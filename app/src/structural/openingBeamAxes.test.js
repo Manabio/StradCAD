@@ -10,10 +10,12 @@ import {
 } from './openingBeamAxes.js';
 import { autoFillWallBeamAxes, wallBeamSourcesFor } from './wallBeamAxes.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
-import { autoFillStructuralGrid } from './structuralAutoFill.js';
+import { autoFillStructuralGrid, autoFillStairLandingBeams } from './structuralAutoFill.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
+import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { landingEdgeCLs } from '../finish/stair/stairLanding.js';
 
 function makeGraph(planeId = 'p1') {
   return new PlanGraph(new Plane(planeId, 0, `${planeId}階`, 1, 1));
@@ -540,6 +542,331 @@ test('【Major-2是正・T2】recomputeStructuralForGraph: 上階（同フット
   assert.ok(openingCL, '上階(g2)に由来openingの梁芯が生成される（下階g1の到達元階段から）');
 });
 
+
+// ---- 実装指示書ステップ7: 鉄骨階段の開口辺（到達辺・側辺は規則Oが担い、踊り場受け梁(LG)とは
+// 辺・座標とも重複しないこと） ----
+// 鉄骨SWITCHBACK階段（landing: x[0,2000] y[0,1500]／outbound: x[0,1000] y[1500,4500]／
+// return: x[1000,2000] y[1500,4500]=破れ先）を graph へ設置する（複数テストで共有）。
+function addSteelSwitchbackStair(g) {
+  const x0 = g.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const xm = g.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = g.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = g.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const ym = g.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = g.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`; // 踊り場(landingRect: x[0,2000] y[0,1500])
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`; // 破れ先(復路レーン。y[1500,4500])
+  const stairCells = new Set([landingKey, outboundKey, returnKey]);
+  const roomCells  = new Set([landingKey, outboundKey]);
+  const room = g.addRoom(roomCells, '階段');
+  return { x0, xm, x1, y0, ym, y1, stair: g.addStair({
+    type: StairType.SWITCHBACK, cells: stairCells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+    structure: StructuralMaterialType.STEEL,
+  }) };
+}
+
+test('【ステップ7】踊り場受け梁(LG)と開口由来梁芯(規則O)は辺・座標とも重複しない（鉄骨SWITCHBACK階段・中間階コピー）', async () => {
+  const project = new Project('proj-lg-vs-opening', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  g1.structureOverride = 'S造';
+  g2.structureOverride = 'S造';
+
+  // 鉄骨SWITCHBACK階段（makeSwitchbackStairGraphと同じフットプリント）を1階(到達元)・2階
+  // (上階自動設置のコピー相当)の両方に設置する。1階はさらに「踊り場を持つ階」として
+  // floorHeightAbove(g1)=3000(2階の標高)で踊り場受け梁(LG)が解決できる。
+  addSteelSwitchbackStair(g1);
+  addSteelSwitchbackStair(g2);
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  try {
+    await recomputeStructuralForGraph(g1, project, 'S造', null);
+    await recomputeStructuralForGraph(g2, project, 'S造', g1);
+
+    // (i)(ii) LG（g1・踊り場back辺=y0=0）と規則Oの開口由来梁芯（g2・stairBeyondの4辺）は
+    // 座標が重ならない——踊り場（landingRect y:[0,1500]）はbeyondBreakUTurnLike の
+    // t>=tRunゲートで破れ先から除外され、開口の水平座標はfront辺(y=1500,踊り場と復路レーンの
+    // 境）とouter(y=4500)だけになる。【QA指摘】これはg1とg2という**階が違うグラフ間**の
+    // 平面座標の比較——下の「LGと開口由来小梁は平面上重ならない」テストでは、spanKey
+    // （CL id の一致）はLG（階段のARCH CL）と小梁（規則Oの梁芯CL）でidの種類自体が違うため
+    // 幾何的な重なりを検出できない。重複を防いでいるのはLGがback辺に固定されていること
+    // （幾何的事実）であり、それを座標で直接確認する。
+    const landingBeams = g1.beams.filter(b => b.role === 'landing');
+    assert.equal(landingBeams.length, 1, '前提: 踊り場受け梁(LG)がg1に1本生成される');
+    const lg = landingBeams[0];
+    assert.equal(lg.isVertical, false, 'LGは踊り場back辺(水平)に立つ');
+    assert.equal(lg.axisCL.value, 0, 'LGは踊り場back辺(y=0)に立つ');
+
+    const openingCLs = g2.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING);
+    assert.equal(openingCLs.length, 4, '前提: g2に開口由来梁芯が4本(通し2・短辺2)生成される');
+    const horizontalOpeningValues = openingCLs
+      .filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL).map(cl => cl.value).sort((a, b) => a - b);
+    assert.deepEqual(horizontalOpeningValues, [1500, 4500],
+      '開口由来の水平梁芯は踊り場front辺(y=1500)と外側(y=4500)——LGが乗るback辺(y=0)は含まれない');
+    assert.ok(horizontalOpeningValues.every(v => Math.abs(v - lg.axisCL.value) >= CL_OVERLAP_TOL_MM),
+      'LGのback辺(y=0)は開口由来梁芯のどの水平座標ともCL_OVERLAP_TOL_MM以上離れている（重複しない）');
+
+    // (iii) 由来openingの梁芯は復路レーンの到達辺(y=4500)・側辺(x=1000,2000)に出る。
+    const verticalOpeningValues = openingCLs
+      .filter(cl => cl.centerLineType === CenterLineType.VERTICAL).map(cl => cl.value).sort((a, b) => a - b);
+    assert.deepEqual(verticalOpeningValues, [1000, 2000], '復路レーンの側辺(x=1000,2000)に開口由来梁芯が出る');
+
+    // (iv) 2回目の再計算でも本数・座標が不変（冪等）。
+    const before = { landing: landingBeams.length, opening: openingCLs.length };
+    await recomputeStructuralForGraph(g1, project, 'S造', null);
+    const result3 = await recomputeStructuralForGraph(g2, project, 'S造', g1);
+    assert.equal(result3.changed, false, '2回目の再計算では変更なし（収束済み）');
+    assert.equal(g1.beams.filter(b => b.role === 'landing').length, before.landing, 'LGの本数は不変');
+    assert.equal(g2.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING).length, before.opening,
+      '開口由来梁芯の本数は不変');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- QA指摘: 上のテストはg1(LG)とg2(開口)という階が違うグラフ間の平面座標比較——同一graph内
+// でLGと開口由来小梁が共存する構成も確認する。3階建て（1F設置・2F自身が同フットプリントの
+// コピーで自身の踊り場と開口を両方持つ・3Fは2Fの上に存在するだけ=floorHeightAbove(2F)を
+// 解決するためのダミー階）を組む。【N1是正・QA指摘】比較はspanKey（axisCL.id:clStart.id:
+// clEnd.id）の一致では行わない——LG（階段のARCH CL上）と開口由来小梁（規則Oの梁芯CL上）は
+// 乗るCLの種類自体が違うため、idが一致することはそもそも無く、LGがfront辺（開口と同じ座標）
+// を拾う不良を入れてもspanKey比較では検出できない（恒真化）。重複を防いでいるのはLGが
+// back辺に固定されていること（幾何的事実）なので、座標（axisCL.value・区間の重なり）で
+// 直接確認する。小梁を実際に生成させるため、階段の外周に通り芯とfootprint（main部屋）を敷く
+// （wallGateが階段の小さな部屋だけではfootprintを認めず小梁が0本になるため。
+// makeOpeningTestDoc.mjsの通り芯格子と同じ理由）。
+function addSteelSwitchbackStairWithFootprint(g, structGraph) {
+  const GRID = { labeled: true, discipline: Discipline.STRUCT };
+  const findOrAddAxis = (type, value) => structGraph.centerLines.find(c => c.centerLineType === type && c.value === value)
+    ?? structGraph.addCenterLine(type, value, GRID);
+  const gx0 = findOrAddAxis(CenterLineType.VERTICAL, -1000);
+  const gx1 = findOrAddAxis(CenterLineType.VERTICAL, 3500);
+  const gy0 = findOrAddAxis(CenterLineType.HORIZONTAL, -1000);
+  const gy1 = findOrAddAxis(CenterLineType.HORIZONTAL, 5000);
+  const { x0, x1, y0, y1, stair } = addSteelSwitchbackStair(g);
+  const key = (L, T, R, B) => `${L.id}:${T.id}:${R.id}:${B.id}`;
+  const strips = [
+    key(gx0, gy0, x0, gy1), // left
+    key(x1, gy0, gx1, gy1), // right
+    key(x0, gy0, x1, y0),   // bottom
+    key(x0, y1, x1, gy1),   // top
+  ];
+  g.addRoom(new Set(strips), 'main');
+  return stair;
+}
+
+test('【ステップ7・同一graph内】recomputeStructuralForGraph: 3階建ての2F自身の中で踊り場受け梁(LG)と開口由来小梁(secondary)が共存し、平面上重ならない', async () => {
+  const project = new Project('proj-lg-opening-samegraph', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  project.addPlane(6000, '3階', 'p3'); // 2Fの上に3Fが存在する=floorHeightAbove(2F)が解決できる（LG生成の前提）
+  g1.structureOverride = 'S造';
+  g2.structureOverride = 'S造';
+
+  // 1F=到達元、2F=フットプリント一致のコピー（2F自身が「踊り場を持つ階」でもあり
+  // 「1Fの到達元階段から破れ先開口を受ける階」でもある）。
+  addSteelSwitchbackStairWithFootprint(g1, project.structGraph);
+  addSteelSwitchbackStairWithFootprint(g2, project.structGraph);
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  try {
+    await recomputeStructuralForGraph(g1, project, 'S造', null);
+    await recomputeStructuralForGraph(g2, project, 'S造', g1);
+
+    const landingBeams = g2.beams.filter(b => b.role === 'landing');
+    assert.equal(landingBeams.length, 1, '2F自身にもLGが1本生成される（3Fが上にあるためfloorHeightAboveが解決できる）');
+    const lg = landingBeams[0];
+    assert.equal(lg.axisCL.value, 0, 'LGは踊り場back辺(y=0)に立つ');
+
+    const openingBeams = g2.beams.filter(b => b.role === 'secondary');
+    assert.ok(openingBeams.length > 0, '前提: 2F自身に開口由来の小梁(secondary)が生成されている（1Fに到達元階段があるため）');
+
+    // 【N1是正・QA指摘】LGと同じ向き（水平）の小梁について、座標で「重ならない」ことを直接
+    // 確認する——spanKey（CL id）の一致比較では、LGと小梁が乗るCLの種類自体が違う
+    // （LG=階段のARCH CL／小梁=規則Oの梁芯CL）ため、LGがfront辺（開口と同じ座標）を拾う
+    // 不良を入れてもidは常に不一致のままで検出できない（恒真化）。「重ならない」は
+    // (a) 軸の座標が CL_OVERLAP_TOL_MM 以上離れている、または (b) 軸が同じでも区間が
+    // 重ならない、のいずれかで判定する。
+    const parallelSecondaries = openingBeams.filter(b => b.isVertical === lg.isVertical);
+    assert.ok(parallelSecondaries.length > 0, '前提: LGと同じ向き(水平)の開口由来小梁が存在する');
+    const lgLo = Math.min(lg.clStart.value, lg.clEnd.value);
+    const lgHi = Math.max(lg.clStart.value, lg.clEnd.value);
+    for (const b of parallelSecondaries) {
+      const valueSeparated = Math.abs(b.axisCL.value - lg.axisCL.value) >= CL_OVERLAP_TOL_MM;
+      const bLo = Math.min(b.clStart.value, b.clEnd.value);
+      const bHi = Math.max(b.clStart.value, b.clEnd.value);
+      const rangeDisjoint = bHi <= lgLo || bLo >= lgHi;
+      assert.ok(valueSeparated || rangeDisjoint,
+        `LG(axisValue=${lg.axisCL.value})と小梁(axisValue=${b.axisCL.value})は平面上重ならない`);
+    }
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- 変異テスト対応: landingEdgeCLsのback/frontを取り違えると(i)が壊れることを固定する ----
+test('【ステップ7・変異ガード】landingEdgeCLs: back辺(y=0)とfront辺(y=1500)は別のCLで、frontの方が規則Oの開口辺(y=1500)と一致する', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const stairCells = new Set([landingKey, outboundKey, returnKey]);
+  const roomCells  = new Set([landingKey, outboundKey]);
+  const room = graph.addRoom(roomCells, '階段');
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells: stairCells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+    structure: StructuralMaterialType.STEEL,
+  });
+  const edges = landingEdgeCLs(stair, graph);
+  const back = edges.find(e => e.kind === 'back');
+  const front = edges.find(e => e.kind === 'front');
+  const valueOf = (id) => graph.centerLines.find(cl => cl.id === id)?.value;
+  assert.equal(valueOf(back.axisCL), 0, 'back辺の座標はy=0');
+  assert.equal(valueOf(front.axisCL), 1500, 'front辺の座標はy=1500（規則Oの開口辺と一致する側）');
+  assert.notEqual(back.axisCL, front.axisCL, 'back/frontは別のCL——取り違えるとLGが開口辺(front)へ乗ってしまう');
+});
+
+// ---- 実装指示書ステップ7・項目2: STRAIGHT系階段のriser感度 ----
+// slabOpening.test.js の makeStraightRunFixture（QA指摘F3）と同じ8セル直進階段
+// （x方向1000mmピッチ・upDirection='right'。riser=200→破れ先x:[7000,8000]の1セル、
+// riser=400→破れ先x:[3000,8000]の5セル）を、上階自動設置のコピー(g2)として2階建てへ組む。
+function makeStraightRunStairGraph(planeId) {
+  const graph = makeGraph(planeId);
+  const opt = { labeled: false, discipline: Discipline.ARCH };
+  const xs = [];
+  for (let i = 0; i <= 8; i++) xs.push(graph.addCenterLine(CenterLineType.VERTICAL, i * 1000, opt));
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opt);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, opt);
+  const keys = [];
+  for (let i = 0; i < 8; i++) keys.push(`${xs[i].id}:${y0.id}:${xs[i + 1].id}:${y1.id}`);
+  const cells = new Set(keys);
+  const room = graph.addRoom(cells, '階段');
+  graph.addStair({
+    type: StairType.STRAIGHT, cells, roomId: room.id,
+    sections: [9], riser: null, upDirection: 'right', flip: false,
+    structure: StructuralMaterialType.STEEL,
+  });
+  return graph;
+}
+
+test('【ステップ7・項目2】openingBeamSourcesFor: STRAIGHT階段はriserOfの戻り値で開口由来梁芯の座標が変わる（riser=200→x=7000／riser=400→x=3000。実測VERIFIED）', () => {
+  const g1a = makeStraightRunStairGraph('p1a');
+  const g2a = makeStraightRunStairGraph('p2a');
+  g1a.structureOverride = 'S造'; g2a.structureOverride = 'S造';
+  const sources200 = openingBeamSourcesFor(g2a, {}, { riserOf: () => 200, belowGraph: g1a });
+  const shortEdge200 = sources200.find(s => s.isVertical && !s.through);
+  assert.equal(shortEdge200?.coord, 7000, 'riser=200: 破れ先の短辺(到達辺)はx=7000');
+
+  const g1b = makeStraightRunStairGraph('p1b');
+  const g2b = makeStraightRunStairGraph('p2b');
+  g1b.structureOverride = 'S造'; g2b.structureOverride = 'S造';
+  const sources400 = openingBeamSourcesFor(g2b, {}, { riserOf: () => 400, belowGraph: g1b });
+  const shortEdge400 = sources400.find(s => s.isVertical && !s.through);
+  assert.equal(shortEdge400?.coord, 3000, 'riser=400: 破れ先の短辺(到達辺)はx=3000（riserで座標が変わる）');
+
+  const created200 = autoFillOpeningBeamAxes(g2a, sources200);
+  const created400 = autoFillOpeningBeamAxes(g2b, sources400);
+  assert.ok(created200.some(cl => cl.value === 7000));
+  assert.ok(created400.some(cl => cl.value === 3000));
+});
+
+test('【ステップ7・項目2】openingBeamSourcesFor: STRAIGHT階段はriserOfがnullを返すとbreakStepOfの既定比率(totalSteps×0.6を四捨五入)で生成される（sections=[9]→totalSteps=9→breakCell=5→x=4000。実測VERIFIED）', () => {
+  const g1 = makeStraightRunStairGraph('p1n');
+  const g2 = makeStraightRunStairGraph('p2n');
+  g1.structureOverride = 'S造'; g2.structureOverride = 'S造';
+  const sources = openingBeamSourcesFor(g2, {}, { riserOf: () => null, belowGraph: g1 });
+  const shortEdge = sources.find(s => s.isVertical && !s.through);
+  assert.equal(shortEdge?.coord, 4000, 'riserOf省略時と同じ既定比率(0.6)でx=4000になる（例外を投げない）');
+  assert.doesNotThrow(() => autoFillOpeningBeamAxes(g2, sources));
+});
+
+test('【ステップ7・項目2】autoFillStairLandingBeams: STRAIGHT階段は踊り場受け梁(LG)を生成しない', () => {
+  const g1 = makeStraightRunStairGraph('p1lg');
+  const g2 = makeStraightRunStairGraph('p2lg');
+  const project = { planes: [g1.plane, g2.plane], structuralInfo: { foundationType: 'independent' } };
+  const created = autoFillStairLandingBeams(g1, project, null);
+  assert.deepEqual(created, [], 'STRAIGHT階段はLGは0本');
+});
+
+// 【QA指摘F2・N2是正】旧版は最上階(floorHeightAbove null)・1セル退化のSTRAIGHT_LANDINGで、
+// そもそもlandingZが解決できず「何を検証しているか分からない」状態だった。2階建て
+// （floorHeightAboveが解決できる）の下階に、区間長が実測できる非退化のSTRAIGHT_LANDING
+// （run1:3セル・landing:1セル・run2:3セル、計7セル一列）を置いてLGは0本を確認し、同じ
+// project形（2階建て・同じfloorHeightAbove）でSWITCHBACKに差し替えるとLGは1本になる
+// 陽性対照を併記する——構成自体はLGを生成できる（陽性対照あり）ことを示す。
+test('【ステップ7・項目2・QA是正F2】autoFillStairLandingBeams: 2階建て・区間長が実測できる非退化のSTRAIGHT_LANDINGでもLGは0本（同じproject形のSWITCHBACKはLG=1になる陽性対照つき）', () => {
+  const project1 = new Project('proj-straight-landing-lg', 'test');
+  const { graph: sl1 } = project1.addPlane(0, '1階', 'p1');
+  project1.addPlane(3000, '2階', 'p2'); // floorHeightAbove(1F)を解決するためだけの上階
+  makeStraightLandingStairGraphInto(sl1);
+  const createdStraightLanding = autoFillStairLandingBeams(sl1, project1, null);
+  assert.deepEqual(createdStraightLanding, [], 'STRAIGHT_LANDINGはLGは0本（構成はLG生成可能＝陽性対照あり）');
+
+  // 陽性対照: 同じproject形（2階建て・同じ階高）でSWITCHBACKに差し替えるとLGは1本になる
+  // ——この構成自体がLGを生成できることを示す。
+  const project2 = new Project('proj-switchback-lg-control', 'test');
+  const { graph: sb1 } = project2.addPlane(0, '1階', 'p1');
+  project2.addPlane(3000, '2階', 'p2');
+  addSteelSwitchbackStair(sb1);
+  const createdSwitchback = autoFillStairLandingBeams(sb1, project2, null);
+  assert.equal(createdSwitchback.length, 1, '陽性対照: 同じproject形でSWITCHBACKならLGは1本生成される');
+});
+
+// 区間長が実測できる非退化のSTRAIGHT_LANDING（run1:3セル・landing:1セル・run2:3セル、計7セル
+// 一列）を既存のgraphへ設置する（project.addPlaneが返すgraphへ直接設置する形）。
+function makeStraightLandingStairGraphInto(graph) {
+  const opt = { labeled: false, discipline: Discipline.ARCH };
+  const xs = [0, 3000, 4000, 7000].map(v => graph.addCenterLine(CenterLineType.VERTICAL, v, opt));
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opt);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, opt);
+  const keys = [0, 1, 2].map(i => `${xs[i].id}:${y0.id}:${xs[i + 1].id}:${y1.id}`);
+  const cells = new Set(keys);
+  const room = graph.addRoom(cells, '階段');
+  graph.addStair({
+    type: StairType.STRAIGHT_LANDING, cells, roomId: room.id,
+    sections: [4, 1, 4], riser: null, upDirection: 'right', flip: false,
+    structure: StructuralMaterialType.STEEL,
+  });
+}
+
+// ---- 実装指示書ステップ7・項目3: 最上階のSTAIR_VOID Roomから規則Oが発火する ----
+test('【ステップ7・項目3】openingBeamSourcesFor: 最上階のSTAIR_VOID Room（source:\'stairVoid\'）から由来openingの梁芯が生成される（belowGraph不要）', () => {
+  const graph = makeGraph('p-topvoid');
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, GRID);
+  const xa = graph.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH);
+  const xb = graph.addCenterLine(CenterLineType.VERTICAL, 5000, ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, GRID);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, GRID);
+  const ya = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH);
+  const yb = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, GRID);
+  const cells = getAllCells(graph);
+  const centerKey = cells.find(c => c.x1 === 2000 && c.x2 === 5000 && c.y1 === 1000 && c.y2 === 3000).key;
+  graph.addRoom(new Set([centerKey])).setFeature(RoomFeature.STAIR_VOID);
+  graph.structureOverride = 'S造';
+
+  // belowGraphを渡さない（最上階には上階自動設置のコピー階段を持つ実体が無い——STAIR_VOIDは
+  // ensureTopStairVoidが最上階のRoom属性として直接指定するため、stairFilterFor(自階の階段の
+  // 破れ先)とは無関係にopeningCellSetsが直接拾う）。
+  const sources = openingBeamSourcesFor(graph, {});
+  assert.ok(sources.length > 0, 'STAIR_VOID Roomからは下階peek無しでも開口由来梁芯の源が出る');
+  assert.ok(sources.every(s => s.source === 'stairVoid'), 'sourceはstairVoid');
+  const created = autoFillOpeningBeamAxes(graph, sources);
+  assert.equal(created.length, 4, '通し2本・短辺2本の計4本が生成される');
+  assert.ok(created.every(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING));
+  void x0; void xa; void xb; void x1; void y0; void ya; void yb; void y1;
+});
 
 // ---- Minor-QA追加・T8: VOID単独（階段0本）は規則Oのための下階peekを起こさない ----
 test('【Minor-QA追加・T8】recomputeStructuralForGraph: 2階にVOID1部屋だけ（階段0本）なら規則Oのための下階peekは発生せず、由来openingの梁芯は生成される', async () => {
