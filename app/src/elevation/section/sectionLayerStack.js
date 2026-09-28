@@ -27,15 +27,17 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  */
 
 /**
- * VOID/STAIR_VOID（吹抜け・階段吹抜け）featureのRoomは「実床が無い」ことを表現するために
- * Room化されているだけ（CH解決等の都合）——実床が有ると誤判定しないよう除外する。
+ * VOID/STAIR_VOID/EV（吹抜け・階段吹抜け・エレベーターシャフト）featureのRoomは
+ * 「実床が無い」ことを表現するためにRoom化されているだけ（CH解決等の都合）
+ * ——実床が有ると誤判定しないよう除外する。
  * 見えがかり壁のz上限（`resolveSightlineTopZ`）と2FL水平線のowner判定が共有する単一情報源
  * （`elevationStairSequence.js`のaboveRoomSegmentsOnFaceと同じ判定基準）。
  * @param {object|null|undefined} room
  * @returns {boolean}
  */
 export function isRealRoom(room) {
-  return !!room && room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.STAIR_VOID;
+  return !!room && room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.STAIR_VOID
+    && room.feature !== RoomFeature.EV;
 }
 
 /**

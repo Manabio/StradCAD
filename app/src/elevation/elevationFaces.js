@@ -33,6 +33,7 @@ function getShape(graph, id) {
  * 親の帯の中で`wallAdjacentFloorSegments`による床の段差プロファイルとして表現される
  * （`elevation-model.md`「床の段差プロファイル」節）。除外しないと親と部分指定の両方に
  * 全く同じ壁面が重複して展開されてしまう。
+ * EV（エレベーターシャフト）は対象外（許可リストに無いため自動的に除外される。展開図は描かない）。
  */
 export function selectElevationRooms(graph) {
   return (graphList(graph, 'rooms') ?? []).filter(r =>

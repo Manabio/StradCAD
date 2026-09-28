@@ -37,6 +37,22 @@ test('吹抜け・階段吹抜けRoomの占有セルが開口になる', () => {
   assert.ok(rects.every(r => r.y1 === 0 && r.y2 === 1500));
 });
 
+// ---- EV（エレベーターシャフト。実装指示書ステップ1・2026-09-28）はVOIDと同じkind='void'扱い ----
+test('EV Roomの占有セルが開口になる（kind=\'void\'扱い＝slabOpeningFramesからは除かれ、slabOpeningRectsには含まれる）', () => {
+  const { graph, left, right } = makeGrid();
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.EV);
+  graph.addRoom(new Set([right])).setFeature(RoomFeature.STAIR_VOID);
+
+  const rects = slabOpeningRects(graph);
+  assert.equal(rects.length, 2, 'EVもSTAIR_VOIDと同じく開口の範囲（rects）には含まれる');
+  const xs = rects.map(r => [r.x1, r.x2]).sort((a, b) => a[0] - b[0]);
+  assert.deepEqual(xs, [[0, 1000], [1000, 2000]]);
+
+  const frames = slabOpeningFrames(graph);
+  assert.equal(frames.length, 1, 'EVはVOIDと同じくslabOpeningFramesの縁からは除かれ、STAIR_VOID側だけが残る');
+  assert.deepEqual([frames[0].cl.x1, frames[0].cl.x2], [1000, 2000], '残るのはright（STAIR_VOID）のみ');
+});
+
 test('通常の部屋（床がある）は開口に数えない', () => {
   const { graph, left } = makeGrid();
   graph.addRoom(new Set([left])); // feature 未設定＝通常の部屋

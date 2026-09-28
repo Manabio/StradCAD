@@ -152,7 +152,7 @@ export class Room {
     this.cells            = cells;
     this.referenceRoomIds = referenceRoomIds; // 判定3: 参照先部屋IDセット
     this.kind             = kind; // 内外区分（base軸）: 屋内 / 屋外
-    this.feature          = feature; // 属性軸: 'stair' | 'void' | 'stairVoid' | null（なし）
+    this.feature          = feature; // 属性軸: 'stair' | 'void' | 'stairVoid' | 'ev' | null（なし）
     this.templateKey      = templateKey;      // 内装マスターへのポインタ（null = 未指定）
     this.customOverrides  = observable.map(); // 個別上書きポケット（壁・天井フィールドのみ）
     this.finish           = new RoomFinish();
@@ -196,7 +196,7 @@ export class Room {
   removeCell(key)            { this.cells.delete(key); }
   setCells(cells)            { this.cells = cells; }
   setKind(kind)              { this.kind = kind; }
-  setFeature(feature)        { this.feature = feature; } // 'stair' | 'void' | 'stairVoid' | null
+  setFeature(feature)        { this.feature = feature; } // 'stair' | 'void' | 'stairVoid' | 'ev' | null
   setNamePosition(x, y)     { this.namePosition = { x, y }; }
   setFloorLevel(mm)         { this.floorLevel = mm; } // mm | null（null = 階基準どおり）
   setExteriorSlope(n)       { this.exteriorSlope = n; } // 勾配1/N の N | null

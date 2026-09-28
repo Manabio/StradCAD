@@ -1,9 +1,12 @@
 /**
- * 吹抜け（feature=VOID）の×描画（壁内4頂点を対角に結ぶ線分）の幾何計算。
+ * 吹抜け（feature=VOID）・EV（feature=EV。エレベーターシャフト）の×描画
+ * （壁内4頂点を対角に結ぶ線分）の幾何計算。
  *
  * 描画ルールをここへ集約し、レンダラ（renderer/VoidLayer.jsx）は結果を Konva 要素へ写像
  * するだけにする（finish/stepSection.js・finish/stair/stairGeometry.js と同じパターン）。
- * 対象は feature===VOID のみ——STAIR_VOID（階段吹抜け）は一切描画しない自動管理Room（要件）。
+ * 対象は feature===VOID または feature===EV のみ——STAIR_VOID（階段吹抜け）は一切描画しない
+ * 自動管理Room（要件）。上部吹抜けラベル（「上部吹抜け」文言）は VOID のみに付ける
+ * （`showsUpperVoidLabel`）——EV は同じシャフトが続くだけなので破線のみ（裁定Q8）。
  */
 import { RoomFeature } from '@core';
 import { refreshCells, roomBounds, getCellsInRect } from './gridCells.js';
@@ -19,16 +22,16 @@ import { faceRect } from './wallFaces.js';
 export const UPPER_VOID_DASH_PX = [8, 4];
 
 /**
- * グラフ全体から吹抜けの×描画データを列挙する。
+ * グラフ全体から吹抜け・EVの×描画データを列挙する。
  * 矩形（RoomLabelsLayer.jsx の isRectangular 判定と同じ方式。ただし refreshCells 済みで比較）
  * でない部屋・壁内4頂点が解決できない部屋はスキップする。
- * @returns {{id:string, x1:number, y1:number, x2:number, y2:number}[]}
+ * @returns {{id:string, feature:string, x1:number, y1:number, x2:number, y2:number}[]}
  */
 export function computeVoidCrosses(graph) {
   if (!graph) return [];
   const result = [];
   for (const room of graph.rooms) {
-    if (room.feature !== RoomFeature.VOID) continue;
+    if (room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.EV) continue;
     const cells = refreshCells(room.cells, graph);
     if (cells.size === 0) continue;
     const bounds = roomBounds(cells, graph);
@@ -38,7 +41,18 @@ export function computeVoidCrosses(graph) {
     if (!isRectangular) continue;
     const rect = faceRect(cells, graph);
     if (!rect) continue;
-    result.push({ id: room.id, x1: rect.x1, y1: rect.y1, x2: rect.x2, y2: rect.y2 });
+    result.push({ id: room.id, feature: room.feature, x1: rect.x1, y1: rect.y1, x2: rect.x2, y2: rect.y2 });
   }
   return result;
+}
+
+/**
+ * 直下階から見た「上部吹抜け」ラベル（固定文言）を付けるかどうか。
+ * VOID のみ true——EV は同じシャフトが階をまたいで続くだけなので、上部吹抜けラベルは付けず
+ * 破線の×のみで表す（裁定Q8）。
+ * @param {{feature:string}} cross computeVoidCrosses の返り値の要素
+ * @returns {boolean}
+ */
+export function showsUpperVoidLabel(cross) {
+  return cross?.feature === RoomFeature.VOID;
 }

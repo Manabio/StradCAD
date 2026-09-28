@@ -553,6 +553,19 @@ test('【失敗系・WP-V1】selectElevationRooms: STAIR_VOIDは名前を付け�
   assert.deepEqual(result.map(r => r.id), [named.id], 'STAIR_VOIDは有名でもfeature軸で除外されるはず');
 });
 
+// ---- EV（エレベーターシャフト。実装指示書ステップ1・2026-09-28）は名前を付けても対象外 ----
+test('【失敗系】selectElevationRooms: EVは名前を付けても対象外（展開図は描かない）', async () => {
+  const { RoomFeature } = await import('@core');
+  const { selectElevationRooms } = await import('./elevationFaces.js');
+  const graph = makeGraph();
+  const named = graph.addRoom(new Set(), 'LDK');
+  const ev = graph.addRoom(new Set(), 'EV');
+  ev.setFeature(RoomFeature.EV);
+
+  const result = selectElevationRooms(graph);
+  assert.deepEqual(result.map(r => r.id), [named.id], 'EVは有名でもfeature軸で除外されるはず');
+});
+
 // ================================================================
 // wallCoverageGapsOnFace: 実壁（graph.walls）の被覆から「壁の実体が無いローカルx区間」を出す
 // （ユーザー実機指摘2026-09「22」2階A1・階段の下り口。elevation-model.md「実壁の被覆の隙間」節）。

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, ExteriorLevelRef } from './core.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef } from './core.js';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
   serializeSite, decodeSite, restoreSite, decodeFloorSnapshot,
@@ -128,6 +128,84 @@ test('【失敗系】CenterLine.beamAxisOrigin が既知の値以外（未知の
   const cl2 = restored.shapeMap.get(cl.id);
   assert.ok(cl2);
   assert.equal(cl2.beamAxisOrigin, null, '未知の由来文字列はnullへ落ちる（既知の由来色分岐に漏らさない）');
+});
+
+// ---- Room.feature='ev'（EV=エレベーターシャフト。core/constants.js RoomFeature。
+// schema/graphFbs.js ROOM_FEATURE_ENC/DECにev=5を追加。実装指示書ステップ1・2026-09-28） ----
+// restoreGraph の3経路（FlatBuffers encode→decode / plain object直渡し / undoスナップショット）の
+// うち、undoスナップショット経路（centerLineOps.js等）は before/after を serializeGraph(graph)
+// （＝Uint8Array）で採り restoreGraph(graph, bytes) で戻すため、下の「FlatBuffers encode→decode」
+// テストと同一の restoreGraph(bytes)→decode→applySnapshot 経路に収束する（REASONED。
+// centerLineOps.js:184-196 で確認）。よってundo経路専用のテストは書き分けない。
+// plain object経路（旧JSON文書ファイルの読込み。App.jsx:1536 restoreGraph(graph, parsed)。
+// storage/localSnapshot.js parseOpenedFileBytesがJSON.parseした素のオブジェクトをそのまま渡す）は
+// decode()を経由せず applySnapshot が d.feature を直接読む（graphSnapshot.js:757-762）ため、
+// 別経路として下に固定する。
+test('Room.feature=ev は FlatBuffers encode→decode で往復する', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), 'EV');
+  room.setFeature(RoomFeature.EV);
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const r2 = restored.roomMap.get(room.id);
+  assert.ok(r2, '復元後に同一IDの部屋が存在する');
+  assert.equal(r2.feature, RoomFeature.EV);
+});
+
+// QA指摘（低3件・3件目）: decode(serializeGraph(graph)) で作った snapshot はFlatBuffersの
+// ENC/DECを経由して作られるため、plain object経路がENC/DECと独立に'ev'を保つことの証明にならない
+// （変異でENC/DECからevを除去すると、decode(serializeGraph(...))の時点で既にfeatureが失われ、
+// このテストが「plain object経路の検証」として機能しなくなる）。graphSnapshot.js の serialize側
+// （buildSnapshot。rooms要素は:105-138付近）が出力する形を手書きし、ENC/DECから独立させる。
+// applySnapshot（:560-）が `for (const d of snapshot.XXX)` と ??[] を伴わずに直接読む配列
+// （centerLines/points/walls/diagonals/verticalLines/horizontalLines/arcs/circles）だけを埋め、
+// rooms 以外は空のまま——他はすべて `?? []` でフォールバックするため省略できる。
+test('Room.feature=ev は restoreGraph への plain object 直渡し（旧JSON文書ファイル読込みと同じ経路）でも往復する', () => {
+  const snapshot = {
+    centerLines: [], points: [], walls: [], diagonals: [],
+    verticalLines: [], horizontalLines: [], arcs: [], circles: [],
+    rooms: [{
+      id: 'room-ev-1', name: 'EV', cells: [], referenceRoomIds: [],
+      kind: 'interior', feature: 'ev', generatedWallIds: [],
+    }],
+    roomOrder: ['room-ev-1'],
+  };
+
+  const restored = makeGraph();
+  restoreGraph(restored, snapshot);
+
+  const r2 = restored.roomMap.get('room-ev-1');
+  assert.ok(r2, '復元後に同一IDの部屋が存在する');
+  assert.equal(r2.feature, RoomFeature.EV);
+});
+
+test('【失敗系】Room.feature が未知の文字列（\'zz\'）で書かれていた場合、encode→decode 後は null に正規化される（ROOM_FEATURE_ENCに無い→0）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), '未知属性');
+  // setFeatureは値の妥当性を検証せずそのまま代入するため、破損データ・将来削除された属性値を模せる
+  // （beamAxisOriginの前例と同じ手法）。
+  room.setFeature('zz');
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const r2 = restored.roomMap.get(room.id);
+  assert.ok(r2);
+  assert.equal(r2.feature, null, '未知の属性文字列はnullへ落ちる（既知の属性色分岐に漏らさない）');
 });
 
 test('Opening.fixtureType/sillHeight 未設定（null）は encode→decode 後も null のまま（既定値に化けない）', () => {

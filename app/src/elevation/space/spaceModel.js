@@ -332,6 +332,9 @@ function findSingleOverlappingRoom(bounds, targetGraph, predicate) {
 //        渡された範囲の中で連鎖できるところまでで止まる（それより下は評価しようがない）。
 //   (ii) 上の層のセルがSTAIR_VOID → 直下の**階段室1室**（feature===STAIR）とだけ連結（変更なし。
 //        `elevationStair.js`の`findOverlappingVoidRoom`が使う対応と対称の向き）。
+//   (iii) 上の層のセルがEV（エレベーターシャフト）→ 直下の**EV1室**（feature===EV）とだけ連結する
+//        （昇降路は全階同位置で連続する）。VOIDと異なりfeature==nullへのフォールバックはしない
+//        ——EVの下が通常部屋なら連結しない。
 // 階段下の閉じた部屋（天井を持ち全高壁で囲まれる。例: 13.stq「13」）はどちらの規則にも
 // 該当しないため連結しない——旧実装（bbox重なり全部）が誤って混入させていた反例。
 // `findSingleOverlappingRoom`の「先に見つかった1室だけを対応先とする」規約はそのまま使う。
@@ -348,6 +351,8 @@ function unionCrossLayerAdjacency(uf, layers) {
           ?? findSingleOverlappingRoom(bounds, lower.graph, r => r.feature == null);
       } else if (upperRoom.feature === RoomFeature.STAIR_VOID) {
         target = findSingleOverlappingRoom(bounds, lower.graph, r => r.feature === RoomFeature.STAIR);
+      } else if (upperRoom.feature === RoomFeature.EV) {
+        target = findSingleOverlappingRoom(bounds, lower.graph, r => r.feature === RoomFeature.EV);
       } else {
         continue;
       }

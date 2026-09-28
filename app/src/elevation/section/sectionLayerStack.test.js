@@ -17,12 +17,14 @@ function info(floorZMm, { room = null, ch = 2400, role } = {}) {
 const realRoom = { feature: undefined };
 const voidRoom = { feature: RoomFeature.VOID };
 const stairVoidRoom = { feature: RoomFeature.STAIR_VOID };
+const evRoom = { feature: RoomFeature.EV };
 
 // ---- isRealRoom ----
-test('isRealRoom: VOID/STAIR_VOIDのRoomは「実床が無い」ため実Roomとみなさない', () => {
+test('isRealRoom: VOID/STAIR_VOID/EVのRoomは「実床が無い」ため実Roomとみなさない', () => {
   assert.equal(isRealRoom(realRoom), true);
   assert.equal(isRealRoom(voidRoom), false);
   assert.equal(isRealRoom(stairVoidRoom), false);
+  assert.equal(isRealRoom(evRoom), false, 'EV（エレベーターシャフト）も床なし＝実Roomではない');
   assert.equal(isRealRoom(null), false, 'Roomが無い（部屋外）のも実Roomではない');
 });
 

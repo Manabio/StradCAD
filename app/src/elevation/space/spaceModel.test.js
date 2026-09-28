@@ -281,6 +281,38 @@ test('【QA指摘A・Phase2】componentOf: STAIR_VOIDは直下の階段室(featu
     'STAIR_VOIDは隣の通常室とは連結しないはず（階段室以外は対象外）');
 });
 
+// ---- EV（エレベーターシャフト。実装指示書ステップ1・2026-09-28）: 上層EVは直下層のEVとだけ連結する ----
+test('【Phase2】componentOf: 上層EVは直下層のEVと階またぎで同成分（昇降路は全階同位置で連続する）', () => {
+  const lowerGraph = makeGraph();
+  const lowerEv = makeRectRoom(lowerGraph, 0, 0, 2000, 2000, 'EV');
+  lowerEv.setFeature(RoomFeature.EV);
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const upperEv = makeRectRoom(upperGraph, 0, 0, 2000, 2000, 'EV');
+  upperEv.setFeature(RoomFeature.EV);
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.equal(index.componentOf(lowerLayer, lowerEv), index.componentOf(upperLayer, upperEv),
+    '上層EVと直下層EVはfootprintが重なれば階またぎで同じ成分のはず');
+});
+
+test('【失敗系・Phase2】componentOf: 上層EVの下が通常部屋（feature=null）なら階またぎで連結しない（VOIDと異なりfeature==nullへフォールバックしない）', () => {
+  const lowerGraph = makeGraph();
+  const lowerRoom = makeRectRoom(lowerGraph, 0, 0, 2000, 2000, '洋室'); // feature未設定=実Room
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const upperEv = makeRectRoom(upperGraph, 0, 0, 2000, 2000, 'EV');
+  upperEv.setFeature(RoomFeature.EV);
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.notEqual(index.componentOf(lowerLayer, lowerRoom), index.componentOf(upperLayer, upperEv),
+    '上層EVの下が通常部屋なら連結しないはず（EVはVOIDと異なりfeature==nullへフォールバックしない）');
+});
+
 // ---- ユーザー裁定: VOIDは「重なる吹抜けの最下階の親部屋1室」とだけ連結する（複数階の吹抜けは連鎖） ----
 function makeThreeLevelVoidChainGraphs() {
   const l1Graph = makeGraph();

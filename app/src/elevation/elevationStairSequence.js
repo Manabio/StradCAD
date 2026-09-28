@@ -33,7 +33,7 @@
  *   3 到達端（全幅。STRAIGHT_LANDINGは踊り場壁が実在する場合のみ挿入。無ければ3は到達端のまま）/
  *   （STRAIGHT_LANDINGのみ）4 W_out2（s=1側） / 5 到達端（全幅）。
  */
-import { StairType, RoomFeature } from '@core';
+import { StairType } from '@core';
 import { switchbackCuts } from './section/cuts/switchbackCuts.js';
 import { straightCuts } from './section/cuts/straightCuts.js';
 import { UNSUPPORTED_FAN_LANE_TYPES, fanLaneCuts } from './section/cuts/fanCuts.js';
@@ -41,7 +41,7 @@ import { makeProbeContext } from './section/sectionProbe.js';
 import { buildSectionFigure } from './section/sectionEngine.js';
 import { buildCutContent, upperFloorCutWallEndsOf } from './section/sectionContent.js';
 import { cutDrawRange, localXOf } from './section/sectionTypes.js';
-import { layerDirectlyAboveSelf } from './section/sectionLayerStack.js';
+import { layerDirectlyAboveSelf, isRealRoom } from './section/sectionLayerStack.js';
 import {
   emitLine, splitGapMarksByStair, dashHorizontalsBehindStair,
   joinToStairProfile,
@@ -118,11 +118,9 @@ function aboveRoomSegmentsOnFace(face, aboveLayer, probeCtx) {
     const py = face.isVertical ? mid : faceCoord;
     const cell = worldToCell(px, py, aboveLayer.graph);
     const ownerRoom = cell ? cellToRoom.get(cell.key) : null;
-    // VOID/STAIR_VOID（吹抜け・階段吹抜け）featureのRoomは「実床が無い」ことを表現するために
-    // Room化されているだけ（CH解決等の都合。elevationStair.jsのfindOverlappingVoidRoomと同じ
-    // feature判定）——実床が有ると誤判定しないよう除外する。
-    const hasRoom = !!ownerRoom
-      && ownerRoom.feature !== RoomFeature.VOID && ownerRoom.feature !== RoomFeature.STAIR_VOID;
+    // isRealRoom（sectionLayerStack.js）と同じ判定基準（VOID/STAIR_VOID/EVは実床が無い）を
+    // 一本化して使う——判定の重複を避ける。
+    const hasRoom = isRealRoom(ownerRoom);
     const locA = (bLo - face.originWorld) * face.dirSign;
     const locB = (bHi - face.originWorld) * face.dirSign;
     segs.push({ loX: Math.min(locA, locB), hiX: Math.max(locA, locB), hasRoom });

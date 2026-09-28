@@ -116,7 +116,7 @@ const RM = {
   KIND: 18,
   TEMPLATE_KEY: 19, OVR_KEYS: 20, OVR_VALS: 21, // 内装マスター参照 + 個別上書きポケット
   HAS_FLOOR_LEVEL: 22, FLOOR_LEVEL: 23, // 床レベル差(mm)。null は HAS=0 で表現
-  FEATURE: 24, // 属性軸（none=0 / stair=1 / void=2）。kind とは独立
+  FEATURE: 24, // 属性軸（none=0 / stair=1 / void=2 / stairVoid=3 / undefined=4 / ev=5）。kind とは独立
   // 屋外部屋の仕上げレベル（末尾追加。旧データはフィールド欠落＝既定値で復元）
   HAS_EXT_LEVEL: 25, EXT_LEVEL: 26, EXT_LEVEL_REF: 27, // おさえ(mm) / 基準（room=0 / gl=1）
   HAS_EXT_SLOPE: 28, EXT_SLOPE: 29, // 勾配 1/N の N
@@ -131,8 +131,8 @@ const EXT_LEVEL_REF_ENC = { room: 0, gl: 1 };
 const EXT_LEVEL_REF_DEC = ['room', 'gl'];
 
 // Room.feature 列挙値エンコード（属性軸。null は none=0）
-const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3, undefined: 4 };
-const ROOM_FEATURE_DEC = [null, 'stair', 'void', 'stairVoid', 'undefined'];
+const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3, undefined: 4, ev: 5 };
+const ROOM_FEATURE_DEC = [null, 'stair', 'void', 'stairVoid', 'undefined', 'ev'];
 
 // CenterLine: 18 フィールド (0–17)
 const CL = {
