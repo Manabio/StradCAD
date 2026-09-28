@@ -121,6 +121,23 @@ test('【失敗系】CenterLine.beamAxisOrigin 未設定（null。旧データ�
 
 // QA対応（ステップ2・2026-09-26）: schema/graphFbs.js readCLはBeamAxisOriginの既知の値以外を
 // nullへ正規化する（破損データ・将来削除された由来値が未知の色分岐に漏れるのを防ぐ）。
+// 床開口由来（規則O。structural/openingBeamAxes.js。実装指示書「スラブ開口と補強・S造梁芯選定」
+// ステップ4・2026-09-28）の往復テスト。上のBeamAxisOrigin.WALLの往復テストと同型。
+test('CenterLine.beamAxisOrigin:opening（床開口由来）もFlatBuffers encode→decodeで値ありのまま往復する', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING,
+  });
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const cl2 = restored.shapeMap.get(cl.id);
+  assert.ok(cl2, '復元後に同一IDの中心線が存在する');
+  assert.equal(cl2.beamAxisOrigin, BeamAxisOrigin.OPENING);
+});
+
 test('【失敗系】CenterLine.beamAxisOrigin が既知の値以外（未知の文字列）で書かれていた場合、decode後はnullに正規化される', () => {
   const graph = makeGraph();
   // BeamAxisOriginに存在しない値を直接持たせる（writeCL側は値の妥当性を検証せずそのまま文字列化するため、

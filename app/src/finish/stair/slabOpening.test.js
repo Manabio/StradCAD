@@ -592,6 +592,37 @@ test('floorOpeningEdges: 吹抜けと階段吹抜けが隣接するとき共有�
     assert.equal(e.hi, 2000);
     assert.deepEqual(e.sources, ['void', 'stairVoid']);
   }
+  // Minor-3是正: 辺を共有する2つの開口（void・stairVoid）は同じcomponentId。
+  assert.equal(leftEdge.componentId, rightEdge.componentId);
+  assert.equal(topEdge.componentId, leftEdge.componentId);
+  assert.equal(bottomEdge.componentId, leftEdge.componentId);
+});
+
+// ---- Minor-3是正（2026-09-28QAレビュー）: 連結成分はセルの4近傍。角だけで接する開口は別成分 ----
+test('floorOpeningEdges【Minor-3是正】: 角だけで接する2つの開口（対角）はcomponentIdが異なる', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opt = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, opt);
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, opt);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, opt);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opt);
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, opt);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, opt);
+  // 左上セル(x:[0,1000],y:[0,1000])と右下セル(x:[1000,2000],y:[1000,2000])——角(1000,1000)だけで接する。
+  const topLeft = `${x0.id}:${y0.id}:${xm.id}:${ym.id}`;
+  const bottomRight = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  graph.addRoom(new Set([topLeft])).setFeature(RoomFeature.VOID);
+  graph.addRoom(new Set([bottomRight])).setFeature(RoomFeature.VOID);
+  const edges = floorOpeningEdges(graph);
+  assert.equal(edges.length, 8, '角だけで接する2つの正方形はそれぞれ独立した4辺＝計8辺（辺は結合されない）');
+  const topLeftEdges = edges.filter(e => e.coord === 0);
+  const bottomRightEdges = edges.filter(e => e.coord === 2000);
+  assert.ok(topLeftEdges.length > 0 && bottomRightEdges.length > 0, '前提: 各セルの外側の辺（x/y=0とx/y=2000）が存在する');
+  const idsA = new Set(topLeftEdges.map(e => e.componentId));
+  const idsB = new Set(bottomRightEdges.map(e => e.componentId));
+  assert.equal(idsA.size, 1, '左上セル由来の辺は同一componentId');
+  assert.equal(idsB.size, 1, '右下セル由来の辺は同一componentId');
+  assert.notEqual([...idsA][0], [...idsB][0], '角だけで接する開口は別のcomponentId（端点共有では同じになってしまう不良の是正）');
 });
 
 test('floorOpeningEdges【QA指摘F5】: 複数辺の並びはisVertical→coord→lo昇順で決定的', () => {

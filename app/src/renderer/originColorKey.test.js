@@ -46,6 +46,11 @@ test('centerLineOriginColorKey: 梁芯でbeamAxisOrigin:centerは center（S造�
   assert.equal(centerLineOriginColorKey(cl), 'center');
 });
 
+test('centerLineOriginColorKey: 梁芯でbeamAxisOrigin:opening（床開口由来。規則O）は generated（壁由来と同色）', () => {
+  const cl = makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING });
+  assert.equal(centerLineOriginColorKey(cl), 'generated');
+});
+
 test('centerLineOriginColorKey: 梁芯でbeamAxisOrigin:userは aux', () => {
   const cl = makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER });
   assert.equal(centerLineOriginColorKey(cl), 'aux');

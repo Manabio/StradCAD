@@ -12,6 +12,7 @@ import {
 } from './structuralAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { selfWallSegments } from './wallBeamAxes.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
 
 // 1階(elevation:0)・2階(elevation:2400)の2フロアProject。floorHeightAbove(project, 1階plane)=2400。
 function makeProjectWithFloors() {
@@ -358,4 +359,50 @@ test('【WP-B2】autoFillStairLandingBeams: wallGateを渡しても呼び出さ�
   };
   const created = autoFillStairLandingBeams(graph, project, poisonWallGate);
   assert.equal(created.length, 1, 'wallGateが渡されても通常どおり1本生成されるはず');
+});
+
+// ---- 規則O（床開口由来の梁芯。openingBeamAxes.js）の配線 ----
+test('【不変条件】structuralAutoFill.js: autoFillStructuralGrid はautoFillWallBeamAxesの直後にautoFillOpeningBeamAxesを呼び、newBeamsへ含める', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(here, 'structuralAutoFill.js'), 'utf8');
+  assert.ok(/import \{ autoFillOpeningBeamAxes \} from '\.\/openingBeamAxes\.js';/.test(src),
+    'openingBeamAxes.jsのautoFillOpeningBeamAxesをimportしていない');
+  const wallIdx = src.indexOf('autoFillWallBeamAxes(graph, wallSources)');
+  const openingIdx = src.indexOf('autoFillOpeningBeamAxes(graph, openingSources)');
+  assert.ok(wallIdx >= 0 && openingIdx >= 0 && openingIdx > wallIdx,
+    'autoFillOpeningBeamAxesはautoFillWallBeamAxesの直後に呼ぶ');
+  assert.ok(/newBeams: \[.*newOpeningBeamAxes.*\]/.test(src), 'newOpeningBeamAxesをnewBeamsへ含めていない');
+});
+
+test('【不変条件】structuralRecompute.js: openingBeamSourcesForを呼び、autoFillStructuralGridの末尾引数へ渡す', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(here, 'structuralRecompute.js'), 'utf8');
+  assert.ok(/import \{ openingBeamSourcesFor \} from '\.\/openingBeamAxes\.js';/.test(src),
+    'openingBeamAxes.jsのopeningBeamSourcesForをimportしていない');
+  assert.ok(/openingBeamSourcesFor\(targetGraph, project,/.test(src), 'openingBeamSourcesForの呼び出しが無い');
+  assert.ok(/autoFillStructuralGrid\([^)]*openingSources\)/.test(src),
+    'autoFillStructuralGridの末尾引数にopeningSourcesを渡していない');
+});
+
+test('autoFillStructuralGrid: openingSourcesを渡すと規則Oの梁芯（discipline:fuse・beamAxisOrigin:opening）が生成される', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = 'RC造(ラーメン)';
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: true, discipline: Discipline.STRUCT });
+  const project = { planes: [graph.plane], structuralInfo: { mainStructure: 'RC造(ラーメン)', foundationType: 'ベタ基礎' } };
+  const openingSources = [
+    { isVertical: false, coord: 2000, lo: 1000, hi: 5000, outwardSign: -1, through: true, onGrid: false, source: 'void', sources: ['void'], beamWidthUnresolved: false },
+  ];
+  const r = autoFillStructuralGrid(graph, project, 'RC造(ラーメン)', null, [], [], [], [], [], undefined, undefined, undefined, openingSources);
+  const created = r.newBeams.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 2000);
+  assert.ok(created, '規則Oの梁芯がnewBeamsへ含まれる');
+  assert.equal(created.discipline, Discipline.FUSE);
+  assert.equal(created.beamAxisOrigin, BeamAxisOrigin.OPENING);
+  void x0; void x1;
 });

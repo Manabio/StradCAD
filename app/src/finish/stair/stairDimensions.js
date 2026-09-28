@@ -24,6 +24,23 @@ export function floorHeightBelow(project, plane) {
   return plane.elevation - planes[idx - 1].elevation;
 }
 
+/**
+ * stair の蹴上(mm)——明示指定（stair.riser）があればそれを優先し、無ければ設置階〜上階の階高
+ * （floorHeightAbove）から総段数で割って求める（App.jsx・structural/structuralRecompute.js が
+ * 共有する式に一本化したもの）。totalSteps<=0でも`Math.max(1, ...)`で0除算にならない。
+ * 階高が未解決（最上階等）はnull。
+ * `stairEntries.js`等の同型の式（`s.riser ?? (fh != null ? fh / Math.max(1, s.totalSteps) : null)`）は
+ * 個別に残っており、このヘルパーへの移行は別件（未着手）。
+ * @param {import('@core').Stair} stair
+ * @param {object} project
+ * @param {object} plane - stair の設置階のPlane
+ * @returns {number|null}
+ */
+export function stairRiserOf(stair, project, plane) {
+  const fh = floorHeightAbove(project, plane);
+  return stair.riser ?? (fh != null ? fh / Math.max(1, stair.totalSteps) : null);
+}
+
 // 基準法上の寸法制限
 export const STAIR_LIMITS = {
   residential:    { minWidth: 750, maxRiser: 230, minTread: 150 }, // 住宅

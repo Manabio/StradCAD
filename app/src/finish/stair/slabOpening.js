@@ -29,7 +29,17 @@ const WALL_AXIS_CL_EPS = 0.5;
 //   （床なし＝上階スラブ開口）
 // - 階段吹抜け（STAIR_VOID）Room … 占有セル全体が開口。VoidLayer は描画対象外のため kind='stair'・source='stairVoid'
 // - 上階の階段 … 破れ線より先のセルが開口（破れ手前＝階段とりつき部はスラブが残る）。kind='stair'・source='stairBeyond'
-function openingCellSets(upperGraph, riserOf) {
+//
+// stairFilter（既定=常にtrue＝挙動不変）: upperGraph.stairsを破れ先セット列挙前に絞る。
+// 追加理由（実装指示書「スラブ開口と補強・S造梁芯選定」ステップ4 QAレビュー・2026-09-28）:
+// floorOpeningEdges（層A。自階の床の開口を求める用途）で自階の階段をそのまま渡すと、設置階
+// 自身の破れ先（「切断高より上に続く上り部分」=stair-model.md:38前半）まで「自階スラブの開口」と
+// 誤認する——設置階の床に穴は無い。破れ先が「自階スラブの開口越しに見下ろす下階階段」
+// （同行後半）になるのは、下階に同じ階段（到達元。上階自動設置＝syncUpperFloorsのコピー）が
+// あるときだけ。呼び出し側（openingBeamAxes.js openingBeamSourcesFor）がこの条件で絞る。
+// slabOpeningRects/Framesは第3引数を渡さない＝挙動不変（upperGraph視点＝上階を覗く既存用途は
+// この誤認の対象外——upperGraph自身が「自階」ではなく常に「直上階」であり、呼び出し側の設計が異なる）。
+function openingCellSets(upperGraph, riserOf, stairFilter = () => true) {
   const sets = [];
   for (const room of upperGraph.rooms) {
     if (room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.STAIR_VOID
@@ -43,6 +53,7 @@ function openingCellSets(upperGraph, riserOf) {
     }
   }
   for (const stair of upperGraph.stairs) {
+    if (!stairFilter(stair)) continue;
     const beyond = cellsBeyondBreak(stair, upperGraph, riserOf(stair));
     if (beyond.size > 0) sets.push({ cells: beyond, kind: 'stair', source: 'stairBeyond' });
   }
@@ -275,7 +286,7 @@ function resolveAxisPieces(axisList, value, isVertical, side, lo, hi, tolMm) {
   for (const r of side.touching) {
     const [oLo, oHi] = isVertical ? [r.b.y1, r.b.y2] : [r.b.x1, r.b.x2];
     const pieceLo = Math.max(lo, oLo), pieceHi = Math.min(hi, oHi);
-    if (pieceHi - pieceLo > EPS) rawPieces.push({ pieceLo, pieceHi, sources: r.sources });
+    if (pieceHi - pieceLo > EPS) rawPieces.push({ pieceLo, pieceHi, sources: r.sources, componentId: r.componentId });
   }
   rawPieces.sort((a, b) => a.pieceLo - b.pieceLo);
 
@@ -283,20 +294,29 @@ function resolveAxisPieces(axisList, value, isVertical, side, lo, hi, tolMm) {
   for (const p of rawPieces) {
     const axis = resolveCandidateForRange(axisList, value, p.pieceLo, p.pieceHi, tolMm);
     if (!axis) continue; // 区間内で有効な候補が無ければ安全側で捨てる（resolveCandidateForRange参照）
-    resolved.push({ axis, lo: p.pieceLo, hi: p.pieceHi, sources: [...p.sources] });
+    resolved.push({ axis, lo: p.pieceLo, hi: p.pieceHi, sources: [...p.sources], componentId: p.componentId });
   }
   return resolved;
 }
 
-// 同じ(isVertical,coord,outwardSign)グループ内で、lo昇順に隣接し代表CL(axis)が同じピースを
-// 1本の辺へ結合する（sourcesは和集合）。resolveAxisPiecesはoutlineSegments1本ぶんの範囲
-// でしか結合できないため、複数のoutlineSegmentsにまたがる結合（QA再裁定2026-09-28 P5）は
-// ここで行う。piecesは呼び出し前にlo昇順でソート済みであること。
+// 同じ(isVertical,coord,outwardSign)グループ内で、lo昇順に隣接し代表CL(axis)・componentIdが
+// 同じピースを1本の辺へ結合する（sourcesは和集合）。resolveAxisPiecesはoutlineSegments1本ぶんの
+// 範囲でしか結合できないため、複数のoutlineSegmentsにまたがる結合（QA再裁定2026-09-28 P5）は
+// ここで行う。componentId一致も要求する（Minor-3是正）——異なる開口（連結成分）のピースが
+// たまたま同一直線上で隣接していても別の辺のまま保つ（角だけで接する開口を巻き込まないaxis一致
+// だけでは、稀に別成分のピースが座標的に隣接するケースを誤結合しうる安全策）。piecesは呼び出し前に
+// lo昇順でソート済みであること。
+// 【到達しない防御】同じ直線上・同じ外向き側（outwardSign）で端が接する（last.hiとp.loが一致する）
+// 2ピースは、それぞれの由来セルが必ずその接点で直交辺を正の長さ共有する——lo/hiは開口セル自身の
+// 区間（resolveAxisPieces）なので、端が一致する2区間の間にはギャップが無く、境界の直交方向
+// （resolveEdgeSideのoLo/oHi）も同じ辺を通じて連続しているため、cellsShareBoundaryの判定を必ず
+// 満たし同じcomponentIdになる。よってlast.componentId!==p.componentIdでこの分岐に入らない
+// （else側へ落ちて辺が分かれる）経路は理論上到達しないが、上記の安全側ガードとして残す。
 function mergeAdjacentPieces(pieces) {
   const merged = [];
   for (const p of pieces) {
     const last = merged[merged.length - 1];
-    if (last && last.axis === p.axis && Math.abs(last.hi - p.lo) < EPS) {
+    if (last && last.axis === p.axis && last.componentId === p.componentId && Math.abs(last.hi - p.lo) < EPS) {
       last.hi = p.hi;
       for (const s of p.sources) if (!last.sources.includes(s)) last.sources.push(s);
     } else {
@@ -304,6 +324,39 @@ function mergeAdjacentPieces(pieces) {
     }
   }
   return merged;
+}
+
+// 2つのセル矩形が正の長さを持つ境界を共有していれば true（4近傍。角だけで接する場合はfalse。
+// Minor-3是正・2026-09-28QAレビュー: 端点共有によるconnected component判定は「角だけで接する
+// 2開口」を誤って同じ成分にまとめる——セル自体の4近傍で連結成分を決め直す）。
+function cellsShareBoundary(a, b) {
+  const xEdge = (Math.abs(a.x2 - b.x1) < EPS || Math.abs(a.x1 - b.x2) < EPS)
+    && (Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) > EPS);
+  const yEdge = (Math.abs(a.y2 - b.y1) < EPS || Math.abs(a.y1 - b.y2) < EPS)
+    && (Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) > EPS);
+  return xEdge || yEdge;
+}
+
+// cellRecords（各要素に.key/.bを持つ）へ、4近傍で連結したセル同士が同じ値を持つ`componentId`
+// フィールドを書き込む（Union-Find。O(n^2)だが開口セル数は通常小さい）。componentIdは連結成分に
+// 属するセルキーの辞書順最小値——呼び出しをまたいで安定させるため配列indexではなくキーを使う。
+function assignComponentIds(cellRecords) {
+  const n = cellRecords.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (cellsShareBoundary(cellRecords[i].b, cellRecords[j].b)) union(i, j);
+    }
+  }
+  const rootKeys = new Map();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    const cur = rootKeys.get(root);
+    if (cur == null || cellRecords[i].key < cur) rootKeys.set(root, cellRecords[i].key);
+  }
+  for (let i = 0; i < n; i++) cellRecords[i].componentId = rootKeys.get(find(i));
 }
 
 /**
@@ -377,14 +430,19 @@ function resolveEdgeSide(isVertical, value, lo, hi, cellRecords) {
  * `landingEdgeCLs`（stairLanding.js）と同じフィールド名規約（axisCL/clStart/clEndはCL id）。
  *
  * @param {object|null} graph 自階（対象の平面）のグラフ
- * @param {{riserOf?: (stair:object)=>number|null}} [opts] 自階の階段の蹴上（破れ位置の決定に使う）
+ * @param {{riserOf?: (stair:object)=>number|null, stairFilter?: (stair:object)=>boolean}} [opts]
+ *   riserOf=自階の階段の蹴上（破れ位置の決定に使う）。stairFilter=自階の階段（graph.stairs）を
+ *   破れ先セット列挙前に絞る述語（既定=常にtrue＝挙動不変。openingCellSetsのコメント参照。
+ *   呼び出し側=openingBeamAxes.js openingBeamSourcesForが「下階に到達元の階段があるか」で絞る）。
  * @returns {Array<{isVertical:boolean, axisCL:string, clStart:string, clEnd:string, coord:number,
- *   lo:number, hi:number, outwardSign:1|-1, onGrid:boolean, source:string, sources:string[]}>}
- *   並びは isVertical→coord→lo 昇順（決定的）。
+ *   lo:number, hi:number, outwardSign:1|-1, onGrid:boolean, source:string, sources:string[],
+ *   componentId:string}>}
+ *   並びは isVertical→coord→lo 昇順（決定的）。componentId＝開口セルの4近傍連結成分（Minor-3。
+ *   角だけで接する開口は別のcomponentIdになる。openingBeamAxes.js groupByConnectivityが使う）。
  */
-export function floorOpeningEdges(graph, { riserOf = () => null } = {}) {
+export function floorOpeningEdges(graph, { riserOf = () => null, stairFilter = () => true } = {}) {
   if (!graph) return [];
-  const sets = openingCellSets(graph, riserOf);
+  const sets = openingCellSets(graph, riserOf, stairFilter);
   if (sets.length === 0) return [];
 
   // セルキー→sources（初出順）。複数セットに同じキーが現れても bounds は Map で自然に重複しない。
@@ -400,9 +458,12 @@ export function floorOpeningEdges(graph, { riserOf = () => null } = {}) {
   const cellRecords = [];
   for (const [key, sources] of sourcesByKey) {
     const b = cellBoundsFromKey(key, graph); // 削除済みCLを指すキーはnull→安全側で除外
-    if (b) cellRecords.push({ b, sources });
+    if (b) cellRecords.push({ key, b, sources });
   }
   if (cellRecords.length === 0) return [];
+  // 4近傍の連結成分（Minor-3是正）。openingBeamAxes.js groupByConnectivityが端点共有ではなく
+  // これで開口をグルーピングする——角だけで接する2開口を誤って同じ成分にしないため。
+  assignComponentIds(cellRecords);
 
   const segs = outlineSegments(cellRecords.map(r => r.b));
   const gridIndex = gridIndexOf(graph);
@@ -424,7 +485,7 @@ export function floorOpeningEdges(graph, { riserOf = () => null } = {}) {
   for (const { isVertical, value, outwardSign, pieces } of groups.values()) {
     pieces.sort((a, b) => a.lo - b.lo);
     const orthoList = isVertical ? gridIndex.horizontals : gridIndex.verticals;
-    for (const { axis, lo: a, hi: b, sources } of mergeAdjacentPieces(pieces)) {
+    for (const { axis, lo: a, hi: b, sources, componentId } of mergeAdjacentPieces(pieces)) {
       const startCross = cornerCrossRange(cellRecords, isVertical, value, a);
       const endCross = cornerCrossRange(cellRecords, isVertical, value, b);
       const start = startCross && resolveCandidateForRange(orthoList, a, startCross[0], startCross[1], AXIS_MATCH_EPS_MM);
@@ -435,7 +496,7 @@ export function floorOpeningEdges(graph, { riserOf = () => null } = {}) {
       out.push({
         isVertical, axisCL: axis.id, clStart: start.id, clEnd: end.id,
         coord: value, lo: a, hi: b, outwardSign, onGrid: isGridCenterLine(axis),
-        source: sources[0], sources,
+        source: sources[0], sources, componentId,
       });
     }
   }

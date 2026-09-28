@@ -2,6 +2,8 @@ import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
 import { buildStructuralWallGate, buildExteriorSide, buildSelfFootprintGate, createFootprintCache } from './wallGate.js';
 import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, columnSeedBeamSegments, peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache } from './wallBeamAxes.js';
+import { openingBeamSourcesFor } from './openingBeamAxes.js';
+import { stairRiserOf } from '../finish/stair/stairDimensions.js';
 import {
   autoFillStructuralGrid,
   autoFillColumnAxisOffsets,
@@ -110,12 +112,21 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 「最上階」に置き換えて解決する。
   const isRoof = targetGraph.plane.isRoofPlane;
   const wallGate = await buildStructuralWallGate(targetGraph.plane, project, targetGraph, footprintCache, ctx);
-  // 壁由来の梁芯生成対象・木造梁成の下階柱（支持点）が使う1つ下の実体階のpeek。
-  // どちらの用途も不要なら（RC造は自階のみ／非木造は梁成の算定自体が対象外）peekしない。
+  // 壁由来の梁芯生成対象・木造梁成の下階柱（支持点）・規則O（床開口の「到達元」階段判定）が使う
+  // 1つ下の実体階のpeek。どの用途も不要なら（在来木造でなく規則O対象外の主構造は自階のみ）peekしない。
   // 屋根専用平面は project.planes に含まれず belowPlaneOf（peekBelowGraph内部）が引けないため、
   // 屋根専用のpeekRoofBelowGraph（roofForPlaneIdが指す最上階）へ切り替える（ステップ4）——
-  // 非在来（ownRules.framing・wallBeamAxesがいずれも偽）はこの分岐自体に入らずpeek 0回のまま。
-  const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing)
+  // 非在来かつ規則O対象外の主構造はこの分岐自体に入らずpeek 0回のまま。
+  // 【規則O・2026-09-28是正・Minor-4】RC造(ラーメン)/RC造(壁式)/S造/SRC造（規則O対象。framing=null・
+  // wallBeamAxesは'selfAndBelow'ではない）はopeningBeamAxes:'slabOpenings'判定を追加する前は
+  // belowGraphが常にnullだった。規則Oの「下階に到達元の階段があるか」判定
+  // （openingBeamAxes.js stairFilterFor）にはbelowGraphが要るが、**自階に階段が1本も無ければ
+  // 判定自体が無意味**（floorOpeningEdgesのstairFilterはgraph.stairsを絞るだけで、階段0本なら
+  // 何も絞るものが無い）ため、`targetGraph.stairs.length > 0`をゲートに加えて不要なpeekを避ける
+  // （屋根専用平面は自階に階段を持たないため`!isRoof`も明示——isRoofPlaneは常にstairs0本のはずだが
+  // 意図を読み取りやすくするため条件式に残す）。
+  const needsBelowForOpenings = ownRules.openingBeamAxes === 'slabOpenings' && !isRoof && targetGraph.stairs.length > 0;
+  const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing || needsBelowForOpenings)
     ? (precomputedBelowGraph !== undefined ? precomputedBelowGraph
         : isRoof ? await peekRoofBelowGraph(targetGraph, project, ctx) : await peekBelowGraph(targetGraph, project, ctx))
     : null;
@@ -128,6 +139,13 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   runInAction(() => targetGraph.setBeamColumnWidthMm(beamColumnWidthMm(targetGraph, belowGraph, project)));
   // 壁由来の梁芯生成対象（下階peekを含む非同期収集。wallGateと同じパターンで先に await する）。
   const wallSources = await collectWallBeamSources(targetGraph, project, belowGraph, wallSourceCache, ctx);
+  // 床開口（吹抜け・昇降路・階段吹抜け・階段の破れ先）由来の梁芯生成対象（規則O。自階の開口＋
+  // belowGraphは「下階に到達元の階段があるか」の判定にのみ使う＝追加peekなし（上のbelowGraph解決に
+  // openingBeamAxes:'slabOpenings'を含めた）。riserOfは自階の階段の蹴上を「自階〜1つ上の採用フロア」
+  // の階高から解決する（App.jsxの上階スラブ開口表示と同じ式をstairRiserOfへ一本化したもの）。
+  const openingSources = openingBeamSourcesFor(targetGraph, project, {
+    riserOf: (s) => stairRiserOf(s, project, targetGraph.plane), belowGraph,
+  });
   // 在来木造（beamPlacement:'wallRuns'）の壁線上の通し梁が候補列挙に使う壁区間（マージ不要のプレーン配列。
   // belowGraphはwallSourcesと同じpeek結果を使い回す＝1回の再計算で下階を二重にpeekしない）。
   // wallSourceCache共有により、直前のcollectWallBeamSources（selfAndBelowの内部でも同じ壁区間を
@@ -169,7 +187,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。

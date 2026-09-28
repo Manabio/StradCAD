@@ -210,6 +210,9 @@ const WOOD_RULES = Object.freeze({
   }),
   // 壁由来の梁芯生成源（(3)）: 自階＋1つ下の実体階の下地オーナー壁（下地材の種別は問わない）。在来のみ。
   wallBeamAxes: null,
+  // 床開口（吹抜け・昇降路・階段開口）を囲むセル境界CLから梁芯を生成する規則O
+  // （structural/openingBeamAxes.js）。木造は在来の階段開口処理（stairOpeningRuns）が別に担うためnull。
+  openingBeamAxes: null,
   // 外壁アルミサッシはフィン下地直付け（openings/sashDetailCatalog.js）。
   sashFinDirect: true,
   // 採番の選択子（(3)）: individualBeamRoles＝標準材（defaultSections.beam）以外の梁を材ごとに個別採番
@@ -260,6 +263,12 @@ const RC_RULES = Object.freeze({
   }),
   // 自階の下地オーナー壁のうち下地材がRC下地の壁のみ（上下階で壁が連続し自立するため下階は見ない）。
   wallBeamAxes: 'rcBacking',
+  // 床開口（吹抜け・昇降路・階段開口）を囲むセル境界CLから梁芯を生成する規則O
+  // （structural/openingBeamAxes.js）。STEEL_RULESはRC_RULESをspreadし上書きしないため、
+  // S造・SRC造にも効く（wallBeamAxesをnullで上書きしているのとは対照的）。
+  openingBeamAxes: 'slabOpenings',
+  // 規則Oのクリアランス(mm)。壁下地帯・梁幅を逃げた位置からさらに空ける余白（既定0）。
+  openingBeamClearanceMm: 0,
   sashFinDirect: false,
   numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null, columnGroupScope: 'building' }),
 });
@@ -338,6 +347,10 @@ export const UNSPECIFIED_RULES = Object.freeze({
   isRigidFrame: false,
   baseMaterial: 'WOOD',
   defaultSections: sectionsFor('WOOD'),
+  // 【裁定・2026-09-28】STEEL_RULESはRC_RULESをspreadしopeningBeamAxesを上書きしないため
+  // （wallBeamAxesとは異なり）継承すると'slabOpenings'のままになる——isStructureSpecifiedの趣旨
+  // （主構造未確定の階では柱・梁を生成しない）と揃え、ここで明示的にnullへ上書きする。
+  openingBeamAxes: null,
 });
 
 /** 主構造（実効値の文字列表記）のルールセットを返す。未知・未指定は UNSPECIFIED_RULES。 */

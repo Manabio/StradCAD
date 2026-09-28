@@ -43,6 +43,7 @@ test('structureRules: 6種の主構造キーすべてにルールがあり、isR
     assert.ok(typeof r.foundation.hasBase === 'function' && typeof r.foundation.hasMatSlab === 'function');
     assert.ok(['fixed', 'spanDivisor'].includes(r.foundation.beamSizing.kind));
     assert.ok([null, 'rcBacking', 'selfAndBelow'].includes(r.wallBeamAxes));
+    assert.ok([null, 'slabOpenings'].includes(r.openingBeamAxes));
   }
 });
 
@@ -88,6 +89,8 @@ test('structureRules: 木造系（在来・2×4）の判定・基礎種別・基
   assert.equal(isTraditionalWoodStructure('木造（2"×4"）'), false, '2×4は在来ではない');
   assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).wallBeamAxes, 'selfAndBelow', '在来だけ壁由来の梁芯を自階＋下階から生成');
   assert.equal(rulesFor('木造（2"×4"）').wallBeamAxes, null, '2×4は壁自体が構造体＝壁下に梁を入れない');
+  assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).openingBeamAxes, null, '在来木造は階段開口処理(stairOpeningRuns)が別に担う（規則O対象外）');
+  assert.equal(rulesFor('木造（2"×4"）').openingBeamAxes, null);
 });
 
 // ---- 各階柱寸法（ステップ4 C-2a）: woodColumnWidthMm/woodColumnSectionId ----
@@ -248,6 +251,8 @@ test('structureRules: RC系はRC下地の壁だけを梁芯の生成源にし、
     assert.equal(r.family, 'rc');
     assert.equal(isWoodStructure(key), false);
     assert.equal(r.wallBeamAxes, 'rcBacking');
+    assert.equal(r.openingBeamAxes, 'slabOpenings', 'RC系は床開口からも梁芯を生成する（規則O）');
+    assert.equal(r.openingBeamClearanceMm, 0);
     assert.deepEqual({ ...r.foundation.beamSizing }, { kind: 'spanDivisor', depthDivisor: 7 });
     assert.equal(foundationOptionsFor(key), RC_FOUNDATION_OPTIONS);
     assert.equal(r.foundation.hasBase('ベタ基礎'), true, '非木造はベースを常に生成');
@@ -260,6 +265,9 @@ test('structureRules: RC系はRC下地の壁だけを梁芯の生成源にし、
     const r = rulesFor(key);
     assert.equal(r.family, 'steel');
     assert.equal(r.wallBeamAxes, null);
+    // STEEL_RULESはRC_RULESをspreadしopeningBeamAxesを上書きしないため、S造・SRC造にも規則Oが効く。
+    assert.equal(r.openingBeamAxes, 'slabOpenings', 'S造・SRC造も床開口から梁芯を生成する（規則O）');
+    assert.equal(r.openingBeamClearanceMm, 0);
     assert.deepEqual({ ...r.foundation.beamSizing }, { kind: 'spanDivisor', depthDivisor: 8 });
     assert.equal(defaultMaterialFor(key), 'STEEL');
   }
@@ -278,6 +286,10 @@ test('【失敗系】structureRules: 未指定（\'未定\'）・未知の主構
     assert.deepEqual({ ...r.foundation.beamSizing }, { kind: 'spanDivisor', depthDivisor: 8 }, '旧 computeFoundationBeamSize はL/8');
     assert.deepEqual(r.designation, { roof: 'R階伏図', floorSuffix: '伏図' });
     assert.equal(r.wallBeamAxes, null);
+    // 【裁定・2026-09-28】openingBeamAxesはUNSPECIFIED_RULESで明示null上書きする
+    // （isStructureSpecifiedの趣旨＝主構造未確定の階では柱・梁を生成しない、とwallBeamAxesの
+    // 扱いに揃える）。
+    assert.equal(r.openingBeamAxes, null, '未指定はnull（明示上書き。wallBeamAxesと同じ扱いに揃える）');
     assert.equal(r.foundation.drawsBands, false);
     assert.equal(r.isRigidFrame, false);
   }

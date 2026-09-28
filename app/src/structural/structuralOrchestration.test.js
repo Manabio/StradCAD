@@ -1492,6 +1492,10 @@ test('【統合】reflectStructuralToOtherFloors: 非在来（S造）は各非�
       // 採番の適用フェーズ1）。**このテストの目的はpeek回数の内訳を厳密に説明することではなく**、
       // 「反映対象に在来木造の階が無ければ、いずれかの階のchangedに関わらず内部パスが2回目へ進まない」
       // ことを固定すること——sawWallRunsのガードを外す変異でこの値が増える（下のmutation testで実測）。
+      // 【規則O・Minor-4是正・2026-09-28】structureRules.js openingBeamAxes:'slabOpenings'（S造も対象）
+      // によりbelowGraph解決条件へopeningBeamAxes判定を加えたが、Minor-4是正で
+      // `targetGraph.stairs.length > 0`もゲートに含めたため、本フィクスチャ（階段0本）では
+      // 追加peekが発生せず、この値は変わらない（p1=3のまま）。
       assert.equal(peekCounts.get('p1'), 3, '1階のpeek回数（内部パス1回分の基準値）');
       assert.equal(peekCounts.get('p2'), 2, '2階のpeek回数（内部パス1回分の基準値）');
     } finally {
@@ -2526,7 +2530,11 @@ test('【B-5・統合】reflectStructuralToOtherFloors: 非在来（S造）はct
       // 「下の実体階」「1つ上の実体階」を求めるために階をまたいでもう1回graphForを呼ぶ分
       // （非在来でも基礎伏図の解決に使われる）を含めた合計——sawWallRunsが立たない非在来は
       // 収集の内部パスが2回目へ進まないため、この値を超えない（内部パスが2回目へ進む変異が
-      // 起きれば、この合計値がさらに増える）。
+      // 起きれば、この合計値がさらに増える）。【規則O・Minor-4是正・2026-09-28】S造・SRC造・RC造は
+      // structureRules.js openingBeamAxes:'slabOpenings'（規則O・床開口由来の梁芯生成）の対象で、
+      // openingBeamSourcesFor は「下階に到達元の階段があるか」の判定用にbelowGraphを要求するが、
+      // Minor-4是正で`targetGraph.stairs.length > 0`もbelowGraph解決のゲートに含めたため、
+      // 本フィクスチャ（階段0本）では追加peekが発生せず、この値は変わらない。
       assert.equal(ctx.stats.hit + ctx.stats.peek, 5,
         `非在来はgraphFor呼び出し合計がこの上限で頭打ちになる（実際:${ctx.stats.hit + ctx.stats.peek}）`);
     } finally {

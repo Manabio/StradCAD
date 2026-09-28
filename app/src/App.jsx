@@ -24,7 +24,7 @@ import { usePointerInteraction } from './interaction/usePointerInteraction.js';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
-import { floorHeightAbove } from './finish/stair/stairDimensions.js';
+import { floorHeightAbove, stairRiserOf } from './finish/stair/stairDimensions.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
 import { shouldShowPlanFigure } from './renderer/planFigureVisibility.js';
 import { slabOpeningRects, slabOpeningFrames, slabOpeningEdges } from './finish/stair/slabOpening.js';
@@ -451,8 +451,7 @@ const App = observer(() => {
       setUpperVoidCrosses(computeVoidCrosses(temp));
       // 上階スラブの開口（吹抜け・階段吹抜けRoom＋上階階段の破れ先セル）。上階階段の破れ位置は
       // その階の蹴上で決まるため、上階のさらに上との階高から riser を解決して渡す。
-      const aboveFh = floorHeightAbove(project, above);
-      const riserOf = (s) => s.riser ?? (aboveFh != null ? aboveFh / Math.max(1, s.totalSteps) : null);
+      const riserOf = (s) => stairRiserOf(s, project, above);
       const openings = slabOpeningRects(temp, { riserOf });
       setUpperSlabOpenings(openings);
       setUpperSlabFrames(slabOpeningFrames(temp, { riserOf }));

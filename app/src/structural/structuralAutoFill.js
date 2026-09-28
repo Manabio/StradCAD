@@ -10,6 +10,7 @@ import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
+import { autoFillOpeningBeamAxes } from './openingBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 
@@ -486,8 +487,12 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
  *  （在来木造の壁線上の通し梁・屋根の軒桁）へそのまま素通しする。
  *  戻り値の originsUpdatedColumns（QA裁定Major-1・2026-09-27）: autoFillColumnsForStructure の
  *  originsUpdated をそのまま返す——既存柱の由来集合だけが変わった柱id（changed判定には現れない）。
- *  非在来・柱を生成しない階（屋根等）は常に[]。structuralRecompute.js が別枠の originsChanged として使う。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined) {
+ *  非在来・柱を生成しない階（屋根等）は常に[]。structuralRecompute.js が別枠の originsChanged として使う。
+ *  openingSources: 床開口（吹抜け・昇降路・階段吹抜け・階段の破れ先）由来の梁芯生成源（規則O。
+ *  openingBeamAxes.js openingBeamSourcesFor の結果）。壁由来梁芯（autoFillWallBeamAxes）の直後に
+ *  autoFillOpeningBeamAxes へそのまま渡す——省略時（既定[]）は従来どおり何も生成しない
+ *  （openingBeamAxes:'slabOpenings'でない主構造は呼び出し側が[]を渡す）。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = []) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -500,6 +505,9 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 壁由来の梁芯CL自動生成は柱より前に行う（在来木造の壁交点柱が梁芯CLをアンカーに使うため。
   // 通り芯グリッドの部材とは独立の生成源なので、他の主構造でも順序は結果に影響しない）。
   const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
+  // 床開口（吹抜け・昇降路・階段吹抜け・階段の破れ先）由来の梁芯CL自動生成（規則O）。
+  // 壁由来梁芯の直後・柱より前——重複ガード（findBeamAnchorCL）が壁由来梁芯も対象に含むため。
+  const newOpeningBeamAxes = autoFillOpeningBeamAxes(graph, openingSources);
   // 柱は主構造ルールの配置源（通り芯交点／壁交点）で振り分ける。壁交点方式は候補に無い自動柱の撤去も返す。
   const columnsResult = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure))
     ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache) : { created: [], removed: [], originsUpdated: [] };
@@ -560,7 +568,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
   return {
     newColumns, removedColumns, newFootings, removedFootings, originsUpdatedColumns,
-    newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
+    newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newOpeningBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
     removedBeams: [...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed],
   };
 }

@@ -3895,9 +3895,10 @@ test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStru
   // 1つ下の実体階=最上階のgraphから計算する）が加わった。R-2（2026-09-19是正）で11番目の引数として
   // freeEndGraph（自由端の判定基準。屋根専用平面のときだけ1つ下の実体階=最上階のgraphを渡す）が加わった。
   // ステップCで12番目の引数としてwallSourceCache（1回の再計算内の壁区間memo。wallBeamAxes.js
-  // createWallSourceCache）が加わった。
-  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache\)/.test(src),
-    'autoFillStructuralGrid へ wallSegments・aboveColumns・belowColumns・aboveBeamSegments・selfGate・freeEndGraph・wallSourceCache を渡していない');
+  // createWallSourceCache）が加わった。規則O（床開口由来の梁芯。openingBeamAxes.js。実装指示書
+  // 「スラブ開口と補強・S造梁芯選定」ステップ4）で13番目の引数としてopeningSourcesが加わった。
+  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources\)/.test(src),
+    'autoFillStructuralGrid へ wallSegments・aboveColumns・belowColumns・aboveBeamSegments・selfGate・freeEndGraph・wallSourceCache・openingSources を渡していない');
   assert.ok(/removedBeams\.length > 0/.test(src), 'removedBeams が changed の判定に含まれていない');
 });
 

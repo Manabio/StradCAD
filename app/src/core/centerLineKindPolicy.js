@@ -244,6 +244,14 @@ const STRUCTURAL_ANCHOR_KINDS_ANY = Object.freeze(CL_KINDS.filter(k =>
 // wallBeamAxisFollow.js followWallBeamAxes の追従元探索（findWallBeamAxisCL。通り芯を動かさないため
 // STRUCTURAL_ANCHOR_KINDS.primaryは使わない）と、structuralAutoFill.js の梁芯CL全件列挙
 // （beamAxisCenterLines）が共有する。
+//
+// 梁芯（centerLineKind==='beam'）の発生源（実装指示書「スラブ開口と補強・S造梁芯選定」§2.2）:
+//   - 壁由来（structural/wallBeamAxes.js autoFillWallBeamAxes。beamAxisOrigin: 'wall'）
+//   - 床梁割付け由来（structural/woodAutoFill.js。beamAxisOrigin: 'floorBeam'）
+//   - 開口由来＝規則O（structural/openingBeamAxes.js autoFillOpeningBeamAxes。beamAxisOrigin:
+//     'opening'。対象はS造・RC造・SRC造——structureRules.js openingBeamAxes:'slabOpenings'。
+//     通り芯上の辺は大梁の領分のため生成しない）
+//   - 規則C（開口以外の中心線からのS造梁芯選定）は未裁定（.claude/structural-model.md参照）
 export const BEAM_AXIS_KINDS = Object.freeze(['beam']);
 
 // woodAutoFill.js 支持長超過時の追加柱の走行方向候補（ユーザー指示2026-09-19「梁の支持長が1820を超える
