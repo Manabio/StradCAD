@@ -4,6 +4,7 @@ import { buildStructuralWallGate, buildExteriorSide, buildSelfFootprintGate, cre
 import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, columnSeedBeamSegments, peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache } from './wallBeamAxes.js';
 import { openingBeamSourcesFor } from './openingBeamAxes.js';
 import { stairRiserOf } from '../finish/stair/stairDimensions.js';
+import { RoomFeature } from '../core.js';
 import {
   autoFillStructuralGrid,
   autoFillColumnAxisOffsets,
@@ -126,7 +127,13 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // （屋根専用平面は自階に階段を持たないため`!isRoof`も明示——isRoofPlaneは常にstairs0本のはずだが
   // 意図を読み取りやすくするため条件式に残す）。
   const needsBelowForOpenings = ownRules.openingBeamAxes === 'slabOpenings' && !isRoof && targetGraph.stairs.length > 0;
-  const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing || needsBelowForOpenings)
+  // 踊り場受け梁（role:'landing'）は「下から階段が到達している」徴候（自階に上階自動設置の階段
+  // コピーがある、または最上階なら階段吹抜けSTAIR_VOID Roomがある）があるときだけ下階を覗く
+  // （structural/structuralAutoFill.js autoFillStairLandingBeams。ユーザー裁定2026-09-28）。
+  // 屋根専用平面は対象外（屋根には階段が到達しない）。
+  const needsBelowForLanding = !isRoof
+    && (targetGraph.stairs.length > 0 || targetGraph.rooms.some(r => r.feature === RoomFeature.STAIR_VOID));
+  const belowGraph = (ownRules.wallBeamAxes === 'selfAndBelow' || ownRules.framing || needsBelowForOpenings || needsBelowForLanding)
     ? (precomputedBelowGraph !== undefined ? precomputedBelowGraph
         : isRoof ? await peekRoofBelowGraph(targetGraph, project, ctx) : await peekBelowGraph(targetGraph, project, ctx))
     : null;
@@ -187,7 +194,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
 
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
@@ -246,7 +253,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     || removedByClass.length > 0
     || updatedColumnSizes.length > 0 || updatedFootingSizes.length > 0 || updatedBeamSizes.length > 0
     || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0 || updatedBeamDepths.length > 0
-    || updatedColumnEcc.length > 0;
+    || updatedColumnEcc.length > 0 || updatedLandingBeams.length > 0;
   // QA裁定（Major-1・2026-09-27）: 柱の由来集合（structural/columnOrigins.js）だけが変わった場合は
   // changed に含めない——changed は収束ループ（repeatReflectPassUntilConverged）の継続判定・undo登録に
   // 使われており、由来だけの変化でパスを1回増やしたり由来だけのundoエントリを積んだりしないため

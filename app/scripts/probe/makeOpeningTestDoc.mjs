@@ -19,12 +19,15 @@
 //       VOIDにし、1Fは丸ごとmain。
 //     セルC・セルDは全階ともmain部屋1つでそのまま埋める。
 //   1階: 鉄骨SWITCHBACK階段（landing+outboundのみを部屋化。returnKeyが破れ先＝2階からの
-//        見下ろし開口）。踊り場受け梁(LG)が生成される階（floorHeightAbove(1F)=2Fの階高）。
+//        見下ろし開口）。踊り場受け梁(LG)は設置階(1F)ではなく到達階(2F)へ生成される
+//        （ユーザー裁定2026-09-28。floorHeightAbove(1F)=2Fの階高を使ってlevelOffsetを換算する）。
 //   2階: syncUpperFloors（実装本体・本番同関数）で1階の階段を自動設置（フットプリント一致の
 //        コピー。stairFilterForの「下階に到達元の階段がある」条件を満たす中間階）＋
 //        EV部屋（isShaftFeature。床なし＝上階スラブ開口）を1部屋、階段と別ゾーンに独立で追加。
+//        1階階段の到達階でもあるため、踊り場受け梁(LG)がここに生成される。
 //   3階（最上階）: syncUpperFloorsが自動でSTAIR_VOID Room（階段吹抜け。1階階段のfootprintを
-//        丸ごと翻訳）を指定する＋VOID部屋を1部屋、別ゾーンに独立で追加。
+//        丸ごと翻訳）を指定する＋VOID部屋を1部屋、別ゾーンに独立で追加。2階階段（1階の
+//        自動設置コピー）の到達階でもあるため、踊り場受け梁(LG)もここに生成される。
 //
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/makeOpeningTestDoc.mjs [出力先.stq]
 // 既定の出力先は D:/tatsuya/Download/opening-test.stq（兄弟スクリプト makeClDeleteTest.mjs・

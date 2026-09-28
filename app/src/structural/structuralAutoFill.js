@@ -1,4 +1,5 @@
-import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, findHostBeam, openingHostRefCLs, IndependentFooting } from '../core.js';
+import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, findHostBeam, openingHostRefCLs, IndependentFooting, RoomFeature } from '../core.js';
+import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { beamAxisCenterLines as policyBeamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { findSectionEntry } from './sectionCatalog.js';
@@ -13,6 +14,7 @@ import { autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisShortExtents } from './openingBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
+import { roomBounds } from '../finish/gridCells.js';
 
 // 構造モード突入時に呼ばれる、構造体トポロジー（構造グリッド）から未定義の柱・梁・基礎を検出して
 // デフォルト材料・断面で自動生成する純関数群。finish/edgeClassify.js の選定・差分同期パターンを流用する。
@@ -427,26 +429,51 @@ function resolveCLById(graph, id) {
   return graph.centerLines.find(cl => String(cl.id) === String(id)) ?? null;
 }
 
-/** 鉄骨・RC階段の踊り場を支える受け梁（role:'landing', symbol 'LG'）を、踊り場の壁側1辺
- *  （landingEdgeCLsのkind:'back'＝直進部レーンと反対側の外周辺。ユーザー裁定2026-08-23 §9-B。
- *  side辺には生成しない）へ自動生成する（除外集合のスロット・既存梁との重複はスキップ。WP-B2。
- *  architect承認済み実装指示書§4(b)）。
- *  対象は stair.structure（階段自身の材質。フロアの主構造とは独立の値）がSTEEL・RCの階段のみ
- *  （§9-D）。既定の梁天端(levelOffset) = 踊り場桁枠の下端から10mm下
- *  = landingZ − LANDING_FRAME_DEPTH_MM − LANDING_BEAM_DROP_MM（§9-C）。
- *  wallGateは適用しない——階段のRoom（STAIR）はフットプリントの権威を確立しない
- *  （structural-model.md「属性Roomはフットプリントの権威を確立しない」）ため、ゲートに掛けると
- *  常に「範囲外」判定になり生成されなくなってしまう。 */
-export function autoFillStairLandingBeams(graph, project, wallGate = null) {
-  void wallGate; // 意図的に未使用（理由は上記コメント）。他のautoFill*と引数構成を揃えるためだけに受け取る。
-  const floorHeight = floorHeightAbove(project, graph.plane);
-  const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
-  const created = [];
-  for (const stair of graph.stairs) {
-    if (!LANDING_BEAM_STRUCTURES.has(stair.structure)) continue;
-    const z = landingZ(stair, graph, floorHeight);
+// 踊り場矩形（roomBounds）の世界座標一致判定の許容誤差(mm)。openingBeamAxes.js hasMatchingStairBelow
+// と同じ規約（CL_OVERLAP_TOL_MM）。
+const LANDING_RECT_EPS_MM = CL_OVERLAP_TOL_MM;
+
+function rectsMatch(r1, r2) {
+  return Number.isFinite(r1.x1) && Number.isFinite(r2.x1)
+    && Math.abs(r1.x1 - r2.x1) < LANDING_RECT_EPS_MM && Math.abs(r1.x2 - r2.x2) < LANDING_RECT_EPS_MM
+    && Math.abs(r1.y1 - r2.y1) < LANDING_RECT_EPS_MM && Math.abs(r1.y2 - r2.y2) < LANDING_RECT_EPS_MM;
+}
+
+/** belowStair（1つ下の実体階=設置階に立つ階段）の踊り場外周辺を、到達階（graph）側で解決する。
+ *  (a) footprint（roomBounds）が一致する上階自動設置コピー（finish/stair/stairFloorSync.js
+ *  syncUpperFloors。graph.stairsに新idで複製される）があれば、それで landingEdgeCLs。
+ *  (b) 無ければ（最上階＝コピーの代わりにSTAIR_VOID Roomだけがある）、footprintが一致する
+ *  STAIR_VOID Roomを探し、belowStairのtype/upDirection/flip/sections/totalStepsとroom.cellsを
+ *  合成したshimでlandingEdgeCLs（resolveSwitchbackSpanLengths・makeFrameはtype/upDirection/flip/
+ *  sections/totalSteps/cellsしか読まないため、Stairの実インスタンスでなくても同じ幾何が求まる）。
+ *  どちらも無ければnull。 */
+function resolveArrivalLandingEdges(belowStair, belowGraph, graph) {
+  const belowRect = roomBounds(belowStair.cells, belowGraph);
+  if (!Number.isFinite(belowRect.x1)) return null;
+  const copy = graph.stairs.find(s => rectsMatch(roomBounds(s.cells, graph), belowRect));
+  if (copy) return landingEdgeCLs(copy, graph);
+  const room = graph.rooms.find(r => r.feature === RoomFeature.STAIR_VOID && rectsMatch(roomBounds(r.cells, graph), belowRect));
+  if (!room) return null;
+  const shim = {
+    type: belowStair.type, upDirection: belowStair.upDirection, flip: belowStair.flip,
+    sections: belowStair.sections, totalSteps: belowStair.totalSteps, cells: room.cells,
+  };
+  return landingEdgeCLs(shim, graph);
+}
+
+/** belowGraph・現況の階段配置から、今回有効なLGの源（spanKey・材質・levelOffset等）を列挙する。
+ *  belowGraphが無い（最下階・屋根専用平面・下階peek対象外）、またはfloorHeightAboveが未解決なら
+ *  空配列（＝有効な源が0件。呼び出し側の撤去段が既存の自動生成LGを全撤去する）。 */
+function collectLandingSources(graph, project, belowGraph) {
+  if (!belowGraph) return [];
+  const floorHeight = floorHeightAbove(project, belowGraph.plane); // 設置階(belowGraph)〜到達階(graph)の階高
+  if (floorHeight == null) return [];
+  const sources = [];
+  for (const belowStair of belowGraph.stairs) {
+    if (!LANDING_BEAM_STRUCTURES.has(belowStair.structure)) continue;
+    const z = landingZ(belowStair, belowGraph, floorHeight); // 設置階FL基準
     if (z == null) continue;
-    const edges = landingEdgeCLs(stair, graph);
+    const edges = resolveArrivalLandingEdges(belowStair, belowGraph, graph);
     if (!edges) continue;
     const backEdge = edges.find(e => e.kind === 'back');
     if (!backEdge) continue;
@@ -454,18 +481,94 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
     const clStart = resolveCLById(graph, backEdge.clStart);
     const clEnd = resolveCLById(graph, backEdge.clEnd);
     if (!axisCL || !clStart || !clEnd) continue;
-    const key = spanKey(axisCL, clStart, clEnd);
-    if (existing.has(key) || graph.excludedBeamSlots.has(key)) continue;
-    const materialType = stair.structure;
-    const levelOffset = z - LANDING_FRAME_DEPTH_MM - LANDING_BEAM_DROP_MM;
-    created.push(graph.addBeam(
-      materialType, DEFAULT_BEAM_SECTION_BY_MATERIAL[materialType],
-      axisCL, backEdge.isVertical, clStart, clEnd,
-      { role: 'landing', levelOffset },
-    ));
-    existing.add(key);
+    const materialType = belowStair.structure;
+    const levelOffset = z - floorHeight - LANDING_FRAME_DEPTH_MM - LANDING_BEAM_DROP_MM;
+    sources.push({ key: spanKey(axisCL, clStart, clEnd), axisCL, clStart, clEnd, isVertical: backEdge.isVertical, materialType, levelOffset });
   }
-  return created;
+  return sources;
+}
+
+/** 鉄骨・RC階段の踊り場を支える受け梁（role:'landing', symbol 'LG'）を、踊り場の**到達階**
+ *  （踊り場の上の階の伏図）へ自動生成する（設置階には出さない。ユーザー裁定2026-09-28）。
+ *  源は`belowGraph.stairs`（1つ下の実体階＝設置階のgraph）——`graph.stairs`（自階＝到達階）からは
+ *  生成しない（設置階自身の伏図は常に0本のまま。基礎伏図＝最下階も同様に0本）。到達階での踊り場
+ *  外周辺の解決はresolveArrivalLandingEdges参照（単一の情報源finish/stair/stairLanding.jsの
+ *  landingEdgeCLsを、上階自動設置コピーまたはSTAIR_VOID Room由来のshimへ適用する）。
+ *  生成対象は踊り場外周4辺のうち壁側1辺（kind:'back'）だけ（ユーザー裁定2026-08-23 §9-B。
+ *  side/front辺には生成しない）。対象は stair.structure（階段自身の材質）がSTEEL・RCの階段のみ
+ *  （§9-D）。
+ *  levelOffset（到達階FL基準）: 設置階FL基準のlandingZ（§9-C=踊り場桁枠下端-10mm）から、設置階〜
+ *  到達階の階高ぶんを差し引いて到達階FL基準へ換算する
+ *  （levelOffset = landingZ − 設置階〜到達階の階高 − LANDING_FRAME_DEPTH_MM − LANDING_BEAM_DROP_MM）。
+ *
+ *  撤去・更新段（一般則。ユーザー裁定・案A・2026-09-25と同型。QA指摘F1・2026-09-29是正）:
+ *  今回の源から求めた有効spanKey集合を作り、(a) 集合に無い既存の自動生成LG（role:'landing'・
+ *  dimensionStatus:'auto'）は撤去する（貫通スリーブ先消し・excludedBeamSlotsには触れない）——
+ *  下階の階段が消えた・移動した等で旧LGが取り残されるのを防ぐ（autoFillBeamsの撤去段と同じ
+ *  ADD-ONLYの穴を塞ぐ）。この段はbelowGraphがnull（最下階・設置階自身）でも走らせる——belowGraphが
+ *  無い＝有効集合が空なので、そのgraphに残る自動生成LGは無条件で撤去対象になる。
+ *  (b) 有効集合にある自動生成LGが既に存在する場合はlevelOffsetを最新値へ更新する（旧仕様で保存
+ *  された正値のlevelOffset等が冪等スキップで直らない問題の是正）。
+ *  (c) 有効集合にあり既存梁が無いスロットは新規生成する。同spanKeyに自動生成のG（role:'primary'・
+ *  dimensionStatus:'auto'）があれば撤去してLGへ置き換える（貫通スリーブも連鎖削除・除外集合は
+ *  汚さない生のbeamMap.delete。ユーザー裁定2026-09-28: LG区間には床大梁Gを置かない——ただしこれは
+ *  置換分岐そのものが保証する。生成順序（大梁より前）は1パス内の無駄な生成→即撤去を省くだけで、
+ *  順序自体が排他性を保証するわけではない。QA指摘F5是正）。同spanKeyに手動固定・他roleの梁が
+ *  あればLGを作らずスキップする（skippedConflictsとして件数を返す）。excludedBeamSlotsに記録された
+ *  辺（ユーザーがこのLGを手動削除済み）はG撤去も行わずそのままスキップする。
+ *  wallGateは適用しない——階段のRoom（STAIR）・階段吹抜け（STAIR_VOID）はフットプリントの権威を
+ *  確立しない（structural-model.md「属性Roomはフットプリントの権威を確立しない」）ため、ゲートに
+ *  掛けると常に「範囲外」判定になり生成されなくなってしまう。
+ *  @returns {{created: object[], removedG: string[], removedStale: string[], updated: string[], skippedConflicts: number}} */
+export function autoFillStairLandingBeams(graph, project, wallGate = null, belowGraph = null) {
+  void wallGate; // 意図的に未使用（理由は上記コメント）。他のautoFill*と引数構成を揃えるためだけに受け取る。
+  const sources = collectLandingSources(graph, project, belowGraph);
+  const validKeys = new Set(sources.map(s => s.key));
+
+  // (a) 撤去段: 有効集合に無い自動生成LGは撤去する（belowGraphがnullでも走る）。
+  const removedStale = [];
+  for (const beam of graph.beams) {
+    if (beam.role !== 'landing' || beam.dimensionStatus !== 'auto') continue;
+    if (validKeys.has(spanKey(beam.axisCL, beam.clStart, beam.clEnd))) continue;
+    for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === beam.id) graph.sleeveMap.delete(s.id);
+    graph.beamMap.delete(beam.id);
+    removedStale.push(beam.id);
+  }
+
+  const created = [];
+  const removedG = [];
+  const updated = [];
+  let skippedConflicts = 0;
+  for (const src of sources) {
+    if (graph.excludedBeamSlots.has(src.key)) continue; // 手動削除されたLGは復活させない（Gの置換も行わない）
+    const conflict = graph.beams.find(b => spanKey(b.axisCL, b.clStart, b.clEnd) === src.key);
+    if (conflict) {
+      if (conflict.role === 'landing') {
+        // (b) 既存の自動生成LG: levelOffsetを最新値へ更新する（手動固定は上書きしない）。
+        if (conflict.dimensionStatus === 'auto' && conflict.levelOffset !== src.levelOffset) {
+          conflict.setField('levelOffset', src.levelOffset);
+          updated.push(conflict.id);
+        }
+        continue;
+      }
+      if (conflict.role === 'primary' && conflict.dimensionStatus === 'auto') {
+        // (c) 自動生成のGを置換する。除外集合は汚さない生の削除（deleteClassificationOverflowと同じ
+        // 「梁ホストの貫通スリーブも連鎖削除する」規約）。
+        for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === conflict.id) graph.sleeveMap.delete(s.id);
+        graph.beamMap.delete(conflict.id);
+        removedG.push(conflict.id);
+      } else {
+        skippedConflicts++; // 手動固定・他role の梁は上書きしない
+        continue;
+      }
+    }
+    created.push(graph.addBeam(
+      src.materialType, DEFAULT_BEAM_SECTION_BY_MATERIAL[src.materialType],
+      src.axisCL, src.isVertical, src.clStart, src.clEnd,
+      { role: 'landing', levelOffset: src.levelOffset },
+    ));
+  }
+  return { created, removedG, removedStale, updated, skippedConflicts };
 }
 
 /** 構造モード突入時に呼ぶ統合エントリポイント。柱・梁・基礎（フーチング）が対象（耐力壁・スラブは対象外）。
@@ -519,8 +622,13 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null) {
  *  openingSources: 床開口（吹抜け・昇降路・階段吹抜け・階段の破れ先）由来の梁芯生成源（規則O。
  *  openingBeamAxes.js openingBeamSourcesFor の結果）。壁由来梁芯（autoFillWallBeamAxes）の直後に
  *  autoFillOpeningBeamAxes へそのまま渡す——省略時（既定[]）は従来どおり何も生成しない
- *  （openingBeamAxes:'slabOpenings'でない主構造は呼び出し側が[]を渡す）。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = []) {
+ *  （openingBeamAxes:'slabOpenings'でない主構造は呼び出し側が[]を渡す）。
+ *  belowGraph: 1つ下の実体階のgraph（踊り場受け梁＝autoFillStairLandingBeamsが「踊り場の設置階」の
+ *  階段を読む唯一の入口。ユーザー裁定2026-09-28: LGは設置階でなく到達階の伏図に出す）。省略時
+ *  （既定null）は新規LGを生成しない（最下階・屋根専用平面・下階peek対象外と同じ扱い）——ただし
+ *  自動生成済みの既存LG（dimensionStatus:'auto'）が残っていれば撤去する（QA指摘F1是正。下階の階段が
+ *  消えた等で有効な源が0件になった場合の後始末）。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -559,6 +667,18 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : { created: [], removed: [] };
   const newFootings = footingsResult.created;
   const removedFootings = footingsResult.removed;
+  // 踊り場受け梁（role:'landing'）。到達階（踊り場の上の階）へ自動生成する（ユーザー裁定2026-09-28:
+  // 設置階ではなく到達階）。同spanKeyの自動生成G（role:'primary'）との排他性はautoFillStairLandingBeams
+  // 内の置換分岐（同spanKeyのauto G撤去）が保証する——ここで大梁(G)生成より前に呼ぶのは、1パス内で
+  // 「Gを生成してからLGへ置換で即撤去」という無駄を省くためだけ（QA指摘F5是正: 順序自体が排他性を
+  // 保証するわけではない）。屋根専用平面は対象外（屋根には階段が到達しない）。
+  const landingResult = !isRoof
+    ? autoFillStairLandingBeams(graph, project, wallGate, belowGraph)
+    : { created: [], removedG: [], removedStale: [], updated: [], skippedConflicts: 0 };
+  const newLandingBeams = landingResult.created;
+  const removedLandingG = landingResult.removedG;
+  const removedStaleLandingBeams = landingResult.removedStale;
+  const updatedLandingBeams = landingResult.updated;
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
   const beamsResult = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure))
     ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments, belowColumns, selfGate, freeEndGraph, wallSourceCache)
@@ -597,9 +717,6 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     : { created: [], removed: [] };
   const newRoofBeams = roofBeamsResult.created;
   const removedRoofBeams = roofBeamsResult.removed;
-  // 踊り場受け梁（role:'landing'）。鉄骨・RC階段の踊り場辺（壁側1辺）へ自動生成する（WP-B2）。
-  // 通り芯グリッドとは無関係の生成源のため、小梁生成の直前という以外の順序上の制約はない。
-  const newLandingBeams = autoFillStairLandingBeams(graph, project, wallGate);
   // 梁芯CL（discipline:'fuse'）ごとの小梁自動生成。wallGate は直接引かない
   // （直交大梁に挟まれている＝大梁のフットプリント判定を継承するため。上のnewBeams生成後に呼ぶ）。
   // 出自を問わず全梁芯が対象のため、壁由来の梁芯（newWallBeamAxes）もそのまま拾う。beamPlacement:'wallRuns'
@@ -613,7 +730,12 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     // （structuralRecompute.js の changed 判定はこの配列の長さも見る）。
     changedOpeningBeamAxes: [...relabeledOpeningBeamAxes, ...retargetedOpeningBeamAxes, ...retargetedOpeningBeamAxesShort],
     newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newOpeningBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
-    removedBeams: [...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes],
+    removedBeams: [...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes, ...removedLandingG, ...removedStaleLandingBeams],
+    // 踊り場受け梁の既存auto LGへのlevelOffset再計算更新（QA指摘F1是正）。新規/撤去した梁ではないため
+    // newBeams/removedBeamsには混ぜず、changedOpeningBeamAxesと同じ別枠にする
+    // （structuralRecompute.jsのchanged判定はこの配列の長さも見る）。
+    updatedLandingBeams,
+    skippedConflicts: landingResult.skippedConflicts,
   };
 }
 

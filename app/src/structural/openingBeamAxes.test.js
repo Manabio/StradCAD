@@ -2,6 +2,7 @@
 // フィクスチャはwallBeamAxes.test.js（実core.js流儀）・slabOpening.test.js（開口セル構成）を踏襲する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { runInAction } from 'mobx';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline, RoomFeature, StairType, StructuralMaterialType } from '../core.js';
 import { getAllCells } from '../finish/gridCells.js';
 import {
@@ -586,16 +587,17 @@ test('【ステップ7】踊り場受け梁(LG)と開口由来梁芯(規則O)は
     await recomputeStructuralForGraph(g1, project, 'S造', null);
     await recomputeStructuralForGraph(g2, project, 'S造', g1);
 
-    // (i)(ii) LG（g1・踊り場back辺=y0=0）と規則Oの開口由来梁芯（g2・stairBeyondの4辺）は
-    // 座標が重ならない——踊り場（landingRect y:[0,1500]）はbeyondBreakUTurnLike の
+    // (i)(ii) LG（到達階g2・踊り場back辺=y0=0。ユーザー裁定2026-09-28: LGは設置階(g1)でなく
+    // 到達階(g2)の伏図に出る）と規則Oの開口由来梁芯（同じg2・stairBeyondの4辺）は座標が
+    // 重ならない——踊り場（landingRect y:[0,1500]）はbeyondBreakUTurnLike の
     // t>=tRunゲートで破れ先から除外され、開口の水平座標はfront辺(y=1500,踊り場と復路レーンの
-    // 境）とouter(y=4500)だけになる。【QA指摘】これはg1とg2という**階が違うグラフ間**の
-    // 平面座標の比較——下の「LGと開口由来小梁は平面上重ならない」テストでは、spanKey
+    // 境）とouter(y=4500)だけになる。LGと開口由来梁芯は同一graph(g2)上にあるため、spanKey
     // （CL id の一致）はLG（階段のARCH CL）と小梁（規則Oの梁芯CL）でidの種類自体が違うため
     // 幾何的な重なりを検出できない。重複を防いでいるのはLGがback辺に固定されていること
     // （幾何的事実）であり、それを座標で直接確認する。
-    const landingBeams = g1.beams.filter(b => b.role === 'landing');
-    assert.equal(landingBeams.length, 1, '前提: 踊り場受け梁(LG)がg1に1本生成される');
+    assert.equal(g1.beams.filter(b => b.role === 'landing').length, 0, '設置階(g1)自身にはLGは出ないはず（到達階のみ）');
+    const landingBeams = g2.beams.filter(b => b.role === 'landing');
+    assert.equal(landingBeams.length, 1, '前提: 踊り場受け梁(LG)が到達階g2に1本生成される');
     const lg = landingBeams[0];
     assert.equal(lg.isVertical, false, 'LGは踊り場back辺(水平)に立つ');
     assert.equal(lg.axisCL.value, 0, 'LGは踊り場back辺(y=0)に立つ');
@@ -619,7 +621,7 @@ test('【ステップ7】踊り場受け梁(LG)と開口由来梁芯(規則O)は
     await recomputeStructuralForGraph(g1, project, 'S造', null);
     const result3 = await recomputeStructuralForGraph(g2, project, 'S造', g1);
     assert.equal(result3.changed, false, '2回目の再計算では変更なし（収束済み）');
-    assert.equal(g1.beams.filter(b => b.role === 'landing').length, before.landing, 'LGの本数は不変');
+    assert.equal(g2.beams.filter(b => b.role === 'landing').length, before.landing, 'LGの本数は不変');
     assert.equal(g2.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING).length, before.opening,
       '開口由来梁芯の本数は不変');
   } finally {
@@ -678,7 +680,7 @@ test('【ステップ7・同一graph内】recomputeStructuralForGraph: 3階建�
     await recomputeStructuralForGraph(g2, project, 'S造', g1);
 
     const landingBeams = g2.beams.filter(b => b.role === 'landing');
-    assert.equal(landingBeams.length, 1, '2F自身にもLGが1本生成される（3Fが上にあるためfloorHeightAboveが解決できる）');
+    assert.equal(landingBeams.length, 1, '2FにLGが1本生成される（1F階段の到達階。ユーザー裁定2026-09-28: LGは設置階でなく到達階）');
     const lg = landingBeams[0];
     assert.equal(lg.axisCL.value, 0, 'LGは踊り場back辺(y=0)に立つ');
 
@@ -703,6 +705,85 @@ test('【ステップ7・同一graph内】recomputeStructuralForGraph: 3階建�
       assert.ok(valueSeparated || rangeDisjoint,
         `LG(axisValue=${lg.axisCL.value})と小梁(axisValue=${b.axisCL.value})は平面上重ならない`);
     }
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// ---- QA指摘F1再確認・2026-09-29: 撤去・更新段（autoFillStairLandingBeams）がrecomputeStructuralForGraph
+// のchanged判定・undoスナップショットへ正しく波及することを固定する ----
+test('【QA指摘F1再確認】recomputeStructuralForGraph: 到達階のauto LGのlevelOffsetだけが古い再計算はchanged=trueでundoスナップショットが変わる', async () => {
+  const project = new Project('proj-lg-leveloffset-changed', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  project.addPlane(6000, '3階', 'p3'); // 2Fの上に3Fが存在する=floorHeightAbove(2F)が解決できる
+  g1.structureOverride = 'S造';
+  g2.structureOverride = 'S造';
+  addSteelSwitchbackStairWithFootprint(g1, project.structGraph);
+  addSteelSwitchbackStairWithFootprint(g2, project.structGraph);
+
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  try {
+    await recomputeStructuralForGraph(g1, project, 'S造', null);
+    await recomputeStructuralForGraph(g2, project, 'S造', g1); // 収束させる
+
+    const lg = g2.beams.find(b => b.role === 'landing');
+    assert.ok(lg, '前提: 1F階段の到達階(2F)にLGが1本生成されている');
+    // 旧仕様（設置階生成の頃）のlevelOffset値(890)で保存されていた想定に書き換える。
+    runInAction(() => { lg.setField('levelOffset', 890); });
+
+    const result = await recomputeStructuralForGraph(g2, project, 'S造', g1, { captureSnapshots: true });
+    assert.equal(result.changed, true, 'levelOffsetだけの更新でもchanged=trueになるはず');
+    assert.notDeepEqual(result.before, result.after, 'undoスナップショット(before/after)は変わるはず');
+    // landingZ=n1(6)*riser(3000/12=250)=1500。設置階〜到達階の階高=3000。
+    // levelOffset(到達階FL基準)=1500-3000-300-10=-1810
+    assert.equal(lg.levelOffset, -1810, 'levelOffsetは最新値(-1810)へ更新されるはず');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// 最上階の自動指定を模す: 階段実体は持たず、addSteelSwitchbackStairと同じfootprintの
+// STAIR_VOID Roomだけを置く（stairFloorSync.js addStairVoidRoomの模倣）。
+function addStairVoidFootprint(g) {
+  const x0 = g.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const xm = g.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = g.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = g.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const ym = g.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = g.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const landingKey  = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const room = g.addRoom(new Set([landingKey, outboundKey, returnKey]));
+  room.setFeature(RoomFeature.STAIR_VOID);
+}
+
+// ---- 変異検出: needsBelowForLanding（structuralRecompute.js）の peek 条件を外すと赤になることの
+// 固定。他のLGテストは belowGraph を明示的に渡すため precomputedBelowGraph の短絡経路を通り、
+// この条件分岐自体は踏まない——ここだけ belowGraph を省略（undefined）し、内部peekを実際に
+// 発火させて確かめる。 ----
+test('【ステップ7・peek条件の検出力】recomputeStructuralForGraph: belowGraphを省略しても、最上階のSTAIR_VOID Roomがあれば内部peekでLGが生成される', async () => {
+  const project = new Project('proj-lg-needsbelow-peek', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 最上階（g1階段の到達階）
+  g1.structureOverride = 'S造';
+  g2.structureOverride = 'S造';
+  addSteelSwitchbackStair(g1);
+  addStairVoidFootprint(g2); // g2自身はstairsを持たない——STAIR_VOID Roomの徴候だけでpeekが要る
+
+  const originalPeek = floorSwapManager.peek;
+  let peekCount = 0;
+  floorSwapManager.peek = async (plane) => { peekCount++; return project.graphMap.get(plane.id) ?? null; };
+  try {
+    await recomputeStructuralForGraph(g1, project, 'S造'); // belowGraph省略（undefined）
+    const peekCountAfterG1 = peekCount;
+    const result = await recomputeStructuralForGraph(g2, project, 'S造'); // belowGraph省略（undefined）——内部peekに委ねる
+    assert.ok(peekCount > peekCountAfterG1, 'g2の再計算でfloorSwapManager.peekが実際に発火したはず（needsBelowForLandingがtrueのため）');
+    assert.equal(g2.beams.filter(b => b.role === 'landing').length, 1,
+      'belowGraphを省略しても、STAIR_VOID Roomの徴候から内部peekでLGが1本生成されるはず');
+    void result;
   } finally {
     floorSwapManager.peek = originalPeek;
   }
@@ -795,8 +876,8 @@ test('【ステップ7・項目2】autoFillStairLandingBeams: STRAIGHT階段は�
   const g1 = makeStraightRunStairGraph('p1lg');
   const g2 = makeStraightRunStairGraph('p2lg');
   const project = { planes: [g1.plane, g2.plane], structuralInfo: { foundationType: 'independent' } };
-  const created = autoFillStairLandingBeams(g1, project, null);
-  assert.deepEqual(created, [], 'STRAIGHT階段はLGは0本');
+  const result = autoFillStairLandingBeams(g2, project, null, g1); // g2=到達階、belowGraph=g1(設置階)
+  assert.deepEqual(result.created, [], 'STRAIGHT階段はLGは0本');
 });
 
 // 【QA指摘F2・N2是正】旧版は最上階(floorHeightAbove null)・1セル退化のSTRAIGHT_LANDINGで、
@@ -808,19 +889,20 @@ test('【ステップ7・項目2】autoFillStairLandingBeams: STRAIGHT階段は�
 test('【ステップ7・項目2・QA是正F2】autoFillStairLandingBeams: 2階建て・区間長が実測できる非退化のSTRAIGHT_LANDINGでもLGは0本（同じproject形のSWITCHBACKはLG=1になる陽性対照つき）', () => {
   const project1 = new Project('proj-straight-landing-lg', 'test');
   const { graph: sl1 } = project1.addPlane(0, '1階', 'p1');
-  project1.addPlane(3000, '2階', 'p2'); // floorHeightAbove(1F)を解決するためだけの上階
+  const { graph: sl2 } = project1.addPlane(3000, '2階', 'p2'); // 到達階（1F階段の上）
   makeStraightLandingStairGraphInto(sl1);
-  const createdStraightLanding = autoFillStairLandingBeams(sl1, project1, null);
-  assert.deepEqual(createdStraightLanding, [], 'STRAIGHT_LANDINGはLGは0本（構成はLG生成可能＝陽性対照あり）');
+  const straightLandingResult = autoFillStairLandingBeams(sl2, project1, null, sl1);
+  assert.deepEqual(straightLandingResult.created, [], 'STRAIGHT_LANDINGはLGは0本（構成はLG生成可能＝陽性対照あり）');
 
   // 陽性対照: 同じproject形（2階建て・同じ階高）でSWITCHBACKに差し替えるとLGは1本になる
-  // ——この構成自体がLGを生成できることを示す。
+  // ——この構成自体がLGを生成できることを示す。2Fに同footprintの上階自動設置コピーを置く。
   const project2 = new Project('proj-switchback-lg-control', 'test');
   const { graph: sb1 } = project2.addPlane(0, '1階', 'p1');
-  project2.addPlane(3000, '2階', 'p2');
+  const { graph: sb2 } = project2.addPlane(3000, '2階', 'p2');
   addSteelSwitchbackStair(sb1);
-  const createdSwitchback = autoFillStairLandingBeams(sb1, project2, null);
-  assert.equal(createdSwitchback.length, 1, '陽性対照: 同じproject形でSWITCHBACKならLGは1本生成される');
+  addSteelSwitchbackStair(sb2);
+  const switchbackResult = autoFillStairLandingBeams(sb2, project2, null, sb1);
+  assert.equal(switchbackResult.created.length, 1, '陽性対照: 同じproject形でSWITCHBACKならLGは1本生成される');
 });
 
 // 区間長が実測できる非退化のSTRAIGHT_LANDING（run1:3セル・landing:1セル・run2:3セル、計7セル
