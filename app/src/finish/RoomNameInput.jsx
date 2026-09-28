@@ -1,20 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { observer } from 'mobx-react-lite';
 import { roomBounds } from './gridCells.js';
-import { RoomKind, RoomFeature } from '@core';
+import { RoomFeature } from '@core';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
+import {
+  ROOM_KIND_OPTIONS, ROOM_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature,
+} from './roomNamingOptions.js';
 
-// 屋内 / 階段 / 吹抜け / 屋外。
+// 区分（屋内/屋外。kind）と属性（なし/階段/吹抜け/EV等。feature）の2セレクタ。
 // 〔屋内|屋外〕は kind（base軸、相互排他・常にどちらかON）。
-// 〔階段|吹抜け〕は feature（属性軸、相互排他・個別ON/OFF可）。
+// 〔なし|階段|吹抜け|EV等〕は feature（属性軸、相互排他・個別ON/OFF可）。
 // フェーズ3: 既存部屋にもこのダイアログが開くため、すべてローカル state に留め、
 // 確定時（onConfirm）に一括適用する（即時反映はしない）。
-const BUTTONS = [
-  { type: 'kind',    value: RoomKind.INTERIOR, label: '屋内' },
-  { type: 'feature', value: RoomFeature.STAIR, label: '階段' },
-  { type: 'feature', value: RoomFeature.VOID,  label: '吹抜け' },
-  { type: 'kind',    value: RoomKind.EXTERIOR, label: '屋外' },
-];
 
 export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = true, onConfirm, onCancel, onDelete }) => {
   const [value, setValue]           = useState(room.name || '');
@@ -40,11 +37,6 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
   function onKeyDown(e) {
     if (e.key === 'Enter')  { e.preventDefault(); confirm(); }
     if (e.key === 'Escape') { onCancel(room.id); }
-  }
-
-  // 階段/吹抜けは相互排他・個別ON/OFF可（再クリックでOFF）
-  function toggleFeature(featureValue) {
-    setFeatureSel(prev => prev === featureValue ? null : featureValue);
   }
 
   function requestDelete() {
@@ -87,35 +79,38 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
           boxSizing: 'border-box',
         }}
       />
-      <div style={{ display: 'flex', gap: 4 }}>
-        {BUTTONS.map(opt => {
-          const disabled = opt.type === 'feature' && opt.value === RoomFeature.STAIR && !stairEnabled;
-          const active = opt.type === 'kind' ? kindSel === opt.value : featureSel === opt.value;
-          return (
-            <button
-              key={opt.label}
-              disabled={disabled}
-              title={disabled ? '上階に採用階がありません' : undefined}
-              onClick={() => {
-                if (opt.type === 'kind') setKindSel(opt.value);
-                else                     toggleFeature(opt.value);
-              }}
-              style={{
-                flex: 1,
-                fontSize: 12,
-                padding: '5px 0',
-                borderRadius: 6,
-                border: active ? '1px solid #2563eb' : '1px solid #cbd5e1',
-                background: disabled ? '#f1f5f9' : (active ? '#eff6ff' : '#fff'),
-                color: disabled ? '#cbd5e1' : (active ? '#2563eb' : '#475569'),
-                fontWeight: active ? 700 : 400,
-                cursor: disabled ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: '#64748b', marginBottom: 2 }}>区分</div>
+          <select
+            value={kindSel}
+            onChange={e => setKindSel(e.target.value)}
+            style={selectStyle}
+          >
+            {ROOM_KIND_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: '#64748b', marginBottom: 2 }}>属性</div>
+          <select
+            value={featureToSelectValue(featureSel)}
+            onChange={e => setFeatureSel(selectValueToFeature(e.target.value))}
+            title={stairEnabled ? undefined : '上階に採用階がありません'}
+            style={selectStyle}
+          >
+            {ROOM_FEATURE_OPTIONS.map(opt => (
+              <option
+                key={featureToSelectValue(opt.value)}
+                value={featureToSelectValue(opt.value)}
+                disabled={opt.value === RoomFeature.STAIR && !stairEnabled}
+              >
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between' }}>
         <button
@@ -155,6 +150,16 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
     </div>
   );
 });
+
+const selectStyle = {
+  width: '100%',
+  fontSize: 13,
+  padding: '5px 8px',
+  border: '1px solid #93c5fd',
+  borderRadius: 6,
+  outline: 'none',
+  boxSizing: 'border-box',
+};
 
 function btnStyle(bg, color, border) {
   return {

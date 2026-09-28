@@ -6,7 +6,11 @@ import { StairTab } from './stair/StairTab.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
 import { roomCeilingHeight } from './roomMetrics.js';
 import { parseSlopeInput } from './exteriorLevelInput.js';
-import { RoomFeature, RoomKind, ExteriorLevelRef, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
+import {
+  RoomFeature, RoomKind, ExteriorLevelRef, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
+  isShaftFeature, ShaftSoundproof,
+} from '@core';
+import { shaftWallMaterialOptions } from './shaftWallMaterialOptions.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip } from '../catalog/catalogDiffView.js';
@@ -261,6 +265,25 @@ const PerFloorNumberRow = observer(({ label, graph, value, onChange, onBlurValid
   </div>
 ));
 
+// 汎用 select による per-floor 設定行（共通仕様タブの昇降路 壁仕上げ材／防音材）。
+// PerFloorRow（材マスタ限定の MaterialSelect）と違い、options を直接渡す。
+const PerFloorSelectRow = observer(({ label, value, options, onChange }) => (
+  <div style={{
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '6px 12px', borderBottom: '1px solid #e2e8f0',
+    background: '#fafafa', flexShrink: 0,
+  }}>
+    <span style={{ fontSize: 12, fontWeight: 700, color: '#374151', whiteSpace: 'nowrap' }}>{label}：</span>
+    <select
+      value={value ?? ''}
+      onChange={e => onChange(e.target.value)}
+      style={{ ...cellInputStyle, flex: 1, minWidth: 120 }}
+    >
+      {options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+    </select>
+  </div>
+));
+
 // ================================================================
 // CommonSpecTable — 共通仕様タブ（下地材のフロア共通設定）
 // ================================================================
@@ -293,6 +316,20 @@ const CommonSpecTable = observer(({ graph, mode }) => {
           value={graph.ceilingBacking} onChange={code => withFinishUndo(graph, () => graph.setCeilingBacking(code))} />
         <PerFloorRow label="床" mode={mode} category="backing"
           value={graph.floorBacking} onChange={code => withFinishUndo(graph, () => graph.setFloorBacking(code))} />
+        {/* 昇降路（EV等）の壁仕上げ材・防音材 — 内部タブに部屋カードを出さず、ここで一括指定する（Q5）。
+            壁仕上げ材は昇降路部屋の壁厚に効く（edgeComposition.wallDimsWith）。 */}
+        <PerFloorSelectRow label="昇降路 壁仕上げ材"
+          value={graph.shaftWallMaterial}
+          options={shaftWallMaterialOptions(graph.shaftWallMaterial, mode.getMaterialsByCategory('panel'))}
+          onChange={code => withFinishUndo(graph, () => graph.setShaftWallMaterial(code))} />
+        {/* 防音材は表示のみ（断面計算に未接続。天井・床下地と同じ扱い）。 */}
+        <PerFloorSelectRow label="昇降路 防音材"
+          value={graph.shaftSoundproof}
+          options={[
+            { value: ShaftSoundproof.NONE,       label: 'なし' },
+            { value: ShaftSoundproof.INSULATION, label: '断熱材' },
+          ]}
+          onChange={v => withFinishUndo(graph, () => graph.setShaftSoundproof(v))} />
         {/* 部屋の既定値 — 部屋カードの FL / CH が未指定のときに参照される（空欄 = 既定へ復帰） */}
         <PerFloorNumberRow label="FL初期値" graph={graph} value={graph.defaultFloorLevel}
           onChange={v => graph.setDefaultFloorLevel(v === '' ? DEFAULT_ROOM_FLOOR_LEVEL : Number(v))} />
@@ -396,9 +433,11 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
   // （上階自動設置の無名ペアRoomも同様に表示される＝意図どおり）。
   // 階段吹抜け（STAIR_VOID）は自動管理 Room のため引き続き表に出さない。
   // 未定義の部屋（UNDEFINED）も表に出さない（B: 名前未確定のため命名対象外）。
+  // 昇降路（EV等）は共通仕様「昇降路」で一括指定するため内部タブに出さない（Q5）。
   const rooms = graph.rooms.filter(r =>
     r.kind !== RoomKind.EXTERIOR
-    && r.feature !== RoomFeature.STAIR_VOID && r.feature !== RoomFeature.UNDEFINED);
+    && r.feature !== RoomFeature.STAIR_VOID && r.feature !== RoomFeature.UNDEFINED
+    && !isShaftFeature(r.feature));
 
   const [dragId, setDragId]             = useState(null);
   const [overIndex, setOverIndex]       = useState(null);

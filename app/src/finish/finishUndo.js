@@ -27,6 +27,8 @@ const PER_FLOOR_SETTERS = {
   floorBacking:         'setFloorBacking',
   defaultFloorLevel:    'setDefaultFloorLevel',
   defaultCeilingHeight: 'setDefaultCeilingHeight',
+  shaftWallMaterial:    'setShaftWallMaterial',
+  shaftSoundproof:      'setShaftSoundproof',
 };
 
 function snapshotStairs(graph) {
