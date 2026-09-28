@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   appSrcPath,
   stripCommentLines,
@@ -273,4 +274,75 @@ test('【不変条件・P1】App.jsx: runAddAlternative と runCopyAlternative �
   assert.ok(copyTrySwitchIdx >= 0, 'runCopyAlternativeの本体にtrySwitchFloor(が無い');
   assert.ok(copySerializeIdx < copyTrySwitchIdx,
     'runCopyAlternativeではserializeGraph(graph)がtrySwitchFloor(より前である必要がある（切替後は旧graphがclearFloorData済み）');
+});
+
+// ================================================================
+// 入力規制ステップ7（仕上げ）: historyNavRefは連打・多重実行の防止としてguardUiとcapture keydown
+// （関門）に対して冗長なため撤去する。多重実行はその2つが入口で落とす。
+// ================================================================
+
+test('【不変条件・入力規制ステップ7】App.jsx: historyNavRefが無い（多重実行防止はguardUiとcapture keydownに一本化）', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  assert.ok(!appSrc.includes('historyNavRef'), 'App.jsxにhistoryNavRefが残っている');
+});
+
+test('【不変条件・入力規制ステップ7】App.jsx: Ctrl+Z/Yのkeydownハンドラ（onKey）はcapture無しで登録され、captureガードの登録は1つだけ', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const code = stripCommentLines(appSrc);
+
+  const captureMatches = code.match(/window\.addEventListener\('keydown',\s*\w+,\s*true\)/g) || [];
+  assert.equal(captureMatches.length, 1,
+    'captureガード（第3引数true）のkeydown登録は関門用の1つだけである必要がある');
+  assert.match(code, /window\.addEventListener\('keydown',\s*onKey\)/,
+    'Ctrl+Z/Yのkeydownハンドラ（onKey）がcapture無しで登録されていない');
+});
+
+// ================================================================
+// 入力規制ステップ7（仕上げ）: 全画面オーバーレイをApp.jsxのインラインdivからui/BusyOverlay.jsxへ
+// 切り出す。App.jsx側は<BusyOverlay />を描画するだけで、zIndex: 5000のインラインdivは残さない。
+// ================================================================
+
+test('【不変条件・入力規制ステップ7】App.jsx: <BusyOverlay />を描画し、zIndex: 5000のインラインdivを持たない', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const code = stripCommentLines(appSrc);
+
+  assert.match(code, /<BusyOverlay\s*\/>/, 'App.jsxが<BusyOverlay />を描画していない');
+  assert.ok(!code.includes("zIndex: 5000"),
+    'App.jsxにzIndex: 5000のインラインdivが残っている（BusyOverlay.jsxへ移す必要がある）');
+});
+
+test('【不変条件・入力規制ステップ7】ui/BusyOverlay.jsx: observer()で包まれ、isUiBusy()・uiBusyLabel()・LABEL_DELAY_MS・WARN_AFTER_MSを参照する', () => {
+  const busyOverlayPath = path.resolve(import.meta.dirname, 'ui', 'BusyOverlay.jsx');
+  const src = fs.readFileSync(busyOverlayPath, 'utf8');
+  const code = stripCommentLines(src);
+
+  assert.match(code, /export const BusyOverlay = observer\(/, 'BusyOverlayがobserver()で包まれていない');
+  assert.match(code, /isUiBusy\(\)/, 'isUiBusy()を参照していない');
+  assert.match(code, /uiBusyLabel\(\)/, 'uiBusyLabel()を参照していない');
+  assert.match(code, /LABEL_DELAY_MS/, 'LABEL_DELAY_MSを参照していない');
+  assert.match(code, /WARN_AFTER_MS/, 'WARN_AFTER_MSを参照していない');
+});
+
+// QA指摘F2（2026-09-28）: busy中のみ全画面を塞ぎ（busy外はnullで何も塞がない）、オーバーレイの
+// zIndexは既存のMemberLayoutStudy(4000)より上、遅延ラベルはpointerEvents:'none'でクリックを
+// 素通しすることを固定する（変異: `if (!busy) return null;`の行を消す→このテストのみ赤）。
+test('【不変条件・QA指摘F2】ui/BusyOverlay.jsx: busy外はnullを返し、zIndex: 5000・pointerEvents: \'none\'を持つ', () => {
+  const busyOverlayPath = path.resolve(import.meta.dirname, 'ui', 'BusyOverlay.jsx');
+  const src = fs.readFileSync(busyOverlayPath, 'utf8');
+  const code = stripCommentLines(src);
+
+  assert.match(code, /if\s*\(!busy\)\s*return null;/, 'busy外でnullを返すガードが無い');
+  assert.match(code, /zIndex:\s*5000/, 'zIndex: 5000のオーバーレイが無い');
+  assert.match(code, /pointerEvents:\s*'none'/, "pointerEvents: 'none'の遅延ラベルが無い");
+});
+
+// QA指摘F4（2026-09-28）: usePointerInteractionへ渡すonUndo/onRedo（2本指/3本指タップ経由の
+// undo/redo）もHistoryButtonsと同じguardUiで包む——historyNavRef撤去後の再入防止をguardUiに
+// 一本化する（漏らすとタップ経由だけbusy中の連打を弾けない）。
+test('【不変条件・QA指摘F4】App.jsx: usePointerInteractionのonUndo/onRedoはguardUi()で包まれている', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const code = stripCommentLines(appSrc);
+
+  assert.match(code, /onUndo:\s*guardUi\(performUndo\)/, 'usePointerInteractionのonUndoがguardUi()で包まれていない');
+  assert.match(code, /onRedo:\s*guardUi\(performRedo\)/, 'usePointerInteractionのonRedoがguardUi()で包まれていない');
 });

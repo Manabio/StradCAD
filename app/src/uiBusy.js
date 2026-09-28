@@ -3,8 +3,10 @@
  * 入力を塞ぐ状態）を1箇所で管理する。同期編集（層0）と背景の構造同期（層1。structuralSync.js）は
  * 対象外——それらは自前のwhenIdle()を持つ。
  *
- * 現在の利用者は階切替・モード切替・undo/redo（App.jsxの5経路: handleFloorSwitch/
- * switchFloorKeepingMode/handleModeChange/performUndo/performRedo）に加え、CL削除・入替え・
+ * 現在の利用者は階切替・モード切替・元に戻す／やり直し（App.jsxの5経路: handleFloorSwitch/
+ * switchFloorKeepingMode/handleModeChange/performUndo/performRedo。label値は'元に戻す'/'やり直し'
+ * ——「undo中…」のような表示にならないよう遅延ラベル表示（ui/BusyOverlay.jsx）を意識した日本語）
+ * に加え、CL削除・入替え・
  * 偏芯・出幅編集（App.jsxのhandleDeleteCenterLine/handleConvertCenterLine/handleEccConfirm/
  * commitAxisEdit）・移動準備（modes/FloorplanModeState.jsのstartMove内。App.jsx側は
  * beginUiTransitionを呼ばない）（入力規制ステップ3・2026-09-28）、保存・読込み・カタログ保守

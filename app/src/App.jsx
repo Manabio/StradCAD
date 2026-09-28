@@ -85,6 +85,7 @@ import { ModeBar }             from './ui/ModeBar.jsx';
 import { FloorDrum }           from './ui/FloorDrum.jsx';
 import { AltChip }             from './ui/AltChip.jsx';
 import { HistoryButtons }      from './ui/HistoryButtons.jsx';
+import { BusyOverlay }         from './ui/BusyOverlay.jsx';
 import { ScaleIndicator }      from './ui/ScaleIndicator.jsx';
 import { FloorplanPalette }    from './renderer/FloorplanPalette.jsx';
 import { SceneLayers }         from './renderer/SceneLayers.jsx';
@@ -228,8 +229,11 @@ const App = observer(() => {
     project, graph, size, appMode, columnAxisMode, modeRef,
     menu, setMenu,
     onToast: msg => setToast({ msg, key: Date.now() }),
-    onUndo: performUndo,
-    onRedo: performRedo,
+    // 2本指/3本指タップ経由のundo/redoもHistoryButtonsと同じguardUiで包み、同フレーム連打・busy中の
+    // 入力を無視する（多重実行防止をguardUiへ一本化・入力規制ステップ7）。guardUi・performUndo/Redoは
+    // いずれも関数宣言（巻き上げ）のため、この時点（本文の先頭寄り）から参照してよい。
+    onUndo: guardUi(performUndo),
+    onRedo: guardUi(performRedo),
     // 建具モードの脱出（建具ターゲット以外の描画エリアのタップ）。パネルの×と同じ経路を呼ぶ
     // ——handleModeChange を通すことで境界処理（modeBoundaries.opening.exit）が必ず走る。
     onExitOpeningMode: () => handleModeChange('floorplan'),
@@ -594,17 +598,14 @@ const App = observer(() => {
     }
   }
 
-  // Ctrl+Z / Ctrl+Y の実体。コンテキスト切替は非同期のため、進行中の多重実行は弾く。
-  // 切替中に履歴が動いた（別の push/undo が割り込んだ）場合は実行を中止する。
-  const historyNavRef = useRef(false);
+  // Ctrl+Z / Ctrl+Y の実体。コンテキスト切替は非同期。多重実行は guardUi と capture keydown
+  // （関門）が入口で落とす。切替中に履歴が動いた（別の push/undo が割り込んだ）場合は実行を中止する。
   async function performUndo() {
-    if (historyNavRef.current) return;
     const cmd = undoManager.peekUndo();
     if (!cmd) return;
-    historyNavRef.current = true;
     beginUiTransition();
     try {
-      await runBusy('undo', async () => {
+      await runBusy('元に戻す', async () => {
         // 実行中の構造同期が起動元エントリのfloorRecordsへ追記し終える前にundoすると、その追記が
         // undo後に紛れ込む（段階(g)）。cmd.contextの有無に関わらず必ず待つ——switchHistoryContext内の
         // whenIdleはcontextがある場合のみのため、ここで明示する（cmd.contextなしでも起動され得る）。
@@ -614,18 +615,14 @@ const App = observer(() => {
       });
     } catch (err) {
       reportFloorTransitionError(err);
-    } finally {
-      historyNavRef.current = false;
     }
   }
   async function performRedo() {
-    if (historyNavRef.current) return;
     const cmd = undoManager.peekRedo();
     if (!cmd) return;
-    historyNavRef.current = true;
     beginUiTransition();
     try {
-      await runBusy('redo', async () => {
+      await runBusy('やり直し', async () => {
         // performUndoと同じ理由（段階(g)）。
         await structuralSync.whenIdle();
         if (cmd.context) await switchHistoryContext(cmd.context);
@@ -633,8 +630,6 @@ const App = observer(() => {
       });
     } catch (err) {
       reportFloorTransitionError(err);
-    } finally {
-      historyNavRef.current = false;
     }
   }
   // keydown リスナは初回マウント時のみ登録されるため、最新レンダーのクロージャを ref 経由で呼ぶ
@@ -1896,12 +1891,8 @@ const App = observer(() => {
 
   return (
     <>
-      {/* 階/モード切替の関門（runBusy）が開いている間、画面全体の入力を塞ぐ
-          （現状の最大zIndexはMemberLayoutStudyの4000のためそれより上に置く）。observer配下なので
-          isUiBusy()の変化に追随して自動的に再描画される。 */}
-      {isUiBusy() && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 5000, cursor: 'progress' }} />
-      )}
+      {/* 関門（runBusy）が開いている間、画面全体の入力を塞ぐ。詳細はui/BusyOverlay.jsx冒頭コメント。 */}
+      <BusyOverlay />
 
       {/* Undo/Redo ボタン — 左上 */}
       <HistoryButtons onUndo={guardUi(performUndo)} onRedo={guardUi(performRedo)} />

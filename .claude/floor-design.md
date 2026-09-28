@@ -20,8 +20,12 @@ Planeのフィールド一覧・floorNumber.jsの関数シグネチャは`core/p
 ## 構造モードの図面呼称はフロアタブのラベル自体を書き換える
 別枠のタイトル表示は持たない。`computeStructuralDesignation`の判定木は自階基準（タブ番号と図面呼称の番号を一致させるため）。最下階は視点に関わらず常に基礎伏図。
 
-## 切替の関門と先読み＋同期確定（2026-09-27）
-これは入力の関門（`uiBusy.js`）の1利用例——階切替・モード切替・undo/redo（App.jsxの5経路）に加え、CL削除・入替え・偏芯・出幅編集・移動準備（`FloorplanModeState.startMove`内）（入力規制ステップ3・2026-09-28）、保存・読込み・カタログ保守（開く／適用）（入力規制ステップ5・2026-09-28）、階操作（階追加・検討案の追加/コピー/削除・階削除）（入力規制ステップ6・2026-09-28）も同じ関門に入る。各経路は`uiBusy.js`の`runBusy`という共通の関門を必ず通る——本体を丸ごと包み、`isUiBusy()`が真の間はポインタ・キー入力を塞いで同フレーム連打を防ぐ。関門自体は排他制御（mutex）を持たない薄い深さカウンタで、入れ子（undo内の`switchHistoryContext`が`switchFloor`を呼ぶ等）は深さで自然に処理する。関門に入る直前の中断（`resetGestureRefs`）は長押しタイマー（`useLongPress`の`abort()`）の停止を含む——ref を戻すだけでは setTimeout が関門の中で発火してしまう（入力規制ステップ4・2026-09-28）。
+## 入力の関門（uiBusy）と階切替の先読み＋同期確定
+awaitをまたいでgraph／IDBを書くUI入口（層2）は`uiBusy.js`の`runBusy`で包む。同期編集（層0）と背景の構造同期（層1。`structuralSync.js`）は対象外——それぞれ自前のwhenIdle()を持つ。利用者は階切替・モード切替・undo/redo（App.jsxの5経路）に加え、CL削除・入替え・偏芯・出幅編集・移動準備（`FloorplanModeState.startMove`内）（入力規制ステップ3）、保存・読込み・カタログ保守（開く／適用）（ステップ5）、階操作（階追加・検討案の追加/コピー/削除・階削除）（ステップ6）。関門自体は排他制御（mutex）を持たない薄い深さカウンタで、入れ子（undo内の`switchHistoryContext`が`switchFloor`を呼ぶ等）は深さで自然に処理する。
+
+遮断点は4つ: 全画面オーバーレイ（`ui/BusyOverlay.jsx`。400ms遅延でlabelも表示）・キーボードのcapture keydown（`isUiBusy()`で`stopImmediatePropagation`）・`guardUi`（UIコールバック層）・ポインタ入口の`isUiBusy()`ガード（`usePointerInteraction.js`のhandlePointerDown/handleTouchStart本体先頭。オーバーレイに対する二重防御）。関門直前の中断（`resetGestureRefs`）は長押しタイマー（`useLongPress`の`abort()`）の停止を含む——refを戻すだけではsetTimeoutが関門の中で発火してしまう（入力規制ステップ4）。
+
+不変条件: (1)最初のawaitより前に同期で`runBusy`へ入る、(2)`beginUiTransition()`は`runBusy`より前——例外は理由付きで分類表の`noBeginUiTransition`に記録する（階追加のundo/redoクロージャ・`FloorplanModeState.startMove`。いずれも呼ぶと今の操作/準備中の移動を壊す）、(3)`structuralSync.whenIdle()`は関門の中で待つ、(4)失敗の表示は`guardUi`層に一本化——固有の文言を持つ入口（performUndo/Redo・handleModeChange・handleSaveConfirm・runDocumentImport）だけ自前catch、(5)関門の中でユーザーの回答を待たない、(6)App.jsxの全async入口を分類（分類テスト`uiBusyClassification.test.js`。`FloorplanModeState.startMove`と`CatalogMaintenancePanel`内部は各自のwiringテストで固定）（入力規制ステップ1〜7・2026-09-28）。
 
 `store.js`の`switchFloor`は関門の中で`FloorSwapManager.swap`を呼ぶ。`swap`の不変条件は3つ:
 - **中間状態を観測者に見せない**——次階の復元・現階のクリア・アクティブ切替を1つの`runInAction`で同期確定する。「アクティブ階だけ切り替わって中身がまだ空」「中身は復元済みだがアクティブ階が古いまま」のどちらも一度も観測されてはならない（崩れると`renderer/gutterLabelHits.js`のようにフロア切替中の一瞬だけ空データを描画する箇所が事故る）。

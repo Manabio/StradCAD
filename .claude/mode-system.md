@@ -29,3 +29,6 @@ Reactフックはコンポーネント外の`import()`非同期ロードと組�
 ## 壁の鮮度リフレッシュは階切替に足さず、3境界（仕上げ脱出・構造脱出・読込み）で全階を回す
 `wallRefresh.js`の`refreshWallsAllFloors`（壁の再生成をFinishModeStateから独立させる計画）は、仕上げモード脱出・構造モード脱出・文書読込み（`store.js`の`bootReady`）の3つの境界からだけ呼ぶ。階ごとのフック（階切替の`reflectOtherFloors:false`経路等）には足さない——階切替は履歴ナビの「素の切替」（上記）と衝突し、切替のたびに全階の鍵不一致を検出・再生成すると、素の切替のはずが裏で壁を書き換える予期しない副作用になる。
 
+## モード内部の非同期initに個別の関門は不要
+モードの突入境界（`modeBoundaries[x].enter`）は`handleModeChange`/`switchFloorKeepingMode`の`runBusy`本体から呼ばれる内部関数。階切替とdeferでない突入（finish・elevation等）は関門の中で完了まで待つ。`deferEnterOnModeChange`を持つ突入（構造・建具の**モード切替**のみ。App.jsx≈736/751）は画面切替を先行させるため意図的に関門の外で完了する（`entered.catch(console.error)`——背景処理＝層1として扱い、衝突する層2の入口は`structuralSync.whenIdle()`で待つ）。新しい非同期UI入口をApp.jsxに足すと分類テスト（`uiBusyClassification.test.js`）が赤になり分類を強制する——詳細は`.claude/floor-design.md`「入力の関門（uiBusy）」。
+

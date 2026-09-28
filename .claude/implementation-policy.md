@@ -1,6 +1,6 @@
 # 実装方針（全体ルール）
 
-このプロジェクトで必ず遵守する9つの方針。
+このプロジェクトで必ず遵守する10の方針。
 
 1. **データ入替えはFlatBuffersのみ**（JSON.stringify/parse禁止）。Uint8Arrayのまま保存・undo・転送する。詳細: `.claude/serialization-fbs.md`。単発操作のundoスナップショット（plain object往復・JSON差分比較）はデータ入替えに該当せず対象外（`.claude/undo-redo.md`）
 2. **非アクティブフロアはIndexedDBにスワップアウト**し、アクティブフロアのみメモリに展開する。詳細: `.claude/persistence-idb.md`
@@ -33,3 +33,6 @@
      もの、9は**観測者がいるレンダー**の結果をレンダー間で持ち越すもの。
    - 派生値そのものは`.jsx`に書かず純モジュール（`renderer/wallDrawPlan.js`等）へ出す
      ——`.jsx`はreact-konvaを静的importするためnodeから実行できず、コストを単体で測れない。
+10. **awaitをまたいでgraph／IDBを書くUI入口は`runBusy`（`src/uiBusy.js`）で包む**——最初のawaitより前に
+    同期で入り、`beginUiTransition()`を先に呼ぶ。処理中の入力は捨てる（記録・後追いはしない）。
+    詳細: `.claude/floor-design.md`
