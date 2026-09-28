@@ -4,15 +4,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Plane, PlanGraph, Project, CenterLineType, Discipline, StairType, StructuralMaterialType } from '../core.js';
+import { Plane, PlanGraph, Project, CenterLineType, Discipline, StairType, StructuralMaterialType, RoomFeature, spanKey } from '../core.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   autoFillStairLandingBeams, autoFillBeamsForStructure, autoFillStructuralGrid, beamAxisCenterLines,
-  autoFillColumns, autoFillBeams, autoFillFootings, autoFillRoofBeams,
+  autoFillColumns, autoFillBeams, autoFillFootings, autoFillRoofBeams, secondaryBeamSpansFor, autoFillSecondaryBeams,
 } from './structuralAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
-import { selfWallSegments } from './wallBeamAxes.js';
+import { selfWallSegments, wallBeamSourcesFor } from './wallBeamAxes.js';
+import { openingBeamSourcesFor, autoFillOpeningBeamAxes } from './openingBeamAxes.js';
+import { resolveSecondaryBeamsForAxis } from './beamAxisMove.js';
+import { getAllCells } from '../finish/gridCells.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
+import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 
 // 1階(elevation:0)・2階(elevation:2400)の2フロアProject。floorHeightAbove(project, 1階plane)=2400。
 function makeProjectWithFloors() {
@@ -405,4 +409,270 @@ test('autoFillStructuralGrid: openingSourcesを渡すと規則Oの梁芯（disci
   assert.equal(created.discipline, Discipline.FUSE);
   assert.equal(created.beamAxisOrigin, BeamAxisOrigin.OPENING);
   void x0; void x1;
+});
+
+// ---- ステップ5（規則O層C）: 開口由来の短辺梁芯が通し梁芯の小梁を host にする ----
+// 通り芯4本の格子（X:0,10000 / Y:0,10000）の内側に、通し辺・短辺のどちらも通り芯上にない矩形の
+// 吹抜け（X:[2000,5000] / Y:[3000,4000]。width=3000>height=1000→通しは水平辺）を置く。壁は無し
+// （openingBeamAxes.test.jsの makeRectOpeningGraph と同型フィクスチャ）。
+function makeOpeningRectFixtureForSecondaryHost() {
+  const graph = new PlanGraph(new Plane('p1', 3000, '2階', 2, 1));
+  graph.structureOverride = 'RC造(ラーメン)';
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  const xa = graph.addCenterLine(CenterLineType.VERTICAL, 2000,  { labeled: false, discipline: Discipline.ARCH });
+  const xb = graph.addCenterLine(CenterLineType.VERTICAL, 5000,  { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  const ya = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000,  { labeled: false, discipline: Discipline.ARCH });
+  const yb = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000,  { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const cells = getAllCells(graph);
+  const centerKey = cells.find(c => c.x1 === 2000 && c.x2 === 5000 && c.y1 === 3000 && c.y2 === 4000).key;
+  graph.addRoom(new Set([centerKey])).setFeature(RoomFeature.VOID);
+  // graph.planeを最下階(index0=基礎伏図)にしない——基礎伏図は梁のrole既定が'foundation'に切り替わり
+  // 通り芯グリッドのrole:'primary'梁（host候補）が生成されないため、ダミーの1階を先に置く
+  // （既存テストのproject.planes: [new Plane('p0', -3000, ...), graph.plane]と同じ回避パターン）。
+  const project = { planes: [new Plane('p0', 0, '1階', 1, 1), graph.plane], structuralInfo: { mainStructure: 'RC造(ラーメン)', foundationType: 'ベタ基礎' } };
+  return { graph, project, x0, xa, xb, x1, y0, ya, yb, y1 };
+}
+
+function runOpeningRecomputeOnce(graph, project) {
+  const openingSources = openingBeamSourcesFor(graph, project);
+  return autoFillStructuralGrid(graph, project, 'RC造(ラーメン)', null, [], [], [], [], [], undefined, undefined, undefined, openingSources);
+}
+
+test('【ステップ5統合】規則Oの通し梁芯2本にそれぞれ小梁1本、短辺梁芯2本にもそれぞれ小梁1本が生成され、短辺の小梁は通し小梁の縁+クリアランスで止まる', () => {
+  const { graph, project } = makeOpeningRectFixtureForSecondaryHost();
+  runOpeningRecomputeOnce(graph, project);
+
+  const throughAxes = graph.centerLines.filter(cl =>
+    cl.beamAxisOrigin === BeamAxisOrigin.OPENING && cl.centerLineType === CenterLineType.HORIZONTAL);
+  const shortAxes = graph.centerLines.filter(cl =>
+    cl.beamAxisOrigin === BeamAxisOrigin.OPENING && cl.centerLineType === CenterLineType.VERTICAL);
+  assert.equal(throughAxes.length, 2, '通し梁芯2本（y=3000,4000）');
+  assert.equal(shortAxes.length, 2, '短辺梁芯2本（x=2000,5000）');
+
+  for (const axis of throughAxes) {
+    const secondaries = graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === axis.id);
+    assert.equal(secondaries.length, 1, `通し梁芯(y=${axis.value})に小梁がちょうど1本`);
+    assert.equal(secondaries[0].coord1, 200, '通し小梁は通り芯(primary)の縁+クリアランス(150+50)で止まる');
+    assert.equal(secondaries[0].coord2, 9800);
+  }
+  for (const axis of shortAxes) {
+    const secondaries = graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === axis.id);
+    assert.equal(secondaries.length, 1, `短辺梁芯(x=${axis.value})に小梁がちょうど1本`);
+    const [lo, hi] = [secondaries[0].coord1, secondaries[0].coord2].sort((a, b) => a - b);
+    assert.equal(lo, 3200, '短辺の小梁は通し小梁の縁(y=3000側。300/2+50=200)で止まる');
+    assert.equal(hi, 3800, '短辺の小梁は通し小梁の縁(y=4000側)で止まる');
+  }
+
+  // 通し小梁は短辺の位置(x=2000/5000)で分断されない（通し梁芯ごとにちょうど1本のまま）。
+  for (const axis of throughAxes) {
+    assert.equal(graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === axis.id).length, 1);
+  }
+
+  // 冪等: 2回目の autoFillSecondaryBeams（recompute再実行）で増えない。
+  const before = graph.beams.filter(b => b.role === 'secondary').length;
+  runOpeningRecomputeOnce(graph, project);
+  assert.equal(graph.beams.filter(b => b.role === 'secondary').length, before, '2回目で増えない（冪等）');
+});
+
+test('【ステップ5統合・beamAxisMove連携】resolveSecondaryBeamsForAxis（梁芯移動確定）も短辺梁芯の小梁を通し小梁hostで張り直す', () => {
+  const { graph, project } = makeOpeningRectFixtureForSecondaryHost();
+  runOpeningRecomputeOnce(graph, project);
+
+  const shortAxis2000 = graph.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+    && cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+  // 一旦削除して「小梁0本」の状態を作る（移動直後にhostが変わり張り直しが必要になる状況の代用）。
+  const original = graph.beams.find(b => b.role === 'secondary' && b.axisCL.id === shortAxis2000.id);
+  graph.beamMap.delete(original.id);
+  assert.equal(graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === shortAxis2000.id).length, 0);
+
+  const result = resolveSecondaryBeamsForAxis(graph, shortAxis2000, project);
+  assert.deepEqual(result, { before: 0, after: 1 }, 'secondaryBeamSpansFor経由で通し小梁2本をhostとして再解決する');
+
+  const rebuilt = graph.beams.find(b => b.role === 'secondary' && b.axisCL.id === shortAxis2000.id);
+  const [lo, hi] = [rebuilt.coord1, rebuilt.coord2].sort((a, b) => a - b);
+  assert.equal(lo, 3200, '張り直し後も通し小梁の縁+クリアランスで止まる（生成経路と同じ判定を共有）');
+  assert.equal(hi, 3800);
+});
+
+test('【ステップ5統合・生成順序の効果】通し梁芯に小梁がまだ無い時点では、短辺梁芯のsecondaryBeamSpansForは0本（順序が結果を左右する実測）', () => {
+  const { graph, project } = makeOpeningRectFixtureForSecondaryHost();
+  const openingSources = openingBeamSourcesFor(graph, project);
+  autoFillOpeningBeamAxes(graph, openingSources); // 梁芯CLのみ生成（小梁はまだ無い）
+  autoFillColumns(graph, project, null);
+  autoFillBeams(graph, project, 'primary', null); // 通り芯の大梁(primary)を生成
+
+  const through3000 = graph.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+    && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000);
+  const through4000 = graph.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+    && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 4000);
+  const shortAxis = graph.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+    && cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+
+  // 通し梁芯にまだ小梁が無い段階では、短辺梁芯のhost候補（通し梁芯2本）はどちらもfindHostBeamに
+  // 失敗し0本になる——生成順序（通し→短辺）が結果を左右する直接の証拠。
+  assert.equal(secondaryBeamSpansFor(graph, shortAxis).length, 0,
+    '通し梁芯にまだ小梁が無いため、短辺のhost判定は0本');
+
+  // 通し梁芯側を先に処理（本来のorderForSecondaryBeamFillの順序）すれば、通し小梁2本が生成され、
+  // 直後の短辺梁芯のsecondaryBeamSpansForは2本（通し小梁2本）を返すようになる。
+  for (const throughAxis of [through3000, through4000]) {
+    const throughHosts = secondaryBeamSpansFor(graph, throughAxis);
+    assert.equal(throughHosts.length, 2, '通し梁芯はgridXs(x0,x1)の2本がhost候補になる');
+    graph.addBeam(StructuralMaterialType.RC, 'RC-300x300', throughAxis, false, throughHosts[0], throughHosts[1], { role: 'secondary' });
+  }
+  assert.equal(secondaryBeamSpansFor(graph, shortAxis).length, 2,
+    '両方の通し小梁の生成後は、短辺梁芯のhost候補が2本（通し小梁2本）に増える');
+});
+
+test('【ステップ5統合・変異(2)検出用】graph.centerLinesの並びが短辺→通しの順（restoreGraph等の前方参照）でも、autoFillSecondaryBeamsは短辺の小梁を1回目で生成する（orderForSecondaryBeamFillが並べ替える）', () => {
+  // 通常経路（autoFillOpeningBeamAxes）は通し→短辺の順でgraph.centerLinesへ追加するため、
+  // beamAxisCenterLines(graph)の走査順は自然に通し先行になる（このファイルの直前のテストで確認）。
+  // ここではrestoreGraph（IDB読込み）のようにCLの追加順が保存順（短辺→通し）になり、
+  // resolveCenterLineRefsで後から参照解決される前方参照ケースを人工的に再現する——
+  // orderForSecondaryBeamFillが無いと、この並びのままautoFillSecondaryBeamsが短辺を先に処理し
+  // hostが見つからず1回目は0本になる（変異(2)の効果）。
+  const graph = new PlanGraph(new Plane('p1', 3000, '2階', 2, 1));
+  graph.structureOverride = 'RC造(ラーメン)';
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const project = { planes: [new Plane('p0', 0, '1階', 1, 1), graph.plane], structuralInfo: { mainStructure: 'RC造(ラーメン)', foundationType: 'ベタ基礎' } };
+  void y0; void y1; // 通り芯グリッドの生成に必要（autoFillBeamsのperimeter生成）。以降は参照しない
+
+  // 短辺梁芯を先に追加する（extentLoRef/HiRefは、まだ存在しないid文字列を指す前方参照）。
+  const shortAxis = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING,
+    extentLoRef: { clId: 'through3000', offset: 0 }, extentHiRef: { clId: 'through4000', offset: 0 },
+  });
+  // 通し梁芯を後から追加する（idを明示し、shortAxisの前方参照先と一致させる）。
+  const throughAxis3000 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING,
+    extentLoRef: { clId: x0.id, offset: 0 }, extentHiRef: { clId: x1.id, offset: 0 },
+  }, 'through3000');
+  const throughAxis4000 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING,
+    extentLoRef: { clId: x0.id, offset: 0 }, extentHiRef: { clId: x1.id, offset: 0 },
+  }, 'through4000');
+  graph.resolveCenterLineRefs(); // restoreGraph相当: shortAxisのextentLoRef/HiRefを後から解決する
+  assert.equal(graph.centerLines.indexOf(shortAxis) < graph.centerLines.indexOf(throughAxis3000), true,
+    '前提: graph.centerLinesの並びは短辺が通しより先（restoreGraph等の保存順を模す）');
+
+  autoFillColumns(graph, project, null);
+  autoFillBeams(graph, project, 'primary', null); // 通り芯の大梁(primary)を生成
+  const created = autoFillSecondaryBeams(graph, project);
+
+  const shortSecondary = created.find(b => b.axisCL.id === shortAxis.id);
+  assert.ok(shortSecondary, '1回目のautoFillSecondaryBeamsで短辺梁芯にも小梁が生成される（orderForSecondaryBeamFillが通しを先に処理するため）');
+  const [lo, hi] = [shortSecondary.coord1, shortSecondary.coord2].sort((a, b) => a - b);
+  assert.equal(lo, 3200);
+  assert.equal(hi, 3800);
+  void throughAxis4000;
+});
+
+test('【ステップ5・失敗系】開口由来でない梁芯（壁由来wall）はextentが梁芯を参照していても小梁のhostはprimaryのみ（従来どおり）', () => {
+  const { graph, project, x1, y1 } = makeOpeningRectFixtureForSecondaryHost();
+  // 壁由来(WALL)の梁芯を人工的に作り、extentLoRef/HiRefへ既存の梁芯（beam種別。通し梁芯3000）と
+  // 通り芯（x1。extentHiを実在の範囲にするためのダミー）を参照させる——実運用でwallBeamAxes.jsが
+  // 作る参照は通常通り芯・壁だが、ここではopeningHostRefIdsがbeamAxisOrigin===OPENING以外は
+  // 空集合を返すこと（extentが梁芯を指していてもcrossへ加えない）を確かめるため人工構成にする。
+  runOpeningRecomputeOnce(graph, project); // 通し・短辺の梁芯と小梁を用意する（through3000は小梁を持つ）
+  const through3000 = graph.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+    && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000);
+  assert.equal(graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === through3000.id).length, 1,
+    '前提: through3000は小梁を1本持つ（=座標6000をカバーするhost候補になり得る状態）');
+  const wallOriginAxis = graph.addCenterLine(CenterLineType.VERTICAL, 6000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.WALL,
+    extentLoRef: { clId: through3000.id, offset: 0 }, extentHiRef: { clId: x1.id, offset: 0 },
+  });
+  const hosts = secondaryBeamSpansFor(graph, wallOriginAxis);
+  // cross集合はgridYs（y0,y1）のみ（through3000は参照集合に含まれない=openingHostRefIdsが空）。
+  // extentLo=3000のためy0(0)は範囲外・y1(10000)だけが候補に残り、y1にprimaryの大梁があるため1本。
+  // through3000（座標的には範囲内かつ小梁を持つ）がcrossに含まれていれば2本になるはずだが含まれない。
+  assert.equal(hosts.length, 1, 'wall由来の梁芯はopeningHostRefIdsが空集合＝通し梁芯をcrossへ加えない（従来どおりgridYsのみ）');
+  assert.equal(hosts[0].id, y1.id);
+});
+
+test('【ステップ5・I-9】RC下地壁の通し辺では短辺小梁が壁由来小梁をhostにする', () => {
+  const { graph, project, x0, x1, ya } = makeOpeningRectFixtureForSecondaryHost();
+  // y=3000（通し辺）の全長(x0〜x1)を覆うRC下地の下地オーナー壁を張る（I-9是正: この辺は開口由来の
+  // 梁芯を新設せず、壁由来の梁芯(壁芯)をそのまま短辺のextentLoRefが参照する）。
+  graph.interiorWallBacking = RC_WALL_BACKING_CODES[0];
+  graph.addWall(ya, 0, false, x0, 0, x1, 0, { backingDepth: 120, wallFinish: 12.5 });
+
+  const wallSources = wallBeamSourcesFor(graph, project, null);
+  assert.ok(wallSources.some(s => !s.isVertical && Math.abs(s.coord - 3000) < 1), '前提: RC下地壁が壁由来梁芯の源になっている');
+  const openingSources = openingBeamSourcesFor(graph, project);
+  const topSrc = openingSources.find(s => !s.isVertical && s.through === true && Math.abs(s.coord - 3000) < 1);
+  assert.equal(topSrc.rcBacked, true, '前提: y=3000の通し辺はRC下地壁ありでrcBacked:true');
+
+  // autoFillStructuralGrid内部の順序（autoFillWallBeamAxes→autoFillOpeningBeamAxes→…→autoFillSecondaryBeams）
+  // をそのまま通す（openingBeamSourcesFor→autoFillStructuralGridの実配線どおり）。
+  autoFillStructuralGrid(graph, project, 'RC造(ラーメン)', null, wallSources, [], [], [], [], undefined, undefined, undefined, openingSources);
+
+  const wallAxisCL = graph.centerLines.find(cl =>
+    cl.beamAxisOrigin === BeamAxisOrigin.WALL && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000);
+  assert.ok(wallAxisCL, '前提: 壁由来の梁芯(壁芯)がy=3000に生成されている（開口由来の新規梁芯は作らない）');
+
+  const shortLeft = graph.centerLines.find(cl =>
+    cl.beamAxisOrigin === BeamAxisOrigin.OPENING && cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+  assert.equal(shortLeft.extentLoRef?.clId, wallAxisCL.id, '短辺V2000のextentLoRefは壁芯の梁芯(origin=wall)を指す');
+
+  // 壁由来小梁は短辺の位置(x=2000/5000)で分断されず1本のまま。
+  const wallSecondaries = graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === wallAxisCL.id);
+  assert.equal(wallSecondaries.length, 1, '壁由来小梁は1本のまま');
+
+  // 短辺V2000の小梁は1本、描画端は通し小梁の縁+クリアランスで[3200,3800]。
+  const shortSecondaries = graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === shortLeft.id);
+  assert.equal(shortSecondaries.length, 1, '短辺V2000の小梁がちょうど1本（壁由来小梁をhostにできる）');
+  const [lo, hi] = [shortSecondaries[0].coord1, shortSecondaries[0].coord2].sort((a, b) => a - b);
+  assert.equal(lo, 3200, '壁由来小梁の縁(y=3000側。300/2+50=200)で止まる');
+  assert.equal(hi, 3800, '開口由来小梁の縁(y=4000側)で止まる');
+
+  // 冪等: 2回目で本数が増えない。
+  const before = graph.beams.filter(b => b.role === 'secondary').length;
+  const openingSources2 = openingBeamSourcesFor(graph, project);
+  autoFillStructuralGrid(graph, project, 'RC造(ラーメン)', null, wallSources, [], [], [], [], undefined, undefined, undefined, openingSources2);
+  assert.equal(graph.beams.filter(b => b.role === 'secondary').length, before, '2回目で増えない（冪等）');
+});
+
+test('【ステップ5・T2】通し梁芯の小梁スロットが最初からexcludedBeamSlotsなら短辺小梁は生成されない（0本）', () => {
+  // autoFillSecondaryBeams（自動補完）はADD-ONLY——既存の短辺小梁を持ったまま通し小梁だけ後から
+  // 除外しても、既存の短辺小梁は削除されない（他のautoFill*系と同じ規律。resolveSecondaryBeamsForAxis
+  // だけが張り替えの巻き戻しを持つ）。そのため本テストは「最初の生成より前に除外を仕込む」形で、
+  // host欠落が生成時点に効くことを確かめる。
+  const { graph, project } = makeOpeningRectFixtureForSecondaryHost();
+  const openingSources = openingBeamSourcesFor(graph, project);
+  autoFillOpeningBeamAxes(graph, openingSources);
+  autoFillColumns(graph, project, null);
+  autoFillBeams(graph, project, 'primary', null); // 通り芯の大梁(primary)を生成（小梁はまだ無い）
+
+  const through3000 = graph.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+    && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000);
+  const [hostA, hostB] = secondaryBeamSpansFor(graph, through3000);
+  assert.equal([hostA, hostB].length, 2, '前提: 通し梁芯(y=3000)は本来gridXs(x0,x1)2本がhost候補になる');
+  // 通し梁芯(y=3000)の小梁スロットを、一度も生成しないまま最初から除外集合に記録する
+  // （ユーザーが「この位置には小梁を置かない」と事前に選んだ状態を模す）。
+  graph.excludedBeamSlots.add(spanKey(through3000, hostA, hostB));
+
+  const created = autoFillSecondaryBeams(graph, project);
+
+  assert.equal(graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === through3000.id).length, 0,
+    '通し梁芯(y=3000)の小梁は除外集合により生成されない');
+  const shortAxes = graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+    && cl.centerLineType === CenterLineType.VERTICAL);
+  assert.equal(shortAxes.length, 2, '前提: 短辺梁芯2本');
+  for (const axis of shortAxes) {
+    assert.equal(graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === axis.id).length, 0,
+      'host(通し小梁)が最初から欠けているため短辺小梁も生成されない（0本）');
+  }
+  // 対照: もう一方の通し梁芯(y=4000)は除外していないので通常どおり1本生成される。
+  const through4000 = graph.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+    && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 4000);
+  assert.equal(graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === through4000.id).length, 1,
+    '対照: 除外していない通し梁芯(y=4000)は通常どおり生成される');
+  void created;
 });

@@ -14,6 +14,7 @@ import { coordLo as _coordLo, coordHi as _coordHi } from './_internal.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { rulesFor, effectiveStructure, PIN_BEAM_END_CLEARANCE_MM } from '../structural/structureRules.js';
 import { jambAxisValue } from '../structural/woodFraming.js';
+import { BeamAxisOrigin, centerLineKind } from './centerLine.js';
 
 // ---- module-private helpers（構造部材の平面位置導出。core/_internal とは別に構造専用） ----
 
@@ -287,16 +288,55 @@ export const HOST_BEAM_MATCH_TOL_MM = 0.5;
 // （材種で権威を分ける。isPinJoint参照）。
 export const PIN_ROLES = new Set(['secondary', 'floor']);
 
-// 直交CL位置(perpCLId)に、coordを跨ぐ大梁(role:'primary')があれば返す（無ければnull）。
-// 小梁の生成条件（structuralAutoFill.autoFillSecondaryBeams）と描画時の端部クリアランス
+// 直交CL位置(perpCLId)に、coordを跨ぐ大梁(role:'primary')（allowSecondaryHost=trueなら小梁
+// (role:'secondary')も含む。primaryを優先）があれば返す（無ければnull）。小梁の生成条件
+// （structuralAutoFill.autoFillSecondaryBeams）と描画時の端部クリアランス
 // （StructuralBeam._hostEndCenterAndHalfWidth）が二重実装せず同じ関数を使うための単一実装。
 // 座標基準は value（生値）ではなく effectiveValue 系（pendingDelta込み）に統一する——生値で判定すると
 // 通り芯ドラッグ中に描画側だけhostを見失い、小梁端の座標がジャンプする不具合になる（再発防止）。
-export function findHostPrimaryBeam(beams, perpCLId, hostIsVertical, coord, tolerance = HOST_BEAM_MATCH_TOL_MM) {
-  return beams.find(h =>
-    h.role === 'primary' && h.isVertical === hostIsVertical && h.axisCL.id === perpCLId &&
+// allowSecondaryHost（既定false）は開口由来の短辺梁芯が通し小梁を参照する場合（ステップ5・
+// openingHostRefIds参照）にのみ true を渡す——木造の床梁端（woodAutoFill.js）・通常の描画端部
+// クリアランスは host を大梁(primary)に限る従来挙動のまま（findHostPrimaryBeamは本関数の薄い
+// ラッパで、判定の二系統化を避ける）。
+export function findHostBeam(beams, perpCLId, hostIsVertical, coord, { allowSecondaryHost = false, tolerance = HOST_BEAM_MATCH_TOL_MM } = {}) {
+  const matches = beams.filter(h =>
+    (h.role === 'primary' || (allowSecondaryHost && h.role === 'secondary')) &&
+    h.isVertical === hostIsVertical && h.axisCL.id === perpCLId &&
     Math.min(h.clStart.effectiveValue, h.clEnd.effectiveValue) - tolerance <= coord &&
-    coord <= Math.max(h.clStart.effectiveValue, h.clEnd.effectiveValue) + tolerance) ?? null;
+    coord <= Math.max(h.clStart.effectiveValue, h.clEnd.effectiveValue) + tolerance);
+  if (matches.length === 0) return null;
+  return matches.find(h => h.role === 'primary') ?? matches[0];
+}
+
+// findHostBeam の薄いラッパ（allowSecondaryHost:false固定）。既存呼び出し（woodAutoFill.js の床梁端判定・
+// 柱アンカーと共有する経路）は本関数のまま変更しない。
+export function findHostPrimaryBeam(beams, perpCLId, hostIsVertical, coord, tolerance = HOST_BEAM_MATCH_TOL_MM) {
+  return findHostBeam(beams, perpCLId, hostIsVertical, coord, { allowSecondaryHost: false, tolerance });
+}
+
+// 開口由来の梁芯CL（beamAxisOrigin===BeamAxisOrigin.OPENING）が extent で明示参照している梁芯CLの
+// オブジェクト配列（通し辺の梁芯が短辺の extentLoRef/extentHiRef で参照される場合のみ非空）。参照先の
+// 由来（beamAxisOrigin）は問わない——壁由来（wall）の梁芯を参照していてもそのまま含める（I-9是正の
+// RC下地壁がある通し辺は壁芯の梁芯を再利用するため、短辺が参照する側になる。T1参照）。開口由来でない
+// 梁芯・参照先が梁芯CL（centerLineKind==='beam'）でない（通り芯・中心線など）場合は空配列——
+// 「短辺の小梁が参照先の小梁にも取りつく」許可（findHostBeamのallowSecondaryHost）を与える唯一の条件に
+// する（structuralAutoFill.secondaryBeamSpansFor・StructuralBeam._hostEndCenterAndHalfWidth が共有。
+// .claude/structural-model.md 参照）。
+// 参照解決はPlanGraphが設定する _extentLoCL/_extentHiCL（resolveCL後の実CL参照）を読む——CLの内部
+// フィールド（_extentLoCL/_extentHiCL）を、host判定の経路ではここだけで読む（transform/centerLineExtend.js
+// は延長操作という別用途でこれらのフィールドを直接読んでおり、その経路とは無関係）。
+export function openingHostRefCLs(cl) {
+  const cls = [];
+  if (cl.beamAxisOrigin !== BeamAxisOrigin.OPENING) return cls;
+  if (cl.extentLoRef != null && cl._extentLoCL && centerLineKind(cl._extentLoCL) === 'beam') cls.push(cl._extentLoCL);
+  if (cl.extentHiRef != null && cl._extentHiCL && centerLineKind(cl._extentHiCL) === 'beam') cls.push(cl._extentHiCL);
+  return cls;
+}
+
+// openingHostRefCLs(cl) の薄いラッパ（id集合版）。id同士の膜（Set.has(id)）で許可判定したい
+// 呼び出し側（StructuralBeam._hostEndCenterAndHalfWidth）向け。
+export function openingHostRefIds(cl) {
+  return new Set(openingHostRefCLs(cl).map(r => r.id));
 }
 
 // ----------------------------------------------------------------
@@ -431,10 +471,14 @@ export class StructuralBeam extends StructuralEntity {
     return { center, half: extent / 2 };
   }
   // 端部の直交CLに、この小梁を跨いで支持する大梁(role:'primary')があれば、その縁+クリアランスで止める
-  // 座標と半幅を返す（無ければ柱と同じ規約でCL位置=center・半幅0）。host判定は findHostPrimaryBeam に
+  // 座標と半幅を返す（無ければ柱と同じ規約でCL位置=center・半幅0）。host判定は findHostBeam に
   // 委譲する（structuralAutoFill.autoFillSecondaryBeams と同一実装・同一tolerance・同一座標基準）。
+  // allowSecondaryHost は openingHostRefIds(this.axisCL) が perpCL.id を含む場合のみ true——
+  // 開口由来の短辺小梁が、自身の extent で明示参照している通し小梁にも取りつくため
+  // （ステップ5。開口由来でない梁芯・木造の床梁は従来どおり大梁(primary)のみで止まる）。
   _hostEndCenterAndHalfWidth(perpCL, beams, clearance) {
-    const host = findHostPrimaryBeam(beams, perpCL.id, !this.isVertical, this.axisValue);
+    const allowSecondaryHost = openingHostRefIds(this.axisCL).has(perpCL.id);
+    const host = findHostBeam(beams, perpCL.id, !this.isVertical, this.axisValue, { allowSecondaryHost });
     if (!host) return { center: perpCL.effectiveValue + _axisOffset(this._planGraph, perpCL.id), half: 0 };
     return { center: host.axisValue, half: host.sectionWidth / 2 + clearance };
   }

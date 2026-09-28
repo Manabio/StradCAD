@@ -84,9 +84,12 @@ const EXPECTED_EXPORTS = [
   'columnAnchorKey',
   'columnSlotKey',
   'edgeKey',
+  'findHostBeam',
   'findHostPrimaryBeam',
   'isGridCenterLine',
   'isShaftFeature',
+  'openingHostRefCLs',
+  'openingHostRefIds',
   'spanKey',
   'totalStepsFromSections',
 ].sort();

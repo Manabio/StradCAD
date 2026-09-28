@@ -1,4 +1,4 @@
-import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, findHostPrimaryBeam, IndependentFooting } from '../core.js';
+import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, findHostBeam, openingHostRefCLs, IndependentFooting } from '../core.js';
 import { beamAxisCenterLines as policyBeamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { findSectionEntry } from './sectionCatalog.js';
@@ -291,23 +291,51 @@ export function beamAxisCenterLines(graph) {
  *  返す。隣接要素の連続ペアが小梁の生成対象区間になる（「梁と梁の内側」＝host有り通り芯の連続ペア。
  *  隣接通り芯ペアではない——途中に大梁を持たない通り芯（L字の他翼由来・wallGateで梁が省かれた軸など）が
  *  1本挟まるだけで小梁が全く生成されなくなるのを避けるため）。座標基準はeffectiveValue（pendingDelta込み）
- *  に統一する。host判定はfindHostPrimaryBeam（core/structuralEntities.js）に集約——描画側（spanForHostBeams）
+ *  に統一する。host判定はfindHostBeam（core/structuralEntities.js）に集約——描画側（spanForHostBeams）
  *  と同一実装・同一tolerance。autoFillSecondaryBeams（自動補完）と structural/beamAxisMove.js の
  *  resolveSecondaryBeamsForAxis（梁芯移動確定時の局所再解決）が共有する単一実装——host判定・区間規則を
- *  二系統に分岐させないための切り出し。 */
+ *  二系統に分岐させないための切り出し。
+ *  直交集合（cross）は通り芯（従来）に加え、openingHostRefCLs(cl)（開口由来の梁芯が extent で明示
+ *  参照している梁芯CLオブジェクト。core/structuralEntities.jsがCLの内部フィールド_extentLoCL/_extentHiCLを
+ *  読む唯一の場所——ここでは読まない）を合わせたもの——短辺の梁芯が通し辺の梁芯を参照する場合、その
+ *  通し梁芯上のhost判定は allowSecondaryHost:true（小梁も host として認める）にする。通り芯には従来どおり
+ *  primaryのみ（allowSecondaryHost:false）。開口由来でない梁芯は参照集合が空のため cross・host判定
+ *  とも従来と完全同一（ステップ5・.claude/structural-model.md 参照）。
+ *  参照集合が空（開口由来でない梁芯を含む大多数）のときは gridCross をそのまま使う（並べ替えない）——
+ *  gridXs/gridYs は既に value 昇順で確定済みで、これを effectiveValue で再ソートすると、ドラッグ中
+ *  （pendingDelta で value と effectiveValue の大小が入れ替わる瞬間）に従来と順序が変わってしまう
+ *  （再発防止。findHostPrimaryBeam時代の挙動を1ビットも変えない）。参照集合が非空のときだけ、その
+ *  梁芯CLを混ぜて value で再ソートする——直後の inRange フィルタ・extentLo/Hi 判定がどちらも
+ *  value 基準（cl.extentLo ?? -Infinity 等）のため、cross の並びもそれに揃える。 */
 export function secondaryBeamSpansFor(graph, cl) {
   if (cl.centerLineType === CenterLineType.RADIAL) return []; // 放射CLはジオメトリ未対応（getCenterLineSegment同様）
   const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
-  const cross = isVertical ? graph.gridYs : graph.gridXs; // value昇順の直交通り芯
+  const gridCross = isVertical ? graph.gridYs : graph.gridXs; // value昇順の直交通り芯
+  const beamCross = openingHostRefCLs(cl).filter(r => r.centerLineType === (isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL));
+  const beamCrossSet = new Set(beamCross);
+  const cross = beamCross.length === 0 ? gridCross : [...gridCross, ...beamCross].sort((a, b) => a.value - b.value);
   const lo = cl.extentLo ?? -Infinity, hi = cl.extentHi ?? Infinity;
   const inRange = cross.filter(p => p.value >= lo - SPAN_EPS && p.value <= hi + SPAN_EPS);
-  return inRange.filter(p => findHostPrimaryBeam(graph.beams, p.id, !isVertical, cl.effectiveValue));
+  return inRange.filter(p =>
+    findHostBeam(graph.beams, p.id, !isVertical, cl.effectiveValue, { allowSecondaryHost: beamCrossSet.has(p) }));
+}
+
+/** beamAxisCenterLines(graph) の走査順を「参照集合(openingHostRefCLs)が空（通し辺・壁由来・その他。
+ *  従来と同じhost判定）→ 参照集合が非空（短辺・参照先の梁芯をhostに含めうる）」の2群に安定ソート
+ *  （同順位内は元の順を保つ）する——開口由来かどうかでは分けない（openingHostRefCLsは開口由来でない
+ *  梁芯には常に空を返すため、空/非空の2群だけで「参照する側は参照される側より後」を保証できる）。
+ *  短辺の小梁が生成条件を満たすには、参照先の梁芯（通し辺の開口由来梁芯、または壁由来梁芯等）が
+ *  先に小梁を持っている必要があるため（ステップ5-4。autoFillSecondaryBeams専用、収束ループには乗せない）。 */
+function orderForSecondaryBeamFill(cls) {
+  const rank = (cl) => openingHostRefCLs(cl).length === 0 ? 0 : 1;
+  return cls.map((cl, i) => ({ cl, i })).sort((a, b) => (rank(a.cl) - rank(b.cl)) || (a.i - b.i)).map(x => x.cl);
 }
 
 /** 梁芯CL（discipline:'fuse'）ごとに、この梁芯を跨ぐ直交大梁(role:'primary')を持つ通り芯の
  *  連続ペア（＝梁と梁の内側）へ小梁（role:'secondary', symbol B）を自動生成する（除外集合のスロットはスキップ）。
  *  基礎伏図・屋上伏図はhostとなる大梁がrole:'primary'でない（'foundation'/'eaves'）ため自動的に0本になる
- *  （分岐不要）。構造モード突入時の再計算（autoFillStructuralGrid）と、梁芯CL追加時の両方から呼ぶ。 */
+ *  （分岐不要）。構造モード突入時の再計算（autoFillStructuralGrid）と、梁芯CL追加時の両方から呼ぶ。
+ *  走査順は orderForSecondaryBeamFill（開口由来の短辺は、参照する通し辺の小梁が先に生成されるよう後回し）。 */
 export function autoFillSecondaryBeams(graph, project) {
   if (!isStructureSpecified(graph, project)) return [];
   const structure = effectiveStructure(graph, project);
@@ -317,7 +345,7 @@ export function autoFillSecondaryBeams(graph, project) {
   const section = rules.defaultSections.beam;
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
   const created = [];
-  for (const cl of beamAxisCenterLines(graph)) {
+  for (const cl of orderForSecondaryBeamFill(beamAxisCenterLines(graph))) {
     const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
     const hosts = secondaryBeamSpansFor(graph, cl);
     for (let i = 0; i < hosts.length - 1; i++) {
