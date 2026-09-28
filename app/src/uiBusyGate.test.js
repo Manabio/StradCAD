@@ -247,3 +247,30 @@ test('【不変条件・F1】App.jsx: runDeleteAlternative（検討案削除の�
   assert.ok(trySwitchIdx < secondActiveIdx && secondActiveIdx < removeIdx,
     'trySwitchFloor→activePlaneId再判定→removeFloorの順である必要がある');
 });
+
+// ================================================================
+// P1（2026-09-28）: FloorSwapManager.swapは同じrunInAction内で切替前階（graph）にclearFloorData()を
+// 済ませるため、切替後にserializeGraph(graph)すると階固有データが空の内容をコピーしてしまう。
+// runAddAlternative・runCopyAlternativeとも、コピー元の直列化はtrySwitchFloor（＝階切替）より前で
+// 行う必要がある。
+// ================================================================
+
+test('【不変条件・P1】App.jsx: runAddAlternative と runCopyAlternative はserializeGraph(graph)をtrySwitchFloor(より前で呼ぶ', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+
+  const addBody = extractFunctionBody(appSrc, 'async function runAddAlternative');
+  const addSerializeIdx = addBody.indexOf('serializeGraph(graph)');
+  assert.ok(addSerializeIdx >= 0, 'runAddAlternativeの本体にserializeGraph(graph)が無い');
+  const addTrySwitchIdx = addBody.indexOf('trySwitchFloor(');
+  assert.ok(addTrySwitchIdx >= 0, 'runAddAlternativeの本体にtrySwitchFloor(が無い');
+  assert.ok(addSerializeIdx < addTrySwitchIdx,
+    'runAddAlternativeではserializeGraph(graph)がtrySwitchFloor(より前である必要がある（切替後は旧graphがclearFloorData済み）');
+
+  const copyBody = extractFunctionBody(appSrc, 'async function runCopyAlternative');
+  const copySerializeIdx = copyBody.indexOf('serializeGraph(graph)');
+  assert.ok(copySerializeIdx >= 0, 'runCopyAlternativeの本体にserializeGraph(graph)が無い');
+  const copyTrySwitchIdx = copyBody.indexOf('trySwitchFloor(');
+  assert.ok(copyTrySwitchIdx >= 0, 'runCopyAlternativeの本体にtrySwitchFloor(が無い');
+  assert.ok(copySerializeIdx < copyTrySwitchIdx,
+    'runCopyAlternativeではserializeGraph(graph)がtrySwitchFloor(より前である必要がある（切替後は旧graphがclearFloorData済み）');
+});

@@ -421,3 +421,21 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   プレビュー等が消えないまま残る（2026-09-28 QA指摘・仕上げモードのドラッグ中断漏れ）。逆に、
   データを変えないジェスチャー（パン・ピンチ）は戻すと直後の pointerup の判定（パン継続/終了か
   タップか）が変わってしまうので、中断処理では触らない（2026-09-28 QA指摘）。
+
+### 階切替の後に切替前の `graph` 束縛を読む（2026-09-28 検討案追加のコピーで発見）
+
+- **症状**: `runAddAlternative`（検討案の追加）の「Yes（表示中の平面をコピー）」分岐が
+  `trySwitchFloor(() => handleFloorSwitch(result.plane.id))`（階切替）の**後**に
+  `restoreGraph(project.activeGraph, serializeGraph(graph))` を呼んでいた。`FloorSwapManager.swap` は
+  同じ `runInAction` 内で切替前階（`graph`）に `clearFloorData()` を済ませてから `activePlaneId` を
+  変えるため、切替後に `graph`（App.jsx 冒頭で束縛されたレンダー時点の参照）を直列化すると、
+  階固有データが空の内容を新しい検討案へコピーしてしまう。
+- **誤った直感**: 「`graph` は同じオブジェクト参照だから、切替の前後どちらで直列化しても中身は
+  変わらない」。
+- **正しい動き**: 切替をまたぐ関数では、**切替前に採るべき値**（コピー元の直列化・スナップショット等）を
+  関数の先頭にまとめ、`trySwitchFloor`／`handleFloorSwitch` などの階切替呼び出しより前に確定させる
+  （`runCopyAlternative` は元々この形だった。`const bytes = v === 'yes' ? serializeGraph(graph) : null;`
+  を切替前に採り、切替成功後に `if (bytes) restoreGraph(project.activeGraph, bytes);` で書き戻す）。
+  同型の関数を複数持つときは、ソース走査テストで「直列化が `trySwitchFloor(` より前にある」ことを
+  機械的に固定する（`uiBusyGate.test.js`「runAddAlternative と runCopyAlternative は
+  serializeGraph(graph) を trySwitchFloor( より前で呼ぶ」）。

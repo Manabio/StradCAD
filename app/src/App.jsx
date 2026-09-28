@@ -1257,11 +1257,13 @@ const App = observer(() => {
       const altName  = (refPlane?.name ?? '') + '#' + letter;
       const result   = addAlternativeFloor(refId, altName);
       if (!result) return;
+      // 直列化はtrySwitchFloorより前に採る——FloorSwapManager.swapは同じrunInAction内で
+      // 切替前階（graph）にclearFloorData()を済ませるため、切替後にserializeGraph(graph)すると
+      // 階固有データが空の内容をコピーしてしまう（P1・runCopyAlternativeと同じ形。2026-09-28）。
+      const bytes = v === 'yes' ? serializeGraph(graph) : null;
       // 切替に失敗したら以降（複製元の書き戻し）を進めない（F1・2026-09-27）。
       if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
-      if (v === 'yes') {
-        restoreGraph(project.activeGraph, serializeGraph(graph));
-      }
+      if (bytes) restoreGraph(project.activeGraph, bytes);
     });
   }
 
