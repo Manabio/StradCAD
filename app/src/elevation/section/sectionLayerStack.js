@@ -17,7 +17,7 @@
  *
  * 純モジュール（store.js/snap.js/*.jsx/react-konva/appViewport.jsを静的importしない）。
  */
-import { RoomFeature } from '@core';
+import { RoomFeature, isShaftFeature } from '@core';
 import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 
 /**
@@ -27,7 +27,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  */
 
 /**
- * VOID/STAIR_VOID/EV（吹抜け・階段吹抜け・エレベーターシャフト）featureのRoomは
+ * VOID/STAIR_VOID/昇降路（isShaftFeature。吹抜け・階段吹抜け・EV等）featureのRoomは
  * 「実床が無い」ことを表現するためにRoom化されているだけ（CH解決等の都合）
  * ——実床が有ると誤判定しないよう除外する。
  * 見えがかり壁のz上限（`resolveSightlineTopZ`）と2FL水平線のowner判定が共有する単一情報源
@@ -37,7 +37,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  */
 export function isRealRoom(room) {
   return !!room && room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.STAIR_VOID
-    && room.feature !== RoomFeature.EV;
+    && !isShaftFeature(room.feature);
 }
 
 /**

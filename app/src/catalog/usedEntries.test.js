@@ -55,6 +55,11 @@ test('collectUsedMaterialCodes: 4系統（backing4フィールド・room overrid
   );
 });
 
+test('collectUsedMaterialCodes【QA F2/T4】: shaftWallMaterial（昇降路壁材）も収集対象に含む', () => {
+  const codes = collectUsedMaterialCodes(baseSnapshot({ shaftWallMaterial: '301000000020' }));
+  assert.ok(codes.has('301000000020'), 'shaftWallMaterialのコードが収集されていない');
+});
+
 test('collectUsedMaterialCodes: 12桁数字として不正な値（room overrideのnot-a-code等）は含めない', () => {
   const snapshot = baseSnapshot({
     rooms: [{ id: 'r1', overrides: [{ key: 'wallMaterial', value: 'not-a-code' }] }],

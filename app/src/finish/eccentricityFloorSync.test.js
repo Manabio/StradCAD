@@ -9,7 +9,7 @@ import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { runFinishEntryBoundary } from './finishBoundary.js';
 import { loadMaterialMap } from './wallRegeneration.js';
-import { propagateCLEccentricities } from './eccentricityFloorSync.js';
+import { propagateCLEccentricities, shaftOrStairLinks } from './eccentricityFloorSync.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 
 // 直下階（below）: 部屋A1/部屋B1をym（y=3000）で分割。自階（above。アクティブ）: 吹抜け/部屋A2を
@@ -61,6 +61,75 @@ async function makeVoidLinkedTwoFloorFixture() {
   return { project, below, above, aym, materialMap };
 }
 
+// ---- QA F4/T5: 昇降路（EV）は階段規則（設置階〜最上階）で連動することの結線固定 ----
+// 3階建て: 1階（below。ym位置に昇降路なし＝通常部屋のみ）／2階（active。ym位置にEV）／
+// 3階（top。ym位置にもEV＝昇降路が上階へ続く）。階段と同じ「設置階〜最上階」ルールなら、
+// 2階で偏芯を指定すると3階（上）へは伝播するが、1階（下。EVが無い）へは伝播しないはず
+// （shaftOrStairLinksがSTAIR/STAIR_VOIDと同格でisShaftFeatureを見ている、という結線を
+// 全体実行で固定する——単体テストのshaftOrStairLinks（純関数）だけでは呼び出し側
+// linkFlagsOnGraph／linkedGroupForの結線までは守れない）。
+async function makeEvLinkedThreeFloorFixture() {
+  const project = new Project('proj', 'test');
+  const { graph: below }  = project.addPlane(0,    '1階', 'p1');
+  const { graph: active } = project.addPlane(3000, '2階', 'p2');
+  const { graph: top }    = project.addPlane(6000, '3階', 'p3');
+  project.activePlaneId = 'p2';
+
+  floorSwapManager.peek = async (plane) => {
+    if (plane.id === below.plane.id)  return below;
+    if (plane.id === active.plane.id) return active;
+    if (plane.id === top.plane.id)    return top;
+    return null;
+  };
+
+  function buildGrid(graph) {
+    const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+    const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+    const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+    const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+    const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, { labeled: false, discipline: Discipline.ARCH });
+    return { x0, x1, y0, ym, y1 };
+  }
+
+  // 1階: ym位置は通常の2部屋（昇降路なし）
+  const b = buildGrid(below);
+  below.addRoom(new Set([`${b.x0.id}:${b.y0.id}:${b.x1.id}:${b.ym.id}`]), '部屋1A');
+  below.addRoom(new Set([`${b.x0.id}:${b.ym.id}:${b.x1.id}:${b.y1.id}`]), '部屋1B');
+  below.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  await runFinishEntryBoundary(below, project);
+
+  // 2階（active）: ym位置の下側をEVにする
+  const a = buildGrid(active);
+  active.addRoom(new Set([`${a.x0.id}:${a.y0.id}:${a.x1.id}:${a.ym.id}`]), '昇降路').setFeature(RoomFeature.EV);
+  active.addRoom(new Set([`${a.x0.id}:${a.ym.id}:${a.x1.id}:${a.y1.id}`]), '部屋2B');
+  active.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  await runFinishEntryBoundary(active, project);
+
+  // 3階: ym位置の下側にもEV（昇降路が上へ続く）
+  const t = buildGrid(top);
+  top.addRoom(new Set([`${t.x0.id}:${t.y0.id}:${t.x1.id}:${t.ym.id}`]), '昇降路').setFeature(RoomFeature.EV);
+  top.addRoom(new Set([`${t.x0.id}:${t.ym.id}:${t.x1.id}:${t.y1.id}`]), '部屋3B');
+  top.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  await runFinishEntryBoundary(top, project);
+
+  const materialMap = await loadMaterialMap();
+  return { project, below, active, top, aym: a.ym, materialMap };
+}
+
+test('propagateCLEccentricities【QA F4/T5】: 昇降路（EV）に接するCLの偏芯は階段規則で複製される——EVが続く上階へは伝播し、EVの無い直下階へは伝播しない', async () => {
+  const { project, below, active, top, aym, materialMap } = await makeEvLinkedThreeFloorFixture();
+  active.setCLEccentricity(aym.id, { mode: 'face', value: 0, side: 1, backing: '' });
+
+  const saveCalls = [];
+  const saveFloorFn = async (planeId) => { saveCalls.push(planeId); };
+
+  await propagateCLEccentricities(project, active, [aym.id], { materialMap, saveFloorFn });
+
+  assert.deepEqual(saveCalls, [top.plane.id], '昇降路が続く上階（3階）へは伝播し、昇降路の無い直下階（1階）へは伝播しないはず');
+  assert.ok(top.clEccentricities.size > 0, '3階に偏芯レコードが複製されているはず');
+  assert.equal(below.clEccentricities.size, 0, '1階には偏芯レコードが複製されないはず');
+});
+
 test('propagateCLEccentricities: undoRecordsを渡すと保存した階ごとに{planeId,before,after}がsaveの後に積まれ、peekUndoは不変（amendしない。段階(e)・2026-09-26）', async () => {
   const { project, below, above, aym, materialMap } = await makeVoidLinkedTwoFloorFixture();
   above.setCLEccentricity(aym.id, { mode: 'face', value: 0, side: 1, backing: '' });
@@ -98,4 +167,22 @@ test('【失敗系】propagateCLEccentricities: clIds空配列なら何もしな
   await propagateCLEccentricities(project, above, [], { materialMap, undoRecords, saveFloorFn });
   assert.deepEqual(saveCalls, []);
   assert.deepEqual(undoRecords, []);
+});
+
+// ---- shaftOrStairLinks（純関数）: 昇降路（EV等）は階段側の連動ルールに合流する（裁定Q7） ----
+for (const feature of [RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV]) {
+  test(`shaftOrStairLinks: feature=${feature} の部屋に接するCLは stair フラグが立ち void フラグは立たない`, () => {
+    const flags = shaftOrStairLinks([{ feature }]);
+    assert.deepEqual(flags, { stair: true, void: false });
+  });
+}
+
+test('shaftOrStairLinks: VOID の部屋に接するCLは void のみ立つ', () => {
+  const flags = shaftOrStairLinks([{ feature: RoomFeature.VOID }]);
+  assert.deepEqual(flags, { stair: false, void: true });
+});
+
+test('shaftOrStairLinks: 通常部屋（feature=null）に接するCLはどちらも立たない', () => {
+  const flags = shaftOrStairLinks([{ feature: null }]);
+  assert.deepEqual(flags, { stair: false, void: false });
 });

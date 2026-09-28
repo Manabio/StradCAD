@@ -2,6 +2,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature } from '@core';
+
+// 昇降路4属性を固定配列で列挙する（isShaftFeature/SHAFT_FEATURES 本体から作ると、実装側の
+// Setから値を外す変異を入れたときテスト対象も一緒に減って赤にならない——検出力を保つため
+// 独立した固定リストにする）。EVは既存の専用テストがあるため除く。
+const OTHER_SHAFT_FEATURES = [RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV];
 import { slabOpeningRects, slabOpeningFrames, slabOpeningEdges, trimOpeningEdgesAgainstStair } from './slabOpening.js';
 
 // 2×1マス（x:0-1000-2000, y:0-1500）のグリッドを持つグラフとセルキーを作る。
@@ -52,6 +57,22 @@ test('EV Roomの占有セルが開口になる（kind=\'void\'扱い＝slabOpeni
   assert.equal(frames.length, 1, 'EVはVOIDと同じくslabOpeningFramesの縁からは除かれ、STAIR_VOID側だけが残る');
   assert.deepEqual([frames[0].cl.x1, frames[0].cl.x2], [1000, 2000], '残るのはright（STAIR_VOID）のみ');
 });
+
+// ---- 昇降路属性の拡張（DW・貨物用EV・車両用EV。2026-09-28）も同じkind='void'扱い ----
+for (const feature of OTHER_SHAFT_FEATURES) {
+  test(`feature=${feature}（昇降路）の占有セルが開口になる（kind='void'扱い＝slabOpeningFramesからは除かれ、slabOpeningRectsには含まれる）`, () => {
+    const { graph, left, right } = makeGrid();
+    graph.addRoom(new Set([left])).setFeature(feature);
+    graph.addRoom(new Set([right])).setFeature(RoomFeature.STAIR_VOID);
+
+    const rects = slabOpeningRects(graph);
+    assert.equal(rects.length, 2, '昇降路もSTAIR_VOIDと同じく開口の範囲（rects）には含まれる');
+
+    const frames = slabOpeningFrames(graph);
+    assert.equal(frames.length, 1, '昇降路はVOIDと同じくslabOpeningFramesの縁からは除かれ、STAIR_VOID側だけが残る');
+    assert.deepEqual([frames[0].cl.x1, frames[0].cl.x2], [1000, 2000], '残るのはright（STAIR_VOID）のみ');
+  });
+}
 
 test('通常の部屋（床がある）は開口に数えない', () => {
   const { graph, left } = makeGrid();

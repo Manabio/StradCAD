@@ -64,8 +64,20 @@ export const RoomFeature = Object.freeze({
   VOID:       'void',      // 吹抜け（ユーザー指定）
   STAIR_VOID: 'stairVoid', // 階段吹抜け（最上階の屋内階段footprintへ自動指定。描画・操作対象外の自動管理Room）
   UNDEFINED:  'undefined', // 未定義の部屋（削除後も外壁線維持のため一時的に残す。仕上げ表から除外・無描画）
-  EV:         'ev',        // EV（エレベーターシャフト。ユーザー指定。床なし＝上階スラブ開口。展開図は描かない）
+  EV:         'ev',        // 乗用EV（ユーザー指定。床なし＝上階スラブ開口。展開図は描かない）
+  DW:         'dw',        // 小荷物専用昇降機（ダムウェーター。床なし＝上階スラブ開口。展開図は描かない）
+  FREIGHT_EV: 'freightEv', // 貨物用昇降路（床なし＝上階スラブ開口。展開図は描かない）
+  VEHICLE_EV: 'vehicleEv', // 車両用昇降路（床なし＝上階スラブ開口。展開図は描かない）
 });
+
+// 昇降路（EV等）の属性。床なし＝上階スラブ開口・展開図は描かない・共通仕様「昇降路」で
+// 壁材を一括指定。PS 等は後日。
+export const SHAFT_FEATURES = Object.freeze(new Set([
+  RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV,
+]));
+export function isShaftFeature(feature) {
+  return SHAFT_FEATURES.has(feature);
+}
 
 // 階段タイプ（MVPは STRAIGHT のみ実装。他は順次拡張）
 export const StairType = Object.freeze({
@@ -116,6 +128,19 @@ export const DEFAULT_EXTERIOR_WALL_BACKING = '101400000005'; // 外壁下地: �
 export const DEFAULT_INTERIOR_WALL_BACKING = '101400000005'; // 内壁下地: □-90×45 間柱（下地材）
 export const DEFAULT_CEILING_BACKING       = '101400000012'; // 天井下地: □-45×36 杉等・野縁（下地材、表示のみ）
 export const DEFAULT_FLOOR_BACKING         = '101400000007'; // 床下地: □-60×45 杉・松等・床根太（下地材、表示のみ）
+
+// 昇降路（isShaftFeature の部屋）の壁仕上げ材・防音材（共通仕様タブ per-floor 設定）
+export const DEFAULT_SHAFT_WALL_MATERIAL = '301000000002'; // 昇降路壁材既定: せっこうボード t=12.5（面材）
+export const SHAFT_WALL_MATERIAL_CODES = Object.freeze([
+  '301000000002', // せっこうボード t=12.5
+  '301000000005', // 強化せっこうボード t=12.5
+  '301000000020', // 強化せっこうボード t=12.5+12.5
+]);
+export const ShaftSoundproof = Object.freeze({
+  NONE:      'none',
+  INSULATION: 'insulation',
+});
+export const DEFAULT_SHAFT_SOUNDPROOF = ShaftSoundproof.NONE;
 
 // 部屋の既定値（共通仕様タブで per-floor に変更可能）
 export const DEFAULT_ROOM_FLOOR_LEVEL    = 0;    // FL初期値: 当該階FLからの相対高さmm（±0）

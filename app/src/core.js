@@ -11,11 +11,13 @@
 
 export {
   Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind, RoomFeature,
+  SHAFT_FEATURES, isShaftFeature,
   ExteriorLevelRef,
   StairType, StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
   DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
   DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
+  DEFAULT_SHAFT_WALL_MATERIAL, SHAFT_WALL_MATERIAL_CODES, ShaftSoundproof, DEFAULT_SHAFT_SOUNDPROOF,
   SiteLineKind, CL_OVERLAP_TOL_MM,
 } from './core/constants.js';
 

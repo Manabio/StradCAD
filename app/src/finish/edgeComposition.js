@@ -14,10 +14,12 @@
 //     部材ごとの設置向きメタデータ導入時に精緻化する余地がある。
 //   既定（外壁下地=□-90×45, 壁材=せっこうボード12.5, 室側仕上げ=クロス0）では
 //   offset = 90/2 + 12.5 + 0 = 57.5mm となり、従来ジオメトリを再現する。
+//   昇降路（isShaftFeature の部屋）だけは面材を部屋の内装マスターではなく共通仕様
+//   （graph.shaftWallMaterial）から解決する（Q14。壁厚の式自体は他の内壁と不変）。
 // ================================================================
 
 import { MATERIAL_CATEGORY } from './materials/materialData.js';
-import { DEFAULT_WALL_MATERIAL } from '@core';
+import { DEFAULT_WALL_MATERIAL, DEFAULT_SHAFT_WALL_MATERIAL, isShaftFeature } from '@core';
 
 /** 材の「壁を横断する方向」の厚(mm)。面材/仕上げは厚、下地は断面の大きい寸法。
  *  ただしRC壁下地（x:0,y:0,thickness:150/180/200）は部材断面ではなく壁厚そのものを
@@ -42,7 +44,13 @@ function wallDimsWith(graph, room, materialMap, backingCode) {
   if (!materialMap) return null;
   const backing = materialMap.get(backingCode);
   const finishInfo = room?.getFinishInfo?.() ?? {};
-  const panel   = materialMap.get(finishInfo.wallMaterial ?? DEFAULT_WALL_MATERIAL);
+  // 昇降路（isShaftFeature の部屋）は面材だけ共通仕様（graph.shaftWallMaterial）で一括指定する
+  // （Q14）——部屋個別の内装マスター（wallMaterial）は使わない。壁厚の式・室側仕上げ（wallFinish）
+  // の扱いは他の内壁と不変。
+  const panelCode = isShaftFeature(room?.feature)
+    ? (graph?.shaftWallMaterial ?? DEFAULT_SHAFT_WALL_MATERIAL)
+    : (finishInfo.wallMaterial ?? DEFAULT_WALL_MATERIAL);
+  const panel   = materialMap.get(panelCode);
   if (!backing || !panel) return null;
 
   const finishMat = finishInfo.wallFinish ? materialMap.get(finishInfo.wallFinish) : null;

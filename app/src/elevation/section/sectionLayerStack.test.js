@@ -10,6 +10,11 @@ import {
   layersAboveOf, compareLayerPriority, resolveSightlineTopZ, layerDirectlyAboveSelf,
 } from './sectionLayerStack.js';
 
+// 昇降路4属性を固定配列で列挙する（isShaftFeature/SHAFT_FEATURES 本体から作ると、実装側の
+// Setから値を外す変異を入れたときテスト対象も一緒に減って赤にならない——検出力を保つため
+// 独立した固定リストにする）。
+const FIXED_SHAFT_FEATURES = [RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV];
+
 // LayerInfo（probeColumnが層ごとに作る「その列でのその層の床天井」）の最小リテラル。
 function info(floorZMm, { room = null, ch = 2400, role } = {}) {
   return { layer: { graph: {}, floorZMm, role }, room, floorZ: floorZMm, ceilZ: floorZMm + ch };
@@ -27,6 +32,12 @@ test('isRealRoom: VOID/STAIR_VOID/EVのRoomは「実床が無い」ため実Room
   assert.equal(isRealRoom(evRoom), false, 'EV（エレベーターシャフト）も床なし＝実Roomではない');
   assert.equal(isRealRoom(null), false, 'Roomが無い（部屋外）のも実Roomではない');
 });
+
+for (const feature of FIXED_SHAFT_FEATURES) {
+  test(`isRealRoom: feature=${feature}（昇降路）のRoomも「実床が無い」ため実Roomとみなさない`, () => {
+    assert.equal(isRealRoom({ feature }), false);
+  });
+}
 
 // ---- orderLayerStack ----
 test('orderLayerStack: floorZMm昇順へ整列し、入力順が違っても同じ並びになる', () => {

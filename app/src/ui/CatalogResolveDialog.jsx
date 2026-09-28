@@ -35,6 +35,7 @@ const LOCATION_LABELS = Object.freeze({
   interiorWallBacking: '内壁下地',
   ceilingBacking: '天井下地',
   floorBacking: '床下地',
+  shaftWallMaterial: '昇降路壁材',
   opening: '建具',
   columns: '柱',
   beams: '梁',

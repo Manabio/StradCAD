@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef } from './core.js';
+import {
+  Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef,
+  DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF, ShaftSoundproof,
+} from './core.js';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
   serializeSite, decodeSite, restoreSite, decodeFloorSnapshot,
@@ -8,6 +11,11 @@ import {
 import { editSiteLineLength } from './transform/siteEdit.js';
 import { decode } from './schema/graphFbs.js';
 import { BeamAxisOrigin } from './core/centerLine.js';
+
+// 昇降路4属性を固定配列で列挙する（isShaftFeature/SHAFT_FEATURES 本体から作ると、実装側の
+// Setから値を外す変異を入れたときテスト対象も一緒に減って赤にならない——検出力を保つため
+// 独立した固定リストにする。team-lessons「省略側の既定生成で恒真になる」と同型の落とし穴）。
+const FIXED_SHAFT_FEATURES = [RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV];
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -141,24 +149,26 @@ test('【失敗系】CenterLine.beamAxisOrigin が既知の値以外（未知の
 // storage/localSnapshot.js parseOpenedFileBytesがJSON.parseした素のオブジェクトをそのまま渡す）は
 // decode()を経由せず applySnapshot が d.feature を直接読む（graphSnapshot.js:757-762）ため、
 // 別経路として下に固定する。
-test('Room.feature=ev は FlatBuffers encode→decode で往復する', () => {
-  const graph = makeGraph();
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-  const room = graph.addRoom(new Set([key]), 'EV');
-  room.setFeature(RoomFeature.EV);
+for (const feature of FIXED_SHAFT_FEATURES) {
+  test(`Room.feature=${feature}（昇降路）は FlatBuffers encode→decode で往復する`, () => {
+    const graph = makeGraph();
+    const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+    const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, { labeled: false, discipline: Discipline.ARCH });
+    const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+    const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+    const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+    const room = graph.addRoom(new Set([key]), '昇降路');
+    room.setFeature(feature);
 
-  const bytes = serializeGraph(graph);
-  const restored = makeGraph();
-  restoreGraph(restored, bytes);
+    const bytes = serializeGraph(graph);
+    const restored = makeGraph();
+    restoreGraph(restored, bytes);
 
-  const r2 = restored.roomMap.get(room.id);
-  assert.ok(r2, '復元後に同一IDの部屋が存在する');
-  assert.equal(r2.feature, RoomFeature.EV);
-});
+    const r2 = restored.roomMap.get(room.id);
+    assert.ok(r2, '復元後に同一IDの部屋が存在する');
+    assert.equal(r2.feature, feature);
+  });
+}
 
 // QA指摘（低3件・3件目）: decode(serializeGraph(graph)) で作った snapshot はFlatBuffersの
 // ENC/DECを経由して作られるため、plain object経路がENC/DECと独立に'ev'を保つことの証明にならない
@@ -168,24 +178,26 @@ test('Room.feature=ev は FlatBuffers encode→decode で往復する', () => {
 // applySnapshot（:560-）が `for (const d of snapshot.XXX)` と ??[] を伴わずに直接読む配列
 // （centerLines/points/walls/diagonals/verticalLines/horizontalLines/arcs/circles）だけを埋め、
 // rooms 以外は空のまま——他はすべて `?? []` でフォールバックするため省略できる。
-test('Room.feature=ev は restoreGraph への plain object 直渡し（旧JSON文書ファイル読込みと同じ経路）でも往復する', () => {
-  const snapshot = {
-    centerLines: [], points: [], walls: [], diagonals: [],
-    verticalLines: [], horizontalLines: [], arcs: [], circles: [],
-    rooms: [{
-      id: 'room-ev-1', name: 'EV', cells: [], referenceRoomIds: [],
-      kind: 'interior', feature: 'ev', generatedWallIds: [],
-    }],
-    roomOrder: ['room-ev-1'],
-  };
+for (const feature of FIXED_SHAFT_FEATURES) {
+  test(`Room.feature=${feature}（昇降路）は restoreGraph への plain object 直渡し（旧JSON文書ファイル読込みと同じ経路）でも往復する`, () => {
+    const snapshot = {
+      centerLines: [], points: [], walls: [], diagonals: [],
+      verticalLines: [], horizontalLines: [], arcs: [], circles: [],
+      rooms: [{
+        id: 'room-shaft-1', name: '昇降路', cells: [], referenceRoomIds: [],
+        kind: 'interior', feature, generatedWallIds: [],
+      }],
+      roomOrder: ['room-shaft-1'],
+    };
 
-  const restored = makeGraph();
-  restoreGraph(restored, snapshot);
+    const restored = makeGraph();
+    restoreGraph(restored, snapshot);
 
-  const r2 = restored.roomMap.get('room-ev-1');
-  assert.ok(r2, '復元後に同一IDの部屋が存在する');
-  assert.equal(r2.feature, RoomFeature.EV);
-});
+    const r2 = restored.roomMap.get('room-shaft-1');
+    assert.ok(r2, '復元後に同一IDの部屋が存在する');
+    assert.equal(r2.feature, feature);
+  });
+}
 
 test('【失敗系】Room.feature が未知の文字列（\'zz\'）で書かれていた場合、encode→decode 後は null に正規化される（ROOM_FEATURE_ENCに無い→0）', () => {
   const graph = makeGraph();
@@ -1024,6 +1036,16 @@ test('PlanGraph.clear(): wallFreshnessKey が非nullの状態から呼ぶと nul
   assert.equal(graph.wallFreshnessKey, null);
 });
 
+// ---- QA F3/T3: PlanGraph.clear() が shaftWallMaterial／shaftSoundproof を既定へ戻すことの固定 ----
+test('PlanGraph.clear()【QA T3】: shaftWallMaterial／shaftSoundproofが非既定の状態から呼ぶと既定値に戻る', () => {
+  const graph = makeGraph();
+  graph.setShaftWallMaterial('301000000020');
+  graph.setShaftSoundproof(ShaftSoundproof.INSULATION);
+  graph.clear();
+  assert.equal(graph.shaftWallMaterial, DEFAULT_SHAFT_WALL_MATERIAL);
+  assert.equal(graph.shaftSoundproof, DEFAULT_SHAFT_SOUNDPROOF);
+});
+
 test('restoreGraph: wallFreshnessKey が非nullのgraphへ、鍵を持たないスナップショットをrestoreすると（clear()経由で）nullへ戻る（古い鍵の残留防止）', () => {
   const stale = makeGraph();
   stale.setWallFreshnessKey('v1|ext=STALE|int=STALE|str=|col=|rooms=');
@@ -1066,6 +1088,90 @@ test('【失敗系】graph.woodColumnWidthMm に 0 を設定すると encode→d
   restoreGraph(restored, bytes);
 
   assert.equal(restored.woodColumnWidthMm, null);
+});
+
+// ---- 昇降路（isShaftFeature）の壁材・防音材（graph.shaftWallMaterial / shaftSoundproof）の
+// FlatBuffers 往復（ステップ2a・2026-09-28） ----
+test('graph.shaftWallMaterial は FlatBuffers encode→decode で値ありのまま往復する', () => {
+  const graph = makeGraph();
+  graph.setShaftWallMaterial('301000000020');
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.shaftWallMaterial, '301000000020');
+});
+
+// QA F3: restore先が最初から既定値（makeGraph()直後）だと、restoreGraphが実際に何もしなくても
+// 「既定値のまま」に見えてしまい恒真になる。restore先を先に非既定値へ設定してから、
+// shaft未設定のグラフ（FBSエンコード＝旧データ相当。フィールド省略）をrestoreし、
+// 既定値へ戻ることを確認する（clear()→フィールド欠落で既定に戻る、を実際に検証する）。
+test('graph.shaftWallMaterial 未設定相当（旧データ。フィールド欠落）は encode→decode 後も既定値（PB12.5）のまま（restore先を非既定値にしてから確認）', () => {
+  const source = makeGraph();
+  source.shaftWallMaterial = null; // setterを経由せず直接null化（真に「フィールド欠落」の値をFBSへ流す。
+  // setterだと既定値'301000000002'という truthy な文字列が書き込まれ、decode側の`|| null`
+  // フォールバックを一切通らない＝旧データ相当を再現できないため）
+
+  const bytes = serializeGraph(source);
+  const restored = makeGraph();
+  restored.setShaftWallMaterial('301000000020'); // 非既定値に設定してから復元する
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.shaftWallMaterial, DEFAULT_SHAFT_WALL_MATERIAL);
+});
+
+// plain object 直渡し経路（旧JSON文書ファイル読込み）でも同様に、restore先を非既定値にしてから
+// キー自体が無いsnapshotを渡し、恒真にならない形で既定値維持を固定する。
+test('【QA F3】graph.shaftWallMaterial 未設定相当（plain object直渡し。キー自体が無い旧JSON相当）は restore後も既定値（PB12.5）のまま', () => {
+  const snapshot = {
+    centerLines: [], points: [], walls: [], diagonals: [],
+    verticalLines: [], horizontalLines: [], arcs: [], circles: [],
+    rooms: [], roomOrder: [],
+  }; // shaftWallMaterialキー自体が無い旧データ相当
+
+  const restored = makeGraph();
+  restored.setShaftWallMaterial('301000000020'); // 非既定値に設定してから復元する
+  restoreGraph(restored, snapshot);
+
+  assert.equal(restored.shaftWallMaterial, DEFAULT_SHAFT_WALL_MATERIAL);
+});
+
+test('graph.shaftSoundproof は FlatBuffers encode→decode で insulation のまま往復する', () => {
+  const graph = makeGraph();
+  graph.setShaftSoundproof(ShaftSoundproof.INSULATION);
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.shaftSoundproof, ShaftSoundproof.INSULATION);
+});
+
+// QA F3: 同様に restore先を非既定値にしてから、shaft未設定のグラフ（FBSエンコード）をrestoreする。
+test('graph.shaftSoundproof 未設定相当（旧データ。フィールド欠落）は encode→decode 後も既定値（none）のまま（restore先を非既定値にしてから確認）', () => {
+  const source = makeGraph(); // shaftSoundproof未設定のまま（既定=none）
+
+  const bytes = serializeGraph(source);
+  const restored = makeGraph();
+  restored.setShaftSoundproof(ShaftSoundproof.INSULATION); // 非既定値に設定してから復元する
+  restoreGraph(restored, bytes);
+
+  assert.equal(restored.shaftSoundproof, DEFAULT_SHAFT_SOUNDPROOF);
+});
+
+test('【QA F3】graph.shaftSoundproof 未設定相当（plain object直渡し。キー自体が無い旧JSON相当）は restore後も既定値（none）のまま', () => {
+  const snapshot = {
+    centerLines: [], points: [], walls: [], diagonals: [],
+    verticalLines: [], horizontalLines: [], arcs: [], circles: [],
+    rooms: [], roomOrder: [],
+  }; // shaftSoundproofキー自体が無い旧データ相当
+
+  const restored = makeGraph();
+  restored.setShaftSoundproof(ShaftSoundproof.INSULATION); // 非既定値に設定してから復元する
+  restoreGraph(restored, snapshot);
+
+  assert.equal(restored.shaftSoundproof, DEFAULT_SHAFT_SOUNDPROOF);
 });
 
 // ---- 梁が参照する下階柱寸の派生値（graph.beamColumnWidthMm。実機裁定ステップ4 C-2 QA4）は

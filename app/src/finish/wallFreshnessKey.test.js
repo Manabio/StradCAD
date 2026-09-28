@@ -26,11 +26,11 @@ function makeRoom(graph, name = '部屋A') {
   return graph.addRoom(new Set([key]), name);
 }
 
-test('wallFreshnessKey: 書式は {version}|ext=...|int=...|str=...|col=...|rooms=... で、バージョン定数と一致する', () => {
+test('wallFreshnessKey: 書式は {version}|ext=...|int=...|shaft=...|str=...|col=...|rooms=... で、バージョン定数と一致する', () => {
   const graph = makeGraph();
   const key = wallFreshnessKey(graph);
   assert.ok(key.startsWith(`${WALL_KEY_VERSION}|ext=`));
-  assert.match(key, /\|ext=[^|]*\|int=[^|]*\|str=[^|]*\|col=[^|]*\|rooms=/);
+  assert.match(key, /\|ext=[^|]*\|int=[^|]*\|shaft=[^|]*\|str=[^|]*\|col=[^|]*\|rooms=/);
 });
 
 test('wallFreshnessKey: 同じ graph から2回計算すると同一の鍵になる（決定性）', () => {
@@ -59,6 +59,14 @@ test('wallFreshnessKey: interiorWallBacking を変えると鍵が変わる', () 
   makeRoom(graph);
   const before = wallFreshnessKey(graph);
   graph.setInteriorWallBacking('CHANGED-CODE');
+  assert.notEqual(wallFreshnessKey(graph), before);
+});
+
+test('wallFreshnessKey: shaftWallMaterial を変えると鍵が変わる', () => {
+  const graph = makeGraph();
+  makeRoom(graph);
+  const before = wallFreshnessKey(graph);
+  graph.setShaftWallMaterial('CHANGED-CODE');
   assert.notEqual(wallFreshnessKey(graph), before);
 });
 

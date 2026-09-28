@@ -11,7 +11,7 @@
  *
  * store.js / snap.js / .jsx に依存しない（node:test から単体 import 可）。
  */
-import { RoomFeature } from '@core';
+import { RoomFeature, isShaftFeature } from '@core';
 import { cellBoundsList, refreshCells, roomBounds, getCellsInRect } from '../gridCells.js';
 import { faceRect } from '../wallFaces.js';
 import { cellsBeyondBreak, subtractIntervals } from './stairGeometry.js';
@@ -23,14 +23,15 @@ const WALL_AXIS_CL_EPS = 0.5;
 // 開口を成すセル集合を列挙する。`kind` は縁を誰が描くかの区別
 // （'void'＝renderer/VoidLayer.jsx が「上部吹抜け」として外形を描く / 'stair'＝階段側が描く）。
 // - 吹抜け（VOID）Room … 占有セル全体が開口。kind='void'
-// - EV（エレベーターシャフト）Room … 占有セル全体が開口。VOIDと同様 kind='void'（床なし＝上階スラブ開口）
+// - 昇降路（isShaftFeature。EV等）Room … 占有セル全体が開口。VOIDと同様 kind='void'
+//   （床なし＝上階スラブ開口）
 // - 階段吹抜け（STAIR_VOID）Room … 占有セル全体が開口。VoidLayer は描画対象外のため kind='stair'
 // - 上階の階段 … 破れ線より先のセルが開口（破れ手前＝階段とりつき部はスラブが残る）。kind='stair'
 function openingCellSets(upperGraph, riserOf) {
   const sets = [];
   for (const room of upperGraph.rooms) {
     if (room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.STAIR_VOID
-      && room.feature !== RoomFeature.EV) continue;
+      && !isShaftFeature(room.feature)) continue;
     const cells = refreshCells(room.cells, upperGraph);
     if (cells.size > 0) {
       const kind = room.feature === RoomFeature.STAIR_VOID ? 'stair' : 'void';

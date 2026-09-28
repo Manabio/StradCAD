@@ -14,8 +14,9 @@ import { valuesEqual, matchByContent } from './catalogMatch.js';
 import { withEntries, emptyBundle, validateBundle, resolveCatalog } from './catalogBundle.js';
 import { composeCatalog } from './catalogRegistry.js';
 import { collectUsedKeys, collectUsedMaterialCodes, expandTransitiveMaterials, buildDocumentBundle } from './usedEntries.js';
-import { MATERIALS } from '../finish/materials/materialData.js';
+import { MATERIALS, MATERIAL_CATEGORY } from '../finish/materials/materialData.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
+import { SHAFT_WALL_MATERIAL_CODES, DEFAULT_SHAFT_WALL_MATERIAL } from '../core/constants.js';
 import { OpeningMechanism, IMPLEMENTED_MECHANISMS } from '../openings/openingCatalog.js';
 import { SectionShape, SECTION_CATALOG } from '../structural/sectionCatalog.js';
 import {
@@ -26,9 +27,22 @@ import {
 } from './catalogMaintenance.js';
 
 // ステップ3（2026-09-22）で振り直し済み。旧132件のうち廃止・削除2件（アスファルトプライマー・
-// 吸音テックス用捨て糊。legacyMaterialCodes.js の REMOVED_MATERIALS）を除いた130件。
-test('MATERIALS: 130件（旧132件−廃止・削除2件。振り直し済み・新体系）', () => {
-  assert.equal(MATERIALS.length, 130);
+// 吸音テックス用捨て糊。legacyMaterialCodes.js の REMOVED_MATERIALS）を除いた130件に、
+// 昇降路壁材の新設1件（301000000020・強化せっこうボード t=12.5+12.5）を加えた131件。
+test('MATERIALS: 131件（旧132件−廃止・削除2件＋昇降路壁材新設1件。振り直し済み・新体系）', () => {
+  assert.equal(MATERIALS.length, 131);
+});
+
+// ---- QA F8/T6: SHAFT_WALL_MATERIAL_CODES（昇降路壁材の選択肢）の中身検査 ----
+test('SHAFT_WALL_MATERIAL_CODES【QA F8/T6】: 全コードがMATERIALSに実在しcategoryが面材（PANEL）で、DEFAULT_SHAFT_WALL_MATERIALを含む', () => {
+  assert.ok(SHAFT_WALL_MATERIAL_CODES.length > 0);
+  for (const code of SHAFT_WALL_MATERIAL_CODES) {
+    const mat = MATERIALS.find(m => m.code === code);
+    assert.ok(mat, `SHAFT_WALL_MATERIAL_CODESのコード${code}がMATERIALSに存在しない`);
+    assert.equal(mat.category, MATERIAL_CATEGORY.PANEL, `${code}(${mat.name})のcategoryが面材(PANEL)でない`);
+  }
+  assert.ok(SHAFT_WALL_MATERIAL_CODES.includes(DEFAULT_SHAFT_WALL_MATERIAL),
+    'DEFAULT_SHAFT_WALL_MATERIALがSHAFT_WALL_MATERIAL_CODESに含まれていない');
 });
 
 test('MATERIALS: 全件がmaterial.validateを通る', () => {

@@ -272,6 +272,22 @@ test('FinishModeState.init: 自階が参照する未知コード（missing）は
   assert.equal(state.catalogResolveRows, result.catalogResolveRows, 'stateにも同じ配列が反映される');
 });
 
+// ---- QA F2: 昇降路壁材（graph.shaftWallMaterial）も MATERIAL_CODE_GRAPH_FIELDS の対象 ----
+test('FinishModeState.init【QA F2】: graph.shaftWallMaterialが未知コードだとcatalogResolveRowsにunresolved-code行として現れる（_collectReferencedCodesの対象）', async () => {
+  takeUnresolvedCodes();
+  const graph = makeSingleCellGraph();
+  graph.setShaftWallMaterial('999999999999');
+  const state = new FinishModeState(graph, null);
+
+  const result = await state.init();
+
+  assert.equal(result.catalogResolveRows.length, 1);
+  const row = result.catalogResolveRows[0];
+  assert.equal(row.scenario, 'unresolved-code');
+  assert.equal(row.targetKey, '999999999999');
+  assert.ok(row.usage.some(u => u.location === 'floor'), 'shaftWallMaterial由来のusageもlocation:floorのはず');
+});
+
 test('FinishModeState.init: 解決済み・存在するコードはcatalogResolveRowsに行を作らない', async () => {
   takeUnresolvedCodes();
   const graph = makeSingleCellGraph();

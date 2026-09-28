@@ -156,6 +156,8 @@ function buildSnapshot(graph) {
     interiorWallBacking: graph.interiorWallBacking,
     ceilingBacking:      graph.ceilingBacking,
     floorBacking:        graph.floorBacking,
+    shaftWallMaterial:   graph.shaftWallMaterial,
+    shaftSoundproof:     graph.shaftSoundproof,
     defaultFloorLevel:    graph.defaultFloorLevel,
     defaultCeilingHeight: graph.defaultCeilingHeight,
     floorDatum:          graph.floorDatum,
@@ -828,6 +830,8 @@ function applySnapshot(graph, snapshot) {
     if (snapshot.interiorWallBacking) graph.setInteriorWallBacking(snapshot.interiorWallBacking);
     if (snapshot.ceilingBacking)      graph.setCeilingBacking(snapshot.ceilingBacking);
     if (snapshot.floorBacking)        graph.setFloorBacking(snapshot.floorBacking);
+    if (snapshot.shaftWallMaterial)   graph.setShaftWallMaterial(snapshot.shaftWallMaterial);
+    if (snapshot.shaftSoundproof)     graph.setShaftSoundproof(snapshot.shaftSoundproof);
     if (snapshot.defaultFloorLevel != null) graph.setDefaultFloorLevel(snapshot.defaultFloorLevel);
     // CH初期値は 0/null を「未保存（旧データ）」とみなし clear() の既定(2400)を維持する
     if (snapshot.defaultCeilingHeight)      graph.setDefaultCeilingHeight(snapshot.defaultCeilingHeight);

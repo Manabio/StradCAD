@@ -5,6 +5,8 @@
  * その吹抜けの階と直下階の間で共通（連動）にする。同一CL上に壁は1つだけ（要件）のため、
  * この2ルールだけで延長上の壁（同一CLを共有する他の内壁区間）も自然に共有される
  * ——CL単位で spec を複製すれば足り、壁1本ずつを個別に追従させる実装は不要。
+ * 昇降路（isShaftFeature。EV等）は全階同位置のため、階段と同じ「設置階〜最上階」ルールに
+ * 合流させる（裁定Q7・2026-09-28）。
  *
  * 方式: spec レコードの複製。floorSwapManager.peek → set/removeCLEccentricity →
  * applyCLEccentricity → saveFloor という stairFloorSync.js と同じ階またぎ同期パターンに乗る
@@ -27,22 +29,28 @@ import { saveFloor } from '../storage/db.js';
 import { translateCLId } from './floorCLMap.js';
 import { buildCellToRoom, roomsAdjacentToCL } from './edgeClassify.js';
 import { applyCLEccentricity } from './clEccentricity.js';
-import { RoomFeature } from '@core';
+import { RoomFeature, isShaftFeature } from '@core';
 
 /**
- * clId 上の内壁が接する部屋の feature から、その階が「階段」「吹抜け」いずれの連動ルールに
- * 関わるかを返す（stair: STAIR|STAIR_VOID に接する内壁、void: VOID に接する内壁）。
- * STAIR_VOID を stair 側に含めるのは、最上階の階段吹抜け直下（＝階段設置階の続き）も
- * 階段連動グループに含めるため。
+ * 部屋一覧から「階段」「吹抜け」いずれの連動ルールに関わるかを返す純関数
+ * （stair: STAIR|STAIR_VOID または昇降路（isShaftFeature。EV等）に接する内壁、
+ * void: VOID に接する内壁）。STAIR_VOID を stair 側に含めるのは、最上階の階段吹抜け直下
+ * （＝階段設置階の続き）も階段連動グループに含めるため。昇降路を stair 側に含めるのは、
+ * 全階同位置で偏芯を揃えたい範囲が階段と同じ「設置階〜最上階」だから（裁定Q7）。
  */
-function linkFlagsOnGraph(graph, clId, cellToRoom) {
-  const rooms = roomsAdjacentToCL(graph, clId, cellToRoom);
+export function shaftOrStairLinks(rooms) {
   let stair = false, isVoid = false;
   for (const room of rooms) {
-    if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID) stair = true;
+    if (room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID || isShaftFeature(room.feature)) stair = true;
     if (room.feature === RoomFeature.VOID) isVoid = true;
   }
   return { stair, void: isVoid };
+}
+
+/** clId 上の内壁が接する部屋から連動フラグを求める（グラフ依存の薄いラッパ）。 */
+function linkFlagsOnGraph(graph, clId, cellToRoom) {
+  const rooms = roomsAdjacentToCL(graph, clId, cellToRoom);
+  return shaftOrStairLinks(rooms);
 }
 
 /**

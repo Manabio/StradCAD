@@ -4,7 +4,7 @@ import {
   buildCodeTable, normalizeSnapshotCodes, SNAPSHOT_REF_WALKERS,
   setDocumentCodeTable, currentCodeTable, applyDocumentCodeNormalization, takeUnresolvedCodes,
   setDocumentAliases, currentDocumentAliases, addDocumentAliases, peekUnresolvedCodes,
-  clearDocumentAliases,
+  clearDocumentAliases, enumerateMaterialCodeRefs,
 } from './codeNormalization.js';
 import { normalizeMaterialCode } from './legacyMaterialCodes.js';
 import { CatalogKind, kindDef } from './catalogKinds.js';
@@ -56,6 +56,20 @@ test('normalizeSnapshotCodes: 4フィールド（exterior/interior/ceiling/floor
   assert.equal(snapshot.interiorWallBacking, '102000000002');
   assert.equal(snapshot.ceilingBacking, '102000000003');
   assert.equal(snapshot.floorBacking, '102000000004');
+});
+
+// ---- QA F2/T4: 昇降路壁材（shaftWallMaterial）もBACKING_FIELDS対象（enumerate/正規化とも） ----
+test('enumerateMaterialCodeRefs【QA F2/T4】: snapshot.shaftWallMaterialをlocation\'shaftWallMaterial\'で列挙する', () => {
+  const refs = enumerateMaterialCodeRefs(baseSnapshot({ shaftWallMaterial: '301000000020' }));
+  const ref = refs.find(r => r.location === 'shaftWallMaterial');
+  assert.ok(ref, 'shaftWallMaterialのrefが見つからない');
+  assert.equal(ref.code, '301000000020');
+});
+
+test('normalizeSnapshotCodes【QA F2】: shaftWallMaterialも他4フィールドと同様に正規化される', () => {
+  const table = buildCodeTable({ legacy: { '111111111150': '102000000001' } });
+  const { snapshot } = normalizeSnapshotCodes(baseSnapshot({ shaftWallMaterial: '111111111150' }), table);
+  assert.equal(snapshot.shaftWallMaterial, '102000000001');
 });
 
 test('normalizeSnapshotCodes: rooms[].overridesはkey∈{wallMaterial,wallFinish}のvalueだけ正規化する', () => {

@@ -30,12 +30,16 @@ const DIM_KIND_ENC = { grid: 0, center: 1, control: 2 };
 const DIM_KIND_DEC = ['grid', 'center', 'control'];
 const SIDE_ENC     = { top: 0, bottom: 1, left: 2, right: 3 };
 const SIDE_DEC     = ['top', 'bottom', 'left', 'right'];
+// 昇降路防音材（GS.SHAFT_SOUNDPROOF）。0 は 'none' に写る（旧データ＝既定 none と同義）。
+// 範囲外の値だけ ?? null で null になり、restore（graphSnapshot.js）が既定を保つ。
+const SHAFT_SOUNDPROOF_DEC = ['none', 'insulation'];
+const SHAFT_SOUNDPROOF_ENC = { none: 0, insulation: 1 };
 
 // ================================================================
 // フィールドインデックス定数
 // ================================================================
 
-// GraphSnapshot (root): 49 フィールド
+// GraphSnapshot (root): 52 フィールド
 const GS = {
   CLS: 0, PTS: 1, WALLS: 2, DIAGS: 3, VLINES: 4, HLINES: 5, ARCS: 6, CIRCS: 7, DIMS: 8, ROOMS: 9, ROOM_ORDER: 10,
   // 11 は旧 INTERIOR_WALL_PANEL（内壁面材の per-floor 設定。部屋の壁材へ移行し廃止。slot 予約）
@@ -76,6 +80,9 @@ const GS = {
   WALL_FRESHNESS_KEY: 48,
   // 在来木造の各階柱寸法(mm)（per-floor。0=未設定=ルール既定。OP.HEIGHTと同じ規約）
   WOOD_COLUMN_WIDTH_MM: 49,
+  // 昇降路（isShaftFeature の部屋）の壁仕上げ材・防音材（共通仕様タブ per-floor 設定）
+  SHAFT_WALL_MATERIAL: 50, // string（空文字=null=旧データ→既定 DEFAULT_SHAFT_WALL_MATERIAL）
+  SHAFT_SOUNDPROOF: 51,    // int8（none=0 / insulation=1。0 は旧データ＝既定 none と同義）
 };
 
 // Stair: 15 フィールド
@@ -116,7 +123,7 @@ const RM = {
   KIND: 18,
   TEMPLATE_KEY: 19, OVR_KEYS: 20, OVR_VALS: 21, // 内装マスター参照 + 個別上書きポケット
   HAS_FLOOR_LEVEL: 22, FLOOR_LEVEL: 23, // 床レベル差(mm)。null は HAS=0 で表現
-  FEATURE: 24, // 属性軸（none=0 / stair=1 / void=2 / stairVoid=3 / undefined=4 / ev=5）。kind とは独立
+  FEATURE: 24, // 属性軸（none=0 / stair=1 / void=2 / stairVoid=3 / undefined=4 / ev=5 / dw=6 / freightEv=7 / vehicleEv=8）。kind とは独立
   // 屋外部屋の仕上げレベル（末尾追加。旧データはフィールド欠落＝既定値で復元）
   HAS_EXT_LEVEL: 25, EXT_LEVEL: 26, EXT_LEVEL_REF: 27, // おさえ(mm) / 基準（room=0 / gl=1）
   HAS_EXT_SLOPE: 28, EXT_SLOPE: 29, // 勾配 1/N の N
@@ -131,8 +138,8 @@ const EXT_LEVEL_REF_ENC = { room: 0, gl: 1 };
 const EXT_LEVEL_REF_DEC = ['room', 'gl'];
 
 // Room.feature 列挙値エンコード（属性軸。null は none=0）
-const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3, undefined: 4, ev: 5 };
-const ROOM_FEATURE_DEC = [null, 'stair', 'void', 'stairVoid', 'undefined', 'ev'];
+const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3, undefined: 4, ev: 5, dw: 6, freightEv: 7, vehicleEv: 8 };
+const ROOM_FEATURE_DEC = [null, 'stair', 'void', 'stairVoid', 'undefined', 'ev', 'dw', 'freightEv', 'vehicleEv'];
 
 // CenterLine: 18 フィールド (0–17)
 const CL = {
@@ -1715,10 +1722,11 @@ export function encode(snapshot) {
   const sFloorBacking = b.createString(snapshot.floorBacking       ?? '');
   const sStructureOverride = b.createString(snapshot.structureOverride ?? '');
   const sWallFreshnessKey = b.createString(snapshot.wallFreshnessKey ?? '');
+  const sShaftWallMaterial = b.createString(snapshot.shaftWallMaterial ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
   const siteOff = writeSite(b, snapshot.site);
 
-  b.startObject(50);
+  b.startObject(52);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1768,6 +1776,8 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.SITE,                  siteOff,                0);
   b.addFieldOffset(GS.WALL_FRESHNESS_KEY,    sWallFreshnessKey,      0);
   b.addFieldFloat64(GS.WOOD_COLUMN_WIDTH_MM, snapshot.woodColumnWidthMm ?? 0, 0.0);
+  b.addFieldOffset(GS.SHAFT_WALL_MATERIAL, sShaftWallMaterial, 0);
+  b.addFieldInt8(GS.SHAFT_SOUNDPROOF, SHAFT_SOUNDPROOF_ENC[snapshot.shaftSoundproof] ?? 0, 0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1833,5 +1843,7 @@ export function decode(bytes) {
     site:                readSite(bb, r.nested(GS.SITE)),
     wallFreshnessKey:    r.str(GS.WALL_FRESHNESS_KEY) || null,
     woodColumnWidthMm:   r.f64(GS.WOOD_COLUMN_WIDTH_MM) || null,
+    shaftWallMaterial:   r.str(GS.SHAFT_WALL_MATERIAL) || null,
+    shaftSoundproof:     SHAFT_SOUNDPROOF_DEC[r.i8(GS.SHAFT_SOUNDPROOF)] ?? null,
   };
 }

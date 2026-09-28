@@ -20,14 +20,16 @@ import { effectiveStructure, woodColumnSectionId } from '../structural/structure
  * v3: 壁の自由端の柱包み導入（F-3・2026-09-19裁定。在来木造だけ`wallFreeEnd:'columnWrap'`。
  * wallGeneration.js の cornerMap 構築源を広げ、自由端をCL端から柱包み分はね出す）。鍵の入力
  * （実効主構造）は変えていないが生成式が変わったため既存キーを一律不一致にする。
+ * v4 = 昇降路壁材（shaftWallMaterial）を鍵に追加 2026-09-28。
  */
-export const WALL_KEY_VERSION = 'v3';
+export const WALL_KEY_VERSION = 'v4';
 
 /**
  * graph（1階分）の壁再生成に必要な入力から鍵文字列を作る。
  *
  * 鍵に含めるもの:
  *   - 外壁下地・内壁下地の材コード（graph.exteriorWallBacking / interiorWallBacking）
+ *   - 昇降路壁材コード（graph.shaftWallMaterial。isShaftFeature の部屋の面材解決に使う）
  *   - 実効主構造（effectiveStructure。階の上書き優先）
  *   - 在来木造の柱断面（structureRules.js の woodColumnSectionId。graph.woodColumnWidthMm
  *     ＝「各階柱寸法」欄の値。未設定はルール既定 framing.columnSection の幅にフォールバック）。
@@ -51,6 +53,7 @@ export const WALL_KEY_VERSION = 'v3';
 export function wallFreshnessKey(graph, project = null) {
   const ext = graph?.exteriorWallBacking ?? '';
   const int = graph?.interiorWallBacking ?? '';
+  const shaft = graph?.shaftWallMaterial ?? '';
   const structure = effectiveStructure(graph, project) ?? '';
   const columnSection = woodColumnSectionId(graph, project) ?? '';
 
@@ -59,5 +62,5 @@ export function wallFreshnessKey(graph, project = null) {
     return `${room.id}:${room.kind ?? ''}/${room.feature ?? ''}:${info.wallMaterial ?? ''}/${info.wallFinish ?? ''}`;
   });
 
-  return `${WALL_KEY_VERSION}|ext=${ext}|int=${int}|str=${structure}|col=${columnSection}|rooms=${roomParts.join(';')}`;
+  return `${WALL_KEY_VERSION}|ext=${ext}|int=${int}|shaft=${shaft}|str=${structure}|col=${columnSection}|rooms=${roomParts.join(';')}`;
 }

@@ -28,6 +28,7 @@ import {
   DEFAULT_EXTERIOR_WALL_BACKING,
   DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_CEILING_BACKING, DEFAULT_FLOOR_BACKING,
   DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
+  DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF,
 } from './constants.js';
 import { Point, Intersection } from './nodes.js';
 import { VerticalLine, HorizontalLine, DiagonalLine, Arc, Circle } from './shapes.js';
@@ -120,6 +121,11 @@ export class PlanGraph {
     // 将来、天井・床の層構成モデルを導入する際に edgeComposition.js 側で接続する）
     this.ceilingBacking      = DEFAULT_CEILING_BACKING;       // 天井下地: 下地材コード
     this.floorBacking        = DEFAULT_FLOOR_BACKING;         // 床下地: 下地材コード
+
+    // 昇降路（isShaftFeature の部屋）の壁材。部屋個別の内装マスターは使わず共通仕様で
+    // 一括指定する（Q5）。防音材は表示のみ（断面計算に未接続。天井・床下地と同じ扱い）。
+    this.shaftWallMaterial = DEFAULT_SHAFT_WALL_MATERIAL; // 昇降路壁材: 面材コード
+    this.shaftSoundproof   = DEFAULT_SHAFT_SOUNDPROOF;    // 昇降路防音材: 'none' | 'insulation'
 
     // 部屋の既定値（共通仕様タブ per-floor 設定）。部屋側が null のとき参照される。
     this.defaultFloorLevel    = DEFAULT_ROOM_FLOOR_LEVEL;    // FL初期値: 階FLからの相対高さmm
@@ -244,6 +250,8 @@ export class PlanGraph {
       wallFreshnessKey:         observable,
       woodColumnWidthMm:        observable,
       beamColumnWidthMm:        observable,
+      shaftWallMaterial:        observable,
+      shaftSoundproof:          observable,
       setExteriorWallBacking:   action,
       setInteriorWallBacking:   action,
       setCeilingBacking:        action,
@@ -255,6 +263,8 @@ export class PlanGraph {
       setWallFreshnessKey:      action,
       setWoodColumnWidthMm:     action,
       setBeamColumnWidthMm:     action,
+      setShaftWallMaterial:     action,
+      setShaftSoundproof:       action,
       setColumnAxisOffset:  action,
       setCLEccentricity:    action,
       removeCLEccentricity: action,
@@ -428,6 +438,10 @@ export class PlanGraph {
   setInteriorWallBacking(code) { this.interiorWallBacking = code; }
   setCeilingBacking(code)      { this.ceilingBacking      = code; }
   setFloorBacking(code)        { this.floorBacking        = code; }
+  /** 昇降路（isShaftFeature の部屋）の壁材（共通仕様タブ）を設定する。 */
+  setShaftWallMaterial(code) { this.shaftWallMaterial = code; }
+  /** 昇降路の防音材（共通仕様タブ。表示のみ）を設定する。 */
+  setShaftSoundproof(v)      { this.shaftSoundproof   = v; }
   setDefaultFloorLevel(mm)     { this.defaultFloorLevel    = mm; }
   setDefaultCeilingHeight(mm)  { this.defaultCeilingHeight = mm; }
   setFloorDatum(mm) { this.floorDatum = mm; }
@@ -1003,6 +1017,8 @@ export class PlanGraph {
     this.interiorWallBacking = DEFAULT_INTERIOR_WALL_BACKING;
     this.ceilingBacking      = DEFAULT_CEILING_BACKING;
     this.floorBacking        = DEFAULT_FLOOR_BACKING;
+    this.shaftWallMaterial   = DEFAULT_SHAFT_WALL_MATERIAL;
+    this.shaftSoundproof     = DEFAULT_SHAFT_SOUNDPROOF;
     this.defaultFloorLevel    = DEFAULT_ROOM_FLOOR_LEVEL;
     this.defaultCeilingHeight = DEFAULT_ROOM_CEILING_HEIGHT;
     this.floorDatum          = 0;

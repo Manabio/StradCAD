@@ -58,7 +58,7 @@ function normalizeCode(code, table, unresolved, context) {
 // 使用コード収集）が同じ判定を共有する——一方だけ直して他方が古いまま、という分岐を防ぐため
 // （enumerateMaterialCodeRefs が両方の唯一の入口）。
 // ----------------------------------------------------------------
-const BACKING_FIELDS = ['exteriorWallBacking', 'interiorWallBacking', 'ceilingBacking', 'floorBacking'];
+const BACKING_FIELDS = ['exteriorWallBacking', 'interiorWallBacking', 'ceilingBacking', 'floorBacking', 'shaftWallMaterial'];
 
 function isRoomMaterialOverride(ov) {
   return !!ov && (ov.key === 'wallMaterial' || ov.key === 'wallFinish');

@@ -42,8 +42,8 @@ test('LEGACY_MATERIAL_CODE_ALIASES: 新コード全件がmaterialData.jsのMATER
 // 明記し、REMOVED_MATERIALSの記録形にも新コード欄が無い＝2件は本体カタログから除外される設計と
 // 判断した。旧MATERIALS件数132から2件を除いた130件を固定する（132のままという別の記述との食い違いは
 // 報告書で明示する）。
-test('MATERIALS: 全件が新体系（isLegacyCodeがfalse）。130件（132−廃止・削除2件）', () => {
-  assert.equal(MATERIALS.length, 130);
+test('MATERIALS: 全件が新体系（isLegacyCodeがfalse）。131件（132−廃止・削除2件＋昇降路壁材新設1件）', () => {
+  assert.equal(MATERIALS.length, 131);
   for (const m of MATERIALS) assert.equal(isLegacyCode(m.code), false, `${m.code}(${m.name})が旧体系のまま`);
 });
 

@@ -313,6 +313,39 @@ test('【失敗系・Phase2】componentOf: 上層EVの下が通常部屋（featu
     '上層EVの下が通常部屋なら連結しないはず（EVはVOIDと異なりfeature==nullへフォールバックしない）');
 });
 
+// ---- DW（小荷物専用昇降機。昇降路属性の拡張・2026-09-28）も同じ規則（同じfeatureの1室とだけ連結） ----
+test('【Phase2】componentOf: 上層DWは直下層のDWと階またぎで同成分', () => {
+  const lowerGraph = makeGraph();
+  const lowerDw = makeRectRoom(lowerGraph, 0, 0, 2000, 2000, 'DW');
+  lowerDw.setFeature(RoomFeature.DW);
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const upperDw = makeRectRoom(upperGraph, 0, 0, 2000, 2000, 'DW');
+  upperDw.setFeature(RoomFeature.DW);
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.equal(index.componentOf(lowerLayer, lowerDw), index.componentOf(upperLayer, upperDw),
+    '上層DWと直下層DWはfootprintが重なれば階またぎで同じ成分のはず');
+});
+
+test('【失敗系・Phase2】componentOf: 上層EVの下が別種の昇降路（DW）なら階またぎで連結しない（同じfeatureのみ連結）', () => {
+  const lowerGraph = makeGraph();
+  const lowerDw = makeRectRoom(lowerGraph, 0, 0, 2000, 2000, 'DW');
+  lowerDw.setFeature(RoomFeature.DW);
+  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
+  const upperEv = makeRectRoom(upperGraph, 0, 0, 2000, 2000, 'EV');
+  upperEv.setFeature(RoomFeature.EV);
+
+  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
+  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
+  const index = buildSpaceIndex([lowerLayer, upperLayer]);
+
+  assert.notEqual(index.componentOf(lowerLayer, lowerDw), index.componentOf(upperLayer, upperEv),
+    '上層EVの下がDW（別種の昇降路）なら連結しないはず（feature完全一致のみ連結）');
+});
+
 // ---- ユーザー裁定: VOIDは「重なる吹抜けの最下階の親部屋1室」とだけ連結する（複数階の吹抜けは連鎖） ----
 function makeThreeLevelVoidChainGraphs() {
   const l1Graph = makeGraph();

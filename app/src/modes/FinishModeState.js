@@ -30,6 +30,7 @@ function setsEqual(a, b) {
 const MATERIAL_CODE_GRAPH_FIELDS    = [
   'exteriorWallBacking',
   'interiorWallBacking', 'ceilingBacking', 'floorBacking',
+  'shaftWallMaterial',
 ]; // per-floor 設定
 const MATERIAL_CODE_OVERRIDE_FIELDS = ['wallMaterial', 'wallFinish'];               // Room.customOverrides
 
