@@ -36,7 +36,16 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 構造モードのみに存在する合成Plane。`project.planes`/`orderedTabs`から除外、`project.roofPlane`で個別アクセス。
 
 ## kind / feature（Roomの2軸区分）
-`kind`＝屋内/屋外（内外判定はこちらのみ参照）。`feature`＝階段/吹抜け/階段吹抜け/なし（属性）。旧enumの`void`は読込時に「屋内+吹抜け」へ移行される。設計意図は`.claude/data-model.md`。
+`kind`＝屋内/屋外（内外判定はこちらのみ参照）。`feature`＝階段/吹抜け/階段吹抜け/昇降路（EV/DW/貨物用EV/車両用EV）/なし（属性）。旧enumの`void`は読込時に「屋内+吹抜け」へ移行される。設計意図は`.claude/data-model.md`。
+
+## 昇降路（EV等。SHAFT_FEATURES）
+床を持たない部屋属性（EV／DW／貨物用EV／車両用EV。`isShaftFeature`）。共通仕様「昇降路」（per-floor `shaftWallMaterial`・`shaftSoundproof`）で壁材を一括指定し、部屋個別の内装は持たない。展開図は描かない・仕上げ表内部タブに出ない。部分指定でも階段と同型に壁生成の対象。設計意図は`.claude/data-model.md`「Roomの内外区分」節。
+
+## 規則O（開口由来梁芯）
+S造・RC造・SRC造で、床開口（吹抜け・昇降路・階段吹抜け・下階に到達元の階段がある破れ先）を囲むセル境界CLから梁芯CL（由来`'opening'`）を自動生成する規則（`structural/openingBeamAxes.js`）。壁由来梁芯・在来木造の床梁割付けと並ぶ梁芯の第3の発生源。開口以外の中心線を対象にする規則Cは未裁定。設計意図は`.claude/structural-model.md`「規則O」節。
+
+## 開口辺（floorOpeningEdges）
+自階の床開口をセル境界CL上の辺として列挙する純関数（`finish/stair/slabOpening.js`）。情報源は`openingCellSets`（吹抜け・昇降路・階段吹抜けの占有セル∪自階の階段の破れ先セル）1つ。規則Oの入力。設計意図は`.claude/structural-model.md`「規則O」節。
 
 ## 階段吹抜け（STAIR_VOID）
 最上階の屋内階段footprintへ自動指定される自動管理Room（`feature='stairVoid'`・無名）。ユーザー指定の吹抜け（`feature='void'`）と異なり一切描画せず、仕上げ表・部屋ドラッグの対象外。階追加で中間階になると階段のペアRoomへ転用される。設計意図は`.claude/data-model.md`。
@@ -195,7 +204,7 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 `.claude/elevation-model.md`「階をまたぐ2層帯」節。
 
 ## ささら（ささら桁） / 踊り場受け梁
-**ささら（ささら桁）**＝鉄骨階段で段板（踏み板）を両側から支える斜め梁（プレート。板厚12mm・成300mm程度。段部はささらの横に付く「横付け」納まりが一般的で、段部の木口はささらに隠れて見えない）。展開図では側面視＝段鼻から成ぶん下げた輪郭（DETAIL細線）、正面視＝断面矩形（CUT太線）で表す（`elevation/elevationStairSection.js`/`elevation/section/sectionStair.js`）。**踊り場受け梁**＝鉄骨階段・RC造階段の踊り場（せいのある帯として1層1ユニットを構成する要素の一つ）を支える下地鉄骨。構造モードで`role:'landing'`（記号`LG`）の梁として踊り場の壁側1辺（直進部レーンと反対側）に自動生成され、梁天端レベル（`levelOffset`。FL基準・上が正）を編集できる。設計意図は`.claude/structural-model.md`「踊り場受け梁」節・`.claude/elevation-model.md`「階をまたぐ2層帯」節参照。
+**ささら（ささら桁）**＝鉄骨階段で段板（踏み板）を両側から支える斜め梁（プレート。板厚12mm・成300mm程度。段部はささらの横に付く「横付け」納まりが一般的で、段部の木口はささらに隠れて見えない）。展開図では側面視＝段鼻から成ぶん下げた輪郭（DETAIL細線）、正面視＝断面矩形（CUT太線）で表す（`elevation/elevationStairSection.js`/`elevation/section/sectionStair.js`）。**踊り場受け梁**＝鉄骨階段・RC造階段の踊り場（せいのある帯として1層1ユニットを構成する要素の一つ）を支える下地鉄骨。構造モードで`role:'landing'`（記号`LG`）の梁として踊り場の壁側1辺（直進部レーンと反対側）に、踊り場の**到達階**（設置階ではなく踊り場の上の階。最上階はSTAIR_VOID Roomから解決）の伏図へ自動生成され、同spanKeyの自動生成床大梁（G）があれば撤去して置換する（2026-09-28裁定）。梁天端レベル（`levelOffset`。到達階FL基準）を編集できる。設計意図は`.claude/structural-model.md`「踊り場受け梁」節・`.claude/elevation-model.md`「階をまたぐ2層帯」節参照。
 
 ## ドレーキップ窓・常時開放式防火戸/防火折戸・オーバーヘッドドア・非常用進入口・ガラリ
 **ドレーキップ窓**＝すべり出し（開き）と内倒しを兼ねる窓（`DREH_KIPP`）。**常時開放式防火戸/防火折戸**＝平常時は開放したまま火災時に自動閉鎖する防火設備（`FIRE_DOOR`/`FIRE_FOLD`。枚数・開放角度はcatalogエントリの`fireLeaves`/`fireAngle`で持つ）。**オーバーヘッドドア**＝天井方向へ跳ね上げる大型建具（`OVERHEAD`）。**非常用進入口**＝消防隊が外部から進入するための開口（`EMERGENCY`）。**ガラリ**＝通気用のルーバー開口（`GARARI`、固定のみ）。いずれも`openingCatalog.js`のFITTING_CATALOG/WINDOW_CATALOGエントリで、機構(`OpeningMechanism`)ごとに平面記号（`renderer/OpeningsLayer.jsx`）・姿図（`openings/openingElevationFigure.js`）を描く。設計意図は`.claude/opening-model.md`。
