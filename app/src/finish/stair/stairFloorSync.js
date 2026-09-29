@@ -4,7 +4,7 @@ import { saveFloor } from '../../storage/db.js';
 import { undoManager } from '../../undoManager.js';
 import { refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
-import { findCounterpartCL, translateCLId } from '../floorCLMap.js';
+import { collectNeededCLs, addMissingCLs, translateCellSet } from '../floorCLMap.js';
 import { RoomFeature, RoomKind } from '@core';
 
 function setsEqual(a, b) {
@@ -33,95 +33,6 @@ function addStairVoidRoom(graph, cells) {
   const room = graph.addRoom(new Set(cells));
   room.setFeature(RoomFeature.STAIR_VOID);
   return true;
-}
-
-/**
- * 設置階 CL の side('lo'|'hi') 側 extent を上階グラフ向けに変換する。
- * - 通り芯参照（全階共通の structGraph CL）→ 参照をそのまま維持
- * - 設置階 per-floor CL への参照 → 上階の同 type:value CL へ付け替え
- * - 壁参照・付け替え先なし → 解決済み座標を静的値として持たせる（壁は階固有）
- * @returns {{ref: object|null, staticVal: number|null}}
- */
-function translateExtent(src, side, activeGraph, structGraph, upperGraph) {
-  const ref       = side === 'lo' ? src.extentLoRef : src.extentHiRef;
-  const staticVal = side === 'lo' ? src._extentLo   : src._extentHi;
-  const resolved  = side === 'lo' ? src.extentLo    : src.extentHi;
-  if (ref?.clId) {
-    if (structGraph?.shapeMap.has(ref.clId)) return { ref, staticVal: null };
-    const srcRef = activeGraph.shapeMap.get(ref.clId);
-    const counterpart = srcRef
-      ? findCounterpartCL(upperGraph, srcRef.centerLineType, srcRef.value)
-      : null;
-    if (counterpart) {
-      return { ref: { clId: counterpart.id, offset: ref.offset ?? 0 }, staticVal: null };
-    }
-    return { ref: null, staticVal: resolved };
-  }
-  if (ref?.wallId) return { ref: null, staticVal: resolved };
-  return { ref: null, staticVal };
-}
-
-// セルキー（"leftId:topId:rightId:bottomId"）を上階のCL id集合へ変換する。1つでも解決不能なら null。
-function translateCellKey(key, activeGraph, structGraph, upperGraph) {
-  const ids = key.split(':').map(id => translateCLId(id, activeGraph, structGraph, upperGraph));
-  return ids.every(Boolean) ? ids.join(':') : null;
-}
-
-/**
- * cells（Set<string>）を上階の CL id 空間へ type:value 照合で変換する（階段・部屋どちらの
- * セル集合にも使う汎用ヘルパ）。1つでも解決不能なセルがあれば null を返す（安全側。
- * 呼び出し側は該当エンティティの自動追加をスキップする）。
- */
-function translateCellSet(cells, activeGraph, structGraph, upperGraph) {
-  const result = new Set();
-  for (const key of cells) {
-    const translated = translateCellKey(key, activeGraph, structGraph, upperGraph);
-    if (!translated) return null;
-    result.add(translated);
-  }
-  return result;
-}
-
-/**
- * cellKeys（Set<string>）が参照する per-floor 中心線を type:value で集める（通り芯は
- * sourceGraph.shapeMap に無いため自然にスキップされる）。
- * @returns {Map<string, import('@core').CenterLine>} `${type}:${value}` → CenterLine
- */
-function collectNeededCLs(cellKeys, sourceGraph) {
-  const needed = new Map();
-  for (const key of cellKeys) {
-    for (const clId of key.split(':')) {
-      const cl = sourceGraph.shapeMap.get(clId);
-      if (!cl) continue;
-      needed.set(`${cl.centerLineType}:${cl.value}`, cl);
-    }
-  }
-  return needed;
-}
-
-/**
- * needed（collectNeededCLs の結果）のうち upperGraph に無いものを追加し、短縮区間（extent）も
- * translateExtent で写す。stairFloorSync 内の全ての「上階への不足CL同期」処理はこれを使う
- * （二重実装しない）。
- * @returns {number} 追加した CL 数（0 なら変更なし）
- */
-function addMissingCLs(needed, sourceGraph, structGraph, upperGraph) {
-  const added = []; // [元CL, upperGraphに追加したCL]
-  for (const cl of needed.values()) {
-    if (findCounterpartCL(upperGraph, cl.centerLineType, cl.value)) continue;
-    const nc = upperGraph.addCenterLine(cl.centerLineType, cl.value, {
-      labeled: false, trim: false, discipline: cl.discipline,
-      lineWeight: cl.lineWeight, lineType: cl.lineType, color: cl.color,
-    });
-    added.push([cl, nc]);
-  }
-  for (const [src, nc] of added) {
-    for (const side of ['lo', 'hi']) {
-      const { ref, staticVal } = translateExtent(src, side, sourceGraph, structGraph, upperGraph);
-      if (ref || staticVal != null) upperGraph.setCenterLineExtentRef(nc, side, ref, staticVal);
-    }
-  }
-  return added.length;
 }
 
 /**

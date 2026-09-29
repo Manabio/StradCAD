@@ -9,10 +9,11 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
 import { normalizePartialDominance } from '../finish/roomReinterpret.js';
 import { roomNameAnchor } from '../finish/roomLabel.js';
-import { makeRoomUndefined } from '../finish/roomUndefined.js';
-import { selfFloorEquipmentCatalog, nextEquipmentNo } from '../finish/equipment/equipmentNumbering.js';
+import { makeRoomUndefined, subtractCellsFromUndefinedRooms } from '../finish/roomUndefined.js';
+import { selfFloorEquipmentCatalog, nextEquipmentNo, equipmentFloorSpanLabel } from '../finish/equipment/equipmentNumbering.js';
 import { equipmentAtCell } from '../finish/equipment/equipmentGeometry.js';
 import { equipmentHighlightKeys } from '../finish/equipment/equipmentTab.js';
+import { buildingEquipmentCatalog, equipmentSpanLabelOf } from '../finish/equipment/buildingEquipment.js';
 import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
 import {
@@ -757,6 +758,34 @@ export class FinishModeState {
   }
 
   /**
+   * payload（ダイアログの確定内容 {name, kind, feature}）が「昇降機の新規設置」（非昇降機属性の
+   * Room → 昇降機属性）を意図しているか（applyNaming の isNewInstall 判定と同じ述語。ここへ集約し
+   * applyNaming もこれを使う——ステップ4・S3b）。roomId が存在しなければ false。
+   */
+  isElevatorInstallIntent(roomId, payload) {
+    const room = this.graph.roomMap.get(roomId);
+    if (!room) return false;
+    return isShaftFeature(payload.feature) && !isShaftFeature(room.feature);
+  }
+
+  /**
+   * 昇降機の新規設置の事前検証（App.jsx installElevatorFromNaming が関門に入る前に呼ぶ。
+   * ステップ4・S3b）。applyNaming と同じ validateElevatorInstall を使う（検査を2か所に書かない）。
+   * 状態は一切変えない。roomId が存在しなければ拒否なし・cells:null（呼び出し側は何もせず終える）。
+   * @returns {{rejection: string|null, cells: Set<string>|null}}
+   */
+  prepareElevatorNaming(roomId, payload) {
+    const room = this.graph.roomMap.get(roomId);
+    if (!room) return { rejection: null, cells: null };
+    const reason = validateElevatorInstall({
+      graph: this.graph, room, kind: payload.kind,
+      isNewCandidate: this.namingIsNew && this.namingRoomId === roomId,
+    });
+    if (reason) return { rejection: reason, cells: null };
+    return { rejection: null, cells: refreshCells(room.cells, this.graph) };
+  }
+
+  /**
    * ダイアログ確定時に kind/feature/name をまとめて適用する（旧 finishNaming を置き換え）。
    * feature の遷移により Stair の生成・削除・名前変更を行う:
    *   非STAIR → 'stair': 新規変換（Stair生成。名前は空許容）
@@ -771,9 +800,17 @@ export class FinishModeState {
    * 通常の1エントリになる）。既存の昇降機（判定2の統合先等）はこの検証の対象外——
    * featureOptionsForDialog(room, { isNew: false }) が昇降機の選択肢自体を出さないため、
    * 実運用でこの経路には到達しない。
+   *
+   * equipment（第4引数。ステップ4・S3b）: judgeElevatorInstall（finish/equipment/
+   * equipmentFloorPlan.js）が既に判定した { id, category, usage, no } をそのまま使う——
+   * 上階自動設置・下方延長と id/no を揃えるため、この階だけの採番（nextEquipmentNo）へは
+   * 委ねない。省略時（null）は従来どおり自階だけの採番（検討案平面・階段等の直接呼び出し経路の
+   * 挙動を変えない）。isElevatorInstallIntent が偽（新規設置でない）のに equipment を渡すのは
+   * 呼び出し側のバグのため、黙って無視せず throw する。
    * @returns {Stair|null} 新規に階段変換した場合はその Stair（呼び出し側の stairFloorSync 判定用）、それ以外は null。
    */
-  applyNaming(roomId, { name, kind, feature }, floorHeight = null) {
+  applyNaming(roomId, payload, floorHeight = null, { equipment = null } = {}) {
+    const { name, kind, feature } = payload;
     this.lastNamingRejection = null;
 
     const room = this.graph.roomMap.get(roomId);
@@ -784,7 +821,10 @@ export class FinishModeState {
       return null;
     }
 
-    const isNewInstall = isShaftFeature(feature) && !isShaftFeature(room.feature);
+    const isNewInstall = this.isElevatorInstallIntent(roomId, payload);
+    if (equipment && !isNewInstall) {
+      throw new Error('applyNaming: equipment は新規設置（isElevatorInstallIntent）以外では渡せません');
+    }
     if (isNewInstall) {
       const reason = validateElevatorInstall({
         graph: this.graph, room, kind,
@@ -806,8 +846,10 @@ export class FinishModeState {
       this.namingCellOrder = null;
       this._subtractCellsFromUndefined(room.cells); // 候補Roomが統合で消える前に
       const { equipmentId } = installEquipment(this.graph, {
-        id: crypto.randomUUID(), category: ElevatorEquipmentCategory.EV, usage: DEFAULT_EV_USAGE,
-        no: nextEquipmentNo(this.equipmentCatalog(), ElevatorEquipmentCategory.EV),
+        id: equipment?.id ?? crypto.randomUUID(),
+        category: equipment?.category ?? ElevatorEquipmentCategory.EV,
+        usage: equipment?.usage ?? DEFAULT_EV_USAGE,
+        no: equipment?.no ?? nextEquipmentNo(this.equipmentCatalog(), ElevatorEquipmentCategory.EV),
         cells: refreshCells(room.cells, this.graph),
         candidateRoomId: room.id,
       });
@@ -934,16 +976,12 @@ export class FinishModeState {
 
   /**
    * cells を未定義Room群から取り除く（命名確定・新規候補室の削除取消で呼ぶ）。
-   * refreshCells で現行キーへ正規化した集合から差し引き、空になった未定義Roomは削除する。
+   * 本体は finish/roomUndefined.js の subtractCellsFromUndefinedRooms（純関数）へ移した——
+   * finish/equipment/equipmentFloorPlan.js の installOnUpperFloor がモード状態を経由せず
+   * 直接呼ぶため（昇降機の仕様追加 ステップ4・S2）。
    */
   _subtractCellsFromUndefined(cells) {
-    for (const u of this.graph.rooms) {
-      if (u.feature !== RoomFeature.UNDEFINED) continue;
-      const current = refreshCells(u.cells, this.graph);
-      const remaining = new Set([...current].filter(c => !cells.has(c)));
-      if (remaining.size === 0) this.graph.removeRoom(u.id);
-      else u.setCells(remaining);
-    }
+    subtractCellsFromUndefinedRooms(this.graph, cells);
   }
 
   /**
@@ -1042,11 +1080,25 @@ export class FinishModeState {
   }
 
   /**
-   * 自階の器具カタログ（{id,category,no}[]）。ステップ3は自階の行だけを見る
-   * （selfFloorEquipmentCatalog）。ステップ4・5で全階分に差し替える予定の呼び出し口。
+   * 器具カタログ（{id,category,no}[]）。project があれば建物全体（全採用階。
+   * finish/equipment/buildingEquipment.js buildingEquipmentCatalog）、無ければ自階だけ
+   * （selfFloorEquipmentCatalog。既存テスト・project省略の直接呼び出しの挙動を変えない）。
    */
   equipmentCatalog() {
-    return selfFloorEquipmentCatalog(this.graph.equipmentRows);
+    return this.project ? buildingEquipmentCatalog(this.project, this.graph) : selfFloorEquipmentCatalog(this.graph.equipmentRows);
+  }
+
+  /**
+   * 器具id（登録済み・自階に行がある前提）の「設置階〜最上階」表示文字列。project が無い、または
+   * 全採用階にidを持つ行が1件も見つからない場合は自階の階名だけにフォールバックする
+   * （equipmentFloorSpanLabel([{label:自階名, order:0}])。ステップ3の挙動と同じ形）。
+   * @param {string} id
+   * @returns {string}
+   */
+  equipmentSpanLabel(id) {
+    const fallback = () => equipmentFloorSpanLabel([{ label: this.graph.plane?.name ?? '', order: 0 }]);
+    if (!this.project) return fallback();
+    return equipmentSpanLabelOf(this.project, this.graph, id) ?? fallback();
   }
 
   /** 昇降機器具の用途を変更する（withFinishUndo。同値・行なしは何もしない）。 */

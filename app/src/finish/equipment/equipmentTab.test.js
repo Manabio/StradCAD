@@ -25,12 +25,24 @@ function room({ id, feature = RoomFeature.ELEVATOR_EQUIPMENT }) {
   return { id, feature };
 }
 
-test('buildEquipmentTabEntries: 登録済みをno昇順で並べ、記号・用途・spanLabelが入る', () => {
+// spanLabelOf/currentFloorLabel（ステップ4・S4で単一の spanLabel 文字列から差し替え。
+// 旧: buildEquipmentTabEntries({ …, spanLabel: '1階' })（全行に同じ文字列を適用）
+// 新: spanLabelOf(id)（登録済み行ごとに mode.equipmentSpanLabel(id) 相当）・
+//     currentFloorLabel（未登録は常に現在の階名）。テストは呼ばれた id を記録するスタブで固定する）。
+function makeSpanLabelOf(byId = {}) {
+  const calls = [];
+  const fn = (id) => { calls.push(id); return byId[id] ?? `span(${id})`; };
+  fn.calls = calls;
+  return fn;
+}
+
+test('buildEquipmentTabEntries: 登録済みをno昇順で並べ、記号・用途・spanLabel（id別にspanLabelOfを呼ぶ）が入る', () => {
   const rows = [row({ id: 'b', no: 2, roomId: 'rb' }), row({ id: 'a', no: 1, roomId: 'ra', usage: 'freight' })];
   const rooms = [room({ id: 'ra' }), room({ id: 'rb' })];
   const symbols = new Map([['a', 'EV1'], ['b', 'EV2']]);
+  const spanLabelOf = makeSpanLabelOf({ a: '1階〜3階', b: '1階' });
 
-  const entries = buildEquipmentTabEntries({ rows, rooms, symbols, spanLabel: '1階' });
+  const entries = buildEquipmentTabEntries({ rows, rooms, symbols, spanLabelOf, currentFloorLabel: '1階' });
 
   assert.equal(entries.length, 2);
   assert.deepEqual(entries.map(e => e.id), ['a', 'b'], 'no昇順のはず');
@@ -38,16 +50,20 @@ test('buildEquipmentTabEntries: 登録済みをno昇順で並べ、記号・用�
   assert.equal(entries[0].symbol, 'EV1');
   assert.equal(entries[0].usage, 'freight');
   assert.equal(entries[0].category, 'ev');
-  assert.equal(entries[0].spanLabel, '1階');
+  assert.equal(entries[0].spanLabel, '1階〜3階', 'spanLabelOf(id)の戻り値がそのまま入る');
+  assert.equal(entries[1].spanLabel, '1階');
   assert.equal(entries[0].roomId, 'ra');
+  assert.deepEqual(spanLabelOf.calls.sort(), ['a', 'b'], 'spanLabelOfは登録済み行ごとにidで呼ばれる');
 });
 
-test('buildEquipmentTabEntries: 未登録（行を持たない昇降路Room）は登録済みの後ろにroomOrder順（rooms配列の並び順）で並ぶ', () => {
+test('buildEquipmentTabEntries: 未登録（行を持たない昇降路Room）は登録済みの後ろにroomOrder順（rooms配列の並び順）で並び、spanLabelは常にcurrentFloorLabel', () => {
   const rows = [row({ id: 'a', no: 1, roomId: 'ra' })];
   // rooms は roomOrder 順（呼び出し側の規約）。未登録は z→y の順で並べておく。
   const rooms = [room({ id: 'ra' }), room({ id: 'rz' }), room({ id: 'ry' })];
 
-  const entries = buildEquipmentTabEntries({ rows, rooms, symbols: new Map(), spanLabel: '1階' });
+  const entries = buildEquipmentTabEntries({
+    rows, rooms, symbols: new Map(), spanLabelOf: makeSpanLabelOf(), currentFloorLabel: '2階',
+  });
 
   assert.equal(entries.length, 3);
   assert.equal(entries[0].kind, 'row');
@@ -55,13 +71,20 @@ test('buildEquipmentTabEntries: 未登録（行を持たない昇降路Room）�
   assert.ok(entries.slice(1).every(e => e.kind === 'unregistered'));
   assert.ok(entries.slice(1).every(e => e.symbol === '昇降路（未登録）'));
   assert.ok(entries.slice(1).every(e => e.category === null && e.usage === null));
+  assert.ok(entries.slice(1).every(e => e.spanLabel === '2階'), '未登録は設置階の概念が無いため常にcurrentFloorLabel');
 });
 
 test('buildEquipmentTabEntries: 行0件かつ未登録0件は空配列', () => {
-  assert.deepEqual(buildEquipmentTabEntries({ rows: [], rooms: [], symbols: new Map(), spanLabel: '1階' }), []);
+  assert.deepEqual(
+    buildEquipmentTabEntries({ rows: [], rooms: [], symbols: new Map(), spanLabelOf: makeSpanLabelOf(), currentFloorLabel: '1階' }),
+    [],
+  );
   // 非shaft属性のRoomは未登録候補にならない
   const rooms = [room({ id: 'r1', feature: null }), room({ id: 'r2', feature: RoomFeature.STAIR })];
-  assert.deepEqual(buildEquipmentTabEntries({ rows: [], rooms, symbols: new Map(), spanLabel: '1階' }), []);
+  assert.deepEqual(
+    buildEquipmentTabEntries({ rows: [], rooms, symbols: new Map(), spanLabelOf: makeSpanLabelOf(), currentFloorLabel: '1階' }),
+    [],
+  );
 });
 
 test('buildEquipmentTabEntries: 行のroomIdが存在しないRoomを指していても例外にならない', () => {
@@ -69,7 +92,7 @@ test('buildEquipmentTabEntries: 行のroomIdが存在しないRoomを指して�
   const rooms = []; // roomMapに存在しない
 
   assert.doesNotThrow(() => {
-    const entries = buildEquipmentTabEntries({ rows, rooms, symbols: new Map(), spanLabel: '1階' });
+    const entries = buildEquipmentTabEntries({ rows, rooms, symbols: new Map(), spanLabelOf: makeSpanLabelOf(), currentFloorLabel: '1階' });
     assert.equal(entries.length, 1);
     assert.equal(entries[0].roomId, 'no-such-room');
   });
@@ -79,7 +102,7 @@ test('buildEquipmentTabEntries: 登録済みRoomは未登録として二重に�
   const rows = [row({ id: 'a', no: 1, roomId: 'ra' })];
   const rooms = [room({ id: 'ra' })];
 
-  const entries = buildEquipmentTabEntries({ rows, rooms, symbols: new Map(), spanLabel: '1階' });
+  const entries = buildEquipmentTabEntries({ rows, rooms, symbols: new Map(), spanLabelOf: makeSpanLabelOf(), currentFloorLabel: '1階' });
 
   assert.equal(entries.length, 1, '登録済みのRoomは未登録候補から除かれるはず');
 });

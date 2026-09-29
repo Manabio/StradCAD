@@ -48,3 +48,11 @@ test('【配線・強化】SceneLayers は EquipmentSymbolLayer のゲート行�
   assert.match(src, /^\s*symbols=\{computeEquipmentSymbols\(\s*$/m,
     'symbols={computeEquipmentSymbols( が1行まるごとの形で見つからない');
 });
+
+// QA指摘W4（昇降機の仕様追加 ステップ4・S4）: catalogは建物全体（全採用階。project.equipmentIndex経由）
+// のbuildingEquipmentCatalog(project, graph)から作る——floorplan/finish両モードとも同じ供給源にする
+// （selfFloorEquipmentCatalogへの後退・空配列固定を防ぐ）。
+test('【配線・強化・W4】SceneLayers は symbols の catalog引数を buildingEquipmentCatalog(project, graph) から1行まるごとの形で作る', () => {
+  assert.match(src, /^\s*graph, buildingEquipmentCatalog\(project, graph\),\s*$/m,
+    'graph, buildingEquipmentCatalog(project, graph), が1行まるごとの形で見つからない');
+});

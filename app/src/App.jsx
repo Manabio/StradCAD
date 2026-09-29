@@ -25,8 +25,9 @@ import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { floorHeightAbove, stairRiserOf } from './finish/stair/stairDimensions.js';
+import { snapshotFinishState, restoreFinishState } from './finish/finishUndo.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
-import { shouldShowPlanFigure } from './renderer/planFigureVisibility.js';
+import { shouldShowPlanFigure, shouldShowEquipmentSymbols } from './renderer/planFigureVisibility.js';
 import { slabOpeningRects, slabOpeningFrames, slabOpeningEdges } from './finish/stair/slabOpening.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
 import { computeVoidCrosses } from './finish/voidGeometry.js';
@@ -77,7 +78,7 @@ import {
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
   setCenterLineStructuralListener, applyCLEccentricityWithUndo,
 } from './transform/centerLineOps.js';
-import { ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure } from './error.js';
+import { ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure } from './error.js';
 import { isUiBusy, runBusy } from './uiBusy.js';
 import { isSessionOwner } from './storage/sessionLock.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
@@ -210,6 +211,10 @@ const App = observer(() => {
   // （既存部屋の名称・区分・属性の編集）の両方から呼ぶ共通処理（applyNaming＋階段変換時の
   // 上階自動設置 syncUpperFloors）。
   function applyRoomNaming(id, payload) {
+    // 昇降機の新規設置（非昇降機属性→昇降機属性）だけは非同期の関門（installElevatorFromNaming）へ
+    // 分ける——上階の事前チェック・自動設置・下方延長を伴うため（ステップ4・S3b）。既存の拒否
+    // トースト・階段の経路はこの行より後ろ（このifに入らない場合）で、変更しない。
+    if (modeRef.current?.isElevatorInstallIntent(id, payload)) { guardUi(installElevatorFromNaming)(id, payload); return; }
     const floorHeight = floorHeightAbove(project, project.activePlane);
     const convertedStair = modeRef.current?.applyNaming(id, payload, floorHeight);
     // 昇降機の設置が拒否された場合（矩形でない・屋外・新規候補でない）はトーストを出して
@@ -226,6 +231,70 @@ const App = observer(() => {
         .then(m => m.syncUpperFloors(project, project.activeGraph, { undoEntry }))
         .catch(console.error);
     }
+  }
+  // 昇降機の新規設置本体（applyRoomNamingから分岐。ステップ4・S3b）。上階の事前チェック・
+  // 自動設置・下方延長を伴うため関門（runBusy）の中で行う——handleDeleteCenterLine等と同じ形
+  // （beginUiTransition→runBusy→structuralSync.whenIdle()→本体→setFloorSyncTick）。
+  // 事前検証（prepareElevatorNaming）は関門に入る前の同期呼び出し——拒否ならダイアログを
+  // 開いたまま関門に入らずトーストのみ出す。
+  async function installElevatorFromNaming(id, payload) {
+    const fmode = modeRef.current;
+    const g = project.activeGraph;
+    const { rejection, cells } = fmode.prepareElevatorNaming(id, payload);
+    if (rejection) { setToast({ msg: rejection, key: Date.now() }); return; }
+    if (!cells) return; // Room が既に無い等の退化ケース（関門に入らない）
+    beginUiTransition();
+    await runBusy('昇降機の設置', async () => {
+      const isStillValid = () =>
+        modeRef.current === fmode && project.activeGraph === g && fmode.namingRoomId === id && g.roomMap.has(id);
+      // 設置階の確定が「グラフは変更したが undo エントリを持ち帰れない」状態
+      // （拒否・例外・差分なしでの null 戻り）になったとき、上階の巻き戻しだけでは設置階の
+      // 変更済みグラフと食い違う（QA指摘n1-b）。呼ぶ前に snapshotFinishState でスナップショットを
+      // 取っておき、いずれの失敗でも restoreFinishState（finishUndo.js の既存の復元関数。undo
+      // スタックは消費しない即時の戻し）で確定前の状態へ戻してから例外にする。
+      const commitActive = (equipment) => {
+        const before = snapshotFinishState(g);
+        try {
+          fmode.applyNaming(id, payload, floorHeightAbove(project, project.activePlane), { equipment });
+        } catch (err) {
+          runInAction(() => restoreFinishState(g, before));
+          throw err;
+        }
+        if (fmode.lastNamingRejection) {
+          runInAction(() => restoreFinishState(g, before));
+          throw new Error(fmode.lastNamingRejection);
+        }
+        if (!fmode.lastNamingUndoEntry) {
+          runInAction(() => restoreFinishState(g, before));
+          throw new Error('installElevatorFromNaming: applyNamingが差分なしでundoエントリを返さなかったため確定前へ戻しました');
+        }
+        return fmode.lastNamingUndoEntry;
+      };
+      // structuralSync.whenIdle()・動的importの失敗も、equipmentFloorSync.js内部の例外と
+      // 同じ識別コード（ERR_ELEVATOR_OP_FAILED）でトースト表示されるよう、ここでも付け直す
+      // （QA指摘m4。tagElevatorOpFailureは既に付いた例外をそのまま返す＝二重ラップしない）。
+      let r;
+      try {
+        await structuralSync.whenIdle();
+        const m = await import('./finish/equipment/equipmentFloorSync.js');
+        r = await m.runElevatorInstall({
+          project, activeGraph: g, cells, commitActive, isStillValid,
+          onApplied: () => setFloorSyncTick(t => t + 1),
+        });
+      } catch (err) {
+        throw tagElevatorOpFailure(err);
+      }
+      if (r.status === 'rejected') {
+        setToast({ msg: r.message, key: Date.now() });
+      } else if (r.status === 'aborted') {
+        // message が無い（isStillValid の再確認で中断等）ときもダイアログが無言で開いたままに
+        // ならないよう、既存の類似文言（世代不一致の中断）で代用する（QA指摘n1-a）。
+        setToast({ msg: r.message ?? ERR_ELEVATOR_FLOORS_CHANGED, key: Date.now() });
+      } else if (r.status === 'installed' && r.upperSpanLabel) {
+        setToast({ msg: `${r.upperSpanLabel}に EV を自動設置しました`, key: Date.now() });
+      }
+      // extended・upperSpanLabelなしのinstalledはトーストなし（Q6・設計書§1）。
+    });
   }
   // 構造リストで展開中のカードの部材id集合を構造モード状態へ写す（伏図のハイライト。
   // renderer/StructuralLayer.jsx が mode.selectedMemberIds を読む）。構造モード以外・状態未生成時は無視。
@@ -476,6 +545,23 @@ const App = observer(() => {
       const openings = slabOpeningRects(temp, { riserOf });
       setUpperSlabOpenings(openings);
       setUpperSlabFrames(slabOpeningFrames(temp, { riserOf }));
+    })().catch(console.error); // 非オーナータブでは peek → openDB が reject する（unhandled rejection防止）
+    return () => { cancelled = true; };
+  }, [appMode, activeFloorId, floorSyncTick, planesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 昇降機の図中記号（建物全体）: project.equipmentIndex の鮮度を保つため、他階を peek して
+  // 器具行を集める（自階は常に graph.equipmentRows を直接見るため対象外。上階の×と同じ
+  // deps・cancelled ガード。昇降機の仕様追加 ステップ4・S4）。
+  useEffect(() => {
+    if (!shouldShowEquipmentSymbols(appMode)) return undefined;
+    let cancelled = false;
+    (async () => {
+      const active = project.activeGraph;
+      if (!active) return;
+      const m = await import('./finish/equipment/equipmentFloorSync.js');
+      const entries = await m.loadOtherFloorEquipmentRows(project, active);
+      if (cancelled) return;
+      runInAction(() => project.replaceEquipmentIndex(entries));
     })().catch(console.error); // 非オーナータブでは peek → openDB が reject する（unhandled rejection防止）
     return () => { cancelled = true; };
   }, [appMode, activeFloorId, floorSyncTick, planesKey]); // eslint-disable-line react-hooks/exhaustive-deps

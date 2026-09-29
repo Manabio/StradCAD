@@ -1046,3 +1046,15 @@ test('【不変条件・QA指摘M】store.js: switchFloor本体がfloorSwapManag
   assert.ok(idleIdx < swapIdx,
     'whenCenterLineOpsIdle() は floorSwapManager.swap より前に呼ぶ必要がある');
 });
+
+// ---- QA指摘W6（昇降機の仕様追加 ステップ4）: store.js の removeFloor が
+// project.clearEquipmentIndex() を呼び、階削除後にproject.equipmentIndexへ古いplaneIdの
+// キャッシュが残らないようにしている（openingNumberIndex・memberNumberIndexと同じ理由）----
+test('【配線・強化】store.js: removeFloor が project.clearEquipmentIndex() を1行まるごとの形で呼ぶ', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'store.js'), 'utf8');
+  assert.match(src, /^\s*project\.clearEquipmentIndex\(\);\s*$/m,
+    'project.clearEquipmentIndex(); が1行まるごとの形で見つからない');
+  const removeFloorIdx = src.indexOf('export async function removeFloor');
+  const clearIdx = src.indexOf('project.clearEquipmentIndex();');
+  assert.ok(removeFloorIdx >= 0 && clearIdx > removeFloorIdx, 'removeFloor の本体の中に無い');
+});

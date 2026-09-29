@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
 import { ConfirmDialog } from '../../ui/ConfirmDialog.jsx';
 import { RoomDeleteConfirm } from '../RoomDeleteConfirm.jsx';
-import { equipmentSymbols, equipmentFloorSpanLabel } from './equipmentNumbering.js';
+import { equipmentSymbols } from './equipmentNumbering.js';
 import { buildEquipmentTabEntries } from './equipmentTab.js';
 import { EV_USAGE_OPTIONS, CATEGORY_LABEL } from './equipmentOptions.js';
 
@@ -19,9 +19,12 @@ export const EquipmentTab = observer(({ graph, mode, floorName }) => {
 
   const catalog = mode.equipmentCatalog();
   const symbols = equipmentSymbols(catalog);
-  // ステップ3は設置階〜最上階を現在の階名1つで表す（ステップ4・5で全階分の階範囲へ一般化する）。
-  const spanLabel = equipmentFloorSpanLabel([{ label: floorName ?? '', order: 0 }]);
-  const entries = buildEquipmentTabEntries({ rows: graph.equipmentRows, rooms: graph.rooms, symbols, spanLabel });
+  // 登録済み行ごとの階範囲は mode.equipmentSpanLabel(id)（project があれば全階分「1階〜3階」・
+  // 無ければ自階の階名だけ。ステップ4・S4）。未登録（行の無い昇降路Room）は常に現在の階名。
+  const entries = buildEquipmentTabEntries({
+    rows: graph.equipmentRows, rooms: graph.rooms, symbols,
+    spanLabelOf: id => mode.equipmentSpanLabel(id), currentFloorLabel: floorName ?? '',
+  });
 
   if (entries.length === 0) {
     return (

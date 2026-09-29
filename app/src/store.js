@@ -593,6 +593,8 @@ export async function removeFloor(planeId) {
     project.clearMemberNumberIndex();
     // openingNumberIndex も counts が planeId キーゆえ同じ理由で捨てる（.claude/opening-model.md）。
     project.clearOpeningNumberIndex();
+    // equipmentIndex も planeId キーのキャッシュのため同じ理由で捨てる（昇降機の仕様追加 ステップ4・S4）。
+    project.clearEquipmentIndex();
   });
 }
 

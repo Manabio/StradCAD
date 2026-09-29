@@ -43,6 +43,12 @@ export class Project {
     // 建具番号グループの派生キャッシュ（非永続。建具モード突入時の収集フェーズで再構築される。
     // signature → { symbol, subType, width, height, sillHeight, counts:Map<planeId,number>, tag }）。
     this.openingNumberIndex = observable.map();
+    // 昇降機器具の他階分キャッシュ（非永続。openingNumberIndexと同じ型: planeId → 器具行の
+    // plain値配列 Array<{id,category,no,usage}>。App.jsx の effect が floorplan/finish モードで
+    // peek して詰める。アクティブ階は常に graph.equipmentRows（生きている行）を直接見るため対象外
+    // （finish/equipment/buildingEquipment.js floorEquipmentRowLists 参照）。昇降機の仕様追加
+    // ステップ4・S4）。
+    this.equipmentIndex = observable.map({}, { deep: false });
 
     // カタログのR17（重複登録禁止）合成後例外・overlay読込み失敗等のメッセージ通知
     // （2026-09-22 QA指摘B。2026-09-22 再QA指摘Major-Dで通知専用に整理）。
@@ -86,6 +92,8 @@ export class Project {
       removePlane:   action,
       clearMemberNumberIndex: action,
       clearOpeningNumberIndex: action,
+      replaceEquipmentIndex: action,
+      clearEquipmentIndex: action,
       setSiteInfo:     action,
       setBuildingInfo: action,
       setCatalogError: action,
@@ -106,6 +114,10 @@ export class Project {
 
   clearMemberNumberIndex() { this.memberNumberIndex.clear(); }
   clearOpeningNumberIndex() { this.openingNumberIndex.clear(); }
+
+  /** entries（Iterable<[planeId, Array<{id,category,no,usage}>]>）で全置換する。 */
+  replaceEquipmentIndex(entries) { this.equipmentIndex.replace(entries); }
+  clearEquipmentIndex() { this.equipmentIndex.clear(); }
 
   get activeGraph() {
     return this.activePlaneId ? this.graphMap.get(this.activePlaneId) : undefined;

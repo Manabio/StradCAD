@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature,
+  Plane, PlanGraph, Project, CenterLineType, Discipline, RoomKind, RoomFeature,
   isShaftFeature, ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE,
 } from '@core';
 import { FinishModeState } from './FinishModeState.js';
@@ -368,6 +368,167 @@ test('dispose: selectedEquipmentIdがnullに戻る（QA指摘A.3・設計§6）'
 });
 
 // ================================================================
+// ステップ4 S3b: isElevatorInstallIntent・prepareElevatorNaming・applyNaming第4引数equipment
+// ================================================================
+
+test('isElevatorInstallIntent: 非昇降機属性→昇降機属性の新規候補は真', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  assert.equal(state.isElevatorInstallIntent(state.namingRoomId, EV_INSTALL), true);
+});
+
+test('isElevatorInstallIntent: 内部タブのカード（既存の昇降路Room）の再確定・非昇降機payloadは偽', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  state.applyNaming(state.namingRoomId, EV_INSTALL);
+  const room = graph.roomMap.get(graph.equipmentRows[0].roomId);
+  // 既存の昇降路Room（カードの用途変更等）を昇降機のまま渡しても新規設置ではない
+  assert.equal(state.isElevatorInstallIntent(room.id, EV_INSTALL), false, '既に昇降機のRoomは新規設置でない');
+  // 別の通常Room（名前部屋）へ非昇降機payloadを渡しても新規設置ではない
+  const other = graph.addRoom(new Set(), '納戸');
+  assert.equal(state.isElevatorInstallIntent(other.id, { name: '納戸', kind: RoomKind.INTERIOR, feature: null }), false);
+});
+
+test('isElevatorInstallIntent: 存在しないroomIdは偽', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  assert.equal(state.isElevatorInstallIntent('no-such-id', EV_INSTALL), false);
+});
+
+test('prepareElevatorNaming: 状態を一切変えない（snapshotFinishStateのJSON・namingRoomId・_pendingDialogUndoが前後で同一）。拒否文言はapplyNamingと同じ', () => {
+  const graph = makeGrid2x2();
+  const state = new FinishModeState(graph, null);
+  // L字（矩形でない）→拒否されるケースで確認する
+  state.startDrag(1000, 750);
+  state.updateDrag(3000, 750);
+  state.updateDrag(1000, 2250);
+  state.commitDrag();
+  const roomId = state.namingRoomId;
+  const snapshotBefore = JSON.stringify(snapshotFinishState(graph));
+  const namingRoomIdBefore = state.namingRoomId;
+  const pendingUndoBefore = JSON.stringify(state._pendingDialogUndo);
+
+  const { rejection, cells } = state.prepareElevatorNaming(roomId, EV_INSTALL);
+
+  assert.equal(cells, null);
+  assert.equal(JSON.stringify(snapshotFinishState(graph)), snapshotBefore, '状態を変えない');
+  assert.equal(state.namingRoomId, namingRoomIdBefore);
+  assert.equal(JSON.stringify(state._pendingDialogUndo), pendingUndoBefore);
+  assert.equal(state.lastNamingRejection, null, 'prepareElevatorNamingはlastNamingRejectionを書き換えない');
+
+  // applyNamingを実際に呼んだときの拒否文言と一致することを確かめる（検査を2か所に書かない）
+  const applyResult = state.applyNaming(roomId, EV_INSTALL);
+  assert.equal(applyResult, null);
+  assert.equal(state.lastNamingRejection, rejection, 'applyNamingの拒否文言と同一');
+});
+
+test('prepareElevatorNaming: 拒否が無ければcellsを返す（refreshCells済み）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  const roomId = state.namingRoomId;
+  const room = graph.roomMap.get(roomId);
+
+  const { rejection, cells } = state.prepareElevatorNaming(roomId, EV_INSTALL);
+
+  assert.equal(rejection, null);
+  assert.deepEqual(cells, refreshCells(room.cells, graph));
+});
+
+test('applyNaming: equipment引数（judgeElevatorInstallの判定結果）を渡すとid・category・usage・noをそのまま使う（採番し直さない）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  const roomId = state.namingRoomId;
+  const equipment = { id: 'ev-fixed-id', category: ElevatorEquipmentCategory.EV, usage: EvUsage.FREIGHT, no: 7 };
+
+  state.applyNaming(roomId, EV_INSTALL, null, { equipment });
+
+  assert.equal(graph.equipmentRows.length, 1);
+  const row = graph.equipmentRows[0];
+  assert.equal(row.id, equipment.id);
+  assert.equal(row.usage, equipment.usage);
+  assert.equal(row.no, equipment.no);
+});
+
+test('【失敗系】applyNaming: equipmentを渡したのに新規設置でない（isElevatorInstallIntent偽）場合はthrowする（黙って無視しない）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(), '納戸');
+  const equipment = { id: 'x', category: ElevatorEquipmentCategory.EV, usage: DEFAULT_EV_USAGE, no: 1 };
+
+  assert.throws(() => state.applyNaming(room.id, { name: '納戸', kind: RoomKind.INTERIOR, feature: null }, null, { equipment }));
+});
+
+test('equipmentCatalog: projectがあれば建物全体（buildingEquipmentCatalog）を返す', () => {
+  const graph = makeSingleCellGraph();
+  const project = new Project('proj', 'test');
+  project.addPlane(0, '1階', graph.plane.id);
+  project.addPlane(3000, '2階', 'p2');
+  project.replaceEquipmentIndex([['p2', [{ id: 'other', category: 'ev', no: 5, usage: 'passenger' }]]]);
+  const state = new FinishModeState(graph, project);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  state.applyNaming(state.namingRoomId, EV_INSTALL);
+
+  const catalog = state.equipmentCatalog();
+
+  assert.equal(catalog.length, 2);
+  assert.ok(catalog.some(c => c.id === 'other'), '他階(project.equipmentIndex)の器具も含む');
+});
+
+test('equipmentSpanLabel: projectがあれば全採用階から設置階〜最上階を返す', () => {
+  const graph = makeSingleCellGraph();
+  const project = new Project('proj', 'test');
+  project.addPlane(0, '1階', graph.plane.id);
+  project.addPlane(3000, '2階', 'p2');
+  const state = new FinishModeState(graph, project);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  state.applyNaming(state.namingRoomId, EV_INSTALL);
+  const id = graph.equipmentRows[0].id;
+  project.replaceEquipmentIndex([['p2', [{ id, category: 'ev', no: 1, usage: 'passenger' }]]]);
+
+  assert.equal(state.equipmentSpanLabel(id), '1階〜2階');
+});
+
+test('【QA回帰・M1】equipmentCatalog: アクティブ階が検討案の平面（project.planesに無い）なら2基設置してもnoが1・2で重複しない（FinishModeStateを通した形）', () => {
+  const graph = makeThreeCellGraph(); // plane.id='p1'（projectには一切登録しない＝検討案扱い）
+  const project = new Project('proj', 'test');
+  project.addPlane(0, '1階（採用）', 'adopted-p1'); // 採用階は別id。混ざらないことを確認する対象
+  project.replaceEquipmentIndex([['adopted-p1', [{ id: 'other', category: 'ev', no: 9, usage: 'passenger' }]]]);
+  const state = new FinishModeState(graph, project);
+
+  state.startDrag(1000, 1500); // left
+  state.commitDrag();
+  state.applyNaming(state.namingRoomId, EV_INSTALL);
+  state.startDrag(5000, 1500); // right（leftとは辺で隣接しない位置。2基別Room）
+  state.commitDrag();
+  state.applyNaming(state.namingRoomId, EV_INSTALL);
+
+  const catalog = state.equipmentCatalog();
+  assert.deepEqual(catalog.map(c => c.no).sort(), [1, 2], '検討案の平面では自階だけの採番でnoが重複しないはず');
+  assert.ok(!catalog.some(c => c.id === 'other'), '採用階(project.equipmentIndex)の器具は混ざらないはず');
+});
+
+test('equipmentSpanLabel: projectが無ければ自階の階名だけ（ステップ3の挙動のまま）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  state.applyNaming(state.namingRoomId, EV_INSTALL);
+  const id = graph.equipmentRows[0].id;
+
+  assert.equal(state.equipmentSpanLabel(id), graph.plane.name);
+});
+
+// ================================================================
 // S3 失敗系
 // ================================================================
 
@@ -522,6 +683,35 @@ test('【配線・強化】App.jsx: <RoomNameInput> へ isNew={mode.namingIsNew}
     'isNew={mode.namingIsNew} が1行まるごとの形で見つからない');
 });
 
+// ================================================================
+// ステップ4 S3b: applyRoomNaming→installElevatorFromNaming の配線
+// ================================================================
+
+test('【配線・強化】App.jsx: applyRoomNaming は先頭でisElevatorInstallIntentを見て1行まるごとの形でinstallElevatorFromNamingへ分岐しreturnする（rejection判定より前）', () => {
+  const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
+  assert.match(
+    appSrc,
+    /^\s*if \(modeRef\.current\?\.isElevatorInstallIntent\(id, payload\)\) \{ guardUi\(installElevatorFromNaming\)\(id, payload\); return; \}\s*$/m,
+    'if (modeRef.current?.isElevatorInstallIntent(id, payload)) { guardUi(installElevatorFromNaming)(id, payload); return; } が1行まるごとの形で見つからない',
+  );
+  const intentIdx = appSrc.indexOf('if (modeRef.current?.isElevatorInstallIntent(id, payload))');
+  const rejectionIdx = appSrc.indexOf('const rejection = modeRef.current?.lastNamingRejection;');
+  assert.ok(intentIdx >= 0 && rejectionIdx >= 0 && intentIdx < rejectionIdx,
+    'isElevatorInstallIntentの分岐はrejection判定より前にあるはず');
+});
+
+test('【配線・強化】App.jsx: installElevatorFromNamingの関門内でstructuralSync.whenIdle()の待ちが動的import(equipmentFloorSync.js)より前', () => {
+  const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
+  const bodyStart = appSrc.indexOf('async function installElevatorFromNaming(id, payload) {');
+  assert.ok(bodyStart >= 0, 'installElevatorFromNaming本体が見つからない');
+  const bodyEnd = appSrc.indexOf('\n  }', bodyStart); // 関数本体末尾（2スペースインデントの閉じ括弧）
+  const body = appSrc.slice(bodyStart, bodyEnd >= 0 ? bodyEnd : undefined);
+  const whenIdleIdx = body.indexOf('await structuralSync.whenIdle();');
+  const importIdx   = body.indexOf("await import('./finish/equipment/equipmentFloorSync.js');");
+  assert.ok(whenIdleIdx >= 0 && importIdx >= 0 && whenIdleIdx < importIdx,
+    'structuralSync.whenIdle()の待ちはequipmentFloorSync.jsの動的importより前にあるはず');
+});
+
 test('【配線・強化】RoomNameInput.jsx: featureOptionsForDialog(room, { isNew }).map(opt => ( を1行まるごとの形で呼ぶ', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '../finish/RoomNameInput.jsx'), 'utf8');
   assert.match(src, /^\s*\{featureOptionsForDialog\(room, \{ isNew \}\)\.map\(opt => \(\s*$/m,
@@ -620,7 +810,10 @@ test('S4: buildEquipmentTabEntriesに未登録のRoomが並ぶ', async () => {
   const room = graph.addRoom(new Set(['dummy']), '');
   room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
-  const entries = buildEquipmentTabEntries({ rows: graph.equipmentRows, rooms: graph.rooms, symbols: new Map(), spanLabel: '1階' });
+  const entries = buildEquipmentTabEntries({
+    rows: graph.equipmentRows, rooms: graph.rooms, symbols: new Map(),
+    spanLabelOf: () => '1階', currentFloorLabel: '1階',
+  });
 
   assert.equal(entries.length, 1);
   assert.equal(entries[0].kind, 'unregistered');

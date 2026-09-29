@@ -10,17 +10,19 @@ const UNREGISTERED_SYMBOL = '昇降路（未登録）';
  * 機械器具タブに出す行データを組み立てる。登録済み（器具行）を no 昇順、その後ろに
  * 未登録（行を持たない旧データの昇降路Room。roomOrder順＝rooms が既に roomOrder 順であること
  * が前提。graph.rooms getter と同じ規約）を並べる。
- * @param {{ rows: object[], rooms: object[], symbols: Map<string,string>, spanLabel: string }} args
+ * @param {{ rows: object[], rooms: object[], symbols: Map<string,string>,
+ *   spanLabelOf: (id:string) => string, currentFloorLabel: string }} args
  *   rows=graph.equipmentRows・rooms=graph.rooms（roomOrder順）・symbols=equipmentSymbols(catalog)の結果・
- *   spanLabel=設置階〜最上階の表示文字列（ステップ3は現在の階名1つ）。
+ *   spanLabelOf=登録済み行（器具id）ごとの「設置階〜最上階」表示文字列（mode.equipmentSpanLabel）・
+ *   currentFloorLabel=未登録（行の無い昇降路Room。設置階の概念が無いため常に現在の階名）。
  * @returns {Array<{ id, kind:'row'|'unregistered', symbol, category, usage, spanLabel, roomId }>}
  */
-export function buildEquipmentTabEntries({ rows, rooms, symbols, spanLabel }) {
+export function buildEquipmentTabEntries({ rows, rooms, symbols, spanLabelOf, currentFloorLabel }) {
   const registered = [...(rows ?? [])]
     .sort((a, b) => (a.no - b.no) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map(r => ({
       id: r.id, kind: 'row', symbol: symbols?.get(r.id) ?? '', category: r.category, usage: r.usage,
-      spanLabel, roomId: r.roomId,
+      spanLabel: spanLabelOf(r.id), roomId: r.roomId,
     }));
 
   const registeredRoomIds = new Set((rows ?? []).map(r => r.roomId).filter(Boolean));
@@ -28,7 +30,7 @@ export function buildEquipmentTabEntries({ rows, rooms, symbols, spanLabel }) {
     .filter(r => isShaftFeature(r.feature) && !registeredRoomIds.has(r.id))
     .map(r => ({
       id: r.id, kind: 'unregistered', symbol: UNREGISTERED_SYMBOL, category: null, usage: null,
-      spanLabel, roomId: r.id,
+      spanLabel: currentFloorLabel, roomId: r.id,
     }));
 
   return [...registered, ...unregistered];

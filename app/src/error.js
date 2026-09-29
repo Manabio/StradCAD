@@ -165,6 +165,23 @@ export function tagCLOpFailure(err) {
   return Object.assign(new Error(err?.message ?? String(err), { cause: err }), { code: ERR_CL_OP_FAILED });
 }
 
+// 昇降機の設置（finish/equipment/equipmentFloorSync.js runElevatorInstall）専用のエラーコード
+// （ステップ4・S3a）。保存の例外・commitActiveの例外・peek等の読み込み例外で、保存済みの上階を
+// beforeへ巻き戻した後（書込みが無い段階ならそのまま）にこのcodeを付けて再スローする
+// ——ERR_CATALOG_DUPLICATEと同じ「messageが呼び出し元で組み立て済み」様式（下の
+// KNOWN_TRANSITION_ERROR_CODESに載せ、floorTransitionErrorMessageがmessageをそのまま返す）。
+export const ERR_ELEVATOR_OP_FAILED = 'ERR_ELEVATOR_OP_FAILED';
+export const ERR_ELEVATOR_OP_FAILED_MESSAGE = '昇降機の設置に失敗しました。';
+
+// tagCLOpFailureと同じ「既に文字列codeを持つ既知エラーはそのまま返す（上書きしない・
+// 二重ラップしない）」規約（QA指摘m4）。equipmentFloorSync.js（保存・commitActiveの例外）と
+// App.jsx installElevatorFromNaming（動的import・structuralSync.whenIdle()の失敗）の両方から
+// 使う——どちらから投げても同じ識別コード・同じ文言でトースト表示される。
+export function tagElevatorOpFailure(err) {
+  if (err instanceof Error && typeof err.code === 'string') return err;
+  return Object.assign(new Error(ERR_ELEVATOR_OP_FAILED_MESSAGE, { cause: err }), { code: ERR_ELEVATOR_OP_FAILED });
+}
+
 // 階/モード切替の関門（App.jsxのrunBusy経由の5経路）が捕まえた例外を、どの文言で
 // ユーザーへ見せるか決める純関数。関門のコールバック本体はmodeBoundaries.exit/enter（仕上げ脱出の
 // 壁再生成等）を経由するため、swap自身のERR_FLOOR_SWITCH_UNSTABLE以外にも、.codeに識別用コードを
@@ -172,7 +189,7 @@ export function tagCLOpFailure(err) {
 // これらは message が呼び出し元で意味のある内容に組み立てられているため、生の技術的な例外
 // （IDBエラー等）だけをERR_FLOOR_SWITCH_FAILEDに丸め、既知のものはmessageをそのまま見せる
 // （QA指摘F3・2026-09-27）。
-const KNOWN_TRANSITION_ERROR_CODES = [ERR_CATALOG_DUPLICATE];
+const KNOWN_TRANSITION_ERROR_CODES = [ERR_CATALOG_DUPLICATE, ERR_ELEVATOR_OP_FAILED];
 
 // 昇降機の設置（finish/equipment/equipmentOps.js validateElevatorInstall）専用の拒否文言。
 // 矩形でない選択（器具単位の矩形判定。isRectangularCellSet）で確定しようとした場合。
@@ -182,6 +199,23 @@ export const ERR_ELEVATOR_EXTERIOR = '昇降機は屋内で指定してくださ
 // 新規候補（未指定セルからの新規ドラッグ）でない場合（既存の命名済み部屋の統合＝判定2、
 // 部分指定の確定等）。
 export const ERR_ELEVATOR_NOT_UNASSIGNED = '昇降機は未指定のエリアから指定してください。';
+
+// 昇降機の上階事前チェック（finish/equipment/equipmentFloorPlan.js judgeElevatorInstall）専用の
+// 拒否文言（ステップ4・S2）。floorLabel は plane.name。
+// 上階の変換後セルが命名済み部屋・階段・吹抜け・別グループの器具に重なる場合。targetLabelは
+// findShaftInstallConflicts が返す相手の表示名（「階段」「吹抜け」「階段吹抜け」「EV2」「昇降路」
+// 「部屋名」等）。
+export const ERR_ELEVATOR_UPPER_CONFLICT = (floorLabel, targetLabel) =>
+  `${floorLabel}の${targetLabel}と重なるため設置できません。`;
+// 上階で対応する中心線はあるが、範囲が足りず変換後セルが矩形に閉じない場合（Q1）。
+export const ERR_ELEVATOR_UPPER_UNCLOSABLE = (floorLabel) =>
+  `${floorLabel}では昇降路の範囲を区画できないため設置できません。`;
+
+// 昇降機の設置（finish/equipment/equipmentFloorSync.js runElevatorInstall）専用（ステップ4・S3a）。
+// 上階への保存直前に書込み世代（storage/floorWriteGeneration.js）が不一致＝他の処理がその階の
+// floorsを書き換えたため中断した場合。ERR_FLOOR_SWITCH_UNSTABLEと同じ「もう一度お試しください」
+// の様式に合わせる。
+export const ERR_ELEVATOR_FLOORS_CHANGED = '他の操作が階のデータを書き換えたため、昇降機の設置を中断しました。もう一度お試しください。';
 
 export function floorTransitionErrorMessage(err) {
   if (err instanceof Error && err.message === ERR_FLOOR_SWITCH_UNSTABLE) return err.message;

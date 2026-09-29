@@ -12,7 +12,7 @@ import { StepSectionLayer } from './StepSectionLayer.jsx';
 import { VoidLayer } from './VoidLayer.jsx';
 import { EquipmentSymbolLayer } from './EquipmentSymbolLayer.jsx';
 import { computeEquipmentSymbols } from '../finish/equipment/equipmentFigure.js';
-import { selfFloorEquipmentCatalog } from '../finish/equipment/equipmentNumbering.js';
+import { buildingEquipmentCatalog } from '../finish/equipment/buildingEquipment.js';
 import { StructuralLayer, ColumnsLayer } from './StructuralLayer.jsx';
 import { MemberTagLayer } from './MemberTagLayer.jsx';
 import { OpeningTagLayer } from './OpeningTagLayer.jsx';
@@ -161,14 +161,13 @@ export const SceneLayers = observer(({
               <VoidLayer graph={graph} viewport={viewport} upperCrosses={upperVoidCrosses} />
             )}
             {/* 昇降機器具の図中記号（「EV」「EV1」等）。室名が出るモード（floorplan・finish）に揃える
-                （planFigureVisibility.js shouldShowEquipmentSymbols）。catalogはfinishモードなら
-                mode.equipmentCatalog()、それ以外（モード状態が無くても）はselfFloorEquipmentCatalog
-                で自階の行から直接求める（ステップ3の範囲。全階化はステップ5）。 */}
+                （planFigureVisibility.js shouldShowEquipmentSymbols）。catalogは建物全体（全採用階。
+                buildingEquipmentCatalog。project.equipmentIndex を App.jsx の effect が埋める。
+                昇降機の仕様追加 ステップ4・S4）。 */}
             {shouldShowEquipmentSymbols(appMode) && (
               <EquipmentSymbolLayer
                 symbols={computeEquipmentSymbols(
-                  graph,
-                  appMode === 'finish' && mode ? mode.equipmentCatalog() : selfFloorEquipmentCatalog(graph.equipmentRows),
+                  graph, buildingEquipmentCatalog(project, graph),
                 )}
                 viewport={viewport}
               />

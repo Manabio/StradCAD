@@ -78,7 +78,13 @@ export function snapshotFinishState(graph) {
   };
 }
 
-function restoreFinishState(graph, snap) {
+/**
+ * snap（snapshotFinishState の戻り値）の内容で graph の仕上げ状態（部屋・階段・階段下分割CL・
+ * 外部仕上げ行・器具行・階固有設定）を全置換する。pushFinishUndo の undo/redo コールバックが
+ * 使う本体——直接呼ぶ場合は undo スタックに積まれない「即時の巻き戻し」になる（QA指摘n1-b。
+ * 例: commitActive がグラフを変更した直後に失敗し、undo エントリを消費せずに戻す場合）。
+ */
+export function restoreFinishState(graph, snap) {
   // 分割CLの同定（幾何導出）には復元前の stairs が必要なため、先に現在分を採取しておく
   const currentSplitCLs = snapshotUnderSplitCLs(graph);
   restoreRoomsState(graph, snap.rooms);

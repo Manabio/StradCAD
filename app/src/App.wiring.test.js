@@ -67,3 +67,41 @@ test('【不変条件・T7】FinishSidebar/FinishHalfModal は !mode.namingRoomI
   assert.ok(/\{appMode === 'finish' && mode && !mode\.namingRoomId && \(/.test(codeOnly),
     "仕上げ表パネルの描画条件に appMode === 'finish' && mode && !mode.namingRoomId && ( が見つからない");
 });
+
+// ================================================================
+// 昇降機の仕様追加 ステップ4・S4（QA指摘W1・W2）: installElevatorFromNaming の onApplied・
+// project.equipmentIndex を埋める effect の配線。1行まるごとの形で固定する
+// （team-lessons「行末コメントに元の式を残す変異・条件式を定数に差し替える変異」対応）。
+// ================================================================
+
+test('【配線・強化・W1】App.jsx: installElevatorFromNaming は onApplied: () => setFloorSyncTick(t => t + 1), を1行まるごとの形で渡す', () => {
+  assert.match(src, /^\s*onApplied: \(\) => setFloorSyncTick\(t => t \+ 1\),\s*$/m,
+    'onApplied: () => setFloorSyncTick(t => t + 1), が1行まるごとの形で見つからない');
+});
+
+test('【配線・強化・W2】App.jsx: project.equipmentIndexを埋めるeffectが project.replaceEquipmentIndex(entries) を1行まるごとの形でrunInActionの中から呼ぶ', () => {
+  assert.match(src, /^\s*runInAction\(\(\) => project\.replaceEquipmentIndex\(entries\)\);\s*$/m,
+    'runInAction(() => project.replaceEquipmentIndex(entries)); が1行まるごとの形で見つからない');
+});
+
+// QA指摘n1-a: aborted で message が無いとき（isStillValid の再確認による中断等）も、ダイアログが
+// 無言で開いたままにならないよう既存の類似文言（ERR_ELEVATOR_FLOORS_CHANGED）で代用する。
+test('【配線・強化・n1-a】App.jsx: installElevatorFromNaming は aborted のとき r.message ?? ERR_ELEVATOR_FLOORS_CHANGED を1行まるごとの形でトースト表示する', () => {
+  assert.match(src, /^\s*setToast\(\{ msg: r\.message \?\? ERR_ELEVATOR_FLOORS_CHANGED, key: Date\.now\(\) \}\);\s*$/m,
+    'setToast({ msg: r.message ?? ERR_ELEVATOR_FLOORS_CHANGED, key: Date.now() }); が1行まるごとの形で見つからない');
+});
+
+// QA指摘n1-b: commitActive がグラフを変更した後に拒否・例外・undoエントリnullのいずれかに
+// なった場合、設置階も確定前のスナップショットへ戻してから例外にする（上階の巻き戻しだけでは
+// 設置階の変更済みグラフと食い違うため）。snapshotFinishState/restoreFinishState（finishUndo.jsの
+// 既存の復元関数）を使っていることを固定する。
+test('【配線・強化・n1-b】App.jsx: commitActive は snapshotFinishState(g) を先頭で採り、3つの失敗経路すべてで restoreFinishState(g, before) を呼んでから例外にする', () => {
+  const startIdx = src.indexOf('const commitActive = (equipment) => {');
+  assert.ok(startIdx >= 0, 'commitActive が見つからない');
+  const endIdx = src.indexOf('\n      };', startIdx);
+  const body = src.slice(startIdx, endIdx);
+  assert.match(body, /const before = snapshotFinishState\(g\);/, 'before = snapshotFinishState(g) が見つからない');
+  const restoreMatches = body.match(/runInAction\(\(\) => restoreFinishState\(g, before\)\);/g) ?? [];
+  assert.equal(restoreMatches.length, 3,
+    `restoreFinishState(g, before) の呼び出しは3箇所（例外・拒否・undoエントリnull）のはず（実際: ${restoreMatches.length}）`);
+});

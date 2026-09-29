@@ -9,6 +9,7 @@
  */
 import { RoomFeature } from '@core';
 import { FINISH_FIELDS } from './roomReinterpret.js';
+import { refreshCells } from './gridCells.js';
 
 export function makeRoomUndefined(room) {
   room.setName('');
@@ -19,4 +20,24 @@ export function makeRoomUndefined(room) {
   room.setFloorLevel(null);
   room.namePosition = null;
   room.generatedWallIds.clear();
+}
+
+/**
+ * cells を未定義Room群から取り除く（命名確定・新規候補室の削除取消・昇降機の上階自動設置で呼ぶ）。
+ * refreshCells で現行キーへ正規化した集合から差し引き、空になった未定義Roomは削除する。
+ *
+ * modes/FinishModeState.js の `_subtractCellsFromUndefined` の中身をここへ移した（昇降機の仕様追加
+ * ステップ4・S2）。`installOnUpperFloor`（finish/equipment/equipmentFloorPlan.js）が上階の一時グラフへ
+ * モード状態を経由せず直接呼ぶため。
+ * @param {object} graph
+ * @param {Set<string>} cells
+ */
+export function subtractCellsFromUndefinedRooms(graph, cells) {
+  for (const u of graph.rooms) {
+    if (u.feature !== RoomFeature.UNDEFINED) continue;
+    const current = refreshCells(u.cells, graph);
+    const remaining = new Set([...current].filter(c => !cells.has(c)));
+    if (remaining.size === 0) graph.removeRoom(u.id);
+    else u.setCells(remaining);
+  }
 }
