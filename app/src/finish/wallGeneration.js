@@ -377,8 +377,12 @@ export function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset,
  * woodAutoFill.js 3a）も立たない実測不良になる。QA実測2026-09-29:部分指定の昇降機は壁8・
  * 柱4本で x=4000側の2隅が無い）・2a部屋（under2aRoomIds。階段下は別管理）。
  * 部屋名ダイアログからは部分指定の昇降路を作れない（roomNamingOptions.js
- * featureOptionsForDialog）が、CL削除後の再解釈（roomReinterpret.js）で独立した昇降路が
- * 部分指定になりうるため、この例外は残す（2026-09-29 QA実測）。
+ * featureOptionsForDialog）。CL削除後の再解釈（roomReinterpret.js isReinterpretExempt）は
+ * 2026-09-29に昇降路を対象外へ追加したため、この経路ではもう部分指定の昇降路は生じない。
+ * 残る経路は部屋ドラッグ（modes/FinishModeState.js commitDrag）——rooms一覧のフィルタが
+ * STAIR/STAIR_VOID/UNDEFINEDのみを除外しELEVATOR_EQUIPMENTを除外していないため、昇降路の
+ * セルへ跨る統合・部分指定化を止める仕組みがまだ無い（次の課題として温存。この例外自体は
+ * その経路が塞がるまで残す）。
  * @param {import('@core').Room} room
  * @param {Set<string>} under2aRoomIds
  * @returns {boolean}

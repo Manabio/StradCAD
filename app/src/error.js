@@ -107,7 +107,7 @@ export const ERR_CL_DELETE_FOOTPRINT = '外壁を担うため削除できませ�
 
 // CL削除（transform/centerLineOps.js deleteCenterLineWithUndo）専用: 削除しようとしているCLを
 // 失うと自階の部屋セル・スラブセルのいずれかが対辺2本同時喪失になる、または再解釈除外部屋
-// （階段・階段吹抜け・未定義）のセル辺がこのCLを持つ場合（finish/roomReinterpret.js
+// （階段・階段吹抜け・未定義・昇降路）のセル辺がこのCLを持つ場合（finish/roomReinterpret.js
 // findUnresolvableCells。先読みガードとして削除前に判定するほか、削除後の安全網
 // （collectUnresolvableCellsの前後差分）でも同じ文言を返す）。長押しメニューの削除項目の
 // グレー化（interaction/usePointerInteraction.js・menuItems.js）もこの判定を共有する。

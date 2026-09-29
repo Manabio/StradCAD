@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature } from '../core.js';
 import { CONTEXT } from './menuItems.js';
 import { convertMenuFlags } from './clMenuGating.js';
 import { worldToCell } from '../finish/gridCells.js';
@@ -261,6 +261,25 @@ test('convertMenuFlags: 梁芯（セル分割に参加しない種別。isFinish
   const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
   const { isUnresolvable } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.CENTER_LINE, cl: beam, clEndpoint: null });
   assert.equal(isUnresolvable, undefined);
+});
+
+// ---- 昇降路（feature===ELEVATOR_EQUIPMENT）は階段と同じ再解釈対象外（ユーザー裁定2026-09-29・案a）
+// のため、対辺が健在でも辺を1つ失うだけで長押しメニューの削除項目がグレー化される ----
+test('convertMenuFlags: 昇降路のセル辺になっているCLは対辺が健在でもisUnresolvable=true（案a・階段と同じ扱い）', () => {
+  const graph = makeGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const left   = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opts);
+  const top    = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, opts);
+  const right  = graph.addCenterLine(CenterLineType.VERTICAL,   4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts); // rightのさらに外側（通常部屋なら片辺喪失は復元可能）
+  const key = `${left.id}:${top.id}:${right.id}:${bottom.id}`;
+  const room = graph.addRoom(new Set([key]), 'EV');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+
+  const { isUnresolvable } = convertMenuFlags(graph, { appMode: 'floorplan', menuContext: CONTEXT.CENTER_LINE, cl: right, clEndpoint: null });
+  assert.equal(isUnresolvable, true,
+    '通常部屋なら復元可能（isUnresolvable=false）な片辺喪失でも、昇降路は再解釈対象外のため拒否されるはず');
 });
 
 test('【不変条件】transform/centerLineConvert.js: 昇格・降格ガードの両方がisConvertSubject(cl, direction)を呼ぶ', () => {

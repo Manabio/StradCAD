@@ -1458,6 +1458,40 @@ test('deleteCenterLineWithUndo異常系: STAIR部屋のセル辺を担う中心�
   assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
+// ---- deleteCenterLineWithUndo: 昇降路（ELEVATOR_EQUIPMENT）も階段・未定義と同様に
+// ERR_CL_DELETE_UNRESOLVABLEで拒否される（ユーザー裁定2026-09-29・案a）----
+
+test('deleteCenterLineWithUndo異常系: 昇降路（ELEVATOR_EQUIPMENT）のセル辺を担う中心線の削除もERR_CL_DELETE_UNRESOLVABLEで拒否されグラフ無変更', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, opts);
+  const mid = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
+  const cellA = worldToCell(2000, 2000, graph).key;
+  const cellB = worldToCell(6000, 2000, graph).key;
+  const ev = graph.addRoom(new Set([cellA]), 'EV');
+  ev.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  const hall = graph.addRoom(new Set([cellB]), 'ホール');
+  const beforeTop = undoManager.peekUndo();
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, mid);
+
+  assert.equal(toast, ERR_CL_DELETE_UNRESOLVABLE,
+    '昇降路は再解釈対象外（案a）のため、片辺の参照だけで拒否されるはず');
+  assert.equal(graph.shapeMap.has(mid.id), true, '拒否されるので削除されない');
+  assert.deepEqual([...ev.cells], [cellA], '昇降路のcellsは無変更のはず');
+  assert.deepEqual([...hall.cells], [cellB], 'ホールのcellsも無変更のはず');
+  assert.equal(ev.referenceRoomIds.size, 0, '昇降路は部分指定にならない（拒否されるので再解釈自体が走らない）');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+// 対照: 同じ配置で昇降路を通常の部屋にすると削除が通る——既存の同型テスト
+// 「deleteCenterLineWithUndo: 削除したCLを端点（start/end）に持つ腰壁・垂れ壁レコードも掃除される
+// （軸ではなく端点の参照）」（本ファイル上部・cellA/cellBを通常の部屋2つにして`toast===null`を
+// 確認済み）がこれに相当するため、新規追加はしない。
+
 // ---- deleteCenterLineWithUndo: 補助線（aux）の削除では部屋再解釈・エッジ同期・腰壁掃除が走らない ----
 
 test('deleteCenterLineWithUndo: 補助線の削除では部屋再解釈・エッジ同期・腰壁掃除は走らない（セル分割に参加しないため対象外）', async () => {
@@ -3701,6 +3735,84 @@ test('【失敗系】deleteCenterLineWithUndo（struct分岐・ルール2）: �
   assert.equal(saveCalls.length, 0, '先読みガードで拒否されるため他階への保存は一度も起きないはず');
   const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
   assert.equal(decoded.rooms[0].cells.has(key), true, 'p2は無変更のまま');
+});
+
+// ---- 昇降路・階段（再解釈除外・案a）の他階版: 対辺2本同時喪失を待たず、片辺の参照だけで
+// findFloorsBlockingGridDeletionのunresolvablePlanes側に入り拒否される。上の「他階だけが復元不能
+// （対辺2本喪失）」テストと違い、こちらは通常の部屋なら復元可能な1辺喪失の配置（既存テスト
+// 「他階（p2）の内部間仕切り通り芯を削除すると部屋が併合され...」と同じ配置）で、再解釈除外の
+// feature を持つ部屋だけが拒否されることを確認する ----
+
+test('【失敗系】deleteCenterLineWithUndo（struct分岐・ルール2）: 他階だけに昇降路があり、その辺を通り芯が担うならERR_CL_DELETE_UNRESOLVABLEで無変更のまま拒否する（片辺の参照のみ）', async () => {
+  const { project, p1, p2, mid } = makeTwoFloorsWithInteriorGridCL();
+  const midId = mid.id;
+  const cellA = worldToCell(2000, 2000, p2).key;
+  const cellB = worldToCell(6000, 2000, p2).key;
+  const ev = p2.addRoom(new Set([cellA]), 'EV');
+  ev.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  p2.addRoom(new Set([cellB]), 'ホール');
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveCalls = [];
+  const saveFloorFn = async (planeId, bytes) => { saveCalls.push(planeId); store.set(planeId, bytes); };
+  const beforeTop = undoManager.peekUndo();
+
+  const { toast } = await withProductionPeek(project, store, async () => {
+    // 前提: midはp2のフットプリント境界（外壁線）ではなく、通常の部屋なら復元可能な内部仕切りの
+    // 1辺喪失（既存テスト「他階（p2）の内部間仕切り通り芯を削除すると部屋が併合され...」と同じ配置）
+    // だが、昇降路は再解釈対象外（案a）のためfindFloorsBlockingGridDeletionの復元不能側に入るはず。
+    // 前提が崩れたら（フットプリント境界に化けた・復元不能側に入らなかった）ここで赤になる。
+    // withProductionPeek内でfindFloorsBlockingGridDeletionを呼ぶ（本番同型スタブのfloorSwapManager.peek
+    // を使うため。外側で呼ぶとIndexedDB実体を叩いてしまいNode環境でthrowする）。
+    const blockingBefore = await findFloorsBlockingGridDeletion(project, p1, mid);
+    assert.equal(blockingBefore.footprintPlanes.length, 0, '前提: midはp2のフットプリント境界ではない');
+    assert.equal(blockingBefore.unresolvablePlanes.some(p => p.id === p2.plane.id), true,
+      '前提: 昇降路の片辺参照によりp2はfindFloorsBlockingGridDeletionの復元不能側に入るはず');
+
+    return deleteCenterLineWithUndo(p1, project, mid, { saveFloorFn });
+  });
+
+  assert.equal(toast, ERR_CL_DELETE_UNRESOLVABLE);
+  assert.equal(project.structGraph.shapeMap.has(midId), true, '削除されずstructGraphに残る');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  assert.equal(saveCalls.length, 0, '先読みガードで拒否されるため他階への保存は一度も起きないはず');
+  const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+  const decodedEv = decoded.rooms.find(r => r.feature === RoomFeature.ELEVATOR_EQUIPMENT);
+  assert.ok(decodedEv, '保存済みp2に昇降路が残っているはず');
+  assert.deepEqual([...decodedEv.cells], [cellA], '保存済みp2の昇降路のcellsは無変更のはず');
+});
+
+test('【失敗系】deleteCenterLineWithUndo（struct分岐・ルール2）: 他階だけに階段があり、その辺を通り芯が担うならERR_CL_DELETE_UNRESOLVABLEで無変更のまま拒否する（片辺の参照のみ）', async () => {
+  const { project, p1, p2, mid } = makeTwoFloorsWithInteriorGridCL();
+  const midId = mid.id;
+  const cellA = worldToCell(2000, 2000, p2).key;
+  const cellB = worldToCell(6000, 2000, p2).key;
+  const stair = p2.addRoom(new Set([cellA]), '階段');
+  stair.setFeature(RoomFeature.STAIR);
+  p2.addRoom(new Set([cellB]), 'ホール');
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveCalls = [];
+  const saveFloorFn = async (planeId, bytes) => { saveCalls.push(planeId); store.set(planeId, bytes); };
+  const beforeTop = undoManager.peekUndo();
+
+  const { toast } = await withProductionPeek(project, store, async () => {
+    const blockingBefore = await findFloorsBlockingGridDeletion(project, p1, mid);
+    assert.equal(blockingBefore.footprintPlanes.length, 0, '前提: midはp2のフットプリント境界ではない');
+    assert.equal(blockingBefore.unresolvablePlanes.some(p => p.id === p2.plane.id), true,
+      '前提: 階段の片辺参照によりp2はfindFloorsBlockingGridDeletionの復元不能側に入るはず');
+
+    return deleteCenterLineWithUndo(p1, project, mid, { saveFloorFn });
+  });
+
+  assert.equal(toast, ERR_CL_DELETE_UNRESOLVABLE);
+  assert.equal(project.structGraph.shapeMap.has(midId), true, '削除されずstructGraphに残る');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  assert.equal(saveCalls.length, 0, '先読みガードで拒否されるため他階への保存は一度も起きないはず');
+  const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+  const decodedStair = decoded.rooms.find(r => r.feature === RoomFeature.STAIR);
+  assert.ok(decodedStair, '保存済みp2に階段Roomが残っているはず');
+  assert.deepEqual([...decodedStair.cells], [cellA], '保存済みp2の階段のcellsは無変更のはず');
 });
 
 // ---- QA指摘5: 自階(selfAndBelow)の壁由来梁芯の道連れ削除は、自階の「1つ下の実体階」が他階側の

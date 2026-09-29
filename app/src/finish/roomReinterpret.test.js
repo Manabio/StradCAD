@@ -441,13 +441,18 @@ test('findUnresolvableCells: グリッド最外郭（上辺）を失う場合も
 // 無いため、対辺2本同時喪失を待たず、辺を1つでも参照していれば復元不能として返す（通常Roomは
 // 対辺2本同時喪失のときだけ——上の「片辺しか失われないなら復元不能ではない」テストと対照）。----
 
+// QA指摘（案a・空振りテストの是正）: cellAの左辺（V0）はグリッド最外郭で外側に分割CLが
+// 無いため、通常の部屋でも常に復元不能——isReinterpretExemptの有無を判別できず空振りになる
+// （isReinterpretExemptを常にfalseにする変異でも緑のままだった）。cellAの右辺（V4000。
+// makeTwoCellGraphのcellB側との内部境界）に替える——外側にV7000があるため通常の部屋なら
+// 復元可能（[]）、再解釈対象外の部屋だけ[cellA]になり、判別力を持つ。
 test('findUnresolvableCells: 階段Room（feature===STAIR）は再解釈対象外のため、通常なら復元可能な片辺の参照だけでも復元不能として返す', () => {
   const { graph, cellA } = makeTwoCellGraph();
   const room = graph.addRoom(new Set([cellA]), '階段');
   room.setFeature(RoomFeature.STAIR);
-  const [leftId] = cellA.split(':');
+  const [, , rightId] = cellA.split(':');
 
-  assert.deepEqual(findUnresolvableCells(graph, leftId), [cellA],
+  assert.deepEqual(findUnresolvableCells(graph, rightId), [cellA],
     '階段Roomは再解釈で永久に救済されないため、片辺の参照だけで復元不能扱いになるはず（裁定変更点）');
 });
 
@@ -455,18 +460,68 @@ test('findUnresolvableCells: STAIR_VOID部屋（階段吹抜け）も同様に�
   const { graph, cellA } = makeTwoCellGraph();
   const room = graph.addRoom(new Set([cellA]), '吹抜け');
   room.setFeature(RoomFeature.STAIR_VOID);
-  const [leftId] = cellA.split(':');
+  const [, , rightId] = cellA.split(':');
 
-  assert.deepEqual(findUnresolvableCells(graph, leftId), [cellA]);
+  assert.deepEqual(findUnresolvableCells(graph, rightId), [cellA]);
 });
 
 test('findUnresolvableCells: UNDEFINED部屋（未定義）も同様に片辺の参照だけで復元不能として返す', () => {
   const { graph, cellA } = makeTwoCellGraph();
   const room = graph.addRoom(new Set([cellA]), '');
   room.setFeature(RoomFeature.UNDEFINED);
-  const [leftId] = cellA.split(':');
+  const [, , rightId] = cellA.split(':');
 
-  assert.deepEqual(findUnresolvableCells(graph, leftId), [cellA]);
+  assert.deepEqual(findUnresolvableCells(graph, rightId), [cellA]);
+});
+
+// ---- 昇降路（feature===ELEVATOR_EQUIPMENT）も階段と同じ扱いへ（ユーザー裁定2026-09-29）:
+// 案a＝再解釈対象外（isReinterpretExemptにisShaftFeatureを追加）。隣の部屋と統合しない・
+// 部分指定にしないため、昇降路のセル辺になっているCLは（階段と同じく）片辺の参照だけで
+// 復元不能扱いになる。----
+
+test('findUnresolvableCells: 昇降路Room（feature===ELEVATOR_EQUIPMENT）も同様に片辺の参照だけで復元不能として返す', () => {
+  const { graph, cellA } = makeTwoCellGraph();
+  const room = graph.addRoom(new Set([cellA]), 'EV');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  const [, , rightId] = cellA.split(':');
+
+  assert.deepEqual(findUnresolvableCells(graph, rightId), [cellA],
+    '昇降路は再解釈で永久に救済されないため、片辺の参照だけで復元不能扱いになるはず（案a）');
+});
+
+// 対照: 同じ配置・同じ削除対象（cellAの右辺）で通常の部屋なら、外側にV7000があるため復元可能（[]）。
+test('findUnresolvableCells: 【対照】同じ配置・同じ削除対象で通常の部屋なら片辺喪失は復元可能（空配列）', () => {
+  const { graph, cellA } = makeTwoCellGraph();
+  graph.addRoom(new Set([cellA]), '部屋'); // featureなし（通常の部屋）
+  const [, , rightId] = cellA.split(':');
+
+  assert.deepEqual(findUnresolvableCells(graph, rightId), [],
+    '通常の部屋は対辺2本同時喪失のときだけ復元不能——片辺（外側にV7000がある）だけなら復元可能なはず');
+});
+
+// ---- 失敗系: 昇降路の部屋はあるが、判定対象のCLはその昇降路の辺ではなく別の部屋の辺でしかない
+// → 昇降路を理由にした拒否は起きない（対辺2本同時喪失でなければ復元可能） ----
+test('【失敗系】findUnresolvableCells: 昇降路の部屋があっても、削除対象CLがその昇降路の辺でなければ昇降路を理由に拒否しない', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  const left   = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opts);
+  const top    = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  const bottom = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, opts);
+  const right  = graph.addCenterLine(CenterLineType.VERTICAL,   4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts); // rightのさらに外側（片辺喪失を復元可能にする）
+  const key = `${left.id}:${top.id}:${right.id}:${bottom.id}`;
+  graph.addRoom(new Set([key]), '部屋'); // 通常部屋（rightを辺に持つ）
+
+  // 昇降路は別セル（このCLとは無関係）に置く
+  const evV = graph.addCenterLine(CenterLineType.VERTICAL,   20000, opts);
+  const evV2 = graph.addCenterLine(CenterLineType.VERTICAL,  24000, opts);
+  const evH = graph.addCenterLine(CenterLineType.HORIZONTAL, 20000, opts);
+  const evH2 = graph.addCenterLine(CenterLineType.HORIZONTAL,24000, opts);
+  const ev = graph.addRoom(new Set([`${evV.id}:${evH.id}:${evV2.id}:${evH2.id}`]), 'EV');
+  ev.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+
+  assert.deepEqual(findUnresolvableCells(graph, right.id), [],
+    '昇降路が存在しても、削除対象CLがその昇降路の辺でなければ拒否理由にはならないはず');
 });
 
 // ================================================================
@@ -504,6 +559,36 @@ test('reinterpretRoomsOnEntry: 通常に解決できるケースはunresolvedが
   const result = reinterpretRoomsOnEntry(graph);
 
   assert.deepEqual(result.unresolved, [], '完全吸収（2辺喪失だが復元可能）はunresolvedに入らないはず');
+});
+
+test('reinterpretRoomsOnEntry: 昇降路（feature===ELEVATOR_EQUIPMENT）は辺喪失でも吸収されず現状維持され、隣の部屋も昇降路を吸収しない（ユーザー裁定2026-09-29: 階段と同じ扱い）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  [0, 4000, 6000].forEach(x => graph.addCenterLine(CenterLineType.VERTICAL, x, opts));
+  const hs = [0, 2000, 4000].map(y => graph.addCenterLine(CenterLineType.HORIZONTAL, y, opts));
+  // 左列(0..4000)×2行=ホール、右上セル(4000..6000,0..2000)=独立した昇降路、右下=ホール
+  const hallCells = [
+    worldToCell(2000, 1000, graph).key,
+    worldToCell(2000, 3000, graph).key,
+    worldToCell(5000, 3000, graph).key,
+  ];
+  const hall = graph.addRoom(new Set(hallCells), 'ホール');
+  const shaft = graph.addRoom(new Set([worldToCell(5000, 1000, graph).key]), 'EV');
+  shaft.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  const [shaftCellKey] = shaft.cells;
+
+  // 昇降路とホール右下の境界の横CL(y=2000)を削除する（左列も分けているためホール側も再解釈対象になる）
+  graph.removeCenterLine(hs[1].id);
+  const result = reinterpretRoomsOnEntry(graph);
+
+  assert.ok(graph.roomMap.has(shaft.id), '昇降路は吸収されず残る');
+  assert.equal(shaft.cells.size, 1, '昇降路のセル数は変わらない');
+  assert.ok(shaft.cells.has(shaftCellKey), '昇降路のセルは変更されない（ダングリングidも含め現状維持）');
+  assert.equal(shaft.referenceRoomIds.size, 0, '昇降路は部分指定にならない');
+  assert.equal(result.unresolved.includes(shaftCellKey), false,
+    '再解釈除外部屋は候補にすら上がらないため、unresolvedにも（昇降路の分は）入らない');
+  assert.ok(graph.roomMap.has(hall.id), 'ホールも残る');
+  assert.ok(![...hall.cells].includes(shaftCellKey), '隣の部屋（ホール）が昇降路のセルを吸収してはいけない');
 });
 
 // ================================================================
@@ -655,14 +740,14 @@ test('reinterpretSlabsAfterCLRemoval: 対辺2本同時喪失（regionCellsAtが�
 });
 
 // ================================================================
-// QA実測（2026-09-29）回帰ガード: 独立した昇降路がCL削除後の再解釈で部分指定になっても
-// isInteriorWallTarget は true のまま（finish/wallGeneration.js の昇降路例外を維持する根拠）。
-// isReinterpretExempt は昇降路を対象外にしていない（roomReinterpret.jsは変更していない）ため、
-// 独立した昇降路が1辺喪失→dominant判定でreferenceRoomIdsが付く経路が現に存在する。部屋名ダイアログから
-// 部分指定の昇降路を新規に作れなくなった（roomNamingOptions.js featureOptionsForDialog）としても、
-// この経路は塞がっていない。
+// QA実測（2026-09-29）回帰ガード→ユーザー裁定「案a」により書き換え: 昇降路は階段と同じ
+// 再解釈対象外（isReinterpretExemptにisShaftFeatureを追加）。旧テストは「独立した昇降路が
+// CL削除後の再解釈で部分指定になっても isInteriorWallTarget は true のまま」を確認していたが、
+// 対象外化により「部分指定になる」という前提の経路自体が塞がったため、
+// 「削除の先読み（findUnresolvableCells）が拒否する」「（先読みを無視して強行しても）
+// reinterpretRoomsOnEntryは部分指定化しない」へ内容を差し替える。
 // ================================================================
-test('【QA回帰・2026-09-29】CL削除後の再解釈で独立した昇降路が部分指定になっても isInteriorWallTarget は true のまま', () => {
+test('【QA回帰・2026-09-29→書換え】独立した昇降路に接する横CLの削除は先読み（findUnresolvableCells）が拒否する', () => {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   const opts = { labeled: false, discipline: Discipline.ARCH };
   [0, 4000, 6000].forEach(x => graph.addCenterLine(CenterLineType.VERTICAL, x, opts));
@@ -676,20 +761,44 @@ test('【QA回帰・2026-09-29】CL削除後の再解釈で独立した昇降路
   graph.addRoom(new Set(hallCells), 'ホール');
   const ev = graph.addRoom(new Set([worldToCell(5000, 1000, graph).key]), 'EV');
   ev.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  const [evCellKey] = ev.cells;
 
   assert.equal(ev.referenceRoomIds.size, 0, '前提: 削除前は独立部屋（部分指定ではない）');
   assert.equal(isInteriorWallTarget(ev, new Set()), true, '前提: 独立部屋は対象（feature に関わらず）');
 
-  // 昇降路とホール右下の境界の横CL(y=2000)は左列（ホール）も分けている→削除すると昇降路は下辺だけ喪失し、
-  // 再解釈で下のホールセルへ吸収される（部分指定化）。
+  // 昇降路とホール右下の境界の横CL(y=2000)は左列（ホール）も分けている
+  const result = findUnresolvableCells(graph, hs[1].id);
+
+  assert.ok(result.includes(evCellKey),
+    '昇降路のセル辺になっているCLは、再解釈除外部屋の辺を1つでも失う=復元不能として先読みが拒否するはず（案a）');
+});
+
+test('【QA回帰・2026-09-29→書換え】先読みを無視して削除を強行しても、reinterpretRoomsOnEntryは独立した昇降路を部分指定化しない', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  [0, 4000, 6000].forEach(x => graph.addCenterLine(CenterLineType.VERTICAL, x, opts));
+  const hs = [0, 2000, 4000].map(y => graph.addCenterLine(CenterLineType.HORIZONTAL, y, opts));
+  const hallCells = [
+    worldToCell(2000, 1000, graph).key,
+    worldToCell(2000, 3000, graph).key,
+    worldToCell(5000, 3000, graph).key,
+  ];
+  graph.addRoom(new Set(hallCells), 'ホール');
+  const ev = graph.addRoom(new Set([worldToCell(5000, 1000, graph).key]), 'EV');
+  ev.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  const [evCellKey] = ev.cells;
+
+  // 先読みなら拒否される操作を、テストのため（強行時の安全側動作の確認）にガードを迂回して行う。
   graph.removeCenterLine(hs[1].id);
   reinterpretRoomsOnEntry(graph);
 
-  assert.ok(graph.roomMap.has(ev.id), '再解釈後も昇降路自体は残る（親子入れ替えではなく部分指定化）');
-  assert.ok(ev.referenceRoomIds.size >= 1,
-    '前提が崩れたら赤: 再解釈でreferenceRoomIdsが付く（部分指定になる）はず');
-  assert.equal(ev.feature, RoomFeature.ELEVATOR_EQUIPMENT, '再解釈後もfeatureはelevatorEquipmentのまま');
-  assert.ok(isShaftFeature(ev.feature), '再解釈後もisShaftFeatureのまま');
+  assert.ok(graph.roomMap.has(ev.id), '昇降路自体は削除されず残る（旧テストと同じ前提）');
+  assert.equal(ev.referenceRoomIds.size, 0,
+    '再解釈対象外のため部分指定にはならない（旧テストが確認していた「部分指定化」は起きなくなった）');
+  assert.equal(ev.cells.size, 1, 'セル数は変わらない');
+  assert.ok(ev.cells.has(evCellKey), '昇降路のセルはダングリングidを含んだまま現状維持される（階段と同じ、救済経路が無い設計）');
+  assert.equal(ev.feature, RoomFeature.ELEVATOR_EQUIPMENT, 'featureはelevatorEquipmentのまま');
+  assert.ok(isShaftFeature(ev.feature), 'isShaftFeatureのまま');
   assert.equal(isInteriorWallTarget(ev, new Set()), true,
-    '部分指定になった昇降路もisInteriorWallTargetはtrueのまま（STAIRと同型の例外）');
+    '独立部屋のまま（部分指定化していない）なのでisInteriorWallTargetは変わらずtrue');
 });

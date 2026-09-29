@@ -14,7 +14,7 @@
 //                            （少ない方の cells が空になれば部屋自体を削除）
 // ================================================================
 
-import { Room, RoomFeature } from '@core';
+import { Room, RoomFeature, isShaftFeature } from '@core';
 import {
   lostSides, cellInteriorPoint, regionCellsAt, refreshCells, cellBoundsFromKey, worldToCell,
   gridIndexOf, isActiveAcrossRange,
@@ -57,10 +57,12 @@ function hasDividerBeyond(graph, isVertical, refValue, direction, orthoLo, ortho
 }
 
 // reinterpretRoomsOnEntry・findUnresolvableCells の両方が使う「再解釈対象外の部屋」判定
-// （階段・階段吹抜け・未定義の部屋。上記コメント参照）。
+// （階段・階段吹抜け・未定義・昇降路の部屋。上記コメント参照）。
+// 昇降路（isShaftFeature）は階段と同じ扱い（ユーザー裁定2026-09-29）: 全階同位置・器具単位で
+// 矩形という前提があり、隣の部屋と統合すると床開口が広がり階またぎの整合が崩れるため対象外にする。
 function isReinterpretExempt(room) {
   return room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID
-    || room.feature === RoomFeature.UNDEFINED;
+    || room.feature === RoomFeature.UNDEFINED || isShaftFeature(room.feature);
 }
 
 /**
@@ -80,7 +82,7 @@ function isReinterpretExempt(room) {
  *      片辺のみの喪失でも、生き残った反対側のさらに外側（セルの外方向）に、直交範囲で有効な
  *      同軸の分割CLが1本も無ければ同様に復元不能とする（hasDividerBeyond。部屋・スラブの外周
  *      セルで対辺2本喪失に至らないまま代表点が格子外に出る退化——S1・2026-09-27実測）。
- *   2. 再解釈除外部屋（isReinterpretExempt＝階段・階段吹抜け・未定義）のセル辺が clId を持つ場合。
+ *   2. 再解釈除外部屋（isReinterpretExempt＝階段・階段吹抜け・未定義・昇降路）のセル辺が clId を持つ場合。
  *      reinterpretRoomsOnEntry はこれらの部屋を常に素通りする（対辺の喪失数によらず一切変更しない）
  *      ため、辺の一つでも削除されるとRoom.cellsのダングリングidが未来永劫解消されない。
  *   3. スラブ（StructuralSlab.cells）で対辺2本同時喪失になるセル。スラブには部屋のような
@@ -318,6 +320,8 @@ export function reinterpretRoomsOnEntry(graph) {
     // 吸収/削除されると Stair.roomId が孤児化するため（フェーズ2以前は階段はRoomでなく対象外だった＝従来挙動を維持）。
     // 階段吹抜け（STAIR_VOID）も同様に対象外（自動管理 Room。同期側が footprint を管理する）。
     // 未定義の部屋（UNDEFINED）も対象外（外壁線維持のための残置セル。命名/削除でのみ変化する）。
+    // 昇降路（isShaftFeature）も対象外（階段と同じ扱い。ユーザー裁定2026-09-29）: 全階同位置・
+    // 器具単位で矩形という前提があり、隣の部屋と統合すると床開口が広がり階またぎの整合が崩れる。
     if (isReinterpretExempt(room)) continue;
     for (const oldKey of room.cells) {
       const lost = lostSides(oldKey, graph);

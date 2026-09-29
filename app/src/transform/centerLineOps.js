@@ -468,7 +468,7 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
     // （detach・detachOtherFloorsFromGridCenterLineより前。centerLineConvert.js isFootprintBoundaryCL参照）。
     if (isFootprintBoundaryCL(graph, cl)) return { toast: ERR_CL_DELETE_FOOTPRINT };
     // 復元不能セルガード（ステップ2）: 自階の部屋セル・スラブセルのうち、この通り芯を失うと
-    // 対辺2本同時喪失になるもの、または再解釈除外部屋（階段・階段吹抜け・未定義）のセル辺が
+    // 対辺2本同時喪失になるもの、または再解釈除外部屋（階段・階段吹抜け・未定義・昇降路）のセル辺が
     // この通り芯を持つものが1つでもあれば拒否する（finish/roomReinterpret.js
     // findUnresolvableCells。フットプリント境界ガードと同格——detach・他階伝播より前に判定する）。
     if (findUnresolvableCells(graph, cl.id).length > 0) return { toast: ERR_CL_DELETE_UNRESOLVABLE };
