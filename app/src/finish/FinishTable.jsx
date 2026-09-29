@@ -11,6 +11,10 @@ import {
   isShaftFeature, ShaftSoundproof,
 } from '@core';
 import { shaftWallMaterialOptions } from './shaftWallMaterialOptions.js';
+import { floorHeightAbove } from './stair/stairDimensions.js';
+import {
+  ROOM_KIND_OPTIONS, CARD_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature,
+} from './roomNamingOptions.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip } from '../catalog/catalogDiffView.js';
@@ -352,8 +356,11 @@ const CommonSpecTable = observer(({ graph, mode }) => {
 // FinishTable — タブ付きメイン
 // ================================================================
 
-export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onSelectRoom, floorName }) => {
+export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onSelectRoom, onApplyNaming, floorName }) => {
   const [activeTab, setActiveTab] = useState('interior');
+  // 階段化セレクタ（内部タブのカード・部屋名ダイアログ共通）を有効にするか。上階に採用フロアが
+  // 無ければ階段化できない（stairEnabled=false。RoomNameInput.jsxと同じ条件）。
+  const stairEnabled = floorHeightAbove(project, project?.activePlane) != null;
   // 階段が選択されたら「階段」タブへ自動切替
   useEffect(() => { if (mode.selectedStairId) setActiveTab('stair'); }, [mode.selectedStairId]);
   // 部屋が選択されたら「内部」タブへ自動切替（階段選択時は階段タブが勝つ。宣言順で下の effect が
@@ -407,6 +414,8 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
             mode={mode}
             selectedRoomId={selectedRoomId}
             onSelectRoom={onSelectRoom}
+            onApplyNaming={onApplyNaming}
+            stairEnabled={stairEnabled}
             floorName={floorName}
           />
         : activeTab === 'stair'
@@ -415,6 +424,7 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
         ? <CommonSpecTable graph={graph} mode={mode} />
         : <ExteriorTable
             graph={graph}
+            mode={mode}
             category={TAB_TO_CATEGORY[activeTab]}
           />
       }
@@ -426,7 +436,7 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
 // InteriorTable — 部屋ごとの内部仕上げ（既存テーブル）
 // ================================================================
 
-const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, floorName }) => {
+const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, onApplyNaming, stairEnabled, floorName }) => {
   // 屋外部屋（kind===EXTERIOR）は階段の有無によらず除外する（外部タブが担当。非階段は
   // 部位の仕上げレベル入力、屋外階段は階段タブ＋外部タブの部位「階段」行）。
   // 屋内階段（kind===INTERIOR）は通常部屋と同じカードで表示する
@@ -534,6 +544,8 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
             onDrop={e => handleDrop(e, idx)}
             onDragEnd={handleDragEnd}
             onRequestDelete={(roomId, roomName) => setDeleteConfirm({ roomId, roomName })}
+            onApplyNaming={onApplyNaming}
+            stairEnabled={stairEnabled}
           />
         ))}
         {rooms.length > 0 && (
@@ -565,11 +577,94 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, flo
   );
 });
 
+// カード見出しの名称入力欄（展開時のみ。空なら既定「部屋」。確定は blur と Enter。
+// IME変換中のEnterでは確定しない — 変換確定の Enter を早期の blur に横取りさせないため）。
+// 見出しクリック（onToggle）を奪わないよう stopPropagation する。
+const CardNameInput = observer(({ room, onApplyNaming }) => {
+  const [draft, setDraft] = useState(null); // null = 非編集（room.nameをそのまま表示）
+  function commit() {
+    if (draft === null) return;
+    const trimmed = draft.trim();
+    if (trimmed !== (room.name || '')) {
+      onApplyNaming(room.id, { name: trimmed, kind: room.kind, feature: room.feature });
+    }
+    setDraft(null);
+  }
+  return (
+    <input
+      value={draft ?? room.name}
+      onChange={e => setDraft(e.target.value)}
+      onClick={e => e.stopPropagation()}
+      onKeyDown={e => {
+        if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.blur(); }
+      }}
+      onBlur={commit}
+      placeholder="部屋"
+      style={{
+        flex: 1, fontSize: 13, fontWeight: 700, color: '#1e293b',
+        border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px',
+        background: '#fff', minWidth: 0,
+      }}
+    />
+  );
+});
+
+// カード本体の区分（屋内/屋外）・属性（なし/階段/吹抜け）セレクタ。ROOM_KIND_OPTIONS・
+// CARD_FEATURE_OPTIONS（roomNamingOptions.js。昇降路は除外）を共通の唯一の供給源とする。
+// applyNaming の遷移処理（階段化・階段解除・屋外化→外部タブ行連動）はonApplyNaming経由でそのまま通す。
+const CardKindFeatureRow = observer(({ room, onApplyNaming, stairEnabled }) => (
+  <div style={cardRowStyle}>
+    <div style={cardFieldStyle}>
+      <span style={cardLabelStyle}>区分：</span>
+      <div style={cardInputWrapStyle}>
+        <select
+          value={room.kind}
+          onClick={e => e.stopPropagation()}
+          onChange={e => {
+            const kind = e.target.value;
+            if (kind !== room.kind) onApplyNaming(room.id, { name: room.name, kind, feature: room.feature });
+          }}
+          style={cellInputStyle}
+        >
+          {ROOM_KIND_OPTIONS.map(opt => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+    <div style={cardFieldStyle}>
+      <span style={cardLabelStyle}>属性：</span>
+      <div style={cardInputWrapStyle}>
+        <select
+          value={featureToSelectValue(room.feature)}
+          title={stairEnabled ? undefined : '上階に採用階がありません'}
+          onClick={e => e.stopPropagation()}
+          onChange={e => {
+            const feature = selectValueToFeature(e.target.value);
+            if (feature !== room.feature) onApplyNaming(room.id, { name: room.name, kind: room.kind, feature });
+          }}
+          style={cellInputStyle}
+        >
+          {CARD_FEATURE_OPTIONS.map(opt => (
+            <option
+              key={featureToSelectValue(opt.value)}
+              value={featureToSelectValue(opt.value)}
+              disabled={opt.value === RoomFeature.STAIR && !stairEnabled}
+            >
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  </div>
+));
+
 // 部屋1件分のカード。折りたたみ時はヘッダのみ、展開時はセクション群を表示する。
 // 展開＝選択（selectedRoomId）で、図面上の部屋タップからも立つため、可視域へ寄せる
 // （構造の部材カード・建具の一覧行と共通のフック）。
 const RoomCard = observer(({ room, mode, isExpanded, isDragging, isOver,
-  onToggle, onDragStart, onDragOver, onDrop, onDragEnd, onRequestDelete }) => {
+  onToggle, onDragStart, onDragOver, onDrop, onDragEnd, onRequestDelete, onApplyNaming, stairEnabled }) => {
   const cardRef = useScrollIntoViewWhenActive(isExpanded);
   return (
   <div
@@ -594,13 +689,18 @@ const RoomCard = observer(({ room, mode, isExpanded, isDragging, isOver,
       >
         ⠿
       </span>
-      <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
-        {room.name || (room.feature === RoomFeature.STAIR ? '階段' : '（名称未設定）')}
-      </span>
+      {isExpanded ? (
+        <CardNameInput room={room} onApplyNaming={onApplyNaming} />
+      ) : (
+        <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
+          {room.name || (room.feature === RoomFeature.STAIR ? '階段' : '（名称未設定）')}
+        </span>
+      )}
       <span style={{ color: '#94a3b8', fontSize: 11 }}>{isExpanded ? '▼' : '◀'}</span>
     </div>
     {isExpanded && (
       <div style={cardBodyStyle}>
+        <CardKindFeatureRow room={room} onApplyNaming={onApplyNaming} stairEnabled={stairEnabled} />
         {CARD_SECTIONS.map(section => (
           <div key={section.title}>
             <div style={sectionTitleStyle}>【 {section.title} 】</div>
@@ -829,9 +929,9 @@ const PART_OPTIONS = [
   '基礎', '犬走り', '物置', '目地', '雨樋', '笠木', '手摺', 'ルーバー', 'サイン', '門扉', '塀', 'フェンス',
 ];
 
-const ExteriorTable = observer(({ graph, category }) => {
+const ExteriorTable = observer(({ graph, mode, category }) => {
   if (category === 'exteriorRows') {
-    return <GroupedExteriorTable graph={graph} category={category} />;
+    return <GroupedExteriorTable graph={graph} mode={mode} category={category} />;
   }
   return <FlatExteriorTable graph={graph} category={category} />;
 });
@@ -1022,7 +1122,34 @@ const ExteriorLevelRow = observer(({ room, graph }) => {
   );
 });
 
-const GroupedExteriorTable = observer(({ graph, category }) => {
+// 屋外部屋（階段以外）の部位見出しを部屋名の入力欄にする（外部タブでの改名。Room名と、
+// その roomId の全 exteriorRows 行の part を同じ値へ連動更新する。mode.renameExteriorRoom 経由）。
+// FloorLevelInput・CardNameInput と同じ draft 方式（blur/Enterで確定。IME変換中のEnterは無視）。
+const ExteriorPartHeading = observer(({ room, mode }) => {
+  const [draft, setDraft] = useState(null);
+  function commit() {
+    if (draft === null) return;
+    mode.renameExteriorRoom(room.id, draft);
+    setDraft(null);
+  }
+  return (
+    <input
+      value={draft ?? room.name}
+      onChange={e => setDraft(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.blur(); }
+      }}
+      onBlur={commit}
+      placeholder="屋外"
+      style={{
+        fontSize: 13, fontWeight: 700, color: '#374151',
+        border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px', background: '#fff',
+      }}
+    />
+  );
+});
+
+const GroupedExteriorTable = observer(({ graph, mode, category }) => {
   const rows = graph[category];
 
   // 群キー: roomId連動行（階段・屋外部屋）は roomId 単位、手入力行は part 単位で分ける
@@ -1050,7 +1177,10 @@ const GroupedExteriorTable = observer(({ graph, category }) => {
         return (
         <div key={groupKey} style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part || '（部位未設定）'}</div>
+            {showLevelRow
+              ? <ExteriorPartHeading room={room} mode={mode} />
+              : <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part || '（部位未設定）'}</div>
+            }
             <button
               onClick={() => withFinishUndo(graph, () => {
                 // roomId連動行（階段・屋外部屋）はremoveExteriorRowsByRoomIdで、手入力行はpart一致で削除する

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomKind, RoomFeature, SHAFT_FEATURES } from '@core';
 import {
-  ROOM_KIND_OPTIONS, ROOM_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature,
+  ROOM_KIND_OPTIONS, ROOM_FEATURE_OPTIONS, CARD_FEATURE_OPTIONS,
+  featureToSelectValue, selectValueToFeature,
 } from './roomNamingOptions.js';
 
 test('ROOM_FEATURE_OPTIONS は7つで、value集合が [null, STAIR, VOID, EV, DW, FREIGHT_EV, VEHICLE_EV] に一致する（重複なし）', () => {
@@ -31,4 +32,13 @@ test('featureToSelectValue / selectValueToFeature は往復する（null⇄\'\'�
   assert.equal(selectValueToFeature(''), null);
   assert.equal(featureToSelectValue(RoomFeature.EV), 'ev');
   assert.equal(selectValueToFeature('ev'), RoomFeature.EV);
+});
+
+// ---- ステップ1（部屋編集の導線変更）: 内部タブのカード用属性選択肢は昇降路を含まない ----
+test('CARD_FEATURE_OPTIONS は [null, STAIR, VOID] の3つ（なし/階段/吹抜け）で、昇降路（SHAFT_FEATURES）を含まない', () => {
+  const values = CARD_FEATURE_OPTIONS.map(o => o.value);
+  assert.deepEqual(values, [null, RoomFeature.STAIR, RoomFeature.VOID]);
+  for (const feature of SHAFT_FEATURES) {
+    assert.ok(!values.includes(feature), `SHAFT_FEATURES の ${feature} が CARD_FEATURE_OPTIONS に含まれている`);
+  }
 });

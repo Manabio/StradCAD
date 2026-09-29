@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { observer } from 'mobx-react-lite';
 import { roomBounds } from './gridCells.js';
 import { RoomFeature } from '@core';
-import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import {
   ROOM_KIND_OPTIONS, ROOM_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature,
 } from './roomNamingOptions.js';
@@ -10,14 +9,13 @@ import {
 // 区分（屋内/屋外。kind）と属性（なし/階段/吹抜け/EV等。feature）の2セレクタ。
 // 〔屋内|屋外〕は kind（base軸、相互排他・常にどちらかON）。
 // 〔なし|階段|吹抜け|EV等〕は feature（属性軸、相互排他・個別ON/OFF可）。
-// フェーズ3: 既存部屋にもこのダイアログが開くため、すべてローカル state に留め、
-// 確定時（onConfirm）に一括適用する（即時反映はしない）。
+// 新規Room（未指定セル・統合・新規部分指定）の命名専用ダイアログ。既存部屋の編集は
+// 仕上げ表・内部タブのカードへ移した。本ダイアログに削除は無い。
 
-export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = true, onConfirm, onCancel, onDelete }) => {
+export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = true, onConfirm, onCancel }) => {
   const [value, setValue]           = useState(room.name || '');
   const [kindSel, setKindSel]       = useState(room.kind);
   const [featureSel, setFeatureSel] = useState(room.feature ?? null);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
@@ -27,9 +25,6 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
   const cy = (bounds.y1 + bounds.y2) / 2;
   const { x: sx, y: sy } = viewport.worldToScreen(cx, cy);
 
-  // 削除対象が「子を持つ親部屋」かどうか（部分指定も道連れで消える旨の確認を挟む）
-  const hasChildren = graph.rooms.some(r => r.referenceRoomIds.has(room.id));
-
   function confirm() {
     onConfirm(room.id, { name: value.trim(), kind: kindSel, feature: featureSel });
   }
@@ -37,11 +32,6 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
   function onKeyDown(e) {
     if (e.key === 'Enter')  { e.preventDefault(); confirm(); }
     if (e.key === 'Escape') { onCancel(room.id); }
-  }
-
-  function requestDelete() {
-    if (hasChildren) setDeleteConfirmOpen(true);
-    else             onDelete(room.id);
   }
 
   return (
@@ -112,41 +102,20 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
           </select>
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button
-          onClick={requestDelete}
-          style={btnStyle('#fff', '#dc2626', '1px solid #fca5a5')}
+          onClick={() => onCancel(room.id)}
+          style={btnStyle('#f1f5f9', '#475569')}
         >
-          削除
+          キャンセル
         </button>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            onClick={() => onCancel(room.id)}
-            style={btnStyle('#f1f5f9', '#475569')}
-          >
-            キャンセル
-          </button>
-          <button
-            onClick={confirm}
-            style={btnStyle('#2563eb', '#fff')}
-          >
-            確定
-          </button>
-        </div>
+        <button
+          onClick={confirm}
+          style={btnStyle('#2563eb', '#fff')}
+        >
+          確定
+        </button>
       </div>
-      {deleteConfirmOpen && (
-        <ConfirmDialog
-          message="この部屋を削除すると、部分指定も削除されます。よろしいですか？"
-          buttons={[
-            { label: 'キャンセル', value: 'cancel' },
-            { label: '削除', value: 'ok', danger: true },
-          ]}
-          onSelect={value => {
-            setDeleteConfirmOpen(false);
-            if (value === 'ok') onDelete(room.id);
-          }}
-        />
-      )}
     </div>
   );
 });

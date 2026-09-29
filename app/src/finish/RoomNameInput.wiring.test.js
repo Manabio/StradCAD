@@ -49,3 +49,15 @@ test('【不変条件】階段 option の disabled は opt.value === RoomFeature
   assert.ok(/disabled=\{opt\.value === RoomFeature\.STAIR && !stairEnabled\}/.test(codeOnly),
     '階段 option の disabled 条件が想定の形で見つからない');
 });
+
+// ステップ1（部屋編集の導線変更）: 部屋名ダイアログは新規Roomの命名専用にし、削除ボタン・
+// 確認ダイアログを廃止する（削除は仕上げ表・内部タブのカードの削除ボタンに一本化）。
+test('【不変条件】削除ボタン・onDelete・確認ダイアログが存在しない（新規Room命名専用ダイアログ化）', () => {
+  assert.ok(!/onDelete/.test(codeOnly), 'onDelete が残っている');
+  assert.ok(!/requestDelete/.test(codeOnly), 'requestDelete が残っている');
+  assert.ok(!/deleteConfirmOpen/.test(codeOnly), 'deleteConfirmOpen が残っている');
+  assert.ok(!/ConfirmDialog/.test(codeOnly), 'ConfirmDialog の import/使用が残っている');
+  assert.ok(!/hasChildren/.test(codeOnly), 'hasChildren が残っている（削除確認の子有無判定は不要）');
+  const deleteButtonMatches = codeOnly.match(/削除/g) ?? [];
+  assert.equal(deleteButtonMatches.length, 0, '「削除」という文言が残っている（実際: ' + deleteButtonMatches.length + '件）');
+});

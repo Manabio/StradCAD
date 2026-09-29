@@ -206,6 +206,23 @@ const App = observer(() => {
       fieldKey: PRIMARY_DIMENSION_FIELD_BY_MAP[mapName] ?? null, entityId: entity.id,
     });
   }
+  // 仕上げモード: 部屋名ダイアログ（新規Roomの命名専用）・仕上げ表内部タブのカード
+  // （既存部屋の名称・区分・属性の編集）の両方から呼ぶ共通処理（applyNaming＋階段変換時の
+  // 上階自動設置 syncUpperFloors）。
+  function applyRoomNaming(id, payload) {
+    const floorHeight = floorHeightAbove(project, project.activePlane);
+    const convertedStair = modeRef.current?.applyNaming(id, payload, floorHeight);
+    if (convertedStair) {
+      // 新規に階段変換された場合のみ、設置階の上の全採用フロア（最上階まで）へ
+      // 中心線・階段を同期する（非アクティブ階を peek して IDB へ保存。壁は生成しない）。
+      // undoEntry を渡し、自動設置分の巻き戻しを変換エントリへ合成する
+      // （変換の Ctrl+Z 1回で上階分もまとめて undo される）。
+      const undoEntry = modeRef.current?.lastNamingUndoEntry ?? null;
+      import('./finish/stair/stairFloorSync.js')
+        .then(m => m.syncUpperFloors(project, project.activeGraph, { undoEntry }))
+        .catch(console.error);
+    }
+  }
   // 構造リストで展開中のカードの部材id集合を構造モード状態へ写す（伏図のハイライト。
   // renderer/StructuralLayer.jsx が mode.selectedMemberIds を読む）。構造モード以外・状態未生成時は無視。
   // 参照を安定させる（useCallback・依存なし。modeRef は ref なので常に最新を読む）——MemberListTab/MemberCard
@@ -2137,32 +2154,19 @@ const App = observer(() => {
         return room ? (
           <RoomNameInput
             // 部屋が変わったら必ず再マウントして、各値（部屋名・屋内外・階段/吹抜け）の初期値を
-            // その部屋の元指定の値にする。key が無いと、namingRoomId が null を経由せず
-            // 別の部屋へ切り替わる経路（例: ダイアログを開いたまま階段セルをクリック→
-            // startDrag が同一アクション内で閉じて開く）で React がコンポーネントを再利用し、
-            // useState の初期化が走らず前の部屋の値・入力途中の値が残る（ユーザー指摘2026-08:
-            // 新規追加以外のケースの各値の初期値は元指定の値）。
+            // その部屋の元指定の値にする。namingRoomId が null を経由せず別の部屋へ直接
+            // 切り替わる経路（1つの mobx action 内で namingRoomId が A→B と非nullのまま
+            // 変わるケース）があると、key が無い場合 React がコンポーネントを再利用し
+            // useState の初期化が走らず前の部屋の値が残る。現状の commitDrag/startDrag は
+            // ダイアログを開く直前に必ず namingRoomId=null を経由するためこの経路は無いが、
+            // 将来の変更で再び起こりうるため防御的に key を残す。
             key={room.id}
             room={room}
             graph={graph}
             viewport={viewport}
             stairEnabled={floorHeightAbove(project, project.activePlane) != null}
-            onConfirm={(id, payload) => {
-              const floorHeight = floorHeightAbove(project, project.activePlane);
-              const convertedStair = modeRef.current?.applyNaming(id, payload, floorHeight);
-              if (convertedStair) {
-                // 新規に階段変換された場合のみ、設置階の上の全採用フロア（最上階まで）へ
-                // 中心線・階段を同期する（非アクティブ階を peek して IDB へ保存。壁は生成しない）。
-                // undoEntry を渡し、自動設置分の巻き戻しを変換エントリへ合成する
-                // （変換の Ctrl+Z 1回で上階分もまとめて undo される）。
-                const undoEntry = modeRef.current?.lastNamingUndoEntry ?? null;
-                import('./finish/stair/stairFloorSync.js')
-                  .then(m => m.syncUpperFloors(project, project.activeGraph, { undoEntry }))
-                  .catch(console.error);
-              }
-            }}
+            onConfirm={applyRoomNaming}
             onCancel={id => modeRef.current?.cancelNaming(id)}
-            onDelete={id => modeRef.current?.deleteFromDialog(id)}
           />
         ) : null;
       })()}
@@ -2176,6 +2180,7 @@ const App = observer(() => {
               project={project}
               selectedRoomId={mode.selectedRoomId}
               onSelectRoom={id => modeRef.current?.selectRoom(id)}
+              onApplyNaming={applyRoomNaming}
               floorName={floorName}
             />
           : <FinishHalfModal
@@ -2184,6 +2189,7 @@ const App = observer(() => {
               project={project}
               selectedRoomId={mode.selectedRoomId}
               onSelectRoom={id => modeRef.current?.selectRoom(id)}
+              onApplyNaming={applyRoomNaming}
               floorName={floorName}
             />
       )}

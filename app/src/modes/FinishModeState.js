@@ -118,7 +118,7 @@ export class FinishModeState {
       applyNaming:  action,
       cancelNaming: action,
       deleteRoom:   action,
-      deleteFromDialog: action,
+      renameExteriorRoom: action,
       selectStair:  action,
       deleteStair:  action,
       revertStairToRoom:  action,
@@ -478,7 +478,7 @@ export class FinishModeState {
   // 構成セル全部をまとめて拾う（先頭はポインタ直下のセル）
   //
   // 階段クリックの優先順位（ポインタ直下 wx,wy で判定）:
-  //   1. 自階階段のセルかつ破れ線手前          → その自階階段を選択（roomIdのRoomがあればダイアログも開く＝既存扱い）
+  //   1. 自階階段のセルかつ破れ線手前          → その自階階段を選択のみ（ダイアログなし）
   //   2. 自階階段のセルで破れ線先＋下階階段あり → 下階階段を選択（見下げクリック。ダイアログなし）
   //   3. 自階に階段が無い＋下階階段あり         → 下階階段を選択（見下げクリック。ダイアログなし）
   //   4. 自階階段のセルで破れ線先＋下階階段なし → 階段下エリアとして部屋ドラッグを許可
@@ -504,14 +504,9 @@ export class FinishModeState {
     if (stair) {
       const beyond = this._beyondBreakOf(stair);
       if (!beyond.has(pointerKey)) {
-        // 優先1: 自階階段（破れ線手前）— stair.roomId の Room があれば既存扱いでダイアログも開く
-        // （上り口ヒントは不要 — 選択順セルキーが無い経路のため namingCellOrder は明示的にクリアする）
+        // 優先1: 自階階段（破れ線手前）— 階段の選択のみ（ダイアログは開かない。
+        // stair.roomId の Room の編集は仕上げ表・内部タブのカードへ移した）。
         this._selectStair(stair.id);
-        if (stair.roomId && this.graph.roomMap.has(stair.roomId)) {
-          this.namingIsNew     = false;
-          this.namingRoomId    = stair.roomId;
-          this.namingCellOrder = null;
-        }
         return;
       }
       const lower = this._lowerStairForPoint(wx, wy);
@@ -561,13 +556,16 @@ export class FinishModeState {
 
   /**
    * 選択状態表（判定はドラッグ開始セル startCellKey で行う）:
-   *   完全一致                 → 全体選択・既存ダイアログ                              [判定1]
+   *   完全一致                 → 全体選択のみ（ダイアログは開かない）                    [判定1]
    *   複数部屋を完全包含        → 統合（dominantに吸収）・既存ダイアログ                [判定2]
-   *   開始セルが部分指定        → その部分指定を全体選択・既存ダイアログ                [判定3-部分指定]
-   *   開始セルが親/単一の名前セル → その部屋を全体選択・既存ダイアログ                   [判定3-名前セル]
+   *   開始セルが部分指定        → その部分指定を全体選択のみ（ダイアログは開かない）      [判定3-部分指定]
+   *   開始セルが親/単一の名前セル → その部屋を全体選択のみ（ダイアログは開かない）        [判定3-名前セル]
    *   開始セルが親/単一のその他セル → 新規部分指定（cells=newCells∩その部屋）・新規ダイアログ [判定3-その他セル]
    *   開始セルが未指定           → 新規部屋（newCellsから全部屋所属セルを除外）・新規ダイアログ [判定3-未指定]
-   * 階段エリアのセル（開始セルが自階階段）は startDrag 側で既にダイアログまで処理済みで
+   * ダイアログは新規Room（判定2の統合先・判定3のその他セル/未指定）の命名専用。既存部屋の
+   * 名称・区分・属性の編集は仕上げ表・内部タブのカード（onApplyNaming）へ移した。選択のみの
+   * 分岐（判定1・判定3-部分指定・判定3-名前セル）はセルも undo も変更しない。
+   * 階段エリアのセル（開始セルが自階階段）は startDrag 側で既に選択処理済みで
    * commitDrag には到達しない。feature=STAIR の部屋は cells ドリフトに備えて防御的に除外する。
    */
   commitDrag() {
@@ -598,9 +596,9 @@ export class FinishModeState {
     const overlapping = rooms.filter(r => [...cellsOf(r)].some(c => newCells.has(c)));
 
     if (overlapping.length > 0) {
-      // 判定1: 既存部屋と完全一致 — 全体選択・既存ダイアログ（セルは変えない）
+      // 判定1: 既存部屋と完全一致 — 全体選択のみ（セルは変えない・ダイアログは開かない）
       const exactMatch = overlapping.find(r => setsEqual(cellsOf(r), newCells));
-      if (exactMatch) { this._openDialog(exactMatch.id, false, cellOrder); return; }
+      if (exactMatch) { this._selectExistingRoom(exactMatch.id); return; }
 
       // 判定2: 重複する全部屋が newCells に包含される — 拡張・統合
       // （例: A部屋とB部屋を合わせてドラッグ → 一つの大きな部屋に）
@@ -640,7 +638,7 @@ export class FinishModeState {
     // 部分指定（referenceRoomIds 非空）が優先。複数該当なら roomOrder 先勝ち。
     const partialOwners = rooms.filter(r => r.referenceRoomIds.size > 0 && cellsOf(r).has(startCellKey));
     if (partialOwners.length > 0) {
-      this._openDialog(this._firstInRoomOrder(partialOwners).id, false, cellOrder);
+      this._selectExistingRoom(this._firstInRoomOrder(partialOwners).id);
       return;
     }
 
@@ -648,8 +646,8 @@ export class FinishModeState {
     const owner = rooms.find(r => r.referenceRoomIds.size === 0 && cellsOf(r).has(startCellKey));
     if (owner) {
       if (this._nameCellKeyOf(owner) === startCellKey) {
-        // 名前セル — その部屋を全体選択・既存ダイアログ
-        this._openDialog(owner.id, false, cellOrder);
+        // 名前セル — その部屋を全体選択のみ（ダイアログは開かない）
+        this._selectExistingRoom(owner.id);
         return;
       }
       // その他セル — 新規部分指定（cells = newCells ∩ その部屋の現在セル）
@@ -704,6 +702,15 @@ export class FinishModeState {
     this.selectedRoomId  = roomId;
   }
 
+  /**
+   * commitDrag の判定1・判定3-部分指定・判定3-名前セル用: ダイアログを開かずその部屋を選択するだけ。
+   * セルは変更せず、undo エントリも積まない。
+   */
+  _selectExistingRoom(roomId) {
+    this.dragState = null;
+    this.selectRoom(roomId);
+  }
+
   cancelDrag() { this.dragState = null; }
 
   selectRoom(roomId) {
@@ -743,7 +750,8 @@ export class FinishModeState {
         room.setFeature(RoomFeature.STAIR);
         const cells = new Set(room.cells);
         // namingCellOrder（commitDragで開いたダイアログの選択順セルキー）を歩行順として渡す。
-        // startDrag優先1経由（namingCellOrder無し）では null のまま渡り、幾何推定にフォールバックする。
+        // 内部タブのカード（CardKindFeatureRow）経由の階段化はダイアログを経由しないため
+        // namingCellOrder は null のまま渡り、幾何推定にフォールバックする。
         // 構造材は階の実効主構造から既定を引く（鉄骨なら回転部の初期段数 R=0）。
         const structure = this._defaultStairStructure();
         const cls = classifyStairArea(cells, this.graph, floorHeight, this.namingCellOrder, structure);
@@ -881,7 +889,7 @@ export class FinishModeState {
   }
 
   /**
-   * ユーザーが明示的に部屋を削除する（仕上げ表の削除ボタン・ダイアログの削除ボタン共通）。
+   * ユーザーが明示的に部屋を削除する（仕上げ表・内部タブのカードの削除ボタン）。
    * 子（自idを referenceRoomIds に含む部分指定）があれば先に道連れで削除する（親カスケード）。
    * その部屋を roomId に持つ Stair があれば道連れで削除する。壁・境界エッジの後始末はモード切替時の既存ロジックに委ねる。
    */
@@ -890,7 +898,7 @@ export class FinishModeState {
   }
 
   /**
-   * deleteRoom の実体（undo 記録なし。カスケード再帰・deleteFromDialog から使う）。
+   * deleteRoom の実体（undo 記録なし。カスケード再帰から使う）。
    * 部分指定（referenceRoomIds非空）の子・屋外部屋は現行どおり removeRoom。
    * 屋内の親/単一部屋は removeRoom せず _makeUndefined へ変換し、外壁線を維持する
    * （B: 未定義の部屋。子を持つ親は先に子を再帰 removeRoom してから未定義化する）。
@@ -913,46 +921,24 @@ export class FinishModeState {
   }
 
   /**
-   * ダイアログの「削除」ボタン用。判定順が重要（先頭を後回しにすると新規候補室が誤って未定義化される）。
-   *   新規候補室（namingIsNew）  → 作成取消。removeRoom し、切り出し元の未定義Roomへ cells を差し戻す
-   *   feature=STAIR の部屋      → 連動Stairごと削除（deleteStair。選択クリア）
-   *   部分指定（referenceRoomIds非空） → 削除後、参照元（親）を全体選択
-   *   親（子持ち）・単一部屋      → deleteRoom（親カスケードで子も一括削除。屋内なら未定義化）
+   * 外部タブ（roomId連動群。屋外かつ非階段）の見出しから部屋名を改名する。Room名と、
+   * その roomId の全 exteriorRows 行の part を同じ値へ更新する（1 undo エントリ）。
+   * 空文字は既定「屋外」（applyNamingの既定と同じ）。存在しない roomId・屋内の部屋・
+   * 階段の部屋・無変更は no-op（undo を積まない）。
    */
-  deleteFromDialog(roomId) {
-    // 新規部屋（作成→即削除）は保留スナップショットを使う＝差分ゼロでエントリなし
-    const undoBefore = this._pendingDialogUndo ?? snapshotFinishState(this.graph);
-    this._pendingDialogUndo = null;
-
+  renameExteriorRoom(roomId, name) {
     const room = this.graph.roomMap.get(roomId);
-    if (!room) {
-      this.namingRoomId    = null;
-      this.namingIsNew     = false;
-      this.namingCellOrder = null;
-      return;
-    }
-
-    if (this.namingIsNew) {
-      const cells = new Set(room.cells);
-      this.graph.removeRoom(roomId);
-      this._subtractCellsFromUndefined(cells);
-      if (this.selectedRoomId === roomId) this.selectedRoomId = null;
-    } else if (room.feature === RoomFeature.STAIR) {
-      const stair = [...this.graph.stairMap.values()].find(s => s.roomId === roomId);
-      if (stair) this._deleteStairNoUndo(stair.id);
-      else this._deleteRoomNoUndo(roomId); // 連動Stairが見つからない防御ケース
-    } else if (room.referenceRoomIds.size > 0) {
-      const parentId = [...room.referenceRoomIds][0];
-      this._deleteRoomNoUndo(roomId);
-      if (this.graph.roomMap.has(parentId)) this.selectedRoomId = parentId;
-    } else {
-      this._deleteRoomNoUndo(roomId);
-    }
-
-    this.namingRoomId    = null;
-    this.namingIsNew     = false;
-    this.namingCellOrder = null;
-    pushFinishUndo(this.graph, undoBefore);
+    if (!room) return;
+    if (room.kind !== RoomKind.EXTERIOR || room.feature === RoomFeature.STAIR) return;
+    const finalName = name.trim() || '屋外';
+    if (room.name === finalName) return; // 無変更
+    withFinishUndo(this.graph, () => {
+      room.setName(finalName);
+      this.sessionModifiedRoomIds.add(roomId);
+      for (const r of this.graph.exteriorRows.filter(r => r.roomId === roomId)) {
+        r.setField('part', finalName);
+      }
+    });
   }
 
   // ---- 階段 ----
@@ -971,7 +957,7 @@ export class FinishModeState {
   }
 
   /**
-   * deleteStair の実体（undo 記録なし。deleteFromDialog から使う）。
+   * deleteStair の実体（undo 記録なし）。
    * ペアRoom（stair.roomId の Room）は屋外なら removeRoom、屋内なら _makeUndefined で外壁線を維持する。
    */
   _deleteStairNoUndo(id) {

@@ -8,6 +8,8 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { restoreGraph, serializeGraph } from '../graphSnapshot.js';
 import { takeUnresolvedCodes, addDocumentAliases, clearDocumentAliases } from '../catalog/codeNormalization.js';
+import { worldToCell, refreshCells } from '../finish/gridCells.js';
+import { undoManager } from '../undoManager.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -65,14 +67,141 @@ test('【失敗系・QA G2】FinishModeState.commitDrag: 既存部屋と完全�
   room.finish.setField('baseboardMaterial', ''); // ユーザーが明示的にクリアした想定
   state.namingRoomId = null;
 
-  // 同じ領域を再度ドラッグ（既存部屋と完全一致）→ 既存ダイアログが開くだけで新規作成されない
+  // 同じ領域を再度ドラッグ（既存部屋と完全一致）→ 新規作成されない（判定1。ダイアログは開かない）
   state.startDrag(2000, 1500);
   state.commitDrag();
 
-  assert.equal(state.namingRoomId, firstRoomId, '既存部屋がそのまま選択されるはず（新規IDにならない）');
-  assert.equal(state.namingIsNew, false);
+  assert.equal(state.namingRoomId, null, '判定1はダイアログを開かないはず（既存部屋の編集はカードへ移した）');
+  assert.equal(state.selectedRoomId, firstRoomId, '既存部屋がそのまま選択されるはず（新規IDにならない）');
   assert.equal(graph.roomMap.get(firstRoomId).finish.baseboardMaterial, '',
     '既存部屋の完全一致ドラッグでユーザーのクリアが巾木初期値へ巻き戻ってはいけない');
+});
+
+// ================================================================
+// ステップ1（部屋編集の導線変更）: commitDrag の判定1・判定3-部分指定・判定3-名前セルは
+// ダイアログを開かず選択のみ（既存部屋の名称・区分・属性の編集は仕上げ表・内部タブのカードへ移した）。
+// 判定2（統合）・判定3-その他セル/未指定（新規Room）は従来どおりダイアログを開く（回帰の固定）。
+// ================================================================
+
+// 3セル横並びグリッド: left[0,2000] / mid[2000,4000] / right[4000,6000] × y[0,3000]
+// （各縦CLは非labeled・discipline=ARCH・非dashedのため regionCellsAt はセルをまたがない＝1クリック=1セル）
+function makeThreeCellGraph() {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL,   2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL,   4000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL,   6000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  return graph;
+}
+
+test('FinishModeState.commitDrag【判定3-名前セル】: 単一部屋の名前セルをドラッグすると選択のみ（ダイアログ・undoエントリなし）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  // left+midの2セルからなる単一の親部屋（referenceRoomIds空）。名前セルをleftへ明示固定する。
+  const leftCell = worldToCell(1000, 1500, graph);
+  const midCell  = worldToCell(3000, 1500, graph);
+  const room = graph.addRoom(new Set([leftCell.key, midCell.key]), '部屋');
+  room.setNamePosition(1000, 1500); // アンカーをleftセルへ固定（roomLabel.js roomNameAnchor）
+
+  const undoCountBefore = undoManager._undoStack.length;
+  state.startDrag(1000, 1500); // leftセルのみをドラッグ（親部屋の全セルとは不一致）
+  state.commitDrag();
+
+  assert.equal(state.namingRoomId, null, '判定3-名前セルはダイアログを開かないはず');
+  assert.equal(state.selectedRoomId, room.id, '名前セルの部屋が選択されるはず');
+  assert.equal(state.dragState, null);
+  assert.deepEqual([...refreshCells(room.cells, graph)].sort(), [leftCell.key, midCell.key].sort(),
+    '部屋のセルは変わらないはず');
+  assert.equal(undoManager._undoStack.length, undoCountBefore, 'undoエントリを積まないはず');
+});
+
+test('FinishModeState.commitDrag【判定3-部分指定】: 部分指定を含む重複ドラッグ（完全一致・完全包含のいずれでもない）は部分指定を選択のみ', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const midCell   = worldToCell(3000, 1500, graph);
+  const leftCell  = worldToCell(1000, 1500, graph);
+  const parent  = graph.addRoom(new Set([leftCell.key, midCell.key]), '親');
+  const partial = graph.addRoom(new Set([midCell.key]), '子', crypto.randomUUID(), new Set([parent.id]));
+
+  const undoCountBefore = undoManager._undoStack.length;
+  state.startDrag(3000, 1500); // 開始セル=mid（部分指定の唯一のセル）
+  state.updateDrag(5000, 1500); // rightセルも含めて完全一致・完全包含のどちらも崩す
+  state.commitDrag();
+
+  assert.equal(state.namingRoomId, null, '判定3-部分指定はダイアログを開かないはず');
+  assert.equal(state.selectedRoomId, partial.id, '部分指定が選択されるはず');
+  assert.deepEqual([...refreshCells(partial.cells, graph)], [midCell.key], '部分指定のセルは変わらないはず');
+  assert.deepEqual([...refreshCells(parent.cells, graph)].sort(), [leftCell.key, midCell.key].sort(),
+    '親のセルも変わらないはず');
+  assert.equal(undoManager._undoStack.length, undoCountBefore, 'undoエントリを積まないはず');
+});
+
+test('FinishModeState.startDrag【優先1】: 自階階段（破れ線手前）のクリックは階段の選択のみ（stair.roomIdのRoomがあってもダイアログを開かない）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const cell = worldToCell(2000, 1500, graph);
+  const room = graph.addRoom(new Set([cell.key]), '階段');
+  room.setFeature(RoomFeature.STAIR);
+  const stair = graph.addStair({ type: 'straight', cells: new Set([cell.key]), roomId: room.id });
+
+  state.startDrag(2000, 1500);
+
+  assert.equal(state.namingRoomId, null, '優先1はダイアログを開かないはず（stair.roomIdのRoomがあっても）');
+  assert.equal(state.selectedStairId, stair.id, '階段が選択されるはず');
+});
+
+// ---- 回帰の固定: 判定2（統合）・判定3-その他セル/未指定（新規Room）は従来どおりダイアログを開く ----
+
+test('【回帰】FinishModeState.commitDrag【判定2】: 複数部屋を完全包含する統合ドラッグはダイアログを開く（新規Room扱いではなく既存dominantの命名）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const leftCell = worldToCell(1000, 1500, graph);
+  const midCell  = worldToCell(3000, 1500, graph);
+  const roomA = graph.addRoom(new Set([leftCell.key]), 'A');
+  const roomB = graph.addRoom(new Set([midCell.key]), 'B');
+
+  state.startDrag(1000, 1500);
+  state.updateDrag(3000, 1500); // left+midの両方を完全包含
+  state.commitDrag();
+
+  assert.ok(state.namingRoomId, '判定2はダイアログを開くはず');
+  assert.equal(state.namingIsNew, false, '統合は既存dominantの命名扱い（新規Roomではない）');
+  assert.ok(state.namingRoomId === roomA.id || state.namingRoomId === roomB.id);
+});
+
+test('【回帰】FinishModeState.commitDrag【判定3-未指定】: 未指定領域のドラッグは新規Roomのダイアログを開く', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+
+  assert.ok(state.namingRoomId);
+  assert.equal(state.namingIsNew, true);
+});
+
+test('【回帰】FinishModeState.commitDrag【判定3-その他セル】: 親/単一部屋の名前セル以外をドラッグすると新規部分指定のダイアログを開く', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const leftCell = worldToCell(1000, 1500, graph);
+  const midCell  = worldToCell(3000, 1500, graph);
+  const parent = graph.addRoom(new Set([leftCell.key, midCell.key]), '親');
+  parent.setNamePosition(1000, 1500); // 名前セルはleft。midは「その他セル」になる
+
+  const undoCountBefore = undoManager._undoStack.length;
+  state.startDrag(3000, 1500); // midのみ（親の名前セルではない・親の全セルとも不一致）
+  state.commitDrag();
+
+  assert.equal(state.namingIsNew, true, '判定3-その他セルは新規部分指定のダイアログを開くはず');
+  assert.ok(state.namingRoomId, 'ダイアログを開くはず');
+  assert.notEqual(state.namingRoomId, parent.id, '新規に作られた部分指定のIDのはず（親のIDではない）');
+  const newRoom = graph.roomMap.get(state.namingRoomId);
+  assert.ok(newRoom, '新規部分指定のRoomが作られるはず');
+  assert.deepEqual([...newRoom.referenceRoomIds], [parent.id], '新規部分指定は親を参照するはず');
+  // 新規作成（判定3）はダイアログ確定（applyNaming）までundoを保留する契約——この時点ではまだ積まれない
+  assert.equal(undoManager._undoStack.length, undoCountBefore, 'ダイアログ確定前はundoを積まないはず');
 });
 
 // ---- 屋外部屋（非階段）の外部タブ連動（_syncExteriorRows）----
@@ -137,6 +266,88 @@ test('【失敗系】applyNaming: 存在しないroomIdを渡すとnullを返し
 
   assert.equal(result, null);
   assert.equal(graph.exteriorRows.length, before);
+});
+
+// ================================================================
+// ステップ1（部屋編集の導線変更）: renameExteriorRoom（外部タブの群見出しからの改名）
+// ================================================================
+
+test('renameExteriorRoom: 屋外・非階段の部屋を改名するとRoom名と連動exteriorRows行のpartが両方更新される', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+
+  state.renameExteriorRoom(room.id, 'バルコニー');
+
+  assert.equal(graph.roomMap.get(room.id).name, 'バルコニー');
+  const rows = graph.exteriorRows.filter(r => r.roomId === room.id);
+  assert.equal(rows.length, 1, '行は増えず1件のまま');
+  assert.equal(rows[0].part, 'バルコニー');
+});
+
+test('renameExteriorRoom: 空文字は既定「屋外」になる（applyNamingの既定と同じ）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+
+  state.renameExteriorRoom(room.id, '   ');
+
+  assert.equal(graph.roomMap.get(room.id).name, '屋外');
+  assert.equal(graph.exteriorRows.find(r => r.roomId === room.id).part, '屋外');
+});
+
+test('【失敗系】renameExteriorRoom: 存在しないroomId・屋内の部屋・階段の部屋・無変更はno-op（undoエントリを積まない）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+
+  // 存在しないroomId
+  const undoBefore1 = undoManager._undoStack.length;
+  state.renameExteriorRoom('no-such-room-id', 'なにか');
+  assert.equal(undoManager._undoStack.length, undoBefore1, '存在しないroomIdはundoを積まないはず');
+
+  // 屋内の部屋
+  const interiorRoom = graph.addRoom(new Set(['dummy']), '部屋');
+  const undoBefore2 = undoManager._undoStack.length;
+  state.renameExteriorRoom(interiorRoom.id, 'なにか');
+  assert.equal(graph.roomMap.get(interiorRoom.id).name, '部屋', '屋内の部屋は改名されないはず');
+  assert.equal(undoManager._undoStack.length, undoBefore2, '屋内の部屋はundoを積まないはず');
+
+  // 階段の部屋（屋外階段）
+  const stairRoom = graph.addRoom(new Set(['dummy2']), '');
+  state.applyNaming(stairRoom.id, { name: '', kind: RoomKind.EXTERIOR, feature: RoomFeature.STAIR }, 3000);
+  const undoBefore3 = undoManager._undoStack.length;
+  state.renameExteriorRoom(stairRoom.id, 'なにか');
+  assert.equal(graph.exteriorRows.find(r => r.roomId === stairRoom.id).part, '階段', '階段の部位行は変わらないはず');
+  assert.equal(undoManager._undoStack.length, undoBefore3, '階段の部屋はundoを積まないはず');
+
+  // 無変更（同名を渡す）— 注: この undo 件数 assert は、無変更ガード（if (room.name===finalName) return）
+  // を外しても room.setName/r.setField に同じ値を書き戻すだけなら pushFinishUndo が差分ゼロとして
+  // 捨てるため恒真になりうる（検出力なし）。ガードの有無を実際に見分けるのは下の T2
+  // （sessionModifiedRoomIds への記録）。
+  const exteriorRoom = graph.addRoom(new Set(['dummy3']), '');
+  state.applyNaming(exteriorRoom.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  const undoBefore4 = undoManager._undoStack.length;
+  state.renameExteriorRoom(exteriorRoom.id, 'テラス');
+  assert.equal(undoManager._undoStack.length, undoBefore4, '無変更はundoを積まないはず');
+});
+
+// T2: 無変更ガードは sessionModifiedRoomIds.add も含めて早期returnする（withFinishUndoのfn自体を
+// 実行しない）。無変更時の undo 件数assert（恒真になりうる）と違い、こちらはガードが無いと
+// sessionModifiedRoomIds に記録されてしまうため、ガードの有無を実際に見分けられる。
+test('【失敗系】renameExteriorRoom: 無変更はsessionModifiedRoomIdsに記録しない（trim後空白付き同名を含む）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  state.sessionModifiedRoomIds.clear();
+
+  state.renameExteriorRoom(room.id, 'テラス'); // 同名
+  assert.equal(state.sessionModifiedRoomIds.has(room.id), false, '同名は無変更としてsessionModifiedRoomIdsに記録しないはず');
+
+  state.renameExteriorRoom(room.id, '  テラス  '); // 前後空白付き同名（trim後は同じ）
+  assert.equal(state.sessionModifiedRoomIds.has(room.id), false, '前後空白付き同名も無変更のはず');
 });
 
 // ---- _syncExteriorRows: 屋外階段は既存行のpartを上書きしない（旧挙動維持） ----
