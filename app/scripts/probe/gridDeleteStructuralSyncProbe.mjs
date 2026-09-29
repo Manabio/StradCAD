@@ -9,14 +9,9 @@
 //
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/gridDeleteStructuralSyncProbe.mjs [入力.stq] [通り芯ラベル省略可]
 //
-// B-1（リード裁定・QA差し戻し・2026-09-25）: I4（undo/redo一致）は柱・梁・基礎（構造フィールド。
-// columns/beams/footings）だけで合否を決める。壁の幾何（wallGeom/wallCount。アーキ壁）は対象外——
-// 13.stqでredo後にwallGeomだけがドリフトする既知の不具合が**HEAD（3055191。案P・本タスクの変更前）
-// でも再現する**ことをgit stashで実証済み。原因はcenterLineOps.jsの通り芯削除が使う
-// serializeGraph→restoreGraphの往復（beforeArch/afterArchスナップショット方式）とPlanGraphの
-// chamferWalls reaction（core/planGraph.js）の組合せが完全な冪等性を持たないという、本タスク
-// （構造同期・案P）とは無関係な既存の性質——修正は別タスクとしてリードがユーザーへ報告する
-// （このprobeでは検出だけ行い、「注意」として表示するに留める。NGにはしない）。
+// B-1（撤去済み・2026-09-29）: 壁幾何のドリフトは CenterLine.value の意味が参照解決の成否で変わる
+// ことが真因で、2026-09-29 に是正（`core/centerLine.js`・`graphSnapshot.js`）。以後は
+// wallGeom/wallCount も I4a/I4b の合否に含める。
 //
 // I5（2026-09-28是正）: 壁参照（片端含む。hasExternalCenterLineReferencesの
 // _structuralRefsToCL.walls が axisCL/clStart/clEnd のいずれも見る）・柱/梁/基礎等の部材参照・
@@ -140,18 +135,6 @@ function diffDumps(a, b, { ignoreFields = ['clRefs'] } = {}) {
     if (av !== bv) diffs.push({ floor: k, before: a[k] ?? null, after: b[k] ?? null });
   }
   return diffs;
-}
-
-// B-1用: 壁の幾何（wallGeom/wallCount）だけを比較する（既知の不具合の検出専用。NG判定には使わない）。
-function diffWallFieldsOnly(a, b) {
-  const floors = [];
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const k of keys) {
-    const wa = JSON.stringify({ wallGeom: a[k]?.wallGeom ?? null, wallCount: a[k]?.wallCount ?? null });
-    const wb = JSON.stringify({ wallGeom: b[k]?.wallGeom ?? null, wallCount: b[k]?.wallCount ?? null });
-    if (wa !== wb) floors.push(k);
-  }
-  return floors;
 }
 
 function printDiffs(diffs, limit = 5) {
@@ -325,33 +308,23 @@ ok(idempotentDiffs.length === 0, 'I3: 削除後もう1回request("all")しても
 if (idempotentDiffs.length > 0) printDiffs(idempotentDiffs);
 
 // I4: undo→whenIdle後のダンプが基準と一致、redo→whenIdle後が削除直後と一致。
-// B-1: 合否は構造フィールド（columns/beams/footings。clRefsは前述のとおり除外）だけで決める——
-// wallGeom/wallCountは既知の不具合（上記コメント参照）の検出専用に別途調べ、「注意」表示に留める。
-const STRUCT_ONLY_IGNORE = ['clRefs', 'wallGeom', 'wallCount'];
+// 合否は clRefs を除く全フィールド（columns/beams/footings/wallGeom/wallCount）で決める
+// （B-1 撤去・2026-09-29。壁幾何も合否に含める）。
+const STRUCT_ONLY_IGNORE = ['clRefs'];
 
 undoManager.undo();
 await h.probeSync.whenIdle();
 const afterUndoDump = await dumpAll(h);
 const undoDiffs = diffDumps(baselineDump, afterUndoDump, { ignoreFields: STRUCT_ONLY_IGNORE });
-ok(undoDiffs.length === 0, 'I4a/G3: undo後のダンプ（構造フィールド：柱・梁・基礎）が削除前の基準と一致する（既に全平面厳密判定）');
+ok(undoDiffs.length === 0, 'I4a/G3: undo後のダンプ（構造フィールド・壁幾何）が削除前の基準と一致する（既に全平面厳密判定）');
 if (undoDiffs.length > 0) printDiffs(undoDiffs);
-const undoWallDiffs = diffWallFieldsOnly(baselineDump, afterUndoDump);
-if (undoWallDiffs.length > 0) {
-  console.log(`注意: I4aの壁幾何(wallGeom/wallCount)に${undoWallDiffs.length}階分差分あり（${undoWallDiffs.join(', ')}）——` +
-    'B-1・既知の不具合（HEAD 3055191でも再現。案Pとは無関係。NGにしない）');
-}
 
 undoManager.redo();
 await h.probeSync.whenIdle();
 const afterRedoDump = await dumpAll(h);
 const redoDiffs = diffDumps(afterDeleteDump, afterRedoDump, { ignoreFields: STRUCT_ONLY_IGNORE });
-ok(redoDiffs.length === 0, 'I4b/G4: redo後のダンプ（構造フィールド：柱・梁・基礎）が削除直後と一致する（全平面厳密）');
+ok(redoDiffs.length === 0, 'I4b/G4: redo後のダンプ（構造フィールド・壁幾何）が削除直後と一致する（全平面厳密）');
 if (redoDiffs.length > 0) printDiffs(redoDiffs);
-const redoWallDiffs = diffWallFieldsOnly(afterDeleteDump, afterRedoDump);
-if (redoWallDiffs.length > 0) {
-  console.log(`注意: I4bの壁幾何(wallGeom/wallCount)に${redoWallDiffs.length}階分差分あり（${redoWallDiffs.join(', ')}）——` +
-    'B-1・既知の不具合（HEAD 3055191でも再現。案Pとは無関係。NGにしない）');
-}
 
 // ---- G5（段階(g)）: 検出力の対照。undoRecordsを一切forwardしない箱無効ハーネスで同じ削除→undoを
 // 行い、他平面に差分が残ることを確認する（0件なら検出力なしと明記してNGにしない）----

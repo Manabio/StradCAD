@@ -113,18 +113,6 @@ function diffDumps(a, b, { ignoreFields = ['clRefs'] } = {}) {
   return diffs;
 }
 
-// B-1と同種: 壁の幾何（wallGeom/wallCount）だけを比較する（既知の不具合の検出専用。NG判定には使わない）。
-function diffWallFieldsOnly(a, b) {
-  const floors = [];
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const k of keys) {
-    const wa = JSON.stringify({ wallGeom: a[k]?.wallGeom ?? null, wallCount: a[k]?.wallCount ?? null });
-    const wb = JSON.stringify({ wallGeom: b[k]?.wallGeom ?? null, wallCount: b[k]?.wallCount ?? null });
-    if (wa !== wb) floors.push(k);
-  }
-  return floors;
-}
-
 function printDiffs(diffs, limit = 5) {
   for (const d of diffs.slice(0, limit)) {
     console.log(`  差分[${d.floor}]:`);
@@ -332,8 +320,8 @@ const idempotentDiffs = diffDumps(afterDeleteDump, afterSecondRun);
 ok(idempotentDiffs.length === 0, '(3) 削除後もう1回同期しても全階ダンプ差分ゼロ（冪等）');
 if (idempotentDiffs.length > 0) printDiffs(idempotentDiffs);
 
-// (4) undo→whenIdle後のダンプが基準と一致、redo→whenIdle後が削除直後と一致（構造フィールドのみ）。
-const STRUCT_ONLY_IGNORE = ['clRefs', 'wallGeom', 'wallCount'];
+// (4) undo→whenIdle後のダンプが基準と一致、redo→whenIdle後が削除直後と一致（壁幾何も合否に含む。B-1 撤去・2026-09-29）。
+const STRUCT_ONLY_IGNORE = ['clRefs'];
 
 undoManager.undo();
 await h.probeSync.whenIdle();
@@ -354,11 +342,6 @@ if (chosenHasOwnWall) {
   ok(h.project.activeGraph.excludedWallBeamAxes.size === excludedSizeBefore,
     '(6) undo後もexcludedWallBeamAxesの件数は変わらない');
 }
-const undoWallDiffs = diffWallFieldsOnly(baselineDump, afterUndoDump);
-if (undoWallDiffs.length > 0) {
-  console.log(`注意: (4a)の壁幾何(wallGeom/wallCount)に${undoWallDiffs.length}階分差分あり（${undoWallDiffs.join(', ')}）——` +
-    'B-1と同種の既知の性質の可能性（NGにしない）');
-}
 
 undoManager.redo();
 await h.probeSync.whenIdle();
@@ -366,11 +349,6 @@ const afterRedoDump = await dumpAll(h);
 const redoDiffs = diffDumps(afterDeleteDump, afterRedoDump, { ignoreFields: STRUCT_ONLY_IGNORE });
 ok(redoDiffs.length === 0, '(4b)/G4: redo後のダンプ（構造フィールド）が削除直後と一致する（全平面厳密）');
 if (redoDiffs.length > 0) printDiffs(redoDiffs);
-const redoWallDiffs = diffWallFieldsOnly(afterDeleteDump, afterRedoDump);
-if (redoWallDiffs.length > 0) {
-  console.log(`注意: (4b)の壁幾何(wallGeom/wallCount)に${redoWallDiffs.length}階分差分あり（${redoWallDiffs.join(', ')}）——` +
-    'B-1と同種の既知の性質の可能性（NGにしない）');
-}
 
 setCenterLineStructuralListener(null);
 

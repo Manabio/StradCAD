@@ -98,29 +98,6 @@ function diffDumps(a, b) {
   return diffs;
 }
 
-// B-1と同種: 壁の幾何（wallGeom/wallCount）だけを比較する（既知の不具合の検出専用。NG判定には使わない）。
-function diffWallFieldsOnly(a, b) {
-  const floors = [];
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const k of keys) {
-    const wa = JSON.stringify({ wallGeom: a[k]?.wallGeom ?? null, wallCount: a[k]?.wallCount ?? null });
-    const wb = JSON.stringify({ wallGeom: b[k]?.wallGeom ?? null, wallCount: b[k]?.wallCount ?? null });
-    if (wa !== wb) floors.push(k);
-  }
-  return floors;
-}
-
-function diffStructOnly(a, b) {
-  const diffs = [];
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const k of keys) {
-    const strip = (o) => o && { columns: o.columns, beams: o.beams, footings: o.footings };
-    const av = JSON.stringify(strip(a[k]) ?? null), bv = JSON.stringify(strip(b[k]) ?? null);
-    if (av !== bv) diffs.push({ floor: k, before: a[k] ?? null, after: b[k] ?? null });
-  }
-  return diffs;
-}
-
 function printDiffs(diffs, limit = 5) {
   for (const d of diffs.slice(0, limit)) {
     console.log(`  差分[${d.floor}]:`);
@@ -405,14 +382,9 @@ await h.probeSync.whenIdle();
 const clAfterUndo = h.project.activeGraph.centerLines.find(c => c.id === chosen.id);
 ok(clAfterUndo?.value === originalValue, `M7: undoでCL値が移動前(${Math.round(originalValue)})に戻る（実際: ${clAfterUndo?.value}）`);
 const afterUndoDump = await dumpAll(h);
-const undoDiffs = diffStructOnly(baselineDump, afterUndoDump);
-ok(undoDiffs.length === 0, 'M7(G3・厳密): undo後のダンプ（構造フィールド）が基準と一致する（自階・他平面とも厳密判定。段階(g)）');
+const undoDiffs = diffDumps(baselineDump, afterUndoDump);
+ok(undoDiffs.length === 0, 'M7(G3・厳密): undo後のダンプ（dumpの全フィールド。壁幾何を含む）が基準と一致する（自階・他平面とも厳密判定。段階(g)）');
 if (undoDiffs.length > 0) printDiffs(undoDiffs);
-const undoWallDiffs = diffWallFieldsOnly(baselineDump, afterUndoDump);
-if (undoWallDiffs.length > 0) {
-  console.log(`注意: undo後の壁幾何(wallGeom/wallCount)に${undoWallDiffs.length}階分差分あり（${undoWallDiffs.join(', ')}）——` +
-    'B-1と同種の既知の性質の可能性（NGにしない）');
-}
 
 // ---- M8（Q1裁定・dedupeColumnsByAxis対応・2026-09-25）: 移動→undo→同期後、全階で同じAXIS座標
 // （CL_OVERLAP_TOL_MM）に柱が2本以上ある箇所が0本（NG判定）。既存ソルバーが「同座標だがアンカーCLが
@@ -439,14 +411,9 @@ ok(dupSpotsAfterUndo === 0, `M8: 移動→undo→同期後、全階で同じAXIS
 undoManager.redo();
 await h.probeSync.whenIdle();
 const afterRedoDump = await dumpAll(h);
-const redoDiffs = diffStructOnly(afterMoveDump, afterRedoDump);
-ok(redoDiffs.length === 0, 'M7/G4: redo後のダンプ（構造フィールド）が移動直後と一致する（全平面厳密）');
+const redoDiffs = diffDumps(afterMoveDump, afterRedoDump);
+ok(redoDiffs.length === 0, 'M7/G4: redo後のダンプ（dumpの全フィールド。壁幾何を含む）が移動直後と一致する（全平面厳密）');
 if (redoDiffs.length > 0) printDiffs(redoDiffs);
-const redoWallDiffs = diffWallFieldsOnly(afterMoveDump, afterRedoDump);
-if (redoWallDiffs.length > 0) {
-  console.log(`注意: redo後の壁幾何(wallGeom/wallCount)に${redoWallDiffs.length}階分差分あり（${redoWallDiffs.join(', ')}）——` +
-    'B-1と同種の既知の性質の可能性（NGにしない）');
-}
 
 setCenterLineStructuralListener(null);
 
@@ -469,7 +436,7 @@ if (g5Toast !== null) {
   undoManager.undo();
   await hNoBox.probeSync.whenIdle();
   const afterUndoDumpNoBox = await dumpAll(hNoBox);
-  const g5Diffs = diffStructOnly(baselineDumpNoBox, afterUndoDumpNoBox);
+  const g5Diffs = diffDumps(baselineDumpNoBox, afterUndoDumpNoBox);
   if (g5Diffs.length === 0) {
     console.log('G5: 検出力なし（このデータ・この操作では記録を無効にしても他平面に差分が出ない）');
   } else {
