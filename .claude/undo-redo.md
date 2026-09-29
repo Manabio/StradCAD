@@ -51,6 +51,7 @@ plane作成・新階同期・切替・全階の構造再計算が複数階へ波
 - 中心線削除の**壁由来梁芯の道連れ削除**（`transform/centerLineOps.js`。ユーザー承認済み例外・2026-09-25。`.claude/structural-model.md`「壁由来梁芯の道連れ削除」参照）は上記の構造同期とは別物——別ライフサイクルの後追い処理ではなく、中心線削除エントリと同じundo/redoの対象になる。**CL削除＝境界（ステップ3・2026-09-27）以降**は削除本体と同じ`runInAction`ではなく、後始末→壁再生成の**後**の別の`runInAction`でグラフを直接変更するが、それでも同じundoエントリの`before`/`after`スナップショット（`serializeGraph`）に写り込む点は変わらない。そのため専用のundo登録は不要で、中心線削除エントリ自体のundo/redoでそのまま一緒に戻る、という結論は維持される。
 
 ## 落とし穴
+- スナップショットの往復（`serializeGraph→restoreGraph`）は参照解決の成否に依存してはならない（2026-09-29）。保存値は計算値（絶対座標）とし、復元時に解決できない参照は静的化する（`.claude/data-model.md`「CLの`value`は常に絶対座標」参照）。「参照が解決できる間だけ恒等」な往復は、undo/redoの箱・他階のIDB・.stqのどこかで参照先が先に消えた瞬間に値が変わり、壁だけがドリフトする形で表面化する。同じ理由で、通り芯（`restoreStructCLs`）→階グラフ（`restoreGraph`）の復元順序は崩さない。往復の冪等性は`scripts/probe/snapshotRoundTripProbe.mjs`で実データ（13/14/moku4.stq）に対して確かめられる。
 - undo/redo内のフロア切替・IDB書き込みは非同期の投げ放し。連打は`historyNavRef`で弾き、切替中に履歴が動いた場合はpeek再照合で実行を中止する。
 - 自由入力フィールドはキーストロークではなくフォーカス〜ブラーで1エントリ（`beginFieldUndo`/`endFieldUndo`）。onChange単位でpushを足さないこと。
 - 構造同期（`structuralSync`）はfire-and-forget。active graphを丸ごと読む・差し替える処理（階切替・モード境界・履歴コンテキスト切替・階追加・保存・通り芯削除）は先に`structuralSync.whenIdle()`を待つこと。

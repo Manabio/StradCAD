@@ -5,6 +5,9 @@
 ## CLが座標の源泉
 Intersection・Shape・Wall・Opening・構造部材はすべて自前の座標を持たず、参照するCLの`effectiveValue`から導出する。CLを動かすと連鎖的に全図形が追従する。
 
+## CLの`value`は常に絶対座標（参照は解決できるときだけ優先。2026-09-29）
+階固有の中心線・補助線は`refId`＋`refOffset`で親CL（通り芯または他の中心線）に追従する（はね出し追従）が、`value`の意味は参照の解決可否で変えない——解決済みなら`親.value + refOffset`、それ以外（参照なし・未解決）は`_value`＝絶対座標をそのまま返す（未解決時に`refOffset`を足すと二重加算になる。経緯は`.claude/cl-conversion-limits.md`「採った設計の記録」）。この不変条件を支える2つの規律: (1) `serializeGraph`/`serializeStructCLs`は`_value`ではなく計算値`cl.value`を保存する（往復が参照解決に依存しなくなる。in-memoryの`_value`を常時同期するreactionは持たない）。(2) 復元の最終段（`resolveCenterLineRefs`／`resolveExtentWallRefs`。全CL・全壁登録後）で解決できない`refId`・`extentLoRef/HiRef`は静的化して`console.warn`を出し、宙に浮いた参照を黙って残さない。`addCenterLine`直後の解決（`resolveNewCenterLineRefs`）では静的化しない——復元途中は親より先に子が登録される正当な順序があるため。旧データは読込み時に自然に自己修復されるので移行処理は持たない。通り芯への昇格でstructGraphに無い`refId`は渡さない。落とし穴: extentの静的化値は`_extentLo/_extentHi`（通常null＝自由端）で「最後の座標」ではない。`_value`を直読してCLを作り直す箇所（`wallBeamAxisFollow.js`・`centerLineMerge.js`・`centerLineFloorSync.js`等）は参照が解決できる限り実害が無いため据え置き。
+
 ## pendingDelta遅延評価とbake
 ドラッグ中は`pendingDelta`(CL)のみ更新し`value`は変えない。**reaction（chamferWalls等）は`effectiveValue`ではなく`value`を直接監視すること**——`effectiveValue`を監視するとドラッグ中の毎フレームで誤発火する。確定時`bakeCLValue`で`value`に書き込み`pendingDelta`を0に戻す。SpatialIndexもbake後（`value`変化時）にのみ自動再構築される。
 
