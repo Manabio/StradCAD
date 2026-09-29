@@ -369,13 +369,16 @@ export function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset,
 /**
  * finishBoundary.js ステップ2（内周壁の全再生成）の対象Roomかどうかを判定する。
  * 対象外: UNDEFINED（未定義）・屋外部屋（kind===EXTERIOR。壁を持たない）・
- * 部分指定（referenceRoomIds あり。ただしfeature=STAIRまたは昇降路（isShaftFeature。EV等）は
+ * 部分指定（referenceRoomIds あり。ただしfeature=STAIRまたは昇降路（isShaftFeature。昇降機）は
  * 例外で対象に含める——どちらも「親部屋の中の一部だけ壁を持つ」実体のため、部分指定の一般則
  * （親が外周壁を担う）の対象外にする。昇降路も階段と同型: 部分指定のまま（isInteriorWallTarget
  * 対象外のまま）だと自分の外周を一切持てず、親の外周（自分の領域を含んだ全体）にしか壁が生成
- * されない——親部屋の中に埋まったEVの隅（親領域の内部）には壁も壁交点柱（structural/
- * woodAutoFill.js 3a）も立たない実測不良になる。QA実測2026-09-29:部分指定EVは壁8・柱4本で
- * x=4000側の2隅が無い）・2a部屋（under2aRoomIds。階段下は別管理）。
+ * されない——親部屋の中に埋まった昇降機の隅（親領域の内部）には壁も壁交点柱（structural/
+ * woodAutoFill.js 3a）も立たない実測不良になる。QA実測2026-09-29:部分指定の昇降機は壁8・
+ * 柱4本で x=4000側の2隅が無い）・2a部屋（under2aRoomIds。階段下は別管理）。
+ * 部屋名ダイアログからは部分指定の昇降路を作れない（roomNamingOptions.js
+ * featureOptionsForDialog）が、CL削除後の再解釈（roomReinterpret.js）で独立した昇降路が
+ * 部分指定になりうるため、この例外は残す（2026-09-29 QA実測）。
  * @param {import('@core').Room} room
  * @param {Set<string>} under2aRoomIds
  * @returns {boolean}

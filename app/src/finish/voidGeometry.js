@@ -1,5 +1,5 @@
 /**
- * 吹抜け（feature=VOID）・昇降路（isShaftFeature。EV等）の×描画
+ * 吹抜け（feature=VOID）・昇降路（isShaftFeature。昇降機）の×描画
  * （壁内4頂点を対角に結ぶ線分）の幾何計算。
  *
  * 描画ルールをここへ集約し、レンダラ（renderer/VoidLayer.jsx）は結果を Konva 要素へ写像
@@ -22,7 +22,7 @@ import { faceRect } from './wallFaces.js';
 export const UPPER_VOID_DASH_PX = [8, 4];
 
 /**
- * グラフ全体から吹抜け・昇降路（EV等）の×描画データを列挙する。
+ * グラフ全体から吹抜け・昇降路（昇降機）の×描画データを列挙する。
  * 矩形（RoomLabelsLayer.jsx の isRectangular 判定と同じ方式。ただし refreshCells 済みで比較）
  * でない部屋・壁内4頂点が解決できない部屋はスキップする。
  * @returns {{id:string, feature:string, x1:number, y1:number, x2:number, y2:number}[]}
@@ -48,7 +48,7 @@ export function computeVoidCrosses(graph) {
 
 /**
  * 直下階から見た「上部吹抜け」ラベル（固定文言）を付けるかどうか。
- * VOID のみ true——昇降路（EV等）は同じシャフトが階をまたいで続くだけなので、上部吹抜け
+ * VOID のみ true——昇降路（昇降機）は同じシャフトが階をまたいで続くだけなので、上部吹抜け
  * ラベルは付けず破線の×のみで表す（裁定Q8）。
  * @param {{feature:string}} cross computeVoidCrosses の返り値の要素
  * @returns {boolean}

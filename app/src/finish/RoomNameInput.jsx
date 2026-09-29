@@ -3,12 +3,14 @@ import { observer } from 'mobx-react-lite';
 import { roomBounds } from './gridCells.js';
 import { RoomFeature } from '@core';
 import {
-  ROOM_KIND_OPTIONS, ROOM_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature,
+  ROOM_KIND_OPTIONS, featureOptionsForDialog, featureToSelectValue, selectValueToFeature,
 } from './roomNamingOptions.js';
 
-// 区分（屋内/屋外。kind）と属性（なし/階段/吹抜け/EV等。feature）の2セレクタ。
+// 区分（屋内/屋外。kind）と属性（なし/階段/吹抜け/昇降機。feature）の2セレクタ。
 // 〔屋内|屋外〕は kind（base軸、相互排他・常にどちらかON）。
-// 〔なし|階段|吹抜け|EV等〕は feature（属性軸、相互排他・個別ON/OFF可）。
+// 〔なし|階段|吹抜け|昇降機〕は feature（属性軸、相互排他・個別ON/OFF可）。
+// 選択肢は featureOptionsForDialog（roomNamingOptions.js）が唯一の供給源——部分指定
+// （referenceRoomIds 非空）は昇降機を選べない（S5）。
 // 新規Room（未指定セル・統合・新規部分指定）の命名専用ダイアログ。既存部屋の編集は
 // 仕上げ表・内部タブのカードへ移した。本ダイアログに削除は無い。
 
@@ -90,7 +92,7 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
             title={stairEnabled ? undefined : '上階に採用階がありません'}
             style={selectStyle}
           >
-            {ROOM_FEATURE_OPTIONS.map(opt => (
+            {featureOptionsForDialog(room).map(opt => (
               <option
                 key={featureToSelectValue(opt.value)}
                 value={featureToSelectValue(opt.value)}

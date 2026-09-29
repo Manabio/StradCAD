@@ -7,7 +7,7 @@
 //   通り芯（labeled、structGraph共有）: X -1000/3500/8000（3本・2スパン4500mm）、
 //     Y -1000/5000/9500（3本・スパン6000mm/4500mm）。gridIntersections（S造の柱配置選択子）・
 //     gridEdges（大梁配置選択子）で柱・大梁が立つ間隔にし、開口辺（階段0/1000/2000・
-//     EV/VOID 6000/6500/7000/7500）とは一切重ならない座標を選んだ（QAレビュー指摘対応：
+//     昇降機/VOID 6000/6500/7000/7500）とは一切重ならない座標を選んだ（QAレビュー指摘対応：
 //     柱0本・大梁0本では小梁の受け先＝hostが無く「開口梁芯に小梁が架かる」ところまで
 //     目視できないため追加）。
 //   通り芯格子は2×2の4マス（セルA〜D）に分割され、全階とも「main」部屋で埋めてfootprint
@@ -15,7 +15,7 @@
 //     セルA(x:[-1000,3500] y:[-1000,5000])＝階段ゾーン。ゾーン内の4方向ストリップだけ
 //       main部屋にし、内側（階段本体のfootprint）は各階の階段関連部屋（1F/2F=階段、
 //       3F=STAIR_VOID）が占める。
-//     セルB(x:[3500,8000] y:[5000,9500])＝EV/VOIDゾーン。2Fのみ内側をEV、3Fのみ内側を
+//     セルB(x:[3500,8000] y:[5000,9500])＝昇降機/VOIDゾーン。2Fのみ内側を昇降機、3Fのみ内側を
 //       VOIDにし、1Fは丸ごとmain。
 //     セルC・セルDは全階ともmain部屋1つでそのまま埋める。
 //   1階: 鉄骨SWITCHBACK階段（landing+outboundのみを部屋化。returnKeyが破れ先＝2階からの
@@ -23,7 +23,7 @@
 //        （ユーザー裁定2026-09-28。floorHeightAbove(1F)=2Fの階高を使ってlevelOffsetを換算する）。
 //   2階: syncUpperFloors（実装本体・本番同関数）で1階の階段を自動設置（フットプリント一致の
 //        コピー。stairFilterForの「下階に到達元の階段がある」条件を満たす中間階）＋
-//        EV部屋（isShaftFeature。床なし＝上階スラブ開口）を1部屋、階段と別ゾーンに独立で追加。
+//        昇降機部屋（isShaftFeature。床なし＝上階スラブ開口）を1部屋、階段と別ゾーンに独立で追加。
 //        1階階段の到達階でもあるため、踊り場受け梁(LG)がここに生成される。
 //   3階（最上階）: syncUpperFloorsが自動でSTAIR_VOID Room（階段吹抜け。1階階段のfootprintを
 //        丸ごと翻訳）を指定する＋VOID部屋を1部屋、別ゾーンに独立で追加。2階階段（1階の
@@ -153,10 +153,10 @@ function cellAStrips(g, gx0, gx1, gy0, gy1, sx0, sx1, sy0, sy1) {
 }
 const g1CellA = cellAStrips(g1, GX0, GX1, GY0, GY1, x0, x1, y0, y1);
 
-// ---- 2階: EV部屋（階段ゾーンと重ならない別ゾーン。セルB(x:[3500,8000] y:[5000,9500])内側。
+// ---- 2階: 昇降機部屋（階段ゾーンと重ならない別ゾーン。セルB(x:[3500,8000] y:[5000,9500])内側。
 // isShaftFeature=床なし=上階スラブ開口）。syncUpperFloorsより前に追加しておく（同期処理は
 // 階段footprintだけを見るため順序は無関係）。
-// CenterLineはextent省略時「全幅/全高」の無限直線として扱われるため、EV/VOIDのX/Y範囲は
+// CenterLineはextent省略時「全幅/全高」の無限直線として扱われるため、昇降機/VOIDのX/Y範囲は
 // 階段のfootprint(x:0-2000,y:0-4500)とも通り芯(-1000/3500/8000, -1000/5000/9500)とも
 // 重ならない内側の座標(6000-7000, 6500-7500)を選ぶ（実測で確認済み。重なると意図せずセルが
 // 分割される——team-lessons「実データに無い構成は合成テストだけで確定させない」と同型の罠）。
@@ -165,7 +165,7 @@ const evXb = g2.addCenterLine(CenterLineType.VERTICAL, 7000, ARCH);
 const evYa = g2.addCenterLine(CenterLineType.HORIZONTAL, 6500, ARCH);
 const evYb = g2.addCenterLine(CenterLineType.HORIZONTAL, 7500, ARCH);
 const evKey = `${evXa.id}:${evYa.id}:${evXb.id}:${evYb.id}`;
-g2.addRoom(new Set([evKey])).setFeature(RoomFeature.EV);
+g2.addRoom(new Set([evKey])).setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
 function cellBStrips(g, gx1, gx2, gy1, gy2, zx0, zx1, zy0, zy1) {
   return [
@@ -177,7 +177,7 @@ function cellBStrips(g, gx1, gx2, gy1, gy2, zx0, zx1, zy0, zy1) {
 }
 const g2CellB = cellBStrips(g2, GX1, GX2, GY1, GY2, evXa, evXb, evYa, evYb);
 
-// ---- 3階: VOID部屋（階段吹抜け予定地とも別ゾーン。セルB内側。EVと同じ座標帯を使う——
+// ---- 3階: VOID部屋（階段吹抜け予定地とも別ゾーン。セルB内側。昇降機と同じ座標帯を使う——
 // 階が違うため干渉しない）----
 const voidXa = g3.addCenterLine(CenterLineType.VERTICAL, 6000, ARCH);
 const voidXb = g3.addCenterLine(CenterLineType.VERTICAL, 7000, ARCH);
@@ -192,7 +192,7 @@ const g3CellB = cellBStrips(g3, GX1, GX2, GY1, GY2, voidXa, voidXb, voidYa, void
 const cellCKey = cellKey(GX0, GY1, GX1, GY2);
 const cellDKey = cellKey(GX1, GY0, GX2, GY1);
 
-// 1階: セルB（row2,col2 = x:[3500,8000] y:[5000,9500]）は丸ごとmain（EV/VOIDが無いため単一キー）。
+// 1階: セルB（row2,col2 = x:[3500,8000] y:[5000,9500]）は丸ごとmain（昇降機/VOIDが無いため単一キー）。
 const g1CellB = [cellKey(GX1, GY1, GX2, GY2)];
 
 g1.addRoom(new Set([...g1CellA, ...g1CellB, cellCKey, cellDKey]), 'main');

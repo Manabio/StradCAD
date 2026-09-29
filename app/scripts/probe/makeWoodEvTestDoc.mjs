@@ -5,7 +5,7 @@
 // 「壁生成が feature を問わない」ことの検証になっていなかった（moku4.stq の既存「EV」部屋は独立部屋
 // （referenceRoomIds空）のため isInteriorWallTarget は元々対象——部分指定（親部屋の中に埋め込んだ
 // EV）の不具合はこの経路では踏めない）。本版は
-//   (1) moku4.stq の既存「EV」部屋（独立部屋）へ RoomFeature.EV を明示設定
+//   (1) moku4.stq の既存「EV」部屋（独立部屋）へ RoomFeature.ELEVATOR_EQUIPMENT を明示設定
 //   (2) 1階「売場」の内部セル1つを親部屋の中の**部分指定EV**として切り出す
 //       （FinishModeState.js「その他セル — 新規部分指定」経路と同じ形＝
 //       cells={対象セル}, referenceRoomIds={売場.id}）
@@ -44,15 +44,15 @@ console.log(`=== ${srcPath} を読み込み、(1)独立EVへfeature設定 (2)売
 const plane1 = project.planes.find(p => p.name === '1階');
 const g1 = project.graphMap.get(plane1.id);
 
-// (1) 独立部屋の「EV」（1〜3階すべて）へ RoomFeature.EV を明示設定。
+// (1) 独立部屋の「EV」（1〜3階すべて）へ RoomFeature.ELEVATOR_EQUIPMENT を明示設定。
 let independentTouched = 0;
 for (const plane of project.planes) {
   const g = project.graphMap.get(plane.id);
   for (const room of g.rooms) {
     if (room.name === 'EV' && room.referenceRoomIds.size === 0 && room.feature == null) {
-      room.setFeature(RoomFeature.EV);
+      room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
       independentTouched++;
-      console.log(`${plane.name}: 独立EV部屋(${room.id.slice(0, 8)})へ feature=ev を設定`);
+      console.log(`${plane.name}: 独立EV部屋(${room.id.slice(0, 8)})へ feature=elevatorEquipment を設定`);
     }
   }
 }
@@ -78,7 +78,7 @@ const targetCell = [...hall.cells].find(k => {
 });
 if (!targetCell) throw new Error('ホールの対象セル(0..1820, -9884..-9100)が見つかりません');
 const partialEv = g1.addRoom(new Set([targetCell]), 'EV(部分指定)', crypto.randomUUID(), new Set([hall.id]));
-partialEv.setFeature(RoomFeature.EV);
+partialEv.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 console.log(`1階: ホール(${hall.id.slice(0, 8)})の内部セルへ部分指定EV(${partialEv.id.slice(0, 8)})を追加`, cellBoundsFromKey(targetCell, g1));
 // 判別力のある2隅（修正が無いと柱が立たないはずの座標）。
 const discriminatingCorners = [[0, -9884], [1820, -9884]];

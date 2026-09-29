@@ -61,10 +61,10 @@ async function makeVoidLinkedTwoFloorFixture() {
   return { project, below, above, aym, materialMap };
 }
 
-// ---- QA F4/T5: 昇降路（EV）は階段規則（設置階〜最上階）で連動することの結線固定 ----
-// 3階建て: 1階（below。ym位置に昇降路なし＝通常部屋のみ）／2階（active。ym位置にEV）／
-// 3階（top。ym位置にもEV＝昇降路が上階へ続く）。階段と同じ「設置階〜最上階」ルールなら、
-// 2階で偏芯を指定すると3階（上）へは伝播するが、1階（下。EVが無い）へは伝播しないはず
+// ---- QA F4/T5: 昇降路（昇降機）は階段規則（設置階〜最上階）で連動することの結線固定 ----
+// 3階建て: 1階（below。ym位置に昇降路なし＝通常部屋のみ）／2階（active。ym位置に昇降機）／
+// 3階（top。ym位置にも昇降機＝昇降路が上階へ続く）。階段と同じ「設置階〜最上階」ルールなら、
+// 2階で偏芯を指定すると3階（上）へは伝播するが、1階（下。昇降機が無い）へは伝播しないはず
 // （shaftOrStairLinksがSTAIR/STAIR_VOIDと同格でisShaftFeatureを見ている、という結線を
 // 全体実行で固定する——単体テストのshaftOrStairLinks（純関数）だけでは呼び出し側
 // linkFlagsOnGraph／linkedGroupForの結線までは守れない）。
@@ -98,16 +98,16 @@ async function makeEvLinkedThreeFloorFixture() {
   below.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
   await runFinishEntryBoundary(below, project);
 
-  // 2階（active）: ym位置の下側をEVにする
+  // 2階（active）: ym位置の下側を昇降機にする
   const a = buildGrid(active);
-  active.addRoom(new Set([`${a.x0.id}:${a.y0.id}:${a.x1.id}:${a.ym.id}`]), '昇降路').setFeature(RoomFeature.EV);
+  active.addRoom(new Set([`${a.x0.id}:${a.y0.id}:${a.x1.id}:${a.ym.id}`]), '昇降路').setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
   active.addRoom(new Set([`${a.x0.id}:${a.ym.id}:${a.x1.id}:${a.y1.id}`]), '部屋2B');
   active.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
   await runFinishEntryBoundary(active, project);
 
-  // 3階: ym位置の下側にもEV（昇降路が上へ続く）
+  // 3階: ym位置の下側にも昇降機（昇降路が上へ続く）
   const t = buildGrid(top);
-  top.addRoom(new Set([`${t.x0.id}:${t.y0.id}:${t.x1.id}:${t.ym.id}`]), '昇降路').setFeature(RoomFeature.EV);
+  top.addRoom(new Set([`${t.x0.id}:${t.y0.id}:${t.x1.id}:${t.ym.id}`]), '昇降路').setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
   top.addRoom(new Set([`${t.x0.id}:${t.ym.id}:${t.x1.id}:${t.y1.id}`]), '部屋3B');
   top.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
   await runFinishEntryBoundary(top, project);
@@ -116,7 +116,7 @@ async function makeEvLinkedThreeFloorFixture() {
   return { project, below, active, top, aym: a.ym, materialMap };
 }
 
-test('propagateCLEccentricities【QA F4/T5】: 昇降路（EV）に接するCLの偏芯は階段規則で複製される——EVが続く上階へは伝播し、EVの無い直下階へは伝播しない', async () => {
+test('propagateCLEccentricities【QA F4/T5】: 昇降路（昇降機）に接するCLの偏芯は階段規則で複製される——昇降機が続く上階へは伝播し、昇降機の無い直下階へは伝播しない', async () => {
   const { project, below, active, top, aym, materialMap } = await makeEvLinkedThreeFloorFixture();
   active.setCLEccentricity(aym.id, { mode: 'face', value: 0, side: 1, backing: '' });
 
@@ -169,13 +169,11 @@ test('【失敗系】propagateCLEccentricities: clIds空配列なら何もしな
   assert.deepEqual(undoRecords, []);
 });
 
-// ---- shaftOrStairLinks（純関数）: 昇降路（EV等）は階段側の連動ルールに合流する（裁定Q7） ----
-for (const feature of [RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV]) {
-  test(`shaftOrStairLinks: feature=${feature} の部屋に接するCLは stair フラグが立ち void フラグは立たない`, () => {
-    const flags = shaftOrStairLinks([{ feature }]);
-    assert.deepEqual(flags, { stair: true, void: false });
-  });
-}
+// ---- shaftOrStairLinks（純関数）: 昇降路（昇降機）は階段側の連動ルールに合流する（裁定Q7） ----
+test('shaftOrStairLinks: feature=elevatorEquipment の部屋に接するCLは stair フラグが立ち void フラグは立たない', () => {
+  const flags = shaftOrStairLinks([{ feature: RoomFeature.ELEVATOR_EQUIPMENT }]);
+  assert.deepEqual(flags, { stair: true, void: false });
+});
 
 test('shaftOrStairLinks: VOID の部屋に接するCLは void のみ立つ', () => {
   const flags = shaftOrStairLinks([{ feature: RoomFeature.VOID }]);

@@ -4,10 +4,6 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, StairType } from '@core';
 import { getAllCells } from '../gridCells.js';
 
-// 昇降路4属性を固定配列で列挙する（isShaftFeature/SHAFT_FEATURES 本体から作ると、実装側の
-// Setから値を外す変異を入れたときテスト対象も一緒に減って赤にならない——検出力を保つため
-// 独立した固定リストにする）。EVは既存の専用テストがあるため除く。
-const OTHER_SHAFT_FEATURES = [RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV];
 import { slabOpeningRects, slabOpeningFrames, slabOpeningEdges, trimOpeningEdgesAgainstStair, floorOpeningEdges } from './slabOpening.js';
 
 // 2×1マス（x:0-1000-2000, y:0-1500）のグリッドを持つグラフとセルキーを作る。
@@ -43,37 +39,21 @@ test('吹抜け・階段吹抜けRoomの占有セルが開口になる', () => {
   assert.ok(rects.every(r => r.y1 === 0 && r.y2 === 1500));
 });
 
-// ---- EV（エレベーターシャフト。実装指示書ステップ1・2026-09-28）はVOIDと同じkind='void'扱い ----
-test('EV Roomの占有セルが開口になる（kind=\'void\'扱い＝slabOpeningFramesからは除かれ、slabOpeningRectsには含まれる）', () => {
+// ---- 昇降機（isShaftFeature。実装指示書ステップ1・2026-09-28）はVOIDと同じkind='void'扱い ----
+test('昇降機Roomの占有セルが開口になる（kind=\'void\'扱い＝slabOpeningFramesからは除かれ、slabOpeningRectsには含まれる）', () => {
   const { graph, left, right } = makeGrid();
-  graph.addRoom(new Set([left])).setFeature(RoomFeature.EV);
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
   graph.addRoom(new Set([right])).setFeature(RoomFeature.STAIR_VOID);
 
   const rects = slabOpeningRects(graph);
-  assert.equal(rects.length, 2, 'EVもSTAIR_VOIDと同じく開口の範囲（rects）には含まれる');
+  assert.equal(rects.length, 2, '昇降機もSTAIR_VOIDと同じく開口の範囲（rects）には含まれる');
   const xs = rects.map(r => [r.x1, r.x2]).sort((a, b) => a[0] - b[0]);
   assert.deepEqual(xs, [[0, 1000], [1000, 2000]]);
 
   const frames = slabOpeningFrames(graph);
-  assert.equal(frames.length, 1, 'EVはVOIDと同じくslabOpeningFramesの縁からは除かれ、STAIR_VOID側だけが残る');
+  assert.equal(frames.length, 1, '昇降機はVOIDと同じくslabOpeningFramesの縁からは除かれ、STAIR_VOID側だけが残る');
   assert.deepEqual([frames[0].cl.x1, frames[0].cl.x2], [1000, 2000], '残るのはright（STAIR_VOID）のみ');
 });
-
-// ---- 昇降路属性の拡張（DW・貨物用EV・車両用EV。2026-09-28）も同じkind='void'扱い ----
-for (const feature of OTHER_SHAFT_FEATURES) {
-  test(`feature=${feature}（昇降路）の占有セルが開口になる（kind='void'扱い＝slabOpeningFramesからは除かれ、slabOpeningRectsには含まれる）`, () => {
-    const { graph, left, right } = makeGrid();
-    graph.addRoom(new Set([left])).setFeature(feature);
-    graph.addRoom(new Set([right])).setFeature(RoomFeature.STAIR_VOID);
-
-    const rects = slabOpeningRects(graph);
-    assert.equal(rects.length, 2, '昇降路もSTAIR_VOIDと同じく開口の範囲（rects）には含まれる');
-
-    const frames = slabOpeningFrames(graph);
-    assert.equal(frames.length, 1, '昇降路はVOIDと同じくslabOpeningFramesの縁からは除かれ、STAIR_VOID側だけが残る');
-    assert.deepEqual([frames[0].cl.x1, frames[0].cl.x2], [1000, 2000], '残るのはright（STAIR_VOID）のみ');
-  });
-}
 
 test('通常の部屋（床がある）は開口に数えない', () => {
   const { graph, left } = makeGrid();
@@ -530,18 +510,13 @@ test('floorOpeningEdges【QA再指摘F11】: 対角で角だけ接する2開口�
   assert.equal(stairEdge.source, 'stairVoid');
 });
 
-// EVは既存のfeature別専用テスト（上のslabOpeningRects系）が固定しているためDWと2件を固定配列にする
-// （実装本体（SHAFT_FEATURES）から作ると変異で対象ごと減って赤にならないため）。
-const FLOOR_OPENING_SHAFT_FEATURES = [RoomFeature.EV, RoomFeature.DW];
-for (const feature of FLOOR_OPENING_SHAFT_FEATURES) {
-  test(`floorOpeningEdges: 昇降路（feature=${feature}）はsource='shaft'`, () => {
-    const { graph, left } = makeGrid();
-    graph.addRoom(new Set([left])).setFeature(feature);
-    const edges = floorOpeningEdges(graph);
-    assert.equal(edges.length, 4);
-    assert.ok(edges.every(e => e.source === 'shaft' && e.sources.length === 1 && e.sources[0] === 'shaft'));
-  });
-}
+test('floorOpeningEdges: 昇降路（feature=elevatorEquipment）はsource=\'shaft\'', () => {
+  const { graph, left } = makeGrid();
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  const edges = floorOpeningEdges(graph);
+  assert.equal(edges.length, 4);
+  assert.ok(edges.every(e => e.source === 'shaft' && e.sources.length === 1 && e.sources[0] === 'shaft'));
+});
 
 test('floorOpeningEdges: STAIR_VOIDはsource=\'stairVoid\'', () => {
   const { graph, right } = makeGrid();

@@ -191,6 +191,8 @@ const TABS = [
   { id: 'exterior',  label: '外部' },
   { id: 'fittings',  label: '外部建具' },
   { id: 'structure', label: '構造' },
+  { id: 'equipment', label: '機械器具' },
+  { id: 'accessory', label: '附帯' },
   { id: 'common',    label: '共通仕様' },
 ];
 
@@ -321,7 +323,7 @@ const CommonSpecTable = observer(({ graph, mode }) => {
           value={graph.ceilingBacking} onChange={code => withFinishUndo(graph, () => graph.setCeilingBacking(code))} />
         <PerFloorRow label="床" mode={mode} category="backing"
           value={graph.floorBacking} onChange={code => withFinishUndo(graph, () => graph.setFloorBacking(code))} />
-        {/* 昇降路（EV等）の壁仕上げ材・防音材 — 内部タブに部屋カードを出さず、ここで一括指定する（Q5）。
+        {/* 昇降路（昇降機）の壁仕上げ材・防音材 — 内部タブに部屋カードを出さず、ここで一括指定する（Q5）。
             壁仕上げ材は昇降路部屋の壁厚に効く（edgeComposition.wallDimsWith）。 */}
         <PerFloorSelectRow label="昇降路 壁仕上げ材"
           value={graph.shaftWallMaterial}
@@ -352,6 +354,14 @@ const CommonSpecTable = observer(({ graph, mode }) => {
     </div>
   );
 });
+
+// 空タブの共通プレースホルダ（機械器具・附帯。中身は次ステップ／別課題で実装する）。
+// 既存の空状態の流儀（InteriorTable「部屋が登録されていません」）に合わせる。
+const EmptyTabPlaceholder = observer(({ message }) => (
+  <div style={{ textAlign: 'center', color: '#94a3b8', padding: 20, fontSize: 12 }}>
+    {message}
+  </div>
+));
 
 // ================================================================
 // FinishTable — タブ付きメイン
@@ -423,6 +433,10 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
         ? <StairTab graph={graph} mode={mode} project={project} />
         : activeTab === 'common'
         ? <CommonSpecTable graph={graph} mode={mode} />
+        : activeTab === 'equipment'
+        ? <EmptyTabPlaceholder message="機械器具が登録されていません" />
+        : activeTab === 'accessory'
+        ? <EmptyTabPlaceholder message="附帯は未対応です" />
         : <ExteriorTable
             graph={graph}
             mode={mode}
@@ -467,7 +481,7 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, onA
   // （上階自動設置の無名ペアRoomも同様に表示される＝意図どおり）。
   // 階段吹抜け（STAIR_VOID）は自動管理 Room のため引き続き表に出さない。
   // 未定義の部屋（UNDEFINED）も表に出さない（B: 名前未確定のため命名対象外）。
-  // 昇降路（EV等）は共通仕様「昇降路」で一括指定するため内部タブに出さない（Q5）。
+  // 昇降路（昇降機）は共通仕様「昇降路」で一括指定するため内部タブに出さない（Q5）。
   const rooms = graph.rooms.filter(r =>
     r.kind !== RoomKind.EXTERIOR
     && r.feature !== RoomFeature.STAIR_VOID && r.feature !== RoomFeature.UNDEFINED

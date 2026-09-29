@@ -29,7 +29,7 @@ test('isExteriorRoomGroupRoom: kind===EXTERIORかつfeature!==STAIRの部屋だ�
   const plain    = makeRoom(graph, 'テラス', { kind: RoomKind.EXTERIOR, feature: null });
   const stair    = makeRoom(graph, '', { kind: RoomKind.EXTERIOR, feature: RoomFeature.STAIR });
   const void_    = makeRoom(graph, '吹抜け', { kind: RoomKind.EXTERIOR, feature: RoomFeature.VOID });
-  const ev       = makeRoom(graph, 'EV', { kind: RoomKind.EXTERIOR, feature: RoomFeature.EV });
+  const ev       = makeRoom(graph, 'EV', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ELEVATOR_EQUIPMENT });
   const interior = makeRoom(graph, '部屋', { kind: RoomKind.INTERIOR, feature: null });
 
   assert.equal(isExteriorRoomGroupRoom(plain), true);
@@ -131,9 +131,9 @@ test('buildExteriorGroups: 屋内の部屋は行0件だと群を作らない', (
   assert.equal(groups.length, 0);
 });
 
-test('buildExteriorGroups: 屋外の昇降路（EV）は行0件でも群が出る（HEADのshowLevelRowと同じ扱い。除外しない）', () => {
+test('buildExteriorGroups: 屋外の昇降路は行0件でも群が出る（HEADのshowLevelRowと同じ扱い。除外しない）', () => {
   const graph = makeGraph();
-  const ev = makeRoom(graph, 'EV', { kind: RoomKind.EXTERIOR, feature: RoomFeature.EV });
+  const ev = makeRoom(graph, 'EV', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ELEVATOR_EQUIPMENT });
 
   const groups = buildExteriorGroups(input(graph));
 

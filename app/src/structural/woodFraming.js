@@ -982,7 +982,7 @@ export function sillTopLevelOffsetMm(framing = TRADITIONAL_WOOD_FRAMING) {
 
 /**
  * 火打ち梁を設けられる四角か（16㎡以下の四角の4隅。吹抜け（VOID）は可、階段（STAIR・階段吹抜け STAIR_VOID）内は不可）。
- * 「EV」（仕上げモードで指定＝吹抜け扱い・EV側に部屋仕上げ材なし）は本リポにまだ表現が無く、
+ * 「昇降機」（仕上げモードで指定＝吹抜け扱い・昇降機側に部屋仕上げ材なし）は本リポにまだ表現が無く、
  * 表現方法の裁定後に不可条件へ加える。削除済み部屋（UNDEFINED＝外壁線維持のための残置）は床が
  * 無いものとして不可（ASSUMED）。
  * @param {{areaM2:number, isRectangle:boolean, feature?:string|null}|null|undefined} cell

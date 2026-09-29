@@ -79,7 +79,7 @@ export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
   hipBraceSection: 'WOOD-90x90',   // 火打ち梁は90角
   beamTopBelowFLMm: 100,           // 梁天端はFL−100（土台天端も同じ値。woodFraming.js sillTopLevelOffsetMm）
   floorBeamMaxPitchMm: 1820,       // 床梁は柱間・梁間に1820を超えない位置に設ける
-  hipBraceMaxAreaM2: 16,           // 火打ち梁は16㎡以下の四角の4隅（吹抜け可・EV/階段内は不可）
+  hipBraceMaxAreaM2: 16,           // 火打ち梁は16㎡以下の四角の4隅（吹抜け可・昇降機/階段内は不可）
   // 梁の支持長1820ルール（ステップ3i。ユーザー指示2026-09-19）。columnSupportMaxSpanMm と
   // floorBeamMaxPitchMm は値がたまたま同じ(1820)だが概念は別（前者は梁の支持点間距離に柱を追加する
   // 条件、後者は床梁を架けるセルの短辺の上限）——導出関係を持たず独立した定数として持つ。

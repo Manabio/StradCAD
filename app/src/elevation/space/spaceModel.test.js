@@ -281,70 +281,54 @@ test('【QA指摘A・Phase2】componentOf: STAIR_VOIDは直下の階段室(featu
     'STAIR_VOIDは隣の通常室とは連結しないはず（階段室以外は対象外）');
 });
 
-// ---- EV（エレベーターシャフト。実装指示書ステップ1・2026-09-28）: 上層EVは直下層のEVとだけ連結する ----
-test('【Phase2】componentOf: 上層EVは直下層のEVと階またぎで同成分（昇降路は全階同位置で連続する）', () => {
+// ---- 昇降機（実装指示書ステップ1・2026-09-28）: 上層の昇降路は直下層の昇降路とだけ連結する ----
+test('【Phase2】componentOf: 上層の昇降路は直下層の昇降路と階またぎで同成分（昇降路は全階同位置で連続する）', () => {
   const lowerGraph = makeGraph();
   const lowerEv = makeRectRoom(lowerGraph, 0, 0, 2000, 2000, 'EV');
-  lowerEv.setFeature(RoomFeature.EV);
+  lowerEv.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
   const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
   const upperEv = makeRectRoom(upperGraph, 0, 0, 2000, 2000, 'EV');
-  upperEv.setFeature(RoomFeature.EV);
+  upperEv.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
   const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
   const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
   const index = buildSpaceIndex([lowerLayer, upperLayer]);
 
   assert.equal(index.componentOf(lowerLayer, lowerEv), index.componentOf(upperLayer, upperEv),
-    '上層EVと直下層EVはfootprintが重なれば階またぎで同じ成分のはず');
+    '上層の昇降路と直下層の昇降路はfootprintが重なれば階またぎで同じ成分のはず');
 });
 
-test('【失敗系・Phase2】componentOf: 上層EVの下が通常部屋（feature=null）なら階またぎで連結しない（VOIDと異なりfeature==nullへフォールバックしない）', () => {
+test('【失敗系・Phase2】componentOf: 上層の昇降路の下が通常部屋（feature=null）なら階またぎで連結しない（VOIDと異なりfeature==nullへフォールバックしない）', () => {
   const lowerGraph = makeGraph();
   const lowerRoom = makeRectRoom(lowerGraph, 0, 0, 2000, 2000, '洋室'); // feature未設定=実Room
   const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
   const upperEv = makeRectRoom(upperGraph, 0, 0, 2000, 2000, 'EV');
-  upperEv.setFeature(RoomFeature.EV);
+  upperEv.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
   const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
   const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
   const index = buildSpaceIndex([lowerLayer, upperLayer]);
 
   assert.notEqual(index.componentOf(lowerLayer, lowerRoom), index.componentOf(upperLayer, upperEv),
-    '上層EVの下が通常部屋なら連結しないはず（EVはVOIDと異なりfeature==nullへフォールバックしない）');
+    '上層の昇降路の下が通常部屋なら連結しないはず（昇降機はVOIDと異なりfeature==nullへフォールバックしない）');
 });
 
-// ---- DW（小荷物専用昇降機。昇降路属性の拡張・2026-09-28）も同じ規則（同じfeatureの1室とだけ連結） ----
-test('【Phase2】componentOf: 上層DWは直下層のDWと階またぎで同成分', () => {
+test('【失敗系】componentOf: 上層の昇降路の下がVOID（同じfootprint）なら階またぎで連結しない（feature完全一致のみ連結——昇降機とVOIDは別feature）', () => {
   const lowerGraph = makeGraph();
-  const lowerDw = makeRectRoom(lowerGraph, 0, 0, 2000, 2000, 'DW');
-  lowerDw.setFeature(RoomFeature.DW);
-  const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
-  const upperDw = makeRectRoom(upperGraph, 0, 0, 2000, 2000, 'DW');
-  upperDw.setFeature(RoomFeature.DW);
-
-  const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
-  const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
-  const index = buildSpaceIndex([lowerLayer, upperLayer]);
-
-  assert.equal(index.componentOf(lowerLayer, lowerDw), index.componentOf(upperLayer, upperDw),
-    '上層DWと直下層DWはfootprintが重なれば階またぎで同じ成分のはず');
-});
-
-test('【失敗系・Phase2】componentOf: 上層EVの下が別種の昇降路（DW）なら階またぎで連結しない（同じfeatureのみ連結）', () => {
-  const lowerGraph = makeGraph();
-  const lowerDw = makeRectRoom(lowerGraph, 0, 0, 2000, 2000, 'DW');
-  lowerDw.setFeature(RoomFeature.DW);
+  const lowerVoid = makeRectRoom(lowerGraph, 0, 0, 2000, 2000, '吹抜け');
+  lowerVoid.setFeature(RoomFeature.VOID);
   const upperGraph = new PlanGraph(new Plane('p2', 2900, '2階', 1, 1));
   const upperEv = makeRectRoom(upperGraph, 0, 0, 2000, 2000, 'EV');
-  upperEv.setFeature(RoomFeature.EV);
+  upperEv.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
   const lowerLayer = { graph: lowerGraph, floorZMm: 0, role: 'self' };
   const upperLayer = { graph: upperGraph, floorZMm: 2900, role: 'above' };
   const index = buildSpaceIndex([lowerLayer, upperLayer]);
 
-  assert.notEqual(index.componentOf(lowerLayer, lowerDw), index.componentOf(upperLayer, upperEv),
-    '上層EVの下がDW（別種の昇降路）なら連結しないはず（feature完全一致のみ連結）');
+  assert.notEqual(index.componentOf(lowerLayer, lowerVoid), index.componentOf(upperLayer, upperEv),
+    '上層の昇降路の下がVOIDなら連結しないはず（feature完全一致のみ連結——昇降機はVOIDへフォールバックしない）');
 });
+
 
 // ---- ユーザー裁定: VOIDは「重なる吹抜けの最下階の親部屋1室」とだけ連結する（複数階の吹抜けは連鎖） ----
 function makeThreeLevelVoidChainGraphs() {

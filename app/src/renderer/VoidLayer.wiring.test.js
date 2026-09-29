@@ -1,4 +1,4 @@
-// EV（エレベーターシャフト。実装指示書ステップ1・2026-09-28）: renderer/VoidLayer.jsx が
+// 昇降機（実装指示書ステップ1・2026-09-28）: renderer/VoidLayer.jsx が
 // 直下階ラベル（「上部吹抜け」）の表示条件を finish/voidGeometry.js の showsUpperVoidLabel に
 // 委ねていることをソーステキスト検査で固定する（.jsx は node:test から単体 import できないため。
 // OpeningsLayer.wiring.test.js と同じ型）。

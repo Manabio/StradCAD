@@ -64,16 +64,16 @@ export const RoomFeature = Object.freeze({
   VOID:       'void',      // 吹抜け（ユーザー指定）
   STAIR_VOID: 'stairVoid', // 階段吹抜け（最上階の屋内階段footprintへ自動指定。描画・操作対象外の自動管理Room）
   UNDEFINED:  'undefined', // 未定義の部屋（削除後も外壁線維持のため一時的に残す。仕上げ表から除外・無描画）
-  EV:         'ev',        // 乗用EV（ユーザー指定。床なし＝上階スラブ開口。展開図は描かない）
-  DW:         'dw',        // 小荷物専用昇降機（ダムウェーター。床なし＝上階スラブ開口。展開図は描かない）
-  FREIGHT_EV: 'freightEv', // 貨物用昇降路（床なし＝上階スラブ開口。展開図は描かない）
-  VEHICLE_EV: 'vehicleEv', // 車両用昇降路（床なし＝上階スラブ開口。展開図は描かない）
+  // 昇降機（建築基準法上の総称。分類＝EV／エスカレーター／DW は器具行が持つ。この属性の
+  // Room が昇降路）。床なし＝上階スラブ開口。展開図は描かない（ユーザー裁定2026-09-29:
+  // 「昇降機の中にEV/エスカレーター/DWがある。昇降機とEV等は並列ではない」）。
+  ELEVATOR_EQUIPMENT: 'elevatorEquipment',
 });
 
-// 昇降路（EV等）の属性。床なし＝上階スラブ開口・展開図は描かない・共通仕様「昇降路」で
-// 壁材を一括指定。PS 等は後日。
+// 昇降路（isShaftFeature の部屋）の属性。床なし＝上階スラブ開口・展開図は描かない・共通仕様
+// 「昇降路」で壁材を一括指定。PS 等は後日。
 export const SHAFT_FEATURES = Object.freeze(new Set([
-  RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV,
+  RoomFeature.ELEVATOR_EQUIPMENT,
 ]));
 export function isShaftFeature(feature) {
   return SHAFT_FEATURES.has(feature);

@@ -6,7 +6,7 @@ import { RoomKind, RoomFeature } from '@core';
 /**
  * 「屋外部屋の群」の対象か（ユーザー裁定: 屋外タブに削除ボタン・区分セレクタをRoom連動で置く対象）。
  * kind===EXTERIOR かつ feature!==STAIR（HEADの showLevelRow と同じ条件。QA指摘2026-09-29で訂正:
- * STAIR_VOID／UNDEFINEDは屋外Roomの生成経路が無い死んだ条件のため判定に含めない。昇降路（EV等）
+ * STAIR_VOID／UNDEFINEDは屋外Roomの生成経路が無い死んだ条件のため判定に含めない。昇降路（昇降機）
  * はHEADでは「改名入力＋仕上げレベル行」で表示されていたため除外しない）。
  * @param {import('@core').Room | null | undefined} room
  * @returns {boolean}

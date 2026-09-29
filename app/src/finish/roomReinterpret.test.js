@@ -3,13 +3,14 @@
 // なると両者のラベルが同一セルに落ちて重なって表示される（問題: 「3」と「3'」の重なり）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, ExteriorLevelRef, StructuralMaterialType } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, ExteriorLevelRef, StructuralMaterialType, isShaftFeature } from '@core';
 import {
   normalizePartialDominance, reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState,
   findUnresolvableCells, reinterpretSlabsAfterCLRemoval,
 } from './roomReinterpret.js';
 import { roomNameAnchor } from './roomLabel.js';
 import { worldToCell, lostSides, cellInteriorPoint, regionCellsAt } from './gridCells.js';
+import { isInteriorWallTarget } from './wallGeneration.js';
 
 // ---- 作業0（前提確認）: 最外郭CL（外壁線）を失ったセルは再解釈できるか ----
 // フットプリント境界CL削除ガード（centerLineConvert.js isFootprintBoundaryCL）着手前の実測。
@@ -651,4 +652,44 @@ test('reinterpretSlabsAfterCLRemoval: 対辺2本同時喪失（regionCellsAtが�
 
   assert.deepEqual(result.unresolved, [cellKey]);
   assert.ok(slab.cells.has(cellKey), '復元不能なので現状維持（セルキーは変わらない）');
+});
+
+// ================================================================
+// QA実測（2026-09-29）回帰ガード: 独立した昇降路がCL削除後の再解釈で部分指定になっても
+// isInteriorWallTarget は true のまま（finish/wallGeneration.js の昇降路例外を維持する根拠）。
+// isReinterpretExempt は昇降路を対象外にしていない（roomReinterpret.jsは変更していない）ため、
+// 独立した昇降路が1辺喪失→dominant判定でreferenceRoomIdsが付く経路が現に存在する。部屋名ダイアログから
+// 部分指定の昇降路を新規に作れなくなった（roomNamingOptions.js featureOptionsForDialog）としても、
+// この経路は塞がっていない。
+// ================================================================
+test('【QA回帰・2026-09-29】CL削除後の再解釈で独立した昇降路が部分指定になっても isInteriorWallTarget は true のまま', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  [0, 4000, 6000].forEach(x => graph.addCenterLine(CenterLineType.VERTICAL, x, opts));
+  const hs = [0, 2000, 4000].map(y => graph.addCenterLine(CenterLineType.HORIZONTAL, y, opts));
+  // 左列(0..4000)×2行=ホール、右上セル(4000..6000,0..2000)=独立した昇降路、右下=ホール
+  const hallCells = [
+    worldToCell(2000, 1000, graph).key,
+    worldToCell(2000, 3000, graph).key,
+    worldToCell(5000, 3000, graph).key,
+  ];
+  graph.addRoom(new Set(hallCells), 'ホール');
+  const ev = graph.addRoom(new Set([worldToCell(5000, 1000, graph).key]), 'EV');
+  ev.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+
+  assert.equal(ev.referenceRoomIds.size, 0, '前提: 削除前は独立部屋（部分指定ではない）');
+  assert.equal(isInteriorWallTarget(ev, new Set()), true, '前提: 独立部屋は対象（feature に関わらず）');
+
+  // 昇降路とホール右下の境界の横CL(y=2000)は左列（ホール）も分けている→削除すると昇降路は下辺だけ喪失し、
+  // 再解釈で下のホールセルへ吸収される（部分指定化）。
+  graph.removeCenterLine(hs[1].id);
+  reinterpretRoomsOnEntry(graph);
+
+  assert.ok(graph.roomMap.has(ev.id), '再解釈後も昇降路自体は残る（親子入れ替えではなく部分指定化）');
+  assert.ok(ev.referenceRoomIds.size >= 1,
+    '前提が崩れたら赤: 再解釈でreferenceRoomIdsが付く（部分指定になる）はず');
+  assert.equal(ev.feature, RoomFeature.ELEVATOR_EQUIPMENT, '再解釈後もfeatureはelevatorEquipmentのまま');
+  assert.ok(isShaftFeature(ev.feature), '再解釈後もisShaftFeatureのまま');
+  assert.equal(isInteriorWallTarget(ev, new Set()), true,
+    '部分指定になった昇降路もisInteriorWallTargetはtrueのまま（STAIRと同型の例外）');
 });

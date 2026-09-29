@@ -9,13 +9,8 @@ import {
   serializeSite, decodeSite, restoreSite, decodeFloorSnapshot,
 } from './graphSnapshot.js';
 import { editSiteLineLength } from './transform/siteEdit.js';
-import { decode } from './schema/graphFbs.js';
+import { decode, ROOM_FEATURE_ENC, ROOM_FEATURE_DEC } from './schema/graphFbs.js';
 import { BeamAxisOrigin } from './core/centerLine.js';
-
-// 昇降路4属性を固定配列で列挙する（isShaftFeature/SHAFT_FEATURES 本体から作ると、実装側の
-// Setから値を外す変異を入れたときテスト対象も一緒に減って赤にならない——検出力を保つため
-// 独立した固定リストにする。team-lessons「省略側の既定生成で恒真になる」と同型の落とし穴）。
-const FIXED_SHAFT_FEATURES = [RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV];
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -182,8 +177,12 @@ test('【失敗系】CenterLine.beamAxisOrigin が既知の値以外（未知の
   assert.equal(cl2.beamAxisOrigin, null, '未知の由来文字列はnullへ落ちる（既知の由来色分岐に漏らさない）');
 });
 
-// ---- Room.feature='ev'（EV=エレベーターシャフト。core/constants.js RoomFeature。
-// schema/graphFbs.js ROOM_FEATURE_ENC/DECにev=5を追加。実装指示書ステップ1・2026-09-28） ----
+// ---- Room.feature='elevatorEquipment'（昇降機。core/constants.js RoomFeature。
+// schema/graphFbs.js ROOM_FEATURE_ENC/DECにelevatorEquipment=9を割当て。実装指示書ステップ1・
+// 2026-09-28。昇降路属性の整理でDW/貨物用EV/車両用EVは廃止し「昇降機」1種に統合・番号を9へ
+// 変更——2026-09-29。属性の識別子は建築基準法上の「昇降機」に対する誤称だった EV から
+// ELEVATOR_EQUIPMENT へ改名——分類（EV／エスカレーター／DW）は器具行が持つ。ユーザー裁定
+// 2026-09-29「昇降機の中にEV/エスカレーター/DWがある。昇降機とEV等は並列ではない」） ----
 // restoreGraph の3経路（FlatBuffers encode→decode / plain object直渡し / undoスナップショット）の
 // うち、undoスナップショット経路（centerLineOps.js等）は before/after を serializeGraph(graph)
 // （＝Uint8Array）で採り restoreGraph(graph, bytes) で戻すため、下の「FlatBuffers encode→decode」
@@ -193,55 +192,142 @@ test('【失敗系】CenterLine.beamAxisOrigin が既知の値以外（未知の
 // storage/localSnapshot.js parseOpenedFileBytesがJSON.parseした素のオブジェクトをそのまま渡す）は
 // decode()を経由せず applySnapshot が d.feature を直接読む（graphSnapshot.js:757-762）ため、
 // 別経路として下に固定する。
-for (const feature of FIXED_SHAFT_FEATURES) {
-  test(`Room.feature=${feature}（昇降路）は FlatBuffers encode→decode で往復する`, () => {
-    const graph = makeGraph();
-    const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
-    const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, { labeled: false, discipline: Discipline.ARCH });
-    const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
-    const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-    const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-    const room = graph.addRoom(new Set([key]), '昇降路');
-    room.setFeature(feature);
+test('Room.feature=\'elevatorEquipment\'（昇降機）は FlatBuffers encode→decode で往復する', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), '昇降路');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
-    const bytes = serializeGraph(graph);
-    const restored = makeGraph();
-    restoreGraph(restored, bytes);
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
 
-    const r2 = restored.roomMap.get(room.id);
-    assert.ok(r2, '復元後に同一IDの部屋が存在する');
-    assert.equal(r2.feature, feature);
-  });
-}
+  const r2 = restored.roomMap.get(room.id);
+  assert.ok(r2, '復元後に同一IDの部屋が存在する');
+  assert.equal(r2.feature, RoomFeature.ELEVATOR_EQUIPMENT);
+});
 
 // QA指摘（低3件・3件目）: decode(serializeGraph(graph)) で作った snapshot はFlatBuffersの
-// ENC/DECを経由して作られるため、plain object経路がENC/DECと独立に'ev'を保つことの証明にならない
-// （変異でENC/DECからevを除去すると、decode(serializeGraph(...))の時点で既にfeatureが失われ、
-// このテストが「plain object経路の検証」として機能しなくなる）。graphSnapshot.js の serialize側
-// （buildSnapshot。rooms要素は:105-138付近）が出力する形を手書きし、ENC/DECから独立させる。
+// ENC/DECを経由して作られるため、plain object経路がENC/DECと独立に'elevatorEquipment'を保つ
+// ことの証明にならない（変異でENC/DECからelevatorEquipmentを除去すると、
+// decode(serializeGraph(...))の時点で既にfeatureが失われ、このテストが「plain object経路の
+// 検証」として機能しなくなる）。graphSnapshot.js の serialize側（buildSnapshot。rooms要素は
+// :105-138付近）が出力する形を手書きし、ENC/DECから独立させる。
 // applySnapshot（:560-）が `for (const d of snapshot.XXX)` と ??[] を伴わずに直接読む配列
 // （centerLines/points/walls/diagonals/verticalLines/horizontalLines/arcs/circles）だけを埋め、
 // rooms 以外は空のまま——他はすべて `?? []` でフォールバックするため省略できる。
-for (const feature of FIXED_SHAFT_FEATURES) {
-  test(`Room.feature=${feature}（昇降路）は restoreGraph への plain object 直渡し（旧JSON文書ファイル読込みと同じ経路）でも往復する`, () => {
-    const snapshot = {
-      centerLines: [], points: [], walls: [], diagonals: [],
-      verticalLines: [], horizontalLines: [], arcs: [], circles: [],
-      rooms: [{
-        id: 'room-shaft-1', name: '昇降路', cells: [], referenceRoomIds: [],
-        kind: 'interior', feature, generatedWallIds: [],
-      }],
-      roomOrder: ['room-shaft-1'],
-    };
+test('Room.feature=\'elevatorEquipment\'（昇降機）は restoreGraph への plain object 直渡し（旧JSON文書ファイル読込みと同じ経路）でも往復する', () => {
+  const snapshot = {
+    centerLines: [], points: [], walls: [], diagonals: [],
+    verticalLines: [], horizontalLines: [], arcs: [], circles: [],
+    rooms: [{
+      id: 'room-shaft-1', name: '昇降路', cells: [], referenceRoomIds: [],
+      kind: 'interior', feature: RoomFeature.ELEVATOR_EQUIPMENT, generatedWallIds: [],
+    }],
+    roomOrder: ['room-shaft-1'],
+  };
+
+  const restored = makeGraph();
+  restoreGraph(restored, snapshot);
+
+  const r2 = restored.roomMap.get('room-shaft-1');
+  assert.ok(r2, '復元後に同一IDの部屋が存在する');
+  assert.equal(r2.feature, RoomFeature.ELEVATOR_EQUIPMENT);
+});
+
+// ---- 昇降機の仕様追加ステップ2（S4）: ROOM_FEATURE_ENC/DEC 表そのものの検査。ENC/DECは
+// schema/graphFbs.js が export する（決定と読み替えをこの表だけに閉じるため。テストは
+// 表そのものを直接読み、encode/decodeの往復や手書きバイト操作を経由しない——理由: FlatBuffers
+// のバイト列を手で書き換えるのはvtableオフセットの知識を要し脆いため、表を唯一の供給源として
+// 直接検査する方がテストの意図が明確になる）。 ----
+test('【S4】ROOM_FEATURE_ENC.elevatorEquipment は新番号9', () => {
+  assert.equal(ROOM_FEATURE_ENC.elevatorEquipment, 9);
+});
+
+test('【S4】ROOM_FEATURE_DEC は旧5〜8（旧ev/dw/freightEv/vehicleEv）と新9をすべて\'elevatorEquipment\'へ読み替える', () => {
+  for (const code of [5, 6, 7, 8, 9]) {
+    assert.equal(ROOM_FEATURE_DEC[code], 'elevatorEquipment', `code=${code} は 'elevatorEquipment' へ読み替わるはず`);
+  }
+});
+
+// ---- 【F4】旧形式の実バッファ（FEATURE列挙値が旧番号5〜8／未知の番号）を restoreGraph で
+// 読み込む往復。ROOM_FEATURE_DEC表そのものの直接検査（decode経路を通らない）だけでは製品の
+// decode（graphFbs.js の readRoom: ROOM_FEATURE_DEC[r.i8(RM.FEATURE)] ?? null）の `?? null` を
+// 守れないため、実バッファを直接書き換えて decode 経路を通す。バイト列中のFEATURE値の
+// オフセットは決め打ちにせず、feature以外を完全に同一（CenterLine・Room のidを固定して揃える）
+// にした2つのバッファ（feature='elevatorEquipment' と feature='stair'。どちらもROOM_FEATURE_ENCに実在する値で
+// RM.FEATUREフィールドの位置は共通）を diff して求める——同一構造で唯一意味のある差はFEATUREの
+// 値だけになるため、差分バイトが「ちょうど1箇所」であることまで確認してから使う（前提が崩れたら
+// 赤くなる形。固定オフセットの決め打ちを避ける方法として、リード指示のこの方式を採用した）。
+function buildFixedRoomBuffer(feature) {
+  const graph = makeGraph();
+  const opt = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opt, 'f4-x0');
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, opt, 'f4-x1');
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opt, 'f4-y0');
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, opt, 'f4-y1');
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([key]), 'r', 'f4-room');
+  room.setFeature(feature);
+  return serializeGraph(graph);
+}
+
+// feature以外が完全に同一な2バッファをdiffしてFEATUREフィールドのバイトオフセットを求める。
+function findFeatureOffset() {
+  const evBytes    = buildFixedRoomBuffer(RoomFeature.ELEVATOR_EQUIPMENT);
+  const stairBytes = buildFixedRoomBuffer(RoomFeature.STAIR);
+  assert.equal(evBytes.length, stairBytes.length, '前提: feature以外は完全に同一構造のはず（長さが同じ）');
+
+  const diffOffsets = [];
+  for (let i = 0; i < evBytes.length; i++) {
+    if (evBytes[i] !== stairBytes[i]) diffOffsets.push(i);
+  }
+  assert.equal(diffOffsets.length, 1, `前提: feature以外に差が無いはず（差分バイト数: ${diffOffsets.length}）`);
+  const featureOffset = diffOffsets[0];
+  assert.equal(evBytes[featureOffset], ROOM_FEATURE_ENC.elevatorEquipment, '前提: 差分位置の値がelevatorEquipment番号のはず');
+  assert.equal(stairBytes[featureOffset], ROOM_FEATURE_ENC.stair, '前提: 差分位置の値がstair番号のはず');
+  return { evBytes, featureOffset };
+}
+
+test('【F4】旧形式バッファ（FEATURE=5〜8）を restoreGraph で読み込むと feature=\'elevatorEquipment\' になる（decode経路を実際に通す）', () => {
+  const { evBytes, featureOffset } = findFeatureOffset();
+
+  for (const legacyCode of [5, 6, 7, 8]) {
+    const legacyBytes = evBytes.slice();
+    legacyBytes[featureOffset] = legacyCode;
 
     const restored = makeGraph();
-    restoreGraph(restored, snapshot);
+    restoreGraph(restored, legacyBytes);
+    const r2 = [...restored.roomMap.values()].find(r => r.id === 'f4-room');
+    assert.ok(r2, `legacyCode=${legacyCode}: 復元後に部屋が存在する`);
+    assert.equal(r2.feature, 'elevatorEquipment', `legacyCode=${legacyCode}: 旧番号は'elevatorEquipment'へ読み替わるはず`);
+  }
+});
 
-    const r2 = restored.roomMap.get('room-shaft-1');
-    assert.ok(r2, '復元後に同一IDの部屋が存在する');
-    assert.equal(r2.feature, feature);
-  });
-}
+// QA指摘: 旧版はテスト自身の式 `ROOM_FEATURE_DEC[10] ?? null` を評価しているだけで、製品の
+// decode の `?? null`（graphFbs.js readRoom）を実際には通していなかった。F4と同じバイト差し替え
+// 方式で code=10（未知の番号）のバッファを decode() へ直接通し、Room.feature が null になる
+// ことを確かめる形へ置き換える。
+// restoreGraph ではなく decode() を直接呼ぶ理由（実測で確認・REASONED→VERIFIED）: readRoom の
+// `?? null` を外して確かめようとしたところ、restoreGraph 経由では赤にならなかった——
+// graphSnapshot.js の applySnapshot 側にも独立した `const feature = … (d.feature ?? null);`
+// という二重目の ?? null があり（プレーンobject直渡し経路のための保護）、readRoom側の値が
+// undefined になってもこちらが吸収してしまう。decode() を直接呼んで返り値の room.feature を
+// 見ることで、readRoom自身の `?? null` だけを対象にした検出力のあるテストにする。
+test('【失敗系・S4】旧形式バッファのFEATUREが未知の番号（10）だと decode() の返り値で feature=null になる（decode自身の ?? null を対象にする）', () => {
+  const { evBytes, featureOffset } = findFeatureOffset();
+  const unknownBytes = evBytes.slice();
+  unknownBytes[featureOffset] = 10;
+
+  const snapshot = decode(unknownBytes);
+  const r2 = snapshot.rooms.find(r => r.id === 'f4-room');
+  assert.ok(r2, 'decode結果に部屋が存在する');
+  assert.equal(r2.feature, null, '未知の番号はROOM_FEATURE_DECに要素が無く、decode側の ?? null で吸収されるはず');
+});
 
 test('【失敗系】Room.feature が未知の文字列（\'zz\'）で書かれていた場合、encode→decode 後は null に正規化される（ROOM_FEATURE_ENCに無い→0）', () => {
   const graph = makeGraph();

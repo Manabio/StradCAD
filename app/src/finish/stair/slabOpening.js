@@ -25,7 +25,7 @@ const WALL_AXIS_CL_EPS = 0.5;
 // `source` は floorOpeningEdges（層A・実装指示書ステップ3）が使う細分（梁芯生成側の区別。
 // kindはVoidLayerの描画分担、sourceは開口の由来そのもの——別の関係のため両方持つ）。
 // - 吹抜け（VOID）Room … 占有セル全体が開口。kind='void'・source='void'
-// - 昇降路（isShaftFeature。EV等）Room … 占有セル全体が開口。VOIDと同様 kind='void'・source='shaft'
+// - 昇降路（isShaftFeature。昇降機）Room … 占有セル全体が開口。VOIDと同様 kind='void'・source='shaft'
 //   （床なし＝上階スラブ開口）
 // - 階段吹抜け（STAIR_VOID）Room … 占有セル全体が開口。VoidLayer は描画対象外のため kind='stair'・source='stairVoid'
 // - 上階の階段 … 破れ線より先のセルが開口（破れ手前＝階段とりつき部はスラブが残る）。kind='stair'・source='stairBeyond'

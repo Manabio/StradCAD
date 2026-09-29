@@ -68,11 +68,11 @@ function labelPlacement(r, fontSize, gap, margin) {
 }
 
 /**
- * 吹抜け（feature=VOID）・EV（feature=EV）の×を平面図モードで描画する。
- *   自階（graph）: 壁内4頂点を対角に結ぶ一点鎖線・細線（VOID・EV同じ描画。ラベルは無し）。
+ * 吹抜け（feature=VOID）・昇降機（feature=elevatorEquipment）の×を平面図モードで描画する。
+ *   自階（graph）: 壁内4頂点を対角に結ぶ一点鎖線・細線（VOID・昇降機同じ描画。ラベルは無し）。
  *   直下階（upperCrosses。App.jsx が上階を peek して computeVoidCrosses した結果）:
  *     同じ対角線を破線・細線で描き、VOID のみ交点付近に「上部吹抜け」を添える
- *     （`showsUpperVoidLabel`。EV は同じシャフトが続くだけなので破線のみ）。あわせて対角線と
+ *     （`showsUpperVoidLabel`。昇降機は同じシャフトが続くだけなので破線のみ）。あわせて対角線と
  *     同じオフセット（insetRect）の外形（矩形。壁内の外形頂点を結ぶ多角形）を同じ破線・細線で描く
  *     ——設置階側は実壁が既に描かれているため外形は追加しない（直下階側のみ）。
  *     （LOD SCHEMATIC では非表示。STAIR_VOID は computeVoidCrosses 側で除外済み）。

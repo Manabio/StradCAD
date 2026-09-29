@@ -45,28 +45,25 @@ function makeGraphWithRoom(feature) {
   return { graph, room };
 }
 
-// ---- QA F1/T1: EVのみに限定されず、昇降路4属性すべてで同じ解決になることを固定する ----
-// （isShaftFeature を `=== 'ev'` に弱める変異でも、以前はEVのテストしか赤にならず見逃していた）
-const SHAFT_FEATURES_FOR_TEST = [RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV];
+// ---- QA F1/T1: 昇降路（isShaftFeature。現在は昇降機のみ）でwallFinishがshaftWallMaterialの
+// 厚で決まることを固定する（昇降路が1種になり、isShaftFeature を `=== 'elevatorEquipment'` へ
+// 置換する変異は挙動が完全に一致する等価変異になったため、この変異に対する検出力は不要）。
+test('roomWallDims【QA F1/T1】: feature=elevatorEquipment（昇降路）のwallFinishはshaftWallMaterialの厚で決まる（既定PB12.5→12.5、強化PB12.5+12.5→25）', () => {
+  const materialMap = makeMaterialMap();
+  const { graph, room } = makeGraphWithRoom(RoomFeature.ELEVATOR_EQUIPMENT);
 
-for (const feature of SHAFT_FEATURES_FOR_TEST) {
-  test(`roomWallDims【QA F1/T1】: feature=${feature}（昇降路）のwallFinishはshaftWallMaterialの厚で決まる（既定PB12.5→12.5、強化PB12.5+12.5→25）`, () => {
-    const materialMap = makeMaterialMap();
-    const { graph, room } = makeGraphWithRoom(feature);
+  assert.equal(graph.shaftWallMaterial, DEFAULT_SHAFT_WALL_MATERIAL, '既定値の前提');
+  assert.equal(roomWallDims(graph, room, materialMap).wallFinish, 12.5, '既定のshaftWallMaterial（PB12.5）');
 
-    assert.equal(graph.shaftWallMaterial, DEFAULT_SHAFT_WALL_MATERIAL, '既定値の前提');
-    assert.equal(roomWallDims(graph, room, materialMap).wallFinish, 12.5, '既定のshaftWallMaterial（PB12.5）');
-
-    graph.setShaftWallMaterial('301000000020'); // 強化せっこうボード t=12.5+12.5
-    assert.equal(roomWallDims(graph, room, materialMap).wallFinish, 25);
-  });
-}
+  graph.setShaftWallMaterial('301000000020'); // 強化せっこうボード t=12.5+12.5
+  assert.equal(roomWallDims(graph, room, materialMap).wallFinish, 25);
+});
 
 // ---- QA F5: graph.shaftWallMaterial が null（未設定相当）なら `?? DEFAULT_SHAFT_WALL_MATERIAL` で
 // 既定へフォールバックする（`?? DEFAULT_SHAFT_WALL_MATERIAL` を外す変異の検出力） ----
 test('roomWallDims【QA F5】: graph.shaftWallMaterialがnullなら既定（PB12.5→wallFinish 12.5）へフォールバックする', () => {
   const materialMap = makeMaterialMap();
-  const { graph, room } = makeGraphWithRoom(RoomFeature.EV);
+  const { graph, room } = makeGraphWithRoom(RoomFeature.ELEVATOR_EQUIPMENT);
   graph.shaftWallMaterial = null; // setter経由でなく直接null化（未設定相当を模す）
 
   assert.equal(roomWallDims(graph, room, materialMap).wallFinish, 12.5);
@@ -83,7 +80,7 @@ test('roomWallDims: 通常部屋（feature未設定）はshaftWallMaterialを変
 
 test('【失敗系】roomWallDims: 昇降路部屋のshaftWallMaterialがmaterialMapに無いコードならnull（既存の解決不可規約）', () => {
   const materialMap = makeMaterialMap();
-  const { graph, room } = makeGraphWithRoom(RoomFeature.EV);
+  const { graph, room } = makeGraphWithRoom(RoomFeature.ELEVATOR_EQUIPMENT);
   graph.setShaftWallMaterial('999999999999'); // materialMapに存在しないコード
 
   assert.equal(roomWallDims(graph, room, materialMap), null);

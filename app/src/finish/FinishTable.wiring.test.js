@@ -197,3 +197,22 @@ test('【不変条件・W4b】ExteriorTable は GroupedExteriorTable へ onApply
   assert.ok(/<GroupedExteriorTable graph=\{graph\} mode=\{mode\} onApplyNaming=\{onApplyNaming\} category=\{category\} \/>/.test(codeOnly),
     '<GroupedExteriorTable graph={graph} mode={mode} onApplyNaming={onApplyNaming} category={category} /> が見つからない');
 });
+
+// ---- 昇降機の仕様追加ステップ2: 機械器具・附帯タブは空タブ専用コンポーネントへ分岐し、
+// ExteriorTable（構造/外部建具/外部と同じ else 分岐）へ落ちないこと ----
+test('【不変条件】TABS の id の並びが interior/stair/exterior/fittings/structure/equipment/accessory/common のとおり', () => {
+  const startIdx = codeOnly.indexOf('const TABS = [');
+  assert.ok(startIdx >= 0, 'const TABS = [ が見つからない');
+  const endIdx = codeOnly.indexOf('];', startIdx);
+  const block = codeOnly.slice(startIdx, endIdx + 2);
+  const ids = [...block.matchAll(/id: '([a-z]+)'/g)].map(m => m[1]);
+  assert.deepEqual(ids,
+    ['interior', 'stair', 'exterior', 'fittings', 'structure', 'equipment', 'accessory', 'common']);
+});
+
+test('【不変条件】activeTab===equipment/accessory は <EmptyTabPlaceholder message="…" /> へ分岐し、ExteriorTable（else分岐）へ落ちない', () => {
+  assert.ok(/activeTab === 'equipment'\s*\?\s*<EmptyTabPlaceholder message="機械器具が登録されていません" \/>/.test(codeOnly),
+    'activeTab === \'equipment\' ? <EmptyTabPlaceholder message="機械器具が登録されていません" /> が見つからない');
+  assert.ok(/activeTab === 'accessory'\s*\?\s*<EmptyTabPlaceholder message="附帯は未対応です" \/>/.test(codeOnly),
+    'activeTab === \'accessory\' ? <EmptyTabPlaceholder message="附帯は未対応です" /> が見つからない');
+});

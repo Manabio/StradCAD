@@ -1,4 +1,4 @@
-// voidGeometry.js（吹抜け(VOID)・EVの×描画データ計算）の単体テスト。
+// voidGeometry.js（吹抜け(VOID)・昇降機の×描画データ計算）の単体テスト。
 // グリッドの作り方は finish/stair/slabOpening.test.js の makeGrid と同じ方針
 // （壁は生成しない——faceRect は壁が無ければCLのeffectiveValueへ落ちるため、
 // 描画位置の確認だけならCLだけの最小グラフで足りる）。
@@ -6,10 +6,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature } from '@core';
 
-// 昇降路4属性を固定配列で列挙する（isShaftFeature/SHAFT_FEATURES 本体から作ると、実装側の
-// Setから値を外す変異を入れたときテスト対象も一緒に減って赤にならない——検出力を保つため
-// 独立した固定リストにする）。EVは既存の専用テストがあるため除く。
-const OTHER_SHAFT_FEATURES = [RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV];
 import { computeVoidCrosses, showsUpperVoidLabel } from './voidGeometry.js';
 
 // 2×1マス（x:0-1000-2000, y:0-1500）のグリッドを持つグラフとセルキーを作る。
@@ -48,18 +44,18 @@ function makeGrid2x2() {
   };
 }
 
-test('computeVoidCrosses: VOID・EVが列挙され、featureが正しい', () => {
+test('computeVoidCrosses: VOID・昇降機が列挙され、featureが正しい', () => {
   const { graph, left, right } = makeGrid();
   const voidRoom = graph.addRoom(new Set([left]));
   voidRoom.setFeature(RoomFeature.VOID);
   const evRoom = graph.addRoom(new Set([right]));
-  evRoom.setFeature(RoomFeature.EV);
+  evRoom.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
   const result = computeVoidCrosses(graph);
   assert.equal(result.length, 2);
   const byId = new Map(result.map(c => [c.id, c]));
   assert.equal(byId.get(voidRoom.id).feature, RoomFeature.VOID);
-  assert.equal(byId.get(evRoom.id).feature, RoomFeature.EV);
+  assert.equal(byId.get(evRoom.id).feature, RoomFeature.ELEVATOR_EQUIPMENT);
   // 世界座標がセル矩形（left: x:0-1000 / right: x:1000-2000, y:0-1500）で返る（壁未生成のためCL値そのまま）
   assert.deepEqual(
     [byId.get(voidRoom.id).x1, byId.get(voidRoom.id).x2],
@@ -79,48 +75,24 @@ test('【失敗系】computeVoidCrosses: STAIR_VOID・通常部屋（feature未�
   assert.deepEqual(computeVoidCrosses(graph), []);
 });
 
-test('【失敗系】computeVoidCrosses: 非矩形（L字）のVOID・EVは対象外', () => {
+test('【失敗系】computeVoidCrosses: 非矩形（L字）のVOID・昇降機は対象外', () => {
   // VOID（bottomRightを欠いたL字・3セル）
   const voidGrid = makeGrid2x2();
   const voidRoom = voidGrid.graph.addRoom(new Set([voidGrid.topLeft, voidGrid.topRight, voidGrid.bottomLeft]));
   voidRoom.setFeature(RoomFeature.VOID);
   assert.deepEqual(computeVoidCrosses(voidGrid.graph), [], 'VOIDの非矩形はスキップされるはず');
 
-  // QA指摘（低3件・2件目）: EVも同じ非矩形判定を通ることを固定する（別グラフ・同じL字形状）。
+  // QA指摘（低3件・2件目）: 昇降機も同じ非矩形判定を通ることを固定する（別グラフ・同じL字形状）。
   const evGrid = makeGrid2x2();
   const evRoom = evGrid.graph.addRoom(new Set([evGrid.topLeft, evGrid.topRight, evGrid.bottomLeft]));
-  evRoom.setFeature(RoomFeature.EV);
-  assert.deepEqual(computeVoidCrosses(evGrid.graph), [], 'EVの非矩形はスキップされるはず（VOIDと同じ矩形判定を通る）');
+  evRoom.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  assert.deepEqual(computeVoidCrosses(evGrid.graph), [], '昇降機の非矩形はスキップされるはず（VOIDと同じ矩形判定を通る）');
 });
 
-test('showsUpperVoidLabel: VOIDのみtrue（EV・feature無しはfalse）', () => {
+test('showsUpperVoidLabel: VOIDのみtrue（昇降機・feature無しはfalse）', () => {
   assert.equal(showsUpperVoidLabel({ feature: RoomFeature.VOID }), true);
-  assert.equal(showsUpperVoidLabel({ feature: RoomFeature.EV }), false, 'EVは同じシャフトが続くだけなので破線のみ（裁定Q8）');
+  assert.equal(showsUpperVoidLabel({ feature: RoomFeature.ELEVATOR_EQUIPMENT }), false, '昇降機は同じシャフトが続くだけなので破線のみ（裁定Q8）');
   assert.equal(showsUpperVoidLabel({ feature: null }), false);
   assert.equal(showsUpperVoidLabel(null), false, 'crossが無くても例外を投げない');
 });
 
-// ---- 昇降路属性の拡張（DW・貨物用EV・車両用EV。2026-09-28）もEVと同じ扱い ----
-for (const feature of OTHER_SHAFT_FEATURES) {
-  test(`computeVoidCrosses: feature=${feature}（昇降路）が列挙され、featureが正しい`, () => {
-    const { graph, right } = makeGrid();
-    const room = graph.addRoom(new Set([right]));
-    room.setFeature(feature);
-
-    const result = computeVoidCrosses(graph);
-    assert.equal(result.length, 1);
-    assert.equal(result[0].feature, feature);
-    assert.deepEqual([result[0].x1, result[0].x2], [1000, 2000]);
-  });
-
-  test(`【失敗系】computeVoidCrosses: 非矩形（L字）のfeature=${feature}は対象外`, () => {
-    const grid = makeGrid2x2();
-    const room = grid.graph.addRoom(new Set([grid.topLeft, grid.topRight, grid.bottomLeft]));
-    room.setFeature(feature);
-    assert.deepEqual(computeVoidCrosses(grid.graph), [], `feature=${feature}の非矩形はスキップされるはず`);
-  });
-
-  test(`showsUpperVoidLabel: feature=${feature}（昇降路）はfalse（同じシャフトが続くだけなので破線のみ。裁定Q8）`, () => {
-    assert.equal(showsUpperVoidLabel({ feature }), false);
-  });
-}

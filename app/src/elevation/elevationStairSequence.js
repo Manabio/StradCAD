@@ -118,7 +118,7 @@ function aboveRoomSegmentsOnFace(face, aboveLayer, probeCtx) {
     const py = face.isVertical ? mid : faceCoord;
     const cell = worldToCell(px, py, aboveLayer.graph);
     const ownerRoom = cell ? cellToRoom.get(cell.key) : null;
-    // isRealRoom（sectionLayerStack.js）と同じ判定基準（VOID/STAIR_VOID/EVは実床が無い）を
+    // isRealRoom（sectionLayerStack.js）と同じ判定基準（VOID/STAIR_VOID/昇降機は実床が無い）を
     // 一本化して使う——判定の重複を避ける。
     const hasRoom = isRealRoom(ownerRoom);
     const locA = (bLo - face.originWorld) * face.dirSign;

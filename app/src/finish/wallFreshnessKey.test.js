@@ -128,6 +128,19 @@ test('wallFreshnessKey【QA F9】: 部屋のfeatureをUNDEFINED化すると壁�
   assert.ok(after.includes(`/${RoomFeature.UNDEFINED}:`));
 });
 
+// QA軽微指摘（昇降機の仕様追加ステップ2）: 鍵は room.feature の生文字列をそのまま埋め込む
+// （wallFreshnessKey.js `${room.feature ?? ''}`）ため、RoomFeature.ELEVATOR_EQUIPMENT の値
+// （'elevatorEquipment'）を変えると、昇降路のある階の保存済みキーが一律不一致になり壁が
+// 一度再生成される——この結合（属性の文字列そのものが鍵の一部）を固定する。
+test('wallFreshnessKey: 昇降路（feature=ELEVATOR_EQUIPMENT）の部屋があると鍵に /elevatorEquipment: が含まれる', () => {
+  const graph = makeGraph();
+  const room = makeRoom(graph, '昇降路');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  const key = wallFreshnessKey(graph);
+  assert.ok(key.includes(`/${RoomFeature.ELEVATOR_EQUIPMENT}:`));
+  assert.ok(key.includes('/elevatorEquipment:'), '属性の文字列値そのもの（elevatorEquipment）が鍵に含まれる');
+});
+
 // ---- 【不変条件】鍵の入力（下地材・主構造・部屋の壁材/壁仕上げ）を変えるsetterの呼び出し元は
 // ここで固定する。新しい呼び出し元が増えたらこのテストが落ちる——鍵の対象がそこにも要るか
 // レビューする合図にする（鍵の比較・再生成起動はステップ2以降の対象で、ここでは見落とし検知のみ）。

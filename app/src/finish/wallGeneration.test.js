@@ -201,26 +201,21 @@ test('isInteriorWallTarget: 部分指定×feature=STAIR（部分指定から階�
   assert.equal(isInteriorWallTarget(stairPartial, new Set()), true);
 });
 
-// 木造EVの4隅柱（実装指示書ステップ8）の足場: 昇降路（isShaftFeature。EV/DW/貨物用EV/車両用EV）は
-// 内部の通常部屋と同じ isInteriorWallTarget 対象——特例で外れると、内周壁の全再生成（finishBoundary.js
-// ステップ2）から昇降路が除外され、壁が無いまま構造モードへ入ることになり woodAutoFill.js の壁交点柱
-// （3a）が候補源を失う。固定配列で列挙する（SHAFT_FEATURES本体から作ると、実装側が対象ごと減らす
-// 変異でも件数が揃って赤にならないため）。
-const SHAFT_FEATURES_FOR_TEST = [RoomFeature.EV, RoomFeature.DW, RoomFeature.FREIGHT_EV, RoomFeature.VEHICLE_EV];
+// QA是正（2026-09-29）: 部分指定の昇降路（親部屋の中に描いた昇降機。FinishModeState.js
+// 「その他セル — 新規部分指定」経路、およびCL削除後の再解釈 roomReinterpret.js で独立した
+// 昇降路が部分指定になる経路の両方）は STAIR と同型で例外——親が外周壁を担う一般則の対象外に
+// すると、昇降機自身の外周（親領域の内部にある境界）に壁が一切生成されず woodAutoFill.js 3a
+// の柱候補を失う。部屋名ダイアログからは部分指定の昇降路を新規に作れなくなった
+// （roomNamingOptions.js featureOptionsForDialog）が、CL削除後の再解釈で生じる経路が残って
+// いるため、この例外は残す（リード裁定・2026-09-29 QA実測）。
+test('isInteriorWallTarget: 部分指定×feature=elevatorEquipment（部分指定から昇降路化）はSTAIRと同じく例外で対象', () => {
+  const graph = makeGraph();
+  const parent = graph.addRoom(new Set(['dummy1']), '親');
+  const shaftPartial = graph.addRoom(new Set(['dummy2']), 'EV', undefined, new Set([parent.id]));
+  shaftPartial.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
-// QA是正（2026-09-29）: 部分指定の昇降路（親部屋の中に描いた EV 等。FinishModeState.js「その他セル —
-// 新規部分指定」経路）は STAIR と同型で例外——親が外周壁を担う一般則の対象外にすると、EV 自身の
-// 外周（親領域の内部にある境界）に壁が一切生成されず woodAutoFill.js 3a の柱候補を失う。
-for (const feature of SHAFT_FEATURES_FOR_TEST) {
-  test(`isInteriorWallTarget: 部分指定×feature=${feature}（部分指定から昇降路化）はSTAIRと同じく例外で対象`, () => {
-    const graph = makeGraph();
-    const parent = graph.addRoom(new Set(['dummy1']), '親');
-    const shaftPartial = graph.addRoom(new Set(['dummy2']), 'EV', undefined, new Set([parent.id]));
-    shaftPartial.setFeature(feature);
-
-    assert.equal(isInteriorWallTarget(shaftPartial, new Set()), true);
-  });
-}
+  assert.equal(isInteriorWallTarget(shaftPartial, new Set()), true);
+});
 
 test('isInteriorWallTarget: 部分指定×通常部屋（feature未設定のまま）は引き続き対象外（昇降路の例外に巻き込まれない）', () => {
   const graph = makeGraph();
@@ -237,16 +232,18 @@ test('isInteriorWallTarget: under2aRoomIdsに含まれる部屋（階段下2a）
   assert.equal(isInteriorWallTarget(room, new Set([room.id])), false);
 });
 
-for (const feature of SHAFT_FEATURES_FOR_TEST) {
-  test(`isInteriorWallTarget: 昇降路（feature=${feature}）は屋内の通常部屋と同じく対象（内周壁の全再生成から除外されない）`, () => {
-    assert.ok(SHAFT_FEATURES.has(feature), `${feature} はSHAFT_FEATURESの要素であるはず（テストの前提）`);
-    const graph = makeGraph();
-    const room = graph.addRoom(new Set(['dummy']), 'EV');
-    room.setFeature(feature);
+// 木造EVの4隅柱（実装指示書ステップ8）の足場: 昇降路（isShaftFeature。独立部屋＝
+// referenceRoomIds空）は内部の通常部屋と同じ isInteriorWallTarget 対象——特例で外れると、
+// 内周壁の全再生成（finishBoundary.js ステップ2）から昇降路が除外され、壁が無いまま構造
+// モードへ入ることになり woodAutoFill.js の壁交点柱（3a）が候補源を失う。
+test('isInteriorWallTarget: 昇降路（feature=elevatorEquipment・独立部屋）は屋内の通常部屋と同じく対象（内周壁の全再生成から除外されない）', () => {
+  assert.ok(SHAFT_FEATURES.has(RoomFeature.ELEVATOR_EQUIPMENT), 'elevatorEquipment はSHAFT_FEATURESの要素であるはず（テストの前提）');
+  const graph = makeGraph();
+  const room = graph.addRoom(new Set(['dummy']), 'EV');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
-    assert.equal(isInteriorWallTarget(room, new Set()), true);
-  });
-}
+  assert.equal(isInteriorWallTarget(room, new Set()), true);
+});
 
 // ================================================================
 // 柱寸法が基準（120）より細い階の外壁下地帯シフト（bandShift。structural/structureRules.js

@@ -19,11 +19,15 @@ function stripComments(text) {
 
 const codeOnly = stripComments(src);
 
-test('【不変条件】ROOM_FEATURE_OPTIONS.map( と ROOM_KIND_OPTIONS.map( の呼び出しが各1回', () => {
-  const featureMatches = codeOnly.match(/ROOM_FEATURE_OPTIONS\.map\(/g) ?? [];
+// 昇降機の仕様追加ステップ2: 属性選択肢は featureOptionsForDialog(room) を唯一の供給源にする
+// （部分指定は昇降機を出さない。S5）——ROOM_FEATURE_OPTIONS を直接 map しない。
+test('【不変条件】featureOptionsForDialog(room).map( と ROOM_KIND_OPTIONS.map( の呼び出しが各1回、ROOM_FEATURE_OPTIONS.map( は直接使わない', () => {
+  const featureMatches = codeOnly.match(/featureOptionsForDialog\(room\)\.map\(/g) ?? [];
   const kindMatches    = codeOnly.match(/ROOM_KIND_OPTIONS\.map\(/g) ?? [];
-  assert.equal(featureMatches.length, 1, `ROOM_FEATURE_OPTIONS.map( は1回のはず（実際: ${featureMatches.length}）`);
+  assert.equal(featureMatches.length, 1, `featureOptionsForDialog(room).map( は1回のはず（実際: ${featureMatches.length}）`);
   assert.equal(kindMatches.length, 1,    `ROOM_KIND_OPTIONS.map( は1回のはず（実際: ${kindMatches.length}）`);
+  assert.ok(!/ROOM_FEATURE_OPTIONS\.map\(/.test(codeOnly),
+    'ROOM_FEATURE_OPTIONS.map( を直接使っている——featureOptionsForDialog(room) 経由のはず');
 });
 
 test('【不変条件】<select が本体にちょうど2つ', () => {
