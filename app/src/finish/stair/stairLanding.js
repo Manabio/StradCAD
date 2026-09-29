@@ -35,7 +35,10 @@ function computeLandingFrame(stair, graph) {
   const vertical = f.vertical;
 
   // 走行方向(run): 踊り場は t=tRun（往路の終端＝踊り場の開始）〜t=1（踊り場の奥＝終端）。
-  const tRun = spanInfo.len1 / (spanInfo.len1 + spanInfo.landingLen);
+  // 往路と復路は不等長でありうる（uTurnSpans）。設置枠の走行全長は 長い方のレーン＋踊り場 なので、
+  // 前縁は長い方のレーン長で求める（等長なら従来どおり len1 基準と同値）。
+  const laneMax = Math.max(spanInfo.len1, spanInfo.len2);
+  const tRun = laneMax / (laneMax + spanInfo.landingLen);
   const pRun = f.pt(tRun, 0), p1 = f.pt(1, 0);
   const coordAtRun = vertical ? pRun.y : pRun.x;
   const coordAt1   = vertical ? p1.y   : p1.x;
@@ -144,5 +147,6 @@ export function landingZ(stair, graph, floorHeight) {
   if (!spanInfo) return null;
   const riser = stair?.riser ?? (floorHeight != null ? floorHeight / spanInfo.totalSteps : null);
   if (riser == null) return null;
-  return spanInfo.n1 * riser;
+  // 側面の上り口に取りつく回転部（entryTurnSteps）の蹴上は往路の手前に積まれる
+  return (spanInfo.n1 + (stair.entryTurnSteps || 0)) * riser;
 }

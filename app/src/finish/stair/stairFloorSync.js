@@ -209,6 +209,8 @@ export async function syncUpperFloors(project, activeGraph, { undoEntry = null }
             nosing: stair.nosing, width: stair.width,
             upDirection: stair.upDirection, flip: stair.flip,
             sections: stair.sections ?? null,
+            entrySide: stair.entrySide ?? null, arrivalSide: stair.arrivalSide ?? null,
+            entryTurnSteps: stair.entryTurnSteps ?? 0, arrivalTurnSteps: stair.arrivalTurnSteps ?? 0,
           });
           changed = true;
         }

@@ -36,7 +36,7 @@ import { StairType, RoomFeature } from '@core';
 import { roomBounds, worldToCell, refreshCells } from '../gridCells.js';
 import { buildCellToRoom } from '../edgeClassify.js';
 import { makeFrame } from './stairGeometry.js';
-import { detectUTurn } from './stairClassify.js';
+import { uTurnSpans } from './stairClassify.js';
 import {
   DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH,
   computeExternalEdgeParams, findOutsideRoom, mergeSegments, clipToAxisExtent, onStairOpening,
@@ -91,14 +91,11 @@ const MIN_LEN = 1; // mm
 // beyondBreakUTurnLike（stairGeometry.js）と同じ手順で tRun（走行軸上の踊り場・回り部境界）を
 // 実測から導出する。導出不能なら null（レーン判定を行わず通常エッジ扱いにする＝安全側）。
 function buildUTurnContext(stair, graph) {
-  const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
   const b = roomBounds(stair.cells, graph);
   if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return null;
-  const ut = detectUTurn(stair.cells, graph, vertical, b);
-  if (!ut) return null;
-  const f = makeFrame(stair, b);
-  if (!(ut.laneLen > 0) || ut.laneLen >= f.runLength) return null;
-  return { f, tRun: ut.laneLen / f.runLength };
+  const us = uTurnSpans(stair, graph, b);
+  if (!us) return null;
+  return { f: makeFrame(stair, b), tRun: us.tRun };
 }
 
 // エッジ p（computeExternalEdgeParams の1件。axisOffset は符号のみ ±1）の外側（室外方向）の

@@ -90,6 +90,14 @@ export const StairType = Object.freeze({
   OPEN_WELL:        'open_well',        // 中空き
 });
 
+// 折返し・回り階段の出入口（上り口・到達口）の辺。レーンが相手レーンより長く張り出す区間にだけ
+// 側面（inner/outer）を選べる。null=自動（張り出しがあれば inner、無ければ end）。
+export const StairPortSide = Object.freeze({
+  END:   'end',   // 走行端（レーン基端の辺）
+  INNER: 'inner', // 内側（隣レーン側の通り芯。設置階上階スラブの張り出しに取りつく既定）
+  OUTER: 'outer', // 外側（外周側）
+});
+
 // 構造材の種別（柱・梁共通）
 export const StructuralMaterialType = Object.freeze({
   WOOD:  'WOOD',

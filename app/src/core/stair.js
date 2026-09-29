@@ -29,12 +29,18 @@ export class Stair {
     flip        = false,
     sections    = null,    // 区間別・実段数（歩行順。偶数=直進部、奇数=踊場・周回部）。未指定はnull
     roomId      = null,    // 変換元 Room の ID（旧データ・上階自動設置分は null）
+    entrySide   = null,    // 上り口の辺（StairPortSide。折返し・回り階段で往路が張り出すときのみ有効。null=自動）
+    arrivalSide = null,    // 到達口（下り口）の辺（同上。復路が張り出すときのみ有効）
+    entryTurnSteps   = 0,  // 側面の上り口に取りつく回転部（張り出し区間）の蹴上数。0=平場。出入口が走行端なら 0
+    arrivalTurnSteps = 0,  // 側面の到達口に取りつく回転部の蹴上数（同上）
   } = {}) {
     this.id          = id;
     this.type        = type;
     this.structure   = structure;
     this.cells       = cells;
-    this.totalSteps  = sections ? totalStepsFromSections(sections) : totalSteps;
+    this.totalSteps  = sections
+      ? totalStepsFromSections(sections) + (entryTurnSteps || 0) + (arrivalTurnSteps || 0)
+      : totalSteps;
     this.tread       = tread;
     this.riser       = riser;
     this.nosing      = nosing;
@@ -43,6 +49,10 @@ export class Stair {
     this.flip        = flip;
     this.sections    = sections;
     this.roomId      = roomId;
+    this.entrySide   = entrySide;
+    this.arrivalSide = arrivalSide;
+    this.entryTurnSteps   = entryTurnSteps;
+    this.arrivalTurnSteps = arrivalTurnSteps;
     makeObservable(this, {
       type:        observable,
       structure:   observable,
@@ -56,14 +66,21 @@ export class Stair {
       flip:        observable,
       sections:    observable.ref,
       roomId:      observable,
+      entrySide:   observable,
+      arrivalSide: observable,
+      entryTurnSteps:   observable,
+      arrivalTurnSteps: observable,
       setField:    action,
       setCells:    action,
     });
   }
-  // sections（区間別・実段数配列）を設定すると、totalSteps（総マス数+上階床到達分1）を同期する。
+  // sections（区間別・実段数配列）または側面出入口の回転部蹴上数を設定すると、totalSteps
+  //（総マス数+上階床到達分1。取りつき回転部の蹴上を含む）を同期する。
   setField(field, value) {
     this[field] = value;
-    if (field === 'sections' && value) this.totalSteps = totalStepsFromSections(value);
+    if ((field === 'sections' || field === 'entryTurnSteps' || field === 'arrivalTurnSteps') && this.sections) {
+      this.totalSteps = totalStepsFromSections(this.sections) + (this.entryTurnSteps || 0) + (this.arrivalTurnSteps || 0);
+    }
   }
   setCells(cells) { this.cells = cells; }
 }

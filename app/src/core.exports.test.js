@@ -64,6 +64,7 @@ const EXPECTED_EXPORTS = [
   'SiteTriangle',
   'Stair',
   'StairType',
+  'StairPortSide',
   'SteelBeam',
   'SteelColumn',
   'StructuralBeam',

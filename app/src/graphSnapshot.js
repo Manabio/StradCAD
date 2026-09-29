@@ -149,6 +149,8 @@ function buildSnapshot(graph) {
           upDirection: s.upDirection, flip: s.flip,
           sections: s.sections ?? null,
           roomId: s.roomId ?? null,
+          entrySide: s.entrySide ?? null, arrivalSide: s.arrivalSide ?? null,
+          entryTurnSteps: s.entryTurnSteps ?? 0, arrivalTurnSteps: s.arrivalTurnSteps ?? 0,
         };
       }),
     stairOrder: [...graph.stairOrder],
@@ -791,6 +793,8 @@ function applySnapshot(graph, snapshot) {
         totalSteps: d.totalSteps, tread: d.tread, riser: d.riser ?? null,
         nosing: d.nosing, width: d.width, upDirection: d.upDirection, flip: d.flip,
         sections: d.sections ?? null, roomId: d.roomId ?? null,
+        entrySide: d.entrySide ?? null, arrivalSide: d.arrivalSide ?? null,
+        entryTurnSteps: d.entryTurnSteps ?? 0, arrivalTurnSteps: d.arrivalTurnSteps ?? 0,
       }, d.id);
     }
     const savedStairOrder = snapshot.stairOrder ?? [];

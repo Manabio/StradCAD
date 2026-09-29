@@ -1,10 +1,11 @@
 import { observer } from 'mobx-react-lite';
-import { StructuralMaterialType, StairType } from '@core';
+import { StructuralMaterialType, StairType, StairPortSide } from '@core';
 import { computeStairDimensions, floorHeightAbove } from './stairDimensions.js';
 import { roomBounds } from '../gridCells.js';
 import { measureStairSpans } from './stairClassify.js';
 import { stairFigurePrimitives } from './stairFigure.js';
-import { defaultSections } from './stairGeometry.js';
+import { resolveUTurnPorts } from './stairGeometry.js';
+import { applySectionDimEdit, sectionsForType, sameSections, portSideChange } from './stairSectionEdit.js';
 import { resetUnderStairSplit } from './stairUnderSplit.js';
 import { AutoScaledFigure } from '../../structural/sectionFigure/AutoScaledFigure.jsx';
 import { annotatedFigure } from '../../structural/sectionFigure/sectionGeometry.js';
@@ -50,6 +51,14 @@ const STRUCTURE_OPTIONS = [
   { value: StructuralMaterialType.STEEL, label: '鉄骨' },
 ];
 
+// 折返し・回り階段の出入口の辺（張り出すレーン側だけ表示。既定は内側＝隣レーン側の通り芯）
+const PORT_SIDE_OPTIONS = [
+  { value: StairPortSide.INNER, label: '内側（隣レーン側）' },
+  { value: StairPortSide.END,   label: '走行端' },
+  { value: StairPortSide.OUTER, label: '外側' },
+];
+const U_TURN_TYPES = new Set([StairType.SWITCHBACK, StairType.WINDING]);
+
 const DIRECTION_OPTIONS = [
   { value: 'up',    label: '上(↑)' },
   { value: 'down',  label: '下(↓)' },
@@ -77,6 +86,16 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
   const figure = validB
     ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans, graph }), STAIR_FIGURE_FRAME)
     : null;
+  // 出入口の辺（折返し・回り階段で往路／復路が張り出すときだけ選べる。stairGeometry.js と同じ解決）
+  const ports = U_TURN_TYPES.has(stair.type) && spans?.lengths?.length === 3
+    ? resolveUTurnPorts(stair, { laneLenA: spans.lengths[0], laneLenB: spans.lengths[2] })
+    : null;
+  // 出入口の切替: 走行端へ戻すと取りつき回転部は 0、側面へ切り替えると初期蹴上数を入れる（stairSectionEdit.js）
+  const onPortSideChange = (port) => (e) => withFinishUndo(graph, () => {
+    const overhang = Math.abs(spans.lengths[0] - spans.lengths[2]);
+    for (const [k, v] of Object.entries(portSideChange(stair, port, e.target.value, overhang))) stair.setField(k, v);
+    afterEdit();
+  });
 
   // 直進階段の編集時は階段下の分割セル指定を元に戻す（stairUnderSplit.js。
   // 分割CL自体は現仕様＝破れ線位置 FL+1600 へ同期され、STRAIGHT のままなら指定経路は
@@ -101,21 +120,22 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
   const onTypeChange = (e) => withFinishUndo(graph, () => {
     const t = e.target.value;
     stair.setField('type', t);
-    // 切替先タイプと区間数が合わないsections（未初期化・直進[1区間]↔踊り場付[3区間]等）は既定値で組み直す
-    const expected = defaultSections({ type: t, totalSteps: stair.totalSteps });
-    if (HAS_SECTIONS.has(t) && (!stair.sections || stair.sections.length !== expected?.length)) {
-      stair.setField('sections', expected);
+    // 切替先タイプと区間数が合わないsections（未初期化・直進[1区間]↔踊り場付[3区間]等）は既定値で
+    // 組み直し、折返し⇄回りの切替では回転部の段数を型に揃える（stairSectionEdit.js）。
+    if (HAS_SECTIONS.has(t)) {
+      const next = sectionsForType(t, stair);
+      if (next && !sameSections(next, stair.sections)) stair.setField('sections', next);
     }
     afterEdit();
   });
   // 図中編集：踏面寸・区間踏面数の寸法をクリック→NumPad 確定でフィールドへ反映（パネル入力は撤去済み）。
-  // 区間の入力値は踏面数（マス数）。内部の sections は実段数のため、
-  // 直進部（偶数index）は +1（実段数=踏面数+1）、踊場・周回部（奇数index）はそのまま換算する。
+  // 区間の入力値は踏面数（回転部は段数 R）。sections（実段数）への換算と、R による
+  // 折返し⇄回りのタイプ導出は stairSectionEdit.js に一本化。
   const onEditDim = (dim, value) => withFinishUndo(graph, () => {
     if (dim.target === 'sections') {
-      const arr = [...(stair.sections ?? defaultSections(stair))];
-      arr[dim.index] = Math.max(1, dim.index % 2 === 0 ? value + 1 : value);
-      stair.setField('sections', arr);
+      const { sections, type } = applySectionDimEdit(stair, dim.index, value);
+      stair.setField('sections', sections);
+      if (type !== stair.type) stair.setField('type', type);
     } else if (dim.target) {
       stair.setField(dim.target, value);
     }
@@ -182,6 +202,22 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
           <span style={labelStyle}>反転</span>
           <input type="checkbox" checked={stair.flip} onChange={e => withFinishUndo(graph, () => { stair.setField('flip', e.target.checked); afterEdit(); })} />
         </div>
+        {ports?.entryLonger && (
+          <div style={rowStyle}>
+            <span style={labelStyle}>上り口</span>
+            <select style={inputStyle} value={ports.entry} onChange={onPortSideChange('entry')}>
+              {PORT_SIDE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        )}
+        {ports?.arrivalLonger && (
+          <div style={rowStyle}>
+            <span style={labelStyle}>到達口</span>
+            <select style={inputStyle} value={ports.arrival} onChange={onPortSideChange('arrival')}>
+              {PORT_SIDE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        )}
 
         {dims.warnings.length > 0 && (
           <div style={{ marginTop: 8, padding: 8, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4 }}>

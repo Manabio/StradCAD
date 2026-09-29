@@ -10,7 +10,8 @@ import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/f
 import { FINISH_FIELDS, normalizePartialDominance } from '../finish/roomReinterpret.js';
 import { roomNameAnchor } from '../finish/roomLabel.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
-import { RoomFeature, RoomKind, applyDefaultBaseboard } from '@core';
+import { RoomFeature, RoomKind, StructuralMaterialType, applyDefaultBaseboard } from '@core';
+import { effectiveStructure, defaultMaterialFor } from '../structural/structureRules.js';
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
 import { composeCatalog, composeList, docDiffMap } from '../catalog/catalogRegistry.js';
 import { isMaterialCode } from '../catalog/materialCode.js';
@@ -741,14 +742,19 @@ export class FinishModeState {
       if (!wasStair) {
         room.setFeature(RoomFeature.STAIR);
         const cells = new Set(room.cells);
-        // namingCellOrder（commitDragで開いたダイアログの選択順セルキー）を上り口ヒントとして渡す。
-        // startDrag優先1経由（namingCellOrder無し）では null のまま渡り、現行の幾何推定にフォールバックする。
-        const cls = classifyStairArea(cells, this.graph, floorHeight, this.namingCellOrder);
+        // namingCellOrder（commitDragで開いたダイアログの選択順セルキー）を歩行順として渡す。
+        // startDrag優先1経由（namingCellOrder無し）では null のまま渡り、幾何推定にフォールバックする。
+        // 構造材は階の実効主構造から既定を引く（鉄骨なら回転部の初期段数 R=0）。
+        const structure = this._defaultStairStructure();
+        const cls = classifyStairArea(cells, this.graph, floorHeight, this.namingCellOrder, structure);
         const opts = {
           type: cls.type, cells, upDirection: cls.upDirection,
           flip: cls.flip ?? false, sections: cls.sections ?? null,
           roomId: room.id,
         };
+        if (structure) opts.structure = structure;
+        if (cls.entryTurnSteps)   opts.entryTurnSteps   = cls.entryTurnSteps;   // 側面の上り口に取りつく回転部
+        if (cls.arrivalTurnSteps) opts.arrivalTurnSteps = cls.arrivalTurnSteps;
         if (cls.totalSteps) opts.totalSteps = cls.totalSteps;
         convertedStair = this.graph.addStair(opts);
         // 直進階段は破れ線位置（FL+1600）の分割CLで階段下の指定経路を用意する（stairUnderSplit.js）
@@ -784,6 +790,16 @@ export class FinishModeState {
     // 境界エッジの生成はモード境界の差分追跡で行う（フェーズ4）。命名時の即時生成は廃止。
     this.lastNamingUndoEntry = pushFinishUndo(this.graph, undoBefore);
     return convertedStair;
+  }
+
+  /**
+   * 新規階段の構造材の既定。階の実効主構造（structureOverride → 建物全体）の材種が木造・鉄骨なら
+   * それ、RC 等・未定なら null（Stair の既定＝木造のまま）。
+   * @returns {string|null}
+   */
+  _defaultStairStructure() {
+    const material = defaultMaterialFor(effectiveStructure(this.graph, this.project));
+    return material === StructuralMaterialType.WOOD || material === StructuralMaterialType.STEEL ? material : null;
   }
 
   /**

@@ -92,6 +92,8 @@ const ST = {
   UP_DIR: 10, FLIP: 11,
   HAS_SECTIONS: 12, SECTIONS: 13, // 区間別・段数（歩行順、カンマ区切り文字列。例:"4,1,3"）
   ROOM_ID: 14, // 変換元 Room の ID（空文字列 = null。旧データ・上階自動設置分は常に空）
+  ENTRY_SIDE: 15, ARRIVAL_SIDE: 16, // 出入口の辺（StairPortSide。空文字列 = null＝自動）
+  ENTRY_TURN_STEPS: 17, ARRIVAL_TURN_STEPS: 18, // 側面出入口に取りつく回転部の蹴上数（既定 0）
 };
 
 // StructuralMaterialType 列挙値エンコード（柱・梁・耐力壁・スラブ・基礎で共通）
@@ -847,12 +849,14 @@ function writeStair(b, st) {
   const sStru = b.createString(st.structure ?? 'WOOD');
   const sUp   = b.createString(st.upDirection ?? 'right');
   const sRoomId = b.createString(st.roomId ?? '');
+  const sEntry   = b.createString(st.entrySide ?? '');
+  const sArrival = b.createString(st.arrivalSide ?? '');
   const cellsVec = writeStrVec(b, st.cells ?? []);
   const hasRiser = st.riser != null;
   const hasSections = st.sections != null;
   const sSections = hasSections ? b.createString(st.sections.join(',')) : 0;
 
-  b.startObject(15);
+  b.startObject(19);
   b.addFieldOffset(ST.ID,        sId,   0);
   b.addFieldOffset(ST.TYPE,      sType, 0);
   b.addFieldOffset(ST.STRUCTURE, sStru, 0);
@@ -868,6 +872,10 @@ function writeStair(b, st) {
   b.addFieldInt8(ST.HAS_SECTIONS, hasSections ? 1 : 0, 0);
   b.addFieldOffset(ST.SECTIONS,   sSections, 0);
   b.addFieldOffset(ST.ROOM_ID,    sRoomId, 0);
+  b.addFieldOffset(ST.ENTRY_SIDE,   sEntry,   0);
+  b.addFieldOffset(ST.ARRIVAL_SIDE, sArrival, 0);
+  b.addFieldFloat64(ST.ENTRY_TURN_STEPS,   st.entryTurnSteps ?? 0, 0.0);
+  b.addFieldFloat64(ST.ARRIVAL_TURN_STEPS, st.arrivalTurnSteps ?? 0, 0.0);
   return b.endObject();
 }
 
@@ -1521,6 +1529,10 @@ function readStair(bb, tablePos) {
       ? (r.str(ST.SECTIONS) || '').split(',').filter(Boolean).map(Number)
       : null,
     roomId:      r.str(ST.ROOM_ID) || null, // 旧データ（フィールド欠落）は空文字列扱い→null
+    entrySide:   r.str(ST.ENTRY_SIDE) || null,   // 旧データ（フィールド欠落）→ null＝自動
+    arrivalSide: r.str(ST.ARRIVAL_SIDE) || null,
+    entryTurnSteps:   r.f64(ST.ENTRY_TURN_STEPS) || 0,
+    arrivalTurnSteps: r.f64(ST.ARRIVAL_TURN_STEPS) || 0,
   };
 }
 

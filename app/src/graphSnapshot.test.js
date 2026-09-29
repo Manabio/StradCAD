@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef,
-  DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF, ShaftSoundproof,
+  DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF, ShaftSoundproof, StairType,
 } from './core.js';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
@@ -35,6 +35,33 @@ function makeGraphWithWindow(openingProps) {
   const o = graph.addOpening(axisCL, 1, false, clStart, 1000, 1690, OpeningCategory.WINDOW, 'doubleSliding', openingProps);
   return { graph, opening: o };
 }
+
+test('Stair.entrySide/arrivalSide は FlatBuffers encode→decode で往復し、未指定（null）は null のまま', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const cells = new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]);
+  const withSides = graph.addStair({ type: StairType.SWITCHBACK, cells, sections: [5, 1, 5], entrySide: 'outer', arrivalSide: 'end', entryTurnSteps: 3 });
+  const auto = graph.addStair({ type: StairType.WINDING, cells, sections: [5, 5, 4] });
+  assert.equal(withSides.totalSteps, 13, '総蹴上数は取りつき回転部（3）を含む: 10+3');
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const s1 = restored.stairMap.get(withSides.id);
+  assert.equal(s1.entrySide, 'outer');
+  assert.equal(s1.arrivalSide, 'end');
+  assert.equal(s1.entryTurnSteps, 3);
+  assert.equal(s1.arrivalTurnSteps, 0);
+  assert.equal(s1.totalSteps, 13);
+  const s2 = restored.stairMap.get(auto.id);
+  assert.equal(s2.entrySide, null);
+  assert.equal(s2.arrivalSide, null);
+  assert.equal(s2.entryTurnSteps, 0);
+});
 
 test('Opening.fixtureType/sillHeight は FlatBuffers encode→decode で往復する', () => {
   const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800 });
