@@ -45,3 +45,26 @@ test('【失敗系】fillBeamAxisOriginIfUnknown: 補助線(lineType:dashed)に�
   assert.equal(ok, false);
   assert.equal(cl.beamAxisOrigin, null);
 });
+
+// ---- value の3分岐（undo復帰時アーキ壁ドリフト修正・260929指示書ステップ1） ----
+// _value は「絶対座標値」であり続ける前提での value() の分岐を固定する。
+
+test('value: refId無しなら_valueをそのまま返す', () => {
+  const cl = new CenterLine('cl-1', CenterLineType.HORIZONTAL, 700, {});
+  assert.equal(cl.value, 700);
+});
+
+test('value: refIdが解決済み(_referencedCLあり)なら 親.value + refOffset を返す', () => {
+  const parent = new CenterLine('parent', CenterLineType.HORIZONTAL, 1000, {});
+  const child  = new CenterLine('child', CenterLineType.HORIZONTAL, 999,
+    { refId: parent.id, refOffset: 500 });
+  child._referencedCL = parent;
+  assert.equal(child.value, 1500);
+});
+
+test('【失敗系】value: refIdはあるが未解決(_referencedCL無し)なら_valueをそのまま返す（refOffsetを足さない。HEADでは1500+500=2000に化ける＝赤）', () => {
+  const child = new CenterLine('child', CenterLineType.HORIZONTAL, 1500,
+    { refId: 'ghost-parent', refOffset: 500 });
+  // _referencedCL は初期値null（未解決を模す。PlanGraphが解決に失敗したケース）
+  assert.equal(child.value, 1500);
+});

@@ -699,20 +699,44 @@ export class PlanGraph {
    * restoreGraph 等で参照先が自分より後に追加される順序だと解決漏れが起きる
    * （フロア切替でCLの短縮が解除されY2まで延長される不具合の原因）。
    * 全 CL 追加後に呼び、未解決分だけ解決し直す（解決済みの参照は上書きしない）。
+   *
+   * **前提条件**: 復元の最終段（スナップショットの全 CL 登録後）以外で呼んではならない。
+   * 未解決分を解決しても埋まらない参照は、ここで静的化する副作用を持つ（呼び出しタイミングを
+   * 誤ると、まだ登録されていないだけの正当な親を「参照先が無い」と誤検出して静的化してしまう）。
+   * refId は refId=null（はね出し追従・延長端点参照を諦める。_value は案Aによりすでに絶対座標
+   * なので触らない）、extentLoRef/extentHiRef は `_extentLo`/`_extentHi`（通常 null＝自由端。
+   * その時点の extentLo/extentHi の計算値へ固定）へ静的化する。addCenterLine 直後の
+   * resolveNewCenterLineRefs（clRefResolve.js）は復元順序の途中でも呼ばれるため静的化しない
+   * （正当な「親がまだ登録されていない」順序を誤検出するため）。
    */
   resolveCenterLineRefs() {
     for (const cl of this.centerLines) {
       if (cl.refId && !cl._referencedCL) {
         const refCL = resolveCLById(this.shapeMap, this._structGraph, cl.refId, CenterLine);
-        if (refCL) cl._referencedCL = refCL;
+        if (refCL) {
+          cl._referencedCL = refCL;
+        } else {
+          console.warn('[centerLine] 参照先が無いためはね出し追従を解除', cl.id, cl.refId);
+          cl.refId = null; // _value は案A（絶対座標）によりすでに正しいので触らない
+        }
       }
       if (cl.extentLoRef?.clId && !cl._extentLoCL) {
         const loCL = resolveCLById(this.shapeMap, this._structGraph, cl.extentLoRef.clId, CenterLine);
-        if (loCL) cl._extentLoCL = loCL;
+        if (loCL) {
+          cl._extentLoCL = loCL;
+        } else {
+          console.warn('[centerLine] extentLoRef参照先が無いため静的化', cl.id, cl.extentLoRef.clId);
+          this.setCenterLineExtentRef(cl, 'lo', null, cl.extentLo);
+        }
       }
       if (cl.extentHiRef?.clId && !cl._extentHiCL) {
         const hiCL = resolveCLById(this.shapeMap, this._structGraph, cl.extentHiRef.clId, CenterLine);
-        if (hiCL) cl._extentHiCL = hiCL;
+        if (hiCL) {
+          cl._extentHiCL = hiCL;
+        } else {
+          console.warn('[centerLine] extentHiRef参照先が無いため静的化', cl.id, cl.extentHiRef.clId);
+          this.setCenterLineExtentRef(cl, 'hi', null, cl.extentHi);
+        }
       }
     }
   }
@@ -725,11 +749,21 @@ export class PlanGraph {
     for (const cl of this.centerLines) {
       if (cl.extentLoRef?.wallId) {
         const loWall = resolveWallById(this.shapeMap, cl.extentLoRef.wallId, ShapeType);
-        if (loWall) cl._extentLoWall = loWall;
+        if (loWall) {
+          cl._extentLoWall = loWall;
+        } else {
+          console.warn('[centerLine] extentLoRef(壁)参照先が無いため静的化', cl.id, cl.extentLoRef.wallId);
+          this.setCenterLineExtentRef(cl, 'lo', null, cl.extentLo);
+        }
       }
       if (cl.extentHiRef?.wallId) {
         const hiWall = resolveWallById(this.shapeMap, cl.extentHiRef.wallId, ShapeType);
-        if (hiWall) cl._extentHiWall = hiWall;
+        if (hiWall) {
+          cl._extentHiWall = hiWall;
+        } else {
+          console.warn('[centerLine] extentHiRef(壁)参照先が無いため静的化', cl.id, cl.extentHiRef.wallId);
+          this.setCenterLineExtentRef(cl, 'hi', null, cl.extentHi);
+        }
       }
     }
   }

@@ -22,10 +22,10 @@ import { calcStep } from '../renderer/clMoveMath.js';
 import {
   shouldSuggestWoodStructure, commitCLMoveOp, deleteCenterLineWithUndo, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo, setCenterLineStructuralListener,
-  applyCLEccentricityWithUndo, whenCenterLineOpsIdle,
+  applyCLEccentricityWithUndo, whenCenterLineOpsIdle, bakeCLValue,
 } from './centerLineOps.js';
 import { CL_KINDS, coexistenceAt } from '../core/centerLineKindPolicy.js';
-import { BeamAxisOrigin } from '../core/centerLine.js';
+import { BeamAxisOrigin, CenterLine } from '../core/centerLine.js';
 import { regenerateWalls, loadMaterialMap } from '../finish/wallRegeneration.js';
 import { wallFreshnessKey } from '../finish/wallFreshnessKey.js';
 import { recomputeStructuralForGraph } from '../structural/structuralRecompute.js';
@@ -4561,6 +4561,37 @@ test('addCenterLineFromDialog: 既存中心線位置への通り芯追加は中�
   undoManager.undo();
   assert.ok(graph.shapeMap.has(centerId), 'undoで中心線が復元される');
   assert.equal(project.structGraph.centerLines.some(cl => cl.value === 1000), false, 'undoで通り芯は消える');
+});
+
+// ---- bakeCLValue（QA差し戻しMajor-1・260929指示書） ----
+
+test('【失敗系】bakeCLValue: refIdが未解決（_referencedCL無し）のCLを動かすとvalueがnewValになる（refOffsetへ書いて黙って捨てられない）', () => {
+  const cl = new CenterLine('cl-1', CenterLineType.VERTICAL, 1500, { refId: 'ghost', refOffset: 500 });
+  // _referencedCL は初期値null（未解決を模す）
+  bakeCLValue(cl, 4000);
+  assert.equal(cl.value, 4000, 'HEADではrefOffsetへ書き込まれvalueが変わらず1500のまま化ける');
+  assert.equal(cl.pendingDelta, 0);
+});
+
+test('addCenterLineFromDialog: 既存中心線位置への通り芯昇格で、参照先(refId)が階固有CL（structGraphに置けない）なら、生成された通り芯はrefId:nullになる（QA指摘Major-1・未解決refIdを通り芯へ残さない）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false });
+  const centerId = centerCL.id;
+  // 参照先: 階固有CL（project.structGraphには存在しない＝昇格後は解決不能）
+  const floorRefCL = graph.addCenterLine(CenterLineType.VERTICAL, 500, { labeled: false });
+
+  const result = addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: floorRefCL.id, refOffset: 500 },
+    null,
+  );
+
+  assert.equal(result.done, true);
+  assert.equal(result.toast, ERR_CL_CENTER_UPGRADED);
+  assert.equal(graph.shapeMap.has(centerId), false, '旧中心線は削除される');
+  const structCL = project.structGraph.centerLines.find(cl => cl.value === 1000);
+  assert.ok(structCL, '通り芯として structGraph に追加される');
+  assert.equal(structCL.refId, null, '階固有CLは通り芯から解決できないためrefIdは持たない');
 });
 
 // ---- addCenterLineFromDialog: 構造同期リスナー（段階(c)・pushUndoWithStructuralSync・2026-09-25） ----

@@ -38,7 +38,7 @@ export class CenterLine extends Shape {
       ...props,
     });
     this.centerLineType = centerLineType;
-    this._value         = value;              // 絶対座標値（参照なし時）
+    this._value         = value;              // 絶対座標値（参照付きでも絶対座標。最後に解決できた位置）
     this.pendingDelta   = 0;                  // ドラッグ中の未確定変位（0 = 確定済み）
     this.refId          = props.refId ?? null; // 参照先 CenterLine の id
     this.refOffset      = props.refOffset ?? 0; // 参照先からのオフセット
@@ -81,9 +81,8 @@ export class CenterLine extends Shape {
   }
 
   get value() {
-    if (!this.refId) return this._value;
-    const refValue = this._referencedCL ? this._referencedCL.value : this._value;
-    return refValue + this.refOffset;
+    if (this.refId && this._referencedCL) return this._referencedCL.value + this.refOffset;
+    return this._value;
   }
   set value(v) {
     this._value = v;

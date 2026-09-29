@@ -43,7 +43,7 @@ function buildSnapshot(graph) {
   return {
     centerLines: floorCLs.map(cl => ({
       id: cl.id, centerLineType: cl.centerLineType,
-      value: cl._value, labeled: cl.labeled, trim: cl.trim,
+      value: cl.value, labeled: cl.labeled, trim: cl.trim,
       refId: cl.refId ?? null, refOffset: cl.refOffset ?? 0,
       extentLoRef: cl.extentLoRef ?? null, extentHiRef: cl.extentHiRef ?? null,
       extentLo: cl._extentLo ?? null, extentHi: cl._extentHi ?? null,
@@ -287,7 +287,10 @@ function buildStructSnapshot(structGraph, structuralInfo, ledger) {
       .filter(s => isStructCL(s))
       .map(cl => ({
         id: cl.id, centerLineType: cl.centerLineType,
-        value: cl._value, labeled: cl.labeled, trim: cl.trim,
+        // QA差し戻しMinor-4（260929）: 通り芯もrefIdを持ちうる（昇格時にstructGraph内の別通り芯を
+        // 参照する経路。transform/centerLineConvert.js:201・transform/centerLineOps.js:1358,1403）
+        // ため「refIdを持たないため据え置き」は誤り。案A（cl._value→cl.value）に揃える。
+        value: cl.value, labeled: cl.labeled, trim: cl.trim,
         refId: cl.refId ?? null, refOffset: cl.refOffset ?? 0,
         extentLoRef: cl.extentLoRef ?? null, extentHiRef: cl.extentHiRef ?? null,
         extentLo: cl._extentLo ?? null, extentHi: cl._extentHi ?? null,

@@ -666,6 +666,257 @@ test('restoreStructCLs は既存の structGraph 内容を置換し、既定通�
   assert.equal(dst.shapeMap.has(defH.id), false, '既定通り芯（横）は残らない');
 });
 
+// ---- undo復帰時アーキ壁ドリフト修正（260929指示書）ステップ1: 再現テスト ----
+// 階固有CL（子）が通り芯（親、structGraph側）へrefId+refOffsetで追従するケースの往復。
+// 真因: core/centerLine.js value() は refId未解決時に _value + refOffset を返すため、
+// _value が絶対座標のままの参照付きCLは「参照が解決できなくなった瞬間」に refOffset が
+// 二重加算される（graphSnapshot.js buildSnapshotは cl._value を保存する）。
+
+// 親（通り芯。project.structGraph）value=1000 に refOffset=500 で追従する子CL（階固有）を作る。
+function makeGraphWithRefChild(refOffset = 500) {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階');
+  const parent = project.structGraph.addCenterLine(
+    CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  // value（作成時引数）は実際の呼び出し元（addCenterLineFromDialog）と同様、絶対座標を渡す
+  // （ダイアログでユーザーが入力する座標。refOffsetは別途 value-親.value から算出される）。
+  const child = graph.addCenterLine(
+    CenterLineType.VERTICAL, 1000 + refOffset,
+    { labeled: false, discipline: Discipline.ARCH, refId: parent.id, refOffset });
+  return { project, graph, parent, child };
+}
+
+test('参照付き階固有CL（親=通り芯）は serializeGraph→restoreGraph で value・refId が不変', () => {
+  const { project, graph, parent, child } = makeGraphWithRefChild();
+  assert.equal(child.value, 1500, '前提: 親1000 + refOffset500 = 1500');
+
+  const bytesStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  const bytesFloor   = serializeGraph(graph);
+
+  const project2 = new Project('proj2', 'test');
+  const { graph: graph2 } = project2.addPlane(0, '1階');
+  restoreStructCLs(project2.structGraph, project2.structuralInfo, bytesStruct, project2.memberGroupLedger);
+  restoreGraph(graph2, bytesFloor);
+
+  const child2 = graph2.shapeMap.get(child.id);
+  assert.ok(child2);
+  assert.equal(child2.value, 1500, '親が解決できる限りvalueは変わらない');
+  assert.equal(child2.refId, parent.id, '親が解決できるあいだrefIdは維持される');
+});
+
+// QA差し戻しMajor-2（260929）: 上のテストは子を_value=1500（親1000+refOffset500）のまま作るため、
+// buildSnapshotをcl._value保存へ戻しても親移動が無ければ緑のまま＝検出力が無い。
+// 親を後から動かし、_value（作成時の古い値）とvalue（計算値）を乖離させてから往復させる。
+test('【QA差し戻しMajor-2】親(通り芯)を後から移動した参照付き子CLは、serializeGraph→restoreGraphの往復後もvalueが親移動後の座標のまま（_valueへ戻すと赤になる）', () => {
+  const { project, graph, parent, child } = makeGraphWithRefChild();
+  assert.equal(child.value, 1500);
+
+  parent.value = 2000; // 親を移動（refIdで追従する子はvalueが2500になるが、_valueは1500のまま乖離する）
+  assert.equal(child.value, 2500, '前提: 親移動後、子はrefOffset分ずれて2500');
+  assert.notEqual(child._value, child.value, '前提: _valueは古い1500のままでvalueと乖離している');
+
+  // 親を宙に浮かせる（指示書§1.2最下行と同じ最小実験）
+  project.structGraph.shapeMap.delete(parent.id);
+
+  const bytesFloor = serializeGraph(graph);
+  restoreGraph(graph, bytesFloor);
+
+  const child2 = graph.shapeMap.get(child.id);
+  assert.ok(child2);
+  assert.equal(child2.value, 2500, 'cl.value(計算値)を保存するため、親移動後の座標のまま復元される（cl._valueに戻すと1500に化けて赤）');
+  assert.equal(child2.refId, null, '解決できない参照は静的化される');
+});
+
+test('親（通り芯）を _reparentChildCenterLines を経由せず直接消して宙に浮かせた後、serializeGraph→restoreGraphでもvalueは絶対座標(1500)のまま不変で、refIdは静的化される（G1・G2。HEADでは2000に化ける＝赤）', () => {
+  const { project, graph, child } = makeGraphWithRefChild();
+  assert.equal(child.value, 1500);
+
+  // 指示書§1.2最下行の最小実験: _removeShape/removeCenterLine（reparent含む）を通さず直接消す
+  project.structGraph.shapeMap.delete(child.refId);
+
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  let graph2;
+  try {
+    const bytesFloor = serializeGraph(graph);
+    graph2 = graph; // 同一グラフへ復元（restoreGraphはgraph.clear()するため往復として成立する）
+    restoreGraph(graph2, bytesFloor);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const child2 = graph2.shapeMap.get(child.id);
+  assert.ok(child2);
+  assert.equal(child2.value, 1500, '宙に浮いた参照でもvalueは絶対座標1500のまま（HEADでは_value1500+refOffset500=2000に化ける）');
+  assert.equal(child2.refId, null, '解決できない参照は復元時に静的化される（G2）');
+  assert.equal(child2._referencedCL, null);
+
+  const dangling = graph2.centerLines.filter(cl => cl.refId && !cl._referencedCL);
+  assert.equal(dangling.length, 0, '復元後、宙に浮いたrefIdを持つCLは0件（G2）');
+
+  assert.equal(warnings.length, 1, '静的化時にconsole.warnが1回呼ばれる');
+});
+
+test('【失敗系ではない対照】親が解決できる通常ケースの復元ではconsole.warnは呼ばれない（0回）', () => {
+  const { graph } = makeGraphWithRefChild();
+
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    restoreGraph(graph, serializeGraph(graph));
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 0);
+});
+
+test('宙に浮いたrefIdを含むCLの静的化後は、serialize→restore→serializeでバイト列が一致する（2回目と3回目が一致）', () => {
+  const { project, graph, child } = makeGraphWithRefChild();
+  project.structGraph.shapeMap.delete(child.refId);
+
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  let bytes2, bytes3;
+  try {
+    const bytes1 = serializeGraph(graph);
+    restoreGraph(graph, bytes1); // 1回目の復元で静的化が起きる
+    bytes2 = serializeGraph(graph);
+    restoreGraph(graph, bytes2); // 2回目は既にrefId=nullなので静的化は起きない
+    bytes3 = serializeGraph(graph);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.deepEqual(Array.from(bytes2), Array.from(bytes3), '静的化後の往復は冪等');
+});
+
+// ---- QA差し戻しMajor-3（260929）: extent参照（clId型・wallId型）の静的化失敗系 ----
+
+test('【失敗系】extentLoRef/extentHiRefのclIdが復元時に解決できないと静的化され、console.warnが2回呼ばれる', () => {
+  const graph = makeGraph();
+  const loCL = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const hiCL = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const aux  = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, lineType: 'dashed' });
+  graph.setCenterLineExtentRef(aux, 'lo', { clId: loCL.id });
+  graph.setCenterLineExtentRef(aux, 'hi', { clId: hiCL.id });
+  assert.equal(aux.extentLo, 0);
+  assert.equal(aux.extentHi, 3000);
+
+  // 参照先を detachFromCenterLine/teardown を経由せず直接消す（指示書§1.2最下行と同型の最小実験）
+  graph.shapeMap.delete(loCL.id);
+  graph.shapeMap.delete(hiCL.id);
+
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    restoreGraph(graph, serializeGraph(graph));
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const aux2 = graph.shapeMap.get(aux.id);
+  assert.ok(aux2);
+  assert.equal(aux2.extentLoRef, null, 'lo側は静的化される');
+  assert.equal(aux2.extentHiRef, null, 'hi側は静的化される');
+  assert.equal(aux2._extentLoCL, null);
+  assert.equal(aux2._extentHiCL, null);
+  assert.equal(warnings.length, 2, 'lo・hiそれぞれで1回ずつ、計2回warnされる');
+});
+
+test('extentLoRef/extentHiRefのclIdが解決できる通常ケースでは静的化されずwarnは0回', () => {
+  const graph = makeGraph();
+  const loCL = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const hiCL = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const aux  = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, lineType: 'dashed' });
+  graph.setCenterLineExtentRef(aux, 'lo', { clId: loCL.id });
+  graph.setCenterLineExtentRef(aux, 'hi', { clId: hiCL.id });
+
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    restoreGraph(graph, serializeGraph(graph));
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const aux2 = graph.shapeMap.get(aux.id);
+  assert.ok(aux2);
+  assert.equal(aux2.extentLoRef?.clId, loCL.id);
+  assert.equal(aux2.extentHiRef?.clId, hiCL.id);
+  assert.equal(warnings.length, 0);
+});
+
+// 壁の軸CLをstructGraphから欠落させ、壁自体が復元で捨てられる構成（restoreGraphの壁解決は
+// 例外もログもなく捨てる仕様。§606-608コメント参照）を使ってwallId型のextentRefを検証する。
+function makeProjectWithAuxRefWall() {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階');
+  const axisCL  = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const clStart = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: true, discipline: Discipline.STRUCT });
+  const clEnd   = project.structGraph.addCenterLine(CenterLineType.VERTICAL,   3000, { labeled: true, discipline: Discipline.STRUCT });
+  const wall = graph.addWall(axisCL, 75, false, clStart, 0, clEnd, 0, { isExteriorWall: true });
+  const aux = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, lineType: 'dashed' });
+  graph.setCenterLineExtentRef(aux, 'lo', { wallId: wall.id });
+  return { project, graph, wall, aux };
+}
+
+test('【失敗系】extentLoRefのwallIdが指す壁が復元で失われると静的化され、console.warnが1回呼ばれる', () => {
+  const { graph, wall, aux } = makeProjectWithAuxRefWall();
+  assert.equal(typeof aux.extentLo, 'number', '前提: 壁経由でextentLoが解決できている');
+
+  const bytesFloor = serializeGraph(graph);
+
+  // 復元先のstructGraphは空のまま（意図的に軸CLを欠落させ、壁が復元されない状態を作る）
+  const project2 = new Project('proj2', 'test');
+  const { graph: graph2 } = project2.addPlane(0, '1階');
+
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    restoreGraph(graph2, bytesFloor);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(graph2.shapeMap.has(wall.id), false, '前提: 軸CLが無いので壁は復元されない');
+  const aux2 = graph2.shapeMap.get(aux.id);
+  assert.ok(aux2);
+  assert.equal(aux2.extentLoRef, null, '壁を失った参照は静的化される');
+  assert.equal(aux2._extentLoWall, null);
+  assert.equal(warnings.length, 1);
+});
+
+test('extentLoRefのwallIdが指す壁が復元でも維持されれば参照は解決されwarnは0回（対照）', () => {
+  const { project, graph, wall, aux } = makeProjectWithAuxRefWall();
+
+  const bytesStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  const bytesFloor   = serializeGraph(graph);
+
+  const project2 = new Project('proj2', 'test');
+  const { graph: graph2 } = project2.addPlane(0, '1階');
+  restoreStructCLs(project2.structGraph, project2.structuralInfo, bytesStruct, project2.memberGroupLedger);
+
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    restoreGraph(graph2, bytesFloor);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.ok(graph2.shapeMap.has(wall.id), '前提: 軸CLが解決できるので壁は復元される');
+  const aux2 = graph2.shapeMap.get(aux.id);
+  assert.ok(aux2);
+  assert.equal(aux2.extentLoRef?.wallId, wall.id, '壁が残れば参照は維持される');
+  assert.ok(aux2._extentLoWall);
+  assert.equal(warnings.length, 0);
+});
+
 // ---- Ship A: plane一覧（serializePlanes/decodePlanes）の FlatBuffers 往復 ----
 test('serializePlanes → decodePlanes は plane一覧（通常階・検討階・屋根平面）を往復する', () => {
   const project = new Project('proj', 'test');

@@ -84,8 +84,11 @@ function pushUndoWithStructuralSync(graph, project, scope, undoFn, redoFn, saveF
 
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
 export function bakeCLValue(cl, newVal) {
-  if (cl.refId) {
-    cl.refOffset = newVal - (cl._referencedCL?.value ?? cl._value);
+  // refIdはあるが未解決（_referencedCL無し）なら、はね出し追従が成立していないため
+  // refOffsetを書いても黙って捨てられる（core/centerLine.js get value()は未解決時に
+  // refOffsetを足さない＝案A）。この場合はvalue（=_value。絶対座標）を直接書く。
+  if (cl.refId && cl._referencedCL) {
+    cl.refOffset = newVal - cl._referencedCL.value;
   } else {
     cl.value = newVal;
   }
@@ -1353,9 +1356,13 @@ export function addCenterLineFromDialog(graph, project, payload, viewport, opts 
         ...(existing._extentHi != null ? { extentHi: existing._extentHi } : {}),
       };
       graph.removeCenterLine(deletedId);
+      // 通り芯はproject.structGraphにしか置けないため、refIdの解決可否も同グラフだけで判定する
+      // （:1395 isRefResolvableと同じガード。無条件で渡すと未解決refIdが通り芯へ残り、
+      // bakeCLValueでの移動が黙って捨てられる＝QA指摘Major-1）。
+      const isRefResolvableForPromote = refId ? !!project.structGraph.shapeMap.get(refId) : false;
       const structProps = {
         discipline: Discipline.STRUCT,
-        ...(refId ? { refId, refOffset: refOffset ?? 0 } : {}),
+        ...(isRefResolvableForPromote ? { refId, refOffset: refOffset ?? 0 } : {}),
       };
       // 通り芯は project.structGraph に追加する
       const structCL = project.structGraph.addCenterLine(clType, value, structProps);
