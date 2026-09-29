@@ -7,10 +7,18 @@ import { resolveStairUnderEntries } from '../finish/stair/stairUnderRooms.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
-import { FINISH_FIELDS, normalizePartialDominance } from '../finish/roomReinterpret.js';
+import { normalizePartialDominance } from '../finish/roomReinterpret.js';
 import { roomNameAnchor } from '../finish/roomLabel.js';
+import { makeRoomUndefined } from '../finish/roomUndefined.js';
+import { selfFloorEquipmentCatalog, nextEquipmentNo } from '../finish/equipment/equipmentNumbering.js';
+import { equipmentAtCell } from '../finish/equipment/equipmentGeometry.js';
+import { equipmentHighlightKeys } from '../finish/equipment/equipmentTab.js';
+import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
 import { ERR_MATERIAL_MISMATCH } from '../error.js';
-import { RoomFeature, RoomKind, StructuralMaterialType, applyDefaultBaseboard } from '@core';
+import {
+  RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, applyDefaultBaseboard,
+  ElevatorEquipmentCategory, DEFAULT_EV_USAGE,
+} from '@core';
 import { effectiveStructure, defaultMaterialFor } from '../structural/structureRules.js';
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
 import { composeCatalog, composeList, docDiffMap } from '../catalog/catalogRegistry.js';
@@ -44,6 +52,7 @@ export class FinishModeState {
   // 上り口ヒントに使う。startDrag優先1の階段選択経路では設定しない）。ダイアログを閉じる際にクリア。
   namingCellOrder = null;
   selectedStairId = null;
+  selectedEquipmentId = null; // 選択中の昇降機器具（器具行のid、または未登録の昇降路Roomのid）
 
   // ---- 直下階の階段（見下げ表示のヒット判定用。init() で peek しロード） ----
   lowerStairs = []; // Array<{ stair, cellBounds }>（cellBounds は下階graphで解決したワールド矩形配列）
@@ -84,6 +93,12 @@ export class FinishModeState {
     // 直近の applyNaming が積んだ undo エントリ（非observable）。階段変換時、
     // App.jsx が上階自動設置（syncUpperFloors）の巻き戻しを同じエントリへ合成するために参照する。
     this.lastNamingUndoEntry = null;
+    // applyNaming が昇降機の設置を拒否したときの文言（非observable。lastNamingUndoEntryと同じ
+    // 「フィールドで受け渡す」流儀。App.jsx が直後に読んでトースト表示する）。
+    this.lastNamingRejection = null;
+    // 直近の deleteEquipment が積んだ undo エントリ（非observable。setEquipmentUsageは
+    // withFinishUndoで積むため対象外）。
+    this.lastEquipmentUndoEntry = null;
     // _loadLowerStairs が peek した直下階グラフそのもの（非observable。lowerStairs は
     // 表示・見下げ判定用に stair+cellBounds へ加工した派生値のため、直下階の壁・部屋トポロジー
     // 全体が要る finish/finishBoundary.js の resolveStairContext 用にキャッシュを別枠で持つ。
@@ -96,6 +111,7 @@ export class FinishModeState {
       namingRoomId:   observable,
       namingIsNew:    observable,
       selectedStairId: observable,
+      selectedEquipmentId: observable,
       lowerStairs:     observable.ref,
       upperVoids:      observable.ref,
       upperFloorHeight: observable,
@@ -109,6 +125,7 @@ export class FinishModeState {
       interiorMasters: observable.ref,
       catalogResolveRows: observable.ref,
       isDragging:     computed,
+      selectedEquipmentCellKeys: computed,
       previewCells:   computed,
       startDrag:    action,
       updateDrag:   action,
@@ -122,6 +139,9 @@ export class FinishModeState {
       selectStair:  action,
       deleteStair:  action,
       revertStairToRoom:  action,
+      selectEquipment: action,
+      deleteEquipment: action,
+      setEquipmentUsage: action,
     });
   }
 
@@ -365,10 +385,12 @@ export class FinishModeState {
   }
 
   /**
-   * 部屋ドラッグから除外する自階階段セルの Set。破れ線先セルのうち、直下階に階段が無い
-   * （＝階段下エリア）ものは部屋ドラッグを許容するため除外対象から外す。
-   * 階段吹抜け（STAIR_VOID。最上階の自動管理 Room）のセルも除外する
+   * 部屋ドラッグから除外する自階階段・昇降路セルの Set（メソッド名は階段専用だった名残で変えていない）。
+   * 破れ線先セルのうち、直下階に階段が無い（＝階段下エリア）ものは部屋ドラッグを許容するため
+   * 除外対象から外す。階段吹抜け（STAIR_VOID。最上階の自動管理 Room）のセルも除外する
    * （commitDrag の rooms 走査から外れるため、除外しないと二重割当の部屋が作れてしまう）。
+   * isShaftFeature を持つ全 Room（昇降路）のセルも除外する——区分・部分指定・器具行の有無を
+   * 問わない（旧データの未登録昇降路も同時に除外。2-5・S3裁定Q2）。
    */
   _roomExcludedStairKeys() {
     const stairKeys = new Set();
@@ -387,7 +409,7 @@ export class FinishModeState {
       }
     }
     for (const room of this.graph.rooms) {
-      if (room.feature !== RoomFeature.STAIR_VOID) continue;
+      if (room.feature !== RoomFeature.STAIR_VOID && !isShaftFeature(room.feature)) continue;
       for (const key of refreshCells(room.cells, this.graph)) stairKeys.add(key);
     }
     return stairKeys;
@@ -396,6 +418,13 @@ export class FinishModeState {
   /** 階段（自階／下階見下げ）を選択し、部屋選択・命名・部屋ドラッグ状態をクリアする。 */
   _selectStair(id) {
     this.selectStair(id);
+    this.namingRoomId = null;
+    this.dragState    = null;
+  }
+
+  /** 昇降機器具（器具行 or 未登録の昇降路Room）を選択し、部屋選択・命名・部屋ドラッグ状態をクリアする。 */
+  _selectEquipment(id) {
+    this.selectEquipment(id);
     this.namingRoomId = null;
     this.dragState    = null;
   }
@@ -478,6 +507,7 @@ export class FinishModeState {
   // 構成セル全部をまとめて拾う（先頭はポインタ直下のセル）
   //
   // 階段クリックの優先順位（ポインタ直下 wx,wy で判定）:
+  //   0. 昇降機のセル（器具行 or 未登録の昇降路Room）  → その器具を選択（ダイアログなし）
   //   1. 自階階段のセルかつ破れ線手前          → その自階階段を選択のみ（ダイアログなし）
   //   2. 自階階段のセルで破れ線先＋下階階段あり → 下階階段を選択（見下げクリック。ダイアログなし）
   //   3. 自階に階段が無い＋下階階段あり         → 下階階段を選択（見下げクリック。ダイアログなし）
@@ -495,6 +525,11 @@ export class FinishModeState {
     // 判定すると、領域が階段の実占有より広い場合（L字の空象限が連結している等）に
     // 階段でないマスのクリックでも階段が選択されてしまう（＝矩形的な過剰選択）。
     const pointerKey = region[0].key;
+
+    // 優先0: 昇降機のセルを直接指した場合は、階段の探索より先にその器具を選択する。
+    const equipmentHit = equipmentAtCell(this.graph, pointerKey);
+    if (equipmentHit) { this._selectEquipment(equipmentHit.id); return; }
+
     let stair = null;
     for (const s of this.graph.stairs) {
       const cells = refreshCells(s.cells, this.graph);
@@ -566,7 +601,8 @@ export class FinishModeState {
    * 名称・区分・属性の編集は仕上げ表・内部タブのカード（onApplyNaming）へ移した。選択のみの
    * 分岐（判定1・判定3-部分指定・判定3-名前セル）はセルも undo も変更しない。
    * 階段エリアのセル（開始セルが自階階段）は startDrag 側で既に選択処理済みで
-   * commitDrag には到達しない。feature=STAIR の部屋は cells ドリフトに備えて防御的に除外する。
+   * commitDrag には到達しない。feature=STAIR・昇降路（isShaftFeature）の部屋は cells ドリフトに
+   * 備えて防御的に除外する（セル除外で通常到達しないはずだが、newCells に混入した場合の二重の守り）。
    */
   commitDrag() {
     const state = this.dragState;
@@ -592,7 +628,7 @@ export class FinishModeState {
 
     const rooms = this.graph.rooms.filter(r =>
       r.feature !== RoomFeature.STAIR && r.feature !== RoomFeature.STAIR_VOID
-      && r.feature !== RoomFeature.UNDEFINED);
+      && r.feature !== RoomFeature.UNDEFINED && !isShaftFeature(r.feature));
     const overlapping = rooms.filter(r => [...cellsOf(r)].some(c => newCells.has(c)));
 
     if (overlapping.length > 0) {
@@ -700,6 +736,7 @@ export class FinishModeState {
     this.namingRoomId    = roomId;
     this.namingCellOrder = cellOrder;
     this.selectedRoomId  = roomId;
+    this.selectedEquipmentId = null;
   }
 
   /**
@@ -716,6 +753,7 @@ export class FinishModeState {
   selectRoom(roomId) {
     this.selectedRoomId = roomId;
     this.selectedStairId = null;
+    this.selectedEquipmentId = null;
   }
 
   /**
@@ -726,18 +764,60 @@ export class FinishModeState {
    *   STAIR   → null/'void': 連動Stairを削除してfeatureを設定
    *   それ以外: setFeatureのみ（kindの排他・void切替）
    * 名前は feature==='stair' 以外は現行どおり既定「部屋」を適用する（stairは空許容）。
+   * 昇降機（isShaftFeature）への新規設置（非昇降機 → 昇降機）は validateElevatorInstall で
+   * 検証し、拒否なら this.lastNamingRejection にその文言を設定して何も変更せず return null する
+   * （Room は新規候補のまま・_pendingDialogUndo・namingRoomId・namingIsNew・namingCellOrder も保持。
+   * ダイアログは開いたまま——その後「なし」等で確定すれば、保持していた _pendingDialogUndo で
+   * 通常の1エントリになる）。既存の昇降機（判定2の統合先等）はこの検証の対象外——
+   * featureOptionsForDialog(room, { isNew: false }) が昇降機の選択肢自体を出さないため、
+   * 実運用でこの経路には到達しない。
    * @returns {Stair|null} 新規に階段変換した場合はその Stair（呼び出し側の stairFloorSync 判定用）、それ以外は null。
    */
   applyNaming(roomId, { name, kind, feature }, floorHeight = null) {
+    this.lastNamingRejection = null;
+
+    const room = this.graph.roomMap.get(roomId);
+    if (!room) {
+      // Room が見つからない＝もう戻れない確定失敗（拒否とは別）。古い保留undoを次の確定へ
+      // 持ち越さない（QA指摘: HEADはroomを探す前に消していたが、判定順の変更で漏れていた）。
+      this._pendingDialogUndo = null;
+      return null;
+    }
+
+    const isNewInstall = isShaftFeature(feature) && !isShaftFeature(room.feature);
+    if (isNewInstall) {
+      const reason = validateElevatorInstall({
+        graph: this.graph, room, kind,
+        isNewCandidate: this.namingIsNew && this.namingRoomId === roomId,
+      });
+      if (reason) { this.lastNamingRejection = reason; return null; }
+    }
+
     // 新規部屋なら作成前（commitDrag 冒頭）のスナップショットを使い、
     // 「作成＋命名」を1つの undo エントリにまとめる。既存部屋なら現時点から。
     const undoBefore = this._pendingDialogUndo ?? snapshotFinishState(this.graph);
     this._pendingDialogUndo = null;
 
-    const room = this.graph.roomMap.get(roomId);
-    if (!room) return null;
-
     room.setKind(kind);
+
+    if (isNewInstall) {
+      this.namingRoomId    = null;
+      this.namingIsNew     = false;
+      this.namingCellOrder = null;
+      this._subtractCellsFromUndefined(room.cells); // 候補Roomが統合で消える前に
+      const { equipmentId } = installEquipment(this.graph, {
+        id: crypto.randomUUID(), category: ElevatorEquipmentCategory.EV, usage: DEFAULT_EV_USAGE,
+        no: nextEquipmentNo(this.equipmentCatalog(), ElevatorEquipmentCategory.EV),
+        cells: refreshCells(room.cells, this.graph),
+        candidateRoomId: room.id,
+      });
+      normalizePartialDominance(this.graph);
+      this.selectedRoomId     = null;
+      this.selectedStairId    = null;
+      this.selectedEquipmentId = equipmentId;
+      this.lastNamingUndoEntry = pushFinishUndo(this.graph, undoBefore);
+      return null;
+    }
 
     const wasStair = room.feature === RoomFeature.STAIR;
     const toStair  = feature === RoomFeature.STAIR;
@@ -776,6 +856,7 @@ export class FinishModeState {
       // 屋外部屋（階段・非階段共通）→ 外部タブに部位の行を自動追加／更新。屋内へ切替 → 連動行を削除。
       this._syncExteriorRows(room);
       this.selectedRoomId = room.id;
+      this.selectedEquipmentId = null;
     } else {
       if (wasStair) this._removeLinkedStair(roomId); // STAIR → null/void: 連動Stairを削除
       room.setFeature(feature ?? null);
@@ -783,6 +864,7 @@ export class FinishModeState {
       this.sessionModifiedRoomIds.add(roomId);
       this.selectedRoomId  = roomId;
       this.selectedStairId = null;
+      this.selectedEquipmentId = null;
       // 屋外部屋（階段・非階段共通）→ 外部タブに部位の行を自動追加／更新。屋内へ切替 → 連動行を削除。
       this._syncExteriorRows(room);
     }
@@ -843,18 +925,11 @@ export class FinishModeState {
 
   /**
    * Room を「未定義」へ変換する（削除しても外壁線を維持するための残置）。
-   * kind と cells は保持し、名前・feature・仕上げ関連のみ初期化する。
-   * 未定義Room は仕上げ表から除外・無描画だがセル選択は可能（ドラッグで親指定Roomとして切り出せる）。
+   * 本体は finish/roomUndefined.js の makeRoomUndefined（純関数）へ移した——
+   * finish/equipment/equipmentOps.js の removeEquipment がモード状態を経由せず直接呼ぶため。
    */
   _makeUndefined(room) {
-    room.setName('');
-    room.setFeature(RoomFeature.UNDEFINED);
-    room.setTemplateKey(null);
-    room.customOverrides.clear();
-    for (const f of FINISH_FIELDS) room.finish.setField(f, '');
-    room.setFloorLevel(null);
-    room.namePosition = null;
-    room.generatedWallIds.clear();
+    makeRoomUndefined(room);
   }
 
   /**
@@ -910,6 +985,10 @@ export class FinishModeState {
     for (const child of children) this._deleteRoomNoUndo(child.id); // 再帰（各自の連動Stairガード込み）
 
     this._removeLinkedStair(roomId);
+    // ぶら下がった器具行を残さない（昇降路Roomを削除・未定義化するどちらの経路でも呼ぶ守り。
+    // 通常はセル除外・commitDragのroomsフィルタで昇降路Roomの直接削除経路には到達しないはずだが、
+    // 防御的に道連れ削除する——階段と同じ「防御的に除外」の流儀）。
+    this.graph.removeEquipmentRowsByRoomId(roomId);
     if (room.referenceRoomIds.size > 0 || room.kind === RoomKind.EXTERIOR) {
       if (room.kind === RoomKind.EXTERIOR) this.graph.removeExteriorRowsByRoomId(roomId); // 非階段屋外部屋の連動行も削除
       this.graph.removeRoom(roomId);
@@ -918,6 +997,7 @@ export class FinishModeState {
     }
     if (this.selectedRoomId === roomId) this.selectedRoomId = null;
     if (this.namingRoomId === roomId) this.namingRoomId = null;
+    if (this.selectedEquipmentId === roomId) this.selectedEquipmentId = null;
   }
 
   /**
@@ -949,6 +1029,39 @@ export class FinishModeState {
     // roomId が自階 roomMap に無いため（別階のRoom参照）、自然に null になる。
     const roomId = this.graph.stairMap.get(id)?.roomId ?? null;
     this.selectedRoomId = roomId && this.graph.roomMap.has(roomId) ? roomId : null;
+    this.selectedEquipmentId = null;
+  }
+
+  // ---- 昇降機器具 ----
+
+  /** 昇降機器具（器具行 or 未登録の昇降路Room）を選択する。部屋・階段の選択はクリアする。 */
+  selectEquipment(id) {
+    this.selectedEquipmentId = id;
+    this.selectedRoomId  = null;
+    this.selectedStairId = null;
+  }
+
+  /**
+   * 自階の器具カタログ（{id,category,no}[]）。ステップ3は自階の行だけを見る
+   * （selfFloorEquipmentCatalog）。ステップ4・5で全階分に差し替える予定の呼び出し口。
+   */
+  equipmentCatalog() {
+    return selfFloorEquipmentCatalog(this.graph.equipmentRows);
+  }
+
+  /** 昇降機器具の用途を変更する（withFinishUndo。同値・行なしは何もしない）。 */
+  setEquipmentUsage(id, usage) {
+    const row = this.graph.equipmentRows.find(r => r.id === id);
+    if (!row || row.usage === usage) return;
+    withFinishUndo(this.graph, () => row.setUsage(usage));
+  }
+
+  /** 昇降機器具を1基削除する（単階）。 */
+  deleteEquipment(id) {
+    const before = snapshotFinishState(this.graph);
+    removeEquipment(this.graph, id);
+    if (this.selectedEquipmentId === id) this.selectedEquipmentId = null;
+    this.lastEquipmentUndoEntry = pushFinishUndo(this.graph, before);
   }
 
   /** stair.roomId の Room が存在すればそれも削除する（階段タブの削除ボタン経由でも Room が残らないように）。 */
@@ -1000,12 +1113,15 @@ export class FinishModeState {
 
   get isDragging()   { return this.dragState !== null; }
   get previewCells() { return this.dragState ? [...this.dragState.visitedCells.values()] : []; }
+  /** 選択中の昇降機器具（selectedEquipmentId）の平面ハイライト用セルキー集合。 */
+  get selectedEquipmentCellKeys() { return equipmentHighlightKeys(this.graph, this.selectedEquipmentId); }
 
   // ---- Lifecycle ----
 
   dispose() {
     this.cancelDrag();
     this._pendingDialogUndo = null;
+    this.selectedEquipmentId = null;
     // 材データを破棄（仕上げモード離脱時）
     this.materials       = null;
     this.materialMap     = null;

@@ -154,10 +154,22 @@ test('【不変条件・W2】屋外部屋の群の削除は RoomDeleteConfirm（
 // ステップ1補足のQA指摘（重複解消）: 内部タブのカード・外部タブの屋外部屋の群の削除確認は
 // RoomDeleteConfirm（共通コンポーネント）に一本化され、mode.deleteRoom( の呼び出しはその内部
 // 1箇所だけになる。呼び出し側（InteriorTable・GroupedExteriorTable）は2箇所とも同じpropsで使う。
-test('【不変条件・W2b】mode.deleteRoom(deleteConfirm.roomId) の呼び出しは RoomDeleteConfirm 内の1箇所だけ（InteriorTable・GroupedExteriorTableが共有）', () => {
-  const deleteRoomMatches = codeOnly.match(/mode\.deleteRoom\(deleteConfirm\.roomId\)/g) ?? [];
-  assert.equal(deleteRoomMatches.length, 1,
-    `mode.deleteRoom(deleteConfirm.roomId) はRoomDeleteConfirm内の1箇所だけのはず（実際: ${deleteRoomMatches.length}）`);
+// 昇降機の仕様追加ステップ3（S4）: RoomDeleteConfirm 自体は finish/RoomDeleteConfirm.jsx へ
+// 切り出された（機械器具タブの未登録の昇降路の削除確認からも import するため）。
+// mode.deleteRoom(deleteConfirm.roomId) の呼び出しは FinishTable.jsx には無く（切り出し先の
+// RoomDeleteConfirm.jsx に1箇所だけ）、<RoomDeleteConfirm .../> の JSX 使用は
+// FinishTable.jsx 側に引き続き2箇所（InteriorTable・GroupedExteriorTable）。
+test('【不変条件・W2b】mode.deleteRoom(deleteConfirm.roomId) の呼び出しは RoomDeleteConfirm.jsx 内の1箇所だけ（FinishTable.jsx には無い。InteriorTable・GroupedExteriorTableが共有）', () => {
+  const deleteRoomMatchesInFinishTable = codeOnly.match(/mode\.deleteRoom\(deleteConfirm\.roomId\)/g) ?? [];
+  assert.equal(deleteRoomMatchesInFinishTable.length, 0,
+    `mode.deleteRoom(deleteConfirm.roomId) は FinishTable.jsx には無いはず（切り出し済み。実際: ${deleteRoomMatchesInFinishTable.length}）`);
+
+  const confirmSrc = fs.readFileSync(path.resolve(import.meta.dirname, 'RoomDeleteConfirm.jsx'), 'utf8');
+  const confirmCodeOnly = stripComments(confirmSrc);
+  const deleteRoomMatchesInConfirm = confirmCodeOnly.match(/mode\.deleteRoom\(deleteConfirm\.roomId\)/g) ?? [];
+  assert.equal(deleteRoomMatchesInConfirm.length, 1,
+    `mode.deleteRoom(deleteConfirm.roomId) は RoomDeleteConfirm.jsx 内の1箇所だけのはず（実際: ${deleteRoomMatchesInConfirm.length}）`);
+
   const usageMatches = codeOnly.match(
     /<RoomDeleteConfirm graph=\{graph\} mode=\{mode\} deleteConfirm=\{deleteConfirm\} onClose=\{\(\) => setDeleteConfirm\(null\)\} \/>/g) ?? [];
   assert.equal(usageMatches.length, 2,
@@ -210,9 +222,11 @@ test('【不変条件】TABS の id の並びが interior/stair/exterior/fitting
     ['interior', 'stair', 'exterior', 'fittings', 'structure', 'equipment', 'accessory', 'common']);
 });
 
-test('【不変条件】activeTab===equipment/accessory は <EmptyTabPlaceholder message="…" /> へ分岐し、ExteriorTable（else分岐）へ落ちない', () => {
-  assert.ok(/activeTab === 'equipment'\s*\?\s*<EmptyTabPlaceholder message="機械器具が登録されていません" \/>/.test(codeOnly),
-    'activeTab === \'equipment\' ? <EmptyTabPlaceholder message="機械器具が登録されていません" /> が見つからない');
+// 昇降機の仕様追加ステップ3（S4）: 機械器具タブは EmptyTabPlaceholder から EquipmentTab
+// （finish/equipment/EquipmentTab.jsx）へ置き換わった。附帯タブは引き続きプレースホルダのまま。
+test('【不変条件】activeTab===equipment は <EquipmentTab ...> へ、accessory は <EmptyTabPlaceholder message="…" /> へ分岐し、ExteriorTable（else分岐）へ落ちない', () => {
+  assert.ok(/activeTab === 'equipment'\s*\?\s*<EquipmentTab graph=\{graph\} mode=\{mode\} floorName=\{floorName\} \/>/.test(codeOnly),
+    'activeTab === \'equipment\' ? <EquipmentTab graph={graph} mode={mode} floorName={floorName} /> が見つからない');
   assert.ok(/activeTab === 'accessory'\s*\?\s*<EmptyTabPlaceholder message="附帯は未対応です" \/>/.test(codeOnly),
     'activeTab === \'accessory\' ? <EmptyTabPlaceholder message="附帯は未対応です" /> が見つからない');
 });

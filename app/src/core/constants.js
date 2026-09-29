@@ -79,6 +79,17 @@ export function isShaftFeature(feature) {
   return SHAFT_FEATURES.has(feature);
 }
 
+// 昇降機の分類（器具行が持つ。今回追加できるのはEVのみ。'dw'／'escalator'は先送り）。
+export const ElevatorEquipmentCategory = Object.freeze({ EV: 'ev' });
+
+// EV（昇降機の分類の1つ）の用途。
+export const EvUsage = Object.freeze({
+  PASSENGER:          'passenger',         // 乗用
+  PASSENGER_FREIGHT:  'passengerFreight',  // 人荷用
+  FREIGHT:            'freight',           // 荷物用
+});
+export const DEFAULT_EV_USAGE = EvUsage.PASSENGER;
+
 // 階段タイプ（MVPは STRAIGHT のみ実装。他は順次拡張）
 export const StairType = Object.freeze({
   STRAIGHT:         'straight',         // 直進

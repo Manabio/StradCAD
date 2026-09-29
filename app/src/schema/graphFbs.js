@@ -39,7 +39,7 @@ const SHAFT_SOUNDPROOF_ENC = { none: 0, insulation: 1 };
 // フィールドインデックス定数
 // ================================================================
 
-// GraphSnapshot (root): 52 フィールド
+// GraphSnapshot (root): 53 フィールド
 const GS = {
   CLS: 0, PTS: 1, WALLS: 2, DIAGS: 3, VLINES: 4, HLINES: 5, ARCS: 6, CIRCS: 7, DIMS: 8, ROOMS: 9, ROOM_ORDER: 10,
   // 11 は旧 INTERIOR_WALL_PANEL（内壁面材の per-floor 設定。部屋の壁材へ移行し廃止。slot 予約）
@@ -83,6 +83,8 @@ const GS = {
   // 昇降路（isShaftFeature の部屋）の壁仕上げ材・防音材（共通仕様タブ per-floor 設定）
   SHAFT_WALL_MATERIAL: 50, // string（空文字=null=旧データ→既定 DEFAULT_SHAFT_WALL_MATERIAL）
   SHAFT_SOUNDPROOF: 51,    // int8（none=0 / insulation=1。0 は旧データ＝既定 none と同義）
+  // 昇降機器具行（仕上げモード、設置階に帰属。per-floor。末尾追加）
+  EQUIPMENT_ROWS: 52,
 };
 
 // Stair: 15 フィールド
@@ -114,6 +116,10 @@ const ED = { KEY: 0, MASTER_TYPE: 1, OVR_KEYS: 2, OVR_VALS: 3 };
 
 // ExteriorFinishRow（外部仕上げ行 — exteriorRows/exteriorFittingRows/structureRowsで共通）: 6 フィールド
 const XR = { ID: 0, PART: 1, FINISH: 2, BASE: 3, NOTE: 4, ROOM_ID: 5 };
+
+// EquipmentRow（昇降機器具行）: 6 フィールド。分類・用途は文字列で保存（Stair.type等と同じ流儀）。
+// NOは float64（reader にi32読みが無いため。Stairの数値と同じ流儀）。
+const EQ = { ID: 0, CATEGORY: 1, USAGE: 2, NO: 3, CELL_KEYS: 4, ROOM_ID: 5 };
 
 // Room: 30 フィールド
 const RM = {
@@ -888,6 +894,23 @@ function writeStair(b, st) {
   return b.endObject();
 }
 
+function writeEquipmentRow(b, r) {
+  const sId       = b.createString(r.id);
+  const sCategory = b.createString(r.category ?? '');
+  const sUsage    = b.createString(r.usage    ?? '');
+  const sRoomId   = b.createString(r.roomId   ?? '');
+  const cellKeysVec = writeStrVec(b, r.cellKeys ?? []);
+
+  b.startObject(6);
+  b.addFieldOffset(EQ.ID,         sId,       0);
+  b.addFieldOffset(EQ.CATEGORY,   sCategory, 0);
+  b.addFieldOffset(EQ.USAGE,      sUsage,    0);
+  b.addFieldFloat64(EQ.NO,        r.no ?? 0, 0.0);
+  b.addFieldOffset(EQ.CELL_KEYS,  cellKeysVec, 0);
+  b.addFieldOffset(EQ.ROOM_ID,    sRoomId,   0);
+  return b.endObject();
+}
+
 // ----------------------------------------------------------------
 // 構造モード（柱・梁・耐力壁・耐力壁開口・スラブ・基礎・柱脚・貫通孔）
 // サブタイプ別フィールドは extraKeys/extraVals（Room.overrides と同じ文字列ペア配列）で表現する。
@@ -1545,6 +1568,18 @@ function readStair(bb, tablePos) {
   };
 }
 
+function readEquipmentRow(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    id:       r.str(EQ.ID),
+    category: r.str(EQ.CATEGORY) || null,
+    usage:    r.str(EQ.USAGE)    || null,
+    no:       r.f64(EQ.NO)       || null,
+    cellKeys: r.strVec(EQ.CELL_KEYS),
+    roomId:   r.str(EQ.ROOM_ID)  || null,
+  };
+}
+
 // ----------------------------------------------------------------
 // 構造モード（柱・梁・耐力壁・耐力壁開口・スラブ・基礎・柱脚・貫通孔）
 // ----------------------------------------------------------------
@@ -1746,8 +1781,9 @@ export function encode(snapshot) {
   const sShaftWallMaterial = b.createString(snapshot.shaftWallMaterial ?? '');
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
   const siteOff = writeSite(b, snapshot.site);
+  const equipmentRowsVec = writeVec(b, snapshot.equipmentRows ?? [], writeEquipmentRow);
 
-  b.startObject(52);
+  b.startObject(53);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1799,6 +1835,7 @@ export function encode(snapshot) {
   b.addFieldFloat64(GS.WOOD_COLUMN_WIDTH_MM, snapshot.woodColumnWidthMm ?? 0, 0.0);
   b.addFieldOffset(GS.SHAFT_WALL_MATERIAL, sShaftWallMaterial, 0);
   b.addFieldInt8(GS.SHAFT_SOUNDPROOF, SHAFT_SOUNDPROOF_ENC[snapshot.shaftSoundproof] ?? 0, 0);
+  b.addFieldOffset(GS.EQUIPMENT_ROWS, equipmentRowsVec, 0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1866,5 +1903,6 @@ export function decode(bytes) {
     woodColumnWidthMm:   r.f64(GS.WOOD_COLUMN_WIDTH_MM) || null,
     shaftWallMaterial:   r.str(GS.SHAFT_WALL_MATERIAL) || null,
     shaftSoundproof:     SHAFT_SOUNDPROOF_DEC[r.i8(GS.SHAFT_SOUNDPROOF)] ?? null,
+    equipmentRows:       r.vec(GS.EQUIPMENT_ROWS, readEquipmentRow),
   };
 }

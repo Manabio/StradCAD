@@ -37,6 +37,7 @@ import { CenterLine } from './centerLine.js';
 import { DimensionLine } from './dimension.js';
 import { WallBackingMaterial, Edge, ExteriorFinishRow, Room } from './room.js';
 import { Stair } from './stair.js';
+import { EquipmentRow } from './equipment.js';
 import {
   COLUMN_CLASS_BY_MATERIAL, BEAM_CLASS_BY_MATERIAL,
   WALL_CLASS_BY_MATERIAL, SLAB_CLASS_BY_MATERIAL,
@@ -77,6 +78,7 @@ export class PlanGraph {
     this.stairMap            = observable.map(); // id → Stair（設置階に帰属）
     this.stairOrder          = observable.array([]); // 階段の表示順 — Stair ID の配列
     this.exteriorRows        = observable.array([]); // 外部仕上げ行
+    this.equipmentRows       = observable.array([]); // 昇降機器具行（設置階に帰属。id/no/categoryは全階共通）
     this.exteriorFittingRows = observable.array([]); // 外部建具仕上げ行
     this.structureRows       = observable.array([]); // 構造仕上げ行
     this.backingMaterialMap  = observable.map(); // id → WallBackingMaterial（手動壁用に温存。下記「壁下地材操作」参照）
@@ -239,6 +241,9 @@ export class PlanGraph {
       removeExteriorRow:        action,
       removeExteriorRowGroup:   action,
       removeExteriorRowsByRoomId: action,
+      addEquipmentRow:            action,
+      removeEquipmentRow:         action,
+      removeEquipmentRowsByRoomId: action,
       exteriorWallBacking:      observable,
       interiorWallBacking:      observable,
       ceilingBacking:           observable,
@@ -430,6 +435,25 @@ export class PlanGraph {
   /** roomId にリンクした外部仕上げ行（階段連動。exteriorRowsのみ対象）があれば削除する。 */
   removeExteriorRowsByRoomId(roomId) {
     _removeArrayItemsWhere(this.exteriorRows, r => r.roomId === roomId);
+  }
+
+  // ---- 昇降機器具行操作（仕上げモード）----
+
+  /** 昇降機器具行を追加する。opts は EquipmentRow のコンストラクタ引数。 */
+  addEquipmentRow(opts) {
+    const row = new EquipmentRow(opts);
+    this.equipmentRows.push(row);
+    return row;
+  }
+
+  /** id の器具行を削除する。 */
+  removeEquipmentRow(id) {
+    _removeArrayItemsWhere(this.equipmentRows, r => r.id === id);
+  }
+
+  /** roomId を指す器具行をすべて削除する（昇降路Room削除時のぶら下がり防止）。 */
+  removeEquipmentRowsByRoomId(roomId) {
+    _removeArrayItemsWhere(this.equipmentRows, r => r.roomId === roomId);
   }
 
   // ---- per-floor 設定（外壁下地 / 内壁下地 / 天井・床下地）----
@@ -1030,6 +1054,7 @@ export class PlanGraph {
     this.stairMap.clear();
     this.stairOrder.clear();
     this.exteriorRows.clear();
+    this.equipmentRows.clear();
     this.exteriorFittingRows.clear();
     this.structureRows.clear();
     this.edgeMap.clear();

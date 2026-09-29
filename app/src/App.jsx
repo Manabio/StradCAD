@@ -212,6 +212,10 @@ const App = observer(() => {
   function applyRoomNaming(id, payload) {
     const floorHeight = floorHeightAbove(project, project.activePlane);
     const convertedStair = modeRef.current?.applyNaming(id, payload, floorHeight);
+    // 昇降機の設置が拒否された場合（矩形でない・屋外・新規候補でない）はトーストを出して
+    // return する（ダイアログは applyNaming 側で状態を変えていないため開いたまま）。
+    const rejection = modeRef.current?.lastNamingRejection;
+    if (rejection) { setToast({ msg: rejection, key: Date.now() }); return; }
     if (convertedStair) {
       // 新規に階段変換された場合のみ、設置階の上の全採用フロア（最上階まで）へ
       // 中心線・階段を同期する（非アクティブ階を peek して IDB へ保存。壁は生成しない）。
@@ -2165,6 +2169,7 @@ const App = observer(() => {
             graph={graph}
             viewport={viewport}
             stairEnabled={floorHeightAbove(project, project.activePlane) != null}
+            isNew={mode.namingIsNew}
             onConfirm={applyRoomNaming}
             onCancel={id => modeRef.current?.cancelNaming(id)}
           />

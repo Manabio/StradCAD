@@ -59,6 +59,22 @@ test('featureOptionsForDialog: 部分指定（referenceRoomIds非空）は昇降
   }
 });
 
+// ---- QA指摘（ステップ3全体・T5）: isNew===falseの統合ダイアログは昇降機を出さない ----
+test('featureOptionsForDialog: isNew===false（判定2の統合ダイアログ）は昇降機を除いた3つ（部分指定でなくても）', () => {
+  const room = { referenceRoomIds: new Set() }; // 部分指定ではない
+  const values = featureOptionsForDialog(room, { isNew: false }).map(o => o.value);
+  assert.deepEqual(values, [null, RoomFeature.STAIR, RoomFeature.VOID]);
+  for (const feature of SHAFT_FEATURES) {
+    assert.ok(!values.includes(feature), `SHAFT_FEATURES の ${feature} が isNew:false の選択肢に含まれている`);
+  }
+});
+
+test('featureOptionsForDialog: isNew===true・引数省略は（部分指定でなければ）ROOM_FEATURE_OPTIONSそのまま4つ（昇降機を含む）', () => {
+  const room = { referenceRoomIds: new Set() };
+  assert.deepEqual(featureOptionsForDialog(room, { isNew: true }), ROOM_FEATURE_OPTIONS);
+  assert.deepEqual(featureOptionsForDialog(room), ROOM_FEATURE_OPTIONS, '第2引数省略は従来どおり4つのはず');
+});
+
 // ---- 失敗系: referenceRoomIds が undefined/null（想定外の入力）でも例外にならず通常の4つを返す ----
 test('【失敗系】featureOptionsForDialog: referenceRoomIdsがundefinedでも例外にならず4つ', () => {
   const room = { referenceRoomIds: undefined };

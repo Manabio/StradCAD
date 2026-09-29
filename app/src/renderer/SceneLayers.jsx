@@ -10,6 +10,9 @@ import { StairLayer } from './StairLayer.jsx';
 import { RoomLabelsLayer } from './RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './StepSectionLayer.jsx';
 import { VoidLayer } from './VoidLayer.jsx';
+import { EquipmentSymbolLayer } from './EquipmentSymbolLayer.jsx';
+import { computeEquipmentSymbols } from '../finish/equipment/equipmentFigure.js';
+import { selfFloorEquipmentCatalog } from '../finish/equipment/equipmentNumbering.js';
 import { StructuralLayer, ColumnsLayer } from './StructuralLayer.jsx';
 import { MemberTagLayer } from './MemberTagLayer.jsx';
 import { OpeningTagLayer } from './OpeningTagLayer.jsx';
@@ -20,7 +23,10 @@ import { DrawPreview } from './DrawPreview.jsx';
 import { CLAddPreview } from './CLAddPreview.jsx';
 import { WallRefIndicator } from './WallRefIndicator.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './SiteLinesLayer.jsx';
-import { shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers, shouldShowColumnOriginMarks } from './planFigureVisibility.js';
+import {
+  shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers,
+  shouldShowColumnOriginMarks, shouldShowEquipmentSymbols,
+} from './planFigureVisibility.js';
 import { ElevationLayer } from './ElevationLayer.jsx';
 
 // ================================================================
@@ -89,6 +95,7 @@ export const SceneLayers = observer(({
                 viewport={viewport}
                 selectedRoomId={mode.selectedRoomId}
                 previewCells={mode.previewCells}
+                highlightCellKeys={mode.selectedEquipmentCellKeys}
               />
             )}
             {isStairMode && (
@@ -152,6 +159,19 @@ export const SceneLayers = observer(({
             {/* 吹抜けも平面図一式の一部（階段吹抜けと同じ peek 由来）——壁・階段と同じ述語で出す。 */}
             {showPlanFigure && (
               <VoidLayer graph={graph} viewport={viewport} upperCrosses={upperVoidCrosses} />
+            )}
+            {/* 昇降機器具の図中記号（「EV」「EV1」等）。室名が出るモード（floorplan・finish）に揃える
+                （planFigureVisibility.js shouldShowEquipmentSymbols）。catalogはfinishモードなら
+                mode.equipmentCatalog()、それ以外（モード状態が無くても）はselfFloorEquipmentCatalog
+                で自階の行から直接求める（ステップ3の範囲。全階化はステップ5）。 */}
+            {shouldShowEquipmentSymbols(appMode) && (
+              <EquipmentSymbolLayer
+                symbols={computeEquipmentSymbols(
+                  graph,
+                  appMode === 'finish' && mode ? mode.equipmentCatalog() : selfFloorEquipmentCatalog(graph.equipmentRows),
+                )}
+                viewport={viewport}
+              />
             )}
             {/* 表示可否は shouldShowOpeningTags(appMode, lodLevel) が唯一の判定
                 （floorplan×DETAIL / opening×STANDARD・DETAILのみ。レイヤー内部でnullを返す） */}

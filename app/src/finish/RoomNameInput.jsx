@@ -14,7 +14,7 @@ import {
 // 新規Room（未指定セル・統合・新規部分指定）の命名専用ダイアログ。既存部屋の編集は
 // 仕上げ表・内部タブのカードへ移した。本ダイアログに削除は無い。
 
-export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = true, onConfirm, onCancel }) => {
+export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = true, isNew, onConfirm, onCancel }) => {
   const [value, setValue]           = useState(room.name || '');
   const [kindSel, setKindSel]       = useState(room.kind);
   const [featureSel, setFeatureSel] = useState(room.feature ?? null);
@@ -92,7 +92,7 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
             title={stairEnabled ? undefined : '上階に採用階がありません'}
             style={selectStyle}
           >
-            {featureOptionsForDialog(room).map(opt => (
+            {featureOptionsForDialog(room, { isNew }).map(opt => (
               <option
                 key={featureToSelectValue(opt.value)}
                 value={featureToSelectValue(opt.value)}

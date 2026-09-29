@@ -347,6 +347,21 @@ test('【失敗系】applyNaming: 存在しないroomIdを渡すとnullを返し
   assert.equal(graph.exteriorRows.length, before);
 });
 
+// QA指摘（ステップ3全体・A.2）: roomが見つからないときも_pendingDialogUndoを消す
+// （次の確定に古い保留undoが混ざらないように）。
+test('【失敗系・QA指摘A.2】applyNaming: 存在しないroomIdを渡すと_pendingDialogUndoもnullに戻る', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  assert.ok(state._pendingDialogUndo, '前提: 新規候補Roomのダイアログで_pendingDialogUndoが立つ');
+
+  const result = state.applyNaming('no-such-room-id', { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+
+  assert.equal(result, null);
+  assert.equal(state._pendingDialogUndo, null, '古い保留undoが次の確定に持ち越されないはず');
+});
+
 // ================================================================
 // ステップ1（部屋編集の導線変更）: renameExteriorRoom（外部タブの群見出しからの改名）
 // ================================================================

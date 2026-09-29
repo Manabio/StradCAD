@@ -3,7 +3,7 @@
 // （§昇降路 壁仕上げ材／防音材 ステップ2b の PER_FLOOR_SETTERS 追加分）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, ShaftSoundproof } from '../core.js';
+import { Plane, PlanGraph, ShaftSoundproof, ElevatorEquipmentCategory, DEFAULT_EV_USAGE, EvUsage } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { withFinishUndo } from './finishUndo.js';
 
@@ -40,4 +40,41 @@ test('shaftSoundproof を withFinishUndo 経由で変えて undo すると元の
 
   undoManager.redo();
   assert.equal(graph.shaftSoundproof, ShaftSoundproof.INSULATION, 'redo で変更後の値に戻らない');
+});
+
+test('graph.equipmentRows の追加を withFinishUndo 経由で行い undo/redo すると器具行が消えたり戻ったりする', () => {
+  const graph = freshGraph();
+  assert.equal(graph.equipmentRows.length, 0, '前提: 変更前は0件');
+
+  withFinishUndo(graph, () => graph.addEquipmentRow({
+    id: 'eq1', category: ElevatorEquipmentCategory.EV, usage: DEFAULT_EV_USAGE, no: 1,
+    cellKeys: new Set(['a:b:c:d']),
+  }));
+  assert.equal(graph.equipmentRows.length, 1);
+  assert.equal(graph.equipmentRows[0].id, 'eq1');
+
+  undoManager.undo();
+  assert.equal(graph.equipmentRows.length, 0, 'undo で器具行が消えない');
+
+  undoManager.redo();
+  assert.equal(graph.equipmentRows.length, 1, 'redo で器具行が戻らない');
+  assert.equal(graph.equipmentRows[0].id, 'eq1', 'redo後も同じidで復元されていない');
+});
+
+test('graph.equipmentRows の usage 変更を withFinishUndo 経由で行い undo すると元の用途に戻る（同id維持）', () => {
+  const graph = freshGraph();
+  const row = graph.addEquipmentRow({
+    id: 'eq1', category: ElevatorEquipmentCategory.EV, usage: EvUsage.PASSENGER, no: 1,
+    cellKeys: new Set(['a:b:c:d']),
+  });
+
+  withFinishUndo(graph, () => row.setUsage(EvUsage.FREIGHT));
+  assert.equal(graph.equipmentRows[0].usage, EvUsage.FREIGHT);
+
+  undoManager.undo();
+  assert.equal(graph.equipmentRows[0].usage, EvUsage.PASSENGER, 'undo で用途が戻らない');
+  assert.equal(graph.equipmentRows[0].id, 'eq1', 'undo後も同じidのまま');
+
+  undoManager.redo();
+  assert.equal(graph.equipmentRows[0].usage, EvUsage.FREIGHT, 'redo で用途が戻らない');
 });

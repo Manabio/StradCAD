@@ -20,6 +20,7 @@ export const FinishModeLayer = observer(({
   viewport,
   selectedRoomId,
   previewCells = [],
+  highlightCellKeys = null,
 }) => {
   // extent を尊重した実在セルのみ列挙してグリッド背景を塗る。
   // 枠線をセル矩形の stroke で描くと L字領域の内部分割位置に実在しない線が
@@ -156,6 +157,24 @@ export const FinishModeLayer = observer(({
     )),
   ] : [];
 
+  // 昇降機器具タブで選択中の器具のハイライト（選択中の部屋と同じ輪郭線の流儀。
+  // Roomの一部だけ（隣接統合済みRoomの1行ぶん）のこともあるため、Roomの選択枠とは別に
+  // highlightCellKeys（refresh済みのセルキー集合。FinishModeState.selectedEquipmentCellKeys）
+  // から直接描く——どのセルを強調するかは呼び出し側（純モジュール）が決め、ここは描くだけ。
+  const highlightBoundsList = highlightCellKeys && highlightCellKeys.size > 0
+    ? cellBoundsList(highlightCellKeys, graph) : [];
+  const highlightSegs = outlineSegments(highlightBoundsList).map(seg => (
+    <Line
+      key={`hl${seg.isVertical ? 'v' : 'h'}${seg.value}:${seg.lo}`}
+      points={seg.isVertical
+        ? [seg.value, seg.lo, seg.value, seg.hi]
+        : [seg.lo, seg.value, seg.hi, seg.value]}
+      stroke="#2563eb"
+      strokeWidth={2 / viewport.scaleX}
+      listening={false}
+    />
+  ));
+
   return (
     <Group>
       {gridCells}
@@ -163,6 +182,7 @@ export const FinishModeLayer = observer(({
       {roomRects}
       {exteriorWalls}
       {previewRects}
+      {highlightSegs}
     </Group>
   );
 });

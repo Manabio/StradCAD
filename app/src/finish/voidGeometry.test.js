@@ -89,6 +89,82 @@ test('【失敗系】computeVoidCrosses: 非矩形（L字）のVOID・昇降機�
   assert.deepEqual(computeVoidCrosses(evGrid.graph), [], '昇降機の非矩形はスキップされるはず（VOIDと同じ矩形判定を通る）');
 });
 
+test('computeVoidCrosses: 器具行を持つ昇降路Roomは器具単位で×が出る（1列2基・重ならず合わせるとRoom全体）', () => {
+  const { graph, left, right } = makeGrid();
+  const room = graph.addRoom(new Set([left, right]), '');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  graph.addEquipmentRow({ id: 'eq1', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set([left]), roomId: room.id });
+  graph.addEquipmentRow({ id: 'eq2', category: 'ev', usage: 'passenger', no: 2, cellKeys: new Set([right]), roomId: room.id });
+
+  const result = computeVoidCrosses(graph);
+  assert.equal(result.length, 2, 'Room単位ではなく器具単位で2件');
+  const byId = new Map(result.map(c => [c.id, c]));
+  assert.ok(byId.has('eq1') && byId.has('eq2'), 'idは行のid');
+  assert.ok(!byId.has(room.id), 'Room単位の×は出ない');
+
+  const a = byId.get('eq1'), b = byId.get('eq2');
+  // 重ならない（aの右端とbの左端が一致 or 逆）
+  assert.ok(a.x2 <= b.x1 || b.x2 <= a.x1, `矩形が重なっている: a=${JSON.stringify(a)} b=${JSON.stringify(b)}`);
+  // 合わせるとRoom全体（x:0〜2000）になる
+  assert.deepEqual([Math.min(a.x1, b.x1), Math.max(a.x2, b.x2)], [0, 2000]);
+});
+
+test('computeVoidCrosses: L字に統合されたRoom（2行）でも×が2つ（idは行のid）', () => {
+  const grid = makeGrid2x2();
+  const room = grid.graph.addRoom(new Set([grid.topLeft, grid.topRight, grid.bottomLeft]), '');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  grid.graph.addEquipmentRow({
+    id: 'eqTop', category: 'ev', usage: 'passenger', no: 1,
+    cellKeys: new Set([grid.topLeft, grid.topRight]), roomId: room.id,
+  });
+  grid.graph.addEquipmentRow({
+    id: 'eqBottom', category: 'ev', usage: 'passenger', no: 2,
+    cellKeys: new Set([grid.bottomLeft]), roomId: room.id,
+  });
+
+  const result = computeVoidCrosses(grid.graph);
+  assert.equal(result.length, 2);
+  assert.deepEqual(result.map(c => c.id).sort(), ['eqBottom', 'eqTop']);
+});
+
+test('computeVoidCrosses: 器具行の無い矩形の昇降路Roomは従来どおり×が1つ（idはRoomのid）', () => {
+  const { graph, left, right } = makeGrid();
+  const room = graph.addRoom(new Set([left, right]), '');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  // 器具行を一切追加しない（旧データ相当）
+
+  const result = computeVoidCrosses(graph);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, room.id);
+});
+
+test('【失敗系】computeVoidCrosses: 行のcellKeysが解決できない（CL無し）行は×を出さず例外にもならない', () => {
+  const { graph, left } = makeGrid();
+  const room = graph.addRoom(new Set([left]), '');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  graph.addEquipmentRow({
+    id: 'eqBroken', category: 'ev', usage: 'passenger', no: 1,
+    cellKeys: new Set(['no-such-cl-1:no-such-cl-2:no-such-cl-3:no-such-cl-4']), roomId: room.id,
+  });
+
+  assert.doesNotThrow(() => computeVoidCrosses(graph));
+  const result = computeVoidCrosses(graph);
+  assert.deepEqual(result.map(c => c.id), [], '解決できない行の×は出ない（他に器具行が無いためRoom側も無し）');
+});
+
+test('【失敗系】computeVoidCrosses: 行のroomIdが存在しないRoomを指しても例外にならない', () => {
+  const { graph, left } = makeGrid();
+  graph.addEquipmentRow({
+    id: 'eqOrphan', category: 'ev', usage: 'passenger', no: 1,
+    cellKeys: new Set([left]), roomId: 'no-such-room-id',
+  });
+
+  assert.doesNotThrow(() => computeVoidCrosses(graph));
+  const result = computeVoidCrosses(graph);
+  assert.equal(result.length, 1, '行自体のセルは解決できるので×は出る（roomIdの有効性はcross算出に無関係）');
+  assert.equal(result[0].id, 'eqOrphan');
+});
+
 test('showsUpperVoidLabel: VOIDのみtrue（昇降機・feature無しはfalse）', () => {
   assert.equal(showsUpperVoidLabel({ feature: RoomFeature.VOID }), true);
   assert.equal(showsUpperVoidLabel({ feature: RoomFeature.ELEVATOR_EQUIPMENT }), false, '昇降機は同じシャフトが続くだけなので破線のみ（裁定Q8）');

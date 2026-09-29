@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef,
   DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF, ShaftSoundproof, StairType,
+  ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE,
 } from './core.js';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
@@ -10,6 +11,7 @@ import {
 } from './graphSnapshot.js';
 import { editSiteLineLength } from './transform/siteEdit.js';
 import { decode, ROOM_FEATURE_ENC, ROOM_FEATURE_DEC } from './schema/graphFbs.js';
+import { base64ToBytes } from './storage/documentFile.js';
 import { BeamAxisOrigin } from './core/centerLine.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
@@ -1696,4 +1698,86 @@ test('restoreGraph: 旧材コードは3経路（FlatBuffersバイト列・旧JSO
 
     assert.equal(restored.clEccentricities.get(y0.id)?.backing, '101400000007', `${label}: clEccentricities[].backing`);
   }
+});
+
+// ---- 昇降機器具行（equipmentRows。昇降機の仕様追加 ステップ3 S1）----
+
+test('graph.equipmentRows は FlatBuffers encode→decode で全フィールドが往復する（同一idで復元）', () => {
+  const graph = makeGraph();
+  graph.addEquipmentRow({
+    id: 'eq1', category: ElevatorEquipmentCategory.EV, usage: EvUsage.PASSENGER_FREIGHT, no: 2,
+    cellKeys: new Set(['a:b:c:d', 'e:f:g:h']), roomId: 'room1',
+  });
+  const before = graph.equipmentRows.map(r => r.toData());
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const after = restored.equipmentRows.map(r => r.toData());
+  assert.deepEqual(after, before);
+});
+
+test('graph.equipmentRows は restoreGraph への plain object 直渡し（旧JSON文書ファイル読込みと同じ経路）でも往復する', () => {
+  const graph = makeGraph();
+  graph.addEquipmentRow({
+    id: 'eq1', category: ElevatorEquipmentCategory.EV, usage: DEFAULT_EV_USAGE, no: 1,
+    cellKeys: new Set(['a:b:c:d']), roomId: null,
+  });
+  const before = graph.equipmentRows.map(r => r.toData());
+
+  const json = JSON.parse(JSON.stringify({ equipmentRows: before }));
+  const restored = makeGraph();
+  restoreGraph(restored, {
+    centerLines: [], points: [], walls: [], diagonals: [],
+    verticalLines: [], horizontalLines: [], arcs: [], circles: [],
+    rooms: [], roomOrder: [],
+    ...json,
+  });
+
+  assert.deepEqual(restored.equipmentRows.map(r => r.toData()), before);
+});
+
+// QA指摘（ステップ3全体）: 往復テスト（encode→decode）だけでは、writeEquipmentRow・readEquipmentRowの
+// 両方が参照する共有定数 EQ（graphFbs.js）のフィールド番号を入れ替える変異を検出できない
+// （書き手も読み手も同じ入れ替え後の番号を使うため、往復では整合したまま値がズレて見えない）。
+// 既知の正しいバイト列を固定値として埋め込み、その decode() 結果が期待値と一致することを見る。
+test('【固定バイト列】graph.equipmentRows: 既知の正しいFlatBuffersバイト列をdecodeすると、category・usage・no・cellKeys・roomIdが期待どおり復元される（EQフィールド番号入れ替えの検出用）', () => {
+  // 生成元（2026-09-29・HEAD=97fbc3e + ステップ3 S1〜S5未コミット差分の時点）:
+  //   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  //   graph.addEquipmentRow({ id: 'eq-fixed-1', category: ElevatorEquipmentCategory.EV,
+  //     usage: EvUsage.FREIGHT, no: 3, cellKeys: new Set(['ka:kb:kc:kd', 'ke:kf:kg:kh']),
+  //     roomId: 'room-fixed-1' });
+  //   console.log(bytesToBase64(serializeGraph(graph))); // documentFile.js の bytesToBase64
+  // id等はすべて固定文字列（乱数のidを含まない）ため環境が変わっても値は不変。
+  const FIXED_BYTES_B64 = 'eAAAAAAAAAAAAG4AxADAALwAuAC0ALAArACoAKQAoACcAJgAAACUAAAAkACMAIgAhAB0AHAAAABsAGgAZABgAFwAWABUAFAATABAADwAOAA0AEgAMAAsACgAJAAgAAAAeAAcABgARAAUABAAAAAMAAAACAAAAAQAbgAAAMAAAABcAQAAbAEAANwBAADgAQAA4AEAAOABAAC4AQAAuAEAALgBAAC4AQAAuAEAAMwBAADMAQAAzAEAAMwBAADMAQAAzAEAAMwBAADMAQAAzAEAAMwBAADMAQAAzAEAAMwBAADMAQAAzAEAABABAADsAQAAAAAAAADAokAAAAAABAEAABQBAAAkAQAAsAEAADABAACkAQAAqAEAAKgBAACoAQAAqAEAAKgBAACoAQAAqAEAAKwBAACsAQAArAEAAAEAAAAUAAAAEAAkACAAHAAYAAwACAAEABAAAABMAAAAHAAAAAAAAAAAAAhAAAAAAEwAAABUAAAAWAAAAAIAAAAYAAAABAAAAAsAAABrZTprZjprZzpraAALAAAAa2E6a2I6a2M6a2QADAAAAHJvb20tZml4ZWQtMQAAAAAHAAAAZnJlaWdodAACAAAAZXYAAAoAAABlcS1maXhlZC0xAAAMAAAAMzAxMDAwMDAwMDAyAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAMTAxNDAwMDAwMDA3AAAAAAwAAAAxMDE0MDAwMDAwMTIAAAAADAAAADEwMTQwMDAwMDAwNQAAAAAMAAAAMTAxNDAwMDAwMDA1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const bytes = base64ToBytes(FIXED_BYTES_B64);
+
+  const snapshot = decode(bytes);
+
+  assert.equal(snapshot.equipmentRows.length, 1);
+  const row = snapshot.equipmentRows[0];
+  assert.equal(row.id, 'eq-fixed-1');
+  assert.equal(row.category, ElevatorEquipmentCategory.EV);
+  assert.equal(row.usage, EvUsage.FREIGHT);
+  assert.equal(row.no, 3);
+  assert.deepEqual([...row.cellKeys].sort(), ['ka:kb:kc:kd', 'ke:kf:kg:kh']);
+  assert.equal(row.roomId, 'room-fixed-1');
+});
+
+test('【失敗系】graph.equipmentRows: 旧データ（equipmentRowsキー自体が無いFlatBuffersバイト列）を restoreGraph で読み込むと行0件になる（既定値へ黙って落ちない・例外にもならない）', () => {
+  const source = makeGraph(); // equipmentRowsを一切追加しない（旧スキーマ相当）
+  const bytes = serializeGraph(source);
+
+  const restored = makeGraph();
+  restored.addEquipmentRow({ id: 'stale', category: 'ev', usage: DEFAULT_EV_USAGE, no: 1, cellKeys: new Set(['x:y:z:w']) });
+  restoreGraph(restored, bytes); // clear()で一旦空になってから復元される
+
+  assert.deepEqual(restored.equipmentRows.map(r => r.id), []);
+});
+
+test('【失敗系】graph.addEquipmentRow({}) は EquipmentRow のコンストラクタ throw をそのまま伝える（黙って既定値に落ちない）', () => {
+  const graph = makeGraph();
+  assert.throws(() => graph.addEquipmentRow({}));
+  assert.equal(graph.equipmentRows.length, 0, '例外時に半端な行が残らない');
 });

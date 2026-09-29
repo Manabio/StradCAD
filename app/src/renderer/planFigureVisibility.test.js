@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers, shouldShowColumnOriginMarks,
+  shouldShowEquipmentSymbols,
 } from './planFigureVisibility.js';
 
 // 行コメントを落としてから照合する（コメント中の言及を「コード上の参照」と誤検知しないため。
@@ -52,4 +53,9 @@ test('【不変条件】SceneLayers.jsx: ColumnsLayer の originMarks は should
   const src = codeLines(fs.readFileSync(path.resolve(import.meta.dirname, 'SceneLayers.jsx'), 'utf8'));
   assert.ok(/<ColumnsLayer graph=\{graph\} viewport=\{viewport\} finishWrap originMarks=\{shouldShowColumnOriginMarks\(appMode\)\} \/>/.test(src),
     'ColumnsLayer の originMarks が shouldShowColumnOriginMarks(appMode) でゲートされていない');
+});
+
+test('shouldShowEquipmentSymbols: 昇降機器具の図中記号は室名が出るモード（floorplan・finish）でのみ描く', () => {
+  for (const mode of ['floorplan', 'finish']) assert.equal(shouldShowEquipmentSymbols(mode), true, mode);
+  for (const mode of ['opening', 'site', 'structure', 'elevation']) assert.equal(shouldShowEquipmentSymbols(mode), false, mode);
 });

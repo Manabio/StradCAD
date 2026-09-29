@@ -36,3 +36,10 @@ export function shouldShowIntersectionMarkers(appMode) {
 export function shouldShowColumnOriginMarks(appMode) {
   return appMode === 'floorplan';
 }
+
+// 昇降機器具の図中記号（renderer/EquipmentSymbolLayer.jsx）を描くモードか。
+// 室名が出るモード（floorplan=RoomLabelsLayer・finish=FinishModeLayerの部屋名描画）に揃える
+// （昇降路のRoom名は空なので室名自体は出ない。記号だけがこの2モードで出る）。
+export function shouldShowEquipmentSymbols(appMode) {
+  return appMode === 'floorplan' || appMode === 'finish';
+}

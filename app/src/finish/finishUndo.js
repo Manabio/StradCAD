@@ -12,7 +12,7 @@ import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { snapshotRoomsState, restoreRoomsState } from './roomReinterpret.js';
 import { snapshotUnderSplitCLs, restoreUnderSplitCLs } from './stair/stairUnderSplit.js';
-import { ExteriorFinishRow } from '@core';
+import { ExteriorFinishRow, EquipmentRow } from '@core';
 
 const EXTERIOR_CATEGORIES = ['exteriorRows', 'exteriorFittingRows', 'structureRows'];
 // roomId（階段連動リンク）も対象に含める。含めないと undo → redo で行は残っても
@@ -72,6 +72,8 @@ export function snapshotFinishState(graph) {
       cat,
       graph[cat].map(r => Object.fromEntries([['id', r.id], ...EXTERIOR_FIELDS.map(f => [f, r[f]])])),
     ])),
+    // 昇降機器具行（別キー。exteriorRows等とは別テーブルのため相乗りしない）
+    equipment: graph.equipmentRows.map(r => r.toData()),
     perFloor: Object.fromEntries(Object.keys(PER_FLOOR_SETTERS).map(f => [f, graph[f]])),
   };
 }
@@ -80,6 +82,7 @@ function restoreFinishState(graph, snap) {
   // 分割CLの同定（幾何導出）には復元前の stairs が必要なため、先に現在分を採取しておく
   const currentSplitCLs = snapshotUnderSplitCLs(graph);
   restoreRoomsState(graph, snap.rooms);
+  graph.equipmentRows.replace(snap.equipment.map(EquipmentRow.fromData));
   restoreStairs(graph, snap.stairs);
   restoreUnderSplitCLs(graph, currentSplitCLs, snap.splitCLs);
   for (const cat of EXTERIOR_CATEGORIES) {

@@ -28,7 +28,9 @@ export const CARD_FEATURE_OPTIONS = Object.freeze(
 // そのままだが、部分指定（referenceRoomIds 非空。親部屋の中に描いた一部だけの部屋）は
 // 昇降機を選べない——昇降路は未指定セルからしか作れない仕様（S5・2026-09-29）。
 // referenceRoomIds が undefined/null（想定外の入力）でも例外にせず通常の全選択肢を返す。
-export function featureOptionsForDialog(room) {
+// isNew===false（判定2＝既存の命名済み部屋の統合。仕様3裁定Q1）も昇降機を出さない——
+// 統合ダイアログは既存部屋どうしのマージで、新規に昇降路を作る経路ではないため。
+export function featureOptionsForDialog(room, { isNew } = {}) {
   const isPartial = (room?.referenceRoomIds?.size ?? 0) > 0;
-  return isPartial ? CARD_FEATURE_OPTIONS : ROOM_FEATURE_OPTIONS;
+  return (isPartial || isNew === false) ? CARD_FEATURE_OPTIONS : ROOM_FEATURE_OPTIONS;
 }

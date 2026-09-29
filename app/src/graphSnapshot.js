@@ -1,5 +1,5 @@
 import { runInAction } from 'mobx';
-import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow } from '@core';
+import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow } from '@core';
 import { encode, decode } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 import { applyDocumentCodeNormalization } from './catalog/codeNormalization.js';
@@ -154,6 +154,8 @@ function buildSnapshot(graph) {
         };
       }),
     stairOrder: [...graph.stairOrder],
+    // 昇降機器具行（仕上げモード、設置階に帰属）
+    equipmentRows: graph.equipmentRows.map(r => r.toData()),
     exteriorWallBacking: graph.exteriorWallBacking,
     interiorWallBacking: graph.interiorWallBacking,
     ceilingBacking:      graph.ceilingBacking,
@@ -802,6 +804,11 @@ function applySnapshot(graph, snapshot) {
     }
     const savedStairOrder = snapshot.stairOrder ?? [];
     graph.stairOrder.replace(savedStairOrder.filter(id => graph.stairMap.has(id)));
+
+    // 10c. 昇降機器具行（仕上げモード、設置階に帰属）
+    for (const d of snapshot.equipmentRows ?? []) {
+      graph.equipmentRows.push(EquipmentRow.fromData(d));
+    }
 
     // 10.5. 構造: スラブ（cellsのみ、CL非依存）→ 貫通孔（ホスト梁/スラブのID参照解決）
     for (const d of snapshot.slabs ?? []) {

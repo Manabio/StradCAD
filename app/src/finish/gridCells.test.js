@@ -9,6 +9,7 @@ import { withGraphReadScope } from '../graphReadScope.js';
 import {
   worldToCell, worldToCellInIndex, gridIndexOf, getCellsInRect, getAllCells, refreshCells, cellBoundsFromKey,
   gridDividerSegments, isDividerCL, isActiveAcrossRange,
+  isRectangularCellSet, boundsShareEdge, connectedCellComponents,
 } from './gridCells.js';
 
 // 3x3セルの格子（値0/1000/2000/3000。中央の縦CLだけextent制限してL字結合も踏ませる）
@@ -171,4 +172,115 @@ test('gridDividerSegments: struct（labeled:true, STRUCT）はextentLo/Hiが確�
   assert.ok(seg, '前提: x=0の通り芯の区割り線が出力される');
   assert.equal(seg.lo, 0, 'extentLo(100)ではなく格子の外周(yMin=0)になる（常に全長）');
   assert.equal(seg.hi, 3000, 'extentHi(200)ではなく格子の外周(yMax=3000)になる（常に全長）');
+});
+
+// ================================================================
+// isRectangularCellSet / boundsShareEdge / connectedCellComponents
+// （昇降機の仕様追加 ステップ3 S2）
+// ================================================================
+
+function makeFullGrid(xs, ys) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const vs = xs.map((v, i) => graph.addCenterLine(CenterLineType.VERTICAL, v, {
+    labeled: i === 0 || i === xs.length - 1,
+    discipline: (i === 0 || i === xs.length - 1) ? Discipline.STRUCT : Discipline.ARCH,
+  }));
+  const hs = ys.map((v, i) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, {
+    labeled: i === 0 || i === ys.length - 1,
+    discipline: (i === 0 || i === ys.length - 1) ? Discipline.STRUCT : Discipline.ARCH,
+  }));
+  return { graph, vs, hs };
+}
+
+function cellAt(graph, xMin, yMin, xMax, yMax) {
+  return getCellsInRect(xMin, yMin, xMax, yMax, graph).find(c =>
+    c.x1 === xMin && c.y1 === yMin && c.x2 === xMax && c.y2 === yMax);
+}
+
+test('isRectangularCellSet: 2x2の完全な矩形は true', () => {
+  const { graph } = makeFullGrid([0, 1000, 2000], [0, 1000, 2000]);
+  const cells = new Set(getAllCells(graph).map(c => c.key)); // 2x2=4セル全部
+  assert.equal(isRectangularCellSet(cells, graph), true);
+});
+
+test('isRectangularCellSet: L字（4セルから1つ欠けている）は false', () => {
+  const { graph } = makeFullGrid([0, 1000, 2000], [0, 1000, 2000]);
+  const all = getAllCells(graph);
+  const cells = new Set(all.slice(0, 3).map(c => c.key)); // 4隅のうち1つを欠く
+  assert.equal(cells.size, 3);
+  assert.equal(isRectangularCellSet(cells, graph), false);
+});
+
+test('isRectangularCellSet: 1セルのみは true', () => {
+  const { graph } = makeFullGrid([0, 1000, 2000], [0, 1000, 2000]);
+  const one = getAllCells(graph)[0];
+  assert.equal(isRectangularCellSet(new Set([one.key]), graph), true);
+});
+
+test('isRectangularCellSet: 空集合・未解決キーを含む集合は false', () => {
+  const { graph } = makeFullGrid([0, 1000, 2000], [0, 1000, 2000]);
+  assert.equal(isRectangularCellSet(new Set(), graph), false, '空集合');
+  const one = getAllCells(graph)[0];
+  assert.equal(isRectangularCellSet(new Set([one.key, 'no-such-cl:x:y:z']), graph), false, '未解決キーを含む');
+});
+
+test('isRectangularCellSet: T字格子（短いCLで一部だけ区切られた領域が結合されたセル）の全域は true', () => {
+  // makeGraph（このファイル冒頭）は中央の縦CL(x=1000)が上段(y:0-1000)だけを分割し、
+  // 下段2行はx=0〜2000が1つの結合セルになる（L字/T字結合の代表例）。
+  const { graph } = makeGraph();
+  const cells = new Set(getAllCells(graph).map(c => c.key)); // 格子全域（結合セルを含む）
+  assert.equal(isRectangularCellSet(cells, graph), true, '格子全域は結合セルを含んでいても矩形として扱う');
+});
+
+test('isRectangularCellSet: T字格子の一部だけを取り出す（結合セル+隣接セルの一部が欠ける）と false', () => {
+  const { graph } = makeGraph();
+  const all = getAllCells(graph);
+  // 全域から1セルだけ除いた集合は非矩形になるはず。
+  const cells = new Set(all.slice(1).map(c => c.key));
+  assert.equal(isRectangularCellSet(cells, graph), false);
+});
+
+test('boundsShareEdge: 正の長さの辺を共有する2矩形は true（部分重なり含む）', () => {
+  const a = { x1: 0, y1: 0, x2: 1000, y2: 1000 };
+  const bFull = { x1: 1000, y1: 0, x2: 2000, y2: 1000 };
+  assert.equal(boundsShareEdge(a, bFull), true, '辺全体が一致');
+  const bPartial = { x1: 1000, y1: 500, x2: 2000, y2: 1500 };
+  assert.equal(boundsShareEdge(a, bPartial), true, '辺の一部だけ重なる（長さ正）');
+});
+
+test('boundsShareEdge: 角だけで接する2矩形は false', () => {
+  const a = { x1: 0, y1: 0, x2: 1000, y2: 1000 };
+  const b = { x1: 1000, y1: 1000, x2: 2000, y2: 2000 };
+  assert.equal(boundsShareEdge(a, b), false);
+});
+
+test('boundsShareEdge: 離れている2矩形は false', () => {
+  const a = { x1: 0, y1: 0, x2: 1000, y2: 1000 };
+  const b = { x1: 2000, y1: 0, x2: 3000, y2: 1000 };
+  assert.equal(boundsShareEdge(a, b), false);
+});
+
+test('connectedCellComponents: 1列3セルの中央を抜くと2成分になり、並びは各成分の最小キー昇順で決定的', () => {
+  const { graph } = makeFullGrid([0, 1000, 2000, 3000], [0, 1000]);
+  const left  = cellAt(graph, 0, 0, 1000, 1000);
+  const right = cellAt(graph, 2000, 0, 3000, 1000);
+  assert.ok(left && right);
+  const cells = new Set([left.key, right.key]); // 中央(1000-2000)は含めない
+
+  const comps1 = connectedCellComponents(cells, graph);
+  assert.equal(comps1.length, 2);
+  const comps2 = connectedCellComponents(cells, graph);
+  const toSortedArr = comps => comps.map(s => [...s].sort());
+  assert.deepEqual(toSortedArr(comps1), toSortedArr(comps2), '同じ入力なら並びが決定的');
+  // 各成分は単一セルのまま
+  assert.ok(comps1.every(s => s.size === 1));
+});
+
+test('connectedCellComponents: 辺で隣接する2セルは1成分にまとまる', () => {
+  const { graph } = makeFullGrid([0, 1000, 2000], [0, 1000]);
+  const cells = new Set(getAllCells(graph).map(c => c.key)); // 1行2セル、辺で隣接
+  assert.equal(cells.size, 2);
+  const comps = connectedCellComponents(cells, graph);
+  assert.equal(comps.length, 1);
+  assert.equal(comps[0].size, 2);
 });

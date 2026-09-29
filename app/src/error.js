@@ -174,6 +174,15 @@ export function tagCLOpFailure(err) {
 // （QA指摘F3・2026-09-27）。
 const KNOWN_TRANSITION_ERROR_CODES = [ERR_CATALOG_DUPLICATE];
 
+// 昇降機の設置（finish/equipment/equipmentOps.js validateElevatorInstall）専用の拒否文言。
+// 矩形でない選択（器具単位の矩形判定。isRectangularCellSet）で確定しようとした場合。
+export const ERR_ELEVATOR_NOT_RECTANGLE = '昇降機は矩形で指定してください。';
+// 屋外区分で確定しようとした場合（昇降機は屋内固定）。
+export const ERR_ELEVATOR_EXTERIOR = '昇降機は屋内で指定してください。';
+// 新規候補（未指定セルからの新規ドラッグ）でない場合（既存の命名済み部屋の統合＝判定2、
+// 部分指定の確定等）。
+export const ERR_ELEVATOR_NOT_UNASSIGNED = '昇降機は未指定のエリアから指定してください。';
+
 export function floorTransitionErrorMessage(err) {
   if (err instanceof Error && err.message === ERR_FLOOR_SWITCH_UNSTABLE) return err.message;
   // CL操作の入口（tagCLOpFailure）が付けたcode。既知のcode一覧（KNOWN_TRANSITION_ERROR_CODES）と

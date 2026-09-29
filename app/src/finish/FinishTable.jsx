@@ -1,8 +1,9 @@
 import { observer } from 'mobx-react-lite';
 import { useState, useEffect } from 'react';
-import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.js';
 import { StairTab } from './stair/StairTab.jsx';
+import { EquipmentTab } from './equipment/EquipmentTab.jsx';
+import { RoomDeleteConfirm } from './RoomDeleteConfirm.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
 import { roomCeilingHeight } from './roomMetrics.js';
 import { parseSlopeInput } from './exteriorLevelInput.js';
@@ -374,6 +375,8 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
   const stairEnabled = floorHeightAbove(project, project?.activePlane) != null;
   // 階段が選択されたら「階段」タブへ自動切替
   useEffect(() => { if (mode.selectedStairId) setActiveTab('stair'); }, [mode.selectedStairId]);
+  // 昇降機器具が選択されたら「機械器具」タブへ自動切替
+  useEffect(() => { if (mode.selectedEquipmentId) setActiveTab('equipment'); }, [mode.selectedEquipmentId]);
   // 部屋が選択されたら「内部」タブへ自動切替（階段選択時は階段タブが勝つ。宣言順で下の effect が
   // 後に評価されるため、両方セットされた場合はここで内部タブに切り替わらないよう明示的にガードする）
   // 屋外部屋（階段以外）は外部タブが担当するため、選択時はそちらへ切り替える。
@@ -434,7 +437,7 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
         : activeTab === 'common'
         ? <CommonSpecTable graph={graph} mode={mode} />
         : activeTab === 'equipment'
-        ? <EmptyTabPlaceholder message="機械器具が登録されていません" />
+        ? <EquipmentTab graph={graph} mode={mode} floorName={floorName} />
         : activeTab === 'accessory'
         ? <EmptyTabPlaceholder message="附帯は未対応です" />
         : <ExteriorTable
@@ -445,28 +448,6 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
           />
       }
     </div>
-  );
-});
-
-// 部屋削除の確認ダイアログ（内部タブのカード・外部タブの屋外部屋の群で共通。QA指摘2026-09-29:
-// 逐語複製だった確認ダイアログを1箇所へ集約）。deleteConfirm={roomId, roomName}|null。
-// onSelect後は確認・キャンセルどちらでも onClose() を呼ぶ（呼び出し側の deleteConfirm state を戻す）。
-const RoomDeleteConfirm = observer(({ graph, mode, deleteConfirm, onClose }) => {
-  if (!deleteConfirm) return null;
-  const childCount = graph.rooms.filter(r => r.referenceRoomIds.has(deleteConfirm.roomId)).length;
-  const suffix = childCount > 0 ? `（部分指定${childCount}件も削除されます）` : '';
-  return (
-    <ConfirmDialog
-      message={`「${deleteConfirm.roomName || '（名称未設定）'}」を削除しますか？${suffix}`}
-      buttons={[
-        { label: 'キャンセル', value: 'cancel' },
-        { label: '削除', value: 'ok', danger: true },
-      ]}
-      onSelect={value => {
-        if (value === 'ok') mode.deleteRoom(deleteConfirm.roomId);
-        onClose();
-      }}
-    />
   );
 });
 

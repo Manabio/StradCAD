@@ -7,10 +7,24 @@
  * 対象は feature===VOID または isShaftFeature(feature) のみ——STAIR_VOID（階段吹抜け）は
  * 一切描画しない自動管理Room（要件）。上部吹抜けラベル（「上部吹抜け」文言）は VOID のみに
  * 付ける（`showsUpperVoidLabel`）——昇降路は同じシャフトが続くだけなので破線のみ（裁定Q8）。
+ *
+ * 昇降路（isShaftFeature）は器具行を1件以上持つRoomなら「器具単位」で×を出す
+ * （id は器具行の id。統合でL字になったRoomでも器具ごとに矩形が出る）。器具行の無い
+ * 昇降路Room（旧データ）はRoom単位のまま（挙動不変）。同じRoom内の器具どうしの境界には
+ * 壁が無いため、faceRectはその境界をCLのeffectiveValueへフォールバックし、隣の器具へ
+ * はみ出さず・重ならない矩形になる。
  */
 import { RoomFeature, isShaftFeature } from '@core';
-import { refreshCells, roomBounds, getCellsInRect } from './gridCells.js';
+import { refreshCells, isRectangularCellSet } from './gridCells.js';
 import { faceRect } from './wallFaces.js';
+
+// crossを1件組み立てる（矩形でない・壁内頂点が解決できない場合はnull）
+function buildCross(id, feature, cells, graph) {
+  if (!isRectangularCellSet(cells, graph)) return null;
+  const rect = faceRect(cells, graph);
+  if (!rect) return null;
+  return { id, feature, x1: rect.x1, y1: rect.y1, x2: rect.x2, y2: rect.y2 };
+}
 
 /**
  * 「上部吹抜け」（直下階に描く上階吹抜けの×・外形）の破線パターン（スクリーンpx）。
@@ -30,18 +44,21 @@ export const UPPER_VOID_DASH_PX = [8, 4];
 export function computeVoidCrosses(graph) {
   if (!graph) return [];
   const result = [];
+  const registeredShaftRoomIds = new Set(
+    (graph.equipmentRows ?? []).map(r => r.roomId).filter(Boolean),
+  );
   for (const room of graph.rooms) {
     if (room.feature !== RoomFeature.VOID && !isShaftFeature(room.feature)) continue;
-    const cells = refreshCells(room.cells, graph);
-    if (cells.size === 0) continue;
-    const bounds = roomBounds(cells, graph);
-    if (bounds.x1 === Infinity) continue;
-    const cellsInBounds = getCellsInRect(bounds.x1, bounds.y1, bounds.x2, bounds.y2, graph);
-    const isRectangular = cellsInBounds.every(c => cells.has(c.key));
-    if (!isRectangular) continue;
-    const rect = faceRect(cells, graph);
-    if (!rect) continue;
-    result.push({ id: room.id, feature: room.feature, x1: rect.x1, y1: rect.y1, x2: rect.x2, y2: rect.y2 });
+    // 器具行を1件以上持つ昇降路Roomは器具単位（下のループ）へ委譲する。
+    if (isShaftFeature(room.feature) && registeredShaftRoomIds.has(room.id)) continue;
+    const cross = buildCross(room.id, room.feature, refreshCells(room.cells, graph), graph);
+    if (cross) result.push(cross);
+  }
+  for (const row of graph.equipmentRows ?? []) {
+    const cells = refreshCells(row.cellKeys, graph);
+    if (cells.size === 0) continue; // セルが解決できない（CL無し等）行はスキップ
+    const cross = buildCross(row.id, RoomFeature.ELEVATOR_EQUIPMENT, cells, graph);
+    if (cross) result.push(cross);
   }
   return result;
 }

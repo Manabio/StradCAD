@@ -525,6 +525,73 @@ export function cellBoundsList(cells, graph) {
   return [...cells].map(key => cellBoundsFromKey(key, graph)).filter(Boolean);
 }
 
+// 座標一致・辺共有判定の許容差(mm)。finish/stair/slabOpening.js の EPS と同一規約。
+const BOUNDARY_EPS = 1e-6;
+
+/**
+ * cells（refresh済み。worldToCell由来のキー集合）が非空で、現在の格子上の完全な矩形かどうか。
+ * 全キーが cellBoundsFromKey で解決でき、包絡矩形の中の全現行セル（getCellsInRect）が cells に
+ * 含まれるときだけ true（L字・中空き・未解決キーを含む集合は false）。
+ * voidGeometry.js computeVoidCrosses・finish/equipment/equipmentOps.js（installEquipment の矩形判定）
+ * が共通で使う（前者は挙動不変の置き換え）。
+ */
+export function isRectangularCellSet(cells, graph) {
+  if (!cells || cells.size === 0) return false;
+  for (const key of cells) {
+    if (!cellBoundsFromKey(key, graph)) return false;
+  }
+  const bounds = roomBounds(cells, graph);
+  if (bounds.x1 === Infinity) return false;
+  const cellsInBounds = getCellsInRect(bounds.x1, bounds.y1, bounds.x2, bounds.y2, graph);
+  return cellsInBounds.every(c => cells.has(c.key));
+}
+
+/**
+ * 2つのセル矩形（{x1,y1,x2,y2}）が正の長さを持つ辺を共有していれば true。
+ * 角だけで接する（端点のみ一致）場合は false。finish/stair/slabOpening.js の
+ * cellsShareBoundary と同じ判定（4近傍の連結成分判定に使う共有ヘルパー）。
+ */
+export function boundsShareEdge(a, b) {
+  const xEdge = (Math.abs(a.x2 - b.x1) < BOUNDARY_EPS || Math.abs(a.x1 - b.x2) < BOUNDARY_EPS)
+    && (Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) > BOUNDARY_EPS);
+  const yEdge = (Math.abs(a.y2 - b.y1) < BOUNDARY_EPS || Math.abs(a.y1 - b.y2) < BOUNDARY_EPS)
+    && (Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) > BOUNDARY_EPS);
+  return xEdge || yEdge;
+}
+
+/**
+ * cells（キー集合）を辺隣接（boundsShareEdge）で連結成分に分ける（Union-Find）。
+ * 解決できないキー（削除済みCLを指す等）は結果から除く。
+ * 並びは各成分の最小キー（辞書順）の昇順（決定的）。
+ * @returns {Array<Set<string>>}
+ */
+export function connectedCellComponents(cells, graph) {
+  const records = [...cells]
+    .map(key => ({ key, b: cellBoundsFromKey(key, graph) }))
+    .filter(r => r.b);
+  const n = records.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const union = (a, c) => { const ra = find(a), rc = find(c); if (ra !== rc) parent[ra] = rc; };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (boundsShareEdge(records[i].b, records[j].b)) union(i, j);
+    }
+  }
+  const groups = new Map();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(records[i].key);
+  }
+  const components = [...groups.values()].map(keys => new Set(keys));
+  components.sort((a, b) => {
+    const minA = [...a].sort()[0], minB = [...b].sort()[0];
+    return minA < minB ? -1 : minA > minB ? 1 : 0;
+  });
+  return components;
+}
+
 /**
  * Room の cells (Set<key>) からその部屋全体の包絡矩形を返す。
  */

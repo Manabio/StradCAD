@@ -12,6 +12,7 @@
 export {
   Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind, RoomFeature,
   SHAFT_FEATURES, isShaftFeature,
+  ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE,
   ExteriorLevelRef,
   StairType, StairPortSide, StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
   DEFAULT_WALL_MATERIAL, DEFAULT_EXTERIOR_WALL_BACKING,
@@ -67,6 +68,12 @@ export {
 // ================================================================
 
 export { totalStepsFromSections, Stair } from './core/stair.js';
+
+// ================================================================
+// EQUIPMENT (昇降機器具行) — core/equipment.js。
+// ================================================================
+
+export { EquipmentRow } from './core/equipment.js';
 
 // ================================================================
 // STRUCTURAL ENTITIES — core/structuralEntities.js。
