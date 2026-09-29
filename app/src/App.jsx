@@ -78,7 +78,10 @@ import {
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
   setCenterLineStructuralListener, applyCLEccentricityWithUndo,
 } from './transform/centerLineOps.js';
-import { ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure } from './error.js';
+import {
+  ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure,
+  ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE, ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
+} from './error.js';
 import { isUiBusy, runBusy } from './uiBusy.js';
 import { isSessionOwner } from './storage/sessionLock.js';
 import { HamburgerMenu }       from './ui/HamburgerMenu.jsx';
@@ -293,7 +296,93 @@ const App = observer(() => {
       } else if (r.status === 'installed' && r.upperSpanLabel) {
         setToast({ msg: `${r.upperSpanLabel}に EV を自動設置しました`, key: Date.now() });
       }
-      // extended・upperSpanLabelなしのinstalledはトーストなし（Q6・設計書§1）。
+      // extended・upperSpanLabelなしのinstalledはトーストなし（延長・検討案の平面での設置は
+      // 上階への反映が無い／目立った変化が無いため通知不要という仕様）。
+    });
+  }
+  // 昇降機の削除（finish/equipment/EquipmentTab.jsxの削除ボタン。どの階からでも実行される。
+  // ステップ5・全階連動）。installElevatorFromNamingと同じ形（beginUiTransition→runBusy→
+  // structuralSync.whenIdle()→動的import→本体→結果の表示）。成功時のトーストは出さない
+  // （成功時に文言を出す仕様が無いため）。失敗時は識別コード（ERR_ELEVATOR_REMOVE_FAILED）付きの文言。
+  async function deleteElevatorEquipment(id) {
+    const fmode = modeRef.current;
+    const g = project.activeGraph;
+    beginUiTransition();
+    await runBusy('昇降機の削除', async () => {
+      const isStillValid = () => modeRef.current === fmode && project.activeGraph === g;
+      // commitActiveが「グラフは変更したがundoエントリを持ち帰れない」状態（例外・差分なしでの
+      // null戻り）になったとき、他階の巻き戻しだけでは確定済みグラフと食い違う
+      // （installElevatorFromNamingのcommitActiveと同じ理由）ため、呼ぶ前にsnapshotFinishStateで
+      // スナップショットを取っておき、いずれの失敗でもrestoreFinishStateで確定前の状態へ戻してから
+      // 例外にする。
+      const commitActive = (noById) => {
+        const before = snapshotFinishState(g);
+        try {
+          fmode.deleteEquipment(id, { noById });
+        } catch (err) {
+          runInAction(() => restoreFinishState(g, before));
+          throw err;
+        }
+        if (!fmode.lastEquipmentUndoEntry) {
+          runInAction(() => restoreFinishState(g, before));
+          throw new Error('deleteElevatorEquipment: deleteEquipmentが差分なしでundoエントリを返さなかったため確定前へ戻しました');
+        }
+        return fmode.lastEquipmentUndoEntry;
+      };
+      let r;
+      try {
+        await structuralSync.whenIdle();
+        const m = await import('./finish/equipment/equipmentFloorSync.js');
+        r = await m.runElevatorRemoval({
+          project, activeGraph: g, equipmentId: id, commitActive, isStillValid,
+          onApplied: () => setFloorSyncTick(t => t + 1),
+        });
+      } catch (err) {
+        throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_REMOVE_FAILED, message: ERR_ELEVATOR_REMOVE_FAILED_MESSAGE });
+      }
+      if (r.status === 'aborted') {
+        setToast({ msg: r.message ?? ERR_ELEVATOR_FLOORS_CHANGED, key: Date.now() });
+      }
+      // removed・noopはトーストなし（成功時に文言を出す仕様が無いため）。
+    });
+  }
+  // 昇降機の用途変更（finish/equipment/EquipmentTab.jsxの用途セレクト。ステップ5・全階連動）。
+  // 削除と同じ形。
+  async function changeElevatorUsage(id, usage) {
+    const fmode = modeRef.current;
+    const g = project.activeGraph;
+    beginUiTransition();
+    await runBusy('昇降機の用途変更', async () => {
+      const isStillValid = () => modeRef.current === fmode && project.activeGraph === g;
+      const commitActive = () => {
+        const before = snapshotFinishState(g);
+        try {
+          fmode.setEquipmentUsage(id, usage);
+        } catch (err) {
+          runInAction(() => restoreFinishState(g, before));
+          throw err;
+        }
+        if (!fmode.lastEquipmentUndoEntry) {
+          runInAction(() => restoreFinishState(g, before));
+          throw new Error('changeElevatorUsage: setEquipmentUsageが差分なしでundoエントリを返さなかったため確定前へ戻しました');
+        }
+        return fmode.lastEquipmentUndoEntry;
+      };
+      let r;
+      try {
+        await structuralSync.whenIdle();
+        const m = await import('./finish/equipment/equipmentFloorSync.js');
+        r = await m.runElevatorUsageChange({
+          project, activeGraph: g, equipmentId: id, usage, commitActive, isStillValid,
+          onApplied: () => setFloorSyncTick(t => t + 1),
+        });
+      } catch (err) {
+        throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_USAGE_FAILED, message: ERR_ELEVATOR_USAGE_FAILED_MESSAGE });
+      }
+      if (r.status === 'aborted') {
+        setToast({ msg: r.message ?? ERR_ELEVATOR_FLOORS_CHANGED, key: Date.now() });
+      }
+      // changed・noopはトーストなし。
     });
   }
   // 構造リストで展開中のカードの部材id集合を構造モード状態へ写す（伏図のハイライト。
@@ -2273,6 +2362,8 @@ const App = observer(() => {
               onSelectRoom={id => modeRef.current?.selectRoom(id)}
               onApplyNaming={applyRoomNaming}
               floorName={floorName}
+              onDeleteEquipment={guardUi(deleteElevatorEquipment)}
+              onChangeEquipmentUsage={guardUi(changeElevatorUsage)}
             />
           : <FinishHalfModal
               graph={graph}
@@ -2282,6 +2373,8 @@ const App = observer(() => {
               onSelectRoom={id => modeRef.current?.selectRoom(id)}
               onApplyNaming={applyRoomNaming}
               floorName={floorName}
+              onDeleteEquipment={guardUi(deleteElevatorEquipment)}
+              onChangeEquipmentUsage={guardUi(changeElevatorUsage)}
             />
       )}
 

@@ -2,7 +2,7 @@
  * 昇降機器具の確定・削除（graph を書き換える）。モード状態・undo・非同期は持たない
  * （純粋にgraphを引数で受け取り書き換えるだけ。store.js/snap.js/.jsx を静的importしない）。
  */
-import { RoomKind, RoomFeature } from '@core';
+import { RoomKind, RoomFeature, EvUsage } from '@core';
 import { refreshCells, connectedCellComponents, isRectangularCellSet } from '../gridCells.js';
 import { findAdjacentShaftRooms } from './equipmentGeometry.js';
 import { renumberEquipment, selfFloorEquipmentCatalog } from './equipmentNumbering.js';
@@ -92,9 +92,15 @@ export function applyEquipmentNumbers(graph, noById) {
 
 /**
  * 昇降機器具を1基削除する（単階）。
+ * @param {object} graph
+ * @param {string} equipmentId
+ * @param {{noById?: Map<string, number>|null}} [opts] - 渡されれば建物全体で詰めた番号
+ *   （finish/equipment/equipmentNumbering.js buildingNumbersAfterRemoval の戻り値）をそのまま
+ *   反映する（applyEquipmentNumbers）。省略時は従来どおり自階だけで詰め直す
+ *   （renumberEquipment(selfFloorEquipmentCatalog(graph.equipmentRows))）。
  * @returns {{removed:boolean, keptRoomId:string|null, createdShaftRoomIds:string[], undefinedRoomId:string|null}}
  */
-export function removeEquipment(graph, equipmentId) {
+export function removeEquipment(graph, equipmentId, { noById = null } = {}) {
   const row = graph.equipmentRows.find(r => r.id === equipmentId);
   if (!row) return { removed: false, keptRoomId: null, createdShaftRoomIds: [], undefinedRoomId: null };
 
@@ -146,6 +152,40 @@ export function removeEquipment(graph, equipmentId) {
     }
   }
 
-  applyEquipmentNumbers(graph, renumberEquipment(selfFloorEquipmentCatalog(graph.equipmentRows)));
+  applyEquipmentNumbers(graph, noById ?? renumberEquipment(selfFloorEquipmentCatalog(graph.equipmentRows)));
   return { removed: true, keptRoomId, createdShaftRoomIds, undefinedRoomId };
+}
+
+/**
+ * 昇降機の全階連動削除（ステップ5）の1階ぶん。その階に equipmentId の行があれば
+ * removeEquipment(graph, equipmentId, { noById }) を行い、無ければ applyEquipmentNumbers(graph,
+ * noById) だけ（番号だけ変わる階。行の無い階も再採番の対象にする仕様）。
+ * @param {object} graph
+ * @param {string} equipmentId
+ * @param {Map<string, number>} noById
+ * @returns {boolean} グラフが変わったら true（行削除は常にtrue。番号だけの階は変更があった場合のみ）
+ */
+export function applyEquipmentRemovalToFloor(graph, equipmentId, noById) {
+  const hasRow = graph.equipmentRows.some(r => r.id === equipmentId);
+  if (hasRow) {
+    removeEquipment(graph, equipmentId, { noById });
+    return true;
+  }
+  return applyEquipmentNumbers(graph, noById) > 0;
+}
+
+/**
+ * 昇降機の全階連動用途変更（ステップ5）の1階ぶん。その階に equipmentId の行があり、用途が
+ * 異なれば setUsage する。usage が EvUsage のいずれでもなければ throw する（黙って無視しない）。
+ * @param {object} graph
+ * @param {string} equipmentId
+ * @param {string} usage
+ * @returns {boolean} 変わったら true。行が無い・同値なら false。
+ */
+export function applyEquipmentUsageToFloor(graph, equipmentId, usage) {
+  if (!Object.values(EvUsage).includes(usage)) throw new Error(`applyEquipmentUsageToFloor: 不正な用途: ${usage}`);
+  const row = graph.equipmentRows.find(r => r.id === equipmentId);
+  if (!row || row.usage === usage) return false;
+  row.setUsage(usage);
+  return true;
 }

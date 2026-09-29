@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   selfFloorEquipmentCatalog, nextEquipmentNo, equipmentSymbols, renumberEquipment, equipmentFloorSpanLabel,
+  buildingNumbersAfterRemoval,
 } from './equipmentNumbering.js';
 
 test('selfFloorEquipmentCatalog: 同じidの行が複数階ぶん渡されても1件にまとめる', () => {
@@ -27,7 +28,7 @@ test('nextEquipmentNo: 0件なら1、既存の最大+1になる（欠番があ�
 });
 
 // QA指摘（ステップ3全体・T8）: selfFloorEquipmentCatalogだけでなく、equipmentSymbols・
-// renumberEquipment・nextEquipmentNoも「同じidは内部で1件にまとめる」（設計§4(b)）を
+// renumberEquipment・nextEquipmentNoも「同じidは内部で1件にまとめる」仕様を
 // 満たすはず（全階分の行を直接渡されても壊れないように）。dedupeByIdを共有する。
 test('equipmentSymbols: 同じidの行が2件（別の階の行を想定）渡されても1件として扱い"EV"になる', () => {
   const catalog = [
@@ -118,4 +119,39 @@ test('equipmentFloorSpanLabel: 1件ならその階名だけ、複数件なら最
 
 test('【失敗系】equipmentFloorSpanLabel: 空配列は throw する', () => {
   assert.throws(() => equipmentFloorSpanLabel([]));
+});
+
+// ================================================================
+// buildingNumbersAfterRemoval（削除の全階連動の再採番）
+// ================================================================
+
+test('buildingNumbersAfterRemoval: 同じidが複数階にあっても1件にまとめてから除外・詰め直す', () => {
+  const rowLists = [
+    [{ id: 'a', category: 'ev', no: 1 }, { id: 'c', category: 'ev', no: 3 }],
+    [{ id: 'a', category: 'ev', no: 1 }, { id: 'b', category: 'ev', no: 2 }], // aは他階にも同一行
+  ];
+  const result = buildingNumbersAfterRemoval(rowLists, 'a');
+  assert.equal(result.has('a'), false, '削除する id は除かれるはず');
+  assert.equal(result.get('b'), 1);
+  assert.equal(result.get('c'), 2);
+  assert.equal(result.size, 2);
+});
+
+test('buildingNumbersAfterRemoval: 器具0件（削除対象しか無い）は空のMap', () => {
+  const result = buildingNumbersAfterRemoval([[{ id: 'a', category: 'ev', no: 1 }]], 'a');
+  assert.equal(result.size, 0);
+});
+
+// QA指摘T6（2026-09-30）: 同じidのnoが階で食い違う場合に下階（rowListsの先頭）の行が勝つことを、
+// 結果が変わる形（後勝ちだと詰め直し後の順位まで変わる入力）で固定する。b・c2件だけの入力だと
+// 「1件しかない分類はどのnoを拾っても詰め直し後は必ず1になる」ため恒真になる——bのnoが
+// 階によって食い違い、cとの相対順位が入れ替わる入力にする。
+test('buildingNumbersAfterRemoval【QA指摘T6】: 同じidのnoが階で食い違う場合、下階（rowListsの先頭）の行のnoを使う（後勝ちだと結果が変わる）', () => {
+  const rowLists = [
+    [{ id: 'b', category: 'ev', no: 1 }, { id: 'c', category: 'ev', no: 2 }], // 下階(1階想定)
+    [{ id: 'b', category: 'ev', no: 5 }, { id: 'c', category: 'ev', no: 2 }], // 上階(2階想定。bのnoが食い違う)
+  ];
+  const result = buildingNumbersAfterRemoval(rowLists, 'no-such-id');
+  assert.equal(result.get('b'), 1, '下階のno=1を使えばbはc(no=2)より先=1になるはず（後勝ちでno=5を使うと2になってしまう）');
+  assert.equal(result.get('c'), 2);
 });

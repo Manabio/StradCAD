@@ -92,9 +92,8 @@ test('prepareUpperShaftCells: 上階の同じ座標に梁芯だけ→中心線�
 // falseになるため、closed:falseになる——prepareUpperShaftCells単体の「isRectangularCellSetの分岐」を
 // 直接踏む構成として残す（QA指摘・2026-09-30: sourceCells自体がL字＝非矩形のため、本番では
 // validateElevatorInstall（設置階側の矩形判定）で先に拒否され、この入力のままprepareUpperShaftCells
-// まで届くことは無い。実際に本番で起きうる「上階の対応する中心線はあるが範囲が短く閉じない」
-// （Q1）は、下のT1（boundsEqualの分岐を踏む）が正しい再現——両方のfalse分岐を別々に固定するため
-// 意図して残す）。
+// まで届くことは無い。実際に本番で起きうる「上階の対応する中心線はあるが範囲が短く閉じない」場合は、
+// 下のT1（boundsEqualの分岐を踏む）が正しい再現——両方のfalse分岐を別々に固定するため意図して残す）。
 function makeLShapeSourceCells(g1) {
   const x1000 = [...g1.centerLines].find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 1000);
   const x2000 = [...g1.centerLines].find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 2000);

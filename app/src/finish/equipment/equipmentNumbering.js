@@ -78,6 +78,20 @@ export function renumberEquipment(catalog) {
 }
 
 /**
+ * equipmentId を除いた建物全体（全階ぶん）のカタログを分類ごとに 1..n へ詰め直す
+ * （昇降機の削除・全階連動の再採番）。rowLists は階の配列（各要素は {id,category,no}[]。
+ * plain値でも行オブジェクトでもよい——読むのは id・category・no のみ）。同じ id が複数の階に
+ * あっても selfFloorEquipmentCatalog の重複除去（先勝ち）で1件になる。
+ * @param {Array<Array<{id:string, category:string, no:number}>>} rowLists
+ * @param {string} equipmentId
+ * @returns {Map<string, number>} id → 新no（equipmentId は含まれない）
+ */
+export function buildingNumbersAfterRemoval(rowLists, equipmentId) {
+  const catalog = selfFloorEquipmentCatalog(rowLists.flat()).filter(r => r.id !== equipmentId);
+  return renumberEquipment(catalog);
+}
+
+/**
  * order の最小〜最大の階名（例:「1階〜3階」）。1件ならその階名だけ。空配列は throw。
  * @param {Array<{label:string, order:number}>} floors
  */

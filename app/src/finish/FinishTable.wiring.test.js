@@ -224,9 +224,15 @@ test('【不変条件】TABS の id の並びが interior/stair/exterior/fitting
 
 // 昇降機の仕様追加ステップ3（S4）: 機械器具タブは EmptyTabPlaceholder から EquipmentTab
 // （finish/equipment/EquipmentTab.jsx）へ置き換わった。附帯タブは引き続きプレースホルダのまま。
-test('【不変条件】activeTab===equipment は <EquipmentTab ...> へ、accessory は <EmptyTabPlaceholder message="…" /> へ分岐し、ExteriorTable（else分岐）へ落ちない', () => {
-  assert.ok(/activeTab === 'equipment'\s*\?\s*<EquipmentTab graph=\{graph\} mode=\{mode\} floorName=\{floorName\} \/>/.test(codeOnly),
-    'activeTab === \'equipment\' ? <EquipmentTab graph={graph} mode={mode} floorName={floorName} /> が見つからない');
+// ステップ5でEquipmentTabへonDeleteEquipment/onChangeEquipmentUsage（全階連動の入口。App.jsx参照）
+// を渡す形へ変わり複数行になったため、1行まるごとの形（mフラグ）で個別に固定する
+// （旧→新: 1正規表現でのJSX全体一致 → 属性ごとの1行まるごと一致。理由: 属性が増え複数行化した
+// ため単一の1行正規表現では表現できない。team-lessons「配線テストは1行まるごと一致させる」）。
+test('【不変条件】activeTab===equipmentは<EquipmentTab ...>（onDeleteEquipment/onChangeEquipmentUsage込み）へ、accessoryは<EmptyTabPlaceholder message="…" />へ分岐し、ExteriorTable（else分岐）へ落ちない', () => {
+  assert.match(codeOnly, /^\s*: activeTab === 'equipment'\s*$/m, "activeTab === 'equipment' の分岐行が見つからない");
+  assert.match(codeOnly, /^\s*\? <EquipmentTab\s*$/m, '? <EquipmentTab が見つからない');
+  assert.match(codeOnly, /^\s*onDeleteEquipment=\{onDeleteEquipment\}\s*$/m, 'onDeleteEquipment={onDeleteEquipment} が見つからない');
+  assert.match(codeOnly, /^\s*onChangeEquipmentUsage=\{onChangeEquipmentUsage\}\s*$/m, 'onChangeEquipmentUsage={onChangeEquipmentUsage} が見つからない');
   assert.ok(/activeTab === 'accessory'\s*\?\s*<EmptyTabPlaceholder message="附帯は未対応です" \/>/.test(codeOnly),
     'activeTab === \'accessory\' ? <EmptyTabPlaceholder message="附帯は未対応です" /> が見つからない');
 });

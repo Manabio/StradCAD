@@ -97,8 +97,9 @@ export class FinishModeState {
     // applyNaming が昇降機の設置を拒否したときの文言（非observable。lastNamingUndoEntryと同じ
     // 「フィールドで受け渡す」流儀。App.jsx が直後に読んでトースト表示する）。
     this.lastNamingRejection = null;
-    // 直近の deleteEquipment が積んだ undo エントリ（非observable。setEquipmentUsageは
-    // withFinishUndoで積むため対象外）。
+    // 直近の deleteEquipment・setEquipmentUsage が積んだ undo エントリ（非observable。ステップ5:
+    // App.jsx の全階連動（runElevatorRemoval/runElevatorUsageChange）の commitActive が
+    // 読み出す——applyNaming の lastNamingUndoEntry と同じ「フィールドで受け渡す」流儀）。
     this.lastEquipmentUndoEntry = null;
     // _loadLowerStairs が peek した直下階グラフそのもの（非observable。lowerStairs は
     // 表示・見下げ判定用に stair+cellBounds へ加工した派生値のため、直下階の壁・部屋トポロジー
@@ -1101,17 +1102,31 @@ export class FinishModeState {
     return equipmentSpanLabelOf(this.project, this.graph, id) ?? fallback();
   }
 
-  /** 昇降機器具の用途を変更する（withFinishUndo。同値・行なしは何もしない）。 */
+  /**
+   * 昇降機器具の用途を変更する（単階）。同値・行なしは何もしない（lastEquipmentUndoEntryはnull）。
+   * withFinishUndoではなく自前でbefore/after→pushFinishUndoにする——App.jsx
+   * changeElevatorUsage（ステップ5・全階連動）の commitActive が undo エントリを直接
+   * 読み出す必要があるため（withFinishUndoは戻り値を返さない）。lastEquipmentUndoEntryを
+   * 設定するのはdeleteEquipment・setEquipmentUsageの2つ（applyNamingのlastNamingUndoEntryとは別枠）。
+   */
   setEquipmentUsage(id, usage) {
     const row = this.graph.equipmentRows.find(r => r.id === id);
-    if (!row || row.usage === usage) return;
-    withFinishUndo(this.graph, () => row.setUsage(usage));
+    if (!row || row.usage === usage) { this.lastEquipmentUndoEntry = null; return; }
+    const before = snapshotFinishState(this.graph);
+    row.setUsage(usage);
+    this.lastEquipmentUndoEntry = pushFinishUndo(this.graph, before);
   }
 
-  /** 昇降機器具を1基削除する（単階）。 */
-  deleteEquipment(id) {
+  /**
+   * 昇降機器具を1基削除する（単階）。
+   * @param {string} id
+   * @param {{noById?: Map<string,number>|null}} [opts] - 渡されれば建物全体で詰めた番号を反映する
+   *   （finish/equipment/equipmentOps.js removeEquipmentへそのまま渡す。ステップ5・全階連動の
+   *   commitActiveから使う）。省略時は従来どおり自階だけで詰め直す。
+   */
+  deleteEquipment(id, { noById = null } = {}) {
     const before = snapshotFinishState(this.graph);
-    removeEquipment(this.graph, id);
+    removeEquipment(this.graph, id, { noById });
     if (this.selectedEquipmentId === id) this.selectedEquipmentId = null;
     this.lastEquipmentUndoEntry = pushFinishUndo(this.graph, before);
   }

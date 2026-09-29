@@ -5,7 +5,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, isShaftFeature } from '@core';
 import { worldToCell } from '../gridCells.js';
-import { validateElevatorInstall, installEquipment, removeEquipment, applyEquipmentNumbers } from './equipmentOps.js';
+import {
+  validateElevatorInstall, installEquipment, removeEquipment, applyEquipmentNumbers,
+  applyEquipmentRemovalToFloor, applyEquipmentUsageToFloor,
+} from './equipmentOps.js';
+import { buildingNumbersAfterRemoval } from './equipmentNumbering.js';
 import { ERR_ELEVATOR_NOT_UNASSIGNED, ERR_ELEVATOR_NOT_RECTANGLE, ERR_ELEVATOR_EXTERIOR } from '../../error.js';
 
 function makeGrid2x1() {
@@ -181,4 +185,105 @@ test('applyEquipmentNumbers: noByIdに無いidは変更しない。変更した�
   assert.equal(changed, 1);
   assert.equal(graph.equipmentRows.find(r => r.id === 'eq1').no, 1);
   assert.equal(graph.equipmentRows.find(r => r.id === 'eq2').no, 9, 'noByIdに無いidは変更しないはず');
+});
+
+// ================================================================
+// removeEquipment(noById)・applyEquipmentRemovalToFloor・applyEquipmentUsageToFloor
+// ================================================================
+
+// 「自階だけで詰めた結果」と「建物全体で詰めた結果」が食い違う入力: 自階にA(no=1)・C(no=3)、
+// 他階にB(no=2)がある状態でAを削除→建物全体ではB=1・C=2だが、自階だけで詰めるとC=1になる。
+test('removeEquipment: noByIdを渡すとapplyEquipmentNumbersでそのまま反映し、自階だけの詰め直し結果とは食い違う', () => {
+  const graph = makeGrid2x1();
+  const left = worldToCell(1000, 750, graph);
+  graph.addEquipmentRow({ id: 'A', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set([left.key]) });
+  graph.addEquipmentRow({ id: 'C', category: 'ev', usage: 'passenger', no: 3, cellKeys: new Set([left.key]) });
+  const noById = buildingNumbersAfterRemoval(
+    [[{ id: 'A', category: 'ev', no: 1 }, { id: 'C', category: 'ev', no: 3 }], [{ id: 'B', category: 'ev', no: 2 }]],
+    'A',
+  );
+  assert.equal(noById.get('C'), 2, '前提: 建物全体で詰めるとCは2になる（Bが1になるため）');
+
+  const result = removeEquipment(graph, 'A', { noById });
+
+  assert.equal(result.removed, true);
+  assert.equal(graph.equipmentRows.find(r => r.id === 'C').no, 2, '建物全体の番号がそのまま反映されるはず');
+});
+
+test('removeEquipment: noByIdを省略すると従来どおり自階だけで詰め直す（C=1になる）', () => {
+  const graph = makeGrid2x1();
+  const left = worldToCell(1000, 750, graph);
+  graph.addEquipmentRow({ id: 'A', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set([left.key]) });
+  graph.addEquipmentRow({ id: 'C', category: 'ev', usage: 'passenger', no: 3, cellKeys: new Set([left.key]) });
+
+  removeEquipment(graph, 'A');
+
+  assert.equal(graph.equipmentRows.find(r => r.id === 'C').no, 1, '自階だけで詰めるとCは1になるはず（省略時の従来挙動）');
+});
+
+test('applyEquipmentRemovalToFloor: 行がある階は削除して true を返す', () => {
+  const graph = makeGrid2x1();
+  const left = worldToCell(1000, 750, graph);
+  graph.addEquipmentRow({ id: 'A', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set([left.key]) });
+  const noById = new Map([['A', 1]]);
+
+  const changed = applyEquipmentRemovalToFloor(graph, 'A', noById);
+
+  assert.equal(changed, true);
+  assert.equal(graph.equipmentRows.length, 0);
+});
+
+test('applyEquipmentRemovalToFloor: 行が無い階でも noById が別の行の番号を変えれば true', () => {
+  const graph = makeGrid2x1();
+  const left = worldToCell(1000, 750, graph);
+  graph.addEquipmentRow({ id: 'B', category: 'ev', usage: 'passenger', no: 3, cellKeys: new Set([left.key]) });
+  const noById = new Map([['B', 1]]); // 削除した器具Aはこの階に無い
+
+  const changed = applyEquipmentRemovalToFloor(graph, 'A', noById);
+
+  assert.equal(changed, true);
+  assert.equal(graph.equipmentRows.find(r => r.id === 'B').no, 1);
+});
+
+test('applyEquipmentRemovalToFloor: 行が無く番号も変わらない階は false', () => {
+  const graph = makeGrid2x1();
+  const left = worldToCell(1000, 750, graph);
+  graph.addEquipmentRow({ id: 'B', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set([left.key]) });
+  const noById = new Map([['B', 1]]); // 既に1のまま変わらない
+
+  const changed = applyEquipmentRemovalToFloor(graph, 'A', noById);
+
+  assert.equal(changed, false);
+});
+
+test('applyEquipmentUsageToFloor: 用途が変われば true でsetUsageされる', () => {
+  const graph = makeGrid2x1();
+  const left = worldToCell(1000, 750, graph);
+  graph.addEquipmentRow({ id: 'A', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set([left.key]) });
+
+  const changed = applyEquipmentUsageToFloor(graph, 'A', 'freight');
+
+  assert.equal(changed, true);
+  assert.equal(graph.equipmentRows[0].usage, 'freight');
+});
+
+test('applyEquipmentUsageToFloor: 同じ用途は false', () => {
+  const graph = makeGrid2x1();
+  const left = worldToCell(1000, 750, graph);
+  graph.addEquipmentRow({ id: 'A', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set([left.key]) });
+
+  assert.equal(applyEquipmentUsageToFloor(graph, 'A', 'passenger'), false);
+});
+
+test('applyEquipmentUsageToFloor: 行が無い階は false', () => {
+  const graph = makeGrid2x1();
+  assert.equal(applyEquipmentUsageToFloor(graph, 'no-such-id', 'freight'), false);
+});
+
+test('【失敗系】applyEquipmentUsageToFloor: 不正な用途は throw する', () => {
+  const graph = makeGrid2x1();
+  const left = worldToCell(1000, 750, graph);
+  graph.addEquipmentRow({ id: 'A', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set([left.key]) });
+
+  assert.throws(() => applyEquipmentUsageToFloor(graph, 'A', 'not-a-usage'));
 });

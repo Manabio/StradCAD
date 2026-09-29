@@ -2,7 +2,10 @@ import { FinishTable } from './FinishTable.jsx';
 import { BottomSheet } from '../ui/BottomSheet.jsx';
 
 // 縦長デバイス用 — 下からせり上がるハーフモーダル（タブ: 内部 / 階段 / 外部 / …）。
-export function FinishHalfModal({ graph, mode, project, selectedRoomId, onSelectRoom, onApplyNaming, floorName }) {
+export function FinishHalfModal({
+  graph, mode, project, selectedRoomId, onSelectRoom, onApplyNaming, floorName,
+  onDeleteEquipment, onChangeEquipmentUsage,
+}) {
   return (
     <BottomSheet title="仕上げ表" raiseSignal={selectedRoomId}>
       <FinishTable
@@ -13,6 +16,8 @@ export function FinishHalfModal({ graph, mode, project, selectedRoomId, onSelect
         onSelectRoom={onSelectRoom}
         onApplyNaming={onApplyNaming}
         floorName={floorName}
+        onDeleteEquipment={onDeleteEquipment}
+        onChangeEquipmentUsage={onChangeEquipmentUsage}
       />
     </BottomSheet>
   );

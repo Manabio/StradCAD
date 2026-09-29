@@ -368,7 +368,10 @@ const EmptyTabPlaceholder = observer(({ message }) => (
 // FinishTable — タブ付きメイン
 // ================================================================
 
-export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onSelectRoom, onApplyNaming, floorName }) => {
+export const FinishTable = observer(({
+  graph, mode, project, selectedRoomId, onSelectRoom, onApplyNaming, floorName,
+  onDeleteEquipment, onChangeEquipmentUsage,
+}) => {
   const [activeTab, setActiveTab] = useState('interior');
   // 階段化セレクタ（内部タブのカード・部屋名ダイアログ共通）を有効にするか。上階に採用フロアが
   // 無ければ階段化できない（stairEnabled=false。RoomNameInput.jsxと同じ条件）。
@@ -437,7 +440,13 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
         : activeTab === 'common'
         ? <CommonSpecTable graph={graph} mode={mode} />
         : activeTab === 'equipment'
-        ? <EquipmentTab graph={graph} mode={mode} floorName={floorName} />
+        ? <EquipmentTab
+            graph={graph}
+            mode={mode}
+            floorName={floorName}
+            onDeleteEquipment={onDeleteEquipment}
+            onChangeEquipmentUsage={onChangeEquipmentUsage}
+          />
         : activeTab === 'accessory'
         ? <EmptyTabPlaceholder message="附帯は未対応です" />
         : <ExteriorTable

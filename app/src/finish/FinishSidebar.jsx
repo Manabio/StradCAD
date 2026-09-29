@@ -2,7 +2,10 @@ import { FinishTable } from './FinishTable.jsx';
 import { ModePanel } from '../ui/ModePanel.jsx';
 
 // 横長デバイス用 — 右端に固定オーバーレイ（タブ: 内部 / 階段 / 外部 / …）
-export function FinishSidebar({ graph, mode, project, selectedRoomId, onSelectRoom, onApplyNaming, floorName }) {
+export function FinishSidebar({
+  graph, mode, project, selectedRoomId, onSelectRoom, onApplyNaming, floorName,
+  onDeleteEquipment, onChangeEquipmentUsage,
+}) {
   return (
     <ModePanel title="仕上げ表">
       <FinishTable
@@ -13,6 +16,8 @@ export function FinishSidebar({ graph, mode, project, selectedRoomId, onSelectRo
         onSelectRoom={onSelectRoom}
         onApplyNaming={onApplyNaming}
         floorName={floorName}
+        onDeleteEquipment={onDeleteEquipment}
+        onChangeEquipmentUsage={onChangeEquipmentUsage}
       />
     </ModePanel>
   );

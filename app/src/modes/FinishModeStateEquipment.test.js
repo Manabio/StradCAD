@@ -879,6 +879,62 @@ test('【防御】commitDragのroomsフィルタは、dragStateへ紛れ込ん�
   void midCell;
 });
 
+// ================================================================
+// ステップ5: deleteEquipment(id, { noById })・setEquipmentUsageのlastEquipmentUndoEntry
+// ================================================================
+
+// QA指摘T1（2026-09-30）: 旧テストは隣り合う2セルの左を削除する恒真的な入力
+// （自階だけの詰め直しと建物全体の詰め直しが偶然一致してしまい、noByIdを無視する変異でも
+// 緑のままになりうる）だったため、食い違う入力（自階にA・Cのみでno=1・3、他階にBがある想定）へ
+// 差し替える。自階だけで詰めるとCは1になるが、noByIdを渡すとCは2のまま（建物全体の番号を
+// そのまま反映する）ことを固定する。
+test('deleteEquipment【ステップ5・QA指摘T1】: 自階の詰め直しと食い違うnoByIdを渡すと、その値がそのまま反映される', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const leftCell = worldToCell(1000, 1500, graph);
+  const midCell  = worldToCell(3000, 1500, graph);
+  graph.addEquipmentRow({ id: 'A', category: 'ev', usage: DEFAULT_EV_USAGE, no: 1, cellKeys: new Set([leftCell.key]) });
+  graph.addEquipmentRow({ id: 'C', category: 'ev', usage: DEFAULT_EV_USAGE, no: 3, cellKeys: new Set([midCell.key]) });
+  // 建物全体（他階のBを含む）で詰め直すとB=1・C=2。Aは削除対象なのでnoByIdに含まれない。
+  const noById = new Map([['B', 1], ['C', 2]]);
+
+  state.deleteEquipment('A', { noById });
+
+  assert.equal(graph.equipmentRows.length, 1);
+  assert.equal(graph.equipmentRows[0].id, 'C');
+  assert.equal(graph.equipmentRows[0].no, 2,
+    '自階だけで詰め直すとCは1になるところ、noByIdで渡した2がそのまま反映されるはず');
+});
+
+test('deleteEquipment【ステップ5】: noByIdを省略すると従来どおり自階だけで詰め直す', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  state.applyNaming(state.namingRoomId, EV_INSTALL);
+  const row = graph.equipmentRows[0];
+
+  state.deleteEquipment(row.id);
+
+  assert.equal(graph.equipmentRows.length, 0, '従来どおり動作するはず（noById省略で例外にならない）');
+});
+
+test('setEquipmentUsage【ステップ5】: lastEquipmentUndoEntryにエントリが入り、同値ならnullになる', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(2000, 1500);
+  state.commitDrag();
+  state.applyNaming(state.namingRoomId, EV_INSTALL);
+  const row = graph.equipmentRows[0];
+
+  state.setEquipmentUsage(row.id, EvUsage.FREIGHT);
+  assert.notEqual(state.lastEquipmentUndoEntry, null, '用途が変われば lastEquipmentUndoEntry にエントリが入るはず');
+  assert.equal(graph.equipmentRows[0].usage, EvUsage.FREIGHT);
+
+  state.setEquipmentUsage(row.id, EvUsage.FREIGHT); // 同値
+  assert.equal(state.lastEquipmentUndoEntry, null, '同値のときは lastEquipmentUndoEntry が null になるはず');
+});
+
 test('undo→redo→undo: 削除後の各時点でRoom・行の全フィールドが一致する', () => {
   const graph = makeSingleCellGraph();
   const state = new FinishModeState(graph, null);
@@ -955,14 +1011,46 @@ test('【配線・強化】FinishTable.jsx: mode.selectedEquipmentId が立っ�
     'FinishTable.jsx に selectedEquipmentId の自動切替 effect が1行まるごとの形で見つからない');
 });
 
-test('【配線・強化】EquipmentTab.jsx: 用途のonChange・削除の確定・行のonClickが各1行まるごとの形でmodeを呼ぶ', () => {
+// 旧→新（ステップ5・§5の配線の変更）: 用途変更・削除は App.jsx の全階連動
+// （runElevatorRemoval/runElevatorUsageChange）へ委ねるため、EquipmentTab.jsx は
+// mode.setEquipmentUsage/mode.deleteEquipment を直接呼ばず、props（onChangeEquipmentUsage/
+// onDeleteEquipment）を呼ぶ形へ変わった（行の選択＝mode.selectEquipmentは変えない）。
+test('【配線・強化】EquipmentTab.jsx: 行のonClickは従来どおりmode.selectEquipmentを呼び、用途変更・削除はonChangeEquipmentUsage/onDeleteEquipment（props）を呼ぶ。mode.setEquipmentUsage/mode.deleteEquipmentは直接呼ばない', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '../finish/equipment/EquipmentTab.jsx'), 'utf8');
   assert.match(src, /^\s*onClick=\{\(\) => mode\.selectEquipment\(entry\.id\)\}\s*$/m,
     'onClick={() => mode.selectEquipment(entry.id)} が1行まるごとの形で見つからない');
-  assert.match(src, /^\s*onChange=\{e => mode\.setEquipmentUsage\(entry\.id, e\.target\.value\)\}\s*$/m,
-    'onChange={e => mode.setEquipmentUsage(entry.id, e.target.value)} が1行まるごとの形で見つからない');
-  assert.match(src, /^\s*if \(value === 'ok'\) mode\.deleteEquipment\(deleteRowId\);\s*$/m,
-    "if (value === 'ok') mode.deleteEquipment(deleteRowId); が1行まるごとの形で見つからない");
+  assert.match(src, /^\s*onChange=\{e => onChangeEquipmentUsage\(entry\.id, e\.target\.value\)\}\s*$/m,
+    'onChange={e => onChangeEquipmentUsage(entry.id, e.target.value)} が1行まるごとの形で見つからない');
+  assert.match(src, /^\s*if \(value === 'ok'\) onDeleteEquipment\(deleteRowId\);\s*$/m,
+    "if (value === 'ok') onDeleteEquipment(deleteRowId); が1行まるごとの形で見つからない");
+  assert.equal((src.match(/mode\.setEquipmentUsage\(/g) ?? []).length, 0,
+    'EquipmentTab.jsxはmode.setEquipmentUsageを直接呼んではいけない（出現数0）');
+  assert.equal((src.match(/mode\.deleteEquipment\(/g) ?? []).length, 0,
+    'EquipmentTab.jsxはmode.deleteEquipmentを直接呼んではいけない（出現数0）');
+});
+
+// props中継（onDeleteEquipment/onChangeEquipmentUsage）の固定: App.jsx→FinishSidebar/
+// FinishHalfModal→FinishTable→EquipmentTabの経路すべてで1行まるごとの形で中継されること。
+test('【配線・強化】App.jsx: FinishSidebar/FinishHalfModalへonDeleteEquipment/onChangeEquipmentUsageをguardUiで包んで渡す', () => {
+  const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
+  assert.equal((appSrc.match(/^\s*onDeleteEquipment=\{guardUi\(deleteElevatorEquipment\)\}\s*$/gm) ?? []).length, 2,
+    'onDeleteEquipment={guardUi(deleteElevatorEquipment)} がFinishSidebar/FinishHalfModalの2箇所で見つからない');
+  assert.equal((appSrc.match(/^\s*onChangeEquipmentUsage=\{guardUi\(changeElevatorUsage\)\}\s*$/gm) ?? []).length, 2,
+    'onChangeEquipmentUsage={guardUi(changeElevatorUsage)} がFinishSidebar/FinishHalfModalの2箇所で見つからない');
+});
+
+test('【配線・強化】FinishSidebar.jsx・FinishHalfModal.jsx: onDeleteEquipment/onChangeEquipmentUsageをFinishTableへそのまま中継する', () => {
+  for (const file of ['../finish/FinishSidebar.jsx', '../finish/FinishHalfModal.jsx']) {
+    const src = fs.readFileSync(path.resolve(import.meta.dirname, file), 'utf8');
+    assert.match(src, /^\s*onDeleteEquipment=\{onDeleteEquipment\}\s*$/m, `${file}: onDeleteEquipment={onDeleteEquipment} が見つからない`);
+    assert.match(src, /^\s*onChangeEquipmentUsage=\{onChangeEquipmentUsage\}\s*$/m, `${file}: onChangeEquipmentUsage={onChangeEquipmentUsage} が見つからない`);
+  }
+});
+
+test('【配線・強化】FinishTable.jsx: onDeleteEquipment/onChangeEquipmentUsageをEquipmentTabへそのまま中継する', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../finish/FinishTable.jsx'), 'utf8');
+  assert.match(src, /^\s*onDeleteEquipment=\{onDeleteEquipment\}\s*$/m, 'onDeleteEquipment={onDeleteEquipment} が見つからない');
+  assert.match(src, /^\s*onChangeEquipmentUsage=\{onChangeEquipmentUsage\}\s*$/m, 'onChangeEquipmentUsage={onChangeEquipmentUsage} が見つからない');
 });
 
 // ================================================================

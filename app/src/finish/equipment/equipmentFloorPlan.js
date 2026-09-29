@@ -55,7 +55,7 @@ export function prepareUpperShaftCells(upperGraph, sourceGraph, structGraph, sou
   return { cells, closed: boundsEqual(srcBounds, upBounds) };
 }
 
-// 衝突種別の優先順（Q2: 階の昇順で最初の階、その階の中では階段>吹抜け>器具>部屋の順で最初の1件）。
+// 衝突種別の優先順（階の昇順で最初の階、その階の中では階段>吹抜け>器具>部屋の順で最初の1件を報告する）。
 const CONFLICT_KIND_PRIORITY = ['stair', 'void', 'equipment', 'room'];
 
 function pickFirstConflict(conflicts) {

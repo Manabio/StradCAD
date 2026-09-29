@@ -173,13 +173,25 @@ export function tagCLOpFailure(err) {
 export const ERR_ELEVATOR_OP_FAILED = 'ERR_ELEVATOR_OP_FAILED';
 export const ERR_ELEVATOR_OP_FAILED_MESSAGE = '昇降機の設置に失敗しました。';
 
+// 昇降機の削除・用途変更（finish/equipment/equipmentFloorSync.js runElevatorRemoval・
+// runElevatorUsageChange）専用のエラーコード（ステップ5）。設置と同じ「messageが呼び出し元で
+// 組み立て済み」様式——文言はA2（リードの仮定）どおり「昇降機の削除に失敗しました。」
+// 「昇降機の用途の変更に失敗しました。」。
+export const ERR_ELEVATOR_REMOVE_FAILED = 'ERR_ELEVATOR_REMOVE_FAILED';
+export const ERR_ELEVATOR_REMOVE_FAILED_MESSAGE = '昇降機の削除に失敗しました。';
+export const ERR_ELEVATOR_USAGE_FAILED = 'ERR_ELEVATOR_USAGE_FAILED';
+export const ERR_ELEVATOR_USAGE_FAILED_MESSAGE = '昇降機の用途の変更に失敗しました。';
+
 // tagCLOpFailureと同じ「既に文字列codeを持つ既知エラーはそのまま返す（上書きしない・
 // 二重ラップしない）」規約（QA指摘m4）。equipmentFloorSync.js（保存・commitActiveの例外）と
-// App.jsx installElevatorFromNaming（動的import・structuralSync.whenIdle()の失敗）の両方から
-// 使う——どちらから投げても同じ識別コード・同じ文言でトースト表示される。
-export function tagElevatorOpFailure(err) {
+// App.jsx installElevatorFromNaming/deleteElevatorEquipment/changeElevatorUsage
+// （動的import・structuralSync.whenIdle()の失敗）の両方から使う——どちらから投げても同じ
+// 識別コード・同じ文言でトースト表示される。code・messageは呼び出し元が指定する
+// （既定は設置のERR_ELEVATOR_OP_FAILED。削除・用途変更はcode・messageを渡す——3操作それぞれに
+// tag関数を増やさず、識別を引数で渡す形にまとめている）。
+export function tagElevatorOpFailure(err, { code = ERR_ELEVATOR_OP_FAILED, message = ERR_ELEVATOR_OP_FAILED_MESSAGE } = {}) {
   if (err instanceof Error && typeof err.code === 'string') return err;
-  return Object.assign(new Error(ERR_ELEVATOR_OP_FAILED_MESSAGE, { cause: err }), { code: ERR_ELEVATOR_OP_FAILED });
+  return Object.assign(new Error(message, { cause: err }), { code });
 }
 
 // 階/モード切替の関門（App.jsxのrunBusy経由の5経路）が捕まえた例外を、どの文言で
@@ -189,7 +201,9 @@ export function tagElevatorOpFailure(err) {
 // これらは message が呼び出し元で意味のある内容に組み立てられているため、生の技術的な例外
 // （IDBエラー等）だけをERR_FLOOR_SWITCH_FAILEDに丸め、既知のものはmessageをそのまま見せる
 // （QA指摘F3・2026-09-27）。
-const KNOWN_TRANSITION_ERROR_CODES = [ERR_CATALOG_DUPLICATE, ERR_ELEVATOR_OP_FAILED];
+const KNOWN_TRANSITION_ERROR_CODES = [
+  ERR_CATALOG_DUPLICATE, ERR_ELEVATOR_OP_FAILED, ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_USAGE_FAILED,
+];
 
 // 昇降機の設置（finish/equipment/equipmentOps.js validateElevatorInstall）専用の拒否文言。
 // 矩形でない選択（器具単位の矩形判定。isRectangularCellSet）で確定しようとした場合。
@@ -207,15 +221,16 @@ export const ERR_ELEVATOR_NOT_UNASSIGNED = '昇降機は未指定のエリアか
 // 「部屋名」等）。
 export const ERR_ELEVATOR_UPPER_CONFLICT = (floorLabel, targetLabel) =>
   `${floorLabel}の${targetLabel}と重なるため設置できません。`;
-// 上階で対応する中心線はあるが、範囲が足りず変換後セルが矩形に閉じない場合（Q1）。
+// 上階で対応する中心線はあるが、範囲が足りず変換後セルが矩形に閉じない場合。
 export const ERR_ELEVATOR_UPPER_UNCLOSABLE = (floorLabel) =>
   `${floorLabel}では昇降路の範囲を区画できないため設置できません。`;
 
-// 昇降機の設置（finish/equipment/equipmentFloorSync.js runElevatorInstall）専用（ステップ4・S3a）。
-// 上階への保存直前に書込み世代（storage/floorWriteGeneration.js）が不一致＝他の処理がその階の
-// floorsを書き換えたため中断した場合。ERR_FLOOR_SWITCH_UNSTABLEと同じ「もう一度お試しください」
-// の様式に合わせる。
-export const ERR_ELEVATOR_FLOORS_CHANGED = '他の操作が階のデータを書き換えたため、昇降機の設置を中断しました。もう一度お試しください。';
+// 昇降機の設置・削除・用途変更（finish/equipment/equipmentFloorSync.js runElevatorInstall・
+// runElevatorRemoval・runElevatorUsageChange）共通。上階（アクティブ以外の階）への保存直前に
+// 書込み世代（storage/floorWriteGeneration.js）が不一致＝他の処理がその階のfloorsを書き換えた
+// ため中断した場合。ERR_FLOOR_SWITCH_UNSTABLEと同じ「もう一度お試しください」の様式に合わせる。
+// 3操作で共有するため文言は操作名（「設置」等）に依存しない形にする（リードの裁定）。
+export const ERR_ELEVATOR_FLOORS_CHANGED = '他の処理が階を書き換えたため、昇降機の操作を中断しました。もう一度実行してください。';
 
 export function floorTransitionErrorMessage(err) {
   if (err instanceof Error && err.message === ERR_FLOOR_SWITCH_UNSTABLE) return err.message;

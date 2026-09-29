@@ -13,7 +13,10 @@ const rowStyle = {
 
 // 仕上げパレットの「機械器具」タブ — 昇降機器具の一覧＋行内編集（用途・削除）。
 // finish/stair/StairTab.jsx と同じ型（一覧＋選択で背後の部屋カード/器具を選ぶ）。
-export const EquipmentTab = observer(({ graph, mode, floorName }) => {
+// 登録済み行の削除・用途変更は onDeleteEquipment/onChangeEquipmentUsage（必須props）経由——
+// App.jsx の全階連動（runElevatorRemoval/runElevatorUsageChange。ステップ5）へ委ねるため、
+// mode.deleteEquipment/mode.setEquipmentUsageを直接呼ばない（単階しか反映されないため）。
+export const EquipmentTab = observer(({ graph, mode, floorName, onDeleteEquipment, onChangeEquipmentUsage }) => {
   const [deleteRowId, setDeleteRowId] = useState(null); // 器具行の削除確認対象id
   const [deleteRoomConfirm, setDeleteRoomConfirm] = useState(null); // 未登録Room削除の確認対象{roomId, roomName}
 
@@ -52,7 +55,7 @@ export const EquipmentTab = observer(({ graph, mode, floorName }) => {
             <select
               value={entry.usage ?? ''}
               onClick={e => e.stopPropagation()}
-              onChange={e => mode.setEquipmentUsage(entry.id, e.target.value)}
+              onChange={e => onChangeEquipmentUsage(entry.id, e.target.value)}
               style={{ fontSize: 12, flexShrink: 0 }}
             >
               {EV_USAGE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
@@ -81,7 +84,7 @@ export const EquipmentTab = observer(({ graph, mode, floorName }) => {
             { label: '削除', value: 'ok', danger: true },
           ]}
           onSelect={value => {
-            if (value === 'ok') mode.deleteEquipment(deleteRowId);
+            if (value === 'ok') onDeleteEquipment(deleteRowId);
             setDeleteRowId(null);
           }}
         />

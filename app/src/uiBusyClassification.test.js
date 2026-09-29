@@ -42,7 +42,7 @@ const GATED = [
     reason: '同上（performRedo側）。',
   },
   'runAddAlternative', 'runDeleteFloor', 'runDeleteAlternative', 'runCopyAlternative',
-  'installElevatorFromNaming',
+  'installElevatorFromNaming', 'deleteElevatorEquipment', 'changeElevatorUsage',
 ];
 
 function gatedName(entry) {
@@ -149,8 +149,10 @@ const PENDING_COUNT = 0;
 // 昇降機の仕様追加ステップ4・S3bでinstallElevatorFromNaming（GATED）のrunBusy(コールバック1件が
 // 加わったため29→30。ステップ4・S4で project.equipmentIndex を埋めるuseEffect内のIIFE
 // （410/435の上階peek useEffectと同型）が1件加わったため2→3（412/435→412/435/新規の3件）。
+// ステップ5でdeleteElevatorEquipment・changeElevatorUsage（いずれもGATED）のrunBusy(コールバックが
+// 2件加わったため30→32。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 30;
+const ANON_CALLBACK_COUNT = 32;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

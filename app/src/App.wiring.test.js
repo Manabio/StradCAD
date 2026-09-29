@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readAppSrc, extractFunctionBody } from './uiBusySourceScan.js';
 
 const filePath = path.resolve(import.meta.dirname, 'App.jsx');
 const src = fs.readFileSync(filePath, 'utf8');
@@ -105,3 +106,78 @@ test('【配線・強化・n1-b】App.jsx: commitActive は snapshotFinishState(
   assert.equal(restoreMatches.length, 3,
     `restoreFinishState(g, before) の呼び出しは3箇所（例外・拒否・undoエントリnull）のはず（実際: ${restoreMatches.length}）`);
 });
+
+// ================================================================
+// 昇降機の仕様追加 ステップ5（QA指摘T3・2026-09-30）: installElevatorFromNaming・
+// deleteElevatorEquipment・changeElevatorUsage の3入口それぞれについて、onApplied・
+// restoreFinishStateの件数・whenIdleの位置・abortedのトースト・失敗の識別コードを
+// 個別に固定する（3入口のうち1回一致すれば合格、という形にしない——本体を個別に
+// extractFunctionBodyで切り出し、入口ごとに別テストにする）。
+// ================================================================
+
+function escapeRegExpLiteral(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const ELEVATOR_ENTRIES = [
+  {
+    name: 'installElevatorFromNaming',
+    needle: 'async function installElevatorFromNaming',
+    restoreFinishStateCount: 3, // 例外・拒否・undoエントリnull（n1-bのテストと同じ数）
+    tagLine: 'throw tagElevatorOpFailure(err);', // 既定（設置）の識別コード・文言
+    abortedConditionLine: "} else if (r.status === 'aborted') {", // rejected/installedとの分岐の途中
+  },
+  {
+    name: 'deleteElevatorEquipment',
+    needle: 'async function deleteElevatorEquipment',
+    restoreFinishStateCount: 2, // 例外・undoエントリnull（deleteEquipmentにlastNamingRejection相当は無い）
+    tagLine: 'throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_REMOVE_FAILED, message: ERR_ELEVATOR_REMOVE_FAILED_MESSAGE });',
+    abortedConditionLine: "if (r.status === 'aborted') {", // 単独のif（rejected分岐は無い）
+  },
+  {
+    name: 'changeElevatorUsage',
+    needle: 'async function changeElevatorUsage',
+    restoreFinishStateCount: 2, // 例外・undoエントリnull
+    tagLine: 'throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_USAGE_FAILED, message: ERR_ELEVATOR_USAGE_FAILED_MESSAGE });',
+    abortedConditionLine: "if (r.status === 'aborted') {", // 単独のif
+  },
+];
+
+for (const entry of ELEVATOR_ENTRIES) {
+  test(`【配線・強化・QA指摘T3】App.jsx: ${entry.name} はonApplied・restoreFinishState件数・whenIdleの位置・abortedトースト・失敗の識別を個別に満たす`, () => {
+    const appSrc = readAppSrc();
+    const body = extractFunctionBody(appSrc, entry.needle);
+
+    assert.match(body, /^\s*onApplied: \(\) => setFloorSyncTick\(t => t \+ 1\),\s*$/m,
+      `${entry.name}: onApplied: () => setFloorSyncTick(t => t + 1), が1行まるごとの形で見つからない`);
+
+    const restoreMatches = body.match(/runInAction\(\(\) => restoreFinishState\(g, before\)\);/g) ?? [];
+    assert.equal(restoreMatches.length, entry.restoreFinishStateCount,
+      `${entry.name}: restoreFinishState(g, before) の呼び出し件数が想定と異なる（実際: ${restoreMatches.length}）`);
+
+    const whenIdleIdx = body.indexOf('await structuralSync.whenIdle();');
+    const importIdx = body.indexOf("await import('./finish/equipment/equipmentFloorSync.js');");
+    assert.ok(whenIdleIdx >= 0 && importIdx >= 0 && whenIdleIdx < importIdx,
+      `${entry.name}: structuralSync.whenIdle()の待ちがequipmentFloorSync.jsの動的importより前にあるはず`);
+
+    assert.match(body, /^\s*setToast\(\{ msg: r\.message \?\? ERR_ELEVATOR_FLOORS_CHANGED, key: Date\.now\(\) \}\);\s*$/m,
+      `${entry.name}: abortedのトースト行が1行まるごとの形で見つからない`);
+
+    const tagLineRe = new RegExp(`^\\s*${escapeRegExpLiteral(entry.tagLine)}\\s*$`, 'm');
+    assert.match(body, tagLineRe, `${entry.name}: 失敗の識別行（${entry.tagLine}）が1行まるごとの形で見つからない`);
+
+    // abortedのトーストが「if (r.status === 'aborted') { ... }」の中にあることを、条件行の1行まるごと
+    // 一致に加え、行の並び（条件行の直後がトースト行であること）で固定する——setToast(…)の行だけを
+    // 見ると、条件を`if (false) {`に差し替える変異（トーストの行自体は変えない）を見逃すため。
+    const bodyLines = body.split('\n');
+    const condIdx = bodyLines.findIndex(l => l.trim() === entry.abortedConditionLine);
+    assert.ok(condIdx >= 0,
+      `${entry.name}: aborted分岐の条件行（${entry.abortedConditionLine}）が1行まるごとの形で見つからない`);
+    const toastIdx = bodyLines.findIndex(
+      l => l.trim() === "setToast({ msg: r.message ?? ERR_ELEVATOR_FLOORS_CHANGED, key: Date.now() });",
+    );
+    assert.ok(toastIdx >= 0, `${entry.name}: abortedのトースト行が見つからない`);
+    assert.equal(toastIdx, condIdx + 1,
+      `${entry.name}: aborted分岐の条件行の直後がトースト行であるはず（条件行:${condIdx}行目、トースト行:${toastIdx}行目）`);
+  });
+}

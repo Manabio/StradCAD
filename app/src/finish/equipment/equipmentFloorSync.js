@@ -7,17 +7,23 @@
  *
  * 巻き戻し（rollbackSavedFloors）は transform/centerLineFloorSync.js の rollbackFloorRecords と
  * 同じ規則（1件の失敗でも残りの巻き戻しを続ける）のローカル関数——finish/ から transform/ を
- * import しない（設計書 §1）。ただし本経路は最初の例外を記録し、全件試行後に再スローする
- * （呼び出し側が ERR_ELEVATOR_OP_FAILED へ丸めて再スローするため）。
+ * import しない（層をまたぐ依存を作らない方針）。ただし本経路は最初の例外を記録し、全件試行後に
+ * 再スローする（呼び出し側が ERR_ELEVATOR_OP_FAILED へ丸めて再スローするため）。
  */
+import { EvUsage } from '@core';
 import { floorSwapManager } from '../../storage/FloorSwapManager.js';
 import { saveFloor } from '../../storage/db.js';
 import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
 import { undoManager } from '../../undoManager.js';
 import { floorWriteGeneration } from '../../storage/floorWriteGeneration.js';
 import { judgeElevatorInstall, installOnUpperFloor } from './equipmentFloorPlan.js';
-import { equipmentFloorSpanLabel } from './equipmentNumbering.js';
-import { ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure } from '../../error.js';
+import { equipmentFloorSpanLabel, buildingNumbersAfterRemoval } from './equipmentNumbering.js';
+import { applyEquipmentRemovalToFloor, applyEquipmentUsageToFloor } from './equipmentOps.js';
+import {
+  ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure,
+  ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE,
+  ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
+} from '../../error.js';
 
 // rollbackFloorRecords（transform/centerLineFloorSync.js）と同じ規則: アクティブ階なら
 // restoreGraph、そうでなければ saveFloorFn。1件の失敗でも残りの巻き戻しを続ける——ただしこちらは
@@ -93,13 +99,13 @@ export async function runElevatorInstall({
   const planes = project.planes; // 採用フロアのみ・elevation昇順（検討案・屋根は含まれない）
   const activeIndex = planes.findIndex(p => p.id === activeGraph.plane.id);
 
-  // Q5: 検討案の平面がアクティブ（採用フロアでない）→ 判定・上階生成をせず設置階だけ確定する。
+  // 検討案の平面がアクティブ（採用フロアでない）→ 判定・上階生成をせず設置階だけ確定する。
   // 採番は自階の行だけ（equipment=null で commitActive に委ねる＝FinishModeState側の従来経路）。
   // 上階は無いが、undo/redo の後も project.equipmentIndex・記号の再読込みが要る（QA指摘M2）ため、
   // 「何もしない＋onApplied を呼ぶ」だけの合成をamendする。
   if (activeIndex < 0) {
     const entry = commitActive(null);
-    if (!entry) throw tagElevatorOpFailure(new Error('runElevatorInstall: commitActive returned no undo entry (Q5)'));
+    if (!entry) throw tagElevatorOpFailure(new Error('runElevatorInstall: commitActive returned no undo entry (検討案の平面)'));
     amendOnAppliedOnly(entry, onApplied);
     onApplied?.();
     return { status: 'installed', upperSpanLabel: null };
@@ -134,7 +140,8 @@ export async function runElevatorInstall({
   if (!isStillValid()) return { status: 'aborted', message: null };
 
   if (judged.kind === 'extend') {
-    // 延長: 上階には何も書かない（設計書§3）。undo対象は設置階の1エントリだけだが、
+    // 延長: 上階には何も書かない（延長は既存グループへの合流であり上階は既に設置済みのため）。
+    // undo対象は設置階の1エントリだけだが、
     // undo/redo の後も project.equipmentIndex・記号の再読込みが要る（QA指摘M2）ため、
     // 「何もしない＋onApplied を呼ぶ」だけの合成をamendする（上階への記録は増やさない）。
     const entry = commitActive(judged.equipment);
@@ -154,16 +161,20 @@ export async function runElevatorInstall({
       await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
       return { status: 'aborted', message: ERR_ELEVATOR_FLOORS_CHANGED };
     }
-    installOnUpperFloor(graph, { ...judged.equipment, cells: targetCells });
-    const afterBytes = serializeGraph(graph);
+    // installOnUpperFloor（変更）・serializeGraph（直列化）・saveFloorFn（保存）のいずれが例外を
+    // 投げても、保存済みの階を巻き戻してから識別コード付きで再スローする（QA指摘F1: 従来は
+    // saveFloorFnだけがtryの中で、installOnUpperFloor・serializeGraphの例外は捕捉されず
+    // 巻き戻し・識別コードのどちらも無いまま素通ししていた）。
     try {
+      installOnUpperFloor(graph, { ...judged.equipment, cells: targetCells });
+      const afterBytes = serializeGraph(graph);
       await saveFloorFn(plane.id, afterBytes);
+      afterBytesByPlane.set(plane.id, afterBytes);
+      savedPlaneIds.push(plane.id);
     } catch (err) {
       await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
       throw tagElevatorOpFailure(err);
     }
-    afterBytesByPlane.set(plane.id, afterBytes);
-    savedPlaneIds.push(plane.id);
   }
 
   // 5. isStillValid再確認。偽なら上階を巻き戻す。
@@ -186,7 +197,7 @@ export async function runElevatorInstall({
   }
 
   // 7. undoManager.amend（その階がアクティブならrestoreGraph、そうでなければsaveFloorFn）。
-  // undo/redo の後も project.equipmentIndex・記号の再読込みが要る（設計書§1手順7・QA指摘M2）ため、
+  // undo/redo の後も project.equipmentIndex・記号の再読込みが要る（QA指摘M2）ため、
   // 両コールバックの最後に onApplied を呼ぶ。savedPlaneIds が空（新規グループだが上階0件＝
   // 最上階に設置した場合）でも、設置階自体の undo/redo で再読込みが要るため同様にamendする。
   const records = savedPlaneIds.map(planeId => ({
@@ -226,4 +237,260 @@ export async function loadOtherFloorEquipmentRows(project, activeGraph, {
     entries.push([plane.id, g.equipmentRows.map(r => ({ id: r.id, category: r.category, no: r.no, usage: r.usage }))]);
   }
   return entries;
+}
+
+// runElevatorRemoval・runElevatorUsageChangeが共有する「アクティブ以外の全採用階をpeekし、
+// peek直前の書込み世代とpeek直後のbeforeバイト列を控える」手順（runElevatorInstallの手順1と
+// 同じ規則。例外はまだ何も書き込んでいない状態で伝播するため、呼び出し側がtagElevatorOpFailure
+// で識別コードを付けてから再スローする）。
+async function peekNonActiveFloors(project, activeGraph, peekFn) {
+  const genBeforePeek = new Map();
+  const beforeBytesByPlane = new Map();
+  const floors = [];
+  for (const plane of project.planes) {
+    if (plane.id === activeGraph.plane.id) { floors.push({ plane, graph: activeGraph }); continue; }
+    genBeforePeek.set(plane.id, floorWriteGeneration(plane.id));
+    const g = await peekFn(plane);
+    beforeBytesByPlane.set(plane.id, serializeGraph(g));
+    floors.push({ plane, graph: g });
+  }
+  return { floors, genBeforePeek, beforeBytesByPlane };
+}
+
+/**
+ * 昇降機の削除本体（ステップ5・全階連動）。アクティブ階に equipmentId の行が無ければ何もしない
+ * （noop）。検討案の平面がアクティブなら自階だけ確定する。それ以外は他階を先に保存し、
+ * アクティブ階を最後に commitActive で同期確定する——runElevatorInstall と同じ順序規則。
+ *
+ * @param {object} params
+ * @param {object} params.project
+ * @param {object} params.activeGraph
+ * @param {string} params.equipmentId
+ * @param {(noById: Map<string,number>|null) => object|null} params.commitActive - アクティブ階を
+ *   同期で確定し、undo エントリ（undoManager.push の戻り値）を返す。
+ * @param {() => boolean} params.isStillValid
+ * @param {() => void} [params.onApplied]
+ * @param {(plane: object) => Promise<object>} [params.peekFn]
+ * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [params.saveFloorFn]
+ * @returns {Promise<{status:'removed'}|{status:'aborted', message:string|null}|{status:'noop'}>}
+ */
+export async function runElevatorRemoval({
+  project, activeGraph, equipmentId,
+  commitActive, isStillValid, onApplied,
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+}) {
+  // 1. アクティブ階に equipmentId の行が無ければ何もしない。
+  if (!activeGraph.equipmentRows.some(r => r.id === equipmentId)) return { status: 'noop' };
+
+  const planes = project.planes;
+  const activeIndex = planes.findIndex(p => p.id === activeGraph.plane.id);
+
+  // 2. 検討案の平面がアクティブ（採用フロアでない）→ 自階だけ確定・自階の番号詰め。
+  if (activeIndex < 0) {
+    const entry = commitActive(null);
+    if (!entry) {
+      throw tagElevatorOpFailure(
+        new Error('runElevatorRemoval: commitActive returned no undo entry (検討案の平面)'),
+        { code: ERR_ELEVATOR_REMOVE_FAILED, message: ERR_ELEVATOR_REMOVE_FAILED_MESSAGE },
+      );
+    }
+    amendOnAppliedOnly(entry, onApplied);
+    onApplied?.();
+    return { status: 'removed' };
+  }
+
+  // 3. アクティブ以外の全採用階をpeekし、世代とbeforeバイト列を控える。
+  let floors, genBeforePeek, beforeBytesByPlane;
+  try {
+    ({ floors, genBeforePeek, beforeBytesByPlane } = await peekNonActiveFloors(project, activeGraph, peekFn));
+  } catch (err) {
+    throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_REMOVE_FAILED, message: ERR_ELEVATOR_REMOVE_FAILED_MESSAGE });
+  }
+
+  // 4. 建物全体（アクティブ階は生きている行）で番号を詰め直す。
+  const noById = buildingNumbersAfterRemoval(floors.map(f => f.graph.equipmentRows), equipmentId);
+
+  // 5. isStillValid確認。
+  if (!isStillValid()) return { status: 'aborted', message: null };
+
+  // 6. アクティブ以外の各階（昇順）: 変更があった階だけ世代を確認して保存する（削除する器具が
+  // 無い階でも、番号が変わる行を持てば保存対象になる仕様）。
+  const savedPlaneIds = [];
+  const afterBytesByPlane = new Map();
+  for (const { plane, graph } of floors) {
+    if (plane.id === activeGraph.plane.id) continue;
+    // applyEquipmentRemovalToFloor（変更）・serializeGraph（直列化）・saveFloorFn（保存）の
+    // いずれが例外を投げても、保存済みの階を巻き戻してから識別コード付きで再スローする
+    // （QA指摘F1: 従来はsaveFloorFnだけがtryの中だった）。世代の不一致による中断（aborted）は
+    // 例外ではなくreturnのため、この try の中にあっても従来どおり中断として扱われる。
+    try {
+      const changed = applyEquipmentRemovalToFloor(graph, equipmentId, noById);
+      if (!changed) continue;
+      if (floorWriteGeneration(plane.id) !== genBeforePeek.get(plane.id)) {
+        await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+        return { status: 'aborted', message: ERR_ELEVATOR_FLOORS_CHANGED };
+      }
+      const afterBytes = serializeGraph(graph);
+      await saveFloorFn(plane.id, afterBytes);
+      afterBytesByPlane.set(plane.id, afterBytes);
+      savedPlaneIds.push(plane.id);
+    } catch (err) {
+      await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+      throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_REMOVE_FAILED, message: ERR_ELEVATOR_REMOVE_FAILED_MESSAGE });
+    }
+  }
+
+  // 7. isStillValid再確認。
+  if (!isStillValid()) {
+    await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+    return { status: 'aborted', message: null };
+  }
+
+  // 8. アクティブ階を同期で確定する。
+  let entry;
+  try {
+    entry = commitActive(noById);
+  } catch (err) {
+    await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+    throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_REMOVE_FAILED, message: ERR_ELEVATOR_REMOVE_FAILED_MESSAGE });
+  }
+  if (!entry) {
+    await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+    throw tagElevatorOpFailure(
+      new Error('runElevatorRemoval: commitActive returned no undo entry'),
+      { code: ERR_ELEVATOR_REMOVE_FAILED, message: ERR_ELEVATOR_REMOVE_FAILED_MESSAGE },
+    );
+  }
+
+  // 9. undoManager.amend（削除も全階の before/after を1エントリに合成。Ctrl+Zで全階が戻る）。
+  const records = savedPlaneIds.map(planeId => ({
+    planeId, before: beforeBytesByPlane.get(planeId), after: afterBytesByPlane.get(planeId),
+  }));
+  undoManager.amend(
+    entry,
+    () => { applyRecords(project, records, 'before', saveFloorFn); onApplied?.(); },
+    () => { applyRecords(project, records, 'after', saveFloorFn); onApplied?.(); },
+  );
+  onApplied?.();
+
+  return { status: 'removed' };
+}
+
+/**
+ * 昇降機の用途変更本体（ステップ5・全階連動）。アクティブ階に equipmentId の行が無い、または
+ * 既に同じ用途なら何もしない（noop）。それ以外は runElevatorRemoval と同じ順序規則
+ * （他階を先に保存し、アクティブ階を最後に commitActive で同期確定）。番号の詰め直しは
+ * 用途変更では起きないため commitActive は引数を取らない。
+ *
+ * @param {object} params
+ * @param {object} params.project
+ * @param {object} params.activeGraph
+ * @param {string} params.equipmentId
+ * @param {string} params.usage
+ * @param {() => object|null} params.commitActive - アクティブ階の用途を変えて undo エントリを返す。
+ * @param {() => boolean} params.isStillValid
+ * @param {() => void} [params.onApplied]
+ * @param {(plane: object) => Promise<object>} [params.peekFn]
+ * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [params.saveFloorFn]
+ * @returns {Promise<{status:'changed'}|{status:'aborted', message:string|null}|{status:'noop'}>}
+ */
+export async function runElevatorUsageChange({
+  project, activeGraph, equipmentId, usage,
+  commitActive, isStillValid, onApplied,
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+}) {
+  // usage が EvUsage のいずれでもなければ、noop 判定・検討案の平面の分岐より前に拒否する
+  // （アクティブ階に行が無い・1階建て・検討案の平面でも不正な値は弾く）。
+  if (!Object.values(EvUsage).includes(usage)) {
+    throw tagElevatorOpFailure(
+      new Error(`runElevatorUsageChange: 不正な用途: ${usage}`),
+      { code: ERR_ELEVATOR_USAGE_FAILED, message: ERR_ELEVATOR_USAGE_FAILED_MESSAGE },
+    );
+  }
+  const activeRow = activeGraph.equipmentRows.find(r => r.id === equipmentId);
+  if (!activeRow || activeRow.usage === usage) return { status: 'noop' };
+
+  const planes = project.planes;
+  const activeIndex = planes.findIndex(p => p.id === activeGraph.plane.id);
+
+  // 検討案の平面がアクティブ→自階だけ。
+  if (activeIndex < 0) {
+    const entry = commitActive();
+    if (!entry) {
+      throw tagElevatorOpFailure(
+        new Error('runElevatorUsageChange: commitActive returned no undo entry (検討案の平面)'),
+        { code: ERR_ELEVATOR_USAGE_FAILED, message: ERR_ELEVATOR_USAGE_FAILED_MESSAGE },
+      );
+    }
+    amendOnAppliedOnly(entry, onApplied);
+    onApplied?.();
+    return { status: 'changed' };
+  }
+
+  let floors, genBeforePeek, beforeBytesByPlane;
+  try {
+    ({ floors, genBeforePeek, beforeBytesByPlane } = await peekNonActiveFloors(project, activeGraph, peekFn));
+  } catch (err) {
+    throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_USAGE_FAILED, message: ERR_ELEVATOR_USAGE_FAILED_MESSAGE });
+  }
+
+  if (!isStillValid()) return { status: 'aborted', message: null };
+
+  const savedPlaneIds = [];
+  const afterBytesByPlane = new Map();
+  for (const { plane, graph } of floors) {
+    if (plane.id === activeGraph.plane.id) continue;
+    // applyEquipmentUsageToFloor（変更）・serializeGraph（直列化）・saveFloorFn（保存）の
+    // いずれが例外を投げても、保存済みの階を巻き戻してから識別コード付きで再スローする
+    // （QA指摘F1。runElevatorRemovalと同じ規則）。
+    try {
+      const changed = applyEquipmentUsageToFloor(graph, equipmentId, usage);
+      if (!changed) continue;
+      if (floorWriteGeneration(plane.id) !== genBeforePeek.get(plane.id)) {
+        await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+        return { status: 'aborted', message: ERR_ELEVATOR_FLOORS_CHANGED };
+      }
+      const afterBytes = serializeGraph(graph);
+      await saveFloorFn(plane.id, afterBytes);
+      afterBytesByPlane.set(plane.id, afterBytes);
+      savedPlaneIds.push(plane.id);
+    } catch (err) {
+      await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+      throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_USAGE_FAILED, message: ERR_ELEVATOR_USAGE_FAILED_MESSAGE });
+    }
+  }
+
+  if (!isStillValid()) {
+    await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+    return { status: 'aborted', message: null };
+  }
+
+  let entry;
+  try {
+    entry = commitActive();
+  } catch (err) {
+    await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+    throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_USAGE_FAILED, message: ERR_ELEVATOR_USAGE_FAILED_MESSAGE });
+  }
+  if (!entry) {
+    await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+    throw tagElevatorOpFailure(
+      new Error('runElevatorUsageChange: commitActive returned no undo entry'),
+      { code: ERR_ELEVATOR_USAGE_FAILED, message: ERR_ELEVATOR_USAGE_FAILED_MESSAGE },
+    );
+  }
+
+  const records = savedPlaneIds.map(planeId => ({
+    planeId, before: beforeBytesByPlane.get(planeId), after: afterBytesByPlane.get(planeId),
+  }));
+  undoManager.amend(
+    entry,
+    () => { applyRecords(project, records, 'before', saveFloorFn); onApplied?.(); },
+    () => { applyRecords(project, records, 'after', saveFloorFn); onApplied?.(); },
+  );
+  onApplied?.();
+
+  return { status: 'changed' };
 }
