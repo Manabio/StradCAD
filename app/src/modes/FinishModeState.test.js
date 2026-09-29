@@ -9,6 +9,7 @@ import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { restoreGraph, serializeGraph } from '../graphSnapshot.js';
 import { takeUnresolvedCodes, addDocumentAliases, clearDocumentAliases } from '../catalog/codeNormalization.js';
 import { worldToCell, refreshCells } from '../finish/gridCells.js';
+import { buildExteriorGroups } from '../finish/exteriorGroups.js';
 import { undoManager } from '../undoManager.js';
 
 function makeGraph() {
@@ -254,6 +255,84 @@ test('deleteRoom: 非階段の屋外部屋を削除するとexteriorRowsの連�
 
   assert.equal(graph.exteriorRows.filter(r => r.roomId === room.id).length, 0);
   assert.equal(graph.roomMap.has(room.id), false);
+});
+
+// ---- 外部タブ「屋外部屋の群」削除ボタン（Room連動）用: deleteRoomのundoが1エントリで
+// Room・連動行が両方戻ることを固定する（ユーザー裁定「屋外タブに削除ボタン。Room連動」） ----
+test('deleteRoom: 屋外部屋の削除はundoが1エントリで、undoで部屋と連動exteriorRows行が両方戻る', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  const roomId = room.id;
+  const undoCountBefore = undoManager._undoStack.length;
+
+  state.deleteRoom(roomId);
+
+  assert.equal(undoManager._undoStack.length, undoCountBefore + 1, 'undoエントリはちょうど1件増えるはず');
+  assert.equal(graph.roomMap.has(roomId), false);
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === roomId).length, 0);
+
+  undoManager.undo();
+
+  assert.equal(graph.roomMap.has(roomId), true, 'undoで部屋が戻るはず');
+  assert.equal(graph.roomMap.get(roomId).name, 'テラス');
+  const rows = graph.exteriorRows.filter(r => r.roomId === roomId);
+  assert.equal(rows.length, 1, 'undoで連動行も戻るはず');
+  assert.equal(rows[0].part, 'テラス');
+});
+
+test('【失敗系】deleteRoom: 存在しないroomIdはno-op（undoエントリを積まない）', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const undoCountBefore = undoManager._undoStack.length;
+
+  state.deleteRoom('no-such-room-id');
+
+  assert.equal(undoManager._undoStack.length, undoCountBefore, '存在しないroomIdはundoを積まないはず');
+});
+
+test('【失敗系】deleteRoom: 屋外部屋に部分指定の子があると子も消え、undo 1回で親・子・連動行が戻る', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const parent = graph.addRoom(new Set(['dummy']), '');
+  state.applyNaming(parent.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  const child = graph.addRoom(new Set(['dummy2']), '子', crypto.randomUUID(), new Set([parent.id]));
+
+  const undoCountBefore = undoManager._undoStack.length;
+  state.deleteRoom(parent.id);
+
+  assert.equal(undoManager._undoStack.length, undoCountBefore + 1, 'undoはちょうど1件増えるはず（親・子カスケードで1エントリ）');
+  assert.equal(graph.roomMap.has(parent.id), false);
+  assert.equal(graph.roomMap.has(child.id), false, '部分指定の子も一緒に消えるはず');
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === parent.id).length, 0);
+
+  undoManager.undo();
+
+  assert.equal(graph.roomMap.has(parent.id), true, 'undoで親が戻るはず');
+  assert.equal(graph.roomMap.has(child.id), true, 'undoで子も戻るはず');
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === parent.id).length, 1, 'undoで連動行も戻るはず');
+});
+
+// ---- ステップ1補足（ユーザー裁定1）: 行0件の屋外部屋を屋内へ変えるとbuildExteriorGroupsの群が消える ----
+test('applyNaming: 行0件の屋外部屋を屋内へ変えると、buildExteriorGroupsの群が0件になりundoが1件増える', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+  state.applyNaming(room.id, { name: 'バルコニー', kind: RoomKind.EXTERIOR, feature: null });
+  // _syncExteriorRowsが自動追加した連動行を消し、「行0件の屋外部屋」の状態を作る
+  const row = graph.exteriorRows.find(r => r.roomId === room.id);
+  graph.removeExteriorRow('exteriorRows', row.id);
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === room.id).length, 0);
+  let groups = buildExteriorGroups({ rows: graph.exteriorRows, rooms: graph.rooms, roomOrder: graph.roomOrder });
+  assert.equal(groups.filter(g => g.roomId === room.id).length, 1, '行0件でも屋外部屋の群は出るはず（合成群）');
+
+  const undoCountBefore = undoManager._undoStack.length;
+  state.applyNaming(room.id, { name: room.name, kind: RoomKind.INTERIOR, feature: null });
+
+  assert.equal(undoManager._undoStack.length, undoCountBefore + 1, 'undoは1件増えるはず');
+  groups = buildExteriorGroups({ rows: graph.exteriorRows, rooms: graph.rooms, roomOrder: graph.roomOrder });
+  assert.equal(groups.filter(g => g.roomId === room.id).length, 0, '屋内へ変えると群は0件になるはず');
 });
 
 // ---- 失敗系: 存在しないroomIdはexteriorRowsを増やさない ----

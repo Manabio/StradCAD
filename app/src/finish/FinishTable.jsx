@@ -15,6 +15,7 @@ import { floorHeightAbove } from './stair/stairDimensions.js';
 import {
   ROOM_KIND_OPTIONS, CARD_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature,
 } from './roomNamingOptions.js';
+import { buildExteriorGroups, isExteriorRoomGroupRoom } from './exteriorGroups.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip } from '../catalog/catalogDiffView.js';
@@ -425,10 +426,33 @@ export const FinishTable = observer(({ graph, mode, project, selectedRoomId, onS
         : <ExteriorTable
             graph={graph}
             mode={mode}
+            onApplyNaming={onApplyNaming}
             category={TAB_TO_CATEGORY[activeTab]}
           />
       }
     </div>
+  );
+});
+
+// 部屋削除の確認ダイアログ（内部タブのカード・外部タブの屋外部屋の群で共通。QA指摘2026-09-29:
+// 逐語複製だった確認ダイアログを1箇所へ集約）。deleteConfirm={roomId, roomName}|null。
+// onSelect後は確認・キャンセルどちらでも onClose() を呼ぶ（呼び出し側の deleteConfirm state を戻す）。
+const RoomDeleteConfirm = observer(({ graph, mode, deleteConfirm, onClose }) => {
+  if (!deleteConfirm) return null;
+  const childCount = graph.rooms.filter(r => r.referenceRoomIds.has(deleteConfirm.roomId)).length;
+  const suffix = childCount > 0 ? `（部分指定${childCount}件も削除されます）` : '';
+  return (
+    <ConfirmDialog
+      message={`「${deleteConfirm.roomName || '（名称未設定）'}」を削除しますか？${suffix}`}
+      buttons={[
+        { label: 'キャンセル', value: 'cancel' },
+        { label: '削除', value: 'ok', danger: true },
+      ]}
+      onSelect={value => {
+        if (value === 'ok') mode.deleteRoom(deleteConfirm.roomId);
+        onClose();
+      }}
+    />
   );
 });
 
@@ -556,23 +580,7 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, onA
           />
         )}
       </div>
-      {deleteConfirm && (() => {
-        const childCount = graph.rooms.filter(r => r.referenceRoomIds.has(deleteConfirm.roomId)).length;
-        const suffix = childCount > 0 ? `（部分指定${childCount}件も削除されます）` : '';
-        return (
-          <ConfirmDialog
-            message={`「${deleteConfirm.roomName || '（名称未設定）'}」を削除しますか？${suffix}`}
-            buttons={[
-              { label: 'キャンセル', value: 'cancel' },
-              { label: '削除', value: 'ok', danger: true },
-            ]}
-            onSelect={value => {
-              if (value === 'ok') mode.deleteRoom(deleteConfirm.roomId);
-              setDeleteConfirm(null);
-            }}
-          />
-        );
-      })()}
+      <RoomDeleteConfirm graph={graph} mode={mode} deleteConfirm={deleteConfirm} onClose={() => setDeleteConfirm(null)} />
     </div>
   );
 });
@@ -929,9 +937,9 @@ const PART_OPTIONS = [
   '基礎', '犬走り', '物置', '目地', '雨樋', '笠木', '手摺', 'ルーバー', 'サイン', '門扉', '塀', 'フェンス',
 ];
 
-const ExteriorTable = observer(({ graph, mode, category }) => {
+const ExteriorTable = observer(({ graph, mode, onApplyNaming, category }) => {
   if (category === 'exteriorRows') {
-    return <GroupedExteriorTable graph={graph} mode={mode} category={category} />;
+    return <GroupedExteriorTable graph={graph} mode={mode} onApplyNaming={onApplyNaming} category={category} />;
   }
   return <FlatExteriorTable graph={graph} category={category} />;
 });
@@ -1149,54 +1157,72 @@ const ExteriorPartHeading = observer(({ room, mode }) => {
   );
 });
 
-const GroupedExteriorTable = observer(({ graph, mode, category }) => {
+const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category }) => {
   const rows = graph[category];
-
-  // 群キー: roomId連動行（階段・屋外部屋）は roomId 単位、手入力行は part 単位で分ける
-  // （同名partの手入力行と連動行を混同しない）。
-  const groups = new Map();
-  for (const row of rows) {
-    const key = row.roomId ? `room:${row.roomId}` : `part:${row.part}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
-  }
+  // 群の並び（どの群をどの順で出すか）は exteriorGroups.js（純モジュール）を唯一の供給源にする。
+  // 屋外・非階段のRoomは連動行が0件でも群を出す（ユーザー裁定: 屋外タブに削除ボタン・区分
+  // セレクタをRoom連動で置く）。
+  const groups = buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder });
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { roomId, roomName } | null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
       <div style={{ overflowX: 'auto', overflowY: 'auto', flex: 1, padding: 8 }}>
-      {groups.size === 0 && (
+      {groups.length === 0 && (
         <div style={{ ...cellBase, textAlign: 'center', color: '#94a3b8', padding: 20, border: 'none' }}>
           部位が登録されていません
         </div>
       )}
-      {[...groups.entries()].map(([groupKey, groupRows]) => {
-        const part   = groupRows[0].part;
-        const roomId = groupRows[0].roomId;
+      {groups.map(({ key: groupKey, roomId, part, rows: groupRows }) => {
         const room   = roomId ? graph.roomMap.get(roomId) : null;
-        const showLevelRow = room && room.kind === RoomKind.EXTERIOR && room.feature !== RoomFeature.STAIR;
+        const isExteriorRoomGroup = isExteriorRoomGroupRoom(room);
         return (
         <div key={groupKey} style={{ marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            {showLevelRow
-              ? <ExteriorPartHeading room={room} mode={mode} />
-              : <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part || '（部位未設定）'}</div>
-            }
-            <button
-              onClick={() => withFinishUndo(graph, () => {
-                // roomId連動行（階段・屋外部屋）はremoveExteriorRowsByRoomIdで、手入力行はpart一致で削除する
-                if (roomId) graph.removeExteriorRowsByRoomId(roomId);
-                else graph.removeExteriorRowGroup(category, part);
-              })}
-              style={{
-                fontSize: 11, color: '#94a3b8', background: 'none',
-                border: 'none', cursor: 'pointer', padding: '0 4px',
-              }}
-              title="部位を削除"
-            >
-              × 部位を削除
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+              {isExteriorRoomGroup
+                ? <ExteriorPartHeading room={room} mode={mode} />
+                : <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part || '（部位未設定）'}</div>
+              }
+              {isExteriorRoomGroup && (
+                <select
+                  value={room.kind}
+                  onChange={e => {
+                    const kind = e.target.value;
+                    if (kind !== room.kind) onApplyNaming(room.id, { name: room.name, kind, feature: room.feature });
+                  }}
+                  style={{ ...cellInputStyle, width: 'auto', border: '1px solid #cbd5e1', padding: '2px 4px' }}
+                >
+                  {ROOM_KIND_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {isExteriorRoomGroup ? (
+              // ユーザー裁定: 屋外部屋の群の削除はRoom連動（内部タブのカードと同じ削除ボタン・
+              // 確認ダイアログ）。Room・連動行がまとめて1 undo エントリで消える（mode.deleteRoom）。
+              <button onClick={() => setDeleteConfirm({ roomId, roomName: room.name })} style={deleteButtonStyle}>
+                🗑️ 削除
+              </button>
+            ) : (
+              <button
+                onClick={() => withFinishUndo(graph, () => {
+                  // roomId連動行（階段）はremoveExteriorRowsByRoomIdで、手入力行はpart一致で削除する
+                  if (roomId) graph.removeExteriorRowsByRoomId(roomId);
+                  else graph.removeExteriorRowGroup(category, part);
+                })}
+                style={{
+                  fontSize: 11, color: '#94a3b8', background: 'none',
+                  border: 'none', cursor: 'pointer', padding: '0 4px',
+                }}
+                title="部位を削除"
+              >
+                × 部位を削除
+              </button>
+            )}
           </div>
-          {showLevelRow && <ExteriorLevelRow room={room} graph={graph} />}
+          {isExteriorRoomGroup && <ExteriorLevelRow room={room} graph={graph} />}
           <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
             <thead>
               <tr>
@@ -1261,6 +1287,7 @@ const GroupedExteriorTable = observer(({ graph, mode, category }) => {
         </select>
       </div>
       </div>
+      <RoomDeleteConfirm graph={graph} mode={mode} deleteConfirm={deleteConfirm} onClose={() => setDeleteConfirm(null)} />
     </div>
   );
 });
