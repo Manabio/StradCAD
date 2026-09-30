@@ -202,6 +202,65 @@ test('【配線・強化】App.jsx: syncNewFloorFromSource は syncUpperFloorsAu
     'syncUpperFloorsAuto → copyElevatorsToNewFloor → addNewFloorRoomFromSource の順になっていない');
 });
 
+// ================================================================
+// 線種変更の移籍一本化 ステップ2（2026-09-30）: 検討案の追加・コピーで、複製するバイト列を
+// 復元する前に線idを振り直す（serializeGraphWithFreshLineIds）。振り直しがthrowしたときに
+// 平面を追加させない（＝状態を一切変えない）ため、直列化はaddAlternativeFloorより前に置く。
+// team-lessons「正規表現は行頭・行末アンカーで1行まるごと一致させる」対応: 行末コメントに
+// 元の式（serializeGraph(graph)）が残る変異でも緑にならないよう、抽出した関数本体全体に
+// serializeGraph(graph)（振り直し無しの旧呼び出し）が1つも残っていないことも確認する。
+// ================================================================
+
+test('【配線・強化】App.jsx: runAddAlternative はserializeGraphWithFreshLineIds(graph)をaddAlternativeFloorより前で呼ぶ', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function runAddAlternative');
+
+  assert.match(body, /^\s*const bytes = v === 'yes' \? serializeGraphWithFreshLineIds\(graph\) : null;\s*$/m,
+    'const bytes = v === \'yes\' ? serializeGraphWithFreshLineIds(graph) : null; が1行まるごとの形で見つからない');
+  assert.doesNotMatch(body, /serializeGraph\(graph\)/,
+    '振り直し無しのserializeGraph(graph)呼び出しが残っている');
+
+  const serializeIdx = body.indexOf('serializeGraphWithFreshLineIds(graph)');
+  const addAltIdx    = body.indexOf('addAlternativeFloor(refId, altName)');
+  assert.ok(serializeIdx >= 0 && addAltIdx >= 0 && serializeIdx < addAltIdx,
+    'serializeGraphWithFreshLineIds(graph) がaddAlternativeFloor(refId, altName)より前にない');
+
+  // 復元先は切替後のアクティブ階（複製先）で、切替（trySwitchFloor）より後に行う。
+  assert.match(body, /^\s*if \(bytes\) restoreGraph\(project\.activeGraph, bytes\);\s*$/m,
+    'if (bytes) restoreGraph(project.activeGraph, bytes); が1行まるごとの形で見つからない');
+  const restoreIdx   = body.indexOf('if (bytes) restoreGraph(project.activeGraph, bytes);');
+  const trySwitchIdx = body.indexOf('trySwitchFloor(');
+  assert.ok(trySwitchIdx >= 0 && restoreIdx > trySwitchIdx,
+    '復元がtrySwitchFloor(より後にない');
+});
+
+test('【配線・強化】App.jsx: runCopyAlternative はserializeGraphWithFreshLineIds(graph)をaddAlternativeFloorより前で呼ぶ', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function runCopyAlternative');
+
+  assert.match(body, /^\s*\? serializeGraphWithFreshLineIds\(graph\)\s*$/m,
+    '? serializeGraphWithFreshLineIds(graph) が1行まるごとの形で見つからない');
+  assert.doesNotMatch(body, /serializeGraph\(graph\)/,
+    '振り直し無しのserializeGraph(graph)呼び出しが残っている');
+
+  const serializeIdx = body.indexOf('serializeGraphWithFreshLineIds(graph)');
+  const addAltIdx    = body.indexOf('addAlternativeFloor(refId, newName)');
+  assert.ok(serializeIdx >= 0 && addAltIdx >= 0 && serializeIdx < addAltIdx,
+    'serializeGraphWithFreshLineIds(graph) がaddAlternativeFloor(refId, newName)より前にない');
+
+  // 直列化はアクティブ階をコピーするときだけ（非アクティブの平面のコピーで別の平面の内容を複製しない）。
+  assert.match(body, /^\s*const bytes = project\.activePlaneId === planeId\s*\n\s*\? serializeGraphWithFreshLineIds\(graph\)\s*$/m,
+    'const bytes = project.activePlaneId === planeId の直後の行が ? serializeGraphWithFreshLineIds(graph) でない');
+
+  // 復元先は切替後のアクティブ階（複製先）で、切替（trySwitchFloor）より後に行う。
+  assert.match(body, /^\s*if \(bytes\) restoreGraph\(project\.activeGraph, bytes\);\s*$/m,
+    'if (bytes) restoreGraph(project.activeGraph, bytes); が1行まるごとの形で見つからない');
+  const restoreIdx   = body.indexOf('if (bytes) restoreGraph(project.activeGraph, bytes);');
+  const trySwitchIdx = body.indexOf('trySwitchFloor(');
+  assert.ok(trySwitchIdx >= 0 && restoreIdx > trySwitchIdx,
+    '復元がtrySwitchFloor(より後にない');
+});
+
 test('【配線・強化】App.jsx: syncNewFloorFromSource は複製できなかった器具があるときだけERR_ELEVATOR_COPY_SKIPPEDのトーストを出す', () => {
   const appSrc = readAppSrc();
   const body = extractFunctionBody(appSrc, 'async function syncNewFloorFromSource');

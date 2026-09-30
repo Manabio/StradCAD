@@ -8,12 +8,14 @@ import {
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
   serializeSite, decodeSite, restoreSite, decodeFloorSnapshot, encodeFloorSnapshot,
+  serializeGraphWithFreshLineIds,
 } from './graphSnapshot.js';
 import { editSiteLineLength } from './transform/siteEdit.js';
 import { decode, ROOM_FEATURE_ENC, ROOM_FEATURE_DEC } from './schema/graphFbs.js';
 import { base64ToBytes } from './storage/documentFile.js';
 import { BeamAxisOrigin } from './core/centerLine.js';
 import { remapLineIdsInSnapshot, makeFreshLineIdMap, findLineIdOccurrences } from './lineIdRemap.js';
+import { findDuplicateLineIds } from './lineIdUniqueness.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -1941,4 +1943,69 @@ test('【失敗系】remapLineIdsInSnapshot: idMapに重複する新idがある�
   const { graph, x0, x1 } = makeGraphForLineIdRemap();
   const idMap = new Map([[x0.id, 'dup-new-id'], [x1.id, 'dup-new-id']]);
   assert.throws(() => remapLineIdsInSnapshot(decodeFloorSnapshot(serializeGraph(graph)), idMap));
+});
+
+// ---- serializeGraphWithFreshLineIds（検討案の追加・コピー用。線種変更の移籍一本化 ステップ2）----
+// graphSnapshot.js側に buildSnapshot → makeFreshLineIdMap → remapLineIdsInSnapshot → encode を
+// 1関数にまとめたもの。上の往復テストと同じ手順を1関数呼び出しで確かめる。
+
+test('serializeGraphWithFreshLineIds: 壁・部屋・建具・構造材の本数と幾何が保たれ、線idはプロジェクト全体で一意（重複0件）になり、壁・部屋・建具・構造材のidは元のまま変わらない', () => {
+  const { graph, wall, room, opening, column, beam } = makeGraphForLineIdRemap();
+  const originalLineIds = graph.centerLines.map(cl => cl.id);
+
+  const before = {
+    wallCount: graph.walls.length,
+    wallAxisValue: wall.axisCL.effectiveValue,
+    columnCount: graph.columns.length,
+    beamCount: graph.beams.length,
+    beamAxisValue: beam.axisCL.effectiveValue,
+    openingWidth: opening.width,
+    roomCellValues: [...room.cells][0].split(':').map(id => graph.shapeMap.get(id).effectiveValue),
+  };
+
+  const bytes = serializeGraphWithFreshLineIds(graph);
+  const restored = makeGraph('p1-copy');
+  restoreGraph(restored, bytes);
+
+  // 本数・幾何
+  assert.equal(restored.walls.length, before.wallCount);
+  assert.equal(restored.walls[0].axisCL.effectiveValue, before.wallAxisValue);
+  assert.equal(restored.columns.length, before.columnCount);
+  assert.equal(restored.beams.length, before.beamCount);
+  assert.equal(restored.beams[0].axisCL.effectiveValue, before.beamAxisValue);
+  const o2 = [...restored.shapeMap.values()].find(s => s.category === OpeningCategory.WINDOW);
+  assert.equal(o2.width, before.openingWidth);
+  const r2 = restored.rooms[0];
+  const restoredCellValues = [...r2.cells][0].split(':').map(id => restored.shapeMap.get(id).effectiveValue);
+  assert.deepEqual(restoredCellValues, before.roomCellValues);
+
+  // (b) 複製先の線idが元の自グラフ固有の線idと1つも重ならない
+  const restoredLineIds = restored.centerLines.map(cl => cl.id);
+  const originalIdSet = new Set(originalLineIds);
+  for (const id of restoredLineIds) assert.equal(originalIdSet.has(id), false, `線id ${id} が元のidと重複している`);
+
+  // (c) findDuplicateLineIds が [] （プロジェクト全体で一意という不変条件を、複製元・複製先の
+  // 2平面ぶんのエントリで直接検査する）
+  const duplicates = findDuplicateLineIds([
+    { planeId: 'orig', planeName: '元', ids: originalLineIds },
+    { planeId: 'copy', planeName: '複製先', ids: restoredLineIds },
+  ]);
+  assert.deepEqual(duplicates, []);
+
+  // (d) 線以外（壁・部屋・建具・構造材）のidは元のまま変わらない（Q10「線だけ」）
+  assert.equal(restored.walls[0].id, wall.id);
+  assert.equal(restored.rooms[0].id, room.id);
+  assert.equal(o2.id, opening.id);
+  assert.equal(restored.columns[0].id, column.id);
+  assert.equal(restored.beams[0].id, beam.id);
+});
+
+test('【失敗系】serializeGraphWithFreshLineIds: newIdが同じ値を2回返すとthrowし、入力グラフは変わらない（振り直し前に平面を追加してはならない設計の前提）', () => {
+  const { graph } = makeGraphForLineIdRemap();
+  const bytesBefore = serializeGraph(graph);
+
+  assert.throws(() => serializeGraphWithFreshLineIds(graph, { newId: () => 'always-same-id' }));
+
+  const bytesAfter = serializeGraph(graph);
+  assert.deepEqual(bytesAfter, bytesBefore, '入力グラフのバイト列は振り直し失敗の前後で変わらない');
 });

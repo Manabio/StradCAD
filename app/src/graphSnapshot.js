@@ -3,6 +3,7 @@ import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine
 import { encode, decode } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 import { applyDocumentCodeNormalization } from './catalog/codeNormalization.js';
+import { makeFreshLineIdMap, remapLineIdsInSnapshot } from './lineIdRemap.js';
 
 // ----------------------------------------------------------------
 // 共通: 通り芯かどうかの判定
@@ -330,6 +331,20 @@ function buildStructSnapshot(structGraph, structuralInfo, ledger) {
 // ----------------------------------------------------------------
 export function serializeGraph(graph) {
   return encode(buildSnapshot(graph));
+}
+
+// ----------------------------------------------------------------
+// シリアライズ: フロアグラフ → Uint8Array（線（自グラフ固有の中心線・補助線・梁芯）のidを
+// 振り直した上で）
+//
+// 平面を複製するとき、線のidがプロジェクト全体で一意であるという不変条件を保つために使う。
+// 通り芯（共有グラフ）はbuildSnapshotの対象外のためここでも振り直さない。
+// ----------------------------------------------------------------
+export function serializeGraphWithFreshLineIds(graph, { newId } = {}) {
+  const snapshot = buildSnapshot(graph);
+  const idMap = makeFreshLineIdMap(snapshot, newId != null ? { newId } : undefined);
+  const remapped = remapLineIdsInSnapshot(snapshot, idMap);
+  return encode(remapped);
 }
 
 // ----------------------------------------------------------------

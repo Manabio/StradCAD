@@ -282,24 +282,26 @@ test('【不変条件・F1】App.jsx: runDeleteAlternative（検討案削除の�
 // 行う必要がある。
 // ================================================================
 
-test('【不変条件・P1】App.jsx: runAddAlternative と runCopyAlternative はserializeGraph(graph)をtrySwitchFloor(より前で呼ぶ', () => {
+// 複製元の直列化は線idの振り直し付き（serializeGraphWithFreshLineIds）。振り直しの有無は
+// App.wiring.test.js が固定し、ここでは「trySwitchFloorより前」だけを見る。
+test('【不変条件・P1】App.jsx: runAddAlternative と runCopyAlternative はserializeGraphWithFreshLineIds(graph)をtrySwitchFloor(より前で呼ぶ', () => {
   const appSrc = fs.readFileSync(appSrcPath, 'utf8');
 
   const addBody = extractFunctionBody(appSrc, 'async function runAddAlternative');
-  const addSerializeIdx = addBody.indexOf('serializeGraph(graph)');
-  assert.ok(addSerializeIdx >= 0, 'runAddAlternativeの本体にserializeGraph(graph)が無い');
+  const addSerializeIdx = addBody.indexOf('serializeGraphWithFreshLineIds(graph)');
+  assert.ok(addSerializeIdx >= 0, 'runAddAlternativeの本体にserializeGraphWithFreshLineIds(graph)が無い');
   const addTrySwitchIdx = addBody.indexOf('trySwitchFloor(');
   assert.ok(addTrySwitchIdx >= 0, 'runAddAlternativeの本体にtrySwitchFloor(が無い');
   assert.ok(addSerializeIdx < addTrySwitchIdx,
-    'runAddAlternativeではserializeGraph(graph)がtrySwitchFloor(より前である必要がある（切替後は旧graphがclearFloorData済み）');
+    'runAddAlternativeではserializeGraphWithFreshLineIds(graph)がtrySwitchFloor(より前である必要がある（切替後は旧graphがclearFloorData済み）');
 
   const copyBody = extractFunctionBody(appSrc, 'async function runCopyAlternative');
-  const copySerializeIdx = copyBody.indexOf('serializeGraph(graph)');
-  assert.ok(copySerializeIdx >= 0, 'runCopyAlternativeの本体にserializeGraph(graph)が無い');
+  const copySerializeIdx = copyBody.indexOf('serializeGraphWithFreshLineIds(graph)');
+  assert.ok(copySerializeIdx >= 0, 'runCopyAlternativeの本体にserializeGraphWithFreshLineIds(graph)が無い');
   const copyTrySwitchIdx = copyBody.indexOf('trySwitchFloor(');
   assert.ok(copyTrySwitchIdx >= 0, 'runCopyAlternativeの本体にtrySwitchFloor(が無い');
   assert.ok(copySerializeIdx < copyTrySwitchIdx,
-    'runCopyAlternativeではserializeGraph(graph)がtrySwitchFloor(より前である必要がある（切替後は旧graphがclearFloorData済み）');
+    'runCopyAlternativeではserializeGraphWithFreshLineIds(graph)がtrySwitchFloor(より前である必要がある（切替後は旧graphがclearFloorData済み）');
 });
 
 // ================================================================

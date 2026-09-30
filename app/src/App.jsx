@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { observer } from 'mobx-react-lite';
 import { runInAction, reaction } from 'mobx';
 import { undoManager } from './undoManager.js';
-import { serializeGraph, restoreGraph } from './graphSnapshot.js';
+import { serializeGraph, serializeGraphWithFreshLineIds, restoreGraph } from './graphSnapshot.js';
 import { Stage } from 'react-konva';
 import {
   useStore, addFloor, switchFloor, addAlternativeFloor, removeFloor, resetAll, bootReady,
@@ -1446,7 +1446,7 @@ const App = observer(() => {
 
   // ---- フロアメニューの各アクション本体（graph/IDBを書く分岐。関門はここで開く）----
   // graph参照はこれらの定義元と同じレンダー内のhandleFloorMenuActionから同期に呼ばれるクロージャの
-  // 中で使う（'add-alt'/'copy-alt'のrestoreGraph(project.activeGraph, serializeGraph(graph))は
+  // 中で使う（'add-alt'/'copy-alt'のrestoreGraph(project.activeGraph, serializeGraphWithFreshLineIds(graph))は
   // switchFloor前のgraph＝複製元の内容を指す。App.jsx冒頭のconst graph = project.activeGraphは
   // レンダーごとに束縛され直すため、switchFloor後もこの関数が捕まえたままの値を参照する——階切替後の
   // フロア参照はproject.activeGraphを読み直すのが原則だが、ここは意図的にswitchFloor前の値を使う）。
@@ -1458,12 +1458,16 @@ const App = observer(() => {
         .filter(p => p.isAlternative && p.referenceId === refId).length;
       const letter   = String.fromCharCode('a'.charCodeAt(0) + altCount);
       const altName  = (refPlane?.name ?? '') + '#' + letter;
+      // 直列化はaddAlternativeFloor（新しい平面の追加）・trySwitchFloorより前に採る——
+      // FloorSwapManager.swapは同じrunInAction内で切替前階（graph）にclearFloorData()を済ませる
+      // ため、切替後にserializeGraph(graph)すると階固有データが空の内容をコピーしてしまう
+      // （P1・runCopyAlternativeと同じ形。2026-09-28）。加えて、線idの振り直し（複製先で線idが
+      // プロジェクト全体で一意という不変条件を保つ）がthrowしたときに平面を追加させない
+      // （＝状態を一切変えない）ため、addAlternativeFloorより前に置く（線種変更の移籍一本化
+      // ステップ2・2026-09-30）。
+      const bytes = v === 'yes' ? serializeGraphWithFreshLineIds(graph) : null;
       const result   = addAlternativeFloor(refId, altName);
       if (!result) return;
-      // 直列化はtrySwitchFloorより前に採る——FloorSwapManager.swapは同じrunInAction内で
-      // 切替前階（graph）にclearFloorData()を済ませるため、切替後にserializeGraph(graph)すると
-      // 階固有データが空の内容をコピーしてしまう（P1・runCopyAlternativeと同じ形。2026-09-28）。
-      const bytes = v === 'yes' ? serializeGraph(graph) : null;
       // 切替に失敗したら以降（複製元の書き戻し）を進めない（F1・2026-09-27）。
       if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
       if (bytes) restoreGraph(project.activeGraph, bytes);
@@ -1536,11 +1540,14 @@ const App = observer(() => {
     await runBusy('階操作', async () => {
       const refId   = plane.isAlternative ? plane.referenceId : planeId;
       const newName = plane.name + "'";
+      // 直列化はaddAlternativeFloorより前に採る（runAddAlternativeと同じ理由。線idの振り直しが
+      // throwしたときに平面を追加させない＝状態を一切変えない。線種変更の移籍一本化
+      // ステップ2・2026-09-30）。
+      const bytes = project.activePlaneId === planeId
+        ? serializeGraphWithFreshLineIds(graph)
+        : null;
       const result  = addAlternativeFloor(refId, newName);
       if (!result) return;
-      const bytes = project.activePlaneId === planeId
-        ? serializeGraph(graph)
-        : null;
       // 切替に失敗したら複製元の書き戻しを進めない（F1・2026-09-27）。
       if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
       if (bytes) restoreGraph(project.activeGraph, bytes);
