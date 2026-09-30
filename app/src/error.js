@@ -90,7 +90,10 @@ export const ERR_CL_CONVERT_DUP_FLOOR = (floorsByKind) =>
 export const ERR_CL_CONVERT_DUP_FLOOR_DEMOTE = (floorsByKind) =>
   `${formatFloorsByKind(floorsByKind)}があるため中心線にできません。`;
 // 中心⇔通り芯の入替えの階またぎ同期（centerLineFloorSync.js）がIDB書込等で失敗した場合。
-// 昇格は確定後の回収失敗（途中分はundoエントリへ合成済み）、降格は確定前の複製失敗（全体ロールバック済み＝降格されていない）。
+// 昇格は移籍後の吸収失敗（他平面・自階・共有グラフとも巻き戻し済み＝昇格されていない。QA所見5是正・
+// 2026-09-30: applyCenterLineAbsorptionOnPromoteをapplyPromoteToGridの後に呼ぶよう変更したため、
+// 失敗時は自階・structGraphもbeforeへ戻す）、降格は確定前の複製失敗（全体ロールバック済み＝降格
+// されていない）。
 export const ERR_CL_CONVERT_SYNC_FAILED = '他階への反映に失敗しました。';
 
 // 裁定Q11（線種変更の移籍一本化）: 既存データに同じidの線が他の平面に残っていた場合の拒否。
@@ -102,6 +105,18 @@ export const ERR_CL_CONVERT_SAME_ID_FLOOR = (planeNames) =>
   `${planeNames.join('・')} に同じidの線があるため通り芯にできません。`;
 export const ERR_CL_CONVERT_SAME_ID_FLOOR_DEMOTE = (planeNames) =>
   `${planeNames.join('・')} に同じidの線があるため中心線にできません。`;
+
+// 昇格の吸収（線種変更の移籍一本化 ステップ4・centerLineFloorSync.js
+// applyCenterLineAbsorptionOnPromote）専用: 他の平面で、吸収する中心線が2本以上あり（同座標に
+// 区間違いで複数など）、いずれも通り芯id（cl.id）へ参照をまとめようとした結果、置換後の
+// スナップショットで柱芯オフセット（columnAxisOffsets）・CL偏芯（clEccentricities）・腰壁/垂れ壁
+// （kneeDropWalls）のいずれかについて、2本それぞれにその通り芯idを指すエントリが残った場合
+// （centerLineFloorSync.js hasAbsorptionConflict参照。これらは配列（columnAxisOffsetKeys）や
+// 配列内オブジェクト（clEccentricities・kneeDropWalls）として永続化されるため、
+// lineIdRemap.js remapLineIdsInSnapshotのキー衝突検出では捕まらない——2本それぞれの値のうち
+// どちらを採るか黙って決めず、書き換えずに拒否する）。
+export const ERR_CL_CONVERT_ABSORB_CONFLICT_FLOOR = (planeName) =>
+  `${planeName} の同じ位置に中心線が複数あり、参照をまとめられないため通り芯にできません。`;
 
 // CL削除（transform/centerLineOps.js deleteCenterLineWithUndo）専用: 同じ軸（X/Y）に他の通り芯が
 // 無い＝この通り芯が軸最後の1本の場合。ERR_CL_CONVERT_LAST_GRID（降格用）と判定式は共有するが、

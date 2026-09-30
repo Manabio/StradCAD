@@ -301,6 +301,10 @@ const G1_ALLOWLIST = {
       '2026-09-20）。' },
   'transform/centerLineExtend.js': { count: 1, category: 'not-partner-selection',
     reason: 'isEndpointAt。refCLが生きて存在するかのid解決（同一参照 or 同id）——相手選択ではない。' },
+  'transform/centerLineFloorSync.js': { count: 1, category: 'not-partner-selection',
+    reason: 'applyCenterLineAbsorptionOnPromote内、復号後のsnapshot.centerLines（保存形式の中間オブジェクト。' +
+      'graphインスタンスではない）から吸収する中心線のエントリを除くための走査——lineIdRemap.js' +
+      'makeFreshLineIdMapと同じ「snapshot.centerLinesの列挙」であり、種別条件のない全件操作（相手選択ではない）。' },
   'transform/followerGraph.js': { count: 3, category: 'not-partner-selection',
     reason: 'gatherShapes・collectFollowerOffsets候補集め＋gatherShapesの戻り値 `{ centerLines, walls, ' +
       'diagonals }`（shorthandオブジェクトリテラル構築。分割代入検出RE_DESTRUCTURE_CENTERLINESと同じ' +

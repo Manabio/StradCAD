@@ -9,16 +9,16 @@
 // structural/wallBeamAxes.test.js:197-207 を参照していたが、そこにpeekスタブは無い誤記だった）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { runInAction } from 'mobx';
 import { Project, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
-import { undoManager } from '../undoManager.js';
-import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
-import { applyPromoteToGrid } from './centerLineConvert.js';
+import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, decodeFloorSnapshot } from '../graphSnapshot.js';
 import {
   findFloorsWithCounterpartCL, findFloorsWhereFootprintBoundary, findFloorsBlockingGridDeletion,
-  recallPromotedCenterLineDuplicates,
   detachOtherFloorsFromGridCenterLine, applyOtherFloorsGridCenterLineAftermath,
-  saveOtherFloorsAfterGridCenterLineAftermath, absorbWallBeamAxesOnPromote, applyCenterLineRemovalAftermath,
+  saveOtherFloorsAfterGridCenterLineAftermath, absorbWallBeamAxesOnPromote,
+  findCenterLinesToAbsorbOnPromote, applyCenterLineAbsorptionOnPromote,
+  applyCenterLineRemovalAftermath,
 } from './centerLineFloorSync.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { collectUnresolvableCells } from '../finish/roomReinterpret.js';
@@ -132,16 +132,47 @@ test('findFloorsWithCounterpartCL: 同座標にあるのがlabeledな通り芯�
   assert.equal(result.length, 0);
 });
 
-// R8: 同一idの複製は「同じ線の分身」であり重複報告の対象にしない（昇格の回収対象）。
-test('findFloorsWithCounterpartCL: 同一idのCLは重複として報告しない', async () => {
+// 線種変更の移籍一本化・2026-09-30: 分身の廃止に伴い、同一idのCLも他の座標一致のCLと同じ扱いになる
+// （id一致による除外は行わない——同id・別座標の破損データはQ11＝findFloorsWithSameLineIdが呼び出し
+// 側の入口で先に検出して拒否するため、本関数側の役目ではなくなった）。旧R8「同一idは重複報告しない」
+// テストはこの仕様変更で置き換える。
+test('findFloorsWithCounterpartCL: 同一idのCLも座標が一致すれば通常どおり重複として報告する（分身廃止）', async () => {
   const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
   const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 降格複製を模す（同一id）
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 既存データの破損を模す（同一id）
   const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
 
   const result = await withPeekOverride(project, store, () => findFloorsWithCounterpartCL(project, activeGraph, cl));
 
-  assert.equal(result.length, 0);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].kind, 'center');
+});
+
+// 裁定Q1・Q2（線種変更の移籍一本化・2026-09-30）: absorbCenter:trueは中心線を相手から除外する
+// （findCenterLinesToAbsorbOnPromote/applyCenterLineAbsorptionOnPromoteが同じ階の中心線を吸収する
+// ため、findFloorsWithCounterpartCLでは重複扱いにしない）。
+test('findFloorsWithCounterpartCL: absorbCenter:trueは他階の同座標の中心線を相手から除外する', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+
+  const withoutAbsorb = await withPeekOverride(project, store, () => findFloorsWithCounterpartCL(project, activeGraph, cl));
+  assert.equal(withoutAbsorb.length, 1, '従来どおり（absorbCenter省略）は相手として報告される');
+
+  const withAbsorb = await withPeekOverride(project, store, () => findFloorsWithCounterpartCL(project, activeGraph, cl, { absorbCenter: true }));
+  assert.equal(withAbsorb.length, 0, '中心線は除外される');
+});
+
+test('findFloorsWithCounterpartCL: absorbCenter:trueでも補助線は相手として残る（裁定Q3）', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' });
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+
+  const result = await withPeekOverride(project, store, () => findFloorsWithCounterpartCL(project, activeGraph, cl, { absorbCenter: true }));
+  assert.equal(result.length, 1, '補助線は除外されない');
+  assert.equal(result[0].kind, 'aux');
 });
 
 // ---- 発見④・ユーザー裁定・案A・2026-09-25: findFloorsWithCounterpartCLのexcludeAbsorbableBeam ----
@@ -329,8 +360,8 @@ test('absorbWallBeamAxesOnPromote: 梁芯が無い階・座標が違う階はund
   assert.deepEqual(undoRecords, []);
 });
 
-// ---- recallPromotedCenterLineDuplicates ----
-// 3階構成（p1アクティブ、p2/p3）でも peek を差し替えるため、複数階版の共通ヘルパを用意する。
+// 3階構成（p1アクティブ、p2/p3）でも peek を差し替えるため、複数階版の共通ヘルパを用意する
+// （detachOtherFloorsFromGridCenterLineの検証で使う）。
 function makeProjectWithFloors(count) {
   const project = new Project('proj', 'test');
   const names = ['1階', '2階', '3階', '4階'];
@@ -342,92 +373,194 @@ function makeProjectWithFloors(count) {
   return { project, graphs };
 }
 
-test('recallPromotedCenterLineDuplicates: 他階の同一id複製だけを外し、その階の壁は残る', async () => {
-  const { project, graphs: [p1, p2] } = makeProjectWithFloors(2);
-  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
-  const y3 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+// ---- findCenterLinesToAbsorbOnPromote / applyCenterLineAbsorptionOnPromote
+// （線種変更の移籍一本化・裁定Q1・Q2・ステップ4・2026-09-30。QA所見5是正で2関数へ分割し、
+// 書込み（apply側）は移籍後に呼ぶ規律へ変更） ----
+// 分身廃止に伴い旧・recallPromotedCenterLineDuplicatesのテスト（4件）は本関数のテストへ置き換えた
+// （回収＝分身を外すだけの操作は無くなり、吸収＝参照を通り芯idへ一括置換する操作に変わったため）。
+// find側はpeekのみ（書かない）、apply側はfindが返したtargetsをそのまま使う（再peekしない）ため、
+// apply側のテストはwithPeekOverride無しで呼べる。
 
-  const cl1 = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  const cl2 = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl1.id); // 同一id複製
-  p2.addWall(cl2, 0, true, y0, 0, y3, 0, {});
-  // recallPromotedCenterLineDuplicates は実運用では常に applyPromoteToGrid の後に呼ばれる
-  // （centerLineOps.js promoteCenterToGridWithUndo参照）——先に昇格させておかないと、複製回収後の
-  // p2の壁のaxisCL参照（cl1.id）がどこにも解決できず、再シリアライズ→復元時に壁ごと消えてしまう
-  // （本番同型peekに直してQAで判明。生きたグラフを返す旧スタブはこの欠落を再現できなかった）。
-  applyPromoteToGrid(p1, project.structGraph, cl1);
+test('findCenterLinesToAbsorbOnPromote: 他階の同座標の中心線を検出する（書かない）', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherCl = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherClId = otherCl.id;
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
 
-  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const targets = await withPeekOverride(project, store, () =>
+    findCenterLinesToAbsorbOnPromote(project, activeGraph, cl)
+  );
+
+  assert.equal(targets.length, 1);
+  assert.equal(targets[0].plane.id, otherGraph.plane.id);
+  assert.deepEqual(targets[0].absorbedIds, [otherClId]);
+  // 書かない（peekのみ）ことの確認: storeの中身は変化しない。
+  assert.deepEqual(store.get(otherGraph.plane.id), serializeGraph(otherGraph));
+});
+
+test('findCenterLinesToAbsorbOnPromote + applyCenterLineAbsorptionOnPromote: 他階の同座標の中心線を1本吸収し、壁の軸参照(バイト上のid)が通り芯idへ張り替わりundoRecordsへ記録する', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherCl = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherClId = otherCl.id;
+  const y0 = otherGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = otherGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const wall = otherGraph.addWall(otherCl, 0, true, y0, 0, y1, 0, { isExteriorWall: false });
+  const wallId = wall.id;
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
   const saved = [];
   const saveFloorFn = async (planeId, bytes) => { saved.push(planeId); store.set(planeId, bytes); };
 
-  await withPeekOverride(project, store, () =>
-    recallPromotedCenterLineDuplicates(project, p1, cl1, { saveFloorFn })
+  const targets = await withPeekOverride(project, store, () =>
+    findCenterLinesToAbsorbOnPromote(project, activeGraph, cl)
   );
+  // QA所見5是正: applyCenterLineAbsorptionOnPromoteは移籍後（clがproject.structGraphに実在する状態）に
+  // 呼ぶ規律——ここでは呼び出し側promoteCenterToGridWithUndoのapplyPromoteToGridを模して、先にclを
+  // structGraphへ移してから吸収を書く。
+  runInAction(() => {
+    project.structGraph.addCenterLine(cl.centerLineType, cl.value, { labeled: true, discipline: Discipline.STRUCT }, cl.id);
+  });
+  const { conflictPlane } = await applyCenterLineAbsorptionOnPromote(targets, cl, { saveFloorFn });
 
-  const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
-  assert.equal(decoded.shapeMap.has(cl1.id), false, '複製は回収される');
-  assert.equal(decoded.walls.length, 1, '壁は道連れ削除されず残る');
-  assert.deepEqual(saved, [p2.plane.id]);
+  assert.equal(conflictPlane, null);
+  assert.deepEqual(saved, [otherGraph.plane.id]);
+  // clは既にstructGraphへ移籍済み（上のrunInAction）のため、ここではdecodeFloorで完全に解決できる
+  // （QA所見5是正前は移籍前に書いていたため、この時点でresolveCLが解決できず壁が消えるリスクが
+  // あった——decodeFloorでの検証がその回帰を検出する）。
+  const decoded = decodeFloor(project, otherGraph.plane, store.get(otherGraph.plane.id));
+  assert.equal(decoded.shapeMap.has(otherClId), false, '吸収された中心線は消える');
+  assert.equal(decoded.walls.length, 1, '壁は残る');
+  assert.equal(decoded.walls[0].id, wallId);
+  assert.equal(decoded.walls[0].axisCL.id, cl.id, '壁の軸参照はcl.idへ張り替わる');
 });
 
-test('recallPromotedCenterLineDuplicates: structGraph側の同id通り芯は消えない', async () => {
-  const { project, graphs: [p1, p2] } = makeProjectWithFloors(2);
-  const cl1 = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl1.id); // 同一id複製
-  applyPromoteToGrid(p1, project.structGraph, cl1); // 実際の昇格経路を経た状態を再現
+test('findCenterLinesToAbsorbOnPromote + applyCenterLineAbsorptionOnPromote: 同座標に区間違いの中心線が複数あっても全て吸収する（裁定Q2）', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherCl1 = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherCl2 = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherCl1Id = otherCl1.id;
+  const otherCl2Id = otherCl2.id;
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
 
-  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
-  await withPeekOverride(project, store, () =>
-    recallPromotedCenterLineDuplicates(project, p1, cl1, { saveFloorFn: async (planeId, bytes) => { store.set(planeId, bytes); } })
+  const targets = await withPeekOverride(project, store, () =>
+    findCenterLinesToAbsorbOnPromote(project, activeGraph, cl)
   );
+  runInAction(() => {
+    project.structGraph.addCenterLine(cl.centerLineType, cl.value, { labeled: true, discipline: Discipline.STRUCT }, cl.id);
+  });
+  const { conflictPlane } = await applyCenterLineAbsorptionOnPromote(targets, cl, { saveFloorFn });
 
-  assert.equal(project.structGraph.shapeMap.has(cl1.id), true, '昇格後の通り芯本体は消えない');
-  const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
-  assert.equal(decoded.shapeMap.has(cl1.id), false, '他階の複製は消える');
+  assert.equal(conflictPlane, null);
+  const decoded = decodeFloor(project, otherGraph.plane, store.get(otherGraph.plane.id));
+  assert.equal(decoded.shapeMap.has(otherCl1Id), false, '1本目も吸収される');
+  assert.equal(decoded.shapeMap.has(otherCl2Id), false, '2本目も吸収される');
+  assert.equal(
+    [...decoded.shapeMap.values()].filter(s => s.centerLineType === CenterLineType.VERTICAL && s.value === 1000).length,
+    0, '吸収後、その座標の中心線エントリは1本も残らない',
+  );
 });
 
-test('recallPromotedCenterLineDuplicates: 同一id複製が無い階はsaveFloorせずスキップ', async () => {
-  const { project, graphs: [p1, p2] } = makeProjectWithFloors(2);
-  const cl1 = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  p2.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH }); // 別id・別座標
+test('findCenterLinesToAbsorbOnPromote: 中心線が無い階・座標が違う階はtargetsに含まれない', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH }); // 別座標
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
 
-  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
-  const saved = [];
-  await withPeekOverride(project, store, () =>
-    recallPromotedCenterLineDuplicates(project, p1, cl1, { saveFloorFn: async (planeId) => { saved.push(planeId); } })
+  const targets = await withPeekOverride(project, store, () =>
+    findCenterLinesToAbsorbOnPromote(project, activeGraph, cl)
   );
 
-  assert.deepEqual(saved, []);
+  assert.deepEqual(targets, []);
 });
 
-test('recallPromotedCenterLineDuplicates: 途中の階でsaveFloorFnがthrowしても、保存済みの階分はamendされ全体はrejectする', async () => {
-  const { project, graphs: [p1, p2, p3] } = makeProjectWithFloors(3);
-  const cl1 = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl1.id);
-  p3.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl1.id);
-
+test('applyCenterLineAbsorptionOnPromote: 2枚目のsaveFloorFnがrejectしたら例外がそのまま伝播し、1枚目のundoRecordsは積まれている', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const { graph: p3 } = project.addPlane(6000, '3階', 'p3');
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  p3.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
   const store = new Map([[p2.plane.id, serializeGraph(p2)], [p3.plane.id, serializeGraph(p3)]]);
-  const calls = [];
   const saveFloorFn = async (planeId, bytes) => {
-    calls.push(planeId);
     if (planeId === p3.plane.id) throw new Error('p3 save failed');
     store.set(planeId, bytes);
   };
 
-  const entry = undoManager.push(() => {}, () => {});
-  await withPeekOverride(project, store, () =>
-    assert.rejects(() => recallPromotedCenterLineDuplicates(project, p1, cl1, { undoEntry: entry, saveFloorFn }))
+  const targets = await withPeekOverride(project, store, () =>
+    findCenterLinesToAbsorbOnPromote(project, activeGraph, cl)
   );
-  assert.ok(calls.includes(p2.plane.id), 'p2は保存済み');
-  assert.equal(calls.filter(id => id === p2.plane.id).length, 1);
+  runInAction(() => {
+    project.structGraph.addCenterLine(cl.centerLineType, cl.value, { labeled: true, discipline: Discipline.STRUCT }, cl.id);
+  });
 
-  // amendFloorUndoRecordsのundo実行時のsaveFloorFn呼び出しはpeekを経由しない（直接呼ぶ）ため、
-  // withPeekOverride のスコープ外（finallyでpeekが元に戻った後）でも問題なく動く。
-  const callsBeforeUndo = calls.length;
-  undoManager.undo();
-  assert.equal(calls.length, callsBeforeUndo + 1, 'undo実行でp2への書き戻しが1回追加される');
-  assert.equal(calls[calls.length - 1], p2.plane.id, '書き戻し先はp2のみ（p3は保存されていないため対象外）');
+  const undoRecords = [];
+  await assert.rejects(
+    () => applyCenterLineAbsorptionOnPromote(targets, cl, { undoRecords, saveFloorFn }),
+    /p3 save failed/,
+  );
+
+  assert.equal(undoRecords.length, 1, '1枚目(p2)の記録は積まれている（呼び出し側がrollbackFloorRecordsで戻す）');
+  assert.equal(undoRecords[0].planeId, p2.plane.id);
+});
+
+// ---- hasAbsorptionConflict（QA所見2是正・裁定・2026-09-30） ----
+// remapLineIdsInSnapshotのキー衝突検出では捕まらない参照の衝突（columnAxisOffsets・
+// clEccentricities・kneeDropWallsが配列/配列内オブジェクトとしてclIdを保持するため）を、
+// 置換後のsnapshotを直接調べて検出することの確認。
+
+test('applyCenterLineAbsorptionOnPromote: 2本の吸収対象それぞれに偏芯・柱芯オフセットがあれば衝突として拒否し、保存バイトはbeforeのまま', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const a = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const b = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.setCLEccentricity(a.id, { mode: 'value', value: 30, side: 1, backing: '' });
+  otherGraph.setCLEccentricity(b.id, { mode: 'value', value: 40, side: 1, backing: '' });
+  otherGraph.setColumnAxisOffset(a.id, 15);
+  otherGraph.setColumnAxisOffset(b.id, 25);
+  const before = serializeGraph(otherGraph);
+  const store = new Map([[otherGraph.plane.id, before]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  const targets = await withPeekOverride(project, store, () =>
+    findCenterLinesToAbsorbOnPromote(project, activeGraph, cl)
+  );
+  assert.equal(targets[0].absorbedIds.length, 2, '前提: 吸収対象は2本');
+  runInAction(() => {
+    project.structGraph.addCenterLine(cl.centerLineType, cl.value, { labeled: true, discipline: Discipline.STRUCT }, cl.id);
+  });
+
+  const { conflictPlane } = await applyCenterLineAbsorptionOnPromote(targets, cl, { saveFloorFn });
+
+  assert.equal(conflictPlane?.id, otherGraph.plane.id, '期待: 衝突として拒否される');
+  assert.deepEqual(store.get(otherGraph.plane.id), before, '期待: 保存バイトはbeforeのまま（saveFloorFnを呼ばない）');
+});
+
+test('applyCenterLineAbsorptionOnPromote: 片方だけに偏芯があれば衝突にならず成功し、偏芯の値は吸収先(cl.id)へ残る', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const a = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.setCLEccentricity(a.id, { mode: 'value', value: 30, side: 1, backing: '' });
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  const targets = await withPeekOverride(project, store, () =>
+    findCenterLinesToAbsorbOnPromote(project, activeGraph, cl)
+  );
+  runInAction(() => {
+    project.structGraph.addCenterLine(cl.centerLineType, cl.value, { labeled: true, discipline: Discipline.STRUCT }, cl.id);
+  });
+
+  const { conflictPlane } = await applyCenterLineAbsorptionOnPromote(targets, cl, { saveFloorFn });
+
+  assert.equal(conflictPlane, null, '期待: 衝突にならず成功する');
+  const snapshot = decodeFloorSnapshot(store.get(otherGraph.plane.id));
+  const ecc = snapshot.clEccentricities.filter(e => e.clId === cl.id);
+  assert.equal(ecc.length, 1, '期待: 偏芯はcl.idへ1件だけ残る');
+  assert.equal(ecc[0].value, 30);
 });
 
 // ---- detachOtherFloorsFromGridCenterLine / applyOtherFloorsGridCenterLineAftermath

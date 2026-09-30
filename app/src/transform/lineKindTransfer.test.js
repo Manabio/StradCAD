@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Project, CenterLineType, Discipline } from '../core.js';
+import { Project, CenterLineType, Discipline, centerLineKind } from '../core.js';
 import { ERR_CL_CONVERT_DUP_FLOOR } from '../error.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { undoManager } from '../undoManager.js';
@@ -23,6 +23,14 @@ const MSG_DIALOG_PROMOTED = '同位置の中心線を通り芯にしました。
 // 全部屋の全セルキーが、実在する線（自階＋共有グラフ）の id だけで構成されているか。
 // finish/roomReinterpret.js findUnresolvableCells は「これから id を削除したら壊れるセル」の先読みで、
 // 既に切れている参照は検出しない（QA 指摘）ため、ここで直接照合する。
+// 復元した他平面に「その平面固有の中心線」（通り芯を除く）が座標 value に残っているか。
+// graph.centerLines は共有グラフの通り芯を合流して返すため、そのまま使うと吸収後の通り芯を
+// 「残った中心線」と誤判定する。
+function hasOwnCenterLineAt(graph, centerLineType, value) {
+  return graph.centerLines.some(c =>
+    centerLineKind(c) === 'center' && c.centerLineType === centerLineType && Math.abs(c.value - value) < 1);
+}
+
 function allRoomCellRefsResolve(graph, project) {
   const ids = new Set([...graph.centerLines, ...project.structGraph.centerLines].map(c => c.id));
   return graph.rooms.every(r => [...r.cells].every(k => k.split(':').every(id => ids.has(id))));
@@ -143,7 +151,7 @@ test(
     assert.equal(result.done, true, '期待: 吸収して成功する');
     const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
     assert.equal(
-      decoded.centerLines.some(c => c.centerLineType === CenterLineType.VERTICAL && Math.abs(c.value - 3000) < 1),
+      hasOwnCenterLineAt(decoded, CenterLineType.VERTICAL, 3000),
       false, '期待: 2階の同座標の中心線は吸収されて残らない（現状は通り芯と中心線が同座標で並ぶ）',
     );
     assert.equal(decoded.walls.length, 1, '期待: 2階の壁は残る');
@@ -217,7 +225,7 @@ test(
     assert.equal(result.done, true, '期待: 吸収して成功する');
     const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
     assert.equal(
-      decoded.centerLines.some(c => c.centerLineType === CenterLineType.VERTICAL && Math.abs(c.value - 3000) < 1),
+      hasOwnCenterLineAt(decoded, CenterLineType.VERTICAL, 3000),
       false, '期待: 2階の同座標の中心線は吸収されて残らない（現状は通り芯と中心線が同座標で並ぶ）',
     );
     assert.equal(decoded.walls.length, 1, '期待: 2階の壁は残る');
@@ -239,7 +247,7 @@ test(
     assert.equal(result.done, true, '期待: 吸収して成功する');
     const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
     assert.equal(
-      decoded.centerLines.some(c => c.centerLineType === CenterLineType.VERTICAL && Math.abs(c.value - 2000) < 1),
+      hasOwnCenterLineAt(decoded, CenterLineType.VERTICAL, 2000),
       false, '期待: 2階の X=2000 の中心線は吸収されて残らない',
     );
     assert.equal(decoded.walls.length, 1, '期待: 2階の壁は残る');
@@ -265,11 +273,11 @@ test('promoteCenterToGridWithUndo（メニュー経由）: 他の平面に同座
 
 test(
   'promoteCenterToGridWithUndo（メニュー経由）: 他の平面の同座標の中心線は拒否せず吸収し、その平面の壁は通り芯を軸に残る（裁定Q1・Q2）',
-  { todo: '線種変更の移籍一本化 ステップ4 で解消' },
   async () => {
     const { project, p1, p2 } = makeTwoFloors();
     const p1cl = p1.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
     const p2cl = p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
+    const p2clId = p2cl.id;
     const y0 = p2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false });
     const y1 = p2.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false });
     p2.addWall(p2cl, 0, true, y0, 0, y1, 0, { isExteriorWall: false });
@@ -280,12 +288,12 @@ test(
       promoteCenterToGridWithUndo(p1, project, p1cl, { saveFloorFn })
     );
 
-    assert.equal(toast, null, '期待: 吸収して成功する（現状は拒否される）');
+    assert.equal(toast, null, '期待: 吸収して成功する');
     const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
-    assert.equal(
-      decoded.centerLines.some(c => c.centerLineType === CenterLineType.VERTICAL && Math.abs(c.value - 3000) < 1),
-      false, '期待: 2階の同座標の中心線は吸収されて残らない',
-    );
+    // decoded.centerLines は自階＋共有グラフ（通り芯）を合流するため、昇格後は必ずvalue=3000の
+    // 通り芯（新たにstructGraphへ移ったp1cl）を含んでしまい「吸収されて残らない」判定に使えない
+    // ——吸収対象だったp2cl自身（自階固有の中心線）がshapeMapから消えたかで確認する。
+    assert.equal(decoded.shapeMap.has(p2clId), false, '期待: 2階の同座標の中心線は吸収されて残らない');
     assert.equal(decoded.walls.length, 1, '期待: 2階の壁は残る');
     assert.equal(decoded.walls[0].axisValue, 3000, '期待: 2階の壁の幾何は変わらない');
   },
@@ -295,7 +303,6 @@ test(
 
 test(
   'promoteCenterToGridWithUndo: idを保ったまま複製した平面を複製先で移動した後、複製元で昇格すると、同じidの線を検出して拒否し複製先の壁は動かない（指示書§2.2 複製後の昇格・裁定Q11）',
-  { todo: '線種変更の移籍一本化 ステップ4 で解消' },
   async () => {
     const { project, graph: p1, cl } = makeFloorWithCenterLineWallAndRooms('p1', '1階');
     const clId = cl.id;
@@ -314,11 +321,11 @@ test(
     );
 
     // 裁定Q11: 同じ id の線が他の平面にあれば、書き換えずに拒否して平面名を出す。
-    assert.ok(toast, '期待: 同じidの線が他の平面にあるため拒否される（現状は同一idが重複相手から除外され通ってしまう）');
+    assert.ok(toast, '期待: 同じidの線が他の平面にあるため拒否される');
     assert.match(toast, /1階複製/, '期待: 拒否の文言に平面名を出す');
     assert.equal(p1.centerLines.some(c => c.id === clId && c.labeled === false), true, '期待: 拒否時は複製元の中心線を書き換えない');
     const decoded = decodeFloor(project, dupPlane, store.get(dupPlane.id));
-    assert.equal(decoded.walls[0].axisValue, 3500, '期待: 複製先の壁は動かない（現状は3000＝通り芯位置へ回収される）');
+    assert.equal(decoded.walls[0].axisValue, 3500, '期待: 複製先の壁は動かない');
   },
 );
 

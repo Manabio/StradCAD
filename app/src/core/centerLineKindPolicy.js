@@ -175,6 +175,21 @@ export const CONVERT_BLOCKING_KINDS = Object.freeze({
 // （中心線・補助線 ＞ 梁芯）。
 export const CROSS_FLOOR_COUNTERPART_KINDS = Object.freeze(['center', 'aux', 'beam']);
 
+// ---- 原始事実6b: 昇格で他階から吸収する種別 ----
+// transform/centerLineFloorSync.js findCenterLinesToAbsorbOnPromote/applyCenterLineAbsorptionOnPromote・
+// findFloorsWithCounterpartCL
+// （absorbCenter オプション）: 昇格（中心線→通り芯）は、他階の同座標CLのうち中心線（center）だけを
+// 拒否の相手から除外し、その平面の参照を通り芯idへ一括置換して吸収する（線種変更の移籍一本化・
+// 裁定Q1・Q2・2026-09-30）。補助線・保護される梁芯は対象外（従来どおり拒否——CROSS_FLOOR_
+// COUNTERPART_KINDSのうち'center'のみの部分集合。保護されない壁由来梁芯は別の仕組み
+// （absorbWallBeamAxesOnPromote・excludeAbsorbableBeamオプション）で扱うため、ここには含めない）。
+export const PROMOTE_ABSORBED_KINDS = Object.freeze(['center']);
+
+/** cl が昇格時に他階から吸収される種別か（原始事実6b・PROMOTE_ABSORBED_KINDS参照）。 */
+export function isPromoteAbsorbedKind(cl) {
+  return PROMOTE_ABSORBED_KINDS.includes(centerLineKind(cl));
+}
+
 // ---- 原始事実7: 建具がまたげない境界種別 ----
 // openings/openingMove.js isBlockingKind（ステップ6、2026-09-20移行）: 建具の可動範囲を区切る境界
 // （壁を横切ってもまたげないCL）になるのは通り芯・中心線のみ——どちらも壁の実際の区画（間仕切り・
@@ -320,7 +335,7 @@ function combineSyncScopes(a, b) {
  * kindの変換（昇格・降格。fromKind→toKind）が構造同期の起動対象かどうか、対象ならどのscopeで
  * 反映すべきかを導出する（段階(c)・2026-09-25）。変換前後どちらかの種別が全階へ効く（'all'）なら
  * 変換全体を'all'で反映する——通り芯化（昇格）は他階の壁参照が変わりうるし、通り芯からの降格も
- * 同様（他階への複製・回収を伴う）。どちらも'all'でなければ非nullの方（'activeAndAbove'）を使う——
+ * 同様（他階への複製・吸収を伴う）。どちらも'all'でなければ非nullの方（'activeAndAbove'）を使う——
  * 実務上は片方が必ずFLOOR_SHARED_KINDS（通り芯。'all'）になる組合せ（昇格=center→struct、
  * 降格=struct→center）のため、昇格・降格は常に'all'になる。両方nullなら（aux⇄aux等）null。
  * 種別ごとの「操作×種別」の専用表は作らない——移動・追加・削除・変換のいずれもstructuralSyncScopeOfKind
@@ -723,8 +738,7 @@ export function sameDirectionObstacles(graph, subject) {
  * convertBlockingKinds／CROSS_FLOOR_COUNTERPART_KINDS の結果で判定する（本APIは「同座標の候補を
  * 集める」役割のみを持つ）。
  * exclude は同一グラフ内の既存CLを自分自身として除外する用途（オブジェクト参照比較）——異なる
- * グラフインスタンス間（例: 他階を peek した一時グラフ）の同一id除外にはならない。呼び出し側が
- * id で別途除外すること（transform/centerLineFloorSync.js findFloorsWithCounterpartCL 参照）。
+ * グラフインスタンス間（例: 他階を peek した一時グラフ）の同一id除外にはならない。
  * @param {{centerLines: Array}} graph
  * @param {{centerLineType: string, value: number, tolMm?: number, exclude?: object|null}} opts
  * @returns {Array}

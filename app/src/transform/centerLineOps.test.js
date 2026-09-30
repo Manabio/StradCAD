@@ -11,7 +11,7 @@ import {
   ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
   ERR_CL_CONVERT_DUP_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_DUP, ERR_CL_DELETE_FOOTPRINT,
   ERR_CL_DELETE_UNRESOLVABLE, ERR_CL_DELETE_WALLS_UNAVAILABLE, ERR_CATALOG_DUPLICATE,
-  ERR_CL_CONVERT_SAME_ID_FLOOR_DEMOTE,
+  ERR_CL_CONVERT_SAME_ID_FLOOR, ERR_CL_CONVERT_SAME_ID_FLOOR_DEMOTE,
 } from '../error.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { findUnresolvableCells } from '../finish/roomReinterpret.js';
@@ -5657,11 +5657,15 @@ test('demoteGridToCenterWithUndo: 同期ガード（NO_GRID）で確実に失敗
 
 // ---- 複数階シナリオ（floorSwapManager.peek 差し替え方式） ----
 
-test('promoteCenterToGridWithUndo: 他階に同座標の中心線があればフロア名入りトーストで拒否され変換されない', async () => {
+// 裁定Q1（線種変更の移籍一本化・2026-09-30）: 他階の同座標の中心線はもはや拒否の相手ではなく
+// findCenterLinesToAbsorbOnPromote/applyCenterLineAbsorptionOnPromoteが吸収する
+// （旧テストは拒否を期待していたため書き換えた）。
+test('promoteCenterToGridWithUndo: 他階に同座標の中心線があっても拒否せず吸収して通り芯化する（裁定Q1）', async () => {
   const project = new Project('proj', 'test');
   const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
   const { graph: otherGraph }  = project.addPlane(3000, '2階', 'p2');
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherCl = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherClId = otherCl.id;
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -5671,16 +5675,20 @@ test('promoteCenterToGridWithUndo: 他階に同座標の中心線があればフ
   // （structural/wallBeamAxes.test.js:231-234 と同じ方式。floorSwapManagerはシングルトンインスタンス）。
   const originalPeek = floorSwapManager.peek;
   floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
+  const saveFloorFn = async () => {}; // 生きたグラフをそのまま返すスタブのため実IDBを経由させない
   try {
-    const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
+    const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl, { saveFloorFn });
 
-    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'center' }]));
-    // ERR_CL_CONVERT_DUP_FLOOR自体を呼んで期待値を作ると、その関数がkindを無視する変異を
-    // 検出できない——リテラル文字列で固定する（QA指摘m-1）。
-    assert.equal(toast, '2階 の同じ位置に中心線があるため通り芯にできません。');
-    assert.equal(activeGraph.shapeMap.has(cl.id), true, '変換されず階グラフに残る');
-    assert.equal(project.structGraph.shapeMap.has(cl.id), false);
-    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+    assert.equal(toast, null, '期待: 拒否せず吸収して成功する');
+    assert.equal(activeGraph.shapeMap.has(cl.id), false, '自階は移籍済み');
+    assert.equal(project.structGraph.shapeMap.has(cl.id), true, '通り芯化される');
+    assert.notEqual(undoManager.peekUndo(), beforeTop, 'undoが積まれる');
+    // otherGraph は生きたグラフのスタブのため、吸収の副作用（saveFloorFn経由のバイト置換）は
+    // saveFloorFn呼び出しの有無でのみ観測できる（本番同型peekでの詳細な吸収検証は下記の
+    // 別テスト「他階の同座標の中心線を吸収した後、undoで…」で行う）——ここではotherClIdが
+    // 生きたotherGraph自体からは消えない（applyCenterLineAbsorptionOnPromoteはスナップショット
+    // 単位の操作で生きたグラフを直接書き換えないため）ことを確認するに留める。
+    assert.equal(otherGraph.shapeMap.has(otherClId), true, '生きたotherGraph自体は書き換わらない（スナップショット操作のため）');
   } finally {
     floorSwapManager.peek = originalPeek;
   }
@@ -5816,12 +5824,19 @@ test('【失敗系】promoteCenterToGridWithUndo: 他階の梁芯吸収でsaveFl
   assert.equal(calls, 0, 'listenerは呼ばれない');
 });
 
-test('promoteCenterToGridWithUndo: 同じ他階に「梁芯吸収」と「複製回収」の記録が両方あってもundoで両方とも正しく復元される（発見④・案A。applyFloorUndoRecordsの逆順適用の裏取り）', async () => {
+// 発見④・案A・裁定Q1（2026-09-30更新）: 同じ他階に「壁由来梁芯の吸収（absorbWallBeamAxesOnPromote）」
+// と「中心線の吸収（findCenterLinesToAbsorbOnPromote/applyCenterLineAbsorptionOnPromote）」の
+// 両方の記録があっても、undoで両方とも正しく
+// 復元される（旧テストは分身＝同一idの複製を使っていたが、分身廃止に伴い別idの中心線＋別idの
+// 梁芯が同座標に共存する形へ書き換えた——rollbackFloorRecords/applyFloorUndoRecordsの逆順適用の
+// 裏取り）。
+test('promoteCenterToGridWithUndo: 同じ他階に「梁芯吸収」と「中心線吸収」の記録が両方あってもundoで両方とも正しく復元される（発見④・案A）', async () => {
   const project = new Project('proj', 'test');
   const { graph: p1 } = project.addPlane(0, '1階', 'p1');
   const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
   const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 降格複製を模す（同一id）
+  const otherCl = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherClId = otherCl.id;
   const otherBeamAxis = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
   const otherBeamAxisId = otherBeamAxis.id;
 
@@ -5832,27 +5847,33 @@ test('promoteCenterToGridWithUndo: 同じ他階に「梁芯吸収」と「複製
     const { toast } = await promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn });
     assert.equal(toast, null);
     let decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
-    assert.equal(decoded.shapeMap.has(cl.id), false, '複製は回収される');
+    assert.equal(decoded.shapeMap.has(otherClId), false, '中心線は吸収される');
     assert.equal(decoded.shapeMap.has(otherBeamAxisId), false, '梁芯は吸収される');
 
     undoManager.undo();
     decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
-    assert.equal(decoded.shapeMap.has(cl.id), true, 'undoで複製が同idのまま戻る');
+    assert.equal(decoded.shapeMap.has(otherClId), true, 'undoで中心線が同idのまま戻る');
     assert.equal(decoded.shapeMap.has(otherBeamAxisId), true, 'undoで梁芯も同idのまま戻る');
 
     undoManager.redo();
     decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
-    assert.equal(decoded.shapeMap.has(cl.id), false, 'redoで複製が再び回収される');
+    assert.equal(decoded.shapeMap.has(otherClId), false, 'redoで中心線が再び吸収される');
     assert.equal(decoded.shapeMap.has(otherBeamAxisId), false, 'redoで梁芯も再び吸収される');
   });
 });
 
-test('promoteCenterToGridWithUndo: 同じ他階に中心線と梁芯の両方があれば中心線を優先して表示する（優先順: 中心線＞補助線＞梁芯）', async () => {
+// 裁定Q1（2026-09-30更新）: 昇格は他階の同座標の中心線を吸収するため（absorbCenter:true）、
+// findFloorsWithCounterpartCLの重複相手からは常に除外される——旧テスト（中心線＞梁芯の優先表示）は
+// 前提が崩れたため、優先順（補助線＞梁芯）を確認する形に書き換えた（中心線は優先順の比較に登場
+// しなくなったため、残る非吸収対象の組合せ=補助線と保護される梁芯で検証する）。
+test('promoteCenterToGridWithUndo: 同じ他階に補助線と保護される梁芯の両方があれば補助線を優先して表示する（優先順: 中心線＞補助線＞梁芯）', async () => {
   const project = new Project('proj', 'test');
   const { graph: activeGraph } = project.addPlane(0, '1階', 'p1');
   const { graph: otherGraph }  = project.addPlane(3000, '2階', 'p2');
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE }); // 梁芯
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 中心線（同座標に共存）
+  const beamAxis = otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null }); // 梁芯（保護する）
+  const y0 = otherGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  otherGraph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beamAxis, y0, { dimensionStatus: 'locked' }); // 保護される梁芯にする
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' }); // 補助線（同座標に共存）
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -5861,8 +5882,8 @@ test('promoteCenterToGridWithUndo: 同じ他階に中心線と梁芯の両方が
   floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
   try {
     const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
-    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'center' }]), '梁芯より中心線を優先して表示する');
-    assert.equal(toast, '2階 の同じ位置に中心線があるため通り芯にできません。', 'リテラル文字列で固定（QA指摘m-1）');
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'aux' }]), '保護される梁芯より補助線を優先して表示する');
+    assert.equal(toast, '2階 の同じ位置に補助線があるため通り芯にできません。', 'リテラル文字列で固定（QA指摘m-1）');
   } finally {
     floorSwapManager.peek = originalPeek;
   }
@@ -5874,7 +5895,10 @@ test('promoteCenterToGridWithUndo: 複数階・種別混在のトーストは種
   const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
   const { graph: g3 } = project.addPlane(6000, '3階', 'p3');
   const { graph: g4 } = project.addPlane(9000, '4階', 'p4');
-  g4.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 4階=中心線
+  // 4階=補助線（裁定Q1・2026-09-30更新: 昇格は他階の同座標の中心線を拒否せず吸収するため、
+  // 中心線はfindFloorsWithCounterpartCLの重複相手に現れなくなった——優先順テストの対象を
+  // 「補助線＞梁芯」に差し替える）。
+  g4.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' }); // 4階=補助線
   // 2階・3階=梁芯（発見④・案Aで保護されない梁芯は他階重複の相手から除外されるため、lockedの柱を
   // 乗せて保護し、引き続き他階重複の相手として残ることを確認する）。
   const beam2 = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
@@ -5893,10 +5917,10 @@ test('promoteCenterToGridWithUndo: 複数階・種別混在のトーストは種
   try {
     const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
     // 種別の並び順（中心線→補助線→梁芯）が優先され、階の登録順（2階・3階・4階）ではなく
-    // 「4階（中心線）」が先に来る。同種別の階（2階・3階）は「・」で連結する。
+    // 「4階（補助線）」が先に来る。同種別の階（2階・3階）は「・」で連結する。
     assert.equal(
       toast,
-      '4階 の同じ位置に中心線、2階・3階 の同じ位置に梁芯があるため通り芯にできません。',
+      '4階 の同じ位置に補助線、2階・3階 の同じ位置に梁芯があるため通り芯にできません。',
     );
   } finally {
     floorSwapManager.peek = originalPeek;
@@ -5955,13 +5979,19 @@ test('demoteGridToCenterWithUndo: 他階の相手が補助線のみのときは�
 // 往復シナリオ。saveFloorFn を注入して実IDBを経由せず記録だけで検証する（wallRefresh.js の
 // saveFloorFn 注入と同じ前例。promoteCenterToGridWithUndo/demoteGridToCenterWithUndo の第4引数）。
 
-test('promoteCenterToGridWithUndo: 他階にある同一idの複製は重複拒否の対象にせず昇格でき、複製は回収される', async () => {
+// 線種変更の移籍一本化・ステップ4（2026-09-30）: 分身廃止に伴い、他階にある「同一idの複製」は
+// もはや正規のデータ形（降格が作るのは常に新id）ではなく、既存データの破損だけが該当する。
+// この場合は重複拒否の対象にせず回収する旧仕様（R7/R9系）を廃止し、Q11（findFloorsWithSameLineId）
+// で書き換えずに拒否するよう改めた（centerLineFloorSync.js findFloorsWithSameLineId参照）。
+// 以下はその新仕様の確認（往復・移動を伴う詳細な検証はlineKindTransfer.test.jsのQ11テストへ集約）。
+test('promoteCenterToGridWithUndo: 他階にある同一idの線は（既存データの破損として）Q11で拒否され、何も保存されない', async () => {
   const project = new Project('proj', 'test');
   const { graph } = project.addPlane(0, '1階', 'p1');
   const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 降格複製を模す（同一id）
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 既存データの破損を模す（同一id）
   const clId = cl.id;
+  const beforeTop = undoManager.peekUndo();
 
   const saved = [];
   const saveFloorFn = async (planeId) => { saved.push(planeId); };
@@ -5970,66 +6000,271 @@ test('promoteCenterToGridWithUndo: 他階にある同一idの複製は重複拒�
   try {
     const { toast } = await promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn });
 
-    assert.equal(toast, null, '同一idは重複扱いされず拒否されない');
-    assert.equal(project.structGraph.shapeMap.has(clId), true);
-    assert.equal(graph.shapeMap.has(clId), false);
-    assert.equal(otherGraph.shapeMap.has(clId), false, '他階の同一id複製は回収される');
-    assert.deepEqual(saved, [otherGraph.plane.id]);
+    assert.equal(toast, ERR_CL_CONVERT_SAME_ID_FLOOR(['2階']), '裁定Q11: 同じidの線が他の平面にあれば拒否する');
+    assert.equal(project.structGraph.shapeMap.has(clId), false, '昇格されない');
+    assert.equal(graph.shapeMap.has(clId), true, '自階は無変更（中心線のまま）');
+    assert.deepEqual(saved, [], '何も保存しない');
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
   } finally {
     floorSwapManager.peek = originalPeek;
   }
 });
 
-// 旧R7（降格→昇格→降格の往復）は生きたグラフを直接返すpeekスタブ（floorSwapManager.peekの
-// 差し替え）で書かれていたため、ステップ4（昇格時の他階中心線の吸収）が入った後もsaveFloorFn経由の
-// 保存バイト・remapの往復を検証できない（QA指摘・2026-09-30）。同じ往復シナリオを本番同型peek
-// （withProductionPeek＋store）・実際の壁付きで検証する下記テスト
-// 「demoteGridToCenterWithUndo: 降格→昇格→降格の往復（本番同型peek）で他階の壁は3回とも幾何が
-// 変わらず残る（ステップ4で他階の中心線を吸収）」に統合し、このテストは削除した（重複のため）。
-
-test('promoteCenterToGridWithUndo: undoで他階の複製が復活し、redoで再び回収される（saveFloorFn記録で観測。R9）', async () => {
+// 裁定Q1・Q2（線種変更の移籍一本化・ステップ4）: 他階の同座標の中心線（同一idではなく別id）は
+// 拒否せず吸収する。undo/redoで壁の軸参照が元の中心線id⇄通り芯idを往復することを、本番同型peek
+// （保存バイトから復元）で確認する。
+test('promoteCenterToGridWithUndo: 他階の同座標の中心線を吸収した後、undoで壁の軸が元の中心線idに解決され中心線が復活し、redoで通り芯idに解決され中心線が消える（本番同型peek）', async () => {
   const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
-  const otherPlane = otherGraph.plane;
-  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id);
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const clId = cl.id;
+  const otherCl = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const otherClId = otherCl.id;
+  const y0 = p2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = p2.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const wall = p2.addWall(otherCl, 0, true, y0, 0, y1, 0, { isExteriorWall: false });
+  const wallId = wall.id;
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn });
+    assert.equal(toast, null, '期待: 吸収して成功する');
+    let decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(otherClId), false, '確定直後: 吸収された中心線は消える');
+    assert.equal(decoded.walls.length, 1);
+    assert.equal(decoded.walls[0].id, wallId);
+    assert.equal(decoded.walls[0].axisCL.id, clId, '確定直後: 壁の軸は通り芯id（clId）へ張り替わる');
+    assert.equal(decoded.walls[0].axisCL.labeled, true);
+
+    undoManager.undo();
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.walls[0].id, wallId, 'undo: 壁の実体（id）は変わらない');
+    assert.equal(decoded.walls[0].axisCL.id, otherClId, 'undo: 壁の軸は元の中心線id（otherClId）へ戻る');
+    assert.equal(decoded.walls[0].axisCL.labeled, false, 'undo: 軸は中心線（labeled:false）に戻る');
+    assert.equal(decoded.shapeMap.has(otherClId), true, 'undo: 吸収された中心線が復活する');
+    assert.equal(project.structGraph.shapeMap.has(clId), false, 'undo: 通り芯は無くなる');
+    assert.equal(p1.shapeMap.has(clId), true, 'undo: 自階の中心線が戻る');
+
+    undoManager.redo();
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.walls[0].axisCL.id, clId, 'redo: 壁の軸は再び通り芯idへ張り替わる');
+    assert.equal(decoded.walls[0].axisCL.labeled, true);
+    assert.equal(decoded.shapeMap.has(otherClId), false, 'redo: 中心線は再び消える');
+    assert.equal(project.structGraph.shapeMap.has(clId), true, 'redo: 通り芯が戻る');
+  });
+});
+
+// QA所見4・裁定5（2026-09-30）: 2つのfloorRecords（他階の梁芯吸収・中心線吸収）が同じ平面に積まれた
+// 状態で、移籍後の再確認（project.structGraph.shapeMap.get(cl.id)!==cl）が不成立になったら、
+// rollbackFloorRecordsが逆順で書き戻すことで真のbefore（吸収も梁芯撤去も無かった状態）へ戻ることを
+// 確認する——正順のままだと1枚目の記録（梁芯吸収のafter）で上書きされ、梁芯が消えたままになる
+// （QA指摘・rollbackFloorRecords正順化の変異で本テストが赤くなることで裏取りする）。
+test('promoteCenterToGridWithUndo: 移籍後の再確認が不成立なら、梁芯吸収・中心線吸収の両方の記録を逆順で巻き戻し、2階は真のbeforeへ戻りtoast:null・undo未積み', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const clId = cl.id;
+  const oc = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 吸収対象の中心線
+  const ocId = oc.id;
+  const bm = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null }); // 保護されない梁芯
+  const bmId = bm.id;
+  const originalBytes = serializeGraph(p2);
+  const store = new Map([[p2.plane.id, originalBytes]]);
+  let saveCalls = 0;
+  const saveFloorFn = async (planeId, bytes) => {
+    saveCalls++;
+    store.set(planeId, bytes);
+    // 2回目の保存（=中心線吸収のapplyCenterLineAbsorptionOnPromote書込み）の直後に、外部から
+    // 通り芯が共有グラフから消えた（別処理が同時に走った等）状況を模す。
+    if (saveCalls === 2) project.structGraph.shapeMap.delete(clId);
+  };
+  const beforeTop = undoManager.peekUndo();
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn });
+
+    assert.equal(toast, null, '期待: 再確認が不成立になり巻き戻す');
+    // 2回（梁芯吸収・中心線吸収）に加え、rollbackFloorRecordsによる書き戻し（floorRecords2件分）で
+    // さらに2回、計4回保存される。
+    assert.equal(saveCalls, 4, '前提: 実書込み2回＋rollbackFloorRecordsの書き戻し2回＝計4回');
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+    // 寸法線はPlanGraph復元時の自動生成リアクションのタイミング次第で本数が変わりうる
+    // （team-lessons・scratchpad/qa4_probe.test.mjsのeqbヘルパと同じ既知の事情）ため、
+    // dimensionLinesを除いた内容で比較する（寸法線以外＝中心線・壁・梁芯等の構造は厳密に比較する）。
+    const withoutDimLines = (bytes) => { const s = decodeFloorSnapshot(bytes); return JSON.stringify({ ...s, dimensionLines: null }); };
+    assert.equal(withoutDimLines(store.get(p2.plane.id)), withoutDimLines(originalBytes), '期待: 2階の保存内容(寸法線を除く)は真のbeforeのまま');
+    const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(ocId), true, '期待: 中心線idが残る（吸収は取り消される）');
+    assert.equal(decoded.shapeMap.has(bmId), true, '期待: 梁芯idが残る（撤去は取り消される）');
+    assert.equal(project.structGraph.shapeMap.has(clId), false, '通り芯化も取り消される');
+    assert.equal(p1.shapeMap.has(clId), true, '自階の中心線は元に戻る');
+  });
+});
+
+// QA所見5（2026-09-30）: 3平面で2枚目（3階）の保存が失敗した場合、2階の保存内容が元どおりで
+// 自階・共有グラフもbeforeへ戻ることを確認する（移籍後の失敗になるため、自階・共有グラフの
+// 巻き戻しも必ず検証する——移籍前失敗（他階の梁芯吸収失敗系）と違い、この経路は
+// applyPromoteToGridの後に失敗するため自階・structGraphの巻き戻しが新たに必要になった）。
+test('promoteCenterToGridWithUndo: 3平面で2枚目(3階)の中心線吸収の保存が失敗したら、1枚目(2階)はbeforeへ戻り、自階・共有グラフもbeforeへ戻ってrejectする', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const { graph: p3 } = project.addPlane(6000, '3階', 'p3');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const clId = cl.id;
+  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  p3.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const p2Before = serializeGraph(p2);
+  const store = new Map([[p2.plane.id, p2Before], [p3.plane.id, serializeGraph(p3)]]);
+  const saveFloorFn = async (planeId, bytes) => {
+    if (planeId === p3.plane.id) throw new Error('p3 save failed');
+    store.set(planeId, bytes);
+  };
+  const beforeTop = undoManager.peekUndo();
+
+  await withProductionPeek(project, store, async () => {
+    await assert.rejects(() => promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn }), /p3 save failed/);
+  });
+
+  // 寸法線はPlanGraph復元時の自動生成リアクションのタイミング次第で本数が変わりうる
+  // （team-lessons・scratchpad/qa4_probe.test.mjsのeqbヘルパと同じ既知の事情）ため、
+  // dimensionLinesを除いた内容で比較する。
+  const withoutDimLines = (bytes) => { const s = decodeFloorSnapshot(bytes); return JSON.stringify({ ...s, dimensionLines: null }); };
+  assert.equal(withoutDimLines(store.get(p2.plane.id)), withoutDimLines(p2Before), '期待: 2階の保存内容(寸法線を除く)はbeforeのまま');
+  assert.equal(project.structGraph.shapeMap.has(clId), false, '期待: 共有グラフもbeforeへ戻り通り芯化は取り消される');
+  assert.equal(p1.shapeMap.has(clId), true, '期待: 自階は中心線のまま戻る');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+});
+
+// QA所見4（検出力）: 他階の壁・建具・部屋・柱・偏芯・柱芯オフセット・腰壁・除外集合・refId子CLの
+// 全種類が確定後にcl.idへ付け替わり幾何が変わらず、undoで元のidへ戻ることを本番同型peekで確認する
+// （scratchpad/qa4_probe.test.mjs「PROBE item3/5」を下敷きに、プロジェクトの既存テストの様式へ
+// 書き直した）。
+test('promoteCenterToGridWithUndo: 他階の壁・建具・部屋・柱・偏芯・柱芯オフセット・腰壁・除外集合・refId子CLがすべてcl.idへ付け替わり、幾何は変わらず、undo/redoの各時点で線idの重複が無い（本番同型peek）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
   const clId = cl.id;
 
-  const saved = [];
-  const saveFloorFn = async (planeId, bytes) => { saved.push({ planeId, bytes }); };
-  // saveFloorFnで受け取ったバイト列を、peekと同じ手順（PlanGraph+_structGraph差し込み+restoreGraph）で
-  // 復号して中身を確認する（otherGraphは生きた同一インスタンスのため、そのshapeMapでは undo/redo の
-  // 書き戻しを観測できない——非アクティブ階はIDB書込のみが正であり、amendFloorUndoRecordsも
-  // saveFloorFn呼び出しのみを行い、生きたotherGraphオブジェクト自体は書き換えない）。
-  const decode = (bytes) => {
-    const tmp = new PlanGraph(otherPlane);
-    tmp._structGraph = project.structGraph;
-    restoreGraph(tmp, bytes);
-    return tmp;
-  };
+  p2.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false });
+  const x = p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false }); // 吸収対象の中心線
+  const xId = x.id;
+  p2.addCenterLine(CenterLineType.VERTICAL, 6000, { labeled: false });
+  const y0 = p2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false });
+  const y1 = p2.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false });
+  const wall = p2.addWall(x, 0, true, y0, 0, y1, 0, { isExteriorWall: false });
+  const wallId = wall.id;
+  const opening = p2.addOpening(x, 1, true, y0, 500, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  const openingId = opening.id;
+  const leftKey = worldToCell(1500, 1500, p2).key;
+  const rightKey = worldToCell(4500, 1500, p2).key;
+  const leftRoom = p2.addRoom(new Set([leftKey]), '左');
+  const rightRoom = p2.addRoom(new Set([rightKey]), '右');
+  const column = p2.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x, y0, { dimensionStatus: 'locked' });
+  const columnId = column.id;
+  p2.setCLEccentricity(xId, { mode: 'value', value: 30, side: 1, backing: '' });
+  p2.setColumnAxisOffset(xId, 15);
+  p2.setKneeDropWall(edgeKey(xId, y0.id, y1.id), { knee: { topHeight: 900 }, drop: null });
+  p2.excludedColumnSlots.add(`${xId}:${y1.id}`);
+  const child = p2.addCenterLine(CenterLineType.VERTICAL, 3500, {
+    labeled: false, discipline: Discipline.ARCH, refId: xId, refOffset: 500,
+  });
+  const childId = child.id;
+  const childEffectiveValueBefore = child.effectiveValue;
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === otherPlane.id ? otherGraph : null);
-  try {
-    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn });
+  const originalBytes = serializeGraph(p2);
+  const store = new Map([[p2.plane.id, originalBytes]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  const dupCheck = (bytes) => findDuplicateLineIds([
+    { planeId: p1.plane.id, planeName: '1階', ids: [...p1.shapeMap.values()].filter(s => s.centerLineType !== undefined).map(s => s.id) },
+    { planeId: p2.plane.id, planeName: '2階', ids: decodeFloorSnapshot(bytes).centerLines.map(c => c.id) },
+    { planeId: null, planeName: '通り芯', ids: project.structGraph.centerLines.map(c => c.id) },
+  ]);
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn });
     assert.equal(toast, null);
-    assert.equal(saved.length, 1, '昇格確定時に1回保存される');
-    assert.equal(decode(saved[0].bytes).shapeMap.has(clId), false, '昇格直後の保存バイトは複製回収後の状態');
 
-    saved.length = 0;
+    let decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(xId), false, '確定直後: 吸収された中心線は消える');
+    assert.equal(decoded.walls.length, 1);
+    assert.equal(decoded.walls[0].id, wallId);
+    assert.equal(decoded.walls[0].axisCL.id, clId, '壁の軸はcl.idへ付け替わる');
+    assert.equal(decoded.openings.length, 1);
+    assert.equal(decoded.openings[0].id, openingId);
+    assert.equal(decoded.openings[0].axisCL.id, clId, '建具の軸もcl.idへ付け替わる');
+    assert.equal([...decoded.roomMap.get(leftRoom.id).cells][0].includes(clId), true, '左の部屋のセルはcl.idを含む');
+    assert.equal([...decoded.roomMap.get(leftRoom.id).cells][0].includes(xId), false, '左の部屋のセルに旧idは残らない');
+    assert.equal([...decoded.roomMap.get(rightRoom.id).cells][0].includes(clId), true, '右の部屋のセルもcl.idを含む');
+    assert.equal(decoded.columnMap.get(columnId)?.verticalCL.id, clId, '柱の軸もcl.idへ付け替わる');
+    assert.equal(decoded.clEccentricities.get(clId)?.value, 30, '偏芯の値はcl.idキーで残る');
+    assert.equal(decoded.columnAxisOffsets.get(clId), 15, '柱芯オフセットもcl.idキーで残る');
+    assert.equal(decoded.kneeDropWalls.get(edgeKey(clId, y0.id, y1.id))?.knee?.topHeight, 900, '腰壁もcl.idを含むキーで残る');
+    assert.equal(decoded.excludedColumnSlots.has(`${clId}:${y1.id}`), true, '除外集合もcl.idキーで残る');
+    assert.equal(decoded.shapeMap.get(childId)?.refId, clId, 'refIdで参照する子CLもcl.idへ付け替わる');
+    assert.equal(decoded.shapeMap.get(childId)?.effectiveValue, childEffectiveValueBefore, '子CLの実効座標は不変');
+    assert.deepEqual(dupCheck(store.get(p2.plane.id)), [], '確定直後: 線idの重複が無い');
+
     undoManager.undo();
-    assert.equal(saved.length, 1, 'undoでp2への書き戻しが記録される');
-    assert.equal(saved[0].planeId, otherPlane.id);
-    assert.equal(decode(saved[0].bytes).shapeMap.has(clId), true, 'undoで書き戻すバイトは複製が復活した状態');
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.walls[0].axisCL.id, xId, 'undo: 壁の軸は元の中心線idへ戻る');
+    assert.equal(decoded.openings[0].axisCL.id, xId, 'undo: 建具の軸も元の中心線idへ戻る');
+    assert.equal(decoded.shapeMap.has(xId), true, 'undo: 吸収された中心線が復活する');
+    assert.equal(decoded.clEccentricities.has(clId), false, 'undo: 偏芯はcl.idキーには無い');
+    assert.equal(decoded.columnAxisOffsets.has(clId), false, 'undo: 柱芯オフセットもcl.idキーには無い');
+    assert.deepEqual(dupCheck(store.get(p2.plane.id)), [], 'undo直後: 線idの重複が無い');
 
-    saved.length = 0;
     undoManager.redo();
-    assert.equal(saved.length, 1, 'redoでp2への書き戻しが記録される');
-    assert.equal(decode(saved[0].bytes).shapeMap.has(clId), false, 'redoで書き戻すバイトは複製が回収された状態');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.walls[0].axisCL.id, clId, 'redo: 壁の軸は再びcl.idへ付け替わる');
+    assert.equal(decoded.shapeMap.has(xId), false, 'redo: 中心線は再び消える');
+    assert.deepEqual(dupCheck(store.get(p2.plane.id)), [], 'redo直後: 線idの重複が無い');
+  });
+});
+
+// 裁定Q11（線種変更の移籍一本化）: 昇格のQ11は座標重複より先に判定される（補助線が相手の場合）。
+// 従来の他平面重複チェック（findFloorsWithCounterpartCL）は補助線をERR_CL_CONVERT_DUP_FLOOR(aux)で
+// 拒否するが、その相手が「cl.idと同じid」であれば、座標一致の通常重複より先にQ11
+// （ERR_CL_CONVERT_SAME_ID_FLOOR）で拒否されることを確かめる（demote側の対照テストと同型・裁定Q11）。
+test('promoteCenterToGridWithUndo: 他平面に同じid・同じ座標の補助線があっても、Q11がfindFloorsWithCounterpartCLより先に働きERR_CL_CONVERT_SAME_ID_FLOORで拒否される', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const cl = p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const clId = cl.id;
+  // 既存データの破損を模す: 2階にcl.idと同じid・同じ座標の補助線を直接作る。
+  p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' }, clId);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  let saveCalls = 0;
+  const saveFloorFn = async (planeId, bytes) => { saveCalls++; store.set(planeId, bytes); };
+  const beforeTop = undoManager.peekUndo();
+
+  const { toast } = await withProductionPeek(project, store, () =>
+    promoteCenterToGridWithUndo(p1, project, cl, { saveFloorFn })
+  );
+
+  assert.equal(toast, ERR_CL_CONVERT_SAME_ID_FLOOR(['2階']), '期待: ERR_CL_CONVERT_DUP_FLOOR(aux)ではなくQ11の文言');
+  assert.equal(saveCalls, 0, '期待: 拒否時はsaveFloorFnを一度も呼ばない');
+  assert.equal(project.structGraph.shapeMap.has(clId), false, '通り芯化されない');
+  assert.equal(p1.shapeMap.has(clId), true, '自階は移籍していない');
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
 // ---- demoteGridToCenterWithUndo: 複製→移籍の順序（案A、2026-09-17裁定）----
@@ -6160,10 +6395,11 @@ test('demoteGridToCenterWithUndo: 他の平面に通り芯と同じidの線が�
 });
 
 // テストB: 他の平面に「同じid・かつ同じ座標(1000)」の線がある場合。findFloorsWithCounterpartCLは
-// other.id!==cl.idの除外（分身の往復を通すための規則）により、同idの相手を重複相手から除外して
-// しまうため、座標が一致していてもdupFloorsでは検出できない——この場合に落とすのはQ11の役目である
-// ことを確かめる（同じidの重複が「座標が違う」ケースだけでなく「座標も同じ」ケースでも拒否されること）。
-test('demoteGridToCenterWithUndo: 他の平面に通り芯と同じid・同じ座標(1000)の線があっても、findFloorsWithCounterpartCLの同id除外をすり抜けずQ11で拒否される', async () => {
+// id による除外を行わない（分身廃止に伴い2026-09-30に廃止済み）ため、座標一致だけでも本来は
+// dupFloors（ERR_CL_CONVERT_DUP_FLOOR_DEMOTE）に掛かりうるが、Q11をfindFloorsWithCounterpartCLより
+// 先に置いているため、同じidの重複は「座標が違う」ケースだけでなく「座標も同じ」ケースでもQ11の
+// 文言で拒否されることを確かめる（順序が正しいことの裏取り）。
+test('demoteGridToCenterWithUndo: 他の平面に通り芯と同じid・同じ座標(1000)の線があっても、Q11がfindFloorsWithCounterpartCLより先に働き拒否される', async () => {
   const { project, p1, p2, cl } = makeTwoFloorsWithGridCL();
   const clId = cl.id;
   // 既存データの破損を模す: 2階に通り芯と同じid・同じ座標の（非grid）中心線を直接作る。
@@ -6330,13 +6566,11 @@ test('propagateDemotedCenterLine: 2枚目の平面のpeekがrejectしたら、�
 });
 
 // 降格→昇格→降格の往復（本番同型peek）: 分身の廃止（ステップ3）により、降格が他階に作るのは新idの
-// 中心線になる。2回目（昇格）は、他階の同座標の中心線を拒否せず吸収する設計変更（裁定Q1・ステップ4）が
-// 入るまでは、findFloorsWithCounterpartCLが座標一致の重複として拒否する——分身（同id除外）が無くなった
-// 分だけ、この往復は一時的に通らなくなる（指示書§4 Q1・§6 手順4）。期待値はステップ4後の仕様
-// （吸収して壁の幾何は3回とも不変）に書き換え、todoにする。
+// 中心線になる。2回目（昇格）は、他階の同座標の中心線を拒否せず吸収する（裁定Q1・ステップ4・
+// findCenterLinesToAbsorbOnPromote/applyCenterLineAbsorptionOnPromote）ため、壁の幾何は3回とも
+// 不変のまま往復する。
 test(
   'demoteGridToCenterWithUndo: 降格→昇格→降格の往復（本番同型peek）で他階の壁は3回とも幾何が変わらず残る（ステップ4で他階の中心線を吸収）',
-  { todo: '線種変更の移籍一本化 ステップ4 で解消（分身廃止により昇格が他階の同座標中心線を拒否するようになったため）' },
   async () => {
     const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
     const clId = cl.id;
@@ -6975,13 +7209,13 @@ test('demoteGridToCenterWithUndo: 中心線化はコミット時のnotifyだけ�
 // ---- 順序テスト（最重要）: saveFloorFn（他階書込）がstructuralSyncListener（sync）より必ず先に
 // 実行される（確定・undo・redoのいずれも）。共通配列logに save:${planeId} と sync を積んで確認する。
 
-test('【順序が最重要】promoteCenterToGridWithUndo: 他階の梁芯吸収・複製回収（save）が構造同期（sync）より必ず先に実行される（確定・undo・redo。発見④分のsaveを含む）', async () => {
+test('【順序が最重要】promoteCenterToGridWithUndo: 他階の梁芯吸収・中心線吸収（save）が構造同期（sync）より必ず先に実行される（確定・undo・redo。発見④分のsaveを含む）', async () => {
   const project = new Project('proj', 'test');
   const { graph } = project.addPlane(0, '1階', 'p1');
   const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
   const otherPlane = otherGraph.plane;
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 降格複製を模す（同一id）
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 裁定Q1: 吸収対象の中心線（別id）
   otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null }); // 発見④: 保護されない壁由来梁芯（同座標）
 
   const log = [];
@@ -6992,7 +7226,7 @@ test('【順序が最重要】promoteCenterToGridWithUndo: 他階の梁芯吸収
   try {
     const { toast } = await promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn });
     assert.equal(toast, null);
-    assert.deepEqual(log, [`save:${otherPlane.id}`, `save:${otherPlane.id}`, 'sync'], '確定: 吸収・回収のsaveがともにsyncより先');
+    assert.deepEqual(log, [`save:${otherPlane.id}`, `save:${otherPlane.id}`, 'sync'], '確定: 梁芯吸収・中心線吸収のsaveがともにsyncより先');
 
     log.length = 0;
     undoManager.undo();
@@ -7056,7 +7290,10 @@ test('【失敗系】promoteCenterToGridWithUndo: 他階重複トースト（ERR
   const { graph } = project.addPlane(0, '1階', 'p1');
   const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 別id・同座標＝重複相手
+  // 裁定Q1（2026-09-30更新）: 中心線はもはや拒否の相手ではなく吸収されるため、依然として拒否される
+  // 補助線を重複相手にする（中心線を使うと吸収されて成功してしまい、このテストの目的
+  // 「拒否時はlistenerを呼ばない」を検証できなくなる）。
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, lineType: 'dashed' }); // 別id・同座標＝重複相手（補助線）
 
   let calls = 0;
   setCenterLineStructuralListener(() => { calls++; });
@@ -7064,7 +7301,7 @@ test('【失敗系】promoteCenterToGridWithUndo: 他階重複トースト（ERR
   floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
   try {
     const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
-    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: otherGraph.plane.name, kind: 'center' }]));
+    assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: otherGraph.plane.name, kind: 'aux' }]));
     assert.equal(calls, 0);
   } finally {
     floorSwapManager.peek = originalPeek;
@@ -7072,27 +7309,32 @@ test('【失敗系】promoteCenterToGridWithUndo: 他階重複トースト（ERR
   }
 });
 
-test('【失敗系】promoteCenterToGridWithUndo: 回収（recallPromotedCenterLineDuplicates）がthrowしたらnotifyせず再throwする（R2）', async () => {
+// 旧R2（recallPromotedCenterLineDuplicatesが確定後にthrowしnotifyだけ抑止する経路）は分身廃止に
+// 伴い消滅した——中心線の吸収（applyCenterLineAbsorptionOnPromote）はQA所見5是正により移籍**後**
+// （undoエントリを積む前）に行うため、そこでのsaveFloorFn失敗は自階・structGraph・floorRecordsの
+// 全てをbeforeへ巻き戻してから再throwする（undoは積まない）。以下はその確認に置き換える。
+test('【失敗系】promoteCenterToGridWithUndo: 他階の中心線吸収でsaveFloorFnがthrowしたらrollbackし、自階・undoは無変更・listenerは呼ばれない（裁定Q1）', async () => {
   const project = new Project('proj', 'test');
   const { graph } = project.addPlane(0, '1階', 'p1');
   const { graph: otherGraph } = project.addPlane(3000, '2階', 'p2');
   const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
-  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }, cl.id); // 回収対象の複製
+  otherGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH }); // 吸収対象（別id）
 
   const beforeTop = undoManager.peekUndo();
   let calls = 0;
   setCenterLineStructuralListener(() => { calls++; });
   const originalPeek = floorSwapManager.peek;
   floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
-  const saveFloorFn = async () => { throw new Error('recall save failed'); };
+  const saveFloorFn = async () => { throw new Error('absorb save failed'); };
   try {
-    await assert.rejects(() => promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn }), /recall save failed/);
-    assert.equal(calls, 0, '回収が失敗したらnotifyしないはず');
-    assert.notEqual(undoManager.peekUndo(), beforeTop, '昇格自体のundoエントリは既に積まれたまま残る（R2の対象は回収失敗時のnotifyのみ）');
+    await assert.rejects(() => promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn }), /absorb save failed/);
+    assert.equal(calls, 0, 'listenerは呼ばれない');
+    assert.equal(project.structGraph.shapeMap.has(cl.id), false, '自階は無変更（中心線のまま）');
+    assert.equal(graph.shapeMap.has(cl.id), true);
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない（移籍後の失敗だがbeforeへ巻き戻すため）');
   } finally {
     floorSwapManager.peek = originalPeek;
     setCenterLineStructuralListener(null);
-    undoManager.undo(); // 後続テストへ影響しないよう積まれたエントリを戻す
   }
 });
 
