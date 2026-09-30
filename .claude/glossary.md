@@ -13,7 +13,7 @@
 
 ガターラベル・ガター丸の表示対象は「`discipline==='struct'` かつ `labeled===true`」のみ。梁芯は「中心」と同じ表現形式（extentLoRef/HiRef）を使う別種別（`centerLineKind()`が`'beam'`を返す）。設計意図は`.claude/structural-model.md`。種別間の関係（可視モード表・直交端部の特例・同位置共存・入替えガード等）の真実は`core/centerLineKindPolicy.js`、直接走査・生フィールド読みの例外（理由つき）の台帳は`core/centerLineKindPolicy.guard.test.js`のallowlist。
 
-平面モード限定で「通り芯」⇔「中心」は相互変換できる（CL端点のロングタップ→「通り芯に」、通り芯の線上ロングタップ→「中心に」）。id維持のグラフ間移籍（delete+再生成ではない）。設計意図は`.claude/data-model.md`。
+平面モード限定で「通り芯」⇔「中心」は相互変換できる（CL端点のロングタップ→「通り芯に」、通り芯の線上ロングタップ→「中心に」）。id維持のグラフ間**移籍**（delete+再生成ではない）。**移籍**＝線の実体を同じidのまま、階のグラフと共有グラフ（`project.structGraph`）の間で移すこと。降格が他の平面へ作る中心線は新しいidを取り（旧・同id複製＝「分身」方式は廃止）、昇格は他の平面の同座標の中心線を**吸収**する（その平面の参照を通り芯idへ一括置換し中心線を除く）。この一括置換は「一括振り直し（線id）」（`app/src/lineIdRemap.js remapLineIdsInSnapshot`。保存形式のsnapshot全体を1関数で同時置換）で行う。設計意図は`.claude/data-model.md`。
 
 構造モード（`appMode==='structure'`）では「中心」「補助線」（`discipline:'arch'`かつ`labeled:false`）は描画・寸法対象から外れる（データは残る。削除ではない）。構造モードで目印にする浮いた線は梁芯に一本化する設計——つまり構造モードで見えている「中心線のような線」は梁芯。
 

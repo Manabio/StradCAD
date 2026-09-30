@@ -53,7 +53,7 @@ app/src/
 | 昇降機（器具・昇降路・全階連動・階追加時の複製）の設計意図 | `.claude/equipment-model.md` |
 | 展開モード（室内展開図）の設計意図。線分の角の取り合い（L字の外角閉じ。展開図・敷地・階段・柱包み共通）の節を含む | `.claude/elevation-model.md` |
 | 平面の壁取り合い（領域方式への移行） | `.claude/plan-wall-region.md` |
-| 通り芯/中心線の昇格・降格・移動の既知の限界と受容方針（削除はD案＝境界化で解消） | `.claude/cl-conversion-limits.md` |
+| 通り芯/中心線の昇格・降格・移動の既知の限界と受容方針（削除はD案＝境界化、他階同座標チェックは線id一意化＋移籍一本化で解消） | `.claude/cl-conversion-limits.md` |
 | 本番デプロイ | `.claude/deployment.md` |
 | **mdファイル自体を修正するときのルール** | `.claude/doc-policy.md` |
 
