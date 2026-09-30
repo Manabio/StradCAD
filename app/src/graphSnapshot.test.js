@@ -3,16 +3,17 @@ import assert from 'node:assert/strict';
 import {
   Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef,
   DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF, ShaftSoundproof, StairType,
-  ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE,
+  ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE, StructuralMaterialType, edgeKey,
 } from './core.js';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
-  serializeSite, decodeSite, restoreSite, decodeFloorSnapshot,
+  serializeSite, decodeSite, restoreSite, decodeFloorSnapshot, encodeFloorSnapshot,
 } from './graphSnapshot.js';
 import { editSiteLineLength } from './transform/siteEdit.js';
 import { decode, ROOM_FEATURE_ENC, ROOM_FEATURE_DEC } from './schema/graphFbs.js';
 import { base64ToBytes } from './storage/documentFile.js';
 import { BeamAxisOrigin } from './core/centerLine.js';
+import { remapLineIdsInSnapshot, makeFreshLineIdMap, findLineIdOccurrences } from './lineIdRemap.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -1780,4 +1781,164 @@ test('【失敗系】graph.addEquipmentRow({}) は EquipmentRow のコンスト�
   const graph = makeGraph();
   assert.throws(() => graph.addEquipmentRow({}));
   assert.equal(graph.equipmentRows.length, 0, '例外時に半端な行が残らない');
+});
+
+// ---- 線idの一括振り直し・往復テスト ----
+// 壁・部屋（セルキー）・建具・構造材（柱・梁）・refIdで別の線を参照する中心線・
+// extentLoRef/HiRefで別の線を参照する中心線・idをキーにした辞書（柱芯オフセット・CL偏芯・腰壁）を
+// 持つPlanGraphを作り、
+// serializeGraph → decodeFloorSnapshot → makeFreshLineIdMap + remapLineIdsInSnapshot →
+// encodeFloorSnapshot → restoreGraph の往復で、壁・部屋・建具・構造材の本数と幾何が保たれ、
+// 線のidはすべて変わっていて、findLineIdOccurrencesが[]であることを確かめる。
+// 座標はすべて異なる非ゼロ値にする（0どうしの取り違えを座標一致で見逃さないため）。
+function makeGraphForLineIdRemap() {
+  const graph = makeGraph();
+  const x0     = graph.addCenterLine(CenterLineType.VERTICAL,   100,  { labeled: true, discipline: Discipline.ARCH });
+  const x1     = graph.addCenterLine(CenterLineType.VERTICAL,   3100, { labeled: true, discipline: Discipline.ARCH });
+  const xExtra = graph.addCenterLine(CenterLineType.VERTICAL,   6100, { labeled: true, discipline: Discipline.ARCH });
+  const y0     = graph.addCenterLine(CenterLineType.HORIZONTAL, 200,  { labeled: true, discipline: Discipline.ARCH });
+  const y1     = graph.addCenterLine(CenterLineType.HORIZONTAL, 3200, { labeled: true, discipline: Discipline.ARCH });
+  // 別の線をrefIdで参照する中心線（x0から500mmずれた位置に追従する子CL）
+  const xRef = graph.addCenterLine(CenterLineType.VERTICAL, 600, {
+    labeled: false, discipline: Discipline.ARCH, refId: x0.id, refOffset: 500,
+  });
+  // extentLoRef/extentHiRefで別の2本の線を参照する中心線（区間限定の中心線相当）
+  const xSpan = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH,
+    extentLoRef: { clId: x0.id, offset: 0 }, extentHiRef: { clId: xExtra.id, offset: 0 },
+  });
+
+  const wall    = graph.addWall(y0, 75, false, x0, 0, x1, 0, { isExteriorWall: true });
+  const key     = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const room    = graph.addRoom(new Set([key]), 'LDK');
+  const opening = graph.addOpening(y0, 1, false, x0, 1000, 900, OpeningCategory.WINDOW, 'doubleSliding', {});
+  const column  = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x0, y0, {});
+  const beam    = graph.addBeam(StructuralMaterialType.WOOD, 'SEC-BEAM', y0, false, x0, x1, { role: 'primary' });
+  graph.setColumnAxisOffset(x0.id, 15); // idをキーにした辞書（柱芯オフセット）
+  graph.setCLEccentricity(y0.id, { mode: 'value', value: 30, side: 1, backing: '2x4' }); // idをキーにした辞書（CL偏芯）
+  graph.setKneeDropWall(edgeKey(y0.id, x0.id, x1.id), { knee: { topHeight: 1500 }, drop: null });
+
+  return { graph, x0, x1, xExtra, y0, y1, xRef, xSpan, wall, room, opening, column, beam, key };
+}
+
+test('remapLineIdsInSnapshot: 壁・部屋・建具・構造材・refId/extentRef参照CL・id辞書を持つPlanGraphのserializeGraph→remap→restoreGraphの往復で、本数と幾何が保たれ、線idはすべて変わる', () => {
+  const { graph, x0, xExtra, wall, room, opening, column, beam, xRef, xSpan } = makeGraphForLineIdRemap();
+  // 元グラフの「自グラフ固有」の線id全部（makeFreshLineIdMapが1本でも取りこぼすと、その線だけ旧idの
+  // まま残り、下の「線idはすべて変わっている」検査がこの集合との一致で赤くなる）。
+  const originalLineIds = graph.centerLines.map(cl => cl.id);
+
+  const before = {
+    wallCount: graph.walls.length,
+    wallAxisValue: wall.axisCL.effectiveValue,
+    wallStartValue: wall.clStart.effectiveValue,
+    wallEndValue: wall.clEnd.effectiveValue,
+    columnCount: graph.columns.length,
+    beamCount: graph.beams.length,
+    columnAxisValue: column.verticalCL.effectiveValue,
+    columnHorizontalAxisValue: column.horizontalCL.effectiveValue,
+    beamAxisValue: beam.axisCL.effectiveValue,
+    beamStartValue: beam.clStart.effectiveValue,
+    beamEndValue: beam.clEnd.effectiveValue,
+    openingWidth: opening.width,
+    openingAxisValue: opening.axisCL.effectiveValue,
+    columnAxisOffset: graph.columnAxisOffsets.get(x0.id),
+    clEccentricity: { ...graph.clEccentricities.get(wall.axisCL.id) },
+    kneeDropWallCount: graph.kneeDropWalls.size,
+    refCLValue: xRef.effectiveValue,
+    xSpanExtentLoValue: xSpan.extentLo,
+    xSpanExtentHiValue: xSpan.extentHi,
+    // 部屋のセルが指す4本のCLの座標値（順序を保った幾何の指紋）
+    roomCellValues: [...room.cells][0].split(':').map(id => graph.shapeMap.get(id).effectiveValue),
+  };
+
+  const bytes = serializeGraph(graph);
+  const snapshot = decodeFloorSnapshot(bytes);
+  const idMap = makeFreshLineIdMap(snapshot);
+  assert.equal(idMap.size, snapshot.centerLines.length, '前提: 全中心線に新idが割り当てられる');
+
+  const remapped = remapLineIdsInSnapshot(snapshot, idMap);
+  // 事後条件: 旧idが1つも残っていない
+  assert.deepEqual(findLineIdOccurrences(remapped, [...idMap.keys()]), []);
+  // 入力（snapshot）は書き換えられていない
+  assert.notDeepEqual(remapped, snapshot);
+  assert.deepEqual([...snapshot.centerLines.map(c => c.id)], [...idMap.keys()], '入力snapshotの中心線idは元のまま');
+
+  const newBytes = encodeFloorSnapshot(remapped);
+  const restored = makeGraph('p1-restored');
+  restoreGraph(restored, newBytes);
+
+  // 本数
+  assert.equal(restored.walls.length, before.wallCount);
+  assert.equal(restored.columns.length, before.columnCount);
+  assert.equal(restored.beams.length, before.beamCount);
+  assert.equal(restored.rooms.length, 1);
+
+  // 幾何（壁の軸・始終点の座標値）
+  const w2 = restored.walls[0];
+  assert.equal(w2.axisCL.effectiveValue, before.wallAxisValue);
+  assert.equal(w2.clStart.effectiveValue, before.wallStartValue);
+  assert.equal(w2.clEnd.effectiveValue, before.wallEndValue);
+
+  // 幾何（柱・梁の軸のeffectiveValue）
+  const c2 = restored.columns[0];
+  assert.equal(c2.verticalCL.effectiveValue, before.columnAxisValue);
+  assert.equal(c2.horizontalCL.effectiveValue, before.columnHorizontalAxisValue);
+  const b2 = restored.beams[0];
+  assert.equal(b2.axisCL.effectiveValue, before.beamAxisValue);
+  assert.equal(b2.clStart.effectiveValue, before.beamStartValue);
+  assert.equal(b2.clEnd.effectiveValue, before.beamEndValue);
+
+  // 部屋のセル（新idのキーになっているが、指す4本のCLの座標値は不変）
+  const r2 = restored.rooms[0];
+  const restoredCellValues = [...r2.cells][0].split(':').map(id => restored.shapeMap.get(id).effectiveValue);
+  assert.deepEqual(restoredCellValues, before.roomCellValues);
+
+  // 建具
+  const o2 = [...restored.shapeMap.values()].find(s => s.category === OpeningCategory.WINDOW);
+  assert.ok(o2, '復元後に建具が存在する');
+  assert.equal(o2.width, before.openingWidth);
+  assert.equal(o2.axisCL.effectiveValue, before.openingAxisValue);
+
+  // idをキーにした辞書（柱芯オフセット・CL偏芯・腰壁）
+  const newX0Id = idMap.get(x0.id);
+  const newY0Id = idMap.get(wall.axisCL.id);
+  const newX1Id = idMap.get(wall.clEnd.id);
+  assert.equal(restored.columnAxisOffsets.get(newX0Id), before.columnAxisOffset);
+  assert.deepEqual({ ...restored.clEccentricities.get(newY0Id) }, before.clEccentricity);
+  assert.equal(restored.kneeDropWalls.size, before.kneeDropWallCount);
+  assert.equal(restored.kneeDropWalls.has(edgeKey(newY0Id, newX0Id, newX1Id)), true,
+    '腰壁のキーは新idのedgeKeyで引ける');
+
+  // refIdで別の線を参照する中心線: 新x0のidを指し、effectiveValueは不変
+  const xRef2 = restored.shapeMap.get(idMap.get(xRef.id));
+  assert.ok(xRef2);
+  assert.equal(xRef2.refId, newX0Id);
+  assert.equal(xRef2.effectiveValue, before.refCLValue);
+
+  // extentLoRef/extentHiRefで別の2本の線を参照する中心線: 参照先のidが新idへ張り替わり、区間の値は不変
+  const xSpan2 = restored.shapeMap.get(idMap.get(xSpan.id));
+  assert.ok(xSpan2);
+  assert.equal(xSpan2.extentLoRef?.clId, newX0Id);
+  assert.equal(xSpan2.extentHiRef?.clId, idMap.get(xExtra.id));
+  assert.equal(xSpan2.extentLo, before.xSpanExtentLoValue);
+  assert.equal(xSpan2.extentHi, before.xSpanExtentHiValue);
+
+  // 線のidはすべて変わっている（元グラフの自グラフ固有の線id全部が、復元後のどのCLのidにも一致しない）
+  const originalIdSet = new Set(originalLineIds);
+  for (const cl of restored.centerLines) {
+    assert.equal(originalIdSet.has(cl.id), false, `線id ${cl.id} は旧idのままではいけない`);
+  }
+});
+
+test('【失敗系】remapLineIdsInSnapshot: idMapに空文字の旧idがあるとthrow', () => {
+  const { graph } = makeGraphForLineIdRemap();
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  const idMap = new Map([['', 'new-id-1']]);
+  assert.throws(() => remapLineIdsInSnapshot(snapshot, idMap));
+});
+
+test('【失敗系】remapLineIdsInSnapshot: idMapに重複する新idがあるとthrow', () => {
+  const { graph, x0, x1 } = makeGraphForLineIdRemap();
+  const idMap = new Map([[x0.id, 'dup-new-id'], [x1.id, 'dup-new-id']]);
+  assert.throws(() => remapLineIdsInSnapshot(decodeFloorSnapshot(serializeGraph(graph)), idMap));
 });

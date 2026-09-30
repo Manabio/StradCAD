@@ -273,6 +273,11 @@ const G1_ALLOWLIST = {
   'graphSnapshot.js': { count: 2, category: 'not-partner-selection',
     reason: 'restoreStructCLs/applySnapshot。永続化からの全件復元（snapshot.centerLines）——種別を問わず' +
       '全件を作り直す責務のため種別条件を持たない。' },
+  'lineIdRemap.js': { count: 1, category: 'not-partner-selection',
+    reason: 'makeFreshLineIdMap（snapshot.centerLines）。線idの列挙のための走査で、相手選択ではない。' },
+  'lineIdUniqueness.js': { count: 2, category: 'not-partner-selection',
+    reason: 'lineIdsOfSnapshot（snapshot.centerLines）・scanProjectLineIds（project.structGraph.centerLines）。' +
+      'いずれも線idの列挙のための走査で、相手選択ではない。' },
   'openings/openingMove.js': { count: 1, category: 'not-partner-selection',
     reason: 'openingMoveRange。perpendicularWallMaterial が種別を問わずCL上の直交壁材を先に確認する必要が' +
       'あり、種別で絞り込んでからループすると素通りしてしまうため走査APIに畳めない。' },

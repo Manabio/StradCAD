@@ -506,6 +506,17 @@ export function decodeFloorSnapshot(bytes) {
   return applyDocumentCodeNormalization(decode(bytes));
 }
 
+/**
+ * フロアの snapshot（plain object。decodeFloorSnapshot の出力と同形）を FlatBuffers バイト列へ
+ * 戻す（decodeFloorSnapshot の対）。「bytes → decode → 中間オブジェクトの加工 → encode →
+ * restoreGraph」という経路に使う。schema/graphFbs.js encode の薄い再公開（decodePlanes・
+ * decodeSite と同型。store.js が schema/ を直接引かない）。既存の serializeGraph（graph →
+ * bytes）は変えない。
+ */
+export function encodeFloorSnapshot(snapshot) {
+  return encode(snapshot);
+}
+
 // ----------------------------------------------------------------
 // デシリアライズ: Uint8Array | plain object → 通り芯グラフ
 // ----------------------------------------------------------------
