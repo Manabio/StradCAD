@@ -29,5 +29,6 @@
 ## 保存形式
 `Room.feature`の書き出しは`elevatorEquipment`（9）固定。旧5〜8（属性に分類を並べていた頃のev/dw/freightEv/vehicleEv）は読込み時に昇降機へ読み替え、番号は再利用しない（`schema/graphFbs.js`の`ROOM_FEATURE_ENC`/`ROOM_FEATURE_DEC`）。器具行（`EquipmentRow`）は保存データの末尾に追加した。undoの方式は仕上げモードの他の操作と同じ2種類（`.claude/undo-redo.md`「スナップショット方式は2種類」参照）。
 
-## 既知の不良（未修正・原因は未検証）
-設置後に主要構造をS造にすると上階に梁芯がコピーされず、平面と構造モードを行き来するうちに昇降路の梁芯の幅が2000から2190に書き換わる。1階の仕上げモードから設置すると4・5階に壁が出ない。階追加の複製にも同じものが出うる。
+## 上階自動設置は部屋と中心線だけを書く（壁・梁芯は次の境界のsweepが担う）
+`installOnUpperFloor`等の上階自動設置は部屋（昇降路Room）と中心線を書くだけで、壁・梁芯はその場では生成しない——`wallRefresh.js`の`hasNeverBuiltWalls`（sweep対象外ガード）が「部屋も壁も鍵も無い階」だけを対象外にするため、部屋がある限り次の境界（仕上げ脱出の他階・構造脱出・文書読込み等）の`refreshWallsAllFloors`で壁が立つ（2026-09-30再裁定。`.claude/data-model.md`「再生成の起動条件」参照）。構造未定でも開口由来梁芯（規則O）は出す（`structureRules.js`の`UNSPECIFIED_RULES.openingBeamAxes`。柱・梁は生成しない）。
+EVが唯一の部屋である階で梁芯の幅が2000→2190に見えるのは不良ではなく、周壁が外壁になり、開口由来梁芯が外壁の下地帯中心（外壁面は通り芯±60固定。`.claude/structural-model.md`「外壁の面は通り芯±60に固定する」）へ寄るため——全階が壁を持てば全階同位置になる（Node実測: S造 ±95、構造未定 ±97.5）。

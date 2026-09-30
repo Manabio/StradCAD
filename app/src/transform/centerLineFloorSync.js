@@ -170,7 +170,7 @@ export async function findFloorsWhereFootprintBoundary(project, activeGraph, cl)
  * 必要なmaterialMap・遅延チャンク前提のロードを「他階のうちこの通り芯を参照する非屋根階が壁を持つ」
  * ときだけ変更前に行うための判定を、この同じpeekへ相乗りさせる（他階を専用に再peekしない）。
  * この通り芯を一切参照しない階（detachOtherFloorsFromGridCenterLineでskipされる階）・屋根専用平面
- * （isRoofPlane。detachのみで後始末・壁再生成の対象外）・壁を一度も持ったことのない階
+ * （isRoofPlane。detachのみで後始末・壁再生成の対象外）・部屋0件・壁も鍵も無い階
  * （wallRefresh.js hasNeverBuiltWalls）は対象外——参照の無い階まで含めると、materialMap取得・
  * カタログ読込み失敗時に無関係な階を理由に削除自体がERR_CL_DELETE_WALLS_UNAVAILABLEで拒否されうる。
  * 判定はdetachOtherFloorsFromGridCenterLineの参照判定（hasExternalCenterLineReferences ||

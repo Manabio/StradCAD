@@ -23,16 +23,23 @@ import { recomputeActiveStructural, reflectStructuralToOtherFloors } from './str
 import { ERR_CATALOG_DUPLICATE } from './error.js';
 
 /**
- * 壁を一度も持ったことのない階か（wallFreshnessKey未設定かつ壁0本＝仕上げモード未着手）。
- * refreshWallsForGraph 自身の sweep 対象外ガード（裁定案A）と、
+ * 壁の材料（部屋）が無く、壁も鍵も無い階か（wallFreshnessKey未設定かつ壁0本かつ部屋0件）。
+ * refreshWallsForGraph 自身の sweep 対象外ガード（裁定案A→2026-09-30再裁定）と、
  * transform/centerLineOps.js deleteCenterLineWithUndo が壁再生成に必要な実I/O
  * （materialMapロード・resolveStairContext用の下階peek）を変更前に前倒しする際、この階を
  * 早期に除外して無駄なI/Oを避けるために共有する単一の判定（QA指摘H1/H2/M1是正・2026-09-27）。
+ * 【2026-09-30再裁定】旧判定は「wallFreshnessKey未設定かつ壁0本」だけで対象外にしていたが、
+ * 他階の自動設置（昇降機の上階自動設置・階段の上階自動設置・階追加時の複製）が部屋だけを書いて
+ * 壁を書かない階（例: 昇降路Roomのみの上階）まで対象外に含んでしまい、その階の壁・梁芯が
+ * 永久に生成されない不良になっていた（EV-test1.stq 2〜5階）。部屋（壁の材料）が1つでもあれば
+ * 次の境界で壁を持てるべきなので、対象外にするのは「部屋も壁も鍵も無い階」だけに絞る
+ * （吹抜け・階段吹抜けだけの階も部屋を持つため対象——在来木造でその階の柱が壁交点方式へ
+ * 切り替わるのは規則どおりで良い、と再裁定済み）。
  * @param {object} graph
  * @returns {boolean}
  */
 export function hasNeverBuiltWalls(graph) {
-  return graph.wallFreshnessKey == null && graph.walls.length === 0;
+  return graph.wallFreshnessKey == null && graph.walls.length === 0 && graph.rooms.length === 0;
 }
 
 /**
@@ -48,7 +55,7 @@ export function hasNeverBuiltWalls(graph) {
  *   wallFreshnessKey は下地材コード・実効主構造・部屋の壁材/壁仕上げだけを入力にしており CL位相
  *   （部屋の分割・併合）を含まないため、CL削除で壁の形が変わっても鍵が一致したままになりうる——
  *   transform/centerLineOps.js deleteCenterLineWithUndo が削除直後の壁再生成でこれを force:true
- *   で呼ぶ。hasNeverBuiltWalls の「壁を一度も持ったことのない階」ガードは force でも対象外のまま）。
+ *   で呼ぶ。hasNeverBuiltWalls の「部屋0件・壁も鍵も無い階」ガードは force でも対象外のまま）。
  * @param {typeof regenerateWalls} [opts.regenerateWallsFn=regenerateWalls] - テスト用の差し替え
  *   （既定は finish/wallRegeneration.js の regenerateWalls。変更後の区間で例外が起きた場合の
  *   呼び出し元の巻き戻しを検証するための注入口——QA指摘H1のテスト9）。
@@ -57,12 +64,16 @@ export function hasNeverBuiltWalls(graph) {
 export async function refreshWallsForGraph(
   graph, project, getMaterialMap, { peek, pushUndo, force = false, regenerateWallsFn = regenerateWalls },
 ) {
-  // 壁を一度も持ったことのない階は sweep の対象外にする（裁定案A。hasNeverBuiltWalls参照）。
-  // conformWoodBacking も走らせず鍵も書かない——仕上げモードに入って脱出したときに初めて壁を
-  // 持つ、という現状の挙動を変えない。壁0本のまま regenerateWalls を走らせて壁を新規生成すると、
-  // woodAutoFill.js の autoFillWoodColumns が「壁が交点方式に切り替わった」とみなし、壁の無い階の
-  // 通り芯交点auto柱を保全する裁定（2026-09-14「壁が無い階は生成も撤去もしない（既存の柱を保全）」）
-  // が外れて無通知に撤去される。
+  // 部屋も壁も鍵も無い階（壁の材料が無い）は sweep の対象外にする（hasNeverBuiltWalls参照。
+  // 2026-09-30再裁定）。部屋が0件なら regenerateWalls を走らせても壁は1本も生成されない
+  // （壁は部屋領域の外周・内部境界にしか立たない）ため、このガードが無くても壁が増えることは
+  // 無い——ここで早期returnする理由は、それでも走ってしまう無駄なI/O（conformWoodBacking・
+  // materialMapロード・鍵の書込み・他階ならsaveFloor）を避けるため（QA指摘H1/H2/M1是正・
+  // 2026-09-27）。柱保全の裁定（2026-09-14「壁が無い階は生成も撤去もしない（既存の柱を保全）」）は
+  // 別の話——woodAutoFill.js の autoFillWoodColumns 自身が壁区間0本（segments.length===0）で
+  // 早期returnするガードを持つため、部屋の有無に関わらず壁が無ければ柱は保全される（このガードが
+  // なくても柱が撤去されることはない）。部屋が他階の自動設置（昇降機・階段・階追加）で書かれた階は、
+  // 部屋がある＝壁の材料があるため対象外にせず、次のこの境界で壁を持つ（2026-09-30裁定）。
   if (hasNeverBuiltWalls(graph)) return false;
 
   // 在来木造: 共通仕様の壁下地材を柱同寸×30へ自動選択する（従来 runFinishEntryBoundary と同じ

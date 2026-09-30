@@ -2327,9 +2327,17 @@ test('deleteCenterLineWithUndo: 通り芯（struct分岐）でも部分指定に
   assert.equal(new Set(positions).size, positions.length, `同位置の外壁重複が無いはず（実際:${JSON.stringify(positions)}）`);
 });
 
-test('deleteCenterLineWithUndo: 壁を一度も持ったことのない階（wallFreshnessKey未設定・壁0本）では壁再生成が走らない（materialMapもロードされない）', async () => {
+test('deleteCenterLineWithUndo: 部屋0件・壁も鍵も無い階（壁の材料が無い）では壁再生成が走らない（materialMapもロードされない）', async () => {
+  // 2026-09-30再裁定: hasNeverBuiltWalls は「部屋0件」も条件に加わったため、
+  // addAdjacentRoomsWithWalls（部屋2件）はこのケースを再現できない——部屋を1つも作らない
+  // フィクスチャに差し替える（元の意図＝「不要なmaterialMapロードを避ける」はそのまま保つ）。
   const { project, graph } = makeProjectWithGraph();
-  const { xm } = addAdjacentRoomsWithWalls(graph); // regenerateWallsを一度も通していない
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,    opts);
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 4000, opts);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opts);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, opts);
 
   let loadCalls = 0;
   const { toast } = await deleteCenterLineWithUndo(graph, project, xm, {
@@ -2339,7 +2347,27 @@ test('deleteCenterLineWithUndo: 壁を一度も持ったことのない階（wal
   assert.equal(toast, null);
   assert.equal(graph.shapeMap.has(xm.id), false);
   assert.equal(graph.walls.length, 0, '壁は生成されない');
-  assert.equal(loadCalls, 0, '未脱出階はforce再生成の対象外のため、materialMapのロード自体が起きないはず');
+  assert.equal(loadCalls, 0, '部屋の無い階（壁の材料が無い）はforce再生成の対象外のため、materialMapのロード自体が起きないはず');
+});
+
+test('deleteCenterLineWithUndo: 部屋はあるが壁を一度も持ったことのない階（wallFreshnessKey未設定・壁0本）では壁再生成が走る（2026-09-30再裁定）', async () => {
+  // 昇降機・階段の上階自動設置は部屋だけを書き壁を書かない——その階が次の境界（本関数の削除）で
+  // 壁を持てることを固定する回帰テスト。
+  const { project, graph } = makeProjectWithGraph();
+  const { xm } = addAdjacentRoomsWithWalls(graph); // regenerateWallsを一度も通していない（部屋2件・壁0本・鍵null）
+  assert.equal(graph.wallFreshnessKey, null, '前提: 未脱出階（鍵null）');
+  assert.equal(graph.walls.length, 0, '前提: 壁0本');
+  assert.ok(graph.rooms.length > 0, '前提: 部屋は存在する');
+
+  let loadCalls = 0;
+  const { toast } = await deleteCenterLineWithUndo(graph, project, xm, {
+    loadMaterialMapFn: () => { loadCalls++; return loadMaterialMap(); },
+  });
+
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(xm.id), false);
+  assert.ok(loadCalls > 0, '部屋がある階は壁再生成の対象になるためmaterialMapがロードされる');
+  assert.ok(graph.walls.length > 0, '壁が生成される');
 });
 
 test('deleteCenterLineWithUndo: 補助線の削除では壁再生成が走らない（materialMapもロードされない）', async () => {

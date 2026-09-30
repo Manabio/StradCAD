@@ -521,7 +521,7 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
 
     // resolveStairContext用の1つ下の実体階をpeekする（非struct分岐のbelowPlaneForStairsと同じ理由）。
     // QA指摘H1/H2/M1/M1'是正: struct分岐は壁を持つ限り常に壁再生成の対象（canCarryWalls相当が
-    // 常にtrue）のため、壁を一度も持っていない階（hasNeverBuiltWalls）でなければ、materialMap
+    // 常にtrue）のため、部屋0件・壁も鍵も無い階（hasNeverBuiltWalls）でなければ、materialMap
     // 取得・モジュール事前読込み（makeWallRegenPrereqTask）・resolveStairContext用の下階peek
     // （cachedPeekのウォームアップ）も同じawaitゾーンにまとめる。ステップ4・ルール2是正: 他階にも
     // 壁再生成が要る階がある（blockingFloors.anyOtherFloorNeedsWallRegen）場合もここでmaterialMapを
@@ -779,8 +779,8 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   // 下階の壁区間が要る——中心線削除のときだけ、その主構造ルールのときだけ下階をpeekする
   // （RC造・非生成主構造でIDBを無駄に読まない。opts.peekBelowはテスト用の差し替え）。
   const needsBelowPeek = canCarryWalls && rulesFor(effectiveStructure(graph, project)).wallBeamAxes === 'selfAndBelow';
-  // QA指摘H1/H2/M1/M1'是正（2026-09-27）: canCarryWallsの削除は壁再生成の対象になりうるため、壁を
-  // 一度も持っていない階（hasNeverBuiltWalls）でなければ、materialMap取得・モジュール事前読込み
+  // QA指摘H1/H2/M1/M1'是正（2026-09-27）: canCarryWallsの削除は壁再生成の対象になりうるため、
+  // 部屋0件・壁も鍵も無い階（hasNeverBuiltWalls）でなければ、materialMap取得・モジュール事前読込み
   // （makeWallRegenPrereqTask）・resolveStairContext用の下階peek（cachedPeekのウォームアップ）も、
   // この下階peek（needsBelowPeek）と同じawaitゾーンにまとめて変更前に済ませる（struct分岐と
   // 同じ設計。詳細は関数冒頭のコメント参照）。

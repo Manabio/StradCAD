@@ -14,10 +14,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runInAction } from 'mobx';
-import { Project, CenterLineType, Discipline, StructuralMaterialType, centerLineKind } from './core.js';
+import { Project, CenterLineType, Discipline, StructuralMaterialType, RoomFeature, centerLineKind } from './core.js';
 import { undoManager } from './undoManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
-import { refreshWallsAllFloors, refreshWallsForGraph } from './wallRefresh.js';
+import { refreshWallsAllFloors, refreshWallsForGraph, hasNeverBuiltWalls } from './wallRefresh.js';
 import { regenerateWalls, loadMaterialMap } from './finish/wallRegeneration.js';
 import { wallFreshnessKey, WALL_KEY_VERSION } from './finish/wallFreshnessKey.js';
 import { recomputeStructuralForGraph } from './structural/structuralRecompute.js';
@@ -25,6 +25,8 @@ import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { conformWoodBacking } from './structural/woodAutoFill.js';
 import { assignNumbers, applyNumbers } from './structural/memberNumbering.js';
 import { ERR_CATALOG_DUPLICATE } from './error.js';
+import { serializeGraph } from './graphSnapshot.js';
+import { makeStorePeek, makeStoreSave, decodeFloor } from './finish/equipment/equipmentTestFixtures.js';
 
 function makeSinglePlaneProject() {
   const project = new Project('proj', 'test');
@@ -268,8 +270,8 @@ test('【ステップ2結合・M2】conformWoodBacking→regenerateWalls→recom
   assert.equal(cornerCount, 4, '前提: 建物四隅（両軸とも外壁）の柱が4本あるはず');
 });
 
-// ---- S4-1裁定（壁0本・鍵nullの階はsweep対象外）により、壁0本・鍵nullの「未脱出」フィクスチャは
-// もう refreshWallsAllFloors で壁を持てない。「一度は仕上げモードを通って壁を持った階」を
+// ---- S4-1裁定（部屋0件・壁0本・鍵nullの階はsweep対象外）により、部屋0件・壁0本・鍵nullの
+// 「未脱出」フィクスチャはもう refreshWallsAllFloors で壁を持てない。「一度は仕上げモードを通って壁を持った階」を
 // 直接 regenerateWalls＋鍵書込みで再現する（finishBoundary.js を経由すると、その内部の
 // refreshWallsAllFloors【skipActive:true】呼び出しが他階へ波及し実IDBに触れてしまうため、
 // より低レベルの原型プリミティブ2つだけを使う）。
@@ -316,16 +318,49 @@ test('refreshWallsForGraph: force:trueなら鍵一致でも壁を作り直す（
     '壁は全削除→再生成されるため、force再生成後は旧壁idが1つも残らないはず');
 });
 
-test('refreshWallsForGraph: forceでも壁を一度も持ったことのない階（鍵null・壁0本）は対象外のまま', async () => {
-  const { project, graph } = makeSinglePlaneProject();
-  addRectRoom(graph); // regenerateWallsを一度も通していない→wallFreshnessKey=null・walls.length=0
+test('refreshWallsForGraph: forceでも部屋0件・壁も鍵も無い階（壁の材料が無い）は対象外のまま', async () => {
+  // 2026-09-30再裁定: hasNeverBuiltWalls は「部屋0件」も条件に加わったため、addRectRoom
+  // （部屋1件）を使う旧フィクスチャではこのケース（対象外のまま）を再現できない——部屋を
+  // 1つも作らないフィクスチャに差し替える（元の意図＝裁定案Aの主張はそのまま保つ）。
+  const { project, graph } = makeSinglePlaneProject(); // regenerateWallsを一度も通していない→部屋0件・wallFreshnessKey=null・walls.length=0
   let loadCalls = 0;
   const changed = await refreshWallsForGraph(graph, project, () => { loadCalls++; return loadMaterialMap(); }, {
     peek: async () => null, pushUndo: false, force: true,
   });
-  assert.equal(changed, false, '未脱出階はforceでも対象外のまま（裁定案Aを崩さない）');
+  assert.equal(changed, false, '部屋の無い未脱出階はforceでも対象外のまま（裁定案Aを崩さない）');
   assert.equal(graph.walls.length, 0);
   assert.equal(loadCalls, 0, 'materialMapのロードすら行われないはず（鍵比較より前の壁0本ガードで早期returnする）');
+});
+
+test('refreshWallsForGraph: 部屋はあるが壁を一度も持ったことのない階（鍵null・壁0本）はforceで対象になる（2026-09-30再裁定）', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  addRectRoom(graph); // regenerateWallsを一度も通していない→部屋1件・wallFreshnessKey=null・walls.length=0
+  let loadCalls = 0;
+  const changed = await refreshWallsForGraph(graph, project, () => { loadCalls++; return loadMaterialMap(); }, {
+    peek: async () => null, pushUndo: false, force: true,
+  });
+  assert.equal(changed, true, '部屋がある階は対象になる（部屋＝壁の材料があるため）');
+  assert.ok(graph.walls.length > 0, '壁が生成される');
+  assert.ok(loadCalls > 0, 'materialMapがロードされる');
+});
+
+// 裁定1（吹抜けだけの階も部屋を持つため対象）を直接固定する回帰テスト。
+test('refreshWallsForGraph: 吹抜け（RoomFeature.VOID）だけの階（鍵null・壁0本）はsweep対象になり鍵が書かれる', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  const room = addRectRoom(graph, '吹抜け');
+  room.setFeature(RoomFeature.VOID);
+  assert.equal(graph.wallFreshnessKey, null, '前提: 鍵null');
+  assert.equal(graph.walls.length, 0, '前提: 壁0本');
+  assert.ok(graph.rooms.length > 0, '前提: 部屋（吹抜け）あり');
+
+  let loadCalls = 0;
+  const changed = await refreshWallsForGraph(graph, project, () => { loadCalls++; return loadMaterialMap(); }, {
+    peek: async () => null, pushUndo: false, force: true,
+  });
+
+  assert.equal(changed, true, '吹抜けだけの階も部屋を持つため対象になる');
+  assert.ok(loadCalls > 0, 'materialMapがロードされる');
+  assert.ok(graph.wallFreshnessKey != null, '鍵が書かれる');
 });
 
 // ---- 2. 主構造を変える→自階の壁が再生成され鍵が更新・undoで壁と鍵が戻る ----
@@ -465,21 +500,24 @@ test('refreshWallsAllFloors: 主構造を切り替えて戻しても壁交点柱
   assert.equal(columnsUnspecified, columnsWood, 'このフィクスチャでは未定でも同じ交点に柱が立つ（実測）');
 });
 
-// ---- S4-1回帰（自階）: 壁0本・鍵null（未脱出階）はsweep対象外 ----
-// 裁定案A: graph.wallFreshnessKey==null && graph.walls.length===0 の階は「まだ一度も壁を
-// 持ったことのない階」としてsweep対象外にする（conformWoodBackingも走らせない・鍵も書かない）。
-// woodAutoFill.js の「壁0本の階は柱を保全」裁定（2026-09-14）と整合させるための回帰テスト
-// ——このガードが無いと、壁のあるコード経路に切り替わったとみなされ既存のauto柱が無通知に
-// 撤去される（QA実測: moku1.stq 3階で通り芯交点auto柱35→4）。
-test('【S4-1回帰・自階】refreshWallsAllFloors: 壁0本・鍵null（未脱出階）の自階はsweep対象外——既存のauto柱を保全し壁も鍵も変えない', async () => {
+// ---- S4-1回帰（自階）: 部屋0件・壁0本・鍵null（未脱出階）はsweep対象外 ----
+// 裁定案A→2026-09-30再裁定: graph.rooms.length===0 && graph.wallFreshnessKey==null &&
+// graph.walls.length===0 の階は「部屋（壁の材料）も壁も鍵も無い階」としてsweep対象外にする
+// （conformWoodBackingも走らせない・鍵も書かない）。woodAutoFill.js の「壁0本の階は柱を保全」
+// 裁定（2026-09-14）と整合させるための回帰テスト——このガードが無いと、壁のあるコード経路に
+// 切り替わったとみなされ既存のauto柱が無通知に撤去される（QA実測: moku1.stq 3階で通り芯交点
+// auto柱35→4）。
+test('【S4-1回帰・自階】refreshWallsAllFloors: 部屋0件・壁0本・鍵null（未脱出階）の自階はsweep対象外——既存のauto柱を保全し壁も鍵も変えない', async () => {
   const { project, graph } = makeSinglePlaneProject();
   graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
-  // 実データのstairVoidのみの階（壁0本）でも既存の柱が残っているケースを再現する。
+  // 部屋0件の階（通り芯と柱だけ）でも既存の柱が残っているケースを再現する（吹抜けだけの階は
+  // 部屋を持つため今回の裁定では対象——このフィクスチャは部屋を1つも作らない「部屋0件」限定）。
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,   { labeled: false, discipline: Discipline.ARCH });
   const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
   graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x0, y0);
   assert.equal(graph.wallFreshnessKey, null, '前提: 未脱出階（鍵null）');
   assert.equal(graph.walls.length, 0, '前提: 壁0本');
+  assert.equal(graph.rooms.length, 0, '前提: 部屋0件');
 
   const result = await refreshWallsAllFloors(project, {
     pushUndo: true,
@@ -492,11 +530,11 @@ test('【S4-1回帰・自階】refreshWallsAllFloors: 壁0本・鍵null（未脱
   assert.equal(graph.wallFreshnessKey, null, '鍵も書かれない');
 });
 
-// ---- S4-1回帰（他階）: 他階が壁0本・鍵null（未脱出階）でもsweep対象外 ----
-test('【S4-1回帰・他階】refreshWallsAllFloors: 他階が壁0本・鍵null（未脱出階）ならsweep対象外——saveFloorされず既存auto柱も保全される', async () => {
+// ---- S4-1回帰（他階）: 他階が部屋0件・壁0本・鍵null（未脱出階）でもsweep対象外 ----
+test('【S4-1回帰・他階】refreshWallsAllFloors: 他階が部屋0件・壁0本・鍵null（未脱出階）ならsweep対象外——saveFloorされず既存auto柱も保全される', async () => {
   const project = new Project('proj', 'test');
   const { graph: g1 } = project.addPlane(0, '1階', 'p1'); // アクティブ（鍵一致・無変化）
-  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 未脱出階（壁0本・鍵null）
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 未脱出階（部屋0件・壁0本・鍵null）
   project.activePlaneId = 'p1';
   addRectRoom(g1, '1F');
   await seedInitialWalls(g1, project); // g1は鍵一致（変化なし）のままにする——他階側の判定だけを見る
@@ -506,6 +544,7 @@ test('【S4-1回帰・他階】refreshWallsAllFloors: 他階が壁0本・鍵null
   g2.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', x0, y0);
   assert.equal(g2.wallFreshnessKey, null, '前提: p2は未脱出階（鍵null）');
   assert.equal(g2.walls.length, 0, '前提: p2は壁0本');
+  assert.equal(g2.rooms.length, 0, '前提: p2は部屋0件');
 
   const peekMap = { p1: g1, p2: g2 };
   const peek = async (plane) => peekMap[plane.id] ?? null;
@@ -525,8 +564,57 @@ test('【S4-1回帰・他階】refreshWallsAllFloors: 他階が壁0本・鍵null
   }
 });
 
+// ---- 2026-09-30再裁定: 他階の自動設置（昇降機・階段等）が部屋だけを書いた階はsweep対象になる ----
+// EV-test1.stq（昇降機の上階自動設置）の再現。上階自動設置は昇降路Roomと中心線を書くだけで壁は
+// 書かないため、旧判定（hasNeverBuiltWalls=鍵null&&壁0本）だとこの階は永久にsweep対象外だった。
+// 新判定は「部屋（壁の材料）が無い」も条件に加えたため、部屋がある限りsweep対象になる。
+// peekはmakeStorePeek（本番同型: PlanGraph→_structGraph→restoreGraph）を使う——生きたグラフを
+// 返すスタブでは復元時に捨てられる状態を検出できない（team-lessons参照）。
+// 【RoomFeature.ELEVATOR_EQUIPMENT を付けない理由】昇降路Room（isShaftFeature）を置くと
+// floorOpeningEdges経由で規則O（開口由来梁芯）が発火し、reflectStructuralToOtherFloorsが
+// 既定のctx無しで非アクティブ階(p2)の構造再計算をstorage/db.js saveFloor（実IndexedDB）へ
+// 直接保存しようとして単体テストで落ちる（本ファイルは実DBもfake-indexeddbも持たない）。
+// 本テストの対象は壁再生成のsweep判定（wallRefresh.js）だけなので、通常の部屋で代用する
+// （EV固有の規則O連動はEVアップロードのprobe—scripts/probe/evUpperFloorProbe.mjs—で別途検証する）。
+test('refreshWallsAllFloors: 他階が「鍵null・壁0本・部屋あり」ならsweep対象になり、壁が立ち鍵が書かれる（2026-09-30再裁定）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1'); // アクティブ（鍵一致・無変化）
+  const { plane: p2, graph: g2 } = project.addPlane(3000, '2階', 'p2'); // 他階の自動設置で部屋だけ書かれた階を模す
+  project.activePlaneId = 'p1';
+  addRectRoom(g1, '1F');
+  await seedInitialWalls(g1, project); // g1は鍵一致のまま（他階側の判定だけを見る）
+
+  // p2: 部屋（2000角の独立部屋。昇降路と同じく壁も鍵も無い）だけを持つ。
+  addRectRoom(g2, '2F');
+  assert.equal(g2.wallFreshnessKey, null, '前提: p2は鍵null');
+  assert.equal(g2.walls.length, 0, '前提: p2は壁0本');
+  assert.equal(hasNeverBuiltWalls(g2), false, '前提: 部屋があるためhasNeverBuiltWallsはfalse（新判定）');
+
+  const store = new Map([[p2.id, serializeGraph(g2)]]);
+  const saveLog = [];
+  const peek = makeStorePeek(project, store);
+  const saveFloorFn = makeStoreSave(store, saveLog);
+  const originalPeek = floorSwapManager.peek;
+  // reflectStructuralToOtherFloors はシングルトンの floorSwapManager.peek を直接呼ぶため、
+  // 注入用peekと同じ store を読む形へ差し替える（既存テスト「S4-1回帰・他階」と同じ手法）。
+  floorSwapManager.peek = async (plane, structGraph) => peek(plane, structGraph);
+  try {
+    const result = await refreshWallsAllFloors(project, { pushUndo: false, peek, saveFloorFn });
+
+    assert.deepEqual(result.changedPlaneIds, ['p2'], 'p2がsweepで変更される（部屋があるためsweep対象）');
+    assert.deepEqual(saveLog, ['p2'], 'p2がsaveFloorされる');
+
+    const decoded = decodeFloor(project, p2, store.get('p2'));
+    assert.ok(decoded.walls.length > 0, '復号したp2に壁が立つ');
+    assert.ok(decoded.walls.some(w => w.isExteriorWall), '外壁が含まれる（昇降路の周壁は外壁になる）');
+    assert.ok(decoded.wallFreshnessKey != null, '鍵が書かれる');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
 // ---- QA V4: 壁0本でも鍵が既にある階はsweep対象（S4-1ガードとの境界線）----
-// S4-1ガードは「wallFreshnessKey==null かつ 壁0本」の階だけを対象外にする。鍵が既にある
+// S4-1ガードは「部屋0件 かつ wallFreshnessKey==null かつ 壁0本」の階だけを対象外にする。鍵が既にある
 // （null ではない）壁0本の階（実運用では屋外部屋のみ等、regenerateWallsがregenerated:trueでも
 // 壁0本になりうる経路がある）はsweep対象のまま——conformWoodBacking・regenerateWallsは走り、
 // 鍵は現在の入力に基づき更新される。壁が無いためwoodAutoFill.jsの「壁0本の階は柱を保全」

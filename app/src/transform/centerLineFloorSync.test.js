@@ -278,26 +278,45 @@ test('findFloorsBlockingGridDeletion: 他階が外壁線を担っていればfoo
 test('findFloorsBlockingGridDeletion: anyOtherFloorNeedsWallRegenはこの通り芯を参照する他階が壁を持てばtrue（QA指摘10で見直し・参照の無い階は対象外）', async () => {
   const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
-  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]); // 参照なし・壁0本・鍵未設定＝hasNeverBuiltWalls:true
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]); // 参照なし・部屋0件・壁0本・鍵未設定＝hasNeverBuiltWalls:true
 
   const noRef = await withPeekOverride(project, store, () => findFloorsBlockingGridDeletion(project, activeGraph, cl));
   assert.equal(noRef.anyOtherFloorNeedsWallRegen, false, '前提: この通り芯を参照しない他階だけならfalse');
 
-  // 部屋セルの辺にこの通り芯を持たせて参照ありにする（referencesClInCellsOrRecords。壁は置かない
-  // ——hasNeverBuiltWallsは壁0本のままにしたいため）。geometryは無関係——文字列としてclIdを
-  // 含むキーであればよい（他階版findUnresolvableCellsの副作用でunresolvablePlanesにも入りうるが、
-  // 本テストの対象はanyOtherFloorNeedsWallRegenのみ）。
+  // 部屋を作らずに参照だけを持たせる（referencesClInCellsOrRecords。2026-09-30再裁定で
+  // hasNeverBuiltWalls が「部屋0件」も条件に加わったため、部屋セルで参照を作ると
+  // rooms.length>0 になり本ケース（未脱出階のまま）を再現できない——除外集合キーで参照する）。
+  // geometryは無関係——文字列としてclIdを含むキーであればよい。
   const cellKey = `x:y:${cl.id}:z`;
-  otherGraph.addRoom(new Set([cellKey]), '部屋');
+  otherGraph.excludedColumnSlots.add(cellKey);
   const storeRefOnly = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
   const refButNoFreshness = await withPeekOverride(project, storeRefOnly, () => findFloorsBlockingGridDeletion(project, activeGraph, cl));
   assert.equal(refButNoFreshness.anyOtherFloorNeedsWallRegen, false,
-    '参照があっても壁を一度も持ったことのない階（wallFreshnessKey未設定・壁0本）ならfalse');
+    '参照があっても部屋0件・壁も鍵も無い階（wallFreshnessKey未設定・壁0本・部屋0件）ならfalse');
 
   otherGraph.setWallFreshnessKey('dummy'); // 壁0本でも鍵さえ設定されていればhasNeverBuiltWallsは偽になる
   const store2 = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
   const after = await withPeekOverride(project, store2, () => findFloorsBlockingGridDeletion(project, activeGraph, cl));
   assert.equal(after.anyOtherFloorNeedsWallRegen, true, 'この通り芯を参照し、壁を持ったことのある他階が1つでもあればtrue');
+});
+
+// 2026-09-30再裁定: hasNeverBuiltWallsが「部屋0件」も条件に加わったため、部屋がある他階
+// （壁0本・鍵null＝他階の自動設置で部屋だけ書かれた階を模す）は対象外にならずtrueになる。
+test('findFloorsBlockingGridDeletion: 参照あり・部屋あり・壁0本・鍵null の他階は anyOtherFloorNeedsWallRegen=true（2026-09-30再裁定）', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+
+  // この通り芯の id を含むセルの部屋を1つ置く（壁なし・鍵null＝他階の自動設置を模す）。
+  const cellKey = `x:y:${cl.id}:z`;
+  otherGraph.addRoom(new Set([cellKey]), '部屋');
+  assert.equal(otherGraph.walls.length, 0, '前提: 他階は壁0本');
+  assert.equal(otherGraph.wallFreshnessKey, null, '前提: 他階は鍵null');
+  assert.ok(otherGraph.rooms.length > 0, '前提: 他階は部屋あり');
+
+  const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+  const result = await withPeekOverride(project, store, () => findFloorsBlockingGridDeletion(project, activeGraph, cl));
+  assert.equal(result.anyOtherFloorNeedsWallRegen, true,
+    '部屋がある他階は壁0本・鍵nullでもhasNeverBuiltWallsがfalseになるため対象');
 });
 
 // ---- 発見④・ユーザー裁定・案A・2026-09-25: absorbWallBeamAxesOnPromote ----
