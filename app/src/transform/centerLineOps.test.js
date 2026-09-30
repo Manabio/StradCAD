@@ -34,6 +34,7 @@ import { findWallBeamAxisCL, wallBeamSourcesFor } from '../structural/wallBeamAx
 import { openingBeamSourcesFor, autoFillOpeningBeamAxes } from '../structural/openingBeamAxes.js';
 import { getAllCells } from '../finish/gridCells.js';
 import { findFloorsBlockingGridDeletion } from './centerLineFloorSync.js';
+import { withProductionPeek, decodeFloor } from './centerLineTestFixtures.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -6079,33 +6080,6 @@ function makeTwoFloorsWithGridCL() {
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
   return { project, p1, p2, y0, y3, cl };
-}
-
-// 本番同型 peek（IDBの代わりに Map ストアを読む）＋ saveFloorFn（Map ストアへ書く）を差し替える共通ヘルパ。
-function withProductionPeek(project, store, fn) {
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => {
-    const g = new PlanGraph(plane);
-    g._structGraph = project.structGraph;
-    const bytes = store.get(plane.id);
-    if (bytes) restoreGraph(g, bytes);
-    return g;
-  };
-  return (async () => {
-    try {
-      return await fn();
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
-  })();
-}
-
-// store に保存されたバイト列を、peek と同じ手順で復号する（decode ヘルパは saveFloorFn 観測テストで前例あり）。
-function decodeFloor(project, plane, bytes) {
-  const tmp = new PlanGraph(plane);
-  tmp._structGraph = project.structGraph;
-  if (bytes) restoreGraph(tmp, bytes);
-  return tmp;
 }
 
 test('demoteGridToCenterWithUndo: 他階でその通り芯を軸にする壁・開口は降格後も残り、軸は複製された中心線に解決される（本番同型peek）', async () => {
