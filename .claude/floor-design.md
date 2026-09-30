@@ -31,3 +31,8 @@ awaitをまたいでgraph／IDBを書くUI入口（層2）は`uiBusy.js`の`runB
 - **中間状態を観測者に見せない**——次階の復元・現階のクリア・アクティブ切替を1つの`runInAction`で同期確定する。「アクティブ階だけ切り替わって中身がまだ空」「中身は復元済みだがアクティブ階が古いまま」のどちらも一度も観測されてはならない（崩れると`renderer/gutterLabelHits.js`のようにフロア切替中の一瞬だけ空データを描画する箇所が事故る）。
 - **失敗時は現階を巻き込まない**——保存・読込みの失敗／安定しない／復元先の壊れたバイト列のいずれも、現階を元の内容のまま・アクティブも変えずauto-saveを再開してrethrowする。
 - **次階への横からの書込みを世代で検知する**——`floorWriteGeneration`で次階の読込み内容が最新かどうかを確認し、割り込みがあれば読み直す。
+
+## 階の追加・削除が他の階へ波及する処理
+階追加（`App.jsx`の`syncNewFloorFromSource`）は、階段同期（`syncUpperFloorsAuto`）→昇降機の複製（`copyElevatorsToNewFloor`）→外壁内側の部屋の自動追加（`addNewFloorRoomFromSource`）の順で行う——階段同期の後にすることで新階にできた階段・階段吹抜けを昇降機の衝突判定の相手にでき、部屋の自動追加の前にすることで昇降路のセルが新階の部屋領域から自然に除外される（部屋は割当済みセルを除いて作るため）。直下階＝採用階だけを`elevation`昇順に見た新階の1つ下（下方向への追加はこの同期を呼ばない）。階追加全体は前後比較で1つのundoエントリに記録する（`.claude/undo-redo.md`「階追加は～」節）ため、複製・自動追加はいずれも個別のundoエントリを持たない。
+
+階削除（`App.jsx`の`runDeleteFloor`）は、削除する階が持っていた昇降機の器具行のidを削除前に読み（`readFloorEquipmentIds`）、`removeFloor`の後、直下階の階段削除（`removeStairsOnFloor`）・右側の採用階の階番号振り直しという既存の後始末をすべて終えてから、最後に全階から消えた器具があれば番号を建物全体で詰め直す（`renumberEquipmentAfterFloorRemoval`）——再採番の失敗が既存の後始末を巻き込まないようにする順序。いずれもundo対象外（現行の階削除の扱いに従う）。器具・昇降路の詳細は`.claude/equipment-model.md`参照。
