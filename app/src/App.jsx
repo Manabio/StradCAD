@@ -35,10 +35,11 @@ import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP, UNNUMBERED_TAG } from './structural/memberCatalog.js';
 import { CenterLineType, OpeningCategory } from '@core';
 import { isHitTestTarget } from './core/centerLineKindPolicy.js';
-import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
+import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
   floorBytesEqual, applyFloorBytes, blocksFloorRemoval,
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
+  computeFloorDeleteReorder, computeFloorInsert, applyFloorInsert, collectPlaneMetas, applyPlaneMetas,
 } from './floorOps.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { buildFloorChipModel } from './ui/floorChipModel.js';
@@ -1149,9 +1150,14 @@ const App = observer(() => {
   }
 
   // 階追加フロー全体（addFloor＋新階への同期＋切替＋全階の構造反映）を実行し、
-  // 1つの undo エントリとして記録する。
-  //   undo: 追加階に居れば元の階へ戻り、追加階を削除し、同期・構造反映で変わった既存階を元へ戻す
-  //   redo: 同じ planeId で階を作り直し、追加後状態の bytes を IDB へ書き戻して再度切り替える
+  // 1つの undo エントリとして記録する。全採用階のPlaneメタ（elevation・startFloor・name・stories）
+  // も before/after で記録し、undo/redo で書き戻す（途中階挿入は既存階のメタも振り直すため。
+  // 途中階の上階追加と階移動の振り直し一本化 ステップ2）。
+  //   undo: 追加階に居れば元の階へ戻り、追加階を削除し、同期・構造反映で変わった既存階を元へ戻し、
+  //         全採用階のメタを before へ戻す
+  //   redo: 全採用階のメタを after へ先に戻してから、同じ planeId で階を作り直し、追加後状態の
+  //         bytes を IDB へ書き戻して再度切り替える（既存階を先にずらしてから新階を足す。
+  //         同じ高さを一瞬でも作らない）
   // フロア切替・IDB 書き込みは非同期のため undo/redo 内では投げ放しで実行する
   // （完了前に次の undo を重ねると競合しうるが、通常の操作間隔では問題にならない）。
   async function withFloorAddUndo(run) {
@@ -1163,6 +1169,7 @@ const App = observer(() => {
       await structuralSync.whenIdle();
       const sourcePlaneId = project.activePlaneId;
       const before = await collectFloorBytes();
+      const metasBefore = collectPlaneMetas(project);
 
       await run();
 
@@ -1173,6 +1180,7 @@ const App = observer(() => {
 
       const activeAfterId = project.activePlaneId;
       const after = await collectFloorBytes();
+      const metasAfter = collectPlaneMetas(project);
       const addedBytes = new Map(addedPlanes.map(pl => [pl.id, after.get(pl.id) ?? null]));
       const changedSiblings = [];
       for (const [planeId, beforeBytes] of before) {
@@ -1202,11 +1210,13 @@ const App = observer(() => {
             if (addedPlanes.some(pl => pl.id === project.activePlaneId)) return;
           }
           for (const pl of addedPlanes) await removeFloor(pl.id);
+          applyPlaneMetas(project, metasBefore);
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);
         });
       }
       async function redoFloorAdd() {
         await runBusy('階追加のredo', async () => {
+          applyPlaneMetas(project, metasAfter);
           for (const pl of addedPlanes) {
             addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id);
             const bytes = addedBytes.get(pl.id);
@@ -1224,15 +1234,16 @@ const App = observer(() => {
     });
   }
 
-  // 上階を追加して切り替える
+  // 上階を追加して切り替える（途中階なら直上へ挿入し、上の階をずらしてから新階を足す。
+  // 途中階の上階追加と階移動の振り直し一本化 ステップ2）。
   async function executeAddUpper(currentPlane) {
     await withFloorAddUndo(async () => {
-      const topFloor      = currentPlane.startFloor + currentPlane.stories - 1;
-      const newStartFloor = addSkipZero(topFloor, 1);
-      const newName       = makeFloorName(newStartFloor, 1);
-      const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
-      const { plane } = addFloor(nextElevation, newName, newStartFloor, 1);
-      await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
+      const insert = computeFloorInsert(project.planes, currentPlane.id, 1);
+      if (!insert) return;
+      const { newPlane, updates } = insert;
+      const { plane } = applyFloorInsert(project, updates,
+        () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories));
+      await syncNewFloorFromSource(project.activeGraph, plane, newPlane.startFloor);
       // 切替に失敗したら以降（構造反映）を進めない（F1・2026-09-27）。
       if (!(await trySwitchFloor(() => handleFloorSwitch(plane.id)))) return;
       await reflectStructuralAfterFloorAdd(project);
@@ -1273,13 +1284,13 @@ const App = observer(() => {
 
     if (action === 'general') {
       await withFloorAddUndo(async () => {
-        // 上階 n 階分の一般階
-        const topFloor      = currentPlane.startFloor + currentPlane.stories - 1;
-        const newStartFloor = addSkipZero(topFloor, 1);
-        const newName       = makeFloorName(newStartFloor, n);
-        const nextElevation = currentPlane.elevation + 3000 * currentPlane.stories;
-        const { plane } = addFloor(nextElevation, newName, newStartFloor, n);
-        await syncNewFloorFromSource(project.activeGraph, plane, newStartFloor);
+        // 上階 n 階分の一般階（途中階なら直上へ挿入し、上の階をずらしてから新階を足す）
+        const insert = computeFloorInsert(project.planes, currentPlane.id, n);
+        if (!insert) return;
+        const { newPlane, updates } = insert;
+        const { plane } = applyFloorInsert(project, updates,
+          () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories));
+        await syncNewFloorFromSource(project.activeGraph, plane, newPlane.startFloor);
         // 切替に失敗したら以降（構造反映）を進めない（F1・2026-09-27）。
         if (!(await trySwitchFloor(() => handleFloorSwitch(plane.id)))) return;
         await reflectStructuralAfterFloorAdd(project);
@@ -1497,21 +1508,17 @@ const App = observer(() => {
           .filter(p => p.isAlternative && p.referenceId === below.id);
         for (const alt of belowAlts) await removeStairsOnFloor(alt);
       }
-      // 右側の採用の startFloor / elevation を再計算
+      // 右側の採用の startFloor / elevation を再計算（振り直しの計算は floorOps.js
+      // computeFloorDeleteReorder に委譲。途中階の上階追加と階移動の振り直し一本化 ステップ1）。
       const newAdopted = project.planes;
       if (idx < newAdopted.length) {
+        const updates = computeFloorDeleteReorder(newAdopted, idx);
         runInAction(() => {
-          const anchor = newAdopted[idx - 1] ?? newAdopted[0];
-          let prevSF = anchor.startFloor, prevSto = anchor.stories, prevElev = anchor.elevation;
-          const start = anchor === newAdopted[idx - 1] ? idx : idx + 1;
-          for (let i = start; i < newAdopted.length; i++) {
-            const p = newAdopted[i];
-            const sf   = addSkipZero(prevSF + prevSto - 1, 1);
-            const elev = prevElev + prevSto * 3000;
-            p.name       = p.stories > 1 ? makeFloorName(sf, p.stories) : renameFloor(p.name, sf);
-            p.startFloor = sf;
-            p.elevation  = elev;
-            prevSF = sf; prevSto = p.stories; prevElev = elev;
+          for (const u of updates) {
+            const p = project.planeMap.get(u.id);
+            p.name       = u.name;
+            p.startFloor = u.startFloor;
+            p.elevation  = u.elevation;
           }
         });
       }

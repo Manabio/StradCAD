@@ -1,5 +1,7 @@
 // フロア（階・検討案）の並替・切替まわりの計算・低レベル永続化操作。App.jsx から抽出。
-// runInAction によるMobX状態への反映・ダイアログ表示等の配線は App.jsx 側に残す。
+// Planeメタの書き戻し（applyFloorInsert・applyPlaneMetas）はここに置く。ダイアログ表示等の
+// 画面配線は App.jsx 側に残す。
+import { runInAction } from 'mobx';
 import { restoreGraph } from './graphSnapshot.js';
 import { saveFloor, deleteFloor as dbDeleteFloor } from './storage/db.js';
 import { addSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
@@ -37,6 +39,39 @@ export function blocksFloorRemoval(project, planeId) {
   return project.activePlaneId === planeId || isActiveAnAltOf(project, planeId);
 }
 
+// ---- 振り直しの純関数（階操作の共通規則。途中階の上階追加と階移動の振り直し一本化 ステップ1）----
+// planes（elevation昇順の採用フロア一覧）の fromIndex 以降を、planes[fromIndex-1]（無ければ
+// planes[0] を基準に fromIndex=1 とみなす）から順に startFloor・elevation・name を決め直す。
+// 挿入・ドラッグ移動・階変更・階削除の4経路が本関数へ寄せる。戻り値は { id, name, startFloor,
+// elevation } の更新一覧（値が変化する階のみ）。fromIndex が末尾以降・planes が空/1件なら空配列。
+export function renumberPlanesFrom(planes, fromIndex) {
+  if (!planes || planes.length === 0) return [];
+  const start = fromIndex <= 0 ? 1 : fromIndex;
+  if (start >= planes.length) return [];
+  const base = planes[start - 1] ?? planes[0];
+
+  const updates = [];
+  let prevSF      = base.startFloor;
+  let prevStories = base.stories;
+  let prevElev    = base.elevation;
+  for (let i = start; i < planes.length; i++) {
+    const plane   = planes[i];
+    const newSF   = addSkipZero(prevSF + prevStories - 1, 1);
+    const newElev = prevElev + prevStories * 3000;
+    // 一般階は makeFloorName、それ以外は renameFloor で書式を保持
+    const name = plane.stories > 1
+      ? makeFloorName(newSF, plane.stories)
+      : renameFloor(plane.name, newSF);
+    if (name !== plane.name || newSF !== plane.startFloor || newElev !== plane.elevation) {
+      updates.push({ id: plane.id, name, startFloor: newSF, elevation: newElev });
+    }
+    prevSF      = newSF;
+    prevStories = plane.stories;
+    prevElev    = newElev;
+  }
+  return updates;
+}
+
 // ---- フロアタブのドラッグ割り込み（計算部）----
 // project.planes（elevation昇順）を fromId→toZone の並びへ並び替え、
 // 並替後の startFloor/elevation/name を再採番する。no-op（適用不可）なら null。
@@ -58,25 +93,14 @@ export function computeFloorReorder(planes, fromId, toZone) {
   rest.splice(rt, 0, moved);
 
   const newOrder = [bottom, ...rest];
+  return renumberPlanesFrom(newOrder, 1);
+}
 
-  const updates = [];
-  let prevSF      = bottom.startFloor;
-  let prevStories = bottom.stories;
-  let prevElev    = bottom.elevation;
-  for (let i = 1; i < newOrder.length; i++) {
-    const plane  = newOrder[i];
-    const newSF  = addSkipZero(prevSF + prevStories - 1, 1);
-    const newElev = prevElev + prevStories * 3000;
-    // 一般階は makeFloorName、それ以外は renameFloor で書式を保持
-    const name = plane.stories > 1
-      ? makeFloorName(newSF, plane.stories)
-      : renameFloor(plane.name, newSF);
-    updates.push({ id: plane.id, name, startFloor: newSF, elevation: newElev });
-    prevSF      = newSF;
-    prevStories = plane.stories;
-    prevElev    = newElev;
-  }
-  return updates;
+// ---- 階削除の振り直し（計算部）----
+// 削除後の planesAfterRemoval（elevation昇順）で、removedIndex（削除前の採用階配列での
+// index）以降を renumberPlanesFrom へ委譲する。removedIndex が末尾（範囲外）なら空配列。
+export function computeFloorDeleteReorder(planesAfterRemoval, removedIndex) {
+  return renumberPlanesFrom(planesAfterRemoval, removedIndex);
 }
 
 // ---- 検討の並び替え（グループ内。計算部）----
@@ -149,25 +173,120 @@ export function reconcilePlanes(metas, existingIds, bootPlaneId) {
 }
 
 // ---- 階変更（計算部）----
-// planes（elevation昇順の採用フロア一覧）内の planeId 以降の startFloor/elevation/name を
-// newStartFloor 起点で再採番する。適用不可（newStartFloor===0・planeId未検出）なら null。
+// planes（elevation昇順の採用フロア一覧）内の対象階（planeId）の startFloor を newStartFloor へ
+// 差し替え、それ以降は renumberPlanesFrom で決め直す。対象階自身は elevation=直下階から導く
+// 現行ロジックを保つ（最下階なら自身の元 elevation へフォールバック）。
+// 適用不可（newStartFloor===0・planeId未検出）なら null。
 export function computeFloorChangeReorder(planes, planeId, newStartFloor) {
   if (newStartFloor === 0) return null;
   const idx = planes.findIndex(p => p.id === planeId);
   if (idx < 0) return null;
-  const updates = [];
-  let prevSF   = newStartFloor;
-  let prevSto  = 1;
-  let prevElev = planes[idx - 1]
+
+  const target = planes[idx];
+  const newElev = idx > 0
     ? planes[idx - 1].elevation + planes[idx - 1].stories * 3000
     : planes[0].elevation;
-  for (let i = idx; i < planes.length; i++) {
-    const p  = planes[i];
-    const sf = i === idx ? newStartFloor : addSkipZero(prevSF + prevSto - 1, 1);
-    const el = i === idx ? prevElev : prevElev + prevSto * 3000;
-    const name = p.stories > 1 ? makeFloorName(sf, p.stories) : renameFloor(p.name, sf);
-    updates.push({ id: p.id, name, startFloor: sf, elevation: el });
-    prevSF = sf; prevSto = p.stories; prevElev = el;
+  const newName = target.stories > 1
+    ? makeFloorName(newStartFloor, target.stories)
+    : renameFloor(target.name, newStartFloor);
+  const updatedTarget = { ...target, name: newName, startFloor: newStartFloor, elevation: newElev };
+
+  const newPlanes = [...planes];
+  newPlanes[idx] = updatedTarget;
+  const rest = renumberPlanesFrom(newPlanes, idx + 1);
+
+  const updates = [];
+  if (newName !== target.name || newStartFloor !== target.startFloor || newElev !== target.elevation) {
+    updates.push({ id: updatedTarget.id, name: newName, startFloor: newStartFloor, elevation: newElev });
   }
+  updates.push(...rest);
   return updates;
+}
+
+// ---- 途中階の上階追加（挿入）の計算部（振り直し一本化 ステップ2）----
+// planes（elevation昇順の採用フロア一覧）で、表示中の階 currentPlaneId の直上へ stories 階分の
+// 新階を挿入するときの { newPlane, updates } を返す。newPlane は executeAddUpper／'general' の
+// 現行計算と同じ規則（topFloor = 表示中の階の最上段、addSkipZero(topFloor, 1)、
+// elevation = 表示中の階のelevation + 3000×表示中の階のstories）。updates は「新階を挿入位置の
+// 直後に差し込んだ配列」で renumberPlanesFrom(arr, 挿入位置+2)（新階より上の既存階だけ。新階自身は
+// 含まない）。currentPlaneId が planes に無ければ null。表示中の階が最上階なら updates は空配列
+// （従来の上階追加と同じ結果）。
+export function computeFloorInsert(planes, currentPlaneId, stories) {
+  const idx = planes.findIndex(p => p.id === currentPlaneId);
+  if (idx < 0) return null;
+
+  const current       = planes[idx];
+  const topFloor       = current.startFloor + current.stories - 1;
+  const newStartFloor  = addSkipZero(topFloor, 1);
+  const newName        = makeFloorName(newStartFloor, stories);
+  const newElevation   = current.elevation + current.stories * 3000;
+  const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories };
+
+  const arr = [...planes];
+  arr.splice(idx + 1, 0, { id: null, ...newPlane });
+  const updates = renumberPlanesFrom(arr, idx + 2);
+
+  return { newPlane, updates };
+}
+
+// ---- 途中階の上階追加（挿入）の適用（振り直し一本化 ステップ2）----
+// updates（振り直し後の既存Planeメタ）を project.planeMap へ書いてから addNewFloor() を呼ぶ
+// （上の階をずらしてから新階を足す。同じ高さが一瞬でも並ばない順序）。addNewFloor が投げたら、
+// updates を書く前のメタへ全て戻してから再 throw する（メタの変更が残らない）。addNewFloor の
+// 戻り値をそのまま返す。
+export function applyFloorInsert(project, updates, addNewFloor) {
+  const before = new Map();
+  for (const u of updates) {
+    const plane = project.planeMap.get(u.id);
+    if (plane) before.set(u.id, { name: plane.name, startFloor: plane.startFloor, elevation: plane.elevation });
+  }
+
+  runInAction(() => {
+    for (const u of updates) {
+      const plane = project.planeMap.get(u.id);
+      if (!plane) continue;
+      plane.name       = u.name;
+      plane.startFloor = u.startFloor;
+      plane.elevation  = u.elevation;
+    }
+  });
+
+  try {
+    return addNewFloor();
+  } catch (e) {
+    runInAction(() => {
+      for (const [id, meta] of before) {
+        const plane = project.planeMap.get(id);
+        if (!plane) continue;
+        plane.name       = meta.name;
+        plane.startFloor = meta.startFloor;
+        plane.elevation  = meta.elevation;
+      }
+    });
+    throw e;
+  }
+}
+
+// ---- 全採用階のPlaneメタの収集・復元（階操作のundo/redoが使う。振り直し一本化 ステップ2）----
+// project.planes（elevation昇順の採用フロア一覧）から { id, name, startFloor, elevation, stories }
+// の配列を採る。
+export function collectPlaneMetas(project) {
+  return project.planes.map(p => ({
+    id: p.id, name: p.name, startFloor: p.startFloor, elevation: p.elevation, stories: p.stories,
+  }));
+}
+
+// metas（collectPlaneMetasの戻り値）を project.planeMap へ書き戻す。project.planeMap に存在しない
+// id は無視する（undoで追加階を削除した後に呼ぶため、metas側にだけ存在するidがあり得る）。
+export function applyPlaneMetas(project, metas) {
+  runInAction(() => {
+    for (const m of metas) {
+      const plane = project.planeMap.get(m.id);
+      if (!plane) continue;
+      plane.name       = m.name;
+      plane.startFloor = m.startFloor;
+      plane.elevation  = m.elevation;
+      plane.stories    = m.stories;
+    }
+  });
 }

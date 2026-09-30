@@ -33,8 +33,17 @@ export function renameFloor(oldName, newStartFloor) {
     const abs = Math.abs(n);
     if (/地下\d+階/.test(oldName)) return oldName.replace(/地下\d+階/, `地下${abs}階`);
     if (/B\d+/.test(oldName))      return oldName.replace(/B\d+/, `B${abs}`);
+    // 符号またぎ（地上→地下）: "1階"のような地上表記の階が振り直しで地下へ入ったときも
+    // 「地下n階」へ書き換える（QA指摘。renumberPlanesFrom等の振り直しが地下/地上境界を
+    // 越えるときに「地下1階」のまま残って重複する不良の修正）。
+    if (/\d+階/.test(oldName))     return oldName.replace(/\d+階/, `地下${abs}階`);
   }
   if (n > 0) {
+    // 符号またぎ（地下→地上）: 既存の "\d+階"・"M\d+"・"中\d+階" の判定より前に置く
+    // （"地下1階"がそのまま"1階"へ書き換わらず、部分一致の"\d+階"にマッチして
+    // "地下1階"のまま残ってしまう不良の修正。QA指摘）。
+    if (/地下\d+階/.test(oldName)) return oldName.replace(/地下\d+階/, `${n}階`);
+    if (/B\d+/.test(oldName))      return oldName.replace(/B\d+/, `${n}`);
     if (/\d+階/.test(oldName))   return oldName.replace(/\d+階/, `${n}階`);
     if (/^M\d+/.test(oldName))   return oldName.replace(/\d+/, String(n));
     if (/中\d+階/.test(oldName)) return oldName.replace(/\d+/, String(n));

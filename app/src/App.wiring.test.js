@@ -279,3 +279,74 @@ test('【配線・強化】App.jsx: syncNewFloorFromSource は複製できなか
   assert.equal(toastIdx, condIdx + 1,
     '条件行の直後がトースト行であるはず（条件を if(false){ に差し替える変異を見逃さないため）');
 });
+
+// ================================================================
+// 途中階の上階追加と階移動の振り直し一本化 ステップ2（2026-10-01）: executeAddUpper／
+// handleAddFloorConfirm('general') は computeFloorInsert＋applyFloorInsert 経由で既存階をずらして
+// から新階を足し、withFloorAddUndo は全採用階のPlaneメタもbefore/afterで記録してundo/redoで
+// 書き戻す（261001_途中階の上階追加と階移動の振り直し一本化.md §5-7）。
+// ================================================================
+
+test('【配線・強化】App.jsx: executeAddUpper は computeFloorInsert→applyFloorInsert を使い、addFloor を直接呼ばない', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function executeAddUpper');
+
+  assert.match(body, /computeFloorInsert\(project\.planes, currentPlane\.id, 1\)/,
+    'computeFloorInsert(project.planes, currentPlane.id, 1) の呼び出しが見つからない');
+  assert.match(body, /applyFloorInsert\(project, updates,/,
+    'applyFloorInsert(project, updates, ...) の呼び出しが見つからない');
+  // addFloor はapplyFloorInsertへ渡すクロージャの中でだけ呼ぶ（振り直し前にいきなり新階を
+  // 足す旧来の直接呼び出し `const { plane } = addFloor(` が残っていないこと）。
+  assert.doesNotMatch(body, /const \{ plane \} = addFloor\(/,
+    'executeAddUpper 本体に旧来の直接 addFloor( 呼び出し（振り直し前に新階を足す形）が残っている');
+});
+
+test("【配線・強化】App.jsx: handleAddFloorConfirm の'general'分岐も computeFloorInsert→applyFloorInsert を使う", () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function handleAddFloorConfirm');
+  const generalIdx = body.indexOf("if (action === 'general') {");
+  assert.ok(generalIdx >= 0, "'general'分岐が見つからない");
+  const generalBlock = body.slice(generalIdx);
+
+  assert.match(generalBlock, /computeFloorInsert\(project\.planes, currentPlane\.id, n\)/,
+    'computeFloorInsert(project.planes, currentPlane.id, n) の呼び出しが見つからない');
+  assert.match(generalBlock, /applyFloorInsert\(project, updates,/,
+    'applyFloorInsert(project, updates, ...) の呼び出しが見つからない');
+});
+
+test('【配線・強化】App.jsx: withFloorAddUndo は before/after それぞれで collectPlaneMetas(project) を1回ずつ採る', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function withFloorAddUndo');
+  const matches = body.match(/collectPlaneMetas\(project\)/g) ?? [];
+  assert.equal(matches.length, 2,
+    `collectPlaneMetas(project) はbefore/afterの2回呼ぶはず（実際: ${matches.length}）`);
+
+  const beforeIdx = body.indexOf('const metasBefore = collectPlaneMetas(project);');
+  const afterIdx  = body.indexOf('const metasAfter = collectPlaneMetas(project);');
+  const runIdx    = body.indexOf('await run();');
+  assert.ok(beforeIdx >= 0 && afterIdx >= 0 && runIdx >= 0 && beforeIdx < runIdx && runIdx < afterIdx,
+    'metasBefore→run()→metasAfter の順になっていない');
+});
+
+test('【配線・強化】App.jsx: undoFloorAdd は removeFloor ループの後・changedSiblings書き戻しの前に applyPlaneMetas(project, metasBefore) を呼ぶ', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function undoFloorAdd');
+
+  const removeIdx = body.indexOf('for (const pl of addedPlanes) await removeFloor(pl.id);');
+  const applyIdx  = body.indexOf('applyPlaneMetas(project, metasBefore);');
+  const siblingIdx = body.indexOf('for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);');
+  assert.ok(removeIdx >= 0 && applyIdx >= 0 && siblingIdx >= 0,
+    'removeFloorループ・applyPlaneMetas(metasBefore)・changedSiblings書き戻しのいずれかが見つからない');
+  assert.ok(removeIdx < applyIdx && applyIdx < siblingIdx,
+    'applyPlaneMetas(project, metasBefore) が removeFloorループの後・changedSiblings書き戻しの前にない');
+});
+
+test('【配線・強化】App.jsx: redoFloorAdd は addFloor の前に applyPlaneMetas(project, metasAfter) を呼ぶ（既存階を先にずらしてから新階を足す）', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function redoFloorAdd');
+
+  const applyIdx = body.indexOf('applyPlaneMetas(project, metasAfter);');
+  const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id);');
+  assert.ok(applyIdx >= 0 && addIdx >= 0, 'applyPlaneMetas(metasAfter) または addFloor( 呼び出しが見つからない');
+  assert.ok(applyIdx < addIdx, 'applyPlaneMetas(project, metasAfter) が addFloor( より前にない');
+});
