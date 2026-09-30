@@ -182,6 +182,8 @@ S造・RC造・SRC造（選択子`structureRules.js`の`openingBeamAxes:'slabOpe
 
 非在来（S/RC/SRC）でも、下階に到達元の階段がある実体階（規則Oの開口判定）・階段コピーまたはSTAIR_VOIDがある階（踊り場受け梁LGの到達階判定）は`belowGraph`をpeekする——「非在来はbelowGraphをpeekしない」という従来の割り切りは規則OとLG到達階生成で崩れた。
 
+主構造未定（`UNSPECIFIED_STRUCTURE`）でも規則Oは効く（`UNSPECIFIED_RULES.openingBeamAxes='slabOpenings'`。2026-09-30再裁定）——柱・梁は`isStructureSpecified`でゲートされ生成しないが、`autoFillOpeningBeamAxes`はそのゲートに乗らないため、昇降機・階段の上階自動設置で構造未定のまま開口だけが先に生まれる階でも梁芯が全階そろう。
+
 ## 規則C（開口以外の中心線）——未裁定
 壁の乗る中心線・全中心線から梁芯を自動生成するかは未裁定。案a（壁の乗る中心線のみ。RCの`rcBacking`と同型）／案a′（全中心線）／案b（構造モードで中心線表示。可視モード表の導出基準を崩すため不採用方向）／案c（梁芯の手動追加時に非表示の中心線へ吸着）。推奨はa+c。13.stq・14.stqのprobe結果（小梁の手がかりが無いベイの量）を裁定材料にする。
 

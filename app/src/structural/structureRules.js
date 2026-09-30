@@ -347,10 +347,14 @@ export const UNSPECIFIED_RULES = Object.freeze({
   isRigidFrame: false,
   baseMaterial: 'WOOD',
   defaultSections: sectionsFor('WOOD'),
-  // 【裁定・2026-09-28】STEEL_RULESはRC_RULESをspreadしopeningBeamAxesを上書きしないため
-  // （wallBeamAxesとは異なり）継承すると'slabOpenings'のままになる——isStructureSpecifiedの趣旨
-  // （主構造未確定の階では柱・梁を生成しない）と揃え、ここで明示的にnullへ上書きする。
-  openingBeamAxes: null,
+  // 【裁定・2026-09-28→2026-09-30再裁定】STEEL_RULESはRC_RULESをspreadしopeningBeamAxesを
+  // 上書きしないため（wallBeamAxesとは異なり）継承すると'slabOpenings'のままになる。2026-09-28は
+  // isStructureSpecifiedの趣旨（主構造未確定の階では柱・梁を生成しない）に揃えてnull上書きしたが、
+  // 2026-09-30に再裁定: 柱・梁は生成しないが開口由来梁芯は出す（structuralAutoFill.js
+  // autoFillOpeningBeamAxes は isStructureSpecified でゲートされておらず、柱・梁の生成とは独立に
+  // 動く——構造未定のまま昇降機・階段の上階自動設置で開口だけが先に生まれる階でも、開口由来梁芯が
+  // 全階そろうようにする）。継承のまま'slabOpenings'を明示して意図を残す。
+  openingBeamAxes: 'slabOpenings',
 });
 
 /** 主構造（実効値の文字列表記）のルールセットを返す。未知・未指定は UNSPECIFIED_RULES。 */

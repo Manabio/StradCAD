@@ -286,10 +286,10 @@ test('【失敗系】structureRules: 未指定（\'未定\'）・未知の主構
     assert.deepEqual({ ...r.foundation.beamSizing }, { kind: 'spanDivisor', depthDivisor: 8 }, '旧 computeFoundationBeamSize はL/8');
     assert.deepEqual(r.designation, { roof: 'R階伏図', floorSuffix: '伏図' });
     assert.equal(r.wallBeamAxes, null);
-    // 【裁定・2026-09-28】openingBeamAxesはUNSPECIFIED_RULESで明示null上書きする
-    // （isStructureSpecifiedの趣旨＝主構造未確定の階では柱・梁を生成しない、とwallBeamAxesの
-    // 扱いに揃える）。
-    assert.equal(r.openingBeamAxes, null, '未指定はnull（明示上書き。wallBeamAxesと同じ扱いに揃える）');
+    // 【裁定・2026-09-28→2026-09-30再裁定】未指定でも開口由来梁芯（規則O）は出す。柱・梁は
+    // isStructureSpecifiedでゲートされ生成されないが、開口由来梁芯の生成（structuralAutoFill.js
+    // autoFillOpeningBeamAxes）はそのゲートに乗らないため、wallBeamAxesとは扱いを分ける。
+    assert.equal(r.openingBeamAxes, 'slabOpenings', '未指定でも開口由来梁芯は出す（柱・梁は生成しない。2026-09-30再裁定）');
     assert.equal(r.foundation.drawsBands, false);
     assert.equal(r.isRigidFrame, false);
   }

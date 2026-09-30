@@ -50,6 +50,23 @@ test('openingBeamSourcesFor: 主構造の選択子がslabOpenings以外（木造
   assert.deepEqual(openingBeamSourcesFor(graph, {}), []);
 });
 
+// 2026-09-30再裁定: 構造未定（UNSPECIFIED_RULES）でも開口由来梁芯（規則O）は出す。柱・梁は
+// isStructureSpecifiedでゲートされ生成されないが、autoFillOpeningBeamAxes はそのゲートに乗らない
+// ——昇降機・階段の上階自動設置で構造未定のまま開口だけが先に生まれる階でも梁芯が出るようにする
+// （structureRules.js UNSPECIFIED_RULES.openingBeamAxes 参照）。
+test('openingBeamSourcesFor: 構造未定（structureOverride未設定・project省略）でも開口由来梁芯を返す（2026-09-30再裁定）', () => {
+  const { graph } = makeRectOpeningGraph();
+  assert.equal(graph.structureOverride, null, '前提: 主構造は未指定（未定）');
+  const sources = openingBeamSourcesFor(graph, {});
+  assert.equal(sources.length, 4, '柱・梁は生成しないが開口由来梁芯は出す');
+});
+
+test('【失敗系】openingBeamSourcesFor: 木造（2"×4"）は階段開口処理を持たないが構造未定と異なり常に空配列（在来木造は既存:47-50が見ている）', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = '木造（2"×4"）';
+  assert.deepEqual(openingBeamSourcesFor(graph, {}), [], '木造系はopeningBeamAxes:null（未定=slabOpeningsとは異なる）');
+});
+
 test('openingBeamSourcesFor→autoFillOpeningBeamAxes: 矩形の吹抜け（壁なし）は長辺方向2本が通し・短辺2本が通し梁芯のidを参照し、由来はopening', () => {
   const { graph, x0, x1 } = makeRectOpeningGraph();
   graph.structureOverride = 'RC造(ラーメン)';
