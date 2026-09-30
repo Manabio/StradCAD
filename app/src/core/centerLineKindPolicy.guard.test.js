@@ -347,11 +347,13 @@ const G3_ALLOWLIST = {
   'openings/openingMove.js': { count: 1, category: 'not-partner-selection',
     reason: 'candidateTier（スナップ候補の優先順位付け。通り芯を最優先にするUI都合のロジックで、ポリシーの' +
       '関係述語の代替ではない）。' },
-  'transform/centerLineOps.js': { count: 3, category: 'not-partner-selection',
+  'transform/centerLineOps.js': { count: 2, category: 'not-partner-selection',
     reason: 'commitCLMoveOp（centerLineKind(cl)!==\'beam\'／===\'beam\'で通常経路と梁芯専用のグラフ' +
-      'スナップショット方式Undoに分岐する対の判定）・COEXISTENCE同種別分岐の梁芯重複ガード' +
-      '（centerLineKind(cl)===\'beam\'を含むsameCoordの絞り込み）。それぞれ「kind===梁芯なら専用処理」' +
-      'という分岐そのもので、ポリシーの関係述語（例: coexistenceAt）の重複実装ではない。' },
+      'スナップショット方式Undoに分岐する対の判定）。それぞれ「kind===梁芯なら専用処理」' +
+      'という分岐そのもので、ポリシーの関係述語（例: coexistenceAt）の重複実装ではない。' +
+      '（線種変更の移籍一本化・ステップ6・2026-09-30: COEXISTENCE同種別分岐の梁芯重複ガード' +
+      '（sameCoord.some(cl=>centerLineKind(cl)===\'beam\')）は、struct追加時の梁芯拒否を' +
+      'addGridLinesWithFloorAbsorptionの吸収判定へ置き換えたことで削除し、3件→2件になった。）' },
   'ui/circleRef.js': { count: 1, category: 'not-partner-selection',
     reason: 'circleRefKindLabel。参照候補CLの表示ラベル文言（「梁芯」/「中心線」）を決めるUI表示ロジック。' },
 };

@@ -100,7 +100,9 @@ test('COEXISTENCE: 16セルの値を固定する（原始事実の書き写し�
   assert.deepEqual(
     Object.fromEntries(CL_KINDS.map(k => [k, { ...COEXISTENCE[k] }])),
     {
-      struct: { struct: 'forbidden', center: 'promote',  aux: 'allowed',   beam: 'forbidden' },
+      // struct.beam は 'forbidden' から 'absorb' へ改めた（リード裁定・線種変更の移籍一本化
+      // ステップ6是正・2026-09-30。centerLineKindPolicy.js COEXISTENCE定義のコメント参照）。
+      struct: { struct: 'forbidden', center: 'promote',  aux: 'allowed',   beam: 'absorb'    },
       center: { struct: 'forbidden', center: 'extent',   aux: 'allowed',   beam: 'allowed'   },
       aux:    { struct: 'allowed',   center: 'allowed',  aux: 'extent',    beam: 'allowed'   },
       beam:   { struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent'   },
@@ -1164,7 +1166,19 @@ test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexiste
         vp,
       );
 
-      if (outcome === 'forbidden') {
+      // リード裁定（線種変更の移籍一本化 ステップ6是正・2026-09-30）: struct→beam は COEXISTENCE
+      // 表の値そのものを'forbidden'から'absorb'へ改めた——保護されない壁由来梁芯（このaddCLOfKindが
+      // 作るbeamはrefId無し・保護データ無し・由来null）に限っては拒否ではなく吸収（追加後に梁芯を
+      // 撤去）する（centerLineOps.js addGridLinesWithFloorAbsorption参照）。保護される梁芯（由来USER・
+      // refId付き等。別テストで確認済み）は従来どおり拒否のまま——'absorb'は「保護されなければ」の
+      // 前提つきの帰結であり、表の値だけでは保護の有無を表現できないため、ここでは非保護ケースだけ
+      // 検証する。
+      if (outcome === 'absorb') {
+        assert.equal(result.done, true, label);
+        assert.equal(graph.shapeMap.has(existingCl.id), false, `${label}: 保護されない梁芯は吸収されて消える`);
+        assert.ok(project.structGraph.centerLines.some(cl =>
+          cl.centerLineType === clType && Math.abs(cl.value - value) < 1), `${label}: structGraphに通り芯が増える`);
+      } else if (outcome === 'forbidden') {
         assert.equal(result.done, false, label);
         assert.ok(typeof result.toast === 'string' && result.toast.length > 0, `${label}: toastが入る`);
         assert.ok(graph.centerLines.some(cl => cl.id === existingCl.id), `${label}: 既存は残る`);

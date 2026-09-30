@@ -8,7 +8,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline, centerLineKind, StructuralMaterialType } from '../core.js';
-import { ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_SAME_ID_FLOOR, ERR_CL_CONVERT_DUP } from '../error.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
+import {
+  ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_SAME_ID_FLOOR, ERR_CL_CONVERT_DUP, ERR_CL_DUPLICATE,
+} from '../error.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
@@ -16,6 +19,7 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { scanProjectLineIds } from '../lineIdUniqueness.js';
 import {
   addCenterLineFromDialog, promoteCenterToGridWithUndo, demoteGridToCenterWithUndo, bakeCLValue,
+  setCenterLineStructuralListener,
 } from './centerLineOps.js';
 import { withProductionPeek, decodeFloor } from './centerLineTestFixtures.js';
 
@@ -80,6 +84,12 @@ function makeTwoFloorsWithGridCL() {
 
 const dialogPayloadV = (value) => ({
   clDialog: { type: 'vertical', worldCoord: Array.isArray(value) ? value[0] : value, perpCoord: 0 },
+  value, kind: 'struct', refId: null, refOffset: 0,
+});
+
+// QA指摘4のY軸文言テスト用（ui/AddCLDialog.jsx :29 と同じくY軸は符号反転して表示する）。
+const dialogPayloadH = (value) => ({
+  clDialog: { type: 'horizontal', worldCoord: Array.isArray(value) ? value[0] : value, perpCoord: 0 },
   value, kind: 'struct', refId: null, refOffset: 0,
 });
 
@@ -187,7 +197,6 @@ test(
 
 test(
   'addCenterLineFromDialog: 他の平面(2階)に同座標の補助線がある場合、通り芯の単体追加は拒否される（指示書§2.2 ケース2b・裁定Q3〜Q5）',
-  { todo: '線種変更の移籍一本化 ステップ6 で解消' },
   async () => {
     const { project, p1, p2 } = makeTwoFloors();
     p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, lineType: 'dashed' });
@@ -206,7 +215,6 @@ test(
 
 test(
   'addCenterLineFromDialog: スパン配列で一部の値だけ2階の補助線と重なる場合、全体が拒否され値と平面名を出す（指示書§2.2 ケース2c・裁定Q6）',
-  { todo: '線種変更の移籍一本化 ステップ6 で解消' },
   async () => {
     const { project, p1, p2 } = makeTwoFloors();
     p2.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, lineType: 'dashed' }); // 3本のうち2000だけ2階と重なる
@@ -218,6 +226,25 @@ test(
 
     assert.equal(result.done, false, '期待: 2000が2階と重なるため全体を拒否する（現状は3本とも追加される）');
     assert.match(result.toast ?? '', /2000/, '期待: 重なった値を出す');
+    assert.match(result.toast ?? '', /2階/, '期待: 平面名を出す');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 1本も追加されない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: Y軸スパンで一部の値だけ2階の補助線と重なる場合、文言の値は画面表示（符号反転・整数）に合わせる（QA指摘4）',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    p2.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' }); // ワールドY=2000（画面表示は-2000）
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadH([1000, 2000, 3000]), null)
+    );
+
+    assert.equal(result.done, false, '期待: 2000が2階と重なるため全体を拒否する');
+    assert.match(result.toast ?? '', /Y=-2000/, `期待: Y軸は画面表示どおり符号反転した整数（実際: ${result.toast}）`);
+    assert.equal(/Y=2000\b/.test(result.toast ?? ''), false, '期待: 符号反転前の値は出さない');
     assert.match(result.toast ?? '', /2階/, '期待: 平面名を出す');
     assert.equal(project.structGraph.centerLines.length, 0, '期待: 1本も追加されない');
   },
@@ -237,7 +264,6 @@ function makeTwoFloorsWithSecondFloorCenterLineWall(x) {
 
 test(
   'addCenterLineFromDialog: 他の平面(2階)に同座標の中心線がある場合、通り芯の単体追加は拒否せず吸収し、2階の壁は通り芯を軸に残る（2026-09-30 裁定）',
-  { todo: '線種変更の移籍一本化 ステップ6 で解消' },
   async () => {
     const { project, p1, p2, store, saveFloorFn } = makeTwoFloorsWithSecondFloorCenterLineWall(3000);
 
@@ -253,13 +279,19 @@ test(
     );
     assert.equal(decoded.walls.length, 1, '期待: 2階の壁は残る');
     assert.equal(decoded.walls[0].axisValue, 3000, '期待: 2階の壁の幾何は変わらない');
+    const grid = project.structGraph.centerLines.find(c => c.value === 3000);
     assert.equal(project.structGraph.centerLines.filter(c => c.value === 3000).length, 1, '期待: 通り芯は1本');
+    // QA指摘9: 壁は通り芯そのもの（新id）を軸にする（吸収前の自平面固有の中心線idのまま残らない）。
+    assert.equal(decoded.walls[0].axisCL.id, grid.id, '期待: 2階の壁のaxisCL.idは通り芯のidと一致する');
+    assert.deepEqual(
+      await scanProjectLineIds(project, { activeGraph: p1, peek: async (plane) => decodeFloor(project, plane, store.get(plane.id)) }),
+      [], '期待: 確定後も線idはプロジェクト全体で一意（重複0件）',
+    );
   },
 );
 
 test(
   'addCenterLineFromDialog: スパン配列で一部の値が2階の中心線と重なる場合、その中心線を吸収して全本を追加する（2026-09-30 裁定）',
-  { todo: '線種変更の移籍一本化 ステップ6 で解消' },
   async () => {
     const { project, p1, p2, store, saveFloorFn } = makeTwoFloorsWithSecondFloorCenterLineWall(2000);
 
@@ -275,10 +307,64 @@ test(
     );
     assert.equal(decoded.walls.length, 1, '期待: 2階の壁は残る');
     assert.equal(decoded.walls[0].axisValue, 2000, '期待: 2階の壁の幾何は変わらない');
+    const grid = project.structGraph.centerLines.find(c => c.value === 2000);
     assert.deepEqual(
       project.structGraph.centerLines.filter(c => c.centerLineType === CenterLineType.VERTICAL).map(c => c.value).sort((a, b) => a - b),
       [1000, 2000, 3000], '期待: 3本とも追加される',
     );
+    // QA指摘9: 壁は通り芯そのもの（新id）を軸にする。
+    assert.equal(decoded.walls[0].axisCL.id, grid.id, '期待: 2階の壁のaxisCL.idは通り芯のidと一致する');
+    assert.deepEqual(
+      await scanProjectLineIds(project, { activeGraph: p1, peek: async (plane) => decodeFloor(project, plane, store.get(plane.id)) }),
+      [], '期待: 確定後も線idはプロジェクト全体で一意（重複0件）',
+    );
+  },
+);
+
+test(
+  'addCenterLineFromDialog: スパン配列で同じ他平面の中心線を2本（X=2000・3000）吸収すると、両方とも吸収され1本も残らない（QA指摘1・平面単位化の回帰確認）',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    const y0 = p2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false });
+    const y1 = p2.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false });
+    const walls = [];
+    for (const x of [2000, 3000]) {
+      const c = p2.addCenterLine(CenterLineType.VERTICAL, x, { labeled: false });
+      walls.push(p2.addWall(c, 0, true, y0, 0, y1, 0, { isExteriorWall: false }));
+    }
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+    const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+    const beforeTop = undoManager.peekUndo();
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV([2000, 3000]), null, { saveFloorFn })
+    );
+
+    assert.equal(result.done, true, '期待: 両方とも吸収して成功する');
+    let decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    const ownVerticalCount = decoded.centerLines.filter(c =>
+      c.centerLineType === CenterLineType.VERTICAL && !project.structGraph.shapeMap.has(c.id)).length;
+    assert.equal(ownVerticalCount, 0, '期待: 2階の自平面固有の縦中心線は0本（旧実装は1本残った）');
+    assert.equal(decoded.walls.length, 2, '期待: 2階の壁は2本とも残る');
+    for (const w of decoded.walls) {
+      assert.equal(project.structGraph.shapeMap.has(w.axisCL.id), true, `期待: 壁(axisValue=${w.axisValue})は通り芯を軸にする`);
+    }
+    assert.deepEqual(
+      project.structGraph.centerLines.filter(c => c.centerLineType === CenterLineType.VERTICAL).map(c => c.value).sort((a, b) => a - b),
+      [2000, 3000], '期待: 2本とも通り芯化される',
+    );
+    assert.notEqual(undoManager.peekUndo(), beforeTop, '期待: undoが積まれる');
+
+    undoManager.undo();
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    const ownVerticalAfterUndo = decoded.centerLines.filter(c =>
+      c.centerLineType === CenterLineType.VERTICAL && !project.structGraph.shapeMap.has(c.id)).length;
+    assert.equal(ownVerticalAfterUndo, 2, '期待: undoで2階の自平面固有の中心線が2本とも元に戻る');
+    assert.equal(decoded.walls.length, 2, '期待: undo後も2階の壁は2本とも残る');
+    for (const w of decoded.walls) {
+      assert.equal(project.structGraph.shapeMap.has(w.axisCL.id), false, `期待: undoで壁(axisValue=${w.axisValue})は自平面固有の中心線に戻る`);
+    }
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: undoで通り芯は共有グラフから消える');
   },
 );
 
@@ -556,6 +642,456 @@ test(
 
     assert.equal(result.done, false, '期待: 中止は成功扱いにしない');
     assert.equal(result.toast, null, '期待: 中止はエラーではないためtoastは出さない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+// ---- ステップ6: 通常追加（単体・スパン配列）の他平面チェック（裁定Q4〜Q6・Q8） ----
+
+test(
+  'addCenterLineFromDialog: 自階の保護されない壁由来梁芯と同座標に通り芯を単体追加すると、拒否せず吸収して梁芯が撤去される（裁定Q8）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+    const beamAxisId = beamAxis.id;
+    const beforeTop = undoManager.peekUndo();
+
+    const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 };
+    const result = await addCenterLineFromDialog(graph, project, payload, null);
+
+    assert.equal(result.done, true, '期待: 拒否せず吸収して成功する');
+    assert.equal(graph.shapeMap.has(beamAxisId), false, '期待: 保護されない梁芯は撤去される');
+    const grid = project.structGraph.centerLines.find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 1000);
+    assert.ok(grid, '期待: 通り芯が追加される');
+    assert.notEqual(undoManager.peekUndo(), beforeTop, '期待: undoが積まれる');
+
+    undoManager.undo();
+    assert.equal(graph.shapeMap.has(beamAxisId), true, '期待: undoで梁芯が復活する');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: undoで通り芯が消える');
+
+    undoManager.redo();
+    assert.equal(graph.shapeMap.has(beamAxisId), false, '期待: redoで再び梁芯が撤去される');
+    assert.equal(project.structGraph.centerLines.length, 1, '期待: redoで通り芯が戻る');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 自階の保護される壁由来梁芯（lockedの柱が乗る）と同座標に通り芯を単体追加すると拒否される（裁定Q8）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+    const beamAxisId = beamAxis.id;
+    const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+    graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beamAxis, y0, { dimensionStatus: 'locked' });
+    const beforeTop = undoManager.peekUndo();
+
+    const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 };
+    const result = await addCenterLineFromDialog(graph, project, payload, null);
+
+    assert.equal(result.done, false, '期待: 保護される梁芯があるため拒否される');
+    assert.equal(result.toast, ERR_CL_DUPLICATE('beam'));
+    assert.equal(graph.shapeMap.has(beamAxisId), true, '期待: 梁芯は残る');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 通り芯は追加されない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+// ---- リード裁定（線種変更の移籍一本化 ステップ6是正・2026-09-30・QA指摘2）: 由来USER（手動追加材）は無条件で保護 ----
+
+test(
+  'addCenterLineFromDialog: 由来USER（ダイアログのkind:beamで手動追加）の梁芯と同座標に通り芯を単体追加すると拒否され、梁芯と生成済み小梁が残る（QA指摘2）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+    const beamPayload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 1500 }, value: 1000, kind: 'beam', refId: null, refOffset: 0 };
+    const beamResult = await addCenterLineFromDialog(graph, project, beamPayload, { scaleDenominator: 100 });
+    assert.equal(beamResult.done, true, '前提: 手動梁芯の追加が成功する');
+    const beamAxis = graph.centerLines.find(c => centerLineKind(c) === 'beam');
+    assert.equal(beamAxis?.beamAxisOrigin, BeamAxisOrigin.USER, '前提: ダイアログ追加の梁芯は由来USER');
+    const beamAxisId = beamAxis.id;
+    const beforeTop = undoManager.peekUndo();
+
+    const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 };
+    const result = await addCenterLineFromDialog(graph, project, payload, null);
+
+    assert.equal(result.done, false, '期待: 由来USERの梁芯は保護されるため拒否される');
+    assert.equal(graph.shapeMap.has(beamAxisId), true, '期待: 梁芯は残る');
+    assert.equal(project.structGraph.centerLines.some(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 1000), false, '期待: 通り芯は追加されない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'promoteCenterToGridWithUndo（メニュー経由）: 由来USER（手動追加材）の梁芯が同座標にあれば拒否する（QA指摘2）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+    const clId = cl.id;
+    const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+      labeled: false, discipline: Discipline.FUSE, refId: null, beamAxisOrigin: BeamAxisOrigin.USER,
+    });
+    const beamAxisId = beamAxis.id;
+
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl, {});
+
+    assert.equal(toast, ERR_CL_CONVERT_DUP('beam'), '期待: 由来USERの梁芯は保護されるため拒否される');
+    assert.equal(graph.shapeMap.has(clId), true, '期待: 中心線は残る（昇格されない）');
+    assert.equal(graph.shapeMap.has(beamAxisId), true, '期待: 由来USERの梁芯も残る');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 由来WALL（壁由来自動生成）・refId無し・柱なしの梁芯は従来どおり拒否せず吸収する（QA指摘2・対照）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+      labeled: false, discipline: Discipline.FUSE, refId: null, beamAxisOrigin: BeamAxisOrigin.WALL,
+    });
+    const beamAxisId = beamAxis.id;
+
+    const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 };
+    const result = await addCenterLineFromDialog(graph, project, payload, null);
+
+    assert.equal(result.done, true, '期待: 由来WALLは従来どおり吸収されて成功する');
+    assert.equal(graph.shapeMap.has(beamAxisId), false, '期待: 由来WALLの梁芯は撤去される');
+  },
+);
+
+// ---- リード裁定（線種変更の移籍一本化 ステップ6是正・2026-09-30・QA指摘3）: 同座標に区間の離れた梁芯が複数本 ----
+
+test(
+  'addCenterLineFromDialog: 自階の同座標に区間の離れた梁芯が2本あり、両方とも保護されなければ両方とも吸収される（QA指摘3）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    const b1 = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 1000 });
+    const b2 = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: 2000, extentHi: 3000 });
+
+    const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 };
+    const result = await addCenterLineFromDialog(graph, project, payload, null);
+
+    assert.equal(result.done, true, '期待: 両方とも保護されないため吸収して成功する');
+    assert.equal(graph.shapeMap.has(b1.id), false, '期待: 区間[0,1000]の梁芯が撤去される');
+    assert.equal(graph.shapeMap.has(b2.id), false, '期待: 区間[2000,3000]の梁芯も撤去される');
+    assert.equal(project.structGraph.centerLines.length, 1, '期待: 通り芯は1本追加される');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 自階の同座標に区間の離れた梁芯が2本あり、片方だけ保護されれば全体を拒否し両方とも残る（QA指摘3）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    const b1 = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 1000 });
+    const b2 = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+      labeled: false, discipline: Discipline.FUSE, extentLo: 2000, extentHi: 3000, beamAxisOrigin: BeamAxisOrigin.USER,
+    });
+    const beforeTop = undoManager.peekUndo();
+
+    const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 };
+    const result = await addCenterLineFromDialog(graph, project, payload, null);
+
+    assert.equal(result.done, false, '期待: 片方が保護されるため全体を拒否する');
+    assert.equal(graph.shapeMap.has(b1.id), true, '期待: 保護されない側も残る（部分撤去しない）');
+    assert.equal(graph.shapeMap.has(b2.id), true, '期待: 保護される側も残る');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 通り芯は追加されない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 他の平面(2階)の同座標に区間の離れた梁芯が2本あり、両方とも保護されなければ両方とも吸収される（QA指摘3）',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    const b1 = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 1000 });
+    const b2 = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: 2000, extentHi: 3000 });
+    const b1Id = b1.id, b2Id = b2.id;
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+    const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV(1000), null, { saveFloorFn })
+    );
+
+    assert.equal(result.done, true, '期待: 両方とも吸収して成功する');
+    const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(b1Id), false, '期待: 2階の区間[0,1000]の梁芯が撤去される');
+    assert.equal(decoded.shapeMap.has(b2Id), false, '期待: 2階の区間[2000,3000]の梁芯も撤去される');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 他の平面(2階)の同座標に区間の離れた梁芯が2本あり、片方だけ保護されれば拒否し両方とも残る（QA指摘3）',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    const b1 = p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 1000 });
+    const b2 = p2.addCenterLine(CenterLineType.VERTICAL, 1000, {
+      labeled: false, discipline: Discipline.FUSE, extentLo: 2000, extentHi: 3000, beamAxisOrigin: BeamAxisOrigin.USER,
+    });
+    const b1Id = b1.id, b2Id = b2.id;
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV(1000), null)
+    );
+
+    assert.equal(result.done, false, '期待: 片方が保護されるため拒否する');
+    const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(b1Id), true, '期待: 保護されない側も残る（部分撤去しない）');
+    assert.equal(decoded.shapeMap.has(b2Id), true, '期待: 保護される側も残る');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 通り芯は追加されない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 保護される梁芯（由来USER）で拒否したとき構造同期リスナーは呼ばれない（QA指摘9）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+      labeled: false, discipline: Discipline.FUSE, refId: null, beamAxisOrigin: BeamAxisOrigin.USER,
+    });
+    let calls = 0;
+    setCenterLineStructuralListener(() => { calls++; });
+    try {
+      const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 };
+      const result = await addCenterLineFromDialog(graph, project, payload, null);
+      assert.equal(result.done, false, '期待: 保護される梁芯があるため拒否される');
+      assert.equal(graph.shapeMap.has(beamAxis.id), true, '期待: 梁芯は残る');
+      assert.equal(calls, 0, '期待: 拒否経路は構造同期リスナーを呼ばない');
+    } finally {
+      setCenterLineStructuralListener(null);
+    }
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 手順c（他平面の壁由来梁芯の吸収）の保存が失敗したら巻き戻り、undo未積み・共有グラフ不変（QA指摘9）',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    const beamAxis = p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+    const beamAxisId = beamAxis.id;
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+    const beforeBytes = store.get(p2.plane.id);
+    const saveFloorFn = async () => { throw new Error('save failed'); };
+    const beforeTop = undoManager.peekUndo();
+
+    await withProductionPeek(project, store, async () => {
+      await assert.rejects(
+        () => addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null, { saveFloorFn }),
+        /save failed/,
+      );
+    });
+
+    assert.deepEqual(store.get(p2.plane.id), beforeBytes, '期待: 2階のstoreはbeforeバイトのまま');
+    const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(beamAxisId), true, '期待: 2階の梁芯は撤去されず残る');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 通り芯は追加されない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 他の平面(2階)に保護されない壁由来梁芯がある場合、通り芯の単体追加は拒否せず吸収する（裁定Q1・Q8）',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    const beamAxis = p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+    const beamAxisId = beamAxis.id;
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+    const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null, { saveFloorFn })
+    );
+
+    assert.equal(result.done, true, '期待: 吸収して成功する');
+    const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(beamAxisId), false, '期待: 2階の保護されない梁芯は撤去される');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 他の平面(2階)に保護される壁由来梁芯がある場合、通り芯の単体追加は拒否され平面名を出す',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    const beamAxis = p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+    const beamAxisId = beamAxis.id;
+    const y0 = p2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+    p2.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beamAxis, y0, { dimensionStatus: 'locked' });
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null)
+    );
+
+    assert.equal(result.done, false, '期待: 保護される梁芯があるため拒否される');
+    assert.match(result.toast ?? '', /2階/, '期待: 平面名を出す');
+    assert.match(result.toast ?? '', /通り芯を追加できません/, '期待: 裁定Q5の追加用の文言');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 通り芯は追加されない');
+    const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(beamAxisId), true, '期待: 2階の梁芯は書き換えない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: スパン配列で1本が他平面の中心線、別の1本が補助線と重なる場合、全体を拒否し補助線側の値と平面名だけを出し、何も保存しない（裁定Q1・Q3・Q6）',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    p2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false }); // 中心線（吸収対象・拒否理由に出ない）
+    p2.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, lineType: 'dashed' }); // 補助線（拒否理由）
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+    let saveCalls = 0;
+    const saveFloorFn = async (planeId, bytes) => { saveCalls++; store.set(planeId, bytes); };
+    const beforeTop = undoManager.peekUndo();
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV([1000, 2000, 3000]), null, { saveFloorFn })
+    );
+
+    assert.equal(result.done, false, '期待: 一部が補助線と重なるため全体を拒否する');
+    assert.match(result.toast ?? '', /2000/, '期待: 補助線側の値を出す');
+    assert.equal(/1000/.test(result.toast ?? ''), false, '期待: 中心線側（吸収対象）の値は出さない');
+    assert.match(result.toast ?? '', /2階/);
+    assert.equal(saveCalls, 0, '期待: 何も保存されない');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 1本も追加されない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 通常追加で他平面の中心線を吸収した後、undoでその平面の中心線が復活し壁が解決、共有グラフから通り芯が消える。redoで戻る',
+  async () => {
+    const { project, p1, p2, p2cl, store, saveFloorFn } = makeTwoFloorsWithSecondFloorCenterLineWall(3000);
+    const p2clId = p2cl.id;
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null, { saveFloorFn })
+    );
+    assert.equal(result.done, true);
+
+    undoManager.undo();
+    let decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(p2clId), true, '期待: undoで2階の中心線が復活する');
+    assert.equal(decoded.walls.length, 1, '期待: 壁は残る');
+    assert.equal(decoded.walls[0].axisValue, 3000, '期待: 壁はその中心線idに解決する');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: undoで共有グラフから通り芯が消える');
+
+    undoManager.redo();
+    decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decoded.shapeMap.has(p2clId), false, '期待: redoで再び吸収される');
+    assert.equal(decoded.walls[0].axisValue, 3000, '期待: 壁の幾何は変わらない');
+    assert.equal(project.structGraph.centerLines.length, 1, '期待: redoで通り芯が戻る');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 通常追加で他平面のpeekがrejectしたらrejectし、共有グラフ・undoは不変',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
+    const beforeTop = undoManager.peekUndo();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async () => { throw new Error('peek failed'); };
+    try {
+      await assert.rejects(
+        () => addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null),
+        /peek failed/,
+      );
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 通り芯は追加されない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 通常追加中に他平面peekの間でアクティブ階が切り替わったら、手順eの前で中止し巻き戻す（QA指摘6）',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+    const beforeTop = undoManager.peekUndo();
+    const originalPeek = floorSwapManager.peek;
+    let switched = false;
+    floorSwapManager.peek = async (plane) => {
+      const temp = decodeFloor(project, plane, store.get(plane.id));
+      // 他平面peek（IDBを伴うawait）の間に、階切替やhistoryナビゲーションで
+      // アクティブ階が変わりうる（promoteCenterToGridWithUndoのM-2ガードと同じ想定）。
+      if (!switched) { switched = true; project.activePlaneId = p2.plane.id; }
+      return temp;
+    };
+    try {
+      const result = await addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null);
+      assert.equal(result.done, false, '期待: 中止は成功扱いにしない');
+      assert.equal(result.toast, null, '期待: 中止はエラーではないためtoastは出さない');
+    } finally {
+      floorSwapManager.peek = originalPeek;
+      project.activePlaneId = p1.plane.id;
+    }
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 通り芯は追加されない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 通常追加で複数平面の中心線吸収中に後続平面の保存が失敗したら、先に保存した平面もbeforeへ戻し、共有グラフから追加した通り芯が消え、undoは積まれない',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph: p1 } = project.addPlane(0, '1階', 'p1');
+    const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+    const { graph: p3 } = project.addPlane(6000, '3階', 'p3');
+    const p2cl = p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
+    const p2clId = p2cl.id;
+    const y0 = p2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false });
+    const y1 = p2.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false });
+    p2.addWall(p2cl, 0, true, y0, 0, y1, 0, { isExteriorWall: false });
+    const p3cl = p3.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
+    const p3clId = p3cl.id;
+    // QA指摘5是正: graphSnapshot.js（常設の寸法線8本を復元時に補う）のため、直接構築した
+    // グラフを一度も peek（decodeFloor＝restoreGraph往復）していないバイト列と、peek済みの
+    // グラフを再シリアライズしたバイト列とではバイト長が変わる（初回往復だけ増える。2回目以降は
+    // 安定）——保存前後のバイト厳密一致で検証するには、ここで一度
+    // `serializeGraph(decodeFloor(...))` により正規化してから基準値（beforeP2/beforeP3）を
+    // 採る必要がある（qa6_rb.mjsのnorm関数と同じ手順）。
+    const norm = (g) => serializeGraph(decodeFloor(project, g.plane, serializeGraph(g)));
+    const store = new Map([
+      [p2.plane.id, norm(p2)],
+      [p3.plane.id, norm(p3)],
+    ]);
+    const beforeP2 = store.get(p2.plane.id);
+    const beforeP3 = store.get(p3.plane.id);
+    const saveFloorFn = async (planeId, bytes) => {
+      if (planeId === p3.plane.id) throw new Error('save failed');
+      store.set(planeId, bytes);
+    };
+    const beforeTop = undoManager.peekUndo();
+
+    await withProductionPeek(project, store, async () => {
+      await assert.rejects(
+        () => addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null, { saveFloorFn }),
+        /save failed/,
+      );
+    });
+
+    assert.deepEqual(store.get(p2.plane.id), beforeP2, '期待: 2階はbeforeバイトのまま（正規化済み基準とバイト厳密一致）');
+    assert.deepEqual(store.get(p3.plane.id), beforeP3, '期待: 3階はbeforeバイトのまま（そもそも保存前）');
+    const decodedP2 = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decodedP2.shapeMap.has(p2clId), true, '期待: 2階の中心線は吸収前のまま残る（巻き戻る）');
+    assert.equal(decodedP2.walls.length, 1, '期待: 2階の壁は残る');
+    assert.equal(decodedP2.walls[0].axisValue, 3000, '期待: 2階の壁はその中心線idのまま');
+    const decodedP3 = decodeFloor(project, p3.plane, store.get(p3.plane.id));
+    assert.equal(decodedP3.shapeMap.has(p3clId), true, '期待: 3階の中心線も吸収されていない');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 追加した通り芯は共有グラフから消える');
+    assert.equal(p1.centerLines.length, 0, '期待: 自階に中心線の交点・従属物が残らない');
+    assert.equal(p1.columns.length, 0, '期待: 自階に柱の従属物も残らない');
     assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
   },
 );

@@ -4681,7 +4681,7 @@ test('addCenterLineFromDialog: 通り芯・中心線・補助線の追加ではb
   assert.equal(aux.beamAxisOrigin, null);
 });
 
-test('addCenterLineFromDialog: 梁芯の手動追加は既存の中心線・通り芯と同位置に共存できず、通り芯追加も既存の梁芯（中心線が同座標に無い場合）を拒否する', async () => {
+test('addCenterLineFromDialog: 梁芯の手動追加は既存の中心線・通り芯と同位置に共存できない', async () => {
   const { project, graph } = makeProjectWithGraph();
 
   // 既存=中心線、新規=梁芯
@@ -4693,18 +4693,26 @@ test('addCenterLineFromDialog: 梁芯の手動追加は既存の中心線・通�
   );
   assert.equal(r2.done, false);
   assert.equal(r2.toast, ERR_CL_DUPLICATE('center'));
+});
 
-  // 既存=梁芯、新規=通り芯 → 拒否（大梁と完全重複する小梁の生成防止）
-  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+// 線種変更の移籍一本化・ステップ6（2026-09-30・裁定Q8）: 既存が保護されない壁由来梁芯（中心線が
+// 同座標に無い場合）の通り芯追加は、拒否ではなく吸収（追加後に梁芯を撤去）へ変わった——
+// addGridLinesWithFloorAbsorption参照。保護される梁芯（refId付き・locked柱等）の拒否は
+// lineKindTransfer.test.js の裁定Q8テストで確認済み。
+test('addCenterLineFromDialog: 既存の梁芯（中心線が同座標に無い場合）への通り芯追加は拒否せず吸収して梁芯を撤去する（裁定Q8）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+
+  const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  const beamAxisId = beamAxis.id;
   const beforeTop = undoManager.peekUndo();
   const r3 = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
     null,
   );
-  assert.equal(r3.done, false);
-  assert.equal(r3.toast, ERR_CL_DUPLICATE('beam'));
-  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+  assert.equal(r3.done, true, '期待: 拒否せず吸収して成功する');
+  assert.equal(graph.shapeMap.has(beamAxisId), false, '期待: 保護されない梁芯は撤去される');
+  assert.notEqual(undoManager.peekUndo(), beforeTop, 'undoが積まれる');
 });
 
 test('addCenterLineFromDialog: 既存中心線位置への通り芯追加は中心線を移籍して昇格し、done:true+ERR_CL_CENTER_UPGRADEDでundo可能', async () => {
@@ -5019,7 +5027,7 @@ test('addCenterLineFromDialog: 補助線の単体追加・結合連鎖、梁芯�
   }
 });
 
-test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は構造同期リスナーを呼ばない（ERR_CL_DUPLICATE/ERR_CL_STRUCT_EXISTS/バッチ全件重複/梁芯の重複拒否）', async () => {
+test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は構造同期リスナーを呼ばない（ERR_CL_DUPLICATE/ERR_CL_STRUCT_EXISTS/バッチ全件重複）', async () => {
   // ---- struct×struct 同座標 ----
   {
     const { project, graph } = makeProjectWithGraph();
@@ -5081,24 +5089,27 @@ test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は�
     }
   }
 
-  // ---- 梁芯の重複拒否（既存=梁芯、新規=通り芯） ----
-  {
-    const { project, graph } = makeProjectWithGraph();
-    graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
-    let calls = 0;
-    setCenterLineStructuralListener(() => { calls++; });
-    try {
-      const result = await addCenterLineFromDialog(
-        graph, project,
-        { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
-        null,
-      );
-      assert.equal(result.done, false);
-      assert.equal(result.toast, ERR_CL_DUPLICATE('beam'));
-      assert.equal(calls, 0);
-    } finally {
-      setCenterLineStructuralListener(null);
-    }
+});
+
+// 線種変更の移籍一本化・ステップ6（2026-09-30・裁定Q8）: 既存=保護されない梁芯・新規=通り芯は
+// 拒否ではなく吸収して成功するため、上の「拒否系は呼ばない」テストから分離する——吸収は成功
+// （構造同期スコープ'all'）なので構造同期リスナーが呼ばれる。
+test('addCenterLineFromDialog: 既存=保護されない梁芯・新規=通り芯は吸収して成功し、構造同期リスナーが呼ばれる（裁定Q8）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const result = await addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
+      null,
+    );
+    assert.equal(result.done, true);
+    assert.equal(graph.shapeMap.has(beamAxis.id), false, '期待: 保護されない梁芯は撤去される');
+    assert.ok(calls > 0, '期待: 吸収して成功するため構造同期リスナーが呼ばれる');
+  } finally {
+    setCenterLineStructuralListener(null);
   }
 });
 
@@ -5339,8 +5350,11 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
     if (newKind === 'beam' && coexistenceAt(newKind, existingKind) === 'forbidden') return 'forbidden-beam-existing';
     // 線種変更の移籍一本化・裁定Q8（2026-09-30）: 中心線が同座標にあり昇格分岐（promote）へ入る
     // 場合は、梁芯の事前拒否を適用しない——promoteCenterToGridWithUndo自身が保護されない壁由来
-    // 梁芯を吸収する（centerLineOps.js addCenterLineFromDialogのコメント参照）。
-    if (newKind === 'struct' && present.includes('beam') && existingKind !== 'center') return 'forbidden-beam-anywhere';
+    // 梁芯を吸収する（centerLineOps.js addCenterLineFromDialogのコメント参照）。中心線が無い場合は
+    // 通常追加（addGridLinesWithFloorAbsorption）が同じ規則で自階の保護されない壁由来梁芯を吸収する
+    // （同裁定）——このseed済みbeamは常にrefId無し・保護される利用者データ無しのため、常に吸収されて
+    // 成功する（拒否ではなくなった。旧'forbidden-beam-anywhere'を'absorb-beam'へ改めた）。
+    if (newKind === 'struct' && present.includes('beam') && existingKind !== 'center') return 'absorb-beam';
     if (coexistenceAt(newKind, existingKind) === 'promote') return 'promote';
     if (newKind === 'center' && coexistenceAt(newKind, existingKind) === 'forbidden') return 'struct-exists';
     return 'allowed';
@@ -5386,10 +5400,17 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
           .map(centerLineKind);
 
         if (outcome === 'forbidden-same' || outcome === 'forbidden-beam-existing'
-          || outcome === 'forbidden-beam-anywhere' || outcome === 'struct-exists') {
+          || outcome === 'struct-exists') {
           assert.equal(result.done, false, label);
           assert.deepEqual(survivedKinds, [...present].sort(), `${label}: 既存は全て残る`);
           assert.deepEqual(addedKinds, [], `${label}: 何も追加されない`);
+        } else if (outcome === 'absorb-beam') {
+          // 線種変更の移籍一本化・裁定Q8（2026-09-30）: 保護されない壁由来梁芯は拒否ではなく
+          // 吸収される——新規（通り芯）が追加され、梁芯だけが消え、他の共存種別（aux等）は残る。
+          assert.equal(result.done, true, label);
+          const expectedSurvivors = present.filter(k => k !== 'beam').sort();
+          assert.deepEqual(survivedKinds, expectedSurvivors, `${label}: 保護されない梁芯は吸収されて消え、他は残る`);
+          assert.deepEqual(addedKinds, [newKind], `${label}: 新規（通り芯）が追加される`);
         } else if (outcome === 'extent' && !ext) {
           // 既存extentが未指定(null)のため常に重なり扱い→拒否（centerLineOps.jsの
           // 「exLo==null||exHi==null → extentsOverlap=true」短絡）。

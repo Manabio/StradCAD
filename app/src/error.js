@@ -91,6 +91,23 @@ export const ERR_CL_CONVERT_DUP_FLOOR = (floorsByKind) =>
 // 実質的な表示は中心線・補助線のみになる。
 export const ERR_CL_CONVERT_DUP_FLOOR_DEMOTE = (floorsByKind) =>
   `${formatFloorsByKind(floorsByKind)}があるため中心線にできません。`;
+
+// ダイアログからの通り芯の単体追加・スパン配列専用（線種変更の移籍一本化 ステップ6・裁定Q4〜Q6）:
+// ERR_CL_CONVERT_DUP_FLOOR（昇格用「…通り芯にできません」）とは動詞が異なる（「追加できません」）
+// ため別関数にする。相手は他平面の補助線・保護される梁芯のみ（中心線・保護されない壁由来梁芯は
+// transform/centerLineOps.js addGridLinesWithFloorAbsorption が吸収するため相手にならない）。
+export const ERR_CL_ADD_DUP_FLOOR = (floorsByKind) =>
+  `${formatFloorsByKind(floorsByKind)}があるため通り芯を追加できません。`;
+// スパン配列専用（裁定Q6・QA指摘4是正）: 一部の値だけ他平面の相手と重なる場合、値ごとに軸・値・
+// 平面・相手種別を列挙する（例:「X=2000: 2階 の同じ位置に補助線があるため通り芯を追加できません。」）。
+// 値と値の区切りは「／」（値の中の種別の区切り「、」＝formatFloorsByKindと衝突しないよう分ける）。
+// value は呼び出し側（transform/centerLineOps.js）が画面表示（ui/AddCLDialog.jsx
+// `Math.round(sign * value)`。Y軸は符号反転）に合わせて変換済みの値を渡すこと——本関数は受け取った
+// 値をそのまま埋め込むだけで変換しない。
+// entries: [{ axis: 'X'|'Y', value: number, floorsByKind: [{name, kind}] }]
+export const ERR_CL_ADD_DUP_FLOOR_SPAN = (entries) =>
+  `${entries.map(({ axis, value, floorsByKind }) => `${axis}=${value}: ${formatFloorsByKind(floorsByKind)}`).join('／')}があるため通り芯を追加できません。`;
+
 // 中心⇔通り芯の入替えの階またぎ同期（centerLineFloorSync.js）がIDB書込等で失敗した場合。
 // 昇格は移籍後の吸収失敗（他平面・自階・共有グラフとも巻き戻し済み＝昇格されていない。QA所見5是正・
 // 2026-09-30: applyCenterLineAbsorptionOnPromoteをapplyPromoteToGridの後に呼ぶよう変更したため、

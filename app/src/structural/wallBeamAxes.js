@@ -5,7 +5,7 @@ import { runInAction } from 'mobx';
 import { CenterLineType, Discipline } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
-import { structuralAnchorAt, beamAxisAt } from '../core/centerLineKindPolicy.js';
+import { structuralAnchorAt, beamAxisAt, beamAxesAt } from '../core/centerLineKindPolicy.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
 import { peekVia } from './structuralPeek.js';
@@ -359,6 +359,23 @@ export function findWallBeamAxisCL(graph, isVertical, coord) {
 }
 
 /**
+ * coord に一致する壁由来の梁芯を**すべて**返す（線種変更の移籍一本化 ステップ6是正・2026-09-30）:
+ * 同座標に区間の離れた梁芯が複数本ありうるため、`findWallBeamAxisCL`（`.find()`相当）だけでは
+ * 1本しか見つからず、保護判定・吸収撤去（transform/centerLineOps.js
+ * addGridLinesWithFloorAbsorption・transform/centerLineFloorSync.js absorbWallBeamAxesOnPromote）が
+ * 残りの本数を見落とす。呼び出し側は「1本でも保護されていれば拒否、そうでなければ全部撤去」という
+ * 規則で使うこと。
+ * @param {object} graph
+ * @param {boolean} isVertical
+ * @param {number} coord
+ * @returns {import('../core.js').CenterLine[]}
+ */
+export function findWallBeamAxisCLs(graph, isVertical, coord) {
+  const centerLineType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+  return beamAxesAt(graph, { centerLineType, coord });
+}
+
+/**
  * 明示的な中心線削除に限る例外（上記コメント参照）: sourcesBefore にはあった壁ソースが
  * sourcesAfter で無くなった（同方向・座標差がCL_OVERLAP_TOL_MM以上で「対応する後継が無い」）
  * 座標について、その位置の壁由来梁芯CL（discipline:fuse）を求め、次のいずれにも該当しない
@@ -454,6 +471,10 @@ export function removeOrphanedWallBeamAxesFor(graph, project, belowGraph, source
  * @returns {boolean}
  */
 export function isProtectedWallBeamAxis(graph, cl, { ignoreRefsFrom = new Set() } = {}) {
+  // リード裁定（線種変更の移籍一本化 ステップ6是正・2026-09-30）: 由来がユーザー手動追加
+  // （BeamAxisOrigin.USER。AddCLDialogからkind:'beam'で追加した梁芯）は無条件で保護する——
+  // wall/floorBeam/opening由来（自動生成）・null（旧データ）は従来どおり下の個別条件で判定する。
+  if (cl.beamAxisOrigin === BeamAxisOrigin.USER) return true;
   if (cl.refId != null) return true;
   const hasProtectedUserData =
     graph.columns.some(c => (c.verticalCL.id === cl.id || c.horizontalCL.id === cl.id) && c.dimensionStatus !== 'auto') ||

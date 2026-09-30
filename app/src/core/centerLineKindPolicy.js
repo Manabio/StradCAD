@@ -114,8 +114,16 @@ export const HIT_EXCLUDED_KINDS_BY_MODE = Object.freeze({
 //   'allowed'   — 無条件で許可する
 //   'promote'   — 既存（中心線）を移籍して通り芯へ昇格する（transform/centerLineOps.js
 //                 promoteCenterToGridWithUndo。線種変更の移籍一本化・2026-09-30）
+//   'absorb'    — 既存（保護されない壁由来梁芯）を撤去して追加する。保護されていれば拒否する
+//                 （リード裁定・線種変更の移籍一本化 ステップ6是正・2026-09-30。判定述語は
+//                 structural/wallBeamAxes.js isProtectedWallBeamAxis——由来USER（手動追加）・
+//                 refId付き・locked柱等いずれか該当で保護。実装は
+//                 transform/centerLineOps.js addGridLinesWithFloorAbsorption・
+//                 promoteCenterToGridWithUndo が担う。'forbidden'との違い: 同座標に両方が
+//                 「残ることはない」点は共通だが、'forbidden'は追加自体を拒否するのに対し
+//                 'absorb'は既存を消して追加を通す）
 export const COEXISTENCE = Object.freeze({
-  struct: Object.freeze({ struct: 'forbidden', center: 'promote',  aux: 'allowed',   beam: 'forbidden' }),
+  struct: Object.freeze({ struct: 'forbidden', center: 'promote',  aux: 'allowed',   beam: 'absorb'    }),
   center: Object.freeze({ struct: 'forbidden', center: 'extent',   aux: 'allowed',   beam: 'allowed'   }),
   aux:    Object.freeze({ struct: 'allowed',   center: 'allowed',  aux: 'extent',    beam: 'allowed'   }),
   beam:   Object.freeze({ struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent'   }),
@@ -962,24 +970,39 @@ export function structuralAnchorCandidates(graph, { centerLineType, tier }) {
 
 /**
  * coord（effectiveValue基準、tolMm以内）に一致する梁芯CL（BEAM_AXIS_KINDS）を graph.centerLines から
+ * **すべて**返す走査API（線種変更の移籍一本化 ステップ6是正・2026-09-30: 同座標に区間の離れた梁芯が
+ * 複数本ありうる——`.find()`の単数形`beamAxisAt`では最初の1本しか見つからず、保護判定・吸収撤去が
+ * 残りの本数を見落とす。structural/wallBeamAxes.js findWallBeamAxisCLs——壁由来梁芯の道連れ吸収が
+ * 使う。通り芯は対象にしない。追従処理が通り芯を動かす事故を防ぐため意図的に
+ * structuralAnchorAt(tier:'primary') とは別にする）。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType: string, coord: number, tolMm?: number}} opts
+ * @returns {object[]}
+ */
+export function beamAxesAt(graph, { centerLineType, coord, tolMm = CL_OVERLAP_TOL_MM }) {
+  if (centerLineType == null) {
+    throw new Error(`beamAxesAt: centerLineTypeは必須です（実際: ${centerLineType}）`);
+  }
+  if (typeof coord !== 'number' || Number.isNaN(coord)) {
+    throw new Error(`beamAxesAt: coordは数値である必要があります（実際: ${coord}）`);
+  }
+  return graph.centerLines.filter(cl =>
+    cl.centerLineType === centerLineType &&
+    BEAM_AXIS_KINDS.includes(centerLineKind(cl)) &&
+    Math.abs(cl.effectiveValue - coord) < tolMm);
+}
+
+/**
+ * coord（effectiveValue基準、tolMm以内）に一致する梁芯CL（BEAM_AXIS_KINDS）を graph.centerLines から
  * 1本返す走査API（structural/wallBeamAxes.js findWallBeamAxisCL——壁由来梁芯の追従元探索。通り芯は
- * 対象にしない。追従処理が通り芯を動かす事故を防ぐため意図的に structuralAnchorAt(tier:'primary') とは
- * 別にする）。単一パスの `.find()`。
+ * 対象にしない）。`beamAxesAt`の先頭1本を返す薄い包み（同座標に複数本ある場合の扱いは呼び出し側が
+ * 決める——追従元探索は「1本目が見つかれば十分」という前提のまま変えない）。
  * @param {{centerLines: Array}} graph
  * @param {{centerLineType: string, coord: number, tolMm?: number}} opts
  * @returns {object|null}
  */
-export function beamAxisAt(graph, { centerLineType, coord, tolMm = CL_OVERLAP_TOL_MM }) {
-  if (centerLineType == null) {
-    throw new Error(`beamAxisAt: centerLineTypeは必須です（実際: ${centerLineType}）`);
-  }
-  if (typeof coord !== 'number' || Number.isNaN(coord)) {
-    throw new Error(`beamAxisAt: coordは数値である必要があります（実際: ${coord}）`);
-  }
-  return graph.centerLines.find(cl =>
-    cl.centerLineType === centerLineType &&
-    BEAM_AXIS_KINDS.includes(centerLineKind(cl)) &&
-    Math.abs(cl.effectiveValue - coord) < tolMm) ?? null;
+export function beamAxisAt(graph, opts) {
+  return beamAxesAt(graph, opts)[0] ?? null;
 }
 
 /**

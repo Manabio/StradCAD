@@ -11,6 +11,7 @@ import {
   ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_NO_GRID,
   ERR_CL_DELETE_FOOTPRINT, ERR_CL_DELETE_UNRESOLVABLE, ERR_CL_DELETE_WALLS_UNAVAILABLE, ERR_CATALOG_DUPLICATE,
   ERR_CL_CONVERT_SAME_ID_FLOOR, ERR_CL_CONVERT_SAME_ID_FLOOR_DEMOTE, ERR_CL_CONVERT_ABSORB_CONFLICT_FLOOR,
+  ERR_CL_ADD_DUP_FLOOR, ERR_CL_ADD_DUP_FLOOR_SPAN,
 } from '../error.js';
 import { findUnresolvableCells, collectUnresolvableCells } from '../finish/roomReinterpret.js';
 import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
@@ -30,7 +31,7 @@ import { renumberMembers } from '../structural/memberNumbering.js';
 import { autoFillSecondaryBeams, autoFillBeamEccentricity, UNSPECIFIED_STRUCTURE } from '../structural/structuralAutoFill.js';
 import {
   wallBeamAxisExcludeKey, peekBelowGraph, wallBeamSourcesFor, removeOrphanedWallBeamAxesFor, belowPlaneOf,
-  wallBackingCenters, mapBackingCenterMoves, isProtectedWallBeamAxis, findWallBeamAxisCL,
+  wallBackingCenters, mapBackingCenterMoves, isProtectedWallBeamAxis, findWallBeamAxisCLs,
 } from '../structural/wallBeamAxes.js';
 import { followWallBeamAxes } from '../structural/wallBeamAxisFollow.js';
 import { openingBeamSourcesFor, mapOpeningSourceMoves } from '../structural/openingBeamAxes.js';
@@ -55,6 +56,7 @@ import {
   saveOtherFloorsAfterGridCenterLineAftermath,
   findFloorsWithCounterpartCL, findFloorsWithSameLineId, absorbWallBeamAxesOnPromote,
   findCenterLinesToAbsorbOnPromote, applyCenterLineAbsorptionOnPromote,
+  findCenterLinesToAbsorbForValues, applyCenterLineAbsorptionForValues,
   propagateDemotedCenterLine, findFloorsBlockingGridDeletion, applyCenterLineRemovalAftermath,
 } from './centerLineFloorSync.js';
 // 降格（通り芯→中心線）で固定材（非auto）が確認済みで削除されるとき用（手動追加材サイレント撤去回避
@@ -931,11 +933,13 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
   // orphanedWallBeamAxesと同じ述語（isProtectedWallBeamAxis）を共有——重複実装しない。
   // centerLineConvert.jsはimport-free規約のためwallBeamAxes.jsを直接importできず、判定はここ
   // （centerLineOps.js。既にwallBeamAxes.jsをimport済み）で行い、判定済みidの配列だけを渡す。
-  // 梁芯の検索はfindWallBeamAxisCL（centerLineKind(x)==='beam'のインライン比較を増やさない。
-  // G3ガード）を使う。
-  const sameCoordBeamAxis = findWallBeamAxisCL(graph, cl.centerLineType === CenterLineType.VERTICAL, cl.value);
-  const absorbableBeamAxisIds = (sameCoordBeamAxis && !isProtectedWallBeamAxis(graph, sameCoordBeamAxis))
-    ? [sameCoordBeamAxis.id] : [];
+  // 梁芯の検索はfindWallBeamAxisCLs（centerLineKind(x)==='beam'のインライン比較を増やさない。
+  // G3ガード）を使う。線種変更の移籍一本化 ステップ6是正（2026-09-30）: 同座標に区間の離れた
+  // 梁芯が複数本ありうるため複数形で列挙し、保護されないものだけ吸収対象にする——保護される梁芯が
+  // 1本でもあれば、その分は excludeBeamAxisIds に含めないため checkPromoteToGridGuards が拒否する
+  // （従来どおり「1本でも保護されれば昇格自体を拒否」の規則を保つ）。
+  const sameCoordBeamAxes = findWallBeamAxisCLs(graph, cl.centerLineType === CenterLineType.VERTICAL, cl.value);
+  const absorbableBeamAxisIds = sameCoordBeamAxes.filter(ax => !isProtectedWallBeamAxis(graph, ax)).map(ax => ax.id);
 
   const guardError = checkPromoteToGridGuards(graph, project.structGraph, cl, { excludeBeamAxisIds: absorbableBeamAxisIds });
   if (guardError) return { toast: guardError };
@@ -1215,6 +1219,181 @@ export function shouldSuggestWoodStructure(graph, project, appMode, clType, newV
   });
 }
 
+// ---- 通り芯の追加（ダイアログの単体追加・スパン配列）における他平面の吸収・拒否 ----
+// 線種変更の移籍一本化・ステップ6（2026-09-30・裁定Q4〜Q6・Q8）: 通り芯を追加する経路は、昇格
+// （promoteCenterToGridWithUndo）と同じ「他平面の同座標チェック」を通す。単体追加（values=[value]）・
+// スパン配列（values=newValues）の両方がこの内部関数を通ることで、他平面の処理を2回書かない
+// （addCenterLineFromDialogのkind==='struct'分岐・Array.isArray(value)分岐の両方から呼ぶ）。
+// 手順（指示書§手順6 設計a〜h）:
+//   a. 値ごとに他平面の同座標チェック（findFloorsWithCounterpartCL。中心線・保護されない壁由来梁芯は
+//      相手から除外する——後続の手順c・fが同じ階を吸収するため）。1つでも相手（補助線・保護される
+//      梁芯）があれば全体を拒否する（何も書かない）。
+//   b. 自階の壁由来梁芯（裁定Q8）: 保護されなければ吸収対象（手順eで追加後に撤去）、保護されれば
+//      拒否する（既存の事前拒否 `kind==='struct'&&existingKind!=='center'&&sameCoord.some(beam)` は
+//      この判定に置き換える——呼び出し側 addCenterLineFromDialog 参照）。
+//      【リード裁定・現状維持】単体追加とスパン配列とで実際にはここへの到達可否が異なる——単体は
+//      同座標に既存が無いときだけこの関数を呼ぶが、そのまま梁芯があればここで吸収・拒否を判定する。
+//      スパン配列は呼び出し側が`sameCoordCounterparts`で「自階に何か線（梁芯を含む）がある値」を
+//      上流で黙って飛ばすため、梁芯がある値はそもそも`values`に含まれず、この手順に到達しない
+//      （＝スパン配列は自階の梁芯を吸収しない。設計h「自階の同座標重複は範囲外」と同じ理由で、
+//      単体とスパンの差はこのステップの範囲外として現状維持する）。
+//   c. 他平面の保護されない壁由来梁芯を吸収する（追加前。promoteCenterToGridWithUndoと同じ規律）。
+//      aで弾かれているはずだが、防御としてここでもblockedPlanesを確認する。
+//   d. 他平面の中心線吸収の対象を調べる（**平面単位**。1平面につき1回peekし、値ごとの吸収対象idを
+//      Mapへまとめる——findCenterLinesToAbsorbForValues。書込みは手順fで行う）。
+//   e. 手順eの前にアクティブ再確認（graph!==project.activeGraphなら中止。QA指摘6・
+//      promoteCenterToGridWithUndoのM-2ガードと同型）。通り芯を追加し、自階の吸収対象梁芯
+//      （手順b）を撤去する。
+//   f. 他平面の中心線を吸収する（**平面単位**。1平面につき1回のbefore/afterへまとめて保存する
+//      ——applyCenterLineAbsorptionForValues。線種変更の移籍一本化 ステップ6是正・2026-09-30・
+//      QA指摘1: 値ごとに独立してbefore/afterを作る旧実装は、同じ平面を複数の値で吸収すると
+//      後の値の保存が先の値の吸収結果を上書きし1本しか残らない不良になっていた——移籍後に書く
+//      ことに変わりはない）。失敗したら自階・structGraph・floorRecordsをすべて巻き戻す。
+//   g. undo/redoを積む（promoteCenterToGridWithUndoと同じ型——beforeArch/afterArch・
+//      beforeStruct/afterStruct・floorRecordsを1つのundoエントリにまとめる）。
+//   h. 自階の同座標の重複（スパン配列で黙って飛ばす既存挙動）はこの関数の範囲外——呼び出し側が
+//      values に渡す前に除外済みという前提（addCenterLineFromDialogのnewValuesフィルタ参照）。
+// 性能: 値ごとに他平面をpeekする手順a・cは値の数だけ他平面を繰り返しpeekする——1平面1回の
+// peekにまとめる余地がある（設計§3後段。既知の残件。findFloorsWithCounterpartCL・
+// absorbWallBeamAxesOnPromoteはfloorSwapManager.peekのメモ化キャッシュを持たない独立呼び出しの
+// ため）。手順d・fは平面単位へ改めたため、この性能残件の対象ではない（QA指摘1是正）。
+// @param {import('@core').PlanGraph} graph 自階グラフ（アクティブ階）
+// @param {object} project
+// @param {object} opts
+// @param {string} opts.clType CenterLineType
+// @param {number[]} opts.values 追加する座標（単体は要素1つの配列）
+// @param {object} opts.props project.structGraph.addCenterLine へ渡すprops（discipline:STRUCT前提）
+// @param {string|null} opts.syncScope structuralSyncScopeOfKind('struct')相当（常に'all'のはずだが
+//   呼び出し側の値をそのまま使う）
+// @param {Function} [opts.saveFloorFn] テスト用の差し替え（既定はcenterLineFloorSync.js側のsaveFloor）
+// @returns {Promise<{ done: boolean, toast: string|null }>}
+async function addGridLinesWithFloorAbsorption(graph, project, { clType, values, props, syncScope, saveFloorFn }) {
+  const isVertical = clType === CenterLineType.VERTICAL;
+  const axisLabel = isVertical ? 'X' : 'Y';
+
+  // a. 他平面の同座標チェック（全体拒否。何も書かない）。
+  const blockedByValue = [];
+  for (const v of values) {
+    const floors = await findFloorsWithCounterpartCL(project, graph, { centerLineType: clType, value: v }, {
+      excludeAbsorbableBeam: true, absorbCenter: true,
+    });
+    if (floors.length > 0) {
+      blockedByValue.push({ value: v, floorsByKind: floors.map(f => ({ name: f.plane.name, kind: f.kind })) });
+    }
+  }
+  if (blockedByValue.length > 0) {
+    const toast = values.length === 1
+      ? ERR_CL_ADD_DUP_FLOOR(blockedByValue[0].floorsByKind)
+      // QA指摘4: 値は画面表示（ui/AddCLDialog.jsx `Math.round(sign * value)`。Y軸は符号反転）に
+      // 合わせる——ワールド座標をそのまま出すと通り芯追加ダイアログの表示値と符号・丸めが食い違う。
+      : ERR_CL_ADD_DUP_FLOOR_SPAN(blockedByValue.map(({ value, floorsByKind }) =>
+          ({ axis: axisLabel, value: Math.round((isVertical ? 1 : -1) * value), floorsByKind })));
+    return { done: false, toast };
+  }
+
+  // b. 自階の壁由来梁芯（裁定Q8）。線種変更の移籍一本化 ステップ6是正（2026-09-30）: 同座標に
+  // 区間の離れた梁芯が複数本ありうるため findWallBeamAxisCLs（複数形）で全て列挙する——1本でも
+  // 保護されれば拒否、そうでなければ全部吸収対象にする。
+  const ownAbsorbableBeamIds = [];
+  for (const v of values) {
+    const beamAxes = findWallBeamAxisCLs(graph, isVertical, v);
+    if (beamAxes.length === 0) continue;
+    if (beamAxes.some(ax => isProtectedWallBeamAxis(graph, ax))) {
+      return { done: false, toast: ERR_CL_DUPLICATE('beam') };
+    }
+    for (const ax of beamAxes) ownAbsorbableBeamIds.push(ax.id);
+  }
+
+  // c. 他平面の保護されない壁由来梁芯を吸収する（移籍＝追加の前）。
+  const floorRecords = [];
+  for (const v of values) {
+    let blockedPlanes;
+    try {
+      ({ blockedPlanes } = await absorbWallBeamAxesOnPromote(project, graph, { centerLineType: clType, value: v }, {
+        undoRecords: floorRecords,
+        ...(saveFloorFn ? { saveFloorFn } : {}),
+      }));
+    } catch (e) {
+      await rollbackFloorRecords(floorRecords, saveFloorFn, project);
+      throw e;
+    }
+    if (blockedPlanes.length > 0) {
+      // 手順aで弾かれているはずの防御——実際には到達しない想定（promoteCenterToGridWithUndoの
+      // 同型ガードと同じ理由）。
+      await rollbackFloorRecords(floorRecords, saveFloorFn, project);
+      return { done: false, toast: ERR_CL_ADD_DUP_FLOOR(blockedPlanes.map(p => ({ name: p.name, kind: 'beam' }))) };
+    }
+  }
+
+  // d. 他平面の中心線吸収の対象（平面単位。peekのみ。書込みはfで行う）。線種変更の移籍一本化
+  // ステップ6是正（2026-09-30・QA指摘1）: 値ごとに独立してpeekしていた旧実装は、同じ平面を複数の
+  // 値で吸収すると、後で処理した値の保存が先に処理した値の吸収結果を上書きして1本しか残らない
+  // 不良になっていた（実測）——findCenterLinesToAbsorbForValuesで1平面につき1回peekしてまとめる。
+  const absorbTargets = await findCenterLinesToAbsorbForValues(project, graph, { centerLineType: clType, values });
+
+  // 手順e（追加）の前にアクティブ再確認（QA指摘6。promoteCenterToGridWithUndoのM-2ガードと同型）:
+  // 他平面peek（IDBを伴うawait）の間に階が切り替わった可能性があるため、書込み前に検出すれば
+  // rollbackFloorRecordsで足りる（floorRecordsは手順cの梁芯吸収分のみ。ここまでは自階・structGraph
+  // とも未変更のためrestoreStructCLs/restoreGraphは不要）。
+  if (graph !== project.activeGraph) {
+    await rollbackFloorRecords(floorRecords, saveFloorFn, project);
+    return { done: false, toast: null, aborted: true };
+  }
+
+  // e. 追加し、自階の吸収対象梁芯（手順b）を撤去する。
+  const beforeArch = serializeGraph(graph);
+  const beforeStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  const addedIds = [];
+  runInAction(() => {
+    for (const v of values) addedIds.push(project.structGraph.addCenterLine(clType, v, props).id);
+    for (const id of ownAbsorbableBeamIds) graph.removeCenterLine(id);
+  });
+  const gridIdByValue = new Map(values.map((v, i) => [v, addedIds[i]]));
+
+  // f. 他平面の中心線を吸収する（移籍後。平面ごとに1回のbefore/afterへまとめて保存する
+  // ——applyCenterLineAbsorptionForValuesのJSDoc「平面単位」参照）。
+  let conflictPlane;
+  try {
+    ({ conflictPlane } = await applyCenterLineAbsorptionForValues(absorbTargets, gridIdByValue, {
+      undoRecords: floorRecords,
+      ...(saveFloorFn ? { saveFloorFn } : {}),
+    }));
+  } catch (e) {
+    await rollbackFloorRecords(floorRecords, saveFloorFn, project);
+    restoreStructCLs(project.structGraph, project.structuralInfo, beforeStruct, project.memberGroupLedger);
+    restoreGraph(graph, beforeArch);
+    throw e;
+  }
+  if (conflictPlane) {
+    await rollbackFloorRecords(floorRecords, saveFloorFn, project);
+    restoreStructCLs(project.structGraph, project.structuralInfo, beforeStruct, project.memberGroupLedger);
+    restoreGraph(graph, beforeArch);
+    return { done: false, toast: ERR_CL_CONVERT_ABSORB_CONFLICT_FLOOR(conflictPlane.name) };
+  }
+
+  // g. undo/redoを積む（promoteCenterToGridWithUndoと同じ型）。
+  const notify = (records) => { if (syncScope) structuralSyncListener?.(graph, project, syncScope, records); };
+  const afterArch = serializeGraph(graph);
+  const afterStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  undoManager.push(
+    () => {
+      restoreStructCLs(project.structGraph, project.structuralInfo, beforeStruct, project.memberGroupLedger);
+      restoreGraph(graph, beforeArch);
+      applyFloorUndoRecords(project, floorRecords, 'before', saveFloorFn);
+      notify();
+    },
+    () => {
+      restoreStructCLs(project.structGraph, project.structuralInfo, afterStruct, project.memberGroupLedger);
+      restoreGraph(graph, afterArch);
+      applyFloorUndoRecords(project, floorRecords, 'after', saveFloorFn);
+      notify();
+    },
+  );
+  notify(floorRecords);
+
+  return { done: true, toast: null };
+}
+
 // ---- AddCLDialog確定（handleCLDialogConfirm） ----
 // extent解決・重複判定（ERR_CL_DUPLICATE等）・結合連鎖（mergeCenterLineChain/composeUndoWithMergeChain）・
 // undo登録を行う。ダイアログを閉じる setState・木造提案 ConfirmDialog の表示は呼び出し側（App.jsx）。
@@ -1243,35 +1422,20 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
     if (newValues.length === 0) {
       return { done: true, toast: ERR_CL_DUPLICATE('struct'), suggestWood: null };
     }
-    const before = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
-    const addedIds = newValues.map(v =>
-      project.structGraph.addCenterLine(clType, v, {
-        discipline: Discipline.STRUCT,
-        labeled:    true,
-      }).id
-    );
-    const after = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
-    // 裁定(a)・2026-09-25: 通り芯追加のundoは実質的な通り芯削除——deleteCenterLineWithUndoのstruct
-    // 分岐と同じ型（graph.detachFromCenterLine→graph.removeDependentsOfCenterLine→structGraph側の
-    // 削除）に揃える。structGraph.removeCenterLine（ここではrestoreStructCLsによる巻き戻し）の
-    // teardownは自グラフ（階固有）のshapeMapには届かず、S造の格子柱は生成時のフィルタしか通らない
-    // ため再計算しても自然には消えない（core/planGraph.js removeDependentsOfCenterLineのJSDoc参照）。
-    // 他階の格子柱（追加中の'all'同期でIDBに保存されたもの）は、undo後の次のpeekでresolveCLが
-    // 参照不能として落とすため、ここで他階への伝播は不要——通り芯削除と違い、追加のundoは
-    // 「他階に複製されていた実体を消す」のではなく「他階が一時的に持っていたstructGraph側の参照が
-    // 消える」だけなので、次にその階を読み直せば自然に整合する。
-    pushUndoWithStructuralSync(
-      graph, project, syncScope,
-      () => {
-        for (const id of addedIds) {
-          graph.detachFromCenterLine(id);
-          graph.removeDependentsOfCenterLine(id);
-        }
-        restoreStructCLs(project.structGraph, project.structuralInfo, before, project.memberGroupLedger);
-      },
-      () => restoreStructCLs(project.structGraph, project.structuralInfo, after, project.memberGroupLedger),
-      opts.saveFloorFn,
-    );
+    // 線種変更の移籍一本化・ステップ6（2026-09-30・裁定Q4〜Q6・Q8）: 他平面の同座標チェック・
+    // 自階/他平面の梁芯吸収・他平面の中心線吸収は addGridLinesWithFloorAbsorption に一本化する
+    // （単体追加＝下のkind==='struct'分岐と処理を共有——他平面の処理を2回書かない）。自階の同座標
+    // 重複（黙って飛ばす既存挙動）は上のfilterで既に除いてある（設計h・この関数の範囲外）。
+    const result = await addGridLinesWithFloorAbsorption(graph, project, {
+      clType, values: newValues,
+      props: { discipline: Discipline.STRUCT, labeled: true },
+      syncScope,
+      saveFloorFn: opts.saveFloorFn,
+    });
+    // QA指摘6: 手順eの前のアクティブ再確認で中止した場合はtoast:nullで戻るため、そのまま素通しすると
+    // 成功扱い（done:true）になってしまう——promoteCenterToGridWithUndoのaborted処理と同型。
+    if (result.aborted) return { done: false, toast: null, suggestWood: null };
+    if (!result.done) return { done: false, toast: result.toast, suggestWood: null };
     return { done: true, toast: null, suggestWood: { clType, newValues } };
   }
 
@@ -1445,25 +1609,15 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
     }
 
     // 梁芯の手動追加は他種別（通り芯/中心/補助線）と同位置に共存できない（大梁と完全重複する小梁の
-    // 生成防止）。通り芯の追加も既存の梁芯を拒否する。
-    // ただし既存が梁芯で新規が中心線・補助線なら拒否しない——梁芯は在来木造の構造モードが「1つ下の階の壁」
-    // からも自階へ自動生成し（structural/wallBeamAxes.js）平面モードでは非表示のため、障害物にすると
-    // 「当該階に線が無いのに下階に線があると追加できない」になる。中心線・補助線の同位置不許可は同一図面内
-    // の同種別（上の extent 重なり判定）だけで、autoFillWallBeamAxes の重複ガード（意匠中心線・補助線は
-    // 障害物にしない）と対称にする。
-    // kind==='beam'側は coexistenceAt(kind, existingKind) で判定できる（beam行はbeam自身以外すべて
-    // forbiddenのため、existingKind!=='beam'と同値）。kind==='struct'側は existing（同種別優先＝
-    // 中心線が先に選ばれうる）ではなく同座標全体で梁芯の有無を見る必要がある。この2点目は
-    // coexistenceAt(newKind, existingKind)（priority選択された1本だけを見る関係）では表現できない
-    // （sameCoord全体を見る必要がある）ため、走査のAPI化のみに留める（表駆動へは寄せない）。
-    // 線種変更の移籍一本化・裁定Q8（2026-09-30・QA指摘是正）: この梁芯の事前拒否は、中心線が無く
-    // 梁芯だけがある通常追加に限る（existingKind!=='center'の場合のみ適用する下のif式参照）。
-    // 同座標に中心線があり昇格分岐（promote）へ入る場合は適用しない——promoteCenterToGridWithUndo
-    // 自身が自階の梁芯を「保護されない壁由来梁芯は吸収、保護される梁芯は拒否」で判定する
-    // （発見②の規則）ため、ここで一律拒否すると通常追加と違い昇格だけ梁芯を吸収できなくなる。
-    if ((kind === 'beam' && coexistenceAt(kind, existingKind) === 'forbidden') ||
-        (kind === 'struct' && existingKind !== 'center' && sameCoord.some(cl => centerLineKind(cl) === 'beam'))) {
-      return { done: false, toast: ERR_CL_DUPLICATE(kind === 'struct' ? 'beam' : existingKind), suggestWood: null };
+    // 生成防止）。kind==='beam'は coexistenceAt(kind, existingKind) で判定できる（beam行はbeam自身
+    // 以外すべてforbiddenのため、existingKind!=='beam'と同値）。
+    // kind==='struct'側（通り芯の追加が既存の梁芯と同座標のとき）は、線種変更の移籍一本化・
+    // ステップ6是正（2026-09-30・裁定Q8・COEXISTENCE.struct.beam='absorb'）により、ここでは
+    // 拒否しない——addGridLinesWithFloorAbsorptionが自階の壁由来梁芯を「保護されなければ吸収・
+    // 保護されれば拒否」で判定する（同座標に中心線があり昇格分岐（promote）へ入る場合は、ここへ
+    // 来る前に下のif（coexistenceAt==='promote'）で処理される）。
+    if (kind === 'beam' && coexistenceAt(kind, existingKind) === 'forbidden') {
+      return { done: false, toast: ERR_CL_DUPLICATE(existingKind), suggestWood: null };
     }
 
     if (coexistenceAt(kind, existingKind) === 'promote') {
@@ -1524,24 +1678,30 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
     return { done: true, toast: null, suggestWood: null };
   }
 
+  if (kind === 'struct') {
+    // 線種変更の移籍一本化・ステップ6（2026-09-30・裁定Q4〜Q6・Q8）: 単体追加もスパン配列と同じ
+    // addGridLinesWithFloorAbsorptionへ委譲する（他平面の処理を2回書かない。上のスパン配列分岐参照）。
+    const result = await addGridLinesWithFloorAbsorption(graph, project, {
+      clType, values: [value], props, syncScope,
+      saveFloorFn: opts.saveFloorFn,
+    });
+    // QA指摘6: 手順eの前のアクティブ再確認で中止した場合はtoast:nullで戻るため、そのまま素通しすると
+    // 成功扱い（done:true）になってしまう——promoteCenterToGridWithUndoのaborted処理と同型。
+    if (result.aborted) return { done: false, toast: null, suggestWood: null };
+    if (!result.done) return { done: false, toast: result.toast, suggestWood: null };
+    return { done: true, toast: null, suggestWood: { clType, newValues: [value] } };
+  }
+
   const cl = targetGraph.addCenterLine(clType, value, props);
   const clId = cl.id;
-  // 裁定(a)・2026-09-25: kind==='struct'はtargetGraph===project.structGraphのため、
-  // targetGraph.removeCenterLine単独では自グラフ（階固有）のshapeMapに届かない
-  // （バッチ追加・昇格経路の分岐と同じ理由。上のコメント参照）。center/auxはtargetGraph===graphの
-  // ため、graph.removeCenterLine自体が既にdetach→removeDependentsOfCenterLineを内包しており
-  // 従来どおりでよい。
+  // center/auxはtargetGraph===graphのため、graph.removeCenterLine自体が既にdetach→
+  // removeDependentsOfCenterLineを内包しており従来どおりでよい（structはaddGridLinesWithFloorAbsorption
+  // 経由のため、ここに到達するのはcenter/auxのみ）。
   pushUndoWithStructuralSync(
     graph, project, syncScope,
-    () => {
-      if (kind === 'struct') {
-        graph.detachFromCenterLine(clId);
-        graph.removeDependentsOfCenterLine(clId);
-      }
-      targetGraph.removeCenterLine(clId);
-    },
+    () => targetGraph.removeCenterLine(clId),
     () => targetGraph.addCenterLine(clType, value, props, clId),
     opts.saveFloorFn,
   );
-  return { done: true, toast: null, suggestWood: kind === 'struct' ? { clType, newValues: [value] } : null };
+  return { done: true, toast: null, suggestWood: null };
 }

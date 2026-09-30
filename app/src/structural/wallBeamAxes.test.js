@@ -1147,6 +1147,31 @@ test('【n-7是正・対照】isProtectedWallBeamAxis: ignoreRefsFromに含ま�
     '対照: ignoreRefsFrom省略（空集合）なら従来どおり参照ありで保護される');
 });
 
+// ---- リード裁定（線種変更の移籍一本化 ステップ6是正・2026-09-30・QA指摘2）: 由来USER（手動追加）は無条件で保護 ----
+test('【QA指摘2】isProtectedWallBeamAxis: 由来がUSER（AddCLDialogからの手動追加）なら、refId無し・保護データ無しでも保護される', () => {
+  const graph = makeGraph();
+  const ax = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, refId: null, beamAxisOrigin: BeamAxisOrigin.USER,
+  });
+  assert.equal(isProtectedWallBeamAxis(graph, ax), true, '期待: 由来USERは無条件で保護される');
+});
+
+test('【QA指摘2・対照】isProtectedWallBeamAxis: 由来WALL（壁由来自動生成）・refId無し・保護データ無しなら従来どおり保護されない', () => {
+  const graph = makeGraph();
+  const ax = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, refId: null, beamAxisOrigin: BeamAxisOrigin.WALL,
+  });
+  assert.equal(isProtectedWallBeamAxis(graph, ax), false, '期待: 由来WALLは従来どおり個別条件で判定（該当なしなら保護されない）');
+});
+
+test('【QA指摘2・対照】isProtectedWallBeamAxis: 由来null（旧データ）・refId無し・保護データ無しなら従来どおり保護されない', () => {
+  const graph = makeGraph();
+  const ax = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, refId: null, beamAxisOrigin: null,
+  });
+  assert.equal(isProtectedWallBeamAxis(graph, ax), false, '期待: 由来null（旧データ）は従来どおり個別条件で判定');
+});
+
 test('orphanedWallBeamAxes: 座標に一致する梁芯CLが見つからなければ何もしない（既に別経路で消えている等）', () => {
   const graph = makeGraph();
   const before = [{ isVertical: false, coord: 2000, lo: 0, hi: 4000 }];

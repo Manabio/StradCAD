@@ -28,7 +28,7 @@ import { remapLineIdsInSnapshot, findLineIdOccurrences } from '../lineIdRemap.js
 import { saveFloor } from '../storage/db.js';
 import { undoManager } from '../undoManager.js';
 import {
-  findWallBeamAxisCL, isProtectedWallBeamAxis, wallBeamSourcesFor, belowPlaneOf,
+  findWallBeamAxisCLs, isProtectedWallBeamAxis, wallBeamSourcesFor, belowPlaneOf,
 } from '../structural/wallBeamAxes.js';
 import { isFootprintBoundaryCL } from './centerLineConvert.js';
 // CL削除ステップ4（ルール2）: 通り芯削除の他階後始末が使う。centerLineOps.jsが既に静的に引いている
@@ -69,9 +69,12 @@ export function otherPlanes(project, activeGraph) {
  * 発見④・ユーザー裁定・案A・2026-09-25: `excludeAbsorbableBeam:true`（昇格専用。降格は既存どおり
  * falseのまま）を渡すと、保護されない壁由来梁芯（`isProtectedWallBeamAxis`がfalse）は相手から除外する
  * ——`absorbWallBeamAxesOnPromote`が同じ階を吸収撤去するため、ここで重複扱いにする必要が無い。
- * 相手の識別は`centerLineKind(other)==='beam'`のインライン比較ではなく`findWallBeamAxisCL`が返す
+ * 相手の識別は`centerLineKind(other)==='beam'`のインライン比較ではなく`findWallBeamAxisCLs`が返す
  * オブジェクトとの同一性比較で行う（G3ガード対策。呼び出し側centerLineOps.jsに種別名を直書きしない
- * のと同じ理由でこちらも避ける）。
+ * のと同じ理由でこちらも避ける）。線種変更の移籍一本化 ステップ6是正（2026-09-30）: 同座標に
+ * 区間の離れた梁芯が複数本ありうるため複数形で列挙し、**全部**が保護されない場合だけ除外する
+ * （1本でも保護されれば除外せず通常の重複相手として残す——absorbWallBeamAxesOnPromoteの
+ * 「1本でも保護されれば階ごと拒否」と対にする）。
  * 裁定Q1・Q2（線種変更の移籍一本化・2026-09-30）: `absorbCenter:true`（昇格専用。降格は渡さず
  * 従来どおりfalseのまま）を渡すと、種別'center'（中心線）は相手から除外する——
  * `findCenterLinesToAbsorbOnPromote`/`applyCenterLineAbsorptionOnPromote`が同じ階の中心線を
@@ -84,9 +87,13 @@ export async function findFloorsWithCounterpartCL(project, activeGraph, cl, { ex
   const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
   for (const plane of otherPlanes(project, activeGraph)) {
     const temp = await floorSwapManager.peek(plane, project.structGraph);
-    const absorbableBeamAxis = excludeAbsorbableBeam ? findWallBeamAxisCL(temp, isVertical, cl.value) : null;
-    const isExcludedAbsorbable = (other) =>
-      absorbableBeamAxis != null && other === absorbableBeamAxis && !isProtectedWallBeamAxis(temp, absorbableBeamAxis);
+    // 線種変更の移籍一本化 ステップ6是正（2026-09-30）: 同座標に区間の離れた梁芯が複数本ありうる
+    // ため findWallBeamAxisCLs（複数形）で列挙する。1本でも保護されていれば（=absorbWallBeamAxesOnPromote
+    // 側が拒否する）除外せず通常の重複判定に残す——「全部absorbableなときだけ除外する」規則
+    // （absorbWallBeamAxesOnPromoteの「1本でも保護されれば階ごと拒否」と対にする）。
+    const absorbableBeamAxes = excludeAbsorbableBeam ? findWallBeamAxisCLs(temp, isVertical, cl.value) : [];
+    const allAbsorbable = absorbableBeamAxes.length > 0 && absorbableBeamAxes.every(ax => !isProtectedWallBeamAxis(temp, ax));
+    const isExcludedAbsorbable = (other) => allAbsorbable && absorbableBeamAxes.includes(other);
     const counterparts = sameCoordCounterparts(temp, { centerLineType: cl.centerLineType, value: cl.value })
       .filter(other => CROSS_FLOOR_COUNTERPART_KINDS.includes(centerLineKind(other)))
       .filter(other => !isExcludedAbsorbable(other))
@@ -673,19 +680,22 @@ export async function absorbWallBeamAxesOnPromote(project, activeGraph, cl, { un
   const blockedPlanes = [];
   for (const plane of otherPlanes(project, activeGraph)) {
     const temp = await floorSwapManager.peek(plane, project.structGraph);
-    const beamAxis = findWallBeamAxisCL(temp, isVertical, cl.value);
-    if (!beamAxis) continue;
-    if (isProtectedWallBeamAxis(temp, beamAxis)) {
+    // 線種変更の移籍一本化 ステップ6是正（2026-09-30）: 同座標に区間の離れた梁芯が複数本ありうる
+    // ため findWallBeamAxisCLs（複数形）で全て列挙する——1本でも保護されていれば階ごと拒否、
+    // そうでなければ全部撤去する（findWallBeamAxisCL単数形の`.find()`では2本目を見落とす）。
+    const beamAxes = findWallBeamAxisCLs(temp, isVertical, cl.value);
+    if (beamAxes.length === 0) continue;
+    if (beamAxes.some(ax => isProtectedWallBeamAxis(temp, ax))) {
       blockedPlanes.push(plane);
     } else {
-      targets.push({ plane, temp, beamAxis });
+      targets.push({ plane, temp, beamAxes });
     }
   }
   if (blockedPlanes.length > 0) return { blockedPlanes };
 
-  for (const { plane, temp, beamAxis } of targets) {
+  for (const { plane, temp, beamAxes } of targets) {
     const before = serializeGraph(temp);
-    runInAction(() => { temp.removeCenterLine(beamAxis.id); });
+    runInAction(() => { for (const ax of beamAxes) temp.removeCenterLine(ax.id); });
     const after = serializeGraph(temp);
     await saveFloorFn(plane.id, after);
     undoRecords.push({ planeId: plane.id, before, after });
@@ -694,31 +704,58 @@ export async function absorbWallBeamAxesOnPromote(project, activeGraph, cl, { un
 }
 
 /**
- * 昇格（中心線→通り芯）の事前調査（QA所見5是正・2026-09-30）: アクティブ以外の全Plane
- * （検討・屋根含む）をpeekし、この位置の中心線（区間・本数を問わずすべて。裁定Q2）を持つ階を
- * 集める。**何も書かない**（peekのみ。書込みは`applyCenterLineAbsorptionOnPromote`が移籍後に行う
- * ——他階の壁は自平面の中心線idを参照する側であり、その参照先（吸収される中心線）はこの時点では
- * まだ有効なため、ここでのpeek自体は移籍の前後どちらでも安全）。
+ * 昇格・通常追加（中心線→通り芯）の事前調査（QA所見5是正・2026-09-30。線種変更の移籍一本化
+ * ステップ6是正・2026-09-30: **平面単位**へまとめた——値ごとに独立してpeekすると、同じ平面を
+ * 複数の値で吸収するとき、値ごとに取得した別々の`temp`インスタンスへ順にsaveFloorFnが書き込み、
+ * 後で処理した値のbeforeバイトが先に処理した値の吸収結果を上書きして1本しか残らない不良になる
+ * （実測。`applyCenterLineAbsorptionForValues`が同じ`temp`から1回のbefore/afterで全値をまとめて
+ * 書くことで防ぐ）。
+ * アクティブ以外の全Plane（検討・屋根含む）を**1平面につき1回**peekし、値ごとにこの位置の中心線
+ * （区間・本数を問わずすべて。裁定Q2）を持つか調べる。**何も書かない**（peekのみ。書込みは
+ * `applyCenterLineAbsorptionForValues`が移籍後に行う——他階の壁は自平面の中心線idを参照する側で
+ * あり、その参照先（吸収される中心線）はこの時点ではまだ有効なため、ここでのpeek自体は移籍の
+ * 前後どちらでも安全）。
  * 補助線・保護される梁芯はここでは扱わない（補助線は拒否、保護されない壁由来梁芯は
- * `absorbWallBeamAxesOnPromote`が別途吸収する——呼び出し側`promoteCenterToGridWithUndo`は
- * `findFloorsWithCounterpartCL`に`absorbCenter:true`を渡して中心線だけを相手から除外している
- * ため、ここへ来る前提として「補助線・保護される梁芯が無いこと」は既にガード済み）。
+ * `absorbWallBeamAxesOnPromote`が別途吸収する——呼び出し側は`findFloorsWithCounterpartCL`に
+ * `absorbCenter:true`を渡して中心線だけを相手から除外している前提で使うこと）。
  * @param {object} project
- * @param {PlanGraph} activeGraph  昇格を実行する階のグラフ（アクティブ階）
- * @param {CenterLine} cl          昇格前の中心線（まだ活性階に居る）
- * @returns {Promise<Array<{plane: object, temp: object, absorbedIds: string[]}>>} 吸収対象が無い階は含めない
+ * @param {PlanGraph} activeGraph  昇格・追加を実行する階のグラフ（アクティブ階）
+ * @param {{centerLineType: string, values: number[]}} opts
+ * @returns {Promise<Array<{plane: object, temp: object, absorbedIdsByValue: Map<number, string[]>}>>}
+ *   吸収対象が1つも無い階は含めない。absorbedIdsByValueは吸収対象があった値だけのMap。
  */
-export async function findCenterLinesToAbsorbOnPromote(project, activeGraph, cl) {
+export async function findCenterLinesToAbsorbForValues(project, activeGraph, { centerLineType, values }) {
   const targets = [];
   for (const plane of otherPlanes(project, activeGraph)) {
     const temp = await floorSwapManager.peek(plane, project.structGraph);
-    const absorbedIds = sameCoordCounterparts(temp, { centerLineType: cl.centerLineType, value: cl.value })
-      .filter(isPromoteAbsorbedKind)
-      .map(other => other.id);
-    if (absorbedIds.length === 0) continue;
-    targets.push({ plane, temp, absorbedIds });
+    const absorbedIdsByValue = new Map();
+    for (const value of values) {
+      const ids = sameCoordCounterparts(temp, { centerLineType, value })
+        .filter(isPromoteAbsorbedKind)
+        .map(other => other.id);
+      if (ids.length > 0) absorbedIdsByValue.set(value, ids);
+    }
+    if (absorbedIdsByValue.size === 0) continue;
+    targets.push({ plane, temp, absorbedIdsByValue });
   }
   return targets;
+}
+
+/**
+ * `findCenterLinesToAbsorbForValues`の値が1つの薄い包み（昇格`promoteCenterToGridWithUndo`専用。
+ * 重複実装を避けるため本体は複数形に一本化した）。
+ * @param {object} project
+ * @param {PlanGraph} activeGraph
+ * @param {CenterLine} cl 昇格前の中心線（まだ活性階に居る）
+ * @returns {Promise<Array<{plane: object, temp: object, absorbedIds: string[]}>>}
+ */
+export async function findCenterLinesToAbsorbOnPromote(project, activeGraph, cl) {
+  const targets = await findCenterLinesToAbsorbForValues(project, activeGraph, {
+    centerLineType: cl.centerLineType, values: [cl.value],
+  });
+  return targets.map(({ plane, temp, absorbedIdsByValue }) => ({
+    plane, temp, absorbedIds: absorbedIdsByValue.get(cl.value) ?? [],
+  }));
 }
 
 /**
@@ -752,66 +789,89 @@ function hasAbsorptionConflict(snapshot, clId) {
 }
 
 /**
- * 昇格（中心線→通り芯）の中心線吸収の本体（QA所見5是正・2026-09-30: **移籍後**に呼ぶよう変更した。
- * `findCenterLinesToAbsorbOnPromote`が集めたtargetsを受け取り、各平面のスナップショット内で、
- * 吸収する中心線idへの参照（自身の`centerLines`エントリを含む）を通り芯id（`cl.id`）へ一括置換する
- * （線種変更の移籍一本化・裁定Q1。降格`propagateDemotedCenterLine`の逆操作）。
+ * 昇格・通常追加（中心線→通り芯）の中心線吸収の本体（QA所見5是正・2026-09-30: **移籍後**に呼ぶ。
+ * 線種変更の移籍一本化 ステップ6是正・2026-09-30: **平面単位**へまとめた——`findCenterLinesToAbsorbFor
+ * Values`が集めたtargets（1平面につき1つの`temp`・値ごとの吸収対象idのMap）を受け取り、平面ごとに
+ * 「1回のbefore→中心線を全部除く→全値のidを順にremap→衝突検査→事後条件→encode→1回保存」を行う——
+ * 値ごとに独立してbefore/afterを作ると、後で処理した値の保存が先に処理した値の吸収結果を上書きして
+ * 1本しか残らない不良になる（実測。旧`applyCenterLineAbsorptionOnPromote`を値1つの場合に限定した
+ * 薄い包みとして残す）。
+ * 吸収する中心線idへの参照（自身の`centerLines`エントリを含む）を、値ごとの通り芯id
+ * （`gridIdByValue.get(value)`）へ一括置換する（線種変更の移籍一本化・裁定Q1。降格
+ * `propagateDemotedCenterLine`の逆操作）。
  *
- * **移籍後（`applyPromoteToGrid`の後）に呼ぶこと**——`propagateDemotedCenterLine`・
- * `absorbWallBeamAxesOnPromote`とは逆の順序になる点に注意。他階の壁は**自平面の中心線id**
- * （吸収される側のid）を参照する側であり、通り芯id（`cl.id`）への張り替えはこの吸収処理自身が
- * 行うため、移籍前に他階のafterバイトへ`cl.id`を書き込んでしまうと、その時点でまだ`cl`が
- * `project.structGraph`に無く（共有グラフに実体が無い状態で他階のバイトだけが`cl.id`を参照する）、
- * 万一その直後にタブが閉じられる／再読込みされると`resolveCL`が`cl.id`を解決できず他階の壁・部屋が
- * 黙って消える（QA所見5実測）。降格`propagateDemotedCenterLine`は逆に「通り芯がまだ共有グラフに
- * 残っている間に複製しないと他階の壁が解決できず消える」ため移籍前に複製するが、昇格の吸収は
- * 参照先（`cl.id`）が移籍**後**に共有グラフへ実在するようになる側のため、書き込みも移籍後で
- * 揃える必要がある——「他平面の壁は自平面の中心線idを参照するため移籍後にpeekしても壊れない」。
+ * **移籍後（`applyPromoteToGrid`／`project.structGraph.addCenterLine`の後）に呼ぶこと**——
+ * `propagateDemotedCenterLine`・`absorbWallBeamAxesOnPromote`とは逆の順序になる点に注意。他階の壁は
+ * **自平面の中心線id**（吸収される側のid）を参照する側であり、通り芯idへの張り替えはこの吸収処理
+ * 自身が行うため、移籍前に他階のafterバイトへ通り芯idを書き込んでしまうと、その時点でまだ通り芯が
+ * `project.structGraph`に無く（共有グラフに実体が無い状態で他階のバイトだけがそのidを参照する）、
+ * 万一その直後にタブが閉じられる／再読込みされると`resolveCL`がidを解決できず他階の壁・部屋が
+ * 黙って消える（QA所見5実測）。
  *
- * 1平面につき、吸収する中心線が複数あるときは`lineIdRemap.js remapLineIdsInSnapshot`を
- * **1本ずつ順に**呼ぶ（同じ新id=cl.idを複数の旧idへ同時に割り当てるMapは使えないため——
- * `remapLineIdsInSnapshot`のidMapは新idの重複を許さない）。置換後は`hasAbsorptionConflict`で
- * 参照の衝突（QA所見2）を検査し、衝突していればその平面を`conflictPlane`として返す（何も保存
- * しない。呼び出し側がそこまでの`undoRecords`を`rollbackFloorRecords`で巻き戻す）。
- * 例外は握りつぶさない（QA所見3是正: 以前は`remapLineIdsInSnapshot`の例外を`catch`して
- * `conflictPlane`に丸めていたが、プログラム側の誤り（想定外の入力等）まで「衝突トースト」に
- * すり替えてしまうため、ここではtry/catchを持たず、例外はそのまま呼び出し側へ伝播させ
+ * 1平面につき、吸収する中心線（同じ値・複数値どちらも）が複数あるときは`lineIdRemap.js
+ * remapLineIdsInSnapshot`を**1本ずつ順に**呼ぶ（同じ新idを複数の旧idへ同時に割り当てるMapは
+ * 使えないため——`remapLineIdsInSnapshot`のidMapは新idの重複を許さない）。置換後は
+ * `hasAbsorptionConflict`で参照の衝突（QA所見2）を値ごとに検査し、衝突していればその平面を
+ * `conflictPlane`として返す（何も保存しない。呼び出し側がそこまでの`undoRecords`を
+ * `rollbackFloorRecords`で巻き戻す）。
+ * 例外は握りつぶさない（QA所見3是正: プログラム側の誤りまで「衝突トースト」にすり替えない。
  * `ERR_CL_CONVERT_SYNC_FAILED`（tagCLOpFailure経由）で扱う）。
  * 事後条件（吸収した中心線idがどこにも残っていない）は`findLineIdOccurrences`で検査し、
  * 違反したらthrowする（コード側のバグの安全網。`propagateDemotedCenterLine`と同型）。
  *
- * `columnAxisOffsets`等の吸収した中心線分のキーは削除しない——通り芯id（`cl.id`）のキーへ
- * 移る（`remapLineIdsInSnapshot`の一括置換がそのまま行う。降格の`columnAxisOffsets.delete`とは
- * 逆向きだが、往復で値が戻る保証は無い——降格が新idの複製に対しては`columnAxisOffsets`を
- * 引き継がないため）。
- * @param {Array<{plane: object, temp: object, absorbedIds: string[]}>} targets
- *   `findCenterLinesToAbsorbOnPromote`の戻り値
- * @param {CenterLine} cl 昇格後の通り芯（`project.structGraph`に既に居ること前提）
+ * `columnAxisOffsets`等の吸収した中心線分のキーは削除しない——通り芯idのキーへ移る
+ * （`remapLineIdsInSnapshot`の一括置換がそのまま行う）。
+ * @param {Array<{plane: object, temp: object, absorbedIdsByValue: Map<number, string[]>}>} targets
+ *   `findCenterLinesToAbsorbForValues`の戻り値
+ * @param {Map<number, string>} gridIdByValue 値→昇格・追加後の通り芯id（`project.structGraph`に
+ *   既に居ること前提）
  * @param {{undoRecords?: Array, saveFloorFn?: Function}} [opts]
  * @returns {Promise<{conflictPlane: object|null}>} conflictPlaneが非nullなら拒否（何も保存していない）
  */
-export async function applyCenterLineAbsorptionOnPromote(targets, cl, { undoRecords = [], saveFloorFn = saveFloor } = {}) {
-  for (const { plane, temp, absorbedIds } of targets) {
+export async function applyCenterLineAbsorptionForValues(targets, gridIdByValue, { undoRecords = [], saveFloorFn = saveFloor } = {}) {
+  for (const { plane, temp, absorbedIdsByValue } of targets) {
     const before = serializeGraph(temp);
     // 吸収する中心線自身の centerLines エントリは先に除く（除かずに置換すると、その線自身の
-    // idがcl.idへ書き換わり、通り芯と同じidの「中心線」エントリが残ってしまう）。
+    // idが通り芯idへ書き換わり、通り芯と同じidの「中心線」エントリが残ってしまう）。
+    const allAbsorbedIds = [...absorbedIdsByValue.values()].flat();
     let snapshot = decodeFloorSnapshot(before);
-    snapshot = { ...snapshot, centerLines: snapshot.centerLines.filter(c => !absorbedIds.includes(c.id)) };
-    for (const absorbedId of absorbedIds) {
-      snapshot = remapLineIdsInSnapshot(snapshot, new Map([[absorbedId, cl.id]]));
+    snapshot = { ...snapshot, centerLines: snapshot.centerLines.filter(c => !allAbsorbedIds.includes(c.id)) };
+    for (const [value, absorbedIds] of absorbedIdsByValue) {
+      const newId = gridIdByValue.get(value);
+      for (const absorbedId of absorbedIds) {
+        snapshot = remapLineIdsInSnapshot(snapshot, new Map([[absorbedId, newId]]));
+      }
     }
-    if (hasAbsorptionConflict(snapshot, cl.id)) {
-      return { conflictPlane: plane };
+    for (const value of absorbedIdsByValue.keys()) {
+      if (hasAbsorptionConflict(snapshot, gridIdByValue.get(value))) {
+        return { conflictPlane: plane };
+      }
     }
-    const leftover = findLineIdOccurrences(snapshot, absorbedIds);
+    const leftover = findLineIdOccurrences(snapshot, allAbsorbedIds);
     if (leftover.length > 0) {
-      throw new Error(`applyCenterLineAbsorptionOnPromote: ${plane.name} に中心線idの参照が残っています（${leftover.map(o => o.path).join(', ')}）`);
+      throw new Error(`applyCenterLineAbsorptionForValues: ${plane.name} に中心線idの参照が残っています（${leftover.map(o => o.path).join(', ')}）`);
     }
     const after = encodeFloorSnapshot(snapshot);
     await saveFloorFn(plane.id, after);
     undoRecords.push({ planeId: plane.id, before, after });
   }
   return { conflictPlane: null };
+}
+
+/**
+ * `applyCenterLineAbsorptionForValues`の値が1つの薄い包み（昇格`promoteCenterToGridWithUndo`専用。
+ * 重複実装を避けるため本体は複数形に一本化した）。
+ * @param {Array<{plane: object, temp: object, absorbedIds: string[]}>} targets
+ *   `findCenterLinesToAbsorbOnPromote`の戻り値
+ * @param {CenterLine} cl 昇格後の通り芯（`project.structGraph`に既に居ること前提）
+ * @param {{undoRecords?: Array, saveFloorFn?: Function}} [opts]
+ * @returns {Promise<{conflictPlane: object|null}>}
+ */
+export async function applyCenterLineAbsorptionOnPromote(targets, cl, opts = {}) {
+  const wrapped = targets.map(({ plane, temp, absorbedIds }) => ({
+    plane, temp, absorbedIdsByValue: new Map([[cl.value, absorbedIds]]),
+  }));
+  return applyCenterLineAbsorptionForValues(wrapped, new Map([[cl.value, cl.id]]), opts);
 }
 
 /**
