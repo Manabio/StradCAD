@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Text } from 'react-konva';
 import { LodLevel } from '../viewport.js';
-import { computeVoidCrosses, showsUpperVoidLabel, UPPER_VOID_DASH_PX } from '../finish/voidGeometry.js';
+import { computeVoidCrosses, ownVoidCellRects, visibleUpperVoidCrosses, showsUpperVoidLabel, UPPER_VOID_DASH_PX } from '../finish/voidGeometry.js';
 
 const VOID_CROSS_COLOR  = '#1e293b'; // ×の色（StepSectionLayer の断面線と同系）
 const LABEL_FONT_SIZE_PX = 12;       // 「上部吹抜け」のスクリーン上表示サイズ(px)
@@ -71,10 +71,13 @@ function labelPlacement(r, fontSize, gap, margin) {
  * 吹抜け（feature=VOID）・昇降機（feature=elevatorEquipment）の×を平面図モードで描画する。
  *   自階（graph）: 壁内4頂点を対角に結ぶ一点鎖線・細線（VOID・昇降機同じ描画。ラベルは無し）。
  *   直下階（upperCrosses。App.jsx が上階を peek して computeVoidCrosses した結果）:
+ *     自階の吹抜け・昇降路セル（`ownVoidCellRects`）の和集合に覆われないものだけ
+ *     （`visibleUpperVoidCrosses`。2026-10-01裁定——昇降路は設置階〜最上階に同じシャフトが
+ *     続くのでどの階にも破線が出なくなる。判定はセル境界CLの値ベースで壁厚に左右されない）、
  *     同じ対角線を破線・細線で描き、VOID のみ交点付近に「上部吹抜け」を添える
- *     （`showsUpperVoidLabel`。昇降機は同じシャフトが続くだけなので破線のみ）。あわせて対角線と
- *     同じオフセット（insetRect）の外形（矩形。壁内の外形頂点を結ぶ多角形）を同じ破線・細線で描く
- *     ——設置階側は実壁が既に描かれているため外形は追加しない（直下階側のみ）。
+ *     （`showsUpperVoidLabel`）。あわせて対角線と同じオフセット（insetRect）の外形（矩形。
+ *     壁内の外形頂点を結ぶ多角形）を同じ破線・細線で描く——設置階側は実壁が既に描かれているため
+ *     外形は追加しない（直下階側のみ）。
  *     （LOD SCHEMATIC では非表示。STAIR_VOID は computeVoidCrosses 側で除外済み）。
  * 世界座標は全階共通のため、upperCrosses（上階グラフで計算した座標）もそのまま自階へ描ける
  * （stairFloorSync.js の stairPortEdges と同じ前提）。
@@ -84,6 +87,8 @@ export const VoidLayer = observer(({ graph, viewport, upperCrosses = [] }) => {
   if (!graph) return null;
 
   const ownCrosses = computeVoidCrosses(graph);
+  const ownCellRects = ownVoidCellRects(graph);
+  const visibleUpperCrosses = visibleUpperVoidCrosses(upperCrosses, ownCellRects);
   const thin = viewport.lineWeightsPx.thin;
   // ×自体は全LODで描画する。LOD SCHEMATIC で非表示にするのは「上部吹抜け」の文字のみ
   // （要件のLOD指定はラベル文字にのみ掛かる。F10）。
@@ -111,7 +116,7 @@ export const VoidLayer = observer(({ graph, viewport, upperCrosses = [] }) => {
           </Group>
         );
       })}
-      {upperCrosses.map(c => {
+      {visibleUpperCrosses.map(c => {
         const r = insetRect(c, inset);
         if (!r) return null; // 退化矩形（F8）→ 描画スキップ
         const label = showLabel && showsUpperVoidLabel(c) ? labelPlacement(r, fontSize, gap, margin) : null;

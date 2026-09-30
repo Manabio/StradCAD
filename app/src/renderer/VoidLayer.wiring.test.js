@@ -44,3 +44,44 @@ test('【不変条件】VoidLayer.jsx は finish/voidGeometry.js から showsUpp
     'showsUpperVoidLabel を ../finish/voidGeometry.js から import していない',
   );
 });
+
+// 2026-10-01裁定（QA指摘M1・M2でセル境界CL値・和集合判定に改訂）: 直下階の破線は自階に
+// 同位置の吹抜け・昇降路が無いときだけ描く（visibleUpperVoidCrosses・ownVoidCellRects）。
+// 以下のテストは行まるごと一致（`m`フラグ・`^…$`）で固定する——行末コメントに元の式を残す
+// 変異・条件式を定数に差し替える変異のどちらでも赤化することを確認済み。
+
+test('【不変条件】VoidLayer.jsx は finish/voidGeometry.js から ownVoidCellRects・visibleUpperVoidCrosses を import している', () => {
+  const importLines = src.split(/\r?\n/).filter(l => /^import /.test(l));
+  assert.ok(
+    importLines.some(l => /\bownVoidCellRects\b/.test(l) && /voidGeometry\.js/.test(l)),
+    'ownVoidCellRects を ../finish/voidGeometry.js から import していない',
+  );
+  assert.ok(
+    importLines.some(l => /\bvisibleUpperVoidCrosses\b/.test(l) && /voidGeometry\.js/.test(l)),
+    'visibleUpperVoidCrosses を ../finish/voidGeometry.js から import していない',
+  );
+});
+
+test('【不変条件】VoidLayer.jsx は ownCellRects を ownVoidCellRects(graph) で算出する行をコード本体に持つ', () => {
+  assert.ok(
+    /^\s*const ownCellRects = ownVoidCellRects\(graph\);\s*$/m.test(codeOnly),
+    'ownCellRects の算出行が想定の形でコード本体に見つからない',
+  );
+});
+
+test('【不変条件】VoidLayer.jsx は visibleUpperCrosses を visibleUpperVoidCrosses(upperCrosses, ownCellRects) で算出する行をコード本体に持つ', () => {
+  assert.ok(
+    /^\s*const visibleUpperCrosses = visibleUpperVoidCrosses\(upperCrosses, ownCellRects\);\s*$/m.test(codeOnly),
+    'visibleUpperCrosses の算出行が想定の形でコード本体に見つからない',
+  );
+});
+
+test('【不変条件】VoidLayer.jsx は上階破線の描画に visibleUpperCrosses.map( を使う（生の upperCrosses.map( ではない）', () => {
+  assert.ok(
+    /^\s*\{visibleUpperCrosses\.map\(c => \{\s*$/m.test(codeOnly),
+    '上階破線の描画箇所が visibleUpperCrosses.map(c => { の形でコード本体に見つからない',
+  );
+  const rawUpperMapMatches = codeOnly.match(/\bupperCrosses\.map\(/g) ?? [];
+  assert.equal(rawUpperMapMatches.length, 0,
+    '生の upperCrosses.map( がコード本体に残っている（visibleUpperCrosses 経由に置き換わっていないはず）');
+});

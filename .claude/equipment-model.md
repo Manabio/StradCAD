@@ -20,6 +20,9 @@
 ## 採番と記号
 採用階の建物全体で分類ごとに番号を振る（`finish/equipment/equipmentNumbering.js`）。記号は分類内の順位から決まる（1基なら接頭辞のみ、複数なら接頭辞+順位）。他階の器具の一覧（`project.equipmentIndex`）は保存しないキャッシュで、undo・redo・階の増減の後に読み直す。
 
+## ×と直下階の破線
+直下階に描く上階の吹抜け・昇降路の破線（`finish/voidGeometry.js`の`visibleUpperVoidCrosses`）は、自階に同位置の吹抜け・昇降路が無いときだけ出す——昇降路は設置階〜最上階に同じシャフトが続くので、どの階にも破線が出ない（2026-10-01裁定。判定は自階の吹抜け・昇降路が占める全セルの矩形の和集合＝`ownVoidCellRects`と、セル境界CLの値どうしで行い、壁の有無・厚みに左右されない）。「昇降路にはラベルを付けない」（`showsUpperVoidLabel`）は従来どおり別ルールとして存続する。
+
 ## 上階への書込みの共通手順（階段と共有）
 不足CLの追加・セルの対応付けは`finish/floorCLMap.js`（`collectNeededCLs`/`addMissingCLs`/`translateCellSet`）を階段（`finish/stair/stairFloorSync.js`）と共用する。昇降機だけ、不足CLの相手を「区画を割る線」（`isFinishCellDivider`）に絞る——上階の同じ座標に梁芯しか無い場合はそれを対応先とせず新しい中心線を足す（階段は種別を問わない）。上階へ足した中心線は設置階の線の範囲どおりで、器具を削除しても残る。
 
