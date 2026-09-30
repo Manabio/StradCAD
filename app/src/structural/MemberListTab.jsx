@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
 import { useState, useEffect, useRef } from 'react';
-import { StructuralMaterialType, CenterLineType } from '../core.js';
+import { CenterLineType } from '../core.js';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.js';
 import {
@@ -12,12 +12,12 @@ import {
 import {
   MEMBER_GROUPS, REMOVE_FN_BY_MAP, FIELD_DEFS_BY_CATEGORY,
   materialLabel, sectionAspectRatio, sectionIconShape, memberSymbol, memberSignature, memberSizeKey,
-  DEFAULT_SECTION_BY_MATERIAL,
   FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME, UNNUMBERED_TAG, memberGroupKey, noJoinSignatureFor, joinSignatureFor,
   memberOrderKey, isIndividuallyNumbered,
 } from './memberCatalog.js';
-import { alignToOuterFace, autoFillColumnSizes, autoFillColumnBaseSizes, isRigidFrameStructure, beamAxisCenterLines,
+import { alignToOuterFace, isRigidFrameStructure, beamAxisCenterLines,
   autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign, resolveLowestGraph } from './structuralAutoFill.js';
+import { addManualColumn, addManualFooting, addManualBeam } from './manualMemberAdd.js';
 import { buildExteriorSide } from './wallGate.js';
 import { findSectionEntry, sectionList, SectionShape, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
 import { renumberMembers, floorRankOf, previewSplitTag, floorSpanLabel, assignNumbers, standardBeamSectionFor } from './memberNumbering.js';
@@ -33,7 +33,7 @@ import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
 import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
-import { foundationOptionsFor, rulesFor, woodColumnSectionId, woodColumnWidthMm, columnWidthMm } from './structureRules.js';
+import { foundationOptionsFor, rulesFor, woodColumnWidthMm, columnWidthMm } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
 import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth, columnWidthChangeNotice } from './columnWidthScope.js';
 
@@ -1687,23 +1687,15 @@ const NewIntersectionMemberSelector = observer(({ group, graph, project, structu
     const vCL = verticalOptions.find(cl => cl.id === vId);
     const hCL = horizontalOptions.find(cl => cl.id === hId);
     if (!vCL || !hCL) return;
-    const materialType = rules.baseMaterial;
     const before = serializeGraph(graph);
     runInAction(() => {
       if (group.mapName === 'columnMap') {
-        // 在来木造は「各階柱寸法」欄の値（階の柱寸の正角）を新規柱にも使う。非在来・カタログ外は
-        // 従来どおり rules.defaultSections.column（建物共通の固定値）。
-        const columnSection = woodColumnSectionId(graph, project) ?? rules.defaultSections.column;
-        const column = graph.addColumn(materialType, columnSection, vCL, hCL, {});
-        // 壁交点方式では候補に無い自動柱（auto）は再計算で撤去される（woodAutoFill.js）。手動追加は
-        // ユーザーの明示なので固定（locked）にして撤去対象から外す。
-        if (wallColumns) column.setDimensionStatus('locked');
-        // 柱が支える階数(N)も自階（graph.plane）基準で算定する（columnSizing:'fixed' の在来は算定しない＝再計算と同じ）。
-        if (rules.columnSizing !== 'fixed') autoFillColumnSizes(graph, project, graph.plane);
+        // 手動追加はユーザーの明示なので、主構造を問わず固定（locked）にして撤去対象から外す
+        // （手動追加材サイレント撤去回避 ステップ1。dev直下 260929_手動追加材サイレント撤去回避.md）。
+        addManualColumn(graph, project, { vCL, hCL });
       } else {
         // 基礎・柱脚は主構造に関わらず常にRC造（structuralAutoFill.js の autoFillFootings と同じ理由）。
-        graph.addFooting(footingKind, DEFAULT_SECTION_BY_MATERIAL[StructuralMaterialType.RC], vCL, hCL, { materialType: StructuralMaterialType.RC });
-        autoFillColumnBaseSizes(graph, project);
+        addManualFooting(graph, project, { kind: footingKind, vCL, hCL });
       }
       renumberMembers(graph, project, group.mapName);
     });
@@ -1752,14 +1744,14 @@ const NewSpanMemberSelector = observer(({ group, graph, project }) => {
     const clEnd   = crossOptions.find(cl => cl.id === endId);
     if (!axisCL || !clStart || !clEnd || clStart.id === clEnd.id) return;
     const before = serializeGraph(graph);
-    const rules = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
-    const materialType = rules.baseMaterial;
     runInAction(() => {
       if (group.mapName === 'beamMap') {
-        graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd, {});
-        autoFillBeamEccentricity(graph, project); // 外周梁なら柱外面合わせの偏芯量を初期算出（faceGap=0＝面一）
+        // 手動追加はユーザーの明示なので、主構造を問わず固定（locked）にして撤去対象から外す
+        // （手動追加材サイレント撤去回避 ステップ1。dev直下 260929_手動追加材サイレント撤去回避.md）。
+        addManualBeam(graph, project, { axisCL, isVertical, clStart, clEnd });
       } else {
-        graph.addBearingWall(materialType, rules.defaultSections.other, axisCL, isVertical, clStart, clEnd, {});
+        const rules = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
+        graph.addBearingWall(rules.baseMaterial, rules.defaultSections.other, axisCL, isVertical, clStart, clEnd, {});
       }
       renumberMembers(graph, project, group.mapName);
     });
