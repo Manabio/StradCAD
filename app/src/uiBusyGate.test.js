@@ -445,3 +445,83 @@ test('【不変条件・QAブロッカー是正】App.jsx: handleDeleteCenterLin
   assert.ok(idleIdx < checkIdx && checkIdx < deleteIdx,
     `whenIdle() < isCenterLineStillDeletable( < runDeleteCenterLine(の順になっていない（実際の位置: idle=${idleIdx}, check=${checkIdx}, delete=${deleteIdx}）`);
 });
+
+// ================================================================
+// 手動追加材サイレント撤去回避 指示書§5ステップ4: handleConvertCenterLine（降格側）にも
+// handleDeleteCenterLineと同じ2段runBusy構成の固定材確認を入れたことを固定する。
+//   1段目のrunBusy: itemId==='cl-to-center'のときだけcollectFixedMembersByFloor(で列挙 →
+//                    空ならrunConvertCenterLine(まで完了する（従来どおり1回の関門内で終わる）。
+//                    昇格（cl-to-grid）は列挙しない（裁定4は降格のみ対象）。
+//   関門の外:        固定材が見つかったときだけconfirmFixedMemberDeletion(で確認する。
+//   中止分岐:        if (!ok) return; は2段目のrunBusy(より前で中断する。
+//   2段目のrunBusy: 了承後だけrunConvertCenterLine(itemId, cl, { removeFixedMembers: true })を呼ぶ。
+// 変異での検出力確認（手動）: (a) `if (itemId === 'cl-to-center') {`を外して常に列挙する→本テスト赤、
+// (b) collectFixedMembersByFloorの呼び出し行を1段目runBusyの外へ出す→本テスト赤、
+// (c) confirmFixedMemberDeletionの呼び出しを1段目runBusyの中へ入れる→本テスト赤、
+// (d) `if (!ok) return;`を削る→本テスト赤。
+// ================================================================
+test('【不変条件・手動追加材サイレント撤去回避ステップ4】App.jsx: handleConvertCenterLineはcl-to-centerのときだけcollectFixedMembersByFloor→（関門の外で）confirmFixedMemberDeletion→if(!ok)return→2段目のrunBusyの順で固定材の確認を挟む', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function handleConvertCenterLine');
+
+  const runBusy1Idx  = body.indexOf('runBusy(');
+  assert.ok(runBusy1Idx >= 0, 'handleConvertCenterLineの本体にrunBusy(の呼び出しが無い');
+  const ifCenterIdx  = body.indexOf("if (itemId === 'cl-to-center') {");
+  assert.ok(ifCenterIdx >= 0, "cl-to-centerだけ列挙する if (itemId === 'cl-to-center') { が無い");
+  const collectIdx   = body.indexOf('collectFixedMembersByFloor(');
+  assert.ok(collectIdx >= 0, 'collectFixedMembersByFloor(の呼び出しが無い');
+  const runConvert1Idx = body.indexOf('await runConvertCenterLine(itemId, cl);');
+  assert.ok(runConvert1Idx >= 0, '1段目のawait runConvertCenterLine(itemId, cl);が無い（固定材が無いときにそのまま変換まで完了する経路）');
+  const ifByFloorIdx = body.indexOf('if (!byFloor) return;');
+  assert.ok(ifByFloorIdx >= 0, '固定材が無いときにそのまま抜ける if (!byFloor) return; が無い');
+  const confirmIdx   = body.indexOf('confirmFixedMemberDeletion(');
+  assert.ok(confirmIdx >= 0, 'confirmFixedMemberDeletion(の呼び出しが無い');
+  const ifNotOkIdx   = body.indexOf('if (!ok) return;');
+  assert.ok(ifNotOkIdx >= 0, '中止分岐 if (!ok) return; が無い');
+  const runBusy2Idx  = body.indexOf('runBusy(', runBusy1Idx + 1);
+  assert.ok(runBusy2Idx >= 0, '2段目のrunBusy(の呼び出しが無い（確認了承後の変換本体）');
+  const runConvert2Idx = body.indexOf('await runConvertCenterLine(itemId, cl, { removeFixedMembers: true });', runBusy2Idx);
+  assert.ok(runConvert2Idx >= 0, '2段目のrunBusy内にawait runConvertCenterLine(itemId, cl, { removeFixedMembers: true });が無い');
+
+  assert.ok(
+    runBusy1Idx < ifCenterIdx && ifCenterIdx < collectIdx && collectIdx < runConvert1Idx
+      && runConvert1Idx < ifByFloorIdx && ifByFloorIdx < confirmIdx
+      && confirmIdx < ifNotOkIdx && ifNotOkIdx < runBusy2Idx && runBusy2Idx < runConvert2Idx,
+    "if (itemId === 'cl-to-center') {→collectFixedMembersByFloor(→runConvertCenterLine(itemId, cl);→"
+    + 'if(!byFloor)return;→confirmFixedMemberDeletion(→if(!ok)return;→2段目のrunBusy(→'
+    + 'runConvertCenterLine(itemId, cl, { removeFixedMembers: true });の順になっていない'
+    + `（実際の位置: runBusy1=${runBusy1Idx}, ifCenter=${ifCenterIdx}, collect=${collectIdx}, `
+    + `runConvert1=${runConvert1Idx}, ifByFloor=${ifByFloorIdx}, confirm=${confirmIdx}, `
+    + `ifNotOk=${ifNotOkIdx}, runBusy2=${runBusy2Idx}, runConvert2=${runConvert2Idx}）`,
+  );
+});
+
+// ================================================================
+// 固定材確認の表示中は関門（runBusy）を開けておくため、その間にCtrl+Z/Y（undo/redo）や階切替が
+// 割り込みうる——handleDeleteCenterLineと同じ理由で、2段目のrunBusy内でwhenIdle()の後・
+// runConvertCenterLine(呼び出しの前にisCenterLineStillDeletable(で再検証していることを固定する。
+// 変異での検出力確認（手動）: (a) isCenterLineStillDeletable(の呼び出し行そのものを削る→本テスト赤、
+// (b) `if (false)`化して素通りさせる→本テスト赤（呼び出し行の1行まるごと一致を崩すため）。
+// ================================================================
+test('【不変条件・手動追加材サイレント撤去回避ステップ4】App.jsx: handleConvertCenterLineの2段目runBusyはwhenIdle()の後・runConvertCenterLine(の前にisCenterLineStillDeletableで再検証する', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function handleConvertCenterLine');
+
+  const runBusy1Idx = body.indexOf('runBusy(');
+  const runBusy2Idx = body.indexOf('runBusy(', runBusy1Idx + 1);
+  assert.ok(runBusy2Idx >= 0, '2段目のrunBusy(の呼び出しが無い');
+  const body2 = body.slice(runBusy2Idx); // 2段目のrunBusy(以降だけを見る（1段目に同名呼び出しが紛れ込んでも誤検出しない）
+
+  const idleIdx = body2.indexOf('structuralSync.whenIdle()');
+  assert.ok(idleIdx >= 0, '2段目のrunBusy内にstructuralSync.whenIdle()が無い');
+
+  assert.match(body2, /^\s*if \(!isCenterLineStillDeletable\(project, graph, cl\)\) \{$/m,
+    'isCenterLineStillDeletable(project, graph, cl)の再検証呼び出し行が1行まるごとの形で見つからない');
+  const checkIdx = body2.indexOf('if (!isCenterLineStillDeletable(project, graph, cl)) {');
+
+  const convertIdx = body2.indexOf('await runConvertCenterLine(itemId, cl, { removeFixedMembers: true });');
+  assert.ok(convertIdx >= 0, '2段目のrunBusy内にawait runConvertCenterLine(itemId, cl, { removeFixedMembers: true });が無い');
+
+  assert.ok(idleIdx < checkIdx && checkIdx < convertIdx,
+    `whenIdle() < isCenterLineStillDeletable( < runConvertCenterLine(の順になっていない（実際の位置: idle=${idleIdx}, check=${checkIdx}, convert=${convertIdx}）`);
+});

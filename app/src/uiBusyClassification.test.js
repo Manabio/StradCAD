@@ -131,6 +131,15 @@ const EXEMPT = [
       + '書くが、それはhandleDeleteCenterLineの関門内で行われる。恒久的に対象外。',
   },
   {
+    name: 'runConvertCenterLine',
+    reason: '呼び出し元はhandleConvertCenterLine（GATED）のみ。promoteCenterToGridWithUndo/'
+      + 'demoteGridToCenterWithUndo呼び出し→toast→setFloorSyncTickを切り出した内部関数で、'
+      + '関門化済みの呼び出し元（1段目・2段目いずれのrunBusyも）から呼ばれる（手動追加材サイレント'
+      + '撤去回避 指示書§5ステップ4。runDeleteCenterLineと同じ形）。自身はrunBusyを持たず、'
+      + 'awaitの前後で自らgraph/IDBを書くが、それはhandleConvertCenterLineの関門内で行われる。'
+      + '恒久的に対象外。',
+  },
+  {
     name: 'startCenterLineMove',
     reason: 'App.jsxの本体はmodeRef.current?.startMove(cl)をawaitしtoastを出すだけで、関門（runBusy）は'
       + 'FloorplanModeState.startMoveの内部で開く（beginUiTransitionをここで呼ぶとinterruptCurrentActionが'
@@ -159,9 +168,10 @@ const PENDING_COUNT = 0;
 // ステップ5でdeleteElevatorEquipment・changeElevatorUsage（いずれもGATED）のrunBusy(コールバックが
 // 2件加わったため30→32。手動追加材サイレント撤去回避ステップ3でhandleDeleteCenterLineが
 // 固定材の事前確認を挟む2段runBusy構成になり、runBusy(コールバックが1件（確認了承後の2段目）
-// 加わったため32→33。
+// 加わったため32→33。同ステップ4でhandleConvertCenterLineも同じ2段runBusy構成になり、
+// runBusy(コールバックが1件（確認了承後の2段目）加わったため33→34。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 33;
+const ANON_CALLBACK_COUNT = 34;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

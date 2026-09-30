@@ -78,6 +78,51 @@ export async function collectFixedMembersByFloor(project, activeGraph, cl) {
   return result;
 }
 
+/**
+ * cl を参照する固定材（非auto。fixedMembersReferencingと同じ集合）を、graphから実際に削除する
+ * （手動追加材サイレント撤去回避 指示書§2.4・§3裁定4・§5ステップ4）。確認の本数と消す材が
+ * 同じ述語（fixedMembersReferencing）から出るようにするため、列挙をここでも呼び直す。
+ *
+ * graph.removeColumn/removeBeam/removeFooting は使わない——それらは削除したスロットを
+ * excludedColumnSlots/excludedBeamSlots/excludedFootingSlots に記録し、次回以降の自動補完で
+ * 復活しないようにする「手動削除」専用の意味を持つ（core/planGraph.js:571-584,662-666）。
+ * ここでの削除は「降格に伴う自然な後始末」であり、通り芯そのものが消える（中心線化される）ため
+ * 除外集合に記録する意味が無い——columnMap/beamMap/footingMapから直接delete
+ * （removeDependentsOfCenterLineと同じ流儀。core/planGraph.js:1148-1173）。
+ *
+ * 削除するスリーブは refs.sleeves（CL照合）ではなく、消す固定梁のhostBeamIdだけで連鎖させる
+ * （auto梁のスリーブを巻き込まないため——refs.sleevesはCLに軸・端点が一致する梁一般のスリーブを
+ * 指し、非autoで絞ったbeams配列より広い可能性がある）。
+ *
+ * 呼び出し側はrunInAction（mobxのobservable.map/setへの書き込みをまとめる）で包むこと
+ * （このファイル自身はmobxを静的に引かない——react/.jsx/store.js/snap.jsを静的importしない
+ * という本ファイル冒頭の方針に合わせ、runInActionの責務は呼び出し側に残す）。
+ * @param {import('@core').PlanGraph} graph
+ * @param {string} clId
+ * @returns {{ columns: string[], beams: string[], footings: string[], sleeves: string[] }} 削除したid一覧
+ */
+export function removeFixedMembersReferencing(graph, clId) {
+  const { columns, beams, footings } = fixedMembersReferencing(graph, clId);
+  const removedSleeveIds = [];
+  for (const b of beams) {
+    for (const s of [...graph.sleeveMap.values()]) {
+      if (s.hostBeamId === b.id) {
+        graph.sleeveMap.delete(s.id);
+        removedSleeveIds.push(s.id);
+      }
+    }
+    graph.beamMap.delete(b.id);
+  }
+  for (const c of columns)  graph.columnMap.delete(c.id);
+  for (const f of footings) graph.footingMap.delete(f.id);
+  return {
+    columns:  columns.map(c => c.id),
+    beams:    beams.map(b => b.id),
+    footings: footings.map(f => f.id),
+    sleeves:  removedSleeveIds,
+  };
+}
+
 /** CLの確認文言向けの呼び名。通り芯は採番済みラベル（例: X3）に「通り芯 」を前置し、梁芯・中心線は
  *  ラベルを持たない（採番されない）ため種別名＋座標で示す（例: 梁芯 (2400)）。
  *  種別の判定はcenterLineKindPolicy.js経由（FLOOR_SHARED_KINDS／BEAM_AXIS_KINDS）で行い、
@@ -92,11 +137,14 @@ export function clDisplayName(cl) {
 }
 
 /** Q5の確認文言。本数0の材種は省く。基礎/柱脚は「基礎」と表記する。
+ *  verbは文末の動詞（既定'削除する'。降格側は'中心線にする'を渡す——手動追加材サイレント撤去回避
+ *  指示書§5ステップ4。既定値を変えないため既存呼び出し（CL削除）の文言・テストは不変）。
  *  @param {string} clName clDisplayNameの戻り値等、CLの呼び名
  *  @param {Array<{ plane: object, columns: number, beams: number, footings: number }>} byFloor
+ *  @param {{ verb?: string }} [opts]
  *  @returns {string}
  */
-export function formatFixedMemberConfirm(clName, byFloor) {
+export function formatFixedMemberConfirm(clName, byFloor, { verb = '削除する' } = {}) {
   const floors = byFloor.map(({ plane, columns, beams, footings }) => {
     const bits = [];
     if (columns  > 0) bits.push(`柱${columns}`);
@@ -104,5 +152,5 @@ export function formatFixedMemberConfirm(clName, byFloor) {
     if (footings > 0) bits.push(`基礎${footings}`);
     return `${plane.name}: ${bits.join('・')}`;
   });
-  return `${clName} には手動で固定した構造材があります（${floors.join('／')}）。削除すると一緒に削除されます。よろしいですか？`;
+  return `${clName} には手動で固定した構造材があります（${floors.join('／')}）。${verb}と一緒に削除されます。よろしいですか？`;
 }

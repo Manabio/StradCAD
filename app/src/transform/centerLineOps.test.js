@@ -6296,6 +6296,255 @@ test('demoteGridToCenterWithUndo: ロールバックの書き戻しも失敗し�
   });
 });
 
+// ---- demoteGridToCenterWithUndo: opts.removeFixedMembers（手動追加材サイレント撤去回避
+// 指示書§3裁定4・§5ステップ4）。App.jsx handleConvertCenterLineが固定材の事前確認を了承した
+// ときだけtrueを渡す——ここではopts経由の削除本体そのものを検証する（確認UI自体はApp.jsx側の
+// uiBusyGate.test.jsで検証済み）。
+
+test('demoteGridToCenterWithUndo: removeFixedMembers:trueで自階のlocked柱・locked基礎・locked梁とそのスリーブが消え、壁・耐力壁・一般Shape・auto柱は残る', async () => {
+  const { project, p1, y0, y3, cl } = makeTwoFloorsWithGridCL();
+  const clId = cl.id;
+
+  const autoCol   = p1.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y0, { dimensionStatus: 'auto' });
+  const lockedCol = p1.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y3, { dimensionStatus: 'locked' });
+  const lockedFooting = p1.addFooting('independent', 'SEC-F', cl, y0, { dimensionStatus: 'locked' });
+  // 軸として cl を使う梁（固定）とそのスリーブ、cl を端点にする梁（固定）も対象（§2.4「その通り芯を
+  // 参照する固定材」——軸・始端・終端いずれの参照も道連れにする。structuralRefsToCLの判定と同じ）。
+  const axisBeam = p1.addBeam(StructuralMaterialType.STEEL, 'SEC-B', cl, true, y0, y3, { dimensionStatus: 'locked' });
+  const sleeve    = p1.addSleeve('beam', { hostBeamId: axisBeam.id });
+  const endBeam   = p1.addBeam(StructuralMaterialType.STEEL, 'SEC-B', y0, false, cl, project.structGraph.gridXs[1], { dimensionStatus: 'calculated' });
+  const wall = p1.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+  // 耐力壁（wallMap。structuralRefsToCLのwalls）はremoveFixedMembersReferencingの対象外
+  // （§5ステップ4「壁・図形は消さない」）——固定材（柱・梁・基礎/柱脚）とは別枠の集合であること、
+  // 一般Shape（shapeMap。VerticalLine。CenterLineでもWallでもない）も同様に無関係であることを確認する。
+  const bearingWall = p1.addBearingWall(StructuralMaterialType.RC, 'SEC-BW', cl, true, y0, y3, {});
+  // 壁以外の一般Shape（shapeMap。_shapeUsesCenterLineがShapeType.OPENINGとして認識する＝
+  // structuralRefsToCL().shapesに含まれる）。VerticalLine等（addLinkでIntersectionノードに
+  // 接続する種別）はattachedShapeExists経由で降格ガード自体を塞ぐため使えない——Opening/Wallは
+  // shapeMap.setのみでノードリンクを持たないため塞がない（既存のwall付きテストが降格に成功して
+  // いることからも裏取り済み）。
+  const genericShape = p1.addOpening(cl, 1, true, y0, 500, 800, OpeningCategory.FITTING, 'singleSwing', {});
+
+  const store = new Map();
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  const { toast } = await withProductionPeek(project, store, () =>
+    demoteGridToCenterWithUndo(p1, project, cl, { saveFloorFn, removeFixedMembers: true })
+  );
+  assert.equal(toast, null);
+
+  assert.equal(p1.columnMap.has(lockedCol.id), false, 'locked柱は消える');
+  assert.equal(p1.footingMap.has(lockedFooting.id), false, 'locked基礎は消える');
+  assert.equal(p1.beamMap.has(axisBeam.id), false, 'clを軸にするlocked梁は消える');
+  assert.equal(p1.beamMap.has(endBeam.id), false, 'clを端点にするcalculated梁も消える（Q4: calculatedも固定材）');
+  assert.equal(p1.sleeveMap.has(sleeve.id), false, '固定梁のスリーブも連鎖して消える');
+
+  assert.equal(p1.columnMap.has(autoCol.id), true, 'auto柱は残る（撤去段の担当）');
+  // 壁（一般Shape。shapeMap、ShapeType.WALL）はwallMap（耐力壁専用）とは別物——ここでの壁は
+  // graph.wallsゲッター（shapeMap内のShapeType.WALLフィルタ）で確認する。
+  assert.equal(p1.shapeMap.has(wall.id), true, '壁は消えない（shapeMapから見て残る）');
+  assert.ok(p1.walls.some(w => w.id === wall.id), '壁は消えない（graph.wallsゲッターでも見える）');
+  assert.equal(p1.wallMap.has(bearingWall.id), true, '耐力壁（wallMap）は消えない');
+  assert.equal(p1.shapeMap.has(genericShape.id), true, '壁以外の一般Shape（Opening）も消えない');
+  assert.equal(p1.shapeMap.has(clId), true, '降格後の中心線（複製済みの自階本体）自体は残る');
+});
+
+test('demoteGridToCenterWithUndo: removeFixedMembers:trueで他階（peek）のlocked柱・calculated梁も消え、壁は残る（ストアのバイト列を復号して観測）', async () => {
+  const { project, p1, p2, y0, y3, cl } = makeTwoFloorsWithGridCL();
+
+  const lockedCol = p2.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y0, { dimensionStatus: 'locked' });
+  const calcBeam  = p2.addBeam(StructuralMaterialType.STEEL, 'SEC-B', cl, true, y0, y3, { dimensionStatus: 'calculated' });
+  const wall = p2.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false });
+  const wallId = wall.id;
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  const { toast } = await withProductionPeek(project, store, () =>
+    demoteGridToCenterWithUndo(p1, project, cl, { saveFloorFn, removeFixedMembers: true })
+  );
+  assert.equal(toast, null);
+
+  const decoded = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+  assert.equal(decoded.columnMap.has(lockedCol.id), false, '他階のlocked柱も消える');
+  assert.equal(decoded.beamMap.has(calcBeam.id), false, '他階のcalculated梁も消える');
+  assert.equal(decoded.walls.length, 1, '他階の壁は残る');
+  assert.equal(decoded.walls[0].id, wallId);
+});
+
+test('demoteGridToCenterWithUndo: removeFixedMembers:trueで消した固定材は、undoで自階・他階とも全て戻り、redoで再び消える', async () => {
+  const { project, p1, p2, y0, cl } = makeTwoFloorsWithGridCL();
+
+  const selfCol  = p1.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y0, { dimensionStatus: 'locked' });
+  const otherCol = p2.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y0, { dimensionStatus: 'locked' });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await demoteGridToCenterWithUndo(p1, project, cl, { saveFloorFn, removeFixedMembers: true });
+    assert.equal(toast, null);
+    assert.equal(p1.columnMap.has(selfCol.id), false, '確定直後: 自階のlocked柱は消えている');
+    assert.equal(decodeFloor(project, p2.plane, store.get(p2.plane.id)).columnMap.has(otherCol.id), false,
+      '確定直後: 他階のlocked柱も消えている');
+
+    undoManager.undo();
+    assert.equal(p1.columnMap.has(selfCol.id), true, 'undo: 自階のlocked柱が戻る');
+    assert.equal(decodeFloor(project, p2.plane, store.get(p2.plane.id)).columnMap.has(otherCol.id), true,
+      'undo: 他階のlocked柱も戻る');
+
+    undoManager.redo();
+    assert.equal(p1.columnMap.has(selfCol.id), false, 'redo: 自階のlocked柱が再び消える');
+    assert.equal(decodeFloor(project, p2.plane, store.get(p2.plane.id)).columnMap.has(otherCol.id), false,
+      'redo: 他階のlocked柱も再び消える');
+  });
+});
+
+// QA指摘（team-lessons「A/B等価テストが恒真になる」と同型）: 両ケースとも構造材0本・壁0本のままだと
+// structuralShapeが実質CL idしか比べておらず恒真になる。auto柱・auto梁＋スリーブ・一般壁を
+// id固定で両ケース（自階p1・他階p2）に置き、「固定材が無いときの結果」に実体を持たせる。
+test('demoteGridToCenterWithUndo: 固定材が無ければ、removeFixedMembers:trueでもopts省略でも結果は同一（対照）', async () => {
+  // makeTwoFloorsWithGridCLはCL・構造材のidをcrypto.randomUUID()に任せるため、2回呼ぶと別id列に
+  // なりバイト列を直接比較できない。id固定版を自前で組む（addCenterLine/addColumn等の最終引数でid指定）。
+  function makeFixedIdCase() {
+    const project = new Project('proj', 'test');
+    const { graph: p1 } = project.addPlane(0,    '1階', 'p1');
+    const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+    const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT }, 'y0-id');
+    const y3 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT }, 'y3-id');
+    const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }, 'cl-id');
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }, 'x5000-id'); // isLastGridOnAxis対策
+
+    // 固定材（locked/calculated）は0本のまま、auto柱・auto梁＋スリーブ・一般壁を自階・他階の両方に
+    // id固定で置く——removeFixedMembersReferencingが「対象0本」を正しく識別する（＝autoを巻き込まない）
+    // ことがこの対照テストの実体になる。
+    for (const [g, suffix] of [[p1, 'p1'], [p2, 'p2']]) {
+      g.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y0, { dimensionStatus: 'auto' }, `auto-col-${suffix}`);
+      const autoBeam = g.addBeam(StructuralMaterialType.STEEL, 'SEC-B', cl, true, y0, y3, { dimensionStatus: 'auto' }, `auto-beam-${suffix}`);
+      g.addSleeve('beam', { hostBeamId: autoBeam.id }, `auto-sleeve-${suffix}`);
+      g.addWall(cl, 0, true, y0, 0, y3, 0, { isExteriorWall: false }, `wall-${suffix}`);
+    }
+    return { project, p1, p2, y0, y3, cl };
+  }
+
+  const case1 = makeFixedIdCase(); // removeFixedMembers:true
+  const store1 = new Map([[case1.p2.plane.id, serializeGraph(case1.p2)]]);
+  const saveFloorFn1 = async (planeId, bytes) => { store1.set(planeId, bytes); };
+  await withProductionPeek(case1.project, store1, () =>
+    demoteGridToCenterWithUndo(case1.p1, case1.project, case1.cl, { saveFloorFn: saveFloorFn1, removeFixedMembers: true })
+  );
+
+  const case2 = makeFixedIdCase(); // opts省略（従来の降格経路。probe・既存呼び出しと同型）
+  const store2 = new Map([[case2.p2.plane.id, serializeGraph(case2.p2)]]);
+  const saveFloorFn2 = async (planeId, bytes) => { store2.set(planeId, bytes); };
+  await withProductionPeek(case2.project, store2, () =>
+    demoteGridToCenterWithUndo(case2.p1, case2.project, case2.cl, { saveFloorFn: saveFloorFn2 })
+  );
+
+  // バイト列そのものはDimensionLine（寸法線）の自動生成idが実行のたびに乱数で変わるため直接比較
+  // できない（本テストの主眼である固定材の有無とは無関係）。構造材・スリーブ・壁・CLの構成
+  // （id・dimensionStatus）だけを比較する。
+  const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  function structuralShape(g) {
+    return {
+      columns:  g.columns.map(c => ({ id: c.id, dimensionStatus: c.dimensionStatus })).sort(byId),
+      beams:    g.beams.map(b => ({ id: b.id, dimensionStatus: b.dimensionStatus })).sort(byId),
+      footings: g.footings.map(f => ({ id: f.id, dimensionStatus: f.dimensionStatus })).sort(byId),
+      sleeves:  [...g.sleeveMap.values()].map(s => s.id).sort(),
+      walls:    g.walls.map(w => w.id).sort(),
+      clIds:    [...g.shapeMap.values()].filter(s => s.centerLineType !== undefined).map(s => s.id).sort(),
+    };
+  }
+  assert.deepEqual(structuralShape(case1.p1), structuralShape(case2.p1),
+    '固定材0本のときremoveFixedMembers:trueの有無で自階の構造材・スリーブ・壁・CL構成（dimensionStatus込み）は変わらない');
+  const decodedP2Case1 = decodeFloor(case1.project, case1.p2.plane, store1.get(case1.p2.plane.id));
+  const decodedP2Case2 = decodeFloor(case2.project, case2.p2.plane, store2.get(case2.p2.plane.id));
+  assert.deepEqual(structuralShape(decodedP2Case1), structuralShape(decodedP2Case2),
+    '固定材0本のときremoveFixedMembers:trueの有無で他階の構造材・スリーブ・壁・CL構成も変わらない');
+  // 対照テストが空振り（両ケースとも構造材0本）でないことの裏取り: auto柱が実際に両方に1本ずつ残っている。
+  assert.equal(structuralShape(case1.p1).columns.length, 1);
+  assert.equal(structuralShape(decodedP2Case1).columns.length, 1);
+});
+
+test('demoteGridToCenterWithUndo: removeFixedMembers:true でも複製フェーズの他階保存が途中で失敗すればロールバックされ、固定材は自階・他階とも未変更のまま、undoは積まれない', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0,    '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const { graph: p3 } = project.addPlane(6000, '3階', 'p3');
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  const clId = cl.id;
+
+  const p2Col = p2.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y0, { dimensionStatus: 'locked' });
+  const p1Col = p1.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y0, { dimensionStatus: 'locked' });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)], [p3.plane.id, serializeGraph(p3)]]);
+  const saveFloorFn = async (planeId, bytes) => {
+    if (planeId === p3.plane.id) throw new Error('p3 save failed');
+    store.set(planeId, bytes);
+  };
+  const beforeTop = undoManager.peekUndo();
+
+  await withProductionPeek(project, store, async () => {
+    await assert.rejects(
+      () => demoteGridToCenterWithUndo(p1, project, cl, { saveFloorFn, removeFixedMembers: true }),
+      /p3 save failed/,
+    );
+
+    assert.equal(project.structGraph.shapeMap.has(clId), true, 'structGraph側の通り芯は未変更（降格前）');
+    assert.equal(p1.columnMap.has(p1Col.id), true, '自階のlocked柱は削除されない（applyDemoteToCenterより前の失敗のため）');
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+
+    const decodedP2 = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decodedP2.columnMap.has(p2Col.id), true, '他階のlocked柱もロールバックされ残る');
+  });
+});
+
+test('demoteGridToCenterWithUndo: removeFixedMembers:trueでもapplyDemoteToCenterがエラーを返したら、自階の固定材は残り、他階の固定材もロールバックで残る（トーストのみ・undo未積み）', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: p1 } = project.addPlane(0,    '1階', 'p1');
+  const { graph: p2 } = project.addPlane(3000, '2階', 'p2');
+  const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
+  const clId = cl.id;
+
+  const p1Col = p1.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y0, { dimensionStatus: 'locked' });
+  const p2Col = p2.addColumn(StructuralMaterialType.STEEL, 'SEC-C', cl, y0, { dimensionStatus: 'locked' });
+
+  const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+  let intruded = false;
+  // 「複製後にapplyDemoteToCenterがエラーを返したら他階の複製も巻き戻り…」と同じ割り込みを模擬する
+  // （saveFloorFn待ちの間に自階の同座標へ中心線が割り込み追加され、ERR_CL_CONVERT_DUP_DEMOTE('center')
+  // で失敗する経路）。今回はp1・p2ともlocked柱を持たせ、removeFixedMembers:trueでも
+  // 「applyDemoteToCenterに到達する前の失敗＝固定材削除はまだ実行されていない」ことを確認する。
+  const saveFloorFn = async (planeId, bytes) => {
+    store.set(planeId, bytes);
+    if (!intruded) {
+      intruded = true;
+      p1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH, lineType: 'center' });
+    }
+  };
+  const beforeTop = undoManager.peekUndo();
+
+  await withProductionPeek(project, store, async () => {
+    const { toast } = await demoteGridToCenterWithUndo(p1, project, cl, { saveFloorFn, removeFixedMembers: true });
+
+    assert.equal(toast, ERR_CL_CONVERT_DUP_DEMOTE('center'));
+    assert.equal(project.structGraph.shapeMap.has(clId), true, 'structGraph側の通り芯は未変更');
+    assert.equal(p1.shapeMap.has(clId), false, '自階へは移籍していない');
+    assert.equal(p1.columnMap.has(p1Col.id), true, '自階のlocked柱は残る（削除はapplyDemoteToCenter成功後のため未実行）');
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+
+    const decodedP2 = decodeFloor(project, p2.plane, store.get(p2.plane.id));
+    assert.equal(decodedP2.shapeMap.has(clId), false, 'p2の複製はロールバックされている');
+    assert.equal(decodedP2.columnMap.has(p2Col.id), true, '他階のlocked柱もロールバックされ残る');
+  });
+});
+
 // ---- 段階(c)・2026-09-25: promoteCenterToGridWithUndo / demoteGridToCenterWithUndo → 構造同期
 // リスナー（amendは使わないinline方式。他階レコードの適用はnotifyの直前に同じundo/redoクロージャで
 // 行う——順序は「struct→自階→他階→notify」）。setCenterLineStructuralListener は必ずfinallyでnullに

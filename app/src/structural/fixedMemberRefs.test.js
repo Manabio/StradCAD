@@ -7,7 +7,10 @@ import { PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType 
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { undoManager } from '../undoManager.js';
-import { fixedMembersReferencing, collectFixedMembersByFloor, formatFixedMemberConfirm, clDisplayName } from './fixedMemberRefs.js';
+import {
+  fixedMembersReferencing, collectFixedMembersByFloor, removeFixedMembersReferencing,
+  formatFixedMemberConfirm, clDisplayName,
+} from './fixedMemberRefs.js';
 
 // 本番同型 peek（IDBの代わりに Map ストアを読む）。centerLineOps.test.js withProductionPeekと同型。
 function withProductionPeek(project, store, fn) {
@@ -175,6 +178,71 @@ test('collectFixedMembersByFloor: 他階peekが失敗すると関数がrejectし
 });
 
 // ---- (f) formatFixedMemberConfirm の文言（Q5の例を1件固定。本数0の材種を省く） ----
+
+// ---- removeFixedMembersReferencing（手動追加材サイレント撤去回避 指示書§5ステップ4）----
+
+test('removeFixedMembersReferencing: 返すid数はfixedMembersReferencingの本数と一致し、除外集合（excludedXxxSlots）は変化しない', () => {
+  const { graph, v, h } = makeSingleFloor();
+  const v2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+
+  graph.addColumn(StructuralMaterialType.WOOD, 'SEC-C', v, h, { dimensionStatus: 'auto' }); // 残る
+  const lockedCol = graph.addColumn(StructuralMaterialType.WOOD, 'SEC-C', v, h, { dimensionStatus: 'locked' });
+  graph.addBeam(StructuralMaterialType.WOOD, 'SEC-B', h, false, v, v2, { dimensionStatus: 'auto' }); // 残る
+  const lockedBeam = graph.addBeam(StructuralMaterialType.WOOD, 'SEC-B', h, false, v, v2, { dimensionStatus: 'locked' });
+  const lockedFooting = graph.addFooting('independent', 'SEC-F', v, h, { dimensionStatus: 'locked' });
+
+  const before = fixedMembersReferencing(graph, v.id);
+  assert.equal(before.columns.length, 1);
+  assert.equal(before.beams.length, 1);
+  assert.equal(before.footings.length, 1);
+
+  const excludedColumnSizeBefore  = graph.excludedColumnSlots.size;
+  const excludedBeamSizeBefore    = graph.excludedBeamSlots.size;
+  const excludedFootingSizeBefore = graph.excludedFootingSlots.size;
+
+  const removed = removeFixedMembersReferencing(graph, v.id);
+  assert.equal(removed.columns.length, 1);
+  assert.deepEqual(removed.columns, [lockedCol.id]);
+  assert.deepEqual(removed.beams, [lockedBeam.id]);
+  assert.deepEqual(removed.footings, [lockedFooting.id]);
+
+  assert.equal(graph.columnMap.has(lockedCol.id), false, 'locked柱は削除される');
+  assert.equal(graph.beamMap.has(lockedBeam.id), false, 'locked梁は削除される');
+  assert.equal(graph.footingMap.has(lockedFooting.id), false, 'locked基礎は削除される');
+  assert.equal(graph.columns.filter(c => c.dimensionStatus === 'auto').length, 1, 'auto柱は残る');
+  assert.equal(graph.beams.filter(b => b.dimensionStatus === 'auto').length, 1, 'auto梁は残る');
+
+  // 除外集合（トポロジー自動補完が「手動削除済み」を覚える集合）は変化しない——ここでの削除は
+  // removeColumn/removeBeam/removeFootingを経由しない（降格に伴う自然な後始末のため）。
+  assert.equal(graph.excludedColumnSlots.size,  excludedColumnSizeBefore);
+  assert.equal(graph.excludedBeamSlots.size,    excludedBeamSizeBefore);
+  assert.equal(graph.excludedFootingSlots.size, excludedFootingSizeBefore);
+});
+
+test('removeFixedMembersReferencing: 固定梁のスリーブだけを連鎖削除し、auto梁のスリーブは残す', () => {
+  const { graph, v, h } = makeSingleFloor();
+  const v2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+
+  const autoBeam   = graph.addBeam(StructuralMaterialType.WOOD, 'SEC-B', h, false, v, v2, { dimensionStatus: 'auto' });
+  const lockedBeam = graph.addBeam(StructuralMaterialType.WOOD, 'SEC-B', h, false, v, v2, { dimensionStatus: 'locked' });
+  const autoSleeve   = graph.addSleeve('beam', { hostBeamId: autoBeam.id });
+  const lockedSleeve = graph.addSleeve('beam', { hostBeamId: lockedBeam.id });
+
+  const removed = removeFixedMembersReferencing(graph, v.id);
+  assert.deepEqual(removed.sleeves, [lockedSleeve.id]);
+  assert.equal(graph.sleeveMap.has(lockedSleeve.id), false, '固定梁のスリーブは削除される');
+  assert.equal(graph.sleeveMap.has(autoSleeve.id), true, 'auto梁のスリーブは残る（除外集合には無関係）');
+  assert.equal(graph.beamMap.has(autoBeam.id), true, 'auto梁自体も残る');
+});
+
+test('formatFixedMemberConfirm: verbを渡すと文末の動詞が変わる（降格側の文言。既定値は変えない）', () => {
+  const byFloor = [{ plane: { name: '1階' }, columns: 1, beams: 0, footings: 0 }];
+  const message = formatFixedMemberConfirm('通り芯 X3', byFloor, { verb: '中心線にする' });
+  assert.equal(message, '通り芯 X3 には手動で固定した構造材があります（1階: 柱1）。中心線にすると一緒に削除されます。よろしいですか？');
+
+  const defaultMessage = formatFixedMemberConfirm('通り芯 X3', byFloor);
+  assert.equal(defaultMessage, '通り芯 X3 には手動で固定した構造材があります（1階: 柱1）。削除すると一緒に削除されます。よろしいですか？');
+});
 
 test('formatFixedMemberConfirm: Q5の例文を固定する（本数0の材種は省く）', () => {
   const message = formatFixedMemberConfirm('通り芯 X3', [

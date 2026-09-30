@@ -55,6 +55,11 @@ import {
   findFloorsWithCounterpartCL, absorbWallBeamAxesOnPromote, recallPromotedCenterLineDuplicates,
   propagateDemotedCenterLine, findFloorsBlockingGridDeletion, applyCenterLineRemovalAftermath,
 } from './centerLineFloorSync.js';
+// 降格（通り芯→中心線）で固定材（非auto）が確認済みで削除されるとき用（手動追加材サイレント撤去回避
+// 指示書§5ステップ4）。fixedMemberRefs.jsはcenterLineFloorSync.js（otherPlanes）をimportするが、
+// centerLineOps.js自身はfixedMemberRefs.jsをimportしない（このimportがそれ）ため、ここから
+// fixedMemberRefs.jsをimportしても循環にならない（fixedMemberRefs.js冒頭コメント参照）。
+import { removeFixedMembersReferencing } from '../structural/fixedMemberRefs.js';
 
 // CL削除・中心線移動の直後・undo/redo直後に構造同期（structural/structuralSync.js）を起動するための
 // 依存注入フック（App.jsxがsetOpeningGeometryListenerと同じ作法で設定する）。未設定（構造モジュール
@@ -410,6 +415,8 @@ export function whenCenterLineOpsIdle() {
  * 分岐のL485付近・非struct分岐のL768付近）と同じ形——graphが今もアクティブか、clを所有するグラフ
  * （通り芯=全階共有=project.structGraph、それ以外（中心線・補助線・梁芯）=階固有=graph自身）の
  * shapeMapに同一参照のまま残っているか。
+ * 降格（App.jsx handleConvertCenterLineの2段目runBusy。§5ステップ4）でも同じ理由・同じ判定内容
+ * （削除固有の判定は含まない）でそのまま流用する。
  * @param {object} project
  * @param {import('@core').PlanGraph} graph 削除を試みた時点の自階グラフ（呼び出し側のクロージャに閉じ込めた値）
  * @param {import('@core').CenterLine} cl
@@ -1026,7 +1033,14 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
 // （呼び出し側 App.jsx の handleConvertCenterLine が tagCLOpFailure で code を付け、guardUi層
 // （floorTransitionErrorMessage）が ERR_CL_CONVERT_SYNC_FAILED を出す。入力規制ステップ3で関門化）。
 // 後者は従来どおり { toast: error } を返す。
-// @param {{saveFloorFn?: Function}} [opts] - saveFloorFn はテスト用の差し替え（既定値は
+// removeFixedMembers（既定false・手動追加材サイレント撤去回避 指示書§3裁定4・§5ステップ4）:
+// trueなら、この通り芯を参照する固定材（非auto。柱・梁・基礎/柱脚・梁ホストのスリーブ）を
+// 全階（自階＋propagateDemotedCenterLineが複製する他階の複製先）で削除する。壁・図形は消さない
+// （removeDependentsOfCenterLineは壁・図形も消すため使わない。structural/fixedMemberRefs.js
+// removeFixedMembersReferencingが柱・梁・基礎/柱脚・スリーブだけを直接mapから削除する）。
+// 呼び出し側（App.jsx handleConvertCenterLine）が事前にcollectFixedMembersByFloorで確認済みの
+// ときだけtrueを渡す——確認なしの経路（probe・既存テスト）はopts省略のままfalseで、削除は発火しない。
+// @param {{saveFloorFn?: Function, removeFixedMembers?: boolean}} [opts] - saveFloorFn はテスト用の差し替え（既定値は
 //   centerLineFloorSync.js 側の saveFloor。呼び出し側（App.jsx）は無改造でよい）。
 // @returns {Promise<{ toast: string|null }>}
 export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) {
@@ -1052,8 +1066,11 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
     await propagateDemotedCenterLine(project, graph, cl, {
       loCL, hiCL, undoRecords: propagationRecords,
       ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
+      removeFixedMembersFn: opts.removeFixedMembers ? removeFixedMembersReferencing : null,
     });
   } catch (e) {
+    // 複製フェーズが途中で失敗——自階・structGraphともガード契約によりまだ未変更のため、
+    // ここまでに保存できた他階だけをbefore（削除前）へ書き戻せば整合する（rollbackFloorRecords）。
     await rollbackFloorRecords(propagationRecords, opts.saveFloorFn);
     throw e;
   }
@@ -1063,10 +1080,16 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
   const beforeStruct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
   const result = applyDemoteToCenter(graph, project.structGraph, cl);
   if (result.error) {
-    // 複製済みの他階も巻き戻す（自階・structGraph はガード契約によりまだ未変更）。
+    // applyDemoteToCenterのエラーは自階・structGraphを変更する前に検出される（centerLineConvert.js
+    // checkDemoteToCenterGuards相当の再チェック）——自階の固定材削除はまだ行っていないため、
+    // 複製済みの他階（固定材削除を含む）だけをrollbackFloorRecordsで巻き戻せば足りる。
     await rollbackFloorRecords(propagationRecords, opts.saveFloorFn);
     return { toast: result.error };
   }
+  // 降格が成功した直後・afterArch採取前に自階の固定材を削除する（他階は上のpropagateDemotedCenterLine
+  // 内で既に削除済み）。runInActionで包む（fixedMemberRefs.js側はmobxを静的に引かないため、
+  // ここ（App.jsx以外の呼び出し元でも共通の作法）で包む）。
+  if (opts.removeFixedMembers) runInAction(() => removeFixedMembersReferencing(graph, cl.id));
   // 段階(c)・2026-09-25: structuralSyncScopeOfConversion('struct','center')は常に'all'
   // （どちらかが'all'なら全体で'all'。centerLineKindPolicy.js参照）。
   const scope = structuralSyncScopeOfConversion(fromKind, centerLineKind(cl));

@@ -679,10 +679,36 @@ test('【不変条件・手動追加材サイレント撤去回避ステップ3�
   assert.ok(body.includes('deleteCenterLineWithUndo('), 'runDeleteCenterLineの本体にdeleteCenterLineWithUndo(が無い');
 });
 
-test('【不変条件・m-5】App.jsx: handleConvertCenterLine（中心⇔通り芯の入替え）は promoteCenterToGridWithUndo/demoteGridToCenterWithUndo より前に structuralSync.whenIdle() を待つ（入替えも他階IDBを読み書きするため。入力規制ステップ3でcl-to-grid/cl-to-centerのIIFEから名前付き関数へ切り出し）', () => {
+// 手動追加材サイレント撤去回避ステップ4で、変換本体（promoteCenterToGridWithUndo/
+// demoteGridToCenterWithUndo呼び出し・toast・setFloorSyncTick）はrunConvertCenterLineへ
+// 切り出された（固定材の事前確認を挟むため。ステップ3のrunDeleteCenterLineと同じ形）。
+// whenIdle()はhandleConvertCenterLine側（1段目runBusyの中）で待ち、runConvertCenterLine（変換本体）を
+// 呼ぶより前であることを固定する。
+test('【不変条件・m-5】App.jsx: handleConvertCenterLine（中心⇔通り芯の入替え）は runConvertCenterLine( より前に structuralSync.whenIdle() を待つ（入替えも他階IDBを読み書きするため。入力規制ステップ3でcl-to-grid/cl-to-centerのIIFEから名前付き関数へ切り出し・手動追加材サイレント撤去回避ステップ4で変換本体をrunConvertCenterLineへ再切り出し）', () => {
   const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
   const body = extractFunctionBody(appSrc, 'async function handleConvertCenterLine');
-  assertWhenIdleBefore(body, 'const fn = ', 'handleConvertCenterLine');
+  assertWhenIdleBefore(body, 'runConvertCenterLine(', 'handleConvertCenterLine');
+});
+
+// QA指摘: body.includes('const fn = ')だけだとコメント中の同じ文字列でも緑になる（恒真化の懸念）。
+// ステップ3のrunDeleteCenterLine（body.includes('deleteCenterLineWithUndo(')＝実際の呼び出し文字列を
+// 直接見る）と同じ厳密さにするため、`const fn = `の行自体がpromote/demoteの両方を含み（三項演算子で
+// 分岐している証拠）、かつ`fn(graph, project, cl, opts)`の行が別に存在する（分岐した結果を実際に
+// 呼んでいる証拠）ことを、1行まるごとの正規表現一致（mフラグ・行頭行末アンカー）で固定する。
+test('【不変条件・手動追加材サイレント撤去回避ステップ4】App.jsx: runConvertCenterLine は const fn = でpromoteCenterToGridWithUndo/demoteGridToCenterWithUndoを三項分岐し、fn(graph, project, cl, opts)を呼ぶ（変換本体の切り出し先）', () => {
+  const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function runConvertCenterLine');
+
+  assert.match(
+    body,
+    /^\s*const fn = itemId === 'cl-to-grid' \? promoteCenterToGridWithUndo : demoteGridToCenterWithUndo;$/m,
+    'const fn = ...promoteCenterToGridWithUndo...demoteGridToCenterWithUndo;の行が1行まるごとの形で見つからない',
+  );
+  assert.match(
+    body,
+    /^\s*const \{ toast \} = await fn\(graph, project, cl, opts\)/m,
+    'fn(graph, project, cl, opts)を呼ぶ行が1行まるごとの形で見つからない',
+  );
 });
 
 test('【不変条件】App.jsx: setOpeningGeometryListener と setCenterLineStructuralListener はどちらも structuralSync.request へ配線している（コメント行を除いた行で判定。team-lessons 2026-09-23）', () => {

@@ -541,18 +541,28 @@ export async function saveOtherFloorsAfterGridCenterLineAftermath(processed, { u
  * applyCLEccentricityWithUndo も同じ理由でundoRecords配列だけを渡しamendは使わない）でも
  * before/after は常に undoRecords へ記録する——呼び出し側が opts.undoRecords に配列を渡せば、
  * 例外発生時も途中まで積んだ記録を参照できる（ロールバックに使う）。
+ * removeFixedMembersFn を渡すと、複製の直前（同じ runInAction の先頭。before採取後・複製の
+ * addCenterLine前）に各階のtempへ `removeFixedMembersFn(temp, cl.id)` を呼ぶ（手動追加材
+ * サイレント撤去回避 指示書§2.4・§3裁定4・§5ステップ4）。before/afterは1階1レコードのまま
+ * （削除も複製も同じrunInAction・同じsaveFloorFn呼び出しに含まれるため、undoで両方が戻り、
+ * redoで両方が再び効く）。ここから直接 structural/fixedMemberRefs.js を import しない——
+ * fixedMemberRefs.js が本ファイルの otherPlanes を import しており、逆向きimportは循環になる
+ * ため、依存注入（呼び出し側のtransform/centerLineOps.jsが実装を渡す）にする。
  * @param {object} project
  * @param {PlanGraph} activeGraph  降格を実行する階のグラフ（アクティブ階）
  * @param {CenterLine} cl          降格前の通り芯（まだ project.structGraph に居る）
- * @param {{loCL, hiCL, undoEntry?: object|null, saveFloorFn?: Function, undoRecords?: Array}} opts
+ * @param {{loCL, hiCL, undoEntry?: object|null, saveFloorFn?: Function, undoRecords?: Array, removeFixedMembersFn?: Function|null}} opts
  * @returns {Promise<Array>} undoRecords（呼び出し側が渡した配列、省略時は内部で新規作成したもの）
  */
-export async function propagateDemotedCenterLine(project, activeGraph, cl, { loCL, hiCL, undoEntry = null, saveFloorFn = saveFloor, undoRecords = [] }) {
+export async function propagateDemotedCenterLine(project, activeGraph, cl, {
+  loCL, hiCL, undoEntry = null, saveFloorFn = saveFloor, undoRecords = [], removeFixedMembersFn = null,
+}) {
   try {
     for (const plane of otherPlanes(project, activeGraph)) {
       const temp = await floorSwapManager.peek(plane, project.structGraph);
       const before = serializeGraph(temp);
       runInAction(() => {
+        if (removeFixedMembersFn) removeFixedMembersFn(temp, cl.id);
         temp.addCenterLine(cl.centerLineType, cl._value, {
           labeled: false, discipline: Discipline.ARCH, lineType: 'center', trim: cl.trim,
           refId: cl.refId, refOffset: cl.refOffset,

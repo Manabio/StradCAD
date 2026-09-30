@@ -1803,14 +1803,14 @@ const App = observer(() => {
   }
 
   // ---- 固定材の削除確認（手動追加材サイレント撤去回避 指示書§4 Q5。ConfirmDialogをPromise<boolean>に
-  // 包むだけの小関数。CL削除（handleDeleteCenterLine）専用ではなく、降格側（ステップ4）でも
-  // 再利用できる形にしておく）----
-  function confirmFixedMemberDeletion(message) {
+  // 包むだけの小関数。CL削除（handleDeleteCenterLine）専用ではなく、降格側（handleConvertCenterLine・
+  // §5ステップ4）でも再利用する。okLabelは肯定ボタンの文言（既定'削除'。降格は'中心線化'を渡す）----
+  function confirmFixedMemberDeletion(message, okLabel = '削除') {
     return new Promise((resolve) => {
       setFloorConfirm({
         message,
         buttons: [
-          { label: '削除',     value: 'ok', primary: true, danger: true },
+          { label: okLabel,     value: 'ok', primary: true, danger: true },
           { label: 'キャンセル', value: 'cancel' },
         ],
         onSelect: (v) => {
@@ -1876,14 +1876,51 @@ const App = observer(() => {
   // 入替えも他階IDBを読み書きする（centerLineFloorSync.js）ため、実行中の構造同期が他階を
   // 保存・差し替えしている最中に始めると競合する（handleDeleteCenterLineと同じ理由でwhenIdleを
   // 関門の中で待つ。入力規制ステップ3）。
+  //
+  // 変換本体（promoteCenterToGridWithUndo/demoteGridToCenterWithUndo呼び出し・toast・
+  // setFloorSyncTick）はrunConvertCenterLineへ切り出した——降格（cl-to-center）で固定材
+  // （dimensionStatus!=='auto'の柱・梁・基礎/柱脚）が巻き込まれるときは、降格の前に階ごとの
+  // 本数つきの確認を出すため（手動追加材サイレント撤去回避 指示書§3裁定4・§4 Q3/Q4/Q5・
+  // §5ステップ4）。昇格（cl-to-grid）側は列挙しない（裁定4は降格のみ対象。昇格側は触らない）。
+  // handleDeleteCenterLineと同じ2段runBusy構成: 1段目（固定材の列挙。無ければそのまま変換まで
+  // 完了する）→（関門の外で）確認→2段目（了承後の変換本体、固定材を削除しつつ実行）。
+  async function runConvertCenterLine(itemId, cl, opts = {}) {
+    const fn = itemId === 'cl-to-grid' ? promoteCenterToGridWithUndo : demoteGridToCenterWithUndo;
+    const { toast } = await fn(graph, project, cl, opts).catch(err => { throw tagCLOpFailure(err); });
+    if (toast) setToast({ msg: toast, key: Date.now() });
+    setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（handleEccConfirmと同じ）
+  }
+
   async function handleConvertCenterLine(itemId, cl) {
     beginUiTransition();
-    await runBusy(itemId === 'cl-to-grid' ? '通り芯化' : '中心線化', async () => {
+    const byFloor = await runBusy(itemId === 'cl-to-grid' ? '通り芯化' : '中心線化', async () => {
       await structuralSync.whenIdle();
-      const fn = itemId === 'cl-to-grid' ? promoteCenterToGridWithUndo : demoteGridToCenterWithUndo;
-      const { toast } = await fn(graph, project, cl).catch(err => { throw tagCLOpFailure(err); });
-      if (toast) setToast({ msg: toast, key: Date.now() });
-      setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（handleEccConfirmと同じ）
+      if (itemId === 'cl-to-center') {
+        const found = await collectFixedMembersByFloor(project, graph, cl).catch(err => { throw tagCLOpFailure(err); });
+        if (found.length > 0) return found;
+      }
+      await runConvertCenterLine(itemId, cl);
+      return null;
+    });
+    if (!byFloor) return;
+    const ok = await confirmFixedMemberDeletion(
+      formatFixedMemberConfirm(clDisplayName(cl), byFloor, { verb: '中心線にする' }),
+      '中心線化',
+    );
+    if (!ok) return;
+    beginUiTransition();
+    await runBusy('中心線化', async () => {
+      await structuralSync.whenIdle();
+      // 確認ダイアログの表示中は関門を開けておくため、その間にCtrl+Z/Y や階切替が割り込みうる
+      // （handleDeleteCenterLineの2段目と同じ理由）。isCenterLineStillDeletableは「CL削除」専用の
+      // 名前だが、判定内容（graphが今もアクティブか・clを所有するグラフのshapeMapに同一参照のまま
+      // 残っているか）は降格の再検証にもそのまま使える——削除・降格のどちらも「対象CLが消えずに
+      // 存在し続けているか」を見るだけで、削除固有の判定は含まない。
+      if (!isCenterLineStillDeletable(project, graph, cl)) {
+        setToast({ msg: '対象が変わったため中心線化を中止しました', key: Date.now() });
+        return;
+      }
+      await runConvertCenterLine(itemId, cl, { removeFixedMembers: true });
     });
   }
 
