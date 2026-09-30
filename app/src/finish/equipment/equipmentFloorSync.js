@@ -16,13 +16,15 @@ import { saveFloor } from '../../storage/db.js';
 import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
 import { undoManager } from '../../undoManager.js';
 import { floorWriteGeneration } from '../../storage/floorWriteGeneration.js';
-import { judgeElevatorInstall, installOnUpperFloor } from './equipmentFloorPlan.js';
-import { equipmentFloorSpanLabel, buildingNumbersAfterRemoval } from './equipmentNumbering.js';
-import { applyEquipmentRemovalToFloor, applyEquipmentUsageToFloor } from './equipmentOps.js';
+import { judgeElevatorInstall, installOnUpperFloor, copyElevatorRowsToGraph } from './equipmentFloorPlan.js';
+import { equipmentFloorSpanLabel, buildingNumbersAfterRemoval, renumberEquipment, selfFloorEquipmentCatalog } from './equipmentNumbering.js';
+import { applyEquipmentRemovalToFloor, applyEquipmentUsageToFloor, applyEquipmentNumbers } from './equipmentOps.js';
 import {
   ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure,
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE,
   ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
+  ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_COPY_FAILED_MESSAGE,
+  ERR_ELEVATOR_RENUMBER_FAILED, ERR_ELEVATOR_RENUMBER_FAILED_MESSAGE,
 } from '../../error.js';
 
 // rollbackFloorRecords（transform/centerLineFloorSync.js）と同じ規則: アクティブ階なら
@@ -493,4 +495,139 @@ export async function runElevatorUsageChange({
   onApplied?.();
 
   return { status: 'changed' };
+}
+
+/**
+ * 階追加時、直下の採用階の器具行を新階へ複製する。App.jsx
+ * syncNewFloorFromSource が syncUpperFloorsAuto の後・addNewFloorRoomFromSource の前に呼ぶ
+ * （階段同期の後＝新階にできた階段・階段吹抜けを衝突判定の相手にできる。外壁内側の部屋の前＝
+ * 部屋は新階で割当済みのセルを除くので、昇降路を先に作れば部屋から自然に外れる）。
+ *
+ * 直下階は project.planes（採用階だけ・elevation昇順）で newPlane の1つ下。新階が先頭（最下）
+ * なら何もしない。直下階がアクティブ階なら生きているグラフ（activeGraph）、そうでなければ peek。
+ * 直下階の器具行が0件（器具行の無い昇降路だけ、または昇降路が無い）なら noop（新階を peek も
+ * しない）。undo の新規エントリは積まない——withFloorAddUndo が新階のバイト列を丸ごと記録する
+ * ため、複製は階追加のエントリに自然に含まれる。
+ *
+ * @param {object} params
+ * @param {object} params.project
+ * @param {object} params.activeGraph - 表示中（元階）のグラフ
+ * @param {object} params.newPlane - 追加した新しい Plane
+ * @param {(plane: object) => Promise<object>} [params.peekFn] - 既定 floorSwapManager.peek
+ * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [params.saveFloorFn] - 既定 saveFloor
+ * @returns {Promise<{status:'noop'} | {status:'copied', copiedIds: string[], skipped: Array<{id:string, reason:string}>}>}
+ */
+export async function copyElevatorsToNewFloor({
+  project, activeGraph, newPlane,
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+}) {
+  const planes = project.planes;
+  const idx = planes.findIndex(p => p.id === newPlane.id);
+  if (idx <= 0) return { status: 'noop' }; // 新階が先頭（最下）→直下階なし
+
+  const lowerPlane = planes[idx - 1];
+  let lowerGraph;
+  try {
+    lowerGraph = lowerPlane.id === activeGraph.plane.id ? activeGraph : await peekFn(lowerPlane);
+  } catch (err) {
+    throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_COPY_FAILED, message: ERR_ELEVATOR_COPY_FAILED_MESSAGE });
+  }
+  if (lowerGraph.equipmentRows.length === 0) return { status: 'noop' };
+
+  let newGraph;
+  try {
+    newGraph = await peekFn(newPlane);
+  } catch (err) {
+    throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_COPY_FAILED, message: ERR_ELEVATOR_COPY_FAILED_MESSAGE });
+  }
+
+  const { copiedIds, skipped } = copyElevatorRowsToGraph(newGraph, lowerGraph, project.structGraph);
+
+  if (copiedIds.length > 0) {
+    try {
+      await saveFloorFn(newPlane.id, serializeGraph(newGraph));
+    } catch (err) {
+      throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_COPY_FAILED, message: ERR_ELEVATOR_COPY_FAILED_MESSAGE });
+    }
+  }
+
+  return { status: 'copied', copiedIds, skipped };
+}
+
+/**
+ * 消す階（planeId）の器具行の id 一覧を読む。App.jsx runDeleteFloor が removeFloor より前に呼ぶ
+ * （削除後は peek できないため）。消す階がアクティブならメモリ上の生きているグラフ、そうでなければ
+ * peek する。peek の例外は識別コード付きで再スローする（削除前のため状態は変わっていない）。
+ * @param {object} project
+ * @param {object} plane - 消す階の Plane
+ * @param {(plane: object) => Promise<object>} [peekFn] - 既定 floorSwapManager.peek
+ * @returns {Promise<string[]>}
+ */
+export async function readFloorEquipmentIds(project, plane, peekFn = (p) => floorSwapManager.peek(p, project.structGraph)) {
+  try {
+    const graph = project.activePlane?.id === plane.id ? project.activeGraph : await peekFn(plane);
+    return graph.equipmentRows.map(r => r.id);
+  } catch (err) {
+    throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_RENUMBER_FAILED, message: ERR_ELEVATOR_RENUMBER_FAILED_MESSAGE });
+  }
+}
+
+/**
+ * 階削除後、全階から消えた器具があれば番号を詰め直す。App.jsx runDeleteFloor が
+ * removeFloor の直後に呼ぶ。検討案の平面は対象外（project.planes は採用階だけ）。undo エントリは
+ * 積まない（現行の階削除の扱いに従う＝undo できない）。
+ * @param {object} params
+ * @param {object} params.project
+ * @param {object} params.activeGraph - アクティブ階のグラフ（削除後の現在値）
+ * @param {string[]} params.removedIds - 消えた階が持っていた器具行の id 一覧（readFloorEquipmentIds の戻り値）
+ * @param {(plane: object) => Promise<object>} [params.peekFn]
+ * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [params.saveFloorFn]
+ * @returns {Promise<{status:'noop'} | {status:'renumbered', savedPlaneIds: string[]}>}
+ */
+export async function renumberEquipmentAfterFloorRemoval({
+  project, activeGraph, removedIds,
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+}) {
+  if (removedIds.length === 0) return { status: 'noop' };
+
+  let floors, beforeBytesByPlane;
+  try {
+    ({ floors, beforeBytesByPlane } = await peekNonActiveFloors(project, activeGraph, peekFn));
+  } catch (err) {
+    throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_RENUMBER_FAILED, message: ERR_ELEVATOR_RENUMBER_FAILED_MESSAGE });
+  }
+
+  const remainingIds = new Set(floors.flatMap(f => f.graph.equipmentRows.map(r => r.id)));
+  const vanished = removedIds.filter(id => !remainingIds.has(id));
+  if (vanished.length === 0) return { status: 'noop' }; // 器具が残る場合は何もしない（書込みゼロ）
+
+  const noById = renumberEquipment(selfFloorEquipmentCatalog(floors.flatMap(f => f.graph.equipmentRows)));
+
+  const savedPlaneIds = [];
+  for (const { plane, graph } of floors) {
+    if (plane.id === activeGraph.plane.id) continue;
+    // 変更→直列化→保存を1つのtryで囲む（いずれかが例外を投げても保存済みの階を巻き戻してから
+    // 識別コード付きで再スローする。runElevatorRemovalと同じ規則）。
+    try {
+      const changed = applyEquipmentNumbers(graph, noById);
+      if (changed === 0) continue;
+      const afterBytes = serializeGraph(graph);
+      await saveFloorFn(plane.id, afterBytes);
+      savedPlaneIds.push(plane.id);
+    } catch (err) {
+      await rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn);
+      throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_RENUMBER_FAILED, message: ERR_ELEVATOR_RENUMBER_FAILED_MESSAGE });
+    }
+  }
+
+  // 最後にアクティブ階（生きているグラフへ適用。自動保存に任せる）——検討案の平面がアクティブなら
+  // 適用しない（検討案は採用階の再採番の対象外。project.planesは採用階だけを持つため、そこに
+  // 含まれるかどうかで判定する）。
+  if (project.planes.some(p => p.id === activeGraph.plane.id)) {
+    applyEquipmentNumbers(activeGraph, noById);
+  }
+
+  return { status: 'renumbered', savedPlaneIds };
 }

@@ -182,6 +182,24 @@ export const ERR_ELEVATOR_REMOVE_FAILED_MESSAGE = '昇降機の削除に失敗�
 export const ERR_ELEVATOR_USAGE_FAILED = 'ERR_ELEVATOR_USAGE_FAILED';
 export const ERR_ELEVATOR_USAGE_FAILED_MESSAGE = '昇降機の用途の変更に失敗しました。';
 
+// 階追加時の昇降機の複製（finish/equipment/equipmentFloorSync.js copyElevatorsToNewFloor）専用の
+// エラーコード（昇降機の仕様追加 ステップ6）。設置・削除・用途変更と同じ「messageが呼び出し元で
+// 組み立て済み」様式。peek・保存の例外をこのコードで包み直して再スローする（新階の保存は1回だけ
+// のため巻き戻しは不要）。
+export const ERR_ELEVATOR_COPY_FAILED = 'ERR_ELEVATOR_COPY_FAILED';
+export const ERR_ELEVATOR_COPY_FAILED_MESSAGE = '昇降機の複製に失敗しました。';
+
+// 階追加時、直下階の器具行の一部を新階へ複製できなかった（区画できない・新階の階段等と衝突）場合の
+// 通知文言（拒否ではなくトースト表示のみ。App.jsx syncNewFloorFromSource が使う）。
+export const ERR_ELEVATOR_COPY_SKIPPED = (floorName, count) =>
+  `${floorName}へ複製できなかった昇降機があります（${count}基）。`;
+
+// 階削除に伴う昇降機の再採番（finish/equipment/equipmentFloorSync.js
+// renumberEquipmentAfterFloorRemoval）専用のエラーコード（ステップ6）。他階の保存直前の例外で
+// 保存済みの階を before へ巻き戻した後、このコードで包み直して再スローする。
+export const ERR_ELEVATOR_RENUMBER_FAILED = 'ERR_ELEVATOR_RENUMBER_FAILED';
+export const ERR_ELEVATOR_RENUMBER_FAILED_MESSAGE = '階を削除した後、昇降機の番号の詰め直しに失敗しました。';
+
 // tagCLOpFailureと同じ「既に文字列codeを持つ既知エラーはそのまま返す（上書きしない・
 // 二重ラップしない）」規約（QA指摘m4）。equipmentFloorSync.js（保存・commitActiveの例外）と
 // App.jsx installElevatorFromNaming/deleteElevatorEquipment/changeElevatorUsage
@@ -203,6 +221,7 @@ export function tagElevatorOpFailure(err, { code = ERR_ELEVATOR_OP_FAILED, messa
 // （QA指摘F3・2026-09-27）。
 const KNOWN_TRANSITION_ERROR_CODES = [
   ERR_CATALOG_DUPLICATE, ERR_ELEVATOR_OP_FAILED, ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_USAGE_FAILED,
+  ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_RENUMBER_FAILED,
 ];
 
 // 昇降機の設置（finish/equipment/equipmentOps.js validateElevatorInstall）専用の拒否文言。

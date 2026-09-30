@@ -15,6 +15,10 @@ import { installEquipment } from './equipmentOps.js';
 import { selfFloorEquipmentCatalog, nextEquipmentNo, equipmentSymbols } from './equipmentNumbering.js';
 import { ElevatorEquipmentCategory, DEFAULT_EV_USAGE } from '../../core/constants.js';
 import { ERR_ELEVATOR_UPPER_CONFLICT, ERR_ELEVATOR_UPPER_UNCLOSABLE } from '../../error.js';
+// serializeGraph/restoreGraph は graphSnapshot.js から直接 import する——同ファイルは
+// react / store.js / snap.js / .jsx のいずれも静的 import しない（依存を確認済み）ため、
+// equipmentFloorPlan.js の純モジュール規律には反しない。
+import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
 
 const BOUNDS_EPS = 1e-6;
 
@@ -225,4 +229,46 @@ export function judgeElevatorInstall({ structGraph, floors, activeIndex, sourceC
 export function installOnUpperFloor(graph, { id, category, usage, no, cells }) {
   subtractCellsFromUndefinedRooms(graph, cells);
   return installEquipment(graph, { id, category, usage, no, cells, candidateRoomId: null });
+}
+
+/**
+ * 階追加時、直下階（lowerGraph）の器具行を新階（newGraph。一時グラフ）へ複製する
+ * （器具行の無い昇降路は lowerGraph.equipmentRows に含まれないため、そもそも複製対象にならない）。
+ * 行ごとに: 変換元セルを refresh → prepareUpperShaftCells で新階へ変換・不足CLを追加 →
+ * 閉じなければ unclosable でスキップ → findShaftInstallConflicts で衝突判定 → 衝突があれば
+ * conflict でスキップ → installOnUpperFloor で書き込む。id・分類・番号・用途は複製元の行の値を
+ * そのまま使う（採番し直さない）。スキップした行が足した中心線は restoreGraph で取り消す
+ * （残すと新階の階段のセルを割ってしまう）。隣り合う行は installEquipment の既存の隣接統合で
+ * 1つの Room にまとまる。
+ * @param {object} newGraph - 複製先（新階の一時グラフ）。CL・Room・器具行が追加される
+ * @param {object} lowerGraph - 複製元（直下階のグラフ。アクティブならメモリ上、非アクティブなら peek 済み）
+ * @param {object} structGraph - project.structGraph
+ * @returns {{copiedIds: string[], skipped: Array<{id:string, reason:'unclosable'|'conflict'}>}}
+ */
+export function copyElevatorRowsToGraph(newGraph, lowerGraph, structGraph) {
+  const copiedIds = [];
+  const skipped = [];
+  for (const row of lowerGraph.equipmentRows) {
+    const snap = serializeGraph(newGraph);
+    const sourceCells = refreshCells(row.cellKeys, lowerGraph);
+    if (sourceCells.size === 0) { skipped.push({ id: row.id, reason: 'unclosable' }); continue; }
+
+    const { cells, closed } = prepareUpperShaftCells(newGraph, lowerGraph, structGraph, sourceCells);
+    if (!closed) {
+      restoreGraph(newGraph, snap);
+      skipped.push({ id: row.id, reason: 'unclosable' });
+      continue;
+    }
+
+    const conflicts = findShaftInstallConflicts(newGraph, cells);
+    if (conflicts.length > 0) {
+      restoreGraph(newGraph, snap);
+      skipped.push({ id: row.id, reason: 'conflict' });
+      continue;
+    }
+
+    installOnUpperFloor(newGraph, { id: row.id, category: row.category, usage: row.usage, no: row.no, cells });
+    copiedIds.push(row.id);
+  }
+  return { copiedIds, skipped };
 }

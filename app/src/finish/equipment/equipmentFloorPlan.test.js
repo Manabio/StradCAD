@@ -9,12 +9,13 @@ import assert from 'node:assert/strict';
 import {
   Project, CenterLineType, Discipline, RoomKind, RoomFeature, StructuralMaterialType,
 } from '../../core.js';
-import { worldToCell, refreshCells } from '../gridCells.js';
+import { worldToCell, refreshCells, roomBounds } from '../gridCells.js';
 import { serializeGraph } from '../../graphSnapshot.js';
 import { makeStorePeek, assertShaftInvariant } from './equipmentTestFixtures.js';
 import { installEquipment } from './equipmentOps.js';
 import {
   prepareUpperShaftCells, findShaftInstallConflicts, judgeElevatorInstall, installOnUpperFloor,
+  copyElevatorRowsToGraph,
 } from './equipmentFloorPlan.js';
 import { ERR_ELEVATOR_UPPER_CONFLICT, ERR_ELEVATOR_UPPER_UNCLOSABLE } from '../../error.js';
 
@@ -498,4 +499,143 @@ test('installOnUpperFloor: 未定義Roomからセルを引き抜いてからinst
   assert.deepEqual(refreshCells(remaining.cells, g), new Set([rightKey(g)]));
   const shaft = g.roomMap.get(roomId);
   assert.equal(shaft.feature, RoomFeature.ELEVATOR_EQUIPMENT);
+});
+
+// ================================================================
+// copyElevatorRowsToGraph（階追加時の複製）
+// ================================================================
+
+test('copyElevatorRowsToGraph: 1行→新階に同じid・分類・番号・用途の行ができ、昇降路の矩形が元と一致、I1成立', () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  installEquipment(g1, { id: 'ev-a', category: 'ev', usage: 'passengerFreight', no: 3, cells: new Set([leftKey(g1)]) });
+
+  const { copiedIds, skipped } = copyElevatorRowsToGraph(g2, g1, project.structGraph);
+
+  assert.deepEqual(copiedIds, ['ev-a']);
+  assert.deepEqual(skipped, []);
+  assert.equal(g2.equipmentRows.length, 1);
+  const row = g2.equipmentRows[0];
+  assert.equal(row.id, 'ev-a');
+  assert.equal(row.category, 'ev');
+  assert.equal(row.usage, 'passengerFreight');
+  assert.equal(row.no, 3);
+  assertShaftInvariant(g2);
+  const srcBounds = roomBounds(new Set([leftKey(g1)]), g1);
+  const dstBounds = roomBounds(refreshCells(row.cellKeys, g2), g2);
+  assert.deepEqual(dstBounds, srcBounds, '昇降路の矩形が元と一致');
+});
+
+test('copyElevatorRowsToGraph: 隣り合う2行（辺で接する）→新階でも1つのRoomに2行がまとまり、I1成立', () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  installEquipment(g1, { id: 'ev-left',  category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g1)]) });
+  installEquipment(g1, { id: 'ev-right', category: 'ev', usage: 'passenger', no: 2, cells: new Set([rightKey(g1)]) });
+
+  const { copiedIds, skipped } = copyElevatorRowsToGraph(g2, g1, project.structGraph);
+
+  assert.deepEqual(copiedIds.sort(), ['ev-left', 'ev-right']);
+  assert.deepEqual(skipped, []);
+  assert.equal(g2.equipmentRows.length, 2);
+  const rooms = g2.rooms.filter(r => r.feature === RoomFeature.ELEVATOR_EQUIPMENT);
+  assert.equal(rooms.length, 1, '隣り合う2行は1つのRoomにまとまる');
+  assertShaftInvariant(g2);
+});
+
+test('【失敗系】copyElevatorRowsToGraph: 新階の同じセルに階段吹抜けがある→skippedにconflict・保存対象になる行は増えず、CLは足されたぶんも取り消される', () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  installEquipment(g1, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g1)]) });
+  const stairVoid = g2.addRoom(new Set([leftKey(g2)]));
+  stairVoid.setFeature(RoomFeature.STAIR_VOID);
+  const beforeCLCount = g2.centerLines.length;
+
+  const { copiedIds, skipped } = copyElevatorRowsToGraph(g2, g1, project.structGraph);
+
+  assert.deepEqual(copiedIds, []);
+  assert.deepEqual(skipped, [{ id: 'ev-a', reason: 'conflict' }]);
+  assert.equal(g2.equipmentRows.length, 0);
+  assert.equal(g2.centerLines.length, beforeCLCount, 'スキップした行が足したCLはrestoreGraphで取り消される');
+});
+
+test('copyElevatorRowsToGraph: 2行のうち1行だけ衝突→残りの1行だけ複製され、新階の中心線の本数は衝突しない1行だけを複製した場合と同じ', () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  installEquipment(g1, { id: 'ev-left',  category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g1)]) });
+  installEquipment(g1, { id: 'ev-right', category: 'ev', usage: 'passenger', no: 2, cells: new Set([rightKey(g1)]) });
+  const stairVoid = g2.addRoom(new Set([leftKey(g2)]));
+  stairVoid.setFeature(RoomFeature.STAIR_VOID); // leftだけ衝突させる
+
+  const { copiedIds, skipped } = copyElevatorRowsToGraph(g2, g1, project.structGraph);
+
+  assert.deepEqual(copiedIds, ['ev-right']);
+  assert.deepEqual(skipped, [{ id: 'ev-left', reason: 'conflict' }]);
+  const clCountWithOneConflict = g2.centerLines.length;
+
+  // 対照: 最初から衝突しない1行（right）だけを複製した場合と同じCL本数になるはず。
+  const { graphs: graphs2 } = setupProject(2);
+  const [g1b, g2b] = graphs2;
+  installEquipment(g1b, { id: 'ev-right', category: 'ev', usage: 'passenger', no: 2, cells: new Set([rightKey(g1b)]) });
+  copyElevatorRowsToGraph(g2b, g1b, project.structGraph);
+  assert.equal(clCountWithOneConflict, g2b.centerLines.length);
+});
+
+test('【失敗系】copyElevatorRowsToGraph: 行のcellKeysが解決できない（現行グリッドに存在しないキー）→unclosableでスキップ', () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  g1.addEquipmentRow({ id: 'ev-broken', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set(['bogus:bogus:bogus:bogus']), roomId: null });
+
+  const { copiedIds, skipped } = copyElevatorRowsToGraph(g2, g1, project.structGraph);
+
+  assert.deepEqual(copiedIds, []);
+  assert.deepEqual(skipped, [{ id: 'ev-broken', reason: 'unclosable' }]);
+  assert.equal(g2.equipmentRows.length, 0);
+});
+
+test('【失敗系】copyElevatorRowsToGraph: CLを新規に足す必要がある行が衝突でスキップされたとき、足したCLもrestoreGraphで取り消される（中心線の本数が変わらない）', () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  // 設置階に per-floor 中心線（区画を割る）を足し、footprintをleft内の半分にする
+  // （新階g2にはこのCLが無いため、prepareUpperShaftCellsがg2へ1本追加してから閉じる）。
+  g1.addCenterLine(CenterLineType.VERTICAL, 500, { labeled: false, discipline: Discipline.ARCH });
+  const halfCellKey = worldToCell(250, 500, g1).key;
+  g1.addEquipmentRow({ id: 'ev-half', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set([halfCellKey]), roomId: null });
+  const beforeCLCount = g2.centerLines.length;
+  // 新階の対応セルに階段吹抜けを置いて衝突させる。
+  const stairVoid = g2.addRoom(new Set([leftKey(g2)]));
+  stairVoid.setFeature(RoomFeature.STAIR_VOID);
+
+  const { copiedIds, skipped } = copyElevatorRowsToGraph(g2, g1, project.structGraph);
+
+  assert.deepEqual(copiedIds, []);
+  assert.deepEqual(skipped, [{ id: 'ev-half', reason: 'conflict' }]);
+  assert.equal(g2.centerLines.length, beforeCLCount, '衝突でスキップした行が足したCLもrestoreGraphで取り消される');
+});
+
+test('【失敗系】copyElevatorRowsToGraph: 新階で範囲を区画できない行（L字で矩形に閉じない）は、足した中心線が取り消され中心線の本数は呼ぶ前と同じ', () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  const sourceCells = makeLShapeSourceCells(g1);
+  g1.addEquipmentRow({ id: 'ev-lshape', category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set(sourceCells), roomId: null });
+  const beforeCLCount = g2.centerLines.length;
+
+  const { copiedIds, skipped } = copyElevatorRowsToGraph(g2, g1, project.structGraph);
+
+  assert.deepEqual(copiedIds, []);
+  assert.deepEqual(skipped, [{ id: 'ev-lshape', reason: 'unclosable' }]);
+  assert.equal(g2.centerLines.length, beforeCLCount, '区画できない行が足した中心線もrestoreGraphで取り消される');
+});
+
+test('copyElevatorRowsToGraph: 直下階に器具行が無い（未登録の昇降路だけ）→lowerGraph.equipmentRowsが0件なので何も複製しない', () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  const unregisteredShaft = g1.addRoom(new Set([leftKey(g1)]));
+  unregisteredShaft.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  assert.equal(g1.equipmentRows.length, 0, '前提: 器具行は無い（未登録の昇降路）');
+
+  const { copiedIds, skipped } = copyElevatorRowsToGraph(g2, g1, project.structGraph);
+
+  assert.deepEqual(copiedIds, []);
+  assert.deepEqual(skipped, []);
+  assert.equal(g2.equipmentRows.length, 0);
 });

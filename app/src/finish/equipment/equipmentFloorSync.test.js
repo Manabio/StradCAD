@@ -6,17 +6,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Project, CenterLineType, Discipline } from '../../core.js';
+import { Project, CenterLineType, Discipline, RoomFeature } from '../../core.js';
 import { worldToCell } from '../gridCells.js';
 import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
 import { undoManager } from '../../undoManager.js';
 import { noteFloorWrite } from '../../storage/floorWriteGeneration.js';
 import { makeStorePeek, makeStoreSave, decodeFloor, assertShaftInvariant } from './equipmentTestFixtures.js';
 import { installEquipment, removeEquipment, applyEquipmentUsageToFloor } from './equipmentOps.js';
-import { runElevatorInstall, loadOtherFloorEquipmentRows, runElevatorRemoval, runElevatorUsageChange } from './equipmentFloorSync.js';
+import {
+  runElevatorInstall, loadOtherFloorEquipmentRows, runElevatorRemoval, runElevatorUsageChange,
+  copyElevatorsToNewFloor, readFloorEquipmentIds, renumberEquipmentAfterFloorRemoval,
+} from './equipmentFloorSync.js';
 import {
   ERR_ELEVATOR_FLOORS_CHANGED, ERR_ELEVATOR_OP_FAILED, ERR_ELEVATOR_UPPER_CONFLICT,
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_USAGE_FAILED,
+  ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_RENUMBER_FAILED,
 } from '../../error.js';
 
 // ---- 共通フィクスチャ（equipmentFloorPlan.test.js と同じ構図: X:[0,1000,2000] Y:[0,1000]） ----
@@ -678,9 +682,57 @@ test('runElevatorInstall: 検討案の平面がアクティブ（project.planes�
   assert.equal(altGraph.equipmentRows.length, 1);
 });
 
+test('runElevatorInstall: 非アクティブの検討案の平面は対象に入らない（peek・保存されない）', async () => {
+  const { project, graphs } = setupProject(2);
+  const [g1] = graphs;
+  const { graph: altGraph } = project.addPlane(0, '検討1', 'alt1', 1, 1, true, g1.plane.id, 0);
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  store.set(altGraph.plane.id, serializeGraph(altGraph));
+  const beforeAltBytes = store.get(altGraph.plane.id);
+  const saveLog = [];
+  const peeked = [];
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => { peeked.push(plane.id); return basePeek(plane); };
+  const commitCalls = [];
+
+  const result = await runElevatorInstall({
+    project, activeGraph: g1, cells: new Set([leftKey(g1)]),
+    commitActive: makeCommitActive(g1, commitCalls),
+    isStillValid: alwaysValid, onApplied: () => {},
+    peekFn,
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'installed');
+  assert.ok(!peeked.includes('alt1'), 'peekの呼び出しログに検討案のplaneIdが無い');
+  assert.ok(!saveLog.includes('alt1'), '保存ログに検討案のplaneIdが無い');
+  assert.equal(store.get('alt1'), beforeAltBytes, '検討案の平面のストアのバイト列は呼ぶ前と同一');
+});
+
 // ================================================================
 // loadOtherFloorEquipmentRows（S4: project.equipmentIndex を埋める読み出し）
 // ================================================================
+
+test('loadOtherFloorEquipmentRows: 非アクティブの検討案の平面は対象に入らない（peekされない・戻り値に含まれない）', async () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  installEquipment(g2, { id: 'ev-2', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { graph: altGraph } = project.addPlane(0, '検討1', 'alt1', 1, 1, true, g1.plane.id, 0);
+  addRow(altGraph, 'ev-alt', 9);
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  store.set(altGraph.plane.id, serializeGraph(altGraph));
+  const peeked = [];
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => { peeked.push(plane.id); return basePeek(plane); };
+
+  const entries = await loadOtherFloorEquipmentRows(project, g1, { peekFn });
+
+  assert.ok(!peeked.includes('alt1'), 'peekの呼び出しログに検討案のplaneIdが無い');
+  const byPlane = new Map(entries);
+  assert.ok(!byPlane.has('alt1'), '戻り値に検討案のplaneIdが無い');
+});
 
 test('loadOtherFloorEquipmentRows: アクティブ以外の全採用階をpeekしplain値の器具行配列を返す', async () => {
   const { project, graphs } = setupProject(3);
@@ -956,6 +1008,37 @@ test('runElevatorRemoval: 検討案の平面がアクティブ→自階だけ確
   assert.equal(commitCalls[0], null, 'Q5ではnoByIdをnullで渡す（自階だけの番号詰めに委ねる）');
   assert.equal(altGraph.equipmentRows.length, 0);
   assert.equal(store.get(g1.plane.id), before1, '採用階(1階)のストアは変わらないはず');
+});
+
+test('runElevatorRemoval: 非アクティブの検討案の平面は対象に入らない（peek・保存されない）', async () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  installEquipment(g1, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g1)]) });
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { graph: altGraph } = project.addPlane(0, '検討1', 'alt1', 1, 1, true, g1.plane.id, 0);
+  addRow(altGraph, 'ev-a', 1);
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  store.set(altGraph.plane.id, serializeGraph(altGraph));
+  const beforeAltBytes = store.get(altGraph.plane.id);
+  const saveLog = [];
+  const peeked = [];
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => { peeked.push(plane.id); return basePeek(plane); };
+  const commitCalls = [];
+
+  const result = await runElevatorRemoval({
+    project, activeGraph: g1, equipmentId: 'ev-a',
+    commitActive: makeCommitActiveForRemoval(g1, 'ev-a', commitCalls),
+    isStillValid: alwaysValid, onApplied: () => {},
+    peekFn,
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'removed');
+  assert.ok(!peeked.includes('alt1'), 'peekの呼び出しログに検討案のplaneIdが無い');
+  assert.ok(!saveLog.includes('alt1'), '保存ログに検討案のplaneIdが無い');
+  assert.equal(store.get('alt1'), beforeAltBytes, '検討案の平面のストアのバイト列は呼ぶ前と同一');
 });
 
 test('【T6・失敗系】runElevatorRemoval: peekが例外→ERR_ELEVATOR_REMOVE_FAILEDを付けて再スロー・書き込みゼロ・commitActive 0回', async () => {
@@ -1262,6 +1345,37 @@ test('runElevatorUsageChange: 検討案の平面がアクティブ→自階だ�
   assert.equal(altGraph.equipmentRows[0].usage, 'freight');
 });
 
+test('runElevatorUsageChange: 非アクティブの検討案の平面は対象に入らない（peek・保存されない）', async () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  installEquipment(g1, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g1)]) });
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { graph: altGraph } = project.addPlane(0, '検討1', 'alt1', 1, 1, true, g1.plane.id, 0);
+  addRow(altGraph, 'ev-a', 1);
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  store.set(altGraph.plane.id, serializeGraph(altGraph));
+  const beforeAltBytes = store.get(altGraph.plane.id);
+  const saveLog = [];
+  const peeked = [];
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => { peeked.push(plane.id); return basePeek(plane); };
+  const commitCalls = [];
+
+  const result = await runElevatorUsageChange({
+    project, activeGraph: g1, equipmentId: 'ev-a', usage: 'freight',
+    commitActive: makeCommitActiveForUsage(g1, 'ev-a', 'freight', commitCalls),
+    isStillValid: alwaysValid, onApplied: () => {},
+    peekFn,
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'changed');
+  assert.ok(!peeked.includes('alt1'), 'peekの呼び出しログに検討案のplaneIdが無い');
+  assert.ok(!saveLog.includes('alt1'), '保存ログに検討案のplaneIdが無い');
+  assert.equal(store.get('alt1'), beforeAltBytes, '検討案の平面のストアのバイト列は呼ぶ前と同一');
+});
+
 // QA指摘F7（2026-09-30）: usageがEvUsageのいずれでもなければ、noop判定・検討案の平面の分岐
 // より前に拒否する——アクティブ階に行が無い・検討案の平面（1階建て）でも検査される。
 test('【QA指摘F7・失敗系】runElevatorUsageChange: usageが不正な値なら、行が無い・検討案の平面でも識別コード付きで拒否する（noopにならない）', async () => {
@@ -1476,4 +1590,477 @@ test('【失敗系】runElevatorUsageChange: 世代の割り込み→巻き戻�
   assert.equal(result.message, ERR_ELEVATOR_FLOORS_CHANGED);
   assert.equal(interferenceFired, 1);
   assert.equal(commitCalls.length, 0);
+});
+
+// ================================================================
+// copyElevatorsToNewFloor（階追加時の複製）
+// ================================================================
+
+test('copyElevatorsToNewFloor: 直下階がアクティブ→複製され、新階を復号すると同じid・分類・番号・用途の行ができる（保存1回）', async () => {
+  const { project, graphs } = setupProject(2);
+  const [, g2] = graphs; // 1階・2階
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { plane: p3 } = project.addPlane(6000, '3階', 'p3');
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  const saveLog = [];
+
+  const result = await copyElevatorsToNewFloor({
+    project, activeGraph: g2, newPlane: p3,
+    peekFn: makeStorePeek(project, store),
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'copied');
+  assert.deepEqual(result.copiedIds, ['ev-a']);
+  assert.deepEqual(result.skipped, []);
+  assert.deepEqual(saveLog, ['p3']);
+  const decoded = decodeFloor(project, p3, store.get('p3'));
+  assert.equal(decoded.equipmentRows.length, 1);
+  assert.equal(decoded.equipmentRows[0].id, 'ev-a');
+  assert.equal(decoded.equipmentRows[0].category, 'ev');
+  assert.equal(decoded.equipmentRows[0].usage, 'passenger');
+  assert.equal(decoded.equipmentRows[0].no, 1);
+  assertShaftInvariant(decoded, '3階(複製後)');
+});
+
+test('copyElevatorsToNewFloor: 直下階が非アクティブ（途中挿入・peek経由）→複製される', async () => {
+  const { project, graphs } = setupProject(3);
+  const [g1, g2] = graphs; // 1階・2階・3階（elevation 0,3000,6000）
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { plane: pNew } = project.addPlane(4000, '新2階', 'pnew'); // 2階と3階の間に挿入
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  const saveLog = [];
+
+  const result = await copyElevatorsToNewFloor({
+    project, activeGraph: g1, newPlane: pNew, // アクティブは1階（新階の直下=2階とは別）
+    peekFn: makeStorePeek(project, store),
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'copied');
+  assert.deepEqual(result.copiedIds, ['ev-a']);
+  assert.deepEqual(saveLog, ['pnew']);
+});
+
+test('copyElevatorsToNewFloor: 直上にだけ器具がある（直下階は0件）→noop・保存ログは空・新階はpeekされない', async () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { plane: p0 } = project.addPlane(-3000, '地下1階', 'p0'); // g2より下・g1より下に挿入
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  const saveLog = [];
+  const peeked = [];
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => { peeked.push(plane.id); return basePeek(plane); };
+
+  const result = await copyElevatorsToNewFloor({
+    project, activeGraph: g1, newPlane: p0,
+    peekFn,
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'noop');
+  assert.deepEqual(saveLog, []);
+  assert.deepEqual(peeked, [], '新階が最下（直下階なし）なのでpeekは一切呼ばれない');
+});
+
+test('copyElevatorsToNewFloor: 直下階の器具行が0件（未登録の昇降路だけ）→noop・保存ログは空・新階はpeekされない', async () => {
+  const { project, graphs } = setupProject(2);
+  const [, g2] = graphs;
+  const unregisteredShaft = g2.addRoom(new Set([leftKey(g2)]));
+  unregisteredShaft.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  const { plane: p3 } = project.addPlane(6000, '3階', 'p3');
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  const saveLog = [];
+  const peeked = [];
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => { peeked.push(plane.id); return basePeek(plane); };
+
+  const result = await copyElevatorsToNewFloor({
+    project, activeGraph: g2, newPlane: p3,
+    peekFn,
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'noop');
+  assert.deepEqual(saveLog, []);
+  assert.deepEqual(peeked, [], '直下階の器具行が0件なので新階のpeekはしない');
+});
+
+test('copyElevatorsToNewFloor: 新階が最下（直下階なし）→noop', async () => {
+  const { project, graphs } = setupProject(2);
+  const [g1] = graphs;
+  const { plane: p0 } = project.addPlane(-3000, '地下1階', 'p0');
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+
+  const result = await copyElevatorsToNewFloor({
+    project, activeGraph: g1, newPlane: p0,
+    peekFn: makeStorePeek(project, store),
+    saveFloorFn: makeStoreSave(store, []),
+  });
+
+  assert.equal(result.status, 'noop');
+});
+
+test('copyElevatorsToNewFloor: 非アクティブの検討案の平面は対象に入らない（peek・保存されない）', async () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { graph: altGraph } = project.addPlane(
+    g2.plane.elevation, '検討1', 'alt1', g2.plane.startFloor, g2.plane.stories, true, g2.plane.id, 0,
+  );
+  addRow(altGraph, 'ev-alt', 9);
+  const { plane: p3 } = project.addPlane(6000, '3階', 'p3');
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  store.set(altGraph.plane.id, serializeGraph(altGraph));
+  const beforeAltBytes = store.get(altGraph.plane.id);
+  const saveLog = [];
+  const peeked = [];
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => { peeked.push(plane.id); return basePeek(plane); };
+
+  const result = await copyElevatorsToNewFloor({
+    project, activeGraph: g1, newPlane: p3,
+    peekFn,
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'copied');
+  assert.ok(!peeked.includes('alt1'), 'peekの呼び出しログに検討案のplaneIdが無い');
+  assert.ok(!saveLog.includes('alt1'), '保存ログに検討案のplaneIdが無い');
+  assert.equal(store.get('alt1'), beforeAltBytes, '検討案の平面のストアのバイト列は呼ぶ前と同一');
+});
+
+test('copyElevatorsToNewFloor: 一部だけ複製できない（スキップ）→status:copied・skippedにconflict、複製できた行だけ保存される', async () => {
+  const { project, graphs } = setupProject(2);
+  const [, g2] = graphs;
+  installEquipment(g2, { id: 'ev-left',  category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  installEquipment(g2, { id: 'ev-right', category: 'ev', usage: 'passenger', no: 2, cells: new Set([rightKey(g2)]) });
+  const { plane: p3 } = project.addPlane(6000, '3階', 'p3');
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+
+  // 新階(3階)にあらかじめ階段吹抜けを置き、leftだけ衝突させる。
+  const p3Graph = makeStorePeek(project, store)(p3);
+  const stairVoid = p3Graph.addRoom(new Set([leftKey(p3Graph)]));
+  stairVoid.setFeature(RoomFeature.STAIR_VOID);
+  store.set('p3', serializeGraph(p3Graph));
+
+  const saveLog = [];
+  const result = await copyElevatorsToNewFloor({
+    project, activeGraph: g2, newPlane: p3,
+    peekFn: makeStorePeek(project, store),
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'copied');
+  assert.deepEqual(result.copiedIds, ['ev-right']);
+  assert.deepEqual(result.skipped, [{ id: 'ev-left', reason: 'conflict' }]);
+  assert.deepEqual(saveLog, ['p3']);
+  const decoded = decodeFloor(project, p3, store.get('p3'));
+  assert.equal(decoded.equipmentRows.length, 1);
+  assert.equal(decoded.equipmentRows[0].id, 'ev-right');
+});
+
+test('copyElevatorsToNewFloor: 直下階の行が1件だけで、その行が衝突→全行がスキップされたので保存しない', async () => {
+  const { project, graphs } = setupProject(2);
+  const [, g2] = graphs;
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { plane: p3 } = project.addPlane(6000, '3階', 'p3');
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+
+  // 新階(3階)にあらかじめ階段吹抜けを置き、唯一の行を衝突させる。
+  const p3Graph = makeStorePeek(project, store)(p3);
+  const stairVoid = p3Graph.addRoom(new Set([leftKey(p3Graph)]));
+  stairVoid.setFeature(RoomFeature.STAIR_VOID);
+  store.set('p3', serializeGraph(p3Graph));
+
+  const saveLog = [];
+  const result = await copyElevatorsToNewFloor({
+    project, activeGraph: g2, newPlane: p3,
+    peekFn: makeStorePeek(project, store),
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'copied');
+  assert.deepEqual(result.copiedIds, []);
+  assert.deepEqual(result.skipped, [{ id: 'ev-a', reason: 'conflict' }]);
+  assert.deepEqual(saveLog, [], '複製できた行が0件なので保存しない');
+});
+
+test('【失敗系】copyElevatorsToNewFloor: 新階の保存が例外→ERR_ELEVATOR_COPY_FAILEDを付けて再スロー・ストアは不変', async () => {
+  const { project, graphs } = setupProject(2);
+  const [, g2] = graphs;
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { plane: p3 } = project.addPlane(6000, '3階', 'p3');
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  const beforeP3Bytes = store.get('p3');
+  const saveFloorFn = async () => { throw new Error('IDB書込み失敗（意図した失敗）'); };
+
+  await assert.rejects(
+    () => copyElevatorsToNewFloor({
+      project, activeGraph: g2, newPlane: p3,
+      peekFn: makeStorePeek(project, store),
+      saveFloorFn,
+    }),
+    (err) => { assert.equal(err.code, ERR_ELEVATOR_COPY_FAILED); return true; },
+  );
+  assert.equal(store.get('p3'), beforeP3Bytes, 'ストアは不変（新階の保存は1回だけなので巻き戻しは不要）');
+});
+
+test('【失敗系】copyElevatorsToNewFloor: 新階のpeekが例外→ERR_ELEVATOR_COPY_FAILEDを付けて再スロー・保存ゼロ', async () => {
+  const { project, graphs } = setupProject(2);
+  const [, g2] = graphs;
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { plane: p3 } = project.addPlane(6000, '3階', 'p3');
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => {
+    if (plane.id === 'p3') throw new Error('IDB読込み失敗（意図した失敗）');
+    return basePeek(plane);
+  };
+  const saveLog = [];
+
+  await assert.rejects(
+    () => copyElevatorsToNewFloor({
+      project, activeGraph: g2, newPlane: p3,
+      peekFn,
+      saveFloorFn: makeStoreSave(store, saveLog),
+    }),
+    (err) => { assert.equal(err.code, ERR_ELEVATOR_COPY_FAILED); return true; },
+  );
+  assert.deepEqual(saveLog, []);
+});
+
+test('【失敗系】copyElevatorsToNewFloor: 直下階のpeekが例外→ERR_ELEVATOR_COPY_FAILEDを付けて再スロー・保存ゼロ', async () => {
+  const { project, graphs } = setupProject(3);
+  const [g1, g2] = graphs;
+  installEquipment(g2, { id: 'ev-a', category: 'ev', usage: 'passenger', no: 1, cells: new Set([leftKey(g2)]) });
+  const { plane: pNew } = project.addPlane(4000, '新2階', 'pnew');
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => {
+    if (plane.id === g2.plane.id) throw new Error('IDB読込み失敗（意図した失敗）');
+    return basePeek(plane);
+  };
+  const saveLog = [];
+
+  await assert.rejects(
+    () => copyElevatorsToNewFloor({
+      project, activeGraph: g1, newPlane: pNew, // アクティブ(1階)は直下階(2階)と別なのでpeekされる
+      peekFn,
+      saveFloorFn: makeStoreSave(store, saveLog),
+    }),
+    (err) => { assert.equal(err.code, ERR_ELEVATOR_COPY_FAILED); return true; },
+  );
+  assert.deepEqual(saveLog, []);
+});
+
+// ================================================================
+// readFloorEquipmentIds / renumberEquipmentAfterFloorRemoval
+// （階削除時の再採番）
+// ================================================================
+
+test('readFloorEquipmentIds: 非アクティブ階（peek経由）の器具行id一覧を返す', async () => {
+  const { project, graphs } = setupProject(2);
+  const [, g2] = graphs;
+  addRow(g2, 'A', 1); addRow(g2, 'B', 2);
+  const store = new Map();
+  for (const g of graphs) store.set(g.plane.id, serializeGraph(g));
+
+  const ids = await readFloorEquipmentIds(project, g2.plane, makeStorePeek(project, store));
+  assert.deepEqual(ids.sort(), ['A', 'B']);
+});
+
+test('readFloorEquipmentIds: アクティブ階は生きているグラフから読む（peekしない）', async () => {
+  const { project, graphs } = setupProject(1);
+  const [g1] = graphs;
+  addRow(g1, 'A', 1);
+  runInAction(() => { project.activePlaneId = g1.plane.id; });
+  let peeked = false;
+  const ids = await readFloorEquipmentIds(project, g1.plane, async () => { peeked = true; return g1; });
+  assert.deepEqual(ids, ['A']);
+  assert.equal(peeked, false);
+});
+
+test('【失敗系】readFloorEquipmentIds: peekが例外→ERR_ELEVATOR_RENUMBER_FAILEDを付けて再スロー', async () => {
+  const { project, graphs } = setupProject(2);
+  const [, g2] = graphs;
+  const peekFn = async () => { throw new Error('IDB読込み失敗（意図した失敗）'); };
+
+  await assert.rejects(
+    () => readFloorEquipmentIds(project, g2.plane, peekFn),
+    (err) => { assert.equal(err.code, ERR_ELEVATOR_RENUMBER_FAILED); return true; },
+  );
+});
+
+test('renumberEquipmentAfterFloorRemoval: 3階建て（A=1〜3階no1・B=2階だけno2・C=2〜3階no3）で2階を削除→Bが消え、Cがno2に保存される。1階は保存されない', async () => {
+  const { project, graphs } = setupProject(3);
+  const [g1, g2, g3] = graphs; // 1階・2階・3階
+  addRow(g1, 'A', 1); addRow(g2, 'A', 1); addRow(g3, 'A', 1);
+  addRow(g2, 'B', 2);
+  addRow(g2, 'C', 3); addRow(g3, 'C', 3);
+  const removedIds = ['A', 'B', 'C']; // 2階の削除前の器具行id（B以外は他階にも残る）
+  // 2階を削除した後の状態を模す（project.planesから2階を除く）。
+  project.removePlane(g2.plane.id);
+  const store = new Map();
+  store.set(g1.plane.id, serializeGraph(g1));
+  store.set(g3.plane.id, serializeGraph(g3));
+  const saveLog = [];
+
+  const result = await renumberEquipmentAfterFloorRemoval({
+    project, activeGraph: g1, removedIds,
+    peekFn: makeStorePeek(project, store),
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'renumbered');
+  assert.deepEqual(saveLog, ['p3'], '3階(C→no2)だけ保存。1階(Aはnoのまま1)は保存されない');
+  assert.equal(g1.equipmentRows.find(r => r.id === 'A').no, 1, 'アクティブ階(1階)のAはno=1のまま（変更なし）');
+  const decoded = decodeFloor(project, g3.plane, store.get('p3'));
+  assert.equal(decoded.equipmentRows.find(r => r.id === 'C').no, 2, '3階のCがno=2に詰まる');
+});
+
+test('renumberEquipmentAfterFloorRemoval: 削除した階の器具がすべて他階に残る→noop・保存ログは空', async () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  addRow(g1, 'A', 1); addRow(g2, 'A', 1);
+  const store = new Map();
+  store.set(g1.plane.id, serializeGraph(g1));
+  const saveLog = [];
+
+  const result = await renumberEquipmentAfterFloorRemoval({
+    project, activeGraph: g1, removedIds: ['A'],
+    peekFn: makeStorePeek(project, store),
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'noop');
+  assert.deepEqual(saveLog, []);
+});
+
+test('renumberEquipmentAfterFloorRemoval: アクティブ階が持つ行(C)も番号が変わるが、アクティブ階自体は保存されない', async () => {
+  const { project, graphs } = setupProject(3);
+  const [g1, , g3] = graphs;
+  addRow(g1, 'A', 1); addRow(g3, 'A', 1);
+  addRow(g1, 'C', 3);
+  const removedIds = ['A', 'B']; // 2階にあった行のid（Bはどこにも残らない・削除された2階自体がactive）
+  const store = new Map();
+  store.set(g1.plane.id, serializeGraph(g1));
+  store.set(g3.plane.id, serializeGraph(g3));
+  const saveLog = [];
+
+  const result = await renumberEquipmentAfterFloorRemoval({
+    project, activeGraph: g1, removedIds,
+    peekFn: makeStorePeek(project, store),
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'renumbered');
+  assert.equal(g1.equipmentRows.find(r => r.id === 'C').no, 2, 'アクティブ階(1階)のCがno=2に詰まる（生きているグラフへ適用）');
+  assert.ok(!saveLog.includes('p1'), 'アクティブ階自体は保存されない（自動保存に任せる）');
+});
+
+test('【失敗系】renumberEquipmentAfterFloorRemoval: 保存が必要な2階のうち2つ目で失敗→1つ目はbeforeに戻り、識別コード付きで例外・アクティブ階は変わらない', async () => {
+  const { project, graphs } = setupProject(3);
+  const [g1, g2, g3] = graphs;
+  addRow(g1, 'A', 9); // 詰め直し後はno=3になる（アクティブ階でも変更が必要——早期適用の変異を検出するため）
+  addRow(g2, 'B', 2); // 詰め直し後はno=1になる（2階で変更が必要）
+  addRow(g3, 'C', 5); // 詰め直し後はno=2になる（3階で変更が必要）
+  const removedIds = ['X']; // どこにも残らないダミーid（vanished判定を発火させる）
+  const store = new Map();
+  store.set(g2.plane.id, serializeGraph(g2));
+  store.set(g3.plane.id, serializeGraph(g3));
+  const saveLog = [];
+  const saveFloorFn = async (planeId, bytes) => {
+    if (planeId === g3.plane.id) throw new Error('保存失敗（意図した失敗）');
+    store.set(planeId, bytes);
+    saveLog.push(planeId);
+  };
+  const g1NoBefore = g1.equipmentRows.find(r => r.id === 'A').no;
+
+  await assert.rejects(
+    () => renumberEquipmentAfterFloorRemoval({
+      project, activeGraph: g1, removedIds,
+      peekFn: makeStorePeek(project, store),
+      saveFloorFn,
+    }),
+    (err) => { assert.equal(err.code, ERR_ELEVATOR_RENUMBER_FAILED); return true; },
+  );
+  // restoreGraph→serializeGraphの往復はバイト単位で安定しないため、意味内容（decodeFloor）で戻りを確認する。
+  const decodedG2 = decodeFloor(project, g2.plane, store.get(g2.plane.id));
+  assert.equal(decodedG2.equipmentRows.find(r => r.id === 'B').no, 2, '2階はbeforeに戻る（no=2のまま）');
+  assert.equal(g1.equipmentRows.find(r => r.id === 'A').no, g1NoBefore, 'アクティブ階は変わらない（早期適用されていない）');
+});
+
+test('renumberEquipmentAfterFloorRemoval: 検討案がアクティブでも検討案の行は変わらない（採用階だけ番号を詰め直す）', async () => {
+  // A（1〜3階・番号1）・B（2階だけ・番号2）・C（2〜3階・番号3）の状態で2階を削除した後を模す
+  // （2階は既にproject.planesに含まれない＝削除済み）。3階の検討案（Cの複製・番号3のまま）を
+  // アクティブにして、2階が持っていた器具id一覧をremovedIdsに渡す。
+  const { project, graphs } = setupProject(2); // g1=1階, g2(この時点では3階として使う)
+  const [g1, g3] = graphs;
+  addRow(g1, 'A', 1);
+  addRow(g3, 'A', 1); addRow(g3, 'C', 3);
+  const alt = project.addPlane(g3.plane.elevation, 'C#a', 'p3alt', g3.plane.startFloor, g3.plane.stories, true, g3.plane.id);
+  addRow(alt.graph, 'C', 3); // 検討案側にも複製済みの行（採用と同じid）
+  const store = new Map();
+  store.set(g1.plane.id, serializeGraph(g1));
+  store.set(g3.plane.id, serializeGraph(g3));
+  const saveLog = [];
+
+  const result = await renumberEquipmentAfterFloorRemoval({
+    project, activeGraph: alt.graph, removedIds: ['A', 'B', 'C'], // 2階が持っていた器具id（Bはどこにも残らない）
+    peekFn: makeStorePeek(project, store),
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'renumbered');
+  assert.deepEqual(saveLog, [g3.plane.id], '採用の3階だけ保存される');
+  const decoded = decodeFloor(project, g3.plane, store.get(g3.plane.id));
+  assert.equal(decoded.equipmentRows.find(r => r.id === 'C').no, 2, '採用の3階のCは番号2に詰め直される');
+  assert.equal(alt.graph.equipmentRows.find(r => r.id === 'C').no, 3, 'アクティブな検討案のCは番号3のまま（対象外）');
+});
+
+test('renumberEquipmentAfterFloorRemoval: 非アクティブの検討案の平面は読まれず、行も保存も変わらない', async () => {
+  // A（1〜3階・番号1）・B（2階だけ・番号2）・C（2〜3階・番号3）の状態で2階を削除した後を模す
+  // （2階は既にproject.planesに含まれない＝削除済み）。3階を参照する検討案（Cの複製・番号3のまま）は
+  // 非アクティブのまま——アクティブは1階。
+  const { project, graphs } = setupProject(2); // g1=1階, g3=3階
+  const [g1, g3] = graphs;
+  addRow(g1, 'A', 1);
+  addRow(g3, 'A', 1); addRow(g3, 'C', 3);
+  const alt = project.addPlane(g3.plane.elevation, 'C#a', 'p3alt', g3.plane.startFloor, g3.plane.stories, true, g3.plane.id);
+  addRow(alt.graph, 'C', 3); // 検討案側にも複製済みの行（採用と同じid）
+  const store = new Map();
+  store.set(g1.plane.id, serializeGraph(g1));
+  store.set(g3.plane.id, serializeGraph(g3));
+  store.set(alt.plane.id, serializeGraph(alt.graph));
+  const beforeAltBytes = store.get(alt.plane.id);
+  const saveLog = [];
+  const peeked = [];
+  const basePeek = makeStorePeek(project, store);
+  const peekFn = async (plane) => { peeked.push(plane.id); return basePeek(plane); };
+
+  const result = await renumberEquipmentAfterFloorRemoval({
+    project, activeGraph: g1, removedIds: ['A', 'B', 'C'], // 2階が持っていた器具id（Bはどこにも残らない）
+    peekFn,
+    saveFloorFn: makeStoreSave(store, saveLog),
+  });
+
+  assert.equal(result.status, 'renumbered');
+  const decoded = decodeFloor(project, g3.plane, store.get(g3.plane.id));
+  assert.equal(decoded.equipmentRows.find(r => r.id === 'C').no, 2, '採用の3階のCは番号2に詰め直される');
+  assert.equal(store.get(alt.plane.id), beforeAltBytes, '検討案の平面のストアのバイト列は呼ぶ前と同一');
+  assert.ok(!saveLog.includes(alt.plane.id), '保存ログに検討案のplaneIdが無い');
+  assert.ok(!peeked.includes(alt.plane.id), 'peekの呼び出しログに検討案のplaneIdが無い');
 });

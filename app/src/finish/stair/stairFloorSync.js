@@ -292,8 +292,14 @@ export async function syncUpperStairInteriors(project, activeGraph) {
  * @param {object} sourceGraph - 元階（表示中）のグラフ
  * @param {object} newPlane - 追加した新しい Plane
  * @param {string} roomName - 新規 Room の名前（例:"2階"）
+ * @param {(plane: object) => Promise<object>} [peekFn] - 既定 floorSwapManager.peek（テスト注入用。挙動は変えない）
+ * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [saveFloorFn] - 既定 saveFloor（テスト注入用。挙動は変えない）
  */
-export async function addNewFloorRoomFromSource(project, sourceGraph, newPlane, roomName) {
+export async function addNewFloorRoomFromSource(
+  project, sourceGraph, newPlane, roomName,
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+) {
   const sourceCells = new Set();
   for (const room of sourceGraph.rooms) {
     for (const key of refreshCells(room.cells, sourceGraph)) sourceCells.add(key);
@@ -303,17 +309,23 @@ export async function addNewFloorRoomFromSource(project, sourceGraph, newPlane, 
   }
   if (sourceCells.size === 0) return;
 
-  const temp = await floorSwapManager.peek(newPlane, project.structGraph);
+  const temp = await peekFn(newPlane);
 
   // 不足CLを追加（部屋領域分。階段 footprint 分の不足CLは syncUpperFloors が別途担当する）
   const needed = collectNeededCLs(sourceCells, sourceGraph);
   addMissingCLs(needed, sourceGraph, project.structGraph, temp);
 
-  const translatedCells = translateCellSet(sourceCells, sourceGraph, project.structGraph, temp);
-  if (!translatedCells || translatedCells.size === 0) return; // CL変換不能 → 安全側で見送る
+  const translated = translateCellSet(sourceCells, sourceGraph, project.structGraph, temp);
+  if (!translated || translated.size === 0) return; // CL変換不能 → 安全側で見送る
+  // 新階の格子が元の階より細かい場合（昇降機の複製等が先に per-floor 中心線を足している）、
+  // translateCellSet が返す生キーは元の階の粒度のままで、新階側の細かい格子のキーとは
+  // 一致しない——refreshCells で現在のグリッド分割へ展開してから assigned と比較する。
+  const translatedCells = refreshCells(translated, temp);
+  if (translatedCells.size === 0) return;
 
-  // 新階側で既に割当済みのセル（直前の syncUpperFloors が自動指定した階段吹抜け等）は
-  // 除外する（セルの二重割当防止。階段部は吹抜け側が「屋内」を担うため壁生成にも影響しない）
+  // 新階側で既に割当済みのセル（直前の syncUpperFloors が自動指定した階段吹抜け・複製した
+  // 昇降機等）は除外する（セルの二重割当防止。階段部は吹抜け側が「屋内」を担うため壁生成にも
+  // 影響しない）。
   const assigned = new Set();
   for (const room of temp.rooms) {
     for (const key of refreshCells(room.cells, temp)) assigned.add(key);
@@ -322,5 +334,5 @@ export async function addNewFloorRoomFromSource(project, sourceGraph, newPlane, 
   if (freeCells.size === 0) return;
 
   temp.addRoom(freeCells, roomName);
-  await saveFloor(newPlane.id, serializeGraph(temp));
+  await saveFloorFn(newPlane.id, serializeGraph(temp));
 }

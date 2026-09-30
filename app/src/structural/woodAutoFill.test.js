@@ -123,16 +123,12 @@ test('autoFillWoodColumns: 自階の壁の交点・T字に柱（120角）が立�
 
 // ---- 木造EVの4隅柱（実装指示書ステップ8・2026-09-29）----
 // 事実確認（riskiest assumption）: 在来木造の壁は generateRoomWallsFromOutline が部屋の外形から
-// 機械的に生成し、room.feature（isShaftFeature）を一切参照しない——ただし対象を選ぶ
+// 機械的に生成し、room.feature（isShaftFeature）を一切参照しない——対象を選ぶ
 // finish/wallGeneration.js isInteriorWallTarget は「独立した部屋（referenceRoomIds空）」は無条件で
-// 対象だが、「部分指定（親部屋の中に描いた昇降路。referenceRoomIds非空）」は元々STAIRしか例外に
-// 含めておらず、昇降路は対象外だった（QA実測2026-09-29: 部分指定の昇降路は壁8・柱4本で昇降路自身の内部境界
-// 2隅が無い）。isInteriorWallTargetへ昇降路もSTAIRと同型の例外として追加した（本ファイル末尾の
-// 「木造EVの4隅柱（部分指定）」節）ことで、独立・部分指定どちらでも4辺に壁が生成され、4隅が
-// 3a（壁交点）の候補になる——専用の候補源（floorOpeningEdges の source==='shaft' 由来の隅を足す等）
-// は不要と判断した（実装しない）。以下は独立部屋（referenceRoomIds空）のケースの回帰ガード。
-// 本テストはこの前提が崩れたとき（将来isShaftFeatureの部屋だけ壁生成を特別扱いする変更が入ったとき）に
-// 赤くなる回帰ガード。
+// 対象。昇降路（isShaftFeature）は登録済みなら常に独立部屋になるため、専用の候補源
+// （floorOpeningEdges の source==='shaft' 由来の隅を足す等）は不要と判断した（実装しない）。
+// 以下は独立部屋（referenceRoomIds空）のケースの回帰ガード。本テストはこの前提が崩れたとき
+// （将来isShaftFeatureの部屋だけ壁生成を特別扱いする変更が入ったとき）に赤くなる回帰ガード。
 test('autoFillWoodColumns（木造EVの4隅柱）: 昇降路（feature=elevatorEquipment）の部屋も壁交点方式で4隅に柱が立つ（専用の候補源は不要）', () => {
   assert.ok(SHAFT_FEATURES.has(RoomFeature.ELEVATOR_EQUIPMENT), 'elevatorEquipment はSHAFT_FEATURESの要素であるはず（テストの前提）');
   const { graph, x1, x2, y1, y2 } = makeGridGraph();
@@ -198,37 +194,10 @@ test('autoFillWoodColumns（木造EVの4隅柱・対照）: 非在来（S造）�
     '壁が無くても通り芯交点方式（gridIntersections）で4隅に柱が立つ——wallIntersectionsとは独立の経路');
 });
 
-// ---- 木造EVの4隅柱（部分指定・QA是正2026-09-29）----
-// 部分指定（親部屋の中に描いた昇降路。FinishModeState.js「その他セル — 新規部分指定」経路、
-// およびCL削除後の再解釈 roomReinterpret.js で独立した昇降路が部分指定になる経路の両方）は
-// finish/wallGeneration.js isInteriorWallTarget が STAIR と同型の例外に昇降路を加えるまで対象外
-// だった——親（ホール等）の room.cells は子（昇降機）のセルを含んだまま単一の外形として壁生成される
-// ため、親領域の内部に埋まった昇降機の境界（親と共有しない昇降機固有の辺）には壁が一切生成されず、
-// woodAutoFill.js 3aの柱候補（wallIntersectionPoints）も存在しなかった。本番の壁再生成
-// （finish/wallRegeneration.js regenerateWalls）経由で確認する（isInteriorWallTargetは
-// wallRegeneration.jsからしか呼ばれないため、generateRoomWallsFromOutlineを部屋ごとに直接呼ぶ
-// 経路ではこのバグを検出できない）。
-test('autoFillWoodColumns（木造EVの4隅柱・部分指定）: 親部屋（ホール）の中に描いた部分指定の昇降路も自分の4隅に柱が立つ（regenerateWalls本番経路）', async () => {
-  const { graph, x1, x2, y1, y2 } = makeGridGraph(); // x1=0, x2=4000, y1=0, y2=4000
-  const x3 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: true, discipline: Discipline.STRUCT });
-  const cHall = `${x1.id}:${y1.id}:${x2.id}:${y2.id}`; // 0..4000
-  const cEv   = `${x2.id}:${y1.id}:${x3.id}:${y2.id}`; // 4000..8000
-  const hall = graph.addRoom(new Set([cHall, cEv]), 'ホール');
-  const ev = graph.addRoom(new Set([cEv]), 'EV', crypto.randomUUID(), new Set([hall.id]));
-  ev.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
-
-  const materialMap = await loadMaterialMap();
-  const { regenerated } = await regenerateWalls(graph, { materialMap });
-  assert.equal(regenerated, true);
-  assert.equal(graph.walls.length, 12, 'ホール単独の外周8本＋昇降機自身の内部境界2本ぶんの壁（下地オーナー＋薄壁）で12本');
-
-  const { created, removed } = fillWoodColumns(graph);
-  assert.deepEqual(created.map(c => `${c.x},${c.y}`).sort(),
-    ['0,0', '0,4000', '4000,0', '4000,4000', '8000,0', '8000,4000'],
-    'ホールの4隅（0,0）(0,4000)(8000,0)(8000,4000)に加え、昇降機自身の内部境界の2隅(4000,0)(4000,4000)にも柱が立つ');
-  assert.deepEqual(removed, []);
-});
-
+// ---- 木造EVの4隅柱（部分指定・対照。2026-09-30）----
+// 昇降路（isShaftFeature）は登録済みなら常に独立部屋になるため、部分指定の昇降路は生じない
+// （旧データのみ）。isInteriorWallTargetはSTAIR以外の部分指定を一律対象外とするため、部分指定の
+// 昇降路（旧データ）も通常の部分指定と同じく親の外周だけで、自分の内部境界には壁も柱も持たない。
 test('autoFillWoodColumns（木造EVの4隅柱・部分指定・対照）: 通常の部分指定（feature未設定）は親の外周だけで、境界2隅には柱が立たない', async () => {
   const { graph, x1, x2, y1, y2 } = makeGridGraph();
   const x3 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: true, discipline: Discipline.STRUCT });

@@ -164,6 +164,32 @@ test('【不変条件・F1】App.jsx: runDeleteFloor（階削除の本体）はt
     'trySwitchFloor→blocksFloorRemoval再判定→removeFloorの順である必要がある');
 });
 
+// 削除可否の判定の後・removeFloorの前にreadFloorEquipmentIdsで消す階の器具行idを読み、
+// removeFloorの後は既存の後始末（直下階の階段削除・右側の採用階の階番号振り直し）をすべて終えてから
+// renumberEquipmentAfterFloorRemovalで番号を詰め直す——再採番が失敗しても階削除自体の後始末は
+// 完了済みにするため。
+test('【不変条件】App.jsx: runDeleteFloor は 削除可否の判定 < readFloorEquipmentIds < removeFloor < 既存の後始末（階段削除・階番号振り直し） < renumberEquipmentAfterFloorRemoval の順で呼ぶ', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function runDeleteFloor');
+
+  assert.match(body, /^\s*const removedEquipmentIds = await readFloorEquipmentIds\(project, project\.planeMap\.get\(planeId\)\);\s*$/m,
+    'readFloorEquipmentIdsの呼び出し行が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*const renumbered = await renumberEquipmentAfterFloorRemoval\(\{ project, activeGraph: project\.activeGraph, removedIds: removedEquipmentIds \}\);\s*$/m,
+    'renumberEquipmentAfterFloorRemovalの呼び出し行が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*if \(renumbered\.status === 'renumbered'\) setFloorSyncTick\(t => t \+ 1\);\s*$/m,
+    'renumbered.status===\'renumbered\'のときだけsetFloorSyncTickする行が1行まるごとの形で見つからない');
+
+  const secondBlocksIdx = body.indexOf('blocksFloorRemoval(', body.indexOf('blocksFloorRemoval(') + 1);
+  const readIdx = body.indexOf('const removedEquipmentIds = await readFloorEquipmentIds(project, project.planeMap.get(planeId));');
+  const removeIdx = body.indexOf('await removeFloor(planeId)');
+  const stairsIdx = body.indexOf('await removeStairsOnFloor(below);');
+  const renameLoopIdx = body.indexOf('const newAdopted = project.planes;');
+  const renumberIdx = body.indexOf('const renumbered = await renumberEquipmentAfterFloorRemoval({ project, activeGraph: project.activeGraph, removedIds: removedEquipmentIds });');
+  assert.ok(secondBlocksIdx >= 0 && readIdx >= 0 && removeIdx >= 0 && stairsIdx >= 0 && renameLoopIdx >= 0 && renumberIdx >= 0
+    && secondBlocksIdx < readIdx && readIdx < removeIdx && removeIdx < stairsIdx && stairsIdx < renameLoopIdx && renameLoopIdx < renumberIdx,
+    '削除可否の判定 < readFloorEquipmentIds < removeFloor < 既存の後始末（階段削除・階番号振り直し） < renumberEquipmentAfterFloorRemoval の順になっていない');
+});
+
 // ================================================================
 // 入力規制ステップ5: 保存（G4）・読込み（G5）・カタログ保守を開く（G8）の入口を関門へ移すのに伴い、
 // SaveFileDialogのonConfirm・HamburgerMenuのonSelectはguardUi()で包む。ファイル選択inputの

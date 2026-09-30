@@ -181,3 +181,42 @@ for (const entry of ELEVATOR_ENTRIES) {
       `${entry.name}: aborted分岐の条件行の直後がトースト行であるはず（条件行:${condIdx}行目、トースト行:${toastIdx}行目）`);
   });
 }
+
+// 階追加時、階段同期→昇降機の複製→外壁内側の部屋の自動追加の順で呼ぶ（直下階に器具行があれば
+// 新階へ複製する。複製できなかった器具があればトースト表示）。
+test('【配線・強化】App.jsx: syncNewFloorFromSource は syncUpperFloorsAuto → copyElevatorsToNewFloor → addNewFloorRoomFromSource の順で呼ぶ', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function syncNewFloorFromSource');
+
+  assert.match(body, /^\s*await syncUpperFloorsAuto\(project, sourceGraph\);\s*$/m,
+    'await syncUpperFloorsAuto(project, sourceGraph); が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*const copied = await copyElevatorsToNewFloor\(\{ project, activeGraph: sourceGraph, newPlane \}\);\s*$/m,
+    'copyElevatorsToNewFloor の呼び出し行が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*await addNewFloorRoomFromSource\(project, sourceGraph, newPlane, makeFloorName\(newStartFloor, 1\)\);\s*$/m,
+    'addNewFloorRoomFromSource の呼び出し行が1行まるごとの形で見つからない');
+
+  const syncIdx = body.indexOf('await syncUpperFloorsAuto(project, sourceGraph);');
+  const copyIdx = body.indexOf('const copied = await copyElevatorsToNewFloor({ project, activeGraph: sourceGraph, newPlane });');
+  const roomIdx = body.indexOf('await addNewFloorRoomFromSource(project, sourceGraph, newPlane, makeFloorName(newStartFloor, 1));');
+  assert.ok(syncIdx >= 0 && copyIdx >= 0 && roomIdx >= 0 && syncIdx < copyIdx && copyIdx < roomIdx,
+    'syncUpperFloorsAuto → copyElevatorsToNewFloor → addNewFloorRoomFromSource の順になっていない');
+});
+
+test('【配線・強化】App.jsx: syncNewFloorFromSource は複製できなかった器具があるときだけERR_ELEVATOR_COPY_SKIPPEDのトーストを出す', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function syncNewFloorFromSource');
+
+  assert.match(body, /^\s*if \(copied\.status === 'copied' && copied\.skipped\.length > 0\) \{\s*$/m,
+    'if (copied.status === \'copied\' && copied.skipped.length > 0) { が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*setToast\(\{ msg: ERR_ELEVATOR_COPY_SKIPPED\(newPlane\.name, copied\.skipped\.length\), key: Date\.now\(\) \}\);\s*$/m,
+    'ERR_ELEVATOR_COPY_SKIPPEDのトースト行が1行まるごとの形で見つからない');
+
+  const bodyLines = body.split('\n');
+  const condIdx = bodyLines.findIndex(l => l.trim() === "if (copied.status === 'copied' && copied.skipped.length > 0) {");
+  const toastIdx = bodyLines.findIndex(
+    l => l.trim() === 'setToast({ msg: ERR_ELEVATOR_COPY_SKIPPED(newPlane.name, copied.skipped.length), key: Date.now() });',
+  );
+  assert.ok(condIdx >= 0 && toastIdx >= 0);
+  assert.equal(toastIdx, condIdx + 1,
+    '条件行の直後がトースト行であるはず（条件を if(false){ に差し替える変異を見逃さないため）');
+});

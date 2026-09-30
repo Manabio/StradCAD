@@ -81,6 +81,7 @@ import {
 import {
   ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure,
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE, ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
+  ERR_ELEVATOR_COPY_SKIPPED,
 } from './error.js';
 import { isUiBusy, runBusy } from './uiBusy.js';
 import { isSessionOwner } from './storage/sessionLock.js';
@@ -1105,17 +1106,27 @@ const App = observer(() => {
     setFloorDialog({ isLowest, anchor: { x: rect.left, y: rect.bottom } });
   }
 
-  // 階追加（'upper'/'general'のみ対象。'lower' は対象外）: 元階の階段・外壁状態を新階へ引き継ぐ。
+  // 階追加（'upper'/'general'のみ対象。'lower' は対象外）: 元階の階段・昇降機・外壁状態を新階へ
+  // 引き継ぐ。
   //   1. 下階のどこかに階段があれば、新階（〜最上階）へ階段補助線を同期する（syncUpperFloorsAuto。
   //      表示階に階段が無くても下階から起点を探索する。旧最上階＝中間階へ移行した階には階段が
   //      設置され、階段吹抜けはペアRoomへ転用される。新最上階には CL＋階段吹抜けのみ。壁は生成しない）。
-  //   2. 元階に外壁（isExteriorWall）があれば、新階へ「外壁ループ内側」を部屋「n階」として自動追加する
+  //   2. 新階の直下階に昇降機の器具行があれば、その器具を新階へ複製する（copyElevatorsToNewFloor）。
+  //      階段同期の後（新階にできた階段・階段吹抜けを衝突判定の相手にできる）・部屋の自動追加の前
+  //      （部屋は新階で割当済みのセルを除くので、昇降路を先に作れば部屋から自然に外れる）。
+  //      複製できなかった器具があればトーストで知らせる。
+  //   3. 元階に外壁（isExteriorWall）があれば、新階へ「外壁ループ内側」を部屋「n階」として自動追加する
   //      （newStartFloor基準。地下階でも makeFloorName(startFloor, 1) で「地下n階」等に正しく整形される）。
   // addFloor 直後・handleFloorSwitch 前に行う（新階はまだ非アクティブ＝peek→saveFloorの通常経路。
   // handleFloorSwitch 後の activate() は IDB に保存済みの内容を読み込むため反映される）。
   async function syncNewFloorFromSource(sourceGraph, newPlane, newStartFloor) {
     const { syncUpperFloorsAuto, addNewFloorRoomFromSource } = await import('./finish/stair/stairFloorSync.js');
+    const { copyElevatorsToNewFloor } = await import('./finish/equipment/equipmentFloorSync.js');
     await syncUpperFloorsAuto(project, sourceGraph);
+    const copied = await copyElevatorsToNewFloor({ project, activeGraph: sourceGraph, newPlane });
+    if (copied.status === 'copied' && copied.skipped.length > 0) {
+      setToast({ msg: ERR_ELEVATOR_COPY_SKIPPED(newPlane.name, copied.skipped.length), key: Date.now() });
+    }
     if (sourceGraph.walls.some(w => w.isExteriorWall)) {
       await addNewFloorRoomFromSource(project, sourceGraph, newPlane, makeFloorName(newStartFloor, 1));
     }
@@ -1469,6 +1480,9 @@ const App = observer(() => {
         // 切替できていない（失敗・fallback無し）→アクティブ階を削除してしまうため中断（F1・2026-09-27）。
         if (blocksFloorRemoval(project, planeId)) return;
       }
+      // 削除した後に遅延チャンクの取得を挟まないよう、removeFloorより前に済ませる。
+      const { readFloorEquipmentIds, renumberEquipmentAfterFloorRemoval } = await import('./finish/equipment/equipmentFloorSync.js');
+      const removedEquipmentIds = await readFloorEquipmentIds(project, project.planeMap.get(planeId));
       await removeFloor(planeId);
       // 消えた上階(n)に接続していた直下階(n-1)の階段を削除する。採用・検討案の両方。
       if (below) {
@@ -1495,6 +1509,10 @@ const App = observer(() => {
           }
         });
       }
+      // 昇降機の再採番は既存の後始末（階段削除・階番号振り直し）がすべて終わった後に行う——
+      // ここで例外が出ても階削除自体の後始末は完了済みにする（失敗の表示は関門の層に委ねる）。
+      const renumbered = await renumberEquipmentAfterFloorRemoval({ project, activeGraph: project.activeGraph, removedIds: removedEquipmentIds });
+      if (renumbered.status === 'renumbered') setFloorSyncTick(t => t + 1);
     });
   }
 

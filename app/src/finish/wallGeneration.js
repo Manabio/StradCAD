@@ -5,7 +5,7 @@
  * デフォルト: wallBase=90, wallFinish=12.5 → 57.5mm
  */
 
-import { RoomKind, RoomFeature, isShaftFeature, centerLineKind } from '@core';
+import { RoomKind, RoomFeature, centerLineKind } from '@core';
 import { spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { worldToCell, dividerCLsBetween, isActiveAcrossRange } from './gridCells.js';
 import { buildCellToRoom } from './edgeClassify.js';
@@ -369,20 +369,15 @@ export function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset,
 /**
  * finishBoundary.js ステップ2（内周壁の全再生成）の対象Roomかどうかを判定する。
  * 対象外: UNDEFINED（未定義）・屋外部屋（kind===EXTERIOR。壁を持たない）・
- * 部分指定（referenceRoomIds あり。ただしfeature=STAIRまたは昇降路（isShaftFeature。昇降機）は
- * 例外で対象に含める——どちらも「親部屋の中の一部だけ壁を持つ」実体のため、部分指定の一般則
- * （親が外周壁を担う）の対象外にする。昇降路も階段と同型: 部分指定のまま（isInteriorWallTarget
- * 対象外のまま）だと自分の外周を一切持てず、親の外周（自分の領域を含んだ全体）にしか壁が生成
- * されない——親部屋の中に埋まった昇降機の隅（親領域の内部）には壁も壁交点柱（structural/
- * woodAutoFill.js 3a）も立たない実測不良になる。QA実測2026-09-29:部分指定の昇降機は壁8・
- * 柱4本で x=4000側の2隅が無い）・2a部屋（under2aRoomIds。階段下は別管理）。
- * 部屋名ダイアログからは部分指定の昇降路を作れない（roomNamingOptions.js
- * featureOptionsForDialog）。CL削除後の再解釈（roomReinterpret.js isReinterpretExempt）は
- * 2026-09-29に昇降路を対象外へ追加したため、この経路ではもう部分指定の昇降路は生じない。
- * 残る経路は部屋ドラッグ（modes/FinishModeState.js commitDrag）——rooms一覧のフィルタが
- * STAIR/STAIR_VOID/UNDEFINEDのみを除外しELEVATOR_EQUIPMENTを除外していないため、昇降路の
- * セルへ跨る統合・部分指定化を止める仕組みがまだ無い（次の課題として温存。この例外自体は
- * その経路が塞がるまで残す）。
+ * 部分指定（referenceRoomIds あり。ただしfeature=STAIRは例外で対象に含める——「親部屋の中の
+ * 一部だけ壁を持つ」階段の実体のため、部分指定の一般則（親が外周壁を担う）の対象外にする）・
+ * 2a部屋（under2aRoomIds。階段下は別管理）。
+ * 昇降路（isShaftFeature）は登録済みなら常に独立部屋（referenceRoomIds空）で、部分指定には
+ * ならない——設置・上階複製の入口はすべて `new Set()` の非部分指定で Room を作り
+ * （finish/equipment/equipmentOps.js installEquipment・equipmentFloorPlan.js
+ * installOnUpperFloor）、部分指定を作る書込み箇所（部屋ドラッグ・CL削除後の再解釈・部屋名
+ * ダイアログ）は昇降路をすべて除外済みのため、STAIRのような例外は不要（旧データの部分指定の
+ * 昇降路は機械器具タブの「昇降路（未登録）」から削除のみ可能——壁・柱は持たない）。
  * @param {import('@core').Room} room
  * @param {Set<string>} under2aRoomIds
  * @returns {boolean}
@@ -390,7 +385,7 @@ export function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset,
 export function isInteriorWallTarget(room, under2aRoomIds) {
   if (room.feature === RoomFeature.UNDEFINED) return false;
   if (room.kind === RoomKind.EXTERIOR) return false;
-  if (room.referenceRoomIds?.size > 0 && room.feature !== RoomFeature.STAIR && !isShaftFeature(room.feature)) return false;
+  if (room.referenceRoomIds?.size > 0 && room.feature !== RoomFeature.STAIR) return false;
   if (under2aRoomIds.has(room.id)) return false;
   return true;
 }

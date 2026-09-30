@@ -201,20 +201,17 @@ test('isInteriorWallTarget: 部分指定×feature=STAIR（部分指定から階�
   assert.equal(isInteriorWallTarget(stairPartial, new Set()), true);
 });
 
-// QA是正（2026-09-29）: 部分指定の昇降路（親部屋の中に描いた昇降機。FinishModeState.js
-// 「その他セル — 新規部分指定」経路、およびCL削除後の再解釈 roomReinterpret.js で独立した
-// 昇降路が部分指定になる経路の両方）は STAIR と同型で例外——親が外周壁を担う一般則の対象外に
-// すると、昇降機自身の外周（親領域の内部にある境界）に壁が一切生成されず woodAutoFill.js 3a
-// の柱候補を失う。部屋名ダイアログからは部分指定の昇降路を新規に作れなくなった
-// （roomNamingOptions.js featureOptionsForDialog）が、CL削除後の再解釈で生じる経路が残って
-// いるため、この例外は残す（リード裁定・2026-09-29 QA実測）。
-test('isInteriorWallTarget: 部分指定×feature=elevatorEquipment（部分指定から昇降路化）はSTAIRと同じく例外で対象', () => {
+// 昇降路（isShaftFeature）は登録済みなら常に独立部屋（referenceRoomIds空）になり部分指定には
+// ならない——設置・上階複製の入口はすべて非部分指定でRoomを作り、部分指定を作る書込み箇所
+// （部屋ドラッグ・CL削除後の再解釈・部屋名ダイアログ）は昇降路を除外済みのため、STAIRのような
+// 例外は無い（旧データの部分指定の昇降路は対象外のまま。機械器具タブから削除のみ可能）。
+test('isInteriorWallTarget: 部分指定×feature=elevatorEquipment（旧データ）はSTAIRと違い例外にならず対象外', () => {
   const graph = makeGraph();
   const parent = graph.addRoom(new Set(['dummy1']), '親');
   const shaftPartial = graph.addRoom(new Set(['dummy2']), 'EV', undefined, new Set([parent.id]));
   shaftPartial.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
 
-  assert.equal(isInteriorWallTarget(shaftPartial, new Set()), true);
+  assert.equal(isInteriorWallTarget(shaftPartial, new Set()), false);
 });
 
 test('isInteriorWallTarget: 部分指定×通常部屋（feature未設定のまま）は引き続き対象外（昇降路の例外に巻き込まれない）', () => {
