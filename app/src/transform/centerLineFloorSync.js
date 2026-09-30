@@ -8,14 +8,19 @@
 //   降格（通り芯→中心）: 降格後に他階へ複製する座標が、既にその階にある中心線・補助線と
 //   衝突しないことを事前に確認する（複製自体は下記 propagateDemotedCenterLine）。
 // 降格（通り芯→中心）: アクティブ階にだけ中心線が現れるのは不整合（通り芯は全階共通だった）
-// なので、非アクティブの全階へ同一idで複製する（propagateDemotedCenterLine）。
+// なので、非アクティブの全階へ**新しいid**の中心線を作る（propagateDemotedCenterLine。線種変更の
+// 移籍一本化・2026-09-30: 降格前と同じidで複製する「分身」方式は廃止し、線idはプロジェクト全体で
+// 一意に保つ——各平面のスナップショット内の通り芯id参照はlineIdRemap.jsで新idへ一括置換する）。
 // **降格の移籍前に複製する**（通り芯が project.structGraph に残っている間に peek しないと、
 // 他階の壁が graphSnapshot.js の resolveCL で解決できず復元時に捨てられる。2026-09-17実測）。
 import { runInAction } from 'mobx';
-import { Discipline, CenterLineType, centerLineKind } from '@core';
+import { Discipline, CenterLineType, CenterLine, isGridCenterLine, centerLineKind } from '@core';
 import { sameCoordCounterparts, CROSS_FLOOR_COUNTERPART_KINDS } from '../core/centerLineKindPolicy.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
-import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
+import {
+  serializeGraph, restoreGraph, decodeFloorSnapshot, encodeFloorSnapshot,
+} from '../graphSnapshot.js';
+import { remapLineIdsInSnapshot, findLineIdOccurrences } from '../lineIdRemap.js';
 import { saveFloor } from '../storage/db.js';
 import { undoManager } from '../undoManager.js';
 import {
@@ -82,6 +87,34 @@ export async function findFloorsWithCounterpartCL(project, activeGraph, cl, { ex
     if (counterparts.length === 0) continue;
     const kind = CROSS_FLOOR_COUNTERPART_KINDS.find(k => counterparts.some(c => centerLineKind(c) === k));
     result.push({ plane, kind });
+  }
+  return result;
+}
+
+/**
+ * 昇格・降格双方の事前ガード（裁定Q11・線種変更の移籍一本化）: id はプロジェクト全体で一意という
+ * 不変条件（lineIdUniqueness.js 参照）が既存データで崩れていないかを確認する。id（通り芯として
+ * project.structGraph に居る、または居ようとしている cl の id）と同じ id を持つ「自グラフ固有」の
+ * 中心線（lineIdUniqueness.js floorOwnCenterLineIds と同じ絞り込み——shapeMap の CenterLine のうち
+ * 通り芯（GRID種別）を除いたもの）を、アクティブ以外の全 Plane から探す。見つかったら移籍側は
+ * 何も書き換えずに拒否する（黙って壊さない）——リリース前の既存データ走査（線種変更の移籍一本化
+ * 指示書 §2.5）では0件だったが、防御として昇格・降格の入口に置く。findFloorsWithCounterpartCL
+ * とは独立に評価する（座標一致ではなくid一致）。
+ * 性能: このステップでは他階を3回peekする経路になる（本関数・findFloorsWithCounterpartCL・
+ * propagateDemotedCenterLine/absorb系がそれぞれ独立にpeekするため）ことを受容する——同id判定を
+ * findFloorsWithCounterpartCL のpeekへ相乗りさせる余地がある。
+ * @param {object} project
+ * @param {PlanGraph} activeGraph
+ * @param {string} id
+ * @returns {Promise<Array<{plane: Plane}>>} 見つかった Plane の配列（空なら問題ない）
+ */
+export async function findFloorsWithSameLineId(project, activeGraph, id) {
+  const result = [];
+  for (const plane of otherPlanes(project, activeGraph)) {
+    const temp = await floorSwapManager.peek(plane, project.structGraph);
+    const shape = temp.shapeMap.get(id);
+    const hasSameId = shape instanceof CenterLine && !isGridCenterLine(shape);
+    if (hasSameId) result.push({ plane });
   }
   return result;
 }
@@ -529,13 +562,23 @@ export async function saveOtherFloorsAfterGridCenterLineAftermath(processed, { u
 }
 
 /**
- * 降格（通り芯→中心）の**移籍前**に、アクティブ以外の全 Plane へ同一 id で中心線を複製する
- * （呼び出し側は centerLineConvert.js の applyDemoteToCenter より先にこれを呼ぶこと——通り芯が
- * project.structGraph に残っている間に peek しないと、他階の壁の axisCL/clStart/clEnd が
- * graphSnapshot.js の resolveCL で解決できず復元時に黙って捨てられる。2026-09-17実測）。
+ * 降格（通り芯→中心）の**移籍前**に、アクティブ以外の全 Plane へ**新しい id**の中心線を作る
+ * （線種変更の移籍一本化・裁定2・Q1: 線の id はプロジェクト全体で一意に保つ——降格前と同じ id で
+ * 複製する「分身」方式は廃止した）。呼び出し側は centerLineConvert.js の applyDemoteToCenter より
+ * 先にこれを呼ぶこと——通り芯が project.structGraph に残っている間に peek しないと、他階の壁の
+ * axisCL/clStart/clEnd が graphSnapshot.js の resolveCL で解決できず復元時に黙って捨てられる
+ * （2026-09-17実測）。
  * extent は昇格前と同じ最外郭通り芯2本への ref（loCL/hiCL）にする。複製が読む
  * cl.centerLineType/_value/trim/refId/refOffset は applyDemoteToCenter が変更しないフィールド
  * なので、移籍前に読んでも複製内容は移籍後に読むのと同一。
+ * 新しい中心線を追加した直後の snapshot に対し、`lineIdRemap.js`
+ * `remapLineIdsInSnapshot(snapshot, Map([[cl.id, newId]]))` で **その平面のスナップショット内の
+ * 通り芯id参照を一括で新idへ置き換える**（壁の軸・始終端、建具、セルキー、他の線のrefId/extent参照、
+ * 構造材、柱芯オフセット、CL偏芯…参照の種類ごとに書かず1関数で行う——線種変更の移籍一本化
+ * 指示書 §5.2）。事後条件として
+ * `findLineIdOccurrences(remapped, [cl.id])` が空であることを検査し、非空ならthrowする（黙って
+ * 参照を壊さない。message に平面名を含める）。新しい中心線自身の `refId`・extent参照（loCL/hiCL）は
+ * 通り芯id（cl.id）とは別のidのため、この置換の影響を受けない。
  * undoEntry を渡すと、変更した各階の before/after を undoManager.amend で合成する。undoEntry が無い
  * 呼び出し（centerLineOps.js の降格はまだ undo エントリを作っていない段階でこれを呼ぶ。CL偏芯の
  * applyCLEccentricityWithUndo も同じ理由でundoRecords配列だけを渡しamendは使わない）でも
@@ -548,19 +591,23 @@ export async function saveOtherFloorsAfterGridCenterLineAftermath(processed, { u
  * redoで両方が再び効く）。ここから直接 structural/fixedMemberRefs.js を import しない——
  * fixedMemberRefs.js が本ファイルの otherPlanes を import しており、逆向きimportは循環になる
  * ため、依存注入（呼び出し側のtransform/centerLineOps.jsが実装を渡す）にする。
+ * newIdFn はテストの決定性のために注入可能（既定 crypto.randomUUID）。
  * @param {object} project
  * @param {PlanGraph} activeGraph  降格を実行する階のグラフ（アクティブ階）
  * @param {CenterLine} cl          降格前の通り芯（まだ project.structGraph に居る）
- * @param {{loCL, hiCL, undoEntry?: object|null, saveFloorFn?: Function, undoRecords?: Array, removeFixedMembersFn?: Function|null}} opts
+ * @param {{loCL, hiCL, undoEntry?: object|null, saveFloorFn?: Function, undoRecords?: Array,
+ *   removeFixedMembersFn?: Function|null, newIdFn?: () => string}} opts
  * @returns {Promise<Array>} undoRecords（呼び出し側が渡した配列、省略時は内部で新規作成したもの）
  */
 export async function propagateDemotedCenterLine(project, activeGraph, cl, {
   loCL, hiCL, undoEntry = null, saveFloorFn = saveFloor, undoRecords = [], removeFixedMembersFn = null,
+  newIdFn = () => crypto.randomUUID(),
 }) {
   try {
     for (const plane of otherPlanes(project, activeGraph)) {
       const temp = await floorSwapManager.peek(plane, project.structGraph);
       const before = serializeGraph(temp);
+      const newId = newIdFn();
       runInAction(() => {
         if (removeFixedMembersFn) removeFixedMembersFn(temp, cl.id);
         temp.addCenterLine(cl.centerLineType, cl._value, {
@@ -568,11 +615,18 @@ export async function propagateDemotedCenterLine(project, activeGraph, cl, {
           refId: cl.refId, refOffset: cl.refOffset,
           extentLoRef: { clId: loCL.id, offset: 0 },
           extentHiRef: { clId: hiCL.id, offset: 0 },
-        }, cl.id);
+        }, newId);
         temp.columnAxisOffsets.delete(cl.id);
       });
-      await saveFloorFn(plane.id, serializeGraph(temp));
-      undoRecords.push({ planeId: plane.id, before, after: serializeGraph(temp) });
+      const snapshot = decodeFloorSnapshot(serializeGraph(temp));
+      const remapped = remapLineIdsInSnapshot(snapshot, new Map([[cl.id, newId]]));
+      const leftover = findLineIdOccurrences(remapped, [cl.id]);
+      if (leftover.length > 0) {
+        throw new Error(`propagateDemotedCenterLine: ${plane.name} に通り芯idの参照が残っています（${leftover.map(o => o.path).join(', ')}）`);
+      }
+      const after = encodeFloorSnapshot(remapped);
+      await saveFloorFn(plane.id, after);
+      undoRecords.push({ planeId: plane.id, before, after });
     }
   } finally {
     amendFloorUndoRecords(project, undoEntry, undoRecords, saveFloorFn);

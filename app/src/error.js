@@ -93,6 +93,16 @@ export const ERR_CL_CONVERT_DUP_FLOOR_DEMOTE = (floorsByKind) =>
 // 昇格は確定後の回収失敗（途中分はundoエントリへ合成済み）、降格は確定前の複製失敗（全体ロールバック済み＝降格されていない）。
 export const ERR_CL_CONVERT_SYNC_FAILED = '他階への反映に失敗しました。';
 
+// 裁定Q11（線種変更の移籍一本化）: 既存データに同じidの線が他の平面に残っていた場合の拒否。
+// 線の実体をid ごと移す「移籍」に一本化した結果、線idはプロジェクト全体で一意である前提になった
+// ——万一この前提が崩れているデータに対しては、書き換えずに拒否して平面名を出す（黙って壊さない）。
+// planeNames は他平面の名前一覧（findFloorsWithSameLineId の戻り値をmapしたもの）。
+// 昇格（中心線→通り芯）側で使う——昇格時の他平面チェック（線種変更の移籍一本化 ステップ4）で使用する。
+export const ERR_CL_CONVERT_SAME_ID_FLOOR = (planeNames) =>
+  `${planeNames.join('・')} に同じidの線があるため通り芯にできません。`;
+export const ERR_CL_CONVERT_SAME_ID_FLOOR_DEMOTE = (planeNames) =>
+  `${planeNames.join('・')} に同じidの線があるため中心線にできません。`;
+
 // CL削除（transform/centerLineOps.js deleteCenterLineWithUndo）専用: 同じ軸（X/Y）に他の通り芯が
 // 無い＝この通り芯が軸最後の1本の場合。ERR_CL_CONVERT_LAST_GRID（降格用）と判定式は共有するが、
 // 「削除できません」と方向が違うため文言は分ける。

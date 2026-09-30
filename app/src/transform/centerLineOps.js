@@ -10,6 +10,7 @@ import {
   ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_NO_GRID,
   ERR_CL_DELETE_FOOTPRINT, ERR_CL_DELETE_UNRESOLVABLE, ERR_CL_DELETE_WALLS_UNAVAILABLE, ERR_CATALOG_DUPLICATE,
+  ERR_CL_CONVERT_SAME_ID_FLOOR_DEMOTE,
 } from '../error.js';
 import { findUnresolvableCells, collectUnresolvableCells } from '../finish/roomReinterpret.js';
 import { findBracketingCLs, overhangMm } from '../snapGeometry.js';
@@ -52,7 +53,7 @@ import {
   applyFloorUndoRecords, rollbackFloorRecords,
   detachOtherFloorsFromGridCenterLine, applyOtherFloorsGridCenterLineAftermath,
   saveOtherFloorsAfterGridCenterLineAftermath,
-  findFloorsWithCounterpartCL, absorbWallBeamAxesOnPromote, recallPromotedCenterLineDuplicates,
+  findFloorsWithCounterpartCL, findFloorsWithSameLineId, absorbWallBeamAxesOnPromote, recallPromotedCenterLineDuplicates,
   propagateDemotedCenterLine, findFloorsBlockingGridDeletion, applyCenterLineRemovalAftermath,
 } from './centerLineFloorSync.js';
 // 降格（通り芯→中心線）で固定材（非auto）が確認済みで削除されるとき用（手動追加材サイレント撤去回避
@@ -1022,7 +1023,8 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
 // 同座標重複もチェックする（スキップ方式は不採用——片階だけ複製漏れすると壁参照が壊れるため、
 // 1階でも重複していれば全体を拒否する）。
 // 順序は「複製→移籍」（案A、2026-09-17裁定）: 通り芯が project.structGraph に残っている間に
-// 非アクティブ全階へ同一idで複製してから（propagateDemotedCenterLine）、本体を移籍する
+// 非アクティブ全階へ新しいidの中心線を作り、その平面の通り芯id参照を一括置換してから
+// （propagateDemotedCenterLine。線種変更の移籍一本化・分身廃止・2026-09-30）、本体を移籍する
 // （applyDemoteToCenter）。逆順（移籍→複製）だと、複製フェーズで他階を peek した時点で通り芯が
 // structGraph に無く、他階の壁の axisCL/clStart/clEnd が graphSnapshot.js の resolveCL で解決
 // できず復元時に黙って捨てられ、その欠落が saveFloor で永続化される（2026-09-17実測。昇格は
@@ -1035,7 +1037,7 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
 // 後者は従来どおり { toast: error } を返す。
 // removeFixedMembers（既定false・手動追加材サイレント撤去回避 指示書§3裁定4・§5ステップ4）:
 // trueなら、この通り芯を参照する固定材（非auto。柱・梁・基礎/柱脚・梁ホストのスリーブ）を
-// 全階（自階＋propagateDemotedCenterLineが複製する他階の複製先）で削除する。壁・図形は消さない
+// 全階（自階＋propagateDemotedCenterLineが新しいidの中心線を作る他階）で削除する。壁・図形は消さない
 // （removeDependentsOfCenterLineは壁・図形も消すため使わない。structural/fixedMemberRefs.js
 // removeFixedMembersReferencingが柱・梁・基礎/柱脚・スリーブだけを直接mapから削除する）。
 // 呼び出し側（App.jsx handleConvertCenterLine）が事前にcollectFixedMembersByFloorで確認済みの
@@ -1054,6 +1056,14 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
     return { toast: ERR_CL_CONVERT_DUP_FLOOR_DEMOTE(dupFloors.map(f => ({ name: f.plane.name, kind: f.kind }))) };
   }
 
+  // 裁定Q11（線種変更の移籍一本化）: 既存データに同じidの線が他の平面へ残っていないかを確認する。
+  // 線idはプロジェクト全体で一意という前提（propagateDemotedCenterLineが新idで複製する規律）が
+  // 崩れているデータに対しては、書き換えずに拒否する（黙って壊さない）。
+  const sameIdFloors = await findFloorsWithSameLineId(project, graph, cl.id);
+  if (sameIdFloors.length > 0) {
+    return { toast: ERR_CL_CONVERT_SAME_ID_FLOOR_DEMOTE(sameIdFloors.map(f => f.plane.name)) };
+  }
+
   // 複製フェーズ（通り芯はまだ structGraph にある。移籍前提のため applyDemoteToCenter と同じ
   // outermostGridExtentRefs を呼ぶ——二重計算になるが純関数のため結果は同一）。
   // 上の同期ガードから findFloorsWithCounterpartCL の await を挟むため、その間に直交通り芯が
@@ -1066,6 +1076,7 @@ export async function demoteGridToCenterWithUndo(graph, project, cl, opts = {}) 
     await propagateDemotedCenterLine(project, graph, cl, {
       loCL, hiCL, undoRecords: propagationRecords,
       ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
+      ...(opts.newIdFn ? { newIdFn: opts.newIdFn } : {}),
       removeFixedMembersFn: opts.removeFixedMembers ? removeFixedMembersReferencing : null,
     });
   } catch (e) {
