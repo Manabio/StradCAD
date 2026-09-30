@@ -99,6 +99,9 @@ CL・梁芯・柱を「誰が・何のために作ったか」で表す語彙（
 ## 出幅（columnFaceProjection）
 **出幅**＝通り芯から柱外面までの距離。柱芯・偏芯量の真実値で、**1構造×1通り芯**（`structuralInfo.columnFaceProjections`）で持つ。図のX/Y出幅寸法、または描画エリアの○「柱芯」ラベルのロングタップで編集する。設計意図は`.claude/structural-model.md`。
 
+## 固定材（構造部材のdimensionStatus）
+`dimensionStatus`が`'auto'`以外（`'locked'`・`'calculated'`）の構造部材の総称。手動追加（`structural/manualMemberAdd.js`）は追加直後に`locked`化され、撤去段（`autoFillColumns`等）・固定梁と重なる自動梁の撤去（`structural/fixedBeamOverlap.js`）から保護される。CL（通り芯・梁芯・中心線）の削除・降格で固定材が巻き込まれるときは確認のうえで削除する。設計意図は`.claude/structural-model.md`「手動追加は`locked`で撤去段・CL削除巻き込みから守る」節。
+
 ## role（構造部材のrole）
 柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`/`landing`（踊り場受け梁。記号`LG`）/`sill`（土台。記号`SL`。在来木造の基礎伏図＝最下階専用）。伏図の慣習（基礎伏図に柱なし等）に対応する。
 
