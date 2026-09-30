@@ -1,5 +1,6 @@
 import { StructuralMaterialType, CenterLineType, columnSlotKey, spanKey, findHostBeam, openingHostRefCLs, IndependentFooting, RoomFeature } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { beamAxisSpan, fixedBeamSpans, overlapsAnySpan, removeAutoBeamsOverlapping } from './fixedBeamOverlap.js';
 import { beamAxisCenterLines as policyBeamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { findSectionEntry } from './sectionCatalog.js';
@@ -236,18 +237,22 @@ export function autoFillBeams(graph, project, role = 'primary', wallGate = null)
   const spans = computeGridSpans(graph);
   const validKeys = new Set(spans.map(s => s.key));
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
+  // 固定梁（dimensionStatus!=='auto'）と同軸で区間が重なる auto 梁は生成しない（指示書§2.5・裁定Q1）。
+  const fixedSpans = fixedBeamSpans(graph.beams, role);
   const created = [];
   for (const { axisCL, isVertical, clStart, clEnd, key } of spans) {
     if (existing.has(key) || graph.excludedBeamSlots.has(key)) continue;
     // 建物フットプリント外の辺（どの対象階の屋内にも接しない辺）には梁を作らない（外壁線で有無を取捨。wallGate.js 参照）。
     if (wallGate && !wallGate.spanInBuilding(axisCL, isVertical, clStart, clEnd)) continue;
+    if (fixedSpans.length > 0 && overlapsAnySpan(beamAxisSpan({ axisCL, isVertical, clStart, clEnd }), fixedSpans)) continue;
     created.push(graph.addBeam(materialType, section, axisCL, isVertical, clStart, clEnd, { role }));
   }
   // 撤去段（一般則。ユーザー裁定・案A・2026-09-25）: autoFillColumnsと同じADD-ONLYの穴を塞ぐ。
   // 対象は呼び出し時のroleと一致するauto梁だけ（beamMapは'primary'/'foundation'/'eaves'/'secondary'等
   // 複数roleを共有するため、他roleの梁を誤って巻き込まないようroleで絞る）。locked／手動固定
   // （dimensionStatus!=='auto'）は保護。excludedBeamSlotsには触れない。
-  const removed = [];
+  // 固定梁と幾何的に重なるauto梁も同じ規律で撤去する（指示書§2.5・裁定Q1。既存撤去ループの前に行う）。
+  const removed = fixedSpans.length > 0 ? removeAutoBeamsOverlapping(graph, role, fixedSpans) : [];
   for (const beam of graph.beams) {
     if (beam.role !== role || beam.dimensionStatus !== 'auto') continue;
     if (validKeys.has(spanKey(beam.axisCL, beam.clStart, beam.clEnd))) continue;
@@ -278,6 +283,22 @@ export function autoFillBeamsForStructure(graph, project, role, wallGate = null,
     return autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache);
   }
   return autoFillBeams(graph, project, role, wallGate);
+}
+
+/** role の梁が「固定梁と重なるauto梁を生成しない＋撤去する」ガード（fixedBeamOverlap.js）の対象と
+ *  なる生成経路を通るか。通り芯グリッド辺方式（autoFillBeams/autoFillRoofBeams）はガードを守るが、
+ *  在来木造の壁線方式（autoFillWoodWallBeams。role別に beamPlacement/roofBeamPlacement:'wallRuns'）は
+ *  対象外（fixedBeamOverlap.js冒頭コメント参照）——manualMemberAdd.js addManualBeamが、その場で
+ *  撤去してよいかをこの関数で判定する。
+ *  role別の対応関数: 'primary'→autoFillBeams（beamPlacement:'gridEdges'のときだけ）、
+ *  'foundation'→autoFillBeams（常にガード対象。基礎梁は主構造に関わらずグリッド辺方式）、
+ *  'eaves'→autoFillRoofBeams（roofBeamPlacement:'gridEaves'のときだけ）、それ以外
+ *  （'secondary'・'floor'・'sill'・'landing'等）はグリッド辺方式のガード対象外のため false。 */
+export function fixedBeamGuardHonored(role, rules) {
+  if (role === 'primary') return rules.beamPlacement === 'gridEdges';
+  if (role === 'foundation') return true;
+  if (role === 'eaves') return rules.roofBeamPlacement === 'gridEaves';
+  return false;
 }
 
 // 梁芯CL（direct discipline:'fuse'、labeled:false）の追加座標許容誤差(mm)。
@@ -373,17 +394,21 @@ export function autoFillRoofBeams(graph, project, belowMainStructure, wallGate =
   const spans = computeGridSpans(graph);
   const validKeys = new Set(spans.map(s => s.key));
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
+  // 固定の軒桁（dimensionStatus!=='auto'）と同軸で区間が重なる auto 軒桁は生成しない（指示書§2.5・裁定Q1）。
+  const fixedSpans = fixedBeamSpans(graph.beams, 'eaves');
   const created = [];
   for (const { axisCL, isVertical, clStart, clEnd, key } of spans) {
     if (existing.has(key) || graph.excludedBeamSlots.has(key)) continue;
     // 軒桁も直下階のフットプリント（外壁線）でゲートする（wallGate は直下の最上階基準。wallGate.js 参照）。
     if (wallGate && !wallGate.spanInBuilding(axisCL, isVertical, clStart, clEnd)) continue;
+    if (fixedSpans.length > 0 && overlapsAnySpan(beamAxisSpan({ axisCL, isVertical, clStart, clEnd }), fixedSpans)) continue;
     created.push(graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd, { role: 'eaves' }));
   }
   // 撤去段（一般則。ユーザー裁定・案A・2026-09-25。autoFillColumns/autoFillBeams/autoFillFootingsと
   // 同じADD-ONLYの穴——role:'eaves'の軒桁も通り芯グリッド辺方式のため同型の症状が出る。
   // gridConvertStructuralSyncProbe.mjsのC5（13.stqの屋根平面）で発見）。
-  const removed = [];
+  // 固定の軒桁と幾何的に重なるauto軒桁も同じ規律で撤去する（指示書§2.5・裁定Q1）。
+  const removed = fixedSpans.length > 0 ? removeAutoBeamsOverlapping(graph, 'eaves', fixedSpans) : [];
   for (const beam of graph.beams) {
     if (beam.role !== 'eaves' || beam.dimensionStatus !== 'auto') continue;
     if (validKeys.has(spanKey(beam.axisCL, beam.clStart, beam.clEnd))) continue;

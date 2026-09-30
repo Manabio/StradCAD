@@ -22,16 +22,17 @@
 // 純モジュール: react/.jsx/store.js/snap.js を静的 import しない。
 // ================================================================
 import { StructuralMaterialType } from '../core.js';
-import { rulesFor, woodColumnSectionId } from './structureRules.js';
+import { rulesFor, woodColumnSectionId, effectiveStructure } from './structureRules.js';
 import { DEFAULT_SECTION_BY_MATERIAL } from './memberCatalog.js';
-import { autoFillColumnSizes, autoFillColumnBaseSizes, autoFillBeamEccentricity } from './structuralAutoFill.js';
+import { autoFillColumnSizes, autoFillColumnBaseSizes, autoFillBeamEccentricity, fixedBeamGuardHonored } from './structuralAutoFill.js';
 import { autoFillWoodBeamDepths } from './woodAutoFill.js';
+import { beamAxisSpan, removeAutoBeamsOverlapping } from './fixedBeamOverlap.js';
 
 /** 柱を手動追加し、初期値算定後に locked にする。vCL・hCL は明示必須（欠落は例外）。
  *  @returns 追加した StructuralColumn */
 export function addManualColumn(graph, project, { vCL, hCL }) {
   if (!vCL || !hCL) throw new Error('addManualColumn: vCL と hCL は必須です');
-  const rules = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
+  const rules = rulesFor(effectiveStructure(graph, project));
   const materialType = rules.baseMaterial;
   // 在来木造は「各階柱寸法」欄の値（階の柱寸の正角）を新規柱にも使う。非在来・カタログ外は
   // 従来どおり rules.defaultSections.column（建物共通の固定値）。
@@ -60,7 +61,7 @@ export function addManualFooting(graph, project, { kind, vCL, hCL }) {
 export function addManualBeam(graph, project, { axisCL, isVertical, clStart, clEnd }) {
   if (!axisCL || !clStart || !clEnd) throw new Error('addManualBeam: axisCL・clStart・clEnd は必須です');
   if (clStart.id === clEnd.id) throw new Error('addManualBeam: clStart と clEnd は異なるCLである必要があります');
-  const rules = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
+  const rules = rulesFor(effectiveStructure(graph, project));
   const materialType = rules.baseMaterial;
   const beam = graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd, {});
   autoFillBeamEccentricity(graph, project); // 外周梁なら柱外面合わせの偏芯量を初期算出（faceGap=0＝面一）
@@ -70,5 +71,11 @@ export function addManualBeam(graph, project, { axisCL, isVertical, clStart, clE
   // （framing無しの主構造・S造など。structureRules.js:470）。
   autoFillWoodBeamDepths(graph, project, []);
   beam.setDimensionStatus('locked');
+  // 固定梁と重なるauto梁は、その場で撤去し追加と同じundoエントリに入れる（指示書§2.5・裁定Q2）。
+  // 在来木造の壁線方式（role:'primary'）は対象外（fixedBeamGuardHonored参照。次の再計算で復活して
+  // 往復するため）。
+  if (fixedBeamGuardHonored(beam.role, rules)) {
+    removeAutoBeamsOverlapping(graph, beam.role, [beamAxisSpan(beam)]);
+  }
   return beam;
 }
