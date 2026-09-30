@@ -858,7 +858,7 @@ test('【失敗系】isFinishCellDivider・isUnderStairSplitKind・axisLineKindO
 // C. 製品コードとの一致（特性テストの本体）
 // ================================================================
 
-test('addCenterLineFromDialog: 中心線の追加extentの直交端部候補は orthoAnchorKinds(center) の予測と一致する（梁芯は選ばれない）', () => {
+test('addCenterLineFromDialog: 中心線の追加extentの直交端部候補は orthoAnchorKinds(center) の予測と一致する（梁芯は選ばれない）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const structLo = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -100, { labeled: true, discipline: Discipline.STRUCT });
   graph.addCenterLine(CenterLineType.HORIZONTAL, -50, { labeled: false, discipline: Discipline.FUSE }); // 梁芯（perpCoordに近いが選ばれてはいけない）
@@ -870,7 +870,7 @@ test('addCenterLineFromDialog: 中心線の追加extentの直交端部候補は 
   const candidates = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && allowedKinds.includes(centerLineKind(cl)));
   const [expectedLo, expectedHi] = findBracketingCLs(candidates, 0);
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
     null,
@@ -884,7 +884,7 @@ test('addCenterLineFromDialog: 中心線の追加extentの直交端部候補は 
   assert.equal(added.extentHiRef?.clId, auxHi.id, '梁芯(50)ではなく補助線(100)が選ばれる');
 });
 
-test('addCenterLineFromDialog: 梁芯の追加extentの直交端部候補は orthoAnchorKinds(beam) の予測と一致する（通り芯のみ。手前の梁芯・中心線・補助線は選ばれない）', () => {
+test('addCenterLineFromDialog: 梁芯の追加extentの直交端部候補は orthoAnchorKinds(beam) の予測と一致する（通り芯のみ。手前の梁芯・中心線・補助線は選ばれない）', async () => {
   const { project, graph } = makeProjectWithGraph();
   // kindsVisibleWith('beam') は元々 struct・beam の2種類しか含まない（beamは'structure'モードでしか
   // 可視でなく、そのモードの可視種別は['struct','beam']のため）——center/aux は特例の有無に関わらず
@@ -904,7 +904,7 @@ test('addCenterLineFromDialog: 梁芯の追加extentの直交端部候補は ort
   const candidates = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && allowedKinds.includes(centerLineKind(cl)));
   const [expectedLo, expectedHi] = findBracketingCLs(candidates, 0);
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'beam', refId: null, refOffset: 0 },
     null,
@@ -1088,7 +1088,7 @@ test('checkDemoteToCenterGuards: 拒否する既存種別は convertBlockingKind
 
 // ---- B2: COEXISTENCE 16セルの製品コードとの一致（addCenterLineFromDialogを実際に呼んで検証）----
 
-test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexistenceAt(newKind, existingKind) の予測と一致する（forbidden/promote/allowed/extentの重複・分離を実際に再現）', () => {
+test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexistenceAt(newKind, existingKind) の予測と一致する（forbidden/promote/allowed/extentの重複・分離を実際に再現）', async () => {
   const vp = { scaleDenominator: 100 };
   const clType = CenterLineType.VERTICAL;
   const perpType = CenterLineType.HORIZONTAL;
@@ -1129,7 +1129,7 @@ test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexiste
         {
           const { project, graph } = makeBracketedFixture();
           const existingCl = placeExisting(graph, project, existingKind, 500, 3500);
-          const result = addCenterLineFromDialog(
+          const result = await addCenterLineFromDialog(
             graph, project,
             { clDialog: { type: 'vertical', worldCoord: value, perpCoord: 2000 }, value, kind: newKind, refId: null, refOffset: 0 },
             vp,
@@ -1142,7 +1142,7 @@ test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexiste
         {
           const { project, graph } = makeBracketedFixture();
           const existingCl = placeExisting(graph, project, existingKind, 5000, 8000);
-          const result = addCenterLineFromDialog(
+          const result = await addCenterLineFromDialog(
             graph, project,
             { clDialog: { type: 'vertical', worldCoord: value, perpCoord: 2000 }, value, kind: newKind, refId: null, refOffset: 0 },
             vp,
@@ -1158,7 +1158,7 @@ test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexiste
 
       const { project, graph } = makeProjectWithGraph();
       const existingCl = addCLOfKind(graph, project, clType, value, existingKind);
-      const result = addCenterLineFromDialog(
+      const result = await addCenterLineFromDialog(
         graph, project,
         { clDialog: { type: 'vertical', worldCoord: value, perpCoord: 0 }, value, kind: newKind, refId: null, refOffset: 0 },
         vp,
@@ -1194,13 +1194,13 @@ test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexiste
 // 移行前は生の labeled フラグで候補に混ざっていたが、移行後は orthoAnchorKinds の種別ベース予測と
 // 一致するようになった（現行の生成経路は0件・旧データ限定の理論上のケース）。
 
-test('【旧データ限定・種別ベースへ統一】addCenterLineFromDialog(kind:beam) の直交端部候補は種別ベース（orthoAnchorKinds(beam)=[struct]のみ）——labeled:trueでも種別が通り芯でない旧データは候補にしない', () => {
+test('【旧データ限定・種別ベースへ統一】addCenterLineFromDialog(kind:beam) の直交端部候補は種別ベース（orthoAnchorKinds(beam)=[struct]のみ）——labeled:trueでも種別が通り芯でない旧データは候補にしない', async () => {
   const { project, graph } = makeProjectWithGraph();
   const structFar = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
   const legacyLabeledCenter = graph.addCenterLine(CenterLineType.HORIZONTAL, -100, { labeled: true, discipline: Discipline.ARCH });
   assert.equal(centerLineKind(legacyLabeledCenter), 'center', '前提: centerLineKindは種別ベースなので中心線のまま（旧データが実際に作れることの確認）');
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'beam', refId: null, refOffset: 0 },
     { scaleDenominator: 100 },
@@ -1225,12 +1225,12 @@ test('【旧データ限定・種別ベースへ統一】addCenterLineFromDialog
 // 梁芯を端部候補にしない。補助線は壁になれず、端が壁で止まるのは作図上のトリムだけのため、追加extentも
 // 「主体と同じモードで可視な種別」＝通り芯・中心線・補助線に揃える）。
 
-test('【裁定反映済み】addCenterLineFromDialog(kind:aux) の直交端部候補は梁芯を含まない（2026-09-18裁定。orthoAnchorKinds(\'aux\')と一致）', () => {
+test('【裁定反映済み】addCenterLineFromDialog(kind:aux) の直交端部候補は梁芯を含まない（2026-09-18裁定。orthoAnchorKinds(\'aux\')と一致）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const nearBeam  = graph.addCenterLine(CenterLineType.HORIZONTAL, -100, { labeled: false, discipline: Discipline.FUSE });
   const farStruct = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
     { scaleDenominator: 100 },

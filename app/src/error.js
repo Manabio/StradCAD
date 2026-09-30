@@ -12,8 +12,10 @@ function assertKnownKind(kind) {
 export const ERR_CL_DUPLICATE = (kind) =>
   `既に同じ位置に${KIND_LABEL[kind]}があり、追加できません。`;
 
+// 裁定Q9（線種変更の移籍一本化・2026-09-30）: 実態は削除+新規作成ではなく移籍（既存の中心線を
+// そのまま通り芯へ昇格）のため、文言もそれに合わせる。
 export const ERR_CL_CENTER_UPGRADED =
-  '同位置に中心線があります。その中心線を削除して、追加する通り芯を参照するように変更します。';
+  '同位置の中心線を通り芯にしました。';
 
 export const ERR_CL_STRUCT_EXISTS =
   '同位置に通り芯があり、追加できません。';

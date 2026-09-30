@@ -2118,14 +2118,22 @@ const App = observer(() => {
     });
   }
 
-  function handleCLDialogConfirm(value, kind, refId, refOffset) {
+  // 線種変更の移籍一本化・ステップ5（2026-09-30）: 通り芯への昇格（既存の中心線と同位置を指定した
+  // 場合）が他の平面を読むため非同期になった（addCenterLineFromDialog内でpromoteCenterToGridWithUndo
+  // へ委譲）。他の関門付きCL操作（handleConvertCenterLine等）と同じ形（beginUiTransition→runBusy→
+  // structuralSync.whenIdle()→本体）で関門に入る。clDialogのnullチェックは関門の前で行う（従来どおり）。
+  async function handleCLDialogConfirm(value, kind, refId, refOffset) {
     if (!clDialog) return;
-    const { done, toast, suggestWood } = addCenterLineFromDialog(
-      graph, project, { clDialog, value, kind, refId, refOffset }, viewport,
-    );
-    if (toast) setToast({ msg: toast, key: Date.now() });
-    if (done) { setClDialog(null); setClPreview(null); }
-    if (suggestWood) maybeSuggestWoodStructure(suggestWood.clType, suggestWood.newValues);
+    beginUiTransition();
+    await runBusy('線の追加', async () => {
+      await structuralSync.whenIdle();
+      const { done, toast, suggestWood } = await addCenterLineFromDialog(
+        graph, project, { clDialog, value, kind, refId, refOffset }, viewport,
+      ).catch(err => { throw tagCLOpFailure(err); });
+      if (toast) setToast({ msg: toast, key: Date.now() });
+      if (done) { setClDialog(null); setClPreview(null); }
+      if (suggestWood) maybeSuggestWoodStructure(suggestWood.clType, suggestWood.newValues);
+    });
   }
 
   const closeMenu = () => setMenu(null);
@@ -2313,7 +2321,7 @@ const App = observer(() => {
           nearbyCLs={clDialog.nearbyCLs ?? []}
           appMode={appMode}
           columnAxisRefs={appMode === 'structure' ? buildColumnAxisRefs(graph, clDialog.type) : []}
-          onConfirm={handleCLDialogConfirm}
+          onConfirm={guardUi(handleCLDialogConfirm)}
           onCancel={() => { setClDialog(null); setClPreview(null); }}
           onPreviewChange={setClPreview}
         />

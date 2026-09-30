@@ -112,7 +112,8 @@ export const HIT_EXCLUDED_KINDS_BY_MODE = Object.freeze({
 //   'forbidden' — 追加を拒否する
 //   'extent'    — 同種別のextentが重ならなければ許可する（重なれば拒否／隣接すれば結合連鎖へ）
 //   'allowed'   — 無条件で許可する
-//   'promote'   — 既存を削除し、新規（通り芯）へ昇格する
+//   'promote'   — 既存（中心線）を移籍して通り芯へ昇格する（transform/centerLineOps.js
+//                 promoteCenterToGridWithUndo。線種変更の移籍一本化・2026-09-30）
 export const COEXISTENCE = Object.freeze({
   struct: Object.freeze({ struct: 'forbidden', center: 'promote',  aux: 'allowed',   beam: 'forbidden' }),
   center: Object.freeze({ struct: 'forbidden', center: 'extent',   aux: 'allowed',   beam: 'allowed'   }),

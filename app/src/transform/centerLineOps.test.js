@@ -4415,12 +4415,12 @@ test('deleteCenterLineWithUndo（struct分岐）: 他階(p2)の後始末で新�
 // 既存テストが無かった経路（QA実測）。sameCoordCounterparts経由への移行後も、重複除外の
 // 述語（tolMm既定=CL_OVERLAP_TOL_MM）が従来の`< CL_OVERLAP_TOL_MM`と完全一致することを固定する。
 
-test('addCenterLineFromDialog: スパン配列バッチモードは重複する値を除外し、新規の値だけ通り芯として追加する', () => {
+test('addCenterLineFromDialog: スパン配列バッチモードは重複する値を除外し、新規の値だけ通り芯として追加する', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }); // 既存
   const beforeTop = undoManager.peekUndo();
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical' }, value: [1000, 2000, 3000], kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -4442,13 +4442,13 @@ test('addCenterLineFromDialog: スパン配列バッチモードは重複する�
   assert.deepEqual(valuesAfterUndo, [1000], 'undoで新規2本が消え既存の1本だけ残る');
 });
 
-test('addCenterLineFromDialog: スパン配列バッチモードは全値が重複すればdone:trueかつERR_CL_DUPLICATEでundoを積まない', () => {
+test('addCenterLineFromDialog: スパン配列バッチモードは全値が重複すればdone:trueかつERR_CL_DUPLICATEでundoを積まない', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
   const beforeTop = undoManager.peekUndo();
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical' }, value: [1000, 2000], kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -4459,11 +4459,11 @@ test('addCenterLineFromDialog: スパン配列バッチモードは全値が重�
   assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
-test('【失敗系】addCenterLineFromDialog: スパン配列バッチモードの重複除外はtolMm境界（CL_OVERLAP_TOL_MM未満は重複扱い）', () => {
+test('【失敗系】addCenterLineFromDialog: スパン配列バッチモードの重複除外はtolMm境界（CL_OVERLAP_TOL_MM未満は重複扱い）', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT }); // 既存
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     // 1000.4は既存(1000)との差が0.4mm（既定tolMm=CL_OVERLAP_TOL_MM=0.5未満）で重複扱いになるはず
     // ——tolMmが0に壊れる変異（QA指摘m-4）が注入されるとこのケースだけ非重複扱いに変わり検出できる。
@@ -4475,12 +4475,12 @@ test('【失敗系】addCenterLineFromDialog: スパン配列バッチモード�
   assert.deepEqual(result.suggestWood.newValues, [5000], '1000.4は既存1000の重複としてtolMm境界内で除外される');
 });
 
-test('addCenterLineFromDialog: 通り芯を既存通り芯と同座標に追加しようとするとdone:falseでERR_CL_DUPLICATE、undoは積まれない', () => {
+test('addCenterLineFromDialog: 通り芯を既存通り芯と同座標に追加しようとするとdone:falseでERR_CL_DUPLICATE、undoは積まれない', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
   const beforeTop = undoManager.peekUndo();
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -4491,12 +4491,12 @@ test('addCenterLineFromDialog: 通り芯を既存通り芯と同座標に追加�
   assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
-test('addCenterLineFromDialog: 既存通り芯と同座標へ中心線を追加しようとするとdone:falseでERR_CL_STRUCT_EXISTS', () => {
+test('addCenterLineFromDialog: 既存通り芯と同座標へ中心線を追加しようとするとdone:falseでERR_CL_STRUCT_EXISTS', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
   const beforeTop = undoManager.peekUndo();
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
     null,
@@ -4507,13 +4507,13 @@ test('addCenterLineFromDialog: 既存通り芯と同座標へ中心線を追加�
   assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
-test('addCenterLineFromDialog: 既存の梁芯（自動生成・平面では非表示）の位置へ中心線・補助線は追加でき、梁芯も残る', () => {
+test('addCenterLineFromDialog: 既存の梁芯（自動生成・平面では非表示）の位置へ中心線・補助線は追加でき、梁芯も残る', async () => {
   const { project, graph } = makeProjectWithGraph();
   const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
   const beforeTop = undoManager.peekUndo();
 
   // 既存=梁芯、新規=中心線 → 拒否しない（下階の壁由来で自階に湧いた梁芯を障害物にしない）
-  const r1 = addCenterLineFromDialog(
+  const r1 = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
     null,
@@ -4528,7 +4528,7 @@ test('addCenterLineFromDialog: 既存の梁芯（自動生成・平面では非�
 
   // 既存=梁芯、新規=補助線（別軸で独立させる） → 同様に拒否しない
   graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.FUSE });
-  const r1b = addCenterLineFromDialog(
+  const r1b = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'horizontal', worldCoord: 3000, perpCoord: 0 }, value: 3000, kind: 'aux', refId: null, refOffset: 0 },
     { scaleDenominator: 100 }, // aux の extent 計算（はね出し・丸め）が viewport.scaleDenominator を読む
@@ -4538,7 +4538,7 @@ test('addCenterLineFromDialog: 既存の梁芯（自動生成・平面では非�
   assert.ok(graph.centerLines.some(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000 && centerLineKind(cl) === 'aux'));
 });
 
-test('addCenterLineFromDialog: 補助線と中心線が共存する位置への通り芯追加は、並び順によらず中心線を削除して昇格する（相手選択は種別優先順）', () => {
+test('addCenterLineFromDialog: 補助線と中心線が共存する位置への通り芯追加は、並び順によらず中心線を移籍して昇格する（相手選択は種別優先順）', async () => {
   const vp = { scaleDenominator: 100 };
   for (const order of ['aux-first', 'center-first']) {
     const { project, graph } = makeProjectWithGraph();
@@ -4546,49 +4546,50 @@ test('addCenterLineFromDialog: 補助線と中心線が共存する位置への�
     const addCenter = () => graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false });
     const [aux, center] = order === 'aux-first' ? [addAux(), addCenter()] : (() => { const c = addCenter(); const a = addAux(); return [a, c]; })();
 
-    const r = addCenterLineFromDialog(
+    const r = await addCenterLineFromDialog(
       graph, project,
       { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
       vp,
     );
     assert.equal(r.done, true, order);
-    assert.equal(r.toast, ERR_CL_CENTER_UPGRADED, `${order}: 中心線を削除して昇格する`);
-    assert.equal(graph.shapeMap.has(center.id), false, `${order}: 中心線は削除される`);
+    assert.equal(r.toast, ERR_CL_CENTER_UPGRADED, `${order}: 中心線を移籍して昇格する`);
+    assert.equal(graph.shapeMap.has(center.id), false, `${order}: 中心線は自階のshapeMapから移籍して消える`);
+    assert.equal(project.structGraph.shapeMap.get(center.id)?.id, center.id, `${order}: 同じidのまま通り芯（structGraph）へ移籍する`);
     assert.equal(graph.shapeMap.has(aux.id), true, `${order}: 補助線は残る`);
     const kinds = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000).map(centerLineKind).sort();
     assert.deepEqual(kinds, ['aux', 'struct'], `${order}: 通り芯＋補助線の2本になる`);
   }
 });
 
-test('addCenterLineFromDialog: 直交する線・壁が無く extent が1点に退化した補助線でも、同座標の2本目は拒否される', () => {
+test('addCenterLineFromDialog: 直交する線・壁が無く extent が1点に退化した補助線でも、同座標の2本目は拒否される', async () => {
   const project = new Project('proj', 'test');
   const { graph } = project.addPlane(0, '1階', 'p1'); // 直交CL・壁なし → フリー端点が両方 perpCoord に丸められ長さ0
   const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 };
   const vp = { scaleDenominator: 100 };
 
-  const r1 = addCenterLineFromDialog(graph, project, payload, vp);
+  const r1 = await addCenterLineFromDialog(graph, project, payload, vp);
   assert.equal(r1.done, true);
   const first = graph.centerLines.find(cl => centerLineKind(cl) === 'aux');
   assert.equal(first.extentLo, first.extentHi, '前提: extent が1点に退化している');
   const beforeTop = undoManager.peekUndo();
 
-  const r2 = addCenterLineFromDialog(graph, project, payload, vp);
+  const r2 = await addCenterLineFromDialog(graph, project, payload, vp);
   assert.equal(r2.done, false);
   assert.equal(r2.toast, ERR_CL_DUPLICATE('aux'));
   assert.equal(graph.centerLines.filter(cl => centerLineKind(cl) === 'aux').length, 1, '補助線は1本のまま');
   assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
-test('addCenterLineFromDialog: 梁芯と共存する中心線・補助線があるとき、同位置への2本目の同種別は先頭が梁芯でも拒否される', () => {
+test('addCenterLineFromDialog: 梁芯と共存する中心線・補助線があるとき、同位置への2本目の同種別は拒否されるが、通り芯追加（昇格分岐）は中心線を移籍し無保護の梁芯を吸収する', async () => {
   const { project, graph } = makeProjectWithGraph();
   const vp = { scaleDenominator: 100 };
 
   // 梁芯が先（＝下階由来の自動生成が先にある実機の状況）→ 中心線を追加 → もう1本中心線
   graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
   const payloadC = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 };
-  assert.equal(addCenterLineFromDialog(graph, project, payloadC, null).done, true);
+  assert.equal((await addCenterLineFromDialog(graph, project, payloadC, null)).done, true);
   const beforeTop = undoManager.peekUndo();
-  const r2 = addCenterLineFromDialog(graph, project, payloadC, null);
+  const r2 = await addCenterLineFromDialog(graph, project, payloadC, null);
   assert.equal(r2.done, false);
   assert.equal(r2.toast, ERR_CL_DUPLICATE('center'));
   assert.equal(graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000).length, 2, '梁芯＋中心線の2本のまま');
@@ -4597,31 +4598,41 @@ test('addCenterLineFromDialog: 梁芯と共存する中心線・補助線があ�
   // 補助線も同様（extent が重なる2本目は拒否）
   graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.FUSE });
   const payloadA = { clDialog: { type: 'horizontal', worldCoord: 3000, perpCoord: 0 }, value: 3000, kind: 'aux', refId: null, refOffset: 0 };
-  assert.equal(addCenterLineFromDialog(graph, project, payloadA, vp).done, true);
-  const r3 = addCenterLineFromDialog(graph, project, payloadA, vp);
+  assert.equal((await addCenterLineFromDialog(graph, project, payloadA, vp)).done, true);
+  const r3 = await addCenterLineFromDialog(graph, project, payloadA, vp);
   assert.equal(r3.done, false);
   assert.equal(r3.toast, ERR_CL_DUPLICATE('aux'));
   assert.equal(graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 3000 && centerLineKind(cl) === 'aux').length, 1);
 
-  // 通り芯追加は梁芯と中心線の並び順によらず梁芯を理由に拒否する（中心線が先でも昇格経路へ入らない）
-  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: false });                                  // 中心線が先
-  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: false, discipline: Discipline.FUSE });    // 梁芯が後
-  const beforeTop2 = undoManager.peekUndo();
-  const r4 = addCenterLineFromDialog(
+  // 裁定Q8（線種変更の移籍一本化・2026-09-30）: 中心線が同座標にあり昇格分岐（promote）へ入る場合は、
+  // 梁芯の並び順によらず梁芯の事前拒否を適用しない——promoteCenterToGridWithUndo自身が保護されない
+  // 壁由来梁芯を吸収する（中心線が無く梁芯だけがある通常追加は従来どおり拒否。上の r3 参照）。
+  const centerCL5000 = graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: false });             // 中心線が先
+  const beamCL5000 = graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: false, discipline: Discipline.FUSE }); // 梁芯が後（無保護）
+  const centerId5000 = centerCL5000.id;
+  const beamId5000 = beamCL5000.id;
+  const r4 = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 5000, perpCoord: 0 }, value: 5000, kind: 'struct', refId: null, refOffset: 0 },
     null,
   );
-  assert.equal(r4.done, false);
-  assert.equal(r4.toast, ERR_CL_DUPLICATE('beam'));
-  assert.equal(graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000).length, 2, '中心線は削除されず通り芯も増えない');
-  assert.equal(undoManager.peekUndo(), beforeTop2, 'undoは積まれない');
+  assert.equal(r4.done, true, '中心線を移籍して昇格し、無保護の梁芯は吸収される');
+  assert.equal(r4.toast, ERR_CL_CENTER_UPGRADED);
+  // graph.centerLines は自階＋共有グラフ（通り芯）を合流するため、移籍後は通り芯（自階固有ではない）が
+  // 1本だけ見える——ここでは自階固有の実体（shapeMap）から中心線・梁芯の両方が消えたかで確認する。
+  assert.equal(graph.shapeMap.has(centerId5000), false, '旧中心線は自階のshapeMapから移籍して消える');
+  assert.equal(graph.shapeMap.has(beamId5000), false, '無保護の梁芯は昇格に伴い吸収されて消える');
+  assert.equal(project.structGraph.shapeMap.get(centerId5000)?.id, centerId5000, '同じidのまま通り芯として structGraph へ移籍する');
+
+  undoManager.undo();
+  assert.ok(graph.shapeMap.has(centerId5000), 'undoで同じidの中心線が復元される');
+  assert.equal(graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000).length, 2, 'undoで中心線・梁芯とも復元される');
 });
 
 // 由来フィールド（BeamAxisOrigin。ステップ2・2026-09-26）
-test('addCenterLineFromDialog: 梁芯の手動追加はbeamAxisOrigin:userになり、undo/redoを経ても保たれる', () => {
+test('addCenterLineFromDialog: 梁芯の手動追加はbeamAxisOrigin:userになり、undo/redoを経ても保たれる', async () => {
   const { project, graph } = makeProjectWithGraph();
-  const r = addCenterLineFromDialog(
+  const r = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'horizontal', worldCoord: 2000, perpCoord: 0 }, value: 2000, kind: 'beam', refId: null, refOffset: 0 },
     null,
@@ -4640,9 +4651,9 @@ test('addCenterLineFromDialog: 梁芯の手動追加はbeamAxisOrigin:userにな
   assert.equal(restored.beamAxisOrigin, BeamAxisOrigin.USER, 'redo後もbeamAxisOriginが保たれる（graphSnapshot往復）');
 });
 
-test('addCenterLineFromDialog: 通り芯・中心線・補助線の追加ではbeamAxisOriginは付かない（null のまま）', () => {
+test('addCenterLineFromDialog: 通り芯・中心線・補助線の追加ではbeamAxisOriginは付かない（null のまま）', async () => {
   const { project, graph } = makeProjectWithGraph();
-  const rStruct = addCenterLineFromDialog(
+  const rStruct = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -4651,7 +4662,7 @@ test('addCenterLineFromDialog: 通り芯・中心線・補助線の追加ではb
   const struct = project.structGraph.centerLines.find(cl => cl.value === 1000);
   assert.equal(struct.beamAxisOrigin, null);
 
-  const rCenter = addCenterLineFromDialog(
+  const rCenter = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 3000, perpCoord: 0 }, value: 3000, kind: 'center', refId: null, refOffset: 0 },
     null,
@@ -4660,7 +4671,7 @@ test('addCenterLineFromDialog: 通り芯・中心線・補助線の追加ではb
   const center = graph.centerLines.find(cl => centerLineKind(cl) === 'center' && cl.value === 3000);
   assert.equal(center.beamAxisOrigin, null);
 
-  const rAux = addCenterLineFromDialog(
+  const rAux = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 5000, perpCoord: 0 }, value: 5000, kind: 'aux', refId: null, refOffset: 0 },
     { scaleDenominator: 100 },
@@ -4670,12 +4681,12 @@ test('addCenterLineFromDialog: 通り芯・中心線・補助線の追加ではb
   assert.equal(aux.beamAxisOrigin, null);
 });
 
-test('addCenterLineFromDialog: 梁芯の手動追加は既存の中心線・通り芯と同位置に共存できず、通り芯追加も既存の梁芯を拒否する', () => {
+test('addCenterLineFromDialog: 梁芯の手動追加は既存の中心線・通り芯と同位置に共存できず、通り芯追加も既存の梁芯（中心線が同座標に無い場合）を拒否する', async () => {
   const { project, graph } = makeProjectWithGraph();
 
   // 既存=中心線、新規=梁芯
   graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false });
-  const r2 = addCenterLineFromDialog(
+  const r2 = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'horizontal', worldCoord: 2000, perpCoord: 0 }, value: 2000, kind: 'beam', refId: null, refOffset: 0 },
     null,
@@ -4686,7 +4697,7 @@ test('addCenterLineFromDialog: 梁芯の手動追加は既存の中心線・通�
   // 既存=梁芯、新規=通り芯 → 拒否（大梁と完全重複する小梁の生成防止）
   graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
   const beforeTop = undoManager.peekUndo();
-  const r3 = addCenterLineFromDialog(
+  const r3 = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -4696,12 +4707,12 @@ test('addCenterLineFromDialog: 梁芯の手動追加は既存の中心線・通�
   assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
-test('addCenterLineFromDialog: 既存中心線位置への通り芯追加は中心線を削除して昇格し、done:true+ERR_CL_CENTER_UPGRADEDでundo可能', () => {
+test('addCenterLineFromDialog: 既存中心線位置への通り芯追加は中心線を移籍して昇格し、done:true+ERR_CL_CENTER_UPGRADEDでundo可能', async () => {
   const { project, graph } = makeProjectWithGraph();
   const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false });
   const centerId = centerCL.id;
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -4710,11 +4721,11 @@ test('addCenterLineFromDialog: 既存中心線位置への通り芯追加は中�
   assert.equal(result.done, true);
   assert.equal(result.toast, ERR_CL_CENTER_UPGRADED);
   assert.deepEqual(result.suggestWood, { clType: CenterLineType.VERTICAL, newValues: [1000] });
-  assert.equal(graph.shapeMap.has(centerId), false, '旧中心線は削除される');
-  assert.ok(project.structGraph.centerLines.some(cl => cl.value === 1000), '通り芯として structGraph に追加される');
+  assert.equal(graph.shapeMap.has(centerId), false, '旧中心線は自階のshapeMapから移籍して消える');
+  assert.equal(project.structGraph.shapeMap.get(centerId)?.id, centerId, '同じidのまま通り芯として structGraph へ移籍する');
 
   undoManager.undo();
-  assert.ok(graph.shapeMap.has(centerId), 'undoで中心線が復元される');
+  assert.ok(graph.shapeMap.has(centerId), 'undoで同じidの中心線が復元される');
   assert.equal(project.structGraph.centerLines.some(cl => cl.value === 1000), false, 'undoで通り芯は消える');
 });
 
@@ -4728,38 +4739,41 @@ test('【失敗系】bakeCLValue: refIdが未解決（_referencedCL無し）のC
   assert.equal(cl.pendingDelta, 0);
 });
 
-test('addCenterLineFromDialog: 既存中心線位置への通り芯昇格で、参照先(refId)が階固有CL（structGraphに置けない）なら、生成された通り芯はrefId:nullになる（QA指摘Major-1・未解決refIdを通り芯へ残さない）', () => {
+test('addCenterLineFromDialog: 既存中心線が階固有CLをrefIdで参照している場合、昇格後の通り芯はrefId:nullになる（既存の参照を維持しつつ、structGraphで解決できない参照はベイクする。裁定Q7・線種変更の移籍一本化ステップ5）', async () => {
   const { project, graph } = makeProjectWithGraph();
-  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false });
-  const centerId = centerCL.id;
   // 参照先: 階固有CL（project.structGraphには存在しない＝昇格後は解決不能）
   const floorRefCL = graph.addCenterLine(CenterLineType.VERTICAL, 500, { labeled: false });
+  const centerCL = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, refId: floorRefCL.id, refOffset: 500 });
+  const centerId = centerCL.id;
 
-  const result = addCenterLineFromDialog(
+  // 裁定Q7: ダイアログのrefId・refOffsetは捨て、既存の中心線（centerCL）自身の参照を使う——
+  // ここで渡すrefId:nullは無視されることの確認も兼ねる。
+  const result = await addCenterLineFromDialog(
     graph, project,
-    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: floorRefCL.id, refOffset: 500 },
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
     null,
   );
 
   assert.equal(result.done, true);
   assert.equal(result.toast, ERR_CL_CENTER_UPGRADED);
-  assert.equal(graph.shapeMap.has(centerId), false, '旧中心線は削除される');
-  const structCL = project.structGraph.centerLines.find(cl => cl.value === 1000);
-  assert.ok(structCL, '通り芯として structGraph に追加される');
-  assert.equal(structCL.refId, null, '階固有CLは通り芯から解決できないためrefIdは持たない');
+  assert.equal(graph.shapeMap.has(centerId), false, '旧中心線は自階のshapeMapから移籍して消える');
+  const structCL = project.structGraph.shapeMap.get(centerId);
+  assert.ok(structCL, '同じidのまま通り芯として structGraph へ移籍する');
+  assert.equal(structCL.value, 1000, '座標は既存の中心線のまま（refIdのベイク後も1000）');
+  assert.equal(structCL.refId, null, '階固有CLは通り芯から解決できないためrefIdは持たない（applyPromoteToGridのベイク）');
 });
 
 // ---- addCenterLineFromDialog: 構造同期リスナー（段階(c)・pushUndoWithStructuralSync・2026-09-25） ----
 // setCenterLineStructuralListener はテスト間で必ず finally で null に戻す（他テストへ漏らさない）。
 
-test('addCenterLineFromDialog: スパン配列バッチモード（通り芯）は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', () => {
+test('addCenterLineFromDialog: スパン配列バッチモード（通り芯）は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
 
   const calls = [];
   setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
   try {
-    const result = addCenterLineFromDialog(
+    const result = await addCenterLineFromDialog(
       graph, project,
       { clDialog: { type: 'vertical' }, value: [1000, 2000, 3000], kind: 'struct', refId: null, refOffset: 0 },
       null,
@@ -4779,13 +4793,13 @@ test('addCenterLineFromDialog: スパン配列バッチモード（通り芯）�
   }
 });
 
-test('addCenterLineFromDialog: 単体の通り芯追加は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', () => {
+test('addCenterLineFromDialog: 単体の通り芯追加は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', async () => {
   const { project, graph } = makeProjectWithGraph();
 
   const calls = [];
   setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
   try {
-    const result = addCenterLineFromDialog(
+    const result = await addCenterLineFromDialog(
       graph, project,
       { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
       null,
@@ -4803,13 +4817,13 @@ test('addCenterLineFromDialog: 単体の通り芯追加は構造同期リスナ�
   }
 });
 
-test('addCenterLineFromDialog: 単体の通り芯追加はコミット時のnotifyだけ第4引数(undoRecords)に配列を渡し、undo/redo時のnotifyはundefined（段階(g)・QA指摘M-1・2026-09-26）', () => {
+test('addCenterLineFromDialog: 単体の通り芯追加はコミット時のnotifyだけ第4引数(undoRecords)に配列を渡し、undo/redo時のnotifyはundefined（段階(g)・QA指摘M-1・2026-09-26）', async () => {
   const { project, graph } = makeProjectWithGraph();
 
   const received = [];
   setCenterLineStructuralListener((g, p, scope, undoRecords) => received.push(undoRecords));
   try {
-    const result = addCenterLineFromDialog(
+    const result = await addCenterLineFromDialog(
       graph, project,
       { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
       null,
@@ -4826,7 +4840,7 @@ test('addCenterLineFromDialog: 単体の通り芯追加はコミット時のnoti
   }
 });
 
-test('addCenterLineFromDialog: undoでは箱(floorRecords)のbefore保存がnotifyより前に実行される（順序スパイ・段階(g)・QA指摘M-1・2026-09-26）', () => {
+test('addCenterLineFromDialog: undoでは箱(floorRecords)のbefore保存がnotifyより前に実行される（順序スパイ・段階(g)・QA指摘M-1・2026-09-26）', async () => {
   const { project, graph } = makeProjectWithGraph();
 
   const order = [];
@@ -4837,7 +4851,7 @@ test('addCenterLineFromDialog: undoでは箱(floorRecords)のbefore保存がnoti
     order.push('notify');
   });
   try {
-    const result = addCenterLineFromDialog(
+    const result = await addCenterLineFromDialog(
       graph, project,
       { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
       null,
@@ -4854,14 +4868,14 @@ test('addCenterLineFromDialog: undoでは箱(floorRecords)のbefore保存がnoti
   }
 });
 
-test('addCenterLineFromDialog: 既存中心線位置への通り芯追加（昇格経路）は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', () => {
+test('addCenterLineFromDialog: 既存中心線位置への通り芯追加（昇格経路）は構造同期リスナーを(graph, project, "all")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', async () => {
   const { project, graph } = makeProjectWithGraph();
   graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false });
 
   const calls = [];
   setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
   try {
-    const result = addCenterLineFromDialog(
+    const result = await addCenterLineFromDialog(
       graph, project,
       { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
       null,
@@ -4880,13 +4894,13 @@ test('addCenterLineFromDialog: 既存中心線位置への通り芯追加（昇�
   }
 });
 
-test('addCenterLineFromDialog: 単体の中心線追加は構造同期リスナーを(graph, project, "activeAndAbove")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', () => {
+test('addCenterLineFromDialog: 単体の中心線追加は構造同期リスナーを(graph, project, "activeAndAbove")で呼ぶ（確定1回・undo1回・redo1回＝計3回）', async () => {
   const { project, graph } = makeProjectWithGraph();
 
   const calls = [];
   setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
   try {
-    const result = addCenterLineFromDialog(
+    const result = await addCenterLineFromDialog(
       graph, project,
       { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
       null,
@@ -4904,7 +4918,7 @@ test('addCenterLineFromDialog: 単体の中心線追加は構造同期リスナ�
   }
 });
 
-test('addCenterLineFromDialog: 同種別（中心線）の結合連鎖でも構造同期リスナーは(graph, project, "activeAndAbove")で1回・undo1回・redo1回＝計3回', () => {
+test('addCenterLineFromDialog: 同種別（中心線）の結合連鎖でも構造同期リスナーは(graph, project, "activeAndAbove")で1回・undo1回・redo1回＝計3回', async () => {
   const { project, graph } = makeProjectWithGraph();
   // 直交する通り芯Y=1000・Y=2000でperpCoord=1500をブラケットし、新規中心線のextentを[1000,2000]にする
   // （orthoAnchorCandidatesForNewの候補になれるようdiscipline:STRUCT・labeled:trueにする）。
@@ -4917,7 +4931,7 @@ test('addCenterLineFromDialog: 同種別（中心線）の結合連鎖でも構�
   const calls = [];
   setCenterLineStructuralListener((g, p, scope) => calls.push({ g, p, scope }));
   try {
-    const result = addCenterLineFromDialog(
+    const result = await addCenterLineFromDialog(
       graph, project,
       { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 1500 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
       null,
@@ -4938,14 +4952,14 @@ test('addCenterLineFromDialog: 同種別（中心線）の結合連鎖でも構�
   }
 });
 
-test('addCenterLineFromDialog: 補助線の単体追加・結合連鎖、梁芯の追加は構造同期リスナーを呼ばない（structuralSyncScopeOfKindがaux/beamでnullのため）', () => {
+test('addCenterLineFromDialog: 補助線の単体追加・結合連鎖、梁芯の追加は構造同期リスナーを呼ばない（structuralSyncScopeOfKindがaux/beamでnullのため）', async () => {
   // ---- 補助線・単体 ----
   {
     const { project, graph } = makeProjectWithGraph();
     let calls = 0;
     setCenterLineStructuralListener(() => { calls++; });
     try {
-      const result = addCenterLineFromDialog(
+      const result = await addCenterLineFromDialog(
         graph, project,
         { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
         { scaleDenominator: 100 },
@@ -4972,7 +4986,7 @@ test('addCenterLineFromDialog: 補助線の単体追加・結合連鎖、梁芯�
     let calls = 0;
     setCenterLineStructuralListener(() => { calls++; });
     try {
-      const result = addCenterLineFromDialog(
+      const result = await addCenterLineFromDialog(
         graph, project,
         { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 1500 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
         { scaleDenominator: 100 },
@@ -4992,7 +5006,7 @@ test('addCenterLineFromDialog: 補助線の単体追加・結合連鎖、梁芯�
     let calls = 0;
     setCenterLineStructuralListener(() => { calls++; });
     try {
-      const result = addCenterLineFromDialog(
+      const result = await addCenterLineFromDialog(
         graph, project,
         { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'beam', refId: null, refOffset: 0 },
         null,
@@ -5005,7 +5019,7 @@ test('addCenterLineFromDialog: 補助線の単体追加・結合連鎖、梁芯�
   }
 });
 
-test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は構造同期リスナーを呼ばない（ERR_CL_DUPLICATE/ERR_CL_STRUCT_EXISTS/バッチ全件重複/梁芯の重複拒否）', () => {
+test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は構造同期リスナーを呼ばない（ERR_CL_DUPLICATE/ERR_CL_STRUCT_EXISTS/バッチ全件重複/梁芯の重複拒否）', async () => {
   // ---- struct×struct 同座標 ----
   {
     const { project, graph } = makeProjectWithGraph();
@@ -5013,7 +5027,7 @@ test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は�
     let calls = 0;
     setCenterLineStructuralListener(() => { calls++; });
     try {
-      const result = addCenterLineFromDialog(
+      const result = await addCenterLineFromDialog(
         graph, project,
         { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
         null,
@@ -5033,7 +5047,7 @@ test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は�
     let calls = 0;
     setCenterLineStructuralListener(() => { calls++; });
     try {
-      const result = addCenterLineFromDialog(
+      const result = await addCenterLineFromDialog(
         graph, project,
         { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'center', refId: null, refOffset: 0 },
         null,
@@ -5054,7 +5068,7 @@ test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は�
     let calls = 0;
     setCenterLineStructuralListener(() => { calls++; });
     try {
-      const result = addCenterLineFromDialog(
+      const result = await addCenterLineFromDialog(
         graph, project,
         { clDialog: { type: 'vertical' }, value: [1000, 2000], kind: 'struct', refId: null, refOffset: 0 },
         null,
@@ -5074,7 +5088,7 @@ test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は�
     let calls = 0;
     setCenterLineStructuralListener(() => { calls++; });
     try {
-      const result = addCenterLineFromDialog(
+      const result = await addCenterLineFromDialog(
         graph, project,
         { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
         null,
@@ -5088,9 +5102,11 @@ test('【失敗系】addCenterLineFromDialog: 拒否・全件重複の経路は�
   }
 });
 
-test('【失敗系】addCenterLineFromDialog: 構造同期リスナー未設定（null）でも通り芯の追加・undoが例外なく行える', () => {
+test('【失敗系】addCenterLineFromDialog: 構造同期リスナー未設定（null）でも通り芯の追加・undoが例外なく行える', async () => {
   const { project, graph } = makeProjectWithGraph();
-  assert.doesNotThrow(() => addCenterLineFromDialog(
+  // addCenterLineFromDialogは非同期（Promiseを返す）のため、doesNotThrow（同期の例外のみ捕捉）ではなく
+  // doesNotReject（rejectしないことを確認）を使う。
+  await assert.doesNotReject(() => addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -5105,11 +5121,11 @@ test('【失敗系】addCenterLineFromDialog: 構造同期リスナー未設定�
 // （core/planGraph.js removeDependentsOfCenterLineのJSDoc参照）——gridAddStructuralSyncProbe.mjsの
 // A4（実データ・13.stq）で発見。
 
-test('addCenterLineFromDialog: 単体の通り芯追加のundoは、その通り芯を参照する自階の柱を撤去し、redoでCLが戻る（裁定(a)）', () => {
+test('addCenterLineFromDialog: 単体の通り芯追加のundoは、その通り芯を参照する自階の柱を撤去し、redoでCLが戻る（裁定(a)）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -5129,12 +5145,12 @@ test('addCenterLineFromDialog: 単体の通り芯追加のundoは、その通り
   assert.equal(project.structGraph.shapeMap.has(newClId), true, 'redoで通り芯が同idで戻る（以後の同期で柱も再生成されうる）');
 });
 
-test('addCenterLineFromDialog: 昇格経路（既存中心線位置への通り芯追加）のundoは、通り芯化後に生成された自階の柱を撤去する（裁定(a)）', () => {
+test('addCenterLineFromDialog: 昇格経路（既存中心線位置への通り芯追加）のundoは、通り芯化後に生成された自階の柱を撤去する（裁定(a)）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
   graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false }); // 昇格対象の中心線
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -5151,11 +5167,11 @@ test('addCenterLineFromDialog: 昇格経路（既存中心線位置への通り�
   assert.ok(graph.centerLines.some(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 1000 && centerLineKind(cl) === 'center'), 'undoで中心線が復元される');
 });
 
-test('addCenterLineFromDialog: スパン配列バッチモードのundoは、追加された各通り芯を参照する自階の柱をすべて撤去する（裁定(a)）', () => {
+test('addCenterLineFromDialog: スパン配列バッチモードのundoは、追加された各通り芯を参照する自階の柱をすべて撤去する（裁定(a)）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const y0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical' }, value: [1000, 2000], kind: 'struct', refId: null, refOffset: 0 },
     null,
@@ -5179,13 +5195,13 @@ test('addCenterLineFromDialog: スパン配列バッチモードのundoは、追
 // 経由へ移行したことの回帰確認（centerLineKindPolicy.test.js の特性テストと対をなす、centerLineOps.js
 // 側からの直接確認）。
 
-test('addCenterLineFromDialog: 補助線の追加extentは梁芯を端部候補にしない（手前に梁芯、奥に通り芯→通り芯＋はね出し。2026-09-18裁定）', () => {
+test('addCenterLineFromDialog: 補助線の追加extentは梁芯を端部候補にしない（手前に梁芯、奥に通り芯→通り芯＋はね出し。2026-09-18裁定）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const vp = { scaleDenominator: 100 };
   graph.addCenterLine(CenterLineType.HORIZONTAL, -100, { labeled: false, discipline: Discipline.FUSE }); // 梁芯（手前・候補にならない）
   const structFar = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
     vp,
@@ -5198,7 +5214,7 @@ test('addCenterLineFromDialog: 補助線の追加extentは梁芯を端部候補�
   assert.equal(added.extentLo, structFar.value - OVERHANG_AT_DENOM_100, '梁芯(-100)は候補にならず通り芯(-500)がはね出し込みで選ばれる');
 });
 
-test('addCenterLineFromDialog: 補助線の追加extentは壁を境界候補に含める（CLより壁が近ければ壁を優先。現行どおり・移行で変わらない）', () => {
+test('addCenterLineFromDialog: 補助線の追加extentは壁を境界候補に含める（CLより壁が近ければ壁を優先。現行どおり・移行で変わらない）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const vp = { scaleDenominator: 100 };
   const wallAxis  = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
@@ -5207,7 +5223,7 @@ test('addCenterLineFromDialog: 補助線の追加extentは壁を境界候補に�
   const wall = graph.addWall(wallAxis, 0, true, wallStart, 0, wallEnd, 0, { isExteriorWall: false });
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // 壁より遠いCL候補（選ばれない）
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'horizontal', worldCoord: 0, perpCoord: 1000 }, value: 0, kind: 'aux', refId: null, refOffset: 0 },
     vp,
@@ -5218,7 +5234,7 @@ test('addCenterLineFromDialog: 補助線の追加extentは壁を境界候補に�
   assert.deepEqual(added.extentHiRef, { wallId: wall.id }, '壁(3000)が通り芯(5000)より近いため優先される');
 });
 
-test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済みなら、新規補助線の端部ははね出しではなく直交CL参照（ref）になる（lo側）', () => {
+test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済みなら、新規補助線の端部ははね出しではなく直交CL参照（ref）になる（lo側）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const vp = { scaleDenominator: 100 };
   const structLo = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
@@ -5229,7 +5245,7 @@ test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済�
     labeled: false, lineType: 'dashed', extentLoRef: { clId: structLo.id, offset: 0 }, extentHi: 5000,
   });
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
     vp,
@@ -5241,7 +5257,7 @@ test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済�
   assert.equal(added.extentLo, -500, 'structLoの値そのまま（overhangを引いていない）');
 });
 
-test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済みなら、新規補助線の端部ははね出しではなく直交CL参照（ref）になる（hi側）', () => {
+test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済みなら、新規補助線の端部ははね出しではなく直交CL参照（ref）になる（hi側）', async () => {
   const { project, graph } = makeProjectWithGraph();
   const vp = { scaleDenominator: 100 };
   const structHi = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
@@ -5249,7 +5265,7 @@ test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済�
     labeled: false, lineType: 'dashed', extentHiRef: { clId: structHi.id, offset: 0 }, extentLo: -3000,
   });
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
     vp,
@@ -5261,12 +5277,12 @@ test('addCenterLineFromDialog: 既存の補助線が同じ直交CLを参照済�
   assert.equal(added.extentHi, 5000, 'structHiの値そのまま（overhangを足していない）');
 });
 
-test('【失敗系】addCenterLineFromDialog: 補助線の追加extentは直交CL・壁が無ければフリー端点（perpCoordをキリ良く丸めた値）になり、lo/hiとも同じ値に退化する', () => {
+test('【失敗系】addCenterLineFromDialog: 補助線の追加extentは直交CL・壁が無ければフリー端点（perpCoordをキリ良く丸めた値）になり、lo/hiとも同じ値に退化する', async () => {
   const { project, graph } = makeProjectWithGraph(); // 直交CL・壁を一切置かない
   const vp = { scaleDenominator: 100 };
   const perpCoord = 137;
 
-  const result = addCenterLineFromDialog(
+  const result = await addCenterLineFromDialog(
     graph, project,
     { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
     vp,
@@ -5298,7 +5314,7 @@ test('【失敗系】addCenterLineFromDialog: 補助線の追加extentは直交C
 // （centerLineOps.js）もCL_KINDSをそのまま使うため、importして使うと期待値・実測値の両方が
 // 同じ壊れたCL_KINDSを経由してしまい、CL_KINDS自体の並びが壊れる変異を検出できない
 // （QA指摘M-1・QAのcombi.mjsと同じ方針。下のassertで現在値と一致することは別途確認する）。
-test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合の重複判定を総当りで照合する（新規4種別×既存部分集合16通り×extent2通り=128ケース、QA指摘M-1）', () => {
+test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合の重複判定を総当りで照合する（新規4種別×既存部分集合16通り×extent2通り=128ケース、QA指摘M-1）', async () => {
   const KINDS = ['struct', 'center', 'aux', 'beam'];
   assert.deepEqual(KINDS, [...CL_KINDS], '前提: ハードコードした優先順はCL_KINDSの現在値と一致する（CL_KINDS自体が壊れたらこのassertで検出する）');
   const VALUE = 1000;
@@ -5321,7 +5337,10 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
       return coexistenceAt(newKind, existingKind) === 'forbidden' ? 'forbidden-same' : 'extent';
     }
     if (newKind === 'beam' && coexistenceAt(newKind, existingKind) === 'forbidden') return 'forbidden-beam-existing';
-    if (newKind === 'struct' && present.includes('beam')) return 'forbidden-beam-anywhere';
+    // 線種変更の移籍一本化・裁定Q8（2026-09-30）: 中心線が同座標にあり昇格分岐（promote）へ入る
+    // 場合は、梁芯の事前拒否を適用しない——promoteCenterToGridWithUndo自身が保護されない壁由来
+    // 梁芯を吸収する（centerLineOps.js addCenterLineFromDialogのコメント参照）。
+    if (newKind === 'struct' && present.includes('beam') && existingKind !== 'center') return 'forbidden-beam-anywhere';
     if (coexistenceAt(newKind, existingKind) === 'promote') return 'promote';
     if (newKind === 'center' && coexistenceAt(newKind, existingKind) === 'forbidden') return 'struct-exists';
     return 'allowed';
@@ -5353,7 +5372,7 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
         const seeded = present.map(k => ({ k, cl: seed(graph, project, k, ext) }));
 
         const outcome = decideOutcome(newKind, present);
-        const result = addCenterLineFromDialog(
+        const result = await addCenterLineFromDialog(
           graph, project,
           { clDialog: { type: 'vertical', worldCoord: VALUE, perpCoord: 2000 }, value: VALUE, kind: newKind, refId: null, refOffset: 0 },
           vp,
@@ -5387,7 +5406,13 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
           assert.equal(result.done, true, label);
           assert.equal(result.toast, ERR_CL_CENTER_UPGRADED, label);
           assert.equal(pickExistingKind(newKind, present), 'center', label);
-          assert.deepEqual(survivedKinds, present.filter(k => k !== 'center').sort(), `${label}: centerだけ削除され他は残る`);
+          // survivedKindsは「同じidのオブジェクトが自階かstructGraphのどちらかに存在するか」で判定する
+          // ため、centerは移籍（id維持でstructGraphへ）してもここでは「survived」に数える。beamが
+          // 同座標にあれば（このseed済みbeamは常に無保護の壁由来梁芯と同じ扱いのため）昇格に伴って
+          // 吸収され消える（idごと無くなる）。auxは常に残る（裁定Q8）。
+          const expectedSurvivors = present.filter(k => k !== 'beam').sort();
+          assert.deepEqual(survivedKinds, expectedSurvivors, `${label}: centerは同じidのままstructGraphへ移籍・beamは吸収されて消え、他は残る`);
+          assert.equal(graph.shapeMap.has(seeded.find(s => s.k === 'center').cl.id), false, `${label}: centerは自階のshapeMapからは消える`);
           assert.ok(
             project.structGraph.centerLines.some(c => c.centerLineType === clType && Math.abs(c.value - VALUE) < 1),
             `${label}: structGraphに通り芯が増える`,

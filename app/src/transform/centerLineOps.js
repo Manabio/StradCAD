@@ -983,7 +983,10 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
   // （通り芯削除のM-2ガードと同型）。
   if (graph !== project.activeGraph || graph.shapeMap.get(cl.id) !== cl) {
     await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
-    return { toast: null };
+    // 線種変更の移籍一本化 ステップ5是正: この中止はエラーではなく「割り込みで対象が変わった」状態
+    // のため toast は出さないが、呼び出し側（addCenterLineFromDialogの昇格分岐）が「成功した」と
+    // 誤認しないよう aborted:true を返す（ダイアログを閉じない・Q9の文言を出さない）。
+    return { toast: null, aborted: true };
   }
 
   const fromKind = centerLineKind(cl);
@@ -1041,7 +1044,8 @@ export async function promoteCenterToGridWithUndo(graph, project, cl, opts = {})
     await rollbackFloorRecords(floorRecords, opts.saveFloorFn, project);
     restoreStructCLs(project.structGraph, project.structuralInfo, beforeStruct, project.memberGroupLedger);
     restoreGraph(graph, beforeArch);
-    return { toast: null };
+    // 線種変更の移籍一本化 ステップ5是正: 上と同じ理由でaborted:trueを返す。
+    return { toast: null, aborted: true };
   }
 
   // 段階(c)・2026-09-25: structuralSyncScopeOfConversion('center','struct')は常に'all'
@@ -1218,8 +1222,8 @@ export function shouldSuggestWoodStructure(graph, project, appMode, clType, newV
 // @param {object} [opts] - opts.saveFloorFn はテスト用の差し替え（既定はcenterLineFloorSync.js側のsaveFloor。
 //   段階(g)・2026-09-26。構造同期が非アクティブ階へ書く際のsave差し替えに使う——probeで実IDBへの
 //   誤書込みを防ぐため必須）。
-// @returns {{ done: boolean, toast: string|null, suggestWood: {clType, newValues}|null }}
-export function addCenterLineFromDialog(graph, project, payload, viewport, opts = {}) {
+// @returns {Promise<{ done: boolean, toast: string|null, suggestWood: {clType, newValues}|null }>}
+export async function addCenterLineFromDialog(graph, project, payload, viewport, opts = {}) {
   const { clDialog, value, kind, refId, refOffset } = payload;
   const clType = clDialog.type === 'vertical' ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
   // 段階(c)・2026-09-25: 「操作×種別」の専用表は作らず、削除・移動と同じstructuralSyncScopeOfKindを
@@ -1393,7 +1397,7 @@ export function addCenterLineFromDialog(graph, project, payload, viewport, opts 
   // 同種別があればそれを existing にする——先頭が梁芯だと同種別の extent 重なり判定・結合連鎖に入らず
   // 同位置へ何本でも積めてしまう（QA指摘）。同種別が無いときも先頭順ではなく種別の優先順で相手を選ぶ
   // ——補助線→中心線の順で並ぶ位置へ通り芯を足すと、先頭の補助線が相手になって昇格経路（中心線を
-  // 削除して通り芯化）に入らず、通り芯・中心線・補助線が3本併存する（並び順依存。QA指摘）。
+  // 移籍して通り芯化）に入らず、通り芯・中心線・補助線が3本併存する（並び順依存。QA指摘）。
   // 走査は sameCoordCounterparts（core/centerLineKindPolicy.js）経由——種別条件の無い素の
   // graph.centerLines 走査を個別に書かない（過去に3回、非表示の梁芯が誤って障害物に混入した教訓）。
   const sameCoord = sameCoordCounterparts(graph, { centerLineType: clType, value });
@@ -1449,61 +1453,34 @@ export function addCenterLineFromDialog(graph, project, payload, viewport, opts 
     // 障害物にしない）と対称にする。
     // kind==='beam'側は coexistenceAt(kind, existingKind) で判定できる（beam行はbeam自身以外すべて
     // forbiddenのため、existingKind!=='beam'と同値）。kind==='struct'側は existing（同種別優先＝
-    // 中心線が先に選ばれうる）ではなく同座標全体で梁芯の有無を見る必要がある——中心線→梁芯の順に
-    // 並んでいても昇格経路（中心線削除→通り芯追加）へ入って梁芯を残さないため。この2点目は
+    // 中心線が先に選ばれうる）ではなく同座標全体で梁芯の有無を見る必要がある。この2点目は
     // coexistenceAt(newKind, existingKind)（priority選択された1本だけを見る関係）では表現できない
     // （sameCoord全体を見る必要がある）ため、走査のAPI化のみに留める（表駆動へは寄せない）。
+    // 線種変更の移籍一本化・裁定Q8（2026-09-30・QA指摘是正）: この梁芯の事前拒否は、中心線が無く
+    // 梁芯だけがある通常追加に限る（existingKind!=='center'の場合のみ適用する下のif式参照）。
+    // 同座標に中心線があり昇格分岐（promote）へ入る場合は適用しない——promoteCenterToGridWithUndo
+    // 自身が自階の梁芯を「保護されない壁由来梁芯は吸収、保護される梁芯は拒否」で判定する
+    // （発見②の規則）ため、ここで一律拒否すると通常追加と違い昇格だけ梁芯を吸収できなくなる。
     if ((kind === 'beam' && coexistenceAt(kind, existingKind) === 'forbidden') ||
-        (kind === 'struct' && sameCoord.some(cl => centerLineKind(cl) === 'beam'))) {
+        (kind === 'struct' && existingKind !== 'center' && sameCoord.some(cl => centerLineKind(cl) === 'beam'))) {
       return { done: false, toast: ERR_CL_DUPLICATE(kind === 'struct' ? 'beam' : existingKind), suggestWood: null };
     }
 
     if (coexistenceAt(kind, existingKind) === 'promote') {
-      // 既存の中心線を削除して通り芯を新規追加
-      const deletedId = existing.id;
-      const deletedType = existing.centerLineType;
-      const deletedRawValue = existing._value;
-      const deletedProps = {
-        labeled: existing.labeled,
-        lineType: existing.lineType,
-        discipline: existing.discipline,
-        trim: existing.trim,
-        ...(existing.refId != null ? { refId: existing.refId, refOffset: existing.refOffset } : {}),
-        ...(existing.extentLoRef != null ? { extentLoRef: existing.extentLoRef } : {}),
-        ...(existing.extentHiRef != null ? { extentHiRef: existing.extentHiRef } : {}),
-        ...(existing._extentLo != null ? { extentLo: existing._extentLo } : {}),
-        ...(existing._extentHi != null ? { extentHi: existing._extentHi } : {}),
-      };
-      graph.removeCenterLine(deletedId);
-      // 通り芯はproject.structGraphにしか置けないため、refIdの解決可否も同グラフだけで判定する
-      // （:1395 isRefResolvableと同じガード。無条件で渡すと未解決refIdが通り芯へ残り、
-      // bakeCLValueでの移動が黙って捨てられる＝QA指摘Major-1）。
-      const isRefResolvableForPromote = refId ? !!project.structGraph.shapeMap.get(refId) : false;
-      const structProps = {
-        discipline: Discipline.STRUCT,
-        ...(isRefResolvableForPromote ? { refId, refOffset: refOffset ?? 0 } : {}),
-      };
-      // 通り芯は project.structGraph に追加する
-      const structCL = project.structGraph.addCenterLine(clType, value, structProps);
-      const structId = structCL.id;
-      // 裁定(a)・2026-09-25: 昇格経路のundo（通り芯化を取り消す＝実質的な通り芯削除）も、単体追加・
-      // バッチ追加と同じ順序（graph.detachFromCenterLine→graph.removeDependentsOfCenterLine→
-      // structGraph側の削除）に揃える（理由はバッチ追加の分岐と同じ。上のコメント参照）。
-      pushUndoWithStructuralSync(
-        graph, project, syncScope,
-        () => {
-          graph.detachFromCenterLine(structId);
-          graph.removeDependentsOfCenterLine(structId);
-          project.structGraph.removeCenterLine(structId);
-          graph.addCenterLine(deletedType, deletedRawValue, deletedProps, deletedId);
-        },
-        () => {
-          graph.removeCenterLine(deletedId);
-          project.structGraph.addCenterLine(clType, value, structProps, structId);
-        },
-        opts.saveFloorFn,
-      );
-      return { done: true, toast: ERR_CL_CENTER_UPGRADED, suggestWood: { clType, newValues: [value] } };
+      // 線種変更の移籍一本化・ステップ5（2026-09-30）: 削除して作り直す旧経路を廃止し、メニューと
+      // 同じpromoteCenterToGridWithUndo（移籍。他平面の吸収・Q11の同id拒否・undoを含む）へ委譲する。
+      // 裁定Q7: 既存の中心線（existing）の座標・参照（refId・extent）をそのまま使う——ダイアログの
+      // value・refId・refOffsetは捨てる（existingを渡すだけで自動的に満たされる）。
+      const { toast: promoteToast, aborted } = await promoteCenterToGridWithUndo(graph, project, existing, {
+        ...(opts.saveFloorFn ? { saveFloorFn: opts.saveFloorFn } : {}),
+      });
+      // QA指摘是正: promoteCenterToGridWithUndoが中止（階が変わった・clが消えた・移籍後の再確認不成立）
+      // した場合はtoast:nullで戻るため、そのまま素通しすると成功扱い（done:true＋Q9文言）になってしまう
+      // ——aborted:trueのときは失敗扱い（done:false・toastなし・ダイアログは閉じない）にする。
+      if (aborted) return { done: false, toast: null, suggestWood: null };
+      if (promoteToast) return { done: false, toast: promoteToast, suggestWood: null };
+      // 裁定Q9: 文言は「削除して作り直す」ではなく「移籍」の実態に合わせる（error.js参照）。
+      return { done: true, toast: ERR_CL_CENTER_UPGRADED, suggestWood: { clType, newValues: [existing.value] } };
     }
 
     // center行でforbiddenなのはstructのみ（COEXISTENCE.center.struct）。ERR_CL_DUPLICATEの

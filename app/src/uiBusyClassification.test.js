@@ -43,6 +43,7 @@ const GATED = [
   },
   'runAddAlternative', 'runDeleteFloor', 'runDeleteAlternative', 'runCopyAlternative',
   'installElevatorFromNaming', 'deleteElevatorEquipment', 'changeElevatorUsage',
+  'handleCLDialogConfirm',
 ];
 
 function gatedName(entry) {
@@ -169,9 +170,11 @@ const PENDING_COUNT = 0;
 // 2件加わったため30→32。手動追加材サイレント撤去回避ステップ3でhandleDeleteCenterLineが
 // 固定材の事前確認を挟む2段runBusy構成になり、runBusy(コールバックが1件（確認了承後の2段目）
 // 加わったため32→33。同ステップ4でhandleConvertCenterLineも同じ2段runBusy構成になり、
-// runBusy(コールバックが1件（確認了承後の2段目）加わったため33→34。
+// runBusy(コールバックが1件（確認了承後の2段目）加わったため33→34。線種変更の移籍一本化
+// ステップ5でhandleCLDialogConfirmが新たにGATEDへ加わり、そのrunBusy(コールバックが1件
+// 加わったため34→35。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 34;
+const ANON_CALLBACK_COUNT = 35;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

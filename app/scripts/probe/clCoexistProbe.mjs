@@ -3,7 +3,7 @@
 // 確認するprobe（調査・回帰用。製品コードからは参照しない）。
 //
 // 各階の既存CL（全種別）の座標ごとに、4種別（struct/center/aux/beam）で addCenterLineFromDialog を
-// 試行→done/toast/昇格（中心線削除→通り芯追加）の有無を記録→undoで復元。
+// 試行→done/toast/昇格（中心線を移籍して通り芯化）の有無を記録→undoで復元。
 // 加えて、全 center CL について checkPromoteToGridGuards、全 struct CL について
 // checkDemoteToCenterGuards、findFloorsWithCounterpartCL（promote方向=center CL、
 // demote方向=struct CL）の結果を記録する。
@@ -42,6 +42,7 @@
 // 将来にわたって保証されているわけではない）。
 //
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/clCoexistProbe.mjs [入力.stq]
+import { runInAction } from 'mobx';
 import { loadDocument } from './loadDoc.mjs';
 import { CenterLineType } from '../../src/core/constants.js';
 import { centerLineKind } from '../../src/core/centerLine.js';
@@ -67,10 +68,22 @@ function describeDupFloors(result) {
 
 const results = { addDialog: [], promoteGuards: [], demoteGuards: [], counterpartFloors: [] };
 
+// 昇格分岐（COEXISTENCE=promote）はpromoteCenterToGridWithUndoへ委譲され、他平面へ実際に保存
+// （saveFloorFn）しうる（線種変更の移籍一本化 ステップ5・2026-09-30）。このprobeはfloorSwapManager.peek
+// を差し替えて実IDBを経由しないが、save側を差し替えないと吸収時に実IDBへ書いてしまう——
+// 5)で使うnoopSaveFloorFnをここへ引き上げ、1)のaddCenterLineFromDialogにも渡す。
+const noopSaveFloorFn = async () => {};
+
 // ---- 1) addCenterLineFromDialog: 各階の既存CL座標ごとに4種別を試行 ----
+// 昇格（promoteCenterToGridWithUndo）は「渡された graph がアクティブ平面のもの」でなければ中止
+// （aborted）するため、走査中の平面をアクティブにしてから試す（終了後に元へ戻す）。これを
+// しないと非アクティブ平面の昇格がすべて中止＝done:false・toast:null になり、昇格の検出力が
+// アクティブ平面1つ分に落ちる。
+const originalActivePlaneId = project.activePlaneId;
 for (const plane of project.planes) {
   const graph = project.graphMap.get(plane.id);
   if (!graph) continue;
+  runInAction(() => { project.activePlaneId = plane.id; });
   const seenCoords = new Set();
   for (const existing of graph.centerLines) {
     const type = existing.centerLineType === CenterLineType.VERTICAL ? 'vertical'
@@ -83,10 +96,11 @@ for (const plane of project.planes) {
 
     for (const kind of ['struct', 'center', 'aux', 'beam']) {
       const beforeTop = undoManager.peekUndo();
-      const result = addCenterLineFromDialog(
+      const result = await addCenterLineFromDialog(
         graph, project,
         { clDialog: { type, worldCoord, perpCoord: 0 }, value: worldCoord, kind, refId: null, refOffset: 0 },
         viewport,
+        { saveFloorFn: noopSaveFloorFn },
       );
       results.addDialog.push({
         plane: plane.name, type, kind, worldCoord: Math.round(worldCoord),
@@ -97,6 +111,7 @@ for (const plane of project.planes) {
     }
   }
 }
+runInAction(() => { project.activePlaneId = originalActivePlaneId; });
 
 // ---- 2) checkPromoteToGridGuards: 全 center CL ----
 for (const plane of project.planes) {
@@ -154,8 +169,8 @@ if (firstGraph) {
 // この経路は dupFloors.length>0 で即 return する（グラフ変更・saveFloor呼び出しは無い——
 // centerLineOps.js promoteCenterToGridWithUndo/demoteGridToCenterWithUndo 参照）ため、
 // saveFloorFnにスタブを渡しつつ念のため try/catch で囲み、undoが積まれていれば直ちに戻す
-// （本来積まれないはずだが、実データでの想定外を静かに握り潰さず記録する）。
-const noopSaveFloorFn = async () => {};
+// （本来積まれないはずだが、実データでの想定外を静かに握り潰さず記録する。noopSaveFloorFnは
+// 1)と共用するため上に定義済み）。
 for (const entry of results.counterpartFloors) {
   if (entry.floors.length === 0) continue;
   const graph = entry.direction === 'promote' ? project.graphMap.get(project.planes.find(p => p.name === entry.plane)?.id) : firstGraph;

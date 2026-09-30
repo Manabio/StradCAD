@@ -171,10 +171,10 @@ for (const cand of allCandidates) {
   await preConverge(hWiredProbe);
   await preConverge(hUnwiredProbe);
   setCenterLineStructuralListener((g, p, scope, undoRecords) => hWiredProbe.probeSync.request(g, p, { scope, undoRecords }));
-  addCenterLineFromDialog(hWiredProbe.project.activeGraph, hWiredProbe.project, makePayload(cand), null, { saveFloorFn: hWiredProbe.storeSave });
+  await addCenterLineFromDialog(hWiredProbe.project.activeGraph, hWiredProbe.project, makePayload(cand), null, { saveFloorFn: hWiredProbe.storeSave });
   setCenterLineStructuralListener(null);
   await hWiredProbe.probeSync.whenIdle();
-  addCenterLineFromDialog(hUnwiredProbe.project.activeGraph, hUnwiredProbe.project, makePayload(cand), null, { saveFloorFn: hUnwiredProbe.storeSave });
+  await addCenterLineFromDialog(hUnwiredProbe.project.activeGraph, hUnwiredProbe.project, makePayload(cand), null, { saveFloorFn: hUnwiredProbe.storeSave });
 
   const newClIdWiredProbe = hWiredProbe.project.structGraph.centerLines.find(cl => cl.centerLineType === cand.type && Math.abs(cl.value - cand.value) < 1)?.id;
   const wc = newClIdWiredProbe ? await countIntersectionColumns(hWiredProbe, newClIdWiredProbe, cand.type === CenterLineType.VERTICAL) : 0;
@@ -206,7 +206,7 @@ setCenterLineStructuralListener((g, p, scope, undoRecords) => {
 const beforeUndoTop = undoManager.peekUndo();
 const baselineDump = await dumpAll(h);
 const storeBeforeAdd = new Map(h.store);
-const addResult = addCenterLineFromDialog(h.project.activeGraph, h.project, makePayload(candidate), null, { saveFloorFn: h.storeSave });
+const addResult = await addCenterLineFromDialog(h.project.activeGraph, h.project, makePayload(candidate), null, { saveFloorFn: h.storeSave });
 await h.probeSync.whenIdle();
 
 ok(addResult.done === true, `A1: addCenterLineFromDialog(通り芯追加)はdone:trueで成功する（実際: ${JSON.stringify(addResult)}）`);
@@ -272,7 +272,7 @@ const hNoBox = buildHarness(src);
 await preConverge(hNoBox);
 setCenterLineStructuralListener((g, p, scope) => hNoBox.probeSync.request(g, p, { scope })); // undoRecords無し
 const baselineDumpNoBox = await dumpAll(hNoBox);
-const addResultG5 = addCenterLineFromDialog(hNoBox.project.activeGraph, hNoBox.project, makePayload(candidate), null, { saveFloorFn: hNoBox.storeSave });
+const addResultG5 = await addCenterLineFromDialog(hNoBox.project.activeGraph, hNoBox.project, makePayload(candidate), null, { saveFloorFn: hNoBox.storeSave });
 await hNoBox.probeSync.whenIdle();
 if (addResultG5.done !== true) {
   console.log(`G5: 検出力の対照をスキップ（追加拒否。実際: ${JSON.stringify(addResultG5)}）`);
@@ -296,7 +296,7 @@ for (let i = 0; i < 3; i++) {
   await preConverge(hp);
   setCenterLineStructuralListener((g, p, s, undoRecords) => hp.probeSync.request(g, p, { scope: s, undoRecords }));
   const t0 = performance.now();
-  addCenterLineFromDialog(hp.project.activeGraph, hp.project, makePayload(candidate), null, { saveFloorFn: hp.storeSave });
+  await addCenterLineFromDialog(hp.project.activeGraph, hp.project, makePayload(candidate), null, { saveFloorFn: hp.storeSave });
   const t1 = performance.now();
   await hp.probeSync.whenIdle();
   const t2 = performance.now();

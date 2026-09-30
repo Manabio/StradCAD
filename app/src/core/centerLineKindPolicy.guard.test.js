@@ -334,11 +334,12 @@ const G2_ALLOWLIST = {
     reason: 'snapshotForRestore内（案B・2026-09-26。追従先に既存の梁芯・通り芯があり保護されない旧梁芯を' +
       '吸収撤去する前に、undo用にそのCLの状態をそのまま保存するため——centerLineMerge.jsの' +
       'absorbCenterLine loserSnapshotと同じ手法・同じ理由。種別判定ではない。' },
-  'transform/centerLineOps.js': { count: 2, category: 'not-partner-selection',
+  'transform/centerLineOps.js': { count: 1, category: 'not-partner-selection',
     reason: 'commitCLMoveOp（!cl.labeledで結合対象=通り芯以外かを判定。呼び出し元が保証する前提は' +
-      'centerLineKindPolicy.js冒頭コメント参照）・COEXISTENCE=promote分岐のdeletedProps（既存CLの状態を' +
-      'そのままコピーして復元用に保存）。deleteCenterLineWithUndoのisStruct判定はisGridCenterLine' +
-      '（core/centerLine.js。core/配下のためG2対象外）へ移行済み。' },
+      'centerLineKindPolicy.js冒頭コメント参照）。deleteCenterLineWithUndoのisStruct判定はisGridCenterLine' +
+      '（core/centerLine.js。core/配下のためG2対象外）へ移行済み。COEXISTENCE=promote分岐は' +
+      'promoteCenterToGridWithUndoへの委譲に統一され、deletedPropsのコピーは無くなった' +
+      '（線種変更の移籍一本化 ステップ5・2026-09-30）。' },
 };
 
 // ---- G3: `centerLineKind(x) === '<リテラル>'` インライン種別比較 ----

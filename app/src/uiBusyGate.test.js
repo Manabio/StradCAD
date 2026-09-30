@@ -88,6 +88,16 @@ test('【不変条件・入力規制ステップ3】App.jsx: RadialMenuのonSele
     'AxisFaceInputのonConfirmがguardUi()で包まれていない');
 });
 
+// 線種変更の移籍一本化・ステップ5（2026-09-30）: AddCLDialogのonConfirmも、他の関門付きダイアログ
+// （EccentricityDialog等）と同じ形でguardUi()に包む。
+test('【不変条件・線種変更の移籍一本化ステップ5】App.jsx: AddCLDialogのonConfirmはguardUi()で包まれている', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const code = stripCommentLines(appSrc);
+
+  assert.match(code, /<AddCLDialog[\s\S]{0,400}onConfirm=\{guardUi\(handleCLDialogConfirm\)\}/,
+    'AddCLDialogのonConfirmがguardUi()で包まれていない');
+});
+
 // structuralSync.whenIdle()を待つ入口（handleDeleteCenterLine・handleConvertCenterLine・
 // handleEccConfirm・ステップ5で加わったhandleSaveConfirm）はいずれも関門の中でwhenIdleを待つ
 // 必要がある（.claude/undo-redo.md「落とし穴」参照）——本体のテキスト上でrunBusy(より後
@@ -96,7 +106,7 @@ test('【不変条件・入力規制ステップ3】App.jsx: RadialMenuのonSele
 test('【不変条件・入力規制ステップ3/5】App.jsx: whenIdle()を使う入口はいずれもGATED（関門の中で待つ）', () => {
   const appSrc = fs.readFileSync(appSrcPath, 'utf8');
 
-  const GATED_WITH_WHEN_IDLE = ['handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'handleSaveConfirm', 'withFloorAddUndo'];
+  const GATED_WITH_WHEN_IDLE = ['handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'handleSaveConfirm', 'withFloorAddUndo', 'handleCLDialogConfirm'];
   for (const name of GATED_WITH_WHEN_IDLE) {
     const body = extractFunctionBody(appSrc, `async function ${name}`);
     const idleIdx = body.indexOf('structuralSync.whenIdle()');
@@ -526,4 +536,34 @@ test('【不変条件・手動追加材サイレント撤去回避ステップ4�
 
   assert.ok(idleIdx < checkIdx && checkIdx < convertIdx,
     `whenIdle() < isCenterLineStillDeletable( < runConvertCenterLine(の順になっていない（実際の位置: idle=${idleIdx}, check=${checkIdx}, convert=${convertIdx}）`);
+});
+
+// ================================================================
+// 線種変更の移籍一本化・ステップ5（2026-09-30）: handleCLDialogConfirmはaddCenterLineFromDialogが
+// 非同期（他の平面を読む昇格の委譲を含む）になったのに合わせ、他の関門付きCL操作と同じ形
+// （beginUiTransition→runBusy→structuralSync.whenIdle()→本体）で関門に入る。whenIdle()の待ちが
+// addCenterLineFromDialog(の呼び出しより前（かつ両方が1行まるごとの形）であることを固定する
+// （関門の外にwhenIdleが漏れ出す・呼び出し順が入れ替わる変異を検知）。
+// ================================================================
+test('【不変条件・線種変更の移籍一本化ステップ5】App.jsx: handleCLDialogConfirmはrunBusy内でwhenIdle()を待った後にaddCenterLineFromDialog(を呼ぶ', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function handleCLDialogConfirm');
+
+  assertRunBusyIsFirstAwait(body, 'handleCLDialogConfirm');
+  assertBeginUiTransitionBeforeRunBusy(body, 'handleCLDialogConfirm');
+
+  assert.match(body, /^\s*await structuralSync\.whenIdle\(\);\s*$/m,
+    'handleCLDialogConfirmの本体にawait structuralSync.whenIdle();が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*const \{ done, toast, suggestWood \} = await addCenterLineFromDialog\($/m,
+    'handleCLDialogConfirmの本体にaddCenterLineFromDialog(の呼び出し行が1行まるごとの形で見つからない');
+  // 他平面のpeek・保存の失敗（例外）を、汎用のERR_FLOOR_SWITCH_FAILEDではなくCL操作用の
+  // ERR_CL_CONVERT_SYNC_FAILEDへ丸めるため、他のCL操作（handleConvertCenterLine等）と同じ
+  // .catch(err => { throw tagCLOpFailure(err); }) で包む（QA指摘）。
+  assert.match(body, /^\s*\)\.catch\(err => \{ throw tagCLOpFailure\(err\); \}\);$/m,
+    'handleCLDialogConfirmのaddCenterLineFromDialog呼び出しが.catch(err => { throw tagCLOpFailure(err); })で包まれていない');
+
+  const idleIdx = body.indexOf('structuralSync.whenIdle()');
+  const callIdx = body.indexOf('await addCenterLineFromDialog(');
+  assert.ok(idleIdx >= 0 && callIdx >= 0 && idleIdx < callIdx,
+    `whenIdle() < addCenterLineFromDialog(の順になっていない（実際の位置: idle=${idleIdx}, call=${callIdx}）`);
 });

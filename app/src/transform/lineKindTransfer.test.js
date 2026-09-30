@@ -7,11 +7,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Project, CenterLineType, Discipline, centerLineKind } from '../core.js';
-import { ERR_CL_CONVERT_DUP_FLOOR } from '../error.js';
+import { Project, CenterLineType, Discipline, centerLineKind, StructuralMaterialType } from '../core.js';
+import { ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_SAME_ID_FLOOR, ERR_CL_CONVERT_DUP } from '../error.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
+import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { scanProjectLineIds } from '../lineIdUniqueness.js';
 import {
   addCenterLineFromDialog, promoteCenterToGridWithUndo, demoteGridToCenterWithUndo, bakeCLValue,
 } from './centerLineOps.js';
@@ -83,12 +85,15 @@ const dialogPayloadV = (value) => ({
 
 // ---- ケース1: ダイアログで同位置に通り芯（現状は削除して作り直す。壁・部屋の参照が壊れる） ----
 
+// 単一平面（他平面が無い）ため scanProjectLineIds の peek は呼ばれない想定——呼ばれたら想定外として失敗させる。
+const noOtherPlanesPeek = async () => { throw new Error('想定外: このprojectには他平面が無いのでpeekは呼ばれないはず'); };
+
 test(
   'addCenterLineFromDialog: 既存の中心線と同位置に通り芯を指定すると、メニューの昇格と同じく移籍になり、壁・部屋の参照が保たれ undo で戻る（指示書§2.2 ケース1・裁定Q7〜Q9）',
-  { todo: '線種変更の移籍一本化 ステップ5 で解消' },
   async () => {
     const { project, graph, cl } = makeFloorWithCenterLineWallAndRooms();
     const oldId = cl.id;
+    const beforeTop = undoManager.peekUndo();
 
     const result = await addCenterLineFromDialog(graph, project, dialogPayloadV(3000), null);
 
@@ -98,11 +103,30 @@ test(
     assert.equal(grid?.id, oldId, '期待: idは同じまま移籍する（現状は削除+新規作成で新しいidになる）');
     assert.equal(allRoomCellRefsResolve(graph, project), true, '期待: 部屋のセル参照は切れない（現状は左右とも切れる）');
     assert.equal(result.toast, MSG_DIALOG_PROMOTED, '期待: 裁定Q9の文言');
+    assert.notEqual(undoManager.peekUndo(), beforeTop, '期待: 確定でundoスタックが+1される');
+    assert.deepEqual(
+      await scanProjectLineIds(project, { activeGraph: graph, peek: noOtherPlanesPeek }), [],
+      '期待: 確定後も線idはプロジェクト全体で一意（重複0件）',
+    );
 
     undoManager.undo();
     assert.equal(graph.walls.length, 1, '期待: undoで壁が元どおりになる（現状は戻らない）');
     assert.equal(graph.centerLines.some(c => c.id === oldId && c.labeled === false), true, '期待: undoで同じidの中心線に戻る');
     assert.equal(allRoomCellRefsResolve(graph, project), true, '期待: undo後もセル参照が解決する');
+    assert.deepEqual(
+      await scanProjectLineIds(project, { activeGraph: graph, peek: noOtherPlanesPeek }), [],
+      '期待: undo後も線idは一意',
+    );
+
+    undoManager.redo();
+    assert.equal(graph.walls.length, 1, '期待: redoで壁は1本のまま');
+    const gridAfterRedo = project.structGraph.centerLines.find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 3000);
+    assert.equal(gridAfterRedo?.id, oldId, '期待: redoで通り芯が同idのまま共有グラフに戻る');
+    assert.equal(allRoomCellRefsResolve(graph, project), true, '期待: redo後もセル参照が解決する');
+    assert.deepEqual(
+      await scanProjectLineIds(project, { activeGraph: graph, peek: noOtherPlanesPeek }), [],
+      '期待: redo後も線idは一意',
+    );
   },
 );
 
@@ -133,7 +157,6 @@ test('promoteCenterToGridWithUndo（メニュー経由）: 同じ条件で壁は
 
 test(
   'addCenterLineFromDialog: 他の平面(2階)に同座標の中心線がある場合、ダイアログの昇格は拒否せず吸収する（指示書§2.2 ケース2a・裁定Q1）',
-  { todo: '線種変更の移籍一本化 ステップ5 で解消' },
   async () => {
     const { project, p1, p2 } = makeTwoFloors();
     const p1cl = p1.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
@@ -354,5 +377,185 @@ test(
     assert.notEqual(p2CenterLine.id, clId, '期待: 2階の中心線のidは1階と異なるはず（現状は同じid＝分身）');
     assert.equal(decoded.walls.length, 1, '2階の壁は残る');
     assert.equal(decoded.walls[0].axisValue, 1000, '2階の壁の幾何は降格の前後で変わらない');
+  },
+);
+
+// ---- QA指摘是正（ステップ5）: ダイアログ昇格の失敗経路・中止経路・裁定Q7/Q8の直接確認 ----
+
+test(
+  'addCenterLineFromDialog: ダイアログの昇格で他平面のpeekがrejectしたらrejectし、1階の中心線は同id・labeled:falseのまま・共有グラフに無く・undo未積み（QA指摘是正）',
+  async () => {
+    const { project, p1 } = makeTwoFloors();
+    const p1cl = p1.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
+    const clId = p1cl.id;
+    const beforeTop = undoManager.peekUndo();
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async () => { throw new Error('peek failed'); };
+    try {
+      await assert.rejects(
+        () => addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null),
+        /peek failed/,
+      );
+    } finally {
+      floorSwapManager.peek = originalPeek;
+    }
+    assert.equal(p1.centerLines.some(c => c.id === clId && c.labeled === false), true, '期待: 1階の中心線は同id・labeled:falseのまま');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 共有グラフに通り芯は無い');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: ダイアログの昇格で他平面への保存が途中失敗したらrejectし、storeの2階はbeforeバイトのまま・自階/共有グラフも元のまま・undo未積み（QA指摘是正）',
+  async () => {
+    const { project, p1, p2, store } = makeTwoFloorsWithSecondFloorCenterLineWall(3000);
+    const p1cl = p1.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false }); // 昇格対象
+    const clId = p1cl.id;
+    const beforeBytes = store.get(p2.plane.id);
+    const saveFloorFn = async () => { throw new Error('save failed'); };
+    const beforeTop = undoManager.peekUndo();
+
+    await withProductionPeek(project, store, async () => {
+      await assert.rejects(
+        () => addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null, { saveFloorFn }),
+        /save failed/,
+      );
+    });
+
+    assert.equal(store.get(p2.plane.id), beforeBytes, '期待: 2階のstoreはbeforeバイトのまま');
+    assert.equal(p1.centerLines.some(c => c.id === clId && c.labeled === false), true, '期待: 自階は元のまま（中心線のまま）');
+    assert.equal(project.structGraph.centerLines.length, 0, '期待: 共有グラフに通り芯は増えない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: ダイアログの昇格で他平面に同じidの線が残っていれば（裁定Q11）拒否し、undo不変（QA指摘是正）',
+  async () => {
+    const { project, graph: p1, cl } = makeFloorWithCenterLineWallAndRooms('p1', '1階');
+    const clId = cl.id;
+    const bytesForDup = serializeGraph(p1);
+    const { graph: p1Dup, plane: dupPlane } = project.addPlane(0, '1階複製', 'p1dup');
+    restoreGraph(p1Dup, bytesForDup);
+    const store = new Map([[dupPlane.id, serializeGraph(p1Dup)]]);
+    const beforeTop = undoManager.peekUndo();
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null)
+    );
+
+    assert.equal(result.done, false);
+    assert.equal(result.toast, ERR_CL_CONVERT_SAME_ID_FLOOR([dupPlane.name]));
+    assert.equal(p1.centerLines.some(c => c.id === clId && c.labeled === false), true, '期待: 拒否時は書き換えない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: ダイアログの昇格で他平面(2階)に同座標の補助線があれば拒否する（裁定Q3。QA指摘是正）',
+  async () => {
+    const { project, p1, p2 } = makeTwoFloors();
+    const p1cl = p1.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
+    p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, lineType: 'dashed' });
+    const store = new Map([[p2.plane.id, serializeGraph(p2)]]);
+    const beforeTop = undoManager.peekUndo();
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null)
+    );
+
+    assert.equal(result.done, false);
+    assert.equal(result.toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: p2.plane.name, kind: 'aux' }]));
+    assert.equal(p1.centerLines.some(c => c.id === p1cl.id && c.labeled === false), true, '期待: 自階は不変（中心線のまま）');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 裁定Q7 — ダイアログのvalue・refId・refOffsetは捨て、既存の中心線の座標・idをそのまま使う（0.3mmずれ・別の通り芯への参照指定でも既存を優先）',
+  async () => {
+    const { project, graph, cl } = makeFloorWithCenterLineWallAndRooms(); // cl.value === 3000, refIdなし
+    const oldId = cl.id;
+    const decoyRef = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 9999, { labeled: true, discipline: Discipline.STRUCT });
+    const payload = {
+      clDialog: { type: 'vertical', worldCoord: 3000.3, perpCoord: 0 },
+      value: 3000.3, kind: 'struct', refId: decoyRef.id, refOffset: 500,
+    };
+
+    const result = await addCenterLineFromDialog(graph, project, payload, null);
+
+    assert.equal(result.done, true);
+    const grid = project.structGraph.shapeMap.get(oldId);
+    assert.ok(grid, '期待: 同じidのまま通り芯へ移籍する');
+    assert.equal(grid.value, 3000, '期待: 座標は既存の中心線のまま（ダイアログの3000.3は捨てる）');
+    assert.equal(grid.refId, null, '期待: ダイアログのrefId指定は捨てる（既存の中心線はrefId無しだった）');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 裁定Q8 — 保護される梁芯（lockedの柱が乗る）が同座標にあれば通り芯の昇格を拒否し、梁芯・中心線とも残る・undo不変（QA指摘是正）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+    const clId = cl.id;
+    const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: null });
+    const beamAxisId = beamAxis.id;
+    const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+    graph.addColumn(StructuralMaterialType.WOOD, 'SEC-COL', beamAxis, y0, { dimensionStatus: 'locked' }); // 手動固定
+    const beforeTop = undoManager.peekUndo();
+
+    const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 };
+    const result = await addCenterLineFromDialog(graph, project, payload, null);
+
+    assert.equal(result.done, false, '期待: 保護される梁芯があるため拒否される');
+    assert.equal(result.toast, ERR_CL_CONVERT_DUP('beam'));
+    assert.equal(graph.shapeMap.has(clId), true, '期待: 中心線は残る（昇格されない）');
+    assert.equal(graph.shapeMap.has(beamAxisId), true, '期待: 保護された梁芯も残る');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: 裁定Q8 — refId付き（手動追加の可能性）の梁芯が同座標にあれば通り芯の昇格を拒否し、梁芯・中心線とも残る（QA指摘是正）',
+  async () => {
+    const project = new Project('proj', 'test');
+    const { graph } = project.addPlane(0, '1階', 'p1');
+    const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+    const clId = cl.id;
+    const refTarget = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+    const beamAxis = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, refId: refTarget.id, refOffset: 1000 });
+    const beamAxisId = beamAxis.id;
+
+    const payload = { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'struct', refId: null, refOffset: 0 };
+    const result = await addCenterLineFromDialog(graph, project, payload, null);
+
+    assert.equal(result.done, false, '期待: refId付きの梁芯は保護されるため拒否される');
+    assert.equal(result.toast, ERR_CL_CONVERT_DUP('beam'));
+    assert.equal(graph.shapeMap.has(clId), true, '期待: 中心線は残る');
+    assert.equal(graph.shapeMap.has(beamAxisId), true, '期待: refId付きの梁芯は残る（保護される）');
+  },
+);
+
+test(
+  'addCenterLineFromDialog: promoteCenterToGridWithUndoが中止（他平面への保存中に通り芯がstructGraphから消えた）した場合は成功扱いにせず、done:false・toast:null・undo未積みで終える（QA指摘4是正）',
+  async () => {
+    const { project, p1, store } = makeTwoFloorsWithSecondFloorCenterLineWall(3000);
+    const p1cl = p1.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false }); // 昇格対象
+    const beforeTop = undoManager.peekUndo();
+    const saveFloorFn = async (planeId, bytes) => {
+      store.set(planeId, bytes);
+      // 保存の直後（applyCenterLineAbsorptionOnPromote内から呼ばれる）に、別操作でこの通り芯が
+      // structGraphから消えたことを模す——promoteCenterToGridWithUndoの再確認ガードを踏ませる。
+      runInAction(() => { project.structGraph.shapeMap.delete(p1cl.id); });
+    };
+
+    const result = await withProductionPeek(project, store, () =>
+      addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null, { saveFloorFn })
+    );
+
+    assert.equal(result.done, false, '期待: 中止は成功扱いにしない');
+    assert.equal(result.toast, null, '期待: 中止はエラーではないためtoastは出さない');
+    assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
   },
 );

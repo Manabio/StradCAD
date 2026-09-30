@@ -59,7 +59,7 @@ for (const plane of project.planes) {
           const perpCoord = pa + (pb - pa) * frac;
           for (const kind of ['center', 'aux', 'beam']) {
             const beforeTop = undoManager.peekUndo();
-            const result = addCenterLineFromDialog(
+            const result = await addCenterLineFromDialog(
               graph, project,
               { clDialog: { type, worldCoord, perpCoord }, value: worldCoord, kind, refId: null, refOffset: 0 },
               viewport,
