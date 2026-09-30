@@ -372,3 +372,76 @@ test('【不変条件・QA指摘F4】App.jsx: usePointerInteractionのonUndo/onR
   assert.match(code, /onUndo:\s*guardUi\(performUndo\)/, 'usePointerInteractionのonUndoがguardUi()で包まれていない');
   assert.match(code, /onRedo:\s*guardUi\(performRedo\)/, 'usePointerInteractionのonRedoがguardUi()で包まれていない');
 });
+
+// ================================================================
+// 手動追加材サイレント撤去回避 指示書§5ステップ3: handleDeleteCenterLineが固定材の事前確認を
+// 挟む2段runBusy構成になったことを固定する。
+//   1段目のrunBusy: collectFixedMembersByFloor(で固定材を列挙 → 空ならrunDeleteCenterLine(まで
+//                    完了する（従来どおり1回の関門内で終わる）。
+//   関門の外:        固定材が見つかったときだけconfirmFixedMemberDeletion(で確認する
+//                    （確認の表示中は関門を開けておく必要があるため。§5ステップ3）。
+//   中止分岐:        if (!ok) return; は2段目のrunBusy(より前で中断する。
+//   2段目のrunBusy: 了承後だけrunDeleteCenterLine(を呼ぶ。
+// 変異での検出力確認（手動）: (a) collectFixedMembersByFloorの呼び出し行を1段目runBusyの外へ
+// 出す→本テスト赤、(b) confirmFixedMemberDeletionの呼び出しを1段目runBusyの中へ入れる→
+// 本テスト赤（関門内で入力待ちすることになるため禁止したい構成）、(c) `if (!ok) return;`を
+// 削る→本テスト赤。
+// ================================================================
+test('【不変条件・手動追加材サイレント撤去回避ステップ3】App.jsx: handleDeleteCenterLineはcollectFixedMembersByFloor→（関門の外で）confirmFixedMemberDeletion→if(!ok)return→2段目のrunBusyの順で固定材の確認を挟む', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function handleDeleteCenterLine');
+
+  const runBusy1Idx    = body.indexOf('runBusy(');
+  assert.ok(runBusy1Idx >= 0, 'handleDeleteCenterLineの本体にrunBusy(の呼び出しが無い');
+  const collectIdx     = body.indexOf('collectFixedMembersByFloor(');
+  assert.ok(collectIdx >= 0, 'collectFixedMembersByFloor(の呼び出しが無い');
+  const ifByFloorIdx   = body.indexOf('if (!byFloor) return;');
+  assert.ok(ifByFloorIdx >= 0, '固定材が無いときにそのまま抜ける if (!byFloor) return; が無い');
+  const confirmIdx     = body.indexOf('confirmFixedMemberDeletion(');
+  assert.ok(confirmIdx >= 0, 'confirmFixedMemberDeletion(の呼び出しが無い');
+  const ifNotOkIdx     = body.indexOf('if (!ok) return;');
+  assert.ok(ifNotOkIdx >= 0, '中止分岐 if (!ok) return; が無い');
+  const runBusy2Idx    = body.indexOf('runBusy(', runBusy1Idx + 1);
+  assert.ok(runBusy2Idx >= 0, '2段目のrunBusy(の呼び出しが無い（確認了承後の削除本体）');
+
+  assert.ok(
+    runBusy1Idx < collectIdx && collectIdx < ifByFloorIdx && ifByFloorIdx < confirmIdx
+      && confirmIdx < ifNotOkIdx && ifNotOkIdx < runBusy2Idx,
+    'collectFixedMembersByFloor(→if(!byFloor)return;→confirmFixedMemberDeletion(→if(!ok)return;→2段目のrunBusy(の順になっていない'
+    + `（実際の位置: runBusy1=${runBusy1Idx}, collect=${collectIdx}, ifByFloor=${ifByFloorIdx}, confirm=${confirmIdx}, ifNotOk=${ifNotOkIdx}, runBusy2=${runBusy2Idx}）`,
+  );
+});
+
+// ================================================================
+// QAブロッカー是正（手動追加材サイレント撤去回避 指示書§5ステップ3）: 固定材の確認ダイアログ表示中は
+// 関門（runBusy）を開けておくため、その間にCtrl+Z/Y（undo/redo）や階切替が割り込みうる——2段目の
+// runBusy内で、whenIdle()の後・runDeleteCenterLine(呼び出しの前にisCenterLineStillDeletable(で
+// 再検証していることを固定する。再検証をしない・順序を誤ると、graph（ハンドラのクロージャに閉じ込めた
+// 描画時点のactiveGraph）が既に差し替わっている、またはclが所有グラフのshapeMapから消えている状態で
+// runDeleteCenterLineを呼びうる。
+// 変異での検出力確認（手動）: (a) isCenterLineStillDeletable(の呼び出し行そのものを削る→本テスト赤、
+// (b) `if (false)`化して素通りさせる（呼び出し自体は残すが判定を無効化する）→本テスト赤
+// （呼び出し行の1行まるごと一致を崩すため）。
+// ================================================================
+test('【不変条件・QAブロッカー是正】App.jsx: handleDeleteCenterLineの2段目runBusyはwhenIdle()の後・runDeleteCenterLine(の前にisCenterLineStillDeletableで再検証する', () => {
+  const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function handleDeleteCenterLine');
+
+  const runBusy1Idx = body.indexOf('runBusy(');
+  const runBusy2Idx = body.indexOf('runBusy(', runBusy1Idx + 1);
+  assert.ok(runBusy2Idx >= 0, '2段目のrunBusy(の呼び出しが無い');
+  const body2 = body.slice(runBusy2Idx); // 2段目のrunBusy(以降だけを見る（1段目に同名呼び出しが紛れ込んでも誤検出しない）
+
+  const idleIdx = body2.indexOf('structuralSync.whenIdle()');
+  assert.ok(idleIdx >= 0, '2段目のrunBusy内にstructuralSync.whenIdle()が無い');
+
+  assert.match(body2, /^\s*if \(!isCenterLineStillDeletable\(project, graph, cl\)\) \{$/m,
+    'isCenterLineStillDeletable(project, graph, cl)の再検証呼び出し行が1行まるごとの形で見つからない');
+  const checkIdx = body2.indexOf('if (!isCenterLineStillDeletable(project, graph, cl)) {');
+
+  const deleteIdx = body2.indexOf('await runDeleteCenterLine(cl);');
+  assert.ok(deleteIdx >= 0, '2段目のrunBusy内にawait runDeleteCenterLine(cl);が無い');
+
+  assert.ok(idleIdx < checkIdx && checkIdx < deleteIdx,
+    `whenIdle() < isCenterLineStillDeletable( < runDeleteCenterLine(の順になっていない（実際の位置: idle=${idleIdx}, check=${checkIdx}, delete=${deleteIdx}）`);
+});

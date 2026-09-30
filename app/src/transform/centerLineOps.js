@@ -401,6 +401,26 @@ export function whenCenterLineOpsIdle() {
   return new Promise(resolve => { idleResolvers.push(resolve); });
 }
 
+/**
+ * cl が今なお削除可能な状態か（App.jsx handleDeleteCenterLine の2段目runBusy専用の再検証。
+ * 手動追加材サイレント撤去回避 指示書§5ステップ3・QA指摘）。固定材の事前確認ダイアログ表示中は
+ * 関門（uiBusy.js runBusy）を開けておく必要があるため、その間にundo/redo・階切替が割り込みうる
+ * ——2段目のrunBusy（whenIdle()の後・runDeleteCenterLine呼び出しの前）でこの関数を呼び、falseなら
+ * グラフ・undoに一切触れず中止する。判定は本ファイル内の既存の階切替・CL消失再評価（例: 通り芯削除
+ * 分岐のL485付近・非struct分岐のL768付近）と同じ形——graphが今もアクティブか、clを所有するグラフ
+ * （通り芯=全階共有=project.structGraph、それ以外（中心線・補助線・梁芯）=階固有=graph自身）の
+ * shapeMapに同一参照のまま残っているか。
+ * @param {object} project
+ * @param {import('@core').PlanGraph} graph 削除を試みた時点の自階グラフ（呼び出し側のクロージャに閉じ込めた値）
+ * @param {import('@core').CenterLine} cl
+ * @returns {boolean}
+ */
+export function isCenterLineStillDeletable(project, graph, cl) {
+  if (graph !== project.activeGraph) return false;
+  const owningGraph = isGridCenterLine(cl) ? project.structGraph : graph;
+  return owningGraph.shapeMap.get(cl.id) === cl;
+}
+
 // @returns {Promise<{ toast: string|null }>}
 export async function deleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   // beginCenterLineOp/endCenterLineOpは例外でも必ず対で呼ぶ（finally）——whenCenterLineOpsIdleの

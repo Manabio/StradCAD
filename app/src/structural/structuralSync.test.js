@@ -664,10 +664,19 @@ test('【不変条件】App.jsx: handleSaveConfirm は exportDocument() より�
   assertWhenIdleBefore(body, 'exportDocument()', 'handleSaveConfirm');
 });
 
-test('【不変条件】App.jsx: handleDeleteCenterLine は deleteCenterLineWithUndo( より前に structuralSync.whenIdle() を待つ', () => {
+// 手動追加材サイレント撤去回避ステップ3でdeleteCenterLineWithUndo自体はrunDeleteCenterLineへ
+// 切り出された（固定材の事前確認を挟むため）。whenIdle()はhandleDeleteCenterLine側（関門の中）で
+// 待ち、runDeleteCenterLine（削除本体）を呼ぶより前であることを固定する。
+test('【不変条件】App.jsx: handleDeleteCenterLine は runDeleteCenterLine( より前に structuralSync.whenIdle() を待つ', () => {
   const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
   const body = extractFunctionBody(appSrc, 'async function handleDeleteCenterLine');
-  assertWhenIdleBefore(body, 'deleteCenterLineWithUndo(', 'handleDeleteCenterLine');
+  assertWhenIdleBefore(body, 'runDeleteCenterLine(', 'handleDeleteCenterLine');
+});
+
+test('【不変条件・手動追加材サイレント撤去回避ステップ3】App.jsx: runDeleteCenterLine は deleteCenterLineWithUndo( を呼ぶ（削除本体の切り出し先）', () => {
+  const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
+  const body = extractFunctionBody(appSrc, 'async function runDeleteCenterLine');
+  assert.ok(body.includes('deleteCenterLineWithUndo('), 'runDeleteCenterLineの本体にdeleteCenterLineWithUndo(が無い');
 });
 
 test('【不変条件・m-5】App.jsx: handleConvertCenterLine（中心⇔通り芯の入替え）は promoteCenterToGridWithUndo/demoteGridToCenterWithUndo より前に structuralSync.whenIdle() を待つ（入替えも他階IDBを読み書きするため。入力規制ステップ3でcl-to-grid/cl-to-centerのIIFEから名前付き関数へ切り出し）', () => {

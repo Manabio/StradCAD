@@ -22,7 +22,7 @@ import { calcStep } from '../renderer/clMoveMath.js';
 import {
   shouldSuggestWoodStructure, commitCLMoveOp, deleteCenterLineWithUndo, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo, setCenterLineStructuralListener,
-  applyCLEccentricityWithUndo, whenCenterLineOpsIdle, bakeCLValue,
+  applyCLEccentricityWithUndo, whenCenterLineOpsIdle, bakeCLValue, isCenterLineStillDeletable,
 } from './centerLineOps.js';
 import { CL_KINDS, coexistenceAt } from '../core/centerLineKindPolicy.js';
 import { BeamAxisOrigin, CenterLine } from '../core/centerLine.js';
@@ -2819,6 +2819,45 @@ test('whenCenterLineOpsIdle: deleteCenterLineWithUndoが例外を投げても解
   let idleResolved = false;
   await whenCenterLineOpsIdle().then(() => { idleResolved = true; });
   assert.equal(idleResolved, true, '例外後もwhenCenterLineOpsIdleは解決するはず（永久に待たせない）');
+});
+
+// ---- isCenterLineStillDeletable: App.jsx handleDeleteCenterLine の2段目runBusy専用の再検証
+// （手動追加材サイレント撤去回避 指示書§5ステップ3・QA指摘）。固定材の確認ダイアログ表示中は
+// 関門（runBusy）を開けておくため、その間にundo/redo・階切替が割り込みうる——一致→true、
+// graph不一致（階切替済み）→false、clが所有グラフのshapeMapから消えた→falseを固定する。 ----
+
+test('isCenterLineStillDeletable: graph===project.activeGraphかつclが所有グラフのshapeMapに残っていればtrue（中心線＝階固有）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  assert.equal(isCenterLineStillDeletable(project, graph, cl), true);
+});
+
+test('isCenterLineStillDeletable: graphがproject.activeGraphと不一致（階切替済み）ならfalse', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const { plane: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.activePlaneId = p2.id; // 確認ダイアログ表示中に階切替されたことを模す
+  assert.notEqual(project.activeGraph, graph, '前提: activeGraphが切り替わっているはず');
+  assert.equal(isCenterLineStillDeletable(project, graph, cl), false);
+});
+
+test('isCenterLineStillDeletable: clが所有グラフ（中心線＝graph自身）のshapeMapから消えていればfalse', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.shapeMap.delete(cl.id); // 削除・降格等で既に消えた想定（removeCenterLineの直接呼び出しは道連れ削除を伴うため、判定対象のshapeMap不在だけを再現する）
+  assert.equal(isCenterLineStillDeletable(project, graph, cl), false);
+});
+
+test('isCenterLineStillDeletable: 通り芯（全階共有）はproject.structGraphのshapeMapを見る——graph自身のshapeMapには無くてもtrue', () => {
+  const { project, p1, cl } = makeTwoFloorsWithGridCL();
+  assert.equal(p1.shapeMap.has(cl.id), false, '前提: 通り芯はp1自身のshapeMapには無い（project.structGraph側）');
+  assert.equal(isCenterLineStillDeletable(project, p1, cl), true);
+});
+
+test('isCenterLineStillDeletable: 通り芯がproject.structGraphから既に消えていればfalse', () => {
+  const { project, p1, cl } = makeTwoFloorsWithGridCL();
+  project.structGraph.shapeMap.delete(cl.id);
+  assert.equal(isCenterLineStillDeletable(project, p1, cl), false);
 });
 
 // ---- floorSwapManager.swap相当（保存→clearFloorData→階切替）の再現（QA指摘M・テスト(iii)）----

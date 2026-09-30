@@ -77,7 +77,9 @@ import {
   shouldSuggestWoodStructure, addCenterLineFromDialog,
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo,
   setCenterLineStructuralListener, applyCLEccentricityWithUndo,
+  isCenterLineStillDeletable,
 } from './transform/centerLineOps.js';
+import { collectFixedMembersByFloor, clDisplayName, formatFixedMemberConfirm } from './structural/fixedMemberRefs.js';
 import {
   ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure,
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE, ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
@@ -1800,6 +1802,25 @@ const App = observer(() => {
     });
   }
 
+  // ---- 固定材の削除確認（手動追加材サイレント撤去回避 指示書§4 Q5。ConfirmDialogをPromise<boolean>に
+  // 包むだけの小関数。CL削除（handleDeleteCenterLine）専用ではなく、降格側（ステップ4）でも
+  // 再利用できる形にしておく）----
+  function confirmFixedMemberDeletion(message) {
+    return new Promise((resolve) => {
+      setFloorConfirm({
+        message,
+        buttons: [
+          { label: '削除',     value: 'ok', primary: true, danger: true },
+          { label: 'キャンセル', value: 'cancel' },
+        ],
+        onSelect: (v) => {
+          setFloorConfirm(null);
+          resolve(v === 'ok');
+        },
+      });
+    });
+  }
+
   // ---- 通り芯・CL削除（メニューの cl-del）----
   // transform/centerLineOps.js deleteCenterLineWithUndo は他階（検討・屋根を含む）への detach 伝播・
   // 後始末（centerLineFloorSync.js detachOtherFloorsFromGridCenterLine・
@@ -1809,13 +1830,45 @@ const App = observer(() => {
   // 待つ。.claude/undo-redo.md「落とし穴」参照）。入力規制ステップ3で uiBusy.js の関門へ移した——
   // 階またぎ同期・壁再生成の失敗（保存済みの階・自階の後始末は呼び出し元 deleteCenterLineWithUndo が
   // 安全網で巻き戻し済み）はtagCLOpFailureでcodeを付けてguardUi層（App.jsx）へ委ねる。
+  //
+  // deleteCenterLineWithUndo自体（従来の削除本体。toast→setFloorSyncTick込み）はrunDeleteCenterLine
+  // へ切り出した——固定材（dimensionStatus!=='auto'の柱・梁・基礎/柱脚）が巻き込まれるときは、
+  // 削除の前に階ごとの本数つきの確認を出すため（手動追加材サイレント撤去回避 指示書§2.4・§2.6・
+  // §3裁定3・§4 Q3/Q4/Q5・§5ステップ3）。確認の表示中は関門（runBusy）を開けておく必要がある
+  // （関門内で入力待ちをすると操作不能になる）ため、1段目のrunBusy（固定材の列挙。固定材が無ければ
+  // そのまま削除まで完了する＝従来どおり1回の関門内で終わる）→関門の外での確認→（了承時のみ）
+  // 2段目のrunBusy（削除本体）という2段構成にする。中止時（確認でキャンセル）はグラフ・IDB・undoに
+  // 何も残らない——2段目のrunBusy自体が呼ばれないため。
+  async function runDeleteCenterLine(cl) {
+    const { toast } = await deleteCenterLineWithUndo(graph, project, cl).catch(err => { throw tagCLOpFailure(err); });
+    if (toast) setToast({ msg: toast, key: Date.now() });
+    setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（handleConvertCenterLineと同じ。m-6・QA指摘）
+  }
+
   async function handleDeleteCenterLine(cl) {
+    beginUiTransition();
+    const byFloor = await runBusy('CL削除', async () => {
+      await structuralSync.whenIdle();
+      const found = await collectFixedMembersByFloor(project, graph, cl).catch(err => { throw tagCLOpFailure(err); });
+      if (found.length > 0) return found;
+      await runDeleteCenterLine(cl);
+      return null;
+    });
+    if (!byFloor) return;
+    const ok = await confirmFixedMemberDeletion(formatFixedMemberConfirm(clDisplayName(cl), byFloor));
+    if (!ok) return;
     beginUiTransition();
     await runBusy('CL削除', async () => {
       await structuralSync.whenIdle();
-      const { toast } = await deleteCenterLineWithUndo(graph, project, cl).catch(err => { throw tagCLOpFailure(err); });
-      if (toast) setToast({ msg: toast, key: Date.now() });
-      setFloorSyncTick(t => t + 1); // 連動先（他階）の複製・重複判定を反映させる（handleConvertCenterLineと同じ。m-6・QA指摘）
+      // 確認ダイアログの表示中は関門（runBusy）を開けておくため、その間にCtrl+Z/Y（undo/redo）や
+      // 階切替が割り込みうる——graph（ハンドラのクロージャに閉じ込めた描画時点のactiveGraph）が
+      // 差し替わった、またはclが所有グラフから既に消えた（QA指摘・手動追加材サイレント撤去回避
+      // 指示書§5ステップ3）可能性をここで再検証する。falseならグラフ・undoに一切触れず中止する。
+      if (!isCenterLineStillDeletable(project, graph, cl)) {
+        setToast({ msg: '対象が変わったためCL削除を中止しました', key: Date.now() });
+        return;
+      }
+      await runDeleteCenterLine(cl);
     });
   }
 

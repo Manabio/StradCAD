@@ -124,6 +124,13 @@ const EXEMPT = [
       + '内部関数のため対象外（入力規制ステップ6）。',
   },
   {
+    name: 'runDeleteCenterLine',
+    reason: '呼び出し元はhandleDeleteCenterLine（GATED）のみ。deleteCenterLineWithUndo→toast→setFloorSyncTick'
+      + 'を切り出した内部関数で、関門化済みの呼び出し元（runBusyの中）から呼ばれる（手動追加材'
+      + 'サイレント撤去回避 指示書§5ステップ3）。自身はrunBusyを持たず、awaitの前後で自らgraph/IDBを'
+      + '書くが、それはhandleDeleteCenterLineの関門内で行われる。恒久的に対象外。',
+  },
+  {
     name: 'startCenterLineMove',
     reason: 'App.jsxの本体はmodeRef.current?.startMove(cl)をawaitしtoastを出すだけで、関門（runBusy）は'
       + 'FloorplanModeState.startMoveの内部で開く（beginUiTransitionをここで呼ぶとinterruptCurrentActionが'
@@ -150,9 +157,11 @@ const PENDING_COUNT = 0;
 // 加わったため29→30。ステップ4・S4で project.equipmentIndex を埋めるuseEffect内のIIFE
 // （410/435の上階peek useEffectと同型）が1件加わったため2→3（412/435→412/435/新規の3件）。
 // ステップ5でdeleteElevatorEquipment・changeElevatorUsage（いずれもGATED）のrunBusy(コールバックが
-// 2件加わったため30→32。
+// 2件加わったため30→32。手動追加材サイレント撤去回避ステップ3でhandleDeleteCenterLineが
+// 固定材の事前確認を挟む2段runBusy構成になり、runBusy(コールバックが1件（確認了承後の2段目）
+// 加わったため32→33。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 32;
+const ANON_CALLBACK_COUNT = 33;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

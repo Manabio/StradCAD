@@ -34,7 +34,9 @@ import { refreshWallsForGraph, hasNeverBuiltWalls } from '../wallRefresh.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 
 // アクティブ以外の全 Plane（project.planeMap。検討・屋根 Plane 含む）を返す。
-function otherPlanes(project, activeGraph) {
+// export: structural/fixedMemberRefs.js（CL削除の固定材事前確認。手動追加材サイレント撤去回避
+// 指示書§5ステップ3）が同じ「他階を見る」流儀（otherPlanes＋floorSwapManager.peek）を再利用するため。
+export function otherPlanes(project, activeGraph) {
   const activeId = activeGraph?.plane?.id;
   return [...project.planeMap.values()].filter(p => p.id !== activeId);
 }

@@ -1241,6 +1241,13 @@ export class PlanGraph {
     };
   }
 
+  /** _structuralRefsToCL の薄い公開ラッパ。id で対象 CL を指定する
+   *  （structural/fixedMemberRefs.js が、CL削除の事前確認向けに固定材（非auto）だけを絞り込むのに使う。
+   *  重複実装を避けるため列挙自体はここへ委ねる）。 */
+  structuralRefsToCL(id) {
+    return this._structuralRefsToCL(id);
+  }
+
   _labeledVerticals() {
     return _labeledCLs(this.shapeMap, CenterLineType.VERTICAL, CenterLine);
   }
