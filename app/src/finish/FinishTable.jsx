@@ -396,12 +396,15 @@ export const FinishTable = observer(({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      {/* タブバー */}
+      {/* タブバー（タブ数が増えても折返しせず横スクロール） */}
       <div style={{
         display: 'flex',
         borderBottom: '1px solid #e2e8f0',
         background: '#f8fafc',
         flexShrink: 0,
+        overflowX: 'auto',
+        overflowY: 'hidden',
+        scrollbarWidth: 'thin',
       }}>
         {TABS.map(tab => (
           <button
@@ -417,6 +420,8 @@ export const FinishTable = observer(({
               borderBottom: activeTab === tab.id ? '2px solid #2563eb' : '2px solid transparent',
               cursor: 'pointer',
               marginBottom: -1,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
             }}
           >
             {tab.label}

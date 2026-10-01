@@ -228,6 +228,24 @@ test('【不変条件】TABS の id の並びが interior/stair/exterior/fitting
 // を渡す形へ変わり複数行になったため、1行まるごとの形（mフラグ）で個別に固定する
 // （旧→新: 1正規表現でのJSX全体一致 → 属性ごとの1行まるごと一致。理由: 属性が増え複数行化した
 // ため単一の1行正規表現では表現できない。team-lessons「配線テストは1行まるごと一致させる」）。
+// タブバー横スクロール: タブ内の文字を折返しせず、タブバー自体を横スクロール可能にする
+// （コンテナに overflowX:'auto'、各タブに whiteSpace:'nowrap' を持たせる）。
+test('【不変条件】タブバーのコンテナは overflowX: auto を持ち、各タブは whiteSpace: nowrap を持つ（折返しせず横スクロール）', () => {
+  const startIdx = codeOnly.indexOf("borderBottom: '1px solid #e2e8f0',\n        background: '#f8fafc',");
+  assert.ok(startIdx >= 0, 'タブバーのコンテナのstyleが見つからない');
+  const endIdx = codeOnly.indexOf('{TABS.map(tab =>', startIdx);
+  assert.ok(endIdx >= 0, 'TABS.map( が見つからない');
+  const containerBlock = codeOnly.slice(startIdx, endIdx);
+  assert.ok(/overflowX:\s*'auto'/.test(containerBlock),
+    'タブバーのコンテナに overflowX: \'auto\' が見つからない');
+
+  const buttonStartIdx = codeOnly.indexOf('<button', endIdx);
+  const buttonEndIdx = codeOnly.indexOf('</button>', buttonStartIdx);
+  const buttonBlock = codeOnly.slice(buttonStartIdx, buttonEndIdx);
+  assert.ok(/whiteSpace:\s*'nowrap'/.test(buttonBlock),
+    'タブの <button> に whiteSpace: \'nowrap\' が見つからない');
+});
+
 test('【不変条件】activeTab===equipmentは<EquipmentTab ...>（onDeleteEquipment/onChangeEquipmentUsage込み）へ、accessoryは<EmptyTabPlaceholder message="…" />へ分岐し、ExteriorTable（else分岐）へ落ちない', () => {
   assert.match(codeOnly, /^\s*: activeTab === 'equipment'\s*$/m, "activeTab === 'equipment' の分岐行が見つからない");
   assert.match(codeOnly, /^\s*\? <EquipmentTab\s*$/m, '? <EquipmentTab が見つからない');
