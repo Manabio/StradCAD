@@ -3,9 +3,12 @@
 // （§昇降路 壁仕上げ材／防音材 ステップ2b の PER_FLOOR_SETTERS 追加分）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, ShaftSoundproof, ElevatorEquipmentCategory, DEFAULT_EV_USAGE, EvUsage } from '../core.js';
+import {
+  Plane, PlanGraph, ShaftSoundproof, ElevatorEquipmentCategory, DEFAULT_EV_USAGE, EvUsage,
+  Stair, StairType, StairPortSide, StructuralMaterialType, totalStepsFromSections,
+} from '../core.js';
 import { undoManager } from '../undoManager.js';
-import { withFinishUndo } from './finishUndo.js';
+import { withFinishUndo, snapshotFinishState, restoreFinishState } from './finishUndo.js';
 
 function freshGraph() {
   return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -77,4 +80,144 @@ test('graph.equipmentRows の usage 変更を withFinishUndo 経由で行い und
 
   undoManager.redo();
   assert.equal(graph.equipmentRows[0].usage, EvUsage.FREIGHT, 'redo で用途が戻らない');
+});
+
+// ---- 階段の出入口の辺・取りつき回転部（entrySide / arrivalSide / entryTurnSteps / arrivalTurnSteps） ----
+
+// 折返し階段（sections あり）。sections [7,2,7] の区間の和は 15（totalStepsFromSections）、回転部 2+3 で 20
+function addSwitchbackStair(graph) {
+  return graph.addStair({
+    type: StairType.SWITCHBACK, cells: new Set(['a:b:c:d']), sections: [7, 2, 7],
+    entrySide: StairPortSide.INNER, arrivalSide: StairPortSide.OUTER,
+    entryTurnSteps: 2, arrivalTurnSteps: 3,
+  }, 's1');
+}
+
+function portFields(s) {
+  return {
+    entrySide: s.entrySide, arrivalSide: s.arrivalSide,
+    entryTurnSteps: s.entryTurnSteps, arrivalTurnSteps: s.arrivalTurnSteps,
+    totalSteps: s.totalSteps,
+  };
+}
+
+test('別の仕上げ操作を undo/redo しても、階段の出入口の辺・取りつき回転部・総段数が保たれる', () => {
+  const graph = freshGraph();
+  const stair = addSwitchbackStair(graph);
+  const expected = {
+    entrySide: 'inner', arrivalSide: 'outer', entryTurnSteps: 2, arrivalTurnSteps: 3,
+    totalSteps: totalStepsFromSections([7, 2, 7]) + 5,
+  };
+  assert.deepStrictEqual(portFields(stair), expected, '前提: 作成直後の値');
+  assert.equal(expected.totalSteps, 20, '前提: 区間の和15＋回転部5');
+
+  const marker = '301000000005';
+  const markerBefore = graph.shaftWallMaterial;
+  assert.notEqual(markerBefore, marker, '前提: 変更後の値は既定値と異なる');
+  withFinishUndo(graph, () => graph.setShaftWallMaterial(marker));
+
+  undoManager.undo();
+  assert.equal(graph.shaftWallMaterial, markerBefore, 'undo で対象エントリが戻っていない（積まれていない）');
+  assert.deepStrictEqual(portFields(graph.stairMap.get('s1')), expected, 'undo で階段の4項目・総段数が変わった');
+
+  undoManager.redo();
+  assert.equal(graph.shaftWallMaterial, marker, 'redo で対象エントリが戻っていない');
+  assert.deepStrictEqual(portFields(graph.stairMap.get('s1')), expected, 'redo で階段の4項目・総段数が変わった');
+});
+
+test('出入口の辺だけの切替（回転部・総段数は不変）が undo エントリとして積まれ、undo/redo で往復する', () => {
+  const graph = freshGraph();
+  const stair = addSwitchbackStair(graph);
+  const marker = '301000000005';
+  const markerBefore = graph.shaftWallMaterial;
+
+  // 直前に別操作を積み、辺の切替が積まれなかった場合は undo 1回でこちらが戻って赤になるようにする
+  withFinishUndo(graph, () => graph.setShaftWallMaterial(marker));
+  withFinishUndo(graph, () => stair.setField('entrySide', StairPortSide.OUTER));
+  assert.equal(graph.stairMap.get('s1').entrySide, 'outer');
+
+  undoManager.undo();
+  assert.equal(graph.stairMap.get('s1').entrySide, 'inner', 'undo で辺が inner に戻らない（エントリが積まれていない）');
+  assert.equal(graph.shaftWallMaterial, marker, 'undo 1回で直前の別操作まで戻った（辺の切替が積まれていない）');
+
+  undoManager.redo();
+  assert.equal(graph.stairMap.get('s1').entrySide, 'outer', 'redo で辺が outer に戻らない');
+
+  undoManager.undo();
+  undoManager.undo();
+  assert.equal(graph.shaftWallMaterial, markerBefore, '後始末: 別操作も戻しておく');
+});
+
+test('4項目のキーが欠けたスナップショットを復元すると、辺は null・回転部は 0 に正規化され例外にならない', () => {
+  const graph = freshGraph();
+  addSwitchbackStair(graph);
+  const snap = snapshotFinishState(graph);
+  for (const k of ['entrySide', 'arrivalSide', 'entryTurnSteps', 'arrivalTurnSteps']) delete snap.stairs.stairs[0][k];
+
+  assert.doesNotThrow(() => restoreFinishState(graph, snap));
+  const s = graph.stairMap.get('s1');
+  assert.strictEqual(s.entrySide, null);
+  assert.strictEqual(s.arrivalSide, null);
+  assert.strictEqual(s.entryTurnSteps, 0);
+  assert.strictEqual(s.arrivalTurnSteps, 0);
+});
+
+test('4項目が null のスナップショットを復元すると、回転部は 0 に正規化される', () => {
+  const graph = freshGraph();
+  addSwitchbackStair(graph);
+  const snap = snapshotFinishState(graph);
+  for (const k of ['entrySide', 'arrivalSide', 'entryTurnSteps', 'arrivalTurnSteps']) snap.stairs.stairs[0][k] = null;
+
+  assert.doesNotThrow(() => restoreFinishState(graph, snap));
+  const s = graph.stairMap.get('s1');
+  assert.strictEqual(s.entrySide, null);
+  assert.strictEqual(s.arrivalSide, null);
+  assert.strictEqual(s.entryTurnSteps, 0);
+  assert.strictEqual(s.arrivalTurnSteps, 0);
+  assert.strictEqual(s.totalSteps, totalStepsFromSections([7, 2, 7]));
+  assert.strictEqual(s.totalSteps, 15, '区間の和のみ（回転部 0）');
+});
+
+test('不変条件: 全項目を既定値以外にした階段は snapshot→restore→snapshot で一致し、各項目が復元される', () => {
+  // Stair の全17項目（id 含む）を既定値以外にした fixture。項目が増えたらここへの追加を強制する
+  const fixture = {
+    id: 's1',
+    type: StairType.SWITCHBACK, structure: StructuralMaterialType.STEEL,
+    cells: new Set(['a:b:c:d']), sections: [7, 2, 7],
+    totalSteps: totalStepsFromSections([7, 2, 7]) + 5,
+    tread: 260, riser: 180, nosing: 25, width: 1000, upDirection: 'up', flip: true, roomId: 'r1',
+    entrySide: StairPortSide.INNER, arrivalSide: StairPortSide.OUTER,
+    entryTurnSteps: 2, arrivalTurnSteps: 3,
+  };
+  const defaults = new Stair('d', {});
+  assert.deepStrictEqual(Object.keys(fixture).sort(), Object.keys(defaults).sort(),
+    'Stair の項目と fixture のキー集合が不一致（項目を足したら fixture にも足す）');
+  for (const k of Object.keys(fixture)) {
+    if (k === 'id') continue;
+    assert.notDeepStrictEqual(fixture[k], defaults[k], '前提: fixture の ' + k + ' は既定値以外');
+  }
+  assert.equal(fixture.totalSteps, 20);
+
+  const graph = freshGraph();
+  const { id, ...opts } = fixture;
+  graph.addStair(opts, id);
+  const before = snapshotFinishState(graph);
+  restoreFinishState(graph, before);
+
+  const s = graph.stairMap.get('s1');
+  for (const k of Object.keys(fixture)) {
+    const actual = k === 'cells' ? [...s.cells] : s[k];
+    const exp = k === 'cells' ? [...fixture.cells] : fixture[k];
+    assert.deepStrictEqual(actual, exp, '往復後に ' + k + ' が復元されない');
+  }
+  assert.equal(JSON.stringify(snapshotFinishState(graph)), JSON.stringify(before), '往復前後でスナップショットが一致しない');
+});
+
+test('不変条件: 仕上げ undo の階段スナップショットのキー集合は Stair の項目集合と一致する', () => {
+  const graph = freshGraph();
+  graph.addStair({ cells: new Set(['a:b:c:d']) }, 's1');
+  const snapKeys = Object.keys(snapshotFinishState(graph).stairs.stairs[0]).sort();
+  const stairKeys = Object.keys(new Stair('s', {})).sort();
+  assert.deepStrictEqual(snapKeys, stairKeys,
+    'Stair に項目を足したら finishUndo.js の snapshotStairs／restoreStairs にも足す');
 });
