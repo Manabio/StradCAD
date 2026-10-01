@@ -2423,7 +2423,14 @@ test('【統合・3c×3d】autoFillWoodWallBeams→autoFillWoodBeamDepths: 3640�
   const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
   generateRoomWallsFromOutline(graph, room);
   const segs = selfWallSegments(graph);
-  const belowColumns = [{ x: 1820, y: 0, axisX: 1820, axisY: 0, role: 'standard' }];
+  // 四隅にも下階柱を置く（実データと同じ形。壁の隅には必ず下階柱が立つ）。隅に下階柱が無いと、2026-10-01 の
+  // 規則（受梁に限らず子梁の成を受ける梁へ伝える）で、隅の相互host（縦梁と横梁が互いの端を受ける）を通って
+  // 下辺(3640・成300)が全周へ伝播し、分割後の表引き（このテストの本来の意図）が見えなくなるため。
+  const belowColumns = [
+    { x: 1820, y: 0, axisX: 1820, axisY: 0, role: 'standard' },
+    { x: 0, y: 0, axisX: 0, axisY: 0, role: 'standard' }, { x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'standard' },
+    { x: 0, y: 1820, axisX: 0, axisY: 1820, role: 'standard' }, { x: 3640, y: 1820, axisX: 3640, axisY: 1820, role: 'standard' },
+  ];
   const { created } = autoFillWoodWallBeams(graph, PROJECT, segs, null, belowColumns);
   const top = created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1);
   assert.equal(top.length, 2, '3640のrunが1820で2本に分割される');
@@ -2431,6 +2438,24 @@ test('【統合・3c×3d】autoFillWoodWallBeams→autoFillWoodBeamDepths: 3640�
   for (const b of top) {
     assert.equal(b.sectionDefId, 'WOOD-120x120', '各梁は単一区間1820・荷重なし＝成120（3dは変更していないので分割後も同じ述語で支持点を数える）');
   }
+});
+
+test('【統合・3c×3d】autoFillWoodBeamDepths（2026-10-01 リード裁定・隅に下階柱が無い場合）: 閉じた矩形は隅の相互hostを通って最大の成(300)が全周へ回る', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,   { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  generateRoomWallsFromOutline(graph, room);
+  const belowColumns = [{ x: 1820, y: 0, axisX: 1820, axisY: 0, role: 'standard' }]; // 隅には下階柱なし
+  autoFillWoodWallBeams(graph, PROJECT, selfWallSegments(graph), null, belowColumns);
+  autoFillWoodBeamDepths(graph, PROJECT, belowColumns);
+  const depths = graph.beams.filter(b => b.role === 'primary').map(b => b.sectionDefId);
+  assert.equal(depths.length, 5, '上辺の半梁2本・下辺・左右の縦梁');
+  assert.ok(depths.every(d => d === 'WOOD-120x300'), `下辺(300)が縦梁→上辺の半梁へ伝わり全て300: ${depths.join(',')}`);
 });
 
 // ---- autoFillWoodWallBeams（ステップ3h: 頭つなぎ・受梁。下階柱／自階柱を両端支持する梁の生成）----
@@ -3490,11 +3515,11 @@ test('autoFillWoodBeamDepths F1（QA2）: host候補が1本しかない端でも
   assert.equal(withoutBelow.host.sectionDefId, 'WOOD-120x360', '対照: 下階柱が無ければ受梁の成(360)へ引き上がる（C1と同じ結果）');
 });
 
-// 対照フィクスチャ: carrier（縦梁 x=910, y=0..3640）の区間内部の自階柱1本(y=100)の真下に下階柱がある
+// 非受梁フィクスチャ: carrier（縦梁 x=910, y=0..3640）の区間内部の自階柱1本(y=100)の真下に下階柱がある
 // ＝受梁ではない。真下の柱がcarrier自身の支持点になり、長い方の区間(100..3640=3540)は荷重なしで
-// 成300まで上がる——それでも host（横大梁 x=0..1820, y=0。T字1か所で自身の成150）へは伝播しない
-// ことを、carrier自身の成（300）がhostの成（150）より明確に大きい状況で確認する（carrier自身の成が
-// 小さいと「伝播していないから」なのか「伝播元の値がそもそも小さいから」なのか区別できないため）。
+// 成300まで上がる。host（横大梁 x=0..1820, y=0。T字1か所で自身の成150）へ、受梁でなくても
+// 2026-10-01の規則拡張で伝播することを、carrier自身の成（300）がhostの成（150）より明確に大きい
+// 状況で確認する。
 function makeNonCarrierTestGraph() {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
@@ -3510,7 +3535,7 @@ function makeNonCarrierTestGraph() {
   return { graph, xMid, y100, host, carrier, selfColumn };
 }
 
-test('【対照】autoFillWoodBeamDepths C2: 自階柱の真下に下階柱があれば受梁ではないため、carrier自身の成(300)がhostの成(150)より大きくても伝播しない', () => {
+test('autoFillWoodBeamDepths C2: 自階柱の真下に下階柱があり受梁ではない子梁でも、成(300)がhostの成(150)より大きければhostは同寸(300)になる（2026-10-01 規則拡張。旧: 受梁でなければ伝播しない）', () => {
   const { graph, xMid, y100, host, carrier } = makeNonCarrierTestGraph();
   const below = new PlanGraph(new Plane('p0', -3000, '0階', 1, 1));
   const bx = below.addCenterLine(CenterLineType.VERTICAL, xMid.value, { labeled: true, discipline: Discipline.STRUCT });
@@ -3518,7 +3543,7 @@ test('【対照】autoFillWoodBeamDepths C2: 自階柱の真下に下階柱が�
   const belowColumns = [below.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', bx, by, {})];
   autoFillWoodBeamDepths(graph, PROJECT, belowColumns);
   assert.equal(carrier.sectionDefId, 'WOOD-120x300', '真下の柱がcarrier自身の支持点になり、長い方の区間(3540)は荷重なしで成300');
-  assert.equal(host.sectionDefId, 'WOOD-120x150', 'hostは自身のT字1か所ぶん(150)のまま——真下に下階柱がある自階柱は受梁の荷重として伝播しない');
+  assert.equal(host.sectionDefId, 'WOOD-120x300', 'hostは自身のT字1か所ぶん(150)ではなく子梁と同寸(300)へ上がる——受梁（真下に下階柱の無い自階柱を持つ梁）に限らず伝播する');
 });
 
 test('【失敗系】autoFillWoodBeamDepths C3: hostがdimensionStatus=lockedなら受梁の成が伝播しても据え置き（受梁自身は更新される）', () => {
@@ -3536,6 +3561,171 @@ test('autoFillWoodBeamDepths C4: 冪等（受梁伝播込みで2回目の更新�
   assert.equal(first.length, 2);
   const second = autoFillWoodBeamDepths(graph, PROJECT);
   assert.deepEqual(second, []);
+});
+
+// ---- 2026-10-01 梁全般の規則: 「下階に柱のない場所で、子梁の成がそれを受ける梁の成より大きい場合、
+// 受ける梁の成は子梁と同じにする」（受梁に限らない。孫→子→親の連鎖。手動固定は書き換えない）----
+// 連鎖フィクスチャ（自階柱なし＝どの梁も受梁ではない）:
+//   親P: 横 y=0, x=0..1820（span1820。子の取りつき1か所で自身の表値150）
+//   子C: 縦 x=910, y=0..2730（span2730。孫の取りつき1か所で自身の表値270。始端がPにT）
+//   孫G: 横 y=1820, x=910..4550（span3640・荷重なしで表値300。始端がCにT）
+// 伝播なし（旧規則＝受梁のみ起点）なら G=300・C=270・P=150。新規則では C=300・P=300。
+function makeBeamChainGraph({ grandchildRole = 'primary', structure = TRADITIONAL_WOOD_STRUCTURE, material = StructuralMaterialType.WOOD, section = 'WOOD-120x120' } = {}) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = structure;
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: true, discipline: Discipline.STRUCT });
+  const x0 = cl(CenterLineType.VERTICAL, 0), x910 = cl(CenterLineType.VERTICAL, 910);
+  const x1820 = cl(CenterLineType.VERTICAL, 1820), x4550 = cl(CenterLineType.VERTICAL, 4550);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), y1820 = cl(CenterLineType.HORIZONTAL, 1820);
+  const y2730 = cl(CenterLineType.HORIZONTAL, 2730);
+  const parent = graph.addBeam(material, section, y0, false, x0, x1820, { role: 'primary' });
+  const child = graph.addBeam(material, section, x910, true, y0, y2730, { role: 'primary' });
+  const grandchild = graph.addBeam(material, section, y1820, false, x910, x4550, { role: grandchildRole });
+  return { graph, parent, child, grandchild };
+}
+
+test('autoFillWoodBeamDepths D1: 受梁でない孫→子→親の連鎖。孫の成(300)が子・親へ不動点まで伝わり全て300になる', () => {
+  const { graph, parent, child, grandchild } = makeBeamChainGraph();
+  const updated = autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(grandchild.sectionDefId, 'WOOD-120x300', '孫は荷重なし3640で表値300');
+  assert.equal(child.sectionDefId, 'WOOD-120x300', '子は自身の表値270ではなく孫と同寸300');
+  assert.equal(parent.sectionDefId, 'WOOD-120x300', '親は自身の表値150ではなく、伝播で上がった子と同寸300（連鎖）');
+  assert.equal(updated.length, 3);
+  assert.equal(autoFillWoodBeamDepths(graph, PROJECT).length, 0, '冪等');
+});
+
+test('autoFillWoodBeamDepths D2: 子梁が床梁（role:floor）でも、その成(300)がhostへ伝わる', () => {
+  const { graph, parent, child, grandchild } = makeBeamChainGraph({ grandchildRole: 'floor' });
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(grandchild.sectionDefId, 'WOOD-120x300');
+  assert.equal(child.sectionDefId, 'WOOD-120x300', '床梁の成が受ける梁（子）へ伝わる');
+  assert.equal(parent.sectionDefId, 'WOOD-120x300', 'さらに親へも伝わる');
+});
+
+test('autoFillWoodBeamDepths D3: 子梁の成がhost以下ならhostは変わらない（hostの表値のまま・子も変えない）', () => {
+  // host: 横 y=0, x=0..3640（子の取りつき1か所で表値330）／子: 縦 x=1820, y=0..1820（span1820・荷重なしで表値120）。
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: true, discipline: Discipline.STRUCT });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xMid = cl(CenterLineType.VERTICAL, 1820), x1 = cl(CenterLineType.VERTICAL, 3640);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), y1820 = cl(CenterLineType.HORIZONTAL, 1820);
+  const host = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary' });
+  const child = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y0, y1820, { role: 'primary' });
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(host.sectionDefId, 'WOOD-120x330', 'hostは自身の表値330のまま（子の120に下げない）');
+  assert.equal(child.sectionDefId, 'WOOD-120x120', '子は自身の表値120のまま（hostの成を逆に受けない）');
+});
+
+test('【失敗系】autoFillWoodBeamDepths D4: 手動固定（locked）のhostは、子の成が上回っても書き換えない（子は更新される）', () => {
+  const { graph, parent, child } = makeBeamChainGraph();
+  parent.setDimensionStatus('locked');
+  const updated = autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(parent.sectionDefId, 'WOOD-120x120', 'lockedの親は据え置き');
+  assert.equal(child.sectionDefId, 'WOOD-120x300', 'auto の子は孫の成へ上がる');
+  assert.equal(updated.includes(parent.id), false);
+});
+
+test('【現状固定・裁定候補】autoFillWoodBeamDepths D5: lockedの子は表値(270)のまま伝播に参加し、書き戻しだけ飛ばす——lockedの子を通り抜けて親へ孫の成(300)が届く', () => {
+  const { graph, parent, child, grandchild } = makeBeamChainGraph();
+  child.setDimensionStatus('locked');
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(child.sectionDefId, 'WOOD-120x120', 'lockedの子は書き換えない（実際の断面は120のまま）');
+  assert.equal(grandchild.sectionDefId, 'WOOD-120x300');
+  assert.equal(parent.sectionDefId, 'WOOD-120x300', 'lockedの子を通り抜けて親へ300が伝わる（現状の挙動。変えるなら裁定が要る）');
+});
+
+test('【現状固定・裁定候補】autoFillWoodBeamDepths D6: lockedの子の実際の断面(360)が表値(120)より大きくても、hostは実断面に追従しない（表値で伝播）', () => {
+  // host: 横 y=0, x=0..1820（子の取りつき1か所で表値150）／子: 縦 x=910, y=0..1820（表値120。実断面は360でlocked）。
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: true, discipline: Discipline.STRUCT });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xMid = cl(CenterLineType.VERTICAL, 910), x1 = cl(CenterLineType.VERTICAL, 1820);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), y1820 = cl(CenterLineType.HORIZONTAL, 1820);
+  const host = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary' });
+  const child = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x360', xMid, true, y0, y1820, { role: 'primary' });
+  child.setDimensionStatus('locked');
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(child.sectionDefId, 'WOOD-120x360', 'lockedの子の実断面は保持');
+  assert.equal(host.sectionDefId, 'WOOD-120x150', 'hostは子の実断面360ではなく自身の表値150（現状の挙動。追従させるなら裁定が要る）');
+});
+
+test('autoFillWoodBeamDepths D7: 十字貫通（同位置の両側から取りつく2本）の子の成もhostへ伝わる（荷重には数えないが仕口として受ける側は子以上）', () => {
+  // host: 縦 x=1820, y=0..1820（貫通扱いで荷重0・表値120）／左の子: 横 y=910, x=-1820..1820（3640・表値300）／右の子: 横 y=910, x=1820..5460（表値300）。
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: true, discipline: Discipline.STRUCT });
+  const xL = cl(CenterLineType.VERTICAL, -1820), xMid = cl(CenterLineType.VERTICAL, 1820), xR = cl(CenterLineType.VERTICAL, 5460);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), y910 = cl(CenterLineType.HORIZONTAL, 910), y1820 = cl(CenterLineType.HORIZONTAL, 1820);
+  const host = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y0, y1820, { role: 'primary' });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y910, false, xL, xMid, { role: 'primary' });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y910, false, xMid, xR, { role: 'primary' });
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(host.sectionDefId, 'WOOD-120x300', '貫通は荷重0（自身の表値120）だが、両側の子の成300へは追従する');
+});
+
+// 第4引数オプション（手動追加専用。リード裁定2026-10-01）: 省略時は従来どおり全auto梁へ伝播込みで書き戻す（D1）。
+test('autoFillWoodBeamDepths D10: {onlyIds, propagate:false} は指定梁だけを自身の表値(150)で書き戻し、他の梁は変えない（省略時のD1とは結果が違う入力）', () => {
+  const { graph, parent, child, grandchild } = makeBeamChainGraph();
+  const updated = autoFillWoodBeamDepths(graph, PROJECT, [], { onlyIds: [parent.id], propagate: false });
+  assert.equal(parent.sectionDefId, 'WOOD-120x150', '親は子からの伝播(300)を受けず自身の表値150');
+  assert.equal(child.sectionDefId, 'WOOD-120x120', '指定外の子は変えない');
+  assert.equal(grandchild.sectionDefId, 'WOOD-120x120', '指定外の孫は変えない');
+  assert.deepEqual(updated, [parent.id]);
+});
+
+test('autoFillWoodBeamDepths D11: onlyIdsだけ指定（propagate既定true）なら伝播は効き、書き戻しは指定梁だけ', () => {
+  const { graph, parent, child, grandchild } = makeBeamChainGraph();
+  autoFillWoodBeamDepths(graph, PROJECT, [], { onlyIds: [parent.id] });
+  assert.equal(parent.sectionDefId, 'WOOD-120x300', '伝播込みの成300');
+  assert.equal(child.sectionDefId, 'WOOD-120x120');
+  assert.equal(grandchild.sectionDefId, 'WOOD-120x120');
+});
+
+test('autoFillWoodBeamDepths D12: propagate:falseだけ指定（onlyIds省略）なら全auto梁へ各自の表値で書き戻す（伝播なし: 孫300・子270・親150）', () => {
+  const { graph, parent, child, grandchild } = makeBeamChainGraph();
+  autoFillWoodBeamDepths(graph, PROJECT, [], { propagate: false });
+  assert.deepEqual([parent, child, grandchild].map(b => b.sectionDefId), ['WOOD-120x150', 'WOOD-120x270', 'WOOD-120x300']);
+});
+
+test('【失敗系】autoFillWoodBeamDepths D13: 在来以外（S造）はオプションを付けても何もしない', () => {
+  const { graph, parent } = makeBeamChainGraph({ structure: 'S造', material: StructuralMaterialType.STEEL, section: 'S-H300x150' });
+  const updated = autoFillWoodBeamDepths(graph, PROJECT, [], { onlyIds: [parent.id], propagate: false });
+  assert.equal(updated.length, 0);
+  assert.equal(parent.sectionDefId, 'S-H300x150');
+});
+
+test('【失敗系】autoFillWoodBeamDepths D8: 在来以外（S造）は連鎖フィクスチャでも何もせず断面は不変', () => {
+  const { graph, parent, child, grandchild } = makeBeamChainGraph({ structure: 'S造', material: StructuralMaterialType.STEEL, section: 'S-H300x150' });
+  const updated = autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(updated.length, 0);
+  assert.deepEqual([parent, child, grandchild].map(b => b.sectionDefId), ['S-H300x150', 'S-H300x150', 'S-H300x150']);
+});
+
+// F1を新しい起点（受梁に限らない子梁）でも固定する: 下階柱(1820,0)で分割された半梁2本の共有端に、
+// 自階柱を持たない（＝受梁ではない）縦の子梁(x=1820, y=0..3640。表値300)が取りつく。端が下階柱の位置なので
+// どちらの半梁へも伝播せず、半梁の追加順を反転しても同じ（どちらも表値120のまま）。
+function buildSplitHalvesWithNonCarrierChild(reverseOrder) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: true, discipline: Discipline.STRUCT });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xMid = cl(CenterLineType.VERTICAL, 1820), x2 = cl(CenterLineType.VERTICAL, 3640);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), yFar = cl(CenterLineType.HORIZONTAL, 3640);
+  const addHalf = (a, b) => graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, a, b, { role: 'primary' });
+  let half1, half2;
+  if (reverseOrder) { half2 = addHalf(xMid, x2); half1 = addHalf(x0, xMid); } else { half1 = addHalf(x0, xMid); half2 = addHalf(xMid, x2); }
+  const child = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y0, yFar, { role: 'primary' });
+  const belowColumns = [{ x: 1820, y: 0, axisX: 1820, axisY: 0, role: 'standard' }];
+  autoFillWoodBeamDepths(graph, PROJECT, belowColumns);
+  return { half1, half2, child };
+}
+
+test('【失敗系】autoFillWoodBeamDepths D9（F1・新起点）: 端が下階柱の位置なら受梁でない子梁も伝播せず、半梁の追加順を反転しても同じ', () => {
+  for (const reverse of [false, true]) {
+    const { half1, half2, child } = buildSplitHalvesWithNonCarrierChild(reverse);
+    assert.equal(child.sectionDefId, 'WOOD-120x300', `子は荷重なし3640で表値300（reverse=${reverse}）`);
+    assert.equal(half1.sectionDefId, 'WOOD-120x120', `半梁1は表値120のまま（reverse=${reverse}）`);
+    assert.equal(half2.sectionDefId, 'WOOD-120x120', `半梁2は表値120のまま（reverse=${reverse}）`);
+  }
 });
 
 // ---- F1（QA・2026-09-16）: 下階柱で分割された2本の半梁が共有端を持つとき、その端に取りつく受梁の

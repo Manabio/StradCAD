@@ -1393,6 +1393,21 @@ test('【R-3】reflectStructuralToOtherFloors: 屋根の梁（role:primary）に
     const room = g2.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
     generateRoomWallsFromOutline(g2, room);
     project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
+    // g2の部屋の真下（g1）にも同じ部屋を置き、四隅の壁交点に下階柱が立つようにする（実データと同じく
+    // 上階の壁の隅の下に下階柱がある形）。2026-10-01の規則（子梁の成を受ける梁へ伝える）で、隅に下階柱が無いと
+    // 隅の相互hostを通って最大の成が全周へ回り、120角の縦梁が残らなくなる（このテストは120角グループの
+    // 共有タグを見るため隅の下階柱が要る）。
+    const room1 = g1.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A1');
+    generateRoomWallsFromOutline(g1, room1);
+    // 下階に部屋の無い遠くの部屋B（3640×3640）をg2にだけ置く。下階柱の無い長スパンの梁（成300）が
+    // 別の材寸グループとして残り、120角グループがg2・屋根の複数階にまたがる＝階プレフィックスが付く状況を保つ
+    // （隅・中間とも下階柱で支えた部屋Aだけだと全梁が120角の単一グループになりプレフィックスが付かない）。
+    const bx0 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 20000, { labeled: true, discipline: Discipline.STRUCT });
+    const bx1 = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 23640, { labeled: true, discipline: Discipline.STRUCT });
+    const by0 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+    const by1 = project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+    const roomB = g2.addRoom(new Set([`${bx0.id}:${by0.id}:${bx1.id}:${by1.id}`]), 'B');
+    generateRoomWallsFromOutline(g2, roomB);
 
     const roofPlane = syncRoofPlane(project);
     const roofGraph = project.graphMap.get(roofPlane.id);

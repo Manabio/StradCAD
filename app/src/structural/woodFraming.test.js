@@ -6,7 +6,7 @@ import path from 'node:path';
 import { RoomFeature } from '../core/constants.js';
 import {
   woodBeamDepthMm, woodBeamSectionKey, woodBeamSectionForDepth, woodBeamDepthForSpans, crossingBeamLoadCoords,
-  mergeWallIntervals, subtractCoveredSpan, throughBeamRuns, columnSplitPoints, propagateCarrierDepths, columnSupportBeamCandidates,
+  mergeWallIntervals, subtractCoveredSpan, throughBeamRuns, columnSplitPoints, propagateBeamDepths, columnSupportBeamCandidates,
   beamWallCrossPoints, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
   wallRunFaces, faceStudPositions, sillTopLevelOffsetMm, jambAxisValue, jambColumnPositions, rectsOverlap,
   supportSpanColumnPositions, mergePrimaryBeamRuns, wallRunFreeEnds, SUPPORT_SPAN_PRIORITY_ORDER,
@@ -590,63 +590,74 @@ test('【失敗系】beamWallCrossPoints: 非数混入・空入力は無視し�
   );
 });
 
-test('propagateCarrierDepths: 1段伝播（carrierの成をhostへmaxで反映）', () => {
-  const result = propagateCarrierDepths([
-    { id: 'carrier', depth: 300, isCarrier: true, hostIds: ['host'] },
-    { id: 'host', depth: 240, isCarrier: false, hostIds: [] },
+test('propagateBeamDepths: 1段伝播（子梁の成をhostへmaxで反映）', () => {
+  const result = propagateBeamDepths([
+    { id: 'child', depth: 300, hostIds: ['host'] },
+    { id: 'host', depth: 240, hostIds: [] },
   ]);
-  assert.equal(result.get('carrier'), 300, 'carrier自身の成は不変');
-  assert.equal(result.get('host'), 300, 'hostの成はcarrierと同寸へ上がる');
+  assert.equal(result.get('child'), 300, '子梁自身の成は不変');
+  assert.equal(result.get('host'), 300, 'hostの成は子梁と同寸へ上がる');
 });
 
-test('propagateCarrierDepths: 多段伝播（hostのhostまで、伝播元がcarrierかどうかは問わない）', () => {
-  const result = propagateCarrierDepths([
-    { id: 'carrier', depth: 360, isCarrier: true, hostIds: ['host1'] },
-    { id: 'host1', depth: 240, isCarrier: false, hostIds: ['host2'] },
-    { id: 'host2', depth: 120, isCarrier: false, hostIds: [] },
+test('propagateBeamDepths: 多段伝播（孫→子→親。hostのhostまで荷重経路を辿る）', () => {
+  const result = propagateBeamDepths([
+    { id: 'grandchild', depth: 360, hostIds: ['child'] },
+    { id: 'child', depth: 240, hostIds: ['parent'] },
+    { id: 'parent', depth: 120, hostIds: [] },
   ]);
-  assert.equal(result.get('host1'), 360, 'carrierから直接伝播');
-  assert.equal(result.get('host2'), 360, 'host1が上がった分がさらにhost2へ伝播（荷重経路を辿る）');
+  assert.equal(result.get('child'), 360, '孫から直接伝播');
+  assert.equal(result.get('parent'), 360, '子が上がった分がさらに親へ伝播');
 });
 
-test('propagateCarrierDepths: hostのほうが元々大きければ据え置き', () => {
-  const result = propagateCarrierDepths([
-    { id: 'carrier', depth: 240, isCarrier: true, hostIds: ['host'] },
-    { id: 'host', depth: 300, isCarrier: false, hostIds: [] },
+test('propagateBeamDepths: 入力の並び順（親が先・孫が後）に依らず同じ結果になる', () => {
+  const result = propagateBeamDepths([
+    { id: 'parent', depth: 120, hostIds: [] },
+    { id: 'child', depth: 240, hostIds: ['parent'] },
+    { id: 'grandchild', depth: 360, hostIds: ['child'] },
   ]);
-  assert.equal(result.get('host'), 300, 'carrierより大きいhostの成は下げない');
+  assert.equal(result.get('child'), 360);
+  assert.equal(result.get('parent'), 360);
 });
 
-test('propagateCarrierDepths: isCarrier=falseのノードは起点にならない（同じ成・hostIdsでも伝播しない）', () => {
-  const result = propagateCarrierDepths([
-    { id: 'notCarrier', depth: 300, isCarrier: false, hostIds: ['host'] },
-    { id: 'host', depth: 120, isCarrier: false, hostIds: [] },
+test('propagateBeamDepths: hostのほうが元々大きければ据え置き（子梁の成がhost以下なら変わらない）', () => {
+  const result = propagateBeamDepths([
+    { id: 'child', depth: 240, hostIds: ['host'] },
+    { id: 'host', depth: 300, hostIds: [] },
+    { id: 'child2', depth: 300, hostIds: ['host'] },
   ]);
-  assert.equal(result.get('host'), 120, 'carrierでない梁からは伝播しない');
+  assert.equal(result.get('host'), 300, '子梁より大きい・同じhostの成は下げない／上げない');
 });
 
-test('propagateCarrierDepths: 循環（A→B→A）があっても停止し、両者ともmaxの成に収束する', () => {
-  const result = propagateCarrierDepths([
-    { id: 'a', depth: 300, isCarrier: true, hostIds: ['b'] },
-    { id: 'b', depth: 120, isCarrier: false, hostIds: ['a'] },
+test('propagateBeamDepths: 受梁か否かを示すフィールドを持たない全ての子梁が起点になる', () => {
+  const result = propagateBeamDepths([
+    { id: 'child', depth: 300, hostIds: ['host'] },
+    { id: 'host', depth: 120, hostIds: [] },
+  ]);
+  assert.equal(result.get('host'), 300, '受梁でない子梁からも伝播する（2026-10-01）');
+});
+
+test('propagateBeamDepths: 循環（A→B→A）があっても停止し、両者ともmaxの成に収束する', () => {
+  const result = propagateBeamDepths([
+    { id: 'a', depth: 300, hostIds: ['b'] },
+    { id: 'b', depth: 120, hostIds: ['a'] },
   ]);
   assert.equal(result.get('a'), 300);
   assert.equal(result.get('b'), 300);
 });
 
-test('【失敗系】propagateCarrierDepths: 未知hostId・非数depthは無視し例外を投げない', () => {
+test('【失敗系】propagateBeamDepths: 未知hostId・非数depthは無視し例外を投げない', () => {
   assert.doesNotThrow(() => {
-    const result = propagateCarrierDepths([
-      { id: 'carrier', depth: 300, isCarrier: true, hostIds: ['missing', 'host'] },
-      { id: 'host', depth: 120, isCarrier: false, hostIds: [] },
-      { id: 'nanDepth', depth: NaN, isCarrier: true, hostIds: ['host'] },
+    const result = propagateBeamDepths([
+      { id: 'child', depth: 300, hostIds: ['missing', 'host'] },
+      { id: 'host', depth: 120, hostIds: [] },
+      { id: 'nanDepth', depth: NaN, hostIds: ['host'] },
     ]);
     assert.equal(result.get('host'), 300, '未知hostIdは無視しつつ、存在するhostへは伝播する');
     assert.equal(result.has('nanDepth'), false, '非数depthのノードは結果に含めない');
     assert.equal(result.has('missing'), false);
   });
-  assert.deepEqual([...propagateCarrierDepths([]).entries()], []);
-  assert.deepEqual([...propagateCarrierDepths(null).entries()], []);
+  assert.deepEqual([...propagateBeamDepths([]).entries()], []);
+  assert.deepEqual([...propagateBeamDepths(null).entries()], []);
 });
 
 test('studPositions: AB間の両端に (L − (商−1)×455)/2 をとり、残りを455で割り付ける（位置は材の中心）', () => {

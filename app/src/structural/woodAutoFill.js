@@ -24,7 +24,7 @@ import { woodStudCodeFor } from '../finish/materials/backingClass.js';
 import { beamGridCells } from './framingCells.js';
 import {
   woodBeamDepthForSpans, woodBeamSectionForDepth, crossingBeamLoadCoords,
-  mergeWallIntervals, throughBeamRuns, propagateCarrierDepths, pointsOnWallLines, columnSplitPoints,
+  mergeWallIntervals, throughBeamRuns, propagateBeamDepths, pointsOnWallLines, columnSplitPoints,
   columnSupportBeamCandidates, beamWallCrossPoints, WALL_JUNCTION_TOL_MM, sillTopLevelOffsetMm,
   jambColumnPositions, rectsOverlap, subtractCoveredSpan, supportSpanColumnPositions, mergePrimaryBeamRuns,
 } from './woodFraming.js';
@@ -1764,8 +1764,10 @@ function alongCoordOnAxis(beam, x, y, tol) {
 
 /**
  * 在来木造の大梁・小梁の断面（sectionDefId）を、支持区間ごとの梁成表引きで自動更新する（ステップ3d）。
- * さらに後段で、受梁（区間内部に自階柱があり、その真下に下階柱が無い梁）の成を、それが取りつく
- * host 梁へ不動点まで伝播する（ステップ3c-3。裁定2026-09-14「受梁を受ける梁は受梁同寸」）。
+ * さらに後段で、各梁（子梁）の成を、その端が取りつく host 梁（受ける梁）へ不動点まで伝播する
+ * （ステップ3c-3。裁定2026-09-14「受梁を受ける梁は受梁同寸」を、ユーザー仕様2026-10-01「下階に柱のない
+ * 場所で、子梁の成がそれを受ける梁の成より大きい場合、受ける梁の成は子梁と同じにする」で受梁以外の子梁
+ * ＝小梁・床梁へも拡張。受梁は子梁の一種で、起点を絞る条件はもう持たない）。
  *  - 支持点＝梁の両端（clStart/clEnd.effectiveValue）＋1つ下の階の柱（role!=='foundation'）のうち
  *    梁の軸上（CL_OVERLAP_TOL_MM以内）かつ両端の内側にあるもの。スパンは芯々（coord1/coord2は描画用
  *    トリム値のため使わない）。
@@ -1774,11 +1776,10 @@ function alongCoordOnAxis(beam, x, y, tol) {
  *    ただし取りつく先が床梁（role:'floor'）の端は十字貫通判定を通さず常に荷重点として数える
  *    （大梁の両側から取りつく2本の床梁は別々の荷重点であり、通過しているだけの十字貫通ではないため）。
  *  - 対象・荷重源とも「WOOD_DEPTH_BEAM_ROLES かつ主構造の材種」の梁だけ（他の梁が荷重源になる条件も同じ集合）。
- *  - **受梁の判定**（3c-3）＝区間内部の自階柱の荷重点（columnLoads）のうち、その真下（CL_OVERLAP_TOL_MM
- *    以内）に下階柱（belowSupports）が無いもの。端に乗る柱は直交梁が受けるため対象外（区間内部のみ＝
- *    columnLoads の既存の定義そのまま）。受梁は新しいエンティティ・フラグとして**保存しない**——毎回
- *    この判定から導出するだけ。
- *  - 伝播は`woodFraming.js`の`propagateCarrierDepths`に委ねる（host のさらに先の host へも荷重経路上を
+ *  - 伝播の起点は「host を持つ全ての対象梁」（受梁に限らない。2026-10-01）。「下階に柱のない場所」は
+ *    下記F1の端判定（端が下階柱の位置なら host を持たない）がそのまま表す。受梁（区間内部に自階柱があり
+ *    真下に下階柱が無い梁）は、その端が下階柱の位置でなければ host を持つので、この規則に含まれる。
+ *  - 伝播は`woodFraming.js`の`propagateBeamDepths`に委ねる（host のさらに先の host へも荷重経路上を
  *    辿って不動点まで反映。host判定・グラフ探査の二重実装はしない——host集合は上記hostMapと同じ
  *    findHostPrimaryBeam呼び出しから作る）。
  *  - **端が下階柱の位置ならhost登録しない**（ユーザー裁定2026-09-16「梁の端が下階柱なら受梁にしない」＝
@@ -1803,9 +1804,18 @@ function alongCoordOnAxis(beam, x, y, tol) {
  * @param {object} project
  * @param {Array|null} [belowColumns] - 1つ下の実体階の柱集合（呼び出し側が peekBelowGraph(graph,project).columns
  *   等で渡す。省略・nullどちらも下階柱を支持点に含めない＝端点2点だけで評価する）
+ * @param {{onlyIds?: Iterable<string>|null, propagate?: boolean}} [options] - 省略時（構造再計算の経路）は
+ *   全ての auto 梁へ子梁の伝播込みで書き戻す（従来どおり）。手動追加（manualMemberAdd.js addManualBeam）だけが指定する:
+ *   onlyIds=書き戻す梁idの集合（それ以外の梁は成を変えない）、propagate=false=子梁の成の伝播をしない
+ *   （梁自身の表値＝端点2点の支持＋その梁への荷重点から引いた値だけを使う。下階柱を渡せない経路では伝播の前提
+ *   「下階に柱のない場所」を判定できないため。リード裁定2026-10-01）。onlyIds が空の集合なら何も書き戻さない。
+ *   伝播を止めるのは propagate に false を明示したときだけ（null・undefined は伝播する）。
  * @returns {string[]}
  */
-export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
+export function autoFillWoodBeamDepths(graph, project, belowColumns = [], options = {}) {
+  const onlyIds = options?.onlyIds ?? null;
+  const propagate = options?.propagate !== false;
+  const onlySet = onlyIds == null ? null : new Set(onlyIds);
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing) return [];
   const columnWidth = resolvedBeamColumnWidthMm(graph, project);
@@ -1823,7 +1833,7 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
   // 床梁2本は互いに「反対方向から来た別の梁」であり十字貫通（通過しているだけ）ではなく実際の2つの
   // 荷重点なので、crossingBeamLoadCoords（+1/−1が揃うと除外）に通すと消えてしまう（ステップ3e-2の
   // 前提「両側の床梁が荷重として消えない」）。同位置の重複は woodBeamDepthForSpans の dedup が畳む。
-  // 同時に、各梁の各端が取りつく先の host を beamId -> Set<hostBeamId> でも集める（受梁の伝播先。3c-3）。
+  // 同時に、各梁の各端が取りつく先の host を beamId -> Set<hostBeamId> でも集める（子梁の成の伝播先。3c-3）。
   const hostMap = new Map();
   const hostFloorMap = new Map();
   const hostIdsByBeam = new Map();
@@ -1854,8 +1864,8 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
     }
   }
 
-  // 第1パス: 対象梁それぞれの支持区間ごとの梁成表引き（受梁の伝播をまだ考慮しない、自分の値）と
-  // 受梁判定（isCarrier）・伝播先（hostIds）をnodeとして集める。
+  // 第1パス: 対象梁それぞれの支持区間ごとの梁成表引き（子梁からの伝播をまだ考慮しない、自分の値）と
+  // 伝播先（hostIds）をnodeとして集める。
   const nodes = [];
   for (const beam of targets) {
     const endA = beam.clStart.effectiveValue, endB = beam.clEnd.effectiveValue;
@@ -1873,15 +1883,14 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = []) {
     const floorLoads = hostFloorMap.get(beam.id) ?? [];
     const depth = woodBeamDepthForSpans(supports, [...columnLoads, ...crossLoads, ...floorLoads]);
     if (depth == null) continue;
-    // 受梁＝区間内部の自階柱（columnLoads）のうち、真下（tol以内）に下階柱（belowSupports）が無いもの。
-    const carried = columnLoads.filter(c => !belowSupports.some(s => Math.abs(s - c) < CL_OVERLAP_TOL_MM));
-    nodes.push({ id: beam.id, depth, isCarrier: carried.length > 0, hostIds: [...(hostIdsByBeam.get(beam.id) ?? [])] });
+    nodes.push({ id: beam.id, depth, hostIds: propagate ? [...(hostIdsByBeam.get(beam.id) ?? [])] : [] });
   }
 
-  // 第2パス: 受梁の成をhost梁へ不動点まで伝播した最終的な成で書き戻す。
-  const finalDepths = propagateCarrierDepths(nodes);
+  // 第2パス: 子梁の成をhost梁へ不動点まで伝播した最終的な成で書き戻す（propagate=falseなら各梁の表値のまま）。
+  const finalDepths = propagateBeamDepths(nodes);
   const updated = [];
   for (const beam of targets) {
+    if (onlySet && !onlySet.has(beam.id)) continue;
     const depth = finalDepths.get(beam.id);
     if (depth == null) continue;
     const key = woodBeamSectionForDepth(depth, columnWidth);

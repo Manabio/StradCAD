@@ -14,7 +14,7 @@
 // （structuralAutoFill.js:915,933）。autoFillBeamEccentricity は dimensionStatus を見ないため
 // 順序に依存しないが、追加直後に呼ぶ既存の挙動（faceGap=0からの初期偏芯算出）に合わせる。
 // 梁成の自動算定（autoFillWoodBeamDepths、在来木造のみ）も同じ理由で「追加直後の1回だけ」locked化前に
-// 呼ぶ（S造柱のautoFillColumnSizesと同じ扱い。指示書 案(ii) 2026-09-30）。dimensionStatus==='auto' の
+// 呼ぶ（書き戻しは追加した梁だけ・他の梁からの成の伝播なし。下の addManualBeam のコメント参照。S造柱のautoFillColumnSizesと同じ扱い。指示書 案(ii) 2026-09-30）。dimensionStatus==='auto' の
 // 材だけを対象にするため、先にlockedにすると成が既定断面(120x120)のまま固定されてしまう。以後の
 // 再計算・beamType昇格（standard→受梁等）・階段LGのG置換の対象からは外れる——手動固定した材を
 // 再計算が黙って書き換えないという既存方針（上のlocked化の理由）と同じ副作用であり受容する。
@@ -66,10 +66,13 @@ export function addManualBeam(graph, project, { axisCL, isVertical, clStart, clE
   const beam = graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd, {});
   autoFillBeamEccentricity(graph, project); // 外周梁なら柱外面合わせの偏芯量を初期算出（faceGap=0＝面一）
   // belowColumns=[]固定: 手動追加は同期処理で他階peekができないため、下階柱を支持点に含めず端点2点
-  // だけで評価する（本番の再計算より成が大きめに出うるが、初期値としては安全側）。在来以外・材幅未解決
+  // だけで評価する。下階柱を渡せないので「下階に柱のない場所」を判定できず、子梁の成の伝播
+  // （2026-10-01 梁全般の規則）は前提を欠く——そこで初期値は**追加した梁だけ**に書き戻し（onlyIds）、
+  // その梁自身の表値（端点2点の支持＋その梁への荷重点）とする（propagate:false。他の梁の成は変えない。
+  // 他の梁は次の構造再計算が下階柱込みで決める。リード裁定2026-10-01）。在来以外・材幅未解決
   // （resolvedBeamColumnWidthMm）のときはautoFillWoodBeamDepths自身が[]を返し何もしない
   // （framing無しの主構造・S造など。structureRules.js:470）。
-  autoFillWoodBeamDepths(graph, project, []);
+  autoFillWoodBeamDepths(graph, project, [], { onlyIds: [beam.id], propagate: false });
   beam.setDimensionStatus('locked');
   // 固定梁と重なるauto梁は、その場で撤去し追加と同じundoエントリに入れる（指示書§2.5・裁定Q2）。
   // 在来木造の壁線方式（role:'primary'）は対象外（fixedBeamGuardHonored参照。次の再計算で復活して

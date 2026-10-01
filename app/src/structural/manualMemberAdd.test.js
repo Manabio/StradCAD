@@ -4,9 +4,12 @@
 // .jsx/store.js/snap.jsはimportしない。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { addManualColumn, addManualFooting, addManualBeam } from './manualMemberAdd.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
+import { autoFillWoodWallBeams, autoFillWoodBeamDepths } from './woodAutoFill.js';
+import { selfWallSegments } from './wallBeamAxes.js';
+import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 
 function makeGridGraph(structure, xs = [0, 4000], ys = [0, 4000]) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -112,4 +115,44 @@ test('【手動追加・失敗経路】S造（framing無し）の梁は成の算
   const beam = addManualBeam(graph, GRID_PROJECT, { axisCL: y1, isVertical: false, clStart: x1, clEnd: x2 });
   assert.equal(beam.dimensionStatus, 'locked');
   assert.equal(beam.sectionDefId, 'STEEL-H200x100');
+});
+
+// ---- (g) 在来木造の手動追加は追加した梁だけに、その梁自身の表値で書き戻す（リード裁定2026-10-01） ----
+// 3640×1820の矩形の壁線上の梁を下階柱込み（四隅＋(1820,0)）で収束させた後、belowColumns=[]固定の手動追加を行う。
+// 旧実装（全auto梁へ伝播込みで書き戻す）では、下階柱を渡せないためF1のスキップが効かず、隅の相互hostを通って
+// 最大の成が連結した梁すべてへ回り、追加梁自身もふくらんだ成のままlockedになっていた。
+function makeConvergedRectGraph() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (t, v) => graph.addCenterLine(t, v, { labeled: true, discipline: Discipline.STRUCT });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xm = cl(CenterLineType.VERTICAL, 1820), x1 = cl(CenterLineType.VERTICAL, 3640);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), y1 = cl(CenterLineType.HORIZONTAL, 1820);
+  generateRoomWallsFromOutline(graph, graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A'));
+  const below = [[1820, 0], [0, 0], [3640, 0], [0, 1820], [3640, 1820]].map(([x, y]) => ({ x, y, axisX: x, axisY: y, role: 'standard' }));
+  autoFillWoodWallBeams(graph, GRID_PROJECT, selfWallSegments(graph), null, below);
+  autoFillWoodBeamDepths(graph, GRID_PROJECT, below);
+  return { graph, xm, y0, y1 };
+}
+
+test('【手動追加】在来木造: 追加梁以外のauto梁の成は1本も変わらず、追加梁は自身の表値(120)でlockedになる', () => {
+  const { graph, xm, y0, y1 } = makeConvergedRectGraph();
+  const pre = new Map(graph.beams.map(b => [b.id, b.sectionDefId]));
+  assert.equal(pre.size, 5, '前提: 上辺の半梁2本・下辺・左右の縦梁');
+  const beam = addManualBeam(graph, GRID_PROJECT, { axisCL: xm, isVertical: true, clStart: y0, clEnd: y1 });
+  const changed = graph.beams.filter(b => b !== beam && pre.get(b.id) !== b.sectionDefId);
+  assert.equal(changed.length, 0, `他のauto梁の成が変わっている: ${changed.map(b => `${b.axisValue}:${pre.get(b.id)}->${b.sectionDefId}`)}`);
+  assert.equal(beam.dimensionStatus, 'locked');
+  assert.equal(beam.sectionDefId, 'WOOD-120x120', '長さ1820・荷重なしの自身の表値。関係のない梁から伝わった成ではない');
+});
+
+test('【手動追加】在来木造: 追加梁へ端を乗せる既存の梁は荷重点として数えられる（表値330）が、既存の梁の成は変わらない', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (t, v) => graph.addCenterLine(t, v, { labeled: true, discipline: Discipline.STRUCT });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xm = cl(CenterLineType.VERTICAL, 1820), x1 = cl(CenterLineType.VERTICAL, 3640);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), y1 = cl(CenterLineType.HORIZONTAL, 1820);
+  const existing = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, true, y0, y1, { role: 'primary' }); // 始端が追加梁へT
+  const beam = addManualBeam(graph, GRID_PROJECT, { axisCL: y0, isVertical: false, clStart: x0, clEnd: x1 });
+  assert.equal(beam.sectionDefId, 'WOOD-120x330', '3640・荷重1か所の表値');
+  assert.equal(existing.sectionDefId, 'WOOD-120x120', '既存のauto梁は手動追加では書き換えない');
 });

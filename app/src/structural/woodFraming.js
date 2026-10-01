@@ -133,18 +133,20 @@ export function crossingBeamLoadCoords(ends, tol = CL_OVERLAP_TOL_MM) {
 }
 
 /**
- * 受梁（区間内部に自階柱があり、その真下に下階柱が無い梁。判定は呼び出し側＝woodAutoFill.jsが行い
- * isCarrierで渡す）の成を、その受梁の端が取りつく host 梁へ不動点まで伝播する（ステップ3c-3。裁定
- * 2026-09-14「受梁を受ける梁は受梁同寸」）。host の成 = max(host の成, 受梁の成)——伝播で成が
- * 上がった梁は、それ自身が受梁かどうかに関わらずさらにその host へ伝播する（荷重経路を辿る）。
+ * 梁の成を、その梁の端が取りつく host 梁（受ける梁）へ不動点まで伝播する（ステップ3c-3。裁定
+ * 2026-09-14「受梁を受ける梁は受梁同寸」を、2026-10-01 ユーザー仕様「下階に柱のない場所で、子梁の成が
+ * それを受ける梁の成より大きい場合、受ける梁の成は子梁と同じにする」で受梁だけでなく全ての子梁へ拡張）。
+ * 「下階に柱のない場所」の判定（端が下階柱の位置なら hostIds に入れない）は呼び出し側＝woodAutoFill.js
+ * が行い、ここは hostIds を辿るだけ。host の成 = max(host の成, 子梁の成)——伝播で成が上がった梁は、
+ * さらにその host へ伝播する（荷重経路を辿る。孫→子→親）。全ノードが起点（host を持たなければ何も起きない）。
  * 循環（A→B→A等）があっても、各ノードの成は入力に現れる値の中で単調に増えるだけなので有限回で
  * 不動点に達する（無限ループにはならないが、想定外の入力に備え反復回数の安全弁を持つ）。
  * 非数のdepth・idの無い要素は無視する。未知のhostId（同じidの要素がnodesに無い）も無視する
  * （例外を投げない）。
- * @param {Array<{id:string, depth:number, isCarrier:boolean, hostIds?:string[]}>} nodes
+ * @param {Array<{id:string, depth:number, hostIds?:string[]}>} nodes
  * @returns {Map<string, number>} id -> 伝播後の成（入力のdepthのまま、または伝播で上がった値）
  */
-export function propagateCarrierDepths(nodes) {
+export function propagateBeamDepths(nodes) {
   const list = Array.isArray(nodes) ? nodes : [];
   const depthById = new Map();
   const hostsById = new Map();
@@ -153,7 +155,7 @@ export function propagateCarrierDepths(nodes) {
     depthById.set(n.id, n.depth);
     hostsById.set(n.id, Array.isArray(n.hostIds) ? n.hostIds : []);
   }
-  const queue = list.filter(n => n && n.isCarrier && depthById.has(n.id)).map(n => n.id);
+  const queue = list.filter(n => n && depthById.has(n.id)).map(n => n.id);
   const inQueue = new Set(queue);
   // 安全弁: 通常は単調増加＋入力値の有限集合により自然に停止するが、想定外の入力で反復が
   // 膨らまないよう上限を設ける（循環自体は正しく1回で収束するため、この上限に届くのは異常系のみ）。
