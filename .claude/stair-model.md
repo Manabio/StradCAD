@@ -185,6 +185,7 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
   ——取りつき回転部は sections に入れず別フィールドに持つ（先頭を回転部にすると区間数3を前提にする
   消費側が壊れる）。展開図（`elevation/section/*`）は復路レーン長を往路と同じとみなし、取りつき回転部も
   未追従（別件）。
+- `Stair` の項目を列挙する箇所は4つ（FBS `schema/graphFbs.js`・`graphSnapshot.js`・`finish/stair/stairFloorSync.js`・`finish/finishUndo.js`）。項目を足すときは全部に足す（finishUndo だけは採取側をキー集合の突合テスト、復元側を全項目往復テストが検出する。他3つは機械検出が無い）。
 - 階段はRoomを残したまま設置する（`Stair.roomId`リンク。理由と不変条件は`.claude/data-model.md`）。
 - 2a壁も脱出のたびに導出し直す（他の壁と同じライフサイクル。壁の再生成をFinishModeStateから
   独立させる計画。専用なのは`generateStairUnderWalls`の偏芯式という生成手順だけ）。

@@ -603,3 +603,13 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   ヒアドキュメント（展開なし）か、スクリプトをファイルへ書いてから実行する。委譲文にも「コマンド文字列に
   バッククォートを含めない」「git の状態を変えるコマンド（stash・checkout・restore・reset）を実行しない」を書く。
   復旧は、壊れた対象ファイルだけ破棄 → stash の中身を `--stat` で確認 → pop の順。
+
+### 実体に項目を足した後、別経路の undo で値が初期化された（2026-09-29 追加の4項目が仕上げ undo の列挙に無かった・2026-10-01 修正）
+
+- **症状**: 階段に出入口の辺・取りつき回転部の4項目（`entrySide`・`arrivalSide`・`entryTurnSteps`・`arrivalTurnSteps`）を足した際、
+  FBS・`graphSnapshot.js`・`stairFloorSync.js` は直したが、仕上げ undo（`finish/finishUndo.js`）の列挙だけ漏れた。
+  仕上げ内の別操作を undo/redo するだけで階段の4項目と総段数が初期値に戻り、辺だけの切替は undo に積まれなかった。
+- **誤った直感**: 保存形式と境界 undo を直せば、その実体の項目追従は十分。
+- **正しい動き**: 同じ実体を列挙する箇所を grep で全列挙してから足す（階段は4箇所あった）。列挙が複数残るなら、
+  実体の項目集合と列挙のキー集合を突合する不変条件テストを置く（`finishUndo.test.js`）。キー集合の突合は採取側しか
+  守らない。復元側は全項目を既定値以外にした往復テストで守る。

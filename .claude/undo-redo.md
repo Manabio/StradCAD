@@ -37,6 +37,8 @@ CL操作（`transform/centerLineOps.js`の`addCenterLineFromDialog`・`commitCLM
 ## 「作成→ダイアログ確定」は1エントリ、キャンセルはエントリなし
 仕上げモードの新規部屋はcommitDrag（作成）時点ではpushを保留し（`_pendingDialogUndo`）、applyNaming（確定）で作成＋命名を1エントリにする。キャンセルは作成と相殺して差分ゼロ＝積まない。部屋統合（判定2）だけはキャンセルしても残る仕様のため即時push。
 
+仕上げモード undo（`finish/finishUndo.js`）は階段を項目ごとに列挙して写すため、`Stair` に項目を足したら `snapshotStairs`／`restoreStairs` の列挙も足す。採取側の列挙漏れは `finishUndo.test.js` のキー集合の突合テストが、復元側の渡し忘れは全項目を既定値以外にした往復テスト（fixture の項目集合も `Stair` と突合）が検出する。
+
 ## 階操作（追加・挿入・並替・階変更）は「全採用フロアのbefore/afterバイト列比較＋Planeメタ比較」で1エントリ
 plane作成・新階同期（階段・昇降機の複製）・切替・全階の構造再計算が複数階へ波及するため、逆操作ではなく前後比較で記録する（`withFloorOpUndo`。`beginUiTransition()`は呼び出し元が直前に呼ぶ）。全採用階のPlaneメタ（elevation・startFloor・name・stories。`collectPlaneMetas`）もbefore/afterで持つため、追加階が無い並替・階変更でもメタに差があれば1エントリ積む。積むかどうか・差分（`addedPlanes`・`changedSiblings`・`hasChanges`）は`floorOps.js`の純関数`diffFloorOpSnapshot`へ委譲し、`withFloorOpUndo`自身は判定しない。redoは**同一planeId**でplaneを再作成してbytesを書き戻す（IDが変わると以降のundo/redoサイクルとIDBキーが壊れる）。フロー内の構造再計算は個別pushを抑止する（二重記録防止。`recomputeActiveStructural(pushUndo=false)`）。階削除は従来どおりundo無し（下記「undo対象外」節）。
 
