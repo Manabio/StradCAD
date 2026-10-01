@@ -12,13 +12,17 @@ import { stripCommentLines } from './uiBusySourceScan.js';
 
 test('floorOrderFollowers: name の並びが固定されている', () => {
   assert.deepEqual(floorOrderFollowers.map(f => f.name), [
-    'stairUpperSync', 'stairsBelowRemoval', 'elevatorCopy', 'exteriorRoom', 'switchToAddedFloor',
-    'structuralReflect', 'elevatorRenumber',
+    'roofPlaneHeight', 'stairUpperSync', 'stairsBelowRemoval', 'elevatorCopy', 'exteriorRoom',
+    'switchToAddedFloor', 'structuralReflect', 'elevatorRenumber',
   ]);
 });
 
 test('floorOrderFollowers: 各followerのappliesToが固定されている', () => {
   const byName = Object.fromEntries(floorOrderFollowers.map(f => [f.name, f.appliesTo]));
+  assert.deepEqual(byName.roofPlaneHeight, [
+    FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
+    FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+  ]);
   assert.deepEqual(byName.stairUpperSync, [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.REORDER]);
   assert.deepEqual(byName.elevatorCopy, [FLOOR_ORDER_KIND.INSERT]);
   assert.deepEqual(byName.elevatorRenumber, [FLOOR_ORDER_KIND.DELETE]);
@@ -250,7 +254,7 @@ test('CHANGE のとき structuralReflect だけが呼ばれる', async () => {
     ui: makeUi(),
   }, followers);
 
-  assert.deepEqual(calls, ['structuralReflect']);
+  assert.deepEqual(calls, ['roofPlaneHeight', 'structuralReflect'], 'roofPlaneHeightもCHANGEに適用される');
 });
 
 // QA指摘5: floorOrderChange.js のソース（コメント行除去後）で、追従処理の主要呼び出し行が
@@ -431,4 +435,94 @@ test('【不変条件】applyPlaneMetas: stories が undefined のエントリ�
   assert.equal(plane.startFloor, 2);
   assert.equal(plane.elevation, 3000);
   assert.equal(plane.stories, 3, 'storiesがundefinedのエントリではstoriesを書き換えてはいけない');
+});
+
+// ---- (e) roofPlaneHeight follower（§5-8。屋根平面の高さは最上階に従属） ----
+
+test('roofPlaneHeight: project.roofPlaneが無いときは何もしない（屋根平面を新設しない）', async () => {
+  const project = makeProjectWithThreeFloors();
+  const sizeBefore = project.planeMap.size;
+
+  const updates = [{ id: 'p3', name: '5階', startFloor: 5, elevation: 12000 }];
+  await applyFloorOrderChange(project, {
+    kind: FLOOR_ORDER_KIND.CHANGE,
+    updates,
+    sourceGraph: {},
+    ui: makeUi(),
+  }, [floorOrderFollowers.find(f => f.name === 'roofPlaneHeight')]);
+
+  assert.equal(project.planeMap.size, sizeBefore, 'roofPlaneが無いプロジェクトに屋根平面を作ってはいけない');
+  assert.equal(project.roofPlane, null);
+});
+
+test('roofPlaneHeight: 最上階idが同じまま高さ・階番号が変わったら屋根平面の高さが追従する', async () => {
+  const project = makeProjectWithThreeFloors();
+  const { syncRoofPlane } = await import('./structural/roofPlane.js');
+  const roof = syncRoofPlane(project); // 最上階(p3: elevation=6000,startFloor=3)の上に屋根平面ができる
+  assert.equal(roof.elevation, 6001);
+  assert.equal(roof.startFloor, 3);
+
+  // p3の振り直し（挿入で1段ずれた想定）: elevation/startFloorだけ動き、idは変わらない
+  const updates = [{ id: 'p3', name: '4階', startFloor: 4, elevation: 9000 }];
+  await applyFloorOrderChange(project, {
+    kind: FLOOR_ORDER_KIND.INSERT,
+    updates,
+    addPlane: () => project.addPlane(6000, '3階', 'new', 3, 1),
+    sourceGraph: {},
+    ui: makeUi(),
+  }, [floorOrderFollowers.find(f => f.name === 'roofPlaneHeight')]);
+
+  const roofAfter = project.roofPlane;
+  assert.equal(roofAfter.id, roof.id, '最上階idが同じなら屋根平面を作り直さない');
+  assert.equal(roofAfter.elevation, 9001, '屋根平面の高さは最上階+1に追従する必要がある');
+  assert.equal(roofAfter.startFloor, 4);
+});
+
+// QA指摘2026-10-01: roofPlaneHeightがstructuralReflectより前に走る（屋根平面の高さを合わせてから
+// 構造反映が屋根平面を読む）ことを、変異（順序入替え）で検出できる形で固定する。
+test('roofPlaneHeight: 途中挿入（最上階idは同じ）でstructuralReflectより前に屋根平面の高さが新しい最上階+1になっている', async () => {
+  const project = makeProjectWithThreeFloors();
+  const { syncRoofPlane } = await import('./structural/roofPlane.js');
+  syncRoofPlane(project); // 最上階(p3: elevation=6000,startFloor=3)の上に屋根平面ができる
+
+  const roofPlaneHeight = floorOrderFollowers.find(f => f.name === 'roofPlaneHeight');
+  let elevationSeenByStub = null;
+  const stub = {
+    name: 'stub',
+    appliesTo: [FLOOR_ORDER_KIND.INSERT],
+    run(ctx) { elevationSeenByStub = ctx.project.roofPlane.elevation; },
+  };
+
+  const updates = [{ id: 'p3', name: '4階', startFloor: 4, elevation: 9000 }];
+  await applyFloorOrderChange(project, {
+    kind: FLOOR_ORDER_KIND.INSERT,
+    updates,
+    addPlane: () => project.addPlane(6000, '3階', 'new', 3, 1),
+    sourceGraph: {},
+    ui: makeUi(),
+  }, [roofPlaneHeight, stub]);
+
+  assert.equal(elevationSeenByStub, 9001, 'roofPlaneHeightはstubより前に走り、屋根平面の高さを新しい最上階+1へ合わせている必要がある');
+});
+
+// QA指摘2026-10-01再裁定: 最上階idが変わる操作（最上階の上へのINSERT）では屋根平面を作り直さない
+// （undoの記録の外にある屋根平面を階操作の時点で作り直すと、undoで旧屋根平面が戻らない）。
+test('roofPlaneHeight: 最上階の上へのINSERT（idが変わる）では屋根平面を作り直さない', async () => {
+  const project = makeProjectWithThreeFloors();
+  const { syncRoofPlane } = await import('./structural/roofPlane.js');
+  const roof = syncRoofPlane(project); // roofForPlaneId='p3'
+  const planeCountBefore = project.planeMap.size;
+
+  // 最上階の上へ新しい最上階p4を追加する（p3の上。updatesは無し＝p3は動かない）
+  await applyFloorOrderChange(project, {
+    kind: FLOOR_ORDER_KIND.INSERT,
+    updates: [],
+    addPlane: () => project.addPlane(9000, '4階', 'p4', 4, 1),
+    sourceGraph: {},
+    ui: makeUi(),
+  }, [floorOrderFollowers.find(f => f.name === 'roofPlaneHeight')]);
+
+  assert.equal(project.roofPlane.id, roof.id, '屋根平面のidは変わらない（作り直していない）');
+  assert.equal(project.roofPlane.roofForPlaneId, 'p3', 'roofForPlaneIdは古いまま（新しい最上階p4には追従しない）');
+  assert.equal(project.planeMap.size, planeCountBefore + 1, '増えるのは追加したp4の1つだけ（削除→新設はしていない）');
 });

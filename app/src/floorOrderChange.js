@@ -19,6 +19,7 @@ import { saveFloor } from './storage/db.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { applyFloorInsert, applyPlaneMetas } from './floorOps.js';
 import { reflectStructuralAfterFloorAdd } from './structural/structuralOrchestration.js';
+import { followRoofPlaneToTop } from './structural/roofPlane.js';
 import { makeFloorName } from './floorNumber.js';
 import { ERR_ELEVATOR_COPY_SKIPPED } from './error.js';
 
@@ -47,11 +48,32 @@ async function removeStairsOnPlane(project, plane) {
 // delete は旧 runDeleteFloor の順序（下階の階段削除 → 振り直し → 昇降機の再採番。再採番は
 // HEADどおり後始末の最後に置く——throwしても他の後始末は完了済みにする意図を保つため、delete専用の
 // elevatorRenumber を構造反映の後ろへ登録する）、insert は旧 executeAddUpper/'general' の順序
-// （階段の上階同期 → 昇降機の複製 → 外壁内側の部屋）を、appliesTo の違い（elevatorCopyはinsertのみ・
-// elevatorRenumberはdeleteのみ・stairsBelowRemovalはdeleteのみ・exteriorRoomはinsertのみ・
-// stairUpperSyncはinsert/reorder・structuralReflectはinsert/addLower/delete/reorder/change）で
-// 同じ配列に両立させている（リード指示・F5裁定・2026-10-01。reorder/changeはステップ4でQ1裁定）。
+// （階段の上階同期 → 昇降機の複製 → 外壁内側の部屋）を、appliesTo の違い（roofPlaneHeightは全種別・
+// elevatorCopyはinsertのみ・elevatorRenumberはdeleteのみ・stairsBelowRemovalはdeleteのみ・
+// exteriorRoomはinsertのみ・stairUpperSyncはinsert/reorder・structuralReflectは
+// insert/addLower/delete/reorder/change）で同じ配列に両立させている（リード指示・F5裁定・
+// 2026-10-01。reorder/changeはステップ4でQ1裁定）。
 export const floorOrderFollowers = [
+  {
+    // 屋根平面の高さは最上階に従属する（最上階 id が同じでも、振り直しで高さ・階番号だけ動くことが
+    // ある。§5-8）。structuralReflect が屋根平面を読む前に高さを合わせておく必要があるため先頭に
+    // 置く。followRoofPlaneToTop は最上階idが同じときだけ書き換え、idが変わった（最上階そのものが
+    // 入れ替わった）ときは何もしない——作り直し（削除→新設）はここで行わない（syncRoofPlaneは呼ば
+    // ない）。理由: 屋根平面はPlaneメタのundo記録（collectPlaneMetas）・バイト列のundo記録
+    // （collectFloorBytes）のいずれも対象外（project.planesのみを見る）のため、階操作の時点で
+    // 作り直すとundoで旧屋根平面が戻らず、新しい屋根平面が削除済みの階を指したまま残る
+    // （QA指摘・2026-10-01再裁定）。作り直しは次の構造モード突入のsyncRoofPlaneに任せる。
+    // 屋根平面が無いプロジェクトでは（構造モードに入ったことが無い）followRoofPlaneToTopが
+    // 何もせずfalseを返すので、ここでも何も起きない。
+    name: 'roofPlaneHeight',
+    appliesTo: [
+      FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
+      FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+    ],
+    run(ctx) {
+      runInAction(() => followRoofPlaneToTop(ctx.project));
+    },
+  },
   {
     name: 'stairUpperSync',
     // reorder（ドラッグ移動）も含める（§5-6「移動後にfollower（構造反映・階段同期）が呼ばれる」・

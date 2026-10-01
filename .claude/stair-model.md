@@ -191,3 +191,6 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
 - 2a壁の描画クリップ（stairUnderClip.js）は、L_TURN/FLARED/OPEN_WELLでは破れ線弦の半平面
   クリップを行わずセル矩形（KEEP_MARGIN拡張）のまま採用する——弦の無限延長が別アーム側の
   破れ線先セルを誤って切ってしまうため。斜めの破れ線と厳密には一致しない（セル粒度）。
+
+## 階操作（追加・挿入・並替・階変更・削除）への追従は`floorOrderChange.js`が担う
+上階の自動設置（`syncUpperFloorsAuto`）・直下階の階段削除は、階の並びを変える経路（挿入・下階追加・削除・ドラッグ移動・階変更）から個別に呼ばれず、`floorOrderFollowers`レジストリの`stairUpperSync`／`stairsBelowRemoval`に登録して行う。同期ルールが今後変わったら、この2つのfollowerだけ直せば全経路に効く（`.claude/floor-design.md`「階の並びを変える操作が他の階へ波及する処理」参照）。
