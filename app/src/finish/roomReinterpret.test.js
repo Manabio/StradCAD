@@ -9,8 +9,9 @@ import {
   findUnresolvableCells, reinterpretSlabsAfterCLRemoval,
 } from './roomReinterpret.js';
 import { roomNameAnchor } from './roomLabel.js';
-import { worldToCell, lostSides, cellInteriorPoint, regionCellsAt } from './gridCells.js';
+import { worldToCell, lostSides, cellInteriorPoint, regionCellsAt, refreshCells } from './gridCells.js';
 import { isInteriorWallTarget } from './wallGeneration.js';
+import { stairUnderRoomsOf } from './stair/stairUnderRooms.js';
 
 // ---- 作業0（前提確認）: 最外郭CL（外壁線）を失ったセルは再解釈できるか ----
 // フットプリント境界CL削除ガード（centerLineConvert.js isFootprintBoundaryCL）着手前の実測。
@@ -773,6 +774,158 @@ test('【QA回帰・2026-09-29→書換え】独立した昇降路に接する�
     '昇降路のセル辺になっているCLは、再解釈除外部屋の辺を1つでも失う=復元不能として先読みが拒否するはず（案a）');
 });
 
+// ================================================================
+// 不変条件（moku2-1 2階実測・2026-10-01）: 再解釈は、再解釈除外部屋
+// （isReinterpretExempt＝階段・階段吹抜け・未定義・昇降路）とStair.cellsが持つセルを
+// 奪わない（セルの二重所有を作らない）。
+//
+// フィクスチャ: 横2列のグリッド。左列(x0..x1)はさらに上下2セルに分かれ、除外部屋
+// （階段ペアRoom等）が占める。右列(x1..x2)は分割なしの1セルで、通常の部屋（廊下相当）
+// が占める。列境界のCL(x1)は（floorplanモードでの短縮により）全区間で非アクティブ
+// （＝開口）——CL自体は削除しない（moku2-1の実際の原因と同じ。CL削除によるダングリング
+// ではなく「存在するが短縮で非アクティブ」なケースを再現する）。
+// この開口により、通常の部屋の代表点から見た連結領域（regionCellsAt）は
+// [通常の部屋のセル, 除外部屋のセル×2] の3セルになる——不変条件が無いと、通常の部屋が
+// 除外部屋のセルを own してしまう（セルの二重所有＝moku2-1の不良の直接原因）。
+// ================================================================
+function makeExemptOpeningFixture() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, ARCH);
+  // x1: 列境界だが、extentLo/Hiをグリッド外に置くことで「常に非アクティブ（＝開口）」を表す
+  // （CL自体は削除しない。moku2-1の実際の原因＝短縮による非アクティブと同じ再現方法）。
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { ...ARCH, extentLo: 10000, extentHi: 11000 });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 6000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, ARCH);
+  // yMid: 左列(x0..x1)だけを上下に分ける内部仕切り（extentを左列のx範囲に限定）。
+  // 右列（通常の部屋）はこの仕切りの影響を受けず1セルのまま——worldToCellの点判定で
+  // 両列の「縦区間」の形が食い違うため、x1が非アクティブでも1個の巨大セルへ自動合体せず、
+  // regionCellsAtのflood-fillで3つの別個セルとして連結される（実機のL字連結領域と同型）。
+  const yMid = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { ...ARCH, extentLo: 0, extentHi: 3000 });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+
+  const exemptTopKey    = `${x0.id}:${y0.id}:${x1.id}:${yMid.id}`;
+  const exemptBottomKey = `${x0.id}:${yMid.id}:${x1.id}:${y1.id}`;
+  const normalKey       = `${x1.id}:${y0.id}:${x2.id}:${y1.id}`;
+
+  const normalRoom = graph.addRoom(new Set([normalKey]), '廊下');
+
+  return { graph, exemptTopKey, exemptBottomKey, normalKey, normalRoom };
+}
+
+test('reinterpretRoomsOnEntry【不変条件】: 開口（短縮で非アクティブな列境界CL）を挟んで隣接する通常の部屋は、階段ペアRoom（feature===STAIR）とStair.cellsが持つセルを奪わない', () => {
+  const { graph, exemptTopKey, exemptBottomKey, normalKey, normalRoom } = makeExemptOpeningFixture();
+  const stairRoom = graph.addRoom(new Set([exemptTopKey, exemptBottomKey]), '階段');
+  stairRoom.setFeature(RoomFeature.STAIR);
+  const stair = graph.addStair({ cells: new Set([exemptTopKey, exemptBottomKey]), roomId: stairRoom.id });
+
+  // 前提: 通常の部屋（廊下）が開口越しに辺を1つ失っている（再解釈の起動条件）
+  assert.deepEqual(lostSides(normalKey, graph), ['left'], '前提: 廊下の左辺（開口）が喪失扱いになる');
+
+  const result = reinterpretRoomsOnEntry(graph);
+
+  // (a) 廊下のcellsが階段セルを含まない（二重所有が起きていない）
+  assert.ok(!normalRoom.cells.has(exemptTopKey) && !normalRoom.cells.has(exemptBottomKey),
+    '廊下が階段のセルを奪ってはいけない');
+  // (b) 階段ペアRoomのcellsは不変
+  assert.deepEqual([...stairRoom.cells].sort(), [exemptTopKey, exemptBottomKey].sort(),
+    '階段ペアRoomのセルは再解釈の前後で不変のはず');
+  // (c) stairUnderRoomsOf（2a判定の部屋抽出）が廊下を誤って拾わない。
+  // cellsBeyondBreak（階段ジオメトリ・riser等が必要）はこの純粋な格子テストの対象外のため、
+  // 実機で破れ先セルになりうる「階段自身のセル」をbeyondの代役として使う——廊下がこの
+  // セル群と物理的に重ならなければ、実際のcellsBeyondBreak（階段セルの部分集合）とも重ならない。
+  const beyondProxy = refreshCells(stair.cells, graph);
+  assert.deepEqual(stairUnderRoomsOf(stair, graph, beyondProxy), [],
+    '廊下が階段のセルを持たないため、2a判定の部屋抽出に廊下が入ってはいけない');
+  // (d) 復元不能（unresolved）には入らない——除外対象を除いた残りセル（廊下自身）で
+  // 正しく解決できるはず
+  assert.deepEqual(result.unresolved, [], '廊下自身のセルで解決できるため復元不能にはならないはず');
+});
+
+test('reinterpretRoomsOnEntry【不変条件】: 昇降路（isShaftFeature）が占めるセルも同様に奪われない', () => {
+  const { graph, exemptTopKey, exemptBottomKey, normalKey, normalRoom } = makeExemptOpeningFixture();
+  const shaftRoom = graph.addRoom(new Set([exemptTopKey, exemptBottomKey]), 'EV');
+  shaftRoom.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  assert.ok(isShaftFeature(shaftRoom.feature), '前提: isShaftFeatureがtrueになる種別');
+
+  const result = reinterpretRoomsOnEntry(graph);
+
+  assert.ok(!normalRoom.cells.has(exemptTopKey) && !normalRoom.cells.has(exemptBottomKey),
+    '通常の部屋が昇降路のセルを奪ってはいけない');
+  assert.deepEqual([...shaftRoom.cells].sort(), [exemptTopKey, exemptBottomKey].sort(),
+    '昇降路のセルは再解釈の前後で不変のはず');
+  assert.deepEqual(result.unresolved, [], '通常の部屋自身のセルで解決できるため復元不能にはならないはず');
+  assert.ok(normalRoom.cells.has(normalKey), '通常の部屋のセル自体は維持される');
+});
+
+test('reinterpretRoomsOnEntry【不変条件】: 未定義部屋（RoomFeature.UNDEFINED）が占めるセルも同様に奪われない', () => {
+  const { graph, exemptTopKey, exemptBottomKey, normalRoom } = makeExemptOpeningFixture();
+  const undefinedRoom = graph.addRoom(new Set([exemptTopKey, exemptBottomKey]), '');
+  undefinedRoom.setFeature(RoomFeature.UNDEFINED);
+
+  const result = reinterpretRoomsOnEntry(graph);
+
+  assert.ok(!normalRoom.cells.has(exemptTopKey) && !normalRoom.cells.has(exemptBottomKey),
+    '通常の部屋が未定義部屋のセルを奪ってはいけない');
+  assert.deepEqual([...undefinedRoom.cells].sort(), [exemptTopKey, exemptBottomKey].sort(),
+    '未定義部屋のセルは再解釈の前後で不変のはず');
+  assert.deepEqual(result.unresolved, [], '通常の部屋自身のセルで解決できるため復元不能にはならないはず');
+});
+
+// ================================================================
+// QA指摘1（2026-10-01）: 固定セル自身をoldKeyとして持つ「正規の階段下部屋（2a）」が
+// セルを奪われる不良。破れ先セルを通常の部屋が持つのは設計上正しい（stairUnderRoomsOfの
+// 前提）——その部屋が開口越しに辺を1つ失っても、固定セル（階段ペアRoom・Stair.cellsの
+// セル）自身をoldKeyとして持つなら、洪水させず現状のまま残すべき。QA再現: scratchの
+// under.mjs（物入=botを正規に持つ→再解釈でbotを失い廊下の部分指定化→廊下が空になる）。
+// ================================================================
+test('reinterpretRoomsOnEntry【QA指摘1】: 階段の破れ先セルを正規に持つ通常の部屋（2a）は、そのセル自身を失わない（物入・廊下とも維持される）', () => {
+  const { graph, exemptTopKey, exemptBottomKey, normalKey, normalRoom } = makeExemptOpeningFixture();
+  const stairRoom = graph.addRoom(new Set([exemptTopKey, exemptBottomKey]), '階段');
+  stairRoom.setFeature(RoomFeature.STAIR);
+  graph.addStair({ cells: new Set([exemptTopKey, exemptBottomKey]), roomId: stairRoom.id });
+  // 物入: 階段の破れ先セル(exemptBottomKey)を正規に持つ通常の部屋（2a。設計上
+  // Stair.cells／階段ペアRoomと同じセルを持つのが正しい）。
+  const closet = graph.addRoom(new Set([exemptBottomKey]), '物入');
+
+  const result = reinterpretRoomsOnEntry(graph);
+
+  assert.deepEqual([...closet.cells], [exemptBottomKey], '物入はbotを失わず、部分指定にもならないはず');
+  assert.equal(closet.referenceRoomIds.size, 0, '物入は廊下の部分指定になってはいけない');
+  assert.ok(graph.roomMap.has(closet.id), '物入は吸収削除されてはいけない');
+  assert.deepEqual([...normalRoom.cells], [normalKey], '廊下は空にならず、自分のセルを維持するはず');
+  assert.deepEqual([...stairRoom.cells].sort(), [exemptTopKey, exemptBottomKey].sort(),
+    '階段ペアRoomのセルは不変のはず');
+  assert.deepEqual(result.unresolved, [], '廊下自身のセルで解決できるため復元不能にはならないはず');
+});
+
+// ================================================================
+// QA指摘2（2026-10-01・既存不良）: 多部屋グループの解決で「親にcellsを足す→各エントリの
+// oldKeyを消す」の順だと、親自身のoldKeyがcellsに含まれる場合、足したばかりのセルを
+// 直後に消してしまい、親が本来維持すべきセルを失う。「先に全oldKeyを消す→その後で足す」
+// （1部屋グループと同じ順序）に直すことで防ぐ。
+// 指摘1の固定セル判定とは無関係であることを示すため、除外部屋・Stairを一切使わない
+// （fixedCellsが空の状態で、通常の部屋どうし2件がflood領域を共有する最小構成）。
+// ================================================================
+test('reinterpretRoomsOnEntry【QA指摘2】: 多部屋グループで親自身のoldKeyが洪水先の領域に含まれても、親はセルを失わない（除外部屋を使わない最小構成）', () => {
+  const { graph, exemptTopKey, exemptBottomKey, normalKey, normalRoom } = makeExemptOpeningFixture();
+  // 「大」は通常の部屋（featureなし。除外部屋ではない）。exemptTopKey/exemptBottomKeyという
+  // 名前はフィクスチャ共用の都合で、ここでは階段とは無関係な2セルとして使う。
+  const big = graph.addRoom(new Set([exemptTopKey, exemptBottomKey]), '大');
+
+  const result = reinterpretRoomsOnEntry(graph);
+
+  // 「大」（親候補。セル数2で廊下より多い）は、開口で連結された領域の全セル
+  // （exemptTopKey・exemptBottomKey・normalKey）を維持するはず——自分のoldKeyの削除で
+  // 足したばかりのセルを消してしまうと、exemptTopKey・exemptBottomKeyが失われる。
+  assert.deepEqual([...big.cells].sort(), [exemptTopKey, exemptBottomKey, normalKey].sort(),
+    '親（大）は自分の元のセルを含む領域全体を維持するはず（0件・一部欠落のいずれにもならない）');
+  // 廊下（セル数1。子側）は部分指定として同じ領域全体を持つ
+  assert.deepEqual([...normalRoom.cells].sort(), [exemptTopKey, exemptBottomKey, normalKey].sort());
+  assert.deepEqual([...normalRoom.referenceRoomIds], [big.id], '廊下は大の部分指定になるはず');
+  assert.deepEqual(result.unresolved, []);
+});
+
 test('【QA回帰・2026-09-29→書換え】先読みを無視して削除を強行しても、reinterpretRoomsOnEntryは独立した昇降路を部分指定化しない', () => {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   const opts = { labeled: false, discipline: Discipline.ARCH };
@@ -801,4 +954,39 @@ test('【QA回帰・2026-09-29→書換え】先読みを無視して削除を�
   assert.ok(isShaftFeature(ev.feature), 'isShaftFeatureのまま');
   assert.equal(isInteriorWallTarget(ev, new Set()), true,
     '独立部屋のまま（部分指定化していない）なのでisInteriorWallTargetは変わらずtrue');
+});
+
+// QA指摘2の修正で入ったリグレッション: 同じ子部屋が同一グループに「2辺以上喪失」と「1辺喪失」の
+// エントリを両方持つとき、全oldKeyを先に消す順序だと2辺喪失側の処理時点で子のcellsが空になり、
+// 吸収削除されてしまう（HEADは1辺喪失エントリのoldKeyが残っていたため部分指定になっていた）。
+// 吸収か部分指定かはエントリ単位でなく部屋単位で決める（混在は常に部分指定）。
+test('reinterpretRoomsOnEntry【QA指摘2・回帰】: 同じグループに2辺喪失→1辺喪失の順でエントリを持つ子部屋は、吸収削除されず部分指定として残る', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const A = { labeled: false, discipline: Discipline.ARCH };
+  // x1・x2 は1段目（y3000〜6000）だけ非アクティブ → 1段目の3セルが開口で連結する
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, A);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { ...A, extentLo: 3000, extentHi: 6000 });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 6000, { ...A, extentLo: 3000, extentHi: 6000 });
+  const x3 = graph.addCenterLine(CenterLineType.VERTICAL, 9000, A);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, A);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, A);
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, A);
+  const k = (a, b, c, d) => `${a.id}:${b.id}:${c.id}:${d.id}`;
+  const r1L = k(x0, y0, x1, y1), r1M = k(x1, y0, x2, y1), r1R = k(x2, y0, x3, y1);
+  const r2L = k(x0, y1, x1, y2), r2M = k(x1, y1, x2, y2);
+  const big = graph.addRoom(new Set([r1R, r2L, r2M]), '大');
+  // 子: r1M（左右とも喪失=2辺）→ r1L（右だけ喪失=1辺）の順
+  const child = graph.addRoom(new Set([r1M, r1L]), '子');
+
+  const result = reinterpretRoomsOnEntry(graph);
+
+  assert.ok(graph.roomMap.has(child.id), '子は吸収削除されず残るはず');
+  assert.deepEqual([...child.referenceRoomIds], [big.id], '子は大の部分指定になるはず');
+  // 1段目の3セルは開口で1つの統合セルになる（旧キーは別のキーへ置き換わる）
+  const pt = cellInteriorPoint(r1M, graph);
+  const merged = regionCellsAt(pt.x, pt.y, graph).map(c => c.key);
+  assert.equal(merged.length, 1, '1段目は統合後1セルのはず');
+  assert.ok(child.cells.has(merged[0]), '子のcellsに統合後の1段目セルを含むはず');
+  assert.ok(big.cells.has(merged[0]), '大も統合後の1段目セルを持つはず');
+  assert.deepEqual(result.unresolved, []);
 });

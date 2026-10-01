@@ -313,6 +313,24 @@ export function reinterpretRoomsOnEntry(graph) {
 
   const unresolved = new Set();
 
+  // 不変条件: 固定セル（再解釈除外部屋＝isReinterpretExempt＝階段・階段吹抜け・未定義・
+  // 昇降路のセルと、Stair.cellsのセル）の所有は動かさない——他の部屋の洪水先（領域の
+  // flood-fill）としてこれらを奪わないだけでなく、固定セル自身をoldKeyとして持つ通常の
+  // 部屋（階段下部屋＝2a。破れ先セルを正規に持つのが設計上正しい。stairUnderRoomsOfの
+  // 前提）からも動かさない。開口（区間内で非アクティブな分割CL）を挟んで隣の部屋の連結領域が
+  // 固定セルへ延びると、二重所有により2a判定（finish/stair/stairUnderRooms.js
+  // stairUnderRoomsOf）が誤発火する（moku2-1 2階実測・2026-10-01。QA指摘1・2026-10-01で
+  // 「奪わない」から「所有は動かさない」へ言い直し: 固定セルをoldKeyとして持つ通常の部屋も
+  // 洪水対象から外すことで、そのセル自身が固定セルである場合に現状維持できるようにした）。
+  const fixedCells = new Set();
+  for (const room of rooms) {
+    if (!isReinterpretExempt(room)) continue;
+    for (const key of refreshCells(room.cells, graph)) fixedCells.add(key);
+  }
+  for (const stair of graph.stairs) {
+    for (const key of refreshCells(stair.cells, graph)) fixedCells.add(key);
+  }
+
   // 1. 影響を受けるセルを収集し、現在の分割上での連結領域（正準ID）でグルーピングする
   const groups = new Map(); // regionId -> { cells, entries: [{ room, oldKey, lostCount }] }
   for (const room of rooms) {
@@ -327,10 +345,20 @@ export function reinterpretRoomsOnEntry(graph) {
       const lost = lostSides(oldKey, graph);
       if (lost.length === 0) continue;
 
+      // oldKey自身が固定セル（現在の分割へrefreshした結果のいずれかがfixedCellsに含まれる。
+      // 未細分化ならoldKey自身を含む）なら、洪水させず現状のまま残す（上記不変条件。
+      // QA指摘1・2026-10-01: 物入=階段の破れ先セル(bot)を正規に持つ通常の部屋が、botを
+      // fixedCells扱いで奪われて廊下の部分指定に化け、廊下のcellsが空になる不良の修正）。
+      const refreshedOld = refreshCells(new Set([oldKey]), graph);
+      // unresolved へは加えない: 2a部屋が破れ先セル（固定セル）を持つのは正規の状態で、復元不能ではないため。
+      if ([...refreshedOld].some(k => fixedCells.has(k))) continue;
+
       const pt = cellInteriorPoint(oldKey, graph);
       if (!pt) { unresolved.add(oldKey); continue; } // 退化ケース（対辺2本同時消失）→ 復元不能なので今回は現状維持
 
-      const region = regionCellsAt(pt.x, pt.y, graph);
+      // 洪水先の領域から、除外部屋・Stair.cellsのセル（fixedCells）を奪わないよう除く
+      // （上記不変条件）。除いた結果が空なら復元不能として現状維持する。
+      const region = regionCellsAt(pt.x, pt.y, graph).filter(c => !fixedCells.has(c.key));
       if (region.length === 0) { unresolved.add(oldKey); continue; }
 
       const regionId = region.map(c => c.key).sort().join('|');
@@ -361,19 +389,33 @@ export function reinterpretRoomsOnEntry(graph) {
       }
     }
 
-    for (const c of cells) dominant.addCell(c.key);
-    for (const e of entries) {
-      e.room.removeCell(e.oldKey);
-      if (e.room.id === dominant.id) continue;
+    // 先に全エントリのoldKeyを消してから親・子へセルを足す（1部屋グループと同じ「消してから
+    // 足す」順序）。消す前に足すと、親が足したばかりのセルを自分のoldKeyの削除で直後に
+    // 消してしまう（QA指摘2・2026-10-01: oldKeyが洪水先の領域cellsに残っていると、親の
+    // セルが意図せず減る既存不良の修正）。
+    for (const e of entries) e.room.removeCell(e.oldKey);
 
-      if (e.lostCount === 1) {
+    for (const c of cells) dominant.addCell(c.key);
+
+    // 部分指定か吸収かはエントリ単位でなく部屋単位で決める（全oldKey先消しで、2辺喪失エントリの
+    // 時点で他のoldKeyも消えて空に見えるため）。HEADと同じ結果: 1辺喪失が1件でもあれば部分指定／
+    // 全件2辺以上かつ空なら吸収削除／2辺以上でも他のセルが残れば何もしない。
+    const byRoom = new Map(); // roomId -> { room, hasSingleLoss }
+    for (const e of entries) {
+      if (e.room.id === dominant.id) continue;
+      const slot = byRoom.get(e.room.id) ?? { room: e.room, hasSingleLoss: false };
+      if (e.lostCount === 1) slot.hasSingleLoss = true;
+      byRoom.set(e.room.id, slot);
+    }
+    for (const { room, hasSingleLoss } of byRoom.values()) {
+      if (hasSingleLoss) {
         // 1辺喪失 → 部分指定化（子の同一性・仕上げ情報は維持したまま親の内訳になる）
-        for (const c of cells) e.room.addCell(c.key);
-        e.room.referenceRoomIds.add(dominant.id);
-      } else if (e.room.cells.size === 0) {
+        for (const c of cells) room.addCell(c.key);
+        room.referenceRoomIds.add(dominant.id);
+      } else if (room.cells.size === 0) {
         // 2辺以上喪失 → 旧部屋名を削除し、親へ完全吸収（屋外部屋の連動行も孤児化させず削除）
-        graph.removeExteriorRowsByRoomId(e.room.id);
-        graph.removeRoom(e.room.id);
+        graph.removeExteriorRowsByRoomId(room.id);
+        graph.removeRoom(room.id);
       }
     }
   }
