@@ -1,8 +1,9 @@
 // 「階の並びが変わった」1つの出来事の唯一の入口。App.jsx はこれを1回呼ぶだけにする。追従処理
 // （階段の上階同期・昇降機の複製と再採番・外壁内側の部屋の自動追加・直下階の階段削除・新階への
 // 切替・全階の構造反映）は登録制のレジストリ（floorOrderFollowers）にまとめる。階段や昇降機の
-// 仕様が今後変わっても、登録先の follower だけ直せば挿入・下階追加・削除の全経路に効く
-// （modeBoundaries レジストリと同型。途中階の上階追加と階移動の振り直し一本化 ステップ3）。
+// 仕様が今後変わっても、登録先の follower だけ直せば挿入・下階追加・削除・ドラッグ移動・階変更の
+// 全経路に効く（modeBoundaries レジストリと同型。途中階の上階追加と階移動の振り直し一本化
+// ステップ3・4）。
 //
 // node:test から単体 import できるよう、react-konva / store.js / snap.js / .jsx を静的に引かない
 // （抽出した純モジュールの不変条件。team-lessons「抽出モジュールはreact-konva/store.js/snap.js/.jsx
@@ -21,8 +22,9 @@ import { reflectStructuralAfterFloorAdd } from './structural/structuralOrchestra
 import { makeFloorName } from './floorNumber.js';
 import { ERR_ELEVATOR_COPY_SKIPPED } from './error.js';
 
-// 階操作の種類。'reorder'（ドラッグ移動）・'change'（階変更）は定数とappliesToの受け皿のみ用意し、
-// App.jsx からはまだ呼ばない（ステップ4で接続する）。
+// 階操作の種類。'reorder'（ドラッグ移動）・'change'（階変更）も、挿入・削除と同じく
+// applyFloorOrderChange 経由で関門・undo・追従処理を伴う（Q1裁定・途中階の上階追加と階移動の
+// 振り直し一本化 ステップ4）。
 export const FLOOR_ORDER_KIND = Object.freeze({
   INSERT: 'insert',
   ADD_LOWER: 'addLower',
@@ -46,12 +48,16 @@ async function removeStairsOnPlane(project, plane) {
 // HEADどおり後始末の最後に置く——throwしても他の後始末は完了済みにする意図を保つため、delete専用の
 // elevatorRenumber を構造反映の後ろへ登録する）、insert は旧 executeAddUpper/'general' の順序
 // （階段の上階同期 → 昇降機の複製 → 外壁内側の部屋）を、appliesTo の違い（elevatorCopyはinsertのみ・
-// elevatorRenumberはdeleteのみ・stairsBelowRemovalはdeleteのみ・stairUpperSync/exteriorRoomは
-// insertのみ）で同じ配列に両立させている（リード指示・F5裁定・2026-10-01）。
+// elevatorRenumberはdeleteのみ・stairsBelowRemovalはdeleteのみ・exteriorRoomはinsertのみ・
+// stairUpperSyncはinsert/reorder・structuralReflectはinsert/addLower/delete/reorder/change）で
+// 同じ配列に両立させている（リード指示・F5裁定・2026-10-01。reorder/changeはステップ4でQ1裁定）。
 export const floorOrderFollowers = [
   {
     name: 'stairUpperSync',
-    appliesTo: [FLOOR_ORDER_KIND.INSERT],
+    // reorder（ドラッグ移動）も含める（§5-6「移動後にfollower（構造反映・階段同期）が呼ばれる」・
+    // Q1裁定・2026-10-01）。syncUpperFloorsAutoはセル集合の一致で既存の階段を飛ばす冪等処理
+    // （§2.4）のため、階段の無い移動では何もせず、移動によって新しい直下階ができたときだけ効く。
+    appliesTo: [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.REORDER],
     async run(ctx) {
       const { syncUpperFloorsAuto } = await import('./finish/stair/stairFloorSync.js');
       await syncUpperFloorsAuto(ctx.project, ctx.sourceGraph);
@@ -103,8 +109,12 @@ export const floorOrderFollowers = [
     // delete への構造反映は現状（HEAD）には無い追加挙動——指示書§4.3「階の並びが変わった後の
     // 追従処理」に全階の構造反映が含まれ、Q1の根拠「1つ下の階の壁に依存する梁芯」は削除でも
     // 成り立つため、2026-10-01 にリード裁定で追加した（途中階の上階追加と階移動の振り直し
-    // 一本化 ステップ3）。
-    appliesTo: [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE],
+    // 一本化 ステップ3）。reorder（ドラッグ移動）・change（階変更）も同じ根拠（移動後は「1つ下の
+    // 階の壁」が変わりうる・階変更は部材番号の階表記が変わる）で追加した（ステップ4・Q1裁定）。
+    appliesTo: [
+      FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
+      FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+    ],
     async run(ctx) {
       await reflectStructuralAfterFloorAdd(ctx.project);
     },

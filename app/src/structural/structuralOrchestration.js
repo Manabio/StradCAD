@@ -475,7 +475,7 @@ export async function runStructuralModeSetup(targetGraph, project, { onToast, ct
 // mainStructure は屋根平面（軒桁）でのみ意味を持つが、ここでの対象は常に実体階なので自階の実効値でよい。
 
 // アクティブな graph を再計算し、変化があれば undo に積む（通常の auto-save に乗る）。
-// pushUndo=false は階追加フロー用（withFloorAddUndo が全階分を1エントリで巻き戻すため個別には積まない）。
+// pushUndo=false は階操作フロー用（withFloorOpUndo が全階分を1エントリで巻き戻すため個別には積まない）。
 // ctx（解決コンテキスト）は省略可能——受け取って下へ渡すだけで、この関数自身は生成しない。
 // 戻り値 { changed } は structural/structuralSync.js recomputeForStructuralSync（'all'の外側ループの
 // 収束判定）が読む——既存の呼び出し元（wallRefresh.js・本ファイルの他関数）は戻り値を読まないため
@@ -808,7 +808,7 @@ export async function reflectStructuralToOtherFloors(project, ctxArg = undefined
 
 // 要件1：階追加後。追加で N（負担階数）・基礎指定が変わるため、全実体階の構造部材を更新する。
 // アクティブ（追加直後の表示階）はメモリ上で、その他の実体階は peek+保存で反映する。
-// undo は個別に積まない（呼び出し元の withFloorAddUndo が階追加フロー全体を1エントリで記録する）。
+// undo は個別に積まない（呼び出し元の withFloorOpUndo が階操作フロー全体を1エントリで記録する）。
 // これにより別階・別モードへ移動したとき、更新後の柱・梁・材寸がそのまま描画される。
 // ctx（解決コンテキスト）: withResolveContext（runStructuralModeSetupと同じ3値規約）——省略時は
 // 本関数が自分で1個生成し、recomputeActiveStructural・reflectStructuralToOtherFloorsの両方へ同じ

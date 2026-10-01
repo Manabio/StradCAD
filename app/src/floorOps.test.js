@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   floorBytesEqual, computeFloorReorder, computeFloorChangeReorder, computeAltReorder, resolveChipReorderTarget,
   reconcilePlanes, blocksFloorRemoval, renumberPlanesFrom, computeFloorDeleteReorder,
-  computeFloorInsert, applyFloorInsert, collectPlaneMetas, applyPlaneMetas,
+  computeFloorInsert, applyFloorInsert, collectPlaneMetas, applyPlaneMetas, diffFloorOpSnapshot,
 } from './floorOps.js';
 import { Project } from './core/project.js';
 
@@ -399,7 +399,7 @@ test('computeFloorInsert: 挿入位置より下の階は、規則から外れて
   assert.ok(!touchedIds.includes('p2'), 'p2（挿入位置より下）が更新一覧に含まれている');
 });
 
-// §5-5相当: undo/redoでPlaneメタがbefore/afterへ戻る（App.jsxのwithFloorAddUndoが
+// §5-5相当: undo/redoでPlaneメタがbefore/afterへ戻る（App.jsxのwithFloorOpUndoが
 // collectPlaneMetas/applyPlaneMetasを使う組み立てをfloorOps単体で固定する）。
 test('挿入→undo相当（removePlane＋applyPlaneMetas(before)）→redo相当（applyPlaneMetas(after)＋addPlane）でメタがbefore/afterと一致する', () => {
   const project = new Project('proj', 'test');
@@ -577,4 +577,76 @@ test('computeFloorDeleteReorder: 削除位置より下の階（a）は、規則�
   const updates = computeFloorDeleteReorder(afterRemoval, 1); // bを削除した後（旧idx=1）
   const touchedIds = updates.map(u => u.id);
   assert.ok(!touchedIds.includes('a'), 'a（削除位置より下）が更新一覧に含まれている');
+});
+
+// ---- ステップ4: diffFloorOpSnapshot（階操作のundoに積むべき差分。App.jsxのwithFloorOpUndoが使う）----
+
+function metasFromPlanes(planes) {
+  return planes.map(p => ({ id: p.id, name: p.name, startFloor: p.startFloor, elevation: p.elevation, stories: p.stories }));
+}
+
+test('diffFloorOpSnapshot: 追加階があれば addedPlanes に入り、hasChanges は true（挿入相当）', () => {
+  const metasBefore = metasFromPlanes(makeFourFloors());
+  const before = new Map(metasBefore.map(m => [m.id, new Uint8Array([1])]));
+  const after  = new Map(before);
+  after.set('new', new Uint8Array([9]));
+  const metasAfter = [...metasBefore, { id: 'new', name: '5階', startFloor: 5, elevation: 12000, stories: 1 }];
+
+  const result = diffFloorOpSnapshot({ before, after, metasBefore, metasAfter });
+  assert.deepEqual(result.addedPlanes, [{ id: 'new', name: '5階', startFloor: 5, elevation: 12000, stories: 1 }]);
+  assert.deepEqual(result.changedSiblings, []);
+  assert.equal(result.metasChanged, true, 'metasAfterの件数が増えているのでmetasChangedもtrue');
+  assert.equal(result.hasChanges, true);
+});
+
+test('diffFloorOpSnapshot: 追加階が無くてもPlaneメタだけ変化していれば hasChanges は true（ドラッグ移動・階変更相当）', () => {
+  const planes = makeFourFloors();
+  const metasBefore = metasFromPlanes(planes);
+  const before = new Map(metasBefore.map(m => [m.id, new Uint8Array([1])]));
+  const after  = new Map(before); // bytesは変化しない（メタの書換えだけ）
+  const metasAfter = metasBefore.map(m => (m.id === 'b' ? { ...m, name: '5階', startFloor: 5, elevation: 12000 } : m));
+
+  const result = diffFloorOpSnapshot({ before, after, metasBefore, metasAfter });
+  assert.deepEqual(result.addedPlanes, [], '追加階は無い');
+  assert.deepEqual(result.changedSiblings, [], 'bytesは変化していない');
+  assert.equal(result.metasChanged, true);
+  assert.equal(result.hasChanges, true, 'メタだけの変化でもhasChangesはtrueである必要がある（旧来はaddedPlanesのみで判定していた）');
+});
+
+test('diffFloorOpSnapshot: メタ不変でもbytesだけ変化していれば changedSiblings に入り hasChanges は true', () => {
+  const metasBefore = metasFromPlanes(makeFourFloors());
+  const metasAfter  = metasBefore; // メタは不変
+  const before = new Map(metasBefore.map(m => [m.id, new Uint8Array([1])]));
+  const after  = new Map(before);
+  after.set('c', new Uint8Array([2])); // cのbytesだけ変化（同期・自動補完等）
+
+  const result = diffFloorOpSnapshot({ before, after, metasBefore, metasAfter });
+  assert.deepEqual(result.addedPlanes, []);
+  assert.deepEqual(result.changedSiblings, [{ planeId: 'c', before: before.get('c'), after: after.get('c') }]);
+  assert.equal(result.metasChanged, false);
+  assert.equal(result.hasChanges, true);
+});
+
+test('【失敗系】diffFloorOpSnapshot: 追加・メタ・bytesのいずれも変化が無ければ hasChanges は false（undoを積まない）', () => {
+  const metasBefore = metasFromPlanes(makeFourFloors());
+  const metasAfter  = metasBefore;
+  const before = new Map(metasBefore.map(m => [m.id, new Uint8Array([1])]));
+  const after  = new Map(before);
+
+  const result = diffFloorOpSnapshot({ before, after, metasBefore, metasAfter });
+  assert.deepEqual(result.addedPlanes, []);
+  assert.deepEqual(result.changedSiblings, []);
+  assert.equal(result.metasChanged, false);
+  assert.equal(result.hasChanges, false);
+});
+
+test('【失敗系】diffFloorOpSnapshot: IDB未保存（bytesがnull）の階が変化してもnull同士は等しいとみなされ変化扱いにしない', () => {
+  const metasBefore = metasFromPlanes(makeFourFloors());
+  const metasAfter  = metasBefore;
+  const before = new Map(metasBefore.map(m => [m.id, null]));
+  const after  = new Map(before); // 両方ともIDB未保存のまま
+
+  const result = diffFloorOpSnapshot({ before, after, metasBefore, metasAfter });
+  assert.deepEqual(result.changedSiblings, []);
+  assert.equal(result.hasChanges, false);
 });

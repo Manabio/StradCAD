@@ -506,7 +506,7 @@ export async function runElevatorUsageChange({
  * 直下階は project.planes（採用階だけ・elevation昇順）で newPlane の1つ下。新階が先頭（最下）
  * なら何もしない。直下階がアクティブ階なら生きているグラフ（activeGraph）、そうでなければ peek。
  * 直下階の器具行が0件（器具行の無い昇降路だけ、または昇降路が無い）なら noop（新階を peek も
- * しない）。undo の新規エントリは積まない——withFloorAddUndo が新階のバイト列を丸ごと記録する
+ * しない）。undo の新規エントリは積まない——withFloorOpUndo が新階のバイト列を丸ごと記録する
  * ため、複製は階追加のエントリに自然に含まれる。
  *
  * @param {object} params

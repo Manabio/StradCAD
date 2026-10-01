@@ -106,7 +106,7 @@ test('【不変条件・線種変更の移籍一本化ステップ5】App.jsx: A
 test('【不変条件・入力規制ステップ3/5】App.jsx: whenIdle()を使う入口はいずれもGATED（関門の中で待つ）', () => {
   const appSrc = fs.readFileSync(appSrcPath, 'utf8');
 
-  const GATED_WITH_WHEN_IDLE = ['handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'handleSaveConfirm', 'withFloorAddUndo', 'handleCLDialogConfirm'];
+  const GATED_WITH_WHEN_IDLE = ['handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'handleSaveConfirm', 'withFloorOpUndo', 'handleCLDialogConfirm'];
   for (const name of GATED_WITH_WHEN_IDLE) {
     const body = extractFunctionBody(appSrc, `async function ${name}`);
     const idleIdx = body.indexOf('structuralSync.whenIdle()');

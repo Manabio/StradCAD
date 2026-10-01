@@ -23,22 +23,30 @@ import {
 } from './uiBusySourceScan.js';
 
 // ---- GATED（関門内。runBusy(が最初のawait）----
-// 文字列の他に { name, noBeginUiTransition: true, reason } も許す——undoFloorAdd/redoFloorAddは
+// 文字列の他に { name, noBeginUiTransition: true, reason } も許す——undoFloorOp/redoFloorOpは
 // performUndo/performRedoの関門を抜けた後もfire-and-forgetで走り続けるため自前でrunBusyを持つが、
 // beginUiTransition()（interruptCurrentActionが今の操作を中断してしまう）はperformUndo/performRedo
-// が既に済ませているためここでは呼ばない（入力規制ステップ6）。
+// が既に済ませているためここでは呼ばない（入力規制ステップ6）。withFloorOpUndoも同じ理由で
+// noBeginUiTransition——呼び出し元（executeAddUpper・handleAddFloorConfirmの各分岐・
+// runReorderFloor・runFloorChange）が全てbeginUiTransition()を済ませてから呼ぶため、本関数内では
+// 重ねて呼ばない（途中階の上階追加と階移動の振り直し一本化 ステップ4）。
 const GATED = [
   'performUndo', 'performRedo', 'handleModeChange', 'handleFloorSwitch', 'switchFloorKeepingMode',
   'handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'commitAxisEdit',
   'handleSaveConfirm', 'runDocumentImport', 'openCatalogMaintenancePanel',
-  'withFloorAddUndo',
   {
-    name: 'undoFloorAdd', noBeginUiTransition: true,
+    name: 'withFloorOpUndo', noBeginUiTransition: true,
+    reason: '呼び出し元（executeAddUpper・handleAddFloorConfirmの各分岐・runReorderFloor・'
+      + 'runFloorChange）が全てbeginUiTransition()を済ませてから呼ぶため、本関数内で重ねて呼ばない'
+      + '（二重呼び出しを避け、呼び出し元の責任に統一する）。',
+  },
+  {
+    name: 'undoFloorOp', noBeginUiTransition: true,
     reason: 'performUndoのrunBusy(の関門を抜けた後もfire-and-forgetで走り続けるため自前のrunBusyを持つ。'
       + 'beginUiTransition()はperformUndoが既に済ませており、ここで呼ぶと今の操作を中断してしまうため呼ばない。',
   },
   {
-    name: 'redoFloorAdd', noBeginUiTransition: true,
+    name: 'redoFloorOp', noBeginUiTransition: true,
     reason: '同上（performRedo側）。',
   },
   'runAddAlternative', 'runDeleteFloor', 'runDeleteAlternative', 'runCopyAlternative',
@@ -100,19 +108,37 @@ const EXEMPT = [
   },
   {
     name: 'collectFloorBytes',
-    reason: '呼び出し元はwithFloorAddUndo（GATED）のみ。関門化済みの呼び出し元（runBusyの中）から呼ばれる'
+    reason: '呼び出し元はwithFloorOpUndo（GATED）のみ。関門化済みの呼び出し元（runBusyの中）から呼ばれる'
       + '内部関数のため対象外（入力規制ステップ6）。',
   },
   {
     name: 'executeAddUpper',
     reason: '呼び出し元はhandleAddFloor（[+]ボタン。onClickがguardUiで包装済み）とhandleAddFloorConfirmのみ。'
-      + '本体はwithFloorAddUndo（既に関門内で自走）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない'
-      + '（判定基準はtrySwitchFloorと同じ）。恒久的に対象外（入力規制ステップ6）。',
+      + '本体はbeginUiTransition()（graph/IDBを書かない）を同期で呼んだ後、withFloorOpUndo（既に関門内で'
+      + '自走）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない（判定基準はtrySwitchFloorと同じ）。'
+      + '恒久的に対象外（入力規制ステップ6・振り直し一本化ステップ4）。',
   },
   {
     name: 'handleAddFloorConfirm',
-    reason: '呼び出し元はAddFloorDialogのonConfirm（guardUiで包装済み）のみ。本体はexecuteAddUpper/withFloorAddUndo'
-      + '（既に関門内で自走）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない。恒久的に対象外（入力規制ステップ6）。',
+    reason: '呼び出し元はAddFloorDialogのonConfirm（guardUiで包装済み）のみ。本体はexecuteAddUpper/'
+      + 'withFloorOpUndo（既に関門内で自走。lower/general分岐はbeginUiTransition()も同期で呼ぶが'
+      + 'graph/IDBは書かない）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない。'
+      + '恒久的に対象外（入力規制ステップ6・振り直し一本化ステップ4）。',
+  },
+  {
+    name: 'runReorderFloor',
+    reason: '呼び出し元はhandleChipReorder（floor側）経由のhandleFloorMenuAction（onManageがguardUiで'
+      + '包装済み）のみ。computeFloorReorder（純関数）・beginUiTransition()（いずれもgraph/IDBを'
+      + '書かない）を同期で呼んだ後、withFloorOpUndo（既に関門内で自走）をawaitするだけで、awaitの'
+      + '前後で自らgraph/IDBを書かない（executeAddUpperと同じ判定基準）。恒久的に対象外'
+      + '（途中階の上階追加と階移動の振り直し一本化 ステップ4）。',
+  },
+  {
+    name: 'runFloorChange',
+    reason: '呼び出し元はFloorChangeDialogのonConfirm（guardUiで包装済み）のみ。setFloorChangeDlg'
+      + '（React state）・computeFloorChangeReorder（純関数）・beginUiTransition()を同期で呼んだ後、'
+      + 'withFloorOpUndo（既に関門内で自走）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない。'
+      + '恒久的に対象外（途中階の上階追加と階移動の振り直し一本化 ステップ4）。',
   },
   {
     name: 'runDeleteCenterLine',
@@ -162,9 +188,13 @@ const PENDING_COUNT = 0;
 // 加わったため32→33。同ステップ4でhandleConvertCenterLineも同じ2段runBusy構成になり、
 // runBusy(コールバックが1件（確認了承後の2段目）加わったため33→34。線種変更の移籍一本化
 // ステップ5でhandleCLDialogConfirmが新たにGATEDへ加わり、そのrunBusy(コールバックが1件
-// 加わったため34→35。
+// 加わったため34→35。途中階の上階追加と階移動の振り直し一本化ステップ4で、withFloorAddUndoを
+// withFloorOpUndoへ一般化しつつ、新設runReorderFloor・runFloorChangeがそれぞれ
+// withFloorOpUndo( に渡す無名 async コールバックが2件（App.jsx の runReorderFloor・runFloorChange）
+// 加わったため35→37（withFloorOpUndo自身のrunBusy(コールバック・undoFloorOp/redoFloorOpのrunBusy(
+// コールバックは既存のwithFloorAddUndo/undoFloorAdd/redoFloorAddの改名のため増減なし）。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 35;
+const ANON_CALLBACK_COUNT = 37;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

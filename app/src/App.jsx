@@ -37,7 +37,7 @@ import { CenterLineType, OpeningCategory } from '@core';
 import { isHitTestTarget } from './core/centerLineKindPolicy.js';
 import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
-  floorBytesEqual, applyFloorBytes, blocksFloorRemoval,
+  applyFloorBytes, blocksFloorRemoval, diffFloorOpSnapshot,
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
   computeFloorDeleteReorder, computeFloorInsert, collectPlaneMetas, applyPlaneMetas,
 } from './floorOps.js';
@@ -1135,20 +1135,24 @@ const App = observer(() => {
     return map;
   }
 
-  // 階追加フロー全体（addFloor＋新階への同期＋切替＋全階の構造反映）を実行し、
-  // 1つの undo エントリとして記録する。全採用階のPlaneメタ（elevation・startFloor・name・stories）
-  // も before/after で記録し、undo/redo で書き戻す（途中階挿入は既存階のメタも振り直すため。
-  // 途中階の上階追加と階移動の振り直し一本化 ステップ2）。
+  // 階操作（追加・ドラッグ移動・階変更）フロー全体を実行し、1つの undo エントリとして記録する。
+  // 「積むかどうか」・差分の計算は floorOps.js の純関数 diffFloorOpSnapshot に委譲し、追加階の
+  // 有無に関わらず、全採用階のPlaneメタ（elevation・startFloor・name・stories）または既存階の
+  // バイト列（changedSiblings）のいずれかに差があれば undo を積む（ドラッグ移動・階変更はメタ
+  // だけが変わる。途中階挿入は既存階のメタも振り直すため。途中階の上階追加と階移動の振り直し
+  // 一本化 ステップ2・4）。呼び出し元（executeAddUpper・handleAddFloorConfirmの各分岐・
+  // runReorderFloor・runFloorChange）が全てbeginUiTransition()を済ませてから呼ぶため、本関数内では
+  // 重ねて呼ばない。
   //   undo: 追加階に居れば元の階へ戻り、追加階を削除し、同期・構造反映で変わった既存階を元へ戻し、
   //         全採用階のメタを before へ戻す
-  //   redo: 全採用階のメタを after へ先に戻してから、同じ planeId で階を作り直し、追加後状態の
-  //         bytes を IDB へ書き戻して再度切り替える（既存階を先にずらしてから新階を足す。
-  //         同じ高さを一瞬でも作らない）
+  //   redo: 全採用階のメタを after へ先に戻してから、追加階があれば同じ planeId で作り直して
+  //         追加後状態の bytes を IDB へ書き戻し、既存階を after へ戻してから、アクティブ階が
+  //         変わっていたときだけ切り替える（ドラッグ移動では階は切り替わらないため無駄な切替を
+  //         しない）
   // フロア切替・IDB 書き込みは非同期のため undo/redo 内では投げ放しで実行する
   // （完了前に次の undo を重ねると競合しうるが、通常の操作間隔では問題にならない）。
-  async function withFloorAddUndo(run) {
-    beginUiTransition();
-    await runBusy('階追加', async () => {
+  async function withFloorOpUndo(label, run) {
+    await runBusy(label, async () => {
       // 実行中の構造同期（建具・通り芯削除起因）がactive graphを保存・差し替えしている最中に階を追加すると、
       // collectFloorBytes（アクティブ階はメモリからserializeGraph）が再計算途中の中途半端な状態を
       // before/afterのスナップショット・新階コピー元へ焼き込んでしまう（structural/structuralSync.js参照）。
@@ -1159,30 +1163,23 @@ const App = observer(() => {
 
       await run();
 
-      const addedPlanes = project.planes
-        .filter(p => !before.has(p.id))
-        .map(p => ({ id: p.id, elevation: p.elevation, name: p.name, startFloor: p.startFloor, stories: p.stories }));
-      if (addedPlanes.length === 0) return;
-
       const activeAfterId = project.activePlaneId;
       const after = await collectFloorBytes();
       const metasAfter = collectPlaneMetas(project);
+      const { addedPlanes, changedSiblings, hasChanges } = diffFloorOpSnapshot({
+        before, after, metasBefore, metasAfter,
+      });
+      if (!hasChanges) return;
+
       const addedBytes = new Map(addedPlanes.map(pl => [pl.id, after.get(pl.id) ?? null]));
-      const changedSiblings = [];
-      for (const [planeId, beforeBytes] of before) {
-        const afterBytes = after.get(planeId);
-        if (after.has(planeId) && !floorBytesEqual(beforeBytes, afterBytes)) {
-          changedSiblings.push({ planeId, before: beforeBytes, after: afterBytes });
-        }
-      }
 
       // undo/redoはfire-and-forget（undoManager.pushへ渡す関数は同期に呼ばれるだけで完了を
       // 待たない）ため、performUndo/performRedoのrunBusy(の関門を抜けた後もこの中身は走り続ける
       // ——それぞれ自前のrunBusyを持ち、同期でdepth++するので抜け目なく関門が続く（入力規制
       // ステップ6）。beginUiTransition()はperformUndo/performRedoが既に済ませているためここでは
       // 呼ばない（呼ぶとinterruptCurrentActionが今の操作を中断してしまう）。
-      async function undoFloorAdd() {
-        await runBusy('階追加のundo', async () => {
+      async function undoFloorOp() {
+        await runBusy(label + 'のundo', async () => {
           // アクティブ階は削除できないため、追加階に居る場合は先に元の階へ戻る
           // （元の階が消えている防御ケースでは追加階以外の最初の採用フロアへ）
           if (addedPlanes.some(pl => pl.id === project.activePlaneId)) {
@@ -1200,8 +1197,8 @@ const App = observer(() => {
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);
         });
       }
-      async function redoFloorAdd() {
-        await runBusy('階追加のredo', async () => {
+      async function redoFloorOp() {
+        await runBusy(label + 'のredo', async () => {
           applyPlaneMetas(project, metasAfter);
           for (const pl of addedPlanes) {
             addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id);
@@ -1209,13 +1206,15 @@ const App = observer(() => {
             if (bytes != null) await saveFloor(pl.id, bytes);
           }
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.after);
-          await handleFloorSwitch(activeAfterId); // activate() が保存済み bytes を読み込む
+          // activate() が保存済み bytes を読み込む。ドラッグ移動・階変更はアクティブ階が変わらない
+          // ため、無駄な切替をしない。
+          if (activeAfterId !== project.activePlaneId) await handleFloorSwitch(activeAfterId);
         });
       }
 
       undoManager.push(
-        () => { undoFloorAdd().catch(console.error); },
-        () => { redoFloorAdd().catch(console.error); },
+        () => { undoFloorOp().catch(console.error); },
+        () => { redoFloorOp().catch(console.error); },
       );
     });
   }
@@ -1224,7 +1223,8 @@ const App = observer(() => {
   // 既存階をずらしてから新階を足す本体・追従処理は applyFloorOrderChange（floorOrderChange.js）へ
   // 委譲する。途中階の上階追加と階移動の振り直し一本化 ステップ2・3。
   async function executeAddUpper(currentPlane) {
-    await withFloorAddUndo(async () => {
+    beginUiTransition();
+    await withFloorOpUndo('階追加', async () => {
       const insert = computeFloorInsert(project.planes, currentPlane.id, 1);
       if (!insert) return;
       const { newPlane, updates } = insert;
@@ -1251,7 +1251,8 @@ const App = observer(() => {
     }
 
     if (action === 'lower') {
-      await withFloorAddUndo(async () => {
+      beginUiTransition();
+      await withFloorOpUndo('階追加', async () => {
         // 下階 n 階分+: 表示中の開始階から連鎖して n 本追加（上の階はずれないため updates は空）。
         const lowestElevation = project.planes[0]?.elevation ?? 0;
         let prevFloor = currentPlane.startFloor;
@@ -1278,7 +1279,8 @@ const App = observer(() => {
     }
 
     if (action === 'general') {
-      await withFloorAddUndo(async () => {
+      beginUiTransition();
+      await withFloorOpUndo('階追加', async () => {
         // 上階 n 階分の一般階（途中階なら直上へ挿入し、上の階をずらしてから新階を足す）
         const insert = computeFloorInsert(project.planes, currentPlane.id, n);
         if (!insert) return;
@@ -1297,17 +1299,29 @@ const App = observer(() => {
 
   // ---- フロアタブのドラッグ割り込み ----
   // 並替後の startFloor/elevation/name 再採番は floorOps.js の計算部（computeFloorReorder）に委譲し、
-  // 書き戻しは applyPlaneMetas（floorOps.js）を使う（途中階の上階追加と階移動の振り直し一本化
-  // ステップ3。メタを書き戻すループの一本化）。
-  function handleReorderFloor(fromId, toZone) {
+  // 本体・追従処理（階段の上階同期・全階の構造反映）・undo は applyFloorOrderChange／
+  // withFloorOpUndo（floorOrderChange.js／本ファイル）へ委譲する（Q1裁定・途中階の上階追加と
+  // 階移動の振り直し一本化 ステップ4）。no-op（更新一覧が空）は関門に入らず同期で抜ける。
+  async function runReorderFloor(fromId, toZone) {
     const updates = computeFloorReorder(project.planes, fromId, toZone);
     if (!updates) return;
-    applyPlaneMetas(project, updates);
+    beginUiTransition();
+    await withFloorOpUndo('階操作', async () => {
+      await applyFloorOrderChange(project, {
+        kind: FLOOR_ORDER_KIND.REORDER,
+        updates,
+        sourceGraph: project.activeGraph,
+        ui: floorOrderUi(),
+      });
+    });
   }
 
   // ---- 階・検討案の並替（検討チップのメニューから。±1で隣と入替え）----
-  // 既存の handleReorderFloor / handleReorderAlt（ドロップゾーン方式）を再利用する。
+  // 既存の runReorderFloor / handleReorderAlt（ドロップゾーン方式）を再利用する。
   // 対象（alt/floor）とtoZoneの判定は floorOps.js の計算部（resolveChipReorderTarget）に委譲。
+  // 採用（floor）側は runReorderFloor の Promise をそのまま返す（呼び出し元のguardUi/.catchが
+  // 例外を拾えるように）。検討（alt）側は altIndex のみの並替で関門・追従処理の対象外（範囲外。
+  // §7「検討案の並び替えはcomputeAltReorderのみ」）のため同期のまま。
   function handleChipReorder(planeId, direction) {
     const plane = project.planeMap.get(planeId);
     if (!plane) return;
@@ -1318,22 +1332,24 @@ const App = observer(() => {
       : [];
     const target = resolveChipReorderTarget(plane, alts, project.planes, direction);
     if (!target) return;
-    if (target.kind === 'alt') handleReorderAlt(planeId, target.toZone, target.refId);
-    else                       handleReorderFloor(planeId, target.toZone);
+    if (target.kind === 'alt') { handleReorderAlt(planeId, target.toZone, target.refId); return; }
+    return runReorderFloor(planeId, target.toZone);
   }
 
   // ---- フロアメニュー選択 ----
-  // 本体は同期のまま（awaitを持たない）。graph/IDBを書く分岐は名前付き関数（runXxx）へ切り出し、
-  // 各自 beginUiTransition→runBusy('階操作', ...) で関門に入る——このハンドラ自身はPromiseを
-  // returnするだけにして、guardUi(handleFloorMenuAction相当のラッパー)が例外を拾えるようにする
-  // （入力規制ステップ6）。
+  // 本体は非asyncのまま（await自体は持たない）。graph/IDBを書く分岐は名前付き関数（runXxx）へ
+  // 切り出し、各自 beginUiTransition→withFloorOpUndo/runBusy('階操作', ...) で関門に入る——
+  // このハンドラ自身はPromiseをreturnするだけにして、guardUi(handleFloorMenuAction相当の
+  // ラッパー)が例外を拾えるようにする（move-up/move-downはrunReorderFloorのPromiseを返しうる。
+  // 入力規制ステップ6・振り直し一本化ステップ4）。
   function handleFloorMenuAction(action, planeId) {
     const plane = project.planeMap.get(planeId);
     if (!plane) return;
 
     if (action === 'move-up' || action === 'move-down') {
-      handleChipReorder(planeId, action === 'move-up' ? 1 : -1);
-      return;
+      // handleChipReorder は floor側で runReorderFloor の Promise を返す（alt側は undefined）。
+      // いずれも Promise.resolve() で包まれ、呼び出し元の guardUi が例外を拾う。
+      return handleChipReorder(planeId, action === 'move-up' ? 1 : -1);
     }
 
     if (action === 'floor-change') {
@@ -1550,13 +1566,23 @@ const App = observer(() => {
     runInAction(() => { for (const u of updates) { project.planeMap.get(u.id).altIndex = u.altIndex; } });
   }
 
-  // 階変更。再採番の計算は floorOps.js（computeFloorChangeReorder）に委譲し、書き戻しは
-  // applyPlaneMetas（floorOps.js）を使う（途中階の上階追加と階移動の振り直し一本化 ステップ3）。
-  function handleFloorChange(planeId, newStartFloor) {
+  // 階変更。再採番の計算は floorOps.js（computeFloorChangeReorder）に委譲し、本体・追従処理
+  // （全階の構造反映）・undo は applyFloorOrderChange／withFloorOpUndo へ委譲する（Q1裁定・
+  // 途中階の上階追加と階移動の振り直し一本化 ステップ4）。no-op（更新一覧が空）は関門に入らず
+  // 同期で抜ける。ダイアログを閉じる処理（setFloorChangeDlg(null)）は先頭で同期に行う。
+  async function runFloorChange(planeId, newStartFloor) {
     setFloorChangeDlg(null);
     const updates = computeFloorChangeReorder(project.planes, planeId, newStartFloor);
     if (!updates) return;
-    applyPlaneMetas(project, updates);
+    beginUiTransition();
+    await withFloorOpUndo('階操作', async () => {
+      await applyFloorOrderChange(project, {
+        kind: FLOOR_ORDER_KIND.CHANGE,
+        updates,
+        sourceGraph: project.activeGraph,
+        ui: floorOrderUi(),
+      });
+    });
   }
 
   // ---- 三斜 線分長さ確定（NumPad/テキスト入力からの確定） ----
@@ -2339,7 +2365,7 @@ const App = observer(() => {
       {floorChangeDlg && (
         <FloorChangeDialog
           currentStartFloor={project.planeMap.get(floorChangeDlg.planeId)?.startFloor ?? 1}
-          onConfirm={n => handleFloorChange(floorChangeDlg.planeId, n)}
+          onConfirm={guardUi(n => runFloorChange(floorChangeDlg.planeId, n))}
           onCancel={() => setFloorChangeDlg(null)}
         />
       )}

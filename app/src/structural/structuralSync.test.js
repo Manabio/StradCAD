@@ -652,10 +652,10 @@ test('【不変条件】App.jsx: switchFloorKeepingMode は boundary?.exit?.( �
   assertWhenIdleBefore(body, '?.exit?.(', 'switchFloorKeepingMode');
 });
 
-test('【不変条件】App.jsx: withFloorAddUndo は collectFloorBytes() より前に structuralSync.whenIdle() を待つ', () => {
+test('【不変条件】App.jsx: withFloorOpUndo は collectFloorBytes() より前に structuralSync.whenIdle() を待つ', () => {
   const appSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
-  const body = extractFunctionBody(appSrc, 'async function withFloorAddUndo');
-  assertWhenIdleBefore(body, 'collectFloorBytes()', 'withFloorAddUndo');
+  const body = extractFunctionBody(appSrc, 'async function withFloorOpUndo');
+  assertWhenIdleBefore(body, 'collectFloorBytes()', 'withFloorOpUndo');
 });
 
 test('【不変条件】App.jsx: handleSaveConfirm は exportDocument() より前に structuralSync.whenIdle() を待つ', () => {

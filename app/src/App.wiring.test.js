@@ -310,9 +310,9 @@ test('【配線・強化】App.jsx: runDeleteFloor は computeFloorDeleteReorder
     'runDeleteFloor に旧来の直接呼び出し（followerへ移した処理）が残っている');
 });
 
-test('【配線・強化】App.jsx: withFloorAddUndo は before/after それぞれで collectPlaneMetas(project) を1回ずつ採る', () => {
+test('【配線・強化】App.jsx: withFloorOpUndo は before/after それぞれで collectPlaneMetas(project) を1回ずつ採る', () => {
   const appSrc = readAppSrc();
-  const body = extractFunctionBody(appSrc, 'async function withFloorAddUndo');
+  const body = extractFunctionBody(appSrc, 'async function withFloorOpUndo');
   const matches = body.match(/collectPlaneMetas\(project\)/g) ?? [];
   assert.equal(matches.length, 2,
     `collectPlaneMetas(project) はbefore/afterの2回呼ぶはず（実際: ${matches.length}）`);
@@ -324,9 +324,37 @@ test('【配線・強化】App.jsx: withFloorAddUndo は before/after それぞ�
     'metasBefore→run()→metasAfter の順になっていない');
 });
 
-test('【配線・強化】App.jsx: undoFloorAdd は removeFloor ループの後・changedSiblings書き戻しの前に applyPlaneMetas(project, metasBefore) を呼ぶ', () => {
+// 「積むかどうか」の判定は diffFloorOpSnapshot（floorOps.js）へ寄せ、旧来の
+// `if (addedPlanes.length === 0) return;`（追加階が無ければ無条件でundoを積まない）は残っていない
+// （途中階の上階追加と階移動の振り直し一本化 ステップ4）。
+// §5-6の検出力強化: diffFloorOpSnapshot({ から undoFloorOp（1つ目の内側クロージャ）の定義直前
+// までの区間（「積むかどうか」の判定域。undoFloorOp/redoFloorOp内部のreturnは別の制御フロー
+// なので対象外）を切り出し、return を含む行が if (!hasChanges) return; の1行だけであることを
+// 検査する（旧不良の再導入——diffFloorOpSnapshotのhasChangesに加えて旧来の
+// if (addedPlanes.length === 0) return; 相当のガードを足す変異——を検知する。QA指摘）。
+test('【配線・強化】App.jsx: withFloorOpUndo は diffFloorOpSnapshot({ 〜 undoFloorOp定義前 の区間に if (!hasChanges) return; 以外の return を持たない', () => {
   const appSrc = readAppSrc();
-  const body = extractFunctionBody(appSrc, 'async function undoFloorAdd');
+  const body = extractFunctionBody(appSrc, 'async function withFloorOpUndo');
+
+  assert.match(body, /const \{ addedPlanes, changedSiblings, hasChanges \} = diffFloorOpSnapshot\(\{/,
+    'diffFloorOpSnapshot({ ... }) の呼び出しが見つからない');
+
+  const startIdx = body.indexOf('diffFloorOpSnapshot({');
+  const endIdx   = body.indexOf('async function undoFloorOp');
+  assert.ok(startIdx >= 0 && endIdx >= 0 && startIdx < endIdx,
+    'diffFloorOpSnapshot({ 〜 async function undoFloorOp の区間が見つからない');
+  const region = body.slice(startIdx, endIdx);
+
+  const returnLines = region.split(/\r?\n/).map(l => l.trim()).filter(l => l.includes('return'));
+  assert.deepEqual(returnLines, ['if (!hasChanges) return;'],
+    `diffFloorOpSnapshot〜undoFloorOp定義前の区間にif (!hasChanges) return;以外のreturnが残っている`
+    + `（実際: ${JSON.stringify(returnLines)}）。旧来のif (addedPlanes.length === 0) return;相当の`
+    + 'ガードを足す変異を防ぐため、判定はhasChangesへ一本化すること');
+});
+
+test('【配線・強化】App.jsx: undoFloorOp は removeFloor ループの後・changedSiblings書き戻しの前に applyPlaneMetas(project, metasBefore) を呼ぶ', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function undoFloorOp');
 
   const removeIdx = body.indexOf('for (const pl of addedPlanes) await removeFloor(pl.id);');
   const applyIdx  = body.indexOf('applyPlaneMetas(project, metasBefore);');
@@ -337,14 +365,89 @@ test('【配線・強化】App.jsx: undoFloorAdd は removeFloor ループの後
     'applyPlaneMetas(project, metasBefore) が removeFloorループの後・changedSiblings書き戻しの前にない');
 });
 
-test('【配線・強化】App.jsx: redoFloorAdd は addFloor の前に applyPlaneMetas(project, metasAfter) を呼ぶ（既存階を先にずらしてから新階を足す）', () => {
+test('【配線・強化】App.jsx: redoFloorOp は addFloor の前に applyPlaneMetas(project, metasAfter) を呼ぶ（既存階を先にずらしてから新階を足す）', () => {
   const appSrc = readAppSrc();
-  const body = extractFunctionBody(appSrc, 'async function redoFloorAdd');
+  const body = extractFunctionBody(appSrc, 'async function redoFloorOp');
 
   const applyIdx = body.indexOf('applyPlaneMetas(project, metasAfter);');
   const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id);');
   assert.ok(applyIdx >= 0 && addIdx >= 0, 'applyPlaneMetas(metasAfter) または addFloor( 呼び出しが見つからない');
   assert.ok(applyIdx < addIdx, 'applyPlaneMetas(project, metasAfter) が addFloor( より前にない');
+});
+
+// redoFloorOpは、追加階が無く（ドラッグ移動・階変更）activeAfterIdが変わっていない場合は
+// handleFloorSwitchを呼ばない（§4.3「ドラッグ移動では階は切り替わらないので無駄な切替をしない」）。
+test('【配線・強化】App.jsx: redoFloorOp は activeAfterId !== project.activePlaneId のときだけ handleFloorSwitch(activeAfterId) を呼ぶ', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function redoFloorOp');
+
+  assert.match(body, /^\s*if \(activeAfterId !== project\.activePlaneId\) await handleFloorSwitch\(activeAfterId\);\s*$/m,
+    'if (activeAfterId !== project.activePlaneId) await handleFloorSwitch(activeAfterId); が1行まるごとの形で見つからない');
+});
+
+// ================================================================
+// 途中階の上階追加と階移動の振り直し一本化 ステップ4（Q1裁定）: ドラッグ移動（runReorderFloor）・
+// 階変更（runFloorChange）も、挿入・削除と同じ applyFloorOrderChange／withFloorOpUndo 経由で
+// 関門・undo・追従処理を伴う。
+// ================================================================
+
+test('【配線・強化】App.jsx: runReorderFloor は computeFloorReorder( → beginUiTransition(); → withFloorOpUndo(\'階操作\' → applyFloorOrderChange(kind: REORDER) の順で呼ぶ', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function runReorderFloor');
+
+  assert.match(body, /^\s*const updates = computeFloorReorder\(project\.planes, fromId, toZone\);\s*$/m,
+    'computeFloorReorder(project.planes, fromId, toZone) が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*if \(!updates\) return;\s*$/m, 'if (!updates) return; が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*beginUiTransition\(\);\s*$/m, 'beginUiTransition(); が1行まるごとの形で見つからない');
+  assert.match(body, /await withFloorOpUndo\('階操作', async \(\) => \{/,
+    "withFloorOpUndo('階操作', async () => { ... }) の呼び出しが見つからない");
+  assert.match(body, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.REORDER,/,
+    'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.REORDER, ... }) の呼び出しが見つからない');
+
+  const computeIdx = body.indexOf('const updates = computeFloorReorder(project.planes, fromId, toZone);');
+  const beginIdx   = body.indexOf('beginUiTransition();');
+  const withIdx    = body.indexOf("withFloorOpUndo('階操作', async () => {");
+  const applyIdx   = body.indexOf('applyFloorOrderChange(project, {');
+  assert.ok(computeIdx >= 0 && beginIdx >= 0 && withIdx >= 0 && applyIdx >= 0
+    && computeIdx < beginIdx && beginIdx < withIdx && withIdx < applyIdx,
+    'computeFloorReorder( → beginUiTransition(); → withFloorOpUndo(\'階操作\' → applyFloorOrderChange( の順になっていない');
+});
+
+test('【配線・強化】App.jsx: runFloorChange は setFloorChangeDlg(null) → computeFloorChangeReorder( → beginUiTransition(); → withFloorOpUndo(\'階操作\' → applyFloorOrderChange(kind: CHANGE) の順で呼ぶ', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function runFloorChange');
+
+  assert.match(body, /^\s*setFloorChangeDlg\(null\);\s*$/m, 'setFloorChangeDlg(null); が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*const updates = computeFloorChangeReorder\(project\.planes, planeId, newStartFloor\);\s*$/m,
+    'computeFloorChangeReorder(project.planes, planeId, newStartFloor) が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*if \(!updates\) return;\s*$/m, 'if (!updates) return; が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*beginUiTransition\(\);\s*$/m, 'beginUiTransition(); が1行まるごとの形で見つからない');
+  assert.match(body, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.CHANGE,/,
+    'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.CHANGE, ... }) の呼び出しが見つからない');
+
+  const setDlgIdx  = body.indexOf('setFloorChangeDlg(null);');
+  const computeIdx = body.indexOf('const updates = computeFloorChangeReorder(project.planes, planeId, newStartFloor);');
+  const beginIdx   = body.indexOf('beginUiTransition();');
+  const withIdx    = body.indexOf("withFloorOpUndo('階操作', async () => {");
+  const applyIdx   = body.indexOf('applyFloorOrderChange(project, {');
+  assert.ok(setDlgIdx >= 0 && computeIdx >= 0 && beginIdx >= 0 && withIdx >= 0 && applyIdx >= 0
+    && setDlgIdx < computeIdx && computeIdx < beginIdx && beginIdx < withIdx && withIdx < applyIdx,
+    'setFloorChangeDlg(null) → computeFloorChangeReorder( → beginUiTransition(); → withFloorOpUndo(\'階操作\' → applyFloorOrderChange( の順になっていない');
+});
+
+test('【配線・強化】App.jsx: handleChipReorder は floor側で runReorderFloor の Promise を返す', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'function handleChipReorder');
+
+  assert.match(body, /^\s*return runReorderFloor\(planeId, target\.toZone\);\s*$/m,
+    'return runReorderFloor(planeId, target.toZone); が1行まるごとの形で見つからない');
+});
+
+test('【配線・強化】App.jsx: FloorChangeDialogのonConfirmはguardUi(n => runFloorChange(floorChangeDlg.planeId, n))で包まれている', () => {
+  const appSrc = readAppSrc();
+  const code = stripCommentLines(appSrc);
+  assert.match(code, /<FloorChangeDialog[\s\S]{0,300}onConfirm=\{guardUi\(n => runFloorChange\(floorChangeDlg\.planeId, n\)\)\}/,
+    'FloorChangeDialogのonConfirmがguardUi(n => runFloorChange(floorChangeDlg.planeId, n))で包まれていない');
 });
 
 // ================================================================
@@ -365,4 +468,31 @@ test('【配線】App.jsx: floorOrderUi 本体に switchFloor: (id) => trySwitch
   const body = extractFunctionBody(appSrc, 'function floorOrderUi');
   assert.match(body, /^\s*switchFloor: \(id\) => trySwitchFloor\(\(\) => handleFloorSwitch\(id\)\),\s*$/m,
     'switchFloor: (id) => trySwitchFloor(() => handleFloorSwitch(id)), が1行まるごとの形で見つからない');
+});
+
+// ================================================================
+// QA指摘（横断テスト）: withFloorOpUndo は全呼び出し箇所で、呼び出し元がbeginUiTransition()を
+// 済ませてから呼ぶ不変条件（withFloorOpUndo自身はbeginUiTransition()を呼ばない。
+// uiBusyClassification.test.jsのnoBeginUiTransition扱いの裏付け）。呼び出し件数も固定し、
+// 増減（新しい呼び出し元の追加・既存の削除）を検知する。
+// 変異: executeAddUpper／handleAddFloorConfirmの'lower'/'general'分岐／runReorderFloor／
+// runFloorChangeのいずれかから beginUiTransition(); を外すと赤になる。
+// ================================================================
+
+test('【不変条件・横断】App.jsx: await withFloorOpUndo( の全呼び出し箇所は、直前の非空行が beginUiTransition(); である（呼び出し件数は5件固定）', () => {
+  const lines = stripCommentLines(readAppSrc()).split(/\r?\n/);
+  const callLineIdxs = [];
+  lines.forEach((line, i) => { if (line.includes('await withFloorOpUndo(')) callLineIdxs.push(i); });
+
+  assert.equal(callLineIdxs.length, 5,
+    `await withFloorOpUndo( の呼び出し件数が5件固定と異なる（実際: ${callLineIdxs.length}）。`
+    + '呼び出し元が増減していないか見直すこと');
+
+  for (const idx of callLineIdxs) {
+    let prev = idx - 1;
+    while (prev >= 0 && lines[prev].trim() === '') prev--;
+    assert.ok(prev >= 0 && lines[prev].trim() === 'beginUiTransition();',
+      `await withFloorOpUndo( の直前の非空行が beginUiTransition(); ではない`
+      + `（呼び出し行: "${lines[idx].trim()}"、直前の非空行: "${prev >= 0 ? lines[prev].trim() : '(なし)'}"）`);
+  }
 });

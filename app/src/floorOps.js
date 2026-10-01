@@ -276,11 +276,49 @@ export function collectPlaneMetas(project) {
   }));
 }
 
+// ---- 階操作（追加・ドラッグ移動・階変更）のundoに積むべき差分（計算部。振り直し一本化 ステップ4）----
+// before/after は planeId→bytes（Uint8Array|null）の Map（App.jsxのcollectFloorBytesの戻り値）。
+// metasBefore/metasAfter は collectPlaneMetas の戻り値（全採用階の{id,name,startFloor,elevation,
+// stories}配列。elevation昇順）。追加階が無くても、Planeメタ（ドラッグ移動・階変更）だけが
+// 変化したケースでも undo に積めるよう、「積むかどうか」の判定をhasChangesへ一本化する。
+// 戻り値:
+//   addedPlanes: after にあって before に無い id のメタ（metasAfter から抜く。insert/addLower用）
+//   changedSiblings: before/after 両方にあり bytes が変化した { planeId, before, after } の配列
+//   metasChanged: metasBefore と metasAfter が一致しない（階数・値のいずれかが違う）
+//   hasChanges: addedPlanes.length>0 || changedSiblings.length>0 || metasChanged
+export function diffFloorOpSnapshot({ before, after, metasBefore, metasAfter }) {
+  const addedPlanes = metasAfter.filter(m => !before.has(m.id));
+
+  const changedSiblings = [];
+  for (const [planeId, beforeBytes] of before) {
+    if (!after.has(planeId)) continue;
+    const afterBytes = after.get(planeId);
+    if (!floorBytesEqual(beforeBytes, afterBytes)) {
+      changedSiblings.push({ planeId, before: beforeBytes, after: afterBytes });
+    }
+  }
+
+  const metasChanged = !planeMetasEqual(metasBefore, metasAfter);
+  const hasChanges = addedPlanes.length > 0 || changedSiblings.length > 0 || metasChanged;
+
+  return { addedPlanes, changedSiblings, metasChanged, hasChanges };
+}
+
+function planeMetasEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i];
+    if (x.id !== y.id || x.name !== y.name || x.startFloor !== y.startFloor
+      || x.elevation !== y.elevation || x.stories !== y.stories) return false;
+  }
+  return true;
+}
+
 // metas（collectPlaneMetasの戻り値、または renumberPlanesFrom 系の更新一覧）を project.planeMap へ
 // 書き戻す。project.planeMap に存在しない id は無視する（undoで追加階を削除した後に呼ぶため、
 // metas側にだけ存在するidがあり得る）。stories が undefined のエントリ（renumberPlanesFrom 系の
 // 更新一覧はstoriesを持たない）では stories を書かない（途中階の上階追加と階移動の振り直し
-// 一本化 ステップ3。handleReorderFloor・handleFloorChange・runDeleteFloorの振り直しループも
+// 一本化 ステップ3。runReorderFloor・runFloorChange・runDeleteFloorの振り直しループも
 // 本関数へ寄せるため）。
 export function applyPlaneMetas(project, metas) {
   runInAction(() => {

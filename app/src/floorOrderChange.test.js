@@ -19,13 +19,16 @@ test('floorOrderFollowers: name の並びが固定されている', () => {
 
 test('floorOrderFollowers: 各followerのappliesToが固定されている', () => {
   const byName = Object.fromEntries(floorOrderFollowers.map(f => [f.name, f.appliesTo]));
-  assert.deepEqual(byName.stairUpperSync, [FLOOR_ORDER_KIND.INSERT]);
+  assert.deepEqual(byName.stairUpperSync, [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.REORDER]);
   assert.deepEqual(byName.elevatorCopy, [FLOOR_ORDER_KIND.INSERT]);
   assert.deepEqual(byName.elevatorRenumber, [FLOOR_ORDER_KIND.DELETE]);
   assert.deepEqual(byName.exteriorRoom, [FLOOR_ORDER_KIND.INSERT]);
   assert.deepEqual(byName.stairsBelowRemoval, [FLOOR_ORDER_KIND.DELETE]);
   assert.deepEqual(byName.switchToAddedFloor, [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER]);
-  assert.deepEqual(byName.structuralReflect, [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE]);
+  assert.deepEqual(byName.structuralReflect, [
+    FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
+    FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+  ]);
 });
 
 // ---- (b) applyFloorOrderChange の配線（フェイクfollowersで検証）----
@@ -202,6 +205,52 @@ test('DELETE のとき structuralReflect 相当の follower が呼ばれる', as
   }, followers);
 
   assert.equal(structuralCalled, true, 'DELETEでもstructuralReflectが呼ばれる必要がある');
+});
+
+// 途中階の上階追加と階移動の振り直し一本化 ステップ4（Q1裁定）: ドラッグ移動（REORDER）は
+// stairUpperSync→structuralReflectの順で呼ばれ、insert専用のelevatorCopy・exteriorRoom・
+// switchToAddedFloorは（appliesToによるフィルタで）呼ばれない。
+test('REORDER のとき stairUpperSync→structuralReflect の順で呼ばれ、insert専用のfollowerは呼ばれない', async () => {
+  const project = makeProjectWithThreeFloors();
+  const calls = [];
+  const followers = floorOrderFollowers.map((f) => {
+    if (f.name === 'stairUpperSync') return { ...f, async run() { calls.push('stairUpperSync'); } };
+    if (f.name === 'structuralReflect') return { ...f, async run() { calls.push('structuralReflect'); } };
+    if (f.name === 'elevatorCopy' || f.name === 'exteriorRoom' || f.name === 'switchToAddedFloor') {
+      return { ...f, async run() { calls.push(f.name); } }; // appliesToで除外される想定（呼ばれたら検出する）
+    }
+    return f;
+  });
+
+  const updates = [{ id: 'p2', name: '5階', startFloor: 5, elevation: 12000 }];
+  await applyFloorOrderChange(project, {
+    kind: FLOOR_ORDER_KIND.REORDER,
+    updates,
+    sourceGraph: {},
+    ui: makeUi(),
+  }, followers);
+
+  assert.deepEqual(calls, ['stairUpperSync', 'structuralReflect']);
+});
+
+// 階変更（CHANGE）は structuralReflect だけが呼ばれる（stairUpperSyncはinsert/reorderのみ）。
+test('CHANGE のとき structuralReflect だけが呼ばれる', async () => {
+  const project = makeProjectWithThreeFloors();
+  const calls = [];
+  const followers = floorOrderFollowers.map((f) => {
+    if (f.name === 'structuralReflect') return { ...f, async run() { calls.push('structuralReflect'); } };
+    return { ...f, async run() { calls.push(f.name); } }; // 他はappliesToで除外される想定（呼ばれたら検出する）
+  });
+
+  const updates = [{ id: 'p2', name: '5階', startFloor: 5, elevation: 12000 }];
+  await applyFloorOrderChange(project, {
+    kind: FLOOR_ORDER_KIND.CHANGE,
+    updates,
+    sourceGraph: {},
+    ui: makeUi(),
+  }, followers);
+
+  assert.deepEqual(calls, ['structuralReflect']);
 });
 
 // QA指摘5: floorOrderChange.js のソース（コメント行除去後）で、追従処理の主要呼び出し行が
