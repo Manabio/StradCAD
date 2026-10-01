@@ -244,6 +244,12 @@ export const ERR_ELEVATOR_COPY_SKIPPED = (floorName, count) =>
 export const ERR_ELEVATOR_RENUMBER_FAILED = 'ERR_ELEVATOR_RENUMBER_FAILED';
 export const ERR_ELEVATOR_RENUMBER_FAILED_MESSAGE = '階を削除した後、昇降機の番号の詰め直しに失敗しました。';
 
+// 階段の指定の確定（App.jsx convertStairFromNaming が applyRoomNaming へ再入した後）で例外が出た場合。
+// 昇降機の設置・削除と同じ「messageが呼び出し元で組み立て済み」様式（KNOWN_TRANSITION_ERROR_CODES に載せ、
+// floorTransitionErrorMessage がmessageをそのまま返す＝階切替の汎用文言に丸めない）。
+export const ERR_STAIR_DESIGNATE_FAILED = 'ERR_STAIR_DESIGNATE_FAILED';
+export const ERR_STAIR_DESIGNATE_FAILED_MESSAGE = '階段の指定に失敗しました。';
+
 // tagCLOpFailureと同じ「既に文字列codeを持つ既知エラーはそのまま返す（上書きしない・
 // 二重ラップしない）」規約（QA指摘m4）。equipmentFloorSync.js（保存・commitActiveの例外）と
 // App.jsx installElevatorFromNaming/deleteElevatorEquipment/changeElevatorUsage
@@ -265,7 +271,7 @@ export function tagElevatorOpFailure(err, { code = ERR_ELEVATOR_OP_FAILED, messa
 // （QA指摘F3・2026-09-27）。
 const KNOWN_TRANSITION_ERROR_CODES = [
   ERR_CATALOG_DUPLICATE, ERR_ELEVATOR_OP_FAILED, ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_USAGE_FAILED,
-  ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_RENUMBER_FAILED,
+  ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_RENUMBER_FAILED, ERR_STAIR_DESIGNATE_FAILED,
 ];
 
 // 昇降機の設置（finish/equipment/equipmentOps.js validateElevatorInstall）専用の拒否文言。
@@ -281,6 +287,22 @@ export const ERR_ELEVATOR_NOT_UNASSIGNED = '昇降機は未指定のエリアか
 // 未定義部屋のセルからの新規ドラッグ）でない場合（既存の命名済み部屋・統合・部分指定）、または
 // 候補のセルが階段・他の部屋と重なる場合。
 export const ERR_ROOF_NOT_UNASSIGNED = '屋根は未指定のエリアから指定してください。';
+
+// 屋根を付けた直後の警告（finish/roof/roofFloorCheck.js findUpperRoomsOverCells）。屋根の上の階の同じ
+// 位置に屋内の部屋があるとき。警告だけで、上の階の部屋は自動では変更しない。floorLabels は階名の配列。
+export const ERR_ROOF_UPPER_ROOMS = (floorLabels) =>
+  `屋根の上の階（${floorLabels.join('・')}）に部屋があります。上の階の部屋は自動では変更されません。`;
+
+// 階段の指定の拒否（finish/stair/stairRoofConflict.js・App.jsx convertStairFromNaming）。階段は上の階へ
+// 展開される（中間階は階段、最上階は階段吹抜け）が、その位置に屋根があると屋根セルと重なるため、
+// 指定を確定せず何も変更しない。floorLabels は衝突する階名の配列。
+export const ERR_STAIR_UPPER_ROOF = (floorLabels) =>
+  `${floorLabels.join('・')}の屋根と重なるため、階段を指定できません。`;
+// 上の階の読込み（peek）が失敗して屋根との重なりを確かめられなかった場合。何も変更しない。
+export const ERR_STAIR_UPPER_CHECK_FAILED = '上の階を確認できなかったため、階段を指定できませんでした。';
+// 上の階の確認（非同期）の間にモード・階・部屋が変わり、確認結果が今の状態に当てはまらなくなって
+// 指定を中断した場合（昇降機の世代不一致 ERR_ELEVATOR_FLOORS_CHANGED と同じ「もう一度」の様式）。
+export const ERR_STAIR_DESIGNATE_ABORTED = '上の階の確認中に状態が変わったため、階段の指定を中断しました。もう一度実行してください。';
 
 // 昇降機の上階事前チェック（finish/equipment/equipmentFloorPlan.js judgeElevatorInstall）専用の
 // 拒否文言（ステップ4・S2）。floorLabel は plane.name。

@@ -8,7 +8,21 @@ import {
   tagElevatorOpFailure, ERR_ELEVATOR_OP_FAILED, ERR_ELEVATOR_OP_FAILED_MESSAGE,
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE,
   ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
+  ERR_STAIR_DESIGNATE_FAILED, ERR_STAIR_DESIGNATE_FAILED_MESSAGE, ERR_STAIR_DESIGNATE_ABORTED,
+  ERR_STAIR_UPPER_CHECK_FAILED, ERR_ELEVATOR_FLOORS_CHANGED,
 } from './error.js';
+
+test('【B1b】階段の指定の失敗: tagElevatorOpFailure で包んだ例外は floorTransitionErrorMessage で階切替の汎用文言に丸められず専用文言になる', () => {
+  const tagged = tagElevatorOpFailure(new Error('boom'), { code: ERR_STAIR_DESIGNATE_FAILED, message: ERR_STAIR_DESIGNATE_FAILED_MESSAGE });
+  assert.equal(tagged.code, ERR_STAIR_DESIGNATE_FAILED);
+  assert.equal(floorTransitionErrorMessage(tagged), ERR_STAIR_DESIGNATE_FAILED_MESSAGE);
+  assert.notEqual(floorTransitionErrorMessage(new Error('boom')), ERR_STAIR_DESIGNATE_FAILED_MESSAGE, '包んでいない例外は従来どおり汎用文言');
+});
+
+test('【B1b】階段の指定の中断用の文言は、確認失敗用・昇降機用の文言と別', () => {
+  assert.notEqual(ERR_STAIR_DESIGNATE_ABORTED, ERR_STAIR_UPPER_CHECK_FAILED);
+  assert.notEqual(ERR_STAIR_DESIGNATE_ABORTED, ERR_ELEVATOR_FLOORS_CHANGED);
+});
 
 test('floorTransitionErrorMessage: ERR_FLOOR_SWITCH_UNSTABLEはそのまま見せる', () => {
   const err = new Error(ERR_FLOOR_SWITCH_UNSTABLE);

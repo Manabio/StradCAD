@@ -6,6 +6,9 @@ import { refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
 import { collectNeededCLs, addMissingCLs, translateCellSet } from '../floorCLMap.js';
 import { RoomFeature, RoomKind, isRoofFeature } from '@core';
+import { upperAdoptedPlanes } from '../roof/roofFloorCheck.js';
+import { findStairUpperRoofConflicts } from './stairRoofConflict.js';
+import { ERR_STAIR_UPPER_ROOF } from '../../error.js';
 
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -33,6 +36,39 @@ function addStairVoidRoom(graph, cells) {
   const room = graph.addRoom(new Set(cells));
   room.setFeature(RoomFeature.STAIR_VOID);
   return true;
+}
+
+/**
+ * 階段の新規指定（部屋→階段）の事前チェック。syncUpperFloors が上の階へ展開する位置（中間階は階段、
+ * 最上階は屋内階段のときの階段吹抜け）に屋根（ROOF）があるかを、上の全採用階を peek して調べ、
+ * あれば拒否のメッセージを返す（無ければ null）。読むだけ——peek した一時グラフへ CL を足すが保存しない。
+ * 呼び出し側（App.jsx convertStairFromNaming）は、graph・他階の保存データを一切変える前にこれを呼び、
+ * メッセージがあれば階段の指定を確定しない（昇降機の judgeElevatorInstall と同じ「確定前の拒否」）。
+ * peekFn の失敗は握りつぶさず reject する（呼び出し側が「確かめられなかったので指定しない」とする）。
+ *
+ * @param {object} project
+ * @param {object} activeGraph - 設置階（アクティブ）のグラフ
+ * @param {Set<string>} cells - 階段にする部屋のセル（raw）
+ * @param {boolean} indoor - 屋内階段か（屋外階段は最上階に階段吹抜けを作らない）
+ * @param {(plane: object) => Promise<object>} [peekFn] - 既定 floorSwapManager.peek（テスト注入用。挙動は変えない）
+ * @returns {Promise<string|null>} 拒否メッセージ（衝突なしなら null）
+ */
+export async function findStairUpperRoofRejection(
+  project, activeGraph, cells, indoor,
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+) {
+  const uppers = upperAdoptedPlanes(project.planes, activeGraph?.plane);
+  if (uppers.length === 0) return null;
+  const floors = [{ plane: activeGraph.plane, graph: activeGraph }];
+  for (const plane of uppers) {
+    const graph = await peekFn(plane);
+    if (!graph) throw new Error(`findStairUpperRoofRejection: peek が階のグラフを返しませんでした（plane=${plane.id}）`);
+    floors.push({ plane, graph });
+  }
+  const conflicts = findStairUpperRoofConflicts({
+    structGraph: project.structGraph, floors, activeIndex: 0, cells, indoor,
+  });
+  return conflicts.length > 0 ? ERR_STAIR_UPPER_ROOF(conflicts.map(c => c.floorLabel)) : null;
 }
 
 /**
@@ -72,8 +108,14 @@ function addStairVoidRoom(graph, cells) {
  * @param {object} activeGraph - 設置階（アクティブ）のグラフ
  * @param {object} [opts]
  * @param {object|null} [opts.undoEntry] - 合成先の undo エントリ（undoManager.push の戻り値）
+ * @param {(plane: object) => Promise<object>} [opts.peekFn] - 既定 floorSwapManager.peek（テスト注入用。挙動は変えない）
+ * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [opts.saveFloorFn] - 既定 saveFloor（テスト注入用。挙動は変えない）
  */
-export async function syncUpperFloors(project, activeGraph, { undoEntry = null } = {}) {
+export async function syncUpperFloors(project, activeGraph, {
+  undoEntry = null,
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+} = {}) {
   const planes = project.planes; // elevation 昇順・採用フロアのみ（検討フロア/屋根伏図は除外済み）
   const active = activeGraph?.plane;
   if (!active) return;
@@ -98,7 +140,7 @@ export async function syncUpperFloors(project, activeGraph, { undoEntry = null }
     const isActive = plane.id === project.activePlane?.id;
     const temp = isActive
       ? project.activeGraph
-      : await floorSwapManager.peek(plane, project.structGraph);
+      : await peekFn(plane);
     const beforeBytes = undoEntry ? serializeGraph(temp) : null;
     let changed = false;
 
@@ -147,7 +189,7 @@ export async function syncUpperFloors(project, activeGraph, { undoEntry = null }
       }
     }
 
-    if (changed && !isActive) await saveFloor(plane.id, serializeGraph(temp));
+    if (changed && !isActive) await saveFloorFn(plane.id, serializeGraph(temp));
     if (changed && undoEntry) {
       undoRecords.push({ planeId: plane.id, before: beforeBytes, after: serializeGraph(temp) });
     }
@@ -160,7 +202,7 @@ export async function syncUpperFloors(project, activeGraph, { undoEntry = null }
         if (project.activePlane?.id === rec.planeId) {
           restoreGraph(project.activeGraph, rec[which]); // undo 時にその階がアクティブなら生きているグラフへ復元
         } else {
-          saveFloor(rec.planeId, rec[which]).catch(console.error); // 非アクティブ階は IDB のみが正
+          saveFloorFn(rec.planeId, rec[which]).catch(console.error); // 非アクティブ階は IDB のみが正
         }
       }
     };

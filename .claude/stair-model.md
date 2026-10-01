@@ -193,5 +193,8 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
   クリップを行わずセル矩形（KEEP_MARGIN拡張）のまま採用する——弦の無限延長が別アーム側の
   破れ線先セルを誤って切ってしまうため。斜めの破れ線と厳密には一致しない（セル粒度）。
 
+## 上階展開の位置に屋根があるときは階段の指定を拒否する
+通り芯だけでできた階段（`syncUpperFloors`は何も展開しない既存の挙動）でも、屋根の真下なら安全側で拒否する（2026-10-02リード裁定）。階段の新規指定（`applyRoomNaming`の部屋→階段）は、上に採用フロアがあるとき非同期の関門（`App.jsx convertStairFromNaming`）で、上階展開の位置（中間階の階段・最上階の階段吹抜け）に屋根（ROOF）が無いかを確定前に確かめ、あれば何も変更せず拒否する（`finish/stair/stairRoofConflict.js`。理由と既知の限界＝階追加・並べ替えの自動展開は拒否しない点は`.claude/data-model.md`の屋根の節）。
+
 ## 階操作（追加・挿入・並替・階変更・削除）への追従は`floorOrderChange.js`が担う
 上階の自動設置（`syncUpperFloorsAuto`）・直下階の階段削除は、階の並びを変える経路（挿入・下階追加・削除・ドラッグ移動・階変更）から個別に呼ばれず、`floorOrderFollowers`レジストリの`stairUpperSync`／`stairsBelowRemoval`に登録して行う。同期ルールが今後変わったら、この2つのfollowerだけ直せば全経路に効く（`.claude/floor-design.md`「階の並びを変える操作が他の階へ波及する処理」参照）。

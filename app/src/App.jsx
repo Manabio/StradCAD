@@ -33,7 +33,8 @@ import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBo
 import { computeVoidCrosses } from './finish/voidGeometry.js';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP, UNNUMBERED_TAG } from './structural/memberCatalog.js';
-import { CenterLineType, OpeningCategory } from '@core';
+import { CenterLineType, OpeningCategory, isRoofFeature } from '@core';
+import { upperAdoptedPlanes, findUpperRoomsOverCells } from './finish/roof/roofFloorCheck.js';
 import { isHitTestTarget } from './core/centerLineKindPolicy.js';
 import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
@@ -85,6 +86,8 @@ import { collectFixedMembersByFloor, clDisplayName, formatFixedMemberConfirm } f
 import {
   ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure,
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE, ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
+  ERR_ROOF_UPPER_ROOMS, ERR_STAIR_UPPER_CHECK_FAILED, ERR_STAIR_DESIGNATE_ABORTED,
+  ERR_STAIR_DESIGNATE_FAILED, ERR_STAIR_DESIGNATE_FAILED_MESSAGE,
 } from './error.js';
 import { isUiBusy, runBusy } from './uiBusy.js';
 import { isSessionOwner } from './storage/sessionLock.js';
@@ -217,11 +220,16 @@ const App = observer(() => {
   // 仕上げモード: 部屋名ダイアログ（新規Roomの命名専用）・仕上げ表内部タブのカード
   // （既存部屋の名称・区分・属性の編集）の両方から呼ぶ共通処理（applyNaming＋階段変換時の
   // 上階自動設置 syncUpperFloors）。
-  function applyRoomNaming(id, payload) {
+  function applyRoomNaming(id, payload, { stairChecked = false } = {}) {
     // 昇降機の新規設置（非昇降機属性→昇降機属性）だけは非同期の関門（installElevatorFromNaming）へ
     // 分ける——上階の事前チェック・自動設置・下方延長を伴うため（ステップ4・S3b）。既存の拒否
     // トースト・階段の経路はこの行より後ろ（このifに入らない場合）で、変更しない。
     if (modeRef.current?.isElevatorInstallIntent(id, payload)) { guardUi(installElevatorFromNaming)(id, payload); return; }
+    // 階段の新規指定（階段でない部屋→階段）は、上に採用フロアがあるとき、上の階へ展開される位置に屋根が
+    // 無いかを確定前に確かめる非同期の関門（convertStairFromNaming）へ分ける（ステップB1b）。上の階が
+    // 無ければ従来どおりの同期の経路。関門を通った後の再入は stairChecked で分岐を飛ばす。
+    if (!stairChecked && modeRef.current?.isStairConversionIntent(id, payload) && upperAdoptedPlanes(project.planes, project.activePlane).length > 0) { guardUi(convertStairFromNaming)(id, payload); return; }
+    const wasRoof = isRoofFeature(project.activeGraph.roomMap.get(id)?.feature);
     const floorHeight = floorHeightAbove(project, project.activePlane);
     const convertedStair = modeRef.current?.applyNaming(id, payload, floorHeight);
     // 昇降機の設置が拒否された場合（矩形でない・屋外・新規候補でない）はトーストを出して
@@ -238,6 +246,53 @@ const App = observer(() => {
         .then(m => m.syncUpperFloors(project, project.activeGraph, { undoEntry }))
         .catch(console.error);
     }
+    // 屋根が新しく付いた（ROOF でなかった部屋が ROOF になった）確定の直後だけ、屋根の上の階の同じ位置に
+    // 屋内の部屋が無いかを警告する（ステップB1b）。警告は付与の後で、付与そのものは変えない。undo/redo では
+    // 出さない（階またぎの警告は確定時だけの流儀）。
+    const roofRoom = project.activeGraph.roomMap.get(id);
+    if (isRoofFeature(roofRoom?.feature) && !wasRoof) warnUpperRoomsOverRoof(project.activeGraph, new Set(roofRoom.cells));
+  }
+  // 屋根の上の階の警告本体（applyRoomNaming から）。上の階を読むだけ（書かない）ので関門には入らない。
+  // 失敗は階段の上階展開（syncUpperFloors）と同じく console.error（屋根の付与は確定済みで巻き戻さない）。
+  function warnUpperRoomsOverRoof(g, cells) {
+    findUpperRoomsOverCells(project, g, cells, (p) => floorSwapManager.peek(p, project.structGraph))
+      .then(names => { if (names.length > 0) setToast({ msg: ERR_ROOF_UPPER_ROOMS(names), key: Date.now() }); })
+      .catch(console.error);
+  }
+  // 階段の新規指定の本体（applyRoomNaming から分岐。ステップB1b）。上の階へ展開される位置（中間階の階段・
+  // 最上階の階段吹抜け）に屋根があれば、何も変更せずメッセージだけ出す（ダイアログは開いたまま。昇降機の
+  // installElevatorFromNaming と同じ「確定前の拒否」）。上の階の読込み（peek）は変更の前に済ませる——
+  // 確定後に非同期処理を挟んで失敗しても巻き戻せないため。通ったら同期で applyRoomNaming を再入する。
+  async function convertStairFromNaming(id, payload) {
+    const fmode = modeRef.current;
+    const g = project.activeGraph;
+    const prep = fmode.prepareStairNaming(id, payload);
+    if (!prep) return; // Room が既に無い等の退化ケース（関門に入らない）
+    beginUiTransition();
+    await runBusy('階段の指定', async () => {
+      let rejection;
+      try {
+        await structuralSync.whenIdle();
+        const m = await import('./finish/stair/stairFloorSync.js');
+        rejection = await m.findStairUpperRoofRejection(project, g, prep.cells, prep.indoor);
+      } catch (err) {
+        console.error(err);
+        setToast({ msg: ERR_STAIR_UPPER_CHECK_FAILED, key: Date.now() });
+        return;
+      }
+      if (rejection) { setToast({ msg: rejection, key: Date.now() }); return; }
+      // 非同期の間にモード・階・部屋が変わっていたら確定しない（確認した結果が今の状態に当てはまらない）。
+      if (modeRef.current !== fmode || project.activeGraph !== g || !fmode.isStairConversionIntent(id, payload)) {
+        setToast({ msg: ERR_STAIR_DESIGNATE_ABORTED, key: Date.now() });
+        return;
+      }
+      try {
+        applyRoomNaming(id, payload, { stairChecked: true });
+      } catch (err) {
+        // 階切替の汎用文言（ERR_FLOOR_SWITCH_FAILED）に丸められないよう、階段の指定の失敗と分かる識別を付ける。
+        throw tagElevatorOpFailure(err, { code: ERR_STAIR_DESIGNATE_FAILED, message: ERR_STAIR_DESIGNATE_FAILED_MESSAGE });
+      }
+    });
   }
   // 昇降機の新規設置本体（applyRoomNamingから分岐。ステップ4・S3b）。上階の事前チェック・
   // 自動設置・下方延長を伴うため関門（runBusy）の中で行う——handleDeleteCenterLine等と同じ形

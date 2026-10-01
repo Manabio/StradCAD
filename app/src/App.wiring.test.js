@@ -496,3 +496,104 @@ test('【不変条件・横断】App.jsx: await withFloorOpUndo( の全呼び出
       + `（呼び出し行: "${lines[idx].trim()}"、直前の非空行: "${prev >= 0 ? lines[prev].trim() : '(なし)'}"）`);
   }
 });
+
+// ================================================================
+// 屋根と他の階の整合（ステップB1b）: 階段の新規指定の確定前の拒否・屋根の付与直後の警告の配線。
+// 判断は純関数（finish/stair/stairRoofConflict.js・finish/roof/roofFloorCheck.js）に置いてあり、ここでは
+// 呼び出し側（App.jsx）の順序だけを、コメント行を除いた関数本体・1行まるごとの一致で固定する。
+// ================================================================
+
+const STAIR_BRANCH_LINE =
+  'if (!stairChecked && modeRef.current?.isStairConversionIntent(id, payload) && upperAdoptedPlanes(project.planes, project.activePlane).length > 0) { guardUi(convertStairFromNaming)(id, payload); return; }';
+
+test('【配線・B1b】applyRoomNaming: 階段の新規指定は、変更（applyNaming）より前の1行で convertStairFromNaming へ分岐しreturnする（昇降機の分岐の後）', () => {
+  const body = extractFunctionBody(readAppSrc(), 'function applyRoomNaming');
+  const lines = body.split('\n').map(l => l.trim());
+  const branchIdx = lines.indexOf(STAIR_BRANCH_LINE);
+  assert.ok(branchIdx >= 0, `階段の分岐が1行まるごとの形で見つからない: ${STAIR_BRANCH_LINE}`);
+  const elevatorIdx = lines.findIndex(l => l.startsWith('if (modeRef.current?.isElevatorInstallIntent(id, payload))'));
+  const applyIdx = lines.findIndex(l => l.includes('modeRef.current?.applyNaming('));
+  assert.ok(elevatorIdx >= 0 && applyIdx >= 0, '前提: 昇降機の分岐と applyNaming の呼び出しがある');
+  assert.ok(elevatorIdx < branchIdx && branchIdx < applyIdx,
+    `階段の分岐は昇降機の分岐より後・applyNaming の呼び出しより前（昇降機:${elevatorIdx}、階段:${branchIdx}、applyNaming:${applyIdx}）`);
+});
+
+test('【配線・B1b】convertStairFromNaming: 事前チェック（上の階の peek を含む）が変更（applyRoomNaming の再入）より前で、拒否ならreturnする', () => {
+  const body = extractFunctionBody(readAppSrc(), 'async function convertStairFromNaming');
+  const lines = body.split('\n').map(l => l.trim());
+  const idxOf = (pred) => lines.findIndex(pred);
+  const whenIdleIdx = idxOf(l => l === 'await structuralSync.whenIdle();');
+  const importIdx = idxOf(l => l === "const m = await import('./finish/stair/stairFloorSync.js');");
+  const checkIdx = idxOf(l => l === 'rejection = await m.findStairUpperRoofRejection(project, g, prep.cells, prep.indoor);');
+  const rejectIdx = idxOf(l => l === 'if (rejection) { setToast({ msg: rejection, key: Date.now() }); return; }');
+  const commitIdx = idxOf(l => l === 'applyRoomNaming(id, payload, { stairChecked: true });');
+  for (const [name, i] of [['whenIdle', whenIdleIdx], ['動的import', importIdx], ['事前チェック', checkIdx], ['拒否のreturn', rejectIdx], ['確定', commitIdx]]) {
+    assert.ok(i >= 0, `${name} の行が1行まるごとの形で見つからない`);
+  }
+  assert.ok(whenIdleIdx < importIdx && importIdx < checkIdx && checkIdx < rejectIdx && rejectIdx < commitIdx,
+    `順序は whenIdle → import → 事前チェック → 拒否return → 確定 のはず（${whenIdleIdx},${importIdx},${checkIdx},${rejectIdx},${commitIdx}）`);
+  assert.equal(body.match(/applyRoomNaming\(/g)?.length ?? 0, 1, 'applyRoomNaming の呼び出しは確定の1回だけ（事前チェックの前に変更が起きない）');
+  assert.ok(!body.includes('.applyNaming('), 'モード状態の applyNaming を直接呼ばない（必ず applyRoomNaming 経由）');
+  // 事前チェックの失敗（peek 失敗等）は握りつぶさず、何も変更せず専用メッセージを出してreturnする
+  assert.ok(lines.includes('setToast({ msg: ERR_STAIR_UPPER_CHECK_FAILED, key: Date.now() });'), '確認失敗のトーストが無い');
+});
+
+test('【配線・B1b】applyRoomNaming: 再入フラグ stairChecked の既定は false（既定が true だと事前チェックが丸ごと無効になる）', () => {
+  const src = readAppSrc();
+  const lines = stripCommentLines(src).split('\n').map(l => l.trim());
+  assert.ok(lines.includes('function applyRoomNaming(id, payload, { stairChecked = false } = {}) {'),
+    'function applyRoomNaming(id, payload, { stairChecked = false } = {}) { が1行まるごとの形で見つからない');
+  assert.equal(lines.filter(l => l.includes('stairChecked: true')).length, 1, 'stairChecked: true で再入するのは convertStairFromNaming の1箇所だけ');
+});
+
+test('【配線・B1b】convertStairFromNaming: 確認失敗（catch）の直後は return、await 後の再確認も1行まるごと一致で確定より前・中で return、確定の例外は識別を付ける', () => {
+  const body = extractFunctionBody(readAppSrc(), 'async function convertStairFromNaming');
+  const lines = body.split('\n').map(l => l.trim());
+  // (1) catch: setToast(確認失敗) の直後の行が return;（消すと、上の階を確認できないまま階段を確定してしまう）
+  const catchIdx = lines.indexOf('} catch (err) {');
+  assert.ok(catchIdx >= 0, '確認の catch が無い');
+  assert.deepEqual(lines.slice(catchIdx + 1, catchIdx + 4), [
+    'console.error(err);',
+    'setToast({ msg: ERR_STAIR_UPPER_CHECK_FAILED, key: Date.now() });',
+    'return;',
+  ], 'catch は console.error → 確認失敗のトースト → return; の順');
+  // (2) await 後の再確認
+  const recheckLine = 'if (modeRef.current !== fmode || project.activeGraph !== g || !fmode.isStairConversionIntent(id, payload)) {';
+  const recheckIdx = lines.indexOf(recheckLine);
+  assert.ok(recheckIdx >= 0, `再確認の if が1行まるごとの形で見つからない: ${recheckLine}`);
+  assert.deepEqual(lines.slice(recheckIdx + 1, recheckIdx + 4), [
+    'setToast({ msg: ERR_STAIR_DESIGNATE_ABORTED, key: Date.now() });',
+    'return;',
+    '}',
+  ], '再確認が偽でなければ 中断のトースト → return; で閉じる');
+  const commitIdx = lines.indexOf('applyRoomNaming(id, payload, { stairChecked: true });');
+  assert.ok(commitIdx > recheckIdx, '再確認は確定（applyRoomNaming の再入）より前');
+  // (3) 確定の例外は階段の指定の失敗として識別する（階切替の汎用文言に丸められない）
+  assert.equal(lines[commitIdx - 1], 'try {', '確定は try の中');
+  assert.deepEqual(lines.slice(commitIdx + 1, commitIdx + 4), [
+    '} catch (err) {',
+    'throw tagElevatorOpFailure(err, { code: ERR_STAIR_DESIGNATE_FAILED, message: ERR_STAIR_DESIGNATE_FAILED_MESSAGE });',
+    '}',
+  ]);
+});
+
+test('【配線・B1b】applyRoomNaming: 屋根の警告は applyNaming と rejection の判定より後で、wasRoof は applyNaming より前に採る', () => {
+  const body = extractFunctionBody(readAppSrc(), 'function applyRoomNaming');
+  const lines = body.split('\n').map(l => l.trim());
+  const wasRoofIdx = lines.indexOf('const wasRoof = isRoofFeature(project.activeGraph.roomMap.get(id)?.feature);');
+  const applyIdx = lines.findIndex(l => l.includes('modeRef.current?.applyNaming('));
+  const rejectionIdx = lines.indexOf('if (rejection) { setToast({ msg: rejection, key: Date.now() }); return; }');
+  const warnIdx = lines.indexOf('if (isRoofFeature(roofRoom?.feature) && !wasRoof) warnUpperRoomsOverRoof(project.activeGraph, new Set(roofRoom.cells));');
+  assert.ok(wasRoofIdx >= 0 && warnIdx >= 0 && applyIdx >= 0 && rejectionIdx >= 0, '必要な行が1行まるごとの形で見つからない');
+  assert.ok(wasRoofIdx < applyIdx, 'wasRoof は applyNaming より前に採る（確定後では常に真になる）');
+  assert.ok(applyIdx < rejectionIdx && rejectionIdx < warnIdx, '警告は拒否の判定より後（拒否された屋根では出さない）');
+});
+
+test('【配線・B1b】warnUpperRoomsOverRoof: 上の階は読むだけ（peek）・結果があればトースト・失敗は console.error', () => {
+  const body = extractFunctionBody(readAppSrc(), 'function warnUpperRoomsOverRoof');
+  assert.ok(body.includes('findUpperRoomsOverCells(project, g, cells, (p) => floorSwapManager.peek(p, project.structGraph))'));
+  assert.ok(body.includes('if (names.length > 0) setToast({ msg: ERR_ROOF_UPPER_ROOMS(names), key: Date.now() });'));
+  // 部分一致だと、行末コメントに元の式を残す変異（`// .catch(console.error);`）でも緑になる——trim した行の完全一致にする
+  assert.ok(body.split('\n').map(l => l.trim()).includes('.catch(console.error);'), '失敗は握りつぶさずログに出す（行まるごと一致）');
+  assert.ok(!body.includes('saveFloor') && !body.includes('runBusy'), '他階へ書かない・関門にも入らない（読むだけ）');
+});

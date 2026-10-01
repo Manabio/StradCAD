@@ -52,6 +52,7 @@ const GATED = [
   'runAddAlternative', 'runDeleteFloor', 'runDeleteAlternative', 'runCopyAlternative',
   'installElevatorFromNaming', 'deleteElevatorEquipment', 'changeElevatorUsage',
   'handleCLDialogConfirm',
+  'convertStairFromNaming',
 ];
 
 function gatedName(entry) {
@@ -193,8 +194,10 @@ const PENDING_COUNT = 0;
 // withFloorOpUndo( に渡す無名 async コールバックが2件（App.jsx の runReorderFloor・runFloorChange）
 // 加わったため35→37（withFloorOpUndo自身のrunBusy(コールバック・undoFloorOp/redoFloorOpのrunBusy(
 // コールバックは既存のwithFloorAddUndo/undoFloorAdd/redoFloorAddの改名のため増減なし）。
+// 屋根と他の階の整合（ステップB1b）でconvertStairFromNaming（GATED。階段の新規指定の確定前に上の階の
+// 屋根との重なりを確かめる）のrunBusy(コールバックが1件加わったため37→38。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 37;
+const ANON_CALLBACK_COUNT = 38;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

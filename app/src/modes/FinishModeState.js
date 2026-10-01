@@ -788,6 +788,30 @@ export class FinishModeState {
   }
 
   /**
+   * payload が「階段の新規指定」（階段でない Room → 階段）を意図しているか（applyNaming の wasStair/toStair
+   * 判定と同じ述語。既に階段の Room の名前変更・再確定は含まない）。roomId が存在しなければ false。
+   * App.jsx applyRoomNaming が、上の階の屋根との事前チェック（convertStairFromNaming）へ分岐する判定に使う。
+   */
+  isStairConversionIntent(roomId, payload) {
+    const room = this.graph.roomMap.get(roomId);
+    if (!room) return false;
+    return payload.feature === RoomFeature.STAIR && room.feature !== RoomFeature.STAIR;
+  }
+
+  /**
+   * 階段の新規指定の事前チェックに要る値（App.jsx convertStairFromNaming が関門に入る前に読む）。
+   * 状態は一切変えない。cells は階段になる Room のセル（applyNaming が Stair に渡す room.cells と同じ）、
+   * indoor は payload の区分が屋外でないか（isIndoorStair は確定後の kind を見る＝applyNaming が
+   * room.setKind(payload.kind) した結果と同じ）。roomId が存在しなければ null。
+   * @returns {{cells: Set<string>, indoor: boolean}|null}
+   */
+  prepareStairNaming(roomId, payload) {
+    const room = this.graph.roomMap.get(roomId);
+    if (!room) return null;
+    return { cells: new Set(room.cells), indoor: payload.kind !== RoomKind.EXTERIOR };
+  }
+
+  /**
    * ダイアログ確定時に kind/feature/name をまとめて適用する（旧 finishNaming を置き換え）。
    * feature の遷移により Stair の生成・削除・名前変更を行う:
    *   非STAIR → 'stair': 新規変換（Stair生成。名前は空許容）
