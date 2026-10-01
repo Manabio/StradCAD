@@ -400,7 +400,8 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 ## 振り直し（renumberPlanesFrom）
 採用階の並び（elevation昇順）で、基準の階から上へ順にstartFloor・elevation・nameを決め直すこと。
 階の並びを変える操作（挿入・ドラッグ移動・階削除・階変更）が共通で使う純関数（`floorOps.js`）に
-一本化されている。設計意図は`.claude/floor-design.md`「階の並びを変える操作が他の階へ波及する処理」節。
+一本化されている。ただし地階での上階追加だけは表示中の階とその下をずらす例外（`computeFloorInsert`。
+ユーザー裁定2026-10-01）。設計意図は`.claude/floor-design.md`「階の並びを変える操作が他の階へ波及する処理」節。
 
 ## 追従処理（floorOrderFollowers）
 「階の並びが変わった」1つの出来事の後に走る登録制の処理（屋根平面の高さ・階段の上階同期・

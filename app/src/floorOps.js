@@ -4,7 +4,7 @@
 import { runInAction } from 'mobx';
 import { restoreGraph } from './graphSnapshot.js';
 import { saveFloor, deleteFloor as dbDeleteFloor } from './storage/db.js';
-import { addSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
+import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
 
 // Uint8Array 同士の内容比較（null 同士は等しい）
 export function floorBytesEqual(a, b) {
@@ -209,13 +209,47 @@ export function computeFloorChangeReorder(planes, planeId, newStartFloor) {
 // 現行計算と同じ規則（topFloor = 表示中の階の最上段、addSkipZero(topFloor, 1)、
 // elevation = 表示中の階のelevation + 3000×表示中の階のstories）。updates は「新階を挿入位置の
 // 直後に差し込んだ配列」で renumberPlanesFrom(arr, 挿入位置+2)（新階より上の既存階だけ。新階自身は
-// 含まない）。currentPlaneId が planes に無ければ null。表示中の階が最上階なら updates は空配列
-// （従来の上階追加と同じ結果）。
+// 含まない）。currentPlaneId が planes に無ければ null。地上階で、表示中の階が最上階なら
+// updates は空配列（従来の上階追加と同じ結果）。
+//
+// 地階（current.startFloor < 0）での上階追加だけは「表示中の階とその下をずらす」（地上階の番号・
+// 高さは動かさない。ユーザー裁定2026-10-01）。新階（stories=n）は表示中の階の最上段に合わせて
+// startFloor = current.startFloor+current.stories-1 を基準に n-1 を引き（subtractSkipZero）、
+// elevation = current.elevation+(current.stories-n)×3000 を受け取る（current.stories=1・n=1なら
+// 表示中の階の元の番号・高さをそのまま受け取る従来の式と一致。current.stories>1（複層の地階）でも
+// 新階が表示中の階の最上段に重ならないよう最上段基準で計算する——QA指摘・2026-10-01修正）。
+// 表示中の階とそれより下の採用階は全て n 階分（startFloor -= n・elevation -= 3000×n）下へずらす
+// （地下どうしの移動なので0をまたがない）。地上階（current.startFloor > 0）は本分岐を通らず、
+// 従来どおり「上をずらす」。
 export function computeFloorInsert(planes, currentPlaneId, stories) {
   const idx = planes.findIndex(p => p.id === currentPlaneId);
   if (idx < 0) return null;
 
-  const current       = planes[idx];
+  const current = planes[idx];
+
+  if (current.startFloor < 0) {
+    const n = stories;
+    const currentTopFloor = current.startFloor + current.stories - 1;
+    const newStartFloor = subtractSkipZero(currentTopFloor, n - 1);
+    const newElevation  = current.elevation + (current.stories - n) * 3000;
+    const newName       = makeFloorName(newStartFloor, n);
+    const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories: n };
+
+    const updates = [];
+    for (let i = 0; i <= idx; i++) {
+      const plane       = planes[i];
+      const shiftedSF   = subtractSkipZero(plane.startFloor, n);
+      const shiftedElev = plane.elevation - n * 3000;
+      const name = plane.stories > 1
+        ? makeFloorName(shiftedSF, plane.stories)
+        : renameFloor(plane.name, shiftedSF);
+      if (name !== plane.name || shiftedSF !== plane.startFloor || shiftedElev !== plane.elevation) {
+        updates.push({ id: plane.id, name, startFloor: shiftedSF, elevation: shiftedElev });
+      }
+    }
+    return { newPlane, updates };
+  }
+
   const topFloor       = current.startFloor + current.stories - 1;
   const newStartFloor  = addSkipZero(topFloor, 1);
   const newName        = makeFloorName(newStartFloor, stories);

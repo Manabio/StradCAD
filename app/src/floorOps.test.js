@@ -319,25 +319,158 @@ test('computeFloorInsert: 1〜5階の3階へ挿入すると1・2・3・4・5・6
   assert.equal(new Set(elevations).size, elevations.length, '同じelevationの階が無い');
 });
 
-test('computeFloorInsert: 地下の途中階（B2）から挿入してもB1が2つにならない（B2・B1・1階・2階に振り直る）', () => {
+// ---- 地階での上階追加（表示中の階とその下をずらす。地上階は動かさない。ユーザー裁定2026-10-01）----
+
+test('computeFloorInsert: 地下の途中階（B2）から挿入すると、B2とそれより下（無し）だけが下へずれ、地上階（1階）は動かない', () => {
   const project = new Project('proj', 'test');
   project.addPlane(0,    '地下2階', 'B2', -2, 1);
   project.addPlane(3000, '地下1階', 'B1', -1, 1);
   project.addPlane(6000, '1階',    'F1', 1,  1);
 
   const insert = computeFloorInsert(project.planes, 'B2', 1);
+  // n=1なので新階はB2の元の番号・高さをそのまま受け取る
+  assert.deepEqual(insert.newPlane, { name: '地下2階', startFloor: -2, elevation: 0, stories: 1 });
+  assert.deepEqual(insert.updates, [
+    { id: 'B2', name: '地下3階', startFloor: -3, elevation: -3000 },
+  ]);
+  applyFloorInsert(project, insert.updates,
+    () => project.addPlane(insert.newPlane.elevation, insert.newPlane.name, 'newB2', insert.newPlane.startFloor, insert.newPlane.stories));
+
+  const startFloors = project.planes.map(p => p.startFloor);
+  assert.deepEqual(startFloors, [-3, -2, -1, 1]);
+  assert.equal(new Set(startFloors).size, startFloors.length, '同じstartFloorの階が無い');
+
+  const names = project.planes.map(p => p.name);
+  assert.deepEqual(names, ['地下3階', '地下2階', '地下1階', '1階']);
+  assert.equal(new Set(names).size, names.length, '同じ名前の階が無い');
+});
+
+test('computeFloorInsert: 地下の最上の地階（B1）から挿入すると、B1とそれより下（B2）が下へずれ、地上階（1階）は動かない', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '地下2階', 'B2', -2, 1);
+  project.addPlane(3000, '地下1階', 'B1', -1, 1);
+  project.addPlane(6000, '1階',    'F1', 1,  1);
+
+  const insert = computeFloorInsert(project.planes, 'B1', 1);
   assert.deepEqual(insert.newPlane, { name: '地下1階', startFloor: -1, elevation: 3000, stories: 1 });
+  assert.deepEqual(insert.updates, [
+    { id: 'B2', name: '地下3階', startFloor: -3, elevation: -3000 },
+    { id: 'B1', name: '地下2階', startFloor: -2, elevation: 0 },
+  ]);
   applyFloorInsert(project, insert.updates,
     () => project.addPlane(insert.newPlane.elevation, insert.newPlane.name, 'newB1', insert.newPlane.startFloor, insert.newPlane.stories));
 
   const startFloors = project.planes.map(p => p.startFloor);
-  assert.deepEqual(startFloors, [-2, -1, 1, 2]);
-  assert.equal(new Set(startFloors).size, startFloors.length, '同じstartFloorの階が無い');
-
-  // QA指摘: 符号またぎ（地下→地上）でrenameFloorが部分一致し「地下1階」が2つ残っていた不良の回帰防止
+  assert.deepEqual(startFloors, [-3, -2, -1, 1]);
   const names = project.planes.map(p => p.name);
-  assert.deepEqual(names, ['地下2階', '地下1階', '1階', '2階']);
-  assert.equal(new Set(names).size, names.length, '同じ名前の階が無い');
+  assert.deepEqual(names, ['地下3階', '地下2階', '地下1階', '1階']);
+});
+
+test('computeFloorInsert: 全階地下（B2・B1のみ）でB1から挿入すると、B1・B2がともに下へずれる', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '地下2階', 'B2', -2, 1);
+  project.addPlane(3000, '地下1階', 'B1', -1, 1);
+
+  const insert = computeFloorInsert(project.planes, 'B1', 1);
+  assert.deepEqual(insert.newPlane, { name: '地下1階', startFloor: -1, elevation: 3000, stories: 1 });
+  assert.deepEqual(insert.updates, [
+    { id: 'B2', name: '地下3階', startFloor: -3, elevation: -3000 },
+    { id: 'B1', name: '地下2階', startFloor: -2, elevation: 0 },
+  ]);
+});
+
+test('computeFloorInsert: 地下の途中階（B2）から一般階2階分を挿入すると、新階がstories=2で挿入され、B2は2階分下へずれる', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '地下2階', 'B2', -2, 1);
+  project.addPlane(3000, '地下1階', 'B1', -1, 1);
+  project.addPlane(6000, '1階',    'F1', 1,  1);
+
+  const insert = computeFloorInsert(project.planes, 'B2', 2);
+  assert.deepEqual(insert.newPlane, { name: '一般階', startFloor: -3, elevation: -3000, stories: 2 });
+  assert.deepEqual(insert.updates, [
+    { id: 'B2', name: '地下4階', startFloor: -4, elevation: -6000 },
+  ]);
+});
+
+// 【重大・QA指摘】複層の地階（stories>1）から追加すると新階が表示中の階と重なっていた不良の回帰防止。
+// 新階は表示中の階の最上段に合わせる（newStartFloor=current最上段-(n-1)・newElevation=current.elevation+(current.stories-n)*3000）。
+test('computeFloorInsert: 複層の地階（G: -3〜-2, stories2）から挿入すると、新階はGの最上段(-2,3000)に重ならず、Gは最上段基準で下へずれる', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '一般階', 'G', -3, 2); // -3・-2の2階分（最上段は-2）
+  project.addPlane(6000, '地下1階', 'B1', -1, 1);
+  project.addPlane(9000, '1階',    'F1', 1,  1);
+
+  const insert = computeFloorInsert(project.planes, 'G', 1);
+  assert.deepEqual(insert.newPlane, { name: '地下2階', startFloor: -2, elevation: 3000, stories: 1 });
+  assert.deepEqual(insert.updates, [
+    { id: 'G', name: '一般階', startFloor: -4, elevation: -3000 }, // Gの最上段は-3(旧-2から1つ下)
+  ]);
+  const touchedIds = insert.updates.map(u => u.id);
+  assert.ok(!touchedIds.includes('B1'), 'B1（地階より上）が更新一覧に含まれている');
+  assert.ok(!touchedIds.includes('F1'), '1階（地上階）が更新一覧に含まれている');
+
+  // 全階の[startFloor, startFloor+stories-1]の範囲が互いに重ならない
+  applyFloorInsert(project, insert.updates,
+    () => project.addPlane(insert.newPlane.elevation, insert.newPlane.name, 'newB2', insert.newPlane.startFloor, insert.newPlane.stories));
+  const ranges = project.planes.map(p => [p.startFloor, p.startFloor + p.stories - 1]);
+  for (let i = 0; i < ranges.length; i++) {
+    for (let j = i + 1; j < ranges.length; j++) {
+      const overlap = ranges[i][0] <= ranges[j][1] && ranges[j][0] <= ranges[i][1];
+      assert.ok(!overlap, `range ${ranges[i]} と ${ranges[j]} が重なっている`);
+    }
+  }
+});
+
+// 【失敗系】地階挿入で地上階（B1・1階）はupdatesに含まれない（上の階は触らない）
+test('【失敗系】computeFloorInsert: 地階挿入では地階より上の採用階（B1・1階）はupdatesに含まれない', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '地下2階', 'B2', -2, 1);
+  project.addPlane(3000, '地下1階', 'B1', -1, 1);
+  project.addPlane(6000, '1階',    'F1', 1,  1);
+
+  const insert = computeFloorInsert(project.planes, 'B2', 1);
+  const touchedIds = insert.updates.map(u => u.id);
+  assert.ok(!touchedIds.includes('B1'), 'B1（地階より上）が更新一覧に含まれている');
+  assert.ok(!touchedIds.includes('F1'), '1階（地上階）が更新一覧に含まれている');
+});
+
+// 【対照】地上階（3階建ての2階）からの挿入は現行どおり上をずらし、下は触らない（地階分岐の対照）
+test('【対照】computeFloorInsert: 地上階（2階）からの挿入は上（3階）をずらし、下（1階）は触らない', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '1階', 'F1', 1, 1);
+  project.addPlane(3000, '2階', 'F2', 2, 1);
+  project.addPlane(6000, '3階', 'F3', 3, 1);
+
+  const insert = computeFloorInsert(project.planes, 'F2', 1);
+  assert.deepEqual(insert.newPlane, { name: '3階', startFloor: 3, elevation: 6000, stories: 1 });
+  assert.deepEqual(insert.updates, [
+    { id: 'F3', name: '4階', startFloor: 4, elevation: 9000 },
+  ]);
+  const touchedIds = insert.updates.map(u => u.id);
+  assert.ok(!touchedIds.includes('F1'), '1階（挿入位置より下）が更新一覧に含まれている');
+});
+
+// applyFloorInsertの順序（上の階をずらしてから新階を足す）を地階版でも固定する。
+// B1は挿入前の高さ(3000)が新階の高さ(3000)と同じ——addNewFloor呼出し時点でB1がすでに
+// 旧B2の位置(0)へずれていること（新階の高さと一瞬でも重ならないこと）も確認する。
+test('applyFloorInsert（地階版）: addNewFloor が呼ばれた時点で既存のB2・B1はすでに下へずれている（新階の高さと重ならない）', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '地下2階', 'B2', -2, 1);
+  project.addPlane(3000, '地下1階', 'B1', -1, 1);
+  const insert = computeFloorInsert(project.planes, 'B1', 1);
+
+  let b2ElevationDuringAdd = null;
+  let b1ElevationDuringAdd = null;
+  applyFloorInsert(project, insert.updates, () => {
+    b2ElevationDuringAdd = project.planeMap.get('B2').elevation;
+    b1ElevationDuringAdd = project.planeMap.get('B1').elevation;
+    return project.addPlane(insert.newPlane.elevation, insert.newPlane.name, 'newB1', insert.newPlane.startFloor, insert.newPlane.stories);
+  });
+
+  assert.equal(b2ElevationDuringAdd, -3000, '新階を足す前に既存のB2はすでに-3000へずれている必要がある');
+  assert.equal(b1ElevationDuringAdd, 0, '新階を足す前に既存のB1（旧3000＝新階と同じ高さだった階）はすでに0へずれている必要がある');
+  const elevations = project.planes.map(p => p.elevation);
+  assert.equal(new Set(elevations).size, elevations.length, '同じelevationの階が一瞬も並ばない');
 });
 
 test('【失敗系】computeFloorInsert: 表示中の階が最上階なら updates は空配列で、newPlane は従来の上階追加と同じ計算', () => {

@@ -33,6 +33,6 @@ awaitをまたいでgraph／IDBを書くUI入口（層2）は`uiBusy.js`の`runB
 - **次階への横からの書込みを世代で検知する**——`floorWriteGeneration`で次階の読込み内容が最新かどうかを確認し、割り込みがあれば読み直す。
 
 ## 階の並びを変える操作が他の階へ波及する処理
-階の並びを変える操作（上階追加・途中階への挿入・下階追加・削除・並替・階変更）は必ず「振り直し（`floorOps.js`の`renumberPlanesFrom`1つ。最下階を基準に上を3000×階数で決め直す）→`floorOrderChange.js`の`applyFloorOrderChange`」の1経路を通る。App.jsxは振り直しループも追従処理の列挙も持たない（`startFloor`／`elevation`／`stories`への直接代入が無いことを配線テストで固定）。
+階の並びを変える操作（上階追加・途中階への挿入・下階追加・削除・並替・階変更）は必ず「振り直し（`floorOps.js`の`renumberPlanesFrom`1つ。最下階を基準に上を3000×階数で決め直す）→`floorOrderChange.js`の`applyFloorOrderChange`」の1経路を通る。App.jsxは振り直しループも追従処理の列挙も持たない（`startFloor`／`elevation`／`stories`への直接代入が無いことを配線テストで固定）。ただし地階（表示中の階の`startFloor < 0`）での上階追加だけは例外で、`computeFloorInsert`が`renumberPlanesFrom`を使わず表示中の階とそれより下の採用階だけをnずらす（地上階の番号・高さは動かさない。ユーザー裁定2026-10-01）。
 
 追従処理（`floorOrderFollowers`。登録順＝実行順、`before`＝並び変更前、`run`＝後、`run`が`false`を返すと以降を止める）は登録制のレジストリにまとめる（`modeBoundaries`と同型）。既定の登録順は屋根平面の高さ（`roofPlaneHeight`。最上階idが同じときだけ書き換え、idが変わる作り直しは行わない）→階段の上階同期→直下階の階段削除→昇降機の複製→外壁内側の部屋→新階への切替→全階の構造反映（`structuralReflect`）→昇降機の再採番。挿入・削除で元々違っていた順序は`appliesTo`（各followerがどの`FLOOR_ORDER_KIND`に効くか）の違いで同じ配列に両立させている。屋根平面の高さ追従を先頭に置く理由は、構造反映が屋根平面を読む前に高さを合わせる必要があるため。削除・並替・階変更にも構造反映を伴わせる理由は、1つ下の階の壁に依存する梁芯・部材番号の階表記が変わるため。階段や昇降機の同期仕様が今後変わっても、登録先のfollowerだけ直せば挿入・下階追加・削除・ドラッグ移動・階変更の全経路に効く。
