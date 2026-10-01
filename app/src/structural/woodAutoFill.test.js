@@ -6,8 +6,9 @@ import { Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMateri
 import {
   wallIntersectionPoints, autoFillWoodColumns, conformWoodSections, conformWoodBacking, WALL_JUNCTION_TOL_MM,
   autoFillWoodBeamDepths, autoFillWoodWallBeams, autoFillWoodFloorBeams, conformWoodColumnEccentricity,
-  autoFillWoodSillBeams, nearestAnchorCL, dedupeColumnsByAxis,
+  autoFillWoodSillBeams, nearestAnchorCL, dedupeColumnsByAxis, woodBeamDepthMarkSignature,
 } from './woodAutoFill.js';
+import { addManualBeam } from './manualMemberAdd.js';
 import { wallRunFreeEnds } from './woodFraming.js';
 import { WOOD_STUD_CODE_BY_SIZE } from '../finish/materials/backingClass.js';
 import { autoFillColumnsForStructure, autoFillStructuralGrid, autoFillBeamsForStructure, convertMembersToEffectiveMaterial } from './structuralAutoFill.js';
@@ -3581,7 +3582,7 @@ function makeBeamChainGraph({ grandchildRole = 'primary', structure = TRADITIONA
   const parent = graph.addBeam(material, section, y0, false, x0, x1820, { role: 'primary' });
   const child = graph.addBeam(material, section, x910, true, y0, y2730, { role: 'primary' });
   const grandchild = graph.addBeam(material, section, y1820, false, x910, x4550, { role: grandchildRole });
-  return { graph, parent, child, grandchild };
+  return { graph, parent, child, grandchild, cls: { x0, x910, x1820, x4550, y0, y1820, y2730 } };
 }
 
 test('autoFillWoodBeamDepths D1: 受梁でない孫→子→親の連鎖。孫の成(300)が子・親へ不動点まで伝わり全て300になる', () => {
@@ -3634,7 +3635,7 @@ test('【現状固定・裁定候補】autoFillWoodBeamDepths D5: lockedの子�
   assert.equal(parent.sectionDefId, 'WOOD-120x300', 'lockedの子を通り抜けて親へ300が伝わる（現状の挙動。変えるなら裁定が要る）');
 });
 
-test('【現状固定・裁定候補】autoFillWoodBeamDepths D6: lockedの子の実際の断面(360)が表値(120)より大きくても、hostは実断面に追従しない（表値で伝播）', () => {
+test('【失敗系】autoFillWoodBeamDepths D6: 手入力の記録が無い固定梁（手動追加・旧データ）は、実断面(360)が表値(120)より大きくても追従しない（hostは表値で伝播）', () => {
   // host: 横 y=0, x=0..1820（子の取りつき1か所で表値150）／子: 縦 x=910, y=0..1820（表値120。実断面は360でlocked）。
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
@@ -3646,7 +3647,7 @@ test('【現状固定・裁定候補】autoFillWoodBeamDepths D6: lockedの子�
   child.setDimensionStatus('locked');
   autoFillWoodBeamDepths(graph, PROJECT);
   assert.equal(child.sectionDefId, 'WOOD-120x360', 'lockedの子の実断面は保持');
-  assert.equal(host.sectionDefId, 'WOOD-120x150', 'hostは子の実断面360ではなく自身の表値150（現状の挙動。追従させるなら裁定が要る）');
+  assert.equal(host.sectionDefId, 'WOOD-120x150', 'hostは子の実断面360ではなく自身の表値150（手入力の記録＝woodManualDepthMmが無い固定梁は追従しない。ユーザー裁定2026-10-01）');
 });
 
 test('autoFillWoodBeamDepths D7: 十字貫通（同位置の両側から取りつく2本）の子の成もhostへ伝わる（荷重には数えないが仕口として受ける側は子以上）', () => {
@@ -3699,6 +3700,279 @@ test('【失敗系】autoFillWoodBeamDepths D8: 在来以外（S造）は連鎖�
   const updated = autoFillWoodBeamDepths(graph, PROJECT);
   assert.equal(updated.length, 0);
   assert.deepEqual([parent, child, grandchild].map(b => b.sectionDefId), ['S-H300x150', 'S-H300x150', 'S-H300x150']);
+});
+
+// ---- A2-2a（2026-10-01）: 梁成の手入力（woodManualDepthMm=M）と受ける梁の追従 ----
+// 連鎖フィクスチャ（makeBeamChainGraph）の表値: 親P=150・子C=270（孫の取りつきで）・孫G=300。伝播込みの既定は全て300。
+// Mが表値Tより大きいときだけ、伝播へ出す値をMにして受ける梁が追従する。手入力した梁自身はMのまま。
+const markOf = (b) => [b.woodAutoDepthMm, b.woodDepthFollowsManual];
+
+test('autoFillWoodBeamDepths E1: 自動のまま子Cへ手入力360(>表値270)——Cは360のまま、親Pは360へ追従して印が立つ。孫Gは300で印なし。冪等', () => {
+  const { graph, parent, child, grandchild } = makeBeamChainGraph();
+  child.setField('woodManualDepthMm', 360);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(child.sectionDefId, 'WOOD-120x360', '手入力した梁自身は手入力の成');
+  assert.equal(parent.sectionDefId, 'WOOD-120x360', '受ける梁は手入力の超過分に追従する（孫の300ではなく360）');
+  assert.equal(grandchild.sectionDefId, 'WOOD-120x300');
+  assert.deepEqual(markOf(child), [300, null], 'Cは「手入力が無ければ付く成」300（孫を受けるため。表の値270ではない）を持つ。追従の印は手入力側には立たない');
+  assert.deepEqual(markOf(parent), [null, true], 'Pは追従の印');
+  assert.deepEqual(markOf(grandchild), [null, null]);
+  const sig = woodBeamDepthMarkSignature(graph);
+  assert.notEqual(sig, '');
+  assert.deepEqual(autoFillWoodBeamDepths(graph, PROJECT), [], '冪等（2回目の更新は0件）');
+  assert.equal(woodBeamDepthMarkSignature(graph), sig, '署名も不変');
+});
+
+test('autoFillWoodBeamDepths E2: 固定＋手入力（D6の形）——子Cは手入力360で作り直され、hostは360へ追従して印が立つ。Cの表の値は120', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: true, discipline: Discipline.STRUCT });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xMid = cl(CenterLineType.VERTICAL, 910), x1 = cl(CenterLineType.VERTICAL, 1820);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), y1820 = cl(CenterLineType.HORIZONTAL, 1820);
+  const host = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary' });
+  const child = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y0, y1820, { role: 'primary' });
+  child.setDimensionStatus('locked');
+  child.setField('woodManualDepthMm', 360);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(child.sectionDefId, 'WOOD-120x360', '固定でも手入力の成から作る（入力値の反映であって自動変更ではない）');
+  assert.equal(host.sectionDefId, 'WOOD-120x360');
+  assert.deepEqual(markOf(child), [120, null]);
+  assert.deepEqual(markOf(host), [null, true]);
+});
+
+test('autoFillWoodBeamDepths E3（Q3・2026-10-01 リード採用・ユーザー確認待ち）: 表値(270)より小さい手入力150——Cは150、伝播には表値を使うのでPは孫の300、印はどこにも立たない', () => {
+  const { graph, parent, child } = makeBeamChainGraph();
+  child.setField('woodManualDepthMm', 150);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(child.sectionDefId, 'WOOD-120x150');
+  assert.equal(parent.sectionDefId, 'WOOD-120x300', '伝播は表値270→孫の300を通り抜けて親へ');
+  assert.equal(woodBeamDepthMarkSignature(graph), '', '表示用の値はどこにも立たない');
+});
+
+test('autoFillWoodBeamDepths E4: 手入力を自動（null）へ戻すと、次の再計算で子も親も元の成（300）へ戻り、表示用の値は全て消える', () => {
+  const { graph, parent, child } = makeBeamChainGraph();
+  child.setField('woodManualDepthMm', 360);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  child.setField('woodManualDepthMm', null);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(child.sectionDefId, 'WOOD-120x300');
+  assert.equal(parent.sectionDefId, 'WOOD-120x300');
+  assert.equal(woodBeamDepthMarkSignature(graph), '');
+});
+
+test('【失敗系】autoFillWoodBeamDepths E5: 手動追加した固定梁（手入力の記録なし）は、下階柱で表値が追加時の成より小さくなっても凍結のまま、受ける梁は追従せず印も立たない', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: true, discipline: Discipline.STRUCT });
+  const x0 = cl(CenterLineType.VERTICAL, 0), x910 = cl(CenterLineType.VERTICAL, 910);
+  const x1820 = cl(CenterLineType.VERTICAL, 1820), x4550 = cl(CenterLineType.VERTICAL, 4550);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), y1820 = cl(CenterLineType.HORIZONTAL, 1820), y2730 = cl(CenterLineType.HORIZONTAL, 2730);
+  const parent = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1820, { role: 'primary' });
+  const child = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', x910, true, y0, y2730, { role: 'primary' });
+  const manual = addManualBeam(graph, PROJECT, { axisCL: y1820, isVertical: false, clStart: x910, clEnd: x4550 });
+  assert.equal(manual.sectionDefId, 'WOOD-120x300', '追加時は下階柱を渡せず3640の表値300');
+  assert.equal(manual.woodManualDepthMm, null, '手動追加は手入力の記録を持たない');
+  const below = [{ x: 2730, y: 1820, axisX: 2730, axisY: 1820, role: 'standard' }]; // 手動梁の中間に下階柱＝表値は120へ下がる
+  autoFillWoodBeamDepths(graph, PROJECT, below);
+  assert.equal(manual.sectionDefId, 'WOOD-120x300', '固定梁の成は凍結');
+  assert.equal(child.sectionDefId, 'WOOD-120x270', '子は手動梁の表値(120)で伝播＝実断面300には追従しない');
+  assert.equal(parent.sectionDefId, 'WOOD-120x270', '親も追従しない（300にならない）');
+  assert.equal(woodBeamDepthMarkSignature(graph), '', '印は立たない');
+});
+
+test('autoFillWoodBeamDepths E6: 部分経路（onlyIds・propagate:false）は表示用の値を書かない・既存値も触らない。onlyIds内のMありの梁はMから断面を作り、外の梁は書かない', () => {
+  const a = makeBeamChainGraph();
+  a.child.setField('woodManualDepthMm', 360);
+  a.parent.setField('woodAutoDepthMm', 111);
+  autoFillWoodBeamDepths(a.graph, PROJECT, [], { onlyIds: [a.child.id], propagate: false });
+  assert.equal(a.child.sectionDefId, 'WOOD-120x360', 'onlyIds内のMありはMから作る');
+  assert.equal(a.parent.sectionDefId, 'WOOD-120x120', 'onlyIds外は書かない');
+  assert.equal(a.parent.woodAutoDepthMm, 111, '部分経路は表示用の値を消さない');
+  assert.deepEqual(markOf(a.child), [null, null], '部分経路は書かない');
+  const b = makeBeamChainGraph();
+  b.child.setField('woodManualDepthMm', 360);
+  autoFillWoodBeamDepths(b.graph, PROJECT, [], { onlyIds: [b.parent.id] });
+  assert.equal(b.parent.sectionDefId, 'WOOD-120x360', 'onlyIdsだけ（伝播あり）はMの超過分も伝わる');
+  assert.equal(b.child.sectionDefId, 'WOOD-120x120', 'onlyIds外のMあり梁は書かない');
+  assert.equal(woodBeamDepthMarkSignature(b.graph), '', 'onlyIdsだけでも表示用の値は書かない');
+});
+
+test('autoFillWoodBeamDepths E7: 固定（手入力なし）の子Cを挟んでも、孫Gの手入力360は通り抜けて親Pへ届く。Cは書き換えず印も立たない', () => {
+  const { graph, parent, child, grandchild } = makeBeamChainGraph();
+  child.setDimensionStatus('locked');
+  grandchild.setField('woodManualDepthMm', 360);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(grandchild.sectionDefId, 'WOOD-120x360');
+  assert.equal(child.sectionDefId, 'WOOD-120x120', '固定の受ける梁は書き換えない');
+  assert.deepEqual(markOf(child), [null, null], '固定（手入力なし）に追従の印は立たない');
+  assert.equal(parent.sectionDefId, 'WOOD-120x360');
+  assert.deepEqual(markOf(parent), [null, true]);
+  assert.deepEqual(markOf(grandchild), [300, null]);
+});
+
+test('autoFillWoodBeamDepths E8（Q2・2026-10-01 リード採用・ユーザー確認待ち）: 自動のまま手入力240した子Cへ孫から300が伝わっても、Cは240のまま上げない。伝播は通り抜けて親Pへ300が届く', () => {
+  const { graph, parent, child } = makeBeamChainGraph();
+  child.setField('woodManualDepthMm', 240);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(child.sectionDefId, 'WOOD-120x240', '手入力を尊重して上げない（子からの伝播で書き換えない）');
+  assert.equal(parent.sectionDefId, 'WOOD-120x300', 'その先の親へは300が届く');
+});
+
+test('【失敗系】autoFillWoodBeamDepths E9: カタログに無い成の手入力390——その梁の断面は据え置き、受ける梁は手入力が無かった場合の成（baseFinal=300）の断面で書かれ、追従の印は立たない', () => {
+  assert.equal(findSectionEntry('WOOD-120x390'), null, '前提: 120×390はカタログに無い');
+  const { graph, parent, child } = makeBeamChainGraph();
+  child.setField('woodManualDepthMm', 390);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(child.sectionDefId, 'WOOD-120x120', '据え置き');
+  // 旧期待: 受ける梁のキーも無いので既定の 120x120 のまま残る → 新期待（リード裁定 m-1）: baseFinal の断面で書く
+  assert.equal(parent.sectionDefId, 'WOOD-120x300', '390 は引けないので baseFinal(300) の断面へフォールバック');
+  assert.deepEqual(markOf(parent), [null, null], '追従の印は立てない');
+  // 旧期待: Cの値は表の値270 → 新期待: 手入力が無ければ付く成 300
+  assert.deepEqual(markOf(child), [300, null]);
+});
+
+test('【失敗系】autoFillWoodBeamDepths T-1: 壊れた手入力（0・負数・幅未満・NaN・文字列・Infinity）は手入力なし扱い——固定の実寸は書き換えず、autoは表の値と伝播の値、表示用の値は立たず、例外も出ない', () => {
+  // 固定で実寸 120x360 の梁に M=0 を入れても 120x120 へ上書きされない（D6 と同じ形）。
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: true, discipline: Discipline.STRUCT });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xMid = cl(CenterLineType.VERTICAL, 910), x1 = cl(CenterLineType.VERTICAL, 1820);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), y1820 = cl(CenterLineType.HORIZONTAL, 1820);
+  const host = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary' });
+  const child = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x360', xMid, true, y0, y1820, { role: 'primary' });
+  child.setDimensionStatus('locked');
+  for (const bad of [0, -100, 100, NaN, '360', Infinity]) {
+    child.setField('woodManualDepthMm', bad);
+    autoFillWoodBeamDepths(graph, PROJECT);
+    assert.equal(child.sectionDefId, 'WOOD-120x360', `固定の実寸は M=${String(bad)} で書き換えない`);
+    assert.equal(host.sectionDefId, 'WOOD-120x150', `host は表値150（M=${String(bad)}）`);
+    assert.equal(woodBeamDepthMarkSignature(graph), '', `表示用の値は立たない（M=${String(bad)}）`);
+  }
+  // auto の連鎖: 壊れた M は手入力なしと同じ結果（C=300・P=300・G=300）。
+  for (const bad of [0, -100, 100, NaN, '360', Infinity]) {
+    const { graph: g, parent, child: c, grandchild } = makeBeamChainGraph();
+    c.setField('woodManualDepthMm', bad);
+    autoFillWoodBeamDepths(g, PROJECT);
+    assert.deepEqual([parent, c, grandchild].map(b => b.sectionDefId), ['WOOD-120x300', 'WOOD-120x300', 'WOOD-120x300'], `M=${String(bad)}`);
+    assert.equal(woodBeamDepthMarkSignature(g), '', `表示用の値は立たない（M=${String(bad)}）`);
+    assert.equal(Object.is(c.woodManualDepthMm, bad), true, '計算側はユーザー入力を書き換えない');
+  }
+});
+
+test('【失敗系】autoFillWoodBeamDepths T-2: 材幅が解決できない（0）状態で全体経路を実行すると、事前に置いた表示用の値は null に戻り、M と断面は変わらない', () => {
+  const { graph, parent, child } = makeBeamChainGraph();
+  child.setField('woodManualDepthMm', 360);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.notEqual(woodBeamDepthMarkSignature(graph), '', '前提: 表示用の値が立っている');
+  graph.setBeamColumnWidthMm(0);
+  const updated = autoFillWoodBeamDepths(graph, PROJECT);
+  assert.deepEqual(updated, []);
+  assert.equal(woodBeamDepthMarkSignature(graph), '');
+  assert.equal(child.woodManualDepthMm, 360);
+  assert.deepEqual([parent.sectionDefId, child.sectionDefId], ['WOOD-120x360', 'WOOD-120x360']);
+});
+
+test('autoFillWoodBeamDepths T-4: 子を受ける梁の手入力——「手入力が無ければ付く成」は baseFinal。M>baseFinal なら立ち、M≦baseFinal なら立たず、他の梁は手入力なしの場合と一致する', () => {
+  const sections = (c) => [c.parent, c.child, c.grandchild].map(b => b.sectionDefId);
+  const ctl = makeBeamChainGraph();
+  autoFillWoodBeamDepths(ctl.graph, PROJECT);
+  // C: 表値270・孫を受けて baseFinal=300。M=330 → 300（270 ではない）。
+  const a = makeBeamChainGraph();
+  a.child.setField('woodManualDepthMm', 330);
+  autoFillWoodBeamDepths(a.graph, PROJECT);
+  assert.deepEqual(markOf(a.child), [300, null]);
+  assert.equal(a.parent.sectionDefId, 'WOOD-120x330', '受ける梁は手入力330へ追従');
+  assert.deepEqual(markOf(a.parent), [null, true]);
+  // M=300（＝baseFinal）→ 値は null・印なし。全梁が手入力なしと一致。
+  const b = makeBeamChainGraph();
+  b.child.setField('woodManualDepthMm', 300);
+  autoFillWoodBeamDepths(b.graph, PROJECT);
+  assert.deepEqual(markOf(b.child), [null, null]);
+  assert.equal(woodBeamDepthMarkSignature(b.graph), '');
+  assert.deepEqual(sections(b), sections(ctl));
+  // T(270) < M(285) < baseFinal(300): 伝播で M に置換しても受ける梁・他の梁の結果は変わらない（実測）。
+  // C 自身は 285 がカタログに無いので据え置き、値も立たない。
+  const c = makeBeamChainGraph();
+  c.child.setField('woodManualDepthMm', 285);
+  autoFillWoodBeamDepths(c.graph, PROJECT);
+  assert.equal(c.parent.sectionDefId, ctl.parent.sectionDefId);
+  assert.equal(c.grandchild.sectionDefId, ctl.grandchild.sectionDefId);
+  assert.equal(woodBeamDepthMarkSignature(c.graph), '', '追従の印も値もどこにも立たない');
+  // 親Pの手入力（T=150 < M=240 < baseFinal=300）: P 自身は M、値は立たず、他は手入力なしと一致。
+  const d = makeBeamChainGraph();
+  d.parent.setField('woodManualDepthMm', 240);
+  autoFillWoodBeamDepths(d.graph, PROJECT);
+  assert.equal(d.parent.sectionDefId, 'WOOD-120x240');
+  assert.deepEqual(markOf(d.parent), [null, null]);
+  assert.equal(d.child.sectionDefId, ctl.child.sectionDefId);
+  assert.equal(d.grandchild.sectionDefId, ctl.grandchild.sectionDefId);
+});
+
+test('autoFillWoodBeamDepths E10: 材幅が変わると手入力の成から（新しい幅×360で）作り直す', () => {
+  const { graph, child } = makeBeamChainGraph();
+  child.setField('woodManualDepthMm', 360);
+  graph.setBeamColumnWidthMm(105);
+  autoFillWoodBeamDepths(graph, PROJECT);
+  assert.equal(child.sectionDefId, 'WOOD-105x360');
+});
+
+test('【失敗系】autoFillWoodBeamDepths E11: 在来以外（S造）では、残っていた表示用の値を null に戻し、M・断面は変えない', () => {
+  const { graph, parent, child } = makeBeamChainGraph({ structure: 'S造' });
+  child.setField('woodManualDepthMm', 360);
+  child.setField('woodAutoDepthMm', 270);
+  parent.setField('woodDepthFollowsManual', true);
+  const updated = autoFillWoodBeamDepths(graph, PROJECT);
+  assert.deepEqual(updated, []);
+  assert.equal(woodBeamDepthMarkSignature(graph), '', '表示用の値は消える');
+  assert.equal(child.woodManualDepthMm, 360, '手入力の値はユーザー入力なので残す');
+  assert.equal(child.sectionDefId, 'WOOD-120x120');
+});
+
+test('autoFillWoodBeamDepths E12: 手入力梁の端が下階柱の位置なら誰も上がらない（受ける梁は対照と同じ成）。手入力梁自身の表の値は立つ', () => {
+  const below = [{ x: 910, y: 1820, axisX: 910, axisY: 1820, role: 'standard' }];
+  const ctl = makeBeamChainGraph();
+  autoFillWoodBeamDepths(ctl.graph, PROJECT, below);
+  const t = Number(/x(\d+)$/.exec(ctl.grandchild.sectionDefId)[1]);
+  const { graph, parent, child, grandchild } = makeBeamChainGraph();
+  grandchild.setField('woodManualDepthMm', 360);
+  autoFillWoodBeamDepths(graph, PROJECT, below);
+  assert.equal(grandchild.sectionDefId, 'WOOD-120x360');
+  assert.equal(child.sectionDefId, ctl.child.sectionDefId, '端が下階柱＝受ける梁（子）へ伝播しない');
+  assert.equal(parent.sectionDefId, ctl.parent.sectionDefId);
+  assert.deepEqual(markOf(grandchild), [t, null], '手入力梁自身の表の値は立つ（M>T）');
+  assert.deepEqual([markOf(child), markOf(parent)], [[null, null], [null, null]]);
+});
+
+test('autoFillWoodBeamDepths E13（D5）: 自動のまま手入力した梁は、下階柱で分割されて別実体になると手入力が消える。対照: 下階柱が無ければ同じ実体で手入力が残る', () => {
+  const { graph, x0, x2, y0 } = makeTwoRoomGraph();
+  const segs = selfWallSegments(graph);
+  const top = () => graph.beams.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1 && b.role === 'primary');
+  autoFillWoodWallBeams(graph, PROJECT, segs);
+  assert.equal(top().length, 1);
+  const original = top()[0];
+  assert.deepEqual([original.clStart.id, original.clEnd.id].sort(), [x0.id, x2.id].sort());
+  original.setField('woodManualDepthMm', 360);
+  autoFillWoodWallBeams(graph, PROJECT, segs);
+  assert.equal(top().length, 1, '対照: 区切りが変わらなければ同じ実体');
+  assert.equal(top()[0].id, original.id);
+  assert.equal(top()[0].woodManualDepthMm, 360, '対照: 手入力は残る');
+  const below = [{ x: 3640, y: 0, axisX: 3640, axisY: 0, role: 'standard' }];
+  autoFillWoodWallBeams(graph, PROJECT, segs, null, below);
+  assert.equal(graph.beamMap.has(original.id), false, '分割で旧実体は撤去される');
+  assert.equal(top().length, 2, '半梁2本');
+  assert.deepEqual(top().map(b => b.woodManualDepthMm), [null, null], '新しい実体は手入力なし（表の値）');
+});
+
+test('woodBeamDepthMarkSignature: 空なら空文字、表示用の値が変われば文字列も変わり、手入力Mだけでは変わらない', () => {
+  const { graph, parent, child } = makeBeamChainGraph();
+  assert.equal(woodBeamDepthMarkSignature(graph), '');
+  child.setField('woodManualDepthMm', 360);
+  assert.equal(woodBeamDepthMarkSignature(graph), '', 'Mだけ（計算前）は署名に入らない');
+  child.setField('woodAutoDepthMm', 270);
+  const s1 = woodBeamDepthMarkSignature(graph);
+  assert.notEqual(s1, '');
+  parent.setField('woodDepthFollowsManual', true);
+  assert.notEqual(woodBeamDepthMarkSignature(graph), s1);
 });
 
 // F1を新しい起点（受梁に限らない子梁）でも固定する: 下階柱(1820,0)で分割された半梁2本の共有端に、
@@ -3807,6 +4081,42 @@ test('【統合】recomputeStructuralForGraph: 在来木造の梁成が更新さ
     const { changed: changed2 } = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(changed2, true);
     assert.equal(beam.sectionDefId, 'WOOD-120x300', '1階の柱を消した対照では単一区間3640＝成300');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+// A2-2a: 梁成の表示用の値（woodAutoDepthMm・woodDepthFollowsManual）だけが変わった再計算は、changed=false
+// （収束・undoに使わない）のまま originsChanged=true を返す（非アクティブ階の保存要否に使う）。
+test('【統合】recomputeStructuralForGraph: 梁成の表示用の値だけが変わった再計算は changed=false かつ originsChanged=true、値が変わらなければ originsChanged=false', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  project.activePlaneId = 'p2';
+  g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = g2.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = g2.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = g2.addCenterLine(CenterLineType.HORIZONTAL, 0,  { labeled: true, discipline: Discipline.STRUCT });
+  const beam = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x300', y0, false, x0, x1, { role: 'primary' });
+  beam.setField('woodManualDepthMm', 360); // 表値300より大きい手入力
+  const peekMap = { p1: g1, p2: g2 };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    let last = null;
+    for (let i = 0; i < 4; i++) { last = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE); if (!last.changed) break; }
+    assert.equal(last.changed, false, '前提: 収束した');
+    assert.equal(beam.sectionDefId, 'WOOD-120x360');
+    assert.equal(beam.woodAutoDepthMm, 300, '前提: 表の値が書かれている');
+    // 表示用の値だけを消す（保存済みの古い状態を模す）——断面は同じなので changed は立たない。
+    beam.setField('woodAutoDepthMm', null);
+    const r = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.equal(r.changed, false, '表示用の値だけの変化は changed に入れない');
+    assert.equal(r.originsChanged, true, '保存要否の別枠には乗る');
+    assert.equal(beam.woodAutoDepthMm, 300);
+    const again = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.deepEqual([again.changed, again.originsChanged], [false, false], '値が変わらなければ保存不要');
   } finally {
     floorSwapManager.peek = originalPeek;
   }

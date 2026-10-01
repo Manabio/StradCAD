@@ -467,6 +467,67 @@ test('Opening削除→undo相当: removeShape後にaddOpening(同id, {fixtureTyp
   assert.equal(restored.sillHeight, 700);
 });
 
+// ---- WoodBeam の梁成の手入力と表示用の値（A2-2a）の往復 ----
+function makeGraphWithWoodBeam(props = {}) {
+  const graph = makeGraph();
+  // 自グラフ固有の線（ARCH）にする——snapshot に含まれ、restoreGraph 単体で梁の参照CLが解決できる。
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = cl(CenterLineType.VERTICAL, 0), x1 = cl(CenterLineType.VERTICAL, 3640), y0 = cl(CenterLineType.HORIZONTAL, 0);
+  const beam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x300', y0, false, x0, x1, { role: 'primary', ...props });
+  return { graph, beam };
+}
+const beamExtra = (graph) => {
+  const [b] = decode(serializeGraph(graph)).beams;
+  return Object.fromEntries(b.extraKeys.map((k, i) => [k, b.extraVals[i]]));
+};
+
+test('WoodBeam.woodManualDepthMm/woodAutoDepthMm/woodDepthFollowsManual: FBS encode→decode と restoreGraph で往復し、キーが extraKeys にそろう', () => {
+  const { graph, beam } = makeGraphWithWoodBeam({ woodManualDepthMm: 360, woodAutoDepthMm: 240, woodDepthFollowsManual: true });
+  const extra = beamExtra(graph);
+  assert.equal(extra.woodManualDepthMm, '360');
+  assert.equal(extra.woodAutoDepthMm, '240');
+  assert.equal(extra.woodDepthFollowsManual, 'true');
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  const b2 = restored.beamMap.get(beam.id);
+  assert.deepEqual([b2.woodManualDepthMm, b2.woodAutoDepthMm, b2.woodDepthFollowsManual], [360, 240, true]);
+});
+
+test('WoodBeam: 3フィールドが null（旧データ相当）ならキーを書かず、null のまま往復し、非 null よりバイト長が短い', () => {
+  const { graph, beam } = makeGraphWithWoodBeam();
+  const extra = beamExtra(graph);
+  for (const k of ['woodManualDepthMm', 'woodAutoDepthMm', 'woodDepthFollowsManual']) assert.equal(k in extra, false, `${k} は書かない`);
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  const b2 = restored.beamMap.get(beam.id);
+  assert.deepEqual([b2.woodManualDepthMm, b2.woodAutoDepthMm, b2.woodDepthFollowsManual], [null, null, null]);
+  const full = makeGraphWithWoodBeam({ woodManualDepthMm: 360, woodAutoDepthMm: 240, woodDepthFollowsManual: true });
+  assert.ok(serializeGraph(full.graph).length > serializeGraph(graph).length);
+});
+
+test('WoodBeam: 3フィールドが null の梁を複数持つグラフは、全梁の extraKeys に3キーが1つも出ない（旧文書とバイト列が同じ形）', () => {
+  const { graph, beam } = makeGraphWithWoodBeam();
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const x2 = cl(CenterLineType.VERTICAL, 7280), y1 = cl(CenterLineType.HORIZONTAL, 3640);
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x240', y1, false, beam.clStart, x2, { role: 'secondary', beamType: '小梁' });
+  const beams = decode(serializeGraph(graph)).beams;
+  assert.equal(beams.length, 2);
+  for (const b of beams) {
+    for (const k of ['woodManualDepthMm', 'woodAutoDepthMm', 'woodDepthFollowsManual']) {
+      assert.equal(b.extraKeys.includes(k), false, `${k} は null なら書かない`);
+    }
+  }
+});
+
+test('WoodBeam: wood で始まる全インスタンスフィールドを非 null にすると、全てが extraKeys に載る（列挙漏れの突合）', () => {
+  const { graph, beam } = makeGraphWithWoodBeam();
+  const woodKeys = Object.keys(beam).filter(k => k.startsWith('wood'));
+  assert.ok(woodKeys.length >= 3, `前提: wood* フィールドが3つ以上ある（実際:${woodKeys}）`);
+  for (const k of woodKeys) beam.setField(k, 1);
+  const extra = beamExtra(graph);
+  for (const k of woodKeys) assert.equal(k in extra, true, `${k} が graphSnapshot の beams の packExtraFields 列挙に無い（保存・undo・階切替で消える）`);
+});
+
 // ---- Opening.height の FlatBuffers 往復（Finding 4 回帰） ----
 test('Opening.height は FlatBuffers encode→decode で往復する', () => {
   const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800, height: 1170 });

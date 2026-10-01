@@ -549,7 +549,16 @@ export class WoodBeam extends StructuralBeam {
       jointCondition: props.jointCondition ?? { start: 'PIN', end: 'PIN' }, // 木造は基本ピン接合
     });
     this.beamType = props.beamType ?? '大梁'; // '大梁' | '小梁' | '桁' | '小屋梁' | '頭つなぎ' | '受梁' | '土台'
-    makeObservable(this, { beamType: observable });
+    // 梁成の手入力（A2-2。.claude/structural-model.md 梁成の節）。woodManualDepthMm=ユーザーが入れた成(mm)・
+    // null=自動（唯一の書き手は入口UI。計算側は書かない）。woodAutoDepthMm・woodDepthFollowsManual は
+    // autoFillWoodBeamDepths（全体経路）が書く表示用の値（手入力の梁の表の値／手入力の超過分に追従して上がった印。
+    // 後者は true|null で false は使わない）。いずれも null は保存しない（packExtraFields）ので旧文書は不変。
+    this.woodManualDepthMm = props.woodManualDepthMm ?? null;
+    this.woodAutoDepthMm = props.woodAutoDepthMm ?? null;
+    this.woodDepthFollowsManual = props.woodDepthFollowsManual ?? null;
+    makeObservable(this, {
+      beamType: observable, woodManualDepthMm: observable, woodAutoDepthMm: observable, woodDepthFollowsManual: observable,
+    });
   }
 }
 

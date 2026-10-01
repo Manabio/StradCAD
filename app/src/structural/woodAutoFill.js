@@ -1796,6 +1796,19 @@ function alongCoordOnAxis(beam, x, y, tol) {
  *  - dimensionStatus==='auto' の部材のみ更新する（locked/calculated は保持。conformWoodSections が
  *    dimensionStatus を問わず幅だけそろえるのとは意図的に非対称——柱寸法（幅）は階の値として恒久的に
  *    そろえる一方、成は支持・荷重の実況から決まる算定値のため、手動固定を上書きしない）。
+ *  - 成の手入力（woodManualDepthMm=M。A2-2a。ユーザー入力専用で本関数は書かない）がある梁は、dimensionStatus を
+ *    問わず毎回 woodBeamSectionForDepth(M, 幅) から断面を作る（自動のまま手入力した梁も、子から M より大きい成が
+ *    伝わっても上げない＝2026-10-01 リード採用・ユーザー確認待ち（Q2））。M が表の値T（伝播前の自分の値）より
+ *    大きいときだけ、伝播へ出す値を M にして受ける梁を追従させる（2回目の伝播）。M≦T のときは伝播にはTを使い、
+ *    その梁自身の成は M（2026-10-01 リード採用・ユーザー確認待ち（Q3））。手入力の記録が無い固定梁
+ *    （手動追加・旧データ）は従来どおり凍結で追従しない。M の断面キーがカタログに無い（幅の変更後など）ときは
+ *    その梁の断面を据え置き、伝播にだけ M を使う。手入力が「有効」なのは有限の数で材幅以上のときだけ
+ *    （0・負数・幅未満・NaN・文字列・Infinity は手入力なし扱い。isValidManualDepth）。手入力なしの auto 梁に
+ *    カタログ外の成が伝わった場合は、手入力が無かった場合の成（baseFinal）の断面で書く。
+ *  - 表示用の値（全体経路＝onlyIds省略かつpropagate!==falseのときだけ）: woodAutoDepthMm=手入力が無ければその梁に
+ *    付く成（baseFinal＝表の値＋子からの伝播）。有効な M が baseFinal を超える梁にだけ立てる。
+ *    woodDepthFollowsManual=手入力なし・auto・手入力の超過分で成が上がった梁だけ true。他は null に戻す
+ *    （対象外の梁・framing無し・幅未解決でも戻す）。
  * 在来以外（framing を持たない主構造）・柱既定断面がカタログに無い場合は何もしない。更新した部材idを返す。
  * 成の算定に使う材幅（カタログの断面キー選定）は「梁を支える1つ下の実体階の柱寸」
  * （resolvedBeamColumnWidthMm。実機裁定ステップ4 C-2 QA2）——呼び出し元が事前に
@@ -1816,10 +1829,11 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = [], option
   const onlyIds = options?.onlyIds ?? null;
   const propagate = options?.propagate !== false;
   const onlySet = onlyIds == null ? null : new Set(onlyIds);
+  const fullPath = onlySet == null && propagate;
   const rules = rulesFor(effectiveStructure(graph, project));
-  if (!rules.framing) return [];
+  if (!rules.framing) { if (fullPath) clearBeamDepthMarks(graph.beams, null); return []; }
   const columnWidth = resolvedBeamColumnWidthMm(graph, project);
-  if (!columnWidth) return [];
+  if (!columnWidth) { if (fullPath) clearBeamDepthMarks(graph.beams, null); return []; }
   const beams = graph.beams;
   const targets = beams.filter(b => b.materialType === rules.baseMaterial && WOOD_DEPTH_BEAM_ROLES.includes(b.role));
   // belowColumnsはundefined（既定[]）以外にnullが明示的に渡されうる（structuralRecompute.jsの
@@ -1886,19 +1900,88 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = [], option
     nodes.push({ id: beam.id, depth, hostIds: propagate ? [...(hostIdsByBeam.get(beam.id) ?? [])] : [] });
   }
 
+  // 手入力（A2-2a）: M>T の梁（excess）は、伝播へ出す値を M にして2回目の伝播を行う。baseFinal は
+  // 「手入力が無かった場合の最終成」（追従印の判定の基準）。M≦T は伝播へは T のまま。
+  const excess = new Map();
+  const targetById = new Map(targets.map(b => [b.id, b]));
+  for (const n of nodes) {
+    const m = targetById.get(n.id).woodManualDepthMm;
+    if (isValidManualDepth(m, columnWidth) && m > n.depth) excess.set(n.id, m);
+  }
+  const baseFinal = propagateBeamDepths(nodes);
+  const finalDepths = excess.size === 0
+    ? baseFinal
+    : propagateBeamDepths(nodes.map(n => (excess.has(n.id) ? { ...n, depth: excess.get(n.id) } : n)));
+
   // 第2パス: 子梁の成をhost梁へ不動点まで伝播した最終的な成で書き戻す（propagate=falseなら各梁の表値のまま）。
-  const finalDepths = propagateBeamDepths(nodes);
+  // 手入力ありは M から作る（状態を問わない）。手入力なし＆非auto は凍結。
   const updated = [];
   for (const beam of targets) {
     if (onlySet && !onlySet.has(beam.id)) continue;
-    const depth = finalDepths.get(beam.id);
+    const m = beam.woodManualDepthMm;
+    const hasManual = isValidManualDepth(m, columnWidth);
+    const depth = hasManual ? m : finalDepths.get(beam.id);
     if (depth == null) continue;
-    const key = woodBeamSectionForDepth(depth, columnWidth);
-    if (key == null || beam.dimensionStatus !== 'auto' || beam.sectionDefId === key) continue;
+    let key = woodBeamSectionForDepth(depth, columnWidth);
+    // カタログに無い成（手入力の超過分）が伝わってきた手入力なしの梁は、手入力が無かった場合の成（baseFinal）の
+    // 断面で書く（既定断面が表値より小さいまま残らないため）。baseFinal の key も無ければ据え置き。
+    if (key == null && !hasManual) key = woodBeamSectionForDepth(baseFinal.get(beam.id), columnWidth);
+    if (key == null || (!hasManual && beam.dimensionStatus !== 'auto') || beam.sectionDefId === key) continue;
     beam.setField('sectionDefId', key);
     updated.push(beam.id);
   }
+
+  if (fullPath) {
+    const marks = new Map();
+    for (const beam of targets) {
+      // 手入力が無ければその梁に付く成（baseFinal）。有効な M が baseFinal を超えるときだけ立てる。
+      const m = beam.woodManualDepthMm;
+      const autoMm = isValidManualDepth(m, columnWidth) && baseFinal.has(beam.id) && m > baseFinal.get(beam.id)
+        ? baseFinal.get(beam.id) : null;
+      let follows = null;
+      if (!isValidManualDepth(m, columnWidth) && beam.dimensionStatus === 'auto'
+        && finalDepths.has(beam.id) && finalDepths.get(beam.id) > baseFinal.get(beam.id)
+        && woodBeamSectionForDepth(finalDepths.get(beam.id), columnWidth) != null) follows = true;
+      marks.set(beam.id, { autoMm, follows });
+    }
+    clearBeamDepthMarks(beams, marks);
+  }
   return updated;
+}
+
+/**
+ * 有効な成の手入力＝有限の数で、かつ材幅以上（0・負数・幅未満・NaN・文字列・Infinity は「手入力なし」扱い）。
+ * 書き戻し・excess・表示用の値の判定はすべてこの1関数を通す。woodManualDepthMm 自体は書き換えない。
+ */
+function isValidManualDepth(m, columnWidth) {
+  return Number.isFinite(m) && m >= columnWidth;
+}
+
+/**
+ * 梁成の表示用の値（woodAutoDepthMm・woodDepthFollowsManual）を書く。marks が null なら全梁を null に戻す。
+ * marks にある梁はその値、無い梁（対象外・node 無し）は null に戻す。変化が無ければ書かない。
+ */
+function clearBeamDepthMarks(beams, marks) {
+  for (const b of beams) {
+    const mk = marks?.get(b.id);
+    const t = mk?.autoMm ?? null;
+    const f = mk?.follows ?? null;
+    if ((b.woodAutoDepthMm ?? null) !== t) b.setField('woodAutoDepthMm', t);
+    if ((b.woodDepthFollowsManual ?? null) !== f) b.setField('woodDepthFollowsManual', f);
+  }
+}
+
+/**
+ * 梁成の表示用の値が非 null の梁を「id:表の値:追従」にしてソート連結した署名（空なら ''）。
+ * 構造再計算の保存要否（originsChanged）の判定に使う（表示用の値だけが変わった非アクティブ階も保存する）。
+ */
+export function woodBeamDepthMarkSignature(graph) {
+  const parts = [];
+  for (const b of graph.beams) {
+    if (b.woodAutoDepthMm == null && b.woodDepthFollowsManual == null) continue;
+    parts.push(`${b.id}:${b.woodAutoDepthMm ?? ''}:${b.woodDepthFollowsManual ? 1 : ''}`);
+  }
+  return parts.sort().join('|');
 }
 
 /**

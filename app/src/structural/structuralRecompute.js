@@ -19,7 +19,7 @@ import {
   deleteClassificationOverflow,
 } from './structuralAutoFill.js';
 import { collectFloorGroups } from './memberNumbering.js';
-import { conformWoodSections, conformWoodColumnEccentricity, autoFillWoodBeamDepths } from './woodAutoFill.js';
+import { conformWoodSections, conformWoodColumnEccentricity, autoFillWoodBeamDepths, woodBeamDepthMarkSignature } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
 import { conformToLedger } from './memberGroups.js';
 
@@ -86,8 +86,8 @@ import { conformToLedger } from './memberGroups.js';
  * @returns {Promise<{changed: boolean, originsChanged: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
  *   before/after はcaptureSnapshots:true時のみ非null（undo用スナップショット）。changed=false かつ
  *   captureSnapshots:trueのとき after===before（再シリアライズしない）。
- *   originsChanged（QA裁定Major-1・2026-09-27）: 既存柱の由来集合（woodColumnOrigins）だけが
- *   変わったか。changedとは独立——収束ループ・undoの判定には使わず、呼び出し側の保存要否判定
+ *   originsChanged（QA裁定Major-1・2026-09-27）: 既存柱の由来集合（woodColumnOrigins）・梁成の表示用の値
+ *   （woodAutoDepthMm・woodDepthFollowsManual。A2-2a）だけが変わったか。changedとは独立——収束ループ・undoの判定には使わず、呼び出し側の保存要否判定
  *   （changed || originsChanged）にだけ使うこと。
  */
 export async function recomputeStructuralForGraph(targetGraph, project, mainStructure, precomputedBelowGraph = undefined, options = {}) {
@@ -217,7 +217,10 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const updatedColumnEcc = runInAction(() => conformWoodColumnEccentricity(targetGraph, project, exterior, wallSourceCache));
   // 在来木造: 大梁・小梁の成を支持区間ごとの梁成表引きで自動更新する（ステップ3d。dimensionStatus==='auto'のみ。
   // 断面キー選定の材幅も同じ下階参照——上で書いたgraph.beamColumnWidthMmを内部で読む）。
+  // 表示用の値（woodAutoDepthMm・woodDepthFollowsManual）だけが変わったかは署名の前後比較で見る（originsChanged）。
+  const depthMarksBefore = woodBeamDepthMarkSignature(targetGraph);
   const updatedBeamDepths = runInAction(() => autoFillWoodBeamDepths(targetGraph, project, belowGraph?.columns ?? []));
+  const depthMarksChanged = woodBeamDepthMarkSignature(targetGraph) !== depthMarksBefore;
   // 壁下地材（共通仕様の per-floor 設定。壁厚の情報源）はここでは触らない——壁は仕上げ脱出時の導出物で、
   // 構造再計算は壁を再生成できないため、ここで下地材だけ変えると「共通仕様は120×30なのに壁は90のまま」
   // のズレを作る（実機 2026-09-14）。在来の柱同寸×30への自動選択は壁生成の直前＝仕上げ突入
@@ -260,7 +263,9 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // （案(a)不採用の理由）。代わりに別枠の originsChanged を返し、呼び出し側
   // （structuralOrchestration.js recomputeInactiveStructural/reflectRoofPlane）が保存要否の判定
   // （changed || originsChanged）だけに使う。
-  const originsChanged = originsUpdatedColumns.length > 0;
+  // A2-2a: 梁成の表示用の値（woodAutoDepthMm・woodDepthFollowsManual）だけの変化も同じ別枠に乗せる
+  // （表示専用で、収束・undoには使わない。非アクティブ階では保存要否だけに効く）。
+  const originsChanged = originsUpdatedColumns.length > 0 || depthMarksChanged;
   const after = captureSnapshots ? (changed ? serializeGraph(targetGraph) : before) : null;
   return { changed, originsChanged, before, after };
 }
