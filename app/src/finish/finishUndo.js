@@ -31,6 +31,7 @@ const PER_FLOOR_SETTERS = {
   shaftSoundproof:      'setShaftSoundproof',
 };
 
+// Stair の項目を足したら下の snapshotStairs／restoreStairs にも足す（finishUndo.test.js の不変条件テストが検出する）。
 function snapshotStairs(graph) {
   return {
     stairOrder: [...graph.stairOrder],
@@ -42,6 +43,8 @@ function snapshotStairs(graph) {
         nosing: s.nosing, width: s.width, upDirection: s.upDirection,
         flip: s.flip, sections: s.sections ? [...s.sections] : null,
         roomId: s.roomId ?? null,
+        entrySide: s.entrySide ?? null, arrivalSide: s.arrivalSide ?? null,
+        entryTurnSteps: s.entryTurnSteps ?? 0, arrivalTurnSteps: s.arrivalTurnSteps ?? 0,
       };
     }),
   };
@@ -55,6 +58,9 @@ function restoreStairs(graph, snap) {
       totalSteps: d.totalSteps, tread: d.tread, riser: d.riser,
       nosing: d.nosing, width: d.width, upDirection: d.upDirection,
       flip: d.flip, sections: d.sections, roomId: d.roomId,
+      // 出入口の辺・回転部は旧スナップショット（キー欠落）だと undefined になりうるため null／0 に正規化する
+      entrySide: d.entrySide ?? null, arrivalSide: d.arrivalSide ?? null,
+      entryTurnSteps: d.entryTurnSteps ?? 0, arrivalTurnSteps: d.arrivalTurnSteps ?? 0,
     }, d.id);
   }
   graph.stairOrder.replace(snap.stairOrder.filter(id => graph.stairMap.has(id)));
