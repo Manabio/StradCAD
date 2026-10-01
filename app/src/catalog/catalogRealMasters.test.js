@@ -23,14 +23,50 @@ import {
   FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM,
   OPENING_SUB_TYPE_SWING_CHILD_MECHANISM, OPENING_SUB_TYPE_FIRE_DOOR_MECHANISM,
   OPENING_SUB_TYPE_FIRE_FOLD_MECHANISM, OPENING_SUB_TYPE_SLIDE_LAYOUT_MECHANISM,
-  formatCatalogSourceLine,
+  formatCatalogSourceLine, DEFAULT_PANEL_X, DEFAULT_PANEL_Y,
 } from './catalogMaintenance.js';
 
 // ステップ3（2026-09-22）で振り直し済み。旧132件のうち廃止・削除2件（アスファルトプライマー・
 // 吸音テックス用捨て糊。legacyMaterialCodes.js の REMOVED_MATERIALS）を除いた130件に、
 // 昇降路壁材の新設1件（301000000020・強化せっこうボード t=12.5+12.5）を加えた131件。
-test('MATERIALS: 131件（旧132件−廃止・削除2件＋昇降路壁材新設1件。振り直し済み・新体系）', () => {
-  assert.equal(MATERIALS.length, 131);
+// 2026-10-01: 木質系セメント板の面材16件（301000000021〜36）とルーフィング3件（302000000007〜09）を
+// 加えて150件。
+test('MATERIALS: 150件（131件＋セメント系面材16件＋ルーフィング3件。振り直し済み・新体系）', () => {
+  assert.equal(MATERIALS.length, 150);
+});
+
+test('MATERIALS: 面材（PANEL）は全件 x=910,y=1820、仕上げ材（FINISH）は全件 x=0,y=0（2026-10-01裁定）', () => {
+  const panels = MATERIALS.filter(m => m.category === MATERIAL_CATEGORY.PANEL);
+  const finishes = MATERIALS.filter(m => m.category === MATERIAL_CATEGORY.FINISH);
+  assert.equal(panels.length, 58); // 既存42件＋セメント系16件
+  // 保守パネル側の既定寸法定数（catalogMaintenance.js）と本体の全面材が一致すること
+  for (const m of panels) assert.deepEqual([m.x, m.y], [DEFAULT_PANEL_X, DEFAULT_PANEL_Y], `${m.code}(${m.name})`);
+  assert.deepEqual([DEFAULT_PANEL_X, DEFAULT_PANEL_Y], [910, 1820]);
+  for (const m of finishes) assert.deepEqual([m.x, m.y], [0, 0], `${m.code}(${m.name})`);
+});
+
+test('MATERIALS: 追加19件（セメント系面材16件・ルーフィング3件）が存在し、コードが一意・面材は木質系セメント板（JIS A 5404）', () => {
+  const codes = MATERIALS.map(m => m.code);
+  assert.equal(new Set(codes).size, codes.length);
+  const byCode = new Map(MATERIALS.map(m => [m.code, m]));
+  const cement = [];
+  for (let n = 21; n <= 36; n++) cement.push(`3010000000${n}`);
+  const names = ['硬質木片セメント板', '高圧木毛セメント板', '硬質木毛セメント板', '断熱・複合耐火野地板'];
+  cement.forEach((code, i) => {
+    const m = byCode.get(code);
+    assert.ok(m, `${code}が無い`);
+    assert.equal(m.category, MATERIAL_CATEGORY.PANEL);
+    assert.equal(m.spec, '木質系セメント板（JIS A 5404）');
+    assert.equal(m.name, `${names[Math.floor(i / 4)]} t=${[15, 18, 25, 30][i % 4]}`);
+    assert.equal(m.thickness, [15, 18, 25, 30][i % 4]);
+  });
+  const roofing = ['302000000003', '302000000007', '302000000008', '302000000009'];
+  assert.deepEqual(roofing.map(c => byCode.get(c)?.name), [
+    '改質アスファルトルーフィング', 'アスファルトルーフィング', '粘着層付きルーフィング', '透湿防水ルーフィング',
+  ]);
+  assert.equal(byCode.get('302000000003').spec, 'ストレッチアスファルトルーフィング（JIS A 6022）');
+  for (const c of roofing) assert.deepEqual([byCode.get(c).x, byCode.get(c).y, byCode.get(c).thickness], [0, 0, 0]);
+  assert.equal(byCode.get('302000000002').name, '透湿防水シート');
 });
 
 // ---- QA F8/T6: SHAFT_WALL_MATERIAL_CODES（昇降路壁材の選択肢）の中身検査 ----

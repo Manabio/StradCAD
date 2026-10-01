@@ -770,3 +770,34 @@ test('結合: 重複禁止で1件skipされた場合、applyReconcilePlanの結�
   assert.match(msg, /1件.*追加されました/);
   assert.match(msg, /1件は同じ内容の材料が既にあるため追加しませんでした/);
 });
+
+// ---- 2026-10-01: 面材のx/y（0,0→910,1820）・302000000003の名称/規格変更が旧文書の読込み照合に与える影響 ----
+test('旧文書の同梱面材（x/y=0）× 本体（x/y=910×1820）: adoptDocで通知あり・diffFieldsはx,yのみ・文書側が採用される（壁厚計算はthicknessのみ参照）', async () => {
+  const { MATERIALS } = await import('../finish/materials/materialData.js');
+  const { materialThickness } = await import('../finish/edgeComposition.js');
+  const builtin = MATERIALS.find(m => m.code === '301000000002');
+  const oldDoc = { ...builtin, x: 0, y: 0 };
+  const plan = planIncomingReconcile({ kind: CatalogKind.MATERIAL, docEntries: [oldDoc], appEntries: [builtin] });
+  assert.equal(plan.adoptDoc.length, 1);
+  assert.deepEqual(plan.adoptDoc[0].diffFields, ['x', 'y']);
+  assert.equal(plan.adoptDoc[0].notify, true);
+  assert.match(formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL }), /内容が異なる材料が1件あります/);
+  // 文書側採用（doc>user>builtin）でも壁厚計算に使う値は変わらない
+  setOverlay(CatalogKind.MATERIAL, { doc: [oldDoc] });
+  const adopted = composeCatalog(CatalogKind.MATERIAL, MATERIALS).get(builtin.code);
+  assert.deepEqual([adopted.x, adopted.y], [0, 0]);
+  assert.equal(materialThickness(adopted), materialThickness(builtin));
+});
+
+test('旧文書の302000000003（旧名称・旧規格）: name/spec/noteが違うがspecを含むためnotify:false（通知なし）・文書側採用', async () => {
+  const { MATERIALS } = await import('../finish/materials/materialData.js');
+  const builtin = MATERIALS.find(m => m.code === '302000000003');
+  const oldDoc = {
+    code: '302000000003', name: 'アスファルトルーフィング', spec: '改質アスファルトルーフィング（940・1600等）',
+    x: 0, y: 0, thickness: 0, note: '屋根下葺材（野地板の上）', category: 'finish',
+  };
+  const plan = planIncomingReconcile({ kind: CatalogKind.MATERIAL, docEntries: [oldDoc], appEntries: [builtin] });
+  assert.deepEqual(plan.adoptDoc[0].diffFields, ['name', 'spec', 'note']);
+  assert.equal(plan.adoptDoc[0].notify, false);
+  assert.equal(formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL }), null);
+});

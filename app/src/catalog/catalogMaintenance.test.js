@@ -20,6 +20,8 @@ import {
   openingSubTypeFormFieldsFor, openingSubTypeRowDisabledReason,
   formatMechanismLabel, OPENING_SUB_TYPE_MECHANISM_LABELS,
   collectExportableEntries, formatBuiltinSource, formatCatalogSourceLine,
+  DEFAULT_PANEL_X, DEFAULT_PANEL_Y, materialFormHasDimensions, materialFormHasBackingClass,
+  initialMaterialDimensions, materialFormWithCategory, validateMaterialFormDimensions,
 } from './catalogMaintenance.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog, markOverlayUntrusted } from './catalogRegistry.js';
 import { valuesEqual } from './catalogMatch.js';
@@ -208,11 +210,107 @@ test('【失敗系】validateMaterialEntry: 未知のcategoryは追加不可（�
 });
 
 // ---- buildMaterialEntry: category:backingはx/yをそのまま持たせる。backingClassは値がある時だけ ----
-test('buildMaterialEntry: category:panel/finishはx/y=0固定でbackingClassを持たない', () => {
-  const entry = buildMaterialEntry({ code: '301000000099', name: 'A', category: 'panel', x: 999, y: 999, backingClass: 'wood' });
+test('buildMaterialEntry: category:finishはx/y=0固定でbackingClassを持たない', () => {
+  const entry = buildMaterialEntry({ code: '302000000099', name: 'A', category: 'finish', x: 999, y: 999, backingClass: 'wood' });
   assert.equal(entry.x, 0);
   assert.equal(entry.y, 0);
   assert.equal(entry.backingClass, undefined);
+});
+
+test('buildMaterialEntry: category:panel（面材）はx/yを保持しbackingClassを持たない（2026-10-01）', () => {
+  const entry = buildMaterialEntry({ code: '301000000099', name: 'A', category: 'panel', x: 910, y: 1820, backingClass: 'wood' });
+  assert.equal(entry.x, 910);
+  assert.equal(entry.y, 1820);
+  assert.equal(entry.backingClass, undefined);
+});
+
+test('面材: フォーム形（formFromEntry相当）→buildMaterialEntry→planSaveEntry で本体面材のnote編集後もx/y=910×1820が保たれる', () => {
+  const prevEntry = material({ x: 910, y: 1820, note: '旧' });
+  // CatalogMaintenancePanel.jsx formFromEntry/handleSave が作る形（x/yは入力欄値＝数値のまま、送信時にNumber()）。
+  const form = {
+    name: prevEntry.name, spec: prevEntry.spec, thickness: String(prevEntry.thickness),
+    note: '新備考', category: prevEntry.category, x: prevEntry.x, y: prevEntry.y, backingClass: '',
+  };
+  const entry = buildMaterialEntry({
+    code: prevEntry.code, name: form.name, spec: form.spec, thickness: Number(form.thickness), note: form.note,
+    category: form.category, x: Number(form.x), y: Number(form.y), backingClass: form.backingClass || undefined,
+  });
+  assert.equal(entry.x, 910);
+  assert.equal(entry.y, 1820);
+  const plan = planSaveEntry(CatalogKind.MATERIAL, entry, { builtinList: [prevEntry], rowState: 'builtin', prevEntry });
+  assert.equal(plan.ok, true, plan.message);
+  assert.equal(plan.noop, false);
+  const saved = plan.nextUser.find(e => e.code === prevEntry.code);
+  assert.deepEqual([saved.x, saved.y, saved.note], [910, 1820, '新備考']);
+});
+
+test('【失敗系】面材: x/yに負数・非数・Infinityを入れるとplanSaveEntryが拒否する（0は許す）', () => {
+  const base = material({ x: 910, y: 1820 });
+  const plan = (x, y) => planSaveEntry(CatalogKind.MATERIAL,
+    buildMaterialEntry({ code: '301000000098', name: '新面材', spec: 'S', thickness: 9, category: 'panel', x, y }),
+    { builtinList: [base], rowState: null });
+  const negX = plan(-1, 1820);
+  assert.equal(negX.ok, false);
+  assert.match(negX.message, /面材のXは0以上/);
+  const negY = plan(910, -5);
+  assert.equal(negY.ok, false);
+  assert.match(negY.message, /面材のYは0以上/);
+  assert.equal(plan(Number('abc'), 1820).ok, false);
+  assert.equal(plan(910, Infinity).ok, false);
+  assert.equal(plan(0, 0).ok, true, '0＝未設定は許す');
+});
+
+// ---- 面材フォームの既定寸法・空欄拒否・カテゴリ別の欄表示（2026-10-01 QA M-1/m-1） ----
+test('materialFormHasDimensions / materialFormHasBackingClass: backing/panel/finish の3値を固定', () => {
+  assert.deepEqual(
+    ['backing', 'panel', 'finish'].map(materialFormHasDimensions), [true, true, false]);
+  assert.deepEqual(
+    ['backing', 'panel', 'finish'].map(materialFormHasBackingClass), [true, false, false]);
+});
+
+test('新規面材フォームの初期X/Yは910/1820（文字列）、他カテゴリは空欄', () => {
+  assert.equal(DEFAULT_PANEL_X, 910);
+  assert.equal(DEFAULT_PANEL_Y, 1820);
+  assert.deepEqual(initialMaterialDimensions('panel'), { x: '910', y: '1820' });
+  assert.deepEqual(initialMaterialDimensions('backing'), { x: '', y: '' });
+  assert.deepEqual(initialMaterialDimensions('finish'), { x: '', y: '' });
+});
+
+test('materialFormWithCategory: 面材へ切替で空欄だけ既定を補い、入力済みは触らない。他カテゴリ・他項目は不変', () => {
+  const blank = { name: 'N', category: 'finish', x: '', y: '  ' };
+  assert.deepEqual(materialFormWithCategory(blank, 'panel'), { name: 'N', category: 'panel', x: '910', y: '1820' });
+  const filled = { name: 'N', category: 'backing', x: '45', y: '0' };
+  const next = materialFormWithCategory(filled, 'panel');
+  assert.deepEqual([next.x, next.y], ['45', '0'], '入力済み（0含む）は触らない');
+  const toBacking = materialFormWithCategory(blank, 'backing');
+  assert.deepEqual([toBacking.category, toBacking.x, toBacking.y], ['backing', '', '  ']);
+});
+
+test('【失敗系】面材フォーム: X/Yが空欄（空文字・空白のみ）なら拒否、"0"の明示入力・下地材・仕上げ材は対象外', () => {
+  const r = validateMaterialFormDimensions({ category: 'panel', x: '', y: '1820' });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /面材のX\/Yを入力してください/);
+  assert.equal(validateMaterialFormDimensions({ category: 'panel', x: '910', y: '   ' }).ok, false);
+  assert.equal(validateMaterialFormDimensions({ category: 'panel', x: '0', y: '0' }).ok, true);
+  assert.equal(validateMaterialFormDimensions({ category: 'panel', x: 0, y: 0 }).ok, true, '編集開始で引き継いだ数値0');
+  assert.equal(validateMaterialFormDimensions({ category: 'backing', x: '', y: '' }).ok, true);
+  assert.equal(validateMaterialFormDimensions({ category: 'finish', x: '', y: '' }).ok, true);
+});
+
+test('【失敗系】新規面材（本体面材と name/spec/thickness 同一・X/Yは既定のまま）は重複禁止で拒否される', () => {
+  const builtin = material({ x: DEFAULT_PANEL_X, y: DEFAULT_PANEL_Y });
+  const form = {
+    name: builtin.name, spec: builtin.spec, thickness: String(builtin.thickness), note: '', category: 'panel',
+    ...initialMaterialDimensions('panel'), backingClass: '',
+  };
+  assert.deepEqual(validateMaterialFormDimensions(form), { ok: true });
+  const entry = buildMaterialEntry({
+    code: '301000000099', name: form.name, spec: form.spec, thickness: Number(form.thickness), note: form.note,
+    category: form.category, x: Number(form.x), y: Number(form.y), backingClass: form.backingClass || undefined,
+  });
+  const result = validateMaterialEntry(entry, [builtin]);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /重複|同じ|一致/);
 });
 
 test('buildMaterialEntry: category:backingはx/y/backingClassをそのまま持たせる', () => {

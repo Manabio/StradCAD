@@ -533,7 +533,7 @@ test('FinishModeState.init: 文書同梱材が本体と不一致なら materialD
   setOverlay(CatalogKind.MATERIAL, {
     doc: [{
       code: '301000000002', name: 'せっこうボード t=12.5', spec: 'JIS A 6901',
-      x: 0, y: 0, thickness: 15, note: '壁・天井下地の主流（GB-R）', category: 'panel',
+      x: 910, y: 1820, thickness: 15, note: '壁・天井下地の主流（GB-R）', category: 'panel',
     }],
   });
   const graph = makeSingleCellGraph();

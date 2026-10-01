@@ -364,15 +364,15 @@ export function nextMaterialCode(major, minor, knownCodes) {
 }
 
 /**
- * フォーム入力から材エントリを組み立てる。面材・仕上げ材はx/yを常に0固定
- * （materialData.js「面材・仕上げ材は寸法なし→0,0」と同じ）。下地材（category:'backing'）は
- * x/yをそのまま持たせる。
+ * フォーム入力から材エントリを組み立てる。仕上げ材はx/yを常に0固定
+ * （materialData.js「仕上げ材は寸法なし→0,0」と同じ）。下地材（category:'backing'）・
+ * 面材（category:'panel'。板の施工寸法 例: 910×1820）はx/yをそのまま持たせる。
  * QA指摘Minor3（再指摘）: name/spec/noteの前後の空白を除く責務をこの関数1箇所に寄せる
  * （呼び出し側でトリムしてから渡す約束にすると、呼び出し側が増えたときにトリムし忘れが起こる）。
  *
- * ステップ12b QA指摘n1（12c申し送り・2026-09-24再報告）の解消: x/y:0固定は面材・仕上げ材専用の
- * 割り切りのまま残し、category:'backing'のときだけ呼び出し側（フォーム）から渡された x/y を
- * そのまま使う——間柱コード（WOOD_STUD_CODE_BY_SIZE）行の materialExtraLockedFields
+ * ステップ12b QA指摘n1（12c申し送り・2026-09-24再報告）の解消: x/y:0固定は仕上げ材専用の
+ * 割り切りのまま残し、category:'backing'・'panel'のときだけ呼び出し側（フォーム）から渡された x/y を
+ * そのまま使う（面材は2026-10-01に追加）——間柱コード（WOOD_STUD_CODE_BY_SIZE）行の materialExtraLockedFields
  * （x/y/thicknessロック）は、フォーム（ui/CatalogMaintenancePanel.jsx formFromEntry）が編集開始時に
  * 元entryのx/yを引き継ぐため、変更していなければlockedFieldsForの一致検査を通る。
  *
@@ -392,11 +392,73 @@ export function buildMaterialEntry({
     entry.x = x;
     entry.y = y;
     if (backingClass != null) entry.backingClass = backingClass;
+  } else if (category === MATERIAL_CATEGORY.PANEL) {
+    // 面材は施工寸法（板の幅×高さ。例: 910×1820）を持つためx/yを保持する（0＝未設定も許す）。
+    entry.x = x;
+    entry.y = y;
   } else {
     entry.x = 0;
     entry.y = 0;
   }
   return entry;
+}
+
+/**
+ * 面材の既定寸法（板の施工寸法 mm）。本体の面材（materialData.js PANEL）の x/y と一致すること
+ * （catalogRealMasters.test.js が突合する）。materialData.js は動的importの純データのため、ここへ置く。
+ */
+export const DEFAULT_PANEL_X = 910;
+export const DEFAULT_PANEL_Y = 1820;
+
+/** フォームにX/Y入力欄を出すカテゴリ（下地材・面材）。仕上げ材は0固定で欄なし。 */
+export function materialFormHasDimensions(category) {
+  return category === MATERIAL_CATEGORY.BACKING || category === MATERIAL_CATEGORY.PANEL;
+}
+
+/** フォームに下地区分（backingClass）欄を出すカテゴリ（下地材のみ）。 */
+export function materialFormHasBackingClass(category) {
+  return category === MATERIAL_CATEGORY.BACKING;
+}
+
+function isBlankInput(v) {
+  return v == null || (typeof v === 'string' && v.trim() === '');
+}
+
+/**
+ * 新規追加フォームの X/Y 初期値（フォームが持つ文字列の形）。面材は既定寸法、他は空欄。
+ * @returns {{ x: string, y: string }}
+ */
+export function initialMaterialDimensions(category) {
+  return category === MATERIAL_CATEGORY.PANEL
+    ? { x: String(DEFAULT_PANEL_X), y: String(DEFAULT_PANEL_Y) }
+    : { x: '', y: '' };
+}
+
+/**
+ * フォームのカテゴリを切り替えた次のフォーム値。面材へ切り替えたとき X/Y が空欄の項目だけ既定寸法を
+ * 補う（入力済みの値は触らない）。それ以外のカテゴリ・項目は変えない。
+ * @param {{ category: string, x: string|number, y: string|number }} form
+ */
+export function materialFormWithCategory(form, category) {
+  const next = { ...form, category };
+  if (category === MATERIAL_CATEGORY.PANEL) {
+    if (isBlankInput(next.x)) next.x = String(DEFAULT_PANEL_X);
+    if (isBlankInput(next.y)) next.y = String(DEFAULT_PANEL_Y);
+  }
+  return next;
+}
+
+/**
+ * 保存前のフォーム入力検査: 面材のX/Yが空欄（空文字・空白のみ）なら0として保存せず拒否する
+ * （0を明示入力した場合は許す。重複禁止が x/y=0 の別材で素通りするのを防ぐ）。下地材・仕上げ材は対象外。
+ * @param {{ category: string, x: string|number, y: string|number }} form
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+export function validateMaterialFormDimensions(form) {
+  if (form?.category === MATERIAL_CATEGORY.PANEL && (isBlankInput(form.x) || isBlankInput(form.y))) {
+    return { ok: false, message: '面材のX/Yを入力してください' };
+  }
+  return { ok: true };
 }
 
 /**
@@ -842,6 +904,22 @@ function validateBackingMaterialFields(entry, { builtinOverride }) {
 }
 
 /**
+ * 面材（material・category:'panel'）のx/y検査: 0以上の有限数（0＝未設定のユーザー材が既にありうるので
+ * 拒否しない）。planSaveEntry からのみ呼ぶ（validateBackingMaterialFields と同じ唯一の経路）。
+ * @param {object} entry
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+function validatePanelMaterialFields(entry) {
+  if (!(typeof entry.x === 'number' && Number.isFinite(entry.x) && entry.x >= 0)) {
+    return { ok: false, message: '面材のXは0以上の数値を入力してください' };
+  }
+  if (!(typeof entry.y === 'number' && Number.isFinite(entry.y) && entry.y >= 0)) {
+    return { ok: false, message: '面材のYは0以上の数値を入力してください' };
+  }
+  return { ok: true };
+}
+
+/**
  * ステップ12a（1.3 本体編集の保存プラン）: (0) rowStateがEXISTING_ROW_STATES（既存行の編集）
  * なのにprevEntryが省略されていれば拒否（QA指摘Minor-2） (1) 固定項目
  * （lockedFieldsFor。加えてkeyOf自体の一致——QA指摘Nit-2: valuesEqualは文字列をtrimして
@@ -909,6 +987,11 @@ export function planSaveEntry(kind, entry, { builtinList = [], rowState = null, 
   if (kind === CatalogKind.MATERIAL && entry.category === MATERIAL_CATEGORY.BACKING) {
     const backingResult = validateBackingMaterialFields(entry, { builtinOverride: builtinKeys.has(key) });
     if (!backingResult.ok) return backingResult;
+  }
+
+  if (kind === CatalogKind.MATERIAL && entry.category === MATERIAL_CATEGORY.PANEL) {
+    const panelResult = validatePanelMaterialFields(entry);
+    if (!panelResult.ok) return panelResult;
   }
 
   try {

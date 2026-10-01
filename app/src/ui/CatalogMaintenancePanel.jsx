@@ -17,6 +17,8 @@ import {
   realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
   isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY, BACKING_CLASS_OPTIONS,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry,
+  materialFormHasDimensions, materialFormHasBackingClass, initialMaterialDimensions,
+  materialFormWithCategory, validateMaterialFormDimensions,
   applyCatalogEditPlan, materialExtraLockedFields, materialSaveMessage, catalogSaveMessage,
   lockedFieldReason, materialRowDisabledReason, removeMessageFor, backingClassDisplayFor,
   buildFixtureSymbolEntry, validateFixtureSymbolForm, fixtureSymbolFormFieldsFor,
@@ -123,12 +125,8 @@ function computeDerived(list, search, category) {
   return { allRows, visibleRows, knownCodes };
 }
 
-// ステップ12c: 下地材（category:'backing'）はX/Y入力・下地区分（backingClass）選択欄を
-// フォームに出す。判断（どのcategoryで寸法欄を持つか）は純関数側（buildMaterialEntryの
-// category分岐）に置き、ここは表示の要否だけを見る薄い判定。
-function materialFormHasDimensions(category) {
-  return category === MATERIAL_CATEGORY.BACKING;
-}
+// X/Y欄・下地区分欄の表示要否（materialFormHasDimensions/HasBackingClass）、面材の既定寸法・空欄検査は
+// catalog/catalogMaintenance.js の純関数。ここは呼ぶだけ。
 
 function formFromEntry(entry) {
   const parsed = parseMaterialCode(entry.code);
@@ -140,10 +138,10 @@ function formFromEntry(entry) {
     category: entry.category,
     major: parsed?.major ?? firstMajor(),
     minor: parsed?.minor ?? firstMinor(parsed?.major ?? firstMajor()),
-    // ステップ12c QA指摘n1対応: 下地材（category:'backing'）の編集開始時は元entryのx/yを
-    // 引き継ぐ（buildMaterialEntryへそのまま渡す。変更しなければlockedFieldsForの一致検査を
-    // 通る——間柱6件のextraLocked（x/y/thickness）対策）。面材・仕上げ材はどのみち
-    // buildMaterialEntryが0固定にするため、entry.x/yをそのまま持たせても無害。
+    // ステップ12c QA指摘n1対応: 下地材（category:'backing'）・面材（'panel'）の編集開始時は
+    // 元entryのx/yを引き継ぐ（buildMaterialEntryへそのまま渡す。変更しなければlockedFieldsForの
+    // 一致検査を通る——間柱6件のextraLocked（x/y/thickness）対策。面材は本体編集でx/yが0へ戻らない）。
+    // 仕上げ材はどのみちbuildMaterialEntryが0固定にするため、entry.x/yをそのまま持たせても無害。
     x: entry.x ?? 0,
     y: entry.y ?? 0,
     backingClass: entry.backingClass ?? '',
@@ -338,7 +336,7 @@ export function CatalogMaintenancePanel({ onClose }) {
     actions.resetConfirmState();
     setForm({
       name: '', spec: '', thickness: '', note: '', category: MATERIAL_CATEGORY.PANEL, major, minor: firstMinor(major),
-      x: '', y: '', backingClass: '',
+      ...initialMaterialDimensions(MATERIAL_CATEGORY.PANEL), backingClass: '',
     });
     setFormError(null);
     setFormMessage(null);
@@ -376,6 +374,8 @@ export function CatalogMaintenancePanel({ onClose }) {
       setFormError('厚さは数値で入力してください');
       return;
     }
+    const dimCheck = validateMaterialFormDimensions(form);
+    if (!dimCheck.ok) { setFormError(dimCheck.message); return; }
     const code = isAdding ? previewCode : selectedCode;
     const entry = buildMaterialEntry({
       code, name: form.name, spec: form.spec, thickness, note: form.note, category: form.category,
@@ -638,7 +638,7 @@ export function CatalogMaintenancePanel({ onClose }) {
                         disabled={!!disabledReason || lockedFields.has('category')}
                         title={lockedFields.has('category') ? lockedFieldReason(CatalogKind.MATERIAL, 'category') : undefined}
                         style={docDiffByField.has('category') ? { color: CATALOG_DIFF_COLOR } : undefined}
-                        onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                        onChange={e => setForm(f => materialFormWithCategory(f, e.target.value))}
                       >
                         <option value={MATERIAL_CATEGORY.PANEL}>面材</option>
                         <option value={MATERIAL_CATEGORY.FINISH}>仕上げ材</option>
@@ -734,11 +734,11 @@ export function CatalogMaintenancePanel({ onClose }) {
                         <span className="catmnt-form-label">X / Y</span>
                         <input value="0" disabled readOnly style={{ maxWidth: 56 }} />
                         <input value="0" disabled readOnly style={{ maxWidth: 56 }} />
-                        <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>面材・仕上げ材は寸法なし固定</span>
+                        <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>仕上げ材は寸法なし固定</span>
                       </div>
                     )}
 
-                    {materialFormHasDimensions(form.category) && (
+                    {materialFormHasBackingClass(form.category) && (
                       <div className="catmnt-form-row">
                         <span className="catmnt-form-label">下地区分</span>
                         <select

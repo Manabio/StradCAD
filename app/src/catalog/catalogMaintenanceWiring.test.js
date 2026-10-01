@@ -1175,11 +1175,16 @@ test('【不変条件・ステップ12c】ui/CatalogMaintenancePanel.jsx: カテ
   );
 });
 
-test('【不変条件・ステップ12c】ui/CatalogMaintenancePanel.jsx: X/Y・下地区分の表示要否はmaterialFormHasDimensions(category)（純関数）で判定し、jsx側にcategory直書き条件を持たない', () => {
+// 2026-10-01: 面材もX/Y欄を持つため、X/Y欄（下地材・面材）と下地区分欄（下地材のみ）の判定関数を分けた。
+test('【不変条件・ステップ12c】ui/CatalogMaintenancePanel.jsx: X/Yの表示要否はmaterialFormHasDimensions(category)・下地区分はmaterialFormHasBackingClass(category)（純関数）で判定し、jsx側にcategory直書き条件を持たない', () => {
   const src = readSrc('ui/CatalogMaintenancePanel.jsx');
-  assert.ok(/function materialFormHasDimensions\(category\)/.test(src), 'CatalogMaintenancePanel.jsx に materialFormHasDimensions 関数が見つからない');
-  const callCount = (src.match(/materialFormHasDimensions\(form\.category\)/g) ?? []).length;
-  assert.ok(callCount >= 2, 'materialFormHasDimensions(form.category) がX/Y欄・下地区分欄の両方で呼ばれていない');
+  // 2026-10-01: 判定本体は catalog/catalogMaintenance.js の純関数（単体テストで3値を固定）。jsxはimportして呼ぶだけ。
+  assert.ok(!/function materialFormHasDimensions\(/.test(src) && !/function materialFormHasBackingClass\(/.test(src), 'jsx側に判定関数を再定義している');
+  const importBlock = src.slice(0, src.indexOf("from '../catalog/catalogMaintenance.js'"));
+  assert.ok(/\bmaterialFormHasDimensions\b/.test(importBlock) && /\bmaterialFormHasBackingClass\b/.test(importBlock),
+    'CatalogMaintenancePanel.jsx が catalogMaintenance.js から materialFormHasDimensions/HasBackingClass を import していない');
+  assert.ok((src.match(/materialFormHasDimensions\(form\.category\)/g) ?? []).length >= 1, 'materialFormHasDimensions(form.category) がX/Y欄で呼ばれていない');
+  assert.ok((src.match(/materialFormHasBackingClass\(form\.category\)/g) ?? []).length >= 1, 'materialFormHasBackingClass(form.category) が下地区分欄で呼ばれていない');
 });
 
 test('【不変条件・ステップ12c】ui/CatalogMaintenancePanel.jsx: 下地区分（backingClass）の選択肢はcatalog/catalogMaintenance.jsのBACKING_CLASS_OPTIONS経由（.jsx側にwood/otherの対応表を直書きしない）', () => {
