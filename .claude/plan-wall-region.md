@@ -108,6 +108,14 @@ protrusion分ずれた後の座標）を読むと、柱が設計交点ではな�
 確認）: 2階・3階の「廊下」で開口（アキ）幅の表示が72.5mm縮み、`recessHi`/`recessLo`の縁取り線が
 1本増える（壁が物理的に延びたことの正しい反映）——寸法・見た目が変わるためユーザー目視の確認事項。
 
+## 仕上げモード背景の補助線（FinishModeLayer）
+区割り線（セル分割CLの実在区間を描く線）・外壁判定線（外壁ループの太線）は、壁（ShapesLayer）の
+**上**に描かれるため、素のCL座標のままだと壁の中を通って見える。`finish/finishGuideGeometry.js`が
+壁の実在範囲（`wallBodyRects`。material∪backing、本ファイルの層と同じ定義）と重ねて、区割り線は
+壁区間を切り欠き、外壁判定線は外壁の外面（`wallFaces.js`の`outerWallFaceAt`）へ移す。腰壁・垂れ壁は
+`graph.kneeDropWalls`という別マップの注記であり`graph.walls`に専用のWallを追加しないため、
+`wallBodyRects`は通常壁と同じに扱えば済む（特別扱いは不要）。
+
 ## 計測（回帰の基準）
 `app/scripts/probe/`（製品コードからは参照しない）。`11.stq` を Node へ復元し、描画セグメントを世界座標へ
 落として比較する。`planDefects.mjs`: `through`（相手の材を完全に横切る。目標0）／`join`（端が相手の材の中で

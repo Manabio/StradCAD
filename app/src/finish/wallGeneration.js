@@ -249,12 +249,12 @@ function classifyExteriorEdge(room, p, graph, cellToRoom) {
  * - `loopType: 'outer'` — 建物外周（時計回り想定）
  * - `loopType: 'courtyard'` — 建物内部の屋外領域の境界（反時計回り想定）
  *
- * @returns {{ axisCLId, startCLId, endCLId, isVertical, loopType, value, start, end }[]}
+ * @returns {{ axisCLId, startCLId, endCLId, isVertical, loopType, value, start, end, outwardSign }[]}
  */
 export function computeExteriorWallSegments(graph) {
   const cellToRoom = buildCellToRoom(graph);
 
-  const groups = new Map(); // "axisCLId:loopType" → segs[]
+  const groups = new Map(); // "axisCLId:loopType:sign" → segs[]
   // 部分指定の部屋は親と同じ外周エッジを重複して上げる（cells は親の部分集合なので
   // 外周の一部が完全に一致する）。同一エッジが2本入ると mergeSegments は端点CLが
   // 連続しないため結合できず、まったく同じ線分が2件返って React の key が衝突する。
@@ -266,7 +266,8 @@ export function computeExteriorWallSegments(graph) {
       const segId = `${p.axisCLId}:${loopType}:${p.startCLId}:${p.endCLId}:${p.axisOffset}`;
       if (seen.has(segId)) continue;
       seen.add(segId);
-      const key = `${p.axisCLId}:${loopType}`;
+      const sign = Math.sign(p.axisOffset) || 1;
+      const key = `${p.axisCLId}:${loopType}:${sign}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push({ ...p, loopType });
     }
@@ -288,6 +289,9 @@ export function computeExteriorWallSegments(graph) {
         value:      axisCL.value,
         start:      startCL.value,
         end:        endCL.value,
+        // 外壁は常に室内方向(axisOffset)の逆側に生成される（本関数冒頭コメント・generateExteriorWalls
+        // 参照）ため、外向き方向はaxisOffsetの符号を反転したもの。
+        outwardSign: -(Math.sign(seg.axisOffset) || 1),
       });
     }
   }

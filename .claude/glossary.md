@@ -408,3 +408,15 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 直下階の階段削除・昇降機の複製と再採番・全階の構造反映等）。`floorOrderChange.js`の
 `applyFloorOrderChange`が唯一の入口で、各followerは`appliesTo`（どの階操作に効くか）を持つ。
 `modeBoundaries`レジストリと同型。設計意図は`.claude/floor-design.md`参照。
+
+## 区割り線
+仕上げモード背景（`FinishModeLayer.jsx`）が描く、セル分割CLの実在区間の線（`finish/gridCells.js`
+`gridDividerSegments`）。壁（ShapesLayer）の上に重ねて描くため、壁の実在範囲と重なる部分は
+`finish/finishGuideGeometry.js` `dividerSegmentsOutsideWalls`が切り欠く。設計意図は
+`.claude/plan-wall-region.md`「仕上げモード背景の補助線」節。
+
+## 外壁判定線
+仕上げモード背景が太線で描く、外壁ループ（建物外周・中庭境界）の判定用の線（`finish/wallGeneration.js`
+`computeExteriorWallSegments`）。壁の上に重ねて描くため、`finish/finishGuideGeometry.js`
+`exteriorGuideSegments`が外壁の外面（`wallFaces.js` `outerWallFaceAt`）へ移して描く。設計意図は
+`.claude/plan-wall-region.md`「仕上げモード背景の補助線」節。

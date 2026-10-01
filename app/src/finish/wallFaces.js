@@ -83,6 +83,31 @@ export function innerWallFaceAt(graph, cl, { isVertical, inward, spanLo, spanHi,
 }
 
 /**
+ * cl（軸CL）上の壁のうち、isVertical・スパン[spanLo,spanHi]との有意重なりを満たすものの中から、
+ * 実在する材（material∪backing）の外側の面（outward方向の最遠端）を返す。該当する壁がなければ
+ * null（呼び出し側は外壁判定線のCL座標フォールバックに使う）。innerWallFaceAt と同じ索引
+ * （wallsOnAxisCL）・同じ重なり許容差（SPAN_OVERLAP_EPS）を共有する——違いは内側面ではなく
+ * 「材そのものの外側の端」を返すこと（inward方向でcl.effectiveValueとの位置関係を問わない）。
+ * @param {1|-1} outward - 1なら材範囲の上端(hi)の最大、-1なら下端(lo)の最小
+ */
+export function outerWallFaceAt(graph, cl, { isVertical, outward, spanLo, spanHi, wallFilter }) {
+  let best = null;
+  for (const w of wallsOnAxisCL(graph, cl.id)) {
+    if (w.isVertical !== isVertical) continue;
+    if (wallFilter && !wallFilter(w)) continue;
+    const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
+    if (Math.min(wHi, spanHi) - Math.max(wLo, spanLo) <= SPAN_OVERLAP_EPS) continue;
+    const material = w.materialRange;
+    const backing = w.backingRange;
+    const lo = backing ? Math.min(material.lo, backing.lo) : material.lo;
+    const hi = backing ? Math.max(material.hi, backing.hi) : material.hi;
+    const face = outward > 0 ? hi : lo;
+    if (best == null || (outward > 0 ? face > best : face < best)) best = face;
+  }
+  return best;
+}
+
+/**
  * cells（footprint）の壁内4頂点（壁仕上げ材の内側の角。壁が無い辺は cl.effectiveValue で
  * フォールバック）と、各辺の壁有無を返す。結果が退化矩形（x2<=x1 または y2<=y1。壁面の
  * 交差・座標不整合等の異常値）なら null を返す——呼び出し側はこれをフォールバック

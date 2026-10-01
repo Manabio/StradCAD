@@ -1,8 +1,8 @@
 import { observer } from 'mobx-react-lite';
 import { Rect, Text, Line, Group, Shape } from 'react-konva';
-import { getAllCells, gridDividerSegments, cellBoundsList, outlineSegments } from './gridCells.js';
+import { getAllCells, cellBoundsList, outlineSegments } from './gridCells.js';
 import { roomNameAnchor } from './roomLabel.js';
-import { computeExteriorWallSegments } from './wallGeneration.js';
+import { dividerSegmentsOutsideWalls, exteriorGuideSegments } from './finishGuideGeometry.js';
 import { RoomFeature } from '@core';
 
 const EXTERIOR_WALL_WIDTH = 4; // px（ズームに依らない太線幅）
@@ -34,7 +34,7 @@ export const FinishModeLayer = observer(({
     />
   ));
 
-  const gridLines = gridDividerSegments(graph).map(seg => (
+  const gridLines = dividerSegmentsOutsideWalls(graph).map(seg => (
     <Line
       key={`gl${seg.key}`}
       points={seg.isVertical
@@ -116,17 +116,19 @@ export const FinishModeLayer = observer(({
     }
   });
 
-  // 外壁ループ（建物外周・中庭境界）を太線表示
-  const exteriorWalls = computeExteriorWallSegments(graph).map(seg => {
+  // 外壁ループ（建物外周・中庭境界）を太線表示。壁本体の外面（さらに線幅半分ぶん外側）に描く
+  // （区割り線と同じ理由——壁の中を通って見える不良の是正。finishGuideGeometry.js）。
+  const exteriorWalls = exteriorGuideSegments(graph, { strokeHalfWidthMm: EXTERIOR_WALL_WIDTH / 2 / viewport.scaleX }).map(seg => {
     const points = seg.isVertical
       ? [seg.value, seg.start, seg.value, seg.end]
       : [seg.start, seg.value, seg.end, seg.value];
     return (
       <Line
-        key={`ew${seg.axisCLId}:${seg.loopType}:${seg.startCLId}:${seg.endCLId}`}
+        key={seg.key}
         points={points}
         stroke="#1e293b"
         strokeWidth={EXTERIOR_WALL_WIDTH / viewport.scaleX}
+        lineCap="square"
         listening={false}
       />
     );

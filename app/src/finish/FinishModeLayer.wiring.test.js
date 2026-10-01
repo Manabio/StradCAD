@@ -40,3 +40,19 @@ test('【配線・強化】FinishModeLayer は highlightCellKeys から cellBoun
 test('【不変条件】FinishModeLayer は組み立てたハイライト線分（highlightSegs）を描画する（<Group> 内に含む）', () => {
   assert.ok(/\{highlightSegs\}/.test(codeOnly), '{highlightSegs} がJSX本体に見つからない');
 });
+
+// 区割り線・外壁判定線は、壁本体と重なる部分を描かない／外壁の外面の外側に描くため
+// finishGuideGeometry.js（dividerSegmentsOutsideWalls・exteriorGuideSegments）を唯一の
+// 供給源にする（設計意図は.claude/plan-wall-region.md）。gridDividerSegments・
+// computeExteriorWallSegmentsを直接呼ばないことを固定する——本体コメントには一致しない
+// よう、コメント除去後のソース（codeOnly）で件数を数える。
+test('【配線・強化】FinishModeLayer は区割り線・外壁判定線を finishGuideGeometry.js の dividerSegmentsOutsideWalls・exteriorGuideSegments から組み立てる（gridDividerSegments・computeExteriorWallSegmentsを直接呼ばない）', () => {
+  assert.match(src, /^\s*const gridLines = dividerSegmentsOutsideWalls\(graph\)\.map\(seg => \(\s*$/m,
+    'const gridLines = dividerSegmentsOutsideWalls(graph).map(seg => ( が1行まるごとの形で見つからない');
+  assert.match(src, /^\s*const exteriorWalls = exteriorGuideSegments\(graph, \{ strokeHalfWidthMm: EXTERIOR_WALL_WIDTH \/ 2 \/ viewport\.scaleX \}\)\.map\(seg => \{\s*$/m,
+    'const exteriorWalls = exteriorGuideSegments(graph, { strokeHalfWidthMm: EXTERIOR_WALL_WIDTH / 2 / viewport.scaleX }).map(seg => { が1行まるごとの形で見つからない');
+  assert.equal((codeOnly.match(/gridDividerSegments\(/g) || []).length, 0,
+    'gridDividerSegments(を直接呼んでいないはず（本体コメント除去後の件数で判定）');
+  assert.equal((codeOnly.match(/computeExteriorWallSegments\(/g) || []).length, 0,
+    'computeExteriorWallSegments(を直接呼んでいないはず（本体コメント除去後の件数で判定）');
+});
