@@ -498,8 +498,8 @@ export async function runElevatorUsageChange({
 }
 
 /**
- * 階追加時、直下の採用階の器具行を新階へ複製する。App.jsx
- * syncNewFloorFromSource が syncUpperFloorsAuto の後・addNewFloorRoomFromSource の前に呼ぶ
+ * 階追加時、直下の採用階の器具行を新階へ複製する。floorOrderChange.js の elevator follower が
+ * stairUpperSync（syncUpperFloorsAuto）の後・exteriorRoom（addNewFloorRoomFromSource）の前に呼ぶ
  * （階段同期の後＝新階にできた階段・階段吹抜けを衝突判定の相手にできる。外壁内側の部屋の前＝
  * 部屋は新階で割当済みのセルを除くので、昇降路を先に作れば部屋から自然に外れる）。
  *

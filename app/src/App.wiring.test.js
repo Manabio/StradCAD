@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readAppSrc, extractFunctionBody } from './uiBusySourceScan.js';
+import { readAppSrc, extractFunctionBody, stripCommentLines } from './uiBusySourceScan.js';
 
 const filePath = path.resolve(import.meta.dirname, 'App.jsx');
 const src = fs.readFileSync(filePath, 'utf8');
@@ -182,25 +182,11 @@ for (const entry of ELEVATOR_ENTRIES) {
   });
 }
 
-// 階追加時、階段同期→昇降機の複製→外壁内側の部屋の自動追加の順で呼ぶ（直下階に器具行があれば
-// 新階へ複製する。複製できなかった器具があればトースト表示）。
-test('【配線・強化】App.jsx: syncNewFloorFromSource は syncUpperFloorsAuto → copyElevatorsToNewFloor → addNewFloorRoomFromSource の順で呼ぶ', () => {
-  const appSrc = readAppSrc();
-  const body = extractFunctionBody(appSrc, 'async function syncNewFloorFromSource');
-
-  assert.match(body, /^\s*await syncUpperFloorsAuto\(project, sourceGraph\);\s*$/m,
-    'await syncUpperFloorsAuto(project, sourceGraph); が1行まるごとの形で見つからない');
-  assert.match(body, /^\s*const copied = await copyElevatorsToNewFloor\(\{ project, activeGraph: sourceGraph, newPlane \}\);\s*$/m,
-    'copyElevatorsToNewFloor の呼び出し行が1行まるごとの形で見つからない');
-  assert.match(body, /^\s*await addNewFloorRoomFromSource\(project, sourceGraph, newPlane, makeFloorName\(newStartFloor, 1\)\);\s*$/m,
-    'addNewFloorRoomFromSource の呼び出し行が1行まるごとの形で見つからない');
-
-  const syncIdx = body.indexOf('await syncUpperFloorsAuto(project, sourceGraph);');
-  const copyIdx = body.indexOf('const copied = await copyElevatorsToNewFloor({ project, activeGraph: sourceGraph, newPlane });');
-  const roomIdx = body.indexOf('await addNewFloorRoomFromSource(project, sourceGraph, newPlane, makeFloorName(newStartFloor, 1));');
-  assert.ok(syncIdx >= 0 && copyIdx >= 0 && roomIdx >= 0 && syncIdx < copyIdx && copyIdx < roomIdx,
-    'syncUpperFloorsAuto → copyElevatorsToNewFloor → addNewFloorRoomFromSource の順になっていない');
-});
+// 階追加時の追従処理（階段の上階同期→昇降機の複製→外壁内側の部屋の自動追加）の順序は
+// floorOrderChange.js のレジストリ（floorOrderFollowers）へ移った。App.jsx 側の配線
+// （applyFloorOrderChangeを呼ぶこと）は後段の【配線・強化】executeAddUpper/'general'分岐のテストで、
+// 追従処理の順序自体は floorOrderChange.test.js（レジストリの name 順）で固定する
+// （途中階の上階追加と階移動の振り直し一本化 ステップ3）。
 
 // ================================================================
 // 線種変更の移籍一本化 ステップ2（2026-09-30）: 検討案の追加・コピーで、複製するバイト列を
@@ -261,47 +247,31 @@ test('【配線・強化】App.jsx: runCopyAlternative はserializeGraphWithFres
     '復元がtrySwitchFloor(より後にない');
 });
 
-test('【配線・強化】App.jsx: syncNewFloorFromSource は複製できなかった器具があるときだけERR_ELEVATOR_COPY_SKIPPEDのトーストを出す', () => {
-  const appSrc = readAppSrc();
-  const body = extractFunctionBody(appSrc, 'async function syncNewFloorFromSource');
-
-  assert.match(body, /^\s*if \(copied\.status === 'copied' && copied\.skipped\.length > 0\) \{\s*$/m,
-    'if (copied.status === \'copied\' && copied.skipped.length > 0) { が1行まるごとの形で見つからない');
-  assert.match(body, /^\s*setToast\(\{ msg: ERR_ELEVATOR_COPY_SKIPPED\(newPlane\.name, copied\.skipped\.length\), key: Date\.now\(\) \}\);\s*$/m,
-    'ERR_ELEVATOR_COPY_SKIPPEDのトースト行が1行まるごとの形で見つからない');
-
-  const bodyLines = body.split('\n');
-  const condIdx = bodyLines.findIndex(l => l.trim() === "if (copied.status === 'copied' && copied.skipped.length > 0) {");
-  const toastIdx = bodyLines.findIndex(
-    l => l.trim() === 'setToast({ msg: ERR_ELEVATOR_COPY_SKIPPED(newPlane.name, copied.skipped.length), key: Date.now() });',
-  );
-  assert.ok(condIdx >= 0 && toastIdx >= 0);
-  assert.equal(toastIdx, condIdx + 1,
-    '条件行の直後がトースト行であるはず（条件を if(false){ に差し替える変異を見逃さないため）');
-});
-
 // ================================================================
-// 途中階の上階追加と階移動の振り直し一本化 ステップ2（2026-10-01）: executeAddUpper／
-// handleAddFloorConfirm('general') は computeFloorInsert＋applyFloorInsert 経由で既存階をずらして
-// から新階を足し、withFloorAddUndo は全採用階のPlaneメタもbefore/afterで記録してundo/redoで
-// 書き戻す（261001_途中階の上階追加と階移動の振り直し一本化.md §5-7）。
+// 途中階の上階追加と階移動の振り直し一本化 ステップ2・3（2026-10-01）: executeAddUpper／
+// handleAddFloorConfirm('general'/'lower')・runDeleteFloor は computeFloorInsert／
+// computeFloorDeleteReorder で振り直しを計算し、本体・追従処理は applyFloorOrderChange
+// （floorOrderChange.js）へ委譲する。addFloor を直接呼ばず、applyFloorInsert も直接呼ばない
+// （261001_途中階の上階追加と階移動の振り直し一本化.md §5-7）。
 // ================================================================
 
-test('【配線・強化】App.jsx: executeAddUpper は computeFloorInsert→applyFloorInsert を使い、addFloor を直接呼ばない', () => {
+test('【配線・強化】App.jsx: executeAddUpper は computeFloorInsert→applyFloorOrderChange(kind: INSERT) を使い、addFloor を直接呼ばない', () => {
   const appSrc = readAppSrc();
   const body = extractFunctionBody(appSrc, 'async function executeAddUpper');
 
   assert.match(body, /computeFloorInsert\(project\.planes, currentPlane\.id, 1\)/,
     'computeFloorInsert(project.planes, currentPlane.id, 1) の呼び出しが見つからない');
-  assert.match(body, /applyFloorInsert\(project, updates,/,
-    'applyFloorInsert(project, updates, ...) の呼び出しが見つからない');
-  // addFloor はapplyFloorInsertへ渡すクロージャの中でだけ呼ぶ（振り直し前にいきなり新階を
+  assert.match(body, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.INSERT,/,
+    'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.INSERT, ... }) の呼び出しが見つからない');
+  // addFloor はaddPlaneへ渡すクロージャの中でだけ呼ぶ（振り直し前にいきなり新階を
   // 足す旧来の直接呼び出し `const { plane } = addFloor(` が残っていないこと）。
   assert.doesNotMatch(body, /const \{ plane \} = addFloor\(/,
     'executeAddUpper 本体に旧来の直接 addFloor( 呼び出し（振り直し前に新階を足す形）が残っている');
+  assert.doesNotMatch(body, /applyFloorInsert\(/,
+    'executeAddUpper が applyFloorInsert を直接呼んでいる（applyFloorOrderChangeへ委譲していない）');
 });
 
-test("【配線・強化】App.jsx: handleAddFloorConfirm の'general'分岐も computeFloorInsert→applyFloorInsert を使う", () => {
+test("【配線・強化】App.jsx: handleAddFloorConfirm の'general'分岐も computeFloorInsert→applyFloorOrderChange(kind: INSERT) を使う", () => {
   const appSrc = readAppSrc();
   const body = extractFunctionBody(appSrc, 'async function handleAddFloorConfirm');
   const generalIdx = body.indexOf("if (action === 'general') {");
@@ -310,8 +280,34 @@ test("【配線・強化】App.jsx: handleAddFloorConfirm の'general'分岐も 
 
   assert.match(generalBlock, /computeFloorInsert\(project\.planes, currentPlane\.id, n\)/,
     'computeFloorInsert(project.planes, currentPlane.id, n) の呼び出しが見つからない');
-  assert.match(generalBlock, /applyFloorInsert\(project, updates,/,
-    'applyFloorInsert(project, updates, ...) の呼び出しが見つからない');
+  assert.match(generalBlock, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.INSERT,/,
+    'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.INSERT, ... }) の呼び出しが見つからない');
+});
+
+test("【配線・強化】App.jsx: handleAddFloorConfirm の'lower'分岐は applyFloorOrderChange(kind: ADD_LOWER) を使う", () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function handleAddFloorConfirm');
+  const lowerIdx = body.indexOf("if (action === 'lower') {");
+  assert.ok(lowerIdx >= 0, "'lower'分岐が見つからない");
+  const lowerBlock = body.slice(lowerIdx, body.indexOf("if (action === 'general') {"));
+
+  assert.match(lowerBlock, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.ADD_LOWER,/,
+    'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.ADD_LOWER, ... }) の呼び出しが見つからない');
+});
+
+test('【配線・強化】App.jsx: runDeleteFloor は computeFloorDeleteReorder→applyFloorOrderChange(kind: DELETE) を使う（removeFloorはaddPlane/removePlaneクロージャの中だけ）', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'async function runDeleteFloor');
+
+  assert.match(body, /computeFloorDeleteReorder\(afterRemoval, idx\)/,
+    'computeFloorDeleteReorder(afterRemoval, idx) の呼び出しが見つからない');
+  assert.match(body, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.DELETE,/,
+    'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.DELETE, ... }) の呼び出しが見つからない');
+  assert.match(body, /removePlane: \(\) => removeFloor\(planeId\),/,
+    'removePlane: () => removeFloor(planeId), が見つからない');
+  // 器具id読み・階段削除・昇降機再採番・構造反映の直接呼び出しはfollower側へ移した。
+  assert.doesNotMatch(body, /readFloorEquipmentIds|renumberEquipmentAfterFloorRemoval|removeStairsOnFloor/,
+    'runDeleteFloor に旧来の直接呼び出し（followerへ移した処理）が残っている');
 });
 
 test('【配線・強化】App.jsx: withFloorAddUndo は before/after それぞれで collectPlaneMetas(project) を1回ずつ採る', () => {
@@ -349,4 +345,24 @@ test('【配線・強化】App.jsx: redoFloorAdd は addFloor の前に applyPla
   const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id);');
   assert.ok(applyIdx >= 0 && addIdx >= 0, 'applyPlaneMetas(metasAfter) または addFloor( 呼び出しが見つからない');
   assert.ok(applyIdx < addIdx, 'applyPlaneMetas(project, metasAfter) が addFloor( より前にない');
+});
+
+// ================================================================
+// QA指摘§5-7: 振り直し（startFloor・elevation・stories）は必ず floorOps.js の applyPlaneMetas／
+// applyFloorInsert 経由で書く（App.jsx 本文に直接代入が残っていないことをソース走査で固定する）。
+// ================================================================
+
+test('【不変条件・§5-7】App.jsx: startFloor=／elevation=／stories= の直接代入が無い（振り直しは必ずfloorOps.js経由）', () => {
+  const code = stripCommentLines(readAppSrc());
+  assert.doesNotMatch(code, /\.(startFloor|elevation|stories)\s*=(?!=)/,
+    'App.jsx 本文に .startFloor=／.elevation=／.stories= への直接代入が残っている');
+});
+
+// QA指摘: floorOrderUi の switchFloor が trySwitchFloor(() => handleFloorSwitch(id)) であることを固定する
+// （applyFloorOrderChange の ui.switchFloor が F1規律（trySwitchFloorで成否を判定）を経由する配線）。
+test('【配線】App.jsx: floorOrderUi 本体に switchFloor: (id) => trySwitchFloor(() => handleFloorSwitch(id)), が1行まるごとの形で存在する', () => {
+  const appSrc = readAppSrc();
+  const body = extractFunctionBody(appSrc, 'function floorOrderUi');
+  assert.match(body, /^\s*switchFloor: \(id\) => trySwitchFloor\(\(\) => handleFloorSwitch\(id\)\),\s*$/m,
+    'switchFloor: (id) => trySwitchFloor(() => handleFloorSwitch(id)), が1行まるごとの形で見つからない');
 });

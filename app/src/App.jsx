@@ -39,8 +39,9 @@ import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
   floorBytesEqual, applyFloorBytes, blocksFloorRemoval,
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
-  computeFloorDeleteReorder, computeFloorInsert, applyFloorInsert, collectPlaneMetas, applyPlaneMetas,
+  computeFloorDeleteReorder, computeFloorInsert, collectPlaneMetas, applyPlaneMetas,
 } from './floorOps.js';
+import { applyFloorOrderChange, FLOOR_ORDER_KIND } from './floorOrderChange.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { buildFloorChipModel } from './ui/floorChipModel.js';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
@@ -58,7 +59,7 @@ import { autoFillColumnAxisOffsets, autoFillBeamEccentricity, resolveLowestGraph
 import { buildExteriorSide } from './structural/wallGate.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
-import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, reflectStructuralAfterFloorAdd } from './structural/structuralOrchestration.js';
+import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors } from './structural/structuralOrchestration.js';
 import { structuralSync, OPENING_STRUCTURAL_SYNC } from './structural/structuralSync.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
@@ -84,7 +85,6 @@ import { collectFixedMembersByFloor, clDisplayName, formatFixedMemberConfirm } f
 import {
   ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure,
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE, ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
-  ERR_ELEVATOR_COPY_SKIPPED,
 } from './error.js';
 import { isUiBusy, runBusy } from './uiBusy.js';
 import { isSessionOwner } from './storage/sessionLock.js';
@@ -1109,30 +1109,16 @@ const App = observer(() => {
     setFloorDialog({ isLowest, anchor: { x: rect.left, y: rect.bottom } });
   }
 
-  // 階追加（'upper'/'general'のみ対象。'lower' は対象外）: 元階の階段・昇降機・外壁状態を新階へ
-  // 引き継ぐ。
-  //   1. 下階のどこかに階段があれば、新階（〜最上階）へ階段補助線を同期する（syncUpperFloorsAuto。
-  //      表示階に階段が無くても下階から起点を探索する。旧最上階＝中間階へ移行した階には階段が
-  //      設置され、階段吹抜けはペアRoomへ転用される。新最上階には CL＋階段吹抜けのみ。壁は生成しない）。
-  //   2. 新階の直下階に昇降機の器具行があれば、その器具を新階へ複製する（copyElevatorsToNewFloor）。
-  //      階段同期の後（新階にできた階段・階段吹抜けを衝突判定の相手にできる）・部屋の自動追加の前
-  //      （部屋は新階で割当済みのセルを除くので、昇降路を先に作れば部屋から自然に外れる）。
-  //      複製できなかった器具があればトーストで知らせる。
-  //   3. 元階に外壁（isExteriorWall）があれば、新階へ「外壁ループ内側」を部屋「n階」として自動追加する
-  //      （newStartFloor基準。地下階でも makeFloorName(startFloor, 1) で「地下n階」等に正しく整形される）。
-  // addFloor 直後・handleFloorSwitch 前に行う（新階はまだ非アクティブ＝peek→saveFloorの通常経路。
-  // handleFloorSwitch 後の activate() は IDB に保存済みの内容を読み込むため反映される）。
-  async function syncNewFloorFromSource(sourceGraph, newPlane, newStartFloor) {
-    const { syncUpperFloorsAuto, addNewFloorRoomFromSource } = await import('./finish/stair/stairFloorSync.js');
-    const { copyElevatorsToNewFloor } = await import('./finish/equipment/equipmentFloorSync.js');
-    await syncUpperFloorsAuto(project, sourceGraph);
-    const copied = await copyElevatorsToNewFloor({ project, activeGraph: sourceGraph, newPlane });
-    if (copied.status === 'copied' && copied.skipped.length > 0) {
-      setToast({ msg: ERR_ELEVATOR_COPY_SKIPPED(newPlane.name, copied.skipped.length), key: Date.now() });
-    }
-    if (sourceGraph.walls.some(w => w.isExteriorWall)) {
-      await addNewFloorRoomFromSource(project, sourceGraph, newPlane, makeFloorName(newStartFloor, 1));
-    }
+  // 階追加（'upper'/'general'/'lower'）で新階ができた後の追従処理（階段の上階同期・昇降機の複製・
+  // 外壁内側の部屋の自動追加・新階への切替・全階の構造反映）は floorOrderChange.js のレジストリ
+  // （floorOrderFollowers）が一元化する。App.jsx は applyFloorOrderChange を1回呼ぶだけ
+  // （途中階の上階追加と階移動の振り直し一本化 ステップ3）。
+  function floorOrderUi() {
+    return {
+      notify: (msg) => setToast({ msg, key: Date.now() }),
+      switchFloor: (id) => trySwitchFloor(() => handleFloorSwitch(id)),
+      onFloorSyncChanged: () => setFloorSyncTick(t => t + 1),
+    };
   }
 
   // ---- 階追加の undo 記録 ----
@@ -1235,18 +1221,21 @@ const App = observer(() => {
   }
 
   // 上階を追加して切り替える（途中階なら直上へ挿入し、上の階をずらしてから新階を足す。
-  // 途中階の上階追加と階移動の振り直し一本化 ステップ2）。
+  // 既存階をずらしてから新階を足す本体・追従処理は applyFloorOrderChange（floorOrderChange.js）へ
+  // 委譲する。途中階の上階追加と階移動の振り直し一本化 ステップ2・3。
   async function executeAddUpper(currentPlane) {
     await withFloorAddUndo(async () => {
       const insert = computeFloorInsert(project.planes, currentPlane.id, 1);
       if (!insert) return;
       const { newPlane, updates } = insert;
-      const { plane } = applyFloorInsert(project, updates,
-        () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories));
-      await syncNewFloorFromSource(project.activeGraph, plane, newPlane.startFloor);
-      // 切替に失敗したら以降（構造反映）を進めない（F1・2026-09-27）。
-      if (!(await trySwitchFloor(() => handleFloorSwitch(plane.id)))) return;
-      await reflectStructuralAfterFloorAdd(project);
+      await applyFloorOrderChange(project, {
+        kind: FLOOR_ORDER_KIND.INSERT,
+        updates,
+        addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories),
+        sourceGraph: project.activeGraph,
+        newStartFloor: newPlane.startFloor,
+        ui: floorOrderUi(),
+      });
     });
   }
 
@@ -1263,21 +1252,27 @@ const App = observer(() => {
 
     if (action === 'lower') {
       await withFloorAddUndo(async () => {
-        // 下階 n 階分+: 表示中の開始階から連鎖して n 本追加
+        // 下階 n 階分+: 表示中の開始階から連鎖して n 本追加（上の階はずれないため updates は空）。
         const lowestElevation = project.planes[0]?.elevation ?? 0;
         let prevFloor = currentPlane.startFloor;
-        let lastPlane = null;
-        for (let i = 1; i <= n; i++) {
-          const sf   = subtractSkipZero(prevFloor, 1);
-          const name = makeFloorName(sf, 1);
-          const elev = lowestElevation - 3000 * i;
-          const result = addFloor(elev, name, sf, 1);
-          lastPlane = result.plane;
-          prevFloor = sf;
-        }
-        // 作成した最も下の階に切り替え。切替に失敗したら以降（構造反映）を進めない（F1・2026-09-27）。
-        if (lastPlane && !(await trySwitchFloor(() => handleFloorSwitch(lastPlane.id)))) return;
-        await reflectStructuralAfterFloorAdd(project);
+        const addPlane = () => {
+          let lastPlane = null;
+          for (let i = 1; i <= n; i++) {
+            const sf   = subtractSkipZero(prevFloor, 1);
+            const name = makeFloorName(sf, 1);
+            const elev = lowestElevation - 3000 * i;
+            const result = addFloor(elev, name, sf, 1);
+            lastPlane = result.plane;
+            prevFloor = sf;
+          }
+          return { plane: lastPlane };
+        };
+        await applyFloorOrderChange(project, {
+          kind: FLOOR_ORDER_KIND.ADD_LOWER,
+          updates: [],
+          addPlane,
+          ui: floorOrderUi(),
+        });
       });
       return;
     }
@@ -1288,29 +1283,26 @@ const App = observer(() => {
         const insert = computeFloorInsert(project.planes, currentPlane.id, n);
         if (!insert) return;
         const { newPlane, updates } = insert;
-        const { plane } = applyFloorInsert(project, updates,
-          () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories));
-        await syncNewFloorFromSource(project.activeGraph, plane, newPlane.startFloor);
-        // 切替に失敗したら以降（構造反映）を進めない（F1・2026-09-27）。
-        if (!(await trySwitchFloor(() => handleFloorSwitch(plane.id)))) return;
-        await reflectStructuralAfterFloorAdd(project);
+        await applyFloorOrderChange(project, {
+          kind: FLOOR_ORDER_KIND.INSERT,
+          updates,
+          addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories),
+          sourceGraph: project.activeGraph,
+          newStartFloor: newPlane.startFloor,
+          ui: floorOrderUi(),
+        });
       });
     }
   }
 
   // ---- フロアタブのドラッグ割り込み ----
-  // 並替後の startFloor/elevation/name 再採番は floorOps.js の計算部（computeFloorReorder）に委譲。
+  // 並替後の startFloor/elevation/name 再採番は floorOps.js の計算部（computeFloorReorder）に委譲し、
+  // 書き戻しは applyPlaneMetas（floorOps.js）を使う（途中階の上階追加と階移動の振り直し一本化
+  // ステップ3。メタを書き戻すループの一本化）。
   function handleReorderFloor(fromId, toZone) {
     const updates = computeFloorReorder(project.planes, fromId, toZone);
     if (!updates) return;
-    runInAction(() => {
-      for (const u of updates) {
-        const plane = project.planeMap.get(u.id);
-        plane.name       = u.name;
-        plane.startFloor = u.startFloor;
-        plane.elevation  = u.elevation;
-      }
-    });
+    applyPlaneMetas(project, updates);
   }
 
   // ---- 階・検討案の並替（検討チップのメニューから。±1で隣と入替え）----
@@ -1377,11 +1369,11 @@ const App = observer(() => {
       const lowerEnd = lower.startFloor + lower.stories - 1;
       const newSF    = (lowerEnd + upper.startFloor) / 2;
       const newSto   = upper.startFloor - newSF;
-      runInAction(() => {
-        plane.startFloor = newSF;
-        plane.stories    = newSto;
-        plane.name       = makeFloorName(newSF, newSto);
-      });
+      // 書き戻しは applyPlaneMetas（floorOps.js）へ寄せる（途中階の上階追加と階移動の振り直し
+      // 一本化 ステップ3。メタを書き戻すループの一本化）。elevation は動かさないため現在値を渡す。
+      applyPlaneMetas(project, [
+        { id: planeId, name: makeFloorName(newSF, newSto), startFloor: newSF, elevation: plane.elevation, stories: newSto },
+      ]);
       return;
     }
 
@@ -1497,35 +1489,22 @@ const App = observer(() => {
         // 切替できていない（失敗・fallback無し）→アクティブ階を削除してしまうため中断（F1・2026-09-27）。
         if (blocksFloorRemoval(project, planeId)) return;
       }
-      // 削除した後に遅延チャンクの取得を挟まないよう、removeFloorより前に済ませる。
-      const { readFloorEquipmentIds, renumberEquipmentAfterFloorRemoval } = await import('./finish/equipment/equipmentFloorSync.js');
-      const removedEquipmentIds = await readFloorEquipmentIds(project, project.planeMap.get(planeId));
-      await removeFloor(planeId);
-      // 消えた上階(n)に接続していた直下階(n-1)の階段を削除する。採用・検討案の両方。
-      if (below) {
-        await removeStairsOnFloor(below);
-        const belowAlts = [...project.planeMap.values()]
-          .filter(p => p.isAlternative && p.referenceId === below.id);
-        for (const alt of belowAlts) await removeStairsOnFloor(alt);
-      }
-      // 右側の採用の startFloor / elevation を再計算（振り直しの計算は floorOps.js
-      // computeFloorDeleteReorder に委譲。途中階の上階追加と階移動の振り直し一本化 ステップ1）。
-      const newAdopted = project.planes;
-      if (idx < newAdopted.length) {
-        const updates = computeFloorDeleteReorder(newAdopted, idx);
-        runInAction(() => {
-          for (const u of updates) {
-            const p = project.planeMap.get(u.id);
-            p.name       = u.name;
-            p.startFloor = u.startFloor;
-            p.elevation  = u.elevation;
-          }
-        });
-      }
-      // 昇降機の再採番は既存の後始末（階段削除・階番号振り直し）がすべて終わった後に行う——
-      // ここで例外が出ても階削除自体の後始末は完了済みにする（失敗の表示は関門の層に委ねる）。
-      const renumbered = await renumberEquipmentAfterFloorRemoval({ project, activeGraph: project.activeGraph, removedIds: removedEquipmentIds });
-      if (renumbered.status === 'renumbered') setFloorSyncTick(t => t + 1);
+      // 右側の採用の startFloor / elevation の振り直しは、削除前の配列を filter で「削除後」に
+      // 模して計算する（removeFloor の前に計算して渡す。途中階の上階追加と階移動の振り直し
+      // 一本化 ステップ3・§4.3）。
+      const afterRemoval = adopted.filter(p => p.id !== planeId);
+      const updates = computeFloorDeleteReorder(afterRemoval, idx); // 削除位置が末尾なら内部で空配列
+      // 新階の追従処理（階段の上階同期・昇降機の複製等）と同様、本体・追従処理は
+      // applyFloorOrderChange（floorOrderChange.js）へ委譲する（器具idを読む・下階の階段を
+      // 削除する・昇降機を再採番する・全階の構造反映は floorOrderFollowers 側で行う）。
+      await applyFloorOrderChange(project, {
+        kind: FLOOR_ORDER_KIND.DELETE,
+        updates,
+        removePlane: () => removeFloor(planeId),
+        removedPlane: project.planeMap.get(planeId),
+        below,
+        ui: floorOrderUi(),
+      });
     });
   }
 
@@ -1561,15 +1540,6 @@ const App = observer(() => {
     });
   }
 
-  // 指定階の階段をすべて削除する。アクティブ階はライブグラフ、非アクティブ階は peek して保存。
-  async function removeStairsOnFloor(plane) {
-    const isActive = plane.id === project.activePlaneId;
-    const g = isActive ? project.activeGraph : await floorSwapManager.peek(plane, project.structGraph);
-    if (g.stairs.length === 0) return;
-    runInAction(() => { for (const s of [...g.stairs]) g.removeStair(s.id); });
-    if (!isActive) await saveFloor(plane.id, serializeGraph(g)); // アクティブ階は auto-save に委ねる
-  }
-
   // 検討の並び替え（グループ内）。再採番の計算は floorOps.js（computeAltReorder）に委譲。
   function handleReorderAlt(fromId, toZone, refId) {
     const alts = [...project.planeMap.values()]
@@ -1580,19 +1550,13 @@ const App = observer(() => {
     runInAction(() => { for (const u of updates) { project.planeMap.get(u.id).altIndex = u.altIndex; } });
   }
 
-  // 階変更。再採番の計算は floorOps.js（computeFloorChangeReorder）に委譲。
+  // 階変更。再採番の計算は floorOps.js（computeFloorChangeReorder）に委譲し、書き戻しは
+  // applyPlaneMetas（floorOps.js）を使う（途中階の上階追加と階移動の振り直し一本化 ステップ3）。
   function handleFloorChange(planeId, newStartFloor) {
     setFloorChangeDlg(null);
     const updates = computeFloorChangeReorder(project.planes, planeId, newStartFloor);
     if (!updates) return;
-    runInAction(() => {
-      for (const u of updates) {
-        const p = project.planeMap.get(u.id);
-        p.name       = u.name;
-        p.startFloor = u.startFloor;
-        p.elevation  = u.elevation;
-      }
-    });
+    applyPlaneMetas(project, updates);
   }
 
   // ---- 三斜 線分長さ確定（NumPad/テキスト入力からの確定） ----

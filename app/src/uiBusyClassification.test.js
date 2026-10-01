@@ -99,11 +99,6 @@ const EXEMPT = [
       + 'awaitした後setActiveStructSlotKey（React state）を書くのみで、graph/IDBは書かない。対象外。',
   },
   {
-    name: 'syncNewFloorFromSource',
-    reason: '呼び出し元はexecuteAddUpper/handleAddFloorConfirm（いずれもwithFloorAddUndo経由でGATEDのEXEMPT）のみ。'
-      + '関門化済みの呼び出し元（runBusyの中）から呼ばれる内部関数のため対象外（入力規制ステップ6）。',
-  },
-  {
     name: 'collectFloorBytes',
     reason: '呼び出し元はwithFloorAddUndo（GATED）のみ。関門化済みの呼び出し元（runBusyの中）から呼ばれる'
       + '内部関数のため対象外（入力規制ステップ6）。',
@@ -118,11 +113,6 @@ const EXEMPT = [
     name: 'handleAddFloorConfirm',
     reason: '呼び出し元はAddFloorDialogのonConfirm（guardUiで包装済み）のみ。本体はexecuteAddUpper/withFloorAddUndo'
       + '（既に関門内で自走）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない。恒久的に対象外（入力規制ステップ6）。',
-  },
-  {
-    name: 'removeStairsOnFloor',
-    reason: '呼び出し元はrunDeleteFloor（GATED）のみ。関門化済みの呼び出し元（runBusyの中）から呼ばれる'
-      + '内部関数のため対象外（入力規制ステップ6）。',
   },
   {
     name: 'runDeleteCenterLine',

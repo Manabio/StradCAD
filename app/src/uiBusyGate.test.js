@@ -168,36 +168,34 @@ test('【不変条件・F1】App.jsx: runDeleteFloor（階削除の本体）はt
   assert.ok(firstBlocksIdx >= 0, 'blocksFloorRemovalによる事前判定が無い');
   const secondBlocksIdx = body.indexOf('blocksFloorRemoval(', firstBlocksIdx + 1);
   assert.ok(secondBlocksIdx >= 0, '切替後にblocksFloorRemovalを再判定していない（切替失敗を検知できない）');
-  const removeIdx = body.indexOf('await removeFloor(planeId)');
+  // removeFloorの実呼び出しは applyFloorOrderChange へ渡す removePlane クロージャの中
+  // （途中階の上階追加と階移動の振り直し一本化 ステップ3。実体の削除はfloorOrderChange.js側が
+  // await removePlane() で呼ぶ）。
+  const removeIdx = body.indexOf('removeFloor(planeId)');
   assert.ok(removeIdx >= 0, 'removeFloorの呼び出しが見つからない');
   assert.ok(trySwitchIdx < secondBlocksIdx && secondBlocksIdx < removeIdx,
     'trySwitchFloor→blocksFloorRemoval再判定→removeFloorの順である必要がある');
 });
 
-// 削除可否の判定の後・removeFloorの前にreadFloorEquipmentIdsで消す階の器具行idを読み、
-// removeFloorの後は既存の後始末（直下階の階段削除・右側の採用階の階番号振り直し）をすべて終えてから
-// renumberEquipmentAfterFloorRemovalで番号を詰め直す——再採番が失敗しても階削除自体の後始末は
-// 完了済みにするため。
-test('【不変条件】App.jsx: runDeleteFloor は 削除可否の判定 < readFloorEquipmentIds < removeFloor < 既存の後始末（階段削除・階番号振り直し） < renumberEquipmentAfterFloorRemoval の順で呼ぶ', () => {
+// 削除可否の判定の後、既存階の振り直し（afterRemoval・updates）を removeFloor の前に計算し、
+// 本体・追従処理（器具idを読む・階段削除・振り直しの書き戻し・昇降機再採番・構造反映）は
+// applyFloorOrderChange（floorOrderChange.js）へ一括委譲する（途中階の上階追加と階移動の
+// 振り直し一本化 ステップ3）。
+test('【不変条件】App.jsx: runDeleteFloor は 削除可否の判定 < afterRemoval/updatesの計算 < applyFloorOrderChange(kind: DELETE) の順で呼ぶ', () => {
   const appSrc = fs.readFileSync(appSrcPath, 'utf8');
   const body = extractFunctionBody(appSrc, 'async function runDeleteFloor');
 
-  assert.match(body, /^\s*const removedEquipmentIds = await readFloorEquipmentIds\(project, project\.planeMap\.get\(planeId\)\);\s*$/m,
-    'readFloorEquipmentIdsの呼び出し行が1行まるごとの形で見つからない');
-  assert.match(body, /^\s*const renumbered = await renumberEquipmentAfterFloorRemoval\(\{ project, activeGraph: project\.activeGraph, removedIds: removedEquipmentIds \}\);\s*$/m,
-    'renumberEquipmentAfterFloorRemovalの呼び出し行が1行まるごとの形で見つからない');
-  assert.match(body, /^\s*if \(renumbered\.status === 'renumbered'\) setFloorSyncTick\(t => t \+ 1\);\s*$/m,
-    'renumbered.status===\'renumbered\'のときだけsetFloorSyncTickする行が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*const afterRemoval = adopted\.filter\(p => p\.id !== planeId\);\s*$/m,
+    'afterRemoval = adopted.filter(p => p.id !== planeId); が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*const updates = computeFloorDeleteReorder\(afterRemoval, idx\);.*$/m,
+    'computeFloorDeleteReorder(afterRemoval, idx) の呼び出しが1行まるごとの形で見つからない');
 
   const secondBlocksIdx = body.indexOf('blocksFloorRemoval(', body.indexOf('blocksFloorRemoval(') + 1);
-  const readIdx = body.indexOf('const removedEquipmentIds = await readFloorEquipmentIds(project, project.planeMap.get(planeId));');
-  const removeIdx = body.indexOf('await removeFloor(planeId)');
-  const stairsIdx = body.indexOf('await removeStairsOnFloor(below);');
-  const renameLoopIdx = body.indexOf('const newAdopted = project.planes;');
-  const renumberIdx = body.indexOf('const renumbered = await renumberEquipmentAfterFloorRemoval({ project, activeGraph: project.activeGraph, removedIds: removedEquipmentIds });');
-  assert.ok(secondBlocksIdx >= 0 && readIdx >= 0 && removeIdx >= 0 && stairsIdx >= 0 && renameLoopIdx >= 0 && renumberIdx >= 0
-    && secondBlocksIdx < readIdx && readIdx < removeIdx && removeIdx < stairsIdx && stairsIdx < renameLoopIdx && renameLoopIdx < renumberIdx,
-    '削除可否の判定 < readFloorEquipmentIds < removeFloor < 既存の後始末（階段削除・階番号振り直し） < renumberEquipmentAfterFloorRemoval の順になっていない');
+  const afterRemovalIdx = body.indexOf('const afterRemoval = adopted.filter(p => p.id !== planeId);');
+  const applyIdx = body.indexOf('applyFloorOrderChange(project, {');
+  assert.ok(secondBlocksIdx >= 0 && afterRemovalIdx >= 0 && applyIdx >= 0
+    && secondBlocksIdx < afterRemovalIdx && afterRemovalIdx < applyIdx,
+    '削除可否の判定 < afterRemoval/updatesの計算 < applyFloorOrderChange の順になっていない');
 });
 
 // ================================================================

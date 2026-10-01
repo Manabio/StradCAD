@@ -234,7 +234,7 @@ export const ERR_ELEVATOR_COPY_FAILED = 'ERR_ELEVATOR_COPY_FAILED';
 export const ERR_ELEVATOR_COPY_FAILED_MESSAGE = '昇降機の複製に失敗しました。';
 
 // 階追加時、直下階の器具行の一部を新階へ複製できなかった（区画できない・新階の階段等と衝突）場合の
-// 通知文言（拒否ではなくトースト表示のみ。App.jsx syncNewFloorFromSource が使う）。
+// 通知文言（拒否ではなくトースト表示のみ。floorOrderChange.js の elevator follower が使う）。
 export const ERR_ELEVATOR_COPY_SKIPPED = (floorName, count) =>
   `${floorName}へ複製できなかった昇降機があります（${count}基）。`;
 

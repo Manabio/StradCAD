@@ -276,8 +276,12 @@ export function collectPlaneMetas(project) {
   }));
 }
 
-// metas（collectPlaneMetasの戻り値）を project.planeMap へ書き戻す。project.planeMap に存在しない
-// id は無視する（undoで追加階を削除した後に呼ぶため、metas側にだけ存在するidがあり得る）。
+// metas（collectPlaneMetasの戻り値、または renumberPlanesFrom 系の更新一覧）を project.planeMap へ
+// 書き戻す。project.planeMap に存在しない id は無視する（undoで追加階を削除した後に呼ぶため、
+// metas側にだけ存在するidがあり得る）。stories が undefined のエントリ（renumberPlanesFrom 系の
+// 更新一覧はstoriesを持たない）では stories を書かない（途中階の上階追加と階移動の振り直し
+// 一本化 ステップ3。handleReorderFloor・handleFloorChange・runDeleteFloorの振り直しループも
+// 本関数へ寄せるため）。
 export function applyPlaneMetas(project, metas) {
   runInAction(() => {
     for (const m of metas) {
@@ -286,7 +290,7 @@ export function applyPlaneMetas(project, metas) {
       plane.name       = m.name;
       plane.startFloor = m.startFloor;
       plane.elevation  = m.elevation;
-      plane.stories    = m.stories;
+      if (m.stories !== undefined) plane.stories = m.stories;
     }
   });
 }
