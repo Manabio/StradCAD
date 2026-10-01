@@ -23,7 +23,7 @@ import { selfWallSegments, findBeamAnchorCL, wallBeamAxisExcludeKey, bracketExte
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
 import { beamGridCells } from './framingCells.js';
 import {
-  woodBeamDepthForSpans, woodBeamSectionForDepth, crossingBeamLoadCoords,
+  woodBeamDepthForSpans, woodBeamSectionForDepth, isValidManualDepth, crossingBeamLoadCoords,
   mergeWallIntervals, throughBeamRuns, propagateBeamDepths, pointsOnWallLines, columnSplitPoints,
   columnSupportBeamCandidates, beamWallCrossPoints, WALL_JUNCTION_TOL_MM, sillTopLevelOffsetMm,
   jambColumnPositions, rectsOverlap, subtractCoveredSpan, supportSpanColumnPositions, mergePrimaryBeamRuns,
@@ -1947,14 +1947,6 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = [], option
     clearBeamDepthMarks(beams, marks);
   }
   return updated;
-}
-
-/**
- * 有効な成の手入力＝有限の数で、かつ材幅以上（0・負数・幅未満・NaN・文字列・Infinity は「手入力なし」扱い）。
- * 書き戻し・excess・表示用の値の判定はすべてこの1関数を通す。woodManualDepthMm 自体は書き換えない。
- */
-function isValidManualDepth(m, columnWidth) {
-  return Number.isFinite(m) && m >= columnWidth;
 }
 
 /**

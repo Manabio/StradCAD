@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RoomFeature } from '../core/constants.js';
 import {
-  woodBeamDepthMm, woodBeamSectionKey, woodBeamSectionForDepth, woodBeamDepthForSpans, crossingBeamLoadCoords,
+  woodBeamDepthMm, woodBeamSectionKey, woodBeamSectionForDepth, isValidManualDepth, woodBeamDepthForSpans, crossingBeamLoadCoords,
   mergeWallIntervals, subtractCoveredSpan, throughBeamRuns, columnSplitPoints, propagateBeamDepths, columnSupportBeamCandidates,
   beamWallCrossPoints, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
   wallRunFaces, faceStudPositions, sillTopLevelOffsetMm, jambAxisValue, jambColumnPositions, rectsOverlap,
@@ -81,6 +81,17 @@ test('sectionCatalog: 木造エントリは正角（90/105/120）と「正角幅
     assert.ok([90, 105, 120].includes(s.width), `${s.key}: 幅は正角材の寸法`);
     assert.ok(s.height >= s.width, `${s.key}: 成は幅以上`);
     assert.equal(s.key, `WOOD-${s.width}x${s.height}`);
+  }
+});
+
+test('isValidManualDepth: 有限の数で幅（有限の正の数）以上だけ有効', () => {
+  assert.equal(isValidManualDepth(360, 120), true);
+  assert.equal(isValidManualDepth(120, 120), true, '幅ちょうど');
+  for (const bad of [0, -1, 100, NaN, '360', Infinity, null, undefined]) {
+    assert.equal(isValidManualDepth(bad, 120), false, `m=${String(bad)}`);
+  }
+  for (const w of [null, undefined, NaN, 0, -120, '120', Infinity]) {
+    assert.equal(isValidManualDepth(360, w), false, `幅=${String(w)}`);
   }
 });
 

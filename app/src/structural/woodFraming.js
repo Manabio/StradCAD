@@ -61,6 +61,18 @@ export function woodBeamSectionForDepth(depthMm, columnWidthMm) {
 }
 
 /**
+ * 有効な成の手入力＝有限の数で、かつ材幅（有限の正の数）以上（0・負数・幅未満・NaN・文字列・Infinity・
+ * 幅が非数/0以下は「手入力なし」扱い）。書き戻し・excess・表示用の値（woodAutoFill.js）と梁カードの
+ * 表示（woodBeamDepthInput.js）の判定はすべてこの1関数を通す。woodManualDepthMm 自体は書き換えない。
+ * @param {*} m - woodManualDepthMm
+ * @param {number} columnWidthMm
+ * @returns {boolean}
+ */
+export function isValidManualDepth(m, columnWidthMm) {
+  return Number.isFinite(m) && Number.isFinite(columnWidthMm) && columnWidthMm > 0 && m >= columnWidthMm;
+}
+
+/**
  * 梁の断面キー（材幅＝柱同寸 × 梁成表の成）。「支持間距離と中間荷重から梁断面を決める」という
  * 呼び出し側の判断をここ1か所に置く（生成側が別式で組み直さないため）。
  * @param {number} spanMm

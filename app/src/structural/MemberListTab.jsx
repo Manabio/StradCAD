@@ -13,8 +13,9 @@ import {
   MEMBER_GROUPS, REMOVE_FN_BY_MAP, FIELD_DEFS_BY_CATEGORY,
   materialLabel, sectionAspectRatio, sectionIconShape, memberSymbol, memberSignature, memberSizeKey,
   FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME, UNNUMBERED_TAG, memberGroupKey, noJoinSignatureFor, joinSignatureFor,
-  memberOrderKey, isIndividuallyNumbered,
+  memberOrderKey, isIndividuallyNumbered, isMemberNumberLocked,
 } from './memberCatalog.js';
+import { showsWoodBeamDepthFields, woodBeamDepthOptions, woodBeamDepthFieldView } from './woodBeamDepthInput.js';
 import { alignToOuterFace, isRigidFrameStructure, beamAxisCenterLines,
   autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign, resolveLowestGraph } from './structuralAutoFill.js';
 import { addManualColumn, addManualFooting, addManualBeam } from './manualMemberAdd.js';
@@ -33,7 +34,7 @@ import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
 import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
-import { foundationOptionsFor, rulesFor, woodColumnWidthMm, columnWidthMm } from './structureRules.js';
+import { foundationOptionsFor, rulesFor, woodColumnWidthMm, columnWidthMm, resolvedBeamColumnWidthMm } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
 import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth, columnWidthChangeNotice } from './columnWidthScope.js';
 
@@ -832,6 +833,9 @@ const MemberCard = observer(({
   // ——断面が柱寸・梁成表から自動で決まり、部材ごとの分割・統合に意味が無いため。「削除」は残す。
   // 柱カード（woodColumnCard）も同じ理由で適用範囲・統合を出さない（削除の扱いだけ下の削除ボタンで分岐）。
   const hideScopeAndMerge = (group.mapName === 'beamMap' || woodColumnCard) && fieldCtx.woodFixedSection;
+  // 在来木造の梁の部材番号は入力不可（ユーザー裁定2026-10-02。理由は memberCatalog.js isMemberNumberLocked）。
+  // 入力欄の disabled と確定処理（commitManualNumber・handleManualFocus）の入口が同じ判定を共用する。
+  const memberNumberLocked = isMemberNumberLocked(representative, group.mapName, fieldCtx);
   // 図上で編集する寸法フィールドはフォームから除外（断面図の editable dim と二重入力になるため）。
   // when を持つフィールド（接合方法＝鉄骨の梁のみ）は条件を満たすときだけ出す。
   const allFields = (FIELD_DEFS_BY_CATEGORY[group.category] ?? [])
@@ -865,6 +869,14 @@ const MemberCard = observer(({
   // 共通カードは従来どおり focusedMember のみ（無ければ「この部材」はdisabledのまま。共通カードの
   // members は同一タグの複数の共通柱を束ねており「自分自身」が1本に定まらないため対象にできない）。
   const columnEntityTarget = isIndividualColumn ? (focusedMember ?? representative) : focusedMember;
+
+  // 在来木造の梁カードの「梁成」「自動梁の対象」欄（表示だけ・入力不可。ユーザー裁定2026-10-02）。
+  // 対象の梁はタップで開いた梁があればそれ、無ければ代表。表示判断は woodBeamDepthInput.js の純関数。
+  const showWoodBeamDepthFields = showsWoodBeamDepthFields(group.mapName, representative, rulesFor(structure));
+  const woodBeamDepthTarget = focusedMember ?? representative;
+  const woodBeamWidth = showWoodBeamDepthFields ? resolvedBeamColumnWidthMm(graph, project) : null;
+  const woodBeamDepthOpts = showWoodBeamDepthFields ? woodBeamDepthOptions(woodBeamWidth) : [];
+  const woodBeamView = showWoodBeamDepthFields ? woodBeamDepthFieldView(woodBeamDepthTarget, woodBeamWidth) : null;
 
   // ---- 適用範囲（分割UI。design-member-numbering-ui.md セクション2）----
   // スコープは sticky にしない: カード展開のたびに（＝isExpanded false→true）、
@@ -1043,6 +1055,7 @@ const MemberCard = observer(({
   const hadGidBeforeEditRef = useRef(false); // 今回の編集セッション開始時点でgidを持っていたか（空confirm時の巻き戻し判定）
 
   function handleManualFocus() {
+    if (memberNumberLocked) return;
     hadGidBeforeEditRef.current = !!representative.numberGroupId;
     setManualDraft(representative.memberNo ?? '');
     setManualDuplicate(false);
@@ -1067,6 +1080,7 @@ const MemberCard = observer(({
     return false;
   }
   function commitManualNumber() {
+    if (memberNumberLocked) { setManualDraft(null); return; } // 在来木造の梁は台帳へ何も書かない（入口の拒否）
     if (manualDraft == null) return;
     const value = manualDraft;
     if (value === (representative.memberNo ?? '')) { setManualDraft(null); return; } // 無変更
@@ -1306,7 +1320,7 @@ const MemberCard = observer(({
                   onFocus={handleManualFocus}
                   onBlur={commitManualNumber}
                   onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                  disabled={readOnly}
+                  disabled={readOnly || memberNumberLocked}
                   style={cellInputStyle}
                 />
                 {manualDuplicate && (
@@ -1351,6 +1365,44 @@ const MemberCard = observer(({
                 </div>
               </div>
             </div>
+          )}
+          {/* 在来木造の梁の「梁成」「自動梁の対象」。表示だけで入力不可（ユーザー裁定2026-10-02。入力の画面は作らない）。 */}
+          {showWoodBeamDepthFields && (
+            <>
+              <div style={cardRowStyle}>
+                <div style={cardFieldStyle}>
+                  <span style={cardLabelStyle}>梁成：</span>
+                  <div style={cardInputWrapStyle}>
+                    <select
+                      value={woodBeamView.depthValue ?? ''}
+                      disabled
+                      style={{ ...cellInputStyle, cursor: 'default' }}
+                    >
+                      <option value="">自動</option>
+                      {woodBeamView.depthValue != null && !woodBeamDepthOpts.includes(woodBeamView.depthValue) && (
+                        <option value={woodBeamView.depthValue}>{woodBeamView.depthValue}</option>
+                      )}
+                      {woodBeamDepthOpts.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <div style={cardRowStyle}>
+                <div style={cardFieldStyle}>
+                  <span style={cardLabelStyle}>自動梁の対象：</span>
+                  <div style={cardInputWrapStyle}>
+                    <select
+                      value={woodBeamView.autoTargetValue}
+                      disabled
+                      style={{ ...cellInputStyle, cursor: 'default' }}
+                    >
+                      <option value="auto">自動</option>
+                      <option value="locked">固定</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </>
           )}
           {/* 在来木造（columnSizing:'fixed'）の非基礎梁は材幅も「下階柱同寸」＝梁を支える1つ下の実体階の
               「各階柱寸法」欄から決まる（conformWoodSections が resolvedBeamColumnWidthMm へそろえる。

@@ -201,6 +201,17 @@ export const FIELD_DEFS_BY_CATEGORY = {
   ],
 };
 
+/**
+ * 部材番号（手入力）を禁止するか（ユーザー裁定2026-10-02）。在来木造（ctx.woodFixedSection）の非基礎梁は
+ * 断面が柱寸と梁成表から自動で決まる（断面欄の disabledWhen と同じ条件）。台帳は断面を含む材寸を再計算の
+ * たびに部材へ書き戻すため（memberGroups.js conformToLedger。台帳の仕様）、手入力で台帳に spec を作ると
+ * 成の自動算定（autoFillWoodBeamDepths）と同じ梁の断面を書き合い再計算が収束しない。
+ * 部材番号を書く確定処理（MemberListTab.jsx commitManualNumber）の入口と入力欄の disabled が共用する。
+ */
+export function isMemberNumberLocked(entity, mapName, ctx) {
+  return mapName === 'beamMap' && ctx?.woodFixedSection === true && entity?.role !== 'foundation';
+}
+
 // ================================================================
 // 部材番号の「材寸グループ採番」（structural/memberNumbering.js・memberGroups.js が使う）
 //
