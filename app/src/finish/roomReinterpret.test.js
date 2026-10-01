@@ -592,6 +592,48 @@ test('reinterpretRoomsOnEntry: 昇降路（feature===ELEVATOR_EQUIPMENT）は辺
   assert.ok(![...hall.cells].includes(shaftCellKey), '隣の部屋（ホール）が昇降路のセルを吸収してはいけない');
 });
 
+// ---- 屋根（RoomFeature.ROOF。ステップB1a）: 再解釈除外（固定セル）。昇降路と同じ構成で検証する ----
+test('【B1a・I2】reinterpretRoomsOnEntry: 屋根（kind=EXTERIOR・feature=ROOF）は辺喪失でも動かず、隣の屋内部屋も屋根を吸収しない／屋根も屋内を吸わない', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const opts = { labeled: false, discipline: Discipline.ARCH };
+  [0, 4000, 6000].forEach(x => graph.addCenterLine(CenterLineType.VERTICAL, x, opts));
+  const hs = [0, 2000, 4000].map(y => graph.addCenterLine(CenterLineType.HORIZONTAL, y, opts));
+  const hallCells = [
+    worldToCell(2000, 1000, graph).key,
+    worldToCell(2000, 3000, graph).key,
+    worldToCell(5000, 3000, graph).key,
+  ];
+  const hall = graph.addRoom(new Set(hallCells), 'ホール');
+  const roof = graph.addRoom(new Set([worldToCell(5000, 1000, graph).key]), '屋根');
+  roof.setKind(RoomKind.EXTERIOR);
+  roof.setFeature(RoomFeature.ROOF);
+  const [roofCellKey] = roof.cells;
+
+  graph.removeCenterLine(hs[1].id); // 屋根とホール右下の境界の横CL(y=2000)
+  reinterpretRoomsOnEntry(graph);
+
+  assert.ok(graph.roomMap.has(roof.id), '屋根は吸収されず残る');
+  assert.deepEqual([...roof.cells], [roofCellKey], '屋根のセルは変更されない（現状維持）');
+  assert.equal(roof.referenceRoomIds.size, 0, '屋根は部分指定にならない');
+  assert.equal(roof.kind, RoomKind.EXTERIOR);
+  assert.equal(roof.feature, RoomFeature.ROOF);
+  assert.ok(graph.roomMap.has(hall.id), 'ホールも残る');
+  assert.ok(![...hall.cells].includes(roofCellKey), '屋内部屋（ホール）が屋根のセルを吸収してはいけない');
+  const ownedByBoth = [...hall.cells].filter(k => roof.cells.has(k));
+  assert.deepEqual(ownedByBoth, [], 'I2: 屋根セルは他の部屋と二重に所有されない');
+});
+
+test('【B1a】findUnresolvableCells: 屋根も再解釈除外のため、片辺の参照だけで復元不能として返す（【対照】通常の部屋は復元可能＝上のテスト）', () => {
+  const { graph, cellA } = makeTwoCellGraph();
+  const room = graph.addRoom(new Set([cellA]), '屋根');
+  room.setKind(RoomKind.EXTERIOR);
+  room.setFeature(RoomFeature.ROOF);
+  const [, , rightId] = cellA.split(':');
+
+  assert.deepEqual(findUnresolvableCells(graph, rightId), [cellA],
+    '屋根は再解釈で救済されないため、片辺の参照だけで復元不能扱い（昇降路と同じ既知の限界）');
+});
+
 // ================================================================
 // findUnresolvableCells（スラブ拡張。H2・2026-09-27）
 // ================================================================

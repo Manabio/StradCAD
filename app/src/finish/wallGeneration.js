@@ -8,7 +8,7 @@
 import { RoomKind, RoomFeature, centerLineKind } from '@core';
 import { spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { worldToCell, dividerCLsBetween, isActiveAcrossRange } from './gridCells.js';
-import { buildCellToRoom } from './edgeClassify.js';
+import { buildCellToRoom, isEnclosureOutside } from './edgeClassify.js';
 import { wallRunFreeEnds, WALL_JUNCTION_TOL_MM } from '../structural/woodFraming.js';
 
 export const DEFAULT_WALL_BASE   = 90;    // mm
@@ -236,10 +236,11 @@ function classifyExteriorEdge(room, p, graph, cellToRoom) {
   if (room.kind === RoomKind.EXTERIOR) return null;
 
   const outsideRoom = findOutsideRoom(p, graph, cellToRoom);
-  const outsideKind = outsideRoom?.kind ?? null;
 
-  if (outsideKind === null) return 'outer';
-  if (outsideKind === RoomKind.EXTERIOR) return 'courtyard';
+  // 部屋なし・屋根（feature===ROOF）は同値——建物外周として扱う（屋根は壁を持たない屋外だが、
+  // 外壁は屋根セルの縁を「無割当に面する辺」として引き直す。isEnclosureOutside）。
+  if (isEnclosureOutside(outsideRoom)) return 'outer';
+  if (outsideRoom.kind === RoomKind.EXTERIOR) return 'courtyard';
   return null;
 }
 

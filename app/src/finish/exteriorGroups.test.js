@@ -178,3 +178,69 @@ test('buildExteriorGroups: 並び順は「行を持つ群は行の出現順」�
   assert.deepEqual(groups[2].rows, []);
   assert.deepEqual(groups[3].rows, []);
 });
+
+// ---- 屋根（RoomFeature.ROOF。ステップB1a）: 専用の群（type:'roof'）を先頭に出す ----
+test('buildExteriorGroups: 各群は type を持つ（手入力=part・roomId連動=room・屋外部屋の合成群=room）', () => {
+  const graph = makeGraph();
+  const withRows = makeRoom(graph, 'テラス', { kind: RoomKind.EXTERIOR });
+  const noRows   = makeRoom(graph, 'バルコニー', { kind: RoomKind.EXTERIOR });
+  graph.addExteriorRow('exteriorRows', '外壁');
+  graph.addExteriorRow('exteriorRows', 'テラス', withRows.id);
+
+  const groups = buildExteriorGroups(input(graph));
+
+  assert.deepEqual(groups.map(g => [g.key, g.type]), [
+    ['part:外壁', 'part'],
+    [`room:${withRows.id}`, 'room'],
+    [`room:${noRows.id}`, 'room'],
+  ]);
+});
+
+test('isExteriorRoomGroupRoom: 屋根（kind=EXTERIOR・feature=ROOF）は屋外部屋の群の対象外', () => {
+  const graph = makeGraph();
+  const roof = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  assert.equal(isExteriorRoomGroupRoom(roof), false, '仕上げレベル行・改名入力・区分セレクタを出さない');
+});
+
+test('buildExteriorGroups: 屋根は type:\'roof\'・見出し「屋根」・行なしの群になり、屋外部屋の群に混ざらない', () => {
+  const graph = makeGraph();
+  const roof = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+
+  const groups = buildExteriorGroups(input(graph));
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].type, 'roof');
+  assert.equal(groups[0].key, `roof:${roof.id}`);
+  assert.equal(groups[0].roomId, roof.id);
+  assert.equal(groups[0].part, '屋根');
+  assert.deepEqual(groups[0].rows, []);
+  assert.equal(groups.filter(g => g.type === 'room').length, 0, '屋外部屋の群として二重に出ない');
+});
+
+test('buildExteriorGroups: 並びは 下屋（roomOrder順）→ 既存の群（行を持つ群→行0件の屋外部屋）', () => {
+  const graph = makeGraph();
+  // roomOrder: terrace → roof1 → balcony → roof2
+  const terrace = makeRoom(graph, 'テラス', { kind: RoomKind.EXTERIOR });
+  const roof1   = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  const balcony = makeRoom(graph, 'バルコニー', { kind: RoomKind.EXTERIOR });
+  const roof2   = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  graph.addExteriorRow('exteriorRows', '外壁');
+  graph.addExteriorRow('exteriorRows', 'テラス', terrace.id);
+
+  const groups = buildExteriorGroups(input(graph));
+
+  assert.deepEqual(groups.map(g => g.key), [
+    `roof:${roof1.id}`, `roof:${roof2.id}`,
+    'part:外壁', `room:${terrace.id}`, `room:${balcony.id}`,
+  ]);
+  assert.deepEqual(groups.map(g => g.type), ['roof', 'roof', 'part', 'room', 'room']);
+});
+
+test('【失敗系】buildExteriorGroups: 屋内の部屋・Roomが無い屋根id（roomOrder にだけある）は屋根の群を作らない', () => {
+  const graph = makeGraph();
+  makeRoom(graph, '部屋', { kind: RoomKind.INTERIOR, feature: null });
+
+  const groups = buildExteriorGroups({ rows: [], rooms: graph.rooms, roomOrder: [...graph.roomOrder, 'ghost-roof'] });
+
+  assert.equal(groups.length, 0);
+});

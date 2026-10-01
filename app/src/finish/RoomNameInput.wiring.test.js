@@ -56,6 +56,20 @@ test('【不変条件】階段 option の disabled は opt.value === RoomFeature
     '階段 option の disabled 条件が想定の形で見つからない');
 });
 
+// 屋根（ステップB1a）: 屋根を選ぶと区分は屋外に固定される。判断は roomNamingOptions.js の純関数
+// （effectiveDialogKind・isKindLockedByFeature）が持ち、jsx は呼ぶだけ（コメント行を除いた本体に対する
+// 1行まるごと一致）。
+const codeLines = codeOnly.split(/\r?\n/).map(l => l.trim());
+test('【不変条件・B1a】確定は kind に effectiveDialogKind(kindSel, featureSel) を渡す（屋根は屋外へ強制）', () => {
+  assert.ok(codeLines.includes('onConfirm(room.id, { name: value.trim(), kind: effectiveDialogKind(kindSel, featureSel), feature: featureSel });'),
+    'confirm() の onConfirm 呼び出しが想定の形で見つからない');
+});
+
+test('【不変条件・B1a】区分 select は表示値が effectiveDialogKind(...)・disabled が isKindLockedByFeature(featureSel)', () => {
+  assert.ok(codeLines.includes('value={effectiveDialogKind(kindSel, featureSel)}'), '区分 select の value が見つからない');
+  assert.ok(codeLines.includes('disabled={isKindLockedByFeature(featureSel)}'), '区分 select の disabled が見つからない');
+});
+
 // ステップ1（部屋編集の導線変更）: 部屋名ダイアログは新規Roomの命名専用にし、削除ボタン・
 // 確認ダイアログを廃止する（削除は仕上げ表・内部タブのカードの削除ボタンに一本化）。
 test('【不変条件】削除ボタン・onDelete・確認ダイアログが存在しない（新規Room命名専用ダイアログ化）', () => {

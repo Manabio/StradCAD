@@ -7,7 +7,7 @@
 // 内側線として扱ってしまう。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomKind, RoomFeature } from '@core';
 import { LANE_CLEARANCE, laneStairSideThinProps } from './stairUnderWalls.js';
 import { cellsBeyondBreak } from './stairGeometry.js';
 import { regenerateWalls, loadMaterialMap } from '../wallRegeneration.js';
@@ -242,4 +242,51 @@ test('【失敗系・QA U1・トートロジー回避】regenerateWalls: 片方�
   assert.equal(graph.walls.length, 27, '2a指定を外すと総壁本数は26ではなく27になる');
   assert.equal(g2.under.generatedWallIds.size, 3, '通常部屋化したunder2はステップ2の対称壁本数になる（2aの4本とは異なる）');
   assert.equal(g2.room.generatedWallIds.size, 6, 'claimが働かなくなり隣室（階段ペアRoom）の壁本数が4本→6本に変わる');
+});
+
+// ---- 屋根（RoomFeature.ROOF。ステップB1a）の I0: 2a（階段下部屋）の委譲判定でも、屋根セルは
+// 「外側の部屋なし（無割当）」と同値。階段下部屋（beyond セル x:1000..2000,y:1500..4500）の右辺
+// （footprint 境界 x=2000）の外側に置いた1セル（x:2000..3000,y:1500..4500）を、屋根／無割当／通常の
+// 屋内部屋にした3配置で regenerateWalls の全壁ダイジェストを比べる。
+// 屋根・無割当は 2a が自分で壁を持つ（委譲しない）。通常の屋内部屋だと相手の壁へ委譲し壁が変わる（対照）。 ----
+async function digestWithNeighbor(mode) {
+  const { graph, stair, under } = makeStairUnderFixture();
+  const x1 = [...graph.shapeMap.values()].find(s => s.centerLineType === CenterLineType.VERTICAL && s.value === 2000);
+  const ym = [...graph.shapeMap.values()].find(s => s.centerLineType === CenterLineType.HORIZONTAL && s.value === 1500);
+  const y1 = [...graph.shapeMap.values()].find(s => s.centerLineType === CenterLineType.HORIZONTAL && s.value === 4500);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const key = `${x1.id}:${ym.id}:${x2.id}:${y1.id}`;
+  if (mode === 'roof') {
+    const r = graph.addRoom(new Set([key]), '屋根');
+    r.setKind(RoomKind.EXTERIOR);
+    r.setFeature(RoomFeature.ROOF);
+  } else if (mode === 'interior') {
+    graph.addRoom(new Set([key]), '居間');
+  }
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, stairUnderEntries: [{ stair, room: under, splitCLIds: new Set() }] });
+  // CL id は配置ごとに違うため、軸CLは id でなく値で表して比べる（wallDigest は id 版）。
+  const digest = graph.walls
+    .map(w => ({
+      axis: w.axisCL.value, isVertical: w.isVertical, axisOffset: w.axisOffset,
+      startOffset: w.startOffset, endOffset: w.endOffset, c1: w.coord1, c2: w.coord2,
+      backingDepth: w.backingDepth, finishSide: w.finishSide,
+    }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return { digest, underWalls: under.generatedWallIds.size };
+}
+
+test('【B1a・I0】regenerateWalls: 階段下部屋（2a）の外側が屋根セルでも、外側が無割当の配置と全壁ダイジェストが一致する（委譲しない）', async () => {
+  const roof = await digestWithNeighbor('roof');
+  const none = await digestWithNeighbor('none');
+  assert.ok(none.underWalls > 0, '前提: 2a壁が生成される');
+  assert.equal(roof.underWalls, none.underWalls, '2a壁の本数が一致する');
+  assert.deepEqual(roof.digest, none.digest);
+});
+
+test('【B1a・I0・対照】regenerateWalls: 階段下部屋（2a）の外側が通常の屋内部屋だと委譲され、無割当（＝屋根）とは壁が一致しない', async () => {
+  const interior = await digestWithNeighbor('interior');
+  const none = await digestWithNeighbor('none');
+  assert.notDeepEqual(interior.digest, none.digest,
+    '前提: この配置では隣室の有無が2a壁に効く（効かないなら上のテストは検出力が無い）');
 });

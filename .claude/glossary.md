@@ -36,7 +36,10 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 構造モードのみに存在する合成Plane。`project.planes`/`orderedTabs`から除外、`project.roofPlane`で個別アクセス。
 
 ## kind / feature（Roomの2軸区分）
-`kind`＝屋内/屋外（内外判定はこちらのみ参照）。`feature`＝階段/吹抜け/階段吹抜け/昇降機/なし（属性）。旧enumの`void`は読込時に「屋内+吹抜け」へ移行される。設計意図は`.claude/data-model.md`。
+`kind`＝屋内/屋外（内外判定はこちらのみ参照。例外は屋根）。`feature`＝階段/吹抜け/階段吹抜け/昇降機/屋根/なし（属性）。旧enumの`void`は読込時に「屋内+吹抜け」へ移行される。設計意図は`.claude/data-model.md`。
+
+## 屋根（属性）/ 下屋
+**屋根（属性）**＝`RoomFeature.ROOF`。屋根面がある階のセルに付ける屋外部屋（kind=EXTERIOR固定・名前「屋根」固定）で、壁・境界・2a委譲・展開図・断面の判定では部屋の無いセル（無割当）と同値。仕上げモードの新規の部屋指定でだけ選べる。**下屋**＝セルに付けた屋根すべて（ユーザー裁定。2階建てで1階だけ張り出す下屋は、屋根セルが最上階＝2階に付く。備考「下野」はB2で入れる）。**主屋根**＝セルを持たない最上階の屋根（B3）。8項目（`RoofSpec`）は後続ステップ。設計意図は`.claude/data-model.md`「屋根」節。
 
 ## 昇降機 / 器具 / 昇降路 / 設置階 / グループ
 **昇降機**＝建築基準法上の総称（EV／エスカレーター／DWを含む。並列の選択肢ではない）。**器具**＝EV等1基（`EquipmentRow`）。**昇降路**＝器具が占めるセル集合のRoomで、属性が昇降機（`RoomFeature.ELEVATOR_EQUIPMENT`。`SHAFT_FEATURES`・`isShaftFeature`。床を持たない＝上階スラブの開口。展開図は描かない）。**設置階**＝その器具の行が存在する最下階（保存せず導出）。**グループ**＝同じ器具idを持つ全階の行と昇降路Room。共通仕様「昇降路」（per-floor `shaftWallMaterial`・`shaftSoundproof`）で壁材を一括指定し、部屋個別の内装は持たない・仕上げ表内部タブに出ない。設計意図は`.claude/equipment-model.md`。

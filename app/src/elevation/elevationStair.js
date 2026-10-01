@@ -9,7 +9,7 @@
  */
 import { RoomFeature } from '@core';
 import { roomBounds, worldToCell } from '../finish/gridCells.js';
-import { buildCellToRoom, ADJACENT_SAMPLE_EPS } from '../finish/edgeClassify.js';
+import { buildEnclosureCellToRoom, ADJACENT_SAMPLE_EPS } from '../finish/edgeClassify.js';
 import { stairPortEdges } from '../finish/stair/stairGeometry.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
@@ -79,7 +79,7 @@ function findOverlappingVoidRoom(stairRoom, graph, upperGraph) {
  */
 function resolveUpperCeilingHeight(stair, stairRoom, graph, upperGraph) {
   if (stair) {
-    const cellToRoom = buildCellToRoom(upperGraph);
+    const cellToRoom = buildEnclosureCellToRoom(upperGraph);
     for (const edge of stairPortEdges(stair, graph, ['arrival'])) {
       const mid = (edge.lo + edge.hi) / 2;
       for (const sign of [1, -1]) {

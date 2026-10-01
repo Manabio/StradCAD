@@ -15,9 +15,9 @@ import { equipmentAtCell } from '../finish/equipment/equipmentGeometry.js';
 import { equipmentHighlightKeys } from '../finish/equipment/equipmentTab.js';
 import { buildingEquipmentCatalog, equipmentSpanLabelOf } from '../finish/equipment/buildingEquipment.js';
 import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
-import { ERR_MATERIAL_MISMATCH } from '../error.js';
+import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED } from '../error.js';
 import {
-  RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, applyDefaultBaseboard,
+  RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME, applyDefaultBaseboard,
   ElevatorEquipmentCategory, DEFAULT_EV_USAGE,
 } from '@core';
 import { effectiveStructure, defaultMaterialFor } from '../structural/structureRules.js';
@@ -389,7 +389,8 @@ export class FinishModeState {
   /**
    * 部屋ドラッグから除外する自階階段・昇降路セルの Set（メソッド名は階段専用だった名残で変えていない）。
    * 破れ線先セルのうち、直下階に階段が無い（＝階段下エリア）ものは部屋ドラッグを許容するため
-   * 除外対象から外す。階段吹抜け（STAIR_VOID。最上階の自動管理 Room）のセルも除外する
+   * 除外対象から外す。屋根（ROOF）のセルも除外する（屋根の拡張は削除→指定し直し。屋根と屋内部屋が
+   * 1室に統合される経路を断つ）。階段吹抜け（STAIR_VOID。最上階の自動管理 Room）のセルも除外する
    * （commitDrag の rooms 走査から外れるため、除外しないと二重割当の部屋が作れてしまう）。
    * isShaftFeature を持つ全 Room（昇降路）のセルも除外する——区分・部分指定・器具行の有無を
    * 問わない（旧データの未登録昇降路も同時に除外。2-5・S3裁定Q2）。
@@ -411,7 +412,7 @@ export class FinishModeState {
       }
     }
     for (const room of this.graph.rooms) {
-      if (room.feature !== RoomFeature.STAIR_VOID && !isShaftFeature(room.feature)) continue;
+      if (room.feature !== RoomFeature.STAIR_VOID && !isShaftFeature(room.feature) && !isRoofFeature(room.feature)) continue;
       for (const key of refreshCells(room.cells, this.graph)) stairKeys.add(key);
     }
     return stairKeys;
@@ -630,7 +631,7 @@ export class FinishModeState {
 
     const rooms = this.graph.rooms.filter(r =>
       r.feature !== RoomFeature.STAIR && r.feature !== RoomFeature.STAIR_VOID
-      && r.feature !== RoomFeature.UNDEFINED && !isShaftFeature(r.feature));
+      && r.feature !== RoomFeature.UNDEFINED && !isShaftFeature(r.feature) && !isRoofFeature(r.feature));
     const overlapping = rooms.filter(r => [...cellsOf(r)].some(c => newCells.has(c)));
 
     if (overlapping.length > 0) {
@@ -834,12 +835,22 @@ export class FinishModeState {
       if (reason) { this.lastNamingRejection = reason; return null; }
     }
 
+    // 屋根（ROOF）への新規指定は、未指定エリアからの新規候補だけに限る（部分指定・統合・既存部屋・
+    // 階段・昇降路・他の部屋のセルは拒否。昇降機と同じ「何も変更せず拒否」の流儀）。
+    // 既に屋根の部屋への再確定（wasRoof）は検証しない（セルは動かない）。
+    const toRoof = isRoofFeature(feature);
+    if (toRoof && !isRoofFeature(room.feature)) {
+      const reason = this._roofAssignRejection(room);
+      if (reason) { this.lastNamingRejection = reason; return null; }
+    }
+
     // 新規部屋なら作成前（commitDrag 冒頭）のスナップショットを使い、
     // 「作成＋命名」を1つの undo エントリにまとめる。既存部屋なら現時点から。
     const undoBefore = this._pendingDialogUndo ?? snapshotFinishState(this.graph);
     this._pendingDialogUndo = null;
 
-    room.setKind(kind);
+    // 屋根は区分を屋外に固定する（ダイアログの無効化に頼らず、ここでも強制する）。
+    room.setKind(toRoof ? RoomKind.EXTERIOR : kind);
 
     if (isNewInstall) {
       this.namingRoomId    = null;
@@ -903,7 +914,7 @@ export class FinishModeState {
     } else {
       if (wasStair) this._removeLinkedStair(roomId); // STAIR → null/void: 連動Stairを削除
       room.setFeature(feature ?? null);
-      room.setName(name || (room.kind === RoomKind.EXTERIOR ? '屋外' : '部屋'));
+      room.setName(toRoof ? ROOF_ROOM_NAME : (name || (room.kind === RoomKind.EXTERIOR ? '屋外' : '部屋')));
       this.sessionModifiedRoomIds.add(roomId);
       this.selectedRoomId  = roomId;
       this.selectedStairId = null;
@@ -926,6 +937,30 @@ export class FinishModeState {
   }
 
   /**
+   * 屋根（ROOF）の新規指定の事前検証。拒否理由の文言（error.js）を返す。通れば null。
+   * 1. 新規候補（ダイアログを開いた未指定エリアの Room）でない、または部分指定
+   * 2. 候補のセルが、階段・階段吹抜け・昇降路・屋根のセル、または未定義以外の他の部屋のセルと重なる
+   *    （commitDrag の未指定経路は claimed セルを除くため通常到達しない二重の守り）
+   * 防御のための重複: 「部分指定」と「blocked（階段・昇降路・屋根のセル）」の条件は、後ろの「他の部屋の
+   * セルと重なる」判定でも先に拒否されるため、単独の変異ではテストが赤にならない（意図した重複）。
+   * @returns {string|null}
+   */
+  _roofAssignRejection(room) {
+    const isNewCandidate = this.namingIsNew && this.namingRoomId === room.id;
+    if (!isNewCandidate || room.referenceRoomIds.size > 0) return ERR_ROOF_NOT_UNASSIGNED;
+    const own = refreshCells(room.cells, this.graph);
+    const blocked = this._roomExcludedStairKeys();
+    for (const key of own) if (blocked.has(key)) return ERR_ROOF_NOT_UNASSIGNED;
+    for (const other of this.graph.rooms) {
+      if (other.id === room.id || other.feature === RoomFeature.UNDEFINED) continue;
+      for (const key of refreshCells(other.cells, this.graph)) {
+        if (own.has(key)) return ERR_ROOF_NOT_UNASSIGNED;
+      }
+    }
+    return null;
+  }
+
+  /**
    * 新規階段の構造材の既定。階の実効主構造（structureOverride → 建物全体）の材種が木造・鉄骨なら
    * それ、RC 等・未定なら null（Stair の既定＝木造のまま）。
    * @returns {string|null}
@@ -941,7 +976,10 @@ export class FinishModeState {
    * それ以外（屋内へ切替）: 連動行を削除。
    */
   _syncExteriorRows(room) {
-    if (room.kind === RoomKind.EXTERIOR) {
+    if (isRoofFeature(room.feature)) {
+      // 屋根（I3）: 連動行を作らない。屋外部屋だった時の既存の連動行は消す（外部タブは専用の群を出す）。
+      this.graph.removeExteriorRowsByRoomId(room.id);
+    } else if (room.kind === RoomKind.EXTERIOR) {
       const isStair = room.feature === RoomFeature.STAIR;
       const rows = this.graph.exteriorRows.filter(r => r.roomId === room.id);
       if (rows.length > 0) {
@@ -1049,6 +1087,7 @@ export class FinishModeState {
     const room = this.graph.roomMap.get(roomId);
     if (!room) return;
     if (room.kind !== RoomKind.EXTERIOR || room.feature === RoomFeature.STAIR) return;
+    if (isRoofFeature(room.feature)) return; // 屋根の名前は '屋根' 固定（編集口なし）
     const finalName = name.trim() || '屋外';
     if (room.name === finalName) return; // 無変更
     withFinishUndo(this.graph, () => {

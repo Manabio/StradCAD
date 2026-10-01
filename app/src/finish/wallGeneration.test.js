@@ -7,8 +7,9 @@ import assert from 'node:assert/strict';
 import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind, RoomFeature, SHAFT_FEATURES, edgeKey } from '@core';
 import {
   applyBackingOwnership, computeExternalEdgeParams, generateExteriorWalls, generateRoomWallsFromOutline,
-  isInteriorWallTarget, clipToAxisExtent,
+  isInteriorWallTarget, clipToAxisExtent, computeExteriorWallSegments,
 } from './wallGeneration.js';
+import { buildRoofLayout, ROOF_LAYOUT_SHAPES } from './roofTestFixtures.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -622,4 +623,99 @@ test('【不変条件】clipToAxisExtent: extentLo/Hiが未確定（null）のCL
   const endCL   = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
   const clipped = clipToAxisExtent(axisCL, startCL, 0, endCL, 0, 57.5);
   assert.deepEqual(clipped, { startOffset: 0, endOffset: 0 });
+});
+
+// ================================================================
+// 屋根（RoomFeature.ROOF。ステップB1a）の I0: 屋根セルは壁の判定で「部屋の無いセル（無割当）」と同値。
+// 屋根セルを持つ配置は、同じセルを無割当にした配置と、外壁セグメント・生成壁（全属性。id を除く）が
+// すべて一致する。対照として「同じセルを通常の屋外部屋にした配置」は一致しない（courtyard 扱いで
+// 切替角に壁厚ぶんの欠けが出る＝屋根の例外が効いている）。
+// 比較は安定キー（plain object の JSON）の配列で行う——Wall エンティティの配列を丸ごと
+// assert.deepEqual すると失敗時に MobX グラフ全体を差分表示して OOM になる。
+// ================================================================
+
+const num = (v) => (v == null ? null : Math.round(v * 1000) / 1000);
+
+// 壁の全スカラー属性（id・CL id を除く。軸・端点CLは値で表す）。
+function wallKey(w) {
+  return JSON.stringify({
+    isVertical: w.isVertical, isRoomWall: w.isRoomWall, isExteriorWall: w.isExteriorWall,
+    axis: num(w.axisCL.value), axisOffset: num(w.axisOffset),
+    start: num(w.clStart.value), startOffset: num(w.startOffset),
+    end: num(w.clEnd.value), endOffset: num(w.endOffset),
+    c1: num(w.coord1), c2: num(w.coord2),
+    wallFinish: num(w.wallFinish), backingOffset: num(w.backingOffset), backingDepth: num(w.backingDepth),
+    finishSide: w.finishSide ?? null, bandOffset: num(w.bandOffset),
+  });
+}
+
+function segKey(graph, s) {
+  return JSON.stringify({
+    isVertical: s.isVertical, loopType: s.loopType, axis: num(graph.shapeMap.get(s.axisCLId).value),
+    value: num(s.value), start: num(s.start), end: num(s.end), outwardSign: s.outwardSign,
+  });
+}
+
+// 外壁＋全屋内部屋の内周壁（generateRoomWallsFromOutline）。多重集合として比較するためソートする。
+function wallMultiset(graph, opts) {
+  const walls = [
+    ...generateExteriorWalls(graph, opts),
+    ...graph.rooms.filter(r => r.kind === RoomKind.INTERIOR).flatMap(r => generateRoomWallsFromOutline(graph, r, opts)),
+  ];
+  return walls.map(wallKey).sort();
+}
+
+const ROOF_I0_OPTS = [
+  { label: '通常（RC・S造相当）', opts: {} },
+  { label: '在来木造（wrapFreeEnds＝柱包み）', opts: { wrapFreeEnds: true } },
+  { label: '帯シフト（bandShift=30）', opts: { bandShift: 30 } },
+  { label: '在来木造＋帯シフト', opts: { wrapFreeEnds: true, bandShift: 30 } },
+];
+
+for (const shape of ROOF_LAYOUT_SHAPES) {
+  test(`【I0】屋根セルの配置は無割当の配置と外壁セグメントが一致する（${shape}）`, () => {
+    const roof = buildRoofLayout(shape, 'roof').graph;
+    const none = buildRoofLayout(shape, 'none').graph;
+    const a = computeExteriorWallSegments(roof).map(s => segKey(roof, s)).sort();
+    const b = computeExteriorWallSegments(none).map(s => segKey(none, s)).sort();
+    assert.ok(a.length > 0, '前提: 外壁セグメントが出る');
+    assert.deepEqual(a, b);
+  });
+
+  for (const { label, opts } of ROOF_I0_OPTS) {
+    test(`【I0】屋根セルの配置は無割当の配置と生成壁（全属性）が一致する（${shape}・${label}）`, () => {
+      const roof = wallMultiset(buildRoofLayout(shape, 'roof').graph, opts);
+      const none = wallMultiset(buildRoofLayout(shape, 'none').graph, opts);
+      assert.ok(roof.length > 0, '前提: 壁が生成される');
+      assert.deepEqual(roof, none);
+    });
+  }
+
+  test(`【I0・対照】同じセルを通常の屋外部屋にした配置は無割当の配置と生成壁が一致しない（courtyard 扱い。屋根の例外が効いている。${shape}）`, () => {
+    const exterior = wallMultiset(buildRoofLayout(shape, 'exterior').graph, {});
+    const none = wallMultiset(buildRoofLayout(shape, 'none').graph, {});
+    assert.notDeepEqual(exterior, none);
+  });
+}
+
+test('【I0】band 配置の切替角: 屋根セルに面する辺の外壁は無割当と同じ outer ループで、切替角の壁端が壁厚ぶんはね出す（屋外部屋だと欠ける）', () => {
+  // 屋根: y=0 の水平壁は x=4000 の角へ +57.5 はね出す（4057.5）。通常の屋外部屋は 4000 で止まり欠ける（V1実測）。
+  const topWallEnd = (graph) => Math.max(...generateExteriorWalls(graph)
+    .filter(w => !w.isVertical && w.axisCL.value === 0).map(w => Math.max(w.coord1, w.coord2)));
+  assert.equal(topWallEnd(buildRoofLayout('band', 'roof').graph), 4057.5);
+  assert.equal(topWallEnd(buildRoofLayout('band', 'none').graph), 4057.5);
+  assert.equal(topWallEnd(buildRoofLayout('band', 'exterior').graph), 4000);
+});
+
+test('【I0】屋根セル自身の辺からは壁を作らない（屋根の外周 x=8000・y=0 の屋根側には壁が出ない）', () => {
+  const { graph } = buildRoofLayout('band', 'roof');
+  const walls = generateExteriorWalls(graph);
+  assert.equal(walls.some(w => w.isVertical && w.axisCL.value === 8000), false, '屋根の外周(x=8000)に壁は出ない');
+  assert.equal(walls.some(w => !w.isVertical && w.axisCL.value === 0 && Math.min(w.coord1, w.coord2) >= 4000), false,
+    '屋根セル上辺(y=0, x>=4000)に壁は出ない');
+});
+
+test('【失敗系】屋根の部屋は内周壁の生成対象外（isInteriorWallTarget=false。kind=EXTERIOR）', () => {
+  const { extra } = buildRoofLayout('band', 'roof');
+  assert.equal(isInteriorWallTarget(extra, new Set()), false);
 });

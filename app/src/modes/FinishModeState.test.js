@@ -11,6 +11,8 @@ import { takeUnresolvedCodes, addDocumentAliases, clearDocumentAliases } from '.
 import { worldToCell, refreshCells } from '../finish/gridCells.js';
 import { buildExteriorGroups } from '../finish/exteriorGroups.js';
 import { undoManager } from '../undoManager.js';
+import { wallFreshnessKey } from '../finish/wallFreshnessKey.js';
+import { ERR_ROOF_NOT_UNASSIGNED } from '../error.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -721,4 +723,262 @@ test('【ステップ7d QA指摘Minor-4】FinishModeState.init: 内装・境界�
     result.catalogResolveRows.some(r => r.kind === CatalogKind.BOUNDARY_MASTER),
     '境界マスターのunresolved-code行は現れるはず',
   );
+});
+
+// ================================================================
+// 屋根（ステップB1a。RoomFeature.ROOF）: 新規の部屋指定（未指定セルのドラッグ→ダイアログ確定）でだけ
+// 付く。kind=EXTERIOR 固定・name='屋根' 固定・連動 exteriorRows なし（I3）・ドラッグ対象外（I2）。
+// ================================================================
+
+// 3セル横並び（makeThreeCellGraph）の指定セルをドラッグ→ダイアログを開く→ROOFで確定する。
+// ダイアログが送ってくる payload は kind=INTERIOR のまま（区分 select の無効化に頼らず applyNaming が強制する）。
+function assignRoofViaDrag(state, graph, x, y) {
+  state.startDrag(x, y);
+  state.commitDrag();
+  const id = state.namingRoomId;
+  assert.ok(id, '前提: 未指定セルのドラッグで新規Roomのダイアログが開く');
+  state.applyNaming(id, { name: '', kind: RoomKind.INTERIOR, feature: RoomFeature.ROOF });
+  return graph.roomMap.get(id);
+}
+
+test('【B1a】applyNaming: 新規の未指定セルに属性ROOFで確定すると kind=EXTERIOR・name=屋根・連動exteriorRowsなし（payloadのkindがINTERIORでも強制）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+
+  assert.equal(state.lastNamingRejection, null);
+  assert.equal(roof.feature, RoomFeature.ROOF);
+  assert.equal(roof.kind, RoomKind.EXTERIOR, '屋根は区分が屋外に固定される（payload=INTERIORでも）');
+  assert.equal(roof.name, '屋根', '屋根の名前は固定');
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === roof.id).length, 0, 'I3: 屋根に連動する外部行は作らない');
+});
+
+test('【B1a】applyNaming: ユーザー入力名は無視して name=屋根 固定（屋根に名前は付けない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(1000, 1500);
+  state.commitDrag();
+  const id = state.namingRoomId;
+
+  state.applyNaming(id, { name: '下屋1', kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+
+  assert.equal(graph.roomMap.get(id).name, '屋根');
+});
+
+test('【B1a】屋根の付与→undo→redo: 部屋・壁の鮮度キー・外部タブの群が1エントリで戻る', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const keyBefore = wallFreshnessKey(graph);
+  const groupsOf = () => buildExteriorGroups({ rows: graph.exteriorRows, rooms: graph.rooms, roomOrder: graph.roomOrder });
+  const undoCountBefore = undoManager._undoStack.length;
+
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const roofId = roof.id;
+  const keyAfter = wallFreshnessKey(graph);
+
+  assert.equal(undoManager._undoStack.length, undoCountBefore + 1, '作成＋命名で undo は1エントリ');
+  assert.notEqual(keyAfter, keyBefore, '屋根の付与で鮮度キーが変わる（feature が鍵に入る）');
+  assert.deepEqual(groupsOf().map(g => [g.type, g.roomId]), [['roof', roofId]]);
+
+  undoManager.undo();
+  assert.equal(graph.roomMap.has(roofId), false, 'undoで屋根の部屋が消える');
+  assert.equal(wallFreshnessKey(graph), keyBefore, 'undoで鮮度キーが元に戻る');
+  assert.equal(groupsOf().length, 0, 'undoで外部タブの群が消える');
+
+  undoManager.redo();
+  const restored = graph.roomMap.get(roofId);
+  assert.ok(restored, 'redoで屋根の部屋が戻る');
+  assert.equal(restored.feature, RoomFeature.ROOF);
+  assert.equal(restored.kind, RoomKind.EXTERIOR);
+  assert.equal(restored.name, '屋根');
+  assert.equal(wallFreshnessKey(graph), keyAfter, 'redoで鮮度キーが付与後に戻る');
+  assert.deepEqual(groupsOf().map(g => [g.type, g.roomId]), [['roof', roofId]]);
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === roofId).length, 0);
+});
+
+test('【B1a・I3】屋外部屋→屋根で既存の連動行が消え、屋根→屋外で連動行が1件できる', () => {
+  const graph = makeSingleCellGraph();
+  const state = new FinishModeState(graph, null);
+  const room = graph.addRoom(new Set(['dummy']), '');
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === room.id).length, 1, '前提: 屋外部屋には連動行がある');
+
+  // _syncExteriorRows を直接呼ぶ（新規候補でない既存部屋への ROOF 付与は applyNaming が拒否するため、
+  // 同期の挙動そのものを固定する。feature を ROOF にしてから呼ぶ＝applyNaming 内の呼び出し順と同じ）。
+  room.setFeature(RoomFeature.ROOF);
+  state._syncExteriorRows(room);
+  assert.equal(graph.exteriorRows.filter(r => r.roomId === room.id).length, 0, '屋外→屋根で連動行が消える');
+
+  // 屋根→屋外（通常の屋外部屋）: applyNaming は ROOF から他の属性への変更を拒否しない
+  state.applyNaming(room.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  const rows = graph.exteriorRows.filter(r => r.roomId === room.id);
+  assert.equal(rows.length, 1, '屋根→屋外で連動行が1件できる');
+  assert.equal(rows[0].part, 'テラス');
+  assert.equal(room.feature, null);
+  assert.equal(room.kind, RoomKind.EXTERIOR);
+});
+
+test('【B1a・失敗系】applyNaming: 部分指定への ROOF は拒否（lastNamingRejection・何も変更しない・ダイアログは開いたまま）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const leftCell = worldToCell(1000, 1500, graph);
+  const midCell  = worldToCell(3000, 1500, graph);
+  const parent = graph.addRoom(new Set([leftCell.key, midCell.key]), '親');
+  parent.setNamePosition(1000, 1500);
+  state.startDrag(3000, 1500);
+  state.commitDrag(); // 新規部分指定のダイアログ
+  const childId = state.namingRoomId;
+  assert.deepEqual([...graph.roomMap.get(childId).referenceRoomIds], [parent.id], '前提: 部分指定の候補');
+  const undoCountBefore = undoManager._undoStack.length;
+
+  const result = state.applyNaming(childId, { name: '', kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+
+  assert.equal(result, null);
+  assert.equal(state.lastNamingRejection, ERR_ROOF_NOT_UNASSIGNED);
+  assert.equal(graph.roomMap.get(childId).feature, null, 'featureは変わらない');
+  assert.equal(state.namingRoomId, childId, 'ダイアログは開いたまま');
+  assert.equal(undoManager._undoStack.length, undoCountBefore, 'undoを積まない');
+});
+
+test('【B1a・失敗系】applyNaming: 既存の命名済み部屋（新規候補でない）への ROOF は拒否し、feature/kind/name を変えない', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const cell = worldToCell(1000, 1500, graph);
+  const room = graph.addRoom(new Set([cell.key]), 'リビング');
+  const undoCountBefore = undoManager._undoStack.length;
+
+  state.applyNaming(room.id, { name: 'リビング', kind: RoomKind.INTERIOR, feature: RoomFeature.ROOF });
+
+  assert.equal(state.lastNamingRejection, ERR_ROOF_NOT_UNASSIGNED);
+  assert.equal(room.feature, null);
+  assert.equal(room.kind, RoomKind.INTERIOR);
+  assert.equal(room.name, 'リビング');
+  assert.equal(undoManager._undoStack.length, undoCountBefore);
+});
+
+test('【B1a・失敗系】applyNaming: 候補のセルが階段・昇降路・他の部屋のセルと重なる場合の ROOF は拒否', () => {
+  for (const make of [
+    (graph, cell) => { // 階段（ペアRoom＋Stair）
+      const r = graph.addRoom(new Set([cell.key]), '階段');
+      r.setFeature(RoomFeature.STAIR);
+      graph.addStair({ type: 'straight', cells: new Set([cell.key]), roomId: r.id });
+    },
+    (graph, cell) => { // 昇降路
+      const r = graph.addRoom(new Set([cell.key]), '');
+      r.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+    },
+    (graph, cell) => { graph.addRoom(new Set([cell.key]), '居間'); }, // 他の命名済み部屋
+  ]) {
+    const graph = makeThreeCellGraph();
+    const state = new FinishModeState(graph, null);
+    const cell = worldToCell(1000, 1500, graph);
+    make(graph, cell);
+    // 新規候補（ダイアログを開いた状態）を、既に占有されているセルで手作りする（commitDrag は占有セルを
+    // 除くため通常到達しない二重の守りを直接検証する）。
+    const candidate = graph.addRoom(new Set([cell.key]), '');
+    state.namingRoomId = candidate.id;
+    state.namingIsNew = true;
+
+    state.applyNaming(candidate.id, { name: '', kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+
+    assert.equal(state.lastNamingRejection, ERR_ROOF_NOT_UNASSIGNED);
+    assert.equal(candidate.feature, null, '屋根にならない');
+  }
+});
+
+test('【B1a】未定義部屋（2セル）の片方のセルを屋根にできる（未定義は拒否理由にならない）。未定義部屋は残り1セルになり、undo で2セルに戻る', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const leftCell = worldToCell(1000, 1500, graph);
+  const midCell  = worldToCell(3000, 1500, graph);
+  const rightCell = worldToCell(5000, 1500, graph);
+  const undef = graph.addRoom(new Set([leftCell.key, midCell.key]), '');
+  undef.setFeature(RoomFeature.UNDEFINED);
+  graph.addRoom(new Set([rightCell.key]), '居間');
+
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500); // 未定義の左セルをドラッグ
+
+  assert.equal(state.lastNamingRejection, null, '未定義部屋のセルは屋根の指定を拒否しない');
+  assert.equal(roof.feature, RoomFeature.ROOF);
+  assert.deepEqual([...refreshCells(roof.cells, graph)], [leftCell.key], '屋根は1セル');
+  assert.deepEqual([...refreshCells(undef.cells, graph)], [midCell.key], '未定義部屋は残りの1セル');
+
+  undoManager.undo();
+  assert.equal(graph.roomMap.has(roof.id), false, 'undoで屋根が消える');
+  assert.deepEqual([...refreshCells(graph.roomMap.get(undef.id).cells, graph)].sort(), [leftCell.key, midCell.key].sort(),
+    'undoで未定義部屋が2セルに戻る');
+});
+
+test('【B1a】deleteRoom: 屋根を削除すると部屋が消えて外部タブの群が0件になり（未定義化しない）、undo 1回で屋根が戻る', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const roofId = roof.id;
+  const groupsOf = () => buildExteriorGroups({ rows: graph.exteriorRows, rooms: graph.rooms, roomOrder: graph.roomOrder });
+  const undoCountBefore = undoManager._undoStack.length;
+
+  state.deleteRoom(roofId);
+
+  assert.equal(undoManager._undoStack.length, undoCountBefore + 1);
+  assert.equal(graph.roomMap.has(roofId), false, '屋根は部屋ごと消える（屋外部屋と同じ。未定義部屋にならない）');
+  assert.equal(graph.rooms.some(r => r.feature === RoomFeature.UNDEFINED), false);
+  assert.equal(groupsOf().length, 0);
+
+  undoManager.undo();
+  assert.equal(graph.roomMap.get(roofId)?.feature, RoomFeature.ROOF, 'undoで屋根が戻る');
+  assert.deepEqual(groupsOf().map(g => g.type), ['roof']);
+});
+
+test('【B1a・失敗系】renameExteriorRoom: 屋根に対しては何もしない（name=屋根のまま・undoを積まない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const undoCountBefore = undoManager._undoStack.length;
+
+  state.renameExteriorRoom(roof.id, '下屋');
+
+  assert.equal(roof.name, '屋根');
+  assert.equal(undoManager._undoStack.length, undoCountBefore);
+});
+
+test('【B1a・I2】屋根セルは部屋ドラッグで取れない・伸ばせない（startDragで開始されず、他の部屋のドラッグ範囲から除かれる）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500); // left が屋根
+  const roofCells = new Set(roof.cells);
+
+  // 屋根セルから開始 → ドラッグ自体が始まらない（ダイアログも開かない）
+  state.startDrag(1000, 1500);
+  assert.equal(state.dragState, null, '屋根セルからはドラッグが始まらない');
+
+  // mid から開始して left へ伸ばす → left（屋根）は範囲に入らず、mid だけの新規部屋になる
+  state.startDrag(3000, 1500);
+  state.updateDrag(1000, 1500);
+  assert.ok(state.dragState, 'mid からのドラッグは開始される');
+  for (const key of roofCells) assert.equal(state.dragState.visitedCells.has(key), false, '屋根セルは伸ばせない');
+  state.commitDrag();
+  const created = graph.roomMap.get(state.namingRoomId);
+  assert.ok(created, 'mid の新規Roomができる');
+  for (const key of roofCells) assert.equal(refreshCells(created.cells, graph).has(key), false, '新規Roomに屋根セルは入らない');
+  assert.deepEqual([...roof.cells].sort(), [...roofCells].sort(), '屋根のセルは変わらない');
+});
+
+test('【B1a・I2】屋根セルを含む統合（判定2）に屋根は巻き込まれない: 屋根は rooms 判定の対象外', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const midCell = worldToCell(3000, 1500, graph);
+  const room = graph.addRoom(new Set([midCell.key]), '居間');
+  const roofCellsBefore = [...roof.cells];
+
+  // mid から left へ（屋根セルは除外される）→ mid 単独＝既存部屋と完全一致（判定1）。屋根は吸収されない。
+  state.startDrag(3000, 1500);
+  state.updateDrag(1000, 1500);
+  state.commitDrag();
+
+  assert.equal(state.namingRoomId, null, '判定1（完全一致）で選択のみ');
+  assert.equal(state.selectedRoomId, room.id);
+  assert.equal(graph.roomMap.has(roof.id), true, '屋根は消えない');
+  assert.deepEqual([...roof.cells], roofCellsBefore);
 });

@@ -151,7 +151,7 @@ export const ERR_CL_DELETE_FOOTPRINT = '外壁を担うため削除できませ�
 
 // CL削除（transform/centerLineOps.js deleteCenterLineWithUndo）専用: 削除しようとしているCLを
 // 失うと自階の部屋セル・スラブセルのいずれかが対辺2本同時喪失になる、または再解釈除外部屋
-// （階段・階段吹抜け・未定義・昇降路）のセル辺がこのCLを持つ場合（finish/roomReinterpret.js
+// （階段・階段吹抜け・未定義・昇降路・屋根）のセル辺がこのCLを持つ場合（finish/roomReinterpret.js
 // findUnresolvableCells。先読みガードとして削除前に判定するほか、削除後の安全網
 // （collectUnresolvableCellsの前後差分）でも同じ文言を返す）。長押しメニューの削除項目の
 // グレー化（interaction/usePointerInteraction.js・menuItems.js）もこの判定を共有する。
@@ -276,6 +276,11 @@ export const ERR_ELEVATOR_EXTERIOR = '昇降機は屋内で指定してくださ
 // 新規候補（未指定セルからの新規ドラッグ）でない場合（既存の命名済み部屋の統合＝判定2、
 // 部分指定の確定等）。
 export const ERR_ELEVATOR_NOT_UNASSIGNED = '昇降機は未指定のエリアから指定してください。';
+
+// 屋根（RoomFeature.ROOF。finish/FinishModeState.js applyNaming）の拒否文言。新規候補（未指定セル・
+// 未定義部屋のセルからの新規ドラッグ）でない場合（既存の命名済み部屋・統合・部分指定）、または
+// 候補のセルが階段・他の部屋と重なる場合。
+export const ERR_ROOF_NOT_UNASSIGNED = '屋根は未指定のエリアから指定してください。';
 
 // 昇降機の上階事前チェック（finish/equipment/equipmentFloorPlan.js judgeElevatorInstall）専用の
 // 拒否文言（ステップ4・S2）。floorLabel は plane.name。

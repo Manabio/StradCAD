@@ -11,7 +11,7 @@ import { RoomKind, RoomFeature } from '@core';
 import { computeExternalEdgeParams, mergeSegments } from '../finish/wallGeneration.js';
 import { innerWallFaceAt } from '../finish/wallFaces.js';
 import { sameAxisLine } from '../finish/kneeDropWall.js';
-import { buildCellToRoom } from '../finish/edgeClassify.js';
+import { buildEnclosureCellToRoom } from '../finish/edgeClassify.js';
 import { cutPlaneOffsetMm } from './section/sectionCutPlane.js';
 import { isRealRoom } from './section/sectionLayerStack.js';
 import { worldToCell } from '../finish/gridCells.js';
@@ -721,7 +721,7 @@ export function faceBoundaryLocalX(face, graph) {
 export function roomAtFaceSide(face, coord, graph) {
   const inner = face.axisCL.effectiveValue + (Math.sign(face.inward) || 1) * PROBE_EPS_MM;
   const cell = worldToCell(face.isVertical ? inner : coord, face.isVertical ? coord : inner, graph);
-  return cell ? (buildCellToRoom(graph).get(cell.key) ?? null) : null;
+  return cell ? (buildEnclosureCellToRoom(graph).get(cell.key) ?? null) : null;
 }
 
 /**

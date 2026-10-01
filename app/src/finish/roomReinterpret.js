@@ -14,7 +14,7 @@
 //                            （少ない方の cells が空になれば部屋自体を削除）
 // ================================================================
 
-import { Room, RoomFeature, isShaftFeature } from '@core';
+import { Room, RoomFeature, isShaftFeature, isRoofFeature } from '@core';
 import {
   lostSides, cellInteriorPoint, regionCellsAt, refreshCells, cellBoundsFromKey, worldToCell,
   gridIndexOf, isActiveAcrossRange,
@@ -57,12 +57,13 @@ function hasDividerBeyond(graph, isVertical, refValue, direction, orthoLo, ortho
 }
 
 // reinterpretRoomsOnEntry・findUnresolvableCells の両方が使う「再解釈対象外の部屋」判定
-// （階段・階段吹抜け・未定義・昇降路の部屋。上記コメント参照）。
+// （階段・階段吹抜け・未定義・昇降路・屋根の部屋。上記コメント参照）。
 // 昇降路（isShaftFeature）は階段と同じ扱い（ユーザー裁定2026-09-29）: 全階同位置・器具単位で
 // 矩形という前提があり、隣の部屋と統合すると床開口が広がり階またぎの整合が崩れるため対象外にする。
 function isReinterpretExempt(room) {
   return room.feature === RoomFeature.STAIR || room.feature === RoomFeature.STAIR_VOID
-    || room.feature === RoomFeature.UNDEFINED || isShaftFeature(room.feature);
+    || room.feature === RoomFeature.UNDEFINED || isShaftFeature(room.feature)
+    || isRoofFeature(room.feature); // 屋根も固定セル（屋内部屋の洪水に奪われず、屋根も屋内を吸わない）
 }
 
 /**
@@ -82,7 +83,7 @@ function isReinterpretExempt(room) {
  *      片辺のみの喪失でも、生き残った反対側のさらに外側（セルの外方向）に、直交範囲で有効な
  *      同軸の分割CLが1本も無ければ同様に復元不能とする（hasDividerBeyond。部屋・スラブの外周
  *      セルで対辺2本喪失に至らないまま代表点が格子外に出る退化——S1・2026-09-27実測）。
- *   2. 再解釈除外部屋（isReinterpretExempt＝階段・階段吹抜け・未定義・昇降路）のセル辺が clId を持つ場合。
+ *   2. 再解釈除外部屋（isReinterpretExempt＝階段・階段吹抜け・未定義・昇降路・屋根）のセル辺が clId を持つ場合。
  *      reinterpretRoomsOnEntry はこれらの部屋を常に素通りする（対辺の喪失数によらず一切変更しない）
  *      ため、辺の一つでも削除されるとRoom.cellsのダングリングidが未来永劫解消されない。
  *   3. スラブ（StructuralSlab.cells）で対辺2本同時喪失になるセル。スラブには部屋のような
@@ -314,7 +315,7 @@ export function reinterpretRoomsOnEntry(graph) {
   const unresolved = new Set();
 
   // 不変条件: 固定セル（再解釈除外部屋＝isReinterpretExempt＝階段・階段吹抜け・未定義・
-  // 昇降路のセルと、Stair.cellsのセル）の所有は動かさない——他の部屋の洪水先（領域の
+  // 昇降路・屋根のセルと、Stair.cellsのセル）の所有は動かさない——他の部屋の洪水先（領域の
   // flood-fill）としてこれらを奪わないだけでなく、固定セル自身をoldKeyとして持つ通常の
   // 部屋（階段下部屋＝2a。破れ先セルを正規に持つのが設計上正しい。stairUnderRoomsOfの
   // 前提）からも動かさない。開口（区間内で非アクティブな分割CL）を挟んで隣の部屋の連結領域が

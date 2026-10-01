@@ -2,9 +2,14 @@
 // 判定に使う）の種別ベース化（centerLineKindPolicy.js統一。ステップ6、2026-09-20）のテスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, edgeKey } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, edgeKey } from '@core';
 import fs from 'node:fs';
-import { classifyAxisLineType, selectBoundaryMaster, buildCellToRoom } from './edgeClassify.js';
+import {
+  classifyAxisLineType, selectBoundaryMaster, buildCellToRoom, computeNamedBoundaryEdges,
+  syncEdgesFromTopology, snapshotEdges, isEnclosureOutside,
+} from './edgeClassify.js';
+import { footprintCellKeys } from '../structural/wallGate.js';
+import { buildRoofLayout, ROOF_LAYOUT_SHAPES } from './roofTestFixtures.js';
 import { worldToCell } from './gridCells.js';
 import { BOUNDARY_MASTERS } from './materials/boundaryMasters.js';
 
@@ -109,4 +114,61 @@ test('【不変条件・ステップ7b】selectBoundaryMasterがソース中で�
     assert.ok(BOUNDARY_MASTERS[key], `BOUNDARY_MASTERSに${key}が存在しない（selectBoundaryMasterのソース中で返している）`);
     assert.equal(BOUNDARY_MASTERS[key].key, key);
   }
+});
+
+// ================================================================
+// 屋根（RoomFeature.ROOF。ステップB1a）の I0: 屋根セルは境界の判定でも「部屋の無いセル（無割当）」と同値。
+// 境界エッジ・境界マスター・建物フットプリントが、同じセルを無割当にした配置と一致する。
+// 対照: 通常の屋外部屋にした配置は屋内側の境界が INNER_OUTER_WALL になり一致しない。
+// ================================================================
+
+function boundarySummary(graph) {
+  const cellToRoom = buildCellToRoom(graph);
+  const keys = [...computeNamedBoundaryEdges(graph)].sort();
+  return {
+    keys,
+    masters: keys.map(k => [k, selectBoundaryMaster(k, graph, cellToRoom)]),
+    footprint: [...footprintCellKeys(graph)].sort(),
+  };
+}
+
+for (const shape of ROOF_LAYOUT_SHAPES) {
+  test(`【I0】屋根セルの配置は無割当の配置と境界エッジ・境界マスター・footprintCellKeysが一致する（${shape}）`, () => {
+    const roof = boundarySummary(buildRoofLayout(shape, 'roof').graph);
+    const none = boundarySummary(buildRoofLayout(shape, 'none').graph);
+    assert.ok(roof.keys.length > 0, '前提: 境界エッジがある');
+    assert.ok(roof.footprint.length > 0, '前提: footprintがある');
+    assert.deepEqual(roof.keys, none.keys, '屋根セルは境界エッジを持たない');
+    assert.deepEqual(roof.masters, none.masters);
+    assert.deepEqual(roof.footprint, none.footprint, '屋根は建物の外（wallGate.isBuildingRoom は INTERIOR のみ）');
+    assert.ok(roof.masters.every(([, m]) => m === 'EXTERIOR_WALL' || m === 'UNDEFINED' || m === 'INTERIOR_WALL'),
+      '屋根に面する辺は EXTERIOR_WALL（INNER_OUTER_WALL にならない）');
+  });
+
+  test(`【I0】syncEdgesFromTopology 後の edgeMap（キー・masterType）が屋根と無割当で一致する（${shape}）`, () => {
+    const a = buildRoofLayout(shape, 'roof').graph;
+    const b = buildRoofLayout(shape, 'none').graph;
+    syncEdgesFromTopology(a);
+    syncEdgesFromTopology(b);
+    assert.deepEqual(snapshotEdges(a), snapshotEdges(b));
+  });
+
+  test(`【I0・対照】同じセルを通常の屋外部屋にした配置は屋内との境界が INNER_OUTER_WALL になり、屋根・無割当と一致しない（${shape}）`, () => {
+    const ext = boundarySummary(buildRoofLayout(shape, 'exterior').graph);
+    const none = boundarySummary(buildRoofLayout(shape, 'none').graph);
+    assert.ok(ext.masters.some(([, m]) => m === 'INNER_OUTER_WALL'));
+    assert.notDeepEqual(ext.masters, none.masters);
+  });
+}
+
+test('isEnclosureOutside: 部屋なし（null/undefined）と屋根は真、屋内・屋外・階段・吹抜けは偽（屋外部屋は外壁の判定で courtyard 側＝偽）', () => {
+  const graph = makeGraph();
+  const mk = (kind, feature) => { const r = graph.addRoom(new Set([`d-${Math.random()}`]), 'r'); r.setKind(kind); r.setFeature(feature); return r; };
+  assert.equal(isEnclosureOutside(null), true);
+  assert.equal(isEnclosureOutside(undefined), true);
+  assert.equal(isEnclosureOutside(mk(RoomKind.EXTERIOR, RoomFeature.ROOF)), true);
+  assert.equal(isEnclosureOutside(mk(RoomKind.INTERIOR, null)), false);
+  assert.equal(isEnclosureOutside(mk(RoomKind.EXTERIOR, null)), false);
+  assert.equal(isEnclosureOutside(mk(RoomKind.INTERIOR, RoomFeature.STAIR)), false);
+  assert.equal(isEnclosureOutside(mk(RoomKind.INTERIOR, RoomFeature.VOID)), false);
 });

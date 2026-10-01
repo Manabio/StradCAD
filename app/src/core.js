@@ -11,7 +11,7 @@
 
 export {
   Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind, RoomFeature,
-  SHAFT_FEATURES, isShaftFeature,
+  SHAFT_FEATURES, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME,
   ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE,
   ExteriorLevelRef,
   StairType, StairPortSide, StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,

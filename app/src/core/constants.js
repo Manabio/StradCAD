@@ -68,7 +68,18 @@ export const RoomFeature = Object.freeze({
   // Room が昇降路）。床なし＝上階スラブ開口。展開図は描かない（ユーザー裁定2026-09-29:
   // 「昇降機の中にEV/エスカレーター/DWがある。昇降機とEV等は並列ではない」）。
   ELEVATOR_EQUIPMENT: 'elevatorEquipment',
+  // 屋根（下屋＝屋根面がある階のセルに付く）。kind は EXTERIOR に固定。壁・境界・2a委譲の判定では
+  // 「部屋の無いセル」と同値（finish/edgeClassify.js isEnclosureOutside。外壁の内外判定が feature を
+  // 見る唯一の例外）。
+  ROOF:       'roof',
 });
+
+export function isRoofFeature(feature) {
+  return feature === RoomFeature.ROOF;
+}
+
+// 屋根の Room.name は固定（編集口なし。ユーザー裁定: 屋根に名前は付けない）。
+export const ROOF_ROOM_NAME = '屋根';
 
 // 昇降路（isShaftFeature の部屋）の属性。床なし＝上階スラブ開口・展開図は描かない・共通仕様
 // 「昇降路」で壁材を一括指定。PS 等は後日。

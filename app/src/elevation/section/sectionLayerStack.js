@@ -17,7 +17,7 @@
  *
  * 純モジュール（store.js/snap.js/*.jsx/react-konva/appViewport.jsを静的importしない）。
  */
-import { RoomFeature, isShaftFeature } from '@core';
+import { RoomFeature, isShaftFeature, isRoofFeature } from '@core';
 import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 
 /**
@@ -37,7 +37,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  */
 export function isRealRoom(room) {
   return !!room && room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.STAIR_VOID
-    && !isShaftFeature(room.feature);
+    && !isShaftFeature(room.feature) && !isRoofFeature(room.feature); // 屋根は描画対象外＝実床なし（無割当と同値）
 }
 
 /**

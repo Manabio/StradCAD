@@ -4,6 +4,7 @@ import { roomBounds } from './gridCells.js';
 import { RoomFeature } from '@core';
 import {
   ROOM_KIND_OPTIONS, featureOptionsForDialog, featureToSelectValue, selectValueToFeature,
+  effectiveDialogKind, isKindLockedByFeature,
 } from './roomNamingOptions.js';
 
 // 区分（屋内/屋外。kind）と属性（なし/階段/吹抜け/昇降機。feature）の2セレクタ。
@@ -28,7 +29,7 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
   const { x: sx, y: sy } = viewport.worldToScreen(cx, cy);
 
   function confirm() {
-    onConfirm(room.id, { name: value.trim(), kind: kindSel, feature: featureSel });
+    onConfirm(room.id, { name: value.trim(), kind: effectiveDialogKind(kindSel, featureSel), feature: featureSel });
   }
 
   function onKeyDown(e) {
@@ -75,8 +76,10 @@ export const RoomNameInput = observer(({ room, graph, viewport, stairEnabled = t
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 11, color: '#64748b', marginBottom: 2 }}>区分</div>
           <select
-            value={kindSel}
+            value={effectiveDialogKind(kindSel, featureSel)}
             onChange={e => setKindSel(e.target.value)}
+            disabled={isKindLockedByFeature(featureSel)}
+            title={isKindLockedByFeature(featureSel) ? '屋根は屋外に固定されます' : undefined}
             style={selectStyle}
           >
             {ROOM_KIND_OPTIONS.map(opt => (

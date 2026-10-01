@@ -259,6 +259,61 @@ test('【S4】ROOM_FEATURE_DEC は旧5〜8（旧ev/dw/freightEv/vehicleEv）と�
   }
 });
 
+// ---- 屋根（ステップB1a）: Room.feature='roof'=10。kind は EXTERIOR 固定 ----
+test('【B1a】ROOM_FEATURE_ENC.roof は10、ROOM_FEATURE_DEC[10] は \'roof\'（既存の番号は不変）', () => {
+  assert.equal(ROOM_FEATURE_ENC.roof, 10);
+  assert.equal(ROOM_FEATURE_DEC[10], 'roof');
+  assert.equal(ROOM_FEATURE_ENC.elevatorEquipment, 9);
+  assert.equal(ROOM_FEATURE_ENC.stair, 1);
+});
+
+test('【B1a】Room.feature=\'roof\'（kind=EXTERIOR・name=屋根）は FlatBuffers encode→decode で feature・kind・name とも往復する', () => {
+  const graph = makeGraph();
+  const opt = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opt);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, opt);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opt);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, opt);
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), '屋根');
+  room.setKind(RoomKind.EXTERIOR);
+  room.setFeature(RoomFeature.ROOF);
+
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+
+  const r2 = restored.roomMap.get(room.id);
+  assert.ok(r2, '復元後に同一IDの部屋が存在する');
+  assert.equal(r2.feature, RoomFeature.ROOF);
+  assert.equal(r2.kind, RoomKind.EXTERIOR);
+  assert.equal(r2.name, '屋根');
+});
+
+test('【B1a】屋根の部屋は階の複製・検討案のコピー（serializeGraphWithFreshLineIds）でも feature・kind・name が残り、セルは振り直した線idを指す', () => {
+  const graph = makeGraph();
+  const opt = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opt);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, opt);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opt);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, opt);
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), '屋根');
+  room.setKind(RoomKind.EXTERIOR);
+  room.setFeature(RoomFeature.ROOF);
+
+  const copy = makeGraph();
+  restoreGraph(copy, serializeGraphWithFreshLineIds(graph));
+
+  const r2 = copy.roomMap.get(room.id);
+  assert.ok(r2, '複製先に屋根の部屋が残る（room id は不変）');
+  assert.equal(r2.feature, RoomFeature.ROOF);
+  assert.equal(r2.kind, RoomKind.EXTERIOR);
+  assert.equal(r2.name, '屋根');
+  const [cellKey] = r2.cells;
+  for (const id of cellKey.split(':')) {
+    assert.ok(copy.shapeMap.has(id), `セルが指す線id ${id} が複製先に存在する`);
+    assert.ok(![x0.id, x1.id, y0.id, y1.id].includes(id), '線idは振り直されている');
+  }
+});
+
 // ---- 【F4】旧形式の実バッファ（FEATURE列挙値が旧番号5〜8／未知の番号）を restoreGraph で
 // 読み込む往復。ROOM_FEATURE_DEC表そのものの直接検査（decode経路を通らない）だけでは製品の
 // decode（graphFbs.js の readRoom: ROOM_FEATURE_DEC[r.i8(RM.FEATURE)] ?? null）の `?? null` を
@@ -313,20 +368,20 @@ test('【F4】旧形式バッファ（FEATURE=5〜8）を restoreGraph で読み
   }
 });
 
-// QA指摘: 旧版はテスト自身の式 `ROOM_FEATURE_DEC[10] ?? null` を評価しているだけで、製品の
+// QA指摘: 旧版はテスト自身の式 `ROOM_FEATURE_DEC[11] ?? null` を評価しているだけで、製品の
 // decode の `?? null`（graphFbs.js readRoom）を実際には通していなかった。F4と同じバイト差し替え
-// 方式で code=10（未知の番号）のバッファを decode() へ直接通し、Room.feature が null になる
-// ことを確かめる形へ置き換える。
+// 方式で code=11（未知の番号。10 は屋根に割当て済み）のバッファを decode() へ直接通し、
+// Room.feature が null になることを確かめる形へ置き換える。
 // restoreGraph ではなく decode() を直接呼ぶ理由（実測で確認・REASONED→VERIFIED）: readRoom の
 // `?? null` を外して確かめようとしたところ、restoreGraph 経由では赤にならなかった——
 // graphSnapshot.js の applySnapshot 側にも独立した `const feature = … (d.feature ?? null);`
 // という二重目の ?? null があり（プレーンobject直渡し経路のための保護）、readRoom側の値が
 // undefined になってもこちらが吸収してしまう。decode() を直接呼んで返り値の room.feature を
 // 見ることで、readRoom自身の `?? null` だけを対象にした検出力のあるテストにする。
-test('【失敗系・S4】旧形式バッファのFEATUREが未知の番号（10）だと decode() の返り値で feature=null になる（decode自身の ?? null を対象にする）', () => {
+test('【失敗系・S4】旧形式バッファのFEATUREが未知の番号（11）だと decode() の返り値で feature=null になる（decode自身の ?? null を対象にする）', () => {
   const { evBytes, featureOffset } = findFeatureOffset();
   const unknownBytes = evBytes.slice();
-  unknownBytes[featureOffset] = 10;
+  unknownBytes[featureOffset] = 11;
 
   const snapshot = decode(unknownBytes);
   const r2 = snapshot.rooms.find(r => r.id === 'f4-room');

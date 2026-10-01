@@ -254,3 +254,49 @@ test('【不変条件】activeTab===equipmentは<EquipmentTab ...>（onDeleteEqu
   assert.ok(/activeTab === 'accessory'\s*\?\s*<EmptyTabPlaceholder message="附帯は未対応です" \/>/.test(codeOnly),
     'activeTab === \'accessory\' ? <EmptyTabPlaceholder message="附帯は未対応です" /> が見つからない');
 });
+
+// ---- 屋根（ステップB1a）: 外部タブの屋根群は見出し「屋根」＋削除だけ（連動行・仕上げレベル行・改名入力・
+// 区分セレクタ・「＋ 行を追加」を持たない）。判断（群の type）は exteriorGroups.js の純関数が持ち、
+// jsx は type==='roof' で分岐するだけ。 ----
+function roofGroupBlock() {
+  // トリムした1行がまるごと一致する行から探す（行末コメントに元の式を残す変異を許さない）。
+  const needle = "if (groupType === 'roof') {";
+  const lines = codeOnly.split('\n');
+  const lineIdx = lines.findIndex(l => l.trim() === needle);
+  assert.ok(lineIdx >= 0, `${needle} の行が見つからない`);
+  const start = lines.slice(0, lineIdx).join('\n').length + 1;
+  const braceStart = codeOnly.indexOf('{', start);
+  let depth = 0, i = braceStart;
+  for (; i < codeOnly.length; i++) {
+    if (codeOnly[i] === '{') depth++;
+    else if (codeOnly[i] === '}') { depth--; if (depth === 0) break; }
+  }
+  return codeOnly.slice(braceStart, i + 1);
+}
+
+test('【不変条件・B1a】GroupedExteriorTable は群の type を受けて type===roof の分岐を持つ（map の分割代入に type: groupType）', () => {
+  assert.ok(codeOnly.split('\n').some(l => l.trim() === '{groups.map(({ key: groupKey, type: groupType, roomId, part, rows: groupRows }) => {'),
+    "{groups.map(({ key: groupKey, type: groupType, roomId, part, rows: groupRows }) => { の行が見つからない");
+});
+
+test('【不変条件・B1a】屋根群のブロックは見出し（part）と削除ボタン（setDeleteConfirm→RoomDeleteConfirm→mode.deleteRoom）だけで、仕上げレベル行・改名入力・区分セレクタ・行テーブルを出さない', () => {
+  const block = roofGroupBlock();
+  assert.ok(/setDeleteConfirm\(\{ roomId, roomName: part \}\)/.test(block), '削除ボタンが setDeleteConfirm({ roomId, roomName: part }) を呼ぶ形で見つからない');
+  assert.ok(/\{part\}/.test(block), '見出しに part（固定「屋根」）を出す形が見つからない');
+  for (const forbidden of ['ExteriorLevelRow', 'ExteriorPartHeading', '<select', '<table', 'ROOM_KIND_OPTIONS', '＋ 行を追加']) {
+    assert.ok(!block.includes(forbidden), `屋根群のブロックに ${forbidden} が含まれている`);
+  }
+});
+
+test('【不変条件・B1a】屋根群の分岐は return で抜ける（既存の屋外部屋・部位の群の描画へ落ちない）', () => {
+  const block = roofGroupBlock();
+  assert.ok(/^\s*return \(\s*$/m.test(block), '屋根群のブロックに return ( が無い');
+});
+
+test('【不変条件・B1a】PART_OPTIONS に「屋根」を足さない（手入力の「屋根」群と屋根セルの群が区別できなくなる）', () => {
+  const start = codeOnly.indexOf('const PART_OPTIONS');
+  assert.ok(start >= 0, 'const PART_OPTIONS が見つからない');
+  const end = codeOnly.indexOf(']', start);
+  // 「屋根庇」等は既存の別の部位。単独の「屋根」要素だけを禁じる。
+  assert.ok(!codeOnly.slice(start, end).includes("'屋根'"), "PART_OPTIONS に '屋根' が含まれている");
+});

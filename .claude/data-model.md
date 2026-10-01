@@ -212,17 +212,23 @@ Y2〜Y1が1セルで、通り上にはY2〜-3500と-2000〜Y1の2本が分断し
 境界の分類・選定は`finish/edgeClassify.js`の純関数に置く。Edgeはキャッシュ(`masterType`)と個別上書き(`overrides`)のみ持つ。
 
 ## Roomの内外区分は kind × feature の2軸（旧voidは読込時移行）
-`kind`（屋内/屋外）と`feature`（階段/吹抜け/なし）は独立。外壁・footprint等の内外判定は**kind軸のみ**を見る（featureを混ぜない）。旧データの`kind='void'`は読込時に「屋内+吹抜け」へ移行するが、デコード経路はFlatBuffers・plain object・undoスナップショットの**3系統**あり、移行を1箇所に足しても他が漏れる——変更時は3経路すべてを揃えること。
+`kind`（屋内/屋外）と`feature`（階段/吹抜け/なし）は独立。外壁・footprint等の内外判定は**kind軸のみ**を見る（featureを混ぜない）。**唯一の例外が屋根（`feature=ROOF`）**——下記「屋根」節。旧データの`kind='void'`は読込時に「屋内+吹抜け」へ移行するが、デコード経路はFlatBuffers・plain object・undoスナップショットの**3系統**あり、移行を1箇所に足しても他が漏れる——変更時は3経路すべてを揃えること。
 屋外部屋（kind===EXTERIOR）は壁を持たない。屋内⇔屋外部屋の境界は常に屋内側から外壁（loopType `'courtyard'`）として生成し、屋外部屋自身の辺からは壁を作らない。仕上げ表では屋外部屋（階段以外）は内部タブではなく外部タブへ部屋名の部位として連動させ、勾配・おさえ（仕上げレベル）を持たせる——階段（feature=STAIR）は従来どおり部位「階段」に固定するため対象外。
 
 部屋編集の導線: 部屋名ダイアログ（`RoomNameInput.jsx`）は新規Roomの命名専用。既存部屋の名称・区分・属性の編集は仕上げ表・内部タブのカードで行い（屋外部屋は上記のとおり外部タブ）、ダイアログ側に削除ボタンは持たない。
 
 昇降路（`SHAFT_FEATURES`・`isShaftFeature`）は床を持たない（上階スラブの開口。展開図は描かない）属性の一種。共通仕様「昇降路」（per-floor `shaftWallMaterial`・`shaftSoundproof`）で壁材を一括指定し、仕上げ表の内部タブには出さない（部屋カードなし）。CL偏芯の階連動は階段と同じ規則（設置階〜最上階）。器具行・不変条件I1・階の増減時の連動は`.claude/equipment-model.md`参照。
 
+## 屋根（feature=ROOF）は壁・境界・2a委譲・展開図・断面では「部屋の無いセル」と同値（外壁判定の唯一の例外）
+屋根（下屋）は屋根面がある階のセルに付く屋外部屋（kind=EXTERIOR固定・名前は「屋根」固定）。屋外部屋のまま外壁判定に乗せると、外周が「無割当に面する辺（outer）」から「屋外部屋に面する辺（courtyard）」へ切り替わる角で壁厚ぶんが欠け、屋内との境界も`INNER_OUTER_WALL`（気密層つき）になる（`finish/wallGeneration.js`はloopTypeごとに隅の取り合いを組むため。実測: 屋内4000×3000の右に屋外帯を置くと壁端が4057.5→4000）。仕様「外部隣接辺は外壁から除外して再度外周を探査」を字義どおり満たすため、`isEnclosureOutside(room)`（`finish/edgeClassify.js`。部屋なし or ROOF）を**外壁分類（`classifyExteriorEdge`）・境界領域（`regionOf`）・2a委譲（`isDelegatedEdge`と、階段下壁（`stairUnderOwnParams`）の外側部屋の正規化）**で使い、屋根セルを無割当と同値に扱う。`isRoofFeature`を直接見る箇所は、`computeNamedBoundaryEdges`（屋根は境界エッジを持たない）・`isReinterpretExempt`・部屋ドラッグ除外・複写除外・外部タブの群（`exteriorGroups.js`）・`sectionLayerStack.js`の`isRealRoom`。構造側（`wallGate.isBuildingRoom`はINTERIORのみ）は元から同値。
+展開図・断面の屋根の描画は対象外（ユーザー裁定）のため、屋根を付けても展開図・断面は無割当のときと1プリミティブも変えない。`elevation/`の部屋の逆引き（`space/spaceModel.js`・`elevationFaces.js`の`roomAtFaceSide`・`elevationStair.js`）は`buildEnclosureCellToRoom`（`buildCellToRoom`から屋根を除いた索引）を使い、実床判定`isRealRoom`も屋根を実床なしとする。`buildCellToRoom`自体から屋根を外す案は、壁側の索引の意味が黙って変わるため採らない。
+**未裁定（2026-10-02実測）**: 屋根のある上階に、下の階の階段を展開した場合（`stairFloorSync.js`の上階自動設置・`roomReinterpret.js`の`ensureStairRooms`）、中間階では屋根セルの上にStairが置かれるがペアRoomは作られず、最上階では階段吹抜けができない（例外は出ない）。階段が建物の外に出てI0が崩れる。拒否するか既知の限界とするかをユーザーに確認する。
+不変条件: 屋根セルを持つ配置は、同じセルを無割当にした配置と外壁セグメント・生成壁・境界エッジ・footprintが一致する（I0）。屋根は固定セル（`isReinterpretExempt`に含む。屋内部屋の洪水に奪われず、屋根も屋内を吸わない）・部屋ドラッグ対象外（昇降路と同じ。拡張は削除→指定し直し）・新規の部屋指定（未指定/未定義のセル）でだけ選べる。連動`exteriorRows`は作らず外部タブに専用の群（`exteriorGroups.js`のtype:'roof'）を出す。上に階を追加する複写（`addNewFloorRoomFromSource`）は屋根セルを写さない（屋根の上は建物の外）。CL削除時に屋根セルの辺CLが先読みで「復元不能」になるのは昇降路と同じ既知の限界。
+
 ## 階段はRoomを残したままStairと相互リンクする
 階段化でRoomを消すと外壁生成（graph.rooms走査）から階段エリアが消えるため、`feature=STAIR`のRoomを保持し`Stair.roomId`でリンクする。不変条件: 削除は必ず双方向道連れ（片側だけ消すと孤児化）、階段Roomは部屋再解釈（roomReinterpret）の対象外（吸収されるとリンクが壊れる）、内周壁生成・仕上げ表内部タブ・キャンバス部屋塗りからは除外する。roomIdなしのStair（旧データ）は上階自動設置（syncUpperFloors）・仕上げモード突入時にRoomを自動補完する（ensureStairRooms）。補完できないのはフットプリントが既存Roomと重なる場合のみで、そのときはRoomなしで動く互換経路に残る（既に「屋内」なので外壁判定に実害なし）。
 
-`reinterpretRoomsOnEntry`の不変条件: 固定セル（再解釈除外部屋＝階段・階段吹抜け・未定義・昇降路のセルと、`Stair.cells`のセル）の所有は動かさない——他の部屋の洪水先（`regionCellsAt`）として奪わないだけでなく、固定セル自身をoldKeyとして持つ通常の部屋（階段下部屋＝2a。破れ先セルを正規に持つのが設計上正しい。`stairUnderRoomsOf`の前提）からも動かさない（`fixedCells`で両方を判定）。開口（短縮で区間内が非アクティブな分割CL）を挟んで隣の部屋の連結領域が固定セルへ延びると、二重所有により2a判定が誤発火し、仕上げ突入→脱出で廊下など階段に開口で接する部屋の壁が階段下部屋（2a）の偏芯壁式で再生成される（moku2-1 2階実測・2026-10-01。QA指摘で「奪わない」から言い直し）。多部屋グループの解決は「全oldKeyを消す→親・子へ足す」の順を守る（逆順だと親自身のoldKeyがfloodセルに残る場合に親がセルを失う）。
+`reinterpretRoomsOnEntry`の不変条件: 固定セル（再解釈除外部屋＝階段・階段吹抜け・未定義・昇降路・屋根のセルと、`Stair.cells`のセル）の所有は動かさない——他の部屋の洪水先（`regionCellsAt`）として奪わないだけでなく、固定セル自身をoldKeyとして持つ通常の部屋（階段下部屋＝2a。破れ先セルを正規に持つのが設計上正しい。`stairUnderRoomsOf`の前提）からも動かさない（`fixedCells`で両方を判定）。開口（短縮で区間内が非アクティブな分割CL）を挟んで隣の部屋の連結領域が固定セルへ延びると、二重所有により2a判定が誤発火し、仕上げ突入→脱出で廊下など階段に開口で接する部屋の壁が階段下部屋（2a）の偏芯壁式で再生成される（moku2-1 2階実測・2026-10-01。QA指摘で「奪わない」から言い直し）。多部屋グループの解決は「全oldKeyを消す→親・子へ足す」の順を守る（逆順だと親自身のoldKeyがfloodセルに残る場合に親がセルを失う）。
 
 ## 最上階の屋内階段footprintは階段吹抜け（feature=STAIR_VOID）で表す
 最上階には階段実体を置かない（階段は次階への到達手段）が、footprintを「屋内」として外壁生成・境界分類に参加させる必要があるため、自動管理Room（`feature=STAIR_VOID`・無名・kind=INTERIOR）を自動指定する（syncUpperFloors／仕上げモード突入時のensureTopStairVoid。屋外階段は対象外）。ユーザー指定の吹抜け（`feature=VOID`）とは描画・操作の扱いが異なる: STAIR_VOIDは塗り・仕上げ表・部屋ドラッグ・内周壁・部屋再解釈のすべてから除外し、一切描画しない。階追加で旧最上階が中間階になると、階段吹抜けはそのままペアRoomへ転用される（ensureStairRoomsのfootprint一致判定。転用できない残骸は同期時に削除）。自動同期による指定・転用・削除はいずれもundo対象外。

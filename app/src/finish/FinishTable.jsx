@@ -1182,7 +1182,21 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
           部位が登録されていません
         </div>
       )}
-      {groups.map(({ key: groupKey, roomId, part, rows: groupRows }) => {
+      {groups.map(({ key: groupKey, type: groupType, roomId, part, rows: groupRows }) => {
+        if (groupType === 'roof') {
+          // 屋根（下屋）の群: 見出し「屋根」＋削除ボタンだけ（屋根の項目の入力は B2）。連動行・
+          // 仕上げレベル行・改名入力・区分セレクタは出さない。削除は屋外部屋と同じ mode.deleteRoom。
+          return (
+            <div key={groupKey} style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, gap: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part}</div>
+                <button onClick={() => setDeleteConfirm({ roomId, roomName: part })} style={deleteButtonStyle}>
+                  🗑️ 削除
+                </button>
+              </div>
+            </div>
+          );
+        }
         const room   = roomId ? graph.roomMap.get(roomId) : null;
         const isExteriorRoomGroup = isExteriorRoomGroupRoom(room);
         return (

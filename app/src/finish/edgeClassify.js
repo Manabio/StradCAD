@@ -13,7 +13,7 @@
 //    選定はトポロジー論理のみで、材データには依存しない。
 // ================================================================
 
-import { CenterLineType, RoomKind, RoomFeature, edgeKey } from '@core';
+import { CenterLineType, RoomKind, RoomFeature, isRoofFeature, edgeKey } from '@core';
 import { axisLineKindOf } from '../core/centerLineKindPolicy.js';
 import { worldToCell, refreshCells } from './gridCells.js';
 
@@ -36,8 +36,18 @@ const REGION = Object.freeze({
   INTERIOR:       'interior',      // 屋内（kind !== EXTERIOR。feature の階段・吹抜けは無関係）
 });
 
+/**
+ * 「建物の外側（部屋の無いセルと同値）」か。部屋なし、または屋根（feature===ROOF）。
+ * 外壁・境界・2a委譲の内外判定が feature を見る唯一の例外（屋根は kind=EXTERIOR だが、
+ * 壁の取り合いでは無割当と同じ扱いにする。.claude/data-model.md「屋根（ROOF）」参照）。
+ * @param {import('@core').Room | null | undefined} room
+ */
+export function isEnclosureOutside(room) {
+  return !room || isRoofFeature(room.feature);
+}
+
 function regionOf(room) {
-  if (!room) return REGION.ANON_EXTERIOR;
+  if (isEnclosureOutside(room)) return REGION.ANON_EXTERIOR;
   return room.kind === RoomKind.EXTERIOR ? REGION.NAMED_EXTERIOR : REGION.INTERIOR;
 }
 
@@ -115,6 +125,18 @@ export function buildCellToRoom(graph) {
 }
 
 /**
+ * buildCellToRoom から屋根（feature===ROOF）の部屋を除いた索引。屋根セルは索引上「部屋なし」になる。
+ * 展開図・断面（elevation/）の部屋の逆引き専用: 屋根の描画は対象外（ユーザー裁定）のため、屋根を付けても
+ * 展開図・断面は無割当のときと変わらない。壁・境界は isEnclosureOutside で別途同値にしている
+ * （buildCellToRoom 自体の意味は変えない＝屋根セルは壁側では部屋として引ける）。
+ */
+export function buildEnclosureCellToRoom(graph) {
+  const m = buildCellToRoom(graph);
+  for (const [key, room] of m) if (isRoofFeature(room.feature)) m.delete(key);
+  return m;
+}
+
+/**
  * 名前付き部屋のセル境界セグメントを edgeKey 集合として列挙する。
  * 各セルの4辺を走査し、端点CLを value 昇順に正規化して重複排除する。
  * （部屋の命名でエッジが生じる。両側が同一部屋の内部CLも含む。）
@@ -123,6 +145,7 @@ export function computeNamedBoundaryEdges(graph) {
   const keys = new Set();
   for (const room of graph.rooms) {
     if (!room.name) continue;
+    if (isRoofFeature(room.feature)) continue; // 屋根は部屋の無いセルと同値（境界エッジを持たない）
     for (const cellKey of room.cells) {
       const [L, T, R, B] = cellKey.split(':');
       const add = (axisId, sId, eId) => {

@@ -5,7 +5,7 @@ import { undoManager } from '../../undoManager.js';
 import { refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
 import { collectNeededCLs, addMissingCLs, translateCellSet } from '../floorCLMap.js';
-import { RoomFeature, RoomKind } from '@core';
+import { RoomFeature, RoomKind, isRoofFeature } from '@core';
 
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -302,6 +302,9 @@ export async function addNewFloorRoomFromSource(
 ) {
   const sourceCells = new Set();
   for (const room of sourceGraph.rooms) {
+    // 屋根（下屋）のセルは写さない: 屋根の上の階は建物の外（無割当と同値）で、屋内部屋を作ると
+    // 屋根の上に部屋ができてしまう。
+    if (isRoofFeature(room.feature)) continue;
     for (const key of refreshCells(room.cells, sourceGraph)) sourceCells.add(key);
   }
   for (const stair of sourceGraph.stairs) {

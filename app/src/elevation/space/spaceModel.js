@@ -23,7 +23,7 @@
  * 消費者は`section/sectionHits.js`の`probeColumnHits`（`makeProbeContext`経由）。
  */
 import { RoomFeature, isShaftFeature } from '@core';
-import { buildCellToRoom, computeNamedBoundaryEdges, edgeGeometry } from '../../finish/edgeClassify.js';
+import { buildEnclosureCellToRoom, computeNamedBoundaryEdges, edgeGeometry } from '../../finish/edgeClassify.js';
 import { worldToCell, roomBounds, refreshCells } from '../../finish/gridCells.js';
 import { roomCeilingHeight } from '../../finish/roomMetrics.js';
 import { kneeDropRecordsOnAxis, kneeDropWallGeometry } from '../../finish/kneeDropWall.js';
@@ -71,7 +71,7 @@ export function buildSpaceIndex(layers, opts = {}) {
     if (cached) return cached;
     let byGraph = cellToRoomByGraph.get(layer.graph);
     if (!byGraph) {
-      byGraph = buildCellToRoom(layer.graph);
+      byGraph = buildEnclosureCellToRoom(layer.graph); // 屋根セルは「部屋なし」（展開図・断面は屋根を描かない）
       cellToRoomByGraph.set(layer.graph, byGraph);
     }
     cellToRoomByLayer.set(layer, byGraph);
@@ -282,7 +282,7 @@ function isFullHeightWallSpan(graph, key, cellToRoom) {
 function unionSameLayerAdjacency(uf, layer) {
   const graph = layer.graph;
   if (!graph) return;
-  const cellToRoom = buildCellToRoom(graph);
+  const cellToRoom = buildEnclosureCellToRoom(graph);
   for (const key of computeNamedBoundaryEdges(graph)) {
     const geo = edgeGeometry(key, graph, cellToRoom);
     if (!geo?.roomNeg || !geo?.roomPos || geo.roomNeg === geo.roomPos) continue;

@@ -152,10 +152,12 @@ const EXT_LEVEL_REF_DEC = ['room', 'gl'];
 // DW）は Room ではなく器具行が持つ（ユーザー裁定2026-09-29）。番号の割当てと読み替えは
 // この表だけに閉じる（後で番号方針が変わっても表だけ直せばよい）。
 // export しているのはテスト（graphSnapshot.test.js）が表自体を直接検査するため。
-export const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3, undefined: 4, elevatorEquipment: 9 };
+// 10＝屋根（下屋。kind は EXTERIOR 固定）。
+export const ROOM_FEATURE_ENC = { stair: 1, void: 2, stairVoid: 3, undefined: 4, elevatorEquipment: 9, roof: 10 };
 export const ROOM_FEATURE_DEC = [
   null, 'stair', 'void', 'stairVoid', 'undefined',
   'elevatorEquipment', 'elevatorEquipment', 'elevatorEquipment', 'elevatorEquipment', 'elevatorEquipment',
+  'roof',
 ];
 
 // CenterLine: 18 フィールド (0–17)

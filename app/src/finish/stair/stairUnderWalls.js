@@ -34,7 +34,7 @@
 
 import { StairType, RoomFeature } from '@core';
 import { roomBounds, worldToCell, refreshCells } from '../gridCells.js';
-import { buildCellToRoom } from '../edgeClassify.js';
+import { buildCellToRoom, isEnclosureOutside } from '../edgeClassify.js';
 import { makeFrame } from './stairGeometry.js';
 import { uTurnSpans } from './stairClassify.js';
 import {
@@ -173,7 +173,7 @@ function classifyUTurnEdge(ctx, p, graph) {
 //     隣室壁1本だけが残り2a側面が下地むき出しになる）
 // それ以外（footprint境界上・相手がユーザー指定の通常部屋・吹抜けVOID）は委譲する（true）。
 function isDelegatedEdge(outsideRoom, p, graph, under2aRoomIds, stairOpenings, onFootprint) {
-  if (outsideRoom == null) return false;
+  if (isEnclosureOutside(outsideRoom)) return false; // 外側未指定・屋根（無割当と同値）は委譲しない
   if (outsideRoom.feature === RoomFeature.STAIR || outsideRoom.feature === RoomFeature.STAIR_VOID) return false;
   if (outsideRoom.feature === RoomFeature.UNDEFINED) return false;
   if (under2aRoomIds.has(outsideRoom.id)) return false;
@@ -211,7 +211,8 @@ function stairUnderOwnParams(graph, stair, room, opts = {}) {
     const outsideRoom = findOutsideRoom(p, graph, cellToRoom);
     const onFootprint = isOnFootprintBoundary(p, graph, footprintCellKeys);
     if (isDelegatedEdge(outsideRoom, p, graph, under2aRoomIds, stairOpenings, onFootprint)) continue; // 委譲: 生成もclaimもしない
-    result.push({ p, kind, outsideRoom });
+    // 屋根は無割当と同値: ルール2（外側の部屋の仕上げ薄壁）に屋根の仕上げを持ち込まない。
+    result.push({ p, kind, outsideRoom: isEnclosureOutside(outsideRoom) ? null : outsideRoom });
   }
   return result;
 }
