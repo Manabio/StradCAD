@@ -86,7 +86,8 @@ function footprintProbe(graph, cache = undefined) {
       if (!cell) return false;
       return isBuildingRoom(cellToRoom.get(cell.key));
     };
-    return { probe, size };
+    const cellKeyAt = (wx, wy) => worldToCell(wx, wy, graph)?.key ?? null;
+    return { probe, size, cellKeyAt };
   }
   const cached = cache.get(graph);
   if (cached) return cached;
@@ -109,7 +110,16 @@ function footprintProbe(graph, cache = undefined) {
     points.set(key, result);
     return result;
   };
-  const entry = { probe, size };
+  const keys = new Map(); // "wx,wy" -> セルキー|null（probe と同じ確定済み索引・同じ寿命）
+  const cellKeyAt = (wx, wy) => {
+    const key = `${wx},${wy}`;
+    if (keys.has(key)) return keys.get(key);
+    const cell = worldToCellInIndex(wx, wy, index);
+    const result = cell ? cell.key : null;
+    keys.set(key, result);
+    return result;
+  };
+  const entry = { probe, size, cellKeyAt };
   cache.set(graph, entry);
   return entry;
 }
@@ -188,17 +198,23 @@ export function buildExteriorSide(graph, cache = undefined) {
 
 /** 複数階のフットプリント述語をANDで束ねた WallGate を作る。世界座標が「対象の全階で建物内」＝直下まで連続して
  *  建物がある位置かを判定する（鉛直連続性）。 */
-function makeWallGate(probes) {
+function makeWallGate(probes, targetRoofAt = null) {
   const isBuilding = (wx, wy) => probes.every(p => p(wx, wy));
   return {
     /** 軸線(axisCL.value)上の1点(along)の直交両側(±EPS)のいずれかが「下まで連続して建物内」なら true。
      *  spanInBuilding・footprintBreakCLs（区間の分割粒度に依らない境界検出）が共有する唯一の点判定
-     *  ——判定式を二重化しない。 */
+     *  ——判定式を二重化しない。
+     *  targetRoofAt（自階単独ゲートだけが渡す。その点が小屋組の対象の下屋のセルなら、どの下屋かを表す値。
+     *  違えば null）が有るときは、両側で値が違う線＝下屋の外周も建物内とする（片側だけが対象の屋根セルの線と、
+     *  隣り合う別々の下屋の境界）。両側とも同じ下屋のセルの線＝屋根範囲の内部は従来どおり出さない。
+     *  無ければ従来どおり。 */
     spanPointInBuilding(axisCL, isVertical, along) {
       const a = axisCL.value;
-      return isVertical
-        ? isBuilding(a - SAMPLE_EPS, along) || isBuilding(a + SAMPLE_EPS, along)
-        : isBuilding(along, a - SAMPLE_EPS) || isBuilding(along, a + SAMPLE_EPS);
+      const [x1, y1, x2, y2] = isVertical
+        ? [a - SAMPLE_EPS, along, a + SAMPLE_EPS, along]
+        : [along, a - SAMPLE_EPS, along, a + SAMPLE_EPS];
+      if (isBuilding(x1, y1) || isBuilding(x2, y2)) return true;
+      return targetRoofAt ? targetRoofAt(x1, y1) !== targetRoofAt(x2, y2) : false;
     },
     /** グリッド辺の両側(±EPS)のいずれかが「下まで連続して建物内」なら true（直下に支えの無い辺は false で省く）。
      *  区間中点でのspanPointInBuildingを見るだけ——分割粒度が粗いと中点が偶然どちら側に転ぶかで結果が
@@ -263,11 +279,29 @@ export function footprintBreakCLs(gate, graph, axisCL, isVertical, lo, hi) {
  *  `fp.size===0`判定でnullを返していたため、これは回帰ではなく仕上げモード未着手階を保全する
  *  既存の規律（他のautoFillXxxと同じ「部屋が無い階は保全」裁定）をそのまま引き継いだ挙動である。
  *  @param {object} graph
- *  @param {ReturnType<typeof createFootprintCache>} [cache] - 省略時は毎回組み直す（従来どおり）。 */
-export function buildSelfFootprintGate(graph, cache = undefined) {
+ *  @param {ReturnType<typeof createFootprintCache>} [cache] - 省略時は毎回組み直す（従来どおり）。
+ *  @param {object} [options]
+ *  @param {Map<string,string>|Set<string>} [options.roofPerimeterCellKeys] - 小屋組の対象の下屋のセル
+ *    （roofFramingRegions.js leanToFramingCellKeys＝セルキー → どの下屋か、の Map。Set を渡すと全セルを
+ *    1つの下屋として扱う）。屋根セルは建物外だが、**片側だけが**対象のセルである線（下屋の外周＝軒・妻）と、
+ *    両側が**別々の下屋**のセルである線（隣り合う下屋の境界＝それぞれの外周）は建物内とみなす——下の階の
+ *    壁線上の通し梁が下屋の外周に出る。両側とも同じ下屋のセルの線（屋根範囲の内部）・対象でない屋根セル
+ *    （非在来・矩形でない・陸屋根）は従来どおり建物外（対象の下屋と対象でない屋根セルの境界は、対象の下屋の
+ *    外周なので出る）。省略・空ならゲートは従来と完全に同じ。Map・Set 以外は TypeError。 */
+export function buildSelfFootprintGate(graph, cache = undefined, { roofPerimeterCellKeys = undefined } = {}) {
+  const isMap = roofPerimeterCellKeys instanceof Map;
+  if (roofPerimeterCellKeys != null && !isMap && !(roofPerimeterCellKeys instanceof Set)) {
+    throw new TypeError('buildSelfFootprintGate: roofPerimeterCellKeys は Map<string,string> か Set<string> で渡す');
+  }
   const fp = footprintProbe(graph, cache);
   if (fp.size === 0) return null;
-  return makeWallGate([fp.probe]);
+  if (!roofPerimeterCellKeys || roofPerimeterCellKeys.size === 0) return makeWallGate([fp.probe]);
+  const targetRoofAt = (wx, wy) => {
+    const key = fp.cellKeyAt(wx, wy);
+    if (key === null || !roofPerimeterCellKeys.has(key)) return null;
+    return isMap ? roofPerimeterCellKeys.get(key) : true;
+  };
+  return makeWallGate([fp.probe], targetRoofAt);
 }
 
 /** 構造モードの生成対象階(plane)について、基準階＋直下の全階のフットプリントをANDで束ねた WallGate を構築する

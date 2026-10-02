@@ -4466,7 +4466,8 @@ test('【不変条件】structuralRecompute.js: options.footprintCacheをbuildSt
   // ステップB-3でctx（解決コンテキスト。省略可・既定undefined）が5番目の引数として加わった。
   assert.ok(/buildStructuralWallGate\(targetGraph\.plane, project, targetGraph, footprintCache, ctx\)/.test(src),
     'buildStructuralWallGateへfootprintCache・ctxを渡していない');
-  assert.ok(/buildSelfFootprintGate\(isRoof \? \(belowGraph \?\? targetGraph\) : targetGraph, footprintCache\)/.test(src),
+  // C2d-1: 第3引数に { roofPerimeterCellKeys: roofCellKeys }（下屋の外周。leanToPerimeter.test.js が行まるごと固定）が加わった。
+  assert.ok(/buildSelfFootprintGate\(isRoof \? \(belowGraph \?\? targetGraph\) : targetGraph, footprintCache, \{ roofPerimeterCellKeys: roofCellKeys \}\)/.test(src),
     'buildSelfFootprintGateへfootprintCacheを渡していない');
   assert.ok(/buildExteriorSide\(targetGraph, footprintCache\)/.test(src),
     'buildExteriorSideへfootprintCacheを渡していない');
@@ -4495,8 +4496,9 @@ test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStru
   // 踊り場受け梁(LG)の到達階生成（WP-B2改訂・2026-09-28裁定）で14番目の引数としてbelowGraphが加わった。
   // 小屋梁の生成（ステップC2b）で15番目の引数としてroofRegions（屋根専用平面のときだけ主屋根の region 配列、
   // 実体階は undefined＝小屋梁に触れない）が加わった。
-  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions\)/.test(src),
-    'autoFillStructuralGrid へ wallSegments・aboveColumns・belowColumns・aboveBeamSegments・selfGate・freeEndGraph・wallSourceCache・openingSources・belowGraph・roofRegions を渡していない');
+  // 下屋の範囲の床梁ガード（ステップC2d-1）で16番目の引数としてroofCellKeys（実体階だけ対象の下屋のセルキー集合）が加わった。
+  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys\)/.test(src),
+    'autoFillStructuralGrid へ wallSegments・aboveColumns・belowColumns・aboveBeamSegments・selfGate・freeEndGraph・wallSourceCache・openingSources・belowGraph・roofRegions・roofCellKeys を渡していない');
   assert.ok(/removedBeams\.length > 0/.test(src), 'removedBeams が changed の判定に含まれていない');
 });
 

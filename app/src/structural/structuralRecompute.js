@@ -21,7 +21,8 @@ import {
 import { collectFloorGroups } from './memberNumbering.js';
 import { conformWoodSections, conformWoodColumnEccentricity, autoFillWoodBeamDepths, woodBeamDepthMarkSignature } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
-import { mainRoofFramingRegion } from './roofFramingRegions.js';
+import { mainRoofFramingRegion, leanToFramingCellKeys } from './roofFramingRegions.js';
+import { withGraphReadScope } from '../graphReadScope.js';
 import { conformToLedger } from './memberGroups.js';
 
 /**
@@ -187,7 +188,11 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // targetGraph 自身へフォールバックする（buildSelfFootprintGate(null)のクラッシュ回避）。
   // 実体階（isRoof===false）は常に targetGraph自身＝autoFillWoodWallBeams/autoFillWoodSillBeamsが
   // 省略時に自前計算する値と同じ＝従来どおり不変。
-  const selfGate = buildSelfFootprintGate(isRoof ? (belowGraph ?? targetGraph) : targetGraph, footprintCache);
+  // 実体階だけ、小屋組の対象の下屋（矩形の片流れ・切妻・寄棟。roofFramingRegions.js）のセルを渡す——下屋の外周
+  // （片側だけが対象の屋根セルの線）を建物内とみなして壁線上の通し梁を出し、床梁はその区画に作らない
+  // （1回の再計算につき1回だけ導く。屋根セルが無い階は部屋を走査するだけ）。屋根専用平面は従来どおり。
+  const roofCellKeys = isRoof ? undefined : withGraphReadScope(targetGraph, () => leanToFramingCellKeys(targetGraph, project));
+  const selfGate = buildSelfFootprintGate(isRoof ? (belowGraph ?? targetGraph) : targetGraph, footprintCache, { roofPerimeterCellKeys: roofCellKeys });
   // 自由端（F-2・selfWallFreeEnds）の判定基準（R-2・2026-09-19是正）。selfGateと同じ理由——屋根専用
   // 平面は自階に壁が無いため、判定は「1つ下の実体階（＝最上階）」で行う。belowGraphはselfGateと
   // 同じ値を使い回す（追加peekは無い）。実体階は常にtargetGraph自身（従来と同値）。
@@ -201,7 +206,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const roofRegions = isRoof ? (mainRegion ? [mainRegion] : []) : undefined;
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。

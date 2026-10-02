@@ -275,7 +275,8 @@ test('【不変条件】structuralAutoFill.js: autoFillStructuralGrid はbeamPla
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralAutoFill.js'), 'utf8');
-  assert.ok(/autoFillWoodFloorBeams\(graph, project\)/.test(src), 'autoFillWoodFloorBeams(graph, project) の呼び出しが無い');
+  // C2d-1: 第3引数に対象の下屋のセルキー集合（roofCellKeys）を渡す。呼び出し行まるごと一致で固定する（配線の確認は leanToPerimeter.test.js）。
+  assert.ok(/^\s*\? autoFillWoodFloorBeams\(graph, project, roofCellKeys\) : \{ created: \[\], removed: \[\] \};$/m.test(src), 'autoFillWoodFloorBeams(graph, project, roofCellKeys) の呼び出しが無い');
   assert.ok(/floorBeamsResult\.created/.test(src), 'floorBeamsResult.created をnewBeamsへ含めていない');
   assert.ok(/floorBeamsResult\.removed/.test(src), 'floorBeamsResult.removed をremovedBeamsへ含めていない');
 });
@@ -683,8 +684,8 @@ test('【不変条件】structuralRecompute.js: openingBeamSourcesForを呼び�
   assert.ok(/import \{ openingBeamSourcesFor \} from '\.\/openingBeamAxes\.js';/.test(src),
     'openingBeamAxes.jsのopeningBeamSourcesForをimportしていない');
   assert.ok(/openingBeamSourcesFor\(targetGraph, project,/.test(src), 'openingBeamSourcesForの呼び出しが無い');
-  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph, roofRegions\)/.test(src),
-    'autoFillStructuralGridの末尾引数にopeningSources, belowGraph, roofRegionsを渡していない（belowGraphはWP-B2改訂＝踊り場受け梁の到達階生成、roofRegionsはC2b＝小屋梁の生成が追加した引数）');
+  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph, roofRegions, roofCellKeys\)/.test(src),
+    'autoFillStructuralGridの末尾引数にopeningSources, belowGraph, roofRegions, roofCellKeysを渡していない（belowGraphはWP-B2改訂＝踊り場受け梁の到達階生成、roofRegionsはC2b＝小屋梁の生成、roofCellKeysはC2d-1＝下屋の範囲の床梁ガードが追加した引数）');
 });
 
 test('autoFillStructuralGrid: openingSourcesを渡すと規則Oの梁芯（discipline:fuse・beamAxisOrigin:opening）が生成される', () => {

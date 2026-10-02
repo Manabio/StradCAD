@@ -20,6 +20,7 @@ import { mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView } from '../f
 import { resolveRoofShape, roofRoomBounds } from '../finish/roof/roofDefaults.js';
 import { roofHighSideViewOfRoom } from '../finish/roof/roofOrientation.js';
 import { rectOfBounds } from '../finish/roof/roofGeometry.js';
+import { refreshCells } from '../finish/gridCells.js';
 import { roofRidgeIsVertical } from './roofFramingGeometry.js';
 import { showRoofFraming, roofFramingWidths, roofFramingHostMembers, roofFramingPrimitives } from './framingDrawing.js';
 
@@ -38,11 +39,11 @@ export function mainRoofFramingRegion(topGraph, project) {
   return { key: 'main', rect, shape, ridgeIsVertical: roofRidgeIsVertical(rect, CL_OVERLAP_TOL_MM), highSide };
 }
 
-/** 下屋（屋根セルのある階の屋根の部屋）ごとの小屋組の region。条件を満たす部屋だけの配列（無ければ空）。 */
-export function leanToFramingRegions(graph, project) {
+/** 下屋の region と、その元の部屋の組（leanToFramingRegions・leanToFramingCellKeys の共通の導出）。 */
+function leanToFramingEntries(graph, project) {
   if (!graph) return [];
   if (!rulesFor(effectiveStructure(graph, project)).framing) return [];
-  const regions = [];
+  const entries = [];
   for (const room of graph.rooms) {
     if (!isRoofFeature(room.feature) || !room.roofSpec) continue;
     const boundsList = roofRoomBounds(room, graph);
@@ -51,9 +52,29 @@ export function leanToFramingRegions(graph, project) {
     const shape = resolveRoofShape(room.roofSpec, { boundsList });
     if (!FRAMING_SHAPES.has(shape)) continue;
     const highSide = shape === RoofShape.MONO ? roofHighSideViewOfRoom(room, graph).value : null;
-    regions.push({ key: `lean:${room.id}`, rect, shape, ridgeIsVertical: roofRidgeIsVertical(rect, CL_OVERLAP_TOL_MM), highSide });
+    entries.push({ room, region: { key: `lean:${room.id}`, rect, shape, ridgeIsVertical: roofRidgeIsVertical(rect, CL_OVERLAP_TOL_MM), highSide } });
   }
-  return regions;
+  return entries;
+}
+
+/** 下屋（屋根セルのある階の屋根の部屋）ごとの小屋組の region。条件を満たす部屋だけの配列（無ければ空）。 */
+export function leanToFramingRegions(graph, project) {
+  return leanToFramingEntries(graph, project).map(e => e.region);
+}
+
+/**
+ * 小屋組の対象の下屋（leanToFramingRegions が region を返す部屋）のセルキー → その下屋の region の key の Map
+ * （現在の格子で解決。無ければ空。`.has`・`.size` は集合と同じに使える）。自階単独ゲート（wallGate.js
+ * buildSelfFootprintGate の roofPerimeterCellKeys）と床梁のガード（woodAutoFill.js autoFillWoodFloorBeams）が
+ * 共有する「対象の屋根セル」。値（どの下屋のセルか）はゲートが使う——隣り合う別々の下屋の境界も、
+ * それぞれの下屋の外周として扱うため。
+ */
+export function leanToFramingCellKeys(graph, project) {
+  const keys = new Map();
+  for (const { room, region } of leanToFramingEntries(graph, project)) {
+    for (const key of refreshCells(room.cells, graph)) keys.set(key, region.key);
+  }
+  return keys;
 }
 
 /**

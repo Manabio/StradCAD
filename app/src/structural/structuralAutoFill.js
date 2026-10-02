@@ -656,8 +656,10 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null, below
  *  消えた等で有効な源が0件になった場合の後始末）。
  *  roofRegions: 小屋梁（role:'roofBeam'。woodRoofFraming.js autoFillWoodRoofFraming）を載せる小屋組の region 群
  *  （roofFramingRegions.js。主屋根は呼び出し側が最上階の graph から導く）。省略時（undefined）は小屋梁に一切
- *  触れない（実体階など小屋組を扱わない呼び出し）。[] なら auto の小屋梁を撤去する。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined) {
+ *  触れない（実体階など小屋組を扱わない呼び出し）。[] なら auto の小屋梁を撤去する。
+ *  roofCellKeys: 小屋組の対象の下屋のセルキー集合（roofFramingRegions.js leanToFramingCellKeys）。床梁
+ *  （autoFillWoodFloorBeams）へそのまま素通しし、その区画には床梁を作らない。省略時は従来どおり。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -729,7 +731,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 自然に0本だが、将来（ステップ5）屋根の梁をrole:'primary'へ切り替えた際に床梁が生えるのを防ぐ
   // 明示ガード）。
   const floorBeamsResult = !isRoof && rulesFor(structure).beamPlacement === 'wallRuns'
-    ? autoFillWoodFloorBeams(graph, project) : { created: [], removed: [] };
+    ? autoFillWoodFloorBeams(graph, project, roofCellKeys) : { created: [], removed: [] };
   // 小屋伏図にも梁・柱ルールを適用する計画（ステップ5）: 屋根専用平面の梁は主構造ルールの選択子
   // roofBeamPlacement（structureRules.js。ステップ2）で振り分ける——在来木造（'wallRuns'）は
   // 通り芯グリッドの軒桁（role:'eaves'）の代わりに、自階（＝最上階。wallSegments・selfGateは

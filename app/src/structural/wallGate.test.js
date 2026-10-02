@@ -231,6 +231,94 @@ test('createFootprintCache: 点判定のmemoキーはwx・wyの両方——同�
     '同じwx(=1500±EPS)でも異なるwy(=1500)なら建物内——memoキーがwyを区別できていないと1つ目の結果(false)を誤って返す');
 });
 
+// ================================================================
+// ステップ C2d-1: roofPerimeterCellKeys（下屋の外周＝片側だけが対象の屋根セルの線を建物内とする）
+// ================================================================
+
+// 4セルが東へ並ぶ（各2000×2000）。A=屋内、R1・R2=屋根（対象の下屋）、R3=屋根（対象でない屋根セル）。
+function makeRoofRowGraph() {
+  const graph = makeGraph();
+  const xs = [0, 2000, 4000, 6000, 8000].map(v => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: true, discipline: Discipline.STRUCT }));
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  const key = i => `${xs[i].id}:${y0.id}:${xs[i + 1].id}:${y1.id}`;
+  graph.addRoom(new Set([key(0)]), 'A');
+  const roof = (i) => {
+    const room = graph.addRoom(new Set([key(i)]), '屋根');
+    room.setKind(RoomKind.EXTERIOR);
+    room.setFeature(RoomFeature.ROOF);
+    return key(i);
+  };
+  const [r1, r2, r3] = [roof(1), roof(2), roof(3)];
+  return { graph, xs, y0, y1, targets: new Set([r1, r2]), r3 };
+}
+
+test('【下屋の外周】片側だけが対象の屋根セルの線は建物内。両側とも対象の線（屋根範囲の内部）・対象でない屋根セルは従来どおり建物外', () => {
+  const { graph, xs, y0, y1, targets } = makeRoofRowGraph();
+  const plain = buildSelfFootprintGate(graph);
+  const gate = buildSelfFootprintGate(graph, undefined, { roofPerimeterCellKeys: targets });
+  // 軒（y=0・y=2000。屋根セルと外の境界）: 対象なら建物内、従来は建物外
+  assert.equal(plain.spanPointInBuilding(y0, false, 3000), false, '前提: 従来は屋根セルの外周は建物外');
+  assert.equal(gate.spanPointInBuilding(y0, false, 3000), true, '軒（上）');
+  assert.equal(gate.spanPointInBuilding(y1, false, 5000), true, '軒（下）。R2 も対象');
+  // 屋根範囲の内部（R1|R2）: 両側とも対象
+  assert.equal(gate.spanPointInBuilding(xs[2], true, 1000), false, '屋根範囲の内部の線は出さない');
+  // 屋内|屋根（A|R1）は従来から建物内
+  assert.equal(plain.spanPointInBuilding(xs[1], true, 1000), true);
+  assert.equal(gate.spanPointInBuilding(xs[1], true, 1000), true);
+  // 対象|対象でない屋根（R2|R3）: 片側だけが対象
+  assert.equal(gate.spanPointInBuilding(xs[3], true, 1000), true, '対象の屋根セルと対象外の屋根セルの境（妻）');
+  // 対象でない屋根セルの外周（R3|外）: 従来どおり
+  assert.equal(gate.spanPointInBuilding(xs[4], true, 1000), false, '対象でない屋根セルは従来どおり建物外');
+  assert.equal(gate.spanPointInBuilding(y0, false, 7000), false, '対象でない屋根セルの軒も従来どおり');
+});
+
+test('【下屋の外周】Map（セル→どの下屋か）を渡すと、隣り合う別々の下屋の境界は建物内（それぞれの外周）。同じ下屋のセル同士の線は出さない', () => {
+  const { graph, xs, y0, targets } = makeRoofRowGraph();
+  const [r1, r2] = [...targets];
+  // R1 と R2 が別々の下屋
+  const separate = buildSelfFootprintGate(graph, undefined, { roofPerimeterCellKeys: new Map([[r1, 'lean:a'], [r2, 'lean:b']]) });
+  assert.equal(separate.spanPointInBuilding(xs[2], true, 1000), true, '別々の下屋の境界（R1|R2）は建物内');
+  assert.equal(separate.spanPointInBuilding(y0, false, 3000), true, '軒は従来どおり建物内');
+  assert.equal(separate.spanPointInBuilding(xs[4], true, 1000), false, '対象でない屋根セルの外周は従来どおり建物外');
+  // R1 と R2 が同じ下屋（1つの下屋の2セル）
+  const same = buildSelfFootprintGate(graph, undefined, { roofPerimeterCellKeys: new Map([[r1, 'lean:a'], [r2, 'lean:a']]) });
+  assert.equal(same.spanPointInBuilding(xs[2], true, 1000), false, '同じ下屋の内部の線は出さない');
+  // cache あり・なしで同じ
+  const cached = buildSelfFootprintGate(graph, createFootprintCache(), { roofPerimeterCellKeys: new Map([[r1, 'lean:a'], [r2, 'lean:b']]) });
+  assert.equal(cached.spanPointInBuilding(xs[2], true, 1000), true);
+});
+
+test('【下屋の外周】footprintBreakCLs: 屋根セルの外周の境界でも区間が割れる（屋内→対象の屋根セルは両側とも建物内で割れない）', () => {
+  const { graph, y0, targets } = makeRoofRowGraph();
+  const gate = buildSelfFootprintGate(graph, undefined, { roofPerimeterCellKeys: targets });
+  // 軒 y=0 に沿って x:-1000..9000。x=0 で外→内、x=6000 で対象外（R3）手前＝内→外へ変わる。x=2000・4000 は内→内。
+  const xValues = footprintBreakCLs(gate, graph, y0, false, -1000, 9000).map(cl => cl.value);
+  assert.deepEqual(xValues, [0, 6000]);
+});
+
+test('【下屋の外周】引数省略・null・空集合・存在しないセルキーは従来と同じゲート（cache あり・なし両方）', () => {
+  const { graph, xs, y0, y1, targets } = makeRoofRowGraph();
+  const probes = [[y0, false, 3000], [y1, false, 5000], [xs[2], true, 1000], [xs[3], true, 1000], [xs[1], true, 1000], [xs[4], true, 1000]];
+  const answers = (gate) => probes.map(([cl, v, along]) => gate.spanPointInBuilding(cl, v, along));
+  const base = answers(buildSelfFootprintGate(graph));
+  for (const options of [undefined, {}, { roofPerimeterCellKeys: undefined }, { roofPerimeterCellKeys: null },
+    { roofPerimeterCellKeys: new Set() }, { roofPerimeterCellKeys: new Set(['no:such:cell:key']) }]) {
+    assert.deepEqual(answers(buildSelfFootprintGate(graph, undefined, options)), base, JSON.stringify(options));
+    assert.deepEqual(answers(buildSelfFootprintGate(graph, createFootprintCache(), options)), base, `cache あり ${JSON.stringify(options)}`);
+  }
+  // 対照: 同じ probe 群で、対象の集合を渡したときだけ答えが変わる（cache あり・なしで同じ）
+  const withTargets = answers(buildSelfFootprintGate(graph, undefined, { roofPerimeterCellKeys: targets }));
+  assert.notDeepEqual(withTargets, base);
+  assert.deepEqual(answers(buildSelfFootprintGate(graph, createFootprintCache(), { roofPerimeterCellKeys: targets })), withTargets);
+});
+
+test('【失敗系】【下屋の外周】roofPerimeterCellKeys が Set でない（配列など）は TypeError。部屋が無い graph は従来どおり null', () => {
+  const { graph, targets } = makeRoofRowGraph();
+  assert.throws(() => buildSelfFootprintGate(graph, undefined, { roofPerimeterCellKeys: [...targets] }), TypeError);
+  assert.equal(buildSelfFootprintGate(makeGraph(), undefined, { roofPerimeterCellKeys: targets }), null);
+});
+
 test('buildStructuralWallGate: cache指定時も省略時と同じ判定になる（基準階＋直下階のAND）', async () => {
   const below = makeRectRoomGraph();
   const above = makeRectRoomGraph();

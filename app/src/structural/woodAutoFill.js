@@ -30,6 +30,8 @@ import {
 } from './woodFraming.js';
 import { woodColumnEccentricity } from './woodColumnOffset.js';
 import { buildSelfFootprintGate, footprintBreakCLs } from './wallGate.js';
+import { worldToCell } from '../finish/gridCells.js';
+import { withGraphReadScope } from '../graphReadScope.js';
 import { bareColumnRect } from '../finish/columnWrap.js';
 import { findHostWall } from '../openings/openingGeometry.js';
 import { selfWallFreeEnds } from './wallFreeEnds.js';
@@ -1529,11 +1531,16 @@ function lockedFullBeamOverlap(graph, materialType, isVertical, coord, lo, hi, t
  *    幾何的に重なっていれば生成しない（findBeamAnchorCLで既存CLを再利用した際のspanKeyすり抜けの
  *    最終防止。実データで発覚した壁下梁・頭つなぎとの二重梁を防ぐ）。
  *  - 非在来（framing を持たない主構造）は何もしない。
+ *  - 屋根ガード（roofCellKeys）: セルの中心が小屋組の対象の下屋のセル（roofFramingRegions.js
+ *    leanToFramingCellKeys）の中にある区画には作らない（屋根の下に床は無い）。下屋の外周に大梁が出る
+ *    ようになると下屋の範囲にも梁で囲まれた区画ができるため。候補にならないので既存の auto の床梁は
+ *    上の撤去ループで消える。省略・空集合なら従来どおり。
  * @param {object} graph
  * @param {object} project
+ * @param {Map<string,string>|Set<string>} [roofCellKeys] - 小屋組の対象の下屋のセル（キーの有無だけを見る）
  * @returns {{created: object[], removed: string[]}}
  */
-export function autoFillWoodFloorBeams(graph, project) {
+export function autoFillWoodFloorBeams(graph, project, roofCellKeys = undefined) {
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing) return { created: [], removed: [] };
   const maxPitch = TRADITIONAL_WOOD_FRAMING.floorBeamMaxPitchMm;
@@ -1546,6 +1553,14 @@ export function autoFillWoodFloorBeams(graph, project) {
     hi: Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue),
   }));
   const cells = beamGridCells(lines);
+  // 対象の下屋の区画（中心が対象の屋根セルの中）。格子索引を区画ごとに組み直さないよう、梁を作り始める前に
+  // 1つの読み取りスコープでまとめて判定する。
+  const roofCells = roofCellKeys && roofCellKeys.size > 0
+    ? withGraphReadScope(graph, () => new Set(cells.filter((cell) => {
+      const hit = worldToCell((cell.x1 + cell.x2) / 2, (cell.y1 + cell.y2) / 2, graph);
+      return !!hit && roofCellKeys.has(hit.key);
+    })))
+    : null;
 
   // セルの辺（isVertical, coord）を作っている大梁自身を座標で逆引きする（clStart/clEndのアンカーに使う。
   // beamGridCellsは線分の集合しか返さないため、生成元の梁オブジェクトへ戻す必要がある）。
@@ -1563,6 +1578,7 @@ export function autoFillWoodFloorBeams(graph, project) {
   for (const cell of cells) {
     const w = cell.x2 - cell.x1, h = cell.y2 - cell.y1;
     if (Math.min(w, h) <= maxPitch) continue; // 短辺が1820以下なら床梁不要
+    if (roofCells?.has(cell)) continue; // 対象の下屋の区画（屋根の下に床は無い）
 
     const isVertical = floorBeamIsVertical(w, h);
     const longLen = isVertical ? w : h;
