@@ -1,7 +1,7 @@
 // beamJunction.js（在来木造の梁の交点処理・B-3・2026-09-17裁定「通しが勝つ」）の単体テスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveBeamJunctionSpans } from './beamJunction.js';
+import { resolveBeamJunctionSpans, continuousBeamLengths } from './beamJunction.js';
 
 const THROUGH = Object.freeze({ beamJunction: 'throughWins' });
 
@@ -203,4 +203,171 @@ test('【失敗系】(o) beams が null / 空配列でも例外を投げず空Ma
   assert.equal(resolveBeamJunctionSpans(THROUGH, null).size, 0);
   assert.equal(resolveBeamJunctionSpans(THROUGH, []).size, 0);
   assert.doesNotThrow(() => resolveBeamJunctionSpans(THROUGH, null));
+});
+
+// ---- 出隅の長さ＝同じ軸で連続する梁の全長（ユーザー裁定2026-10-02「短手と長手が出会うとき、長手勝ち」）----
+const TOL = 0.5;
+
+test('(p1) 連続長: 1本だけなら材長（end1>end2の向きでも同じ）', () => {
+  const m = continuousBeamLengths([beam('A', false, 0, 0, 1000), beam('B', true, 5000, 800, 0)], TOL);
+  assert.equal(m.get('A'), 1000);
+  assert.equal(m.get('B'), 800);
+});
+
+test('(p2) 連続長: 端と端がつながる2本・3本は全員が合計の長さ（並び順・向きに依らない）', () => {
+  const two = continuousBeamLengths([beam('A', false, 0, 0, 1000), beam('B', false, 0, 1000, 2500)], TOL);
+  assert.equal(two.get('A'), 2500);
+  assert.equal(two.get('B'), 2500);
+  const three = continuousBeamLengths([
+    beam('C', false, 0, 3000, 2000), // end1>end2
+    beam('A', false, 0, 0, 1000),
+    beam('B', false, 0, 1000, 2000),
+  ], TOL);
+  for (const id of ['A', 'B', 'C']) assert.equal(three.get(id), 3000, id);
+});
+
+test('(p3) 連続長: tol 以内のずれはつなぎ、すき間・重なりはつながない（別の run）', () => {
+  const near = continuousBeamLengths([beam('A', false, 0, 0, 1000), beam('B', false, 0, 1000.3, 2000)], TOL);
+  assert.equal(near.get('A'), 2000);
+  const gap = continuousBeamLengths([beam('A', false, 0, 0, 1000), beam('B', false, 0, 1100, 2000)], TOL);
+  assert.equal(gap.get('A'), 1000);
+  assert.equal(gap.get('B'), 900);
+  const overlap = continuousBeamLengths([beam('A', false, 0, 0, 1000), beam('B', false, 0, 600, 2000)], TOL);
+  assert.equal(overlap.get('A'), 1000);
+  assert.equal(overlap.get('B'), 1400);
+});
+
+test('(p9) 連続長: end1/end2（柱面トリム前）でつなぐ——分割点の両側が柱幅ぶん離れた base1/base2 では見ない', () => {
+  // 下階柱（幅120）の位置 x=1000 で分割された2本。描画スパン（base）は柱の面 940・1060 で止まっていて離れている。
+  const m = continuousBeamLengths([
+    beam('A', false, 0, 0, 1000, { base2: 940 }),
+    beam('B', false, 0, 1000, 2500, { base1: 1060 }),
+  ], TOL);
+  assert.equal(m.get('A'), 2500);
+  assert.equal(m.get('B'), 2500);
+});
+
+test('(p10) 連続長: 端の差がちょうど tol のすき間・重なりはどちらもつながない（tol 未満だけつなぐ）', () => {
+  const gap = continuousBeamLengths([beam('A', false, 0, 0, 1000), beam('B', false, 0, 1000 + TOL, 2000)], TOL);
+  assert.equal(gap.get('A'), 1000);
+  const overlap = continuousBeamLengths([beam('A', false, 0, 0, 1000), beam('B', false, 0, 1000 - TOL, 2000)], TOL);
+  assert.equal(overlap.get('A'), 1000);
+});
+
+test('(p4) 連続長: 断面（sectionKey）が違ってもつなぐ。途中のT字・十字の交点があっても同じ軸ならつなぐ', () => {
+  const m = continuousBeamLengths([
+    beam('A', false, 0, 0, 1000, { sectionKey: 'S120x120' }),
+    beam('B', false, 0, 1000, 3000, { sectionKey: 'S120x270' }),
+    beam('T', true, 0, 1000, 2000), // 分割点に別方向の梁が突き当たる
+  ], TOL);
+  assert.equal(m.get('A'), 3000);
+  assert.equal(m.get('B'), 3000);
+  assert.equal(m.get('T'), 1000, '別方向の梁は混ざらない');
+});
+
+test('(p5) 連続長: 向き・軸座標が違う梁は混ざらない（端が一致していても別の run）', () => {
+  const m = continuousBeamLengths([
+    beam('A', false, 0, 0, 1000),
+    beam('B', false, 100, 1000, 2000), // 軸が違う
+    beam('C', true, 0, 1000, 2000),    // 向きが違う（座標は同じ数値）
+  ], TOL);
+  assert.equal(m.get('A'), 1000);
+  assert.equal(m.get('B'), 1000);
+  assert.equal(m.get('C'), 1000);
+});
+
+test('【失敗系】(p6) 連続長: primary でない梁は数えず・つなぎの橋にもならない', () => {
+  const m = continuousBeamLengths([
+    beam('A', false, 0, 0, 1000),
+    beam('F', false, 0, 1000, 2000, { role: 'floor' }),
+    beam('B', false, 0, 2000, 3000),
+  ], TOL);
+  assert.equal(m.has('F'), false);
+  assert.equal(m.get('A'), 1000);
+  assert.equal(m.get('B'), 1000);
+});
+
+test('【失敗系】(p7) 連続長: 長さ0・座標が有限でない梁・null/空入力でも例外を投げない', () => {
+  const m = continuousBeamLengths([
+    beam('Z', false, 0, 500, 500),
+    beam('N1', false, 0, NaN, 1000),
+    beam('N2', false, undefined, 0, 1000),
+    beam('N3', false, 0, 0, Infinity),
+    beam('A', false, 0, 0, 500),
+  ], TOL);
+  assert.equal(m.get('Z'), 500, '長さ0の梁は隣とつながる（0を足すだけ）');
+  assert.equal(m.get('A'), 500);
+  for (const id of ['N1', 'N2', 'N3']) assert.equal(m.has(id), false, id);
+  assert.equal(continuousBeamLengths(null, TOL).size, 0);
+  assert.equal(continuousBeamLengths([], TOL).size, 0);
+});
+
+test('(p8) 連続長: 長い鎖（500本）でも合計になる（走査し直さない実装の正しさ）', () => {
+  const beams = [];
+  for (let i = 0; i < 500; i++) beams.push(beam(`B${i}`, i % 2 === 0, 0, i * 100, (i + 1) * 100));
+  // 向きが交互なので、同じ向きの梁は100おきに離れる＝つながらない
+  const m = continuousBeamLengths(beams, TOL);
+  assert.equal(m.get('B0'), 100);
+  const chain = [];
+  for (let i = 0; i < 500; i++) chain.push(beam(`C${i}`, false, 0, i * 100, (i + 1) * 100));
+  const c = continuousBeamLengths(chain, TOL);
+  assert.equal(c.get('C0'), 50000);
+  assert.equal(c.get('C499'), 50000);
+});
+
+test('(q1) 出隅: 分割された長辺（短い断片が角に来る）対 分割されていない短辺 → 長辺が勝つ（旧規則なら短辺が勝つ構成）', () => {
+  const beams = [
+    beam('H1', false, 0, 0, 1000, { sectionKey: 'A', halfWidth: 60 }),     // 長辺（X）の角の断片
+    beam('H2', false, 0, 1000, 3000, { sectionKey: 'B', halfWidth: 60 }),  // 断面違いで分割
+    beam('V', true, 0, 0, 2000, { sectionKey: 'T', halfWidth: 45 }),       // 短辺（Y）1本
+  ];
+  const j = resolveBeamJunctionSpans(THROUGH, beams);
+  assert.equal(j.get('H1').ends[0].kind, 'cornerClose', '連続長3000>2000＝Xが勝者');
+  assert.equal(j.get('H1').coord1, -45);
+  assert.equal(j.get('V').ends[0].kind, 'winnerFace');
+  assert.equal(j.get('V').coord1, 60);
+});
+
+test('(q2) 出隅: 短辺側が分割されていても、連続長が長ければ短辺側（Y）が勝つ', () => {
+  const beams = [
+    beam('H', false, 0, 0, 2000, { halfWidth: 60 }),
+    beam('V1', true, 0, 0, 1000, { halfWidth: 45 }),
+    beam('V2', true, 0, 1000, 3000, { halfWidth: 45 }),
+  ];
+  const j = resolveBeamJunctionSpans(THROUGH, beams);
+  assert.equal(j.get('V1').ends[0].kind, 'cornerClose');
+  assert.equal(j.get('H').ends[0].kind, 'winnerFace');
+});
+
+test('(q3) 出隅: 連続長が同じなら X 方向（従来どおり）', () => {
+  const beams = [
+    beam('H1', false, 0, 0, 1000), beam('H2', false, 0, 1000, 2000),
+    beam('V', true, 0, 0, 2000),
+  ];
+  const j = resolveBeamJunctionSpans(THROUGH, beams);
+  assert.equal(j.get('H1').ends[0].kind, 'cornerClose');
+  assert.equal(j.get('V').ends[0].kind, 'winnerFace');
+});
+
+test('【失敗系】(q4) 出隅: 片方の方向にしか arm が無い角は勝者なし（従来どおり）', () => {
+  const beams = [
+    beam('H1', false, 0, 0, 1000, { sectionKey: 'A' }),
+    beam('H2', false, 0, 1000, 3000, { sectionKey: 'A' }),
+  ];
+  // 断面が同じ共線ペアは (1000,0) で通し（X方向）、(0,0)・(3000,0) は片方向のみで勝者なし。
+  const j = resolveBeamJunctionSpans(THROUGH, beams);
+  assert.equal(j.get('H1').ends[0].kind, 'base');
+  assert.equal(j.get('H1').ends[1].kind, 'through');
+  assert.equal(j.get('H2').ends[1].kind, 'base');
+});
+
+test('(q5) 出隅: 連続長が離れた別の run（すき間あり）は合わせない＝角の梁1本ずつの長さで比べる', () => {
+  const beams = [
+    beam('H1', false, 0, 0, 1000),
+    beam('H2', false, 0, 1500, 3500), // すき間500＝別の run（旧規則と同じ結果になる）
+    beam('V', true, 0, 0, 2000),
+  ];
+  const j = resolveBeamJunctionSpans(THROUGH, beams);
+  assert.equal(j.get('V').ends[0].kind, 'cornerClose', 'H1 は 1000 のまま＜2000');
+  assert.equal(j.get('H1').ends[0].kind, 'winnerFace');
 });

@@ -2,7 +2,9 @@
 // 在来木造の梁の交点処理（B-3・ユーザー裁定2026-09-17）。
 //
 // 「通しの梁（両側に続く梁）が勝ち、T字で突き当たる梁が負け（勝者の面で止まる）」「出隅（L字）は
-// 長い方が勝ち、同長ならX方向」——このルールは場面によらず一律に適用する。実体スパン
+// 長い方が勝ち、同長ならX方向」——このルールは場面によらず一律に適用する。出隅の長さは、角に端を
+// 置く梁1本の材長ではなく、同じ軸で端と端がつながる梁を合わせた全長（continuousBeamLengths。
+// 梁は下階柱で分割されるため。ユーザー裁定2026-10-02「短手と長手が出会うとき、長手勝ち」）。実体スパン
 // （core/structuralEntities.js の spanForColumns。下階柱面での止め）はここでは一切書き換えない
 // ——ここが返すのは描画専用の追加トリム（勝者面での止め・L字の角閉じ）で、renderer/StructuralLayer.jsx
 // が spanForColumns の結果を上書きして使う（設計意図は .claude/structural-model.md「在来木造の梁は
@@ -50,6 +52,68 @@ function clusterPoints(points, tol) {
 }
 
 /**
+ * 同じ軸の上で端と端がつながる梁（role==='primary'）を合わせた全長（連続長）を梁ごとに返す純関数。
+ * 出隅（L字）の勝者を「辺の長さ」で決めるために使う——梁は下階柱の位置で分割されるため、1本の材長では
+ * 辺の長さを表せない（ユーザー裁定2026-10-02「短手と長手が出会うとき、長手勝ち」）。
+ * つながる＝同じ向き・同じ軸座標（tol未満）で、一方の hi 端ともう一方の lo 端の差が tol 未満。
+ * 軸座標は直前の梁との差で鎖状にまとめる（clusterPoints と同じ限界: 少しずつずれる軸は1つにつながりうる）。
+ * 座標は end1/end2（AXIS・未トリム）を使う——分割点では2本が同じCLを共有してぴたりと一致する
+ * （base1/base2 は柱面トリム後で、分割点の両側は柱幅ぶん離れる）。断面（sectionKey）は問わない。
+ * 重なり・すき間のある梁は直接にはつながない（重なる梁も共通の隣を介して同じ成分にはなりうる。全長は
+ * 成分の「最大hi − 最小lo」なので二重には数えない）。1回の呼び出しで軸ごとにまとめて作る（O(n log n)）。
+ * @param {Array<{id:string, role:string, isVertical:boolean, axisValue:number, end1:number, end2:number}>} beams
+ * @param {number} tol
+ * @returns {Map<string, number>} id -> 連続長。primary でない梁・座標が有限でない梁は含まない。
+ */
+export function continuousBeamLengths(beams, tol) {
+  const lengths = new Map();
+  const groups = new Map(); // 向き -> [{b, lo, hi}]
+  for (const b of beams ?? []) {
+    if (b?.role !== 'primary') continue;
+    if (![b.axisValue, b.end1, b.end2].every(Number.isFinite)) continue;
+    const key = dirKey(b.isVertical);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ b, lo: Math.min(b.end1, b.end2), hi: Math.max(b.end1, b.end2) });
+  }
+  for (const items of groups.values()) {
+    // 軸座標を tol で隣接クラスタにまとめる（同じ軸の梁だけをつなぐため）。
+    items.sort((p, q) => p.b.axisValue - q.b.axisValue);
+    let axis = [];
+    const flush = () => { if (axis.length > 0) runLengthsOnAxis(axis, tol, lengths); axis = []; };
+    for (const it of items) {
+      if (axis.length > 0 && it.b.axisValue - axis[axis.length - 1].b.axisValue >= tol) flush();
+      axis.push(it);
+    }
+    flush();
+  }
+  return lengths;
+}
+
+// 同じ軸の梁群を union-find でつなぎ（hi 端と lo 端が tol 以内）、成分ごとの全長（最大hi − 最小lo）を積む。
+function runLengthsOnAxis(items, tol, lengths) {
+  const parent = items.map((_, i) => i);
+  const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const byHi = items.map((_, i) => i).sort((p, q) => items[p].hi - items[q].hi);
+  for (let i = 0; i < items.length; i++) {
+    // |hi - lo| < tol の梁（clusterPoints と同じ厳密な比較。二分探索で下限を探して昇順に走査）。
+    let l = 0, r = byHi.length;
+    while (l < r) { const m = (l + r) >> 1; if (items[byHi[m]].hi <= items[i].lo - tol) l = m + 1; else r = m; }
+    for (let k = l; k < byHi.length && items[byHi[k]].hi < items[i].lo + tol; k++) {
+      const j = byHi[k];
+      if (j !== i) parent[find(j)] = find(i);
+    }
+  }
+  const extent = new Map();
+  items.forEach((it, i) => {
+    const root = find(i);
+    const e = extent.get(root);
+    if (!e) extent.set(root, { lo: it.lo, hi: it.hi });
+    else { e.lo = Math.min(e.lo, it.lo); e.hi = Math.max(e.hi, it.hi); }
+  });
+  items.forEach((it, i) => { const e = extent.get(find(i)); lengths.set(it.b.id, e.hi - e.lo); });
+}
+
+/**
  * 在来木造の梁の交点処理（drawing.beamJunction==='throughWins' のときだけ動作）。
  * @param {{beamJunction?: string}|null|undefined} drawing - structureRules.js の rulesFor(structure).drawing
  * @param {Array<{id:string, role:string, isVertical:boolean, axisValue:number, end1:number, end2:number,
@@ -76,6 +140,7 @@ export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_
     points.push({ ...p2, beam: b, endIndex: 1, dir: Math.sign(b.end1 - b.end2) || 1, along: b.end2 });
   }
   const clusters = clusterPoints(points, tol);
+  const runLengths = continuousBeamLengths(primaries, tol); // 出隅の勝者用（軸ごとに1回だけ作る）
 
   // 端ごとの解決結果を id -> [end0, end1] へ積む（両端が別の交点で解決されうるため先に用意する）。
   const perBeam = new Map();
@@ -112,11 +177,12 @@ export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_
     else if (continuous.X && continuous.Y) winner = 'X'; // 十字は既定X
     else if (!sectionBreak.X && !sectionBreak.Y) {
       // どちらも連続でなく、断面違いの衝突（sectionBreak）も無い＝出隅（L字）。両方向に実際にarmが
-      // あるときだけ材長（各方向の最大値。同一方向に複数armがあっても代表は最長のもの）で比べる。
+      // あるときだけ連続長（各方向の最大値。同一方向に複数armがあっても代表は最長のもの）で比べる。
       const xArms = armsByDir.X, yArms = armsByDir.Y;
       if (xArms.length > 0 && yArms.length > 0) {
-        const xLen = Math.max(...xArms.map(a => Math.abs(a.beam.end2 - a.beam.end1)));
-        const yLen = Math.max(...yArms.map(a => Math.abs(a.beam.end2 - a.beam.end1)));
+        const lenOf = a => runLengths.get(a.beam.id) ?? Math.abs(a.beam.end2 - a.beam.end1);
+        const xLen = Math.max(...xArms.map(lenOf));
+        const yLen = Math.max(...yArms.map(lenOf));
         winner = Math.abs(xLen - yLen) <= tol ? 'X' : (xLen > yLen ? 'X' : 'Y');
       }
     }
