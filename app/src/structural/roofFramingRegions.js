@@ -104,8 +104,8 @@ export function roofFramingFigurePrimitives({ rules, lod, isRoofPlane, subjectGr
     regions,
     hostBeams: roofFramingHostMembers(subjectGraph.beams, rules.baseMaterial),
     ...widths,
-    purlinPitchesMm: rules.framing.purlinPitchesMm,
-    maxEaveGapMm: rules.framing.purlinMaxEaveGapMm,
+    purlinPitchMm: rules.framing.purlinPitchMm,
+    purlinStartOffsetsMm: rules.framing.purlinStartOffsetsMm,
     tolMm: CL_OVERLAP_TOL_MM,
   });
 }

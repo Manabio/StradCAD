@@ -272,13 +272,13 @@ function requireWidth(v, name) {
  * @param {Array<{isVertical:boolean, axis:number, lo:number, hi:number}>} p.hostBeams roofFramingHostMembers の戻り値
  * @param {number} p.ridgeWidthMm
  * @param {number} p.purlinWidthMm
- * @param {number[]} p.purlinPitchesMm 母屋ピッチの候補
- * @param {number} p.maxEaveGapMm 軒桁までの残りの上限
+ * @param {number} p.purlinPitchMm 母屋のピッチ
+ * @param {number[]} p.purlinStartOffsetsMm 母屋の1本目の位置（棟木から）の候補
  * @param {number} p.tolMm
  * @returns {Array<{kind:'ridge'|'purlin', key:string, points:number[]}|{kind:'strut', key:string, x:number, y:number, radius:number}>}
  * @throws {RangeError} 幅が不正（roofFramingLines・roofStrutPoints の入力検査もそのまま伝わる）
  */
-export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeWidthMm, purlinWidthMm, purlinPitchesMm, maxEaveGapMm, tolMm }) {
+export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeWidthMm, purlinWidthMm, purlinPitchMm, purlinStartOffsetsMm, tolMm }) {
   if (!showRoofFraming(drawing, lod)) return [];
   if (!regions || regions.length === 0) return [];
   requireWidth(ridgeWidthMm, 'ridgeWidthMm');
@@ -290,7 +290,7 @@ export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeW
   for (const region of regions) {
     const { ridges, purlins } = roofFramingLines({
       rect: region.rect, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical,
-      highSide: region.highSide, purlinPitchesMm, maxEaveGapMm, tolMm,
+      highSide: region.highSide, purlinPitchMm, purlinStartOffsetsMm, tolMm,
     });
     ridges.forEach((line, i) => {
       out.push({ kind: 'ridge', key: `${region.key}:ridge:${i}:-`, points: segment(line, -ridgeWidthMm / 2) });

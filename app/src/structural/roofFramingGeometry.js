@@ -56,52 +56,50 @@ export function roofRidgeIsVertical(rect, tolMm = 0) {
 
 /**
  * 母屋の割付（棟木側から軒桁へ向かう。切妻・片流れ・寄棟が共用する唯一の判断）。
- * 棟木（片流れは高い側の辺）から軒桁までの水平距離 halfSpanMm に、ピッチ p（候補 pitchesMm のどれか1つ）で
- * 棟木側から k*p（k=1,2,…）に母屋を置く。最後の母屋（無ければ棟木）から軒桁までの残りが
- * maxEaveGapMm 以下になったら置くのをやめる（＝残りが上限以下になる最少本数）。軒桁と重なる位置・越える位置
- * には置かない。候補のうち残りが最大のピッチを選び、残りが同じ（tolMm 以内）なら大きいピッチ。
- * 2026-10-02 リード解釈・ユーザー確認中: 原文「910未満」の境界を「残り 910 以下」と取る
- * （未満を厳密に取ると半スパン 3640 が 606 ピッチになり、従来の 910 割付と変わるため）。
- * この境界は gap <= maxEaveGapMm + tol の1箇所の比較だけに集約している。
+ * ピッチは pitchMm（910）固定。1本目の位置（棟木からの距離）の候補 startOffsetsMm（455・910）ごとに
+ * start + k*pitch（k=0,1,…）を軒桁の手前（H − tol 未満）まで置き、最後の母屋（無ければ棟木）から軒桁までの
+ * 残りが pitchMm に近い案を採る（同じ＝tol 以内なら大きい start）。軒桁と重なる位置・越える位置には置かない。
+ * 理由: 柱の割付（910 モジュール）と絡むため（ユーザー裁定 2026-10-02）。
  * @param {object} p
  * @param {number} p.halfSpanMm 棟木（高い側の辺）から軒桁までの距離（>=0）
- * @param {number[]} p.pitchesMm 候補のピッチ（空でない。各 >0）
- * @param {number} p.maxEaveGapMm 軒桁までの残りの上限（>0。例 910）
+ * @param {number} p.pitchMm 母屋のピッチ（>0。例 910）。残りの目標値でもある
+ * @param {number[]} p.startOffsetsMm 1本目の位置の候補（空でない。各 >0。例 [455, 910]）
  * @param {number} p.tolMm 許容差（>=0）
- * @returns {{pitchMm: number|null, offsetsMm: number[], eaveGapMm: number}} offsetsMm は棟木側からの距離の昇順。
- *   母屋が不要（halfSpan が上限以下）なら pitchMm=null・offsetsMm=[]・eaveGapMm=halfSpanMm
+ * @returns {{startOffsetMm: number|null, offsetsMm: number[], eaveGapMm: number}} offsetsMm は棟木側からの距離の昇順。
+ *   採った案で母屋が1本も無いとき startOffsetMm=null・offsetsMm=[]・eaveGapMm=halfSpanMm
  * @throws {RangeError} 入力が不正
  */
-export function purlinLayoutFromRidge({ halfSpanMm, pitchesMm, maxEaveGapMm, tolMm }) {
+export function purlinLayoutFromRidge({ halfSpanMm, pitchMm, startOffsetsMm, tolMm }) {
   requireNonNegative(halfSpanMm, 'halfSpanMm');
-  if (!Array.isArray(pitchesMm) || pitchesMm.length === 0) {
-    throw new RangeError('pitchesMm は空でない配列でなければなりません');
+  requirePositive(pitchMm, 'pitchMm');
+  if (!Array.isArray(startOffsetsMm) || startOffsetsMm.length === 0) {
+    throw new RangeError('startOffsetsMm は空でない配列でなければなりません');
   }
-  for (const p of pitchesMm) requirePositive(p, 'pitchesMm の要素');
-  requirePositive(maxEaveGapMm, 'maxEaveGapMm');
+  for (const s of startOffsetsMm) requirePositive(s, 'startOffsetsMm の要素');
   requireNonNegative(tolMm, 'tolMm');
-  const gapOk = gap => gap <= maxEaveGapMm + tolMm; // 「以下」。未満にするなら <（確認中）
-  const layoutOf = pitch => {
+  const layoutOf = start => {
     const offsets = [];
-    for (let k = 1; !gapOk(halfSpanMm - (k - 1) * pitch); k++) {
-      if (k * pitch >= halfSpanMm - tolMm) break; // 軒桁と重なる・越える位置には置かない
-      offsets.push(k * pitch);
-    }
+    for (let k = 0; start + k * pitchMm < halfSpanMm - tolMm; k++) offsets.push(start + k * pitchMm); // 軒桁と重なる位置には置かない
     const last = offsets.length > 0 ? offsets[offsets.length - 1] : 0;
-    return { pitchMm: pitch, offsetsMm: offsets, eaveGapMm: halfSpanMm - last };
+    return { startOffsetMm: offsets.length > 0 ? start : null, offsetsMm: offsets, eaveGapMm: halfSpanMm - last };
   };
-  if (gapOk(halfSpanMm)) return { pitchMm: null, offsetsMm: [], eaveGapMm: halfSpanMm };
+  // 「残りが pitchMm に近い」の比較はここ1箇所
+  const distance = c => Math.abs(pitchMm - c.eaveGapMm);
   let best = null;
-  for (const pitch of pitchesMm) {
-    const c = layoutOf(pitch);
-    if (best === null || c.eaveGapMm > best.eaveGapMm + tolMm
-      || (Math.abs(c.eaveGapMm - best.eaveGapMm) <= tolMm && c.pitchMm > best.pitchMm)) best = c;
+  let bestStart = 0;
+  for (const start of startOffsetsMm) {
+    const c = layoutOf(start);
+    if (best === null || distance(c) < distance(best) - tolMm
+      || (Math.abs(distance(c) - distance(best)) <= tolMm && start > bestStart)) {
+      best = c;
+      bestStart = start;
+    }
   }
   return best;
 }
 
 // ---- 以下 rect* は矩形専用（rect は検証済みの矩形）。layout は purlinLayoutFromRidge の引数のうち
-// 半スパン以外（{pitchesMm, maxEaveGapMm, tolMm}） ----
+// 半スパン以外（{pitchMm, startOffsetsMm, tolMm}） ----
 
 function rectGableLines(rect, ridgeIsVertical, layout) {
   const { x1, y1, x2, y2 } = rect;
@@ -164,12 +162,12 @@ function rectHipLines(rect, layout) {
 
 /**
  * 矩形の屋根の棟木・母屋の線（水平距離で割り付け。勾配は位置に影響しない）。矩形専用。
- * 母屋は棟木側から軒桁へ割り付ける（purlinLayoutFromRidge。候補ピッチ・残りの上限は引数）。
+ * 母屋は棟木側から軒桁へ割り付ける（purlinLayoutFromRidge。ピッチ・1本目の候補は引数）。
  *  - 切妻: 棟＝矩形の中央（向きは ridgeIsVertical。未指定なら roofRidgeIsVertical）。母屋は棟から両側へ
- *    k*p（半スパン＝短手の半分）。端は屋根範囲の辺まで。
+ *    割付の位置（半スパン＝短手の半分）。端は屋根範囲の辺まで。
  *  - 片流れ: 棟木なし。highSide（'top'|'bottom'|'left'|'right'。y 軸が下向き正なので top＝y が小さい辺 y1、
- *    bottom＝y2、left＝x1、right＝x2）が高い側。高い側の辺から低い側の軒へ k*p。高い側の辺そのものには置かない。
- *  - 寄棟: 棟木（正方形は中心）からの距離 k*p の位置に環（4辺に平行。軒からの内側への距離 d＝半スパン−k*p。
+ *    bottom＝y2、left＝x1、right＝x2）が高い側。高い側の辺から低い側の軒へ割付の位置。高い側の辺そのものには置かない。
+ *  - 寄棟: 棟木（正方形は中心）からの距離が割付の位置に環（4辺に平行。軒からの内側への距離 d＝半スパン−割付の位置。
  *    横線は x1+d..x2-d、縦線は y1+d..y2-d）。棟木は長辺方向に長さ（長辺−短辺）の線。正方形は棟木なし（方形）。
  *    ridgeIsVertical は無視。
  *  - 陸屋根・棟違い・未知の形状・rect=null・幅か高さが tolMm 以下の矩形は空。
@@ -178,20 +176,20 @@ function rectHipLines(rect, layout) {
  * @param {string} p.shape RoofShape の値
  * @param {boolean} [p.ridgeIsVertical] 切妻の棟が y 方向か
  * @param {string|null} [p.highSide] 片流れの高い側
- * @param {number[]} p.purlinPitchesMm 母屋ピッチの候補（空でない。各 >0。例 [303, 455, 606, 910]）
- * @param {number} p.maxEaveGapMm 最後の母屋から軒桁までの残りの上限（>0。例 910）
+ * @param {number} p.purlinPitchMm 母屋のピッチ（>0。例 910）
+ * @param {number[]} p.purlinStartOffsetsMm 母屋の1本目の位置（棟木から）の候補（空でない。各 >0。例 [455, 910]）
  * @param {number} p.tolMm 許容差（>=0。例 CL_OVERLAP_TOL_MM）
  * @returns {{ridges: Array<{isVertical:boolean,coord:number,lo:number,hi:number}>, purlins: Array<{isVertical:boolean,coord:number,lo:number,hi:number}>}}
  * @throws {RangeError} ピッチ・許容差が不正、rect の座標が非有限か逆順、片流れで highSide が不正
  */
-export function roofFramingLines({ rect, shape, ridgeIsVertical, highSide = null, purlinPitchesMm, maxEaveGapMm, tolMm }) {
-  if (!Array.isArray(purlinPitchesMm) || purlinPitchesMm.length === 0) {
-    throw new RangeError('purlinPitchesMm は空でない配列でなければなりません');
+export function roofFramingLines({ rect, shape, ridgeIsVertical, highSide = null, purlinPitchMm, purlinStartOffsetsMm, tolMm }) {
+  requirePositive(purlinPitchMm, 'purlinPitchMm');
+  if (!Array.isArray(purlinStartOffsetsMm) || purlinStartOffsetsMm.length === 0) {
+    throw new RangeError('purlinStartOffsetsMm は空でない配列でなければなりません');
   }
-  for (const p of purlinPitchesMm) requirePositive(p, 'purlinPitchesMm の要素');
-  requirePositive(maxEaveGapMm, 'maxEaveGapMm');
+  for (const s of purlinStartOffsetsMm) requirePositive(s, 'purlinStartOffsetsMm の要素');
   requireNonNegative(tolMm, 'tolMm');
-  const layout = { pitchesMm: purlinPitchesMm, maxEaveGapMm, tolMm };
+  const layout = { pitchMm: purlinPitchMm, startOffsetsMm: purlinStartOffsetsMm, tolMm };
   const empty = { ridges: [], purlins: [] };
   if (!rect) return empty;
   for (const k of ['x1', 'y1', 'x2', 'y2']) requireFinite(rect[k], `rect.${k}`);
