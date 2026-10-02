@@ -23,7 +23,7 @@ export const MEMBER_GROUPS = [
   { key: 'column',  mapName: 'columnMap',  category: MEMBER_CATEGORY.COLUMN_LIKE, label: '柱・杭',     iconShape: 'square' },
   { key: 'footing', mapName: 'footingMap', category: MEMBER_CATEGORY.BOX_LIKE,    label: '基礎・柱脚', iconShape: 'box' },
   { key: 'beam',    mapName: 'beamMap',    category: MEMBER_CATEGORY.ROD,         label: '梁',         iconShape: 'band',
-    filter: b => b.role !== 'secondary' && b.role !== 'landing' && b.role !== 'floor' },
+    filter: b => b.role !== 'secondary' && b.role !== 'landing' && b.role !== 'floor' && b.role !== 'roofBeam' },
   { key: 'beamSub', mapName: 'beamMap',    category: MEMBER_CATEGORY.ROD,         label: '小梁',       iconShape: 'band',
     filter: b => b.role === 'secondary', allowManualAdd: false, hideWhenEmpty: true },
   // 踊り場受け梁（WP-B。小梁と同型＝通り芯グリッドではなく階段の踊り場辺から自動生成するため
@@ -34,7 +34,11 @@ export const MEMBER_GROUPS = [
   // 手動追加UIなし。非在来・床梁の無い階ではセクション自体を隠す）。
   { key: 'beamFloor', mapName: 'beamMap', category: MEMBER_CATEGORY.ROD,          label: '床梁',       iconShape: 'band',
     filter: b => b.role === 'floor', allowManualAdd: false, hideWhenEmpty: true },
-  { key: 'slab',    mapName: 'slabMap',    category: MEMBER_CATEGORY.PLANE_H,     label: 'スラブ',     iconShape: 'plane' },
+  // 小屋梁（在来木造の小屋組。ステップC2a。床梁と同型＝母屋・棟木の位置から自動生成するため手動追加UIなし。
+  // 小屋組の無い階・非在来ではセクション自体を隠す）。
+  { key: 'beamRoof', mapName: 'beamMap', category: MEMBER_CATEGORY.ROD,           label: '小屋梁',     iconShape: 'band',
+    filter: b => b.role === 'roofBeam', allowManualAdd: false, hideWhenEmpty: true },
+  { key: 'slab',  mapName: 'slabMap',    category: MEMBER_CATEGORY.PLANE_H,     label: 'スラブ',     iconShape: 'plane' },
   { key: 'wall',    mapName: 'wallMap',    category: MEMBER_CATEGORY.PLANE_V,     label: '耐力壁',     iconShape: 'wall' },
 ];
 
@@ -94,6 +98,7 @@ export function memberSymbol(entity, mapName) {
         case 'eaves':      return 'EG'; // 軒桁
         case 'roof':       return entity.beamType === '垂木' ? 'RF' : 'PR'; // 垂木 / 母屋
         case 'landing':    return 'LG'; // 踊り場受け梁
+        case 'roofBeam':   return 'KB'; // 小屋梁
         default:           return 'G';  // 大梁
       }
     case 'slabMap':

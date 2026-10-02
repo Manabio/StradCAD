@@ -60,10 +60,39 @@ test('isPinJoint: 鉄骨以外は jointType ではなく role（小梁のみピ�
   assert.equal(woodPrimary.hasRigidJoint, false, '継手記号は鉄骨のみ');
 });
 
-// 【ステップ3e-2・床梁】PIN_ROLES=new Set(['secondary','floor']) が「母材から離して終える」role集合の
-// 単一の定義（isPinJoint・jointType既定・spanForColumnsの早期returnの3か所が読む）。
-test('PIN_ROLES: secondary/floorの2値を持つ', () => {
-  assert.deepEqual([...PIN_ROLES].sort(), ['floor', 'secondary']);
+// 【ステップ3e-2・床梁／C2a・小屋梁】PIN_ROLES=new Set(['secondary','floor','roofBeam']) が「母材から離して終える」
+// role集合の単一の定義（isPinJoint・jointType既定・spanForColumnsの早期returnの3か所が読む）。
+test('PIN_ROLES: secondary/floor/roofBeamの3値を持つ（C2aで小屋梁を追加。大梁・軒桁・土台などは含まない）', () => {
+  assert.deepEqual([...PIN_ROLES].sort(), ['floor', 'roofBeam', 'secondary']);
+  for (const role of ['primary', 'foundation', 'sill', 'eaves', 'roof', 'landing']) assert.equal(PIN_ROLES.has(role), false, role);
+});
+
+test('【C2a】isPinJoint/jointType: 木造の小屋梁(role:roofBeam)も小梁・床梁と同じくピン扱い。鉄骨の小屋梁はjointTypeが権威', () => {
+  const { graph, x1, y1, y2 } = setupGraph();
+  const roofBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x210', x1, true, y1, y2, { role: 'roofBeam', beamType: '小屋梁' });
+  assert.equal(roofBeam.jointType, 'PIN');
+  assert.equal(roofBeam.isPinJoint, true);
+  assert.equal(roofBeam.hasRigidJoint, false);
+  const steel = addBeam(graph, x1, y1, y2, { role: 'roofBeam', jointType: 'RIGID' });
+  assert.equal(steel.isPinJoint, false, '鉄骨はjointType=RIGIDならPIN_ROLESに関わらず剛接合扱い（材種で権威を分ける）');
+});
+
+test('【C2a】spanForColumns: 小屋梁(role:roofBeam)は床梁と同じくhost（大梁）の縁で止まり、hostが無い端はCL位置まで。既存の小梁・床梁の結果は不変', () => {
+  const { graph, x1, x2, y1, y2 } = setupGraph();
+  graph.setStructureOverride(TRADITIONAL_WOOD_STRUCTURE);
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
+  const xMid = graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const roofBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x210', xMid, true, y1, y2, { role: 'roofBeam' });
+  const floorBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y1, y2, { role: 'floor' });
+  const secondary = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, true, y1, y2, { role: 'secondary' });
+  const expected = { coord1: 120 / 2, coord2: 6000 };
+  assert.deepEqual(roofBeam.spanForColumns(graph.columns), expected, '始端(y1)はhostの面まで、終端(y2)はhostが無いのでCL位置まで');
+  assert.deepEqual(floorBeam.spanForColumns(graph.columns), expected, '床梁は不変');
+  assert.deepEqual(secondary.spanForColumns(graph.columns), expected, '小梁は不変');
+  // hostになれるのはprimaryだけ——小屋梁同士・小屋梁→床梁の端は止まらない（findHostBeam）
+  const other = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x210', y2, false, x1, x2, { role: 'roofBeam' });
+  assert.deepEqual(roofBeam.spanForColumns(graph.columns), expected, '終端側に小屋梁があってもhostにならない（primaryのみ）');
+  assert.ok(other);
 });
 
 test('isPinJoint/jointType: 木造の床梁(role:floor)も小梁と同じくピン扱い（PIN_ROLES）', () => {

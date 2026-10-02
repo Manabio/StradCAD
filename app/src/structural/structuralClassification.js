@@ -112,8 +112,8 @@ export function memberKindOf(mapName, entity) {
     case 'footingMap': return (entity && 'baseType' in entity) ? MEMBER_KIND.COLUMN_BASE : MEMBER_KIND.INDEPENDENT_FOOTING;
     case 'beamMap':
       if (entity?.role === 'foundation') return MEMBER_KIND.FOUNDATION_BEAM; // 基礎梁・地中梁
-      // 軒桁(eaves)・屋根架構(roof)は表A対象外（屋根+/小屋伏図側・部材生成は次フェーズ）＝ゲートしない。
-      if (entity?.role === 'eaves' || entity?.role === 'roof') return null;
+      // 軒桁(eaves)・屋根架構(roof)・小屋梁(roofBeam)は表A対象外（屋根+/小屋伏図側・部材生成は次フェーズ）＝ゲートしない。
+      if (entity?.role === 'eaves' || entity?.role === 'roof' || entity?.role === 'roofBeam') return null;
       return MEMBER_KIND.BEAM; // 大梁(primary)・小梁(secondary)
     case 'slabMap':    return MEMBER_KIND.SLAB;
     case 'wallMap':    return MEMBER_KIND.WALL;

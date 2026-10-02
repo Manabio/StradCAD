@@ -225,7 +225,8 @@ export function roofFramingWidths(framing) {
 
 /**
  * 束を立てる横架材（その伏図の大梁系）を {isVertical, axis, lo, hi} へ写す。role 'primary'（軒桁・壁線の通し梁・
- * 頭つなぎ・受梁）で、材種が主構造のものだけ（床梁・小梁・基礎梁などの上には立てない）。
+ * 頭つなぎ・受梁）と 'roofBeam'（小屋梁。ユーザー裁定2026-10-02・ステップC2a）で、材種が主構造のものだけ
+ * （床梁・小梁・基礎梁などの上には立てない）。
  * 軸・範囲は梁の芯々（axisValue と clStart/clEnd の effectiveValue。woodAutoFill.js の支持点の取り方と同じ）——
  * 描画用に柱手前でトリムした coord1/coord2 ではない。
  * wallBeamAxes.js columnSeedBeamSegments を再利用しない理由: あちらは柱の点源用で primary と floor の両方を含み、
@@ -235,7 +236,7 @@ export function roofFramingWidths(framing) {
  */
 export function roofFramingHostMembers(beams, baseMaterial) {
   return (beams ?? [])
-    .filter(b => b.role === 'primary' && b.materialType === baseMaterial)
+    .filter(b => (b.role === 'primary' || b.role === 'roofBeam') && b.materialType === baseMaterial)
     .map(b => ({
       isVertical: b.isVertical,
       axis: b.axisValue,

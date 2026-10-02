@@ -255,6 +255,29 @@ test('【ステップ4第3単位②】collectFloorGroups/applyNumbers: 在来木
   assert.equal(std[1].memberNo, 'G4');
 });
 
+test('【C2a】collectFloorGroups/applyNumbers: 小屋梁(role:roofBeam)は記号KBで採番され、大梁(G)・床梁(FB)と番号が混ざらず、同寸の小屋梁は1グループ・2回実行で安定（個別採番しない）', () => {
+  const project = makeProject([{ id: 'p1', startFloor: 1 }]);
+  const k1 = woodBeam('k1', 'WOOD-120x330', { role: 'roofBeam', axisValue: 300 });
+  const k2 = woodBeam('k2', 'WOOD-120x330', { role: 'roofBeam', axisValue: 100 });
+  const k3 = woodBeam('k3', 'WOOD-120x240', { role: 'roofBeam', axisValue: 200 });
+  const g1 = woodBeam('g1', 'WOOD-120x120', { axisValue: 400 });
+  const fb = woodBeam('fb', 'WOOD-120x120', { role: 'floor', axisValue: 500 });
+  const g = makeGraph('p1', { beamMap: [k1, k2, k3, g1, fb] });
+  g.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+
+  const run = () => { collectFloorGroups(g, project); applyNumbers(g, project, assignNumbers(project)); };
+  run();
+  assert.equal(k1.memberNo, k2.memberNo, '同寸の小屋梁は同じ番号（120×330は非標準だが個別採番しない）');
+  assert.match(k1.memberNo, /^KB\d+$/);
+  assert.match(k3.memberNo, /^KB\d+$/);
+  assert.notEqual(k1.memberNo, k3.memberNo, '寸法違いは別グループ');
+  assert.equal(g1.memberNo, 'G1');
+  assert.equal(fb.memberNo, 'FB1');
+  const before = [k1, k2, k3, g1, fb].map(b => b.memberNo);
+  run();
+  assert.deepEqual([k1, k2, k3, g1, fb].map(b => b.memberNo), before, '2回実行でmemberNoが変わらない（冪等）');
+});
+
 test('【ステップ4 C-2b QA2】collectFloorGroups/applyNumbers: graph.woodColumnWidthMmを105にすると標準材が120×120から105×120（柱寸×梁成表の最小成）へ切り替わる（120×120が非標準＝個別採番、105×120が標準）', () => {
   const project = makeProject([{ id: 'p1', startFloor: 1 }]);
   const nonStd = [

@@ -167,6 +167,89 @@ test('CenterLine.beamAxisOrigin:opening（床開口由来）もFlatBuffers encod
   assert.equal(cl2.beamAxisOrigin, BeamAxisOrigin.OPENING);
 });
 
+// ---- ステップC2a: 小屋梁（role:'roofBeam'・beamType:'小屋梁'）と梁芯の由来 roofBeam の保存。
+// 梁の role は文字列・beamType は extra で保存されるため、スキーマ変更なしで往復する（REASONED→ここで固定）。----
+function makeRoofBeamGraph() {
+  const graph = makeGraph();
+  // 通り芯（struct）は structGraph に属し階のスナップショットに含まれないため、階固有の中心線（ARCH）で組む
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3640, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const axis = graph.addCenterLine(CenterLineType.VERTICAL, 1820, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.ROOF_BEAM,
+  });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3640, { labeled: false, discipline: Discipline.ARCH });
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary' });
+  const roofBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x210', axis, true, y0, y1, { role: 'roofBeam', beamType: '小屋梁' });
+  roofBeam.setMemberNo('KB1');
+  return { graph, roofBeam, axis };
+}
+
+test('【C2a】小屋梁（role:roofBeam・beamType:小屋梁）と梁芯の由来roofBeamはFlatBuffers encode→decodeで往復し、再シリアライズもバイト一致する', () => {
+  const { graph, roofBeam, axis } = makeRoofBeamGraph();
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+
+  const b2 = restored.beamMap.get(roofBeam.id);
+  assert.ok(b2, '復元後に同一IDの小屋梁が存在する');
+  assert.equal(b2.role, 'roofBeam');
+  assert.equal(b2.beamType, '小屋梁');
+  assert.equal(b2.memberNo, 'KB1');
+  assert.equal(b2.sectionDefId, 'WOOD-120x210');
+  assert.equal(b2.jointType, 'PIN', '既定のjointType（PIN_ROLES）も往復後に保たれる');
+  assert.equal(b2.isPinJoint, true);
+  assert.equal(restored.shapeMap.get(axis.id).beamAxisOrigin, BeamAxisOrigin.ROOF_BEAM, '由来roofBeamは既知値として保たれる（nullへ落ちない）');
+  // 初回の復元→再シリアライズは小屋梁の有無によらずバイト長が変わる（既存挙動。小屋梁なしでも1736→2944で、
+  // C2a以前から。復元時にグラフ側の既定値が書かれるため）。小屋梁の保存が安定するのは2回目以降。
+  const second = serializeGraph(restored);
+  const restored2 = makeGraph();
+  restoreGraph(restored2, second);
+  const third = serializeGraph(restored2);
+  assert.equal(third.length, second.length, '2周目以降はバイト長が変わらない（小屋梁の保存が安定）');
+  assert.ok(third.every((v, i) => v === second[i]), '2周目以降はバイト列が変わらない（小屋梁の保存が安定）');
+  assert.equal(restored.beams.filter(b => b.role === 'primary').length, 1, '同居する大梁のroleは不変');
+});
+
+test('【C2a】小屋梁は plain object 直渡し（decodeFloorSnapshot経由）でも往復する', () => {
+  const { graph, roofBeam } = makeRoofBeamGraph();
+  const snapshot = decodeFloorSnapshot(encodeFloorSnapshot(decodeFloorSnapshot(serializeGraph(graph))));
+  const restored = makeGraph();
+  restoreGraph(restored, snapshot);
+  const b2 = restored.beamMap.get(roofBeam.id);
+  assert.ok(b2);
+  assert.equal(b2.role, 'roofBeam');
+  assert.equal(b2.beamType, '小屋梁');
+});
+
+test('【C2a】undo: serializeGraph(前)→変更（小屋梁の削除）→restoreGraph(前)で小屋梁が元のid・role・beamTypeで戻る', async () => {
+  const { undoManager } = await import('./undoManager.js');
+  const { graph, roofBeam } = makeRoofBeamGraph();
+  const before = serializeGraph(graph);
+  graph.beamMap.delete(roofBeam.id);
+  const after = serializeGraph(graph);
+  assert.equal(graph.beams.some(b => b.role === 'roofBeam'), false, '前提: 削除済み');
+  undoManager.push(() => restoreGraph(graph, before), () => restoreGraph(graph, after));
+  undoManager.undo();
+  const back = graph.beamMap.get(roofBeam.id);
+  assert.ok(back, 'undoで小屋梁が戻る');
+  assert.equal(back.role, 'roofBeam');
+  assert.equal(back.beamType, '小屋梁');
+  undoManager.redo();
+  assert.equal(graph.beamMap.has(roofBeam.id), false, 'redoで再び消える');
+});
+
+test('【C2a・失敗系】role が空文字で保存された梁は復元時に primary へ落ちる（既知roleの既定。roofBeamへは誤変換されない）', () => {
+  const { graph } = makeRoofBeamGraph();
+  const snap = decodeFloorSnapshot(serializeGraph(graph));
+  for (const b of snap.beams) if (b.role === 'roofBeam') b.role = '';
+  const restored = makeGraph();
+  restoreGraph(restored, decodeFloorSnapshot(encodeFloorSnapshot(snap)));
+  assert.equal(restored.beams.filter(b => b.role === 'roofBeam').length, 0);
+  assert.equal(restored.beams.length, 2);
+  assert.ok(restored.beams.every(b => b.role === 'primary'));
+});
+
 test('【失敗系】CenterLine.beamAxisOrigin が既知の値以外（未知の文字列）で書かれていた場合、decode後はnullに正規化される', () => {
   const graph = makeGraph();
   // BeamAxisOriginに存在しない値を直接持たせる（writeCL側は値の妥当性を検証せずそのまま文字列化するため、

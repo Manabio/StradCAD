@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   memberSymbol, MEMBER_GROUPS, NUMBERED_MAPS, FIELD_DEFS_BY_CATEGORY, SIGNATURE_FIELDS_BY_MAP, MEMBER_CATEGORY,
   noJoinSignatureFor, joinSignatureFor, memberSignature, isIndividuallyNumbered, memberGroupKey, memberOrderKey,
+  isMemberNumberLocked,
 } from './memberCatalog.js';
 import { makeBeam, makeColumn } from './memberTestFixtures.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
@@ -124,6 +125,62 @@ test('【失敗系・3e-2】MEMBER_GROUPS: 「小梁」グループのfilterはr
   const beamSubGroup = MEMBER_GROUPS.find(g => g.key === 'beamSub');
   const floor = makeBeam('b1', 'WOOD-120x120', { role: 'floor' });
   assert.equal(beamSubGroup.filter(floor), false);
+});
+
+// ---- ステップC2a（小屋梁 role:'roofBeam'、記号KB。ユーザー裁定2026-10-02）----
+
+test('【C2a】memberSymbol: beamMapのrole:roofBeamは記号KBを返す（既存roleの記号は不変）', () => {
+  assert.equal(memberSymbol(makeBeam('b1', 'WOOD-120x210', { role: 'roofBeam' }), 'beamMap'), 'KB');
+  const expected = { primary: 'G', secondary: 'B', floor: 'FB', foundation: 'FG', sill: 'SL', eaves: 'EG', landing: 'LG' };
+  for (const [role, sym] of Object.entries(expected)) {
+    assert.equal(memberSymbol(makeBeam('x', 'WOOD-120x120', { role }), 'beamMap'), sym, `role:${role}`);
+  }
+});
+
+test('【C2a】MEMBER_GROUPS: 「梁」グループのfilterはrole:roofBeamを除外し、「小屋梁」グループだけが拾う（二重に出ない）', () => {
+  const beamGroup = MEMBER_GROUPS.find(g => g.key === 'beam');
+  const roofGroup = MEMBER_GROUPS.find(g => g.key === 'beamRoof');
+  const roofBeam = makeBeam('b1', 'WOOD-120x210', { role: 'roofBeam' });
+  assert.equal(beamGroup.filter(roofBeam), false);
+  assert.equal(roofGroup.filter(roofBeam), true);
+  const owners = MEMBER_GROUPS.filter(g => g.mapName === 'beamMap' && (g.filter ?? (() => true))(roofBeam));
+  assert.deepEqual(owners.map(g => g.key), ['beamRoof'], '小屋梁を拾うグループは「小屋梁」だけ');
+  // 既存のroleは従来どおりちょうど1グループに属する
+  for (const role of ['primary', 'secondary', 'floor', 'landing', 'foundation', 'sill', 'eaves', 'roof']) {
+    const b = makeBeam('x', 'WOOD-120x120', { role });
+    const n = MEMBER_GROUPS.filter(g => g.mapName === 'beamMap' && (g.filter ?? (() => true))(b)).length;
+    assert.equal(n, 1, `role:${role}はちょうど1グループ`);
+  }
+});
+
+test('【C2a】MEMBER_GROUPS: 「小屋梁」グループは手動追加不可・0件時は非表示（床梁と同型）で、他のroleを拾わない', () => {
+  const roofGroup = MEMBER_GROUPS.find(g => g.key === 'beamRoof');
+  assert.ok(roofGroup);
+  assert.equal(roofGroup.label, '小屋梁');
+  assert.equal(roofGroup.mapName, 'beamMap');
+  assert.equal(roofGroup.category, MEMBER_CATEGORY.ROD);
+  assert.equal(roofGroup.allowManualAdd, false);
+  assert.equal(roofGroup.hideWhenEmpty, true);
+  for (const role of ['primary', 'secondary', 'floor', 'landing', 'foundation', 'sill', 'eaves', 'roof']) {
+    assert.equal(roofGroup.filter(makeBeam('x', 'WOOD-120x120', { role })), false, `role:${role}`);
+  }
+  assert.equal(MEMBER_GROUPS.filter(g => g.key === 'beamRoof').length, 1, 'キーは一意');
+});
+
+test('【C2a】isMemberNumberLocked: 在来木造の小屋梁は部材番号が入力不可（基礎梁以外の梁と同じ）。非在来では入力可のまま', () => {
+  const roofBeam = makeBeam('b1', 'WOOD-120x210', { role: 'roofBeam' });
+  assert.equal(isMemberNumberLocked(roofBeam, 'beamMap', { woodFixedSection: true }), true);
+  assert.equal(isMemberNumberLocked(roofBeam, 'beamMap', { woodFixedSection: false }), false);
+});
+
+test('【C2a】isIndividuallyNumbered: 小屋梁は在来木造でも個別採番しない（個別採番の対象roleは梁成表の primary/secondary/floor のみ）', () => {
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  const roofBeam = makeBeam('b1', 'WOOD-120x330', { materialType: 'WOOD', role: 'roofBeam' });
+  const primary = makeBeam('b2', 'WOOD-120x330', { materialType: 'WOOD', role: 'primary' });
+  assert.equal(isIndividuallyNumbered(primary, 'beamMap', rules), true, '対照: 非標準の大梁は個別採番');
+  assert.equal(isIndividuallyNumbered(roofBeam, 'beamMap', rules), false);
+  assert.equal(memberGroupKey(roofBeam, 'beamMap', rules, undefined, 'p1'), memberSignature(roofBeam, 'beamMap'), '署名で1グループにまとまる');
+  assert.match(memberSignature(roofBeam, 'beamMap'), /^beamMap\|KB\|WOOD\|/, '署名の記号はKB（大梁Gとグループが混ざらない）');
 });
 
 // ---- ステップ3（2026-09-17裁定）: 在来木造の柱の個別採番（isIndividuallyNumbered/memberGroupKey/memberOrderKey） ----

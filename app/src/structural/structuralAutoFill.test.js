@@ -9,6 +9,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   autoFillStairLandingBeams, autoFillBeamsForStructure, autoFillStructuralGrid, beamAxisCenterLines,
   autoFillColumns, autoFillBeams, autoFillFootings, autoFillRoofBeams, secondaryBeamSpansFor, autoFillSecondaryBeams,
+  convertMembersToEffectiveMaterial, deleteClassificationOverflow,
 } from './structuralAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { selfWallSegments, wallBeamSourcesFor } from './wallBeamAxes.js';
@@ -43,6 +44,32 @@ function beamKey(b) {
   const ends = [b.clStart.effectiveValue, b.clEnd.effectiveValue].sort((x, y) => x - y);
   return `${b.role}:${b.isVertical}:${Math.round(b.axisValue)}:${Math.round(ends[0])}:${Math.round(ends[1])}`;
 }
+
+// ---- ステップC2a: 小屋梁（role:'roofBeam'）は材種変換・表A削除の対象外 ----
+test('【C2a】convertMembersToEffectiveMaterial: 小屋梁(role:roofBeam)は主構造をS造へ変えても変換しない（対照: 小梁は変換される）', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const roofBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x210', y1, false, x1, x2, { role: 'roofBeam', beamType: '小屋梁' });
+  const secondary = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'secondary' });
+  graph.structureOverride = 'S造';
+  const { convertedBeams } = convertMembersToEffectiveMaterial(graph, GRID_PROJECT, 'S造');
+  assert.deepEqual(convertedBeams, [secondary.id], '変換されたのは小梁だけ');
+  // convertBeamMaterial は梁を作り直す（idは同じ・オブジェクトは別）ため map から引き直す
+  assert.equal(graph.beamMap.get(secondary.id).materialType, StructuralMaterialType.STEEL, '対照: 小梁はS造の材種へ変換された');
+  const roofAfter = graph.beamMap.get(roofBeam.id);
+  assert.equal(roofAfter.materialType, StructuralMaterialType.WOOD, '小屋梁の材種は不変');
+  assert.equal(roofAfter.sectionDefId, 'WOOD-120x210', '小屋梁の断面は不変（木造専用の断面を壊さない）');
+});
+
+test('【C2a・失敗系】deleteClassificationOverflow: 梁が×の主構造では auto の小梁は削除されるが、auto の小屋梁は削除されない（表A対象外）', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph('RC造(壁式)');
+  const roofBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x210', y1, false, x1, x2, { role: 'roofBeam', beamType: '小屋梁' });
+  const secondary = graph.addBeam(StructuralMaterialType.RC, 'RC-300x300', y1, false, x1, x2, { role: 'secondary' });
+  assert.equal(roofBeam.dimensionStatus, 'auto');
+  assert.equal(secondary.dimensionStatus, 'auto');
+  const removed = deleteClassificationOverflow(graph, GRID_PROJECT);
+  assert.deepEqual(removed, [secondary.id], '対照: 表Aで×の小梁だけ削除');
+  assert.equal(graph.beamMap.has(roofBeam.id), true, '小屋梁は残る');
+});
 
 test('beamAxisCenterLines: core/centerLineKindPolicy.jsへの委譲後もcenterLineKind===\'beam\'のCLをgraph順のまま返す（既存export名はstructural/MemberListTab.jsxが直接importする）', () => {
   const { graph } = makeGridGraph(TRADITIONAL_WOOD_STRUCTURE);

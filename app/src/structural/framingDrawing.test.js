@@ -434,6 +434,40 @@ test('roofFramingHostMembers: role primary かつ材種が主構造の梁だけ�
   assert.deepEqual(roofFramingHostMembers(undefined, 'WOOD'), []);
 });
 
+test('【C2a】roofFramingHostMembers: 小屋梁（role roofBeam）は横架材に含める（ユーザー裁定2026-10-02）。材種が主構造でない小屋梁・他role（床梁・小梁・土台）は引き続き除く', () => {
+  const beam = (over) => ({
+    role: 'primary', materialType: 'WOOD', isVertical: false, axisValue: -3640,
+    clStart: { effectiveValue: 0 }, clEnd: { effectiveValue: 7280 }, ...over,
+  });
+  const beams = [
+    beam({ role: 'roofBeam', isVertical: true, axisValue: 1820, clStart: { effectiveValue: -3640 }, clEnd: { effectiveValue: 0 } }),
+    beam({ role: 'roofBeam', materialType: 'STEEL', axisValue: 9 }),
+    beam({ role: 'sill', axisValue: 8 }),
+    beam({ role: 'floor', axisValue: 7 }),
+    beam({ role: 'secondary', axisValue: 6 }),
+  ];
+  assert.deepEqual(roofFramingHostMembers(beams, 'WOOD'), [{ isVertical: true, axis: 1820, lo: -3640, hi: 0 }]);
+  assert.deepEqual(roofFramingHostMembers([beam({}), beams[0]], 'WOOD').length, 2, 'primaryと小屋梁が並ぶ');
+});
+
+test('【C2a】roofFramingHostMembers → roofFramingPrimitives: 小屋梁の上には（大梁と同じく）束が立つ', () => {
+  const mk = role => ({
+    role, materialType: 'WOOD', isVertical: false, axisValue: -3640,
+    clStart: { effectiveValue: 0 }, clEnd: { effectiveValue: 7280 },
+  });
+  const count = role => kindOf(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD,
+    baseArgs({ hostBeams: roofFramingHostMembers([mk(role)], 'WOOD') })), 'strut').length;
+  assert.equal(count('roofBeam'), count('primary'), '小屋梁は大梁と同数の束が立つ');
+  assert.ok(count('roofBeam') > 0);
+});
+
+test('【C2a】beamDepthMarks: 小屋梁（role roofBeam）の非正角材は他の梁と同じく標記される（寸法標記を出す裁定）。基礎梁だけが対象外のまま', () => {
+  const [mark] = beamDepthMarks(WOOD_DRAWING, LodLevel.STANDARD, [makeBeam({ role: 'roofBeam', sectionDefId: 'WOOD-120x210' })]);
+  assert.ok(mark, '小屋梁にも標記が出る');
+  assert.equal(mark.label.text, '120×210');
+  assert.deepEqual(beamDepthMarks(WOOD_DRAWING, LodLevel.STANDARD, [makeBeam({ role: 'foundation' })]), []);
+});
+
 test('roofFramingHostMembers → roofFramingPrimitives: 床梁（role floor）の上には束が立たない（呼び出し側の絞り込み）', () => {
   const mk = role => ({
     role, materialType: 'WOOD', isVertical: false, axisValue: -3640,

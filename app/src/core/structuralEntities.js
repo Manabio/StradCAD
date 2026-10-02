@@ -283,10 +283,10 @@ export const RIGID_JOINT_OFFSET_MM = 900;
 export const HOST_BEAM_MATCH_TOL_MM = 0.5;
 
 // 「母材から離して終える」（host基準のspanForHostBeamsへ委譲する）梁のrole集合。小梁(secondary)に
-// 床梁(floor。ステップ3e-2)を加えた——どちらも取りつく先の大梁の縁+クリアランスで止まる点が同じ
-// （host判定はfindHostPrimaryBeamに集約済み）。鉄骨のピン接合（jointType）はこの集合と独立
-// （材種で権威を分ける。isPinJoint参照）。
-export const PIN_ROLES = new Set(['secondary', 'floor']);
+// 床梁(floor。ステップ3e-2)・小屋梁(roofBeam。ステップC2a)を加えた——いずれも取りつく先の大梁の縁+
+// クリアランスで止まる点が同じ（host判定はfindHostPrimaryBeamに集約済み）。鉄骨のピン接合（jointType）は
+// この集合と独立（材種で権威を分ける。isPinJoint参照）。
+export const PIN_ROLES = new Set(['secondary', 'floor', 'roofBeam']);
 
 // 直交CL位置(perpCLId)に、coordを跨ぐ大梁(role:'primary')（allowSecondaryHost=trueなら小梁
 // (role:'secondary')も含む。primaryを優先）があれば返す（無ければnull）。小梁の生成条件
@@ -361,8 +361,10 @@ export class StructuralBeam extends StructuralEntity {
     // eccentricity は派生値: s*((梁幅-既定柱幅)/2 + faceGap)。s=外周側符号。structuralAutoFill.autoBeamEccentricity 参照。
     this.faceGap         = props.faceGap ?? 0;
     this.jointCondition  = props.jointCondition ?? { start: 'RIGID', end: 'RIGID' }; // 剛接合=ラーメン既定
-    // 小梁・床梁・基礎梁・軒桁・母屋・垂木・踊り場受け梁はサブクラスを増やさず role + 既定値の組み合わせで表現する。
-    this.role             = props.role             ?? 'primary'; // primary/secondary/floor/foundation/eaves/roof/landing
+    // 小梁・床梁・基礎梁・軒桁・母屋・垂木・踊り場受け梁・小屋梁はサブクラスを増やさず role + 既定値の組み合わせで表現する。
+    // roofBeam＝在来木造の小屋梁（beamType '小屋梁'・記号KB。母屋・棟木と直交して軒桁等へ架かる実体の部材。
+    // 棟木・母屋・束は保存せず描画時に導く。.claude/structural-model.md「小屋組」の節）。
+    this.role             = props.role             ?? 'primary'; // primary/secondary/floor/foundation/eaves/roof/landing/roofBeam/sill
     // 接合方法（'RIGID'=剛接合 / 'PIN'=ピン接合）。鉄骨の梁でのみ意味を持つ（isPinJoint/hasRigidJoint 参照）。
     // 既定は剛接合。ただし小梁・床梁（PIN_ROLES。梁芯CL追加・床梁自動生成で生成される）だけはピン接合を
     // 初期値にする——生成側（structuralAutoFill/beamAxisMove/woodAutoFill）ではなくここで既定を決めることで、

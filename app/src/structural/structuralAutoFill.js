@@ -795,6 +795,9 @@ export function convertMembersToEffectiveMaterial(graph, project, belowMainStruc
   }
   for (const beam of [...graph.beamMap.values()]) {
     if (beam.role === 'sill') continue; // 土台は変換対象外（上記コメント参照。QA裁定Major-2）
+    // 小屋梁（role:'roofBeam'）も変換対象外——在来木造専用の概念（断面は柱同寸の幅×小屋梁の成の表）。
+    // 非在来へ切替えたときの撤去は小屋梁の生成処理（C2b）が担う。ここで材種を変えると木造専用の断面が壊れる。
+    if (beam.role === 'roofBeam') continue;
     // 基礎梁=主構造非依存の常時RC。軒桁=下階主構造、それ以外(床梁)=自階主構造。出所が未確定なら変換しない。
     if (beam.role !== 'foundation' && !(beam.role === 'eaves' ? belowSpecified : ownSpecified)) continue;
     const targetMaterial = beam.role === 'foundation' ? StructuralMaterialType.RC

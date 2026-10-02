@@ -51,6 +51,19 @@ test('centerLineOriginColorKey: 梁芯でbeamAxisOrigin:opening（床開口由�
   assert.equal(centerLineOriginColorKey(cl), 'generated');
 });
 
+test('【C2a】centerLineOriginColorKey: 梁芯でbeamAxisOrigin:roofBeam（小屋梁割付け由来）は generated', () => {
+  assert.equal(BeamAxisOrigin.ROOF_BEAM, 'roofBeam');
+  const cl = makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.ROOF_BEAM });
+  assert.equal(centerLineOriginColorKey(cl), 'generated');
+});
+
+test('【C2a・失敗系】BeamAxisOrigin の全値は由来色キーが none（既定）へ落ちない——由来を足したのに色の写像を足し忘れる事故の検出', () => {
+  for (const [name, origin] of Object.entries(BeamAxisOrigin)) {
+    const key = centerLineOriginColorKey(makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: origin }));
+    assert.notEqual(key, 'none', `BeamAxisOrigin.${name}(${origin}) が none に落ちている`);
+  }
+});
+
 test('centerLineOriginColorKey: 梁芯でbeamAxisOrigin:userは aux', () => {
   const cl = makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER });
   assert.equal(centerLineOriginColorKey(cl), 'aux');

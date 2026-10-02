@@ -61,6 +61,24 @@ test('【Minor-1・QA裁定2026-09-18】structuralContribution: 土台（role:\'
   assert.deepEqual(contribution, [], '土台は床下の横架材で室内展開に寄与しないため除外される（階段帯はclipを通さないため床下線が出る）');
 });
 
+test('【C2a】structuralContribution: 小屋梁（role:\'roofBeam\'）は展開図・断面の加算寄与に含まれない。他roleは従来どおり含まれる', () => {
+  const graph = makeGraph();
+  addHorizontalBeam(graph, -100, 'roofBeam');
+  assert.deepEqual(structuralContribution([{ graph, floorZMm: 0, role: 'self' }]), [], '小屋梁は構造モードの伏図専用（ユーザー裁定2026-10-02）');
+  for (const role of ['primary', 'secondary', 'floor', 'landing', 'eaves']) {
+    const g = makeGraph(`p-${role}`);
+    addHorizontalBeam(g, -100, role);
+    const c = structuralContribution([{ graph: g, floorZMm: 0, role: 'self' }]);
+    assert.equal(c.length, 1, `role:${role}は従来どおり寄与する`);
+  }
+  // 小屋梁と大梁が同じ階に混在しても、除外されるのは小屋梁だけ
+  const mixed = makeGraph('mixed');
+  addHorizontalBeam(mixed, -100, 'roofBeam');
+  addHorizontalBeam(mixed, -100, 'primary');
+  const roles = structuralContribution([{ graph: mixed, floorZMm: 0, role: 'self' }]).map(b => b.role);
+  assert.deepEqual(roles, ['primary']);
+});
+
 // ---- structuralPrimitivesForCut ----
 test('【WP-C】structuralPrimitivesForCut: 切断線が梁を横切る（直交・spanが重なる）と幅×せいのCUT断面矩形(4本・太線)を出す', () => {
   const graph = makeGraph();
