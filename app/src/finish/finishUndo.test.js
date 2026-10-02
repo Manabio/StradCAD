@@ -264,6 +264,27 @@ test('屋根の項目の変更を withFinishUndo で包むと undo/redo で戻�
   assert.equal(graph.roomMap.get(roof.id).roofSpec.slope, 4);
 });
 
+test('【C1b】highSide（null→明示）の変更を withFinishUndo で包むと undo/redo で null（自動）へ戻る（下屋・主屋根とも1エントリ）', () => {
+  const { graph, roof } = graphWithRoof();
+  roof.roofSpec.setField('highSide', null);
+  const stackBefore = undoManager._undoStack.length;
+  withFinishUndo(graph, () => roof.roofSpec.setField('highSide', 'left'));
+  assert.equal(undoManager._undoStack.length, stackBefore + 1);
+  undoManager.undo();
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.highSide, null);
+  undoManager.redo();
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.highSide, 'left');
+
+  const g2 = freshGraph();
+  const before2 = undoManager._undoStack.length;
+  withFinishUndo(g2, () => g2.mainRoofSpec.setField('highSide', 'top'));
+  assert.equal(undoManager._undoStack.length, before2 + 1);
+  undoManager.undo();
+  assert.equal(g2.mainRoofSpec.highSide, null);
+  undoManager.redo();
+  assert.equal(g2.mainRoofSpec.highSide, 'top');
+});
+
 // ---- 主屋根（ステップB3。PlanGraph.mainRoofSpec。snapshot の `mainRoof` キー） ----
 test('不変条件（B3）: 仕上げ undo の snapshot の mainRoof のキー集合は ROOF_SPEC_KEYS と一致する', () => {
   const graph = freshGraph();

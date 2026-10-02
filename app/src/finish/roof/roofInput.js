@@ -2,7 +2,7 @@
  * 屋根の項目の入力検証と選択肢の組立（純関数。store.js / snap.js / .jsx を静的 import しない）。ステップ B2。
  * RoofGroup.jsx（描画だけ）と FinishModeState.setRoofField（確定時の最終検証）が共有する。
  */
-import { RoofShape, ROOF_SHAPE_LABELS } from '@core';
+import { RoofShape, ROOF_SHAPE_LABELS, RoofHighSide, ROOF_HIGH_SIDE_LABELS } from '@core';
 
 const NUMBER_TEXT = /^\d+(\.\d+)?$/;
 
@@ -40,7 +40,7 @@ export function isValidRoofOverhang(n) {
 
 /**
  * 項目ごとの確定値の検証（RoofSpec.setField へ渡してよい値か）。
- * shape は RoofShape の値のみ（「自動」へ戻す入口は無い）。材料コードは空でない文字列。
+ * shape・highSide は RoofShape・RoofHighSide の値のみ（null＝「自動」へ戻す入口は無い）。材料コードは空でない文字列。
  * 自由入力（屋根仕上げ・軒裏・備考）は文字列なら何でも可。
  * @param {string} field RoofSpec の項目名
  * @param {unknown} value
@@ -49,6 +49,7 @@ export function isValidRoofOverhang(n) {
 export function isValidRoofFieldValue(field, value) {
   switch (field) {
     case 'shape': return Object.values(RoofShape).includes(value);
+    case 'highSide': return Object.values(RoofHighSide).includes(value);
     case 'slope': return isValidRoofSlope(value);
     case 'eaveOverhangMm':
     case 'gableOverhangMm': return isValidRoofOverhang(value);
@@ -64,6 +65,11 @@ export function isValidRoofFieldValue(field, value) {
 /** 形状の選択肢（「自動」は出さない）。 */
 export function roofShapeOptions() {
   return Object.values(RoofShape).map(value => ({ value, label: ROOF_SHAPE_LABELS[value] }));
+}
+
+/** 片流れの高い側の選択肢（上・下・左・右。「自動」は出さない）。 */
+export function roofHighSideOptions() {
+  return Object.values(RoofHighSide).map(value => ({ value, label: ROOF_HIGH_SIDE_LABELS[value] }));
 }
 
 /**

@@ -1,4 +1,4 @@
-// 外部タブの屋根（下屋＝RoofGroup・主屋根＝MainRoofGroup）の群の中身。フォーム1行（形状・勾配・軒の出・妻側の出）＋表に固定2行
+// 外部タブの屋根（下屋＝RoofGroup・主屋根＝MainRoofGroup）の群の中身。フォーム1行（形状・［高い側］・勾配・軒の出・妻側の出）＋表に固定2行
 // （「屋根」行: 仕上げ＝屋根仕上げ／下地＝防水シート・野地板の選択欄／備考、「軒裏」行: 仕上げ＝軒裏）。
 // 見出し「屋根」と削除ボタンは FinishTable.jsx 側（群の枠）が持つ。判断（選択肢・実効の形状・入力の検証）は
 // roofDefaults.js／roofInput.js の純関数に置き、ここは描くだけ。確定は mode.setRoofField／setMainRoofField（1確定＝undo 1エントリ）。
@@ -7,9 +7,10 @@ import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
 import { ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES } from '@core';
 import { resolveRoofShape, roofRoomBounds } from './roofDefaults.js';
-import { resolveMainRoofShape } from './mainRoof.js';
+import { resolveMainRoofShape, mainRoofHighSideView } from './mainRoof.js';
+import { roofHighSideViewOfRoom } from './roofOrientation.js';
 import {
-  roofShapeOptions, roofMaterialOptions, parseRoofSlopeInput, parseRoofOverhangInput,
+  roofShapeOptions, roofHighSideOptions, roofMaterialOptions, parseRoofSlopeInput, parseRoofOverhangInput,
 } from './roofInput.js';
 
 // 文字列の欄（屋根仕上げ・軒裏・備考）。blur／Enter で確定する（既存の CardNameInput・ExteriorPartHeading と
@@ -72,7 +73,8 @@ export const RoofGroup = observer(({ room, graph, mode, styles }) => {
   if (!spec) return null; // I1 により屋根の部屋には必ずある。復元の途中などで一瞬無いときは何も出さない
   const set = (field, value) => mode.setRoofField(room.id, field, value);
   const shape = resolveRoofShape(spec, { boundsList: roofRoomBounds(room, graph) });
-  return <RoofSpecFields spec={spec} shape={shape} set={set} mode={mode} styles={styles} />;
+  const highSide = roofHighSideViewOfRoom(room, graph);
+  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} set={set} mode={mode} styles={styles} />;
 });
 
 /**
@@ -84,14 +86,16 @@ export const MainRoofGroup = observer(({ graph, mode, styles }) => {
   const spec = graph.mainRoofSpec;
   const set = (field, value) => mode.setMainRoofField(field, value);
   const shape = resolveMainRoofShape(graph, mode.project);
-  return <RoofSpecFields spec={spec} shape={shape} set={set} mode={mode} styles={styles} />;
+  const highSide = mainRoofHighSideView(graph, mode.project);
+  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} set={set} mode={mode} styles={styles} />;
 });
 
 /**
  * 屋根の項目のフォーム1行＋固定2行の表（下屋・主屋根で共通）。spec＝表示する RoofSpec、shape＝形状の実効値
- * （呼び出し側が範囲・主構造から導く）、set＝項目の確定関数 (field, value)。
+ * （呼び出し側が範囲・主構造から導く）、highSide＝「高い側」欄の表示判断 { visible, value }（呼び出し側が導く。
+ * visible のときだけ形状の直後に選択欄を出す）、set＝項目の確定関数 (field, value)。
  */
-const RoofSpecFields = observer(({ spec, shape, set, mode, styles }) => {
+const RoofSpecFields = observer(({ spec, shape, highSide, set, mode, styles }) => {
   const { cellBase, headerCell, cellInputStyle } = styles;
   const boxed = { ...cellInputStyle, border: '1px solid #cbd5e1', padding: '2px 4px' };
   const nameOf = code => mode.getMaterial(code)?.name;
@@ -120,6 +124,17 @@ const RoofSpecFields = observer(({ spec, shape, set, mode, styles }) => {
         >
           {roofShapeOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
+        {highSide.visible && <span style={formLabelStyle}>高い側</span>}
+        {highSide.visible && (
+          <select
+            value={highSide.value}
+            onChange={e => set('highSide', e.target.value)}
+            onClick={e => e.stopPropagation()}
+            style={{ ...boxed, width: 'auto' }}
+          >
+            {roofHighSideOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        )}
         <span style={formLabelStyle}>勾配</span>
         <RoofNumberInput value={spec.slope} parse={parseRoofSlopeInput} onCommit={n => set('slope', n)}
           style={{ ...boxed, width: 40, minWidth: 0 }} />

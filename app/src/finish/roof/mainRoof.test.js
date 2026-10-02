@@ -9,7 +9,8 @@ import {
 import { rulesFor, UNSPECIFIED_STRUCTURE, TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
 import { footprintCellKeys } from '../../structural/wallGate.js';
 import { resolveRoofShape } from './roofDefaults.js';
-import { mainRoofBounds, resolveMainRoofShape } from './mainRoof.js';
+import { mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView } from './mainRoof.js';
+import { rectOfBounds } from './roofGeometry.js';
 import { wallFreshnessKey } from '../wallFreshnessKey.js';
 import { generateExteriorWalls, generateRoomWallsFromOutline, computeExteriorWallSegments } from '../wallGeneration.js';
 import { computeNamedBoundaryEdges } from '../edgeClassify.js';
@@ -99,6 +100,91 @@ test('【B3・失敗系】resolveMainRoofShape: 部屋が無い階（建物範�
   assert.equal(resolveMainRoofShape(g), RoofShape.MONO);
 });
 
+// ---- C1b: 矩形でない建物範囲の自動の形状は寄棟（主屋根だけ。下屋は短手の規則のまま） ----
+
+/** L字の屋内（3セル）だけの階（buildRoofLayout の notch・屋根なし）。建物範囲は矩形でない。 */
+const lShapedGraph = () => buildRoofLayout('notch', 'none').graph;
+
+test('【C1b】resolveMainRoofShape: 建物範囲が矩形でない（L字）なら、木造・主構造未定の自動の形状は寄棟', () => {
+  const project = new Project('p', 'test');
+  const g = lShapedGraph();
+  assert.equal(rectOfBounds(mainRoofBounds(g)), null, '前提: 建物範囲は矩形でない');
+  assert.ok(mainRoofBounds(g).length > 0);
+  for (const key of [TRADITIONAL_WOOD_STRUCTURE, '木造（2"×4"）', UNSPECIFIED_STRUCTURE]) {
+    project.structuralInfo.mainStructure = key;
+    assert.equal(resolveMainRoofShape(g, project), RoofShape.HIP, key);
+  }
+});
+
+test('【C1b】resolveMainRoofShape: 矩形の建物範囲は今までどおり短手の規則（3640以下=片流れ・超=切妻）', () => {
+  const project = new Project('p', 'test');
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  assert.equal(resolveMainRoofShape(singleRoomGraph(9000, 3640), project), RoofShape.MONO);
+  assert.equal(resolveMainRoofShape(singleRoomGraph(9000, 3641), project), RoofShape.GABLE);
+  // 2セルに分かれた矩形（band の屋内部分）も矩形
+  assert.equal(resolveMainRoofShape(buildRoofLayout('band', 'roof').graph, project), RoofShape.MONO);
+});
+
+test('【C1b】resolveMainRoofShape: 非木造は矩形でなくても陸屋根。明示値は矩形でなくてもそのまま', () => {
+  const project = new Project('p', 'test');
+  const g = lShapedGraph();
+  for (const key of ['RC造(ラーメン)', 'RC造(壁式)', 'S造', 'SRC造']) {
+    project.structuralInfo.mainStructure = key;
+    assert.equal(resolveMainRoofShape(g, project), RoofShape.FLAT, key);
+  }
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  g.mainRoofSpec.setField('shape', RoofShape.GABLE);
+  assert.equal(resolveMainRoofShape(g, project), RoofShape.GABLE);
+});
+
+test('【C1b・失敗系】建物範囲が空の階は木造でも寄棟にならない（今までどおり短手0＝片流れ）。階段だけの階も空', () => {
+  const project = new Project('p', 'test');
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  const g = new PlanGraph(new Plane('p1', 0, '3階', 3, 1));
+  assert.equal(resolveMainRoofShape(g, project), RoofShape.MONO);
+});
+
+test('【C1b】下屋の resolveRoofShape は矩形でなくても今までどおり（L字の下屋は短手で片流れ／切妻。寄棟にならない）', () => {
+  const L = [rect(0, 0, 6000, 2000), rect(0, 2000, 3000, 7000)]; // 短手 3000 の L字
+  const LBIG = [rect(0, 0, 9000, 4000), rect(0, 4000, 4000, 9000)]; // 短手 4000 超の L字
+  assert.equal(rectOfBounds(L), null);
+  const rules = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  assert.equal(resolveRoofShape(new RoofSpec(), { boundsList: L }), RoofShape.MONO);
+  assert.equal(resolveRoofShape(new RoofSpec(), { boundsList: LBIG }), RoofShape.GABLE);
+  assert.equal(resolveRoofShape(new RoofSpec(), { boundsList: LBIG, rules }), RoofShape.GABLE, 'rules を渡しても寄棟にならない');
+});
+
+test('【C1b】mainRoofHighSideView: 片流れ＋矩形のとき、既定は横長=上・縦長=左・正方形=上。明示値が優先', () => {
+  const project = new Project('p', 'test');
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  assert.deepEqual(mainRoofHighSideView(singleRoomGraph(9000, 3000), project), { visible: true, value: 'top' });
+  assert.deepEqual(mainRoofHighSideView(singleRoomGraph(3000, 3500), project), { visible: true, value: 'left' });
+  assert.deepEqual(mainRoofHighSideView(singleRoomGraph(3000, 3000), project), { visible: true, value: 'top' });
+  const g = singleRoomGraph(9000, 3000);
+  g.mainRoofSpec.setField('highSide', 'right');
+  assert.deepEqual(mainRoofHighSideView(g, project), { visible: true, value: 'right' });
+});
+
+test('【C1b・失敗系】mainRoofHighSideView: 形状が片流れでない（切妻・寄棟・陸屋根）・矩形でない・建物範囲が空は非表示', () => {
+  const project = new Project('p', 'test');
+  const hidden = { visible: false, value: null };
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  const gable = singleRoomGraph(9000, 6000);
+  gable.mainRoofSpec.setField('highSide', 'left'); // 明示値があっても出さない
+  assert.deepEqual(mainRoofHighSideView(gable, project), hidden, '切妻');
+  assert.deepEqual(mainRoofHighSideView(lShapedGraph(), project), hidden, 'L字＝寄棟');
+  const lMono = lShapedGraph();
+  lMono.mainRoofSpec.setField('shape', RoofShape.MONO);
+  assert.deepEqual(mainRoofHighSideView(lMono, project), hidden, '矩形でない片流れは出さない');
+  // 建物範囲が空: 形状は片流れだが範囲が無いので高い側は導けない
+  assert.deepEqual(mainRoofHighSideView(new PlanGraph(new Plane('p1', 0, '3階', 3, 1)), project), hidden, '空');
+  project.structuralInfo.mainStructure = 'S造';
+  assert.deepEqual(mainRoofHighSideView(singleRoomGraph(9000, 3000), project), hidden, '陸屋根');
+  const sMono = singleRoomGraph(9000, 3000);
+  sMono.mainRoofSpec.setField('shape', RoofShape.MONO);
+  assert.deepEqual(mainRoofHighSideView(sMono, project), { visible: true, value: 'top' }, 'S造でも明示の片流れなら出る');
+});
+
 test('【B3】mainRoofBounds: 建物範囲（footprintCellKeys）のセル矩形。屋根セルのある階では屋根セルを含まない', () => {
   const { graph } = buildRoofLayout('band', 'roof');
   const bounds = mainRoofBounds(graph);
@@ -124,7 +210,7 @@ function fingerprint(graph, project) {
   };
 }
 
-test('【B3】主屋根の全9項目を既定以外にしても、壁の鮮度キー・建物範囲・外壁セグメント・生成壁・境界は変わらない', () => {
+test('【B3】主屋根の全10項目を既定以外にしても、壁の鮮度キー・建物範囲・外壁セグメント・生成壁・境界は変わらない', () => {
   for (const shape of ['band', 'notch']) {
     for (const mode of ['roof', 'none']) {
       const { graph } = buildRoofLayout(shape, mode);
@@ -132,7 +218,7 @@ test('【B3】主屋根の全9項目を既定以外にしても、壁の鮮度�
       const before = fingerprint(graph, project);
       assert.ok(before.walls.length > 0 && before.footprint.length > 0, '前提: 壁・建物範囲がある');
       graph.setMainRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
-      assert.equal(ROOF_SPEC_KEYS.filter(k => graph.mainRoofSpec[k] !== new RoofSpec()[k]).length, 9, '前提: 全項目が既定以外');
+      assert.equal(ROOF_SPEC_KEYS.filter(k => graph.mainRoofSpec[k] !== new RoofSpec()[k]).length, 10, '前提: 全項目が既定以外');
       assert.deepEqual(fingerprint(graph, project), before, `${shape}/${mode}`);
     }
   }

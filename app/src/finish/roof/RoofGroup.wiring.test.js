@@ -39,6 +39,23 @@ test('【不変条件】形状 select の表示値は resolveRoofShape（自動�
   assert.ok(!/自動/.test(groupBody), '「自動」という選択肢・文言を出さない（表示は導いた形状）');
 });
 
+test('【不変条件・C1b】「高い側」の欄は highSide.visible のときだけ、形状 select の直後に出す。値は highSide.value・選択肢は roofHighSideOptions()・確定は set(\'highSide\', …)', () => {
+  assert.ok(roofLines.includes('{highSide.visible && <span style={formLabelStyle}>高い側</span>}'), 'ラベルの visible 結び付けが見つからない');
+  assert.ok(roofLines.includes('{highSide.visible && ('), 'select の visible 結び付けが見つからない');
+  assert.ok(roofLines.includes('value={highSide.value}'), 'value={highSide.value} が見つからない');
+  assert.ok(roofLines.includes("onChange={e => set('highSide', e.target.value)}"), "onChange が set('highSide', …) でない");
+  assert.ok(/roofHighSideOptions\(\)\.map\(/.test(groupBody), 'roofHighSideOptions().map( が見つからない');
+  // 形状 select の直後（形状の選択肢の閉じタグの後、勾配ラベルの前）にある
+  const shapeEnd = groupBody.indexOf('roofShapeOptions().map(');
+  const highStart = groupBody.indexOf('{highSide.visible && <span');
+  const slopeLabel = groupBody.indexOf('<span style={formLabelStyle}>勾配</span>');
+  assert.ok(shapeEnd >= 0 && shapeEnd < highStart && highStart < slopeLabel, '形状 select → 高い側 → 勾配 の順');
+  // visible の導出は呼び出し側（純関数）。下屋と主屋根がそれぞれ導いて渡す
+  assert.ok(roofLines.includes('const highSide = roofHighSideViewOfRoom(room, graph);'), '下屋の高い側の導出の行が見つからない');
+  assert.ok(roofLines.includes('const highSide = mainRoofHighSideView(graph, mode.project);'), '主屋根の高い側の導出の行が見つからない');
+  assert.ok(!/\.highSide\s*=|setField\('highSide'/.test(roofCode), 'jsx が highSide を直接書き換えていない（確定は set 経由）');
+});
+
 test('【不変条件】勾配・軒の出・妻側の出は検証の純関数（parseRoofSlopeInput／parseRoofOverhangInput）を通し、onCommit は set(各項目, n)', () => {
   assert.ok(roofLines.includes("<RoofNumberInput value={spec.slope} parse={parseRoofSlopeInput} onCommit={n => set('slope', n)}"),
     '勾配の RoofNumberInput が parseRoofSlopeInput／set(\'slope\', n) で配線されていない');
@@ -81,7 +98,7 @@ test('【不変条件】表は固定2行（屋根・軒裏）。行の追加・�
 
 test('【不変条件】入力欄は無効化・読取専用にしない（select・input に disabled／readOnly が無い）', () => {
   assert.ok(!/disabled|readOnly/.test(roofCode), 'disabled／readOnly が見つかった（屋根の項目は常に編集できる）');
-  assert.equal((roofCode.match(/<select/g) ?? []).length, 2, 'select は形状と材料（共通の materialSelect）の2か所だけ');
+  assert.equal((roofCode.match(/<select/g) ?? []).length, 3, 'select は形状・高い側・材料（共通の materialSelect）の3か所だけ');
   assert.equal((roofCode.match(/<input/g) ?? []).length, 2, 'input は RoofTextInput・RoofNumberInput の2か所だけ');
 });
 
@@ -176,9 +193,9 @@ test('【不変条件・B3】MainRoofGroup の確定は mode.setMainRoofField(fi
 });
 
 test('【不変条件・B3】下屋と主屋根は同じ描画部品 RoofSpecFields（spec・shape・set を引数で受ける）を使い、各1回ずつ描く', () => {
-  assert.equal(roofLines.filter(l => l === 'return <RoofSpecFields spec={spec} shape={shape} set={set} mode={mode} styles={styles} />;').length, 2,
+  assert.equal(roofLines.filter(l => l === 'return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} set={set} mode={mode} styles={styles} />;').length, 2,
     '下屋と主屋根の2か所で同じ RoofSpecFields を同じ引数で描く');
-  assert.ok(roofLines.includes('const RoofSpecFields = observer(({ spec, shape, set, mode, styles }) => {'), 'RoofSpecFields の宣言');
+  assert.ok(roofLines.includes('const RoofSpecFields = observer(({ spec, shape, highSide, set, mode, styles }) => {'), 'RoofSpecFields の宣言');
   // 下屋の形状の導出（範囲は屋根セル）は RoofGroup 側のまま
   assert.ok(roofLines.includes('const shape = resolveRoofShape(spec, { boundsList: roofRoomBounds(room, graph) });'));
 });

@@ -335,7 +335,7 @@ function makeGraphWithRoof() {
   return { graph, interior, roof };
 }
 
-test('【B2】snapshotRoomsState→restoreRoomsState→snapshotRoomsState: 全9項目を既定値以外にした RoofSpec が往復する（出幅0・勾配2.5・形状明示）', () => {
+test('【B2】snapshotRoomsState→restoreRoomsState→snapshotRoomsState: 全10項目を既定値以外にした RoofSpec が往復する（出幅0・勾配2.5・形状明示）', () => {
   const { graph, roof } = makeGraphWithRoof();
   const snap = snapshotRoomsState(graph);
   roof.roofSpec.setField('slope', 7);
@@ -344,6 +344,25 @@ test('【B2】snapshotRoomsState→restoreRoomsState→snapshotRoomsState: 全9�
   const restored = graph.roomMap.get(roof.id);
   assert.deepEqual(restored.roofSpec.toData(), { ...NON_DEFAULT_ROOF_SPEC });
   assert.equal(JSON.stringify(snapshotRoomsState(graph)), JSON.stringify(snap), '往復前後でスナップショットが一致する');
+});
+
+test('【C1b】snapshotRoomsState→restoreRoomsState: highSide の null（自動）と明示値がそれぞれ保たれる。壊れた値は null へ', () => {
+  const { graph, roof } = makeGraphWithRoof();
+  const specOf = () => graph.roomMap.get(roof.id).roofSpec; // restore は Room を作り直すので毎回引き直す
+  specOf().setField('highSide', null);
+  const snapNull = snapshotRoomsState(graph);
+  assert.equal(snapNull.rooms.find(r => r.id === roof.id).roofSpec.highSide, null);
+  specOf().setField('highSide', 'bottom');
+  restoreRoomsState(graph, snapNull);
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.highSide, null, 'null（自動）へ戻る');
+  specOf().setField('highSide', 'bottom');
+  const snapSet = snapshotRoomsState(graph);
+  specOf().setField('highSide', null);
+  restoreRoomsState(graph, snapSet);
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.highSide, 'bottom');
+  snapSet.rooms.find(r => r.id === roof.id).roofSpec.highSide = 'up';
+  restoreRoomsState(graph, snapSet);
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.highSide, null, '【失敗系】未知の値は null');
 });
 
 test('【B2】snapshotRoomsState: roofSpec のキー集合は ROOF_SPEC_KEYS と一致し、屋根でない部屋は null', () => {

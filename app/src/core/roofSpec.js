@@ -1,14 +1,15 @@
 /**
  * 屋根の仕様（RoofSpec）。core.js から分離。core/equipment.js と並ぶ値クラス。
  *
- * 屋根（Room.feature===ROOF）の8項目＋備考の唯一の保存先。Room.roofSpec が持つ（不変条件 I1:
+ * 屋根（Room.feature===ROOF）の8項目＋備考＋片流れの高い側の唯一の保存先。Room.roofSpec が持つ（不変条件 I1:
  * feature===ROOF ⇔ roofSpec≠null）。項目集合の定義は ROOF_SPEC_KEYS と toData()/fromData() の
  * 1か所だけ——直列化（FBS・graphSnapshot）・仕上げモード undo・テストの突合はここを共通の入口にする。
- * 形状だけ null（＝自動）を持てる。表示時に導く（finish/roof/roofDefaults.js resolveRoofShape）。
+ * 形状と片流れの高い側（highSide）だけ null（＝自動）を持てる。表示時に導く（finish/roof/roofDefaults.js
+ * resolveRoofShape・roofGeometry.js resolveRoofHighSide）。
  */
 import { makeObservable, observable, action } from 'mobx';
 import {
-  RoofShape, DEFAULT_ROOF_SLOPE, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM,
+  RoofShape, RoofHighSide, DEFAULT_ROOF_SLOPE, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM,
   DEFAULT_ROOF_SHEATHING, DEFAULT_ROOF_UNDERLAYMENT,
 } from './constants.js';
 
@@ -16,9 +17,11 @@ import {
 export const ROOF_SPEC_KEYS = Object.freeze([
   'shape', 'slope', 'sheathingMaterial', 'underlaymentMaterial',
   'roofFinish', 'eaveOverhangMm', 'gableOverhangMm', 'soffit', 'note',
+  'highSide',
 ]);
 
 const SHAPE_VALUES = new Set(Object.values(RoofShape));
+const HIGH_SIDE_VALUES = new Set(Object.values(RoofHighSide));
 
 /**
  * spec（RoofSpec または toData() 形式の plain）が既定値（new RoofSpec()）と全項目同じか。
@@ -46,6 +49,7 @@ export class RoofSpec {
     gableOverhangMm = DEFAULT_ROOF_GABLE_OVERHANG_MM,
     soffit = '',
     note = '',
+    highSide = null,
   } = {}) {
     this.shape = shape;                       // RoofShape | null（null＝自動）
     this.slope = slope;                       // 勾配 N/10 の N（0.5 刻みを許す）
@@ -56,6 +60,7 @@ export class RoofSpec {
     this.gableOverhangMm = gableOverhangMm;   // 妻側の出幅 mm（0 も正当）
     this.soffit = soffit;                     // 軒裏（自由入力）
     this.note = note;                         // 備考
+    this.highSide = highSide;                 // 片流れの高い側 RoofHighSide | null（null＝自動。片流れのときだけ使う）
     makeObservable(this, {
       shape:                observable,
       slope:                observable,
@@ -66,6 +71,7 @@ export class RoofSpec {
       gableOverhangMm:      observable,
       soffit:               observable,
       note:                 observable,
+      highSide:             observable,
       setField:             action,
     });
   }
@@ -82,12 +88,13 @@ export class RoofSpec {
       sheathingMaterial: this.sheathingMaterial, underlaymentMaterial: this.underlaymentMaterial,
       roofFinish: this.roofFinish, eaveOverhangMm: this.eaveOverhangMm,
       gableOverhangMm: this.gableOverhangMm, soffit: this.soffit, note: this.note,
+      highSide: this.highSide,
     };
   }
 
   /**
    * plain object から RoofSpec を作る（直列化・undo・FBS が共通して使う）。壊れた値の正規化:
-   * 未知の shape→null／slope が非有限または0以下→既定／出幅が非有限または負→既定（0 は正当なので保つ）／
+   * 未知の shape・highSide→null／slope が非有限または0以下→既定／出幅が非有限または負→既定（0 は正当なので保つ）／
    * 文字列の欠落→''／材料コードの欠落（空・非文字列）→既定。
    */
   static fromData(d) {
@@ -107,6 +114,7 @@ export class RoofSpec {
         ? src.gableOverhangMm : DEFAULT_ROOF_GABLE_OVERHANG_MM,
       soffit: str(src.soffit),
       note: str(src.note),
+      highSide: HIGH_SIDE_VALUES.has(src.highSide) ? src.highSide : null,
     });
   }
 }

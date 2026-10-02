@@ -1073,7 +1073,7 @@ test('【B2b】選択中の屋根を削除すると選択が外れる（既存�
 
 const ROOF_DEFAULTS = {
   shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
-  roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野',
+  roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野', highSide: null,
 };
 
 test('【B2・I1】屋根の付与で roofSpec ができる（既定値・備考「下野」・形状は自動 null）', () => {
@@ -1129,13 +1129,13 @@ test('【B2・I1】屋根の付与→undo→redo: undo で roofSpec ごと消え
   assert.deepEqual(graph.roomMap.get(roofId).roofSpec.toData(), ROOF_DEFAULTS);
 });
 
-test('【B2】setRoofField: 9項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
+test('【B2】setRoofField: 10項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
   const graph = makeThreeCellGraph();
   const state = new FinishModeState(graph, null);
   const roof = assignRoofViaDrag(state, graph, 1000, 1500);
   const edits = {
     shape: 'hip', slope: 2.5, sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009',
-    roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '本屋根',
+    roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '本屋根', highSide: 'left',
   };
   for (const [field, value] of Object.entries(edits)) {
     // undo/redo は Room を作り直すため、毎回 graph から引き直す
@@ -1149,7 +1149,24 @@ test('【B2】setRoofField: 9項目それぞれを確定でき、1回の確定�
     undoManager.redo();
     assert.equal(graph.roomMap.get(roof.id).roofSpec[field], value, `${field}: redo でやり直せる`);
   }
-  assert.equal(Object.keys(edits).length, 9);
+  assert.equal(Object.keys(edits).length, 10);
+});
+
+test('【C1b】setRoofField: highSide を同じ値へ再確定すると無変更で false（undo を積まない）。別の辺へ変えると undo 1エントリで null まで戻れる', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  assert.equal(roof.roofSpec.highSide, null, '付与直後は null（自動）');
+  const base = undoManager._undoStack.length;
+  assert.equal(state.setRoofField(roof.id, 'highSide', 'bottom'), true);
+  assert.equal(undoManager._undoStack.length, base + 1);
+  assert.equal(state.setRoofField(roof.id, 'highSide', 'bottom'), false, '無変更');
+  assert.equal(undoManager._undoStack.length, base + 1);
+  assert.equal(state.setRoofField(roof.id, 'highSide', 'right'), true);
+  undoManager.undo();
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.highSide, 'bottom');
+  undoManager.undo();
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.highSide, null);
 });
 
 test('【B2・失敗系】setRoofField: 不正な値（勾配0・2.3・負の出幅・未知の形状・空の材料コード）は確定せず undo も積まない', () => {
@@ -1160,6 +1177,7 @@ test('【B2・失敗系】setRoofField: 不正な値（勾配0・2.3・負の出
   const bad = [
     ['slope', 0], ['slope', 2.3], ['slope', -1], ['slope', '3'], ['eaveOverhangMm', -1], ['gableOverhangMm', NaN],
     ['shape', 'dome'], ['shape', null], ['sheathingMaterial', ''], ['underlaymentMaterial', null], ['unknown', 1],
+    ['highSide', 'up'], ['highSide', null], ['highSide', ''],
   ];
   for (const [field, value] of bad) {
     assert.equal(state.setRoofField(roof.id, field, value), false, `${field}=${String(value)}`);
@@ -1211,7 +1229,7 @@ test('【B2】屋根の項目を編集しても壁の鮮度キーは変わらな
 // ---- 主屋根（ステップB3）: setMainRoofField。値は graph.mainRoofSpec（階ごと設定）。undo は finishUndo の mainRoof ----
 const MAIN_ROOF_DEFAULTS = {
   shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
-  roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '',
+  roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '', highSide: null,
 };
 
 test('【B3】主屋根の初期値は既定値で、備考は空（下屋の「下野」ではない）', () => {
@@ -1219,12 +1237,12 @@ test('【B3】主屋根の初期値は既定値で、備考は空（下屋の「
   assert.deepEqual(graph.mainRoofSpec.toData(), MAIN_ROOF_DEFAULTS);
 });
 
-test('【B3】setMainRoofField: 9項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
+test('【B3】setMainRoofField: 10項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
   const graph = makeThreeCellGraph();
   const state = new FinishModeState(graph, null);
   const edits = {
     shape: 'hip', slope: 2.5, sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009',
-    roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '主屋根',
+    roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '主屋根', highSide: 'left',
   };
   for (const [field, value] of Object.entries(edits)) {
     // undo/redo は主屋根の RoofSpec を作り直すため、毎回 graph から引き直す
@@ -1238,7 +1256,19 @@ test('【B3】setMainRoofField: 9項目それぞれを確定でき、1回の確�
     undoManager.redo();
     assert.equal(graph.mainRoofSpec[field], value, `${field}: redo でやり直せる`);
   }
-  assert.equal(Object.keys(edits).length, 9);
+  assert.equal(Object.keys(edits).length, 10);
+});
+
+test('【C1b】setMainRoofField: highSide を同じ値へ再確定すると無変更で false（undo を積まない）。undo で null（自動）へ戻る', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const base = undoManager._undoStack.length;
+  assert.equal(state.setMainRoofField('highSide', 'top'), true);
+  assert.equal(undoManager._undoStack.length, base + 1);
+  assert.equal(state.setMainRoofField('highSide', 'top'), false, '無変更');
+  assert.equal(undoManager._undoStack.length, base + 1);
+  undoManager.undo();
+  assert.equal(graph.mainRoofSpec.highSide, null);
 });
 
 test('【B3・失敗系】setMainRoofField: 不正な値（勾配0・2.3・負の出幅・未知の形状・空の材料コード・未知の項目）は確定せず undo も積まない', () => {
@@ -1248,6 +1278,7 @@ test('【B3・失敗系】setMainRoofField: 不正な値（勾配0・2.3・負�
   const bad = [
     ['slope', 0], ['slope', 2.3], ['slope', -1], ['slope', '3'], ['eaveOverhangMm', -1], ['gableOverhangMm', NaN],
     ['shape', 'dome'], ['shape', null], ['sheathingMaterial', ''], ['underlaymentMaterial', null], ['unknown', 1],
+    ['highSide', 'up'], ['highSide', null], ['highSide', ''],
   ];
   for (const [field, value] of bad) {
     assert.equal(state.setMainRoofField(field, value), false, `${field}=${String(value)}`);

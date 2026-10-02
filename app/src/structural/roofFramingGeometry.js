@@ -16,9 +16,9 @@
  *   - プログラム誤り（ピッチ・許容差が非有限か不正、座標が非有限、x1>x2/y1>y2、lo>hi、
  *     片流れの highSide が不正）は RangeError を投げる。
  */
-import { RoofShape } from '../core/constants.js';
+import { RoofShape, RoofHighSide } from '../core/constants.js';
 
-const HIGH_SIDES = ['top', 'bottom', 'left', 'right'];
+const HIGH_SIDES = Object.values(RoofHighSide);
 
 function requireFinite(v, name) {
   if (typeof v !== 'number' || !Number.isFinite(v)) {
@@ -201,6 +201,7 @@ export function koyaBeamPositions({ lines, supports = [], tiers = [], gridOrigin
     requireFinite(s.at, 'support.at');
     requireFinite(s.lo, 'support.lo');
     requireFinite(s.hi, 'support.hi');
+    if (s.lo > s.hi) throw new RangeError(`support の lo が hi より大きい: ${s.lo} > ${s.hi}`);
   }
   if (live.some(l => l.isVertical !== live[0].isVertical)) {
     throw new RangeError('lines の isVertical が混在しています');

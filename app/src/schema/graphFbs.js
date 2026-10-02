@@ -124,12 +124,13 @@ const XR = { ID: 0, PART: 1, FINISH: 2, BASE: 3, NOTE: 4, ROOM_ID: 5 };
 // NOは float64（reader にi32読みが無いため。Stairの数値と同じ流儀）。
 const EQ = { ID: 0, CATEGORY: 1, USAGE: 2, NO: 3, CELL_KEYS: 4, ROOM_ID: 5 };
 
-// RoofSpec（屋根の仕様。Room.roofSpec）: 9 フィールド。項目集合は core/roofSpec.js ROOF_SPEC_KEYS が唯一の定義。
+// RoofSpec（屋根の仕様。Room.roofSpec）: 10 フィールド。項目集合は core/roofSpec.js ROOF_SPEC_KEYS が唯一の定義。
 // shape の null（自動）は空文字で表す。出幅 0 は正当な値なので HAS フラグは持たず、読み側で既定へ読み替えない
 // （既定への読み替えは RoofSpec.fromData の「非有限・負」だけ）。
+// HIGH_SIDE（片流れの高い側。9）は null（自動）のときフィールドごと書かない（無ければ読みは null）。
 const RS = {
   SHAPE: 0, SLOPE: 1, SHEATHING: 2, UNDERLAYMENT: 3, ROOF_FINISH: 4,
-  EAVE_OVERHANG: 5, GABLE_OVERHANG: 6, SOFFIT: 7, NOTE: 8,
+  EAVE_OVERHANG: 5, GABLE_OVERHANG: 6, SOFFIT: 7, NOTE: 8, HIGH_SIDE: 9,
 };
 
 // Room: 31 フィールド
@@ -670,7 +671,9 @@ function writeRoofSpec(b, rs) {
   const sRoofFinish   = b.createString(rs.roofFinish ?? '');
   const sSoffit       = b.createString(rs.soffit ?? '');
   const sNote         = b.createString(rs.note ?? '');
-  b.startObject(9);
+  // highSide が null（自動）のときは文字列もフィールドも作らない（既存文書のバイト列を変えない）
+  const sHighSide     = rs.highSide ? b.createString(rs.highSide) : 0;
+  b.startObject(10);
   b.addFieldOffset(RS.SHAPE,          sShape,      0);
   b.addFieldFloat64(RS.SLOPE,         rs.slope ?? 0.0, 0.0);
   b.addFieldOffset(RS.SHEATHING,      sSheathing,  0);
@@ -680,6 +683,7 @@ function writeRoofSpec(b, rs) {
   b.addFieldFloat64(RS.GABLE_OVERHANG, rs.gableOverhangMm ?? 0.0, 0.0);
   b.addFieldOffset(RS.SOFFIT,         sSoffit,     0);
   b.addFieldOffset(RS.NOTE,           sNote,       0);
+  b.addFieldOffset(RS.HIGH_SIDE,      sHighSide,   0);
   return b.endObject();
 }
 
@@ -1435,6 +1439,7 @@ function readRoofSpec(bb, tablePos) {
     gableOverhangMm:      r.f64(RS.GABLE_OVERHANG),
     soffit:               r.str(RS.SOFFIT),
     note:                 r.str(RS.NOTE),
+    highSide:             r.str(RS.HIGH_SIDE) || null,
   };
 }
 

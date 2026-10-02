@@ -32,7 +32,7 @@ test('【B3】上に階を追加（旧最上階がアクティブ）: 新しい�
   assert.equal(result, 'carried');
   assert.deepEqual(log, ['f2'], '保存は新しい最上階へ1回だけ');
   const decoded = decodeFloor(project, newPlane, store.get('f2'));
-  assert.deepEqual(decoded.mainRoofSpec.toData(), { ...NON_DEFAULT_ROOF_SPEC }, '全9項目が写る');
+  assert.deepEqual(decoded.mainRoofSpec.toData(), { ...NON_DEFAULT_ROOF_SPEC }, '全10項目が写る');
   assert.deepEqual(g1.mainRoofSpec.toData(), { ...NON_DEFAULT_ROOF_SPEC }, '旧最上階の値は残る（消さない）');
   assert.equal(store.has('f1'), false, '旧最上階には何も書かない');
   assert.notEqual(decoded.mainRoofSpec, g1.mainRoofSpec, '同じオブジェクトを共有しない（別の RoofSpec）');

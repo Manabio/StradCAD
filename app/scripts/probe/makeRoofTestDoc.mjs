@@ -449,7 +449,7 @@ if (!roofAfter || roofAfter.kind !== RoomKind.EXTERIOR || roofAfter.name !== '�
 }
 console.log('OK: 往復テスト一致（屋根の部屋も残る）');
 
-// ---- 屋根の仕様（RoofSpec。ステップB2）: 屋根の部屋が既定値の RoofSpec を持ち、保存→読込みで全9項目が残る ----
+// ---- 屋根の仕様（RoofSpec。ステップB2）: 屋根の部屋が既定値の RoofSpec を持ち、保存→読込みで全10項目が残る ----
 {
   const roofRoomsOf = (proj) => proj.planes.flatMap(p => proj.graphMap.get(p.id).rooms
     .filter(r => r.feature === RoomFeature.ROOF).map(r => ({ planeName: p.name, room: r })));
@@ -483,7 +483,7 @@ console.log('OK: 往復テスト一致（屋根の部屋も残る）');
       if (r.feature !== RoomFeature.ROOF && r.roofSpec) { console.error(`NG: 屋根でない部屋に roofSpec がある（${r.name}）`); process.exit(1); }
     }
   }
-  console.log(`OK: 屋根の部屋 ${before.length} 件が既定値の RoofSpec（備考「下野」）を持ち、保存→読込みで全9項目が残る`);
+  console.log(`OK: 屋根の部屋 ${before.length} 件が既定値の RoofSpec（備考「下野」）を持ち、保存→読込みで全10項目が残る`);
   // 目視用: 屋根の短手と導かれる形状（屋根の部屋ごと）
   for (const { planeName, room } of after) {
     const g = reloaded.graphMap.get(planeName === target.plane.name ? target.plane.id : reloaded.planes.find(p => p.name === planeName).id);

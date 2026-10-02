@@ -14,7 +14,9 @@
 import { rulesFor, effectiveStructure } from '../../structural/structureRules.js';
 import { footprintCellKeys } from '../../structural/wallGate.js';
 import { cellBoundsList } from '../gridCells.js';
+import { RoofShape } from '../../core/constants.js';
 import { resolveRoofShape } from './roofDefaults.js';
+import { roofShortSpanMm, rectOfBounds, roofHighSideView } from './roofGeometry.js';
 
 /**
  * 最上階の建物範囲のセル矩形群（現在の格子で解決。部屋が無い・階段だけの階は空）。
@@ -26,7 +28,9 @@ export function mainRoofBounds(graph) {
 
 /**
  * 主屋根の形状の実効値。明示値はそのまま。自動のとき、主構造のルールが既定の形状を持てばそれ（非木造＝陸屋根）、
- * 持たなければ建物範囲の短手で片流れ／切妻。建物範囲は必要なときだけ計算する。
+ * 持たなければ建物範囲が矩形でない（L字など。空は含まない）なら寄棟、矩形なら短手で片流れ／切妻
+ * （ユーザー裁定 2026-10-02。この寄棟は主屋根だけ。下屋は矩形かどうかに依らず resolveRoofShape＝短手の規則のまま）。
+ * 建物範囲は必要なときだけ計算する。
  * @param {object} graph 最上階（またはその検討案）の graph
  * @param {object|null} [project] 主構造の建物全体値の解決用（graph の階ごと設定が優先）
  * @returns {string} RoofShape の値
@@ -35,5 +39,21 @@ export function resolveMainRoofShape(graph, project = null) {
   const spec = graph.mainRoofSpec;
   const rules = rulesFor(effectiveStructure(graph, project));
   if (spec?.shape || rules.mainRoofDefaultShape) return resolveRoofShape(spec, { rules });
-  return resolveRoofShape(spec, { boundsList: mainRoofBounds(graph), rules });
+  const boundsList = mainRoofBounds(graph);
+  if (roofShortSpanMm(boundsList) > 0 && !rectOfBounds(boundsList)) return RoofShape.HIP; // 空（短手0）は今までどおり
+  return resolveRoofShape(spec, { boundsList, rules });
+}
+
+/**
+ * 主屋根の「高い側」の選択欄の表示判断（形状の実効値が片流れで建物範囲が矩形のときだけ visible）。
+ * 主屋根は屋内に接する辺を持たない（adjacency なし）ので、既定は横長なら上・縦長なら左。
+ * @param {object} graph 最上階（またはその検討案）の graph
+ * @param {object|null} [project]
+ * @returns {{ visible: boolean, value: string|null }}
+ */
+export function mainRoofHighSideView(graph, project = null) {
+  const shape = resolveMainRoofShape(graph, project);
+  if (shape !== RoofShape.MONO) return { visible: false, value: null };
+  const rect = rectOfBounds(mainRoofBounds(graph));
+  return roofHighSideView({ shape, highSide: graph.mainRoofSpec?.highSide ?? null, rect, adjacency: null });
 }

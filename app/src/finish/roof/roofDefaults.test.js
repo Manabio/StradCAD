@@ -13,7 +13,7 @@ test('createRoofSpec: 既定値一式（形状=自動・勾配3・野地板=構�
   const spec = createRoofSpec();
   assert.deepEqual(spec.toData(), {
     shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
-    roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '',
+    roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '', highSide: null,
   });
   assert.ok(spec instanceof RoofSpec);
 });

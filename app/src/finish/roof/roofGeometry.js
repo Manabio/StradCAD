@@ -1,6 +1,7 @@
 /**
  * 屋根の範囲の幾何（純関数。store.js / snap.js / .jsx を静的 import しない）。ステップ B2。
  */
+import { RoofShape, RoofHighSide } from '../../core/constants.js';
 
 const EPS = 1e-6;
 
@@ -98,8 +99,8 @@ export function rectOfBounds(boundsList) {
 }
 
 // 片流れの高い側の候補（同長のときの優先順でもある）。y 軸は下向き正なので top＝y が小さい辺（y1）、
-// bottom＝y2、left＝x1、right＝x2。
-const HIGH_SIDE_ORDER = ['top', 'bottom', 'left', 'right'];
+// bottom＝y2、left＝x1、right＝x2。値の定義は RoofHighSide（core/constants.js）、順序はここの責務。
+const HIGH_SIDE_ORDER = [RoofHighSide.TOP, RoofHighSide.BOTTOM, RoofHighSide.LEFT, RoofHighSide.RIGHT];
 
 /**
  * 片流れの高い側の実効値。順に:
@@ -126,5 +127,19 @@ export function resolveRoofHighSide(highSide, rect, adjacency) {
     if (best) return best;
   }
   if (!rect) return null;
-  return rect.y2 - rect.y1 > rect.x2 - rect.x1 + EPS ? 'left' : 'top';
+  return rect.y2 - rect.y1 > rect.x2 - rect.x1 + EPS ? RoofHighSide.LEFT : RoofHighSide.TOP;
+}
+
+/**
+ * 外部タブの「高い側」の選択欄の表示判断（描画は RoofGroup.jsx が visible と value に従うだけ）。
+ *   visible: 形状の実効値が片流れで、屋根範囲が矩形のときだけ true。矩形でない片流れ（下屋のL字など）は
+ *            小屋組の決め方が未定なので出さない（value は null）。
+ *   value:   resolveRoofHighSide の結果（未設定＝自動なら導いた辺。選ぶと保存する）。
+ * @param {{ shape: string, highSide: string|null, rect: object|null, adjacency: object|null }} p
+ * @returns {{ visible: boolean, value: string|null }}
+ */
+export function roofHighSideView({ shape, highSide, rect, adjacency }) {
+  if (shape !== RoofShape.MONO || !rect) return { visible: false, value: null };
+  const value = resolveRoofHighSide(highSide, rect, adjacency);
+  return { visible: value !== null, value };
 }

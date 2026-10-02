@@ -83,6 +83,17 @@ test('片流れ 4550x3000 high=right: 低い側 x1=0 から 910,1820,2730,3640 �
   assert.deepEqual(coords(purlins), [1010, 1920, 2830, 3740]);
 });
 
+test('片流れ 5000x3000（端数あり・上下左右が非対称）: 4方向とも低い側の軒から数える（向きの取り違えを検出）', () => {
+  const r = rc(0, 0, 5000, 3000);
+  const at = highSide => coords(lines(r, RoofShape.MONO, { highSide }).purlins);
+  assert.deepEqual(at('top'), [270, 1180, 2090], 'top: y=0 が高い。低い側 y=3000 から 910 ごと');
+  assert.deepEqual(at('bottom'), [910, 1820, 2730], 'bottom: y=3000 が高い。低い側 y=0 から');
+  assert.deepEqual(at('left'), [450, 1360, 2270, 3180, 4090], 'left: x=0 が高い。低い側 x=5000 から');
+  assert.deepEqual(at('right'), [910, 1820, 2730, 3640, 4550], 'right: x=5000 が高い。低い側 x=0 から');
+  assert.ok(lines(r, RoofShape.MONO, { highSide: 'top' }).purlins.every(p => !p.isVertical));
+  assert.ok(lines(r, RoofShape.MONO, { highSide: 'left' }).purlins.every(p => p.isVertical));
+});
+
 test('片流れ 3640 幅: 軒から 910,1820,2730 の3本のみ（3640 は高い辺と一致するので置かない）', () => {
   const { purlins } = lines(rc(0, 0, 3640, 5000), RoofShape.MONO, { highSide: 'right' });
   assert.deepEqual(coords(purlins), [910, 1820, 2730]);
@@ -267,6 +278,7 @@ test('【失敗系】不正入力は RangeError（max/grid/tol・非有限の座
   assert.throws(() => kb([hl(NaN, 0, 3000)]), RangeError);
   assert.throws(() => kb([hl(0, 3000, 0)]), RangeError);
   assert.throws(() => kb([hl(0, 0, 3000)], { supports: [{ at: NaN, lo: 0, hi: 1 }] }), RangeError);
+  assert.throws(() => kb([hl(0, 0, 3000)], { supports: [{ at: 1, lo: 5, hi: 0 }] }), RangeError, 'support の lo>hi');
   assert.throws(() => kb([hl(0, 0, 3000), vl(0, 0, 3000)]), RangeError);
 });
 

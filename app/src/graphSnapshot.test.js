@@ -317,7 +317,7 @@ test('【B1a】屋根の部屋は階の複製・検討案のコピー（serializ
 });
 
 // ---- 屋根の仕様（ステップB2。Room.roofSpec。FBS の RS テーブル＋RM.ROOF_SPEC=30） ----
-// 屋根（全9項目を既定値以外にした RoofSpec）の部屋を1つ持つ graph。屋内の部屋も1つ置く（roofSpec を持たない側の確認用）。
+// 屋根（全10項目を既定値以外にした RoofSpec）の部屋を1つ持つ graph。屋内の部屋も1つ置く（roofSpec を持たない側の確認用）。
 function makeGraphWithRoofRoom(specData = NON_DEFAULT_ROOF_SPEC) {
   const graph = makeGraph();
   const opt = { labeled: false, discipline: Discipline.ARCH };
@@ -334,7 +334,7 @@ function makeGraphWithRoofRoom(specData = NON_DEFAULT_ROOF_SPEC) {
   return { graph, interior, roof };
 }
 
-test('【B2】FlatBuffers encode→decode: 全9項目を既定値以外にした RoofSpec が往復する（出幅0・勾配2.5・形状は明示）', () => {
+test('【B2】FlatBuffers encode→decode: 全10項目を既定値以外にした RoofSpec が往復する（出幅0・勾配2.5・形状は明示）', () => {
   const { graph, roof, interior } = makeGraphWithRoofRoom();
   const restored = makeGraph();
   restoreGraph(restored, serializeGraph(graph));
@@ -382,7 +382,7 @@ test('【B2・失敗系】屋根なのに roofSpec が欠けたスナップシ�
   assert.ok(spec, 'I1: ROOF の部屋には roofSpec が補われる');
   assert.deepEqual(spec.toData(), {
     shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
-    roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野',
+    roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野', highSide: null,
   });
   // バッファ自体に RS が無い経路（RoofSpec を持たない屋根の部屋を書いて読む）でも同じ
   const noSpec = makeGraphWithRoofRoom();
@@ -426,7 +426,7 @@ test('【B3】既定値のバイト列は mainRoofSpec のキーが無い snapsh
   assert.deepEqual([...encodeFloorSnapshot(snap)], [...bytes]);
 });
 
-test('【B3】FlatBuffers encode→decode: 全9項目を既定値以外にした主屋根が往復する（出幅0・勾配2.5・形状は明示）', () => {
+test('【B3】FlatBuffers encode→decode: 全10項目を既定値以外にした主屋根が往復する（出幅0・勾配2.5・形状は明示）', () => {
   const graph = makeGraph();
   graph.setMainRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
   const restored = makeGraph();
@@ -499,7 +499,7 @@ test('【B3・失敗系】壊れた主屋根（未知の shape・負の出幅・
     restoreGraph(restored, input);
     assert.deepEqual(restored.mainRoofSpec.toData(), {
       shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
-      roofFinish: '仕上', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '軒裏', note: 'メモ',
+      roofFinish: '仕上', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '軒裏', note: 'メモ', highSide: null,
     }, label);
   }
 });
@@ -513,6 +513,81 @@ test('【B3】主屋根は屋根の部屋（下屋）の RoofSpec と別の保�
   assert.equal(restored.mainRoofSpec.slope, 4);
   assert.equal(restored.roomMap.get(roof.id).roofSpec.note, '下野');
   assert.equal(restored.roomMap.get(roof.id).roofSpec.slope, 2.5);
+});
+
+// ---- 片流れの高い側（ステップC1b。RoofSpec.highSide。FBS の RS.HIGH_SIDE=9。null は書かない） ----
+const HIGH_SIDES = ['top', 'bottom', 'left', 'right'];
+
+test('【C1b】highSide の4値が FBS・plain 経路で往復する（下屋・主屋根とも）', () => {
+  for (const highSide of HIGH_SIDES) {
+    const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, highSide });
+    graph.setMainRoofSpec(RoofSpec.fromData({ ...NON_DEFAULT_ROOF_SPEC, highSide }));
+    const viaFbs = makeGraph();
+    restoreGraph(viaFbs, serializeGraph(graph));
+    assert.equal(viaFbs.roomMap.get(roof.id).roofSpec.highSide, highSide, `下屋 FBS ${highSide}`);
+    assert.equal(viaFbs.mainRoofSpec.highSide, highSide, `主屋根 FBS ${highSide}`);
+    const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+    const viaPlain = makeGraph();
+    restoreGraph(viaPlain, JSON.parse(JSON.stringify(snapshot)));
+    assert.equal(viaPlain.roomMap.get(roof.id).roofSpec.highSide, highSide, `下屋 plain ${highSide}`);
+    assert.equal(viaPlain.mainRoofSpec.highSide, highSide, `主屋根 plain ${highSide}`);
+    const copy = makeGraph();
+    restoreGraph(copy, serializeGraphWithFreshLineIds(graph));
+    assert.equal(copy.roomMap.get(roof.id).roofSpec.highSide, highSide, `複製 ${highSide}`);
+    assert.equal(copy.mainRoofSpec.highSide, highSide, `主屋根の複製 ${highSide}`);
+  }
+});
+
+test('【C1b】主屋根は highSide だけを明示（他は既定）しても既定外として保存・復元される', () => {
+  const graph = makeGraph();
+  const base = serializeGraph(graph);
+  graph.mainRoofSpec.setField('highSide', 'left');
+  assert.equal(isDefaultRoofSpec(graph.mainRoofSpec), false);
+  assert.ok(serializeGraph(graph).length > base.length);
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  assert.equal(restored.mainRoofSpec.highSide, 'left');
+  assert.equal(restored.mainRoofSpec.shape, null);
+});
+
+test('【C1b】highSide が null のときは何も書かない: 下屋で一度設定して null へ戻したバイト列は、設定前と一致する', () => {
+  const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, highSide: null });
+  const base = serializeGraph(graph);
+  roof.roofSpec.setField('highSide', 'top');
+  assert.ok(serializeGraph(graph).length > base.length, '値があれば文字列ぶん長くなる');
+  roof.roofSpec.setField('highSide', null);
+  assert.deepEqual([...serializeGraph(graph)], [...base]);
+  // 旧データ（highSide のキーが無い plain）を encode したバイト列とも一致する（フィールドを書かない）
+  const snap = decodeFloorSnapshot(base);
+  assert.equal(snap.rooms.find(r => r.id === roof.id).roofSpec.highSide, null, '読みは null');
+  delete snap.rooms.find(r => r.id === roof.id).roofSpec.highSide;
+  assert.deepEqual([...encodeFloorSnapshot(snap)], [...base]);
+});
+
+test('【C1b・失敗系】旧データ（highSide のキー・フィールドが無い）は null。壊れた highSide は null へ正規化される（FBS・plain とも）', () => {
+  const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, highSide: null });
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  delete snapshot.rooms.find(r => r.id === roof.id).roofSpec.highSide;
+  const old = makeGraph();
+  restoreGraph(old, snapshot);
+  assert.equal(old.roomMap.get(roof.id).roofSpec.highSide, null);
+  for (const bad of ['up', 'TOP', 7]) {
+    snapshot.rooms.find(r => r.id === roof.id).roofSpec.highSide = bad;
+    snapshot.mainRoofSpec = { ...NON_DEFAULT_ROOF_SPEC, highSide: bad };
+    for (const [label, input] of [['plain', snapshot]]) {
+      const restored = makeGraph();
+      restoreGraph(restored, input);
+      assert.equal(restored.roomMap.get(roof.id).roofSpec.highSide, null, `${label} 下屋 ${bad}`);
+      assert.equal(restored.mainRoofSpec.highSide, null, `${label} 主屋根 ${bad}`);
+    }
+  }
+  // FBS に壊れた文字列が書かれていた場合（文字列の bad だけ）
+  snapshot.rooms.find(r => r.id === roof.id).roofSpec.highSide = 'up';
+  snapshot.mainRoofSpec = { ...NON_DEFAULT_ROOF_SPEC, highSide: 'up' };
+  const viaFbs = makeGraph();
+  restoreGraph(viaFbs, encodeFloorSnapshot(snapshot));
+  assert.equal(viaFbs.roomMap.get(roof.id).roofSpec.highSide, null);
+  assert.equal(viaFbs.mainRoofSpec.highSide, null);
 });
 
 test('【B2・失敗系】壊れた roofSpec（未知の shape・負の出幅・slope=0・材料コード欠落）は復元で正規化される', () => {

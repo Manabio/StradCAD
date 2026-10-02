@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { roofShortSpanMm, rectOfBounds, resolveRoofHighSide } from './roofGeometry.js';
+import { roofShortSpanMm, rectOfBounds, resolveRoofHighSide, roofHighSideView } from './roofGeometry.js';
 
 const rect = (x1, y1, x2, y2) => ({ x1, y1, x2, y2 });
 
@@ -104,6 +104,29 @@ test('resolveRoofHighSide: 接していない（全て 0）・主屋根（adjace
   assert.equal(resolveRoofHighSide(null, rect(0, 0, 3000, 5000), adj(0, 0, 0, 0)), 'left');  // 縦長
   assert.equal(resolveRoofHighSide(null, rect(0, 0, 3000, 5000), null), 'left');
   assert.equal(resolveRoofHighSide(null, rect(0, 0, 4000, 4000), null), 'top');               // 正方形
+});
+
+test('roofHighSideView: 片流れ＋矩形なら visible。明示値が最優先、無ければ下屋は屋内に接する辺・主屋根は長手の小さい側', () => {
+  const r = rect(0, 0, 5000, 3000);
+  assert.deepEqual(roofHighSideView({ shape: 'mono', highSide: 'right', rect: r, adjacency: adj(9000, 0, 0, 0) }),
+    { visible: true, value: 'right' });
+  assert.deepEqual(roofHighSideView({ shape: 'mono', highSide: null, rect: r, adjacency: adj(0, 2000, 4500, 1000) }),
+    { visible: true, value: 'left' });
+  assert.deepEqual(roofHighSideView({ shape: 'mono', highSide: null, rect: rect(0, 0, 3000, 5000), adjacency: null }),
+    { visible: true, value: 'left' }, '主屋根・縦長');
+  assert.deepEqual(roofHighSideView({ shape: 'mono', highSide: null, rect: r, adjacency: null }),
+    { visible: true, value: 'top' }, '主屋根・横長');
+  assert.deepEqual(roofHighSideView({ shape: 'mono', highSide: null, rect: rect(0, 0, 4000, 4000), adjacency: null }),
+    { visible: true, value: 'top' }, '正方形');
+});
+
+test('【失敗系】roofHighSideView: 片流れ以外は非表示（明示値があっても）。矩形でない片流れも非表示', () => {
+  const r = rect(0, 0, 5000, 3000);
+  for (const shape of ['gable', 'hip', 'staggered', 'flat', null, undefined]) {
+    assert.deepEqual(roofHighSideView({ shape, highSide: 'top', rect: r, adjacency: null }), { visible: false, value: null }, String(shape));
+  }
+  assert.deepEqual(roofHighSideView({ shape: 'mono', highSide: 'top', rect: null, adjacency: null }), { visible: false, value: null });
+  assert.deepEqual(roofHighSideView({ shape: 'mono', highSide: null, rect: null, adjacency: adj(1, 2, 3, 4) }), { visible: false, value: null });
 });
 
 test('【失敗系】resolveRoofHighSide: 不正な明示値は未指定扱い。rect も接触も無ければ null', () => {

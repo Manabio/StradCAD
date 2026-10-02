@@ -97,6 +97,20 @@ export const ROOF_SHAPE_LABELS = Object.freeze({
   [RoofShape.STAGGERED]: '棟違い',
   [RoofShape.FLAT]:      '陸屋根',
 });
+// 片流れの高い側（RoofSpec.highSide。null＝自動で、表示時に finish/roof/roofGeometry.js resolveRoofHighSide が導く）。
+// y 軸は下向き正なので top＝y が小さい辺、left＝x が小さい辺。
+export const RoofHighSide = Object.freeze({
+  TOP:    'top',
+  BOTTOM: 'bottom',
+  LEFT:   'left',
+  RIGHT:  'right',
+});
+export const ROOF_HIGH_SIDE_LABELS = Object.freeze({
+  [RoofHighSide.TOP]:    '上',
+  [RoofHighSide.BOTTOM]: '下',
+  [RoofHighSide.LEFT]:   '左',
+  [RoofHighSide.RIGHT]:  '右',
+});
 // 形状の自動判定: 短手（屋根範囲に内接する全矩形の短辺の最大）がこの値以下なら片流れ、超えれば切妻。
 export const ROOF_MONO_MAX_SHORT_SPAN_MM = 3640;
 
