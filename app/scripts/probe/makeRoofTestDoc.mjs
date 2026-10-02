@@ -29,7 +29,9 @@ import { runInAction } from 'mobx';
 import { loadDocument } from './loadDoc.mjs';
 import { serializeGraph, serializeStructCLs, serializePlanes, restoreGraph, restoreStructCLs, decodePlanes } from '../../src/graphSnapshot.js';
 import { buildDocumentJson, parseDocumentEnvelope } from '../../src/storage/documentFile.js';
-import { Project, RoomKind, RoomFeature, CenterLineType } from '../../src/core.js';
+import { Project, RoomKind, RoomFeature, CenterLineType, RoofSpec, ROOF_SPEC_KEYS, ROOF_SHAPE_LABELS } from '../../src/core.js';
+import { resolveRoofShape, roofRoomBounds } from '../../src/finish/roof/roofDefaults.js';
+import { roofShortSpanMm } from '../../src/finish/roof/roofGeometry.js';
 import { cellBoundsFromKey, refreshCells, worldToCell } from '../../src/finish/gridCells.js';
 import { buildCellToRoom, syncEdgesFromTopology } from '../../src/finish/edgeClassify.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
@@ -446,6 +448,49 @@ if (!roofAfter || roofAfter.kind !== RoomKind.EXTERIOR || roofAfter.name !== '�
   process.exit(1);
 }
 console.log('OK: 往復テスト一致（屋根の部屋も残る）');
+
+// ---- 屋根の仕様（RoofSpec。ステップB2）: 屋根の部屋が既定値の RoofSpec を持ち、保存→読込みで全9項目が残る ----
+{
+  const roofRoomsOf = (proj) => proj.planes.flatMap(p => proj.graphMap.get(p.id).rooms
+    .filter(r => r.feature === RoomFeature.ROOF).map(r => ({ planeName: p.name, room: r })));
+  const before = roofRoomsOf(roof.project);
+  const after = roofRoomsOf(reloaded);
+  if (before.length === 0 || before.length !== after.length) {
+    console.error(`NG: 屋根の部屋の数が合わない（保存前 ${before.length} / 読込み後 ${after.length}）`);
+    process.exit(1);
+  }
+  const expectDefaults = { ...new RoofSpec({ note: '下野' }).toData() };
+  for (let i = 0; i < before.length; i++) {
+    const b = before[i].room.roofSpec;
+    const a = after[i].room.roofSpec;
+    if (!b || !a) { console.error(`NG: 屋根の部屋に roofSpec が無い（${before[i].planeName}）`); process.exit(1); }
+    if (JSON.stringify(b.toData()) !== JSON.stringify(expectDefaults)) {
+      console.error('NG: 付与した屋根の roofSpec が既定値（備考「下野」）でない', b.toData());
+      process.exit(1);
+    }
+    if (JSON.stringify(a.toData()) !== JSON.stringify(b.toData())) {
+      console.error('NG: 保存→読込みで roofSpec の項目が変わった', b.toData(), a.toData());
+      process.exit(1);
+    }
+    if (Object.keys(a.toData()).sort().join() !== [...ROOF_SPEC_KEYS].sort().join()) {
+      console.error('NG: roofSpec のキー集合が ROOF_SPEC_KEYS と一致しない');
+      process.exit(1);
+    }
+  }
+  // 屋根以外の部屋に roofSpec が付いていないこと（I1）
+  for (const p of reloaded.planes) {
+    for (const r of reloaded.graphMap.get(p.id).rooms) {
+      if (r.feature !== RoomFeature.ROOF && r.roofSpec) { console.error(`NG: 屋根でない部屋に roofSpec がある（${r.name}）`); process.exit(1); }
+    }
+  }
+  console.log(`OK: 屋根の部屋 ${before.length} 件が既定値の RoofSpec（備考「下野」）を持ち、保存→読込みで全9項目が残る`);
+  // 目視用: 屋根の短手と導かれる形状（屋根の部屋ごと）
+  for (const { planeName, room } of after) {
+    const g = reloaded.graphMap.get(planeName === target.plane.name ? target.plane.id : reloaded.planes.find(p => p.name === planeName).id);
+    const bounds = roofRoomBounds(room, g);
+    console.log(`  ${planeName} の屋根: セル${room.cells.size}件 短手=${roofShortSpanMm(bounds)}mm → 形状（自動）=${ROOF_SHAPE_LABELS[resolveRoofShape(room.roofSpec, { boundsList: bounds })]}`);
+  }
+}
 
 fs.writeFileSync(outPath, json);
 console.log('wrote', outPath, json.length, 'bytes');

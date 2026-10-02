@@ -4,7 +4,9 @@ import {
   Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef,
   DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF, ShaftSoundproof, StairType,
   ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE, StructuralMaterialType, edgeKey,
+  RoofSpec, ROOF_SPEC_KEYS,
 } from './core.js';
+import { NON_DEFAULT_ROOF_SPEC } from './finish/roofTestFixtures.js';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
   serializeSite, decodeSite, restoreSite, decodeFloorSnapshot, encodeFloorSnapshot,
@@ -312,6 +314,111 @@ test('【B1a】屋根の部屋は階の複製・検討案のコピー（serializ
     assert.ok(copy.shapeMap.has(id), `セルが指す線id ${id} が複製先に存在する`);
     assert.ok(![x0.id, x1.id, y0.id, y1.id].includes(id), '線idは振り直されている');
   }
+});
+
+// ---- 屋根の仕様（ステップB2。Room.roofSpec。FBS の RS テーブル＋RM.ROOF_SPEC=30） ----
+// 屋根（全9項目を既定値以外にした RoofSpec）の部屋を1つ持つ graph。屋内の部屋も1つ置く（roofSpec を持たない側の確認用）。
+function makeGraphWithRoofRoom(specData = NON_DEFAULT_ROOF_SPEC) {
+  const graph = makeGraph();
+  const opt = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opt);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, opt);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL,   2000, opt);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opt);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, opt);
+  const interior = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), '居間');
+  const roof = graph.addRoom(new Set([`${x1.id}:${y0.id}:${x2.id}:${y1.id}`]), '屋根');
+  roof.setKind(RoomKind.EXTERIOR);
+  roof.setFeature(RoomFeature.ROOF);
+  roof.setRoofSpec(RoofSpec.fromData(specData));
+  return { graph, interior, roof };
+}
+
+test('【B2】FlatBuffers encode→decode: 全9項目を既定値以外にした RoofSpec が往復する（出幅0・勾配2.5・形状は明示）', () => {
+  const { graph, roof, interior } = makeGraphWithRoofRoom();
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  assert.deepEqual(restored.roomMap.get(roof.id).roofSpec.toData(), { ...NON_DEFAULT_ROOF_SPEC });
+  assert.equal(restored.roomMap.get(roof.id).roofSpec.eaveOverhangMm, 0);
+  assert.equal(restored.roomMap.get(roof.id).roofSpec.slope, 2.5);
+  assert.equal(restored.roomMap.get(interior.id).roofSpec, null, '屋根でない部屋は roofSpec を持たない');
+});
+
+test('【B2】FlatBuffers: 形状 null（自動）・出幅0 の組が往復する（shape は空文字で保存され null へ戻る）', () => {
+  const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, shape: null, eaveOverhangMm: 0, gableOverhangMm: 0 });
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  const spec = restored.roomMap.get(roof.id).roofSpec;
+  assert.equal(spec.shape, null);
+  assert.equal(spec.eaveOverhangMm, 0);
+  assert.equal(spec.gableOverhangMm, 0);
+});
+
+test('【B2】graphSnapshot の plain 経路（decodeFloorSnapshot→JSON→restoreGraph）でも RoofSpec が往復する。キー集合は ROOF_SPEC_KEYS', () => {
+  const { graph, roof } = makeGraphWithRoofRoom();
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  const plainRoof = snapshot.rooms.find(r => r.id === roof.id);
+  assert.deepEqual(Object.keys(plainRoof.roofSpec).sort(), [...ROOF_SPEC_KEYS].sort(), 'FBS 読み側のキー集合 = ROOF_SPEC_KEYS');
+  const viaJson = JSON.parse(JSON.stringify(snapshot));
+  const restored = makeGraph();
+  restoreGraph(restored, viaJson);
+  assert.deepEqual(restored.roomMap.get(roof.id).roofSpec.toData(), { ...NON_DEFAULT_ROOF_SPEC });
+});
+
+test('【B2】階の複製・検討案のコピー（serializeGraphWithFreshLineIds）でも RoofSpec が残る', () => {
+  const { graph, roof } = makeGraphWithRoofRoom();
+  const copy = makeGraph();
+  restoreGraph(copy, serializeGraphWithFreshLineIds(graph));
+  assert.deepEqual(copy.roomMap.get(roof.id).roofSpec.toData(), { ...NON_DEFAULT_ROOF_SPEC });
+});
+
+test('【B2・失敗系】屋根なのに roofSpec が欠けたスナップショット（B1a 時点のデータ）は既定値で補う（備考「下野」）', () => {
+  const { graph, roof } = makeGraphWithRoofRoom();
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  snapshot.rooms.find(r => r.id === roof.id).roofSpec = null;
+  const restored = makeGraph();
+  restoreGraph(restored, snapshot);
+  const spec = restored.roomMap.get(roof.id).roofSpec;
+  assert.ok(spec, 'I1: ROOF の部屋には roofSpec が補われる');
+  assert.deepEqual(spec.toData(), {
+    shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
+    roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野',
+  });
+  // バッファ自体に RS が無い経路（RoofSpec を持たない屋根の部屋を書いて読む）でも同じ
+  const noSpec = makeGraphWithRoofRoom();
+  noSpec.roof.setRoofSpec(null);
+  const viaFbs = makeGraph();
+  restoreGraph(viaFbs, serializeGraph(noSpec.graph));
+  assert.equal(viaFbs.roomMap.get(noSpec.roof.id).roofSpec.note, '下野');
+});
+
+test('【B2・失敗系】屋根でない部屋に roofSpec が付いたスナップショットは復元で捨てる（FBS の RS テーブルを経由しても）', () => {
+  const { graph, interior } = makeGraphWithRoofRoom();
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  snapshot.rooms.find(r => r.id === interior.id).roofSpec = { ...NON_DEFAULT_ROOF_SPEC };
+  const viaPlain = makeGraph();
+  restoreGraph(viaPlain, snapshot);
+  assert.equal(viaPlain.roomMap.get(interior.id).roofSpec, null, 'plain 経路');
+  const viaFbs = makeGraph();
+  restoreGraph(viaFbs, encodeFloorSnapshot(snapshot));
+  assert.equal(viaFbs.roomMap.get(interior.id).roofSpec, null, 'FBS 経路');
+});
+
+test('【B2・失敗系】壊れた roofSpec（未知の shape・負の出幅・slope=0・材料コード欠落）は復元で正規化される', () => {
+  const { graph, roof } = makeGraphWithRoofRoom();
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  snapshot.rooms.find(r => r.id === roof.id).roofSpec = {
+    ...NON_DEFAULT_ROOF_SPEC, shape: 'dome', eaveOverhangMm: -3, slope: 0, sheathingMaterial: '', underlaymentMaterial: undefined,
+  };
+  const restored = makeGraph();
+  restoreGraph(restored, snapshot);
+  const spec = restored.roomMap.get(roof.id).roofSpec;
+  assert.equal(spec.shape, null);
+  assert.equal(spec.eaveOverhangMm, 455);
+  assert.equal(spec.slope, 3);
+  assert.equal(spec.sheathingMaterial, '101200000008');
+  assert.equal(spec.underlaymentMaterial, '302000000003');
+  assert.equal(spec.gableOverhangMm, 300, '正常な項目は保つ');
 });
 
 // ---- 【F4】旧形式の実バッファ（FEATURE列挙値が旧番号5〜8／未知の番号）を restoreGraph で

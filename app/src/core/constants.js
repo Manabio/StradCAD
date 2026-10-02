@@ -81,6 +81,49 @@ export function isRoofFeature(feature) {
 // 屋根の Room.name は固定（編集口なし。ユーザー裁定: 屋根に名前は付けない）。
 export const ROOF_ROOM_NAME = '屋根';
 
+// 屋根の形状（RoofSpec.shape。null＝自動で、表示時に finish/roof/roofDefaults.js resolveRoofShape が導く）。
+// 陸屋根は下屋でも選べる（既定になるのは非木造の主屋根だけ＝B3）。
+export const RoofShape = Object.freeze({
+  MONO:      'mono',      // 片流れ
+  GABLE:     'gable',     // 切妻
+  HIP:       'hip',       // 寄棟
+  STAGGERED: 'staggered', // 棟違い
+  FLAT:      'flat',      // 陸屋根
+});
+export const ROOF_SHAPE_LABELS = Object.freeze({
+  [RoofShape.MONO]:      '片流れ',
+  [RoofShape.GABLE]:     '切妻',
+  [RoofShape.HIP]:       '寄棟',
+  [RoofShape.STAGGERED]: '棟違い',
+  [RoofShape.FLAT]:      '陸屋根',
+});
+// 形状の自動判定: 短手（屋根範囲に内接する全矩形の短辺の最大）がこの値以下なら片流れ、超えれば切妻。
+export const ROOF_MONO_MAX_SHORT_SPAN_MM = 3640;
+
+// 屋根の既定値（RoofSpec）
+export const DEFAULT_ROOF_SLOPE = 3;                  // 勾配 N/10 の N（屋外部屋の exteriorSlope＝1/N とは別）
+export const DEFAULT_ROOF_EAVE_OVERHANG_MM = 455;     // 軒の出幅
+export const DEFAULT_ROOF_GABLE_OVERHANG_MM = 455;    // 妻側の出幅
+export const DEFAULT_ROOF_SHEATHING = '101200000008'; // 野地板: 構造用合板 t=12（面材）
+export const DEFAULT_ROOF_UNDERLAYMENT = '302000000003'; // 防水シート: 改質アスファルトルーフィング
+export const DEFAULT_ROOF_NOTE = '下野';               // 下屋（セルに付けた屋根）の備考の付与時の既定
+
+// 屋根の野地板・防水シートの選択肢（材料コード。名前は材データから引く。並びは表示順）。
+// 野地板: 構造用合板（t=9/12/15/24/28）→ 硬質木片 → 高圧木毛 → 硬質木毛 → 断熱・複合耐火（各 t=15/18/25/30）。
+export const ROOF_SHEATHING_CODES = Object.freeze([
+  '101200000007', '101200000008', '101200000009', '101200000010', '101200000011',
+  '301000000021', '301000000022', '301000000023', '301000000024',
+  '301000000025', '301000000026', '301000000027', '301000000028',
+  '301000000029', '301000000030', '301000000031', '301000000032',
+  '301000000033', '301000000034', '301000000035', '301000000036',
+]);
+export const ROOF_UNDERLAYMENT_CODES = Object.freeze([
+  '302000000007', // アスファルトルーフィング
+  '302000000003', // 改質アスファルトルーフィング
+  '302000000008', // 粘着層付きルーフィング
+  '302000000009', // 透湿防水ルーフィング
+]);
+
 // 昇降路（isShaftFeature の部屋）の属性。床なし＝上階スラブ開口・展開図は描かない・共通仕様
 // 「昇降路」で壁材を一括指定。PS 等は後日。
 export const SHAFT_FEATURES = Object.freeze(new Set([

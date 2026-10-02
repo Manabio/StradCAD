@@ -3,7 +3,7 @@
  * RoomFinish / ExteriorFinishRow / Room）。core.js から分離。
  */
 import { makeObservable, observable, action } from 'mobx';
-import { RoomKind, ExteriorLevelRef, DEFAULT_WALL_MATERIAL } from './constants.js';
+import { RoomKind, RoomFeature, ExteriorLevelRef, DEFAULT_WALL_MATERIAL } from './constants.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
@@ -162,6 +162,9 @@ export class Room {
     this.exteriorSlope    = null;   // 勾配 1/N の N。null = 未設定
     this.exteriorLevelRef = ExteriorLevelRef.ROOM; // おさえの基準: 'room' | 'gl'
     this.exteriorLevel    = null;   // おさえの符号付きmm。null = 未設定
+    // 屋根の仕様（RoofSpec | null）。不変条件 I1: feature===ROOF ⇔ roofSpec≠null。
+    // 付与で作るのは仕上げモード（FinishModeState.applyNaming）、ROOF でなくなれば setFeature が捨てる。
+    this.roofSpec         = null;
     this.generatedWallIds = new Set(); // 自動生成された Wall の ID を管理（非 observable）
     makeObservable(this, {
       name:                observable,
@@ -175,6 +178,8 @@ export class Room {
       exteriorSlope:       observable,
       exteriorLevelRef:    observable,
       exteriorLevel:       observable,
+      roofSpec:            observable.ref,
+      setRoofSpec:         action,
       setName:             action,
       addCell:             action,
       removeCell:          action,
@@ -196,7 +201,11 @@ export class Room {
   removeCell(key)            { this.cells.delete(key); }
   setCells(cells)            { this.cells = cells; }
   setKind(kind)              { this.kind = kind; }
-  setFeature(feature)        { this.feature = feature; } // RoomFeature の各値（constants.js 参照） | null
+  setFeature(feature) { // RoomFeature の各値（constants.js 参照） | null
+    this.feature = feature;
+    if (feature !== RoomFeature.ROOF) this.roofSpec = null; // I1: ROOF でなくなれば屋根の仕様は捨てる
+  }
+  setRoofSpec(spec)          { this.roofSpec = spec; } // RoofSpec | null（作るのは仕上げモードの付与／復元）
   setNamePosition(x, y)     { this.namePosition = { x, y }; }
   setFloorLevel(mm)         { this.floorLevel = mm; } // mm | null（null = 階基準どおり）
   setExteriorSlope(n)       { this.exteriorSlope = n; } // 勾配1/N の N | null

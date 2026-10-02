@@ -982,3 +982,171 @@ test('【B1a・I2】屋根セルを含む統合（判定2）に屋根は巻き�
   assert.equal(graph.roomMap.has(roof.id), true, '屋根は消えない');
   assert.deepEqual([...roof.cells], roofCellsBefore);
 });
+
+// ================================================================
+// 屋根の仕様（ステップB2。Room.roofSpec）。I1: feature===ROOF ⇔ roofSpec≠null
+// ================================================================
+
+const ROOF_DEFAULTS = {
+  shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
+  roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野',
+};
+
+test('【B2・I1】屋根の付与で roofSpec ができる（既定値・備考「下野」・形状は自動 null）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  assert.ok(roof.roofSpec, '屋根には roofSpec がある');
+  assert.deepEqual(roof.roofSpec.toData(), ROOF_DEFAULTS);
+});
+
+test('【B2・I1】屋根でない部屋（屋内・屋外）には roofSpec が無い', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(1000, 1500);
+  state.commitDrag();
+  const id = state.namingRoomId;
+  state.applyNaming(id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  assert.equal(graph.roomMap.get(id).roofSpec, null);
+});
+
+test('【B2・I1】屋根→他の属性で roofSpec が消える（編集内容は残らない）。setFeature 単体は roofSpec を作らない', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  state.setRoofField(roof.id, 'slope', 5);
+  assert.equal(roof.roofSpec.slope, 5);
+
+  state.applyNaming(roof.id, { name: 'テラス', kind: RoomKind.EXTERIOR, feature: null });
+  assert.equal(roof.feature, null);
+  assert.equal(roof.roofSpec, null, '屋根でなくなれば roofSpec は捨てられる');
+
+  roof.setFeature(RoomFeature.ROOF); // 屋根へ戻す経路（既存部屋への付与は applyNaming が拒否するため直接）
+  assert.equal(roof.roofSpec, null, 'setFeature は roofSpec を作らない（作るのは付与の確定処理）');
+});
+
+test('【B2・I1】屋根の部屋を削除すると部屋ごと消える（roofSpec だけが残ることはない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  state.deleteRoom(roof.id);
+  assert.equal(graph.roomMap.has(roof.id), false);
+  assert.equal(graph.rooms.filter(r => r.roofSpec).length, 0);
+});
+
+test('【B2・I1】屋根の付与→undo→redo: undo で roofSpec ごと消え、redo で既定値の roofSpec が戻る（編集後の値で）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const roofId = roof.id;
+  undoManager.undo();
+  assert.equal(graph.roomMap.has(roofId), false, 'undo で屋根の部屋が消える');
+  undoManager.redo();
+  assert.deepEqual(graph.roomMap.get(roofId).roofSpec.toData(), ROOF_DEFAULTS);
+});
+
+test('【B2】setRoofField: 9項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const edits = {
+    shape: 'hip', slope: 2.5, sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009',
+    roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '本屋根',
+  };
+  for (const [field, value] of Object.entries(edits)) {
+    // undo/redo は Room を作り直すため、毎回 graph から引き直す
+    const before = graph.roomMap.get(roof.id).roofSpec[field];
+    const stackBefore = undoManager._undoStack.length;
+    assert.equal(state.setRoofField(roof.id, field, value), true, `${field} の確定`);
+    assert.equal(graph.roomMap.get(roof.id).roofSpec[field], value);
+    assert.equal(undoManager._undoStack.length, stackBefore + 1, `${field}: undo は1エントリ`);
+    undoManager.undo();
+    assert.equal(graph.roomMap.get(roof.id).roofSpec[field], before, `${field}: undo で戻る`);
+    undoManager.redo();
+    assert.equal(graph.roomMap.get(roof.id).roofSpec[field], value, `${field}: redo でやり直せる`);
+  }
+  assert.equal(Object.keys(edits).length, 9);
+});
+
+test('【B2・失敗系】setRoofField: 不正な値（勾配0・2.3・負の出幅・未知の形状・空の材料コード）は確定せず undo も積まない', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const stackBefore = undoManager._undoStack.length;
+  const bad = [
+    ['slope', 0], ['slope', 2.3], ['slope', -1], ['slope', '3'], ['eaveOverhangMm', -1], ['gableOverhangMm', NaN],
+    ['shape', 'dome'], ['shape', null], ['sheathingMaterial', ''], ['underlaymentMaterial', null], ['unknown', 1],
+  ];
+  for (const [field, value] of bad) {
+    assert.equal(state.setRoofField(roof.id, field, value), false, `${field}=${String(value)}`);
+  }
+  assert.deepEqual(roof.roofSpec.toData(), ROOF_DEFAULTS, '値は変わらない');
+  assert.equal(undoManager._undoStack.length, stackBefore, 'undo は積まれない');
+});
+
+test('【B2・失敗系】setRoofField: 無変更・屋根でない部屋・存在しない roomId は false（undo を積まない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const other = graph.addRoom(new Set([worldToCell(3000, 1500, graph).key]), '居間');
+  const stackBefore = undoManager._undoStack.length;
+  assert.equal(state.setRoofField(roof.id, 'slope', 3), false, '現在値と同じ');
+  assert.equal(state.setRoofField(other.id, 'slope', 4), false, '屋根でない部屋');
+  assert.equal(state.setRoofField('no-such-room', 'slope', 4), false, '存在しない roomId');
+  assert.equal(undoManager._undoStack.length, stackBefore);
+  assert.equal(other.roofSpec, null);
+});
+
+// 防御のテスト: 既に屋根の部屋へ applyNaming(feature: ROOF) で確定し直す導線は、現状の画面には無い
+// （外部タブの屋根の群は区分セレクタ・改名入力を持たず、部屋名ダイアログの屋根の選択肢は新規指定だけ）。
+// applyNaming を直接呼んでも編集済みの roofSpec を既定値で上書きしないことを固定する。
+test('【B2・防御】屋根の部屋へ feature=ROOF で確定し直しても編集済みの roofSpec（勾配4・備考「下野」）は保たれ、拒否もされない', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  state.setRoofField(roof.id, 'slope', 4);
+
+  state.applyNaming(roof.id, { name: '', kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+
+  assert.equal(state.lastNamingRejection, null);
+  const spec = graph.roomMap.get(roof.id).roofSpec;
+  assert.equal(spec.slope, 4, '編集済みの勾配が既定値(3)へ戻らない');
+  assert.equal(spec.note, '下野');
+});
+
+test('【B2】屋根の項目を編集しても壁の鮮度キーは変わらない（屋根の仕様は壁に効かない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const key = wallFreshnessKey(graph);
+  state.setRoofField(roof.id, 'shape', 'flat');
+  state.setRoofField(roof.id, 'eaveOverhangMm', 900);
+  assert.equal(wallFreshnessKey(graph), key);
+});
+
+test('【B2】_collectReferencedCodes: 屋根の野地板・防水シートの材料コードが照合対象に入る（屋根が無ければ入らない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  assert.equal(state._collectReferencedCodes().has('302000000003'), false, '前提: 屋根が無ければ防水シートのコードは無い');
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  state.setRoofField(roof.id, 'sheathingMaterial', '301000000023');
+  const codes = state._collectReferencedCodes();
+  assert.equal(codes.has('301000000023'), true, '野地板');
+  assert.equal(codes.has('302000000003'), true, '防水シート（既定）');
+  assert.equal(codes.has('101200000008'), false, '変更前の野地板は含まれない');
+});
+
+test('【B2】FBS 保存→読込み: 屋根の項目の編集値が残る（保存→読込みで全項目）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  state.setRoofField(roof.id, 'slope', 2.5);
+  state.setRoofField(roof.id, 'eaveOverhangMm', 0);
+  state.setRoofField(roof.id, 'note', '変更後');
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  const spec = restored.roomMap.get(roof.id).roofSpec;
+  assert.equal(spec.slope, 2.5);
+  assert.equal(spec.eaveOverhangMm, 0);
+  assert.equal(spec.note, '変更後');
+});

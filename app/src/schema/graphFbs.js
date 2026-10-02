@@ -121,7 +121,15 @@ const XR = { ID: 0, PART: 1, FINISH: 2, BASE: 3, NOTE: 4, ROOM_ID: 5 };
 // NOは float64（reader にi32読みが無いため。Stairの数値と同じ流儀）。
 const EQ = { ID: 0, CATEGORY: 1, USAGE: 2, NO: 3, CELL_KEYS: 4, ROOM_ID: 5 };
 
-// Room: 30 フィールド
+// RoofSpec（屋根の仕様。Room.roofSpec）: 9 フィールド。項目集合は core/roofSpec.js ROOF_SPEC_KEYS が唯一の定義。
+// shape の null（自動）は空文字で表す。出幅 0 は正当な値なので HAS フラグは持たず、読み側で既定へ読み替えない
+// （既定への読み替えは RoofSpec.fromData の「非有限・負」だけ）。
+const RS = {
+  SHAPE: 0, SLOPE: 1, SHEATHING: 2, UNDERLAYMENT: 3, ROOF_FINISH: 4,
+  EAVE_OVERHANG: 5, GABLE_OVERHANG: 6, SOFFIT: 7, NOTE: 8,
+};
+
+// Room: 31 フィールド
 const RM = {
   ID: 0, NAME: 1, CELLS: 2, REF_IDS: 3, GEN_WALL_IDS: 4,
   HAS_POS: 5, POS_X: 6, POS_Y: 7,
@@ -136,6 +144,7 @@ const RM = {
   // 屋外部屋の仕上げレベル（末尾追加。旧データはフィールド欠落＝既定値で復元）
   HAS_EXT_LEVEL: 25, EXT_LEVEL: 26, EXT_LEVEL_REF: 27, // おさえ(mm) / 基準（room=0 / gl=1）
   HAS_EXT_SLOPE: 28, EXT_SLOPE: 29, // 勾配 1/N の N
+  ROOF_SPEC: 30, // 屋根の仕様（RS テーブル。feature=roof の部屋だけが持つ。無ければフィールド自体を書かない）
 };
 
 // Room.kind 列挙値エンコード（VOID は旧データデコード専用。書き込みは INTERIOR/EXTERIOR のみ）
@@ -650,7 +659,29 @@ function writeDim(b, d) {
   return b.endObject();
 }
 
+function writeRoofSpec(b, rs) {
+  if (!rs) return 0;
+  const sShape        = b.createString(rs.shape ?? '');
+  const sSheathing    = b.createString(rs.sheathingMaterial ?? '');
+  const sUnderlay     = b.createString(rs.underlaymentMaterial ?? '');
+  const sRoofFinish   = b.createString(rs.roofFinish ?? '');
+  const sSoffit       = b.createString(rs.soffit ?? '');
+  const sNote         = b.createString(rs.note ?? '');
+  b.startObject(9);
+  b.addFieldOffset(RS.SHAPE,          sShape,      0);
+  b.addFieldFloat64(RS.SLOPE,         rs.slope ?? 0.0, 0.0);
+  b.addFieldOffset(RS.SHEATHING,      sSheathing,  0);
+  b.addFieldOffset(RS.UNDERLAYMENT,   sUnderlay,   0);
+  b.addFieldOffset(RS.ROOF_FINISH,    sRoofFinish, 0);
+  b.addFieldFloat64(RS.EAVE_OVERHANG, rs.eaveOverhangMm ?? 0.0, 0.0);
+  b.addFieldFloat64(RS.GABLE_OVERHANG, rs.gableOverhangMm ?? 0.0, 0.0);
+  b.addFieldOffset(RS.SOFFIT,         sSoffit,     0);
+  b.addFieldOffset(RS.NOTE,           sNote,       0);
+  return b.endObject();
+}
+
 function writeRoom(b, rm) {
+  const roofSpecOff = writeRoofSpec(b, rm.roofSpec ?? null);
   const cellsVec    = writeStrVec(b, rm.cells);
   const refIdsVec   = writeStrVec(b, rm.referenceRoomIds);
   const genWallVec  = writeStrVec(b, rm.generatedWallIds);
@@ -678,7 +709,7 @@ function writeRoom(b, rm) {
   const kindEnc    = isLegacyVoidKind ? ROOM_KIND_ENC.interior : (ROOM_KIND_ENC[rm.kind] ?? 0);
   const featureVal = isLegacyVoidKind ? 'void' : (rm.feature ?? null);
 
-  b.startObject(30);
+  b.startObject(31);
   b.addFieldOffset(RM.ID,           sId,          0);
   b.addFieldOffset(RM.NAME,         sName,        0);
   b.addFieldOffset(RM.CELLS,        cellsVec,     0);
@@ -709,6 +740,7 @@ function writeRoom(b, rm) {
   b.addFieldInt8(RM.EXT_LEVEL_REF,   EXT_LEVEL_REF_ENC[rm.exteriorLevelRef] ?? 0, 0);
   b.addFieldInt8(RM.HAS_EXT_SLOPE,   rm.exteriorSlope != null ? 1 : 0, 0);
   b.addFieldFloat64(RM.EXT_SLOPE,    rm.exteriorSlope ?? 0.0, 0.0);
+  b.addFieldOffset(RM.ROOF_SPEC,     roofSpecOff,  0);
   return b.endObject();
 }
 
@@ -1385,6 +1417,24 @@ function readDim(bb, tablePos) {
   };
 }
 
+// 屋根の仕様の plain 表現（RoofSpec.toData と同じキー集合）。テーブルが無ければ null。
+// 値の正規化（未知の shape・不正な数・材料コード欠落）は復元側の RoofSpec.fromData が行う。
+function readRoofSpec(bb, tablePos) {
+  if (!tablePos) return null;
+  const r = makeReader(bb, tablePos);
+  return {
+    shape:                r.str(RS.SHAPE) || null,
+    slope:                r.f64(RS.SLOPE),
+    sheathingMaterial:    r.str(RS.SHEATHING),
+    underlaymentMaterial: r.str(RS.UNDERLAYMENT),
+    roofFinish:           r.str(RS.ROOF_FINISH),
+    eaveOverhangMm:       r.f64(RS.EAVE_OVERHANG),
+    gableOverhangMm:      r.f64(RS.GABLE_OVERHANG),
+    soffit:               r.str(RS.SOFFIT),
+    note:                 r.str(RS.NOTE),
+  };
+}
+
 function readRoom(bb, tablePos) {
   const r = makeReader(bb, tablePos);
   const ovrKeys = r.strVec(RM.OVR_KEYS);
@@ -1426,6 +1476,7 @@ function readRoom(bb, tablePos) {
     exteriorLevel:    r.i8(RM.HAS_EXT_LEVEL) ? r.f64(RM.EXT_LEVEL) : null,
     exteriorLevelRef: EXT_LEVEL_REF_DEC[r.i8(RM.EXT_LEVEL_REF)] ?? 'room',
     exteriorSlope:    r.i8(RM.HAS_EXT_SLOPE) ? r.f64(RM.EXT_SLOPE) : null,
+    roofSpec:         readRoofSpec(bb, r.nested(RM.ROOF_SPEC)),
   };
 }
 

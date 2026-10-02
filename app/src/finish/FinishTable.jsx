@@ -4,6 +4,7 @@ import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.j
 import { StairTab } from './stair/StairTab.jsx';
 import { EquipmentTab } from './equipment/EquipmentTab.jsx';
 import { RoomDeleteConfirm } from './RoomDeleteConfirm.jsx';
+import { RoofGroup } from './roof/RoofGroup.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
 import { roomCeilingHeight } from './roomMetrics.js';
 import { parseSlopeInput } from './exteriorLevelInput.js';
@@ -1184,8 +1185,9 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
       )}
       {groups.map(({ key: groupKey, type: groupType, roomId, part, rows: groupRows }) => {
         if (groupType === 'roof') {
-          // 屋根（下屋）の群: 見出し「屋根」＋削除ボタンだけ（屋根の項目の入力は B2）。連動行・
-          // 仕上げレベル行・改名入力・区分セレクタは出さない。削除は屋外部屋と同じ mode.deleteRoom。
+          // 屋根（下屋）の群: 見出し「屋根」＋削除ボタン＋屋根の項目（RoofGroup。フォーム1行＋固定2行の表）。
+          // 連動行・仕上げレベル行・改名入力・区分セレクタは出さない。削除は屋外部屋と同じ mode.deleteRoom。
+          const roofRoom = graph.roomMap.get(roomId);
           return (
             <div key={groupKey} style={{ marginBottom: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, gap: 8 }}>
@@ -1194,6 +1196,7 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
                   🗑️ 削除
                 </button>
               </div>
+              {roofRoom && <RoofGroup room={roofRoom} graph={graph} mode={mode} styles={{ cellBase, headerCell, cellInputStyle }} />}
             </div>
           );
         }

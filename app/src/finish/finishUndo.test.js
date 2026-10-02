@@ -6,7 +6,9 @@ import assert from 'node:assert/strict';
 import {
   Plane, PlanGraph, ShaftSoundproof, ElevatorEquipmentCategory, DEFAULT_EV_USAGE, EvUsage,
   Stair, StairType, StairPortSide, StructuralMaterialType, totalStepsFromSections,
+  RoomKind, RoomFeature, RoofSpec, ROOF_SPEC_KEYS,
 } from '../core.js';
+import { NON_DEFAULT_ROOF_SPEC } from './roofTestFixtures.js';
 import { undoManager } from '../undoManager.js';
 import { withFinishUndo, snapshotFinishState, restoreFinishState } from './finishUndo.js';
 
@@ -220,4 +222,44 @@ test('不変条件: 仕上げ undo の階段スナップショットのキー集
   const stairKeys = Object.keys(new Stair('s', {})).sort();
   assert.deepStrictEqual(snapKeys, stairKeys,
     'Stair に項目を足したら finishUndo.js の snapshotStairs／restoreStairs にも足す');
+});
+
+// ---- 屋根の仕様（ステップB2。Room.roofSpec）。部屋の snapshot は roomReinterpret.snapshotRoomsState 経由 ----
+function graphWithRoof() {
+  const graph = freshGraph();
+  const roof = graph.addRoom(new Set(['a:b:c:d']), '屋根');
+  roof.setKind(RoomKind.EXTERIOR);
+  roof.setFeature(RoomFeature.ROOF);
+  roof.setRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
+  return { graph, roof };
+}
+
+test('不変条件: 仕上げ undo の snapshot の room.roofSpec のキー集合は ROOF_SPEC_KEYS と一致する', () => {
+  const { graph } = graphWithRoof();
+  const [roomSnap] = snapshotFinishState(graph).rooms.rooms;
+  assert.deepStrictEqual(Object.keys(roomSnap.roofSpec).sort(), [...ROOF_SPEC_KEYS].sort(),
+    'RoofSpec に項目を足したら roomReinterpret.js の snapshotRoomsState／restoreRoomsState にも足す（toData/fromData が唯一の定義）');
+});
+
+test('不変条件: 全項目を既定値以外にした RoofSpec は snapshot→restore→snapshot で一致し、各項目が復元される', () => {
+  const { graph, roof } = graphWithRoof();
+  const before = snapshotFinishState(graph);
+  restoreFinishState(graph, before);
+  const spec = graph.roomMap.get(roof.id).roofSpec;
+  for (const k of ROOF_SPEC_KEYS) {
+    assert.deepStrictEqual(spec[k], NON_DEFAULT_ROOF_SPEC[k], '往復後に ' + k + ' が復元されない');
+  }
+  assert.equal(JSON.stringify(snapshotFinishState(graph)), JSON.stringify(before), '往復前後でスナップショットが一致しない');
+});
+
+test('屋根の項目の変更を withFinishUndo で包むと undo/redo で戻る（1エントリ）', () => {
+  const { graph, roof } = graphWithRoof();
+  const stackBefore = undoManager._undoStack.length;
+  withFinishUndo(graph, () => roof.roofSpec.setField('slope', 4));
+  assert.equal(undoManager._undoStack.length, stackBefore + 1);
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.slope, 4);
+  undoManager.undo();
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.slope, 2.5, 'undo で変更前（2.5）へ戻る');
+  undoManager.redo();
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.slope, 4);
 });

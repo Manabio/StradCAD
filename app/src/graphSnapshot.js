@@ -3,6 +3,7 @@ import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine
 import { encode, decode } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 import { applyDocumentCodeNormalization } from './catalog/codeNormalization.js';
+import { restoreRoofSpecInto } from './finish/roof/roofDefaults.js';
 import { makeFreshLineIdMap, remapLineIdsInSnapshot } from './lineIdRemap.js';
 
 // ----------------------------------------------------------------
@@ -123,6 +124,8 @@ function buildSnapshot(graph) {
           exteriorSlope:    r.exteriorSlope ?? null,
           exteriorLevelRef: r.exteriorLevelRef,
           exteriorLevel:    r.exteriorLevel ?? null,
+          // 屋根の仕様（feature=roof の部屋だけ。無ければ null＝キー集合は RoofSpec.toData が唯一の定義）
+          roofSpec:         r.roofSpec ? r.roofSpec.toData() : null,
           // 個別上書きポケット（選択された材のみが結果的に永続化される）
           overrides:        [...r.customOverrides].map(([key, value]) => ({ key, value: String(value) })),
           finish: {
@@ -803,6 +806,7 @@ function applySnapshot(graph, snapshot) {
       if (d.exteriorSlope != null) room.setExteriorSlope(d.exteriorSlope);
       if (d.exteriorLevelRef) room.setExteriorLevelRef(d.exteriorLevelRef);
       if (d.exteriorLevel != null) room.setExteriorLevel(d.exteriorLevel);
+      restoreRoofSpecInto(room, d.roofSpec); // I1（ROOF なら補う／ROOF でなければ捨てる）
       for (const [key, val] of Object.entries(d.finish ?? {})) {
         if (val) room.finish.setField(key, val);
       }

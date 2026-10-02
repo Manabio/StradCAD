@@ -12,6 +12,10 @@
 export {
   Discipline, ShapeType, OpeningCategory, ShapeKind, CenterLineType, RoomKind, RoomFeature,
   SHAFT_FEATURES, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME,
+  RoofShape, ROOF_SHAPE_LABELS, ROOF_MONO_MAX_SHORT_SPAN_MM,
+  DEFAULT_ROOF_SLOPE, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM,
+  DEFAULT_ROOF_SHEATHING, DEFAULT_ROOF_UNDERLAYMENT, DEFAULT_ROOF_NOTE,
+  ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES,
   ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE,
   ExteriorLevelRef,
   StairType, StairPortSide, StructuralMaterialType, LINE_WEIGHT_MM, DimensionKind, DimensionSide,
@@ -62,6 +66,12 @@ export {
   WallBackingMaterial, edgeKey, Edge, RoomFinish, ExteriorFinishRow, Room,
   applyDefaultBaseboard, DEFAULT_BASEBOARD_MATERIAL, DEFAULT_BASEBOARD_HEIGHT,
 } from './core/room.js';
+
+// ================================================================
+// ROOF SPEC (屋根の仕様) — core/roofSpec.js。Room.roofSpec が持つ。
+// ================================================================
+
+export { RoofSpec, ROOF_SPEC_KEYS } from './core/roofSpec.js';
 
 // ================================================================
 // STAIR (階段) — core/stair.js。

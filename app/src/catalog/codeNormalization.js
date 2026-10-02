@@ -60,6 +60,15 @@ function normalizeCode(code, table, unresolved, context) {
 // ----------------------------------------------------------------
 const BACKING_FIELDS = ['exteriorWallBacking', 'interiorWallBacking', 'ceilingBacking', 'floorBacking', 'shaftWallMaterial'];
 
+// rooms[].roofSpec（屋根の仕様）が持つ材料コードの項目（野地板・防水シート。core/roofSpec.js の
+// ROOF_SPEC_KEYS の部分集合。本ファイルはゼロ依存の葉モジュールのため名前を直書きし、一致は
+// codeNormalization.test.js が固定する）。空文字・非文字列は対象外（復元側が既定で補う）。
+const ROOF_SPEC_MATERIAL_FIELDS = ['sheathingMaterial', 'underlaymentMaterial'];
+
+function isRoofSpecMaterialCode(spec, field) {
+  return !!spec && typeof spec[field] === 'string' && spec[field] !== '';
+}
+
 function isRoomMaterialOverride(ov) {
   return !!ov && (ov.key === 'wallMaterial' || ov.key === 'wallFinish');
 }
@@ -91,6 +100,10 @@ export function enumerateMaterialCodeRefs(snapshot) {
       if (!isRoomMaterialOverride(ov)) continue;
       refs.push({ code: ov.value, location: 'room', roomId: room.id, key: ov.key });
     }
+    for (const field of ROOF_SPEC_MATERIAL_FIELDS) {
+      if (!isRoofSpecMaterialCode(room?.roofSpec, field)) continue;
+      refs.push({ code: room.roofSpec[field], location: 'roofSpec', roomId: room.id, key: field });
+    }
   }
   for (const edge of snapshot.edges ?? []) {
     for (const ov of edge?.overrides ?? []) {
@@ -109,19 +122,32 @@ function normalizeRooms(rooms, table, unresolved) {
   if (!Array.isArray(rooms)) return rooms;
   let changedAny = false;
   const next = rooms.map(room => {
+    let nextRoom = room;
     const overrides = room?.overrides;
-    if (!Array.isArray(overrides)) return room;
-    let changed = false;
-    const nextOverrides = overrides.map(ov => {
-      if (!isRoomMaterialOverride(ov)) return ov;
-      const mapped = normalizeCode(ov.value, table, unresolved, { location: 'room', roomId: room.id, key: ov.key });
-      if (mapped === ov.value) return ov;
-      changed = true;
-      return { ...ov, value: mapped };
-    });
-    if (!changed) return room;
+    if (Array.isArray(overrides)) {
+      let changed = false;
+      const nextOverrides = overrides.map(ov => {
+        if (!isRoomMaterialOverride(ov)) return ov;
+        const mapped = normalizeCode(ov.value, table, unresolved, { location: 'room', roomId: room.id, key: ov.key });
+        if (mapped === ov.value) return ov;
+        changed = true;
+        return { ...ov, value: mapped };
+      });
+      if (changed) nextRoom = { ...nextRoom, overrides: nextOverrides };
+    }
+    // 屋根の仕様の材料コード（野地板・防水シート）
+    let nextSpec = room?.roofSpec;
+    for (const field of ROOF_SPEC_MATERIAL_FIELDS) {
+      if (!isRoofSpecMaterialCode(room?.roofSpec, field)) continue;
+      const code = room.roofSpec[field];
+      const mapped = normalizeCode(code, table, unresolved, { location: 'roofSpec', roomId: room.id, key: field });
+      if (mapped === code) continue;
+      nextSpec = { ...nextSpec, [field]: mapped };
+    }
+    if (nextSpec !== room?.roofSpec) nextRoom = { ...nextRoom, roofSpec: nextSpec };
+    if (nextRoom === room) return room;
     changedAny = true;
-    return { ...room, overrides: nextOverrides };
+    return nextRoom;
   });
   return changedAny ? next : rooms;
 }

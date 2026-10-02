@@ -15,6 +15,8 @@ import { equipmentAtCell } from '../finish/equipment/equipmentGeometry.js';
 import { equipmentHighlightKeys } from '../finish/equipment/equipmentTab.js';
 import { buildingEquipmentCatalog, equipmentSpanLabelOf } from '../finish/equipment/buildingEquipment.js';
 import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
+import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
+import { isValidRoofFieldValue } from '../finish/roof/roofInput.js';
 import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED } from '../error.js';
 import {
   RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME, applyDefaultBaseboard,
@@ -138,6 +140,7 @@ export class FinishModeState {
       cancelNaming: action,
       deleteRoom:   action,
       renameExteriorRoom: action,
+      setRoofField: action,
       selectStair:  action,
       deleteStair:  action,
       revertStairToRoom:  action,
@@ -447,6 +450,14 @@ export class FinishModeState {
       if (!ov) continue;
       for (const f of MATERIAL_CODE_OVERRIDE_FIELDS) {
         const v = ov instanceof Map ? ov.get(f) : ov[f];
+        if (typeof v === 'string' && v) codes.add(v);
+      }
+    }
+
+    // 屋根の仕様の材料コード（野地板・防水シート。codeNormalization の ROOF_SPEC_MATERIAL_FIELDS と同じ2項目）
+    for (const room of g?.rooms ?? []) {
+      for (const f of ['sheathingMaterial', 'underlaymentMaterial']) {
+        const v = room.roofSpec?.[f];
         if (typeof v === 'string' && v) codes.add(v);
       }
     }
@@ -937,7 +948,9 @@ export class FinishModeState {
       this.selectedEquipmentId = null;
     } else {
       if (wasStair) this._removeLinkedStair(roomId); // STAIR → null/void: 連動Stairを削除
-      room.setFeature(feature ?? null);
+      room.setFeature(feature ?? null); // ROOF 以外へ変えれば roofSpec は捨てられる（I1）
+      // 屋根の新規付与は既定値の RoofSpec（備考 '下野'）を付ける。既に屋根の部屋への再確定は既存の値を保つ
+      if (toRoof && !room.roofSpec) room.setRoofSpec(createLeanToRoofSpec());
       room.setName(toRoof ? ROOF_ROOM_NAME : (name || (room.kind === RoomKind.EXTERIOR ? '屋外' : '部屋')));
       this.sessionModifiedRoomIds.add(roomId);
       this.selectedRoomId  = roomId;
@@ -1121,6 +1134,22 @@ export class FinishModeState {
         r.setField('part', finalName);
       }
     });
+  }
+
+  /**
+   * 屋根（下屋）の項目を1つ確定する（外部タブの屋根の群。1回の確定で undo 1エントリ）。
+   * 項目は RoofSpec の9キー。値は isValidRoofFieldValue で検証し、不正な値・無変更・屋根でない部屋・
+   * 存在しない roomId は何も変更せず（undo を積まず）false を返す。呼び出し側（RoofGroup）は false のとき
+   * 表示を元の値へ戻す。
+   * @returns {boolean} 変更を確定したら true
+   */
+  setRoofField(roomId, field, value) {
+    const room = this.graph.roomMap.get(roomId);
+    if (!room || !isRoofFeature(room.feature) || !room.roofSpec) return false;
+    if (!isValidRoofFieldValue(field, value)) return false;
+    if (room.roofSpec[field] === value) return false;
+    withFinishUndo(this.graph, () => room.roofSpec.setField(field, value));
+    return true;
   }
 
   // ---- 階段 ----

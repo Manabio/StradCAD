@@ -3,7 +3,8 @@
 // なると両者のラベルが同一セルに落ちて重なって表示される（問題: 「3」と「3'」の重なり）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, ExteriorLevelRef, StructuralMaterialType, isShaftFeature } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, ExteriorLevelRef, StructuralMaterialType, isShaftFeature, RoofSpec, ROOF_SPEC_KEYS } from '@core';
+import { NON_DEFAULT_ROOF_SPEC } from './roofTestFixtures.js';
 import {
   normalizePartialDominance, reinterpretRoomsOnEntry, snapshotRoomsState, restoreRoomsState,
   findUnresolvableCells, reinterpretSlabsAfterCLRemoval,
@@ -321,6 +322,56 @@ test('snapshotRoomsState→restoreRoomsState: 未設定の部屋はnull/"room"/n
   assert.equal(restored.exteriorSlope, null);
   assert.equal(restored.exteriorLevelRef, ExteriorLevelRef.ROOM);
   assert.equal(restored.exteriorLevel, null);
+});
+
+// ---- 屋根の仕様（ステップB2。Room.roofSpec）の仕上げモード undo 経路（snapshotRoomsState/restoreRoomsState）----
+function makeGraphWithRoof() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const interior = graph.addRoom(new Set(['dummy1']), '居間');
+  const roof = graph.addRoom(new Set(['dummy2']), '屋根');
+  roof.setKind(RoomKind.EXTERIOR);
+  roof.setFeature(RoomFeature.ROOF);
+  roof.setRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
+  return { graph, interior, roof };
+}
+
+test('【B2】snapshotRoomsState→restoreRoomsState→snapshotRoomsState: 全9項目を既定値以外にした RoofSpec が往復する（出幅0・勾配2.5・形状明示）', () => {
+  const { graph, roof } = makeGraphWithRoof();
+  const snap = snapshotRoomsState(graph);
+  roof.roofSpec.setField('slope', 7);
+  roof.roofSpec.setField('note', '書換え');
+  restoreRoomsState(graph, snap);
+  const restored = graph.roomMap.get(roof.id);
+  assert.deepEqual(restored.roofSpec.toData(), { ...NON_DEFAULT_ROOF_SPEC });
+  assert.equal(JSON.stringify(snapshotRoomsState(graph)), JSON.stringify(snap), '往復前後でスナップショットが一致する');
+});
+
+test('【B2】snapshotRoomsState: roofSpec のキー集合は ROOF_SPEC_KEYS と一致し、屋根でない部屋は null', () => {
+  const { graph, roof, interior } = makeGraphWithRoof();
+  const snap = snapshotRoomsState(graph);
+  const roofSnap = snap.rooms.find(r => r.id === roof.id);
+  assert.deepEqual(Object.keys(roofSnap.roofSpec).sort(), [...ROOF_SPEC_KEYS].sort());
+  assert.equal(snap.rooms.find(r => r.id === interior.id).roofSpec, null);
+});
+
+test('【B2・失敗系】restoreRoomsState: roofSpec が欠けた屋根の snapshot（B1a 以前の形）は既定値で補う（備考「下野」）', () => {
+  const { graph, roof } = makeGraphWithRoof();
+  const snap = snapshotRoomsState(graph);
+  delete snap.rooms.find(r => r.id === roof.id).roofSpec; // キー自体が無い旧形式
+  restoreRoomsState(graph, snap);
+  const spec = graph.roomMap.get(roof.id).roofSpec;
+  assert.ok(spec, 'I1: 屋根の部屋には roofSpec が補われる');
+  assert.equal(spec.note, '下野');
+  assert.equal(spec.slope, 3);
+  assert.equal(spec.shape, null);
+});
+
+test('【B2・失敗系】restoreRoomsState: 屋根でない部屋に付いた roofSpec は捨てる（I1）', () => {
+  const { graph, interior } = makeGraphWithRoof();
+  const snap = snapshotRoomsState(graph);
+  snap.rooms.find(r => r.id === interior.id).roofSpec = { ...NON_DEFAULT_ROOF_SPEC };
+  restoreRoomsState(graph, snap);
+  assert.equal(graph.roomMap.get(interior.id).roofSpec, null);
 });
 
 // ================================================================

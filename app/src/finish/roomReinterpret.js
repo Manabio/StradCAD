@@ -19,6 +19,7 @@ import {
   lostSides, cellInteriorPoint, regionCellsAt, refreshCells, cellBoundsFromKey, worldToCell,
   gridIndexOf, isActiveAcrossRange,
 } from './gridCells.js';
+import { restoreRoofSpecInto } from './roof/roofDefaults.js';
 
 function isEarlierInOrder(graph, idA, idB) {
   const order = graph.roomOrder;
@@ -592,6 +593,7 @@ export function snapshotRoomsState(graph) {
         id: r.id, name: r.name, cells: [...r.cells], referenceRoomIds: [...r.referenceRoomIds],
         kind: r.kind, feature: r.feature, templateKey: r.templateKey, floorLevel: r.floorLevel,
         exteriorSlope: r.exteriorSlope, exteriorLevelRef: r.exteriorLevelRef, exteriorLevel: r.exteriorLevel,
+        roofSpec: r.roofSpec ? r.roofSpec.toData() : null,
         namePosition: r.namePosition ? { x: r.namePosition.x, y: r.namePosition.y } : null,
         generatedWallIds: [...r.generatedWallIds],
         customOverrides: [...r.customOverrides],
@@ -612,6 +614,7 @@ export function restoreRoomsState(graph, snap) {
     if (d.exteriorSlope != null) room.setExteriorSlope(d.exteriorSlope);
     if (d.exteriorLevelRef) room.setExteriorLevelRef(d.exteriorLevelRef);
     if (d.exteriorLevel != null) room.setExteriorLevel(d.exteriorLevel);
+    restoreRoofSpecInto(room, d.roofSpec); // I1（ROOF なら補う／ROOF でなければ捨てる）
     if (d.namePosition) room.setNamePosition(d.namePosition.x, d.namePosition.y);
     for (const [k, v] of d.customOverrides) room.customOverrides.set(k, v);
     for (const [k, v] of Object.entries(d.finish)) if (v) room.finish.setField(k, v);

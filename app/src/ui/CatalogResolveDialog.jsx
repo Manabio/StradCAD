@@ -29,6 +29,7 @@ function actionLabel(action) {
 const LOCATION_LABELS = Object.freeze({
   floor: '階',
   room: '部屋',
+  roofSpec: '屋根',
   edge: '境界',
   clEccentricity: 'CL偏芯',
   exteriorWallBacking: '外壁下地',
