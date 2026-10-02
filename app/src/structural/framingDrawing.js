@@ -12,6 +12,7 @@
 // 抵触しない（openings/openingPlanSymbolGeometry.js と同じ先例）。
 // ================================================================
 import { findSectionEntry } from './sectionCatalog.js';
+import { roofFramingLines, roofStrutPoints } from './roofFramingGeometry.js';
 import { LodLevel } from '../viewport.js';
 
 /** 伏図の全黒色（PLAN_WALL_LINE_COLOR とは根拠が別＝「平面は柱断面を壁と同じ黒」に対し
@@ -198,4 +199,107 @@ export function beamDepthMarks(drawing, lod, beams) {
     });
   }
   return marks;
+}
+
+// ---- 小屋組（棟木・母屋・束）の伏図描画（ステップC3a。在来木造のみ。設計意図は
+// .claude/structural-model.md「小屋伏図」節）。棟木・母屋・束は保存せず、屋根の入力（region）と梁から
+// 描くたびに導く。位置の幾何は roofFramingGeometry.js（純関数）、ここは「描くか・どう描くか」の判断だけ。----
+
+/** 棟木・母屋の一点鎖線のパターン(px)。CenterLinesLayer.jsx の中心線（dash=[12,4,2,4]・strokeScaleEnabled=false）
+ *  と同じ見え方——画面px固定で、線の太さも strokeScaleEnabled=false の px（viewport.lineWeightsPx）で指定する。 */
+export const ROOF_FRAMING_DASH = Object.freeze([12, 4, 2, 4]);
+
+/**
+ * 棟木・母屋の実寸幅(mm)。framing.ridgeSection（棟木）・framing.purlinSection（母屋。束も同寸）をカタログから引く。
+ * framing が無い（在来木造以外）か断面がカタログに無ければ null（描かない）。
+ * @param {{ridgeSection:string, purlinSection:string}|null|undefined} framing rulesFor(...).framing
+ * @returns {{ridgeWidthMm:number, purlinWidthMm:number}|null}
+ */
+export function roofFramingWidths(framing) {
+  if (!framing) return null;
+  const ridge = findSectionEntry(framing.ridgeSection);
+  const purlin = findSectionEntry(framing.purlinSection);
+  if (!ridge || !purlin) return null;
+  return { ridgeWidthMm: ridge.width, purlinWidthMm: purlin.width };
+}
+
+/**
+ * 束を立てる横架材（その伏図の大梁系）を {isVertical, axis, lo, hi} へ写す。role 'primary'（軒桁・壁線の通し梁・
+ * 頭つなぎ・受梁）で、材種が主構造のものだけ（床梁・小梁・基礎梁などの上には立てない）。
+ * 軸・範囲は梁の芯々（axisValue と clStart/clEnd の effectiveValue。woodAutoFill.js の支持点の取り方と同じ）——
+ * 描画用に柱手前でトリムした coord1/coord2 ではない。
+ * wallBeamAxes.js columnSeedBeamSegments を再利用しない理由: あちらは柱の点源用で primary と floor の両方を含み、
+ * 軸も偏芯を含まない axisCL.effectiveValue——束は primary だけ・梁の実位置（偏芯込みの axisValue）に立てるため別関数。
+ * @param {Array<{role:string, materialType:string, isVertical:boolean, axisValue:number, clStart:{effectiveValue:number}, clEnd:{effectiveValue:number}}>} beams
+ * @param {string} baseMaterial 主構造の材種（rulesFor(...).baseMaterial）
+ */
+export function roofFramingHostMembers(beams, baseMaterial) {
+  return (beams ?? [])
+    .filter(b => b.role === 'primary' && b.materialType === baseMaterial)
+    .map(b => ({
+      isVertical: b.isVertical,
+      axis: b.axisValue,
+      lo: Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue),
+      hi: Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue),
+    }));
+}
+
+/** 小屋組の線（棟木・母屋・束）を描くか。drawing.roofFramingLines==='dashDot'（在来木造）かつ略図（SCHEMATIC）でない
+ *  ときだけ true。それ以外（既定 'none'・未知値・drawing 未定義・略図）は false。判定先はここに一本化する
+ *  （roofFramingPrimitives と、region の導出を省く呼び出し側の早期ゲート roofFramingRegions.js の両方が読む）。 */
+export function showRoofFraming(drawing, lod) {
+  return drawing?.roofFramingLines === 'dashDot' && lod !== LodLevel.SCHEMATIC;
+}
+
+function requireWidth(v, name) {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+    throw new RangeError(`${name} は 0 より大きい有限の数値でなければなりません: ${v}`);
+  }
+}
+
+/**
+ * 小屋組の描画プリミティブ（ワールドmm座標。全LODとも実寸）。drawing.roofFramingLines!=='dashDot'（既定 'none'。
+ * 非在来・未知値・drawing 未定義）または lod===SCHEMATIC（略図）は常に空配列。regions が空でも空。
+ *   - 棟木: 軸から ±ridgeWidthMm/2 の平行線2本（kind:'ridge'）
+ *   - 母屋: 軸上に1本（kind:'purlin'）
+ *   - 束: 母屋・棟木の線と hostBeams の全交点に半径 purlinWidthMm/2 の円（kind:'strut'）
+ * 並びは region ごとに 棟木→母屋→束。描画側は kind で線と束を分けて、線→束の順に重ねる。
+ * @param {object} drawing rulesFor(...).drawing
+ * @param {string} lod LodLevel
+ * @param {object} p
+ * @param {Array<{key:string, rect:object, shape:string, ridgeIsVertical:boolean, highSide:string|null}>} p.regions roofFramingRegions.js の戻り値
+ * @param {Array<{isVertical:boolean, axis:number, lo:number, hi:number}>} p.hostBeams roofFramingHostMembers の戻り値
+ * @param {number} p.ridgeWidthMm
+ * @param {number} p.purlinWidthMm
+ * @param {number} p.purlinPitchMm
+ * @param {number} p.tolMm
+ * @returns {Array<{kind:'ridge'|'purlin', key:string, points:number[]}|{kind:'strut', key:string, x:number, y:number, radius:number}>}
+ * @throws {RangeError} 幅が不正（roofFramingLines・roofStrutPoints の入力検査もそのまま伝わる）
+ */
+export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeWidthMm, purlinWidthMm, purlinPitchMm, tolMm }) {
+  if (!showRoofFraming(drawing, lod)) return [];
+  if (!regions || regions.length === 0) return [];
+  requireWidth(ridgeWidthMm, 'ridgeWidthMm');
+  requireWidth(purlinWidthMm, 'purlinWidthMm');
+  const segment = (line, across) => (line.isVertical
+    ? [line.coord + across, line.lo, line.coord + across, line.hi]
+    : [line.lo, line.coord + across, line.hi, line.coord + across]);
+  const out = [];
+  for (const region of regions) {
+    const { ridges, purlins } = roofFramingLines({
+      rect: region.rect, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical,
+      highSide: region.highSide, purlinPitchMm, tolMm,
+    });
+    ridges.forEach((line, i) => {
+      out.push({ kind: 'ridge', key: `${region.key}:ridge:${i}:-`, points: segment(line, -ridgeWidthMm / 2) });
+      out.push({ kind: 'ridge', key: `${region.key}:ridge:${i}:+`, points: segment(line, ridgeWidthMm / 2) });
+    });
+    purlins.forEach((line, i) => {
+      out.push({ kind: 'purlin', key: `${region.key}:purlin:${i}`, points: segment(line, 0) });
+    });
+    roofStrutPoints([...ridges, ...purlins], hostBeams ?? [], tolMm).forEach((p, i) => {
+      out.push({ kind: 'strut', key: `${region.key}:strut:${i}`, x: p.x, y: p.y, radius: purlinWidthMm / 2 });
+    });
+  }
+  return out;
 }

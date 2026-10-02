@@ -466,16 +466,29 @@ test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅�
     columnFinishWrap: false, planColumnColor: 'wall', planColumnLineWeight: 'ultraThick',
     framingPlanColor: 'mono', framingColumnSymbol: 'crossBox', framingColumnLineWeight: 'byLod',
     memberTags: 'hide', beamDepthMark: 'offsetLine', beamEndColumnMatch: 'coordinate', beamJunction: 'throughWins',
-    planColumnOriginMark: 'cross',
+    planColumnOriginMark: 'cross', roofFramingLines: 'dashDot',
   });
   for (const key of ['木造（2"×4"）', 'S造', 'SRC造', 'RC造(ラーメン)', 'RC造(壁式)', UNSPECIFIED_STRUCTURE]) {
     assert.deepEqual({ ...rulesFor(key).drawing }, {
       columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
       framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
       memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId', beamJunction: 'columnFace',
-      planColumnOriginMark: 'none',
+      planColumnOriginMark: 'none', roofFramingLines: 'none',
     }, key);
   }
+});
+
+test('structureRules（C3a）: 小屋組の描画（drawing.roofFramingLines）は在来木造だけ dashDot、他の主構造・未定・未知は none。母屋ピッチ910・束の最大間隔1820は在来だけが持つ', () => {
+  assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing.roofFramingLines, 'dashDot');
+  for (const key of ['木造（2"×4"）', 'S造', 'SRC造', 'RC造(ラーメン)', 'RC造(壁式)', UNSPECIFIED_STRUCTURE, 'no-such-structure']) {
+    assert.equal(rulesFor(key).drawing.roofFramingLines, 'none', key);
+    assert.equal(rulesFor(key).framing, null, `${key}: 小屋組の定数（framing）は在来だけ`);
+  }
+  const framing = rulesFor(TRADITIONAL_WOOD_STRUCTURE).framing;
+  assert.equal(framing.purlinPitchMm, 910);
+  assert.equal(framing.strutMaxPitchMm, 1820);
+  assert.equal(framing.ridgeSection, 'WOOD-120x120', '棟木は120角');
+  assert.equal(framing.purlinSection, 'WOOD-90x90', '母屋は90角（束も同寸）');
 });
 
 test('structureRules: ピン接合の梁の端部クリアランス（pinBeamEndClearanceMm）は在来木造だけ0（大梁面まで伸ばす）、他の主構造・未定は既定50（PIN_BEAM_END_CLEARANCE_MM）', () => {

@@ -280,3 +280,113 @@ test('【不変条件・柱の由来別色分けステップ3】StructuralLayer.
   assert.ok(/color=\{color\}/.test(body), '伏図の下階柱×がcolor={color}（呼び出し側framingColor）を描いていない');
   assert.ok(!/originColor\(/.test(body), '伏図の下階柱×がoriginColor(を使っている（全黒のはずが由来色化する回帰）');
 });
+
+// ---- ステップC3a: 小屋組（棟木・母屋・束）。判断は structural/roofFramingRegions.js・framingDrawing.js にあり、
+// StructuralLayer.jsx は戻り値のプリミティブを描くだけ ----
+
+// コメント行・行末コメントを除いた本体の各行（前後空白を除去。空行は落とす）。1行まるごと一致の検査用。
+function bodyLines(src) {
+  return codeLines(src).map(l => l.trim()).filter(l => l.length > 0);
+}
+
+// 小屋組を足す前から存在し、今回の変更で1文字も変えてはならない本体の行（梁本体の色・梁の帯・非正角材の標記）。
+const UNCHANGED_BODY_LINES = [
+  'const color = colorOf(b.materialType);',
+  'const baseSpans = (beam?.graph?.beams ?? []).map(b => {',
+  '<Line key={b.id} points={[p1.x, p1.y, p2.x, p2.y]} stroke={color} strokeWidth={thin} dash={beamDash} {...pickShapeProps} />,',
+  '...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash, pickShapeProps),',
+  'const colorOf = m => framingColor(figureRules.drawing, COLOR_BY_MATERIAL[m]);',
+  '<Line key={`depthPar:${mark.id}`} points={mark.parallel} stroke={color} strokeWidth={beamDepthMarkStrokeWidth} listening={false} />,',
+  '<Line key={`depthS0:${mark.id}`} points={mark.slopes[0]} stroke={color} strokeWidth={beamDepthMarkStrokeWidth} listening={false} />,',
+  '<Line key={`depthS1:${mark.id}`} points={mark.slopes[1]} stroke={color} strokeWidth={beamDepthMarkStrokeWidth} listening={false} />,',
+];
+
+test('【不変条件・C3a】StructuralLayer.jsx: 梁本体の色・梁の帯・非正角材の標記の行は小屋組の追加で無改変（1行まるごと一致・各1回）', () => {
+  const lines = bodyLines(readSource());
+  for (const expected of UNCHANGED_BODY_LINES) {
+    const hits = lines.filter(l => l === expected).length;
+    assert.equal(hits, 1, `本体の行が無い・改変・重複している（${hits}件）: ${expected}`);
+  }
+});
+
+test('【不変条件・C3a】StructuralLayer.jsx: 小屋組は roofFramingFigurePrimitives( の戻り値を描くだけ（region・幾何・描くかの判断を jsx に書かない）', () => {
+  const src = readSource();
+  const lines = codeLines(src);
+  const calls = lines.filter(l => /roofFramingFigurePrimitives\(/.test(l));
+  assert.equal(calls.length, 1, `roofFramingFigurePrimitives( の呼び出しが1箇所でない:\n${calls.join('\n')}`);
+  const defMatch = /const\s+(\w+)\s*=\s*roofFramingFigurePrimitives\(/.exec(src);
+  assert.ok(defMatch, 'roofFramingFigurePrimitives(...) の戻り値の代入が見つからない');
+  const v = defMatch[1];
+  // 判断・幾何は純モジュール側。jsx が直接引いたり、描くかの選択子（'dashDot'）を比べたりしない
+  const code = lines.join('\n');
+  for (const forbidden of [/roofFramingGeometry/, /roofFramingLines\b/, /roofStrutPoints/, /mainRoofFramingRegion/, /leanToFramingRegions/, /roofFramingPrimitives\(/, /'dashDot'/]) {
+    assert.ok(!forbidden.test(code), `StructuralLayer.jsx の本体に ${forbidden} がある（判断を jsx に持ち込む回帰）`);
+  }
+  // 戻り値は kind で線（棟木・母屋）と束に分けて map するだけ
+  assert.ok(new RegExp(`${v}\\.filter\\(p => p\\.kind !== 'strut'\\)\\.map\\(`).test(src), `${v}.filter(p => p.kind !== 'strut').map( が見つからない（線の描画）`);
+  assert.ok(new RegExp(`${v}\\.filter\\(p => p\\.kind === 'strut'\\)\\.map\\(`).test(src), `${v}.filter(p => p.kind === 'strut').map( が見つからない（束の描画）`);
+  // 入力は主題階の rules・LOD・主題階/最上階の graph・project（屋根専用平面か否かは composition.subjectPlane から）
+  // 引数は コメント行・行末コメントを除いた本体 から切り出し、各行を1行まるごとで固定する
+  // （コメントに元の式を残しただけの差し替えを緑にしない）。
+  const argMatch = /roofFramingFigurePrimitives\(\{([\s\S]*?)\}\);/.exec(code);
+  assert.ok(argMatch, 'roofFramingFigurePrimitives({...}) の引数が見つからない');
+  const argLines = argMatch[1].split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  assert.deepEqual(argLines, [
+    'rules: figureRules,', // 主題階の rules
+    'lod,',
+    'isRoofPlane: composition.subjectPlane?.isRoofPlane === true,',
+    'subjectGraph: figureGraph,', // beamMap の供給階（主題階）
+    'topGraph: column?.graph ?? null,', // columnMap の供給階（屋根専用平面では最上階）
+    'project,',
+    'memo: graphComputed,', // region の導出は graph 単位に memo 化（毎ズームで再計算しない）
+  ]);
+});
+
+test('【不変条件・C3a】StructuralLayer.jsx: 小屋組ブロックの開始行・Group・filter の行は1行まるごと一致（jsx に条件を足さない・beam の表示スタイルを引き継ぐ）', () => {
+  const lines = bodyLines(readSource());
+  for (const expected of [
+    '{roofFramingPrims.length > 0 && (',
+    '<Group name="roof-framing" {...groupPropsForStyle(beam?.spec.style)}>',
+    "{roofFramingPrims.filter(p => p.kind !== 'strut').map(p => (",
+    "{roofFramingPrims.filter(p => p.kind === 'strut').map(p => (",
+  ]) {
+    const hits = lines.filter(l => l === expected).length;
+    assert.equal(hits, 1, `本体の行が無い・改変・重複している（${hits}件）: ${expected}`);
+  }
+});
+
+test('【不変条件・C3a】StructuralLayer.jsx: 小屋組の Line・Circle は listening={false}（クリックの当たり判定に入れない）・一点鎖線は画面px固定（strokeScaleEnabled={false}・ROOF_FRAMING_DASH・lineWeightsPx.medium）・色は colorOf 経由', () => {
+  const src = readSource();
+  const m = /<Group name="roof-framing"[\s\S]*?\n {6}\)\}/.exec(src);
+  assert.ok(m, '<Group name="roof-framing"> のブロックが見つからない');
+  const block = codeLines(m[0]).join('\n');
+  const line = /<Line[\s\S]*?\/>/.exec(block);
+  const circle = /<Circle[\s\S]*?\/>/.exec(block);
+  assert.ok(line && circle, '小屋組ブロックに <Line と <Circle が無い');
+  for (const [name, el] of [['Line', line[0]], ['Circle', circle[0]]]) {
+    assert.ok(/listening=\{false\}/.test(el), `小屋組の ${name} が listening={false} でない`);
+    assert.ok(/colorOf\(figureRules\.baseMaterial\)/.test(el), `小屋組の ${name} の色が colorOf（framingColor 経由・全黒）でない`);
+  }
+  assert.ok(/dash=\{ROOF_FRAMING_DASH\}/.test(line[0]), 'Line の dash が ROOF_FRAMING_DASH でない');
+  assert.ok(/strokeScaleEnabled=\{false\}/.test(line[0]), 'Line が strokeScaleEnabled={false}（画面px固定）でない');
+  assert.ok(/strokeWidth=\{viewport\.lineWeightsPx\.medium\}/.test(line[0]), 'Line の線幅が viewport.lineWeightsPx.medium（中線）でない');
+  assert.ok(/radius=\{p\.radius\}/.test(circle[0]), 'Circle の半径が p.radius（ワールド実寸）でない');
+  assert.ok(!/onClick|onTap|hitStrokeWidth|listening=\{true\}/.test(block), '小屋組がクリック対象になっている');
+});
+
+test('【不変条件・C3a】StructuralLayer.jsx: z-order は 梁の帯・非正角材の標記・壁の後、選択ハイライトの前。線（棟木・母屋）→ 束の順', () => {
+  const src = readSource();
+  const beamBody = src.indexOf('beamDrawSpans.flatMap(');
+  const depthMarks = src.indexOf('beamDepthMarkList.flatMap(');
+  const walls = src.indexOf('(wall?.graph?.structuralWalls ?? []).flatMap(');
+  const roof = src.indexOf('<Group name="roof-framing"');
+  const selection = src.indexOf('<Group name="member-selection">');
+  for (const [name, idx] of [['梁本体', beamBody], ['非正角材の標記', depthMarks], ['壁', walls], ['小屋組', roof], ['選択ハイライト', selection]]) {
+    assert.ok(idx > 0, `${name} の描画が見つからない`);
+  }
+  assert.ok(beamBody < roof && depthMarks < roof && walls < roof, '小屋組が梁の帯・標記・壁より前にある');
+  assert.ok(roof < selection, '小屋組が選択ハイライトより後ろにある');
+  const lineIdx = src.indexOf(".filter(p => p.kind !== 'strut')");
+  const strutIdx = src.indexOf(".filter(p => p.kind === 'strut')");
+  assert.ok(lineIdx > roof && strutIdx > lineIdx, '線（棟木・母屋）の後に束を描いていない');
+});

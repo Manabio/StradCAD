@@ -90,6 +90,12 @@ export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
   // −この値。消費先は基礎の断面図（後続ステップ）。それまで基礎梁の levelOffset は書かない（断面・
   // 展開図に基礎梁の消費者が無く、書くと全既存文書に無観測の差分と undo だけが生じるため。2026-09-18裁定）。
   sillPackingThicknessMm: 20,
+  // 小屋組（ステップC3a。棟木・母屋・束は保存せず伏図の描画時に導く。設計意図は
+  // .claude/structural-model.md「小屋伏図」節）。母屋ピッチは水平距離で軒から（roofFramingGeometry.js）。
+  // 束の最大間隔は小屋梁の位置決め（後続ステップ）が使う——floorBeamMaxPitchMm・columnSupportMaxSpanMm
+  // と値がたまたま同じ(1820)だが概念は別（独立した定数として持つ）。
+  purlinPitchMm: 910,
+  strutMaxPitchMm: 1820,
 });
 // 木造下地（壁下地材・外壁の開口まわり）。寸法は「柱寸×○」で柱寸に連動する係数として持つ
 // （適用は woodFraming.js の studSpec / openingJambSpec / studPositions）。
@@ -203,11 +209,14 @@ const WOOD_RULES = Object.freeze({
   // 2026-09-17・B-3）。
   // planColumnOriginMark＝平面図（詳細LOD）で柱の由来を示す×を描くか（'none'＝既定／'cross'＝在来木造。
   // renderer/originColorKey.js columnOriginMarkKey が唯一の解決先。柱の由来別色分け ステップ3）。
+  // roofFramingLines＝伏図に小屋組の線（棟木＝一点鎖線2本・母屋＝一点鎖線1本・束＝黒丸。保存せず描画時に導く）
+  // を描くか（'none'＝既定／'dashDot'＝在来木造。structural/framingDrawing.js roofFramingPrimitives が唯一の解決先。
+  // ステップC3a）。
   drawing: Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
     framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
     memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId', beamJunction: 'columnFace',
-    planColumnOriginMark: 'none',
+    planColumnOriginMark: 'none', roofFramingLines: 'none',
   }),
   // 壁由来の梁芯生成源（(3)）: 自階＋1つ下の実体階の下地オーナー壁（下地材の種別は問わない）。在来のみ。
   wallBeamAxes: null,
@@ -263,7 +272,7 @@ const RC_RULES = Object.freeze({
     columnFinishWrap: true, planColumnColor: 'material', planColumnLineWeight: 'thick',
     framingPlanColor: 'material', framingColumnSymbol: 'section', framingColumnLineWeight: 'fixed',
     memberTags: 'show', beamDepthMark: 'none', beamEndColumnMatch: 'clId', beamJunction: 'columnFace',
-    planColumnOriginMark: 'none',
+    planColumnOriginMark: 'none', roofFramingLines: 'none',
   }),
   // 自階の下地オーナー壁のうち下地材がRC下地の壁のみ（上下階で壁が連続し自立するため下階は見ない）。
   wallBeamAxes: 'rcBacking',
@@ -339,6 +348,8 @@ export const STRUCTURE_RULES = Object.freeze({
         memberTags: 'hide', beamDepthMark: 'offsetLine', beamEndColumnMatch: 'coordinate', beamJunction: 'throughWins',
         // 平面詳細LODで柱の由来×を描く（在来木造のみ。柱の由来別色分け ステップ3）。
         planColumnOriginMark: 'cross',
+        // 伏図に棟木・母屋・束を描く（在来木造のみ。ステップC3a）。
+        roofFramingLines: 'dashDot',
       }) },
     { column: TRADITIONAL_WOOD_FRAMING.columnSection, beam: TRADITIONAL_WOOD_FRAMING.columnSection }), // 梁の既定＝柱同寸の正角
   '木造（2"×4"）': withProfile('木造（2"×4"）', WOOD_RULES), // 壁自体が構造体＝壁下に梁を入れない（wallBeamAxes:null）

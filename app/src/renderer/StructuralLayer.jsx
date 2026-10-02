@@ -7,8 +7,9 @@ import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { resolveBeamJunctionSpans } from '../structural/beamJunction.js';
 import {
   framingColumnGroups, framingColor, framingColorOverride, columnSectionSize, framingColumnLineWeight,
-  beamDepthMarks, pickMembersOnFigure, pickColumnsOnFigure, columnRenderSize,
+  beamDepthMarks, pickMembersOnFigure, pickColumnsOnFigure, columnRenderSize, ROOF_FRAMING_DASH,
 } from '../structural/framingDrawing.js';
+import { roofFramingFigurePrimitives } from '../structural/roofFramingRegions.js';
 import { planColumnWraps } from './wallDrawPlan.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
 import { graphComputed } from './graphDerived.js';
@@ -441,6 +442,18 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
     id: b.id, isVertical: b.isVertical, axisValue: b.axisValue, coord1, coord2,
     sectionDefId: b.sectionDefId, role: b.role, materialType: b.materialType,
   })));
+  // 小屋組（棟木・母屋・束。在来木造の伏図のみ。保存せず描くたびに導く）。何をどこへ描くかは
+  // structural/roofFramingRegions.js roofFramingFigurePrimitives が丸ごと決める（非在来・略図は空配列）。
+  // 主屋根は屋根専用平面で「1つ下＝最上階」の graph（columnMap の供給階）から、下屋は自階 graph から導く。
+  const roofFramingPrims = roofFramingFigurePrimitives({
+    rules: figureRules,
+    lod,
+    isRoofPlane: composition.subjectPlane?.isRoofPlane === true,
+    subjectGraph: figureGraph,
+    topGraph: column?.graph ?? null,
+    project,
+    memo: graphComputed,
+  });
   const beamDepthLabelFontSize = NUM_FONT_PX / viewport.scaleX;
   const beamDepthLabelGap = TEXT_GAP_PX / viewport.scaleX;
   const beamDepthMarkStrokeWidth = resolveStrokeWidth(
@@ -652,6 +665,31 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
           return bandLines(`wall:${w.id}`, w.isVertical, w.axisValue, w.thickness / 2, segments, color, medium, wallDash);
         })}
       </Group>
+      {/* 小屋組（棟木＝一点鎖線2本・母屋＝一点鎖線1本・束＝黒丸）。梁の帯の後・選択ハイライトの前。
+          線（棟木・母屋）→ 束の順。一点鎖線は中心線（CenterLinesLayer.jsx）と同じ画面px固定。クリック対象にしない。 */}
+      {roofFramingPrims.length > 0 && (
+        <Group name="roof-framing" {...groupPropsForStyle(beam?.spec.style)}>
+          {roofFramingPrims.filter(p => p.kind !== 'strut').map(p => (
+            <Line
+              key={p.key}
+              points={p.points}
+              stroke={colorOf(figureRules.baseMaterial)}
+              strokeWidth={viewport.lineWeightsPx.medium}
+              dash={ROOF_FRAMING_DASH}
+              strokeScaleEnabled={false}
+              listening={false}
+            />
+          ))}
+          {roofFramingPrims.filter(p => p.kind === 'strut').map(p => (
+            <Circle
+              key={p.key}
+              x={p.x} y={p.y} radius={p.radius}
+              fill={colorOf(figureRules.baseMaterial)}
+              listening={false}
+            />
+          ))}
+        </Group>
+      )}
       {/* 構造リストで展開中のカードの部材（selectedMemberIds）を選択状態として最前面に示す。
           どの部材をどんな矩形で示すかは structural/memberSelection.js が決め、ここは描画に使ったのと同じ
           解決済み幾何（表示中の柱集合・トリム済みの梁スパン・帯幅）を渡して Konva へ写すだけ。

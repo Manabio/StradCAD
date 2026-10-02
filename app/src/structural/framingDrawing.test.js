@@ -6,6 +6,7 @@ import {
   framingColumnGroups, framingColor, framingColorOverride,
   columnSectionSize, columnCrossPointsLocal, COLUMN_CROSS_OVERHANG_RATIO, framingColumnLineWeight, showMemberTags, beamDepthMarks,
   pickMembersOnFigure, columnListCategory, pickColumnsOnFigure, columnRenderSize,
+  ROOF_FRAMING_DASH, showRoofFraming, roofFramingWidths, roofFramingHostMembers, roofFramingPrimitives,
 } from './framingDrawing.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 import { STRUCTURES } from './structuralClassification.js';
@@ -279,4 +280,166 @@ test('columnCrossPointsLocal: 既定（COLUMN_CROSS_OVERHANG_RATIO）では×の
   }
   // 2本は互いに別の対角線（同じ線を2回返していない）。
   assert.notDeepEqual(lines[0], lines[1]);
+});
+
+// ---- ステップC3a: 小屋組（棟木・母屋・束）の描画プリミティブ ----
+
+const TOL = 0.5;
+const PITCH = 910;
+const WOOD_FRAMING = rulesFor(TRADITIONAL_WOOD_STRUCTURE).framing;
+// moku4 の最上階（7280×8974。X 方向が幅・Y 方向が奥行き）。切妻の棟は y 方向＝x=3640。
+const MOKU_RECT = { x1: 0, y1: -12614, x2: 7280, y2: -3640 };
+const gableRegion = { key: 'main', rect: MOKU_RECT, shape: 'gable', ridgeIsVertical: true, highSide: null };
+const baseArgs = (over = {}) => ({
+  regions: [gableRegion], hostBeams: [], ridgeWidthMm: 120, purlinWidthMm: 90, purlinPitchMm: PITCH, tolMm: TOL, ...over,
+});
+const kindOf = (prims, kind) => prims.filter(p => p.kind === kind);
+
+test('roofFramingPrimitives: 切妻（moku4 最上階）は棟木が軸±60の2本・母屋が1本ずつ6本、端は屋根範囲の辺まで。束は host が無ければ無い', () => {
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs());
+  assert.equal(prims.length, 8);
+  const ridges = kindOf(prims, 'ridge');
+  assert.deepEqual(ridges.map(p => p.points), [
+    [3580, -12614, 3580, -3640],
+    [3700, -12614, 3700, -3640],
+  ], '棟木は x=3640 の軸から ±60 の2本（実寸 120 角）、端は y1/y2');
+  const purlins = kindOf(prims, 'purlin');
+  assert.deepEqual(purlins.map(p => p.points[0]), [910, 1820, 2730, 4550, 5460, 6370], '母屋 x=910・1820・2730・4550・5460・6370');
+  for (const p of purlins) {
+    assert.equal(p.points[0], p.points[2], '縦線');
+    assert.deepEqual([p.points[1], p.points[3]], [-12614, -3640], '端は屋根範囲の辺まで（軒の出は描かない）');
+  }
+  assert.equal(kindOf(prims, 'strut').length, 0, 'host 梁が無ければ束は無い');
+  assert.equal(new Set(prims.map(p => p.key)).size, prims.length, 'key は一意');
+});
+
+test('roofFramingPrimitives: 束は母屋・棟木と host 梁の全交点に半径45（母屋90角の半分）で出る（東西の軒桁 y=-3640・-12614 で 7×2=14 か所）', () => {
+  const hostBeams = [
+    { isVertical: false, axis: -3640, lo: 0, hi: 7280 },
+    { isVertical: false, axis: -12614, lo: 0, hi: 7280 },
+  ];
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.DETAIL, baseArgs({ hostBeams }));
+  const struts = kindOf(prims, 'strut');
+  assert.equal(struts.length, 14);
+  for (const s of struts) assert.equal(s.radius, 45);
+  const at = y => struts.filter(s => s.y === y).map(s => s.x).sort((a, b) => a - b);
+  assert.deepEqual(at(-3640), [910, 1820, 2730, 3640, 4550, 5460, 6370]);
+  assert.deepEqual(at(-12614), [910, 1820, 2730, 3640, 4550, 5460, 6370]);
+  assert.deepEqual(struts[0], { kind: 'strut', key: 'main:strut:0', x: 910, y: -12614, radius: 45 }, '型と座標を固定');
+});
+
+test('roofFramingPrimitives: 母屋・棟木と交わらない host 梁（範囲外・平行）には束が立たない', () => {
+  const hostBeams = [
+    { isVertical: false, axis: -3640, lo: 0, hi: 1000 },      // x=910 の母屋だけに届く
+    { isVertical: true, axis: 3640, lo: -12614, hi: -3640 },  // 棟木と平行（重なり）
+    { isVertical: false, axis: -2000, lo: 0, hi: 7280 },      // 屋根範囲の外（y が範囲外）
+  ];
+  const struts = kindOf(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ hostBeams })), 'strut');
+  assert.deepEqual(struts.map(s => [s.x, s.y]), [[910, -3640]]);
+});
+
+test('roofFramingPrimitives: 片流れは棟木なし・母屋は低い側の軒から910ごと（高い側 top: y=2090・1180・270）', () => {
+  const region = { key: 'lean:r1', rect: { x1: 0, y1: 0, x2: 9000, y2: 3000 }, shape: 'mono', ridgeIsVertical: false, highSide: 'top' };
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] }));
+  assert.equal(kindOf(prims, 'ridge').length, 0);
+  assert.deepEqual(kindOf(prims, 'purlin').map(p => p.points), [
+    [0, 270, 9000, 270], [0, 1180, 9000, 1180], [0, 2090, 9000, 2090],
+  ]);
+});
+
+test('roofFramingPrimitives: 寄棟は軒から910ごとの環状の母屋（2周×4辺）と、長さ（長辺−短辺）の棟木2本線', () => {
+  const region = { key: 'main', rect: { x1: 0, y1: 0, x2: 7280, y2: 5460 }, shape: 'hip', ridgeIsVertical: false, highSide: null };
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] }));
+  assert.deepEqual(kindOf(prims, 'ridge').map(p => p.points), [
+    [2730, 2670, 4550, 2670], [2730, 2790, 4550, 2790],
+  ], '棟木は y=2730 の軸 ±60、x は 2730〜4550（長さ 7280−5460=1820）');
+  assert.equal(kindOf(prims, 'purlin').length, 8);
+});
+
+test('roofFramingPrimitives: 複数 region（主屋根＋下屋）は region の key で区別され、それぞれの線が出る', () => {
+  const lean = { key: 'lean:r1', rect: { x1: 0, y1: 0, x2: 9000, y2: 3000 }, shape: 'mono', ridgeIsVertical: false, highSide: 'top' };
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [gableRegion, lean] }));
+  assert.equal(prims.filter(p => p.key.startsWith('main:')).length, 8);
+  assert.equal(prims.filter(p => p.key.startsWith('lean:r1:')).length, 3);
+});
+
+test('【失敗系】roofFramingPrimitives: 略図（SCHEMATIC）は region・host があっても空', () => {
+  const hostBeams = [{ isVertical: false, axis: -3640, lo: 0, hi: 7280 }];
+  assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.SCHEMATIC, baseArgs({ hostBeams })), []);
+});
+
+test('【失敗系】roofFramingPrimitives: 非在来6種＋未知値・未定義の drawing は常に空（LOD・region・host が正常でも）', () => {
+  const hostBeams = [{ isVertical: false, axis: -3640, lo: 0, hi: 7280 }];
+  for (const key of NON_TRADITIONAL_KEYS) {
+    assert.deepEqual(roofFramingPrimitives(rulesFor(key).drawing, LodLevel.STANDARD, baseArgs({ hostBeams })), [], key);
+  }
+  for (const drawing of [{}, undefined, null, { roofFramingLines: 'unknown' }, { roofFramingLines: 'none' }]) {
+    assert.deepEqual(roofFramingPrimitives(drawing, LodLevel.STANDARD, baseArgs({ hostBeams })), [], String(drawing));
+  }
+});
+
+test('【失敗系】roofFramingPrimitives: region が空・undefined・null なら空。陸屋根・棟違いの region は線を持たない', () => {
+  for (const regions of [[], undefined, null]) {
+    assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions })), []);
+  }
+  for (const shape of ['flat', 'staggered']) {
+    const region = { ...gableRegion, shape };
+    assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] })), [], shape);
+  }
+});
+
+test('【失敗系】roofFramingPrimitives: 幅が不正（0・負・NaN・未指定）は RangeError', () => {
+  for (const bad of [0, -120, NaN, undefined]) {
+    assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ ridgeWidthMm: bad })), RangeError, `ridge ${bad}`);
+    assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ purlinWidthMm: bad })), RangeError, `purlin ${bad}`);
+  }
+  assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ purlinPitchMm: 0 })), RangeError, 'ピッチ 0');
+});
+
+test('showRoofFraming: 在来木造の略図以外だけ true。ROOF_FRAMING_DASH は中心線と同じ一点鎖線 [12,4,2,4]', () => {
+  assert.equal(showRoofFraming(WOOD_DRAWING, LodLevel.STANDARD), true);
+  assert.equal(showRoofFraming(WOOD_DRAWING, LodLevel.DETAIL), true);
+  assert.equal(showRoofFraming(WOOD_DRAWING, LodLevel.SCHEMATIC), false);
+  for (const key of NON_TRADITIONAL_KEYS) assert.equal(showRoofFraming(rulesFor(key).drawing, LodLevel.DETAIL), false, key);
+  assert.deepEqual([...ROOF_FRAMING_DASH], [12, 4, 2, 4]);
+});
+
+test('roofFramingWidths: 在来木造は棟木120・母屋90。framing が無い（非在来）・断面がカタログに無いときは null', () => {
+  assert.deepEqual(roofFramingWidths(WOOD_FRAMING), { ridgeWidthMm: 120, purlinWidthMm: 90 });
+  for (const key of NON_TRADITIONAL_KEYS) assert.equal(roofFramingWidths(rulesFor(key).framing), null, key);
+  assert.equal(roofFramingWidths(undefined), null);
+  assert.equal(roofFramingWidths({ ...WOOD_FRAMING, ridgeSection: 'NO-SUCH' }), null);
+  assert.equal(roofFramingWidths({ ...WOOD_FRAMING, purlinSection: 'NO-SUCH' }), null);
+});
+
+test('roofFramingHostMembers: role primary かつ材種が主構造の梁だけを芯々（axisValue・clStart/clEnd の effectiveValue）で写す。床梁・小梁・基礎梁・他材種は除く', () => {
+  const beam = (over) => ({
+    role: 'primary', materialType: 'WOOD', isVertical: false, axisValue: -3640,
+    clStart: { effectiveValue: 7280 }, clEnd: { effectiveValue: 0 }, ...over,
+  });
+  const beams = [
+    beam({}),
+    beam({ role: 'floor', axisValue: 1 }),
+    beam({ role: 'secondary', axisValue: 2 }),
+    beam({ role: 'foundation', axisValue: 3 }),
+    beam({ role: 'eaves', axisValue: 4 }),
+    beam({ materialType: 'STEEL', axisValue: 5 }),
+    beam({ isVertical: true, axisValue: 910, clStart: { effectiveValue: -12614 }, clEnd: { effectiveValue: -3640 } }),
+  ];
+  assert.deepEqual(roofFramingHostMembers(beams, 'WOOD'), [
+    { isVertical: false, axis: -3640, lo: 0, hi: 7280 },
+    { isVertical: true, axis: 910, lo: -12614, hi: -3640 },
+  ]);
+  assert.deepEqual(roofFramingHostMembers(undefined, 'WOOD'), []);
+});
+
+test('roofFramingHostMembers → roofFramingPrimitives: 床梁（role floor）の上には束が立たない（呼び出し側の絞り込み）', () => {
+  const mk = role => ({
+    role, materialType: 'WOOD', isVertical: false, axisValue: -3640,
+    clStart: { effectiveValue: 0 }, clEnd: { effectiveValue: 7280 },
+  });
+  const count = role => kindOf(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD,
+    baseArgs({ hostBeams: roofFramingHostMembers([mk(role)], 'WOOD') })), 'strut').length;
+  assert.equal(count('primary'), 7);
+  assert.equal(count('floor'), 0);
 });
