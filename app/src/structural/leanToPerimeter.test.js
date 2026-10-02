@@ -113,9 +113,12 @@ async function readSrc(name) {
   return fs.readFileSync(path.join(here, name), 'utf8');
 }
 
-test('【配線】structuralRecompute.js: 実体階だけ roofCellKeys を導き、自階ゲートと autoFillStructuralGrid（床梁）へ渡す', async () => {
+test('【配線】structuralRecompute.js: 実体階だけ下屋を1回導き（C2d-2）、セルキーを自階ゲートと autoFillStructuralGrid（床梁）へ、region を小屋梁の生成へ渡す', async () => {
   const src = await readSrc('structuralRecompute.js');
-  assert.ok(/^\s{2}const roofCellKeys = isRoof \? undefined : withGraphReadScope\(targetGraph, \(\) => leanToFramingCellKeys\(targetGraph, project\)\);$/m.test(src), 'roofCellKeys の導出行');
+  assert.ok(/^\s{2}const leanTo = isRoof \? null : withGraphReadScope\(targetGraph, \(\) => leanToFraming\(targetGraph, project\)\);$/m.test(src), '下屋の導出行（1回だけ）');
+  assert.ok(/^\s{2}const roofCellKeys = leanTo\?\.cellKeys;$/m.test(src), 'roofCellKeys は導出の cellKeys');
+  assert.ok(/^\s{2}const roofRegions = isRoof \? \(mainRegion \? \[mainRegion\] : \[\]\) : leanTo\.regions;$/m.test(src), '実体階は下屋の regions を小屋梁の生成へ渡す（屋根専用平面は主屋根の region のまま）');
+  assert.equal((src.match(/leanToFraming\(/g) ?? []).length, 1, '下屋の導出は1回（部屋を二重に走査しない）');
   assert.ok(/^\s{2}const selfGate = buildSelfFootprintGate\(isRoof \? \(belowGraph \?\? targetGraph\) : targetGraph, footprintCache, \{ roofPerimeterCellKeys: roofCellKeys \}\);$/m.test(src), 'selfGate へ roofPerimeterCellKeys を渡す行');
   assert.ok(/aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys\)\);$/m.test(src), 'autoFillStructuralGrid へ roofCellKeys を渡す行');
 });

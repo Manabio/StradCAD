@@ -70,11 +70,24 @@ export function leanToFramingRegions(graph, project) {
  * それぞれの下屋の外周として扱うため。
  */
 export function leanToFramingCellKeys(graph, project) {
+  return cellKeysOfEntries(leanToFramingEntries(graph, project), graph);
+}
+
+function cellKeysOfEntries(entries, graph) {
   const keys = new Map();
-  for (const { room, region } of leanToFramingEntries(graph, project)) {
+  for (const { room, region } of entries) {
     for (const key of refreshCells(room.cells, graph)) keys.set(key, region.key);
   }
   return keys;
+}
+
+/**
+ * 実体階の再計算が1回の部屋の走査で両方を得る入口: 下屋の region 群（小屋梁の生成。woodRoofFraming.js）と
+ * セルキー（外周の梁・床梁のガード）。結果は leanToFramingRegions・leanToFramingCellKeys と同じ。
+ */
+export function leanToFraming(graph, project) {
+  const entries = leanToFramingEntries(graph, project);
+  return { regions: entries.map(e => e.region), cellKeys: cellKeysOfEntries(entries, graph) };
 }
 
 /**

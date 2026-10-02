@@ -655,8 +655,8 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null, below
  *  自動生成済みの既存LG（dimensionStatus:'auto'）が残っていれば撤去する（QA指摘F1是正。下階の階段が
  *  消えた等で有効な源が0件になった場合の後始末）。
  *  roofRegions: 小屋梁（role:'roofBeam'。woodRoofFraming.js autoFillWoodRoofFraming）を載せる小屋組の region 群
- *  （roofFramingRegions.js。主屋根は呼び出し側が最上階の graph から導く）。省略時（undefined）は小屋梁に一切
- *  触れない（実体階など小屋組を扱わない呼び出し）。[] なら auto の小屋梁を撤去する。
+ *  （roofFramingRegions.js。主屋根は呼び出し側が最上階の graph から、下屋は実体階の自階 graph から導く）。
+ *  省略時（undefined）は小屋梁に一切触れない（小屋組を扱わない呼び出し）。[] なら auto の小屋梁を撤去する。
  *  roofCellKeys: 小屋組の対象の下屋のセルキー集合（roofFramingRegions.js leanToFramingCellKeys）。床梁
  *  （autoFillWoodFloorBeams）へそのまま素通しし、その区画には床梁を作らない。省略時は従来どおり。 */
 export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined) {
@@ -746,8 +746,9 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
         ? autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache)
         : autoFillRoofBeams(graph, project, belowMainStructure, wallGate))
     : { created: [], removed: [] };
-  // 小屋梁（在来木造の主屋根。ステップC2b）。軒桁・頭つなぎ（role:'primary'）の生成・撤去が確定した直後に呼ぶ——
-  // 小屋梁の位置・端の host は確定済みの大梁を前提にするため。roofRegions===undefined（実体階）は何もしない。
+  // 小屋梁（在来木造の主屋根・下屋。ステップC2b・C2d-2）。軒桁・頭つなぎ・壁線の通し梁（role:'primary'）の
+  // 生成・撤去が確定した直後に呼ぶ——小屋梁の位置・端の host は確定済みの大梁を前提にするため。
+  // roofRegions===undefined は何もしない。
   const roofFramingResult = autoFillWoodRoofFraming(graph, project, roofRegions);
   const newRoofBeams = [...roofBeamsResult.created, ...roofFramingResult.created];
   const removedRoofBeams = [...roofBeamsResult.removed, ...roofFramingResult.removed];

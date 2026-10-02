@@ -2,8 +2,9 @@
 // 設計意図: .claude/structural-model.md「小屋組」の節の表「小屋梁が入る集合・外れる集合」。
 // 生成処理（C2b）はまだ無い——合成graphに小屋梁を1本置いて各処理を通し、表どおり
 // 「ホワイトリスト方式の集合には入らない（＝巻き込まれない）」「既定で入る集合には入る」を固定する。
-// 構造再計算（recomputeStructuralForGraph）を通しても、手で置いた auto の小屋梁が
-// 撤去されず・成を書き換えられず・柱を生まず・他の梁を分割しないこと、が主題。
+// 構造再計算（recomputeStructuralForGraph）を通しても、手で置いた小屋梁が柱を生まず・他の梁を分割しないこと、が主題。
+// （C2d-2 以降、下屋の region が無い実体階の再計算は auto の小屋梁を撤去する。残る・書き換えられない側は locked で固定する。
+// 生成そのものは woodRoofFraming.test.js・leanToRoofBeams.test.js。）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -101,7 +102,11 @@ const putRoofBeam = (role, status = 'auto', section = 'WOOD-120x210') => (g2, { 
   return [b];
 };
 
-test('【C2a統合】構造再計算を通しても、auto の小屋梁は撤去されず・断面は小屋梁の成の表（スパン1820→120）で書かれ・柱を生まず・他の梁を分割せず、変化0件に収束する', async () => {
+// 【C2d-2 で書き換え・2026-10-03】C2a〜C2c 時点は「実体階に手で置いた auto の小屋梁は撤去されず、成の表で書かれる」を
+// 固定していた。C2d-2 で実体階も region（下屋が無ければ []）を渡すため、region に無い auto の小屋梁は撤去される
+// （成の表で書かれる側は、下屋の region を持つ leanToRoofBeams.test.js が固定する）。元の主題（小屋梁は柱を生まず・
+// 他の梁を分割せず・変化0件に収束する）は保つ——撤去された後も他の部材が小屋梁の有無で一致することを見る。
+test('【C2a統合】構造再計算を通すと、下屋の無い実体階に置いた auto の小屋梁は撤去され（region []）、柱を生まず・他の梁を分割せず、変化0件に収束する', async () => {
   const base = buildTwoFloors(null);
   const withRoof = buildTwoFloors(putRoofBeam('roofBeam'));
   const [roofBeam] = withRoof.placed;
@@ -110,23 +115,37 @@ test('【C2a統合】構造再計算を通しても、auto の小屋梁は撤去
   await withPeek(base.project, [base.g1, base.g2], () => sweep(base.project, base.g1, base.g2));
   const changes = await withPeek(withRoof.project, [withRoof.g1, withRoof.g2], () => sweep(withRoof.project, withRoof.g1, withRoof.g2));
 
-  // 誰にも触られない
-  assert.equal(withRoof.g2.beamMap.get(roofBeam.id), roofBeam, '撤去も作り直しもされない（同一インスタンスのまま）');
-  // 【C2c で書き換え・2026-10-02】C2a 時点は「断面は書き換えられない（120x210 のまま）」。C2c で小屋梁の成の表が
-  // 入ったため、スパン1820（支持点は両端のみ）の auto の小屋梁は表の最小値 120 へ書かれる（柱・他の梁・収束は不変のまま）。
-  assert.equal(roofBeam.sectionDefId, 'WOOD-120x120', '断面は小屋梁の成の表（スパン1820→120）で書かれる');
-  assert.equal(roofBeam.woodAutoDepthMm, null, '梁成表の表示用の値も書かれない');
-  assert.equal(roofBeam.woodDepthFollowsManual, null);
-  assert.deepEqual([roofBeam.clStart.id, roofBeam.clEnd.id], [withRoof.g2.centerLines.find(c => c.value === 0 && c.centerLineType === CenterLineType.HORIZONTAL).id, withRoof.g2.centerLines.find(c => c.value === 1820 && c.centerLineType === CenterLineType.HORIZONTAL).id], '端のCLも不変（他の梁を分割する再割付けもない）');
+  assert.equal(withRoof.g2.beamMap.has(roofBeam.id), false, '下屋の region が無い実体階では auto の小屋梁は撤去される');
+  assert.equal(withRoof.g2.beams.filter(b => b.role === 'roofBeam').length, 0);
+  assert.equal(changes[0][0], true, '撤去は最初の再計算の changed に乗る（保存・undo の判定から漏れない）');
 
   // 他の部材は小屋梁の有無で一致する（柱を生まない・他の梁を分割しない・他の梁の成に影響しない）
   assert.deepEqual(columnLines(withRoof.g1), columnLines(base.g1), '1階の柱は小屋梁の有無で同じ');
   assert.deepEqual(columnLines(withRoof.g2), columnLines(base.g2), '2階の柱も同じ');
   assert.deepEqual(beamLines(withRoof.g1), beamLines(base.g1), '1階の梁は同じ');
   assert.deepEqual(beamLines(withRoof.g2), beamLines(base.g2), '2階の他の梁（分割・成）は同じ');
-  assert.equal(withRoof.g2.beams.filter(b => b.role === 'roofBeam').length, 1, '小屋梁は増えも減りもしない');
 
   // 収束: 3周目は両階とも changed=false
+  assert.deepEqual(changes[2], [false, false], `3周目で変化0件に収束: ${JSON.stringify(changes)}`);
+});
+
+// 【C2d-2 で追加】上の auto の小屋梁を locked にした版。locked は region に無くても保持され、成の表でも書かれない
+// （C2a〜C2c で auto が担っていた「撤去・書き換えされない」の固定は、手動固定の小屋梁の保持として引き継ぐ）。
+test('【C2a統合】下屋の無い実体階でも、locked の小屋梁は撤去も断面の書き換えもされず、柱を生まず・他の梁を分割せず、変化0件に収束する', async () => {
+  const base = buildTwoFloors(null);
+  const withRoof = buildTwoFloors(putRoofBeam('roofBeam', 'locked'));
+  const [roofBeam] = withRoof.placed;
+
+  await withPeek(base.project, [base.g1, base.g2], () => sweep(base.project, base.g1, base.g2));
+  const changes = await withPeek(withRoof.project, [withRoof.g1, withRoof.g2], () => sweep(withRoof.project, withRoof.g1, withRoof.g2));
+
+  assert.equal(withRoof.g2.beamMap.get(roofBeam.id), roofBeam, '撤去も作り直しもされない（同一インスタンスのまま）');
+  assert.equal(roofBeam.sectionDefId, 'WOOD-120x210', 'locked は成の表でも書かれない');
+  assert.deepEqual([roofBeam.clStart.id, roofBeam.clEnd.id], [withRoof.g2.centerLines.find(c => c.value === 0 && c.centerLineType === CenterLineType.HORIZONTAL).id, withRoof.g2.centerLines.find(c => c.value === 1820 && c.centerLineType === CenterLineType.HORIZONTAL).id], '端のCLも不変（他の梁を分割する再割付けもない）');
+  assert.deepEqual(columnLines(withRoof.g1), columnLines(base.g1), '1階の柱は小屋梁の有無で同じ');
+  assert.deepEqual(columnLines(withRoof.g2), columnLines(base.g2), '2階の柱も同じ');
+  assert.deepEqual(beamLines(withRoof.g1), beamLines(base.g1), '1階の梁は同じ');
+  assert.deepEqual(beamLines(withRoof.g2), beamLines(base.g2), '2階の他の梁は同じ');
   assert.deepEqual(changes[2], [false, false], `3周目で変化0件に収束: ${JSON.stringify(changes)}`);
 });
 
@@ -140,13 +159,20 @@ test('【C2a統合・検出力】対照: 同じ位置・同じ端の梁を locke
   assert.equal(roofLocked.g2.beams.filter(b => b.role === 'roofBeam').length, 1, 'locked の小屋梁は保持される');
 });
 
-test('【C2a統合】auto の小屋梁は、主構造を木造から変えても材種変換されず断面も不変（撤去は生成ステップC2bの責務）', async () => {
+// 【C2d-2 で書き換え・2026-10-03】C2a 時点は auto の小屋梁が S造へ変えても残ることを固定していた。C2d-2 で実体階も
+// region（非在来は [] ）を渡すため auto は撤去される。「材種変換されず断面も不変」の主題は locked の小屋梁で保つ。
+test('【C2a統合】主構造を木造から変えると、auto の小屋梁は撤去され（非在来は region []）、locked の小屋梁は材種変換されず断面も不変', async () => {
   const d = buildTwoFloors(putRoofBeam('roofBeam'));
   const [roofBeam] = d.placed;
   d.g2.structureOverride = 'S造';
   await withPeek(d.project, [d.g1, d.g2], async () => { await recomputeStructuralForGraph(d.g2, d.project, 'S造'); });
-  const after = d.g2.beamMap.get(roofBeam.id);
-  assert.ok(after, 'S造へ切替えても小屋梁は消えない（C2a時点。表Aの対象外）');
+  assert.equal(d.g2.beamMap.has(roofBeam.id), false, 'S造へ切替えると auto の小屋梁は撤去される（在来でなければ region が無い）');
+
+  const locked = buildTwoFloors(putRoofBeam('roofBeam', 'locked'));
+  locked.g2.structureOverride = 'S造';
+  await withPeek(locked.project, [locked.g1, locked.g2], async () => { await recomputeStructuralForGraph(locked.g2, locked.project, 'S造'); });
+  const after = locked.g2.beamMap.get(locked.placed[0].id);
+  assert.ok(after, 'locked の小屋梁は S造へ切替えても消えない（表Aの対象外）');
   assert.equal(after.materialType, WOOD);
   assert.equal(after.sectionDefId, 'WOOD-120x210');
 });
@@ -264,6 +290,8 @@ test('【C2a・既知】autoFillWoodWallBeams の「占有物」判定は role �
   const d = buildTwoFloors((g2, { x0, x1, y0 }) => [g2.addBeam(WOOD, 'WOOD-120x210', y0, false, x0, x1, { role: 'roofBeam', beamType: '小屋梁' })]);
   const [roofBeam] = d.placed;
   await withPeek(d.project, [d.g1, d.g2], async () => { await recomputeStructuralForGraph(d.g2, d.project, TRADITIONAL_WOOD_STRUCTURE); });
+  // C2d-2 以降、下屋の無い実体階では region 無し（[]）でも auto の小屋梁は撤去される——この「撤去される」側の表明は
+  // 占有物判定だけを区別できなくなった（locked 側の「残って大梁を止める」表明が占有物判定の検出力を持つ）。
   assert.equal(d.g2.beamMap.has(roofBeam.id), false, '占有物として撤去される（現状の挙動）');
   assert.ok(d.g2.beams.some(b => b.role === 'primary' && Math.abs(b.axisValue) < 1 && !b.isVertical), '代わりに壁線の大梁が立つ');
   // 対照: locked の小屋梁は占有物として残り、その区間の大梁は生成されない（手動固定が勝つ）

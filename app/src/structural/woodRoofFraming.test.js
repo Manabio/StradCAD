@@ -1,4 +1,5 @@
-// woodRoofFraming.js（在来木造の小屋梁の自動生成。ステップC2b。主屋根の切妻・片流れ）の単体＋統合テスト。
+// woodRoofFraming.js（在来木造の小屋梁の自動生成。ステップC2b・C2d-2。主屋根・下屋の切妻・片流れ）の単体＋統合テスト。
+// 下屋（実体階へ載せる小屋梁）の統合テストは leanToRoofBeams.test.js。
 // 設計意図: .claude/structural-model.md「小屋梁」の節。実 core.js（Plane/PlanGraph）を使う。
 // 位置の幾何の純関数（roofFramingGeometry.js）は別テスト。ここは graph の読み書き（host・区切り・冪等・撤去・除外集合）。
 import { test } from 'node:test';
@@ -210,6 +211,38 @@ test('【失敗系】寄棟は、母屋が無く棟木1本だけで線の向き�
   // 対照: 同じ範囲を切妻にすれば、棟木（縦）を支えるために小屋梁ができる。
   const gable = { ...smallHip, shape: RoofShape.GABLE };
   assert.ok(autoFillWoodRoofFraming(graph, PROJECT, [gable]).created.length >= 1, '対照: 切妻なら小屋梁ができる（寄棟だから止まっている）');
+});
+
+test('【C2d-2】小屋梁は region の範囲の中の host の間にだけ作る（範囲の外の大梁へ延びない＝隣の部屋・別の下屋へはみ出さない）', () => {
+  // 縦の大梁が x=0・1820・3640 にある屋根で、region は左半分（x 0..1820）だけ。片流れ（高い側＝左）＝母屋は縦線。
+  const { graph } = makeRoof({ mid: true });
+  const half = { key: 'lean:half', rect: { x1: 0, y1: 0, x2: 1820, y2: 7280 }, shape: RoofShape.MONO, ridgeIsVertical: true, highSide: RoofHighSide.LEFT };
+  autoFillWoodRoofFraming(graph, PROJECT, [half]);
+  assert.deepEqual(descs(graph), ['y=1820:0..1820', 'y=3640:0..1820', 'y=5460:0..1820'], '範囲の外（x 1820..3640）には作らない');
+});
+
+test('【失敗系・C2d-2】region の rect が退化（幅0・高さ0）・NaN・欠落でも例外を投げず、小屋梁を作らない（既存の auto の小屋梁は region 無しと同じく撤去）', () => {
+  const bad = {
+    '幅0': { x1: 1820, y1: 0, x2: 1820, y2: 7280 },
+    '高さ0': { x1: 0, y1: 3640, x2: 3640, y2: 3640 },
+    NaN: { x1: NaN, y1: 0, x2: 3640, y2: 7280 },
+    '欠落': undefined,
+  };
+  for (const [name, badRect] of Object.entries(bad)) {
+    for (const shape of [RoofShape.GABLE, RoofShape.MONO]) {
+      const { graph } = makeRoof();
+      const region = { key: 'lean:bad', rect: badRect, shape, ridgeIsVertical: true, highSide: shape === RoofShape.MONO ? RoofHighSide.LEFT : null };
+      let result;
+      assert.doesNotThrow(() => { result = autoFillWoodRoofFraming(graph, PROJECT, [region]); }, `${name}・${shape}`);
+      assert.deepEqual(result, { created: [], removed: [] }, `${name}・${shape}: 作らない`);
+      assert.equal(roofBeams(graph).length, 0);
+    }
+  }
+  const { graph } = makeRoof();
+  autoFillWoodRoofFraming(graph, PROJECT, [GABLE]);
+  assert.equal(roofBeams(graph).length, 3, '前提: 正常な region なら作る');
+  const res = autoFillWoodRoofFraming(graph, PROJECT, [{ ...GABLE, rect: { x1: NaN, y1: 0, x2: 3640, y2: 7280 } }]);
+  assert.equal(res.removed.length, 3, '不正な region は region 無しと同じ＝既存の auto を撤去');
 });
 
 test('regions===undefined は、小屋梁でない梁（軒桁）にも一切触れない', () => {
@@ -656,7 +689,11 @@ test('【統合】recomputeStructuralForGraph: 主屋根を陸屋根→切妻へ
   }
 });
 
-test('【統合】実体階（最上階）の再計算は小屋梁に触れない（regions を渡さない＝I-C3）', async () => {
+// 【C2d-2 で書き換え・2026-10-03】C2b〜C2c 時点は「実体階の再計算は小屋梁に触れない（regions を渡さない＝I-C3）」を
+// 固定していた（手で置いた auto の小屋梁が実体階の再計算で撤去されない）。C2d-2 で実体階も下屋の region（下屋が無ければ
+// []）を渡すようになったため、region に無い auto の小屋梁は実体階でも撤去される。元の主題（実体階の再計算は屋根専用平面の
+// 小屋梁へ書かない・実体階に新しく小屋梁を作らない・小屋梁が柱を生まない）は保ち、撤去されない側は locked に置き換えた。
+test('【統合】実体階（最上階）の再計算は、下屋の無い階では auto の小屋梁を撤去し（region []）、locked は残す。屋根専用平面の小屋梁には触れず、新しく作らない', async () => {
   const { project, g1, roofGraph } = buildProject(RoofShape.GABLE);
   const original = floorSwapManager.peek;
   try {
@@ -664,15 +701,27 @@ test('【統合】実体階（最上階）の再計算は小屋梁に触れな�
     await converge(project, g1, roofGraph);
     const before = descs(roofGraph);
     assert.ok(before.length >= 1);
-    // 実体階に（手で）置いた auto の小屋梁は、実体階の再計算で撤去されない（regions===undefined は触れない）。
+    const colsBefore = colSig(g1);
     const cl = (type, v) => g1.centerLines.find(c => c.centerLineType === type && c.value === v);
-    const planted = g1.addBeam(WOOD, 'WOOD-120x120', cl(CenterLineType.HORIZONTAL, 7280), false,
-      cl(CenterLineType.VERTICAL, 0), cl(CenterLineType.VERTICAL, 3640), { role: 'roofBeam', beamType: '小屋梁' });
-    // 最上階を単独で再計算しても、屋根の小屋梁は増減しない（最上階は屋根の graph に書かない）。
+    const put = (status) => {
+      const b = g1.addBeam(WOOD, 'WOOD-120x120', cl(CenterLineType.HORIZONTAL, 7280), false,
+        cl(CenterLineType.VERTICAL, 0), cl(CenterLineType.VERTICAL, 3640), { role: 'roofBeam', beamType: '小屋梁' });
+      if (status !== 'auto') b.setDimensionStatus(status);
+      return b;
+    };
+    // 実体階（下屋なし）に置いた auto の小屋梁は、実体階の再計算で撤去され、changed に乗る。
+    const planted = put('auto');
+    const r1 = await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.equal(g1.beamMap.has(planted.id), false, 'region 無し（下屋なし）の実体階では auto の小屋梁は撤去される');
+    assert.equal(r1.changed, true, '撤去が changed に乗る');
+    // locked は残る。実体階に新しく小屋梁は作らない（置いた1本だけ）。
+    const locked = put('locked');
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.ok(g1.beamMap.has(locked.id), 'locked の小屋梁は残る（作りも撤去もしない）');
+    assert.equal(roofBeams(g1).length, 1, '実体階に新しく小屋梁は作らない');
+    // 最上階を単独で再計算しても、屋根専用平面の小屋梁は増減しない（最上階は屋根の graph に書かない）。柱も生まない。
     assert.deepEqual(descs(roofGraph), before);
-    assert.ok(g1.beamMap.has(planted.id), '実体階の再計算は小屋梁に触れない（作りもせず、撤去もしない）');
-    assert.equal(roofBeams(g1).length, 1, '実体階に新しく小屋梁は作らない（置いた1本だけ）');
+    assert.deepEqual(colSig(g1), colsBefore, '小屋梁（auto・locked とも）は柱を生まない');
   } finally {
     floorSwapManager.peek = original;
   }

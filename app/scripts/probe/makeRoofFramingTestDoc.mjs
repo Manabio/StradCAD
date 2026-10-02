@@ -13,8 +13,11 @@
 //      **一致を要求するもの（exit 1）**: 壁・境界エッジ・footprint・展開図（屋根セルは壁側では部屋の無いセルと同値＝不変条件 I0）。
 //      **一致しなくなったもの（C2d-1 で意図して変わる）**: 柱・梁・スラブ・基礎。対象の下屋は外周に梁（軒桁）が出て、
 //      範囲に床梁が出ないため、「無割当と一致」は崩れる（makeRoofTestDoc.mjs は L字＝対象外・13＝S造なので今も一致する）。
-//      差は全件を表示し、次の期待を検査する: ①下屋の外周の各辺（屋内との境界を除く）に primary 梁が出る ②下屋の範囲に床梁が無い
-//      ③無割当との差に、梁の削除（床梁以外）・壁の差が無い。収束スイープ数は上限5。
+//      差は全件を表示し、次の期待を検査する: ①下屋の外周の各辺（屋内に接する辺は対象外。屋内に接しない辺のうち下の階に
+//      壁線がある辺だけが対象で、壁線が無い辺は「検査対象外」と表示）に primary 梁が出る ②下屋の範囲に床梁が無い
+//      ③無割当との差に、梁の削除（床梁以外）・壁の差が無い ④（C2d-2）下屋の階に小屋梁（role:'roofBeam'）が出て、向きが
+//      母屋・棟木と直交・成が小屋梁の成の表どおり（軸上に下の階の柱が無いもの）・全ての母屋・棟木で束の間隔が上限以下・
+//      下屋の無い階に小屋梁が無い。収束スイープ数は上限5。
 //   6. 目視用: 導かれる region（形状・高い側・棟）・母屋の位置・束の位置（外周の梁ができる前後）を出す。
 //   7. 書いて読み直したダイジェスト一致を確認してから保存する。
 //
@@ -41,6 +44,7 @@ import { wallBackingCenters, mapBackingCenterMoves } from '../../src/structural/
 import { followWallBeamAxes } from '../../src/structural/wallBeamAxisFollow.js';
 import { leanToFramingRegions } from '../../src/structural/roofFramingRegions.js';
 import { roofFramingLines, roofStrutPoints } from '../../src/structural/roofFramingGeometry.js';
+import { koyaBeamDepthForSpans } from '../../src/structural/woodFraming.js';
 import { roofFramingHostMembers } from '../../src/structural/framingDrawing.js';
 import { rulesFor, effectiveStructure } from '../../src/structural/structureRules.js';
 import { FinishModeState } from '../../src/modes/FinishModeState.js';
@@ -464,22 +468,35 @@ if (region) {
     for (const [s, e] of spans) { if (s > at + 1) break; at = Math.max(at, e); }
     return at >= hi - 1;
   };
-  const lowerWallRuns = (isVertical, coord) => {
-    const lowerG = roof.project.graphMap.get(adoptedPlanes(roof.project)[TARGET.planeIndex - 1].id);
-    return lowerG.walls.filter(w => w.isVertical === isVertical && Math.abs(w.axisValue - coord) < 80);
+  const lowerPlane = adoptedPlanes(roof.project)[TARGET.planeIndex - 1];
+  const lowerG = roof.project.graphMap.get(lowerPlane.id);
+  const lowerWallRuns = (isVertical, coord) => lowerG.walls.filter(w => w.isVertical === isVertical && Math.abs(w.axisValue - coord) < 80);
+  // 屋内に接する辺か: 辺の外側（屋根範囲の外）50mm の点を 100mm ごとに調べ、1点でも実在の屋内部屋（自階）なら接する。
+  // 接しない辺だけが外周の梁の検査対象（屋内との境界は従来どおり。屋根範囲の内側の梁は無い）。
+  const ownMap = buildCellToRoom(roofGraph2F);
+  const touchesIndoor = (isVertical, coord, lo, hi, outward) => {
+    for (let t = lo + 50; t < hi; t += 100) {
+      const [x, y] = isVertical ? [coord + outward * 50, t] : [t, coord + outward * 50];
+      if (isRealIndoor(roomAtPoint(roofGraph2F, ownMap, x, y))) return true;
+    }
+    return false;
   };
   console.log('--- 下屋の外周の各辺（上＝y小・下＝y大・左＝x小・右＝x大）---');
-  for (const [name, isVertical, coord, lo, hi] of [
-    ['上辺', false, R.y1, R.x1, R.x2], ['下辺', false, R.y2, R.x1, R.x2], ['左辺', true, R.x1, R.y1, R.y2], ['右辺', true, R.x2, R.y1, R.y2],
+  for (const [name, isVertical, coord, lo, hi, outward] of [
+    ['上辺', false, R.y1, R.x1, R.x2, -1], ['下辺', false, R.y2, R.x1, R.x2, 1], ['左辺', true, R.x1, R.y1, R.y2, -1], ['右辺', true, R.x2, R.y1, R.y2, 1],
   ]) {
-    const hasWall = lowerWallRuns(isVertical, coord).length > 0;
-    console.log(`  ${name}（${isVertical ? 'x' : 'y'}=${coord}、${lo}..${hi}）: primary 梁 ${covers(isVertical, coord, lo, hi) ? '全長あり' : '全長はない'}（1階の壁線${hasWall ? 'あり' : 'なし'}）`);
-  }
-  const perimeterExterior = [
-    ['下辺', false, R.y2, R.x1, R.x2], ['右辺', true, R.x2, R.y1, R.y2],
-  ].filter(([, isV, c]) => lowerWallRuns(isV, c).length > 0);
-  for (const [name, isVertical, coord, lo, hi] of perimeterExterior) {
-    if (!covers(isVertical, coord, lo, hi)) fail(`下屋の外周（${name}）に primary 梁が全長に出ていない`);
+    const head = `  ${name}（${isVertical ? 'x' : 'y'}=${coord}、${lo}..${hi}）`;
+    const hasBeam = covers(isVertical, coord, lo, hi);
+    if (touchesIndoor(isVertical, coord, lo, hi, outward)) {
+      console.log(`${head}: 屋内に接する辺（検査対象外）。primary 梁 ${hasBeam ? '全長あり' : '全長はない'}`);
+      continue;
+    }
+    if (lowerWallRuns(isVertical, coord).length === 0) {
+      console.log(`${head}: 屋内に接しないが、下の階（${lowerPlane.name}）に壁線が無い辺（検査対象外）。primary 梁 ${hasBeam ? '全長あり' : '全長はない'}`);
+      continue;
+    }
+    console.log(`${head}: 屋内に接せず下の階に壁線あり（検査対象）。primary 梁 ${hasBeam ? '全長あり' : '全長はない'}`);
+    if (!hasBeam) fail(`下屋の外周（${name}）に primary 梁が全長に出ていない`);
   }
   // 範囲の床梁
   const floorInRoof = roofGraph2F.beams.filter(b => b.role === 'floor' && (b.isVertical
@@ -487,6 +504,37 @@ if (region) {
     : b.axisValue > R.y1 - 1 && b.axisValue < R.y2 + 1 && Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) < R.x2 - 1 && Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue) > R.x1 + 1));
   console.log(`  下屋の範囲に掛かる床梁: ${floorInRoof.length} 本${floorInRoof.length > 0 ? '（' + floorInRoof.map(beamLine).join(' / ') + '）' : ''}`);
   if (floorInRoof.length > 0) fail('下屋の範囲に床梁が残っている');
+
+  // ---- 下屋の小屋梁（C2d-2。この階の graph に role:'roofBeam'。位置・成・束の間隔）----
+  const koya = roofGraph2F.beams.filter(b => b.role === 'roofBeam');
+  console.log(`--- 下屋の小屋梁 ${koya.length} 本（${target.plane.name}） ---`);
+  if (koya.length === 0) fail('下屋に小屋梁が1本も出ていない（母屋の束が1820を超える形のはず）');
+  for (const b of [...koya].sort((p, q) => p.axisValue - q.axisValue)) {
+    const lo = Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue);
+    const hi = Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue);
+    // 成の期待: 軸上に下の階の柱が無ければ支持点は両端だけ＝小屋梁の成の表（woodFraming.js koyaBeamDepthForSpans）。柱があれば細かく割れて小さくなりうるので表示だけ。
+    const lowerOnAxis = lowerG.columns.filter(c => (b.isVertical ? Math.abs(c.axisX - b.axisValue) < 1 && c.axisY > lo + 1 && c.axisY < hi - 1
+      : Math.abs(c.axisY - b.axisValue) < 1 && c.axisX > lo + 1 && c.axisX < hi - 1));
+    const depth = Number(/x(\d+)$/.exec(b.sectionDefId ?? '')?.[1]);
+    const expect = koyaBeamDepthForSpans([lo, hi]);
+    console.log(`  ${beamLine(b)} host: ${clName(b.clStart)} → ${clName(b.clEnd)} ${b.dimensionStatus}（下の階の柱が軸上に ${lowerOnAxis.length} 本。表の成=${expect}）`);
+    if (lowerOnAxis.length === 0 && depth !== expect) fail(`小屋梁の成が表と一致しない: ${beamLine(b)}（表=${expect}）`);
+    if (b.isVertical !== !region.ridgeIsVertical) fail(`小屋梁の向きが母屋・棟木と直交していない: ${beamLine(b)}`);
+  }
+  // 束の間隔: 全ての母屋・棟木で、線の両端を含めた束の隣り合う間隔が上限以下
+  for (const line of [...ridges, ...purlins]) {
+    const alongs = [line.lo, line.hi, ...roofStrutPoints([line], roofFramingHostMembers(roofGraph2F.beams, rules.baseMaterial), tol).map(p => (line.isVertical ? p.y : p.x))]
+      .sort((p, q) => p - q);
+    const maxGap = Math.max(...alongs.slice(1).map((v, i) => v - alongs[i]));
+    console.log(`  束の最大間隔 ${line.isVertical ? 'x' : 'y'}=${line.coord}: ${maxGap}（上限 ${F.strutMaxPitchMm}）`);
+    if (maxGap > F.strutMaxPitchMm + tol) fail(`束の間隔が上限を超える: ${line.isVertical ? 'x' : 'y'}=${line.coord}（${maxGap}）`);
+  }
+  // 小屋梁は他の階（下屋の無い階）に出ない
+  for (const p of roof.project.planes) {
+    if (p.id === target.plane.id) continue;
+    const n = roof.project.graphMap.get(p.id).beams.filter(b => b.role === 'roofBeam').length;
+    if (n > 0) fail(`下屋の無い階 ${p.name} に小屋梁が ${n} 本ある`);
+  }
 }
 
 // ---- 往復テスト（書いて読み直して部屋・壁・柱のダイジェスト一致。屋根の部屋が残ることも確認）----

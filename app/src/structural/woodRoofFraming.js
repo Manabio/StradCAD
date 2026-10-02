@@ -1,5 +1,7 @@
 /**
- * 在来木造の小屋梁（role:'roofBeam'、beamType:'小屋梁'、記号KB）の自動生成（ステップC2b。主屋根の切妻・片流れだけ）。
+ * 在来木造の小屋梁（role:'roofBeam'、beamType:'小屋梁'、記号KB）の自動生成（ステップC2b・C2d-2。主屋根と
+ * 矩形の下屋の切妻・片流れ。下屋は実体階の graph へ、主屋根は屋根専用平面の graph へ載せる——位置・区切り・
+ * 成は同じ規則で、下屋専用の分岐は持たない）。
  * 設計意図は .claude/structural-model.md「小屋梁」の節。
  *
  * 小屋梁は母屋・棟木と直交する横架材で、各母屋・棟木の上で束の間隔（線の両端＝屋根範囲の辺を含む）が
@@ -16,7 +18,8 @@
  *  - I-C2（自分の出力を入力に数えない）: 位置を決める「支え」は role:'primary' の梁だけで、既存の roofBeam を含めない。
  *    既存の auto の小屋梁は spanKey が同じなら同じ実体を使い回す（id を変えない）。2回目の呼び出しは変化 0 件。
  *  - I-C3: regions===undefined なら小屋梁に一切触れない。
- *  - 他の階へは書かない（regions は呼び出し側が最上階の graph から導いたもの。この関数は自階 graph だけを読み書きする）。
+ *  - 他の階へは書かない（regions は呼び出し側が導いたもの＝主屋根は最上階の graph から、下屋は自階の graph から。
+ *    この関数は渡された graph だけを読み書きする）。
  *  - 毎回再生成の自動部材: 撤去は beamMap.delete を直接使う（graph.removeBeam は使わない＝excludedBeamSlots を汚さない）。
  *    対象は role:'roofBeam' で dimensionStatus==='auto' のみ（locked/calculated は保持）。
  *  - 除外集合は beamExclusionKey('roofBeam', …)（名前空間つき）。ユーザーが削除した小屋梁は再生成しない。
@@ -48,6 +51,9 @@ function planRegionSegments(graph, rules, region, primaries) {
   // 寄棟（環状の母屋）は後続（C2e）。形状で止める（母屋が無く棟木だけの小さな寄棟は線の向きが混在しないため、
   // 下の向きの混在チェックだけでは止まらない）。
   if (region.shape === RoofShape.HIP) return [];
+  // 不正な rect（欠落・NaN。roofFramingLines は有限でない座標を RangeError で拒む）は region 無しと同じに扱う。
+  const r = region.rect;
+  if (!r || ![r.x1, r.y1, r.x2, r.y2].every(Number.isFinite)) return [];
   const { ridges, purlins } = roofFramingLines({
     rect: region.rect, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, highSide: region.highSide,
     purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol,
@@ -109,17 +115,17 @@ function planRegionSegments(graph, rules, region, primaries) {
 
 /**
  * 小屋梁（role:'roofBeam'）を自動生成・撤去する。
- *  - regions===undefined: 何もしない（I-C3。実体階など、小屋組を扱わない呼び出し）。
+ *  - regions===undefined: 何もしない（I-C3。小屋組を扱わない呼び出し）。
  *  - 在来木造でない（rules.framing が無い）／regions が空: auto の小屋梁を全て撤去する。
  *  - region の形状が寄棟（C2e で扱う）: その region の小屋梁は作らない（既存の auto は撤去される）。
  *  - 候補に無くなった auto の小屋梁（屋根の入力や主構造の変更で不要になったもの）は撤去する。locked は保持。
  *  - 梁芯CLは位置に通り芯・既存の梁芯があればそれを、無ければ梁芯CL（由来 roofBeam）を作る（床梁と共有の
  *    wallBeamAxes.js ensureAutoBeamAxisCL）。除外座標（excludedWallBeamAxes）の位置には作らない。
  *    不要になった小屋梁由来の梁芯CLは撤去しない（孤児の梁芯を撤去しない既存の裁定。床梁・壁由来と同じ）。
- * @param {object} graph 屋根専用平面の graph（小屋梁を載せる平面）
+ * @param {object} graph 小屋梁を載せる平面の graph（主屋根＝屋根専用平面、下屋＝その屋根セルのある実体階）
  * @param {object} project
  * @param {Array<{key:string, rect:object, shape:string, ridgeIsVertical:boolean, highSide:string|null}>|undefined} regions
- *   roofFramingRegions.js の region（主屋根）。undefined なら何もしない
+ *   roofFramingRegions.js の region（主屋根・下屋）。undefined なら何もしない
  * @returns {{created: object[], removed: string[]}}
  */
 export function autoFillWoodRoofFraming(graph, project, regions) {
