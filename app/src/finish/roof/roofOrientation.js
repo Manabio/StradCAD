@@ -12,7 +12,7 @@ import { RoofShape } from '../../core/constants.js';
 import { footprintCellKeys } from '../../structural/wallGate.js';
 import { cellBoundsList } from '../gridCells.js';
 import { resolveRoofShape, roofRoomBounds } from './roofDefaults.js';
-import { rectOfBounds, roofHighSideView } from './roofGeometry.js';
+import { rectOfBounds, roofHighSideView, roofRidgeDirectionView } from './roofGeometry.js';
 
 const EPS = 1e-6;
 
@@ -57,4 +57,18 @@ export function roofHighSideViewOfRoom(room, graph) {
   const rect = rectOfBounds(boundsList);
   const adjacency = rect && shape === RoofShape.MONO ? roofEdgeInteriorAdjacency(rect, graph) : null; // 片流れ以外は使わない
   return roofHighSideView({ shape, highSide: spec?.highSide ?? null, rect, adjacency });
+}
+
+/**
+ * 下屋（屋根の Room）の「棟木の向き」の選択欄の表示判断。形状の実効値（resolveRoofShape）が切妻で屋根範囲が
+ * 矩形のときだけ visible。値は明示値（自動＝null）。
+ * @param {{ roofSpec: { shape: string|null, ridgeDirection: string|null }, cells: Set<string> }} room
+ * @param {object} graph 屋根のある階の graph
+ * @returns {{ visible: boolean, value: string|null }}
+ */
+export function roofRidgeDirectionViewOfRoom(room, graph) {
+  const spec = room.roofSpec;
+  const boundsList = roofRoomBounds(room, graph);
+  const shape = resolveRoofShape(spec, { boundsList });
+  return roofRidgeDirectionView({ shape, ridgeDirection: spec?.ridgeDirection ?? null, rect: rectOfBounds(boundsList) });
 }

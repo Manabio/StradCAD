@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape,
 } from '@core';
-import { roofEdgeInteriorAdjacency, roofHighSideViewOfRoom } from './roofOrientation.js';
+import { roofEdgeInteriorAdjacency, roofHighSideViewOfRoom, roofRidgeDirectionViewOfRoom } from './roofOrientation.js';
 import { createLeanToRoofSpec, roofRoomBounds } from './roofDefaults.js';
 import { rectOfBounds } from './roofGeometry.js';
 
@@ -159,6 +159,37 @@ test('【失敗系】roofHighSideViewOfRoom: 形状が片流れでない（明�
   const big = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
   const rb = big.roof([[0, 0], [1, 0], [0, 1], [1, 1]]);
   assert.deepEqual(roofHighSideViewOfRoom(rb, big.graph), hidden, '短手 8000 → 切妻');
+});
+
+// ---- roofRidgeDirectionViewOfRoom（C2e-1c） ----
+
+test('roofRidgeDirectionViewOfRoom: 切妻（短手3640超の自動・明示）の矩形の下屋は visible。値は明示値、自動は null', () => {
+  const big = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  const r = big.roof([[0, 0], [1, 0], [0, 1], [1, 1]]); // 8000x8000 → 自動は切妻
+  assert.deepEqual(roofRidgeDirectionViewOfRoom(r, big.graph), { visible: true, value: null });
+  r.roofSpec.setField('ridgeDirection', 'vertical');
+  assert.deepEqual(roofRidgeDirectionViewOfRoom(r, big.graph), { visible: true, value: 'vertical' });
+  const small = makeGrid(XS, YS);
+  const rs = small.roof([[1, 1]]); // 自動は片流れ。明示の切妻にすると出る
+  assert.equal(roofRidgeDirectionViewOfRoom(rs, small.graph).visible, false, '自動の片流れでは出さない');
+  rs.roofSpec.setField('shape', RoofShape.GABLE);
+  assert.deepEqual(roofRidgeDirectionViewOfRoom(rs, small.graph), { visible: true, value: null });
+});
+
+test('【失敗系】roofRidgeDirectionViewOfRoom: 切妻でない（明示の片流れ・寄棟・陸屋根・棟違い）下屋と、矩形でない切妻の下屋は非表示（明示値があっても）', () => {
+  const hidden = { visible: false, value: null };
+  for (const shape of [RoofShape.MONO, RoofShape.HIP, RoofShape.FLAT, RoofShape.STAGGERED]) {
+    const { graph, roof } = makeGrid(XS, YS);
+    const r = roof([[1, 1]]);
+    r.roofSpec.setField('shape', shape);
+    r.roofSpec.setField('ridgeDirection', 'horizontal');
+    assert.deepEqual(roofRidgeDirectionViewOfRoom(r, graph), hidden, shape);
+  }
+  const { graph, roof } = makeGrid(XS, YS);
+  const l = roof([[1, 1], [2, 1], [1, 2]]); // L字
+  l.roofSpec.setField('shape', RoofShape.GABLE);
+  l.roofSpec.setField('ridgeDirection', 'horizontal');
+  assert.deepEqual(roofRidgeDirectionViewOfRoom(l, graph), hidden, 'L字の切妻');
 });
 
 test('【失敗系】roofHighSideViewOfRoom: 矩形でない片流れ（L字の下屋。短手 3640 以下で自動は片流れ）は非表示。明示値があっても出さない', () => {

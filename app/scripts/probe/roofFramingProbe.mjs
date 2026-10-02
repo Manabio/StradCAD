@@ -57,6 +57,17 @@ console.log('主構造:', project.structuralInfo.mainStructure);
 const roofPlane = project.roofPlane;
 if (!roofPlane) { console.log('屋根専用平面が無い文書: 対象外（exit 0）'); process.exit(0); }
 
+// RIDGE_DIRECTION=vertical|horizontal のとき、収束の前に主屋根（最上階の mainRoofSpec）の棟木の向きを上書きする（C2e-1c。
+// 切妻の向きを変えたときの小屋梁・束の確認用。保存はしない。主屋根が切妻でなければ region には効かない）。
+if (process.env.RIDGE_DIRECTION) {
+  const top = structuralPlaneBelow(roofPlane, project);
+  const g = top ? project.graphMap.get(top.id) : null;
+  if (!g) { console.log('最上階が無いので RIDGE_DIRECTION は無視'); } else {
+    g.mainRoofSpec.setField('ridgeDirection', process.env.RIDGE_DIRECTION);
+    console.log(`RIDGE_DIRECTION=${process.env.RIDGE_DIRECTION} を最上階の mainRoofSpec へ設定（保存しない）`);
+  }
+}
+
 const convergedAt = await sweepUntilConverged(project, 'desc', MAX_SWEEPS, (i, changedPlanes) => {
   console.log(`sweep${i}: changed=[${changedPlanes.join(',')}]`);
 });

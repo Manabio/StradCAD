@@ -90,6 +90,36 @@ test('mainRoofFramingRegion: 形状の明示値（寄棟・切妻）はそのま
   });
 });
 
+test('【C2e-1c】mainRoofFramingRegion: 切妻の棟木の向きは ridgeDirection が指定されていればそれ（横長でも縦・縦長でも横）。未指定は長手', () => {
+  const project = woodProject();
+  const wide = singleRoomGraph(9000, 6000);
+  assert.equal(mainRoofFramingRegion(wide, project).ridgeIsVertical, false, '自動・横長');
+  wide.mainRoofSpec.setField('ridgeDirection', 'vertical');
+  const r = mainRoofFramingRegion(wide, project);
+  assert.equal(r.shape, 'gable');
+  assert.equal(r.ridgeIsVertical, true, '横長でも縦を指定');
+  wide.mainRoofSpec.setField('ridgeDirection', 'horizontal');
+  assert.equal(mainRoofFramingRegion(wide, project).ridgeIsVertical, false);
+  const tall = singleRoomGraph(6000, 9000);
+  tall.mainRoofSpec.setField('ridgeDirection', 'horizontal');
+  assert.equal(mainRoofFramingRegion(tall, project).ridgeIsVertical, false, '縦長でも横を指定');
+  tall.mainRoofSpec.setField('ridgeDirection', null);
+  assert.equal(mainRoofFramingRegion(tall, project).ridgeIsVertical, true, '自動へ戻すと長手');
+});
+
+test('【C2e-1c・失敗系】mainRoofFramingRegion: ridgeDirection は切妻だけに効く。寄棟・片流れでは指定を無視して長手（region.ridgeIsVertical は変わらない）', () => {
+  const project = woodProject();
+  const hip = singleRoomGraph(9000, 6000);
+  hip.mainRoofSpec.setField('shape', RoofShape.HIP);
+  hip.mainRoofSpec.setField('ridgeDirection', 'vertical');
+  assert.equal(mainRoofFramingRegion(hip, project).ridgeIsVertical, false, '寄棟・横長');
+  const mono = singleRoomGraph(9000, 3000);
+  mono.mainRoofSpec.setField('ridgeDirection', 'vertical');
+  const m = mainRoofFramingRegion(mono, project);
+  assert.equal(m.shape, 'mono');
+  assert.equal(m.ridgeIsVertical, false, '片流れ・横長');
+});
+
 test('【失敗系】mainRoofFramingRegion: 陸屋根・棟違い（明示）は小屋組を持たず null', () => {
   const project = woodProject();
   for (const shape of [RoofShape.FLAT, RoofShape.STAGGERED]) {
@@ -147,6 +177,19 @@ test('leanToFramingRegions: 短手が3640超の下屋は切妻（正方形は棟
   assert.equal(region.highSide, null);
   r.roofSpec.setField('shape', RoofShape.HIP);
   assert.equal(leanToFramingRegions(graph, woodProject())[0].shape, 'hip');
+});
+
+test('【C2e-1c】leanToFramingRegions: 切妻の下屋は ridgeDirection に従う。寄棟の下屋は指定を無視する', () => {
+  const { graph, roof } = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  const r = roof([[0, 0], [1, 0], [0, 1], [1, 1]]); // 8000×8000（正方形。自動の切妻は棟が x 方向）
+  r.roofSpec.setField('ridgeDirection', 'vertical');
+  const [g] = leanToFramingRegions(graph, woodProject());
+  assert.equal(g.shape, 'gable');
+  assert.equal(g.ridgeIsVertical, true, '正方形でも縦を指定');
+  r.roofSpec.setField('shape', RoofShape.HIP);
+  const [h] = leanToFramingRegions(graph, woodProject());
+  assert.equal(h.shape, 'hip');
+  assert.equal(h.ridgeIsVertical, false, '寄棟は指定を無視（長手＝正方形は横）');
 });
 
 test('leanToFramingRegions: 屋根が複数なら1部屋につき1つ。屋根でない部屋（屋内・屋外）は region にならない', () => {

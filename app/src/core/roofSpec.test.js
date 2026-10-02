@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  RoofSpec, ROOF_SPEC_KEYS, RoofShape, RoofHighSide, DEFAULT_ROOF_SLOPE, DEFAULT_ROOF_EAVE_OVERHANG_MM,
+  RoofSpec, ROOF_SPEC_KEYS, RoofShape, RoofHighSide, RoofRidgeDirection, DEFAULT_ROOF_SLOPE, DEFAULT_ROOF_EAVE_OVERHANG_MM,
   DEFAULT_ROOF_GABLE_OVERHANG_MM, DEFAULT_ROOF_SHEATHING, DEFAULT_ROOF_UNDERLAYMENT,
   ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES, isDefaultRoofSpec,
 } from '../core.js';
@@ -13,7 +13,7 @@ test('RoofSpec: 既定値は 形状=自動(null)・勾配3・野地板=構造用
     shape: null, slope: DEFAULT_ROOF_SLOPE,
     sheathingMaterial: DEFAULT_ROOF_SHEATHING, underlaymentMaterial: DEFAULT_ROOF_UNDERLAYMENT,
     roofFinish: '', eaveOverhangMm: DEFAULT_ROOF_EAVE_OVERHANG_MM, gableOverhangMm: DEFAULT_ROOF_GABLE_OVERHANG_MM,
-    soffit: '', note: '', highSide: null,
+    soffit: '', note: '', highSide: null, ridgeDirection: null,
   });
   assert.equal(DEFAULT_ROOF_SLOPE, 3);
   assert.equal(DEFAULT_ROOF_EAVE_OVERHANG_MM, 455);
@@ -26,11 +26,12 @@ test('不変条件: toData() のキー集合は ROOF_SPEC_KEYS と一致し、�
   assert.deepEqual(Object.keys(new RoofSpec().toData()).sort(), [...ROOF_SPEC_KEYS].sort());
   assert.deepEqual(Object.keys(NON_DEFAULT_ROOF_SPEC).sort(), [...ROOF_SPEC_KEYS].sort(),
     'RoofSpec に項目を足したら fixture にも足す');
-  assert.equal(ROOF_SPEC_KEYS.length, 10);
-  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 1], 'highSide', 'highSide は末尾');
+  assert.equal(ROOF_SPEC_KEYS.length, 11);
+  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 1], 'ridgeDirection', 'ridgeDirection は末尾');
+  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 2], 'highSide');
 });
 
-test('不変条件: 全10項目を既定値以外にした RoofSpec は toData→fromData→toData で一致し、各項目が保たれる（出幅0・勾配2.5）', () => {
+test('不変条件: 全11項目を既定値以外にした RoofSpec は toData→fromData→toData で一致し、各項目が保たれる（出幅0・勾配2.5）', () => {
   const defaults = new RoofSpec().toData();
   for (const key of ROOF_SPEC_KEYS) {
     assert.notDeepEqual(NON_DEFAULT_ROOF_SPEC[key], defaults[key], `前提: ${key} は既定値と異なる`);
@@ -71,6 +72,23 @@ test('highSide: 既定は null（自動）。4値は toData→fromData で保た
 test('【失敗系】fromData: 未知の highSide は null（自動）へ（欠落・空・非文字列・大文字違いも）', () => {
   for (const v of ['up', 'TOP', '', 3, null, undefined, {}]) {
     assert.equal(RoofSpec.fromData({ highSide: v }).highSide, null, `highSide=${JSON.stringify(v)}`);
+  }
+});
+
+test('ridgeDirection: 既定は null（自動＝長手）。2値は toData→fromData で保たれ、setField で書き換えられる', () => {
+  assert.equal(new RoofSpec().ridgeDirection, null);
+  for (const ridgeDirection of Object.values(RoofRidgeDirection)) {
+    assert.equal(RoofSpec.fromData({ ridgeDirection }).ridgeDirection, ridgeDirection);
+    assert.equal(new RoofSpec({ ridgeDirection }).toData().ridgeDirection, ridgeDirection);
+  }
+  const spec = new RoofSpec();
+  spec.setField('ridgeDirection', RoofRidgeDirection.HORIZONTAL);
+  assert.equal(spec.ridgeDirection, 'horizontal');
+});
+
+test('【失敗系】fromData: 未知の ridgeDirection は null（自動）へ（欠落・空・非文字列・大文字違い・highSide の値も）', () => {
+  for (const v of ['diagonal', 'VERTICAL', '', 3, null, undefined, {}, 'top']) {
+    assert.equal(RoofSpec.fromData({ ridgeDirection: v }).ridgeDirection, null, `ridgeDirection=${JSON.stringify(v)}`);
   }
 });
 
@@ -123,15 +141,16 @@ test('isDefaultRoofSpec: 既定値の RoofSpec・その toData()・null/undefine
   assert.equal(isDefaultRoofSpec(undefined), true);
 });
 
-test('isDefaultRoofSpec: 10項目のどれか1つでも既定値と違えば false（ROOF_SPEC_KEYS の全項目で確かめる）', () => {
+test('isDefaultRoofSpec: 11項目のどれか1つでも既定値と違えば false（ROOF_SPEC_KEYS の全項目で確かめる）', () => {
   for (const key of ROOF_SPEC_KEYS) {
     const spec = new RoofSpec();
     spec.setField(key, NON_DEFAULT_ROOF_SPEC[key]);
     assert.equal(isDefaultRoofSpec(spec), false, `${key} だけ既定外でも false`);
     assert.equal(isDefaultRoofSpec(spec.toData()), false, `${key}（plain）`);
   }
-  assert.equal(ROOF_SPEC_KEYS.length, 10);
+  assert.equal(ROOF_SPEC_KEYS.length, 11);
   assert.equal(isDefaultRoofSpec(new RoofSpec({ highSide: RoofHighSide.TOP })), false, 'highSide だけ明示しても既定外');
+  assert.equal(isDefaultRoofSpec(new RoofSpec({ ridgeDirection: RoofRidgeDirection.HORIZONTAL })), false, 'ridgeDirection だけ明示しても既定外');
 });
 
 test('isDefaultRoofSpec: 形状を明示すると（自動と同じ見た目の陸屋根でも）既定値ではない。出幅0は既定外', () => {

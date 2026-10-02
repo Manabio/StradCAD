@@ -111,6 +111,16 @@ export const ROOF_HIGH_SIDE_LABELS = Object.freeze({
   [RoofHighSide.LEFT]:   '左',
   [RoofHighSide.RIGHT]:  '右',
 });
+// 切妻の棟木の向き（RoofSpec.ridgeDirection。null＝自動で長手に沿う＝既定。表示時・構造再計算時に
+// finish/roof/roofGeometry.js resolveRoofRidgeIsVertical が導く）。切妻だけに効く（寄棟は棟木が長手に沿わないと成り立たない）。
+export const RoofRidgeDirection = Object.freeze({
+  VERTICAL:   'vertical',   // 棟木が y 方向（縦）
+  HORIZONTAL: 'horizontal', // 棟木が x 方向（横）
+});
+export const ROOF_RIDGE_DIRECTION_LABELS = Object.freeze({
+  [RoofRidgeDirection.VERTICAL]:   '縦',
+  [RoofRidgeDirection.HORIZONTAL]: '横',
+});
 // 形状の自動判定: 短手（屋根範囲に内接する全矩形の短辺の最大）がこの値以下なら片流れ、超えれば切妻。
 export const ROOF_MONO_MAX_SHORT_SPAN_MM = 3640;
 

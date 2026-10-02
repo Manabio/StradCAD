@@ -16,7 +16,7 @@ import { footprintCellKeys } from '../../structural/wallGate.js';
 import { cellBoundsList } from '../gridCells.js';
 import { RoofShape } from '../../core/constants.js';
 import { resolveRoofShape } from './roofDefaults.js';
-import { roofShortSpanMm, rectOfBounds, roofHighSideView } from './roofGeometry.js';
+import { roofShortSpanMm, rectOfBounds, roofHighSideView, roofRidgeDirectionView } from './roofGeometry.js';
 
 /**
  * 最上階の建物範囲のセル矩形群（現在の格子で解決。部屋が無い・階段だけの階は空）。
@@ -56,4 +56,17 @@ export function mainRoofHighSideView(graph, project = null) {
   if (shape !== RoofShape.MONO) return { visible: false, value: null };
   const rect = rectOfBounds(mainRoofBounds(graph));
   return roofHighSideView({ shape, highSide: graph.mainRoofSpec?.highSide ?? null, rect, adjacency: null });
+}
+
+/**
+ * 主屋根の「棟木の向き」の選択欄の表示判断（形状の実効値が切妻で建物範囲が矩形のときだけ visible）。
+ * @param {object} graph 最上階（またはその検討案）の graph
+ * @param {object|null} [project]
+ * @returns {{ visible: boolean, value: string|null }}
+ */
+export function mainRoofRidgeDirectionView(graph, project = null) {
+  const shape = resolveMainRoofShape(graph, project);
+  if (shape !== RoofShape.GABLE) return { visible: false, value: null };
+  const rect = rectOfBounds(mainRoofBounds(graph));
+  return roofRidgeDirectionView({ shape, ridgeDirection: graph.mainRoofSpec?.ridgeDirection ?? null, rect });
 }

@@ -18,6 +18,7 @@ import { autoFillWoodWallBeams, autoFillWoodBeamDepths } from './woodAutoFill.js
 import { roofFramingLines, roofStrutPoints } from './roofFramingGeometry.js';
 import { roofFramingHostMembers } from './framingDrawing.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
+import { mainRoofFramingRegion } from './roofFramingRegions.js';
 
 const WOOD = StructuralMaterialType.WOOD;
 const PROJECT = { planes: [], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
@@ -141,6 +142,22 @@ test('片流れ（高い側＝上）: 母屋は横線なので小屋梁は縦（
   assert.equal(b.clEnd, cl.y2);
   assert.equal(b.axisCL.beamAxisOrigin, BeamAxisOrigin.ROOF_BEAM);
   for (const g of maxStrutGaps(graph, MONO_TOP)) assert.ok(g.max <= F.strutMaxPitchMm);
+});
+
+test('【C2e-1c】切妻の棟木が横（ridgeIsVertical=false。縦長の屋根）: 母屋は横線なので小屋梁は縦で、横の軒桁（y=0,7280）から横の軒桁へ。束の間隔は1820以下', () => {
+  const { graph, cl } = makeRoof();
+  const GABLE_H = { ...GABLE, ridgeIsVertical: false };
+  assert.ok(maxStrutGaps(graph, GABLE_H).some(g => g.max > F.strutMaxPitchMm), '前提: 小屋梁の前は束の間隔が1820を超える線がある');
+  autoFillWoodRoofFraming(graph, PROJECT, [GABLE_H]);
+  const koya = roofBeams(graph);
+  assert.ok(koya.length >= 1, '小屋梁ができる');
+  assert.ok(koya.every(b => b.isVertical === true), '母屋・棟木（横）と直交＝縦');
+  assert.ok(koya.every(b => b.clStart === cl.y0 && b.clEnd === cl.y2), '横の軒桁（y=0・y=7280）の間に架かる');
+  for (const g of maxStrutGaps(graph, GABLE_H)) assert.ok(g.max <= F.strutMaxPitchMm, `線 y=${g.coord} の束の最大間隔 ${g.max} が1820以下`);
+  // 対照: 同じ屋根でも棟木が縦（既定の長手）なら小屋梁は横
+  const ref = makeRoof();
+  autoFillWoodRoofFraming(ref.graph, PROJECT, [GABLE]);
+  assert.ok(roofBeams(ref.graph).every(b => b.isVertical === false), '対照: 棟木縦なら小屋梁は横');
 });
 
 // ---------------- 冪等・追従・撤去 ----------------
@@ -847,6 +864,47 @@ test('【統合】recomputeStructuralForGraph（C2c）: 小屋梁の断面だけ
     assert.equal(r.changed, true);
     const again = await recomputeStructuralForGraph(roofGraph, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(again.changed, false, '収束後は変化 0（冪等）');
+  } finally {
+    floorSwapManager.peek = original;
+  }
+});
+
+test('【統合・C2e-1c】mainRoofSpec.ridgeDirection を横にして再計算すると、棟木が x 方向の中央に変わり、小屋梁は縦へ作り直される。柱は不変・収束。縦（既定）へ戻す（null）と元の3本に戻る。寄棟では指定を無視する', async () => {
+  const { project, g1, roofGraph } = buildProject(RoofShape.GABLE); // 3640×7280（縦長＝自動は棟木が縦）
+  const original = floorSwapManager.peek;
+  try {
+    floorSwapManager.peek = async (plane) => ({ p1: g1, roof1: roofGraph })[plane.id] ?? null;
+    assert.ok(await converge(project, g1, roofGraph) !== null);
+    const autoDescs = descs(roofGraph);
+    assert.deepEqual(autoDescs, ['y=1820:0..3640', 'y=3640:0..3640', 'y=5460:0..3640'], '前提: 自動（長手＝縦棟）の小屋梁は横3本');
+    const colsAuto = colSig(g1);
+
+    g1.mainRoofSpec.setField('ridgeDirection', 'horizontal');
+    const region = mainRoofFramingRegion(g1, project);
+    assert.equal(region.ridgeIsVertical, false, '前提: region の棟木が横');
+    const sweeps = await converge(project, g1, roofGraph);
+    assert.ok(sweeps !== null, `収束する（${sweeps}回）`);
+    const koya = roofBeams(roofGraph);
+    assert.ok(koya.length >= 1 && koya.every(b => b.isVertical === true), `小屋梁は縦に作り直される: ${descs(roofGraph).join(' ')}`);
+    assert.ok(descs(roofGraph).every(d => d.startsWith('x=')), '横の小屋梁は撤去されている');
+    for (const g of maxStrutGaps(roofGraph, region)) assert.ok(g.max <= F.strutMaxPitchMm, `線 y=${g.coord} の束の最大間隔 ${g.max} が1820以下`);
+    assert.equal(roofGraph.columns.length, 0, '屋根に柱は立たない');
+    assert.deepEqual(colSig(g1), colsAuto, '最上階の柱は棟木の向きに依らない');
+
+    g1.mainRoofSpec.setField('ridgeDirection', null);
+    assert.ok(await converge(project, g1, roofGraph) !== null);
+    assert.deepEqual(descs(roofGraph), autoDescs, '自動へ戻すと元の小屋梁に戻る');
+
+    // 寄棟では指定を無視する（棟木は長手に沿う）。指定の有無で region・小屋梁・柱が変わらない
+    g1.setMainRoofSpec(new RoofSpec({ shape: RoofShape.HIP }));
+    assert.ok(await converge(project, g1, roofGraph) !== null);
+    const hipDescs = descs(roofGraph);
+    const hipCols = colSig(g1);
+    g1.mainRoofSpec.setField('ridgeDirection', 'horizontal');
+    assert.equal(mainRoofFramingRegion(g1, project).ridgeIsVertical, true, '寄棟は指定を無視（縦長＝縦）');
+    assert.ok(await converge(project, g1, roofGraph) !== null);
+    assert.deepEqual(descs(roofGraph), hipDescs, '寄棟の小屋梁・飛び梁は指定で変わらない');
+    assert.deepEqual(colSig(g1), hipCols);
   } finally {
     floorSwapManager.peek = original;
   }

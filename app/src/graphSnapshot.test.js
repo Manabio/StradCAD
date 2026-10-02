@@ -466,6 +466,7 @@ test('【B2・失敗系】屋根なのに roofSpec が欠けたスナップシ�
   assert.deepEqual(spec.toData(), {
     shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
     roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野', highSide: null,
+    ridgeDirection: null,
   });
   // バッファ自体に RS が無い経路（RoofSpec を持たない屋根の部屋を書いて読む）でも同じ
   const noSpec = makeGraphWithRoofRoom();
@@ -583,6 +584,7 @@ test('【B3・失敗系】壊れた主屋根（未知の shape・負の出幅・
     assert.deepEqual(restored.mainRoofSpec.toData(), {
       shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
       roofFinish: '仕上', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '軒裏', note: 'メモ', highSide: null,
+      ridgeDirection: null,
     }, label);
   }
 });
@@ -671,6 +673,76 @@ test('【C1b・失敗系】旧データ（highSide のキー・フィールド�
   restoreGraph(viaFbs, encodeFloorSnapshot(snapshot));
   assert.equal(viaFbs.roomMap.get(roof.id).roofSpec.highSide, null);
   assert.equal(viaFbs.mainRoofSpec.highSide, null);
+});
+
+// ---- 切妻の棟木の向き（ステップC2e-1c。RoofSpec.ridgeDirection。FBS の RS.RIDGE_DIRECTION=10。null は書かない） ----
+const RIDGE_DIRECTIONS = ['vertical', 'horizontal'];
+
+test('【C2e-1c】ridgeDirection の2値が FBS・plain 経路・複製で往復する（下屋・主屋根とも）', () => {
+  for (const ridgeDirection of RIDGE_DIRECTIONS) {
+    const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, ridgeDirection });
+    graph.setMainRoofSpec(RoofSpec.fromData({ ...NON_DEFAULT_ROOF_SPEC, ridgeDirection }));
+    const viaFbs = makeGraph();
+    restoreGraph(viaFbs, serializeGraph(graph));
+    assert.equal(viaFbs.roomMap.get(roof.id).roofSpec.ridgeDirection, ridgeDirection, `下屋 FBS ${ridgeDirection}`);
+    assert.equal(viaFbs.mainRoofSpec.ridgeDirection, ridgeDirection, `主屋根 FBS ${ridgeDirection}`);
+    const viaPlain = makeGraph();
+    restoreGraph(viaPlain, JSON.parse(JSON.stringify(decodeFloorSnapshot(serializeGraph(graph)))));
+    assert.equal(viaPlain.roomMap.get(roof.id).roofSpec.ridgeDirection, ridgeDirection, `下屋 plain ${ridgeDirection}`);
+    assert.equal(viaPlain.mainRoofSpec.ridgeDirection, ridgeDirection, `主屋根 plain ${ridgeDirection}`);
+    const copy = makeGraph();
+    restoreGraph(copy, serializeGraphWithFreshLineIds(graph));
+    assert.equal(copy.roomMap.get(roof.id).roofSpec.ridgeDirection, ridgeDirection, `複製 ${ridgeDirection}`);
+    assert.equal(copy.mainRoofSpec.ridgeDirection, ridgeDirection, `主屋根の複製 ${ridgeDirection}`);
+  }
+});
+
+test('【C2e-1c】主屋根は ridgeDirection だけを明示（他は既定）しても既定外として保存・復元される', () => {
+  const graph = makeGraph();
+  const base = serializeGraph(graph);
+  graph.mainRoofSpec.setField('ridgeDirection', 'horizontal');
+  assert.equal(isDefaultRoofSpec(graph.mainRoofSpec), false);
+  assert.ok(serializeGraph(graph).length > base.length);
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  assert.equal(restored.mainRoofSpec.ridgeDirection, 'horizontal');
+  assert.equal(restored.mainRoofSpec.shape, null);
+});
+
+test('【C2e-1c】ridgeDirection が null のときは何も書かない: 設定して null へ戻したバイト列は設定前と一致し、キーの無い旧データを encode したものとも一致する', () => {
+  const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, ridgeDirection: null });
+  const base = serializeGraph(graph);
+  roof.roofSpec.setField('ridgeDirection', 'vertical');
+  assert.ok(serializeGraph(graph).length > base.length, '値があれば文字列ぶん長くなる');
+  roof.roofSpec.setField('ridgeDirection', null);
+  assert.deepEqual([...serializeGraph(graph)], [...base]);
+  const snap = decodeFloorSnapshot(base);
+  assert.equal(snap.rooms.find(r => r.id === roof.id).roofSpec.ridgeDirection, null, '読みは null');
+  delete snap.rooms.find(r => r.id === roof.id).roofSpec.ridgeDirection;
+  assert.deepEqual([...encodeFloorSnapshot(snap)], [...base]);
+});
+
+test('【C2e-1c・失敗系】旧データ（ridgeDirection のキーが無い）は null。壊れた ridgeDirection は null へ正規化される（plain・FBS とも）', () => {
+  const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, ridgeDirection: null });
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  delete snapshot.rooms.find(r => r.id === roof.id).roofSpec.ridgeDirection;
+  const old = makeGraph();
+  restoreGraph(old, snapshot);
+  assert.equal(old.roomMap.get(roof.id).roofSpec.ridgeDirection, null);
+  for (const bad of ['diagonal', 'VERTICAL', 'top', 7]) {
+    snapshot.rooms.find(r => r.id === roof.id).roofSpec.ridgeDirection = bad;
+    snapshot.mainRoofSpec = { ...NON_DEFAULT_ROOF_SPEC, ridgeDirection: bad };
+    const restored = makeGraph();
+    restoreGraph(restored, snapshot);
+    assert.equal(restored.roomMap.get(roof.id).roofSpec.ridgeDirection, null, `plain 下屋 ${bad}`);
+    assert.equal(restored.mainRoofSpec.ridgeDirection, null, `plain 主屋根 ${bad}`);
+  }
+  snapshot.rooms.find(r => r.id === roof.id).roofSpec.ridgeDirection = 'diagonal';
+  snapshot.mainRoofSpec = { ...NON_DEFAULT_ROOF_SPEC, ridgeDirection: 'diagonal' };
+  const viaFbs = makeGraph();
+  restoreGraph(viaFbs, encodeFloorSnapshot(snapshot));
+  assert.equal(viaFbs.roomMap.get(roof.id).roofSpec.ridgeDirection, null);
+  assert.equal(viaFbs.mainRoofSpec.ridgeDirection, null);
 });
 
 test('【B2・失敗系】壊れた roofSpec（未知の shape・負の出幅・slope=0・材料コード欠落）は復元で正規化される', () => {

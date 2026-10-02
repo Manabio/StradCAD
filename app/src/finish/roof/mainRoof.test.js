@@ -9,7 +9,7 @@ import {
 import { rulesFor, UNSPECIFIED_STRUCTURE, TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
 import { footprintCellKeys } from '../../structural/wallGate.js';
 import { resolveRoofShape } from './roofDefaults.js';
-import { mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView } from './mainRoof.js';
+import { mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView, mainRoofRidgeDirectionView } from './mainRoof.js';
 import { rectOfBounds } from './roofGeometry.js';
 import { wallFreshnessKey } from '../wallFreshnessKey.js';
 import { generateExteriorWalls, generateRoomWallsFromOutline, computeExteriorWallSegments } from '../wallGeneration.js';
@@ -185,6 +185,33 @@ test('【C1b・失敗系】mainRoofHighSideView: 形状が片流れでない（�
   assert.deepEqual(mainRoofHighSideView(sMono, project), { visible: true, value: 'top' }, 'S造でも明示の片流れなら出る');
 });
 
+test('【C2e-1c】mainRoofRidgeDirectionView: 切妻＋矩形のとき visible。値は明示値（自動は null）', () => {
+  const project = new Project('p', 'test');
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  const g = singleRoomGraph(9000, 6000); // 自動は切妻
+  assert.deepEqual(mainRoofRidgeDirectionView(g, project), { visible: true, value: null });
+  g.mainRoofSpec.setField('ridgeDirection', 'vertical');
+  assert.deepEqual(mainRoofRidgeDirectionView(g, project), { visible: true, value: 'vertical' });
+});
+
+test('【C2e-1c・失敗系】mainRoofRidgeDirectionView: 形状が切妻でない（片流れ・寄棟・陸屋根）・矩形でない・建物範囲が空は非表示（明示値があっても）', () => {
+  const project = new Project('p', 'test');
+  const hidden = { visible: false, value: null };
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  const mono = singleRoomGraph(9000, 3000);
+  mono.mainRoofSpec.setField('ridgeDirection', 'vertical');
+  assert.deepEqual(mainRoofRidgeDirectionView(mono, project), hidden, '片流れ');
+  const l = lShapedGraph();
+  l.mainRoofSpec.setField('ridgeDirection', 'vertical');
+  assert.deepEqual(mainRoofRidgeDirectionView(l, project), hidden, 'L字＝寄棟');
+  const lGable = lShapedGraph();
+  lGable.mainRoofSpec.setField('shape', RoofShape.GABLE);
+  assert.deepEqual(mainRoofRidgeDirectionView(lGable, project), hidden, '矩形でない切妻は出さない');
+  assert.deepEqual(mainRoofRidgeDirectionView(new PlanGraph(new Plane('p1', 0, '3階', 3, 1)), project), hidden, '空（片流れ扱い）');
+  project.structuralInfo.mainStructure = 'S造';
+  assert.deepEqual(mainRoofRidgeDirectionView(singleRoomGraph(9000, 6000), project), hidden, '陸屋根');
+});
+
 test('【B3】mainRoofBounds: 建物範囲（footprintCellKeys）のセル矩形。屋根セルのある階では屋根セルを含まない', () => {
   const { graph } = buildRoofLayout('band', 'roof');
   const bounds = mainRoofBounds(graph);
@@ -210,7 +237,7 @@ function fingerprint(graph, project) {
   };
 }
 
-test('【B3】主屋根の全10項目を既定以外にしても、壁の鮮度キー・建物範囲・外壁セグメント・生成壁・境界は変わらない', () => {
+test('【B3】主屋根の全11項目を既定以外にしても、壁の鮮度キー・建物範囲・外壁セグメント・生成壁・境界は変わらない', () => {
   for (const shape of ['band', 'notch']) {
     for (const mode of ['roof', 'none']) {
       const { graph } = buildRoofLayout(shape, mode);
@@ -218,7 +245,7 @@ test('【B3】主屋根の全10項目を既定以外にしても、壁の鮮度�
       const before = fingerprint(graph, project);
       assert.ok(before.walls.length > 0 && before.footprint.length > 0, '前提: 壁・建物範囲がある');
       graph.setMainRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
-      assert.equal(ROOF_SPEC_KEYS.filter(k => graph.mainRoofSpec[k] !== new RoofSpec()[k]).length, 10, '前提: 全項目が既定以外');
+      assert.equal(ROOF_SPEC_KEYS.filter(k => graph.mainRoofSpec[k] !== new RoofSpec()[k]).length, 11, '前提: 全項目が既定以外');
       assert.deepEqual(fingerprint(graph, project), before, `${shape}/${mode}`);
     }
   }

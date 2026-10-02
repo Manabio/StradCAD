@@ -1,7 +1,8 @@
 /**
  * 屋根の範囲の幾何（純関数。store.js / snap.js / .jsx を静的 import しない）。ステップ B2。
  */
-import { RoofShape, RoofHighSide } from '../../core/constants.js';
+import { RoofShape, RoofHighSide, RoofRidgeDirection } from '../../core/constants.js';
+import { roofRidgeIsVertical } from '../../structural/roofFramingGeometry.js';
 
 const EPS = 1e-6;
 
@@ -128,6 +129,34 @@ export function resolveRoofHighSide(highSide, rect, adjacency) {
   }
   if (!rect) return null;
   return rect.y2 - rect.y1 > rect.x2 - rect.x1 + EPS ? RoofHighSide.LEFT : RoofHighSide.TOP;
+}
+
+/**
+ * 切妻の棟木が y 方向（縦）か。明示値（'vertical'|'horizontal'）があればそれ、それ以外（null・不正値）は
+ * 未指定扱いで従来の長手（roofRidgeIsVertical。正方形は横）。寄棟・片流れでは使わない（呼び出し側が切妻のときだけ引く。
+ * 寄棟の棟木は長手に沿わないと成り立たない）。
+ * @param {string|null} ridgeDirection RoofSpec.ridgeDirection
+ * @param {{x1:number,y1:number,x2:number,y2:number}} rect
+ * @param {number} [tolMm=0] 正方形とみなす許容差
+ * @returns {boolean}
+ */
+export function resolveRoofRidgeIsVertical(ridgeDirection, rect, tolMm = 0) {
+  if (ridgeDirection === RoofRidgeDirection.VERTICAL) return true;
+  if (ridgeDirection === RoofRidgeDirection.HORIZONTAL) return false;
+  return roofRidgeIsVertical(rect, tolMm);
+}
+
+/**
+ * 外部タブの「棟木の向き」の選択欄の表示判断（描画は RoofGroup.jsx が visible と value に従うだけ）。
+ *   visible: 形状の実効値が切妻で、屋根範囲が矩形のときだけ true（片流れ・寄棟・陸屋根・矩形でない屋根は出さない）。
+ *   value:   明示値（'vertical'|'horizontal'）。未設定（自動＝長手）・不正値は null（欄は「自動（長手）」を示す）。
+ * @param {{ shape: string, ridgeDirection: string|null, rect: object|null }} p
+ * @returns {{ visible: boolean, value: string|null }}
+ */
+export function roofRidgeDirectionView({ shape, ridgeDirection, rect }) {
+  if (shape !== RoofShape.GABLE || !rect) return { visible: false, value: null };
+  const explicit = ridgeDirection === RoofRidgeDirection.VERTICAL || ridgeDirection === RoofRidgeDirection.HORIZONTAL;
+  return { visible: true, value: explicit ? ridgeDirection : null };
 }
 
 /**

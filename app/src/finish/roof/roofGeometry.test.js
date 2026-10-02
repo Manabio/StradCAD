@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { roofShortSpanMm, rectOfBounds, resolveRoofHighSide, roofHighSideView } from './roofGeometry.js';
+import {
+  roofShortSpanMm, rectOfBounds, resolveRoofHighSide, roofHighSideView, resolveRoofRidgeIsVertical, roofRidgeDirectionView,
+} from './roofGeometry.js';
 
 const rect = (x1, y1, x2, y2) => ({ x1, y1, x2, y2 });
 
@@ -127,6 +129,39 @@ test('【失敗系】roofHighSideView: 片流れ以外は非表示（明示値�
   }
   assert.deepEqual(roofHighSideView({ shape: 'mono', highSide: 'top', rect: null, adjacency: null }), { visible: false, value: null });
   assert.deepEqual(roofHighSideView({ shape: 'mono', highSide: null, rect: null, adjacency: adj(1, 2, 3, 4) }), { visible: false, value: null });
+});
+
+test('resolveRoofRidgeIsVertical: 未設定は長手（縦長なら縦・横長なら横・正方形は横）。縦・横の指定が最優先', () => {
+  assert.equal(resolveRoofRidgeIsVertical(null, rect(0, 0, 3000, 5000), 0), true, '縦長・自動');
+  assert.equal(resolveRoofRidgeIsVertical(null, rect(0, 0, 5000, 3000), 0), false, '横長・自動');
+  assert.equal(resolveRoofRidgeIsVertical(null, rect(0, 0, 4000, 4000), 0), false, '正方形・自動');
+  assert.equal(resolveRoofRidgeIsVertical(null, rect(0, 0, 4000, 4050), 100), false, '許容差内は正方形');
+  assert.equal(resolveRoofRidgeIsVertical('horizontal', rect(0, 0, 3000, 5000), 0), false, '縦長でも横を指定');
+  assert.equal(resolveRoofRidgeIsVertical('vertical', rect(0, 0, 5000, 3000), 0), true, '横長でも縦を指定');
+  assert.equal(resolveRoofRidgeIsVertical('vertical', rect(0, 0, 4000, 4000), 0), true, '正方形でも縦を指定');
+});
+
+test('【失敗系】resolveRoofRidgeIsVertical: 不正値（未知の文字列・大文字違い・highSide の値・数値）は未指定扱い（長手）', () => {
+  for (const bad of ['diagonal', 'VERTICAL', 'top', '', 1, {}, undefined]) {
+    assert.equal(resolveRoofRidgeIsVertical(bad, rect(0, 0, 3000, 5000), 0), true, `縦長 ${JSON.stringify(bad)}`);
+    assert.equal(resolveRoofRidgeIsVertical(bad, rect(0, 0, 5000, 3000), 0), false, `横長 ${JSON.stringify(bad)}`);
+  }
+});
+
+test('roofRidgeDirectionView: 切妻＋矩形なら visible。値は明示値、未設定（自動）・不正値は null', () => {
+  const r = rect(0, 0, 5000, 3000);
+  assert.deepEqual(roofRidgeDirectionView({ shape: 'gable', ridgeDirection: null, rect: r }), { visible: true, value: null });
+  assert.deepEqual(roofRidgeDirectionView({ shape: 'gable', ridgeDirection: 'vertical', rect: r }), { visible: true, value: 'vertical' });
+  assert.deepEqual(roofRidgeDirectionView({ shape: 'gable', ridgeDirection: 'horizontal', rect: r }), { visible: true, value: 'horizontal' });
+  assert.deepEqual(roofRidgeDirectionView({ shape: 'gable', ridgeDirection: 'diagonal', rect: r }), { visible: true, value: null }, '不正値は自動表示');
+});
+
+test('【失敗系】roofRidgeDirectionView: 切妻以外は非表示（明示値があっても）。矩形でない切妻も非表示', () => {
+  const r = rect(0, 0, 5000, 3000);
+  for (const shape of ['mono', 'hip', 'staggered', 'flat', null, undefined]) {
+    assert.deepEqual(roofRidgeDirectionView({ shape, ridgeDirection: 'vertical', rect: r }), { visible: false, value: null }, String(shape));
+  }
+  assert.deepEqual(roofRidgeDirectionView({ shape: 'gable', ridgeDirection: 'vertical', rect: null }), { visible: false, value: null });
 });
 
 test('【失敗系】resolveRoofHighSide: 不正な明示値は未指定扱い。rect も接触も無ければ null', () => {

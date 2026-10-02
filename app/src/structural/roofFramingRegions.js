@@ -7,6 +7,7 @@
  *   - 在来木造（rulesFor(effectiveStructure(graph, project)).framing が真。構造種別の直接比較はしない）
  *   - 範囲が矩形（rectOfBounds が非 null。矩形でない屋根は後続ステップ）
  *   - 形状（自動なら導いた形状）が片流れ・切妻・寄棟（陸屋根・棟違いは小屋組を持たない）
+ * ridgeIsVertical は切妻だけ spec.ridgeDirection（指定が無ければ長手）に従う。他の形状は常に長手。
  * 形状・範囲・高い側の判断は既存の関数（mainRoof.js・roofDefaults.js・roofOrientation.js・roofGeometry.js）を
  * そのまま使い、ここで複製しない。
  *
@@ -19,13 +20,22 @@ import { rulesFor, effectiveStructure } from './structureRules.js';
 import { mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView } from '../finish/roof/mainRoof.js';
 import { resolveRoofShape, roofRoomBounds } from '../finish/roof/roofDefaults.js';
 import { roofHighSideViewOfRoom } from '../finish/roof/roofOrientation.js';
-import { rectOfBounds } from '../finish/roof/roofGeometry.js';
+import { rectOfBounds, resolveRoofRidgeIsVertical } from '../finish/roof/roofGeometry.js';
 import { refreshCells } from '../finish/gridCells.js';
 import { roofRidgeIsVertical } from './roofFramingGeometry.js';
 import { showRoofFraming, roofFramingWidths, roofFramingHostMembers, roofFramingPrimitives } from './framingDrawing.js';
 
 /** 小屋組を持つ形状（陸屋根・棟違いは持たない）。 */
 const FRAMING_SHAPES = new Set([RoofShape.MONO, RoofShape.GABLE, RoofShape.HIP]);
+
+/**
+ * region の棟木の向き。指定（spec.ridgeDirection）が効くのは切妻だけ。それ以外の形状は従来の長手
+ * （寄棟の棟木は長手に沿わないと成り立たない。片流れは棟木が無い）。
+ */
+function regionRidgeIsVertical(shape, spec, rect) {
+  if (shape !== RoofShape.GABLE) return roofRidgeIsVertical(rect, CL_OVERLAP_TOL_MM);
+  return resolveRoofRidgeIsVertical(spec?.ridgeDirection ?? null, rect, CL_OVERLAP_TOL_MM);
+}
 
 /** 主屋根（最上階の建物範囲）の小屋組の region。条件を満たさなければ null。 */
 export function mainRoofFramingRegion(topGraph, project) {
@@ -36,7 +46,7 @@ export function mainRoofFramingRegion(topGraph, project) {
   const shape = resolveMainRoofShape(topGraph, project);
   if (!FRAMING_SHAPES.has(shape)) return null;
   const highSide = shape === RoofShape.MONO ? mainRoofHighSideView(topGraph, project).value : null;
-  return { key: 'main', rect, shape, ridgeIsVertical: roofRidgeIsVertical(rect, CL_OVERLAP_TOL_MM), highSide };
+  return { key: 'main', rect, shape, ridgeIsVertical: regionRidgeIsVertical(shape, topGraph.mainRoofSpec, rect), highSide };
 }
 
 /** 下屋の region と、その元の部屋の組（leanToFramingRegions・leanToFramingCellKeys の共通の導出）。 */
@@ -52,7 +62,7 @@ function leanToFramingEntries(graph, project) {
     const shape = resolveRoofShape(room.roofSpec, { boundsList });
     if (!FRAMING_SHAPES.has(shape)) continue;
     const highSide = shape === RoofShape.MONO ? roofHighSideViewOfRoom(room, graph).value : null;
-    entries.push({ room, region: { key: `lean:${room.id}`, rect, shape, ridgeIsVertical: roofRidgeIsVertical(rect, CL_OVERLAP_TOL_MM), highSide } });
+    entries.push({ room, region: { key: `lean:${room.id}`, rect, shape, ridgeIsVertical: regionRidgeIsVertical(shape, room.roofSpec, rect), highSide } });
   }
   return entries;
 }

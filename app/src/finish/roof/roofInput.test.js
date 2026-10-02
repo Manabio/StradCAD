@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { RoofShape, ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES, ROOF_SPEC_KEYS } from '@core';
 import {
   parseRoofSlopeInput, parseRoofOverhangInput, isValidRoofFieldValue, roofShapeOptions, roofHighSideOptions, roofMaterialOptions,
+  roofRidgeDirectionOptions, roofRidgeDirectionFromSelect,
 } from './roofInput.js';
 
 test('parseRoofSlopeInput: 0.5刻みの正の数は有効（3・2.5・0.5・10）', () => {
@@ -31,7 +32,9 @@ test('【失敗系】parseRoofOverhangInput: 負・文字・空は null', () => 
   }
 });
 
-test('isValidRoofFieldValue: 全10項目それぞれの正常値と不正値', () => {
+test('isValidRoofFieldValue: 全11項目それぞれの正常値と不正値', () => {
+  for (const v of ['vertical', 'horizontal', null]) assert.ok(isValidRoofFieldValue('ridgeDirection', v), String(v));
+  for (const v of ['diagonal', 'VERTICAL', 'top', '', 0, undefined]) assert.ok(!isValidRoofFieldValue('ridgeDirection', v), String(v));
   for (const v of ['top', 'bottom', 'left', 'right']) assert.ok(isValidRoofFieldValue('highSide', v), v);
   assert.ok(!isValidRoofFieldValue('highSide', null), '「自動」へ戻す入口は無い（shape と同じ）');
   for (const v of ['up', 'TOP', '', 0, undefined]) assert.ok(!isValidRoofFieldValue('highSide', v), String(v));
@@ -60,7 +63,7 @@ test('isValidRoofFieldValue: 全10項目それぞれの正常値と不正値', (
   }
   assert.ok(!isValidRoofFieldValue('unknown', 'x'));
   // 全キーに判定がある（ROOF_SPEC_KEYS の取りこぼし検出）
-  const sample = { shape: 'mono', slope: 3, sheathingMaterial: 'a', underlaymentMaterial: 'b', roofFinish: '', eaveOverhangMm: 0, gableOverhangMm: 0, soffit: '', note: '', highSide: 'top' };
+  const sample = { shape: 'mono', slope: 3, sheathingMaterial: 'a', underlaymentMaterial: 'b', roofFinish: '', eaveOverhangMm: 0, gableOverhangMm: 0, soffit: '', note: '', highSide: 'top', ridgeDirection: 'vertical' };
   for (const key of ROOF_SPEC_KEYS) assert.ok(isValidRoofFieldValue(key, sample[key]), key);
 });
 
@@ -72,6 +75,14 @@ test('roofShapeOptions: 5形状（片流れ・切妻・寄棟・棟違い・陸�
 test('roofHighSideOptions: 上・下・左・右の並びで「自動」は出さない', () => {
   assert.deepEqual(roofHighSideOptions().map(o => o.label), ['上', '下', '左', '右']);
   assert.deepEqual(roofHighSideOptions().map(o => o.value), ['top', 'bottom', 'left', 'right']);
+});
+
+test('roofRidgeDirectionOptions: 先頭が「自動（長手）」（value は空）、続いて縦・横。選択欄の値は保存値へ（空→null）', () => {
+  assert.deepEqual(roofRidgeDirectionOptions().map(o => o.label), ['自動（長手）', '縦', '横']);
+  assert.deepEqual(roofRidgeDirectionOptions().map(o => o.value), ['', 'vertical', 'horizontal']);
+  assert.equal(roofRidgeDirectionFromSelect(''), null);
+  assert.equal(roofRidgeDirectionFromSelect('vertical'), 'vertical');
+  assert.equal(roofRidgeDirectionFromSelect('horizontal'), 'horizontal');
 });
 
 test('roofMaterialOptions: 候補コードの並びで名前を引く。解決できないコードは名前の代わりにコードを表示', () => {
