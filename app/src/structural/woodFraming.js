@@ -48,6 +48,37 @@ export function woodBeamDepthMm(spanMm, intermediateLoads, table = WOOD_BEAM_DEP
 }
 
 /**
+ * 小屋梁の成（mm）を、支持点間の最大距離から小屋梁の成の表（TRADITIONAL_WOOD_FRAMING.koyaBeamDepthTable）で引く
+ * （ステップC2c）。区分の上限以下で最初に当てはまる列（境界は「以下」＝1820ちょうどは最小の成）。
+ * 表の外（3640超）は表の最大値。非数・0以下は woodBeamDepthMm と同じく null（入力の誤り＝呼び出し側が扱う）。
+ * @param {number} spanMm - 支持点間の最大距離(mm)
+ * @param {{spanLimitsMm:number[], depthsMm:number[]}} [table]
+ * @returns {number|null}
+ */
+export function koyaBeamDepthMm(spanMm, table = TRADITIONAL_WOOD_FRAMING.koyaBeamDepthTable) {
+  if (!Number.isFinite(spanMm) || spanMm <= 0) return null;
+  const found = table.spanLimitsMm.findIndex(limit => spanMm <= limit);
+  return table.depthsMm[found < 0 ? table.depthsMm.length - 1 : found];
+}
+
+/**
+ * 小屋梁1本の成を、支持点（両端＋区間内の下階柱）の隣り合う2点間の**最大距離**で決める（ステップC2c）。
+ * 支持点は woodBeamDepthForSpans と同じ tol でまとめる。中間荷重は数えない（小屋梁の表は距離だけ）。
+ * 支持点が2点未満（まとめた結果を含む）・非数混入は null。
+ * @param {number[]} supportCoords
+ * @param {number} [tol]
+ * @returns {number|null}
+ */
+export function koyaBeamDepthForSpans(supportCoords, tol = CL_OVERLAP_TOL_MM) {
+  if (!Array.isArray(supportCoords) || supportCoords.some(c => !Number.isFinite(c))) return null;
+  const supports = dedupCoords(supportCoords, tol);
+  if (supports.length < 2) return null;
+  let maxSpan = 0;
+  for (let i = 0; i < supports.length - 1; i++) maxSpan = Math.max(maxSpan, supports[i + 1] - supports[i]);
+  return koyaBeamDepthMm(maxSpan);
+}
+
+/**
  * 梁の断面キー（材幅＝柱同寸 × 成）。既に決まった成から断面キーを引く「成→断面」の判断をここ1か所に
  * 置く（woodBeamSectionKey・autoFillWoodBeamDepths＝ステップ3d が別式で組み直さないため）。
  * @param {number} depthMm - 梁成（成が引けない呼び出し元は先にnullで打ち切ること）

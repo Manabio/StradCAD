@@ -13,7 +13,7 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
-import { autoFillWoodWallBeams } from './woodAutoFill.js';
+import { autoFillWoodWallBeams, autoFillWoodBeamDepths } from './woodAutoFill.js';
 import { roofFramingLines, roofStrutPoints } from './roofFramingGeometry.js';
 import { roofFramingHostMembers } from './framingDrawing.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
@@ -376,6 +376,142 @@ test('壁線の通し梁の候補が後から同じ区間に現れると、auto 
   assert.equal(r2.created.length + r2.removed.length, 0, `収束（1回目 created=${r1.created.length} removed=${r1.removed.length}）`);
 });
 
+// ---------------- 小屋梁の成（C2c。autoFillWoodBeamDepths） ----------------
+
+// 小さな合成 graph。縦の大梁(primary) host を x=0 と x=span に y -hostHalf..hostHalf で置き、その間に y=0 の小屋梁を
+// x0→x1 で渡す。host の長さ 2×hostHalf が短いほど、host 自身の梁成表の値は小さい（伝播・中間荷重の効きが見える）。
+function makeKoyaSpan(span, { hostHalf = 910, koyaProps = {}, koyaSection = 'WOOD-120x120' } = {}) {
+  const graph = new PlanGraph(new Plane('roof1', 6000, '小屋伏図', 1, 1, false, null, 0, true, 'p_top'));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, STRUCT);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, span, STRUCT);
+  const ya = graph.addCenterLine(CenterLineType.HORIZONTAL, -hostHalf, STRUCT);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, STRUCT);
+  const yb = graph.addCenterLine(CenterLineType.HORIZONTAL, hostHalf, STRUCT);
+  const hostL = graph.addBeam(WOOD, 'WOOD-120x120', x0, true, ya, yb, { role: 'primary', beamType: '軒桁' });
+  const hostR = graph.addBeam(WOOD, 'WOOD-120x120', x1, true, ya, yb, { role: 'primary', beamType: '軒桁' });
+  const koya = graph.addBeam(WOOD, koyaSection, y0, false, x0, x1, { role: 'roofBeam', beamType: '小屋梁', ...koyaProps });
+  return { graph, koya, hostL, hostR, cl: { x0, x1, y0 } };
+}
+const belowCol = (x, y) => ({ x, y, axisX: x, axisY: y, role: 'standard' });
+
+test('【C2c】小屋梁の成: スパン（両端の間）が 1820/1821/2730/2731/3640/3641/7280 のとき、表の 120/210/210/270/270/270/270', () => {
+  const expected = new Map([[1820, 120], [1821, 210], [2730, 210], [2731, 270], [3640, 270], [3641, 270], [7280, 270]]);
+  for (const [span, depth] of expected) {
+    // 初期断面は 120x240（auto）。成が 120 なら 120x120 へ下がる＝「表の値で書く」ことを見る（既定のまま据え置きと区別）。
+    const { graph, koya } = makeKoyaSpan(span, { koyaSection: 'WOOD-120x240' });
+    autoFillWoodBeamDepths(graph, PROJECT, []);
+    assert.equal(koya.sectionDefId, `WOOD-120x${depth}`, `span ${span}`);
+  }
+});
+
+test('【C2c】小屋梁の成: 軸上・区間内の下階柱で支持点が区切られ（最大距離で引く）、軸から外れた柱・区間外の柱は区切らない', () => {
+  const cut = makeKoyaSpan(3640);
+  autoFillWoodBeamDepths(cut.graph, PROJECT, [belowCol(1820, 0)]);
+  assert.equal(cut.koya.sectionDefId, 'WOOD-120x120', '1820＋1820 に区切られる');
+
+  const off = makeKoyaSpan(3640);
+  autoFillWoodBeamDepths(off.graph, PROJECT, [belowCol(1820, 500), belowCol(5000, 0), belowCol(-100, 0)]);
+  assert.equal(off.koya.sectionDefId, 'WOOD-120x270', '軸（y=0）から500ずれた柱・区間外の柱は支持点に数えない');
+
+  const uneven = makeKoyaSpan(3640);
+  autoFillWoodBeamDepths(uneven.graph, PROJECT, [belowCol(1000, 0)]);
+  assert.equal(uneven.koya.sectionDefId, 'WOOD-120x210', '最大距離 2640 で引く（1000 と 2640 の大きい方）');
+});
+
+test('【C2c】小屋梁の成: locked の小屋梁は触らず（成が表と違っても据え置き）、auto の小屋梁だけ書く。表示用の値は付けない', () => {
+  const { graph, koya } = makeKoyaSpan(3640, { koyaProps: { dimensionStatus: 'locked' } });
+  const updated = autoFillWoodBeamDepths(graph, PROJECT, []);
+  assert.equal(koya.sectionDefId, 'WOOD-120x120', 'locked は不変');
+  assert.equal(updated.includes(koya.id), false);
+
+  const auto = makeKoyaSpan(3640);
+  const updatedAuto = autoFillWoodBeamDepths(auto.graph, PROJECT, []);
+  assert.deepEqual(updatedAuto.filter(id => id === auto.koya.id), [auto.koya.id], '対照: auto は書かれる（検出力）');
+  assert.equal(auto.koya.woodAutoDepthMm, null);
+  assert.equal(auto.koya.woodDepthFollowsManual, null);
+});
+
+test('【C2c】成の伝播: 端に下階柱が無く、小屋梁の成＞host の成なら host（受ける梁）が小屋梁と同じ成になる。host の追従印・表示用の値は付かない', () => {
+  const { graph, koya, hostL, hostR } = makeKoyaSpan(3640);
+  autoFillWoodBeamDepths(graph, PROJECT, []);
+  assert.equal(koya.sectionDefId, 'WOOD-120x270');
+  assert.equal(hostL.sectionDefId, 'WOOD-120x270', '左の host が 270 へ');
+  assert.equal(hostR.sectionDefId, 'WOOD-120x270', '右の host が 270 へ');
+  assert.equal(hostL.woodDepthFollowsManual, null, '伝播は手入力の追従印ではない');
+  assert.equal(hostL.woodAutoDepthMm, null);
+});
+
+test('【C2c】成の伝播: 端が下階柱の位置ならその端の host へは伝播しない（F1）。片端だけ下階柱なら他端だけ伝播する', () => {
+  const both = makeKoyaSpan(3640);
+  autoFillWoodBeamDepths(both.graph, PROJECT, [belowCol(0, 0), belowCol(3640, 0)]);
+  // 柱が (1820,…) に無いので小屋梁自身は 3640 のまま 270。端が柱の位置なので host は 120 のまま。
+  assert.equal(both.koya.sectionDefId, 'WOOD-120x270');
+  assert.equal(both.hostL.sectionDefId, 'WOOD-120x120');
+  assert.equal(both.hostR.sectionDefId, 'WOOD-120x120');
+
+  const one = makeKoyaSpan(3640);
+  autoFillWoodBeamDepths(one.graph, PROJECT, [belowCol(0, 0)]);
+  assert.equal(one.hostL.sectionDefId, 'WOOD-120x120', '柱がある端は伝播しない');
+  assert.equal(one.hostR.sectionDefId, 'WOOD-120x270', '柱が無い端は伝播する');
+});
+
+test('【C2c】host の梁成表の「中間荷重」に小屋梁を数えない（U5）。同じ位置の小梁（secondary）なら荷重として数えて host が上がる（対照）', () => {
+  // host は x=0 の縦の梁（y -1000..1000＝スパン2000。荷重0なら 240、荷重1なら 270）。短い（910）梁を y=0 で取りつかせる。
+  const build = role => {
+    const graph = new PlanGraph(new Plane('roof1', 6000, '小屋伏図', 1, 1, false, null, 0, true, 'p_top'));
+    graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, STRUCT);
+    const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 910, STRUCT);
+    const ya = graph.addCenterLine(CenterLineType.HORIZONTAL, -1000, STRUCT);
+    const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, STRUCT);
+    const yb = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, STRUCT);
+    const host = graph.addBeam(WOOD, 'WOOD-120x120', x0, true, ya, yb, { role: 'primary', beamType: '軒桁' });
+    graph.addBeam(WOOD, 'WOOD-120x120', y0, false, x0, x1, { role, beamType: role === 'roofBeam' ? '小屋梁' : '小梁' });
+    return { graph, host };
+  };
+  const koya = build('roofBeam');
+  autoFillWoodBeamDepths(koya.graph, PROJECT, []);
+  assert.equal(koya.host.sectionDefId, 'WOOD-120x240', '小屋梁（910・成120）は荷重に数えない＝荷重0の表値240。成は host 以下なので伝播もしない');
+  const secondary = build('secondary');
+  autoFillWoodBeamDepths(secondary.graph, PROJECT, []);
+  assert.equal(secondary.host.sectionDefId, 'WOOD-120x270', '対照: 小梁なら中間荷重1か所＝270（この構成で荷重が効くことの検出力）');
+});
+
+test('【C2c】autoFillWoodBeamDepths: 冪等（2回目は更新なし）。onlyIds が空（手動追加の経路）なら小屋梁も触らない', () => {
+  const { graph, koya } = makeKoyaSpan(3640);
+  const none = autoFillWoodBeamDepths(graph, PROJECT, [], { onlyIds: [], propagate: false });
+  assert.deepEqual(none, []);
+  assert.equal(koya.sectionDefId, 'WOOD-120x120', 'onlyIds が空なら何も書かない');
+  const first = autoFillWoodBeamDepths(graph, PROJECT, []);
+  assert.ok(first.includes(koya.id));
+  assert.deepEqual(autoFillWoodBeamDepths(graph, PROJECT, []), [], '2回目は更新0');
+});
+
+test('【C2c・失敗系】手動追加の経路（onlyIds＝追加した大梁・propagate:false）では、小屋梁から追加した大梁へ成を伝播しない（対照: 通常の経路は伝播して270）', () => {
+  // koya（スパン3640→270）が下階柱の無い位置で hostL に載る。hostL を「いま手動追加した大梁」とみなす。
+  const manual = makeKoyaSpan(3640);
+  autoFillWoodBeamDepths(manual.graph, PROJECT, [], { onlyIds: [manual.hostL.id], propagate: false });
+  assert.equal(manual.hostL.sectionDefId, 'WOOD-120x120', '追加した梁は自分の表値のまま（既存の小屋梁の成を受け取らない）');
+  assert.equal(manual.koya.sectionDefId, 'WOOD-120x120', 'onlyIds に無い小屋梁は書かない');
+
+  const normal = makeKoyaSpan(3640);
+  autoFillWoodBeamDepths(normal.graph, PROJECT, []);
+  assert.equal(normal.hostL.sectionDefId, 'WOOD-120x270', '対照: 通常の経路は小屋梁の成が host へ伝播する（検出力）');
+});
+
+test('【C2c・失敗系】長さ0の小屋梁（支持点が1点）は成を引けず据え置き、例外を投げない。非在来の graph は何もしない', () => {
+  const { graph, cl } = makeKoyaSpan(3640);
+  const degenerate = graph.addBeam(WOOD, 'WOOD-120x120', cl.y0, false, cl.x0, cl.x0, { role: 'roofBeam', beamType: '小屋梁' });
+  assert.doesNotThrow(() => autoFillWoodBeamDepths(graph, PROJECT, []));
+  assert.equal(degenerate.sectionDefId, 'WOOD-120x120');
+
+  const steel = makeKoyaSpan(3640);
+  steel.graph.structureOverride = null;
+  assert.deepEqual(autoFillWoodBeamDepths(steel.graph, PROJECT, []), []);
+  assert.equal(steel.koya.sectionDefId, 'WOOD-120x120');
+});
+
 // ---------------- 構造再計算の統合（本番と同じ順: 小屋伏図→最上階） ----------------
 
 // 最上階: 3640×7280 の実壁の部屋（矩形）。主屋根の形状は引数。小屋伏図: 最上階の peek で解決。
@@ -449,12 +585,37 @@ test('【統合】recomputeStructuralForGraph: 切妻の主屋根で、小屋伏
     // 既存の大梁（軒桁など）: 被覆区間は同じ（小屋梁の梁芯CLが下階柱位置と重なると分割されうるが、被覆は不変）。
     const notKoya = b => b.role !== 'roofBeam';
     assert.deepEqual(coverage(withKoya.roofGraph, notKoya), coverage(baseline.roofGraph, notKoya), '軒桁などの被覆は不変');
-    // 小屋梁自身は梁成表・個別採番の対象外（断面は既定の幅×成のまま。成の表は次のステップ）。
+    // 小屋梁自身は梁成表・個別採番の対象外（成は専用の表。C2c。値は下の【統合】C2c のテストで固定）。
     assert.ok(koya.every(b => b.dimensionStatus === 'auto'));
     // 3周目（もう一度回しても）変化 0。
     floorSwapManager.peek = async (plane) => peekWith[plane.id] ?? null;
     const again = await recomputeStructuralForGraph(withKoya.roofGraph, withKoya.project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(again.changed, false, '収束後の再計算は変化 0（冪等）');
+  } finally {
+    floorSwapManager.peek = original;
+  }
+});
+
+test('【統合】recomputeStructuralForGraph（C2c）: 小屋梁の断面だけが変わる再計算でも changed=true（保存・undo の判定に乗る）。収束後は false', async () => {
+  const { project, g1, roofGraph } = buildProject(RoofShape.GABLE);
+  const original = floorSwapManager.peek;
+  try {
+    floorSwapManager.peek = async (plane) => ({ p1: g1, roof1: roofGraph })[plane.id] ?? null;
+    assert.ok(await converge(project, g1, roofGraph) !== null);
+    const koya = roofBeams(roofGraph);
+    assert.deepEqual(koya.map(b => `${desc(b)} ${b.sectionDefId}`).sort(),
+      ['y=1820:0..3640 WOOD-120x270', 'y=3640:0..3640 WOOD-120x270', 'y=5460:0..3640 WOOD-120x270'],
+      '3640 の小屋梁3本はスパン3640（下階柱で区切られない）＝表の270');
+    // 断面だけを既定へ戻す（梁の入れ替え・柱・CL は変えない）。次の再計算の変化は成の書き戻しだけ。
+    const target = koya.find(b => b.axisValue === 3640);
+    const idsBefore = roofGraph.beams.map(b => b.id).sort();
+    target.setField('sectionDefId', 'WOOD-120x120');
+    const r = await recomputeStructuralForGraph(roofGraph, project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.equal(target.sectionDefId, 'WOOD-120x270', '成が表の値へ戻る');
+    assert.deepEqual(roofGraph.beams.map(b => b.id).sort(), idsBefore, '前提: 梁の増減は無い＝changed の源は成の書き戻しだけ');
+    assert.equal(r.changed, true);
+    const again = await recomputeStructuralForGraph(roofGraph, project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.equal(again.changed, false, '収束後は変化 0（冪等）');
   } finally {
     floorSwapManager.peek = original;
   }

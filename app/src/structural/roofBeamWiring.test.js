@@ -101,7 +101,7 @@ const putRoofBeam = (role, status = 'auto', section = 'WOOD-120x210') => (g2, { 
   return [b];
 };
 
-test('【C2a統合】構造再計算を通しても、auto の小屋梁は撤去されず・断面を書き換えられず・柱を生まず・他の梁を分割せず、変化0件に収束する', async () => {
+test('【C2a統合】構造再計算を通しても、auto の小屋梁は撤去されず・断面は小屋梁の成の表（スパン1820→120）で書かれ・柱を生まず・他の梁を分割せず、変化0件に収束する', async () => {
   const base = buildTwoFloors(null);
   const withRoof = buildTwoFloors(putRoofBeam('roofBeam'));
   const [roofBeam] = withRoof.placed;
@@ -112,7 +112,9 @@ test('【C2a統合】構造再計算を通しても、auto の小屋梁は撤去
 
   // 誰にも触られない
   assert.equal(withRoof.g2.beamMap.get(roofBeam.id), roofBeam, '撤去も作り直しもされない（同一インスタンスのまま）');
-  assert.equal(roofBeam.sectionDefId, 'WOOD-120x210', '断面は書き換えられない（梁成表の対象外・幅は柱寸と同値）');
+  // 【C2c で書き換え・2026-10-02】C2a 時点は「断面は書き換えられない（120x210 のまま）」。C2c で小屋梁の成の表が
+  // 入ったため、スパン1820（支持点は両端のみ）の auto の小屋梁は表の最小値 120 へ書かれる（柱・他の梁・収束は不変のまま）。
+  assert.equal(roofBeam.sectionDefId, 'WOOD-120x120', '断面は小屋梁の成の表（スパン1820→120）で書かれる');
   assert.equal(roofBeam.woodAutoDepthMm, null, '梁成表の表示用の値も書かれない');
   assert.equal(roofBeam.woodDepthFollowsManual, null);
   assert.deepEqual([roofBeam.clStart.id, roofBeam.clEnd.id], [withRoof.g2.centerLines.find(c => c.value === 0 && c.centerLineType === CenterLineType.HORIZONTAL).id, withRoof.g2.centerLines.find(c => c.value === 1820 && c.centerLineType === CenterLineType.HORIZONTAL).id], '端のCLも不変（他の梁を分割する再割付けもない）');
@@ -162,7 +164,10 @@ test('【C2a】conformWoodSections: 小屋梁は「既定で入る」集合—�
   assert.equal(same.sectionDefId, 'WOOD-120x210');
 });
 
-test('【C2a】autoFillWoodBeamDepths（梁成表）: 小屋梁は対象外——支持点間が長くても断面を変えず、大梁(primary)は表で成が上がる（対照）', () => {
+// 【C2c で書き換え・2026-10-02】C2a 時点は「小屋梁は成の算定の対象外＝断面を変えない（120x120 のまま）」を固定していた。
+// C2c で小屋梁に専用の成の表（スパン7280→最大値270）が入ったため、断面は 120x270 になる。「梁成表の対象外」という
+// 趣旨は保つ（梁成表なら同スパンは300＝大梁 primary の値。小屋梁が 300 にならないことで梁成表を通っていないと言える）。
+test('【C2a】autoFillWoodBeamDepths（梁成表）: 小屋梁は梁成表の対象外——支持点間が長くても梁成表の成（300）にならず小屋梁の表の最大値270、大梁(primary)は梁成表で上がる（対照）', () => {
   const graph = makeGraph();
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, STRUCT);
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 7280, STRUCT);
@@ -171,9 +176,9 @@ test('【C2a】autoFillWoodBeamDepths（梁成表）: 小屋梁は対象外—�
   const roofBeam = graph.addBeam(WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'roofBeam', beamType: '小屋梁' });
   const primary = graph.addBeam(WOOD, 'WOOD-120x120', y1, false, x0, x1, { role: 'primary' });
   autoFillWoodBeamDepths(graph, PROJECT, []);
-  assert.equal(roofBeam.sectionDefId, 'WOOD-120x120', '小屋梁（スパン7280）は表で書き換えられない');
+  assert.equal(roofBeam.sectionDefId, 'WOOD-120x270', '小屋梁（スパン7280）は小屋梁の表の最大値（梁成表の300ではない）');
   assert.equal(roofBeam.woodAutoDepthMm, null);
-  assert.notEqual(primary.sectionDefId, 'WOOD-120x120', '対照: 同スパンの大梁は表で成が上がる（検出力）');
+  assert.equal(primary.sectionDefId, 'WOOD-120x300', '対照: 同スパンの大梁は梁成表（7280は表の外＝荷重0の最大列300）で成が上がる（検出力）');
 });
 
 test('【C2a】WOOD_DEPTH_BEAM_ROLES / showsWoodBeamDepthFields: 小屋梁は梁成表の対象でなく、カードに「梁成」「自動梁の対象」欄を出さない', () => {

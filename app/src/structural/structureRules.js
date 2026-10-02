@@ -99,6 +99,13 @@ export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
   purlinPitchMm: 910,
   purlinStartOffsetsMm: Object.freeze([455, 910]),
   strutMaxPitchMm: 1820,
+  // 小屋梁の成の表（ステップC2c。ユーザー仕様書）。支持点間の最大距離が spanLimitsMm の各値以下なら
+  // 対応する depthsMm の成。表の外（3640超）は表の最大値。梁成表（WOOD_BEAM_DEPTH_TABLE）とは別表で、
+  // 中間荷重の列を持たない（woodFraming.js koyaBeamDepthMm）。
+  koyaBeamDepthTable: Object.freeze({
+    spanLimitsMm: Object.freeze([1820, 2730, 3640]),
+    depthsMm: Object.freeze([120, 210, 270]),
+  }),
 });
 // 木造下地（壁下地材・外壁の開口まわり）。寸法は「柱寸×○」で柱寸に連動する係数として持つ
 // （適用は woodFraming.js の studSpec / openingJambSpec / studPositions）。

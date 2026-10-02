@@ -10,6 +10,7 @@ import {
   beamWallCrossPoints, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
   wallRunFaces, faceStudPositions, sillTopLevelOffsetMm, jambAxisValue, jambColumnPositions, rectsOverlap,
   supportSpanColumnPositions, mergePrimaryBeamRuns, wallRunFreeEnds, SUPPORT_SPAN_PRIORITY_ORDER,
+  koyaBeamDepthMm, koyaBeamDepthForSpans,
 } from './woodFraming.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { findSectionEntry, woodRectSectionKey, SECTION_CATALOG } from './sectionCatalog.js';
@@ -45,6 +46,42 @@ test('【失敗系】woodBeamDepthMm: 非数・0以下の距離、負や非整�
   assert.equal(woodBeamDepthMm(undefined, 0), null);
   assert.equal(woodBeamDepthMm(1820, -1), null);
   assert.equal(woodBeamDepthMm(1820, 1.5), null);
+});
+
+test('koyaBeamDepthMm（C2c）: 小屋梁の成の表＝1820以下120／2730以下210／3640以下270。境界は「以下」で、3640超も表の最大値270', () => {
+  assert.deepEqual(TRADITIONAL_WOOD_FRAMING.koyaBeamDepthTable, { spanLimitsMm: [1820, 2730, 3640], depthsMm: [120, 210, 270] });
+  assert.equal(koyaBeamDepthMm(1), 120);
+  assert.equal(koyaBeamDepthMm(1820), 120);
+  assert.equal(koyaBeamDepthMm(1821), 210);
+  assert.equal(koyaBeamDepthMm(2730), 210);
+  assert.equal(koyaBeamDepthMm(2731), 270);
+  assert.equal(koyaBeamDepthMm(3640), 270);
+  assert.equal(koyaBeamDepthMm(3641), 270);
+  assert.equal(koyaBeamDepthMm(100000), 270);
+  // 梁成表（woodBeamDepthMm）とは別の表: 同じ距離・荷重0でも値が違う（2731→梁成表は300、小屋梁は270）。
+  assert.equal(woodBeamDepthMm(2731, 0), 300);
+});
+
+test('【失敗系】koyaBeamDepthMm: 非数・0以下は null（woodBeamDepthMm と同じ入力の誤り扱い）', () => {
+  for (const bad of [0, -1, NaN, Infinity, undefined, null, '1820']) {
+    assert.equal(koyaBeamDepthMm(bad), null, `${String(bad)}`);
+  }
+});
+
+test('koyaBeamDepthForSpans（C2c）: 支持点間の最大距離で引く（中間の支持点で区切ると小さくなる・tol 以内の重複は1点）', () => {
+  assert.equal(koyaBeamDepthForSpans([0, 3640]), 270);
+  assert.equal(koyaBeamDepthForSpans([3640, 0, 1820]), 120, '未ソートでもよい。1820＋1820');
+  assert.equal(koyaBeamDepthForSpans([0, 1000, 3640]), 210, '最大区間 2640');
+  assert.equal(koyaBeamDepthForSpans([0, 500, 3640]), 270, '最大区間 3140');
+  assert.equal(koyaBeamDepthForSpans([0, 0.2, 1820]), 120, 'tol 未満の近接点は同一点');
+});
+
+test('【失敗系】koyaBeamDepthForSpans: 支持点が2点未満（重複を畳んで1点を含む）・非数混入・配列でない入力は null', () => {
+  assert.equal(koyaBeamDepthForSpans([]), null);
+  assert.equal(koyaBeamDepthForSpans([100]), null);
+  assert.equal(koyaBeamDepthForSpans([100, 100]), null);
+  assert.equal(koyaBeamDepthForSpans([0, NaN, 1820]), null);
+  assert.equal(koyaBeamDepthForSpans(null), null);
 });
 
 test('woodBeamSectionKey: 支持間距離と中間荷重から「柱同寸×成」の断面キーを返し、表のすべての成×正角幅がカタログにある', () => {
