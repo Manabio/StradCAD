@@ -268,7 +268,8 @@ function requireWidth(v, name) {
  * @param {object} drawing rulesFor(...).drawing
  * @param {string} lod LodLevel
  * @param {object} p
- * @param {Array<{key:string, rect:object, shape:string, ridgeIsVertical:boolean, highSide:string|null}>} p.regions roofFramingRegions.js の戻り値
+ * @param {Array<{key:string, rect:object|null, rects?:object[], shape:string, ridgeIsVertical:boolean|null, highSide:string|null}>} p.regions roofFramingRegions.js の戻り値
+ *   （rect=null の region は矩形でない寄棟で、rects＝セル矩形から棟木・母屋を導く）
  * @param {Array<{isVertical:boolean, axis:number, lo:number, hi:number}>} p.hostBeams roofFramingHostMembers の戻り値
  * @param {number} p.ridgeWidthMm
  * @param {number} p.purlinWidthMm
@@ -289,7 +290,7 @@ export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeW
   const out = [];
   for (const region of regions) {
     const { ridges, purlins } = roofFramingLines({
-      rect: region.rect, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical,
+      rect: region.rect, rects: region.rects, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical,
       highSide: region.highSide, purlinPitchMm, purlinStartOffsetsMm, tolMm,
     });
     ridges.forEach((line, i) => {

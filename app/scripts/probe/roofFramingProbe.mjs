@@ -19,7 +19,9 @@
 //   寄棟は線の向きが混在するので、「支えの無い端の区間」の host を線ごとに決める（桁行の線＝棟木・環の長辺は大梁だけ、
 //   妻側の線＝環の短辺は大梁＋その線と平行な第1段の小屋梁）。棟木の両端に束があるかも検査する（無ければ違反）。
 //   寄棟の文書は makeHipRoofTestDoc.mjs が作る（roof-test4.stq）。飛び梁は一覧に [飛び梁] と付く。
-// 【通らない経路】矩形でない屋根（L字の下屋など）。region が無いので対象外。
+// 【矩形でない寄棟の主屋根（C2e-2）】rect:null・rects の region。棟木・母屋の一覧（種別・向き・coord・lo..hi・levelMm）を出し、
+//   auto の小屋梁が0本であることだけ確かめる（小屋梁は C2e-3。束の間隔の検査は対象外）。exit 0。
+// 【通らない経路】矩形でない屋根の小屋梁（C2e-3 まで無い）・L字の下屋（region が無いので対象外）。
 //
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/roofFramingProbe.mjs [入力.stq]   （既定: moku4）
 import crypto from 'node:crypto';
@@ -190,9 +192,27 @@ let excludedCount = 0;
 let koyaTotal = 0;
 let strutMaxPitchMm = 1820;
 if (!mainRegion) {
-  console.log('主屋根の小屋組の region なし（在来でない／陸屋根・棟違い／矩形でない／屋根なし）: 対象外');
+  console.log('主屋根の小屋組の region なし（在来でない／陸屋根・棟違い／矩形でない切妻・片流れ／屋根なし）: 対象外');
   const n = roofGraph.beams.filter(b => b.role === 'roofBeam').length;
   console.log(`  小屋梁の本数: ${n}（0であるはず）`);
+  if (n > 0) failed = true;
+} else if (!mainRegion.rect) {
+  // 矩形でない寄棟（C2e-2）: 棟木・母屋の描画だけ。小屋梁は C2e-3 まで作らないので inspectRegion（小屋梁の検査）は呼ばない。
+  const F = rulesFor(effectiveStructure(roofGraph, project)).framing;
+  const xs = mainRegion.rects.flatMap(r => [r.x1, r.x2]);
+  const ys = mainRegion.rects.flatMap(r => [r.y1, r.y2]);
+  console.log('主屋根: 矩形でない寄棟（描画のみ。小屋梁は C2e-3）: 対象外');
+  console.log(`  セル矩形 ${mainRegion.rects.length} 個  外接 x ${Math.min(...xs)}..${Math.max(...xs)} / y ${Math.min(...ys)}..${Math.max(...ys)}`);
+  const { ridges, purlins } = roofFramingLines({
+    rect: mainRegion.rect, rects: mainRegion.rects, shape: mainRegion.shape, ridgeIsVertical: mainRegion.ridgeIsVertical,
+    highSide: mainRegion.highSide, purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol,
+  });
+  for (const [name, ls] of [['棟木', ridges], ['母屋', purlins]]) {
+    console.log(`--- ${name} ${ls.length} 本 ---`);
+    for (const l of ls) console.log(`  ${l.isVertical ? 'x' : 'y'}=${l.coord}  ${l.lo}..${l.hi}  levelMm=${l.levelMm}`);
+  }
+  const n = roofGraph.beams.filter(b => b.role === 'roofBeam' && b.dimensionStatus === 'auto').length;
+  console.log(`  auto の小屋梁の本数: ${n}（0であるはず）`);
   if (n > 0) failed = true;
 } else {
   const r = inspectRegion(roofGraph, mainRegion, roofGraph.plane.name || '小屋伏図');
@@ -213,7 +233,7 @@ for (const s of strayFloors) {
   console.log(`NG: 下屋の region が無い階 [${planeLabel(s.plane)}] に auto の小屋梁が ${s.count} 本残っている`);
   failed = true;
 }
-if (!mainRegion && leanTos.length === 0 && !failed) {
+if (!mainRegion?.rect && leanTos.length === 0 && !failed) {
   console.log('小屋組の region が1つも無い文書: 対象外（exit 0）');
   process.exit(0);
 }

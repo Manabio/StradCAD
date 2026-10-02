@@ -8,8 +8,8 @@
  *   isVertical は既存の梁（StructuralBeam.isVertical）と同じ意味で、true＝y 方向に走る線（x=coord 一定、
  *   y が lo..hi）、false＝x 方向に走る線（y=coord 一定、x が lo..hi）。
  *
- * 屋根範囲は矩形 rect={x1,y1,x2,y2}（x1<x2, y1<y2）だけを扱う（roofFramingLines は矩形専用）。
- * 非矩形（rectOfBounds が null）は空を返す。非矩形の寄棟は後続ステップで別途設計する。
+ * 屋根範囲は矩形 rect={x1,y1,x2,y2}（x1<x2, y1<y2）が基本（rect* の関数は矩形専用）。矩形でない範囲は、寄棟だけ
+ * orthogonalHipLines（rects＝セル矩形。ステップ C2e-2）で棟木・母屋を導く。矩形でない切妻・片流れは空を返す。
  *
  * 不正入力の扱い:
  *   - 「何も生えない」入力（rect=null・陸屋根・棟違い・未知の形状・幅/高さ 0 の矩形）は空を返す。
@@ -160,6 +160,164 @@ function rectHipLines(rect, layout) {
   return { ridges, purlins: sortLines(purlins) };
 }
 
+// ---- 矩形でない寄棟（直交多角形）。ステップ C2e-2 ----
+
+const GEOM_EPS = 1e-6;
+
+/** 昇順の値を、先頭（最小）から tol 以内のものをその最小の値へ寄せて返す（重複なし）。 */
+function snapSorted(values, tol) {
+  const out = [];
+  for (const v of [...values].sort((a, b) => a - b)) {
+    if (out.length === 0 || v - out[out.length - 1] > tol) out.push(v);
+  }
+  return out;
+}
+
+/** 昇順の値から、前の値と EPS 以内のものを除く。 */
+function dedupeSorted(values) {
+  const out = [];
+  for (const v of values) if (out.length === 0 || v - out[out.length - 1] > GEOM_EPS) out.push(v);
+  return out;
+}
+
+/**
+ * 直交多角形の寄棟の棟木・母屋の線。建物範囲 P（rects の和集合。穴も軒として扱う）の内側へ、外周から L∞ 距離 d の
+ * 等高線（P の内側へ半辺 d の正方形を収められる点の集合 E_d の境界）を求める。
+ *  - 母屋＝軒から pitchMm ごとの段 d（k*pitchMm）で、E_d の境界のうち片側だけが E_d の内側の辺。
+ *  - 棟木＝E_d が幅 0 につぶれる段（座標の対の差の半分）で、つぶれた辺（両側とも E_d の外）。
+ *    孤立した点（正方形の翼の頂点＝方形）は線にならない。隅木・谷木は出さない。
+ * 直交多角形の E_d の境界は必ず「元の x ±d」「元の y ±d」の上にあるので、座標を圧縮した格子で正確に求まる。
+ * 矩形の寄棟（roofFramingLines の rectHipLines）とは割付の基準が違う（矩形は棟木から、こちらは軒から。ユーザー裁定）。
+ * 半スパンが pitchMm の倍数の矩形では位置が一致する。
+ * 線は {isVertical, coord, lo, hi, levelMm}（levelMm＝軒からの内側への距離）。同じ種別・段・向き・座標で端が接する辺は
+ * 1本にまとめる（棟木の十字は交点で切らない）。長さ tolMm 以下は捨てる。
+ * @param {object} p
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>} p.rects 建物範囲のセル矩形（幅か高さが tolMm 以下は無視）
+ * @param {number} p.pitchMm 母屋のピッチ（>0。例 910）
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {{ridges: Array<object>, purlins: Array<object>}}
+ * @throws {RangeError} pitchMm・tolMm が不正、rects が配列でない、座標が非有限か逆順
+ */
+export function orthogonalHipLines({ rects, pitchMm, tolMm }) {
+  requirePositive(pitchMm, 'pitchMm');
+  requireNonNegative(tolMm, 'tolMm');
+  if (!Array.isArray(rects)) throw new RangeError('rects は配列でなければなりません');
+  rects.forEach((r, i) => {
+    for (const k of ['x1', 'y1', 'x2', 'y2']) requireFinite(r?.[k], `rects[${i}].${k}`);
+    if (r.x2 < r.x1 || r.y2 < r.y1) throw new RangeError(`rects[${i}] の座標が逆順です: ${JSON.stringify(r)}`);
+  });
+  const empty = { ridges: [], purlins: [] };
+  const live = rects.filter(r => r.x2 - r.x1 > tolMm && r.y2 - r.y1 > tolMm);
+  if (live.length === 0) return empty;
+
+  // 1. 座標の圧縮と塗り（累積和 acc[j][i]＝セル (0..i-1, 0..j-1) の塗り数）
+  const xs = snapSorted(live.flatMap(r => [r.x1, r.x2]), tolMm);
+  const ys = snapSorted(live.flatMap(r => [r.y1, r.y2]), tolMm);
+  const indexOf = (arr, v) => {
+    let best = 0;
+    for (let i = 1; i < arr.length; i++) if (Math.abs(arr[i] - v) < Math.abs(arr[best] - v)) best = i;
+    return best;
+  };
+  const nx = xs.length - 1;
+  const ny = ys.length - 1;
+  const filled = Array.from({ length: ny }, () => new Array(nx).fill(false));
+  for (const r of live) {
+    for (let j = indexOf(ys, r.y1); j < indexOf(ys, r.y2); j++) {
+      for (let i = indexOf(xs, r.x1); i < indexOf(xs, r.x2); i++) filled[j][i] = true;
+    }
+  }
+  const acc = Array.from({ length: ny + 1 }, () => new Array(nx + 1).fill(0));
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) acc[j + 1][i + 1] = acc[j][i + 1] + acc[j + 1][i] - acc[j][i] + (filled[j][i] ? 1 : 0);
+  }
+  const x0 = xs[0];
+  const xN = xs[nx];
+  const y0 = ys[0];
+  const yN = ys[ny];
+
+  // 2. 収まり判定: 中心 (cx,cy)・半辺 h の正方形が P に収まるか
+  const fits = (cx, cy, h) => {
+    if (cx - h < x0 - GEOM_EPS || cx + h > xN + GEOM_EPS || cy - h < y0 - GEOM_EPS || cy + h > yN + GEOM_EPS) return false;
+    let ia = 0;
+    while (xs[ia + 1] <= cx - h + GEOM_EPS) ia++;
+    let ib = ia;
+    while (ib + 1 < nx && xs[ib + 1] < cx + h - GEOM_EPS) ib++;
+    let ja = 0;
+    while (ys[ja + 1] <= cy - h + GEOM_EPS) ja++;
+    let jb = ja;
+    while (jb + 1 < ny && ys[jb + 1] < cy + h - GEOM_EPS) jb++;
+    const count = acc[jb + 1][ib + 1] - acc[ja][ib + 1] - acc[jb + 1][ia] + acc[ja][ia];
+    return count === (ib - ia + 1) * (jb - ja + 1);
+  };
+
+  // 3. 段の集合。棟木の段 H＝座標の対の差の半分、母屋の段 D＝k*pitchMm（H の値と tolMm 以内なら H の値に寄せる）
+  const S = Math.min(xN - x0, yN - y0) / 2;
+  const hCand = [];
+  for (let a = 0; a < xs.length; a++) for (let b = a + 1; b < xs.length; b++) hCand.push((xs[b] - xs[a]) / 2);
+  for (let a = 0; a < ys.length; a++) for (let b = a + 1; b < ys.length; b++) hCand.push((ys[b] - ys[a]) / 2);
+  const ridgeLevels = snapSorted(hCand.filter(h => h > tolMm && h <= S + tolMm), tolMm);
+  const levels = ridgeLevels.map(d => ({ d, ridge: true, purlin: false }));
+  for (let k = 1; k * pitchMm <= S + tolMm; k++) {
+    const d = k * pitchMm;
+    const same = levels.find(l => l.ridge && Math.abs(l.d - d) <= tolMm);
+    if (same) same.purlin = true;
+    else levels.push({ d, ridge: false, purlin: true });
+  }
+  levels.sort((a, b) => a.d - b.d);
+
+  // 4. 段ごとの評価。辺は (種別, 段, 向き, 座標) ごとに集め、5. で端の接する辺を1本にまとめる
+  const groups = new Map();
+  const addSegment = (kind, d, isVertical, coord, lo, hi) => {
+    const key = `${kind}|${d}|${isVertical}|${coord}`;
+    if (!groups.has(key)) groups.set(key, { kind, d, isVertical, coord, segs: [] });
+    groups.get(key).segs.push([lo, hi]);
+  };
+  for (const { d, ridge, purlin } of levels) {
+    const within = (lo, hi) => v => v >= lo - GEOM_EPS && v <= hi + GEOM_EPS;
+    const X = dedupeSorted(xs.flatMap(v => [v - d, v + d]).filter(within(x0 + d, xN - d)).sort((a, b) => a - b));
+    const Y = dedupeSorted(ys.flatMap(v => [v - d, v + d]).filter(within(y0 + d, yN - d)).sort((a, b) => a - b));
+    if (X.length === 0 || Y.length === 0) continue;
+    const mid = (A, i) => (A[i] + A[i + 1]) / 2;
+    const inCell = (i, j) => i >= 0 && j >= 0 && i + 1 < X.length && j + 1 < Y.length && fits(mid(X, i), mid(Y, j), d);
+    const cellIn = Array.from({ length: X.length - 1 }, (_, i) => Array.from({ length: Y.length - 1 }, (_, j) => inCell(i, j)));
+    const cell = (i, j) => (cellIn[i]?.[j] === true);
+    for (let k = 0; k < Y.length; k++) { // 横の辺 y=Y[k]、x は X[i]..X[i+1]
+      for (let i = 0; i + 1 < X.length; i++) {
+        const up = cell(i, k - 1);
+        const down = cell(i, k);
+        if (purlin && up !== down) addSegment('purlin', d, false, Y[k], X[i], X[i + 1]);
+        else if (ridge && !up && !down && fits(mid(X, i), Y[k], d)) addSegment('ridge', d, false, Y[k], X[i], X[i + 1]);
+      }
+    }
+    for (let k = 0; k < X.length; k++) { // 縦の辺 x=X[k]、y は Y[j]..Y[j+1]
+      for (let j = 0; j + 1 < Y.length; j++) {
+        const left = cell(k - 1, j);
+        const right = cell(k, j);
+        if (purlin && left !== right) addSegment('purlin', d, true, X[k], Y[j], Y[j + 1]);
+        else if (ridge && !left && !right && fits(X[k], mid(Y, j), d)) addSegment('ridge', d, true, X[k], Y[j], Y[j + 1]);
+      }
+    }
+  }
+
+  // 5. つなぎ
+  const ridges = [];
+  const purlins = [];
+  for (const g of groups.values()) {
+    g.segs.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const [lo, hi] of g.segs) {
+      const last = merged[merged.length - 1];
+      if (last && lo <= last[1] + GEOM_EPS) last[1] = Math.max(last[1], hi);
+      else merged.push([lo, hi]);
+    }
+    for (const [lo, hi] of merged) {
+      if (hi - lo <= tolMm) continue;
+      (g.kind === 'ridge' ? ridges : purlins).push({ isVertical: g.isVertical, coord: g.coord, lo, hi, levelMm: g.d });
+    }
+  }
+  return { ridges: sortLines(ridges), purlins: sortLines(purlins) };
+}
+
 /**
  * 矩形の屋根の棟木・母屋の線（水平距離で割り付け。勾配は位置に影響しない）。矩形専用。
  * 母屋は棟木側から軒桁へ割り付ける（purlinLayoutFromRidge。ピッチ・1本目の候補は引数）。
@@ -170,9 +328,12 @@ function rectHipLines(rect, layout) {
  *  - 寄棟: 棟木（正方形は中心）からの距離が割付の位置に環（4辺に平行。軒からの内側への距離 d＝半スパン−割付の位置。
  *    横線は x1+d..x2-d、縦線は y1+d..y2-d）。棟木は長辺方向に長さ（長辺−短辺）の線。正方形は棟木なし（方形）。
  *    ridgeIsVertical は無視。
- *  - 陸屋根・棟違い・未知の形状・rect=null・幅か高さが tolMm 以下の矩形は空。
+ *  - 陸屋根・棟違い・未知の形状・幅か高さが tolMm 以下の矩形は空。
+ *  - rect=null のとき、shape が寄棟で rects（セル矩形の配列）が空でなければ矩形でない寄棟（orthogonalHipLines。
+ *    purlinStartOffsetsMm は使わない）。それ以外の rect=null は空。rect があれば rects は無視する。
  * @param {object} p
  * @param {{x1:number,y1:number,x2:number,y2:number}|null} p.rect
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>|null} [p.rects] 矩形でない建物範囲のセル矩形（rect=null のとき）
  * @param {string} p.shape RoofShape の値
  * @param {boolean} [p.ridgeIsVertical] 切妻の棟が y 方向か
  * @param {string|null} [p.highSide] 片流れの高い側
@@ -182,7 +343,7 @@ function rectHipLines(rect, layout) {
  * @returns {{ridges: Array<{isVertical:boolean,coord:number,lo:number,hi:number}>, purlins: Array<{isVertical:boolean,coord:number,lo:number,hi:number}>}}
  * @throws {RangeError} ピッチ・許容差が不正、rect の座標が非有限か逆順、片流れで highSide が不正
  */
-export function roofFramingLines({ rect, shape, ridgeIsVertical, highSide = null, purlinPitchMm, purlinStartOffsetsMm, tolMm }) {
+export function roofFramingLines({ rect, rects = null, shape, ridgeIsVertical, highSide = null, purlinPitchMm, purlinStartOffsetsMm, tolMm }) {
   requirePositive(purlinPitchMm, 'purlinPitchMm');
   if (!Array.isArray(purlinStartOffsetsMm) || purlinStartOffsetsMm.length === 0) {
     throw new RangeError('purlinStartOffsetsMm は空でない配列でなければなりません');
@@ -191,7 +352,13 @@ export function roofFramingLines({ rect, shape, ridgeIsVertical, highSide = null
   requireNonNegative(tolMm, 'tolMm');
   const layout = { pitchMm: purlinPitchMm, startOffsetsMm: purlinStartOffsetsMm, tolMm };
   const empty = { ridges: [], purlins: [] };
-  if (!rect) return empty;
+  if (!rect) {
+    // 矩形でない寄棟（rect=null・rects＝セル矩形）だけ orthogonalHipLines。矩形かどうかは呼び出し側（region）が保証する。
+    if (shape === RoofShape.HIP && Array.isArray(rects) && rects.length > 0) {
+      return orthogonalHipLines({ rects, pitchMm: purlinPitchMm, tolMm });
+    }
+    return empty;
+  }
   for (const k of ['x1', 'y1', 'x2', 'y2']) requireFinite(rect[k], `rect.${k}`);
   if (rect.x2 < rect.x1 || rect.y2 < rect.y1) {
     throw new RangeError(`rect の座標が逆順です: ${JSON.stringify(rect)}`);

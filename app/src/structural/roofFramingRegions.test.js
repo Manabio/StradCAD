@@ -140,10 +140,50 @@ test('【失敗系】mainRoofFramingRegion: 非在来（RC・S・SRC・2×4・�
   assert.equal(mainRoofFramingRegion(over, woodProject()), null, '階の上書きが S造');
 });
 
-test('【失敗系】mainRoofFramingRegion: 建物範囲が矩形でない（L字＝自動は寄棟）・空・graph 無しは null', () => {
+const byPos = (a, b) => a.y1 - b.y1 || a.x1 - b.x1;
+
+test('【C2e-2】mainRoofFramingRegion: 建物範囲が矩形でない（L字＝自動は寄棟）は rect:null・rects＝セル矩形の region（描画のみ）', () => {
   const project = woodProject();
   const l = buildRoofLayout('notch', 'none').graph;
-  assert.equal(mainRoofFramingRegion(l, project), null, 'L字は後続ステップ');
+  const region = mainRoofFramingRegion(l, project);
+  assert.deepEqual({ ...region, rects: [...region.rects].sort(byPos) }, {
+    key: 'main', rect: null,
+    rects: [
+      { x1: 0, y1: 0, x2: 2000, y2: 1500 }, { x1: 2000, y1: 0, x2: 4000, y2: 1500 }, { x1: 0, y1: 1500, x2: 2000, y2: 3000 },
+    ],
+    shape: 'hip', ridgeIsVertical: null, highSide: null,
+  });
+  // rects は graph のセル（mainRoofBounds）の写し。graph 側のオブジェクトを共有しない（書き換えても graph は不変）
+  region.rects[0].x1 = -1;
+  assert.deepEqual(mainRoofFramingRegion(l, project).rects.map(r => r.x1).sort((a, b) => a - b), [0, 0, 2000]);
+  // 寄棟を明示しても同じ
+  l.mainRoofSpec.setField('shape', RoofShape.HIP);
+  assert.equal(mainRoofFramingRegion(l, project).shape, 'hip');
+});
+
+test('【C2e-2・失敗系】mainRoofFramingRegion: 矩形でない建物範囲は寄棟のときだけ。切妻・片流れ・陸屋根・棟違い（明示）・非在来は null', () => {
+  const project = woodProject();
+  for (const shape of [RoofShape.GABLE, RoofShape.MONO, RoofShape.FLAT, RoofShape.STAGGERED]) {
+    const l = buildRoofLayout('notch', 'none').graph;
+    l.mainRoofSpec.setField('shape', shape);
+    assert.equal(mainRoofFramingRegion(l, project), null, shape);
+  }
+  const l = buildRoofLayout('notch', 'none').graph;
+  for (const key of ['RC造(ラーメン)', 'S造', '木造（2"×4"）', UNSPECIFIED_STRUCTURE]) {
+    assert.equal(mainRoofFramingRegion(l, woodProject(key)), null, key);
+  }
+  l.setStructureOverride('S造');
+  assert.equal(mainRoofFramingRegion(l, project), null, '階の上書きが S造');
+});
+
+test('【C2e-2】L字の下屋（屋根セル）は主屋根の region が増えても region にならない（下屋は矩形のみ）', () => {
+  const l = makeGrid(XS, YS);
+  l.roof([[1, 1], [2, 1], [1, 2]]); // L字の下屋
+  assert.deepEqual(leanToFramingRegions(l.graph, woodProject()), []);
+});
+
+test('【失敗系】mainRoofFramingRegion: 空・graph 無しは null', () => {
+  const project = woodProject();
   assert.equal(mainRoofFramingRegion(new PlanGraph(new Plane('p1', 0, '3階', 3, 1)), project), null, '部屋が無い');
   assert.equal(mainRoofFramingRegion(null, project), null);
   assert.equal(mainRoofFramingRegion(undefined, project), null);

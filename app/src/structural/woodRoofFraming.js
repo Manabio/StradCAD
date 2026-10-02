@@ -245,8 +245,9 @@ function planHipTobibariSegments(graph, rules, region, primaries, koyaBeams) {
  *    不要になった小屋梁由来の梁芯CLは撤去しない（孤児の梁芯を撤去しない既存の裁定。床梁・壁由来と同じ）。
  * @param {object} graph 小屋梁を載せる平面の graph（主屋根＝屋根専用平面、下屋＝その屋根セルのある実体階）
  * @param {object} project
- * @param {Array<{key:string, rect:object, shape:string, ridgeIsVertical:boolean, highSide:string|null}>|undefined} regions
- *   roofFramingRegions.js の region（主屋根・下屋）。undefined なら何もしない
+ * @param {Array<{key:string, rect:object|null, shape:string, ridgeIsVertical:boolean|null, highSide:string|null}>|undefined} regions
+ *   roofFramingRegions.js の region（主屋根・下屋）。undefined なら何もしない。rect=null（矩形でない寄棟）の region は
+ *   小屋梁を作らない（候補0＝ auto の小屋梁は撤去・locked は残る。矩形でない寄棟の小屋梁は C2e-3）
  * @returns {{created: object[], removed: string[]}}
  */
 export function autoFillWoodRoofFraming(graph, project, regions) {
@@ -320,6 +321,7 @@ export function autoFillWoodRoofFraming(graph, project, regions) {
 
   if (rules.framing) {
     for (const region of regions) {
+      if (!region.rect) continue; // 矩形でない寄棟の region（rect=null・描画のみ）は小屋梁を作らない（C2e-3）
       if (region.shape === RoofShape.HIP) {
         // 寄棟は2段: 梁間方向の小屋梁（第1段）→ それを host に含めた飛び梁（第2段）。
         const koya = emitSegments(planHipKetaSegments(graph, rules, region, primaries), ROOF_BEAM_TYPE);

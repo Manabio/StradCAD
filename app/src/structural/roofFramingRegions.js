@@ -5,7 +5,9 @@
  *
  * region＝{ key, rect, shape, ridgeIsVertical, highSide }。次をすべて満たす屋根だけが region になる:
  *   - 在来木造（rulesFor(effectiveStructure(graph, project)).framing が真。構造種別の直接比較はしない）
- *   - 範囲が矩形（rectOfBounds が非 null。矩形でない屋根は後続ステップ）
+ *   - 範囲が矩形（rectOfBounds が非 null）。矩形でない主屋根は寄棟のときだけ例外で、
+ *     { key:'main', rect:null, rects:セル矩形の配列, shape:'hip', ridgeIsVertical:null, highSide:null }（描画のみ。
+ *     小屋梁は作らない＝C2e-3。下屋の矩形でない範囲は region なし）
  *   - 形状（自動なら導いた形状）が片流れ・切妻・寄棟（陸屋根・棟違いは小屋組を持たない）
  * ridgeIsVertical は切妻だけ spec.ridgeDirection（指定が無ければ長手）に従う。他の形状は常に長手。
  * 形状・範囲・高い側の判断は既存の関数（mainRoof.js・roofDefaults.js・roofOrientation.js・roofGeometry.js）を
@@ -37,12 +39,27 @@ function regionRidgeIsVertical(shape, spec, rect) {
   return resolveRoofRidgeIsVertical(spec?.ridgeDirection ?? null, rect, CL_OVERLAP_TOL_MM);
 }
 
+/**
+ * 矩形でない主屋根の region（ステップ C2e-2）。形状（自動なら導いた形状）が寄棟のときだけ作る（矩形でない切妻・片流れは
+ * 小屋組を持たない）。rect=null・rects＝セル矩形（有効なもののコピー。無ければ null を返す）。描画（棟木・母屋・束）だけに
+ * 使い、小屋梁は作らない（C2e-3）。
+ */
+function hipOnlyRegion(topGraph, project, bounds) {
+  const rects = (bounds ?? [])
+    .filter(b => b && [b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) && b.x2 > b.x1 && b.y2 > b.y1)
+    .map(({ x1, y1, x2, y2 }) => ({ x1, y1, x2, y2 }));
+  if (rects.length === 0) return null;
+  if (resolveMainRoofShape(topGraph, project) !== RoofShape.HIP) return null;
+  return { key: 'main', rect: null, rects, shape: RoofShape.HIP, ridgeIsVertical: null, highSide: null };
+}
+
 /** 主屋根（最上階の建物範囲）の小屋組の region。条件を満たさなければ null。 */
 export function mainRoofFramingRegion(topGraph, project) {
   if (!topGraph) return null;
   if (!rulesFor(effectiveStructure(topGraph, project)).framing) return null;
-  const rect = rectOfBounds(mainRoofBounds(topGraph));
-  if (!rect) return null;
+  const bounds = mainRoofBounds(topGraph);
+  const rect = rectOfBounds(bounds);
+  if (!rect) return hipOnlyRegion(topGraph, project, bounds);
   const shape = resolveMainRoofShape(topGraph, project);
   if (!FRAMING_SHAPES.has(shape)) return null;
   const highSide = shape === RoofShape.MONO ? mainRoofHighSideView(topGraph, project).value : null;

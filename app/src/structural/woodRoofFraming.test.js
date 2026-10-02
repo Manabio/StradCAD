@@ -327,6 +327,29 @@ test('locked の小屋梁は、候補から外れても保持される（auto �
   assert.deepEqual(descs(graph), ['y=3640:0..3640']);
 });
 
+// 矩形でない寄棟の region（rect:null・rects。C2e-2＝描画のみ）。小屋梁は C2e-3 まで作らない。
+const NON_RECT_HIP = {
+  key: 'main', rect: null, shape: RoofShape.HIP, ridgeIsVertical: null, highSide: null,
+  rects: [{ x1: 0, y1: 0, x2: 3640, y2: 3640 }, { x1: 0, y1: 3640, x2: 3640, y2: 7280 }, { x1: 3640, y1: 3640, x2: 7280, y2: 7280 }],
+};
+
+test('【C2e-2】矩形でない寄棟の region（rect:null）は小屋梁を作らず、例外も投げない。既存の auto の小屋梁は region 無しと同じく撤去、locked は残る', () => {
+  const fresh = makeRoof({ mid: true });
+  const clCount = fresh.graph.centerLines.length;
+  assert.deepEqual(autoFillWoodRoofFraming(fresh.graph, PROJECT, [NON_RECT_HIP]), { created: [], removed: [] });
+  assert.equal(roofBeams(fresh.graph).length, 0, '小屋梁を作らない');
+  assert.equal(fresh.graph.centerLines.length, clCount, '梁芯CLも作らない');
+
+  const { graph } = makeRoof();
+  autoFillWoodRoofFraming(graph, PROJECT, [GABLE]);
+  const keep = roofBeams(graph).find(b => b.axisValue === 3640);
+  keep.setDimensionStatus('locked');
+  const { created, removed } = autoFillWoodRoofFraming(graph, PROJECT, [NON_RECT_HIP]);
+  assert.equal(created.length, 0);
+  assert.equal(removed.length, 2, 'auto の2本だけ撤去（[] と同じ）');
+  assert.deepEqual(descs(graph), ['y=3640:0..3640'], 'locked は残る');
+});
+
 // ---------------- 失敗系・境界 ----------------
 
 test('【失敗系】屋根範囲の端に host（縦の軒桁）が無い区間は生成しない（x0 側の軒桁なし＋中央あり → 中央〜x1 だけ）', () => {

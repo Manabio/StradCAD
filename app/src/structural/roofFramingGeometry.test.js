@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  roofFramingLines, roofRidgeIsVertical, koyaBeamPositions, roofStrutPoints, purlinLayoutFromRidge,
+  roofFramingLines, roofRidgeIsVertical, koyaBeamPositions, roofStrutPoints, purlinLayoutFromRidge, orthogonalHipLines,
 } from './roofFramingGeometry.js';
 import { RoofShape } from '../core/constants.js';
 
@@ -442,4 +442,157 @@ test('切妻の母屋・棟木と横架材の束: 7280x8974 縦棟 × 軒桁2本
   const { ridges, purlins } = lines(r, RoofShape.GABLE, { ridgeIsVertical: true });
   const pts = roofStrutPoints([...ridges, ...purlins], [mem(false, -12614, 0, 7280), mem(false, -3640, 0, 7280)], TOL);
   assert.equal(pts.length, 14);
+});
+
+// ---- orthogonalHipLines（矩形でない寄棟。ステップ C2e-2。軒から 910 ごとの L∞ 等高線＝母屋、つぶれる位置＝棟木） ----
+// 期待値は手計算（y は下向き正）。期待の並びは sortLines と同じ（横線→縦線、coord 昇順、lo 昇順）。
+
+const H = (coord, lo, hi, levelMm) => ({ isVertical: false, coord, lo, hi, levelMm });
+const V = (coord, lo, hi, levelMm) => ({ isVertical: true, coord, lo, hi, levelMm });
+const byOrder = (a, b) => (a.isVertical === b.isVertical ? 0 : (a.isVertical ? 1 : -1)) || a.coord - b.coord || a.lo - b.lo;
+const ortho = (rects, extra = {}) => orthogonalHipLines({ rects, pitchMm: PITCH, tolMm: TOL, ...extra });
+const expectLines = (rects, ridges, purlins) => {
+  const r = ortho(rects);
+  assert.deepEqual(r.ridges, [...ridges].sort(byOrder));
+  assert.deepEqual(r.purlins, [...purlins].sort(byOrder));
+};
+const L_SHAPE = [rc(0, 0, 5460, 3640), rc(0, 3640, 5460, 7280), rc(5460, 3640, 9100, 7280)];
+
+test('orthogonalHipLines (a) L字 9100x7280 から右上 3640x3640 を欠いた形: 棟木2本・母屋10本', () => {
+  expectLines(L_SHAPE,
+    [H(5460, 3640, 7280, 1820), V(2730, 2730, 4550, 2730)],
+    [
+      H(910, 910, 4550, 910), V(4550, 910, 4550, 910), H(4550, 4550, 8190, 910),
+      V(8190, 4550, 6370, 910), H(6370, 910, 8190, 910), V(910, 910, 6370, 910),
+      H(1820, 1820, 3640, 1820), V(3640, 1820, 5460, 1820), H(5460, 1820, 3640, 1820), V(1820, 1820, 5460, 1820),
+    ]);
+});
+
+test('orthogonalHipLines (b) T字: 母屋8本（d=910）・棟木は十字で切らない通しの2本', () => {
+  expectLines([rc(0, 0, 10920, 3640), rc(3640, 3640, 7280, 9100)],
+    [H(1820, 1820, 9100, 1820), V(5460, 1820, 7280, 1820)],
+    [
+      H(910, 910, 10010, 910), V(10010, 910, 2730, 910), H(2730, 6370, 10010, 910), V(6370, 2730, 8190, 910),
+      H(8190, 4550, 6370, 910), V(4550, 2730, 8190, 910), H(2730, 910, 4550, 910), V(910, 910, 2730, 910),
+    ]);
+});
+
+test('orthogonalHipLines (c) 端数のある寸法: 翼ごとに棟木の高さ（軒からの距離）が違う', () => {
+  expectLines([rc(0, 0, 3640, 8974), rc(0, 4487, 7280, 8974)],
+    [V(1820, 1820, 6307, 1820), H(6730.5, 2243.5, 5036.5, 2243.5)],
+    [
+      H(910, 910, 2730, 910), V(2730, 910, 5397, 910), H(5397, 2730, 6370, 910), V(6370, 5397, 8064, 910),
+      H(8064, 910, 6370, 910), V(910, 910, 8064, 910),
+      H(6307, 1820, 5460, 1820), V(5460, 6307, 7154, 1820), H(7154, 1820, 5460, 1820), V(1820, 6307, 7154, 1820),
+    ]);
+});
+
+test('orthogonalHipLines (d) 正方形の翼: 棟木は翼の1本だけ（正方形の頂点＝方形は棟木にならない）', () => {
+  expectLines([rc(0, 0, 7280, 7280), rc(7280, 3640, 9100, 7280)],
+    [H(5460, 5460, 7280, 1820)],
+    [
+      H(910, 910, 6370, 910), V(6370, 910, 4550, 910), H(4550, 6370, 8190, 910),
+      V(8190, 4550, 6370, 910), H(6370, 910, 8190, 910), V(910, 910, 6370, 910),
+      H(1820, 1820, 5460, 1820), H(5460, 1820, 5460, 1820), V(1820, 1820, 5460, 1820), V(5460, 1820, 5460, 1820),
+      H(2730, 2730, 4550, 2730), H(4550, 2730, 4550, 2730), V(2730, 2730, 4550, 2730), V(4550, 2730, 4550, 2730),
+    ]);
+});
+
+test('orthogonalHipLines (e) 幅 910 の翼: 棟木は出る（軒から 455）。母屋は翼に入らない', () => {
+  expectLines([rc(0, 0, 7280, 3640), rc(0, 3640, 910, 5460)],
+    [V(455, 3185, 5005, 455), H(1820, 1820, 5460, 1820)],
+    [H(910, 910, 6370, 910), H(2730, 910, 6370, 910), V(910, 910, 2730, 910), V(6370, 910, 2730, 910)]);
+});
+
+test('orthogonalHipLines (f) 中庭の穴: 穴も軒として扱い、環が穴のまわりにも回る', () => {
+  expectLines([rc(0, 0, 9100, 3640), rc(0, 5460, 9100, 9100), rc(0, 3640, 3640, 5460), rc(5460, 3640, 9100, 5460)],
+    [H(1820, 1820, 7280, 1820), H(7280, 1820, 7280, 1820), V(1820, 1820, 7280, 1820), V(7280, 1820, 7280, 1820)],
+    [
+      H(910, 910, 8190, 910), H(8190, 910, 8190, 910), V(910, 910, 8190, 910), V(8190, 910, 8190, 910),
+      H(2730, 2730, 6370, 910), H(6370, 2730, 6370, 910), V(2730, 2730, 6370, 910), V(6370, 2730, 6370, 910),
+    ]);
+});
+
+test('orthogonalHipLines: 矩形の座標が 0.3mm ずれていても（許容差 0.5 以内）同じ結果', () => {
+  // 近い座標は最小の値へ寄せるので、各グループの最小を本来の値にしてある
+  const sloppy = [rc(0, 0, 5460.3, 3640.2), rc(0.2, 3640.3, 5460.2, 7280), rc(5460, 3640, 9100, 7280.3)];
+  assert.deepEqual(ortho(sloppy), ortho(L_SHAPE));
+});
+
+test('orthogonalHipLines (g) 性質: 矩形 9100x7280 は roofFramingLines の寄棟と同じ位置（levelMm を除く）', () => {
+  const r = rc(0, 0, 9100, 7280);
+  const rectHip = lines(r, RoofShape.HIP);
+  const o = ortho([r]);
+  const bare = ls => ls.map(l => ({ isVertical: l.isVertical, coord: l.coord, lo: l.lo, hi: l.hi }));
+  assert.deepEqual(bare(o.ridges), rectHip.ridges);
+  assert.deepEqual(bare(o.purlins), rectHip.purlins);
+  assert.deepEqual(o.purlins.map(l => l.levelMm).sort((a, b) => a - b), [910, 910, 910, 910, 1820, 1820, 1820, 1820, 2730, 2730, 2730, 2730]);
+  assert.deepEqual(o.ridges.map(l => l.levelMm), [3640]);
+});
+
+test('orthogonalHipLines (g) 性質: 線は外接矩形の内側にあり、母屋の中点の L∞ 距離は levelMm（L字）', () => {
+  const { ridges, purlins } = ortho(L_SHAPE);
+  const distToNotch = (x, y) => Math.max(Math.max(5460 - x, 0, x - 9100), Math.max(0 - y, 0, y - 3640));
+  const mid = l => (l.isVertical ? { x: l.coord, y: (l.lo + l.hi) / 2 } : { x: (l.lo + l.hi) / 2, y: l.coord });
+  for (const l of [...ridges, ...purlins]) {
+    const [x1, x2] = l.isVertical ? [l.coord, l.coord] : [l.lo, l.hi];
+    const [y1, y2] = l.isVertical ? [l.lo, l.hi] : [l.coord, l.coord];
+    assert.ok(x1 >= 0 && x2 <= 9100 && y1 >= 0 && y2 <= 7280, JSON.stringify(l));
+    assert.ok(l.hi > l.lo);
+  }
+  for (const l of purlins) {
+    const { x, y } = mid(l);
+    const dist = Math.min(x, 9100 - x, y, 7280 - y, distToNotch(x, y));
+    assert.equal(dist, l.levelMm, JSON.stringify(l));
+  }
+});
+
+test('orthogonalHipLines: 2回呼んで同じ結果（入力を書き換えない）', () => {
+  const input = L_SHAPE.map(r => ({ ...r }));
+  const first = ortho(input);
+  assert.deepEqual(input, L_SHAPE);
+  assert.deepEqual(ortho(input), first);
+});
+
+test('【失敗系】orthogonalHipLines: 空・面積0だけの rects は空。不正入力は RangeError', () => {
+  const none = { ridges: [], purlins: [] };
+  assert.deepEqual(ortho([]), none);
+  assert.deepEqual(ortho([rc(0, 0, 0, 5000), rc(0, 0, 5000, 0.5)]), none);
+  assert.throws(() => ortho([rc(0, 0, NaN, 5000)]), RangeError);
+  assert.throws(() => ortho([rc(0, 0, Infinity, 5000)]), RangeError);
+  assert.throws(() => ortho([rc(5000, 0, 0, 5000)]), RangeError);
+  assert.throws(() => ortho([rc(0, 5000, 5000, 0)]), RangeError);
+  assert.throws(() => ortho([null]), RangeError);
+  assert.throws(() => ortho(null), RangeError);
+  assert.throws(() => ortho(L_SHAPE, { pitchMm: 0 }), RangeError);
+  assert.throws(() => ortho(L_SHAPE, { pitchMm: -910 }), RangeError);
+  assert.throws(() => ortho(L_SHAPE, { pitchMm: NaN }), RangeError);
+  assert.throws(() => ortho(L_SHAPE, { tolMm: -1 }), RangeError);
+});
+
+test('roofFramingLines: rect=null・寄棟・rects ありは orthogonalHipLines と同じ。切妻・片流れ・陸屋根・rects 無しは空', () => {
+  const viaLines = shape => roofFramingLines({
+    rect: null, rects: L_SHAPE, shape, ridgeIsVertical: null, highSide: null,
+    purlinPitchMm: PITCH, purlinStartOffsetsMm: STARTS, tolMm: TOL,
+  });
+  const none = { ridges: [], purlins: [] };
+  assert.deepEqual(viaLines(RoofShape.HIP), ortho(L_SHAPE));
+  for (const shape of [RoofShape.GABLE, RoofShape.MONO, RoofShape.FLAT, RoofShape.STAGGERED, 'unknown']) {
+    assert.deepEqual(viaLines(shape), none, shape);
+  }
+  const noRects = rects => roofFramingLines({
+    rect: null, rects, shape: RoofShape.HIP, purlinPitchMm: PITCH, purlinStartOffsetsMm: STARTS, tolMm: TOL,
+  });
+  assert.deepEqual(noRects(null), none);
+  assert.deepEqual(noRects(undefined), none);
+  assert.deepEqual(noRects([]), none);
+});
+
+test('roofFramingLines: rect があれば rects は無視する（従来どおり矩形の寄棟）', () => {
+  const r = rc(0, 0, 9100, 7280);
+  const withRects = roofFramingLines({
+    rect: r, rects: L_SHAPE, shape: RoofShape.HIP, purlinPitchMm: PITCH, purlinStartOffsetsMm: STARTS, tolMm: TOL,
+  });
+  assert.deepEqual(withRects, lines(r, RoofShape.HIP));
+  assert.ok(withRects.purlins.every(l => !('levelMm' in l)));
 });

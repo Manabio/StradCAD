@@ -355,6 +355,39 @@ test('roofFramingPrimitives: 寄棟は棟木側から910ごとの環状の母屋
   assert.equal(kindOf(prims, 'purlin').length, 8);
 });
 
+// L字（9100×7280 から右上 3640×3640 を欠く）。rect:null・rects の region＝矩形でない寄棟（C2e-2）。
+const L_RECTS = [
+  { x1: 0, y1: 0, x2: 5460, y2: 3640 }, { x1: 0, y1: 3640, x2: 5460, y2: 7280 }, { x1: 5460, y1: 3640, x2: 9100, y2: 7280 },
+];
+const lHipRegion = { key: 'main', rect: null, rects: L_RECTS, shape: 'hip', ridgeIsVertical: null, highSide: null };
+
+test('【C2e-2】roofFramingPrimitives: 矩形でない寄棟（rect:null・rects）は棟木の対（軸±60）・母屋（10本）・束が出る。key は main:ridge:i:± の形', () => {
+  const hostBeams = [{ isVertical: false, axis: 910, lo: 0, hi: 9100 }];
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [lHipRegion], hostBeams }));
+  assert.deepEqual(kindOf(prims, 'ridge').map(p => [p.key, p.points]), [
+    ['main:ridge:0:-', [3640, 5400, 7280, 5400]], ['main:ridge:0:+', [3640, 5520, 7280, 5520]],
+    ['main:ridge:1:-', [2670, 2730, 2670, 4550]], ['main:ridge:1:+', [2790, 2730, 2790, 4550]],
+  ], '棟木 y=5460 の x3640..7280 と x=2730 の y2730..4550（軸±60の2本ずつ）');
+  assert.deepEqual(kindOf(prims, 'purlin').map(p => p.points), [
+    [910, 910, 4550, 910], [1820, 1820, 3640, 1820], [4550, 4550, 8190, 4550], [1820, 5460, 3640, 5460], [910, 6370, 8190, 6370],
+    [910, 910, 910, 6370], [1820, 1820, 1820, 5460], [3640, 1820, 3640, 5460], [4550, 910, 4550, 4550], [8190, 4550, 8190, 6370],
+  ]);
+  const struts = kindOf(prims, 'strut');
+  assert.deepEqual(struts.map(s => [s.x, s.y, s.radius]).sort((a, b) => a[0] - b[0]), [[910, 910, 45], [4550, 910, 45]],
+    '束は y=910 の梁と、母屋 x=910・x=4550 の交点（向きが混在する線でも立つ）');
+  assert.equal(new Set(prims.map(p => p.key)).size, prims.length, 'key は一意');
+});
+
+test('【C2e-2・失敗系】roofFramingPrimitives: rects があっても矩形でない切妻・片流れ・陸屋根は空。rects が空・無しの rect:null も空', () => {
+  for (const shape of ['gable', 'mono', 'flat', 'staggered']) {
+    const region = { ...lHipRegion, shape };
+    assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] })), [], shape);
+  }
+  for (const rects of [[], undefined, null]) {
+    assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...lHipRegion, rects }] })), []);
+  }
+});
+
 test('roofFramingPrimitives: 複数 region（主屋根＋下屋）は region の key で区別され、それぞれの線が出る', () => {
   const lean = { key: 'lean:r1', rect: { x1: 0, y1: 0, x2: 9000, y2: 3000 }, shape: 'mono', ridgeIsVertical: false, highSide: 'top' };
   const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [gableRegion, lean] }));
