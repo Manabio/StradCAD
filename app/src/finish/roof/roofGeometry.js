@@ -65,3 +65,66 @@ export function roofShortSpanMm(boundsList) {
   }
   return best;
 }
+
+/**
+ * セル矩形の和集合が外接矩形と面積で一致するときだけ、その外接矩形を返す（重なりのあるセルも和集合で数える）。
+ * L字・離れた成分・空（面積0・null だけ）は null。小屋組は矩形の屋根だけを対象にする（structural/roofFramingGeometry.js）。
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>} boundsList セルの矩形
+ * @returns {{x1:number,y1:number,x2:number,y2:number}|null}
+ */
+export function rectOfBounds(boundsList) {
+  const rects = (boundsList ?? []).filter(b => b && [b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)
+    && b.x2 - b.x1 > EPS && b.y2 - b.y1 > EPS);
+  if (rects.length === 0) return null;
+
+  const xs = uniqueSorted(rects.flatMap(b => [b.x1, b.x2]));
+  const ys = uniqueSorted(rects.flatMap(b => [b.y1, b.y2]));
+  const nearIndex = (arr, v) => arr.findIndex(a => Math.abs(a - v) <= EPS);
+  const filled = Array.from({ length: ys.length - 1 }, () => new Array(xs.length - 1).fill(false));
+  for (const b of rects) {
+    for (let j = nearIndex(ys, b.y1); j < nearIndex(ys, b.y2); j++) {
+      for (let i = nearIndex(xs, b.x1); i < nearIndex(xs, b.x2); i++) filled[j][i] = true;
+    }
+  }
+  let unionArea = 0;
+  for (let j = 0; j < filled.length; j++) {
+    for (let i = 0; i < filled[j].length; i++) {
+      if (filled[j][i]) unionArea += (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j]);
+    }
+  }
+  const bbox = { x1: xs[0], y1: ys[0], x2: xs[xs.length - 1], y2: ys[ys.length - 1] };
+  const bboxArea = (bbox.x2 - bbox.x1) * (bbox.y2 - bbox.y1);
+  return Math.abs(unionArea - bboxArea) <= EPS * Math.max(1, bboxArea) ? bbox : null;
+}
+
+// 片流れの高い側の候補（同長のときの優先順でもある）。y 軸は下向き正なので top＝y が小さい辺（y1）、
+// bottom＝y2、left＝x1、right＝x2。
+const HIGH_SIDE_ORDER = ['top', 'bottom', 'left', 'right'];
+
+/**
+ * 片流れの高い側の実効値。順に:
+ *   1. 明示値（highSide が 'top'|'bottom'|'left'|'right' のどれか）。それ以外（null・不正値）は未指定扱い。
+ *   2. adjacency（各辺の外側が同じ階の屋内に接する長さ mm。下屋だけ）の最大の辺。同長は top→bottom→left→right。
+ *      全て 0 以下・非有限なら接していないとみなす。
+ *   3. 接していない場合と主屋根（adjacency=null）: 長手方向に平行な辺のうち座標が小さい側
+ *      （横長なら top、縦長なら left。正方形は棟が横方向なので top）。
+ * rect が無く 1・2 で決まらなければ null。
+ * @param {string|null} highSide
+ * @param {{x1:number,y1:number,x2:number,y2:number}|null} rect
+ * @param {{top:number,bottom:number,left:number,right:number}|null} adjacency
+ * @returns {'top'|'bottom'|'left'|'right'|null}
+ */
+export function resolveRoofHighSide(highSide, rect, adjacency) {
+  if (HIGH_SIDE_ORDER.includes(highSide)) return highSide;
+  if (adjacency) {
+    let best = null;
+    let bestLen = 0;
+    for (const side of HIGH_SIDE_ORDER) {
+      const len = adjacency[side];
+      if (Number.isFinite(len) && len > bestLen + EPS) { best = side; bestLen = len; }
+    }
+    if (best) return best;
+  }
+  if (!rect) return null;
+  return rect.y2 - rect.y1 > rect.x2 - rect.x1 + EPS ? 'left' : 'top';
+}
