@@ -478,14 +478,15 @@ test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅�
   }
 });
 
-test('structureRules（C3a）: 小屋組の描画（drawing.roofFramingLines）は在来木造だけ dashDot、他の主構造・未定・未知は none。母屋ピッチ910・束の最大間隔1820は在来だけが持つ', () => {
+test('structureRules（C3a）: 小屋組の描画（drawing.roofFramingLines）は在来木造だけ dashDot、他の主構造・未定・未知は none。母屋ピッチ候補・軒桁までの残りの上限910・束の最大間隔1820は在来だけが持つ', () => {
   assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).drawing.roofFramingLines, 'dashDot');
   for (const key of ['木造（2"×4"）', 'S造', 'SRC造', 'RC造(ラーメン)', 'RC造(壁式)', UNSPECIFIED_STRUCTURE, 'no-such-structure']) {
     assert.equal(rulesFor(key).drawing.roofFramingLines, 'none', key);
     assert.equal(rulesFor(key).framing, null, `${key}: 小屋組の定数（framing）は在来だけ`);
   }
   const framing = rulesFor(TRADITIONAL_WOOD_STRUCTURE).framing;
-  assert.equal(framing.purlinPitchMm, 910);
+  assert.deepEqual([...framing.purlinPitchesMm], [303, 455, 606, 910]);
+  assert.equal(framing.purlinMaxEaveGapMm, 910);
   assert.equal(framing.strutMaxPitchMm, 1820);
   assert.equal(framing.ridgeSection, 'WOOD-120x120', '棟木は120角');
   assert.equal(framing.purlinSection, 'WOOD-90x90', '母屋は90角（束も同寸）');

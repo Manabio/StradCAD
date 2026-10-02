@@ -285,13 +285,13 @@ test('columnCrossPointsLocal: 既定（COLUMN_CROSS_OVERHANG_RATIO）では×の
 // ---- ステップC3a: 小屋組（棟木・母屋・束）の描画プリミティブ ----
 
 const TOL = 0.5;
-const PITCH = 910;
 const WOOD_FRAMING = rulesFor(TRADITIONAL_WOOD_STRUCTURE).framing;
 // moku4 の最上階（7280×8974。X 方向が幅・Y 方向が奥行き）。切妻の棟は y 方向＝x=3640。
 const MOKU_RECT = { x1: 0, y1: -12614, x2: 7280, y2: -3640 };
 const gableRegion = { key: 'main', rect: MOKU_RECT, shape: 'gable', ridgeIsVertical: true, highSide: null };
 const baseArgs = (over = {}) => ({
-  regions: [gableRegion], hostBeams: [], ridgeWidthMm: 120, purlinWidthMm: 90, purlinPitchMm: PITCH, tolMm: TOL, ...over,
+  regions: [gableRegion], hostBeams: [], ridgeWidthMm: 120, purlinWidthMm: 90,
+  purlinPitchesMm: WOOD_FRAMING.purlinPitchesMm, maxEaveGapMm: WOOD_FRAMING.purlinMaxEaveGapMm, tolMm: TOL, ...over,
 });
 const kindOf = (prims, kind) => prims.filter(p => p.kind === kind);
 
@@ -338,16 +338,15 @@ test('roofFramingPrimitives: 母屋・棟木と交わらない host 梁（範囲
   assert.deepEqual(struts.map(s => [s.x, s.y]), [[910, -3640]]);
 });
 
-test('roofFramingPrimitives: 片流れは棟木なし・母屋は低い側の軒から910ごと（高い側 top: y=2090・1180・270）', () => {
+test('roofFramingPrimitives: 片流れは棟木なし・母屋は高い側の辺から（高さ3000は303ピッチ・残り879。top: y=303,606,…,2121 の7本）', () => {
   const region = { key: 'lean:r1', rect: { x1: 0, y1: 0, x2: 9000, y2: 3000 }, shape: 'mono', ridgeIsVertical: false, highSide: 'top' };
   const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] }));
   assert.equal(kindOf(prims, 'ridge').length, 0);
-  assert.deepEqual(kindOf(prims, 'purlin').map(p => p.points), [
-    [0, 270, 9000, 270], [0, 1180, 9000, 1180], [0, 2090, 9000, 2090],
-  ]);
+  assert.deepEqual(kindOf(prims, 'purlin').map(p => p.points),
+    [303, 606, 909, 1212, 1515, 1818, 2121].map(y => [0, y, 9000, y]));
 });
 
-test('roofFramingPrimitives: 寄棟は軒から910ごとの環状の母屋（2周×4辺）と、長さ（長辺−短辺）の棟木2本線', () => {
+test('roofFramingPrimitives: 寄棟は棟木側から910ごとの環状の母屋（2周×4辺）と、長さ（長辺−短辺）の棟木2本線', () => {
   const region = { key: 'main', rect: { x1: 0, y1: 0, x2: 7280, y2: 5460 }, shape: 'hip', ridgeIsVertical: false, highSide: null };
   const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] }));
   assert.deepEqual(kindOf(prims, 'ridge').map(p => p.points), [
@@ -360,7 +359,7 @@ test('roofFramingPrimitives: 複数 region（主屋根＋下屋）は region の
   const lean = { key: 'lean:r1', rect: { x1: 0, y1: 0, x2: 9000, y2: 3000 }, shape: 'mono', ridgeIsVertical: false, highSide: 'top' };
   const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [gableRegion, lean] }));
   assert.equal(prims.filter(p => p.key.startsWith('main:')).length, 8);
-  assert.equal(prims.filter(p => p.key.startsWith('lean:r1:')).length, 3);
+  assert.equal(prims.filter(p => p.key.startsWith('lean:r1:')).length, 7);
 });
 
 test('【失敗系】roofFramingPrimitives: 略図（SCHEMATIC）は region・host があっても空', () => {
@@ -393,7 +392,9 @@ test('【失敗系】roofFramingPrimitives: 幅が不正（0・負・NaN・未�
     assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ ridgeWidthMm: bad })), RangeError, `ridge ${bad}`);
     assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ purlinWidthMm: bad })), RangeError, `purlin ${bad}`);
   }
-  assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ purlinPitchMm: 0 })), RangeError, 'ピッチ 0');
+  assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ purlinPitchesMm: [0] })), RangeError, 'ピッチ 0');
+  assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ purlinPitchesMm: [] })), RangeError, '候補が空');
+  assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ maxEaveGapMm: undefined })), RangeError, '残りの上限なし');
 });
 
 test('showRoofFraming: 在来木造の略図以外だけ true。ROOF_FRAMING_DASH は中心線と同じ一点鎖線 [12,4,2,4]', () => {

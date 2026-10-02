@@ -295,11 +295,12 @@ test('roofFramingFigurePrimitives: 小屋伏図（屋根専用平面）は最上
   });
   const count = kind => prims.filter(p => p.kind === kind).length;
   assert.equal(count('ridge'), 2);
-  assert.equal(count('purlin'), 6, '軒から910・1820・2730 の両側');
+  assert.equal(count('purlin'), 14, '半スパン3000は303ピッチ（残り879）で棟から両側に7本ずつ');
   const struts = prims.filter(p => p.kind === 'strut');
-  assert.equal(struts.length, 7, '壁線梁 x=0 と棟木1・母屋6 の交点。床梁 x=4500 には立たない');
+  assert.equal(struts.length, 15, '壁線梁 x=0 と棟木1・母屋14 の交点。床梁 x=4500 には立たない');
   assert.ok(struts.every(s => s.x === 0 && s.radius === 45));
-  assert.deepEqual(struts.map(s => s.y), [910, 1820, 2730, 3000, 3270, 4180, 5090], '軒から910ごと・棟 y=3000');
+  assert.deepEqual(struts.map(s => s.y),
+    [879, 1182, 1485, 1788, 2091, 2394, 2697, 3000, 3303, 3606, 3909, 4212, 4515, 4818, 5121], '棟 y=3000 から303ごと');
   assert.deepEqual(prims.find(p => p.kind === 'ridge').points, [0, 2940, 9000, 2940]);
 });
 
@@ -311,9 +312,9 @@ test('roofFramingFigurePrimitives: 実体階の伏図は自階 graph の下屋�
     rules: WOOD, lod: LodLevel.DETAIL, isRoofPlane: false, subjectGraph: graph, topGraph: null, project: woodProject(),
   });
   assert.deepEqual(prims.map(p => [p.kind, ...p.points]), [
-    ['purlin', 2180, 1500, 2180, 3000],
-    ['purlin', 3090, 1500, 3090, 3000],
-  ], '片流れ left: 低い側（右 x=4000）から 910・1820 の x=3090・2180。梁が無いので束なし');
+    ['purlin', 2606, 1500, 2606, 3000],
+    ['purlin', 3212, 1500, 3212, 3000],
+  ], '片流れ left: 高い側（x=2000）から幅2000は606ピッチ（残り788）の x=2606・3212。梁が無いので束なし');
 });
 
 test('【失敗系】roofFramingFigurePrimitives: 略図・非在来は graph を一切読まずに空（region 導出を省く）', () => {

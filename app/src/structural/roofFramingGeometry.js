@@ -1,7 +1,7 @@
 /**
  * 小屋組（棟木・母屋・小屋梁の位置・束）の幾何の純モジュール（ステップ C1。どこからも呼ばない）。
  * graph・store.js・snap.js・.jsx・react・konva を import しない（node:test から単体で import できる）。
- * 定数（母屋ピッチ 910・束の最大間隔 1820・許容差）は引数で受ける（呼び出し側が structureRules.js・
+ * 定数（母屋ピッチの候補・軒桁までの残りの上限・束の最大間隔 1820・許容差）は引数で受ける（呼び出し側が structureRules.js・
  * core/constants.js の CL_OVERLAP_TOL_MM を渡す。CL_OVERLAP_TOL_MM=0.5mm＝「他CLと同一座標」とみなす距離）。
  *
  * 座標は mm、y 軸は下向きが正。線の表現 Line={isVertical, coord, lo, hi}:
@@ -13,7 +13,7 @@
  *
  * 不正入力の扱い:
  *   - 「何も生えない」入力（rect=null・陸屋根・棟違い・未知の形状・幅/高さ 0 の矩形）は空を返す。
- *   - プログラム誤り（ピッチ・許容差が非有限か不正、座標が非有限、x1>x2/y1>y2、lo>hi、
+ *   - プログラム誤り（ピッチ候補・残りの上限・許容差が非有限か不正、座標が非有限、x1>x2/y1>y2、lo>hi、
  *     片流れの highSide が不正）は RangeError を投げる。
  */
 import { RoofShape, RoofHighSide } from '../core/constants.js';
@@ -54,66 +54,106 @@ export function roofRidgeIsVertical(rect, tolMm = 0) {
   return (rect.y2 - rect.y1) - (rect.x2 - rect.x1) > tolMm;
 }
 
-// 軒（from）から内側へ pitch ごとの距離 k*pitch（k>=1）。中心（半スパン half）の手前 tol までに限る
-// （中心と一致する距離は含めない）。
-function offsetsFromEave(half, pitch, tol) {
-  const out = [];
-  for (let k = 1; k * pitch < half - tol; k++) out.push(k * pitch);
-  return out;
+/**
+ * 母屋の割付（棟木側から軒桁へ向かう。切妻・片流れ・寄棟が共用する唯一の判断）。
+ * 棟木（片流れは高い側の辺）から軒桁までの水平距離 halfSpanMm に、ピッチ p（候補 pitchesMm のどれか1つ）で
+ * 棟木側から k*p（k=1,2,…）に母屋を置く。最後の母屋（無ければ棟木）から軒桁までの残りが
+ * maxEaveGapMm 以下になったら置くのをやめる（＝残りが上限以下になる最少本数）。軒桁と重なる位置・越える位置
+ * には置かない。候補のうち残りが最大のピッチを選び、残りが同じ（tolMm 以内）なら大きいピッチ。
+ * 2026-10-02 リード解釈・ユーザー確認中: 原文「910未満」の境界を「残り 910 以下」と取る
+ * （未満を厳密に取ると半スパン 3640 が 606 ピッチになり、従来の 910 割付と変わるため）。
+ * この境界は gap <= maxEaveGapMm + tol の1箇所の比較だけに集約している。
+ * @param {object} p
+ * @param {number} p.halfSpanMm 棟木（高い側の辺）から軒桁までの距離（>=0）
+ * @param {number[]} p.pitchesMm 候補のピッチ（空でない。各 >0）
+ * @param {number} p.maxEaveGapMm 軒桁までの残りの上限（>0。例 910）
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {{pitchMm: number|null, offsetsMm: number[], eaveGapMm: number}} offsetsMm は棟木側からの距離の昇順。
+ *   母屋が不要（halfSpan が上限以下）なら pitchMm=null・offsetsMm=[]・eaveGapMm=halfSpanMm
+ * @throws {RangeError} 入力が不正
+ */
+export function purlinLayoutFromRidge({ halfSpanMm, pitchesMm, maxEaveGapMm, tolMm }) {
+  requireNonNegative(halfSpanMm, 'halfSpanMm');
+  if (!Array.isArray(pitchesMm) || pitchesMm.length === 0) {
+    throw new RangeError('pitchesMm は空でない配列でなければなりません');
+  }
+  for (const p of pitchesMm) requirePositive(p, 'pitchesMm の要素');
+  requirePositive(maxEaveGapMm, 'maxEaveGapMm');
+  requireNonNegative(tolMm, 'tolMm');
+  const gapOk = gap => gap <= maxEaveGapMm + tolMm; // 「以下」。未満にするなら <（確認中）
+  const layoutOf = pitch => {
+    const offsets = [];
+    for (let k = 1; !gapOk(halfSpanMm - (k - 1) * pitch); k++) {
+      if (k * pitch >= halfSpanMm - tolMm) break; // 軒桁と重なる・越える位置には置かない
+      offsets.push(k * pitch);
+    }
+    const last = offsets.length > 0 ? offsets[offsets.length - 1] : 0;
+    return { pitchMm: pitch, offsetsMm: offsets, eaveGapMm: halfSpanMm - last };
+  };
+  if (gapOk(halfSpanMm)) return { pitchMm: null, offsetsMm: [], eaveGapMm: halfSpanMm };
+  let best = null;
+  for (const pitch of pitchesMm) {
+    const c = layoutOf(pitch);
+    if (best === null || c.eaveGapMm > best.eaveGapMm + tolMm
+      || (Math.abs(c.eaveGapMm - best.eaveGapMm) <= tolMm && c.pitchMm > best.pitchMm)) best = c;
+  }
+  return best;
 }
 
-// ---- 以下 rect* は矩形専用（rect は検証済みの矩形） ----
+// ---- 以下 rect* は矩形専用（rect は検証済みの矩形）。layout は purlinLayoutFromRidge の引数のうち
+// 半スパン以外（{pitchesMm, maxEaveGapMm, tolMm}） ----
 
-function rectGableLines(rect, ridgeIsVertical, pitch, tol) {
+function rectGableLines(rect, ridgeIsVertical, layout) {
   const { x1, y1, x2, y2 } = rect;
   const ridges = [];
   const purlins = [];
   if (ridgeIsVertical) { // 棟は y 方向。軒は x1 と x2 の2辺
-    ridges.push(vLine((x1 + x2) / 2, y1, y2));
-    for (const d of offsetsFromEave((x2 - x1) / 2, pitch, tol)) {
-      purlins.push(vLine(x1 + d, y1, y2), vLine(x2 - d, y1, y2));
+    const c = (x1 + x2) / 2;
+    ridges.push(vLine(c, y1, y2));
+    for (const o of purlinLayoutFromRidge({ halfSpanMm: (x2 - x1) / 2, ...layout }).offsetsMm) {
+      purlins.push(vLine(c - o, y1, y2), vLine(c + o, y1, y2));
     }
   } else { // 棟は x 方向。軒は y1 と y2 の2辺
-    ridges.push(hLine((y1 + y2) / 2, x1, x2));
-    for (const d of offsetsFromEave((y2 - y1) / 2, pitch, tol)) {
-      purlins.push(hLine(y1 + d, x1, x2), hLine(y2 - d, x1, x2));
+    const c = (y1 + y2) / 2;
+    ridges.push(hLine(c, x1, x2));
+    for (const o of purlinLayoutFromRidge({ halfSpanMm: (y2 - y1) / 2, ...layout }).offsetsMm) {
+      purlins.push(hLine(c - o, x1, x2), hLine(c + o, x1, x2));
     }
   }
   return { ridges, purlins: sortLines(purlins) };
 }
 
-function rectMonoLines(rect, highSide, pitch, tol) {
+function rectMonoLines(rect, highSide, layout) {
   if (!HIGH_SIDES.includes(highSide)) {
     throw new RangeError(`片流れの highSide が不正です: ${highSide}`);
   }
   const { x1, y1, x2, y2 } = rect;
   const purlins = [];
-  // 低い側の軒から k*pitch。高い側の辺（から tol 以内）には置かない。
+  // 高い側の辺から低い側の軒へ向かって割り付ける（高い側の辺そのものには置かない）。
   if (highSide === 'top' || highSide === 'bottom') {
-    const span = y2 - y1;
-    for (let k = 1; k * pitch < span - tol; k++) {
-      purlins.push(hLine(highSide === 'top' ? y2 - k * pitch : y1 + k * pitch, x1, x2));
-    }
+    const { offsetsMm } = purlinLayoutFromRidge({ halfSpanMm: y2 - y1, ...layout });
+    for (const o of offsetsMm) purlins.push(hLine(highSide === 'top' ? y1 + o : y2 - o, x1, x2));
   } else {
-    const span = x2 - x1;
-    for (let k = 1; k * pitch < span - tol; k++) {
-      purlins.push(vLine(highSide === 'left' ? x2 - k * pitch : x1 + k * pitch, y1, y2));
-    }
+    const { offsetsMm } = purlinLayoutFromRidge({ halfSpanMm: x2 - x1, ...layout });
+    for (const o of offsetsMm) purlins.push(vLine(highSide === 'left' ? x1 + o : x2 - o, y1, y2));
   }
   return { ridges: [], purlins: sortLines(purlins) };
 }
 
-function rectHipLines(rect, pitch, tol) {
+function rectHipLines(rect, layout) {
   const { x1, y1, x2, y2 } = rect;
   const w = x2 - x1;
   const h = y2 - y1;
   const ridges = [];
-  if (Math.abs(w - h) > tol) { // 正方形（方形）は棟木なし
+  if (Math.abs(w - h) > layout.tolMm) { // 正方形（方形）は棟木なし
     if (w > h) ridges.push(hLine((y1 + y2) / 2, x1 + h / 2, x2 - h / 2));
     else ridges.push(vLine((x1 + x2) / 2, y1 + w / 2, y2 - w / 2));
   }
   const purlins = [];
-  for (const d of offsetsFromEave(Math.min(w, h) / 2, pitch, tol)) {
+  // 棟木（正方形は中心）からの距離 o の位置に環を置く。軒からの内側への距離 d = 半スパン − o。
+  const half = Math.min(w, h) / 2;
+  for (const o of purlinLayoutFromRidge({ halfSpanMm: half, ...layout }).offsetsMm) {
+    const d = half - o;
     purlins.push(
       hLine(y1 + d, x1 + d, x2 - d), hLine(y2 - d, x1 + d, x2 - d),
       vLine(x1 + d, y1 + d, y2 - d), vLine(x2 - d, y1 + d, y2 - d),
@@ -124,26 +164,34 @@ function rectHipLines(rect, pitch, tol) {
 
 /**
  * 矩形の屋根の棟木・母屋の線（水平距離で割り付け。勾配は位置に影響しない）。矩形専用。
- *  - 切妻: 棟＝矩形の中央（向きは ridgeIsVertical。未指定なら roofRidgeIsVertical）。母屋は両側の軒から
- *    k*pitch（k>=1）。棟と重なる位置・棟を越える位置には置かない。端は屋根範囲の辺まで。
+ * 母屋は棟木側から軒桁へ割り付ける（purlinLayoutFromRidge。候補ピッチ・残りの上限は引数）。
+ *  - 切妻: 棟＝矩形の中央（向きは ridgeIsVertical。未指定なら roofRidgeIsVertical）。母屋は棟から両側へ
+ *    k*p（半スパン＝短手の半分）。端は屋根範囲の辺まで。
  *  - 片流れ: 棟木なし。highSide（'top'|'bottom'|'left'|'right'。y 軸が下向き正なので top＝y が小さい辺 y1、
- *    bottom＝y2、left＝x1、right＝x2）が高い側。低い側の軒から k*pitch。高い側の辺そのものには置かない。
- *  - 寄棟: 軒から内側へ d=k*pitch の環（4辺に平行。横線は x1+d..x2-d、縦線は y1+d..y2-d）。中心（短辺/2）に
- *    届く d は置かない。棟木は長辺方向に長さ（長辺−短辺）の線。正方形は棟木なし（方形）。ridgeIsVertical は無視。
+ *    bottom＝y2、left＝x1、right＝x2）が高い側。高い側の辺から低い側の軒へ k*p。高い側の辺そのものには置かない。
+ *  - 寄棟: 棟木（正方形は中心）からの距離 k*p の位置に環（4辺に平行。軒からの内側への距離 d＝半スパン−k*p。
+ *    横線は x1+d..x2-d、縦線は y1+d..y2-d）。棟木は長辺方向に長さ（長辺−短辺）の線。正方形は棟木なし（方形）。
+ *    ridgeIsVertical は無視。
  *  - 陸屋根・棟違い・未知の形状・rect=null・幅か高さが tolMm 以下の矩形は空。
  * @param {object} p
  * @param {{x1:number,y1:number,x2:number,y2:number}|null} p.rect
  * @param {string} p.shape RoofShape の値
  * @param {boolean} [p.ridgeIsVertical] 切妻の棟が y 方向か
  * @param {string|null} [p.highSide] 片流れの高い側
- * @param {number} p.purlinPitchMm 母屋ピッチ（>0。例 910）
+ * @param {number[]} p.purlinPitchesMm 母屋ピッチの候補（空でない。各 >0。例 [303, 455, 606, 910]）
+ * @param {number} p.maxEaveGapMm 最後の母屋から軒桁までの残りの上限（>0。例 910）
  * @param {number} p.tolMm 許容差（>=0。例 CL_OVERLAP_TOL_MM）
  * @returns {{ridges: Array<{isVertical:boolean,coord:number,lo:number,hi:number}>, purlins: Array<{isVertical:boolean,coord:number,lo:number,hi:number}>}}
  * @throws {RangeError} ピッチ・許容差が不正、rect の座標が非有限か逆順、片流れで highSide が不正
  */
-export function roofFramingLines({ rect, shape, ridgeIsVertical, highSide = null, purlinPitchMm, tolMm }) {
-  requirePositive(purlinPitchMm, 'purlinPitchMm');
+export function roofFramingLines({ rect, shape, ridgeIsVertical, highSide = null, purlinPitchesMm, maxEaveGapMm, tolMm }) {
+  if (!Array.isArray(purlinPitchesMm) || purlinPitchesMm.length === 0) {
+    throw new RangeError('purlinPitchesMm は空でない配列でなければなりません');
+  }
+  for (const p of purlinPitchesMm) requirePositive(p, 'purlinPitchesMm の要素');
+  requirePositive(maxEaveGapMm, 'maxEaveGapMm');
   requireNonNegative(tolMm, 'tolMm');
+  const layout = { pitchesMm: purlinPitchesMm, maxEaveGapMm, tolMm };
   const empty = { ridges: [], purlins: [] };
   if (!rect) return empty;
   for (const k of ['x1', 'y1', 'x2', 'y2']) requireFinite(rect[k], `rect.${k}`);
@@ -155,9 +203,9 @@ export function roofFramingLines({ rect, shape, ridgeIsVertical, highSide = null
   // 形状の分岐はここだけ（矩形専用の rect* を呼ぶ）。
   const vertical = typeof ridgeIsVertical === 'boolean' ? ridgeIsVertical : roofRidgeIsVertical(rect, tolMm);
   switch (shape) {
-    case RoofShape.GABLE: return rectGableLines(rect, vertical, purlinPitchMm, tolMm);
-    case RoofShape.MONO: return rectMonoLines(rect, highSide, purlinPitchMm, tolMm);
-    case RoofShape.HIP: return rectHipLines(rect, purlinPitchMm, tolMm);
+    case RoofShape.GABLE: return rectGableLines(rect, vertical, layout);
+    case RoofShape.MONO: return rectMonoLines(rect, highSide, layout);
+    case RoofShape.HIP: return rectHipLines(rect, layout);
     default: return empty; // 陸屋根・棟違い・未知
   }
 }

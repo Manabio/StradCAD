@@ -91,10 +91,13 @@ export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
   // 展開図に基礎梁の消費者が無く、書くと全既存文書に無観測の差分と undo だけが生じるため。2026-09-18裁定）。
   sillPackingThicknessMm: 20,
   // 小屋組（ステップC3a。棟木・母屋・束は保存せず伏図の描画時に導く。設計意図は
-  // .claude/structural-model.md「小屋伏図」節）。母屋ピッチは水平距離で軒から（roofFramingGeometry.js）。
+  // .claude/structural-model.md「小屋伏図」節）。母屋は棟木側から水平距離で割り付け、軒桁までの残りが
+  // purlinMaxEaveGapMm 以下になる最少本数のうち、残りが最大になるピッチを候補から選ぶ（roofFramingGeometry.js。
+  // 2026-10-02 ユーザー裁定。「未満／以下」の解釈は確認中）。
   // 束の最大間隔は小屋梁の位置決め（後続ステップ）が使う——floorBeamMaxPitchMm・columnSupportMaxSpanMm
   // と値がたまたま同じ(1820)だが概念は別（独立した定数として持つ）。
-  purlinPitchMm: 910,
+  purlinPitchesMm: Object.freeze([303, 455, 606, 910]),
+  purlinMaxEaveGapMm: 910,
   strutMaxPitchMm: 1820,
 });
 // 木造下地（壁下地材・外壁の開口まわり）。寸法は「柱寸×○」で柱寸に連動する係数として持つ

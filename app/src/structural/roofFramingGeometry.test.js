@@ -1,14 +1,83 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { roofFramingLines, roofRidgeIsVertical, koyaBeamPositions, roofStrutPoints } from './roofFramingGeometry.js';
+import {
+  roofFramingLines, roofRidgeIsVertical, koyaBeamPositions, roofStrutPoints, purlinLayoutFromRidge,
+} from './roofFramingGeometry.js';
 import { RoofShape } from '../core/constants.js';
 
 const TOL = 0.5;
-const PITCH = 910;
+const PITCHES = [303, 455, 606, 910];
+const MAX_GAP = 910;
 const rc = (x1, y1, x2, y2) => ({ x1, y1, x2, y2 });
 const lines = (rect, shape, extra = {}) =>
-  roofFramingLines({ rect, shape, purlinPitchMm: PITCH, tolMm: TOL, ...extra });
+  roofFramingLines({ rect, shape, purlinPitchesMm: PITCHES, maxEaveGapMm: MAX_GAP, tolMm: TOL, ...extra });
 const coords = ls => ls.map(l => l.coord);
+const layout = (halfSpanMm, extra = {}) =>
+  purlinLayoutFromRidge({ halfSpanMm, pitchesMm: PITCHES, maxEaveGapMm: MAX_GAP, tolMm: TOL, ...extra });
+const mult = (p, n) => Array.from({ length: n }, (_, i) => (i + 1) * p);
+
+// ---- purlinLayoutFromRidge（母屋の割付の唯一の判断。2026-10-02 リード解釈・ユーザー確認中） ----
+
+test('purlinLayoutFromRidge: H=3640 は 910 ピッチ・位置 910/1820/2730・残り 910（従来の割付と同じ）', () => {
+  assert.deepEqual(layout(3640), { pitchMm: 910, offsetsMm: [910, 1820, 2730], eaveGapMm: 910 });
+});
+
+test('purlinLayoutFromRidge: H=3185 は 455 ピッチ（910 は残り 455・606 と 303 は残り 761）・残り 910', () => {
+  assert.deepEqual(layout(3185), { pitchMm: 455, offsetsMm: [455, 910, 1365, 1820, 2275], eaveGapMm: 910 });
+});
+
+test('purlinLayoutFromRidge: H=1830 は 606 と 303 が同じ残り 618 → 大きい 606。位置 606/1212', () => {
+  assert.deepEqual(layout(1830), { pitchMm: 606, offsetsMm: [606, 1212], eaveGapMm: 618 });
+});
+
+test('purlinLayoutFromRidge: H=915 は 303 ピッチ・位置 303・残り 612（910 は残り 5）', () => {
+  assert.deepEqual(layout(915), { pitchMm: 303, offsetsMm: [303], eaveGapMm: 612 });
+});
+
+test('purlinLayoutFromRidge: H=2000 は 606（303 と同じ残り 788 なら大きいピッチ）。位置 606/1212', () => {
+  assert.deepEqual(layout(2000), { pitchMm: 606, offsetsMm: [606, 1212], eaveGapMm: 788 });
+});
+
+test('purlinLayoutFromRidge: 残りが同じなら大きいピッチ（H=1820 は 910 と 455 が残り 910 → 910）', () => {
+  assert.deepEqual(layout(1820), { pitchMm: 910, offsetsMm: [910], eaveGapMm: 910 });
+});
+
+test('purlinLayoutFromRidge: H が 910 以下なら母屋なし（910・900・0）。pitchMm は null', () => {
+  assert.deepEqual(layout(910), { pitchMm: null, offsetsMm: [], eaveGapMm: 910 });
+  assert.deepEqual(layout(900), { pitchMm: null, offsetsMm: [], eaveGapMm: 900 });
+  assert.deepEqual(layout(0), { pitchMm: null, offsetsMm: [], eaveGapMm: 0 });
+});
+
+test('purlinLayoutFromRidge: 上限の境界は「以下」（2026-10-02 リード解釈・ユーザー確認中。未満を厳密に取ると半スパン 3640 が 606 ピッチになる）', () => {
+  assert.deepEqual(layout(910.4).offsetsMm, [], '910.4 は tol 0.5 以内なので 910 扱い＝母屋なし');
+  assert.deepEqual(layout(910.5).offsetsMm, [], '上限+tol ちょうどは母屋なし');
+  assert.deepEqual(layout(910.6).offsetsMm, [303], 'tol を超えたら置く');
+  assert.deepEqual(layout(911), { pitchMm: 303, offsetsMm: [303], eaveGapMm: 608 });
+  assert.equal(layout(3640).pitchMm, 910, '残りちょうど 910 を許すので 3640 は 910 ピッチ');
+  // tol=0 なら境界が「以下」か「未満」かだけが結果を分ける（3185 は 455 ピッチの残りがちょうど 910。未満なら 606 ピッチ）
+  assert.deepEqual(layout(3185, { tolMm: 0 }), { pitchMm: 455, offsetsMm: [455, 910, 1365, 1820, 2275], eaveGapMm: 910 });
+  assert.deepEqual(layout(910, { tolMm: 0 }).offsetsMm, [], '残りちょうど 910 なら母屋なし');
+});
+
+test('purlinLayoutFromRidge: 候補が [910] だけなら棟から 910 ごと・残り 910 以下（従来どおり）', () => {
+  const one = h => layout(h, { pitchesMm: [910] });
+  assert.deepEqual(one(3640), { pitchMm: 910, offsetsMm: [910, 1820, 2730], eaveGapMm: 910 });
+  assert.deepEqual(one(3000), { pitchMm: 910, offsetsMm: [910, 1820, 2730], eaveGapMm: 270 });
+  assert.deepEqual(one(2730), { pitchMm: 910, offsetsMm: [910, 1820], eaveGapMm: 910 });
+  assert.deepEqual(one(900).offsetsMm, []);
+});
+
+test('【失敗系】purlinLayoutFromRidge: 不正入力（候補が空・0 以下・非有限・上限・許容差・半スパンが負か非有限）は RangeError', () => {
+  assert.throws(() => layout(3000, { pitchesMm: [] }), RangeError);
+  assert.throws(() => layout(3000, { pitchesMm: undefined }), RangeError);
+  assert.throws(() => layout(3000, { pitchesMm: [910, 0] }), RangeError);
+  assert.throws(() => layout(3000, { pitchesMm: [NaN] }), RangeError);
+  assert.throws(() => layout(3000, { maxEaveGapMm: 0 }), RangeError);
+  assert.throws(() => layout(3000, { maxEaveGapMm: undefined }), RangeError);
+  assert.throws(() => layout(3000, { tolMm: -1 }), RangeError);
+  assert.throws(() => layout(-1), RangeError);
+  assert.throws(() => layout(Infinity), RangeError);
+});
 
 test('roofRidgeIsVertical: 縦長のみ true（横長・正方形は false）', () => {
   assert.equal(roofRidgeIsVertical(rc(0, 0, 3000, 5000)), true);
@@ -34,10 +103,10 @@ test('切妻: ridgeIsVertical 省略時は長手方向（縦長 7280x8974 なら
   assert.equal(ridges[0].coord, 3640);
 });
 
-test('切妻 6370x9000: 棟 3185、母屋は片側 910・1820・2730（端数 455 はそのまま）計6本', () => {
+test('切妻 6370x9000: 棟 3185、半スパン 3185 は 455 ピッチで棟から両側に5本ずつ（910 ピッチだと軒桁の手前 455 しか残らないため）計10本', () => {
   const { ridges, purlins } = lines(rc(0, 0, 6370, 9000), RoofShape.GABLE, { ridgeIsVertical: true });
   assert.equal(ridges[0].coord, 3185);
-  assert.deepEqual(coords(purlins), [910, 1820, 2730, 3640, 4550, 5460]);
+  assert.deepEqual(coords(purlins), [910, 1365, 1820, 2275, 2730, 3640, 4095, 4550, 5005, 5460]);
 });
 
 test('切妻 短手 3640（横長 5000x3640）: 棟 y=1820、母屋は y=910 と 2730 の1本ずつ。1820 には置かない', () => {
@@ -47,10 +116,10 @@ test('切妻 短手 3640（横長 5000x3640）: 棟 y=1820、母屋は y=910 と
   assert.ok(purlins.every(p => !p.isVertical && p.lo === 0 && p.hi === 5000));
 });
 
-test('切妻 正方形 4550x4550: 棟は横方向（x 方向に走る y=2275）、母屋は y=910,1820 と 2730,3640 計4本', () => {
+test('切妻 正方形 4550x4550: 棟は横方向（x 方向に走る y=2275）、半スパン 2275 は 455 ピッチで y=910,1365,1820 と 2730,3185,3640 計6本', () => {
   const { ridges, purlins } = lines(rc(0, 0, 4550, 4550), RoofShape.GABLE);
   assert.deepEqual(ridges, [{ isVertical: false, coord: 2275, lo: 0, hi: 4550 }]);
-  assert.deepEqual(coords(purlins), [910, 1820, 2730, 3640]);
+  assert.deepEqual(coords(purlins), [910, 1365, 1820, 2730, 3185, 3640]);
   assert.ok(purlins.every(p => !p.isVertical));
 });
 
@@ -60,46 +129,47 @@ test('切妻 短手 1820: 棟 910 と母屋の位置が重なるので母屋 0 �
   assert.deepEqual(purlins, []);
 });
 
-test('片流れ 6000x3640 high=top（y 小さい側が高い）: 母屋は低い側 y2=3640 から 2730,1820,910 の3本（y=0 の高い辺には置かない）', () => {
+test('片流れ 6000x3640 high=top（y 小さい側が高い）: 母屋は高い側 y1=0 から 910,1820,2730 の3本（y=0 の高い辺には置かない）', () => {
   const { ridges, purlins } = lines(rc(0, 0, 6000, 3640), RoofShape.MONO, { highSide: 'top' });
   assert.deepEqual(ridges, []);
   assert.deepEqual(coords(purlins), [910, 1820, 2730]);
   assert.ok(purlins.every(p => !p.isVertical && p.lo === 0 && p.hi === 6000));
 });
 
-test('片流れ 6000x3640 high=bottom: 低い側 y1=0 から 910,1820,2730（y=3640 の高い辺には置かない）', () => {
+test('片流れ 6000x3640 high=bottom: 高い側 y2=3640 から 2730,1820,910（y=3640 の高い辺には置かない）', () => {
   const { purlins } = lines(rc(0, 0, 6000, 3640), RoofShape.MONO, { highSide: 'bottom' });
   assert.deepEqual(coords(purlins), [910, 1820, 2730]);
 });
 
-test('片流れ 4550x3000 high=left: 低い側 x2=4550 から 3640,2730,1820,910 の4本（x=0 の高い辺には置かない）、縦線 y:0..3000', () => {
+test('片流れ 4550x3000 high=left: 高い側 x1=0 から 910,1820,2730,3640 の4本（x=0 の高い辺には置かない）、縦線 y:0..3000', () => {
   const { purlins } = lines(rc(0, 0, 4550, 3000), RoofShape.MONO, { highSide: 'left' });
   assert.deepEqual(coords(purlins), [910, 1820, 2730, 3640]);
   assert.ok(purlins.every(p => p.isVertical && p.lo === 0 && p.hi === 3000));
 });
 
-test('片流れ 4550x3000 high=right: 低い側 x1=0 から 910,1820,2730,3640 の4本', () => {
+test('片流れ 4550x3000 high=right: 高い側 x2=4650 から 3740,2830,1920,1010 の4本', () => {
   const { purlins } = lines(rc(100, 0, 4650, 3000), RoofShape.MONO, { highSide: 'right' });
   assert.deepEqual(coords(purlins), [1010, 1920, 2830, 3740]);
 });
 
-test('片流れ 5000x3000（端数あり・上下左右が非対称）: 4方向とも低い側の軒から数える（向きの取り違えを検出）', () => {
+test('片流れ 5000x3000（端数あり・上下左右が非対称）: 4方向とも高い側の辺から数える（向きの取り違えを検出）', () => {
   const r = rc(0, 0, 5000, 3000);
   const at = highSide => coords(lines(r, RoofShape.MONO, { highSide }).purlins);
-  assert.deepEqual(at('top'), [270, 1180, 2090], 'top: y=0 が高い。低い側 y=3000 から 910 ごと');
-  assert.deepEqual(at('bottom'), [910, 1820, 2730], 'bottom: y=3000 が高い。低い側 y=0 から');
-  assert.deepEqual(at('left'), [450, 1360, 2270, 3180, 4090], 'left: x=0 が高い。低い側 x=5000 から');
-  assert.deepEqual(at('right'), [910, 1820, 2730, 3640, 4550], 'right: x=5000 が高い。低い側 x=0 から');
+  // 高さ3000 は 303 ピッチ（残り 879）で7本。幅5000 は 455 ピッチ（残り 905）で9本。
+  assert.deepEqual(at('top'), mult(303, 7), 'top: y=0 が高い。y=0 から 303 ごと');
+  assert.deepEqual(at('bottom'), mult(303, 7).map(o => 3000 - o).reverse(), 'bottom: y=3000 が高い。y=3000 から');
+  assert.deepEqual(at('left'), mult(455, 9), 'left: x=0 が高い。x=0 から 455 ごと');
+  assert.deepEqual(at('right'), mult(455, 9).map(o => 5000 - o).reverse(), 'right: x=5000 が高い。x=5000 から');
   assert.ok(lines(r, RoofShape.MONO, { highSide: 'top' }).purlins.every(p => !p.isVertical));
   assert.ok(lines(r, RoofShape.MONO, { highSide: 'left' }).purlins.every(p => p.isVertical));
 });
 
-test('片流れ 3640 幅: 軒から 910,1820,2730 の3本のみ（3640 は高い辺と一致するので置かない）', () => {
+test('片流れ 3640 幅 high=right: 高い辺から 910,1820,2730 の3本のみ（0 は低い軒と一致するので置かない）', () => {
   const { purlins } = lines(rc(0, 0, 3640, 5000), RoofShape.MONO, { highSide: 'right' });
   assert.deepEqual(coords(purlins), [910, 1820, 2730]);
 });
 
-test('寄棟 7280x8974: 環は d=910,1820,2730 の3重（各4本=12本）、棟木は x=3640 の縦線 y:3640..5334（長さ 1694）', () => {
+test('寄棟 7280x8974: 半スパン 3640 は 910 ピッチ。環は d=910,1820,2730 の3重（各4本=12本）、棟木は x=3640 の縦線 y:3640..5334（長さ 1694）', () => {
   const r = rc(0, 0, 7280, 8974);
   const { ridges, purlins } = lines(r, RoofShape.HIP);
   assert.deepEqual(ridges, [{ isVertical: true, coord: 3640, lo: 3640, hi: 5334 }]);
@@ -148,15 +218,33 @@ test('【失敗系】幅または高さが 0 の矩形は空（例外にしな�
   assert.deepEqual(lines(rc(0, 0, 4000, 0), RoofShape.HIP), empty);
 });
 
-test('【失敗系】ピッチ 0 以下・非有限・許容差の不正は RangeError', () => {
+test('寄棟 9000x5000（端数あり）: 半スパン 2500 は 606 ピッチ（残り 682）。環は棟木側から 606,1212,1818 ＝軒から d=1894,1288,682', () => {
+  const { purlins } = lines(rc(0, 0, 9000, 5000), RoofShape.HIP);
+  assert.deepEqual(layout(2500), { pitchMm: 606, offsetsMm: [606, 1212, 1818], eaveGapMm: 682 });
+  assert.equal(purlins.length, 12);
+  const horizontal = purlins.filter(p => !p.isVertical);
+  assert.deepEqual(coords(horizontal), [682, 1288, 1894, 3106, 3712, 4318]);
+  assert.deepEqual(horizontal.filter(p => p.coord === 682), [{ isVertical: false, coord: 682, lo: 682, hi: 8318 }]);
+  const vertical = purlins.filter(p => p.isVertical);
+  assert.deepEqual(coords(vertical), [682, 1288, 1894, 7106, 7712, 8318]);
+  assert.deepEqual(vertical.filter(p => p.coord === 1894), [{ isVertical: true, coord: 1894, lo: 1894, hi: 3106 }]);
+});
+
+test('【失敗系】ピッチ候補が空・0 以下・非有限・残りの上限・許容差の不正は RangeError', () => {
   const r = rc(0, 0, 5000, 4000);
-  for (const purlinPitchMm of [0, -910, NaN, Infinity, undefined]) {
-    assert.throws(() => roofFramingLines({ rect: r, shape: RoofShape.GABLE, purlinPitchMm, tolMm: TOL }), RangeError);
+  const run = extra => roofFramingLines({
+    rect: r, shape: RoofShape.GABLE, purlinPitchesMm: PITCHES, maxEaveGapMm: MAX_GAP, tolMm: TOL, ...extra,
+  });
+  for (const purlinPitchesMm of [[], [0], [-910], [NaN], [Infinity], [910, 0], undefined, 910]) {
+    assert.throws(() => run({ purlinPitchesMm }), RangeError, String(purlinPitchesMm));
   }
-  assert.throws(() => roofFramingLines({ rect: r, shape: RoofShape.GABLE, purlinPitchMm: PITCH, tolMm: -1 }), RangeError);
-  assert.throws(() => roofFramingLines({ rect: r, shape: RoofShape.GABLE, purlinPitchMm: PITCH }), RangeError);
-  // rect=null でもピッチが不正なら例外
-  assert.throws(() => roofFramingLines({ rect: null, shape: RoofShape.FLAT, purlinPitchMm: 0, tolMm: TOL }), RangeError);
+  for (const maxEaveGapMm of [0, -1, NaN, undefined]) {
+    assert.throws(() => run({ maxEaveGapMm }), RangeError, `maxEaveGapMm ${maxEaveGapMm}`);
+  }
+  assert.throws(() => run({ tolMm: -1 }), RangeError);
+  assert.throws(() => run({ tolMm: undefined }), RangeError);
+  // rect=null でもピッチ候補が不正なら例外
+  assert.throws(() => run({ rect: null, shape: RoofShape.FLAT, purlinPitchesMm: [0] }), RangeError);
 });
 
 test('【失敗系】矩形の座標が非有限・逆順は RangeError。片流れの highSide が不正も RangeError', () => {
