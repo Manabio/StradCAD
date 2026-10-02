@@ -1,12 +1,13 @@
-// 外部タブの屋根（下屋）の群の中身。フォーム1行（形状・勾配・軒の出・妻側の出）＋表に固定2行
+// 外部タブの屋根（下屋＝RoofGroup・主屋根＝MainRoofGroup）の群の中身。フォーム1行（形状・勾配・軒の出・妻側の出）＋表に固定2行
 // （「屋根」行: 仕上げ＝屋根仕上げ／下地＝防水シート・野地板の選択欄／備考、「軒裏」行: 仕上げ＝軒裏）。
 // 見出し「屋根」と削除ボタンは FinishTable.jsx 側（群の枠）が持つ。判断（選択肢・実効の形状・入力の検証）は
-// roofDefaults.js／roofInput.js の純関数に置き、ここは描くだけ。確定は mode.setRoofField（1確定＝undo 1エントリ）。
+// roofDefaults.js／roofInput.js の純関数に置き、ここは描くだけ。確定は mode.setRoofField／setMainRoofField（1確定＝undo 1エントリ）。
 // 文字・数値の欄は draft 方式（blur／Enter で確定。不正な数値は確定せず元の値へ戻す）。
 import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
 import { ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES } from '@core';
 import { resolveRoofShape, roofRoomBounds } from './roofDefaults.js';
+import { resolveMainRoofShape } from './mainRoof.js';
 import {
   roofShapeOptions, roofMaterialOptions, parseRoofSlopeInput, parseRoofOverhangInput,
 } from './roofInput.js';
@@ -62,17 +63,38 @@ const RoofNumberInput = observer(({ value, parse, onCommit, style }) => {
 const formLabelStyle = { fontSize: 12, color: '#374151', whiteSpace: 'nowrap' };
 
 /**
+ * 下屋（屋根セルの群）。項目の描画は RoofSpecFields（主屋根と共通）。確定は mode.setRoofField。
  * @param {{ room: object, graph: object, mode: object, styles: { cellBase: object, headerCell: object, cellInputStyle: object } }} props
  *   styles は FinishTable.jsx の既存の表のスタイル（群の見た目をそろえるため受け取る）。
  */
 export const RoofGroup = observer(({ room, graph, mode, styles }) => {
   const spec = room.roofSpec;
   if (!spec) return null; // I1 により屋根の部屋には必ずある。復元の途中などで一瞬無いときは何も出さない
+  const set = (field, value) => mode.setRoofField(room.id, field, value);
+  const shape = resolveRoofShape(spec, { boundsList: roofRoomBounds(room, graph) });
+  return <RoofSpecFields spec={spec} shape={shape} set={set} mode={mode} styles={styles} />;
+});
+
+/**
+ * 主屋根（最上階とその検討案の外部タブ先頭の固定の群）。範囲は最上階の建物範囲、形状の既定は主構造のルール
+ * （resolveMainRoofShape）。項目の描画は RoofSpecFields（下屋と共通）。確定は mode.setMainRoofField。
+ * @param {{ graph: object, mode: object, styles: { cellBase: object, headerCell: object, cellInputStyle: object } }} props
+ */
+export const MainRoofGroup = observer(({ graph, mode, styles }) => {
+  const spec = graph.mainRoofSpec;
+  const set = (field, value) => mode.setMainRoofField(field, value);
+  const shape = resolveMainRoofShape(graph, mode.project);
+  return <RoofSpecFields spec={spec} shape={shape} set={set} mode={mode} styles={styles} />;
+});
+
+/**
+ * 屋根の項目のフォーム1行＋固定2行の表（下屋・主屋根で共通）。spec＝表示する RoofSpec、shape＝形状の実効値
+ * （呼び出し側が範囲・主構造から導く）、set＝項目の確定関数 (field, value)。
+ */
+const RoofSpecFields = observer(({ spec, shape, set, mode, styles }) => {
   const { cellBase, headerCell, cellInputStyle } = styles;
   const boxed = { ...cellInputStyle, border: '1px solid #cbd5e1', padding: '2px 4px' };
-  const set = (field, value) => mode.setRoofField(room.id, field, value);
   const nameOf = code => mode.getMaterial(code)?.name;
-  const shape = resolveRoofShape(spec, { boundsList: roofRoomBounds(room, graph) });
   const materialSelect = (field, codes) => (
     <select
       value={spec[field]}

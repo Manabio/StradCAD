@@ -1,5 +1,5 @@
 import { runInAction } from 'mobx';
-import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow } from '@core';
+import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec } from '@core';
 import { encode, decode } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 import { applyDocumentCodeNormalization } from './catalog/codeNormalization.js';
@@ -166,6 +166,8 @@ function buildSnapshot(graph) {
     floorBacking:        graph.floorBacking,
     shaftWallMaterial:   graph.shaftWallMaterial,
     shaftSoundproof:     graph.shaftSoundproof,
+    // 主屋根の仕様。既定値と全項目同じなら null＝何も書かない（既存文書のバイト列を変えない。読み側は無ければ既定値）
+    mainRoofSpec:        isDefaultRoofSpec(graph.mainRoofSpec) ? null : graph.mainRoofSpec.toData(),
     defaultFloorLevel:    graph.defaultFloorLevel,
     defaultCeilingHeight: graph.defaultCeilingHeight,
     floorDatum:          graph.floorDatum,
@@ -878,6 +880,7 @@ function applySnapshot(graph, snapshot) {
     if (snapshot.floorBacking)        graph.setFloorBacking(snapshot.floorBacking);
     if (snapshot.shaftWallMaterial)   graph.setShaftWallMaterial(snapshot.shaftWallMaterial);
     if (snapshot.shaftSoundproof)     graph.setShaftSoundproof(snapshot.shaftSoundproof);
+    if (snapshot.mainRoofSpec)        graph.setMainRoofSpec(RoofSpec.fromData(snapshot.mainRoofSpec)); // 無ければ clear() の既定値
     if (snapshot.defaultFloorLevel != null) graph.setDefaultFloorLevel(snapshot.defaultFloorLevel);
     // CH初期値は 0/null を「未保存（旧データ）」とみなし clear() の既定(2400)を維持する
     if (snapshot.defaultCeilingHeight)      graph.setDefaultCeilingHeight(snapshot.defaultCeilingHeight);

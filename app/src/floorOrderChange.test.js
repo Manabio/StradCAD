@@ -13,8 +13,17 @@ import { stripCommentLines } from './uiBusySourceScan.js';
 test('floorOrderFollowers: name の並びが固定されている', () => {
   assert.deepEqual(floorOrderFollowers.map(f => f.name), [
     'roofPlaneHeight', 'stairUpperSync', 'stairsBelowRemoval', 'elevatorCopy', 'exteriorRoom',
-    'switchToAddedFloor', 'structuralReflect', 'elevatorRenumber',
+    'mainRoofCarry', 'switchToAddedFloor', 'structuralReflect', 'elevatorRenumber',
   ]);
+});
+
+// B3: 主屋根の引き継ぎは INSERT（上に階を追加）だけ。下への追加・削除・並べ替え・階変更では写さない。
+// 新階への書込みなので階の切替（switchToAddedFloor）より前に並ぶ。
+test('floorOrderFollowers: mainRoofCarry は INSERT のみで、switchToAddedFloor より前', () => {
+  const names = floorOrderFollowers.map(f => f.name);
+  const carry = floorOrderFollowers.find(f => f.name === 'mainRoofCarry');
+  assert.deepEqual(carry.appliesTo, [FLOOR_ORDER_KIND.INSERT]);
+  assert.ok(names.indexOf('mainRoofCarry') < names.indexOf('switchToAddedFloor'));
 });
 
 test('floorOrderFollowers: 各followerのappliesToが固定されている', () => {

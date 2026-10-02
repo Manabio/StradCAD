@@ -20,6 +20,7 @@ import { STRUCTURES, STRUCTURE_PROFILES } from './structuralClassification.js';
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { BackingClass } from '../finish/materials/backingClass.js';
 import { findSectionEntry, woodRectSectionKey, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
+import { RoofShape } from '../core/constants.js';
 
 /** 主構造未指定を表す値（MAIN_STRUCTURE_OPTIONS[0]。core/structuralInfo.js の既定・FlatBuffers復元の既定もこれ）。 */
 export const UNSPECIFIED_STRUCTURE = '未定';
@@ -225,6 +226,9 @@ const WOOD_RULES = Object.freeze({
   // ユーザー裁定2026-09-17）。memberCatalog.js memberGroupKey が唯一の消費先（columnMapにplaneIdを
   // 付与するかどうかを分岐する）。
   numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null, columnGroupScope: 'building' }),
+  // (2) 主屋根（最上階の外部タブ先頭の固定の群）の形状の既定。null＝導出（短手が3640以下なら片流れ・超えれば切妻。
+  // finish/roof/roofDefaults.js resolveRoofShape）。木造系（在来・2"×4"）は短手の規則。
+  mainRoofDefaultShape: null,
 });
 
 // RC系（ラーメン・壁式）に共通のルール。
@@ -271,6 +275,9 @@ const RC_RULES = Object.freeze({
   openingBeamClearanceMm: 0,
   sashFinDirect: false,
   numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null, columnGroupScope: 'building' }),
+  // (2) 主屋根の形状の既定: 非木造（RC・S・SRC。STEEL_RULES は spread で継承）は陸屋根
+  // （仕様「非木造の建物の場合、最上階の上の構造R階伏せ図の仕上げは、最上階の外壁に合わせて、自動的に陸屋根」）。
+  mainRoofDefaultShape: RoofShape.FLAT,
 });
 
 // 鉄骨系（S造・SRC造）に共通のルール。
@@ -355,6 +362,9 @@ export const UNSPECIFIED_RULES = Object.freeze({
   // 動く——構造未定のまま昇降機・階段の上階自動設置で開口だけが先に生まれる階でも、開口由来梁芯が
   // 全階そろうようにする）。継承のまま'slabOpenings'を明示して意図を残す。
   openingBeamAxes: 'slabOpenings',
+  // 【裁定・2026-10-02】STEEL_RULES（RC_RULES の spread）を継承すると 'flat' になるが、主構造が未定のときは
+  // 非木造と決まっていないため木造系と同じ短手の規則（null＝導出）にする。継承に任せず明示して意図を残す。
+  mainRoofDefaultShape: null,
 });
 
 /** 主構造（実効値の文字列表記）のルールセットを返す。未知・未指定は UNSPECIFIED_RULES。 */

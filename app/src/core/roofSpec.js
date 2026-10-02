@@ -20,6 +20,21 @@ export const ROOF_SPEC_KEYS = Object.freeze([
 
 const SHAPE_VALUES = new Set(Object.values(RoofShape));
 
+/**
+ * spec（RoofSpec または toData() 形式の plain）が既定値（new RoofSpec()）と全項目同じか。
+ * 主屋根（PlanGraph.mainRoofSpec）は既定値のとき保存データへ何も書かない（既存文書のバイト列を変えない）
+ * 判定の唯一の入口。項目集合は ROOF_SPEC_KEYS で比べるため、項目が増えても追随する。
+ * 値が無い（null/undefined）ものは既定値扱い。
+ * @param {object|null|undefined} spec
+ * @returns {boolean}
+ */
+export function isDefaultRoofSpec(spec) {
+  if (!spec) return true;
+  const def = new RoofSpec().toData();
+  const data = typeof spec.toData === 'function' ? spec.toData() : spec;
+  return ROOF_SPEC_KEYS.every(k => data[k] === def[k]);
+}
+
 export class RoofSpec {
   constructor({
     shape = null,

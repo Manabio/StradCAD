@@ -39,7 +39,7 @@ const SHAFT_SOUNDPROOF_ENC = { none: 0, insulation: 1 };
 // フィールドインデックス定数
 // ================================================================
 
-// GraphSnapshot (root): 53 フィールド
+// GraphSnapshot (root): 54 フィールド
 const GS = {
   CLS: 0, PTS: 1, WALLS: 2, DIAGS: 3, VLINES: 4, HLINES: 5, ARCS: 6, CIRCS: 7, DIMS: 8, ROOMS: 9, ROOM_ORDER: 10,
   // 11 は旧 INTERIOR_WALL_PANEL（内壁面材の per-floor 設定。部屋の壁材へ移行し廃止。slot 予約）
@@ -85,6 +85,9 @@ const GS = {
   SHAFT_SOUNDPROOF: 51,    // int8（none=0 / insulation=1。0 は旧データ＝既定 none と同義）
   // 昇降機器具行（仕上げモード、設置階に帰属。per-floor。末尾追加）
   EQUIPMENT_ROWS: 52,
+  // 主屋根の仕様（RS テーブル。最上階の外部タブ先頭の固定の群。per-floor。末尾追加）。
+  // 既定値のときはフィールド自体を書かない（既存文書のバイト列を変えない。読み側は無ければ既定値）。
+  MAIN_ROOF_SPEC: 53,
 };
 
 // Stair: 15 フィールド
@@ -1835,8 +1838,9 @@ export function encode(snapshot) {
   const structuralInfoOff  = writeStructuralInfo(b, snapshot.structuralInfo);
   const siteOff = writeSite(b, snapshot.site);
   const equipmentRowsVec = writeVec(b, snapshot.equipmentRows ?? [], writeEquipmentRow);
+  const mainRoofSpecOff = writeRoofSpec(b, snapshot.mainRoofSpec ?? null); // null（既定値）は何も書かない（0）
 
-  b.startObject(53);
+  b.startObject(54);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1889,6 +1893,7 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.SHAFT_WALL_MATERIAL, sShaftWallMaterial, 0);
   b.addFieldInt8(GS.SHAFT_SOUNDPROOF, SHAFT_SOUNDPROOF_ENC[snapshot.shaftSoundproof] ?? 0, 0);
   b.addFieldOffset(GS.EQUIPMENT_ROWS, equipmentRowsVec, 0);
+  b.addFieldOffset(GS.MAIN_ROOF_SPEC, mainRoofSpecOff, 0);
   const root = b.endObject();
 
   b.finish(root);
@@ -1957,5 +1962,6 @@ export function decode(bytes) {
     shaftWallMaterial:   r.str(GS.SHAFT_WALL_MATERIAL) || null,
     shaftSoundproof:     SHAFT_SOUNDPROOF_DEC[r.i8(GS.SHAFT_SOUNDPROOF)] ?? null,
     equipmentRows:       r.vec(GS.EQUIPMENT_ROWS, readEquipmentRow),
+    mainRoofSpec:        readRoofSpec(bb, r.nested(GS.MAIN_ROOF_SPEC)),
   };
 }

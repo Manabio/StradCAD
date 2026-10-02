@@ -269,3 +269,58 @@ test('【失敗系】isSelectedRoofGroup: 未選択（null/undefined）・屋根
   assert.equal(isSelectedRoofGroup({ type: 'part', roomId: null }, null), false);
   assert.ok(roof.id);
 });
+
+// ---- 主屋根（ステップB3）: includeMainRoof で type:'mainRoof' の群を先頭に出す ----
+test('【B3】buildExteriorGroups: includeMainRoof=true で先頭に type:\'mainRoof\'（見出し「屋根」・roomId なし・行なし）が1つ付く。並びは 主屋根→下屋→屋外部屋→部位', () => {
+  const graph = makeGraph();
+  makeRoom(graph, 'テラス', { kind: RoomKind.EXTERIOR });
+  const roof = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  graph.addExteriorRow('exteriorRows', '外壁');
+  const groups = buildExteriorGroups({ ...input(graph), includeMainRoof: true });
+
+  assert.deepEqual(groups.map(g => g.type), ['mainRoof', 'roof', 'part', 'room']);
+  assert.equal(groups[0].key, 'mainRoof');
+  assert.equal(groups[0].roomId, null);
+  assert.equal(groups[0].part, '屋根');
+  assert.deepEqual(groups[0].rows, []);
+  assert.equal(groups[1].roomId, roof.id);
+  assert.equal(groups.filter(g => g.type === 'mainRoof').length, 1);
+});
+
+test('【B3】buildExteriorGroups: includeMainRoof を省略・false にすると従来どおり（主屋根の群なし）。既存の群は同じ並び・同じ中身', () => {
+  const graph = makeGraph();
+  makeRoom(graph, 'テラス', { kind: RoomKind.EXTERIOR });
+  makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  graph.addExteriorRow('exteriorRows', '外壁');
+  const base = buildExteriorGroups(input(graph));
+  const off = buildExteriorGroups({ ...input(graph), includeMainRoof: false });
+  const on = buildExteriorGroups({ ...input(graph), includeMainRoof: true });
+
+  assert.equal(base.some(g => g.type === 'mainRoof'), false);
+  assert.deepEqual(off.map(g => g.key), base.map(g => g.key));
+  assert.deepEqual(on.slice(1).map(g => g.key), base.map(g => g.key), '主屋根を除けば従来の群と同じ');
+});
+
+test('【B3】buildExteriorGroups: 部屋も行も無い最上階でも主屋根の群だけが出る（includeMainRoof=true）。false なら空', () => {
+  const graph = makeGraph();
+  assert.deepEqual(buildExteriorGroups({ ...input(graph), includeMainRoof: true }).map(g => g.type), ['mainRoof']);
+  assert.equal(buildExteriorGroups(input(graph)).length, 0);
+});
+
+test('【B3】isSelectedRoofGroup: 主屋根の群は選択中の部屋 id が何であっても常に false（青枠なし）', () => {
+  const graph = makeGraph();
+  const roof = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  const [main] = buildExteriorGroups({ ...input(graph), includeMainRoof: true });
+  assert.equal(main.type, 'mainRoof');
+  for (const selected of [null, undefined, roof.id, 'mainRoof', '']) {
+    assert.equal(isSelectedRoofGroup(main, selected), false, String(selected));
+  }
+});
+
+test('【B3】屋根の部屋（下屋）が無い・複数でも主屋根の群は常に1つで、下屋の群は従来どおり屋根の部屋ごと', () => {
+  const graph = makeGraph();
+  makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  const groups = buildExteriorGroups({ ...input(graph), includeMainRoof: true });
+  assert.deepEqual(groups.map(g => g.type), ['mainRoof', 'roof', 'roof']);
+});

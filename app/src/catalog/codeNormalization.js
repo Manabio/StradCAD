@@ -95,6 +95,11 @@ export function enumerateMaterialCodeRefs(snapshot) {
     if (code == null) continue;
     refs.push({ code, location: field });
   }
+  // 主屋根の仕様（snapshot.mainRoofSpec。既定値のときは null＝列挙に出ない）
+  for (const field of ROOF_SPEC_MATERIAL_FIELDS) {
+    if (!isRoofSpecMaterialCode(snapshot.mainRoofSpec, field)) continue;
+    refs.push({ code: snapshot.mainRoofSpec[field], location: 'mainRoofSpec', key: field });
+  }
   for (const room of snapshot.rooms ?? []) {
     for (const ov of room?.overrides ?? []) {
       if (!isRoomMaterialOverride(ov)) continue;
@@ -150,6 +155,19 @@ function normalizeRooms(rooms, table, unresolved) {
     return nextRoom;
   });
   return changedAny ? next : rooms;
+}
+
+// 主屋根の仕様（snapshot.mainRoofSpec）の材料コード（野地板・防水シート）。変化が無ければ同一参照を返す。
+function normalizeMainRoofSpec(spec, table, unresolved) {
+  let next = spec;
+  for (const field of ROOF_SPEC_MATERIAL_FIELDS) {
+    if (!isRoofSpecMaterialCode(spec, field)) continue;
+    const code = spec[field];
+    const mapped = normalizeCode(code, table, unresolved, { location: 'mainRoofSpec', key: field });
+    if (mapped === code) continue;
+    next = { ...next, [field]: mapped };
+  }
+  return next;
 }
 
 function normalizeEdges(edges, table, unresolved) {
@@ -214,6 +232,9 @@ export function normalizeSnapshotCodes(snapshot, table) {
   const rooms = normalizeRooms(snapshot.rooms, table, unresolved);
   if (rooms !== snapshot.rooms) changed = true;
 
+  const mainRoofSpec = normalizeMainRoofSpec(snapshot.mainRoofSpec, table, unresolved);
+  if (mainRoofSpec !== snapshot.mainRoofSpec) changed = true;
+
   const edges = normalizeEdges(snapshot.edges, table, unresolved);
   if (edges !== snapshot.edges) changed = true;
 
@@ -221,7 +242,10 @@ export function normalizeSnapshotCodes(snapshot, table) {
   if (clEccentricities !== snapshot.clEccentricities) changed = true;
 
   if (!changed) return { snapshot, unresolved };
-  return { snapshot: { ...snapshot, ...backingFields, rooms, edges, clEccentricities }, unresolved };
+  // mainRoofSpec が undefined（キー無し）のときは足さない（キー集合を変えない）
+  const next = { ...snapshot, ...backingFields, rooms, edges, clEccentricities };
+  if (mainRoofSpec !== undefined) next.mainRoofSpec = mainRoofSpec;
+  return { snapshot: next, unresolved };
 }
 
 // ----------------------------------------------------------------

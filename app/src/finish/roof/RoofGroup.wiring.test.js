@@ -142,9 +142,11 @@ test('【不変条件・B2b】屋根の群は RoofGroupFrame で囲み、選択�
   'RoofGroupFrame の選択中の配線の行が見つからない');
   assert.ok(tableLines.includes('</RoofGroupFrame>'), '</RoofGroupFrame> が見つからない');
   const frame = sliceBlock(tableCode, 'const RoofGroupFrame', 'const GroupedExteriorTable');
-  assert.ok(/const frameRef = useScrollIntoViewWhenActive\(selected\);/.test(frame), 'スクロールフックが見つからない');
-  assert.ok(/ref=\{frameRef\}/.test(frame), 'ref が枠に付いていない');
-  assert.ok(/outline: selected \? '2px solid #2563eb' : 'none',/.test(frame), '選択中の強調（部屋カードと同じ青枠）が見つからない');
+  // 行末コメントを除いた1行まるごと一致で検査する（変異「outline: 'none', // outline: selected ? ...」等を通さない）
+  const frameLines = frame.split('\n').map(l => l.replace(/\s\/\/.*$/, '').trim());
+  assert.ok(frameLines.includes('const frameRef = useScrollIntoViewWhenActive(selected);'), 'スクロールフックが見つからない');
+  assert.ok(frameLines.includes('ref={frameRef}'), 'ref が枠に付いていない');
+  assert.ok(frameLines.includes("outline: selected ? '2px solid #2563eb' : 'none',"), '選択中の強調（部屋カードと同じ青枠）が見つからない');
 });
 
 test('【不変条件】FinishTable.jsx の屋根の群（groupType===roof）は RoofGroup を描く。屋外部屋の群・部位の群の描画（ExteriorLevelRow・ExteriorPartHeading）は屋根の分岐に入らない', () => {
@@ -157,4 +159,59 @@ test('【不変条件】FinishTable.jsx の屋根の群（groupType===roof）は
   const roofBranch = tableCode.slice(roofBranchStart, roofBranchEnd);
   assert.ok(!/ExteriorLevelRow|ExteriorPartHeading/.test(roofBranch), '屋根の分岐に屋外部屋の群の部品が入っている');
   assert.ok(/setDeleteConfirm\(\{ roomId, roomName: part \}\)/.test(roofBranch), '屋根の群の削除ボタン（見出し「屋根」）が残っている');
+});
+
+// ---- ステップB3: 主屋根（最上階の外部タブ先頭の固定の群） ----
+const mainStart = roofCode.indexOf('export const MainRoofGroup');
+const mainBody = roofCode.slice(mainStart, roofCode.indexOf('const RoofSpecFields', mainStart));
+
+test('【不変条件・B3】MainRoofGroup の確定は mode.setMainRoofField(field, value) の1か所。形状は resolveMainRoofShape(graph, mode.project)。値は graph.mainRoofSpec', () => {
+  assert.ok(mainStart >= 0, 'export const MainRoofGroup が見つからない');
+  const lines = mainBody.split('\n').map(l => l.replace(/\s\/\/.*$/, '').trim());
+  assert.ok(lines.includes('const spec = graph.mainRoofSpec;'), 'const spec = graph.mainRoofSpec; が見つからない');
+  assert.ok(lines.includes('const set = (field, value) => mode.setMainRoofField(field, value);'), '確定の1行が見つからない');
+  assert.ok(lines.includes('const shape = resolveMainRoofShape(graph, mode.project);'), '形状の導出の1行が見つからない');
+  assert.equal((roofCode.match(/mode\.setMainRoofField\(/g) ?? []).length, 1, 'mode.setMainRoofField の呼び出しは1か所だけ');
+  assert.ok(!/\.setField\(|setRoofField|setMainRoofSpec/.test(mainBody), '主屋根の群が RoofSpec を直接書き換えていない（確定は mode 経由）');
+});
+
+test('【不変条件・B3】下屋と主屋根は同じ描画部品 RoofSpecFields（spec・shape・set を引数で受ける）を使い、各1回ずつ描く', () => {
+  assert.equal(roofLines.filter(l => l === 'return <RoofSpecFields spec={spec} shape={shape} set={set} mode={mode} styles={styles} />;').length, 2,
+    '下屋と主屋根の2か所で同じ RoofSpecFields を同じ引数で描く');
+  assert.ok(roofLines.includes('const RoofSpecFields = observer(({ spec, shape, set, mode, styles }) => {'), 'RoofSpecFields の宣言');
+  // 下屋の形状の導出（範囲は屋根セル）は RoofGroup 側のまま
+  assert.ok(roofLines.includes('const shape = resolveRoofShape(spec, { boundsList: roofRoomBounds(room, graph) });'));
+});
+
+test('【不変条件・B3】FinishTable.jsx: 主屋根の群は最上階（isTopFloorPlane）のときだけ buildExteriorGroups に含め、MainRoofGroup を描く。削除ボタン・選択の青枠・屋外部屋の部品を持たない', () => {
+  assert.ok(tableLines.includes('const includeMainRoof = isTopFloorPlane(mode.project, graph.plane);'), 'includeMainRoof の1行が見つからない');
+  const branch = sliceBlock(tableCode, "if (groupType === 'mainRoof') {", "if (groupType === 'roof') {");
+  assert.ok(/<MainRoofGroup graph=\{graph\} mode=\{mode\} styles=\{\{ cellBase, headerCell, cellInputStyle \}\} \/>/.test(branch), 'MainRoofGroup の配線が見つからない');
+  assert.ok(!/setDeleteConfirm|削除|deleteButtonStyle|<button|deleteRoom/.test(branch), '主屋根の群に削除ボタン（button・deleteRoom・setDeleteConfirm）がある');
+  assert.ok(!/RoofGroupFrame|isSelectedRoofGroup|outline/.test(branch), '主屋根の群に選択の青枠がある');
+  assert.ok(!/ExteriorLevelRow|ExteriorPartHeading|<RoofGroup /.test(branch), '主屋根の分岐に他の群の部品が入っている');
+  assert.ok(branch.indexOf('>{part}<') >= 0, '見出しは群の part（固定「屋根」）');
+});
+
+test('【不変条件・B3】カタログ照合ダイアログは location=mainRoofSpec を「主屋根」と表示する（下屋の roofSpec＝「屋根」と区別）', () => {
+  const dialog = codeOf('../../ui/CatalogResolveDialog.jsx');
+  assert.ok(dialog.split('\n').map(l => l.trim()).includes("mainRoofSpec: '主屋根',"), "mainRoofSpec: '主屋根', が見つからない");
+  assert.ok(dialog.split('\n').map(l => l.trim()).includes("roofSpec: '屋根',"), '下屋の表示名は不変');
+});
+
+test('【不変条件・B3】階追加の引き継ぎ: follower mainRoofCarry は INSERT のみで carryMainRoofToNewTop(ctx.project, ctx.addedPlane) を呼ぶ。階の切替より前', () => {
+  const orderCode = codeOf('../../floorOrderChange.js');
+  const lines = orderCode.split('\n').map(l => l.replace(/\s\/\/.*$/, '').trim());
+  assert.ok(lines.includes('await carryMainRoofToNewTop(ctx.project, ctx.addedPlane);'), 'follower の呼び出し行が見つからない');
+  assert.ok(lines.includes("import { carryMainRoofToNewTop } from './finish/roof/mainRoofFloorSync.js';"));
+  const block = sliceBlock(orderCode, "name: 'mainRoofCarry',", "name: 'switchToAddedFloor',");
+  assert.ok(/appliesTo: \[FLOOR_ORDER_KIND\.INSERT\],/.test(block), 'appliesTo は INSERT のみ');
+});
+
+test('【不変条件・B3】mainRoof.js・mainRoofFloorSync.js は store.js・snap.js・.jsx を静的 import しない（node:test から単体 import できる）', () => {
+  for (const file of ['mainRoof.js', 'mainRoofFloorSync.js']) {
+    const code = codeOf(file);
+    assert.ok(!/from '[^']*(store|snap)\.js'/.test(code), `${file} が store.js／snap.js を import している`);
+    assert.ok(!/from '[^']*\.jsx'/.test(code), `${file} が .jsx を import している`);
+  }
 });

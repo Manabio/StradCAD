@@ -20,6 +20,7 @@ import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { applyFloorInsert, applyPlaneMetas } from './floorOps.js';
 import { reflectStructuralAfterFloorAdd } from './structural/structuralOrchestration.js';
 import { followRoofPlaneToTop } from './structural/roofPlane.js';
+import { carryMainRoofToNewTop } from './finish/roof/mainRoofFloorSync.js';
 import { makeFloorName } from './floorNumber.js';
 import { ERR_ELEVATOR_COPY_SKIPPED } from './error.js';
 
@@ -114,6 +115,17 @@ export const floorOrderFollowers = [
       if (!ctx.sourceGraph.walls.some(w => w.isExteriorWall)) return;
       const { addNewFloorRoomFromSource } = await import('./finish/stair/stairFloorSync.js');
       await addNewFloorRoomFromSource(ctx.project, ctx.sourceGraph, ctx.addedPlane, makeFloorName(ctx.newStartFloor, 1));
+    },
+  },
+  {
+    // 上に階を追加して最上階が入れ替わったとき、旧最上階の主屋根の値を新しい最上階へ写す（B3・ユーザー裁定
+    // 2026-10-02）。INSERT のみ（ADD_LOWER＝下への追加・DELETE・REORDER・CHANGE では写さず、新しい最上階が
+    // 自分の値を使う）。途中階への追加は追加した階が最上階にならないので carryMainRoofToNewTop が何もしない。
+    // 新階への書込みなので階の切替（switchToAddedFloor）より前に置く。
+    name: 'mainRoofCarry',
+    appliesTo: [FLOOR_ORDER_KIND.INSERT],
+    async run(ctx) {
+      await carryMainRoofToNewTop(ctx.project, ctx.addedPlane);
     },
   },
   {

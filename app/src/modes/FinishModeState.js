@@ -20,7 +20,7 @@ import { isValidRoofFieldValue } from '../finish/roof/roofInput.js';
 import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED } from '../error.js';
 import {
   RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME, applyDefaultBaseboard,
-  ElevatorEquipmentCategory, DEFAULT_EV_USAGE,
+  ElevatorEquipmentCategory, DEFAULT_EV_USAGE, isDefaultRoofSpec,
 } from '@core';
 import { effectiveStructure, defaultMaterialFor } from '../structural/structureRules.js';
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
@@ -141,6 +141,7 @@ export class FinishModeState {
       deleteRoom:   action,
       renameExteriorRoom: action,
       setRoofField: action,
+      setMainRoofField: action,
       selectStair:  action,
       deleteStair:  action,
       revertStairToRoom:  action,
@@ -458,6 +459,15 @@ export class FinishModeState {
     for (const room of g?.rooms ?? []) {
       for (const f of ['sheathingMaterial', 'underlaymentMaterial']) {
         const v = room.roofSpec?.[f];
+        if (typeof v === 'string' && v) codes.add(v);
+      }
+    }
+
+    // 主屋根の仕様の材料コード。既定値のときは保存データへ書かれず（codeNormalization の列挙にも出ない）、
+    // ここでも対象にしない（保存側と同じ規則）。
+    if (g?.mainRoofSpec && !isDefaultRoofSpec(g.mainRoofSpec)) {
+      for (const f of ['sheathingMaterial', 'underlaymentMaterial']) {
+        const v = g.mainRoofSpec[f];
         if (typeof v === 'string' && v) codes.add(v);
       }
     }
@@ -1163,6 +1173,22 @@ export class FinishModeState {
     if (!isValidRoofFieldValue(field, value)) return false;
     if (room.roofSpec[field] === value) return false;
     withFinishUndo(this.graph, () => room.roofSpec.setField(field, value));
+    return true;
+  }
+
+  /**
+   * 主屋根（最上階の外部タブ先頭の固定の群）の項目を1つ確定する。setRoofField と同じ検証・無変更判定・
+   * undo 1エントリ（値は graph.mainRoofSpec＝階ごと設定。undo は finishUndo の `mainRoof` キー）。
+   * 不正な値・無変更は何も変更せず（undo を積まず）false を返す。呼び出し側（RoofGroup）は false のとき
+   * 表示を元の値へ戻す。
+   * @returns {boolean} 変更を確定したら true
+   */
+  setMainRoofField(field, value) {
+    const spec = this.graph.mainRoofSpec;
+    if (!spec) return false;
+    if (!isValidRoofFieldValue(field, value)) return false;
+    if (spec[field] === value) return false;
+    withFinishUndo(this.graph, () => spec.setField(field, value));
     return true;
   }
 

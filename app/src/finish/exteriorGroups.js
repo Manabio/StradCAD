@@ -30,9 +30,11 @@ export function isSelectedRoofGroup(group, selectedRoomId) {
 
 /**
  * GroupedExteriorTable が描く群の並びを組み立てる。各群は type を持つ:
- * 'roof'（屋根セルの群。下屋）／'room'（roomId連動群）／'part'（手入力の部位群）。
- * （'mainRoof'＝主屋根は B3。）
- *   0. 屋根（feature===ROOF）の Room ごとに type:'roof' の群を、roomOrder 順で先頭に出す
+ * 'mainRoof'（主屋根。セルを持たない固定の群）／'roof'（屋根セルの群。下屋）／'room'（roomId連動群）／
+ * 'part'（手入力の部位群）。
+ *   0a. includeMainRoof（既定 false。最上階とその検討案のときだけ呼び出し側が true）なら、type:'mainRoof' の群を
+ *      最初の1つとして出す（roomId なし・rows:[]・見出しは固定「屋根」。削除ボタン・選択の青枠なし）。
+ *   0. 屋根（feature===ROOF）の Room ごとに type:'roof' の群を、roomOrder 順で主屋根の次に出す
  *      （連動行は持たない＝rows:[]。見出しは固定「屋根」）。
  *   1. rows（graph.exteriorRows）から現行どおり群を作る（roomId連動行は roomId 単位、
  *      手入力行は part 単位。行の出現順を保つ——同名 part の手入力群と連動群は
@@ -40,11 +42,15 @@ export function isSelectedRoofGroup(group, selectedRoomId) {
  *   2. 屋外・非階段・非屋根の Room（isExteriorRoomGroupRoom）のうち、1 で連動群ができなかった
  *      （連動行が0件の）ものを、roomOrder 順で 1 のあとに追加する（見出し・仕上げレベル行・
  *      「＋ 行を追加」だけの空群。part は room.name）。
- * @param {{ rows: Array<{roomId: string|null, part: string}>, rooms: Array<import('@core').Room>, roomOrder: Array<string> }} args
- * @returns {Array<{ key: string, type: 'roof'|'room'|'part', roomId: string|null, part: string, rows: Array }>}
+ * @param {{ rows: Array<{roomId: string|null, part: string}>, rooms: Array<import('@core').Room>, roomOrder: Array<string>, includeMainRoof?: boolean }} args
+ * @returns {Array<{ key: string, type: 'mainRoof'|'roof'|'room'|'part', roomId: string|null, part: string, rows: Array }>}
  */
-export function buildExteriorGroups({ rows, rooms, roomOrder }) {
+export function buildExteriorGroups({ rows, rooms, roomOrder, includeMainRoof = false }) {
   const roomById = new Map(rooms.map(r => [r.id, r]));
+
+  const mainRoofGroups = includeMainRoof
+    ? [{ key: 'mainRoof', type: 'mainRoof', roomId: null, part: ROOF_ROOM_NAME, rows: [] }]
+    : [];
 
   const roofGroups = [];
   for (const roomId of roomOrder) {
@@ -75,5 +81,5 @@ export function buildExteriorGroups({ rows, rooms, roomOrder }) {
     order.push(key);
   }
 
-  return [...roofGroups, ...order.map(key => groups.get(key))];
+  return [...mainRoofGroups, ...roofGroups, ...order.map(key => groups.get(key))];
 }

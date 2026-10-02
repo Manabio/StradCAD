@@ -803,6 +803,80 @@ test('【B2】applyDocumentCodeNormalization: 文書の読み替え（alias）�
   clearDocumentAliases();
 });
 
+// ---- 主屋根（ステップB3）: snapshot.mainRoofSpec.sheathingMaterial / underlaymentMaterial ----
+function mainRoofSnapshot(mainRoofSpec) {
+  return baseSnapshot({ mainRoofSpec });
+}
+
+test('【B3】enumerateMaterialCodeRefs: 主屋根の野地板・防水シートを location=mainRoofSpec・key 付きで列挙する（roomId なし）', () => {
+  const refs = enumerateMaterialCodeRefs(mainRoofSnapshot({ sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009' }))
+    .filter(r => r.location === 'mainRoofSpec');
+  assert.deepEqual(refs.map(r => [r.code, r.key, 'roomId' in r]).sort(), [
+    ['301000000023', 'sheathingMaterial', false],
+    ['302000000009', 'underlaymentMaterial', false],
+  ]);
+});
+
+test('【B3】enumerateMaterialCodeRefs: 実際の RoofSpec.toData() の2コードが拾われる＝walker の項目名と RoofSpec のキーが一致している', () => {
+  const refs = enumerateMaterialCodeRefs({ mainRoofSpec: new RoofSpec().toData() });
+  assert.deepEqual(refs.map(r => [r.key, r.code]).sort(), [
+    ['sheathingMaterial', '101200000008'],
+    ['underlaymentMaterial', '302000000003'],
+  ]);
+  for (const r of refs) assert.ok(ROOF_SPEC_KEYS.includes(r.key));
+});
+
+test('【B3】enumerateMaterialCodeRefs: 既定値のままの主屋根は snapshot.mainRoofSpec が null（保存されない）ので列挙に出ない。キー無し・空/非文字列も出ない', () => {
+  const none = r => r.location === 'mainRoofSpec';
+  assert.equal(enumerateMaterialCodeRefs(mainRoofSnapshot(null)).filter(none).length, 0);
+  assert.equal(enumerateMaterialCodeRefs(mainRoofSnapshot(undefined)).filter(none).length, 0);
+  assert.equal(enumerateMaterialCodeRefs(mainRoofSnapshot({ sheathingMaterial: '', underlaymentMaterial: undefined })).filter(none).length, 0);
+});
+
+test('【B3】normalizeSnapshotCodes: 読み替え表が主屋根の2コードにも効く（他の項目は不変・変化なしなら同一参照・元は破壊しない）', () => {
+  const spec = { shape: 'flat', slope: 3, sheathingMaterial: '111111111150', underlaymentMaterial: '302000000003', note: 'メモ' };
+  const table = buildCodeTable({ legacy: { '111111111150': '101200000008' } });
+  const { snapshot, unresolved } = normalizeSnapshotCodes(mainRoofSnapshot(spec), table);
+  assert.equal(snapshot.mainRoofSpec.sheathingMaterial, '101200000008');
+  assert.equal(snapshot.mainRoofSpec.underlaymentMaterial, '302000000003', '対象外のコードは不変');
+  assert.equal(snapshot.mainRoofSpec.note, 'メモ');
+  assert.equal(snapshot.mainRoofSpec.shape, 'flat');
+  assert.deepEqual(unresolved, []);
+  assert.equal(spec.sheathingMaterial, '111111111150', '元の snapshot は破壊されない（copy-on-write）');
+
+  const unchanged = mainRoofSnapshot({ sheathingMaterial: '301000000023', underlaymentMaterial: '302000000003' });
+  const same = buildCodeTable({ legacy: { '999999999999': '101200000008' } });
+  assert.equal(normalizeSnapshotCodes(unchanged, same).snapshot, unchanged, '変化なしなら同一参照');
+});
+
+test('【B3・失敗系】normalizeSnapshotCodes: mainRoofSpec のキーが無い snapshot へはキーを足さない。廃止（null）コードは据え置き＋unresolved（location=mainRoofSpec）', () => {
+  const table = buildCodeTable({ legacy: { '301000000023': '301000000024', '302000000009': null } });
+  const noKey = baseSnapshot({ exteriorWallBacking: '301000000023' });
+  assert.equal('mainRoofSpec' in normalizeSnapshotCodes(noKey, table).snapshot, false);
+
+  const { snapshot, unresolved } = normalizeSnapshotCodes(
+    mainRoofSnapshot({ sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009' }), table);
+  assert.equal(snapshot.mainRoofSpec.sheathingMaterial, '301000000024');
+  assert.equal(snapshot.mainRoofSpec.underlaymentMaterial, '302000000009', '値は据え置き');
+  assert.deepEqual(unresolved.filter(u => u.location === 'mainRoofSpec'), [
+    { code: '302000000009', location: 'mainRoofSpec', key: 'underlaymentMaterial' },
+  ]);
+});
+
+test('【B3】applyDocumentCodeNormalization: 文書の読み替え（alias）が主屋根の材料コードに効き、未解決は location=mainRoofSpec で蓄積に積まれる', () => {
+  clearDocumentAliases();
+  takeUnresolvedCodes();
+  addDocumentAliases(CatalogKind.MATERIAL, [{ from: '301000000023', to: '301000000024' }, { from: '302000000009', to: null }]);
+  const applied = applyDocumentCodeNormalization(
+    mainRoofSnapshot({ sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009' }));
+  assert.equal(applied.mainRoofSpec.sheathingMaterial, '301000000024');
+  const unresolved = takeUnresolvedCodes().filter(u => u.location === 'mainRoofSpec');
+  assert.equal(unresolved.length, 1);
+  assert.equal(unresolved[0].code, '302000000009');
+  assert.equal(unresolved[0].kind, CatalogKind.MATERIAL);
+  clearDocumentAliases();
+});
+
 // ---- clearDocumentAliases: 全種別解除 ----
 test('clearDocumentAliases: material・interiorMasterの両方のaliasesを解除する（全種別解除）', () => {
   setDocumentAliases(CatalogKind.MATERIAL, { a: 'b' });

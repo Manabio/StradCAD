@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   RoofSpec, ROOF_SPEC_KEYS, RoofShape, DEFAULT_ROOF_SLOPE, DEFAULT_ROOF_EAVE_OVERHANG_MM,
   DEFAULT_ROOF_GABLE_OVERHANG_MM, DEFAULT_ROOF_SHEATHING, DEFAULT_ROOF_UNDERLAYMENT,
-  ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES,
+  ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES, isDefaultRoofSpec,
 } from '../core.js';
 import { NON_DEFAULT_ROOF_SPEC } from '../finish/roofTestFixtures.js';
 
@@ -95,4 +95,27 @@ test('候補コード表: 野地板は構造用合板5件＋セメント板16件
   assert.deepEqual([...ROOF_UNDERLAYMENT_CODES], ['302000000007', '302000000003', '302000000008', '302000000009']);
   assert.ok(ROOF_SHEATHING_CODES.includes(DEFAULT_ROOF_SHEATHING));
   assert.ok(ROOF_UNDERLAYMENT_CODES.includes(DEFAULT_ROOF_UNDERLAYMENT));
+});
+
+// ---- B3: 主屋根の「既定値のときは保存しない」判定（isDefaultRoofSpec） ----
+test('isDefaultRoofSpec: 既定値の RoofSpec・その toData()・null/undefined は既定値扱い', () => {
+  assert.equal(isDefaultRoofSpec(new RoofSpec()), true);
+  assert.equal(isDefaultRoofSpec(new RoofSpec().toData()), true);
+  assert.equal(isDefaultRoofSpec(null), true);
+  assert.equal(isDefaultRoofSpec(undefined), true);
+});
+
+test('isDefaultRoofSpec: 9項目のどれか1つでも既定値と違えば false（ROOF_SPEC_KEYS の全項目で確かめる）', () => {
+  for (const key of ROOF_SPEC_KEYS) {
+    const spec = new RoofSpec();
+    spec.setField(key, NON_DEFAULT_ROOF_SPEC[key]);
+    assert.equal(isDefaultRoofSpec(spec), false, `${key} だけ既定外でも false`);
+    assert.equal(isDefaultRoofSpec(spec.toData()), false, `${key}（plain）`);
+  }
+  assert.equal(ROOF_SPEC_KEYS.length, 9);
+});
+
+test('isDefaultRoofSpec: 形状を明示すると（自動と同じ見た目の陸屋根でも）既定値ではない。出幅0は既定外', () => {
+  assert.equal(isDefaultRoofSpec(new RoofSpec({ shape: RoofShape.FLAT })), false);
+  assert.equal(isDefaultRoofSpec(new RoofSpec({ eaveOverhangMm: 0 })), false);
 });

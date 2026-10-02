@@ -38,6 +38,7 @@ import { DimensionLine } from './dimension.js';
 import { WallBackingMaterial, Edge, ExteriorFinishRow, Room } from './room.js';
 import { Stair } from './stair.js';
 import { EquipmentRow } from './equipment.js';
+import { RoofSpec } from './roofSpec.js';
 import {
   COLUMN_CLASS_BY_MATERIAL, BEAM_CLASS_BY_MATERIAL,
   WALL_CLASS_BY_MATERIAL, SLAB_CLASS_BY_MATERIAL,
@@ -128,6 +129,11 @@ export class PlanGraph {
     // 一括指定する（Q5）。防音材は表示のみ（断面計算に未接続。天井・床下地と同じ扱い）。
     this.shaftWallMaterial = DEFAULT_SHAFT_WALL_MATERIAL; // 昇降路壁材: 面材コード
     this.shaftSoundproof   = DEFAULT_SHAFT_SOUNDPROOF;    // 昇降路防音材: 'none' | 'insulation'
+
+    // 主屋根の仕様（最上階の外部タブ先頭の固定の群「屋根」。常に RoofSpec を持つ＝null にしない。備考の既定は空）。
+    // 全階が持てるが、使われるのは最上階（とその検討案）の分だけで、他の階では休眠する。
+    // 既定値のときは保存データへ何も書かない（graphSnapshot.js・core/roofSpec.js isDefaultRoofSpec）。
+    this.mainRoofSpec = new RoofSpec();
 
     // 部屋の既定値（共通仕様タブ per-floor 設定）。部屋側が null のとき参照される。
     this.defaultFloorLevel    = DEFAULT_ROOM_FLOOR_LEVEL;    // FL初期値: 階FLからの相対高さmm
@@ -257,6 +263,8 @@ export class PlanGraph {
       beamColumnWidthMm:        observable,
       shaftWallMaterial:        observable,
       shaftSoundproof:          observable,
+      mainRoofSpec:             observable.ref,
+      setMainRoofSpec:          action,
       setExteriorWallBacking:   action,
       setInteriorWallBacking:   action,
       setCeilingBacking:        action,
@@ -466,6 +474,8 @@ export class PlanGraph {
   setShaftWallMaterial(code) { this.shaftWallMaterial = code; }
   /** 昇降路の防音材（共通仕様タブ。表示のみ）を設定する。 */
   setShaftSoundproof(v)      { this.shaftSoundproof   = v; }
+  /** 主屋根の仕様（RoofSpec）を差し替える。常に RoofSpec（null にしない）。 */
+  setMainRoofSpec(spec)      { this.mainRoofSpec      = spec; }
   setDefaultFloorLevel(mm)     { this.defaultFloorLevel    = mm; }
   setDefaultCeilingHeight(mm)  { this.defaultCeilingHeight = mm; }
   setFloorDatum(mm) { this.floorDatum = mm; }
@@ -1078,7 +1088,8 @@ export class PlanGraph {
     this.floorBacking        = DEFAULT_FLOOR_BACKING;
     this.shaftWallMaterial   = DEFAULT_SHAFT_WALL_MATERIAL;
     this.shaftSoundproof     = DEFAULT_SHAFT_SOUNDPROOF;
-    this.defaultFloorLevel    = DEFAULT_ROOM_FLOOR_LEVEL;
+    this.mainRoofSpec        = new RoofSpec();
+    this.defaultFloorLevel   = DEFAULT_ROOM_FLOOR_LEVEL;
     this.defaultCeilingHeight = DEFAULT_ROOM_CEILING_HEIGHT;
     this.floorDatum          = 0;
     this.structureOverride   = null;

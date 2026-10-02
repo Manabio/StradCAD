@@ -131,8 +131,9 @@ test('【不変条件・W1】GroupedExteriorTable は exteriorGroups.js の buil
   assert.ok(/import \{ buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup \} from '\.\/exteriorGroups\.js';/.test(codeOnly),
     "import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js'; が見つからない");
   const block = groupedExteriorTableBlock();
-  assert.ok(/buildExteriorGroups\(\{ rows, rooms: graph\.rooms, roomOrder: graph\.roomOrder \}\)/.test(block),
-    'GroupedExteriorTable本体に buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder }) の呼び出しが見つからない');
+  // B3: 主屋根の群（最上階のみ）の有無を includeMainRoof で渡す（旧: 引数は rows・rooms・roomOrder の3つだけ）
+  assert.ok(/buildExteriorGroups\(\{ rows, rooms: graph\.rooms, roomOrder: graph\.roomOrder, includeMainRoof \}\)/.test(block),
+    'GroupedExteriorTable本体に buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder, includeMainRoof }) の呼び出しが見つからない');
   // 旧実装（rowsから直接Mapを組む処理）が復活していないことも固定する
   assert.ok(!/const key = row\.roomId \? `room:\$\{row\.roomId\}` : `part:\$\{row\.part\}`;/.test(block),
     '群キーの手組みロジックが残っている（buildExteriorGroupsへ一本化されていないはず）');

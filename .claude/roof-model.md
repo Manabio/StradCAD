@@ -1,4 +1,4 @@
-# 屋根（下屋）の仕様 — RoofSpec
+# 屋根（下屋・主屋根）の仕様 — RoofSpec
 
 屋根の壁・境界・他階との整合（feature=ROOF を「部屋の無いセル」と同値に扱う）は `.claude/data-model.md` の屋根の節。ここは屋根の**項目（RoofSpec）**の設計意図だけを書く。
 
@@ -15,7 +15,7 @@
 ## 形状だけ「自動」を持つ
 - `shape: null`＝自動。表示時に`resolveRoofShape`が導く（短手が`ROOF_MONO_MAX_SHORT_SPAN_MM`以下なら片流れ、超えれば切妻）。選ぶと保存され、「自動へ戻す」入口は作らない。他の項目は付与時に既定値を保存する。理由: 材料コードは保存されていないと使用コードの収集（同梱）・読込み時の照合に乗らない。
 - 短手＝屋根範囲に内接する全矩形の短辺の最大（`roofShortSpanMm`）。セルの分割の取り方に依存しない。
-- 陸屋根は下屋でも選べる（既定になるのは非木造の主屋根だけ＝主屋根は未実装。`resolveRoofShape`の`rules.mainRoofDefaultShape`が引数口）。構造種別を直接比べず`rulesFor`経由にすること。
+- 陸屋根は下屋でも選べる（既定になるのは非木造の主屋根だけ。`resolveRoofShape`の`rules.mainRoofDefaultShape`が引数口で、主屋根のときだけ渡す）。構造種別を直接比べず`rulesFor`経由にすること。
 
 ## 材料コードの照合
 - 野地板・防水シートのコードは`codeNormalization.js`の材料walker（`ROOF_SPEC_MATERIAL_FIELDS`）で列挙・読み替えされ、使用コードの収集（同梱）と未解決コードの検出に乗る。`FinishModeState._collectReferencedCodes`も同じ2項目を見る。walkerは零依存の葉モジュールのため項目名を直書きしており、`ROOF_SPEC_KEYS`との一致は`codeNormalization.test.js`が固定する。
@@ -29,6 +29,17 @@
 - 平面で屋根セルをクリックすると、`FinishModeState.startDrag`（優先0b。`roofRoomAtCell`）がその屋根の部屋を選択するだけでドラッグは始めない（屋根は部屋ドラッグの対象外のまま。広げるときは削除→指定し直し）。選択は屋外部屋と同じ経路で外部タブへ切り替わり、選んだ屋根の群だけを青枠で強調して可視域へ寄せる（判定は`exteriorGroups.js`の`isSelectedRoofGroup`）。
 - 逆向き（外部タブの群のクリックで平面の屋根を選ぶ）は、既存の屋外部屋の群も持たないため屋根にも付けていない。
 
+## 主屋根（最上階の屋根）
+- 最上階（とその検討案）の外部タブ先頭に、セルを持たない固定の群「屋根」（`type:'mainRoof'`・削除ボタンなし・選択の枠なし）。範囲は最上階の建物範囲（`footprintCellKeys`）、入力項目・入力UI・初期値関数は下屋と同じ（`RoofGroup.jsx`の`RoofSpecFields`を共用）。備考の既定だけ空（下屋は「下野」）。
+- 保存先は最上階の**graphの階ごと設定** `PlanGraph.mainRoofSpec`（常に`RoofSpec`。全階が持てるが使われるのは最上階の分だけで、他の階では休眠する）。project・屋根専用平面（R階。構造モード専用で作り直される）には置かない。最上階の判定は`core/project.js`の`isTopFloorPlane`（`project.planes`の末尾。検討案は参照元で判定）。
+- **既定値のときは保存データへ何も書かない**（`GS.MAIN_ROOF_SPEC=53`を省く。`isDefaultRoofSpec`が唯一の判定）。主屋根を編集していない文書のバイト列は変わらない。材料コードの収集・照合も既定値のときは出ない。
+- 形状の既定は`rulesFor(effectiveStructure).mainRoofDefaultShape`（RC・S・SRC=陸屋根、在来・2×4=null＝短手の規則）。主構造が**未定**のときは`UNSPECIFIED_RULES`が明示でnull（継承に任せると`STEEL_RULES`経由で`flat`になるため）＝木造と同じ短手の規則。導出は`finish/roof/mainRoof.js`（`wallGate.js`が storage 系を連鎖して引くので、`graphSnapshot`が引く`roofDefaults.js`には置かない＝import循環の回避）。
+- 主屋根は壁・境界・構造・展開図に影響しない（値の保持と外部タブの表示だけ。壁の鮮度キーにも入れない）。
+- 仕上げ undo は別キー`mainRoof`（`PER_FLOOR_SETTERS`は値そのものを入れる形でオブジェクトを相乗りさせない）。確定は`FinishModeState.setMainRoofField`（1確定＝undo 1エントリ）。
+- **上に階を追加して最上階が入れ替わったときだけ**、旧最上階の値を新しい最上階へ写す（follower `mainRoofCarry`・`finish/roof/mainRoofFloorSync.js`）。階の削除・並べ替え・階変更・下への追加では写さず、新しい最上階が自分の値を使う。旧最上階の値は残し、旧最上階が既定値なら何も書かない。旧最上階の検討案の主屋根は写さない（採用フロアの値だけ）。階追加のundoは追加階ごと消えるので、旧最上階には何も書かない。
+
 ## 既知の限界
 - 形状が自動のとき、導かれた形状と同じ値を選んでも `onChange` が発火しないため、導いた形状を「そのまま固定」するには別の形状を一度選ぶ必要がある。
-- 主屋根（`PlanGraph.mainRoofSpec`・最上階の群）は未実装。
+- 主屋根の形状は最上階の建物範囲から導くだけで、構造材（小屋組）・平面・展開図・断面には反映しない（構造種別が変わると表示の形状が追従するだけ）。
+- 「既定値は保存しない」の帰結（主屋根）: (a) 既定の野地板・防水シートのコードをユーザーが保守パネルで上書き（本体の編集）していても、主屋根が既定値のままの文書にはその材が同梱されず、別の環境では本体カタログの内容で表示される。(b) 将来、屋根の既定値の定数（`DEFAULT_ROOF_*`）を変えると、主屋根を編集していない文書は新しい既定値に変わる（保存データに値が無いため）。下屋は付与時に値を保存するのでどちらも起きない。
+- 最上階が入れ替わっても、階の削除・並べ替えでは主屋根の値は動かない（旧最上階の値は旧最上階に休眠したまま）。

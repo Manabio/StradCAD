@@ -52,7 +52,7 @@ app/src/
 | 材料等カタログ（材料・内装/境界マスター・断面・建具種別・建具記号）の同梱・照合・本体編集の設計意図 | `.claude/catalog-model.md` |
 | 昇降機（器具・昇降路・全階連動・階追加時の複製）の設計意図 | `.claude/equipment-model.md` |
 | 展開モード（室内展開図）の設計意図。線分の角の取り合い（L字の外角閉じ。展開図・敷地・階段・柱包み共通）の節を含む | `.claude/elevation-model.md` |
-| 屋根（下屋）の項目（RoofSpec・形状の自動・初期値・材料コードの照合）の設計意図。壁・境界の扱いは data-model.md の屋根の節 | `.claude/roof-model.md` |
+| 屋根（下屋・主屋根）の項目（RoofSpec・形状の自動・初期値・材料コードの照合・最上階の主屋根）の設計意図。壁・境界の扱いは data-model.md の屋根の節 | `.claude/roof-model.md` |
 | 平面の壁取り合い（領域方式への移行） | `.claude/plan-wall-region.md` |
 | 通り芯/中心線の昇格・降格・移動の既知の限界と受容方針（削除はD案＝境界化、他階同座標チェックは線id一意化＋移籍一本化で解消） | `.claude/cl-conversion-limits.md` |
 | 本番デプロイ | `.claude/deployment.md` |

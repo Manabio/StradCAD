@@ -8,7 +8,7 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { restoreGraph, serializeGraph } from '../graphSnapshot.js';
 import { takeUnresolvedCodes, addDocumentAliases, clearDocumentAliases } from '../catalog/codeNormalization.js';
-import { worldToCell, refreshCells } from '../finish/gridCells.js';
+import { worldToCell, refreshCells, regionCellsAt } from '../finish/gridCells.js';
 import { buildExteriorGroups } from '../finish/exteriorGroups.js';
 import { undoManager } from '../undoManager.js';
 import { wallFreshnessKey } from '../finish/wallFreshnessKey.js';
@@ -1206,6 +1206,154 @@ test('【B2】屋根の項目を編集しても壁の鮮度キーは変わらな
   state.setRoofField(roof.id, 'shape', 'flat');
   state.setRoofField(roof.id, 'eaveOverhangMm', 900);
   assert.equal(wallFreshnessKey(graph), key);
+});
+
+// ---- 主屋根（ステップB3）: setMainRoofField。値は graph.mainRoofSpec（階ごと設定）。undo は finishUndo の mainRoof ----
+const MAIN_ROOF_DEFAULTS = {
+  shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
+  roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '',
+};
+
+test('【B3】主屋根の初期値は既定値で、備考は空（下屋の「下野」ではない）', () => {
+  const graph = makeThreeCellGraph();
+  assert.deepEqual(graph.mainRoofSpec.toData(), MAIN_ROOF_DEFAULTS);
+});
+
+test('【B3】setMainRoofField: 9項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const edits = {
+    shape: 'hip', slope: 2.5, sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009',
+    roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '主屋根',
+  };
+  for (const [field, value] of Object.entries(edits)) {
+    // undo/redo は主屋根の RoofSpec を作り直すため、毎回 graph から引き直す
+    const before = graph.mainRoofSpec[field];
+    const stackBefore = undoManager._undoStack.length;
+    assert.equal(state.setMainRoofField(field, value), true, `${field} の確定`);
+    assert.equal(graph.mainRoofSpec[field], value);
+    assert.equal(undoManager._undoStack.length, stackBefore + 1, `${field}: undo は1エントリ`);
+    undoManager.undo();
+    assert.equal(graph.mainRoofSpec[field], before, `${field}: undo で戻る`);
+    undoManager.redo();
+    assert.equal(graph.mainRoofSpec[field], value, `${field}: redo でやり直せる`);
+  }
+  assert.equal(Object.keys(edits).length, 9);
+});
+
+test('【B3・失敗系】setMainRoofField: 不正な値（勾配0・2.3・負の出幅・未知の形状・空の材料コード・未知の項目）は確定せず undo も積まない', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const stackBefore = undoManager._undoStack.length;
+  const bad = [
+    ['slope', 0], ['slope', 2.3], ['slope', -1], ['slope', '3'], ['eaveOverhangMm', -1], ['gableOverhangMm', NaN],
+    ['shape', 'dome'], ['shape', null], ['sheathingMaterial', ''], ['underlaymentMaterial', null], ['unknown', 1],
+  ];
+  for (const [field, value] of bad) {
+    assert.equal(state.setMainRoofField(field, value), false, `${field}=${String(value)}`);
+  }
+  assert.deepEqual(graph.mainRoofSpec.toData(), MAIN_ROOF_DEFAULTS, '値は変わらない');
+  assert.equal(undoManager._undoStack.length, stackBefore, 'undo は積まれない');
+});
+
+test('【B3・失敗系】setMainRoofField: 無変更（現在値と同じ）は false で undo を積まない', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const stackBefore = undoManager._undoStack.length;
+  assert.equal(state.setMainRoofField('slope', 3), false);
+  assert.equal(state.setMainRoofField('note', ''), false);
+  assert.equal(undoManager._undoStack.length, stackBefore);
+});
+
+test('【B3】主屋根の編集は屋根の部屋（下屋）の値に触れず、下屋の編集も主屋根に触れない', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  state.setMainRoofField('slope', 5);
+  assert.equal(graph.roomMap.get(roof.id).roofSpec.slope, 3, '下屋は既定のまま');
+  state.setRoofField(roof.id, 'slope', 4);
+  assert.equal(graph.mainRoofSpec.slope, 5, '主屋根は変わらない');
+});
+
+test('【B3】主屋根の全項目を編集しても壁の鮮度キーは変わらない（主屋根は壁に効かない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const key = wallFreshnessKey(graph);
+  state.setMainRoofField('shape', 'flat');
+  state.setMainRoofField('eaveOverhangMm', 900);
+  state.setMainRoofField('sheathingMaterial', '301000000023');
+  assert.equal(wallFreshnessKey(graph), key);
+});
+
+test('【B3】主屋根の材料コードは既定以外のときだけ参照コードに載る（_collectReferencedCodes。既定のままなら載らない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  assert.equal(state._collectReferencedCodes().has('101200000008'), false, '既定の野地板は主屋根からは載らない');
+  state.setMainRoofField('sheathingMaterial', '301000000023');
+  const codes = state._collectReferencedCodes();
+  assert.equal(codes.has('301000000023'), true);
+  assert.equal(codes.has('302000000003'), true, '既定以外になれば防水シートも載る');
+});
+
+// ---- 屋根セルの押下（B2b）: ドラッグを始めない・階段の見下げより優先 ----
+// 中央の縦CLを短縮（extent が行全体を覆わない＝セルの境界として分割しない）し、屋根セル（左）と未指定セル（右）が
+// 同じ領域（regionCellsAt）になる配置。領域は屋根以外（右の未指定セル）へも広がる。
+function makeRoofRegionGraph() {
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const mid = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const hMid = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  // 縦CL（x=2000）は上段（y:0..1500）だけ、横CL（y=1500）は左半分（x:0..2000）だけを分割する。
+  // 結果、左下のセル（0..2000×1500..3000）と右のセル（2000..4000×0..3000）が1つの領域（L字）になる
+  mid.setProps({ _extentLo: 0, _extentHi: 1500 });
+  hMid.setProps({ _extentLo: 0, _extentHi: 2000 });
+  const left = worldToCell(1000, 2250, graph);
+  const roof = graph.addRoom(new Set([left.key]), '屋根');
+  roof.setKind(RoomKind.EXTERIOR);
+  roof.setFeature(RoomFeature.ROOF);
+  return { graph, roof, leftKey: left.key };
+}
+
+test('【B2b・T-Y1】屋根セルの押下はドラッグを始めない: 領域が屋根以外（未指定セル）へ広がる配置でも、選択だけで dragState は null・commitDrag しても部屋は増えない', () => {
+  const { graph, roof, leftKey } = makeRoofRegionGraph();
+  const state = new FinishModeState(graph, null);
+  const region = regionCellsAt(1000, 2250, graph);
+  assert.equal(region.length, 2, '前提: 屋根セルと未指定セルが同じ領域になる（短縮CLで分割されない）');
+  assert.equal(region[0].key, leftKey, '前提: 押下セルは屋根セル');
+
+  const roomsBefore = graph.rooms.length;
+  const stackBefore = undoManager._undoStack.length;
+  state.startDrag(1000, 2250);
+  assert.equal(state.dragState, null, '屋根セルの押下でドラッグ（dragState）が始まらない');
+  assert.equal(state.selectedRoomId, roof.id, '押した屋根が選択される');
+  state.commitDrag();
+  assert.equal(state.namingRoomId, null, '命名ダイアログも開かない');
+  assert.equal(graph.rooms.length, roomsBefore, '部屋が増えない（屋根を広げたり取り込んだりしない）');
+  assert.equal(undoManager._undoStack.length, stackBefore, 'undo も積まれない');
+});
+
+test('【B2b・T-Y1・対照】同じ配置で屋根でない側（未指定セル）を押すと、屋根セルを除いた領域でドラッグが始まる', () => {
+  const { graph, leftKey } = makeRoofRegionGraph();
+  const state = new FinishModeState(graph, null);
+  state.startDrag(3000, 2250);
+  assert.ok(state.dragState, '未指定セルの押下はドラッグを始める');
+  assert.equal(state.dragState.visitedCells.has(leftKey), false, '屋根セルはドラッグの対象に含まれない');
+});
+
+test('【B2b・T-Y2】屋根セルの押下は、直下階の階段の見下げ（lowerStairs）より優先して屋根を選択する（階段の選択に化けない）', () => {
+  const { graph, roof } = makeRoofRegionGraph();
+  const state = new FinishModeState(graph, null);
+  // init() の peek が詰める直下階の階段（見下げ）を、屋根セルと同じ位置に直接置く
+  state.lowerStairs = [{ stair: { id: 's-lower' }, cellBounds: [{ x1: 0, y1: 0, x2: 2000, y2: 3000 }] }];
+  assert.equal(state._lowerStairForPoint(1000, 2250)?.id, 's-lower', '前提: この位置は下階階段の見下げ範囲');
+
+  state.startDrag(1000, 2250);
+  assert.equal(state.selectedRoomId, roof.id, '屋根が選択される');
+  assert.equal(state.selectedStairId, null, '下階階段は選択されない');
+  assert.equal(state.dragState, null);
 });
 
 test('【B2】_collectReferencedCodes: 屋根の野地板・防水シートの材料コードが照合対象に入る（屋根が無ければ入らない）', () => {

@@ -4,13 +4,13 @@ import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.j
 import { StairTab } from './stair/StairTab.jsx';
 import { EquipmentTab } from './equipment/EquipmentTab.jsx';
 import { RoomDeleteConfirm } from './RoomDeleteConfirm.jsx';
-import { RoofGroup } from './roof/RoofGroup.jsx';
+import { RoofGroup, MainRoofGroup } from './roof/RoofGroup.jsx';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
 import { roomCeilingHeight } from './roomMetrics.js';
 import { parseSlopeInput } from './exteriorLevelInput.js';
 import {
   RoomFeature, RoomKind, ExteriorLevelRef, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
-  isShaftFeature, ShaftSoundproof,
+  isShaftFeature, ShaftSoundproof, isTopFloorPlane,
 } from '@core';
 import { shaftWallMaterialOptions } from './shaftWallMaterialOptions.js';
 import { floorHeightAbove } from './stair/stairDimensions.js';
@@ -1189,7 +1189,9 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
   // 群の並び（どの群をどの順で出すか）は exteriorGroups.js（純モジュール）を唯一の供給源にする。
   // 屋外・非階段のRoomは連動行が0件でも群を出す（ユーザー裁定: 屋外タブに削除ボタン・区分
   // セレクタをRoom連動で置く）。
-  const groups = buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder });
+  // 主屋根の群は最上階（とその検討案）の外部タブにだけ出す（判定は core/project.js isTopFloorPlane）。
+  const includeMainRoof = isTopFloorPlane(mode.project, graph.plane);
+  const groups = buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder, includeMainRoof });
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { roomId, roomName } | null
 
   return (
@@ -1201,6 +1203,18 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
         </div>
       )}
       {groups.map(({ key: groupKey, type: groupType, roomId, part, rows: groupRows }) => {
+        if (groupType === 'mainRoof') {
+          // 主屋根（最上階の建物範囲全体）の固定の群: 見出し「屋根」＋屋根の項目（MainRoofGroup）。セルを持たないため
+          // 平面からは選ばれず、選択の枠は付けない。
+          return (
+            <div key={groupKey} style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part}</div>
+              </div>
+              <MainRoofGroup graph={graph} mode={mode} styles={{ cellBase, headerCell, cellInputStyle }} />
+            </div>
+          );
+        }
         if (groupType === 'roof') {
           // 屋根（下屋）の群: 見出し「屋根」＋削除ボタン＋屋根の項目（RoofGroup。フォーム1行＋固定2行の表）。
           // 連動行・仕上げレベル行・改名入力・区分セレクタは出さない。削除は屋外部屋と同じ mode.deleteRoom。

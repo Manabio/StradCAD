@@ -7,6 +7,22 @@ import { PlanGraph } from './planGraph.js';
 import { Site } from './site.js';
 import { StructuralInfo } from './structuralInfo.js';
 
+/**
+ * plane が最上階（とその検討案）か。最上階＝project.planes（採用フロア・elevation 昇順。屋根専用平面と検討案を
+ * 除く）の末尾。検討案は参照元（referenceId）が最上階なら真。屋根専用平面・plane/project が無い・階が無い場合は偽。
+ * 主屋根（PlanGraph.mainRoofSpec）を使う階の判定の唯一の入口。
+ * @param {{ planes: Array<{id: string}> }|null|undefined} project
+ * @param {{ id: string, isAlternative?: boolean, referenceId?: string|null, isRoofPlane?: boolean }|null|undefined} plane
+ * @returns {boolean}
+ */
+export function isTopFloorPlane(project, plane) {
+  if (!project || !plane || plane.isRoofPlane) return false;
+  const planes = project.planes;
+  const top = planes[planes.length - 1];
+  if (!top) return false;
+  return plane.isAlternative ? plane.referenceId === top.id : plane.id === top.id;
+}
+
 export class Project {
   constructor(id, name) {
     this.id   = id;

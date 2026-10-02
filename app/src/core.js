@@ -71,7 +71,7 @@ export {
 // ROOF SPEC (屋根の仕様) — core/roofSpec.js。Room.roofSpec が持つ。
 // ================================================================
 
-export { RoofSpec, ROOF_SPEC_KEYS } from './core/roofSpec.js';
+export { RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec } from './core/roofSpec.js';
 
 // ================================================================
 // STAIR (階段) — core/stair.js。
@@ -127,4 +127,4 @@ export { StructuralInfo } from './core/structuralInfo.js';
 // PROJECT (MobX ルートストア) — core/project.js。
 // ================================================================
 
-export { Project } from './core/project.js';
+export { Project, isTopFloorPlane } from './core/project.js';

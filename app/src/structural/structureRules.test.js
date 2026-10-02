@@ -486,6 +486,22 @@ test('structureRules: ピン接合の梁の端部クリアランス（pinBeamEnd
   }
 });
 
+test('structureRules（B3）: 主屋根の形状の既定（mainRoofDefaultShape）は非木造（RC・S・SRC）だけ陸屋根、木造系（在来・2×4）・未定・未知は null（短手の規則）', () => {
+  for (const key of ['RC造(ラーメン)', 'RC造(壁式)', 'S造', 'SRC造']) {
+    assert.equal(rulesFor(key).mainRoofDefaultShape, 'flat', key);
+  }
+  for (const key of [TRADITIONAL_WOOD_STRUCTURE, '木造（2"×4"）']) {
+    assert.equal(rulesFor(key).mainRoofDefaultShape, null, key);
+  }
+  // 未定は STEEL_RULES（RC_RULES の spread）の継承に任せると 'flat' になる——明示の null で上書きしている
+  assert.equal(UNSPECIFIED_RULES.mainRoofDefaultShape, null);
+  assert.equal(rulesFor(UNSPECIFIED_STRUCTURE).mainRoofDefaultShape, null);
+  assert.equal(rulesFor('no-such-structure').mainRoofDefaultShape, null);
+  assert.equal(rulesFor(undefined).mainRoofDefaultShape, null);
+  // 全ルールセットがこの選択子を持つ（undefined でなく null か値）
+  for (const key of STRUCTURE_KEYS) assert.notEqual(STRUCTURE_RULES[key].mainRoofDefaultShape, undefined, key);
+});
+
 test('effectiveStructure: project が無くても graph の後方参照（_structuralInfo / _structGraph 経由）から建物全体値を引く', () => {
   const info = new StructuralInfo();
   info.setField('mainStructure', TRADITIONAL_WOOD_STRUCTURE);

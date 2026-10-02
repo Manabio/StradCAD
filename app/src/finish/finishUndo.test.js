@@ -263,3 +263,71 @@ test('屋根の項目の変更を withFinishUndo で包むと undo/redo で戻�
   undoManager.redo();
   assert.equal(graph.roomMap.get(roof.id).roofSpec.slope, 4);
 });
+
+// ---- 主屋根（ステップB3。PlanGraph.mainRoofSpec。snapshot の `mainRoof` キー） ----
+test('不変条件（B3）: 仕上げ undo の snapshot の mainRoof のキー集合は ROOF_SPEC_KEYS と一致する', () => {
+  const graph = freshGraph();
+  graph.setMainRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
+  const snap = snapshotFinishState(graph);
+  assert.deepStrictEqual(Object.keys(snap.mainRoof).sort(), [...ROOF_SPEC_KEYS].sort(),
+    'RoofSpec に項目を足したら toData/fromData（唯一の定義）に足す。finishUndo の mainRoof は toData をそのまま採る');
+});
+
+test('不変条件（B3）: 全項目を既定値以外にした主屋根は snapshot→restore→snapshot で一致し、各項目が復元される', () => {
+  const graph = freshGraph();
+  graph.setMainRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
+  const before = snapshotFinishState(graph);
+  graph.setMainRoofSpec(new RoofSpec()); // 既定へ崩してから復元
+  restoreFinishState(graph, before);
+  for (const k of ROOF_SPEC_KEYS) {
+    assert.deepStrictEqual(graph.mainRoofSpec[k], NON_DEFAULT_ROOF_SPEC[k], '往復後に ' + k + ' が復元されない');
+  }
+  assert.equal(JSON.stringify(snapshotFinishState(graph)), JSON.stringify(before));
+});
+
+test('主屋根の変更を withFinishUndo で包むと undo/redo で戻る（1エントリ）', () => {
+  const graph = freshGraph();
+  const stackBefore = undoManager._undoStack.length;
+  withFinishUndo(graph, () => graph.mainRoofSpec.setField('slope', 4));
+  assert.equal(undoManager._undoStack.length, stackBefore + 1);
+  assert.equal(graph.mainRoofSpec.slope, 4);
+  undoManager.undo();
+  assert.equal(graph.mainRoofSpec.slope, 3, 'undo で既定の勾配3へ戻る');
+  undoManager.redo();
+  assert.equal(graph.mainRoofSpec.slope, 4);
+});
+
+test('主屋根を編集した後に別の仕上げ操作を挟んで undo/redo しても、主屋根の値は初期化されない（階段の4項目と同型の列挙漏れ対策）', () => {
+  const graph = freshGraph();
+  withFinishUndo(graph, () => graph.mainRoofSpec.setField('note', '主屋根メモ'));
+  withFinishUndo(graph, () => graph.setShaftSoundproof(ShaftSoundproof.INSULATION)); // 別の操作
+  undoManager.undo(); // 別の操作を戻す
+  assert.equal(graph.shaftSoundproof, ShaftSoundproof.NONE);
+  assert.equal(graph.mainRoofSpec.note, '主屋根メモ', '別操作の undo で主屋根の値が失われない');
+  undoManager.redo();
+  assert.equal(graph.shaftSoundproof, ShaftSoundproof.INSULATION);
+  assert.equal(graph.mainRoofSpec.note, '主屋根メモ', '別操作の redo でも保たれる');
+  undoManager.undo();
+  undoManager.undo(); // 主屋根の編集を戻す
+  assert.equal(graph.mainRoofSpec.note, '');
+});
+
+test('restoreFinishState: 主屋根は snap.mainRoof で全置換される。旧スナップショット（mainRoof キー欠落）は既定値、壊れた値は正規化される', () => {
+  const graph = freshGraph();
+  graph.setMainRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
+  const snap = snapshotFinishState(freshGraph()); // 既定の主屋根
+  restoreFinishState(graph, snap);
+  assert.deepStrictEqual(graph.mainRoofSpec.toData(), new RoofSpec().toData(), 'snap の既定値で全置換');
+
+  graph.setMainRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
+  const legacy = { ...snap };
+  delete legacy.mainRoof;
+  restoreFinishState(graph, legacy);
+  assert.deepStrictEqual(graph.mainRoofSpec.toData(), new RoofSpec().toData(), 'キー欠落は既定値');
+
+  restoreFinishState(graph, { ...snap, mainRoof: { ...NON_DEFAULT_ROOF_SPEC, slope: -1, shape: 'dome', eaveOverhangMm: -1 } });
+  assert.equal(graph.mainRoofSpec.slope, 3);
+  assert.equal(graph.mainRoofSpec.shape, null);
+  assert.equal(graph.mainRoofSpec.eaveOverhangMm, 455);
+  assert.equal(graph.mainRoofSpec.note, NON_DEFAULT_ROOF_SPEC.note, '壊れていない項目は保たれる');
+});

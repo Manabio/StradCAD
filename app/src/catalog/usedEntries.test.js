@@ -83,6 +83,32 @@ test('【B2】buildDocumentBundle: 使用中の屋根の材料（野地板・防
   assert.ok(unresolvedKeys.get(CatalogKind.MATERIAL).has('302000000009'), '実体が無い防水シートは未解決として返る');
 });
 
+test('collectUsedMaterialCodes【B3】: 主屋根の野地板・防水シートも収集対象に含む。既定値のままなら snapshot.mainRoofSpec が null で収集に出ない', () => {
+  const codes = collectUsedMaterialCodes(baseSnapshot({
+    mainRoofSpec: { sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009' },
+  }));
+  assert.ok(codes.has('301000000023'), '野地板');
+  assert.ok(codes.has('302000000009'), '防水シート');
+  const none = collectUsedMaterialCodes(baseSnapshot({ mainRoofSpec: null }));
+  assert.equal(none.has('302000000009'), false);
+  assert.equal(none.has('101200000008'), false, '既定の野地板は主屋根からは出ない');
+});
+
+test('【B3】buildDocumentBundle: 使用中の主屋根の材料が同梱束に入り、解決できない主屋根の材料は unresolvedKeys へ', () => {
+  const snapshot = baseSnapshot({
+    mainRoofSpec: { sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009' },
+  });
+  const usedKeysByKind = collectUsedKeysByKind([snapshot], [CatalogKind.MATERIAL]);
+  const materialMap = new Map([
+    ['301000000023', { code: '301000000023', name: '硬質木片セメント板 t=25', spec: '', x: 910, y: 1820, thickness: 25 }],
+  ]);
+  const { bundle, unresolvedKeys } = buildDocumentBundle({
+    usedKeysByKind, resolvedByKind: new Map([[CatalogKind.MATERIAL, materialMap]]),
+  });
+  assert.ok(bundle.catalogs.material.some(e => e.code === '301000000023'), '主屋根の野地板は同梱される');
+  assert.ok(unresolvedKeys.get(CatalogKind.MATERIAL).has('302000000009'), '実体が無い防水シートは未解決として返る');
+});
+
 test('collectUsedMaterialCodes: 12桁数字として不正な値（room overrideのnot-a-code等）は含めない', () => {
   const snapshot = baseSnapshot({
     rooms: [{ id: 'r1', overrides: [{ key: 'wallMaterial', value: 'not-a-code' }] }],
