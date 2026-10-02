@@ -517,11 +517,20 @@ export class FinishModeState {
     });
   }
 
+  /** セルキーを占有する屋根（feature=ROOF）の部屋を返す。無ければ null（屋根セルのクリック選択の判定）。 */
+  roofRoomAtCell(cellKey) {
+    for (const room of this.graph.rooms) {
+      if (isRoofFeature(room.feature) && refreshCells(room.cells, this.graph).has(cellKey)) return room;
+    }
+    return null;
+  }
+
   // 選択は連結領域単位。短縮CLでL字化した領域は、内部のどこを指しても
   // 構成セル全部をまとめて拾う（先頭はポインタ直下のセル）
   //
   // 階段クリックの優先順位（ポインタ直下 wx,wy で判定）:
   //   0. 昇降機のセル（器具行 or 未登録の昇降路Room）  → その器具を選択（ダイアログなし）
+  //   0b. 屋根のセル                              → その屋根の部屋を選択（ダイアログなし・ドラッグなし）
   //   1. 自階階段のセルかつ破れ線手前          → その自階階段を選択のみ（ダイアログなし）
   //   2. 自階階段のセルで破れ線先＋下階階段あり → 下階階段を選択（見下げクリック。ダイアログなし）
   //   3. 自階に階段が無い＋下階階段あり         → 下階階段を選択（見下げクリック。ダイアログなし）
@@ -543,6 +552,11 @@ export class FinishModeState {
     // 優先0: 昇降機のセルを直接指した場合は、階段の探索より先にその器具を選択する。
     const equipmentHit = equipmentAtCell(this.graph, pointerKey);
     if (equipmentHit) { this._selectEquipment(equipmentHit.id); return; }
+
+    // 優先0b: 屋根のセルを直接指した場合はその屋根の部屋を選択するだけ（ドラッグは始めない。
+    // 屋根は部屋ドラッグの対象外のまま。外部タブへの切替・群の強調は FinishTable 側が selectedRoomId で行う）。
+    const roofHit = this.roofRoomAtCell(pointerKey);
+    if (roofHit) { this.selectRoom(roofHit.id); return; }
 
     let stair = null;
     for (const s of this.graph.stairs) {

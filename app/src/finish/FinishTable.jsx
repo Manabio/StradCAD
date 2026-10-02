@@ -17,7 +17,7 @@ import { floorHeightAbove } from './stair/stairDimensions.js';
 import {
   ROOM_KIND_OPTIONS, CARD_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature,
 } from './roomNamingOptions.js';
-import { buildExteriorGroups, isExteriorRoomGroupRoom } from './exteriorGroups.js';
+import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip } from '../catalog/catalogDiffView.js';
@@ -1167,6 +1167,23 @@ const ExteriorPartHeading = observer(({ room, mode }) => {
   );
 });
 
+// 屋根の群の枠。平面で選ばれた屋根の群だけ、部屋カードと同じ選択の強調（青の枠）を付け、可視域へ寄せる。
+const RoofGroupFrame = observer(({ selected, children }) => {
+  const frameRef = useScrollIntoViewWhenActive(selected);
+  return (
+    <div
+      ref={frameRef}
+      style={{
+        marginBottom: 16,
+        outline: selected ? '2px solid #2563eb' : 'none',
+        outlineOffset: 2,
+      }}
+    >
+      {children}
+    </div>
+  );
+});
+
 const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category }) => {
   const rows = graph[category];
   // 群の並び（どの群をどの順で出すか）は exteriorGroups.js（純モジュール）を唯一の供給源にする。
@@ -1189,7 +1206,7 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
           // 連動行・仕上げレベル行・改名入力・区分セレクタは出さない。削除は屋外部屋と同じ mode.deleteRoom。
           const roofRoom = graph.roomMap.get(roomId);
           return (
-            <div key={groupKey} style={{ marginBottom: 16 }}>
+            <RoofGroupFrame key={groupKey} selected={isSelectedRoofGroup({ type: groupType, roomId }, mode.selectedRoomId)}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, gap: 8 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part}</div>
                 <button onClick={() => setDeleteConfirm({ roomId, roomName: part })} style={deleteButtonStyle}>
@@ -1197,7 +1214,7 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
                 </button>
               </div>
               {roofRoom && <RoofGroup room={roofRoom} graph={graph} mode={mode} styles={{ cellBase, headerCell, cellInputStyle }} />}
-            </div>
+            </RoofGroupFrame>
           );
         }
         const room   = roomId ? graph.roomMap.get(roomId) : null;

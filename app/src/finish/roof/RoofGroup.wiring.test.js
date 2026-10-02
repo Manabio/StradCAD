@@ -97,6 +97,56 @@ test('【不変条件】RoofGroup.jsx は store.js・snap.js を静的 import �
   assert.ok(roofLines.includes('const { cellBase, headerCell, cellInputStyle } = styles;'), 'styles の受け取りが見つからない');
 });
 
+// ---- ステップB2b: 屋根セルのクリック選択 → 外部タブへ切替 → 選択中の群を強調・スクロール ----
+const tableLines = tableCode.split('\n').map(l => l.replace(/\s\/\/.*$/, '').trim());
+const stateCode = codeOf('../../modes/FinishModeState.js');
+const stateLines = stateCode.split('\n').map(l => l.replace(/\s\/\/.*$/, '').trim());
+
+function sliceBlock(code, startNeedle, endNeedle) {
+  const s = code.indexOf(startNeedle);
+  assert.ok(s >= 0, `${startNeedle} が見つからない`);
+  const e = code.indexOf(endNeedle, s);
+  assert.ok(e >= 0, `${endNeedle} が見つからない`);
+  return code.slice(s, e);
+}
+
+test('【不変条件・B2b】startDrag は屋根セルの直接クリックで roofRoomAtCell → selectRoom して return する（ドラッグ開始 dragState の設定より前）', () => {
+  const body = sliceBlock(stateCode, '  startDrag(wx, wy) {', '  updateDrag(wx, wy) {');
+  const lines = body.split('\n').map(l => l.replace(/\s\/\/.*$/, '').trim());
+  assert.ok(lines.includes('const roofHit = this.roofRoomAtCell(pointerKey);'), 'const roofHit = this.roofRoomAtCell(pointerKey); の行が見つからない');
+  assert.ok(lines.includes('if (roofHit) { this.selectRoom(roofHit.id); return; }'), 'roofHit の選択と return の1行が見つからない');
+  assert.ok(body.indexOf('roofRoomAtCell(pointerKey)') < body.indexOf('this.dragState = {'), '屋根の判定はドラッグ開始より前');
+});
+
+test('【不変条件・B2b】屋根セルを部屋ドラッグの除外対象に含める行（isRoofFeature）が残っている（屋根は広げない・取り込まない）', () => {
+  assert.ok(stateLines.includes(
+    'if (room.feature !== RoomFeature.STAIR_VOID && !isShaftFeature(room.feature) && !isRoofFeature(room.feature)) continue;'),
+  '_roomExcludedStairKeys の屋根除外の行が見つからない');
+});
+
+test('【不変条件・B2b】roofRoomAtCell は isRoofFeature の部屋のうち refreshCells がセルキーを含むものだけを返す', () => {
+  const body = sliceBlock(stateCode, '  roofRoomAtCell(cellKey) {', '  startDrag(wx, wy) {');
+  assert.ok(/if \(isRoofFeature\(room\.feature\) && refreshCells\(room\.cells, this\.graph\)\.has\(cellKey\)\) return room;/.test(body),
+    'roofRoomAtCell の判定行が見つからない');
+});
+
+test('【不変条件・B2b】屋根の選択は既存の「屋外部屋の選択→外部タブへ切替」の経路に載る（kind===EXTERIOR かつ非階段で exterior タブ）', () => {
+  assert.ok(tableLines.includes('&& selectedRoom.kind === RoomKind.EXTERIOR && selectedRoom.feature !== RoomFeature.STAIR;'),
+    'selectedIsExterior の判定行が見つからない（屋根を除外していない）');
+  assert.ok(tableLines.includes("setActiveTab(selectedIsExterior ? 'exterior' : 'interior');"), '外部タブへの切替の行が見つからない');
+});
+
+test('【不変条件・B2b】屋根の群は RoofGroupFrame で囲み、選択中の判定は isSelectedRoofGroup（純関数）の結果を渡すだけ。枠はスクロールフックと選択の強調を持つ', () => {
+  assert.ok(tableLines.includes(
+    '<RoofGroupFrame key={groupKey} selected={isSelectedRoofGroup({ type: groupType, roomId }, mode.selectedRoomId)}>'),
+  'RoofGroupFrame の選択中の配線の行が見つからない');
+  assert.ok(tableLines.includes('</RoofGroupFrame>'), '</RoofGroupFrame> が見つからない');
+  const frame = sliceBlock(tableCode, 'const RoofGroupFrame', 'const GroupedExteriorTable');
+  assert.ok(/const frameRef = useScrollIntoViewWhenActive\(selected\);/.test(frame), 'スクロールフックが見つからない');
+  assert.ok(/ref=\{frameRef\}/.test(frame), 'ref が枠に付いていない');
+  assert.ok(/outline: selected \? '2px solid #2563eb' : 'none',/.test(frame), '選択中の強調（部屋カードと同じ青枠）が見つからない');
+});
+
 test('【不変条件】FinishTable.jsx の屋根の群（groupType===roof）は RoofGroup を描く。屋外部屋の群・部位の群の描画（ExteriorLevelRow・ExteriorPartHeading）は屋根の分岐に入らない', () => {
   assert.ok(tableCode.split('\n').map(l => l.trim()).includes(
     '{roofRoom && <RoofGroup room={roofRoom} graph={graph} mode={mode} styles={{ cellBase, headerCell, cellInputStyle }} />}'),

@@ -983,6 +983,90 @@ test('【B1a・I2】屋根セルを含む統合（判定2）に屋根は巻き�
   assert.deepEqual([...roof.cells], roofCellsBefore);
 });
 
+// ---- ステップB2b: 平面で屋根セルをクリックすると屋根を選択する（ドラッグ対象外は変えない） ----
+
+test('【B2b】屋根セルのクリック（startDrag）でその屋根の部屋が選択される（ドラッグは始まらず・ダイアログも開かず・undoを積まない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  state.selectRoom(null);
+  const undoCountBefore = undoManager._undoStack.length;
+
+  state.startDrag(1000, 1500);
+
+  assert.equal(state.selectedRoomId, roof.id, '屋根が選択される');
+  assert.equal(state.dragState, null, 'ドラッグは始まらない');
+  assert.equal(state.namingRoomId, null, 'ダイアログは開かない');
+  assert.equal(state.selectedStairId, null);
+  assert.equal(undoManager._undoStack.length, undoCountBefore, '選択は undo に積まない');
+
+  state.selectRoom(null);
+  assert.equal(state.selectedRoomId, null, '選択解除も可能');
+  assert.equal(undoManager._undoStack.length, undoCountBefore, '選択解除も undo に積まない');
+});
+
+test('【B2b】屋根セルから始めたドラッグでセルは変わらない（屋根は選択されるだけ。updateDrag・commitDrag で何も起きない）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const roomCountBefore = graph.rooms.length;
+  const roofCellsBefore = [...roof.cells];
+
+  state.startDrag(1000, 1500);
+  state.updateDrag(3000, 1500);
+  state.commitDrag();
+
+  assert.equal(state.selectedRoomId, roof.id);
+  assert.equal(state.namingRoomId, null, '新規部屋のダイアログは開かない');
+  assert.equal(graph.rooms.length, roomCountBefore, '部屋は増えない');
+  assert.deepEqual([...roof.cells], roofCellsBefore, '屋根は広がらない');
+});
+
+test('【B2b】屋根以外のクリックの挙動は変わらない: 未指定セルは新規ドラッグが始まり、既存の屋内部屋は従来どおり（選択のみ）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  const midCell = worldToCell(3000, 1500, graph);
+  const room = graph.addRoom(new Set([midCell.key]), '居間');
+  state.selectRoom(null);
+
+  state.startDrag(5000, 1500); // 未指定セル（右）
+  assert.ok(state.dragState, '未指定セルはドラッグが始まる');
+  assert.equal(state.selectedRoomId, null, '屋根は選択されない');
+  state.cancelDrag();
+
+  state.startDrag(3000, 1500);
+  state.commitDrag();
+  assert.equal(state.selectedRoomId, room.id, '屋内部屋は従来どおり選択される');
+  assert.notEqual(state.selectedRoomId, roof.id);
+});
+
+test('【B2b】roofRoomAtCell: 屋根セルなら屋根の部屋、屋根以外のセルなら null（複数の屋根があればセルの属する屋根）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roofA = assignRoofViaDrag(state, graph, 1000, 1500);
+  const roofB = assignRoofViaDrag(state, graph, 5000, 1500);
+  const midCell = worldToCell(3000, 1500, graph);
+
+  assert.equal(state.roofRoomAtCell(worldToCell(1000, 1500, graph).key)?.id, roofA.id);
+  assert.equal(state.roofRoomAtCell(worldToCell(5000, 1500, graph).key)?.id, roofB.id);
+  assert.equal(state.roofRoomAtCell(midCell.key), null, '部屋の無いセルは null');
+  assert.equal(state.roofRoomAtCell('no-such-cell'), null, '存在しないセルキーは null');
+});
+
+test('【B2b】選択中の屋根を削除すると選択が外れる（既存の部屋削除と同じ）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const roof = assignRoofViaDrag(state, graph, 1000, 1500);
+  state.startDrag(1000, 1500);
+  assert.equal(state.selectedRoomId, roof.id);
+
+  state.deleteRoom(roof.id);
+
+  assert.equal(state.selectedRoomId, null, '削除した屋根の選択は残らない');
+  assert.equal(graph.roomMap.has(roof.id), false);
+});
+
 // ================================================================
 // 屋根の仕様（ステップB2。Room.roofSpec）。I1: feature===ROOF ⇔ roofSpec≠null
 // ================================================================

@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, RoomKind, RoomFeature } from '@core';
-import { buildExteriorGroups, isExteriorRoomGroupRoom } from './exteriorGroups.js';
+import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -243,4 +243,29 @@ test('【失敗系】buildExteriorGroups: 屋内の部屋・Roomが無い屋根i
   const groups = buildExteriorGroups({ rows: [], rooms: graph.rooms, roomOrder: [...graph.roomOrder, 'ghost-roof'] });
 
   assert.equal(groups.length, 0);
+});
+
+// ---- ステップB2b: 選んだ屋根の群だけが「選択中」になる ----
+test('isSelectedRoofGroup: 屋根が複数あるとき、選択中の部屋の屋根の群だけ true', () => {
+  const graph = makeGraph();
+  const roof1 = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  const roof2 = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  const groups = buildExteriorGroups(input(graph));
+
+  assert.deepEqual(groups.map(g => isSelectedRoofGroup(g, roof1.id)), [true, false]);
+  assert.deepEqual(groups.map(g => isSelectedRoofGroup(g, roof2.id)), [false, true]);
+});
+
+test('【失敗系】isSelectedRoofGroup: 未選択（null/undefined）・屋根でない群・存在しない id は常に false', () => {
+  const graph = makeGraph();
+  const roof = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  const terrace = makeRoom(graph, 'テラス', { kind: RoomKind.EXTERIOR });
+  const [roofGroup, terraceGroup] = buildExteriorGroups(input(graph));
+
+  assert.equal(isSelectedRoofGroup(roofGroup, null), false);
+  assert.equal(isSelectedRoofGroup(roofGroup, undefined), false);
+  assert.equal(isSelectedRoofGroup(roofGroup, 'ghost'), false);
+  assert.equal(isSelectedRoofGroup(terraceGroup, terrace.id), false, '屋外部屋の群は強調しない（屋根の群だけ）');
+  assert.equal(isSelectedRoofGroup({ type: 'part', roomId: null }, null), false);
+  assert.ok(roof.id);
 });

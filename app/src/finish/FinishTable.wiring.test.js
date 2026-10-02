@@ -128,8 +128,8 @@ function groupedExteriorTableBlock() {
 }
 
 test('【不変条件・W1】GroupedExteriorTable は exteriorGroups.js の buildExteriorGroups を唯一の供給源にする', () => {
-  assert.ok(/import \{ buildExteriorGroups, isExteriorRoomGroupRoom \} from '\.\/exteriorGroups\.js';/.test(codeOnly),
-    "import { buildExteriorGroups, isExteriorRoomGroupRoom } from './exteriorGroups.js'; が見つからない");
+  assert.ok(/import \{ buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup \} from '\.\/exteriorGroups\.js';/.test(codeOnly),
+    "import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js'; が見つからない");
   const block = groupedExteriorTableBlock();
   assert.ok(/buildExteriorGroups\(\{ rows, rooms: graph\.rooms, roomOrder: graph\.roomOrder \}\)/.test(block),
     'GroupedExteriorTable本体に buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder }) の呼び出しが見つからない');

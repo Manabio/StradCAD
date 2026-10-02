@@ -18,6 +18,17 @@ export function isExteriorRoomGroupRoom(room) {
 }
 
 /**
+ * 群が「選択中の屋根の群」か（平面で選んだ屋根の群だけを強調・スクロールする判定）。
+ * 屋根の群（type:'roof'）で、roomId が選択中の部屋 id と一致するときだけ true。
+ * @param {{ type: string, roomId: string|null }} group
+ * @param {string|null|undefined} selectedRoomId
+ * @returns {boolean}
+ */
+export function isSelectedRoofGroup(group, selectedRoomId) {
+  return group.type === 'roof' && selectedRoomId != null && group.roomId === selectedRoomId;
+}
+
+/**
  * GroupedExteriorTable が描く群の並びを組み立てる。各群は type を持つ:
  * 'roof'（屋根セルの群。下屋）／'room'（roomId連動群）／'part'（手入力の部位群）。
  * （'mainRoof'＝主屋根は B3。）
