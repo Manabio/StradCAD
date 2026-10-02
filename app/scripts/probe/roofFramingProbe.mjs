@@ -14,9 +14,12 @@
 // 下屋の region を持たない実体階に auto の小屋梁（role:'roofBeam'・dimensionStatus 'auto'）が残っていたら NG
 // （region が無くなったら撤去される規則の確認）。
 //
-// 【この probe が通る経路】矩形の切妻・片流れの主屋根・下屋。region が1つも無い文書（在来でない・陸屋根・棟違い・
-//   矩形でない・屋根なし）は「対象外」と表示して exit 0（小屋梁が0本のことは、他の確認——13.stq の dump 一致——で見る）。
-// 【通らない経路】寄棟（C2e）、矩形でない屋根（L字の下屋など）。region が無いので対象外。
+// 【この probe が通る経路】矩形の切妻・片流れ・寄棟（C2e-1b）の主屋根・下屋。region が1つも無い文書（在来でない・陸屋根・
+//   棟違い・矩形でない・屋根なし）は「対象外」と表示して exit 0（小屋梁が0本のことは、他の確認——13.stq の dump 一致——で見る）。
+//   寄棟は線の向きが混在するので、「支えの無い端の区間」の host を線ごとに決める（桁行の線＝棟木・環の長辺は大梁だけ、
+//   妻側の線＝環の短辺は大梁＋その線と平行な第1段の小屋梁）。棟木の両端に束があるかも検査する（無ければ違反）。
+//   寄棟の文書は makeHipRoofTestDoc.mjs が作る（roof-test4.stq）。飛び梁は一覧に [飛び梁] と付く。
+// 【通らない経路】矩形でない屋根（L字の下屋など）。region が無いので対象外。
 //
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/roofFramingProbe.mjs [入力.stq]   （既定: moku4）
 import crypto from 'node:crypto';
@@ -33,12 +36,12 @@ const { serializeGraph } = await import('../../src/graphSnapshot.js');
 const { sweepUntilConverged, planeLabel } = await import('./sweepOrder.mjs');
 const { structuralPlaneBelow } = await import('../../src/structural/drawingDesignation.js');
 const { mainRoofFramingRegion, leanToFramingRegions } = await import('../../src/structural/roofFramingRegions.js');
-const { roofFramingLines, roofStrutPoints } = await import('../../src/structural/roofFramingGeometry.js');
+const { roofFramingLines, roofStrutPoints, roofRidgeIsVertical } = await import('../../src/structural/roofFramingGeometry.js');
 const { roofFramingHostMembers } = await import('../../src/structural/framingDrawing.js');
 const { rulesFor, effectiveStructure } = await import('../../src/structural/structureRules.js');
 const { assignNumbers, applyNumbers } = await import('../../src/structural/memberNumbering.js');
 const { CL_OVERLAP_TOL_MM } = await import('../../src/core/constants.js');
-const { CenterLineType } = await import('../../src/core.js');
+const { CenterLineType, RoofShape } = await import('../../src/core.js');
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';
 const MAX_SWEEPS = 8;
@@ -106,7 +109,7 @@ function inspectRegion(graph, region, listLabel) {
   for (const b of sorted) {
     const lo = Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue);
     const hi = Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue);
-    console.log(`  ${b.isVertical ? 'x' : 'y'}=${b.axisValue}（${clName(b.axisCL)}） ${lo}..${hi}  host: ${clName(b.clStart)} → ${clName(b.clEnd)}  断面=${b.sectionDefId} 採番=${b.memberNo} ${b.dimensionStatus}`);
+    console.log(`  ${b.isVertical ? 'x' : 'y'}=${b.axisValue}（${clName(b.axisCL)}） ${lo}..${hi}  host: ${clName(b.clStart)} → ${clName(b.clEnd)}  断面=${b.sectionDefId} 採番=${b.memberNo} ${b.dimensionStatus}${b.beamType === '飛び梁' ? '  [飛び梁]' : ''}`);
   }
 
   // ---- 束の間隔 ----
@@ -126,9 +129,15 @@ function inspectRegion(graph, region, listLabel) {
   };
   // 「支えの無い端の区間」: 位置 p（区間 a..b の中、a から910ごとの全点を試す）で、線を挟む左右の両方に host
   // （線と平行で p を跨ぐ大梁）があれば小屋梁をかけられた＝除外しない。どちらかが無ければ構造上かけられない＝除外して一覧に出す。
-  const parallel = graph.beams.filter(b => b.role === 'primary' && b.materialType === rules.baseMaterial && b.isVertical === lines[0]?.isVertical);
+  // 寄棟（C2e-1b）は線の向きが混在するので、host は線ごとに決める: 桁行の線（棟木・環の長辺）は大梁だけ、妻側の線（環の短辺）は
+  // 大梁＋その線と平行な小屋梁（第1段）。桁行の向きは roofRidgeIsVertical（正方形は横）。切妻・片流れは全ての線が同じ向きで、
+  // 平行な小屋梁は無い（小屋梁は線と直交する）ので従来どおり大梁だけ。飛び梁は妻側の線と直交するので host にならない。
+  const isHip = region.shape === RoofShape.HIP;
+  const ketaVertical = isHip ? roofRidgeIsVertical(region.rect, tol) : null;
+  const hostsOf = (line) => graph.beams.filter(b => b.isVertical === line.isVertical && b.materialType === rules.baseMaterial
+    && (b.role === 'primary' || (isHip && line.isVertical !== ketaVertical && b.role === 'roofBeam')));
   const boundedAt = (line, p) => {
-    const spans = parallel.filter(b => Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) - tol <= p && p <= Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue) + tol);
+    const spans = hostsOf(line).filter(b => Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) - tol <= p && p <= Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue) + tol);
     return spans.some(b => b.axisValue < line.coord - tol) && spans.some(b => b.axisValue > line.coord + tol);
   };
   console.log(`--- 母屋・棟木ごとの束の最大間隔（前＝小屋梁を数えない → 後＝小屋梁を数える。上限 ${F.strutMaxPitchMm}） ---`);
@@ -146,8 +155,15 @@ function inspectRegion(graph, region, listLabel) {
       if (samples.some(p => boundedAt(line, p))) { violations++; notes.push(`違反 ${g.a}..${g.b}（${g.len}）`); }
       else { excluded.push({ line, ...g }); notes.push(`除外 ${g.a}..${g.b}（${g.len}。支えの無い端の区間）`); }
     }
+    // 寄棟の棟木は、両端（隅木の上端）の下に横架材（束）が要る。端の束が無ければ違反。
+    let endNote = '';
+    if (isHip && line.kind === '棟木') {
+      const along = roofStrutPoints([line], allMembers, tol).map(p => (line.isVertical ? p.y : p.x));
+      const missing = [line.lo, line.hi].filter(e => !along.some(a => Math.abs(a - e) <= tol));
+      if (missing.length > 0) { violations++; endNote = `  違反 棟木の端に束なし（${missing.join(', ')}）`; } else endNote = '  棟木の両端に束あり';
+    }
     const axisName = line.isVertical ? 'x' : 'y';
-    console.log(`  ${line.kind} ${axisName}=${line.coord}（範囲 ${line.lo}..${line.hi}）: ${before.max} → ${after.max}  束 ${after.alongs.length}点${notes.length ? '  ' + notes.join(' / ') : ''}`);
+    console.log(`  ${line.kind} ${axisName}=${line.coord}（範囲 ${line.lo}..${line.hi}）: ${before.max} → ${after.max}  束 ${after.alongs.length}点${notes.length ? '  ' + notes.join(' / ') : ''}${endNote}`);
   }
   if (excluded.length > 0) {
     console.log('--- 除外した区間（支えの無い端） ---');

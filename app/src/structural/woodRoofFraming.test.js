@@ -59,6 +59,8 @@ const roofBeams = graph => graph.beams.filter(b => b.role === 'roofBeam');
 // 小屋梁1本の記述（向き・軸の座標・区間）。比較しやすい文字列。
 const desc = b => `${b.isVertical ? 'x' : 'y'}=${b.axisValue}:${Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue)}..${Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue)}`;
 const descs = graph => roofBeams(graph).map(desc).sort();
+const tobibari = graph => graph.beams.filter(b => b.role === 'roofBeam' && b.beamType === '飛び梁');
+const koyaOnly = graph => graph.beams.filter(b => b.role === 'roofBeam' && b.beamType === '小屋梁');
 
 // 母屋・棟木の各線の束（線×横架材の交点）の最大間隔。端（線の両端）は束扱い。
 function maxStrutGaps(graph, region) {
@@ -170,7 +172,10 @@ test('屋根の入力が変わったら、古い auto の小屋梁を撤去し�
   assert.equal(graph.excludedBeamSlots.size, 0, '撤去は除外集合を汚さない');
 });
 
-test('regions===undefined は何もしない（I-C3）。[] ・非在来・寄棟の region は auto の小屋梁を撤去する', () => {
+// 【C2e-1b で書き換え】以前は「寄棟の region は小屋梁を作らない＝既存の auto は撤去」を固定していた（寄棟は後続）。寄棟も
+// 小屋梁を作るようになったので、撤去される側は陸屋根（region 無し）で固定し直し、寄棟は「切妻の小屋梁が寄棟の小屋梁に置き換わる」へ。
+
+test('regions===undefined は何もしない（I-C3）。[] ・非在来の region は auto の小屋梁を撤去する（寄棟は小屋梁を作る＝撤去しない）', () => {
   const { graph } = makeRoof();
   autoFillWoodRoofFraming(graph, PROJECT, [GABLE]);
   const before = descs(graph);
@@ -180,11 +185,13 @@ test('regions===undefined は何もしない（I-C3）。[] ・非在来・寄�
   assert.deepEqual(descs(graph), before, 'undefined では撤去も生成もしない');
 
   const hip = autoFillWoodRoofFraming(graph, PROJECT, [HIP]);
-  assert.equal(hip.removed.length, 3, '寄棟は小屋梁を作らない（後続C2e）＝既存の auto は撤去');
-  assert.equal(roofBeams(graph).length, 0);
+  // この大きさ（3640×7280）の寄棟は seed（棟木の両端 y=1820・5460）が切妻の位置と一致し、妻側の線が1820で飛び梁も無い。
+  assert.deepEqual(descs(graph), before, '寄棟も小屋梁を作る（C2e-1b。この大きさでは切妻と同じ位置）');
+  assert.deepEqual([hip.created.length, hip.removed.length], [0, 0], '既存の小屋梁は使い回す');
+  assert.equal(tobibari(graph).length, 0);
 
   autoFillWoodRoofFraming(graph, PROJECT, [GABLE]);
-  assert.equal(roofBeams(graph).length, 3);
+  assert.deepEqual(descs(graph), before, '切妻へ戻せば元の小屋梁');
   const empty = autoFillWoodRoofFraming(graph, PROJECT, []);
   assert.equal(empty.removed.length, 3, '[]（陸屋根・棟違い・矩形でない・非在来など region なし）は全撤去');
 
@@ -196,7 +203,9 @@ test('regions===undefined は何もしない（I-C3）。[] ・非在来・寄�
   assert.equal(roofBeams(graph).length, 0);
 });
 
-test('【失敗系】寄棟は、母屋が無く棟木1本だけで線の向きが混在しない小さな屋根（x 0..1820 × y 0..7280）でも小屋梁を作らない（形状で止める。寄棟の小屋梁はC2e）', () => {
+// 【C2e-1b で書き換え】以前は「母屋が無く棟木1本だけの小さな寄棟（x 0..1820 × y 0..7280）は小屋梁を作らない（形状で止める）」を
+// 固定していた。寄棟も小屋梁を作るので、同じ入力で「棟木の両端（seed）を含めて梁間方向の小屋梁ができ、飛び梁は妻側の線が無いので0」を固定する。
+test('寄棟の小さな屋根（母屋が無く棟木1本だけ。x 0..1820 × y 0..7280）: 棟木の両端（y=910・6370）に必ず小屋梁が置かれ、束の間隔が1820以下になる。妻側の線が無いので飛び梁は0', () => {
   const { graph } = makeRoof({ mid: true });
   const smallHip = { key: 'main', rect: { x1: 0, y1: 0, x2: 1820, y2: 7280 }, shape: RoofShape.HIP, ridgeIsVertical: true, highSide: null };
   const lines = roofFramingLines({
@@ -204,13 +213,12 @@ test('【失敗系】寄棟は、母屋が無く棟木1本だけで線の向き�
     purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
   });
   assert.equal(lines.purlins.length, 0, '前提: 母屋は無い');
-  assert.equal(lines.ridges.length, 1, '前提: 棟木が縦に1本（向きが混在しない）');
-  const r = autoFillWoodRoofFraming(graph, PROJECT, [smallHip]);
-  assert.equal(r.created.length, 0);
-  assert.equal(roofBeams(graph).length, 0);
-  // 対照: 同じ範囲を切妻にすれば、棟木（縦）を支えるために小屋梁ができる。
-  const gable = { ...smallHip, shape: RoofShape.GABLE };
-  assert.ok(autoFillWoodRoofFraming(graph, PROJECT, [gable]).created.length >= 1, '対照: 切妻なら小屋梁ができる（寄棟だから止まっている）');
+  assert.equal(lines.ridges.length, 1, '前提: 棟木が縦に1本');
+  autoFillWoodRoofFraming(graph, PROJECT, [smallHip]);
+  const ds = descs(graph);
+  assert.ok(ds.includes('y=910:0..1820') && ds.includes('y=6370:0..1820'), `seed（棟木の両端）: ${ds}`);
+  assert.equal(tobibari(graph).length, 0);
+  for (const g of maxStrutGaps(graph, smallHip)) assert.ok(g.max <= F.strutMaxPitchMm, `棟木の束の最大間隔 ${g.max}`);
 });
 
 test('【C2d-2】小屋梁は region の範囲の中の host の間にだけ作る（範囲の外の大梁へ延びない＝隣の部屋・別の下屋へはみ出さない）', () => {
@@ -385,6 +393,196 @@ test('既存の梁芯CL（壁由来）が小屋梁の位置にあれば、それ
   assert.equal(existing.beamAxisOrigin, BeamAxisOrigin.WALL, '既にある由来は上書きしない');
 });
 
+// ---------------- 寄棟（C2e-1b。第1段＝梁間方向の小屋梁、第2段＝飛び梁） ----------------
+
+// 屋根専用平面の合成 graph（寄棟用）。範囲 x 0..w × y 0..h。通り芯は x が 0・xMid…・w、y が 0・yMid…・h。
+// 大梁（軒桁）は外周4辺（sides で欠かせる。extra は追加の大梁 {horizontal, coord, from, to}）。
+function makeHipRoof({ w = 5460, h = 9100, xMid = [2730], yMid = [4550], sides = {}, extra = [] } = {}) {
+  const on = { x0: true, x1: true, y0: true, y1: true, ...sides };
+  const graph = new PlanGraph(new Plane('roof1', 6000, '小屋伏図', 1, 1, false, null, 0, true, 'p_top'));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const xs = [0, ...xMid, w].map(v => graph.addCenterLine(CenterLineType.VERTICAL, v, STRUCT));
+  const ys = [0, ...yMid, h].map(v => graph.addCenterLine(CenterLineType.HORIZONTAL, v, STRUCT));
+  const X = v => xs.find(c => c.value === v);
+  const Y = v => ys.find(c => c.value === v);
+  const add = (axisCL, isVertical, a, b) =>
+    graph.addBeam(WOOD, 'WOOD-120x120', axisCL, isVertical, a, b, { role: 'primary', beamType: '軒桁' });
+  const beams = {};
+  if (on.x0) beams.x0 = add(X(0), true, Y(0), Y(h));
+  if (on.x1) beams.x1 = add(X(w), true, Y(0), Y(h));
+  if (on.y0) beams.y0 = add(Y(0), false, X(0), X(w));
+  if (on.y1) beams.y1 = add(Y(h), false, X(0), X(w));
+  for (const e of extra) beams[`${e.horizontal ? 'y' : 'x'}${e.coord}`] = e.horizontal
+    ? add(Y(e.coord), false, X(e.from), X(e.to)) : add(X(e.coord), true, Y(e.from), Y(e.to));
+  return { graph, X, Y, beams, region: { key: 'main', rect: { x1: 0, y1: 0, x2: w, y2: h }, shape: RoofShape.HIP, ridgeIsVertical: h > w, highSide: null } };
+}
+const tobibariDescs = graph => tobibari(graph).map(desc).sort();
+const koyaDescs = graph => koyaOnly(graph).map(desc).sort();
+
+test('【寄棟】片側だけに大梁がある非対称な屋根では、妻側の母屋がその大梁で 1820 以下に支えられている側に飛び梁を作らない（片側ずつ位置を決める。反対側の都合で不要な飛び梁を作らない）', () => {
+  // lo 側（y 0..2730）だけに縦の大梁 x=1820・x=3640 がある。lo 側の妻側の線（x 910..4550 等）は 1820 以下に支えられる。
+  const { graph, region } = makeHipRoof({
+    xMid: [1820, 2730, 3640], yMid: [2730, 4550],
+    extra: [{ coord: 1820, from: 0, to: 2730 }, { coord: 3640, from: 0, to: 2730 }],
+  });
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.deepEqual(tobibariDescs(graph), ['x=2730:6370..9100'], 'hi 側だけに飛び梁');
+  assert.ok(maxStrutGaps(graph, region).every(g => g.max <= F.strutMaxPitchMm + CL_OVERLAP_TOL_MM), '束の間隔は全線 1820 以下');
+});
+
+test('【寄棟】計算例（x 0..5460 × y 0..9100。通り芯 x=0/2730/5460・y=0/4550/9100）: 第1段＝y=2730（seed）・4550（通り芯）・6370（seed）の梁間方向の小屋梁（x 0→5460）、第2段＝x=2730 の飛び梁 y 0→2730 と 6370→9100（lo・hi が対称）', () => {
+  const { graph, region, X } = makeHipRoof();
+  assert.ok(maxStrutGaps(graph, region).some(g => g.max > F.strutMaxPitchMm), '前提: 小屋梁の前は束の間隔が1820を超える線がある');
+  const { created, removed } = autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.equal(removed.length, 0);
+  assert.deepEqual(koyaDescs(graph), ['y=2730:0..5460', 'y=4550:0..5460', 'y=6370:0..5460']);
+  assert.deepEqual(tobibariDescs(graph), ['x=2730:0..2730', 'x=2730:6370..9100']);
+  assert.equal(created.length, 5);
+  for (const b of roofBeams(graph)) {
+    assert.equal(b.role, 'roofBeam');
+    assert.equal(b.dimensionStatus, 'auto');
+    assert.equal(b.isPinJoint, true, 'PIN_ROLES: host の面で止める');
+  }
+  // 飛び梁の軸は通り芯 x=2730（梁芯CLを作らない）。両端のCLは host（軒桁・第1段の小屋梁）の axisCL そのもの。
+  for (const b of tobibari(graph)) assert.equal(b.axisCL, X(2730));
+  const hostOf = (end) => graph.beams.find(h => !h.isVertical && h.axisCL === end);
+  for (const b of tobibari(graph)) for (const end of [b.clStart, b.clEnd]) assert.ok(hostOf(end), '端のCLを axisCL にする host（軒桁か第1段の小屋梁）がある');
+  // 成: 第1段は支持点間 5460→270、飛び梁は 2730→210。
+  autoFillWoodBeamDepths(graph, PROJECT, []);
+  assert.deepEqual(koyaOnly(graph).map(b => b.sectionDefId), ['WOOD-120x270', 'WOOD-120x270', 'WOOD-120x270']);
+  assert.deepEqual(tobibari(graph).map(b => b.sectionDefId), ['WOOD-120x210', 'WOOD-120x210']);
+  for (const g of maxStrutGaps(graph, region)) assert.ok(g.max <= F.strutMaxPitchMm, `線 coord=${g.coord} の束の最大間隔 ${g.max} が1820以下`);
+});
+
+test('【寄棟】棟木の両端の位置（seed）の小屋梁は、棟木を跨ぐ直交の大梁が既にあれば置かない（大梁が支える）。飛び梁はその大梁で終わる', () => {
+  // y=2730 に全幅の大梁を足す（棟木 x=2730 を跨ぐ）。seed の y=2730 は置かず、y=6370 の seed と通り芯 y=4550 は残る。
+  const { graph, region, Y, X } = makeHipRoof({ yMid: [2730, 4550] });
+  graph.addBeam(WOOD, 'WOOD-120x120', Y(2730), false, X(0), X(5460), { role: 'primary', beamType: '大梁' });
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.deepEqual(koyaDescs(graph), ['y=4550:0..5460', 'y=6370:0..5460'], 'y=2730 には小屋梁を重ねない');
+  assert.deepEqual(tobibariDescs(graph), ['x=2730:0..2730', 'x=2730:6370..9100'], '飛び梁の lo 側は大梁 y=2730 で終わる');
+  for (const g of maxStrutGaps(graph, region)) assert.ok(g.max <= F.strutMaxPitchMm, `束の最大間隔 ${g.max}`);
+});
+
+test('寄棟の正方形（5460角）: 中心 x=2730 の梁間方向の小屋梁が1本、その両側（x 0→2730 と 2730→5460）に y=2730 の飛び梁', () => {
+  const { graph, region } = makeHipRoof({ w: 5460, h: 5460, yMid: [2730] });
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.deepEqual(koyaDescs(graph), ['x=2730:0..5460'], '方形は棟木なし。seed は中心の1点');
+  assert.deepEqual(tobibariDescs(graph), ['y=2730:0..2730', 'y=2730:2730..5460']);
+  for (const g of maxStrutGaps(graph, region)) assert.ok(g.max <= F.strutMaxPitchMm, `束の最大間隔 ${g.max}`);
+});
+
+test('【境界】妻側の線の長さが 1820 なら飛び梁は0（x 0..3640 × y 0..7280）。第1段の小屋梁（seed を含む）だけできる', () => {
+  const { graph, region } = makeHipRoof({ w: 3640, h: 7280, xMid: [], yMid: [3640] });
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.equal(tobibari(graph).length, 0);
+  assert.deepEqual(koyaDescs(graph), ['y=1820:0..3640', 'y=3640:0..3640', 'y=5460:0..3640']);
+  for (const g of maxStrutGaps(graph, region)) assert.ok(g.max <= F.strutMaxPitchMm, `束の最大間隔 ${g.max}`);
+});
+
+test('【失敗系・境界】寄棟で作れない入力は例外を投げず作らない: 母屋も棟木も無い正方形（1820角）・妻の軒桁の対が無い・横架材（直交の大梁）が無い・rect が不正', () => {
+  const tiny = makeHipRoof({ w: 1820, h: 1820, xMid: [], yMid: [] });
+  assert.doesNotThrow(() => autoFillWoodRoofFraming(tiny.graph, PROJECT, [tiny.region]));
+  assert.equal(roofBeams(tiny.graph).length, 0, '線が1本も無い（棟木なし・母屋なし）');
+
+  const noPurlinHost = makeHipRoof({ sides: { x0: false, x1: false } }); // 梁間方向の小屋梁の host（縦の大梁）が無い
+  assert.doesNotThrow(() => autoFillWoodRoofFraming(noPurlinHost.graph, PROJECT, [noPurlinHost.region]));
+  assert.equal(koyaOnly(noPurlinHost.graph).length, 0, 'host が無ければ第1段は作らない');
+  assert.equal(tobibari(noPurlinHost.graph).length, 0, '第1段が無く、軒桁だけ（対が無い）なら飛び梁も作らない');
+  assert.equal(noPurlinHost.graph.centerLines.filter(c => c.beamAxisOrigin === BeamAxisOrigin.ROOF_BEAM).length, 0, '梁芯CLも作らない');
+
+  const { graph, region } = makeHipRoof();
+  for (const badRect of [{ x1: NaN, y1: 0, x2: 5460, y2: 9100 }, { x1: 0, y1: 4550, x2: 5460, y2: 4550 }, undefined]) {
+    let r;
+    assert.doesNotThrow(() => { r = autoFillWoodRoofFraming(graph, PROJECT, [{ ...region, rect: badRect }]); }, JSON.stringify(badRect));
+    assert.deepEqual(r, { created: [], removed: [] });
+  }
+});
+
+test('【失敗系】妻の軒桁が無い側（y=0 の大梁なし）には飛び梁を作らない。反対側（hi）は作る', () => {
+  const { graph, region } = makeHipRoof({ sides: { y0: false } });
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.deepEqual(tobibariDescs(graph), ['x=2730:6370..9100']);
+  assert.deepEqual(koyaDescs(graph), ['y=2730:0..5460', 'y=4550:0..5460', 'y=6370:0..5460'], '第1段は影響を受けない');
+});
+
+test('【寄棟】seed の小屋梁をユーザーが削除すると、飛び梁の終点は次の部材になる（x=2730 の y 0→2730 が 0→4550 へ）', () => {
+  const { graph, region } = makeHipRoof();
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  const seed = koyaOnly(graph).find(b => b.axisValue === 2730);
+  graph.removeBeam(seed.id);
+  const r = autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.deepEqual(koyaDescs(graph), ['y=4550:0..5460', 'y=6370:0..5460']);
+  assert.deepEqual(tobibariDescs(graph), ['x=2730:0..4550', 'x=2730:6370..9100']);
+  assert.equal(r.removed.length, 1, '0→2730 の飛び梁が撤去され');
+  assert.equal(r.created.length, 1, '0→4550 の飛び梁ができる');
+  assert.equal(autoFillWoodRoofFraming(graph, PROJECT, [region]).created.length, 0, '収束');
+});
+
+test('【寄棟・冪等（I-C2）】2回目・3回目は created 0・removed 0・id 不変・梁芯CLも増えない（飛び梁の host に graph 上の既存の小屋梁を数えない）', () => {
+  const { graph, region } = makeHipRoof();
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  const ids = roofBeams(graph).map(b => b.id).sort();
+  const clCount = graph.centerLines.length;
+  assert.equal(ids.length, 5);
+  for (let i = 0; i < 2; i++) {
+    const r = autoFillWoodRoofFraming(graph, PROJECT, [region]);
+    assert.deepEqual([r.created.length, r.removed.length], [0, 0], `${i + 2}回目`);
+  }
+  assert.deepEqual(roofBeams(graph).map(b => b.id).sort(), ids);
+  assert.equal(graph.centerLines.length, clCount);
+});
+
+test('【寄棟】切妻へ変えると飛び梁は撤去され、寄棟へ戻すと作り直される。小屋梁→飛び梁の beamType 違いの再利用は作り直し（locked は触らない）', () => {
+  const { graph, region } = makeHipRoof();
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  const oldTobi = tobibari(graph).map(b => b.id).sort();
+  assert.equal(oldTobi.length, 2);
+  const toGable = autoFillWoodRoofFraming(graph, PROJECT, [{ ...region, shape: RoofShape.GABLE }]);
+  assert.equal(tobibari(graph).length, 0, '切妻に飛び梁は無い');
+  for (const id of oldTobi) assert.ok(toGable.removed.includes(id), '飛び梁は撤去される');
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.equal(tobibari(graph).length, 2, '寄棟へ戻せば作り直される');
+
+  // beamType 違い（auto）: 同じ spanKey の梁を作り直す。removed と created の両方に入る。
+  const victim = tobibari(graph)[0];
+  victim.beamType = '小屋梁';
+  const key = spanKey(victim.axisCL, victim.clStart, victim.clEnd);
+  const redo = autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.deepEqual(redo.removed, [victim.id]);
+  assert.equal(redo.created.length, 1);
+  assert.equal(spanKey(redo.created[0].axisCL, redo.created[0].clStart, redo.created[0].clEnd), key);
+  assert.equal(redo.created[0].beamType, '飛び梁');
+  assert.equal(graph.beamMap.has(victim.id), false);
+
+  // locked: beamType が違っても触らない。
+  const keep = tobibari(graph)[0];
+  keep.beamType = '小屋梁';
+  keep.setDimensionStatus('locked');
+  const none = autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.deepEqual([none.created.length, none.removed.length], [0, 0]);
+  assert.ok(graph.beamMap.has(keep.id));
+});
+
+test('【寄棟・描画】飛び梁（y 0→2730）の端は、軒桁（y=0）の面と第1段の小屋梁（y=2730）の面で止まる（host に小屋梁を許す＝C2e-1a）', () => {
+  const { graph, region } = makeHipRoof();
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  const t = tobibari(graph).find(b => Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) === 0);
+  assert.ok(t);
+  assert.deepEqual(t.spanForHostBeams(graph.beams, 0), { coord1: 60, coord2: 2670 }, '半幅60（120角）ずつ内側で止まる');
+  // 対照: 第1段の小屋梁を graph から外すと、その端は host を見つけられず CL 位置（2730）まで伸びる。
+  const seed = koyaOnly(graph).find(b => b.axisValue === 2730);
+  graph.beamMap.delete(seed.id);
+  assert.equal(t.spanForHostBeams(graph.beams, 0).coord2, 2730);
+});
+
+test('【寄棟・配線】roofFramingHostMembers は飛び梁を束の横架材に含む（束の最大間隔の検査と描画が同じ部材を見る）', () => {
+  const { graph, region } = makeHipRoof();
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  const members = roofFramingHostMembers(graph.beams, WOOD);
+  assert.ok(tobibari(graph).every(t => members.some(m => m.isVertical === t.isVertical && Math.abs(m.axis - t.axisValue) < 1)));
+});
+
 // ---------------- 壁線の候補との関係（既知の挙動の固定） ----------------
 
 test('壁線の通し梁の候補が後から同じ区間に現れると、auto の小屋梁が大梁へ置き換わる（既存の占有物判定。小屋梁は二重に残らない）', () => {
@@ -547,16 +745,16 @@ test('【C2c・失敗系】長さ0の小屋梁（支持点が1点）は成を引
 
 // ---------------- 構造再計算の統合（本番と同じ順: 小屋伏図→最上階） ----------------
 
-// 最上階: 3640×7280 の実壁の部屋（矩形）。主屋根の形状は引数。小屋伏図: 最上階の peek で解決。
-function buildProject(shape) {
+// 最上階: 既定 3640×7280 の実壁の部屋（矩形）。主屋根の形状は引数。小屋伏図: 最上階の peek で解決。
+function buildProject(shape, { w = 3640, h = 7280 } = {}) {
   const project = new Project('proj-roof-framing', 'test');
   const { graph: g1 } = project.addPlane(0, '1階', 'p1'); // 唯一の実体階＝最上階
   project.activePlaneId = 'p1';
   g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
   const gx0 = g1.addCenterLine(CenterLineType.VERTICAL, 0, STRUCT);
-  const gx1 = g1.addCenterLine(CenterLineType.VERTICAL, 3640, STRUCT);
+  const gx1 = g1.addCenterLine(CenterLineType.VERTICAL, w, STRUCT);
   const gy0 = g1.addCenterLine(CenterLineType.HORIZONTAL, 0, STRUCT);
-  const gy1 = g1.addCenterLine(CenterLineType.HORIZONTAL, 7280, STRUCT);
+  const gy1 = g1.addCenterLine(CenterLineType.HORIZONTAL, h, STRUCT);
   const room = g1.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
   generateRoomWallsFromOutline(g1, room);
   g1.setMainRoofSpec(new RoofSpec({ shape }));
@@ -722,6 +920,77 @@ test('【統合】実体階（最上階）の再計算は、下屋の無い階�
     // 最上階を単独で再計算しても、屋根専用平面の小屋梁は増減しない（最上階は屋根の graph に書かない）。柱も生まない。
     assert.deepEqual(descs(roofGraph), before);
     assert.deepEqual(colSig(g1), colsBefore, '小屋梁（auto・locked とも）は柱を生まない');
+  } finally {
+    floorSwapManager.peek = original;
+  }
+});
+
+// 【寄棟・統合】5460×9100 の最上階（実壁の1部屋）に寄棟の主屋根。収束後の小屋伏図の飛び梁・柱・成の連鎖を見る。
+test('【統合・寄棟】recomputeStructuralForGraph: 小屋伏図に第1段の小屋梁と飛び梁ができ、収束し（柱は切妻のときと同じ・収束後 changed=false）、飛び梁の端の受け材の成が飛び梁の成以上になる（1段の伝播。飛び梁→小屋梁→大梁の連鎖は roofBeamWiring.test.js の単体で検証）。切妻へ戻すと飛び梁が消える', async () => {
+  const size = { w: 5460, h: 9100 };
+  const hip = buildProject(RoofShape.HIP, size);
+  const gable = buildProject(RoofShape.GABLE, size);
+  const original = floorSwapManager.peek;
+  try {
+    floorSwapManager.peek = async (plane) => ({ p1: hip.g1, roof1: hip.roofGraph })[plane.id] ?? null;
+    const sweeps = await converge(hip.project, hip.g1, hip.roofGraph);
+    assert.ok(sweeps !== null && sweeps <= 5, `収束する（${sweeps}回）`);
+    assert.ok(tobibari(hip.roofGraph).length >= 1, '飛び梁ができる');
+    assert.ok(koyaOnly(hip.roofGraph).length >= 1, '第1段の小屋梁ができる');
+    assert.equal(hip.roofGraph.columns.length, 0, '屋根に柱は立たない');
+    for (const g of maxStrutGaps(hip.roofGraph, { rect: { x1: 0, y1: 0, x2: 5460, y2: 9100 }, shape: RoofShape.HIP, ridgeIsVertical: true, highSide: null })) {
+      assert.ok(g.max <= F.strutMaxPitchMm, `線 coord=${g.coord} の束の最大間隔 ${g.max}`);
+    }
+
+    // 伝播の連鎖: 飛び梁の成は、端の host（第1段の小屋梁・軒桁）の成以下（下階柱の位置の端は伝播しない＝F1）。
+    const depthOf = b => Number(/x(\d+)$/.exec(b.sectionDefId)[1]);
+    const columnAt = (x, y) => hip.g1.columns.some(c => Math.abs(c.axisX - x) < 1 && Math.abs(c.axisY - y) < 1);
+    let checkedEnds = 0;
+    for (const t of tobibari(hip.roofGraph)) {
+      for (const end of [t.clStart, t.clEnd]) {
+        const host = hip.roofGraph.beams.find(h => h !== t && h.isVertical !== t.isVertical && h.axisCL === end &&
+          Math.min(h.clStart.effectiveValue, h.clEnd.effectiveValue) <= t.axisValue + 1 && t.axisValue - 1 <= Math.max(h.clStart.effectiveValue, h.clEnd.effectiveValue));
+        assert.ok(host, '端の host がある');
+        const [px, py] = t.isVertical ? [t.axisValue, end.effectiveValue] : [end.effectiveValue, t.axisValue];
+        if (columnAt(px, py)) continue;
+        assert.ok(depthOf(host) >= depthOf(t), `飛び梁 ${desc(t)}（${t.sectionDefId}）の端の host ${desc(host)} は ${host.sectionDefId}`);
+        checkedEnds++;
+      }
+    }
+    assert.ok(checkedEnds >= 1, '下階柱の無い端が1つは検査された（空振りでない）');
+    // 小屋梁・飛び梁は梁成表・個別採番の対象外だが、小屋梁の成の表は効いている（飛び梁 2730→210 以上）。
+    assert.ok(tobibari(hip.roofGraph).every(t => depthOf(t) >= 210), '飛び梁の成は表の値（スパン2730以上→210以上）');
+
+    // 柱: 切妻の主屋根と同じ（寄棟か切妻かで下階の柱は変わらない）。
+    floorSwapManager.peek = async (plane) => ({ p1: gable.g1, roof1: gable.roofGraph })[plane.id] ?? null;
+    await converge(gable.project, gable.g1, gable.roofGraph);
+    assert.deepEqual(colSig(hip.g1), colSig(gable.g1), '最上階の柱は屋根の形状に依らない');
+
+    floorSwapManager.peek = async (plane) => ({ p1: hip.g1, roof1: hip.roofGraph })[plane.id] ?? null;
+    const again = await recomputeStructuralForGraph(hip.roofGraph, hip.project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.equal(again.changed, false, '収束後の再計算は変化 0（冪等）');
+
+    // 切妻へ戻すと飛び梁が撤去される（auto）。
+    hip.g1.setMainRoofSpec(new RoofSpec({ shape: RoofShape.GABLE }));
+    const back = await recomputeStructuralForGraph(hip.roofGraph, hip.project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.equal(back.changed, true);
+    assert.equal(tobibari(hip.roofGraph).length, 0, '切妻に飛び梁は無い');
+  } finally {
+    floorSwapManager.peek = original;
+  }
+});
+
+test('【統合・失敗系・寄棟】寄棟の主屋根を陸屋根へ変えて再計算すると、小屋梁と飛び梁が全て撤去される（auto）', async () => {
+  const { project, g1, roofGraph } = buildProject(RoofShape.HIP, { w: 5460, h: 9100 });
+  const original = floorSwapManager.peek;
+  try {
+    floorSwapManager.peek = async (plane) => ({ p1: g1, roof1: roofGraph })[plane.id] ?? null;
+    await converge(project, g1, roofGraph);
+    assert.ok(tobibari(roofGraph).length >= 1, '前提: 寄棟では飛び梁がある');
+    g1.setMainRoofSpec(new RoofSpec({ shape: RoofShape.FLAT }));
+    const r = await recomputeStructuralForGraph(roofGraph, project, TRADITIONAL_WOOD_STRUCTURE);
+    assert.equal(r.changed, true);
+    assert.equal(roofBeams(roofGraph).length, 0);
   } finally {
     floorSwapManager.peek = original;
   }

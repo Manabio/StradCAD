@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Project, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape, RoofHighSide,
+  Project, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape, RoofHighSide, beamExclusionKey,
 } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
@@ -153,15 +153,19 @@ test('【統合】矩形の下屋（片流れ・高い側＝上）: 2階の伏�
   assert.equal(koya(doc.g1).length, 0);
 });
 
-test('【統合】下屋の小屋梁は柱を生まず・床梁の区画を作らず・他の梁を分割しない（対照: 同じ下屋を寄棟にして小屋梁だけを作らない版と、両階の柱・床梁・大梁の被覆が一致）', async () => {
+// 【C2e-1b で書き換え】対照はこれまで「同じ下屋を寄棟にして小屋梁だけを作らない版」だったが、寄棟も小屋梁（と飛び梁）を作るように
+// なった。陸屋根へ置き換えると外周の梁・床梁ガード（対象の下屋だけ）が変わり対照にならないので、同じ片流れで収束させた後に
+// 小屋梁を removeBeam で除外（excludedBeamSlots）して再収束させた版を対照にする（外周の梁・床梁ガードは同じ。梁芯CLは孤児として残る）。
+test('【統合】下屋の小屋梁は柱を生まず・床梁の区画を作らず・他の梁を分割しない（対照: 同じ下屋で小屋梁だけを除外した版と、両階の柱・床梁・大梁の被覆が一致）', async () => {
   const withKoya = buildTwoFloors(ONE_LEAN);
   const control = buildTwoFloors(ONE_LEAN);
-  control.roofs[0].roofSpec.setField('shape', RoofShape.HIP); // 寄棟の region は小屋梁を作らない（C2e）。外周の梁・床梁ガードは同じ（対象の下屋）
   assert.equal(leanToFramingCellKeys(control.g2, control.project).size, 2, '前提: 対照も対象の下屋（外周の梁・床梁ガードは同じ）');
   await converge(withKoya);
   await converge(control);
+  for (const b of koya(control.g2)) control.g2.removeBeam(b.id);
+  await converge(control);
   assert.equal(koya(withKoya.g2).length, 3, '前提: 本体は小屋梁が出る');
-  assert.equal(koya(control.g2).length, 0, '前提: 対照は小屋梁なし');
+  assert.equal(koya(control.g2).length, 0, '前提: 対照は小屋梁なし（除外されて再生成されない）');
   for (const k of ['g1', 'g2']) {
     assert.deepEqual(colSig(withKoya[k]), colSig(control[k]), `${k} の柱は小屋梁の有無で同じ`);
     assert.deepEqual(beamSig(withKoya[k], 'floor'), beamSig(control[k], 'floor'), `${k} の床梁は同じ`);
@@ -171,14 +175,17 @@ test('【統合】下屋の小屋梁は柱を生まず・床梁の区画を作�
 });
 
 test('【統合】小屋梁の作成・成の変化・撤去は、他の梁が1本も変わらなくても changed=true（保存・undo の判定に乗る）。収束後は false', async () => {
+  // 【C2e-1b で書き換え】小屋梁なしの収束状態は、寄棟（今は小屋梁を作る）ではなく、片流れで収束させた後に小屋梁を
+  // removeBeam で除外した状態で作る。除外集合を空にして再生成させる（梁芯CLは孤児として残るので同じ区間の鍵に戻る）。
   const doc = buildTwoFloors(ONE_LEAN);
-  doc.roofs[0].roofSpec.setField('shape', RoofShape.HIP); // 小屋梁なしで収束させる
+  await converge(doc);
+  for (const b of koya(doc.g2)) doc.g2.removeBeam(b.id);
   await converge(doc);
   assert.equal(koya(doc.g2).length, 0);
   const primaryIds = () => doc.g2.beams.filter(b => b.role === 'primary').map(b => b.id).sort();
   const before = primaryIds();
 
-  doc.roofs[0].roofSpec.setField('shape', RoofShape.MONO); // 作成
+  doc.g2.excludedBeamSlots.clear(); // 作成
   const created = await recompute2F(doc);
   assert.equal(koya(doc.g2).length, 3, '片流れで小屋梁ができる');
   assert.deepEqual(primaryIds(), before, '前提: この回は大梁が1本も入れ替わらない＝changed の源は小屋梁だけ');
@@ -192,9 +199,13 @@ test('【統合】小屋梁の作成・成の変化・撤去は、他の梁が1�
   assert.equal(depth.changed, true);
   assert.equal((await recompute2F(doc)).changed, false, '収束後は変化 0（冪等）');
 
-  doc.roofs[0].roofSpec.setField('shape', RoofShape.HIP); // 撤去
+  // 撤去: 形状は片流れのまま、除外の鍵だけを入れて候補から外す（陸屋根にすると下屋の外周の梁も消えて
+  // 「他の梁が変わらない」前提が崩れ、changed が大梁の変化だけで真になりうるため）。
+  const beforeRemoval = primaryIds();
+  for (const b of koya(doc.g2)) doc.g2.excludedBeamSlots.add(beamExclusionKey('roofBeam', b.axisCL, b.clStart, b.clEnd));
   const removed = await recompute2F(doc);
-  assert.equal(koya(doc.g2).length, 0);
+  assert.equal(koya(doc.g2).length, 0, '除外した小屋梁は撤去される');
+  assert.deepEqual(primaryIds(), beforeRemoval, '前提: この回も大梁は1本も入れ替わらない＝changed の源は小屋梁の撤去だけ');
   assert.equal(removed.changed, true);
 });
 

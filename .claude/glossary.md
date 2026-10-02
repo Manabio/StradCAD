@@ -106,10 +106,11 @@ CL・梁芯・柱を「誰が・何のために作ったか」で表す語彙（
 `dimensionStatus`が`'auto'`以外（`'locked'`・`'calculated'`）の構造部材の総称。手動追加（`structural/manualMemberAdd.js`）は追加直後に`locked`化され、撤去段（`autoFillColumns`等）・固定梁と重なる自動梁の撤去（`structural/fixedBeamOverlap.js`）から保護される。CL（通り芯・梁芯・中心線）の削除・降格で固定材が巻き込まれるときは確認のうえで削除する。設計意図は`.claude/structural-model.md`「手動追加は`locked`で撤去段・CL削除巻き込みから守る」節。
 
 ## role（構造部材のrole）
-柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`/`landing`（踊り場受け梁。記号`LG`）/`sill`（土台。記号`SL`。在来木造の基礎伏図＝最下階専用）/`floor`（床梁。記号`FB`）/`roofBeam`（小屋梁。記号`KB`。在来木造の小屋組。生成は後続ステップで未実装）。伏図の慣習（基礎伏図に柱なし等）に対応する。
+柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`/`landing`（踊り場受け梁。記号`LG`）/`sill`（土台。記号`SL`。在来木造の基礎伏図＝最下階専用）/`floor`（床梁。記号`FB`）/`roofBeam`（小屋梁・飛び梁。記号`KB`。在来木造の小屋組）。伏図の慣習（基礎伏図に柱なし等）に対応する。
 
 ## 小屋梁 / 棟木 / 母屋 / 束（在来木造の小屋組）
 **小屋梁**＝母屋・棟木と直交して軒桁等へ架かる梁。実体の部材（role `roofBeam`・beamType「小屋梁」・記号`KB`）として保存する唯一の小屋組部材。**棟木・母屋・束**は保存せず、屋根の入力と梁から伏図の描画のたびに導く（棟木＝一点鎖線2本・母屋＝一点鎖線1本・束＝黒丸）。設計意図は`.claude/structural-model.md`「小屋組」の節。
+**飛び梁**＝寄棟の妻側の母屋を受ける、桁行方向の短い小屋梁。妻の軒桁から最初の梁間方向の梁（大梁か第1段の小屋梁）まで。role `roofBeam`・beamType「飛び梁」・記号`KB`は小屋梁と共有。
 
 ## 伏図記号
 伏図（framing plan）の柱記号。×＝下階柱（断面□に対角線2本）、□＝当該階（自階）柱（輪郭のみ）。在来木造のみ（他の主構造は断面そのまま）。設計意図は`.claude/structural-model.md`。
