@@ -1204,7 +1204,7 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
       )}
       {groups.map(({ key: groupKey, type: groupType, roomId, part, rows: groupRows }) => {
         if (groupType === 'mainRoof') {
-          // 主屋根（最上階の建物範囲全体）の固定の群: 見出し「屋根」＋屋根の項目（MainRoofGroup）。セルを持たないため
+          // 主屋根（最上階の建物範囲全体）の固定の群: 見出し「屋根（主屋根）」＋屋根の項目（MainRoofGroup）。セルを持たないため
           // 平面からは選ばれず、選択の枠は付けない。
           return (
             <div key={groupKey} style={{ marginBottom: 16 }}>

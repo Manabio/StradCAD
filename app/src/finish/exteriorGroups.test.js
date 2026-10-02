@@ -271,7 +271,7 @@ test('【失敗系】isSelectedRoofGroup: 未選択（null/undefined）・屋根
 });
 
 // ---- 主屋根（ステップB3）: includeMainRoof で type:'mainRoof' の群を先頭に出す ----
-test('【B3】buildExteriorGroups: includeMainRoof=true で先頭に type:\'mainRoof\'（見出し「屋根」・roomId なし・行なし）が1つ付く。並びは 主屋根→下屋→屋外部屋→部位', () => {
+test('【B3】buildExteriorGroups: includeMainRoof=true で先頭に type:\'mainRoof\'（見出し「屋根（主屋根）」・roomId なし・行なし）が1つ付く。下屋の見出しは「屋根」のまま。並びは 主屋根→下屋→屋外部屋→部位', () => {
   const graph = makeGraph();
   makeRoom(graph, 'テラス', { kind: RoomKind.EXTERIOR });
   const roof = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
@@ -281,9 +281,10 @@ test('【B3】buildExteriorGroups: includeMainRoof=true で先頭に type:\'main
   assert.deepEqual(groups.map(g => g.type), ['mainRoof', 'roof', 'part', 'room']);
   assert.equal(groups[0].key, 'mainRoof');
   assert.equal(groups[0].roomId, null);
-  assert.equal(groups[0].part, '屋根');
+  assert.equal(groups[0].part, '屋根（主屋根）');
   assert.deepEqual(groups[0].rows, []);
   assert.equal(groups[1].roomId, roof.id);
+  assert.equal(groups[1].part, '屋根');
   assert.equal(groups.filter(g => g.type === 'mainRoof').length, 1);
 });
 

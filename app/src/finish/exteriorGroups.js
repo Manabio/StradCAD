@@ -28,12 +28,16 @@ export function isSelectedRoofGroup(group, selectedRoomId) {
   return group.type === 'roof' && selectedRoomId != null && group.roomId === selectedRoomId;
 }
 
+/** 主屋根の群の見出し（下屋の群の見出しは ROOF_ROOM_NAME＝「屋根」）。 */
+export const MAIN_ROOF_GROUP_LABEL = '屋根（主屋根）';
+
 /**
  * GroupedExteriorTable が描く群の並びを組み立てる。各群は type を持つ:
  * 'mainRoof'（主屋根。セルを持たない固定の群）／'roof'（屋根セルの群。下屋）／'room'（roomId連動群）／
  * 'part'（手入力の部位群）。
  *   0a. includeMainRoof（既定 false。最上階とその検討案のときだけ呼び出し側が true）なら、type:'mainRoof' の群を
- *      最初の1つとして出す（roomId なし・rows:[]・見出しは固定「屋根」。削除ボタン・選択の青枠なし）。
+ *      最初の1つとして出す（roomId なし・rows:[]・見出しは固定「屋根（主屋根）」＝下屋の群「屋根」と
+ *      見分けるため。ユーザー裁定2026-10-02。削除ボタン・選択の青枠なし）。
  *   0. 屋根（feature===ROOF）の Room ごとに type:'roof' の群を、roomOrder 順で主屋根の次に出す
  *      （連動行は持たない＝rows:[]。見出しは固定「屋根」）。
  *   1. rows（graph.exteriorRows）から現行どおり群を作る（roomId連動行は roomId 単位、
@@ -49,7 +53,7 @@ export function buildExteriorGroups({ rows, rooms, roomOrder, includeMainRoof = 
   const roomById = new Map(rooms.map(r => [r.id, r]));
 
   const mainRoofGroups = includeMainRoof
-    ? [{ key: 'mainRoof', type: 'mainRoof', roomId: null, part: ROOF_ROOM_NAME, rows: [] }]
+    ? [{ key: 'mainRoof', type: 'mainRoof', roomId: null, part: MAIN_ROOF_GROUP_LABEL, rows: [] }]
     : [];
 
   const roofGroups = [];
