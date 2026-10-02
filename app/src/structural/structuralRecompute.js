@@ -21,6 +21,7 @@ import {
 import { collectFloorGroups } from './memberNumbering.js';
 import { conformWoodSections, conformWoodColumnEccentricity, autoFillWoodBeamDepths, woodBeamDepthMarkSignature } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
+import { mainRoofFramingRegion } from './roofFramingRegions.js';
 import { conformToLedger } from './memberGroups.js';
 
 /**
@@ -192,9 +193,15 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 同じ値を使い回す（追加peekは無い）。実体階は常にtargetGraph自身（従来と同値）。
   const freeEndGraph = isRoof ? (belowGraph ?? targetGraph) : targetGraph;
 
+  // 小屋梁を載せる小屋組の region（ステップC2b。主屋根の切妻・片流れ）。屋根専用平面だけが対象で、belowGraph＝
+  // 「1つ下の実体階（＝最上階）」（上の peekRoofBelowGraph で解決済み。追加peekなし）の建物範囲・屋根の入力から導く。
+  // 実体階は undefined＝小屋梁に一切触れない（下屋は後続ステップ）。非在来・矩形でない・陸屋根は region が無く
+  // []＝auto の小屋梁を撤去する。
+  const mainRegion = isRoof ? mainRoofFramingRegion(belowGraph, project) : null;
+  const roofRegions = isRoof ? (mainRegion ? [mainRegion] : []) : undefined;
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。

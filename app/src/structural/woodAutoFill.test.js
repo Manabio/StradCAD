@@ -4493,8 +4493,10 @@ test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStru
   // createWallSourceCache）が加わった。規則O（床開口由来の梁芯。openingBeamAxes.js。実装指示書
   // 「スラブ開口と補強・S造梁芯選定」ステップ4）で13番目の引数としてopeningSourcesが加わった。
   // 踊り場受け梁(LG)の到達階生成（WP-B2改訂・2026-09-28裁定）で14番目の引数としてbelowGraphが加わった。
-  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph\)/.test(src),
-    'autoFillStructuralGrid へ wallSegments・aboveColumns・belowColumns・aboveBeamSegments・selfGate・freeEndGraph・wallSourceCache・openingSources・belowGraph を渡していない');
+  // 小屋梁の生成（ステップC2b）で15番目の引数としてroofRegions（屋根専用平面のときだけ主屋根の region 配列、
+  // 実体階は undefined＝小屋梁に触れない）が加わった。
+  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions\)/.test(src),
+    'autoFillStructuralGrid へ wallSegments・aboveColumns・belowColumns・aboveBeamSegments・selfGate・freeEndGraph・wallSourceCache・openingSources・belowGraph・roofRegions を渡していない');
   assert.ok(/removedBeams\.length > 0/.test(src), 'removedBeams が changed の判定に含まれていない');
 });
 

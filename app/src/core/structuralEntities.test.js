@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
-import { findHostBeam, findHostPrimaryBeam, openingHostRefCLs, openingHostRefIds } from './structuralEntities.js';
+import { findHostBeam, findHostPrimaryBeam, openingHostRefCLs, openingHostRefIds, beamExclusionKey, spanKey } from './structuralEntities.js';
 import { BeamAxisOrigin } from './centerLine.js';
 
 function makeGraph() {
@@ -94,4 +94,36 @@ test('【失敗系・変異(4)検出用】開口由来でない小梁の自由�
 
   // 修正後の実装: hostは見つからない（xAに大梁(primary)が無いため）ので自由端＝CL位置(3000)で止まる。
   assert.equal(beamB.coord2, 3000, 'xA上のsecondary梁Cをhostにせず、CL位置で自由端になる');
+});
+
+// ---- beamExclusionKey: 小屋梁（roofBeam）は sill と同じく role の名前空間つき。既存の role の鍵は不変（C2b） ----
+test('beamExclusionKey: roofBeam は "roofBeam:" 前置、sill は "sill:" 前置、それ以外の role は素の spanKey（既存文書の除外集合と互換）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const key = spanKey(y0, x0, x1);
+  assert.equal(beamExclusionKey('roofBeam', y0, x0, x1), `roofBeam:${key}`);
+  assert.equal(beamExclusionKey('sill', y0, x0, x1), `sill:${key}`, '既存の sill の鍵は不変');
+  for (const role of ['primary', 'secondary', 'floor', 'foundation', 'eaves', 'roof', 'landing', undefined]) {
+    assert.equal(beamExclusionKey(role, y0, x0, x1), key, `role=${role} は素の spanKey（不変）`);
+  }
+  assert.equal(beamExclusionKey('roofBeam', y0, x1, x0), `roofBeam:${key}`, '端の順序に依存しない');
+});
+
+test('PlanGraph.removeBeam/addBeam: 小屋梁の除外キーは名前空間つきで積まれ、addBeam で同じ名前空間のキーだけ解除される', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const key = spanKey(y0, x0, x1);
+  const koya = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'roofBeam', beamType: '小屋梁' });
+  graph.removeBeam(koya.id);
+  assert.deepEqual([...graph.excludedBeamSlots], [`roofBeam:${key}`]);
+  // 同じ spanKey の大梁を追加しても、小屋梁の除外は解除されない（別の名前空間）。
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'primary' });
+  assert.deepEqual([...graph.excludedBeamSlots], [`roofBeam:${key}`]);
+  // 小屋梁を再び追加（手動で置き直した等）すると解除される。
+  graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x1, { role: 'roofBeam', beamType: '小屋梁' });
+  assert.equal(graph.excludedBeamSlots.size, 0);
 });

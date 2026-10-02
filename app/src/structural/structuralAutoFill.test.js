@@ -683,8 +683,8 @@ test('【不変条件】structuralRecompute.js: openingBeamSourcesForを呼び�
   assert.ok(/import \{ openingBeamSourcesFor \} from '\.\/openingBeamAxes\.js';/.test(src),
     'openingBeamAxes.jsのopeningBeamSourcesForをimportしていない');
   assert.ok(/openingBeamSourcesFor\(targetGraph, project,/.test(src), 'openingBeamSourcesForの呼び出しが無い');
-  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph\)/.test(src),
-    'autoFillStructuralGridの末尾引数にopeningSources, belowGraphを渡していない（belowGraphはWP-B2改訂＝踊り場受け梁の到達階生成が追加した引数）');
+  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph, roofRegions\)/.test(src),
+    'autoFillStructuralGridの末尾引数にopeningSources, belowGraph, roofRegionsを渡していない（belowGraphはWP-B2改訂＝踊り場受け梁の到達階生成、roofRegionsはC2b＝小屋梁の生成が追加した引数）');
 });
 
 test('autoFillStructuralGrid: openingSourcesを渡すと規則Oの梁芯（discipline:fuse・beamAxisOrigin:opening）が生成される', () => {

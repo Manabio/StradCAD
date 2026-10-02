@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { runInAction } from 'mobx';
 import {
-  Project, PlanGraph, Plane, CenterLineType, Discipline, StructuralMaterialType, OpeningCategory,
+  Project, PlanGraph, Plane, CenterLineType, Discipline, StructuralMaterialType, OpeningCategory, RoofSpec, RoofShape,
 } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -1065,6 +1065,11 @@ test('recomputeStructuralComposition【裁定変更・2026-09-19】: 在来木�
   g1.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
   g2.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
   g2.setWoodColumnWidthMm(105);
+  // 主屋根は陸屋根（小屋組なし）にする。この試験の主題は「軒桁の材幅が1回目と2回目で変わらない」ことで、
+  // 小屋梁（C2b。切妻・片流れの主屋根に生成）の梁芯CLが下階柱の位置にできると、2回目に軒桁がその柱で
+  // 分割され直る（3c-2b。上の「2本に分割され直る」試験と同じ既存の挙動）ため、id比較が小屋梁の有無に
+  // 左右される。小屋梁の絡みは woodRoofFraming.test.js の【統合】が受け持つ。
+  g2.setMainRoofSpec(new RoofSpec({ shape: RoofShape.FLAT }));
 
   const roofPlane = syncRoofPlane(project);
   const roofGraph = project.graphMap.get(roofPlane.id);

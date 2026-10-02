@@ -22,7 +22,7 @@ export const BeamAxisOrigin = Object.freeze({
   CENTER:     'center',    // 中心線由来（S造向け。未実装・色キーのみ予約）
   USER:       'user',      // ユーザーが AddCLDialog から追加
   OPENING:    'opening',   // 床開口由来の自動生成（structural/openingBeamAxes.js）。規則O
-  ROOF_BEAM:  'roofBeam',  // 小屋梁割付け由来の自動生成（在来木造の小屋組。生成処理はステップC2b。値のみ先行して配線）
+  ROOF_BEAM:  'roofBeam',  // 小屋梁割付け由来の自動生成（structural/woodRoofFraming.js。在来木造の主屋根の小屋組）
 });
 
 export class CenterLine extends Shape {

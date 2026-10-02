@@ -9,6 +9,7 @@ import {
   selfWallSegments, columnSeedBeamSegments, stairOpeningRuns, wallRunSegments,
   peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache,
   wallBeamSourcesFor, orphanedWallBeamAxes, wallBackingCenterCoord, isProtectedWallBeamAxis,
+  ensureAutoBeamAxisCL, bracketAutoBeamAxisExtent,
 } from './wallBeamAxes.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
@@ -1207,4 +1208,80 @@ test('orphanedWallBeamAxes: 偏芯壁（梁芯の座標が中心線自身の値�
   const result = orphanedWallBeamAxes(graph, sourcesBefore, sourcesAfter);
   assert.equal(result.length, 1, '中心線自身の値(2000)ではなく壁の下地帯中心(2050)で解決できているはず');
   assert.equal(result[0].id, ax.id);
+});
+
+// ---- ensureAutoBeamAxisCL / bracketAutoBeamAxisExtent（床梁・小屋梁が共有する梁芯CLの確保。C2b） ----
+function makeBracketGraph() {
+  const graph = makeGraph();
+  const gx0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const gx1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  const gy0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  return { graph, gx0, gx1, gy0 };
+}
+
+test('ensureAutoBeamAxisCL: 位置に通り芯があればそれを返す（CLを作らない。通り芯に由来は書かない）', () => {
+  const { graph, gy0 } = makeBracketGraph();
+  const n = graph.centerLines.length;
+  const cl = ensureAutoBeamAxisCL(graph, false, 0, 100, 3900, BeamAxisOrigin.ROOF_BEAM);
+  assert.equal(cl, gy0);
+  assert.equal(graph.centerLines.length, n);
+  assert.equal(gy0.beamAxisOrigin, null, '梁芯でないCLには由来を書かない');
+});
+
+test('ensureAutoBeamAxisCL: 位置に由来未設定の梁芯があればそれを返して由来を書く。既に由来（user）があれば上書きしない', () => {
+  const { graph } = makeBracketGraph();
+  const unknown = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 4000 });
+  const user = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 4000, beamAxisOrigin: BeamAxisOrigin.USER });
+  assert.equal(ensureAutoBeamAxisCL(graph, false, 1000, 0, 4000, BeamAxisOrigin.FLOOR_BEAM), unknown);
+  assert.equal(unknown.beamAxisOrigin, BeamAxisOrigin.FLOOR_BEAM);
+  assert.equal(ensureAutoBeamAxisCL(graph, false, 2000, 0, 4000, BeamAxisOrigin.ROOF_BEAM), user);
+  assert.equal(user.beamAxisOrigin, BeamAxisOrigin.USER);
+});
+
+test('ensureAutoBeamAxisCL: 無ければ梁芯CL（fuse・非ラベル・extent=[lo,hi]・由来つき）を作る。2回目は作った CL を再利用する', () => {
+  const { graph } = makeBracketGraph();
+  const cl = ensureAutoBeamAxisCL(graph, true, 1820, 300, 3500, BeamAxisOrigin.ROOF_BEAM); // isVertical=true → VERTICAL(x=1820)
+  assert.equal(cl.centerLineType, CenterLineType.VERTICAL);
+  assert.equal(cl.value, 1820);
+  assert.equal(cl.discipline, Discipline.FUSE);
+  assert.equal(cl.labeled, false);
+  assert.equal(cl.extentLo, 300);
+  assert.equal(cl.extentHi, 3500);
+  assert.equal(cl.beamAxisOrigin, BeamAxisOrigin.ROOF_BEAM);
+  const n = graph.centerLines.length;
+  assert.equal(ensureAutoBeamAxisCL(graph, true, 1820, 300, 3500, BeamAxisOrigin.ROOF_BEAM), cl);
+  assert.equal(graph.centerLines.length, n, '再利用（増えない）');
+});
+
+test('【失敗系】ensureAutoBeamAxisCL: 除外座標（excludedWallBeamAxes）には CL を作らず null を返す', () => {
+  const { graph } = makeBracketGraph();
+  graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(true, 1820));
+  const n = graph.centerLines.length;
+  assert.equal(ensureAutoBeamAxisCL(graph, true, 1820, 0, 3000, BeamAxisOrigin.FLOOR_BEAM), null);
+  assert.equal(graph.centerLines.length, n);
+  // 既に位置にある CL は除外座標でも返す（除外は「新しく作らない」だけ）。
+  const existing = graph.addCenterLine(CenterLineType.VERTICAL, 1820, { labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 3000 });
+  assert.equal(ensureAutoBeamAxisCL(graph, true, 1820, 0, 3000, BeamAxisOrigin.FLOOR_BEAM), existing);
+});
+
+test('bracketAutoBeamAxisExtent: extent を和集合にして直交通り芯へ ref で張り直す（縮めない）。ブラケットできない側は静的な値', () => {
+  const { graph, gy0 } = makeBracketGraph();
+  // 縦CL x=2000（VERTICAL）。直交は gridYs（y=0 の1本だけ）。extent 現在値 [500,1500]、梁の範囲 [300,1200]。
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.FUSE, extentLo: 500, extentHi: 1500 });
+  bracketAutoBeamAxisExtent(graph, cl, true, 300, 1200);
+  // 和集合 [300,1500]。lo 側: 300 以下の最大の通り芯＝y=0 → ref。hi 側: 1500 以上の通り芯は無い → 静的 1500。
+  assert.equal(cl.extentLoRef?.clId, gy0.id);
+  assert.equal(cl.extentLo, 0, 'lo は通り芯 y=0 へ張り直された（和集合以上を覆う）');
+  assert.equal(cl.extentHiRef, null);
+  assert.equal(cl.extentHi, 1500);
+});
+
+test('【失敗系】bracketAutoBeamAxisExtent: extent が未確定（null＝全幅扱い）のCLは触らない', () => {
+  const { graph } = makeBracketGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.FUSE });
+  assert.equal(cl.extentLo, null);
+  bracketAutoBeamAxisExtent(graph, cl, true, 300, 1200);
+  assert.equal(cl.extentLo, null);
+  assert.equal(cl.extentHi, null);
+  assert.equal(cl.extentLoRef, null);
 });

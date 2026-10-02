@@ -106,11 +106,15 @@ export function spanKey(axisCL, clA, clB) {
 // だけは 'sill:' を前置して名前空間を分ける——土台と基礎梁（role:'foundation'）は同一 axisCL/clStart/
 // clEnd（同一spanKey）を共有しうる（同じ位置に両方が生成される。structural/woodAutoFill.js
 // autoFillWoodSillBeams 参照）ため、spanKey そのものを除外キーにすると片方を removeBeam しただけで
-// もう片方まで除外されてしまう（QA指摘Major-1・2026-09-18。実データで再現）。他roleは従来どおり
-// spanKey そのもの（PlanGraph.addBeam/removeBeam・挙動不変）。
+// もう片方まで除外されてしまう（QA指摘Major-1・2026-09-18。実データで再現）。
+// role:'roofBeam'（小屋梁。structural/woodRoofFraming.js）も同じ理由で 'roofBeam:' を前置する——
+// 小屋梁は載る梁の軸CLを端のCLにするため、同じ spanKey の大梁（壁線の通し梁の候補）と
+// キーを共有しうる。名前空間を分けないと、小屋梁を削除しただけで同じ区間の大梁の生成まで抑止される。
+// 他roleは従来どおり spanKey そのもの（既存文書の除外集合と互換。PlanGraph.addBeam/removeBeam・挙動不変）。
+const EXCLUSION_NAMESPACED_ROLES = new Set(['sill', 'roofBeam']);
 export function beamExclusionKey(role, axisCL, clA, clB) {
   const key = spanKey(axisCL, clA, clB);
-  return role === 'sill' ? `sill:${key}` : key;
+  return EXCLUSION_NAMESPACED_ROLES.has(role) ? `${role}:${key}` : key;
 }
 
 class StructuralEntity {

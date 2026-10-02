@@ -2,10 +2,10 @@
 // 生成された梁芯CLは既存の autoFillSecondaryBeams がそのまま拾う（梁芯の出自を見ない実装のため、
 // 小梁の生成・端部トリム・除外集合・採番はすべて既存経路）。設計意図は .claude/structural-model.md 参照。
 import { runInAction } from 'mobx';
-import { CenterLineType, Discipline } from '../core.js';
+import { CenterLineType, Discipline, centerLineKind } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
-import { structuralAnchorAt, beamAxisAt, beamAxesAt } from '../core/centerLineKindPolicy.js';
+import { structuralAnchorAt, beamAxisAt, beamAxesAt, spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
 import { peekVia } from './structuralPeek.js';
@@ -675,6 +675,55 @@ export function bracketExtent(gridCLs, lo, hi) {
     if (hiCL == null && cl.value >= hi - BRACKET_EPS_MM) hiCL = cl;
   }
   return { loCL, hiCL };
+}
+
+/**
+ * 床梁・小屋梁など「梁の位置が決まってから梁芯を用意する」自動生成の梁芯CL確保（woodAutoFill.js
+ * autoFillWoodFloorBeams から抽出した共有処理の前半）。coord に一致する通り芯・梁芯（findBeamAnchorCL）が
+ * あればそれを使い（由来が未設定なら origin を書く）、無ければ梁芯CL（discipline:'fuse'、labeled:false、
+ * extent は絶対座標 [lo,hi]）を作る。除外集合 excludedWallBeamAxes に記録された座標は作らず null を返す
+ * （手動削除の尊重）。
+ * 梁の重複判定（spanKey の除外・既存・占有）は呼び出し側が axisCL を使って行うため、CL の確保と
+ * extent の張り直し（bracketAutoBeamAxisExtent）は2つに分ける——床梁は判定でスキップした座標にも
+ * CL を残す既存の挙動（孤児の梁芯）を変えないため。
+ * @param {object} graph
+ * @param {boolean} isVertical 梁が y 方向に走るか（true なら梁芯は x=coord の VERTICAL）
+ * @param {number} coord 梁芯の座標
+ * @param {number} lo 梁の範囲（走る方向）の下端。新規作成する CL の extentLo
+ * @param {number} hi 同上端。新規作成する CL の extentHi
+ * @param {string} origin BeamAxisOrigin の値
+ * @returns {object|null} CL。除外座標で作らなかったときは null
+ */
+export function ensureAutoBeamAxisCL(graph, isVertical, coord, lo, hi, origin) {
+  const axisType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+  let axisCL = findBeamAnchorCL(graph, axisType, coord);
+  if (axisCL) fillBeamAxisOriginIfUnknown(axisCL, origin);
+  if (!axisCL) {
+    if (graph.excludedWallBeamAxes.has(wallBeamAxisExcludeKey(isVertical, coord))) return null; // 手動削除の尊重
+    axisCL = graph.addCenterLine(axisType, coord, {
+      labeled: false, discipline: Discipline.FUSE, extentLo: lo, extentHi: hi, beamAxisOrigin: origin,
+    });
+  }
+  return axisCL;
+}
+
+/**
+ * 梁芯CLの extent を、梁の範囲 [lo,hi] を含むように直交通り芯へ「再ブラケット」する
+ * （ensureAutoBeamAxisCL の後半。woodAutoFill.js autoFillWoodFloorBeams D1 から抽出）。
+ * 現在の解決済み extent（ref・static問わず）と [lo,hi] の和集合を bracketExtent（3cのautoFillWallBeamAxes と
+ * 同一実装）へ通し、結果で ref を張り替える（ブラケット先の通り芯が動けば追従する。ブラケットできない側だけ
+ * 静的な和集合値）。結果は常に和集合以上＝縮めない。全幅扱い（spansEntireAxis の種別・extent に null を持つ CL）は
+ * 触らない（縮めることになるため）。
+ * 【呼び出し側の規律】冪等性のため、梁を実際に新規作成する直前にだけ呼ぶ。
+ */
+export function bracketAutoBeamAxisExtent(graph, axisCL, isVertical, lo, hi) {
+  if (spansEntireAxis(centerLineKind(axisCL)) || axisCL.extentLo == null || axisCL.extentHi == null) return;
+  const unionLo = Math.min(axisCL.extentLo, lo);
+  const unionHi = Math.max(axisCL.extentHi, hi);
+  const gridCLs = isVertical ? graph.gridYs : graph.gridXs; // 直交通り芯（value昇順。bracketExtentと同じ規約）
+  const { loCL, hiCL } = bracketExtent(gridCLs, unionLo, unionHi);
+  graph.setCenterLineExtentRef(axisCL, 'lo', loCL ? { clId: loCL.id, offset: 0 } : null, loCL ? null : unionLo);
+  graph.setCenterLineExtentRef(axisCL, 'hi', hiCL ? { clId: hiCL.id, offset: 0 } : null, hiCL ? null : unionHi);
 }
 
 /**

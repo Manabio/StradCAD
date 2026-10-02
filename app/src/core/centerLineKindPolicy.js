@@ -272,8 +272,7 @@ const STRUCTURAL_ANCHOR_KINDS_ANY = Object.freeze(CL_KINDS.filter(k =>
 // 梁芯（centerLineKind==='beam'）の発生源（実装指示書「スラブ開口と補強・S造梁芯選定」§2.2）:
 //   - 壁由来（structural/wallBeamAxes.js autoFillWallBeamAxes。beamAxisOrigin: 'wall'）
 //   - 床梁割付け由来（structural/woodAutoFill.js。beamAxisOrigin: 'floorBeam'）
-//   - 小屋梁割付け由来（在来木造の小屋組。beamAxisOrigin: 'roofBeam'。生成処理はステップC2b＝未実装。
-//     値だけ BeamAxisOrigin.ROOF_BEAM に配線済み）
+//   - 小屋梁割付け由来（structural/woodRoofFraming.js。在来木造の主屋根の小屋組。beamAxisOrigin: 'roofBeam'）
 //   - 開口由来＝規則O（structural/openingBeamAxes.js autoFillOpeningBeamAxes。beamAxisOrigin:
 //     'opening'。対象はS造・RC造・SRC造——structureRules.js openingBeamAxes:'slabOpenings'。
 //     通り芯上の辺は大梁の領分のため生成しない）

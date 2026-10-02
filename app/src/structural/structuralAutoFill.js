@@ -10,6 +10,7 @@ import { peekVia } from './structuralPeek.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
+import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisShortExtents } from './openingBeamAxes.js';
@@ -652,8 +653,11 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null, below
  *  階段を読む唯一の入口。ユーザー裁定2026-09-28: LGは設置階でなく到達階の伏図に出す）。省略時
  *  （既定null）は新規LGを生成しない（最下階・屋根専用平面・下階peek対象外と同じ扱い）——ただし
  *  自動生成済みの既存LG（dimensionStatus:'auto'）が残っていれば撤去する（QA指摘F1是正。下階の階段が
- *  消えた等で有効な源が0件になった場合の後始末）。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null) {
+ *  消えた等で有効な源が0件になった場合の後始末）。
+ *  roofRegions: 小屋梁（role:'roofBeam'。woodRoofFraming.js autoFillWoodRoofFraming）を載せる小屋組の region 群
+ *  （roofFramingRegions.js。主屋根は呼び出し側が最上階の graph から導く）。省略時（undefined）は小屋梁に一切
+ *  触れない（実体階など小屋組を扱わない呼び出し）。[] なら auto の小屋梁を撤去する。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -740,8 +744,11 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
         ? autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache)
         : autoFillRoofBeams(graph, project, belowMainStructure, wallGate))
     : { created: [], removed: [] };
-  const newRoofBeams = roofBeamsResult.created;
-  const removedRoofBeams = roofBeamsResult.removed;
+  // 小屋梁（在来木造の主屋根。ステップC2b）。軒桁・頭つなぎ（role:'primary'）の生成・撤去が確定した直後に呼ぶ——
+  // 小屋梁の位置・端の host は確定済みの大梁を前提にするため。roofRegions===undefined（実体階）は何もしない。
+  const roofFramingResult = autoFillWoodRoofFraming(graph, project, roofRegions);
+  const newRoofBeams = [...roofBeamsResult.created, ...roofFramingResult.created];
+  const removedRoofBeams = [...roofBeamsResult.removed, ...roofFramingResult.removed];
   // 梁芯CL（discipline:'fuse'）ごとの小梁自動生成。wallGate は直接引かない
   // （直交大梁に挟まれている＝大梁のフットプリント判定を継承するため。上のnewBeams生成後に呼ぶ）。
   // 出自を問わず全梁芯が対象のため、壁由来の梁芯（newWallBeamAxes）もそのまま拾う。beamPlacement:'wallRuns'

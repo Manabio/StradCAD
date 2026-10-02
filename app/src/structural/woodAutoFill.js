@@ -10,16 +10,16 @@
 // **前提**: 呼び出し側が壁由来の梁芯CL（autoFillWallBeamAxes。マージ済み・下階込みの wallSources）を
 // 先に生成しておくこと——ここでは CL を作らない（自階だけの未マージ source で作ると、下階経路で
 // extent の短い梁芯CLが永続化され、後の重複ガードで固定される）。
-import { CenterLineType, Discipline, centerLineKind, columnSlotKey, columnAnchorKey, spanKey, beamExclusionKey, findHostPrimaryBeam } from '../core.js';
+import { CenterLineType, columnSlotKey, columnAnchorKey, spanKey, beamExclusionKey, findHostPrimaryBeam } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
-import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
-import { structuralAnchorAt, structuralAnchorCandidates, supportSpanColumnCandidates, spansEntireAxis } from '../core/centerLineKindPolicy.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
+import { structuralAnchorAt, structuralAnchorCandidates, supportSpanColumnCandidates } from '../core/centerLineKindPolicy.js';
 import { findSectionEntry, woodRectSectionKey } from './sectionCatalog.js';
 import {
   rulesFor, effectiveStructure, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, WOOD_DEPTH_BEAM_ROLES,
   woodColumnWidthMm, woodColumnSectionId, resolvedBeamColumnWidthMm, columnSectionId, columnWidthMm,
 } from './structureRules.js';
-import { selfWallSegments, findBeamAnchorCL, wallBeamAxisExcludeKey, bracketExtent, wallBackingCenterCoord } from './wallBeamAxes.js';
+import { selfWallSegments, findBeamAnchorCL, ensureAutoBeamAxisCL, bracketAutoBeamAxisExtent, wallBackingCenterCoord } from './wallBeamAxes.js';
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
 import { beamGridCells } from './framingCells.js';
 import {
@@ -1474,7 +1474,8 @@ function floorBeamIsVertical(w, h) {
 // 既にあるため、この関数へ到達する前にcontinueする。そのためこの関数は「自分自身」を除外する必要が無い
 // （以前は除外用のexcludeKey引数を持っていたが、冪等性には寄与せずroleも見ないため同一spanKeyの
 // primaryまで素通ししうる欠陥だった。QA指摘により削除——existingFloorKeysの先行continue一本化）。
-function axisSpanOccupied(graph, materialType, isVertical, coord, lo, hi, tol) {
+// （小屋梁の生成 structural/woodRoofFraming.js も同じ判定を共有するため export する。）
+export function axisSpanOccupied(graph, materialType, isVertical, coord, lo, hi, tol) {
   return graph.beams.some(b =>
     b.materialType === materialType && (b.role === 'primary' || b.role === 'floor') &&
     b.isVertical === isVertical && Math.abs(b.axisValue - coord) < tol &&
@@ -1577,23 +1578,16 @@ export function autoFillWoodFloorBeams(graph, project) {
     if (!startEdge || !endEdge) continue; // 理論上beamGridCellsの被覆保証により必ず見つかるはずの安全弁
     const clStart = startEdge.axisCL, clEnd = endEdge.axisCL;
 
-    const axisType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
     const pitch = longLen / n;
     for (let i = 1; i < n; i++) {
       const coord = longLo + i * pitch;
-      let axisCL = findBeamAnchorCL(graph, axisType, coord);
       // 由来は「その座標が床梁の候補になった」時点の意味であり、この後の除外集合・スパン重複判定
       // （下のexcludedBeamSlots/existingFloorKeys等）より前に書き戻す。そのため実際には床梁を
       // 生成しない座標の既存梁芯にもfloorBeamが付きうる（色分けはwall由来と同じgeneratedのため実害なし）。
-      if (axisCL) fillBeamAxisOriginIfUnknown(axisCL, BeamAxisOrigin.FLOOR_BEAM);
-      if (!axisCL) {
-        const excludeKey = wallBeamAxisExcludeKey(isVertical, coord);
-        if (graph.excludedWallBeamAxes.has(excludeKey)) continue; // 手動削除の尊重
-        axisCL = graph.addCenterLine(axisType, coord, {
-          labeled: false, discipline: Discipline.FUSE, extentLo: shortLo, extentHi: shortHi,
-          beamAxisOrigin: BeamAxisOrigin.FLOOR_BEAM,
-        });
-      }
+      // 梁芯CLの確保（既存の通り芯・梁芯の再利用／無ければ作成／除外座標は作らない）は
+      // wallBeamAxes.js ensureAutoBeamAxisCL（小屋梁の生成と共有）。
+      const axisCL = ensureAutoBeamAxisCL(graph, isVertical, coord, shortLo, shortHi, BeamAxisOrigin.FLOOR_BEAM);
+      if (!axisCL) continue; // 除外座標（手動削除の尊重）
 
       const key = spanKey(axisCL, clStart, clEnd);
       if (graph.excludedBeamSlots.has(key)) continue; // 除外スロットは候補扱いにしない（生成しない・撤去対象に含める）
@@ -1608,24 +1602,11 @@ export function autoFillWoodFloorBeams(graph, project) {
       // CenterLinesLayerはextent±overhangしか描かないため床梁の真下に梁芯が描かれず、snap.jsの
       // 沿線スナップも効かなくなる（実データmoku1/moku2の2階で確認: 床梁 axis=5460 span=-3640..0 に
       // 対し既存extentは-9100..-7280＝完全に外）。
-      // 現在の解決済みextent（ref・static問わず）と床梁スパンの和集合[min(現lo,shortLo),
-      // max(現hi,shortHi)]を、wallBeamAxes.js bracketExtent（3cのautoFillWallBeamAxesと同一実装。
-      // 直交通り芯へスナップ）へ通し、その結果でrefを張り替える——ref→staticへ落とすのではなく
-      // 通り芯ブラケット方式（3c）と同じ意味論に揃えることで、ブラケット先の通り芯が動けばこの梁芯も
-      // 追従する（static固定だと追従が失われる）。ブラケットできない側（外側に通り芯が無い）だけ
-      // 静的な和集合値にフォールバックする（bracketExtentの戻り値がnullの側）。bracketExtentは
-      // 「lo以下の最大値・hi以上の最小値」を返すため、結果は常に和集合以上＝現在値以上を覆う（縮めない）。
-      // 【N2】extent未確定（extentLo==null または extentHi==null＝全幅扱いのCL）は触らない——
-      // 触ると「全幅」から有限範囲へ縮めることになってしまう。
+      // 現在の解決済みextent（ref・static問わず）と床梁スパンの和集合を直交通り芯へ再ブラケットして
+      // refを張り替える（結果は常に和集合以上＝縮めない。【N2】全幅扱いのCLは触らない）。実体は
+      // wallBeamAxes.js bracketAutoBeamAxisExtent（小屋梁の生成と共有）。
       // 冪等性: 2回目呼び出しはexistingFloorKeysで先にcontinueするためこのブロックへは到達しない。
-      if (!spansEntireAxis(centerLineKind(axisCL)) && axisCL.extentLo != null && axisCL.extentHi != null) {
-        const unionLo = Math.min(axisCL.extentLo, shortLo);
-        const unionHi = Math.max(axisCL.extentHi, shortHi);
-        const gridCLs = isVertical ? graph.gridYs : graph.gridXs; // 直交通り芯（value昇順。wallBeamAxes.jsと同じ規約）
-        const { loCL, hiCL } = bracketExtent(gridCLs, unionLo, unionHi);
-        graph.setCenterLineExtentRef(axisCL, 'lo', loCL ? { clId: loCL.id, offset: 0 } : null, loCL ? null : unionLo);
-        graph.setCenterLineExtentRef(axisCL, 'hi', hiCL ? { clId: hiCL.id, offset: 0 } : null, hiCL ? null : unionHi);
-      }
+      bracketAutoBeamAxisExtent(graph, axisCL, isVertical, shortLo, shortHi);
 
       created.push(graph.addBeam(
         rules.baseMaterial, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd,
