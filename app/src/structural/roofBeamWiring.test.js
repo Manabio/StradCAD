@@ -207,6 +207,45 @@ test('【C2a】autoFillWoodBeamDepths（梁成表）: 小屋梁は梁成表の�
   assert.equal(primary.sectionDefId, 'WOOD-120x300', '対照: 同スパンの大梁は梁成表（7280は表の外＝荷重0の最大列300）で成が上がる（検出力）');
 });
 
+// 【C2e-1a】小屋梁・飛び梁（子）は直交する小屋梁にも載れる（host 拡張）。飛び梁(スパン2730→210)が小屋梁R(スパン1820→120)に載り、
+// R が大梁P(120)に載る配置。x0 縦軸に P（y1820→y2730）、y2730 横軸に R（x0→x1820）、x910 縦軸に飛び梁（y0→y2730）。
+function buildTobibariChain(rStatus = 'auto') {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, STRUCT);
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 910, STRUCT);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 1820, STRUCT);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, STRUCT);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2730, STRUCT);
+  const yh = graph.addCenterLine(CenterLineType.HORIZONTAL, 1820, STRUCT); // 大梁は短く（自分の梁成表を最小の120に保つ）
+  const primary = graph.addBeam(WOOD, 'WOOD-120x120', x0, true, yh, y1, { role: 'primary' });
+  const r = graph.addBeam(WOOD, 'WOOD-120x120', y1, false, x0, x1, { role: 'roofBeam', beamType: '小屋梁' });
+  if (rStatus !== 'auto') r.setDimensionStatus(rStatus);
+  const tobi = graph.addBeam(WOOD, 'WOOD-120x120', xm, true, y0, y1, { role: 'roofBeam', beamType: '飛び梁' });
+  return { graph, primary, r, tobi };
+}
+
+test('【C2e-1a】autoFillWoodBeamDepths（伝播の連鎖）: 飛び梁(210)→載る小屋梁(120→210)→大梁(120→210)と伝わる', () => {
+  const { graph, primary, r, tobi } = buildTobibariChain();
+  autoFillWoodBeamDepths(graph, PROJECT, []);
+  assert.equal(tobi.sectionDefId, 'WOOD-120x210', '飛び梁（スパン2730）は小屋梁の表で210');
+  assert.equal(r.sectionDefId, 'WOOD-120x210', '載られた小屋梁（自分の表は120）は伝播で210');
+  assert.equal(primary.sectionDefId, 'WOOD-120x210', '小屋梁を経由して大梁も210');
+});
+
+test('【C2e-1a・失敗系】伝播: 飛び梁の端が下階柱の位置なら（F1）小屋梁へ伝播しない／host の小屋梁が locked なら成は書かれない', () => {
+  const f1 = buildTobibariChain();
+  const below = [{ x: 910, y: 2730, axisX: 910, axisY: 2730, role: 'standard' }];
+  autoFillWoodBeamDepths(f1.graph, PROJECT, below);
+  assert.equal(f1.tobi.sectionDefId, 'WOOD-120x210', '前提: 飛び梁自身は210（下階柱は端点なのでスパンは変わらない）');
+  assert.equal(f1.r.sectionDefId, 'WOOD-120x120', '端が下階柱の上＝柱が受けるので小屋梁へ伝播しない');
+  assert.equal(f1.primary.sectionDefId, 'WOOD-120x120', '大梁にも伝わらない');
+
+  const locked = buildTobibariChain('locked');
+  autoFillWoodBeamDepths(locked.graph, PROJECT, []);
+  assert.equal(locked.r.sectionDefId, 'WOOD-120x120', 'locked の小屋梁は成を書かれない');
+  assert.equal(locked.tobi.sectionDefId, 'WOOD-120x210', '対照: auto の飛び梁は書かれる');
+});
+
 test('【C2a】WOOD_DEPTH_BEAM_ROLES / showsWoodBeamDepthFields: 小屋梁は梁成表の対象でなく、カードに「梁成」「自動梁の対象」欄を出さない', () => {
   assert.deepEqual([...WOOD_DEPTH_BEAM_ROLES], ['primary', 'secondary', 'floor']);
   const mk = role => ({ materialType: WOOD, role });

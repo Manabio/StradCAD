@@ -116,7 +116,8 @@ moku4_kd 2階 (1820,-9100)）——この2点源の扱いの食い違いはユ�
 | 集合・処理 | 小屋梁 | 方式 |
 |---|---|---|
 | 梁成表 `WOOD_DEPTH_BEAM_ROLES`・個別採番・梁成欄・表示用の値（`woodAutoDepthMm` など） | 外れる（成は専用の表。下の「成」） | ホワイトリスト |
-| 柱の点源 `columnSeedBeamSegments`・床梁のセル・`mergePrimaryBeamRuns`・交点処理 `beamJunction`・壁線梁の撤去 `removableRoles`・`autoFillBeamEccentricity`・host 判定 `findHostBeam` | 外れる（host になれるのは primary のみ） | ホワイトリスト |
+| 柱の点源 `columnSeedBeamSegments`・床梁のセル・`mergePrimaryBeamRuns`・交点処理 `beamJunction`・壁線梁の撤去 `removableRoles`・`autoFillBeamEccentricity` | 外れる | ホワイトリスト |
+| host 判定 `findHostBeam` | 既定では外れる（host は primary のみ）。子が小屋梁（role 'roofBeam'）のときだけ `allowRoofBeamHost` で直交する小屋梁も host になれる（primary 優先）。使う箇所は描画の端の止め `_hostEndCenterAndHalfWidth`（子が roofBeam のときだけ）と成の伝播 `autoFillWoodBeamDepths` の小屋梁ループ `roofEndHostBeam`（端が下階柱の位置なら探さない規則 F1 は共通）。`findHostPrimaryBeam`（柱アンカーと共有）は不変 | オプション |
 | 表A `memberKindOf`・材種変換 `convertMembersToEffectiveMaterial`・展開図/断面 `EXCLUDED_BEAM_ROLES` | 外す（表外／変換しない／描かない） | 明示的に除外 |
 | `PIN_ROLES`（host の面で止める）・束の横架材 `roofFramingHostMembers` | 入る（束は小屋梁の上にも立つ） | 明示的に追加 |
 | `conformWoodSections`（幅を柱寸へ）・`beamDepthMarks`（幅×成の標記）・手動固定 `fixedMemberRefs`・除外集合 | 入る | 既定 |

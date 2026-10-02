@@ -52,6 +52,48 @@ test('findHostBeam: 同一perpCL上にprimaryとsecondaryが両方あればprima
   assert.equal(findHostBeam(graph.beams, y0.id, false, 5000, { allowSecondaryHost: true }), primary);
 });
 
+test('findHostBeam: allowRoofBeamHost 既定(false)では小屋梁はhostにならず、trueでhostになる（C2e-1a）', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const x10 = graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const roof = graph.addBeam(StructuralMaterialType.WOOD, SEC, y0, false, x0, x10, { role: 'roofBeam' });
+
+  assert.equal(findHostBeam(graph.beams, y0.id, false, 5000), null, '既定(false)では小屋梁をhostにしない');
+  assert.equal(findHostBeam(graph.beams, y0.id, false, 5000, { allowSecondaryHost: true }), null, '小梁を許す指定でも小屋梁は対象外');
+  assert.equal(findHostPrimaryBeam(graph.beams, y0.id, false, 5000), null);
+  assert.equal(findHostBeam(graph.beams, y0.id, false, 5000, { allowRoofBeamHost: true }), roof);
+});
+
+test('findHostBeam: allowRoofBeamHost でも同じ位置に primary と roofBeam があれば primary を優先する', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const x10 = graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const roof = graph.addBeam(StructuralMaterialType.WOOD, SEC, y0, false, x0, x10, { role: 'roofBeam' });
+  const primary = graph.addBeam(StructuralMaterialType.WOOD, SEC, y0, false, x0, x10, { role: 'primary' });
+
+  assert.notEqual(roof, primary);
+  assert.equal(findHostBeam(graph.beams, y0.id, false, 5000, { allowRoofBeamHost: true }), primary);
+});
+
+test('findHostBeam【失敗系】: allowRoofBeamHost でも向き違い・範囲外・存在しないCL id・空配列・不正な座標はnull', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const x10 = graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addBeam(StructuralMaterialType.WOOD, SEC, y0, false, x0, x10, { role: 'roofBeam' });
+  const opt = { allowRoofBeamHost: true };
+
+  // 子と平行な小屋梁は host にならない（hostIsVertical が子の向きの反対だけを見る）
+  assert.equal(findHostBeam(graph.beams, y0.id, true, 5000, opt), null, 'hostIsVertical が違えば除かれる');
+  assert.equal(findHostBeam(graph.beams, y0.id, false, 15000, opt), null, '範囲外');
+  assert.equal(findHostBeam(graph.beams, 'no-such-cl', false, 5000, opt), null, '存在しないCL id');
+  assert.equal(findHostBeam([], y0.id, false, 5000, opt), null, '空配列');
+  assert.equal(findHostBeam(graph.beams, y0.id, false, NaN, opt), null, '不正な座標(NaN)');
+  assert.equal(findHostBeam(graph.beams, y0.id, false, undefined, opt), null, '不正な座標(undefined)');
+});
+
 test('openingHostRefCLs: beamAxisOrigin!==OPENINGは常に空配列', () => {
   const graph = makeGraph();
   const through = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.FUSE });

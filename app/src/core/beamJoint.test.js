@@ -89,9 +89,13 @@ test('【C2a】spanForColumns: 小屋梁(role:roofBeam)は床梁と同じくhost
   assert.deepEqual(roofBeam.spanForColumns(graph.columns), expected, '始端(y1)はhostの面まで、終端(y2)はhostが無いのでCL位置まで');
   assert.deepEqual(floorBeam.spanForColumns(graph.columns), expected, '床梁は不変');
   assert.deepEqual(secondary.spanForColumns(graph.columns), expected, '小梁は不変');
-  // hostになれるのはprimaryだけ——小屋梁同士・小屋梁→床梁の端は止まらない（findHostBeam）
+  // 【C2e-1a 仕様変更】子が小屋梁・飛び梁（role:roofBeam）のときだけ、直交する小屋梁も host になれる
+  // （寄棟の飛び梁が第1段の小屋梁の面で止まるため）。旧表明「小屋梁は小屋梁の面で止まらない」は
+  // 「子が小屋梁なら止まる」へ書き換え。床梁・小梁・大梁の子は従来どおり小屋梁の面で止まらない（対照）。
   const other = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x210', y2, false, x1, x2, { role: 'roofBeam' });
-  assert.deepEqual(roofBeam.spanForColumns(graph.columns), expected, '終端側に小屋梁があってもhostにならない（primaryのみ）');
+  assert.deepEqual(roofBeam.spanForColumns(graph.columns), { coord1: 120 / 2, coord2: 6000 - 120 / 2 }, '終端側の直交する小屋梁(120幅)の面で止まる');
+  assert.deepEqual(floorBeam.spanForColumns(graph.columns), expected, '対照: 床梁は小屋梁の面で止まらない');
+  assert.deepEqual(secondary.spanForColumns(graph.columns), expected, '対照: 小梁は小屋梁の面で止まらない');
   assert.ok(other);
 });
 

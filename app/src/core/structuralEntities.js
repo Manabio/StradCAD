@@ -302,9 +302,11 @@ export const PIN_ROLES = new Set(['secondary', 'floor', 'roofBeam']);
 // openingHostRefIds参照）にのみ true を渡す——木造の床梁端（woodAutoFill.js）・通常の描画端部
 // クリアランスは host を大梁(primary)に限る従来挙動のまま（findHostPrimaryBeamは本関数の薄い
 // ラッパで、判定の二系統化を避ける）。
-export function findHostBeam(beams, perpCLId, hostIsVertical, coord, { allowSecondaryHost = false, tolerance = HOST_BEAM_MATCH_TOL_MM } = {}) {
+// allowRoofBeamHost（既定false）は子が小屋梁・飛び梁（role:'roofBeam'）のときだけ true を渡す——
+// 小屋梁も受ける梁（host）になれる（寄棟の飛び梁が第1段の小屋梁に載る。primary が優先）。
+export function findHostBeam(beams, perpCLId, hostIsVertical, coord, { allowSecondaryHost = false, allowRoofBeamHost = false, tolerance = HOST_BEAM_MATCH_TOL_MM } = {}) {
   const matches = beams.filter(h =>
-    (h.role === 'primary' || (allowSecondaryHost && h.role === 'secondary')) &&
+    (h.role === 'primary' || (allowSecondaryHost && h.role === 'secondary') || (allowRoofBeamHost && h.role === 'roofBeam')) &&
     h.isVertical === hostIsVertical && h.axisCL.id === perpCLId &&
     Math.min(h.clStart.effectiveValue, h.clEnd.effectiveValue) - tolerance <= coord &&
     coord <= Math.max(h.clStart.effectiveValue, h.clEnd.effectiveValue) + tolerance);
@@ -484,7 +486,7 @@ export class StructuralBeam extends StructuralEntity {
   // （ステップ5。開口由来でない梁芯・木造の床梁は従来どおり大梁(primary)のみで止まる）。
   _hostEndCenterAndHalfWidth(perpCL, beams, clearance) {
     const allowSecondaryHost = openingHostRefIds(this.axisCL).has(perpCL.id);
-    const host = findHostBeam(beams, perpCL.id, !this.isVertical, this.axisValue, { allowSecondaryHost });
+    const host = findHostBeam(beams, perpCL.id, !this.isVertical, this.axisValue, { allowSecondaryHost, allowRoofBeamHost: this.role === 'roofBeam' });
     if (!host) return { center: perpCL.effectiveValue + _axisOffset(this._planGraph, perpCL.id), half: 0 };
     return { center: host.axisValue, half: host.sectionWidth / 2 + clearance };
   }

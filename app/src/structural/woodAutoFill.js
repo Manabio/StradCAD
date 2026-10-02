@@ -10,7 +10,7 @@
 // **前提**: 呼び出し側が壁由来の梁芯CL（autoFillWallBeamAxes。マージ済み・下階込みの wallSources）を
 // 先に生成しておくこと——ここでは CL を作らない（自階だけの未マージ source で作ると、下階経路で
 // extent の短い梁芯CLが永続化され、後の重複ガードで固定される）。
-import { CenterLineType, columnSlotKey, columnAnchorKey, spanKey, beamExclusionKey, findHostPrimaryBeam } from '../core.js';
+import { CenterLineType, columnSlotKey, columnAnchorKey, spanKey, beamExclusionKey, findHostPrimaryBeam, findHostBeam } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { structuralAnchorAt, structuralAnchorCandidates, supportSpanColumnCandidates } from '../core/centerLineKindPolicy.js';
@@ -1854,14 +1854,20 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = [], option
   const hostIdsByBeam = new Map();
   // F1（2026-09-16）: この端が下階柱の位置と同一点なら、柱が受けるためhostを探さない（あいまい一致の回避）。
   // AXIS（axisX/axisY）で判定する——個別柱の偏心で支持点判定がずれないため。host は targets の中の
-  // role:'primary' だけ（小屋梁は host を探す側であって、host にはならない）。小屋梁の伝播の起点（下記）も共用する。
+  // role:'primary' だけ（対象梁の子は大梁にしか載らない）。小屋梁（子）は下の roofEndHostBeam が同じ F1 判定で
+  // 小屋梁も host に加える。
+  const endAtBelowColumn = (x, endCL) => belowSupportColumns.some((c) => {
+    const along = alongCoordOnAxis(x, c.axisX, c.axisY, CL_OVERLAP_TOL_MM);
+    return along != null && Math.abs(along - endCL.effectiveValue) < CL_OVERLAP_TOL_MM;
+  });
   const endHostBeam = (x, endCL) => {
-    const atBelowColumn = belowSupportColumns.some((c) => {
-      const along = alongCoordOnAxis(x, c.axisX, c.axisY, CL_OVERLAP_TOL_MM);
-      return along != null && Math.abs(along - endCL.effectiveValue) < CL_OVERLAP_TOL_MM;
-    });
-    if (atBelowColumn) return null;
+    if (endAtBelowColumn(x, endCL)) return null;
     return findHostPrimaryBeam(targets, endCL.id, !x.isVertical, x.axisValue);
+  };
+  // 小屋梁（子）の端の host: 大梁（primary 優先）に加え、直交する小屋梁・飛び梁も host になれる。
+  const roofEndHostBeam = (x, endCL) => {
+    if (endAtBelowColumn(x, endCL)) return null;
+    return findHostBeam([...targets, ...roofTargets], endCL.id, !x.isVertical, x.axisValue, { allowRoofBeamHost: true });
   };
   for (const x of targets) {
     for (const [endCL, otherCL] of [[x.clStart, x.clEnd], [x.clEnd, x.clStart]]) {
@@ -1910,7 +1916,8 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = [], option
   // 小屋梁（role:'roofBeam'。ステップC2c）: 成は専用の表（支持点間の最大距離だけで引く。中間荷重は数えない）で決め、
   // 伝播の起点（子梁）にだけ加わる。受ける梁（host）の梁成表の中間荷重には数えない（hostMap・hostFloorMap へ積まない。
   // ユーザー裁定U5）——効くのは「子梁の成＞host の成なら host を子梁と同じ成にする」伝播だけ。host を探す条件
-  // （端が下階柱の位置なら探さない＝F1・role:'primary' 限定）は上の endHostBeam を共用する。
+  // （端が下階柱の位置なら探さない＝F1）は上の endAtBelowColumn を共用する。host は大梁に加えて直交する小屋梁
+  // （飛び梁→小屋梁→大梁と連鎖する）。
   for (const beam of roofTargets) {
     const endA = beam.clStart.effectiveValue, endB = beam.clEnd.effectiveValue;
     const depth = koyaBeamDepthForSpans([endA, endB, ...belowSupportAlongs(beam, Math.min(endA, endB), Math.max(endA, endB))]);
@@ -1918,7 +1925,7 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = [], option
     const hostIds = new Set();
     if (propagate) {
       for (const endCL of [beam.clStart, beam.clEnd]) {
-        const host = endHostBeam(beam, endCL);
+        const host = roofEndHostBeam(beam, endCL);
         if (host) hostIds.add(host.id);
       }
     }
@@ -1956,7 +1963,7 @@ export function autoFillWoodBeamDepths(graph, project, belowColumns = [], option
     updated.push(beam.id);
   }
   // 小屋梁の書き戻し: auto だけ（locked は触らない）。断面がカタログに無い成は据え置き（上と同じ）。
-  // 成は専用の表の値のまま（小屋梁は他の梁の host にならず、伝播で上がらない）。
+  // 成は専用の表の値か、載っている子の小屋梁・飛び梁からの伝播で上がった値（finalDepths）。
   for (const beam of roofTargets) {
     if (onlySet && !onlySet.has(beam.id)) continue;
     const depth = finalDepths.get(beam.id);
