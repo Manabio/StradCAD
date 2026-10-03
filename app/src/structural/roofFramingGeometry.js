@@ -475,7 +475,7 @@ export function roofHipDiagonals({ rect, rects = null, shape, tolMm }) {
   return orthogonalHipDiagonals({ rects: [rect], tolMm });
 }
 
-// ---- 寄棟の小屋梁のための「翼」の分け方（ステップ C2e-3a。呼び出し元はまだ無い） ----
+// ---- 寄棟の小屋梁のための「翼」の分け方（ステップ C2e-3a。呼び出し元は woodRoofFraming.js＝C2e-3b） ----
 
 /** 区間 [lo,hi] から taken（{lo,hi}）を引いた残りのうち、長さが tol を超えるもの（昇順）。 */
 function subtractIntervals(lo, hi, taken, tol) {

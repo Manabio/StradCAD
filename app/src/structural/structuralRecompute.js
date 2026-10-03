@@ -203,7 +203,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 「1つ下の実体階（＝最上階）」の建物範囲・屋根の入力から導く。上の peekRoofBelowGraph で解決済み。追加peekなし）、
   // 実体階＝下屋（自階の屋根セル。上の leanTo と同じ1回の導出）。どちらも region が無ければ []＝その平面の
   // auto の小屋梁を撤去する（下屋の削除・L字化・非在来化。locked は残る）。非在来・陸屋根も [] 。矩形でない寄棟の
-  // 主屋根は [region]（rect=null。C2e-2 は描画のみで、autoFillWoodRoofFraming は小屋梁を作らず auto は撤去する。C2e-3 で作る）。
+  // 主屋根は [region]（rect=null・rects。autoFillWoodRoofFraming が翼ごとに小屋梁・飛び梁を作る＝C2e-3b）。
   const mainRegion = isRoof ? mainRoofFramingRegion(belowGraph, project) : null;
   const roofRegions = isRoof ? (mainRegion ? [mainRegion] : []) : leanTo.regions;
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。

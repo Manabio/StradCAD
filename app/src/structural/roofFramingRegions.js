@@ -6,8 +6,8 @@
  * region＝{ key, rect, shape, ridgeIsVertical, highSide }。次をすべて満たす屋根だけが region になる:
  *   - 在来木造（rulesFor(effectiveStructure(graph, project)).framing が真。構造種別の直接比較はしない）
  *   - 範囲が矩形（rectOfBounds が非 null）。矩形でない主屋根は寄棟のときだけ例外で、
- *     { key:'main', rect:null, rects:セル矩形の配列, shape:'hip', ridgeIsVertical:null, highSide:null }（描画のみ。
- *     小屋梁は作らない＝C2e-3。下屋の矩形でない範囲は region なし）
+ *     { key:'main', rect:null, rects:セル矩形の配列, shape:'hip', ridgeIsVertical:null, highSide:null }（描画と、
+ *     翼ごとの小屋梁・飛び梁の生成＝woodRoofFraming.js C2e-3b。下屋の矩形でない範囲は region なし）
  *   - 形状（自動なら導いた形状）が片流れ・切妻・寄棟（陸屋根・棟違いは小屋組を持たない）
  * ridgeIsVertical は切妻だけ spec.ridgeDirection（指定が無ければ長手）に従う。他の形状は常に長手。
  * 形状・範囲・高い側の判断は既存の関数（mainRoof.js・roofDefaults.js・roofOrientation.js・roofGeometry.js）を
@@ -41,8 +41,8 @@ function regionRidgeIsVertical(shape, spec, rect) {
 
 /**
  * 矩形でない主屋根の region（ステップ C2e-2）。形状（自動なら導いた形状）が寄棟のときだけ作る（矩形でない切妻・片流れは
- * 小屋組を持たない）。rect=null・rects＝セル矩形（有効なもののコピー。無ければ null を返す）。描画（棟木・母屋・束）だけに
- * 使い、小屋梁は作らない（C2e-3）。
+ * 小屋組を持たない）。rect=null・rects＝セル矩形（有効なもののコピー。無ければ null を返す）。描画（棟木・母屋・束）と
+ * 小屋梁・飛び梁の生成（woodRoofFraming.js C2e-3b）に使う。
  */
 function hipOnlyRegion(topGraph, project, bounds) {
   const rects = (bounds ?? [])

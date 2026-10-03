@@ -3,6 +3,7 @@
  * 矩形の下屋の切妻・片流れ・寄棟。下屋は実体階の graph へ、主屋根は屋根専用平面の graph へ載せる——位置・区切り・
  * 成は同じ規則で、下屋専用の分岐は持たない）。寄棟は、桁行の線を支える梁間方向の小屋梁（第1段。棟木の両端に必ず置く）と、
  * 妻側の線を支える桁行方向の短い小屋梁＝飛び梁（第2段。beamType:'飛び梁'、role・記号は小屋梁と同じ）の2段。
+ * 矩形でない寄棟の主屋根（C2e-3b）は、屋根を「翼」（棟木を段の高さだけ四方へ広げた矩形）に分け、翼ごとに矩形の寄棟と同じ2段を回す。
  * 設計意図は .claude/structural-model.md「小屋梁」の節。
  *
  * 小屋梁は母屋・棟木と直交する横架材で、各母屋・棟木の上で束の間隔（線の両端＝屋根範囲の辺を含む）が
@@ -18,8 +19,8 @@
  * 【不変条件】
  *  - I-C2（自分の出力を入力に数えない）: 位置を決める「支え」は role:'primary' の梁だけで、既存の roofBeam を含めない。
  *    既存の auto の小屋梁は spanKey が同じなら同じ実体を使い回す（id を変えない）。2回目の呼び出しは変化 0 件。
- *    寄棟の飛び梁の host は、大梁と「この呼び出しで計画し実在する第1段の小屋梁」だけ（graph 上にあるだけの小屋梁は
- *    候補にしない）。
+ *    graph 上にあるだけの既存の小屋梁は、支えにも host にも数えない。数えるのは「この呼び出しで先に計画し実在する」
+ *    小屋梁だけ——寄棟の飛び梁の host は第1段の小屋梁、矩形でない寄棟の後の翼の支え・host は先の翼の小屋梁（prior）。
  *  - I-C3: regions===undefined なら小屋梁に一切触れない。
  *  - 他の階へは書かない（regions は呼び出し側が導いたもの＝主屋根は最上階の graph から、下屋は自階の graph から。
  *    この関数は渡された graph だけを読み書きする）。
@@ -33,7 +34,7 @@ import { CL_OVERLAP_TOL_MM, RoofShape } from '../core/constants.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { SUPPORT_SPAN_COLUMN_KINDS, supportSpanColumnCandidates } from '../core/centerLineKindPolicy.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
-import { roofFramingLines, koyaBeamPositions, roofRidgeIsVertical } from './roofFramingGeometry.js';
+import { roofFramingLines, koyaBeamPositions, hipFramingWings, orthogonalChord } from './roofFramingGeometry.js';
 import { ensureAutoBeamAxisCL, bracketAutoBeamAxisExtent } from './wallBeamAxes.js';
 import { axisSpanOccupied } from './woodAutoFill.js';
 
@@ -45,14 +46,24 @@ const spanLo = b => Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue);
 const spanHi = b => Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue);
 const byValueThenId = (a, b) => a.effectiveValue - b.effectiveValue || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
+const validRect = r => !!r && [r.x1, r.y1, r.x2, r.y2].every(Number.isFinite) && r.x2 >= r.x1 && r.y2 >= r.y1;
+
 /**
  * region の棟木・母屋の線を導く。不正な rect（欠落・NaN。roofFramingLines は有限でない座標を RangeError で
- * 拒む）は region 無しと同じに扱い null を返す。
+ * 拒む）は region 無しと同じに扱い null を返す。rect=null は矩形でない寄棟（rects が空でない配列で全要素が正しいときだけ。
+ * 線は orthogonalHipLines）で、それ以外は null。
  * @returns {{ridges: object[], purlins: object[]}|null}
  */
 function regionLines(region, F, tol) {
   const r = region.rect;
-  if (!r || ![r.x1, r.y1, r.x2, r.y2].every(Number.isFinite)) return null;
+  if (!r) {
+    const rs = region.rects;
+    if (region.shape !== RoofShape.HIP || !Array.isArray(rs) || rs.length === 0 || !rs.every(validRect)) return null;
+    return roofFramingLines({
+      rect: null, rects: rs, shape: region.shape, purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol,
+    });
+  }
+  if (![r.x1, r.y1, r.x2, r.y2].every(Number.isFinite)) return null;
   return roofFramingLines({
     rect: region.rect, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, highSide: region.highSide,
     purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol,
@@ -69,10 +80,7 @@ function koyaPositionsForLines(graph, rules, lines, primaries, extraSupports = [
   const tol = CL_OVERLAP_TOL_MM;
   const F = rules.framing;
   const lineVertical = lines[0].isVertical;
-  const supports = primaries
-    .filter(b => b.isVertical !== lineVertical)
-    .map(b => ({ at: b.axisValue, lo: spanLo(b), hi: spanHi(b) }))
-    .concat(extraSupports);
+  const supports = supportsFrom(primaries, lineVertical).concat(extraSupports);
   const alongType = lineVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
   const candidates = supportSpanColumnCandidates(graph, { centerLineType: alongType });
   const tiers = SUPPORT_SPAN_COLUMN_KINDS.map(kind => candidates.filter(c => c.kind === kind).map(c => c.cl.effectiveValue));
@@ -153,38 +161,107 @@ function planRegionSegments(graph, rules, region, primaries) {
 }
 
 /**
- * 矩形の寄棟の第1段: 桁行の線（棟木＋環の長辺）を支える、梁間方向の小屋梁の区間を計画する（graph は読むだけ）。
- * 位置は切妻・片流れと同じ規則（koyaPositionsForLines）に、棟木の両端（正方形は中心）の位置（seed）を必ず加える
- * ——棟木の端は隅木の上端で、その下に横架材が無いと隅木が支えられない。その位置で棟木の座標を跨ぐ直交の大梁が
- * 既にあれば seed は置かない（大梁が支える）。host は線と平行な大梁だけ。
- * 桁行の向きは roofRidgeIsVertical（正方形は横＝rectHipLines の棟木の向きと一致。region.ridgeIsVertical は使わない）。
+ * 寄棟の翼の分け方（hipFramingWings。矩形の寄棟は翼1つ）と、翼の外側の判定に使う屋根範囲のセル矩形。
+ * 線が導けない region（不正な rect・rects）は null。
+ * @returns {{wings: object[], rects: object[]}|null}
  */
-function planHipKetaSegments(graph, rules, region, primaries) {
+function hipModel(region, F, tol) {
+  const rl = regionLines(region, F, tol);
+  if (!rl) return null;
+  const { wings } = hipFramingWings({
+    rect: region.rect ?? null, rects: region.rect ? null : region.rects, ridges: rl.ridges, purlins: rl.purlins, tolMm: tol,
+  });
+  return { wings, rects: region.rect ? [region.rect] : region.rects };
+}
+
+/** beams のうち、向きが lineVertical と直交する梁を、線に沿った座標（at）と範囲（lo..hi）にしたもの。 */
+function supportsFrom(beams, lineVertical) {
+  return beams.filter(b => b.isVertical !== lineVertical).map(b => ({ at: b.axisValue, lo: spanLo(b), hi: spanHi(b) }));
+}
+
+/**
+ * 翼の切れ目で分かれた母屋の部分（extendLo／extendHi が立つもの）を、その端が本当の支えに届くまで延ばす。切れ目は線の本当の
+ * 端ではなく、延ばさないと切れ目を束とみなして、翼の間に束の間隔 1820 超の穴ができる。延ばし先は、元の線の端（lineLo／lineHi）と、
+ * 部分の座標を跨ぐ直交の梁（baseBeams＝大梁と先の翼の小屋梁）の軸のうち切れ目に最も近いものの内側。延ばした線は位置の計算と
+ * keepOwn の判定に使う（生成する区間の端ではない）。
+ */
+function extendSplitPortions(portions, baseBeams) {
   const tol = CL_OVERLAP_TOL_MM;
-  const rl = regionLines(region, rules.framing, tol);
-  if (!rl) return [];
-  const { x1, y1, x2, y2 } = region.rect;
-  const ketaVertical = roofRidgeIsVertical(region.rect, tol);
-  const lines = [...rl.ridges, ...rl.purlins].filter(l => l.isVertical === ketaVertical);
+  return portions.map(p => {
+    if (!p.extendLo && !p.extendHi) return p;
+    const axes = baseBeams
+      .filter(b => b.isVertical !== p.isVertical && spanLo(b) - tol <= p.coord && p.coord <= spanHi(b) + tol)
+      .map(b => b.axisValue);
+    return {
+      ...p,
+      lo: p.extendLo ? Math.max(p.lineLo, ...axes.filter(v => v <= p.lo + tol)) : p.lo,
+      hi: p.extendHi ? Math.min(p.lineHi, ...axes.filter(v => v >= p.hi - tol)) : p.hi,
+    };
+  });
+}
+
+/** 区間 s（軸 coord 一定・向き isVertical・範囲 lo..hi）が線 l と交わるか（端の接触も許容差まで含める。平行なら false）。 */
+function segmentCrosses(s, l) {
+  const tol = CL_OVERLAP_TOL_MM;
+  return s.isVertical !== l.isVertical && l.coord >= s.lo - tol && l.coord <= s.hi + tol && s.coord >= l.lo - tol && s.coord <= l.hi + tol;
+}
+
+/**
+ * (ii) 区間が別の翼の矩形の中に全体で収まり、かつ自分の線（ownLines）を1本も横切らないなら、その区間は別の翼のもの
+ * （自分の翼の線を支えていない）なので作らない。別の翼が無い（矩形の寄棟）なら常に残す。
+ */
+function keepOwn(s, ownLines, wing, wings) {
+  const tol = CL_OVERLAP_TOL_MM;
+  const inOther = wings.some(o => {
+    if (o === wing) return false;
+    const { x1, y1, x2, y2 } = o.rect;
+    const [crossLo, crossHi, alongLo, alongHi] = s.isVertical ? [x1, x2, y1, y2] : [y1, y2, x1, x2];
+    return s.coord >= crossLo - tol && s.coord <= crossHi + tol && s.lo >= alongLo - tol && s.hi <= alongHi + tol;
+  });
+  return !inOther || ownLines.some(l => segmentCrosses(s, l));
+}
+
+/** (iii) 先の翼の小屋梁（prior）と同じ向き・同じ軸で、許容差を超えて重なる区間は作らない（同じ梁が翼の間で二重にならない）。 */
+function coveredByPrior(s, prior) {
+  const tol = CL_OVERLAP_TOL_MM;
+  return prior.some(b => b.isVertical === s.isVertical && Math.abs(b.axisValue - s.coord) <= tol &&
+    Math.min(spanHi(b), s.hi) - Math.max(spanLo(b), s.lo) > tol);
+}
+
+/**
+ * 寄棟の翼ごとの第1段: 桁行の線（その翼の棟木＋桁行の母屋の部分）を支える、梁間方向の小屋梁の区間を計画する（graph は読むだけ）。
+ * 位置は切妻・片流れと同じ規則（koyaPositionsForLines）に、棟木の両端（正方形は中心）の位置（seed。翼ごとに決めたもの）を必ず加える
+ * ——棟木の端は隅木の上端で、その下に横架材が無いと隅木が支えられない。その位置で棟木の座標を跨ぐ直交の梁（大梁と先の翼の
+ * 小屋梁。prior）が既にあれば seed は置かない（その梁が支える）。host は線と平行な大梁と先の翼の小屋梁。
+ * 区間は、位置 p の弦（屋根範囲の中で翼の幅を含む最大の線分。orthogonalChord）の中の host の間で、(i) 翼と交わる
+ * (ii) keepOwn (iii) 先の翼の小屋梁と重ならない、ものに絞る。矩形の寄棟（翼1つ）では (i)〜(iii) と延長は何も変えない。
+ */
+function planHipKetaSegments(graph, rules, wing, primaries, prior, model) {
+  const tol = CL_OVERLAP_TOL_MM;
+  const base = [...primaries, ...prior];
+  const ketaVertical = wing.ketaVertical;
+  const lines = [...(wing.ridge ? [wing.ridge] : []), ...extendSplitPortions(wing.keta, base)];
   if (lines.length === 0) return [];
 
-  // 棟木の両端（隅木の上端）。短手 s の半分だけ桁行の端から入った位置。正方形は2点が一致して1点になる。
-  const [alongLo, alongHi, crossLo, crossHi] = ketaVertical ? [y1, y2, x1, x2] : [x1, x2, y1, y2];
-  const s = crossHi - crossLo;
-  const ridgeCoord = (crossLo + crossHi) / 2;
-  const seeds = [alongLo + s / 2, alongHi - s / 2]
-    .filter((v, i, a) => i === 0 || Math.abs(v - a[0]) > tol)
-    .filter(v => !primaries.some(b => b.isVertical !== ketaVertical && Math.abs(b.axisValue - v) <= tol &&
-      spanLo(b) - tol <= ridgeCoord && ridgeCoord <= spanHi(b) + tol));
+  const { x1, y1, x2, y2 } = wing.rect;
+  const [crossLo, crossHi] = ketaVertical ? [x1, x2] : [y1, y2];
+  const seeds = wing.seeds.filter(v => !base.some(b => b.isVertical !== ketaVertical && Math.abs(b.axisValue - v) <= tol &&
+    spanLo(b) - tol <= wing.ridgeCross && wing.ridgeCross <= spanHi(b) + tol));
   const extra = seeds.map(at => ({ at, lo: crossLo, hi: crossHi }));
-  const positions = [...koyaPositionsForLines(graph, rules, lines, primaries, extra), ...seeds]
+  const positions = [...koyaPositionsForLines(graph, rules, lines, base, extra), ...seeds]
     .sort((a, b) => a - b)
     .filter((v, i, a) => i === 0 || v - a[i - 1] > tol);
 
-  const parallel = primaries.filter(b => b.isVertical === ketaVertical);
-  const hostCLs = hostAxisCLsIn(parallel, crossLo, crossHi);
-  return positions.flatMap(p =>
-    segmentsBetweenHosts(graph, rules, p, hostCLsAt(parallel, ketaVertical, hostCLs, p), !ketaVertical));
+  const parallel = base.filter(b => b.isVertical === ketaVertical);
+  return positions.flatMap(p => {
+    const chord = orthogonalChord({ rects: model.rects, isVertical: !ketaVertical, coord: p, lo: crossLo, hi: crossHi, tolMm: tol });
+    if (!chord) return [];
+    const hosts = hostCLsAt(parallel, ketaVertical, hostAxisCLsIn(parallel, chord.lo, chord.hi), p);
+    return segmentsBetweenHosts(graph, rules, p, hosts, !ketaVertical)
+      .filter(s => s.hi > crossLo + tol && s.lo < crossHi - tol)
+      .filter(s => keepOwn(s, lines, wing, model.wings))
+      .filter(s => !coveredByPrior(s, prior));
+  });
 }
 
 /**
@@ -195,27 +272,24 @@ function planHipKetaSegments(graph, rules, region, primaries) {
  * 妻側の線の位置以内（軒側）にある最初の host（妻の軒桁から最初の梁間方向の部材まで）。T より内側の host は使わない。
  * T が無ければ候補の全部を使う。途中の host でも区切る（小屋梁どうしを交差させない）。
  */
-function planHipTobibariSegments(graph, rules, region, primaries, koyaBeams) {
+function planHipTobibariSegments(graph, rules, wing, primaries, koyaBeams, prior, model) {
   const tol = CL_OVERLAP_TOL_MM;
-  const rl = regionLines(region, rules.framing, tol);
-  if (!rl) return [];
-  const { x1, y1, x2, y2 } = region.rect;
-  const ketaVertical = roofRidgeIsVertical(region.rect, tol);
-  const gableLines = rl.purlins.filter(l => l.isVertical !== ketaVertical);
-  if (gableLines.length === 0) return [];
+  const base = [...primaries, ...prior];
+  const ketaVertical = wing.ketaVertical;
+  const { x1, y1, x2, y2 } = wing.rect;
   const [alongLo, alongHi] = ketaVertical ? [y1, y2] : [x1, x2];
-  const center = (alongLo + alongHi) / 2;
-  // 飛び梁（桁行方向）の host＝妻側の線と平行な梁（大梁と第1段の小屋梁）。向きは妻側の線と同じ。
+  const center = wing.center;
+  // 飛び梁（桁行方向）の host＝妻側の線と平行な梁（大梁・この翼の第1段・先の翼の小屋梁）。向きは妻側の線と同じ。
   const hostIsVertical = !ketaVertical;
-  const hostBeams = [...primaries.filter(b => b.isVertical === hostIsVertical), ...koyaBeams.filter(b => b.isVertical === hostIsVertical)];
+  const hostBeams = [...base, ...koyaBeams].filter(b => b.isVertical === hostIsVertical);
 
   const segments = [];
   for (const side of ['lo', 'hi']) {
-    const lines = gableLines.filter(l => (side === 'lo' ? l.coord < center - tol : l.coord > center + tol));
+    const lines = extendSplitPortions(side === 'lo' ? wing.gableLo : wing.gableHi, base);
     if (lines.length === 0) continue; // 妻側の線が無い側は飛び梁なし
     const innermost = side === 'lo' ? Math.max(...lines.map(l => l.coord)) : Math.min(...lines.map(l => l.coord));
     const hostCLs = side === 'lo' ? hostAxisCLsIn(hostBeams, alongLo, center) : hostAxisCLsIn(hostBeams, center, alongHi);
-    for (const p of koyaPositionsForLines(graph, rules, lines, primaries)) {
+    for (const p of koyaPositionsForLines(graph, rules, lines, base)) {
       const hosts = hostCLsAt(hostBeams, hostIsVertical, hostCLs, p);
       // 終点 T（軒から内側へ数えて最初に最も内側の線へ届く host）より内側の host を落とす。
       let trimmed = hosts;
@@ -227,7 +301,9 @@ function planHipTobibariSegments(graph, rules, region, primaries, koyaBeams) {
         for (let i = hosts.length - 1; i >= 0; i--) if (hosts[i].effectiveValue <= innermost + tol) { t = i; break; }
         if (t >= 0) trimmed = hosts.slice(t);
       }
-      segments.push(...segmentsBetweenHosts(graph, rules, p, trimmed, ketaVertical));
+      segments.push(...segmentsBetweenHosts(graph, rules, p, trimmed, ketaVertical)
+        .filter(s => keepOwn(s, lines, wing, model.wings))
+        .filter(s => !coveredByPrior(s, prior)));
     }
   }
   return segments;
@@ -237,8 +313,9 @@ function planHipTobibariSegments(graph, rules, region, primaries, koyaBeams) {
  * 小屋梁（role:'roofBeam'）を自動生成・撤去する。
  *  - regions===undefined: 何もしない（I-C3。小屋組を扱わない呼び出し）。
  *  - 在来木造でない（rules.framing が無い）／regions が空: auto の小屋梁を全て撤去する。
- *  - region の形状が寄棟（矩形）: 第1段の小屋梁→第2段の飛び梁（beamType '飛び梁'）の順に作る。使い回す既存の auto は
- *    beamType が違えば作り直す（removed と created の両方に入る）。
+ *  - region の形状が寄棟（矩形も矩形でない寄棟も）: 翼ごとに、第1段の小屋梁→第2段の飛び梁（beamType '飛び梁'）の順に作る
+ *    （翼の順は roofFramingGeometry.js hipFramingWings。矩形は翼1つ）。使い回す既存の auto は beamType が違えば作り直す
+ *    （removed と created の両方に入る）。
  *  - 候補に無くなった auto の小屋梁（屋根の入力や主構造の変更で不要になったもの）は撤去する。locked は保持。
  *  - 梁芯CLは位置に通り芯・既存の梁芯があればそれを、無ければ梁芯CL（由来 roofBeam）を作る（床梁と共有の
  *    wallBeamAxes.js ensureAutoBeamAxisCL）。除外座標（excludedWallBeamAxes）の位置には作らない。
@@ -246,8 +323,8 @@ function planHipTobibariSegments(graph, rules, region, primaries, koyaBeams) {
  * @param {object} graph 小屋梁を載せる平面の graph（主屋根＝屋根専用平面、下屋＝その屋根セルのある実体階）
  * @param {object} project
  * @param {Array<{key:string, rect:object|null, shape:string, ridgeIsVertical:boolean|null, highSide:string|null}>|undefined} regions
- *   roofFramingRegions.js の region（主屋根・下屋）。undefined なら何もしない。rect=null（矩形でない寄棟）の region は
- *   小屋梁を作らない（候補0＝ auto の小屋梁は撤去・locked は残る。矩形でない寄棟の小屋梁は C2e-3）
+ *   roofFramingRegions.js の region（主屋根・下屋）。undefined なら何もしない。rect=null（矩形でない寄棟。rects＝セル矩形）の
+ *   region は shape が寄棟で rects が正しいときだけ小屋梁を作る（それ以外は候補0＝ auto の小屋梁は撤去・locked は残る）
  * @returns {{created: object[], removed: string[]}}
  */
 export function autoFillWoodRoofFraming(graph, project, regions) {
@@ -321,12 +398,18 @@ export function autoFillWoodRoofFraming(graph, project, regions) {
 
   if (rules.framing) {
     for (const region of regions) {
-      if (!region.rect) continue; // 矩形でない寄棟の region（rect=null・描画のみ）は小屋梁を作らない（C2e-3）
       if (region.shape === RoofShape.HIP) {
-        // 寄棟は2段: 梁間方向の小屋梁（第1段）→ それを host に含めた飛び梁（第2段）。
-        const koya = emitSegments(planHipKetaSegments(graph, rules, region, primaries), ROOF_BEAM_TYPE);
-        emitSegments(planHipTobibariSegments(graph, rules, region, primaries, koya), TOBIBARI_BEAM_TYPE);
-      } else {
+        // 寄棟は翼ごとに2段: 梁間方向の小屋梁（第1段）→ それを host に含めた飛び梁（第2段）。翼の順に回し、
+        // 先の翼で実在する小屋梁（prior）は後の翼の支え・host に数える（矩形の寄棟は翼1つで prior は空）。
+        const model = hipModel(region, rules.framing, CL_OVERLAP_TOL_MM);
+        if (!model) continue;
+        const prior = [];
+        for (const wing of model.wings) {
+          const koya = emitSegments(planHipKetaSegments(graph, rules, wing, primaries, prior, model), ROOF_BEAM_TYPE);
+          const tobi = emitSegments(planHipTobibariSegments(graph, rules, wing, primaries, koya, prior, model), TOBIBARI_BEAM_TYPE);
+          prior.push(...koya, ...tobi);
+        }
+      } else if (region.rect) {
         emitSegments(planRegionSegments(graph, rules, region, primaries), ROOF_BEAM_TYPE);
       }
     }
