@@ -232,7 +232,9 @@ test('【統合・失敗系】下屋を削除（屋根の部屋を外す）し�
 
 test('【統合・失敗系】対象でない下屋（L字・陸屋根）・非在来では小屋梁を作らない。非在来へ変えると既存の auto の小屋梁は撤去される', async () => {
   const lShape = buildTwoFloors([[[1, 0], [2, 0], [2, 1]]]);
-  assert.equal(leanToFramingRegions(lShape.g2, lShape.project).length, 0, '前提: L字は region 無し');
+  // E1b: 描画用の leanToFramingRegions は L字を翼ごとの片流れの region にする。構造側（leanToFraming）は L字を含まない（小屋梁は E2）
+  assert.equal(leanToFraming(lShape.g2, lShape.project).regions.length, 0, '前提: L字は構造側の region 無し');
+  assert.equal(leanToFramingRegions(lShape.g2, lShape.project).length, 1, '前提: 描画用には L字の region がある');
   await converge(lShape);
   assert.equal(koya(lShape.g2).length, 0, 'L字の下屋は作らない（従来どおり）');
 

@@ -8,7 +8,10 @@ import {
   pickMembersOnFigure, columnListCategory, pickColumnsOnFigure, columnRenderSize,
   ROOF_FRAMING_DASH, showRoofFraming, roofFramingWidths, roofFramingHostMembers, roofFramingPrimitives,
 } from './framingDrawing.js';
-import { roofFramingLines, roofStrutPoints, roofOutline } from './roofFramingGeometry.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { roofFramingLines, roofStrutPoints, roofOutline, leanToWingsOf } from './roofFramingGeometry.js';
+import { stripCommentLines } from '../uiBusySourceScan.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 import { STRUCTURES } from './structuralClassification.js';
 import { LodLevel } from '../viewport.js';
@@ -380,6 +383,72 @@ test('【D2・失敗系】roofFramingPrimitives: edges が不正（配列でな�
   assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...gableRegion, edges: null }] })), base);
   assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...gableRegion, edges: [] }] })), base);
   assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...gableRegion, edges: 'x' }] })), RangeError);
+});
+
+// ---- ステップ E1b: L字の下屋（翼ごとの片流れ。rect:null・leanToWings）の描画 ----
+// 形1a（出隅の回り込み・奥行き同じ）。屋内 [0,3640]² に接する L字 P=[0,5460]×[3640,5460]∪[3640,5460]×[0,3640]。
+const L_LEAN_RECTS = [{ x1: 0, y1: 3640, x2: 3640, y2: 5460 }, { x1: 3640, y1: 3640, x2: 5460, y2: 5460 }, { x1: 3640, y1: 0, x2: 5460, y2: 3640 }];
+const L_LEAN_CONTACTS = [
+  { isVertical: false, coord: 3640, lo: 0, hi: 3640, outward: -1 }, { isVertical: true, coord: 3640, lo: 0, hi: 3640, outward: -1 },
+];
+function lLeanRegion(over = {}) {
+  const { wings, unassigned, kindZones } = leanToWingsOf({ rects: L_LEAN_RECTS, contacts: L_LEAN_CONTACTS, tolMm: TOL });
+  const { edges, outline } = roofOutline({
+    rects: L_LEAN_RECTS, shape: 'mono', eaveOverhangMm: 455, gableOverhangMm: 455, zeroZones: L_LEAN_CONTACTS, kindZones, tolMm: TOL,
+  });
+  return { key: 'lean:K', rect: null, rects: L_LEAN_RECTS, shape: 'mono', ridgeIsVertical: null, highSide: null, leanToWings: wings, leanToUnassigned: unassigned, edges, outline, ...over };
+}
+
+test('【E1b】roofFramingPrimitives: L字の下屋（形1a）は 母屋2・隅木1・外形線1・束1 の順で、母屋・隅木は外形線まで延びる。key は lean:K:purlin:i 等', () => {
+  const hostBeams = [{ isVertical: true, axis: 1820, lo: 3000, hi: 6000 }];
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [lLeanRegion()], hostBeams }));
+  assert.deepEqual(prims, [
+    { kind: 'purlin', key: 'lean:K:purlin:0', points: [-455, 4550, 4550, 4550] }, // 上の壁の翼の母屋（けらばの左端が 455 延びる）
+    { kind: 'purlin', key: 'lean:K:purlin:1', points: [4550, -455, 4550, 4550] }, // 左の壁の翼の母屋（けらばの上端が 455 延びる）
+    { kind: 'hip', key: 'lean:K:hip:0', points: [5915, 5915, 3640, 3640] }, // 継ぎ目の隅木。軒側の端 (5460,5460) は外形線の角まで 455 延びる
+    { kind: 'outline', key: 'lean:K:outline:0', points: [5915, -455, 5915, 5915, -455, 5915, -455, 3640, 3640, 3640, 3640, -455], closed: true },
+    { kind: 'strut', key: 'lean:K:strut:0', x: 1820, y: 4550, radius: 45 }, // 延長前の母屋 y=4550（x 0..4550）と host 梁 x=1820 の交点
+  ]);
+});
+
+test('【E1b】roofFramingPrimitives: L字の下屋の隅木は、軒側の端が辺の途中にあるとき（形1b。奥行き違い）も軒の出幅ぶん延びる。矩形の寄棟の隅木と同じ points の約束（軒側→上端）', () => {
+  // 形1b: P=[0,5460]×[3640,7280]∪[3640,5460]×[0,3640]。隅木は (5460,5460)→(3640,3640)。軒側の端 (5460,5460) は x=5460 の辺の途中
+  const rects = [{ x1: 0, y1: 3640, x2: 3640, y2: 7280 }, { x1: 3640, y1: 3640, x2: 5460, y2: 7280 }, { x1: 3640, y1: 0, x2: 5460, y2: 3640 }];
+  const { wings, kindZones } = leanToWingsOf({ rects, contacts: L_LEAN_CONTACTS, tolMm: TOL });
+  const { edges, outline } = roofOutline({ rects, shape: 'mono', eaveOverhangMm: 455, gableOverhangMm: 455, zeroZones: L_LEAN_CONTACTS, kindZones, tolMm: TOL });
+  const region = { key: 'lean:K', rect: null, rects, shape: 'mono', ridgeIsVertical: null, highSide: null, leanToWings: wings, edges, outline };
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] }));
+  assert.deepEqual(kindOf(prims, 'hip').map(p => p.points), [[5915, 5915, 3640, 3640]]);
+  assert.deepEqual(kindOf(prims, 'outline').map(p => p.points), [[5915, -455, 5915, 7735, -455, 7735, -455, 3640, 3640, 3640, 3640, -455]]);
+});
+
+test('【E1b・失敗系】roofFramingPrimitives: leanToWings が無い・null の rect:null の片流れは従来どおり線を出さない。edges が無ければ延長なし。壊れた翼は RangeError', () => {
+  const noWings = lLeanRegion({ leanToWings: undefined });
+  assert.deepEqual(kindOf(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [noWings] })), 'purlin'), [], '翼が無ければ母屋なし（従来）');
+  assert.deepEqual(kindOf(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [lLeanRegion({ leanToWings: null })] })), 'hip'), []);
+  const noEdges = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [lLeanRegion({ edges: undefined })] }));
+  assert.deepEqual(kindOf(noEdges, 'purlin').map(p => p.points), [[0, 4550, 4550, 4550], [4550, 0, 4550, 4550]], 'edges 無しは延長なし');
+  assert.deepEqual(kindOf(noEdges, 'hip').map(p => p.points), [[5460, 5460, 3640, 3640]]);
+  assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [lLeanRegion({ leanToWings: [{ highSide: 'top' }] })] })), RangeError);
+  assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.SCHEMATIC, baseArgs({ regions: [lLeanRegion()] })), [], '略図は空');
+  assert.deepEqual(roofFramingPrimitives(rulesFor('S造').drawing, LodLevel.STANDARD, baseArgs({ regions: [lLeanRegion()] })), [], '非在来は空');
+});
+
+// 配線: roofFramingPrimitives が region.leanToWings を線の導出へ渡し、L字の下屋のときだけ斜め線の延長を midEdge にする。
+// 呼び出しは1行まるごとで一致させる（team-lessons 2026-09-29。行末コメントに元の式を残す変異を部分一致では見逃す）。
+const drawingSrc = stripCommentLines(fs.readFileSync(path.resolve(import.meta.dirname, 'framingDrawing.js'), 'utf8'));
+function countWholeLines(text, line) {
+  const escaped = line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (text.match(new RegExp(`^\\s*${escaped}$`, 'gm')) || []).length;
+}
+
+test('【E1b・配線】roofFramingPrimitives は leanToWings を roofFramingLines・roofHipDiagonals へ渡し、斜め線の延長は L字の下屋のときだけ midEdge', () => {
+  for (const line of [
+    'highSide: region.highSide, leanToWings: region.leanToWings ?? null, purlinPitchMm, purlinStartOffsetsMm, tolMm,',
+    'const leanToWings = region.leanToWings ?? null;',
+    'diagonals: roofHipDiagonals({ rect: region.rect, rects: region.rects, shape: region.shape, leanToWings, tolMm }),',
+    'edges, midEdge: leanToWings !== null, tolMm,',
+  ]) assert.equal(countWholeLines(drawingSrc, line), 1, `${line} の行は1つのはず`);
 });
 
 test('roofFramingPrimitives: 束は母屋・棟木と host 梁の全交点に半径45（母屋90角の半分）で出る（東西の軒桁 y=-3640・-12614 で 7×2=14 か所）', () => {

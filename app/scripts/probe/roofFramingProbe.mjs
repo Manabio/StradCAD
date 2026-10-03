@@ -23,7 +23,12 @@
 //   棟木か頂点・seed・桁行／妻側の線の部分と延長の印）、取り残し（unassigned。1本でもあれば NG＝被覆性の崩れ）、小屋梁・飛び梁と
 //   他の梁の内部での交差（あれば NG）を出す。束の間隔は元の全棟木・母屋で 1820 以下（「支えの無い端の区間」の除外は設けない。
 //   超えたら違反）。棟木の両端の束の検査は矩形の寄棟だけ。
-// 【通らない経路】L字の下屋（region が無いので対象外）。
+// 【L字の下屋（E1b。翼ごとの片流れ）】leanToFramingRegions は L字の片流れの下屋も region（rect:null・leanToWings）にするが、
+//   構造側（leanToFraming）には入れない＝小屋梁は E2。この probe は L字の下屋を「描画だけ」と表示し、束の間隔・小屋梁・
+//   stray の検査は行わない。翼の表（順・向き・壁・奥行き・矩形・延長）・取り残し（unassigned。報告だけで NG にしない＝
+//   形によっては残りうる既知の限界）・母屋と斜め線（延長前→後）・継ぎ目の mismatches・外形線・計算時間を出す。
+//   stray 検査（region の無い階に auto の小屋梁が残っていないか）は構造側の region（leanToFraming）で行う。
+// 【通らない経路】L字の下屋の小屋梁（E2）。
 //
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/roofFramingProbe.mjs [入力.stq]   （既定: moku4）
 import crypto from 'node:crypto';
@@ -39,8 +44,11 @@ const { floorSwapManager } = await import('../../src/storage/FloorSwapManager.js
 const { serializeGraph } = await import('../../src/graphSnapshot.js');
 const { sweepUntilConverged, planeLabel } = await import('./sweepOrder.mjs');
 const { structuralPlaneBelow } = await import('../../src/structural/drawingDesignation.js');
-const { mainRoofFramingRegion, leanToFramingRegions } = await import('../../src/structural/roofFramingRegions.js');
-const { roofFramingLines, roofStrutPoints, roofRidgeIsVertical, hipFramingWings } = await import('../../src/structural/roofFramingGeometry.js');
+const { mainRoofFramingRegion, leanToFramingRegions, leanToFraming } = await import('../../src/structural/roofFramingRegions.js');
+const {
+  roofFramingLines, roofStrutPoints, roofRidgeIsVertical, hipFramingWings,
+  roofHipDiagonals, leanToSeams, extendLinesToOutline, extendDiagonalsToOutline,
+} = await import('../../src/structural/roofFramingGeometry.js');
 const { roofFramingHostMembers } = await import('../../src/structural/framingDrawing.js');
 const { rulesFor, effectiveStructure } = await import('../../src/structural/structureRules.js');
 const { assignNumbers, applyNumbers } = await import('../../src/structural/memberNumbering.js');
@@ -91,14 +99,18 @@ const roofGraph = project.graphMap.get(roofPlane.id);
 const topPlane = structuralPlaneBelow(roofPlane, project);
 const topGraph = topPlane ? project.graphMap.get(topPlane.id) : null;
 const mainRegion = mainRoofFramingRegion(topGraph, project);
-// 下屋＝実体階ごとの region。region の無い実体階は stray 検査（auto の小屋梁が残っていないこと）に回す。
+// 下屋＝実体階ごとの region。矩形でない下屋（L字。rect:null）は描画だけなので lLeanTos に分ける（小屋梁の検査をしない）。
+// 構造側の region の無い実体階は stray 検査（auto の小屋梁が残っていないこと）に回す。
 const leanTos = [];
+const lLeanTos = [];
 const strayFloors = [];
 for (const p of project.planes) {
   const g = project.graphMap.get(p.id);
+  const t0 = performance.now();
   const regions = leanToFramingRegions(g, project);
-  for (const region of regions) leanTos.push({ plane: p, graph: g, region });
-  if (regions.length === 0) {
+  const ms = performance.now() - t0;
+  for (const region of regions) (region.rect ? leanTos : lLeanTos).push({ plane: p, graph: g, region, ms });
+  if (leanToFraming(g, project).regions.length === 0) {
     const stray = g.beams.filter(b => b.role === 'roofBeam' && b.dimensionStatus === 'auto');
     if (stray.length > 0) strayFloors.push({ plane: p, count: stray.length });
   }
@@ -129,6 +141,42 @@ function printWings(region, F) {
   });
   console.log(`  取り残し（unassigned）: ${unassigned.length} 本${unassigned.length > 0 ? ' — NG（被覆性が崩れている）: ' + unassigned.map(lineName).join(' / ') : ''}`);
   return unassigned.length;
+}
+
+/**
+ * L字の下屋（rect:null・leanToWings。E1b）の描画の内訳を出す。翼の表・取り残し・母屋と斜め線（延長前→後）・
+ * 継ぎ目の mismatches・外形線。小屋梁・束の検査はしない（描画だけ。小屋梁は E2）。
+ * @returns {number} 取り残しの本数（報告だけ。NG にしない）
+ */
+function printLeanToDrawing(region, F, ms) {
+  const wings = region.leanToWings;
+  const lineName = l => `${l.isVertical ? 'x' : 'y'}=${l.coord} ${l.lo}..${l.hi}`;
+  console.log(`--- 翼 ${wings.length} 枚（順＝作った順）。計算時間 ${ms.toFixed(1)}ms（leanToFramingRegions の1階分） ---`);
+  wings.forEach((w, i) => {
+    const r = w.rect;
+    const ext = w.domain.filter(d => d.entry !== 'direct').map(d => `x ${d.x1}..${d.x2} × y ${d.y1}..${d.y2}（入り口 ${d.entry}）`);
+    console.log(`  W${i + 1} 流れ=${w.highSide} 壁 ${lineName(w.wallEdge)} 奥行き=${w.depthMm} rect x ${r.x1}..${r.x2} × y ${r.y1}..${r.y2}  延長: ${ext.join(' / ') || '-'}`);
+  });
+  const { purlins } = roofFramingLines({
+    rect: null, rects: region.rects, shape: region.shape, leanToWings: wings,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol,
+  });
+  const drawn = extendLinesToOutline({ lines: purlins, edges: region.edges, tolMm: tol });
+  console.log(`--- 母屋 ${purlins.length} 本（延長前 → 延長後） ---`);
+  purlins.forEach((l, i) => console.log(`  ${lineName(l)} → ${drawn[i].lo}..${drawn[i].hi}`));
+  const { diagonals, mismatches } = leanToSeams({ wings, tolMm: tol });
+  const diagDrawn = extendDiagonalsToOutline({
+    diagonals: roofHipDiagonals({ rect: null, rects: region.rects, shape: region.shape, leanToWings: wings, tolMm: tol }),
+    edges: region.edges, midEdge: true, tolMm: tol,
+  });
+  console.log(`--- 継ぎ目の斜め線 ${diagonals.length} 本（軒側→上端。延長前 → 延長後の軒側） ---`);
+  diagonals.forEach((d, i) => console.log(`  ${d.kind} (${d.x1},${d.y1}) → (${d.x2},${d.y2})  延長後の軒側 (${diagDrawn[i].x1},${diagDrawn[i].y1})`));
+  console.log(`  継ぎ目の mismatches（高さが合わず描かない組）: ${mismatches.length} 件${mismatches.length > 0 ? ' ' + JSON.stringify(mismatches) : ''}`);
+  console.log(`--- 外形線 ${region.outline.length} 閉路 ---`);
+  region.outline.forEach((loop, i) => console.log(`  [${i}] ${loop.points.join(',')}`));
+  const un = region.leanToUnassigned ?? [];
+  console.log(`  取り残し（unassigned）: ${un.length} 件${un.length > 0 ? '（報告のみ。既知の限界）: ' + un.map(u => `x ${u.x1}..${u.x2} × y ${u.y1}..${u.y2}`).join(' / ') : ''}`);
+  return un.length;
 }
 
 // 小屋梁・飛び梁（roofBeam）が、直交する梁（大梁を含む全部）と内部で交差している組の記述（空なら交差なし）。
@@ -271,11 +319,17 @@ for (const { plane, graph, region } of leanTos) {
   const r = inspectRegion(graph, region, `${planeLabel(plane)}の伏図（この階の小屋梁の全数）`);
   violations += r.violations; excludedCount += r.excluded; koyaTotal += r.koya; strutMaxPitchMm = r.strutMaxPitchMm;
 }
+// ---- L字の下屋（E1b。描画だけ） ----
+for (const { plane, region, ms } of lLeanTos) {
+  console.log(`=== 下屋 [${planeLabel(plane)}] ${region.key}（L字。描画だけ＝小屋梁は E2。束の間隔は検査しない） ===`);
+  console.log('region:', JSON.stringify(region));
+  printLeanToDrawing(region, rulesFor(effectiveStructure(project.graphMap.get(plane.id), project)).framing, ms);
+}
 for (const s of strayFloors) {
   console.log(`NG: 下屋の region が無い階 [${planeLabel(s.plane)}] に auto の小屋梁が ${s.count} 本残っている`);
   failed = true;
 }
-if (!mainRegion && leanTos.length === 0 && !failed) {
+if (!mainRegion && leanTos.length === 0 && lLeanTos.length === 0 && !failed) {
   console.log('小屋組の region が1つも無い文書: 対象外（exit 0）');
   process.exit(0);
 }
@@ -289,6 +343,6 @@ if (violations > 0) {
   console.log(`NG: 束の最大間隔が ${strutMaxPitchMm} を超える区間が ${violations} 件（除外対象でない）`);
   failed = true;
 }
-console.log(`収束スイープ数: ${convergedAt}（上限 ${SWEEP_LIMIT}）  小屋梁: ${koyaTotal}本  除外区間: ${excludedCount}件${leanTos.length > 0 ? `  下屋: ${leanTos.length}件` : ''}`);
+console.log(`収束スイープ数: ${convergedAt}（上限 ${SWEEP_LIMIT}）  小屋梁: ${koyaTotal}本  除外区間: ${excludedCount}件${leanTos.length > 0 ? `  下屋: ${leanTos.length}件` : ''}${lLeanTos.length > 0 ? `  L字の下屋（描画だけ）: ${lLeanTos.length}件` : ''}`);
 console.log(failed ? 'RESULT: NG' : 'RESULT: OK');
 process.exit(failed ? 1 : 0);
