@@ -665,11 +665,11 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
           return bandLines(`wall:${w.id}`, w.isVertical, w.axisValue, w.thickness / 2, segments, color, medium, wallDash);
         })}
       </Group>
-      {/* 小屋組（棟木＝一点鎖線2本・母屋・隅木・谷木＝一点鎖線1本・束＝黒丸）。梁の帯の後・選択ハイライトの前。
-          線（棟木・母屋・隅木・谷木）→ 束の順。一点鎖線は中心線（CenterLinesLayer.jsx）と同じ画面px固定。クリック対象にしない。 */}
+      {/* 小屋組（棟木＝一点鎖線2本・母屋・隅木・谷木＝一点鎖線1本・束＝黒丸・屋根の外形線＝閉じた細い実線）。梁の帯の後・
+          選択ハイライトの前。線（棟木・母屋・隅木・谷木）→ 束 → 外形線の順。一点鎖線は中心線（CenterLinesLayer.jsx）と同じ画面px固定。クリック対象にしない。 */}
       {roofFramingPrims.length > 0 && (
         <Group name="roof-framing" {...groupPropsForStyle(beam?.spec.style)}>
-          {roofFramingPrims.filter(p => p.kind !== 'strut').map(p => (
+          {roofFramingPrims.filter(p => p.kind !== 'strut' && p.kind !== 'outline').map(p => (
             <Line
               key={p.key}
               points={p.points}
@@ -685,6 +685,17 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
               key={p.key}
               x={p.x} y={p.y} radius={p.radius}
               fill={colorOf(figureRules.baseMaterial)}
+              listening={false}
+            />
+          ))}
+          {roofFramingPrims.filter(p => p.kind === 'outline').map(p => (
+            <Line
+              key={p.key}
+              points={p.points}
+              closed
+              stroke={colorOf(figureRules.baseMaterial)}
+              strokeWidth={viewport.lineWeightsPx.thin}
+              strokeScaleEnabled={false}
               listening={false}
             />
           ))}

@@ -61,11 +61,17 @@ function makeGrid(xs, ys) {
 const XS = [0, 2000, 4000, 6000];
 const YS = [0, 1500, 3000, 4500];
 
+/** 外形線の辺の部分（roofOutline の edges）の期待値。 */
+const E = (isVertical, coord, lo, hi, outward, overhangMm) => ({ isVertical, coord, lo, hi, outward, overhangMm });
+
 // ---- mainRoofFramingRegion ----
 
 test('mainRoofFramingRegion: 在来・矩形・自動の形状。短手3640超は切妻（棟は長手方向。横長なら x 方向＝ridgeIsVertical false）', () => {
+  // D1: region は外形線（edges・outline）を持つ。既定の出幅は軒・妻側とも 455。期待値に項目を足した（既存の項目の assert は同じ）
   assert.deepEqual(mainRoofFramingRegion(singleRoomGraph(9000, 6000), woodProject()), {
     key: 'main', rect: { x1: 0, y1: 0, x2: 9000, y2: 6000 }, shape: 'gable', ridgeIsVertical: false, highSide: null,
+    edges: [E(false, 0, 0, 9000, -1, 455), E(true, 9000, 0, 6000, 1, 455), E(false, 6000, 0, 9000, 1, 455), E(true, 0, 0, 6000, -1, 455)],
+    outline: [{ points: [9455, -455, 9455, 6455, -455, 6455, -455, -455] }],
   });
   assert.equal(mainRoofFramingRegion(singleRoomGraph(6000, 9000), woodProject()).ridgeIsVertical, true, '縦長は y 方向の棟');
 });
@@ -87,6 +93,8 @@ test('mainRoofFramingRegion: 形状の明示値（寄棟・切妻）はそのま
   hip.mainRoofSpec.setField('highSide', 'left'); // 明示値があっても片流れ以外は使わない
   assert.deepEqual(mainRoofFramingRegion(hip, project), {
     key: 'main', rect: { x1: 0, y1: 0, x2: 9000, y2: 3000 }, shape: 'hip', ridgeIsVertical: false, highSide: null,
+    edges: [E(false, 0, 0, 9000, -1, 455), E(true, 9000, 0, 3000, 1, 455), E(false, 3000, 0, 9000, 1, 455), E(true, 0, 0, 3000, -1, 455)],
+    outline: [{ points: [9455, -455, 9455, 3455, -455, 3455, -455, -455] }],
   });
 });
 
@@ -152,6 +160,12 @@ test('【C2e-2】mainRoofFramingRegion: 建物範囲が矩形でない（L字＝
       { x1: 0, y1: 0, x2: 2000, y2: 1500 }, { x1: 2000, y1: 0, x2: 4000, y2: 1500 }, { x1: 0, y1: 1500, x2: 2000, y2: 3000 },
     ],
     shape: 'hip', ridgeIsVertical: null, highSide: null,
+    // D1: 矩形でない寄棟も外形線を持つ（入隅 (2455,1955) を結ぶ6頂点）
+    edges: [
+      E(false, 0, 0, 4000, -1, 455), E(true, 4000, 0, 1500, 1, 455), E(false, 1500, 2000, 4000, 1, 455),
+      E(true, 2000, 1500, 3000, 1, 455), E(false, 3000, 0, 2000, 1, 455), E(true, 0, 0, 3000, -1, 455),
+    ],
+    outline: [{ points: [4455, -455, 4455, 1955, 2455, 1955, 2455, 3455, -455, 3455, -455, -455] }],
   });
   // rects は graph のセル（mainRoofBounds）の写し。graph 側のオブジェクトを共有しない（書き換えても graph は不変）
   region.rects[0].x1 = -1;
@@ -197,6 +211,9 @@ test('leanToFramingRegions: 屋内に接する辺が高い側（片流れ）。k
   const r = roof([[1, 1]]); // 2000×1500
   assert.deepEqual(leanToFramingRegions(graph, woodProject()), [{
     key: `lean:${r.id}`, rect: { x1: 2000, y1: 1500, x2: 4000, y2: 3000 }, shape: 'mono', ridgeIsVertical: false, highSide: 'left',
+    // D1: 屋内に接する左の辺は出幅 0（壁に当たる）。片流れ left は縦の辺が軒・横の辺がけらば（既定は同じ 455）
+    edges: [E(false, 1500, 2000, 4000, -1, 455), E(true, 4000, 1500, 3000, 1, 455), E(false, 3000, 2000, 4000, 1, 455), E(true, 2000, 1500, 3000, -1, 0)],
+    outline: [{ points: [4455, 1045, 4455, 3455, 2000, 3455, 2000, 1045] }],
   }]);
 });
 
@@ -262,6 +279,82 @@ test('【失敗系】leanToFramingRegions: 非在来・project 無し・graph �
   }
   assert.deepEqual(leanToFramingRegions(graph, null), []);
   assert.deepEqual(leanToFramingRegions(null, woodProject()), []);
+});
+
+// ---- 屋根の外形線（軒先・けらば。ステップ D1） ----
+
+test('【D1】mainRoofFramingRegion: 明示の出幅（軒 600・妻側 300）が edges・outline に効く。切妻の棟木の向きを変えると軒とけらばが入れ替わる', () => {
+  const project = woodProject();
+  const g = singleRoomGraph(9000, 6000); // 自動の切妻・棟は横（x 方向）
+  g.mainRoofSpec.setField('eaveOverhangMm', 600);
+  g.mainRoofSpec.setField('gableOverhangMm', 300);
+  const h = mainRoofFramingRegion(g, project);
+  assert.deepEqual(h.edges, [E(false, 0, 0, 9000, -1, 600), E(true, 9000, 0, 6000, 1, 300), E(false, 6000, 0, 9000, 1, 600), E(true, 0, 0, 6000, -1, 300)]);
+  assert.deepEqual(h.outline, [{ points: [9300, -600, 9300, 6600, -300, 6600, -300, -600] }]);
+  g.mainRoofSpec.setField('ridgeDirection', 'vertical'); // 棟を縦にすると縦の辺が軒
+  const v = mainRoofFramingRegion(g, project);
+  assert.deepEqual(v.edges, [E(false, 0, 0, 9000, -1, 300), E(true, 9000, 0, 6000, 1, 600), E(false, 6000, 0, 9000, 1, 300), E(true, 0, 0, 6000, -1, 600)]);
+  assert.deepEqual(v.outline, [{ points: [9600, -300, 9600, 6300, -600, 6300, -600, -300] }]);
+});
+
+test('【D1】mainRoofFramingRegion: 片流れは高い側の指定で軒の辺が決まる。寄棟（矩形）は全辺が軒', () => {
+  const project = woodProject();
+  const mono = singleRoomGraph(9000, 3000);
+  mono.mainRoofSpec.setField('eaveOverhangMm', 600);
+  mono.mainRoofSpec.setField('gableOverhangMm', 300);
+  mono.mainRoofSpec.setField('highSide', 'right'); // 縦の辺が軒（600）・横の辺がけらば（300）
+  assert.deepEqual(mainRoofFramingRegion(mono, project).outline, [{ points: [9600, -300, 9600, 3300, -600, 3300, -600, -300] }]);
+  const hip = singleRoomGraph(9000, 3000);
+  hip.mainRoofSpec.setField('shape', RoofShape.HIP);
+  hip.mainRoofSpec.setField('eaveOverhangMm', 600);
+  hip.mainRoofSpec.setField('gableOverhangMm', 300); // 寄棟には妻が無いので効かない
+  assert.deepEqual(mainRoofFramingRegion(hip, project).outline, [{ points: [9600, -600, 9600, 3600, -600, 3600, -600, -600] }]);
+});
+
+test('【D1・失敗系】mainRoofFramingRegion: 出幅が負・NaN の spec は既定値（455）で描く（例外にしない）。0 は正当で外形線＝屋根範囲', () => {
+  const project = woodProject();
+  const g = singleRoomGraph(9000, 6000);
+  g.mainRoofSpec.eaveOverhangMm = -5;
+  g.mainRoofSpec.gableOverhangMm = NaN;
+  assert.deepEqual(mainRoofFramingRegion(g, project).outline, [{ points: [9455, -455, 9455, 6455, -455, 6455, -455, -455] }]);
+  g.mainRoofSpec.eaveOverhangMm = 0;
+  g.mainRoofSpec.gableOverhangMm = 0;
+  assert.deepEqual(mainRoofFramingRegion(g, project).outline, [{ points: [9000, 0, 9000, 6000, 0, 6000, 0, 0] }]);
+});
+
+test('【D1】leanToFramingRegions: 下屋の辺が一部だけ屋内に接するとき、接する部分だけ出幅 0（辺を分けて段差）。接しない下屋は全辺に出幅', () => {
+  const project = woodProject();
+  const { graph, interior, roof } = makeGrid(XS, YS);
+  interior([[0, 1]]); // x 0..2000・y 1500..3000。屋根（2000..6000 × 1500..3000）の左の辺 x=2000 に全体で接する
+  const r = roof([[1, 1], [2, 1]]);
+  r.roofSpec.setField('shape', RoofShape.HIP);
+  r.roofSpec.setField('eaveOverhangMm', 600);
+  const [full] = leanToFramingRegions(graph, project);
+  assert.deepEqual(full.edges.filter(e => e.overhangMm === 0), [E(true, 2000, 1500, 3000, -1, 0)], '左の辺だけ 0');
+  // 屋内を上の段へ移すと、屋根（2000..6000 × 1500..3000）の上の辺 y=1500 のうち x 0..4000 と重なる 2000..4000 だけが接する
+  const g2 = makeGrid(XS, YS);
+  g2.interior([[1, 0]]); // x 2000..4000・y 0..1500（屋根の上の辺の左半分に接する）
+  const r2 = g2.roof([[1, 1], [2, 1]]);
+  r2.roofSpec.setField('shape', RoofShape.HIP);
+  r2.roofSpec.setField('eaveOverhangMm', 600);
+  const [part] = leanToFramingRegions(g2.graph, project);
+  assert.deepEqual(part.edges, [
+    E(false, 1500, 2000, 4000, -1, 0), E(false, 1500, 4000, 6000, -1, 600), // 上の辺: 屋内に接する 2000..4000 は 0、残りは 600
+    E(true, 6000, 1500, 3000, 1, 600), E(false, 3000, 2000, 6000, 1, 600), E(true, 2000, 1500, 3000, -1, 600),
+  ]);
+  // 段差: 屋内に接する 2000..4000 は y=1500（出幅 0）、残りは y=900（600 外へ）。x=4000 で小辺が挿入される
+  assert.deepEqual(part.outline, [{ points: [4000, 1500, 4000, 900, 6600, 900, 6600, 3600, 1400, 3600, 1400, 1500] }]);
+});
+
+test('【D1】leanToFramingRegions: 屋内に接しない下屋は全辺に出幅。切妻の下屋は棟木の向きで軒・けらばが入れ替わる', () => {
+  const { graph, roof } = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  const r = roof([[0, 0], [1, 0], [0, 1], [1, 1]]); // 8000×8000（自動の切妻・棟は横）
+  r.roofSpec.setField('eaveOverhangMm', 600);
+  r.roofSpec.setField('gableOverhangMm', 300);
+  const project = woodProject();
+  assert.deepEqual(leanToFramingRegions(graph, project)[0].outline, [{ points: [8300, -600, 8300, 8600, -300, 8600, -300, -600] }]);
+  r.roofSpec.setField('ridgeDirection', 'vertical');
+  assert.deepEqual(leanToFramingRegions(graph, project)[0].outline, [{ points: [8600, -300, 8600, 8300, -600, 8300, -600, -300] }]);
 });
 
 // ---- roofFramingRegionsForFigure（どの伏図にどの region が載るか） ----
@@ -397,7 +490,10 @@ test('roofFramingFigurePrimitives: 実体階の伏図は自階 graph の下屋�
   assert.deepEqual(prims.map(p => [p.kind, ...p.points]), [
     ['purlin', 2455, 1500, 2455, 3000],
     ['purlin', 3365, 1500, 3365, 3000],
+    // D1: 屋根の外形線（左の辺は屋内に接するので出幅 0）。母屋・束の数は変わらない
+    ['outline', 4455, 1045, 4455, 3455, 2000, 3455, 2000, 1045],
   ], '片流れ left: 高い側（x=2000）から幅2000は455始まり（残り635）の x=2455・3365。梁が無いので束なし');
+  assert.ok(prims.filter(p => p.kind === 'outline').every(p => p.closed === true && p.key.includes(':outline:')));
 });
 
 test('【失敗系】roofFramingFigurePrimitives: 略図・非在来は graph を一切読まずに空（region 導出を省く）', () => {

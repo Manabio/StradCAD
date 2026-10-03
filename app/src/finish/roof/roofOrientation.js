@@ -44,6 +44,30 @@ export function roofEdgeInteriorAdjacency(rect, graph) {
 }
 
 /**
+ * 屋根範囲（矩形 rect）の各辺のうち、外側が同じ階の屋内に接する区間（roofEdgeInteriorAdjacency と同じ判定を、長さでなく
+ * 区間で返す）。屋根の外形線（軒の出）が壁に当たって出幅 0 になる部分に使う。複数の屋内セルが接すれば区間も複数。
+ * 辺の向き・外側は roofFramingGeometry.js の線と同じ（isVertical＝x=coord 一定、outward＝外側が coord の +方向か -方向か）。
+ * @param {{x1:number,y1:number,x2:number,y2:number}|null} rect
+ * @param {object} graph 屋根のある階の graph
+ * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1}>}
+ */
+export function roofEdgeInteriorContacts(rect, graph) {
+  const out = [];
+  if (!rect) return out;
+  for (const b of cellBoundsList(footprintCellKeys(graph), graph)) {
+    const lo = Math.max(b.x1, rect.x1);
+    const hi = Math.min(b.x2, rect.x2);
+    const loY = Math.max(b.y1, rect.y1);
+    const hiY = Math.min(b.y2, rect.y2);
+    if (hi > lo && Math.abs(b.y2 - rect.y1) <= EPS) out.push({ isVertical: false, coord: rect.y1, lo, hi, outward: -1 });
+    if (hi > lo && Math.abs(b.y1 - rect.y2) <= EPS) out.push({ isVertical: false, coord: rect.y2, lo, hi, outward: 1 });
+    if (hiY > loY && Math.abs(b.x2 - rect.x1) <= EPS) out.push({ isVertical: true, coord: rect.x1, lo: loY, hi: hiY, outward: -1 });
+    if (hiY > loY && Math.abs(b.x1 - rect.x2) <= EPS) out.push({ isVertical: true, coord: rect.x2, lo: loY, hi: hiY, outward: 1 });
+  }
+  return out;
+}
+
+/**
  * 下屋（屋根の Room）の「高い側」の選択欄の表示判断。形状の実効値（resolveRoofShape）が片流れで屋根範囲が
  * 矩形のときだけ visible。値は resolveRoofHighSide（明示値→屋内に接する最長の辺→長手に平行な小さい側）。
  * @param {{ roofSpec: { shape: string|null, highSide: string|null }, cells: Set<string> }} room

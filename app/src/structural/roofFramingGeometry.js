@@ -325,7 +325,8 @@ function buildOrthoField(rects, tolMm) {
   const hCand = [];
   for (let a = 0; a < xs.length; a++) for (let b = a + 1; b < xs.length; b++) hCand.push((xs[b] - xs[a]) / 2);
   for (let a = 0; a < ys.length; a++) for (let b = a + 1; b < ys.length; b++) hCand.push((ys[b] - ys[a]) / 2);
-  return { xs, ys, x0, xN, y0, yN, fits, S, hCand, indexOf };
+  const cellFilled = (i, j) => filled[j]?.[i] === true; // 圧縮格子のセル (i,j)＝xs[i]..xs[i+1]×ys[j]..ys[j+1] が P の内側か
+  return { xs, ys, x0, xN, y0, yN, fits, S, hCand, indexOf, cellFilled };
 }
 
 /** 棟木の段（軒からの距離）の候補。座標の対の差の半分のうち 0 より大きく S 以下のものを、tolMm 以内で寄せて昇順に返す。 */
@@ -473,6 +474,210 @@ export function roofHipDiagonals({ rect, rects = null, shape, tolMm }) {
   }
   if (rect.x2 - rect.x1 <= tolMm || rect.y2 - rect.y1 <= tolMm) return [];
   return orthogonalHipDiagonals({ rects: [rect], tolMm });
+}
+
+// ---- 屋根の外形線（軒先・けらば。ステップ D1） ----
+
+/**
+ * 屋根範囲 P（rects の和集合）の外周の辺を閉路ごとに返す（穴があれば穴も別の閉路）。圧縮格子（buildOrthoField）の
+ * 単位辺のうち内外が分かれるものを、内側が進行方向の右（y 下向きの画面で時計回り）になるようにつなぎ、同一直線上で
+ * 続く辺は1本に併合する。斜めに接する頂点（4辺が集まる）は内側へ曲がる辺を優先してつなぐ（どちらでも閉路にはなる）。
+ * 辺は {isVertical, coord, lo, hi, outward, dir}。isVertical は roofFramingLines の線と同じ意味、outward＝外側が
+ * coord の +方向(+1)か -方向(-1)か、dir＝閉路を進む向きが lo→hi(+1)か hi→lo(-1)か。閉路の辺は進行順。
+ * @param {object} p
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>} p.rects 屋根範囲のセル矩形（幅か高さが tolMm 以下は無視）
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {Array<Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1, dir:1|-1}>>}
+ * @throws {RangeError} tolMm が不正、rects が配列でない、座標が非有限か逆順
+ */
+export function orthogonalBoundaryLoops({ rects, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  const field = buildOrthoField(rects, tolMm);
+  if (!field) return [];
+  const { xs, ys, cellFilled } = field;
+  const nx = xs.length - 1;
+  const ny = ys.length - 1;
+  // 単位辺。from・to は格子点の添字 [i, j]
+  const units = [];
+  for (let k = 0; k <= ny; k++) { // 横の辺 y=ys[k]、x は xs[i]..xs[i+1]。内側が下なら外側は -y・進行は +x
+    for (let i = 0; i < nx; i++) {
+      const up = cellFilled(i, k - 1);
+      const down = cellFilled(i, k);
+      if (up === down) continue;
+      const outward = down ? -1 : 1;
+      const dir = -outward;
+      units.push({ isVertical: false, line: k, a: i, outward, dir, from: dir > 0 ? [i, k] : [i + 1, k], to: dir > 0 ? [i + 1, k] : [i, k] });
+    }
+  }
+  for (let k = 0; k <= nx; k++) { // 縦の辺 x=xs[k]、y は ys[j]..ys[j+1]。内側が右なら外側は -x・進行は -y
+    for (let j = 0; j < ny; j++) {
+      const left = cellFilled(k - 1, j);
+      const right = cellFilled(k, j);
+      if (left === right) continue;
+      const outward = right ? -1 : 1;
+      const dir = outward;
+      units.push({ isVertical: true, line: k, a: j, outward, dir, from: dir > 0 ? [k, j] : [k, j + 1], to: dir > 0 ? [k, j + 1] : [k, j] });
+    }
+  }
+  const keyOf = ([i, j]) => `${i},${j}`;
+  const outgoing = new Map();
+  for (const u of units) {
+    const key = keyOf(u.from);
+    if (!outgoing.has(key)) outgoing.set(key, []);
+    outgoing.get(key).push(u);
+  }
+  const travel = u => (u.isVertical ? [0, u.dir] : [u.dir, 0]);
+  const loops = [];
+  for (const u0 of units) {
+    if (u0.used) continue;
+    const raw = [];
+    let cur = u0;
+    for (;;) {
+      cur.used = true;
+      raw.push(cur);
+      if (keyOf(cur.to) === keyOf(u0.from)) break;
+      const cands = (outgoing.get(keyOf(cur.to)) ?? []).filter(c => !c.used);
+      if (cands.length === 0) break;
+      const [tx, ty] = travel(cur);
+      cur = cands.find(c => { const [cx, cy] = travel(c); return cx === -ty && cy === tx; }) ?? cands[0]; // 内側（進行方向の右）へ曲がる辺を優先
+    }
+    // 同一直線上で続く単位辺を1本にまとめる。先頭は「前の辺の続きでない」辺から始める
+    const continues = (p, e) => p.isVertical === e.isVertical && p.line === e.line && p.dir === e.dir;
+    let start = raw.findIndex((e, i) => !continues(raw[(i + raw.length - 1) % raw.length], e));
+    if (start < 0) start = 0;
+    const ordered = [...raw.slice(start), ...raw.slice(0, start)];
+    const runs = [];
+    for (const e of ordered) {
+      const last = runs[runs.length - 1];
+      if (last && continues(last[last.length - 1], e)) last.push(e);
+      else runs.push([e]);
+    }
+    loops.push(runs.map(run => {
+      const first = run[0];
+      const a = Math.min(...run.map(e => e.a));
+      const b = Math.max(...run.map(e => e.a)) + 1;
+      const along = first.isVertical ? ys : xs;
+      const across = first.isVertical ? xs : ys;
+      return { isVertical: first.isVertical, coord: across[first.line], lo: along[a], hi: along[b], outward: first.outward, dir: first.dir };
+    }));
+  }
+  return loops;
+}
+
+/**
+ * 辺が軒（eave）かけらば（gable）か。寄棟は全辺が軒。切妻は棟木に平行な辺（棟木が縦なら縦の辺）が軒で、棟木の端の側
+ * （棟木と直交する辺）がけらば。片流れは高い側とその反対の辺（highSide が top/bottom なら横の辺、left/right なら縦の辺）が軒で、
+ * 残る2辺がけらば。陸屋根・棟違い・未知の形状は小屋組を持たない（呼び出し側が region にしない）ので RangeError。
+ * @param {object} p
+ * @param {string} p.shape RoofShape の値
+ * @param {boolean|null} [p.ridgeIsVertical] 切妻のときだけ使う（boolean 必須）
+ * @param {string|null} [p.highSide] 片流れのときだけ使う（RoofHighSide の値必須）
+ * @param {boolean} p.isVertical 辺の向き（x=coord 一定＝true）
+ * @returns {'eave'|'gable'}
+ * @throws {RangeError} 形状が未知・小屋組を持たない、切妻の ridgeIsVertical が boolean でない、片流れの highSide が不正
+ */
+export function roofEdgeKind({ shape, ridgeIsVertical = null, highSide = null, isVertical }) {
+  if (shape === RoofShape.HIP) return 'eave';
+  if (shape === RoofShape.GABLE) {
+    if (typeof ridgeIsVertical !== 'boolean') throw new RangeError(`切妻の ridgeIsVertical は boolean でなければなりません: ${ridgeIsVertical}`);
+    return isVertical === ridgeIsVertical ? 'eave' : 'gable';
+  }
+  if (shape === RoofShape.MONO) {
+    if (!HIGH_SIDES.includes(highSide)) throw new RangeError(`片流れの highSide が不正です: ${highSide}`);
+    return isVertical === (highSide === 'left' || highSide === 'right') ? 'eave' : 'gable';
+  }
+  throw new RangeError(`外形線を持たない形状です: ${shape}`);
+}
+
+/** 辺 edge を、出幅 0 の区間 zones（同じ向き・同じ直線・同じ外側の区間）で分けた部分（昇順）。base は区間の外の出幅。 */
+function splitEdgeByZones(edge, base, zones, tolMm) {
+  const hit = zones
+    .filter(z => z.isVertical === edge.isVertical && Math.abs(z.coord - edge.coord) <= tolMm && z.outward === edge.outward)
+    .map(z => [Math.max(z.lo, edge.lo), Math.min(z.hi, edge.hi)])
+    .filter(([a, b]) => b - a > tolMm)
+    .sort((p, q) => p[0] - q[0]);
+  const merged = [];
+  for (const [a, b] of hit) {
+    const last = merged[merged.length - 1];
+    if (last && a <= last[1] + tolMm) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+  const parts = [];
+  let pos = edge.lo;
+  for (const [a0, b0] of merged) {
+    const a = a0 - pos <= tolMm ? pos : a0;
+    const b = edge.hi - b0 <= tolMm ? edge.hi : b0;
+    if (a > pos) parts.push({ lo: pos, hi: a, overhangMm: base });
+    parts.push({ lo: a, hi: b, overhangMm: 0 });
+    pos = b;
+  }
+  if (edge.hi > pos) parts.push({ lo: pos, hi: edge.hi, overhangMm: base });
+  const joined = []; // 隣り合う同じ出幅の部分は1つにする（出幅 0 の屋根・全体が接する辺で段差を作らない）
+  for (const p of parts) {
+    const last = joined[joined.length - 1];
+    if (last && last.overhangMm === p.overhangMm) last.hi = p.hi;
+    else joined.push({ ...p });
+  }
+  return joined;
+}
+
+/**
+ * 屋根の外形線（軒先・けらば。ステップ D1）。屋根範囲（rects。矩形は [rect]）の外周の辺を、種別（roofEdgeKind）ごとの出幅
+ * だけ外へ平行移動した閉じた線を返す。基準は屋根範囲の辺（通り芯）から水平に測る。辺のうち zeroZones に含まれる部分
+ * （下屋の辺が屋内に接する部分）は出幅 0（壁に当たる）。辺の途中で出幅が変わるときは、その辺を部分に分け、段差の小辺を
+ * 挿入する（辺ごとではなく部分ごと）。隣り合う辺は直交するので、移動した2本の線の交点が頂点（隅木・谷木に当たる角も
+ * 同じ式）。穴があれば穴の辺も外形（穴の内側＝外側）として同じ規則で移動する（穴の外形線は穴の中へ縮む）。
+ * 出幅が辺の長さより大きい凹み（入隅の極小の辺など）での線の反転は扱わない（実データで起きない前提）。
+ * @param {object} p
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>} p.rects 屋根範囲のセル矩形
+ * @param {string} p.shape RoofShape の値（roofEdgeKind と同じ）
+ * @param {boolean|null} [p.ridgeIsVertical]
+ * @param {string|null} [p.highSide]
+ * @param {number} p.eaveOverhangMm 軒の出幅（>=0）
+ * @param {number} p.gableOverhangMm 妻側（けらば）の出幅（>=0）
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1}>} [p.zeroZones] 出幅 0 の区間
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {{edges: Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1, overhangMm:number}>, outline: Array<{points:number[]}>}}
+ *   edges＝辺の部分（閉路の進行順。出幅つき）、outline＝閉路ごとの頂点列（points は x,y の並び）
+ * @throws {RangeError} 出幅が負・非有限、形状・向きの指定が不正（roofEdgeKind）、rects が不正（orthogonalBoundaryLoops）
+ */
+export function roofOutline({ rects, shape, ridgeIsVertical = null, highSide = null, eaveOverhangMm, gableOverhangMm, zeroZones = [], tolMm }) {
+  requireNonNegative(eaveOverhangMm, 'eaveOverhangMm');
+  requireNonNegative(gableOverhangMm, 'gableOverhangMm');
+  const loops = orthogonalBoundaryLoops({ rects, tolMm });
+  const partLoops = loops.map(loop => loop.flatMap(edge => {
+    const kind = roofEdgeKind({ shape, ridgeIsVertical, highSide, isVertical: edge.isVertical });
+    const parts = splitEdgeByZones(edge, kind === 'eave' ? eaveOverhangMm : gableOverhangMm, zeroZones, tolMm);
+    if (edge.dir < 0) parts.reverse();
+    return parts.map(p => ({ isVertical: edge.isVertical, coord: edge.coord, lo: p.lo, hi: p.hi, outward: edge.outward, dir: edge.dir, overhangMm: p.overhangMm }));
+  }));
+  const shifted = e => e.coord + e.outward * e.overhangMm;
+  const outline = partLoops.map(parts => {
+    const points = [];
+    parts.forEach((p, i) => {
+      const q = parts[(i + 1) % parts.length];
+      if (p.isVertical !== q.isVertical) { // 直交する辺: 2本の線の交点
+        const v = p.isVertical ? p : q;
+        const h = p.isVertical ? q : p;
+        points.push(shifted(v), shifted(h));
+      } else if (Math.abs(shifted(p) - shifted(q)) > GEOM_EPS) { // 同じ直線上で出幅が変わる: 段差の小辺
+        const b = p.dir > 0 ? p.hi : p.lo;
+        if (p.isVertical) points.push(shifted(p), b, shifted(q), b);
+        else points.push(b, shifted(p), b, shifted(q));
+      }
+    });
+    // 細い穴が出幅でつぶれる（両側の外形線が同じ位置で出会う）と同じ点が続くので、連続する同一点（閉路の先頭と末尾を含む）は1つにする。
+    const dedup = [];
+    for (let i = 0; i < points.length; i += 2) {
+      const n = dedup.length;
+      if (n >= 2 && Math.abs(dedup[n - 2] - points[i]) <= GEOM_EPS && Math.abs(dedup[n - 1] - points[i + 1]) <= GEOM_EPS) continue;
+      dedup.push(points[i], points[i + 1]);
+    }
+    while (dedup.length >= 4 && Math.abs(dedup[0] - dedup[dedup.length - 2]) <= GEOM_EPS && Math.abs(dedup[1] - dedup[dedup.length - 1]) <= GEOM_EPS) dedup.splice(-2, 2);
+    return { points: dedup };
+  });
+  const edges = partLoops.flat().map(e => ({ isVertical: e.isVertical, coord: e.coord, lo: e.lo, hi: e.hi, outward: e.outward, overhangMm: e.overhangMm }));
+  return { edges, outline };
 }
 
 // ---- 寄棟の小屋梁のための「翼」の分け方（ステップ C2e-3a。呼び出し元は woodRoofFraming.js＝C2e-3b） ----

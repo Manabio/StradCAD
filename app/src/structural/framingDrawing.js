@@ -264,12 +264,14 @@ function requireWidth(v, name) {
  *   - 棟木: 軸から ±ridgeWidthMm/2 の平行線2本（kind:'ridge'）
  *   - 母屋: 軸上に1本（kind:'purlin'）
  *   - 隅木・谷木: 上端まで斜めに1本（kind:'hip'|'valley'。寄棟だけ・束なし。points は軒側→上端の4値）
+ *   - 外形線: 屋根の外形（軒先・けらば）の閉じた折れ線を閉路ごとに1つ（kind:'outline'。points は x,y の並び・closed:true。
+ *     細い実線。region.outline が無ければ出さない。束の対象にしない）
  *   - 束: 母屋・棟木の線と hostBeams の全交点に半径 purlinWidthMm/2 の円（kind:'strut'）
- * 並びは region ごとに 棟木→母屋→隅木→谷木→束。描画側は kind で線と束を分けて、線→束の順に重ねる。
+ * 並びは region ごとに 棟木→母屋→隅木→谷木→外形線→束。描画側は kind で一点鎖線・束・外形線を分けて重ねる。
  * @param {object} drawing rulesFor(...).drawing
  * @param {string} lod LodLevel
  * @param {object} p
- * @param {Array<{key:string, rect:object|null, rects?:object[], shape:string, ridgeIsVertical:boolean|null, highSide:string|null}>} p.regions roofFramingRegions.js の戻り値
+ * @param {Array<{key:string, rect:object|null, rects?:object[], shape:string, ridgeIsVertical:boolean|null, highSide:string|null, outline?:Array<{points:number[]}>}>} p.regions roofFramingRegions.js の戻り値
  *   （rect=null の region は矩形でない寄棟で、rects＝セル矩形から棟木・母屋を導く）
  * @param {Array<{isVertical:boolean, axis:number, lo:number, hi:number}>} p.hostBeams roofFramingHostMembers の戻り値
  * @param {number} p.ridgeWidthMm
@@ -277,7 +279,7 @@ function requireWidth(v, name) {
  * @param {number} p.purlinPitchMm 母屋のピッチ
  * @param {number[]} p.purlinStartOffsetsMm 母屋の1本目の位置（棟木から）の候補
  * @param {number} p.tolMm
- * @returns {Array<{kind:'ridge'|'purlin'|'hip'|'valley', key:string, points:number[]}|{kind:'strut', key:string, x:number, y:number, radius:number}>}
+ * @returns {Array<{kind:'ridge'|'purlin'|'hip'|'valley', key:string, points:number[]}|{kind:'outline', key:string, points:number[], closed:true}|{kind:'strut', key:string, x:number, y:number, radius:number}>}
  * @throws {RangeError} 幅が不正（roofFramingLines・roofHipDiagonals・roofStrutPoints の入力検査もそのまま伝わる）
  */
 export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeWidthMm, purlinWidthMm, purlinPitchMm, purlinStartOffsetsMm, tolMm }) {
@@ -306,6 +308,10 @@ export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeW
     for (const d of roofHipDiagonals({ rect: region.rect, rects: region.rects, shape: region.shape, tolMm })) {
       out.push({ kind: d.kind, key: `${region.key}:${d.kind}:${counts[d.kind]++}`, points: [d.x1, d.y1, d.x2, d.y2] });
     }
+    // 屋根の外形線（軒先・けらば。region.outline＝閉路ごとの点列。D1）。閉じた細い実線。束の対象にしない
+    (region.outline ?? []).forEach((loop, i) => {
+      out.push({ kind: 'outline', key: `${region.key}:outline:${i}`, points: loop.points, closed: true });
+    });
     roofStrutPoints([...ridges, ...purlins], hostBeams ?? [], tolMm).forEach((p, i) => {
       out.push({ kind: 'strut', key: `${region.key}:strut:${i}`, x: p.x, y: p.y, radius: purlinWidthMm / 2 });
     });

@@ -323,8 +323,10 @@ test('【不変条件・C3a】StructuralLayer.jsx: 小屋組は roofFramingFigur
     assert.ok(!forbidden.test(code), `StructuralLayer.jsx の本体に ${forbidden} がある（判断を jsx に持ち込む回帰）`);
   }
   // 戻り値は kind で線（棟木・母屋）と束に分けて map するだけ
-  assert.ok(new RegExp(`${v}\\.filter\\(p => p\\.kind !== 'strut'\\)\\.map\\(`).test(src), `${v}.filter(p => p.kind !== 'strut').map( が見つからない（線の描画）`);
+  // D1: 屋根の外形線（kind:'outline'）が増えたので、一点鎖線の filter は outline を除き、外形線の map が別にある
+  assert.ok(new RegExp(`${v}\\.filter\\(p => p\\.kind !== 'strut' && p\\.kind !== 'outline'\\)\\.map\\(`).test(src), `${v}.filter(p => p.kind !== 'strut' && p.kind !== 'outline').map( が見つからない（線の描画）`);
   assert.ok(new RegExp(`${v}\\.filter\\(p => p\\.kind === 'strut'\\)\\.map\\(`).test(src), `${v}.filter(p => p.kind === 'strut').map( が見つからない（束の描画）`);
+  assert.ok(new RegExp(`${v}\\.filter\\(p => p\\.kind === 'outline'\\)\\.map\\(`).test(src), `${v}.filter(p => p.kind === 'outline').map( が見つからない（外形線の描画）`);
   // 入力は主題階の rules・LOD・主題階/最上階の graph・project（屋根専用平面か否かは composition.subjectPlane から）
   // 引数は コメント行・行末コメントを除いた本体 から切り出し、各行を1行まるごとで固定する
   // （コメントに元の式を残しただけの差し替えを緑にしない）。
@@ -347,8 +349,10 @@ test('【不変条件・C3a】StructuralLayer.jsx: 小屋組ブロックの開�
   for (const expected of [
     '{roofFramingPrims.length > 0 && (',
     '<Group name="roof-framing" {...groupPropsForStyle(beam?.spec.style)}>',
-    "{roofFramingPrims.filter(p => p.kind !== 'strut').map(p => (",
+    // D1: 屋根の外形線（kind:'outline'）は一点鎖線の群から外し、細い実線の別の map で描く（書き換え: 一点鎖線の filter に outline 除外を追加）
+    "{roofFramingPrims.filter(p => p.kind !== 'strut' && p.kind !== 'outline').map(p => (",
     "{roofFramingPrims.filter(p => p.kind === 'strut').map(p => (",
+    "{roofFramingPrims.filter(p => p.kind === 'outline').map(p => (",
   ]) {
     const hits = lines.filter(l => l === expected).length;
     assert.equal(hits, 1, `本体の行が無い・改変・重複している（${hits}件）: ${expected}`);
@@ -386,7 +390,28 @@ test('【不変条件・C3a】StructuralLayer.jsx: z-order は 梁の帯・非�
   }
   assert.ok(beamBody < roof && depthMarks < roof && walls < roof, '小屋組が梁の帯・標記・壁より前にある');
   assert.ok(roof < selection, '小屋組が選択ハイライトより後ろにある');
-  const lineIdx = src.indexOf(".filter(p => p.kind !== 'strut')");
+  const lineIdx = src.indexOf(".filter(p => p.kind !== 'strut' && p.kind !== 'outline')");
   const strutIdx = src.indexOf(".filter(p => p.kind === 'strut')");
+  const outlineIdx = src.indexOf(".filter(p => p.kind === 'outline')");
   assert.ok(lineIdx > roof && strutIdx > lineIdx, '線（棟木・母屋）の後に束を描いていない');
+  assert.ok(outlineIdx > strutIdx, '束の後に屋根の外形線を描いていない');
+});
+
+test('【不変条件・D1】StructuralLayer.jsx: 屋根の外形線の Line は閉じた細い実線（closed・lineWeightsPx.thin・strokeScaleEnabled={false}・dash なし）・listening={false}・色は colorOf 経由', () => {
+  const src = readSource();
+  const m = /<Group name="roof-framing"[\s\S]*?\n {6}\)\}/.exec(src);
+  assert.ok(m, '<Group name="roof-framing"> のブロックが見つからない');
+  const block = codeLines(m[0]).join('\n');
+  const mapStart = block.indexOf("{roofFramingPrims.filter(p => p.kind === 'outline').map(p => (");
+  assert.ok(mapStart >= 0, '外形線の map が無い');
+  const line = /<Line[\s\S]*?\/>/.exec(block.slice(mapStart));
+  assert.ok(line, '外形線の <Line が無い');
+  const el = line[0];
+  assert.ok(/^\s*closed$/m.test(el), '外形線の Line が closed でない');
+  assert.ok(/points=\{p\.points\}/.test(el), '外形線の points が p.points でない');
+  assert.ok(/strokeWidth=\{viewport\.lineWeightsPx\.thin\}/.test(el), '外形線の線幅が lineWeightsPx.thin（細線）でない');
+  assert.ok(/strokeScaleEnabled=\{false\}/.test(el), '外形線が strokeScaleEnabled={false}（画面px固定）でない');
+  assert.ok(/listening=\{false\}/.test(el), '外形線が listening={false} でない');
+  assert.ok(/colorOf\(figureRules\.baseMaterial\)/.test(el), '外形線の色が colorOf 経由でない');
+  assert.ok(!/dash=/.test(el), '外形線が実線でない（dash がある）');
 });

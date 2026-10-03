@@ -314,6 +314,36 @@ test('roofFramingPrimitives: 切妻（moku4 最上階）は棟木が軸±60の2�
   assert.equal(new Set(prims.map(p => p.key)).size, prims.length, 'key は一意');
 });
 
+test('【D1】roofFramingPrimitives: region.outline は閉路ごとに kind:outline（key＝region:outline:i・closed）。切妻の棟木・母屋・束の数は不変・束は外形線の対象外', () => {
+  const hostBeams = [{ isVertical: false, axis: -3640, lo: 0, hi: 7280 }];
+  const outline = [{ points: [7735, -13069, 7735, -3185, -455, -3185, -455, -13069] }];
+  const without = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ hostBeams }));
+  const withOutline = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...gableRegion, outline }], hostBeams }));
+  assert.deepEqual(kindOf(withOutline, 'outline'), [{ kind: 'outline', key: 'main:outline:0', points: outline[0].points, closed: true }]);
+  assert.deepEqual(withOutline.filter(p => p.kind !== 'outline'), without, '外形線以外（棟木・母屋・束）は不変');
+  assert.deepEqual(['ridge', 'purlin', 'strut'].map(k => kindOf(withOutline, k).length), ['ridge', 'purlin', 'strut'].map(k => kindOf(without, k).length));
+  assert.ok(kindOf(withOutline, 'strut').length > 0, '前提: 束が立つ host 梁がある');
+  assert.ok(withOutline.findIndex(p => p.kind === 'outline') < withOutline.findIndex(p => p.kind === 'strut'), '外形線は束の前（region ごとの並び）');
+});
+
+test('【D1】roofFramingPrimitives: 閉路が複数（外周＋穴）なら outline:0・outline:1。寄棟・片流れも出る。key は一意', () => {
+  const rings = [{ points: [3100, -100, 3100, 3100, -100, 3100, -100, -100] }, { points: [1100, 1100, 1100, 1900, 1900, 1900, 1900, 1100] }];
+  const hip = { key: 'main', rect: null, rects: [{ x1: 0, y1: 0, x2: 3000, y2: 1000 }], shape: 'hip', ridgeIsVertical: null, highSide: null, outline: rings };
+  const mono = { key: 'lean:r1', rect: { x1: 0, y1: 0, x2: 2000, y2: 1500 }, shape: 'mono', ridgeIsVertical: false, highSide: 'left', outline: [rings[0]] };
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [hip, mono] }));
+  assert.deepEqual(kindOf(prims, 'outline').map(p => p.key), ['main:outline:0', 'main:outline:1', 'lean:r1:outline:0']);
+  assert.equal(new Set(prims.map(p => p.key)).size, prims.length, 'key は一意');
+});
+
+test('【D1・失敗系】roofFramingPrimitives: outline が無い・空の region は外形線を出さない。略図・非在来は outline があっても空', () => {
+  for (const region of [gableRegion, { ...gableRegion, outline: [] }, { ...gableRegion, outline: undefined }]) {
+    assert.equal(kindOf(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] })), 'outline').length, 0);
+  }
+  const region = { ...gableRegion, outline: [{ points: [0, 0, 1, 0, 1, 1, 0, 1] }] };
+  assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.SCHEMATIC, baseArgs({ regions: [region] })), []);
+  assert.deepEqual(roofFramingPrimitives(rulesFor('S造').drawing, LodLevel.STANDARD, baseArgs({ regions: [region] })), []);
+});
+
 test('roofFramingPrimitives: 束は母屋・棟木と host 梁の全交点に半径45（母屋90角の半分）で出る（東西の軒桁 y=-3640・-12614 で 7×2=14 か所）', () => {
   const hostBeams = [
     { isVertical: false, axis: -3640, lo: 0, hi: 7280 },
