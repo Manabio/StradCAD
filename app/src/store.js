@@ -23,7 +23,7 @@ import {
   serializeGraph, restoreGraph,
 } from './graphSnapshot.js';
 import { reconcilePlanes } from './floorOps.js';
-import { clearLocalAutosave } from './storage/localSnapshot.js';
+import { clearLocalAutosave, setOpenedFileName, clearOpenedFileName } from './storage/localSnapshot.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { ERR_CATALOG_DUPLICATE } from './error.js';
 import { CatalogKind, kindDef, KIND_LABELS } from './catalog/catalogKinds.js';
@@ -880,8 +880,11 @@ export async function exportDocument() {
  * リロード後は既に正しい束が読まれるため、次回のloadCatalogOverlaysFromIDBでも
  * migrateBundleは無例外＝no-opになり通知も出ない）。doc.migrated 自体は戻り値として保持して
  * いる（documentFile.js側。将来リロードをまたいで通知を渡す口が要る場合の入口として残す）。
+ *
+ * fileName（読込みしたファイル名）があれば読込みファイル名として保存し、無ければ前の文書の名前を
+ * 消す（文書を置き換えたのに前の名前が残らないように）。検証（parseDocumentEnvelope）が通った後にだけ触る。
  */
-export async function importDocument(envelope) {
+export async function importDocument(envelope, fileName = null) {
   const doc = parseDocumentEnvelope(envelope);
   await clearAllStores();
   for (const { planeId, bytes } of doc.floors) await saveSavedFloor(planeId, bytes);
@@ -898,12 +901,13 @@ export async function importDocument(envelope) {
   // （saveToIDB の⑤と同じ理由）。
   if (doc.bootPlaneId) localStorage.setItem(PLANE_ID_KEY, doc.bootPlaneId);
   localStorage.setItem(SAVED_FLAG_KEY, '1');
+  if (fileName) setOpenedFileName(fileName); else clearOpenedFileName();
   clearDirty();
 }
 
 /**
  * すべてのIndexedDBストア（floors/projects/savedFloors。catalogsストア＝ユーザーカタログ
- * ライブラリは対象外）と、文書系のlocalStorageキー（保存フラグ・ブートplaneId・projectId）、
+ * ライブラリは対象外）と、文書系のlocalStorageキー（保存フラグ・ブートplaneId・projectId・読込みファイル名）、
  * および旧「書出し」（廃止済みlocalStorage自動保存）の残骸を消去する。「新規（全消去）」メニュー専用。
  * 画面校正（strad_pxPerMmX/Y 等、viewport.js）は端末設定のため対象外——文書ではなく端末に紐づく。
  * in-memory再初期化は行わない（呼び出し側が location.reload() で再起動すること。module singleton・
@@ -919,6 +923,7 @@ export async function resetAll() {
   localStorage.removeItem(SAVED_FLAG_KEY);
   localStorage.removeItem(PLANE_ID_KEY);
   localStorage.removeItem(PROJECT_ID_KEY);
+  clearOpenedFileName();
   clearLocalAutosave();
   clearDirty();
   clearOverlays();

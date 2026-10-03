@@ -66,7 +66,7 @@ import { refreshWallsAllFloors } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
-import { parseOpenedFileBytes, downloadDocumentFile, defaultDocumentFileName } from './storage/localSnapshot.js';
+import { parseOpenedFileBytes, downloadDocumentFile, defaultDocumentFileName, getOpenedFileName, saveNameFromOpenedFileName } from './storage/localSnapshot.js';
 import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { isDocumentEnvelope } from './storage/documentFile.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
@@ -151,6 +151,7 @@ const App = observer(() => {
   const [showCalibration, setShowCalibration] = useState(false);
   const [showSiteDialog,  setShowSiteDialog]  = useState(false);
   const [saveDialogDefaultName, setSaveDialogDefaultName] = useState(null); // 非null=保存ファイル名ダイアログ表示中
+  const [openedFileName] = useState(getOpenedFileName); // 読込みしたファイル名（読込みは reload を伴うので起動時に1回読めばよい）
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
   const [CatalogMaintenancePanelComp, setCatalogMaintenancePanelComp] = useState(null); // 動的import済みのパネル本体（null=未ロード/非表示）
   const [CatalogResolveDialogComp, setCatalogResolveDialogComp] = useState(null); // 指示UI（ステップ6-3）ダイアログ本体（動的import済み。null=未ロード/非表示）
@@ -1712,7 +1713,7 @@ const App = observer(() => {
     }
     if (id === 'save') {
       // まずファイル名指定ダイアログを開く（確定時に handleSaveConfirm が保存を実行する）
-      setSaveDialogDefaultName(defaultDocumentFileName());
+      setSaveDialogDefaultName(openedFileName ? saveNameFromOpenedFileName(openedFileName) : defaultDocumentFileName());
       return;
     }
     if (id === 'settings') {
@@ -1744,11 +1745,11 @@ const App = observer(() => {
 
   // 文書ファイル読込みの確定実行（handleFileOpenの確認ダイアログonSelectから呼ぶ）。
   // reloadでページ自体を作り直すため、関門はreloadまで閉じる必要がない。
-  async function runDocumentImport(parsed) {
+  async function runDocumentImport(parsed, fileName) {
     beginUiTransition();
     await runBusy('読込み', async () => {
       try {
-        await importDocument(parsed);
+        await importDocument(parsed, fileName);
         window.location.reload();
       } catch (e) {
         console.error(e);
@@ -1799,7 +1800,7 @@ const App = observer(() => {
             if (v !== 'ok') return;
             // onSelectはConfirmDialogのコールバックでguardUiを経由しないが、runDocumentImport自身が
             // 自前でcatch済みのためrejectしない。
-            void runDocumentImport(parsed);
+            void runDocumentImport(parsed, file.name);
           },
         });
         return;
@@ -2272,6 +2273,15 @@ const App = observer(() => {
         position: 'fixed', top: 0, right: 6,
         height: TOP_BAR, display: 'flex', alignItems: 'center', zIndex: 210,
       }}>
+        {openedFileName && (
+          <span
+            title={openedFileName}
+            style={{
+              maxWidth: 200, marginRight: 6, fontSize: 13, color: '#475569',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >{openedFileName}</span>
+        )}
         <HamburgerMenu onSelect={guardUi(handleHamburgerSelect)} />
       </div>
 

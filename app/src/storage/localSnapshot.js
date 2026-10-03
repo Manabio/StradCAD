@@ -12,6 +12,28 @@ export function clearLocalAutosave() {
   localStorage.removeItem(LEGACY_AUTOSAVE_KEY);
 }
 
+// 「読込み」した文書ファイル名（File.name そのまま・拡張子付き）の localStorage キー。読込みは
+// location.reload() を伴うため reload をまたいで残す。キー文字列の唯一の所有者はこのモジュール。
+const OPENED_FILE_NAME_KEY = 'strad-opened-file-name';
+
+// 読込みした文書ファイル名。未設定なら null。
+export function getOpenedFileName() {
+  return localStorage.getItem(OPENED_FILE_NAME_KEY);
+}
+
+export function setOpenedFileName(name) {
+  localStorage.setItem(OPENED_FILE_NAME_KEY, name);
+}
+
+export function clearOpenedFileName() {
+  localStorage.removeItem(OPENED_FILE_NAME_KEY);
+}
+
+// 読込みしたファイル名から保存ダイアログ用の名前（拡張子なし）を得る。末尾の .stq（大小無視）だけを外す。
+export function saveNameFromOpenedFileName(name) {
+  return name.replace(/\.stq$/i, '');
+}
+
 // 既定の文書ファイル名（拡張子なし・保存日時入り）。保存ダイアログの初期値に使う。
 export function defaultDocumentFileName() {
   const d = new Date();
