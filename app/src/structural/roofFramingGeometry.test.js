@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   roofFramingLines, roofRidgeIsVertical, koyaBeamPositions, roofStrutPoints, purlinLayoutFromRidge, orthogonalHipLines,
-  orthogonalHipDiagonals, roofHipDiagonals,
+  orthogonalHipDiagonals, roofHipDiagonals, orthogonalHipApexes, hipFramingWings, orthogonalChord,
 } from './roofFramingGeometry.js';
 import { RoofShape } from '../core/constants.js';
 
@@ -738,4 +738,221 @@ test('【失敗系】roofHipDiagonals: rect=null で rects が null・undefined�
   assert.throws(() => hipDiag({ rect: rc(5000, 0, 0, 5000) }), RangeError);
   assert.throws(() => hipDiag({ rect: rc(0, 5000, 5000, 0) }), RangeError);
   assert.throws(() => hipDiag({ rect: rc(0, 0, 5000, 5000), tolMm: -1 }), RangeError);
+});
+
+// ---- orthogonalHipApexes / orthogonalChord / hipFramingWings（寄棟の翼。ステップ C2e-3a）----
+// 期待値は手計算（設計書 c2e3 の検算）。(a) L字 (b) T字 (c) 端数 (d) 正方形の翼 (e) 幅 910 の翼 (f) 中庭 (h) 9100x3640 の右上を欠いた形。
+
+const T_SHAPE = [rc(0, 0, 10920, 3640), rc(3640, 3640, 7280, 9100)];
+const C_SHAPE = [rc(0, 0, 3640, 8974), rc(0, 4487, 7280, 8974)];
+const D_SHAPE = [rc(0, 0, 7280, 7280), rc(7280, 3640, 9100, 7280)];
+const E_SHAPE = [rc(0, 0, 7280, 3640), rc(0, 3640, 910, 5460)];
+const F_SHAPE = [rc(0, 0, 9100, 3640), rc(0, 5460, 9100, 9100), rc(0, 3640, 3640, 5460), rc(5460, 3640, 9100, 5460)];
+const H_SHAPE = [rc(0, 0, 8645, 3640), rc(8645, 455, 9100, 3640)];
+const ALL_SHAPES = { a: L_SHAPE, b: T_SHAPE, c: C_SHAPE, d: D_SHAPE, e: E_SHAPE, f: F_SHAPE, h: H_SHAPE, rect: [rc(0, 0, 9100, 7280)] };
+
+// Portion（levelMm を渡さなければ付けない。lineLo/lineHi は省略時 lo/hi）
+const P = (isVertical, coord, lo, hi, levelMm, o = {}) => ({
+  isVertical, coord, lo, hi, ...(levelMm === undefined ? {} : { levelMm }),
+  lineLo: o.lineLo ?? lo, lineHi: o.lineHi ?? hi, extendLo: o.extendLo ?? false, extendHi: o.extendHi ?? false,
+});
+const wingsOf = (rects, extra = {}) => hipFramingWings({ rects, ...ortho(rects), tolMm: TOL, ...extra });
+const hipRect = r => {
+  const { ridges, purlins } = lines(r, RoofShape.HIP);
+  return hipFramingWings({ rect: r, ridges, purlins, tolMm: TOL });
+};
+
+test('orthogonalHipApexes: 正方形 5460 は中心1点。矩形 9100x7280 と (a)(b)(c)(e)(f) は無し。(d) は正方形の中心', () => {
+  const apexes = rects => orthogonalHipApexes({ rects, tolMm: TOL });
+  assert.deepEqual(apexes([rc(0, 0, 5460, 5460)]), [{ x: 2730, y: 2730, levelMm: 2730 }]);
+  assert.deepEqual(apexes([rc(0, 0, 9100, 7280)]), []);
+  assert.deepEqual(apexes(D_SHAPE), [{ x: 3640, y: 3640, levelMm: 3640 }]);
+  for (const k of ['a', 'b', 'c', 'e', 'f', 'h']) assert.deepEqual(apexes(ALL_SHAPES[k]), [], k);
+});
+
+test('【失敗系】orthogonalHipApexes: 空は []。不正入力は RangeError', () => {
+  assert.deepEqual(orthogonalHipApexes({ rects: [], tolMm: TOL }), []);
+  assert.throws(() => orthogonalHipApexes({ rects: [rc(0, 0, NaN, 5000)], tolMm: TOL }), RangeError);
+  assert.throws(() => orthogonalHipApexes({ rects: [rc(5000, 0, 0, 5000)], tolMm: TOL }), RangeError);
+  assert.throws(() => orthogonalHipApexes({ rects: null, tolMm: TOL }), RangeError);
+  assert.throws(() => orthogonalHipApexes({ rects: L_SHAPE, tolMm: -1 }), RangeError);
+});
+
+test('orthogonalChord: (a) L字・(f) 中庭の弦（併合・隙間・範囲外）', () => {
+  const chord = (rects, isVertical, coord, lo, hi) => orthogonalChord({ rects, isVertical, coord, lo, hi, tolMm: TOL });
+  assert.deepEqual(chord(L_SHAPE, true, 3640, 3640, 7280), { lo: 0, hi: 7280 });
+  assert.deepEqual(chord(L_SHAPE, false, 4550, 0, 5460), { lo: 0, hi: 9100 });
+  assert.deepEqual(chord(L_SHAPE, true, 7280, 3640, 7280), { lo: 3640, hi: 7280 });
+  assert.equal(chord(L_SHAPE, true, 7280, 0, 3640), null);
+  assert.deepEqual(chord(F_SHAPE, true, 4550, 0, 3640), { lo: 0, hi: 3640 });
+  assert.equal(chord(F_SHAPE, true, 4550, 0, 9100), null, '中庭をまたぐ区間は弦にならない');
+  assert.equal(chord(L_SHAPE, true, 99999, 0, 10), null);
+});
+
+test('【失敗系】orthogonalChord: 不正入力は RangeError', () => {
+  const base = { rects: L_SHAPE, isVertical: true, coord: 3640, lo: 0, hi: 100, tolMm: TOL };
+  assert.throws(() => orthogonalChord({ ...base, coord: NaN }), RangeError);
+  assert.throws(() => orthogonalChord({ ...base, lo: NaN }), RangeError);
+  assert.throws(() => orthogonalChord({ ...base, lo: 200 }), RangeError);
+  assert.throws(() => orthogonalChord({ ...base, rects: null }), RangeError);
+  assert.throws(() => orthogonalChord({ ...base, rects: [rc(0, 0, NaN, 1)] }), RangeError);
+  assert.throws(() => orthogonalChord({ ...base, tolMm: -1 }), RangeError);
+});
+
+test('hipFramingWings 矩形 5460x9100: 翼1つ（桁行＝縦4本、seeds は棟木の両端、妻側は中心で分ける）', () => {
+  const r = rc(0, 0, 5460, 9100);
+  const { ridges } = lines(r, RoofShape.HIP);
+  assert.deepEqual(hipRect(r), {
+    wings: [{
+      ketaVertical: true, rect: r, levelMm: 2730, ridge: ridges[0], ridgeCross: 2730, center: 4550, seeds: [2730, 6370],
+      keta: [P(true, 910, 910, 8190), P(true, 1820, 1820, 7280), P(true, 3640, 1820, 7280), P(true, 4550, 910, 8190)],
+      gableLo: [P(false, 910, 910, 4550), P(false, 1820, 1820, 3640)],
+      gableHi: [P(false, 7280, 1820, 3640), P(false, 8190, 910, 4550)],
+    }],
+    unassigned: [],
+  });
+});
+
+test('hipFramingWings 矩形・正方形 5460: 桁行は横・seeds は中心の1点・棟木なし', () => {
+  const r = rc(0, 0, 5460, 5460);
+  assert.deepEqual(hipRect(r), {
+    wings: [{
+      ketaVertical: false, rect: r, levelMm: 2730, ridge: null, ridgeCross: 2730, center: 2730, seeds: [2730],
+      keta: [P(false, 910, 910, 4550), P(false, 1820, 1820, 3640), P(false, 3640, 1820, 3640), P(false, 4550, 910, 4550)],
+      gableLo: [P(true, 910, 910, 4550), P(true, 1820, 1820, 3640)],
+      gableHi: [P(true, 3640, 1820, 3640), P(true, 4550, 910, 4550)],
+    }],
+    unassigned: [],
+  });
+});
+
+test('hipFramingWings (a) L字: W1（x=2730 の主たる翼）と W2（y=5460）。接合の切れ目は W2 の extendLo', () => {
+  const { ridges } = ortho(L_SHAPE);
+  const [rh, rv] = [ridges.find(l => !l.isVertical), ridges.find(l => l.isVertical)];
+  assert.deepEqual(wingsOf(L_SHAPE), {
+    wings: [
+      {
+        ketaVertical: true, rect: rc(0, 0, 5460, 7280), levelMm: 2730, ridge: rv, ridgeCross: 2730, center: 3640, seeds: [2730, 4550],
+        keta: [P(true, 910, 910, 6370, 910), P(true, 1820, 1820, 5460, 1820), P(true, 3640, 1820, 5460, 1820), P(true, 4550, 910, 4550, 910)],
+        gableLo: [P(false, 910, 910, 4550, 910), P(false, 1820, 1820, 3640, 1820)],
+        gableHi: [P(false, 5460, 1820, 3640, 1820), P(false, 6370, 910, 4550, 910, { lineHi: 8190 })],
+      },
+      {
+        ketaVertical: false, rect: rc(1820, 3640, 9100, 7280), levelMm: 1820, ridge: rh, ridgeCross: 5460, center: 5460, seeds: [3640, 7280],
+        keta: [P(false, 4550, 4550, 8190, 910), P(false, 6370, 4550, 8190, 910, { lineLo: 910, extendLo: true })],
+        gableLo: [],
+        gableHi: [P(true, 8190, 4550, 6370, 910)],
+      },
+    ],
+    unassigned: [],
+  });
+});
+
+test('hipFramingWings (b) T字: 横の翼 Wh が先・縦の翼の端の seed は Wh へ移る（x=5460）', () => {
+  const { ridges } = ortho(T_SHAPE);
+  const [rh, rv] = [ridges.find(l => !l.isVertical), ridges.find(l => l.isVertical)];
+  assert.deepEqual(wingsOf(T_SHAPE), {
+    wings: [
+      {
+        ketaVertical: false, rect: rc(0, 0, 10920, 3640), levelMm: 1820, ridge: rh, ridgeCross: 1820, center: 5460, seeds: [1820, 5460, 9100],
+        keta: [
+          P(false, 910, 910, 10010, 910), P(false, 2730, 910, 4550, 910), P(false, 2730, 6370, 10010, 910),
+        ],
+        gableLo: [P(true, 910, 910, 2730, 910)],
+        gableHi: [P(true, 10010, 910, 2730, 910)],
+      },
+      {
+        ketaVertical: true, rect: rc(3640, 0, 7280, 9100), levelMm: 1820, ridge: rv, ridgeCross: 5460, center: 4550, seeds: [7280],
+        keta: [P(true, 4550, 2730, 8190, 910), P(true, 6370, 2730, 8190, 910)],
+        gableLo: [],
+        gableHi: [P(false, 8190, 4550, 6370, 910)],
+      },
+    ],
+    unassigned: [],
+  });
+});
+
+test('hipFramingWings (d) 正方形の翼: 頂点の翼 W0（段 3640）が先、W1 は y=5460 の棟木', () => {
+  const [rh] = ortho(D_SHAPE).ridges;
+  assert.deepEqual(wingsOf(D_SHAPE), {
+    wings: [
+      {
+        ketaVertical: false, rect: rc(0, 0, 7280, 7280), levelMm: 3640, ridge: null, ridgeCross: 3640, center: 3640, seeds: [3640],
+        keta: [
+          P(false, 910, 910, 6370, 910), P(false, 1820, 1820, 5460, 1820), P(false, 2730, 2730, 4550, 2730),
+          P(false, 4550, 2730, 4550, 2730), P(false, 5460, 1820, 5460, 1820), P(false, 6370, 910, 6370, 910, { lineHi: 8190 }),
+        ],
+        gableLo: [P(true, 910, 910, 6370, 910), P(true, 1820, 1820, 5460, 1820), P(true, 2730, 2730, 4550, 2730)],
+        gableHi: [P(true, 4550, 2730, 4550, 2730), P(true, 5460, 1820, 5460, 1820), P(true, 6370, 910, 4550, 910)],
+      },
+      {
+        ketaVertical: false, rect: rc(3640, 3640, 9100, 7280), levelMm: 1820, ridge: rh, ridgeCross: 5460, center: 6370, seeds: [5460, 7280],
+        keta: [P(false, 4550, 6370, 8190, 910), P(false, 6370, 6370, 8190, 910, { lineLo: 910, extendLo: true })],
+        gableLo: [],
+        gableHi: [P(true, 8190, 4550, 6370, 910)],
+      },
+    ],
+    unassigned: [],
+  });
+});
+
+test('hipFramingWings (f) 中庭: 翼4つの順（y=1820, y=7280, x=1820, x=7280）・各 seeds は両隣の棟木から移る', () => {
+  const r = wingsOf(F_SHAPE);
+  assert.deepEqual(r.wings.map(w => [w.ketaVertical, w.ridgeCross]), [[false, 1820], [false, 7280], [true, 1820], [true, 7280]]);
+  for (const w of r.wings) assert.deepEqual(w.seeds, [1820, 7280], JSON.stringify(w.ridge));
+  assert.deepEqual(r.unassigned, []);
+  // x=1820 の翼: x=910 の環（y 910..8190）は上下の横の翼が [910,2730]・[6370,8190] を取り、残りの [2730,6370] を取る（両端が接する）
+  const side = r.wings[2].keta.find(p => p.coord === 910);
+  assert.deepEqual(side, P(true, 910, 2730, 6370, 910, { lineLo: 910, lineHi: 8190, extendLo: true, extendHi: true }));
+});
+
+test('hipFramingWings 性質: (a)〜(f)(h)・矩形で unassigned が空、各母屋の部分は重ならず和が元の線に一致', () => {
+  for (const [name, rects] of Object.entries(ALL_SHAPES)) {
+    const { purlins } = ortho(rects);
+    const r = wingsOf(rects);
+    assert.deepEqual(r.unassigned, [], name);
+    const portions = r.wings.flatMap(w => [...w.keta, ...w.gableLo, ...w.gableHi]);
+    for (const l of purlins) {
+      const mine = portions
+        .filter(p => p.isVertical === l.isVertical && p.coord === l.coord && p.levelMm === l.levelMm && p.lineLo === l.lo && p.lineHi === l.hi)
+        .sort((p, q) => p.lo - q.lo);
+      assert.ok(mine.length > 0, `${name}: ${JSON.stringify(l)}`);
+      assert.ok(Math.abs(mine[0].lo - l.lo) <= TOL && Math.abs(mine[mine.length - 1].hi - l.hi) <= TOL, `${name}: 端 ${JSON.stringify(l)}`);
+      for (let i = 1; i < mine.length; i++) {
+        assert.ok(Math.abs(mine[i].lo - mine[i - 1].hi) <= TOL, `${name}: 重なり・隙間 ${JSON.stringify(l)}`);
+      }
+    }
+    // 翼の矩形は屋根範囲の外接矩形の中
+    const xs = rects.flatMap(q => [q.x1, q.x2]);
+    const ys = rects.flatMap(q => [q.y1, q.y2]);
+    for (const w of r.wings) {
+      assert.ok(w.rect.x1 >= Math.min(...xs) - TOL && w.rect.x2 <= Math.max(...xs) + TOL, name);
+      assert.ok(w.rect.y1 >= Math.min(...ys) - TOL && w.rect.y2 <= Math.max(...ys) + TOL, name);
+    }
+  }
+});
+
+test('hipFramingWings: 被覆されない線は unassigned に返る（屋根範囲の外の母屋を渡した場合）', () => {
+  const far = { isVertical: true, coord: 100000, lo: 0, hi: 5000, levelMm: 910 };
+  const r = hipFramingWings({ rects: L_SHAPE, ridges: ortho(L_SHAPE).ridges, purlins: [far], tolMm: TOL });
+  assert.deepEqual(r.unassigned, [far]);
+});
+
+test('【失敗系】hipFramingWings: levelMm 無し・不正な rect・両方無し・許容差の不正', () => {
+  const { ridges, purlins } = ortho(L_SHAPE);
+  const bare = ({ isVertical, coord, lo, hi }) => ({ isVertical, coord, lo, hi });
+  assert.throws(() => hipFramingWings({ rects: L_SHAPE, ridges: ridges.map(bare), purlins, tolMm: TOL }), RangeError);
+  assert.throws(() => hipFramingWings({ rects: L_SHAPE, ridges, purlins: purlins.map(bare), tolMm: TOL }), RangeError);
+  assert.throws(() => hipFramingWings({ rects: L_SHAPE, ridges, purlins: [{ ...purlins[0], levelMm: 0 }], tolMm: TOL }), RangeError);
+  assert.throws(() => hipFramingWings({ rects: L_SHAPE, ridges: [{ ...ridges[0], coord: NaN }], purlins, tolMm: TOL }), RangeError);
+  assert.throws(() => hipFramingWings({ rect: rc(0, 0, NaN, 5000), ridges: [], purlins: [], tolMm: TOL }), RangeError);
+  assert.throws(() => hipFramingWings({ rect: rc(5000, 0, 0, 5000), ridges: [], purlins: [], tolMm: TOL }), RangeError);
+  assert.throws(() => hipFramingWings({ rects: [rc(0, 0, NaN, 5000)], ridges: [], purlins: [], tolMm: TOL }), RangeError);
+  assert.throws(() => hipFramingWings({ rects: 'x', ridges: [], purlins: [], tolMm: TOL }), RangeError);
+  assert.throws(() => hipFramingWings({ rects: L_SHAPE, ridges, purlins, tolMm: -1 }), RangeError);
+  const none = { wings: [], unassigned: [] };
+  assert.deepEqual(hipFramingWings({ ridges: [], purlins: [], tolMm: TOL }), none);
+  assert.deepEqual(hipFramingWings({ rect: null, rects: null, ridges: [], purlins: [], tolMm: TOL }), none);
+  assert.deepEqual(hipFramingWings({ rects: [], ridges: [], purlins: [], tolMm: TOL }), none);
+  assert.deepEqual(hipFramingWings({ rect: rc(0, 0, 0, 5000), ridges: [], purlins: [], tolMm: TOL }), none);
 });

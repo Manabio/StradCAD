@@ -204,10 +204,10 @@ export function orthogonalHipLines({ rects, pitchMm, tolMm }) {
   requireNonNegative(tolMm, 'tolMm');
   const field = buildOrthoField(rects, tolMm);
   if (!field) return { ridges: [], purlins: [] };
-  const { fits, S, hCand } = field;
+  const { fits, S } = field;
 
   // 3. 段の集合。棟木の段 H＝座標の対の差の半分、母屋の段 D＝k*pitchMm（H の値と tolMm 以内なら H の値に寄せる）
-  const ridgeLevels = snapSorted(hCand.filter(h => h > tolMm && h <= S + tolMm), tolMm);
+  const ridgeLevels = ridgeLevelsOf(field, tolMm);
   const levels = ridgeLevels.map(d => ({ d, ridge: true, purlin: false }));
   for (let k = 1; k * pitchMm <= S + tolMm; k++) {
     const d = k * pitchMm;
@@ -328,6 +328,11 @@ function buildOrthoField(rects, tolMm) {
   return { xs, ys, x0, xN, y0, yN, fits, S, hCand, indexOf };
 }
 
+/** 棟木の段（軒からの距離）の候補。座標の対の差の半分のうち 0 より大きく S 以下のものを、tolMm 以内で寄せて昇順に返す。 */
+function ridgeLevelsOf(field, tolMm) {
+  return snapSorted(field.hCand.filter(h => h > tolMm && h <= field.S + tolMm), tolMm);
+}
+
 /**
  * 段 d の等高線 E_d の格子。X・Y＝E_d の境界が乗りうる座標（元の座標 ±d のうち範囲内）、cell(i,j)＝
  * X[i]..X[i+1]×Y[j]..Y[j+1] のセルが E_d の内側か（範囲外の添字は false）。
@@ -340,6 +345,41 @@ function levelCells(field, d) {
   if (X.length === 0 || Y.length === 0) return { X, Y, cell: () => false };
   const cellIn = Array.from({ length: X.length - 1 }, (_, i) => Array.from({ length: Y.length - 1 }, (_, j) => fits(midOf(X, i), midOf(Y, j), d)));
   return { X, Y, cell: (i, j) => (cellIn[i]?.[j] === true) };
+}
+
+/**
+ * 直交多角形の寄棟の「方形の頂点」（正方形の翼の中心。棟木が幅 0 の点につぶれた所＝棟木の線にならない孤立点）。
+ * 棟木の段 d ごとに、E_d の格子点で、(1) その点が E_d に属し、(2) 周りの4セルが全て E_d の外、(3) 接する辺の中点
+ * （端の辺は存在する分だけ）がどれも E_d に属さないもの。x・y の昇順。
+ * @param {object} p
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>} p.rects 建物範囲のセル矩形（orthogonalHipLines と同じ）
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {Array<{x:number, y:number, levelMm:number}>}
+ * @throws {RangeError} tolMm が不正、rects が配列でない、座標が非有限か逆順
+ */
+export function orthogonalHipApexes({ rects, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  const field = buildOrthoField(rects, tolMm);
+  if (!field) return [];
+  const { fits } = field;
+  const out = [];
+  for (const d of ridgeLevelsOf(field, tolMm)) {
+    const { X, Y, cell } = levelCells(field, d);
+    for (let k = 0; k < X.length; k++) {
+      for (let m = 0; m < Y.length; m++) {
+        if (!fits(X[k], Y[m], d)) continue;
+        if (cell(k - 1, m - 1) || cell(k, m - 1) || cell(k - 1, m) || cell(k, m)) continue;
+        const touching = [];
+        if (k > 0) touching.push([midOf(X, k - 1), Y[m]]);
+        if (k + 1 < X.length) touching.push([midOf(X, k), Y[m]]);
+        if (m > 0) touching.push([X[k], midOf(Y, m - 1)]);
+        if (m + 1 < Y.length) touching.push([X[k], midOf(Y, m)]);
+        if (touching.some(([x, y]) => fits(x, y, d))) continue;
+        out.push({ x: X[k], y: Y[m], levelMm: d });
+      }
+    }
+  }
+  return out.sort((a, b) => a.x - b.x || a.y - b.y);
 }
 
 /**
@@ -433,6 +473,222 @@ export function roofHipDiagonals({ rect, rects = null, shape, tolMm }) {
   }
   if (rect.x2 - rect.x1 <= tolMm || rect.y2 - rect.y1 <= tolMm) return [];
   return orthogonalHipDiagonals({ rects: [rect], tolMm });
+}
+
+// ---- 寄棟の小屋梁のための「翼」の分け方（ステップ C2e-3a。呼び出し元はまだ無い） ----
+
+/** 区間 [lo,hi] から taken（{lo,hi}）を引いた残りのうち、長さが tol を超えるもの（昇順）。 */
+function subtractIntervals(lo, hi, taken, tol) {
+  const out = [];
+  let cur = lo;
+  for (const t of taken.filter(t => t.hi > lo && t.lo < hi).sort((a, b) => a.lo - b.lo)) {
+    if (t.lo - cur > tol) out.push({ lo: cur, hi: t.lo });
+    cur = Math.max(cur, t.hi);
+  }
+  if (hi - cur > tol) out.push({ lo: cur, hi });
+  return out;
+}
+
+function requireLevelLine(l, name) {
+  requireFinite(l?.coord, `${name}.coord`);
+  requireFinite(l.lo, `${name}.lo`);
+  requireFinite(l.hi, `${name}.hi`);
+  if (l.hi < l.lo) throw new RangeError(`${name} の lo>hi です: ${JSON.stringify(l)}`);
+  requirePositive(l.levelMm, `${name}.levelMm`);
+}
+
+/** 翼の中の線の部分 Portion。levelMm は元の線にあるときだけ付ける。 */
+function portionOf(line, lo, hi, extendLo, extendHi) {
+  const p = { isVertical: line.isVertical, coord: line.coord, lo, hi };
+  if (line.levelMm !== undefined) p.levelMm = line.levelMm;
+  return { ...p, lineLo: line.lo, lineHi: line.hi, extendLo, extendHi };
+}
+
+/**
+ * 寄棟の小屋梁（第1段・第2段）を翼ごとに回すための、翼と線の振り分け（純関数。ステップ C2e-3a）。
+ * 翼＝棟木（方形は頂点）を、その段 levelMm だけ四方へ広げた矩形（必ず屋根範囲の中）。翼ごとに矩形の寄棟と同じ手順を回す。
+ *  - 翼の順: 段の大きい順 → 棟木の長い順（頂点は 0）→ 桁行が横の翼を先 → 棟木の座標 → 棟木の lo（頂点は x）。主たる翼が先。
+ *  - 振り分け（先着）: 母屋ごとに、翼の順に「その翼の矩形の中で軒から同じ距離にある部分」を取る。母屋 ℓ（段 L）が縦なら
+ *    ℓ の x が翼の x1+L..x2−L の中にあるときだけ取り、区間は y が [翼の y1+L, 翼の y2−L] との共通部分（横は対称）。
+ *    先の翼が取った区間は引き、残りが後の翼の部分。部分の端が先の翼の取った区間に接すれば extendLo/extendHi を立てる
+ *    （接合の切れ目で、本当の線の端は lineLo/lineHi）。翼の中で棟木と平行な部分が桁行（keta）、直交する部分が妻側
+ *    （中心 center の lo 側 gableLo・hi 側 gableHi）。
+ *  - seed（棟木の端の位置）: 棟木の端が別の翼の直交する棟木の上にあれば、その別の翼に自分の棟木の座標を足し、無ければ
+ *    自分の seed にする。頂点の翼は頂点の x。
+ *  - 被覆性（前提）: どの母屋のどの点も、どれか1つの翼で軒からの距離がその段に等しい。崩れた分は unassigned に返す
+ *    （呼び出し側は空であることを確かめる）。center から tolMm 以内の妻側の部分も unassigned に入れる（桁行／妻側を決められない）。
+ * rect を渡す入口は矩形の寄棟（翼1つ。正方形判定と seed の式は今の矩形の計画と同じ。rect の全母屋が桁行／妻側に入る。
+ * ridges・purlins は roofFramingLines の結果で levelMm 不要。翼の levelMm は短手の半分）。rects の入口は矩形でない寄棟
+ * （ridges・purlins は orthogonalHipLines の結果で全て levelMm が要る）。rect も rects も無ければ空。
+ * @param {object} p
+ * @param {{x1:number,y1:number,x2:number,y2:number}|null} [p.rect]
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>|null} [p.rects]
+ * @param {Array<object>} p.ridges 棟木の線 {isVertical, coord, lo, hi, levelMm?}
+ * @param {Array<object>} p.purlins 母屋の線（同上）
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {{wings: Array<object>, unassigned: Array<object>}} Wing＝{ketaVertical, rect, levelMm, ridge(Line|null),
+ *   ridgeCross, center, seeds, keta, gableLo, gableHi}、Portion＝{isVertical, coord, lo, hi, levelMm?, lineLo, lineHi,
+ *   extendLo, extendHi}。各リストは横線→縦線・coord・lo の昇順
+ * @throws {RangeError} tolMm が不正、座標が非有限か逆順、rects の入口で線に levelMm（>0）が無い
+ */
+export function hipFramingWings({ rect = null, rects = null, ridges, purlins, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  if (rect) return hipFramingWingsOfRect({ rect, ridges, purlins, tolMm });
+  if (rects === null || rects === undefined) return { wings: [], unassigned: [] };
+  if (!Array.isArray(rects)) throw new RangeError('rects は配列でなければなりません');
+  if (rects.length === 0) return { wings: [], unassigned: [] };
+  return hipFramingWingsOfRects({ rects, ridges, purlins, tolMm });
+}
+
+function hipFramingWingsOfRect({ rect, ridges, purlins, tolMm }) {
+  for (const k of ['x1', 'y1', 'x2', 'y2']) requireFinite(rect[k], `rect.${k}`);
+  if (rect.x2 < rect.x1 || rect.y2 < rect.y1) throw new RangeError(`rect の座標が逆順です: ${JSON.stringify(rect)}`);
+  if (rect.x2 - rect.x1 <= tolMm || rect.y2 - rect.y1 <= tolMm) return { wings: [], unassigned: [] };
+  const { x1, y1, x2, y2 } = rect;
+  const ketaVertical = roofRidgeIsVertical(rect, tolMm);
+  const [alongLo, alongHi, crossLo, crossHi] = ketaVertical ? [y1, y2, x1, x2] : [x1, x2, y1, y2];
+  const s = crossHi - crossLo;
+  const center = (alongLo + alongHi) / 2;
+  const keta = [];
+  const gableLo = [];
+  const gableHi = [];
+  const unassigned = [];
+  for (const l of sortLines([...purlins])) {
+    const portion = portionOf(l, l.lo, l.hi, false, false);
+    if (l.isVertical === ketaVertical) keta.push(portion);
+    else if (l.coord < center - tolMm) gableLo.push(portion);
+    else if (l.coord > center + tolMm) gableHi.push(portion);
+    else unassigned.push({ ...l });
+  }
+  const wing = {
+    ketaVertical,
+    rect: { x1, y1, x2, y2 },
+    levelMm: Math.min(x2 - x1, y2 - y1) / 2,
+    ridge: ridges[0] ?? null,
+    ridgeCross: (crossLo + crossHi) / 2,
+    center,
+    seeds: [alongLo + s / 2, alongHi - s / 2].filter((v, i, a) => i === 0 || Math.abs(v - a[0]) > tolMm),
+    keta, gableLo, gableHi,
+  };
+  return { wings: [wing], unassigned: sortLines(unassigned) };
+}
+
+function hipFramingWingsOfRects({ rects, ridges, purlins, tolMm }) {
+  ridges.forEach((l, i) => requireLevelLine(l, `ridges[${i}]`));
+  purlins.forEach((l, i) => requireLevelLine(l, `purlins[${i}]`));
+  const wings = [
+    ...ridges.map(r => {
+      const L = r.levelMm;
+      return {
+        ketaVertical: r.isVertical,
+        rect: r.isVertical
+          ? { x1: r.coord - L, y1: r.lo - L, x2: r.coord + L, y2: r.hi + L }
+          : { x1: r.lo - L, y1: r.coord - L, x2: r.hi + L, y2: r.coord + L },
+        levelMm: L, ridge: r, ridgeCross: r.coord, center: (r.lo + r.hi) / 2, seeds: [],
+      };
+    }),
+    ...orthogonalHipApexes({ rects, tolMm }).map(a => ({
+      ketaVertical: false,
+      rect: { x1: a.x - a.levelMm, y1: a.y - a.levelMm, x2: a.x + a.levelMm, y2: a.y + a.levelMm },
+      levelMm: a.levelMm, ridge: null, ridgeCross: a.y, center: a.x, seeds: [a.x],
+    })),
+  ];
+  const ridgeLength = w => (w.ridge ? w.ridge.hi - w.ridge.lo : 0);
+  const ridgeStart = w => (w.ridge ? w.ridge.lo : w.center);
+  wings.sort((a, b) => b.levelMm - a.levelMm || ridgeLength(b) - ridgeLength(a)
+    || (a.ketaVertical === b.ketaVertical ? 0 : (a.ketaVertical ? 1 : -1))
+    || a.ridgeCross - b.ridgeCross || ridgeStart(a) - ridgeStart(b));
+
+  // seed: 棟木の端が別の翼の直交する棟木の上にあれば、その翼へ（その棟木に沿った座標＝自分の棟木の coord）。無ければ自分へ
+  for (const w of wings) {
+    const r = w.ridge;
+    if (!r) continue;
+    for (const e of [r.lo, r.hi]) {
+      const px = r.isVertical ? r.coord : e;
+      const py = r.isVertical ? e : r.coord;
+      const hosts = wings.filter(o => o !== w && o.ridge && o.ridge.isVertical !== r.isVertical && (o.ridge.isVertical
+        ? Math.abs(px - o.ridge.coord) <= tolMm && py >= o.ridge.lo - tolMm && py <= o.ridge.hi + tolMm
+        : Math.abs(py - o.ridge.coord) <= tolMm && px >= o.ridge.lo - tolMm && px <= o.ridge.hi + tolMm));
+      if (hosts.length === 0) w.seeds.push(e);
+      else for (const o of hosts) o.seeds.push(r.coord);
+    }
+  }
+  for (const w of wings) w.seeds = snapSorted(w.seeds, tolMm);
+
+  // 振り分け（先着）
+  const lines = sortLines([...purlins]);
+  const taken = lines.map(() => []);
+  const unassigned = [];
+  for (const w of wings) {
+    w.keta = [];
+    w.gableLo = [];
+    w.gableHi = [];
+    lines.forEach((l, i) => {
+      const L = l.levelMm;
+      const { x1, y1, x2, y2 } = w.rect;
+      const [crossLo, crossHi, alongLo, alongHi] = l.isVertical ? [x1, x2, y1, y2] : [y1, y2, x1, x2];
+      if (l.coord - crossLo < L - tolMm || crossHi - l.coord < L - tolMm) return;
+      const lo = Math.max(l.lo, alongLo + L);
+      const hi = Math.min(l.hi, alongHi - L);
+      if (hi - lo <= tolMm) return;
+      for (const piece of subtractIntervals(lo, hi, taken[i], tolMm)) {
+        const portion = portionOf(l, piece.lo, piece.hi,
+          taken[i].some(t => Math.abs(t.hi - piece.lo) <= tolMm), taken[i].some(t => Math.abs(t.lo - piece.hi) <= tolMm));
+        if (l.isVertical === w.ketaVertical) w.keta.push(portion);
+        else if (l.coord < w.center - tolMm) w.gableLo.push(portion);
+        else if (l.coord > w.center + tolMm) w.gableHi.push(portion);
+        else unassigned.push({ isVertical: l.isVertical, coord: l.coord, lo: piece.lo, hi: piece.hi, levelMm: L });
+      }
+      taken[i].push({ lo, hi });
+    });
+    sortLines(w.keta);
+    sortLines(w.gableLo);
+    sortLines(w.gableHi);
+  }
+  lines.forEach((l, i) => {
+    for (const piece of subtractIntervals(l.lo, l.hi, taken[i], tolMm)) {
+      unassigned.push({ isVertical: l.isVertical, coord: l.coord, lo: piece.lo, hi: piece.hi, levelMm: l.levelMm });
+    }
+  });
+  return { wings, unassigned: sortLines(unassigned) };
+}
+
+/**
+ * 屋根範囲（rects の和集合）の中での、部材の「弦」（ステップ C2e-3a）。部材の直交方向の座標 coord を閉区間（許容差込み）に
+ * 含む矩形の、部材に沿う方向の区間を集め、隙間が tolMm 以下のものを併合して、[lo,hi]（許容差込み）を含む区間を返す。
+ * isVertical は部材の向き（true＝x=coord を y 方向に走る）。無ければ null。
+ * @param {object} p
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>} p.rects
+ * @param {boolean} p.isVertical
+ * @param {number} p.coord
+ * @param {number} p.lo
+ * @param {number} p.hi
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {{lo:number, hi:number}|null}
+ * @throws {RangeError} tolMm が不正、rects が配列でない、座標が非有限か逆順
+ */
+export function orthogonalChord({ rects, isVertical, coord, lo, hi, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  requireFinite(coord, 'coord');
+  requireFinite(lo, 'lo');
+  requireFinite(hi, 'hi');
+  if (hi < lo) throw new RangeError(`lo>hi です: ${lo}, ${hi}`);
+  if (!Array.isArray(rects)) throw new RangeError('rects は配列でなければなりません');
+  const spans = [];
+  rects.forEach((r, i) => {
+    for (const k of ['x1', 'y1', 'x2', 'y2']) requireFinite(r?.[k], `rects[${i}].${k}`);
+    if (r.x2 < r.x1 || r.y2 < r.y1) throw new RangeError(`rects[${i}] の座標が逆順です: ${JSON.stringify(r)}`);
+    const [crossLo, crossHi, alongLo, alongHi] = isVertical ? [r.x1, r.x2, r.y1, r.y2] : [r.y1, r.y2, r.x1, r.x2];
+    if (coord >= crossLo - tolMm && coord <= crossHi + tolMm) spans.push({ lo: alongLo, hi: alongHi });
+  });
+  spans.sort((a, b) => a.lo - b.lo);
+  const merged = [];
+  for (const s of spans) {
+    const last = merged[merged.length - 1];
+    if (last && s.lo <= last.hi + tolMm) last.hi = Math.max(last.hi, s.hi);
+    else merged.push({ ...s });
+  }
+  return merged.find(s => s.lo - tolMm <= lo && hi <= s.hi + tolMm) ?? null;
 }
 
 /**
