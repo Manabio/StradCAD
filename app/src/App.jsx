@@ -11,6 +11,7 @@ import {
 import { replaceRowsByScenario } from './catalog/resolveQueue.js';
 import { kindDef } from './catalog/catalogKinds.js';
 import { isDirty, markDirty } from './dirtyState.js';
+import { createBackGuard, detectBackGuardPlatform } from './backGuard.js';
 import { viewport } from './appViewport.js';
 import {
   findNearbyCenterLines,
@@ -729,6 +730,19 @@ const App = observer(() => {
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
+  }, []);
+
+  useEffect(() => {
+    const platform = detectBackGuardPlatform({
+      userAgent: navigator.userAgent,
+      uaDataPlatform: navigator.userAgentData?.platform,
+      maxTouchPoints: navigator.maxTouchPoints,
+    });
+    const guard = createBackGuard({
+      win: window, history: window.history, platform, CloseWatcherCtor: window.CloseWatcher,
+    });
+    guard.start();
+    return () => guard.dispose();
   }, []);
 
   useEffect(() => {
