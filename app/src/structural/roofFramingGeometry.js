@@ -1567,6 +1567,47 @@ export function leanToOwnerAt(wings, x, y, tolMm) {
  * @throws {RangeError} ピッチ・候補・許容差が不正、wings が不正
  */
 export function leanToMonoLines({ wings, pitchMm, startOffsetsMm, tolMm }) {
+  const groups = leanToPurlinGroups({ wings, pitchMm, startOffsetsMm, tolMm });
+  const purlins = [];
+  for (const g of groups) {
+    for (const [lo, hi] of mergeRanges(g.segs, GEOM_EPS)) {
+      if (hi - lo > tolMm) purlins.push({ isVertical: g.isVertical, coord: g.coord, lo, hi, offsetMm: g.offsetMm });
+    }
+  }
+  return { ridges: [], purlins: sortLines(purlins) };
+}
+
+/**
+ * L字の下屋（翼）の母屋を「面」ごとに分ける。面＝同じ壁（highSide・wallCoord）の翼の集まり（leanToMonoLines が線をつなぐ単位）。
+ * 線の割付・範囲・つなぎは leanToMonoLines と同じで、全面の lines を合わせて sortLines すると leanToMonoLines の purlins と一致する。
+ * 面は wings を番号順に走査して作り、並びは属する翼の最小番号順。線の無い面も lines: [] で返す。
+ * @param {object} p leanToMonoLines と同じ
+ * @returns {Array<{highSide:string, wallCoord:number, wingIndices:number[], lineIsVertical:boolean,
+ *   lines: Array<{isVertical:boolean,coord:number,lo:number,hi:number,offsetMm:number}>}>}
+ *   lineIsVertical は left/right の面で true（線の向き。top/bottom は false）。lines は sortLines 済み
+ * @throws {RangeError} ピッチ・候補・許容差が不正、wings が不正
+ */
+export function leanToMonoPlanes({ wings, pitchMm, startOffsetsMm, tolMm }) {
+  const groups = leanToPurlinGroups({ wings, pitchMm, startOffsetsMm, tolMm });
+  const planes = new Map();
+  wings.forEach((w, wi) => {
+    const key = `${w.highSide}|${w.wallCoord}`;
+    if (!planes.has(key)) {
+      planes.set(key, { highSide: w.highSide, wallCoord: w.wallCoord, wingIndices: [], lineIsVertical: !leanFlowsAlongY(w.highSide), lines: [] });
+    }
+    planes.get(key).wingIndices.push(wi);
+  });
+  for (const g of groups) {
+    const plane = planes.get(`${g.highSide}|${g.wallCoord}`);
+    for (const [lo, hi] of mergeRanges(g.segs, GEOM_EPS)) {
+      if (hi - lo > tolMm) plane.lines.push({ isVertical: g.isVertical, coord: g.coord, lo, hi, offsetMm: g.offsetMm });
+    }
+  }
+  return [...planes.values()].map(p => ({ ...p, lines: sortLines(p.lines) }));
+}
+
+// leanToMonoLines・leanToMonoPlanes の共通部: 入力検査と、線ごとの区間の集まり（highSide・wallCoord つき。翼を番号順に走査した順）
+function leanToPurlinGroups({ wings, pitchMm, startOffsetsMm, tolMm }) {
   requireLeanToWings(wings);
   requirePositive(pitchMm, 'pitchMm');
   if (!Array.isArray(startOffsetsMm) || startOffsetsMm.length === 0) {
@@ -1574,7 +1615,7 @@ export function leanToMonoLines({ wings, pitchMm, startOffsetsMm, tolMm }) {
   }
   for (const s of startOffsetsMm) requirePositive(s, 'startOffsetsMm の要素');
   requireNonNegative(tolMm, 'tolMm');
-  if (wings.length === 0) return { ridges: [], purlins: [] };
+  if (wings.length === 0) return [];
   const { offsetsMm } = purlinLayoutFromRidge({ halfSpanMm: Math.max(...wings.map(w => w.depthMm)), pitchMm, startOffsetsMm, tolMm });
 
   // 向き isVertical・座標 p の線が、翼 wi の部分 f を通る区間（延長は他の翼との比較で自分のものになる区間だけ）
@@ -1608,17 +1649,11 @@ export function leanToMonoLines({ wings, pitchMm, startOffsetsMm, tolMm }) {
       if (o >= w.depthMm - tolMm) continue;
       const coord = w.wallCoord + sign * o;
       const key = `${isVertical}|${coord}|${w.highSide}|${w.wallCoord}`;
-      if (!groups.has(key)) groups.set(key, { isVertical, coord, offsetMm: o, segs: [] });
+      if (!groups.has(key)) groups.set(key, { isVertical, coord, offsetMm: o, highSide: w.highSide, wallCoord: w.wallCoord, segs: [] });
       for (const f of w.domain) groups.get(key).segs.push(...segmentsIn(wi, f, isVertical, coord));
     }
   });
-  const purlins = [];
-  for (const g of groups.values()) {
-    for (const [lo, hi] of mergeRanges(g.segs, GEOM_EPS)) {
-      if (hi - lo > tolMm) purlins.push({ isVertical: g.isVertical, coord: g.coord, lo, hi, offsetMm: g.offsetMm });
-    }
-  }
-  return { ridges: [], purlins: sortLines(purlins) };
+  return [...groups.values()];
 }
 
 /**

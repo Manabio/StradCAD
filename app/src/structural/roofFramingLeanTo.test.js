@@ -1,11 +1,11 @@
 // L字（矩形でない）の下屋＝翼ごとの片流れ（ステップ E1a。roofFramingGeometry.js の leanToWingsOf・leanToOwnerAt・
-// leanToMonoLines・leanToSeams、roofOutline の kindZones、extendDiagonalsToOutline の辺の途中の分岐、roofFramingLines・
+// leanToMonoLines・leanToMonoPlanes（E2a）・leanToSeams、roofOutline の kindZones、extendDiagonalsToOutline の辺の途中の分岐、roofFramingLines・
 // roofHipDiagonals の leanToWings）のテスト。期待値は手計算（y は下向き正。母屋の割付は下屋全体で1つ＝最大奥行きの翼の割付）。
 // 割付（ピッチ910・1本目の候補 [455,910]）: 奥行き1820→[910]、3000→[455,1365,2275]、3640→[910,1820,2730]、4000→[455,1365,2275,3185]。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  leanToWingsOf, leanToOwnerAt, leanToMonoLines, leanToSeams, roofOutline, roofFramingLines, roofHipDiagonals,
+  leanToWingsOf, leanToOwnerAt, leanToMonoLines, leanToMonoPlanes, leanToSeams, roofOutline, roofFramingLines, roofHipDiagonals,
   extendLinesToOutline, extendDiagonalsToOutline as extendDiagonalsRaw,
 } from './roofFramingGeometry.js';
 import { RoofShape } from '../core/constants.js';
@@ -438,6 +438,72 @@ test('【失敗系】leanToMonoLines・leanToSeams・leanToOwnerAt: ピッチ・
   assert.throws(() => leanToOwnerAt('x', 0, 0, TOL), RangeError);
   assert.deepEqual(leanToMonoLines({ ...ok, wings: [] }), { ridges: [], purlins: [] });
   assert.equal(leanToOwnerAt([], 0, 0, TOL), null);
+});
+
+// ---- leanToMonoPlanes（ステップ E2a。面＝同じ壁の翼の集まり） ----
+const planesOf = wings => leanToMonoPlanes({ wings, pitchMm: 910, startOffsetsMm: [455, 910], tolMm: TOL });
+const PN = (highSide, wallCoord, wingIndices, lineIsVertical, lines) => ({ highSide, wallCoord, wingIndices, lineIsVertical, lines });
+const byLine = (a, b) => (a.isVertical === b.isVertical ? 0 : (a.isVertical ? 1 : -1)) || a.coord - b.coord || a.lo - b.lo;
+
+test('leanToMonoPlanes 形1a: 壁の違う翼は別の面（top と left）。面の順は翼の最小番号順', () => {
+  assert.deepEqual(planesOf(wingsOf(F1A).wings), [
+    PN('top', 3640, [0], false, [PL(false, 4550, 0, 4550, 910)]),
+    PN('left', 3640, [1], true, [PL(true, 4550, 0, 4550, 910)]),
+  ]);
+});
+
+test('leanToMonoPlanes 形1b: 母屋は割付1つ。top の面が3本、left の面が1本', () => {
+  assert.deepEqual(planesOf(wingsOf(F1B).wings), [
+    PN('top', 3640, [0], false, [PL(false, 4550, 0, 4550, 910), PL(false, 5460, 0, 5460, 1820), PL(false, 6370, 0, 5460, 2730)]),
+    PN('left', 3640, [1], true, [PL(true, 4550, 0, 4550, 910)]),
+  ]);
+});
+
+test('leanToMonoPlanes 形2: 同じ壁の2翼は1つの面（wingIndices [0,1]）で、母屋 y=910 は面の中でつながる', () => {
+  assert.deepEqual(planesOf(wingsOf(F2).wings), [
+    PN('top', 0, [0, 1], false, [PL(false, 910, 0, 5460, 910), PL(false, 1820, 3640, 5460, 1820), PL(false, 2730, 3640, 5460, 2730)]),
+  ]);
+});
+
+test('leanToMonoPlanes 形5: 谷木の形。top の面が先（翼0）・left の面が後', () => {
+  assert.deepEqual(planesOf(wingsOf(F5).wings), [
+    PN('top', 0, [0], false, [PL(false, 910, 910, 5460, 910)]),
+    PN('left', 0, [1], true, [PL(true, 910, 910, 3640, 910)]),
+  ]);
+});
+
+test('leanToMonoPlanes: 全形で、面の lines を合わせて並べ直すと leanToMonoLines の purlins と一致（形1a〜7・roof-test1・矩形）', () => {
+  const forms = { F1A, F1B, F2, F3, F4, F5, F6, F7, FRT1, 矩形: { rects: [RECT], contacts: [ct(false, 0, 0, 4000, -1)] } };
+  for (const [name, form] of Object.entries(forms)) {
+    const { wings } = wingsOf(form);
+    const planes = planesOf(wings);
+    assert.deepEqual(planes.flatMap(p => p.lines).sort(byLine), monoLines(wings).purlins, name);
+    assert.deepEqual(planes.flatMap(p => p.wingIndices).sort((a, b) => a - b), wings.map((_, i) => i), `${name}: 全翼がちょうど1つの面に属する`);
+    for (const p of planes) {
+      assert.ok(p.lines.every(l => l.isVertical === p.lineIsVertical), `${name}: 面の線の向きは面で一定`);
+      assert.deepEqual(p.lines, [...p.lines].sort(byLine), `${name}: lines は sortLines 済み`);
+    }
+  }
+});
+
+test('leanToMonoPlanes roof-test1: 面は left（壁 7280）→ top（壁 -3640）の順', () => {
+  const planes = planesOf(wingsOf(FRT1).wings);
+  assert.deepEqual(planes, [
+    PN('left', 7280, [0], true, [PL(true, 8190, -9884, -2730, 910)]),
+    PN('top', -3640, [1], false, [PL(false, -2730, 3640, 8190, 910), PL(false, -1820, 3640, 9100, 1820), PL(false, -910, 3640, 9100, 2730)]),
+  ]);
+});
+
+test('【失敗系】leanToMonoPlanes: ピッチ・候補・許容差・翼が不正なら RangeError。翼が空なら []', () => {
+  const { wings } = wingsOf(F1A);
+  const ok = { wings, pitchMm: 910, startOffsetsMm: [455, 910], tolMm: TOL };
+  assert.throws(() => leanToMonoPlanes({ ...ok, pitchMm: 0 }), RangeError);
+  assert.throws(() => leanToMonoPlanes({ ...ok, startOffsetsMm: [] }), RangeError);
+  assert.throws(() => leanToMonoPlanes({ ...ok, startOffsetsMm: [0] }), RangeError);
+  assert.throws(() => leanToMonoPlanes({ ...ok, tolMm: -1 }), RangeError);
+  assert.throws(() => leanToMonoPlanes({ ...ok, wings: null }), RangeError);
+  assert.throws(() => leanToMonoPlanes({ ...ok, wings: [{ ...wings[0], highSide: 'up' }] }), RangeError);
+  assert.deepEqual(leanToMonoPlanes({ ...ok, wings: [] }), []);
 });
 
 test('【失敗系】roofOutline: kindZones が辺を覆わない・kind が不正・配列でないは RangeError。null は今まで通り（省略と同じ）', () => {
