@@ -1,4 +1,10 @@
 // 中心線・補助線・梁芯の端点延長・端点短縮。
+// 端点（交点を失った端。isEndpointAt）は短縮不可。延長は中心線のみ端点からでも可、梁芯は不可
+// （2026-10-03 裁定。表は core/centerLineKindPolicy.js の ENDPOINT_EXTENDABLE_KINDS）。
+// 中心線の延長は、現在の端から延長先までに同軸・同種別の別ピースが掛かる場合は不可（延長後の結合が
+// 重なりを隣接と誤認して相手を吸収して消すため。相手が外部参照を持ち結合が阻まれる場合は重なったまま
+// 残る。表は EXTEND_OVERLAP_FORBIDDEN_KINDS。境界ちょうどで接する場合は従来どおり延長して結合する。
+// 2026-10-03 裁定）。
 //
 // 「隣のCL」= 自身と直交し、自身の種別から見て直交端部のアンカーになりうる種別で、かつ自身の座標
 // (value)まで extent が届いている CL（core/centerLineKindPolicy.js の orthoAnchorCandidates。
@@ -25,8 +31,8 @@ import { CenterLineType, centerLineKind } from '@core';
 import { overhangMm } from '../snapGeometry.js';
 import { mergeCenterLineChain } from './centerLineMerge.js';
 import {
-  hasEndpointRule, allowsWallAnchor, extentAnchorStyle, coversAlongAxis, orthoAnchorCandidates,
-  isReferencedByAux,
+  hasEndpointRule, allowsExtendFromEndpoint, forbidsExtendOverSameAxisPiece, allowsWallAnchor, extentAnchorStyle,
+  coversAlongAxis, orthoAnchorCandidates, isReferencedByAux, mergeCandidates,
 } from '../core/centerLineKindPolicy.js';
 
 // 端点判定の座標一致許容誤差(mm)。端点は直交CLの value を直接コピーして作られるため
@@ -37,7 +43,9 @@ const ENDPOINT_EPS = 0.5;
  * 中心線の lo/hi 側の端が「端点」かどうかを判定する（端点ルール）。
  *
  * 中心線の端は通常、直交CLとの交差（交点）上に乗る。線分編集（直交CLの短縮・削除）で
- * 交差が失われた端は「端点」となり、延長・短縮の対象から外れ、座標がその場に固定される。
+ * 交差が失われた端は「端点」となり、短縮の対象から外れ、座標がその場に固定される。延長は
+ * 中心線なら端点からでも可（梁芯は不可。allowsExtendFromEndpoint）。延長の許可はこの関数の判定を
+ * 変えない（壁端の仕上げ回り込みもこの判定を使うため、端点かどうかは延長の可否と独立に決まる）。
  * 補助線はオーバーハング付きの静的端点が正規状態のため対象外（常に false。hasEndpointRule）。
  *
  * 参照先優先: side側の extentLoRef/HiRef が指す解決済み参照先CL（cl._extentLoCL/_extentHiCL。
@@ -124,14 +132,43 @@ export function findShortenBoundary(graph, cl, side) {
   return { type: 'point' };
 }
 
-// 端点（交点を失った端）は延長・短縮の対象にならない（端点ルール）
-export function canExtendCenterLine(graph, cl, side)  { return !isEndpointAt(graph, cl, side) && !!findExtendBoundary(graph, cl, side); }
+// 端点（交点を失った端）からの延長は中心線のみ可（梁芯は不可。allowsExtendFromEndpoint。2026-10-03 裁定）。
+// 延長を端点ルールで拒否するか（端点、かつ、その種別が端点からの延長を許さない）。
+function rejectsExtendByEndpointRule(graph, cl, side) {
+  return isEndpointAt(graph, cl, side) && !allowsExtendFromEndpoint(centerLineKind(cl));
+}
+
+// 現在の端から境界までの掃引区間に、同軸（同 centerLineType・同 value）・同種別の別ピースが掛かるか。
+// 延長後の結合（mergeCenterLineChain）は重なりを隣接と誤認して相手を吸収して消す。相手が外部参照を持ち
+// 結合が阻まれる場合は重なったまま残る（2026-10-03 裁定）。境界ちょうど・現在の端ちょうどで接するだけなら掛からない。
+// extent が null（全軸）の相手は安全側で掛かる扱い。列挙は mergeCandidates 経由（素の centerLines 走査をしない）。
+function sweepHitsSameAxisPiece(graph, cl, side, boundary) {
+  const coord = side === 'lo' ? cl.extentLo : cl.extentHi;
+  const target = boundary.type === 'wall' ? boundary.item.axisValue : boundary.item.value;
+  const min = Math.min(coord, target), max = Math.max(coord, target);
+  return mergeCandidates(graph, { centerLineType: cl.centerLineType, kind: centerLineKind(cl), exclude: [cl.id] })
+    .filter(p => Math.abs(p.value - cl.value) <= ENDPOINT_EPS)
+    .some(p => p.extentLo == null || p.extentHi == null
+      || (p.extentLo < max - ENDPOINT_EPS && p.extentHi > min + ENDPOINT_EPS));
+}
+
+// 延長の境界を解決する。端点ルール・境界の有無・延長の重なり禁止のいずれかで延長できなければ null。
+// canExtendCenterLine と extendCenterLine が共用する（判定を2か所に持たない）。
+function resolveExtendBoundary(graph, cl, side) {
+  if (rejectsExtendByEndpointRule(graph, cl, side)) return null;
+  const boundary = findExtendBoundary(graph, cl, side);
+  if (!boundary) return null;
+  if (forbidsExtendOverSameAxisPiece(centerLineKind(cl)) && sweepHitsSameAxisPiece(graph, cl, side, boundary)) return null;
+  return boundary;
+}
+
+export function canExtendCenterLine(graph, cl, side)  { return !!resolveExtendBoundary(graph, cl, side); }
+// 端点（交点を失った端）は短縮の対象にならない（端点ルール。isEndpointAt）。
 export function canShortenCenterLine(graph, cl, side) { return !isEndpointAt(graph, cl, side) && !!findShortenBoundary(graph, cl, side); }
 
 // side側の端点を隣のCL（または壁）まで延長する。延長後、同種同軸のCLと端点が一致すれば結合する。
 export function extendCenterLine(graph, cl, side, viewport) {
-  if (isEndpointAt(graph, cl, side)) return { extended: false };
-  const boundary = findExtendBoundary(graph, cl, side);
+  const boundary = resolveExtendBoundary(graph, cl, side);
   if (!boundary) return { extended: false };
 
   const kind          = centerLineKind(cl);

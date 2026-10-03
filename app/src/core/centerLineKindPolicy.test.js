@@ -24,6 +24,8 @@ import {
   moveSnapTargetKinds,
   coexistenceAt, convertBlockingKinds, convertSubjectKind, mergeableKinds, allowsWallAnchor, extentAnchorStyle,
   hasEndpointRule, spansEntireAxis, isOpeningBoundaryKind,
+  ENDPOINT_EXTENDABLE_KINDS, allowsExtendFromEndpoint,
+  EXTEND_OVERLAP_FORBIDDEN_KINDS, forbidsExtendOverSameAxisPiece,
   isOrthoAnchorCandidate, isSameDirectionObstacle, isMoveSnapTarget, isMergeCandidate, isConvertSubject,
   usesBeamAxisMoveSnap,
   isRenderTarget, isHitTestTarget,
@@ -344,6 +346,21 @@ test('allowsWallAnchor / extentAnchorStyle / hasEndpointRule / spansEntireAxis /
   assert.deepEqual(CL_KINDS.map(hasEndpointRule), [false, true, false, true]);
   assert.deepEqual(CL_KINDS.map(spansEntireAxis), [true, false, false, false]);
   assert.deepEqual(CL_KINDS.map(isOpeningBoundaryKind), [true, true, false, false]);
+});
+
+test('ENDPOINT_EXTENDABLE_KINDS / allowsExtendFromEndpoint: 端点からの延長は中心線のみ（梁芯・補助線・通り芯は不可）', () => {
+  assert.deepEqual([...ENDPOINT_EXTENDABLE_KINDS], ['center']);
+  assert.ok(Object.isFrozen(ENDPOINT_EXTENDABLE_KINDS));
+  assert.deepEqual(CL_KINDS.map(allowsExtendFromEndpoint), [false, true, false, false]); // struct,center,aux,beam
+  for (const k of ENDPOINT_EXTENDABLE_KINDS) assert.ok(hasEndpointRule(k), '延長を許す種別は端点ルールの対象の部分集合');
+  assert.throws(() => allowsExtendFromEndpoint('wood'), /未知のCL種別: wood/);
+});
+
+test('EXTEND_OVERLAP_FORBIDDEN_KINDS / forbidsExtendOverSameAxisPiece: 延長の重なり禁止は中心線のみ（梁芯・補助線・通り芯は対象外）', () => {
+  assert.deepEqual([...EXTEND_OVERLAP_FORBIDDEN_KINDS], ['center']);
+  assert.ok(Object.isFrozen(EXTEND_OVERLAP_FORBIDDEN_KINDS));
+  assert.deepEqual(CL_KINDS.map(forbidsExtendOverSameAxisPiece), [false, true, false, false]); // struct,center,aux,beam
+  assert.throws(() => forbidsExtendOverSameAxisPiece('wood'), /未知のCL種別: wood/);
 });
 
 // ---- B1: CLレベルAPIの肯定側（骨抜き＝常に false/true 固定でも通ってしまう穴を塞ぐ）----

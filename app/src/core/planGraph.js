@@ -820,7 +820,8 @@ export class PlanGraph {
    *
    * - 他CLの extentLo/HiRef が id を指す場合: 現在座標で静的化する。
    *   交点を失った線分の端は「端点」となり座標が削除位置に固定される
-   *   （延長・短縮の除外判定は transform/centerLineExtend.js の isEndpointAt）。
+   *   （短縮の除外判定は transform/centerLineExtend.js の isEndpointAt。延長の除外は
+   *   同ファイルの rejectsExtendByEndpointRule＝端点かつ種別が梁芯。中心線は端点からでも延長できる）。
    * - 壁の clStart/clEnd が id の場合: 参照を反対側の端CLへ繰り上げ、端点側は
    *   「端点ノードに壁があったと想定した」分（|axisOffset| = 下地偏芯量＋仕上げ厚）
    *   だけ CL 位置からはね出して止める。

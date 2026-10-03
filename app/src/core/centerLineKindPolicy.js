@@ -155,6 +155,14 @@ export const EXTENT_ANCHOR_STYLE = Object.freeze({
 });
 // 端点ルール（isEndpointAt）の対象種別（中心線・梁芯。補助線はフリー端点を持つため対象外）。
 export const ENDPOINT_RULE_KINDS = Object.freeze(['center', 'beam']);
+// 端点ルールの対象（中心線・梁芯）のうち、端点からの延長を許す種別。梁芯は自動生成（小梁の自動補完・
+// 再ブラケット）との干渉が未評価のため除外。補助線はもともと端点ルールの対象外。
+// 2026-10-03 ユーザー裁定。短縮は端点では不可のまま（メニューは削除を出す）。
+export const ENDPOINT_EXTENDABLE_KINDS = Object.freeze(['center']);
+// 延長が、現在の端から延長先までに掛かる同軸・同種別の別ピースを持つとき延長を禁じる種別。延長後の結合
+// （mergeCenterLineChain）は端が1組だけ一致すれば隣接とみなすため、重なったピースを隣接と誤認して相手を
+// 吸収し、相手が消える（2026-10-03 ユーザー裁定）。補助線・梁芯の延長は従来どおり（対象外）。
+export const EXTEND_OVERLAP_FORBIDDEN_KINDS = Object.freeze(['center']);
 // 常に全軸（ガター~ガター）に及ぶ種別（＝端部候補・障害物判定で「extentを持たない」として扱う種別）。
 // VERIFIED（renderer/CenterLinesLayer.jsx clExtent L23-31）: 通り芯の `trim:true` はガター～ガター
 // ではなく直交labeled CLの端でカットするが、これは描画（画面上の線分の長さ）だけの話——
@@ -544,6 +552,18 @@ export function extentAnchorStyle(kind) {
 export function hasEndpointRule(kind) {
   assertKnownKind(kind);
   return ENDPOINT_RULE_KINDS.includes(kind);
+}
+
+/** kind が端点（交点を失った端）からの延長を許すか。 */
+export function allowsExtendFromEndpoint(kind) {
+  assertKnownKind(kind);
+  return ENDPOINT_EXTENDABLE_KINDS.includes(kind);
+}
+
+/** kind の延長が、同軸・同種別の別ピースへ掛かる（重なる）ことを禁じられているか。 */
+export function forbidsExtendOverSameAxisPiece(kind) {
+  assertKnownKind(kind);
+  return EXTEND_OVERLAP_FORBIDDEN_KINDS.includes(kind);
 }
 
 /** kind が常に全軸へ及ぶか。 */
