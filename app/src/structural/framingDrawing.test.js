@@ -8,6 +8,7 @@ import {
   pickMembersOnFigure, columnListCategory, pickColumnsOnFigure, columnRenderSize,
   ROOF_FRAMING_DASH, showRoofFraming, roofFramingWidths, roofFramingHostMembers, roofFramingPrimitives,
 } from './framingDrawing.js';
+import { roofFramingLines, roofStrutPoints } from './roofFramingGeometry.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 import { STRUCTURES } from './structuralClassification.js';
 import { LodLevel } from '../viewport.js';
@@ -376,6 +377,46 @@ test('【C2e-2】roofFramingPrimitives: 矩形でない寄棟（rect:null・rect
   assert.deepEqual(struts.map(s => [s.x, s.y, s.radius]).sort((a, b) => a[0] - b[0]), [[910, 910, 45], [4550, 910, 45]],
     '束は y=910 の梁と、母屋 x=910・x=4550 の交点（向きが混在する線でも立つ）');
   assert.equal(new Set(prims.map(p => p.key)).size, prims.length, 'key は一意');
+});
+
+test('【C2e-2b】roofFramingPrimitives: L字の寄棟は隅木6・谷木1が points と key（main:hip:i・main:valley:i）で出る。並びは棟木→母屋→隅木→谷木→束', () => {
+  const hostBeams = [{ isVertical: false, axis: 910, lo: 0, hi: 9100 }];
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [lHipRegion], hostBeams }));
+  assert.deepEqual(kindOf(prims, 'hip').map(p => [p.key, p.points]), [
+    ['main:hip:0', [0, 0, 2730, 2730]], ['main:hip:1', [0, 7280, 2730, 4550]], ['main:hip:2', [3640, 5460, 2730, 4550]],
+    ['main:hip:3', [5460, 0, 2730, 2730]], ['main:hip:4', [9100, 3640, 7280, 5460]], ['main:hip:5', [9100, 7280, 7280, 5460]],
+  ]);
+  assert.deepEqual(kindOf(prims, 'valley').map(p => [p.key, p.points]), [['main:valley:0', [5460, 3640, 3640, 5460]]]);
+  const order = ['ridge', 'purlin', 'hip', 'valley', 'strut'];
+  const ranks = prims.map(p => order.indexOf(p.kind));
+  assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b), '種別の並び');
+  assert.equal(new Set(prims.map(p => p.key)).size, prims.length, 'key は一意');
+});
+
+test('【C2e-2b】roofFramingPrimitives: 矩形の寄棟は隅木4（谷木なし）。斜め線を足しても束の数は変わらない（斜め線に束は立たない）', () => {
+  const region = { key: 'main', rect: { x1: 0, y1: 0, x2: 7280, y2: 5460 }, shape: 'hip', ridgeIsVertical: false, highSide: null };
+  const hostBeams = [{ isVertical: false, axis: 910, lo: 0, hi: 7280 }, { isVertical: true, axis: 910, lo: 0, hi: 5460 }];
+  const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region], hostBeams }));
+  assert.deepEqual(kindOf(prims, 'hip').map(p => p.points), [
+    [0, 0, 2730, 2730], [0, 5460, 2730, 2730], [7280, 0, 4550, 2730], [7280, 5460, 4550, 2730],
+  ]);
+  assert.equal(kindOf(prims, 'valley').length, 0);
+  // 斜め線を受け取らない確認: 隅木・谷木を除いた線だけから roofStrutPoints を直接引いた数と一致する
+  const { ridges, purlins } = roofFramingLines({
+    rect: region.rect, shape: 'hip', purlinPitchMm: WOOD_FRAMING.purlinPitchMm,
+    purlinStartOffsetsMm: WOOD_FRAMING.purlinStartOffsetsMm, tolMm: TOL,
+  });
+  assert.equal(kindOf(prims, 'strut').length, roofStrutPoints([...ridges, ...purlins], hostBeams, TOL).length);
+});
+
+test('【C2e-2b・失敗系】roofFramingPrimitives: 切妻・片流れ・陸屋根は隅木・谷木を持たない（矩形・矩形でない範囲とも）', () => {
+  const rect = { x1: 0, y1: 0, x2: 7280, y2: 5460 };
+  for (const shape of ['gable', 'mono', 'flat', 'staggered']) {
+    for (const region of [{ key: 'main', rect, shape, ridgeIsVertical: false, highSide: 'top' }, { ...lHipRegion, shape }]) {
+      const prims = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] }));
+      assert.equal(prims.filter(p => p.kind === 'hip' || p.kind === 'valley').length, 0, shape);
+    }
+  }
 });
 
 test('【C2e-2・失敗系】roofFramingPrimitives: rects があっても矩形でない切妻・片流れ・陸屋根は空。rects が空・無しの rect:null も空', () => {

@@ -665,8 +665,8 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
           return bandLines(`wall:${w.id}`, w.isVertical, w.axisValue, w.thickness / 2, segments, color, medium, wallDash);
         })}
       </Group>
-      {/* 小屋組（棟木＝一点鎖線2本・母屋＝一点鎖線1本・束＝黒丸）。梁の帯の後・選択ハイライトの前。
-          線（棟木・母屋）→ 束の順。一点鎖線は中心線（CenterLinesLayer.jsx）と同じ画面px固定。クリック対象にしない。 */}
+      {/* 小屋組（棟木＝一点鎖線2本・母屋・隅木・谷木＝一点鎖線1本・束＝黒丸）。梁の帯の後・選択ハイライトの前。
+          線（棟木・母屋・隅木・谷木）→ 束の順。一点鎖線は中心線（CenterLinesLayer.jsx）と同じ画面px固定。クリック対象にしない。 */}
       {roofFramingPrims.length > 0 && (
         <Group name="roof-framing" {...groupPropsForStyle(beam?.spec.style)}>
           {roofFramingPrims.filter(p => p.kind !== 'strut').map(p => (

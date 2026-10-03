@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   roofFramingLines, roofRidgeIsVertical, koyaBeamPositions, roofStrutPoints, purlinLayoutFromRidge, orthogonalHipLines,
+  orthogonalHipDiagonals, roofHipDiagonals,
 } from './roofFramingGeometry.js';
 import { RoofShape } from '../core/constants.js';
 
@@ -595,4 +596,146 @@ test('roofFramingLines: rect があれば rects は無視する（従来どお�
   });
   assert.deepEqual(withRects, lines(r, RoofShape.HIP));
   assert.ok(withRects.purlins.every(l => !('levelMm' in l)));
+});
+
+// ---- orthogonalHipDiagonals / roofHipDiagonals（寄棟の隅木・谷木。ステップ C2e-2b。等高線の角の軌跡） ----
+// 期待値は手計算（設計書 §5。y は下向き正）。タプルは [x1,y1,x2,y2]（x1,y1＝軒側、x2,y2＝上端）。
+
+const diagOrder = (a, b) => (a.kind === b.kind ? 0 : (a.kind === 'hip' ? -1 : 1)) || a.x1 - b.x1 || a.y1 - b.y1 || a.x2 - b.x2 || a.y2 - b.y2;
+const hipD = ([x1, y1, x2, y2]) => ({ kind: 'hip', x1, y1, x2, y2 });
+const valleyD = ([x1, y1, x2, y2]) => ({ kind: 'valley', x1, y1, x2, y2 });
+const diags = (rects, extra = {}) => orthogonalHipDiagonals({ rects, tolMm: TOL, ...extra });
+const expectDiags = (rects, hips, valleys) => {
+  assert.deepEqual(diags(rects), [...hips.map(hipD), ...valleys.map(valleyD)].sort(diagOrder));
+};
+
+test('orthogonalHipDiagonals (a) L字: 隅木6（元の出隅5＋隠れた1）・谷木1', () => {
+  expectDiags(L_SHAPE,
+    [[0, 0, 2730, 2730], [0, 7280, 2730, 4550], [3640, 5460, 2730, 4550], [5460, 0, 2730, 2730], [9100, 3640, 7280, 5460], [9100, 7280, 7280, 5460]],
+    [[5460, 3640, 3640, 5460]]);
+});
+
+test('orthogonalHipDiagonals (b) T字: 隅木6・谷木2', () => {
+  expectDiags([rc(0, 0, 10920, 3640), rc(3640, 3640, 7280, 9100)],
+    [[0, 0, 1820, 1820], [0, 3640, 1820, 1820], [3640, 9100, 5460, 7280], [7280, 9100, 5460, 7280], [10920, 0, 9100, 1820], [10920, 3640, 9100, 1820]],
+    [[3640, 3640, 5460, 1820], [7280, 3640, 5460, 1820]]);
+});
+
+test('orthogonalHipDiagonals (c) 端数のある寸法: 翼ごとに上端の高さが違う', () => {
+  expectDiags([rc(0, 0, 3640, 8974), rc(0, 4487, 7280, 8974)],
+    [[0, 0, 1820, 1820], [0, 8974, 2243.5, 6730.5], [1820, 6307, 2243.5, 6730.5], [3640, 0, 1820, 1820], [7280, 4487, 5036.5, 6730.5], [7280, 8974, 5036.5, 6730.5]],
+    [[3640, 4487, 1820, 6307]]);
+});
+
+test('orthogonalHipDiagonals (d) 正方形の翼: 方形の頂点に4本が集まり、同じ直線上の逆向きの2本はつながない', () => {
+  expectDiags([rc(0, 0, 7280, 7280), rc(7280, 3640, 9100, 7280)],
+    [[0, 0, 3640, 3640], [0, 7280, 3640, 3640], [5460, 5460, 3640, 3640], [7280, 0, 3640, 3640], [9100, 3640, 7280, 5460], [9100, 7280, 7280, 5460]],
+    [[7280, 3640, 5460, 5460]]);
+});
+
+test('orthogonalHipDiagonals (e) 幅 910 の翼: 隅木6・谷木1', () => {
+  expectDiags([rc(0, 0, 7280, 3640), rc(0, 3640, 910, 5460)],
+    [[0, 0, 1820, 1820], [0, 5460, 455, 5005], [455, 3185, 1820, 1820], [910, 5460, 455, 5005], [7280, 0, 5460, 1820], [7280, 3640, 5460, 1820]],
+    [[910, 3640, 455, 3185]]);
+});
+
+test('orthogonalHipDiagonals (f) 中庭の穴: 隅木4・谷木4（穴の角は入隅）', () => {
+  expectDiags([rc(0, 0, 9100, 3640), rc(0, 5460, 9100, 9100), rc(0, 3640, 3640, 5460), rc(5460, 3640, 9100, 5460)],
+    [[0, 0, 1820, 1820], [0, 9100, 1820, 7280], [9100, 0, 7280, 1820], [9100, 9100, 7280, 7280]],
+    [[3640, 3640, 1820, 1820], [3640, 5460, 1820, 7280], [5460, 3640, 7280, 1820], [5460, 5460, 7280, 7280]]);
+});
+
+test('orthogonalHipDiagonals: 矩形 9100x7280 は4隅から棟木の両端へ、正方形 5460 は4隅から中心へ', () => {
+  expectDiags([rc(0, 0, 9100, 7280)],
+    [[0, 0, 3640, 3640], [0, 7280, 3640, 3640], [9100, 0, 5460, 3640], [9100, 7280, 5460, 3640]], []);
+  expectDiags([rc(0, 0, 5460, 5460)],
+    [[0, 0, 2730, 2730], [0, 5460, 2730, 2730], [5460, 0, 2730, 2730], [5460, 5460, 2730, 2730]], []);
+});
+
+test('orthogonalHipDiagonals (roof-test4 の主屋根) 非ゼロ始まり・負の座標でも同じ規則', () => {
+  expectDiags([rc(0, -12614, 7280, -3640)],
+    [[0, -12614, 3640, -8974], [7280, -12614, 3640, -8974], [0, -3640, 3640, -7280], [7280, -3640, 3640, -7280]], []);
+});
+
+test('orthogonalHipDiagonals 性質: 矩形の上端の集合は roofFramingLines の寄棟の棟木の端点（正方形は中心）', () => {
+  for (const r of [rc(0, 0, 9100, 7280), rc(0, 0, 7280, 9100), rc(0, 0, 5460, 5460), rc(100, 200, 4100, 1700)]) {
+    const tops = new Set(diags([r]).map(d => `${d.x2},${d.y2}`));
+    const { ridges } = lines(r, RoofShape.HIP);
+    const expected = new Set();
+    for (const l of ridges) {
+      expected.add(l.isVertical ? `${l.coord},${l.lo}` : `${l.lo},${l.coord}`);
+      expected.add(l.isVertical ? `${l.coord},${l.hi}` : `${l.hi},${l.coord}`);
+    }
+    if (ridges.length === 0) expected.add(`${(r.x1 + r.x2) / 2},${(r.y1 + r.y2) / 2}`);
+    assert.deepEqual([...tops].sort(), [...expected].sort(), JSON.stringify(r));
+  }
+});
+
+test('orthogonalHipDiagonals 性質（L字）: 全部 45° で、中点の L∞ 距離＝軒側の端の距離＋長さの半分。各上端は棟木の端か別の斜め線の上端', () => {
+  const ds = diags(L_SHAPE);
+  const { ridges } = ortho(L_SHAPE);
+  const distToNotch = (x, y) => Math.max(Math.max(5460 - x, 0, x - 9100), Math.max(0 - y, 0, y - 3640));
+  const dist = (x, y) => Math.min(x, 9100 - x, y, 7280 - y, distToNotch(x, y));
+  const ridgeEnds = new Set(ridges.flatMap(l => (l.isVertical ? [`${l.coord},${l.lo}`, `${l.coord},${l.hi}`] : [`${l.lo},${l.coord}`, `${l.hi},${l.coord}`])));
+  const tops = ds.map(d => `${d.x2},${d.y2}`);
+  for (const d of ds) {
+    assert.equal(Math.abs(d.x2 - d.x1), Math.abs(d.y2 - d.y1), JSON.stringify(d));
+    const mx = (d.x1 + d.x2) / 2;
+    const my = (d.y1 + d.y2) / 2;
+    assert.equal(dist(mx, my), dist(d.x1, d.y1) + Math.abs(d.x2 - d.x1) / 2, JSON.stringify(d));
+    const top = `${d.x2},${d.y2}`;
+    assert.ok(ridgeEnds.has(top) || tops.filter(t => t === top).length >= 2, `上端が孤立: ${JSON.stringify(d)}`);
+  }
+});
+
+test('orthogonalHipDiagonals: 矩形の座標が 0.3mm ずれていても（許容差 0.5 以内）同じ結果', () => {
+  const sloppy = [rc(0, 0, 5460.3, 3640.2), rc(0.2, 3640.3, 5460.2, 7280), rc(5460, 3640, 9100, 7280.3)];
+  assert.deepEqual(diags(sloppy), diags(L_SHAPE));
+});
+
+test('orthogonalHipDiagonals: 2回呼んで同じ結果（入力を書き換えない）', () => {
+  const input = L_SHAPE.map(r => ({ ...r }));
+  const first = diags(input);
+  assert.deepEqual(input, L_SHAPE);
+  assert.deepEqual(diags(input), first);
+});
+
+test('【失敗系】orthogonalHipDiagonals: 空・面積0だけの rects は []。不正入力は RangeError', () => {
+  assert.deepEqual(diags([]), []);
+  assert.deepEqual(diags([rc(0, 0, 0, 5000), rc(0, 0, 5000, 0.5)]), []);
+  assert.throws(() => diags([rc(0, 0, NaN, 5000)]), RangeError);
+  assert.throws(() => diags([rc(5000, 0, 0, 5000)]), RangeError);
+  assert.throws(() => diags([null]), RangeError);
+  assert.throws(() => diags(null), RangeError);
+  assert.throws(() => diags(L_SHAPE, { tolMm: -1 }), RangeError);
+  assert.throws(() => diags(L_SHAPE, { tolMm: NaN }), RangeError);
+});
+
+const hipDiag = (extra = {}) => roofHipDiagonals({ rect: null, rects: null, shape: RoofShape.HIP, tolMm: TOL, ...extra });
+
+test('roofHipDiagonals: 寄棟の rect は矩形の斜め線、rect=null は rects の斜め線。rect があれば rects は無視', () => {
+  const r = rc(0, 0, 9100, 7280);
+  assert.deepEqual(hipDiag({ rect: r }), diags([r]));
+  assert.equal(hipDiag({ rect: r }).length, 4);
+  assert.deepEqual(hipDiag({ rects: L_SHAPE }), diags(L_SHAPE));
+  assert.deepEqual(hipDiag({ rect: r, rects: L_SHAPE }), diags([r]));
+});
+
+test('roofHipDiagonals: 切妻・片流れ・陸屋根・棟違い・未知の形状は []（rect があっても rects があっても）', () => {
+  for (const shape of [RoofShape.GABLE, RoofShape.MONO, RoofShape.FLAT, RoofShape.STAGGERED, 'unknown']) {
+    assert.deepEqual(hipDiag({ rect: rc(0, 0, 9100, 7280), shape }), [], shape);
+    assert.deepEqual(hipDiag({ rects: L_SHAPE, shape }), [], shape);
+  }
+});
+
+test('【失敗系】roofHipDiagonals: rect=null で rects が null・undefined・[] や幅0の rect は []。NaN・逆順・tolMm 不正は RangeError', () => {
+  assert.deepEqual(hipDiag({ rects: null }), []);
+  assert.deepEqual(hipDiag({ rects: undefined }), []);
+  assert.deepEqual(hipDiag({ rects: [] }), []);
+  assert.deepEqual(hipDiag({ rect: rc(0, 0, 0, 5000) }), []);
+  assert.deepEqual(hipDiag({ rect: rc(0, 0, 5000, 0.5) }), []);
+  assert.throws(() => hipDiag({ rect: rc(0, 0, NaN, 5000) }), RangeError);
+  assert.throws(() => hipDiag({ rect: rc(5000, 0, 0, 5000) }), RangeError);
+  assert.throws(() => hipDiag({ rect: rc(0, 5000, 5000, 0) }), RangeError);
+  assert.throws(() => hipDiag({ rect: rc(0, 0, 5000, 5000), tolMm: -1 }), RangeError);
 });

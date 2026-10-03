@@ -12,7 +12,7 @@
 // 抵触しない（openings/openingPlanSymbolGeometry.js と同じ先例）。
 // ================================================================
 import { findSectionEntry } from './sectionCatalog.js';
-import { roofFramingLines, roofStrutPoints } from './roofFramingGeometry.js';
+import { roofFramingLines, roofHipDiagonals, roofStrutPoints } from './roofFramingGeometry.js';
 import { LodLevel } from '../viewport.js';
 
 /** 伏図の全黒色（PLAN_WALL_LINE_COLOR とは根拠が別＝「平面は柱断面を壁と同じ黒」に対し
@@ -263,8 +263,9 @@ function requireWidth(v, name) {
  * 非在来・未知値・drawing 未定義）または lod===SCHEMATIC（略図）は常に空配列。regions が空でも空。
  *   - 棟木: 軸から ±ridgeWidthMm/2 の平行線2本（kind:'ridge'）
  *   - 母屋: 軸上に1本（kind:'purlin'）
+ *   - 隅木・谷木: 上端まで斜めに1本（kind:'hip'|'valley'。寄棟だけ・束なし。points は軒側→上端の4値）
  *   - 束: 母屋・棟木の線と hostBeams の全交点に半径 purlinWidthMm/2 の円（kind:'strut'）
- * 並びは region ごとに 棟木→母屋→束。描画側は kind で線と束を分けて、線→束の順に重ねる。
+ * 並びは region ごとに 棟木→母屋→隅木→谷木→束。描画側は kind で線と束を分けて、線→束の順に重ねる。
  * @param {object} drawing rulesFor(...).drawing
  * @param {string} lod LodLevel
  * @param {object} p
@@ -276,8 +277,8 @@ function requireWidth(v, name) {
  * @param {number} p.purlinPitchMm 母屋のピッチ
  * @param {number[]} p.purlinStartOffsetsMm 母屋の1本目の位置（棟木から）の候補
  * @param {number} p.tolMm
- * @returns {Array<{kind:'ridge'|'purlin', key:string, points:number[]}|{kind:'strut', key:string, x:number, y:number, radius:number}>}
- * @throws {RangeError} 幅が不正（roofFramingLines・roofStrutPoints の入力検査もそのまま伝わる）
+ * @returns {Array<{kind:'ridge'|'purlin'|'hip'|'valley', key:string, points:number[]}|{kind:'strut', key:string, x:number, y:number, radius:number}>}
+ * @throws {RangeError} 幅が不正（roofFramingLines・roofHipDiagonals・roofStrutPoints の入力検査もそのまま伝わる）
  */
 export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeWidthMm, purlinWidthMm, purlinPitchMm, purlinStartOffsetsMm, tolMm }) {
   if (!showRoofFraming(drawing, lod)) return [];
@@ -300,6 +301,11 @@ export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeW
     purlins.forEach((line, i) => {
       out.push({ kind: 'purlin', key: `${region.key}:purlin:${i}`, points: segment(line, 0) });
     });
+    // 隅木・谷木（寄棟だけ）。上端まで斜めに1本。束は立てない（斜め線は roofStrutPoints へ渡さない）
+    const counts = { hip: 0, valley: 0 };
+    for (const d of roofHipDiagonals({ rect: region.rect, rects: region.rects, shape: region.shape, tolMm })) {
+      out.push({ kind: d.kind, key: `${region.key}:${d.kind}:${counts[d.kind]++}`, points: [d.x1, d.y1, d.x2, d.y2] });
+    }
     roofStrutPoints([...ridges, ...purlins], hostBeams ?? [], tolMm).forEach((p, i) => {
       out.push({ kind: 'strut', key: `${region.key}:strut:${i}`, x: p.x, y: p.y, radius: purlinWidthMm / 2 });
     });
