@@ -8,7 +8,7 @@ import {
   pickMembersOnFigure, columnListCategory, pickColumnsOnFigure, columnRenderSize,
   ROOF_FRAMING_DASH, showRoofFraming, roofFramingWidths, roofFramingHostMembers, roofFramingPrimitives,
 } from './framingDrawing.js';
-import { roofFramingLines, roofStrutPoints } from './roofFramingGeometry.js';
+import { roofFramingLines, roofStrutPoints, roofOutline } from './roofFramingGeometry.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 import { STRUCTURES } from './structuralClassification.js';
 import { LodLevel } from '../viewport.js';
@@ -342,6 +342,44 @@ test('【D1・失敗系】roofFramingPrimitives: outline が無い・空の regi
   const region = { ...gableRegion, outline: [{ points: [0, 0, 1, 0, 1, 1, 0, 1] }] };
   assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.SCHEMATIC, baseArgs({ regions: [region] })), []);
   assert.deepEqual(roofFramingPrimitives(rulesFor('S造').drawing, LodLevel.STANDARD, baseArgs({ regions: [region] })), []);
+});
+
+test('【D2】roofFramingPrimitives: 切妻は region.edges のけらば出幅ぶん棟木・母屋の端が外形線まで延びる。束の数・位置と外形線は不変', () => {
+  const { edges, outline } = roofOutline({
+    rects: [MOKU_RECT], shape: 'gable', ridgeIsVertical: true, eaveOverhangMm: 455, gableOverhangMm: 455, tolMm: TOL,
+  });
+  const hostBeams = [{ isVertical: false, axis: -3640, lo: 0, hi: 7280 }, { isVertical: false, axis: -12614, lo: 0, hi: 7280 }];
+  const without = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...gableRegion, outline }], hostBeams }));
+  const withEdges = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...gableRegion, outline, edges }], hostBeams }));
+  assert.deepEqual(kindOf(withEdges, 'ridge').map(p => p.points), [
+    [3580, -13069, 3580, -3185],
+    [3700, -13069, 3700, -3185],
+  ], '棟木の端は y1-455・y2+455');
+  for (const p of kindOf(withEdges, 'purlin')) assert.deepEqual([p.points[1], p.points[3]], [-13069, -3185], '母屋の端も外形線まで');
+  assert.deepEqual(kindOf(withEdges, 'purlin').map(p => p.points[0]), kindOf(without, 'purlin').map(p => p.points[0]), '母屋の位置は不変');
+  assert.deepEqual(kindOf(withEdges, 'strut'), kindOf(without, 'strut'), '束は延長前の線で決まる（数・位置とも不変）');
+  assert.ok(kindOf(withEdges, 'strut').length > 0, '前提: 束がある');
+  assert.deepEqual(kindOf(withEdges, 'outline'), kindOf(without, 'outline'), '外形線は不変');
+  assert.deepEqual(withEdges.map(p => p.key), without.map(p => p.key), 'key・並びは不変');
+});
+
+test('【D2】roofFramingPrimitives: 寄棟（矩形）は棟木・母屋が不変で、隅木4本の軒側が軒の出幅ぶん斜め外へ延びる', () => {
+  const rect = { x1: 0, y1: 0, x2: 9000, y2: 6000 };
+  const { edges } = roofOutline({ rects: [rect], shape: 'hip', eaveOverhangMm: 455, gableOverhangMm: 455, tolMm: TOL });
+  const region = { key: 'main', rect, shape: 'hip', ridgeIsVertical: null, highSide: null };
+  const without = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [region] }));
+  const withEdges = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...region, edges }] }));
+  assert.deepEqual(withEdges.filter(p => p.kind !== 'hip'), without.filter(p => p.kind !== 'hip'), '隅木以外は不変');
+  assert.deepEqual(kindOf(withEdges, 'hip').map(p => p.points), [
+    [-455, -455, 3000, 3000], [-455, 6455, 3000, 3000], [9455, -455, 6000, 3000], [9455, 6455, 6000, 3000],
+  ]);
+});
+
+test('【D2・失敗系】roofFramingPrimitives: edges が不正（配列でない）なら RangeError、無い・null は延長なしで従来どおり', () => {
+  const base = roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs());
+  assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...gableRegion, edges: null }] })), base);
+  assert.deepEqual(roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...gableRegion, edges: [] }] })), base);
+  assert.throws(() => roofFramingPrimitives(WOOD_DRAWING, LodLevel.STANDARD, baseArgs({ regions: [{ ...gableRegion, edges: 'x' }] })), RangeError);
 });
 
 test('roofFramingPrimitives: 束は母屋・棟木と host 梁の全交点に半径45（母屋90角の半分）で出る（東西の軒桁 y=-3640・-12614 で 7×2=14 か所）', () => {

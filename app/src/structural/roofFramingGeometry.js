@@ -680,6 +680,78 @@ export function roofOutline({ rects, shape, ridgeIsVertical = null, highSide = n
   return { edges, outline };
 }
 
+// ---- 母屋・棟木・隅木の出幅ぶんの延長（描画用。ステップ D2） ----
+
+/** 延長に使う辺（roofOutline の edges）の検査。null・undefined は辺なし（延長しない）。 */
+function requireOutlineEdges(edges) {
+  if (edges == null) return [];
+  if (!Array.isArray(edges)) throw new RangeError('edges は配列でなければなりません');
+  for (const e of edges) {
+    if (!e || typeof e.isVertical !== 'boolean') throw new RangeError(`edges の isVertical が不正です: ${JSON.stringify(e)}`);
+    for (const k of ['coord', 'lo', 'hi']) requireFinite(e[k], `edge.${k}`);
+    if (e.outward !== 1 && e.outward !== -1) throw new RangeError(`edges の outward が不正です: ${e.outward}`);
+    requireNonNegative(e.overhangMm, 'edge.overhangMm');
+  }
+  return edges;
+}
+
+/**
+ * 母屋・棟木の線を、けらば側の出幅ぶん外形線まで延ばした「描画用の線」を返す（ステップ D2。入力の線は変えない）。
+ * 線の端点が、線と直交する屋根範囲の辺の上（端の座標が辺の coord、線の coord が辺の [lo,hi]。tolMm で判定）にあり、
+ * その辺の外側が線の外向きと同じなら、その辺の部分の出幅だけ外へ延ばす。段差の境目に線が来て複数の部分に属すときは小さい出幅。
+ * 端が屋根範囲の内部で終わる線（寄棟の環・棟木・つぶれた棟木）はどの辺の上にも無いので延びない。
+ * 辺（edges）が null・空なら線はそのまま。長さ・順序・件数は変えない（束の位置は延長前の線で決める）。
+ * @param {object} p
+ * @param {Array<{isVertical:boolean,coord:number,lo:number,hi:number}>} p.lines 棟木・母屋の線
+ * @param {Array<{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1,overhangMm:number}>|null} p.edges roofOutline の edges
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {Array<{isVertical:boolean,coord:number,lo:number,hi:number}>}
+ * @throws {RangeError} tolMm が不正、edges が配列でない・辺の値が不正
+ */
+export function extendLinesToOutline({ lines, edges, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  const list = requireOutlineEdges(edges);
+  const reach = (line, at, outward) => {
+    const hits = list.filter(e => e.isVertical !== line.isVertical && e.outward === outward
+      && Math.abs(e.coord - at) <= tolMm && e.lo - tolMm <= line.coord && line.coord <= e.hi + tolMm);
+    return hits.length === 0 ? 0 : Math.min(...hits.map(e => e.overhangMm));
+  };
+  return lines.map(line => ({ ...line, lo: line.lo - reach(line, line.lo, -1), hi: line.hi + reach(line, line.hi, 1) }));
+}
+
+/**
+ * 隅木を軒先の角まで延ばした「描画用の斜め線」を返す（ステップ D2。入力は変えない）。隅木（kind:'hip'）の軒側の端 (x1,y1) が
+ * 屋根範囲の角（直交する2辺の上。両辺とも外側が線の向きの逆）にあり、2辺の出幅が等しい（tolMm 以内）なら、その出幅ぶん
+ * 45° に外へ延ばす（外形線の角へ）。出幅が違う（下屋の辺が屋内に接する角など）は延ばさない。谷木（valley）・隠れた出隅の
+ * 隅木（軒側の端が屋根範囲の内部）は延ばさない。上端 (x2,y2) は変えない。
+ * @param {object} p
+ * @param {Array<{kind:'hip'|'valley', x1:number, y1:number, x2:number, y2:number}>} p.diagonals roofHipDiagonals の戻り値
+ * @param {Array<{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1,overhangMm:number}>|null} p.edges roofOutline の edges
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {Array<{kind:'hip'|'valley', x1:number, y1:number, x2:number, y2:number}>}
+ * @throws {RangeError} tolMm が不正、edges が配列でない・辺の値が不正
+ */
+export function extendDiagonalsToOutline({ diagonals, edges, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  const list = requireOutlineEdges(edges);
+  return diagonals.map(d => {
+    if (d.kind !== 'hip') return d;
+    const sx = Math.sign(d.x2 - d.x1);
+    const sy = Math.sign(d.y2 - d.y1);
+    if (sx === 0 || sy === 0) return d;
+    const on = (isVertical, outward) => list.filter(e => e.isVertical === isVertical && e.outward === outward
+      && Math.abs(e.coord - (isVertical ? d.x1 : d.y1)) <= tolMm
+      && e.lo - tolMm <= (isVertical ? d.y1 : d.x1) && (isVertical ? d.y1 : d.x1) <= e.hi + tolMm);
+    const vs = on(true, -sx);
+    const hs = on(false, -sy);
+    if (vs.length === 0 || hs.length === 0) return d;
+    const dv = Math.min(...vs.map(e => e.overhangMm));
+    const dh = Math.min(...hs.map(e => e.overhangMm));
+    if (Math.abs(dv - dh) > tolMm || dv <= 0) return d;
+    return { ...d, x1: d.x1 - sx * dv, y1: d.y1 - sy * dv };
+  });
+}
+
 // ---- 寄棟の小屋梁のための「翼」の分け方（ステップ C2e-3a。呼び出し元は woodRoofFraming.js＝C2e-3b） ----
 
 /** 区間 [lo,hi] から taken（{lo,hi}）を引いた残りのうち、長さが tol を超えるもの（昇順）。 */

@@ -477,7 +477,9 @@ test('roofFramingFigurePrimitives: 小屋伏図（屋根専用平面）は最上
   assert.ok(struts.every(s => s.x === 0 && s.radius === 45));
   assert.deepEqual(struts.map(s => s.y),
     [725, 1635, 2545, 3000, 3455, 4365, 5275], '棟 y=3000 から 455・1365・2275');
-  assert.deepEqual(prims.find(p => p.kind === 'ridge').points, [0, 2940, 9000, 2940]);
+  // D2: 棟木・母屋の端はけらば（縦の辺 x=0・9000）の出幅 455 ぶん外形線まで延びる。束の位置（上）は延長前の線のまま
+  assert.deepEqual(prims.find(p => p.kind === 'ridge').points, [-455, 2940, 9455, 2940]);
+  assert.deepEqual(prims.find(p => p.kind === 'purlin').points, [-455, 725, 9455, 725]);
 });
 
 test('roofFramingFigurePrimitives: 実体階の伏図は自階 graph の下屋（片流れ）。束は自階の梁が母屋と交わる所だけ', () => {
@@ -488,8 +490,8 @@ test('roofFramingFigurePrimitives: 実体階の伏図は自階 graph の下屋�
     rules: WOOD, lod: LodLevel.DETAIL, isRoofPlane: false, subjectGraph: graph, topGraph: null, project: woodProject(),
   });
   assert.deepEqual(prims.map(p => [p.kind, ...p.points]), [
-    ['purlin', 2455, 1500, 2455, 3000],
-    ['purlin', 3365, 1500, 3365, 3000],
+    ['purlin', 2455, 1045, 2455, 3455], // D2: けらば（横の辺）の出幅 455 ぶん外形線まで延びる
+    ['purlin', 3365, 1045, 3365, 3455],
     // D1: 屋根の外形線（左の辺は屋内に接するので出幅 0）。母屋・束の数は変わらない
     ['outline', 4455, 1045, 4455, 3455, 2000, 3455, 2000, 1045],
   ], '片流れ left: 高い側（x=2000）から幅2000は455始まり（残り635）の x=2455・3365。梁が無いので束なし');

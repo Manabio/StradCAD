@@ -12,7 +12,7 @@
 // 抵触しない（openings/openingPlanSymbolGeometry.js と同じ先例）。
 // ================================================================
 import { findSectionEntry } from './sectionCatalog.js';
-import { roofFramingLines, roofHipDiagonals, roofStrutPoints } from './roofFramingGeometry.js';
+import { roofFramingLines, roofHipDiagonals, roofStrutPoints, extendLinesToOutline, extendDiagonalsToOutline } from './roofFramingGeometry.js';
 import { LodLevel } from '../viewport.js';
 
 /** 伏図の全黒色（PLAN_WALL_LINE_COLOR とは根拠が別＝「平面は柱断面を壁と同じ黒」に対し
@@ -263,7 +263,9 @@ function requireWidth(v, name) {
  * 非在来・未知値・drawing 未定義）または lod===SCHEMATIC（略図）は常に空配列。regions が空でも空。
  *   - 棟木: 軸から ±ridgeWidthMm/2 の平行線2本（kind:'ridge'）
  *   - 母屋: 軸上に1本（kind:'purlin'）
- *   - 隅木・谷木: 上端まで斜めに1本（kind:'hip'|'valley'。寄棟だけ・束なし。points は軒側→上端の4値）
+ *     （棟木・母屋は region.edges があれば、屋根範囲の辺の上で終わる端を出幅ぶん外形線まで延ばす＝けらば側。D2。寄棟は延びない）
+ *   - 隅木・谷木: 上端まで斜めに1本（kind:'hip'|'valley'。寄棟だけ・束なし。points は軒側→上端の4値。
+ *     隅木は軒側の端を軒先の角まで45°に延ばす。谷木は延ばさない。D2）
  *   - 外形線: 屋根の外形（軒先・けらば）の閉じた折れ線を閉路ごとに1つ（kind:'outline'。points は x,y の並び・closed:true。
  *     細い実線。region.outline が無ければ出さない。束の対象にしない）
  *   - 束: 母屋・棟木の線と hostBeams の全交点に半径 purlinWidthMm/2 の円（kind:'strut'）
@@ -296,16 +298,23 @@ export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeW
       rect: region.rect, rects: region.rects, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical,
       highSide: region.highSide, purlinPitchMm, purlinStartOffsetsMm, tolMm,
     });
-    ridges.forEach((line, i) => {
+    // 描画用の線は、けらば側で出幅ぶん外形線まで延ばす（D2）。束（roofStrutPoints）は延長前の線で決める
+    const edges = region.edges ?? null;
+    const drawRidges = extendLinesToOutline({ lines: ridges, edges, tolMm });
+    const drawPurlins = extendLinesToOutline({ lines: purlins, edges, tolMm });
+    drawRidges.forEach((line, i) => {
       out.push({ kind: 'ridge', key: `${region.key}:ridge:${i}:-`, points: segment(line, -ridgeWidthMm / 2) });
       out.push({ kind: 'ridge', key: `${region.key}:ridge:${i}:+`, points: segment(line, ridgeWidthMm / 2) });
     });
-    purlins.forEach((line, i) => {
+    drawPurlins.forEach((line, i) => {
       out.push({ kind: 'purlin', key: `${region.key}:purlin:${i}`, points: segment(line, 0) });
     });
-    // 隅木・谷木（寄棟だけ）。上端まで斜めに1本。束は立てない（斜め線は roofStrutPoints へ渡さない）
+    // 隅木・谷木（寄棟だけ）。上端まで斜めに1本。隅木は軒先の角まで延ばす（D2）。束は立てない（斜め線は roofStrutPoints へ渡さない）
     const counts = { hip: 0, valley: 0 };
-    for (const d of roofHipDiagonals({ rect: region.rect, rects: region.rects, shape: region.shape, tolMm })) {
+    const diagonals = extendDiagonalsToOutline({
+      diagonals: roofHipDiagonals({ rect: region.rect, rects: region.rects, shape: region.shape, tolMm }), edges, tolMm,
+    });
+    for (const d of diagonals) {
       out.push({ kind: d.kind, key: `${region.key}:${d.kind}:${counts[d.kind]++}`, points: [d.x1, d.y1, d.x2, d.y2] });
     }
     // 屋根の外形線（軒先・けらば。region.outline＝閉路ごとの点列。D1）。閉じた細い実線。束の対象にしない
