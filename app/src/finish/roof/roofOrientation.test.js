@@ -6,7 +6,10 @@ import assert from 'node:assert/strict';
 import {
   Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape,
 } from '@core';
-import { roofEdgeInteriorAdjacency, roofHighSideViewOfRoom, roofRidgeDirectionViewOfRoom } from './roofOrientation.js';
+import {
+  roofEdgeInteriorAdjacency, roofEdgeInteriorContacts, roofBoundaryInteriorContacts, roofHighSideViewOfRoom, roofRidgeDirectionViewOfRoom,
+} from './roofOrientation.js';
+import { orthogonalBoundaryLoops } from '../../structural/roofFramingGeometry.js';
 import { createLeanToRoofSpec, roofRoomBounds } from './roofDefaults.js';
 import { rectOfBounds } from './roofGeometry.js';
 
@@ -200,4 +203,58 @@ test('【失敗系】roofHighSideViewOfRoom: 矩形でない片流れ（L字の�
   r.roofSpec.setField('shape', RoofShape.MONO);
   r.roofSpec.setField('highSide', 'left');
   assert.deepEqual(roofHighSideViewOfRoom(r, graph), { visible: false, value: null });
+});
+
+// ---- roofBoundaryInteriorContacts（ステップ E1a。矩形でない屋根範囲の外周の辺が屋内に接する区間） ----
+
+const TOL = 0.5;
+const edgesOf = (room, graph) => orthogonalBoundaryLoops({
+  rects: roofRoomBounds(room, graph).map(({ x1, y1, x2, y2 }) => ({ x1, y1, x2, y2 })), tolMm: TOL,
+}).flat();
+const sortedJson = list => list.map(c => JSON.stringify(c)).sort();
+
+test('roofBoundaryInteriorContacts: 矩形の4辺を渡すと roofEdgeInteriorContacts と同じ集合（上・左・下・右の屋内と、辺の一部だけが接する場合）', () => {
+  const { graph, addRoom, roof, rectOf } = makeGrid(XS, YS);
+  addRoom([[1, 0]], { name: '上' }); // 屋根の上辺 4000 のうち x:2000..4000 に接する
+  addRoom([[0, 1]], { name: '左' });
+  addRoom([[2, 2]], { name: '右下' }); // 屋根 x:2000..6000,y:1500..3000 の下辺の右半分 x:4000..6000 に接する
+  addRoom([[1, 2]], { name: '下' }); // 下辺の左半分に接する
+  const r = roof([[1, 1], [2, 1]]);
+  const expected = roofEdgeInteriorContacts(rectOf(r), graph);
+  assert.ok(expected.length >= 3, `前提: 区間がある ${expected.length}`);
+  assert.deepEqual(sortedJson(roofBoundaryInteriorContacts(edgesOf(r, graph), graph)), sortedJson(expected));
+});
+
+test('roofBoundaryInteriorContacts: L字の入隅で、1つの屋内セルが2辺に接する（外側 +方向の横の辺と縦の辺）', () => {
+  const { graph, addRoom, roof } = makeGrid(XS, YS);
+  addRoom([[2, 2]], { name: '入隅の室' }); // x:4000..6000,y:3000..4500
+  const r = roof([[1, 1], [2, 1], [1, 2]]); // L字: (1,1)(2,1)(1,2)
+  const got = roofBoundaryInteriorContacts(edgesOf(r, graph), graph);
+  assert.deepEqual(sortedJson(got), sortedJson([
+    { isVertical: false, coord: 3000, lo: 4000, hi: 6000, outward: 1 },
+    { isVertical: true, coord: 4000, lo: 3000, hi: 4500, outward: 1 },
+  ]));
+});
+
+test('roofBoundaryInteriorContacts: L字で外側 -方向（上・左）の辺に接する屋内は、その辺の接する区間だけ', () => {
+  const { graph, addRoom, roof } = makeGrid(XS, YS);
+  addRoom([[1, 0]], { name: '上' }); // x:2000..4000,y:0..1500。L字の上辺 x:2000..6000 のうち 2000..4000
+  addRoom([[0, 2]], { name: '左下' }); // x:0..2000,y:3000..4500。L字の左辺 y:1500..4500 のうち 3000..4500
+  const r = roof([[1, 1], [2, 1], [1, 2]]);
+  assert.deepEqual(sortedJson(roofBoundaryInteriorContacts(edgesOf(r, graph), graph)), sortedJson([
+    { isVertical: false, coord: 1500, lo: 2000, hi: 4000, outward: -1 },
+    { isVertical: true, coord: 2000, lo: 3000, hi: 4500, outward: -1 },
+  ]));
+});
+
+test('【失敗系】roofBoundaryInteriorContacts: 屋内が接しない（屋根セル・屋外部屋・角で触れるだけ）は空。edges が配列でなければ RangeError', () => {
+  const { graph, addRoom, roof } = makeGrid(XS, YS);
+  addRoom([[0, 0]], { name: '角で触れる' }); // x:0..2000,y:0..1500。L字の角 (2000,1500) だけ
+  addRoom([[2, 0]], { kind: RoomKind.EXTERIOR, name: 'バルコニー' });
+  const r = roof([[1, 1], [2, 1], [1, 2]]);
+  const edges = edgesOf(r, graph);
+  assert.deepEqual(roofBoundaryInteriorContacts(edges, graph), []);
+  assert.deepEqual(roofBoundaryInteriorContacts([], graph), []);
+  assert.throws(() => roofBoundaryInteriorContacts(null, graph), RangeError);
+  assert.throws(() => roofBoundaryInteriorContacts({}, graph), RangeError);
 });

@@ -11,6 +11,8 @@
  * 屋根範囲は矩形 rect={x1,y1,x2,y2}（x1<x2, y1<y2）が基本（rect* の関数は矩形専用）。矩形でない範囲は、寄棟だけ
  * orthogonalHipLines（rects＝セル矩形。ステップ C2e-2）で棟木・母屋を導く。矩形でない切妻・片流れは空を返す。
  * 寄棟の隅木・谷木（斜め線）は棟木・母屋とは別の配列で、roofHipDiagonals / orthogonalHipDiagonals（ステップ C2e-2b）。
+ * 矩形でない下屋の片流れ（L字）は、壁ごとの翼（leanToWingsOf。ステップ E1a）に分けた母屋・継ぎ目の隅木・谷木を
+ * leanToWings 引数で渡したときだけ返す（渡さなければ空）。
  *
  * 不正入力の扱い:
  *   - 「何も生えない」入力（rect=null・陸屋根・棟違い・未知の形状・幅/高さ 0 の矩形）は空を返す。
@@ -458,12 +460,15 @@ export function orthogonalHipDiagonals({ rects, tolMm }) {
  * @param {{x1:number,y1:number,x2:number,y2:number}|null} p.rect
  * @param {Array<object>|null} [p.rects]
  * @param {string} p.shape RoofShape の値
+ * @param {Array<object>|null} [p.leanToWings] L字の下屋の翼（leanToWingsOf の wings。rect=null の片流れだけ。既定 null）
  * @param {number} p.tolMm 許容差（>=0）
  * @returns {Array<{kind:'hip'|'valley', x1:number, y1:number, x2:number, y2:number}>}
  * @throws {RangeError} 許容差が不正、rect の座標が非有限か逆順
  */
-export function roofHipDiagonals({ rect, rects = null, shape, tolMm }) {
+export function roofHipDiagonals({ rect, rects = null, shape, leanToWings = null, tolMm }) {
   requireNonNegative(tolMm, 'tolMm');
+  // L字（矩形でない）の下屋の片流れ（rect=null・翼＝leanToWingsOf）は継ぎ目（隅木・谷木）。寄棟ではないが斜め線の入口はここ1つ
+  if (!rect && shape === RoofShape.MONO && Array.isArray(leanToWings)) return leanToSeams({ wings: leanToWings, tolMm }).diagonals;
   if (shape !== RoofShape.HIP) return [];
   if (!rect) {
     return Array.isArray(rects) && rects.length > 0 ? orthogonalHipDiagonals({ rects, tolMm }) : [];
@@ -622,6 +627,37 @@ function splitEdgeByZones(edge, base, zones, tolMm) {
 }
 
 /**
+ * 辺 edge を、辺の部分ごとの種別 kindZones（leanToWingsOf の戻り値。同じ向き・同じ直線・同じ外側の区間）で分け、部分ごとの
+ * 出幅（軒 or けらば）で splitEdgeByZones した部分（昇順）。隣り合う同じ出幅の部分は1つにする。辺を隙間なく覆わなければ RangeError。
+ */
+function splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, zeroZones, tolMm) {
+  const hit = kindZones
+    .filter(z => z.isVertical === edge.isVertical && z.outward === edge.outward && Math.abs(z.coord - edge.coord) <= tolMm)
+    .map(z => ({ lo: Math.max(z.lo, edge.lo), hi: Math.min(z.hi, edge.hi), kind: z.kind }))
+    .filter(z => z.hi - z.lo > tolMm)
+    .sort((p, q) => p.lo - q.lo);
+  const parts = [];
+  let pos = edge.lo;
+  for (const z of hit) {
+    if (z.kind !== 'eave' && z.kind !== 'gable') throw new RangeError(`kindZones の kind が不正です: ${z.kind}`);
+    if (z.lo - pos > tolMm) throw new RangeError(`kindZones が辺を覆っていません: ${JSON.stringify(edge)}（${pos}..${z.lo}）`);
+    if (z.hi <= pos) continue;
+    const piece = { ...edge, lo: pos, hi: z.hi };
+    parts.push(...splitEdgeByZones(piece, z.kind === 'eave' ? eaveOverhangMm : gableOverhangMm, zeroZones, tolMm));
+    pos = z.hi;
+  }
+  if (edge.hi - pos > tolMm) throw new RangeError(`kindZones が辺を覆っていません: ${JSON.stringify(edge)}（${pos}..${edge.hi}）`);
+  const joined = [];
+  for (const p of parts) {
+    const last = joined[joined.length - 1];
+    if (last && last.overhangMm === p.overhangMm) last.hi = p.hi;
+    else joined.push({ ...p });
+  }
+  if (joined.length > 0) joined[joined.length - 1].hi = edge.hi;
+  return joined;
+}
+
+/**
  * 屋根の外形線（軒先・けらば。ステップ D1）。屋根範囲（rects。矩形は [rect]）の外周の辺を、種別（roofEdgeKind）ごとの出幅
  * だけ外へ平行移動した閉じた線を返す。基準は屋根範囲の辺（通り芯）から水平に測る。辺のうち zeroZones に含まれる部分
  * （下屋の辺が屋内に接する部分）は出幅 0（壁に当たる）。辺の途中で出幅が変わるときは、その辺を部分に分け、段差の小辺を
@@ -636,18 +672,28 @@ function splitEdgeByZones(edge, base, zones, tolMm) {
  * @param {number} p.eaveOverhangMm 軒の出幅（>=0）
  * @param {number} p.gableOverhangMm 妻側（けらば）の出幅（>=0）
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1}>} [p.zeroZones] 出幅 0 の区間
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1, kind:'eave'|'gable'}>|null} [p.kindZones]
+ *   辺の部分ごとの種別（L字の下屋＝leanToWingsOf の戻り値。ステップ E1a）。null（既定）なら shape・ridgeIsVertical・highSide から
+ *   辺ごとに種別を決める（今までの式）。非 null なら roofEdgeKind を呼ばず、辺をこの部分に分けて部分ごとの出幅で動かす
+ *   （辺を隙間なく覆わなければ RangeError）
  * @param {number} p.tolMm 許容差（>=0）
  * @returns {{edges: Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1, overhangMm:number}>, outline: Array<{points:number[]}>}}
  *   edges＝辺の部分（閉路の進行順。出幅つき）、outline＝閉路ごとの頂点列（points は x,y の並び）
  * @throws {RangeError} 出幅が負・非有限、形状・向きの指定が不正（roofEdgeKind）、rects が不正（orthogonalBoundaryLoops）
  */
-export function roofOutline({ rects, shape, ridgeIsVertical = null, highSide = null, eaveOverhangMm, gableOverhangMm, zeroZones = [], tolMm }) {
+export function roofOutline({ rects, shape, ridgeIsVertical = null, highSide = null, eaveOverhangMm, gableOverhangMm, zeroZones = [], kindZones = null, tolMm }) {
   requireNonNegative(eaveOverhangMm, 'eaveOverhangMm');
   requireNonNegative(gableOverhangMm, 'gableOverhangMm');
+  if (kindZones !== null && !Array.isArray(kindZones)) throw new RangeError('kindZones は配列か null でなければなりません');
   const loops = orthogonalBoundaryLoops({ rects, tolMm });
   const partLoops = loops.map(loop => loop.flatMap(edge => {
-    const kind = roofEdgeKind({ shape, ridgeIsVertical, highSide, isVertical: edge.isVertical });
-    const parts = splitEdgeByZones(edge, kind === 'eave' ? eaveOverhangMm : gableOverhangMm, zeroZones, tolMm);
+    let parts;
+    if (kindZones === null) {
+      const kind = roofEdgeKind({ shape, ridgeIsVertical, highSide, isVertical: edge.isVertical });
+      parts = splitEdgeByZones(edge, kind === 'eave' ? eaveOverhangMm : gableOverhangMm, zeroZones, tolMm);
+    } else {
+      parts = splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, zeroZones, tolMm);
+    }
     if (edge.dir < 0) parts.reverse();
     return parts.map(p => ({ isVertical: edge.isVertical, coord: edge.coord, lo: p.lo, hi: p.hi, outward: edge.outward, dir: edge.dir, overhangMm: p.overhangMm }));
   }));
@@ -724,14 +770,18 @@ export function extendLinesToOutline({ lines, edges, tolMm }) {
  * 屋根範囲の角（直交する2辺の上。両辺とも外側が線の向きの逆）にあり、2辺の出幅が等しい（tolMm 以内）なら、その出幅ぶん
  * 45° に外へ延ばす（外形線の角へ）。出幅が違う（下屋の辺が屋内に接する角など）は延ばさない。谷木（valley）・隠れた出隅の
  * 隅木（軒側の端が屋根範囲の内部）は延ばさない。上端 (x2,y2) は変えない。
+ * 軒側の端が1本の辺の上にだけある（もう1本の辺の上に無い）ときは、既定（midEdge=false）では延ばさない。midEdge=true
+ * （片流れの下屋の L字の継ぎ目＝ステップ E1a）のときだけ、その辺の部分の出幅の最小（段差の境目は小さい方）が 0 より大きければ、
+ * その出幅ぶん同じく外へ延ばす。
  * @param {object} p
  * @param {Array<{kind:'hip'|'valley', x1:number, y1:number, x2:number, y2:number}>} p.diagonals roofHipDiagonals の戻り値
  * @param {Array<{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1,overhangMm:number}>|null} p.edges roofOutline の edges
+ * @param {boolean} [p.midEdge=false] 軒側の端が1本の辺の途中にある隅木も延ばすか（L字の下屋の継ぎ目。既定は延ばさない）
  * @param {number} p.tolMm 許容差（>=0）
  * @returns {Array<{kind:'hip'|'valley', x1:number, y1:number, x2:number, y2:number}>}
  * @throws {RangeError} tolMm が不正、edges が配列でない・辺の値が不正
  */
-export function extendDiagonalsToOutline({ diagonals, edges, tolMm }) {
+export function extendDiagonalsToOutline({ diagonals, edges, midEdge = false, tolMm }) {
   requireNonNegative(tolMm, 'tolMm');
   const list = requireOutlineEdges(edges);
   return diagonals.map(d => {
@@ -744,7 +794,13 @@ export function extendDiagonalsToOutline({ diagonals, edges, tolMm }) {
       && e.lo - tolMm <= (isVertical ? d.y1 : d.x1) && (isVertical ? d.y1 : d.x1) <= e.hi + tolMm);
     const vs = on(true, -sx);
     const hs = on(false, -sy);
-    if (vs.length === 0 || hs.length === 0) return d;
+    if (vs.length === 0 && hs.length === 0) return d;
+    if (vs.length === 0 || hs.length === 0) {
+      // 軒側の端が1本の辺の途中にある（片流れの下屋の L字の継ぎ目）。midEdge のときだけ、その部分の出幅の最小だけ外へ
+      if (!midEdge) return d;
+      const ov = Math.min(...(vs.length > 0 ? vs : hs).map(e => e.overhangMm));
+      return ov > 0 ? { ...d, x1: d.x1 - sx * ov, y1: d.y1 - sy * ov } : d;
+    }
     const dv = Math.min(...vs.map(e => e.overhangMm));
     const dh = Math.min(...hs.map(e => e.overhangMm));
     if (Math.abs(dv - dh) > tolMm || dv <= 0) return d;
@@ -987,13 +1043,15 @@ export function orthogonalChord({ rects, isVertical, coord, lo, hi, tolMm }) {
  * @param {string} p.shape RoofShape の値
  * @param {boolean} [p.ridgeIsVertical] 切妻の棟が y 方向か
  * @param {string|null} [p.highSide] 片流れの高い側
+ * @param {Array<object>|null} [p.leanToWings] L字の下屋の翼（leanToWingsOf の wings。rect=null・片流れのときだけ使う。
+ *   渡さなければ今まで通り＝空）
  * @param {number} p.purlinPitchMm 母屋のピッチ（>0。例 910）
  * @param {number[]} p.purlinStartOffsetsMm 母屋の1本目の位置（棟木から）の候補（空でない。各 >0。例 [455, 910]）
  * @param {number} p.tolMm 許容差（>=0。例 CL_OVERLAP_TOL_MM）
  * @returns {{ridges: Array<{isVertical:boolean,coord:number,lo:number,hi:number}>, purlins: Array<{isVertical:boolean,coord:number,lo:number,hi:number}>}}
  * @throws {RangeError} ピッチ・許容差が不正、rect の座標が非有限か逆順、片流れで highSide が不正
  */
-export function roofFramingLines({ rect, rects = null, shape, ridgeIsVertical, highSide = null, purlinPitchMm, purlinStartOffsetsMm, tolMm }) {
+export function roofFramingLines({ rect, rects = null, shape, ridgeIsVertical, highSide = null, leanToWings = null, purlinPitchMm, purlinStartOffsetsMm, tolMm }) {
   requirePositive(purlinPitchMm, 'purlinPitchMm');
   if (!Array.isArray(purlinStartOffsetsMm) || purlinStartOffsetsMm.length === 0) {
     throw new RangeError('purlinStartOffsetsMm は空でない配列でなければなりません');
@@ -1006,6 +1064,10 @@ export function roofFramingLines({ rect, rects = null, shape, ridgeIsVertical, h
     // 矩形でない寄棟（rect=null・rects＝セル矩形）だけ orthogonalHipLines。矩形かどうかは呼び出し側（region）が保証する。
     if (shape === RoofShape.HIP && Array.isArray(rects) && rects.length > 0) {
       return orthogonalHipLines({ rects, pitchMm: purlinPitchMm, tolMm });
+    }
+    // L字（矩形でない）の下屋の片流れ: 翼（leanToWingsOf）ごとの母屋。下屋全体で割付は1つ（leanToMonoLines）
+    if (shape === RoofShape.MONO && Array.isArray(leanToWings)) {
+      return leanToMonoLines({ wings: leanToWings, pitchMm: purlinPitchMm, startOffsetsMm: purlinStartOffsetsMm, tolMm });
     }
     return empty;
   }
@@ -1138,4 +1200,532 @@ export function roofStrutPoints(lines, members, tolMm) {
     }
   }
   return points.sort((p, q) => p.x - q.x || p.y - q.y);
+}
+
+// ---- L字（矩形でない）の下屋＝翼ごとの片流れ（ステップ E1a。呼び出し元は E1b。寄棟の翼 hipFramingWings とは別物） ----
+//
+// 下屋の屋根範囲 P が矩形でないとき、壁（屋内に接する辺）ごとに「その壁から流れる片流れの矩形」＝翼を求める。翼の高い側は
+// 壁のある側。壁の上端の高さは全翼で同じなので、母屋の位置（壁からの距離）は全翼で共通の割付を使う。2つの翼が覆う部分
+// （壁の角の回り込み）は、各翼の「入り口の辺」（その部分へ延びてきた辺）に近い方の翼が持ち、境目が隅木・谷木になる。
+
+const LEAN_ENTRIES = ['left', 'right', 'top', 'bottom'];
+const LEAN_SIDE_RANK = { top: 0, bottom: 1, left: 2, right: 3 };
+
+/** 壁の辺（向き・外側）が表す片流れの高い側。外側が coord の −方向なら壁は屋根の top/left 側。 */
+const leanSideOfEdge = (isVertical, outward) => (isVertical ? (outward < 0 ? 'left' : 'right') : (outward < 0 ? 'top' : 'bottom'));
+/** 流れが y 方向（top/bottom の翼）か。 */
+const leanFlowsAlongY = side => side === 'top' || side === 'bottom';
+
+/** 昇順の配列 arr の中で v に最も近い要素の添字。 */
+function nearestIndexOf(arr, v) {
+  let best = 0;
+  for (let i = 1; i < arr.length; i++) if (Math.abs(arr[i] - v) < Math.abs(arr[best] - v)) best = i;
+  return best;
+}
+
+/** 区間 [lo,hi] の組を昇順に並べ、隙間が tol 以下のものを併合する。 */
+function mergeRanges(ranges, tol) {
+  const merged = [];
+  for (const [lo, hi] of [...ranges].sort((a, b) => a[0] - b[0] || a[1] - b[1])) {
+    const last = merged[merged.length - 1];
+    if (last && lo <= last[1] + tol) last[1] = Math.max(last[1], hi);
+    else merged.push([lo, hi]);
+  }
+  return merged;
+}
+
+/** 翼の配列の検査（leanTo* の共通）。 */
+function requireLeanToWings(wings) {
+  if (!Array.isArray(wings)) throw new RangeError('wings は配列でなければなりません');
+  wings.forEach((w, i) => {
+    if (!HIGH_SIDES.includes(w?.highSide)) throw new RangeError(`wings[${i}].highSide が不正です: ${w?.highSide}`);
+    requireFinite(w.wallCoord, `wings[${i}].wallCoord`);
+    requirePositive(w.depthMm, `wings[${i}].depthMm`);
+    if (!Array.isArray(w.domain)) throw new RangeError(`wings[${i}].domain は配列でなければなりません`);
+    w.domain.forEach((f, k) => {
+      for (const key of ['x1', 'y1', 'x2', 'y2']) requireFinite(f?.[key], `wings[${i}].domain[${k}].${key}`);
+      if (f.x2 < f.x1 || f.y2 < f.y1) throw new RangeError(`wings[${i}].domain[${k}] の座標が逆順です: ${JSON.stringify(f)}`);
+      if (f.entry !== 'direct' && !LEAN_ENTRIES.includes(f.entry)) throw new RangeError(`wings[${i}].domain[${k}].entry が不正です: ${f.entry}`);
+    });
+  });
+}
+
+/**
+ * 入り口の辺（延長の部分 f の f.entry。left＝左辺 x=f.x1 から延びてきた）までの距離を、点 (ox+dx·t, oy+dy·t) の t の一次式
+ * {sigma, beta}（距離 = sigma·t + beta）で返す。
+ */
+function leanEntryLinear(f, ox, oy, dx, dy) {
+  switch (f.entry) {
+    case 'left': return { sigma: dx, beta: ox - f.x1 };
+    case 'right': return { sigma: -dx, beta: f.x2 - ox };
+    case 'top': return { sigma: dy, beta: oy - f.y1 };
+    default: return { sigma: -dy, beta: f.y2 - oy }; // bottom
+  }
+}
+
+/** 翼の壁からの距離を、点 (ox+dx·t, oy+dy·t) の t の一次式で返す。 */
+function leanWallLinear(wing, ox, oy, dx, dy) {
+  switch (wing.highSide) {
+    case 'top': return { sigma: dy, beta: oy - wing.wallCoord };
+    case 'bottom': return { sigma: -dy, beta: wing.wallCoord - oy };
+    case 'left': return { sigma: dx, beta: ox - wing.wallCoord };
+    default: return { sigma: -dx, beta: wing.wallCoord - ox }; // right
+  }
+}
+
+/**
+ * 一次式 w（距離）が u に勝つ（strict なら <、でなければ ≤。差が tolMm 以内は同距離）t の区間 {lo,hi}（±Infinity あり）。
+ * 勝てる t が無ければ null。
+ */
+function leanWinInterval(w, u, strict, tolMm) {
+  const ds = w.sigma - u.sigma;
+  const db = w.beta - u.beta;
+  if (ds === 0) return (strict ? db < -tolMm : db <= tolMm) ? { lo: -Infinity, hi: Infinity } : null;
+  const t = -db / ds;
+  return ds > 0 ? { lo: -Infinity, hi: t } : { lo: t, hi: Infinity };
+}
+
+/** 区間 J=[jlo,jhi] のうち win（leanWinInterval。null は全く勝てない）の外＝負ける区間。 */
+function leanLoseIntervals(jlo, jhi, win) {
+  if (!win) return [{ lo: jlo, hi: jhi }];
+  const out = [];
+  if (win.lo > jlo) out.push({ lo: jlo, hi: Math.min(jhi, win.lo) });
+  if (win.hi < jhi) out.push({ lo: Math.max(jlo, win.hi), hi: jhi });
+  return out;
+}
+
+/**
+ * L字（矩形でない）の下屋を、壁ごとの片流れの矩形＝翼に分ける（純関数。ステップ E1a）。
+ *  1. 壁の区間＝contacts（屋内に接する屋根範囲の辺の区間。roofBoundaryInteriorContacts）を、同じ向き・同じ直線・同じ外側で
+ *     隙間 tolMm 以下を併合し、屋根範囲の外周の辺の上の部分に切る。載らない区間は捨てる。区間が1つも無い（屋内に接さない）
+ *     ときは仮の区間（外接矩形が縦長なら left、そうでなければ top。その向きの外周の辺で coord が外接矩形の端のもの全部）。
+ *  2. 優先順＝その辺の上の区間の長さの合計（大きい順）→ top→bottom→left→right → coord 昇順 → lo 昇順。
+ *  3. 区間ごとに優先順で壁から流れ方向へ「塗られていて印の無い」セルを掃く。外周（塗られていないセル・範囲外）で止まれば
+ *     その列は翼になる（奥行き＝壁から外周まで）。印のあるセルで止まれば掃かない。隣り合い奥行きの差が tolMm 以下の列は1翼。
+ *  4. 翼ができたら、その翼が覆う流れ方向の各行（left/right の翼は各列）について、横の両側へ「塗られていて直接の印の無い」
+ *     セルを進めるだけ進み、延長の印と入り口（右へ延びた部分は 'left'、左へ 'right'、下へ 'top'、上へ 'bottom'）を付ける。
+ *     延長の印は重複してよい。後の区間の掃きは延長の印でも止まる。
+ *  5. 塗られているのに印が無いセルは unassigned（描かない。probe で報告する）。
+ *  6. kindZones＝屋根範囲の外周の辺を、辺の部分ごとに軒（eave）かけらば（gable）に分けたもの。内側のセルを持つ翼（延長のセル
+ *     は入り口までの距離が最も近い翼＝leanToOwnerAt）の流れが辺と直交（縦の流れで横の辺・横の流れで縦の辺）なら軒、平行なら
+ *     けらば。取り残しのセルの辺は軒。全辺を隙間なく覆う（roofOutline の kindZones に渡す）。
+ * 翼＝{highSide, wallCoord, wallEdge:{isVertical,coord,lo,hi,outward}（翼が接する壁の辺の部分）, depthMm, rect, domain}。
+ * domain＝{x1,y1,x2,y2,entry}。最初の1つが entry:'direct'（rect そのもの）、以降は延長の部分（流れ方向の行ごとに、翼の端から
+ * 止まる所までを1つの矩形にし、同じ範囲で隣り合う行は1つにまとめる。入り口の辺は 'left'＝x1・'right'＝x2・'top'＝y1・'bottom'＝y2）。
+ * @param {object} p
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>} p.rects 屋根範囲のセル矩形（幅か高さが tolMm 以下は無視。空なら空）
+ * @param {Array<{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1}>} p.contacts 屋内に接する区間
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {{wings: Array<object>, unassigned: Array<{x1:number,y1:number,x2:number,y2:number}>,
+ *   kindZones: Array<{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1,kind:'eave'|'gable'}>}}
+ * @throws {RangeError} tolMm が不正、rects が配列でない・座標が非有限か逆順、contacts が配列でない・値が不正（座標が非有限、
+ *   lo>hi、outward が ±1 でない）
+ */
+export function leanToWingsOf({ rects, contacts, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  if (!Array.isArray(contacts)) throw new RangeError('contacts は配列でなければなりません');
+  contacts.forEach((c, i) => {
+    if (typeof c?.isVertical !== 'boolean') throw new RangeError(`contacts[${i}].isVertical が不正です: ${c?.isVertical}`);
+    for (const k of ['coord', 'lo', 'hi']) requireFinite(c[k], `contacts[${i}].${k}`);
+    if (c.hi < c.lo) throw new RangeError(`contacts[${i}] の lo が hi より大きい: ${c.lo} > ${c.hi}`);
+    if (c.outward !== 1 && c.outward !== -1) throw new RangeError(`contacts[${i}].outward が不正です: ${c.outward}`);
+  });
+  const loops = orthogonalBoundaryLoops({ rects, tolMm }); // rects の検査もここ
+  if (loops.length === 0) return { wings: [], unassigned: [], kindZones: [] };
+  const live = rects.filter(r => r.x2 - r.x1 > tolMm && r.y2 - r.y1 > tolMm);
+  const edges = loops.flat();
+
+  // 1. 壁の区間（外周の辺ごとに切って併合）
+  const pieces = [];
+  edges.forEach((e, ei) => {
+    const ranges = contacts
+      .filter(c => c.isVertical === e.isVertical && c.outward === e.outward && Math.abs(c.coord - e.coord) <= tolMm)
+      .map(c => [Math.max(c.lo, e.lo), Math.min(c.hi, e.hi)])
+      .filter(([lo, hi]) => hi - lo > tolMm);
+    for (const [lo, hi] of mergeRanges(ranges, tolMm)) pieces.push({ edge: ei, isVertical: e.isVertical, coord: e.coord, outward: e.outward, lo, hi });
+  });
+  if (pieces.length === 0) { // 接していない下屋
+    const minX = Math.min(...live.map(r => r.x1));
+    const minY = Math.min(...live.map(r => r.y1));
+    const tall = (Math.max(...live.map(r => r.y2)) - minY) - (Math.max(...live.map(r => r.x2)) - minX) > tolMm;
+    edges.forEach((e, ei) => {
+      if (e.isVertical === tall && e.outward === -1 && Math.abs(e.coord - (tall ? minX : minY)) <= tolMm) {
+        pieces.push({ edge: ei, isVertical: e.isVertical, coord: e.coord, outward: e.outward, lo: e.lo, hi: e.hi });
+      }
+    });
+  }
+
+  // 2. 優先順
+  const edgeSum = new Map();
+  for (const p of pieces) edgeSum.set(p.edge, (edgeSum.get(p.edge) ?? 0) + (p.hi - p.lo));
+  const rankOf = p => LEAN_SIDE_RANK[leanSideOfEdge(p.isVertical, p.outward)];
+  pieces.sort((a, b) => {
+    const diff = edgeSum.get(b.edge) - edgeSum.get(a.edge);
+    return (Math.abs(diff) > tolMm ? diff : 0) || rankOf(a) - rankOf(b) || a.coord - b.coord || a.lo - b.lo;
+  });
+
+  // 格子と塗り
+  const xs = snapSorted([...live.flatMap(r => [r.x1, r.x2]), ...pieces.filter(p => !p.isVertical).flatMap(p => [p.lo, p.hi])], tolMm);
+  const ys = snapSorted([...live.flatMap(r => [r.y1, r.y2]), ...pieces.filter(p => p.isVertical).flatMap(p => [p.lo, p.hi])], tolMm);
+  const nx = xs.length - 1;
+  const ny = ys.length - 1;
+  const filled = Array.from({ length: ny }, (_, j) => Array.from({ length: nx }, (_, i) => {
+    const mx = (xs[i] + xs[i + 1]) / 2;
+    const my = (ys[j] + ys[j + 1]) / 2;
+    return live.some(r => r.x1 < mx && mx < r.x2 && r.y1 < my && my < r.y2);
+  }));
+  const direct = Array.from({ length: ny }, () => new Array(nx).fill(-1)); // 直接の印（翼の番号）
+  const ext = Array.from({ length: ny }, () => Array.from({ length: nx }, () => [])); // 延長の印（翼の番号。重複可）
+  const blocked = (i, j) => direct[j][i] >= 0 || ext[j][i].length > 0;
+
+  // 3.・4. 掃きと延長
+  const wings = [];
+  for (const piece of pieces) {
+    const side = leanSideOfEdge(piece.isVertical, piece.outward);
+    const flowY = leanFlowsAlongY(side);
+    const laneArr = flowY ? xs : ys;
+    const stepArr = flowY ? ys : xs;
+    const dir = side === 'top' || side === 'left' ? 1 : -1;
+    const wallIdx = nearestIndexOf(stepArr, piece.coord);
+    const wallCoord = stepArr[wallIdx];
+    const first = dir > 0 ? wallIdx : wallIdx - 1;
+    const ns = stepArr.length - 1;
+    const nl = laneArr.length - 1;
+    const cellOf = (l, s) => (flowY ? [l, s] : [s, l]);
+    const swept = [];
+    for (let l = 0; l < nl; l++) {
+      if (laneArr[l] < piece.lo - tolMm || laneArr[l + 1] > piece.hi + tolMm) continue;
+      let s = first;
+      while (s >= 0 && s < ns) {
+        const [i, j] = cellOf(l, s);
+        if (!filled[j][i] || blocked(i, j)) break;
+        s += dir;
+      }
+      if (s >= 0 && s < ns) { // 途中で止まった: 塗られていない（外周）なら掃けた、印のあるセルなら掃けない
+        const [i, j] = cellOf(l, s);
+        if (filled[j][i]) continue;
+      }
+      const depth = Math.abs((dir > 0 ? stepArr[s] : stepArr[s + 1]) - wallCoord);
+      if (depth > tolMm) swept.push({ l, s, depth });
+    }
+    const groups = [];
+    for (const sw of swept) {
+      const g = groups[groups.length - 1];
+      if (g && sw.l === g[g.length - 1].l + 1 && Math.abs(sw.depth - g[0].depth) <= tolMm) g.push(sw);
+      else groups.push([sw]);
+    }
+    const made = groups.map(g => {
+      const idx = wings.length;
+      for (const { l, s } of g) for (let t = first; t !== s; t += dir) { const [i, j] = cellOf(l, t); direct[j][i] = idx; }
+      const l0 = g[0].l;
+      const l1 = g[g.length - 1].l;
+      const far = dir > 0 ? stepArr[g[0].s] : stepArr[g[0].s + 1];
+      const [flowLo, flowHi] = dir > 0 ? [wallCoord, far] : [far, wallCoord];
+      const rect = flowY
+        ? { x1: laneArr[l0], y1: flowLo, x2: laneArr[l1 + 1], y2: flowHi }
+        : { x1: flowLo, y1: laneArr[l0], x2: flowHi, y2: laneArr[l1 + 1] };
+      const wing = {
+        highSide: side, wallCoord,
+        wallEdge: { isVertical: !flowY, coord: wallCoord, lo: laneArr[l0], hi: laneArr[l1 + 1], outward: dir > 0 ? -1 : 1 },
+        depthMm: g[0].depth, rect, domain: [{ ...rect, entry: 'direct' }],
+      };
+      wings.push(wing);
+      return { idx, wing, l0, l1, s0: g[0].s };
+    });
+    for (const { idx, wing, l0, l1, s0 } of made) { // 延長（その区間の翼がすべて直接の印を持ってから）
+      const rows = [];
+      for (let t = first; t !== s0; t += dir) rows.push(t);
+      rows.sort((a, b) => a - b);
+      const runs = [];
+      for (const r of rows) {
+        for (const [up, entry] of [[1, flowY ? 'left' : 'top'], [-1, flowY ? 'right' : 'bottom']]) {
+          let l = up > 0 ? l1 + 1 : l0 - 1;
+          let end = up > 0 ? l1 : l0;
+          while (l >= 0 && l < nl) {
+            const [i, j] = cellOf(l, r);
+            if (!filled[j][i] || direct[j][i] >= 0) break;
+            ext[j][i].push(idx);
+            end = l;
+            l += up;
+          }
+          if (end === (up > 0 ? l1 : l0)) continue;
+          const [laneLo, laneHi] = up > 0 ? [laneArr[l1 + 1], laneArr[end + 1]] : [laneArr[end], laneArr[l0]];
+          runs.push(flowY
+            ? { x1: laneLo, y1: stepArr[r], x2: laneHi, y2: stepArr[r + 1], entry }
+            : { x1: stepArr[r], y1: laneLo, x2: stepArr[r + 1], y2: laneHi, entry });
+        }
+      }
+      for (const run of runs) { // 同じ入り口・同じ範囲で流れ方向に隣り合う行は1つ
+        const prev = wing.domain.find(m => m.entry === run.entry && (flowY
+          ? m.x1 === run.x1 && m.x2 === run.x2 && m.y2 === run.y1
+          : m.y1 === run.y1 && m.y2 === run.y2 && m.x2 === run.x1));
+        if (prev) { if (flowY) prev.y2 = run.y2; else prev.x2 = run.x2; } else wing.domain.push(run);
+      }
+    }
+  }
+
+  // 5. 取り残し
+  const unassigned = [];
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) if (filled[j][i] && !blocked(i, j)) unassigned.push({ x1: xs[i], y1: ys[j], x2: xs[i + 1], y2: ys[j + 1] });
+  }
+
+  // 6. 辺の種別
+  const kindOf = (owner, isVertical) => (owner === null ? 'eave' : (isVertical === leanFlowsAlongY(wings[owner].highSide) ? 'gable' : 'eave'));
+  const kindZones = [];
+  for (const e of edges) {
+    const alongArr = e.isVertical ? ys : xs;
+    const acrossArr = e.isVertical ? xs : ys;
+    const ci = nearestIndexOf(acrossArr, e.coord);
+    const inner = e.outward < 0 ? ci : ci - 1; // 内側のセルの across 方向の添字
+    const parts = [];
+    for (let l = 0; l + 1 < alongArr.length; l++) {
+      const a = alongArr[l];
+      const b = alongArr[l + 1];
+      if (a < e.lo - tolMm || b > e.hi + tolMm) continue;
+      const [i, j] = e.isVertical ? [inner, l] : [l, inner];
+      if (direct[j][i] >= 0) { parts.push({ lo: a, hi: b, kind: kindOf(direct[j][i], e.isVertical) }); continue; }
+      if (ext[j][i].length === 0) { parts.push({ lo: a, hi: b, kind: 'eave' }); continue; }
+      // 延長のセル: 候補の入り口までの距離が等しくなる点で切り、部分ごとの中点の所有者で決める
+      const cx = (xs[i] + xs[i + 1]) / 2;
+      const cy = (ys[j] + ys[j + 1]) / 2;
+      const [ox, oy, dx, dy] = e.isVertical ? [e.coord, 0, 0, 1] : [0, e.coord, 1, 0];
+      const lines = [];
+      for (const w of wings) {
+        for (const f of w.domain) {
+          if (f.entry !== 'direct' && f.x1 <= cx && cx <= f.x2 && f.y1 <= cy && cy <= f.y2) lines.push(leanEntryLinear(f, ox, oy, dx, dy));
+        }
+      }
+      const cuts = [];
+      for (let p = 0; p < lines.length; p++) {
+        for (let q = p + 1; q < lines.length; q++) {
+          if (lines[p].sigma === lines[q].sigma) continue;
+          const t = (lines[q].beta - lines[p].beta) / (lines[p].sigma - lines[q].sigma);
+          if (t > a + tolMm && t < b - tolMm) cuts.push(t);
+        }
+      }
+      const bounds = [a, ...snapSorted(cuts, tolMm), b];
+      for (let k = 0; k + 1 < bounds.length; k++) {
+        const m = (bounds[k] + bounds[k + 1]) / 2;
+        const owner = leanToOwnerAt(wings, e.isVertical ? e.coord : m, e.isVertical ? m : e.coord, tolMm);
+        parts.push({ lo: bounds[k], hi: bounds[k + 1], kind: kindOf(owner, e.isVertical) });
+      }
+    }
+    const joined = [];
+    for (const p of parts) {
+      const last = joined[joined.length - 1];
+      if (last && last.kind === p.kind) last.hi = p.hi;
+      else joined.push({ ...p });
+    }
+    for (const p of joined) kindZones.push({ isVertical: e.isVertical, coord: e.coord, lo: p.lo, hi: p.hi, outward: e.outward, kind: p.kind });
+  }
+  return { wings, unassigned, kindZones };
+}
+
+/**
+ * 点 (x,y) を持つ翼の番号（leanToWingsOf の翼。どの翼にも無ければ null）。点を含む部分（domain。許容差込み）を持つ翼が候補で、
+ * 直接（'direct'）があればその翼（同じ点を2つの翼が直接で持つのは境界上だけ＝番号の小さい方）、無ければ延長の入り口の辺までの
+ * 距離が最小の翼（'left'→x−x1、'right'→x2−x、'top'→y−y1、'bottom'→y2−y。差が tolMm 以内は同距離＝番号の小さい翼）。
+ * @param {Array<object>} wings
+ * @param {number} x
+ * @param {number} y
+ * @param {number} tolMm 許容差（>=0）
+ * @returns {number|null}
+ * @throws {RangeError} 許容差・座標が不正、wings が不正
+ */
+export function leanToOwnerAt(wings, x, y, tolMm) {
+  requireNonNegative(tolMm, 'tolMm');
+  requireFinite(x, 'x');
+  requireFinite(y, 'y');
+  requireLeanToWings(wings);
+  let directOwner = null;
+  let best = null;
+  let bestDist = Infinity;
+  wings.forEach((w, idx) => {
+    for (const f of w.domain) {
+      if (x < f.x1 - tolMm || x > f.x2 + tolMm || y < f.y1 - tolMm || y > f.y2 + tolMm) continue;
+      if (f.entry === 'direct') { if (directOwner === null) directOwner = idx; continue; }
+      const dist = leanEntryLinear(f, x, y, 0, 0).beta; // 方向 0 なので距離は定数 beta
+      if (dist < bestDist - tolMm) { best = idx; bestDist = dist; }
+    }
+  });
+  return directOwner ?? best;
+}
+
+/**
+ * L字の下屋（翼）の母屋（片流れに棟木は無い）。割付は下屋全体で1つ＝最大奥行きの翼で purlinLayoutFromRidge を1回求め、
+ * 各翼は割付のうち自分の奥行き未満（tolMm）の位置だけに置く（壁の上端の高さが全翼で同じなので、同じ位置は同じ高さ）。
+ * 位置は壁から wallCoord ± offset（top/left は +、bottom/right は −）。top/bottom の翼は横線、left/right の翼は縦線。
+ * 線の範囲は、翼の直接の部分は翼の幅いっぱい、延長の部分は（同じ点を持つ他の翼との比較で）自分の入り口までの距離が
+ * 他の翼以下（番号の小さい翼には未満）の区間。長さ tolMm 以下は捨て、同じ線（向き・座標・高い側・壁の座標）で接するものは1本。
+ * @param {object} p
+ * @param {Array<object>} p.wings leanToWingsOf の wings
+ * @param {number} p.pitchMm 母屋のピッチ（>0。例 910）
+ * @param {number[]} p.startOffsetsMm 1本目の位置の候補（空でない。各 >0。例 [455, 910]）
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {{ridges: [], purlins: Array<{isVertical:boolean,coord:number,lo:number,hi:number,offsetMm:number}>}}
+ * @throws {RangeError} ピッチ・候補・許容差が不正、wings が不正
+ */
+export function leanToMonoLines({ wings, pitchMm, startOffsetsMm, tolMm }) {
+  requireLeanToWings(wings);
+  requirePositive(pitchMm, 'pitchMm');
+  if (!Array.isArray(startOffsetsMm) || startOffsetsMm.length === 0) {
+    throw new RangeError('startOffsetsMm は空でない配列でなければなりません');
+  }
+  for (const s of startOffsetsMm) requirePositive(s, 'startOffsetsMm の要素');
+  requireNonNegative(tolMm, 'tolMm');
+  if (wings.length === 0) return { ridges: [], purlins: [] };
+  const { offsetsMm } = purlinLayoutFromRidge({ halfSpanMm: Math.max(...wings.map(w => w.depthMm)), pitchMm, startOffsetsMm, tolMm });
+
+  // 向き isVertical・座標 p の線が、翼 wi の部分 f を通る区間（延長は他の翼との比較で自分のものになる区間だけ）
+  const segmentsIn = (wi, f, isVertical, p) => {
+    const [flowLo, flowHi, alongLo, alongHi] = isVertical ? [f.x1, f.x2, f.y1, f.y2] : [f.y1, f.y2, f.x1, f.x2];
+    if (f.entry === 'direct') return p >= flowLo - tolMm && p <= flowHi + tolMm ? [[alongLo, alongHi]] : [];
+    if (!(p >= flowLo - tolMm && p < flowHi - tolMm)) return [];
+    const [ox, oy, dx, dy] = isVertical ? [p, 0, 0, 1] : [0, p, 1, 0];
+    const mine = leanEntryLinear(f, ox, oy, dx, dy);
+    const lose = [];
+    wings.forEach((u, ui) => {
+      if (ui === wi) return;
+      for (const g of u.domain) {
+        if (g.entry === 'direct') continue;
+        const [gFlowLo, gFlowHi, gLo, gHi] = isVertical ? [g.x1, g.x2, g.y1, g.y2] : [g.y1, g.y2, g.x1, g.x2];
+        if (!(p >= gFlowLo - tolMm && p < gFlowHi - tolMm)) continue;
+        const jlo = Math.max(alongLo, gLo);
+        const jhi = Math.min(alongHi, gHi);
+        if (jhi - jlo <= 0) continue;
+        lose.push(...leanLoseIntervals(jlo, jhi, leanWinInterval(mine, leanEntryLinear(g, ox, oy, dx, dy), ui < wi, tolMm)));
+      }
+    });
+    return subtractIntervals(alongLo, alongHi, lose, tolMm).map(s => [s.lo, s.hi]);
+  };
+
+  const groups = new Map();
+  wings.forEach((w, wi) => {
+    const isVertical = !leanFlowsAlongY(w.highSide);
+    const sign = w.highSide === 'top' || w.highSide === 'left' ? 1 : -1;
+    for (const o of offsetsMm) {
+      if (o >= w.depthMm - tolMm) continue;
+      const coord = w.wallCoord + sign * o;
+      const key = `${isVertical}|${coord}|${w.highSide}|${w.wallCoord}`;
+      if (!groups.has(key)) groups.set(key, { isVertical, coord, offsetMm: o, segs: [] });
+      for (const f of w.domain) groups.get(key).segs.push(...segmentsIn(wi, f, isVertical, coord));
+    }
+  });
+  const purlins = [];
+  for (const g of groups.values()) {
+    for (const [lo, hi] of mergeRanges(g.segs, GEOM_EPS)) {
+      if (hi - lo > tolMm) purlins.push({ isVertical: g.isVertical, coord: g.coord, lo, hi, offsetMm: g.offsetMm });
+    }
+  }
+  return { ridges: [], purlins: sortLines(purlins) };
+}
+
+/**
+ * L字の下屋（翼）の継ぎ目＝隅木・谷木（斜め線）。2つの翼の延長の部分（入り口が直交する組）が重なる矩形の中で、2つの入り口の辺が
+ * 交わる角から 45° に、入り口までの距離が等しい点の軌跡（線分）。他の翼の延長の部分がある所では、その翼の入り口までの距離が
+ * 自分たちより小さい区間を除く。両端で2つの翼の壁からの距離が等しい（tolMm 以内）線だけ描く（等しくない＝壁の上端の高さが
+ * 合わない組は mismatches に返し、描かない）。壁からの距離が線に沿って増えれば隅木 'hip'、減れば谷木 'valley'。
+ * (x1,y1)＝壁からの距離が大きい端（軒側）、(x2,y2)＝小さい端（orthogonalHipDiagonals と同じ約束）。同種別・同直線で接するものは
+ * 1本にまとめる。長さ（x の幅）が tolMm 以下は捨てる。並びは kind（hip→valley）・x1・y1・x2・y2 の昇順。
+ * 向かい合う壁の翼（入り口が平行）や段違いの壁の翼は継ぎ目を描かない（既知の限界）。
+ * @param {object} p
+ * @param {Array<object>} p.wings leanToWingsOf の wings
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {{diagonals: Array<{kind:'hip'|'valley', x1:number, y1:number, x2:number, y2:number}>,
+ *   mismatches: Array<{wingA:number, wingB:number, x1:number, y1:number, x2:number, y2:number}>}}
+ * @throws {RangeError} 許容差が不正、wings が不正
+ */
+export function leanToSeams({ wings, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  requireLeanToWings(wings);
+  const exts = [];
+  wings.forEach((w, wi) => { for (const f of w.domain) if (f.entry !== 'direct') exts.push({ wi, f }); });
+  const segs = [];
+  const mismatches = [];
+  for (let p = 0; p < exts.length; p++) {
+    for (let q = p + 1; q < exts.length; q++) {
+      if (exts[p].wi === exts[q].wi) continue;
+      const horizontalEntry = e => e === 'left' || e === 'right';
+      if (horizontalEntry(exts[p].f.entry) === horizontalEntry(exts[q].f.entry)) continue; // 入り口が平行は継ぎ目なし
+      const [A, B] = horizontalEntry(exts[p].f.entry) ? [exts[p], exts[q]] : [exts[q], exts[p]];
+      const O = { x1: Math.max(A.f.x1, B.f.x1), y1: Math.max(A.f.y1, B.f.y1), x2: Math.min(A.f.x2, B.f.x2), y2: Math.min(A.f.y2, B.f.y2) };
+      if (O.x2 - O.x1 <= tolMm || O.y2 - O.y1 <= tolMm) continue;
+      const sx = A.f.entry === 'left' ? 1 : -1;
+      const sy = B.f.entry === 'top' ? 1 : -1;
+      const px = A.f.entry === 'left' ? A.f.x1 : A.f.x2;
+      const py = B.f.entry === 'top' ? B.f.y1 : B.f.y2;
+      // 点 (px+sx·s, py+sy·s) が矩形 R の中にある s の区間
+      const within = R => {
+        const [xa, xb] = sx > 0 ? [R.x1 - px, R.x2 - px] : [px - R.x2, px - R.x1];
+        const [ya, yb] = sy > 0 ? [R.y1 - py, R.y2 - py] : [py - R.y2, py - R.y1];
+        return [Math.max(xa, ya), Math.min(xb, yb)];
+      };
+      const [lo0, hi] = within(O);
+      const lo = Math.max(0, lo0);
+      if (hi - lo <= tolMm) continue;
+      // 他の翼の延長の部分: 入り口までの距離が s（A・B の距離）より小さい区間は継ぎ目でない
+      const lose = [];
+      wings.forEach((w, wi) => {
+        if (wi === A.wi || wi === B.wi) return;
+        for (const g of w.domain) {
+          if (g.entry === 'direct') continue;
+          const [glo, ghi] = within(g);
+          const jlo = Math.max(lo, glo);
+          const jhi = Math.min(hi, ghi);
+          if (jhi - jlo <= 0) continue;
+          const { sigma, beta } = leanEntryLinear(g, px, py, sx, sy);
+          // 継ぎ目が有効＝距離 sigma·s+beta ≥ s ⇔ (sigma−1)·s + beta ≥ 0
+          const c1 = sigma - 1;
+          let valid;
+          if (c1 === 0) valid = beta >= -tolMm ? { lo: -Infinity, hi: Infinity } : null;
+          else if (c1 < 0) valid = { lo: -Infinity, hi: -beta / c1 };
+          else valid = { lo: -beta / c1, hi: Infinity };
+          lose.push(...leanLoseIntervals(jlo, jhi, valid));
+        }
+      });
+      const wallA = leanWallLinear(wings[A.wi], px, py, sx, sy);
+      const wallB = leanWallLinear(wings[B.wi], px, py, sx, sy);
+      for (const piece of subtractIntervals(lo, hi, lose, tolMm)) {
+        const at = s => ({ x: px + sx * s, y: py + sy * s });
+        const a = at(piece.lo);
+        const b = at(piece.hi);
+        const gapLo = Math.abs((wallA.sigma * piece.lo + wallA.beta) - (wallB.sigma * piece.lo + wallB.beta));
+        const gapHi = Math.abs((wallA.sigma * piece.hi + wallA.beta) - (wallB.sigma * piece.hi + wallB.beta));
+        if (gapLo > tolMm || gapHi > tolMm) {
+          mismatches.push({ wingA: A.wi, wingB: B.wi, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+          continue;
+        }
+        const kind = wallA.sigma > 0 ? 'hip' : 'valley';
+        const [far, near] = kind === 'hip' ? [b, a] : [a, b];
+        segs.push({ kind, sx, sy, far, near, key: `${kind}|${sx * sy}|${sx * sy > 0 ? far.x - far.y : far.x + far.y}` });
+      }
+    }
+  }
+  // 同種別・同直線で接するものは1本（s の増える向き＝sx·x の増える向きで併合）
+  const byKey = new Map();
+  for (const s of segs) {
+    if (!byKey.has(s.key)) byKey.set(s.key, []);
+    byKey.get(s.key).push(s);
+  }
+  const diagonals = [];
+  for (const list of byKey.values()) {
+    const { kind, sx, sy } = list[0];
+    // 各線分を s の小さい側→大きい側の (u0,u1)（u＝sx·x）にして併合する。軒側＝hip は大きい側、valley は小さい側
+    const spans = list.map(s => {
+      const [p0, p1] = kind === 'hip' ? [s.near, s.far] : [s.far, s.near]; // s の小さい側→大きい側
+      return [sx * p0.x, sx * p1.x];
+    });
+    const anchor = list[0].far;
+    const yAt = x => (sx * sy > 0 ? x - anchor.x + anchor.y : anchor.y + anchor.x - x);
+    for (const [u0, u1] of mergeRanges(spans, GEOM_EPS)) {
+      const small = { x: sx * u0, y: yAt(sx * u0) };
+      const large = { x: sx * u1, y: yAt(sx * u1) };
+      const [far, near] = kind === 'hip' ? [large, small] : [small, large];
+      diagonals.push({ kind, x1: far.x, y1: far.y, x2: near.x, y2: near.y });
+    }
+  }
+  const kindRank = k => (k === 'hip' ? 0 : 1);
+  diagonals.sort((a, b) => kindRank(a.kind) - kindRank(b.kind) || a.x1 - b.x1 || a.y1 - b.y1 || a.x2 - b.x2 || a.y2 - b.y2);
+  return { diagonals, mismatches };
 }

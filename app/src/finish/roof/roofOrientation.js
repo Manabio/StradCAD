@@ -68,6 +68,34 @@ export function roofEdgeInteriorContacts(rect, graph) {
 }
 
 /**
+ * 屋根範囲の外周の辺（edges。矩形でない範囲も含む）の外側が同じ階の屋内に接する区間（roofEdgeInteriorContacts の一般化。
+ * 矩形の4辺を渡せば同じ集合になる）。L字の下屋の翼（roofFramingGeometry.js leanToWingsOf）の壁の区間に使う。
+ * 辺は orthogonalBoundaryLoops の辺（{isVertical, coord, lo, hi, outward}。outward＝外側が coord の +方向か -方向か）。
+ * 外側が -方向の横の辺は、屋内セルの y2 が coord に接する。外側が +方向なら y1 が接する（縦の辺は x2・x1）。辺に沿う重なりが
+ * 正のものだけ。複数の屋内セルが接すれば区間も複数。
+ * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1}>} edges
+ * @param {object} graph 屋根のある階の graph
+ * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1}>}
+ * @throws {RangeError} edges が配列でない
+ */
+export function roofBoundaryInteriorContacts(edges, graph) {
+  if (!Array.isArray(edges)) throw new RangeError('edges は配列でなければなりません');
+  const out = [];
+  if (edges.length === 0) return out;
+  for (const b of cellBoundsList(footprintCellKeys(graph), graph)) {
+    for (const e of edges) {
+      const [near, from, to] = e.isVertical
+        ? [e.outward < 0 ? b.x2 : b.x1, b.y1, b.y2]
+        : [e.outward < 0 ? b.y2 : b.y1, b.x1, b.x2];
+      const lo = Math.max(from, e.lo);
+      const hi = Math.min(to, e.hi);
+      if (hi > lo && Math.abs(near - e.coord) <= EPS) out.push({ isVertical: e.isVertical, coord: e.coord, lo, hi, outward: e.outward });
+    }
+  }
+  return out;
+}
+
+/**
  * 下屋（屋根の Room）の「高い側」の選択欄の表示判断。形状の実効値（resolveRoofShape）が片流れで屋根範囲が
  * 矩形のときだけ visible。値は resolveRoofHighSide（明示値→屋内に接する最長の辺→長手に平行な小さい側）。
  * @param {{ roofSpec: { shape: string|null, highSide: string|null }, cells: Set<string> }} room
