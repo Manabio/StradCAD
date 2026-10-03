@@ -1,6 +1,6 @@
 // 下屋の外周の梁（軒桁）と、下屋の範囲の床梁ガード（ステップ C2d-1）のテスト。
 // 設計意図: .claude/structural-model.md「下屋の外周」。小屋組の対象の下屋（roofFramingRegions.js
-// leanToFramingRegions が region を返す矩形の下屋）だけが対象。L字の下屋・非在来は従来どおり何もしない。
+// leanToFramingRegions が region を返す下屋。矩形に加え L字の片流れも対象＝ステップ E2b）だけが対象。非在来・切妻や陸屋根になる L字は従来どおり何もしない。
 // 比べるのは位置由来のキー（軸・座標・区間）で、エンティティ配列は deepEqual しない。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -83,7 +83,7 @@ test('【床梁ガード】既にある auto の床梁は、ガードで候補�
   assert.equal(room.cells.has(key), true);
 });
 
-test('【失敗系】leanToFramingCellKeys: 屋根セルが無い・非在来・矩形でない下屋は空集合', () => {
+test('【失敗系】leanToFramingCellKeys: 屋根セルが無い・非在来は空集合', () => {
   assert.equal(leanToFramingCellKeys(closedCellGraph().graph, woodProject()).size, 0, '屋根セル無し');
   const { graph } = closedCellGraph({ roofRoom: true });
   const rc = new Project('p', 'test');
@@ -213,13 +213,34 @@ test('【統合】矩形の下屋（片流れ）: 外周の3辺に primary 梁�
   assert.equal(again.changed, false);
 });
 
-test('【統合・対照】L字の下屋（対象外）は従来どおり: 屋根セルの外周に梁は出ない', async () => {
-  const doc = buildTwoFloors([[1, 0], [2, 0], [2, 1]]); // L字
-  assert.equal(leanToFramingCellKeys(doc.g2, doc.project).size, 0, '前提: L字は region 無し');
-  await converge(doc);
-  assert.equal(primaryCovers(doc.g2, false, 0, SQ, SQ * 3), false, '外周の軒（y=0）に梁は出ない');
-  assert.equal(primaryCovers(doc.g2, true, SQ * 3, 0, SQ), false, '外周の妻（x=10920）に梁は出ない');
-  assert.ok(primaryCovers(doc.g2, true, SQ, 0, SQ * 2), '屋内との境界（x=3640）には従来どおり出る');
+// E2b で書き換え（旧: 「L字の下屋（対象外）は従来どおり外周に梁は出ない」。L字の片流れも対象になった）。
+test('【統合】L字の下屋（片流れ）も外周の梁が出る。L字の内側の入隅（セルどうしの境界）には出ない。屋根の範囲に床梁は無い。収束し、収束後は changed=false', async () => {
+  const doc = buildTwoFloors([[1, 0], [2, 0], [2, 1]]); // L字（2階 x3640..10920 × y0..3640 と x7280..10920 × y3640..7280）
+  assert.equal(leanToFramingCellKeys(doc.g2, doc.project).size, 3, '前提: L字の3セルが対象');
+  const history = await converge(doc);
+  assert.deepEqual(history.at(-1), [false, false], `収束: ${JSON.stringify(history)}`);
+  assert.ok(history.length <= 5, `スイープ数は上限5以内: ${history.length}`);
+  assert.ok(primaryCovers(doc.g2, false, 0, SQ, SQ * 3), '外周の軒（y=0）に梁が出る');
+  assert.ok(primaryCovers(doc.g2, true, SQ * 3, 0, SQ * 2), '外周の妻（x=10920）に梁が出る');
+  assert.ok(primaryCovers(doc.g2, false, SQ * 2, SQ * 2, SQ * 3), '外周（y=7280。下の腕の下辺）に梁が出る');
+  assert.ok(primaryCovers(doc.g2, true, SQ, 0, SQ), '屋内との境界（x=3640）には従来どおり出る');
+  const floorInRoof = doc.g2.beams.filter(b => b.role === 'floor'
+    && (b.isVertical ? b.axisValue : Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue)) > SQ + 1);
+  assert.equal(floorInRoof.length, 0, 'L字の範囲（x>3640）に床梁は無い');
+  const again = await withPeek([doc.g1, doc.g2], () => recomputeStructuralForGraph(doc.g2, doc.project, TRADITIONAL_WOOD_STRUCTURE));
+  assert.equal(again.changed, false);
+});
+
+test('【統合・失敗系】自動の形状が切妻になる L字・明示の寄棟・陸屋根の L字は対象外: セルキーは空で、屋根セルの外周に梁は出ない', async () => {
+  for (const shape of [RoofShape.HIP, RoofShape.FLAT, RoofShape.GABLE]) {
+    const doc = buildTwoFloors([[1, 0], [2, 0], [2, 1]]);
+    doc.g2.rooms.find(room => room.feature === RoomFeature.ROOF).roofSpec.setField('shape', shape);
+    assert.equal(leanToFramingCellKeys(doc.g2, doc.project).size, 0, `前提: 明示の ${shape} の L字は region 無し`);
+    await converge(doc);
+    assert.equal(primaryCovers(doc.g2, false, 0, SQ, SQ * 3), false, `${shape}: 外周の軒（y=0）に梁は出ない`);
+    assert.equal(primaryCovers(doc.g2, true, SQ * 3, 0, SQ), false, `${shape}: 外周の妻（x=10920）に梁は出ない`);
+    assert.ok(primaryCovers(doc.g2, true, SQ, 0, SQ), `${shape}: 屋内との境界（x=3640）には従来どおり出る`);
+  }
 });
 
 test('【統合・対照】同じ屋根セルを陸屋根（小屋組なし＝対象外）にすると、外周の梁・屋根の範囲の床梁は従来どおりの結果になる', async () => {

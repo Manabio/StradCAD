@@ -199,7 +199,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 同じ値を使い回す（追加peekは無い）。実体階は常にtargetGraph自身（従来と同値）。
   const freeEndGraph = isRoof ? (belowGraph ?? targetGraph) : targetGraph;
 
-  // 小屋梁を載せる小屋組の region（ステップC2b・C2d-2。切妻・片流れ）。屋根専用平面＝主屋根（belowGraph＝
+  // 小屋梁を載せる小屋組の region（ステップC2b・C2d-2。切妻・片流れ。L字の片流れの下屋も region＝E2b。面ごとに小屋梁）。屋根専用平面＝主屋根（belowGraph＝
   // 「1つ下の実体階（＝最上階）」の建物範囲・屋根の入力から導く。上の peekRoofBelowGraph で解決済み。追加peekなし）、
   // 実体階＝下屋（自階の屋根セル。上の leanTo と同じ1回の導出）。どちらも region が無ければ []＝その平面の
   // auto の小屋梁を撤去する（下屋の削除・L字化・非在来化。locked は残る）。非在来・陸屋根も [] 。矩形でない寄棟の

@@ -9,9 +9,10 @@
  *   - 範囲が矩形（rectOfBounds が非 null）。矩形でない屋根の例外は2つ:
  *     ・主屋根の寄棟: { key:'main', rect:null, rects:セル矩形の配列, shape:'hip', ridgeIsVertical:null, highSide:null }
  *       （描画と、翼ごとの小屋梁・飛び梁の生成＝woodRoofFraming.js C2e-3b）
- *     ・下屋の片流れ（L字。描画だけ。leanToFramingRegions のみ。ステップ E1b）:
+ *     ・下屋の片流れ（L字。ステップ E1b・E2b）:
  *       { key:'lean:…', rect:null, rects, shape:'mono', ridgeIsVertical:null, highSide:null, leanToWings, leanToUnassigned }
- *       （翼＝leanToWingsOf。小屋梁などの構造は E2）。他の形状の矩形でない下屋は region なし
+ *       （翼＝leanToWingsOf。描画・外周の梁・床梁のガード・小屋梁［面ごと。woodRoofFraming.js］）。
+ *       他の形状の矩形でない下屋は region なし
  *   - 形状（自動なら導いた形状）が片流れ・切妻・寄棟（陸屋根・棟違いは小屋組を持たない）
  * ridgeIsVertical は切妻だけ spec.ridgeDirection（指定が無ければ長手）に従う。他の形状は常に長手。
  * 形状・範囲・高い側の判断は既存の関数（mainRoof.js・roofDefaults.js・roofOrientation.js・roofGeometry.js）を
@@ -102,13 +103,13 @@ export function mainRoofFramingRegion(topGraph, project) {
 
 /**
  * 下屋の region と、その元の部屋の組（leanToFramingRegions・leanToFramingCellKeys の共通の導出）。
- * withNonRect＝矩形でない下屋（L字）の片流れも region にするか。leanToFramingRegions（描画）だけが真にする
- * （構造＝小屋梁・外周の梁・床梁のガードは L字を扱わない。ステップ E2）。L字の region は
+ * 矩形でない下屋（L字）の片流れも region にする（描画・外周の梁・床梁のガード・小屋梁が同じ region を使う。ステップ E2b）。
+ * L字の region は
  * { key, rect:null, rects, shape:'mono', ridgeIsVertical:null, highSide:null, leanToWings, leanToUnassigned, edges, outline }。
  * 形状（自動なら導いた形状）が片流れのときだけ（切妻になる L字・明示の寄棟や陸屋根は region なし）。翼がひとつも
  * 作れなければ（屋根範囲に有効なセルが無い）region なし。
  */
-function leanToFramingEntries(graph, project, { withNonRect = false } = {}) {
+function leanToFramingEntries(graph, project) {
   if (!graph) return [];
   if (!rulesFor(effectiveStructure(graph, project)).framing) return [];
   const entries = [];
@@ -117,7 +118,6 @@ function leanToFramingEntries(graph, project, { withNonRect = false } = {}) {
     const boundsList = roofRoomBounds(room, graph);
     const rect = rectOfBounds(boundsList);
     if (!rect) {
-      if (!withNonRect) continue;
       const rects = validCellRects(boundsList);
       if (!rects || resolveRoofShape(room.roofSpec, { boundsList }) !== RoofShape.MONO) continue;
       const edges = orthogonalBoundaryLoops({ rects, tolMm: CL_OVERLAP_TOL_MM }).flat();
@@ -142,10 +142,10 @@ function leanToFramingEntries(graph, project, { withNonRect = false } = {}) {
 
 /**
  * 下屋（屋根セルのある階の屋根の部屋）ごとの小屋組の region。条件を満たす部屋だけの配列（無ければ空）。
- * 描画用なので、矩形でない下屋（L字）の片流れも含む（leanToFraming・leanToFramingCellKeys は含まない）。
+ * 矩形でない下屋（L字）の片流れも含む（leanToFraming・leanToFramingCellKeys と同じ結果）。
  */
 export function leanToFramingRegions(graph, project) {
-  return leanToFramingEntries(graph, project, { withNonRect: true }).map(e => e.region);
+  return leanToFramingEntries(graph, project).map(e => e.region);
 }
 
 /**

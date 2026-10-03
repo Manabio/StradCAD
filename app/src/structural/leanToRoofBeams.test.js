@@ -123,6 +123,22 @@ function maxStrutGaps(graph, region) {
   });
 }
 
+// L字（leanToWings）の母屋の束の最大間隔。maxStrutGaps は矩形用（rect を使う）なので、L字は leanToWings から線を導く。
+function leanToLineGaps(graph, region) {
+  const { purlins } = roofFramingLines({
+    rect: null, rects: region.rects, shape: region.shape, leanToWings: region.leanToWings,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+  });
+  const members = roofFramingHostMembers(graph.beams, rulesFor(TRADITIONAL_WOOD_STRUCTURE).baseMaterial);
+  return purlins.map(line => {
+    const alongs = [line.lo, line.hi, ...roofStrutPoints([line], members, CL_OVERLAP_TOL_MM).map(p => (line.isVertical ? p.y : p.x))]
+      .sort((a, b) => a - b);
+    let max = 0;
+    for (let i = 0; i + 1 < alongs.length; i++) max = Math.max(max, alongs[i + 1] - alongs[i]);
+    return { coord: line.coord, max };
+  });
+}
+
 const ONE_LEAN = [[[1, 0], [2, 0]]]; // 2階 x3640..10920 × y0..3640（短手3640＝片流れ。高い側は上）
 // 母屋は横線（y=910・1820・2730）。小屋梁は縦で、上下の軒（y=0・y=3640）の大梁から大梁へ。
 const EXPECTED_KOYA = ['V|5460|0|3640', 'V|7280|0|3640', 'V|9100|0|3640'];
@@ -230,13 +246,14 @@ test('【統合・失敗系】下屋を削除（屋根の部屋を外す）し�
   assert.deepEqual(koya(locked.g2).map(b => b.id).sort(), ids, 'locked の小屋梁は region が無くなっても残る（同じ実体のまま）');
 });
 
-test('【統合・失敗系】対象でない下屋（L字・陸屋根）・非在来では小屋梁を作らない。非在来へ変えると既存の auto の小屋梁は撤去される', async () => {
-  const lShape = buildTwoFloors([[[1, 0], [2, 0], [2, 1]]]);
-  // E1b: 描画用の leanToFramingRegions は L字を翼ごとの片流れの region にする。構造側（leanToFraming）は L字を含まない（小屋梁は E2）
-  assert.equal(leanToFraming(lShape.g2, lShape.project).regions.length, 0, '前提: L字は構造側の region 無し');
-  assert.equal(leanToFramingRegions(lShape.g2, lShape.project).length, 1, '前提: 描画用には L字の region がある');
-  await converge(lShape);
-  assert.equal(koya(lShape.g2).length, 0, 'L字の下屋は作らない（従来どおり）');
+test('【統合・失敗系】対象でない下屋（陸屋根・明示の寄棟の L字）・非在来では小屋梁を作らない。非在来へ変えると既存の auto の小屋梁は撤去される', async () => {
+  // E2b で書き換え（旧: L字は構造側の region 無しで小屋梁を作らない。L字の片流れは下の統合テストで小屋梁を作る）。
+  // 明示の寄棟の L字は片流れの region にならない（E1b）ので小屋梁を作らない。
+  const lHip = buildTwoFloors([[[1, 0], [2, 0], [2, 1]]]);
+  lHip.roofs[0].roofSpec.setField('shape', RoofShape.HIP);
+  assert.equal(leanToFraming(lHip.g2, lHip.project).regions.length, 0, '前提: 明示の寄棟の L字は region 無し');
+  await converge(lHip);
+  assert.equal(koya(lHip.g2).length, 0, '寄棟の L字の下屋は作らない');
 
   const flat = buildTwoFloors(ONE_LEAN);
   flat.roofs[0].roofSpec.setField('shape', RoofShape.FLAT);
@@ -264,6 +281,28 @@ test('【統合】1つの階に下屋が2つあれば region ごとに小屋梁�
   assert.deepEqual(history.at(-1), [false, false], `収束: ${JSON.stringify(history)}`);
   assert.ok(history.length <= 5, `スイープ数は上限5以内: ${history.length}`);
   assert.deepEqual(koyaKeys(doc.g2), [...EXPECTED_KOYA, 'V|5460|3640|7280', 'V|7280|3640|7280', 'V|9100|3640|7280'].sort());
+});
+
+test('【統合・E2b】L字の下屋（片流れ）は面ごとに小屋梁を作る。収束・束の間隔 1820 以下・L字の範囲に床梁なし・2回目は changed=false', async () => {
+  const doc = buildTwoFloors([[[1, 0], [2, 0], [2, 1]]]);
+  const [region] = leanToFramingRegions(doc.g2, doc.project);
+  // 前提（leanToWingsOf の出力）: 壁 x=3640 の上段の翼 x3640..10920 × y0..3640（奥行き 7280）が1つ。下の腕は別の翼でなく取り残しにもならない
+  assert.deepEqual(region.leanToWings.map(w => [w.highSide, w.wallCoord, w.depthMm]), [['left', 3640, 7280]], '前提: 翼1つ（左の壁・奥行き7280）');
+  assert.equal(leanToFraming(doc.g2, doc.project).regions.length, 1, '前提: 構造側に region がある');
+  const history = await converge(doc);
+  assert.deepEqual(history.at(-1), [false, false], `収束: ${JSON.stringify(history)}`);
+  assert.ok(history.length <= 5, `スイープ数は上限5以内: ${history.length}`);
+  // 左の壁の翼の母屋は縦線なので、小屋梁は横梁。y=1820 は翼の幅（x3640..10920）を渡る 7280 スパン（設計裁定で受け入れ）、
+  // y=3640・5460 は下の腕（x7280..10920）の入隅・中間。
+  assert.deepEqual(koyaKeys(doc.g2), ['H|1820|3640|10920', 'H|3640|7280|10920', 'H|5460|7280|10920'], '横の小屋梁（軸 y=1820・3640・5460）');
+  assert.ok(koya(doc.g2).every(b => b.beamType === '小屋梁' && b.dimensionStatus === 'auto'));
+  // 区間 lo..hi は梁の座標。横の線（母屋）を支える縦の小屋梁。全て母屋と直交
+  for (const g of leanToLineGaps(doc.g2, region)) assert.ok(g.max <= F.strutMaxPitchMm, `母屋 ${g.coord} の束の最大間隔 ${g.max}`);
+  assert.ok(doc.g2.beams.every(b => b.role !== 'floor' || b.axisValue < SQ + 1 || (!b.isVertical && hi(b) < SQ + 1)), 'L字の範囲に床梁は出ない');
+  assert.equal(koya(doc.g1).length, 0, '1階には出ない');
+  const before = koyaKeys(doc.g2);
+  assert.equal((await recompute2F(doc)).changed, false, '2回目は変化 0');
+  assert.deepEqual(koyaKeys(doc.g2), before);
 });
 
 test('【統合】leanToFraming は leanToFramingRegions・leanToFramingCellKeys と同じ結果を1回の走査で返す', () => {

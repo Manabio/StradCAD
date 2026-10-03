@@ -190,9 +190,9 @@ test('【C2e-2・失敗系】mainRoofFramingRegion: 矩形でない建物範囲�
   assert.equal(mainRoofFramingRegion(l, project), null, '階の上書きが S造');
 });
 
-// E1b: L字の下屋は描画用の leanToFramingRegions だけが「翼ごとの片流れ」の region にする（C2e-2 の「region にならない」から変更。
-// 構造側の leanToFraming・leanToFramingCellKeys は従来どおり L字を含まない＝小屋梁などは E2）。
-test('【E1b】L字の下屋（屋内に接しない。形6）は翼2つの region（rect:null・shape:mono）。外形線は全辺 455。構造側（leanToFraming・leanToFramingCellKeys）には入らない', () => {
+// E1b: L字の下屋は「翼ごとの片流れ」の region になる（C2e-2 の「region にならない」から変更）。E2b: 描画用の leanToFramingRegions だけでなく
+// 構造側の leanToFraming・leanToFramingCellKeys も L字を含む（外周の梁・床梁のガード・小屋梁が同じ region を使う）。
+test('【E1b・E2b】L字の下屋（屋内に接しない。形6）は翼2つの region（rect:null・shape:mono）。外形線は全辺 455。構造側（leanToFraming・leanToFramingCellKeys）にも同じ region・全セルが入る', () => {
   const l = makeGrid(XS, YS);
   const r = l.roof([[1, 1], [2, 1], [1, 2]]); // L字の下屋。外接 4000×3000（横長）→ 仮の壁は上（y=1500）
   const project = woodProject();
@@ -211,8 +211,12 @@ test('【E1b】L字の下屋（屋内に接しない。形6）は翼2つの regi
       E(true, 4000, 3000, 4500, 1, 455), E(false, 4500, 2000, 4000, 1, 455), E(true, 2000, 1500, 4500, -1, 455)],
     outline: [{ points: [6455, 1045, 6455, 3455, 4455, 3455, 4455, 4955, 1545, 4955, 1545, 1045] }],
   }]);
-  assert.equal(leanToFramingCellKeys(l.graph, project).size, 0, 'L字は小屋組の対象セルに入らない（自階単独ゲート・床梁のガードは不変）');
-  assert.deepEqual(leanToFraming(l.graph, project), { regions: [], cellKeys: new Map() }, 'L字は構造側の region に入らない');
+  // E2b で書き換え（旧: size 0・regions []。L字は構造側に入らなかった）。構造側は region と全3セルを持つ。
+  assert.equal(leanToFramingCellKeys(l.graph, project).size, 3, 'L字の3セルは小屋組の対象セル（自階単独ゲート・床梁のガードが効く）');
+  assert.deepEqual([...new Set(leanToFramingCellKeys(l.graph, project).values())], [`lean:${r.id}`], 'セルの値は region の key');
+  const both = leanToFraming(l.graph, project);
+  assert.deepEqual(both.regions, leanToFramingRegions(l.graph, project), 'L字は構造側の region にも入る（描画と同じ）');
+  assert.deepEqual([...both.cellKeys], [...leanToFramingCellKeys(l.graph, project)]);
 });
 
 test('【E1b】L字の下屋が屋内に接する（形1a。出隅の回り込み）: 壁ごとの翼2つ・継ぎ目の延長を持つ。屋内に接する2辺は出幅 0・外形線は段差の無い6頂点', () => {

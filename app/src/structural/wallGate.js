@@ -286,7 +286,7 @@ export function footprintBreakCLs(gate, graph, axisCL, isVertical, lo, hi) {
  *    1つの下屋として扱う）。屋根セルは建物外だが、**片側だけが**対象のセルである線（下屋の外周＝軒・妻）と、
  *    両側が**別々の下屋**のセルである線（隣り合う下屋の境界＝それぞれの外周）は建物内とみなす——下の階の
  *    壁線上の通し梁が下屋の外周に出る。両側とも同じ下屋のセルの線（屋根範囲の内部）・対象でない屋根セル
- *    （非在来・矩形でない・陸屋根）は従来どおり建物外（対象の下屋と対象でない屋根セルの境界は、対象の下屋の
+ *    （非在来・陸屋根・切妻や明示の寄棟になる L字）は従来どおり建物外（対象の下屋と対象でない屋根セルの境界は、対象の下屋の
  *    外周なので出る）。省略・空ならゲートは従来と完全に同じ。Map・Set 以外は TypeError。 */
 export function buildSelfFootprintGate(graph, cache = undefined, { roofPerimeterCellKeys = undefined } = {}) {
   const isMap = roofPerimeterCellKeys instanceof Map;
