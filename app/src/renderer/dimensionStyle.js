@@ -7,3 +7,10 @@ export const DIMENSION_LINE_WEIGHT = 'thin';
 // （GutterLayer.jsx・structural/StructuralLayer.jsx の非正角材の梁標記が同じ値を共有する単一の入口）。
 export const NUM_FONT_PX = 11;
 export const TEXT_GAP_PX = 2;
+
+// 通り芯だけ長鎖線（他の一点鎖線 [12,4,2,4]＝中心線・梁芯・母屋などと判別するため）。
+// 比率は線幅 d 基準: 長線24d／すき間3d／短線（点）6d／すき間3d（周期36d）。
+export const GRID_LINE_DASH_RATIO = Object.freeze([24, 3, 6, 3]);
+export function gridLineDash(strokeWidthPx) {
+  return GRID_LINE_DASH_RATIO.map(r => r * strokeWidthPx);
+}

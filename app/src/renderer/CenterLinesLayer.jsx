@@ -1,8 +1,10 @@
 import { observer } from 'mobx-react-lite';
-import { Line, Circle } from 'react-konva';
+import { Line, Circle, Group } from 'react-konva';
 import { CenterLineType, DimensionSide, centerLineKind } from '@core';
 import { nonLabeledClExtent } from '../snap.js';
 import { gutterEdgeCoord } from './gutterPrimitives.jsx';
+import { gutterClipRects } from './gutterLabelHits.js';
+import { gridLineDash } from './dimensionStyle.js';
 import { isRenderTarget } from '../core/centerLineKindPolicy.js';
 import { originColor } from './canvasStyle.js';
 import { centerLineOriginColorKey } from './originColorKey.js';
@@ -93,7 +95,7 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
         points={points}
         stroke={originColor(centerLineOriginColorKey(cl))}
         strokeWidth={viewport.lineWeightsPx.thin}
-        dash={isAux ? undefined : [12, 4, 2, 4]}
+        dash={isAux ? undefined : centerLineKind(cl) === 'struct' ? gridLineDash(viewport.lineWeightsPx.thin) : [12, 4, 2, 4]}
         strokeScaleEnabled={false}
         listening={false}
         opacity={cl.labeled || isBeamAxis ? 1 : 0.5}
@@ -101,7 +103,16 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
     );
   });
 
-  if (!columnAxisMode) return clLines;
+  // CL本体（全種別）と柱芯線は描画エリア矩形（ガター内端の内側）でクリップする（寸法線と同じ
+  // gutterClipRects().area）。clExtent が丸ラベル中心・ガター内の○「柱芯」まで返す延伸は、ガター側が
+  // 切り落とされて描画エリア端で止まる（丸ラベル側は GutterCircleLabels が isClInDrawingBand で、
+  // 本体が全部切り落とされる条件＝垂直方向の座標がガター帯、と同じ条件で消える）。
+  const { area } = gutterClipRects(viewport, width, height);
+  const clipped = (children) => (
+    <Group clipX={area.x} clipY={area.y} clipWidth={area.width} clipHeight={area.height}>{children}</Group>
+  );
+
+  if (!columnAxisMode) return clipped(clLines);
 
   const axisLines = [...graph.gridXs, ...graph.gridYs].flatMap(cl => {
     const off = graph.columnAxisOffsets.get(cl.id) ?? 0;
@@ -129,7 +140,7 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
     ];
   });
 
-  return [...clLines, ...axisLines];
+  return clipped([...clLines, ...axisLines]);
 });
 
 // ---- 交点マーカー (ワールド空間) ----

@@ -1,5 +1,5 @@
 import { observer } from 'mobx-react-lite';
-import { Line, Circle } from 'react-konva';
+import { Line, Circle, Group } from 'react-konva';
 import { DimensionKind, DimensionSide, CenterLineType, Discipline } from '@core';
 import { CenterLinesLayer, clExtent } from './CenterLinesLayer.jsx';
 import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX } from './dimensionStyle.js';
@@ -7,7 +7,8 @@ import { gutterEdgeCoord, labelCircle, dimensionRow } from './gutterPrimitives.j
 import { INSET } from '../layout.js';
 import {
   gridLineBounds, columnAxisPush, buildColumnAxisAnchors, columnAxisLabelCoords,
-  drawingAreaBounds, isCenterDimensionTarget, rowDotIds, buildCenterRowAnchors,
+  drawingAreaBounds, isCenterDimensionTarget, rowDotIds, buildCenterRowAnchors, isClInDrawingBand,
+  gutterClipRects,
 } from './gutterLabelHits.js';
 
 // ================================================================
@@ -19,6 +20,9 @@ import {
 // 変換してから配置し、フォントサイズ・線太さ・半径などの「画面定数px」は scaleX で割って
 // ワールド単位に変換する（描画時に親Groupのscaleで再度掛け戻され、画面上は常に一定pxになる）。
 // この手法は元々 CenterDimensionLayer（CENTER寸法）が使っていたものを全体に適用している。
+// CL本体（全種別・柱芯線。CenterLinesLayer）と寸法線はガーター内端でクリップする（CL本体・CENTER寸法＝
+// 描画エリア矩形、GRID寸法＝軸方向のみ。gutterClipRects）。ガター内に残るのは丸ラベルとGRID寸法だけで、
+// 丸ラベルは isClInDrawingBand（本体が全部切り落とされる条件と同じ）で本体と一緒に消える。
 // ================================================================
 
 // ---- ガター内 通り芯丸ラベル ----
@@ -34,16 +38,14 @@ const GutterCircleLabels = observer(({ graph, viewport, width, height }) => {
     .filter(cl => cl.labeled && cl.discipline === Discipline.STRUCT)
     .flatMap(cl => {
       if (cl.centerLineType === CenterLineType.VERTICAL) {
-        const sx = cl.effectiveValue * viewport.scaleX + viewport.offsetX;
-        if (sx < INSET.left || sx > width - INSET.right) return [];
+        if (!isClInDrawingBand(cl, viewport, width, height)) return [];
         return [
           ...labelCircle(`${cl.id}-t`, cl.effectiveValue, topY,    cl.label, viewport),
           ...labelCircle(`${cl.id}-b`, cl.effectiveValue, bottomY, cl.label, viewport),
         ];
       }
       if (cl.centerLineType === CenterLineType.HORIZONTAL) {
-        const sy = cl.effectiveValue * viewport.scaleY + viewport.offsetY;
-        if (sy < INSET.top || sy > height - INSET.bottom) return [];
+        if (!isClInDrawingBand(cl, viewport, width, height)) return [];
         return [
           ...labelCircle(`${cl.id}-l`, leftX,  cl.effectiveValue, cl.label, viewport),
           ...labelCircle(`${cl.id}-r`, rightX, cl.effectiveValue, cl.label, viewport),
@@ -72,10 +74,11 @@ const GridDimensions = observer(({ graph, viewport, width, height }) => {
   const strokeWidth = viewport.lineWeightsPx[DIMENSION_LINE_WEIGHT];
   const gap         = GRID_NUM_GAP_PX / viewport.scaleX;
 
-  return graph.dimensionLines.flatMap(d => {
-    if (d.dimensionKind !== DimensionKind.GRID) return [];
+  const xEls = [], yEls = [];
+  graph.dimensionLines.forEach(d => {
+    if (d.dimensionKind !== DimensionKind.GRID) return;
     const segs = d.segments;
-    if (segs.length === 0) return [];
+    if (segs.length === 0) return;
 
     const values = d.effectiveAnchors.map(a => a.value);
 
@@ -95,7 +98,8 @@ const GridDimensions = observer(({ graph, viewport, width, height }) => {
         <Circle key={`${d.id}-dot-${i}`} x={x} y={lineY} radius={dotR} fill={GRID_LINE_COLOR} listening={false} />
       ));
       els.push(...labels);
-      return els;
+      xEls.push(...els);
+      return;
     }
 
     if (d.axis === 'Y') {
@@ -114,11 +118,16 @@ const GridDimensions = observer(({ graph, viewport, width, height }) => {
         <Circle key={`${d.id}-dot-${i}`} x={lineX} y={y} radius={dotR} fill={GRID_LINE_COLOR} listening={false} />
       ));
       els.push(...labels);
-      return els;
+      yEls.push(...els);
     }
-
-    return [];
   });
+
+  // 軸方向のはみ出しだけをガーター内端でクリップする（X行＝x のみ、Y行＝y のみ制限）
+  const { gridX, gridY } = gutterClipRects(viewport, width, height);
+  return [
+    <Group key="grid-x" clipX={gridX.x} clipY={gridX.y} clipWidth={gridX.width} clipHeight={gridX.height}>{xEls}</Group>,
+    <Group key="grid-y" clipX={gridY.x} clipY={gridY.y} clipWidth={gridY.width} clipHeight={gridY.height}>{yEls}</Group>,
+  ];
 });
 
 // ================================================================
@@ -445,6 +454,7 @@ const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisM
   if (!graph) return null;
 
   const areaBounds = drawingAreaBounds(viewport, width, height);
+  const { area } = gutterClipRects(viewport, width, height);
 
   const rows   = graph.dimensionLines.filter(d => d.dimensionKind === DimensionKind.CENTER);
   const top    = rows.find(d => d.side === DimensionSide.TOP);
@@ -463,13 +473,17 @@ const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisM
     // 一切出ないので、表示済み集合（第4・5引数）は空配列でよい。
     const fallbackX = buildFallbackElements(graph, viewport, 'X', [], [], appMode);
     const fallbackY = buildFallbackElements(graph, viewport, 'Y', [], [], appMode);
-    return [
-      ...buildColumnAxisRowElements(top,    topB,    topL,    topA,    viewport),
-      ...buildColumnAxisRowElements(bottom, bottomB, bottomL, bottomA, viewport),
-      ...buildColumnAxisRowElements(left,   leftB,   leftL,   leftA,   viewport),
-      ...buildColumnAxisRowElements(right,  rightB,  rightL,  rightA, viewport),
-      ...fallbackX, ...fallbackY,
-    ];
+    return (
+      <Group clipX={area.x} clipY={area.y} clipWidth={area.width} clipHeight={area.height}>
+        {[
+          ...buildColumnAxisRowElements(top,    topB,    topL,    topA,    viewport),
+          ...buildColumnAxisRowElements(bottom, bottomB, bottomL, bottomA, viewport),
+          ...buildColumnAxisRowElements(left,   leftB,   leftL,   leftA,   viewport),
+          ...buildColumnAxisRowElements(right,  rightB,  rightL,  rightA, viewport),
+          ...fallbackX, ...fallbackY,
+        ]}
+      </Group>
+    );
   }
 
   const { boundary: topB,    lineCoord: topLC,    anchors: topA    } = buildCenterRowAnchors(top,    graph, viewport, areaBounds, appMode);
@@ -485,11 +499,15 @@ const CenterDimensions = observer(({ graph, viewport, width, height, columnAxisM
   const fallbackX = buildFallbackElements(graph, viewport, 'X', topA,  bottomA, appMode);
   const fallbackY = buildFallbackElements(graph, viewport, 'Y', leftA, rightA,  appMode);
 
-  return [
-    ...topRes.elements, ...bottomRes.elements,
-    ...leftRes.elements, ...rightRes.elements,
-    ...fallbackX, ...fallbackY,
-  ];
+  return (
+    <Group clipX={area.x} clipY={area.y} clipWidth={area.width} clipHeight={area.height}>
+      {[
+        ...topRes.elements, ...bottomRes.elements,
+        ...leftRes.elements, ...rightRes.elements,
+        ...fallbackX, ...fallbackY,
+      ]}
+    </Group>
+  );
 });
 
 // ---- 統合エクスポート ----

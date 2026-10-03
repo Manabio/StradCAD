@@ -59,7 +59,7 @@ export const SceneLayers = observer(({
   return (
     <>
       <Layer name="world">
-        {/* ガーターレイヤー（通り芯本体・丸ラベル・通り芯寸法）— window全体・クリップなし・描画エリアと同倍率 */}
+        {/* ガーターレイヤー（通り芯本体・丸ラベル・通り芯寸法）— window全体・描画エリアと同倍率。Group 自体はクリップなし（CL本体・寸法線は GutterLayer 内部で個別にクリップ。丸ラベル・GRID寸法はガター内が定位置） */}
         <Group
           x={viewport.offsetX}
           y={viewport.offsetY}

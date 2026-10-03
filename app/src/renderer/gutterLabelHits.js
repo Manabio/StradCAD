@@ -314,3 +314,37 @@ export function findCenterDimensionLegEndpoint(graph, wx, wy, thresholdPx, scale
   }
   return nearest;
 }
+
+// CL本体・寸法線のクリップ矩形（ワールド座標）。area=描画エリア（ガター内端の内側。CL本体（全種別）・
+// 柱芯線・CENTER寸法・柱芯行・部屋内フォールバック用）、gridX=上下ガーターのGRID寸法用（x だけ描画
+// エリアに制限、y は画面全域）、gridY=左右ガーターのGRID寸法用（y だけ制限、x は画面全域）。
+// 描画だけをクリップする。ヒット判定（gutterHitTest.js・snap.js）は幾何計算で独立しており従来どおり
+// （既知の限界：ガター帯に隠れた寸法線の足もヒットしうる）。
+export function gutterClipRects(viewport, width, height) {
+  const b = drawingAreaBounds(viewport, width, height);
+  const p = viewport.screenToWorld(0, 0), q = viewport.screenToWorld(width, height);
+  const fx = Math.min(p.x, q.x), fy = Math.min(p.y, q.y);
+  const fw = Math.abs(q.x - p.x), fh = Math.abs(q.y - p.y);
+  const aw = b.xMax - b.xMin, ah = b.yMax - b.yMin;
+  return {
+    area:  { x: b.xMin, y: b.yMin, width: aw, height: ah },
+    gridX: { x: b.xMin, y: fy,     width: aw, height: fh },
+    gridY: { x: fx,     y: b.yMin, width: fw, height: ah },
+  };
+}
+
+// CLの垂直方向の画面座標が描画エリア（ガター帯の内側）に入っているか。丸ラベル（GutterLayer
+// GutterCircleLabels）の表示条件。CL本体（CenterLinesLayer）は area 矩形でクリップされるため、軸平行線で
+// ある本体が全部切り落とされる条件はこの判定の否定と一致する＝本体が消えればラベルも一緒に消える。
+// 境界ちょうどは入っている扱い（INSET 以上・端-INSET 以下）。
+export function isClInDrawingBand(cl, viewport, width, height) {
+  if (cl.centerLineType === CenterLineType.VERTICAL) {
+    const sx = cl.effectiveValue * viewport.scaleX + viewport.offsetX;
+    return sx >= INSET.left && sx <= width - INSET.right;
+  }
+  if (cl.centerLineType === CenterLineType.HORIZONTAL) {
+    const sy = cl.effectiveValue * viewport.scaleY + viewport.offsetY;
+    return sy >= INSET.top && sy <= height - INSET.bottom;
+  }
+  return false;
+}

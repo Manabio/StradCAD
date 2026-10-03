@@ -56,9 +56,48 @@ test('【不変条件・変更していない証拠】柱芯オフセット線(a
   assert.ok(/stroke="#3b82f6"/.test(axisLinesRegion), 'axisLines のstrokeが固定色#3b82f6のままではない（対象外の変更）');
 });
 
-test('【不変条件・変更していない証拠】CenterLinesLayer本体: dash・opacityは今回対象外のため変更していない', () => {
-  assert.ok(bodyCodeOnly.includes('dash={isAux ? undefined : [12, 4, 2, 4]}'),
-    'dash={isAux ? undefined : [12, 4, 2, 4]} が見つからない（dashを今回変更していない証拠が崩れている）');
+test('【不変条件・変更していない証拠】CenterLinesLayer本体: dashは通り芯だけ長鎖線化し中心線・梁芯は[12,4,2,4]のまま、opacityは変更していない', () => {
+  // 通り芯（struct）だけ長鎖線 gridLineDash、補助線は実線、それ以外（中心線・梁芯）は従来の [12,4,2,4]。
+  assert.ok(bodyCodeOnly.includes("dash={isAux ? undefined : centerLineKind(cl) === 'struct' ? gridLineDash(viewport.lineWeightsPx.thin) : [12, 4, 2, 4]}"),
+    '通り芯のみ gridLineDash・他は [12, 4, 2, 4] のdash式が見つからない（中心線・梁芯の一点鎖線が変わっている）');
   assert.ok(bodyCodeOnly.includes('opacity={cl.labeled || isBeamAxis ? 1 : 0.5}'),
     'opacity={cl.labeled || isBeamAxis ? 1 : 0.5} が見つからない（opacityを今回変更していない証拠が崩れている）');
+});
+
+// ガター帯の出入り: CL本体（clLines・全種別）・柱芯線（axisLines）は gutterClipRects().area の clip 付き
+// Group で描画エリア矩形にクリップし（二値判定ではない）、丸ラベル（GutterLayer.jsx GutterCircleLabels）
+// は isClInDrawingBand（本体が全部切り落とされる条件と同じ）で消える配線を固定する。
+test('【不変条件】CenterLinesLayer本体と柱芯線は gutterClipRects().area の clip Group で描画エリアにクリップし、二値判定は持たない', () => {
+  assert.ok(bodyCodeOnly.includes('const { area } = gutterClipRects(viewport, width, height);'),
+    'gutterClipRects().area の取得が見つからない');
+  assert.ok(/<Group\b[^>]*clipX=\{area\.x\}[^>]*clipY=\{area\.y\}[^>]*clipWidth=\{area\.width\}[^>]*clipHeight=\{area\.height\}/.test(bodyCodeOnly),
+    'area 矩形の clip 付き Group が見つからない');
+  assert.ok(bodyCodeOnly.includes('return clipped(clLines);') && bodyCodeOnly.includes('return clipped([...clLines, ...axisLines]);'),
+    'clLines／clLines+axisLines の両経路が clip Group で包まれていない');
+  assert.ok(!bodyCodeOnly.includes('isClInDrawingBand'),
+    'CenterLinesLayer本体に二値判定 isClInDrawingBand が残っている（クリップ方式へ統一済み）');
+});
+
+test('【不変条件】GutterLayer.jsx の丸ラベルは isClInDrawingBand を使い、旧インライン判定を持たない', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'GutterLayer.jsx'), 'utf8');
+  const labelsIdx = src.indexOf('const GutterCircleLabels =');
+  assert.ok(labelsIdx > 0, 'GutterCircleLabels の定義が見つからない');
+  const region = stripComments(src.slice(labelsIdx, src.indexOf('\nconst ', labelsIdx + 1)));
+  assert.equal((region.match(/isClInDrawingBand\(cl, viewport, width, height\)/g) ?? []).length, 2,
+    'GutterCircleLabels の縦・横で isClInDrawingBand を使っていない');
+  assert.ok(!region.includes('sx < INSET.left') && !region.includes('sy < INSET.top'),
+    'GutterCircleLabels に旧インライン判定が残っている（本体と判定が分岐する）');
+});
+
+// 寸法線のクリップ: GRID寸法（X行・Y行の2 Group）と CENTER寸法（両経路を包む Group）の配線を固定する。
+test('【不変条件】GutterLayer.jsx: GridDimensions に clip 付き Group が2つ、CenterDimensions に1つ以上ある', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'GutterLayer.jsx'), 'utf8');
+  const gridIdx = src.indexOf('const GridDimensions =');
+  const centerIdx = src.indexOf('const CenterDimensions =');
+  assert.ok(gridIdx > 0 && centerIdx > gridIdx, 'GridDimensions / CenterDimensions の定義が見つからない');
+  const gridRegion = stripComments(src.slice(gridIdx, src.indexOf('\nconst ', gridIdx + 1)));
+  const centerRegion = stripComments(src.slice(centerIdx, src.indexOf('\nexport const', centerIdx)));
+  const clipGroups = r => (r.match(/<Group\b[^>]*clipX=/g) ?? []).length;
+  assert.equal(clipGroups(gridRegion), 2, 'GridDimensions の clipX 付き Group が2つではない');
+  assert.ok(clipGroups(centerRegion) >= 1, 'CenterDimensions に clipX 付き Group が無い');
 });

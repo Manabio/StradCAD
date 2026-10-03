@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import {
   Plane, PlanGraph, CenterLineType, DimensionKind, DimensionSide, HDimensionLine, VDimensionLine,
 } from '../core.js';
-import { findCenterDimensionLegEndpoint, centerDimensionLegHits } from './gutterLabelHits.js';
+import { findCenterDimensionLegEndpoint, centerDimensionLegHits, isClInDrawingBand, gutterClipRects } from './gutterLabelHits.js';
+import { INSET } from '../layout.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -125,4 +126,60 @@ test('findCenterDimensionLegEndpoint: columnAxisMode中はCENTER行が柱芯表�
   const { graph } = setupFourLegsGraph();
   const h = hit(graph, 500, 450, true); // 通常なら{cl:clTop, side:'lo'}が返る位置
   assert.equal(h, null);
+});
+
+// ---- isClInDrawingBand ----
+test('isClInDrawingBand: 横CLは INSET.top ちょうど=true／1px上=false、下ガーター側も同様', () => {
+  const vp = makeViewport(); // offset=0・scale=1 → sy=value
+  const h = v => ({ centerLineType: CenterLineType.HORIZONTAL, effectiveValue: v });
+  assert.equal(isClInDrawingBand(h(INSET.top), vp, WIDTH, HEIGHT), true);
+  assert.equal(isClInDrawingBand(h(INSET.top - 1), vp, WIDTH, HEIGHT), false);
+  assert.equal(isClInDrawingBand(h(HEIGHT - INSET.bottom), vp, WIDTH, HEIGHT), true);
+  assert.equal(isClInDrawingBand(h(HEIGHT - INSET.bottom + 1), vp, WIDTH, HEIGHT), false);
+});
+
+test('isClInDrawingBand: 縦CLの左右ガーター', () => {
+  const vp = makeViewport();
+  const v = x => ({ centerLineType: CenterLineType.VERTICAL, effectiveValue: x });
+  assert.equal(isClInDrawingBand(v(INSET.left), vp, WIDTH, HEIGHT), true);
+  assert.equal(isClInDrawingBand(v(INSET.left - 1), vp, WIDTH, HEIGHT), false);
+  assert.equal(isClInDrawingBand(v(WIDTH - INSET.right), vp, WIDTH, HEIGHT), true);
+  assert.equal(isClInDrawingBand(v(WIDTH - INSET.right + 1), vp, WIDTH, HEIGHT), false);
+});
+
+test('isClInDrawingBand: offset/scale を反映し、種別不明は false', () => {
+  const vp = { scaleX: 2, scaleY: 2, offsetX: 100, offsetY: 100 };
+  // sy = 2*v + 100。v=0 → 100（INSET.top 以上なら true は INSET に依存するため境界で確認）
+  const v = (INSET.top - 100) / 2;
+  assert.equal(isClInDrawingBand({ centerLineType: CenterLineType.HORIZONTAL, effectiveValue: v }, vp, WIDTH, HEIGHT), true);
+  assert.equal(isClInDrawingBand({ centerLineType: CenterLineType.HORIZONTAL, effectiveValue: v - 1 }, vp, WIDTH, HEIGHT), false);
+  assert.equal(isClInDrawingBand({ centerLineType: 'unknown', effectiveValue: 500 }, vp, WIDTH, HEIGHT), false);
+});
+
+test('gutterClipRects: offset=0・scale=1 で area が INSET 内端と一致、gridX/gridY は片軸のみ画面全域', () => {
+  const r = gutterClipRects(VIEWPORT, WIDTH, HEIGHT);
+  const aw = WIDTH - INSET.left - INSET.right, ah = HEIGHT - INSET.top - INSET.bottom;
+  assert.deepEqual(r.area, { x: INSET.left, y: INSET.top, width: aw, height: ah });
+  assert.deepEqual(r.gridX, { x: INSET.left, y: 0, width: aw, height: HEIGHT });
+  assert.deepEqual(r.gridY, { x: 0, y: INSET.top, width: WIDTH, height: ah });
+});
+
+test('gutterClipRects: offset/scale を反映し、width/height は常に正', () => {
+  const vp = {
+    scaleX: 2, scaleY: 2, offsetX: 100, offsetY: 100,
+    screenToWorld(sx, sy) { return { x: (sx - 100) / 2, y: (sy - 100) / 2 }; },
+  };
+  const r = gutterClipRects(vp, WIDTH, HEIGHT);
+  assert.equal(r.area.x, (INSET.left - 100) / 2);
+  assert.equal(r.area.y, (INSET.top - 100) / 2);
+  assert.equal(r.area.width, (WIDTH - INSET.left - INSET.right) / 2);
+  assert.equal(r.gridX.y, -50);
+  assert.equal(r.gridX.height, HEIGHT / 2);
+  assert.equal(r.gridY.x, -50);
+  assert.equal(r.gridY.width, WIDTH / 2);
+  for (const k of ['area', 'gridX', 'gridY']) assert.ok(r[k].width > 0 && r[k].height > 0);
+  // y 反転（scale 負）でも正になる
+  const flip = { screenToWorld: (sx, sy) => ({ x: -sx, y: -sy }) };
+  const f = gutterClipRects(flip, WIDTH, HEIGHT);
+  for (const k of ['area', 'gridX', 'gridY']) assert.ok(f[k].width > 0 && f[k].height > 0);
 });
