@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { StairType } from '@core';
 import { StairEditor } from './StairPanel.jsx';
+import { stairFloorLabels } from './stairFloorLabel.js';
 
 const TYPE_LABEL = {
   [StairType.STRAIGHT]:         '直進',
@@ -21,6 +22,7 @@ const valueStyle = { fontSize: 13, color: '#0f172a' };
 export const StairTab = observer(({ graph, mode, project }) => {
   const stairs = graph.stairs;
   const lowerStairs = mode.lowerStairs ?? [];
+  const floorLabels = stairFloorLabels(project?.planes, project?.activePlane?.id);
   const selectedId = mode.selectedStairId;
   const selectedSelf = selectedId ? graph.stairMap.get(selectedId) : null;
   const selectedLower = !selectedSelf && selectedId
@@ -46,7 +48,7 @@ export const StairTab = observer(({ graph, mode, project }) => {
                 background: s.id === selectedId ? '#eff6ff' : '#fff',
               }}
             >
-              階段{i + 1}（{TYPE_LABEL[s.type] ?? s.type}）
+              階段{i + 1}（{TYPE_LABEL[s.type] ?? s.type}）{floorLabels.self}
             </button>
           ))}
           {lowerStairs.map(({ stair: s }, i) => (
@@ -61,7 +63,7 @@ export const StairTab = observer(({ graph, mode, project }) => {
                 color: '#64748b',
               }}
             >
-              階段{stairs.length + i + 1}（{TYPE_LABEL[s.type] ?? s.type}）・下階設置
+              階段{stairs.length + i + 1}（{TYPE_LABEL[s.type] ?? s.type}）{floorLabels.lower}・下階設置
             </button>
           ))}
         </div>
