@@ -3,6 +3,7 @@ import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList, worldTo
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { ensureUnderStairSplit, removeUnderStairSplit } from '../finish/stair/stairUnderSplit.js';
+import { removeStairOnFloor, isContinuationStair } from '../finish/stair/stairRemoval.js';
 import { resolveStairUnderEntries } from '../finish/stair/stairUnderRooms.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -17,7 +18,7 @@ import { buildingEquipmentCatalog, equipmentSpanLabelOf } from '../finish/equipm
 import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { isValidRoofFieldValue } from '../finish/roof/roofInput.js';
-import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED } from '../error.js';
+import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED, ERR_STAIR_DELETE_CONTINUATION, ERR_ROOM_DELETE_HAS_STAIR_CHILD } from '../error.js';
 import {
   RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME, applyDefaultBaseboard,
   ElevatorEquipmentCategory, DEFAULT_EV_USAGE, isDefaultRoofSpec,
@@ -34,6 +35,12 @@ function setsEqual(a, b) {
   if (a.size !== b.size) return false;
   for (const x of a) if (!b.has(x)) return false;
   return true;
+}
+
+// 階段のペア Room が、確定内容の feature で階段でなくなるか。applyNaming が連動 Stair を削除する条件と
+// isStairRemovalIntent（App.jsx の関門への分岐判定）の単一の式（別々に書かない）。
+function isLeavingStair(room, feature) {
+  return room.feature === RoomFeature.STAIR && feature !== RoomFeature.STAIR;
 }
 
 // グラフ上で「材コード」を保持するフィールド（照合対象）。
@@ -103,6 +110,12 @@ export class FinishModeState {
     // App.jsx の全階連動（runElevatorRemoval/runElevatorUsageChange）の commitActive が
     // 読み出す——applyNaming の lastNamingUndoEntry と同じ「フィールドで受け渡す」流儀）。
     this.lastEquipmentUndoEntry = null;
+    // 直近の deleteStair が積んだ undo エントリ（非observable。App.jsx deleteStairCascade の
+    // commitActive が読み出す——lastEquipmentUndoEntry と同じ「フィールドで受け渡す」流儀）。
+    this.lastStairUndoEntry = null;
+    // 直近の deleteRoom が積んだ undo エントリ（非observable。階段のペア部屋のカード削除の
+    // App.jsx deleteStairRoomCascade の commitActive が読み出す）。
+    this.lastRoomUndoEntry = null;
     // _loadLowerStairs が peek した直下階グラフそのもの（非observable。lowerStairs は
     // 表示・見下げ判定用に stair+cellBounds へ加工した派生値のため、直下階の壁・部屋トポロジー
     // 全体が要る finish/finishBoundary.js の resolveStairContext 用にキャッシュを別枠で持つ。
@@ -971,7 +984,7 @@ export class FinishModeState {
       this.selectedRoomId = room.id;
       this.selectedEquipmentId = null;
     } else {
-      if (wasStair) this._removeLinkedStair(roomId); // STAIR → null/void: 連動Stairを削除
+      if (isLeavingStair(room, feature)) this._removeLinkedStair(roomId); // STAIR → null/void: 連動Stairを削除
       room.setFeature(feature ?? null); // ROOF 以外へ変えれば roofSpec は捨てられる（I1）
       // 屋根の新規付与は既定値の RoofSpec（備考 '下野'）を付ける。既に屋根の部屋への再確定は既存の値を保つ
       if (toRoof && !room.roofSpec) room.setRoofSpec(createLeanToRoofSpec());
@@ -1107,7 +1120,44 @@ export class FinishModeState {
    * その部屋を roomId に持つ Stair があれば道連れで削除する。壁・境界エッジの後始末はモード切替時の既存ロジックに委ねる。
    */
   deleteRoom(roomId) {
-    withFinishUndo(this.graph, () => this._deleteRoomNoUndo(roomId));
+    this.lastRoomUndoEntry = null; // 前回の値を持ち越さない
+    if (this.roomDeleteBlockReason(roomId)) return; // 部分指定に階段を含む部屋は何も変更しない（黙って通さない）
+    // withFinishUndo ではなく自前で before/after→pushFinishUndo にする——App.jsx deleteStairRoomCascade の
+    // commitActive が undo エントリを読み出す必要があるため（deleteStair と同じ。エントリの内容は
+    // withFinishUndo と同一）。差分なしなら lastRoomUndoEntry は null。
+    const before = snapshotFinishState(this.graph);
+    this._deleteRoomNoUndo(roomId);
+    this.lastRoomUndoEntry = pushFinishUndo(this.graph, before);
+  }
+
+  /** roomId を referenceRoomIds に持つ部分指定の子（deleteRoom の親カスケードの列挙。判定と削除の共通の源）。 */
+  _childRoomsOf(roomId) {
+    return this.graph.rooms.filter(r => r.referenceRoomIds.has(roomId));
+  }
+
+  /**
+   * roomId の削除で道連れに消える部屋（子・孫…。roomId 自身は含まない）の id。
+   * _deleteRoomNoUndo の再帰と同じ _childRoomsOf から導く。
+   */
+  _cascadedRoomIds(roomId) {
+    const ids = [];
+    const walk = id => {
+      for (const child of this._childRoomsOf(id)) { ids.push(child.id); walk(child.id); }
+    };
+    walk(roomId);
+    return ids;
+  }
+
+  /**
+   * 部屋の削除が許されない理由（道連れで消える部分指定の子・孫に階段のペア部屋がある。
+   * 親の削除で階段が自階だけ消え、上の階の分身・階段吹抜けが残るのを防ぐ）。許されるなら null。
+   * 削除対象そのものが階段のペア部屋の場合は拒否しない（階段の関門へ回る）。存在しない id は null。
+   * @returns {string|null}
+   */
+  roomDeleteBlockReason(roomId) {
+    if (!this.graph.roomMap.has(roomId)) return null;
+    return this._cascadedRoomIds(roomId).some(id => this.stairOfRoom(id) !== null)
+      ? ERR_ROOM_DELETE_HAS_STAIR_CHILD : null;
   }
 
   /**
@@ -1119,8 +1169,7 @@ export class FinishModeState {
   _deleteRoomNoUndo(roomId) {
     const room = this.graph.roomMap.get(roomId);
     if (!room) return;
-    const children = this.graph.rooms.filter(r => r.referenceRoomIds.has(roomId));
-    for (const child of children) this._deleteRoomNoUndo(child.id); // 再帰（各自の連動Stairガード込み）
+    for (const child of this._childRoomsOf(roomId)) this._deleteRoomNoUndo(child.id); // 再帰（各自の連動Stairガード込み）
 
     this._removeLinkedStair(roomId);
     // ぶら下がった器具行を残さない（昇降路Roomを削除・未定義化するどちらの経路でも呼ぶ守り。
@@ -1263,37 +1312,77 @@ export class FinishModeState {
     this.lastEquipmentUndoEntry = pushFinishUndo(this.graph, before);
   }
 
-  /** stair.roomId の Room が存在すればそれも削除する（階段タブの削除ボタン経由でも Room が残らないように）。 */
+  /**
+   * stair.roomId の Room が存在すればそれも削除する（階段タブの削除ボタン経由でも Room が残らないように）。
+   * withFinishUndo ではなく自前で before/after→pushFinishUndo にする——App.jsx deleteStairCascade の
+   * commitActive が undo エントリを直接読み出す必要があるため（deleteEquipment と同じ。withFinishUndo は
+   * 戻り値を返さない）。差分なしなら lastStairUndoEntry は null。
+   */
   deleteStair(id) {
-    withFinishUndo(this.graph, () => this._deleteStairNoUndo(id));
+    const before = snapshotFinishState(this.graph);
+    this._deleteStairNoUndo(id);
+    this.lastStairUndoEntry = pushFinishUndo(this.graph, before);
+  }
+
+  /**
+   * 階段の削除が許されない理由（中間階＝直下の採用階に同 footprint の階段がある）。許されるなら null。
+   * 階段タブの削除ボタンの無効化・理由表示に使う（observer から呼ぶ。lowerStairs を読んで依存を張る）。
+   * 直下階が未読込み（_lowerGraph が null）の間は null——その間に押された場合は関門側
+   * （finish/stair/stairFloorSync.js runStairRemoval）が同じ判定で拒否する。
+   * @returns {string|null}
+   */
+  stairDeleteBlockReason(stairId) {
+    if (this.lowerStairs.length === 0 || !this._lowerGraph || !this.project) return null;
+    const stair = this.graph.stairMap.get(stairId);
+    if (!stair) return null;
+    return isContinuationStair(stair, this.graph, this._lowerGraph, this.project.structGraph)
+      ? ERR_STAIR_DELETE_CONTINUATION : null;
+  }
+
+  /** roomId をペア Room に持つ Stair（無ければ null）。 */
+  stairOfRoom(roomId) {
+    return [...this.graph.stairMap.values()].find(s => s.roomId === roomId) ?? null;
+  }
+
+  /**
+   * payload（ダイアログ・カードの確定内容）が「階段を外す」（階段のペア Room → 階段でない）を意図しているか。
+   * applyNaming が _removeLinkedStair を呼ぶ条件（isLeavingStair）と同じ式。ペア Room に Stair 実体が
+   * 無い旧データは偽（従来どおり同期の applyNaming が扱う）。App.jsx applyRoomNaming が、上の階へ
+   * 連動する非同期の関門（revertStairFromNaming）へ分ける判定に使う。roomId が存在しなければ false。
+   */
+  isStairRemovalIntent(roomId, payload) {
+    const room = this.graph.roomMap.get(roomId);
+    if (!room) return false;
+    return isLeavingStair(room, payload.feature) && this.stairOfRoom(roomId) !== null;
   }
 
   /**
    * deleteStair の実体（undo 記録なし）。
-   * ペアRoom（stair.roomId の Room）は屋外なら removeRoom、屋内なら _makeUndefined で外壁線を維持する。
+   * 本体は finish/stair/stairRemoval.js removeStairOnFloor（ペアRoomは屋外なら removeRoom、屋内なら
+   * 未定義化で外壁線を維持）。ここは選択のクリアだけを持つ。
    */
   _deleteStairNoUndo(id) {
     const stair = this.graph.stairMap.get(id);
-    if (stair) removeUnderStairSplit(stair, this.graph); // 階段下の分割CLを指定ごと元に戻す
-    if (stair?.roomId && this.graph.roomMap.has(stair.roomId)) {
-      const room = this.graph.roomMap.get(stair.roomId);
-      if (room.kind === RoomKind.EXTERIOR) {
-        this.graph.removeRoom(stair.roomId);
-      } else {
-        this._makeUndefined(room);
+    if (stair) {
+      // 選択のクリアはペアRoomが存在した場合だけ（従来どおり。削除前に判定する）
+      const hadRoom = !!stair.roomId && this.graph.roomMap.has(stair.roomId);
+      removeStairOnFloor(this.graph, stair); // 本体は finish/stair/stairRemoval.js
+      if (hadRoom) {
+        if (this.selectedRoomId === stair.roomId) this.selectedRoomId = null;
+        if (this.namingRoomId === stair.roomId) this.namingRoomId = null;
       }
-      if (this.selectedRoomId === stair.roomId) this.selectedRoomId = null;
-      if (this.namingRoomId === stair.roomId) this.namingRoomId = null;
+    } else {
+      this.graph.removeStair(id);
     }
-    if (stair?.roomId) this.graph.removeExteriorRowsByRoomId(stair.roomId); // 連動する外部仕上げ行も削除
-    this.graph.removeStair(id);
     if (this.selectedStairId === id) this.selectedStairId = null;
   }
 
   /**
    * 階段OFF復帰: stair.roomId の Room を feature=null に戻し、Stair を削除して選択を Room へ戻す。
    * Room が存在しない旧データ Stair（上階自動設置分・移行前データ）は何もしない。
-   * （現状 applyNaming の STAIR→null/void 遷移が同等の処理を担うため未配線。フェーズ4以降のUI導線候補として保持）
+   * （現状 applyNaming の STAIR→null/void 遷移が同等の処理を担うため未配線。フェーズ4以降のUI導線候補として保持。
+   * 配線するなら、階段を消す他の入口と同じ関門——App.jsx deleteStairCascade／revertStairFromNaming の
+   * runStairRemoval——を通すこと。通さないと上の階の分身・階段吹抜けが残り、見上げ破線が残る）
    */
   revertStairToRoom(stairId) {
     const stair = this.graph.stairMap.get(stairId);

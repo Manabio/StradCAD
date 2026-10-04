@@ -19,7 +19,7 @@ const valueStyle = { fontSize: 13, color: '#0f172a' };
 
 // 仕上げパレットの「階段」タブ — 階段一覧＋選択中の階段パラメータ編集。
 // 直下階の階段（見下げ）も一覧に含め、選択時は読み取り専用で表示する。
-export const StairTab = observer(({ graph, mode, project }) => {
+export const StairTab = observer(({ graph, mode, project, onDeleteStair }) => {
   const stairs = graph.stairs;
   const lowerStairs = mode.lowerStairs ?? [];
   const floorLabels = stairFloorLabels(project?.planes, project?.activePlane?.id);
@@ -68,7 +68,13 @@ export const StairTab = observer(({ graph, mode, project }) => {
           ))}
         </div>
       )}
-      {selectedSelf && <StairEditor stair={selectedSelf} graph={graph} project={project} onDelete={id => mode.deleteStair(id)} />}
+      {selectedSelf && (
+        <StairEditor
+          stair={selectedSelf} graph={graph} project={project}
+          onDelete={onDeleteStair}
+          deleteBlockedReason={mode.stairDeleteBlockReason(selectedSelf.id)}
+        />
+      )}
       {selectedLower && (
         // 下階に設置された階段の読み取り専用表示（編集は設置階の仕上げモードで行う）。
         <div style={{ padding: 16 }}>

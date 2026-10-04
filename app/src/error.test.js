@@ -10,7 +10,15 @@ import {
   ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
   ERR_STAIR_DESIGNATE_FAILED, ERR_STAIR_DESIGNATE_FAILED_MESSAGE, ERR_STAIR_DESIGNATE_ABORTED,
   ERR_STAIR_UPPER_CHECK_FAILED, ERR_ELEVATOR_FLOORS_CHANGED,
+  ERR_STAIR_DELETE_FAILED, ERR_STAIR_DELETE_FAILED_MESSAGE,
 } from './error.js';
+
+test('階段の削除の失敗: tagElevatorOpFailure で包んだ例外は専用文言になり、包んでいない例外は汎用文言のまま', () => {
+  const tagged = tagElevatorOpFailure(new Error('boom'), { code: ERR_STAIR_DELETE_FAILED, message: ERR_STAIR_DELETE_FAILED_MESSAGE });
+  assert.equal(tagged.code, ERR_STAIR_DELETE_FAILED);
+  assert.equal(floorTransitionErrorMessage(tagged), ERR_STAIR_DELETE_FAILED_MESSAGE);
+  assert.notEqual(floorTransitionErrorMessage(new Error('boom')), ERR_STAIR_DELETE_FAILED_MESSAGE);
+});
 
 test('【B1b】階段の指定の失敗: tagElevatorOpFailure で包んだ例外は floorTransitionErrorMessage で階切替の汎用文言に丸められず専用文言になる', () => {
   const tagged = tagElevatorOpFailure(new Error('boom'), { code: ERR_STAIR_DESIGNATE_FAILED, message: ERR_STAIR_DESIGNATE_FAILED_MESSAGE });

@@ -4,7 +4,8 @@ import { BottomSheet } from '../ui/BottomSheet.jsx';
 // 縦長デバイス用 — 下からせり上がるハーフモーダル（タブ: 内部 / 階段 / 外部 / …）。
 export function FinishHalfModal({
   graph, mode, project, selectedRoomId, onSelectRoom, onApplyNaming, floorName,
-  onDeleteEquipment, onChangeEquipmentUsage,
+  onDeleteEquipment, onChangeEquipmentUsage, onDeleteStair,
+  onDeleteStairRoom,
 }) {
   return (
     <BottomSheet title="仕上げ表" raiseSignal={selectedRoomId}>
@@ -18,6 +19,8 @@ export function FinishHalfModal({
         floorName={floorName}
         onDeleteEquipment={onDeleteEquipment}
         onChangeEquipmentUsage={onChangeEquipmentUsage}
+        onDeleteStair={onDeleteStair}
+        onDeleteStairRoom={onDeleteStairRoom}
       />
     </BottomSheet>
   );

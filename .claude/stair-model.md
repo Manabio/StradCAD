@@ -201,3 +201,9 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
 
 ## 階操作（追加・挿入・並替・階変更・削除）への追従は`floorOrderChange.js`が担う
 上階の自動設置（`syncUpperFloorsAuto`）・直下階の階段削除は、階の並びを変える経路（挿入・下階追加・削除・ドラッグ移動・階変更）から個別に呼ばれず、`floorOrderFollowers`レジストリの`stairUpperSync`／`stairsBelowRemoval`に登録して行う。同期ルールが今後変わったら、この2つのfollowerだけ直せば全経路に効く（`.claude/floor-design.md`「階の並びを変える操作が他の階へ波及する処理」参照）。
+
+## 階段の削除は設置階だけ。上の階へ連動する
+- 設置階で削除すると、上の階の同 footprint の階段と最上階の階段吹抜けを `runStairRemoval`（`finish/stair/stairFloorSync.js`）が連動して消し、undo 1回で全階が戻る。ペア部屋・吹抜けは各階の区分の規則で未定義化か削除。上の階に補完した中心線は残す（未定義部屋のセルが参照する）が、階段下の分割CLは階段に属するので一緒に戻す。
+- 中間階は「直下の採用階に同 footprint の階段がある」で判定して拒否する。`Stair` に自動設置の印が無いので、手動で同じ位置に指定した階段とは区別しない。直下階へ footprint を写せないときは「続く階段ではない」とする（直下階にその格子が無ければ同 footprint の階段も在りえないため）。
+- 階段を消す入口は3つ（階段タブ＝`App.jsx deleteStairCascade`、階段のペア部屋のカード削除＝`deleteStairRoomCascade`、属性で階段を外す＝`revertStairFromNaming`）で、すべて同じ関門（`runStairRemoval`）を通す。違いは設置階の確定の本体だけ（`deleteStair`／従来の `deleteRoom`／`applyNaming`）で、カード削除の自階の結果は従来の `deleteRoom` と同じ（部分指定の子の道連れ削除を含む）。`revertStairToRoom`（未配線）を配線するときも同じ。再指定では上の階の未定義部屋からセルを引き抜く（引き抜かないとペア部屋・吹抜けができず点線が出ない）。
+- **部分指定に階段を含む部屋の削除は拒否する**（`roomDeleteBlockReason`。道連れで消える子・孫に階段のペア部屋がある場合。親の削除のカスケードが階段を自階だけ消し、上の階の分身・吹抜けが残る・中間階でも消せてしまうため。「先に階段を削除」と案内。判定は削除と同じ列挙 `_childRoomsOf` から導く）。

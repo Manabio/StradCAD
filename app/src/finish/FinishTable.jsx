@@ -371,7 +371,8 @@ const EmptyTabPlaceholder = observer(({ message }) => (
 
 export const FinishTable = observer(({
   graph, mode, project, selectedRoomId, onSelectRoom, onApplyNaming, floorName,
-  onDeleteEquipment, onChangeEquipmentUsage,
+  onDeleteEquipment, onChangeEquipmentUsage, onDeleteStair,
+  onDeleteStairRoom,
 }) => {
   const [activeTab, setActiveTab] = useState('interior');
   // 階段化セレクタ（内部タブのカード・部屋名ダイアログ共通）を有効にするか。上階に採用フロアが
@@ -438,11 +439,12 @@ export const FinishTable = observer(({
             selectedRoomId={selectedRoomId}
             onSelectRoom={onSelectRoom}
             onApplyNaming={onApplyNaming}
+            onDeleteStairRoom={onDeleteStairRoom}
             stairEnabled={stairEnabled}
             floorName={floorName}
           />
         : activeTab === 'stair'
-        ? <StairTab graph={graph} mode={mode} project={project} />
+        ? <StairTab graph={graph} mode={mode} project={project} onDeleteStair={onDeleteStair} />
         : activeTab === 'common'
         ? <CommonSpecTable graph={graph} mode={mode} />
         : activeTab === 'equipment'
@@ -470,7 +472,7 @@ export const FinishTable = observer(({
 // InteriorTable — 部屋ごとの内部仕上げ（既存テーブル）
 // ================================================================
 
-const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, onApplyNaming, stairEnabled, floorName }) => {
+const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, onApplyNaming, onDeleteStairRoom, stairEnabled, floorName }) => {
   // 屋外部屋（kind===EXTERIOR）は階段の有無によらず除外する（外部タブが担当。非階段は
   // 部位の仕上げレベル入力、屋外階段は階段タブ＋外部タブの部位「階段」行）。
   // 屋内階段（kind===INTERIOR）は通常部屋と同じカードで表示する
@@ -590,7 +592,7 @@ const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, onA
           />
         )}
       </div>
-      <RoomDeleteConfirm graph={graph} mode={mode} deleteConfirm={deleteConfirm} onClose={() => setDeleteConfirm(null)} />
+      <RoomDeleteConfirm graph={graph} mode={mode} deleteConfirm={deleteConfirm} onClose={() => setDeleteConfirm(null)} onDeleteStairRoom={onDeleteStairRoom} />
     </div>
   );
 });

@@ -89,6 +89,7 @@ import {
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE, ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
   ERR_ROOF_UPPER_ROOMS, ERR_STAIR_UPPER_CHECK_FAILED, ERR_STAIR_DESIGNATE_ABORTED,
   ERR_STAIR_DESIGNATE_FAILED, ERR_STAIR_DESIGNATE_FAILED_MESSAGE,
+  ERR_STAIR_DELETE_FAILED, ERR_STAIR_DELETE_FAILED_MESSAGE,
 } from './error.js';
 import { isUiBusy, runBusy } from './uiBusy.js';
 import { isSessionOwner } from './storage/sessionLock.js';
@@ -231,6 +232,10 @@ const App = observer(() => {
     // 無いかを確定前に確かめる非同期の関門（convertStairFromNaming）へ分ける（ステップB1b）。上の階が
     // 無ければ従来どおりの同期の経路。関門を通った後の再入は stairChecked で分岐を飛ばす。
     if (!stairChecked && modeRef.current?.isStairConversionIntent(id, payload) && upperAdoptedPlanes(project.planes, project.activePlane).length > 0) { guardUi(convertStairFromNaming)(id, payload); return; }
+    // 階段を外す（階段のペア部屋→階段でない）は、階段タブの削除と同じ関門（revertStairFromNaming→runStairRemoval）へ分ける。
+    // 設置階なら上の階の分身・階段吹抜けも連動して消す／中間階なら拒否する。関門の中の確定は applyNaming を直接呼ぶ
+    // （この関数を再入しない）。
+    if (modeRef.current?.isStairRemovalIntent(id, payload)) { guardUi(revertStairFromNaming)(id, payload); return; }
     const wasRoof = isRoofFeature(project.activeGraph.roomMap.get(id)?.feature);
     const floorHeight = floorHeightAbove(project, project.activePlane);
     const convertedStair = modeRef.current?.applyNaming(id, payload, floorHeight);
@@ -444,6 +449,137 @@ const App = observer(() => {
         setToast({ msg: r.message ?? ERR_ELEVATOR_FLOORS_CHANGED, key: Date.now() });
       }
       // changed・noopはトーストなし。
+    });
+  }
+  // 階段の削除（階段タブの削除ボタン。部屋カードの削除は deleteStairRoomCascade）。設置階で削除したとき、上の階へ自動設置された
+  // 同 footprint の階段と最上階の階段吹抜けも連動して消す（finish/stair/stairFloorSync.js runStairRemoval）。
+  // 下の階から続く階段（中間階）は拒否してトーストだけ出す。deleteElevatorEquipment と同じ形
+  // （beginUiTransition→runBusy→structuralSync.whenIdle()→動的import→本体→結果の表示）。
+  // 動的importは確定（commitActive）より前＝関門の先頭側で済ませる。成功時のトーストは出さない。
+  async function deleteStairCascade(id) {
+    const fmode = modeRef.current;
+    const g = project.activeGraph;
+    beginUiTransition();
+    await runBusy('階段の削除', async () => {
+      const isStillValid = () => modeRef.current === fmode && project.activeGraph === g && g.stairMap.has(id);
+      // 設置階の確定が「グラフは変更したが undo エントリを持ち帰れない」状態（例外・差分なしでの null 戻り）に
+      // なったとき、上の階の巻き戻しだけでは食い違うため、確定前のスナップショットへ戻してから例外にする
+      // （deleteElevatorEquipment の commitActive と同じ）。
+      const commitActive = () => {
+        const before = snapshotFinishState(g);
+        try {
+          fmode.deleteStair(id);
+        } catch (err) {
+          runInAction(() => restoreFinishState(g, before));
+          throw err;
+        }
+        if (!fmode.lastStairUndoEntry) {
+          runInAction(() => restoreFinishState(g, before));
+          throw new Error('deleteStairCascade: deleteStairが差分なしでundoエントリを返さなかったため確定前へ戻しました');
+        }
+        return fmode.lastStairUndoEntry;
+      };
+      let r;
+      try {
+        await structuralSync.whenIdle();
+        const m = await import('./finish/stair/stairFloorSync.js');
+        r = await m.runStairRemoval({
+          project, activeGraph: g, stairId: id, commitActive, isStillValid,
+          onApplied: () => setFloorSyncTick(t => t + 1),
+        });
+      } catch (err) {
+        throw tagElevatorOpFailure(err, { code: ERR_STAIR_DELETE_FAILED, message: ERR_STAIR_DELETE_FAILED_MESSAGE });
+      }
+      if (r.status === 'rejected' || (r.status === 'aborted' && r.message)) {
+        setToast({ msg: r.message, key: Date.now() });
+      }
+      // removed・noop・message なしの aborted（状態が変わっていた）はトーストなし。
+    });
+  }
+  // 内部タブの部屋カードの削除（階段のペア部屋）。deleteStairCascade と同じ関門だが、設置階の確定は階段タブの
+  // deleteStair ではなく従来の deleteRoom（部分指定の子の道連れ削除・屋内の未定義化を含む。自階の結果は従来と同じ）。
+  async function deleteStairRoomCascade(roomId) {
+    const fmode = modeRef.current;
+    const g = project.activeGraph;
+    const stair = fmode.stairOfRoom(roomId);
+    if (!stair) return; // 階段実体が既に無い等の退化ケース（関門に入らない）
+    const stairId = stair.id;
+    beginUiTransition();
+    await runBusy('階段の削除', async () => {
+      const isStillValid = () =>
+        modeRef.current === fmode && project.activeGraph === g && fmode.stairOfRoom(roomId)?.id === stairId && !fmode.roomDeleteBlockReason(roomId);
+      const commitActive = () => {
+        const before = snapshotFinishState(g);
+        try {
+          fmode.deleteRoom(roomId);
+        } catch (err) {
+          runInAction(() => restoreFinishState(g, before));
+          throw err;
+        }
+        if (!fmode.lastRoomUndoEntry) {
+          runInAction(() => restoreFinishState(g, before));
+          throw new Error('deleteStairRoomCascade: deleteRoomが差分なしでundoエントリを返さなかったため確定前へ戻しました');
+        }
+        return fmode.lastRoomUndoEntry;
+      };
+      let r;
+      try {
+        await structuralSync.whenIdle();
+        const m = await import('./finish/stair/stairFloorSync.js');
+        r = await m.runStairRemoval({
+          project, activeGraph: g, stairId, commitActive, isStillValid,
+          onApplied: () => setFloorSyncTick(t => t + 1),
+        });
+      } catch (err) {
+        throw tagElevatorOpFailure(err, { code: ERR_STAIR_DELETE_FAILED, message: ERR_STAIR_DELETE_FAILED_MESSAGE });
+      }
+      if (r.status === 'rejected' || (r.status === 'aborted' && r.message)) {
+        setToast({ msg: r.message, key: Date.now() });
+      }
+    });
+  }
+  // 部屋カードの「属性」で階段を外す（階段→階段でない。applyRoomNaming から分岐）。階段タブの削除と同じ関門
+  // （runStairRemoval）を通し、設置階なら上の階の分身・階段吹抜けも連動して消す／中間階なら拒否（部屋は何も変えない）。
+  // 設置階の確定は applyNaming（従来どおり部屋の属性・外部仕上げ行・選択の変更が反映される）。
+  async function revertStairFromNaming(id, payload) {
+    const fmode = modeRef.current;
+    const g = project.activeGraph;
+    const stair = fmode.stairOfRoom(id);
+    if (!stair) return; // 階段実体が既に無い等の退化ケース（関門に入らない）
+    const stairId = stair.id;
+    beginUiTransition();
+    await runBusy('階段の削除', async () => {
+      const isStillValid = () =>
+        modeRef.current === fmode && project.activeGraph === g && g.stairMap.has(stairId) && fmode.isStairRemovalIntent(id, payload);
+      const commitActive = () => {
+        const before = snapshotFinishState(g);
+        fmode.lastNamingUndoEntry = null; // 前回の値を持ち越さない
+        try {
+          fmode.applyNaming(id, payload, floorHeightAbove(project, project.activePlane));
+        } catch (err) {
+          runInAction(() => restoreFinishState(g, before));
+          throw err;
+        }
+        if (fmode.lastNamingRejection || !fmode.lastNamingUndoEntry) {
+          runInAction(() => restoreFinishState(g, before));
+          throw new Error(fmode.lastNamingRejection ?? 'revertStairFromNaming: applyNamingが差分なしでundoエントリを返さなかったため確定前へ戻しました');
+        }
+        return fmode.lastNamingUndoEntry;
+      };
+      let r;
+      try {
+        await structuralSync.whenIdle();
+        const m = await import('./finish/stair/stairFloorSync.js');
+        r = await m.runStairRemoval({
+          project, activeGraph: g, stairId, commitActive, isStillValid,
+          onApplied: () => setFloorSyncTick(t => t + 1),
+        });
+      } catch (err) {
+        throw tagElevatorOpFailure(err, { code: ERR_STAIR_DELETE_FAILED, message: ERR_STAIR_DELETE_FAILED_MESSAGE });
+      }
+      if (r.status === 'rejected' || (r.status === 'aborted' && r.message)) {
+        setToast({ msg: r.message, key: Date.now() });
+      }
     });
   }
   // 構造リストで展開中のカードの部材id集合を構造モード状態へ写す（伏図のハイライト。
@@ -2563,6 +2699,8 @@ const App = observer(() => {
               floorName={floorName}
               onDeleteEquipment={guardUi(deleteElevatorEquipment)}
               onChangeEquipmentUsage={guardUi(changeElevatorUsage)}
+              onDeleteStair={guardUi(deleteStairCascade)}
+              onDeleteStairRoom={guardUi(deleteStairRoomCascade)}
             />
           : <FinishHalfModal
               graph={graph}
@@ -2574,6 +2712,8 @@ const App = observer(() => {
               floorName={floorName}
               onDeleteEquipment={guardUi(deleteElevatorEquipment)}
               onChangeEquipmentUsage={guardUi(changeElevatorUsage)}
+              onDeleteStair={guardUi(deleteStairCascade)}
+              onDeleteStairRoom={guardUi(deleteStairRoomCascade)}
             />
       )}
 

@@ -71,7 +71,9 @@ const rowStyle   = { display: 'flex', alignItems: 'center', gap: 8, marginBottom
 const inputStyle = { flex: 1, fontSize: 13, padding: '4px 6px', border: '1px solid #cbd5e1', borderRadius: 4 };
 
 // 階段パラメータ編集の中身（仕上げパレットの「階段」タブ内に配置）。
-export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
+// deleteBlockedReason: 削除できない理由（中間階の階段。FinishModeState.stairDeleteBlockReason）。非nullなら
+// 削除ボタンを無効にし、理由をボタンの下に出す（ボタンは隠さない）。
+export const StairEditor = observer(({ stair, graph, project, onDelete, deleteBlockedReason = null }) => {
   if (!stair) return null;
 
   const floorHeight = floorHeightAbove(project, project?.activePlane);
@@ -229,14 +231,20 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
 
         <button
           onClick={() => onDelete && onDelete(stair.id)}
+          disabled={deleteBlockedReason != null}
           style={{
             marginTop: 16, width: '100%', padding: '8px',
             border: '1px solid #fca5a5', background: '#fff', color: '#dc2626',
-            borderRadius: 4, cursor: 'pointer', fontSize: 13,
+            borderRadius: 4, fontSize: 13,
+            cursor: deleteBlockedReason != null ? 'not-allowed' : 'pointer',
+            opacity: deleteBlockedReason != null ? 0.5 : 1,
           }}
         >
           階段を削除
         </button>
+        {deleteBlockedReason != null && (
+          <div style={{ marginTop: 6, fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>{deleteBlockedReason}</div>
+        )}
     </div>
   );
 });

@@ -53,6 +53,7 @@ const GATED = [
   'installElevatorFromNaming', 'deleteElevatorEquipment', 'changeElevatorUsage',
   'handleCLDialogConfirm',
   'convertStairFromNaming',
+  'deleteStairCascade', 'deleteStairRoomCascade', 'revertStairFromNaming',
 ];
 
 function gatedName(entry) {
@@ -196,8 +197,13 @@ const PENDING_COUNT = 0;
 // コールバックは既存のwithFloorAddUndo/undoFloorAdd/redoFloorAddの改名のため増減なし）。
 // 屋根と他の階の整合（ステップB1b）でconvertStairFromNaming（GATED。階段の新規指定の確定前に上の階の
 // 屋根との重なりを確かめる）のrunBusy(コールバックが1件加わったため37→38。
+// 階段の削除の連動（件B ステップ3・4）でdeleteStairCascade・revertStairFromNaming（いずれもGATED。設置階の
+// 削除に上の階の分身・階段吹抜けの削除を連動させる）のrunBusy(コールバックが2件加わったため38→40。
+// 階段のペア部屋のカード削除の入口 deleteStairRoomCascade（GATED。3つ目の同型の関門。共通化せず本体を並べる——
+// 共通関数に寄せると各入口は薄いラッパー（EXEMPT）になり、関門の順序の固定が1箇所へ寄って検出力が落ちるため）の
+// runBusy(コールバックが1件加わったため40→41。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 38;
+const ANON_CALLBACK_COUNT = 41;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

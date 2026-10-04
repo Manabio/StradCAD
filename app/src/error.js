@@ -250,6 +250,19 @@ export const ERR_ELEVATOR_RENUMBER_FAILED_MESSAGE = '階を削除した後、昇
 export const ERR_STAIR_DESIGNATE_FAILED = 'ERR_STAIR_DESIGNATE_FAILED';
 export const ERR_STAIR_DESIGNATE_FAILED_MESSAGE = '階段の指定に失敗しました。';
 
+// 階段の削除（finish/stair/stairFloorSync.js runStairRemoval。上の階の連動削除を伴う）専用。
+// 下の階から続く階段（中間階の階段）は設置階でしか削除できないため、書込みゼロで拒否する。
+export const ERR_STAIR_DELETE_CONTINUATION = '下の階から続く階段は削除できません。設置した階で削除してください。';
+// 部屋の削除（finish/FinishModeState.js roomDeleteBlockReason）専用。道連れで消える部分指定の子・孫に
+// 階段のペア部屋があると、階段が自階だけ消えて上の階の分身・階段吹抜けが残るため、何も変更せず拒否する。
+export const ERR_ROOM_DELETE_HAS_STAIR_CHILD = '部分指定に階段を含む部屋は削除できません。先に階段を削除してください。';
+// peek・保存・commitActive の例外を、保存済みの上の階を before へ巻き戻した後（書込み前ならそのまま）
+// このコードで包み直して再スローする（昇降機の削除と同じ「messageが呼び出し元で組み立て済み」様式）。
+export const ERR_STAIR_DELETE_FAILED = 'ERR_STAIR_DELETE_FAILED';
+export const ERR_STAIR_DELETE_FAILED_MESSAGE = '階段の削除に失敗しました。';
+// 上の階への保存直前に書込み世代が不一致（他の処理がその階を書き換えた）で中断した場合。
+export const ERR_STAIR_FLOORS_CHANGED = '他の処理が階を書き換えたため、階段の削除を中断しました。もう一度実行してください。';
+
 // tagCLOpFailureと同じ「既に文字列codeを持つ既知エラーはそのまま返す（上書きしない・
 // 二重ラップしない）」規約（QA指摘m4）。equipmentFloorSync.js（保存・commitActiveの例外）と
 // App.jsx installElevatorFromNaming/deleteElevatorEquipment/changeElevatorUsage
@@ -272,6 +285,7 @@ export function tagElevatorOpFailure(err, { code = ERR_ELEVATOR_OP_FAILED, messa
 const KNOWN_TRANSITION_ERROR_CODES = [
   ERR_CATALOG_DUPLICATE, ERR_ELEVATOR_OP_FAILED, ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_USAGE_FAILED,
   ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_RENUMBER_FAILED, ERR_STAIR_DESIGNATE_FAILED,
+  ERR_STAIR_DELETE_FAILED,
 ];
 
 // 昇降機の設置（finish/equipment/equipmentOps.js validateElevatorInstall）専用の拒否文言。

@@ -171,10 +171,20 @@ test('【不変条件・W2b】mode.deleteRoom(deleteConfirm.roomId) の呼び出
   assert.equal(deleteRoomMatchesInConfirm.length, 1,
     `mode.deleteRoom(deleteConfirm.roomId) は RoomDeleteConfirm.jsx 内の1箇所だけのはず（実際: ${deleteRoomMatchesInConfirm.length}）`);
 
-  const usageMatches = codeOnly.match(
+  // 階段の削除の全階連動（2026-10-03）: 内部タブだけ onDeleteStairRoom（部屋 id で呼ぶ入口）を渡す（階段のペア
+  // 部屋のカード削除を階段タブと同じ関門へ回すため。階段 id の入口 onDeleteStair は階段タブ専用）。
+  // 外部タブの屋外部屋の群は階段のペア部屋に届かないので従来の形のまま。
+  const allUsages = codeOnly.match(/<RoomDeleteConfirm /g) ?? [];
+  assert.equal(allUsages.length, 2,
+    `<RoomDeleteConfirm .../> の呼び出しはInteriorTable・GroupedExteriorTableの2箇所のはず（実際: ${allUsages.length}）`);
+  const interiorUsage = codeOnly.match(
+    /<RoomDeleteConfirm graph=\{graph\} mode=\{mode\} deleteConfirm=\{deleteConfirm\} onClose=\{\(\) => setDeleteConfirm\(null\)\} onDeleteStairRoom=\{onDeleteStairRoom\} \/>/g) ?? [];
+  assert.equal(interiorUsage.length, 1,
+    `onDeleteStairRoom つきの <RoomDeleteConfirm .../> は内部タブの1箇所だけのはず（実際: ${interiorUsage.length}）`);
+  const exteriorUsage = codeOnly.match(
     /<RoomDeleteConfirm graph=\{graph\} mode=\{mode\} deleteConfirm=\{deleteConfirm\} onClose=\{\(\) => setDeleteConfirm\(null\)\} \/>/g) ?? [];
-  assert.equal(usageMatches.length, 2,
-    `<RoomDeleteConfirm .../> の呼び出しはInteriorTable・GroupedExteriorTableの2箇所のはず（実際: ${usageMatches.length}）`);
+  assert.equal(exteriorUsage.length, 1,
+    `onDeleteStairRoom なしの <RoomDeleteConfirm .../> は外部タブの1箇所だけのはず（実際: ${exteriorUsage.length}）`);
 });
 
 // W5: 削除ボタンの分岐は isExteriorRoomGroup（isExteriorRoomGroupRoomの結果）で判定する。

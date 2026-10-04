@@ -597,3 +597,120 @@ test('【配線・B1b】warnUpperRoomsOverRoof: 上の階は読むだけ（peek�
   assert.ok(body.split('\n').map(l => l.trim()).includes('.catch(console.error);'), '失敗は握りつぶさずログに出す（行まるごと一致）');
   assert.ok(!body.includes('saveFloor') && !body.includes('runBusy'), '他階へ書かない・関門にも入らない（読むだけ）');
 });
+
+// ================================================================
+// 階段の削除の連動（設置階の削除＝上の階の分身・階段吹抜けも消す。2026-10-03 件B ステップ3・4）:
+// 階段タブの削除（deleteStairCascade）と部屋カード「属性」で階段を外す（revertStairFromNaming）は同じ関門
+// （runStairRemoval）を通す。1行まるごと一致（m フラグ・行頭行末アンカー）で、行末コメントに元の式を残す変異も赤にする。
+// ================================================================
+
+const STAIR_ENTRIES = [
+  {
+    name: 'deleteStairCascade',
+    needle: 'async function deleteStairCascade',
+    commitLine: 'fmode.deleteStair(id);',
+    stairIdArg: 'stairId: id,',
+    restoreCount: 2, // 例外・undoエントリnull
+    guardLine: 'if (!fmode.lastStairUndoEntry) {',
+  },
+  {
+    name: 'deleteStairRoomCascade',
+    needle: 'async function deleteStairRoomCascade',
+    commitLine: 'fmode.deleteRoom(roomId);',
+    stairIdArg: 'stairId,',
+    restoreCount: 2, // 例外・undoエントリnull
+    guardLine: 'if (!fmode.lastRoomUndoEntry) {',
+  },
+  {
+    name: 'revertStairFromNaming',
+    needle: 'async function revertStairFromNaming',
+    commitLine: 'fmode.applyNaming(id, payload, floorHeightAbove(project, project.activePlane));',
+    stairIdArg: 'stairId,',
+    restoreCount: 2, // 例外・拒否/undoエントリnull
+    // QA指摘: この条件行を `if (false) {` に変えても全テストが緑だった（拒否・差分なしの巻き戻しが無検出）
+    guardLine: 'if (fmode.lastNamingRejection || !fmode.lastNamingUndoEntry) {',
+  },
+];
+
+test('【配線・件B】App.jsx: FinishSidebar・FinishHalfModal へ onDeleteStairRoom={guardUi(deleteStairRoomCascade)} を1行まるごとの形で2箇所渡す', () => {
+  const matches = src.match(/^\s*onDeleteStairRoom=\{guardUi\(deleteStairRoomCascade\)\}\s*$/gm) ?? [];
+  assert.equal(matches.length, 2, `onDeleteStairRoom={guardUi(deleteStairRoomCascade)} は2箇所のはず（実際: ${matches.length}）`);
+});
+
+test('【配線・件B】App.jsx: deleteStairRoomCascade は階段実体が無ければ関門に入らず、isStillValid で階段の存在・削除不可でないことも確かめる', () => {
+  const body = extractFunctionBody(readAppSrc(), 'async function deleteStairRoomCascade');
+  const lines = body.split('\n').map(l => l.trim());
+  const guardIdx = lines.indexOf('if (!stair) return; // 階段実体が既に無い等の退化ケース（関門に入らない）');
+  assert.ok(guardIdx >= 0, 'stair が無いときの早期 return が見つからない');
+  assert.ok(lines.includes('modeRef.current === fmode && project.activeGraph === g && fmode.stairOfRoom(roomId)?.id === stairId && !fmode.roomDeleteBlockReason(roomId);'),
+    'isStillValid の条件行が1行まるごとの形で見つからない');
+  assert.ok(lines.indexOf('beginUiTransition();') > guardIdx, 'beginUiTransition() は早期 return の後');
+});
+
+test('【配線・件B】App.jsx: FinishSidebar・FinishHalfModal へ onDeleteStair={guardUi(deleteStairCascade)} を1行まるごとの形で2箇所渡す', () => {
+  const matches = src.match(/^\s*onDeleteStair=\{guardUi\(deleteStairCascade\)\}\s*$/gm) ?? [];
+  assert.equal(matches.length, 2, `onDeleteStair={guardUi(deleteStairCascade)} は2箇所のはず（実際: ${matches.length}）`);
+});
+
+for (const entry of STAIR_ENTRIES) {
+  test(`【配線・件B】App.jsx: ${entry.name} は onApplied・確定行・restoreFinishState件数・whenIdle→動的import→runStairRemoval の順・失敗の識別・トーストを満たす`, () => {
+    const body = extractFunctionBody(readAppSrc(), entry.needle);
+
+    assert.match(body, /^\s*onApplied: \(\) => setFloorSyncTick\(t => t \+ 1\),\s*$/m,
+      `${entry.name}: onApplied: () => setFloorSyncTick(t => t + 1), が1行まるごとの形で見つからない`);
+    assert.match(body, new RegExp(`^\\s*${escapeRegExpLiteral(entry.commitLine)}\\s*$`, 'm'),
+      `${entry.name}: 確定行（${entry.commitLine}）が1行まるごとの形で見つからない`);
+    assert.match(body, new RegExp(`^\\s*project, activeGraph: g, ${escapeRegExpLiteral(entry.stairIdArg)} commitActive, isStillValid,\\s*$`, 'm'),
+      `${entry.name}: runStairRemoval の引数行が1行まるごとの形で見つからない`);
+
+    assert.match(body, new RegExp(`^\\s*${escapeRegExpLiteral(entry.guardLine)}\\s*$`, 'm'),
+      `${entry.name}: 拒否・undoエントリnullの条件行（${entry.guardLine}）が1行まるごとの形で見つからない`);
+
+    const restoreMatches = body.match(/^\s*runInAction\(\(\) => restoreFinishState\(g, before\)\);\s*$/gm) ?? [];
+    assert.equal(restoreMatches.length, entry.restoreCount,
+      `${entry.name}: restoreFinishState(g, before) は ${entry.restoreCount} 箇所のはず（実際: ${restoreMatches.length}）`);
+
+    const lines = body.split('\n').map(l => l.trim());
+    const idleIdx = lines.indexOf('await structuralSync.whenIdle();');
+    const importIdx = lines.indexOf("const m = await import('./finish/stair/stairFloorSync.js');");
+    const runIdx = lines.indexOf('r = await m.runStairRemoval({');
+    assert.ok(idleIdx >= 0 && importIdx > idleIdx && runIdx > importIdx,
+      `${entry.name}: whenIdle → 動的import → runStairRemoval の順（確定の後に遅延チャンクを読まない）になっていない`);
+
+    assert.ok(lines.includes('throw tagElevatorOpFailure(err, { code: ERR_STAIR_DELETE_FAILED, message: ERR_STAIR_DELETE_FAILED_MESSAGE });'),
+      `${entry.name}: 失敗の識別行が1行まるごとの形で見つからない`);
+    const condIdx = lines.indexOf("if (r.status === 'rejected' || (r.status === 'aborted' && r.message)) {");
+    assert.ok(condIdx >= 0 && lines[condIdx + 1] === 'setToast({ msg: r.message, key: Date.now() });',
+      `${entry.name}: rejected／message ありの aborted のトースト（条件行の直後にトースト行）が見つからない`);
+  });
+}
+
+test('【配線・件B】App.jsx: deleteStairCascade の isStillValid は mode・階・階段の存在を1行まるごとの形で確かめる', () => {
+  const body = extractFunctionBody(readAppSrc(), 'async function deleteStairCascade');
+  assert.match(body, /^\s*const isStillValid = \(\) => modeRef\.current === fmode && project\.activeGraph === g && g\.stairMap\.has\(id\);\s*$/m,
+    'isStillValid の行が1行まるごとの形で見つからない');
+});
+
+test('【配線・件B】App.jsx: applyRoomNaming は階段を外す意図を、昇降機・階段の新規指定の分岐の後・applyNaming より前で revertStairFromNaming へ分ける（1行まるごと）', () => {
+  const body = extractFunctionBody(readAppSrc(), 'function applyRoomNaming');
+  const lines = body.split('\n').map(l => l.trim());
+  const branchIdx = lines.indexOf('if (modeRef.current?.isStairRemovalIntent(id, payload)) { guardUi(revertStairFromNaming)(id, payload); return; }');
+  const elevatorIdx = lines.findIndex(l => l.startsWith('if (modeRef.current?.isElevatorInstallIntent(id, payload))'));
+  const conversionIdx = lines.findIndex(l => l.startsWith('if (!stairChecked && modeRef.current?.isStairConversionIntent(id, payload)'));
+  const applyIdx = lines.findIndex(l => l.includes('modeRef.current?.applyNaming('));
+  assert.ok(branchIdx >= 0, '階段を外す分岐が1行まるごとの形で見つからない');
+  assert.ok(elevatorIdx >= 0 && conversionIdx >= 0 && applyIdx >= 0, '比較対象の行が見つからない');
+  assert.ok(elevatorIdx < branchIdx && conversionIdx < branchIdx && branchIdx < applyIdx,
+    '階段を外す分岐は昇降機・階段の新規指定の分岐より後、applyNaming の呼び出しより前');
+});
+
+test('【配線・件B】App.jsx: revertStairFromNaming は階段実体が無ければ関門に入らず、isStillValid で意図の維持も確かめる', () => {
+  const body = extractFunctionBody(readAppSrc(), 'async function revertStairFromNaming');
+  const lines = body.split('\n').map(l => l.trim());
+  const guardIdx = lines.indexOf('if (!stair) return; // 階段実体が既に無い等の退化ケース（関門に入らない）');
+  assert.ok(guardIdx >= 0, 'stair が無いときの早期 return が見つからない');
+  assert.ok(lines.includes('modeRef.current === fmode && project.activeGraph === g && g.stairMap.has(stairId) && fmode.isStairRemovalIntent(id, payload);'),
+    'isStillValid の条件行が1行まるごとの形で見つからない');
+  const beginIdx = lines.indexOf('beginUiTransition();');
+  assert.ok(beginIdx > guardIdx, 'beginUiTransition() は早期 return の後');
+});

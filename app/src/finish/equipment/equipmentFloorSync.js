@@ -5,17 +5,17 @@
  * 呼び出し元（App.jsx installElevatorFromNaming。ステップ4 S3b）が、設置階の確定（commitActive）・
  * 有効性チェック（isStillValid）・反映後コールバック（onApplied）を注入する。
  *
- * 巻き戻し（rollbackSavedFloors）は transform/centerLineFloorSync.js の rollbackFloorRecords と
- * 同じ規則（1件の失敗でも残りの巻き戻しを続ける）のローカル関数——finish/ から transform/ を
- * import しない（層をまたぐ依存を作らない方針）。ただし本経路は最初の例外を記録し、全件試行後に
- * 再スローする（呼び出し側が ERR_ELEVATOR_OP_FAILED へ丸めて再スローするため）。
+ * 巻き戻し（rollbackSavedFloors）・undo 合成（applyRecords・amendOnAppliedOnly）は
+ * finish/floorUndoRecords.js へ移した（階段の連動削除と共有。呼び出し側が ERR_ELEVATOR_OP_FAILED 等へ
+ * 丸めて再スローする）。
  */
 import { EvUsage } from '@core';
 import { floorSwapManager } from '../../storage/FloorSwapManager.js';
 import { saveFloor } from '../../storage/db.js';
-import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
+import { serializeGraph } from '../../graphSnapshot.js';
 import { undoManager } from '../../undoManager.js';
 import { floorWriteGeneration } from '../../storage/floorWriteGeneration.js';
+import { rollbackSavedFloors, applyRecords, amendOnAppliedOnly } from '../floorUndoRecords.js';
 import { judgeElevatorInstall, installOnUpperFloor, copyElevatorRowsToGraph } from './equipmentFloorPlan.js';
 import { equipmentFloorSpanLabel, buildingNumbersAfterRemoval, renumberEquipment, selfFloorEquipmentCatalog } from './equipmentNumbering.js';
 import { applyEquipmentRemovalToFloor, applyEquipmentUsageToFloor, applyEquipmentNumbers } from './equipmentOps.js';
@@ -26,49 +26,6 @@ import {
   ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_COPY_FAILED_MESSAGE,
   ERR_ELEVATOR_RENUMBER_FAILED, ERR_ELEVATOR_RENUMBER_FAILED_MESSAGE,
 } from '../../error.js';
-
-// rollbackFloorRecords（transform/centerLineFloorSync.js）と同じ規則: アクティブ階なら
-// restoreGraph、そうでなければ saveFloorFn。1件の失敗でも残りの巻き戻しを続ける——ただしこちらは
-// 最初の例外を記録し、全件試行後に再スローする（呼び出し側が識別コード付きで包み直す）。
-async function rollbackSavedFloors(savedPlaneIds, beforeBytesByPlane, project, saveFloorFn) {
-  let firstError = null;
-  for (const planeId of savedPlaneIds) {
-    const before = beforeBytesByPlane.get(planeId);
-    try {
-      if (project.activePlane?.id === planeId) {
-        restoreGraph(project.activeGraph, before);
-      } else {
-        await saveFloorFn(planeId, before);
-      }
-    } catch (err) {
-      console.error(err);
-      if (!firstError) firstError = err;
-    }
-  }
-  if (firstError) throw firstError;
-}
-
-// applyFloorUndoRecords（transform/centerLineFloorSync.js）と同じ規則のローカル関数
-// （undoManager.amend のundo/redoコールバックから呼ぶ。同期関数——saveFloorFnは待たない
-// ＝stairFloorSync.js applyBytesと同じ「非アクティブ階はfire-and-forget」規約）。
-function applyRecords(project, records, which, saveFloorFn) {
-  const ordered = which === 'before' ? [...records].reverse() : records;
-  for (const rec of ordered) {
-    if (project.activePlane?.id === rec.planeId) {
-      restoreGraph(project.activeGraph, rec[which]);
-    } else {
-      saveFloorFn(rec.planeId, rec[which]).catch(console.error);
-    }
-  }
-}
-
-// 上階への書込みが無い経路（延長・Q5）でも、undo/redo の後に project.equipmentIndex・記号の
-// 再読込みが要る（QA指摘M2）ため、記録は増やさず「何もしない＋onApplied を呼ぶ」だけを
-// entry へ合成する（undoManager.amend と同じ合成規則。base の undo/redo の前後どちらに
-// 副作用を足すかは undoManager.amend 自体が決める——ここでは意味を持たないため気にしない）。
-function amendOnAppliedOnly(entry, onApplied) {
-  undoManager.amend(entry, () => onApplied?.(), () => onApplied?.());
-}
 
 /**
  * 昇降機の設置本体。判定（judgeElevatorInstall）→上階への書込み→設置階の確定
