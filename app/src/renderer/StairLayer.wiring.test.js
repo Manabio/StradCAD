@@ -19,3 +19,10 @@ test('【不変条件】StairLayer は e.wallGraph を resolveStairSideLines の
     'e から wallGraph を取り出す行が見つからない',
   );
 });
+
+test('【不変条件】StairLayer は矢じり chevronPoints を ./chevron.js から import し、ローカル定義（function chevronPoints・CHEVRON_ANGLE）を持たない', () => {
+  assert.match(src, /^import \{ chevronPoints \} from '\.\/chevron\.js';\s*$/m);
+  assert.ok(!/function chevronPoints/.test(src), 'ローカル定義が残っている');
+  assert.ok(!/CHEVRON_ANGLE/.test(src), '角度の定数が残っている');
+  assert.match(src, /^\s*points=\{chevronPoints\(pts, px\(10\)\)\}\s*$/m);
+});

@@ -13,27 +13,9 @@ import {
   stairLineRenderProps, stairDownviewDashPx, stairUpperOpeningDashPx, outlineStrokeWidth,
 } from '../finish/stair/stairLineJoinPrimitives.js';
 
-const STAIR_STROKE = '#1e293b';
-const CHEVRON_ANGLE = Math.PI / 7; // 矢じり(^)の開き角
+import { chevronPoints } from './chevron.js';
 
-// 終点の矢じりを、黒三角ではなく鋭く尖った "^"（開いた山形）の2点で返す。
-// pts は矢印本体の points 配列（[x1,y1,x2,y2,...]）。終点側の進行方向へ向けて尖らせる。
-function chevronPoints(pts, len) {
-  const n = pts.length;
-  const tip = { x: pts[n - 2], y: pts[n - 1] };
-  const prev = { x: pts[n - 4], y: pts[n - 3] };
-  const dx = tip.x - prev.x, dy = tip.y - prev.y;
-  const d = Math.hypot(dx, dy) || 1;
-  const bx = -dx / d, by = -dy / d; // 進行方向の逆（尖端から広がる向き）
-  const cos = Math.cos(CHEVRON_ANGLE), sin = Math.sin(CHEVRON_ANGLE);
-  const w1 = { x: bx * cos - by * sin, y: bx * sin + by * cos };
-  const w2 = { x: bx * cos + by * sin, y: -bx * sin + by * cos };
-  return [
-    tip.x + w1.x * len, tip.y + w1.y * len,
-    tip.x, tip.y,
-    tip.x + w2.x * len, tip.y + w2.y * len,
-  ];
-}
+const STAIR_STROKE = '#1e293b';
 
 /**
  * 階段を描画する。entries は描画用に解決済みの配列:
