@@ -31,7 +31,7 @@ export function buildUpperStairPeekEntries(belowGraph, floorHeight) {
   return belowGraph.stairs.map(s => ({
     id: s.id,
     stair: s,
-    graph: belowGraph, // 側面線の壁有無判定（resolveStairSideLines）。その階段が実在する下階のグラフを渡す
+    graph: belowGraph, // footprint（境界CL・線の位置）の解決。壁の有無は buildStairEntries が wallGraph（表示中の階）を付ける
     bounds: roomBounds(s.cells, belowGraph),
     cellBounds: cellBoundsList(s.cells, belowGraph), // 実セル占有（選択枠用。選択は startDrag 経由で一本化）
     riser: s.riser ?? (floorHeight != null ? floorHeight / Math.max(1, s.totalSteps) : null),
@@ -110,13 +110,15 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
     ? (upperStairEntriesPeek ?? [])
         .filter(e => !installStairIds.has(e.id))
         .map(e => {
+          // wallGraph: 上の階から見る側面線は表示中の階（自階）の壁で有無を判定する
+          // （resolveStairSideLines の第4引数。壁の無い区間は床の端として実線で描く）。
           const overlapInstall = installEntries.find(ie => anyCellBoundsOverlap(e.cellBounds, ie.cellBounds));
           return overlapInstall
             ? {
-                ...e, installOverlap: true, clipAgainstId: overlapInstall.id,
+                ...e, wallGraph: graph, installOverlap: true, clipAgainstId: overlapInstall.id,
                 beyondBreakBounds: overlapInstall.beyondBreakBounds,
               }
-            : e;
+            : { ...e, wallGraph: graph };
         })
     : [];
 

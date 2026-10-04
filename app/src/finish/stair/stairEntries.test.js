@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { anyCellBoundsOverlap, buildStairEntries } from './stairEntries.js';
 import { LodLevel } from '../../viewport.js';
+import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { classifyStairArea } from './stairClassify.js';
 
 // ---- anyCellBoundsOverlap（下階階段の見下げ upper エントリが自階 install エントリと同一
 //      footprint かどうかの判定。cellBounds 同士の総当たり。RECT_OVERLAP_EPS=1mm未満は無視） ----
@@ -56,4 +58,49 @@ test('buildStairEntries: 平面図を描くモード（建具・敷地を含む�
   for (const mode of ['structure', 'elevation']) {
     assert.equal(call(mode).isStairMode, false, mode);
   }
+});
+
+// ---- upper エントリの wallGraph（上の階から見る側面線は表示中の階の壁で判定する） ----
+// 判断は純モジュール（ここ）に置き、StairLayer は e.wallGraph を渡すだけにする。
+function activeGraphWithStair() {
+  const graph = new PlanGraph(new Plane('p2', 1, '2階', 1, 1));
+  const V = (v) => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const H = (v) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = V(0), x1 = V(1000), y0 = H(0), y1 = H(2800);
+  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const cells = new Set([key]);
+  const cls = classifyStairArea(cells, graph, 2800, [key]);
+  graph.addStair({ type: cls.type, cells, upDirection: cls.upDirection, flip: cls.flip, sections: cls.sections });
+  return graph;
+}
+const peekEntry = (id, rect) => ({ id, stair: {}, graph: { tag: 'below' }, cellBounds: [rect] });
+
+test('buildStairEntries: upperEntries は installOverlap あり・なしとも wallGraph === 自階グラフ、installEntries は持たない', () => {
+  const graph = activeGraphWithStair();
+  const project = { planes: [], activePlane: null };
+  const viewport = { lodLevel: LodLevel.DETAIL };
+  const overlapping = peekEntry('low-a', { x1: 0, y1: 0, x2: 1000, y2: 2800 });
+  const apart = peekEntry('low-b', { x1: 50000, y1: 50000, x2: 51000, y2: 52800 });
+  const r = buildStairEntries(graph, project, {
+    appMode: 'finish', viewport, upperStairEntriesPeek: [overlapping, apart], stairBreakOverhangMm: 0,
+  });
+  assert.equal(r.installEntries.length, 1);
+  assert.equal(r.upperEntries.length, 2);
+  const a = r.upperEntries.find(e => e.id === 'low-a');
+  const b = r.upperEntries.find(e => e.id === 'low-b');
+  assert.equal(a.installOverlap, true, '重なる側は installOverlap');
+  assert.equal(b.installOverlap, undefined, '重ならない側は installOverlap 無し');
+  assert.equal(a.wallGraph, graph);
+  assert.equal(b.wallGraph, graph);
+  assert.notEqual(a.graph, graph, 'footprint 用の graph は下階のまま');
+  assert.equal(r.installEntries.every(e => !('wallGraph' in e)), true);
+});
+
+test('buildStairEntries: 平面を描かないモード（structure）では upperEntries は空（wallGraph を付ける対象が無い）', () => {
+  const graph = activeGraphWithStair();
+  const r = buildStairEntries(graph, { planes: [], activePlane: null }, {
+    appMode: 'structure', viewport: { lodLevel: LodLevel.DETAIL },
+    upperStairEntriesPeek: [peekEntry('low-a', { x1: 0, y1: 0, x2: 1000, y2: 2800 })], stairBreakOverhangMm: 0,
+  });
+  assert.deepEqual(r.upperEntries, []);
 });

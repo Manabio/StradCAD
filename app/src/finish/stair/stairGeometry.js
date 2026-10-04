@@ -1308,16 +1308,20 @@ export function subtractIntervals(targetLo, targetHi, covers) {
  * 描画ルール自体をここに集約し、レンダラ（StairLayer）は結果を写像するだけにする。
  *
  * @param {import('@core').Stair} stair
- * @param {object} graph - footprint・壁の実体を解決するグラフ。upper エントリ（下階の見下げ表示）
- *   では、その階段が実在する階（下階の peek 済みグラフ）を渡すこと——見下げ図はその階段が
- *   実際に設置されている階の壁の有無をそのまま映すため（アクティブ階の壁は別物）。
+ * @param {object} graph - footprint（境界CLの特定・線の位置）を解決するグラフ。upper エントリでは
+ *   その階段が実在する階（下階の peek 済みグラフ）を渡すこと。
  * @param {ReturnType<typeof buildStairGeometry>} geom
+ * @param {{ wallGraph?: object }} [opts] wallGraph を与えたときだけ、壁の有無をそのグラフの壁で
+ *   判定する（upper エントリ＝上の階から見る側面線は表示中の階の壁で判定する）。この場合、壁の
+ *   無い残り区間は「床の端」として floorEdge: true を付ける。省略時は graph の壁で判定し、
+ *   floorEdge は付けない（install エントリの結果は不変）。
  * @returns {ReturnType<typeof buildStairGeometry>} outline を差し替えた geom（他フィールドは同一参照）
  */
-export function resolveStairSideLines(stair, graph, geom) {
+export function resolveStairSideLines(stair, graph, geom, opts = {}) {
   const boundsList = cellBoundsList(stair.cells, graph);
   const outline = boundsList.length > 0 ? outlineSegments(boundsList) : [];
-  const walls = graph.walls;
+  const wallGraph = opts.wallGraph ?? null;
+  const walls = (wallGraph ?? graph).walls;
   // F2: snap許容差は実際に適用されたインセット量（geom.sideInsetMm。CL偏芯で実壁面が固定
   // WALL_INSET を超えて離れうる）から動的に求める。geom.sideInsetMm 未設定（buildStairGeometry
   // 経由でない呼び出し等）は WALL_INSET 起点の既定 SNAP_DIST 相当へフォールバックする。
@@ -1325,7 +1329,8 @@ export function resolveStairSideLines(stair, graph, geom) {
   const resolvedOutline = geom.outline.reduce((acc, s) => {
     if (!s.side) { acc.push(s); return acc; }
     const edge = outline.length > 0 ? snapToFootprintEdge(s, outline, snapDist) : null;
-    if (!edge) { acc.push({ ...s, medium: true }); return acc; } // 境界を特定できない→安全側で全描画
+    // 境界を特定できない→安全側で全描画。床の端とは断定できないので wallGraph ありでも floorEdge は付けない
+    if (!edge) { acc.push({ ...s, medium: true }); return acc; }
     const isVertical = edge.isVertical;
     const sLo = isVertical ? Math.min(s.y1, s.y2) : Math.min(s.x1, s.x2);
     const sHi = isVertical ? Math.max(s.y1, s.y2) : Math.max(s.x1, s.x2);
@@ -1338,7 +1343,7 @@ export function resolveStairSideLines(stair, graph, geom) {
       const part = isVertical
         ? { x1: s.x1, y1: lo, x2: s.x2, y2: hi }
         : { x1: lo, y1: s.y1, x2: hi, y2: s.y2 };
-      acc.push({ ...s, ...part, medium: true });
+      acc.push(wallGraph ? { ...s, ...part, medium: true, floorEdge: true } : { ...s, ...part, medium: true });
     }
     return acc;
   }, []);

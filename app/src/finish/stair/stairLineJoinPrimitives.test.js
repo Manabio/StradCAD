@@ -12,6 +12,7 @@ import {
   stairDownviewDashPx, stairUpperOpeningDashPx,
 } from './stairLineJoinPrimitives.js';
 import { UPPER_VOID_DASH_PX } from '../voidGeometry.js';
+import { clipSegmentsBeyondBreak } from './beyondBreakClip.js';
 
 const WEIGHTS = { thin: 1, medium: 2 };
 const SCALE_X = 0.0378;
@@ -246,6 +247,47 @@ test('stairLineRenderProps: s.dashed（到達辺等）はisDownViewでなくて�
   const entry = { view: 'install', id: 's1', outlineSegs: [outlineSeg], isDownView: false };
   const { outline } = stairLineRenderProps(entry, fakeViewport(SCALE_X), WEIGHTS);
   assert.deepEqual(outline[0].dash, [40 / SCALE_X, 30 / SCALE_X]);
+});
+
+// ---- 床の端（floorEdge）: 見下げでも実線 ----
+
+test('写像: isDownViewでも floorEdge の外周線は dash 無し、タグ無しの外周線と踏面線は dash あり', () => {
+  const seg = { x1: 0, y1: 0, x2: 100, y2: 0 };
+  const edge = { x1: 0, y1: 50, x2: 100, y2: 50, medium: true, floorEdge: true };
+  const entries = [{ view: 'upper', id: 's1', treadSegs: [seg], outlineSegs: [edge, seg], isDownView: true }];
+  const prims = buildStairJoinPrimitives(entries, SCALE_X, WEIGHTS);
+  assert.ok(prims[0].dash, '踏面線は dash');
+  assert.equal(prims[1].dash, undefined, '床の端は実線');
+  assert.ok(prims[2].dash, 'タグ無し外周線は dash');
+});
+
+test('stairLineRenderProps: isDownViewでも floorEdge の外周線は dash 無し、タグ無し外周線・踏面線は UPPER_VOID_DASH_PX', () => {
+  const seg = { x1: 0, y1: 0, x2: 100, y2: 0 };
+  const edge = { x1: 0, y1: 50, x2: 100, y2: 50, medium: true, floorEdge: true };
+  const entry = { view: 'upper', id: 's1', treadSegs: [seg], outlineSegs: [edge, seg], isDownView: true };
+  const { treads, outline } = stairLineRenderProps(entry, fakeViewport(SCALE_X), WEIGHTS);
+  const expected = UPPER_VOID_DASH_PX.map(w => w / SCALE_X);
+  assert.equal(outline[0].dash, undefined, '床の端は実線');
+  assert.deepEqual(outline[1].dash, expected);
+  assert.deepEqual(treads[0].dash, expected);
+});
+
+test('stairLineRenderProps: floorEdge でも s.dashed（到達辺等）は破線のまま', () => {
+  const s = { x1: 0, y1: 0, x2: 100, y2: 0, floorEdge: true, dashed: true };
+  const { outline } = stairLineRenderProps({ view: 'upper', id: 's1', outlineSegs: [s], isDownView: true }, fakeViewport(SCALE_X), WEIGHTS);
+  assert.deepEqual(outline[0].dash, [40 / SCALE_X, 30 / SCALE_X]);
+});
+
+// StairLayer の実経路: 見下げの外周線は clipSegmentsBeyondBreak を通ってから stairLineRenderProps へ渡る。
+test('stairLineRenderProps: 破れ線で切られた後も floorEdge の外周線は実線（クリップがタグを落とさない）', () => {
+  const edge = { x1: 50, y1: 0, x2: 50, y2: 200, medium: true, side: true, floorEdge: true };
+  const breakLine = [{ x1: 0, y1: 100, x2: 100, y2: 100 }];
+  const beyond = [{ x1: 0, y1: 100, x2: 100, y2: 200 }];
+  const clipped = clipSegmentsBeyondBreak([edge], breakLine, beyond);
+  assert.equal(clipped.length, 1);
+  assert.deepEqual([clipped[0].y1, clipped[0].y2], [100, 200], '破れ先だけが残る');
+  const { outline } = stairLineRenderProps({ view: 'upper', id: 's1', outlineSegs: clipped, isDownView: true }, fakeViewport(SCALE_X), WEIGHTS);
+  assert.equal(outline[0].dash, undefined);
 });
 
 // ---- 失敗系 ----

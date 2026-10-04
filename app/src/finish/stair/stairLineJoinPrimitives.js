@@ -105,7 +105,7 @@ export function buildStairJoinPrimitives(entries, scaleX, lineWeightsPx) {
         key: stairOutlineKey(view, id, i),
         x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
         width: outlineStrokeWidth(s, scaleX, lineWeightsPx),
-        dash: (isDownView || s.dashed) || undefined,
+        dash: ((isDownView && !s.floorEdge) || s.dashed) || undefined,
       });
     });
   }
@@ -167,7 +167,8 @@ export function stairLineRenderProps(entry, viewportLike, lineWeightsPx) {
     const j = joined.get(key);
     return {
       key, points: j.points, strokeWidth: j.width,
-      dash: isDownView ? downviewDash : (s.dashed ? [px(40), px(30)] : undefined),
+      // floorEdge（床の端＝壁の無い側面線）は見下げでも実線
+      dash: (isDownView && !s.floorEdge) ? downviewDash : (s.dashed ? [px(40), px(30)] : undefined),
     };
   });
   return { treads, outline };

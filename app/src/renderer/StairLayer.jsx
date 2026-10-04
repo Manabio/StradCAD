@@ -38,12 +38,14 @@ function chevronPoints(pts, len) {
 /**
  * 階段を描画する。entries は描画用に解決済みの配列:
  *   { id, stair, bounds:{x1,y1,x2,y2}, riser:number|null, spans:{lengths:number[]}|null,
- *     view:'install'|'upper', selectable:boolean, graph?:object,
+ *     view:'install'|'upper', selectable:boolean, graph?:object, wallGraph?:object,
  *     cellBounds:Array<{x1,y1,x2,y2}>|undefined,  // 実セル占有（選択ヒット・枠用。省略時は bounds）
  *     installOverlap?:boolean, clipAgainstId?:string }
  * stepNumbers=false のとき段数字（注記）を描かない。図そのものは変えない。
- *   graph は stair.cells・壁の実体を解決するグラフ（その階段が実在する階のグラフ。upper エントリ
+ *   graph は stair.cells（footprint）を解決するグラフ（その階段が実在する階のグラフ。upper エントリ
  *   では peek した下階グラフ）。省略時は側面線の壁有無判定をせず常時描画する（安全側）。
+ *   wallGraph は側面線の壁有無を判定するグラフ（upper エントリ＝表示中の階。壁の無い区間は
+ *   床の端 floorEdge として実線で描く）。省略時（install）は graph の壁で判定する。
  *   installOverlap/clipAgainstId/beyondBreakBounds は、footprint が自階 install 階段と重なる
  *   upper エントリ（下階階段の見下げが自階の自動設置階段と同じ位置に表示される場合)に
  *   App.jsx が付与する。
@@ -55,7 +57,7 @@ function chevronPoints(pts, len) {
  *   描かれる範囲＝自階スラブの開口は「install 階段の破れ線より先」で、線の終点は当該平面の
  *   実線（footprint 境界＝壁面線・到達辺）になる。開口を狭める2要素は別の層が担当し、
  *   ここでは合成しない: 上階階段のとりつき部（破れ線手前側＝スラブが残る側）は破れ線クリップが、
- *   天井高さに達する壁は resolveStairSideLines の壁スパン差し引きが受け持つ。
+ *   天井高さに達する壁は resolveStairSideLines の壁スパン差し引き（表示中の階の壁で判定）が受け持つ。
  *
  *   可視判定はプリミティブ別に独立（共有ゲートを持たない）:
  *   矢印は clipAgainstId が指す install エントリの破れ線（実 polyline）でクリップして
@@ -100,11 +102,11 @@ export const StairLayer = observer(({
   // 側面線（outline の side タグ）の壁有無は resolveStairSideLines（stairGeometry.js）で
   // 解決する——描画ルールの宣言はそちら側に集約し、ここでは結果を写像するだけにする。
   const resolved = entries.map((e) => {
-    const { stair, bounds: b, riser, spans, view, graph } = e;
+    const { stair, bounds: b, riser, spans, view, graph, wallGraph } = e;
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
-    const resolve = (g) => (graph ? resolveStairSideLines(stair, graph, g) : g);
+    const resolve = (g) => (graph ? resolveStairSideLines(stair, graph, g, { wallGraph }) : g);
     const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm, breakOverhangMm, graph });
     // install エントリは、破れ線から先（＝切断高より上に続く上り部分）を点線で描き足すため、
     // 破断のない全段ジオメトリ（upper ビュー）も併せて作る。実際に描くのは破れ先だけで、
