@@ -25,9 +25,9 @@
 //   超えたら違反）。棟木の両端の束の検査は矩形の寄棟だけ。
 // 【L字の下屋（E1b・E2b。翼ごとの片流れ・面ごとの小屋梁）】leanToFramingRegions・leanToFraming は L字の片流れの下屋も region
 //   （rect:null・leanToWings・leanToDrains）にする。描画の内訳（翼の表・水下の表・母屋の段の基準・母屋と斜め線の延長前→後・
-//   水下の場の計算時間・外形線）は水下への L∞ 距離の場（leanToDrainFraming）。小屋梁はまだ旧い面（翼ごとの面。ステップ2で水下の面へ）
-//   なので、L字の束の最大間隔の検査は NG になりうる。構造の検査（inspectLeanTo）: 旧い面（leanToMonoPlanes）・新しい面（水下ごと）・
-//   小屋梁の一覧（host 名つき）・**全母屋の束の最大間隔（1820 超は NG。
+//   水下の場の計算時間・外形線）は水下への L∞ 距離の場（leanToDrainFraming）。小屋梁も同じ場の面（水下ごと）の母屋を支える。
+//   構造の検査（inspectLeanTo）: 面（水下ごと）・棟木と母屋・
+//   小屋梁の一覧（host 名つき）・**全母屋・棟木の束の最大間隔（1820 超は NG。
 //   「支えの無い端の区間」の除外は設けない）**・小屋梁と他の梁の内部での交差（NG）・同じ軸で重なる小屋梁（NG）・取り残し
 //   （unassigned。報告だけで NG にしない＝形によっては残りうる既知の限界）。stray 検査（region の無い階に auto の小屋梁が残って
 //   いないか）は構造側の region（leanToFraming）で行う。
@@ -50,7 +50,7 @@ const { structuralPlaneBelow } = await import('../../src/structural/drawingDesig
 const { mainRoofFramingRegion, leanToFramingRegions, leanToFraming } = await import('../../src/structural/roofFramingRegions.js');
 const {
   roofFramingLines, roofStrutPoints, roofRidgeIsVertical, hipFramingWings, purlinLayoutFromRidge,
-  roofHipDiagonals, leanToDrainFraming, extendLinesToOutline, extendDiagonalsToOutline, leanToMonoPlanes,
+  roofHipDiagonals, leanToDrainFraming, extendLinesToOutline, extendDiagonalsToOutline,
 } = await import('../../src/structural/roofFramingGeometry.js');
 const { roofFramingHostMembers } = await import('../../src/structural/framingDrawing.js');
 const { rulesFor, effectiveStructure } = await import('../../src/structural/structureRules.js');
@@ -225,7 +225,7 @@ function printKoyaList(graph, listLabel) {
 }
 
 /**
- * L字の下屋（rect:null・leanToWings。E2b）の構造の検査。面の表（leanToMonoPlanes）・小屋梁の一覧（host 名つき）・
+ * L字の下屋（rect:null・leanToDrains。E2b）の構造の検査。面の表（水下ごと）・小屋梁の一覧（host 名つき）・
  * 全母屋の束の最大間隔（1820 超は NG。「支えの無い端の区間」の除外は設けない）・小屋梁と他の梁の内部での交差（NG）・
  * 同じ軸で重なる小屋梁（NG）・取り残し（報告だけ。既知の限界）を出す。
  * @returns {{violations:number, problems:number, koya:number, unassigned:number, strutMaxPitchMm:number}}
@@ -233,25 +233,20 @@ function printKoyaList(graph, listLabel) {
 function inspectLeanTo(graph, region, listLabel) {
   const rules = rulesFor(effectiveStructure(graph, project));
   const F = rules.framing;
-  // 小屋梁がまだ使っている旧い面（leanToMonoPlanes。ステップ2で水下の面へ切り替える）。描画の母屋は下の新しい面
-  const planes = leanToMonoPlanes({ wings: region.leanToWings, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol });
-  console.log(`--- 旧い面 ${planes.length} 枚（小屋梁が使う。順＝属する翼の最小番号順。同じ壁の翼の集まり） ---`);
-  planes.forEach((pl, i) => {
-    console.log(`  P${i + 1} 壁 ${pl.highSide} ${pl.wallCoord}  翼=[${pl.wingIndices.map(w => `W${w + 1}`).join(',')}]  線の向き=${pl.lineIsVertical ? '縦' : '横'}  母屋 ${pl.lines.length} 本: ${pl.lines.map(l => `${l.isVertical ? 'x' : 'y'}=${l.coord} ${l.lo}..${l.hi}`).join(' / ') || '-'}`);
-  });
   const { eaveGapMm } = purlinLayoutFromRidge({ halfSpanMm: region.leanToPurlinDepthMm, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol });
   const faces = leanToDrainFraming({ rects: region.rects, drains: region.leanToDrains, pitchMm: F.purlinPitchMm, firstLevelMm: eaveGapMm, tolMm: tol }).faces;
-  console.log(`--- 面 ${faces.length} 枚（水下ごと。順＝水下の長い順→上・下・左・右→座標順） ---`);
+  console.log(`--- 面 ${faces.length} 枚（水下ごと。小屋梁が支える面。順＝水下の長い順→上・下・左・右→座標順。水下と直交する向きの母屋が混ざる面は、小屋梁の側で向きごとに分ける） ---`);
   faces.forEach((fc, i) => {
     const d = fc.drain;
     console.log(`  F${i + 1} 水下 ${d.isVertical ? 'x' : 'y'}=${d.coord} ${d.lo}..${d.hi}  線の向き=${fc.lineIsVertical ? '縦' : '横'}  母屋 ${fc.lines.length} 本: ${fc.lines.map(l => `${l.isVertical ? 'x' : 'y'}=${l.coord} ${l.lo}..${l.hi}`).join(' / ') || '-'}`);
   });
   const koya = printKoyaList(graph, listLabel);
 
-  const { purlins } = roofFramingLines({
+  const framing = roofFramingLines({
     rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
     purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol,
   });
+  const purlins = [...framing.ridges, ...framing.purlins]; // 向かい合う水下があれば棟木も束の対象
   const allMembers = roofFramingHostMembers(graph.beams, rules.baseMaterial);
   const membersWithoutKoya = roofFramingHostMembers(graph.beams.filter(b => b.role !== 'roofBeam'), rules.baseMaterial);
   const maxGap = (line, members) => {

@@ -7,7 +7,8 @@
  * leanToPlanRegions。構造ゲートなし）。母屋・束・小屋梁は描かない。線は細い実線1本で、全 LOD で同じ。
  *
  * primitive: { kind:'line', key, role:'outline'|'ridge'|'hip'|'valley', points:number[], closed:boolean, detailOnly:false }
- *   outline＝軒先・けらばの外形線（壁の中に重なる部分は除く）、ridge＝棟木（切妻はけらばの外形線まで・寄棟は延ばさない）、
+ *   outline＝軒先・けらばの外形線（壁の中に重なる部分は除く）、ridge＝棟木（切妻はけらばの外形線まで・寄棟は延ばさない。
+ *   L字の下屋の片流れは向かい合う水下があるときだけ＝伏図と同じ線）、
  *   hip＝隅木（軒の角まで）、valley＝谷木（軒先の線の入隅の角まで。伏図と違い平面だけ延ばす）。
  * 切妻になる L字・棟違いは暫定で軒先の線だけ（次のステップで「妻面全幅の中心が棟木」の規則を入れる）。
  */
@@ -34,7 +35,10 @@ export function roofPlanFigure(graph) {
       out.push({ kind: 'line', key: `${region.key}:outline:${i}`, role: 'outline', points: path.points, closed: path.closed, detailOnly: false });
     });
     const ridges = extendLinesToOutline({
-      lines: roofRidgeLines({ rect: region.rect, rects: region.rects ?? null, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, tolMm }),
+      lines: roofRidgeLines({
+        rect: region.rect, rects: region.rects ?? null, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical,
+        leanToDrains: region.leanToDrains ?? null, leanToPurlinDepthMm: region.leanToPurlinDepthMm ?? null, tolMm,
+      }),
       edges: region.edges, tolMm,
     });
     ridges.forEach((line, i) => {

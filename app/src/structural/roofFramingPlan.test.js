@@ -18,7 +18,24 @@ const exposed = (rects, extra) => roofOutlineExposedPaths(outArgs(rects, extra))
 /** 屋内に接する区間（出幅 0 の区間。roofBoundaryInteriorContacts の1要素と同じ形）。 */
 const Z = (isVertical, coord, lo, hi, outward) => ({ isVertical, coord, lo, hi, outward });
 
+// U字の下屋（屋内 x1820..3640・y0..3640 の左・下・右。下の腕が深い）。水下は左・下・右の3本で、左右が向かい合う
+const U_RECTS = [rc(0, 3640, 5460, 7280), rc(0, 0, 1820, 3640), rc(3640, 0, 5460, 3640)];
+const U_DRAINS = [
+  { isVertical: false, coord: 7280, lo: 0, hi: 5460, outward: 1 }, { isVertical: true, coord: 0, lo: 0, hi: 7280, outward: -1 },
+  { isVertical: true, coord: 5460, lo: 0, hi: 7280, outward: 1 },
+];
+
 // ---- roofRidgeLines ----
+
+test('roofRidgeLines: L字の下屋の片流れ（leanToDrains）は向かい合う水下の棟木だけ。伏図（roofFramingLines）と同じ線。水下が1本・渡さない・奥行き無しは空か RangeError', () => {
+  const layout = { purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: TOL };
+  const ridges = roofRidgeLines({ rect: null, rects: U_RECTS, shape: RoofShape.MONO, leanToDrains: U_DRAINS, leanToPurlinDepthMm: 3640, tolMm: TOL });
+  assert.deepEqual(ridges, [{ isVertical: true, coord: 2730, lo: 3640, hi: 4550, levelMm: 2730 }]);
+  assert.deepEqual(ridges, roofFramingLines({ rect: null, rects: U_RECTS, shape: RoofShape.MONO, leanToDrains: U_DRAINS, leanToPurlinDepthMm: 3640, ...layout }).ridges);
+  assert.deepEqual(roofRidgeLines({ rect: null, rects: U_RECTS, shape: RoofShape.MONO, tolMm: TOL }), [], 'leanToDrains を渡さなければ空（従来）');
+  assert.deepEqual(roofRidgeLines({ rect: null, rects: [BOX], shape: RoofShape.MONO, leanToDrains: [{ isVertical: false, coord: 3000, lo: 0, hi: 4000, outward: 1 }], leanToPurlinDepthMm: 3000, tolMm: TOL }), [], '水下1本は棟木なし');
+  assert.throws(() => roofRidgeLines({ rect: null, rects: U_RECTS, shape: RoofShape.MONO, leanToDrains: U_DRAINS, tolMm: TOL }), RangeError, '奥行き無し');
+});
 
 test('roofRidgeLines: 切妻・寄棟（矩形）・寄棟（L字の rects）は roofFramingLines(...).ridges と一致する', () => {
   const layout = { purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: TOL };
@@ -45,6 +62,7 @@ test('roofRidgeLines: 棟木は母屋のピッチ・割付の候補に依存し�
     { rect: wide, shape: RoofShape.GABLE, ridgeIsVertical: false },
     { rect: wide, shape: RoofShape.HIP },
     { rect: null, rects: lShape, shape: RoofShape.HIP },
+    { rect: null, rects: U_RECTS, shape: RoofShape.MONO, leanToDrains: U_DRAINS, leanToPurlinDepthMm: 3640 },
   ]) {
     assert.deepEqual(at(910, [455, 910], p), at(1820, [910, 1820], p), `${p.shape}: 前提＝ピッチを変えても棟木は同じ`);
     assert.deepEqual(roofRidgeLines({ ...p, tolMm: TOL }), at(1820, [910, 1820], p), `${p.shape}: 固定ピッチでも 1820 と同じ`);

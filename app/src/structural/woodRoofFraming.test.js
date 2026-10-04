@@ -8,6 +8,9 @@ import {
   Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType, RoofSpec, RoofShape, RoofHighSide,
   spanKey, beamExclusionKey, findHostPrimaryBeam, findHostBeam,
 } from '../core.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { stripCommentLines } from '../uiBusySourceScan.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -15,7 +18,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { autoFillWoodWallBeams, autoFillWoodBeamDepths } from './woodAutoFill.js';
-import { roofFramingLines, roofStrutPoints, leanToWingsOf, leanToMonoLines } from './roofFramingGeometry.js';
+import { roofFramingLines, roofStrutPoints, leanToWingsOf } from './roofFramingGeometry.js';
 import { roofFramingHostMembers } from './framingDrawing.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { mainRoofFramingRegion } from './roofFramingRegions.js';
@@ -65,17 +68,15 @@ const koyaOnly = graph => graph.beams.filter(b => b.role === 'roofBeam' && b.bea
 
 // 母屋・棟木の各線の束（線×横架材の交点）の最大間隔。端（線の両端）は束扱い。
 // region が矩形でない寄棟（rect:null・rects）なら、線は rects から導く（C2e-3b）。
-// L字の下屋（leanToWings）の小屋梁は、今のところ翼ごとの面（leanToMonoPlanes）の母屋＝旧い母屋（leanToMonoLines）を支えるように作る。
-// 描画の母屋は水下への距離の場（roofFramingLines の leanToDrains）に替わったので、L字だけ旧い母屋で検査する
-// （小屋梁も水下の面へ切り替えるステップ2で roofFramingLines へ戻す）。
+// L字の下屋は水下への距離の場の母屋（roofFramingLines の leanToDrains・leanToPurlinDepthMm）。線が空だと検査が黙って空振りするので、
+// L字の region では線が1本以上あることを assert する。
 function maxStrutGaps(graph, region) {
-  const tolMm = CL_OVERLAP_TOL_MM;
-  const { ridges, purlins } = !region.rect && region.leanToWings
-    ? leanToMonoLines({ wings: region.leanToWings, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm })
-    : roofFramingLines({
-      rect: region.rect ?? null, rects: region.rects ?? null, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, highSide: region.highSide,
-      purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm,
-    });
+  const { ridges, purlins } = roofFramingLines({
+    rect: region.rect ?? null, rects: region.rects ?? null, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, highSide: region.highSide,
+    leanToDrains: region.leanToDrains ?? null, leanToPurlinDepthMm: region.leanToPurlinDepthMm ?? null,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+  });
+  if (!region.rect && region.leanToDrains) assert.ok(purlins.length > 0, 'L字の下屋の母屋が空（検査が空振りする）');
   const members = roofFramingHostMembers(graph.beams, WOOD);
   return [...ridges, ...purlins].map(line => {
     const alongs = [line.lo, line.hi, ...roofStrutPoints([line], members, CL_OVERLAP_TOL_MM).map(p => (line.isVertical ? p.y : p.x))]
@@ -845,6 +846,19 @@ const LF1A = { cells: [rc(0, 3640, 3640, 5460), rc(3640, 3640, 5460, 5460), rc(3
 const LF1B = { cells: [rc(0, 3640, 5460, 7280), rc(3640, 0, 5460, 3640)], contacts: [ct(false, 3640, 0, 3640, -1), ct(true, 3640, 0, 3640, -1)] };
 const LF2 = { cells: [rc(0, 0, 5460, 1820), rc(3640, 1820, 5460, 3640)], contacts: [ct(false, 0, 0, 5460, -1)] };
 const LF5 = { cells: [rc(0, 0, 5460, 1820), rc(0, 1820, 1820, 3640)], contacts: [ct(false, 0, 1820, 5460, -1), ct(true, 0, 0, 3640, -1)] };
+// 奥行き 1000（r=545）。結果が r に敏感な形（母屋 x=3455 の束の間隔が r を渡さないと 1995 になる）
+const LFR545 = { cells: [rc(0, 7000, 3000, 8000), rc(3000, 0, 4000, 8000)], contacts: [ct(false, 7000, 0, 3000, -1), ct(true, 3000, 0, 7000, -1)] };
+// 向かい合う水下を持つ（QA の穴・凹み形。水下が穴に面する D1 の形なので棟木の出方は既知の限界の産物だが、棟木も支える仕組みの検証には使える）。棟木の段が母屋の段と重なり、全幅の小屋梁が偶然横切らない
+const LFRIDGE = { cells: [rc(0, 0, 7280, 1820), rc(0, 1820, 1820, 5460), rc(3640, 1820, 7280, 3640), rc(1820, 3640, 7280, 5460)], contacts: [ct(false, 0, 0, 7280, -1)] };
+// U字（屋内 x1820..3640・y0..3640 の左・下・右を回る。下の腕が深く、棟木 x=2730 が y 3640..4550 に出る）
+const LFU = { cells: [rc(0, 3640, 5460, 7280), rc(0, 0, 1820, 3640), rc(3640, 0, 5460, 3640)], contacts: [ct(true, 1820, 0, 3640, 1), ct(false, 3640, 1820, 3640, -1), ct(true, 3640, 0, 3640, -1)] };
+// U字（屋内 x1820..7280・y0..1820 の左・下・右を回る。屋内の下の辺も接するので下の帯は上が壁の翼になり、棟木 x=4550（y 1820..4550）の
+// 下側の母屋が横向き＝全幅の小屋梁が棟木の位置まで来ない。水下は外周の x=0・x=9100・y=9100 だけで、穴・凹みに面しない＝D1 に当たらない）
+const LFU2 = { cells: [rc(0, 0, 1820, 1820), rc(7280, 0, 9100, 1820), rc(0, 1820, 9100, 9100)], contacts: [ct(true, 1820, 0, 1820, 1), ct(true, 7280, 0, 1820, -1), ct(false, 1820, 1820, 7280, -1)] };
+// 屋内に接しない L字（仮の壁は上）。奥行き 3000 の翼と 1500 の翼。水下は同長（2000）で、長手方向の奥行きは番号の小さい翼の 3000（r=725）
+const LF3000 = { cells: [rc(2000, 1500, 4000, 3000), rc(4000, 1500, 6000, 3000), rc(2000, 3000, 4000, 4500)], contacts: [] };
+// 水下が段違い（同じ壁 y=0・水下は y=7280（x0..5460）と y=3640（x5460..9100））。水下の端の外側（斜め線の向こう）に水下と直交する向きの母屋が入る
+const LFS = { cells: [rc(0, 0, 5460, 7280), rc(5460, 0, 9100, 3640)], contacts: [ct(false, 0, 0, 9100, -1)] };
 const LFR = {
   cells: [rc(3640, -3640, 7280, 0), rc(7280, -3640, 9100, 0), rc(7280, -7280, 9100, -3640), rc(7280, -9884, 9100, -9100), rc(7280, -9100, 9100, -7280)],
   contacts: [ct(true, 7280, -9884, -9100, -1), ct(false, -3640, 3640, 7280, -1), ct(true, 7280, -7280, -3640, -1), ct(true, 7280, -9100, -7280, -1)],
@@ -855,8 +869,11 @@ const LFR = {
 function makeLeanRoof({ cells, contacts, centerLinesY = [], beams }) {
   const { graph, X, Y } = makeWingRoof({ cells, ...(beams ? { beams } : {}) });
   for (const y of centerLinesY) graph.addCenterLine(CenterLineType.HORIZONTAL, y, { labeled: false, discipline: Discipline.ARCH });
-  const { wings } = leanToWingsOf({ rects: cells, contacts, tolMm: CL_OVERLAP_TOL_MM });
-  const region = { key: 'lean:t', rect: null, rects: cells, shape: RoofShape.MONO, ridgeIsVertical: null, highSide: null, leanToWings: wings };
+  const { wings, drains, longDepthMm } = leanToWingsOf({ rects: cells, contacts, tolMm: CL_OVERLAP_TOL_MM });
+  const region = {
+    key: 'lean:t', rect: null, rects: cells, shape: RoofShape.MONO, ridgeIsVertical: null, highSide: null,
+    leanToWings: wings, leanToDrains: drains, leanToPurlinDepthMm: longDepthMm,
+  };
   return { graph, X, Y, region };
 }
 
@@ -870,18 +887,18 @@ test('【L字の下屋・形1a】出隅の回り込み（面は top → left）:
   for (const b of roofBeams(graph)) assert.equal(b.dimensionStatus, 'auto');
 });
 
-test('【L字の下屋・形1b】奥行きの違う回り込み: top の面は x=1820・3640（3640..7280）、left の面は y=1820・3640（3640..5460）', () => {
+test('【L字の下屋・形1b】奥行きの違う回り込み（水下は右辺 x=5460・下辺 y=7280）: 下辺の面の縦 x=1820・3640、右辺の面の横 y=1820・3640・5460。縦の x=1820 は横の小屋梁 y=5460 で分かれる', () => {
   const { graph, region } = makeLeanRoof(LF1B);
   assertWingInvariants(graph, region, 'L字1b');
-  assert.deepEqual(koyaDescs(graph), ['x=1820:3640..7280', 'x=3640:3640..7280', 'y=1820:3640..5460', 'y=3640:3640..5460']);
+  assert.deepEqual(koyaDescs(graph), ['x=1820:3640..5460', 'x=1820:5460..7280', 'x=3640:5460..7280', 'y=1820:3640..5460', 'y=3640:3640..5460', 'y=5460:0..5460']);
 });
 
-test('【L字の下屋・(i′)】弦が自分の母屋を横切らない区間は作らない: 形1b で屋内との境界の大梁 x=3640（y0..3640）が無くても、x=3640 の 0..3640（どの母屋の内部も横切らない）は作らず、3640..7280 だけが残る', () => {
+test('【L字の下屋・(i′)】弦が自分の母屋を横切らない区間は作らない: 形1b で屋内との境界の大梁 x=3640（y0..3640）が無くても、x=3640 の 0..3640（どの母屋の内部も横切らない）は作らず、5460..7280 だけが残る', () => {
   const beams = perimeterBeams(LF1B.cells).filter(([horizontal, coord, from, to]) => !(!horizontal && coord === 3640 && from === 0 && to === 3640));
   const { graph, region } = makeLeanRoof({ ...LF1B, beams });
   assert.equal(beams.length, perimeterBeams(LF1B.cells).length - 1, '前提: 1本だけ外した');
   autoFillWoodRoofFraming(graph, PROJECT, [region]);
-  assert.ok(koyaDescs(graph).includes('x=3640:3640..7280'));
+  assert.ok(koyaDescs(graph).includes('x=3640:5460..7280'));
   assert.equal(koyaDescs(graph).includes('x=3640:0..3640'), false, '母屋の内部を横切らない区間は作らない');
   assert.deepEqual(interiorCrossings(graph), []);
 });
@@ -898,40 +915,118 @@ test('【L字の下屋・形5】谷木の形（面は top → left）: 母屋は
   assert.deepEqual(koyaDescs(graph), ['x=1820:0..1820', 'x=3640:0..1820', 'y=1820:0..1820']);
 });
 
-test('【L字の下屋・形R】roof-test1 の2階の下屋（中心線なし）: left の面の横 y=-3640・-5460・-7280・-9100（x7280..9100）、top の面の縦 x=5460・7280（y-3640..0。x=7280 は弦が -9884..0 でも自分の線を横切る -3640..0 だけ）', () => {
+test('【L字の下屋・棟木も小屋梁で支える】向かい合う水下の棟木（段が母屋の段と重なる位置は母屋でなく棟木）にも小屋梁が来て、棟木の束の間隔が1820以下になる', () => {
+  const { graph, region } = makeLeanRoof(LFRIDGE);
+  const framing = roofFramingLines({
+    rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+  });
+  assert.ok(framing.ridges.length > 0, '前提: 棟木がある');
+  assert.ok(maxStrutGaps(graph, region).length >= framing.ridges.length + framing.purlins.length, '前提: maxStrutGaps は棟木も検査する');
+  assertWingInvariants(graph, region, 'L字・棟木');
+});
+
+test('【L字の下屋・棟木も小屋梁で支える・U字】正当な U字（左右の水下が向かい合う。深い下の腕）でも棟木 x=2730 を支える', () => {
+  const { graph, region } = makeLeanRoof(LFU);
+  assert.deepEqual(region.leanToDrains.map(d => [d.isVertical, d.coord]).sort(), [[false, 7280], [true, 0], [true, 5460]], '前提: 水下は左・下・右');
+  assertWingInvariants(graph, region, 'L字・U字の棟木');
+});
+
+test('【L字の下屋・棟木も小屋梁で支える・U字（下の辺も接する）】穴・凹みに面しない正当な形で、棟木 x=4550 を支える小屋梁 y=3640 が 3640..5460 に出る（棟木を面に入れないと束の間隔が 2730）', () => {
+  const { graph, region } = makeLeanRoof(LFU2);
+  assert.deepEqual(region.leanToDrains.map(d => [d.isVertical, d.coord]).sort(), [[false, 9100], [true, 0], [true, 9100]], '前提: 水下は外周の左・下・右だけ');
+  assert.equal(region.leanToPurlinDepthMm, 7280, '前提: 長手方向の翼の奥行き');
+  const framing = roofFramingLines({
+    rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+  });
+  assert.deepEqual(framing.ridges.map(l => [l.isVertical, l.coord, l.lo, l.hi]), [[true, 4550, 1820, 4550]], '前提: 棟木 x=4550（y 1820..4550）');
+  assertWingInvariants(graph, region, 'L字・U字（下の辺も接する）の棟木');
+  assert.ok(koyaDescs(graph).includes('y=3640:3640..5460'), `小屋梁: ${koyaDescs(graph)}`);
+});
+
+test('【L字の下屋・母屋の段の始まり r（結果）】奥行き 1000（r=545。910 ではない）の L字: 母屋 x=3455 の束の間隔が1820以下になるよう小屋梁 y=7000 が 3000..4000 に出る。r を渡さないと母屋の位置がずれて検査が崩れる', () => {
+  const { graph, region } = makeLeanRoof(LFR545);
+  assert.equal(region.leanToPurlinDepthMm, 1000, '前提: 長手方向の翼の奥行き');
+  assertWingInvariants(graph, region, 'L字・r=545');
+  assert.ok(koyaDescs(graph).includes('y=7000:3000..4000'), `小屋梁: ${koyaDescs(graph)}`);
+});
+
+test('【L字の下屋・母屋の段の始まり r（不変条件）】長手方向の奥行き 3000（r=725。910 ではない）の L字: 小屋梁は r+k×910 の段の母屋を支え、束の間隔の不変条件を満たす（結果は r に鈍感な形。配線の抜けは上の結果テストと下の配線テストで守る）', () => {
+  const { graph, region } = makeLeanRoof(LF3000);
+  assert.equal(region.leanToPurlinDepthMm, 3000, '前提: 長手方向の翼の奥行き');
+  const purlins = roofFramingLines({
+    rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+  }).purlins;
+  assert.ok(purlins.some(l => !l.isVertical && l.levelMm === 725), '前提: 水下から 725 の母屋（r=725）');
+  const r = assertWingInvariants(graph, region, 'L字・r=725');
+  assert.ok(r.created.length > 0);
+});
+
+// 配線: 小屋梁の面は描画（roofFramingLines）と同じ r で導く。位置の選び方は通り芯・910グリッド優先で r に鈍感なため、結果の比較では
+// 配線の抜けを検出できない。呼び出しは1行まるごとで一致させる（team-lessons 2026-09-29）。
+test('【L字の下屋・配線】leanToModel は長手方向の奥行き（region.leanToPurlinDepthMm）から purlinLayoutFromRidge の残り r を導き、leanToDrainFraming の段の始まりへ渡す', () => {
+  const src = stripCommentLines(fs.readFileSync(path.resolve(import.meta.dirname, 'woodRoofFraming.js'), 'utf8'));
+  const count = line => (src.match(new RegExp(`^\\s*${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'gm')) || []).length;
+  for (const line of [
+    'const { eaveGapMm } = purlinLayoutFromRidge({ halfSpanMm: depth, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol });',
+    'const { faces } = leanToDrainFraming({ rects: rs, drains: region.leanToDrains, pitchMm: F.purlinPitchMm, firstLevelMm: eaveGapMm, tolMm: tol });',
+  ]) assert.equal(count(line), 1, `${line} の行は1つのはず`);
+});
+
+test('【L字の下屋・水下が段違い】面に水下と直交する向きの母屋が混ざる形: 向きごとに面を分けて小屋梁が生成され、束の間隔・交差・重なり・冪等の不変条件を満たす', () => {
+  const { graph, region } = makeLeanRoof(LFS);
+  const purlins = roofFramingLines({
+    rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+  }).purlins;
+  assert.ok(purlins.some(l => l.isVertical) && purlins.some(l => !l.isVertical), '前提: 縦の母屋と横の母屋が混ざる');
+  const r = assertWingInvariants(graph, region, 'L字・水下が段違い');
+  assert.ok(r.created.length > 0, '小屋梁が生成される');
+  assert.ok(koyaOnly(graph).some(b => b.isVertical) && koyaOnly(graph).some(b => !b.isVertical), '縦・横の両方の向きの小屋梁ができる（混ざった向きの母屋を別の面として支える）');
+  assert.deepEqual(tobibariDescs(graph), [], '飛び梁は無い');
+  for (const b of roofBeams(graph)) assert.equal(b.dimensionStatus, 'auto');
+});
+
+test('【L字の下屋・形R】roof-test1 の2階の下屋（中心線なし。水下は右辺 x=9100・下辺 y=0）: 右辺の面の横 y=-3640・-5460・-7280・-9100（x7280..9100）、下辺の面の縦 x=5460・7280、横の y=-1820（x3640..9100）。縦は y=-1820 で分かれる', () => {
   const { graph, region } = makeLeanRoof(LFR);
   assertWingInvariants(graph, region, 'L字R');
-  assert.deepEqual(koyaDescs(graph), ['x=5460:-3640..0', 'x=7280:-3640..0', 'y=-3640:7280..9100', 'y=-5460:7280..9100', 'y=-7280:7280..9100', 'y=-9100:7280..9100']);
-  assert.ok(koyaOnly(graph).filter(b => !b.isVertical).every(b => b.clStart.effectiveValue === 7280 && b.clEnd.effectiveValue === 9100));
+  assert.deepEqual(koyaDescs(graph), ['x=5460:-1820..0', 'x=5460:-3640..-1820', 'x=7280:-1820..0', 'y=-1820:3640..9100', 'y=-3640:7280..9100', 'y=-5460:7280..9100', 'y=-7280:7280..9100', 'y=-9100:7280..9100']);
+  assert.ok(koyaOnly(graph).filter(b => !b.isVertical && b.axisValue !== -1820).every(b => b.clStart.effectiveValue === 7280 && b.clEnd.effectiveValue === 9100));
 });
 
 test('【L字の下屋・形R・中心線あり】既存の中心線の候補（y=-6370）があると、通り芯の次の優先でそれが選ばれ、横の小屋梁は y=-6370・-4550（910グリッド）になる（実データ roof-test1 の2階と同じ）', () => {
   const { graph, region } = makeLeanRoof({ ...LFR, centerLinesY: [-6370] });
   assertWingInvariants(graph, region, 'L字R・中心線');
-  assert.deepEqual(koyaDescs(graph), ['x=5460:-3640..0', 'x=7280:-3640..0', 'y=-4550:7280..9100', 'y=-6370:7280..9100', 'y=-7280:7280..9100', 'y=-9100:7280..9100']);
+  assert.deepEqual(koyaDescs(graph), ['x=5460:-1820..0', 'x=5460:-3640..-1820', 'x=7280:-1820..0', 'y=-1820:3640..9100', 'y=-3640:7280..9100', 'y=-4550:7280..9100', 'y=-6370:7280..9100', 'y=-7280:7280..9100', 'y=-9100:7280..9100']);
 });
 
-test('【L字の下屋・先の面の小屋梁を host に数える】形R で壁の大梁 y=-3640（x3640..7280）が無いと、top の面の x=7280 は先の面（left）の小屋梁 y=-3640（x7280..9100）の端に載って -3640..0 になる。先の面の小屋梁を数えなければ作られない', () => {
-  const beams = perimeterBeams(LFR.cells).filter(([horizontal, coord, from, to]) => !(horizontal && coord === -3640 && from === 3640 && to === 7280));
+test('【L字の下屋・先の面の小屋梁を host に数える】形R で壁の大梁 y=0（x3640..9100 の下辺の軒桁）が無いと、下辺の面の x=5460 は先の面（右辺の面）の小屋梁 y=-1820（x3640..9100）に載る -3640..-1820 だけが残る。先の面の小屋梁を数えなければ作られない', () => {
+  const full = perimeterBeams(LFR.cells);
+  const beams = full.filter(([horizontal, coord]) => !(horizontal && coord === 0));
   const { graph, region } = makeLeanRoof({ ...LFR, beams });
-  assert.equal(beams.length, perimeterBeams(LFR.cells).length - 1, '前提: 壁の大梁を1本外した');
+  assert.ok(beams.length < full.length, '前提: 下辺の大梁を外した');
   autoFillWoodRoofFraming(graph, PROJECT, [region]);
-  assert.ok(koyaDescs(graph).includes('y=-3640:7280..9100'), '前提: 先の面の小屋梁 y=-3640');
-  assert.ok(koyaDescs(graph).includes('x=7280:-3640..0'), '先の面の小屋梁が host');
+  assert.ok(koyaDescs(graph).includes('y=-1820:3640..9100'), '前提: 先の面の小屋梁 y=-1820');
+  assert.ok(koyaDescs(graph).includes('x=5460:-3640..-1820'), '先の面の小屋梁 y=-1820 が host（上端は壁の大梁 y=-3640）');
+  assert.equal(koyaDescs(graph).some(d => d.startsWith('x=7280:') || d.startsWith('x=5460:-1820')), false, '下辺の大梁が無いので y=-1820..0 側は host が無く作られない');
   assert.deepEqual(interiorCrossings(graph), []);
   assert.deepEqual(parallelOverlaps(graph), []);
 });
 
-test('【L字の下屋・host の優先】x=7280 の小屋梁（top の面）の y=-3640 側の端は、同じ座標の先の面の小屋梁（y=-3640 の横）ではなく大梁（primary）に載る', () => {
+test('【L字の下屋・host の優先】x=7280 の小屋梁（下辺の面）の y=0 側の端は大梁（primary）、y=-1820 側の端は先の面の小屋梁（roofBeam）に載る（小屋梁を host にできるのは小屋梁を支える場合だけ）', () => {
   const { graph, region } = makeLeanRoof(LFR);
   autoFillWoodRoofFraming(graph, PROJECT, [region]);
   const b = koyaOnly(graph).find(k => k.isVertical && k.axisValue === 7280);
   assert.ok(b, '前提: x=7280 の小屋梁がある');
-  assert.ok(koyaOnly(graph).some(k => !k.isVertical && k.axisValue === -3640), '前提: 先の面の小屋梁 y=-3640 がある');
-  for (const cl of [b.clStart, b.clEnd]) {
-    const host = findHostBeam(graph.beams, cl.id, false, b.axisValue, { allowRoofBeamHost: true });
-    assert.equal(host?.role, 'primary', `端 ${cl.effectiveValue} の host は大梁`);
-  }
+  assert.ok(koyaOnly(graph).some(k => !k.isVertical && k.axisValue === -1820), '前提: 先の面の小屋梁 y=-1820 がある');
+  const roleAt = v => {
+    const cl = [b.clStart, b.clEnd].find(c => c.effectiveValue === v);
+    return findHostBeam(graph.beams, cl.id, false, b.axisValue, { allowRoofBeamHost: true })?.role;
+  };
+  assert.equal(roleAt(0), 'primary', '端 0 の host は大梁');
+  assert.equal(roleAt(-1820), 'roofBeam', '端 -1820 の host は先の面の小屋梁');
 });
 
 test('【L字の下屋・撤去】[] で auto の小屋梁は全て撤去され、locked は残る。L字の region へ戻せば作り直される（locked は使い回す）', () => {
@@ -948,27 +1043,34 @@ test('【L字の下屋・撤去】[] で auto の小屋梁は全て撤去され�
   assert.ok(graph.beamMap.has(keep.id));
 });
 
-test('【L字の下屋・失敗系】rects が [] ・NaN・配列でない／leanToWings が無い・[]・配列でない／片流れ以外（rect=null）は小屋梁を作らず例外も投げない。既存の auto は撤去', () => {
+test('【L字の下屋・失敗系】rects が [] ・NaN・配列でない／leanToDrains が無い・[]・配列でない・不正／母屋の段の基準（奥行き）が無い・0・NaN／片流れ以外（rect=null）は小屋梁を作らず例外も投げない。既存の auto は撤去', () => {
   const { graph, region } = makeLeanRoof(LF1A);
   const bad = [
     { ...region, rects: [] },
     { ...region, rects: [rc(0, 0, NaN, 3640)] },
     { ...region, rects: 'x' },
-    { ...region, leanToWings: undefined },
-    { ...region, leanToWings: [] },
-    { ...region, leanToWings: 'x' },
+    { ...region, leanToDrains: undefined },
+    { ...region, leanToDrains: [] },
+    { ...region, leanToDrains: 'x' },
+    { ...region, leanToDrains: region.leanToDrains.map((d, i) => (i === 0 ? { ...d, outward: 2 } : d)) },
+    { ...region, leanToDrains: region.leanToDrains.map((d, i) => (i === 0 ? { ...d, coord: NaN } : d)) },
+    { ...region, leanToDrains: region.leanToDrains.map((d, i) => (i === 0 ? { ...d, lo: d.hi + 1 } : d)) },
+    { ...region, leanToPurlinDepthMm: undefined },
+    { ...region, leanToPurlinDepthMm: null },
+    { ...region, leanToPurlinDepthMm: 0 },
+    { ...region, leanToPurlinDepthMm: NaN },
     { ...region, shape: RoofShape.GABLE },
     { ...region, shape: RoofShape.FLAT },
   ];
   for (const b of bad) {
     let r;
-    assert.doesNotThrow(() => { r = autoFillWoodRoofFraming(graph, PROJECT, [b]); }, JSON.stringify(b.shape) + JSON.stringify(b.rects) + JSON.stringify(b.leanToWings));
+    assert.doesNotThrow(() => { r = autoFillWoodRoofFraming(graph, PROJECT, [b]); }, JSON.stringify(b.shape) + JSON.stringify(b.rects) + JSON.stringify(b.leanToDrains) + String(b.leanToPurlinDepthMm));
     assert.deepEqual(r, { created: [], removed: [] });
   }
   assert.equal(roofBeams(graph).length, 0);
   autoFillWoodRoofFraming(graph, PROJECT, [region]);
   assert.equal(roofBeams(graph).length, 4);
-  const r = autoFillWoodRoofFraming(graph, PROJECT, [{ ...region, leanToWings: [] }]);
+  const r = autoFillWoodRoofFraming(graph, PROJECT, [{ ...region, leanToDrains: [] }]);
   assert.equal(r.removed.length, 4, 'auto の小屋梁は region が不正になると撤去される');
   assert.equal(roofBeams(graph).length, 0);
 });

@@ -14,7 +14,7 @@
  *         leanToDrains, leanToPurlinDepthMm }
  *       （翼＝leanToWingsOf。leanToDrains＝水下・leanToPurlinDepthMm＝母屋の段の基準＝長手方向の翼の奥行き。
  *       描画の母屋・棟木・隅木・谷木は水下への距離の場［leanToDrainFraming］、外周の梁・床梁のガードは翼のセル、
- *       小屋梁［面ごと。woodRoofFraming.js］は今のところ翼）。
+ *       小屋梁［面ごと。woodRoofFraming.js］は水下ごとの面）。
  *       他の形状の矩形でない下屋は region なし
  *   - 形状（自動なら導いた形状）が片流れ・切妻・寄棟（陸屋根・棟違いは小屋組を持たない）
  * ridgeIsVertical は切妻だけ spec.ridgeDirection（指定が無ければ長手）に従う。他の形状は常に長手。

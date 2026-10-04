@@ -16,7 +16,7 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { leanToFraming, leanToFramingRegions, leanToFramingCellKeys } from './roofFramingRegions.js';
-import { roofFramingLines, roofStrutPoints, leanToMonoLines } from './roofFramingGeometry.js';
+import { roofFramingLines, roofStrutPoints } from './roofFramingGeometry.js';
 import { roofFramingHostMembers } from './framingDrawing.js';
 
 const STRUCT = { labeled: true, discipline: Discipline.STRUCT };
@@ -124,12 +124,14 @@ function maxStrutGaps(graph, region) {
 }
 
 // L字（leanToWings）の母屋の束の最大間隔。maxStrutGaps は矩形用（rect を使う）なので、L字は leanToWings から線を導く。
-// 小屋梁は今のところ翼ごとの面の母屋＝旧い母屋（leanToMonoLines）を支えるように作る。描画の母屋は水下への距離の場
-// （roofFramingLines の leanToDrains）に替わったので、ここは旧い母屋で検査する（小屋梁も水下の面へ切り替えるステップ2で戻す）。
+// 小屋梁は水下ごとの面（水下への距離の場）の母屋を支えるように作る。母屋は roofFramingLines の leanToDrains・leanToPurlinDepthMm で導く。
+// 線が空だと検査が黙って空振りするので、1本以上あることを assert する。
 function leanToLineGaps(graph, region) {
-  const { purlins } = leanToMonoLines({
-    wings: region.leanToWings, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+  const { purlins } = roofFramingLines({
+    rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
   });
+  assert.ok(purlins.length > 0, 'L字の下屋の母屋が空（検査が空振りする）');
   const members = roofFramingHostMembers(graph.beams, rulesFor(TRADITIONAL_WOOD_STRUCTURE).baseMaterial);
   return purlins.map(line => {
     const alongs = [line.lo, line.hi, ...roofStrutPoints([line], members, CL_OVERLAP_TOL_MM).map(p => (line.isVertical ? p.y : p.x))]

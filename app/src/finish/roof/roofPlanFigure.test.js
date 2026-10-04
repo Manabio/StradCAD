@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape } from '@core';
 import { roofPlanFigure, visibleRoofPlanPrimitives } from './roofPlanFigure.js';
+import { leanToPlanRegions } from '../../structural/roofFramingRegions.js';
+import { roofFramingLines } from '../../structural/roofFramingGeometry.js';
 import { createLeanToRoofSpec } from './roofDefaults.js';
 import { LodLevel } from '../../viewport.js';
 
@@ -85,6 +87,22 @@ test('roofPlanFigure: L字の片流れは外形線＋継ぎ目の隅木（棟木
   const outline = prims.find(p => p.role === 'outline');
   assert.equal(outline.closed, false, '屋内に接する2辺を除いた開いた折れ線');
   assert.deepEqual(outline.points, [3640, -455, 5915, -455, 5915, 5915, -455, 5915, -455, 3640], '屋内に接する2辺（通り芯＝壁の中）の外側だけ。両端は出幅 0 の壁の位置で止まる');
+});
+
+test('roofPlanFigure: U字の片流れ（向かい合う水下）は棟木が出て、伏図（roofFramingLines の ridges）と同じ線。隅木は2本・谷木なし', () => {
+  const g = makeGrid([0, 1820, 3640, 5460], [0, 3640, 7280]);
+  g.interior([[1, 0]]); // 屋内（x1820..3640・y0..3640）の左・下・右を回る U字
+  g.roof([[0, 0], [2, 0], [0, 1], [1, 1], [2, 1]], RoofShape.MONO);
+  const prims = roofPlanFigure(g.graph);
+  assert.deepEqual(countByRole(prims), { outline: 1, ridge: 1, hip: 2, valley: 0 });
+  const [region] = leanToPlanRegions(g.graph);
+  assert.ok(region.leanToDrains.length === 3, '前提: 水下は左・下・右の3本');
+  const { ridges } = roofFramingLines({
+    rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
+    purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: 0.5,
+  });
+  assert.deepEqual(ridges.map(l => [l.isVertical, l.coord, l.lo, l.hi]), [[true, 2730, 3640, 4550]], '前提: 棟木は x=2730 の y 3640..4550');
+  assert.deepEqual(prims.find(p => p.role === 'ridge').points, [2730, 3640, 2730, 4550], '平面の棟木は伏図と同じ（けらばの外形線へは延びない端）');
 });
 
 test('roofPlanFigure: L字の片流れ（屋内に接しない。両翼が同じ壁で水下が段違い）は水下への距離の場の継ぎ目＝深い翼の外の角から隅木・浅い翼の水下の端から谷木', () => {

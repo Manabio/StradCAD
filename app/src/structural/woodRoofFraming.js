@@ -4,7 +4,7 @@
  * 成は同じ規則で、下屋専用の分岐は持たない）。寄棟は、桁行の線を支える梁間方向の小屋梁（第1段。棟木の両端に必ず置く）と、
  * 妻側の線を支える桁行方向の短い小屋梁＝飛び梁（第2段。beamType:'飛び梁'、role・記号は小屋梁と同じ）の2段。
  * 矩形でない寄棟の主屋根（C2e-3b）は、屋根を「翼」（棟木を段の高さだけ四方へ広げた矩形）に分け、翼ごとに矩形の寄棟と同じ2段を回す。
- * L字（矩形でない）の片流れの下屋（E2b）は、同じ壁の翼の集まり＝「面」ごとに母屋を支える小屋梁を回す（寄棟の翼と同じ「先の面を数える」道具）。
+ * L字（矩形でない）の片流れの下屋（E2b）は、水下ごとの「面」（水下への L∞ 距離の場）の母屋を支える小屋梁を回す（寄棟の翼と同じ「先の面を数える」道具）。
  * 設計意図は .claude/structural-model.md「小屋梁」の節。
  *
  * 小屋梁は母屋・棟木と直交する横架材で、各母屋・棟木の上で束の間隔（線の両端＝屋根範囲の辺を含む）が
@@ -36,7 +36,7 @@ import { CL_OVERLAP_TOL_MM, RoofShape } from '../core/constants.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { SUPPORT_SPAN_COLUMN_KINDS, supportSpanColumnCandidates } from '../core/centerLineKindPolicy.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
-import { roofFramingLines, koyaBeamPositions, hipFramingWings, orthogonalChord, leanToMonoPlanes } from './roofFramingGeometry.js';
+import { roofFramingLines, koyaBeamPositions, hipFramingWings, orthogonalChord, leanToDrainFraming, purlinLayoutFromRidge } from './roofFramingGeometry.js';
 import { ensureAutoBeamAxisCL, bracketAutoBeamAxisExtent } from './wallBeamAxes.js';
 import { axisSpanOccupied } from './woodAutoFill.js';
 
@@ -177,16 +177,32 @@ function hipModel(region, F, tol) {
 }
 
 /**
- * L字の下屋（矩形でない片流れ）の面ごとの母屋の線（leanToMonoPlanes）と、弦の判定に使う屋根範囲のセル矩形。
- * 矩形の region・片流れ以外・rects が空か不正・翼（leanToWings）が無い region は null（小屋梁は作らない）。
- * @returns {{planes: object[], rects: object[]}|null}
+ * L字の下屋（矩形でない片流れ）の面ごとの母屋の線（水下への L∞ 距離の場 leanToDrainFraming の面＝水下ごと）と、弦の判定に使う
+ * 屋根範囲のセル矩形。母屋の段は region.leanToPurlinDepthMm（長手方向の翼の奥行き）の残り r から（描画の roofFramingLines と同じ）。
+ * 矩形の region・片流れ以外・rects が空か不正・水下（leanToDrains）か奥行きが無い region は null（小屋梁は作らない）。
+ * 面の中の線の向きは水下と同じとは限らない（水下が段違いの形では、水下の端の外側の母屋が直交する向きで入る）ので、
+ * 面を向きごとに分けて返す（水下と同じ向きが先。planLeanToPlaneSegments は面内で向きが一定という前提）。
+ * @returns {{planes: Array<{lineIsVertical:boolean, lines: object[]}>, rects: object[]}|null}
  */
 function leanToModel(region, F, tol) {
   const rs = region.rects;
   if (region.rect || region.shape !== RoofShape.MONO) return null;
   if (!Array.isArray(rs) || rs.length === 0 || !rs.every(validRect)) return null;
-  if (!Array.isArray(region.leanToWings) || region.leanToWings.length === 0) return null;
-  const planes = leanToMonoPlanes({ wings: region.leanToWings, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol });
+  if (!Array.isArray(region.leanToDrains) || region.leanToDrains.length === 0) return null;
+  // 水下の要素が不正な region は小屋梁を作らない（rects が不正なときと同じ。例外を投げない）
+  const validDrain = d => typeof d?.isVertical === 'boolean' && [d.coord, d.lo, d.hi].every(Number.isFinite) && d.lo <= d.hi && (d.outward === 1 || d.outward === -1);
+  if (!region.leanToDrains.every(validDrain)) return null;
+  const depth = region.leanToPurlinDepthMm;
+  if (typeof depth !== 'number' || !Number.isFinite(depth) || depth <= 0) return null;
+  const { eaveGapMm } = purlinLayoutFromRidge({ halfSpanMm: depth, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol });
+  const { faces } = leanToDrainFraming({ rects: rs, drains: region.leanToDrains, pitchMm: F.purlinPitchMm, firstLevelMm: eaveGapMm, tolMm: tol });
+  const planes = [];
+  for (const face of faces) {
+    for (const lineIsVertical of [face.lineIsVertical, !face.lineIsVertical]) {
+      const lines = face.lines.filter(l => l.isVertical === lineIsVertical);
+      if (lines.length > 0) planes.push({ lineIsVertical, lines });
+    }
+  }
   return { planes, rects: rs };
 }
 
@@ -335,7 +351,7 @@ function planHipTobibariSegments(graph, rules, wing, primaries, koyaBeams, prior
 }
 
 /**
- * L字の下屋の1つの面（同じ壁の翼の集まり。全ての母屋が同じ向き）の母屋を支える小屋梁の区間を計画する（graph は読むだけ）。
+ * L字の下屋の1つの面（水下ごと。leanToModel が向きごとに分けるので全ての母屋が同じ向き）の母屋を支える小屋梁の区間を計画する（graph は読むだけ）。
  * 位置は切妻・片流れと同じ規則（koyaPositionsForLines。seed なし＝片流れに棟木・隅木の seed は無い）。支え・host は大梁と
  * 先の面の小屋梁（prior）。区間は、位置 p の弦（屋根範囲の中で、p を範囲に含む自分の線を通る最大の線分。orthogonalChord。
  * 面は矩形でないので翼の矩形の範囲は使わない）の中の host の間で、(i′) 自分の線を内部で横切る（segmentSupportsLine。
@@ -376,7 +392,7 @@ function planLeanToPlaneSegments(graph, rules, plane, primaries, prior, rects) {
  *  - region の形状が寄棟（矩形も矩形でない寄棟も）: 翼ごとに、第1段の小屋梁→第2段の飛び梁（beamType '飛び梁'）の順に作る
  *    （翼の順は roofFramingGeometry.js hipFramingWings。矩形は翼1つ）。使い回す既存の auto は beamType が違えば作り直す
  *    （removed と created の両方に入る）。
- *  - region が L字の片流れ（rect=null・shape が片流れ・leanToWings あり）: 面（leanToMonoPlanes）の順に第1段だけ作る（飛び梁なし）。
+ *  - region が L字の片流れ（rect=null・shape が片流れ・leanToDrains あり）: 面（水下ごと。leanToDrainFraming の順）に第1段だけ作る（飛び梁なし）。
  *  - 候補に無くなった auto の小屋梁（屋根の入力や主構造の変更で不要になったもの）は撤去する。locked は保持。
  *  - 梁芯CLは位置に通り芯・既存の梁芯があればそれを、無ければ梁芯CL（由来 roofBeam）を作る（床梁と共有の
  *    wallBeamAxes.js ensureAutoBeamAxisCL）。除外座標（excludedWallBeamAxes）の位置には作らない。

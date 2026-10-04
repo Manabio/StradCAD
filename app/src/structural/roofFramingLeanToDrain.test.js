@@ -153,6 +153,14 @@ test('入隅の L字（形5）: 2つの水下の入隅の角 (1820,1820) から�
   assert.deepEqual(extendDiagonalsToOutline({ diagonals: fr.diagonals, edges, tolMm: TOL }), fr.diagonals, '既定（valleys なし）は谷木を延ばさない');
 });
 
+test('面の同点（形5の入隅）: 縦の母屋 x=910 は2つの水下から等距離。線の向きと水下の向きが一致する面（水下 x=1820）に入り、水下 y=1820 の面は横の母屋だけになる', () => {
+  const { fr } = fieldOf(F5);
+  assert.deepEqual(fr.faces.map(f => [f.drain, f.lineIsVertical, plain(f.lines)]), [
+    [DR(false, 1820, 1820, 5460, 1), false, [ln(false, 910, 910, 5460)]],
+    [DR(true, 1820, 1820, 3640, 1), true, [ln(true, 910, 910, 3640)]],
+  ]);
+});
+
 test('3翼（U字）: 水下は左・下・右の3本。隅木は水下と水下の外の角（(0,5460)・(5460,5460)）の2本で、棟木は出ない', () => {
   const { fr, w } = fieldOf(FU);
   assert.equal(w.drains.length, 3);
@@ -195,7 +203,8 @@ test('向かい合う水下（2本）: 棟木が中央に出る。母屋は各�
   assert.deepEqual(plain(fr.ridges), [ln(true, 1820, 0, 1820)]);
   assert.deepEqual(plain(fr.purlins), [ln(true, 910, 0, 1820), ln(true, 2730, 0, 1820)]);
   assert.deepEqual(fr.diagonals, []);
-  assert.deepEqual(fr.faces.map(f => [f.drain.coord, plain(f.lines)]), [[0, [ln(true, 910, 0, 1820)]], [3640, [ln(true, 2730, 0, 1820)]]]);
+  assert.deepEqual(fr.faces.map(f => [f.drain.coord, plain(f.lines)]), [[0, [ln(true, 910, 0, 1820), ln(true, 1820, 0, 1820)]], [3640, [ln(true, 2730, 0, 1820)]]],
+    '棟木も面に入る（小屋梁が支える）。2つの水下から等距離で向きも同じなので番号の小さい水下（x=0）の面');
 });
 
 test('中庭（穴）に面する水下: 帯は向こう側の屋根に当たって止まる。穴の四隅から谷木、母屋は穴を囲む環', () => {
@@ -217,11 +226,11 @@ test('矩形の屋根範囲は矩形の片流れの式と一致する（R1: 上�
   }
 });
 
-test('面: 母屋はちょうど1つの面に属する。面の lines は sortLines 済みで、全面を合わせると purlins と一致する（全形）', () => {
+test('面: 母屋・棟木はちょうど1つの面に属する。面の lines は sortLines 済みで、全面を合わせると purlins と ridges を合わせたものと一致する（全形）', () => {
   const byLine = (a, b) => (a.isVertical === b.isVertical ? 0 : (a.isVertical ? 1 : -1)) || a.coord - b.coord || a.lo - b.lo;
   for (const [name, form] of Object.entries({ F1A, F1B, F2, F3, F5, F6, FRT1, FU, FSTEP, F2000 })) {
     const { fr } = fieldOf(form);
-    assert.deepEqual(fr.faces.flatMap(f => f.lines).sort(byLine), fr.purlins, name);
+    assert.deepEqual(fr.faces.flatMap(f => f.lines).sort(byLine), [...fr.purlins, ...fr.ridges].sort(byLine), name);
     for (const f of fr.faces) assert.deepEqual(f.lines, [...f.lines].sort(byLine), `${name}: lines は sortLines 済み`);
   }
 });
