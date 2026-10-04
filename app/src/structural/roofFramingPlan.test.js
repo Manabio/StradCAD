@@ -73,7 +73,7 @@ test('【失敗系】roofRidgeLines: 片流れ（highSide 無しでも例外に�
   for (const shape of [RoofShape.MONO, RoofShape.FLAT, RoofShape.STAGGERED, 'no-such-shape']) {
     assert.deepEqual(roofRidgeLines({ rect: BOX, shape, ridgeIsVertical: false, tolMm: TOL }), [], shape);
   }
-  assert.deepEqual(roofRidgeLines({ rect: null, rects: [BOX], shape: RoofShape.GABLE, tolMm: TOL }), [], 'L字の切妻は棟木を持たない（暫定）');
+  assert.deepEqual(roofRidgeLines({ rect: null, rects: [BOX], shape: RoofShape.GABLE, tolMm: TOL }), [], '水下（leanToDrains）を渡さない L字の切妻は棟木を持たない（水下を渡した切妻の L字は roofFramingGableArm.test.js）');
   assert.deepEqual(roofRidgeLines({ rect: null, rects: null, shape: RoofShape.HIP, tolMm: TOL }), []);
   assert.throws(() => roofRidgeLines({ rect: BOX, shape: RoofShape.GABLE, ridgeIsVertical: false, tolMm: -1 }), RangeError);
   assert.throws(() => roofRidgeLines({ rect: rc(5, 0, 0, 3000), shape: RoofShape.GABLE, ridgeIsVertical: false, tolMm: TOL }), RangeError);

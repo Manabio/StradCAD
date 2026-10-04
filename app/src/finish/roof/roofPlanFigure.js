@@ -8,11 +8,11 @@
  *
  * primitive: { kind:'line', key, role:'outline'|'ridge'|'hip'|'valley', points:number[], closed:boolean, detailOnly:false }
  *   outline＝軒先・けらばの外形線（壁の中に重なる部分は除く）、ridge＝棟木（切妻はけらばの外形線まで・寄棟は延ばさない。
- *   L字の下屋の片流れは向かい合う水下があるときだけ＝伏図と同じ線）、
+ *   L字の下屋の片流れ・切妻は水下の場の線＝伏図と同じ線。片流れは向かい合う水下があるときだけ）、
  *   hip＝隅木（軒の角まで）、valley＝谷木（軒先の線の入隅の角まで。伏図と違い平面だけ延ばす）。
  * 壁に当たる線の端（外形線の開いた端・棟木・隅木・谷木）は、通り芯ではなく描かれている壁の屋根側の外壁面で止める
  * （roofPlanWallTrim.js。壁が無い階は通り芯のまま）。
- * 切妻になる L字・棟違いは暫定で軒先の線だけ（次のステップで「妻面全幅の中心が棟木」の規則を入れる）。
+ * L字の切妻は腕ごとに棟木（軒・けらばは gableArmDrainsOf。水下を持つ region）。棟違い・水下が空の切妻の L字は軒先の線だけ。
  * 詳細（DETAIL）だけ、傾斜面（水下）ごとに水下向きの矢印・「屋根」・「（傾斜N/10）」を出す（detailOnly:true の arrow・text。
  * visibleRoofPlanPrimitives が他の LOD で除く）。矢じりは renderer/chevron.js（依存なしの純モジュール）。
  */

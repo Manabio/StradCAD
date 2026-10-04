@@ -132,6 +132,16 @@ test('roofFramingEaveCorners: 実体階の伏図（下屋）は region の角を
   assert.deepEqual(calls, ['roofFramingLeanRegions'], '小屋組の描画と同じ memo の region');
 });
 
+test('切妻の L字（roof-test8 型）: 軒の辺（下辺・右辺）とけらばの辺（左辺・上辺）の出隅の2角。軒と軒の角 (9100,0)・壁（出幅 0）との角は対象外', () => {
+  const { graph, interior, roof } = makeGrid([3640, 7280, 9100], [-9884, -3640, 0]);
+  interior([[0, 0]]);
+  roof([[0, 1], [1, 1], [1, 0]], RoofShape.GABLE);
+  const region = regionOf(graph);
+  assert.equal(region.shape, 'gable');
+  assert.ok(Array.isArray(region.leanToDrains) && region.leanToDrains.length === 4, '前提: 水下（軒の辺）4つを持つ L字の region');
+  assert.deepEqual(corners(region), [C(3640, 0, false), C(9100, -9884, true)], '下辺の梁は左端 (3640,0)・右辺の梁は上端 (9100,-9884) でけらばの出幅ぶん勝つ');
+});
+
 test('主屋根（屋根専用平面）は []: 切妻の主屋根（けらばに出幅がある）でも軒桁は対象外', () => {
   const top = makeGrid([0, 9000], [0, 6000]);
   top.interior([[0, 0]]); // 9000×6000 の建物・自動の切妻（短手 6000 > 3640）

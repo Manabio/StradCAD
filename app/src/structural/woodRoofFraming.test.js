@@ -18,7 +18,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { autoFillWoodWallBeams, autoFillWoodBeamDepths } from './woodAutoFill.js';
-import { roofFramingLines, roofStrutPoints, leanToWingsOf } from './roofFramingGeometry.js';
+import { roofFramingLines, roofStrutPoints, leanToWingsOf, gableArmDrainsOf } from './roofFramingGeometry.js';
 import { roofFramingHostMembers } from './framingDrawing.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { mainRoofFramingRegion } from './roofFramingRegions.js';
@@ -1029,6 +1029,113 @@ test('【L字の下屋・host の優先】x=7280 の小屋梁（下辺の面）�
   assert.equal(roleAt(-1820), 'roofBeam', '端 -1820 の host は先の面の小屋梁');
 });
 
+// ---- L字の切妻の下屋（腕ごとに棟木。軒・けらばは gableArmDrainsOf。設計意図は structural-model.md「L字の下屋」） ----
+
+// 切妻の L字の region（roofFramingRegions.js の切妻の L字の region と同じ形: 水下＝軒の辺・段の基準＝長手方向の腕の半スパン）。
+function makeGableLeanRoof({ cells, beams }) {
+  const { graph, X, Y } = makeWingRoof({ cells, ...(beams ? { beams } : {}) });
+  const { drains, longHalfSpanMm } = gableArmDrainsOf({ rects: cells, tolMm: CL_OVERLAP_TOL_MM });
+  const region = {
+    key: 'lean:g', rect: null, rects: cells, shape: RoofShape.GABLE, ridgeIsVertical: null, highSide: null,
+    leanToDrains: drains, leanToPurlinDepthMm: longHalfSpanMm,
+  };
+  return { graph, X, Y, region };
+}
+
+test('【L字の切妻・roof-test8 型】小屋梁は横の腕の縦の梁 x=5460・7280（y-3640..0）と縦の腕の横の梁 y=-9100・-7280・-5460・-3640（x7280..9100）。束の間隔は全母屋・棟木で1820以下・交差なし・冪等', () => {
+  const { graph, region } = makeGableLeanRoof(LFR);
+  assert.equal(region.leanToPurlinDepthMm, 910, '前提: 長手方向の腕（縦の腕 幅 1820）の半スパン');
+  assert.ok(maxStrutGaps(graph, region).some(g => g.max > F.strutMaxPitchMm), '前提: 小屋梁の前は束の間隔が1820を超える線がある');
+  const r = assertWingInvariants(graph, region, '切妻の L字');
+  assert.deepEqual(koyaDescs(graph), ['x=5460:-3640..0', 'x=7280:-3640..0', 'y=-3640:7280..9100', 'y=-5460:7280..9100', 'y=-7280:7280..9100', 'y=-9100:7280..9100']);
+  assert.deepEqual(tobibariDescs(graph), [], '飛び梁は無い');
+  assert.equal(r.created.length, 6);
+  for (const b of roofBeams(graph)) assert.equal(b.dimensionStatus, 'auto');
+});
+
+test('【L字の切妻・既知の限界（受容）】棟木が屋根範囲の内部で終わる端（隅木・谷木の上端）の真下に横架材を足さない（seed なし）。roof-test8 型の縦の腕の棟木の下端 (8190,-2730) の下に小屋梁 y=-2730 は無い。束の間隔の検査は線の端を支点とみなすので検出しない', () => {
+  const { graph, region } = makeGableLeanRoof(LFR);
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.ok(koyaDescs(graph).length > 0, '前提: 小屋梁はできている');
+  assert.equal(roofBeams(graph).some(b => !b.isVertical && b.axisValue === -2730), false, '棟木 x=8190 の下端の位置に梁は無い');
+  // 等幅の L字（幅 1820）: 棟木が (4550,910) で出会うが、その真下に横架材も束も無い（棟木は最寄りの束から片持ち）
+  const eq = makeGableLeanRoof({ cells: [rc(0, 0, 5460, 1820), rc(3640, -3640, 5460, 0)] });
+  autoFillWoodRoofFraming(eq.graph, PROJECT, [eq.region]);
+  assert.ok(roofBeams(eq.graph).length > 0, '前提: 小屋梁はできている');
+  assert.equal(roofBeams(eq.graph).some(b => (b.isVertical && b.axisValue === 4550) || (!b.isVertical && b.axisValue === 910)), false, '棟木の交点 (4550,910) を通る小屋梁は無い');
+});
+
+test('【L字の切妻・不変条件の回帰】平行な母屋・棟木の真下に沿う梁が直交の小屋梁を切って束の間隔が 1820 を超えた形（腕の幅が等しい・突き出しが短いコの字など。seed 方式で NG だった3形）で、束の間隔・交差なし・同軸の重なりなし・冪等が成り立つ', () => {
+  const shapes = {
+    L1: [[0, 0, 6370, 910], [1820, 910, 6370, 4550]],
+    L2: [[0, 0, 3913, 4550], [0, 4550, 910, 6370]],
+    コの字: [[0, 7280, 10556, 14560], [0, 0, 4550, 7280], [7553, 0, 10556, 7280]],
+  };
+  for (const [name, list] of Object.entries(shapes)) {
+    const cells = list.map(([x1, y1, x2, y2]) => rc(x1, y1, x2, y2));
+    const { graph, region } = makeGableLeanRoof({ cells });
+    assert.ok(region.leanToDrains.length > 0, `${name}: 前提: 水下がある`);
+    const r = assertWingInvariants(graph, region, name);
+    assert.ok(r.created.length > 0, `${name}: 小屋梁ができる（検査が空振りしない）`);
+  }
+});
+
+test('【L字の切妻・既知の限界（受容）③】小屋梁の弦が別の面の平行な棟木・母屋の真下に沿って走る形では、束を交差でしか数えないのでその線の束の間隔が 1820 を超える（腕の幅＝棒の厚み 3640 の十字の棟木 x=9100 は 3640・一部の Z字の母屋 x=5733 は 2093）。不変条件のテストとは別に固定', () => {
+  const R = list => list.map(([x1, y1, x2, y2]) => rc(x1, y1, x2, y2));
+  const gapOf = (cells, isVertical, coord) => {
+    const { graph, region } = makeGableLeanRoof({ cells });
+    autoFillWoodRoofFraming(graph, PROJECT, [region]);
+    assert.ok(roofBeams(graph).length > 0, '前提: 小屋梁はできている');
+    const hit = maxStrutGaps(graph, region).filter(g => g.coord === coord && (g.hi - g.lo > 0));
+    assert.ok(hit.length > 0, `前提: 線 coord=${coord} がある`);
+    return Math.max(...hit.map(g => g.max));
+  };
+  const cross = R([[0, 2730, 15470, 6370], [7280, 0, 10920, 2730], [7280, 6370, 10920, 9100]]);
+  assert.equal(gapOf(cross, true, 9100), 3640, '十字: 棟木 x=9100（0..9100）の束の最大間隔');
+  const z = R([[0, 0, 6643, 3003], [3003, 3003, 6643, 6643], [3003, 6643, 12103, 10283]]);
+  assert.equal(gapOf(z, true, 5733), 2093, 'Z字: 母屋 x=5733 の束の最大間隔');
+});
+
+test('【L字の切妻・形の網羅】T字（横の棒＋縦の棒）・コの字・十字・正方形3つの L字・段違い: 束の最大間隔 1820 以下・交差なし・同軸の重なりなし・冪等・梁を1本以上作る', () => {
+  const shapes = {
+    T: [rc(0, 0, 9100, 3640), rc(3640, 3640, 5460, 10920)],
+    コの字: [rc(0, 3640, 9100, 7280), rc(0, 0, 1820, 3640), rc(7280, 0, 9100, 3640)],
+    十字: [rc(0, 3640, 9100, 7280), rc(3640, 0, 5460, 3640), rc(3640, 7280, 5460, 10920)],
+    正方形3つ: [rc(0, 0, 3640, 3640), rc(3640, 0, 7280, 3640), rc(0, 3640, 3640, 7280)],
+    段違い: [rc(0, 0, 7280, 7280), rc(7280, 0, 10920, 3640)],
+  };
+  for (const [name, cells] of Object.entries(shapes)) {
+    const { graph, region } = makeGableLeanRoof({ cells });
+    assert.ok(region.leanToDrains.length > 0, `${name}: 前提: 水下がある`);
+    const r = assertWingInvariants(graph, region, name);
+    assert.ok(r.created.length > 0, `${name}: 小屋梁ができる（検査が空振りしない）`);
+  }
+});
+
+test('【L字の切妻・失敗系】rects が [] ・NaN・水下が無い・[]・不正／母屋の段の基準（奥行き）が無い・0 の切妻の region は小屋梁を作らず例外も投げない。既存の auto は撤去。形状（片流れ・切妻）は入口の条件でない', () => {
+  const { graph, region } = makeGableLeanRoof(LFR);
+  const bad = [
+    { ...region, rects: [] },
+    { ...region, rects: [rc(0, 0, NaN, 3640)] },
+    { ...region, leanToDrains: undefined },
+    { ...region, leanToDrains: [] },
+    { ...region, leanToDrains: region.leanToDrains.map((d, i) => (i === 0 ? { ...d, outward: 2 } : d)) },
+    { ...region, leanToPurlinDepthMm: null },
+    { ...region, leanToPurlinDepthMm: 0 },
+  ];
+  for (const b of bad) {
+    let r;
+    assert.doesNotThrow(() => { r = autoFillWoodRoofFraming(graph, PROJECT, [b]); }, JSON.stringify(b.leanToDrains) + String(b.leanToPurlinDepthMm));
+    assert.deepEqual(r, { created: [], removed: [] });
+  }
+  assert.equal(roofBeams(graph).length, 0);
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.equal(roofBeams(graph).length, 6, '前提: 正しい region なら6本');
+  const r = autoFillWoodRoofFraming(graph, PROJECT, [{ ...region, leanToDrains: [] }]);
+  assert.equal(r.removed.length, 6, 'auto の小屋梁は region が不正になると撤去される');
+  assert.equal(roofBeams(graph).length, 0);
+});
+
 test('【L字の下屋・撤去】[] で auto の小屋梁は全て撤去され、locked は残る。L字の region へ戻せば作り直される（locked は使い回す）', () => {
   const { graph, region } = makeLeanRoof(LF1A);
   autoFillWoodRoofFraming(graph, PROJECT, [region]);
@@ -1043,7 +1150,7 @@ test('【L字の下屋・撤去】[] で auto の小屋梁は全て撤去され�
   assert.ok(graph.beamMap.has(keep.id));
 });
 
-test('【L字の下屋・失敗系】rects が [] ・NaN・配列でない／leanToDrains が無い・[]・配列でない・不正／母屋の段の基準（奥行き）が無い・0・NaN／片流れ以外（rect=null）は小屋梁を作らず例外も投げない。既存の auto は撤去', () => {
+test('【L字の下屋・失敗系】rects が [] ・NaN・配列でない／leanToDrains が無い・[]・配列でない・不正／母屋の段の基準（奥行き）が無い・0・NaN は小屋梁を作らず例外も投げない（形状は問わない＝切妻の L字も同じ入口）。既存の auto は撤去', () => {
   const { graph, region } = makeLeanRoof(LF1A);
   const bad = [
     { ...region, rects: [] },
@@ -1059,8 +1166,6 @@ test('【L字の下屋・失敗系】rects が [] ・NaN・配列でない／lea
     { ...region, leanToPurlinDepthMm: null },
     { ...region, leanToPurlinDepthMm: 0 },
     { ...region, leanToPurlinDepthMm: NaN },
-    { ...region, shape: RoofShape.GABLE },
-    { ...region, shape: RoofShape.FLAT },
   ];
   for (const b of bad) {
     let r;

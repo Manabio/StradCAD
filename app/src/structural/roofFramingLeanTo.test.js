@@ -283,7 +283,7 @@ test('壁の区間: 隙間が許容差以下の接触は1つの壁に併合。�
 
 // ---- 入口（roofFramingLines・roofHipDiagonals）と既存の挙動 ----
 
-test('roofFramingLines・roofHipDiagonals: leanToDrains を渡すと rect=null の片流れだけ水下の場の母屋・継ぎ目を返す。渡さなければ今まで通り空', () => {
+test('roofFramingLines・roofHipDiagonals: leanToDrains を渡すと rect=null の L字（片流れ・切妻）の水下の場の母屋・継ぎ目を返す。渡さなければ今まで通り空', () => {
   const w = wingsOf(F1B);
   const base = { rect: null, rects: F1B.rects, shape: RoofShape.MONO, ridgeIsVertical: null, highSide: null, purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: TOL };
   const viaDrains = { leanToDrains: w.drains, leanToPurlinDepthMm: w.longDepthMm };
@@ -293,8 +293,11 @@ test('roofFramingLines・roofHipDiagonals: leanToDrains を渡すと rect=null �
   assert.deepEqual(roofFramingLines(base), { ridges: [], purlins: [] }, '渡さなければ空（矩形でない片流れは小屋組なし）');
   assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.MONO, leanToDrains: w.drains, tolMm: TOL }), fr.diagonals);
   assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.MONO, tolMm: TOL }), []);
-  assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.GABLE, leanToDrains: w.drains, tolMm: TOL }), [], '片流れ以外は使わない');
-  assert.deepEqual(roofFramingLines({ ...base, shape: RoofShape.GABLE, ...viaDrains }), { ridges: [], purlins: [] }, '片流れ以外は使わない');
+  // 切妻の L字（腕ごとに棟木）も同じ入口（水下を渡せば形状は問わない）。水下を渡さない切妻は空のまま
+  assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.GABLE, leanToDrains: w.drains, tolMm: TOL }), fr.diagonals, '形状は問わない');
+  assert.deepEqual(roofFramingLines({ ...base, shape: RoofShape.GABLE, ...viaDrains }), { ridges: fr.ridges, purlins: fr.purlins }, '形状は問わない');
+  assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.GABLE, tolMm: TOL }), [], '水下が無い切妻は空');
+  assert.deepEqual(roofFramingLines({ ...base, shape: RoofShape.GABLE }), { ridges: [], purlins: [] }, '水下が無い切妻は空');
   // rect があれば矩形の式（leanToDrains は無視）
   const rectCase = roofFramingLines({ rect: RECT, shape: RoofShape.MONO, highSide: 'top', ...viaDrains, purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: TOL });
   assert.deepEqual(rectCase.purlins.map(l => l.coord), [455, 1365, 2275]);

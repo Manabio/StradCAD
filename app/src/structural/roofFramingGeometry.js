@@ -9,11 +9,12 @@
  *   y が lo..hi）、false＝x 方向に走る線（y=coord 一定、x が lo..hi）。
  *
  * 屋根範囲は矩形 rect={x1,y1,x2,y2}（x1<x2, y1<y2）が基本（rect* の関数は矩形専用）。矩形でない範囲は、寄棟だけ
- * orthogonalHipLines（rects＝セル矩形。ステップ C2e-2）で棟木・母屋を導く。矩形でない切妻・片流れは空を返す。
+ * orthogonalHipLines（rects＝セル矩形。ステップ C2e-2）で棟木・母屋を導く。矩形でない切妻・片流れは、水下（leanToDrains）を渡さなければ空を返す。
  * 寄棟の隅木・谷木（斜め線）は棟木・母屋とは別の配列で、roofHipDiagonals / orthogonalHipDiagonals（ステップ C2e-2b）。
  * 矩形でない下屋の片流れ（L字）は、壁ごとの翼（leanToWingsOf。ステップ E1a）から流れの向きと辺の種別・水下（drains）を決め、
  * 母屋・棟木・継ぎ目の隅木・谷木は水下への L∞ 距離の場（leanToDrainFraming）で導く。leanToDrains 引数を渡したときだけ返す
- * （渡さなければ空）。小屋梁（woodRoofFraming.js）も同じ場の面（水下ごと）を使う。
+ * （渡さなければ空）。小屋梁（woodRoofFraming.js）も同じ場の面（水下ごと）を使う。矩形でない下屋の切妻（腕ごとに棟木）は、
+ * 軒とけらばを辺を掃いて決め（gableArmDrainsOf）、その水下を同じ場に渡す（形状は問わない）。
  *
  * 不正入力の扱い:
  *   - 「何も生えない」入力（rect=null・陸屋根・棟違い・未知の形状・幅/高さ 0 の矩形）は空を返す。
@@ -474,16 +475,17 @@ export function orthogonalHipDiagonals({ rects, tolMm }) {
  * @param {{x1:number,y1:number,x2:number,y2:number}|null} p.rect
  * @param {Array<object>|null} [p.rects]
  * @param {string} p.shape RoofShape の値
- * @param {Array<object>|null} [p.leanToDrains] L字の下屋の水下（leanToWingsOf の drains。rect=null の片流れだけ。既定 null）
+ * @param {Array<object>|null} [p.leanToDrains] L字の下屋の水下（leanToWingsOf／gableArmDrainsOf の drains。rect=null の片流れ・切妻。既定 null）
  * @param {number} p.tolMm 許容差（>=0）
  * @returns {Array<{kind:'hip'|'valley', x1:number, y1:number, x2:number, y2:number}>}
  * @throws {RangeError} 許容差が不正、rect の座標が非有限か逆順、leanToDrains が不正
  */
 export function roofHipDiagonals({ rect, rects = null, shape, leanToDrains = null, tolMm }) {
   requireNonNegative(tolMm, 'tolMm');
-  // L字（矩形でない）の下屋の片流れ（rect=null・水下＝leanToWingsOf の drains）は水下への距離の場の継ぎ目（隅木・谷木）。
-  // 寄棟ではないが斜め線の入口はここ1つ。ピッチは斜め線に効かない
-  if (!rect && shape === RoofShape.MONO && Array.isArray(leanToDrains)) {
+  // L字（矩形でない）の下屋の片流れ・切妻（rect=null・水下＝leanToWingsOf／gableArmDrainsOf の drains）は水下への距離の場の
+  // 継ぎ目（隅木・谷木）。形状は問わない。寄棟ではないが斜め線の入口はここ1つ。ピッチは斜め線に効かない。
+  // 水下を寄棟より先に見るが（roofFramingLines は寄棟が先）、寄棟の region は leanToDrains を持たないので順序の違いは到達しない
+  if (!rect && Array.isArray(leanToDrains)) {
     return leanToDrainField({ rects, drains: leanToDrains, tolMm }, { diagonals: true }).diagonals;
   }
   if (shape !== RoofShape.HIP) return [];
@@ -1288,7 +1290,7 @@ export function orthogonalChord({ rects, isVertical, coord, lo, hi, tolMm }) {
  * @param {string} p.shape RoofShape の値
  * @param {boolean} [p.ridgeIsVertical] 切妻の棟が y 方向か
  * @param {string|null} [p.highSide] 片流れの高い側
- * @param {Array<object>|null} [p.leanToDrains] L字の下屋の水下（leanToWingsOf の drains。rect=null・片流れのときだけ使う。
+ * @param {Array<object>|null} [p.leanToDrains] L字の下屋の水下（leanToWingsOf／gableArmDrainsOf の drains。rect=null・片流れか切妻のときだけ使う。
  *   渡さなければ今まで通り＝空）。母屋・棟木は水下への L∞ 距離の場（leanToDrainFraming）で、段は水下から
  *   r + k×purlinPitchMm（r＝長手方向の翼の奥行 leanToPurlinDepthMm に purlinLayoutFromRidge を当てた軒までの残り）
  * @param {number|null} [p.leanToPurlinDepthMm] 長手方向の翼の奥行き（leanToWingsOf の longDepthMm。leanToDrains を渡すとき必須）
@@ -1312,9 +1314,9 @@ export function roofFramingLines({ rect, rects = null, shape, ridgeIsVertical, h
     if (shape === RoofShape.HIP && Array.isArray(rects) && rects.length > 0) {
       return orthogonalHipLines({ rects, pitchMm: purlinPitchMm, tolMm });
     }
-    // L字（矩形でない）の下屋の片流れ: 水下への L∞ 距離の場の母屋・棟木。母屋の段は全ての面で同じ r + k×ピッチ
-    // （r＝長手方向の翼の奥行きに purlinLayoutFromRidge を当てた、軒までの残り）
-    if (shape === RoofShape.MONO && Array.isArray(leanToDrains)) {
+    // L字（矩形でない）の下屋の片流れ・切妻（形状は問わない）: 水下への L∞ 距離の場の母屋・棟木。母屋の段は全ての面で同じ
+    // r + k×ピッチ（r＝長手方向の翼（切妻は腕）の奥行きに purlinLayoutFromRidge を当てた、軒までの残り）
+    if (Array.isArray(leanToDrains)) {
       requirePositive(leanToPurlinDepthMm, 'leanToPurlinDepthMm');
       const { eaveGapMm } = purlinLayoutFromRidge({ halfSpanMm: leanToPurlinDepthMm, ...layout });
       const { ridges, purlins } = leanToDrainField({ rects, drains: leanToDrains, pitchMm: purlinPitchMm, firstLevelMm: eaveGapMm, tolMm }, { lines: true });
@@ -1345,7 +1347,7 @@ const RIDGE_ONLY_START_OFFSETS_MM = Object.freeze([455, 910]);
 
 /**
  * 棟木の線だけ（平面の表示用。ステップ1）。roofFramingLines の ridges と同じ結果で、切妻（rect）・寄棟（rect か rects）のときだけ
- * 返す。ほかに、L字の下屋の片流れ（rect=null・leanToDrains あり）は向かい合う水下の棟木（無ければ空）。矩形の片流れ・陸屋根・
+ * 返す。ほかに、L字の下屋の片流れ・切妻（rect=null・leanToDrains あり）は向かい合う水下の棟木（無ければ空）。矩形の片流れ・陸屋根・
  * 棟違い・未知の形状は空（片流れは highSide 無しでも例外にしない）。引数の意味は roofFramingLines と同じ。
  * @param {object} p
  * @param {{x1:number,y1:number,x2:number,y2:number}|null} p.rect
@@ -1359,9 +1361,9 @@ const RIDGE_ONLY_START_OFFSETS_MM = Object.freeze([455, 910]);
  * @throws {RangeError} 許容差が不正、rect の座標が非有限か逆順
  */
 export function roofRidgeLines({ rect, rects = null, shape, ridgeIsVertical, leanToDrains = null, leanToPurlinDepthMm = null, tolMm }) {
-  // L字（矩形でない）の下屋の片流れは、向かい合う水下があるときだけ棟木が出る（水下への距離の場。伏図と同じ線）。
+  // L字（矩形でない）の下屋の片流れ・切妻は、向かい合う水下があるときだけ棟木が出る（水下への距離の場。伏図と同じ線）。
   // 棟木は段の始まり・ピッチに依らないので、ピッチ・候補は固定値でよい（leanToPurlinDepthMm は入口の検査のために要る）
-  const leanTo = !rect && shape === RoofShape.MONO && Array.isArray(leanToDrains);
+  const leanTo = !rect && Array.isArray(leanToDrains);
   if (shape !== RoofShape.GABLE && shape !== RoofShape.HIP && !leanTo) return [];
   return roofFramingLines({
     rect, rects, shape, ridgeIsVertical, leanToDrains, leanToPurlinDepthMm,
@@ -1769,6 +1771,68 @@ function leanToLongDepthOf(wings, drains, tolMm) {
     return (Math.abs(diff) > tolMm ? diff : 0) || p.index - q.index;
   });
   return matches[0].w.depthMm;
+}
+
+/**
+ * L字（矩形でない）の切妻の下屋の軒とけらば（純関数。腕ごとに棟木）。屋根範囲の外周を、まっすぐな辺（穴の辺も）ごとに、
+ * 辺の幅いっぱいのまま内側へ平行に掃き、一部でも外周に当たるまでの距離 L（その辺を一辺とする最大の矩形の奥行き）を求める。
+ * 辺がけらば（腕の端）になるのは、両端の角がどちらも出隅（凸）で、かつ辺の長さ w に対し L > w + tolMm のときだけ。それ以外は軒（水下）。
+ * 入隅（凹）の角に接する辺（腕の内側の辺）は L が長くても必ず軒。同じ長さ（L＝w）も軒＝正方形の腕はけらばを持たない。穴の辺は
+ * 角が屋根範囲から見て入隅なので必ず軒。
+ * 壁（屋内に接する辺）も同じ規則で分類する（軒になった壁は出幅 0 の水下＝壁へ下る面、けらばになった壁は腕の棟木がそこで止まる）。
+ * 棟木・母屋・隅木・谷木・面は、この水下を leanToDrainFraming（水下への L∞ 距離の場）に渡して求める。
+ * 矩形を渡すと、長辺（w が大きい側）が軒・短辺がけらば、正方形は4辺とも軒（呼び出し側は矩形には使わない）。
+ * 長手方向の腕＝けらばの辺のうち掃いた深さ L が最大のもの（差が tolMm 以内は同じ。同じなら幅 w が広い方）の幅の半分が
+ * longHalfSpanMm（母屋の段の基準 leanToPurlinDepthMm）。けらばが無い（すべて軒）形・使える矩形が無い形は longHalfSpanMm=null
+ * （呼び出し側は region を作らず、外形線だけの補完 region にする）。
+ * @param {object} p
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>} p.rects 屋根範囲のセル矩形（幅か高さが tolMm 以下は無視。空なら空の結果）
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {{drains: Array<{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1}>,
+ *   kindZones: Array<{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1,kind:'eave'|'gable'}>, longHalfSpanMm: number|null}}
+ *   drains＝軒の辺（leanToDrainFraming に渡せる形）、kindZones＝全辺（roofOutline の kindZones に渡す）
+ * @throws {RangeError} tolMm が不正、rects が配列でない・座標が非有限か逆順
+ */
+export function gableArmDrainsOf({ rects, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  const field = buildOrthoField(rects, tolMm); // rects の検査もここ
+  if (!field) return { drains: [], kindZones: [], longHalfSpanMm: null };
+  const { xs, ys, cellFilled } = field;
+  const drains = [];
+  const kindZones = [];
+  let longest = null; // 長手方向の腕＝けらばのうち L 最大（同じなら w が広い）
+  for (const e of orthogonalBoundaryLoops({ rects, tolMm }).flat()) {
+    const along = e.isVertical ? ys : xs;
+    const across = e.isVertical ? xs : ys;
+    const l0 = nearestIndexOf(along, e.lo);
+    const l1 = nearestIndexOf(along, e.hi);
+    const ci = nearestIndexOf(across, e.coord);
+    const step = -e.outward; // 内側へ
+    const filledAt = (l, s) => (e.isVertical ? cellFilled(s, l) : cellFilled(l, s));
+    let s = step > 0 ? ci : ci - 1;
+    let last = null;
+    while (s >= 0 && s + 1 < across.length) {
+      let allFilled = true;
+      for (let l = l0; l < l1 && allFilled; l++) allFilled = filledAt(l, s);
+      if (!allFilled) break;
+      last = s;
+      s += step;
+    }
+    const far = last === null ? e.coord : across[step > 0 ? last + 1 : last];
+    const sweptMm = Math.abs(far - e.coord);
+    const widthMm = e.hi - e.lo;
+    // 腕の端は両端の角がどちらも出隅（凸）の辺だけ。端で辺が途切れる位置の内側のセルが塗られていれば、その角は入隅（凹）
+    const reflexLo = l0 > 0 && filledAt(l0 - 1, step > 0 ? ci : ci - 1);
+    const reflexHi = l1 < along.length - 1 && filledAt(l1, step > 0 ? ci : ci - 1);
+    const kind = !reflexLo && !reflexHi && sweptMm > widthMm + tolMm ? 'gable' : 'eave';
+    kindZones.push({ isVertical: e.isVertical, coord: e.coord, lo: e.lo, hi: e.hi, outward: e.outward, kind });
+    if (kind === 'eave') {
+      drains.push({ isVertical: e.isVertical, coord: e.coord, lo: e.lo, hi: e.hi, outward: e.outward });
+    } else if (longest === null || sweptMm > longest.sweptMm + tolMm || (Math.abs(sweptMm - longest.sweptMm) <= tolMm && widthMm > longest.widthMm)) {
+      longest = { sweptMm, widthMm };
+    }
+  }
+  return { drains, kindZones, longHalfSpanMm: longest === null ? null : longest.widthMm / 2 };
 }
 
 // ---- L字の下屋: 水下への L∞ 距離の場（母屋・棟木・隅木・谷木・面。翼は流れの向きと辺の種別・水下を決めるだけ） ----

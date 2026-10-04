@@ -124,14 +124,23 @@ test('roofPlanFigure: L字の片流れ（屋内に接しない。両翼が同じ
 });
 
 
-test('roofPlanFigure: 切妻になる L字・棟違い・陸屋根は暫定で外形線だけ（棟木・隅木なし）', () => {
+test('roofPlanFigure: 切妻の L字は腕ごとに棟木（自動で切妻・明示の切妻）。棟木はけらばの外形線まで延び、隅木・谷木は軒先の角から', () => {
   const big = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
-  big.roof([[0, 0], [1, 0], [0, 1]]); // 自動で切妻になる L字
-  assert.deepEqual(countByRole(roofPlanFigure(big.graph)), { outline: 1, ridge: 0, hip: 0, valley: 0 });
-  for (const shape of [RoofShape.STAGGERED, RoofShape.FLAT, RoofShape.GABLE]) {
+  big.roof([[0, 0], [1, 0], [0, 1]]); // 自動で切妻になる L字（幅 4000 の腕2本。右端の辺・下端の辺がけらば）
+  const prims = roofPlanFigure(big.graph);
+  assert.deepEqual(countByRole(prims), { outline: 1, ridge: 2, hip: 1, valley: 1 });
+  assert.deepEqual(prims.filter(p => p.role === 'ridge').map(p => p.points), [[2000, 2000, 8455, 2000], [2000, 2000, 2000, 8455]], '棟木は腕の幅の中心。けらば（右端・下端）の外形線まで 455 延びる');
+  assert.deepEqual(prims.find(p => p.role === 'hip').points, [-455, -455, 2000, 2000]);
+  assert.deepEqual(prims.find(p => p.role === 'valley').points, [4455, 4455, 2000, 2000]);
+  const explicit = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
+  explicit.roof([[1, 1], [2, 1], [1, 2]], RoofShape.GABLE); // 明示の切妻（短手が 3640 以下でも切妻）
+  const ep = roofPlanFigure(explicit.graph);
+  assert.deepEqual(countByRole(ep), { outline: 1, ridge: 2, hip: 2, valley: 1 }, '明示の切妻の L字');
+  assert.deepEqual(ep.filter(p => p.role === 'ridge').map(p => p.points), [[3250, 2250, 6455, 2250], [3000, 2500, 3000, 4955]]);
+  for (const shape of [RoofShape.STAGGERED, RoofShape.FLAT]) {
     const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
     g.roof([[1, 1], [2, 1], [1, 2]], shape);
-    assert.deepEqual(countByRole(roofPlanFigure(g.graph)), { outline: 1, ridge: 0, hip: 0, valley: 0 }, `L字・明示の ${shape}`);
+    assert.deepEqual(countByRole(roofPlanFigure(g.graph)), { outline: 1, ridge: 0, hip: 0, valley: 0 }, `L字・明示の ${shape}（外形線だけ）`);
   }
   for (const shape of [RoofShape.STAGGERED, RoofShape.FLAT]) {
     const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
@@ -252,6 +261,82 @@ test('壁あり: 壁に当たらない端・壁から離れた（reach の外の
   assert.deepEqual(after.points, bare.points);
 });
 
+/** roof-test8 型の切妻の L字（屋内 x3640..7280 × y-9884..-3640 の下・右を回る。横の腕 幅 3640・縦の腕 幅 1820）。cx・cy は通り芯。 */
+function makeGableL() {
+  const g = makeGrid([3640, 7280, 9100], [-9884, -3640, 0]);
+  g.interior([[0, 0]]);
+  g.roof([[0, 1], [1, 1], [1, 0]], RoofShape.GABLE);
+  return g;
+}
+
+test('roofPlanFigure: 切妻の L字（roof-test8 型）は棟木2（腕ごと）・隅木2・谷木1。棟木はけらばの外形線まで延び、隅木は軒先の出隅から、谷木は出幅 0 の入隅なので延びない', () => {
+  const g = makeGableL();
+  const prims = roofPlanFigure(g.graph);
+  assert.deepEqual(countByRole(prims), { outline: 1, ridge: 2, hip: 2, valley: 1 });
+  assert.deepEqual(prims.filter(p => p.role === 'ridge').map(p => p.points), [
+    [3185, -1820, 7280, -1820], // 横の腕: 左端（けらば）で 455 延びる・右端（内部）は延びない
+    [8190, -10339, 8190, -2730], // 縦の腕: 上端（けらば）で 455 延びる・下端（広い腕の面に当たる内部）は延びない
+  ]);
+  assert.deepEqual(prims.filter(p => p.role === 'hip').map(p => p.points), [
+    [8190, -2730, 7280, -1820], // 両端とも内部
+    [9555, 455, 7280, -1820], // 下辺・右辺の軒先の出隅 (9100,0) から外へ 455 ずつ
+  ]);
+  assert.deepEqual(prims.find(p => p.role === 'valley').points, [7280, -3640, 8190, -2730], '谷木は出幅 0 の壁どうしの入隅 (7280,-3640) から。延ばさない');
+  const outline = prims.find(p => p.role === 'outline');
+  assert.equal(outline.closed, false, '屋内に接する2辺を除いた開いた折れ線');
+  assert.deepEqual(outline.points, [6825, -9884, 6825, -10339, 9555, -10339, 9555, 455, 3185, 455, 3185, -4095, 3640, -4095], '両端は建物の出隅（(7280,-9884)・(3640,-3640)）を回り込んで外壁の線で止まる（33505af の規則が切妻の L字でも効く）');
+});
+
+test('roofPlanFigure: 切妻の L字の傾斜ラベルは4面（軒の辺ごと）。壁へ下る2面（壁 y=-3640・壁 x=7280）にも出て、矢印は壁の向き', () => {
+  const g = makeGableL();
+  const arrows = arrowsOf(roofPlanFigureAll(g.graph));
+  assert.equal(arrows.length, 4);
+  const dir = a => [Math.sign(a.points[2] - a.points[0]), Math.sign(a.points[3] - a.points[1])].join(',');
+  assert.deepEqual(arrows.map(dir).sort(), ['-1,0', '0,-1', '0,1', '1,0'], '右・下・壁 x=7280（左向き）・壁 y=-3640（上向き）');
+  const towardWallX = arrows.find(a => dir(a) === '-1,0');
+  assert.ok(towardWallX.points[0] > 7280 && towardWallX.points[2] > 7280, '壁 x=7280 へ向かう矢印は屋根範囲（x>7280）の中');
+  const towardWallY = arrows.find(a => dir(a) === '0,-1');
+  assert.ok(towardWallY.points[1] > -3640 && towardWallY.points[3] > -3640, '壁 y=-3640 へ向かう矢印は屋根範囲（y>-3640）の中');
+});
+
+test('roofPlanFigure: 切妻の L字で壁あり: 壁に当たる端（谷木の入隅の端・外形線の両端）だけ外壁面で止まり、棟木・隅木は変わらない', () => {
+  const g = makeGableL();
+  const bare = roofPlanFigure(g.graph);
+  // 壁 y=-3640（屋根側 +y の外端 -3565）・壁 x=7280（外端 7355）・建物の左の外壁 x=3640（外端 3565）・上の外壁 y=-9884（外端 -9959）
+  addWallOn(g.graph, g.cy[1], 75, false, g.cx[0], g.cx[1]);
+  addWallOn(g.graph, g.cx[1], 75, true, g.cy[0], g.cy[1]);
+  addWallOn(g.graph, g.cx[0], -75, true, g.cy[0], g.cy[1]);
+  addWallOn(g.graph, g.cy[0], -75, false, g.cx[0], g.cx[1]);
+  const after = roofPlanFigure(g.graph);
+  assert.equal(after.length, bare.length, '線の数は変わらない');
+  const moved = after.filter((p, i) => JSON.stringify(p.points) !== JSON.stringify(bare[i].points));
+  assert.deepEqual(moved.map(p => p.role).sort(), ['outline', 'valley']);
+  assert.deepEqual(after.find(p => p.role === 'valley').points, [7355, -3565, 8190, -2730], '谷木の壁側の端は両壁の外面の角へ（45° に 75 戻る）');
+  assert.deepEqual(after.find(p => p.role === 'outline').points, [6825, -9959, 6825, -10339, 9555, -10339, 9555, 455, 3185, 455, 3185, -4095, 3565, -4095], '回り込みの両端だけ外壁の外面へ');
+});
+
+test('roofPlanFigure: 切妻の L字・十字で、腕の突き出しが幅より短い形でも、ラベルの数＝水下の数（描いた面の数）・棟木は腕ごと（入隅に接する辺は軒）', () => {
+  const build = (xs, ys, cells, interiorCells = null) => {
+    const g = makeGrid(xs, ys);
+    if (interiorCells) g.interior(interiorCells);
+    g.roof(cells, RoofShape.GABLE);
+    return g.graph;
+  };
+  const cases = [
+    { name: 'roof-test8 の横の腕を x=4550 始まり（突き出し 2730 ＜ 幅 3640）', graph: build([4550, 7280, 9100], [-9884, -3640, 0], [[0, 1], [1, 1], [1, 0]], [[0, 0]]), faces: 4, ridges: 2 },
+    { name: '明示切妻の L字（x2000..6000×y1500..3000＋x2000..4000×y3000..4500）', graph: build([0, 2000, 4000, 6000], [0, 1500, 3000, 4500], [[1, 1], [2, 1], [1, 2]]), faces: 4, ridges: 2 },
+    { name: '本体＋突起', graph: build([0, 2730, 7280], [0, 5460, 6370], [[0, 0], [1, 0], [0, 1]]), faces: 4, ridges: 2 },
+    { name: '十字', graph: build([0, 3640, 5460, 9100], [0, 3640, 7280, 10920], [[1, 0], [0, 1], [1, 1], [2, 1], [1, 2]]), faces: 8, ridges: 3 },
+  ];
+  for (const c of cases) {
+    const [region] = leanToPlanRegions(c.graph);
+    assert.equal(region.planDrains.length, c.faces, `${c.name}: 水下（面）の数`);
+    const prims = roofPlanFigureAll(c.graph);
+    assert.equal(arrowsOf(prims).length, c.faces, `${c.name}: ラベル（矢印）の数＝描いた面の数`);
+    assert.equal(countByRole(prims.filter(p => p.kind === 'line')).ridge, c.ridges, `${c.name}: 棟木`);
+  }
+});
+
 // ---- 傾斜ラベル（詳細 LOD の「屋根」・水下向きの矢印・「（傾斜N/10）」） ----
 
 const labelsOf = prims => prims.filter(p => p.kind !== 'line');
@@ -329,7 +414,7 @@ test('roofSlopeLabelPrimitives: 面ごとに key が一意。傾斜が 2.5 な�
   assert.deepEqual(roofSlopeLabelPrimitives({ key: 'k', anchors: [], slope: 3 }), []);
 });
 
-test('roofPlanFigure: 傾斜面の数（形状ごと）。片流れ1・切妻2・寄棟4・L字の寄棟6・L字の片流れ2。陸屋根・切妻になる L字・棟違いは 0', () => {
+test('roofPlanFigure: 傾斜面の数（形状ごと）。片流れ1・切妻2・寄棟4・L字の寄棟6・L字の片流れ2・L字の切妻4（軒の辺ごと）。陸屋根・棟違いは 0', () => {
   const count = (cells, shape, grid = [[0, 4000, 8000], [0, 4000, 8000]], setup = null) => {
     const g = makeGrid(...grid);
     if (setup) setup(g);
@@ -342,7 +427,7 @@ test('roofPlanFigure: 傾斜面の数（形状ごと）。片流れ1・切妻2�
   assert.equal(count([[0, 0], [1, 0], [0, 1]], RoofShape.HIP), 6, 'L字の寄棟（外周6辺）');
   assert.equal(count([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.FLAT), 0, '陸屋根');
   assert.equal(count([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.STAGGERED), 0, '棟違い');
-  assert.equal(count([[0, 0], [1, 0], [0, 1]], RoofShape.GABLE), 0, '切妻になる L字は外形線だけ');
+  assert.equal(count([[0, 0], [1, 0], [0, 1]], RoofShape.GABLE), 4, 'L字の切妻（軒の4辺が水下＝4面。けらばの2辺は面を持たない）');
   assert.equal(count([[0, 0], [1, 0], [0, 1]], RoofShape.FLAT), 0, '陸屋根の L字');
   // roof-test1 型の L字の片流れ: 屋内（上の左）に接し、水下が右と下の2面
   const l = makeGrid([3640, 7280, 9100], [-9884, -3640, 0]);

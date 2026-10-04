@@ -31,6 +31,8 @@
 //   「支えの無い端の区間」の除外は設けない）**・小屋梁と他の梁の内部での交差（NG）・同じ軸で重なる小屋梁（NG）・取り残し
 //   （unassigned。報告だけで NG にしない＝形によっては残りうる既知の限界）。stray 検査（region の無い階に auto の小屋梁が残って
 //   いないか）は構造側の region（leanToFraming）で行う。
+//   切妻の L字（shape:'gable'・翼なし・leanToDrains あり。腕ごとに棟木。軒・けらばは gableArmDrainsOf）も同じ表示と検査を通る
+//   （翼の表は片流れだけ。取り残しは翼が無いので常に 0 件）。
 // 【通らない経路】なし（矩形・矩形でない寄棟・L字の片流れの主屋根・下屋）。ただし L字の「面」が複数ある形の実データは roof-test1 だけ。
 //
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/roofFramingProbe.mjs [入力.stq]   （既定: moku4）
@@ -152,10 +154,11 @@ function printWings(region, F) {
  * @returns {number} 取り残しの本数（報告だけ。NG にしない）
  */
 function printLeanToDrawing(region, F, ms) {
-  const wings = region.leanToWings;
+  const wings = region.leanToWings ?? null; // 切妻の L字（腕ごとに棟木）は翼を持たない（軒・けらばは gableArmDrainsOf で辺を掃いて決める）
   const lineName = l => `${l.isVertical ? 'x' : 'y'}=${l.coord} ${l.lo}..${l.hi}`;
-  console.log(`--- 翼 ${wings.length} 枚（順＝作った順）。計算時間 ${ms.toFixed(1)}ms（leanToFramingRegions の1階分） ---`);
-  wings.forEach((w, i) => {
+  if (wings) console.log(`--- 翼 ${wings.length} 枚（順＝作った順）。計算時間 ${ms.toFixed(1)}ms（leanToFramingRegions の1階分） ---`);
+  else console.log(`--- 切妻の L字（翼なし。腕ごとに棟木）。形状=${region.shape}。計算時間 ${ms.toFixed(1)}ms（leanToFramingRegions の1階分） ---`);
+  (wings ?? []).forEach((w, i) => {
     const r = w.rect;
     const ext = w.domain.filter(d => d.entry !== 'direct').map(d => `x ${d.x1}..${d.x2} × y ${d.y1}..${d.y2}（入り口 ${d.entry}）`);
     console.log(`  W${i + 1} 流れ=${w.highSide} 壁 ${lineName(w.wallEdge)} 奥行き=${w.depthMm} rect x ${r.x1}..${r.x2} × y ${r.y1}..${r.y2}  延長: ${ext.join(' / ') || '-'}`);

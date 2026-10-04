@@ -195,5 +195,5 @@ console.log('wrote', outPath, json.length, 'bytes');
 
 // 目視用の組合せ（D:/tatsuya/Download。入力は roof-test1〜3 と同じ文書から作る）:
 //   roof-test5  = roof-test3 → gable    roof-test6 = roof-test3 → hip    roof-test7 = roof-test3 → flat
-//   roof-test8  = roof-test1 → gable（L字の切妻＝暫定の外形線だけ）    roof-test9 = roof-test1 → hip（L字の寄棟）
+//   roof-test8  = roof-test1 → gable（L字の切妻＝腕ごとに棟木）    roof-test9 = roof-test1 → hip（L字の寄棟）
 //   roof-test10 = roof-test2（13＝S造）→ gable

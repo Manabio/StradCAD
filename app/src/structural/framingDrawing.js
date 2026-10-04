@@ -275,7 +275,7 @@ function requireWidth(v, name) {
  * @param {object} p
  * @param {Array<{key:string, rect:object|null, rects?:object[], shape:string, ridgeIsVertical:boolean|null, highSide:string|null, outline?:Array<{points:number[]}>}>} p.regions roofFramingRegions.js の戻り値
  *   （rect=null の region は矩形でない寄棟で、rects＝セル矩形から棟木・母屋を導く。leanToDrains・leanToPurlinDepthMm を持つ
- *   rect=null の片流れは L字の下屋で、水下への距離の場の棟木・母屋・継ぎ目の斜め線）
+ *   rect=null の片流れ・切妻は L字の下屋で、水下への距離の場の棟木・母屋・継ぎ目の斜め線）
  * @param {Array<{isVertical:boolean, axis:number, lo:number, hi:number}>} p.hostBeams roofFramingHostMembers の戻り値
  * @param {number} p.ridgeWidthMm
  * @param {number} p.purlinWidthMm

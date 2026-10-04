@@ -15,7 +15,11 @@
  *       （翼＝leanToWingsOf。leanToDrains＝水下・leanToPurlinDepthMm＝母屋の段の基準＝長手方向の翼の奥行き。
  *       描画の母屋・棟木・隅木・谷木は水下への距離の場［leanToDrainFraming］、外周の梁・床梁のガードは翼のセル、
  *       小屋梁［面ごと。woodRoofFraming.js］は水下ごとの面）。
- *       他の形状の矩形でない下屋は region なし
+ *     ・下屋の切妻（L字。腕ごとに棟木）:
+ *       { key:'lean:…', rect:null, rects, shape:'gable', ridgeIsVertical:null, highSide:null, leanToDrains, leanToPurlinDepthMm }
+ *       （翼は持たない。軒・けらばは gableArmDrainsOf が辺を掃いて決め、leanToDrains＝軒の辺・leanToPurlinDepthMm＝長手方向の腕の
+ *       半スパン。水下が空・けらばが無い形は region なし）
+ *       他の形状（寄棟・陸屋根・棟違い）の矩形でない下屋は region なし
  *   - 形状（自動なら導いた形状）が片流れ・切妻・寄棟（陸屋根・棟違いは小屋組を持たない）
  * ridgeIsVertical は切妻だけ spec.ridgeDirection（指定が無ければ長手）に従う。他の形状は常に長手。
  * 形状・範囲・高い側の判断は既存の関数（mainRoof.js・roofDefaults.js・roofOrientation.js・roofGeometry.js）を
@@ -37,7 +41,7 @@ import { resolveRoofShape, roofRoomBounds } from '../finish/roof/roofDefaults.js
 import { roofHighSideViewOfRoom, roofEdgeInteriorContacts, roofBoundaryInteriorContacts, roofInteriorRects } from '../finish/roof/roofOrientation.js';
 import { rectOfBounds, resolveRoofRidgeIsVertical } from '../finish/roof/roofGeometry.js';
 import { refreshCells } from '../finish/gridCells.js';
-import { roofRidgeIsVertical, roofOutline, roofOutlineExposedPaths, orthogonalBoundaryLoops, leanToWingsOf, eaveBeamCorners } from './roofFramingGeometry.js';
+import { roofRidgeIsVertical, roofOutline, roofOutlineExposedPaths, orthogonalBoundaryLoops, leanToWingsOf, gableArmDrainsOf, eaveBeamCorners } from './roofFramingGeometry.js';
 import { showRoofFraming, roofFramingWidths, roofFramingHostMembers, roofFramingPrimitives } from './framingDrawing.js';
 
 /** 小屋組を持つ形状（陸屋根・棟違いは持たない）。 */
@@ -115,12 +119,12 @@ export function mainRoofFramingRegion(topGraph, project) {
 
 /**
  * 下屋の region と、その元の部屋の組（leanToFramingRegions・leanToFramingCellKeys の共通の導出）。
- * 矩形でない下屋（L字）の片流れも region にする（描画・外周の梁・床梁のガード・小屋梁が同じ region を使う。ステップ E2b）。
- * L字の region は
+ * 矩形でない下屋（L字）の片流れと切妻も region にする（描画・外周の梁・床梁のガード・小屋梁が同じ region を使う。ステップ E2b）。
+ * 片流れの L字の region は
  * { key, rect:null, rects, shape:'mono', ridgeIsVertical:null, highSide:null, leanToWings, leanToUnassigned, leanToDrains,
- *   leanToPurlinDepthMm, edges, outline }。
- * 形状（自動なら導いた形状）が片流れのときだけ（切妻になる L字・明示の寄棟や陸屋根は region なし）。翼がひとつも
- * 作れなければ（屋根範囲に有効なセルが無い）region なし。
+ *   leanToPurlinDepthMm, edges, outline }。切妻の L字は gableArmRegion（翼なし）。
+ * 形状（自動なら導いた形状）が片流れ・切妻のときだけ（明示の寄棟・陸屋根・棟違いは region なし）。翼がひとつも
+ * 作れなければ（屋根範囲に有効なセルが無い）・切妻で水下が空なら region なし。
  */
 function leanToFramingEntries(graph, project) {
   if (!graph) return [];
@@ -135,6 +139,25 @@ function leanToFramingEntries(graph, project) {
 }
 
 /**
+ * 矩形でない（L字などの）切妻の下屋の region（腕ごとに棟木）。軒とけらばは gableArmDrainsOf（辺を掃く）で決め、水下＝軒の辺。
+ * { key, rect:null, rects, shape:'gable', ridgeIsVertical:null, highSide:null, leanToDrains, leanToPurlinDepthMm（＝長手方向の
+ * 腕の半スパン）, edges, outline }（翼 leanToWings・leanToUnassigned は持たない）。水下が空・けらばが無い形は null
+ * （呼び出し側は外形線だけの補完 region にする）。
+ */
+function gableArmRegion(room, graph, rects) {
+  const { drains, kindZones, longHalfSpanMm } = gableArmDrainsOf({ rects, tolMm: CL_OVERLAP_TOL_MM });
+  if (drains.length === 0 || longHalfSpanMm === null) return null;
+  const edges = orthogonalBoundaryLoops({ rects, tolMm: CL_OVERLAP_TOL_MM }).flat();
+  const interiorRects = roofInteriorRects(graph);
+  const contacts = roofBoundaryInteriorContacts(edges, graph, interiorRects); // 屋内に接する区間は出幅 0
+  const region = {
+    key: `lean:${room.id}`, rect: null, rects, shape: RoofShape.GABLE, ridgeIsVertical: null, highSide: null,
+    leanToDrains: drains, leanToPurlinDepthMm: longHalfSpanMm,
+  };
+  return { region: withOutline(region, room.roofSpec, contacts, kindZones, interiorRects), zeroZones: contacts, kindZones, interiorRects };
+}
+
+/**
  * 下屋1部屋の小屋組の region（構造ゲートは見ない。leanToFramingEntries が部屋ごとに呼ぶ）。region にならなければ null。
  * zeroZones・kindZones は region の外形線に使った出幅 0 の区間・辺の部分ごとの種別（平面の exposedPaths が同じ入力で
  * roofOutlineExposedPaths を呼ぶために返す。矩形は kindZones=null）。
@@ -145,7 +168,10 @@ function framingRegionOfRoom(room, graph) {
   const rect = rectOfBounds(boundsList);
   if (!rect) {
     const rects = validCellRects(boundsList);
-    if (!rects || resolveRoofShape(room.roofSpec, { boundsList }) !== RoofShape.MONO) return null;
+    if (!rects) return null;
+    const shape = resolveRoofShape(room.roofSpec, { boundsList });
+    if (shape === RoofShape.GABLE) return gableArmRegion(room, graph, rects);
+    if (shape !== RoofShape.MONO) return null;
     const edges = orthogonalBoundaryLoops({ rects, tolMm: CL_OVERLAP_TOL_MM }).flat();
     const interiorRects = roofInteriorRects(graph); // 屋内のセル矩形（接する区間と外形線の回り込みの判定が共用）
     const contacts = roofBoundaryInteriorContacts(edges, graph, interiorRects); // 屋内に接する区間＝翼の壁・出幅 0 の区間
@@ -168,7 +194,7 @@ function framingRegionOfRoom(room, graph) {
 
 /**
  * 平面の表示（軒先・棟木・隅木・谷木の線）だけのための補完 region。framingRegionOfRoom が null のとき（陸屋根・棟違い・
- * 切妻になる L字・片流れで翼が0の L字・明示の寄棟の L字）に作る。範囲が空・不正なら null。
+ * 水下が空になる切妻の L字・片流れで翼が0の L字・明示の寄棟の L字）に作る。範囲が空・不正なら null。
  * 外形線は全辺を軒とみなす（kindZones＝全辺 'eave'。roofEdgeKind は陸屋根で RangeError のため kindZones の経路を通す）。
  * 明示の寄棟の L字だけ shape が寄棟で、棟木・隅木・谷木が導かれる。他は shape を実効値のままにするが線は外形だけ
  * （roofRidgeLines・roofHipDiagonals が寄棟・L字の片流れの水下以外に空を返す）。
@@ -218,7 +244,7 @@ export function leanToPlanRegions(graph) {
 
 /**
  * 平面の傾斜ラベル用の水下（流れの先の軒の辺。{isVertical, coord, lo, hi, outward}）。矩形の片流れ＝高い側の反対の辺・切妻＝棟木と
- * 平行な2辺・寄棟（矩形でないものも）＝全辺・L字の片流れ＝leanToDrains。陸屋根・外形線だけの region（切妻になる L字・棟違い・
+ * 平行な2辺・寄棟（矩形でないものも）＝全辺・L字の片流れと切妻＝leanToDrains。陸屋根・外形線だけの region（水下が空の切妻の L字・棟違い・
  * 翼が無い L字）は []（ラベルなし）。
  */
 function planDrainsOf(region) {

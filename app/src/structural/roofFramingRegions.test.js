@@ -239,11 +239,9 @@ test('【E1b】L字の下屋が屋内に接する（形1a。出隅の回り込�
   assert.deepEqual(region.edges.filter(e => e.overhangMm === 0).map(e => [e.isVertical, e.coord, e.lo, e.hi]), [[false, 3640, 0, 3640], [true, 3640, 0, 3640]], '屋内に接する辺だけ出幅 0');
 });
 
-test('【E1b・失敗系】L字の下屋のうち、形状が自動で切妻になる（短手3640超）・明示の寄棟・陸屋根・棟違いは region にならない。非在来も空', () => {
-  const big = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
-  big.roof([[0, 0], [1, 0], [0, 1]]); // 外接 8000×8000 の L字。自動の形状は切妻
-  assert.deepEqual(leanToFramingRegions(big.graph, woodProject()), [], '自動が切妻の L字');
-  for (const shape of [RoofShape.HIP, RoofShape.GABLE, RoofShape.FLAT, RoofShape.STAGGERED]) {
+// 旧: 自動で切妻になる L字・明示の切妻も region にならない（暫定で外形線だけ）。切妻の L字は腕ごとに棟木の region になった（次のテスト）。
+test('【E1b・失敗系】L字の下屋のうち、明示の寄棟・陸屋根・棟違いは region にならない。非在来も空', () => {
+  for (const shape of [RoofShape.HIP, RoofShape.FLAT, RoofShape.STAGGERED]) {
     const l = makeGrid(XS, YS);
     l.roof([[1, 1], [2, 1], [1, 2]]).roofSpec.setField('shape', shape);
     assert.deepEqual(leanToFramingRegions(l.graph, woodProject()), [], `明示の ${shape}`);
@@ -252,6 +250,72 @@ test('【E1b・失敗系】L字の下屋のうち、形状が自動で切妻に�
   l.roof([[1, 1], [2, 1], [1, 2]]);
   for (const key of ['RC造(ラーメン)', 'S造', UNSPECIFIED_STRUCTURE]) assert.deepEqual(leanToFramingRegions(l.graph, woodProject(key)), [], key);
   assert.equal(leanToFramingRegions(l.graph, woodProject()).length, 1, '前提: 在来なら region がある');
+});
+
+test('【切妻の L字・region】自動で切妻・明示の切妻の L字は rect:null・shape:gable の region（翼なし・水下＝軒の辺・母屋の段の基準＝長手方向の腕の半スパン）。伏図用・平面用とも出る', () => {
+  const D = (isVertical, coord, lo, hi, outward) => ({ isVertical, coord, lo, hi, outward });
+  const big = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  const bigRoom = big.roof([[0, 0], [1, 0], [0, 1]]); // 外接 8000×8000 の L字（幅 4000 の腕2本）。自動の形状は切妻
+  const [region] = leanToFramingRegions(big.graph, woodProject());
+  assert.ok(region, '前提: 切妻の L字の region がある');
+  assert.equal(region.key, `lean:${bigRoom.id}`);
+  assert.equal(region.shape, 'gable');
+  assert.equal(region.rect, null);
+  assert.equal(region.rects.length, 3);
+  assert.equal(region.ridgeIsVertical, null);
+  assert.equal(region.highSide, null);
+  assert.equal(region.leanToWings, undefined, '翼は持たない');
+  assert.equal(region.leanToUnassigned, undefined);
+  assert.deepEqual(region.leanToDrains, [D(false, 0, 0, 8000, -1), D(false, 4000, 4000, 8000, 1), D(true, 4000, 4000, 8000, 1), D(true, 0, 0, 8000, -1)], '軒の4辺（右端・下端の2辺はけらば）');
+  assert.equal(region.leanToPurlinDepthMm, 2000, '長手方向の腕（けらばから掃いた深さ最大）の幅 4000 の半分');
+  assert.deepEqual(region.outline, [{ points: [8455, -455, 8455, 4455, 4455, 4455, 4455, 8455, -455, 8455, -455, -455] }], '軒・けらばとも 455');
+  assert.equal(leanToFramingCellKeys(big.graph, woodProject()).size, 3, '外周の梁・床梁のガードの対象セル');
+  const [plan] = leanToPlanRegions(big.graph);
+  assert.deepEqual(plan.leanToDrains, region.leanToDrains, '平面用も同じ region（同じ導出）');
+  assert.deepEqual(plan.planDrains, region.leanToDrains, '傾斜ラベルの水下は leanToDrains');
+  assert.equal(plan.exposedPaths.length, 1);
+
+  // 明示の切妻（短手が 3640 以下でも切妻）。横の腕 4000×1500 の半スパン 750
+  const l = makeGrid(XS, YS);
+  l.roof([[1, 1], [2, 1], [1, 2]]).roofSpec.setField('shape', RoofShape.GABLE);
+  const [explicit] = leanToFramingRegions(l.graph, woodProject());
+  assert.deepEqual(explicit.leanToDrains, [D(false, 1500, 2000, 6000, -1), D(false, 3000, 4000, 6000, 1), D(true, 4000, 3000, 4500, 1), D(true, 2000, 1500, 4500, -1)],
+    '縦の腕の右の辺 x=4000[3000..4500] は入隅に接するので軒（深さ 2000 ＞ 長さ 1500 でもけらばにしない）。けらばは右端 x=6000・下端 y=4500');
+  assert.equal(explicit.leanToPurlinDepthMm, 750);
+});
+
+test('【切妻の L字・region】屋内に接する辺は出幅 0。roof-test8 型は軒4辺（壁の辺も軒＝壁へ下る面）・けらば2辺（左端・上端）で、外形線は建物の出隅を回り込む', () => {
+  const { graph, interior, roof } = makeGrid([3640, 7280, 9100], [-9884, -3640, 0]);
+  interior([[0, 0]]);
+  roof([[0, 1], [1, 1], [1, 0]]).roofSpec.setField('shape', RoofShape.GABLE);
+  const [region] = leanToFramingRegions(graph, woodProject());
+  assert.deepEqual(region.leanToDrains.map(d => [d.isVertical, d.coord, d.lo, d.hi, d.outward]), [
+    [true, 9100, -9884, 0, 1], [false, 0, 3640, 9100, 1], [false, -3640, 3640, 7280, -1], [true, 7280, -9884, -3640, -1],
+  ], '右辺・下辺・壁 y=-3640（同じ長さ＝軒）・壁 x=7280。けらばは左辺 x=3640・上辺 y=-9884');
+  assert.equal(region.leanToPurlinDepthMm, 910, '縦の腕（幅 1820）の半スパン');
+  assert.deepEqual(region.edges.filter(e => e.overhangMm === 0).map(e => [e.isVertical, e.coord]), [[false, -3640], [true, 7280]], '屋内に接する2辺だけ出幅 0');
+  assert.deepEqual(region.outline, [{ points: [9555, -10339, 9555, 455, 3185, 455, 3185, -4095, 3640, -4095, 3640, -3640, 7280, -3640, 7280, -9884, 6825, -9884, 6825, -10339] }]);
+});
+
+test('【切妻の L字・失敗系】構造ゲート: 在来木造でなければ伏図用は空（平面用は構造種別に関わらず出る）。けらばが無い形（中庭のある環）は region にならず外形線だけの補完 region', () => {
+  const big = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  big.roof([[0, 0], [1, 0], [0, 1]]);
+  assert.equal(leanToFramingRegions(big.graph, woodProject()).length, 1, '前提: 在来なら region がある');
+  for (const key of ['RC造(ラーメン)', 'S造', UNSPECIFIED_STRUCTURE]) {
+    assert.deepEqual(leanToFramingRegions(big.graph, woodProject(key)), [], key);
+    assert.equal(leanToFramingCellKeys(big.graph, woodProject(key)).size, 0, key);
+  }
+  const [planOnS] = leanToPlanRegions(big.graph);
+  assert.equal(planOnS.leanToDrains.length, 4, '平面用は構造ゲートを見ない');
+  // 中庭のある環（3×3 の中央を抜く）: 外周も穴の辺（入隅）も全部軒でけらばが無い＝長手方向の腕が決まらない
+  const ring = makeGrid([0, 3000, 6000, 9000], [0, 3000, 6000, 9000]);
+  ring.roof([[0, 0], [1, 0], [2, 0], [0, 1], [2, 1], [0, 2], [1, 2], [2, 2]]).roofSpec.setField('shape', RoofShape.GABLE);
+  assert.deepEqual(leanToFramingRegions(ring.graph, woodProject()), [], 'けらばが無い形は region なし');
+  const [ringPlan] = leanToPlanRegions(ring.graph);
+  assert.equal(ringPlan.leanToDrains, undefined, '補完 region は水下を持たない（外形線だけ）');
+  assert.deepEqual(ringPlan.planDrains, [], 'ラベルなし');
+  assert.equal(ringPlan.exposedPaths.length, 2, '外周と穴');
+  assert.ok(ringPlan.exposedPaths.every(p => p.closed));
 });
 
 test('【E1b】L字の下屋は明示の highSide を使わない（翼ごとに壁で決まる）', () => {
@@ -673,22 +737,33 @@ test('【平面】leanToPlanRegions: 陸屋根の L字も軒先の線だけ（re
   assert.deepEqual(plan.exposedPaths[0].points, [6455, 1045, 6455, 3455, 4455, 3455, 4455, 4955, 1545, 4955, 1545, 1045], '全辺 455 の閉路（L字の6頂点）');
 });
 
-test('【平面】leanToPlanRegions: 切妻になる L字（自動で短手3640超・明示の切妻）と棟違いは暫定で外形線だけ（翼・棟木の導出なし）。伏図側は region なし', () => {
+test('【平面】leanToPlanRegions: 切妻の L字（自動で短手3640超・明示の切妻）は腕ごとに棟木の region（翼なし・水下あり）、棟違いは外形線だけ。伏図側は切妻だけ region', () => {
   const big = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
   big.roof([[0, 0], [1, 0], [0, 1]]); // 外接 8000×8000 の L字。自動の形状は切妻
   const [auto] = leanToPlanRegions(big.graph);
   assert.equal(auto.shape, 'gable');
   assert.equal(auto.rect, null);
   assert.equal(auto.leanToWings, undefined, '翼は作らない');
+  assert.equal(auto.leanToDrains.length, 4, '水下（軒の辺）がある＝棟木・隅木・谷木・ラベルを持つ');
   assert.equal(auto.exposedPaths.length, 1);
   assert.equal(auto.exposedPaths[0].closed, true);
-  assert.deepEqual(leanToFramingRegions(big.graph, woodProject()), []);
-  for (const shape of [RoofShape.GABLE, RoofShape.STAGGERED]) {
+  assert.equal(leanToFramingRegions(big.graph, woodProject()).length, 1, '伏図側も切妻の L字は region');
+  {
     const l = makeGrid(XS, YS);
-    l.roof([[1, 1], [2, 1], [1, 2]]).roofSpec.setField('shape', shape);
+    l.roof([[1, 1], [2, 1], [1, 2]]).roofSpec.setField('shape', RoofShape.GABLE);
     const [plan] = leanToPlanRegions(l.graph);
-    assert.equal(plan.shape, shape);
-    assert.equal(plan.exposedPaths.length, 1, `明示の ${shape}（L字）`);
+    assert.equal(plan.shape, 'gable');
+    assert.equal(plan.leanToDrains.length, 4, '明示の切妻（L字）: 上辺・左辺・入隅の2辺が軒（けらばは右端・下端）');
+    assert.equal(plan.exposedPaths.length, 1);
+  }
+  {
+    const l = makeGrid(XS, YS);
+    l.roof([[1, 1], [2, 1], [1, 2]]).roofSpec.setField('shape', RoofShape.STAGGERED);
+    const [plan] = leanToPlanRegions(l.graph);
+    assert.equal(plan.shape, RoofShape.STAGGERED);
+    assert.equal(plan.leanToDrains, undefined, '棟違いは水下を持たない（外形線だけ）');
+    assert.equal(plan.exposedPaths.length, 1, '明示の棟違い（L字）');
+    assert.deepEqual(leanToFramingRegions(l.graph, woodProject()), [], '伏図側は棟違いを region にしない');
   }
   const rect = makeGrid(XS, YS);
   rect.roof([[1, 1], [2, 1]]).roofSpec.setField('shape', RoofShape.STAGGERED);
