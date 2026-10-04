@@ -37,7 +37,7 @@ import { resolveRoofShape, roofRoomBounds } from '../finish/roof/roofDefaults.js
 import { roofHighSideViewOfRoom, roofEdgeInteriorContacts, roofBoundaryInteriorContacts } from '../finish/roof/roofOrientation.js';
 import { rectOfBounds, resolveRoofRidgeIsVertical } from '../finish/roof/roofGeometry.js';
 import { refreshCells } from '../finish/gridCells.js';
-import { roofRidgeIsVertical, roofOutline, roofOutlineExposedPaths, orthogonalBoundaryLoops, leanToWingsOf } from './roofFramingGeometry.js';
+import { roofRidgeIsVertical, roofOutline, roofOutlineExposedPaths, orthogonalBoundaryLoops, leanToWingsOf, eaveBeamCorners } from './roofFramingGeometry.js';
 import { showRoofFraming, roofFramingWidths, roofFramingHostMembers, roofFramingPrimitives } from './framingDrawing.js';
 
 /** 小屋組を持つ形状（陸屋根・棟違いは持たない）。 */
@@ -188,7 +188,8 @@ function planOutlineOnlyRegion(room, graph) {
 /**
  * 平面に描く下屋（屋根セルのある階の屋根の部屋）ごとの region。構造ゲートは見ない（全構造種別で出す。project 不要）。
  * 部屋ごとに framingRegionOfRoom の結果（伏図と同じ幾何）、無ければ平面専用の補完 region（planOutlineOnlyRegion）。
- * どちらも平面用に exposedPaths（roofOutlineExposedPaths。壁の中に重なる部分を除いた外形線）と slope（roofSpec.slope）を足す
+ * どちらも平面用に exposedPaths（roofOutlineExposedPaths。壁の中に重なる部分を除いた外形線）・slope（roofSpec.slope）・
+ * zeroZones（屋内に接する区間。壁に当たる線の端を外壁面で止める finish/roof/roofPlanWallTrim.js が使う）を足す
  * （伏図用の region＝leanToFramingRegions には足さない）。範囲が空・不正・roofSpec が無い部屋は出ない。
  * 戻り値は読み取り専用（renderer の graphComputed が共有する）。
  */
@@ -203,6 +204,7 @@ export function leanToPlanRegions(graph) {
       ...r.region,
       exposedPaths: roofOutlineExposedPaths(outlineArgs(r.region, room.roofSpec, r.zeroZones, r.kindZones)),
       slope: room.roofSpec.slope,
+      zeroZones: r.zeroZones,
     });
   }
   return out;
@@ -266,6 +268,19 @@ export function roofFramingRegionsForFigure({ isRoofPlane, subjectGraph, topGrap
     });
   }
   return memo(subjectGraph, 'roofFramingLeanRegions', () => leanToFramingRegions(subjectGraph, project));}
+
+/**
+ * 表示中の伏図で、下屋の軒の側の梁が出隅で勝ってけらばの出幅ぶん延びる角（beamJunction.js resolveBeamJunctionSpans の eaveCorners。
+ * 描画だけ）。小屋組の外形線を描く条件（showRoofFraming）と同じときだけ。**主屋根（屋根専用平面）は []**（軒桁は対象外）。
+ * region は roofFramingFigurePrimitives と同じ memo のもの。
+ * @param {object} p roofFramingFigurePrimitives と同じ（widths は不要）
+ * @returns {Array<{x:number, y:number, eaveIsVertical:boolean, extendMm:number}>}
+ */
+export function roofFramingEaveCorners({ rules, lod, isRoofPlane, subjectGraph, topGraph, project, memo }) {
+  if (isRoofPlane || !subjectGraph || !showRoofFraming(rules.drawing, lod)) return [];
+  const regions = roofFramingRegionsForFigure({ isRoofPlane, subjectGraph, topGraph, project, memo });
+  return regions.flatMap(region => eaveBeamCorners(region, CL_OVERLAP_TOL_MM));
+}
 
 /**
  * 表示中の伏図に描く小屋組のプリミティブ（renderer/StructuralLayer.jsx はこれを描くだけ）。描かない条件

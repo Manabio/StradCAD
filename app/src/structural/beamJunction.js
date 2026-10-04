@@ -2,7 +2,8 @@
 // 在来木造の梁の交点処理（B-3・ユーザー裁定2026-09-17）。
 //
 // 「通しの梁（両側に続く梁）が勝ち、T字で突き当たる梁が負け（勝者の面で止まる）」「出隅（L字）は
-// 長い方が勝ち、同長ならX方向」——このルールは場面によらず一律に適用する。出隅の長さは、角に端を
+// 長い方が勝ち、同長ならX方向」——このルールは場面によらず一律に適用する（例外は下屋の軒の側の梁。呼び出し側が
+// eaveCorners を渡した角だけ、軒の側が勝ってけらばの出幅ぶん外形線まで延びる。描画だけ）。出隅の長さは、角に端を
 // 置く梁1本の材長ではなく、同じ軸で端と端がつながる梁を合わせた全長（continuousBeamLengths。
 // 梁は下階柱で分割されるため。ユーザー裁定2026-10-02「短手と長手が出会うとき、長手勝ち」）。実体スパン
 // （core/structuralEntities.js の spanForColumns。下階柱面での止め）はここでは一切書き換えない
@@ -120,12 +121,16 @@ function runLengthsOnAxis(items, tol, lengths) {
  *   base1:number, base2:number, halfWidth:number, sectionKey:string|null}>} beams
  *   end1/end2＝clStart/clEnd.effectiveValue（AXIS・未トリム）。base1/base2＝spanForColumns の結果
  *   （下階柱面でのトリム済み）。halfWidth＝beamRenderWidth(b,lod)/2（単線LODは0）。sectionKey＝sectionDefId。
- * @param {{tol?: number}} [opts]
+ * @param {{tol?: number, eaveCorners?: Array<{x:number, y:number, eaveIsVertical:boolean, extendMm:number}>}} [opts]
+ *   eaveCorners＝下屋の軒の側の梁が出隅で勝つ角（roofFramingGeometry.js eaveBeamCorners）。その角の交点では、軒の側が
+ *   通しでなければ、短い方でも軒の側が勝ち、端を max(敗者の半幅, extendMm)（けらばの出幅）だけ外へ延ばす（kind 'eaveExtend'・
+ *   capped）。けらば側に梁が無くても延ばす。軒の側が通しの角・軒の側に梁の端が無い角は通常の決定のまま。
+ *   渡さない・空なら今までと完全に同じ結果。
  * @returns {Map<string, {coord1:number, coord2:number, ends:[{kind:string,capped:boolean},{kind:string,capped:boolean}]}>}
  *   変化した梁（少なくとも片端が base 以外になった梁）だけを収める。'columnFace'/未知値/undefined は
  *   常に空Map（恒等の根拠をここに置く——呼び出し側は分岐しない）。
  */
-export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_MM } = {}) {
+export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_MM, eaveCorners = [] } = {}) {
   const result = new Map();
   if (drawing?.beamJunction !== 'throughWins') return result;
   const primaries = (beams ?? []).filter(b => b.role === 'primary');
@@ -170,9 +175,16 @@ export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_
       sectionBreak[d] = plus.length > 0 && minus.length > 0 && !matched;
     }
 
+    // 下屋の軒の側の梁が、けらばの側の梁との出隅で勝つ角（eaveCorners。伏図の描画だけ）。軒の側が通しなら対象外
+    // （通常の勝者決定のまま）。軒の側に梁の端が無い角も対象外。
+    const eaveCorner = (eaveCorners ?? []).find(c => Math.abs(c.x - cluster.x) < tol && Math.abs(c.y - cluster.y) < tol);
+    const eaveDir = eaveCorner ? (eaveCorner.eaveIsVertical ? 'Y' : 'X') : null;
+    const eaveWins = eaveDir != null && !continuous[eaveDir] && !sectionBreak[eaveDir] && armsByDir[eaveDir].length > 0;
+
     // 勝者決定（この順で1回）。
     let winner = null;
-    if (continuous.X && !continuous.Y) winner = 'X';
+    if (eaveWins) winner = eaveDir;
+    else if (continuous.X && !continuous.Y) winner = 'X';
     else if (continuous.Y && !continuous.X) winner = 'Y';
     else if (continuous.X && continuous.Y) winner = 'X'; // 十字は既定X
     else if (!sectionBreak.X && !sectionBreak.Y) {
@@ -208,8 +220,9 @@ export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_
           // L字の勝者（連続不成立）——敗者側armの最大半幅ぶん控えて角を閉じる。
           const loserArms = armsByDir[otherDir(winner)];
           const loserHalf = Math.max(0, ...loserArms.map(a => a.beam.halfWidth));
-          kind = 'cornerClose';
-          coord = arm.along - arm.dir * loserHalf;
+          // 軒の勝ちは、けらばの出幅ぶん（敗者の半幅より大きければ）外形線まで延ばす
+          kind = eaveWins ? 'eaveExtend' : 'cornerClose';
+          coord = arm.along - arm.dir * (eaveWins ? Math.max(loserHalf, eaveCorner.extendMm) : loserHalf);
           capped = true;
         } else {
           // 負け方向arm——勝者の面（実描画半幅ぶん）で止める。

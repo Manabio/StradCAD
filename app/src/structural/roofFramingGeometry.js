@@ -819,6 +819,54 @@ export function roofOutlineExposedPaths(args) {
   return out;
 }
 
+/**
+ * 下屋の外周の梁のうち、軒の側の梁がけらばの側の梁との出隅で勝ち、けらばの出幅ぶん外形線まで延びる角（伏図の描画だけ。
+ * ユーザー指示2026-10-04「軒の出にかかる垂木を支えるため、胴差は勝ちで妻側まで伸ばす」）。region の edges（roofOutline の辺の部分）の
+ * うち、軒（出幅>0）の部分とけらば（出幅>0）の部分が屋根範囲の出隅（凸の角）で出会う点だけ。
+ * 辺の種別: 矩形は roofEdgeKind、L字の下屋（leanToDrains を持つ region）は水下（leanToDrains）が軒・出幅>0 のそれ以外がけらば。
+ * 矩形でない寄棟（rect も leanToDrains も無い）・寄棟（全辺が軒）は []。軒と軒の角・入隅・壁（出幅 0）との角・出幅 0 のけらばは対象外
+ * （出幅 0 のけらばは壁と区別できないので長手勝ちのまま）。
+ * @param {object} region leanToFramingRegions の region（edges・rect・shape・ridgeIsVertical・highSide・leanToDrains）
+ * @param {number} tolMm 許容差（>=0）
+ * @returns {Array<{x:number, y:number, eaveIsVertical:boolean, extendMm:number}>}
+ *   x,y＝角（軒の梁とけらばの梁の芯が出会う点）。eaveIsVertical＝軒の辺の向き（x=一定＝true）。extendMm＝けらばの出幅
+ * @throws {RangeError} tolMm が不正、edges の値が不正、矩形で形状が小屋組を持たない（roofEdgeKind）
+ */
+export function eaveBeamCorners(region, tolMm) {
+  requireNonNegative(tolMm, 'tolMm');
+  const edges = requireOutlineEdges(region?.edges).filter(e => e.overhangMm > 0);
+  if (edges.length === 0) return [];
+  const drains = region.leanToDrains ?? null;
+  const isEave = e => {
+    if (drains) {
+      const mid = (e.lo + e.hi) / 2;
+      return drains.some(d => d.isVertical === e.isVertical && d.outward === e.outward && Math.abs(d.coord - e.coord) <= tolMm
+        && d.lo - tolMm <= mid && mid <= d.hi + tolMm);
+    }
+    if (!region.rect) return true; // 矩形でない寄棟など（全辺が軒＝けらばが無い）
+    return roofEdgeKind({ shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, highSide: region.highSide, isVertical: e.isVertical }) === 'eave';
+  };
+  const eaves = edges.filter(isEave);
+  const gables = edges.filter(e => !eaves.includes(e));
+  const out = [];
+  for (const a of eaves) {
+    for (const b of gables) {
+      if (a.isVertical === b.isVertical) continue;
+      const x = a.isVertical ? a.coord : b.coord; // 軒の辺は垂直なら x=a.coord・けらばの辺は水平 y=b.coord（逆も同じ）
+      const y = a.isVertical ? b.coord : a.coord;
+      const alongA = a.isVertical ? y : x;
+      const alongB = a.isVertical ? x : y;
+      // 角は両方の辺の端。端から辺の本体へ向かう向き（lo の端なら +1）と、相手の外向きが逆なら凸の角
+      const bodyA = Math.abs(alongA - a.lo) <= tolMm ? 1 : Math.abs(alongA - a.hi) <= tolMm ? -1 : 0;
+      const bodyB = Math.abs(alongB - b.lo) <= tolMm ? 1 : Math.abs(alongB - b.hi) <= tolMm ? -1 : 0;
+      if (bodyA === 0 || bodyB === 0 || b.outward !== -bodyA || a.outward !== -bodyB) continue;
+      if (out.some(c => c.eaveIsVertical === a.isVertical && Math.abs(c.x - x) <= tolMm && Math.abs(c.y - y) <= tolMm)) continue;
+      out.push({ x, y, eaveIsVertical: a.isVertical, extendMm: b.overhangMm });
+    }
+  }
+  return out;
+}
+
 // ---- 母屋・棟木・隅木の出幅ぶんの延長（描画用。ステップ D2） ----
 
 /** 延長に使う辺（roofOutline の edges）の検査。null・undefined は辺なし（延長しない）。 */

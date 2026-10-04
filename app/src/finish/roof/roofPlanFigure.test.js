@@ -26,7 +26,7 @@ function makeGrid(xs, ys) {
     if (shape) room.roofSpec.setField('shape', shape);
     return room;
   };
-  return { graph, interior, roof };
+  return { graph, interior, roof, cx, cy };
 }
 
 const countByRole = prims => {
@@ -174,4 +174,62 @@ test('visibleRoofPlanPrimitives: 線は全 LOD で同数。詳細だけの図形
   assert.deepEqual(visibleRoofPlanPrimitives(mixed, LodLevel.STANDARD).map(p => p.key), ['a']);
   assert.deepEqual(visibleRoofPlanPrimitives(mixed, LodLevel.SCHEMATIC).map(p => p.key), ['a']);
   assert.deepEqual(visibleRoofPlanPrimitives([], LodLevel.DETAIL), []);
+});
+
+// ---- 壁に当たる端を外壁面で止める（roofPlanWallTrim.js）。壁は本番の graph.addWall（製品の外壁と同じ形: 軸CL＋偏芯の対称壁） ----
+
+/** 軸 CL（isVertical なら縦）上の壁（from〜to の CL の間）。axisOffset だけ偏芯した壁面＝材は軸〜壁面（外壁と同じ対称壁）。 */
+const addWallOn = (graph, axisCL, axisOffset, isVertical, from, to) =>
+  graph.addWall(axisCL, axisOffset, isVertical, from, 0, to, 0, { wallFinish: 12.5 });
+
+test('壁あり: 片流れの外形線の端は通り芯でなく外壁面（壁の屋根側の外端）で止まる。壁が無ければ通り芯のまま', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000]);
+  g.interior([[0, 1]]); // 屋根（x 2000..6000・y 1500..3000）の左の辺 x=2000 に接する
+  g.roof([[1, 1], [2, 1]]);
+  const [bare] = roofPlanFigure(g.graph);
+  assert.deepEqual(bare.points, [2000, 1045, 6455, 1045, 6455, 3455, 2000, 3455], '前提: 壁が無ければ通り芯（今までと同じ）');
+  const wall = addWallOn(g.graph, g.cx[1], 75, true, g.cy[1], g.cy[2]); // x=2000 の壁。屋根側（+x）の外端は 2075
+  assert.deepEqual(wall.materialRange, { lo: 2000, hi: 2075 }, '前提: 材は軸〜壁面');
+  const [trimmed] = roofPlanFigure(g.graph);
+  assert.equal(trimmed.role, 'outline');
+  assert.equal(trimmed.closed, false);
+  assert.deepEqual(trimmed.points, [2075, 1045, 6455, 1045, 6455, 3455, 2075, 3455], '両端（壁に当たる端）だけ x=2075 へ。軒先・けらばの角は不変');
+  assert.equal(trimmed.key, bare.key, 'key は変わらない');
+});
+
+test('壁あり: 寄棟の下屋は壁側の隅木の端を外壁面まで戻す（45°に線に沿って）。棟木・壁に当たらない隅木は変えない', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  g.interior([[0, 0], [1, 0]]); // 屋根（y 4000..8000）の上辺 y=4000 に接する
+  g.roof([[0, 1], [1, 1]], RoofShape.HIP);
+  const before = roofPlanFigure(g.graph);
+  const hipsBefore = before.filter(p => p.role === 'hip').map(p => p.points);
+  assert.equal(hipsBefore.length, 4, '前提: 隅木4本');
+  addWallOn(g.graph, g.cy[1], 75, false, g.cx[0], g.cx[2]); // y=4000 の壁。屋根側（+y）の外端は 4075
+  const after = roofPlanFigure(g.graph);
+  assert.equal(after.length, before.length, '線の数は変わらない');
+  const moved = after.filter((p, i) => JSON.stringify(p.points) !== JSON.stringify(before[i].points));
+  assert.deepEqual(moved.map(p => p.role).sort(), ['hip', 'hip', 'outline'], '変わるのは壁側の隅木2本と、外形線の壁に当たる端だけ');
+  const hipsAfter = after.filter(p => p.role === 'hip').map(p => p.points);
+  const wallSide = hipsBefore.filter(pts => pts.some((v, k) => k % 2 === 1 && v === 4000));
+  assert.equal(wallSide.length, 2, '前提: 壁（y=4000）の上に端がある隅木が2本');
+  for (const pts of wallSide) {
+    const [x1, , x2, y2] = pts;
+    const dx = Math.sign(x2 - x1);
+    const moved1 = hipsAfter.find(h => Math.abs(h[0] - (x1 + dx * 75)) < 1e-6 && Math.abs(h[1] - 4075) < 1e-6);
+    assert.ok(moved1, `隅木 ${pts} は壁側の端が (${x1 + dx * 75}, 4075) へ（45° に 75 戻る）`);
+    assert.deepEqual(moved1.slice(2), [x2, y2], '反対側の端は変えない');
+  }
+  const ridge = after.find(p => p.role === 'ridge');
+  assert.deepEqual(ridge.points, before.find(p => p.role === 'ridge').points, '棟木（壁に当たらない）は不変');
+});
+
+test('壁あり: 壁に当たらない端・壁から離れた（reach の外の）壁は変えない', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000]);
+  g.interior([[0, 1]]);
+  g.roof([[1, 1], [2, 1]]);
+  const [bare] = roofPlanFigure(g.graph);
+  addWallOn(g.graph, g.cx[0], 75, true, g.cy[1], g.cy[2]); // x=0 の壁（屋根の端の直線 x=2000 ではない）
+  addWallOn(g.graph, g.cx[3], 75, true, g.cy[0], g.cy[1]); // x=6000 の壁だが屋根の辺（y 1500..3000）から離れている
+  const [after] = roofPlanFigure(g.graph);
+  assert.deepEqual(after.points, bare.points);
 });

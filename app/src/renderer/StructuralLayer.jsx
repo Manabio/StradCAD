@@ -9,7 +9,7 @@ import {
   framingColumnGroups, framingColor, framingColorOverride, columnSectionSize, framingColumnLineWeight,
   beamDepthMarks, pickMembersOnFigure, pickColumnsOnFigure, columnRenderSize, ROOF_FRAMING_DASH,
 } from '../structural/framingDrawing.js';
-import { roofFramingFigurePrimitives } from '../structural/roofFramingRegions.js';
+import { roofFramingFigurePrimitives, roofFramingEaveCorners } from '../structural/roofFramingRegions.js';
 import { planColumnWraps } from './wallDrawPlan.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
 import { graphComputed } from './graphDerived.js';
@@ -423,13 +423,19 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   // 下階柱面での止め）はここでは書き換えず、描画専用の追加トリム（勝者面での止め・L字の角閉じ）だけを
   // structural/beamJunction.js resolveBeamJunctionSpans が解決する——drawing.beamJunction!=='throughWins'
   // （在来木造以外）は常に空Mapを返すため、非在来は完全不変（beamDrawSpansがbaseSpansとそのまま同じ）。
+  // 下屋の軒の側の梁がけらばの出隅で勝つ角（描画だけ）の判断は roofFramingRegions.js roofFramingEaveCorners が決める
+  // （主屋根・小屋組を描かない条件は []）。region は下の小屋組の描画と同じ memo。
+  const eaveCorners = roofFramingEaveCorners({
+    rules: figureRules, lod, isRoofPlane: composition.subjectPlane?.isRoofPlane === true,
+    subjectGraph: figureGraph, topGraph: column?.graph ?? null, project, memo: graphComputed,
+  });
   const junctions = resolveBeamJunctionSpans(figureRules.drawing, baseSpans.map(({ beam: b, coord1, coord2 }) => ({
     id: b.id, role: b.role, isVertical: b.isVertical, axisValue: b.axisValue,
     end1: b.clStart.effectiveValue, end2: b.clEnd.effectiveValue,
     base1: coord1, base2: coord2,
     halfWidth: (beamRenderWidth(b, lod) ?? 0) / 2,
     sectionKey: b.sectionDefId,
-  })));
+  })), { eaveCorners });
   const beamDrawSpans = baseSpans.map(s => {
     const j = junctions.get(s.beam.id);
     return j ? { beam: s.beam, coord1: j.coord1, coord2: j.coord2, ends: j.ends } : s;

@@ -57,3 +57,12 @@ test('【不変条件】roofPlanFigure.js（純モジュール）は store.js・
     assert.ok(!/store\.js|snap\.js|\.jsx|react-konva|graphDerived|mobx/.test(line), `禁止の import: ${line}`);
   }
 });
+
+test('【配線】roofPlanFigure.js は region ごとの線を trimRoofPlanLinesAtWalls( に通し（faceAt は outerWallFaceNear）、壁に当たる端を外壁面で止める（1行まるごと）', () => {
+  assert.match(figure, /^\s*out\.push\(\.\.\.trimRoofPlanLinesAtWalls\(lines, \{ faceAt, zeroZones: region\.zeroZones, reachMm, tolMm \}\)\);\s*$/m,
+    'out.push(...trimRoofPlanLinesAtWalls(lines, { faceAt, zeroZones: region.zeroZones, reachMm, tolMm })); が1行まるごとの形で見つからない');
+  assert.match(figure, /^\s*const faceAt = q => outerWallFaceNear\(graph, q\);\s*$/m);
+  assert.equal(count(figure, /trimRoofPlanLinesAtWalls\(/g), 1);
+  assert.match(figure, /^\s*import \{ trimRoofPlanLinesAtWalls \} from '\.\/roofPlanWallTrim\.js';\s*$/m);
+  assert.match(figure, /^\s*import \{ outerWallFaceNear \} from '\.\.\/wallFaces\.js';\s*$/m);
+});

@@ -585,11 +585,12 @@ test('【失敗系】roofFramingFigurePrimitives: subject の graph が無い・
 
 // ---- leanToPlanRegions（下屋の平面表示。ステップ1。構造ゲートなし・補完 region あり） ----
 
-/** 平面用 region から平面専用の項目（exposedPaths・slope）を除いたもの＝伏図用 region と同じ幾何のはず。 */
+/** 平面用 region から平面専用の項目（exposedPaths・slope・zeroZones）を除いたもの＝伏図用 region と同じ幾何のはず。 */
 const withoutPlanFields = region => {
   const rest = { ...region };
   delete rest.exposedPaths;
   delete rest.slope;
+  delete rest.zeroZones;
   return rest;
 };
 
@@ -609,7 +610,9 @@ test('【平面】leanToPlanRegions: 木造の矩形の下屋は leanToFramingRe
   // 左の辺（出幅 0＝壁の中）を除いた開いた1本。上下はけらば・右は軒（既定は同じ 455）
   assert.deepEqual(plan[0].exposedPaths, [{ points: [2000, 1045, 6455, 1045, 6455, 3455, 2000, 3455], closed: false }]);
   assert.deepEqual(leanToFramingRegions(graph, project), before, '平面用の導出は伏図用の結果を変えない（exposedPaths・slope を伏図用 region に足さない）');
-  assert.ok(!('exposedPaths' in framing[0]) && !('slope' in framing[0]));
+  assert.ok(!('exposedPaths' in framing[0]) && !('slope' in framing[0]) && !('zeroZones' in framing[0]));
+  // 平面用 region は屋内に接する区間（壁に当たる線の端を外壁面で止める roofPlanWallTrim.js が使う）を持つ
+  assert.deepEqual(plan[0].zeroZones, [{ isVertical: true, coord: 2000, lo: 1500, hi: 3000, outward: -1 }]);
 });
 
 test('【平面】leanToPlanRegions: 屋内に接しない下屋は外形線が closed の1本。切妻の矩形は木造と同じ region', () => {

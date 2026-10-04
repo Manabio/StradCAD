@@ -10,11 +10,15 @@
  *   outline＝軒先・けらばの外形線（壁の中に重なる部分は除く）、ridge＝棟木（切妻はけらばの外形線まで・寄棟は延ばさない。
  *   L字の下屋の片流れは向かい合う水下があるときだけ＝伏図と同じ線）、
  *   hip＝隅木（軒の角まで）、valley＝谷木（軒先の線の入隅の角まで。伏図と違い平面だけ延ばす）。
+ * 壁に当たる線の端（外形線の開いた端・棟木・隅木・谷木）は、通り芯ではなく描かれている壁の屋根側の外壁面で止める
+ * （roofPlanWallTrim.js。壁が無い階は通り芯のまま）。
  * 切妻になる L字・棟違いは暫定で軒先の線だけ（次のステップで「妻面全幅の中心が棟木」の規則を入れる）。
  */
 import { CL_OVERLAP_TOL_MM } from '../../core/constants.js';
 import { roofRidgeLines, roofHipDiagonals, extendLinesToOutline, extendDiagonalsToOutline } from '../../structural/roofFramingGeometry.js';
 import { leanToPlanRegions } from '../../structural/roofFramingRegions.js';
+import { outerWallFaceNear } from '../wallFaces.js';
+import { trimRoofPlanLinesAtWalls } from './roofPlanWallTrim.js';
 import { LodLevel } from '../../viewport.js';
 
 const segment = line => (line.isVertical
@@ -30,9 +34,11 @@ const segment = line => (line.isVertical
 export function roofPlanFigure(graph) {
   const out = [];
   const tolMm = CL_OVERLAP_TOL_MM;
+  const faceAt = q => outerWallFaceNear(graph, q);
   for (const region of leanToPlanRegions(graph)) {
+    const lines = [];
     region.exposedPaths.forEach((path, i) => {
-      out.push({ kind: 'line', key: `${region.key}:outline:${i}`, role: 'outline', points: path.points, closed: path.closed, detailOnly: false });
+      lines.push({ kind: 'line', key: `${region.key}:outline:${i}`, role: 'outline', points: path.points, closed: path.closed, detailOnly: false });
     });
     const ridges = extendLinesToOutline({
       lines: roofRidgeLines({
@@ -42,7 +48,7 @@ export function roofPlanFigure(graph) {
       edges: region.edges, tolMm,
     });
     ridges.forEach((line, i) => {
-      out.push({ kind: 'line', key: `${region.key}:ridge:${i}`, role: 'ridge', points: segment(line), closed: false, detailOnly: false });
+      lines.push({ kind: 'line', key: `${region.key}:ridge:${i}`, role: 'ridge', points: segment(line), closed: false, detailOnly: false });
     });
     // L字の下屋の継ぎ目（隅木・谷木）は水下への距離の場（伏図と同じ）。軒先の角（出隅・入隅）まで延ばす
     const diagonals = extendDiagonalsToOutline({
@@ -51,8 +57,11 @@ export function roofPlanFigure(graph) {
     });
     const counts = { hip: 0, valley: 0 };
     for (const d of diagonals) {
-      out.push({ kind: 'line', key: `${region.key}:${d.kind}:${counts[d.kind]++}`, role: d.kind, points: [d.x1, d.y1, d.x2, d.y2], closed: false, detailOnly: false });
+      lines.push({ kind: 'line', key: `${region.key}:${d.kind}:${counts[d.kind]++}`, role: d.kind, points: [d.x1, d.y1, d.x2, d.y2], closed: false, detailOnly: false });
     }
+    // 壁に当たる端は通り芯でなく外壁面で止める（壁が無ければ通り芯のまま）。壁を探す距離は出幅（軒・けらば）の大きい方
+    const reachMm = Math.max(0, ...region.edges.map(e => e.overhangMm)) + tolMm;
+    out.push(...trimRoofPlanLinesAtWalls(lines, { faceAt, zeroZones: region.zeroZones, reachMm, tolMm }));
   }
   return out;
 }

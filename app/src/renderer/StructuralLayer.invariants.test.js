@@ -415,3 +415,14 @@ test('【不変条件・D1】StructuralLayer.jsx: 屋根の外形線の Line は
   assert.ok(/colorOf\(figureRules\.baseMaterial\)/.test(el), '外形線の色が colorOf 経由でない');
   assert.ok(!/dash=/.test(el), '外形線が実線でない（dash がある）');
 });
+
+test('【配線】StructuralLayer.jsx: 下屋の軒の梁が出隅で勝つ角（eaveCorners）は roofFramingEaveCorners で求め、resolveBeamJunctionSpans の第3引数 { eaveCorners } に渡す（1行まるごと。判断は純モジュール）', () => {
+  // コメント行を除いた本体に対し、m フラグの行頭・行末アンカーで照合する（行末コメントで式を無効化する変異を検出）
+  const body = readSource().split(/\r?\n/).filter(line => !line.trim().startsWith('//')).join('\n');
+  assert.match(body, /^\s*\}\)\), \{ eaveCorners \}\);\s*$/m, 'resolveBeamJunctionSpans の呼び出しが `})), { eaveCorners });` で閉じていない');
+  assert.match(body, /^\s*const eaveCorners = roofFramingEaveCorners\(\{\s*$/m);
+  assert.match(body, /^\s*rules: figureRules, lod, isRoofPlane: composition\.subjectPlane\?\.isRoofPlane === true,\s*$/m);
+  assert.match(body, /^\s*subjectGraph: figureGraph, topGraph: column\?\.graph \?\? null, project, memo: graphComputed,\s*$/m);
+  assert.match(body, /^\s*import \{ roofFramingFigurePrimitives, roofFramingEaveCorners \} from '\.\.\/structural\/roofFramingRegions\.js';\s*$/m);
+  assert.equal((body.match(/roofFramingEaveCorners\(/g) || []).length, 1, 'roofFramingEaveCorners( の呼び出しはこの1箇所だけ');
+});
