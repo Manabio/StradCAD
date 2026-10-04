@@ -93,7 +93,9 @@ test('roofPlanFigure: L字の片流れは外形線＋継ぎ目の隅木（棟木
   assert.deepEqual(countByRole(prims), { outline: 1, ridge: 0, hip: 1, valley: 0 });
   const outline = prims.find(p => p.role === 'outline');
   assert.equal(outline.closed, false, '屋内に接する2辺を除いた開いた折れ線');
-  assert.deepEqual(outline.points, [3640, -455, 5915, -455, 5915, 5915, -455, 5915, -455, 3640], '屋内に接する2辺（通り芯＝壁の中）の外側だけ。両端は出幅 0 の壁の位置で止まる');
+  // 両端は建物の出隅（右上の翼の左上 (3640,0)・左下の翼の左上 (0,3640)＝屋内の右上・左下の角）。そこで軒先の線は建物の外壁の線まで
+  // 回り込む（軒の出 455 ぶん V の先へ延ばして直角に戻る）。壁が無いので通り芯の線 y=0・x=0 まで
+  assert.deepEqual(outline.points, [3185, 0, 3185, -455, 5915, -455, 5915, 5915, -455, 5915, -455, 3185, 0, 3185], '屋内に接する2辺（通り芯＝壁の中）の外側だけ。両端は建物の出隅を回り込んで外壁の線で止まる');
 });
 
 test('roofPlanFigure: U字の片流れ（向かい合う水下）は棟木が出て、伏図（roofFramingLines の ridges）と同じ線。隅木は2本・谷木なし', () => {
@@ -145,7 +147,9 @@ test('roofPlanFigure: 屋内に接する辺は外形線から除く（開いた�
   const [outline] = roofPlanFigure(g.graph);
   assert.equal(outline.role, 'outline');
   assert.equal(outline.closed, false);
-  assert.deepEqual(outline.points, [2000, 1045, 6455, 1045, 6455, 3455, 2000, 3455]);
+  // 屋根の上下の辺は屋内（左）の上下の辺と同じ線上（面一）で、屋内の右上・右下の角が建物の出隅。両端はそこで軒の出 455 ぶん
+  // 建物側へ回り込んで外壁の線（y=1500・y=3000）まで戻る（壁が無いので通り芯の線）
+  assert.deepEqual(outline.points, [1545, 1500, 1545, 1045, 6455, 1045, 6455, 3455, 1545, 3455, 1545, 3000]);
 });
 
 test('roofPlanFigure: key は region の key と通し番号で一意。屋根が複数なら部屋ごとの線が並ぶ', () => {
@@ -191,16 +195,20 @@ const addWallOn = (graph, axisCL, axisOffset, isVertical, from, to) =>
 
 test('壁あり: 片流れの外形線の端は通り芯でなく外壁面（壁の屋根側の外端）で止まる。壁が無ければ通り芯のまま', () => {
   const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000]);
-  g.interior([[0, 1]]); // 屋根（x 2000..6000・y 1500..3000）の左の辺 x=2000 に接する
+  g.interior([[0, 1]]); // 屋根（x 2000..6000・y 1500..3000）の左の辺 x=2000 に接する。上下の辺は屋内の上下の辺と面一
   g.roof([[1, 1], [2, 1]]);
   const [bare] = roofPlanFigure(g.graph);
-  assert.deepEqual(bare.points, [2000, 1045, 6455, 1045, 6455, 3455, 2000, 3455], '前提: 壁が無ければ通り芯（今までと同じ）');
-  const wall = addWallOn(g.graph, g.cx[1], 75, true, g.cy[1], g.cy[2]); // x=2000 の壁。屋根側（+x）の外端は 2075
-  assert.deepEqual(wall.materialRange, { lo: 2000, hi: 2075 }, '前提: 材は軸〜壁面');
+  // 屋内の右上・右下の角が建物の出隅。軒先の線は両端で建物側へ回り込んで外壁の線（y=1500・y=3000）まで戻る
+  assert.deepEqual(bare.points, [1545, 1500, 1545, 1045, 6455, 1045, 6455, 3455, 1545, 3455, 1545, 3000], '前提: 壁が無ければ通り芯の線まで');
+  // 建物の上下の外壁（x 0..2000）。外面は北の壁が y=1425・南の壁が y=3075
+  const north = addWallOn(g.graph, g.cy[1], -75, false, g.cx[0], g.cx[1]);
+  const south = addWallOn(g.graph, g.cy[2], 75, false, g.cx[0], g.cx[1]);
+  assert.deepEqual(north.materialRange, { lo: 1425, hi: 1500 }, '前提: 材は軸〜壁面');
+  assert.deepEqual(south.materialRange, { lo: 3000, hi: 3075 }, '前提: 材は軸〜壁面');
   const [trimmed] = roofPlanFigure(g.graph);
   assert.equal(trimmed.role, 'outline');
   assert.equal(trimmed.closed, false);
-  assert.deepEqual(trimmed.points, [2075, 1045, 6455, 1045, 6455, 3455, 2075, 3455], '両端（壁に当たる端）だけ x=2075 へ。軒先・けらばの角は不変');
+  assert.deepEqual(trimmed.points, [1545, 1425, 1545, 1045, 6455, 1045, 6455, 3455, 1545, 3455, 1545, 3075], '折り返しの両端（壁に当たる端）だけ外壁の外面へ。軒先・けらばの角は不変');
   assert.equal(trimmed.key, bare.key, 'key は変わらない');
 });
 
@@ -212,6 +220,9 @@ test('壁あり: 寄棟の下屋は壁側の隅木の端を外壁面まで戻す
   const hipsBefore = before.filter(p => p.role === 'hip').map(p => p.points);
   assert.equal(hipsBefore.length, 4, '前提: 隅木4本');
   addWallOn(g.graph, g.cy[1], 75, false, g.cx[0], g.cx[2]); // y=4000 の壁。屋根側（+y）の外端は 4075
+  // 屋根の左右の辺は屋内の左右の辺と面一（建物の出隅）で、外形線の両端は建物側へ回り込む。回り込みの端が当たる左右の外壁（x=0・x=8000）
+  addWallOn(g.graph, g.cx[0], -75, true, g.cy[0], g.cy[1]);
+  addWallOn(g.graph, g.cx[2], 75, true, g.cy[0], g.cy[1]);
   const after = roofPlanFigure(g.graph);
   assert.equal(after.length, before.length, '線の数は変わらない');
   const moved = after.filter((p, i) => JSON.stringify(p.points) !== JSON.stringify(before[i].points));

@@ -34,7 +34,7 @@ import {
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import { mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView } from '../finish/roof/mainRoof.js';
 import { resolveRoofShape, roofRoomBounds } from '../finish/roof/roofDefaults.js';
-import { roofHighSideViewOfRoom, roofEdgeInteriorContacts, roofBoundaryInteriorContacts } from '../finish/roof/roofOrientation.js';
+import { roofHighSideViewOfRoom, roofEdgeInteriorContacts, roofBoundaryInteriorContacts, roofInteriorRects } from '../finish/roof/roofOrientation.js';
 import { rectOfBounds, resolveRoofRidgeIsVertical } from '../finish/roof/roofGeometry.js';
 import { refreshCells } from '../finish/gridCells.js';
 import { roofRidgeIsVertical, roofOutline, roofOutlineExposedPaths, orthogonalBoundaryLoops, leanToWingsOf, eaveBeamCorners } from './roofFramingGeometry.js';
@@ -61,21 +61,22 @@ function overhangOf(v, fallback) {
  * region に屋根の外形線（軒先・けらば。ステップ D1）を足す。outline＝閉路ごとの点列 [{points}]、edges＝辺の部分ごとの出幅
  * [{isVertical, coord, lo, hi, outward, overhangMm}]（母屋・棟木・隅木の延長＝D2 が使う）。基準は屋根範囲の辺（通り芯）。
  * zeroZones＝出幅 0 の区間（下屋の辺が屋内に接する部分）。kindZones＝辺の部分ごとの種別（L字の下屋の翼。leanToWingsOf。
- * 無ければ null＝形状から辺ごとに決める）。
+ * 無ければ null＝形状から辺ごとに決める）。interiorRects＝建物範囲のセル矩形（外形線が建物の出隅を回り込む判定。null なら回り込まない。
+ * 回り込みは outline の点列（と平面の exposedPaths）だけを変え、edges は変えない）。
  */
-function withOutline(region, spec, zeroZones = [], kindZones = null) {
-  const { edges, outline } = roofOutline(outlineArgs(region, spec, zeroZones, kindZones));
+function withOutline(region, spec, zeroZones = [], kindZones = null, interiorRects = null) {
+  const { edges, outline } = roofOutline(outlineArgs(region, spec, zeroZones, kindZones, interiorRects));
   return { ...region, edges, outline };
 }
 
 /** roofOutline・roofOutlineExposedPaths に渡す引数（withOutline と平面の exposedPaths が共有する）。 */
-function outlineArgs(region, spec, zeroZones, kindZones) {
+function outlineArgs(region, spec, zeroZones, kindZones, interiorRects = null) {
   return {
     rects: region.rect ? [region.rect] : region.rects,
     shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, highSide: region.highSide,
     eaveOverhangMm: overhangOf(spec?.eaveOverhangMm, DEFAULT_ROOF_EAVE_OVERHANG_MM),
     gableOverhangMm: overhangOf(spec?.gableOverhangMm, DEFAULT_ROOF_GABLE_OVERHANG_MM),
-    zeroZones, kindZones, tolMm: CL_OVERLAP_TOL_MM,
+    zeroZones, kindZones, interiorRects, tolMm: CL_OVERLAP_TOL_MM,
   };
 }
 
@@ -146,21 +147,23 @@ function framingRegionOfRoom(room, graph) {
     const rects = validCellRects(boundsList);
     if (!rects || resolveRoofShape(room.roofSpec, { boundsList }) !== RoofShape.MONO) return null;
     const edges = orthogonalBoundaryLoops({ rects, tolMm: CL_OVERLAP_TOL_MM }).flat();
-    const contacts = roofBoundaryInteriorContacts(edges, graph); // 屋内に接する区間＝翼の壁・出幅 0 の区間
+    const interiorRects = roofInteriorRects(graph); // 屋内のセル矩形（接する区間と外形線の回り込みの判定が共用）
+    const contacts = roofBoundaryInteriorContacts(edges, graph, interiorRects); // 屋内に接する区間＝翼の壁・出幅 0 の区間
     const { wings, unassigned, kindZones, drains, longDepthMm } = leanToWingsOf({ rects, contacts, tolMm: CL_OVERLAP_TOL_MM });
     if (wings.length === 0) return null;
     const region = {
       key: `lean:${room.id}`, rect: null, rects, shape: RoofShape.MONO, ridgeIsVertical: null, highSide: null,
       leanToWings: wings, leanToUnassigned: unassigned, leanToDrains: drains, leanToPurlinDepthMm: longDepthMm,
     };
-    return { region: withOutline(region, room.roofSpec, contacts, kindZones), zeroZones: contacts, kindZones };
+    return { region: withOutline(region, room.roofSpec, contacts, kindZones, interiorRects), zeroZones: contacts, kindZones, interiorRects };
   }
   const shape = resolveRoofShape(room.roofSpec, { boundsList });
   if (!FRAMING_SHAPES.has(shape)) return null;
   const highSide = shape === RoofShape.MONO ? roofHighSideViewOfRoom(room, graph).value : null;
   const region = { key: `lean:${room.id}`, rect, shape, ridgeIsVertical: regionRidgeIsVertical(shape, room.roofSpec, rect), highSide };
-  const zeroZones = roofEdgeInteriorContacts(rect, graph); // 屋内に接する部分は出幅 0
-  return { region: withOutline(region, room.roofSpec, zeroZones), zeroZones, kindZones: null };
+  const interiorRects = roofInteriorRects(graph); // 屋内のセル矩形（接する区間と外形線の回り込みの判定が共用）
+  const zeroZones = roofEdgeInteriorContacts(rect, graph, interiorRects); // 屋内に接する部分は出幅 0
+  return { region: withOutline(region, room.roofSpec, zeroZones, null, interiorRects), zeroZones, kindZones: null, interiorRects };
 }
 
 /**
@@ -178,11 +181,12 @@ function planOutlineOnlyRegion(room, graph) {
   if (!rects) return null;
   const shape = resolveRoofShape(room.roofSpec, { boundsList });
   const edges = orthogonalBoundaryLoops({ rects, tolMm: CL_OVERLAP_TOL_MM }).flat();
-  const zeroZones = roofBoundaryInteriorContacts(edges, graph); // 屋内に接する部分は出幅 0（壁の中に重なるので線を描かない）
+  const interiorRects = roofInteriorRects(graph);
+  const zeroZones = roofBoundaryInteriorContacts(edges, graph, interiorRects); // 屋内に接する部分は出幅 0（壁の中に重なるので線を描かない）
   const kindZones = edges.map(e => ({ isVertical: e.isVertical, coord: e.coord, lo: e.lo, hi: e.hi, outward: e.outward, kind: 'eave' }));
   const region = { key: `lean:${room.id}`, rect, shape, ridgeIsVertical: null, highSide: null };
   if (!rect) region.rects = rects;
-  return { region: withOutline(region, room.roofSpec, zeroZones, kindZones), zeroZones, kindZones };
+  return { region: withOutline(region, room.roofSpec, zeroZones, kindZones, interiorRects), zeroZones, kindZones, interiorRects };
 }
 
 /**
@@ -203,7 +207,7 @@ export function leanToPlanRegions(graph) {
     if (!r) continue;
     out.push({
       ...r.region,
-      exposedPaths: roofOutlineExposedPaths(outlineArgs(r.region, room.roofSpec, r.zeroZones, r.kindZones)),
+      exposedPaths: roofOutlineExposedPaths(outlineArgs(r.region, room.roofSpec, r.zeroZones, r.kindZones, r.interiorRects)),
       slope: room.roofSpec.slope,
       zeroZones: r.zeroZones,
       planDrains: planDrainsOf(r.region),

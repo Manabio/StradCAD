@@ -233,7 +233,9 @@ test('【E1b】L字の下屋が屋内に接する（形1a。出隅の回り込�
   assert.deepEqual(region.leanToWings.map(w => [w.highSide, w.wallCoord, w.depthMm]), [['top', 3640, 1820], ['left', 3640, 1820]], '壁の長さが同じ→上が先');
   assert.deepEqual(region.leanToWings.map(w => w.domain.map(d => d.entry)), [['direct', 'left'], ['direct', 'top']], '入隅の角のセルは両方の翼の延長');
   assert.deepEqual(region.leanToUnassigned, []);
-  assert.deepEqual(region.outline, [{ points: [5915, -455, 5915, 5915, -455, 5915, -455, 3640, 3640, 3640, 3640, -455] }]);
+  // 屋内（左上）の左下 (0,3640)・右上 (3640,0) の角が建物の出隅。外形線は両端でそこを回り込む（軒の出 455 ぶん V の先へ延ばし、
+  // 外壁の線 x=0・y=0 へ直角に戻る）。edges は変えない
+  assert.deepEqual(region.outline, [{ points: [5915, -455, 5915, 5915, -455, 5915, -455, 3185, 0, 3185, 0, 3640, 3640, 3640, 3640, 0, 3185, 0, 3185, -455] }]);
   assert.deepEqual(region.edges.filter(e => e.overhangMm === 0).map(e => [e.isVertical, e.coord, e.lo, e.hi]), [[false, 3640, 0, 3640], [true, 3640, 0, 3640]], '屋内に接する辺だけ出幅 0');
 });
 
@@ -278,7 +280,9 @@ test('leanToFramingRegions: 屋内に接する辺が高い側（片流れ）。k
     key: `lean:${r.id}`, rect: { x1: 2000, y1: 1500, x2: 4000, y2: 3000 }, shape: 'mono', ridgeIsVertical: false, highSide: 'left',
     // D1: 屋内に接する左の辺は出幅 0（壁に当たる）。片流れ left は縦の辺が軒・横の辺がけらば（既定は同じ 455）
     edges: [E(false, 1500, 2000, 4000, -1, 455), E(true, 4000, 1500, 3000, 1, 455), E(false, 3000, 2000, 4000, 1, 455), E(true, 2000, 1500, 3000, -1, 0)],
-    outline: [{ points: [4455, 1045, 4455, 3455, 2000, 3455, 2000, 1045] }],
+    // 屋根の上下の辺は屋内の上下の辺と面一で、屋内の右上・右下の角が建物の出隅。外形線は両端でそこを回り込む（軒の出 455 ぶん
+    // 西へ延ばし、外壁の線 y=1500・y=3000 へ戻る）。edges は変えない
+    outline: [{ points: [4455, 1045, 4455, 3455, 1545, 3455, 1545, 3000, 2000, 3000, 2000, 1500, 1545, 1500, 1545, 1045] }],
   }]);
 });
 
@@ -405,7 +409,8 @@ test('【D1】leanToFramingRegions: 下屋の辺が一部だけ屋内に接す�
     E(true, 6000, 1500, 3000, 1, 600), E(false, 3000, 2000, 6000, 1, 600), E(true, 2000, 1500, 3000, -1, 600),
   ]);
   // 段差: 屋内に接する 2000..4000 は y=1500（出幅 0）、残りは y=900（600 外へ）。x=4000 で小辺が挿入される
-  assert.deepEqual(part.outline, [{ points: [4000, 1500, 4000, 900, 6600, 900, 6600, 3600, 1400, 3600, 1400, 1500] }]);
+  // （左上の角 (2000,1500) は屋内の左下＝建物の出隅。軒の出 600 ぶん上へ延ばして外壁の線 x=2000 へ戻る回り込みが入る。edges は上の通り不変）
+  assert.deepEqual(part.outline, [{ points: [4000, 1500, 4000, 900, 6600, 900, 6600, 3600, 1400, 3600, 1400, 900, 2000, 900, 2000, 1500] }]);
 });
 
 test('【D1】leanToFramingRegions: 屋内に接しない下屋は全辺に出幅。切妻の下屋は棟木の向きで軒・けらばが入れ替わる', () => {
@@ -555,7 +560,8 @@ test('roofFramingFigurePrimitives: 実体階の伏図は自階 graph の下屋�
     ['purlin', 2455, 1045, 2455, 3455], // D2: けらば（横の辺）の出幅 455 ぶん外形線まで延びる
     ['purlin', 3365, 1045, 3365, 3455],
     // D1: 屋根の外形線（左の辺は屋内に接するので出幅 0）。母屋・束の数は変わらない
-    ['outline', 4455, 1045, 4455, 3455, 2000, 3455, 2000, 1045],
+    // （屋根の上下の辺が屋内の上下の辺と面一。屋内の右上・右下の角が建物の出隅なので、外形線は両端でそこを回り込む）
+    ['outline', 4455, 1045, 4455, 3455, 1545, 3455, 1545, 3000, 2000, 3000, 2000, 1500, 1545, 1500, 1545, 1045],
   ], '片流れ left: 高い側（x=2000）から幅2000は455始まり（残り635）の x=2455・3365。梁が無いので束なし');
   assert.ok(prims.filter(p => p.kind === 'outline').every(p => p.closed === true && p.key.includes(':outline:')));
 });
@@ -609,7 +615,8 @@ test('【平面】leanToPlanRegions: 木造の矩形の下屋は leanToFramingRe
   assert.equal(plan[0].highSide, 'left', '屋内に接する辺が高い側');
   assert.equal(plan[0].slope, 3, 'slope は roofSpec.slope（既定 3）');
   // 左の辺（出幅 0＝壁の中）を除いた開いた1本。上下はけらば・右は軒（既定は同じ 455）
-  assert.deepEqual(plan[0].exposedPaths, [{ points: [2000, 1045, 6455, 1045, 6455, 3455, 2000, 3455], closed: false }]);
+  // 両端は建物の出隅（屋内の右上・右下の角）を回り込んで外壁の線 y=1500・y=3000 で止まる
+  assert.deepEqual(plan[0].exposedPaths, [{ points: [1545, 1500, 1545, 1045, 6455, 1045, 6455, 3455, 1545, 3455, 1545, 3000], closed: false }]);
   assert.deepEqual(leanToFramingRegions(graph, project), before, '平面用の導出は伏図用の結果を変えない（exposedPaths・slope を伏図用 region に足さない）');
   assert.ok(!('exposedPaths' in framing[0]) && !('slope' in framing[0]) && !('zeroZones' in framing[0]));
   // 平面用 region は屋内に接する区間（壁に当たる線の端を外壁面で止める roofPlanWallTrim.js が使う）を持つ
@@ -650,7 +657,7 @@ test('【平面】leanToPlanRegions: 陸屋根は軒先の線だけ（全辺軒�
   const [plan] = leanToPlanRegions(graph);
   assert.equal(plan.shape, 'flat');
   assert.deepEqual(plan.rect, { x1: 2000, y1: 1500, x2: 6000, y2: 3000 });
-  assert.deepEqual(plan.exposedPaths, [{ points: [2000, 1045, 6455, 1045, 6455, 3455, 2000, 3455], closed: false }], '全辺 455（軒）。左は壁に接して除く');
+  assert.deepEqual(plan.exposedPaths, [{ points: [1545, 1500, 1545, 1045, 6455, 1045, 6455, 3455, 1545, 3455, 1545, 3000], closed: false }], '全辺 455（軒）。左は壁に接して除く。両端は建物の出隅を回り込む');
   assert.deepEqual(plan.edges.filter(e => e.overhangMm === 0).map(e => [e.isVertical, e.coord]), [[true, 2000]]);
   assert.deepEqual(leanToFramingRegions(graph, woodProject()), [], '伏図側は陸屋根を region にしない（不変）');
 });

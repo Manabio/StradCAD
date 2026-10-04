@@ -44,6 +44,16 @@ export function roofEdgeInteriorAdjacency(rect, graph) {
 }
 
 /**
+ * 同じ階の屋内（建物範囲。定義は上の注記）のセル矩形。外形線が建物の出隅を回り込む判定
+ * （roofFramingGeometry.js roofOutline の interiorRects）がセルの矩形との重なりで使う。屋内が無ければ空。
+ * @param {object} graph 屋根のある階の graph
+ * @returns {Array<{x1:number,y1:number,x2:number,y2:number}>}
+ */
+export function roofInteriorRects(graph) {
+  return cellBoundsList(footprintCellKeys(graph), graph);
+}
+
+/**
  * 屋根範囲（矩形 rect）の各辺のうち、外側が同じ階の屋内に接する区間（roofEdgeInteriorAdjacency と同じ判定を、長さでなく
  * 区間で返す）。屋根の外形線（軒の出）が壁に当たって出幅 0 になる部分に使う。複数の屋内セルが接すれば区間も複数。
  * 辺の向き・外側は roofFramingGeometry.js の線と同じ（isVertical＝x=coord 一定、outward＝外側が coord の +方向か -方向か）。
@@ -51,10 +61,10 @@ export function roofEdgeInteriorAdjacency(rect, graph) {
  * @param {object} graph 屋根のある階の graph
  * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1}>}
  */
-export function roofEdgeInteriorContacts(rect, graph) {
+export function roofEdgeInteriorContacts(rect, graph, interiorRects = null) {
   const out = [];
   if (!rect) return out;
-  for (const b of cellBoundsList(footprintCellKeys(graph), graph)) {
+  for (const b of interiorRects ?? roofInteriorRects(graph)) {
     const lo = Math.max(b.x1, rect.x1);
     const hi = Math.min(b.x2, rect.x2);
     const loY = Math.max(b.y1, rect.y1);
@@ -75,14 +85,16 @@ export function roofEdgeInteriorContacts(rect, graph) {
  * 正のものだけ。複数の屋内セルが接すれば区間も複数。
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1}>} edges
  * @param {object} graph 屋根のある階の graph
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>|null} [interiorRects] 屋内のセル矩形（roofInteriorRects の結果。
+ *   呼び出し側が同じ階で何度も使うときに渡して再計算を避ける。省略・null なら graph から求める）
  * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outward:1|-1}>}
  * @throws {RangeError} edges が配列でない
  */
-export function roofBoundaryInteriorContacts(edges, graph) {
+export function roofBoundaryInteriorContacts(edges, graph, interiorRects = null) {
   if (!Array.isArray(edges)) throw new RangeError('edges は配列でなければなりません');
   const out = [];
   if (edges.length === 0) return out;
-  for (const b of cellBoundsList(footprintCellKeys(graph), graph)) {
+  for (const b of interiorRects ?? roofInteriorRects(graph)) {
     for (const e of edges) {
       const [near, from, to] = e.isVertical
         ? [e.outward < 0 ? b.x2 : b.x1, b.y1, b.y2]

@@ -633,11 +633,11 @@ function splitEdgeByZones(edge, base, zones, tolMm, keepCovered = false) {
   for (const [a0, b0] of merged) {
     const a = a0 - pos <= tolMm ? pos : a0;
     const b = edge.hi - b0 <= tolMm ? edge.hi : b0;
-    if (a > pos) parts.push({ lo: pos, hi: a, overhangMm: base, covered: false });
-    parts.push({ lo: a, hi: b, overhangMm: 0, covered: true });
+    if (a > pos) parts.push({ lo: pos, hi: a, overhangMm: base, baseMm: base, covered: false });
+    parts.push({ lo: a, hi: b, overhangMm: 0, baseMm: base, covered: true });
     pos = b;
   }
-  if (edge.hi > pos) parts.push({ lo: pos, hi: edge.hi, overhangMm: base, covered: false });
+  if (edge.hi > pos) parts.push({ lo: pos, hi: edge.hi, overhangMm: base, baseMm: base, covered: false });
   const joined = []; // 隣り合う同じ出幅の部分は1つにする（出幅 0 の屋根・全体が接する辺で段差を作らない）
   for (const p of parts) {
     const last = joined[joined.length - 1];
@@ -705,6 +705,7 @@ function splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, 
 export function roofOutline(args) {
   const partLoops = outlinePartLoops(args, false);
   const shifted = outlineShifted;
+  const wraps = outlineWrapCorners(args);
   const outline = partLoops.map(parts => {
     const points = [];
     parts.forEach((p, i) => {
@@ -712,7 +713,9 @@ export function roofOutline(args) {
       if (p.isVertical !== q.isVertical) { // 直交する辺: 2本の線の交点
         const v = p.isVertical ? p : q;
         const h = p.isVertical ? q : p;
-        points.push(shifted(v), shifted(h));
+        const wrap = wrapAtCorner(wraps, v.coord, h.coord, args.tolMm);
+        if (wrap) points.push(...wrapPolyline(wrap)); // 建物の出隅は回り込む（B の線を V の先へ w 延ばして壁の線へ戻る）
+        else points.push(shifted(v), shifted(h));
       } else if (Math.abs(shifted(p) - shifted(q)) > GEOM_EPS) { // 同じ直線上で出幅が変わる: 段差の小辺
         const b = p.dir > 0 ? p.hi : p.lo;
         if (p.isVertical) points.push(shifted(p), b, shifted(q), b);
@@ -756,8 +759,88 @@ function outlinePartLoops({ rects, shape, ridgeIsVertical = null, highSide = nul
       parts = splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, zeroZones, tolMm, keepCovered);
     }
     if (edge.dir < 0) parts.reverse();
-    return parts.map(p => ({ isVertical: edge.isVertical, coord: edge.coord, lo: p.lo, hi: p.hi, outward: edge.outward, dir: edge.dir, overhangMm: p.overhangMm, covered: p.covered }));
+    return parts.map(p => ({ isVertical: edge.isVertical, coord: edge.coord, lo: p.lo, hi: p.hi, outward: edge.outward, dir: edge.dir, overhangMm: p.overhangMm, baseMm: p.baseMm, covered: p.covered }));
   }));
+}
+
+/**
+ * 外形線が建物の出隅を回り込む角（ユーザー指示2026-10-04）。屋根範囲の出隅（凸の角）V で、屋内に接する辺 A（出幅 0）と
+ * 出幅 h>0 の辺 B が出会い、V の対角（A の向こう側かつ B の向こう側）が屋内でない（＝V が建物の出隅）とき、B を平行移動した線を
+ * V の先へ w だけ延ばし、直角に折って B の線（建物の外壁の線）まで戻る。w＝A が屋内に接していなければ持つ出幅（A の種別の出幅）。
+ * ただし B の線に沿って V の先に屋内が A 側に続く長さ（外壁がある長さ）と、対角側（B の外側の出幅の帯）に屋内が現れるまでの長さを
+ * 超えない。0 になれば回り込まない（V の対角が屋内＝壁が続く角はこの 0 で今までどおり）。屋内は interiorRects（建物範囲のセル矩形）
+ * との重なりで判定する。interiorRects が無い・空なら回り込みなし（今までと同じ）。
+ * @param {object} args roofOutline と同じ（interiorRects を持つ）
+ * @returns {Array<{x:number,y:number,ux:number,uy:number,sx:number,sy:number,w:number,h:number,aIsPrev:boolean}>}
+ *   x,y＝V。(ux,uy)＝V の先（B の線に沿って A の外向き）、(sx,sy)＝B の外向き。h＝B の出幅。aIsPrev＝閉路の進行で A が V の手前か
+ */
+function outlineWrapCorners(args) {
+  const rects = (Array.isArray(args.interiorRects) ? args.interiorRects : [])
+    .filter(r => r && [r.x1, r.y1, r.x2, r.y2].every(Number.isFinite) && r.x2 > r.x1 && r.y2 > r.y1);
+  if (rects.length === 0) return [];
+  const tolMm = args.tolMm;
+  const wraps = [];
+  for (const parts of outlinePartLoops(args, true)) {
+    parts.forEach((p, i) => {
+      const q = parts[(i + 1) % parts.length];
+      if (p.isVertical === q.isVertical || p.covered === q.covered) return;
+      const a = p.covered ? p : q; // 屋内に接する辺（出幅 0）
+      const b = p.covered ? q : p; // 出幅のある辺
+      if (!(a.baseMm > 0) || !(b.overhangMm > 0)) return;
+      // 凸の角か: 閉路の進行で p は V で終わり q は V から始まる。V から見た各辺の伸びる向きと、屋根のある側（外向きの反対）が一致
+      const vert = p.isVertical ? p : q;
+      const hor = p.isVertical ? q : p;
+      const dv = p.isVertical ? -p.dir : q.dir;
+      const dh = p.isVertical ? q.dir : -p.dir;
+      if (vert.outward !== -dh || hor.outward !== -dv) return;
+      const x = vert.coord;
+      const y = hor.coord;
+      const uSign = a.outward;
+      const sSign = b.outward;
+      // 各セル矩形を V 原点の (u, s) 座標（u＝B の線に沿って V の先・s＝B の外向き）の範囲にする
+      const ranges = rects.map(r => {
+        const [ua, ub] = b.isVertical ? [(r.y1 - y) * uSign, (r.y2 - y) * uSign] : [(r.x1 - x) * uSign, (r.x2 - x) * uSign];
+        const [sa, sb] = b.isVertical ? [(r.x1 - x) * sSign, (r.x2 - x) * sSign] : [(r.y1 - y) * sSign, (r.y2 - y) * sSign];
+        return { u1: Math.min(ua, ub), u2: Math.max(ua, ub), s1: Math.min(sa, sb), s2: Math.max(sa, sb) };
+      });
+      // 外壁が続く長さ: B の線（s=0）に A 側（s<0）から接する屋内セルを、u=0 から連続する分だけ
+      const abut = ranges.filter(r => Math.abs(r.s2) <= tolMm && r.s1 < -tolMm);
+      let reach = 0;
+      for (let moved = true; moved;) {
+        moved = false;
+        for (const r of abut) if (r.u1 <= reach + tolMm && r.u2 > reach) { reach = r.u2; moved = true; }
+      }
+      // 対角側に屋内が現れるまでの長さ: B の外側の出幅の帯（0<s<h）に重なる屋内セルの、V の先（u>0）の最も手前
+      const inBand = ranges.filter(r => r.s2 > tolMm && r.s1 < b.overhangMm - tolMm && r.u2 > tolMm);
+      const diagonal = Math.min(Infinity, ...inBand.map(r => Math.max(r.u1, 0)));
+      const w = Math.min(a.baseMm, reach, diagonal);
+      if (!(w > tolMm)) return;
+      wraps.push({
+        x, y, w, h: b.overhangMm, aIsPrev: p.covered,
+        ux: b.isVertical ? 0 : uSign, uy: b.isVertical ? uSign : 0,
+        sx: b.isVertical ? sSign : 0, sy: b.isVertical ? 0 : sSign,
+      });
+    });
+  }
+  return wraps;
+}
+
+/** 角 (x,y) の回り込み（無ければ undefined）。 */
+function wrapAtCorner(wraps, x, y, tolMm) {
+  return wraps.find(c => Math.abs(c.x - x) <= tolMm && Math.abs(c.y - y) <= tolMm);
+}
+
+/** 回り込みの3点（x,y の並び）。V・W1（V の先 w）・W2（W1 から B の外向きへ h）。閉路の進行で A が手前なら V→W1→W2、後ろなら逆。 */
+function wrapPolyline(c) {
+  const { v, w1, w2 } = wrapPoints(c);
+  return c.aIsPrev ? [...v, ...w1, ...w2] : [...w2, ...w1, ...v];
+}
+
+function wrapPoints(c) {
+  const v = [c.x, c.y];
+  const w1 = [c.x + c.ux * c.w, c.y + c.uy * c.w];
+  const w2 = [w1[0] + c.sx * c.h, w1[1] + c.sy * c.h];
+  return { v, w1, w2 };
 }
 
 /** 点列（x,y の並び）の末尾と同じ点でなければ足す。 */
@@ -779,6 +862,13 @@ function pushPointDedup(points, [x, y]) {
  */
 export function roofOutlineExposedPaths(args) {
   const out = [];
+  const wraps = outlineWrapCorners(args);
+  const wrapBetween = (a, b) => {
+    if (a.isVertical === b.isVertical) return undefined;
+    const v = a.isVertical ? a : b;
+    const h = a.isVertical ? b : a;
+    return wrapAtCorner(wraps, v.coord, h.coord, args.tolMm);
+  };
   for (const parts of outlinePartLoops(args, true)) {
     const n = parts.length;
     // 線分（from→to）の列。部分ごとの線（移した直線の上）と、出幅の変わる同一直線上の段差の小辺を進行順に並べる。隣り合う線分は端が接する
@@ -788,10 +878,21 @@ export function roofOutlineExposedPaths(args) {
       const next = parts[(i + 1) % n];
       const across = outlineShifted(p);
       const pt = (along, at = across) => (p.isVertical ? [at, along] : [along, at]);
+      // 建物の出隅の回り込み（roofOutline と同じ角）。出幅のある辺 B は V の先 W1 まで延び、W1 から B の線（V の側）へ戻る
+      const wrapStart = wrapBetween(prev, p);
+      const wrapEnd = wrapBetween(p, next);
+      const alongOfW1 = c => (p.isVertical ? c.y + c.uy * c.w : c.x + c.ux * c.w);
       // 端の along 座標: 隣が直交する辺なら隣の移した線の位置（頂点）、同じ直線上の続きなら部分自身の端
-      const startAlong = prev.isVertical !== p.isVertical ? outlineShifted(prev) : (p.dir > 0 ? p.lo : p.hi);
-      const endAlong = next.isVertical !== p.isVertical ? outlineShifted(next) : (p.dir > 0 ? p.hi : p.lo);
+      const startAlong = wrapStart && !p.covered ? alongOfW1(wrapStart)
+        : prev.isVertical !== p.isVertical ? outlineShifted(prev) : (p.dir > 0 ? p.lo : p.hi);
+      const endAlong = wrapEnd && !p.covered ? alongOfW1(wrapEnd)
+        : next.isVertical !== p.isVertical ? outlineShifted(next) : (p.dir > 0 ? p.hi : p.lo);
       segs.push({ from: pt(startAlong), to: pt(endAlong), drawn: !p.covered });
+      if (wrapEnd) { // B から A へ（B が手前）: 戻りの線（描く）と壁の線の上の部分（描かない）。A から B へは逆の順
+        const { v, w1, w2 } = wrapPoints(wrapEnd);
+        if (p.covered) segs.push({ from: v, to: w1, drawn: false }, { from: w1, to: w2, drawn: true });
+        else segs.push({ from: w2, to: w1, drawn: true }, { from: w1, to: v, drawn: false });
+      }
       if (next.isVertical === p.isVertical && Math.abs(outlineShifted(next) - across) > GEOM_EPS) {
         const b = p.dir > 0 ? p.hi : p.lo; // 段差の小辺（同じ along の位置で、p の線から next の線へ）
         segs.push({ from: pt(b), to: pt(b, outlineShifted(next)), drawn: !p.covered && !next.covered });
