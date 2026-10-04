@@ -594,8 +594,12 @@ export function roofEdgeKind({ shape, ridgeIsVertical = null, highSide = null, i
   throw new RangeError(`外形線を持たない形状です: ${shape}`);
 }
 
-/** 辺 edge を、出幅 0 の区間 zones（同じ向き・同じ直線・同じ外側の区間）で分けた部分（昇順）。base は区間の外の出幅。 */
-function splitEdgeByZones(edge, base, zones, tolMm) {
+/**
+ * 辺 edge を、出幅 0 の区間 zones（同じ向き・同じ直線・同じ外側の区間）で分けた部分（昇順）。base は区間の外の出幅。
+ * 部分は covered（zones に覆われた部分か）を持つ。同じ出幅の隣り合う部分は1つにするが、keepCovered のときだけ covered が
+ * 違えば分けたままにする（roofOutlineExposedPaths。既定の roofOutline は今までどおり出幅だけで1つにする）。
+ */
+function splitEdgeByZones(edge, base, zones, tolMm, keepCovered = false) {
   const hit = zones
     .filter(z => z.isVertical === edge.isVertical && Math.abs(z.coord - edge.coord) <= tolMm && z.outward === edge.outward)
     .map(z => [Math.max(z.lo, edge.lo), Math.min(z.hi, edge.hi)])
@@ -612,15 +616,15 @@ function splitEdgeByZones(edge, base, zones, tolMm) {
   for (const [a0, b0] of merged) {
     const a = a0 - pos <= tolMm ? pos : a0;
     const b = edge.hi - b0 <= tolMm ? edge.hi : b0;
-    if (a > pos) parts.push({ lo: pos, hi: a, overhangMm: base });
-    parts.push({ lo: a, hi: b, overhangMm: 0 });
+    if (a > pos) parts.push({ lo: pos, hi: a, overhangMm: base, covered: false });
+    parts.push({ lo: a, hi: b, overhangMm: 0, covered: true });
     pos = b;
   }
-  if (edge.hi > pos) parts.push({ lo: pos, hi: edge.hi, overhangMm: base });
+  if (edge.hi > pos) parts.push({ lo: pos, hi: edge.hi, overhangMm: base, covered: false });
   const joined = []; // 隣り合う同じ出幅の部分は1つにする（出幅 0 の屋根・全体が接する辺で段差を作らない）
   for (const p of parts) {
     const last = joined[joined.length - 1];
-    if (last && last.overhangMm === p.overhangMm) last.hi = p.hi;
+    if (last && last.overhangMm === p.overhangMm && (!keepCovered || last.covered === p.covered)) last.hi = p.hi;
     else joined.push({ ...p });
   }
   return joined;
@@ -630,7 +634,7 @@ function splitEdgeByZones(edge, base, zones, tolMm) {
  * 辺 edge を、辺の部分ごとの種別 kindZones（leanToWingsOf の戻り値。同じ向き・同じ直線・同じ外側の区間）で分け、部分ごとの
  * 出幅（軒 or けらば）で splitEdgeByZones した部分（昇順）。隣り合う同じ出幅の部分は1つにする。辺を隙間なく覆わなければ RangeError。
  */
-function splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, zeroZones, tolMm) {
+function splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, zeroZones, tolMm, keepCovered = false) {
   const hit = kindZones
     .filter(z => z.isVertical === edge.isVertical && z.outward === edge.outward && Math.abs(z.coord - edge.coord) <= tolMm)
     .map(z => ({ lo: Math.max(z.lo, edge.lo), hi: Math.min(z.hi, edge.hi), kind: z.kind }))
@@ -643,14 +647,14 @@ function splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, 
     if (z.lo - pos > tolMm) throw new RangeError(`kindZones が辺を覆っていません: ${JSON.stringify(edge)}（${pos}..${z.lo}）`);
     if (z.hi <= pos) continue;
     const piece = { ...edge, lo: pos, hi: z.hi };
-    parts.push(...splitEdgeByZones(piece, z.kind === 'eave' ? eaveOverhangMm : gableOverhangMm, zeroZones, tolMm));
+    parts.push(...splitEdgeByZones(piece, z.kind === 'eave' ? eaveOverhangMm : gableOverhangMm, zeroZones, tolMm, keepCovered));
     pos = z.hi;
   }
   if (edge.hi - pos > tolMm) throw new RangeError(`kindZones が辺を覆っていません: ${JSON.stringify(edge)}（${pos}..${edge.hi}）`);
   const joined = [];
   for (const p of parts) {
     const last = joined[joined.length - 1];
-    if (last && last.overhangMm === p.overhangMm) last.hi = p.hi;
+    if (last && last.overhangMm === p.overhangMm && (!keepCovered || last.covered === p.covered)) last.hi = p.hi;
     else joined.push({ ...p });
   }
   if (joined.length > 0) joined[joined.length - 1].hi = edge.hi;
@@ -681,23 +685,9 @@ function splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, 
  *   edges＝辺の部分（閉路の進行順。出幅つき）、outline＝閉路ごとの頂点列（points は x,y の並び）
  * @throws {RangeError} 出幅が負・非有限、形状・向きの指定が不正（roofEdgeKind）、rects が不正（orthogonalBoundaryLoops）
  */
-export function roofOutline({ rects, shape, ridgeIsVertical = null, highSide = null, eaveOverhangMm, gableOverhangMm, zeroZones = [], kindZones = null, tolMm }) {
-  requireNonNegative(eaveOverhangMm, 'eaveOverhangMm');
-  requireNonNegative(gableOverhangMm, 'gableOverhangMm');
-  if (kindZones !== null && !Array.isArray(kindZones)) throw new RangeError('kindZones は配列か null でなければなりません');
-  const loops = orthogonalBoundaryLoops({ rects, tolMm });
-  const partLoops = loops.map(loop => loop.flatMap(edge => {
-    let parts;
-    if (kindZones === null) {
-      const kind = roofEdgeKind({ shape, ridgeIsVertical, highSide, isVertical: edge.isVertical });
-      parts = splitEdgeByZones(edge, kind === 'eave' ? eaveOverhangMm : gableOverhangMm, zeroZones, tolMm);
-    } else {
-      parts = splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, zeroZones, tolMm);
-    }
-    if (edge.dir < 0) parts.reverse();
-    return parts.map(p => ({ isVertical: edge.isVertical, coord: edge.coord, lo: p.lo, hi: p.hi, outward: edge.outward, dir: edge.dir, overhangMm: p.overhangMm }));
-  }));
-  const shifted = e => e.coord + e.outward * e.overhangMm;
+export function roofOutline(args) {
+  const partLoops = outlinePartLoops(args, false);
+  const shifted = outlineShifted;
   const outline = partLoops.map(parts => {
     const points = [];
     parts.forEach((p, i) => {
@@ -724,6 +714,92 @@ export function roofOutline({ rects, shape, ridgeIsVertical = null, highSide = n
   });
   const edges = partLoops.flat().map(e => ({ isVertical: e.isVertical, coord: e.coord, lo: e.lo, hi: e.hi, outward: e.outward, overhangMm: e.overhangMm }));
   return { edges, outline };
+}
+
+/** 外形線の辺の部分を出幅ぶん外へ移した線の座標。 */
+function outlineShifted(e) {
+  return e.coord + e.outward * e.overhangMm;
+}
+
+/**
+ * roofOutline・roofOutlineExposedPaths の共通の下ごしらえ: 閉路ごとの辺の部分（進行順。{isVertical, coord, lo, hi, outward, dir,
+ * overhangMm, covered}）。引数の検査もここ。keepCovered は splitEdgeByZones と同じ（roofOutline は false）。
+ */
+function outlinePartLoops({ rects, shape, ridgeIsVertical = null, highSide = null, eaveOverhangMm, gableOverhangMm, zeroZones = [], kindZones = null, tolMm }, keepCovered) {
+  requireNonNegative(eaveOverhangMm, 'eaveOverhangMm');
+  requireNonNegative(gableOverhangMm, 'gableOverhangMm');
+  if (kindZones !== null && !Array.isArray(kindZones)) throw new RangeError('kindZones は配列か null でなければなりません');
+  const loops = orthogonalBoundaryLoops({ rects, tolMm });
+  return loops.map(loop => loop.flatMap(edge => {
+    let parts;
+    if (kindZones === null) {
+      const kind = roofEdgeKind({ shape, ridgeIsVertical, highSide, isVertical: edge.isVertical });
+      parts = splitEdgeByZones(edge, kind === 'eave' ? eaveOverhangMm : gableOverhangMm, zeroZones, tolMm, keepCovered);
+    } else {
+      parts = splitEdgeByKindZones(edge, kindZones, eaveOverhangMm, gableOverhangMm, zeroZones, tolMm, keepCovered);
+    }
+    if (edge.dir < 0) parts.reverse();
+    return parts.map(p => ({ isVertical: edge.isVertical, coord: edge.coord, lo: p.lo, hi: p.hi, outward: edge.outward, dir: edge.dir, overhangMm: p.overhangMm, covered: p.covered }));
+  }));
+}
+
+/** 点列（x,y の並び）の末尾と同じ点でなければ足す。 */
+function pushPointDedup(points, [x, y]) {
+  const n = points.length;
+  if (n >= 2 && Math.abs(points[n - 2] - x) <= GEOM_EPS && Math.abs(points[n - 1] - y) <= GEOM_EPS) return;
+  points.push(x, y);
+}
+
+/**
+ * 平面の表示用の外形線（軒先・けらば。ステップ1）。roofOutline と同じ引数・同じ線だが、壁の中に重なる部分は描かない:
+ * zeroZones（下屋の辺が屋内に接する部分。通り芯＝壁の中）に覆われた辺の部分と、その端の段差の小辺は除く。描くのは
+ * 覆われない部分（出幅ぶん移した線。ユーザーが出幅 0 を入れた屋内に接しない辺も含む）と、両側とも描く部分である段差の小辺。
+ * ループ全体を描くなら closed:true の1本（roofOutline の outline と同じ点列）、そうでなければ開いた折れ線
+ * （ループ始点をまたぐ部分は1本につなぐ）。roofOutline の戻り値は変えない。
+ * @param {object} p roofOutline と同じ
+ * @returns {Array<{points:number[], closed:boolean}>}
+ * @throws {RangeError} roofOutline と同じ
+ */
+export function roofOutlineExposedPaths(args) {
+  const out = [];
+  for (const parts of outlinePartLoops(args, true)) {
+    const n = parts.length;
+    // 線分（from→to）の列。部分ごとの線（移した直線の上）と、出幅の変わる同一直線上の段差の小辺を進行順に並べる。隣り合う線分は端が接する
+    const segs = [];
+    parts.forEach((p, i) => {
+      const prev = parts[(i + n - 1) % n];
+      const next = parts[(i + 1) % n];
+      const across = outlineShifted(p);
+      const pt = (along, at = across) => (p.isVertical ? [at, along] : [along, at]);
+      // 端の along 座標: 隣が直交する辺なら隣の移した線の位置（頂点）、同じ直線上の続きなら部分自身の端
+      const startAlong = prev.isVertical !== p.isVertical ? outlineShifted(prev) : (p.dir > 0 ? p.lo : p.hi);
+      const endAlong = next.isVertical !== p.isVertical ? outlineShifted(next) : (p.dir > 0 ? p.hi : p.lo);
+      segs.push({ from: pt(startAlong), to: pt(endAlong), drawn: !p.covered });
+      if (next.isVertical === p.isVertical && Math.abs(outlineShifted(next) - across) > GEOM_EPS) {
+        const b = p.dir > 0 ? p.hi : p.lo; // 段差の小辺（同じ along の位置で、p の線から next の線へ）
+        segs.push({ from: pt(b), to: pt(b, outlineShifted(next)), drawn: !p.covered && !next.covered });
+      }
+    });
+    if (segs.every(s => s.drawn)) {
+      const points = [];
+      for (const s of segs) pushPointDedup(points, s.to); // 各線分の終点を並べると roofOutline の outline と同じ順（先頭は最初の部分の終点）
+      while (points.length >= 4 && Math.abs(points[0] - points[points.length - 2]) <= GEOM_EPS && Math.abs(points[1] - points[points.length - 1]) <= GEOM_EPS) points.splice(-2, 2);
+      if (points.length >= 4) out.push({ points, closed: true });
+      continue;
+    }
+    const start = segs.findIndex((s, i) => s.drawn && !segs[(i + segs.length - 1) % segs.length].drawn);
+    if (start < 0) continue; // 描く線分が無い
+    let path = null;
+    const flush = () => { if (path && path.length >= 4) out.push({ points: path, closed: false }); path = null; };
+    for (let k = 0; k < segs.length; k++) {
+      const s = segs[(start + k) % segs.length];
+      if (!s.drawn) { flush(); continue; }
+      if (!path) { path = []; pushPointDedup(path, s.from); }
+      pushPointDedup(path, s.to);
+    }
+    flush();
+  }
+  return out;
 }
 
 // ---- 母屋・棟木・隅木の出幅ぶんの延長（描画用。ステップ D2） ----
@@ -768,8 +844,10 @@ export function extendLinesToOutline({ lines, edges, tolMm }) {
 /**
  * 隅木を軒先の角まで延ばした「描画用の斜め線」を返す（ステップ D2。入力は変えない）。隅木（kind:'hip'）の軒側の端 (x1,y1) が
  * 屋根範囲の角（直交する2辺の上。両辺とも外側が線の向きの逆）にあり、2辺の出幅が等しい（tolMm 以内）なら、その出幅ぶん
- * 45° に外へ延ばす（外形線の角へ）。出幅が違う（下屋の辺が屋内に接する角など）は延ばさない。谷木（valley）・隠れた出隅の
- * 隅木（軒側の端が屋根範囲の内部）は延ばさない。上端 (x2,y2) は変えない。
+ * 45° に外へ延ばす（外形線の角へ）。出幅が違う（下屋の辺が屋内に接する角など）は延ばさない。谷木（valley）は既定では
+ * 延ばさない（伏図 D2）。valleys=true（平面の表示）のときだけ、谷木の軒側の端が入隅（直交する2辺の上。両辺とも外側が
+ * 線の向きの逆）にあれば同じ規則で外形線の入隅の角まで延ばす。隠れた出隅の隅木（軒側の端が屋根範囲の内部）は延ばさない。
+ * 上端 (x2,y2) は変えない。
  * 軒側の端が1本の辺の上にだけある（もう1本の辺の上に無い）ときは、既定（midEdge=false）では延ばさない。midEdge=true
  * （片流れの下屋の L字の継ぎ目＝ステップ E1a）のときだけ、その辺の部分の出幅の最小（段差の境目は小さい方）が 0 より大きければ、
  * その出幅ぶん同じく外へ延ばす。
@@ -777,15 +855,16 @@ export function extendLinesToOutline({ lines, edges, tolMm }) {
  * @param {Array<{kind:'hip'|'valley', x1:number, y1:number, x2:number, y2:number}>} p.diagonals roofHipDiagonals の戻り値
  * @param {Array<{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1,overhangMm:number}>|null} p.edges roofOutline の edges
  * @param {boolean} [p.midEdge=false] 軒側の端が1本の辺の途中にある隅木も延ばすか（L字の下屋の継ぎ目。既定は延ばさない）
+ * @param {boolean} [p.valleys=false] 谷木も延ばすか（平面の表示。既定は延ばさない）
  * @param {number} p.tolMm 許容差（>=0）
  * @returns {Array<{kind:'hip'|'valley', x1:number, y1:number, x2:number, y2:number}>}
  * @throws {RangeError} tolMm が不正、edges が配列でない・辺の値が不正
  */
-export function extendDiagonalsToOutline({ diagonals, edges, midEdge = false, tolMm }) {
+export function extendDiagonalsToOutline({ diagonals, edges, midEdge = false, valleys = false, tolMm }) {
   requireNonNegative(tolMm, 'tolMm');
   const list = requireOutlineEdges(edges);
   return diagonals.map(d => {
-    if (d.kind !== 'hip') return d;
+    if (d.kind !== 'hip' && !(valleys && d.kind === 'valley')) return d;
     const sx = Math.sign(d.x2 - d.x1);
     const sy = Math.sign(d.y2 - d.y1);
     if (sx === 0 || sy === 0) return d;
@@ -1085,6 +1164,30 @@ export function roofFramingLines({ rect, rects = null, shape, ridgeIsVertical, h
     case RoofShape.HIP: return rectHipLines(rect, layout);
     default: return empty; // 陸屋根・棟違い・未知
   }
+}
+
+// 棟木はピッチ・割付に依存しない（座標の対の差・短手の半分で決まる）。非木造には rules.framing が無くピッチを渡せないので、
+// 棟木だけを要る平面の表示（roofRidgeLines）は固定値で roofFramingLines を呼ぶ。値が効かないことは roofFramingPlan.test.js が固定する。
+const RIDGE_ONLY_PITCH_MM = 910;
+const RIDGE_ONLY_START_OFFSETS_MM = Object.freeze([455, 910]);
+
+/**
+ * 棟木の線だけ（平面の表示用。ステップ1）。roofFramingLines の ridges と同じ結果で、切妻（rect）・寄棟（rect か rects）のときだけ
+ * 返す。片流れ・陸屋根・棟違い・未知の形状は空（片流れは highSide 無しでも例外にしない）。引数の意味は roofFramingLines と同じ。
+ * @param {object} p
+ * @param {{x1:number,y1:number,x2:number,y2:number}|null} p.rect
+ * @param {Array<object>|null} [p.rects]
+ * @param {string} p.shape RoofShape の値
+ * @param {boolean} [p.ridgeIsVertical] 切妻の棟が y 方向か
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {Array<{isVertical:boolean,coord:number,lo:number,hi:number}>}
+ * @throws {RangeError} 許容差が不正、rect の座標が非有限か逆順
+ */
+export function roofRidgeLines({ rect, rects = null, shape, ridgeIsVertical, tolMm }) {
+  if (shape !== RoofShape.GABLE && shape !== RoofShape.HIP) return [];
+  return roofFramingLines({
+    rect, rects, shape, ridgeIsVertical, purlinPitchMm: RIDGE_ONLY_PITCH_MM, purlinStartOffsetsMm: RIDGE_ONLY_START_OFFSETS_MM, tolMm,
+  }).ridges;
 }
 
 /**

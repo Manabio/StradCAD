@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Rect, Text, Line, Group, Shape } from 'react-konva';
 import { getAllCells, cellBoundsList, outlineSegments } from './gridCells.js';
-import { roomNameAnchor } from './roomLabel.js';
+import { roomNameAnchor, showsRoomNameLabel } from './roomLabel.js';
 import { dividerSegmentsOutsideWalls, exteriorGuideSegments } from './finishGuideGeometry.js';
 import { RoomFeature } from '@core';
 
@@ -90,7 +90,7 @@ export const FinishModeLayer = observer(({
       }
     }
 
-    if (room.name) {
+    if (showsRoomNameLabel(room)) {
       // アンカー算出は roomLabel.js に集約（親は部分指定に奪われていないセルから選ぶ）
       const anchor = roomNameAnchor(room, graph);
 

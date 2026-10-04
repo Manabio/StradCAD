@@ -2,6 +2,18 @@
 // 描画（FinishModeLayer.jsx）と名前セルのクリック判定（FinishModeState._nameCellKeyOf）の
 // 両方がこのアンカーを参照する——二重実装だと片方だけ直ってクリック位置と表示がずれるため。
 import { cellBoundsFromKey, roomBounds, refreshCells } from './gridCells.js';
+import { isRoofFeature } from '../core/constants.js';
+
+/**
+ * 部屋名ラベルを出すか（平面 RoomLabelsLayer・仕上げ FinishModeLayer の共通の判断）。名前が空なら出さない。
+ * 屋根の部屋（feature===ROOF。名前は固定の「屋根」）は全 LOD で出さない（裁定2026-10-04「屋根の室名は隠す」。
+ * 屋根の表示は RoofPlanLayer の線・（ステップ2の）文字で行う）。選択・塗り・クリックには関与しない。
+ * @param {{ name: string, feature: string|null }} room
+ * @returns {boolean}
+ */
+export function showsRoomNameLabel(room) {
+  return !!room.name && !isRoofFeature(room.feature);
+}
 
 /**
  * 部屋名ラベルのアンカー位置と参照幅（フォントサイズ導出用）。

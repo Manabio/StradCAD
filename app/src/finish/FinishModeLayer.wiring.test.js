@@ -41,6 +41,15 @@ test('【不変条件】FinishModeLayer は組み立てたハイライト線分�
   assert.ok(/\{highlightSegs\}/.test(codeOnly), '{highlightSegs} がJSX本体に見つからない');
 });
 
+// 下屋の平面表示（ステップ1・裁定2026-10-04「屋根の室名は隠す」）: 室名ラベルを出す判断は純モジュール
+// finish/roomLabel.js の showsRoomNameLabel（屋根の部屋は全 LOD で出さない）に従うだけで、jsx は feature を直接見ない。
+test('【配線】FinishModeLayer は室名ラベルを showsRoomNameLabel(room) で出し分ける（1行まるごと・room.name 直読みの if を残さない）', () => {
+  assert.match(codeOnly, /^\s*if \(showsRoomNameLabel\(room\)\) \{\s*$/m, 'if (showsRoomNameLabel(room)) { が1行まるごとの形で見つからない');
+  assert.match(codeOnly, /^import \{ roomNameAnchor, showsRoomNameLabel \} from '\.\/roomLabel\.js';\s*$/m);
+  assert.equal((codeOnly.match(/showsRoomNameLabel\(/g) || []).length, 1, '呼び出しはこの1箇所');
+  assert.equal((codeOnly.match(/if \(room\.name\)/g) || []).length, 0, 'if (room.name) で出す経路が残っていない');
+});
+
 // 区割り線・外壁判定線は、壁本体と重なる部分を描かない／外壁の外面の外側に描くため
 // finishGuideGeometry.js（dividerSegmentsOutsideWalls・exteriorGuideSegments）を唯一の
 // 供給源にする（設計意図は.claude/plan-wall-region.md）。gridDividerSegments・

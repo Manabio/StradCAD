@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Group, Text } from 'react-konva';
 import { cellBoundsFromKey, getCellsInRect, roomBounds } from '../finish/gridCells.js';
 import { withFinishUndo } from '../finish/finishUndo.js';
+import { showsRoomNameLabel } from '../finish/roomLabel.js';
 import { LodLevel } from '../viewport.js';
 
 const FONT_SIZE_PX    = 14; // 部屋名のスクリーン上の表示サイズ (px)
@@ -22,7 +23,7 @@ export const RoomLabelsLayer = observer(({ graph, viewport, floorPrefix = '' }) 
   if (!graph) return null;
 
   return graph.rooms.map(room => {
-    if (!room.name) return null;
+    if (!showsRoomNameLabel(room)) return null;
 
     let cx, cy;
     if (room.namePosition) {

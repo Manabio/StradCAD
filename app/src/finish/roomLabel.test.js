@@ -2,8 +2,8 @@
 // 描画（FinishModeLayer.jsx）とクリック判定（FinishModeState._nameCellKeyOf）の共通契約。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
-import { roomNameAnchor } from './roomLabel.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, ROOF_ROOM_NAME } from '@core';
+import { roomNameAnchor, showsRoomNameLabel } from './roomLabel.js';
 import { worldToCell } from './gridCells.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
@@ -58,6 +58,23 @@ test('【失敗系】roomNameAnchor: 部分指定が親全域を覆う退化ケ�
   const a = roomNameAnchor(parent, graph);
   assert.ok(a, '除外で候補が尽きてもラベル自体は消えないはず');
   assert.deepEqual({ x: a.x, y: a.y }, { x: 2000, y: 1500 });
+});
+
+// ---- showsRoomNameLabel（室名を出す判断。平面 RoomLabelsLayer・仕上げ FinishModeLayer 共通。裁定2026-10-04「屋根の室名は隠す」）----
+test('showsRoomNameLabel: 名前のある通常の部屋・階段・屋外部屋は出す。屋根の部屋（feature=ROOF）は名前があっても出さない', () => {
+  assert.equal(showsRoomNameLabel({ name: '居間', feature: null }), true);
+  assert.equal(showsRoomNameLabel({ name: 'テラス', feature: null }), true);
+  assert.equal(showsRoomNameLabel({ name: '階段', feature: RoomFeature.STAIR }), true);
+  assert.equal(showsRoomNameLabel({ name: '吹抜け', feature: RoomFeature.VOID }), true);
+  assert.equal(showsRoomNameLabel({ name: ROOF_ROOM_NAME, feature: RoomFeature.ROOF }), false, '屋根（固定名「屋根」）は出さない');
+  assert.equal(showsRoomNameLabel({ name: '任意の名前', feature: RoomFeature.ROOF }), false, '名前の値に依らず feature で判断する');
+});
+
+test('【失敗系】showsRoomNameLabel: 名前が空・未設定の部屋は（屋根でなくても）出さない', () => {
+  assert.equal(showsRoomNameLabel({ name: '', feature: null }), false);
+  assert.equal(showsRoomNameLabel({ name: undefined, feature: null }), false);
+  assert.equal(showsRoomNameLabel({ name: null, feature: RoomFeature.STAIR }), false);
+  assert.equal(showsRoomNameLabel({ name: '', feature: RoomFeature.ROOF }), false);
 });
 
 // ---- 失敗系: セルが1つも解決できない場合は null（呼び出し側がラベル非表示にする）----

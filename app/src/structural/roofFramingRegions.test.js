@@ -8,6 +8,7 @@ import {
 } from '@core';
 import {
   mainRoofFramingRegion, leanToFramingRegions, leanToFramingCellKeys, leanToFraming, roofFramingRegionsForFigure, roofFramingFigurePrimitives,
+  leanToPlanRegions,
 } from './roofFramingRegions.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
@@ -577,4 +578,144 @@ test('【失敗系】roofFramingFigurePrimitives: subject の graph が無い・
   const flat = singleRoomGraph(9000, 6000);
   flat.mainRoofSpec.setField('shape', RoofShape.FLAT);
   assert.deepEqual(roofFramingFigurePrimitives({ rules: WOOD, lod: LodLevel.STANDARD, isRoofPlane: true, subjectGraph: { beams: [] }, topGraph: flat, project }), []);
+});
+
+// ---- leanToPlanRegions（下屋の平面表示。ステップ1。構造ゲートなし・補完 region あり） ----
+
+/** 平面用 region から平面専用の項目（exposedPaths・slope）を除いたもの＝伏図用 region と同じ幾何のはず。 */
+const withoutPlanFields = region => {
+  const rest = { ...region };
+  delete rest.exposedPaths;
+  delete rest.slope;
+  return rest;
+};
+
+test('【平面】leanToPlanRegions: 木造の矩形の下屋は leanToFramingRegions と同じ幾何に、exposedPaths（屋内に接する辺を除いた外形線）と slope が加わる', () => {
+  const { graph, interior, roof } = makeGrid(XS, YS);
+  interior([[0, 1]]); // 屋根（x 2000..6000・y 1500..3000）の左の辺 x=2000 に全体で接する
+  roof([[1, 1], [2, 1]]);
+  const project = woodProject();
+  const framing = leanToFramingRegions(graph, project);
+  const before = JSON.parse(JSON.stringify(framing));
+  const plan = leanToPlanRegions(graph);
+  assert.equal(plan.length, 1);
+  assert.deepEqual(withoutPlanFields(plan[0]), framing[0], '伏図用と同じ幾何（key・rect・shape・highSide・edges・outline）');
+  assert.equal(plan[0].shape, 'mono');
+  assert.equal(plan[0].highSide, 'left', '屋内に接する辺が高い側');
+  assert.equal(plan[0].slope, 3, 'slope は roofSpec.slope（既定 3）');
+  // 左の辺（出幅 0＝壁の中）を除いた開いた1本。上下はけらば・右は軒（既定は同じ 455）
+  assert.deepEqual(plan[0].exposedPaths, [{ points: [2000, 1045, 6455, 1045, 6455, 3455, 2000, 3455], closed: false }]);
+  assert.deepEqual(leanToFramingRegions(graph, project), before, '平面用の導出は伏図用の結果を変えない（exposedPaths・slope を伏図用 region に足さない）');
+  assert.ok(!('exposedPaths' in framing[0]) && !('slope' in framing[0]));
+});
+
+test('【平面】leanToPlanRegions: 屋内に接しない下屋は外形線が closed の1本。切妻の矩形は木造と同じ region', () => {
+  const { graph, roof } = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  const r = roof([[0, 0], [1, 0], [0, 1], [1, 1]]); // 8000×8000（自動の切妻・棟は横）
+  r.roofSpec.setField('slope', 4.5);
+  const [plan] = leanToPlanRegions(graph);
+  assert.deepEqual(withoutPlanFields(plan), leanToFramingRegions(graph, woodProject())[0]);
+  assert.equal(plan.shape, 'gable');
+  assert.equal(plan.slope, 4.5);
+  assert.deepEqual(plan.exposedPaths, [{ points: [8455, -455, 8455, 8455, -455, 8455, -455, -455], closed: true }]);
+});
+
+test('【平面】leanToPlanRegions: S造・RC造・未定でも出る（project 不要）。伏図側のゲートは今までどおり S造・未定で leanToFramingRegions・leanToFramingCellKeys・leanToFraming が空', () => {
+  const { graph, roof } = makeGrid(XS, YS);
+  roof([[1, 1], [2, 1]]);
+  assert.equal(leanToPlanRegions(graph).length, 1, '構造種別に関わらず出る');
+  assert.equal(leanToFramingRegions(graph, woodProject()).length, 1, '前提: 在来なら伏図側も region がある');
+  for (const key of ['S造', 'RC造(ラーメン)', UNSPECIFIED_STRUCTURE]) {
+    const project = woodProject(key);
+    assert.deepEqual(leanToFramingRegions(graph, project), [], `leanToFramingRegions ${key}`);
+    assert.equal(leanToFramingCellKeys(graph, project).size, 0, `leanToFramingCellKeys ${key}`);
+    const both = leanToFraming(graph, project);
+    assert.deepEqual(both.regions, [], `leanToFraming.regions ${key}`);
+    assert.equal(both.cellKeys.size, 0, `leanToFraming.cellKeys ${key}`);
+  }
+  assert.deepEqual(leanToFramingRegions(graph, null), [], 'project 無しの伏図側は空（今までどおり）');
+});
+
+test('【平面】leanToPlanRegions: 陸屋根は軒先の線だけ（全辺軒）。屋内に接する部分は出幅 0 で線を描かない。伏図側は region なし', () => {
+  const { graph, interior, roof } = makeGrid(XS, YS);
+  interior([[0, 1]]);
+  roof([[1, 1], [2, 1]]).roofSpec.setField('shape', RoofShape.FLAT);
+  const [plan] = leanToPlanRegions(graph);
+  assert.equal(plan.shape, 'flat');
+  assert.deepEqual(plan.rect, { x1: 2000, y1: 1500, x2: 6000, y2: 3000 });
+  assert.deepEqual(plan.exposedPaths, [{ points: [2000, 1045, 6455, 1045, 6455, 3455, 2000, 3455], closed: false }], '全辺 455（軒）。左は壁に接して除く');
+  assert.deepEqual(plan.edges.filter(e => e.overhangMm === 0).map(e => [e.isVertical, e.coord]), [[true, 2000]]);
+  assert.deepEqual(leanToFramingRegions(graph, woodProject()), [], '伏図側は陸屋根を region にしない（不変）');
+});
+
+test('【平面】leanToPlanRegions: 陸屋根の L字も軒先の線だけ（rects・屋内に接しなければ closed）', () => {
+  const { graph, roof } = makeGrid(XS, YS);
+  roof([[1, 1], [2, 1], [1, 2]]).roofSpec.setField('shape', RoofShape.FLAT);
+  const [plan] = leanToPlanRegions(graph);
+  assert.equal(plan.rect, null);
+  assert.equal(plan.rects.length, 3);
+  assert.equal(plan.exposedPaths.length, 1);
+  assert.equal(plan.exposedPaths[0].closed, true);
+  assert.deepEqual(plan.exposedPaths[0].points, [6455, 1045, 6455, 3455, 4455, 3455, 4455, 4955, 1545, 4955, 1545, 1045], '全辺 455 の閉路（L字の6頂点）');
+});
+
+test('【平面】leanToPlanRegions: 切妻になる L字（自動で短手3640超・明示の切妻）と棟違いは暫定で外形線だけ（翼・棟木の導出なし）。伏図側は region なし', () => {
+  const big = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  big.roof([[0, 0], [1, 0], [0, 1]]); // 外接 8000×8000 の L字。自動の形状は切妻
+  const [auto] = leanToPlanRegions(big.graph);
+  assert.equal(auto.shape, 'gable');
+  assert.equal(auto.rect, null);
+  assert.equal(auto.leanToWings, undefined, '翼は作らない');
+  assert.equal(auto.exposedPaths.length, 1);
+  assert.equal(auto.exposedPaths[0].closed, true);
+  assert.deepEqual(leanToFramingRegions(big.graph, woodProject()), []);
+  for (const shape of [RoofShape.GABLE, RoofShape.STAGGERED]) {
+    const l = makeGrid(XS, YS);
+    l.roof([[1, 1], [2, 1], [1, 2]]).roofSpec.setField('shape', shape);
+    const [plan] = leanToPlanRegions(l.graph);
+    assert.equal(plan.shape, shape);
+    assert.equal(plan.exposedPaths.length, 1, `明示の ${shape}（L字）`);
+  }
+  const rect = makeGrid(XS, YS);
+  rect.roof([[1, 1], [2, 1]]).roofSpec.setField('shape', RoofShape.STAGGERED);
+  const [stag] = leanToPlanRegions(rect.graph);
+  assert.equal(stag.shape, 'staggered');
+  assert.deepEqual(stag.exposedPaths, [{ points: [6455, 1045, 6455, 3455, 1545, 3455, 1545, 1045], closed: true }], '棟違い（矩形）は全辺軒の閉路');
+});
+
+test('【平面】leanToPlanRegions: 明示の寄棟の L字は rect:null・rects の寄棟 region。伏図側は region なし', () => {
+  const l = makeGrid(XS, YS);
+  l.roof([[1, 1], [2, 1], [1, 2]]).roofSpec.setField('shape', RoofShape.HIP);
+  const [plan] = leanToPlanRegions(l.graph);
+  assert.equal(plan.shape, 'hip');
+  assert.equal(plan.rect, null);
+  assert.deepEqual(plan.rects, [{ x1: 2000, y1: 1500, x2: 4000, y2: 3000 }, { x1: 4000, y1: 1500, x2: 6000, y2: 3000 }, { x1: 2000, y1: 3000, x2: 4000, y2: 4500 }]);
+  assert.equal(plan.ridgeIsVertical, null);
+  assert.equal(plan.highSide, null);
+  assert.deepEqual(plan.exposedPaths, [{ points: [6455, 1045, 6455, 3455, 4455, 3455, 4455, 4955, 1545, 4955, 1545, 1045], closed: true }]);
+  assert.deepEqual(leanToFramingRegions(l.graph, woodProject()), []);
+});
+
+test('【平面・失敗系】leanToPlanRegions: 範囲が空・不正（セルが解決できない）・roofSpec が null・屋根でない部屋・graph 無しは出ない', () => {
+  assert.deepEqual(leanToPlanRegions(null), []);
+  assert.deepEqual(leanToPlanRegions(undefined), []);
+  const none = makeGrid(XS, YS);
+  none.interior([[0, 0]]);
+  none.exterior([[1, 1]]);
+  assert.deepEqual(leanToPlanRegions(none.graph), [], '屋根でない部屋（屋内・屋外）は出ない');
+  const bad = makeGrid(XS, YS);
+  const room = bad.roof([[1, 1]]);
+  room.cells.clear();
+  room.cells.add('no:such:cell:key');
+  assert.deepEqual(leanToPlanRegions(bad.graph), [], 'セルが解決できない屋根は何も描かない');
+  const nullSpec = makeGrid(XS, YS);
+  nullSpec.roof([[1, 1]]).setRoofSpec(null);
+  assert.deepEqual(leanToPlanRegions(nullSpec.graph), [], 'roofSpec が null（I1 違反）は出ない');
+});
+
+test('【平面】leanToPlanRegions: 屋根が複数なら部屋ごとに1つ（key は部屋 id）', () => {
+  const g = makeGrid(XS, YS);
+  const a = g.roof([[0, 0]]);
+  const b = g.roof([[2, 2]]);
+  assert.deepEqual(leanToPlanRegions(g.graph).map(r => r.key), [`lean:${a.id}`, `lean:${b.id}`]);
 });

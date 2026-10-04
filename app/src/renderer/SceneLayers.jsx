@@ -10,6 +10,7 @@ import { StairLayer } from './StairLayer.jsx';
 import { RoomLabelsLayer } from './RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './StepSectionLayer.jsx';
 import { VoidLayer } from './VoidLayer.jsx';
+import { RoofPlanLayer } from './RoofPlanLayer.jsx';
 import { EquipmentSymbolLayer } from './EquipmentSymbolLayer.jsx';
 import { computeEquipmentSymbols } from '../finish/equipment/equipmentFigure.js';
 import { buildingEquipmentCatalog } from '../finish/equipment/buildingEquipment.js';
@@ -160,6 +161,7 @@ export const SceneLayers = observer(({
             {showPlanFigure && (
               <VoidLayer graph={graph} viewport={viewport} upperCrosses={upperVoidCrosses} />
             )}
+            {showPlanFigure && <RoofPlanLayer graph={graph} viewport={viewport} />}
             {/* 昇降機器具の図中記号（「EV」「EV1」等）。室名が出るモード（floorplan・finish）に揃える
                 （planFigureVisibility.js shouldShowEquipmentSymbols）。catalogは建物全体（全採用階。
                 buildingEquipmentCatalog。project.equipmentIndex を App.jsx の effect が埋める。
