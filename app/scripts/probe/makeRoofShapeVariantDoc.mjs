@@ -102,10 +102,17 @@ function printSummary(project) {
       times.push(performance.now() - t0);
     }
     const counts = { outline: 0, ridge: 0, hip: 0, valley: 0 };
-    for (const p of prims) counts[p.role]++;
+    const lines = prims.filter(p => p.kind === 'line');
+    const arrows = prims.filter(p => p.kind === 'arrow');
+    for (const p of lines) counts[p.role]++;
     const regionMs = (() => { const t0 = performance.now(); leanToPlanRegions(graph); return performance.now() - t0; })();
-    console.log(`  [${plane.name || '(無名)'}${plane.isAlternative ? '・検討案' : ''}] 下屋 ${rooms.length} 部屋: 外形線 ${counts.outline} / 棟木 ${counts.ridge} / 隅木 ${counts.hip} / 谷木 ${counts.valley}（線 ${prims.length} 本）`
+    console.log(`  [${plane.name || '(無名)'}${plane.isAlternative ? '・検討案' : ''}] 下屋 ${rooms.length} 部屋: 外形線 ${counts.outline} / 棟木 ${counts.ridge} / 隅木 ${counts.hip} / 谷木 ${counts.valley}（線 ${lines.length} 本）・傾斜ラベル ${arrows.length} 面`
       + `  roofPlanFigure 初回 ${times[0].toFixed(1)}ms・以降の最小 ${Math.min(...times.slice(1)).toFixed(1)}ms（leanToPlanRegions 単体 ${regionMs.toFixed(1)}ms）`);
+    for (const a of arrows) { // 傾斜ラベルの面ごとの flow（矢印の向き）と基準点（矢印の中点）
+      const [tx, ty, hx, hy] = a.points;
+      const flow = Math.abs(hx - tx) > Math.abs(hy - ty) ? (hx > tx ? '右' : '左') : (hy > ty ? '下' : '上');
+      console.log(`    面 ${a.key.replace(':arrow:', ' #')} flow=${flow} anchor=(${Math.round((tx + hx) / 2)},${Math.round((ty + hy) / 2)})`);
+    }
     for (const region of leanToPlanRegions(graph)) {
       const room = rooms.find(r => `lean:${r.id}` === region.key);
       const kind = region.rect ? '矩形' : `L字等（セル矩形 ${region.rects.length}）`;

@@ -96,7 +96,8 @@ export function trimRoofPlanLinesAtWalls(primitives, { faceAt, zeroZones, reachM
   const ctx = { faceAt, zeroZones: zeroZones ?? [], reachMm, tolMm };
   const out = [];
   for (const prim of primitives) {
-    if (prim.role === 'outline') out.push(trimOpenOutline(prim, ctx));
+    if (prim.kind !== 'line') out.push(prim); // 文字・矢印（ラベル）は線の端止めの対象外
+    else if (prim.role === 'outline') out.push(trimOpenOutline(prim, ctx));
     else {
       const trimmed = trimStraight(prim, ctx);
       if (trimmed) out.push(trimmed);

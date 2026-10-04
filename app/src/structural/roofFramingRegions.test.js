@@ -591,6 +591,7 @@ const withoutPlanFields = region => {
   delete rest.exposedPaths;
   delete rest.slope;
   delete rest.zeroZones;
+  delete rest.planDrains;
   return rest;
 };
 

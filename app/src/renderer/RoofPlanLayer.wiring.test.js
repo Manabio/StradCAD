@@ -39,15 +39,35 @@ test('【不変条件】RoofPlanLayer.jsx は appMode・graph.・project を読�
   assert.equal(count(layer, /\bgraph\.\w/g), 0, 'graph. を読まない（導出は純モジュール）');
 });
 
-test('【配線】RoofPlanLayer.jsx は <Line を1つだけ、細線（viewport.lineWeightsPx.thin）・strokeScaleEnabled={false}・listening={false} で描く（Group にも listening={false}）', () => {
-  assert.equal(count(layer, /<Line\b/g), 1);
-  assert.equal(count(layer, /listening=\{false\}/g), 2, 'Group と Line の2箇所');
+test('【配線】RoofPlanLayer.jsx は <Line を3つ（線・矢印本体・矢じり）と <Text を1つだけ。Line は細線（viewport.lineWeightsPx.thin）・strokeScaleEnabled={false}・listening={false}、Text は fontSize={p.fontSizeMm}・listening={false}（Group にも listening={false}）', () => {
+  assert.equal(count(layer, /<Line\b/g), 3, '線・矢印本体・矢じり');
+  assert.equal(count(layer, /<Text\b/g), 1);
+  assert.equal(count(layer, /listening=\{false\}/g), 5, 'Group・Line 3本・Text の5箇所');
   assert.match(layer, /^\s*<Group name="roof-plan" listening=\{false\}>\s*$/m);
-  assert.match(layer, /^\s*listening=\{false\}\s*$/m, 'Line の listening={false} が1行まるごとの形（行末コメントに残す変異を検出）');
-  assert.match(layer, /^\s*strokeWidth=\{viewport\.lineWeightsPx\.thin\}\s*$/m);
-  assert.match(layer, /^\s*strokeScaleEnabled=\{false\}\s*$/m);
-  assert.match(layer, /^\s*points=\{p\.points\}\s*$/m);
-  assert.match(layer, /^\s*closed=\{p\.closed\}\s*$/m);
+  const lines = layer.match(/<Line\b[\s\S]*?\/>/g) ?? [];
+  assert.equal(lines.length, 3);
+  for (const el of lines) { // 要素ごとに1行まるごと（行末コメントに残す変異を検出）
+    assert.match(el, /^\s*listening=\{false\}\s*$/m, 'Line の listening={false}');
+    assert.match(el, /^\s*strokeWidth=\{viewport\.lineWeightsPx\.thin\}\s*$/m, 'Line の線幅は細線');
+    assert.match(el, /^\s*strokeScaleEnabled=\{false\}\s*$/m, 'Line は画面px固定');
+  }
+  assert.match(lines[0], /^\s*points=\{p\.points\}\s*$/m, 'arrow 本体');
+  assert.match(lines[1], /^\s*points=\{p\.head\}\s*$/m, '矢じり');
+  assert.match(lines[1], /^\s*lineCap="round"\s*$/m);
+  assert.match(lines[1], /^\s*lineJoin="round"\s*$/m);
+  assert.match(lines[2], /^\s*points=\{p\.points\}\s*$/m);
+  assert.match(lines[2], /^\s*closed=\{p\.closed\}\s*$/m);
+  const text = (layer.match(/<Text\b[\s\S]*?\/>/g) ?? [])[0];
+  assert.ok(text, '<Text 要素が見つかる');
+  for (const re of [/^\s*x=\{p\.x\}\s*$/m, /^\s*y=\{p\.y\}\s*$/m, /^\s*text=\{p\.text\}\s*$/m, /^\s*fontSize=\{p\.fontSizeMm\}\s*$/m,
+    /^\s*fill=\{ROOF_PLAN_COLOR\}\s*$/m, /^\s*listening=\{false\}\s*$/m]) assert.match(text, re, String(re));
+  assert.match(layer, /^import \{ Group, Line, Text \} from 'react-konva';\s*$/m);
+});
+
+test('【配線】RoofPlanLayer.jsx は kind で arrow・text を分けて写すだけ（判断は純モジュール。LOD は visibleRoofPlanPrimitives）', () => {
+  assert.match(layer, /^\s*if \(p\.kind === 'text'\) \{\s*$/m);
+  assert.match(layer, /^\s*if \(p\.kind === 'arrow'\) \{\s*$/m);
+  assert.equal(count(layer, /viewport\.lodLevel/g), 1, 'LOD の参照は visibleRoofPlanPrimitives への引数だけ');
 });
 
 test('【不変条件】roofPlanFigure.js（純モジュール）は store.js・snap.js・.jsx・react-konva・graphDerived を import しない', () => {
@@ -65,4 +85,13 @@ test('【配線】roofPlanFigure.js は region ごとの線を trimRoofPlanLines
   assert.equal(count(figure, /trimRoofPlanLinesAtWalls\(/g), 1);
   assert.match(figure, /^\s*import \{ trimRoofPlanLinesAtWalls \} from '\.\/roofPlanWallTrim\.js';\s*$/m);
   assert.match(figure, /^\s*import \{ outerWallFaceNear \} from '\.\.\/wallFaces\.js';\s*$/m);
+});
+
+test('【配線】roofPlanFigure.js は水下ごとの基準点（drainFaceAnchors）から傾斜ラベルを作る（面を間引かない＝傾斜面1つにつき1つ）。矢じりは renderer/chevron.js（1行まるごと）', () => {
+  assert.match(figure, /^\s*const anchors = drainFaceAnchors\(\{ rects: region\.rect \? \[region\.rect\] : region\.rects, drains: region\.planDrains, tolMm \}\);\s*$/m);
+  assert.equal(count(figure, /anchors\s*\.filter\(/g), 0, '基準点を間引かない');
+  assert.match(figure, /^\s*out\.push\(\.\.\.roofSlopeLabelPrimitives\(\{ key: region\.key, anchors, slope: region\.slope \}\)\);\s*$/m);
+  assert.match(figure, /^\s*import \{ chevronPoints \} from '\.\.\/\.\.\/renderer\/chevron\.js';\s*$/m);
+  assert.equal(count(figure, /drainFaceAnchors\(/g), 1);
+  assert.equal(count(figure, /chevronPoints\(/g), 1);
 });

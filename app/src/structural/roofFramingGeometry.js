@@ -1888,3 +1888,125 @@ export function leanToDrainFraming({ rects, drains, pitchMm, firstLevelMm, tolMm
   if (firstLevelMm !== undefined) requirePositive(firstLevelMm, 'firstLevelMm');
   return leanToDrainField({ rects, drains, pitchMm, firstLevelMm, tolMm }, { lines: true, diagonals: true });
 }
+
+// ---- 水下ごとの面の基準点（平面の傾斜ラベル用。ステップ3） ----
+
+/** 水下の流れの向き（水下の外向き）。上下左右の4つ（y 下向き正。top＝y が小さい側）。 */
+function drainFlowOf(d) {
+  if (d.isVertical) return d.outward > 0 ? 'right' : 'left';
+  return d.outward > 0 ? 'down' : 'up';
+}
+
+/** 水下 d の座標系（along＝水下に沿う座標・across＝水下から内向き n の距離 u）で見た矩形の範囲。 */
+function drainAxes(d) {
+  return d.isVertical
+    ? { acrossLo: 'x1', acrossHi: 'x2', alongLo: 'y1', alongHi: 'y2' }
+    : { acrossLo: 'y1', acrossHi: 'y2', alongLo: 'x1', alongHi: 'x2' };
+}
+
+/** 点 m（水下の上の along 座標）から内向きに屋根範囲 live を最初に出るまでの距離。 */
+function drainDepthAt(d, m, live, tolMm) {
+  const ax = drainAxes(d);
+  const n = -d.outward;
+  const spans = live.filter(r => r[ax.alongLo] <= m && m <= r[ax.alongHi]).map(r => (n > 0
+    ? [r[ax.acrossLo] - d.coord, r[ax.acrossHi] - d.coord]
+    : [d.coord - r[ax.acrossHi], d.coord - r[ax.acrossLo]]));
+  let reach = 0;
+  for (let moved = true; moved;) {
+    moved = false;
+    for (const [u1, u2] of spans) {
+      if (u1 <= reach + tolMm && u2 > reach) { reach = u2; moved = true; }
+    }
+  }
+  return reach;
+}
+
+/** 箱 box（{x1,y1,x2,y2}）が矩形群 field の和に完全に含まれるか（圧縮座標の各セルの中点で調べる）。 */
+function boxCoveredBy(box, field) {
+  const cuts = (lo, hi, values) => [lo, hi, ...values.filter(v => v > lo && v < hi)].sort((a, b) => a - b);
+  const xs = cuts(box.x1, box.x2, field.flatMap(r => [r.x1, r.x2]));
+  const ys = cuts(box.y1, box.y2, field.flatMap(r => [r.y1, r.y2]));
+  for (let i = 0; i + 1 < xs.length; i++) {
+    for (let j = 0; j + 1 < ys.length; j++) {
+      const mx = (xs[i] + xs[i + 1]) / 2;
+      const my = (ys[j] + ys[j + 1]) / 2;
+      if (xs[i + 1] - xs[i] <= 0 || ys[j + 1] - ys[j] <= 0) continue;
+      if (!field.some(r => r.x1 < mx && mx < r.x2 && r.y1 < my && my < r.y2)) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * 水下 d の上の点 m から、場の定義域 field に収まる最大の正方形（水下に沿って m±s・内向きに 0..2s）の s。
+ * 収まるかは s について単調（小さい正方形は大きい正方形に含まれる）で、境目は定義域の矩形の座標で決まるので、
+ * 候補の s（m からの along の距離・水下からの across の距離の半分）を昇順に二分探索して厳密な値を求める。
+ */
+function drainRunAt(d, m, field) {
+  const ax = drainAxes(d);
+  const n = -d.outward;
+  const boxOf = s => {
+    const [a1, a2] = n > 0 ? [d.coord, d.coord + 2 * s] : [d.coord - 2 * s, d.coord];
+    return d.isVertical ? { x1: a1, x2: a2, y1: m - s, y2: m + s } : { x1: m - s, x2: m + s, y1: a1, y2: a2 };
+  };
+  const cands = [...new Set([
+    ...field.flatMap(r => [r[ax.alongLo], r[ax.alongHi]]).map(c => Math.abs(c - m)),
+    ...field.flatMap(r => [r[ax.acrossLo], r[ax.acrossHi]]).map(c => Math.abs(c - d.coord) / 2),
+  ].filter(s => s > 0))].sort((a, b) => a - b);
+  let lo = 0; // 収まる候補の個数（先頭から連続）
+  let hi = cands.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (boxCoveredBy(boxOf(cands[mid]), field)) lo = mid + 1; else hi = mid;
+  }
+  return lo === 0 ? 0 : cands[lo - 1];
+}
+
+/**
+ * 水下ごとの面（水下1本につき1つ。leanToDrainFraming の faces と同じ並び＝mergeDrainEdges 後の水下の順）の基準点。
+ * 傾斜の文字・矢印を置く点。形状によらない（寄棟・切妻・片流れ・L字とも、水下の集合だけから決まる）。
+ *  - run: 水下の上の点 m から内向きに正方形（水下に沿って m±s・内向きに 0..2s）を置いたとき、場の定義域（leanToDrainFraming と同じ
+ *    drainFieldRects。水下の外側の帯を除いたもの）に収まる最大の s。
+ *  - depth: m から内向きに屋根範囲を最初に出るまでの距離。
+ *  - 基準点＝m から内向きに min(run, depth)/2 の点（depth で止めないと、水下から遠い面で建物の中へ出る）。
+ *  - m の候補: 水下を屋根範囲・他の水下の座標で区切った小区間の中点と、水下の中点。min(run, depth) が最大の候補、
+ *    同じ（tolMm 以内）なら水下の中点に近い方（さらに同じなら along の小さい方）。
+ * 水下が空・使える矩形が無いときは []。
+ * @param {object} p
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>} p.rects 屋根範囲のセル矩形
+ * @param {Array<{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1}>} p.drains 水下の辺
+ * @param {number} p.tolMm 許容差（>=0）
+ * @returns {Array<{drainIndex:number, drain:{isVertical:boolean,coord:number,lo:number,hi:number,outward:1|-1}, anchor:{x:number,y:number}, flow:'up'|'down'|'left'|'right'}>}
+ * @throws {RangeError} 許容差が不正、rects が配列でない・座標が非有限か逆順、drains が配列でない・値が不正
+ */
+export function drainFaceAnchors({ rects, drains, tolMm }) {
+  requireNonNegative(tolMm, 'tolMm');
+  requireDrains(drains);
+  const live = liveRectsOf(rects, tolMm);
+  const merged = mergeDrainEdges(drains, tolMm);
+  if (live.length === 0 || merged.length === 0) return [];
+  const field = drainFieldRects(live, merged, DRAIN_FIELD_DEFAULT_PITCH_MM, tolMm);
+  return merged.map((drain, drainIndex) => {
+    const ax = drainAxes(drain);
+    const n = -drain.outward;
+    const cuts = [drain.lo, drain.hi, ...live.flatMap(r => [r[ax.alongLo], r[ax.alongHi]]),
+      ...merged.flatMap(d => (d.isVertical === drain.isVertical ? [d.lo, d.hi] : [d.coord]))]
+      .filter(v => v > drain.lo + tolMm && v < drain.hi - tolMm).sort((a, b) => a - b);
+    const bounds = [drain.lo, ...cuts, drain.hi].filter((v, i, a) => i === 0 || v - a[i - 1] > tolMm);
+    const middle = (drain.lo + drain.hi) / 2;
+    // 水下の中点が屋根範囲のセルの境目に乗ると、隣の行の奥行き・run が混ざって基準点が屋根範囲の縁へ出る（奥行きの違う L字）。
+    // 境目に乗る中点は候補から外す（小区間の中点は必ずセルの内部。小区間は1つ以上あるので候補は残る）
+    const middleOnEdge = live.some(r => Math.abs(r[ax.alongLo] - middle) <= tolMm || Math.abs(r[ax.alongHi] - middle) <= tolMm);
+    const cands = [...(middleOnEdge ? [] : [middle]), ...bounds.slice(1).map((v, i) => (bounds[i] + v) / 2)];
+    let best = null;
+    for (const m of cands) {
+      const reach = Math.min(drainRunAt(drain, m, field), drainDepthAt(drain, m, live, tolMm));
+      const better = best === null || reach > best.reach + tolMm
+        || (Math.abs(reach - best.reach) <= tolMm && (Math.abs(m - middle) < Math.abs(best.m - middle) - tolMm
+          || (Math.abs(Math.abs(m - middle) - Math.abs(best.m - middle)) <= tolMm && m < best.m)));
+      if (better) best = { m, reach };
+    }
+    const across = drain.coord + (n * best.reach) / 2;
+    return { drainIndex, drain: { ...drain }, anchor: drain.isVertical ? { x: across, y: best.m } : { x: best.m, y: across }, flow: drainFlowOf(drain) };
+  });
+}

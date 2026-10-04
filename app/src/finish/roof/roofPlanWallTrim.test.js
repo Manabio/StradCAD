@@ -122,6 +122,21 @@ test('壁に平行な線・屋内側へ向かう線・faceAt が null の線は�
   assert.deepEqual(run([], () => 60, zones), [], '空の入力は空');
 });
 
+test('文字・矢印（傾斜ラベル）は素通し: faceAt が面を答えても座標を変えず、同じオブジェクトのまま。線は従来どおり止まる', () => {
+  const arrow = { kind: 'arrow', key: 'a', points: [7280, -3640, 8180, -3640], head: [0, 0, 1, 1, 2, 2], detailOnly: true };
+  const text = { kind: 'text', key: 't', x: 7280, y: -3640, text: '屋根', fontSizeMm: 200, detailOnly: true };
+  const hip = line('hip', [9555, 455, 5460, -3640]);
+  const { faceAt } = recorder(() => 100);
+  const out = run([arrow, text, hip], wallTable, ZONES);
+  assert.equal(out[0], arrow);
+  assert.equal(out[1], text);
+  assert.deepEqual(out[2].points, [9555, 455, 5460 + D, -3640 + D], '線は止まる');
+  const calls = [];
+  run([arrow, text], q => { calls.push(q); return 100; }, ZONES);
+  assert.equal(calls.length, 0, 'ラベルでは faceAt を呼ばない');
+  assert.equal(faceAt({}), 100);
+});
+
 test('壁が無い階（faceAt が常に null）は全ての線が変わらない', () => {
   const prims = [
     line('outline', [7280, -10339, 9555, -10339, 9555, 455, 3185, 455, 3185, -3640]),

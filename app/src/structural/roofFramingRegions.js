@@ -190,6 +190,7 @@ function planOutlineOnlyRegion(room, graph) {
  * 部屋ごとに framingRegionOfRoom の結果（伏図と同じ幾何）、無ければ平面専用の補完 region（planOutlineOnlyRegion）。
  * どちらも平面用に exposedPaths（roofOutlineExposedPaths。壁の中に重なる部分を除いた外形線）・slope（roofSpec.slope）・
  * zeroZones（屋内に接する区間。壁に当たる線の端を外壁面で止める finish/roof/roofPlanWallTrim.js が使う）を足す
+ * ・planDrains（傾斜ラベルの水下。planDrainsOf）を足す
  * （伏図用の region＝leanToFramingRegions には足さない）。範囲が空・不正・roofSpec が無い部屋は出ない。
  * 戻り値は読み取り専用（renderer の graphComputed が共有する）。
  */
@@ -205,9 +206,31 @@ export function leanToPlanRegions(graph) {
       exposedPaths: roofOutlineExposedPaths(outlineArgs(r.region, room.roofSpec, r.zeroZones, r.kindZones)),
       slope: room.roofSpec.slope,
       zeroZones: r.zeroZones,
+      planDrains: planDrainsOf(r.region),
     });
   }
   return out;
+}
+
+/**
+ * 平面の傾斜ラベル用の水下（流れの先の軒の辺。{isVertical, coord, lo, hi, outward}）。矩形の片流れ＝高い側の反対の辺・切妻＝棟木と
+ * 平行な2辺・寄棟（矩形でないものも）＝全辺・L字の片流れ＝leanToDrains。陸屋根・外形線だけの region（切妻になる L字・棟違い・
+ * 翼が無い L字）は []（ラベルなし）。
+ */
+function planDrainsOf(region) {
+  if (region.leanToDrains) return region.leanToDrains.map(({ isVertical, coord, lo, hi, outward }) => ({ isVertical, coord, lo, hi, outward }));
+  const rects = region.rect ? [region.rect] : region.rects;
+  const edges = orthogonalBoundaryLoops({ rects, tolMm: CL_OVERLAP_TOL_MM }).flat()
+    .map(({ isVertical, coord, lo, hi, outward }) => ({ isVertical, coord, lo, hi, outward }));
+  if (region.shape === RoofShape.HIP) return edges;
+  if (!region.rect) return [];
+  if (region.shape === RoofShape.GABLE) return edges.filter(e => e.isVertical === region.ridgeIsVertical);
+  if (region.shape === RoofShape.MONO) {
+    const verticalFlow = region.highSide === 'left' || region.highSide === 'right'; // 縦の水下（左右の辺）
+    const outward = region.highSide === 'top' || region.highSide === 'left' ? 1 : -1; // 高い側の反対の辺の外向き
+    return edges.filter(e => e.isVertical === verticalFlow && e.outward === outward);
+  }
+  return [];
 }
 
 /**

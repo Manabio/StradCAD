@@ -3,13 +3,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape } from '@core';
-import { roofPlanFigure, visibleRoofPlanPrimitives } from './roofPlanFigure.js';
+import {
+  roofPlanFigure as roofPlanFigureAll, visibleRoofPlanPrimitives, roofSlopeText, roofSlopeLabelPrimitives,
+  ROOF_LABEL_FONT_MM, ROOF_LABEL_ARROW_MM, ROOF_LABEL_GAP_MM, ROOF_LABEL_HEAD_MM,
+} from './roofPlanFigure.js';
+import { chevronPoints } from '../../renderer/chevron.js';
 import { leanToPlanRegions } from '../../structural/roofFramingRegions.js';
 import { roofFramingLines } from '../../structural/roofFramingGeometry.js';
 import { createLeanToRoofSpec } from './roofDefaults.js';
 import { LodLevel } from '../../viewport.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
+
+/** 線（kind:'line'）だけ。ステップ1以来のテストは線の図形を見る（傾斜ラベルは roofPlanFigureAll で別に見る）。 */
+const roofPlanFigure = graph => roofPlanFigureAll(graph).filter(p => p.kind === 'line');
 
 /** 格子 xs × ys の階。interior・roof は [i, j] セルの配列から部屋を作る。 */
 function makeGrid(xs, ys) {
@@ -232,4 +239,189 @@ test('壁あり: 壁に当たらない端・壁から離れた（reach の外の
   addWallOn(g.graph, g.cx[3], 75, true, g.cy[0], g.cy[1]); // x=6000 の壁だが屋根の辺（y 1500..3000）から離れている
   const [after] = roofPlanFigure(g.graph);
   assert.deepEqual(after.points, bare.points);
+});
+
+// ---- 傾斜ラベル（詳細 LOD の「屋根」・水下向きの矢印・「（傾斜N/10）」） ----
+
+const labelsOf = prims => prims.filter(p => p.kind !== 'line');
+const arrowsOf = prims => prims.filter(p => p.kind === 'arrow');
+/** 文字の推定幅（半角 ASCII 0.5・それ以外 1.0 × 200）。テスト側の独立な計算。 */
+const widthOf = text => [...text].reduce((w, ch) => w + (ch.charCodeAt(0) < 128 ? 0.5 : 1) * 200, 0);
+
+test('roofSlopeText: 「（傾斜N/10）」。0.5 刻みは「2.5」。有限でない・0・負・未指定は既定の傾斜（3）', () => {
+  assert.equal(roofSlopeText(3), '（傾斜3/10）');
+  assert.equal(roofSlopeText(4), '（傾斜4/10）');
+  assert.equal(roofSlopeText(2.5), '（傾斜2.5/10）');
+  for (const bad of [NaN, 0, -1, Infinity, -Infinity, undefined, null, '3']) assert.equal(roofSlopeText(bad), '（傾斜3/10）', String(bad));
+});
+
+test('roofSlopeLabelPrimitives: 縦の矢印（上下）は文字を左右から挟む（左「屋根」・右「（傾斜N/10）」）。矢印の中点が基準点・先端が水下側', () => {
+  assert.deepEqual([ROOF_LABEL_FONT_MM, ROOF_LABEL_ARROW_MM, ROOF_LABEL_GAP_MM, ROOF_LABEL_HEAD_MM], [200, 900, 100, 150]);
+  const a = { x: 1000, y: 2000 };
+  const wName = widthOf('屋根');
+  const wSlope = widthOf('（傾斜3/10）');
+  assert.equal(wName, 400);
+  assert.equal(wSlope, 1200);
+  for (const flow of ['down', 'up']) {
+    const prims = roofSlopeLabelPrimitives({ key: 'k', anchors: [{ drainIndex: 0, anchor: a, flow }], slope: 3 });
+    assert.deepEqual(prims.map(p => p.kind), ['arrow', 'text', 'text']);
+    assert.ok(prims.every(p => p.detailOnly === true));
+    const [arrow, name, slope] = prims;
+    const [tx, ty, hx, hy] = arrow.points;
+    assert.equal(tx, 1000, `${flow}: 縦の矢印`);
+    assert.equal(hx, 1000);
+    assert.equal(Math.abs(hy - ty), 900, '長さ 900');
+    assert.equal((ty + hy) / 2, 2000, '中点が基準点');
+    assert.equal(flow === 'down' ? hy > ty : hy < ty, true, `${flow}: 先端が水下側（down は +y・up は -y）`);
+    assert.deepEqual(arrow.head, chevronPoints(arrow.points, 150), '矢じりは chevronPoints（長さ 150）');
+    assert.equal(name.text, '屋根');
+    assert.equal(slope.text, '（傾斜3/10）');
+    assert.equal(name.fontSizeMm, 200);
+    assert.ok(name.x + wName < 1000 && 1000 < slope.x, `${flow}: 「屋根」の右端 ${name.x + wName} < 矢印の x < 傾斜の文字の左端 ${slope.x}`);
+    assert.equal(name.x + wName, 1000 - 100, '「屋根」の右端は矢印から 100');
+    assert.equal(slope.x, 1000 + 100);
+    assert.equal(name.y + 200 / 2, 2000, '文字の縦位置は基準点が中心');
+    assert.equal(slope.y + 200 / 2, 2000);
+  }
+});
+
+test('roofSlopeLabelPrimitives: 横の矢印（左右）は文字を上下から挟む（上「屋根」・下「（傾斜N/10）」）。文字の横位置は基準点が中心', () => {
+  const a = { x: 1000, y: 2000 };
+  const wName = widthOf('屋根');
+  const wSlope = widthOf('（傾斜3/10）');
+  for (const flow of ['right', 'left']) {
+    const prims = roofSlopeLabelPrimitives({ key: 'k', anchors: [{ drainIndex: 0, anchor: a, flow }], slope: 3 });
+    const [arrow, name, slope] = prims;
+    const [tx, ty, hx, hy] = arrow.points;
+    assert.equal(ty, 2000, `${flow}: 横の矢印`);
+    assert.equal(hy, 2000);
+    assert.equal(Math.abs(hx - tx), 900);
+    assert.equal((tx + hx) / 2, 1000);
+    assert.equal(flow === 'right' ? hx > tx : hx < tx, true, `${flow}: 先端が水下側（right は +x・left は -x）`);
+    assert.deepEqual(arrow.head, chevronPoints(arrow.points, 150));
+    assert.ok(name.y + 200 < 2000 && 2000 < slope.y, `${flow}: 「屋根」の下端 ${name.y + 200} < 矢印の y < 傾斜の文字の上端 ${slope.y}`);
+    assert.equal(name.y + 200, 2000 - 100);
+    assert.equal(slope.y, 2000 + 100);
+    assert.equal(name.x + wName / 2, 1000, '「屋根」の横位置は基準点が中心');
+    assert.equal(slope.x + wSlope / 2, 1000, '傾斜の文字も');
+  }
+});
+
+test('roofSlopeLabelPrimitives: 面ごとに key が一意。傾斜が 2.5 なら「（傾斜2.5/10）」・不正なら既定。面が無ければ空', () => {
+  const anchors = [{ drainIndex: 0, anchor: { x: 0, y: 0 }, flow: 'down' }, { drainIndex: 1, anchor: { x: 5000, y: 0 }, flow: 'up' }];
+  const prims = roofSlopeLabelPrimitives({ key: 'lean:r1', anchors, slope: 2.5 });
+  assert.equal(prims.length, 6);
+  assert.equal(new Set(prims.map(p => p.key)).size, 6);
+  assert.ok(prims.filter(p => p.kind === 'text' && p.text !== '屋根').every(p => p.text === '（傾斜2.5/10）'));
+  const bad = roofSlopeLabelPrimitives({ key: 'k', anchors, slope: NaN });
+  assert.ok(bad.filter(p => p.kind === 'text' && p.text !== '屋根').every(p => p.text === '（傾斜3/10）'));
+  assert.deepEqual(roofSlopeLabelPrimitives({ key: 'k', anchors: [], slope: 3 }), []);
+});
+
+test('roofPlanFigure: 傾斜面の数（形状ごと）。片流れ1・切妻2・寄棟4・L字の寄棟6・L字の片流れ2。陸屋根・切妻になる L字・棟違いは 0', () => {
+  const count = (cells, shape, grid = [[0, 4000, 8000], [0, 4000, 8000]], setup = null) => {
+    const g = makeGrid(...grid);
+    if (setup) setup(g);
+    g.roof(cells, shape);
+    return arrowsOf(roofPlanFigureAll(g.graph)).length;
+  };
+  assert.equal(count([[0, 0], [1, 0]], null, [[0, 4000, 8000], [0, 3000]]), 1, '片流れ（短手3000・高い側は既定）');
+  assert.equal(count([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.GABLE), 2, '切妻');
+  assert.equal(count([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.HIP), 4, '寄棟');
+  assert.equal(count([[0, 0], [1, 0], [0, 1]], RoofShape.HIP), 6, 'L字の寄棟（外周6辺）');
+  assert.equal(count([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.FLAT), 0, '陸屋根');
+  assert.equal(count([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.STAGGERED), 0, '棟違い');
+  assert.equal(count([[0, 0], [1, 0], [0, 1]], RoofShape.GABLE), 0, '切妻になる L字は外形線だけ');
+  assert.equal(count([[0, 0], [1, 0], [0, 1]], RoofShape.FLAT), 0, '陸屋根の L字');
+  // roof-test1 型の L字の片流れ: 屋内（上の左）に接し、水下が右と下の2面
+  const l = makeGrid([3640, 7280, 9100], [-9884, -3640, 0]);
+  l.interior([[0, 0]]);
+  l.roof([[1, 0], [1, 1], [0, 1]]);
+  const prims = roofPlanFigureAll(l.graph);
+  assert.equal(arrowsOf(prims).length, 2);
+  assert.ok(labelsOf(prims).length === 6 && labelsOf(prims).every(p => p.detailOnly === true));
+});
+
+test('roofPlanFigure: 傾斜面1つにつき1つ。屋内に全体が接する水下の面（壁へ向かって下る面）にもラベルを出す。矢印は壁の向き', () => {
+  const full = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  full.interior([[0, 0], [1, 0]]); // 上の辺（y=4000）の全体が屋内に接する
+  full.roof([[0, 1], [1, 1]], RoofShape.HIP);
+  const fullArrows = arrowsOf(roofPlanFigureAll(full.graph));
+  assert.equal(fullArrows.length, 4, '描いてある面を省かない（寄棟 4 面）');
+  const towardWall = fullArrows.filter(a => a.points[0] === a.points[2] && a.points[3] < a.points[1]);
+  assert.equal(towardWall.length, 1, '上の壁へ向かう（先端の y が小さい）縦の矢印が1つ');
+  assert.ok(towardWall[0].points[3] > 4000 && towardWall[0].points[1] < 8000, '矢印は屋根範囲（y 4000..8000）の中');
+  const part = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  part.interior([[0, 0]]); // 上の辺の半分（x 0..4000）だけ屋内に接する
+  part.roof([[0, 1], [1, 1]], RoofShape.HIP);
+  assert.equal(arrowsOf(roofPlanFigureAll(part.graph)).length, 4, '一部だけ接する水下の面は出す');
+  const none = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  none.roof([[0, 1], [1, 1]], RoofShape.HIP);
+  assert.equal(arrowsOf(roofPlanFigureAll(none.graph)).length, 4);
+});
+
+test('roofPlanFigure: 外壁面どまり（線の端止め）はラベルを動かさない。壁ありでも arrow・text の座標は壁なしと同じ（線だけが変わる）', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  g.interior([[0, 0], [1, 0]]);
+  g.roof([[0, 1], [1, 1]], RoofShape.HIP);
+  const bare = roofPlanFigureAll(g.graph);
+  assert.ok(labelsOf(bare).length > 0, '前提: ラベルがある');
+  addWallOn(g.graph, g.cy[1], 75, false, g.cx[0], g.cx[2]); // y=4000 の壁。屋根側の外端は 4075
+  const walled = roofPlanFigureAll(g.graph);
+  assert.deepEqual(labelsOf(walled), labelsOf(bare), 'ラベルは不変');
+  const lineChanged = walled.filter(p => p.kind === 'line').some((p, i) => JSON.stringify(p.points) !== JSON.stringify(bare.filter(q => q.kind === 'line')[i].points));
+  assert.ok(lineChanged, '前提: 線は壁の面まで止まって変わっている（trim が効いている）');
+});
+
+test('roofPlanFigure: 傾斜は roofSpec.slope の値。全 primitive の key は一意。ラベルは線の後に並ぶ', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  const room = g.roof([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.HIP);
+  room.roofSpec.setField('slope', 4.5);
+  const prims = roofPlanFigureAll(g.graph);
+  assert.equal(new Set(prims.map(p => p.key)).size, prims.length, 'key は一意');
+  const firstLabel = prims.findIndex(p => p.kind !== 'line');
+  assert.ok(firstLabel > 0 && prims.slice(firstLabel).every(p => p.kind !== 'line'), '線→ラベルの順');
+  assert.ok(prims.filter(p => p.kind === 'text' && p.text !== '屋根').every(p => p.text === '（傾斜4.5/10）'));
+});
+
+test('visibleRoofPlanPrimitives: 矢印・文字は詳細（DETAIL）だけ。SCHEMATIC・STANDARD は 0 件。線は3つの LOD で同数', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  g.roof([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.HIP);
+  const prims = roofPlanFigureAll(g.graph);
+  const lineCount = prims.filter(p => p.kind === 'line').length;
+  assert.ok(lineCount > 0 && labelsOf(prims).length > 0, '前提: 線もラベルもある');
+  for (const lod of [LodLevel.SCHEMATIC, LodLevel.STANDARD]) {
+    const shown = visibleRoofPlanPrimitives(prims, lod);
+    assert.equal(shown.filter(p => p.kind === 'arrow' || p.kind === 'text').length, 0, `${lod}: ラベル 0 件`);
+    assert.equal(shown.filter(p => p.kind === 'line').length, lineCount, `${lod}: 線は同数`);
+  }
+  const detail = visibleRoofPlanPrimitives(prims, LodLevel.DETAIL);
+  assert.equal(detail.length, prims.length, 'DETAIL は全部');
+  assert.equal(detail.filter(p => p.kind === 'line').length, lineCount);
+});
+
+test('T-C2 奥行の違う L字（水下の中点がセルの境目に乗る）: 文字の箱（推定幅×200）・矢印・矢じりが屋内のセルに重ならない', () => {
+  const interiorBox = { x1: 0, y1: 0, x2: 3640, y2: 3640 }; // どちらの形も左上の屋内セル
+  const overlapsInterior = (x1, y1, x2, y2) => x1 < interiorBox.x2 && x2 > interiorBox.x1 && y1 < interiorBox.y2 && y2 > interiorBox.y1;
+  const forms = {
+    '右の腕が浅い': { xs: [0, 3640, 5460], ys: [0, 3640, 7280], roof: [[1, 0], [0, 1], [1, 1]] },
+    '左右を入れ替えた形': { xs: [0, 3640, 7280], ys: [0, 3640, 5460], roof: [[0, 1], [1, 0], [1, 1]] },
+  };
+  for (const [label, f] of Object.entries(forms)) {
+    const g = makeGrid(f.xs, f.ys);
+    g.interior([[0, 0]]);
+    g.roof(f.roof);
+    const prims = roofPlanFigureAll(g.graph);
+    assert.equal(arrowsOf(prims).length, 2, `${label}: 前提: 面が2つ`);
+    for (const p of prims) {
+      if (p.kind === 'text') {
+        assert.ok(!overlapsInterior(p.x, p.y, p.x + widthOf(p.text), p.y + 200), `${label}: 文字「${p.text}」の箱 (${p.x},${p.y}) が屋内に重ならない`);
+      } else if (p.kind === 'arrow') {
+        const pts = [...p.points, ...p.head];
+        for (let i = 0; i < pts.length; i += 2) assert.ok(!overlapsInterior(pts[i] - 1, pts[i + 1] - 1, pts[i] + 1, pts[i + 1] + 1), `${label}: 矢印の点 (${pts[i]},${pts[i + 1]}) が屋内にある`);
+        const [tx, ty, hx, hy] = p.points; // 本体の線分（縦か横）
+        assert.ok(!overlapsInterior(Math.min(tx, hx) - 1, Math.min(ty, hy) - 1, Math.max(tx, hx) + 1, Math.max(ty, hy) + 1), `${label}: 矢印の線分が屋内を通らない`);
+      }
+    }
+  }
 });
