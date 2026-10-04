@@ -264,8 +264,8 @@ function requireWidth(v, name) {
  *   - 棟木: 軸から ±ridgeWidthMm/2 の平行線2本（kind:'ridge'）
  *   - 母屋: 軸上に1本（kind:'purlin'）
  *     （棟木・母屋は region.edges があれば、屋根範囲の辺の上で終わる端を出幅ぶん外形線まで延ばす＝けらば側。D2。寄棟は延びない）
- *   - 隅木・谷木: 上端まで斜めに1本（kind:'hip'|'valley'。寄棟と、L字の下屋の翼の継ぎ目。束なし。points は軒側→上端の4値。
- *     隅木は軒側の端を軒先の角まで45°に延ばす（L字の下屋は端が辺の途中でも延ばす）。谷木は延ばさない。D2・E1b）
+ *   - 隅木・谷木: 上端まで斜めに1本（kind:'hip'|'valley'。寄棟と、L字の下屋の水下への距離の場の継ぎ目。束なし。points は
+ *     軒側→上端の4値。隅木・谷木とも軒側の端を軒先の角（出隅・入隅）まで45°に延ばす。D2・E1b・L字の下屋の場）
  *   - 外形線: 屋根の外形（軒先・けらば）の閉じた折れ線を閉路ごとに1つ（kind:'outline'。points は x,y の並び・closed:true。
  *     細い実線。region.outline が無ければ出さない。束の対象にしない）
  *   - 束: 母屋・棟木の線と hostBeams の全交点に半径 purlinWidthMm/2 の円（kind:'strut'）
@@ -274,8 +274,8 @@ function requireWidth(v, name) {
  * @param {string} lod LodLevel
  * @param {object} p
  * @param {Array<{key:string, rect:object|null, rects?:object[], shape:string, ridgeIsVertical:boolean|null, highSide:string|null, outline?:Array<{points:number[]}>}>} p.regions roofFramingRegions.js の戻り値
- *   （rect=null の region は矩形でない寄棟で、rects＝セル矩形から棟木・母屋を導く。leanToWings を持つ rect=null の片流れは
- *   L字の下屋で、翼ごとの母屋・継ぎ目の斜め線）
+ *   （rect=null の region は矩形でない寄棟で、rects＝セル矩形から棟木・母屋を導く。leanToDrains・leanToPurlinDepthMm を持つ
+ *   rect=null の片流れは L字の下屋で、水下への距離の場の棟木・母屋・継ぎ目の斜め線）
  * @param {Array<{isVertical:boolean, axis:number, lo:number, hi:number}>} p.hostBeams roofFramingHostMembers の戻り値
  * @param {number} p.ridgeWidthMm
  * @param {number} p.purlinWidthMm
@@ -297,7 +297,8 @@ export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeW
   for (const region of regions) {
     const { ridges, purlins } = roofFramingLines({
       rect: region.rect, rects: region.rects, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical,
-      highSide: region.highSide, leanToWings: region.leanToWings ?? null, purlinPitchMm, purlinStartOffsetsMm, tolMm,
+      highSide: region.highSide, leanToDrains: region.leanToDrains ?? null, leanToPurlinDepthMm: region.leanToPurlinDepthMm ?? null,
+      purlinPitchMm, purlinStartOffsetsMm, tolMm,
     });
     // 描画用の線は、けらば側で出幅ぶん外形線まで延ばす（D2）。束（roofStrutPoints）は延長前の線で決める
     const edges = region.edges ?? null;
@@ -312,11 +313,12 @@ export function roofFramingPrimitives(drawing, lod, { regions, hostBeams, ridgeW
     });
     // 隅木・谷木（寄棟と L字の下屋の継ぎ目）。上端まで斜めに1本。隅木は軒先の角まで延ばす（D2）。束は立てない（斜め線は roofStrutPoints へ渡さない）
     const counts = { hip: 0, valley: 0 };
-    // L字の下屋（翼ごとの片流れ）の継ぎ目（隅木）は軒側の端が辺の途中にあるので、辺の途中も延ばす（midEdge）
-    const leanToWings = region.leanToWings ?? null;
+    // L字の下屋（水下への距離の場）の隅木は、軒先の角（水下と水下の外の角）から出る＝普通の角の規則で延びる。谷木は
+    // 軒先の入隅の角まで延ばす（valleys。平面と同じ。保存データ・束・小屋梁は変えない描画だけ）。矩形でない寄棟の谷木も同じ
+    const leanToDrains = region.leanToDrains ?? null;
     const diagonals = extendDiagonalsToOutline({
-      diagonals: roofHipDiagonals({ rect: region.rect, rects: region.rects, shape: region.shape, leanToWings, tolMm }),
-      edges, midEdge: leanToWings !== null, tolMm,
+      diagonals: roofHipDiagonals({ rect: region.rect, rects: region.rects, shape: region.shape, leanToDrains, tolMm }),
+      edges, valleys: true, tolMm,
     });
     for (const d of diagonals) {
       out.push({ kind: d.kind, key: `${region.key}:${d.kind}:${counts[d.kind]++}`, points: [d.x1, d.y1, d.x2, d.y2] });

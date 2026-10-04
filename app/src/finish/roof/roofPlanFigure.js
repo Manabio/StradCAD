@@ -40,11 +40,10 @@ export function roofPlanFigure(graph) {
     ridges.forEach((line, i) => {
       out.push({ kind: 'line', key: `${region.key}:ridge:${i}`, role: 'ridge', points: segment(line), closed: false, detailOnly: false });
     });
-    // L字の下屋（翼ごとの片流れ）の継ぎ目は軒側の端が辺の途中にあるので、辺の途中も延ばす（midEdge。伏図と同じ）
-    const leanToWings = region.leanToWings ?? null;
+    // L字の下屋の継ぎ目（隅木・谷木）は水下への距離の場（伏図と同じ）。軒先の角（出隅・入隅）まで延ばす
     const diagonals = extendDiagonalsToOutline({
-      diagonals: roofHipDiagonals({ rect: region.rect, rects: region.rects ?? null, shape: region.shape, leanToWings, tolMm }),
-      edges: region.edges, midEdge: leanToWings !== null, valleys: true, tolMm,
+      diagonals: roofHipDiagonals({ rect: region.rect, rects: region.rects ?? null, shape: region.shape, leanToDrains: region.leanToDrains ?? null, tolMm }),
+      edges: region.edges, valleys: true, tolMm,
     });
     const counts = { hip: 0, valley: 0 };
     for (const d of diagonals) {

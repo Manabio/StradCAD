@@ -15,7 +15,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { autoFillWoodWallBeams, autoFillWoodBeamDepths } from './woodAutoFill.js';
-import { roofFramingLines, roofStrutPoints, leanToWingsOf } from './roofFramingGeometry.js';
+import { roofFramingLines, roofStrutPoints, leanToWingsOf, leanToMonoLines } from './roofFramingGeometry.js';
 import { roofFramingHostMembers } from './framingDrawing.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { mainRoofFramingRegion } from './roofFramingRegions.js';
@@ -65,11 +65,17 @@ const koyaOnly = graph => graph.beams.filter(b => b.role === 'roofBeam' && b.bea
 
 // 母屋・棟木の各線の束（線×横架材の交点）の最大間隔。端（線の両端）は束扱い。
 // region が矩形でない寄棟（rect:null・rects）なら、線は rects から導く（C2e-3b）。
+// L字の下屋（leanToWings）の小屋梁は、今のところ翼ごとの面（leanToMonoPlanes）の母屋＝旧い母屋（leanToMonoLines）を支えるように作る。
+// 描画の母屋は水下への距離の場（roofFramingLines の leanToDrains）に替わったので、L字だけ旧い母屋で検査する
+// （小屋梁も水下の面へ切り替えるステップ2で roofFramingLines へ戻す）。
 function maxStrutGaps(graph, region) {
-  const { ridges, purlins } = roofFramingLines({
-    rect: region.rect ?? null, rects: region.rects ?? null, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, highSide: region.highSide,
-    leanToWings: region.leanToWings ?? null, purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
-  });
+  const tolMm = CL_OVERLAP_TOL_MM;
+  const { ridges, purlins } = !region.rect && region.leanToWings
+    ? leanToMonoLines({ wings: region.leanToWings, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm })
+    : roofFramingLines({
+      rect: region.rect ?? null, rects: region.rects ?? null, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, highSide: region.highSide,
+      purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm,
+    });
   const members = roofFramingHostMembers(graph.beams, WOOD);
   return [...ridges, ...purlins].map(line => {
     const alongs = [line.lo, line.hi, ...roofStrutPoints([line], members, CL_OVERLAP_TOL_MM).map(p => (line.isVertical ? p.y : p.x))]

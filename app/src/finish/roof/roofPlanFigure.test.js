@@ -87,11 +87,15 @@ test('roofPlanFigure: L字の片流れは外形線＋継ぎ目の隅木（棟木
   assert.deepEqual(outline.points, [3640, -455, 5915, -455, 5915, 5915, -455, 5915, -455, 3640], '屋内に接する2辺（通り芯＝壁の中）の外側だけ。両端は出幅 0 の壁の位置で止まる');
 });
 
-test('roofPlanFigure: L字の片流れ（屋内に接しない。両翼が同じ壁）は継ぎ目が無く外形線だけ', () => {
+test('roofPlanFigure: L字の片流れ（屋内に接しない。両翼が同じ壁で水下が段違い）は水下への距離の場の継ぎ目＝深い翼の外の角から隅木・浅い翼の水下の端から谷木', () => {
   const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
   g.roof([[1, 1], [2, 1], [1, 2]]);
-  assert.deepEqual(countByRole(roofPlanFigure(g.graph)), { outline: 1, ridge: 0, hip: 0, valley: 0 });
+  const prims = roofPlanFigure(g.graph);
+  assert.deepEqual(countByRole(prims), { outline: 1, ridge: 0, hip: 1, valley: 1 });
+  assert.deepEqual(prims.find(p => p.role === 'hip').points, [4455, 4955, 2000, 2500], '外の角 (4000,4500) を軒先の角 (4455,4955) まで');
+  assert.deepEqual(prims.find(p => p.role === 'valley').points, [4455, 3455, 2500, 1500], '入隅 (4000,3000) を軒先の入隅の角 (4455,3455) まで（平面は谷木も延ばす）');
 });
+
 
 test('roofPlanFigure: 切妻になる L字・棟違い・陸屋根は暫定で外形線だけ（棟木・隅木なし）', () => {
   const big = makeGrid([0, 4000, 8000], [0, 4000, 8000]);

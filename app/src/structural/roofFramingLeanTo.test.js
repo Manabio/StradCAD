@@ -1,12 +1,14 @@
 // L字（矩形でない）の下屋＝翼ごとの片流れ（ステップ E1a。roofFramingGeometry.js の leanToWingsOf・leanToOwnerAt・
 // leanToMonoLines・leanToMonoPlanes（E2a）・leanToSeams、roofOutline の kindZones、extendDiagonalsToOutline の辺の途中の分岐、roofFramingLines・
-// roofHipDiagonals の leanToWings）のテスト。期待値は手計算（y は下向き正。母屋の割付は下屋全体で1つ＝最大奥行きの翼の割付）。
+// roofHipDiagonals の leanToDrains）のテスト。期待値は手計算（y は下向き正）。leanToMonoLines・leanToMonoPlanes・leanToSeams・leanToOwnerAt は
+// 翼ごとの母屋（割付は下屋全体で1つ＝最大奥行きの翼の割付）で、小屋梁がまだ使う（ステップ2で水下の場へ切り替えて削除）。
+// 描画の母屋・継ぎ目は水下への距離の場（leanToDrainFraming。roofFramingLeanToDrain.test.js が形ごとに全数）。
 // 割付（ピッチ910・1本目の候補 [455,910]）: 奥行き1820→[910]、3000→[455,1365,2275]、3640→[910,1820,2730]、4000→[455,1365,2275,3185]。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   leanToWingsOf, leanToOwnerAt, leanToMonoLines, leanToMonoPlanes, leanToSeams, roofOutline, roofFramingLines, roofHipDiagonals,
-  extendLinesToOutline, extendDiagonalsToOutline as extendDiagonalsRaw,
+  extendLinesToOutline, extendDiagonalsToOutline as extendDiagonalsRaw, leanToDrainFraming, purlinLayoutFromRidge,
 } from './roofFramingGeometry.js';
 import { RoofShape } from '../core/constants.js';
 
@@ -29,8 +31,14 @@ const outlineOf = (form, kindZones, eaveOverhangMm = 455, gableOverhangMm = 455)
   rects: form.rects, shape: RoofShape.MONO, highSide: 'top', eaveOverhangMm, gableOverhangMm, zeroZones: form.contacts, kindZones, tolMm: TOL,
 });
 const Lx = (isVertical, coord, lo, hi) => ({ isVertical, coord, lo, hi });
-/** L字の下屋の継ぎ目の延長（midEdge あり。呼び出し側＝E1b も同じ指定にする）。 */
+/** L字の下屋の継ぎ目の延長（midEdge あり。旧い継ぎ目 leanToSeams は軒側の端が辺の途中にある。新しい隅木・谷木は valleys: true を足して渡す）。 */
 const extendDiagonalsToOutline = args => extendDiagonalsRaw({ midEdge: true, ...args });
+/** 水下への距離の場（leanToDrainFraming）の結果。母屋の段の始まりは長手方向の翼の奥行きの purlinLayoutFromRidge。 */
+const framingOf = ({ rects, contacts }) => {
+  const w = wingsOf({ rects, contacts });
+  const { eaveGapMm } = purlinLayoutFromRidge({ halfSpanMm: w.longDepthMm, pitchMm: 910, startOffsetsMm: [455, 910], tolMm: TOL });
+  return leanToDrainFraming({ rects, drains: w.drains, pitchMm: 910, firstLevelMm: eaveGapMm, tolMm: TOL });
+};
 const plain = purlins => purlins.map(({ isVertical, coord, lo, hi }) => Lx(isVertical, coord, lo, hi));
 
 // ---- 形（設計書 §1.6）。座標は mm ----
@@ -87,10 +95,14 @@ test('形1b: 奥行きが違う（下の腕 3640・右の腕 1820）。母屋は
     W('left', 3640, WE(true, 3640, 0, 3640, -1), 1820, rc(3640, 0, 5460, 3640), [D(3640, 3640, 5460, 7280, 'top')]),
   ]);
   assert.deepEqual(r.unassigned, []);
+  // 辺の種別は「内側のセルを含むどれかの翼の壁と平行なら軒」（新規則）。右辺 x=5460 の下の腕の部分（y 5460..7280）は、下の腕（top の翼。流れは
+  // +y で右辺と平行）だけでなく右の腕の延長（left の翼。流れは +x で右辺と直交）も含むので軒になる（旧規則は所有者の流れだけで「けらば」だった）
   assert.deepEqual(r.kindZones, [
-    KZ(false, 0, 3640, 5460, -1, 'gable'), KZ(true, 5460, 0, 5460, 1, 'eave'), KZ(true, 5460, 5460, 7280, 1, 'gable'),
+    KZ(false, 0, 3640, 5460, -1, 'gable'), KZ(true, 5460, 0, 7280, 1, 'eave'),
     KZ(false, 7280, 0, 5460, 1, 'eave'), KZ(true, 0, 3640, 7280, -1, 'gable'), KZ(false, 3640, 0, 3640, -1, 'eave'), KZ(true, 3640, 0, 3640, -1, 'eave'),
   ]);
+  assert.deepEqual(r.drains, [WE(true, 5460, 0, 7280, 1), WE(false, 7280, 0, 5460, 1)], '水下＝右辺の全長と下辺の全長');
+  assert.equal(r.longDepthMm, 1820, '最も長い水下（右辺 7280）へ流れる翼＝右の腕（奥行き 1820）');
   const lines = monoLines(r.wings);
   assert.deepEqual(lines.purlins, [
     PL(false, 4550, 0, 4550, 910), PL(false, 5460, 0, 5460, 1820), PL(false, 6370, 0, 5460, 2730), PL(true, 4550, 0, 4550, 910),
@@ -104,14 +116,15 @@ test('形1b: 奥行きが違う（下の腕 3640・右の腕 1820）。母屋は
   assert.deepEqual(extendDiagonalsToOutline({ diagonals: seams.diagonals, edges: o.edges, tolMm: TOL }), [DG('hip', 5915, 5915, 3640, 3640)]);
 });
 
-test('形1b（軒の出 600・妻側 300）: 外形線が辺の部分ごとに動く。隅木は段差の境目で小さい出幅 300 だけ延び、母屋の延長も軒/妻の出幅', () => {
+test('形1b（軒の出 600・妻側 300）: 右辺は全部軒（600）になり段差が無い（旧規則は右辺の下の腕の部分がけらば 300 で、辺の途中で段差があった）。水下と水下の外の角の隅木は軒の出 600 だけ延び、母屋の延長はけらば側が妻側の出幅 300', () => {
   const r = wingsOf(F1B);
   const o = outlineOf(F1B, r.kindZones, 600, 300);
-  assert.deepEqual(o.outline, [{ points: [6060, -300, 6060, 5460, 5760, 5460, 5760, 7880, -300, 7880, -300, 3640, 3640, 3640, 3640, -300] }]);
-  const lines = monoLines(r.wings);
-  assert.deepEqual(extendLinesToOutline({ lines: lines.purlins, edges: o.edges, tolMm: TOL }).map(l => [l.isVertical, l.coord, l.lo, l.hi]),
-    [[false, 4550, -300, 4550], [false, 5460, -300, 5760], [false, 6370, -300, 5760], [true, 4550, -300, 4550]]);
-  assert.deepEqual(extendDiagonalsToOutline({ diagonals: seamsOf(r.wings).diagonals, edges: o.edges, tolMm: TOL }), [DG('hip', 5760, 5760, 3640, 3640)]);
+  assert.deepEqual(o.outline, [{ points: [6060, -300, 6060, 7880, -300, 7880, -300, 3640, 3640, 3640, 3640, -300] }]);
+  const fr = framingOf(F1B);
+  assert.deepEqual(extendLinesToOutline({ lines: fr.purlins, edges: o.edges, tolMm: TOL }).map(l => [l.isVertical, l.coord, l.lo, l.hi]), [
+    [false, 4550, -300, 2730], [false, 5460, -300, 3640], [false, 6370, -300, 4550], [true, 2730, 3640, 4550], [true, 3640, 3640, 5460], [true, 4550, -300, 6370],
+  ], '左端が x=0（けらば・300）の横線は -300、上端が y=0（けらば・300）の縦線 x=4550 は -300');
+  assert.deepEqual(extendDiagonalsToOutline({ diagonals: fr.diagonals, edges: o.edges, valleys: true, tolMm: TOL }), [DG('hip', 6060, 7880, 1820, 3640)]);
 });
 
 test('形2: 1つの壁・奥行きが違う2枚（同じ壁の top）。母屋 y=910 は2枚をまたいで1本につながる（割付1つ）。入隅の点でけらばに載る母屋は延びる', () => {
@@ -216,7 +229,7 @@ test('形7: 屋内に接する区間が短い。直接の翼は1枚で、延長�
   assert.deepEqual(extendLinesToOutline({ lines: lines.purlins, edges: o.edges, tolMm: TOL }).map(l => [l.coord, l.lo, l.hi]), [[910, -455, 5915]]);
 });
 
-test('roof-test1.stq の2階の下屋（S0 実測）: 左の壁（6244）が先・top の壁が後。形1b と同じ配置で、隅木は右辺の軒/けらばの境目へ延びる', () => {
+test('roof-test1.stq の2階の下屋（S0 実測）: 左の壁（6244）が先・top の壁が後。形1b と同じ配置。右辺は全長が軒（旧規則は y -1820..0 がけらば）。水下は右辺と下辺', () => {
   const r = wingsOf(FRT1);
   assert.deepEqual(r.wings, [
     W('left', 7280, WE(true, 7280, -9884, -3640, -1), 1820, rc(7280, -9884, 9100, -3640), [D(7280, -3640, 9100, 0, 'top')]),
@@ -224,9 +237,29 @@ test('roof-test1.stq の2階の下屋（S0 実測）: 左の壁（6244）が先�
   ]);
   assert.deepEqual(r.unassigned, []);
   assert.deepEqual(r.kindZones, [
-    KZ(false, -9884, 7280, 9100, -1, 'gable'), KZ(true, 9100, -9884, -1820, 1, 'eave'), KZ(true, 9100, -1820, 0, 1, 'gable'),
+    KZ(false, -9884, 7280, 9100, -1, 'gable'), KZ(true, 9100, -9884, 0, 1, 'eave'),
     KZ(false, 0, 3640, 9100, 1, 'eave'), KZ(true, 3640, -3640, 0, -1, 'gable'), KZ(false, -3640, 3640, 7280, -1, 'eave'), KZ(true, 7280, -9884, -3640, -1, 'eave'),
   ]);
+  assert.deepEqual(r.drains, [WE(true, 9100, -9884, 0, 1), WE(false, 0, 3640, 9100, 1)]);
+  assert.equal(r.longDepthMm, 1820, '長手方向の水下＝右辺 9884。そこへ流れる翼 W1（奥行き 1820）→ 軒までの残り r=910');
+  // 水下への距離の場（設計の期待値）: 隅木 (9100,0)→(5460,-3640)、母屋6本、面2つ
+  const fr = framingOf(FRT1);
+  assert.deepEqual(fr.ridges, []);
+  assert.deepEqual(plain(fr.purlins), [
+    Lx(false, -2730, 3640, 6370), Lx(false, -1820, 3640, 7280), Lx(false, -910, 3640, 8190),
+    Lx(true, 6370, -3640, -2730), Lx(true, 7280, -3640, -1820), Lx(true, 8190, -9884, -910),
+  ]);
+  assert.deepEqual(fr.diagonals, [DG('hip', 9100, 0, 5460, -3640)]);
+  assert.deepEqual(fr.faces.map(f => [f.drain, f.lineIsVertical, plain(f.lines)]), [
+    [WE(true, 9100, -9884, 0, 1), true, [Lx(true, 6370, -3640, -2730), Lx(true, 7280, -3640, -1820), Lx(true, 8190, -9884, -910)]],
+    [WE(false, 0, 3640, 9100, 1), false, [Lx(false, -2730, 3640, 6370), Lx(false, -1820, 3640, 7280), Lx(false, -910, 3640, 8190)]],
+  ]);
+  const o0 = outlineOf(FRT1, r.kindZones);
+  assert.deepEqual(extendDiagonalsToOutline({ diagonals: fr.diagonals, edges: o0.edges, valleys: true, tolMm: TOL }), [DG('hip', 9555, 455, 5460, -3640)], '軒先の角 (9555,455) まで');
+  assert.deepEqual(extendLinesToOutline({ lines: fr.purlins, edges: o0.edges, tolMm: TOL }).map(l => [l.coord, l.lo, l.hi]), [
+    [-2730, 3185, 6370], [-1820, 3185, 7280], [-910, 3185, 8190], [6370, -3640, -2730], [7280, -3640, -1820], [8190, -10339, -910],
+  ], 'けらば側（左の辺 x=3640・上の辺 y=-9884）だけ出幅ぶん延びる');
+  // 以下は小屋梁がまだ使う旧い母屋・継ぎ目（leanToMonoLines・leanToSeams。ステップ2で小屋梁を水下の面へ切り替えるまで残す）
   const lines = monoLines(r.wings);
   assert.deepEqual(lines.purlins, [
     PL(false, -2730, 3640, 8190, 910), PL(false, -1820, 3640, 9100, 1820), PL(false, -910, 3640, 9100, 2730), PL(true, 8190, -9884, -2730, 910),
@@ -363,17 +396,26 @@ test('leanToMonoLines: 同じ点を2つの翼の延長が同じ距離で持つ�
 
 // ---- 入口（roofFramingLines・roofHipDiagonals）と既存の挙動 ----
 
-test('roofFramingLines・roofHipDiagonals: leanToWings を渡すと rect=null の片流れだけ翼の母屋・継ぎ目を返す。渡さなければ今まで通り空', () => {
-  const { wings } = wingsOf(F1B);
+test('roofFramingLines・roofHipDiagonals: leanToDrains を渡すと rect=null の片流れだけ水下の場の母屋・継ぎ目を返す。渡さなければ今まで通り空', () => {
+  const w = wingsOf(F1B);
   const base = { rect: null, rects: F1B.rects, shape: RoofShape.MONO, ridgeIsVertical: null, highSide: null, purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: TOL };
-  assert.deepEqual(roofFramingLines({ ...base, leanToWings: wings }), monoLines(wings));
+  const viaDrains = { leanToDrains: w.drains, leanToPurlinDepthMm: w.longDepthMm };
+  const fr = framingOf(F1B);
+  assert.deepEqual(roofFramingLines({ ...base, ...viaDrains }), { ridges: fr.ridges, purlins: fr.purlins });
   assert.deepEqual(roofFramingLines(base), { ridges: [], purlins: [] }, '渡さなければ空（矩形でない片流れは小屋組なし）');
-  assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.MONO, leanToWings: wings, tolMm: TOL }), seamsOf(wings).diagonals);
+  assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.MONO, leanToDrains: w.drains, tolMm: TOL }), fr.diagonals);
   assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.MONO, tolMm: TOL }), []);
-  assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.GABLE, leanToWings: wings, tolMm: TOL }), [], '片流れ以外は使わない');
-  // rect があれば矩形の式（leanToWings は無視）
-  const rectCase = roofFramingLines({ rect: RECT, shape: RoofShape.MONO, highSide: 'top', leanToWings: wings, purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: TOL });
+  assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.GABLE, leanToDrains: w.drains, tolMm: TOL }), [], '片流れ以外は使わない');
+  assert.deepEqual(roofFramingLines({ ...base, shape: RoofShape.GABLE, ...viaDrains }), { ridges: [], purlins: [] }, '片流れ以外は使わない');
+  // rect があれば矩形の式（leanToDrains は無視）
+  const rectCase = roofFramingLines({ rect: RECT, shape: RoofShape.MONO, highSide: 'top', ...viaDrains, purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: TOL });
   assert.deepEqual(rectCase.purlins.map(l => l.coord), [455, 1365, 2275]);
+  // 【失敗系】水下があるのに母屋の段の基準（奥行き）が無い・不正は RangeError
+  assert.throws(() => roofFramingLines({ ...base, leanToDrains: w.drains }), RangeError, '奥行き無し');
+  assert.throws(() => roofFramingLines({ ...base, leanToDrains: w.drains, leanToPurlinDepthMm: 0 }), RangeError, '奥行き 0');
+  assert.throws(() => roofFramingLines({ ...base, leanToDrains: [{ isVertical: true }], leanToPurlinDepthMm: 1820 }), RangeError, '水下が不正');
+  assert.throws(() => roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.MONO, leanToDrains: [{}], tolMm: TOL }), RangeError, '水下が不正');
+  assert.deepEqual(roofHipDiagonals({ rect: null, rects: F1B.rects, shape: RoofShape.MONO, leanToDrains: 'x', tolMm: TOL }), [], '配列でない水下は渡さないのと同じ');
 });
 
 test('extendDiagonalsToOutline: 軒側の端が1本の辺の途中にあるとき、その部分の出幅の最小だけ延ばす（縦の辺・横の辺とも）。出幅 0 と谷木は延ばさない', () => {
@@ -413,7 +455,7 @@ test('【失敗系】leanToWingsOf: 許容差・rects・contacts が不正なら
 });
 
 test('【失敗系】leanToWingsOf: 使える矩形が無い（空・幅か高さが許容差以下）は空を返す（例外にしない）', () => {
-  const empty = { wings: [], unassigned: [], kindZones: [] };
+  const empty = { wings: [], unassigned: [], kindZones: [], drains: [], longDepthMm: null };
   assert.deepEqual(leanToWingsOf({ rects: [], contacts: [], tolMm: TOL }), empty);
   assert.deepEqual(leanToWingsOf({ rects: [rc(0, 0, 0.2, 100)], contacts: [ct(false, 0, 0, 100, -1)], tolMm: TOL }), empty);
 });
