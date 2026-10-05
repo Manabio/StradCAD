@@ -416,6 +416,6 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
   );
 
   return isLandscape
-    ? <ModePanel width={360}>{inner}</ModePanel>
+    ? <ModePanel width={360} raiseSignal={mode.selectedLineId}>{inner}</ModePanel>
     : <BottomSheet title="敷地" initialSnap={0.5} raiseSignal={mode.selectedLineId}>{inner}</BottomSheet>;
 });

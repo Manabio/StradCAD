@@ -59,6 +59,6 @@ export const StructuralPanel = observer(function StructuralPanel({ project, grap
   // 横長＝構造モードの入退場に追従して自動開閉するため、手動クローズ（×）は出さない。
   // 縦長＝ボトムシートは描画エリアを覆うため、従来どおり手動クローズを残す。
   return isLandscape
-    ? <ModePanel title="構造">{inner}</ModePanel>
+    ? <ModePanel title="構造" raiseSignal={focusRequest}>{inner}</ModePanel>
     : <BottomSheet title="構造" onClose={onClose} initialSnap={0.5} raiseSignal={focusRequest}>{inner}</BottomSheet>;
 });

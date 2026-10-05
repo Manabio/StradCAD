@@ -26,6 +26,6 @@ export const FloorplanPalette = observer(function FloorplanPalette({ opening, is
   );
 
   return isLandscape
-    ? <ModePanel title="開口" width={320} onClose={onClose}>{rows}</ModePanel>
+    ? <ModePanel title="開口" width={320} raiseSignal={opening.id} onClose={onClose}>{rows}</ModePanel>
     : <BottomSheet title="開口" initialSnap={0.4} raiseSignal={opening.id}>{rows}</BottomSheet>;
 });

@@ -79,6 +79,6 @@ export const OpeningPanel = observer(function OpeningPanel({ graph, project, mod
   );
 
   return isLandscape
-    ? <ModePanel title="建具" onClose={onClose}>{inner}</ModePanel>
+    ? <ModePanel title="建具" raiseSignal={selectedId} onClose={onClose}>{inner}</ModePanel>
     : <BottomSheet title="建具" initialSnap={0.5} raiseSignal={selectedId} onClose={onClose}>{inner}</BottomSheet>;
 });

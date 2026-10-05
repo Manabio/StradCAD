@@ -8,7 +8,7 @@ export function FinishSidebar({
   onDeleteStairRoom,
 }) {
   return (
-    <ModePanel title="仕上げ表">
+    <ModePanel title="仕上げ表" raiseSignal={selectedRoomId}>
       <FinishTable
         graph={graph}
         mode={mode}
