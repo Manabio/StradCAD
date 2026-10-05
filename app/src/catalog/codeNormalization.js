@@ -625,6 +625,24 @@ export function addDocumentAliases(kind, pairs) {
   setDocumentAliases(kind, next);
 }
 
+/**
+ * 文書固有の正規化表（documentCodeTableByKind。setDocumentAliases・setDocumentCodeTable のどちらで
+ * 設定されたものも、表そのもの）の決定的な署名文字列。全種別（SNAPSHOT_REF_WALKERS のキー順）を
+ * [kind, [[from,to]…（from の昇順）]|null] に並べて JSON 化する。表の挿入順に左右されない。未設定の種別は
+ * null、明示的に空の表は []（区別する）。どちらも例外にならず決定的。仕上げ脱出の省略判定（finish/finishExitStamp.js）が
+ * 「読み替え表が前回の脱出から変わっていないか」の一致条件に使う。
+ * @returns {string}
+ */
+export function documentCodeTablesSignature() {
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  return JSON.stringify(Object.keys(SNAPSHOT_REF_WALKERS).map(kind => {
+    const table = documentCodeTableByKind.get(kind);
+    // 未設定（null。effectiveCodeTable が本体表へ委ねる）と明示的に空の表（[]。本体表も効かない）は別物
+    const entries = table ? [...table.entries()].sort((a, b) => cmp(a[0], b[0])) : null;
+    return [kind, entries];
+  }));
+}
+
 /** 全種別の文書固有の読み替え・正規化表を解除する（本体の振り直し表は止まらない）。 */
 export function clearDocumentAliases() {
   for (const kind of Object.keys(SNAPSHOT_REF_WALKERS)) {

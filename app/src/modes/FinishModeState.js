@@ -7,6 +7,7 @@ import { removeStairOnFloor, isContinuationStair } from '../finish/stair/stairRe
 import { resolveStairUnderEntries } from '../finish/stair/stairUnderRooms.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { floorWriteGeneration } from '../storage/floorWriteGeneration.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
 import { normalizePartialDominance } from '../finish/roomReinterpret.js';
 import { roomNameAnchor } from '../finish/roomLabel.js';
@@ -25,7 +26,7 @@ import {
 } from '@core';
 import { effectiveStructure, defaultMaterialFor } from '../structural/structureRules.js';
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
-import { composeCatalog, composeList, docDiffMap } from '../catalog/catalogRegistry.js';
+import { composeCatalog, composeList, docDiffMap, overlayGeneration } from '../catalog/catalogRegistry.js';
 import { isMaterialCode } from '../catalog/materialCode.js';
 import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes } from '../catalog/codeNormalization.js';
 import { buildResolveRows } from '../catalog/resolveQueue.js';
@@ -76,6 +77,8 @@ export class FinishModeState {
   materialError   = null;        // 照合エラーメッセージ | null
   materials       = null;        // 材マスタ配列（読み取り専用）
   materialMap     = null;        // Map<code, material>
+  lowerGraphGeneration = null;   // _lowerGraph を peek した時点の直下階の書込み世代（peek 中に書かれたら null。非observable）
+  materialOverlayGeneration = null; // materialMap を作った時点の overlayGeneration()（非observable）
   materialDiffs   = null;        // docDiffMap(material)。Map<code, {baseOrigin, diffFields, baseEntry}>
   interiorMasters = null;        // composeCatalog(INTERIOR_MASTER)の結果。Map<key, 定義>（ステップ7b）
   // 指示UI（ステップ6-3）場面(b)unresolved-codeの行。init()で組み立て、App.jsxが
@@ -194,6 +197,9 @@ export class FinishModeState {
 
     const materials = composeList(CatalogKind.MATERIAL, matMod.MATERIALS);
     const materialMap = composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS);
+    // 材マスタを作った時点のカタログ世代（非observable。finish/finishExitStamp.js が「この材マスタが
+    // 今のカタログで作られたか」を確かめるために読む。composeCatalog と同じ同期区間で記録する）。
+    this.materialOverlayGeneration = overlayGeneration();
     const materialDiffs = docDiffMap(CatalogKind.MATERIAL, matMod.MATERIALS); // 同梱材の本体との不一致
     // ステップ7b: 内装マスターもregistry合成（doc/userの読み替え・同梱を反映）。
     const interiorMasters = composeCatalog(CatalogKind.INTERIOR_MASTER, interiorMasterBuiltinList(masterMod));
@@ -306,12 +312,18 @@ export class FinishModeState {
     const below = idx > 0 ? planes[idx - 1] : null;
     if (!below || !active) {
       this._lowerGraph = null;
+      this.lowerGraphGeneration = null;
       if (!this._disposed) runInAction(() => { this.lowerStairs = []; });
       return;
     }
+    // peek の前後で直下階の書込み世代を読み、同じときだけ記録する（違えば null＝peek 中に書かれた。
+    // finish/finishExitStamp.js が「直下階キャッシュが新鮮か」の判定に使う）。
+    const genBefore = floorWriteGeneration(below.id);
     const temp = await floorSwapManager.peek(below, project.structGraph);
     if (this._disposed) return;
     this._lowerGraph = temp;
+    const genAfter = floorWriteGeneration(below.id);
+    this.lowerGraphGeneration = genBefore === genAfter ? genAfter : null;
     runInAction(() => {
       this.lowerStairs = temp.stairs.map(s => ({
         stair: s,
@@ -1421,6 +1433,7 @@ export class FinishModeState {
     this.materialError   = null;
     this.lowerStairs     = [];
     this._lowerGraph     = null;
+    this.lowerGraphGeneration = null;
     this.upperVoids      = [];
     this.upperFloorHeight = null;
     this._disposed       = true;

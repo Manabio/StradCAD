@@ -102,7 +102,18 @@ export async function runFinishEntryBoundary(graph, project, { loadFloorFn = nul
 // fmode: modeRef.current（脱出直前でまだ生存・材ロード済み）。寸法は実材厚から導出するため必要。
 // goingToStructure: 遷移先が構造モードなら reflectStructuralAfterFinishExit 側で
 // 自階の再計算をスキップする（構造モード突入境界処理に委ねるため）。
-export async function runFinishExitBoundary(graph, project, fmode, { goingToStructure = false } = {}) {
+// stamps: finish/finishExitStamp.js createFinishExitStamps の保管庫（省略可）。渡されたときだけ
+// 「無編集の階の脱出を丸ごと省く」。stamps.canSkip が完全一致（自階のバイト列・他の全平面の内容・
+// 通り芯・平面一覧・カタログ世代・読み替え表・部材採番 index が前回の全部行う脱出の直後と同じ）を
+// 返したときだけ、何もせず { skipped: true } を返す。それ以外は従来どおり全部行い、条件が揃えば
+// 末尾で印を記録する。省くのは階切替（App.jsx switchFloorKeepingMode）だけ——モード切替の脱出・
+// 平面モードへ移る階切替は stamps を渡さず、今までどおり全部行う（ユーザー裁定2026-10-05 R3）。
+// 裁定: R1 完全一致のときだけ省く／R2 無編集の階切替で undo エントリが積まれなくなるのを
+// 受け入れる／R3 階切替だけ／R4 その階の2回目以降の無編集の脱出から速くなれば良い（印は文書へ保存せず
+// メモリ上だけ）。戻り値は { skipped }（呼び出し元は使っていない）。
+export async function runFinishExitBoundary(graph, project, fmode, { goingToStructure = false, stamps = null } = {}) {
+  if (stamps && (await stamps.canSkip(graph, project)).skip) return { skipped: true };
+  const stampProbe = stamps ? await stamps.beginFullExit(graph, project, fmode) : null;
   const undoFns = [];
   const redoFns = [];
 
@@ -291,4 +302,9 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
   // 作り直す（壁の再生成をFinishModeStateから独立させる計画のステップ4）。undo対象外
   // （pushUndo:false。recomputeInactiveStructuralと同じ「他階を書き換える経路は undo 対象外」割り切り）。
   await refreshWallsAllFloors(project, { skipActive: true, pushUndo: false });
+
+  // 全部行った脱出の直後に印を記録する（条件が揃わなければ何も記録しない＝begin で消えたまま）。
+  // 途中で例外が出たらここへは来ない（印は無いまま）。
+  if (stamps) stamps.endFullExit(graph, project, stampProbe, { regenerated });
+  return { skipped: false };
 }

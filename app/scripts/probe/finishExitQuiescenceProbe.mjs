@@ -22,7 +22,7 @@
 //   --edit=return : 3回目の遷移の突入・init のあと、自階の天井高初期値（graph.setDefaultCeilingHeight）を変える
 //                   （(i) が不一致になることの確認＝検出力）。
 //
-// 【IndexedDB の扱い】fake・メモリ化（finishExitEccProbe.mjs の installFakeIndexedDB と同じ最小シム。floors の
+// 【IndexedDB の扱い】fake・メモリ化（storage/db.js が使う API だけを模す最小シム installFakeIndexedDB。floors の
 // put/get/delete を模す）。実 IDB へは一切触れない。文書の全階のバイト列を fake IDB の floors へ種として入れ、
 // 実アプリと同じく「アクティブ階だけがメモリに展開され、他階は空」の状態から始める（アクティブ階は
 // floorSwapManager.activate＝復元＋heal）。peek・loadFloor・saveFloor は実物（storage/db.js・FloorSwapManager）。
@@ -53,7 +53,7 @@
 //      現階を毎回保存し、世代が巡回のたびに進むため）。
 //  (c) この probe は読込み境界（store.js bootReady の refreshWallsAllFloors）を通していない。足すと各階の最初の脱出が
 //      収束しやすくなる（13.stq は初回から収束）ので、数字は控えめ側。
-//  (d) 文書同梱のカタログ（overlay）を立てていない。カタログを持つ文書（moku2-1 等）の数字は参考扱い。
+//  (d) 文書同梱のカタログ（overlay）を立てていない。カタログを持つ文書の数字は参考扱い。
 // ・対象関数の呼出回数: 脱出境界・突入境界は本 probe が直接呼ぶ回数を数える。regenerateWalls は
 //   runFinishExitBoundary の内部（ESM 束縛）で差し替えられないため、「regenerateWalls が regenerated:true を
 //   返したときだけ呼ばれる graph.setWallFreshnessKey の呼出回数」（インスタンスに被せて数える）を代わりに出す。

@@ -4,7 +4,14 @@
 // runStructuralModeSetup 等のIDB経路は node:test 環境で indexedDB未定義になるため対象外）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline, StairType, RoomFeature, centerLineKind } from '../core.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { runInAction } from 'mobx';
+import { serializeGraph } from '../graphSnapshot.js';
+import { floorBytesEqual } from '../floorOps.js';
+import { overlayGeneration } from '../catalog/catalogRegistry.js';
+import { createFinishExitStamps } from './finishExitStamp.js';
+import { Project,CenterLineType, Discipline, StairType, RoomFeature, centerLineKind } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finishBoundary.js';
@@ -371,4 +378,194 @@ test('【QA V1回帰】runFinishExitBoundary: fmode._lowerGraphが正しい直�
   const { graph: otherPlaneGraph } = new Project('other', 'other').addPlane(0, '別階', 'zzz');
   const digestC = await runCase(() => otherPlaneGraph);
   assert.equal(digestC, digestA, '別階を指すキャッシュでもplane不一致で実peekへフォールバックし同じ壁になる');
+});
+
+// ---- 省略の印（stamps。階切替で無編集の階の脱出を丸ごと省く。2-3b）----
+// 2階建て（below=p1・above=p2。above が自階）。他の平面 p1 のバイト列・世代はメモリ上のスタブ。
+// 1回目の脱出は壁が無い状態から壁を作るので自階の正規形が変わり、印は付かない。印が付くのは2回目の脱出から、
+// 省くのは3回目から。
+async function makeStampFixture() {
+  const { project, below, above } = makeStairVoidFixture({ withStair: false });
+  const store = new Map([['p1', serializeGraph(below)]]);
+  const gens = new Map([['p1', '1']]);
+  const stamps = createFinishExitStamps({ loadFloorFn: async (id) => store.get(id) ?? null, generationOf: (id) => gens.get(id) ?? '0' });
+  const materialMap = await loadMaterialMap();
+  const fmode = { materialMap, stairUnderRooms: () => [], materialOverlayGeneration: overlayGeneration() };
+  const peekCalls = [];
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => { peekCalls.push(plane.id); return plane.id === 'p1' ? below : null; };
+  await runFinishEntryBoundary(above, project);
+  return {
+    project, below, above, store, gens, stamps, fmode, peekCalls,
+    exit: (opts = {}) => runFinishExitBoundary(above, project, opts.fmode === undefined ? fmode : opts.fmode, { goingToStructure: false, ...opts.args }),
+    restore: () => { floorSwapManager.peek = originalPeek; },
+  };
+}
+
+test('【stamps】(a) stamps 省略: 戻り値は { skipped:false }、壁・undo は従来どおり（無編集の2回目も全部行う）', async () => {
+  const f = await makeStampFixture();
+  try {
+    const r1 = await f.exit();
+    assert.deepEqual(r1, { skipped: false });
+    assert.ok(f.above.walls.length > 0, '前提: 壁が生成された');
+    const u1 = undoManager.peekUndo();
+    const r2 = await f.exit();
+    assert.deepEqual(r2, { skipped: false });
+    assert.notEqual(undoManager.peekUndo(), u1, '省略なしでは2回目も undo エントリを積む');
+  } finally { f.restore(); }
+});
+
+test('【stamps】(b) 無編集で続けて脱出: 1回目・2回目は全部行い、3回目は省く（undo 不変・バイト列不変・peek なし）', async () => {
+  const f = await makeStampFixture();
+  try {
+    const args = { stamps: f.stamps };
+    const r1 = await f.exit({ args });
+    assert.deepEqual(r1, { skipped: false });
+    assert.ok(f.above.walls.length >= 1, '前提: 壁が1本以上ある');
+    assert.ok(f.above.wallFreshnessKey, '前提: regenerated が真（鮮度キーが書かれた）');
+    const r2 = await f.exit({ args }); // この脱出で印が付く
+    assert.deepEqual(r2, { skipped: false });
+    const undoTop = undoManager.peekUndo();
+    const before = serializeGraph(f.above);
+    const ids = f.above.walls.map(w => w.id).join(',');
+    f.peekCalls.length = 0;
+    const r3 = await f.exit({ args });
+    assert.deepEqual(r3, { skipped: true });
+    assert.equal(undoManager.peekUndo(), undoTop, '省いた脱出は undo エントリを積まない');
+    assert.equal(floorBytesEqual(serializeGraph(f.above), before), true, 'バイト列は前後で同一');
+    assert.equal(f.above.walls.map(w => w.id).join(','), ids, '壁 id も不変');
+    assert.deepEqual(f.peekCalls, [], '他の階を peek していない（何も行っていない）');
+    const r4 = await f.exit({ args });
+    assert.deepEqual(r4, { skipped: true }, '以後も省く');
+  } finally { f.restore(); }
+});
+
+test('【stamps】(c) 自階を編集すると次は全部行い、編集が壁へ反映される', async () => {
+  const f = await makeStampFixture();
+  try {
+    const args = { stamps: f.stamps };
+    await f.exit({ args });
+    await f.exit({ args });
+    assert.deepEqual(await f.exit({ args }), { skipped: true }, '前提: 無編集なら省く');
+    const keyBefore = f.above.wallFreshnessKey;
+    const digestBefore = wallDigest(f.above);
+    f.above.setInteriorWallBacking('101400000009');
+    const r = await f.exit({ args });
+    assert.deepEqual(r, { skipped: false });
+    assert.notEqual(f.above.wallFreshnessKey, keyBefore, '編集（下地材）が鮮度キーへ反映された');
+    assert.ok(f.above.walls.length > 0);
+    assert.equal(typeof digestBefore, 'string');
+  } finally { f.restore(); }
+});
+
+test('【stamps】(d) 他の平面のバイト列を内容の違うものへ差し替えて世代を進めると、次は全部行う', async () => {
+  const f = await makeStampFixture();
+  try {
+    const args = { stamps: f.stamps };
+    await f.exit({ args });
+    await f.exit({ args });
+    assert.deepEqual(await f.exit({ args }), { skipped: true }, '前提: 無編集なら省く');
+    runInAction(() => f.below.setDefaultCeilingHeight(2999));
+    f.store.set('p1', serializeGraph(f.below));
+    f.gens.set('p1', '2');
+    assert.deepEqual(await f.exit({ args }), { skipped: false });
+  } finally { f.restore(); }
+});
+
+test('【stamps】(e) fmode が null（材未ロード）の脱出は印が付かず、次も全部行う', async () => {
+  const f = await makeStampFixture();
+  try {
+    const args = { stamps: f.stamps };
+    for (let i = 0; i < 4; i++) assert.deepEqual(await f.exit({ fmode: null, args }), { skipped: false }, `${i + 1}回目`);
+    assert.deepEqual(await f.stamps.canSkip(f.above, f.project), { skip: false, reason: 'noStamp' });
+  } finally { f.restore(); }
+});
+
+test('【stamps】(e2) 材マスタ未ロード（regenerated:false）の脱出は、世代が合っていても印が付かない', async () => {
+  const f = await makeStampFixture();
+  try {
+    const args = { stamps: f.stamps };
+    const fm = { materialMap: null, stairUnderRooms: () => [], materialOverlayGeneration: overlayGeneration() };
+    for (let i = 0; i < 3; i++) await f.exit({ fmode: fm, args });
+    assert.deepEqual(await f.stamps.canSkip(f.above, f.project), { skip: false, reason: 'noStamp' });
+  } finally { f.restore(); }
+});
+
+test('【stamps】直下階キャッシュ: 突入後に直下階が書き換わった（世代が進んだ）fmode では印が付かず、書換えが無ければ付く', async () => {
+  const f = await makeStampFixture();
+  try {
+    const args = { stamps: f.stamps };
+    const cached = (gen) => ({ ...f.fmode, _lowerGraph: f.below, lowerGraphGeneration: gen });
+    // 書換え無し: 従来どおり2回目で印が付き、3回目は省く
+    await f.exit({ fmode: cached('1'), args });
+    await f.exit({ fmode: cached('1'), args });
+    assert.deepEqual(await f.exit({ fmode: cached('1'), args }), { skipped: true });
+    // 突入後に直下階の IDB が書き換わった（世代が進む）。キャッシュは '1' のまま
+    runInAction(() => f.below.setDefaultCeilingHeight(2999)); // 内容の違う直下階へ
+    f.store.set('p1', serializeGraph(f.below));
+    f.gens.set('p1', '2');
+    for (let i = 0; i < 3; i++) assert.deepEqual(await f.exit({ fmode: cached('1'), args }), { skipped: false }, `${i + 1}回目`);
+    assert.deepEqual(await f.stamps.canSkip(f.above, f.project), { skip: false, reason: 'noStamp' });
+  } finally { f.restore(); }
+});
+
+test('【stamps】(f) 脱出の途中で例外 → 例外は上へ伝わり、印は付かない（以前の印も消える）', async () => {
+  const f = await makeStampFixture();
+  try {
+    const args = { stamps: f.stamps };
+    await f.exit({ args });
+    await f.exit({ args });
+    assert.equal((await f.stamps.canSkip(f.above, f.project)).skip, true, '前提: 印がある');
+    f.above.setInteriorWallBacking('101400000009'); // 編集して全部行う側へ進ませる
+    const boom = { get materialMap() { throw new Error('boom'); }, materialOverlayGeneration: overlayGeneration() };
+    await assert.rejects(() => f.exit({ fmode: boom, args }), /boom/);
+    assert.deepEqual(await f.stamps.canSkip(f.above, f.project), { skip: false, reason: 'noStamp' });
+  } finally { f.restore(); }
+});
+
+test('【stamps】(g) goingToStructure:true と stamps を同時に渡しても壊れない', async () => {
+  const f = await makeStampFixture();
+  try {
+    const args = { stamps: f.stamps, goingToStructure: true };
+    assert.deepEqual(await f.exit({ args }), { skipped: false });
+    assert.deepEqual(await f.exit({ args }), { skipped: false });
+    assert.ok(f.above.walls.length > 0);
+  } finally { f.restore(); }
+});
+
+// ---- 配線（ソース走査。App.jsx・finishBoundary.js） ----
+const readSrc = (rel) => fs.readFileSync(path.resolve(import.meta.dirname, '..', rel), 'utf8');
+const codeLines = (src) => src.split(/\r?\n/).filter(l => !l.trim().startsWith('//')).join('\n');
+
+test('【配線】App.jsx: finish.exit は floorSwitch のときだけ保管庫を渡す／保管庫は本物の loadFloor・floorWriteGeneration で作る', () => {
+  const code = codeLines(readSrc('App.jsx'));
+  assert.match(code, /^\s*exit: \(graph, \{ toMode, floorSwitch \}\) => runFinishExitBoundary\(graph, project, modeRef\.current, \{ goingToStructure: toMode === 'structure', stamps: floorSwitch \? getFinishExitStamps\(\) : null \}\),$/m);
+  assert.match(code, /createFinishExitStamps\(\{ loadFloorFn: loadFloor, generationOf: floorWriteGeneration \}\)/);
+  assert.match(code, /^\s*const finishExitStampsRef = useRef\(null\);$/m);
+});
+
+test('【配線】App.jsx: floorSwitch:true で exit を呼ぶのは switchFloorKeepingMode だけ（handleModeChange・handleFloorSwitch は false）', () => {
+  const code = codeLines(readSrc('App.jsx'));
+  const trues = code.split(/\r?\n/).filter(l => /\.exit\?\.\(.*floorSwitch: true/.test(l));
+  assert.equal(trues.length, 1);
+  const body = (name) => {
+    const s = code.indexOf(`async function ${name}(`);
+    assert.ok(s >= 0, name);
+    const e = code.indexOf('\n  }\n', s);
+    return code.slice(s, e);
+  };
+  assert.match(body('switchFloorKeepingMode'), /exit\?\.\(graph, \{ toMode: appMode, floorSwitch: true \}\)/);
+  assert.match(body('handleFloorSwitch'), /exit\?\.\(project\.activeGraph, \{ toMode: 'floorplan', floorSwitch: false \}\)/);
+  assert.match(body('handleModeChange'), /exit\?\.\(graph, \{ toMode: newMode, floorSwitch: false \}\)/);
+});
+
+test('【配線】finishBoundary.js: canSkip は resolveStairContext より前、endFullExit は refreshWallsAllFloors より後', () => {
+  const src = readSrc('finish/finishBoundary.js');
+  const s = src.indexOf('export async function runFinishExitBoundary');
+  const code = codeLines(src.slice(s));
+  const idx = (t) => { const i = code.indexOf(t); assert.ok(i >= 0, t); return i; };
+  assert.ok(idx('stamps.canSkip(') < idx('await resolveStairContext('));
+  assert.ok(idx('stamps.beginFullExit(') < idx('await resolveStairContext('));
+  assert.ok(idx('stamps.endFullExit(') > idx('await refreshWallsAllFloors('));
+  assert.match(code, /stamps\.endFullExit\(graph, project, stampProbe, \{ regenerated \}\)/);
 });

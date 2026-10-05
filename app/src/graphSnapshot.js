@@ -368,18 +368,49 @@ export function serializeGraphWithFreshLineIds(graph, { newId } = {}) {
 // graph は変更しない。
 // ----------------------------------------------------------------
 export function serializeGraphCanonicalWalls(graph) {
-  const snapshot = buildSnapshot(graph);
-  const keyed = snapshot.walls.map((w, i) => {
-    const content = { ...w };
-    delete content.id;
-    return { wall: w, key: JSON.stringify(content), i };
-  });
-  keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.i - b.i));
-  snapshot.walls = keyed.map(k => k.wall);
-  const idMap = new Map(keyed.map((k, n) => [k.wall.id, `w${n}`]));
-  const remapped = remapLineIdsInSnapshot(snapshot, idMap);
-  for (const room of remapped.rooms) room.generatedWallIds.sort();
-  return encode(remapped);
+  return encode(canonicalizeWallIdsInSnapshot(buildSnapshot(graph), { sortByContent: true }));
+}
+
+// 壁 id を w0..wn へ振り直した snapshot を返す（入力 snapshot は変更しない。snapshot.walls の並びは
+// sortByContent 時のみ並べ替えた新しい配列になる）。
+// sortByContent: true  = 壁を「id を除いた内容」の順に並べ替えてから振る（serializeGraphCanonicalWalls）。
+//                        rooms[].generatedWallIds も並べ替える。
+// sortByContent: false = 並べ替えず、壁の現在の並び順のまま振る（置換だけ。generatedWallIds も並べ替えない）。
+function canonicalizeWallIdsInSnapshot(snapshot, { sortByContent }) {
+  let walls = snapshot.walls;
+  if (sortByContent) {
+    const keyed = walls.map((w, i) => {
+      const content = { ...w };
+      delete content.id;
+      return { wall: w, key: JSON.stringify(content), i };
+    });
+    keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.i - b.i));
+    walls = keyed.map(k => k.wall);
+  }
+  const idMap = new Map(walls.map((w, n) => [w.id, `w${n}`]));
+  const remapped = remapLineIdsInSnapshot({ ...snapshot, walls }, idMap);
+  if (sortByContent) for (const room of remapped.rooms) room.generatedWallIds.sort();
+  return remapped;
+}
+
+// ----------------------------------------------------------------
+// 階データのバイト列 → 壁 id を w0..wn へ振り直した比較用バイト列（保存・復元には使わない）
+//
+// 仕上げ脱出の省略判定（finish/finishExitStamp.js）が「他の平面」の内容を比べるために使う。
+// 壁の並び順は変えない（sortByContent: false）。自階は脱出が生成壁を最初に全部消すので壁の並び順が
+// 結果に効かないが、他の平面は構造の再計算が壁を消さずに読むため、並び順が結果に効く可能性を排除
+// できない——並べ替えると並びだけ違う2つを「同じ」と誤認しうるので、厳しい側（位置で振る）に倒す。
+// 材コードの読み替え（applyDocumentCodeNormalization）は通さない（別の一致条件 codeSig が覆う）。
+// null・undefined・長さ0 → 空の Uint8Array／ArrayBuffer → Uint8Array で包んで同じ／
+// Uint8Array → decode→置換→encode／それ以外（古い JSON 文字列など）→ null（不明。呼び出し側は
+// 「常に別物」として扱う）。
+// ----------------------------------------------------------------
+export function canonicalizeFloorBytes(bytes) {
+  if (bytes == null) return new Uint8Array(0);
+  if (bytes instanceof ArrayBuffer) return canonicalizeFloorBytes(new Uint8Array(bytes));
+  if (!(bytes instanceof Uint8Array)) return null;
+  if (bytes.length === 0) return new Uint8Array(0);
+  return encode(canonicalizeWallIdsInSnapshot(decode(bytes), { sortByContent: false }));
 }
 
 // ----------------------------------------------------------------

@@ -67,6 +67,8 @@ import { refreshWallsAllFloors } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
+import { floorWriteGeneration } from './storage/floorWriteGeneration.js';
+import { createFinishExitStamps } from './finish/finishExitStamp.js';
 import { parseOpenedFileBytes, downloadDocumentFile, defaultDocumentFileName, getOpenedFileName, saveNameFromOpenedFileName } from './storage/localSnapshot.js';
 import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { isDocumentEnvelope } from './storage/documentFile.js';
@@ -198,6 +200,9 @@ const App = observer(() => {
   // mode: MobX observer として描画に使用
   const [mode, setMode] = useState(null);
   const modeRef = useRef(null);
+  // 仕上げ脱出の省略の印の保管庫（メモリ上だけ。初回の階切替で作る。文書の読込み・新規は reload で消える）
+  const finishExitStampsRef = useRef(null);
+  const getFinishExitStamps = () => (finishExitStampsRef.current ??= createFinishExitStamps({ loadFloorFn: loadFloor, generationOf: floorWriteGeneration }));
 
   const graph = project.activeGraph;
 
@@ -1137,7 +1142,8 @@ const App = observer(() => {
       // 突入: 前回脱出時点のRoom.cellsを現在のCLトポロジーと突き合わせて再解釈した上でエッジを再同期。
       // 脱出: 部屋ごとの壁自動生成・外壁再生成・構造反映を確定。
       enter: (graph) => runFinishEntryBoundary(graph, project, { loadFloorFn: loadFloor }),
-      exit: (graph, { toMode }) => runFinishExitBoundary(graph, project, modeRef.current, { goingToStructure: toMode === 'structure' }),
+      // 階切替（floorSwitch）のときだけ省略の印を渡す（無編集の階の脱出を丸ごと省く。モード切替は常に全部行う）。
+      exit: (graph, { toMode, floorSwitch }) => runFinishExitBoundary(graph, project, modeRef.current, { goingToStructure: toMode === 'structure', stamps: floorSwitch ? getFinishExitStamps() : null }),
     },
     structure: {
       // 突入: 構造情報ダイアログ・図面合成の構築・全階の自動補完反映。脱出: バインディング停止・確定保存・他階反映。

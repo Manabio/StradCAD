@@ -7,7 +7,7 @@ import { runInAction } from 'mobx';
 import {
   Plane, PlanGraph, Project, CenterLineType, Discipline, OpeningCategory, StairType, StructuralMaterialType,
 } from './core.js';
-import { serializeGraph, serializeGraphCanonicalWalls, decodeFloorSnapshot } from './graphSnapshot.js';
+import { serializeGraph, serializeGraphCanonicalWalls, canonicalizeFloorBytes, decodeFloorSnapshot } from './graphSnapshot.js';
 import { findLineIdOccurrences } from './lineIdRemap.js';
 import { floorBytesEqual } from './floorOps.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
@@ -382,3 +382,76 @@ for (const [label, makeFixture] of [['2部屋', makeTwoRoomFixture], ['階段下
     assert.equal(floorBytesEqual(serializeGraphCanonicalWalls(graph), canon1), true, '3回目も一致する');
   });
 }
+
+// ---- canonicalizeFloorBytes（他の平面の比較用。並べ替えず、壁 id だけを位置で w0..wn へ振る） ----
+test('canonicalizeFloorBytes: null・undefined・長さ0は空の Uint8Array、ArrayBuffer は Uint8Array と同じ、文字列は null（不明）', () => {
+  for (const v of [null, undefined, new Uint8Array(0), new ArrayBuffer(0)]) {
+    const r = canonicalizeFloorBytes(v);
+    assert.ok(r instanceof Uint8Array);
+    assert.equal(r.length, 0);
+  }
+  const bytes = serializeGraph(makeFixedCLGraph([BASE_WALL, OTHER_WALL]));
+  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  assert.equal(floorBytesEqual(canonicalizeFloorBytes(ab), canonicalizeFloorBytes(bytes)), true);
+  assert.equal(canonicalizeFloorBytes('{"legacy":"json"}'), null);
+  assert.equal(canonicalizeFloorBytes(''), null);
+});
+
+test('canonicalizeFloorBytes: 壁 id だけを付け替えた2つのバイト列は一致する（素のバイト列は不一致）', () => {
+  const a = serializeGraph(makeFixedCLGraph([BASE_WALL, OTHER_WALL]));
+  const b = serializeGraph(makeFixedCLGraph([BASE_WALL, OTHER_WALL]));
+  assert.equal(floorBytesEqual(a, b), false, '前提: 素のバイト列は壁 id で食い違う');
+  assert.equal(floorBytesEqual(canonicalizeFloorBytes(a), canonicalizeFloorBytes(b)), true);
+});
+
+test('canonicalizeFloorBytes: 壁の並び順だけを入れ替えると不一致（位置で振る）。serializeGraphCanonicalWalls は一致（対照）', () => {
+  const g1 = makeFixedCLGraph([BASE_WALL, OTHER_WALL]);
+  const g2 = makeFixedCLGraph([OTHER_WALL, BASE_WALL]);
+  assert.equal(floorBytesEqual(serializeGraphCanonicalWalls(g1), serializeGraphCanonicalWalls(g2)), true, '対照: 並べ替える方は一致');
+  assert.equal(floorBytesEqual(canonicalizeFloorBytes(serializeGraph(g1)), canonicalizeFloorBytes(serializeGraph(g2))), false);
+});
+
+test('canonicalizeFloorBytes: 壁の内容を1つ変えると不一致', () => {
+  const a = serializeGraph(makeFixedCLGraph([BASE_WALL, OTHER_WALL]));
+  const changed = { ...BASE_WALL, props: { ...BASE_WALL.props, wallFinish: 13 } };
+  const b = serializeGraph(makeFixedCLGraph([changed, OTHER_WALL]));
+  assert.equal(floorBytesEqual(canonicalizeFloorBytes(a), canonicalizeFloorBytes(b)), false);
+});
+
+test('canonicalizeFloorBytes: walls[].id・generatedWallIds・extentLoRef.wallId が w0.. へ置換され、旧 id は残らない', () => {
+  const { graph, walls } = makeReferencingGraph();
+  const oldIds = walls.map(w => w.id);
+  const snap = decodeFloorSnapshot(serializeGraph(graph));
+  assert.ok(findLineIdOccurrences(snap, oldIds).length >= 4, '前提: 旧 id が3種の箇所に出ている');
+  const out = decodeFloorSnapshot(canonicalizeFloorBytes(serializeGraph(graph)));
+  assert.equal(findLineIdOccurrences(out, oldIds).length, 0, '旧 id が残っていない');
+  assert.deepEqual(out.walls.map(w => w.id), ['w0', 'w1']);
+  const gen = out.rooms.flatMap(r => r.generatedWallIds).sort();
+  assert.deepEqual(gen, ['w0', 'w1']);
+  const aux = out.centerLines.find(c => c.extentLoRef?.wallId);
+  assert.ok(aux, '前提: 端の参照を持つ補助線がある');
+  assert.equal(aux.extentLoRef.wallId, 'w0');
+});
+
+test('canonicalizeFloorBytes: 決定的（2回同じ）で、壁 id 以外の内容は保たれ、入力のバイト列は変えない', () => {
+  const graph = makeRichGraph();
+  const bytes = serializeGraph(graph);
+  const copy = bytes.slice();
+  const c1 = canonicalizeFloorBytes(bytes);
+  const c2 = canonicalizeFloorBytes(bytes);
+  assert.equal(floorBytesEqual(c1, c2), true);
+  assert.equal(floorBytesEqual(bytes, copy), true, '入力は不変');
+  assert.equal(floorBytesEqual(canonicalizeFloorBytes(c1), c1), true, '冪等');
+  const drop = new Set(['walls', 'generatedWallIds', 'extentLoRef', 'extentHiRef']);
+  const strip = (b) => JSON.stringify(decodeFloorSnapshot(b), (k, v) => (drop.has(k) ? undefined : (typeof v === 'bigint' ? String(v) : v)));
+  const kept = strip(bytes);
+  assert.ok(kept.length > 500, '前提: 壁以外の中身がある');
+  assert.equal(strip(c1), kept);
+  const wallsNoId = (b) => JSON.stringify(decodeFloorSnapshot(b).walls.map(w => { const c = { ...w }; delete c.id; return c; }));
+  assert.equal(wallsNoId(c1), wallsNoId(bytes), '壁の id 以外の内容・並びは同じ');
+});
+
+test('canonicalizeFloorBytes: 壁が0本のバイト列でも例外にならず決定的', () => {
+  const bytes = serializeGraph(makeGraph());
+  assert.equal(floorBytesEqual(canonicalizeFloorBytes(bytes), canonicalizeFloorBytes(bytes)), true);
+});

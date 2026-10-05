@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { FinishModeState } from './FinishModeState.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
-import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
+import { setOverlay, clearOverlays, overlayGeneration } from '../catalog/catalogRegistry.js';
 
 function makeSingleCellGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -48,4 +48,19 @@ test('FinishModeState.init: doc overlayが無ければbuiltinのINTERIOR_MASTERS
 
   assert.equal(state.getInteriorMaster('LIVING_ROOM').wallMaterial, '301000000002');
   assert.equal(state.getInteriorMaster('LIVING_ROOM').ceilingHeight, 2700);
+});
+
+test('FinishModeState.materialOverlayGeneration: init 前は null、init 後は材マスタを作った時点の overlayGeneration()、世代を進めて作り直すと新しい値', async () => {
+  const state = new FinishModeState(makeSingleCellGraph(), null);
+  assert.equal(state.materialOverlayGeneration, null);
+  await state.init();
+  assert.equal(state.materialOverlayGeneration, overlayGeneration());
+
+  const before = overlayGeneration();
+  clearOverlays();
+  assert.ok(overlayGeneration() > before, '前提: カタログ世代が進んだ');
+  assert.notEqual(state.materialOverlayGeneration, overlayGeneration(), '旧 state の記録は古い世代のまま');
+  const state2 = new FinishModeState(makeSingleCellGraph(), null);
+  await state2.init();
+  assert.equal(state2.materialOverlayGeneration, overlayGeneration());
 });
