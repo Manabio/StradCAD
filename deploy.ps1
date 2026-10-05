@@ -1,4 +1,4 @@
-# StradCAD デプロイスクリプト
+﻿# StradCAD デプロイスクリプト
 # app/dist をビルドし、SSH 経由で公開サーバー(strad-cad-deploy)へ転送・展開する
 # 接続設定は ~/.ssh/config の Host "strad-cad-deploy" を参照
 
