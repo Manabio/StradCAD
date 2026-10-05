@@ -355,6 +355,34 @@ export function serializeGraphWithFreshLineIds(graph, { newId } = {}) {
 }
 
 // ----------------------------------------------------------------
+// シリアライズ: フロアグラフ → Uint8Array（壁 id の付け替えに左右されない比較用）
+//
+// 保存・復元には使わない（比較専用）。仕上げ脱出は壁を全削除→再生成するため、内容が同じでも壁 id が
+// 毎回変わる。壁を「id を除いた内容」の決定的な並びにして id を w0..wn へ振り直し、壁 id を参照する
+// 箇所（rooms[].generatedWallIds・centerLines[].extentLoRef/extentHiRef.wallId）を同じ対応で置き換える。
+// 置換は lineIdRemap.js の remapLineIdsInSnapshot（snapshot 全体の文字列・キーを走査する部分文字列の
+// 同時置換）に任せるため、上記以外の場所に壁 id が出ても旧 id が残って偽の不一致になることは無い。
+// 前提: 壁 id は UUID 等、他の文字列の部分文字列にならない値（addWall の既定 crypto.randomUUID）。
+// 内容が完全に同じ壁が2本以上あるときは、元の並び順で w の番号を割り当てる（一意でない）。壁の入れ替えで
+// バイト列が変わるのは、その2本を別々の部屋の generatedWallIds が指している場合だけ（不一致＝安全側）。
+// graph は変更しない。
+// ----------------------------------------------------------------
+export function serializeGraphCanonicalWalls(graph) {
+  const snapshot = buildSnapshot(graph);
+  const keyed = snapshot.walls.map((w, i) => {
+    const content = { ...w };
+    delete content.id;
+    return { wall: w, key: JSON.stringify(content), i };
+  });
+  keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.i - b.i));
+  snapshot.walls = keyed.map(k => k.wall);
+  const idMap = new Map(keyed.map((k, n) => [k.wall.id, `w${n}`]));
+  const remapped = remapLineIdsInSnapshot(snapshot, idMap);
+  for (const room of remapped.rooms) room.generatedWallIds.sort();
+  return encode(remapped);
+}
+
+// ----------------------------------------------------------------
 // シリアライズ: 通り芯グラフ → Uint8Array
 // ----------------------------------------------------------------
 export function serializeStructCLs(structGraph, structuralInfo, ledger) {
