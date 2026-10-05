@@ -416,7 +416,7 @@ test('【不変条件・D1】StructuralLayer.jsx: 屋根の外形線の Line は
   assert.ok(!/dash=/.test(el), '外形線が実線でない（dash がある）');
 });
 
-test('【配線】StructuralLayer.jsx: 下屋の軒の梁が出隅で勝つ角（eaveCorners）は roofFramingEaveCorners で求め、resolveBeamJunctionSpans の第3引数 { eaveCorners } に渡す（1行まるごと。判断は純モジュール）', () => {
+test('【配線】StructuralLayer.jsx: 下屋・主屋根の軒の梁が出隅で勝つ角（eaveCorners）は roofFramingEaveCorners で求め、resolveBeamJunctionSpans の第3引数 { eaveCorners } に渡す（1行まるごと。判断は純モジュール）', () => {
   // コメント行を除いた本体に対し、m フラグの行頭・行末アンカーで照合する（行末コメントで式を無効化する変異を検出）
   const body = readSource().split(/\r?\n/).filter(line => !line.trim().startsWith('//')).join('\n');
   assert.match(body, /^\s*\}\)\), \{ eaveCorners \}\);\s*$/m, 'resolveBeamJunctionSpans の呼び出しが `})), { eaveCorners });` で閉じていない');

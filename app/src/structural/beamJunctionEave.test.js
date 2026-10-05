@@ -1,4 +1,4 @@
-// beamJunction.js resolveBeamJunctionSpans の任意引数 { eaveCorners }（下屋の軒の側の梁が出隅で勝ち、けらばの出幅ぶん延びる。
+// beamJunction.js resolveBeamJunctionSpans の任意引数 { eaveCorners }（下屋・主屋根の軒の側の梁が出隅で勝ち、けらばの出幅ぶん延びる。
 // 伏図の描画だけ）のテスト。引数を渡さない・空なら今までと同じ結果であることは既存の beamJunction.test.js の入力で確かめる。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

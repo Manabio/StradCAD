@@ -320,14 +320,15 @@ export function roofFramingRegionsForFigure({ isRoofPlane, subjectGraph, topGrap
   return memo(subjectGraph, 'roofFramingLeanRegions', () => leanToFramingRegions(subjectGraph, project));}
 
 /**
- * 表示中の伏図で、下屋の軒の側の梁が出隅で勝ってけらばの出幅ぶん延びる角（beamJunction.js resolveBeamJunctionSpans の eaveCorners。
- * 描画だけ）。小屋組の外形線を描く条件（showRoofFraming）と同じときだけ。**主屋根（屋根専用平面）は []**（軒桁は対象外）。
+ * 表示中の伏図で、軒の側の梁が出隅で勝ってけらばの出幅ぶん延びる角（beamJunction.js resolveBeamJunctionSpans の eaveCorners。
+ * 描画だけ）。小屋組の外形線を描く条件（showRoofFraming）と同じときだけ。下屋（実体階の伏図）と主屋根（屋根専用平面＝小屋伏図の
+ * 軒桁。2026-10-05 ユーザー裁定で主屋根へ拡大）の両方が対象。主屋根は寄棟（全辺が軒）・region なし・陸屋根・topGraph 無しなら []。
  * region は roofFramingFigurePrimitives と同じ memo のもの。
  * @param {object} p roofFramingFigurePrimitives と同じ（widths は不要）
  * @returns {Array<{x:number, y:number, eaveIsVertical:boolean, extendMm:number}>}
  */
 export function roofFramingEaveCorners({ rules, lod, isRoofPlane, subjectGraph, topGraph, project, memo }) {
-  if (isRoofPlane || !subjectGraph || !showRoofFraming(rules.drawing, lod)) return [];
+  if (!subjectGraph || !showRoofFraming(rules.drawing, lod)) return [];
   const regions = roofFramingRegionsForFigure({ isRoofPlane, subjectGraph, topGraph, project, memo });
   return regions.flatMap(region => eaveBeamCorners(region, CL_OVERLAP_TOL_MM));
 }

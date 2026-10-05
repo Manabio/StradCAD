@@ -423,8 +423,9 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   // 下階柱面での止め）はここでは書き換えず、描画専用の追加トリム（勝者面での止め・L字の角閉じ）だけを
   // structural/beamJunction.js resolveBeamJunctionSpans が解決する——drawing.beamJunction!=='throughWins'
   // （在来木造以外）は常に空Mapを返すため、非在来は完全不変（beamDrawSpansがbaseSpansとそのまま同じ）。
-  // 下屋の軒の側の梁がけらばの出隅で勝つ角（描画だけ）の判断は roofFramingRegions.js roofFramingEaveCorners が決める
-  // （主屋根・小屋組を描かない条件は []）。region は下の小屋組の描画と同じ memo。
+  // 下屋・主屋根（屋根専用平面の軒桁）の軒の側の梁がけらばの出隅で勝つ角（描画だけ）の判断は
+  // roofFramingRegions.js roofFramingEaveCorners が決める（小屋組を描かない条件・寄棟・region なしは []）。
+  // region は下の小屋組の描画と同じ memo。
   const eaveCorners = roofFramingEaveCorners({
     rules: figureRules, lod, isRoofPlane: composition.subjectPlane?.isRoofPlane === true,
     subjectGraph: figureGraph, topGraph: column?.graph ?? null, project, memo: graphComputed,

@@ -2,7 +2,7 @@
 // 在来木造の梁の交点処理（B-3・ユーザー裁定2026-09-17）。
 //
 // 「通しの梁（両側に続く梁）が勝ち、T字で突き当たる梁が負け（勝者の面で止まる）」「出隅（L字）は
-// 長い方が勝ち、同長ならX方向」——このルールは場面によらず一律に適用する（例外は下屋の軒の側の梁。呼び出し側が
+// 長い方が勝ち、同長ならX方向」——このルールは場面によらず一律に適用する（例外は下屋・主屋根の軒の側の梁。呼び出し側が
 // eaveCorners を渡した角だけ、軒の側が勝ってけらばの出幅ぶん外形線まで延びる。描画だけ）。出隅の長さは、角に端を
 // 置く梁1本の材長ではなく、同じ軸で端と端がつながる梁を合わせた全長（continuousBeamLengths。
 // 梁は下階柱で分割されるため。ユーザー裁定2026-10-02「短手と長手が出会うとき、長手勝ち」）。実体スパン
@@ -122,7 +122,7 @@ function runLengthsOnAxis(items, tol, lengths) {
  *   end1/end2＝clStart/clEnd.effectiveValue（AXIS・未トリム）。base1/base2＝spanForColumns の結果
  *   （下階柱面でのトリム済み）。halfWidth＝beamRenderWidth(b,lod)/2（単線LODは0）。sectionKey＝sectionDefId。
  * @param {{tol?: number, eaveCorners?: Array<{x:number, y:number, eaveIsVertical:boolean, extendMm:number}>}} [opts]
- *   eaveCorners＝下屋の軒の側の梁が出隅で勝つ角（roofFramingGeometry.js eaveBeamCorners）。その角の交点では、軒の側が
+ *   eaveCorners＝下屋・主屋根（屋根専用平面の軒桁）の軒の側の梁が出隅で勝つ角（roofFramingGeometry.js eaveBeamCorners）。その角の交点では、軒の側が
  *   通しでなければ、短い方でも軒の側が勝ち、端を max(敗者の半幅, extendMm)（けらばの出幅）だけ外へ延ばす（kind 'eaveExtend'・
  *   capped）。けらば側に梁が無くても延ばす。軒の側が通しの角・軒の側に梁の端が無い角は通常の決定のまま。
  *   渡さない・空なら今までと完全に同じ結果。
@@ -175,7 +175,7 @@ export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_
       sectionBreak[d] = plus.length > 0 && minus.length > 0 && !matched;
     }
 
-    // 下屋の軒の側の梁が、けらばの側の梁との出隅で勝つ角（eaveCorners。伏図の描画だけ）。軒の側が通しなら対象外
+    // 下屋・主屋根の軒の側の梁が、けらばの側の梁との出隅で勝つ角（eaveCorners。伏図の描画だけ）。軒の側が通しなら対象外
     // （通常の勝者決定のまま）。軒の側に梁の端が無い角も対象外。
     const eaveCorner = (eaveCorners ?? []).find(c => Math.abs(c.x - cluster.x) < tol && Math.abs(c.y - cluster.y) < tol);
     const eaveDir = eaveCorner ? (eaveCorner.eaveIsVertical ? 'Y' : 'X') : null;
