@@ -197,7 +197,7 @@ function leanToModel(region, F, tol) {
   const depth = region.leanToPurlinDepthMm;
   if (typeof depth !== 'number' || !Number.isFinite(depth) || depth <= 0) return null;
   const { eaveGapMm } = purlinLayoutFromRidge({ halfSpanMm: depth, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol });
-  const { faces } = leanToDrainFraming({ rects: rs, drains: region.leanToDrains, pitchMm: F.purlinPitchMm, firstLevelMm: eaveGapMm, tolMm: tol });
+  const { faces, ridges } = leanToDrainFraming({ rects: rs, drains: region.leanToDrains, pitchMm: F.purlinPitchMm, firstLevelMm: eaveGapMm, tolMm: tol });
   const planes = [];
   for (const face of faces) {
     for (const lineIsVertical of [face.lineIsVertical, !face.lineIsVertical]) {
@@ -205,7 +205,50 @@ function leanToModel(region, F, tol) {
       if (lines.length > 0) planes.push({ lineIsVertical, lines });
     }
   }
-  return { planes, rects: rs };
+  return { planes, rects: rs, ridges };
+}
+
+/**
+ * 壁に接する矩形の寄棟（水下の場の region・shape 寄棟・矩形1つ）の棟木の先端（屋根範囲の内側で終わる端＝隅木の上端）の下に、
+ * 棟木と直交する小屋梁を1本ずつ足す区間を計画する（graph は読むだけ。2026-10-05 裁定）。区間は先端の位置の弦の中で、
+ * 棟木の座標を跨ぐ host の間の1区間。足さない: (a) 先端の位置で棟木を跨ぐ直交の梁（大梁・面の小屋梁）が既にある
+ * (b) host の対が無く区間にならない (c) 区間が、先端の位置と同じ軸の母屋・棟木の線（平行で真下に沿う）と内部で重なる
+ * (束を交差でしか数えないので、沿って走ると線の束の間隔が 1820 を超える。L字の切妻の seed を取り除いた経緯と同じ）
+ * (d) 先の面の小屋梁と同じ軸で重なる。矩形でない（L字）・水下を持たない寄棟・切妻・片流れは空。
+ * @returns {Array<{coord:number, lo:number, hi:number, clStart:object, clEnd:object, isVertical:boolean}>}
+ */
+function planLeanToHipRidgeEndSegments(graph, rules, region, model, primaries, prior) {
+  const tol = CL_OVERLAP_TOL_MM;
+  if (region.shape !== RoofShape.HIP || model.rects.length !== 1) return [];
+  const rect = model.rects[0];
+  const base = [...primaries, ...prior];
+  const allLines = model.planes.flatMap(p => p.lines);
+  const segments = [];
+  const done = [];
+  for (const ridge of model.ridges) {
+    const [alongLo, alongHi] = ridge.isVertical ? [rect.y1, rect.y2] : [rect.x1, rect.x2];
+    const koyaIsVertical = !ridge.isVertical;
+    for (const p of [ridge.lo, ridge.hi]) {
+      if (p <= alongLo + tol || p >= alongHi - tol) continue; // 屋根範囲の外周の上の端は先端でない
+      if (done.some(d => d.isVertical === koyaIsVertical && Math.abs(d.coord - p) <= tol && Math.abs(d.cross - ridge.coord) <= tol)) continue;
+      done.push({ isVertical: koyaIsVertical, coord: p, cross: ridge.coord });
+      if (base.some(b => b.isVertical === koyaIsVertical && Math.abs(b.axisValue - p) <= tol &&
+        spanLo(b) - tol <= ridge.coord && ridge.coord <= spanHi(b) + tol)) continue; // (a)
+      const chord = orthogonalChord({ rects: model.rects, isVertical: koyaIsVertical, coord: p, lo: ridge.coord, hi: ridge.coord, tolMm: tol });
+      if (!chord) continue;
+      const parallel = base.filter(b => b.isVertical === ridge.isVertical);
+      const hosts = hostCLsAt(parallel, ridge.isVertical, hostAxisCLsIn(parallel, chord.lo, chord.hi), p);
+      for (const s of segmentsBetweenHosts(graph, rules, p, hosts, koyaIsVertical)) {
+        if (!(s.lo + tol < ridge.coord && ridge.coord < s.hi - tol)) continue; // 棟木を跨ぐ区間だけ（b）
+        const alongLine = allLines.some(l => l.isVertical === koyaIsVertical && Math.abs(l.coord - p) <= tol &&
+          Math.min(l.hi, s.hi) - Math.max(l.lo, s.lo) > tol);
+        if (alongLine) continue; // (c)
+        if (coveredByPrior(s, prior)) continue; // (d)
+        segments.push(s);
+      }
+    }
+  }
+  return segments;
 }
 
 /** beams のうち、向きが lineVertical と直交する梁を、線に沿った座標（at）と範囲（lo..hi）にしたもの。 */
@@ -487,6 +530,8 @@ export function autoFillWoodRoofFraming(graph, project, regions) {
         for (const plane of model.planes) {
           prior.push(...emitSegments(planLeanToPlaneSegments(graph, rules, plane, primaries, prior, model.rects), ROOF_BEAM_TYPE));
         }
+        // 壁に接する矩形の寄棟の棟木の先端（隅木の上端）の下の小屋梁（面の小屋梁が出揃ってから。それを host に数える）
+        emitSegments(planLeanToHipRidgeEndSegments(graph, rules, region, model, primaries, prior), ROOF_BEAM_TYPE);
       } else if (region.shape === RoofShape.HIP) {
         // 寄棟（水下を持たない＝壁に接しない矩形の寄棟・矩形でない主屋根の寄棟）は翼ごとに2段: 梁間方向の小屋梁（第1段）→
         // それを host に含めた飛び梁（第2段）。翼の順に回し、先の翼で実在する小屋梁（prior）は後の翼の支え・host に数える
