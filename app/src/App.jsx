@@ -12,6 +12,7 @@ import { replaceRowsByScenario } from './catalog/resolveQueue.js';
 import { kindDef } from './catalog/catalogKinds.js';
 import { isDirty, markDirty } from './dirtyState.js';
 import { createBackGuard, detectBackGuardPlatform } from './backGuard.js';
+import { createGestureGuard } from './gestureGuard.js';
 import { viewport } from './appViewport.js';
 import {
   findNearbyCenterLines,
@@ -884,6 +885,12 @@ const App = observer(() => {
     });
     guard.start();
     return () => guard.dispose();
+  }, []);
+
+  useEffect(() => {
+    const gestureGuard = createGestureGuard({ doc: document });
+    gestureGuard.start();
+    return () => gestureGuard.dispose();
   }, []);
 
   useEffect(() => {
