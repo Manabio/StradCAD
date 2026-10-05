@@ -148,6 +148,21 @@ test('切妻の L字（roof-test8 型）: 軒の辺（下辺・右辺）とけ�
   assert.deepEqual(corners(region), [C(3640, 0, false), C(9100, -9884, true)], '下辺の梁は左端 (3640,0)・右辺の梁は上端 (9100,-9884) でけらばの出幅ぶん勝つ');
 });
 
+test('対角だけで接するセルの下屋（切妻）: 対角の接点 (3640,7280) には角を出さない（凸の角だけの判定を守る）', () => {
+  // 屋根: 上段 (0,0)(1,0)・右 (1,1)・左下 (0,2)。屋内 (0,1)。(1,1) と (0,2) は点 (3640,7280) でだけ接する
+  // 判定（outward の2条件）を両方外すと結果が変わるのは、3×3 格子の 4032 形のうち対角だけで接する型の 37 形だけ（2026-10-05 QA の掃引）。
+  // 2条件の片方だけを外しても、この格子の形では結果が変わらない（片方が残れば弾かれる。区別できる形は見つかっていない）
+  const { graph, interior, roof } = makeGrid([0, 3640, 7280, 10920], [0, 3640, 7280, 10920]);
+  interior([[0, 1]]);
+  roof([[0, 0], [1, 0], [0, 2], [1, 1]], RoofShape.GABLE);
+  const region = regionOf(graph);
+  assert.equal(region.rect, null, '前提: 矩形でない L/S 字の region');
+  assert.ok(Array.isArray(region.leanToDrains) && region.leanToDrains.length > 0, '前提: 水下を持つ（角の計算に届く）');
+  const all = corners(region);
+  assert.deepEqual(all, [C(0, 0, false), C(7280, 7280, true)]);
+  assert.ok(!all.some(c => c.x === 3640 && c.y === 7280), '対角の接点（別々のセルの軒の辺とけらばの辺が出会うが、出隅ではない）には角を出さない');
+});
+
 // ---- 主屋根（屋根専用平面の軒桁。2026-10-05 ユーザー裁定で下屋から拡大） ----
 
 /** 9000×6000 の建物を最上階に持つ主屋根。subject は屋根専用平面の graph の代役（graph があればよい。region は topGraph から導く）。 */
