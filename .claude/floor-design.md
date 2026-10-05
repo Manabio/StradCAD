@@ -23,6 +23,8 @@ Planeのフィールド一覧・floorNumber.jsの関数シグネチャは`core/p
 ## 入力の関門（uiBusy）と階切替の先読み＋同期確定
 awaitをまたいでgraph／IDBを書くUI入口（層2）は`uiBusy.js`の`runBusy`で包む。同期編集（層0）と背景の構造同期（層1。`structuralSync.js`）は対象外——それぞれ自前のwhenIdle()を持つ。利用者は階切替・モード切替・undo/redo（App.jsxの5経路）に加え、CL削除・入替え・偏芯・出幅編集・移動準備（`FloorplanModeState.startMove`内）（入力規制ステップ3）、保存・読込み・カタログ保守（開く／適用）（ステップ5）、階操作（階追加・検討案の追加/コピー/削除・並替・階変更・階削除）（ステップ6・途中階の上階追加と階移動の振り直し一本化で並替・階変更を追加）。関門自体は排他制御（mutex）を持たない薄い深さカウンタで、入れ子（undo内の`switchHistoryContext`が`switchFloor`を呼ぶ等）は深さで自然に処理する。
 
+階を選ぶドラムロール（`FloorDrum.jsx`。判断は純モジュール`ui/floorDrumLogic.js`）は、選んだ瞬間から切替の決着まで選んだ階を表示の基準にする（保留中の選択）。決着（成功・失敗・関門に無視）で外し、失敗・無視のときだけ実際の階へ戻る。決着待ち中の再入力は無視する。`guardUi`が決着をドラムへ伝えるためPromiseを返す（busyのときは何もしない）。ユーザー裁定2026-10-05「戻る状態は見せず、入力規制が必要なら入れて、UIだけでも即応させて」。
+
 遮断点は4つ: 全画面オーバーレイ（`ui/BusyOverlay.jsx`。400ms遅延でlabelも表示）・キーボードのcapture keydown（`isUiBusy()`で`stopImmediatePropagation`）・`guardUi`（UIコールバック層）・ポインタ入口の`isUiBusy()`ガード（`usePointerInteraction.js`のhandlePointerDown/handleTouchStart本体先頭。オーバーレイに対する二重防御）。関門直前の中断（`resetGestureRefs`）は長押しタイマー（`useLongPress`の`abort()`）の停止を含む——refを戻すだけではsetTimeoutが関門の中で発火してしまう（入力規制ステップ4）。
 
 不変条件: (1)最初のawaitより前に同期で`runBusy`へ入る、(2)`beginUiTransition()`は`runBusy`より前——例外は理由付きで分類表の`noBeginUiTransition`に記録する（階操作のundo/redoクロージャ・`FloorplanModeState.startMove`。いずれも呼ぶと今の操作/準備中の移動を壊す）。`withFloorOpUndo`の全5呼び出し箇所では、呼び出し元が直前に`beginUiTransition()`を呼ぶ（横断テストで固定）、(3)`structuralSync.whenIdle()`は関門の中で待つ、(4)失敗の表示は`guardUi`層に一本化——固有の文言を持つ入口（performUndo/Redo・handleModeChange・handleSaveConfirm・runDocumentImport）だけ自前catch、(5)関門の中でユーザーの回答を待たない、(6)App.jsxの全async入口を分類（分類テスト`uiBusyClassification.test.js`。`FloorplanModeState.startMove`と`CatalogMaintenancePanel`内部は各自のwiringテストで固定）（入力規制ステップ1〜7・2026-09-28）。

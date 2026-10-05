@@ -50,6 +50,9 @@ S造・RC造・SRC造で、床開口（吹抜け・昇降路・階段吹抜け�
 ## 開口辺（floorOpeningEdges）
 自階の床開口をセル境界CL上の辺として列挙する純関数（`finish/stair/slabOpening.js`）。情報源は`openingCellSets`（吹抜け・昇降路・階段吹抜けの占有セル∪自階の階段の破れ先セル）1つ。規則Oの入力。設計意図は`.claude/structural-model.md`「規則O」節。
 
+## 省略の印（finishExitStamp）
+仕上げモードのままの階切替で、無編集の階の仕上げ脱出を丸ごと省けるかを判定する記録（階ごとの脱出直後のバイト列＋外部入力。メモリ上のみ）。設計意図は`.claude/data-model.md`「内周壁は鮮度キーが…」節。
+
 ## 階段吹抜け（STAIR_VOID）
 最上階の屋内階段footprintへ自動指定される自動管理Room（`feature='stairVoid'`・無名）。ユーザー指定の吹抜け（`feature='void'`）と異なり一切描画せず、仕上げ表・部屋ドラッグの対象外。階追加で中間階になると階段のペアRoomへ転用される。設計意図は`.claude/data-model.md`。
 
@@ -286,7 +289,7 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 （`finish/wallFreshnessKey.js`）。`graph.wallFreshnessKey`へ保存し、「保存キー≠現在キー」を
 内周壁・外壁の全削除→導出再生成の起動条件にする（仕上げ脱出・構造脱出・文書読込みの3境界。
 `wallRefresh.js`の`refreshWallsAllFloors`）——ただし3境界のうち**仕上げ脱出の自階は無条件**
-（鍵を見ずに毎回再生成し、鍵は結果として書く）。数値(mm)は含めない（材コードだけで組み立て、
+（鍵を見ずに再生成し、鍵は結果として書く。階切替で省略の印が一致したときだけ脱出ごと省く）。数値(mm)は含めない（材コードだけで組み立て、
 丸め規約を持たない）。材マスタや生成規則を変えたら`WALL_KEY_VERSION`を上げて既存キーを一律
 不一致にする。設計意図は`.claude/data-model.md`「内周壁は鮮度キーが変わった境界で全削除・
 導出再生成する」節。
