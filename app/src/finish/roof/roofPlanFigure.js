@@ -12,7 +12,8 @@
  *   hip＝隅木（軒の角まで）、valley＝谷木（軒先の線の入隅の角まで。伏図と違い平面だけ延ばす）。
  * 壁に当たる線の端（外形線の開いた端・棟木・隅木・谷木）は、通り芯ではなく描かれている壁の屋根側の外壁面で止める
  * （roofPlanWallTrim.js。壁が無い階は通り芯のまま）。
- * L字の切妻は腕ごとに棟木（軒・けらばは gableArmDrainsOf。水下を持つ region）。棟違い・水下が空の切妻の L字は軒先の線だけ。
+ * L字の切妻は腕ごとに棟木（軒・けらばは gableArmDrainsOf。水下を持つ region）。水下は屋内に接する部分を除く（壁へ下る面は作らない。
+ * 振り分けは leanToDrainRoute）。棟違い・全周が壁・向かい合う壁の間・けらばの無い切妻の L字は軒先の線だけ（outlineOnly）。
  * 詳細（DETAIL）だけ、傾斜面（水下）ごとに水下向きの矢印・「屋根」・「（傾斜N/10）」を出す（detailOnly:true の arrow・text。
  * visibleRoofPlanPrimitives が他の LOD で除く）。矢じりは renderer/chevron.js（依存なしの純モジュール）。
  */
@@ -44,7 +45,8 @@ export function roofPlanFigure(graph) {
     region.exposedPaths.forEach((path, i) => {
       lines.push({ kind: 'line', key: `${region.key}:outline:${i}`, role: 'outline', points: path.points, closed: path.closed, detailOnly: false });
     });
-    const ridges = extendLinesToOutline({
+    // 外形線だけの region（outlineOnly: 陸屋根・棟違い・全周が壁・向かい合う壁の間など）は棟木・隅木・谷木・ラベルを出さない
+    const ridges = region.outlineOnly ? [] : extendLinesToOutline({
       lines: roofRidgeLines({
         rect: region.rect, rects: region.rects ?? null, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical,
         leanToDrains: region.leanToDrains ?? null, leanToPurlinDepthMm: region.leanToPurlinDepthMm ?? null, tolMm,
@@ -55,7 +57,7 @@ export function roofPlanFigure(graph) {
       lines.push({ kind: 'line', key: `${region.key}:ridge:${i}`, role: 'ridge', points: segment(line), closed: false, detailOnly: false });
     });
     // L字の下屋の継ぎ目（隅木・谷木）は水下への距離の場（伏図と同じ）。軒先の角（出隅・入隅）まで延ばす
-    const diagonals = extendDiagonalsToOutline({
+    const diagonals = region.outlineOnly ? [] : extendDiagonalsToOutline({
       diagonals: roofHipDiagonals({ rect: region.rect, rects: region.rects ?? null, shape: region.shape, leanToDrains: region.leanToDrains ?? null, tolMm }),
       edges: region.edges, valleys: true, tolMm,
     });
@@ -67,7 +69,7 @@ export function roofPlanFigure(graph) {
     const reachMm = Math.max(0, ...region.edges.map(e => e.overhangMm)) + tolMm;
     out.push(...trimRoofPlanLinesAtWalls(lines, { faceAt, zeroZones: region.zeroZones, reachMm, tolMm }));
     // 傾斜面ごとのラベル（詳細 LOD のみ）。外壁面どまりは線の端だけで、ラベルの座標は動かさない。
-    // 傾斜面1つにつき1つ（ユーザー指示）。壁に接する切妻・寄棟の下屋は壁の辺も水下なので、壁へ向かう矢印の面も出す（描いてある面を省かない）
+    // 傾斜面（水下）1つにつき1つ（ユーザー指示）。水下は屋内に接する部分（壁）を除いたもの（2026-10-05 裁定）なので、壁へ向かう矢印は出ない
     const anchors = drainFaceAnchors({ rects: region.rect ? [region.rect] : region.rects, drains: region.planDrains, tolMm });
     out.push(...roofSlopeLabelPrimitives({ key: region.key, anchors, slope: region.slope }));
   }

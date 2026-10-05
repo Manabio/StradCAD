@@ -138,7 +138,8 @@ test('切妻の L字（roof-test8 型）: 軒の辺（下辺・右辺）とけ�
   roof([[0, 1], [1, 1], [1, 0]], RoofShape.GABLE);
   const region = regionOf(graph);
   assert.equal(region.shape, 'gable');
-  assert.ok(Array.isArray(region.leanToDrains) && region.leanToDrains.length === 4, '前提: 水下（軒の辺）4つを持つ L字の region');
+  // 2026-10-05: 水下は壁（屋内に接する2辺）を除く下辺・右辺の2つ（旧: 壁の辺も軒＝4つ）。角の結果は変わらない（壁は出幅 0 で対象外だった）
+  assert.ok(Array.isArray(region.leanToDrains) && region.leanToDrains.length === 2, '前提: 水下（壁を除く軒の辺）2つを持つ L字の region');
   assert.deepEqual(corners(region), [C(3640, 0, false), C(9100, -9884, true)], '下辺の梁は左端 (3640,0)・右辺の梁は上端 (9100,-9884) でけらばの出幅ぶん勝つ');
 });
 

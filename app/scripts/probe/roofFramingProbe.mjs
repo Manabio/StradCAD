@@ -157,7 +157,7 @@ function printLeanToDrawing(region, F, ms) {
   const wings = region.leanToWings ?? null; // 切妻の L字（腕ごとに棟木）は翼を持たない（軒・けらばは gableArmDrainsOf で辺を掃いて決める）
   const lineName = l => `${l.isVertical ? 'x' : 'y'}=${l.coord} ${l.lo}..${l.hi}`;
   if (wings) console.log(`--- 翼 ${wings.length} 枚（順＝作った順）。計算時間 ${ms.toFixed(1)}ms（leanToFramingRegions の1階分） ---`);
-  else console.log(`--- 切妻の L字（翼なし。腕ごとに棟木）。形状=${region.shape}。計算時間 ${ms.toFixed(1)}ms（leanToFramingRegions の1階分） ---`);
+  else console.log(`--- 水下の場の region（翼なし。切妻・寄棟の L字や、壁に一部接する矩形の下屋）。形状=${region.shape}。計算時間 ${ms.toFixed(1)}ms（leanToFramingRegions の1階分） ---`);
   (wings ?? []).forEach((w, i) => {
     const r = w.rect;
     const ext = w.domain.filter(d => d.entry !== 'direct').map(d => `x ${d.x1}..${d.x2} × y ${d.y1}..${d.y2}（入り口 ${d.entry}）`);
@@ -167,7 +167,7 @@ function printLeanToDrawing(region, F, ms) {
   const drainName = d => `${d.isVertical ? 'x' : 'y'}=${d.coord} ${d.lo}..${d.hi}（外側 ${d.isVertical ? (d.outward > 0 ? '右' : '左') : (d.outward > 0 ? '下' : '上')}）`;
   console.log(`--- 水下 ${region.leanToDrains.length} 本: ${region.leanToDrains.map(drainName).join(' / ')} ---`);
   const { eaveGapMm } = purlinLayoutFromRidge({ halfSpanMm: region.leanToPurlinDepthMm, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol });
-  console.log(`  母屋の段の基準: 長手方向の翼の奥行き ${region.leanToPurlinDepthMm} → 軒までの残り r=${eaveGapMm}（段 r + k×${F.purlinPitchMm}）`);
+  console.log(`  母屋の段の基準（leanToPurlinDepthMm） ${region.leanToPurlinDepthMm} → 軒までの残り r=${eaveGapMm}（段 r + k×${F.purlinPitchMm}）`);
   const t0 = performance.now();
   const field = leanToDrainFraming({ rects: region.rects, drains: region.leanToDrains, pitchMm: F.purlinPitchMm, firstLevelMm: eaveGapMm, tolMm: tol });
   const firstMs = performance.now() - t0;

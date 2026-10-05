@@ -18,7 +18,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { autoFillWoodWallBeams, autoFillWoodBeamDepths } from './woodAutoFill.js';
-import { roofFramingLines, roofStrutPoints, leanToWingsOf, gableArmDrainsOf } from './roofFramingGeometry.js';
+import { roofFramingLines, roofStrutPoints, leanToWingsOf, gableArmDrainsOf, leanToDrainRoute } from './roofFramingGeometry.js';
 import { roofFramingHostMembers } from './framingDrawing.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { mainRoofFramingRegion } from './roofFramingRegions.js';
@@ -1094,6 +1094,106 @@ test('【L字の切妻・既知の限界（受容）③】小屋梁の弦が別�
   assert.equal(gapOf(cross, true, 9100), 3640, '十字: 棟木 x=9100（0..9100）の束の最大間隔');
   const z = R([[0, 0, 6643, 3003], [3003, 3003, 6643, 6643], [3003, 6643, 12103, 10283]]);
   assert.equal(gapOf(z, true, 5733), 2093, 'Z字: 母屋 x=5733 の束の最大間隔');
+});
+
+// ---- 壁を水下から除いた下屋（2026-10-05 裁定。leanToDrainRoute の field の region）。寄棟の分岐より水下の分岐が先 ----
+
+// leanToDrainRoute が field を返す形の region（roofFramingRegions.js framingRegionOfRoom と同じ組み立て）。
+function makeRouteRoof({ cells, shape, zeroZones, rect = null, highSide = null, ridgeIsVertical = null }) {
+  const route = leanToDrainRoute({ shape, rect, rects: cells, ridgeIsVertical, highSide, autoHighSide: highSide, zeroZones, tolMm: CL_OVERLAP_TOL_MM });
+  assert.equal(route.kind, 'field', '前提: 水下の場の経路');
+  const { graph, X, Y } = makeWingRoof({ cells });
+  const region = {
+    key: 'lean:r', rect: null, rects: cells, shape: route.shape, ridgeIsVertical: null, highSide: null,
+    leanToDrains: route.drains, leanToPurlinDepthMm: route.purlinDepthMm,
+  };
+  return { graph, X, Y, region, route };
+}
+const wallZone = (isVertical, coord, lo, hi, outward) => ({ isVertical, coord, lo, hi, outward });
+
+test('【壁に接する寄棟】分岐の順: 水下を持つ寄棟の region（rect:null・shape:hip・leanToDrains）は面ごとの小屋梁（飛び梁なし）。水下を持たない矩形でない寄棟（主屋根）は翼ごとの2段のまま', () => {
+  const cells = [rc(3640, -3640, 9100, 0)]; // roof-test6 型（上辺 y=-3640 が壁）
+  const { graph, region } = makeRouteRoof({ cells, shape: RoofShape.HIP, zeroZones: [wallZone(false, -3640, 3640, 9100, -1)], rect: cells[0] });
+  assert.equal(region.shape, 'hip');
+  const r = assertWingInvariants(graph, region, '壁に接する寄棟');
+  assert.ok(r.created.length > 0, '小屋梁ができる（検査が空振りしない）');
+  assert.deepEqual(tobibariDescs(graph), [], '飛び梁（寄棟の第2段）は作らない');
+  // 同じ region を shape だけ片流れにしても同じ小屋梁＝水下の場の経路は形状を問わない（寄棟の分岐へ流れていない）
+  const asMono = makeRouteRoof({ cells, shape: RoofShape.HIP, zeroZones: [wallZone(false, -3640, 3640, 9100, -1)], rect: cells[0] });
+  autoFillWoodRoofFraming(asMono.graph, PROJECT, [{ ...asMono.region, shape: RoofShape.MONO }]);
+  assert.deepEqual(descs(asMono.graph), descs(graph), '形状に依らず同じ');
+  // 対照: 水下の無い寄棟（矩形でない主屋根の region）は翼ごとの2段（飛び梁あり得る）で、面ごとの結果と違う
+  const hipOnly = makeWingRoof({ cells: [rc(0, 0, 5460, 3640), rc(0, 3640, 5460, 7280), rc(5460, 3640, 9100, 7280)] });
+  autoFillWoodRoofFraming(hipOnly.graph, PROJECT, [hipOnly.region]);
+  assert.ok(tobibariDescs(hipOnly.graph).length > 0, '対照: 水下の無い寄棟は飛び梁（第2段）を作る');
+});
+
+test('【壁に接する寄棟】roof-test6 型（矩形 x3640..9100 × y-3640..0・上辺が壁）: 水下は左・右・下。母屋の線は棟木 x=6370（壁側へ -2730 まで）・段 910/1820。束の間隔・交差・重なり・冪等', () => {
+  const cells = [rc(3640, -3640, 9100, 0)];
+  const { graph, region } = makeRouteRoof({ cells, shape: RoofShape.HIP, zeroZones: [wallZone(false, -3640, 3640, 9100, -1)], rect: cells[0] });
+  assert.equal(region.leanToPurlinDepthMm, 2730, '水下の場の D の最大値（棟木の高さ）');
+  const { ridges, purlins } = roofFramingLines({
+    rect: null, rects: cells, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+  });
+  const line = l => `${l.isVertical ? 'x' : 'y'}=${l.coord}:${l.lo}..${l.hi}`;
+  assert.deepEqual(ridges.map(line), ['x=6370:-3640..-2730']);
+  assert.deepEqual(purlins.map(line).sort(), ['x=4550:-3640..-910', 'x=5460:-3640..-1820', 'x=7280:-3640..-1820', 'x=8190:-3640..-910', 'y=-1820:5460..7280', 'y=-910:4550..8190']);
+  assertWingInvariants(graph, region, 'roof-test6 型');
+  assert.deepEqual(tobibariDescs(graph), []);
+});
+
+test('【既知の限界（受容）T4】壁に接する矩形の寄棟（roof-test6 型）: 棟木 x=6370（y-3640..-2730）の内部の端 (6370,-2730)（隅木の上端）を通る小屋梁・大梁が無い（寄棟の2段・seed・飛び梁を使わないため。L字の切妻の限界①と同系統）', () => {
+  const cells = [rc(3640, -3640, 9100, 0)];
+  const { graph, region } = makeRouteRoof({ cells, shape: RoofShape.HIP, zeroZones: [wallZone(false, -3640, 3640, 9100, -1)], rect: cells[0] });
+  // 実データ（roof-test6）は下の階の壁線 x=5460 と通り芯 X4=7280 を持つ。その通り芯を足して小屋梁の位置の候補にする
+  graph.addCenterLine(CenterLineType.VERTICAL, 5460, STRUCT);
+  graph.addCenterLine(CenterLineType.VERTICAL, 7280, STRUCT);
+  autoFillWoodRoofFraming(graph, PROJECT, [region]);
+  assert.ok(roofBeams(graph).length > 0, '前提: 小屋梁はできている');
+  const through = graph.beams.filter(b => {
+    const lo = Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue);
+    const hi = Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue);
+    return b.isVertical ? Math.abs(b.axisValue - 6370) <= 0.5 && lo <= -2730 && -2730 <= hi : Math.abs(b.axisValue + 2730) <= 0.5 && lo <= 6370 && 6370 <= hi;
+  });
+  assert.deepEqual(through.map(desc), [], '棟木の端 (6370,-2730) の下に横架材が無い');
+  assert.deepEqual(koyaDescs(graph), ['x=5460:-3640..0', 'x=7280:-3640..0', 'y=-1820:3640..5460', 'y=-1820:7280..9100']);
+});
+
+test('【壁に接する寄棟】一部だけ壁・コの字の壁の間の端・全周が壁: 壁を除いた外周の寄棟は束・交差・重なり・冪等の不変条件を満たす。全周が壁は region にならず（route が none）小屋梁なし', () => {
+  const rect = rc(0, 0, 9100, 5460);
+  const forms = {
+    '上辺の半分が壁': [wallZone(false, 0, 0, 4550, -1)],
+    '左辺の全部が壁': [wallZone(true, 0, 0, 5460, -1)],
+    '左辺と上辺が壁（入隅側）': [wallZone(true, 0, 0, 5460, -1), wallZone(false, 0, 0, 9100, -1)],
+    '下辺の一部が壁': [wallZone(false, 5460, 1820, 5460, 1)],
+  };
+  for (const [name, zones] of Object.entries(forms)) {
+    const { graph, region } = makeRouteRoof({ cells: [rect], shape: RoofShape.HIP, zeroZones: zones, rect });
+    const r = assertWingInvariants(graph, region, name);
+    assert.ok(r.created.length > 0, `${name}: 小屋梁ができる（検査が空振りしない）`);
+    assert.deepEqual(tobibariDescs(graph), [], `${name}: 飛び梁なし`);
+  }
+  const all = [wallZone(false, 0, 0, 9100, -1), wallZone(true, 9100, 0, 5460, 1), wallZone(false, 5460, 0, 9100, 1), wallZone(true, 0, 0, 5460, -1)];
+  assert.equal(leanToDrainRoute({ shape: RoofShape.HIP, rect, rects: [rect], zeroZones: all, tolMm: CL_OVERLAP_TOL_MM }).kind, 'none', '全周が壁');
+});
+
+test('【L字の寄棟】壁を除いた外周が水下の region（roof-test9 型）: 小屋梁は面ごと（飛び梁なし）。束の間隔・交差・重なり・冪等', () => {
+  const cells = LFR.cells; // roof-test8/9 型の L字
+  const edges = [wallZone(false, -3640, 3640, 7280, -1), wallZone(true, 7280, -9884, -3640, -1)];
+  const { graph, region } = makeRouteRoof({ cells, shape: RoofShape.HIP, zeroZones: edges });
+  assert.equal(region.leanToDrains.length, 4, '上・右・下・左（壁2辺を除く）');
+  const r = assertWingInvariants(graph, region, 'L字の寄棟');
+  assert.ok(r.created.length > 0);
+  assert.deepEqual(tobibariDescs(graph), []);
+});
+
+test('【L字の下屋・配線】autoFillWoodRoofFraming は水下の分岐を寄棟の分岐より先に見る（壁に接する寄棟の region が全辺軒の寄棟へ流れない）', () => {
+  const src = stripCommentLines(fs.readFileSync(path.resolve(import.meta.dirname, 'woodRoofFraming.js'), 'utf8'));
+  const leanTo = src.indexOf('if (!region.rect && Array.isArray(region.leanToDrains)) {');
+  const hip = src.indexOf('} else if (region.shape === RoofShape.HIP) {');
+  assert.ok(leanTo > 0 && hip > 0, '前提: 2つの分岐がある');
+  assert.ok(leanTo < hip, '水下の分岐が寄棟の分岐より先');
 });
 
 test('【L字の切妻・形の網羅】T字（横の棒＋縦の棒）・コの字・十字・正方形3つの L字・段違い: 束の最大間隔 1820 以下・交差なし・同軸の重なりなし・冪等・梁を1本以上作る', () => {

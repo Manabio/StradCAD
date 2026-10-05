@@ -476,9 +476,20 @@ export function autoFillWoodRoofFraming(graph, project, regions) {
 
   if (rules.framing) {
     for (const region of regions) {
-      if (region.shape === RoofShape.HIP) {
-        // 寄棟は翼ごとに2段: 梁間方向の小屋梁（第1段）→ それを host に含めた飛び梁（第2段）。翼の順に回し、
-        // 先の翼で実在する小屋梁（prior）は後の翼の支え・host に数える（矩形の寄棟は翼1つで prior は空）。
+      if (!region.rect && Array.isArray(region.leanToDrains)) {
+        // 水下の場の region（L字の片流れ・切妻・寄棟、壁に一部接する矩形の下屋）は面ごと。先の面で実在する小屋梁（prior）は後の面の
+        // 支え・host に数える。**寄棟の分岐より先に見る**: 壁に接する下屋の寄棟は水下（壁を除いた外周）を持つ region で、
+        // 全辺が軒の寄棟（翼ごとの2段）へ流すと壁へ下る面の小屋梁ができる（2026-10-05 裁定）。
+        const model = leanToModel(region, rules.framing, CL_OVERLAP_TOL_MM);
+        if (!model) continue;
+        const prior = [];
+        for (const plane of model.planes) {
+          prior.push(...emitSegments(planLeanToPlaneSegments(graph, rules, plane, primaries, prior, model.rects), ROOF_BEAM_TYPE));
+        }
+      } else if (region.shape === RoofShape.HIP) {
+        // 寄棟（水下を持たない＝壁に接しない矩形の寄棟・矩形でない主屋根の寄棟）は翼ごとに2段: 梁間方向の小屋梁（第1段）→
+        // それを host に含めた飛び梁（第2段）。翼の順に回し、先の翼で実在する小屋梁（prior）は後の翼の支え・host に数える
+        // （矩形の寄棟は翼1つで prior は空）。
         const model = hipModel(region, rules.framing, CL_OVERLAP_TOL_MM);
         if (!model) continue;
         const prior = [];
@@ -486,14 +497,6 @@ export function autoFillWoodRoofFraming(graph, project, regions) {
           const koya = emitSegments(planHipKetaSegments(graph, rules, wing, primaries, prior, model), ROOF_BEAM_TYPE);
           const tobi = emitSegments(planHipTobibariSegments(graph, rules, wing, primaries, koya, prior, model), TOBIBARI_BEAM_TYPE);
           prior.push(...koya, ...tobi);
-        }
-      } else if (!region.rect && Array.isArray(region.leanToDrains)) {
-        // L字の下屋の片流れ・切妻は面ごと。先の面で実在する小屋梁（prior）は後の面の支え・host に数える（矩形の下屋は下の分岐）。
-        const model = leanToModel(region, rules.framing, CL_OVERLAP_TOL_MM);
-        if (!model) continue;
-        const prior = [];
-        for (const plane of model.planes) {
-          prior.push(...emitSegments(planLeanToPlaneSegments(graph, rules, plane, primaries, prior, model.rects), ROOF_BEAM_TYPE));
         }
       } else if (region.rect) {
         emitSegments(planRegionSegments(graph, rules, region, primaries), ROOF_BEAM_TYPE);

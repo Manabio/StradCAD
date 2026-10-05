@@ -249,15 +249,10 @@ test('【統合・失敗系】下屋を削除（屋根の部屋を外す）し�
   assert.deepEqual(koya(locked.g2).map(b => b.id).sort(), ids, 'locked の小屋梁は region が無くなっても残る（同じ実体のまま）');
 });
 
-test('【統合・失敗系】対象でない下屋（陸屋根・明示の寄棟の L字）・非在来では小屋梁を作らない。非在来へ変えると既存の auto の小屋梁は撤去される', async () => {
+test('【統合・失敗系】対象でない下屋（陸屋根）・非在来では小屋梁を作らない。非在来へ変えると既存の auto の小屋梁は撤去される', async () => {
   // E2b で書き換え（旧: L字は構造側の region 無しで小屋梁を作らない。L字の片流れは下の統合テストで小屋梁を作る）。
-  // 明示の寄棟の L字は片流れの region にならない（E1b）ので小屋梁を作らない。
-  const lHip = buildTwoFloors([[[1, 0], [2, 0], [2, 1]]]);
-  lHip.roofs[0].roofSpec.setField('shape', RoofShape.HIP);
-  assert.equal(leanToFraming(lHip.g2, lHip.project).regions.length, 0, '前提: 明示の寄棟の L字は region 無し');
-  await converge(lHip);
-  assert.equal(koya(lHip.g2).length, 0, '寄棟の L字の下屋は作らない');
-
+  // 2026-10-05 で書き換え（旧: 明示の寄棟の L字は region 無しで小屋梁を作らない）。寄棟の L字は水下の場の region になり小屋梁を作る
+  // （下の【統合・L字の寄棟】）。ここは対象外の陸屋根と非在来。
   const flat = buildTwoFloors(ONE_LEAN);
   flat.roofs[0].roofSpec.setField('shape', RoofShape.FLAT);
   await converge(flat);
@@ -306,6 +301,119 @@ test('【統合・E2b】L字の下屋（片流れ）は面ごとに小屋梁を�
   const before = koyaKeys(doc.g2);
   assert.equal((await recompute2F(doc)).changed, false, '2回目は変化 0');
   assert.deepEqual(koyaKeys(doc.g2), before);
+});
+
+// ---- 2026-10-05 裁定: 下屋は壁へ下る面を作らない（水下＝軒−屋内に接する部分）。小屋梁・束・外周の梁の統合 ----
+
+/** region の全母屋・棟木の束の最大間隔（線の両端を含む。矩形・水下の場の region とも roofFramingLines の入口）。線が空だと空振りするので1本以上を assert。 */
+function allLineGaps(graph, region) {
+  const { ridges, purlins } = roofFramingLines({
+    rect: region.rect, rects: region.rects ?? null, shape: region.shape, ridgeIsVertical: region.ridgeIsVertical, highSide: region.highSide,
+    leanToDrains: region.leanToDrains ?? null, leanToPurlinDepthMm: region.leanToPurlinDepthMm ?? null,
+    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+  });
+  const lines = [...ridges, ...purlins];
+  assert.ok(lines.length > 0, '母屋・棟木が空（検査が空振りする）');
+  const members = roofFramingHostMembers(graph.beams, rulesFor(TRADITIONAL_WOOD_STRUCTURE).baseMaterial);
+  return lines.map(line => {
+    const alongs = [line.lo, line.hi, ...roofStrutPoints([line], members, CL_OVERLAP_TOL_MM).map(p => (line.isVertical ? p.y : p.x))].sort((a, b) => a - b);
+    let max = 0;
+    for (let i = 0; i + 1 < alongs.length; i++) max = Math.max(max, alongs[i + 1] - alongs[i]);
+    return { coord: line.coord, isVertical: line.isVertical, max };
+  });
+}
+
+/** 小屋梁どうし・同じ軸で重なる区間があるか（あれば重なった軸の名前）。 */
+function overlappingKoya(graph) {
+  const list = koya(graph);
+  const out = [];
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const a = list[i];
+      const b = list[j];
+      if (a.isVertical === b.isVertical && Math.abs(a.axisValue - b.axisValue) <= CL_OVERLAP_TOL_MM
+        && Math.min(hi(a), hi(b)) - Math.max(lo(a), lo(b)) > CL_OVERLAP_TOL_MM) out.push(key(a));
+    }
+  }
+  return out;
+}
+
+test('【統合・壁に接する寄棟】矩形の寄棟の下屋が屋内（左）に接すると、水下の場の region（壁を除く3辺）。壁へ下る面の小屋梁・飛び梁は作らず、全母屋・棟木の束の間隔は 1820 以下・小屋梁の重なりなし・収束・冪等', async () => {
+  const doc = buildTwoFloors(ONE_LEAN); // 2階 x3640..10920 × y0..3640。左の辺 x=3640 が屋内（左の列）に接する
+  doc.roofs[0].roofSpec.setField('shape', RoofShape.HIP);
+  const [region] = leanToFramingRegions(doc.g2, doc.project);
+  assert.equal(region.rect, null, '壁に接する寄棟は水下の場の region（rect:null・rects）');
+  assert.deepEqual(region.rects, [{ x1: 3640, y1: 0, x2: 10920, y2: 3640 }]);
+  assert.equal(region.shape, 'hip');
+  assert.deepEqual(region.leanToDrains.map(d => [d.isVertical, d.coord, d.lo, d.hi, d.outward]), [[false, 0, 3640, 10920, -1], [true, 10920, 0, 3640, 1], [false, 3640, 3640, 10920, 1]], '上・右・下の3辺（左の壁 x=3640 は水下でない）');
+  const history = await converge(doc);
+  assert.deepEqual(history.at(-1), [false, false], `収束: ${JSON.stringify(history)}`);
+  assert.ok(history.length <= 5, `スイープ数は上限5以内: ${history.length}`);
+  assert.ok(koya(doc.g2).length > 0, '小屋梁が出る');
+  assert.ok(koya(doc.g2).every(b => b.beamType === '小屋梁' && b.dimensionStatus === 'auto'), '飛び梁（寄棟の第2段）は作らない');
+  for (const g of allLineGaps(doc.g2, region)) assert.ok(g.max <= F.strutMaxPitchMm, `${g.isVertical ? 'x' : 'y'}=${g.coord} の束の最大間隔 ${g.max}`);
+  assert.deepEqual(overlappingKoya(doc.g2), [], '同じ軸で重なる小屋梁は無い');
+  const before = koyaKeys(doc.g2);
+  assert.equal((await recompute2F(doc)).changed, false, '冪等');
+  assert.deepEqual(koyaKeys(doc.g2), before);
+});
+
+test('【統合・壁と平行な切妻→片流れ】棟木が壁と平行になる切妻（壁側の軒が全部壁）は、壁を水上にした片流れ（高い側＝壁）と、region・小屋梁が完全に一致する', async () => {
+  // 縦長（x3640..7280 × y0..7280）の下屋。棟木は縦（長手）＝軒は左右の辺で、左の辺 x=3640 が屋内（左の列）に全部接する
+  const cells = [[[1, 0], [1, 1]]];
+  const gable = buildTwoFloors(cells);
+  gable.roofs[0].roofSpec.setField('shape', RoofShape.GABLE);
+  const mono = buildTwoFloors(cells);
+  mono.roofs[0].roofSpec.setField('shape', RoofShape.MONO);
+  mono.roofs[0].roofSpec.setField('highSide', RoofHighSide.LEFT);
+  const strip = r => ({ ...r, key: 'k' });
+  const [rg] = leanToFramingRegions(gable.g2, gable.project);
+  const [rm] = leanToFramingRegions(mono.g2, mono.project);
+  assert.equal(rg.shape, 'mono', '実効の形状は片流れ');
+  assert.equal(rg.highSide, 'left', '高い側＝壁の側');
+  assert.deepEqual(strip(rg), strip(rm), '同じ矩形の片流れ（高い側＝壁）と region が一致');
+  await converge(gable);
+  await converge(mono);
+  assert.ok(koya(gable.g2).length > 0, '前提: 小屋梁がある');
+  assert.deepEqual(koyaKeys(gable.g2), koyaKeys(mono.g2), '小屋梁が完全に一致');
+});
+
+test('【統合・L字の寄棟】明示の寄棟の L字の下屋は region になり小屋梁を作る（壁 x=3640 へ下る面は無い）。全母屋・棟木の束の間隔は 1820 以下・重なりなし・収束・冪等・L字の範囲に床梁なし', async () => {
+  const doc = buildTwoFloors([[[1, 0], [2, 0], [2, 1]]]);
+  doc.roofs[0].roofSpec.setField('shape', RoofShape.HIP);
+  const [region] = leanToFramingRegions(doc.g2, doc.project);
+  assert.ok(region, '前提: region がある');
+  assert.equal(region.rect, null);
+  assert.equal(region.shape, 'hip');
+  assert.equal(region.leanToDrains.some(d => d.isVertical && d.coord === 3640), false, '壁 x=3640 は水下でない');
+  const history = await converge(doc);
+  assert.deepEqual(history.at(-1), [false, false], `収束: ${JSON.stringify(history)}`);
+  assert.ok(history.length <= 5, `スイープ数は上限5以内: ${history.length}`);
+  assert.ok(koya(doc.g2).length > 0, '小屋梁が出る');
+  for (const g of allLineGaps(doc.g2, region)) assert.ok(g.max <= F.strutMaxPitchMm, `${g.isVertical ? 'x' : 'y'}=${g.coord} の束の最大間隔 ${g.max}`);
+  assert.deepEqual(overlappingKoya(doc.g2), [], '同じ軸で重なる小屋梁は無い');
+  assert.ok(doc.g2.beams.every(b => b.role !== 'floor' || b.axisValue < SQ + 1 || (!b.isVertical && hi(b) < SQ + 1)), 'L字の範囲に床梁は出ない');
+  const before = koyaKeys(doc.g2);
+  assert.equal((await recompute2F(doc)).changed, false, '冪等');
+  assert.deepEqual(koyaKeys(doc.g2), before);
+});
+
+test('【統合・L字の切妻】両腕の内側が壁（屋内の右・下を回る L字）の切妻は、同じ範囲の L字の片流れと同じ水下・同じ小屋梁（棟木は出ない）', async () => {
+  // 屋内（左の列 x0..3640 × y0..7280）の右と下を回る L字: 縦の腕 x3640..7280 × y0..10920・横の腕 x0..3640 × y7280..10920。壁は x=3640 と y=7280
+  const cells = [[[1, 0], [1, 1], [1, 2], [0, 2]]];
+  const gable = buildTwoFloors(cells);
+  gable.roofs[0].roofSpec.setField('shape', RoofShape.GABLE);
+  const mono = buildTwoFloors(cells);
+  mono.roofs[0].roofSpec.setField('shape', RoofShape.MONO);
+  const [rg] = leanToFramingRegions(gable.g2, gable.project);
+  const [rm] = leanToFramingRegions(mono.g2, mono.project);
+  assert.deepEqual(rg.leanToDrains, rm.leanToDrains, '水下が同じ（壁 x=3640 を除く）');
+  await converge(gable);
+  await converge(mono);
+  for (const g of allLineGaps(gable.g2, rg)) assert.ok(g.max <= F.strutMaxPitchMm, `${g.isVertical ? 'x' : 'y'}=${g.coord} の束の最大間隔 ${g.max}`);
+  assert.deepEqual(overlappingKoya(gable.g2), []);
+  assert.ok(koya(gable.g2).length > 0);
+  assert.deepEqual(koyaKeys(gable.g2), koyaKeys(mono.g2), '小屋梁が L字の片流れと同じ');
 });
 
 test('【統合】leanToFraming は leanToFramingRegions・leanToFramingCellKeys と同じ結果を1回の走査で返す', () => {

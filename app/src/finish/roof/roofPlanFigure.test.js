@@ -221,33 +221,26 @@ test('壁あり: 片流れの外形線の端は通り芯でなく外壁面（壁
   assert.equal(trimmed.key, bare.key, 'key は変わらない');
 });
 
-test('壁あり: 寄棟の下屋は壁側の隅木の端を外壁面まで戻す（45°に線に沿って）。棟木・壁に当たらない隅木は変えない', () => {
-  const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
-  g.interior([[0, 0], [1, 0]]); // 屋根（y 4000..8000）の上辺 y=4000 に接する
-  g.roof([[0, 1], [1, 1]], RoofShape.HIP);
+// 旧（〜2026-10-05）: 8000×4000 の寄棟の上辺が壁で、壁の角から出る隅木2本を含む4本の隅木の壁側の端を外壁面まで戻していた。
+// 壁へ下る面を作らない裁定で、壁に接する寄棟は壁を除いた3辺（左・右・下）が水下＝隅木は下の2隅から壁へ向かう2本になった。
+// 壁に当たるのはその隅木の上端なので、同じ「45°に線に沿って戻す」を上端で確かめる（12000×4000。上端は壁 y=4000 の (4000,4000)・(8000,4000)）。
+test('壁あり: 寄棟の下屋は壁に当たる隅木の端（上端）を外壁面まで戻す（45°に線に沿って）。壁に当たらない端は変えない', () => {
+  const g = makeGrid([0, 4000, 8000, 12000], [0, 4000, 8000]);
+  g.interior([[0, 0], [1, 0], [2, 0]]); // 屋根（y 4000..8000）の上辺 y=4000 に接する
+  g.roof([[0, 1], [1, 1], [2, 1]], RoofShape.HIP);
   const before = roofPlanFigure(g.graph);
   const hipsBefore = before.filter(p => p.role === 'hip').map(p => p.points);
-  assert.equal(hipsBefore.length, 4, '前提: 隅木4本');
-  addWallOn(g.graph, g.cy[1], 75, false, g.cx[0], g.cx[2]); // y=4000 の壁。屋根側（+y）の外端は 4075
-  // 屋根の左右の辺は屋内の左右の辺と面一（建物の出隅）で、外形線の両端は建物側へ回り込む。回り込みの端が当たる左右の外壁（x=0・x=8000）
+  assert.deepEqual(hipsBefore, [[-455, 8455, 4000, 4000], [12455, 8455, 8000, 4000]], '前提: 隅木は下の2隅から壁 y=4000 の (4000,4000)・(8000,4000) へ。壁の角から出る隅木は無い');
+  addWallOn(g.graph, g.cy[1], 75, false, g.cx[0], g.cx[3]); // y=4000 の壁。屋根側（+y）の外端は 4075
+  // 屋根の左右の辺は屋内の左右の辺と面一（建物の出隅）で、外形線の両端は建物側へ回り込む。回り込みの端が当たる左右の外壁（x=0・x=12000）
   addWallOn(g.graph, g.cx[0], -75, true, g.cy[0], g.cy[1]);
-  addWallOn(g.graph, g.cx[2], 75, true, g.cy[0], g.cy[1]);
+  addWallOn(g.graph, g.cx[3], 75, true, g.cy[0], g.cy[1]);
   const after = roofPlanFigure(g.graph);
   assert.equal(after.length, before.length, '線の数は変わらない');
   const moved = after.filter((p, i) => JSON.stringify(p.points) !== JSON.stringify(before[i].points));
-  assert.deepEqual(moved.map(p => p.role).sort(), ['hip', 'hip', 'outline'], '変わるのは壁側の隅木2本と、外形線の壁に当たる端だけ');
+  assert.deepEqual(moved.map(p => p.role).sort(), ['hip', 'hip', 'outline'], '変わるのは壁に当たる隅木2本の上端と、外形線の壁に当たる端だけ');
   const hipsAfter = after.filter(p => p.role === 'hip').map(p => p.points);
-  const wallSide = hipsBefore.filter(pts => pts.some((v, k) => k % 2 === 1 && v === 4000));
-  assert.equal(wallSide.length, 2, '前提: 壁（y=4000）の上に端がある隅木が2本');
-  for (const pts of wallSide) {
-    const [x1, , x2, y2] = pts;
-    const dx = Math.sign(x2 - x1);
-    const moved1 = hipsAfter.find(h => Math.abs(h[0] - (x1 + dx * 75)) < 1e-6 && Math.abs(h[1] - 4075) < 1e-6);
-    assert.ok(moved1, `隅木 ${pts} は壁側の端が (${x1 + dx * 75}, 4075) へ（45° に 75 戻る）`);
-    assert.deepEqual(moved1.slice(2), [x2, y2], '反対側の端は変えない');
-  }
-  const ridge = after.find(p => p.role === 'ridge');
-  assert.deepEqual(ridge.points, before.find(p => p.role === 'ridge').points, '棟木（壁に当たらない）は不変');
+  assert.deepEqual(hipsAfter, [[-455, 8455, 3925, 4075], [12455, 8455, 8075, 4075]], '上端は 45° に 75 だけ軒側へ戻って外壁面 y=4075。軒側の端は変えない');
 });
 
 test('壁あり: 壁に当たらない端・壁から離れた（reach の外の）壁は変えない', () => {
@@ -269,37 +262,36 @@ function makeGableL() {
   return g;
 }
 
-test('roofPlanFigure: 切妻の L字（roof-test8 型）は棟木2（腕ごと）・隅木2・谷木1。棟木はけらばの外形線まで延び、隅木は軒先の出隅から、谷木は出幅 0 の入隅なので延びない', () => {
+// 旧（〜2026-10-05）: 棟木2（腕ごと）・隅木2・谷木1・水下4（壁へ下る2面を含む）。壁（屋内に接する辺）は水下にしない裁定で、
+// 水下は下辺・右辺の2本になり、棟木・谷木は出ず、隅木は下辺・右辺の軒先の出隅から壁 y=-3640 の (5460,-3640) へ1本（roof-test1＝L字の片流れと同じ線）
+test('roofPlanFigure: 切妻の L字（roof-test8 型）は水下が下辺・右辺だけ＝棟木0・隅木1・谷木0。隅木は軒先の出隅から壁 y=-3640 へ（壁へ下る面を作らない）', () => {
   const g = makeGableL();
   const prims = roofPlanFigure(g.graph);
-  assert.deepEqual(countByRole(prims), { outline: 1, ridge: 2, hip: 2, valley: 1 });
-  assert.deepEqual(prims.filter(p => p.role === 'ridge').map(p => p.points), [
-    [3185, -1820, 7280, -1820], // 横の腕: 左端（けらば）で 455 延びる・右端（内部）は延びない
-    [8190, -10339, 8190, -2730], // 縦の腕: 上端（けらば）で 455 延びる・下端（広い腕の面に当たる内部）は延びない
-  ]);
+  assert.deepEqual(countByRole(prims), { outline: 1, ridge: 0, hip: 1, valley: 0 });
   assert.deepEqual(prims.filter(p => p.role === 'hip').map(p => p.points), [
-    [8190, -2730, 7280, -1820], // 両端とも内部
-    [9555, 455, 7280, -1820], // 下辺・右辺の軒先の出隅 (9100,0) から外へ 455 ずつ
+    [9555, 455, 5460, -3640], // 下辺・右辺の軒先の出隅 (9100,0) から外へ 455。上端は壁 y=-3640 の上（x=5460。D が下辺＝右辺の距離で等しい点）
   ]);
-  assert.deepEqual(prims.find(p => p.role === 'valley').points, [7280, -3640, 8190, -2730], '谷木は出幅 0 の壁どうしの入隅 (7280,-3640) から。延ばさない');
+  const same = makeGrid([3640, 7280, 9100], [-9884, -3640, 0]); // 同じ範囲の L字の片流れ（roof-test1 型）と線が同じ
+  same.interior([[0, 0]]);
+  same.roof([[0, 1], [1, 1], [1, 0]], RoofShape.MONO);
+  assert.deepEqual(prims.map(p => [p.role, p.points]), roofPlanFigure(same.graph).map(p => [p.role, p.points]), '切妻の L字（壁を除くと腕の内側が壁）と L字の片流れで線が同じ');
   const outline = prims.find(p => p.role === 'outline');
   assert.equal(outline.closed, false, '屋内に接する2辺を除いた開いた折れ線');
   assert.deepEqual(outline.points, [6825, -9884, 6825, -10339, 9555, -10339, 9555, 455, 3185, 455, 3185, -4095, 3640, -4095], '両端は建物の出隅（(7280,-9884)・(3640,-3640)）を回り込んで外壁の線で止まる（33505af の規則が切妻の L字でも効く）');
 });
 
-test('roofPlanFigure: 切妻の L字の傾斜ラベルは4面（軒の辺ごと）。壁へ下る2面（壁 y=-3640・壁 x=7280）にも出て、矢印は壁の向き', () => {
+// 旧: 4面（壁へ下る2面を含む）。壁へ下る面は作らない裁定で、右・下の2面だけ
+test('roofPlanFigure: 切妻の L字の傾斜ラベルは水下ごと＝2面（右・下）。壁 y=-3640・壁 x=7280 へ向かう矢印は出ない', () => {
   const g = makeGableL();
   const arrows = arrowsOf(roofPlanFigureAll(g.graph));
-  assert.equal(arrows.length, 4);
+  assert.equal(arrows.length, 2);
   const dir = a => [Math.sign(a.points[2] - a.points[0]), Math.sign(a.points[3] - a.points[1])].join(',');
-  assert.deepEqual(arrows.map(dir).sort(), ['-1,0', '0,-1', '0,1', '1,0'], '右・下・壁 x=7280（左向き）・壁 y=-3640（上向き）');
-  const towardWallX = arrows.find(a => dir(a) === '-1,0');
-  assert.ok(towardWallX.points[0] > 7280 && towardWallX.points[2] > 7280, '壁 x=7280 へ向かう矢印は屋根範囲（x>7280）の中');
-  const towardWallY = arrows.find(a => dir(a) === '0,-1');
-  assert.ok(towardWallY.points[1] > -3640 && towardWallY.points[3] > -3640, '壁 y=-3640 へ向かう矢印は屋根範囲（y>-3640）の中');
+  assert.deepEqual(arrows.map(dir).sort(), ['0,1', '1,0'], '右（+x）・下（+y）だけ。壁の向き（左向き・上向き）の矢印は無い');
 });
 
-test('roofPlanFigure: 切妻の L字で壁あり: 壁に当たる端（谷木の入隅の端・外形線の両端）だけ外壁面で止まり、棟木・隅木は変わらない', () => {
+// 旧: 谷木の入隅の端・外形線の両端が動き、棟木・隅木は変わらない。壁を水下から除いた結果、谷木・棟木が無く、動くのは壁 y=-3640 に当たる
+// 隅木の上端と外形線の両端
+test('roofPlanFigure: 切妻の L字で壁あり: 壁に当たる端（隅木の上端・外形線の両端）だけ外壁面で止まる', () => {
   const g = makeGableL();
   const bare = roofPlanFigure(g.graph);
   // 壁 y=-3640（屋根側 +y の外端 -3565）・壁 x=7280（外端 7355）・建物の左の外壁 x=3640（外端 3565）・上の外壁 y=-9884（外端 -9959）
@@ -310,8 +302,8 @@ test('roofPlanFigure: 切妻の L字で壁あり: 壁に当たる端（谷木の
   const after = roofPlanFigure(g.graph);
   assert.equal(after.length, bare.length, '線の数は変わらない');
   const moved = after.filter((p, i) => JSON.stringify(p.points) !== JSON.stringify(bare[i].points));
-  assert.deepEqual(moved.map(p => p.role).sort(), ['outline', 'valley']);
-  assert.deepEqual(after.find(p => p.role === 'valley').points, [7355, -3565, 8190, -2730], '谷木の壁側の端は両壁の外面の角へ（45° に 75 戻る）');
+  assert.deepEqual(moved.map(p => p.role).sort(), ['hip', 'outline']);
+  assert.deepEqual(after.find(p => p.role === 'hip').points, [9555, 455, 5535, -3565], '隅木の上端は壁 y=-3640 の外面 y=-3565 へ（45° に 75 戻る）。軒先の端は変えない');
   assert.deepEqual(after.find(p => p.role === 'outline').points, [6825, -9959, 6825, -10339, 9555, -10339, 9555, 455, 3185, 455, 3185, -4095, 3565, -4095], '回り込みの両端だけ外壁の外面へ');
 });
 
@@ -323,7 +315,8 @@ test('roofPlanFigure: 切妻の L字・十字で、腕の突き出しが幅よ�
     return g.graph;
   };
   const cases = [
-    { name: 'roof-test8 の横の腕を x=4550 始まり（突き出し 2730 ＜ 幅 3640）', graph: build([4550, 7280, 9100], [-9884, -3640, 0], [[0, 1], [1, 1], [1, 0]], [[0, 0]]), faces: 4, ridges: 2 },
+    // 旧: faces 4・ridges 2。屋内に接する2辺（壁）は水下にしない裁定で、水下は右・下の2本＝棟木なし
+    { name: 'roof-test8 の横の腕を x=4550 始まり（突き出し 2730 ＜ 幅 3640）。腕の内側が壁', graph: build([4550, 7280, 9100], [-9884, -3640, 0], [[0, 1], [1, 1], [1, 0]], [[0, 0]]), faces: 2, ridges: 0 },
     { name: '明示切妻の L字（x2000..6000×y1500..3000＋x2000..4000×y3000..4500）', graph: build([0, 2000, 4000, 6000], [0, 1500, 3000, 4500], [[1, 1], [2, 1], [1, 2]]), faces: 4, ridges: 2 },
     { name: '本体＋突起', graph: build([0, 2730, 7280], [0, 5460, 6370], [[0, 0], [1, 0], [0, 1]]), faces: 4, ridges: 2 },
     { name: '十字', graph: build([0, 3640, 5460, 9100], [0, 3640, 7280, 10920], [[1, 0], [0, 1], [1, 1], [2, 1], [1, 2]]), faces: 8, ridges: 3 },
@@ -438,22 +431,83 @@ test('roofPlanFigure: 傾斜面の数（形状ごと）。片流れ1・切妻2�
   assert.ok(labelsOf(prims).length === 6 && labelsOf(prims).every(p => p.detailOnly === true));
 });
 
-test('roofPlanFigure: 傾斜面1つにつき1つ。屋内に全体が接する水下の面（壁へ向かって下る面）にもラベルを出す。矢印は壁の向き', () => {
-  const full = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
-  full.interior([[0, 0], [1, 0]]); // 上の辺（y=4000）の全体が屋内に接する
-  full.roof([[0, 1], [1, 1]], RoofShape.HIP);
-  const fullArrows = arrowsOf(roofPlanFigureAll(full.graph));
-  assert.equal(fullArrows.length, 4, '描いてある面を省かない（寄棟 4 面）');
-  const towardWall = fullArrows.filter(a => a.points[0] === a.points[2] && a.points[3] < a.points[1]);
-  assert.equal(towardWall.length, 1, '上の壁へ向かう（先端の y が小さい）縦の矢印が1つ');
-  assert.ok(towardWall[0].points[3] > 4000 && towardWall[0].points[1] < 8000, '矢印は屋根範囲（y 4000..8000）の中');
+// 旧（〜2026-10-05）: 「傾斜面1つにつき1つ。壁へ向かって下る面にもラベルを出す（寄棟 4 面）」。壁へ下る面は作らない裁定で、
+// 屋内に接する辺（壁）は水下でない＝壁へ向かう矢印の面は出ない。一部だけ壁に接する辺は、壁でない部分が水下として残る
+test('roofPlanFigure: 壁に接する寄棟（roof-test6 型）は棟木1・隅木2（下の2隅から）・面3。L字の寄棟（roof-test9 型）は棟木1・隅木3・面4。壁の線上の角から出る隅木・谷木は無い', () => {
+  // roof-test6: 矩形 x3640..9100 × y-3640..0。上辺 y=-3640 が屋内（上）に接する
+  const a = makeGrid([3640, 9100], [-7280, -3640, 0]);
+  a.interior([[0, 0]]);
+  a.roof([[0, 1]], RoofShape.HIP);
+  const pa = roofPlanFigureAll(a.graph);
+  const la = pa.filter(p => p.kind === 'line');
+  assert.deepEqual(countByRole(la), { outline: 1, ridge: 1, hip: 2, valley: 0 });
+  assert.deepEqual(la.find(p => p.role === 'ridge').points, [6370, -3640, 6370, -2730], '棟木は壁側の端から頂点 (6370,-2730) まで（寄棟の棟木は延ばさない）');
+  assert.deepEqual(la.filter(p => p.role === 'hip').map(p => p.points), [[3185, 455, 6370, -2730], [9555, 455, 6370, -2730]], '隅木は下の2隅（軒先の角まで）から頂点へ');
+  assert.equal(arrowsOf(pa).length, 3, '面は左・右・下の3つ');
+  // roof-test9: L字（屋内 x3640..7280 × y-9884..-3640 の下・右を回る）の寄棟
+  const b = makeGrid([3640, 7280, 9100], [-9884, -3640, 0]);
+  b.interior([[0, 0]]);
+  b.roof([[0, 1], [1, 1], [1, 0]], RoofShape.HIP);
+  const pb = roofPlanFigureAll(b.graph);
+  const lb = pb.filter(p => p.kind === 'line');
+  assert.deepEqual(countByRole(lb), { outline: 1, ridge: 1, hip: 3, valley: 0 });
+  assert.deepEqual(lb.find(p => p.role === 'ridge').points, [6370, -3640, 6370, -2730]);
+  assert.deepEqual(lb.filter(p => p.role === 'hip').map(p => p.points), [[3185, 455, 6370, -2730], [9555, -10339, 7280, -8064], [9555, 455, 6370, -2730]]);
+  assert.equal(arrowsOf(pb).length, 4, '面は上・右・下・左の4つ（壁へ下る面は無い）');
+});
+
+test('T3: 上が全部壁・下の左半分が壁の切妻は、同じ壁配置で高い側＝上を指定した片流れと、region・線・ラベルが完全一致', () => {
+  const build = shape => {
+    const g = makeGrid([0, 4000, 8000], [0, 4000, 8000, 12000]);
+    g.interior([[0, 0], [1, 0]]); // 屋根（y4000..8000）の上辺 y=4000 の全体が屋内
+    g.interior([[0, 2]]); // 下辺 y=8000 の左半分（x0..4000）が屋内
+    const room = g.roof([[0, 1], [1, 1]], shape);
+    if (shape === RoofShape.MONO) room.roofSpec.setField('highSide', 'top');
+    return g.graph;
+  };
+  const strip = prims => prims.map(p => ({ ...p, key: undefined }));
+  const gable = build(RoofShape.GABLE);
+  const mono = build(RoofShape.MONO);
+  const [rg] = leanToPlanRegions(gable);
+  const [rm] = leanToPlanRegions(mono);
+  assert.equal(rg.shape, 'mono');
+  assert.deepEqual({ ...rg, key: 0 }, { ...rm, key: 0 }, 'region（母屋の段の基準・水下・外形線）が一致');
+  const fg = roofPlanFigureAll(gable);
+  assert.ok(arrowsOf(fg).length > 0 && fg.some(p => p.role === 'outline'), '前提: 線とラベルがある');
+  assert.deepEqual(strip(fg), strip(roofPlanFigureAll(mono)), '線・ラベルが一致');
+});
+
+test('roofPlanFigure: 壁（屋内に接する辺）へ向かう矢印は出ない。全形状・壁の4方向で、壁の外向きと同じ向きの矢印が0。寄棟は壁を除く3面。一部だけ壁の辺は壁でない部分の面だけ', () => {
+  const dirOf = a => [Math.sign(a.points[2] - a.points[0]), Math.sign(a.points[3] - a.points[1])].join(',');
+  // 屋根（8000×4000 か 4000×8000）の1辺の全体が屋内に接する。壁へ向かう向き＝その辺の外向き
+  const sides = {
+    top: { grid: [[0, 4000, 8000], [0, 4000, 8000]], roof: [[0, 1], [1, 1]], interior: [[0, 0], [1, 0]], toward: '0,-1' },
+    bottom: { grid: [[0, 4000, 8000], [0, 4000, 8000]], roof: [[0, 0], [1, 0]], interior: [[0, 1], [1, 1]], toward: '0,1' },
+    left: { grid: [[0, 4000, 8000], [0, 4000, 8000]], roof: [[1, 0], [1, 1]], interior: [[0, 0], [0, 1]], toward: '-1,0' },
+    right: { grid: [[0, 4000, 8000], [0, 4000, 8000]], roof: [[0, 0], [0, 1]], interior: [[1, 0], [1, 1]], toward: '1,0' },
+  };
+  const faceCounts = { null: 1, [RoofShape.GABLE]: 1, [RoofShape.HIP]: 3 };
+  for (const [side, f] of Object.entries(sides)) {
+    for (const shape of [null, RoofShape.GABLE, RoofShape.HIP]) {
+      const g = makeGrid(...f.grid);
+      g.interior(f.interior);
+      g.roof(f.roof, shape);
+      const arrows = arrowsOf(roofPlanFigureAll(g.graph));
+      assert.equal(arrows.filter(a => dirOf(a) === f.toward).length, 0, `${side}の壁・${shape ?? '片流れ（自動）'}: 壁へ向かう矢印が無い`);
+      assert.equal(arrows.length, faceCounts[shape], `${side}の壁・${shape ?? '片流れ（自動）'}: 面の数（片流れ・壁と平行な切妻は壁を水上にした1面・寄棟は壁を除く3面）`);
+    }
+  }
   const part = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
   part.interior([[0, 0]]); // 上の辺の半分（x 0..4000）だけ屋内に接する
   part.roof([[0, 1], [1, 1]], RoofShape.HIP);
-  assert.equal(arrowsOf(roofPlanFigureAll(part.graph)).length, 4, '一部だけ接する水下の面は出す');
+  const partArrows = arrowsOf(roofPlanFigureAll(part.graph));
+  assert.equal(partArrows.length, 4, '一部だけ接する辺は、壁でない部分（x 4000..8000）が水下として残る＝4面');
+  const up = partArrows.filter(a => dirOf(a) === '0,-1');
+  assert.equal(up.length, 1);
+  assert.ok(up[0].points[0] >= 4000, `上向きの矢印は壁（x 0..4000）でない側（x ≥ 4000）にある: x=${up[0].points[0]}`);
   const none = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
   none.roof([[0, 1], [1, 1]], RoofShape.HIP);
-  assert.equal(arrowsOf(roofPlanFigureAll(none.graph)).length, 4);
+  assert.equal(arrowsOf(roofPlanFigureAll(none.graph)).length, 4, '壁に接しない寄棟は4面（今までどおり）');
 });
 
 test('roofPlanFigure: 外壁面どまり（線の端止め）はラベルを動かさない。壁ありでも arrow・text の座標は壁なしと同じ（線だけが変わる）', () => {

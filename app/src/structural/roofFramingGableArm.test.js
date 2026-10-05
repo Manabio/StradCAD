@@ -57,6 +57,15 @@ test('gableArmDrainsOf: roof-test8 型の L字は軒4辺（下辺・右辺・壁
   ]);
   assert.deepEqual(g.drains, [DR(true, 9100, -9884, 0, 1), DR(false, 0, 3640, 9100, 1), DR(false, -3640, 3640, 7280, -1), DR(true, 7280, -9884, -3640, -1)]);
   assert.equal(g.longHalfSpanMm, 910, '長手方向の腕＝けらばの深さが最大（上辺の 9884）の腕。幅 1820 の半分');
+  assert.deepEqual(g.longArmRect, rc(7280, -9884, 9100, 0), '長手方向の腕の矩形＝上辺の幅いっぱいを掃いた深さ 9884 まで（leanToDrainRoute が壁を除いた水下の D の最大値を測る範囲）');
+});
+
+test('gableArmDrainsOf: 長手方向の腕の矩形（longArmRect）は、けらばの辺の幅いっぱいを掃いた深さまでの矩形。けらばが無い形は null', () => {
+  assert.deepEqual(gableArmDrainsOf({ rects: RECT, tolMm: TOL }).longArmRect, rc(0, 0, 9000, 3000), '矩形は幅 3000 の短辺（左端）から長手いっぱい。左右どちらのけらばも同じ矩形');
+  assert.deepEqual(gableArmDrainsOf({ rects: DEEP_NARROW, tolMm: TOL }).longArmRect, rc(0, 0, 9100, 2000), '深い腕（右端のけらば。深さ 9100）が長手方向の腕');
+  assert.deepEqual(gableArmDrainsOf({ rects: T, tolMm: TOL }).longArmRect, rc(0, 0, 9000, 3000), 'T字は棒の左端と縦の棒の下端が同じ深さ 9000・同じ幅 3000＝先に出会う左端が勝つ');
+  assert.equal(gableArmDrainsOf({ rects: [rc(0, 0, 3000, 3000)], tolMm: TOL }).longArmRect, null, '正方形はけらばが無い（4辺とも軒）');
+  assert.equal(gableArmDrainsOf({ rects: RING, tolMm: TOL }).longArmRect, null, '環もけらばが無い');
 });
 
 test('gableArmDrainsOf: 形ごとの辺の種別（T字・正方形3つの L字・コの字・十字・穴あき・段違い・矩形・正方形）', () => {
@@ -159,7 +168,7 @@ test('gableArmDrainsOf: 深さが同じなら幅が広い腕が勝つ（横の�
 // ---- 失敗系 ----
 
 test('【失敗系】gableArmDrainsOf: 空・有効な矩形が無い入力は空の結果（例外にしない）。tolMm・rects の不正は RangeError', () => {
-  const empty = { drains: [], kindZones: [], longHalfSpanMm: null };
+  const empty = { drains: [], kindZones: [], longHalfSpanMm: null, longArmRect: null };
   assert.deepEqual(gableArmDrainsOf({ rects: [], tolMm: TOL }), empty);
   assert.deepEqual(gableArmDrainsOf({ rects: [rc(0, 0, 0, 3000), rc(0, 0, 3000, 0.3)], tolMm: TOL }), empty, '幅か高さが tolMm 以下の矩形は無視');
   for (const tolMm of [-1, NaN, undefined, '0.5']) assert.throws(() => gableArmDrainsOf({ rects: RECT, tolMm }), RangeError, `tolMm=${tolMm}`);
