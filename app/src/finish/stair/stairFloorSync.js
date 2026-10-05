@@ -32,18 +32,24 @@ function isIndoorStair(graph, stair) {
 /**
  * 最上階の階段 footprint へ階段吹抜け（STAIR_VOID）Room を自動指定する。
  * 未定義以外の既存 Room（stairVoid 自身を含む）とセルが重なる場合は何もしない（冪等・二重割当防止）。
+ * 重なりは両辺を refreshCells で現行グリッドの原子セルへ展開して比べる（cells は translateCellSet の
+ * 生キーで、格子が直下階より細かい階では原子セルと一致しない。生のまま比べると既存の吹抜けを見落とし、
+ * 呼ぶたびに増える）。展開後が空（解決できるセルが無い）なら何もしない。
  * 未定義 Room（階段の連動削除などで外形を保つために残した部屋）とだけ重なるなら、そのセルを未定義 Room
  * から引き抜いてから作る（再指定が詰まらない。FinishModeState.applyNaming と同じ前例）。
+ * 作る Room のセルは渡された cells（生キー）のまま持つ（読む側が refreshCells で展開する）。
  * @returns {boolean} 追加したか
  */
 function addStairVoidRoom(graph, cells) {
   if (cells.size === 0) return false;
+  const refreshed = refreshCells(cells, graph);
+  if (refreshed.size === 0) return false;
   for (const room of graph.rooms) {
     if (room.feature === RoomFeature.UNDEFINED) continue;
     const roomCells = refreshCells(room.cells, graph);
-    if ([...cells].some(k => roomCells.has(k))) return false;
+    if ([...refreshed].some(k => roomCells.has(k))) return false;
   }
-  subtractCellsFromUndefinedRooms(graph, refreshCells(cells, graph));
+  subtractCellsFromUndefinedRooms(graph, refreshed);
   const room = graph.addRoom(new Set(cells));
   room.setFeature(RoomFeature.STAIR_VOID);
   return true;
