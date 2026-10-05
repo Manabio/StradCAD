@@ -1,4 +1,8 @@
 import { useState, useRef } from 'react';
+import {
+  ITEM_H, clampIndex, resolveDisplayId, nextIndexFromDrag, nextIndexFromWheel,
+  canRequestSwitch, requestFloorSwitch,
+} from './floorDrumLogic.js';
 
 // ピルボタンのスタイル（isActive=現在階, dim=折りたたみ時の半透明）
 function pillStyle(isActive, dim) {
@@ -16,7 +20,6 @@ function pillStyle(isActive, dim) {
   };
 }
 
-const ITEM_H       = 34; // 1階あたりの高さ(px)
 const HALF_VISIBLE = 2;  // 中心の上下に露出する階数（計 2*2+1=5 階）
 
 // 縦ドラム1階分のスタイル。中心からの距離で減衰させ、ドラムロールの遠近を演出する。
@@ -37,14 +40,15 @@ function wheelItemStyle(dist) {
 
 // 横長用ドラムロール — 当該階を中心に固定し、ドラッグ/ホイールで階を回す。
 // ordered は上=上階の並び（呼び出し側で反転済み）。
-function FloorWheel({ ordered, activeIndex, onSwitch }) {
+// displayIndex は表示基準の階（保留中の選択があればその階）。pendingId は切替の決着待ちの階
+// （null=待ちなし）、requestSwitch(id) は切替の要求（FloorDrum が pending の管理を持つ）。
+function FloorWheel({ ordered, displayIndex, pendingId, requestSwitch }) {
   const [drag, setDrag] = useState(0);          // ドラッグ中の縦オフセット(px)
   const [dragging, setDragging] = useState(false);
   const startY = useRef(0);
 
-  const clamp = i => Math.max(0, Math.min(ordered.length - 1, i));
-
   const onPointerDown = e => {
+    if (pendingId != null) return; // 切替の決着待ち中は新しい操作を始めない（連打無視）
     startY.current = e.clientY;
     setDragging(true);
     e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -58,23 +62,23 @@ function FloorWheel({ ordered, activeIndex, onSwitch }) {
     setDragging(false);
     e.currentTarget.releasePointerCapture?.(e.pointerId);
     // 下方向ドラッグ(正) → 上の階（インデックス小）が中心へ。
-    const steps = Math.round(drag / ITEM_H);
+    // 離した位置から選んだ階の中心へ直接スナップする（pending が表示基準になる）。
+    const next = nextIndexFromDrag(displayIndex, drag, ordered.length);
     setDrag(0);
-    const next = clamp(activeIndex - steps);
-    if (next !== activeIndex) onSwitch(ordered[next].id);
+    requestSwitch(ordered[next].id);
   };
   const onWheel = e => {
     // ホイール下回し → 1階下へ（インデックス大）。
-    const next = clamp(activeIndex + (e.deltaY > 0 ? 1 : -1));
-    if (next !== activeIndex) onSwitch(ordered[next].id);
+    const next = nextIndexFromWheel(displayIndex, e.deltaY, ordered.length);
+    requestSwitch(ordered[next].id);
   };
 
   const maskH = ITEM_H * (HALF_VISIBLE * 2 + 1);
   const centerTop = (maskH - ITEM_H) / 2;
   // 当該階を中心スロットへ固定し、ドラッグ分だけ追従させる。
-  const translateY = centerTop - activeIndex * ITEM_H + drag;
+  const translateY = centerTop - displayIndex * ITEM_H + drag;
   // ドラッグ中に中心へ来ている階（色付けの基準）。
-  const centerIndex = clamp(Math.round(activeIndex - drag / ITEM_H));
+  const centerIndex = clampIndex(Math.round(displayIndex - drag / ITEM_H), ordered.length);
 
   return (
     <div
@@ -129,14 +133,26 @@ function FloorWheel({ ordered, activeIndex, onSwitch }) {
 // isLandscape   : 横長=左端縦並び / 縦長=下部横並び
 export function FloorDrum({ floors, activeFloorId, onSwitch, isLandscape }) {
   const [expanded, setExpanded] = useState(false);
-  const active  = floors.find(f => f.id === activeFloorId) ?? null;
+  // 保留中の選択。階を選んだ瞬間から切替の決着まで、表示は選んだ階に留める。
+  // pendingRef は同一フレーム内の再入力を state の再描画前でも弾くための鏡（state だけだと古い値を読む）。
+  const [pendingId, setPendingId] = useState(null);
+  const pendingRef = useRef(null);
+  const setPending = id => { pendingRef.current = id; setPendingId(id); };
+
+  const displayId = resolveDisplayId(floors, activeFloorId, pendingId);
+  const display   = floors.find(f => f.id === displayId) ?? null;
+
+  const requestSwitch = id => {
+    if (!canRequestSwitch(pendingRef.current, displayId, id)) return;
+    requestFloorSwitch(id, onSwitch, setPending);
+  };
 
   if (isLandscape) {
     // 縦ドラムは上=上階。floors は標高昇順想定なので反転する。
     const ordered = [...floors].reverse();
-    const activeIndex = ordered.findIndex(f => f.id === activeFloorId);
-    if (activeIndex < 0) return null;
-    return <FloorWheel ordered={ordered} activeIndex={activeIndex} onSwitch={onSwitch} />;
+    const displayIndex = ordered.findIndex(f => f.id === displayId);
+    if (displayIndex < 0) return null;
+    return <FloorWheel ordered={ordered} displayIndex={displayIndex} pendingId={pendingId} requestSwitch={requestSwitch} />;
   }
 
   return (
@@ -156,10 +172,10 @@ export function FloorDrum({ floors, activeFloorId, onSwitch, isLandscape }) {
         ? floors.map(f => (
             <button
               key={f.id}
-              onClick={() => { onSwitch(f.id); setExpanded(false); }}
-              aria-current={f.id === activeFloorId ? 'true' : undefined}
+              onClick={() => { requestSwitch(f.id); setExpanded(false); }}
+              aria-current={f.id === displayId ? 'true' : undefined}
               title={f.name}
-              style={pillStyle(f.id === activeFloorId, false)}
+              style={pillStyle(f.id === displayId, false)}
             >
               {f.name}
             </button>
@@ -170,7 +186,7 @@ export function FloorDrum({ floors, activeFloorId, onSwitch, isLandscape }) {
               title="階を移動"
               style={pillStyle(true, true)}
             >
-              {active?.name ?? '階'}
+              {display?.name ?? '階'}
             </button>
           )}
     </div>

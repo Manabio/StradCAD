@@ -985,7 +985,7 @@ const App = observer(() => {
   function guardUi(fn) {
     return (...args) => {
       if (isUiBusy()) return;
-      Promise.resolve(fn(...args)).catch(reportFloorTransitionError);
+      return Promise.resolve(fn(...args)).catch(reportFloorTransitionError);
     };
   }
 
