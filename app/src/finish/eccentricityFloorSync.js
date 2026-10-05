@@ -26,6 +26,7 @@ import { runInAction } from 'mobx';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { serializeGraph, floorBytesMayHaveClEccentricities } from '../graphSnapshot.js';
 import { saveFloor } from '../storage/db.js';
+import { floorBytesEqual } from '../floorOps.js';
 import { translateCLId } from './floorCLMap.js';
 import { buildCellToRoom, roomsAdjacentToCL } from './edgeClassify.js';
 import { applyCLEccentricity } from './clEccentricity.js';
@@ -108,10 +109,12 @@ function linkedGroupFor(clId, activeGraph, structGraph, peeks, activeIdx) {
  * 連動ルールで結ばれた他階へ複製する（プッシュ側）。呼び出し側でアクティブ階自身への適用
  * （set/removeCLEccentricity + applyCLEccentricity）を済ませた後に呼ぶこと。
  *
- * F5: 階ごとに peek 1回・buildCellToRoom 1回・（変更があれば）saveFloor 1回に畳む
+ * F5: 階ごとに peek 1回・buildCellToRoom 1回・saveFloor 最大1回に畳む
  * （clId ごとの繰り返し呼び出しで階数×CL数回 peek していた旧実装を解消）。
+ * 保存するのは、適用の前後（同じ temp＝復元＋heal 後を直列化したもの）でバイト列が違う階だけ。
+ * 同じ内容なら保存せず（書込み世代を進めない）undoRecords にも積まない。
  *
- * undo: opts.undoRecords に配列を渡すと、変更した各階ごとに { planeId, before, after }
+ * undo: opts.undoRecords に配列を渡すと、保存した各階ごとに { planeId, before, after }
  * （シリアライズ済みバイト列）を、saveFloorFn 成功後に push する——transform/centerLineFloorSync.js
  * の propagateDemotedCenterLine と同じ位置・同じ形（段階(e)・2026-09-26。amend は使わない——
  * 呼び出し側 transform/centerLineOps.js の applyCLEccentricityWithUndo が自階の変更と同じ
@@ -144,7 +147,9 @@ export async function propagateCLEccentricities(project, activeGraph, clIds, { m
 
   for (const i of targetFloorIdx) {
     const { plane, graph: temp } = peeks[i];
-    const before = undoRecords ? serializeGraph(temp) : null;
+    // 適用の前後を、同じ temp（復元＋heal 後）の直列化どうしで比べる。IDB の生バイト列とは比べない
+    // （復元・heal・正規化で、保存済みのバイト列と serializeGraph(復元後) は一致しないことがありうる）。
+    const before = serializeGraph(temp);
     let changed = false;
     for (const { group, localIds, spec } of perClId) {
       if (!group.has(i)) continue;
@@ -157,6 +162,7 @@ export async function propagateCLEccentricities(project, activeGraph, clIds, { m
     }
     if (!changed) continue;
     const after = serializeGraph(temp);
+    if (floorBytesEqual(before, after)) continue; // 適用しても内容が変わらない階は保存しない・記録しない
     await saveFloorFn(plane.id, after);
     if (undoRecords) undoRecords.push({ planeId: plane.id, before, after });
   }
