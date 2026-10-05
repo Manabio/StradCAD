@@ -237,7 +237,7 @@ function fingerprint(graph, project) {
   };
 }
 
-test('【B3】主屋根の全11項目を既定以外にしても、壁の鮮度キー・建物範囲・外壁セグメント・生成壁・境界は変わらない', () => {
+test('【B3】主屋根の全12項目を既定以外にしても、壁の鮮度キー・建物範囲・外壁セグメント・生成壁・境界は変わらない', () => {
   for (const shape of ['band', 'notch']) {
     for (const mode of ['roof', 'none']) {
       const { graph } = buildRoofLayout(shape, mode);
@@ -245,7 +245,7 @@ test('【B3】主屋根の全11項目を既定以外にしても、壁の鮮度�
       const before = fingerprint(graph, project);
       assert.ok(before.walls.length > 0 && before.footprint.length > 0, '前提: 壁・建物範囲がある');
       graph.setMainRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
-      assert.equal(ROOF_SPEC_KEYS.filter(k => graph.mainRoofSpec[k] !== new RoofSpec()[k]).length, 11, '前提: 全項目が既定以外');
+      assert.equal(ROOF_SPEC_KEYS.filter(k => graph.mainRoofSpec[k] !== new RoofSpec()[k]).length, 12,'前提: 全項目が既定以外');
       assert.deepEqual(fingerprint(graph, project), before, `${shape}/${mode}`);
     }
   }

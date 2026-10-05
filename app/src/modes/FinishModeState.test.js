@@ -2,7 +2,7 @@
 // node:testから直接importできる（ElevationModeState.test.jsと同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature, ROOF_SPEC_KEYS } from '@core';
 import { FinishModeState } from './FinishModeState.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
@@ -1074,7 +1074,7 @@ test('【B2b】選択中の屋根を削除すると選択が外れる（既存�
 const ROOF_DEFAULTS = {
   shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
   roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野', highSide: null,
-  ridgeDirection: null,
+  ridgeDirection: null, columnThrough: false,
 };
 
 test('【B2・I1】屋根の付与で roofSpec ができる（既定値・備考「下野」・形状は自動 null）', () => {
@@ -1130,14 +1130,14 @@ test('【B2・I1】屋根の付与→undo→redo: undo で roofSpec ごと消え
   assert.deepEqual(graph.roomMap.get(roofId).roofSpec.toData(), ROOF_DEFAULTS);
 });
 
-test('【B2】setRoofField: 11項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
+test('【B2】setRoofField: 12項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
   const graph = makeThreeCellGraph();
   const state = new FinishModeState(graph, null);
   const roof = assignRoofViaDrag(state, graph, 1000, 1500);
   const edits = {
     shape: 'hip', slope: 2.5, sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009',
     roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '本屋根', highSide: 'left',
-    ridgeDirection: 'horizontal',
+    ridgeDirection: 'horizontal', columnThrough: true,
   };
   for (const [field, value] of Object.entries(edits)) {
     // undo/redo は Room を作り直すため、毎回 graph から引き直す
@@ -1151,7 +1151,8 @@ test('【B2】setRoofField: 11項目それぞれを確定でき、1回の確定�
     undoManager.redo();
     assert.equal(graph.roomMap.get(roof.id).roofSpec[field], value, `${field}: redo でやり直せる`);
   }
-  assert.equal(Object.keys(edits).length, 11);
+  assert.equal(Object.keys(edits).length, 12);
+  assert.deepEqual(Object.keys(edits).sort(), [...ROOF_SPEC_KEYS].sort(), '全項目を確定している（空振り防止）');
 });
 
 test('【C2e-1c】setRoofField: ridgeDirection を同じ値へ再確定すると無変更で false。別の向きへ・null（自動）へ戻すのも undo 1エントリで、undo で元へ戻る', () => {
@@ -1252,7 +1253,7 @@ test('【B2】屋根の項目を編集しても壁の鮮度キーは変わらな
 const MAIN_ROOF_DEFAULTS = {
   shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
   roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '', highSide: null,
-  ridgeDirection: null,
+  ridgeDirection: null, columnThrough: false,
 };
 
 test('【B3】主屋根の初期値は既定値で、備考は空（下屋の「下野」ではない）', () => {
@@ -1260,13 +1261,13 @@ test('【B3】主屋根の初期値は既定値で、備考は空（下屋の「
   assert.deepEqual(graph.mainRoofSpec.toData(), MAIN_ROOF_DEFAULTS);
 });
 
-test('【B3】setMainRoofField: 11項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
+test('【B3】setMainRoofField: 12項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
   const graph = makeThreeCellGraph();
   const state = new FinishModeState(graph, null);
   const edits = {
     shape: 'hip', slope: 2.5, sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009',
     roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '主屋根', highSide: 'left',
-    ridgeDirection: 'vertical',
+    ridgeDirection: 'vertical', columnThrough: true,
   };
   for (const [field, value] of Object.entries(edits)) {
     // undo/redo は主屋根の RoofSpec を作り直すため、毎回 graph から引き直す
@@ -1280,7 +1281,7 @@ test('【B3】setMainRoofField: 11項目それぞれを確定でき、1回の確
     undoManager.redo();
     assert.equal(graph.mainRoofSpec[field], value, `${field}: redo でやり直せる`);
   }
-  assert.equal(Object.keys(edits).length, 11);
+  assert.equal(Object.keys(edits).length, 12);
 });
 
 test('【C2e-1c】setMainRoofField: ridgeDirection を同じ値へ再確定すると無変更で false（undo を積まない）。null で自動へ戻せ、undo で元の向きへ戻る', () => {

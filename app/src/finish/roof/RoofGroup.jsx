@@ -1,4 +1,4 @@
-// 外部タブの屋根（下屋＝RoofGroup・主屋根＝MainRoofGroup）の群の中身。フォーム1行（形状・［高い側］・［棟木の向き］・勾配・軒の出・妻側の出）＋表に固定2行
+// 外部タブの屋根（下屋＝RoofGroup・主屋根＝MainRoofGroup）の群の中身。フォーム1行（形状・［高い側］・［棟木の向き］・勾配・軒の出・妻側の出・［柱貫通］）＋表に固定2行
 // （「屋根」行: 仕上げ＝屋根仕上げ／下地＝防水シート・野地板の選択欄／備考、「軒裏」行: 仕上げ＝軒裏）。
 // 見出し「屋根」と削除ボタンは FinishTable.jsx 側（群の枠）が持つ。判断（選択肢・実効の形状・入力の検証）は
 // roofDefaults.js／roofInput.js の純関数に置き、ここは描くだけ。確定は mode.setRoofField／setMainRoofField（1確定＝undo 1エントリ）。
@@ -8,7 +8,8 @@ import { useState } from 'react';
 import { ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES } from '@core';
 import { resolveRoofShape, roofRoomBounds } from './roofDefaults.js';
 import { resolveMainRoofShape, mainRoofHighSideView, mainRoofRidgeDirectionView } from './mainRoof.js';
-import { roofHighSideViewOfRoom, roofRidgeDirectionViewOfRoom } from './roofOrientation.js';
+import { roofHighSideViewOfRoom, roofRidgeDirectionViewOfRoom, roofColumnThroughViewOfRoom } from './roofOrientation.js';
+import { roofColumnThroughView } from './roofGeometry.js';
 import {
   roofShapeOptions, roofHighSideOptions, roofRidgeDirectionOptions, roofRidgeDirectionFromSelect,
   roofMaterialOptions, parseRoofSlopeInput, parseRoofOverhangInput,
@@ -76,7 +77,8 @@ export const RoofGroup = observer(({ room, graph, mode, styles }) => {
   const shape = resolveRoofShape(spec, { boundsList: roofRoomBounds(room, graph) });
   const highSide = roofHighSideViewOfRoom(room, graph);
   const ridgeDirection = roofRidgeDirectionViewOfRoom(room, graph);
-  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} set={set} mode={mode} styles={styles} />;
+  const columnThrough = roofColumnThroughViewOfRoom(room, graph, mode.project);
+  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} set={set} mode={mode} styles={styles} />;
 });
 
 /**
@@ -90,16 +92,18 @@ export const MainRoofGroup = observer(({ graph, mode, styles }) => {
   const shape = resolveMainRoofShape(graph, mode.project);
   const highSide = mainRoofHighSideView(graph, mode.project);
   const ridgeDirection = mainRoofRidgeDirectionView(graph, mode.project);
-  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} set={set} mode={mode} styles={styles} />;
+  const columnThrough = roofColumnThroughView({ isLeanTo: false, columnPlacement: null, hasColumns: false, columnThrough: false }); // 主屋根には出さない
+  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} set={set} mode={mode} styles={styles} />;
 });
 
 /**
  * 屋根の項目のフォーム1行＋固定2行の表（下屋・主屋根で共通）。spec＝表示する RoofSpec、shape＝形状の実効値
  * （呼び出し側が範囲・主構造から導く）、highSide＝「高い側」欄の表示判断 { visible, value }（呼び出し側が導く。
  * visible のときだけ形状の直後に選択欄を出す）、ridgeDirection＝「棟木の向き」欄の表示判断 { visible, value }（同。切妻のときだけ
- * visible。value は明示値、自動は null）、set＝項目の確定関数 (field, value)。
+ * visible。value は明示値、自動は null）、columnThrough＝「柱貫通」チェックの表示判断 { visible, value }（同。下屋で、
+ * 通り芯の交点に柱が立つ構造のときだけ visible）、set＝項目の確定関数 (field, value)。
  */
-const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, set, mode, styles }) => {
+const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, columnThrough, set, mode, styles }) => {
   const { cellBase, headerCell, cellInputStyle } = styles;
   const boxed = { ...cellInputStyle, border: '1px solid #cbd5e1', padding: '2px 4px' };
   const nameOf = code => mode.getMaterial(code)?.name;
@@ -162,6 +166,17 @@ const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, set, m
         <RoofNumberInput value={spec.gableOverhangMm} parse={parseRoofOverhangInput} onCommit={n => set('gableOverhangMm', n)}
           style={{ ...boxed, width: 56, minWidth: 0 }} />
         <span style={formLabelStyle}>mm</span>
+        {columnThrough.visible && (
+          <label style={{ ...formLabelStyle, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={columnThrough.value}
+              onChange={e => set('columnThrough', e.target.checked)}
+              onClick={e => e.stopPropagation()}
+            />
+            柱貫通
+          </label>
+        )}
       </div>
       <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
         <thead>

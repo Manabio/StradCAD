@@ -14,7 +14,7 @@ test('createRoofSpec: 既定値一式（形状=自動・勾配3・野地板=構�
   assert.deepEqual(spec.toData(), {
     shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
     roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '', highSide: null,
-    ridgeDirection: null,
+    ridgeDirection: null, columnThrough: false,
   });
   assert.ok(spec instanceof RoofSpec);
 });

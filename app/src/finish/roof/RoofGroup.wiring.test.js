@@ -115,7 +115,23 @@ test('【不変条件】表は固定2行（屋根・軒裏）。行の追加・�
 test('【不変条件】入力欄は無効化・読取専用にしない（select・input に disabled／readOnly が無い）', () => {
   assert.ok(!/disabled|readOnly/.test(roofCode), 'disabled／readOnly が見つかった（屋根の項目は常に編集できる）');
   assert.equal((roofCode.match(/<select/g) ?? []).length, 4, 'select は形状・高い側・棟木の向き・材料（共通の materialSelect）の4か所だけ');
-  assert.equal((roofCode.match(/<input/g) ?? []).length, 2, 'input は RoofTextInput・RoofNumberInput の2か所だけ');
+  assert.equal((roofCode.match(/<input/g) ?? []).length, 3, 'input は RoofTextInput・RoofNumberInput・柱貫通のチェックの3か所だけ');
+});
+
+test('【不変条件・柱貫通】「柱貫通」チェックは columnThrough.visible のときだけ、妻側の出の直後（表の前）に出す。値は columnThrough.value・確定は set(\'columnThrough\', checked)。主屋根へは出さない', () => {
+  assert.ok(roofLines.includes('{columnThrough.visible && ('), 'チェックの visible 結び付けが見つからない');
+  assert.ok(roofLines.includes('checked={columnThrough.value}'), 'checked={columnThrough.value} が見つからない');
+  assert.ok(roofLines.includes("onChange={e => set('columnThrough', e.target.checked)}"), "onChange が set('columnThrough', e.target.checked) でない");
+  assert.ok(roofLines.includes('type="checkbox"'), 'チェックボックスでない');
+  const gableLabel = groupBody.indexOf('妻側の出');
+  const checkStart = groupBody.indexOf('{columnThrough.visible && (');
+  const tableStart = groupBody.indexOf('<table');
+  assert.ok(gableLabel >= 0 && gableLabel < checkStart && checkStart < tableStart, '妻側の出 → 柱貫通 → 表 の順');
+  // 表示判断は純関数（下屋は部屋と階から、主屋根は isLeanTo:false の固定）
+  assert.ok(roofLines.includes('const columnThrough = roofColumnThroughViewOfRoom(room, graph, mode.project);'), '下屋の柱貫通の導出の行が見つからない');
+  assert.ok(roofLines.includes('const columnThrough = roofColumnThroughView({ isLeanTo: false, columnPlacement: null, hasColumns: false, columnThrough: false });'), '主屋根の柱貫通の導出の行が見つからない');
+  assert.equal((roofCode.match(/columnThrough=\{columnThrough\}/g) ?? []).length, 2, '下屋・主屋根の2か所から RoofSpecFields へ渡す');
+  assert.ok(!/\.columnThrough\s*=|setField\('columnThrough'/.test(roofCode), 'jsx が columnThrough を直接書き換えていない（確定は set 経由）');
 });
 
 test('【不変条件】文字欄・数値欄は Enter（IME 変換中は除く）で preventDefault して blur＝確定する。Escape の専用処理は持たない（既存の CardNameInput・ExteriorPartHeading と同じ）', () => {
@@ -209,9 +225,9 @@ test('【不変条件・B3】MainRoofGroup の確定は mode.setMainRoofField(fi
 });
 
 test('【不変条件・B3】下屋と主屋根は同じ描画部品 RoofSpecFields（spec・shape・set を引数で受ける）を使い、各1回ずつ描く', () => {
-  assert.equal(roofLines.filter(l => l === 'return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} set={set} mode={mode} styles={styles} />;').length, 2,
+  assert.equal(roofLines.filter(l => l === 'return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} set={set} mode={mode} styles={styles} />;').length, 2,
     '下屋と主屋根の2か所で同じ RoofSpecFields を同じ引数で描く');
-  assert.ok(roofLines.includes('const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, set, mode, styles }) => {'), 'RoofSpecFields の宣言');
+  assert.ok(roofLines.includes('const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, columnThrough, set, mode, styles }) => {'), 'RoofSpecFields の宣言');
   // 下屋の形状の導出（範囲は屋根セル）は RoofGroup 側のまま
   assert.ok(roofLines.includes('const shape = resolveRoofShape(spec, { boundsList: roofRoomBounds(room, graph) });'));
 });

@@ -7,6 +7,7 @@ import {
   RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec,
 } from './core.js';
 import { NON_DEFAULT_ROOF_SPEC } from './finish/roofTestFixtures.js';
+import { ByteBuffer } from 'flatbuffers';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
   serializeSite, decodeSite, restoreSite, decodeFloorSnapshot, encodeFloorSnapshot,
@@ -466,7 +467,7 @@ test('【B2・失敗系】屋根なのに roofSpec が欠けたスナップシ�
   assert.deepEqual(spec.toData(), {
     shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
     roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野', highSide: null,
-    ridgeDirection: null,
+    ridgeDirection: null, columnThrough: false,
   });
   // バッファ自体に RS が無い経路（RoofSpec を持たない屋根の部屋を書いて読む）でも同じ
   const noSpec = makeGraphWithRoofRoom();
@@ -584,7 +585,7 @@ test('【B3・失敗系】壊れた主屋根（未知の shape・負の出幅・
     assert.deepEqual(restored.mainRoofSpec.toData(), {
       shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
       roofFinish: '仕上', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '軒裏', note: 'メモ', highSide: null,
-      ridgeDirection: null,
+      ridgeDirection: null, columnThrough: false,
     }, label);
   }
 });
@@ -743,6 +744,63 @@ test('【C2e-1c・失敗系】旧データ（ridgeDirection のキーが無い�
   restoreGraph(viaFbs, encodeFloorSnapshot(snapshot));
   assert.equal(viaFbs.roomMap.get(roof.id).roofSpec.ridgeDirection, null);
   assert.equal(viaFbs.mainRoofSpec.ridgeDirection, null);
+});
+
+// ---- 柱貫通（RoofSpec.columnThrough。FBS の RS.COLUMN_THROUGH=11。true のときだけ書く） ----
+// 主屋根の RS テーブル（GS.MAIN_ROOF_SPEC=53）に、フィールド番号 fieldNo が書かれているか（vtable の有無）を直接読む。
+// 値でなくフィールドの有無を見るのは、既定値のフィールドを書かないこと＝既存文書のバイト列が変わらないことの検査のため。
+function mainRoofSpecHasField(bytes, fieldNo) {
+  const bb = new ByteBuffer(bytes);
+  const root = bb.readInt32(bb.position()) + bb.position();
+  const o = bb.__offset(root, 4 + 53 * 2);
+  assert.ok(o, '前提: 主屋根の RS テーブルがある');
+  return bb.__offset(bb.__indirect(root + o), 4 + fieldNo * 2) !== 0;
+}
+
+test('【柱貫通】FlatBuffers: false のときは RS の COLUMN_THROUGH(11) を書かない。true のときだけ書く（既存フィールドの有無は対照）', () => {
+  const { graph } = makeGraphWithRoofRoom();
+  graph.setMainRoofSpec(RoofSpec.fromData({ ...NON_DEFAULT_ROOF_SPEC, highSide: 'top', columnThrough: false }));
+  const off = serializeGraph(graph);
+  assert.equal(mainRoofSpecHasField(off, 9), true, '対照: highSide(9) は値があれば書かれる（読み取りヘルパーが効いている）');
+  assert.equal(mainRoofSpecHasField(off, 11), false, 'false は書かない');
+  graph.setMainRoofSpec(RoofSpec.fromData({ ...NON_DEFAULT_ROOF_SPEC, highSide: 'top', columnThrough: true }));
+  assert.equal(mainRoofSpecHasField(serializeGraph(graph), 11), true, 'true は書く');
+});
+
+test('【柱貫通】FlatBuffers: 下屋の false を true→false と往復させたバイト列は最初と一致する。キーが無い旧データの plain を encode しても一致する', () => {
+  const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, columnThrough: false });
+  const base = serializeGraph(graph);
+  roof.roofSpec.setField('columnThrough', true);
+  assert.notDeepEqual([...serializeGraph(graph)], [...base], 'true ではバイト列が変わる');
+  roof.roofSpec.setField('columnThrough', false);
+  assert.deepEqual([...serializeGraph(graph)], [...base]);
+  // 旧データ（columnThrough のキーが無い plain）を encode したバイト列とも一致する（false はフィールドを書かない）
+  const snap = decodeFloorSnapshot(base);
+  assert.equal(snap.rooms.find(r => r.id === roof.id).roofSpec.columnThrough, false, '読みは false');
+  delete snap.rooms.find(r => r.id === roof.id).roofSpec.columnThrough;
+  assert.deepEqual([...encodeFloorSnapshot(snap)], [...base]);
+});
+
+test('【柱貫通】FlatBuffers: true は下屋・主屋根とも往復する。false は false のまま', () => {
+  for (const columnThrough of [true, false]) {
+    const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, columnThrough });
+    graph.setMainRoofSpec(RoofSpec.fromData({ ...NON_DEFAULT_ROOF_SPEC, columnThrough }));
+    const restored = makeGraph();
+    restoreGraph(restored, serializeGraph(graph));
+    assert.equal(restored.roomMap.get(roof.id).roofSpec.columnThrough, columnThrough, `下屋 ${columnThrough}`);
+    assert.equal(restored.mainRoofSpec.columnThrough, columnThrough, `主屋根 ${columnThrough}`);
+  }
+});
+
+test('【柱貫通・失敗系】壊れた columnThrough（真偽値でない値）は復元で false へ正規化される', () => {
+  const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, columnThrough: true });
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  for (const bad of ['yes', 1, null]) {
+    snapshot.rooms.find(r => r.id === roof.id).roofSpec.columnThrough = bad;
+    const restored = makeGraph();
+    restoreGraph(restored, snapshot);
+    assert.equal(restored.roomMap.get(roof.id).roofSpec.columnThrough, false, `columnThrough=${JSON.stringify(bad)}`);
+  }
 });
 
 test('【B2・失敗系】壊れた roofSpec（未知の shape・負の出幅・slope=0・材料コード欠落）は復元で正規化される', () => {

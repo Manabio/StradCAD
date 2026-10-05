@@ -684,7 +684,7 @@ test('【不変条件】structuralRecompute.js: openingBeamSourcesForを呼び�
   assert.ok(/import \{ openingBeamSourcesFor \} from '\.\/openingBeamAxes\.js';/.test(src),
     'openingBeamAxes.jsのopeningBeamSourcesForをimportしていない');
   assert.ok(/openingBeamSourcesFor\(targetGraph, project,/.test(src), 'openingBeamSourcesForの呼び出しが無い');
-  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph, roofRegions, roofCellKeys\)/.test(src),
+  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter\)/.test(src),
     'autoFillStructuralGridの末尾引数にopeningSources, belowGraph, roofRegions, roofCellKeysを渡していない（belowGraphはWP-B2改訂＝踊り場受け梁の到達階生成、roofRegionsはC2b＝小屋梁の生成、roofCellKeysはC2d-1＝下屋の範囲の床梁ガードが追加した引数）');
 });
 

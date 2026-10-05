@@ -229,6 +229,17 @@ function makeWallGate(probes, targetRoofAt = null) {
       return isBuilding(x - SAMPLE_EPS, y - SAMPLE_EPS) || isBuilding(x + SAMPLE_EPS, y - SAMPLE_EPS)
           || isBuilding(x - SAMPLE_EPS, y + SAMPLE_EPS) || isBuilding(x + SAMPLE_EPS, y + SAMPLE_EPS);
     },
+    /** intersectionInBuilding の「自階の屋根セルも建物とみなす」版（柱貫通。roofColumnFilter.js の roofOnlyThrough の交点だけが使う）。
+     *  probes の先頭＝自階（buildStructuralWallGate・buildSelfFootprintGate とも基準階を先頭に積む）の述語だけ
+     *  `自階の屋内 || roofCellAt` に置き換え、直下の階の連続性（残りの probes の AND）は intersectionInBuilding と同じ。
+     *  @param {(wx:number, wy:number) => boolean} roofCellAt 自階の「貫通する屋根セル」の中の点か */
+    intersectionInBuildingWithRoof(verticalCL, horizontalCL, roofCellAt) {
+      const x = verticalCL.value, y = horizontalCL.value;
+      const [self, ...below] = probes;
+      const inBuilding = (wx, wy) => (self ? (self(wx, wy) || roofCellAt(wx, wy)) : true) && below.every(p => p(wx, wy));
+      return inBuilding(x - SAMPLE_EPS, y - SAMPLE_EPS) || inBuilding(x + SAMPLE_EPS, y - SAMPLE_EPS)
+          || inBuilding(x - SAMPLE_EPS, y + SAMPLE_EPS) || inBuilding(x + SAMPLE_EPS, y + SAMPLE_EPS);
+    },
   };
 }
 

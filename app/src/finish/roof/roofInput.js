@@ -43,7 +43,7 @@ export function isValidRoofOverhang(n) {
 /**
  * 項目ごとの確定値の検証（RoofSpec.setField へ渡してよい値か）。
  * shape・highSide は RoofShape・RoofHighSide の値のみ（null＝「自動」へ戻す入口は無い）。ridgeDirection は
- * RoofRidgeDirection の値か null（選択欄に「自動（長手）」があるので null で自動へ戻せる）。材料コードは空でない文字列。
+ * RoofRidgeDirection の値か null（選択欄に「自動（長手）」があるので null で自動へ戻せる）。columnThrough は真偽値。材料コードは空でない文字列。
  * 自由入力（屋根仕上げ・軒裏・備考）は文字列なら何でも可。
  * @param {string} field RoofSpec の項目名
  * @param {unknown} value
@@ -54,6 +54,7 @@ export function isValidRoofFieldValue(field, value) {
     case 'shape': return Object.values(RoofShape).includes(value);
     case 'highSide': return Object.values(RoofHighSide).includes(value);
     case 'ridgeDirection': return value === null || Object.values(RoofRidgeDirection).includes(value);
+    case 'columnThrough': return typeof value === 'boolean';
     case 'slope': return isValidRoofSlope(value);
     case 'eaveOverhangMm':
     case 'gableOverhangMm': return isValidRoofOverhang(value);

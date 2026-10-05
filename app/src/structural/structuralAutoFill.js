@@ -12,6 +12,7 @@ import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
+import { ROOF_COLUMN_CLASS } from './roofColumnFilter.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisShortExtents } from './openingBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
@@ -106,19 +107,32 @@ export function computeGridSpans(graph) {
 
 /** 柱が存在しない交点を検出し、自階の実効主構造・既定断面で自動生成する（除外集合のスロットはスキップ）。
  *  柱は物理的に立つ自階のgraphに格納するため、材料も自階基準（resolveDefaultMaterialType）で導出する。
- *  基礎伏図でも呼ぶ（最下階の柱も自階分として生成する）。屋根専用平面では呼ばない。 */
-export function autoFillColumns(graph, project, wallGate = null) {
+ *  基礎伏図でも呼ぶ（最下階の柱も自階分として生成する）。屋根専用平面では呼ばない。
+ *  roofColumnFilter（roofColumnFilter.js buildRoofColumnFilter の結果。省略・null・empty なら今までと完全に同じ）:
+ *  その階で屋根セルにしか接しない交点を、'roofOnlyBlocked'（柱貫通オフ）なら作らず・その交点の auto の柱も撤去し
+ *  （locked／手動固定・杭は残す。excludedColumnSlots には触れない）、'roofOnlyThrough'（オン）なら自階の屋根セルを
+ *  建物とみなして生成する（直下の階の連続性は今までどおり。wallGate.intersectionInBuildingWithRoof）。 */
+export function autoFillColumns(graph, project, wallGate = null, roofColumnFilter = null) {
   if (!isStructureSpecified(graph, project)) return { created: [], removed: [], originsUpdated: [] }; // 主構造未確定の間は生成しない
   const rules = rulesFor(effectiveStructure(graph, project));
   const materialType = rules.baseMaterial;
   const intersections = computeGridIntersections(graph);
   const validKeys = new Set(intersections.map(i => i.key));
   const existing = new Set(graph.columns.map(c => columnSlotKey(c.verticalCL, c.horizontalCL)));
+  const roofClassAt = (verticalCL, horizontalCL) =>
+    (roofColumnFilter && !roofColumnFilter.empty ? roofColumnFilter.classify(verticalCL.value, horizontalCL.value) : ROOF_COLUMN_CLASS.NONE);
   const created = [];
   for (const { verticalCL, horizontalCL, key } of intersections) {
     if (existing.has(key) || graph.excludedColumnSlots.has(key)) continue;
+    const roofClass = roofClassAt(verticalCL, horizontalCL);
+    if (roofClass === ROOF_COLUMN_CLASS.BLOCKED) continue; // 屋根セルにしか接しない交点（柱貫通オフ）には柱を作らない
     // 建物フットプリント外の交点には柱を作らない（外壁線で有無を取捨。wallGate.js 参照）。
-    if (wallGate && !wallGate.intersectionInBuilding(verticalCL, horizontalCL)) continue;
+    if (wallGate) {
+      const inBuilding = roofClass === ROOF_COLUMN_CLASS.THROUGH
+        ? wallGate.intersectionInBuildingWithRoof(verticalCL, horizontalCL, roofColumnFilter.throughCellAt)
+        : wallGate.intersectionInBuilding(verticalCL, horizontalCL);
+      if (!inBuilding) continue;
+    }
     created.push(graph.addColumn(materialType, rules.defaultSections.column, verticalCL, horizontalCL, {}));
   }
   // 撤去段（一般則。ユーザー裁定・案A・2026-09-25）: 通り芯グリッド交点方式（gridIntersections。
@@ -132,7 +146,10 @@ export function autoFillColumns(graph, project, wallGate = null) {
     // 杭（role:'foundation'）は自動生成の対象外（本関数は作らない）なので撤去対象からも外す
     // （woodAutoFill.js:729の撤去ループと同じ保護。手動配置された杭を誤って巻き込まない）。
     if (column.role === 'foundation' || column.dimensionStatus !== 'auto') continue;
-    if (validKeys.has(columnSlotKey(column.verticalCL, column.horizontalCL))) continue;
+    // 柱貫通オフの屋根セルにしか接しない交点の auto の柱は、候補キーに残っていても撤去する
+    // （屋根にする前＝部屋だった頃に立った柱の持ち越し。生成側はこの交点を既に作らない）。
+    const roofBlocked = roofClassAt(column.verticalCL, column.horizontalCL) === ROOF_COLUMN_CLASS.BLOCKED;
+    if (!roofBlocked && validKeys.has(columnSlotKey(column.verticalCL, column.horizontalCL))) continue;
     graph.columnMap.delete(column.id);
     removed.push(column.id);
   }
@@ -151,12 +168,14 @@ export function autoFillColumns(graph, project, wallGate = null) {
  *  originsUpdated（QA裁定Major-1・2026-09-27）: 在来木造（wallIntersections）のときだけ非空になりうる
  *  ——既存柱の由来集合（structural/columnOrigins.js）だけが変わった柱id（autoFillWoodColumns参照）。
  *  非在来は常に[]。
+ *  roofColumnFilter（柱貫通。roofColumnFilter.js の結果。省略時は今までと同じ）: 通り芯交点方式（autoFillColumns）だけへ渡す
+ *  ——在来木造（wallIntersections）は対象外で無視される。呼び出し側は対象の階の graph から作ったフィルタを渡すこと。
  *  @returns {{created: object[], removed: string[], originsUpdated: string[]}} */
-export function autoFillColumnsForStructure(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = [], belowColumns = [], wallSourceCache = undefined) {
+export function autoFillColumnsForStructure(graph, project, wallGate = null, aboveColumns = [], wallSegments = [], aboveBeamSegments = [], belowColumns = [], wallSourceCache = undefined, roofColumnFilter = null) {
   if (!isStructureSpecified(graph, project)) return { created: [], removed: [], originsUpdated: [] };
   const rules = rulesFor(effectiveStructure(graph, project));
   if (rules.columnPlacement === 'wallIntersections') return autoFillWoodColumns(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache);
-  return autoFillColumns(graph, project, wallGate);
+  return autoFillColumns(graph, project, wallGate, roofColumnFilter);
 }
 
 /** 柱が存在しない交点を検出し、独立フーチングをデフォルト材料・断面で自動生成する（除外集合のスロットはスキップ）。
@@ -658,8 +677,10 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null, below
  *  （roofFramingRegions.js。主屋根は呼び出し側が最上階の graph から、下屋は実体階の自階 graph から導く）。
  *  省略時（undefined）は小屋梁に一切触れない（小屋組を扱わない呼び出し）。[] なら auto の小屋梁を撤去する。
  *  roofCellKeys: 小屋組の対象の下屋のセルキー集合（roofFramingRegions.js leanToFramingCellKeys）。床梁
- *  （autoFillWoodFloorBeams）へそのまま素通しし、その区画には床梁を作らない。省略時は従来どおり。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined) {
+ *  （autoFillWoodFloorBeams）へそのまま素通しし、その区画には床梁を作らない。省略時は従来どおり。
+ *  roofColumnFilter: 柱貫通（roofColumnFilter.js buildRoofColumnFilter を自階の graph から作った結果）。
+ *  autoFillColumnsForStructure へそのまま素通しする——省略時（null）は柱の生成・撤去は従来と完全に同じ。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined, roofColumnFilter = null) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
@@ -689,7 +710,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const retargetedOpeningBeamAxesShort = retargetOpeningBeamAxisShortExtents(graph, openingSources);
   // 柱は主構造ルールの配置源（通り芯交点／壁交点）で振り分ける。壁交点方式は候補に無い自動柱の撤去も返す。
   const columnsResult = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure))
-    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache) : { created: [], removed: [], originsUpdated: [] };
+    ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache, roofColumnFilter) : { created: [], removed: [], originsUpdated: [] };
   const newColumns = columnsResult.created;
   const removedColumns = columnsResult.removed;
   const originsUpdatedColumns = columnsResult.originsUpdated;

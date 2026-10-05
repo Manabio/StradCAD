@@ -1211,7 +1211,7 @@ export class FinishModeState {
 
   /**
    * 屋根（下屋）の項目を1つ確定する（外部タブの屋根の群。1回の確定で undo 1エントリ）。
-   * 項目は RoofSpec の11キー。値は isValidRoofFieldValue で検証し、不正な値・無変更・屋根でない部屋・
+   * 項目は RoofSpec の12キー。値は isValidRoofFieldValue で検証し、不正な値・無変更・屋根でない部屋・
    * 存在しない roomId は何も変更せず（undo を積まず）false を返す。呼び出し側（RoofGroup）は false のとき
    * 表示を元の値へ戻す。
    * @returns {boolean} 変更を確定したら true

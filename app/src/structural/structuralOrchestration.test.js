@@ -714,7 +714,7 @@ test('【不変条件・ソース走査】structuralOrchestration.js: 下階編�
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralOrchestration.js'), 'utf8');
-  assert.ok(/autoFillColumnsForStructure\(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveBeamSegmentsForBelow, belowBelowGraph\?\.columns \?\? \[\]\)/.test(src),
+  assert.ok(/autoFillColumnsForStructure\(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveBeamSegmentsForBelow, belowBelowGraph\?\.columns \?\? \[\], undefined,/.test(src),
     'autoFillColumnsForStructure(belowGraph, ...) へ aboveColumnsForBelow・belowWallSegments・aboveBeamSegmentsForBelow・belowBelowGraph?.columnsを渡していない');
   assert.ok(/aboveColumnsForBelow\s*=\s*subjectGraph\.columns/.test(src),
     'aboveColumnsForBelow が subjectGraph.columns（メモリ上）から来ていない（誤ってpeekしている可能性）');

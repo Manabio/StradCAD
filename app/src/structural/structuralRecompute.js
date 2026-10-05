@@ -22,6 +22,7 @@ import { collectFloorGroups } from './memberNumbering.js';
 import { conformWoodSections, conformWoodColumnEccentricity, autoFillWoodBeamDepths, woodBeamDepthMarkSignature } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
 import { mainRoofFramingRegion, leanToFraming } from './roofFramingRegions.js';
+import { buildRoofColumnFilter } from './roofColumnFilter.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { conformToLedger } from './memberGroups.js';
 
@@ -206,9 +207,13 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 主屋根は [region]（rect=null・rects。autoFillWoodRoofFraming が翼ごとに小屋梁・飛び梁を作る＝C2e-3b）。
   const mainRegion = isRoof ? mainRoofFramingRegion(belowGraph, project) : null;
   const roofRegions = isRoof ? (mainRegion ? [mainRegion] : []) : leanTo.regions;
+  // 柱貫通（下屋の屋根セルにしか接しない通り芯交点の柱。roofColumnFilter.js）。通り芯の交点に柱が立つ構造の実体階だけ、
+  // 自階の graph から作って autoFillStructuralGrid へ渡す（在来木造・屋根専用平面は null＝従来どおり）。
+  const roofColumnFilter = (!isRoof && ownRules.columnPlacement !== 'wallIntersections')
+    ? withGraphReadScope(targetGraph, () => buildRoofColumnFilter(targetGraph)) : null;
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。

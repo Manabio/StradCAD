@@ -160,6 +160,19 @@ export function roofRidgeDirectionView({ shape, ridgeDirection, rect }) {
 }
 
 /**
+ * 外部タブの「柱貫通」チェックの表示判断（描画は RoofGroup.jsx が visible と value に従うだけ）。
+ *   visible: 下屋で、かつ柱が通り芯の交点に立つ構造（rules.columnPlacement が 'wallIntersections' でなく、柱を持つ確定済みの構造＝S造・RC造（ラーメン）・SRC造。hasColumns）の
+ *            ときだけ true。在来木造・主屋根（isLeanTo=false）は出さない（値も使わない）。
+ *   value:   保存値（true のとき屋根セルにしか接しない位置にも柱を立てる。既定 false）。
+ * @param {{ isLeanTo: boolean, columnPlacement: string|null|undefined, hasColumns: boolean|null|undefined, columnThrough: boolean|null|undefined }} p
+ * @returns {{ visible: boolean, value: boolean }}
+ */
+export function roofColumnThroughView({ isLeanTo, columnPlacement, hasColumns, columnThrough }) {
+  const visible = isLeanTo === true && columnPlacement !== 'wallIntersections' && hasColumns === true;
+  return { visible, value: columnThrough === true };
+}
+
+/**
  * 外部タブの「高い側」の選択欄の表示判断（描画は RoofGroup.jsx が visible と value に従うだけ）。
  *   visible: 形状の実効値が片流れで、屋根範囲が矩形のときだけ true。矩形でない片流れ（下屋のL字など）は
  *            小屋組の決め方が未定なので出さない（value は null）。

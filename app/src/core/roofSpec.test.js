@@ -13,7 +13,7 @@ test('RoofSpec: 既定値は 形状=自動(null)・勾配3・野地板=構造用
     shape: null, slope: DEFAULT_ROOF_SLOPE,
     sheathingMaterial: DEFAULT_ROOF_SHEATHING, underlaymentMaterial: DEFAULT_ROOF_UNDERLAYMENT,
     roofFinish: '', eaveOverhangMm: DEFAULT_ROOF_EAVE_OVERHANG_MM, gableOverhangMm: DEFAULT_ROOF_GABLE_OVERHANG_MM,
-    soffit: '', note: '', highSide: null, ridgeDirection: null,
+    soffit: '', note: '', highSide: null, ridgeDirection: null, columnThrough: false,
   });
   assert.equal(DEFAULT_ROOF_SLOPE, 3);
   assert.equal(DEFAULT_ROOF_EAVE_OVERHANG_MM, 455);
@@ -26,12 +26,13 @@ test('不変条件: toData() のキー集合は ROOF_SPEC_KEYS と一致し、�
   assert.deepEqual(Object.keys(new RoofSpec().toData()).sort(), [...ROOF_SPEC_KEYS].sort());
   assert.deepEqual(Object.keys(NON_DEFAULT_ROOF_SPEC).sort(), [...ROOF_SPEC_KEYS].sort(),
     'RoofSpec に項目を足したら fixture にも足す');
-  assert.equal(ROOF_SPEC_KEYS.length, 11);
-  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 1], 'ridgeDirection', 'ridgeDirection は末尾');
-  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 2], 'highSide');
+  assert.equal(ROOF_SPEC_KEYS.length, 12);
+  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 1], 'columnThrough', 'columnThrough は末尾');
+  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 2], 'ridgeDirection');
+  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 3], 'highSide');
 });
 
-test('不変条件: 全11項目を既定値以外にした RoofSpec は toData→fromData→toData で一致し、各項目が保たれる（出幅0・勾配2.5）', () => {
+test('不変条件: 全12項目を既定値以外にした RoofSpec は toData→fromData→toData で一致し、各項目が保たれる（出幅0・勾配2.5）', () => {
   const defaults = new RoofSpec().toData();
   for (const key of ROOF_SPEC_KEYS) {
     assert.notDeepEqual(NON_DEFAULT_ROOF_SPEC[key], defaults[key], `前提: ${key} は既定値と異なる`);
@@ -92,6 +93,23 @@ test('【失敗系】fromData: 未知の ridgeDirection は null（自動）へ�
   }
 });
 
+test('columnThrough: 既定は false。true は toData→fromData で保たれ、setField で書き換えられる', () => {
+  assert.equal(new RoofSpec().columnThrough, false);
+  assert.equal(RoofSpec.fromData({ columnThrough: true }).columnThrough, true);
+  assert.equal(new RoofSpec({ columnThrough: true }).toData().columnThrough, true);
+  const spec = new RoofSpec();
+  spec.setField('columnThrough', true);
+  assert.equal(spec.columnThrough, true);
+  assert.equal(RoofSpec.fromData(spec.toData()).columnThrough, true);
+});
+
+test('【失敗系】fromData: columnThrough が true 以外（欠落・0・1・文字列・null）は false', () => {
+  for (const v of [false, 0, 1, 'true', 'yes', null, undefined, {}, []]) {
+    assert.equal(RoofSpec.fromData({ columnThrough: v }).columnThrough, false, `columnThrough=${JSON.stringify(v)}`);
+  }
+  assert.equal(RoofSpec.fromData({}).columnThrough, false);
+});
+
 test('【失敗系】fromData: slope が非有限・0以下・数値でないときは既定値3（0.5刻みの2.5は保つ）', () => {
   for (const slope of [0, -1, NaN, Infinity, '3', null, undefined]) {
     assert.equal(RoofSpec.fromData({ slope }).slope, DEFAULT_ROOF_SLOPE, `slope=${String(slope)}`);
@@ -141,14 +159,15 @@ test('isDefaultRoofSpec: 既定値の RoofSpec・その toData()・null/undefine
   assert.equal(isDefaultRoofSpec(undefined), true);
 });
 
-test('isDefaultRoofSpec: 11項目のどれか1つでも既定値と違えば false（ROOF_SPEC_KEYS の全項目で確かめる）', () => {
+test('isDefaultRoofSpec: 12項目のどれか1つでも既定値と違えば false（ROOF_SPEC_KEYS の全項目で確かめる）', () => {
   for (const key of ROOF_SPEC_KEYS) {
     const spec = new RoofSpec();
     spec.setField(key, NON_DEFAULT_ROOF_SPEC[key]);
     assert.equal(isDefaultRoofSpec(spec), false, `${key} だけ既定外でも false`);
     assert.equal(isDefaultRoofSpec(spec.toData()), false, `${key}（plain）`);
   }
-  assert.equal(ROOF_SPEC_KEYS.length, 11);
+  assert.equal(ROOF_SPEC_KEYS.length, 12);
+  assert.equal(isDefaultRoofSpec(new RoofSpec({ columnThrough: true })), false, 'columnThrough だけ true でも既定外');
   assert.equal(isDefaultRoofSpec(new RoofSpec({ highSide: RoofHighSide.TOP })), false, 'highSide だけ明示しても既定外');
   assert.equal(isDefaultRoofSpec(new RoofSpec({ ridgeDirection: RoofRidgeDirection.HORIZONTAL })), false, 'ridgeDirection だけ明示しても既定外');
 });

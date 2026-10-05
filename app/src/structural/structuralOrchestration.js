@@ -13,6 +13,7 @@ import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRule
 import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments, columnSeedBeamSegments, createWallSourceCache } from './wallBeamAxes.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
 import { buildStructuralWallGate, createFootprintCache } from './wallGate.js';
+import { buildRoofColumnFilter } from './roofColumnFilter.js';
 import { collectFloorGroups, assignNumbers, applyNumbers } from './memberNumbering.js';
 import { conformToLedger } from './memberGroups.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
@@ -214,7 +215,9 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
       if (structureHasMemberKind(MEMBER_KIND.COLUMN, belowStructure)) {
         // belowGraphから見た「1つ下の実体階」＝belowBelowGraph（3iのbelow優先候補。上のbelowWallSegments
         // と同じpeek結果を使い回す——追加peek0回。belowBelowGraphが未解決（非在来等）ならnull=[]）。
-        autoFillColumnsForStructure(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveBeamSegmentsForBelow, belowBelowGraph?.columns ?? []);
+        autoFillColumnsForStructure(belowGraph, project, belowGate, aboveColumnsForBelow, belowWallSegments, aboveBeamSegmentsForBelow, belowBelowGraph?.columns ?? [], undefined,
+          // 柱貫通（下階自身の屋根セル。通り芯交点方式の構造だけ。recomputeStructuralForGraph の主経路と同じ判定・同じ graph 起点）
+          rulesFor(belowStructure).columnPlacement !== 'wallIntersections' ? buildRoofColumnFilter(belowGraph) : null);
       }
       deleteClassificationOverflow(belowGraph, project);
       autoFillColumnAxisOffsets(belowGraph, project, belowLowestGraph);

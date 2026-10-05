@@ -3,7 +3,7 @@
 // 同じ中心線（固定id）で作る。wallGeneration.test.js・edgeClassify.test.js が共有する。
 import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape, RoofHighSide, RoofRidgeDirection } from '@core';
 
-// 屋根の仕様（RoofSpec）の全11項目を既定値以外にした plain 値。往復・キー集合の突合テストが共有する
+// 屋根の仕様（RoofSpec）の全12項目を既定値以外にした plain 値。往復・キー集合の突合テストが共有する
 // （項目が増えたらここへの追加を強制する）。出幅0・勾配2.5・形状は明示（自動でない）。
 export const NON_DEFAULT_ROOF_SPEC = Object.freeze({
   shape: RoofShape.HIP,
@@ -17,6 +17,7 @@ export const NON_DEFAULT_ROOF_SPEC = Object.freeze({
   note: '下野',
   highSide: RoofHighSide.RIGHT,
   ridgeDirection: RoofRidgeDirection.VERTICAL,
+  columnThrough: true,
 });
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };

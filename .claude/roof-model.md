@@ -3,14 +3,20 @@
 屋根の壁・境界・他階との整合（feature=ROOF を「部屋の無いセル」と同値に扱う）は `.claude/data-model.md` の屋根の節。ここは屋根の**項目（RoofSpec）**の設計意図だけを書く。
 
 ## 2軸の持ち方
-- 屋根の部屋は「屋外部屋（kind=EXTERIOR）＋属性ROOF」。**項目（形状・勾配・野地板・防水シート・屋根仕上げ・軒の出・妻側の出・軒裏・備考・片流れの高い側・切妻の棟木の向き）は `Room.roofSpec`（`core/roofSpec.js`の`RoofSpec`）の1か所だけ**が保存先。
+- 屋根の部屋は「屋外部屋（kind=EXTERIOR）＋属性ROOF」。**項目（形状・勾配・野地板・防水シート・屋根仕上げ・軒の出・妻側の出・軒裏・備考・片流れの高い側・切妻の棟木の向き・柱貫通）は `Room.roofSpec`（`core/roofSpec.js`の`RoofSpec`）の1か所だけ**が保存先。
 - `exteriorRows` の連動行は作らない（二重持ちを避ける。外部タブは専用の群 `type:'roof'` に `RoofGroup.jsx` を描く）。
 - 別実体（Stairのような `Roof` ＋ roomId）にしない: 屋根は外壁生成から消えたい側で、別実体にする理由（Room を消すと外壁生成から消える）が当てはまらない。Room に載せれば部屋削除・階の複製・検討案のコピーで値が自動で道連れになる。
 
 ## 不変条件 I1: feature===ROOF ⇔ roofSpec≠null
 - 付与で作る（`FinishModeState.applyNaming`が`createLeanToRoofSpec`）、ROOFでなくなれば`Room.setFeature`が捨てる。
 - 復元側の入口は`restoreRoofSpecInto`（`finish/roof/roofDefaults.js`）1つ。`graphSnapshot.restoreGraph`（FBS・JSON・plainの3経路の合流先）と`roomReinterpret.restoreRoomsState`（仕上げモードundo）が共用する。欠けていれば既定値（備考「下野」）で補い、ROOFでないのに付いていれば捨てる。
-- **項目集合の唯一の定義は `ROOF_SPEC_KEYS` と `toData()`/`fromData()`**。FBSの読み書き・graphSnapshot・roomReinterpretはどれもこの plain 表現を通す。項目を足すときの追従先は、FBSの`RS`テーブル（末尾追加）・`finishUndo.test.js`／`roofSpec.test.js`のキー集合の突合。
+- **項目集合の唯一の定義は `ROOF_SPEC_KEYS` と `toData()`/`fromData()`**。FBSの読み書き・graphSnapshot・roomReinterpretはどれもこの plain 表現を通す。項目を足すときの追従先は、FBSの`RS`テーブル（末尾追加）・`roofInput.js`の`isValidRoofFieldValue`（`default: false`なので足し忘れるとUIから確定できない）・`roofTestFixtures.js`の`NON_DEFAULT_ROOF_SPEC`・`finishUndo.test.js`／`roofSpec.test.js`のキー集合の突合。`graphSnapshot`・`roomReinterpret`・`finishUndo`・`mainRoofFloorSync`は`toData`/`fromData`を通るので自動で追従する（`codeNormalization`は材料コードの項目だけ）。
+
+## 柱貫通（`RoofSpec.columnThrough`。既定 false。2026-10-05）
+- **通り芯の交点に柱が立つ構造（S造・RC造・SRC造。`rulesFor(…).columnPlacement`が`wallIntersections`でない）の下屋だけ**の項目。オフのとき、その階で屋根セルにしか接しない交点（屋根の角・辺の途中・屋根セル同士の境）に柱を作らず、屋根にする前に立った auto の柱も撤去する。オンなら自階の屋根セルを建物とみなして立てる（直下の階に建物が無い交点には立たない）。建物の壁の線上（屋内セルに1つでも触れる交点）はどちらでも従来どおり。在来木造・主屋根は対象外（値は保存するが使わず、欄も出さない）。
+- 判定は`structural/roofColumnFilter.js`（純モジュール）。点サンプリングでなく、屋内セル矩形（`roofInteriorRects`）と屋根セル矩形への閉区間の接触で分類する。生成のゲートは元から屋根セルを建物外と見ており、オフで要るのは**持ち越しの撤去**、オンで要るのは`wallGate.intersectionInBuildingWithRoof`（自階の屋根だけを建物とみなす）。撤去は locked／手動固定・杭を残し、`excludedColumnSlots`に触れない。
+- フィルタは**対象の階自身の graph**から作り、柱を作る全経路へ渡す（`structuralRecompute`の主経路と`structuralOrchestration`の下階編集経路。どちらかで渡し忘れると「ある経路では撤去・別の経路では残る」になるので配線テストが1行まるごと固定）。反映のタイミングは既存の境界処理のまま（仕上げ脱出の自階再計算・構造突入）で、新しい引き金は無い。
+- 保存は`RS`の`COLUMN_THROUGH=11`（int8）。**true のときだけ書く**ので、使っていない文書のバイト列は変わらない。既知の限界: 屋根の外周に持ち越された auto の梁（梁芯が屋根セルの縁にある梁）は撤去しない（柱だけが対象）。
 
 ## 形状・高い側・棟木の向きだけ「自動」を持つ
 - `shape: null`＝自動。表示時に`resolveRoofShape`が導く（短手が`ROOF_MONO_MAX_SHORT_SPAN_MM`以下なら片流れ、超えれば切妻。矩形かどうかは見ない）。選ぶと保存され、「自動へ戻す」入口は作らない。他の項目は付与時に既定値を保存する。**主屋根だけ**、主構造のルールが既定形状を持たない（木造・未定）とき建物範囲が矩形でなければ寄棟（`mainRoof.js`の`resolveMainRoofShape`。ユーザー裁定2026-10-02「下屋は片流れ・主屋根は寄棟」）。範囲が空の階は今までどおり（短手0＝片流れ）、非木造は矩形でなくても陸屋根。下屋は矩形でなくても短手の規則のまま。理由: 材料コードは保存されていないと使用コードの収集（同梱）・読込み時の照合に乗らない。

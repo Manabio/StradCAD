@@ -12,7 +12,9 @@ import { RoofShape } from '../../core/constants.js';
 import { footprintCellKeys } from '../../structural/wallGate.js';
 import { cellBoundsList } from '../gridCells.js';
 import { resolveRoofShape, roofRoomBounds } from './roofDefaults.js';
-import { rectOfBounds, roofHighSideView, roofRidgeDirectionView } from './roofGeometry.js';
+import { rulesFor, effectiveStructure, UNSPECIFIED_STRUCTURE } from '../../structural/structureRules.js';
+import { structureHasMemberKind, MEMBER_KIND } from '../../structural/structuralClassification.js';
+import { rectOfBounds, roofHighSideView, roofRidgeDirectionView, roofColumnThroughView } from './roofGeometry.js';
 
 const EPS = 1e-6;
 
@@ -121,6 +123,25 @@ export function roofHighSideViewOfRoom(room, graph) {
   const rect = rectOfBounds(boundsList);
   const adjacency = rect && shape === RoofShape.MONO ? roofEdgeInteriorAdjacency(rect, graph) : null; // 片流れ以外は使わない
   return roofHighSideView({ shape, highSide: spec?.highSide ?? null, rect, adjacency });
+}
+
+/**
+ * 下屋（屋根の Room）の「柱貫通」チェックの表示判断（roofColumnThroughView に、その階の実効主構造の柱の配置源を渡す）。
+ * 柱が通り芯の交点に立つ構造（S造・RC造（ラーメン）・SRC造）のときだけ visible。柱を持たない構造（RC造（壁式）・木造（2"×4"））と
+ * 主構造が未定の階は出さない（柱を生成しないため。生成側 autoFillStructuralGrid の `structureHasMemberKind(COLUMN)` と同じ述語）。
+ * @param {{ roofSpec: { columnThrough: boolean }|null }} room
+ * @param {object} graph 屋根のある階の graph
+ * @param {object|null} project 実効主構造の解決に使う（graph の上書きがあれば不要）
+ * @returns {{ visible: boolean, value: boolean }}
+ */
+export function roofColumnThroughViewOfRoom(room, graph, project) {
+  const structure = effectiveStructure(graph, project);
+  return roofColumnThroughView({
+    isLeanTo: true,
+    columnPlacement: rulesFor(structure).columnPlacement,
+    hasColumns: structure !== UNSPECIFIED_STRUCTURE && structureHasMemberKind(MEMBER_KIND.COLUMN, structure),
+    columnThrough: room.roofSpec?.columnThrough ?? false,
+  });
 }
 
 /**
