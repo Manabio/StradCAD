@@ -24,7 +24,7 @@
  */
 import { runInAction } from 'mobx';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
-import { serializeGraph } from '../graphSnapshot.js';
+import { serializeGraph, floorBytesMayHaveClEccentricities } from '../graphSnapshot.js';
 import { saveFloor } from '../storage/db.js';
 import { translateCLId } from './floorCLMap.js';
 import { buildCellToRoom, roomsAdjacentToCL } from './edgeClassify.js';
@@ -59,13 +59,27 @@ function linkFlagsOnGraph(graph, clId, cellToRoom) {
  * F5: 階ごとの peek・buildCellToRoom をこの呼び出し1回に集約し、複数CL・push/pull の
  * どちらの呼び出しからも同じ結果を使い回す（clId ごとに毎回 peek していた旧実装を解消）。
  */
-async function planePeeks(project, activeGraph) {
+async function planePeeks(project, activeGraph, peekFn = defaultPeek) {
   const planes = project.planes;
-  const active = activeGraph?.plane;
   return Promise.all(planes.map(async (plane) => {
-    const graph = plane.id === active?.id ? activeGraph : await floorSwapManager.peek(plane, project.structGraph);
+    const graph = isOtherPlane(plane, activeGraph) ? await peekFn(plane, project.structGraph) : activeGraph;
     return { plane, graph, cellToRoom: buildCellToRoom(graph) };
   }));
+}
+
+/** 呼び出し時に floorSwapManager.peek を読む（テストが後から代入して差し替えるため、読込み時に捕まえない）。 */
+function defaultPeek(plane, structGraph) {
+  return floorSwapManager.peek(plane, structGraph);
+}
+
+/** 「どの階を他階として読む（peek する）か」の唯一の判定（アクティブ階以外）。planePeeks と事前確認が共有する。 */
+function isOtherPlane(plane, activeGraph) {
+  return plane.id !== activeGraph?.plane?.id;
+}
+
+/** planePeeks が peek する階（isOtherPlane の集合）。 */
+function peekedPlanes(project, activeGraph) {
+  return project.planes.filter(plane => isOtherPlane(plane, activeGraph));
 }
 
 /**
@@ -162,10 +176,20 @@ export async function propagateCLEccentricities(project, activeGraph, clIds, { m
  *
  * @param {object} project
  * @param {object} activeGraph - 突入した階（アクティブ）のグラフ
- * @param {{materialMap: Map}} opts
+ * 事前確認（opts.loadFloorFn）: pull が取り込むのは他階の graph.clEccentricities だけなので、
+ * 他階のどれにも偏芯レコードが無ければ結果は必ず「変更なし」。loadFloorFn が**関数のときだけ**、
+ * peek の前に他階のバイト列の偏芯レコード件数を数え、全部 0 なら peek せずに戻る（null は 0件）。
+ * loadFloorFn 省略・null・undefined は従来どおり常に peek する（既定で実 loadFloor を引かない）。
+ * loadFloorFn の throw は握らず上へ投げる。
+ *
+ * @param {object} project
+ * @param {object} activeGraph
+ * @param {{materialMap: Map,
+ *   loadFloorFn?: ((planeId: string) => Promise<Uint8Array|null>)|null,
+ *   peekFn?: (plane: object, structGraph: object) => Promise<object>}} opts
  * @returns {Promise<void>}
  */
-export async function pullCLEccentricities(project, activeGraph, { materialMap } = {}) {
+export async function pullCLEccentricities(project, activeGraph, { materialMap, loadFloorFn = null, peekFn = defaultPeek } = {}) {
   const active = activeGraph?.plane;
   const planes = project.planes;
   const activeIdx = planes.findIndex(p => p.id === active?.id);
@@ -179,7 +203,15 @@ export async function pullCLEccentricities(project, activeGraph, { materialMap }
   }
   if (candidateClIds.size === 0) return;
 
-  const peeks = await planePeeks(project, activeGraph);
+  if (typeof loadFloorFn === 'function') {
+    let anyRecord = false;
+    for (const plane of peekedPlanes(project, activeGraph)) {
+      if (floorBytesMayHaveClEccentricities(await loadFloorFn(plane.id))) { anyRecord = true; break; }
+    }
+    if (!anyRecord) return;
+  }
+
+  const peeks = await planePeeks(project, activeGraph, peekFn);
 
   for (const clId of candidateClIds) {
     const { group, localIds } = linkedGroupFor(clId, activeGraph, project.structGraph, peeks, activeIdx);

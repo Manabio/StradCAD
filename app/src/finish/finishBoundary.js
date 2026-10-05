@@ -23,7 +23,8 @@ import { refreshWallsAllFloors } from '../wallRefresh.js';
 
 // ---- モード境界: 仕上げモード突入（前回脱出時点のRoom.cellsを現在のCLトポロジーと
 // 突き合わせて再解釈した上で、通り芯変更等のトポロジー差分でエッジを再同期する）----
-export async function runFinishEntryBoundary(graph, project) {
+// loadFloorFn（省略可）: pullCLEccentricities の事前確認用の階バイト列の読み手。省略＝従来どおり常に peek。
+export async function runFinishEntryBoundary(graph, project, { loadFloorFn = null } = {}) {
   // 最上階なら直下階の屋内階段footprintへ階段吹抜け（STAIR_VOID）を補完する
   // （既存データ修復。syncUpperFloors と同じ自動同期のため undo 対象外）
   const { ensureTopStairVoid } = await import('./stair/stairFloorSync.js');
@@ -85,7 +86,7 @@ export async function runFinishEntryBoundary(graph, project) {
     import('./eccentricityFloorSync.js'),
     loadMaterialMap(),
   ]);
-  await pullCLEccentricities(project, graph, { materialMap: pullMaterialMap });
+  await pullCLEccentricities(project, graph, { materialMap: pullMaterialMap, loadFloorFn });
 
   // 部屋の再解釈→エッジ再同期の順に適用したため、undo は逆順で巻き戻す
   if (entryUndoFns.length > 0) {

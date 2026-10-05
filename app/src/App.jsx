@@ -1136,7 +1136,7 @@ const App = observer(() => {
     finish: {
       // 突入: 前回脱出時点のRoom.cellsを現在のCLトポロジーと突き合わせて再解釈した上でエッジを再同期。
       // 脱出: 部屋ごとの壁自動生成・外壁再生成・構造反映を確定。
-      enter: (graph) => runFinishEntryBoundary(graph, project),
+      enter: (graph) => runFinishEntryBoundary(graph, project, { loadFloorFn: loadFloor }),
       exit: (graph, { toMode }) => runFinishExitBoundary(graph, project, modeRef.current, { goingToStructure: toMode === 'structure' }),
     },
     structure: {

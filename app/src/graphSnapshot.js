@@ -1,6 +1,6 @@
 import { runInAction } from 'mobx';
 import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec } from '@core';
-import { encode, decode } from './schema/graphFbs.js';
+import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 import { applyDocumentCodeNormalization } from './catalog/codeNormalization.js';
 import { restoreRoofSpecInto } from './finish/roof/roofDefaults.js';
@@ -526,6 +526,19 @@ export function restoreGraph(graph, data) {
  */
 export function decodeFloorSnapshot(bytes) {
   return applyDocumentCodeNormalization(decode(bytes));
+}
+
+/**
+ * 階データに CL偏芯レコードが在りうるか（仕上げ突入の pull の事前確認用。全体を decode しない）。
+ * null・undefined・長さ0 → false／Uint8Array・ArrayBuffer → 偏芯ベクタの件数 > 0／
+ * それ以外（restoreGraph が受ける旧 JSON 文字列など）→ 不明なので true（＝peek へ進み、旧経路と同じ結果）。
+ * schema/graphFbs.js countClEccentricities の薄い公開（finish/ が schema/ を直接引かない）。
+ */
+export function floorBytesMayHaveClEccentricities(bytes) {
+  if (bytes == null) return false;
+  if (bytes instanceof Uint8Array) return bytes.length > 0 && countClEccentricities(bytes) > 0;
+  if (bytes instanceof ArrayBuffer) return bytes.byteLength > 0 && countClEccentricities(bytes) > 0;
+  return true;
 }
 
 /**

@@ -1913,6 +1913,20 @@ export function encode(snapshot) {
 }
 
 /**
+ * フロアのバイト列から CL偏芯レコード（CL_ECCENTRICITIES ベクタ）の件数だけを読む
+ * （全体を decode しない。null・空・ベクタ無しは 0。decode と同じフィールドを読む）。
+ * Uint8Array／ArrayBuffer 専用（JSON 文字列などは扱えない。呼び出し側で型を見ること）。
+ */
+export function countClEccentricities(bytes) {
+  if (!bytes || bytes.length === 0) return 0;
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const bb = new ByteBuffer(u8);
+  const rootPos = bb.readInt32(bb.position()) + bb.position();
+  const o = bb.__offset(rootPos, 4 + GS.CL_ECCENTRICITIES * 2);
+  return o ? bb.__vector_len(rootPos + o) : 0;
+}
+
+/**
  * FlatBuffers バイナリから snapshot オブジェクトを復元する。
  */
 export function decode(bytes) {
