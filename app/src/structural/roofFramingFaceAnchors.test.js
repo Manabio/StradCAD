@@ -121,17 +121,14 @@ test('T-C1 奥行の違う L字（水下の中点がセルの境目に乗る）�
   assert.deepEqual(b.map(p => [p.flow, p.anchor.x, p.anchor.y]).sort(), [['down', 1820, 4550], ['right', 5460, 1820]].sort());
 });
 
-test('水下が段違い（同じ壁・奥行きの違う2つの下屋）: 水下ごとに1面。各 anchor は自分の水下の面の内部', () => {
+// 旧: 水下が段違い（同じ壁・奥行きの違う2つの下屋）は水下ごとに1面で anchor が出た。新: 段違いの水下は、段の角で水下だけが進む屋根面の
+// 到達時刻が崖になる（規則で作れない形）ので面が定まらない＝ []（平面は軒先の線だけでラベルを出さない）
+test('【失敗系】水下が段違い（同じ壁・奥行きの違う2つの下屋）は規則で作れない形＝面が定まらず anchor なし（[]）', () => {
   const rects = [R(0, 0, 4000, 2000), R(4000, 0, 8000, 4000)];
   const drains = [D(false, 2000, 0, 4000, 1), D(false, 4000, 4000, 8000, 1)];
-  const anchors = drainFaceAnchors({ rects, drains, tolMm: TOL });
-  assert.equal(anchors.length, 2);
-  assert.deepEqual(anchors.map(a => a.drainIndex), [0, 1]);
-  const deep = anchors.find(a => a.drain.coord === 4000);
-  const shallow = anchors.find(a => a.drain.coord === 2000);
-  assert.deepEqual(deep.anchor, { x: 6000, y: 3000 });
-  assert.deepEqual(shallow.anchor, { x: 2000, y: 1000 });
-  assertAnchorsInsideOwnFaces(rects, anchors, '段違い');
+  assert.deepEqual(drainFaceAnchors({ rects, drains, tolMm: TOL }), []);
+  // 水下の端が辺の途中で壁に変わる形（上辺の左だけが水下）も同じ
+  assert.deepEqual(drainFaceAnchors({ rects: [R(0, 0, 8000, 3000)], drains: [D(false, 0, 0, 2000, -1), D(false, 3000, 0, 8000, 1)], tolMm: TOL }), []);
 });
 
 test('drainIndex は mergeDrainEdges 後の水下の並び（長さの大きい順）。同じ直線で接する水下は1つにまとめる', () => {
@@ -139,9 +136,11 @@ test('drainIndex は mergeDrainEdges 後の水下の並び（長さの大きい�
   const anchors = drainFaceAnchors({ rects, drains: [D(false, 3000, 0, 2000, 1), D(false, 3000, 2000, 8000, 1)], tolMm: TOL });
   assert.equal(anchors.length, 1, '同じ直線で接する2つは1面');
   assert.deepEqual(anchors[0].drain, D(false, 3000, 0, 8000, 1));
-  const two = drainFaceAnchors({ rects: [R(0, 0, 8000, 3000)], drains: [D(false, 0, 0, 2000, -1), D(false, 3000, 0, 8000, 1)], tolMm: TOL });
-  assert.deepEqual(two.map(a => a.drain.hi - a.drain.lo), [8000, 2000], '長さの大きい順');
-  assert.deepEqual(two.map(a => a.drainIndex), [0, 1]);
+  // 長さの違う6本（L字の寄棟）: 8000（上）・6000（左）・5000（下）・3000×3
+  const lRects = [R(0, 0, 8000, 3000), R(0, 3000, 3000, 6000)];
+  const six = drainFaceAnchors({ rects: lRects, drains: boundaryDrains(lRects), tolMm: TOL });
+  assert.deepEqual(six.map(a => a.drain.hi - a.drain.lo), [8000, 6000, 5000, 3000, 3000, 3000], '長さの大きい順');
+  assert.deepEqual(six.map(a => a.drainIndex), [0, 1, 2, 3, 4, 5]);
 });
 
 test('【失敗系】drainFaceAnchors: 水下が空・屋根範囲が空は []。許容差が負・水下の値が不正・rects が配列でないは RangeError', () => {

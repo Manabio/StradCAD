@@ -60,6 +60,9 @@ const MONO_TOP = { key: 'main', rect, shape: RoofShape.MONO, ridgeIsVertical: tr
 const HIP = { key: 'main', rect, shape: RoofShape.HIP, ridgeIsVertical: true, highSide: null };
 
 const roofBeams = graph => graph.beams.filter(b => b.role === 'roofBeam');
+// 戻り値 { created, removed } は件数で比べる。梁のオブジェクトを assert.deepEqual に渡すと、失敗時の差分表示が
+// 梁→通り芯→graph 全体をたどってメモリを食い切り、テストのプロセスごと落ちる（2026-10-05 の変異テストで発生）。
+const changeCounts = r => [r.created.length, r.removed.length];
 // 小屋梁1本の記述（向き・軸の座標・区間）。比較しやすい文字列。
 const desc = b => `${b.isVertical ? 'x' : 'y'}=${b.axisValue}:${Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue)}..${Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue)}`;
 const descs = graph => roofBeams(graph).map(desc).sort();
@@ -206,7 +209,7 @@ test('regions===undefined は何もしない（I-C3）。[] ・非在来の regi
   const before = descs(graph);
   assert.equal(before.length, 3);
 
-  assert.deepEqual(autoFillWoodRoofFraming(graph, PROJECT, undefined), { created: [], removed: [] });
+  assert.deepEqual(changeCounts(autoFillWoodRoofFraming(graph, PROJECT, undefined)), [0, 0]);
   assert.deepEqual(descs(graph), before, 'undefined では撤去も生成もしない');
 
   const hip = autoFillWoodRoofFraming(graph, PROJECT, [HIP]);
@@ -267,7 +270,7 @@ test('【失敗系・C2d-2】region の rect が退化（幅0・高さ0）・NaN
       const region = { key: 'lean:bad', rect: badRect, shape, ridgeIsVertical: true, highSide: shape === RoofShape.MONO ? RoofHighSide.LEFT : null };
       let result;
       assert.doesNotThrow(() => { result = autoFillWoodRoofFraming(graph, PROJECT, [region]); }, `${name}・${shape}`);
-      assert.deepEqual(result, { created: [], removed: [] }, `${name}・${shape}: 作らない`);
+      assert.deepEqual(changeCounts(result), [0, 0],`${name}・${shape}: 作らない`);
       assert.equal(roofBeams(graph).length, 0);
     }
   }
@@ -523,7 +526,7 @@ test('【失敗系・境界】寄棟で作れない入力は例外を投げず�
   for (const badRect of [{ x1: NaN, y1: 0, x2: 5460, y2: 9100 }, { x1: 0, y1: 4550, x2: 5460, y2: 4550 }, undefined]) {
     let r;
     assert.doesNotThrow(() => { r = autoFillWoodRoofFraming(graph, PROJECT, [{ ...region, rect: badRect }]); }, JSON.stringify(badRect));
-    assert.deepEqual(r, { created: [], removed: [] });
+    assert.deepEqual(changeCounts(r), [0, 0]);
   }
 });
 
@@ -785,9 +788,9 @@ test('【矩形でない寄棟】先の翼の seed の小屋梁（W2 の x=3640�
   let r;
   assert.doesNotThrow(() => { r = autoFillWoodRoofFraming(graph, PROJECT, [region]); });
   assert.equal(descs(graph).includes('x=3640:4550..7280'), false, '削除した小屋梁は再生成されない');
-  assert.deepEqual(r.created, []);
+  assert.equal(r.created.length, 0);
   assert.deepEqual(koyaDescs(graph), ['x=7280:3640..7280', 'y=2730:0..5460', 'y=4550:0..5460']);
-  assert.deepEqual(autoFillWoodRoofFraming(graph, PROJECT, [region]), { created: [], removed: [] }, '収束');
+  assert.deepEqual(changeCounts(autoFillWoodRoofFraming(graph, PROJECT, [region])), [0, 0], '収束');
 });
 
 test('【矩形でない寄棟・失敗系】rects が [] ・NaN・逆順・配列でない／形状が切妻や陸屋根（rect=null）なら小屋梁を作らず、例外も投げない（既存の auto は撤去）', () => {
@@ -804,7 +807,7 @@ test('【矩形でない寄棟・失敗系】rects が [] ・NaN・逆順・配�
   for (const b of bad) {
     let r;
     assert.doesNotThrow(() => { r = autoFillWoodRoofFraming(graph, PROJECT, [b]); }, JSON.stringify(b.shape) + JSON.stringify(b.rects));
-    assert.deepEqual(r, { created: [], removed: [] });
+    assert.deepEqual(changeCounts(r), [0, 0]);
   }
   assert.equal(roofBeams(graph).length, 0);
   // 既存の auto の小屋梁は、不正な rects の region で撤去される（region 無しと同じ）。
@@ -848,16 +851,18 @@ const LF2 = { cells: [rc(0, 0, 5460, 1820), rc(3640, 1820, 5460, 3640)], contact
 const LF5 = { cells: [rc(0, 0, 5460, 1820), rc(0, 1820, 1820, 3640)], contacts: [ct(false, 0, 1820, 5460, -1), ct(true, 0, 0, 3640, -1)] };
 // 奥行き 1000（r=545）。結果が r に敏感な形（母屋 x=3455 の束の間隔が r を渡さないと 1995 になる）
 const LFR545 = { cells: [rc(0, 7000, 3000, 8000), rc(3000, 0, 4000, 8000)], contacts: [ct(false, 7000, 0, 3000, -1), ct(true, 3000, 0, 7000, -1)] };
-// 向かい合う水下を持つ（QA の穴・凹み形。水下が穴に面する D1 の形なので棟木の出方は既知の限界の産物だが、棟木も支える仕組みの検証には使える）。棟木の段が母屋の段と重なり、全幅の小屋梁が偶然横切らない
+// 向かい合う水下を持つ穴・凹みの形（QA の形。水下が穴の辺に面する＝規則で作れない形。穴の上辺の水下の両端が動かない穴の左右の辺との
+// 270°の角で、到達時刻が崖になる）。旧は棟木も小屋梁で支える検証に使っていたが、新は「小屋梁を作らない」の検証に使う
 const LFRIDGE = { cells: [rc(0, 0, 7280, 1820), rc(0, 1820, 1820, 5460), rc(3640, 1820, 7280, 3640), rc(1820, 3640, 7280, 5460)], contacts: [ct(false, 0, 0, 7280, -1)] };
 // U字（屋内 x1820..3640・y0..3640 の左・下・右を回る。下の腕が深く、棟木 x=2730 が y 3640..4550 に出る）
 const LFU = { cells: [rc(0, 3640, 5460, 7280), rc(0, 0, 1820, 3640), rc(3640, 0, 5460, 3640)], contacts: [ct(true, 1820, 0, 3640, 1), ct(false, 3640, 1820, 3640, -1), ct(true, 3640, 0, 3640, -1)] };
 // U字（屋内 x1820..7280・y0..1820 の左・下・右を回る。屋内の下の辺も接するので下の帯は上が壁の翼になり、棟木 x=4550（y 1820..4550）の
 // 下側の母屋が横向き＝全幅の小屋梁が棟木の位置まで来ない。水下は外周の x=0・x=9100・y=9100 だけで、穴・凹みに面しない＝D1 に当たらない）
 const LFU2 = { cells: [rc(0, 0, 1820, 1820), rc(7280, 0, 9100, 1820), rc(0, 1820, 9100, 9100)], contacts: [ct(true, 1820, 0, 1820, 1), ct(true, 7280, 0, 1820, -1), ct(false, 1820, 1820, 7280, -1)] };
-// 屋内に接しない L字（仮の壁は上）。奥行き 3000 の翼と 1500 の翼。水下は同長（2000）で、長手方向の奥行きは番号の小さい翼の 3000（r=725）
-const LF3000 = { cells: [rc(2000, 1500, 4000, 3000), rc(4000, 1500, 6000, 3000), rc(2000, 3000, 4000, 4500)], contacts: [] };
-// 水下が段違い（同じ壁 y=0・水下は y=7280（x0..5460）と y=3640（x5460..9100））。水下の端の外側（斜め線の向こう）に水下と直交する向きの母屋が入る
+// 屋内に接しない L字（仮の壁は上）。右の列（奥行き 3000）と左の腕（下の 1500）。水下は下辺 y=3000 の一直線の1本で、長手方向の奥行きは 3000（r=725）
+// （旧: 水下が段違いの L字だった。水下が段違いの形は規則で作れない形で小屋梁を作らない）
+const LF3000 = { cells: [rc(0, 1500, 2000, 3000), rc(2000, 1500, 4000, 3000), rc(2000, 0, 4000, 1500)], contacts: [] };
+// 水下が段違い（同じ壁 y=0・水下は y=7280（x0..5460）と y=3640（x5460..9100））。水下だけが進む屋根面は段の角で到達時刻が崖になる＝規則で作れない形
 const LFS = { cells: [rc(0, 0, 5460, 7280), rc(5460, 0, 9100, 3640)], contacts: [ct(false, 0, 0, 9100, -1)] };
 const LFR = {
   cells: [rc(3640, -3640, 7280, 0), rc(7280, -3640, 9100, 0), rc(7280, -7280, 9100, -3640), rc(7280, -9884, 9100, -9100), rc(7280, -9100, 9100, -7280)],
@@ -903,10 +908,15 @@ test('【L字の下屋・(i′)】弦が自分の母屋を横切らない区間�
   assert.deepEqual(interiorCrossings(graph), []);
 });
 
-test('【L字の下屋・形2】同じ壁の出っ張り（面1つ）: 母屋 y=910 の途中だけ x=1820・3640 に 0..1820。出っ張り側の x=3640 の 1820..3640 は外周の大梁が既に占める', () => {
+// 旧: 形2（同じ壁の出っ張り・水下が段違い）は面1つで小屋梁 x=1820・3640 の 0..1820 ができた。新: 水下 y=1820 と y=3640 が段違いで、
+// 水下だけが進む屋根面の到達時刻が崖になる＝規則で作れない形。面が空で小屋梁は1本も作らない（例外なし・冪等）
+test('【L字の下屋・形2】同じ壁の出っ張り（水下が段違い）は規則で作れない形: 面が空で小屋梁を作らない（例外なし・冪等）。対照: 正常な形5は小屋梁ができる', () => {
   const { graph, region } = makeLeanRoof(LF2);
-  assertWingInvariants(graph, region, 'L字2');
-  assert.deepEqual(koyaDescs(graph), ['x=1820:0..1820', 'x=3640:0..1820']);
+  assert.deepEqual(changeCounts(autoFillWoodRoofFraming(graph, PROJECT, [region])), [0, 0]);
+  assert.deepEqual(koyaDescs(graph), []);
+  assert.deepEqual(changeCounts(autoFillWoodRoofFraming(graph, PROJECT, [region])), [0, 0], '冪等');
+  const ok = makeLeanRoof(LF5);
+  assert.ok(autoFillWoodRoofFraming(ok.graph, PROJECT, [ok.region]).created.length > 0, '対照: 正常な形は小屋梁ができる');
 });
 
 test('【L字の下屋・形5】谷木の形（面は top → left）: 母屋は面ごとに1本。x=1820・3640 の 0..1820 と y=1820 の 0..1820', () => {
@@ -915,8 +925,8 @@ test('【L字の下屋・形5】谷木の形（面は top → left）: 母屋は
   assert.deepEqual(koyaDescs(graph), ['x=1820:0..1820', 'x=3640:0..1820', 'y=1820:0..1820']);
 });
 
-test('【L字の下屋・棟木も小屋梁で支える】向かい合う水下の棟木（段が母屋の段と重なる位置は母屋でなく棟木）にも小屋梁が来て、棟木の束の間隔が1820以下になる', () => {
-  const { graph, region } = makeLeanRoof(LFRIDGE);
+test('【L字の下屋・棟木も小屋梁で支える】向かい合う水下の棟木（段が母屋の段と重なる位置は母屋でなく棟木）にも小屋梁が来て、棟木の束の間隔が1820以下になる（U字）', () => {
+  const { graph, region } = makeLeanRoof(LFU);
   const framing = roofFramingLines({
     rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
     purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
@@ -975,18 +985,21 @@ test('【L字の下屋・配線】leanToModel は長手方向の奥行き（regi
   ]) assert.equal(count(line), 1, `${line} の行は1つのはず`);
 });
 
-test('【L字の下屋・水下が段違い】面に水下と直交する向きの母屋が混ざる形: 向きごとに面を分けて小屋梁が生成され、束の間隔・交差・重なり・冪等の不変条件を満たす', () => {
-  const { graph, region } = makeLeanRoof(LFS);
-  const purlins = roofFramingLines({
-    rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
-    purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
-  }).purlins;
-  assert.ok(purlins.some(l => l.isVertical) && purlins.some(l => !l.isVertical), '前提: 縦の母屋と横の母屋が混ざる');
-  const r = assertWingInvariants(graph, region, 'L字・水下が段違い');
-  assert.ok(r.created.length > 0, '小屋梁が生成される');
-  assert.ok(koyaOnly(graph).some(b => b.isVertical) && koyaOnly(graph).some(b => !b.isVertical), '縦・横の両方の向きの小屋梁ができる（混ざった向きの母屋を別の面として支える）');
-  assert.deepEqual(tobibariDescs(graph), [], '飛び梁は無い');
-  for (const b of roofBeams(graph)) assert.equal(b.dimensionStatus, 'auto');
+// 旧: 水下が段違いの形（LFS）は、水下の端の外側の母屋が水下と直交する向きで入る（面に向きの違う線が混ざる）ので、向きごとに面を分けて小屋梁を作った。
+// 新: 段違いの水下は規則で作れない形。穴に面する水下（LFRIDGE）も同じ。小屋梁を作らず、母屋・棟木の線も空（面の中の向きが混ざる形は無くなった）
+test('【L字の下屋・規則で作れない形】水下が段違い・穴に面する水下: 母屋・棟木・斜め線が空で、小屋梁を1本も作らない（例外なし・冪等）。面の中の線の向きが混ざる形は無い', () => {
+  for (const [name, form] of Object.entries({ 水下が段違い: LFS, 穴に面する水下: LFRIDGE })) {
+    const { graph, region } = makeLeanRoof(form);
+    const framing = roofFramingLines({
+      rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
+      purlinPitchMm: F.purlinPitchMm, purlinStartOffsetsMm: F.purlinStartOffsetsMm, tolMm: CL_OVERLAP_TOL_MM,
+    });
+    assert.deepEqual([framing.ridges, framing.purlins], [[], []], `${name}: 線は空`);
+    assert.ok(region.leanToDrains.length > 0 && region.leanToPurlinDepthMm > 0, `${name}: 前提: 水下と段の基準は正常な入力（場が作れないだけ）`);
+    assert.deepEqual(changeCounts(autoFillWoodRoofFraming(graph, PROJECT, [region])), [0, 0], name);
+    assert.deepEqual(roofBeams(graph).map(b => b.id), [], `${name}: 小屋梁なし`);
+    assert.deepEqual(changeCounts(autoFillWoodRoofFraming(graph, PROJECT, [region])), [0, 0], `${name}: 冪等`);
+  }
 });
 
 test('【L字の下屋・形R】roof-test1 の2階の下屋（中心線なし。水下は右辺 x=9100・下辺 y=0）: 右辺の面の横 y=-3640・-5460・-7280・-9100（x7280..9100）、下辺の面の縦 x=5460・7280、横の y=-1820（x3640..9100）。縦は y=-1820 で分かれる', () => {
@@ -1160,19 +1173,22 @@ test('【既知の限界（受容）T4】壁に接する矩形の寄棟（roof-t
   assert.deepEqual(koyaDescs(graph), ['x=5460:-3640..0', 'x=7280:-3640..0', 'y=-1820:3640..5460', 'y=-1820:7280..9100']);
 });
 
-test('【壁に接する寄棟】一部だけ壁・コの字の壁の間の端・全周が壁: 壁を除いた外周の寄棟は束・交差・重なり・冪等の不変条件を満たす。全周が壁は region にならず（route が none）小屋梁なし', () => {
+// 旧: 一部だけ壁（上辺の半分・下辺の一部）の寄棟も壁を除いた外周の field で、小屋梁ができた。新: 辺の途中で壁になる水下は規則で作れない形
+// （route が none・invalidField）で region にならず小屋梁なし
+test('【壁に接する寄棟】辺の全体が壁（左辺・左辺と上辺）: 壁を除いた外周の寄棟は束・交差・重なり・冪等の不変条件を満たす。一部だけ壁は規則で作れない形（route が none・invalidField）・全周が壁も none で小屋梁なし', () => {
   const rect = rc(0, 0, 9100, 5460);
   const forms = {
-    '上辺の半分が壁': [wallZone(false, 0, 0, 4550, -1)],
     '左辺の全部が壁': [wallZone(true, 0, 0, 5460, -1)],
     '左辺と上辺が壁（入隅側）': [wallZone(true, 0, 0, 5460, -1), wallZone(false, 0, 0, 9100, -1)],
-    '下辺の一部が壁': [wallZone(false, 5460, 1820, 5460, 1)],
   };
   for (const [name, zones] of Object.entries(forms)) {
     const { graph, region } = makeRouteRoof({ cells: [rect], shape: RoofShape.HIP, zeroZones: zones, rect });
     const r = assertWingInvariants(graph, region, name);
     assert.ok(r.created.length > 0, `${name}: 小屋梁ができる（検査が空振りしない）`);
     assert.deepEqual(tobibariDescs(graph), [], `${name}: 飛び梁なし`);
+  }
+  for (const [name, zones] of Object.entries({ '上辺の半分が壁': [wallZone(false, 0, 0, 4550, -1)], '下辺の一部が壁': [wallZone(false, 5460, 1820, 5460, 1)] })) {
+    assert.deepEqual(leanToDrainRoute({ shape: RoofShape.HIP, rect, rects: [rect], zeroZones: zones, tolMm: CL_OVERLAP_TOL_MM }), { kind: 'none', reason: 'invalidField' }, name);
   }
   const all = [wallZone(false, 0, 0, 9100, -1), wallZone(true, 9100, 0, 5460, 1), wallZone(false, 5460, 0, 9100, 1), wallZone(true, 0, 0, 5460, -1)];
   assert.equal(leanToDrainRoute({ shape: RoofShape.HIP, rect, rects: [rect], zeroZones: all, tolMm: CL_OVERLAP_TOL_MM }).kind, 'none', '全周が壁');
@@ -1226,7 +1242,7 @@ test('【L字の切妻・失敗系】rects が [] ・NaN・水下が無い・[]�
   for (const b of bad) {
     let r;
     assert.doesNotThrow(() => { r = autoFillWoodRoofFraming(graph, PROJECT, [b]); }, JSON.stringify(b.leanToDrains) + String(b.leanToPurlinDepthMm));
-    assert.deepEqual(r, { created: [], removed: [] });
+    assert.deepEqual(changeCounts(r), [0, 0]);
   }
   assert.equal(roofBeams(graph).length, 0);
   autoFillWoodRoofFraming(graph, PROJECT, [region]);
@@ -1270,7 +1286,7 @@ test('【L字の下屋・失敗系】rects が [] ・NaN・配列でない／lea
   for (const b of bad) {
     let r;
     assert.doesNotThrow(() => { r = autoFillWoodRoofFraming(graph, PROJECT, [b]); }, JSON.stringify(b.shape) + JSON.stringify(b.rects) + JSON.stringify(b.leanToDrains) + String(b.leanToPurlinDepthMm));
-    assert.deepEqual(r, { created: [], removed: [] });
+    assert.deepEqual(changeCounts(r), [0, 0]);
   }
   assert.equal(roofBeams(graph).length, 0);
   autoFillWoodRoofFraming(graph, PROJECT, [region]);

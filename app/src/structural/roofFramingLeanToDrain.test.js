@@ -1,7 +1,9 @@
-// L字（矩形でない）の下屋の「水下への L∞ 距離の場」（roofFramingGeometry.js の leanToDrainFraming・leanToWingsOf の drains/longDepthMm/辺の種別・
+// L字（矩形でない）の下屋の「水下だけが進む場」（roofFramingGeometry.js の leanToDrainFraming・leanToWingsOf の drains/longDepthMm/辺の種別・
 // orthogonalHipLines の firstLevelMm・roofFramingLines/roofHipDiagonals の leanToDrains）のテスト。期待値は手計算（y は下向き正）。
-// 規則: 面の高さ＝勾配×D、D＝水下（軒の辺のうち翼の流れの先のもの）への L∞ 距離。母屋の段は水下から r + k×910
-// （r＝長手方向の翼の奥行きに purlinLayoutFromRidge を当てた、軒までの残り）。隅木・谷木は2つの水下までの距離が等しい点の軌跡。
+// 規則: 面の高さ＝勾配×T、T＝水下（軒の辺のうち翼の流れの先のもの）への到達時刻（水下だけが等速で内側へ進み、壁・けらばは動かない。
+// 点から水下へ屋根の中だけを通る垂線の長さの最小）。母屋の段は水下から r + k×910
+// （r＝長手方向の翼の奥行きに purlinLayoutFromRidge を当てた、軒までの残り）。隅木・谷木は2つの水下までの到達時刻が等しい点の軌跡。
+// T が連続でない形（段違いの水下など）は規則で作れない形＝ valid:false で線・面は空（軒先の線だけ）。
 // 割付（ピッチ910・1本目の候補 [455,910]）の残り r: 奥行き1820→910、3000→725、3640→910、2000→635、4000→815。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,8 +47,13 @@ const FU = {
 };
 // 段違いの壁: 上の壁が y=0（x 0..3640）と y=1820（x 3640..5460）。水下は下辺 y=3640 の一直線
 const FSTEP = { rects: [rc(0, 0, 3640, 3640), rc(3640, 1820, 5460, 3640)], contacts: [ct(false, 0, 0, 3640, -1), ct(false, 1820, 3640, 5460, -1)] };
-// 長手の翼の奥行きが 2000（455 の倍数でない）。短い翼は 1000。壁は y=0 の一直線
+// 長手の翼の奥行きが 2000（455 の倍数でない）。短い翼は 1000。壁は y=0 の一直線（水下 y=2000 と y=1000 が段違い＝規則で作れない形）
 const F2000 = { rects: [rc(0, 0, 2000, 2000), rc(2000, 0, 4000, 1000)], contacts: [ct(false, 0, 0, 4000, -1)] };
+// 奥行きが 2000 の同じ奥行きの L字（形1a を 2000 にした形。水下は一直線の右辺と下辺・規則で作れる）。r=635
+const F2000L = { rects: [rc(0, 2000, 2000, 4000), rc(2000, 2000, 4000, 4000), rc(2000, 0, 4000, 2000)], contacts: [ct(false, 2000, 0, 2000, -1), ct(true, 2000, 0, 2000, -1)] };
+// 規則で作れる形（水下が一直線か入隅・向かい合い）と、作れない形（水下が段違い＝段の角で到達時刻が崖になる）
+const VALID_FORMS = { F1A, F1B, F5, FRT1, FU, FSTEP, F2000L };
+const INVALID_FORMS = { F2, F3, F6, F2000 };
 
 // ---- orthogonalHipLines の段の始まり（firstLevelMm） ----
 
@@ -180,21 +187,35 @@ test('段違いの壁（水下が一直線）: 面は1つで継ぎ目は出な�
   assert.deepEqual(plain(fr.faces[0].lines), plain(fr.purlins));
 });
 
-test('長手の奥行きが 455 の倍数でない（2000）: r=635。長手の水下から 635・1545、短い翼の水下（y=1000）からも同じ段（635）', () => {
-  const { fr, r, w } = fieldOf(F2000);
+test('奥行きが 455 の倍数でない（2000）の同じ奥行きの L字: r=635。水下から 635・1545 の段（右辺 x=4000・下辺 y=4000 から）', () => {
+  const { fr, r, w } = fieldOf(F2000L);
   assert.equal(r, 635, '奥行き 2000 → 455 始まり: 455・1365（残り 635）');
-  assert.deepEqual(w.drains, [DR(false, 1000, 2000, 4000, 1), DR(false, 2000, 0, 2000, 1)]);
-  assert.deepEqual(fr.purlins.filter(l => !l.isVertical).map(l => [l.coord, l.levelMm]), [[365, 635], [455, 1545], [1365, 635]],
-    '長手の水下 y=2000 から 635（y=1365）・1545（y=455）、短い翼の水下 y=1000 から 635（y=365）。段は全て r + k×910');
-  for (const l of fr.purlins) assert.ok([635, 1545].includes(l.levelMm), `段 ${l.levelMm}`);
+  assert.deepEqual(w.drains, [DR(true, 4000, 0, 4000, 1), DR(false, 4000, 0, 4000, 1)]);
+  assert.equal(fr.valid, true);
+  assert.deepEqual(fr.diagonals, [DG('hip', 4000, 4000, 2000, 2000)], '外の角 (4000,4000) から入隅の壁の角 (2000,2000) まで');
+  assert.deepEqual(plain(fr.purlins), [ln(false, 2455, 0, 2455), ln(false, 3365, 0, 3365), ln(true, 2455, 0, 2455), ln(true, 3365, 0, 3365)],
+    '水下 x=4000・y=4000 から 635（3365）・1545（2455）。段は全て r + k×910。壁の上（y=2000 の x<2000・x=2000 の y<2000）は捨てる');
+  assert.deepEqual(fr.purlins.map(l => l.levelMm).sort((a, b) => a - b), [635, 635, 1545, 1545]);
 });
 
-test('段違いの水下（形6。屋内に接しない L字）: 長手（奥行き 3000）の割付 r=725 を短い翼の水下からも使う。浅い翼の水下の端から谷木、深い翼の外の角から隅木', () => {
-  const { fr, r } = fieldOf(F6);
-  assert.equal(r, 725);
-  assert.deepEqual(fr.diagonals, [DG('hip', 4000, 4500, 2000, 2500), DG('valley', 4000, 3000, 2500, 1500)]);
-  assert.deepEqual(fr.faces.map(f => f.drain), [DR(false, 3000, 4000, 6000, 1), DR(false, 4500, 2000, 4000, 1)], '水下は同長（2000）。座標の小さい方が先');
-  assert.deepEqual(fr.purlins.filter(l => !l.isVertical && l.coord === 3775).map(l => [l.lo, l.hi]), [[2000, 3275]], '深い翼の水下 y=4500 から 725 → y=3775');
+// 旧: 長手の奥行きが 2000・短い翼 1000 の L字（形 2000）は、長手の水下から 635・1545、短い翼の水下からも同じ段（635）の母屋が出た。
+// 新: 水下 y=2000 と y=1000 は段違い。段の角（x=2000）で、壁 y=0 の側の点は近い水下 y=1000 へ、遠い点は水下 y=2000 へ流れ、
+// 到達時刻が崖になる（連続しない）ので規則で作れない形（valid:false・線なし）
+test('段違いの水下（形6・形2000・形2・形3。屋内に接しない／壁が段違い）は規則で作れない形＝ valid:false。線・面は空で、崖の線分が invalidAt に入る', () => {
+  const cliffs = {
+    F6: { kind: 'cliff', isVertical: true, coord: 4000, lo: 1500, hi: 3000 },
+    F2000: { kind: 'cliff', isVertical: true, coord: 2000, lo: 0, hi: 1000 },
+    F2: { kind: 'cliff', isVertical: true, coord: 3640, lo: 0, hi: 1820 },
+    F3: { kind: 'cliff', isVertical: true, coord: 1820, lo: 0, hi: 1820 },
+  };
+  assert.deepEqual(Object.keys(cliffs).sort(), Object.keys(INVALID_FORMS).sort(), '前提: 作れない形を全部見る');
+  for (const [name, form] of Object.entries(INVALID_FORMS)) {
+    const { fr, r } = fieldOf(form);
+    assert.ok(r > 0, `${name}: 前提: 母屋の段の基準は求まる（水下の側は正常）`);
+    assert.equal(fr.valid, false, name);
+    assert.deepEqual([fr.ridges, fr.purlins, fr.diagonals, fr.faces], [[], [], [], []], `${name}: 線・面は空`);
+    assert.deepEqual(fr.invalidAt.filter(x => x.kind === 'cliff' && x.isVertical === cliffs[name].isVertical && x.coord === cliffs[name].coord), [cliffs[name]], `${name}: 崖の線分`);
+  }
 });
 
 test('向かい合う水下（2本）: 棟木が中央に出る。母屋は各水下から 910。面は水下ごと', () => {
@@ -228,29 +249,39 @@ test('矩形の屋根範囲は矩形の片流れの式と一致する（R1: 上�
 
 test('面: 母屋・棟木はちょうど1つの面に属する。面の lines は sortLines 済みで、全面を合わせると purlins と ridges を合わせたものと一致する（全形）', () => {
   const byLine = (a, b) => (a.isVertical === b.isVertical ? 0 : (a.isVertical ? 1 : -1)) || a.coord - b.coord || a.lo - b.lo;
-  for (const [name, form] of Object.entries({ F1A, F1B, F2, F3, F5, F6, FRT1, FU, FSTEP, F2000 })) {
+  let lines = 0;
+  for (const [name, form] of Object.entries(VALID_FORMS)) {
     const { fr } = fieldOf(form);
+    assert.equal(fr.valid, true, name);
     assert.deepEqual(fr.faces.flatMap(f => f.lines).sort(byLine), [...fr.purlins, ...fr.ridges].sort(byLine), name);
     for (const f of fr.faces) assert.deepEqual(f.lines, [...f.lines].sort(byLine), `${name}: lines は sortLines 済み`);
+    // 水下だけが進む場では、面の中の線は全て水下と同じ向き（流れは面の中で一定）
+    for (const f of fr.faces) for (const l of f.lines) assert.equal(l.isVertical, f.lineIsVertical, `${name}: 面の線の向きは水下と同じ`);
+    lines += fr.purlins.length + fr.ridges.length;
   }
+  assert.ok(lines >= 20, `検査が空振りしない（線 ${lines} 本）`);
 });
 
 // ---- 入口（roofFramingLines・roofHipDiagonals）と leanToDrainFraming の一致 ----
 
 test('入口: roofFramingLines の母屋・棟木と roofHipDiagonals の斜め線は leanToDrainFraming と一致する（全形）。ピッチ・段の始まりは入口が purlinLayoutFromRidge で導く', () => {
-  for (const [name, form] of Object.entries({ F1A, F1B, F2, F3, F5, F6, FRT1, FU, FSTEP, F2000 })) {
+  let compared = 0;
+  for (const [name, form] of Object.entries({ ...VALID_FORMS, ...INVALID_FORMS })) {
     const { fr, w } = fieldOf(form);
+    compared += fr.purlins.length + fr.diagonals.length;
     const base = { rect: null, rects: form.rects, shape: RoofShape.MONO, ridgeIsVertical: null, highSide: null, purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: TOL };
     assert.deepEqual(roofFramingLines({ ...base, leanToDrains: w.drains, leanToPurlinDepthMm: w.longDepthMm }), { ridges: fr.ridges, purlins: fr.purlins }, name);
     assert.deepEqual(roofHipDiagonals({ rect: null, rects: form.rects, shape: RoofShape.MONO, leanToDrains: w.drains, tolMm: TOL }), fr.diagonals, name);
   }
+  assert.ok(compared >= 20, `検査が空振りしない（線 ${compared} 本。作れない形は空どうしで一致）`);
 });
 
 // ---- 失敗系 ----
 
 test('【失敗系】leanToDrainFraming: 水下が空・使える矩形が無いときは全て空（例外にしない）', () => {
-  const empty = { ridges: [], purlins: [], diagonals: [], faces: [] };
+  const empty = { ridges: [], purlins: [], diagonals: [], faces: [], valid: false, invalidAt: [] }; // 水下が空・矩形が無いは屋根面が無い＝ valid:false（崖ではない）
   const ok = { rects: F1A.rects, drains: leanToWingsOf({ ...F1A, tolMm: TOL }).drains, pitchMm: 910, firstLevelMm: 910, tolMm: TOL };
+  assert.equal(leanToDrainFraming(ok).valid, true, '対照: 正常な入力は valid:true');
   assert.deepEqual(leanToDrainFraming({ ...ok, drains: [] }), empty, '水下なし');
   assert.deepEqual(leanToDrainFraming({ ...ok, rects: [] }), empty, '矩形なし');
   assert.deepEqual(leanToDrainFraming({ ...ok, rects: [rc(0, 0, 0.2, 100)] }), empty, '幅が許容差以下');

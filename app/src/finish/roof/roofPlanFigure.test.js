@@ -114,13 +114,18 @@ test('roofPlanFigure: U字の片流れ（向かい合う水下）は棟木が出
   assert.deepEqual(prims.find(p => p.role === 'ridge').points, [2730, 3640, 2730, 4550], '平面の棟木は伏図と同じ（けらばの外形線へは延びない端）');
 });
 
-test('roofPlanFigure: L字の片流れ（屋内に接しない。両翼が同じ壁で水下が段違い）は水下への距離の場の継ぎ目＝深い翼の外の角から隅木・浅い翼の水下の端から谷木', () => {
+// 旧（〜2026-10-05）: 水下が段違いの L字の片流れは、水下への L∞ 距離の場の継ぎ目として隅木1・谷木1が出た。
+// 新（2026-10-05 裁定「規則どおりの屋根が存在しない形は軒先の線だけ」）: 水下だけが進む屋根面は、段違いの水下の段の角で
+// 到達時刻が崖になる（連続しない）ので作れない形＝外形線だけ（棟木・隅木・谷木・傾斜ラベルを出さない）
+test('roofPlanFigure: L字の片流れ（屋内に接しない。両翼が同じ壁で水下が段違い）は規則で作れない形＝軒先の線だけ。隅木・谷木・傾斜ラベルを出さない', () => {
   const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
   g.roof([[1, 1], [2, 1], [1, 2]]);
   const prims = roofPlanFigure(g.graph);
-  assert.deepEqual(countByRole(prims), { outline: 1, ridge: 0, hip: 1, valley: 1 });
-  assert.deepEqual(prims.find(p => p.role === 'hip').points, [4455, 4955, 2000, 2500], '外の角 (4000,4500) を軒先の角 (4455,4955) まで');
-  assert.deepEqual(prims.find(p => p.role === 'valley').points, [4455, 3455, 2500, 1500], '入隅 (4000,3000) を軒先の入隅の角 (4455,3455) まで（平面は谷木も延ばす）');
+  assert.deepEqual(countByRole(prims), { outline: 1, ridge: 0, hip: 0, valley: 0 });
+  const [region] = leanToPlanRegions(g.graph);
+  assert.equal(region.outlineOnly, true, '水下が段違い＝region は外形線だけの補完 region');
+  assert.deepEqual(region.planDrains, [], 'ラベルの水下も無い');
+  assert.equal(arrowsOf(roofPlanFigureAll(g.graph)).length, 0, '傾斜ラベルも出ない');
 });
 
 
@@ -456,28 +461,39 @@ test('roofPlanFigure: 壁に接する寄棟（roof-test6 型）は棟木1・隅�
   assert.equal(arrowsOf(pb).length, 4, '面は上・右・下・左の4つ（壁へ下る面は無い）');
 });
 
-test('T3: 上が全部壁・下の左半分が壁の切妻は、同じ壁配置で高い側＝上を指定した片流れと、region・線・ラベルが完全一致', () => {
-  const build = shape => {
+test('T3: 上が全部壁の切妻は、同じ壁配置で高い側＝上を指定した片流れと、region・線・ラベルが完全一致。下の左半分も壁（辺の途中で壁になる水下）なら規則で作れない形＝どちらも軒先の線だけ', () => {
+  const build = (shape, bottomHalfWall) => {
     const g = makeGrid([0, 4000, 8000], [0, 4000, 8000, 12000]);
     g.interior([[0, 0], [1, 0]]); // 屋根（y4000..8000）の上辺 y=4000 の全体が屋内
-    g.interior([[0, 2]]); // 下辺 y=8000 の左半分（x0..4000）が屋内
+    if (bottomHalfWall) g.interior([[0, 2]]); // 下辺 y=8000 の左半分（x0..4000）が屋内
     const room = g.roof([[0, 1], [1, 1]], shape);
     if (shape === RoofShape.MONO) room.roofSpec.setField('highSide', 'top');
     return g.graph;
   };
   const strip = prims => prims.map(p => ({ ...p, key: undefined }));
-  const gable = build(RoofShape.GABLE);
-  const mono = build(RoofShape.MONO);
+  // 上だけが壁: 下の辺は壁に接さない＝矩形の片流れ（rect の経路）。切妻は壁を水上にした片流れと同じ
+  const gable = build(RoofShape.GABLE, false);
+  const mono = build(RoofShape.MONO, false);
   const [rg] = leanToPlanRegions(gable);
   const [rm] = leanToPlanRegions(mono);
   assert.equal(rg.shape, 'mono');
-  assert.deepEqual({ ...rg, key: 0 }, { ...rm, key: 0 }, 'region（母屋の段の基準・水下・外形線）が一致');
+  assert.deepEqual({ ...rg, key: 0 }, { ...rm, key: 0 }, 'region（水下・外形線）が一致');
   const fg = roofPlanFigureAll(gable);
   assert.ok(arrowsOf(fg).length > 0 && fg.some(p => p.role === 'outline'), '前提: 線とラベルがある');
   assert.deepEqual(strip(fg), strip(roofPlanFigureAll(mono)), '線・ラベルが一致');
+  // 下辺の左半分も壁: 低い側（下の辺）の途中で壁になる水下＝水下だけが進む屋根面が連続しない。切妻でも片流れでも軒先の線だけ
+  for (const shape of [RoofShape.GABLE, RoofShape.MONO]) {
+    const g = build(shape, true);
+    const [region] = leanToPlanRegions(g);
+    assert.equal(region.outlineOnly, true, `${shape}: 外形線だけの region`);
+    const figure = roofPlanFigureAll(g);
+    const counts = countByRole(figure.filter(p => p.kind === 'line'));
+    assert.ok(counts.outline >= 1 && counts.ridge === 0 && counts.hip === 0 && counts.valley === 0, `${shape}: 線は外形線だけ（壁の部分で分かれて複数本）: ${JSON.stringify(counts)}`);
+    assert.equal(arrowsOf(figure).length, 0, `${shape}: ラベルなし`);
+  }
 });
 
-test('roofPlanFigure: 壁（屋内に接する辺）へ向かう矢印は出ない。全形状・壁の4方向で、壁の外向きと同じ向きの矢印が0。寄棟は壁を除く3面。一部だけ壁の辺は壁でない部分の面だけ', () => {
+test('roofPlanFigure: 壁（屋内に接する辺）へ向かう矢印は出ない。全形状・壁の4方向で、壁の外向きと同じ向きの矢印が0。寄棟は壁を除く3面。一部だけ壁の辺（辺の途中で壁になる水下）は規則で作れない形＝ラベルなし', () => {
   const dirOf = a => [Math.sign(a.points[2] - a.points[0]), Math.sign(a.points[3] - a.points[1])].join(',');
   // 屋根（8000×4000 か 4000×8000）の1辺の全体が屋内に接する。壁へ向かう向き＝その辺の外向き
   const sides = {
@@ -497,14 +513,12 @@ test('roofPlanFigure: 壁（屋内に接する辺）へ向かう矢印は出な�
       assert.equal(arrows.length, faceCounts[shape], `${side}の壁・${shape ?? '片流れ（自動）'}: 面の数（片流れ・壁と平行な切妻は壁を水上にした1面・寄棟は壁を除く3面）`);
     }
   }
+  // 旧: 一部だけ接する辺は壁でない部分（x 4000..8000）が水下として残り4面。新: 辺の途中で壁になる水下は、水下だけが進む屋根面の
+  // 到達時刻が連続しない（崖）ので規則で作れない形＝軒先の線だけ（ラベルなし）
   const part = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
   part.interior([[0, 0]]); // 上の辺の半分（x 0..4000）だけ屋内に接する
   part.roof([[0, 1], [1, 1]], RoofShape.HIP);
-  const partArrows = arrowsOf(roofPlanFigureAll(part.graph));
-  assert.equal(partArrows.length, 4, '一部だけ接する辺は、壁でない部分（x 4000..8000）が水下として残る＝4面');
-  const up = partArrows.filter(a => dirOf(a) === '0,-1');
-  assert.equal(up.length, 1);
-  assert.ok(up[0].points[0] >= 4000, `上向きの矢印は壁（x 0..4000）でない側（x ≥ 4000）にある: x=${up[0].points[0]}`);
+  assert.equal(arrowsOf(roofPlanFigureAll(part.graph)).length, 0, '一部だけ接する辺（辺の途中で壁になる水下）は規則で作れない形＝ラベルなし');
   const none = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
   none.roof([[0, 1], [1, 1]], RoofShape.HIP);
   assert.equal(arrowsOf(roofPlanFigureAll(none.graph)).length, 4, '壁に接しない寄棟は4面（今までどおり）');

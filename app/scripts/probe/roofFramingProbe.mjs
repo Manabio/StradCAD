@@ -25,7 +25,7 @@
 //   超えたら違反）。棟木の両端の束の検査は矩形の寄棟だけ。
 // 【L字の下屋（E1b・E2b。翼ごとの片流れ・面ごとの小屋梁）】leanToFramingRegions・leanToFraming は L字の片流れの下屋も region
 //   （rect:null・leanToWings・leanToDrains）にする。描画の内訳（翼の表・水下の表・母屋の段の基準・母屋と斜め線の延長前→後・
-//   水下の場の計算時間・外形線）は水下への L∞ 距離の場（leanToDrainFraming）。小屋梁も同じ場の面（水下ごと）の母屋を支える。
+//   水下の場の妥当性・計算時間・外形線）は水下だけが進む場（到達時刻 T。leanToDrainFraming）。小屋梁も同じ場の面（水下ごと）の母屋を支える。
 //   構造の検査（inspectLeanTo）: 面（水下ごと）・棟木と母屋・
 //   小屋梁の一覧（host 名つき）・**全母屋・棟木の束の最大間隔（1820 超は NG。
 //   「支えの無い端の区間」の除外は設けない）**・小屋梁と他の梁の内部での交差（NG）・同じ軸で重なる小屋梁（NG）・取り残し
@@ -163,7 +163,7 @@ function printLeanToDrawing(region, F, ms) {
     const ext = w.domain.filter(d => d.entry !== 'direct').map(d => `x ${d.x1}..${d.x2} × y ${d.y1}..${d.y2}（入り口 ${d.entry}）`);
     console.log(`  W${i + 1} 流れ=${w.highSide} 壁 ${lineName(w.wallEdge)} 奥行き=${w.depthMm} rect x ${r.x1}..${r.x2} × y ${r.y1}..${r.y2}  延長: ${ext.join(' / ') || '-'}`);
   });
-  // 水下への L∞ 距離の場（leanToDrainFraming）。水下の表・母屋の段の基準（長手方向の翼の奥行き → 軒までの残り r）・計算時間
+  // 水下だけが進む場（到達時刻 T。leanToDrainFraming）。水下の表・母屋の段の基準（長手方向の翼の奥行き → 軒までの残り r）・計算時間
   const drainName = d => `${d.isVertical ? 'x' : 'y'}=${d.coord} ${d.lo}..${d.hi}（外側 ${d.isVertical ? (d.outward > 0 ? '右' : '左') : (d.outward > 0 ? '下' : '上')}）`;
   console.log(`--- 水下 ${region.leanToDrains.length} 本: ${region.leanToDrains.map(drainName).join(' / ')} ---`);
   const { eaveGapMm } = purlinLayoutFromRidge({ halfSpanMm: region.leanToPurlinDepthMm, pitchMm: F.purlinPitchMm, startOffsetsMm: F.purlinStartOffsetsMm, tolMm: tol });
@@ -171,6 +171,8 @@ function printLeanToDrawing(region, F, ms) {
   const t0 = performance.now();
   const field = leanToDrainFraming({ rects: region.rects, drains: region.leanToDrains, pitchMm: F.purlinPitchMm, firstLevelMm: eaveGapMm, tolMm: tol });
   const firstMs = performance.now() - t0;
+  // 水下だけが進む屋根面の妥当性（region があるのは作れる形だけ。false なら leanToDrainRoute が none にするので出ないはず）
+  console.log(`  水下の場の妥当性 valid=${field.valid}${field.valid ? '' : `（規則で作れない形 — NG。invalidAt=${JSON.stringify(field.invalidAt)}）`}`);
   let minMs = Infinity;
   for (let k = 0; k < 20; k++) {
     const t1 = performance.now();

@@ -1,5 +1,5 @@
 // L字（矩形でない）の切妻の下屋（腕ごとに棟木）の軒・けらばの決め方（roofFramingGeometry.js gableArmDrainsOf）と、その水下を
-// leanToDrainFraming（水下への L∞ 距離の場）に渡した棟木・母屋・隅木・谷木・面のテスト。期待値は手計算（y は下向き正）。
+// leanToDrainFraming（水下だけが進む場）に渡した棟木・母屋・隅木・谷木・面のテスト。期待値は手計算（y は下向き正）。
 // 規則: 屋根範囲の外周の辺ごとに、辺の幅いっぱいのまま内側へ掃いて一部でも外周に当たるまでの距離 L を求め、辺の長さ w に対し
 // L > w＋tol ならけらば（腕の端）、それ以外は軒（水下）。同じ長さは軒。長手方向の腕＝けらばの L が最大の腕（同じなら幅が広い方）。
 // 母屋の段の始まり r＝その腕の半スパンに purlinLayoutFromRidge を当てた残り（割付: ピッチ910・1本目の候補 [455,910]）。
@@ -233,20 +233,25 @@ test('場: 奥行きが 455 の倍数でない腕（半スパン 1000＝r 545。
 
 // ---- 既知の限界（受容）の固定。限界が解消されたら赤になる（今の値を固定。structural-model.md「L字の切妻の既知の限界」） ----
 
-test('【既知の限界（受容）⑤】腕の長さが違うコの字: 短い腕の先端（けらば）が寄棟のように終わる。先端の両角から隅木が出て、棟木は先端まで来ず、三角の面にはラベルが出ない（別の腕の水下の帯が先端の外側を覆う）', () => {
+// 旧（既知の限界⑤）: 腕の長さが違うコの字で、短い腕の先端（けらば）が寄棟のように終わる（先端の両角から隅木が出て、棟木は先端まで来ず、
+// 三角の面にラベルが出ない。別の腕の水下の帯が先端の外側を覆うため）。新（2026-10-05 水下だけが進む屋根面）: けらばは動かないので、
+// 短い腕の先端は切妻のまま終わる（棟木が先端まで来る）。解消
+test('腕の長さが違うコの字: 短い腕の先端（けらば）は切妻のまま終わる。棟木3（x=910・y=4550・x=8190）・隅木2・谷木2・母屋なし。先端の角から隅木は出ない', () => {
   const SHORT = [rc(0, 3640, 9100, 5460), rc(0, 0, 1820, 3640), rc(7280, 1820, 9100, 3640)]; // 右の腕が 1820 短い
-  const EQUAL = [rc(0, 3640, 9100, 5460), rc(0, 0, 1820, 3640), rc(7280, 0, 9100, 3640)];
   assert.deepEqual(gablesOf(SHORT), ['y=0', 'y=1820'], '前提: 短い腕の先端 y=1820[7280..9100] は正しくけらばに分類される');
   const { g, fr } = fieldOf(SHORT);
   assert.equal(g.drains.length, 6);
-  const diags = fr.diagonals.map(d => `${d.kind[0]}(${d.x1},${d.y1})->(${d.x2},${d.y2})`);
-  assert.ok(diags.includes('h(7280,1820)->(8190,2730)') && diags.includes('h(9100,1820)->(8190,2730)'), `けらばの両角から隅木が出る: ${diags}`);
-  assert.deepEqual(plain(fr.ridges).filter(l => l.isVertical && l.coord === 8190), [ln(true, 8190, 2730, 4550)], '棟木 x=8190 はけらば（y=1820）まで来ず 2730 で止まる');
-  assert.equal(drainFaceAnchors({ rects: SHORT, drains: g.drains, tolMm: TOL }).length, g.drains.length, 'ラベルの数＝水下の数（三角の面には水下が無いのでラベルが出ない）');
-  // 対照: 腕の長さが同じなら先端の角から隅木は出ず、棟木は先端まで来る
-  const eq = fieldOf(EQUAL);
-  assert.equal(eq.fr.diagonals.filter(d => d.y1 === 0 || d.y1 === 1820).length, 0, '対照: 先端の角から隅木は出ない');
-  assert.deepEqual(plain(eq.fr.ridges).filter(l => l.isVertical && l.coord === 8190), [ln(true, 8190, 0, 4550)], '対照: 棟木は先端 y=0 まで来る');
+  assert.equal(fr.valid, true);
+  assert.deepEqual(plain(fr.ridges), [ln(false, 4550, 910, 8190), ln(true, 910, 0, 4550), ln(true, 8190, 1820, 4550)], '棟木 x=8190 は先端 y=1820 まで来る');
+  assert.deepEqual(fr.purlins, [], '幅 1820 で段 910 は棟木と重なるので母屋なし');
+  assert.deepEqual(fr.diagonals, [
+    DG('hip', 0, 5460, 910, 4550), DG('hip', 9100, 5460, 8190, 4550),
+    DG('valley', 1820, 3640, 910, 4550), DG('valley', 7280, 3640, 8190, 4550),
+  ], '隅木は下の両角から・谷木は入隅から。けらばの先端の角（y=0・y=1820）から斜め線は出ない');
+  assert.equal(drainFaceAnchors({ rects: SHORT, drains: g.drains, tolMm: TOL }).length, g.drains.length, 'ラベルの数＝水下の数');
+  // 対照: 腕の長さが同じでも同じ形（棟木 x=8190 は先端 y=0 まで）
+  const eq = fieldOf([rc(0, 3640, 9100, 5460), rc(0, 0, 1820, 3640), rc(7280, 0, 9100, 3640)]);
+  assert.deepEqual(plain(eq.fr.ridges).filter(l => l.isVertical && l.coord === 8190), [ln(true, 8190, 0, 4550)], '対照: 腕が同じ長さなら棟木は先端 y=0 まで');
 });
 
 test('【既知の限界（受容）④】腕の長さ＝幅−1mm の形は分類は連続（水下4・けらば2）だが、場が棟木を出さない（leanToDrainField の既存の癖）。＋1mm では棟木が出る', () => {

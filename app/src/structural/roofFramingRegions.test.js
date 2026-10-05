@@ -11,7 +11,6 @@ import {
   leanToPlanRegions,
 } from './roofFramingRegions.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
-import { roofFramingLines, roofHipDiagonals } from './roofFramingGeometry.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { buildRoofLayout } from '../finish/roofTestFixtures.js';
 import { LodLevel } from '../viewport.js';
@@ -194,28 +193,37 @@ test('【C2e-2・失敗系】mainRoofFramingRegion: 矩形でない建物範囲�
 
 // E1b: L字の下屋は「翼ごとの片流れ」の region になる（C2e-2 の「region にならない」から変更）。E2b: 描画用の leanToFramingRegions だけでなく
 // 構造側の leanToFraming・leanToFramingCellKeys も L字を含む（外周の梁・床梁のガード・小屋梁が同じ region を使う）。
-test('【E1b・E2b】L字の下屋（屋内に接しない。形6）は翼2つの region（rect:null・shape:mono）。外形線は全辺 455。構造側（leanToFraming・leanToFramingCellKeys）にも同じ region・全セルが入る', () => {
-  const l = makeGrid(XS, YS);
-  const r = l.roof([[1, 1], [2, 1], [1, 2]]); // L字の下屋。外接 4000×3000（横長）→ 仮の壁は上（y=1500）
+// 旧（〜2026-10-05）: L字の下屋（屋内に接しない。水下が段違いの形6）は翼2つの region。新: 水下が段違いの形は規則で作れない形で region にならない
+// （次のテスト）。ここは水下が一直線の L字（水下 y=3000 の1本。翼は延長を持つ1つ）で region の中身を固定する
+test('【E1b・E2b】L字の下屋（屋内に接しない。水下が一直線）は翼1つ（延長あり）の region（rect:null・shape:mono）。外形線は全辺 455。構造側（leanToFraming・leanToFramingCellKeys）にも同じ region・全セルが入る', () => {
+  const l = makeGrid([0, 2000, 4000], [0, 1500, 3000]);
+  const r = l.roof([[0, 1], [1, 1], [1, 0]]); // L字の下屋（右の列が上へ伸びる）。外接 4000×3000（横長）→ 仮の壁は上（y=0）
   const project = woodProject();
-  const rects = [{ x1: 2000, y1: 1500, x2: 4000, y2: 3000 }, { x1: 4000, y1: 1500, x2: 6000, y2: 3000 }, { x1: 2000, y1: 3000, x2: 4000, y2: 4500 }];
+  const rects = [{ x1: 0, y1: 1500, x2: 2000, y2: 3000 }, { x1: 2000, y1: 1500, x2: 4000, y2: 3000 }, { x1: 2000, y1: 0, x2: 4000, y2: 1500 }];
   assert.deepEqual(leanToFramingRegions(l.graph, project), [{
     key: `lean:${r.id}`, rect: null, rects, shape: 'mono', ridgeIsVertical: null, highSide: null,
     leanToWings: [
-      { highSide: 'top', wallCoord: 1500, wallEdge: { isVertical: false, coord: 1500, lo: 2000, hi: 4000, outward: -1 }, depthMm: 3000,
-        rect: { x1: 2000, y1: 1500, x2: 4000, y2: 4500 }, domain: [{ x1: 2000, y1: 1500, x2: 4000, y2: 4500, entry: 'direct' }] },
-      { highSide: 'top', wallCoord: 1500, wallEdge: { isVertical: false, coord: 1500, lo: 4000, hi: 6000, outward: -1 }, depthMm: 1500,
-        rect: { x1: 4000, y1: 1500, x2: 6000, y2: 3000 }, domain: [{ x1: 4000, y1: 1500, x2: 6000, y2: 3000, entry: 'direct' }] },
+      { highSide: 'top', wallCoord: 0, wallEdge: { isVertical: false, coord: 0, lo: 2000, hi: 4000, outward: -1 }, depthMm: 3000,
+        rect: { x1: 2000, y1: 0, x2: 4000, y2: 3000 },
+        domain: [{ x1: 2000, y1: 0, x2: 4000, y2: 3000, entry: 'direct' }, { x1: 0, y1: 1500, x2: 2000, y2: 3000, entry: 'right' }] },
     ],
     leanToUnassigned: [],
-    // 水下（流れの先の辺。深い翼の下辺 y=4500 と浅い翼の下辺 y=3000）と、母屋の段の基準（長手方向の翼＝水下が同長なら番号の小さい翼の奥行き 3000）
-    leanToDrains: [{ isVertical: false, coord: 3000, lo: 4000, hi: 6000, outward: 1 }, { isVertical: false, coord: 4500, lo: 2000, hi: 4000, outward: 1 }],
+    // 水下（流れの先の辺。右の列の下辺と左の腕の下辺は一直線 y=3000 の1本）と、母屋の段の基準（長手方向の翼の奥行き 3000）
+    leanToDrains: [{ isVertical: false, coord: 3000, lo: 0, hi: 4000, outward: 1 }],
     leanToPurlinDepthMm: 3000,
-    // 屋内に接しないので出幅 0 の区間は無い。上の辺は軒・左右の縦の辺はけらば（既定は同じ 455）
-    edges: [E(false, 1500, 2000, 6000, -1, 455), E(true, 6000, 1500, 3000, 1, 455), E(false, 3000, 4000, 6000, 1, 455),
-      E(true, 4000, 3000, 4500, 1, 455), E(false, 4500, 2000, 4000, 1, 455), E(true, 2000, 1500, 4500, -1, 455)],
-    outline: [{ points: [6455, 1045, 6455, 3455, 4455, 3455, 4455, 4955, 1545, 4955, 1545, 1045] }],
+    // 屋内に接しないので出幅 0 の区間は無い（既定は軒・けらばとも 455）
+    edges: [E(false, 0, 2000, 4000, -1, 455), E(true, 4000, 0, 3000, 1, 455), E(false, 3000, 0, 4000, 1, 455),
+      E(true, 0, 1500, 3000, -1, 455), E(false, 1500, 0, 2000, -1, 455), E(true, 2000, 0, 1500, -1, 455)],
+    outline: [{ points: [4455, -455, 4455, 3455, -455, 3455, -455, 1045, 1545, 1045, 1545, -455] }],
   }]);
+  // 水下が段違いの L字（形6）は規則で作れない形＝ region なし（構造側のセルにも入らない。外形線だけの補完 region は平面用）
+  const step = makeGrid(XS, YS);
+  step.roof([[1, 1], [2, 1], [1, 2]]);
+  assert.deepEqual(leanToFramingRegions(step.graph, project), [], '水下が段違い＝作れない形');
+  assert.equal(leanToFramingCellKeys(step.graph, project).size, 0);
+  const [stepPlan] = leanToPlanRegions(step.graph);
+  assert.equal(stepPlan.outlineOnly, true, '平面は軒先の線だけの補完 region');
+  assert.deepEqual(stepPlan.planDrains, []);
   // E2b で書き換え（旧: size 0・regions []。L字は構造側に入らなかった）。構造側は region と全3セルを持つ。
   assert.equal(leanToFramingCellKeys(l.graph, project).size, 3, 'L字の3セルは小屋組の対象セル（自階単独ゲート・床梁のガードが効く）');
   assert.deepEqual([...new Set(leanToFramingCellKeys(l.graph, project).values())], [`lean:${r.id}`], 'セルの値は region の key');
@@ -244,12 +252,12 @@ test('【E1b】L字の下屋が屋内に接する（形1a。出隅の回り込�
 // 2026-10-05: 明示の寄棟の L字も水下の場の region になった（壁を除いた外周が水下。伏図の小屋梁・外周の梁も出す）。次の【L字の寄棟・region】
 test('【E1b・失敗系】L字の下屋のうち、陸屋根・棟違いは region にならない。非在来も空', () => {
   for (const shape of [RoofShape.FLAT, RoofShape.STAGGERED]) {
-    const l = makeGrid(XS, YS);
-    l.roof([[1, 1], [2, 1], [1, 2]]).roofSpec.setField('shape', shape);
+    const l = makeGrid([0, 2000, 4000], [0, 1500, 3000]);
+    l.roof([[0, 1], [1, 1], [1, 0]]).roofSpec.setField('shape', shape);
     assert.deepEqual(leanToFramingRegions(l.graph, woodProject()), [], `明示の ${shape}`);
   }
-  const l = makeGrid(XS, YS);
-  l.roof([[1, 1], [2, 1], [1, 2]]);
+  const l = makeGrid([0, 2000, 4000], [0, 1500, 3000]); // 水下が一直線の L字（水下が段違いの形は規則で作れず region にならない）
+  l.roof([[0, 1], [1, 1], [1, 0]]);
   for (const key of ['RC造(ラーメン)', 'S造', UNSPECIFIED_STRUCTURE]) assert.deepEqual(leanToFramingRegions(l.graph, woodProject(key)), [], key);
   assert.equal(leanToFramingRegions(l.graph, woodProject()).length, 1, '前提: 在来なら region がある');
 });
@@ -356,9 +364,10 @@ test('【切妻の L字・失敗系】構造ゲート: 在来木造でなけれ�
 });
 
 test('【E1b】L字の下屋は明示の highSide を使わない（翼ごとに壁で決まる）', () => {
-  const l = makeGrid(XS, YS);
-  const r = l.roof([[1, 1], [2, 1], [1, 2]]);
+  const l = makeGrid([0, 2000, 4000], [0, 1500, 3000]);
+  const r = l.roof([[0, 1], [1, 1], [1, 0]]); // 水下が一直線の L字（段違いの形は region にならない）
   const before = leanToFramingRegions(l.graph, woodProject());
+  assert.equal(before.length, 1, '前提: region がある');
   r.roofSpec.setField('highSide', 'bottom');
   assert.deepEqual(leanToFramingRegions(l.graph, woodProject()), before);
   assert.equal(before[0].highSide, null);
@@ -504,7 +513,11 @@ test('【D1】leanToFramingRegions: 下屋の辺が一部だけ屋内に接す�
   const r2 = g2.roof([[1, 1], [2, 1]]);
   r2.roofSpec.setField('shape', RoofShape.HIP);
   r2.roofSpec.setField('eaveOverhangMm', 600);
-  const [part] = leanToFramingRegions(g2.graph, project);
+  // 辺の途中で壁になる水下（上の辺の半分だけ屋内に接する寄棟）は規則で作れない形＝伏図の region なし。外形線だけの補完 region（平面用）が
+  // 同じ edges・外形線を持つ
+  assert.deepEqual(leanToFramingRegions(g2.graph, project), []);
+  const [part] = leanToPlanRegions(g2.graph);
+  assert.equal(part.outlineOnly, true);
   assert.deepEqual(part.edges, [
     E(false, 1500, 2000, 4000, -1, 0), E(false, 1500, 4000, 6000, -1, 600), // 上の辺: 屋内に接する 2000..4000 は 0、残りは 600
     E(true, 6000, 1500, 3000, 1, 600), E(false, 3000, 2000, 6000, 1, 600), E(true, 2000, 1500, 3000, -1, 600),
@@ -829,56 +842,48 @@ test('【平面】leanToPlanRegions: 明示の寄棟の L字は rect:null・rect
   assert.deepEqual(leanToFramingRegions(l.graph, woodProject()).map(r => r.key), [plan.key]);
 });
 
-test('自動の高い側は屋内に接する長さで決まる（隣接の長さ）: 明示の高い側（左）の低い側（右）が全部壁なら、より長く接する右へ読み替え、残る左の一部の壁を除く', () => {
+test('自動の高い側は屋内に接する長さで決まる（隣接の長さ）: 明示の高い側（左）の低い側（右）が全部壁なら、より長く接する右へ読み替える。残る左が一部だけ壁なら規則で作れない形', () => {
   const g = makeGrid(XS, YS);
-  g.interior([[0, 0]]); // 屋根（x2000..4000 × y0..3000）の左辺の y0..1500（長さ 1500）に接する
   g.interior([[2, 0], [2, 1]]); // 右辺の全体（長さ 3000）に接する
-  const room = g.roof([[1, 0], [1, 1]]);
+  const room = g.roof([[1, 0], [1, 1]]); // 屋根 x2000..4000 × y0..3000
   room.roofSpec.setField('highSide', 'left');
   const [region] = leanToFramingRegions(g.graph, woodProject());
-  assert.ok(region, '読み替え先（右＝より長く接する辺）があるので region になる');
+  assert.ok(region, '読み替え先（右＝壁の側）があるので region になる');
   assert.equal(region.shape, 'mono');
-  assert.deepEqual(region.leanToDrains, [{ isVertical: true, coord: 2000, lo: 1500, hi: 3000, outward: -1 }], '高い側＝右・水下＝左の壁でない部分');
+  assert.equal(region.highSide, 'right', '高い側＝右（壁の側）へ読み替える（保存値は左のまま）');
+  assert.equal(room.roofSpec.highSide, 'left', '保存値は変えない');
+  // 左辺の y0..1500（長さ 1500）も屋内に接すると、残る左（水下）が辺の途中で壁に変わる＝水下だけが進む屋根面が連続しない
+  // （旧: 左の壁でない部分 y1500..3000 が水下の region になった）
+  g.interior([[0, 0]]);
+  assert.deepEqual(leanToFramingRegions(g.graph, woodProject()), [], '低い側（左）が一部だけ壁＝規則で作れない形');
+  const [plan] = leanToPlanRegions(g.graph);
+  assert.equal(plan.outlineOnly, true);
+  assert.deepEqual(plan.planDrains, []);
 });
 
-// ---- 既知の限界（受容）の固定。限界が解消されたら赤になる（今の値を固定）。独立の距離で壁へ向かって下がることを検査する ----
+// ---- 旧「既知の限界（受容）」T1・T2 は解消（2026-10-05 下屋の屋根面を水下だけが進む定義へ作り直した）。壁へ下る面・壁の線上から出る谷木が
+// 残っていた形は、水下だけが進む屋根面が存在しない形（到達時刻が崖になる）＝規則で作れない形として軒先の線だけにする ----
 
-/** 点 (x,y) から水下 d（線分）までの L∞ 距離（独立の実装）。 */
-const distToDrain = (d, x, y) => {
-  const [across, along] = d.isVertical ? [x, y] : [y, x];
-  return Math.max(Math.abs(across - d.coord), d.lo - along, along - d.hi, 0);
-};
-const heightAt = (drains, x, y) => Math.min(...drains.map(d => distToDrain(d, x, y)));
-
-test('【既知の限界（受容）T1】入隅の一部だけが屋内で残りが屋外の L字の切妻: 母屋 y=-2730（x0..4550）・棟木 y=-1820（x0..5460）が出て、壁 y=-3640（x0..1820）へ向かって屋根面が下がる（壁へ下る面が残る）', () => {
+test('【T1 解消】入隅の一部だけが屋内で残りが屋外の L字の切妻（旧: 壁 y=-3640 へ屋根面が下がっていた）は規則で作れない形＝伏図の region なし・平面は軒先の線だけ', () => {
   const g = makeGrid([0, 1820, 3640, 9100], [-6370, -3640, 0]);
   g.interior([[0, 0]]); // 屋内 x0..1820 × y-6370..-3640
   g.roof([[0, 1], [1, 1], [2, 1], [2, 0]]).roofSpec.setField('shape', RoofShape.GABLE);
-  const [region] = leanToFramingRegions(g.graph, woodProject());
-  assert.ok(region && Array.isArray(region.leanToDrains), '前提: 水下の場の region');
-  const lines = roofFramingLines({
-    rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, leanToPurlinDepthMm: region.leanToPurlinDepthMm,
-    purlinPitchMm: 910, purlinStartOffsetsMm: [455, 910], tolMm: 0.5,
-  });
-  const key = l => `${l.isVertical ? 'x' : 'y'}=${l.coord}:${l.lo}..${l.hi}`;
-  assert.ok(lines.purlins.map(key).includes('y=-2730:0..4550'), `母屋 y=-2730: ${lines.purlins.map(key)}`);
-  assert.ok(lines.ridges.map(key).includes('y=-1820:0..5460'), `棟木 y=-1820: ${lines.ridges.map(key)}`);
-  // 壁 y=-3640（x0..1820）の内側 1mm の高さ ＜ 60mm の高さ＝壁へ向かって下がっている
-  // x=1800（壁の区間 x0..1820 の端。最寄りの水下は屋外側の軒 y=-3640 x1820..3640 の端）
-  const nearWall = heightAt(region.leanToDrains, 1800, -3639);
-  const farther = heightAt(region.leanToDrains, 1800, -3580);
-  assert.ok(nearWall < farther, `壁の際 ${nearWall} ＜ 60mm 内側 ${farther}（壁へ下る面が残る＝既知の限界）`);
+  assert.deepEqual(leanToFramingRegions(g.graph, woodProject()), [], '水下 x=1820 付近の段で到達時刻が崖＝作れない形');
+  assert.equal(leanToFramingCellKeys(g.graph, woodProject()).size, 0, '外周の梁・床梁の抑止の対象外（陸屋根と同じ扱い）');
+  const [plan] = leanToPlanRegions(g.graph);
+  assert.equal(plan.outlineOnly, true);
+  assert.deepEqual(plan.planDrains, [], 'ラベルなし');
+  assert.ok(plan.exposedPaths.length >= 1, '軒先の線は出る');
 });
 
-test('【既知の限界（受容）T2】両入隅が壁でも入隅の外側の突き出し（910）が腕の幅（1820）より短い L字の寄棟: 谷木 (910,1820)->(1365,1365) が壁 x=910 の線上から出る', () => {
+test('【T2 解消】両入隅が壁でも入隅の外側の突き出し（910）が腕の幅（1820）より短い L字の寄棟（旧: 谷木が壁 x=910 の線上から出ていた）は規則で作れない形＝伏図の region なし・平面は軒先の線だけ', () => {
   const g = makeGrid([0, 910, 2730], [0, 2730, 4550]);
   g.interior([[0, 0]]); // 屋内 x0..910 × y0..2730
   g.roof([[0, 1], [1, 1], [1, 0]]).roofSpec.setField('shape', RoofShape.HIP);
-  const [region] = leanToFramingRegions(g.graph, woodProject());
-  assert.ok(region && Array.isArray(region.leanToDrains), '前提: 水下の場の region');
-  const diagonals = roofHipDiagonals({ rect: null, rects: region.rects, shape: region.shape, leanToDrains: region.leanToDrains, tolMm: 0.5 });
-  assert.ok(diagonals.some(d => d.kind === 'valley' && d.x1 === 910 && d.y1 === 1820 && d.x2 === 1365 && d.y2 === 1365),
-    `谷木: ${JSON.stringify(diagonals)} ${JSON.stringify(region.leanToDrains)}`);
+  assert.deepEqual(leanToFramingRegions(g.graph, woodProject()), [], '水下 y=2730 の左端の段で到達時刻が崖＝作れない形');
+  const [plan] = leanToPlanRegions(g.graph);
+  assert.equal(plan.outlineOnly, true);
+  assert.deepEqual(plan.planDrains, []);
 });
 
 test('【既知の限界（受容）T5】向かい合う壁の間の下屋（水下が0本）は none・伏図用の region が無く、セルキーにも入らない。高い側を壁でない辺（左）に明示すると片流れの region が出る（回避手段）', () => {

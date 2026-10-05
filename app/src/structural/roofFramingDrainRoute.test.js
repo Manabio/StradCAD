@@ -49,13 +49,13 @@ test('矩形の片流れ: 明示の高い側で低い側が全部壁なら、自
   assert.deepEqual(route({ shape: RoofShape.MONO, rect: R, rects: [R], highSide: 'top', autoHighSide: 'top', zeroZones: [WALL.bottom] }), { kind: 'none' });
 });
 
-test('矩形の片流れ: 低い側の一部だけ壁なら field（MONO。水下は壁を除いた部分・母屋の段の基準＝流れ方向の奥行き）', () => {
+// 旧（〜2026-10-05）: 低い側の一部だけ壁なら field（水下は壁を除いた部分）。新: 水下の端が辺の途中で壁に変わる形は、水下だけが進む
+// 屋根面の到達時刻が崖になる（壁の前の点は水下に届かない）ので規則で作れない形＝ none（reason:'invalidField'。軒先の線だけ）
+test('矩形の片流れ: 低い側の一部だけ壁（辺の途中で壁になる水下）は規則で作れない形＝ none（invalidField）', () => {
   const r = route({ shape: RoofShape.MONO, rect: R, rects: [R], highSide: 'top', autoHighSide: 'top', zeroZones: [Z(false, 3000, 0, 3000, 1)] });
-  assert.equal(r.kind, 'field');
-  assert.equal(r.shape, 'mono');
-  assert.deepEqual(r.drains, [DR(false, 3000, 3000, 8000, 1)]);
-  assert.equal(r.purlinDepthMm, 3000);
-  assert.deepEqual(r.kindZones.filter(z => z.kind === 'eave').map(z => [z.isVertical, z.coord]), [[false, 0], [false, 3000]], '外形線の種別は片流れのまま（上下が軒・左右がけらば）');
+  assert.deepEqual(r, { kind: 'none', reason: 'invalidField' });
+  // 壁が水下の端に沿う（壁と水下の境が屋根範囲の角）なら作れる: 低い側が全部壁なら読み替え（rect）・壁なしなら rect
+  assert.equal(route({ shape: RoofShape.MONO, rect: R, rects: [R], highSide: 'top', autoHighSide: 'top', zeroZones: [WALL.left] }).kind, 'rect');
 });
 
 test('矩形の切妻: 棟と平行な2辺が壁に接さなければ rect の切妻。壁が棟木と直交する端（けらば）だけでも rect の切妻', () => {
@@ -73,18 +73,16 @@ test('矩形の切妻: 棟と平行な辺の片方が全部壁で他方が壁に
   assert.deepEqual(route({ shape: RoofShape.GABLE, rect: R, rects: [R], ridgeIsVertical: false, zeroZones: [WALL.top, WALL.bottom] }), { kind: 'none' }, '向かい合う壁の間');
 });
 
-test('矩形の切妻: 一部だけ壁なら field（GABLE。水下は壁を除いた部分・母屋の段の基準＝短手の半分）。全部消える辺と一部消える辺があれば一部の方の残りだけ', () => {
+// 旧: 一部だけ壁なら field（GABLE。水下は壁を除いた部分）。新: 辺の途中で壁になる水下は規則で作れない形＝ none（invalidField）
+test('矩形の切妻: 一部だけ壁（辺の途中で壁になる水下）は規則で作れない形＝ none（invalidField）。上が全部壁・下が一部壁（片流れに読み替えても同じ）も', () => {
   const part = route({ shape: RoofShape.GABLE, rect: R, rects: [R], ridgeIsVertical: false, zeroZones: [Z(false, 0, 0, 3000, -1)] });
-  assert.equal(part.kind, 'field');
-  assert.equal(part.shape, 'gable');
-  assert.deepEqual(part.drains.map(dkey).sort(), [DR(false, 0, 3000, 8000, -1), DR(false, 3000, 0, 8000, 1)].map(dkey).sort());
-  assert.equal(part.purlinDepthMm, 1500);
+  assert.deepEqual(part, { kind: 'none', reason: 'invalidField' });
   const mixed = route({ shape: RoofShape.GABLE, rect: R, rects: [R], ridgeIsVertical: false, zeroZones: [WALL.top, Z(false, 3000, 0, 3000, 1)] });
-  assert.equal(mixed.kind, 'field', '上が全部壁・下が一部壁');
-  assert.deepEqual(mixed.drains, [DR(false, 3000, 3000, 8000, 1)]);
+  assert.deepEqual(mixed, { kind: 'none', reason: 'invalidField' }, '上が全部壁・下が一部壁');
 });
 
-test('T3: 棟と平行な辺の片方が全部壁で他方が一部だけ壁の切妻は、同じ壁配置で高い側＝壁を指定した片流れと route・母屋が完全一致（寸法 5×5×2向き×2形。455 の倍数でない値を含む）', () => {
+// 旧: 片流れと route・母屋が完全一致（どちらも field）。新: どちらも辺の途中で壁になる水下＝規則で作れない形（none・invalidField）で一致
+test('T3: 棟と平行な辺の片方が全部壁で他方が一部だけ壁の切妻は、同じ壁配置で高い側＝壁を指定した片流れと route が完全一致（どちらも規則で作れない形＝ none・invalidField。寸法 5×5×2向き×2形。455 の倍数でない値を含む）', () => {
   const S = [1820, 2275, 3003, 3640, 4550];
   let n = 0;
   for (const w of S) {
@@ -101,20 +99,17 @@ test('T3: 棟と平行な辺の片方が全部壁で他方が一部だけ壁の�
       for (const c of cases) {
         const g = route({ shape: RoofShape.GABLE, rect, rects: [rect], ridgeIsVertical: c.ridgeIsVertical, zeroZones: c.zones });
         const m = route({ shape: RoofShape.MONO, rect, rects: [rect], highSide: c.highSide, autoHighSide: c.highSide, zeroZones: c.zones });
-        assert.equal(m.kind, 'field');
-        assert.equal(m.shape, 'mono');
+        assert.deepEqual(m, { kind: 'none', reason: 'invalidField' }, `片流れ ${w}×${h} ${c.highSide}: 低い側の一部だけ壁`);
         assert.deepEqual(g, m, `route ${w}×${h} ${c.highSide}`);
-        const fr = r => leanToDrainFraming({ rects: [rect], drains: r.drains, pitchMm: 910, firstLevelMm: purlinLayoutFromRidge({ halfSpanMm: r.purlinDepthMm, ...layout }).eaveGapMm, tolMm: TOL });
-        assert.deepEqual(lkeys(fr(g).purlins), lkeys(fr(m).purlins), `母屋 ${w}×${h} ${c.highSide}`);
         n++;
       }
     }
   }
   assert.equal(n, 100);
-  // 例（1820×3003・上が全部壁・下の左半分が壁）: 片流れと同じ母屋＝奥行き 3003 の段（短手の半分 910 の段ではない）
+  // 壁の側の辺が全部壁で、もう片方に壁が無ければ（同じ寸法）片流れの rect で一致する（作れる形との対比）
   const rect = rc(0, 0, 1820, 3003);
-  const g = route({ shape: RoofShape.GABLE, rect, rects: [rect], ridgeIsVertical: false, zeroZones: [Z(false, 0, 0, 1820, -1), Z(false, 3003, 0, 910, 1)] });
-  assert.equal(g.purlinDepthMm, 3003);
+  const ok = route({ shape: RoofShape.GABLE, rect, rects: [rect], ridgeIsVertical: false, zeroZones: [Z(false, 0, 0, 1820, -1)] });
+  assert.deepEqual(ok, { kind: 'rect', shape: 'mono', highSide: 'top' });
 });
 
 test('矩形の寄棟: 壁に接さなければ rect。壁に接すれば field（水下＝壁を除く外周）。全周が壁なら none', () => {
@@ -123,9 +118,10 @@ test('矩形の寄棟: 壁に接さなければ rect。壁に接すれば field�
   assert.equal(r.kind, 'field');
   assert.equal(r.shape, 'hip');
   assert.deepEqual(r.drains.map(dkey).sort(), [DR(true, 8000, 0, 3000, 1), DR(false, 3000, 0, 8000, 1), DR(true, 0, 0, 3000, -1)].map(dkey).sort(), '右・下・左');
-  assert.equal(r.purlinDepthMm, 3000, '水下の場の D の最大値＝min(左右の間隔の半分 4000, 壁から下までの 3000)');
+  assert.equal(r.purlinDepthMm, 3000, '水下の場の T の最大値＝min(左右の間隔の半分 4000, 壁から下までの 3000)');
   assert.equal(r.kindZones.every(z => z.kind === 'eave'), true, '寄棟は全辺が軒');
-  assert.equal(route({ shape: RoofShape.HIP, rect: R, rects: [R], zeroZones: [Z(false, 0, 0, 4000, -1)] }).drains.length, 4, '上辺の一部だけ壁: 上辺の残り＋他の3辺');
+  // 旧: 上辺の一部だけ壁なら上辺の残り＋他の3辺の field。新: 辺の途中で壁になる水下は規則で作れない形
+  assert.deepEqual(route({ shape: RoofShape.HIP, rect: R, rects: [R], zeroZones: [Z(false, 0, 0, 4000, -1)] }), { kind: 'none', reason: 'invalidField' }, '上辺の一部だけ壁');
   assert.deepEqual(route({ shape: RoofShape.HIP, rect: R, rects: [R], zeroZones: Object.values(WALL) }), { kind: 'none' }, '全周が壁');
 });
 
@@ -160,12 +156,12 @@ test('L字の切妻（roof-test8 型）: gableArmDrainsOf の軒から壁を除�
   assert.deepEqual(bare.kindZones, gableArmDrainsOf({ rects: L, tolMm: TOL }).kindZones);
 });
 
-test('L字の切妻: 片側だけ壁なら壁の側の軒だけ除く。けらばが無い形・水下が全部壁の形は none', () => {
+// 旧: 片側だけ壁なら壁の側の軒だけ除いた field（壁でない x=7280 は軒のまま）。新: 入隅の片方の辺だけが壁だと、もう片方の入隅の辺
+// （水下）が壁の向こう（屋外）を回って壁の前の面を引くことになり、壁へ下る面か水下に届かない点ができる＝規則で作れない形
+test('L字の切妻: 入隅の片方の辺だけが壁なら規則で作れない形（none・invalidField）。けらばが無い形・水下が全部壁の形は none', () => {
   // 横の腕の壁だけ（y=-3640。x=7280 側は屋内でない）
   const one = route({ shape: RoofShape.GABLE, rect: null, rects: L, zeroZones: [L_WALLS[0]] });
-  assert.equal(one.kind, 'field');
-  assert.equal(one.drains.some(d => !d.isVertical && d.coord === -3640), false, '壁 y=-3640 は水下でない');
-  assert.equal(one.drains.some(d => d.isVertical && d.coord === 7280), true, '壁でない x=7280 は軒のまま');
+  assert.deepEqual(one, { kind: 'none', reason: 'invalidField' });
   const ring = [rc(0, 0, 9000, 3000), rc(0, 3000, 3000, 6000), rc(6000, 3000, 9000, 6000), rc(0, 6000, 9000, 9000)];
   assert.deepEqual(route({ shape: RoofShape.GABLE, rect: null, rects: ring }), { kind: 'none' }, 'けらばの無い形（環）');
   const edges = orthogonalBoundaryLoops({ rects: L, tolMm: TOL }).flat();
@@ -247,6 +243,7 @@ function* rectForms() {
 test('I1: 全 region で、水下と屋内に接する区間（壁）の重なりが tol 以下（矩形の片流れ・切妻・寄棟 × 壁の組合せ 6寸法×81通り。L字も）', () => {
   let field = 0;
   let rectKind = 0;
+  let invalid = 0;
   for (const { rect, zones } of rectForms()) {
     const wh = (rect.x2 - rect.x1 > rect.y2 - rect.y1);
     for (const [shape, extra] of [
@@ -268,18 +265,29 @@ test('I1: 全 region で、水下と屋内に接する区間（壁）の重な�
         const drains = naturalDrains(rect, r.shape, extra.ridgeIsVertical ?? (rect.y2 - rect.y1 > rect.x2 - rect.x1), r.highSide);
         assert.ok(drains.length > 0);
         for (const d of drains) for (const z of zones) assert.ok(overlapMm(d, z) <= TOL, `I1(rect) ${label}: 水下 ${dkey(d)} と壁 ${dkey(z)} が重なる`);
+      } else if (r.reason === 'invalidField') {
+        // 規則で作れない形（辺の途中で壁になる水下）は、一部だけの壁（辺の全体でない壁）があるときだけ
+        invalid++;
+        const w = rect.x2 - rect.x1;
+        const h = rect.y2 - rect.y1;
+        assert.ok(zones.some(z => z.hi - z.lo < (z.isVertical ? h : w) - TOL), `invalidField は一部だけの壁があるとき ${label}`);
       }
     }
   }
-  assert.ok(field > 100 && rectKind > 100, `検査が空振りしない（field=${field}, rect=${rectKind}）`);
-  // L字
+  assert.ok(field >= 80 && rectKind > 100 && invalid > 100, `検査が空振りしない（field=${field}, rect=${rectKind}, invalid=${invalid}）`);
+  // L字。作れる形（field）は水下と壁が重ならない。入隅の片方だけが壁の切妻・寄棟は規則で作れない形（none・invalidField）
+  const expectKind = { mono: ['field', 'field', 'field', 'field'], gable: ['field', 'none', 'none', 'field'], hip: ['field', 'none', 'none', 'field'] };
+  let lField = 0;
   for (const shape of [RoofShape.MONO, RoofShape.GABLE, RoofShape.HIP]) {
-    for (const zones of [[], [L_WALLS[0]], [L_WALLS[1]], L_WALLS]) {
+    [[], [L_WALLS[0]], [L_WALLS[1]], L_WALLS].forEach((zones, k) => {
       const r = route({ shape, rect: null, rects: L, zeroZones: zones });
-      assert.equal(r.kind, 'field', `${shape} L字は field`);
-      for (const d of r.drains) for (const z of zones) assert.ok(overlapMm(d, z) <= TOL, `I1 L字 ${shape}: 水下 ${dkey(d)} と壁 ${dkey(z)}`);
-    }
+      assert.equal(r.kind, expectKind[shape][k], `${shape} L字 壁${k}`);
+      if (r.kind === 'none') assert.equal(r.reason, 'invalidField');
+      if (r.kind === 'field') lField++;
+      for (const d of r.drains ?? []) for (const z of zones) assert.ok(overlapMm(d, z) <= TOL, `I1 L字 ${shape}: 水下 ${dkey(d)} と壁 ${dkey(z)}`);
+    });
   }
+  assert.equal(lField, 8, '検査が空振りしない（field の route は 4+2+2 通り）');
 });
 
 test('I3: 壁に接する寄棟の水下は、屋内に接しない全外周と一致（長さの合計＝周長−壁の長さ・どの水下も壁の外）。寸法・壁の位置を振る', () => {
@@ -294,7 +302,7 @@ test('I3: 壁に接する寄棟の水下は、屋内に接しない全外周と�
     const drainLen = r.drains.reduce((s, d) => s + (d.hi - d.lo), 0);
     assert.ok(Math.abs(drainLen - (perimeter - wallLen)) <= TOL * 8, `水下の長さ ${drainLen} ＝ 周長 ${perimeter} − 壁 ${wallLen}（${JSON.stringify(rect)} ${JSON.stringify(zones)}）`);
   }
-  assert.ok(n > 100, `空振りしない（${n}）`);
+  assert.ok(n >= 80, `空振りしない（${n}。辺の一部だけ壁の形は規則で作れない形で field にならない）`);
 });
 
 test('I4: 棟が壁と平行な切妻は、同じ矩形の片流れ（高い側＝壁）と、振り分け・棟木・母屋が完全に一致する（寸法を振る）', () => {

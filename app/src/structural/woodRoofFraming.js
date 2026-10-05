@@ -178,11 +178,12 @@ function hipModel(region, F, tol) {
 }
 
 /**
- * L字の下屋（矩形でない片流れ）の面ごとの母屋の線（水下への L∞ 距離の場 leanToDrainFraming の面＝水下ごと）と、弦の判定に使う
+ * 下屋の水下の場の region（水下だけが進む場 leanToDrainFraming の面＝水下ごと）の面ごとの母屋の線と、弦の判定に使う
  * 屋根範囲のセル矩形。母屋の段は region.leanToPurlinDepthMm（長手方向の翼の奥行き）の残り r から（描画の roofFramingLines と同じ）。
  * 矩形の region・rects が空か不正・水下（leanToDrains）か奥行きが無い region は null（小屋梁は作らない）。形状（片流れ・切妻）は問わない。
- * 面の中の線の向きは水下と同じとは限らない（水下が段違いの形では、水下の端の外側の母屋が直交する向きで入る）ので、
- * 面を向きごとに分けて返す（水下と同じ向きが先。planLeanToPlaneSegments は面内で向きが一定という前提）。
+ * 場が規則で作れない形（valid=false）の水下を直接渡されたら面は空（小屋梁は作らない。通常は leanToDrainRoute が region にしない）。
+ * 面を向きごとに分けて返す（水下と同じ向きが先。planLeanToPlaneSegments は面内で向きが一定という前提）。水下だけが進む場では
+ * 面の中の線は全て水下と同じ向きなので、分けた結果は面ごとに1つ（向きの違う側は空）。
  * @returns {{planes: Array<{lineIsVertical:boolean, lines: object[]}>, rects: object[]}|null}
  */
 function leanToModel(region, F, tol) {
