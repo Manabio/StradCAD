@@ -850,10 +850,11 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
   // 初段=下手側（往路runA）と同じ幅方向位置（NUM_OUT）・同じ離れ（pitchA基準）で入口境界線近くに置く。
   // 2段目以降は pivot→外周 の混合（TURN_OUT）で外周部近くへ寄せる。
   // 180°周回部は往路側90°・復路側90°の2つの回転部とみなす。マス数が偶数のとき中央の放射線（u=0.5）は
-  // その共有辺になり、pivot からの放射ではなくレーン間中心線 s=0.5 上の垂直線（閉じ辺の中点Q→奥の辺）で描く。
-  // 奇数では u=0.5 の放射線が存在せず現状のまま。あき0では Q=P かつ perim(0.5)=(1,0.5) で従来の線と一致する。
+  // その共有辺になり、他の放射線と同じ pivot P から奥の辺（外壁側）へ垂直（走行軸に平行）に引く
+  // （ユーザー指示 2026-10-06「pivot はこの踏面だけ変えず、そこから外壁へ向かって垂直線」）。
+  // 奇数では u=0.5 の放射線が存在せず現状のまま。あき0では sA=0.5 で perim(0.5)=(1,0.5) と一致し従来の線と同じ。
   emitTurn(out, turn, {
-    radialLine: (u) => (u === 0.5 ? line(f.pt(tRun, 0.5), f.pt(1, 0.5)) : line(P, perim(u))),
+    radialLine: (u) => (u === 0.5 ? line(P, f.pt(1, sA)) : line(P, perim(u))),
     cellPt: (u) => radialMix(P, perim(u)),
     entryPt: () => f.pt(tRun + tAt(NUM_GAP * pitchA), NUM_OUT),
   }, { detail });
