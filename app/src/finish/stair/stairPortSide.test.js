@@ -1,14 +1,15 @@
-// 折返し・回り階段の出入口の辺（Stair.entrySide / arrivalSide。StairPortSide）の本番経路テスト。
-// 張り出すレーン（相手より長いレーン）の出入口だけが側面（inner/outer）を選べ、既定は inner
-//（設置階上階スラブの張り出しに横から取りつく。ユーザー裁定 2026-09-29）。
+// 折返し・回り階段の出入口の辺（Stair.entrySide / arrivalSide。StairPortSide＝end|left|right）の本番経路テスト。
+// left/right はその口を歩くときの進行方向から見た向き（flip 非依存）。既定（null）は張り出すレーンなら
+// 隣レーン側（設置階上階スラブの張り出しに横から取りつく。ユーザー裁定 2026-09-29）。
 // フィクスチャは 2列×3行のセル格子（y下向き正）:  d c / a b / e f
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StairPortSide } from '@core';
 import { classifyStairArea, measureStairSpans } from './stairClassify.js';
 import { stairPortEdges, buildStairGeometry, resolveUTurnPorts, stairSegmentDims, cellsBeyondBreak } from './stairGeometry.js';
-import { portSideChange } from './stairSectionEdit.js';
+import { portSideChange, resetPortSides, alignPortTurnSteps } from './stairSectionEdit.js';
 import { roomBounds } from '../gridCells.js';
+import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
 
 function layout() {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -54,13 +55,15 @@ test('往路が長い f,b,c,d,a: 上り口の既定は内側＝f の左辺（e �
   assert.ok(bottom && bottom.side && !bottom.port, JSON.stringify(bottom));
 });
 
-test('上り口を「走行端」「外側」へ切り替えると出入口辺が f の下辺（i 側）／右辺へ移る', () => {
+test('上り口を「走行端」「右（上りから見て）」へ切り替えると出入口辺が f の下辺（i 側）／右辺へ移る。左は既定（内側）と同じ辺', () => {
   const { graph, c } = layout();
   const stair = addByOrder(graph, c, ['f', 'b', 'c', 'd', 'a']);
   stair.setField('entrySide', StairPortSide.END);
   assert.deepEqual(edge(stair, graph, 'entry'), [{ isVertical: false, value: 3000, lo: 1000, hi: 2000 }]);
   near([geom(stair, graph, 'install').arrows[0].x1, geom(stair, graph, 'install').arrows[0].y1], [1500, 3000]);
-  stair.setField('entrySide', StairPortSide.OUTER);
+  stair.setField('entrySide', StairPortSide.LEFT);
+  assert.deepEqual(edge(stair, graph, 'entry'), [{ isVertical: true, value: 1000, lo: 2000, hi: 3000 }], '上り（北向き）の左＝西＝既定の内側と同じ辺');
+  stair.setField('entrySide', StairPortSide.RIGHT);
   assert.deepEqual(edge(stair, graph, 'entry'), [{ isVertical: true, value: 2000, lo: 2000, hi: 3000 }]);
   // 外側の出入口では、レーン外側の残り（y 1000〜2000）は側面線のまま
   const rest = geom(stair, graph, 'upper').outline.find(s => s.side && Math.abs(s.x1 - s.x2) < 1e-9
@@ -82,6 +85,11 @@ test('復路が長い b,c,d,a,e: 到達口の既定は内側＝e の右辺（f �
   near([g.arrows[0].x1, g.arrows[0].y1], [1000, 2500]);
   stair.setField('arrivalSide', StairPortSide.END);
   assert.deepEqual(edge(stair, graph, 'arrival'), [{ isVertical: false, value: 3000, lo: 0, hi: 1000 }]);
+  // 到達口は逆向き（南向き）に歩く: 左＝東＝既定の内側（e の右辺 x=1000）、右＝西（e の左辺 x=0）
+  stair.setField('arrivalSide', StairPortSide.LEFT);
+  assert.deepEqual(edge(stair, graph, 'arrival'), [{ isVertical: true, value: 1000, lo: 2000, hi: 3000 }]);
+  stair.setField('arrivalSide', StairPortSide.RIGHT);
+  assert.deepEqual(edge(stair, graph, 'arrival'), [{ isVertical: true, value: 0, lo: 2000, hi: 3000 }]);
 });
 
 test('側面の上り口では張り出し区間 f が取りつき回転部になる: 扇形マス（放射線）で埋まり、直進部の踏面線は b から始まる', () => {
@@ -119,18 +127,59 @@ test('側面の上り口では張り出し区間 f が取りつき回転部に�
 test('上り口を走行端へ戻すと取りつき回転部は無くなり（蹴上 0）、f は直進部の踏面線に戻る。側面へ戻せば初期値が入る', () => {
   const { graph, c } = layout();
   const stair = addByOrder(graph, c, ['f', 'b', 'c', 'd', 'a']);
+  const before = [...stair.sections];
   const toEnd = portSideChange(stair, 'entry', StairPortSide.END, 1000);
-  assert.deepEqual(toEnd, { entrySide: 'end', entryTurnSteps: 0 });
+  assert.deepEqual(toEnd, { entrySide: 'end', entryTurnSteps: 0, sections: [before[0] + 4, before[1], before[2]] }, '取りつき 4 を往路の直進部へ戻す');
   for (const [k, v] of Object.entries(toEnd)) stair.setField(k, v);
-  assert.equal(stair.totalSteps, 9, '13 − 取りつき 4');
+  assert.equal(stair.totalSteps, 13, '総蹴上数は保つ（取りつき 4 を直進部へ戻す）');
   const g = geom(stair, graph, 'upper');
   const inF = (t) => (t.x1 + t.x2) / 2 > 1000 && (t.x1 + t.x2) / 2 < 2000 && (t.y1 + t.y2) / 2 > 2060 && (t.y1 + t.y2) / 2 < 3000;
   assert.ok(g.treads.filter(inF).every(t => Math.abs(t.y1 - t.y2) < 1e-9), '走行端の上り口では f の踏面線は走行軸に直交する');
-  const back = portSideChange(stair, 'entry', StairPortSide.INNER, 1000);
-  assert.deepEqual(back, { entrySide: 'inner', entryTurnSteps: 4 });
-  // 鉄骨なら初期値 0（平場の踏み込み踊り場）
-  stair.setField('structure', 'STEEL');
-  assert.deepEqual(portSideChange(stair, 'entry', StairPortSide.OUTER, 1000), { entrySide: 'outer', entryTurnSteps: 0 });
+  const back = portSideChange(stair, 'entry', StairPortSide.LEFT, 1000);
+  assert.deepEqual(back, { entrySide: 'left', entryTurnSteps: 4, sections: before }, '側面へ戻すと初期値 4 を直進部から引く');
+  for (const [k, v] of Object.entries(back)) stair.setField(k, v);
+  assert.equal(stair.totalSteps, 13, '往復しても総蹴上数は 13');
+  // 辺だけ替える（蹴上が既にある）ときは蹴上も直進部も触らない
+  assert.deepEqual(portSideChange(stair, 'entry', StairPortSide.RIGHT, 1000), { entrySide: 'right' });
+  // 鉄骨なら初期値 0（平場の踏み込み踊り場）。直進部は触らない
+  assert.deepEqual(
+    portSideChange({ structure: 'STEEL', tread: 250, sections: [6, 1, 6], entryTurnSteps: 0 }, 'entry', StairPortSide.RIGHT, 1000),
+    { entrySide: 'right', entryTurnSteps: 0 });
+});
+
+test('【失敗系】portSideChange: 直進部が 2 段未満になる側面への切替は拒否（null）。ちょうど 2 段なら通る', () => {
+  const base = { structure: 'WOOD', tread: 250, entryTurnSteps: 0, arrivalTurnSteps: 0 };
+  // 木造・区画 1000mm ÷ 250 = 4 蹴上。往路 4 段から 4 引くと 0 段
+  assert.equal(portSideChange({ ...base, sections: [4, 1, 9] }, 'entry', StairPortSide.LEFT, 1000), null);
+  assert.equal(portSideChange({ ...base, sections: [5, 1, 9] }, 'entry', StairPortSide.LEFT, 1000), null, '5−4=1 段も不可');
+  assert.deepEqual(portSideChange({ ...base, sections: [6, 1, 9] }, 'entry', StairPortSide.LEFT, 1000),
+    { entrySide: 'left', entryTurnSteps: 4, sections: [2, 1, 9] });
+  // 到達口は復路（sections[2]）から引く
+  assert.deepEqual(portSideChange({ ...base, sections: [9, 1, 6] }, 'arrival', StairPortSide.RIGHT, 1000),
+    { arrivalSide: 'right', arrivalTurnSteps: 4, sections: [9, 1, 2] });
+  assert.equal(portSideChange({ ...base, sections: [9, 1, 5] }, 'arrival', StairPortSide.RIGHT, 1000), null);
+});
+
+test('resetPortSides: 反転・上り方向の変更で辺を自動へ戻し取りつき蹴上を 0 に（直進部へ戻して総蹴上数は保つ）。alignPortTurnSteps: 走行端に残った蹴上を 0 にそろえる', () => {
+  const { graph, c } = layout();
+  const stair = addByOrder(graph, c, ['f', 'b', 'c', 'd', 'a'], { entrySide: StairPortSide.RIGHT });
+  assert.equal(stair.totalSteps, 13);
+  for (const [k, v] of Object.entries(resetPortSides(stair))) stair.setField(k, v);
+  assert.equal(stair.entrySide, null);
+  assert.equal(stair.arrivalSide, null);
+  assert.equal(stair.entryTurnSteps, 0);
+  assert.equal(stair.totalSteps, 13);
+  // 走行端なのに取りつきが残る状態（解決が end）
+  stair.setField('entryTurnSteps', 3);
+  assert.equal(stair.totalSteps, 16);
+  const fixed = alignPortTurnSteps(stair, { entry: 'end', arrival: 'end' });
+  assert.equal(fixed.entryTurnSteps, 0);
+  for (const [k, v] of Object.entries(fixed)) stair.setField(k, v);
+  assert.equal(stair.totalSteps, 16, '消える蹴上は直進部へ戻る（総蹴上数は保つ）');
+  assert.equal(stair.entryTurnSteps, 0);
+  // 側面に解決されている口は触らない／U字以外は {}
+  assert.deepEqual(alignPortTurnSteps(stair, { entry: 'inner', arrival: 'outer' }), {});
+  assert.deepEqual(resetPortSides({ type: StairType.STRAIGHT }), {});
 });
 
 test('復路が長い b,c,d,a,e: 到達口側の取りつき回転部 e は復路の続き番号で、到達番号は総蹴上数', () => {
@@ -205,20 +254,132 @@ test('【実データ moku2-2】上り口を走行端へ切り替えると f の
   assert.deepEqual(edge(stair, graph, 'entry'), [{ isVertical: false, value: 3000, lo: 0, hi: 2000 }]);
 });
 
-test('【失敗系】張り出しの無い等長レーン（2×2）では entrySide/arrivalSide を指定しても走行端のまま', () => {
+test('【失敗系】区画を除くと直進部が残らない 2×2（各レーン 1 行）では entrySide/arrivalSide を指定しても走行端のまま', () => {
   const { graph, c } = layout();
-  const stair = addByOrder(graph, c, ['a', 'b', 'c', 'd'], { entrySide: StairPortSide.INNER, arrivalSide: StairPortSide.OUTER });
+  const stair = addByOrder(graph, c, ['a', 'b', 'c', 'd'], { entrySide: StairPortSide.LEFT, arrivalSide: StairPortSide.RIGHT });
   assert.deepEqual(edge(stair, graph, 'entry'),   [{ isVertical: true, value: 0, lo: 1000, hi: 2000 }]);
   assert.deepEqual(edge(stair, graph, 'arrival'), [{ isVertical: true, value: 0, lo: 0, hi: 1000 }]);
-  const ports = resolveUTurnPorts(stair, { laneLenA: 1000, laneLenB: 1000 });
-  assert.deepEqual(ports, { entry: 'end', arrival: 'end', entryLonger: false, arrivalLonger: false });
+  for (const side of [StairPortSide.LEFT, StairPortSide.RIGHT]) {
+    const p = resolveUTurnPorts({ ...stair, upDirection: stair.upDirection, flip: stair.flip, entrySide: side, arrivalSide: side },
+      { laneLenA: 1000, laneLenB: 1000, firstRowA: 1000, firstRowB: 1000 });
+    assert.equal(p.entry, 'end');
+    assert.equal(p.arrival, 'end');
+    assert.equal(p.entryLonger, false);
+    assert.equal(p.arrivalLonger, false);
+  }
 });
 
-test('【失敗系】resolveUTurnPorts: 不明な値は既定（inner）に丸め、短いレーン側の指定は無視される', () => {
-  const stair = { type: StairType.SWITCHBACK, entrySide: 'sideways', arrivalSide: StairPortSide.OUTER };
+test('【失敗系】resolveUTurnPorts: 不明な値は既定（隣レーン側＝inner）に丸め、区画の無い短いレーン側の指定は無視される', () => {
+  const stair = { type: StairType.SWITCHBACK, upDirection: 'up', flip: false, entrySide: 'sideways', arrivalSide: StairPortSide.RIGHT };
   const p = resolveUTurnPorts(stair, { laneLenA: 2000, laneLenB: 1000 });
   assert.equal(p.entry, 'inner');
-  assert.equal(p.arrival, 'end');
+  assert.equal(p.arrival, 'end', '短いレーンの基端の行（firstRow 未実測＝0）が区画に取れないので走行端');
   assert.equal(p.entryLonger, true);
   assert.equal(p.arrivalLonger, false);
+  // 旧語彙（'inner'/'outer'）が万一残っていても不明な値として自動に丸める
+  assert.equal(resolveUTurnPorts({ ...stair, entrySide: 'outer' }, { laneLenA: 2000, laneLenB: 1000 }).entry, 'inner');
+});
+
+// 等長の 2 行レーン: 上り口 b2→b1、回転部 c,d、到達口 a1→a2（x: 0,1000,2000 / y: 0〜3000。上り方向は上＝北）
+//   [d c]   y0〜1000  回転部
+//   [a1 b1] y1000〜2000
+//   [a2 b2] y2000〜3000
+function equalRowsLayout() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const V = (v) => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const H = (v) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = V(0), x1 = V(1000), x2 = V(2000), y0 = H(0), y1 = H(1000), y2 = H(2000), y3 = H(3000);
+  const k = (l, t, r, b) => `${l.id}:${t.id}:${r.id}:${b.id}`;
+  return { graph, c: { d: k(x0, y0, x1, y1), c: k(x1, y0, x2, y1), a1: k(x0, y1, x1, y2), b1: k(x1, y1, x2, y2), a2: k(x0, y2, x1, y3), b2: k(x1, y2, x2, y3) } };
+}
+
+test('等長レーンで側面（上りから見て右）を指定すると、上り口の出入口辺が b2 の右辺（基端の行）に出る。自動は走行端のまま', () => {
+  const { graph, c } = equalRowsLayout();
+  const stair = addByOrder(graph, c, ['b2', 'b1', 'c', 'd', 'a1', 'a2']);
+  assert.equal(stair.upDirection, 'up');
+  assert.equal(stair.flip, true, '往路 b は右列');
+  assert.equal(stair.entryTurnSteps, 0, '張り出しが無いので取りつき回転部なし');
+  assert.deepEqual(edge(stair, graph, 'entry'), [{ isVertical: false, value: 3000, lo: 1000, hi: 2000 }], '自動は b2 の下辺（走行端）');
+  // 分類の既定は往路 5 段（取りつき 4 を引くと 1 段で拒否される）。直進部を 8 段にして側面へ
+  assert.equal(portSideChange(stair, 'entry', StairPortSide.RIGHT, 1000), null, '往路 5−4=1 段は拒否');
+  stair.setField('sections', [8, 5, 8]);
+  const total0 = stair.totalSteps;
+  // 右（北向きの右＝東）: 外周側（x=2000）。区画は基端の行 b2 だけ（b1 の右辺は含まない）
+  for (const [k, v] of Object.entries(portSideChange(stair, 'entry', StairPortSide.RIGHT, 1000))) stair.setField(k, v);
+  assert.equal(stair.entrySide, 'right');
+  assert.equal(stair.entryTurnSteps, 4);
+  assert.equal(stair.totalSteps, total0, 'portSideChange は総蹴上数を保つ');
+  assert.deepEqual(stair.sections, [4, 5, 8], '往路から取りつき 4 を引く');
+  assert.deepEqual(edge(stair, graph, 'entry'), [{ isVertical: true, value: 2000, lo: 2000, hi: 3000 }]);
+  // 到達口の辺は変わらない
+  assert.deepEqual(edge(stair, graph, 'arrival'), [{ isVertical: false, value: 3000, lo: 0, hi: 1000 }]);
+  // 取りつき回転部 b2（扇形 4 マス）の外側の辺が側面の出入口。直進部は b1 から始まり、b2/b1 の境界（y=2000）が出口境界
+  const g = geom(stair, graph, 'upper');
+  const exitLine = g.treads.find(t => Math.abs(t.y1 - t.y2) < 1e-9 && Math.abs(t.y1 - 2000) < 60 && Math.max(t.x1, t.x2) > 1900);
+  assert.ok(exitLine, '取りつき回転部 b2 の出口境界');
+  const inB2 = (n) => n.x > 1000 && n.x < 2000 && n.y > 2000 && n.y < 3000;
+  assert.deepEqual(g.stepNumbers.filter(inB2).map(n => Number(n.text)).sort((p, q) => p - q), [1, 2, 3, 4]);
+  // 左（内側）は等長レーンでは隣レーンと共有する辺なので選べない＝自動（走行端）に戻る
+  stair.setField('entrySide', StairPortSide.LEFT);
+  assert.deepEqual(edge(stair, graph, 'entry'), [{ isVertical: false, value: 3000, lo: 1000, hi: 2000 }]);
+});
+
+// 往路が 2 行長い（張り出し区間が 2 行）:
+//   [d c]     y0〜1000  回転部
+//   [a1 b1]   y1000〜2000
+//   [a2 b2]   y2000〜3000
+//   [   b3]   y3000〜4000  ← 張り出し（往路のみ）
+//   [   b4]   y4000〜5000
+function overhangTwoRowsLayout() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const V = (v) => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const H = (v) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = V(0), x1 = V(1000), x2 = V(2000), ys = [0, 1000, 2000, 3000, 4000, 5000].map(H);
+  const k = (l, t, r, b) => `${l.id}:${t.id}:${r.id}:${b.id}`;
+  return {
+    graph,
+    c: {
+      d: k(x0, ys[0], x1, ys[1]), c: k(x1, ys[0], x2, ys[1]),
+      a1: k(x0, ys[1], x1, ys[2]), b1: k(x1, ys[1], x2, ys[2]),
+      a2: k(x0, ys[2], x1, ys[3]), b2: k(x1, ys[2], x2, ys[3]),
+      b3: k(x1, ys[3], x2, ys[4]), b4: k(x1, ys[4], x2, ys[5]),
+    },
+  };
+}
+
+test('張り出し区間が 2 行以上でも、側面の出入口は区画の行ぶんのセルの辺をすべて開口辺にする', () => {
+  const { graph, c } = overhangTwoRowsLayout();
+  const stair = addByOrder(graph, c, ['b4', 'b3', 'b2', 'b1', 'c', 'd', 'a1', 'a2']);
+  assert.equal(stair.upDirection, 'up');
+  assert.equal(stair.entrySide, null);
+  // 既定（内側＝北向きの左＝西 x=1000）: 張り出し b3,b4 の辺 2 本（y 3000〜4000, 4000〜5000）
+  assert.deepEqual(edge(stair, graph, 'entry'), [
+    { isVertical: true, value: 1000, lo: 3000, hi: 4000 },
+    { isVertical: true, value: 1000, lo: 4000, hi: 5000 },
+  ]);
+  // 右（外側 x=2000）: 張り出し全体（2 行）の外周の辺 2 本
+  stair.setField('entrySide', StairPortSide.RIGHT);
+  assert.deepEqual(edge(stair, graph, 'entry'), [
+    { isVertical: true, value: 2000, lo: 3000, hi: 4000 },
+    { isVertical: true, value: 2000, lo: 4000, hi: 5000 },
+  ]);
+  // 走行端は b4 の下辺 1 本（辺の数は走行端を変えない）
+  stair.setField('entrySide', StairPortSide.END);
+  assert.deepEqual(edge(stair, graph, 'entry'), [{ isVertical: false, value: 5000, lo: 1000, hi: 2000 }]);
+});
+
+test('旧語彙の出入口の辺（inner/outer）を保存した文書を読むと null（自動）になる。end/left/right は往復する', () => {
+  const { graph, c } = layout();
+  const cells = new Set([c.a, c.b, c.c, c.d]);
+  const mk = (entrySide, arrivalSide) => graph.addStair({ type: StairType.SWITCHBACK, cells, sections: [5, 1, 5], entrySide, arrivalSide });
+  const legacy = mk('inner', 'outer');   // 旧語彙（互換なし）
+  const fresh = mk(StairPortSide.LEFT, StairPortSide.END);
+  const unknown = mk('sideways', null);  // 許可リスト外
+  const restored = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  restoreGraph(restored, serializeGraph(graph));
+  assert.equal(restored.stairMap.get(legacy.id).entrySide, null);
+  assert.equal(restored.stairMap.get(legacy.id).arrivalSide, null);
+  assert.equal(restored.stairMap.get(fresh.id).entrySide, 'left');
+  assert.equal(restored.stairMap.get(fresh.id).arrivalSide, 'end');
+  assert.equal(restored.stairMap.get(unknown.id).entrySide, null);
 });

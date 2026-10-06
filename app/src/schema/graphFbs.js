@@ -13,6 +13,7 @@ import { Builder, ByteBuffer } from 'flatbuffers';
 import { normalizeSubType } from '../openings/openingCatalog.js';
 import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION } from '../structural/structureRules.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
+import { StairPortSide } from '../core/constants.js';
 
 // CenterLine.beamAxisOrigin の許容値集合（BeamAxisOriginの値のみ。未知の文字列はnullへ正規化する
 // ——破損データ・将来削除された由来値がそのままUIへ漏れて未知の色分岐に落ちるのを防ぐ）。
@@ -1611,6 +1612,12 @@ function readExteriorRow(bb, tablePos) {
   };
 }
 
+// 出入口の辺の読込み: 許可リスト外（空・旧語彙 'inner'/'outer'）は null＝自動。
+const PORT_SIDES = new Set(Object.values(StairPortSide));
+function readPortSide(v) {
+  return PORT_SIDES.has(v) ? v : null;
+}
+
 function readStair(bb, tablePos) {
   const r = makeReader(bb, tablePos);
   return {
@@ -1629,8 +1636,9 @@ function readStair(bb, tablePos) {
       ? (r.str(ST.SECTIONS) || '').split(',').filter(Boolean).map(Number)
       : null,
     roomId:      r.str(ST.ROOM_ID) || null, // 旧データ（フィールド欠落）は空文字列扱い→null
-    entrySide:   r.str(ST.ENTRY_SIDE) || null,   // 旧データ（フィールド欠落）→ null＝自動
-    arrivalSide: r.str(ST.ARRIVAL_SIDE) || null,
+    // 旧データ（フィールド欠落）・旧語彙（'inner'/'outer'。互換なし）→ null＝自動
+    entrySide:   readPortSide(r.str(ST.ENTRY_SIDE)),
+    arrivalSide: readPortSide(r.str(ST.ARRIVAL_SIDE)),
     entryTurnSteps:   r.f64(ST.ENTRY_TURN_STEPS) || 0,
     arrivalTurnSteps: r.f64(ST.ARRIVAL_TURN_STEPS) || 0,
   };

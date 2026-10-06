@@ -140,6 +140,7 @@ export class FinishModeState {
       lowerStairs:     observable.ref,
       otherFloors:     observable.ref,
       stairChains:     computed,
+      upperFloorGraph: computed,
       upperVoids:     observable.ref,
       upperFloorHeight: observable,
       materialsLoaded: observable,
@@ -379,6 +380,18 @@ export class FinishModeState {
         : { plane: p, graph: this._otherFloor(p.id)?.graph ?? null }))
       : [{ plane: active, graph: this.graph }];
     return buildStairChains(floors, project.structGraph);
+  }
+
+  /**
+   * 直上階（activePlane の1つ上の採用フロア）のグラフ。_loadStairChains が peek 済みの otherFloors から引く
+   *（再 peek しない）。最上階・アクティブ階が採用階に無い・上階が読めなかったときは null。
+   * 階段パネルが到達口の候補を上階の床で確かめるのに使う（読めなければ幾何だけで絞る）。
+   */
+  get upperFloorGraph() {
+    const planes = this.project?.planes ?? [];
+    const idx = planes.findIndex(p => p.id === this.project?.activePlane?.id);
+    const above = idx >= 0 && idx + 1 < planes.length ? planes[idx + 1] : null;
+    return above ? (this._otherFloor(above.id)?.graph ?? null) : null;
   }
 
   /** 連鎖メンバー { planeId, stairId } の階段本体。自階はライブのグラフ、他階は peek 結果。無ければ null。 */

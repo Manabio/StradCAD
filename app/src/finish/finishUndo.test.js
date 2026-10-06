@@ -90,7 +90,7 @@ test('graph.equipmentRows の usage 変更を withFinishUndo 経由で行い und
 function addSwitchbackStair(graph) {
   return graph.addStair({
     type: StairType.SWITCHBACK, cells: new Set(['a:b:c:d']), sections: [7, 2, 7],
-    entrySide: StairPortSide.INNER, arrivalSide: StairPortSide.OUTER,
+    entrySide: StairPortSide.LEFT, arrivalSide: StairPortSide.RIGHT,
     entryTurnSteps: 2, arrivalTurnSteps: 3,
   }, 's1');
 }
@@ -107,7 +107,7 @@ test('別の仕上げ操作を undo/redo しても、階段の出入口の辺・
   const graph = freshGraph();
   const stair = addSwitchbackStair(graph);
   const expected = {
-    entrySide: 'inner', arrivalSide: 'outer', entryTurnSteps: 2, arrivalTurnSteps: 3,
+    entrySide: 'left', arrivalSide: 'right', entryTurnSteps: 2, arrivalTurnSteps: 3,
     totalSteps: totalStepsFromSections([7, 2, 7]) + 5,
   };
   assert.deepStrictEqual(portFields(stair), expected, '前提: 作成直後の値');
@@ -135,15 +135,15 @@ test('出入口の辺だけの切替（回転部・総段数は不変）が undo
 
   // 直前に別操作を積み、辺の切替が積まれなかった場合は undo 1回でこちらが戻って赤になるようにする
   withFinishUndo(graph, () => graph.setShaftWallMaterial(marker));
-  withFinishUndo(graph, () => stair.setField('entrySide', StairPortSide.OUTER));
-  assert.equal(graph.stairMap.get('s1').entrySide, 'outer');
+  withFinishUndo(graph, () => stair.setField('entrySide', StairPortSide.RIGHT));
+  assert.equal(graph.stairMap.get('s1').entrySide, 'right');
 
   undoManager.undo();
-  assert.equal(graph.stairMap.get('s1').entrySide, 'inner', 'undo で辺が inner に戻らない（エントリが積まれていない）');
+  assert.equal(graph.stairMap.get('s1').entrySide, 'left', 'undo で辺が left に戻らない（エントリが積まれていない）');
   assert.equal(graph.shaftWallMaterial, marker, 'undo 1回で直前の別操作まで戻った（辺の切替が積まれていない）');
 
   undoManager.redo();
-  assert.equal(graph.stairMap.get('s1').entrySide, 'outer', 'redo で辺が outer に戻らない');
+  assert.equal(graph.stairMap.get('s1').entrySide, 'right', 'redo で辺が right に戻らない');
 
   undoManager.undo();
   undoManager.undo();
@@ -188,7 +188,7 @@ test('不変条件: 全項目を既定値以外にした階段は snapshot→res
     cells: new Set(['a:b:c:d']), sections: [7, 2, 7],
     totalSteps: totalStepsFromSections([7, 2, 7]) + 5,
     tread: 260, riser: 180, nosing: 25, width: 1000, upDirection: 'up', flip: true, roomId: 'r1',
-    entrySide: StairPortSide.INNER, arrivalSide: StairPortSide.OUTER,
+    entrySide: StairPortSide.LEFT, arrivalSide: StairPortSide.RIGHT,
     entryTurnSteps: 2, arrivalTurnSteps: 3,
   };
   const defaults = new Stair('d', {});

@@ -10,6 +10,7 @@
 import { StairType, StairPortSide } from '@core';
 import { defaultSections } from './stairGeometry.js';
 import { defaultPortTurnSteps } from './stairClassify.js';
+import { MIN_RUN_RISERS, PORT_RUN_INDEX, stepsFieldOf } from './stairPorts.js';
 
 const U_TURN = new Set([StairType.SWITCHBACK, StairType.WINDING]);
 
@@ -49,19 +50,81 @@ export function sectionsForType(type, stair) {
   return arr;
 }
 
+
 /**
  * 出入口の辺（上り口 'entry'／到達口 'arrival'）を切り替えたときに Stair へ書くフィールド。
- * 走行端へ戻すと取りつき回転部は無くなる（蹴上数 0）。側面へ切り替えるとき蹴上数が 0 なら
- * 初期値（鉄骨 0・木造 張り出し÷踏面。defaultPortTurnSteps）を入れる。
- * @returns {Record<string, string|number>} setField で書くフィールド→値
+ * 総蹴上数（totalSteps）は変えない: 取りつき回転部の蹴上を足すぶん、その口のレーンの直進部（sections の
+ * 往路 0／復路 2）を同じ数だけ減らす（直進部は 2 段以上。守れなければ null＝その側面は選べない）。
+ * 走行端へ戻すと取りつき 0 にして、その蹴上を直進部へ戻す。側面へ切り替えるとき蹴上数が 0 なら
+ * 初期値（鉄骨 0・木造 区画の長さ÷踏面。defaultPortTurnSteps）を入れる。蹴上数が既にあれば辺だけ替える。
+ * @param {number} zoneMm - 区画（張り出し区間／等長レーンの基端の行）の長さ（stairPorts.js portZone の zoneLen）
+ * @returns {Record<string, string|number|number[]>|null} setField で書くフィールド→値（sections を含みうる）。
+ *   直進部が 2 段未満になる・sections が組めないときは null
  */
-export function portSideChange(stair, port, side, overhangMm) {
-  const sideField  = port === 'entry' ? 'entrySide' : 'arrivalSide';
-  const stepsField = port === 'entry' ? 'entryTurnSteps' : 'arrivalTurnSteps';
+export function portSideChange(stair, port, side, zoneMm) {
+  const sideField = port === 'entry' ? 'entrySide' : 'arrivalSide';
+  const stepsField = stepsFieldOf(port);
+  const idx = PORT_RUN_INDEX[port];
+  const cur = Math.max(0, stair[stepsField] ?? 0);
   const out = { [sideField]: side };
-  if (side === StairPortSide.END) out[stepsField] = 0;
-  else if (!(stair[stepsField] > 0)) out[stepsField] = defaultPortTurnSteps(stair.structure, overhangMm, stair.tread);
+  if (side === StairPortSide.END) {
+    out[stepsField] = 0;
+    if (cur > 0) {
+      const sections = [...(stair.sections ?? defaultSections(stair) ?? [])];
+      if (sections.length !== 3) return null;
+      sections[idx] += cur;
+      out.sections = sections;
+    }
+    return out;
+  }
+  if (cur > 0) return out;
+  const want = defaultPortTurnSteps(stair.structure, zoneMm, stair.tread);
+  out[stepsField] = want;
+  if (want > 0) {
+    const sections = [...(stair.sections ?? defaultSections(stair) ?? [])];
+    if (sections.length !== 3 || sections[idx] - want < MIN_RUN_RISERS) return null;
+    sections[idx] -= want;
+    out.sections = sections;
+  }
   return out;
+}
+
+// 取りつき回転部の蹴上（entry/arrival の指定ぶん）を 0 にして直進部へ戻す書込み（総蹴上数を保つ）。
+function foldTurnSteps(stair, ports) {
+  const out = {};
+  let sections = null;
+  for (const port of ports) {
+    const field = stepsFieldOf(port);
+    const cur = Math.max(0, stair[field] ?? 0);
+    if (cur === 0) continue;
+    out[field] = 0;
+    sections ??= [...(stair.sections ?? defaultSections(stair) ?? [])];
+    if (sections.length === 3) sections[PORT_RUN_INDEX[port]] += cur;
+  }
+  if (sections?.length === 3) out.sections = sections;
+  return out;
+}
+
+/**
+ * 昇り方向・反転を変えたときに出入口を自動へ戻す書込み（辺の向きが物理的に入れ替わるため）:
+ * entrySide/arrivalSide を null、取りつき蹴上を 0（その蹴上は直進部へ戻して総蹴上数を保つ）。U字以外は {}。
+ */
+export function resetPortSides(stair) {
+  if (!U_TURN.has(stair.type)) return {};
+  return { entrySide: null, arrivalSide: null, ...foldTurnSteps(stair, ['entry', 'arrival']) };
+}
+
+/**
+ * 解決した出入口（resolveStairPorts の結果）が走行端なのに取りつき蹴上が残っている状態を 0 にそろえる書込み
+ * （描画は走行端の取りつきを無視するため、残すと総蹴上数と図の段数字がずれる。蹴上は直進部へ戻す）。
+ * @param {{ entry:string, arrival:string }} resolved
+ */
+export function alignPortTurnSteps(stair, resolved) {
+  if (!U_TURN.has(stair.type)) return {};
+  return foldTurnSteps(stair, [
+    ...(resolved.entry === StairPortSide.END ? ['entry'] : []),
+    ...(resolved.arrival === StairPortSide.END ? ['arrival'] : []),
+  ]);
 }
 
 export const sameSections = (a, b) =>

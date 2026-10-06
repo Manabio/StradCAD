@@ -4,8 +4,8 @@ import { computeStairDimensions, floorHeightAbove } from './stairDimensions.js';
 import { roomBounds } from '../gridCells.js';
 import { measureStairSpans } from './stairClassify.js';
 import { stairFigurePrimitives } from './stairFigure.js';
-import { resolveUTurnPorts } from './stairGeometry.js';
-import { applySectionDimEdit, sectionsForType, sameSections, portSideChange } from './stairSectionEdit.js';
+import { portSpansOf, portZone, resolveStairPorts, portSideValue, stairPortCandidates } from './stairPorts.js';
+import { applySectionDimEdit, sectionsForType, sameSections, portSideChange, resetPortSides, alignPortTurnSteps } from './stairSectionEdit.js';
 import { resetUnderStairSplit } from './stairUnderSplit.js';
 import { AutoScaledFigure } from '../../structural/sectionFigure/AutoScaledFigure.jsx';
 import { annotatedFigure } from '../../structural/sectionFigure/sectionGeometry.js';
@@ -51,12 +51,12 @@ const STRUCTURE_OPTIONS = [
   { value: StructuralMaterialType.STEEL, label: '鉄骨' },
 ];
 
-// 折返し・回り階段の出入口の辺（張り出すレーン側だけ表示。既定は内側＝隣レーン側の通り芯）
-const PORT_SIDE_OPTIONS = [
-  { value: StairPortSide.INNER, label: '内側（隣レーン側）' },
-  { value: StairPortSide.END,   label: '走行端' },
-  { value: StairPortSide.OUTER, label: '外側' },
-];
+// 折返し・回り階段の出入口の辺（候補が2つ以上あるときだけ表示。左右はその口を歩く向きから見る）
+const PORT_SIDE_LABELS = {
+  [StairPortSide.END]:   '走行端',
+  [StairPortSide.LEFT]:  '左（上りから見て）',
+  [StairPortSide.RIGHT]: '右（上りから見て）',
+};
 const U_TURN_TYPES = new Set([StairType.SWITCHBACK, StairType.WINDING]);
 
 const DIRECTION_OPTIONS = [
@@ -72,7 +72,7 @@ const inputStyle = { flex: 1, fontSize: 13, padding: '4px 6px', border: '1px sol
 
 // 階段パラメータ編集の中身（仕上げパレットの「階段」タブ内に配置）。
 // どの階の階段も自分の階で削除できる（削除ボタンは常に有効）。
-export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
+export const StairEditor = observer(({ stair, graph, project, upperGraph = null, onDelete }) => {
   if (!stair) return null;
 
   const floorHeight = floorHeightAbove(project, project?.activePlane);
@@ -87,22 +87,36 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
   const figure = validB
     ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans, graph }), STAIR_FIGURE_FRAME)
     : null;
-  // 出入口の辺（折返し・回り階段で往路／復路が張り出すときだけ選べる。stairGeometry.js と同じ解決）
-  const ports = U_TURN_TYPES.has(stair.type) && spans?.lengths?.length === 3
-    ? resolveUTurnPorts(stair, { laneLenA: spans.lengths[0], laneLenB: spans.lengths[2] })
-    : null;
-  // 出入口の切替: 走行端へ戻すと取りつき回転部は 0、側面へ切り替えると初期蹴上数を入れる（stairSectionEdit.js）
+  // 出入口の辺（折返し・回り階段。stairGeometry.js と同じ解決）と、選べる候補（床のある部屋に面する辺だけ。
+  // 上り口は自階、到達口は上階の床で確かめる。上階が読めなければ幾何だけで絞り、注記を出す）
+  const portInfo = validB && U_TURN_TYPES.has(stair.type) ? portSpansOf(spans) : null;
+  const ports = portInfo ? resolveStairPorts(stair, portInfo) : null;
+  const portRows = ports ? ['entry', 'arrival'].map(port => {
+    const cands = stairPortCandidates(stair, graph, port, { floorGraph: port === 'entry' ? graph : upperGraph });
+    const current = portSideValue(stair, port, ports);
+    const sides = cands.sides.includes(current) ? cands.sides : [...cands.sides, current];
+    return { port, label: port === 'entry' ? '上り口' : '到達口', current, sides, floorChecked: cands.floorChecked };
+  }) : [];
+  const applyFields = (fields) => { for (const [k, v] of Object.entries(fields)) stair.setField(k, v); };
+  // 出入口の切替: 走行端へ戻すと取りつき回転部は 0、側面へ切り替えると初期蹴上数を入れる。総蹴上数は保つ
+  // （直進部が 2 段未満になる切替は何もしない。stairSectionEdit.js）
   const onPortSideChange = (port) => (e) => withFinishUndo(graph, () => {
-    const overhang = Math.abs(spans.lengths[0] - spans.lengths[2]);
-    for (const [k, v] of Object.entries(portSideChange(stair, port, e.target.value, overhang))) stair.setField(k, v);
+    const fields = portSideChange(stair, port, e.target.value, portZone(portInfo, port).zoneLen);
+    if (!fields) return;
+    applyFields(fields);
     afterEdit();
   });
 
   // 直進階段の編集時は階段下の分割セル指定を元に戻す（stairUnderSplit.js。
   // 分割CL自体は現仕様＝破れ線位置 FL+1600 へ同期され、STRAIGHT のままなら指定経路は
   // 維持される）。蹴上は編集後の値で解決し直す（render 時の riser は編集前のため）。
+  // 出入口が走行端なのに取りつき蹴上が残る状態は 0 にそろえる（編集で解決が変わりうるため）。
   const afterEdit = () => {
     if (!graph) return;
+    if (U_TURN_TYPES.has(stair.type)) {
+      const info = portSpansOf(measureStairSpans(stair, graph));
+      if (info) applyFields(alignPortTurnSteps(stair, resolveStairPorts(stair, info)));
+    }
     const r = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps) : null);
     resetUnderStairSplit(stair, graph, r);
   };
@@ -195,30 +209,25 @@ export const StairEditor = observer(({ stair, graph, project, onDelete }) => {
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>昇り方向</span>
-          <select style={inputStyle} value={stair.upDirection} onChange={e => withFinishUndo(graph, () => { stair.setField('upDirection', e.target.value); afterEdit(); })}>
+          <select style={inputStyle} value={stair.upDirection} onChange={e => withFinishUndo(graph, () => { stair.setField('upDirection', e.target.value); applyFields(resetPortSides(stair)); afterEdit(); })}>
             {DIRECTION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>反転</span>
-          <input type="checkbox" checked={stair.flip} onChange={e => withFinishUndo(graph, () => { stair.setField('flip', e.target.checked); afterEdit(); })} />
+          <input type="checkbox" checked={stair.flip} onChange={e => withFinishUndo(graph, () => { stair.setField('flip', e.target.checked); applyFields(resetPortSides(stair)); afterEdit(); })} />
         </div>
-        {ports?.entryLonger && (
-          <div style={rowStyle}>
-            <span style={labelStyle}>上り口</span>
-            <select style={inputStyle} value={ports.entry} onChange={onPortSideChange('entry')}>
-              {PORT_SIDE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+        {portRows.filter(r => r.sides.length > 1).map(r => (
+          <div key={r.port} style={{ marginBottom: 8 }}>
+            <div style={{ ...rowStyle, marginBottom: 0 }}>
+              <span style={labelStyle}>{r.label}</span>
+              <select style={inputStyle} value={r.current} onChange={onPortSideChange(r.port)}>
+                {r.sides.map(v => <option key={v} value={v}>{PORT_SIDE_LABELS[v]}</option>)}
+              </select>
+            </div>
+            {!r.floorChecked && <div style={{ fontSize: 11, color: '#64748b', marginLeft: 72 }}>上階の床は未確認</div>}
           </div>
-        )}
-        {ports?.arrivalLonger && (
-          <div style={rowStyle}>
-            <span style={labelStyle}>到達口</span>
-            <select style={inputStyle} value={ports.arrival} onChange={onPortSideChange('arrival')}>
-              {PORT_SIDE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-        )}
+        ))}
 
         {dims.warnings.length > 0 && (
           <div style={{ marginTop: 8, padding: 8, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4 }}>

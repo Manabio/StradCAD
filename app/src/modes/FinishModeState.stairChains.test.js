@@ -160,6 +160,35 @@ test('init: peek は採用階の数−1回（p1・p3 を1回ずつ。重複な�
   });
 });
 
+test('upperFloorGraph: 直上階の peek 済みグラフ（別インスタンス）。最上階・peek 前・読めなかった上階・検討案の平面は null', async () => {
+  const mid = setup({ activeIndex: 1 });
+  assert.equal(mid.state.upperFloorGraph, null, 'peek 前は引けない');
+  await withPeek(mid.peek, () => mid.state._loadStairChains());
+  const upper = mid.state.upperFloorGraph;
+  assert.equal(upper.plane.id, 'p3');
+  assert.notEqual(upper, mid.graphs[2], '本番の peek 同型（復元した別インスタンス）');
+  assert.equal(upper, mid.state._otherFloor('p3').graph, '再 peek せず otherFloors から引く');
+
+  const bottom = setup({ activeIndex: 0 });
+  await withPeek(bottom.peek, () => bottom.state._loadStairChains());
+  assert.equal(bottom.state.upperFloorGraph.plane.id, 'p2', '直上階は 1 つ上だけ（p3 ではない）');
+
+  const top = setup({ activeIndex: 2 });
+  await withPeek(top.peek, () => top.state._loadStairChains());
+  assert.equal(top.state.upperFloorGraph, null, '最上階は上階が無い');
+
+  const unreadable = setup({ activeIndex: 1 });
+  await withPeek(async (plane) => (plane.id === 'p3' ? null : unreadable.peek(plane)), () => unreadable.state._loadStairChains());
+  assert.equal(unreadable.state.upperFloorGraph, null, '上階が読めなければ null（候補は幾何だけで絞る）');
+
+  const alt = setup();
+  const { graph: altGraph } = alt.project.addPlane(3000, '検討', 'alt', 2, 1, true, 'p2', 1);
+  alt.project.activePlaneId = 'alt';
+  const altState = new FinishModeState(altGraph, alt.project);
+  await withPeek(alt.peek, () => altState._loadStairChains());
+  assert.equal(altState.upperFloorGraph, null, '検討案の平面は採用階の並びに無い');
+});
+
 test('【失敗系】init: peek の失敗は握りつぶさず reject（遠い階の失敗でも）', async () => {
   const { state, peek } = setup({ activeIndex: 0 });
   await withPeek(async (plane) => { if (plane.id === 'p3') throw new Error('p3 の読み失敗'); return peek(plane); }, async () => {

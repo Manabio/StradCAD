@@ -46,7 +46,7 @@ test('Stair.entrySide/arrivalSide は FlatBuffers encode→decode で往復し�
   const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.ARCH });
   const cells = new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]);
-  const withSides = graph.addStair({ type: StairType.SWITCHBACK, cells, sections: [5, 1, 5], entrySide: 'outer', arrivalSide: 'end', entryTurnSteps: 3 });
+  const withSides = graph.addStair({ type: StairType.SWITCHBACK, cells, sections: [5, 1, 5], entrySide: 'right', arrivalSide: 'end', entryTurnSteps: 3 });
   const auto = graph.addStair({ type: StairType.WINDING, cells, sections: [5, 5, 4] });
   assert.equal(withSides.totalSteps, 13, '総蹴上数は取りつき回転部（3）を含む: 10+3');
 
@@ -55,7 +55,7 @@ test('Stair.entrySide/arrivalSide は FlatBuffers encode→decode で往復し�
   restoreGraph(restored, bytes);
 
   const s1 = restored.stairMap.get(withSides.id);
-  assert.equal(s1.entrySide, 'outer');
+  assert.equal(s1.entrySide, 'right');
   assert.equal(s1.arrivalSide, 'end');
   assert.equal(s1.entryTurnSteps, 3);
   assert.equal(s1.arrivalTurnSteps, 0);

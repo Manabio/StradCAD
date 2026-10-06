@@ -98,7 +98,7 @@ export const StairTab = observer(({ graph, mode, project, onDeleteStair }) => {
       )}
       {selectedSelf && (
         <StairEditor
-          stair={selectedSelf} graph={graph} project={project}
+          stair={selectedSelf} graph={graph} project={project} upperGraph={mode.upperFloorGraph}
           onDelete={onDeleteStair}
         />
       )}

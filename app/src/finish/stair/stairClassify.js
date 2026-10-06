@@ -250,16 +250,14 @@ export function detectUTurn(cells, graph, isVertical, b) {
 }
 
 /**
- * U字（SWITCHBACK/WINDING）の区間実測。回転部（踊り場・回り段）＝**走行軸の遠端（upDirection の先）
- * に接する帯**（全幅セルがあればそれも含む）と定義し、往路＝幅方向 s<0.5 側（flip 込み）、
- * 復路＝s>0.5 側のセルが回転部前縁までに走行軸を覆う長さを各レーン長とする（往路≠復路の不等長可）。
- * 旧 detectUTurn の「最短スパン＝回り段」「安定ソート＝Set の並び順」への依存を持たない。
- * 描画（uTurnLayout）・破れ先セル判定（cellsBeyondBreak）・階段下壁（stairUnderWalls）が同じ tRun を読む。
- * @returns {{ laneA:number, depth:number, laneB:number, tRun:number, entryFull:boolean }|null} mm 長と回転部前縁 t。
- *   entryFull は往路の張り出し（取りつき）が全幅セル（両レーンにまたがる基端側の全幅セル）か。
- *   回転部が取れない（遠端に接するセルが無い・回転部が走行全長を占める・片レーンが空）なら null。
+ * U字の各セルを走行軸 t・幅方向 s の区間へ写し、レーン（A=往路 s<0.5／B=復路 s>0.5／null=回転部ほか）に
+ * 分類する。uTurnSpans（区間実測）と stairPorts.js（出入口の候補列挙）が同じ分類を使う。
+ * 回転部が取れない（遠端に接するセルが無い・回転部が走行全長を占める）なら null。
+ * @returns {{ f:object, L:number, tEps:number, tRun:number, isBaseStrip:(c:object)=>boolean,
+ *   infos:{ key:string, cb:object, tNear:number, tFar:number, sLo:number, sHi:number,
+ *     fullWidth:boolean, farTouching:boolean, lane:'A'|'B'|null }[] }|null}
  */
-export function uTurnSpans(stair, graph, b = null) {
+export function uTurnCellInfos(stair, graph, b = null) {
   if (!graph || !stair?.cells || stair.cells.size === 0) return null;
   const bb = b ?? roomBounds(stair.cells, graph);
   if (![bb.x1, bb.y1, bb.x2, bb.y2].every(Number.isFinite)) return null;
@@ -276,7 +274,7 @@ export function uTurnSpans(stair, graph, b = null) {
     const t1 = f.tOf(p1), t2 = f.tOf(p2), s1 = f.sOf(p1), s2 = f.sOf(p2);
     const tNear = Math.min(t1, t2), tFar = Math.max(t1, t2);
     const sLo = Math.min(s1, s2), sHi = Math.max(s1, s2);
-    infos.push({ tNear, tFar, sLo, sHi, fullWidth: sLo <= sEps && sHi >= 1 - sEps, farTouching: tFar >= 1 - tEps });
+    infos.push({ key, cb, tNear, tFar, sLo, sHi, fullWidth: sLo <= sEps && sHi >= 1 - sEps, farTouching: tFar >= 1 - tEps, lane: null });
   }
   // 基端側の全幅セル（レーンが始まるより手前にある全幅セル）は回転部ではなく往路の取りつき
   //（設置階上階スラブの張り出し下の踏み込み。実データ moku2-2）。往路レーンAの被覆に数える。
@@ -287,13 +285,33 @@ export function uTurnSpans(stair, graph, b = null) {
   if (turnCells.length === 0) return null;
   const tRun = Math.min(...turnCells.map(c => c.tNear));
   if (!(tRun > tEps) || tRun >= 1 - tEps) return null;
+  for (const c of infos) {
+    if (isBaseStrip(c)) c.lane = 'A';
+    else if (!c.fullWidth) c.lane = (c.sLo + c.sHi) / 2 < 0.5 ? 'A' : ((c.sLo + c.sHi) / 2 > 0.5 ? 'B' : null);
+  }
+  return { f, L, tEps, tRun, isBaseStrip, infos };
+}
+
+/**
+ * U字（SWITCHBACK/WINDING）の区間実測。回転部（踊り場・回り段）＝**走行軸の遠端（upDirection の先）
+ * に接する帯**（全幅セルがあればそれも含む）と定義し、往路＝幅方向 s<0.5 側（flip 込み）、
+ * 復路＝s>0.5 側のセルが回転部前縁までに走行軸を覆う長さを各レーン長とする（往路≠復路の不等長可）。
+ * 旧 detectUTurn の「最短スパン＝回り段」「安定ソート＝Set の並び順」への依存を持たない。
+ * 描画（uTurnLayout）・破れ先セル判定（cellsBeyondBreak）・階段下壁（stairUnderWalls）が同じ tRun を読む。
+ * @returns {{ laneA:number, depth:number, laneB:number, tRun:number, entryFull:boolean, firstRowA:number, firstRowB:number }|null} mm 長と回転部前縁 t。
+ *   entryFull は往路の張り出し（取りつき）が全幅セル（両レーンにまたがる基端側の全幅セル）か。
+ *   firstRowA/B は各レーンの基端の行の走行長（mm。等長レーンで出入口を側面にするときの区画）。
+ *   回転部が取れない（遠端に接するセルが無い・回転部が走行全長を占める・片レーンが空）なら null。
+ */
+export function uTurnSpans(stair, graph, b = null) {
+  const ci = uTurnCellInfos(stair, graph, b);
+  if (!ci) return null;
+  const { L, tEps, tRun, infos, isBaseStrip } = ci;
 
   // レーン長 = 回転部前縁までの走行軸の被覆長（区間の和集合。幅方向に細分されたセルの二重計上を防ぐ）
   const coverage = (side) => {
     const ivs = infos
-      .filter(c => side === 'A'
-        ? (isBaseStrip(c) || (!c.fullWidth && (c.sLo + c.sHi) / 2 < 0.5))
-        : (!c.fullWidth && (c.sLo + c.sHi) / 2 > 0.5))
+      .filter(c => c.lane === side)
       .map(c => [c.tNear, Math.min(c.tFar, tRun)])
       .filter(([lo, hi]) => hi - lo > tEps)
       .sort((p, q) => p[0] - q[0]);
@@ -307,9 +325,56 @@ export function uTurnSpans(stair, graph, b = null) {
   };
   const laneA = coverage('A'), laneB = coverage('B');
   if (!(laneA > 0) || !(laneB > 0)) return null;
+  // 基端の行 = レーンの基端（最小 tNear）から始まるセル群が走行軸を覆う長さ（等長レーンの出入口の区画。
+  // 幅方向に細分されたセルは同じ行。行内で終端がそろわないときは短い方に合わせる）
+  const firstRow = (side) => {
+    const own = infos.filter(c => c.lane === side && c.tNear < tRun - tEps);
+    if (own.length === 0) return 0;
+    const near = Math.min(...own.map(c => c.tNear));
+    const row = own.filter(c => c.tNear <= near + tEps);
+    return (Math.min(...row.map(c => Math.min(c.tFar, tRun))) - near) * L;
+  };
   // t（比率）経由の往復で生じる 1e-13 級の丸め誤差を落とす（区間長は mm。消費側は等値比較もする）
   const mm = (v) => Math.round(v * 1e6) / 1e6;
-  return { laneA: mm(laneA), depth: mm((1 - tRun) * L), laneB: mm(laneB), tRun, entryFull: infos.some(isBaseStrip) };
+  return {
+    laneA: mm(laneA), depth: mm((1 - tRun) * L), laneB: mm(laneB), tRun, entryFull: infos.some(isBaseStrip),
+    firstRowA: mm(firstRow('A')), firstRowB: mm(firstRow('B')),
+  };
+}
+
+/**
+ * stair.sections が未設定（null）の場合に totalSteps から妥当な既定値を組み立てる
+ *（totalStepsFromSections の逆算。区間の実段数は直進部≥2・周回部≥1 を保つ）。
+ */
+export function defaultSections(stair) {
+  const total = Math.max(2, stair.totalSteps);
+  const half = (t) => { const a = Math.max(2, Math.ceil(t / 2)); return [a, Math.max(2, t - a)]; };
+  switch (stair.type) {
+    case StairType.STRAIGHT:
+      return [total];
+    case StairType.STRAIGHT_LANDING:
+    case StairType.L_TURN:
+    case StairType.SWITCHBACK: {
+      const [a, s] = half(total);
+      return [a, 1, s];
+    }
+    case StairType.WINDING: {
+      const w = 3;
+      const [a, s] = half(total + 1 - w);
+      return [a, w, s];
+    }
+    case StairType.FLARED: {
+      const w = 2;
+      const [a, s] = half(total + 1 - w);
+      return [a, w, s];
+    }
+    case StairType.OPEN_WELL: {
+      const n = Math.max(2, Math.ceil(total / 3));
+      return [n, 1, n, 1, Math.max(2, total - 2 * n)];
+    }
+    default:
+      return null;
+  }
 }
 
 /**
@@ -650,7 +715,7 @@ export function measureStairSpans(stair, graph) {
       // [往路, 踊り場・回り部の深さ, 復路]。回転部＝走行軸遠端の帯（uTurnSpans）。往路≠復路の不等長可。
       const us = uTurnSpans(stair, graph, b);
       if (!us) return null;
-      return { lengths: [us.laneA, us.depth, us.laneB], entryFull: us.entryFull };
+      return { lengths: [us.laneA, us.depth, us.laneB], entryFull: us.entryFull, firstRowA: us.firstRowA, firstRowB: us.firstRowB };
     }
     case StairType.L_TURN:
     case StairType.FLARED: {
