@@ -15,18 +15,33 @@ export function clearLocalAutosave() {
 // オープン中の文書ファイル名（読込みした File.name、または保存で確定した名前。拡張子付き）の
 // localStorage キー。読込みは location.reload() を伴うため reload をまたいで残す。キー文字列の唯一の所有者はこのモジュール。
 const OPENED_FILE_NAME_KEY = 'strad-opened-file-name';
+// 上の名前が「実際の保存名として確認できていない」印（'1'）。実名を取れないブラウザ（<a download> 退避）で
+// 保存したときに立て、表示では名前の後ろにグレーの「(?)」を付ける（ユーザー指示2026-10-07。表示名のまま確定して
+// ブラウザが「(1)」を付けていても気づけるように）。読込み・ピッカー保存で確定名になれば消す。
+const OPENED_FILE_NAME_UNCONFIRMED_KEY = 'strad-opened-file-name-unconfirmed';
 
-// 読込みした文書ファイル名。未設定なら null。
+// オープン中の文書ファイル名。未設定なら null。
 export function getOpenedFileName() {
   return localStorage.getItem(OPENED_FILE_NAME_KEY);
 }
 
-export function setOpenedFileName(name) {
+// オープン中の文書ファイル名と確定の有無。未設定なら null。表示（App.jsx）はこちらを使う。
+export function getOpenedFileInfo() {
+  const name = getOpenedFileName();
+  if (name == null) return null;
+  return { name, confirmed: localStorage.getItem(OPENED_FILE_NAME_UNCONFIRMED_KEY) !== '1' };
+}
+
+// confirmed=false は「実際の保存名として確認できていない」（退避経路で保存した）印。既定は確定扱い（読込みの File.name は実名）。
+export function setOpenedFileName(name, confirmed = true) {
   localStorage.setItem(OPENED_FILE_NAME_KEY, name);
+  if (confirmed) localStorage.removeItem(OPENED_FILE_NAME_UNCONFIRMED_KEY);
+  else localStorage.setItem(OPENED_FILE_NAME_UNCONFIRMED_KEY, '1');
 }
 
 export function clearOpenedFileName() {
   localStorage.removeItem(OPENED_FILE_NAME_KEY);
+  localStorage.removeItem(OPENED_FILE_NAME_UNCONFIRMED_KEY);
 }
 
 // 読込みしたファイル名から保存ダイアログ用の名前（拡張子なし）を得る。末尾の .stq（大小無視）だけを外す。
@@ -60,8 +75,9 @@ export function downloadDocumentFile(json, fileName = defaultDocumentFileName())
 // 保存先の確定（2段階）。showSaveFilePicker は transient user activation を要するため、
 // 呼び出し側は時間のかかる await（構造同期待ち・exportDocument）より前に openDocumentFileTarget を呼ぶこと。
 // 書込み（writeDocumentFileTarget）は後でよい。
-// 戻り値: { kind:'handle', handle, name } = 実際に保存される名前（ブラウザが「(1)」等を付けた名前を含む）／
-//   { kind:'download', name } = 非対応ブラウザ（実名は取得不能なので要求名）／null = ユーザーが取消。
+// 戻り値: { kind:'handle', handle, name, confirmed:true } = 実際に保存される名前（ブラウザが「(1)」等を付けた名前を含む）／
+//   { kind:'download', name, confirmed:false } = 非対応ブラウザ（実名は取得不能なので要求名。表示は「(?)」付き）／
+//   null = ユーザーが取消。
 export async function openDocumentFileTarget(fileName = defaultDocumentFileName()) {
   const requested = fileName.endsWith('.stq') ? fileName : `${fileName}.stq`;
   if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
@@ -70,7 +86,7 @@ export async function openDocumentFileTarget(fileName = defaultDocumentFileName(
         suggestedName: requested,
         types: [{ description: 'strad 文書', accept: { 'application/json': ['.stq'] } }],
       });
-      return { kind: 'handle', handle, name: handle.name };
+      return { kind: 'handle', handle, name: handle.name, confirmed: true };
     } catch (e) {
       if (e && e.name === 'AbortError') return null;
       // SecurityError（user activation 切れ・iframe 内）等はダウンロードへ切り替えず失敗として伝える
@@ -79,7 +95,7 @@ export async function openDocumentFileTarget(fileName = defaultDocumentFileName(
       throw e;
     }
   }
-  return { kind: 'download', name: requested };
+  return { kind: 'download', name: requested, confirmed: false };
 }
 
 // openDocumentFileTarget で得た保存先へ json を書き込む。書込み途中の失敗（ディスク満杯・権限取消等）は

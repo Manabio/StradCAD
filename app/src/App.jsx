@@ -70,7 +70,7 @@ import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
 import { floorWriteGeneration } from './storage/floorWriteGeneration.js';
 import { createFinishExitStamps } from './finish/finishExitStamp.js';
-import { parseOpenedFileBytes, openDocumentFileTarget, writeDocumentFileTarget, defaultDocumentFileName, getOpenedFileName, setOpenedFileName, saveNameFromOpenedFileName } from './storage/localSnapshot.js';
+import { parseOpenedFileBytes, openDocumentFileTarget, writeDocumentFileTarget, defaultDocumentFileName, getOpenedFileInfo, setOpenedFileName, saveNameFromOpenedFileName } from './storage/localSnapshot.js';
 import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { isDocumentEnvelope } from './storage/documentFile.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
@@ -156,7 +156,7 @@ const App = observer(() => {
   const [showCalibration, setShowCalibration] = useState(false);
   const [showSiteDialog,  setShowSiteDialog]  = useState(false);
   const [saveDialogDefaultName, setSaveDialogDefaultName] = useState(null); // 非null=保存ファイル名ダイアログ表示中
-  const [openedFileName, setOpenedFileNameState] = useState(getOpenedFileName); // オープン中のファイル名（読込みで設定・保存で確定名に更新。読込みは reload を伴うので起動時に1回読む）
+  const [openedFile, setOpenedFileState] = useState(getOpenedFileInfo); // オープン中のファイル { name, confirmed }（読込みで設定・保存で確定名に更新。confirmed=false は実名未確認＝表示に「(?)」。読込みは reload を伴うので起動時に1回読む）
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
   const [CatalogMaintenancePanelComp, setCatalogMaintenancePanelComp] = useState(null); // 動的import済みのパネル本体（null=未ロード/非表示）
   const [CatalogResolveDialogComp, setCatalogResolveDialogComp] = useState(null); // 指示UI（ステップ6-3）ダイアログ本体（動的import済み。null=未ロード/非表示）
@@ -1874,7 +1874,7 @@ const App = observer(() => {
     }
     if (id === 'save') {
       // まずファイル名指定ダイアログを開く（確定時に handleSaveConfirm が保存を実行する）
-      setSaveDialogDefaultName(openedFileName ? saveNameFromOpenedFileName(openedFileName) : defaultDocumentFileName());
+      setSaveDialogDefaultName(openedFile ? saveNameFromOpenedFileName(openedFile.name) : defaultDocumentFileName());
       return;
     }
     if (id === 'settings') {
@@ -1906,8 +1906,8 @@ const App = observer(() => {
           markDirty();
           throw e;
         }
-        setOpenedFileName(target.name);
-        setOpenedFileNameState(target.name);
+        setOpenedFileName(target.name, target.confirmed);
+        setOpenedFileState({ name: target.name, confirmed: target.confirmed });
         setToast({ msg: '保存しました', key: Date.now() });
       } catch (e) {
         // 固有文言を保つため自前でcatchする（performUndoと同じ前例。内部呼び出し元は無い）
@@ -2445,14 +2445,20 @@ const App = observer(() => {
         position: 'fixed', top: 0, right: 6,
         height: TOP_BAR, display: 'flex', alignItems: 'center', zIndex: 210,
       }}>
-        {openedFileName && (
+        {openedFile && (
           <span
-            title={openedFileName}
+            title={openedFile.confirmed
+              ? openedFile.name
+              : `${openedFile.name}\n実際の保存名は確認できていません（同名ファイルがあるとブラウザが「(1)」等を付けることがあります）`}
             style={{
               maxWidth: 200, marginRight: 6, fontSize: 13, color: '#475569',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}
-          >{openedFileName}</span>
+          >
+            {openedFile.name}
+            {/* 実名を取れないブラウザ（<a download> 退避）で保存した名前には「(?)」をグレーで付ける（ユーザー指示2026-10-07） */}
+            {!openedFile.confirmed && <span style={{ color: '#94a3b8', marginLeft: 2 }}>(?)</span>}
+          </span>
         )}
         <HamburgerMenu onSelect={guardUi(handleHamburgerSelect)} />
       </div>
