@@ -22,7 +22,7 @@ async function makeVoidLinkedTwoFloorFixture() {
   const { graph: above } = project.addPlane(3000, '2階', 'p2');
   project.activePlaneId = 'p2';
 
-  // ensureTopStairVoid・pullCLEccentricities（runFinishEntryBoundary内。両方とも自階以外の全Planeを
+  // reconcileOnFinishEntry・pullCLEccentricities（runFinishEntryBoundary内。両方とも自階以外の全Planeを
   // peekする）が直下階・自階の両方をpeekしうるため、エントリ境界を呼ぶ前に両方差し替えておく——
   // pullCLEccentricitiesのplanePeeksは「呼び出し時に渡されたgraph引数」を自階として扱うため
   // （project.activePlaneIdではない）、below側のentry境界呼び出し中もaboveがpeek対象になる

@@ -25,10 +25,10 @@ import { refreshWallsAllFloors } from '../wallRefresh.js';
 // 突き合わせて再解釈した上で、通り芯変更等のトポロジー差分でエッジを再同期する）----
 // loadFloorFn（省略可）: pullCLEccentricities の事前確認用の階バイト列の読み手。省略＝従来どおり常に peek。
 export async function runFinishEntryBoundary(graph, project, { loadFloorFn = null } = {}) {
-  // 最上階なら直下階の屋内階段footprintへ階段吹抜け（STAIR_VOID）を補完する
-  // （既存データ修復。syncUpperFloors と同じ自動同期のため undo 対象外）
-  const { ensureTopStairVoid } = await import('./stair/stairFloorSync.js');
-  await ensureTopStairVoid(project, graph);
+  // 直下の採用階があれば、その屋内階段footprintと自階の階段吹抜け（STAIR_VOID）を整合する
+  // （不足の補完・孤児の未定義化。全階が対象。既存データ修復で、階操作の自動同期と同じく undo 対象外）
+  const { reconcileOnFinishEntry } = await import('./stair/stairFloorSync.js');
+  await reconcileOnFinishEntry(project, graph);
 
   const entryUndoFns = [];
   const entryRedoFns = [];
@@ -51,7 +51,7 @@ export async function runFinishEntryBoundary(graph, project, { loadFloorFn = nul
     reinterpretRoomsOnEntry(graph);
     // 再解釈（CL変更起因の部分指定化）で部分指定が親の残余より大きくなりうるため正規化する
     normalizePartialDominance(graph);
-    // roomIdなしStair（旧データ・上階自動設置分）へ階段Roomを補完（開くだけで修復）
+    // roomIdなしStair（旧データ）へ階段Roomを補完（開くだけで修復）
     stairRoomChanges.push(...ensureStairRooms(graph));
   });
   const roomsAfter = snapshotRoomsState(graph);
@@ -80,7 +80,7 @@ export async function runFinishEntryBoundary(graph, project, { loadFloorFn = nul
   // 突入のたびにここで埋める。pullMaterialMap は fmode（唯一の通常の情報源）がこの時点では
   // まだ生存していないため、clEccentricity.js と同じ理由で独立に動的 import する
   // （コード分割維持。materialData.js のヘッダコメント参照。loadMaterialMap は
-  // wallRegeneration.js に寄せた同じ構築の共有先）。ensureTopStairVoid と同格の
+  // wallRegeneration.js に寄せた同じ構築の共有先）。reconcileOnFinishEntry と同格の
   // 自動同期のため undo 対象外。
   const [{ pullCLEccentricities }, pullMaterialMap] = await Promise.all([
     import('./eccentricityFloorSync.js'),

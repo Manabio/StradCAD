@@ -955,8 +955,8 @@ test('【ステップ7・項目3】openingBeamSourcesFor: 最上階のSTAIR_VOID
   graph.addRoom(new Set([centerKey])).setFeature(RoomFeature.STAIR_VOID);
   graph.structureOverride = 'S造';
 
-  // belowGraphを渡さない（最上階には上階自動設置のコピー階段を持つ実体が無い——STAIR_VOIDは
-  // ensureTopStairVoidが最上階のRoom属性として直接指定するため、stairFilterFor(自階の階段の
+  // belowGraphを渡さない（直上階には階段の実体が無い——STAIR_VOIDは
+  // reconcileStairVoids／syncUpperFloorsが上階のRoom属性として直接指定するため、stairFilterFor(自階の階段の
   // 破れ先)とは無関係にopeningCellSetsが直接拾う）。
   const sources = openingBeamSourcesFor(graph, {});
   assert.ok(sources.length > 0, 'STAIR_VOID Roomからは下階peek無しでも開口由来梁芯の源が出る');

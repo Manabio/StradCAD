@@ -500,7 +500,7 @@ export const bootReady = (async () => {
   // 読込み時の全階壁sweep（壁の再生成をFinishModeStateから独立させる計画のステップ5。
   // 裁定2026-09-15）: 文書を開いた時点で主構造・階別構造・下地材コードの入力と壁の鍵が
   // 食い違っている階（他アプリ間での文書共有・旧バージョンの文書等）があれば、仕上げ脱出・
-  // 構造脱出と同じ規律で鍵不一致の階だけ壁を作り直す。ensureTopStairVoid・ensureStairRooms
+  // 構造脱出と同じ規律で鍵不一致の階だけ壁を作り直す。reconcileOnFinishEntry・ensureStairRooms
   // と同じ「突入時の自動修復」——undo 対象外（pushUndo:false・pushActiveStructuralUndo:false。
   // undoスタックは空のまま）だが、変更があれば markDirty() して保存を促す（保存すれば鍵も
   // 保存され次回は走らない。鍵一致で何も変わらなければ dirty にしない）。sweep が reject

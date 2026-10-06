@@ -1,5 +1,5 @@
 // 「階の並びが変わった」1つの出来事の唯一の入口。App.jsx はこれを1回呼ぶだけにする。追従処理
-// （階段の上階同期・昇降機の複製と再採番・外壁内側の部屋の自動追加・直下階の階段削除・新階への
+// （階段吹抜けの整合・昇降機の複製と再採番・外壁内側の部屋の自動追加・直下階の階段削除・新階への
 // 切替・全階の構造反映）は登録制のレジストリ（floorOrderFollowers）にまとめる。階段や昇降機の
 // 仕様が今後変わっても、登録先の follower だけ直せば挿入・下階追加・削除・ドラッグ移動・階変更の
 // 全経路に効く（modeBoundaries レジストリと同型。途中階の上階追加と階移動の振り直し一本化
@@ -37,23 +37,32 @@ export const FLOOR_ORDER_KIND = Object.freeze({
 
 // below（直下の採用階）の階段をすべて削除する。アクティブ階はライブグラフ、非アクティブ階は
 // peekして保存する（App.jsx removeStairsOnFloor をここへ移した。runDeleteFloorからだけ呼ばれていた）。
-async function removeStairsOnPlane(project, plane) {
+// 消し方は正規の削除経路 removeStairOnFloor（ペア部屋の未定義化・階段下の分割CL・外部仕上げ行まで。
+// ユーザー裁定2026-10-06 Q3）。階段の上の階の吹抜けは、続く stairVoidReconcile が孤児として未定義化する。
+// io（テスト注入用。既定は本番の peek／saveFloor）。
+async function removeStairsOnPlane(project, plane, {
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+} = {}) {
   const isActive = plane.id === project.activePlaneId;
-  const g = isActive ? project.activeGraph : await floorSwapManager.peek(plane, project.structGraph);
+  const g = isActive ? project.activeGraph : await peekFn(plane);
   if (g.stairs.length === 0) return;
-  runInAction(() => { for (const s of [...g.stairs]) g.removeStair(s.id); });
-  if (!isActive) await saveFloor(plane.id, serializeGraph(g)); // アクティブ階は auto-save に委ねる
+  const { removeStairOnFloor } = await import('./finish/stair/stairRemoval.js');
+  runInAction(() => { for (const s of [...g.stairs]) removeStairOnFloor(g, s); });
+  if (!isActive) await saveFloorFn(plane.id, serializeGraph(g)); // アクティブ階は auto-save に委ねる
 }
 
 // 追従処理のレジストリ（登録順＝実行順）。各 follower は { name, appliesTo, before?(ctx), run(ctx) }。
 // delete は旧 runDeleteFloor の順序（下階の階段削除 → 振り直し → 昇降機の再採番。再採番は
 // HEADどおり後始末の最後に置く——throwしても他の後始末は完了済みにする意図を保つため、delete専用の
 // elevatorRenumber を構造反映の後ろへ登録する）、insert は旧 executeAddUpper/'general' の順序
-// （階段の上階同期 → 昇降機の複製 → 外壁内側の部屋）を、appliesTo の違い（roofPlaneHeightは全種別・
+// （階段吹抜けの整合 → 昇降機の複製 → 外壁内側の部屋）を、appliesTo の違い（roofPlaneHeightは全種別・
 // elevatorCopyはinsertのみ・elevatorRenumberはdeleteのみ・stairsBelowRemovalはdeleteのみ・
-// exteriorRoomはinsertのみ・stairUpperSyncはinsert/reorder・structuralReflectは
+// exteriorRoomはinsertのみ・stairVoidReconcile／structuralReflectは
 // insert/addLower/delete/reorder/change）で同じ配列に両立させている（リード指示・F5裁定・
-// 2026-10-01。reorder/changeはステップ4でQ1裁定）。
+// 2026-10-01。reorder/changeはステップ4でQ1裁定。階段は上階へ実体を自動設置せず、設置階の直上1階に
+// 吹抜けだけを置く方式＝2026-10-06 裁定。stairVoidReconcile は stairsBelowRemoval の後・
+// structuralReflect の前）。
 export const floorOrderFollowers = [
   {
     // 屋根平面の高さは最上階に従属する（最上階 id が同じでも、振り直しで高さ・階番号だけ動くことが
@@ -76,25 +85,30 @@ export const floorOrderFollowers = [
     },
   },
   {
-    name: 'stairUpperSync',
-    // reorder（ドラッグ移動）も含める（§5-6「移動後にfollower（構造反映・階段同期）が呼ばれる」・
-    // Q1裁定・2026-10-01）。syncUpperFloorsAutoはセル集合の一致で既存の階段を飛ばす冪等処理
-    // （§2.4）のため、階段の無い移動では何もせず、移動によって新しい直下階ができたときだけ効く。
-    appliesTo: [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.REORDER],
-    async run(ctx) {
-      const { syncUpperFloorsAuto } = await import('./finish/stair/stairFloorSync.js');
-      await syncUpperFloorsAuto(ctx.project, ctx.sourceGraph);
-    },
-  },
-  {
     name: 'stairsBelowRemoval',
     appliesTo: [FLOOR_ORDER_KIND.DELETE],
     async run(ctx) {
       if (!ctx.below) return;
-      await removeStairsOnPlane(ctx.project, ctx.below);
+      await removeStairsOnPlane(ctx.project, ctx.below, ctx.floorIo);
       const belowAlts = [...ctx.project.planeMap.values()]
         .filter(p => p.isAlternative && p.referenceId === ctx.below.id);
-      for (const alt of belowAlts) await removeStairsOnPlane(ctx.project, alt);
+      for (const alt of belowAlts) await removeStairsOnPlane(ctx.project, alt, ctx.floorIo);
+    },
+  },
+  {
+    // 階の並びが変わった後、採用階の隣り合う全ペアで階段吹抜け（STAIR_VOID）を整合する（挿入で
+    // 行き先が変わった階・並替え／階変更で直下階が変わった階・削除で直下階の階段が消えた階の孤児の
+    // 吹抜けの未定義化）。階段そのものは触らない（行き先が変わるだけ。段数は保つ＝再計算しない）。
+    // 削除で直下階の階段を消す stairsBelowRemoval の後に置く（消してから整合を取る）。structuralReflect
+    // の前＝壁・梁芯の再計算が整合後の吹抜けを読む。
+    name: 'stairVoidReconcile',
+    appliesTo: [
+      FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
+      FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+    ],
+    async run(ctx) {
+      const { reconcileAllStairVoids } = await import('./finish/stair/stairFloorSync.js');
+      await reconcileAllStairVoids(ctx.project, ctx.floorIo);
     },
   },
   {
@@ -189,13 +203,15 @@ export const floorOrderFollowers = [
  * @param {object} [opts.removedPlane] - 削除対象のPlane。deleteの追従処理が使う
  * @param {object|null} [opts.below] - 削除対象の直下の採用階。deleteの追従処理が使う
  * @param {{notify:(msg:string)=>void, switchFloor:(planeId:string)=>Promise<boolean>, onFloorSyncChanged:()=>void}} opts.ui
+ * @param {{peekFn?:Function, saveFloorFn?:Function}} [opts.floorIo] - 他階の peek／保存の差し替え（テスト注入用。
+ *   省略時は本番の floorSwapManager.peek／saveFloor。階段の削除・吹抜けの整合の follower が使う）
  * @param {Array} [followers] - 既定 floorOrderFollowers（テスト用に差し替え可能）
  * @returns {Promise<{addedPlane:object|null, halted:boolean}>}
  */
 export async function applyFloorOrderChange(project, opts, followers = floorOrderFollowers) {
-  const { kind, updates, addPlane, removePlane, sourceGraph, newStartFloor, removedPlane, below, ui } = opts;
+  const { kind, updates, addPlane, removePlane, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo } = opts;
   const ctx = {
-    project, kind, updates, sourceGraph, newStartFloor, removedPlane, below, ui,
+    project, kind, updates, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo,
     addedPlane: null, targetPlaneId: null, state: {},
   };
 

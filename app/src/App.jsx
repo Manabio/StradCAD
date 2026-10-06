@@ -228,7 +228,7 @@ const App = observer(() => {
   }
   // 仕上げモード: 部屋名ダイアログ（新規Roomの命名専用）・仕上げ表内部タブのカード
   // （既存部屋の名称・区分・属性の編集）の両方から呼ぶ共通処理（applyNaming＋階段変換時の
-  // 上階自動設置 syncUpperFloors）。
+  // 直上階の階段吹抜けの整合 syncUpperFloors）。
   function applyRoomNaming(id, payload, { stairChecked = false } = {}) {
     // 昇降機の新規設置（非昇降機属性→昇降機属性）だけは非同期の関門（installElevatorFromNaming）へ
     // 分ける——上階の事前チェック・自動設置・下方延長を伴うため（ステップ4・S3b）。既存の拒否
@@ -1330,7 +1330,7 @@ const App = observer(() => {
     setFloorDialog({ isLowest, anchor: { x: rect.left, y: rect.bottom } });
   }
 
-  // 階追加（'upper'/'general'/'lower'）で新階ができた後の追従処理（階段の上階同期・昇降機の複製・
+  // 階追加（'upper'/'general'/'lower'）で新階ができた後の追従処理（階段吹抜けの整合・昇降機の複製・
   // 外壁内側の部屋の自動追加・新階への切替・全階の構造反映）は floorOrderChange.js のレジストリ
   // （floorOrderFollowers）が一元化する。App.jsx は applyFloorOrderChange を1回呼ぶだけ
   // （途中階の上階追加と階移動の振り直し一本化 ステップ3）。
@@ -1520,7 +1520,7 @@ const App = observer(() => {
 
   // ---- フロアタブのドラッグ割り込み ----
   // 並替後の startFloor/elevation/name 再採番は floorOps.js の計算部（computeFloorReorder）に委譲し、
-  // 本体・追従処理（階段の上階同期・全階の構造反映）・undo は applyFloorOrderChange／
+  // 本体・追従処理（階段吹抜けの整合・全階の構造反映）・undo は applyFloorOrderChange／
   // withFloorOpUndo（floorOrderChange.js／本ファイル）へ委譲する（Q1裁定・途中階の上階追加と
   // 階移動の振り直し一本化 ステップ4）。no-op（更新一覧が空）は関門に入らず同期で抜ける。
   async function runReorderFloor(fromId, toZone) {
@@ -1731,9 +1731,9 @@ const App = observer(() => {
       // 一本化 ステップ3・§4.3）。
       const afterRemoval = adopted.filter(p => p.id !== planeId);
       const updates = computeFloorDeleteReorder(afterRemoval, idx); // 削除位置が末尾なら内部で空配列
-      // 新階の追従処理（階段の上階同期・昇降機の複製等）と同様、本体・追従処理は
+      // 新階の追従処理（階段吹抜けの整合・昇降機の複製等）と同様、本体・追従処理は
       // applyFloorOrderChange（floorOrderChange.js）へ委譲する（器具idを読む・下階の階段を
-      // 削除する・昇降機を再採番する・全階の構造反映は floorOrderFollowers 側で行う）。
+      // 削除する・階段吹抜けを整合する・昇降機を再採番する・全階の構造反映は floorOrderFollowers 側で行う）。
       await applyFloorOrderChange(project, {
         kind: FLOOR_ORDER_KIND.DELETE,
         updates,

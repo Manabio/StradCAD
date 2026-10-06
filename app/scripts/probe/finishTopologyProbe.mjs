@@ -23,7 +23,7 @@
 // reinterpretRoomsOnEntry→normalizePartialDominance→ensureStairRooms→syncEdgesFromTopology
 // の4関数（いずれも同期・graph のみに作用し、cells/edges の形を決める）は本 probe でも
 // 同じ順序で呼ぶ。以下は意図的に省く（対象関数の出力に影響しないため）:
-//   - ensureTopStairVoid: 最上階への階段吹抜け補完（Stair.roomId の解決）。IndexedDB peek を
+//   - reconcileOnFinishEntry: 直下階の階段の吹抜け整合（Stair.roomId の解決）。IndexedDB peek を
 //     要求するうえ、isDividerCL・classifyAxisLineType が見る CL の種別・extent を変えない——
 //     ただし、これが補完しうる階段吹抜け Room 自体は本 probe では生成されないため、その Room に
 //     由来する edge・cell の割当（該当階が最上階でStair.roomIdが未解決の場合のみ発生）は測れない

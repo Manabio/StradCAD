@@ -1,3 +1,4 @@
+import { runInAction } from 'mobx';
 import { floorSwapManager } from '../../storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
 import { saveFloor } from '../../storage/db.js';
@@ -6,7 +7,7 @@ import { refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
 import { collectNeededCLs, addMissingCLs, translateCellSet } from '../floorCLMap.js';
 import { RoomFeature, isRoofFeature } from '@core';
-import { setsEqual, isIndoorStair, addStairVoidRoom, reconcileStairVoids } from './stairVoidReconcile.js';
+import { setsEqual, reconcileStairVoids, clearStairVoidsWithoutBelow } from './stairVoidReconcile.js';
 import { upperAdoptedPlanes } from '../roof/roofFloorCheck.js';
 import { findStairUpperRoofConflicts } from './stairRoofConflict.js';
 import {
@@ -17,7 +18,8 @@ import { floorWriteGeneration } from '../../storage/floorWriteGeneration.js';
 import { rollbackSavedFloors, applyRecords, amendOnAppliedOnly } from '../floorUndoRecords.js';
 import { planStairRemovalCascade, applyStairRemovalToFloor } from './stairRemoval.js';
 
-// setsEqual・isIndoorStair・addStairVoidRoom は純モジュール stairVoidReconcile.js へ移した（挙動は同じ）
+// setsEqual・isIndoorStair・addStairVoidRoom は純モジュール stairVoidReconcile.js へ移した（挙動は同じ）。
+// 階操作・仕上げ突入の整合は reconcileAllStairVoids・reconcileOnFinishEntry（下記）。
 
 /**
  * 階段の新規指定（部屋→階段）の事前チェック。syncUpperFloors が展開する位置（設置階の直上1階の、
@@ -70,7 +72,7 @@ export async function findStairUpperRoofRejection(
  * 別途同期コピーする。
  *
  * 非アクティブ階への変更は floorSwapManager.peek → saveFloor の既存パターンを踏襲する。
- * 対象の階がアクティブ階のとき（syncUpperFloorsAuto 経由）はメモリ上のグラフを直接更新する
+ * 対象の階がアクティブ階のとき（階操作の整合 reconcileAllStairVoids 等）はメモリ上のグラフを直接更新する
  * （本体のコメント参照）。
  *
  * undo: opts.undoEntry（applyNaming が積んだ階段変換エントリ）を渡すと、変更した階の
@@ -78,7 +80,7 @@ export async function findStairUpperRoofRejection(
  * する——変換の Ctrl+Z 1回で直上階の吹抜けもまとめて巻き戻る。復元はその階が
  * アクティブならメモリ上のグラフへ restoreGraph、非アクティブなら saveFloor で IDB へ
  * 書き戻す（peek はキャッシュを持たず毎回 IDB から読むため、これで完全に復元される）。
- * undoEntry を渡さない呼び出し（階追加時の syncUpperFloorsAuto 等）は従来どおり undo 対象外。
+ * undoEntry を渡さない呼び出しは従来どおり undo 対象外。
  *
  * @param {object} project
  * @param {object} activeGraph - 設置階（アクティブ）のグラフ
@@ -101,7 +103,7 @@ export async function syncUpperFloors(project, activeGraph, {
   const plane = planes[idx + 1]; // 対象は直上の1階だけ
   const undoRecords = []; // { planeId, before, after }（undoEntry がある場合のみ収集）
 
-  // 起点探索付き同期（syncUpperFloorsAuto）ではアクティブ階が同期対象になりうる。
+  // アクティブ階が同期対象になりうる（上の階で階段を指定して続ける場合等）。
   // アクティブ階を peek→saveFloor で書き換えると、後のモード切替保存（floorSwapManager.swap が
   // メモリ上のグラフを保存する）で上書き消失するため、メモリ上のグラフを直接更新する
   // （永続化は auto-save / floorSwapManager.swap に任せ、saveFloor はスキップする）。
@@ -141,40 +143,94 @@ export async function syncUpperFloors(project, activeGraph, {
 }
 
 /**
- * syncUpperFloors の起点探索付きラッパー（階追加時用）。表示中の階（sourceGraph）に階段が
- * あればそのまま同期し、無ければそれより下の採用フロアを上から順に peek して、階段を持つ
- * 最初の階を起点に同期する。同期されるのは起点の直上1階だけ（syncUpperFloors）。
- * ステップ5で follower ごと置き換える予定。
+ * 階の並びが変わった後に、採用階の隣り合う全ペア（下→上の昇順）で階段吹抜けを整合する
+ * （floorOrderFollowers の stairVoidReconcile が呼ぶ）。各ペアで reconcileStairVoids(上, 下) →
+ * ensureStairRooms(上)。アクティブ階はライブグラフ（保存は auto-save に委ねる）、非アクティブ階は
+ * 平面ごとに1回だけ peek し、その平面に関わる全変更（「上」としての整合）を適用して、変更があった
+ * 平面だけ1回 saveFloor する（同じ平面を2回 peek しない）。ペアは下から順に処理し、直前のペアで
+ * 変えた平面を同じグラフ（キャッシュ）のまま次のペアの「下」に使う。
+ * 途中（整合・保存のどちらでも）で例外が出たら、保存済みの階とアクティブ階を変更前のバイト列へ
+ * rollbackSavedFloors で戻してから元の例外を再スローする。
+ * 最下階（直下階が無い）は clearStairVoidsWithoutBelow で STAIR_VOID を全部未定義化する。採用階が0なら何もしない。
+ * @param {object} project
+ * @param {object} [opts]
+ * @param {(plane: object) => Promise<object>} [opts.peekFn] - 既定 floorSwapManager.peek（テスト注入用）
+ * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [opts.saveFloorFn] - 既定 saveFloor（テスト注入用）
+ * @returns {Promise<{ changedPlaneIds: string[] }>} 変更した平面（アクティブ階を含む）
  */
-export async function syncUpperFloorsAuto(project, sourceGraph) {
-  if (sourceGraph.stairs.length > 0) return syncUpperFloors(project, sourceGraph);
-  const planes = project.planes;
-  const idx = planes.findIndex(p => p.id === sourceGraph.plane?.id);
-  for (let i = idx - 1; i >= 0; i--) {
-    const temp = await floorSwapManager.peek(planes[i], project.structGraph);
-    if (temp.stairs.length > 0) return syncUpperFloors(project, temp);
+export async function reconcileAllStairVoids(project, {
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+} = {}) {
+  const planes = project.planes; // elevation 昇順・採用フロアのみ
+  if (planes.length === 0) return { changedPlaneIds: [] };
+
+  const entries = new Map(); // planeId -> { plane, graph, isActive, changed }
+  const entryOf = async (plane) => {
+    let e = entries.get(plane.id);
+    if (e) return e;
+    const isActive = plane.id === project.activePlaneId;
+    const graph = isActive ? project.activeGraph : await peekFn(plane);
+    if (!graph) throw new Error(`reconcileAllStairVoids: 階のグラフがありません（plane=${plane.id}）`);
+    e = { plane, graph, isActive, changed: false };
+    preBytesByPlane.set(plane.id, serializeGraph(graph)); // 失敗時の巻き戻し用（変更前）
+    entries.set(plane.id, e);
+    return e;
+  };
+
+  const preBytesByPlane = new Map(); // planeId -> 変更前のバイト列
+  const savedPlaneIds = [];
+  try {
+    // 最下階には直下階が無い＝STAIR_VOID は全部孤児（未定義化）
+    const lowest = await entryOf(planes[0]);
+    if (runInAction(() => clearStairVoidsWithoutBelow(lowest.graph)).changed) lowest.changed = true;
+    for (let i = 0; i + 1 < planes.length; i++) {
+      const below = await entryOf(planes[i]);
+      const upper = await entryOf(planes[i + 1]);
+      runInAction(() => {
+        if (reconcileStairVoids(upper.graph, below.graph, project.structGraph).changed) upper.changed = true;
+        if (ensureStairRooms(upper.graph).length > 0) upper.changed = true;
+      });
+    }
+    for (const e of entries.values()) {
+      if (!e.changed || e.isActive) continue; // アクティブ階は auto-save に委ねる
+      await saveFloorFn(e.plane.id, serializeGraph(e.graph));
+      savedPlaneIds.push(e.plane.id);
+    }
+  } catch (err) {
+    // 保存済みの階とアクティブ階（メモリ上）を変更前へ戻す。巻き戻し自体の失敗は元の例外を優先する
+    const activeEntry = [...entries.values()].find(e => e.isActive);
+    const rollbackIds = activeEntry ? [...savedPlaneIds, activeEntry.plane.id] : savedPlaneIds;
+    try { await rollbackSavedFloors(rollbackIds, preBytesByPlane, project, saveFloorFn); } catch { /* 元の例外を再スロー（rollbackSavedFloors が console.error 済み） */ }
+    throw err;
   }
+
+  return { changedPlaneIds: [...entries.values()].filter(e => e.changed).map(e => e.plane.id) };
 }
 
 /**
- * アクティブ階が最上階（採用）のとき、直下階の屋内階段 footprint へ階段吹抜け（STAIR_VOID）を
- * 補完する（仕上げモード突入時の既存データ修復。syncUpperFloors と同じ自動同期のため undo 対象外）。
- * ステップ5で reconcileStairVoids へ置き換える予定（このステップでは触らない）。
- * @returns {Promise<boolean>} 追加したか
+ * 仕上げモード突入時の整合（既存データ修復）。自階の直下に採用階があれば、その階を peek して
+ * reconcileStairVoids(自階, 直下階)。最下階（idx 0）は peek せず clearStairVoidsWithoutBelow（吹抜けは全部孤児）。
+ * 全階が対象（最上階限定ではない）。自階（アクティブ）のメモリ上のグラフだけを更新する（直下階は読むだけ）。
+ * 階操作の follower と同じ自動同期のため undo 対象外。採用階でない階（検討案）は何もしない。
+ * ペア部屋への転用（ensureStairRooms）は、後続の突入境界（runFinishEntryBoundary）の
+ * ensureStairRooms（undo 追跡付き）に任せる。
+ * @param {object} project
+ * @param {object} activeGraph - 突入する階（アクティブ）のグラフ
+ * @param {object} [opts]
+ * @param {(plane: object) => Promise<object>} [opts.peekFn] - 既定 floorSwapManager.peek（テスト注入用）
+ * @returns {Promise<boolean>} 自階のグラフを変更したか
  */
-export async function ensureTopStairVoid(project, activeGraph) {
+export async function reconcileOnFinishEntry(project, activeGraph, {
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+} = {}) {
   const planes = project.planes;
   const idx = planes.findIndex(p => p.id === activeGraph?.plane?.id);
-  if (idx < 1 || idx !== planes.length - 1) return false; // 最上階のみ・下階必須
-  const below = await floorSwapManager.peek(planes[idx - 1], project.structGraph);
-  let changed = false;
-  for (const stair of below.stairs) {
-    if (!isIndoorStair(below, stair)) continue;
-    const cells = translateCellSet(stair.cells, below, project.structGraph, activeGraph);
-    if (!cells) continue; // CL変換不能 → 安全側でスキップ
-    if (addStairVoidRoom(activeGraph, cells)) changed = true;
-  }
-  return changed;
+  if (idx < 0) return false; // 採用階でない
+  if (idx === 0) return runInAction(() => clearStairVoidsWithoutBelow(activeGraph)).changed;
+  const below = await peekFn(planes[idx - 1]);
+  if (!below) throw new Error(`reconcileOnFinishEntry: 直下階のグラフがありません（plane=${planes[idx - 1].id}）`);
+  return runInAction(() => reconcileStairVoids(activeGraph, below, project.structGraph)).changed;
 }
 
 /**

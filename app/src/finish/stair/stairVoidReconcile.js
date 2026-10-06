@@ -151,6 +151,23 @@ export function reconcileStairVoids(graph, belowGraph, structGraph) {
 }
 
 /**
+ * 直下の採用階が無い階（最下階）の階段吹抜け（STAIR_VOID）を全部孤児として未定義化する（純関数・同期。
+ * 外形を保つ makeRoomUndefined。reconcileStairVoids の孤児処理と同じ扱い）。
+ * @param {object} graph 最下階。直接書き換える
+ * @returns {{ changed: boolean, removed: Array<{roomId, reason:'orphan'}> }}
+ */
+export function clearStairVoidsWithoutBelow(graph) {
+  if (!graph) throw new Error('clearStairVoidsWithoutBelow: graph がありません');
+  const result = { changed: false, removed: [] };
+  for (const room of graph.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID)) {
+    makeRoomUndefined(room);
+    result.removed.push({ roomId: room.id, reason: 'orphan' });
+    result.changed = true;
+  }
+  return result;
+}
+
+/**
  * cells（候補の部屋のセル）に触れる階段吹抜け（STAIR_VOID）を、全体が含まれるものと一部だけ重なるものに分ける
  * （純関数・読むだけ）。続きの階段の指定（FinishModeState.applyNaming）が、吸収してよい吹抜けと
  * 拒否すべき部分的な重なりを見分けるのに使う。両辺を refreshCells で現行グリッドの原子セルへ展開して比べる。
