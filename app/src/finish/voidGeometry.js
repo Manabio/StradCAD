@@ -44,10 +44,10 @@ function buildCross(id, feature, cells, graph) {
 
 /**
  * 「上部吹抜け」（直下階に描く上階吹抜けの×・外形）の破線パターン（スクリーンpx）。
- * **上階に床が無い範囲の外形を表す破線の唯一の供給源**——階段側の見上げ破線
- * （上階スラブ開口の縁。finish/stair/stairLineJoinPrimitives.js の `stairUpperOpeningDashPx`）も
- * これを参照する。同じ性質の線なのに線種が食い違うと、隣り合ったとき混在して見える
- * （ユーザー決定2026-09）。自階の吹抜け（一点鎖線）・見下げの点線は別の線種で、ここには含めない。
+ * **平面の「見えない線」の破線パターンの供給源**——階段の上り部分（破れ先）の破線
+ * （finish/stair/stairLineJoinPrimitives.js の `stairDownviewDashPx`）もこれを参照する。
+ * 線種が食い違うと、隣り合ったとき混在して見える（ユーザー決定2026-09）。
+ * 自階の吹抜け（一点鎖線）は別の線種で、ここには含めない。階段の見上げ破線（開口の縁）は廃止済み（2026-10-06）。
  */
 export const UPPER_VOID_DASH_PX = [8, 4];
 

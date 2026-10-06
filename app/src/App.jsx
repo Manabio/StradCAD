@@ -30,7 +30,7 @@ import { floorHeightAbove, stairRiserOf } from './finish/stair/stairDimensions.j
 import { snapshotFinishState, restoreFinishState } from './finish/finishUndo.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
 import { shouldShowPlanFigure, shouldShowEquipmentSymbols } from './renderer/planFigureVisibility.js';
-import { slabOpeningRects, slabOpeningFrames, slabOpeningEdges } from './finish/stair/slabOpening.js';
+import { slabOpeningRects } from './finish/stair/slabOpening.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
 import { computeVoidCrosses } from './finish/voidGeometry.js';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
@@ -184,8 +184,6 @@ const App = observer(() => {
   // 直上階のスラブ開口（＝上階に床が無い領域）のワールド矩形。破れ線から先の階段を点線で
   // 描くときの可視範囲に使う。null=上階が無い／未解決（クリップしない＝安全側）。
   const [upperSlabOpenings, setUpperSlabOpenings] = useState(null);
-  // 同じ開口の「境界CL矩形＋描画用の壁面矩形」。見上げ破線（開口の縁）を描くのに使う。
-  const [upperSlabFrames, setUpperSlabFrames] = useState(null);
   // CL偏芯の階またぎ連動（他階のIDBを直接更新）後に、直上階peek系のstateを再計算させるトリガー
   const [floorSyncTick, setFloorSyncTick] = useState(0);
   // 構造モードのスライダーで選択中の図面スロット key（`slotType:planeId`）。1平面に複数スロットが
@@ -827,7 +825,6 @@ const App = observer(() => {
       if (!above || !active || !shouldShowPlanFigure(appMode)) {
         setUpperVoidCrosses([]);
         setUpperSlabOpenings(null); // 上階なし＝スラブ開口は判定不能（クリップしない）
-        setUpperSlabFrames(null);
         return;
       }
       const temp = await floorSwapManager.peek(above, project.structGraph);
@@ -838,7 +835,6 @@ const App = observer(() => {
       const riserOf = (s) => stairRiserOf(s, project, above);
       const openings = slabOpeningRects(temp, { riserOf });
       setUpperSlabOpenings(openings);
-      setUpperSlabFrames(slabOpeningFrames(temp, { riserOf }));
     })().catch(console.error); // 非オーナータブでは peek → openDB が reject する（unhandled rejection防止）
     return () => { cancelled = true; };
   }, [appMode, activeFloorId, floorSyncTick, planesKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2409,8 +2405,6 @@ const App = observer(() => {
       appMode, viewport, upperStairEntriesPeek: upperStairEntries, upperSlabOpenings,
       stairBreakOverhangMm: overhangMm(viewport, false), // stairEntries.js は snap.js に依存しないため、ここで算出して渡す
     });
-  // 直上階スラブ開口の縁（見上げ破線）。当該階の壁に覆われた区間は既に実線があるので描かない。
-  const stairSlabOpeningEdges = isStairMode ? slabOpeningEdges(upperSlabFrames, graph) : [];
 
   // 排他セッションロック: 別タブが編集セッションを保持している場合、全画面案内のみ表示する
   // （同期・マージ・read-only編集は提供しない）。全hookの後・メインreturnの直前に置く
@@ -2657,7 +2651,6 @@ const App = observer(() => {
             upperEntries={upperEntries}
             stairLaneGapMm={stairLaneGapMm}
             stairBreakOverhangMm={stairBreakOverhangMm}
-            stairSlabOpeningEdges={stairSlabOpeningEdges}
             stairUnderClips={stairUnderClips}
             structComposition={structComposition}
             upperVoidCrosses={upperVoidCrosses}

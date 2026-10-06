@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import {
   stairTreadKey, stairOutlineKey,
   buildStairJoinPrimitives, resolveStairLinePointsMm, stairLineRenderProps,
-  stairDownviewDashPx, stairUpperOpeningDashPx,
+  stairDownviewDashPx,
 } from './stairLineJoinPrimitives.js';
 import { UPPER_VOID_DASH_PX } from '../voidGeometry.js';
 import { clipSegmentsBeyondBreak } from './beyondBreakClip.js';
@@ -52,12 +52,25 @@ test('写像: 踏面線の幅は描画幅（旧treads三項演算）と同じ供
   assert.ok(Math.abs(prims[1].width - 2 / SCALE_X) < 1e-9, 'heavy(実2px相当)');
 });
 
-test('写像: 見下げ(isDownView)の踏面線・外周線はdash扱いになる（対象外の唯一の情報源）', () => {
-  const seg = { x1: 0, y1: 0, x2: 100, y2: 0 };
-  const entries = [{ view: 'upper', id: 's1', treadSegs: [seg], outlineSegs: [seg], isDownView: true }];
+test('写像: 見下げ(isDownView)の踏面線・外周線は実線（dash無し）の細線になる（裁定2026-10-06 Q6）', () => {
+  const heavyTread = { x1: 0, y1: 0, x2: 100, y2: 0, heavy: true };
+  const plainOutline = { x1: 0, y1: 0, x2: 100, y2: 0 }; // タグ無し＝通常は実2px
+  const mediumOutline = { x1: 0, y1: 0, x2: 100, y2: 0, medium: true }; // floorEdge でなければ中線も細線へ
+  const entries = [{ view: 'upper', id: 's1', treadSegs: [heavyTread], outlineSegs: [plainOutline, mediumOutline], isDownView: true }];
   const prims = buildStairJoinPrimitives(entries, SCALE_X, WEIGHTS);
-  assert.ok(prims[0].dash, '踏面線はdash扱い');
-  assert.ok(prims[1].dash, '外周線もdash扱い');
+  for (const p of prims) {
+    assert.equal(p.dash, undefined, '見下げは実線');
+    assert.ok(Math.abs(p.width - WEIGHTS.thin / SCALE_X) < 1e-9, '細線(実1px相当)');
+  }
+});
+
+test('写像: 見下げでも s.dashed（到達辺等）はdash扱いのまま、isDownView無しの同じ線は従来の太さ', () => {
+  const dashed = { x1: 0, y1: 0, x2: 100, y2: 0, dashed: true };
+  const plain = { x1: 0, y1: 0, x2: 100, y2: 0 };
+  const down = buildStairJoinPrimitives([{ view: 'upper', id: 's1', outlineSegs: [dashed], isDownView: true }], SCALE_X, WEIGHTS);
+  assert.ok(down[0].dash);
+  const up = buildStairJoinPrimitives([{ view: 'install', id: 's1', outlineSegs: [plain], isDownView: false }], SCALE_X, WEIGHTS);
+  assert.ok(Math.abs(up[0].width - 2 / SCALE_X) < 1e-9, '非見下げのタグ無し外周線は実2px相当のまま');
 });
 
 test('写像: s.dashed（到達辺等）はisDownViewでなくてもdash扱いになる', () => {
@@ -124,10 +137,9 @@ test('統合: thin(踏面)×thin(外周)は延長しない', () => {
   assert.ok(Math.abs(ty2 - 0) < 1e-6);
 });
 
-test('統合: 見下げ（破れ線から先）で切られた端は不変', () => {
-  // heavy（medium:trueではなく無フラグ=px(2)/実2px）にする——medium(=lineWeightsPx.medium=2)は
-  // 既定SCALE_X=0.0378だと実px換算0.0756でTHIN_PX=1以下になり、そもそも延長ゼロ同士の比較になって
-  // 「不変」の検証として空虚になる（QA指摘）。heavyは常に実2px相当でscale非依存に非thin。
+test('統合: 見下げ（破れ線から先）の細線同士は延長せず、切られた端は不変', () => {
+  // 見下げは実線の細線（thin 同士は延長ゼロ）。見下げの外周線は dash 扱いでなくL字結合の対象になったが、
+  // 細線同士なら座標は動かない。
   const outline = { x1: 100, y1: 0, x2: 100, y2: 100 };
   const partnerAtOtherEnd = { x1: 100, y1: 100, x2: 200, y2: 100 };
   const entries = [{ view: 'upper', id: 's1', outlineSegs: [outline, partnerAtOtherEnd], isDownView: true }];
@@ -232,14 +244,46 @@ test('stairLineRenderProps: heavy踏面線×heavy外周線の角で treads側の
   assert.ok(Math.abs(oy1 * SCALE_X - (-1.0)) < 1e-9, `外周線側も実1px延長（角の外側＝y負方向。実際:${oy1 * SCALE_X}px）`);
 });
 
-test('stairLineRenderProps: isDownViewの踏面線・外周線のdashは「上部吹抜け」と同じ書式（UPPER_VOID_DASH_PX）', () => {
-  const tread = { x1: 0, y1: 0, x2: 100, y2: 0 };
+test('stairLineRenderProps: isDownViewの踏面線・外周線は実線の細線（dash無し・strokeWidth=thin）', () => {
+  const tread = { x1: 0, y1: 0, x2: 100, y2: 0, heavy: true };
   const outlineSeg = { x1: 0, y1: 0, x2: 100, y2: 0 };
   const entry = { view: 'upper', id: 's1', treadSegs: [tread], outlineSegs: [outlineSeg], isDownView: true };
   const { treads, outline } = stairLineRenderProps(entry, fakeViewport(SCALE_X), WEIGHTS);
-  const expected = UPPER_VOID_DASH_PX.map(w => w / SCALE_X);
-  assert.deepEqual(treads[0].dash, expected);
-  assert.deepEqual(outline[0].dash, expected);
+  assert.equal(treads[0].dash, undefined);
+  assert.equal(outline[0].dash, undefined);
+  assert.equal(treads[0].strokeWidth, WEIGHTS.thin / SCALE_X);
+  assert.equal(outline[0].strokeWidth, WEIGHTS.thin / SCALE_X);
+});
+
+// 自階に階段が無い階（STAIR_VOID だけの階）の upper エントリは installOverlap が付かず isDownView:false。
+// それでも「下階の階段を自階で見るエントリ」なので細線の実線（床の端だけ中線）。
+test('見下げ（view=upper・isDownView:false）も踏面線・外周線は細線の実線、floorEdge は中線の実線、install は従来どおり', () => {
+  const tread = { x1: 0, y1: 0, x2: 100, y2: 0, heavy: true };
+  const plain = { x1: 0, y1: 0, x2: 100, y2: 0 };
+  const edge = { x1: 0, y1: 50, x2: 100, y2: 50, medium: true, floorEdge: true };
+  const up = buildStairJoinPrimitives([{ view: 'upper', id: 's1', treadSegs: [tread], outlineSegs: [plain, edge], isDownView: false }], SCALE_X, WEIGHTS);
+  assert.ok(Math.abs(up[0].width - WEIGHTS.thin / SCALE_X) < 1e-9, '踏面線は細線');
+  assert.ok(Math.abs(up[1].width - WEIGHTS.thin / SCALE_X) < 1e-9, 'タグ無し外周線は細線');
+  assert.ok(Math.abs(up[2].width - WEIGHTS.medium / SCALE_X) < 1e-9, '床の端は中線');
+  assert.ok(up.every(p => p.dash === undefined), '全部実線');
+  const inst = buildStairJoinPrimitives([{ view: 'install', id: 's1', treadSegs: [tread], outlineSegs: [plain], isDownView: false }], SCALE_X, WEIGHTS);
+  assert.ok(Math.abs(inst[0].width - 2 / SCALE_X) < 1e-9, 'install の heavy 踏面線は不変');
+  assert.ok(Math.abs(inst[1].width - 2 / SCALE_X) < 1e-9, 'install のタグ無し外周線は不変');
+});
+
+test('見下げの floorEdge（中線）×細線の外周線の直交角は両方延長し、細線同士は延長しない', () => {
+  const edge = { x1: 100, y1: 0, x2: 100, y2: 100, medium: true, floorEdge: true };
+  const thin = { x1: 100, y1: 100, x2: 200, y2: 100 };
+  const { outline } = stairLineRenderProps(
+    { view: 'upper', id: 's1', outlineSegs: [edge, thin], isDownView: true }, fakeViewport(SCALE_X), { thin: 1, medium: 2 });
+  const [, , , ey2] = outline[0].points; // floorEdge の終点（角）
+  const [tx1] = outline[1].points;       // 細線の始点（角）
+  assert.ok(Math.abs((ey2 - 100) * SCALE_X - 0.5) < 1e-9, `floorEdge 側は相手(細1px)の半幅0.5px延びる（実際:${(ey2 - 100) * SCALE_X}px）`);
+  assert.ok(Math.abs((100 - tx1) * SCALE_X - 1.0) < 1e-9, `細線側は相手(中2px)の半幅1px延びる（実際:${(100 - tx1) * SCALE_X}px）`);
+  const t1 = { x1: 100, y1: 0, x2: 100, y2: 100 };
+  const both = stairLineRenderProps({ view: 'upper', id: 's2', outlineSegs: [t1, thin], isDownView: true }, fakeViewport(SCALE_X), { thin: 1, medium: 2 });
+  assert.ok(Math.abs(both.outline[0].points[3] - 100) < 1e-9, '細線同士は延長しない');
+  assert.ok(Math.abs(both.outline[1].points[0] - 100) < 1e-9, '細線同士は延長しない');
 });
 
 test('stairLineRenderProps: s.dashed（到達辺等）はisDownViewでなくても外周線dashに[40,30]相当が入る', () => {
@@ -249,27 +293,31 @@ test('stairLineRenderProps: s.dashed（到達辺等）はisDownViewでなくて�
   assert.deepEqual(outline[0].dash, [40 / SCALE_X, 30 / SCALE_X]);
 });
 
-// ---- 床の端（floorEdge）: 見下げでも実線 ----
+// ---- 床の端（floorEdge）: 見下げでも実線・中線のまま ----
 
-test('写像: isDownViewでも floorEdge の外周線は dash 無し、タグ無しの外周線と踏面線は dash あり', () => {
+test('写像: isDownViewの floorEdge の外周線は実線・中線、タグ無しの外周線と踏面線は実線・細線', () => {
   const seg = { x1: 0, y1: 0, x2: 100, y2: 0 };
   const edge = { x1: 0, y1: 50, x2: 100, y2: 50, medium: true, floorEdge: true };
   const entries = [{ view: 'upper', id: 's1', treadSegs: [seg], outlineSegs: [edge, seg], isDownView: true }];
   const prims = buildStairJoinPrimitives(entries, SCALE_X, WEIGHTS);
-  assert.ok(prims[0].dash, '踏面線は dash');
+  assert.equal(prims[0].dash, undefined);
+  assert.ok(Math.abs(prims[0].width - WEIGHTS.thin / SCALE_X) < 1e-9, '踏面線は細線');
   assert.equal(prims[1].dash, undefined, '床の端は実線');
-  assert.ok(prims[2].dash, 'タグ無し外周線は dash');
+  assert.ok(Math.abs(prims[1].width - WEIGHTS.medium / SCALE_X) < 1e-9, '床の端は中線');
+  assert.equal(prims[2].dash, undefined);
+  assert.ok(Math.abs(prims[2].width - WEIGHTS.thin / SCALE_X) < 1e-9, 'タグ無し外周線は細線');
 });
 
-test('stairLineRenderProps: isDownViewでも floorEdge の外周線は dash 無し、タグ無し外周線・踏面線は UPPER_VOID_DASH_PX', () => {
+test('stairLineRenderProps: isDownViewの floorEdge は実線・中線、タグ無し外周線・踏面線は実線・細線（dashはどれも無し）', () => {
   const seg = { x1: 0, y1: 0, x2: 100, y2: 0 };
   const edge = { x1: 0, y1: 50, x2: 100, y2: 50, medium: true, floorEdge: true };
   const entry = { view: 'upper', id: 's1', treadSegs: [seg], outlineSegs: [edge, seg], isDownView: true };
   const { treads, outline } = stairLineRenderProps(entry, fakeViewport(SCALE_X), WEIGHTS);
-  const expected = UPPER_VOID_DASH_PX.map(w => w / SCALE_X);
   assert.equal(outline[0].dash, undefined, '床の端は実線');
-  assert.deepEqual(outline[1].dash, expected);
-  assert.deepEqual(treads[0].dash, expected);
+  assert.equal(outline[0].strokeWidth, WEIGHTS.medium / SCALE_X);
+  assert.equal(outline[1].dash, undefined);
+  assert.equal(outline[1].strokeWidth, WEIGHTS.thin / SCALE_X);
+  assert.equal(treads[0].dash, undefined);
 });
 
 test('stairLineRenderProps: floorEdge でも s.dashed（到達辺等）は破線のまま', () => {
@@ -321,9 +369,8 @@ test('失敗系: 長さ0の線分 → 座標不変', () => {
   assert.ok(Math.abs(x2 - 50) < 1e-6); assert.ok(Math.abs(y2 - 50) < 1e-6);
 });
 
-test('階段の破線は見上げ・見下げとも「上部吹抜け」（UPPER_VOID_DASH_PX）と同じ書式を参照する', () => {
+test('階段の破れ先（上り部分）の破線は「上部吹抜け」（UPPER_VOID_DASH_PX）と同じ書式を参照する', () => {
   const scaleX = 0.25;
   const expected = UPPER_VOID_DASH_PX.map(w => w / scaleX);
-  assert.deepEqual(stairUpperOpeningDashPx(scaleX), expected); // 上階スラブ開口の縁（見上げ破線）
-  assert.deepEqual(stairDownviewDashPx(scaleX), expected);     // 破れ先＝階段下エリアの外周線・見下げ
+  assert.deepEqual(stairDownviewDashPx(scaleX), expected); // 破れ先＝上り部分の外周線（beyondLines）
 });

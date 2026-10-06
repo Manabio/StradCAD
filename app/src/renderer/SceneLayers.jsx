@@ -38,7 +38,7 @@ import { ElevationLayer } from './ElevationLayer.jsx';
 export const SceneLayers = observer(({
   graph, project, appMode, mode, modeRef, viewport, size, columnAxisMode,
   isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips,
-  structComposition, upperVoidCrosses, stairSlabOpeningEdges = [],
+  structComposition, upperVoidCrosses,
   snapPoint, cursorWorld, clPreview, clDialog, menu,
   onMemberClick, setStatusMenu,
   onOpeningTagClick, onElevationOpeningClick,
@@ -106,7 +106,6 @@ export const SceneLayers = observer(({
                 detail={viewport.lodLevel === LodLevel.DETAIL}
                 laneGapMm={stairLaneGapMm}
                 breakOverhangMm={stairBreakOverhangMm}
-                slabOpeningEdges={stairSlabOpeningEdges}
                 stepNumbers={shouldShowStairStepNumbers(appMode)}
                 selectedStairId={appMode === 'finish' ? mode?.selectedStairId : null}
                 onSelectStair={appMode === 'finish' ? (id => modeRef.current?.selectStair(id)) : null}

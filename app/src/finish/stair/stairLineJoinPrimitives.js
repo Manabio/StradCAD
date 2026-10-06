@@ -7,9 +7,9 @@
  * stairLineRenderProps の返り値（{key,points,strokeWidth,dash}[]）を<Line>へ渡すだけにする。
  *
  * 対象は破線でない外周線（thin/medium/heavy=ささら等）・踏面線（thin/heavy）のみ。
- * 見下げ（isDownView。自階スラブの開口越しに見下ろす下階階段の破線表現）・
- * s.dashed（到達辺等、install表示でも破線の区間）はdash扱いにして対象外にする
- * （破線除外はfigureLineJoin.js側の規約。矢じり・破れ線・選択ハイライト・開口縁は
+ * 見下げ（下階の階段を自階で見るエントリ＝view==='upper'。isDownView の有無によらない）は実線の細線（床の端 floorEdge だけ中線）で、
+ * L字結合の対象。s.dashed（到達辺等の破線の区間）はdash扱いにして対象外にする
+ * （破線除外はfigureLineJoin.js側の規約。矢じり・破れ線・選択ハイライトは
  *   このモジュールの対象外＝呼び出し側がそもそも入力チャネルへ混ぜない）。
  *
  * strokeWidthはKonvaの親GroupのscaleX/scaleYを継承する（StairLayer.jsxのLineは
@@ -32,10 +32,10 @@
 import { resolvePlanLinePointsMmScaledStroke } from '../../renderer/planLineJoin.js';
 import { UPPER_VOID_DASH_PX } from '../voidGeometry.js';
 
-// 見下げ（isDownView）・破れ先（階段下エリアの外周線）の破線パターン（スクリーンpx）。
-// **書式は「上部吹抜け」と同じものを参照する**（ユーザー決定2026-09）——描画根拠
-// （見下げ／見上げ／上部吹抜け）は別のままでよいが、平面に並ぶ「見えない線」の線種が
-// 系統ごとに違うと混在して見える。ここで独自のパターン値を持たないこと。
+// 上り部分（install 側の破れ先の外周線）の破線パターン（スクリーンpx）。見下げ（isDownView）は
+// 実線になった（裁定2026-10-06）ため、これを使うのは beyondLines だけ。
+// **書式は「上部吹抜け」と同じものを参照する**（ユーザー決定2026-09）——平面に並ぶ「見えない線」の
+// 線種が系統ごとに違うと混在して見える。ここで独自のパターン値を持たないこと。
 const DOWNVIEW_DASH_PX = UPPER_VOID_DASH_PX;
 
 // lineWeightsPxに該当キーが無い場合の既定px。figureLineJoin.jsのweightPxが持つ既定THIN_PX=1と
@@ -60,21 +60,22 @@ export function outlineStrokeWidth(s, scaleX, lineWeightsPx) {
   return toWorld(2, scaleX);
 }
 
+// 見下げ（isDownView。自階スラブの開口越しに見る下階階段）の太さ。見えがかり線は踏面線・外周線とも
+// 実線の細線（ユーザー裁定2026-10-06 Q6）。床の端（floorEdge）だけは従来どおり外周線の太さ（中線）を残す。
+export function downviewTreadStrokeWidth(scaleX, lineWeightsPx) {
+  return toWorld(lineWeightsPx?.thin ?? DEFAULT_PX, scaleX);
+}
+export function downviewOutlineStrokeWidth(s, scaleX, lineWeightsPx) {
+  return s.floorEdge ? outlineStrokeWidth(s, scaleX, lineWeightsPx) : downviewTreadStrokeWidth(scaleX, lineWeightsPx);
+}
+
 export function stairTreadKey(view, id, i) { return `${view}:${id}:t:${i}`; }
 export function stairOutlineKey(view, id, i) { return `${view}:${id}:o:${i}`; }
 
-// 見下げ・破れ先の破線パターンを実px→世界mm相当へ変換する（beyondLines等、L字結合を経由しない
-// 常時破線の<Line>もこれを呼ぶ——dashパターン値の唯一の供給源）。
+// 破れ先（上り部分）の破線パターンを実px→世界mm相当へ変換する（beyondLines等、L字結合を経由しない
+// 常時破線の<Line>がこれを呼ぶ——dashパターン値の唯一の供給源）。
 export function stairDownviewDashPx(scaleX) {
   return DOWNVIEW_DASH_PX.map(w => w / scaleX);
-}
-
-// 見上げ破線（上階スラブ開口の縁。renderer/StairLayer.jsx の openingEdges）のパターンを
-// 実px→世界mm相当へ変換する。呼び出し元（描画根拠）は見下げと別だが、書式は同じ
-// UPPER_VOID_DASH_PX を参照する——関数を分けたまま値だけ共有することで、
-// 「根拠は別・書式は共通」を型で表す。
-export function stairUpperOpeningDashPx(scaleX) {
-  return UPPER_VOID_DASH_PX.map(w => w / scaleX);
 }
 
 /**
@@ -91,21 +92,28 @@ export function stairUpperOpeningDashPx(scaleX) {
 export function buildStairJoinPrimitives(entries, scaleX, lineWeightsPx) {
   const prims = [];
   for (const entry of entries) {
-    const { view, id, treadSegs = [], outlineSegs = [], isDownView } = entry;
+    const { view, id, treadSegs = [], outlineSegs = [] } = entry;
+    // 「下階の階段を自階で見るエントリ」＝ view==='upper'（直下階の階段を peek したもの）。
+    // 自階に階段が無い階（STAIR_VOID だけの階）では installOverlap が付かず isDownView は偽だが、
+    // 同じ見下げなので細線にする（裁定2026-10-06 Q6）。isDownView は破れ先クリップ等の別判断用に残る。
+    const isDownView = entry.isDownView || view === 'upper';
     treadSegs.forEach((s, i) => {
       prims.push({
         key: stairTreadKey(view, id, i),
         x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
-        width: treadStrokeWidth(s, scaleX, lineWeightsPx),
-        dash: isDownView || undefined,
+        width: isDownView
+          ? downviewTreadStrokeWidth(scaleX, lineWeightsPx)
+          : treadStrokeWidth(s, scaleX, lineWeightsPx),
       });
     });
     outlineSegs.forEach((s, i) => {
       prims.push({
         key: stairOutlineKey(view, id, i),
         x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
-        width: outlineStrokeWidth(s, scaleX, lineWeightsPx),
-        dash: ((isDownView && !s.floorEdge) || s.dashed) || undefined,
+        width: isDownView
+          ? downviewOutlineStrokeWidth(s, scaleX, lineWeightsPx)
+          : outlineStrokeWidth(s, scaleX, lineWeightsPx),
+        dash: s.dashed || undefined,
       });
     });
   }
@@ -153,22 +161,21 @@ export function resolveStairLinePointsMm(entries, viewportLike, lineWeightsPx) {
 export function stairLineRenderProps(entry, viewportLike, lineWeightsPx) {
   const scaleX = viewportLike.scaleX;
   const px = (w) => w / scaleX;
-  const downviewDash = stairDownviewDashPx(scaleX);
-  const { view, id, treadSegs = [], outlineSegs = [], isDownView } = entry;
+  const { view, id, treadSegs = [], outlineSegs = [] } = entry;
   const joined = resolveStairLinePointsMm([entry], viewportLike, lineWeightsPx);
 
   const treads = treadSegs.map((s, i) => {
     const key = stairTreadKey(view, id, i);
     const j = joined.get(key);
-    return { key, points: j.points, strokeWidth: j.width, dash: isDownView ? downviewDash : undefined };
+    return { key, points: j.points, strokeWidth: j.width, dash: undefined };
   });
   const outline = outlineSegs.map((s, i) => {
     const key = stairOutlineKey(view, id, i);
     const j = joined.get(key);
     return {
       key, points: j.points, strokeWidth: j.width,
-      // floorEdge（床の端＝壁の無い側面線）は見下げでも実線
-      dash: (isDownView && !s.floorEdge) ? downviewDash : (s.dashed ? [px(40), px(30)] : undefined),
+      // 見下げ（isDownView）は全線実線。破線になるのは s.dashed（到達辺等）だけ
+      dash: s.dashed ? [px(40), px(30)] : undefined,
     };
   });
   return { treads, outline };

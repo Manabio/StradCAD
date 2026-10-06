@@ -6,11 +6,10 @@ import {
   clipPolylineStartAtBreak, clipPolylineEndAtBreak,
 } from '../finish/stair/beyondBreakClip.js';
 import { pointInRects, clipSegmentsToRects } from '../finish/stair/segmentClip.js';
-import { trimOpeningEdgesAgainstStair } from '../finish/stair/slabOpening.js';
 import { outlineSegments } from '../finish/gridCells.js';
 import { LodLevel } from '../viewport.js';
 import {
-  stairLineRenderProps, stairDownviewDashPx, stairUpperOpeningDashPx, outlineStrokeWidth,
+  stairLineRenderProps, stairDownviewDashPx, outlineStrokeWidth,
 } from '../finish/stair/stairLineJoinPrimitives.js';
 
 import { chevronPoints } from './chevron.js';
@@ -34,8 +33,9 @@ const STAIR_STROKE = '#1e293b';
  *
  *   ■ 破れ線から先＝見下げの表現
  *   installOverlap 付き upper エントリが描くのは「自階スラブの開口越しに見下ろす下階階段」で、
- *   実体は当該平面より下にある。そのため見えがかり線（踏面線・外周線）は破線
- *   （DOWNVIEW_DASH_PX。書式は「上部吹抜け」と共通）で描く。矢印・段数字は見えがかり線ではなく記号のため実線のまま。
+ *   実体は当該平面より下にある。見えがかり線（踏面線・外周線）は実線の細線で描く
+ *   （床の端 floorEdge だけ中線）。破線にするのは上り部分（install 側の破れ先）だけ
+ *   （DOWNVIEW_DASH_PX。書式は「上部吹抜け」と共通）。矢印・段数字は記号のため実線のまま。
  *   描かれる範囲＝自階スラブの開口は「install 階段の破れ線より先」で、線の終点は当該平面の
  *   実線（footprint 境界＝壁面線・到達辺）になる。開口を狭める2要素は別の層が担当し、
  *   ここでは合成しない: 上階階段のとりつき部（破れ線手前側＝スラブが残る側）は破れ線クリップが、
@@ -59,20 +59,16 @@ export const StairLayer = observer(({
   detail = false,
   laneGapMm = 0,
   breakOverhangMm = 0,
-  slabOpeningEdges = [],
   stepNumbers: showStepNumbers = true,
   selectedStairId = null,
   onSelectStair = null,
 }) => {
   const px = (w) => w / viewport.scaleX; // ズーム非依存の線幅
-  // 見下げ（破れ線から先＝階段下エリア）の破線パターン。書式は「上部吹抜け」と共通
-  // （UPPER_VOID_DASH_PX を stairDownviewDashPx が参照する）。踏面線・外周線のdashは
-  // stairLineRenderProps側で解決するため、ここではbeyondLines（L字結合を経由しない
-  // 常時破線）用にのみ使う。
+  // 上り部分（install 側の破れ先）の破線パターン。書式は「上部吹抜け」と共通
+  // （UPPER_VOID_DASH_PX を stairDownviewDashPx が参照する）。beyondLines（L字結合を経由しない
+  // 常時破線）にのみ使う。見下げ（下階階段）の踏面線・外周線は実線で、stairLineRenderProps側が解決する。
   const downviewDash = stairDownviewDashPx(viewport.scaleX);
-  // 見上げ破線（開口の縁）の線種は「上部吹抜け」と共通（finish/voidGeometry.js の UPPER_VOID_DASH_PX）。
-  const upperOpeningDash = stairUpperOpeningDashPx(viewport.scaleX);
-  // 省略LODでは開口の縁（見上げ破線）を描かず、破れ先の破線だけ細線で残す（ユーザー決定）。
+  // 省略LODでは破れ先の破線を細線にする（ユーザー決定）。
   const schematic = viewport.lodLevel === LodLevel.SCHEMATIC;
 
   // laneGapMm（折返し階段の往路・復路の間のあき）・breakOverhangMm（破れ線の見た目端部の
@@ -102,11 +98,7 @@ export const StairLayer = observer(({
     resolved.filter(r => r && r.e.view === 'install').map(r => [r.e.id, r.geom]),
   );
 
-  // 開口の縁を切るための、実際に描いた破れ先破線と破れ先セル矩形。
-  const beyondSegsAll = [];
-  const beyondBoundsAll = [];
-
-  // 破れ線から先を「見下げ（下階階段）」として点線で描くエントリがある install の id 集合。
+  // 破れ線から先を「見下げ（下階階段）」として実線で描くエントリがある install の id 集合。
   // その install は自分の上り部分を重ねて描かない（同一 footprint・同一形状で完全に重なるため）。
   const coveredByDownView = new Set(
     resolved.filter(r => r && r.e.installOverlap && r.e.beyondBreakBounds?.length > 0)
@@ -138,14 +130,14 @@ export const StairLayer = observer(({
     const installBreakLine = trimBreakOverhang(installGeom?.breakLine, breakOverhangMm);
     // 見下げ（＝破れ線から先を、自階スラブの開口越しに見下ろす表現）として描くエントリか。
     // install エントリ自身も beyondBreakBounds を持つ（重なる upper へ渡すため）ので、
-    // installOverlap でガードしないと自階の手前側まで間引き・点線化されてしまう。
+    // installOverlap でガードしないと自階の手前側まで間引き・細線化されてしまう。
     const isDownView = !!e.installOverlap && e.beyondBreakBounds?.length > 0;
 
     // install エントリ側: 自分の破れ線から先（＝切断高より上に続く上り部分）を点線で描き足す。
     // 破れ先が導出できない（beyondBreakBounds が空）／破れ線が無い場合は従来どおり何も足さない。
     const ownBreakLine = view === 'install' ? trimBreakOverhang(geom.breakLine, breakOverhangMm) : null;
     const beyondDrawable = ownBreakLine?.length > 0 && e.beyondBreakBounds?.length > 0;
-    // 破れ先を「見下げ」として別エントリが点線で描く場合は、同じ形が二重に走るのでこちらは描かない。
+    // 破れ先を「見下げ」として別エントリが実線で描く場合は、同じ形が二重に走るのでこちらは描かない。
     const drawOwnBeyond = beyondDrawable && !!beyondGeom && !coveredByDownView.has(id);
     // 描き足すのは外周線（ささら・到達辺）だけで、踏面線は描かない——破れ線から先の段は
     // 切断面より上にあり、平面図には見えがかりの範囲だけを示せば足りる（ユーザー決定）。
@@ -158,10 +150,6 @@ export const StairLayer = observer(({
           e.slabOpeningBounds,
         )
       : [];
-    if (beyondOutlineSegs.length > 0) {
-      beyondSegsAll.push(...beyondOutlineSegs);
-      beyondBoundsAll.push(...e.beyondBreakBounds);
-    }
 
     // 踏み面は線種の共通定義（LINE_WEIGHT_MM）の thin を参照する。
     // 見下げエントリは clipSegmentsBeyondBreak（beyondBreakClip.js）で破れ先だけに絞る:
@@ -175,7 +163,7 @@ export const StairLayer = observer(({
       : geom.treads;
     // 外周線も踏面線と同じ「線分」プリミティブとして破れ先へクリップする。クリップしないと
     // 下階階段の側面線・上り口の辺が破れ線の手前側（install が実線で描く区間）まで二重に走り、
-    // 点線化した見下げ線が実線の上に重なる。「破れ線から出発した線の終点＝当該平面の実線」は、
+    // 見下げ線が install の実線の上に二重に重なる。「破れ線から出発した線の終点＝当該平面の実線」は、
     // footprint 境界（＝壁面線・到達辺）で止まる外周線がそのまま満たす。
     // 天井高さに達する壁ぶんの差し引きは resolveStairSideLines（壁スパンの区間差し引き）が
     // 既に済ませているため、ここでは重ねて判定しない。
@@ -370,23 +358,5 @@ export const StairLayer = observer(({
     );
   });
 
-  // 直上階スラブ開口の縁（見上げ破線）。階段エントリ単位ではなく開口単位で1度だけ描く
-  // （複数の階段が同じ開口を共有しても二重に描かない）。線種は「上部吹抜け」と共通
-  // （UPPER_VOID_DASH_PX。同じ「上階に床が無い範囲の外形」を表す線のため）。当該階の壁に覆われた区間は
-  // 呼び出し側（slabOpeningEdges）で既に差し引かれている。さらに、階段のとりつき部では階段側の
-  // 破線が縁を担うので、直交する破れ先破線との交点で切って落とす（残りと合わせてL字になる）。
-  // 破れ先破線側は既に開口の縁でクリップ済み——切る向きは双方向で、片方だけでは
-  // 「縁が破線を突き抜ける」か「縁が切られずL字にならない」のどちらかになる（過去の不良）。
-  const trimmedOpeningEdges = schematic
-    ? []
-    : trimOpeningEdgesAgainstStair(slabOpeningEdges, beyondSegsAll, beyondBoundsAll);
-  const openingEdges = trimmedOpeningEdges.map((s, i) => (
-    <Line
-      key={`so${i}`} points={[s.x1, s.y1, s.x2, s.y2]}
-      stroke={STAIR_STROKE} strokeWidth={px(2)} // 破れ先破線（階段外周）と同じ太さに揃える
-      dash={upperOpeningDash} listening={false}
-    />
-  ));
-
-  return <Group>{openingEdges}{groups}</Group>;
+  return <Group>{groups}</Group>;
 });

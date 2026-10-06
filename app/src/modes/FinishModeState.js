@@ -1463,7 +1463,7 @@ export class FinishModeState {
    * Room が存在しない旧データ Stair（上階自動設置分・移行前データ）は何もしない。
    * （現状 applyNaming の STAIR→null/void 遷移が同等の処理を担うため未配線。フェーズ4以降のUI導線候補として保持。
    * 配線するなら、階段を消す他の入口と同じ関門——App.jsx deleteStairCascade／revertStairFromNaming の
-   * runStairRemoval——を通すこと。通さないと上の階の分身・階段吹抜けが残り、見上げ破線が残る）
+   * runStairRemoval——を通すこと。通さないと上の階の分身・階段吹抜けが残り、スラブ開口（規則Oの源）が残る）
    */
   revertStairToRoom(stairId) {
     const stair = this.graph.stairMap.get(stairId);
