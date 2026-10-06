@@ -250,9 +250,6 @@ export const ERR_ELEVATOR_RENUMBER_FAILED_MESSAGE = '階を削除した後、昇
 export const ERR_STAIR_DESIGNATE_FAILED = 'ERR_STAIR_DESIGNATE_FAILED';
 export const ERR_STAIR_DESIGNATE_FAILED_MESSAGE = '階段の指定に失敗しました。';
 
-// 階段の削除（finish/stair/stairFloorSync.js runStairRemoval。上の階の連動削除を伴う）専用。
-// 下の階から続く階段（中間階の階段）は設置階でしか削除できないため、書込みゼロで拒否する。
-export const ERR_STAIR_DELETE_CONTINUATION = '下の階から続く階段は削除できません。設置した階で削除してください。';
 // 部屋の削除（finish/FinishModeState.js roomDeleteBlockReason）専用。道連れで消える部分指定の子・孫に
 // 階段のペア部屋があると、階段が自階だけ消えて上の階の分身・階段吹抜けが残るため、何も変更せず拒否する。
 export const ERR_ROOM_DELETE_HAS_STAIR_CHILD = '部分指定に階段を含む部屋は削除できません。先に階段を削除してください。';

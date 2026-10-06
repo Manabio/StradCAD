@@ -6,6 +6,7 @@
 // 他階 peek は本番同型（バイト列の Map ＋ restoreGraph）で差し替える。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { Project, CenterLineType, Discipline, StairType, RoomFeature } from '../../core.js';
 import { worldToCell, refreshCells } from '../gridCells.js';
 import { serializeGraph } from '../../graphSnapshot.js';
@@ -262,4 +263,27 @@ test('ensureTopStairVoid: 失敗系 — 変換はできるが上階で解決で�
   const saveFloorFn = makeStoreSave(store, saved);
   await syncUpperFloors(project, below, { peekFn, saveFloorFn });
   assert.deepEqual(saved, [], 'syncUpperFloors は上階を保存しない');
+});
+
+test('syncUpperFloors: 3階建て・格子が細かい2階へ2回同期しても吹抜けは1つ。3階は peek も保存もしない', async () => {
+  const ctx = setupSplit();
+  const { project, below, above, store } = ctx;
+  const { graph: top } = project.addPlane(6000, '3階', 'p3');
+  store.set(above.plane.id, serializeGraph(above));
+  store.set(top.plane.id, serializeGraph(top));
+  project.activePlaneId = 'p1';
+  const saved = [];
+  const peeked = [];
+  const inner = makeStorePeek(project, store);
+  const peekFn = async (plane) => { peeked.push(plane.id); return inner(plane); };
+  const saveFloorFn = makeStoreSave(store, saved);
+  const p3Before = Buffer.from(store.get('p3'));
+
+  await syncUpperFloors(project, below, { peekFn, saveFloorFn });
+  await syncUpperFloors(project, below, { peekFn, saveFloorFn });
+
+  assert.equal(voidRooms(decodeFloor(project, above.plane, store.get('p2'))).length, 1);
+  assert.deepEqual(saved, ['p2'], '2回目は変更なしで保存しない・3階は保存しない');
+  assert.deepEqual(peeked, ['p2', 'p2'], '3階は peek しない');
+  assert.ok(Buffer.from(store.get('p3')).equals(p3Before));
 });

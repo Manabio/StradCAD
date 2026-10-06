@@ -5,8 +5,8 @@
  *
  * 単階の本体（removeStairOnFloor）は modes/FinishModeState.js の `_deleteStairNoUndo` から選択状態の
  * クリアを除いたもの。上の階への連動（planStairRemovalCascade → applyStairRemovalToFloor）は、
- * syncUpperFloors（finish/stair/stairFloorSync.js）が指定時に上の階へ自動設置した階段と最上階の
- * 階段吹抜け（STAIR_VOID）を、設置階の削除に合わせて消すための計画と適用。
+ * syncUpperFloors（finish/stair/stairFloorSync.js）が指定時に直上1階へ置いた階段吹抜け（STAIR_VOID）を、
+ * 設置階の削除に合わせて未定義化するための計画と適用（直上階のユーザー指定の階段は消さない）。
  */
 import { RoomFeature, RoomKind } from '@core';
 import { refreshCells } from '../gridCells.js';
@@ -52,58 +52,30 @@ function mapFootprint(srcStair, srcGraph, structGraph, dstGraph) {
 }
 
 /**
- * srcStair と同じ footprint の階段を dstGraph から探す。照合は syncUpperStairInteriors と同じ
- * 「現行グリッドへ展開したセル集合の一致」。写せない・無ければ null。
- */
-export function findSameFootprintStair(srcStair, srcGraph, structGraph, dstGraph) {
-  const cells = mapFootprint(srcStair, srcGraph, structGraph, dstGraph);
-  if (!cells) return null;
-  return dstGraph.stairs.find(s => setsEqual(refreshCells(s.cells, dstGraph), cells)) ?? null;
-}
-
-/**
- * stair（graph 上）が「下の階から続く階段」（直下階に同 footprint の階段がある）か。
- * belowGraph が無ければ偽。stair の graph を起点に直下階へ写して照合する。
- */
-export function isContinuationStair(stair, graph, belowGraph, structGraph) {
-  if (!belowGraph) return false;
-  return findSameFootprintStair(stair, graph, structGraph, belowGraph) !== null;
-}
-
-/**
- * 設置階の階段 stair の削除に連動して、上の階で消す対象を下から順に決める。
- * 各階で同 footprint の階段と同 footprint の STAIR_VOID 部屋を探す。階段が見つかれば次の階の基準にして
- * 続け、見つからない／写せない階で打ち切る（その階の STAIR_VOID は拾ってから打ち切る）。
- * 階段も吹抜けも無い階は結果に入れない。
+ * 設置階の階段 stair の削除に連動して、直上1階で未定義化する階段吹抜けを決める。
+ * 対象は uppers の先頭1階だけ（それより上は触らない）。同 footprint（refreshCells で原子セルへ展開して比較）の
+ * STAIR_VOID を全部拾う。直上階にユーザー指定の階段があっても消さない（階段は自階のもの）。
+ * 写せない・該当なしなら空配列。
  * @param {{structGraph: object, activeGraph: object, stair: object, uppers: Array<{plane: object, graph: object}>}} p
- *   uppers は elevation 昇順の上の採用階（設置階の直上から）
- * @returns {Array<{plane: object, graph: object, stair: object|null, voidRoom: object|null}>}
+ *   uppers は elevation 昇順の上の採用階（設置階の直上から。先頭だけ使う）
+ * @returns {Array<{plane: object, graph: object, voidRooms: object[]}>} 0件か1件
  */
 export function planStairRemovalCascade({ structGraph, activeGraph, stair, uppers }) {
-  const targets = [];
-  let baseStair = stair;
-  let baseGraph = activeGraph;
-  for (const { plane, graph } of uppers) {
-    const cells = mapFootprint(baseStair, baseGraph, structGraph, graph);
-    if (!cells) break;
-    const found = graph.stairs.find(s => setsEqual(refreshCells(s.cells, graph), cells)) ?? null;
-    const voidRoom = graph.rooms.find(r =>
-      r.feature === RoomFeature.STAIR_VOID && setsEqual(refreshCells(r.cells, graph), cells)) ?? null;
-    if (found || voidRoom) targets.push({ plane, graph, stair: found, voidRoom });
-    if (!found) break;
-    baseStair = found;
-    baseGraph = graph;
-  }
-  return targets;
+  const next = uppers[0];
+  if (!next) return [];
+  const { plane, graph } = next;
+  const cells = mapFootprint(stair, activeGraph, structGraph, graph);
+  if (!cells) return [];
+  const voidRooms = graph.rooms.filter(r =>
+    r.feature === RoomFeature.STAIR_VOID && setsEqual(refreshCells(r.cells, graph), cells));
+  return voidRooms.length > 0 ? [{ plane, graph, voidRooms }] : [];
 }
 
 /**
- * 計画の1階分を適用する（階段があれば removeStairOnFloor、階段吹抜けがあれば未定義化）。
+ * 計画の1階分を適用する（同 footprint の階段吹抜けを全部未定義化）。
  * @returns {boolean} 何かを変更したか
  */
 export function applyStairRemovalToFloor(graph, target) {
-  let changed = false;
-  if (target.stair) { removeStairOnFloor(graph, target.stair); changed = true; }
-  if (target.voidRoom) { makeRoomUndefined(target.voidRoom); changed = true; }
-  return changed;
+  for (const room of target.voidRooms) makeRoomUndefined(room);
+  return target.voidRooms.length > 0;
 }

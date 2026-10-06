@@ -4,26 +4,26 @@ import { saveFloor } from '../../storage/db.js';
 import { undoManager } from '../../undoManager.js';
 import { refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
-import { subtractCellsFromUndefinedRooms } from '../roomUndefined.js';
 import { collectNeededCLs, addMissingCLs, translateCellSet } from '../floorCLMap.js';
 import { RoomFeature, isRoofFeature } from '@core';
-import { setsEqual, isIndoorStair, addStairVoidRoom } from './stairVoidReconcile.js';
+import { setsEqual, isIndoorStair, addStairVoidRoom, reconcileStairVoids } from './stairVoidReconcile.js';
 import { upperAdoptedPlanes } from '../roof/roofFloorCheck.js';
 import { findStairUpperRoofConflicts } from './stairRoofConflict.js';
 import {
   ERR_STAIR_UPPER_ROOF, tagElevatorOpFailure,
-  ERR_STAIR_DELETE_CONTINUATION, ERR_STAIR_DELETE_FAILED, ERR_STAIR_DELETE_FAILED_MESSAGE, ERR_STAIR_FLOORS_CHANGED,
+  ERR_STAIR_DELETE_FAILED, ERR_STAIR_DELETE_FAILED_MESSAGE, ERR_STAIR_FLOORS_CHANGED,
 } from '../../error.js';
 import { floorWriteGeneration } from '../../storage/floorWriteGeneration.js';
 import { rollbackSavedFloors, applyRecords, amendOnAppliedOnly } from '../floorUndoRecords.js';
-import { isContinuationStair, planStairRemovalCascade, applyStairRemovalToFloor } from './stairRemoval.js';
+import { planStairRemovalCascade, applyStairRemovalToFloor } from './stairRemoval.js';
 
 // setsEqual・isIndoorStair・addStairVoidRoom は純モジュール stairVoidReconcile.js へ移した（挙動は同じ）
 
 /**
- * 階段の新規指定（部屋→階段）の事前チェック。syncUpperFloors が上の階へ展開する位置（中間階は階段、
- * 最上階は屋内階段のときの階段吹抜け）に屋根（ROOF）があるかを、上の全採用階を peek して調べ、
- * あれば拒否のメッセージを返す（無ければ null）。読むだけ——peek した一時グラフへ CL を足すが保存しない。
+ * 階段の新規指定（部屋→階段）の事前チェック。syncUpperFloors が展開する位置（設置階の直上1階の、
+ * 屋内階段の footprint に置く階段吹抜け）に屋根（ROOF）があるかを、直上の採用階だけ peek して調べ、
+ * あれば拒否のメッセージを返す（無ければ null）。屋外階段は何も置かないので peek せず null。
+ * 読むだけ——peek した一時グラフへ CL を足すが保存しない。
  * 呼び出し側（App.jsx convertStairFromNaming）は、graph・他階の保存データを一切変える前にこれを呼び、
  * メッセージがあれば階段の指定を確定しない（昇降機の judgeElevatorInstall と同じ「確定前の拒否」）。
  * peekFn の失敗は握りつぶさず reject する（呼び出し側が「確かめられなかったので指定しない」とする）。
@@ -31,7 +31,7 @@ import { isContinuationStair, planStairRemovalCascade, applyStairRemovalToFloor 
  * @param {object} project
  * @param {object} activeGraph - 設置階（アクティブ）のグラフ
  * @param {Set<string>} cells - 階段にする部屋のセル（raw）
- * @param {boolean} indoor - 屋内階段か（屋外階段は最上階に階段吹抜けを作らない）
+ * @param {boolean} indoor - 屋内階段か（屋外階段は上階に何も置かない）
  * @param {(plane: object) => Promise<object>} [peekFn] - 既定 floorSwapManager.peek（テスト注入用。挙動は変えない）
  * @returns {Promise<string|null>} 拒否メッセージ（衝突なしなら null）
  */
@@ -39,14 +39,12 @@ export async function findStairUpperRoofRejection(
   project, activeGraph, cells, indoor,
   peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
 ) {
-  const uppers = upperAdoptedPlanes(project.planes, activeGraph?.plane);
-  if (uppers.length === 0) return null;
+  const [next] = upperAdoptedPlanes(project.planes, activeGraph?.plane); // 直上の1階だけ
+  if (!next || !indoor) return null;
   const floors = [{ plane: activeGraph.plane, graph: activeGraph }];
-  for (const plane of uppers) {
-    const graph = await peekFn(plane);
-    if (!graph) throw new Error(`findStairUpperRoofRejection: peek が階のグラフを返しませんでした（plane=${plane.id}）`);
-    floors.push({ plane, graph });
-  }
+  const graph = await peekFn(next);
+  if (!graph) throw new Error(`findStairUpperRoofRejection: peek が階のグラフを返しませんでした（plane=${next.id}）`);
+  floors.push({ plane: next, graph });
   const conflicts = findStairUpperRoofConflicts({
     structGraph: project.structGraph, floors, activeIndex: 0, cells, indoor,
   });
@@ -54,34 +52,30 @@ export async function findStairUpperRoofRejection(
 }
 
 /**
- * 階段を設置した階（activeGraph）の上に採用フロアが複数あるとき、その全階（最上階まで）へ
- * 以下を順に反映する（各階、変更があれば peek → saveFloor）:
+ * 階段を設置した階（activeGraph）の「直上の採用階1階だけ」へ、階段吹抜け（STAIR_VOID）を整合する
+ * （変更があれば peek → saveFloor）。上階には階段実体を置かない。続けて上るときは上階でユーザーが
+ * 階段を指定し、同 footprint の吹抜けはペアRoomへ転用される。それより上の階には何もしない。
  *
- * 1. 中心線の同期: 設置階の階段 footprint を定義する per-floor 中心線のうち、その階に
- *    存在しないものを追加する（短縮区間 extent も写す）。通り芯（structGraph CL）は
- *    全階共通のため対象外。
- * 2. 階段の自動設置: その階の「さらに上」にも採用フロアがある場合のみ（最上階には設置
- *    しない＝階段は次階への到達手段のため）、同 footprint の階段がまだ無ければ設置階と
- *    同じ内容（sections 含む）で追加する（type:value 照合で冪等）。最上階には代わりに、
- *    屋内階段の footprint へ階段吹抜け（STAIR_VOID）を自動指定する（addStairVoidRoom）。
- * 3. ペアRoomの補完: roomId なしの階段へ feature=STAIR の Room を作り相互リンクする
- *    （ensureStairRooms。設置階と同じ不変条件を上階でも守る——data-model.md）。
+ * 1. reconcileStairVoids（stairVoidReconcile.js）: 不足CLの補完・屋内階段の足元の写し・孤児の
+ *    吹抜けの未定義化・重複の削除・追加を行う（屋外階段は対象外。通り芯だけの階段も置く）。
+ * 2. ensureStairRooms: 直上階の roomId なしの階段（ユーザー指定分）へ feature=STAIR の Room を作り
+ *    相互リンクする。reconcile の後に回す——同 footprint の吹抜けがペアRoomへ転用される。
  *
  * 壁は生成しない（ユーザー決定：階段設置と同時の壁生成は行わない。上階の外壁は
- * ペアRoom・階段吹抜けの kind=INTERIOR を通じて通常の屋内外判定・外壁生成に委ねる）。
- * 階段側の仕上げ壁も同様にここでは生成しない——新モデルでは階段ペアRoom・階段吹抜けも
- * 通常のRoomと同じ経路（finish/finishBoundary.js runFinishExitBoundary ステップ1〜3）で壁を持つため、
+ * 階段吹抜けの kind=INTERIOR を通じて通常の屋内外判定・外壁生成に委ねる）。階段側の仕上げ壁も
+ * ここでは生成しない——階段吹抜け・ペアRoomも通常のRoomと同じ経路
+ * （finish/finishBoundary.js runFinishExitBoundary ステップ1〜3）で壁を持つため、
  * その階自身が仕上げモードを脱出したときに生成される。設置階ペアRoomの内装
  * （templateKey・customOverrides）は、仕上げモード脱出時に syncUpperStairInteriors が
  * 別途同期コピーする。
  *
- * 非アクティブ階への変更はいずれも floorSwapManager.peek → saveFloor の既存パターンを踏襲する。
- * 同期対象にアクティブ階が含まれる場合（syncUpperFloorsAuto 経由）はメモリ上のグラフを
- * 直接更新する（ループ内コメント参照）。
+ * 非アクティブ階への変更は floorSwapManager.peek → saveFloor の既存パターンを踏襲する。
+ * 対象の階がアクティブ階のとき（syncUpperFloorsAuto 経由）はメモリ上のグラフを直接更新する
+ * （本体のコメント参照）。
  *
- * undo: opts.undoEntry（applyNaming が積んだ階段変換エントリ）を渡すと、変更した各階の
+ * undo: opts.undoEntry（applyNaming が積んだ階段変換エントリ）を渡すと、変更した階の
  * before/after をシリアライズ済みバイト列で記録し、そのエントリへ合成（undoManager.amend）
- * する——変換の Ctrl+Z 1回で上階の自動設置分もまとめて巻き戻る。復元はその階が
+ * する——変換の Ctrl+Z 1回で直上階の吹抜けもまとめて巻き戻る。復元はその階が
  * アクティブならメモリ上のグラフへ restoreGraph、非アクティブなら saveFloor で IDB へ
  * 書き戻す（peek はキャッシュを持たず毎回 IDB から読むため、これで完全に復元される）。
  * undoEntry を渡さない呼び出し（階追加時の syncUpperFloorsAuto 等）は従来どおり undo 対象外。
@@ -104,80 +98,31 @@ export async function syncUpperFloors(project, activeGraph, {
   const idx = planes.findIndex(p => p.id === active.id);
   if (idx < 0 || idx + 1 >= planes.length) return; // 最上階には上階がない
 
-  // 階段 footprint を定義する per-floor 中心線を type:value で集める（全上階で共通・設置階基準）
-  const needed = collectNeededCLs(
-    activeGraph.stairs.flatMap(s => [...s.cells]), activeGraph,
-  );
-  if (needed.size === 0) return;
-
+  const plane = planes[idx + 1]; // 対象は直上の1階だけ
   const undoRecords = []; // { planeId, before, after }（undoEntry がある場合のみ収集）
 
-  for (let i = idx + 1; i < planes.length; i++) {
-    const plane = planes[i];
-    const hasFloorAbove = i + 1 < planes.length; // このフロアの、さらに上に採用フロアがあるか
-    // 起点探索付き同期（syncUpperFloorsAuto）ではアクティブ階が同期対象に含まれうる。
-    // アクティブ階を peek→saveFloor で書き換えると、後のモード切替保存（floorSwapManager.swap が
-    // メモリ上のグラフを保存する）で上書き消失するため、メモリ上のグラフを直接更新する
-    // （永続化は auto-save / floorSwapManager.swap に任せ、saveFloor はスキップする）。
-    const isActive = plane.id === project.activePlane?.id;
-    const temp = isActive
-      ? project.activeGraph
-      : await peekFn(plane);
-    const beforeBytes = undoEntry ? serializeGraph(temp) : null;
-    let changed = false;
+  // 起点探索付き同期（syncUpperFloorsAuto）ではアクティブ階が同期対象になりうる。
+  // アクティブ階を peek→saveFloor で書き換えると、後のモード切替保存（floorSwapManager.swap が
+  // メモリ上のグラフを保存する）で上書き消失するため、メモリ上のグラフを直接更新する
+  // （永続化は auto-save / floorSwapManager.swap に任せ、saveFloor はスキップする）。
+  const isActive = plane.id === project.activePlane?.id;
+  const temp = isActive
+    ? project.activeGraph
+    : await peekFn(plane);
+  const beforeBytes = undoEntry ? serializeGraph(temp) : null;
+  let changed = false;
 
-    // 1. 不足CLを追加（extent も写す）
-    if (addMissingCLs(needed, activeGraph, project.structGraph, temp) > 0) changed = true;
+  // 1. 直上階の吹抜けを整合する（不足CL補完・足元の写し・孤児/重複の削除・追加）
+  if (reconcileStairVoids(temp, activeGraph, project.structGraph).changed) changed = true;
 
-    // 2. 階段の自動設置（さらに上に採用フロアがある場合のみ＝最上階には設置しない。
-    //    階段は次階への到達手段のため）。
-    for (const stair of activeGraph.stairs) {
-      const translatedCells = translateCellSet(stair.cells, activeGraph, project.structGraph, temp);
-      if (!translatedCells) continue; // CL変換不能 → 安全側でこの階段はスキップ
+  // 2. ペアRoomの補完: ユーザーが直上階で指定した階段（roomId なし）へ feature=STAIR の Room を
+  //    作り相互リンクする（data-model.md の不変条件）。reconcile の後に回すこと——
+  //    footprint が一致する階段吹抜けはペア Room へ転用される。
+  if (ensureStairRooms(temp).length > 0) changed = true;
 
-      if (hasFloorAbove) {
-        const alreadyExists = temp.stairs.some(s => setsEqual(s.cells, translatedCells));
-        if (!alreadyExists) {
-          temp.addStair({
-            type: stair.type, structure: stair.structure, cells: translatedCells,
-            totalSteps: stair.totalSteps, tread: stair.tread, riser: stair.riser ?? null,
-            nosing: stair.nosing, width: stair.width,
-            upDirection: stair.upDirection, flip: stair.flip,
-            sections: stair.sections ?? null,
-            entrySide: stair.entrySide ?? null, arrivalSide: stair.arrivalSide ?? null,
-            entryTurnSteps: stair.entryTurnSteps ?? 0, arrivalTurnSteps: stair.arrivalTurnSteps ?? 0,
-          });
-          // 連動削除で未定義化した部屋（外形を保つために残したペア部屋）の上へ再指定した場合、
-          // ensureStairRooms が未定義部屋との重なりで止まらないよう、先にそのセルを引き抜く
-          subtractCellsFromUndefinedRooms(temp, refreshCells(translatedCells, temp));
-          changed = true;
-        }
-      } else if (isIndoorStair(activeGraph, stair)) {
-        // 最上階: 屋内階段の footprint へ階段吹抜け（STAIR_VOID）を自動指定する
-        // （階段実体は置かない。描画・操作対象外の自動管理 Room。屋外階段は吹抜け不要）。
-        if (addStairVoidRoom(temp, translatedCells)) changed = true;
-      }
-    }
-
-    // 3. ペアRoomの補完: 自動設置した階段（今回分・過去分とも）へ feature=STAIR の Room を
-    //    作り相互リンクする。Room が無いと部屋指定時の外壁生成が階段エリアを「無名屋外」
-    //    とみなし、隣接部屋の周囲に誤った外壁ループができる（data-model.md の不変条件）。
-    //    footprint が一致する階段吹抜け（旧最上階の自動指定分）はペア Room へ転用される。
-    if (ensureStairRooms(temp).length > 0) changed = true;
-
-    // 4. 中間階に残った階段吹抜けの掃除: 転用（手順3）に乗らなかった STAIR_VOID は
-    //    最上階でのみ意味を持つ自動管理 Room のため削除する（footprint 不一致の残骸対策）。
-    if (hasFloorAbove) {
-      for (const r of temp.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID)) {
-        temp.removeRoom(r.id);
-        changed = true;
-      }
-    }
-
-    if (changed && !isActive) await saveFloorFn(plane.id, serializeGraph(temp));
-    if (changed && undoEntry) {
-      undoRecords.push({ planeId: plane.id, before: beforeBytes, after: serializeGraph(temp) });
-    }
+  if (changed && !isActive) await saveFloorFn(plane.id, serializeGraph(temp));
+  if (changed && undoEntry) {
+    undoRecords.push({ planeId: plane.id, before: beforeBytes, after: serializeGraph(temp) });
   }
 
   // 変更した各階の巻き戻し・再適用を、変換エントリ（undoEntry）へ合成する
@@ -198,8 +143,8 @@ export async function syncUpperFloors(project, activeGraph, {
 /**
  * syncUpperFloors の起点探索付きラッパー（階追加時用）。表示中の階（sourceGraph）に階段が
  * あればそのまま同期し、無ければそれより下の採用フロアを上から順に peek して、階段を持つ
- * 最初の階を起点に同期する（例: 階段の無い最上階を表示したまま階を追加した場合、旧最上階
- * への階段設置と新最上階への階段吹抜け指定は、中間階の階段を起点にしないと走らない）。
+ * 最初の階を起点に同期する。同期されるのは起点の直上1階だけ（syncUpperFloors）。
+ * ステップ5で follower ごと置き換える予定。
  */
 export async function syncUpperFloorsAuto(project, sourceGraph) {
   if (sourceGraph.stairs.length > 0) return syncUpperFloors(project, sourceGraph);
@@ -214,6 +159,7 @@ export async function syncUpperFloorsAuto(project, sourceGraph) {
 /**
  * アクティブ階が最上階（採用）のとき、直下階の屋内階段 footprint へ階段吹抜け（STAIR_VOID）を
  * 補完する（仕上げモード突入時の既存データ修復。syncUpperFloors と同じ自動同期のため undo 対象外）。
+ * ステップ5で reconcileStairVoids へ置き換える予定（このステップでは触らない）。
  * @returns {Promise<boolean>} 追加したか
  */
 export async function ensureTopStairVoid(project, activeGraph) {
@@ -232,8 +178,8 @@ export async function ensureTopStairVoid(project, activeGraph) {
 }
 
 /**
- * 階段設置階の仕上げモード脱出時に、上階の階段 footprint（自動設置ペアRoom・最上階の
- * 階段吹抜け STAIR_VOID）へ、設置階ペアRoomの内装（templateKey・customOverrides）を
+ * 階段設置階の仕上げモード脱出時に、直上1階の階段 footprint（階段吹抜け STAIR_VOID・
+ * 同 footprint のペアRoom）へ、設置階ペアRoomの内装（templateKey・customOverrides）を
  * 同期コピーする（階段仕上げ材の参照。以降はその階の Room＝仕上げ表のカードが単一情報源）。
  *
  * 壁はこの同期では生成しない——新モデルでは階段ペアRoom・階段吹抜けも通常のRoomと同じ経路
@@ -243,60 +189,53 @@ export async function ensureTopStairVoid(project, activeGraph) {
  * 何もしない。
  * - 対象は「内装未編集（templateKey なし・customOverrides 空）」の Room のみコピーする。
  *   ユーザーが編集済みの内装は上書きしない。
- * - 多層設置: 設置階から最上階まで、footprint 一致の階段実体を連鎖でたどる。
+ * - 直上1階だけが対象。さらに上の階は、続けて上る階段をユーザーが指定した階自身の脱出時に同期される。
  *
  * syncUpperFloors と同じ自動同期のため undo 対象外。呼び出しは仕上げモード脱出時
  * （設置階がアクティブな時）のみ＝同期対象は常に非アクティブ階（peek → saveFloor）。
  *
  * @param {object} project
  * @param {object} activeGraph - 脱出した階（アクティブ）のグラフ
+ * @param {object} [opts]
+ * @param {(plane: object) => Promise<object>} [opts.peekFn] - 既定 floorSwapManager.peek（テスト注入用。挙動は変えない）
+ * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [opts.saveFloorFn] - 既定 saveFloor（テスト注入用。挙動は変えない）
  */
-export async function syncUpperStairInteriors(project, activeGraph) {
+export async function syncUpperStairInteriors(project, activeGraph, {
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+} = {}) {
   const planes = project.planes;
   const active = activeGraph?.plane;
   if (!active || activeGraph.stairs.length === 0) return;
   const idx = planes.findIndex(p => p.id === active.id);
   if (idx < 0 || idx + 1 >= planes.length) return;
 
-  // 階段ごとに「直下階の階段実体」を追跡する連鎖（footprint 追跡のみに使う）
-  let chains = activeGraph.stairs.map(stair => ({
-    srcRoom: stair.roomId ? (activeGraph.roomMap.get(stair.roomId) ?? null) : null,
-    belowStair: stair,
-    belowGraph: activeGraph,
-  }));
+  const plane = planes[idx + 1]; // 直上の1階だけ
+  if (plane.id === project.activePlane?.id) return; // 想定外（呼び出しは脱出階がアクティブな時のみ）
+  const temp = await peekFn(plane);
+  let changed = false;
 
-  for (let i = idx + 1; i < planes.length && chains.length > 0; i++) {
-    const plane = planes[i];
-    if (plane.id === project.activePlane?.id) return; // 想定外（呼び出しは脱出階がアクティブな時のみ）
-    const temp = await floorSwapManager.peek(plane, project.structGraph);
-    let changed = false;
-    const next = [];
+  for (const stair of activeGraph.stairs) {
+    const srcRoom = stair.roomId ? (activeGraph.roomMap.get(stair.roomId) ?? null) : null;
+    if (!srcRoom) continue;
+    const translated = translateCellSet(stair.cells, activeGraph, project.structGraph, temp);
+    if (!translated) continue; // CL変換不能 → 安全側でこの階段はスキップ
+    const cells = refreshCells(translated, temp);
+    if (cells.size === 0) continue;
 
-    for (const chain of chains) {
-      const translated = translateCellSet(chain.belowStair.cells, chain.belowGraph, project.structGraph, temp);
-      if (!translated) continue; // CL変換不能 → 安全側でこの連鎖は打ち切り
-      const cells = refreshCells(translated, temp);
-      if (cells.size === 0) continue;
+    const room = temp.rooms.find(r =>
+      (r.feature === RoomFeature.STAIR || r.feature === RoomFeature.STAIR_VOID) &&
+      setsEqual(refreshCells(r.cells, temp), cells)) ?? null;
+    if (!room) continue;
 
-      // この階の同 footprint 階段（中間階）。連鎖の次段はこの階段を「直下階の階段」とする
-      const tempStair = temp.stairs.find(s => setsEqual(refreshCells(s.cells, temp), cells)) ?? null;
-      if (tempStair) next.push({ ...chain, belowStair: tempStair, belowGraph: temp });
-
-      const room = temp.rooms.find(r =>
-        (r.feature === RoomFeature.STAIR || r.feature === RoomFeature.STAIR_VOID) &&
-        setsEqual(refreshCells(r.cells, temp), cells)) ?? null;
-      if (!room) continue;
-
-      // 内装コピー: 未編集の自動 Room のみ（ユーザー編集済みの内装は上書きしない）
-      if (chain.srcRoom && room.templateKey == null && room.customOverrides.size === 0) {
-        if (chain.srcRoom.templateKey != null) { room.setTemplateKey(chain.srcRoom.templateKey); changed = true; }
-        for (const [k, v] of chain.srcRoom.customOverrides) { room.customOverrides.set(k, v); changed = true; }
-      }
+    // 内装コピー: 未編集の Room のみ（ユーザー編集済みの内装は上書きしない）
+    if (room.templateKey == null && room.customOverrides.size === 0) {
+      if (srcRoom.templateKey != null) { room.setTemplateKey(srcRoom.templateKey); changed = true; }
+      for (const [k, v] of srcRoom.customOverrides) { room.customOverrides.set(k, v); changed = true; }
     }
-
-    if (changed) await saveFloor(plane.id, serializeGraph(temp));
-    chains = next;
   }
+
+  if (changed) await saveFloorFn(plane.id, serializeGraph(temp));
 }
 
 /**
@@ -368,14 +307,15 @@ export async function addNewFloorRoomFromSource(
 }
 
 /**
- * 階段の削除本体（全階連動）。設置階（アクティブ）で階段を削除するとき、syncUpperFloors が上の階へ
- * 自動設置した同 footprint の階段と最上階の階段吹抜け（STAIR_VOID）も連動して消す
- * （finish/stair/stairRemoval.js が計画・適用）。判定→上の階への書込み→設置階の確定（commitActive）→
- * undo 合成の順で進める（昇降機の runElevatorRemoval と同じ順序規則）。
+ * 階段の削除本体。設置階（アクティブ）で階段を削除するとき、直上1階の同 footprint の階段吹抜け
+ * （STAIR_VOID。syncUpperFloors が置いたもの）を全部未定義化する（finish/stair/stairRemoval.js が計画・適用）。
+ * 直上階のユーザー指定の階段・それより上の階は触らない。続けて自階に、直下階の階段の足元の吹抜けを
+ * reconcileStairVoids で復元する（直下階が無ければ何もしない）。判定→直上階への書込み→設置階の確定
+ * （commitActive）→自階の整合→undo 合成の順で進める（昇降機の runElevatorRemoval と同じ順序規則）。
  *
  * - アクティブ階にその階段が無ければ noop。
  * - 検討案の平面（採用階でない）がアクティブなら、自階だけ確定する（判定も上の階の書込みもしない）。
- * - 直下の採用階に同 footprint の階段がある（下の階から続く階段）なら rejected（書込みゼロ・commitActive なし）。
+ * - どの階の階段も自分の階で削除できる（拒否しない）。
  * - 上の階の per-floor 中心線は消さない（未定義化した部屋のセルが参照する）。
  * - 必要な実 I/O（peek）はすべて確定（commitActive）より前に済ませ、確定の後に await を挟まない。
  *
@@ -424,23 +364,22 @@ export async function runStairRemoval({
     return { status: 'removed', upperCount: 0 };
   }
 
-  // 1. 直下階を peek して「下の階から続く階段」を拒否する。続いて上の全採用階を peek し、peek 直前の
-  // 書込み世代・直後の before を控える。ここまでの例外はまだ何も書いていないので巻き戻さず、識別コード
-  // だけ付けて再スローする。
+  // 1. 直下階（削除後の吹抜けの整合に使う）と直上の1階だけを peek し、直上階は peek 直前の書込み世代・
+  // 直後の before を控える。どの階の階段も自分の階で消せる（拒否しない）。ここまでの例外はまだ何も書いて
+  // いないので巻き戻さず、識別コードだけ付けて再スローする。
   const genBeforePeek = new Map();      // planeId -> peek 直前の世代
   const beforeBytesByPlane = new Map(); // planeId -> peek 直後のバイト列
   const uppers = [];
   let targets;
+  let belowGraph;
   try {
-    const belowGraph = activeIndex > 0 ? await peekFn(planes[activeIndex - 1]) : null;
-    if (isContinuationStair(stair, activeGraph, belowGraph, project.structGraph)) {
-      return { status: 'rejected', message: ERR_STAIR_DELETE_CONTINUATION };
-    }
-    for (const plane of planes.slice(activeIndex + 1)) {
-      genBeforePeek.set(plane.id, floorWriteGeneration(plane.id));
-      const graph = await peekFn(plane);
-      beforeBytesByPlane.set(plane.id, serializeGraph(graph));
-      uppers.push({ plane, graph });
+    belowGraph = activeIndex > 0 ? await peekFn(planes[activeIndex - 1]) : null;
+    const upperPlane = planes[activeIndex + 1];
+    if (upperPlane) {
+      genBeforePeek.set(upperPlane.id, floorWriteGeneration(upperPlane.id));
+      const graph = await peekFn(upperPlane);
+      beforeBytesByPlane.set(upperPlane.id, serializeGraph(graph));
+      uppers.push({ plane: upperPlane, graph });
     }
     // 2. 連動して消す対象を決める。
     targets = planStairRemovalCascade({ structGraph: project.structGraph, activeGraph, stair, uppers });
@@ -495,11 +434,28 @@ export async function runStairRemoval({
     throw tag(new Error('runStairRemoval: commitActive returned no undo entry'));
   }
 
-  // 7. 上の階の before/after を設置階のエントリへ合成する（Ctrl+Z 1回で全階が戻る）。上の階が0件でも、
-  // 設置階自体の undo/redo の後に再読込みが要るため同様に amend する。
+  // 6b. 削除後の整合: 自階（設置階）に、直下階の階段の足元の吹抜けを復元する（直下階に階段がある位置の
+  // 階段を自階で消したとき、その足元は「直下階の階段の吹抜け」として残る）。直下階は確定前に peek 済みで、
+  // ここは同期処理だけ。自階のメモリ上のグラフを直接更新し、変更前後のバイト列を記録へ足す（undo は
+  // 6b の前の状態へ戻した後に確定エントリ本体が戻る）。
   const records = savedPlaneIds.map(planeId => ({
     planeId, before: beforeBytesByPlane.get(planeId), after: afterBytesByPlane.get(planeId),
   }));
+  let reconcileError = null;
+  if (belowGraph) {
+    const preBytes = serializeGraph(activeGraph);
+    try {
+      if (reconcileStairVoids(activeGraph, belowGraph, project.structGraph).changed) {
+        records.push({ planeId: activeGraph.plane.id, before: preBytes, after: serializeGraph(activeGraph) });
+      }
+    } catch (err) {
+      reconcileError = err;
+      restoreGraph(activeGraph, preBytes); // 途中まで書いた分を戻す（確定エントリ本体の undo は有効のまま）
+    }
+  }
+
+  // 7. 上の階・6b の before/after を設置階のエントリへ合成する（Ctrl+Z 1回で全階が戻る）。上の階が0件でも、
+  // 設置階自体の undo/redo の後に再読込みが要るため同様に amend する。
   undoManager.amend(
     entry,
     () => { applyRecords(project, records, 'before', saveFloorFn); onApplied?.(); },
@@ -507,5 +463,6 @@ export async function runStairRemoval({
   );
   onApplied?.();
 
+  if (reconcileError) throw tag(reconcileError); // 合成まで済ませてから知らせる（状態は undo で戻せる）
   return { status: 'removed', upperCount: targets.length };
 }

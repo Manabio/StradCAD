@@ -239,7 +239,7 @@ const App = observer(() => {
     // 無ければ従来どおりの同期の経路。関門を通った後の再入は stairChecked で分岐を飛ばす。
     if (!stairChecked && modeRef.current?.isStairConversionIntent(id, payload) && upperAdoptedPlanes(project.planes, project.activePlane).length > 0) { guardUi(convertStairFromNaming)(id, payload); return; }
     // 階段を外す（階段のペア部屋→階段でない）は、階段タブの削除と同じ関門（revertStairFromNaming→runStairRemoval）へ分ける。
-    // 設置階なら上の階の分身・階段吹抜けも連動して消す／中間階なら拒否する。関門の中の確定は applyNaming を直接呼ぶ
+    // 直上階の階段吹抜けを未定義化し、自階には直下階の階段の吹抜けを復元する。関門の中の確定は applyNaming を直接呼ぶ
     // （この関数を再入しない）。
     if (modeRef.current?.isStairRemovalIntent(id, payload)) { guardUi(revertStairFromNaming)(id, payload); return; }
     const wasRoof = isRoofFeature(project.activeGraph.roomMap.get(id)?.feature);
@@ -250,9 +250,9 @@ const App = observer(() => {
     const rejection = modeRef.current?.lastNamingRejection;
     if (rejection) { setToast({ msg: rejection, key: Date.now() }); return; }
     if (convertedStair) {
-      // 新規に階段変換された場合のみ、設置階の上の全採用フロア（最上階まで）へ
-      // 中心線・階段を同期する（非アクティブ階を peek して IDB へ保存。壁は生成しない）。
-      // undoEntry を渡し、自動設置分の巻き戻しを変換エントリへ合成する
+      // 新規に階段変換された場合のみ、設置階の直上1階へ階段吹抜けを同期する
+      // （非アクティブ階を peek して IDB へ保存。壁は生成しない）。
+      // undoEntry を渡し、吹抜けの巻き戻しを変換エントリへ合成する
       // （変換の Ctrl+Z 1回で上階分もまとめて undo される）。
       const undoEntry = modeRef.current?.lastNamingUndoEntry ?? null;
       import('./finish/stair/stairFloorSync.js')
@@ -272,8 +272,8 @@ const App = observer(() => {
       .then(names => { if (names.length > 0) setToast({ msg: ERR_ROOF_UPPER_ROOMS(names), key: Date.now() }); })
       .catch(console.error);
   }
-  // 階段の新規指定の本体（applyRoomNaming から分岐。ステップB1b）。上の階へ展開される位置（中間階の階段・
-  // 最上階の階段吹抜け）に屋根があれば、何も変更せずメッセージだけ出す（ダイアログは開いたまま。昇降機の
+  // 階段の新規指定の本体（applyRoomNaming から分岐。ステップB1b）。上の階へ展開される位置（直上1階の
+  // 階段吹抜け）に屋根があれば、何も変更せずメッセージだけ出す（ダイアログは開いたまま。昇降機の
   // installElevatorFromNaming と同じ「確定前の拒否」）。上の階の読込み（peek）は変更の前に済ませる——
   // 確定後に非同期処理を挟んで失敗しても巻き戻せないため。通ったら同期で applyRoomNaming を再入する。
   async function convertStairFromNaming(id, payload) {
@@ -457,9 +457,9 @@ const App = observer(() => {
       // changed・noopはトーストなし。
     });
   }
-  // 階段の削除（階段タブの削除ボタン。部屋カードの削除は deleteStairRoomCascade）。設置階で削除したとき、上の階へ自動設置された
-  // 同 footprint の階段と最上階の階段吹抜けも連動して消す（finish/stair/stairFloorSync.js runStairRemoval）。
-  // 下の階から続く階段（中間階）は拒否してトーストだけ出す。deleteElevatorEquipment と同じ形
+  // 階段の削除（階段タブの削除ボタン。部屋カードの削除は deleteStairRoomCascade）。どの階の階段も自階で削除でき、
+  // 直上1階の同 footprint の階段吹抜けを未定義化し、自階には直下階の階段の吹抜けを復元する
+  // （finish/stair/stairFloorSync.js runStairRemoval）。deleteElevatorEquipment と同じ形
   // （beginUiTransition→runBusy→structuralSync.whenIdle()→動的import→本体→結果の表示）。
   // 動的importは確定（commitActive）より前＝関門の先頭側で済ませる。成功時のトーストは出さない。
   async function deleteStairCascade(id) {
@@ -545,7 +545,7 @@ const App = observer(() => {
     });
   }
   // 部屋カードの「属性」で階段を外す（階段→階段でない。applyRoomNaming から分岐）。階段タブの削除と同じ関門
-  // （runStairRemoval）を通し、設置階なら上の階の分身・階段吹抜けも連動して消す／中間階なら拒否（部屋は何も変えない）。
+  // （runStairRemoval）を通し、直上階の階段吹抜けを未定義化する／自階には直下階の階段の吹抜けを復元する。
   // 設置階の確定は applyNaming（従来どおり部屋の属性・外部仕上げ行・選択の変更が反映される）。
   async function revertStairFromNaming(id, payload) {
     const fmode = modeRef.current;

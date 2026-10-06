@@ -1,21 +1,20 @@
-// FinishModeState の階段削除まわり（件B ステップ3・4）: deleteStair の undo エントリ・stairDeleteBlockReason・
+// FinishModeState の階段削除まわり（件B ステップ3・4）: deleteStair の undo エントリ・
 // isStairRemovalIntent・「部屋カードの削除」を階段の関門へ回しても自階の結果が従来の deleteRoom と食い違わないこと。
-// 前提は実際の経路（applyNaming で階段を指定→syncUpperFloors で上の階へ展開）で作る（stairRemovalTestFixtures.js）。
+// 前提は実際の経路（applyNaming で階段を指定→syncUpperFloors で直上階へ階段吹抜けを展開）で作る（stairRemovalTestFixtures.js）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runInAction } from 'mobx';
 import { RoomFeature, RoomKind } from '@core';
 import { FinishModeState } from './FinishModeState.js';
 import { serializeGraph } from '../graphSnapshot.js';
 import { undoManager } from '../undoManager.js';
-import { ERR_STAIR_DELETE_CONTINUATION, ERR_ROOM_DELETE_HAS_STAIR_CHILD } from '../error.js';
+import { ERR_ROOM_DELETE_HAS_STAIR_CHILD } from '../error.js';
 import { makeStorePeek, makeStoreSave, decodeFloor } from '../finish/equipment/equipmentTestFixtures.js';
 import { syncUpperFloors } from '../finish/stair/stairFloorSync.js';
 import { setupProject, addPerFloorV, placeStair } from '../finish/stair/stairRemovalTestFixtures.js';
 
 const RIGHT_HALF = [[750, 500]];
 
-// 3階建ての1階に階段を指定して上の階へ展開済み（2階は階段の分身、3階は階段吹抜け）。
+// 3階建ての1階に階段を指定して直上階へ展開済み（2階は階段吹抜け・3階は何も無い）。
 // g2 は保存バイト列を復号した2階（本番の peek 同型）。
 async function twoFloors() {
   const { project, graphs } = setupProject(3);
@@ -26,12 +25,6 @@ async function twoFloors() {
   await syncUpperFloors(project, g1, { peekFn: makeStorePeek(project, store), saveFloorFn: makeStoreSave(store, []) });
   const g2 = decodeFloor(project, project.planeMap.get('p2'), store.get('p2'));
   return { project, g1, g2, ...placed };
-}
-
-// 直下階の読込み結果（_loadLowerStairs が peek して持つ値）を、IDB を使わずに注入する。
-function injectLower(state, lowerGraph) {
-  state._lowerGraph = lowerGraph;
-  runInAction(() => { state.lowerStairs = lowerGraph.stairs.map(s => ({ stair: s, cellBounds: [] })); });
 }
 
 // ---- deleteStair の undo エントリ ----
@@ -62,38 +55,15 @@ test('【失敗系】deleteStair: 存在しない id は差分なし＝lastStair
   assert.equal(undoManager._undoStack.length, before);
 });
 
-// ---- stairDeleteBlockReason ----
+// ---- 削除の拒否（続きの階段）は撤廃済み ----
 
-test('stairDeleteBlockReason: 直下階に同 footprint の階段がある階段は理由の文言、その階で新設した別位置の階段は null', async () => {
-  const { project, g1, g2 } = await twoFloors();
-  assert.equal(g2.stairs.length, 1, '前提: 2階に分身がある');
-  const own = placeStair(project, g2, { pts: RIGHT_HALF }); // 2階で新設（直下階に同 footprint なし）
+test('stairDeleteBlockReason は撤廃済み（どの階の階段も自階で削除できる）。2階で新設した階段を2階で deleteStair できる', async () => {
+  const { project, g2 } = await twoFloors();
   const state = new FinishModeState(g2, project);
-  injectLower(state, g1);
-
-  const continuation = g2.stairs.find(s => s.id !== own.stair.id);
-  assert.equal(state.stairDeleteBlockReason(continuation.id), ERR_STAIR_DELETE_CONTINUATION, '下の階から続く階段は拒否');
-  assert.equal(state.stairDeleteBlockReason(own.stair.id), null, '2階で新設した階段は削除できる');
-  assert.equal(state.stairDeleteBlockReason('no-such-stair'), null, '存在しない id は null');
-});
-
-test('stairDeleteBlockReason: 直下階が未読込み（_lowerGraph が null）なら、同 footprint があっても null（関門側が拒否する）', async () => {
-  const { project, g1, g2 } = await twoFloors();
-  const state = new FinishModeState(g2, project);
-  injectLower(state, g1);
-  assert.equal(state.stairDeleteBlockReason(g2.stairs[0].id), ERR_STAIR_DELETE_CONTINUATION, '前提: 読込み済みなら拒否');
-
-  state._lowerGraph = null;
-  assert.equal(state.stairDeleteBlockReason(g2.stairs[0].id), null);
-
-  const empty = new FinishModeState(g2, project); // lowerStairs も空（1階を読み込む前）
-  assert.equal(empty.stairDeleteBlockReason(g2.stairs[0].id), null);
-});
-
-test('stairDeleteBlockReason: 設置階（1階。直下階なし）の階段は null', async () => {
-  const { project, g1, stair } = await twoFloors();
-  const state = new FinishModeState(g1, project);
-  assert.equal(state.stairDeleteBlockReason(stair.id), null);
+  assert.equal(state.stairDeleteBlockReason, undefined, '削除拒否の判定メソッドは無い');
+  const own = placeStair(project, g2, { pts: RIGHT_HALF });
+  state.deleteStair(own.stair.id);
+  assert.equal(g2.stairMap.has(own.stair.id), false, '2階の階段は拒否されず消える');
 });
 
 // ---- isStairRemovalIntent ----

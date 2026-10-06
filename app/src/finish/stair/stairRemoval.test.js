@@ -1,6 +1,6 @@
-// finish/stair/stairRemoval.js（階段削除の単階本体と、上の階への連動の計画）の単体テスト。
-// 前提は実際の経路で作る（applyNaming で階段を指定→syncUpperFloors で上の階へ展開。peek・保存は本番同型の
-// 保存バイト列。上の階は復号したグラフに対して検証する）。
+// finish/stair/stairRemoval.js（階段削除の単階本体と、直上1階への連動の計画）の単体テスト。
+// 前提は実際の経路で作る（applyNaming で階段を指定→syncUpperFloors で直上階へ階段吹抜けを展開。peek・保存は
+// 本番同型の保存バイト列。上の階は復号したグラフに対して検証する）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature, RoomKind } from '@core';
@@ -11,12 +11,11 @@ import { FinishModeState } from '../../modes/FinishModeState.js';
 import { findUnderStairSplitCLs, ensureUnderStairSplit } from './stairUnderSplit.js';
 import { syncUpperFloors } from './stairFloorSync.js';
 import {
-  removeStairOnFloor, findSameFootprintStair, isContinuationStair,
-  planStairRemovalCascade, applyStairRemovalToFloor,
+  removeStairOnFloor, planStairRemovalCascade, applyStairRemovalToFloor,
 } from './stairRemoval.js';
 import { setupProject, addPerFloorV, placeStair, keyAt, LEFT_HALF } from './stairRemovalTestFixtures.js';
 
-// n 階建て・全階 x=500 の per-floor 中心線・1階に階段を指定→上の階へ展開。
+// n 階建て・全階 x=500 の per-floor 中心線・1階に階段を指定→直上階へ展開（2階に階段吹抜け）。
 // 戻り値の floors は [1階(生きたグラフ), 2階(復号), 3階(復号)...]。
 async function expanded(n, opts) {
   const { project, graphs } = setupProject(n);
@@ -31,6 +30,7 @@ async function expanded(n, opts) {
 const cascade = ({ project, floors, stair }) => planStairRemovalCascade({
   structGraph: project.structGraph, activeGraph: floors[0].graph, stair, uppers: floors.slice(1),
 });
+const voidRooms = (g) => g.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID);
 
 // ---- removeStairOnFloor ----
 
@@ -99,107 +99,71 @@ test('FinishModeState.deleteStair: removeStairOnFloor への委譲後も、選�
   assert.equal(state.namingRoomId, null);
 });
 
-// ---- findSameFootprintStair / isContinuationStair ----
+// ---- planStairRemovalCascade（直上1階の同 footprint の階段吹抜けだけを拾う） ----
 
-test('isContinuationStair: 直下階に同 footprint の階段がある（上の階の自動設置分）→真、設置階の階段→偽（直下なし）', async () => {
-  const ctx = await expanded(3);
-  const [f1, f2, f3] = ctx.floors;
-  const s2 = f2.graph.stairs[0];
-  assert.ok(s2, '前提: 2階に階段が展開されている');
-  assert.equal(isContinuationStair(s2, f2.graph, f1.graph, ctx.structGraph), true);
-  assert.equal(findSameFootprintStair(s2, f2.graph, ctx.structGraph, f1.graph)?.id, ctx.stair.id, '下→上向きの逆（上→下）でも写せる');
-  assert.equal(findSameFootprintStair(ctx.stair, f1.graph, ctx.structGraph, f2.graph)?.id, s2.id, '下→上');
-  assert.equal(isContinuationStair(ctx.stair, f1.graph, null, ctx.structGraph), false, '直下階なし');
-  assert.equal(f3.graph.stairs.length, 0, '前提: 最上階は階段でなく吹抜け');
-});
-
-test('isContinuationStair: 直下階の階段と一部だけ重なる footprint は偽', async () => {
-  const ctx = await expanded(2);
-  const [f1, f2] = ctx.floors;
-  // 2階（最上階）には階段が無い。2階に置く階段は x=[0,1000]（1階の階段 x=[0,500] を含み、一致はしない）
-  const wide = f2.graph.addStair({ type: StairType.STRAIGHT, cells: new Set([keyAt(f2.graph, LEFT_HALF[0]), keyAt(f2.graph, [750, 500])]), upDirection: 'up' });
-  assert.equal(isContinuationStair(wide, f2.graph, f1.graph, ctx.structGraph), false);
-});
-
-test('【失敗系】isContinuationStair: 直下階へ写せない（直下階に対応する中心線が無い）→偽', async () => {
-  const ctx = await expanded(3);
-  const [, f2] = ctx.floors;
-  const s2 = f2.graph.stairs[0];
-  assert.ok(s2, '前提: 2階に階段がある（上の階の自動設置分）');
-  const empty = decodeFloor(ctx.project, ctx.floors[0].plane, undefined); // per-floor 中心線も階段も無い1階
-  assert.equal(isContinuationStair(s2, f2.graph, empty, ctx.structGraph), false);
-});
-
-// ---- planStairRemovalCascade ----
-
-test('planStairRemovalCascade: 3階建て→2階の階段と3階の階段吹抜けを拾う（階段吹抜けは階段なしの最終段）', async () => {
+test('planStairRemovalCascade: 3階建て→直上の2階の階段吹抜けだけを拾う（3階は対象外）', async () => {
   const ctx = await expanded(3);
   const t = cascade(ctx);
-  assert.equal(t.length, 2);
+  assert.equal(t.length, 1);
   assert.equal(t[0].plane.id, 'p2');
-  assert.equal(t[0].stair?.id, ctx.floors[1].graph.stairs[0].id);
-  assert.equal(t[0].voidRoom, null);
-  assert.equal(t[1].plane.id, 'p3');
-  assert.equal(t[1].stair, null);
-  assert.equal(t[1].voidRoom?.feature, RoomFeature.STAIR_VOID);
+  assert.equal(t[0].voidRooms.length, 1);
+  assert.equal(t[0].voidRooms[0].feature, RoomFeature.STAIR_VOID);
+  assert.equal(t[0].stair, undefined, '階段は計画に含めない（直上階の階段は消さない）');
 });
 
-test('planStairRemovalCascade: 2階建て→最上階の階段吹抜けだけを拾う', async () => {
+test('planStairRemovalCascade: 3階に同 footprint の階段吹抜けがあっても拾わない（N+2 以上は触らない）', async () => {
+  const ctx = await expanded(3);
+  const top = ctx.floors[2].graph;
+  const stray = top.addRoom(new Set([keyAt(top, LEFT_HALF[0])]));
+  stray.setFeature(RoomFeature.STAIR_VOID);
+  assert.deepEqual(cascade(ctx).map(x => x.plane.id), ['p2']);
+});
+
+test('planStairRemovalCascade: 直上階にユーザー指定の階段（同 footprint）があっても消さない。吹抜けが無ければ空', async () => {
+  const ctx = await expanded(3);
+  const g2 = ctx.floors[1].graph;
+  for (const r of voidRooms(g2)) g2.removeRoom(r.id);
+  g2.addStair({ type: StairType.STRAIGHT, cells: new Set([keyAt(g2, LEFT_HALF[0])]), upDirection: 'up' });
+  assert.deepEqual(cascade(ctx), []);
+});
+
+test('planStairRemovalCascade: 同 footprint の階段吹抜けが複数あれば全部拾う（原子セルへ展開して比較）', async () => {
   const ctx = await expanded(2);
+  const g2 = ctx.floors[1].graph;
+  const first = voidRooms(g2)[0];
+  const dup = g2.addRoom(new Set(first.cells));
+  dup.setFeature(RoomFeature.STAIR_VOID);
   const t = cascade(ctx);
   assert.equal(t.length, 1);
-  assert.equal(t[0].stair, null);
-  assert.equal(t[0].voidRoom?.feature, RoomFeature.STAIR_VOID);
+  assert.deepEqual(t[0].voidRooms.map(r => r.id).sort(), [first.id, dup.id].sort());
 });
 
-test('planStairRemovalCascade: 途中の階で階段が欠けていれば、そこで打ち切る（その上の階は拾わない）', async () => {
-  const ctx = await expanded(4);
-  const f3 = ctx.floors[2].graph;
-  f3.removeStair(f3.stairs[0].id); // 3階の階段が欠ける（4階の吹抜けはあるが連鎖が切れている）
-  const t = cascade(ctx);
-  assert.deepEqual(t.map(x => x.plane.id), ['p2']);
-  assert.ok(ctx.floors[3].graph.rooms.some(r => r.feature === RoomFeature.STAIR_VOID), '前提: 4階に吹抜けは残っている');
-});
-
-test('planStairRemovalCascade: 最上階に残った同位置の階段も拾う', async () => {
-  const ctx = await expanded(2);
-  const top = ctx.floors[1].graph;
-  for (const r of top.rooms.filter(x => x.feature === RoomFeature.STAIR_VOID)) top.removeRoom(r.id);
-  const stray = top.addStair({ type: StairType.STRAIGHT, cells: new Set([keyAt(top, LEFT_HALF[0])]), upDirection: 'up' });
-  const t = cascade(ctx);
-  assert.equal(t.length, 1);
-  assert.equal(t[0].stair?.id, stray.id);
-});
-
-test('planStairRemovalCascade: 屋外階段の3階建て→2階の階段だけ（最上階に吹抜けは無い）', async () => {
+test('planStairRemovalCascade: 屋外階段（吹抜けを置かない）→空', async () => {
   const ctx = await expanded(3, { kind: RoomKind.EXTERIOR });
-  const t = cascade(ctx);
-  assert.deepEqual(t.map(x => [x.plane.id, !!x.stair, !!x.voidRoom]), [['p2', true, false]]);
+  assert.deepEqual(cascade(ctx), []);
 });
 
-test('【失敗系】planStairRemovalCascade: 上の階に同 footprint が無ければ空', async () => {
+test('【失敗系】planStairRemovalCascade: 上の階が無い・上の階へ写せない→空', async () => {
   const { project, graphs } = setupProject(2);
   addPerFloorV(graphs);
   const { stair } = placeStair(project, graphs[0]); // 展開（syncUpperFloors）をしない
-  const t = planStairRemovalCascade({
-    structGraph: project.structGraph, activeGraph: graphs[0], stair,
-    uppers: [{ plane: graphs[1].plane, graph: graphs[1] }],
-  });
-  assert.deepEqual(t, []);
+  const base = { structGraph: project.structGraph, activeGraph: graphs[0], stair };
+  assert.deepEqual(planStairRemovalCascade({ ...base, uppers: [{ plane: graphs[1].plane, graph: graphs[1] }] }), [], '同 footprint が無い');
+  assert.deepEqual(planStairRemovalCascade({ ...base, uppers: [] }), [], '上の階が無い');
+  const empty = decodeFloor(project, graphs[1].plane, undefined); // per-floor 中心線が無い2階（写せない）
+  assert.deepEqual(planStairRemovalCascade({ ...base, uppers: [{ plane: graphs[1].plane, graph: empty }] }), []);
 });
 
 // ---- applyStairRemovalToFloor ----
 
-test('applyStairRemovalToFloor: 中間階は階段を消してペアRoomを未定義化、最上階は階段吹抜けを未定義化', async () => {
-  const ctx = await expanded(3);
+test('applyStairRemovalToFloor: 同 footprint の階段吹抜けを全部未定義化する。対象が空なら何もしない', async () => {
+  const ctx = await expanded(2);
+  const g2 = ctx.floors[1].graph;
+  const dup = g2.addRoom(new Set(voidRooms(g2)[0].cells));
+  dup.setFeature(RoomFeature.STAIR_VOID);
   const t = cascade(ctx);
-  const [, g2, g3] = ctx.floors.map(f => f.graph);
-  const pairId = g2.stairs[0].roomId;
   assert.equal(applyStairRemovalToFloor(g2, t[0]), true);
-  assert.equal(applyStairRemovalToFloor(g3, t[1]), true);
-  assert.equal(g2.stairs.length, 0);
-  assert.equal(g2.roomMap.get(pairId)?.feature, RoomFeature.UNDEFINED);
-  assert.equal(g3.rooms.some(r => r.feature === RoomFeature.STAIR_VOID), false);
-  assert.equal(g3.rooms.filter(r => r.feature === RoomFeature.UNDEFINED).length, 1);
-  assert.equal(applyStairRemovalToFloor(g3, { stair: null, voidRoom: null }), false, '対象が空なら何もしない');
+  assert.equal(voidRooms(g2).length, 0);
+  assert.equal(g2.rooms.filter(r => r.feature === RoomFeature.UNDEFINED).length, 2);
+  assert.equal(applyStairRemovalToFloor(g2, { voidRooms: [] }), false, '対象が空なら何もしない');
 });

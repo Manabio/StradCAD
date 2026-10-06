@@ -1,6 +1,6 @@
 // node:test 用のテスト専用ヘルパー（ファイル名に ".test." を含めない＝テスト本体として実行されない。
 // 製品コードから import しない）。階段の連動削除（stairRemoval.test.js・stairFloorSync.removal.test.js）が
-// 共有する、実際の経路（applyNaming で階段を指定→syncUpperFloors で上の階へ展開）で前提を作る手順。
+// 共有する、実際の経路（applyNaming で階段を指定→syncUpperFloors で直上階へ階段吹抜けを展開）で前提を作る手順。
 import { Project, CenterLineType, Discipline, RoomKind, RoomFeature } from '../../core.js';
 import { worldToCell } from '../gridCells.js';
 import { subtractCellsFromUndefinedRooms } from '../roomUndefined.js';

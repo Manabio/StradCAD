@@ -72,7 +72,6 @@ export const StairTab = observer(({ graph, mode, project, onDeleteStair }) => {
         <StairEditor
           stair={selectedSelf} graph={graph} project={project}
           onDelete={onDeleteStair}
-          deleteBlockedReason={mode.stairDeleteBlockReason(selectedSelf.id)}
         />
       )}
       {selectedLower && (

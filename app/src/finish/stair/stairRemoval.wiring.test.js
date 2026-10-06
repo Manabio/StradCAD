@@ -8,19 +8,17 @@ import path from 'node:path';
 const read = (rel) => fs.readFileSync(path.resolve(import.meta.dirname, rel), 'utf8');
 const lines = (src) => src.split(/\r?\n/);
 
-test('【配線・件B】StairTab: StairEditor の onDelete は onDeleteStair（モードの deleteStair 直呼びではない）で、削除不可の理由を渡す', () => {
+test('【配線・件B】StairTab: StairEditor の onDelete は onDeleteStair（モードの deleteStair 直呼びではない）。削除の拒否（続きの階段）は撤廃済み', () => {
   const src = read('StairTab.jsx');
   assert.match(src, /^\s*onDelete=\{onDeleteStair\}\s*$/m, 'onDelete={onDeleteStair} が1行まるごとの形で見つからない');
-  assert.match(src, /^\s*deleteBlockedReason=\{mode\.stairDeleteBlockReason\(selectedSelf\.id\)\}\s*$/m,
-    'deleteBlockedReason={mode.stairDeleteBlockReason(selectedSelf.id)} が1行まるごとの形で見つからない');
+  assert.doesNotMatch(src, /deleteBlockedReason|stairDeleteBlockReason/, '削除拒否の理由の受け渡しが残っている');
   assert.doesNotMatch(src, /mode\.deleteStair\(/, 'mode.deleteStair( の直呼びが残っている（連動削除の関門を通らない）');
   assert.match(src, /^export const StairTab = observer\(\(\{ graph, mode, project, onDeleteStair \}\) => \{\s*$/m, 'StairTab が onDeleteStair を受け取らない');
 });
 
-test('【配線・件B】StairPanel: 削除ボタンは deleteBlockedReason が非nullのとき disabled で、理由をボタンの下に出す', () => {
+test('【配線・件B】StairPanel: 削除ボタンは常に有効（disabled・理由表示なし）で onDelete を呼ぶ', () => {
   const src = read('StairPanel.jsx');
-  assert.match(src, /^\s*disabled=\{deleteBlockedReason != null\}\s*$/m, 'disabled={deleteBlockedReason != null} が1行まるごとの形で見つからない');
-  assert.match(src, /^\s*\{deleteBlockedReason != null && \(\s*$/m, '理由の表示（deleteBlockedReason != null && ( ）が見つからない');
+  assert.doesNotMatch(src, /deleteBlockedReason/, '削除拒否の理由の分岐が残っている');
   assert.match(src, /^\s*onClick=\{\(\) => onDelete && onDelete\(stair\.id\)\}\s*$/m, '削除ボタンの onClick が見つからない');
 });
 

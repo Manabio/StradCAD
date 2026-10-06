@@ -3,7 +3,7 @@ import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList, worldTo
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { ensureUnderStairSplit, removeUnderStairSplit } from '../finish/stair/stairUnderSplit.js';
-import { removeStairOnFloor, isContinuationStair } from '../finish/stair/stairRemoval.js';
+import { removeStairOnFloor } from '../finish/stair/stairRemoval.js';
 import { resolveStairUnderEntries } from '../finish/stair/stairUnderRooms.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -19,7 +19,7 @@ import { buildingEquipmentCatalog, equipmentSpanLabelOf } from '../finish/equipm
 import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { isValidRoofFieldValue } from '../finish/roof/roofInput.js';
-import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED, ERR_STAIR_DELETE_CONTINUATION, ERR_ROOM_DELETE_HAS_STAIR_CHILD } from '../error.js';
+import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED, ERR_ROOM_DELETE_HAS_STAIR_CHILD } from '../error.js';
 import {
   RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME, applyDefaultBaseboard,
   ElevatorEquipmentCategory, DEFAULT_EV_USAGE, isDefaultRoofSpec,
@@ -1334,21 +1334,6 @@ export class FinishModeState {
     const before = snapshotFinishState(this.graph);
     this._deleteStairNoUndo(id);
     this.lastStairUndoEntry = pushFinishUndo(this.graph, before);
-  }
-
-  /**
-   * 階段の削除が許されない理由（中間階＝直下の採用階に同 footprint の階段がある）。許されるなら null。
-   * 階段タブの削除ボタンの無効化・理由表示に使う（observer から呼ぶ。lowerStairs を読んで依存を張る）。
-   * 直下階が未読込み（_lowerGraph が null）の間は null——その間に押された場合は関門側
-   * （finish/stair/stairFloorSync.js runStairRemoval）が同じ判定で拒否する。
-   * @returns {string|null}
-   */
-  stairDeleteBlockReason(stairId) {
-    if (this.lowerStairs.length === 0 || !this._lowerGraph || !this.project) return null;
-    const stair = this.graph.stairMap.get(stairId);
-    if (!stair) return null;
-    return isContinuationStair(stair, this.graph, this._lowerGraph, this.project.structGraph)
-      ? ERR_STAIR_DELETE_CONTINUATION : null;
   }
 
   /** roomId をペア Room に持つ Stair（無ければ null）。 */
