@@ -243,6 +243,27 @@ test('isInteriorWallTarget: 昇降路（feature=elevatorEquipment・独立部屋
   assert.equal(isInteriorWallTarget(room, new Set()), true);
 });
 
+// 階段吹抜け（STAIR_VOID。設置階の直上1階に reconcileStairVoids が置く自動管理Room）は塗り・仕上げ表・
+// 部屋再解釈からは除外するが、内周壁は通常のRoomと同じ経路で持つ（.claude/data-model.md 冒頭の節と
+// 「屋内階段の直上1階のfootprint」の節。2026-10-07 実装確認）——直上階で足元を屋内として囲う壁が要るため。
+// 除外の列挙に巻き込んで対象外にすると、直上階の階段まわりの内周壁が黙って消える。
+test('isInteriorWallTarget: 階段吹抜け（feature=STAIR_VOID・屋内・独立部屋）は通常部屋と同じく対象（内周壁を持つ）', () => {
+  const graph = makeGraph();
+  const room = graph.addRoom(new Set(['dummy']), '');
+  room.setFeature(RoomFeature.STAIR_VOID);
+
+  assert.equal(room.kind, RoomKind.INTERIOR, '前提: 階段吹抜けは屋内（kind=INTERIOR）で置かれる');
+  assert.equal(isInteriorWallTarget(room, new Set()), true);
+});
+
+test('【失敗系】isInteriorWallTarget: 階段吹抜けでも under2aRoomIds に含まれれば対象外（STAIR_VOID が他の除外条件を打ち消さない）', () => {
+  const graph = makeGraph();
+  const room = graph.addRoom(new Set(['dummy']), '');
+  room.setFeature(RoomFeature.STAIR_VOID);
+
+  assert.equal(isInteriorWallTarget(room, new Set([room.id])), false);
+});
+
 // ================================================================
 // 柱寸法が基準（120）より細い階の外壁下地帯シフト（bandShift。structural/structureRules.js
 // woodBaseColumnWidthMm 参照。ステップ1）
