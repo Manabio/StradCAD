@@ -6,7 +6,8 @@ import { refreshCells } from '../gridCells.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
 import { subtractCellsFromUndefinedRooms } from '../roomUndefined.js';
 import { collectNeededCLs, addMissingCLs, translateCellSet } from '../floorCLMap.js';
-import { RoomFeature, RoomKind, isRoofFeature } from '@core';
+import { RoomFeature, isRoofFeature } from '@core';
+import { setsEqual, isIndoorStair, addStairVoidRoom } from './stairVoidReconcile.js';
 import { upperAdoptedPlanes } from '../roof/roofFloorCheck.js';
 import { findStairUpperRoofConflicts } from './stairRoofConflict.js';
 import {
@@ -17,43 +18,7 @@ import { floorWriteGeneration } from '../../storage/floorWriteGeneration.js';
 import { rollbackSavedFloors, applyRecords, amendOnAppliedOnly } from '../floorUndoRecords.js';
 import { isContinuationStair, planStairRemovalCascade, applyStairRemovalToFloor } from './stairRemoval.js';
 
-function setsEqual(a, b) {
-  if (a.size !== b.size) return false;
-  for (const x of a) if (!b.has(x)) return false;
-  return true;
-}
-
-// 屋内階段判定: ペア Room の kind が EXTERIOR でなければ屋内（roomId なしの旧データは屋内扱い）
-function isIndoorStair(graph, stair) {
-  const room = stair.roomId ? graph.roomMap.get(stair.roomId) : null;
-  return (room?.kind ?? RoomKind.INTERIOR) !== RoomKind.EXTERIOR;
-}
-
-/**
- * 最上階の階段 footprint へ階段吹抜け（STAIR_VOID）Room を自動指定する。
- * 未定義以外の既存 Room（stairVoid 自身を含む）とセルが重なる場合は何もしない（冪等・二重割当防止）。
- * 重なりは両辺を refreshCells で現行グリッドの原子セルへ展開して比べる（cells は translateCellSet の
- * 生キーで、格子が直下階より細かい階では原子セルと一致しない。生のまま比べると既存の吹抜けを見落とし、
- * 呼ぶたびに増える）。展開後が空（解決できるセルが無い）なら何もしない。
- * 未定義 Room（階段の連動削除などで外形を保つために残した部屋）とだけ重なるなら、そのセルを未定義 Room
- * から引き抜いてから作る（再指定が詰まらない。FinishModeState.applyNaming と同じ前例）。
- * 作る Room のセルは渡された cells（生キー）のまま持つ（読む側が refreshCells で展開する）。
- * @returns {boolean} 追加したか
- */
-function addStairVoidRoom(graph, cells) {
-  if (cells.size === 0) return false;
-  const refreshed = refreshCells(cells, graph);
-  if (refreshed.size === 0) return false;
-  for (const room of graph.rooms) {
-    if (room.feature === RoomFeature.UNDEFINED) continue;
-    const roomCells = refreshCells(room.cells, graph);
-    if ([...refreshed].some(k => roomCells.has(k))) return false;
-  }
-  subtractCellsFromUndefinedRooms(graph, refreshed);
-  const room = graph.addRoom(new Set(cells));
-  room.setFeature(RoomFeature.STAIR_VOID);
-  return true;
-}
+// setsEqual・isIndoorStair・addStairVoidRoom は純モジュール stairVoidReconcile.js へ移した（挙動は同じ）
 
 /**
  * 階段の新規指定（部屋→階段）の事前チェック。syncUpperFloors が上の階へ展開する位置（中間階は階段、
