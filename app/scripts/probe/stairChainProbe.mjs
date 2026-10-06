@@ -1,4 +1,5 @@
-// 階段の上階展開（続きの階段＋最上階 STAIR_VOID → 直上階1階だけの STAIR_VOID 方式）の変更前基準採取 probe。
+// 階段の上階展開（設置階の直上1階にだけ STAIR_VOID を置く方式。続きの階段は上階でユーザーが指定する）の基準採取 probe。
+// （2026-10-06 の再設計前は「続きの階段の自動コピー＋最上階 STAIR_VOID」方式。その基準は cc286ed で採取した。）
 // 読み取り専用: .stq を復元して各階の階段・STAIR_VOID・VOID・階段ペア部屋・上階スラブ開口・規則Oの源を
 // 位置由来の安定キー（セルキー＝CL id ではなく cellBoundsFromKey の x1,y1,x2,y2 を sort して結合）でJSONへ落とす。
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/stairChainProbe.mjs [stqパス] [出力先ディレクトリ]
@@ -83,7 +84,8 @@ for (let i = 0; i < planes.length; i++) {
       entrySide: s.entrySide ?? null, arrivalSide: s.arrivalSide ?? null,
       entryTurnSteps: s.entryTurnSteps ?? 0, arrivalTurnSteps: s.arrivalTurnSteps ?? 0,
       riserEffective: r3(riserEff),
-      // 続きの階段＝直下階に同 footprint（位置一致）の階段がある
+      // 続きの階段＝直下階に同 footprint（位置一致）の階段がある（ユーザーが上階で指定した続きの階段。
+      // 自動コピーではない。キー名 continuation は旧名のまま）
       continuation: !!belowGraph && belowGraph.stairs.some(b => footKey(b.cells, belowGraph) === footKey(s.cells, graph)),
     };
   }), x => x.cells.join('|'));
@@ -137,6 +139,10 @@ function floorStairShape(graph) {
     pairRooms: graph.rooms.filter(r => r.feature === RoomFeature.STAIR).map(r => fp(r.cells)).sort(),
   };
 }
+// resync シナリオ: 起点階ごとに、上階の同footprint の階段・吹抜け・ペア部屋を除いて本番の syncUpperFloors を
+// 再実行し、保存データと一致するか（matchesStored）を見る。新モデルでは直上1階（k+1）にだけ STAIR_VOID が
+// 置かれ、それより上の階には何も復元されない（probe が除いた続きの階段・吹抜けは戻らない）。
+// したがってユーザー指定の続きの階段を持つ文書（moku4: 2階に続きの階段）は matchesStored=false が正。
 const resyncScenarios = [];
 for (let k = 0; k < planes.length; k++) {
   const originPlane = planes[k];

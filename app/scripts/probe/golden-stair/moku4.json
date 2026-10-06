@@ -1,6 +1,6 @@
 {
  "probe": "stairChainProbe",
- "commit": "cc286ed",
+ "commit": "dcf40aa",
  "source": "moku4",
  "summary": {
   "floorCount": 3,
@@ -32,8 +32,8 @@
   ],
   "resyncScenarioCount": 1,
   "resyncStairVoidsTotal": 1,
-  "resyncStairsTotal": 1,
-  "resyncAllMatchStored": true,
+  "resyncStairsTotal": 0,
+  "resyncAllMatchStored": false,
   "stairsTotal": 2,
   "stairVoidsTotal": 1,
   "continuationStairsTotal": 1,
@@ -47,24 +47,20 @@
    "originFootprints": [
     "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
    ],
-   "matchesStored": true,
+   "matchesStored": false,
    "upper": [
     {
      "name": "2階",
-     "stairs": [
-      "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
-     ],
-     "stairVoids": [],
-     "pairRooms": [
-      "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
-     ]
-    },
-    {
-     "name": "3階",
      "stairs": [],
      "stairVoids": [
       "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
      ],
+     "pairRooms": []
+    },
+    {
+     "name": "3階",
+     "stairs": [],
+     "stairVoids": [],
      "pairRooms": []
     }
    ]

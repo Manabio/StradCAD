@@ -912,7 +912,7 @@ test('【ステップ7・項目2・QA是正F2】autoFillStairLandingBeams: 2階�
   assert.deepEqual(straightLandingResult.created, [], 'STRAIGHT_LANDINGはLGは0本（構成はLG生成可能＝陽性対照あり）');
 
   // 陽性対照: 同じproject形（2階建て・同じ階高）でSWITCHBACKに差し替えるとLGは1本になる
-  // ——この構成自体がLGを生成できることを示す。2Fに同footprintの上階自動設置コピーを置く。
+  // ——この構成自体がLGを生成できることを示す。2Fに同footprintのユーザー指定の階段を置く。
   const project2 = new Project('proj-switchback-lg-control', 'test');
   const { graph: sb1 } = project2.addPlane(0, '1階', 'p1');
   const { graph: sb2 } = project2.addPlane(3000, '2階', 'p2');

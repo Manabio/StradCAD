@@ -22,10 +22,10 @@ const RECT_EPS_MM = CL_OVERLAP_TOL_MM;
 
 /**
  * stair（graphに設置された階段）と同じ世界座標フットプリントの階段が belowGraph にあるか
- * （「下階に同じ階段（到達元）がある」）。上階自動設置（finish/stair/stairFloorSync.js
- * syncUpperFloors）のコピーは`addStair`で新規idを発番する（同一idではない）ため、id一致ではなく
- * フットプリント（roomBounds＝世界座標の外接矩形）の一致で判定する——コピーは同じ踏面ジオメトリを
- * 平行移動なしで複製するため、上下階で完全一致する。
+ * （「下階に同じ階段（到達元）がある」）。続きの階段はユーザーが上階で指定するもの（自動コピーは
+ * しない。設置階の直上1階にはSTAIR_VOIDだけが置かれ、同footprintの階段が指定されるとペア部屋へ
+ * 転用される）で、下階の階段とは別idのため、id一致ではなくフットプリント（roomBounds＝世界座標の
+ * 外接矩形）の一致で判定する。形状（種別・向き）が下階と違ってもフットプリントが同じなら到達元。
  * @param {object} stair
  * @param {object} graph stairが属するgraph（自階）
  * @param {object} belowGraph 1つ下の実体階のgraph
@@ -46,7 +46,7 @@ function hasMatchingStairBelow(stair, graph, belowGraph) {
  * floorOpeningEdges の stairFilter オプションを組み立てる（QAレビュー是正・2026-09-28）:
  * 「破れ先＝切断高より上に続く上り部分」（.claude/stair-model.md:38前半）は設置階自身の床の
  * 開口ではない——設置階の床に穴は無い。「自階スラブの開口越しに見下ろす下階階段」（同行後半）に
- * なるのは**下階に到達元の階段があるとき**だけ（上階自動設置のコピー）。belowGraphが無い
+ * なるのは**下階に到達元の階段があるとき**だけ（ユーザーが上階で指定した続きの階段）。belowGraphが無い
  * （最下階・屋根専用平面）ときは常にfalse——破れ先は開口源にしない。
  * @param {object} graph
  * @param {object|null} belowGraph

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline, StairType, StructuralMaterialType, RoomFeature, spanKey } from '../core.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { landingEdgeCLs } from '../finish/stair/stairLanding.js';
 import {
   autoFillStairLandingBeams, autoFillBeamsForStructure, autoFillStructuralGrid, beamAxisCenterLines,
   autoFillColumns, autoFillBeams, autoFillFootings, autoFillRoofBeams, secondaryBeamSpansFor, autoFillSecondaryBeams,
@@ -336,11 +337,11 @@ test('【WP-B2改訂・2026-09-28裁定】autoFillStairLandingBeams: belowGraph�
   assert.deepEqual(result, { created: [], removedG: [], removedStale: [], updated: [], skippedConflicts: 0 });
 });
 
-test('【WP-B2改訂】autoFillStairLandingBeams: 到達階に上階自動設置コピー(graph.stairs)があれば、そのback辺(y0)に1本生成する（levelOffset=landingZ-階高-310）', () => {
+test('【WP-B2改訂】autoFillStairLandingBeams: 到達階に同footprintの階段（ユーザー指定。graph.stairs）があれば、そのback辺(y0)に1本生成する（levelOffset=landingZ-階高-310）', () => {
   const { project, graphs } = makeProjectWithNFloors([0, 2400]);
   const [floor1, floor2] = graphs;
   makeSwitchbackFixture(floor1, StructuralMaterialType.STEEL); // 設置階
-  const { ids: ids2 } = makeSwitchbackFixture(floor2, StructuralMaterialType.STEEL); // 到達階＝上階自動設置コピー
+  const { ids: ids2 } = makeSwitchbackFixture(floor2, StructuralMaterialType.STEEL); // 到達階＝同footprintのユーザー指定の階段
 
   const onInstall = autoFillStairLandingBeams(floor1, project, null, null); // 1F自身にはbelowGraphが無い
   assert.deepEqual(onInstall.created, [], '設置階(1F)自身は常に0本のはず');
@@ -375,11 +376,11 @@ test('【WP-B2改訂】autoFillStairLandingBeams: 最上階（コピーが無く
   assert.equal(result.created[0].sectionDefId, 'RC-300x300');
 });
 
-test('【WP-B2改訂】autoFillStairLandingBeams: 3階建て（1F設置・2Fコピー・3FはSTAIR_VOIDのみ）は2F・3Fに各1本、1Fは0本', () => {
+test('【WP-B2改訂】autoFillStairLandingBeams: 3階建て（1F設置・2F同footprintのユーザー指定の階段・3FはSTAIR_VOIDのみ）は2F・3Fに各1本、1Fは0本', () => {
   const { project, graphs } = makeProjectWithNFloors([0, 2400, 4800]);
   const [floor1, floor2, floor3] = graphs;
   makeSwitchbackFixture(floor1, StructuralMaterialType.STEEL);
-  makeSwitchbackFixture(floor2, StructuralMaterialType.STEEL); // 2F: 1F階段の上階自動設置コピー
+  makeSwitchbackFixture(floor2, StructuralMaterialType.STEEL); // 2F: 1F階段と同footprintのユーザー指定の階段
   makeStairVoidFixture(floor3); // 3F: 最上階のSTAIR_VOID Room（2F階段の到達先）
 
   const onFloor1 = autoFillStairLandingBeams(floor1, project, null, null);
@@ -388,6 +389,75 @@ test('【WP-B2改訂】autoFillStairLandingBeams: 3階建て（1F設置・2Fコ�
   assert.equal(onFloor1.created.length, 0, '1F(設置階)は常に0本');
   assert.equal(onFloor2.created.length, 1, '2F(1F階段の到達階)は1本');
   assert.equal(onFloor3.created.length, 1, '3F(2F階段の到達階)は1本');
+});
+
+// ---- ステップ7（階段の上階展開の再設計）: 到達階にユーザー指定の階段があっても、踊り場は常に「下階の階段＋到達階のセル」で読む ----
+
+test('【ステップ7】同footprint・同形状の到達階の階段は、(a)到達階の階段そのもの と (b)下階の階段＋到達階のセルのshim で踊り場外周辺が同じ', () => {
+  const { graphs } = makeProjectWithNFloors([0, 2400]);
+  const [floor1, floor2] = graphs;
+  const { stair: below } = makeSwitchbackFixture(floor1, StructuralMaterialType.STEEL);
+  const { stair: arrival } = makeSwitchbackFixture(floor2, StructuralMaterialType.STEEL);
+  const shim = {
+    type: below.type, upDirection: below.upDirection, flip: below.flip,
+    sections: below.sections, totalSteps: below.totalSteps, cells: arrival.cells,
+  };
+  const viaArrival = landingEdgeCLs(arrival, floor2);
+  const viaShim = landingEdgeCLs(shim, floor2);
+  assert.ok(viaArrival && viaShim);
+  assert.deepEqual(viaShim, viaArrival);
+});
+
+test('【ステップ7】到達階に同footprintで形状の違うユーザー階段（STRAIGHT）があっても、下階の階段の踊り場のback辺に1本生成する', () => {
+  const { project, graphs } = makeProjectWithNFloors([0, 2400]);
+  const [floor1, floor2] = graphs;
+  makeSwitchbackFixture(floor1, StructuralMaterialType.STEEL);
+  const { stair: arrival, ids: ids2 } = makeSwitchbackFixture(floor2, StructuralMaterialType.STEEL);
+  runInAction(() => { arrival.type = StairType.STRAIGHT; }); // 到達階のユーザー階段は別形状（踊り場なし）
+  assert.equal(landingEdgeCLs(arrival, floor2), null, '前提: 到達階の階段単体では踊り場外周辺が求まらない');
+
+  const result = autoFillStairLandingBeams(floor2, project, null, floor1);
+  assert.equal(result.created.length, 1, '到達階の階段ではなく下階の階段の踊り場を読むはず');
+  assert.equal(result.created[0].axisCL.id, ids2.y0.id);
+  assert.equal(result.created[0].isVertical, false);
+});
+
+test('【ステップ7】到達階の同footprint の SWITCHBACK が flip 違いでも、下階の階段の back 辺(y0)に1本生成する', () => {
+  const { project, graphs } = makeProjectWithNFloors([0, 2400]);
+  const [floor1, floor2] = graphs;
+  makeSwitchbackFixture(floor1, StructuralMaterialType.STEEL);
+  const { stair: arrival, ids: ids2 } = makeSwitchbackFixture(floor2, StructuralMaterialType.STEEL);
+  runInAction(() => { arrival.flip = !arrival.flip; });
+  const result = autoFillStairLandingBeams(floor2, project, null, floor1);
+  assert.equal(result.created.length, 1);
+  assert.equal(result.created[0].axisCL.id, ids2.y0.id);
+});
+
+test('【ステップ7】到達階の同footprint の SWITCHBACK が upDirection 逆向きでも、下階の階段の back 辺(y0)に1本生成する', () => {
+  const { project, graphs } = makeProjectWithNFloors([0, 2400]);
+  const [floor1, floor2] = graphs;
+  makeSwitchbackFixture(floor1, StructuralMaterialType.STEEL);
+  const { stair: arrival, ids: ids2 } = makeSwitchbackFixture(floor2, StructuralMaterialType.STEEL);
+  runInAction(() => { arrival.upDirection = 'down'; });
+  const result = autoFillStairLandingBeams(floor2, project, null, floor1);
+  assert.equal(result.created.length, 1);
+  assert.equal(result.created[0].axisCL.id, ids2.y0.id);
+});
+
+test('【失敗系・ステップ7】到達階の階段の footprint がずれていて STAIR_VOID も無ければ0本・例外なし', () => {
+  const { project, graphs } = makeProjectWithNFloors([0, 2400]);
+  const [floor1, floor2] = graphs;
+  makeSwitchbackFixture(floor1, StructuralMaterialType.STEEL);
+  const x0 = floor2.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = floor2.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = floor2.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = floor2.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const cells = new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]);
+  const room = floor2.addRoom(cells, '階段');
+  floor2.addStair({ type: StairType.SWITCHBACK, cells, roomId: room.id, sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false, structure: StructuralMaterialType.STEEL });
+  assert.doesNotThrow(() => {
+    assert.equal(autoFillStairLandingBeams(floor2, project, null, floor1).created.length, 0);
+  });
 });
 
 // ---- QA指摘F1是正・2026-09-29: 撤去・更新段（ADD-ONLYの穴を塞ぐ一般則）----

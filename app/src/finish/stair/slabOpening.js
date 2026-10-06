@@ -31,8 +31,8 @@ const WALL_AXIS_CL_EPS = 0.5;
 // floorOpeningEdges（層A。自階の床の開口を求める用途）で自階の階段をそのまま渡すと、設置階
 // 自身の破れ先（「切断高より上に続く上り部分」=stair-model.md:38前半）まで「自階スラブの開口」と
 // 誤認する——設置階の床に穴は無い。破れ先が「自階スラブの開口越しに見下ろす下階階段」
-// （同行後半）になるのは、下階に同じ階段（到達元。上階自動設置＝syncUpperFloorsのコピー）が
-// あるときだけ。呼び出し側（openingBeamAxes.js openingBeamSourcesFor）がこの条件で絞る。
+// （同行後半）になるのは、下階に同footprintの階段（到達元。ユーザーが上階で指定した続きの階段。
+// 上階の自動コピーはしない＝設置階の直上1階にはSTAIR_VOIDだけが置かれる）があるときだけ。呼び出し側（openingBeamAxes.js openingBeamSourcesFor）がこの条件で絞る。
 // slabOpeningRectsは第3引数を渡さない＝挙動不変（upperGraph視点＝上階を覗く既存用途は
 // この誤認の対象外——upperGraph自身が「自階」ではなく常に「直上階」であり、呼び出し側の設計が異なる）。
 function openingCellSets(upperGraph, riserOf, stairFilter = () => true) {

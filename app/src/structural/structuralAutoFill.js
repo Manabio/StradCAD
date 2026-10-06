@@ -485,23 +485,24 @@ function rectsMatch(r1, r2) {
 }
 
 /** belowStair（1つ下の実体階=設置階に立つ階段）の踊り場外周辺を、到達階（graph）側で解決する。
- *  (a) footprint（roomBounds）が一致する上階自動設置コピー（finish/stair/stairFloorSync.js
- *  syncUpperFloors。graph.stairsに新idで複製される）があれば、それで landingEdgeCLs。
- *  (b) 無ければ（最上階＝コピーの代わりにSTAIR_VOID Roomだけがある）、footprintが一致する
- *  STAIR_VOID Roomを探し、belowStairのtype/upDirection/flip/sections/totalStepsとroom.cellsを
- *  合成したshimでlandingEdgeCLs（resolveSwitchbackSpanLengths・makeFrameはtype/upDirection/flip/
- *  sections/totalSteps/cellsしか読まないため、Stairの実インスタンスでなくても同じ幾何が求まる）。
- *  どちらも無ければnull。 */
+ *  踊り場の形は常に下階（設置階）の階段が決める。到達階のセルだけを借りる:
+ *  footprint（roomBounds）が一致する到達階の階段（ユーザーが指定した続きの階段。下階の階段と
+ *  形が違いうるため、その階段の踊り場は読まない）があればそのcells、無ければ（最上階＝階段の
+ *  代わりにSTAIR_VOID Roomだけがある）footprintが一致するSTAIR_VOID Roomのcellsを使う。
+ *  belowStairのtype/upDirection/flip/sections/totalSteps/treadとそのcellsを合成したshimでlandingEdgeCLs
+ *  （resolveSwitchbackSpanLengths・makeFrameはtype/upDirection/flip/sections/totalSteps/tread/cellsしか
+ *  読まないため、Stairの実インスタンスでなくても同じ幾何が求まる）。どちらも無ければnull。 */
 function resolveArrivalLandingEdges(belowStair, belowGraph, graph) {
   const belowRect = roomBounds(belowStair.cells, belowGraph);
   if (!Number.isFinite(belowRect.x1)) return null;
-  const copy = graph.stairs.find(s => rectsMatch(roomBounds(s.cells, graph), belowRect));
-  if (copy) return landingEdgeCLs(copy, graph);
-  const room = graph.rooms.find(r => r.feature === RoomFeature.STAIR_VOID && rectsMatch(roomBounds(r.cells, graph), belowRect));
-  if (!room) return null;
+  const arrivalStair = graph.stairs.find(s => rectsMatch(roomBounds(s.cells, graph), belowRect));
+  const arrivalRoom = arrivalStair ? null
+    : graph.rooms.find(r => r.feature === RoomFeature.STAIR_VOID && rectsMatch(roomBounds(r.cells, graph), belowRect));
+  const cells = (arrivalStair ?? arrivalRoom)?.cells;
+  if (!cells) return null;
   const shim = {
     type: belowStair.type, upDirection: belowStair.upDirection, flip: belowStair.flip,
-    sections: belowStair.sections, totalSteps: belowStair.totalSteps, cells: room.cells,
+    sections: belowStair.sections, totalSteps: belowStair.totalSteps, tread: belowStair.tread, cells,
   };
   return landingEdgeCLs(shim, graph);
 }
@@ -538,7 +539,7 @@ function collectLandingSources(graph, project, belowGraph) {
  *  源は`belowGraph.stairs`（1つ下の実体階＝設置階のgraph）——`graph.stairs`（自階＝到達階）からは
  *  生成しない（設置階自身の伏図は常に0本のまま。基礎伏図＝最下階も同様に0本）。到達階での踊り場
  *  外周辺の解決はresolveArrivalLandingEdges参照（単一の情報源finish/stair/stairLanding.jsの
- *  landingEdgeCLsを、上階自動設置コピーまたはSTAIR_VOID Room由来のshimへ適用する）。
+ *  landingEdgeCLsを、下階の階段の形＋到達階（ユーザー指定の階段またはSTAIR_VOID Room）のセルのshimへ適用する）。
  *  生成対象は踊り場外周4辺のうち壁側1辺（kind:'back'）だけ（ユーザー裁定2026-08-23 §9-B。
  *  side/front辺には生成しない）。対象は stair.structure（階段自身の材質）がSTEEL・RCの階段のみ
  *  （§9-D）。
