@@ -8,7 +8,7 @@ import { translateCellSet, collectNeededCLs } from '../floorCLMap.js';
 import { serializeGraph } from '../../graphSnapshot.js';
 import { makeRoomUndefined } from '../roomUndefined.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
-import { reconcileStairVoids, stairVoidsTouching } from './stairVoidReconcile.js';
+import { reconcileStairVoids, stairVoidsTouching, addStairVoidRoom } from './stairVoidReconcile.js';
 
 // X:[0,1000,2000] Y:[0,1000]（全階共通の通り芯）。per-floor CL H500 を両階に置く（階段の足元の上端）
 function setup({ perFloorCL = true } = {}) {
@@ -69,7 +69,7 @@ test('冪等: 2回呼んで2回目は changed=false・部屋数もバイト列�
   const bytes = serializeGraph(above);
   const n = above.rooms.length;
   const r2 = reconcileStairVoids(above, below, sg);
-  assert.deepEqual(r2, { changed: false, added: [], removed: [], skipped: [] });
+  assert.deepEqual(r2, { changed: false, added: [], removed: [], skipped: [], carved: [] });
   assert.equal(above.rooms.length, n);
   assert.deepEqual(serializeGraph(above), bytes);
 });
@@ -104,22 +104,177 @@ test('own-stair: 上階に同 footprint の階段＋ペア部屋があれば ski
   assert.equal(above.rooms.length, n);
 });
 
-test('overlap: 名前付き部屋と部分的に重なる → skipped(overlap)・部屋数不変', () => {
+// 足元の吹抜けを外し、足元の原子セル atoms を返す（CL 補完のため一度 reconcile を走らせる）
+function clearedFootprint(below, above, sg) {
+  reconcileStairVoids(above, below, sg);
+  above.removeRoom(voidRooms(above)[0].id);
+  return [...refreshCells(translateCellSet(below.stairs[0].cells, below, sg, above), above)];
+}
+const roomCellsOf = (g, room) => refreshCells(room.cells, g);
+
+test('引き抜き: 名前付き部屋が足元を全面覆う → 足元を部屋から引き抜いて吹抜けを置く（部屋は残りのセルを持つ）', () => {
   const { below, above, sg } = setup();
   addStairAt(below, leftKey(below));
-  reconcileStairVoids(above, below, sg); // CL 補完のため一度走らせ、吹抜けは外す
-  above.removeRoom(voidRooms(above)[0].id);
-  // 足元 left=[0,1000]x[0,500] と、上の段 [0,1000]x[500,1000] をまたぐ部屋（足元の一部だけ重なる）
-  const atoms = [...refreshCells(translateCellSet(below.stairs[0].cells, below, sg, above), above)];
-  above.addRoom(new Set([atoms[0], worldToCell(500, 750, above).key]), '居室');
-  const n = above.rooms.length;
-  const before = serializeGraph(above);
+  const atoms = clearedFootprint(below, above, sg);
+  const extra = worldToCell(500, 750, above).key;
+  const room = above.addRoom(new Set([...atoms, extra]), '居室');
   const r = reconcileStairVoids(above, below, sg);
-  assert.equal(r.changed, false);
-  assert.deepEqual(r.skipped.map(s => s.reason), ['overlap']);
-  assert.equal(above.rooms.length, n);
+  assert.equal(r.changed, true);
+  assert.equal(r.added.length, 1);
+  assert.deepEqual(r.skipped, []);
+  assert.deepEqual(r.carved.map(c => [c.roomId, [...c.cells].sort()]), [[room.id, [...atoms].sort()]]);
+  assert.equal(voidRooms(above).length, 1);
+  const rest = roomCellsOf(above, above.roomMap.get(room.id));
+  assert.ok(atoms.every(k => !rest.has(k)), '足元は部屋から引き抜かれている');
+  assert.ok(rest.has(extra), '足元の外のセルは部屋に残る');
+});
+
+test('引き抜き: 部分重なり（足元の一部が部屋・残りは未割当）→ 全体に吹抜けが置かれ、部屋は重なり分だけ減る', () => {
+  const { below, above, sg } = setup({ perFloorCL: false });
+  addStairAt(below, gridOnlyKey(below));
+  reconcileStairVoids(above, below, sg);
+  above.removeRoom(voidRooms(above)[0].id);
+  // 足元 [0,1000]x[0,1000] を H500 で割り、下半分だけ部屋で覆う
+  above.addCenterLine(CenterLineType.HORIZONTAL, 500, { labeled: false, discipline: Discipline.ARCH });
+  const lower = worldToCell(500, 750, above).key;
+  const room = above.addRoom(new Set([lower]), '居室');
+  const r = reconcileStairVoids(above, below, sg);
+  assert.equal(r.added.length, 1);
+  assert.deepEqual(r.skipped, []);
+  assert.equal(above.roomMap.has(room.id), false, '部屋は足元の内側だけだったので空になり除去');
+  assert.deepEqual(r.carved.map(c => c.roomId), [room.id]);
+  const foot = refreshCells(voidRooms(above)[0].cells, above);
+  assert.ok(foot.has(lower) && foot.has(worldToCell(500, 250, above).key), '吹抜けは足元の全体');
+});
+
+test('引き抜き: 部屋のセルが空になる → 部屋ごと除去（空の部屋を残さない）。冪等', () => {
+  const { below, above, sg } = setup();
+  addStairAt(below, leftKey(below));
+  const atoms = clearedFootprint(below, above, sg);
+  const room = above.addRoom(new Set(atoms), '居室');
+  const r = reconcileStairVoids(above, below, sg);
+  assert.equal(r.changed, true);
+  assert.equal(above.roomMap.has(room.id), false);
+  assert.ok(above.rooms.every(x => x.cells.size > 0));
+  const bytes = serializeGraph(above);
+  const r2 = reconcileStairVoids(above, below, sg);
+  assert.deepEqual(r2, { changed: false, added: [], removed: [], skipped: [], carved: [] });
+  assert.deepEqual(serializeGraph(above), bytes);
+});
+
+test('引き抜き: 親のセルがすべて足元で、部分指定の子が足元の外にもセルを持つ → 親は削除され、子の referenceRoomIds に削除済み id が残らない（子は残る）', () => {
+  const { below, above, sg } = setup();
+  addStairAt(below, leftKey(below));
+  const atoms = clearedFootprint(below, above, sg);
+  const extra = worldToCell(500, 750, above).key;
+  const parent = above.addRoom(new Set(atoms), '親');
+  const child = above.addRoom(new Set([...atoms, extra]), '子', undefined, new Set([parent.id]));
+  assert.equal(child.referenceRoomIds.has(parent.id), true, '前提');
+  const r = reconcileStairVoids(above, below, sg);
+  assert.equal(r.added.length, 1);
+  assert.equal(above.roomMap.has(parent.id), false, '親（セルが空）は削除');
+  const kept = above.roomMap.get(child.id);
+  assert.ok(kept, '子は足元の外のセルを持つので残る');
+  assert.equal(kept.referenceRoomIds.has(parent.id), false, '削除済みの親 id を指さない');
+  assert.ok([...kept.referenceRoomIds].every(id => above.roomMap.has(id)), 'referenceRoomIds は全部実在する部屋');
+});
+
+test('引き抜き: ユーザー指定の吹抜け（VOID）からも引き抜く', () => {
+  const { below, above, sg } = setup();
+  addStairAt(below, leftKey(below));
+  const atoms = clearedFootprint(below, above, sg);
+  const extra = worldToCell(500, 750, above).key;
+  const v = above.addRoom(new Set([...atoms, extra]), '吹抜け');
+  v.setFeature(RoomFeature.VOID);
+  const r = reconcileStairVoids(above, below, sg);
+  assert.equal(r.added.length, 1);
+  assert.equal(voidRooms(above).length, 1);
+  const rest = roomCellsOf(above, above.roomMap.get(v.id));
+  assert.ok(atoms.every(k => !rest.has(k)) && rest.has(extra));
+});
+
+// 上階にも H500 はあるが区間が x 1000..2000 だけ＝足元（[0,1000]x[0,500]）の辺では分割線が働かず、
+// 上階の原子セルが足元より大きい（[0,1000]x[0,1000]）。居室がその粗いセルを持つ。
+function coarseAbove() {
+  const ctx = setup();
+  const { below, above, sg } = ctx;
+  const h500 = above.addCenterLine(CenterLineType.HORIZONTAL, 500, { labeled: false, discipline: Discipline.ARCH, extentLo: 1000, extentHi: 2000 });
+  const coarse = worldToCell(500, 250, above).key;
+  const room = above.addRoom(new Set([coarse]), '居室');
+  addStairAt(below, leftKey(below));
+  const foot = [...refreshCells(translateCellSet(below.stairs[0].cells, below, sg, above), above)];
+  assert.deepEqual(foot, [coarse], '前提: 足元の原子セルは足元より大きい上階の粗いセル（[0,1000]x[0,1000]）');
+  return { ...ctx, h500, coarse, room };
+}
+
+test('粗い格子: 上階の中心線の区間を足元の辺まで延ばして格子を割り、足元ちょうどに吹抜けを置く（居室は足元の外のセルを残す）', () => {
+  const { below, above, sg, h500, room } = coarseAbove();
+  const r = reconcileStairVoids(above, below, sg);
+  assert.equal(r.changed, true);
+  assert.deepEqual(r.skipped, []);
+  assert.equal(r.added.length, 1);
+  assert.equal(h500.extentLo, 0, '区間が足元の辺（x 0..1000）まで延びた');
+  const foot = refreshCells(voidRooms(above)[0].cells, above);
+  assert.deepEqual([...foot], [worldToCell(500, 250, above).key], '吹抜けは足元ちょうどの1セル（[0,1000]x[0,500]）');
+  const rest = refreshCells(above.roomMap.get(room.id).cells, above);
+  assert.deepEqual([...rest], [worldToCell(500, 750, above).key], '居室は足元の外（上の段）だけ残る');
+  const r2 = reconcileStairVoids(above, below, sg);
+  assert.deepEqual(r2, { changed: false, added: [], removed: [], skipped: [], carved: [] }, '冪等（2回目は区間も延びない）');
+});
+
+// 置けないことが確定している足元（引き抜けない部屋と重なる）では、上階の格子（中心線の区間）を延ばさない
+for (const [label, make] of [
+  ['ROOF', (r) => { r.setKind(RoomKind.EXTERIOR); r.setFeature(RoomFeature.ROOF); }],
+  ['昇降路', (r) => { r.setFeature(RoomFeature.ELEVATOR_EQUIPMENT); }],
+  ['屋外部屋', (r) => { r.setKind(RoomKind.EXTERIOR); }],
+]) {
+  test(`置けない足元（${label}と重なる）では上階の中心線の区間を延ばさない（skipped(overlap)・区間は不変）`, () => {
+    const { below, above, sg, h500, coarse } = coarseAbove();
+    make(above.addRoom(new Set([coarse]), label)); // 足元と面積のある重なり（粗い生キーが足元を覆う）
+    const [lo, hi] = [h500.extentLo, h500.extentHi];
+    const r = reconcileStairVoids(above, below, sg);
+    assert.deepEqual(r.skipped.map(s => s.reason), ['overlap']);
+    assert.deepEqual([h500.extentLo, h500.extentHi], [lo, hi], '区間は延びない');
+    assert.equal(voidRooms(above).length, 0);
+  });
+}
+
+test('粗い格子のガード: 原子セルが足元からはみ出すときは（区間を延ばさず直接 addStairVoidRoom を呼ぶと）通常の部屋から引き抜かず false・何も変えない', () => {
+  const { below, above, sg, room } = coarseAbove();
+  const raw = translateCellSet(below.stairs[0].cells, below, sg, above);
+  const before = serializeGraph(above);
+  const carved = [];
+  assert.equal(addStairVoidRoom(above, raw, carved), false);
+  assert.deepEqual(carved, []);
+  assert.ok(above.roomMap.has(room.id));
   assert.deepEqual(serializeGraph(above), before);
 });
+
+// 引き抜いてはいけない相手（足元と重なると skipped 'overlap'・何も変えない）
+for (const [label, make] of [
+  ['ROOF', (r) => { r.setKind(RoomKind.EXTERIOR); r.setFeature(RoomFeature.ROOF); }],
+  ['昇降路', (r) => { r.setFeature(RoomFeature.ELEVATOR_EQUIPMENT); }],
+  ['別の階段のペア部屋（STAIR）', (r) => { r.setFeature(RoomFeature.STAIR); }],
+  ['屋外部屋', (r) => { r.setKind(RoomKind.EXTERIOR); }],
+]) {
+  test(`overlap: ${label} と重なる → skipped(overlap)・何も変えない（他の部屋からも引き抜かない）`, () => {
+    // 足元 [0,1000]x[0,1000] を H500 で上下に割り、上半分を通常の部屋・下半分を禁止相手が覆う
+    const { below, above, sg } = setup({ perFloorCL: false });
+    addStairAt(below, gridOnlyKey(below));
+    reconcileStairVoids(above, below, sg);
+    above.removeRoom(voidRooms(above)[0].id);
+    above.addCenterLine(CenterLineType.HORIZONTAL, 500, { labeled: false, discipline: Discipline.ARCH });
+    above.addRoom(new Set([worldToCell(500, 250, above).key]), '居室');
+    make(above.addRoom(new Set([worldToCell(500, 750, above).key]), label));
+    const before = serializeGraph(above);
+    const r = reconcileStairVoids(above, below, sg);
+    assert.equal(r.changed, false);
+    assert.deepEqual(r.skipped.map(s => s.reason), ['overlap']);
+    assert.deepEqual(r.carved, []);
+    assert.equal(voidRooms(above).length, 0);
+    assert.deepEqual(serializeGraph(above), before);
+  });
+}
 
 test('overlap: ROOF 部屋と重なる → skipped(overlap)・吹抜けは置かれない', () => {
   const { below, above, sg } = setup();
@@ -217,14 +372,11 @@ test('重複: 同 footprint の STAIR_VOID が2つ → rooms の並びで先頭�
 
 test('写せない（直下階の格子を上階へ写せない）→ skipped(untranslatable)・何も変えない', () => {
   const { below, above, sg } = setup({ perFloorCL: false });
-  // 直下階では分割線、上階では同座標が補助線（破線＝分割線ではない）。変換は通るが上階の区画に解決できない
-  // （補完は同座標の CL が既にあるため足されない。stairFloorSync.void.test.js の同名の前提と同じ形）
-  below.addCenterLine(CenterLineType.VERTICAL, -1000, { labeled: false, discipline: Discipline.ARCH });
-  above.addCenterLine(CenterLineType.VERTICAL, -1000, { labeled: false, discipline: Discipline.ARCH, lineType: 'dashed' });
+  // 階段のセルが参照する直下階の中心線を消す（CL 削除で解決できなくなったキー）。変換が null になる
+  const gone = below.addCenterLine(CenterLineType.VERTICAL, -1000, { labeled: false, discipline: Discipline.ARCH });
   addStairAt(below, worldToCell(-500, 500, below).key);
-  const probe = translateCellSet(below.stairs[0].cells, below, sg, above);
-  assert.equal(probe?.size, 1, '前提: 変換はできる');
-  assert.equal(refreshCells(probe, above).size, 0, '前提: 上階では解決できる区画が無い');
+  below.removeCenterLine(gone.id);
+  assert.equal(translateCellSet(below.stairs[0].cells, below, sg, above), null, '前提: 変換できない');
   const before = serializeGraph(above);
   const r = reconcileStairVoids(above, below, sg);
   assert.deepEqual(r.skipped.map(s => s.reason), ['untranslatable']);
@@ -232,6 +384,19 @@ test('写せない（直下階の格子を上階へ写せない）→ skipped(un
   assert.equal(above.rooms.length, 0);
   assert.equal(r.changed, false);
   assert.deepEqual(serializeGraph(above), before);
+});
+
+test('上階の同座標が補助線だけ（分割線ではない）でも、足元の辺の分割線を足して吹抜けを置く（旧: 上階で解決できる区画が無く skipped(untranslatable)）', () => {
+  const { below, above, sg } = setup({ perFloorCL: false });
+  below.addCenterLine(CenterLineType.VERTICAL, -1000, { labeled: false, discipline: Discipline.ARCH });
+  above.addCenterLine(CenterLineType.VERTICAL, -1000, { labeled: false, discipline: Discipline.ARCH, lineType: 'dashed' });
+  addStairAt(below, worldToCell(-500, 500, below).key);
+  const probe = translateCellSet(below.stairs[0].cells, below, sg, above);
+  assert.equal(refreshCells(probe, above).size, 0, '前提: 足さなければ上階では解決できる区画が無い');
+  const r = reconcileStairVoids(above, below, sg);
+  assert.deepEqual(r.skipped, []);
+  assert.equal(r.added.length, 1);
+  assert.equal(voidRooms(above).length, 1);
 });
 
 test('写せない階段の既存吹抜けは消さない（孤児の判定を見送る）', () => {

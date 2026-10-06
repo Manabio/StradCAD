@@ -24,7 +24,7 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import {
   serializeGraph, restoreGraph, decodeFloorSnapshot, encodeFloorSnapshot,
 } from '../graphSnapshot.js';
-import { remapLineIdsInSnapshot, findLineIdOccurrences } from '../lineIdRemap.js';
+import { remapLineIdsInSnapshot, findLineIdOccurrences, hasAbsorptionConflict } from '../lineIdRemap.js';
 import { saveFloor } from '../storage/db.js';
 import { undoManager } from '../undoManager.js';
 import {
@@ -758,35 +758,8 @@ export async function findCenterLinesToAbsorbOnPromote(project, activeGraph, cl)
   }));
 }
 
-/**
- * 置換後のsnapshotで、吸収により複数の中心線がclIdへ寄ったことに伴う参照の衝突を検査する
- * （QA所見2是正・裁定・2026-09-30）: `columnAxisOffsets`（柱芯オフセット）・`clEccentricities`
- * （CL偏芯）・`kneeDropWalls`（腰壁・垂れ壁。edgeKeyにclIdを含むもの）のいずれかで、clIdを指す
- * エントリが2件以上残っていれば、どちらの値を採るか黙って決めず衝突として拒否する
- * （`remapLineIdsInSnapshot`はこれらを配列・配列内オブジェクトとして保持するため、キー衝突として
- * は検出できない——実測: `columnAxisOffsetKeys`は`Array<string>`、`clEccentricities`・
- * `kneeDropWalls`は`Array<{clId|key, ...}>`であり、いずれもJSオブジェクトの「プロパティ名」として
- * clIdを使わないため、複数のvalsが同じclId/keyに集約されても重複エントリとして残るだけで例外には
- * ならない。graphSnapshot.js buildSnapshot参照）。
- * @param {object} snapshot 吸収後（remapLineIdsInSnapshot適用後）のsnapshot
- * @param {string} clId
- * @returns {boolean}
- */
-function hasAbsorptionConflict(snapshot, clId) {
-  const eccCount = (snapshot.clEccentricities ?? []).filter(e => e.clId === clId).length;
-  if (eccCount >= 2) return true;
-  const axisCount = (snapshot.columnAxisOffsetKeys ?? []).filter(k => k === clId).length;
-  if (axisCount >= 2) return true;
-  const kneeKeyCounts = new Map();
-  for (const kw of snapshot.kneeDropWalls ?? []) {
-    if (!kw.key.split(':').includes(clId)) continue;
-    kneeKeyCounts.set(kw.key, (kneeKeyCounts.get(kw.key) ?? 0) + 1);
-  }
-  for (const count of kneeKeyCounts.values()) {
-    if (count >= 2) return true;
-  }
-  return false;
-}
+// hasAbsorptionConflict（吸収後の参照の衝突検査）は lineIdRemap.js へ移した（finish/floorCLMap.js の
+// 同座標ピースの結合と共用。挙動は同じ）。
 
 /**
  * 昇格・通常追加（中心線→通り芯）の中心線吸収の本体（QA所見5是正・2026-09-30: **移籍後**に呼ぶ。

@@ -32,7 +32,7 @@
 import { autorun, runInAction } from 'mobx';
 import { PlanGraph } from '@core';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
-import { closeConvexCorners } from '../finish/wallGeneration.js';
+import { healDerivedGeometry } from '../finish/wallGeneration.js';
 import { saveFloor, loadFloor, saveProject, loadProject } from './db.js';
 import { markDirty } from '../dirtyState.js';
 import { floorWriteGeneration } from './floorWriteGeneration.js';
@@ -68,7 +68,7 @@ export class FloorSwapManager {
    * （壁の端点は _startAutoSave の autorun の観測対象でもないが、順序で意図を示す）。
    */
   _healDerivedGeometry(graph) {
-    runInAction(() => closeConvexCorners([...graph.walls]));
+    healDerivedGeometry(graph);
   }
 
   async activate(plane, graph) {

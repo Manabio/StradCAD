@@ -20,7 +20,11 @@
  * だけを対応先として認める——上階の同じ座標に梁芯・補助線しか無い場合は「対応先なし」として
  * 新しい中心線を足す（S0計測で実データに実在を確認済み）。
  */
-import { sameCoordCounterparts } from '../core/centerLineKindPolicy.js';
+import { sameCoordCounterparts, isFinishCellDivider } from '../core/centerLineKindPolicy.js';
+import { isGridCenterLine } from '../core/centerLine.js';
+import { serializeGraph, restoreGraph, decodeFloorSnapshot } from '../graphSnapshot.js';
+import { healDerivedGeometry } from './wallGeneration.js';
+import { remapLineIdsInSnapshot, findLineIdOccurrences, hasAbsorptionConflict } from '../lineIdRemap.js';
 
 const EPS = 1e-6;
 
@@ -131,6 +135,159 @@ export function collectNeededCLs(cellKeys, sourceGraph) {
     }
   }
   return needed;
+}
+
+/**
+ * cellKeys（設置階のセル）を囲む4辺のうち、設置階の per-floor 中心線が作る辺について、上階の同座標の
+ * 仕上げセル分割線（isFinishCellDivider。梁芯・補助線は数えない）の有効区間（extent）が辺の全長を覆って
+ * いなければ、最も近い1本の区間を辺まで延ばす（union。延びるのは足元の辺を覆うまでだけ。既に覆って
+ * いれば何もしない）。addMissingCLs は同座標の中心線が上階にあれば区間を見ずに「対応先あり」とみなす
+ * ため、区間が足元に届かない上階では足元の辺で格子が割れず、原子セルが足元より大きくなる。
+ * 通り芯（structGraph 側）の辺は常に有効なので対象外。同座標に分割線が1本も無い辺は何もしない
+ * （足す側は addMissingCLs）。延ばすのは区間の静的値（参照は外れる）で、直列化に載るため階の
+ * before/after のバイト列合成でそのまま undo できる。
+ * @returns {number} 区間を延ばした中心線の数（0 なら変更なし）
+ */
+export function extendDividerExtents(cellKeys, sourceGraph, structGraph, upperGraph) {
+  let extended = 0;
+  const valueOf = (id) => (sourceGraph.shapeMap.get(id) ?? structGraph?.shapeMap.get(id))?.value;
+  const cells = [];
+  for (const key of cellKeys) {
+    const [leftId, topId, rightId, bottomId] = key.split(':');
+    const [x1, y1, x2, y2] = [leftId, topId, rightId, bottomId].map(valueOf);
+    if ([x1, y1, x2, y2].some(v => typeof v !== 'number')) continue;
+    cells.push({ ids: [leftId, topId, rightId, bottomId], x1, y1, x2, y2 });
+  }
+  const inSet = (x, y) => cells.some(c => x > c.x1 && x < c.x2 && y > c.y1 && y < c.y2);
+  const OUT = 1; // 辺の外側を見る距離(mm)。足元どうしの内部の辺（隣も足元）には分割線を要しない
+  for (const c of cells) {
+    const mx = (c.x1 + c.x2) / 2, my = (c.y1 + c.y2) / 2;
+    const edges = [
+      { id: c.ids[0], lo: c.y1, hi: c.y2, inner: inSet(c.x1 - OUT, my) },
+      { id: c.ids[2], lo: c.y1, hi: c.y2, inner: inSet(c.x2 + OUT, my) },
+      { id: c.ids[1], lo: c.x1, hi: c.x2, inner: inSet(mx, c.y1 - OUT) },
+      { id: c.ids[3], lo: c.x1, hi: c.x2, inner: inSet(mx, c.y2 + OUT) },
+    ];
+    for (const e of edges) {
+      const src = sourceGraph.shapeMap.get(e.id);
+      if (e.inner || !src || src.centerLineType == null) continue; // 通り芯は常に有効
+      if (extendOneEdge(upperGraph, src, Math.min(e.lo, e.hi), Math.max(e.lo, e.hi))) extended++;
+    }
+  }
+  return extended;
+}
+
+/**
+ * translateCellSet が返したセルキーのうち、per-floor 中心線の id を、同座標の分割線のうち辺の区間を覆う
+ * ものへ付け替える（既に覆っていればそのまま）。translateCLId は同 type:value の最初の1本を返すので、
+ * 同座標に区間の違うピースが複数ある上階では、辺を覆わないピースの id がキーに入り、壁生成が軸CLの区間
+ * （clipToAxisExtent）で辺の壁を落とす。覆うものが無ければ元の id のまま。通り芯（structGraph）は不変。
+ * @returns {Set<string>} 付け替え後のキー集合
+ */
+export function retargetKeysToCoveringCLs(keys, graph, structGraph) {
+  const out = new Set();
+  const valueOf = (id) => (graph.shapeMap.get(id) ?? structGraph?.shapeMap.get(id))?.value;
+  const covers = (d, lo, hi) => isGridCenterLine(d) || d.extentLo == null || d.extentHi == null
+    || (d.extentLo <= lo + EPS && d.extentHi >= hi - EPS);
+  for (const key of keys) {
+    const ids = key.split(':');
+    const [x1, y1, x2, y2] = ids.map(valueOf);
+    if ([x1, y1, x2, y2].some(v => typeof v !== 'number')) { out.add(key); continue; }
+    const spans = [[y1, y2], [x1, x2], [y1, y2], [x1, x2]]; // left, top, right, bottom の辺の区間
+    const next = ids.map((id, i) => {
+      const cl = graph.shapeMap.get(id);
+      if (!cl || cl.centerLineType == null) return id; // 通り芯
+      const lo = Math.min(...spans[i]), hi = Math.max(...spans[i]);
+      if (isFinishCellDivider(cl) && covers(cl, lo, hi)) return id;
+      const alt = sameCoordCounterparts(graph, { centerLineType: cl.centerLineType, value: cl.value, tolMm: EPS })
+        .find(d => isFinishCellDivider(d) && covers(d, lo, hi));
+      return alt ? alt.id : id;
+    });
+    out.add(next.join(':'));
+  }
+  return out;
+}
+
+// 同座標の分割線が上階に1本も無い（梁芯・補助線だけで addMissingCLs が「対応先あり」とみなした）ときは、
+// 辺の区間だけの中心線を足す。ある場合は最も近い1本を延ばす。足す／延ばすなら true。
+function extendOneEdge(upperGraph, src, lo, hi) {
+  const { centerLineType: type, value } = src;
+  const sameCoord = sameCoordCounterparts(upperGraph, { centerLineType: type, value, tolMm: EPS });
+  if (sameCoord.length === 0) return false; // 同座標に何も無い（足すのは addMissingCLs の担当）
+  const dividers = sameCoord.filter(isFinishCellDivider);
+  if (dividers.length === 0) {
+    upperGraph.addCenterLine(type, value, {
+      labeled: false, trim: false, discipline: src.discipline, lineWeight: src.lineWeight,
+      lineType: src.lineType, color: src.color, extentLo: lo, extentHi: hi,
+    });
+    return true;
+  }
+  // 区間の未被覆の隙間を、隣のピースを辺まで延ばして埋める（延びるのは辺を覆うところまで。隣のピースに
+  // ちょうど接したら1本に結合する——重なりは作らない。mergeAdjacentDividers）。結合で階のグラフが復元し
+  // 直されるので、1回ごとに同座標の分割線を引き直す。
+  let changed = false;
+  for (let guard = 0; guard < 16; guard++) {
+    const pieces = sameCoordCounterparts(upperGraph, { centerLineType: type, value, tolMm: EPS }).filter(isFinishCellDivider);
+    if (pieces.some(d => isGridCenterLine(d) || d.extentLo == null || d.extentHi == null)) return changed; // 全長有効
+    const gap = firstUncoveredGap(pieces, lo, hi);
+    if (!gap) return changed;
+    const [g1, g2] = gap;
+    const left = pieces.filter(d => d.extentHi <= g1 + EPS).reduce((b, d) => (!b || d.extentHi > b.extentHi ? d : b), null);
+    const right = pieces.filter(d => d.extentLo >= g2 - EPS).reduce((b, d) => (!b || d.extentLo < b.extentLo ? d : b), null);
+    const dl = left ? g1 - left.extentHi : Infinity;
+    const dr = right ? right.extentLo - g2 : Infinity;
+    if (dl === Infinity && dr === Infinity) return changed;
+    if (dl <= dr) {
+      upperGraph.setCenterLineExtentRef(left, 'hi', null, g2);
+      if (right && Math.abs(right.extentLo - g2) < EPS) mergeAdjacentDividers(upperGraph, left.id, right.id);
+    } else {
+      upperGraph.setCenterLineExtentRef(right, 'lo', null, g1);
+      if (left && Math.abs(left.extentHi - g1) < EPS) mergeAdjacentDividers(upperGraph, left.id, right.id);
+    }
+    changed = true;
+  }
+  return changed;
+}
+
+// 区間 [lo,hi] のうち、ピース群（区間は有限）が覆っていない最初の隙間 [g1,g2]。無ければ null。
+function firstUncoveredGap(pieces, lo, hi) {
+  const spans = pieces.map(d => [d.extentLo, d.extentHi]).sort((a, b) => a[0] - b[0]);
+  let cursor = lo;
+  for (const [a, b] of spans) {
+    if (a > cursor + EPS) return [cursor, Math.min(a, hi)];
+    cursor = Math.max(cursor, b);
+    if (cursor >= hi - EPS) return null;
+  }
+  return cursor < hi - EPS ? [cursor, hi] : null;
+}
+
+/**
+ * 同座標・同種別で端がちょうど接する2本の分割線 lowerId（hi 側が接する）と upperId（lo 側が接する）を、
+ * 1本（lowerId）に結合する。吸収する upperId を指す参照（部屋のセルキー・階段・壁の軸と始終端・建具・
+ * 他の線の extent 参照・偏芯レコード等）は、階の保存形式の中間オブジェクトへの一括置換
+ * （lineIdRemap.js remapLineIdsInSnapshot。線種変更の移籍一本化と同じ仕組み）で lowerId へ付け替え、
+ * 階のグラフを復元し直す（エンティティは作り直されるが id は保たれる）。生き残る線の far 側の区間は
+ * 吸収される線の値になる（参照だった場合は参照のまま。片側の参照は静的値化されうる）。
+ * 柱芯オフセット・CL偏芯・腰壁垂れ壁が両方の線に付いていて衝突する（hasAbsorptionConflict）ときは
+ * 何も変えず false（接した2本のまま残る＝重なりは無いので壁生成の軸CLの区間だけが足りなくなりうる）。
+ * @returns {boolean} 結合したか
+ */
+export function mergeAdjacentDividers(graph, lowerId, upperId) {
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  const lower = snapshot.centerLines.find(c => c.id === lowerId);
+  const upper = snapshot.centerLines.find(c => c.id === upperId);
+  if (!lower || !upper) return false;
+  lower.extentHi = upper.extentHi ?? null;
+  lower.extentHiRef = upper.extentHiRef ?? null;
+  snapshot.centerLines = snapshot.centerLines.filter(c => c !== upper);
+  const remapped = remapLineIdsInSnapshot(snapshot, new Map([[upperId, lowerId]]));
+  if (hasAbsorptionConflict(remapped, lowerId)) return false;
+  if (findLineIdOccurrences(remapped, [upperId]).length > 0) return false; // 事後条件: 旧 id が残らない
+  restoreGraph(graph, remapped);
+  healDerivedGeometry(graph);
+  // 読み込み経路（FloorSwapManager activate/peek の _healDerivedGeometry）と同じく、復元した壁の出隅を閉じ直す
+  // （復元直後の状態を読み込み直後と同じにする。冪等）
+  return true;
 }
 
 /**

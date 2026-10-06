@@ -21,7 +21,7 @@ import {
 } from './stair/stairUnderWalls.js';
 import {
   generateRoomWallsFromOutline, generateExteriorWalls, snapshotWall, restoreWallsFromSnapshots,
-  resolveBackingOwnership, applyBackingOwnership, closeConvexCorners, isInteriorWallTarget,
+  resolveBackingOwnership, applyBackingOwnership, healDerivedGeometry, isInteriorWallTarget,
 } from './wallGeneration.js';
 import { buildCellToRoom } from './edgeClassify.js';
 import { woodBaseColumnWidthMm, woodColumnWidthMm, rulesFor, effectiveStructure } from '../structural/structureRules.js';
@@ -479,7 +479,7 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
   {
     const before = new Map();
     for (const w of graph.walls) before.set(w.id, { startOffset: w.startOffset, endOffset: w.endOffset });
-    runInAction(() => closeConvexCorners([...graph.walls]));
+    healDerivedGeometry(graph);
     const cornerChanges = [];
     for (const w of graph.walls) {
       const b = before.get(w.id);

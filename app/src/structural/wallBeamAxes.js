@@ -4,6 +4,7 @@
 import { runInAction } from 'mobx';
 import { CenterLineType, Discipline, centerLineKind } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { isWallEndAtCorner } from '../core/wall.js';
 import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
 import { structuralAnchorAt, beamAxisAt, beamAxesAt, spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
@@ -212,7 +213,11 @@ function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking, cache = u
     // 昇降とは独立にMath.min/maxで決める**（QA是正: 極端に短い壁でoffsetがCL間距離に対し
     // 相対的に大きいと、coord1<=coord2の向きとdesignStart<=designEndの向きが食い違って反転
     // しうるため、物理側の向きへ引きずられない）。
-    const designStart = wall.clStart.effectiveValue, designEnd = wall.clEnd.effectiveValue;
+    // 階段の開口で切った端（端CLのままだが、実際の端が端CL上の相手の壁の材の外＝隅ではない。
+    // core/wall.js isWallEndAtCorner）は、設計上の端も実際の端（coord1/coord2）とする——端CLの位置は
+    // 壁の外（開口の向こう）で、自由端の柱がそこへ出てしまう。隅の端・相手の壁が無い端は従来どおり端CL。
+    const designStart = isWallEndAtCorner(wall, 'start', sourceGraph.walls) ? wall.clStart.effectiveValue : wall.coord1;
+    const designEnd = isWallEndAtCorner(wall, 'end', sourceGraph.walls) ? wall.clEnd.effectiveValue : wall.coord2;
     out.push({
       isVertical: wall.isVertical,
       coord: wallBackingCenterCoord(wall),

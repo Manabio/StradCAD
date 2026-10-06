@@ -170,6 +170,41 @@ export class Wall extends Shape {
 //   frameFaceWidth: 三方枠の見付(mm、null=未設定)。0以下/nullはframeDepthと同じ規約
 //   frameProjection: 三方枠の壁面からの出幅(mm、null=未設定)。0以下/nullはframeDepthと同じ規約
 // ----------------------------------------------------------------
+const WALL_END_CORNER_EPS = 0.5; // mm
+
+/**
+ * 壁 wall の端 which（'start'|'end'）が「隅」か——端の実座標（coord1/coord2）の端CLからの距離が、その端CLを軸にする
+ * 相手の壁（others のうち axisCL が端CLのもの）の材（materialRange＝軸〜仕上げ面〜下地帯）が端CLから張り出す量
+ * 以内か。隅の端は相手の材の中か、その手前（取り合いの欠け＝出隅の補修が閉じる分。別の部屋の壁どうしの角では
+ * 自室側の壁厚ぶん手前で止まる）で終わり、端CLからの距離は相手の材の張り出しを超えない。階段の開口で切った壁
+ * （finish/wallGeneration.js clipEdgeParamsByOpenings）は端CLが元の辺の端のままでも、実際の端は開口の座標にあり、
+ * 通常これを超える。相手の壁が無い・材の範囲が解決できないときは従来どおり端CLでの終端とみなす（true）。
+ * 保存済みの座標だけで判定できるので、保存後・読込み後の補修でも同じ結果になる。
+ * 限界: 開口の端が隅から相手の材の張り出し（壁厚程度）以内だと切った端でも隅とみなす。
+ * @param {Wall} wall
+ * @param {'start'|'end'} which
+ * @param {Iterable<Wall>} others 相手候補の壁（wall 自身・同じ向きの壁は無視される）
+ * @returns {boolean}
+ */
+export function isWallEndAtCorner(wall, which, others) {
+  const cl = which === 'start' ? wall.clStart : wall.clEnd;
+  const c = which === 'start' ? wall.coord1 : wall.coord2;
+  let found = false;
+  for (const o of others) {
+    if (o === wall || o.isVertical === wall.isVertical || o.axisCL !== cl) continue;
+    const r = o.materialRange;
+    if (!Number.isFinite(r.lo) || !Number.isFinite(r.hi)) continue;
+    found = true;
+    // 端CLからの距離が、相手の材が端CLから張り出す量（軸〜仕上げ面〜下地帯の遠い側）以内なら隅。
+    // 隅の端は相手の材の中か、その手前（取り合いの欠け＝出隅の補修が閉じる分）で終わり、端CLからの距離は
+    // 相手の材の張り出しを超えない。開口で切った端は開口の座標にあり、通常これを超える。
+    const cl0 = cl.effectiveValue;
+    const reach = Math.max(Math.abs(r.lo - cl0), Math.abs(r.hi - cl0));
+    if (Math.abs(c - cl0) <= reach + WALL_END_CORNER_EPS) return true;
+  }
+  return !found;
+}
+
 export class Opening extends Shape {
   constructor(id, axisCL, wallSide, isVertical, refCL, refOffset, width, category, subType, props) {
     super(id, props);

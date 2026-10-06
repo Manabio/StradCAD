@@ -9,8 +9,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline } from '../core.js';
-import { findCounterpartCL, translateCLId, collectNeededCLs, addMissingCLs, translateCellSet } from './floorCLMap.js';
+import {
+  findCounterpartCL, translateCLId, collectNeededCLs, addMissingCLs, translateCellSet,
+  extendDividerExtents, retargetKeysToCoveringCLs,
+} from './floorCLMap.js';
 import { isFinishCellDivider } from '../core/centerLineKindPolicy.js';
+import { RoomKind } from '../core.js';
+import { generateExteriorWalls, healDerivedGeometry } from './wallGeneration.js';
+import { mergeAdjacentDividers } from './floorCLMap.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -292,3 +298,171 @@ test('translateCellSet: 1つでも解決できないキーがあればnullを返
   const key = `${a1.id}:${b1.id}:${c1.id}:${d1.id}`;
   assert.equal(translateCellSet(new Set([key]), g1, project.structGraph, g2), null);
 });
+
+// ---- extendDividerExtents / retargetKeysToCoveringCLs（足元の辺を上階の格子で割る） ----
+// 設置階の1セル [0,1000]x[0,1000]（per-floor 中心線4本）。上階は同座標の中心線を持つが、区間を指定して作る。
+const ARCH = { labeled: false, discipline: Discipline.ARCH };
+function cellFixture(upperExtents = {}) {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const s = {
+    left:   g1.addCenterLine(CenterLineType.VERTICAL,   0,    ARCH),
+    top:    g1.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH),
+    right:  g1.addCenterLine(CenterLineType.VERTICAL,   1000, ARCH),
+    bottom: g1.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH),
+  };
+  const up = {};
+  for (const [side, [type, value]] of Object.entries({
+    left: [CenterLineType.VERTICAL, 0], top: [CenterLineType.HORIZONTAL, 0],
+    right: [CenterLineType.VERTICAL, 1000], bottom: [CenterLineType.HORIZONTAL, 1000],
+  })) {
+    up[side] = g2.addCenterLine(type, value, { ...ARCH, ...(upperExtents[side] ?? {}) });
+  }
+  const key = `${s.left.id}:${s.top.id}:${s.right.id}:${s.bottom.id}`;
+  return { project, g1, g2, up, keys: new Set([key]) };
+}
+
+test('extendDividerExtents: 上階の同座標の中心線の区間が足元の辺に届かなければ、辺まで延びる（延ばした本数を返す）', () => {
+  const { project, g1, g2, up, keys } = cellFixture({ right: { extentLo: 0, extentHi: 300 } });
+  const n = extendDividerExtents(keys, g1, project.structGraph, g2);
+  assert.equal(n, 1);
+  assert.equal(up.right.extentLo, 0);
+  assert.equal(up.right.extentHi, 1000, '右辺（x=1000, y 0..1000）を覆うまで延びる');
+});
+
+test('extendDividerExtents: 区間が既に辺を覆っていれば何も変えない（延びるのは覆うまでだけ）', () => {
+  const { project, g1, g2, up, keys } = cellFixture({ right: { extentLo: -500, extentHi: 1500 } });
+  assert.equal(extendDividerExtents(keys, g1, project.structGraph, g2), 0);
+  assert.deepEqual([up.right.extentLo, up.right.extentHi], [-500, 1500], '広い区間も縮めない');
+  const bytesBefore = JSON.stringify(g2.centerLines.map(c => [c.id, c.extentLo, c.extentHi]));
+  extendDividerExtents(keys, g1, project.structGraph, g2);
+  assert.equal(JSON.stringify(g2.centerLines.map(c => [c.id, c.extentLo, c.extentHi])), bytesBefore);
+});
+
+test('extendDividerExtents（明示 vs 省略）: 区間が届かない上階では、addMissingCLs だけでは区間は延びず、extendDividerExtents を足すと延びる', () => {
+  const { project, g1, g2, up, keys } = cellFixture({ right: { extentLo: 0, extentHi: 300 } });
+  addMissingCLs(collectNeededCLs(keys, g1), g1, project.structGraph, g2);
+  assert.equal(up.right.extentHi, 300, 'addMissingCLs は同座標の中心線があれば区間を見ない（既存挙動のまま）');
+  extendDividerExtents(keys, g1, project.structGraph, g2);
+  assert.equal(up.right.extentHi, 1000);
+});
+
+test('extendDividerExtents: 同座標の中心線が無い辺は何もしない（足すのは addMissingCLs の担当）', () => {
+  const { project, g1, g2, keys } = cellFixture();
+  for (const cl of [...g2.centerLines].filter(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 1000)) g2.removeCenterLine(cl.id);
+  const before = g2.centerLines.length;
+  assert.equal(extendDividerExtents(keys, g1, project.structGraph, g2), 0);
+  assert.equal(g2.centerLines.length, before, '中心線は増えない');
+});
+
+test('extendDividerExtents: 同座標が梁芯だけなら（addMissingCLs が対応先ありとみなした辺）、辺の区間だけの分割線を足す', () => {
+  const { project, g1, g2, keys } = cellFixture();
+  for (const cl of [...g2.centerLines].filter(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 1000)) g2.removeCenterLine(cl.id);
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  assert.equal(extendDividerExtents(keys, g1, project.structGraph, g2), 1);
+  const div = findCounterpartCL(g2, CenterLineType.VERTICAL, 1000, isFinishCellDivider);
+  assert.ok(div, '分割線が追加された');
+  assert.deepEqual([div.extentLo, div.extentHi], [0, 1000]);
+});
+
+// 同座標・同種別の分割線の区間が互いに素（重ならない）か
+function dividerSpansDisjoint(graph, type, value) {
+  const spans = graph.centerLines.filter(c => c.centerLineType === type && c.value === value && isFinishCellDivider(c))
+    .map(c => [c.extentLo, c.extentHi]).sort((a, b) => a[0] - b[0]);
+  return spans.every((s, i) => i === 0 || s[0] >= spans[i - 1][1]);
+}
+
+test('extendDividerExtents: 辺まで延ばした先で別ピースにちょうど接したら1本に結合し、同座標の区間は互いに素のまま（重なりを作らない）', () => {
+  const { project, g1, g2, up, keys } = cellFixture({ right: { extentLo: -500, extentHi: 300 } });
+  const other = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH, extentLo: 1000, extentHi: 2500 });
+  extendDividerExtents(keys, g1, project.structGraph, g2);
+  const rights = g2.centerLines.filter(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 1000);
+  assert.equal(rights.length, 1, '接した2本は1本に結合された');
+  assert.equal(rights[0].id, up.right.id, '下側のピースの id が残る');
+  assert.deepEqual([rights[0].extentLo, rights[0].extentHi], [-500, 2500]);
+  assert.equal(g2.shapeMap.has(other.id), false, '吸収されたピースの id は無い');
+  assert.ok(dividerSpansDisjoint(g2, CenterLineType.VERTICAL, 1000));
+});
+
+test('mergeAdjacentDividers: 結合して復元した後の壁は、読み込み経路と同じ補修（healDerivedGeometry）を通した状態と一致する', () => {
+  // 出隅が未補修の壁（generateExteriorWalls 直後）を持つ階。同座標の接する2本（x=1500 の [0,1500]・[1500,3000]）を結合する
+  const make = () => {
+    const g = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+    const A = { labeled: false, discipline: Discipline.ARCH };
+    const x0 = g.addCenterLine(CenterLineType.VERTICAL, 0, A), x3 = g.addCenterLine(CenterLineType.VERTICAL, 3000, A);
+    const yN = g.addCenterLine(CenterLineType.HORIZONTAL, -3000, A), y0 = g.addCenterLine(CenterLineType.HORIZONTAL, 0, A);
+    const y3 = g.addCenterLine(CenterLineType.HORIZONTAL, 3000, A);
+    g.addRoom(new Set([`${x0.id}:${y0.id}:${x3.id}:${y3.id}`]), 'A');
+    g.addRoom(new Set([`${x0.id}:${yN.id}:${x3.id}:${y0.id}`]), '庭').setKind(RoomKind.EXTERIOR);
+    const lo = g.addCenterLine(CenterLineType.VERTICAL, 1500, { ...A, extentLo: 0, extentHi: 1500 });
+    const hi = g.addCenterLine(CenterLineType.VERTICAL, 1500, { ...A, extentLo: 1500, extentHi: 3000 });
+    generateExteriorWalls(g, { wallBase: 120, wallFinish: 12.5 });
+    return { g, lo, hi };
+  };
+  const coords = (g) => g.walls.map(w => `${w.isVertical}:${Math.round(w.axisValue)}:${Math.round(w.coord1)}:${Math.round(w.coord2)}`).sort();
+  const ref = make();
+  assert.ok(healDerivedGeometry(ref.g) > 0, '前提: 未補修の出隅がある（補修で端が動く）');
+  const t = make();
+  const before = coords(t.g);
+  assert.equal(mergeAdjacentDividers(t.g, t.lo.id, t.hi.id), true);
+  assert.notDeepEqual(coords(t.g), before, '結合後の復元で出隅が補修された（未補修のままではない）');
+  assert.deepEqual(coords(t.g), coords(ref.g), '補修のみを通した状態と一致');
+  assert.equal(healDerivedGeometry(t.g), 0, '冪等');
+});
+
+test('extendDividerExtents: 吸収されたピースを参照するキー（部屋のセル・壁の軸・他の線の区間参照）は結合後の id へ付け替わる', () => {
+  const { project, g1, g2, up, keys } = cellFixture({ right: { extentLo: -500, extentHi: 300 } });
+  const other = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH, extentLo: 1000, extentHi: 2500 });
+  const h = g2.addCenterLine(CenterLineType.HORIZONTAL, 700, { ...ARCH, extentLoRef: { clId: other.id, offset: 0 }, extentHiRef: { clId: other.id, offset: 500 } });
+  const room = g2.addRoom(new Set([`${up.left.id}:${up.top.id}:${other.id}:${up.bottom.id}`]), '部屋');
+  extendDividerExtents(keys, g1, project.structGraph, g2);
+  assert.equal(g2.shapeMap.has(other.id), false);
+  assert.equal(g2.roomMap.get(room.id).cells.has(`${up.left.id}:${up.top.id}:${up.right.id}:${up.bottom.id}`), true, '部屋のセルキーが結合後の id へ');
+  const h2 = g2.shapeMap.get(h.id);
+  assert.equal(h2.extentLoRef.clId, up.right.id, '他の線の extent 参照も付け替わる');
+  assert.equal(h2.extentHiRef.clId, up.right.id);
+});
+
+test('extendDividerExtents: 吸収されるピースと生き残るピースの両方に偏芯レコードがあるときは結合せず、接した2本のまま（衝突を黙って決めない）', () => {
+  const { project, g1, g2, up, keys } = cellFixture({ right: { extentLo: -500, extentHi: 300 } });
+  const other = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH, extentLo: 1000, extentHi: 2500 });
+  g2.setCLEccentricity(up.right.id, { finishSide: 'both' });
+  g2.setCLEccentricity(other.id, { finishSide: 'both' });
+  extendDividerExtents(keys, g1, project.structGraph, g2);
+  const rights = g2.centerLines.filter(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 1000);
+  assert.equal(rights.length, 2, '結合されない');
+  assert.equal(g2.shapeMap.get(up.right.id).extentHi, 1000, '延長だけは行われ、接している');
+  assert.ok(dividerSpansDisjoint(g2, CenterLineType.VERTICAL, 1000));
+});
+
+test('extendDividerExtents: 足元どうしの内部の辺（隣のセルも足元）には分割線の区間を延ばさない', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const mk = (g, t, v, ext) => g.addCenterLine(t, v, { ...ARCH, ...(ext ?? {}) });
+  const a = mk(g1, CenterLineType.VERTICAL, 0), b = mk(g1, CenterLineType.HORIZONTAL, 0);
+  const c = mk(g1, CenterLineType.VERTICAL, 1000), d = mk(g1, CenterLineType.HORIZONTAL, 1000);
+  const e = mk(g1, CenterLineType.VERTICAL, 2000);
+  mk(g2, CenterLineType.VERTICAL, 0); mk(g2, CenterLineType.HORIZONTAL, 0); mk(g2, CenterLineType.HORIZONTAL, 1000);
+  mk(g2, CenterLineType.VERTICAL, 2000);
+  const mid = mk(g2, CenterLineType.VERTICAL, 1000, { extentLo: 0, extentHi: 100 }); // 2セルの境界
+  const keys = new Set([`${a.id}:${b.id}:${c.id}:${d.id}`, `${c.id}:${b.id}:${e.id}:${d.id}`]);
+  extendDividerExtents(keys, g1, project.structGraph, g2);
+  assert.deepEqual([mid.extentLo, mid.extentHi], [0, 100], '内部の辺の分割線は延ばさない');
+});
+
+test('retargetKeysToCoveringCLs: 同座標に区間の違うピースが複数あるとき、辺を覆うピースの id へ付け替える。覆っていれば不変・覆うものが無ければ元のまま', () => {
+  const { project, g1, g2, up } = cellFixture({ right: { extentLo: 2000, extentHi: 3000 } }); // translate が拾う先頭は覆わない
+  const covering = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH, extentLo: 0, extentHi: 1000 });
+  const keys = translateCellSet(new Set([...cellFixtureKeys(g1)]), g1, project.structGraph, g2);
+  const [translated] = keys;
+  assert.ok(translated.split(':')[2] === up.right.id, '前提: 最初の1本（覆わない方）がキーに入っている');
+  const [fixed] = retargetKeysToCoveringCLs(keys, g2, project.structGraph);
+  assert.equal(fixed.split(':')[2], covering.id, '覆うピースへ付け替わる');
+  assert.equal(retargetKeysToCoveringCLs(new Set([fixed]), g2, project.structGraph).has(fixed), true, '覆っていれば不変');
+  g2.removeCenterLine(covering.id);
+  assert.equal(retargetKeysToCoveringCLs(keys, g2, project.structGraph).has(translated), true, '覆うものが無ければ元のまま');
+});
+function cellFixtureKeys(g1) {
+  const [l, t, r, b] = [
+    [CenterLineType.VERTICAL, 0], [CenterLineType.HORIZONTAL, 0], [CenterLineType.VERTICAL, 1000], [CenterLineType.HORIZONTAL, 1000],
+  ].map(([ty, v]) => g1.centerLines.find(c => c.centerLineType === ty && c.value === v));
+  return [`${l.id}:${t.id}:${r.id}:${b.id}`];
+}

@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { Project, CenterLineType, Discipline, StairType, RoomFeature } from '../../core.js';
+import { Project, CenterLineType, Discipline, StairType, RoomFeature, RoomKind } from '../../core.js';
 import { worldToCell, refreshCells } from '../gridCells.js';
 import { serializeGraph } from '../../graphSnapshot.js';
 import { floorSwapManager } from '../../storage/FloorSwapManager.js';
@@ -130,13 +130,29 @@ test('reconcileOnFinishEntry: 階段が2つ（moku2-1 と同じ）でも、吹�
   });
 });
 
-test('reconcileOnFinishEntry: 名前付きの部屋と一部だけ重なる場合は足さない', async () => {
+test('reconcileOnFinishEntry: 名前付きの部屋と一部だけ重なる場合は、足元を部屋から引き抜いて吹抜けを置く（部屋は残りを持つ）', async () => {
   const ctx = setupSplit();
   const { project, above, store } = ctx;
-  // 階段の足元（left）を割った原子セルのうち1つだけを名前付きの部屋が持つ
+  // 階段の足元（left）を割った原子セルのうち1つだけを名前付きの部屋が持つ（もう1つは足元の外の上の段）
   const atoms = footprintAtoms(ctx);
   assert.ok(atoms.length > 1, '前提: left は複数の原子セルに分かれている');
-  above.addRoom(new Set([atoms[0]]), '居室');
+  const extra = worldToCell(250, 750, above).key;
+  const room = above.addRoom(new Set([atoms[0], extra]), '居室');
+  await withStorePeek(project, store, async () => {
+    assert.equal(await reconcileOnFinishEntry(project, above), true);
+  });
+  assert.equal(voidRooms(above).length, 1);
+  const rest = refreshCells(above.roomMap.get(room.id).cells, above);
+  assert.ok(atoms.every(k => !rest.has(k)), '足元は部屋から引き抜かれている');
+  assert.ok(rest.has(extra), '足元の外のセルは部屋に残る');
+});
+
+test('reconcileOnFinishEntry: 屋外部屋と一部だけ重なる場合は足さない（引き抜かない）', async () => {
+  const ctx = setupSplit();
+  const { project, above, store } = ctx;
+  const atoms = footprintAtoms(ctx);
+  const yard = above.addRoom(new Set([atoms[0]]), '庭');
+  yard.setKind(RoomKind.EXTERIOR);
   const before = serializeGraph(above);
   await withStorePeek(project, store, async () => {
     assert.equal(await reconcileOnFinishEntry(project, above), false);
@@ -238,7 +254,7 @@ test('reconcileOnFinishEntry: 格子が細かい最上階で作る吹抜けの�
   assert.deepEqual([...voids[0].cells], [...raw], '原子セル（複数）ではなく生キー1つを持つ');
 });
 
-test('reconcileOnFinishEntry: 失敗系 — 変換はできるが上階で解決できる区画が無い（refreshCells 後が空）なら足さない', async () => {
+test('reconcileOnFinishEntry: 同座標が補助線だけの上階でも、足元の辺の分割線を足して吹抜けを置く（2回目以降は冪等）', async () => {
   const project = new Project('proj', 'test');
   const grid = { labeled: true, discipline: Discipline.STRUCT };
   for (const x of [0, 1000, 2000]) project.structGraph.addCenterLine(CenterLineType.VERTICAL, x, grid);
@@ -256,6 +272,32 @@ test('reconcileOnFinishEntry: 失敗系 — 変換はできるが上階で解決
 
   const store = new Map([['p1', serializeGraph(below)], ['p2', serializeGraph(above)]]);
   const g = decodeFloor(project, above.plane, store.get('p2'));
+  // 同座標が補助線だけの上階でも、足元の辺の分割線を足して吹抜けを置く（旧: 足さず何も置かなかった）。
+  // 置いた後は冪等（2回目以降は何も変えない）
+  await withStorePeek(project, store, async () => {
+    assert.equal(await reconcileOnFinishEntry(project, g), true, '1回目: 分割線を足して吹抜けを置く');
+    const placed = serializeGraph(g);
+    for (let i = 1; i < 3; i++) assert.equal(await reconcileOnFinishEntry(project, g), false, `${i + 1}回目`);
+    assert.deepEqual(serializeGraph(g), placed);
+  });
+  assert.equal(voidRooms(g).length, 1);
+});
+
+test('reconcileOnFinishEntry・syncUpperFloors: 失敗系 — 階段の足元が上階へ変換できない（参照する中心線が消えている）なら何も足さず、保存もしない', async () => {
+  const project = new Project('proj', 'test');
+  const grid = { labeled: true, discipline: Discipline.STRUCT };
+  for (const x of [0, 1000, 2000]) project.structGraph.addCenterLine(CenterLineType.VERTICAL, x, grid);
+  for (const y of [0, 1000]) project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, y, grid);
+  const { graph: below } = project.addPlane(0, '1階', 'p1');
+  const { graph: above } = project.addPlane(3000, '2階', 'p2');
+  const gone = below.addCenterLine(CenterLineType.VERTICAL, -1000, { labeled: false, discipline: Discipline.ARCH });
+  addStairAt(below, worldToCell(-500, 500, below).key);
+  below.removeCenterLine(gone.id); // 階段のセルが参照する中心線を消す
+  project.activePlaneId = 'p2';
+  assert.equal(translateCellSet(below.stairs[0].cells, below, project.structGraph, above), null, '前提: 変換できない');
+
+  const store = new Map([['p1', serializeGraph(below)], ['p2', serializeGraph(above)]]);
+  const g = decodeFloor(project, above.plane, store.get('p2'));
   const before = serializeGraph(g);
   await withStorePeek(project, store, async () => {
     for (let i = 0; i < 3; i++) assert.equal(await reconcileOnFinishEntry(project, g), false, `${i + 1}回目`);
@@ -265,9 +307,7 @@ test('reconcileOnFinishEntry: 失敗系 — 変換はできるが上階で解決
 
   project.activePlaneId = 'p1';
   const saved = [];
-  const peekFn = makeStorePeek(project, store);
-  const saveFloorFn = makeStoreSave(store, saved);
-  await syncUpperFloors(project, below, { peekFn, saveFloorFn });
+  await syncUpperFloors(project, below, { peekFn: makeStorePeek(project, store), saveFloorFn: makeStoreSave(store, saved) });
   assert.deepEqual(saved, [], 'syncUpperFloors は上階を保存しない');
 });
 

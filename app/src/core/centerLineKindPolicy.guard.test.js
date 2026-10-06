@@ -270,6 +270,10 @@ const G1_ALLOWLIST = {
       '（ステップ6、2026-09-20）——残る絞り込みは幾何署名（外形内を横切り、extentが外形の直交範囲と' +
       '一致する）による同定で、既存の走査API（orthoAnchorCandidates等）が扱う「同座標・同方向・' +
       '可視種別」の形に合わないため、走査API化は対象外（相手選択ではなく幾何署名判定）。' },
+  'finish/floorCLMap.js': { count: 4, category: 'not-partner-selection',
+    reason: 'mergeAdjacentDividers（snapshot.centerLines。保存形式の中間オブジェクトから、id で指定された' +
+      '接する2本の中心線のエントリを引いて1本に結合する）。相手は呼び出し元が種別・座標で選び済み' +
+      '（sameCoordCounterparts経由）のid指定で、ここでの走査は相手選択ではない。' },
   'graphSnapshot.js': { count: 2, category: 'not-partner-selection',
     reason: 'restoreStructCLs/applySnapshot。永続化からの全件復元（snapshot.centerLines）——種別を問わず' +
       '全件を作り直す責務のため種別条件を持たない。' },

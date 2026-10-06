@@ -6,21 +6,24 @@
 // 世界座標は全階共通。壁は線分（軸・始終点）で比べる。peek は階id→graph のスタブ（本番同型）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline, StairType, StairPortSide, RoomFeature } from '../core.js';
+import { Project, CenterLineType, Discipline, StairType, StairPortSide, RoomFeature, RoomKind } from '../core.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finishBoundary.js';
 import { loadMaterialMap } from './wallRegeneration.js';
 import { stairPortEdges } from './stair/stairGeometry.js';
+import { refreshCells, cellBoundsFromKey } from './gridCells.js';
 
 const X = [-3000, 0, 1000, 4000];
 const Y = [-3000, 0, 1500, 3000, 6000];
 const STAIR_CELLS = [[1, 1], [1, 2]]; // 階段の足元（x 0..1000, y 0..3000。側面の口は先頭／末尾の行が要るので2行）
 
 // 階ごとの通り芯グリッド（per-floor CL。値は全階同一）と、格子セルの鍵を返す。
-function addFloor(project, elevation, id) {
+// yExtents: Y の添字 → 中心線の区間 { extentLo, extentHi }（省略は全長。moku1-2 の2階のように区間が足元に届かない形）
+// beamYs: 梁芯（分割線ではない）にする Y の添字（moku1-2 の2階の Y=-4550 のように、同座標に梁芯しか無く格子が割れない）
+function addFloor(project, elevation, id, { yExtents = {}, xExtents = {}, beamYs = [] } = {}) {
   const { graph } = project.addPlane(elevation, id, id);
-  const xs = X.map(v => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH }));
-  const ys = Y.map(v => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH }));
+  const xs = X.map((v, i) => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH, ...(xExtents[i] ?? {}) }));
+  const ys = Y.map((v, i) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: beamYs.includes(i) ? Discipline.FUSE : Discipline.ARCH, ...(yExtents[i] ?? {}) }));
   const key = (c, r) => `${xs[c].id}:${ys[r].id}:${xs[c + 1].id}:${ys[r + 1].id}`;
   return { graph, key };
 }
@@ -37,10 +40,11 @@ function addRooms(f, skip = []) {
 }
 
 function addStair(f, opts = {}) {
-  const { cells = STAIR_CELLS, ...rest } = opts;
+  const { cells = STAIR_CELLS, kind = null, ...rest } = opts;
   const keys = new Set(cells.map(([c, r]) => f.key(c, r)));
   const pair = f.graph.addRoom(new Set(keys), '階段');
   pair.setFeature(RoomFeature.STAIR);
+  if (kind) pair.setKind(kind);
   return f.graph.addStair({
     type: StairType.STRAIGHT, cells: keys, roomId: pair.id,
     upDirection: 'up', flip: false, totalSteps: 12, tread: 250, ...rest,
@@ -92,17 +96,62 @@ function assertWalled(graph, e, msg) {
 }
 
 // 下階 p1（階段あり）と上階 p2 を組み、上階を脱出して壁を得る。upper(project, lower) が上階の { graph, key } を作る。
-async function twoFloors({ lowerStair = {}, upper, withLowerStair = true, third = false }) {
+async function twoFloors({ lowerStair = {}, upper, withLowerStair = true, third = false, upperYExtents = {}, upperXExtents = {}, upperBeamYs = [] }) {
   const project = new Project('proj', 'test');
   const l = addFloor(project, 0, 'p1');
   addRooms(l);
   const stair = withLowerStair ? addStair(l, lowerStair) : null;
-  const u = addFloor(project, 3000, 'p2');
+  const u = addFloor(project, 3000, 'p2', { yExtents: upperYExtents, xExtents: upperXExtents, beamYs: upperBeamYs });
   upper(u);
   if (third) { const t = addFloor(project, 6000, 'p3'); addRooms(t, STAIR_CELLS); }
   await exitWalls(project, u.graph);
   return { project, lower: l, upper: u, stair };
 }
+
+// 辺 e と同じ向き・同じ線上（許容200mm）の壁が、区間 [lo,hi] に重なる長さの合計
+function coverLen(graph, e, lo, hi) {
+  return dump(graph)
+    .filter(w => w.v === e.isVertical && Math.abs(w.axis - e.value) < 200)
+    .reduce((s, w) => s + Math.max(0, Math.min(w.hi, hi) - Math.max(w.lo, lo)), 0);
+}
+
+// ---- 開口が隣室の辺の一部（開口の端が格子に乗らない）のとき: 開口の区間だけ壁を建てず、残りには建てる ----
+// 階段の両隣（西の列・東の列）の隣室は、生キーで y 0..3000 を1セルで持つ。Y=1500 は梁芯（分割線ではない。
+// moku1-2 の2階の Y=-4550 と同じ形）なので、辺は y=1500 で切れない。階段の側面の口（LEFT）は y 0..1500 か
+// 1500..3000 の半分だけ＝隣室の辺（y 0..3000）の一部。
+const tallSideRooms = (f) => [0, 2].map(c => {
+  const top = f.key(c, 1).split(':'), bottom = f.key(c, 2).split(':');
+  return f.graph.addRoom(new Set([`${top[0]}:${top[1]}:${top[2]}:${bottom[3]}`]), `隣室${c}`);
+});
+
+test('開口が隣室の辺の一部【N+1・下り口】下り口が上階の原子セルの辺の一部でも、隣室側の壁は下り口の区間に建たず、残りの区間には建つ', async () => {
+  const { lower, upper, stair } = await twoFloors({
+    lowerStair: { arrivalSide: StairPortSide.LEFT },
+    upperBeamYs: [2],
+    upper: (u) => { addRooms(u, [[0, 1], [0, 2], [2, 1], [2, 2]]); tallSideRooms(u); },
+  });
+  const [e] = stairPortEdges(stair, lower.graph, ['arrival']);
+  assert.equal(e.isVertical, true, '前提: 側面の口（縦の辺 x=0）');
+  assert.ok(e.hi - e.lo < 3000, '前提: 口は隣室の辺（y 0..3000）の一部');
+  assert.equal(coverLen(upper.graph, e, e.lo + 150, e.hi - 150), 0, '下り口の区間（端の取り合い分を除く）に壁がない');
+  const restLo = e.lo === 0 ? e.hi + 150 : 150, restHi = e.lo === 0 ? 2850 : e.lo - 150;
+  assert.ok(coverLen(upper.graph, e, restLo, restHi) > restHi - restLo - 200, '残りの区間には壁が建つ');
+});
+
+test('開口が隣室の辺の一部【N・上り口】上り口が隣室の辺の一部でも、隣室側の壁は上り口の区間に建たず、残りの区間には建つ（規則1）', async () => {
+  const project = new Project('proj', 'test');
+  const f = addFloor(project, 0, 'p1', { beamYs: [2] });
+  addRooms(f, [[0, 1], [0, 2], [2, 1], [2, 2]]);
+  tallSideRooms(f);
+  const stair = addStair(f, { entrySide: StairPortSide.LEFT });
+  await exitWalls(project, f.graph);
+  const [e] = stairPortEdges(stair, f.graph, ['entry']);
+  assert.equal(e.isVertical, true, '前提: 側面の口（縦の辺 x=0）');
+  assert.ok(e.hi - e.lo < 3000, '前提: 口は隣室の辺（y 0..3000）の一部');
+  assert.equal(coverLen(f.graph, e, e.lo + 150, e.hi - 150), 0, '上り口の区間に壁がない');
+  const restLo = e.lo === 0 ? e.hi + 150 : 150, restHi = e.lo === 0 ? 2850 : e.lo - 150;
+  assert.ok(coverLen(f.graph, e, restLo, restHi) > restHi - restLo - 200, '残りの区間には壁が建つ');
+});
 
 // ---- 規則1: 設置階Nの上り口（と到達辺）に壁を建てない ----
 for (const entrySide of [null, StairPortSide.LEFT, StairPortSide.RIGHT]) {
@@ -169,17 +218,89 @@ test('規則2(c3)【N+1・吹抜けが残り別セルに続きの階段】下り
   assertOpen(upper.graph, stairPortEdges(stair, lower.graph, ['arrival'])[0], '下り口');
 });
 
-test('規則2【対照】N+1 の自階の階段空間が直下階の足元と重ならないなら、下階の到達辺は開口にしない（屋外階段・無関係の階段の誤開口防止）', async () => {
-  // 直下階の足元（x 0..1000）と無関係な位置（east 列）に自階の階段があるだけで、足元は通常の部屋
+test('規則2【対照】直下階の階段が屋外階段なら、N+1 の足元（居室）は吹抜けにならず、下階の到達辺は開口にしない（屋外階段の誤開口防止）', async () => {
   const { lower, upper, stair } = await twoFloors({
+    lowerStair: { kind: RoomKind.EXTERIOR },
     upper: (u) => {
       addRooms(u, [[2, 1], [2, 2]]);
       u.graph.addRoom(new Set(STAIR_CELLS.map(([c, r]) => u.key(c, r))), '居室');
-      addStair(u, { cells: [[2, 1], [2, 2]], upDirection: 'right' });
     },
   });
-  assert.equal(upper.graph.rooms.some(r => r.feature === RoomFeature.STAIR_VOID), false, '前提: 足元は居室（吹抜けにならない）');
+  assert.equal(upper.graph.rooms.some(r => r.feature === RoomFeature.STAIR_VOID), false, '前提: 屋外階段は吹抜けを置かない（足元は居室のまま）');
   assertWalled(upper.graph, stairPortEdges(stair, lower.graph, ['arrival'])[0], '下階の到達辺（居室の北壁）');
+});
+
+// ---- 足元を2階の既存部屋から引き抜く（moku1-2.stq の条件。2階が部屋で覆われていても1階の階段の上は開く） ----
+test('規則3【N+1・2階の既存部屋が足元を覆う（moku1-2）】足元を居室から引き抜いて吹抜けを置く: 西が部屋なしなら足元の西辺は外壁、既存部屋との境は外壁でなく、下り口は開口', async () => {
+  // 足元（列1・行1〜2）を2階の居室が覆い、足元の西（列0・行1〜2）は部屋なし＝屋外
+  const { lower, upper, stair } = await twoFloors({
+    upper: (u) => {
+      addRooms(u, [[0, 1], [0, 2]]);
+      u.graph.addRoom(new Set(STAIR_CELLS.map(([c, r]) => u.key(c, r))), '居室');
+    },
+  });
+  const voids = upper.graph.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID);
+  assert.equal(voids.length, 1, '足元に吹抜けが置かれた');
+  assert.equal(upper.graph.rooms.some(r => r.name === '居室'), false, '居室は足元だけだったので空になり除去');
+  assert.notEqual(show(wallsNear(upper.graph, WEST, { extOnly: true })), '', '足元の西辺は外壁（階段が2階の外壁判定に含まれる）');
+  for (const [name, e] of [['北', NORTH], ['南', SOUTH], ['東', EAST]]) {
+    assert.equal(show(wallsNear(upper.graph, e, { extOnly: true })), '', `${name}辺は屋内どうしの境なので外壁なし`);
+  }
+  assertOpen(upper.graph, stairPortEdges(stair, lower.graph, ['arrival'])[0], '下り口');
+});
+
+test('規則3【N+1・2階の中心線の区間が足元に届かない（moku1-2）】区間を足元の辺まで延ばして格子を割り、足元ちょうどに吹抜けを置く: 足元の外の部屋は削られず、足元の西辺は外壁', async () => {
+  // 2階の Y=0（足元の上辺。x 0..1000）の中心線が x 1000..4000 しか持たない＝足元の上辺で格子が割れない
+  const { lower, upper, stair } = await twoFloors({
+    upperYExtents: { 1: { extentLo: 1000, extentHi: 4000 } },
+    upper: (u) => {
+      addRooms(u, [[0, 1], [0, 2]]);
+      u.graph.addRoom(new Set(STAIR_CELLS.map(([c, r]) => u.key(c, r))), '居室');
+    },
+  });
+  const voids = upper.graph.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID);
+  assert.equal(voids.length, 1, '足元に吹抜けが置かれた（粗い格子でも skipped にならない）');
+  const area = [...refreshCells(voids[0].cells, upper.graph)].reduce((s, k) => {
+    const b = cellBoundsFromKey(k, upper.graph); return s + (b.x2 - b.x1) * (b.y2 - b.y1);
+  }, 0);
+  assert.equal(area, 1000 * 3000, '吹抜けは足元ちょうど（x 0..1000 × y 0..3000）。足元の外へ広がらない');
+  const north = upper.graph.rooms.find(r => r.name === '部屋10');
+  assert.ok(north, '足元の北の部屋（部屋10）は削られず残る');
+  assert.equal(refreshCells(north.cells, upper.graph).size, 1);
+  assert.notEqual(show(wallsNear(upper.graph, WEST, { extOnly: true })), '', '足元の西辺は外壁');
+  assertOpen(upper.graph, stairPortEdges(stair, lower.graph, ['arrival'])[0], '下り口');
+});
+
+test('規則3【N+1・同座標に区間の違う中心線が2本（moku1-2 の X=5460）】足元の西辺の軸には辺を覆う方を選び、西辺の外壁が辺の全長に建つ', async () => {
+  // 2階の X=0（足元の西辺。y 0..3000）に、先に作る1本（y 3000..6000＝辺と無関係）と、辺を丸ごと覆う1本がある。
+  // 変換は最初の1本を選ぶので、付け替えないと壁の軸の区間が辺を覆わず西辺の壁が欠ける
+  const { upper } = await twoFloors({
+    upperXExtents: { 1: { extentLo: 3000, extentHi: 6000 } },
+    upper: (u) => {
+      u.graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH, extentLo: -3000, extentHi: 3000 });
+      addRooms(u, [[0, 1], [0, 2]]);
+      u.graph.addRoom(new Set(STAIR_CELLS.map(([c, r]) => u.key(c, r))), '居室');
+    },
+  });
+  assert.equal(upper.graph.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID).length, 1, '前提: 吹抜けが置かれた');
+  const covered = wallsNear(upper.graph, WEST, { extOnly: true })
+    .reduce((s, w) => s + Math.max(0, Math.min(w.hi, 3000) - Math.max(w.lo, 0)), 0);
+  assert.ok(covered >= 2900, `西辺（y 0..3000）の外壁が全長に建つ（実測 ${covered}）`);
+});
+
+test('規則3【N+1・既存部屋が足元の外へ続く】引き抜き後も部屋は残りのセルを持ち、その壁が足元の辺に建つ（吹抜けの上り口側＝南辺は壁）', async () => {
+  // 足元（列1・行1〜2）と、その東（列2・行1〜2）を同じ居室が覆う。足元だけ引き抜かれ、東が居室に残る
+  const { upper } = await twoFloors({
+    upper: (u) => {
+      addRooms(u, [[0, 1], [0, 2], [2, 1], [2, 2]]);
+      u.graph.addRoom(new Set([...STAIR_CELLS, [2, 1], [2, 2]].map(([c, r]) => u.key(c, r))), '居室');
+    },
+  });
+  const living = upper.graph.rooms.find(r => r.name === '居室');
+  assert.ok(living, '居室は残りのセルを持って残る');
+  assert.equal(living.cells.size, 2, '東の2セルだけ');
+  assertWalled(upper.graph, EAST, '足元と居室の境（足元の東辺）に居室の壁がある');
+  assertWalled(upper.graph, SOUTH, '上り口側の南辺');
 });
 
 // ---- 規則3: N+1 の外壁判定に階段の足元を屋内として参加させる ----

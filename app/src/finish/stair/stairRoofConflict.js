@@ -8,11 +8,11 @@
  * 展開の規則は finish/stair/stairFloorSync.js syncUpperFloors と揃える: 設置階の階段 footprint を
  * 直上の採用階（1階だけ）へ type:value 照合で写し、屋内階段のときだけそこへ階段吹抜けが作られる。
  * 屋外階段は何も作られないので対象外。それより上の階は見ない。
- * 衝突の相手は屋根（ROOF）だけ——通常の部屋・屋外部屋との重なりは従来どおり（今回変えない）。
+ * 衝突の相手は屋根（ROOF）だけ——通常の部屋とは衝突しない（吹抜けが足元を引き抜いて置かれる。stairVoidReconcile.js addStairVoidRoom）。屋外部屋との重なりは置かないだけで拒否はしない。
  */
 import { isRoofFeature } from '@core';
 import { refreshCells } from '../gridCells.js';
-import { collectNeededCLs, addMissingCLs, translateCellSet } from '../floorCLMap.js';
+import { collectNeededCLs, addMissingCLs, extendDividerExtents, translateCellSet } from '../floorCLMap.js';
 
 /**
  * 階段の上階展開と屋根セルの衝突を列挙する。対象は直上の1階（floors[activeIndex+1]）だけ。
@@ -34,6 +34,7 @@ export function findStairUpperRoofConflicts({ structGraph, floors, activeIndex, 
   const { plane, graph: upperGraph } = next;
 
   addMissingCLs(collectNeededCLs(cells, sourceGraph), sourceGraph, structGraph, upperGraph);
+  extendDividerExtents(cells, sourceGraph, structGraph, upperGraph); // reconcileStairVoids と同じ格子にそろえる
   const translated = translateCellSet(cells, sourceGraph, structGraph, upperGraph);
   if (!translated) return []; // CL変換不能: reconcileStairVoids もこの階段をスキップする
   const footprint = refreshCells(translated, upperGraph);

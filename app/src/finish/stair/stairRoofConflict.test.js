@@ -6,8 +6,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { Project, CenterLineType, Discipline, RoomFeature, RoomKind } from '../../core.js';
-import { worldToCell, cellBoundsFromKey } from '../gridCells.js';
+import { Project, CenterLineType, Discipline, RoomFeature, RoomKind, StairType } from '../../core.js';
+import { worldToCell, cellBoundsFromKey, refreshCells } from '../gridCells.js';
+import { reconcileStairVoids } from './stairVoidReconcile.js';
 import { serializeGraph } from '../../graphSnapshot.js';
 import { undoManager } from '../../undoManager.js';
 import { FinishModeState } from '../../modes/FinishModeState.js';
@@ -154,6 +155,33 @@ test('階段の足跡が設置階だけの per-floor 中心線で区切られて
   addPerFloorV(gs2[0], 500);
   addRoof(gs2[1], rightKey(gs2[1])); // 屋根は右セル。階段 [0,500] とは重ならない
   assert.equal(conflictsFor(p2, gs2, { cells: new Set([worldToCell(250, 500, gs2[0]).key]) }).length, 0);
+});
+
+test('上の階の同座標の中心線の区間が足元の辺に届かず、屋根が足元の外の同じ粗い原子セルにある: 予測は衝突なし（延長後の格子で判定）で、実際の整合とも一致する', () => {
+  const { project, graphs } = setupProject(2);
+  const [g1, g2] = graphs;
+  const arch = { labeled: false, discipline: Discipline.ARCH };
+  g1.addCenterLine(CenterLineType.HORIZONTAL, 500, arch); // 足元 [0,1000]x[0,500]
+  const h2 = g2.addCenterLine(CenterLineType.HORIZONTAL, 500, { ...arch, extentLo: 1000, extentHi: 2000 }); // 足元の x 範囲には届かない
+  const stairCell = worldToCell(500, 250, g1).key;
+  g1.addStair({ type: StairType.STRAIGHT, cells: new Set([stairCell]), upDirection: 'up', flip: false, totalSteps: 12, tread: 250 });
+  // 屋根は足元の外（上の段 [0,1000]x[500,1000]）の生キー。上階の格子が足元の辺で割れていないと同じ粗い原子セルになる
+  const sg = project.structGraph.shapeMap;
+  const idAt = (type, value) => [...sg.values()].find(c => c.centerLineType === type && c.value === value).id;
+  const roofKey = `${idAt(CenterLineType.VERTICAL, 0)}:${h2.id}:${idAt(CenterLineType.VERTICAL, 1000)}:${idAt(CenterLineType.HORIZONTAL, 1000)}`;
+  addRoof(g2, roofKey);
+
+  const hit = conflictsFor(project, graphs, { cells: new Set([stairCell]) });
+  assert.deepEqual(hit, [], '区間を延ばして格子を割った上で判定するので、足元の外の屋根とは重ならない');
+
+  // 実際の整合（本番の reconcile）も、吹抜けを足元ちょうどに置いて屋根は触らない（予測と一致）
+  const store = makeStore(graphs);
+  const peeked = makeStorePeek(project, store)(g2.plane);
+  const r = reconcileStairVoids(peeked, g1, project.structGraph);
+  assert.equal(r.added.length, 1, JSON.stringify({ skipped: r.skipped.map(s => s.reason), changed: r.changed }));
+  assert.deepEqual(r.skipped, []);
+  const roof = peeked.rooms.find(x => x.feature === RoomFeature.ROOF);
+  assert.deepEqual([...refreshCells(roof.cells, peeked)].map(k => cellBoundsFromKey(k, peeked)).map(b => [b.y1, b.y2]), [[500, 1000]], '屋根は足元の外のまま');
 });
 
 // ================================================================

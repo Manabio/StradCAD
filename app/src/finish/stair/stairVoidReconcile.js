@@ -5,9 +5,9 @@
  * （stairFloorSync.js は storage を引くため、純モジュールから使えるようここへ置く。挙動は移す前と同じ）。
  */
 import { RoomFeature, RoomKind } from '@core';
-import { refreshCells } from '../gridCells.js';
-import { subtractCellsFromUndefinedRooms, makeRoomUndefined } from '../roomUndefined.js';
-import { collectNeededCLs, addMissingCLs, translateCellSet } from '../floorCLMap.js';
+import { refreshCells, cellBoundsFromKey } from '../gridCells.js';
+import { makeRoomUndefined } from '../roomUndefined.js';
+import { collectNeededCLs, addMissingCLs, extendDividerExtents, retargetKeysToCoveringCLs, translateCellSet } from '../floorCLMap.js';
 
 export function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -21,27 +21,95 @@ export function isIndoorStair(graph, stair) {
   return (room?.kind ?? RoomKind.INTERIOR) !== RoomKind.EXTERIOR;
 }
 
+// 足元から引き抜いてよい部屋か: 未定義（従来どおり。kind は問わない）、通常の部屋（feature なし）・
+// 吹抜け（VOID）は屋内（kind≠EXTERIOR）のものだけ。それ以外（屋根・昇降路・階段・別の階段の吹抜け・
+// 屋外部屋）と重なる足元には置かない。
+function isCarvableRoom(room) {
+  if (room.feature === RoomFeature.UNDEFINED) return true;
+  if (room.kind === RoomKind.EXTERIOR) return false;
+  return room.feature == null || room.feature === RoomFeature.VOID;
+}
+
 /**
- * 最上階の階段 footprint へ階段吹抜け（STAIR_VOID）Room を自動指定する。
- * 未定義以外の既存 Room（stairVoid 自身を含む）とセルが重なる場合は何もしない（冪等・二重割当防止）。
+ * 階段 stair（直下階）の足元が、直上階 graph の引き抜けない部屋（isCarvableRoom でない部屋＝ROOF・昇降路・
+ * 階段・吹抜け・屋外部屋）や自階の階段のセルと、面積のある重なり方をしているか（世界座標の矩形で判定。
+ * 上階の格子が粗くても、部屋の生キーが指す矩形そのものを使うので、足元の外の部屋を巻き込まない）。
+ * 置けないことが確定していれば、上階の格子（中心線の区間）を延ばす意味が無い。
+ */
+function footprintBlocked(graph, belowGraph, stair) {
+  const foot = [...stair.cells].map(k => cellBoundsFromKey(k, belowGraph)).filter(Boolean);
+  const hits = (key) => {
+    const b = cellBoundsFromKey(key, graph);
+    return !!b && foot.some(f => Math.min(b.x2, f.x2) - Math.max(b.x1, f.x1) > 1e-6 && Math.min(b.y2, f.y2) - Math.max(b.y1, f.y1) > 1e-6);
+  };
+  for (const room of graph.rooms) {
+    if (isCarvableRoom(room)) continue;
+    if ([...room.cells].some(hits)) return true;
+  }
+  return graph.stairs.some(s => [...s.cells].some(hits));
+}
+
+/**
+ * 直上階の階段 footprint へ階段吹抜け（STAIR_VOID）Room を自動指定する。階段の真上の床は必ず開くため、
+ * 足元と重なる部屋が引き抜いてよい部屋（未定義・通常の部屋・VOID。isCarvableRoom）だけなら、それらから
+ * 足元の原子セルを引き抜いてから置く（部分重なり＝一部が部屋・残りが未割当も同じ。部屋のセルが空になれば
+ * 部屋ごと removeRoom。subtractCellsFromUndefinedRooms と同じ扱い）。引き抜き後に部屋のセルが非連結に
+ * なっても、部屋はセル集合なので壊れない（部屋再解釈 reinterpretRoomsOnEntry は分割線の消失したセルしか
+ * 動かさず、連結性は見ない）。
+ * ただし上階の格子が足元の辺で割れておらず、重なる原子セルが足元の矩形からはみ出す（引き抜くと足元の外の
+ * 部屋まで削る）ときは通常の部屋・VOID からは引き抜かず skipped にする（未定義だけは従来どおり引き抜く）。
+ * 引き抜いてはいけない部屋（ROOF・昇降路・STAIR・STAIR_VOID＝別の階段か同じ足元の吹抜け・屋外部屋）と
+ * 1セルでも重なれば何もしない（冪等・二重割当防止）。
  * 重なりは両辺を refreshCells で現行グリッドの原子セルへ展開して比べる（cells は translateCellSet の
  * 生キーで、格子が直下階より細かい階では原子セルと一致しない。生のまま比べると既存の吹抜けを見落とし、
  * 呼ぶたびに増える）。展開後が空（解決できるセルが無い）なら何もしない。
- * 未定義 Room（階段の連動削除などで外形を保つために残した部屋）とだけ重なるなら、そのセルを未定義 Room
- * から引き抜いてから作る（再指定が詰まらない。FinishModeState.applyNaming と同じ前例）。
  * 作る Room のセルは渡された cells（生キー）のまま持つ（読む側が refreshCells で展開する）。
+ * 注意: 突入時 reconcile・階操作 follower（undo 対象外）でも同じ規則で他階の部屋のセルを削る。
+ * @param {object} graph
+ * @param {Set<string>} cells
+ * @param {Array<{roomId:string, cells:Set<string>}>} [carvedOut] 引き抜いた通常の部屋・VOID（未定義は含めない）を積む出力先
  * @returns {boolean} 追加したか
  */
-export function addStairVoidRoom(graph, cells) {
+export function addStairVoidRoom(graph, cells, carvedOut = []) {
   if (cells.size === 0) return false;
   const refreshed = refreshCells(cells, graph);
   if (refreshed.size === 0) return false;
+  // 足元の矩形（生キーの bounds）。上階の格子が足元の辺で割れていない（同座標の中心線はあるが区間が
+  // 足りず分割線が働かない）と原子セルが足元より大きくなる。その原子セルを部屋から引き抜くと、足元の外の
+  // 部屋まで削るので、通常の部屋・VOID は「重なる原子セルが全部足元の矩形に収まる」ときだけ引き抜く。
+  const footRects = [...cells].map(k => cellBoundsFromKey(k, graph)).filter(Boolean);
+  const insideFoot = (key) => {
+    const b = cellBoundsFromKey(key, graph);
+    if (!b) return false;
+    // 足元の矩形群（互いに重ならない格子セル）との重なり面積が原子セルの面積に等しければ、全体が足元の中
+    let covered = 0;
+    for (const f of footRects) {
+      const w = Math.min(b.x2, f.x2) - Math.max(b.x1, f.x1);
+      const h = Math.min(b.y2, f.y2) - Math.max(b.y1, f.y1);
+      if (w > 0 && h > 0) covered += w * h;
+    }
+    return covered >= (b.x2 - b.x1) * (b.y2 - b.y1) - 1e-3;
+  };
+  const overlapping = [];
   for (const room of graph.rooms) {
-    if (room.feature === RoomFeature.UNDEFINED) continue;
     const roomCells = refreshCells(room.cells, graph);
-    if ([...refreshed].some(k => roomCells.has(k))) return false;
+    const hit = [...refreshed].filter(k => roomCells.has(k));
+    if (hit.length === 0) continue;
+    if (!isCarvableRoom(room)) return false;
+    if (room.feature !== RoomFeature.UNDEFINED && !hit.every(insideFoot)) return false;
+    overlapping.push({ room, roomCells });
   }
-  subtractCellsFromUndefinedRooms(graph, refreshed);
+  for (const { room, roomCells } of overlapping) {
+    const removed = new Set([...roomCells].filter(k => refreshed.has(k)));
+    if (room.feature !== RoomFeature.UNDEFINED) carvedOut.push({ roomId: room.id, cells: removed });
+    const remaining = new Set([...roomCells].filter(k => !refreshed.has(k)));
+    if (remaining.size === 0) {
+      graph.removeRoom(room.id);
+      // この部屋を親（referenceRoomIds）に持つ部分指定の子が、削除済み id を指したままにならないよう外す
+      // （子は足元の外にセルを持つ場合に残る。親を持たない通常の部屋になる）
+      for (const other of graph.rooms) other.referenceRoomIds.delete(room.id);
+    } else room.setCells(remaining);
+  }
   const room = graph.addRoom(new Set(cells));
   room.setFeature(RoomFeature.STAIR_VOID);
   return true;
@@ -59,23 +127,37 @@ export function addStairVoidRoom(graph, cells) {
  * @param {object} graph       自階（N+1）。直接書き換える
  * @param {object} belowGraph  直下の採用階（N）。読むだけ
  * @param {object} structGraph 通り芯
+ * 追加（手順5）は、足元と重なる通常の部屋・VOID・未定義から足元のセルを引き抜いて置く（addStairVoidRoom。
+ * 屋根・昇降路・階段・別の吹抜け・屋外部屋と重なるときだけ skipped 'overlap'）。階段設置時の syncUpperFloors・
+ * 仕上げ突入時の reconcileOnFinishEntry・階操作の follower のどれも同じ規則で、突入時・follower は
+ * undo 対象外のまま他階（直上階）の部屋のセルを削る。
  * @returns {{ changed: boolean, added: Array<{cells:Set}>, removed: Array<{roomId, reason:'orphan'|'duplicate'}>,
- *             skipped: Array<{cells:Set, reason:'untranslatable'|'overlap'|'covered-by-own-stair'}> }}
+ *             skipped: Array<{cells:Set, reason:'untranslatable'|'overlap'|'covered-by-own-stair'}>,
+ *             carved: Array<{roomId:string, cells:Set<string>}> }} carved＝足元の下に敷かれていた通常の部屋・VOID から引き抜いたセル
  */
 export function reconcileStairVoids(graph, belowGraph, structGraph) {
   if (!graph) throw new Error('reconcileStairVoids: graph がありません');
   if (!belowGraph) throw new Error('reconcileStairVoids: belowGraph がありません');
-  const result = { changed: false, added: [], removed: [], skipped: [] };
+  const result = { changed: false, added: [], removed: [], skipped: [], carved: [] };
   const belowIndoor = belowGraph.stairs.filter(s => isIndoorStair(belowGraph, s));
 
   // 1. 不足の中心線の補完（屋内階段のセルだけ。needed が空でも以降を続ける）
-  const needed = collectNeededCLs(belowIndoor.flatMap(s => [...s.cells]), belowGraph);
+  // 続けて、同座標の中心線が上階にあっても区間が足元の辺に届かないもの（足元の辺で格子が割れず原子セルが
+  // 足元より大きくなる）を、辺まで延ばす（floorCLMap.js extendDividerExtents）。
+  // 置けないことが確定している足元（屋根・昇降路・階段・別の吹抜け・屋外部屋と重なる）では区間を延ばさない
+  // （吹抜けが置かれないのに上階の格子だけ変わるのを避ける。重なり判定は延長より前）
+  const footCells = belowIndoor.flatMap(s => [...s.cells]);
+  const needed = collectNeededCLs(footCells, belowGraph);
   if (addMissingCLs(needed, belowGraph, structGraph, graph) > 0) result.changed = true;
+  const extendCells = belowIndoor.filter(s => !footprintBlocked(graph, belowGraph, s)).flatMap(s => [...s.cells]);
+  if (extendDividerExtents(extendCells, belowGraph, structGraph, graph) > 0) result.changed = true;
 
   // 2. 足元の写し（追加はまだしない）。写せた足元（現行グリッドの原子セル集合）を手順3の孤児判定と手順5に使う
   const mapped = []; // { translated, refreshed }
   for (const stair of belowIndoor) {
-    const translated = translateCellSet(stair.cells, belowGraph, structGraph, graph);
+    const translatedRaw = translateCellSet(stair.cells, belowGraph, structGraph, graph);
+    // 同座標に区間の違う分割線が複数ある上階で、辺を覆わないピースの id がキーに入ると壁が落ちるため付け替える
+    const translated = translatedRaw ? retargetKeysToCoveringCLs(translatedRaw, graph, structGraph) : null;
     const refreshed = translated ? refreshCells(translated, graph) : null;
     if (!translated || refreshed.size === 0) {
       result.skipped.push({ cells: new Set(stair.cells), reason: 'untranslatable' });
@@ -140,7 +222,7 @@ export function reconcileStairVoids(graph, belowGraph, structGraph) {
       continue;
     }
 
-    if (addStairVoidRoom(graph, translated)) {
+    if (addStairVoidRoom(graph, translated, result.carved)) {
       result.added.push({ cells: new Set(translated) });
       result.changed = true;
     } else {

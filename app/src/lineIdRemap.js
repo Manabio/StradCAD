@@ -175,6 +175,36 @@ export function findLineIdOccurrences(snapshot, ids) {
 }
 
 /**
+ * 置換後のsnapshotで、吸収により複数の中心線がclIdへ寄ったことに伴う参照の衝突を検査する
+ * （QA所見2是正・裁定・2026-09-30。transform/centerLineFloorSync.js から移した）: `columnAxisOffsets`
+ * （柱芯オフセット）・`clEccentricities`（CL偏芯）・`kneeDropWalls`（腰壁・垂れ壁。edgeKeyにclIdを含むもの）
+ * のいずれかで、clIdを指すエントリが2件以上残っていれば、どちらの値を採るか黙って決めず衝突として拒否する
+ * （`remapLineIdsInSnapshot`はこれらを配列・配列内オブジェクトとして保持するため、キー衝突としては
+ * 検出できない——実測: `columnAxisOffsetKeys`は`Array<string>`、`clEccentricities`・`kneeDropWalls`は
+ * `Array<{clId|key, ...}>`であり、いずれもJSオブジェクトの「プロパティ名」としてclIdを使わないため、
+ * 複数のvalsが同じclId/keyに集約されても重複エントリとして残るだけで例外にはならない。
+ * graphSnapshot.js buildSnapshot参照）。
+ * @param {object} snapshot 吸収後（remapLineIdsInSnapshot適用後）のsnapshot
+ * @param {string} clId
+ * @returns {boolean}
+ */
+export function hasAbsorptionConflict(snapshot, clId) {
+  const eccCount = (snapshot.clEccentricities ?? []).filter(e => e.clId === clId).length;
+  if (eccCount >= 2) return true;
+  const axisCount = (snapshot.columnAxisOffsetKeys ?? []).filter(k => k === clId).length;
+  if (axisCount >= 2) return true;
+  const kneeKeyCounts = new Map();
+  for (const kw of snapshot.kneeDropWalls ?? []) {
+    if (!kw.key.split(':').includes(clId)) continue;
+    kneeKeyCounts.set(kw.key, (kneeKeyCounts.get(kw.key) ?? 0) + 1);
+  }
+  for (const count of kneeKeyCounts.values()) {
+    if (count >= 2) return true;
+  }
+  return false;
+}
+
+/**
  * snapshot.centerLines の全idについて新idを割り当てた Map<旧id,新id> を返す
  * （通り芯は階の snapshot に含まれないため対象外＝線だけを振り直す）。
  * @param {object} snapshot

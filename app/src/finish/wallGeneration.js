@@ -5,7 +5,9 @@
  * デフォルト: wallBase=90, wallFinish=12.5 → 57.5mm
  */
 
+import { runInAction } from 'mobx';
 import { RoomKind, RoomFeature, centerLineKind } from '@core';
+import { isWallEndAtCorner } from '../core/wall.js';
 import { spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { worldToCell, dividerCLsBetween, isActiveAcrossRange } from './gridCells.js';
 import { buildCellToRoom, isEnclosureOutside } from './edgeClassify.js';
@@ -172,15 +174,16 @@ export function mergeSegments(segs, graph) {
   const sorted = [...segs].sort((a, b) => {
     const aCL = getShape(graph, a.startCLId);
     const bCL = getShape(graph, b.startCLId);
-    return (aCL?.value ?? 0) - (bCL?.value ?? 0);
+    return (a.clipStart ?? aCL?.value ?? 0) - (b.clipStart ?? bCL?.value ?? 0);
   });
 
   const merged = [];
   let current = sorted[0];
   for (let i = 1; i < sorted.length; i++) {
     const next = sorted[i];
-    if (current.endCLId === next.startCLId) {
-      current = { ...current, endCLId: next.endCLId };
+    // 開口で切った端（clipEnd／clipStart）は隅ではない——同じ端CLの id が続いていても結合しない
+    if (current.endCLId === next.startCLId && current.clipEnd == null && next.clipStart == null) {
+      current = { ...current, endCLId: next.endCLId, clipEnd: next.clipEnd };
     } else {
       merged.push(current);
       current = next;
@@ -327,6 +330,54 @@ export function onStairOpening(p, graph, openings) {
   );
 }
 
+// 開口との重なりを区間で扱うときの最小の長さ(mm)。これ以下の重なり・残りは無いものとみなす。
+const OPENING_CLIP_EPS = 0.5;
+
+/**
+ * エッジパラメータ群を階段の上り口・下り口の開口辺（stairPortEdges の結果）の区間で切る。
+ * 辺の区間 [startCL, endCL] のうち開口の区間に重なる部分を除き、残りの区間ごとに1件のパラメータを返す。
+ * 開口と重ならない辺はそのまま（同一オブジェクト）。全部重なる辺は返さない（従来の中点判定＝全部重なる辺の
+ * 特例と同じ結果）。部分的に重なる辺（開口の端が隣室の辺の途中＝上階・同階の格子に乗らないとき）は、
+ * 残りの区間を表す `clipStart`／`clipEnd`（壁の始終端の実座標。その端が辺の本来の端CLと違うときだけ付く）を
+ * 持つパラメータへ分ける。クリップした端は隅ではない（直交する壁が無い）ので、呼び出し側は
+ * コーナーマップへ登録せず、`clipStart - startCL.value` を端点オフセットにする。
+ * @param {Array<object>} params computeExternalEdgeParams の結果（の部分集合）
+ * @param {object} graph
+ * @param {Array<{isVertical:boolean, value:number, lo:number, hi:number}>} openings
+ * @returns {Array<object>}
+ */
+export function clipEdgeParamsByOpenings(params, graph, openings) {
+  if (openings.length === 0) return params;
+  const out = [];
+  for (const p of params) {
+    const axisCL  = getShape(graph, p.axisCLId);
+    const startCL = getShape(graph, p.startCLId);
+    const endCL   = getShape(graph, p.endCLId);
+    if (!axisCL || !startCL || !endCL) { out.push(p); continue; }
+    const sv = Math.min(startCL.value, endCL.value), ev = Math.max(startCL.value, endCL.value);
+    const cuts = openings
+      .filter(o => o.isVertical === p.isVertical && Math.abs(o.value - axisCL.value) < OPENING_EPS)
+      .map(o => [Math.max(sv, o.lo), Math.min(ev, o.hi)])
+      .filter(([a, b]) => b - a > OPENING_CLIP_EPS)
+      .sort((x, y) => x[0] - y[0]);
+    if (cuts.length === 0) { out.push(p); continue; }
+    let cursor = sv;
+    const pieces = [];
+    for (const [a, b] of cuts) {
+      if (a - cursor > OPENING_CLIP_EPS) pieces.push([cursor, a]);
+      cursor = Math.max(cursor, b);
+    }
+    if (ev - cursor > OPENING_CLIP_EPS) pieces.push([cursor, ev]);
+    for (const [a, b] of pieces) {
+      const np = { ...p };
+      if (a - sv > OPENING_CLIP_EPS) np.clipStart = a;
+      if (ev - b > OPENING_CLIP_EPS) np.clipEnd = b;
+      out.push(np);
+    }
+  }
+  return out;
+}
+
 // ----------------------------------------------------------------
 // 端点ルール（軸CLの線分範囲による壁のクリップ）
 // ----------------------------------------------------------------
@@ -355,15 +406,18 @@ const ENDPOINT_EPS = 0.5;
  * seg は mergeSegments 後（startCL.value <= endCL.value）であること。
  * @returns {{ startOffset, endOffset } | null}
  */
-export function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, protrusion) {
+export function clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, protrusion, { clipStart = null, clipEnd = null } = {}) {
   if (spansEntireAxis(centerLineKind(axisCL)) || axisCL.extentLo == null || axisCL.extentHi == null) {
     return { startOffset, endOffset };
   }
   const lo = axisCL.extentLo, hi = axisCL.extentHi;
-  if (startCL.value >= hi - ENDPOINT_EPS || endCL.value <= lo + ENDPOINT_EPS) return null;
+  // 開口で切った端（clipEdgeParamsByOpenings の clipStart／clipEnd）は、端CLではなく切った座標を
+  // 壁の始終端として軸の区間と比べる（端CLのままだと、軸の区間が辺の途中で終わるとき壁が開口へ入り込む）
+  const sv = clipStart ?? startCL.value, ev = clipEnd ?? endCL.value;
+  if (sv >= hi - ENDPOINT_EPS || ev <= lo + ENDPOINT_EPS) return null;
   let s = startOffset, e = endOffset;
-  if (startCL.value < lo - ENDPOINT_EPS) s = (lo - protrusion) - startCL.value;
-  if (endCL.value   > hi + ENDPOINT_EPS) e = (hi + protrusion) - endCL.value;
+  if (sv < lo - ENDPOINT_EPS) s = (lo - protrusion) - startCL.value;
+  if (ev > hi + ENDPOINT_EPS) e = (hi + protrusion) - endCL.value;
   return { startOffset: s, endOffset: e };
 }
 
@@ -396,18 +450,19 @@ export function isInteriorWallTarget(room, under2aRoomIds) {
 }
 
 /**
- * 壁の自由端（F-3・2026-09-19裁定。QA是正版）: 生成対象の辺（`rawParams`。階段開口辺は
- * 既に除外済み）を `structural/woodFraming.js wallRunFreeEnds` へ渡すための薄いアダプタ。
+ * 壁の自由端（F-3・2026-09-19裁定。QA是正版）: 生成対象の辺（`rawParams`。階段開口の区間は
+ * `clipEdgeParamsByOpenings` で既に除かれている）を `structural/woodFraming.js wallRunFreeEnds` へ渡すための薄いアダプタ。
  * 判定ロジック自体（同一線上の連続runの端で直交する生成対象の壁が`WALL_JUNCTION_TOL_MM`以内に
  * 無いもの）は複製せず同じ純関数を共有する——ここでは`rawParams`の各辺を`{isVertical, coord,
  * lo, hi}`（coord=軸CLの実値+axisOffset、lo/hi=start/end CLの実値）へ写すだけ。
  *
- * 開口による同一直線上の中断（例: 横壁が階段開口で二分される）も、開口辺自体が`rawParams`から
- * 既に除外されているため、被覆されない区間としてそのまま自由端になる（幻のコーナーを作らない。
+ * 開口による同一直線上の中断（例: 横壁が階段開口で二分される）も、開口の区間自体が`rawParams`から
+ * 既に除かれているため（開口で切った辺の端は`clipStart`／`clipEnd`＝切った実座標で評価する）、
+ * 被覆されない区間としてそのまま自由端になる（幻のコーナーを作らない。
  * 旧実装＝コーナーマップの構築源を開口辺除外前の全辺へ広げる方式は、①開口と同一直線上（コーナー
  * ではない）の自由端を拾えない②反対面の薄壁の自由端と食い違う③自由端が無い通し辺まで誤って
  * 分断する、という3つの実データ不具合を生んだため廃止した）。
- * @param {Array<object>} rawParams - computeExternalEdgeParams の結果（階段開口辺は除外済み）
+ * @param {Array<object>} rawParams - computeExternalEdgeParams の結果（階段開口の区間は除去済み。clipStart／clipEnd 付きを含む）
  * @param {object} graph
  * @returns {Array<{isVertical:boolean, coord:number, along:number, x:number, y:number}>}
  */
@@ -418,7 +473,7 @@ function freeEndsOf(rawParams, graph) {
     const startCL = getShape(graph, p.startCLId);
     const endCL = getShape(graph, p.endCLId);
     if (!axisCL || !startCL || !endCL) continue;
-    const a = startCL.effectiveValue, b = endCL.effectiveValue;
+    const a = p.clipStart ?? startCL.effectiveValue, b = p.clipEnd ?? endCL.effectiveValue;
     segments.push({ isVertical: p.isVertical, coord: axisCL.effectiveValue + p.axisOffset, lo: Math.min(a, b), hi: Math.max(a, b) });
   }
   return wallRunFreeEnds(segments);
@@ -437,12 +492,14 @@ function matchesFreeEnd(freeEnds, isVertical, coord, along, tol = WALL_JUNCTION_
  * endCL側の自由端は外向き＝runより奥（正方向）になるようにする。
  * @returns {{startOffset:number, endOffset:number}}
  */
-function applyFreeEndProtrusion(freeEnds, isVertical, coord, startCL, endCL, startOffset, endOffset, protrusion) {
+function applyFreeEndProtrusion(freeEnds, isVertical, coord, startCL, endCL, startOffset, endOffset, protrusion, { clipStart = null, clipEnd = null } = {}) {
   if (!freeEnds?.length) return { startOffset, endOffset };
+  // 開口で切った端は壁の始終端の実座標（clipStart／clipEnd）で自由端を引く
+  const sv = clipStart ?? startCL.effectiveValue, ev = clipEnd ?? endCL.effectiveValue;
   const sign = Math.sign(endCL.effectiveValue - startCL.effectiveValue) || 1;
   let s = startOffset, e = endOffset;
-  if (matchesFreeEnd(freeEnds, isVertical, coord, startCL.effectiveValue)) s -= sign * protrusion;
-  if (matchesFreeEnd(freeEnds, isVertical, coord, endCL.effectiveValue)) e += sign * protrusion;
+  if (matchesFreeEnd(freeEnds, isVertical, coord, sv)) s -= sign * protrusion;
+  if (matchesFreeEnd(freeEnds, isVertical, coord, ev)) e += sign * protrusion;
   return { startOffset: s, endOffset: e };
 }
 
@@ -460,9 +517,12 @@ function applyFreeEndProtrusion(freeEnds, isVertical, coord, startCL, endCL, sta
  * 水平辺の endOffset   = コーナーにある垂直辺の axisOffset
  * 垂直辺は h/v を逆にして同様。
  *
- * stairOpenings（階段の上り口・下り口の開口辺。stairPortEdges の結果）上のエッジは
- * 壁を生成しない。フィルタはコーナーマップ構築前に行うため、開口辺に接する隣接壁の
- * 端点オフセットは登録されず（null → 0）、隣接壁は開口境界のCL位置で止まる。
+ * stairOpenings（階段の上り口・下り口の開口辺。stairPortEdges の結果）の**区間**に重なる部分は
+ * 壁を生成しない（clipEdgeParamsByOpenings。辺が開口に全部重なれば辺ごと除外、一部だけなら
+ * 重ならない区間の壁だけ残す）。区間切りはコーナーマップ構築前に行うため、開口の区間に接する隣接壁の
+ * 端点オフセットは登録されず（null → 0）、隣接壁は開口境界のCL位置で止まる。開口で切った端
+ * （`clipStart`／`clipEnd`）は隅ではないのでコーナーマップに載せず、端点オフセットは切った座標から求める。
+ * 軸の区間（clipToAxisExtent）も切った座標で比べる。
  *
  * bandShift（柱寸法が基準より細い階の外壁下地帯シフト量。structural/structureRules.js
  * woodBaseColumnWidthMm 参照）>0 のときは、建物外周に接する辺（classifyExteriorEdge が
@@ -487,11 +547,13 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
     });
   }
 
-  const rawParams = allParams.filter(p => !onStairOpening(p, graph, stairOpenings));
+  // 開口辺との重なりは区間で扱う（全部重なる辺は除外、一部だけ重なる辺は重ならない区間の壁だけ残す）
+  const rawParams = clipEdgeParamsByOpenings(allParams, graph, stairOpenings);
 
   // コーナーマップ構築（生成対象の辺＝rawParamsだけを使う。従来どおり）
   // key: "hCLId:vCLId" (水平CL id : 垂直CL id)
   // 水平辺 → hOffset を登録、垂直辺 → vOffset を登録
+  // 開口で切った端（clipStart／clipEnd）は隅ではないので登録しない
   const cornerMap = new Map();
   const ensureCorner = (hId, vId) => {
     const key = `${hId}:${vId}`;
@@ -502,17 +564,17 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
   for (const p of rawParams) {
     if (!p.isVertical) {
       // 水平辺: axis = 水平CL, start/end = 垂直CL
-      ensureCorner(p.axisCLId, p.startCLId).hOffset = p.axisOffset;
-      ensureCorner(p.axisCLId, p.endCLId).hOffset   = p.axisOffset;
+      if (p.clipStart == null) ensureCorner(p.axisCLId, p.startCLId).hOffset = p.axisOffset;
+      if (p.clipEnd == null)   ensureCorner(p.axisCLId, p.endCLId).hOffset   = p.axisOffset;
     } else {
       // 垂直辺: axis = 垂直CL, start/end = 水平CL
-      ensureCorner(p.startCLId, p.axisCLId).vOffset = p.axisOffset;
-      ensureCorner(p.endCLId,   p.axisCLId).vOffset = p.axisOffset;
+      if (p.clipStart == null) ensureCorner(p.startCLId, p.axisCLId).vOffset = p.axisOffset;
+      if (p.clipEnd == null)   ensureCorner(p.endCLId,   p.axisCLId).vOffset = p.axisOffset;
     }
   }
 
   // 自由端の明示評価（F-3・2026-09-19裁定・QA是正版）: wrapFreeEnds（在来木造の柱包み）のときだけ、
-  // rawParams（開口辺除外後の生成対象の辺）を structural/woodFraming.js wallRunFreeEnds と同じ
+  // rawParams（開口の区間を除いた後の生成対象の辺）を structural/woodFraming.js wallRunFreeEnds と同じ
   // 述語で評価する。開口による同一直線上の中断（コーナーではない）も、通しの内部（自由端にならない）
   // も判定ロジックを複製せず同じ純関数の結果に従う（freeEndsOf参照）。
   const freeEnds = wrapFreeEnds ? freeEndsOf(rawParams, graph) : null;
@@ -547,14 +609,19 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
         startOffset = cornerMap.get(`${seg.startCLId}:${axisCLId}`)?.hOffset ?? 0;
         endOffset   = cornerMap.get(`${seg.endCLId}:${axisCLId}`)?.hOffset   ?? 0;
       }
+      // 開口で切った端: 壁の端は端CLではなく切った座標（clipStart／clipEnd）。直交する壁が無いので隅のオフセットは使わない
+      if (seg.clipStart != null) startOffset = seg.clipStart - startCL.effectiveValue;
+      if (seg.clipEnd != null)   endOffset   = seg.clipEnd - endCL.effectiveValue;
 
       // 自由端ぶんの外向きprotrusionを上乗せする（F-3。腰壁・垂れ壁の辺でも延ばす——
       // 構造柱だけを立てない判断はstructural/woodAutoFill.js側の責務でここでは見ない）。
       ({ startOffset, endOffset } = applyFreeEndProtrusion(
-        freeEnds, isVertical, axisCL.effectiveValue + axisOffset, startCL, endCL, startOffset, endOffset, offset));
+        freeEnds, isVertical, axisCL.effectiveValue + axisOffset, startCL, endCL, startOffset, endOffset, offset,
+        { clipStart: seg.clipStart ?? null, clipEnd: seg.clipEnd ?? null }));
 
       // 端点ルール: 軸CLの線分範囲を越える部分ははねだし付きで止める
-      const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset);
+      const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset,
+        { clipStart: seg.clipStart ?? null, clipEnd: seg.clipEnd ?? null });
       if (!clipped) continue;
 
       const w = graph.addWall(axisCL, axisOffset, isVertical, startCL, clipped.startOffset, endCL, clipped.endOffset, {
@@ -579,10 +646,11 @@ export function generateRoomWallsFromOutline(graph, room, { wallBase = DEFAULT_W
  * loopType ごとに閉じたループとして扱う。生成された壁には
  * isRoomWall=true（chamferWalls による再調整を抑止）/ isExteriorWall=true を設定する。
  *
- * stairOpenings（階段の上り口・下り口の開口辺）上のエッジは、courtyard（両側とも部屋）
- * の場合のみ壁を生成しない。outer（外側が未割当＝部屋指定なし）は建物外周のため
- * 開口辺でも壁を残す。wrapFreeEnds（在来木造の柱包み。F-3・2026-09-19裁定）のときは、
- * loopTypeごとの生成対象の辺（courtyardの開口辺は除く）に自由端（`freeEndsOf`。
+ * stairOpenings（階段の上り口・下り口の開口辺）の区間に重なる部分は、courtyard（両側とも部屋）
+ * の場合のみ壁を生成しない（clipEdgeParamsByOpenings。一部だけ重なる辺は重ならない区間の壁だけ残す）。
+ * outer（外側が未割当＝部屋指定なし）は建物外周のため開口辺でも壁を残す。wrapFreeEnds
+ * （在来木造の柱包み。F-3・2026-09-19裁定）のときは、
+ * loopTypeごとの生成対象の辺（courtyardの開口の区間は除く）に自由端（`freeEndsOf`。
  * generateRoomWallsFromOutlineと同じ判定）を明示評価し、該当端へ外向きprotrusionを与える。
  *
  * bandShift（柱寸法が基準より細い階の外壁下地帯シフト量。structural/structureRules.js
@@ -611,21 +679,23 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
     for (const p of computeExternalEdgeParams(room, offset, graph)) {
       const loopType = classifyExteriorEdge(room, p, graph, cellToRoom);
       if (!loopType) continue;
-      if (loopType === 'courtyard' && onStairOpening(p, graph, stairOpenings)) continue;
+      // courtyard の開口辺との重なりは区間で扱う（全部重なる辺は除外、一部だけ重なる辺は残りの区間だけ）
+      const pieces = loopType === 'courtyard' ? clipEdgeParamsByOpenings([p], graph, stairOpenings) : [p];
+      for (const piece of pieces) {
+        const segId = `${piece.axisCLId}:${loopType}:${piece.startCLId}:${piece.endCLId}:${piece.axisOffset}:${piece.clipStart ?? ''}:${piece.clipEnd ?? ''}`;
+        if (seen.has(segId)) continue;
+        seen.add(segId);
 
-      const segId = `${p.axisCLId}:${loopType}:${p.startCLId}:${p.endCLId}:${p.axisOffset}`;
-      if (seen.has(segId)) continue;
-      seen.add(segId);
+        // 外壁は常に「室外側（室内方向の逆）」に生成する
+        // （p.axisOffset は常に室内方向を指すため、outer/courtyard とも反転する）
+        let axisOffset = -piece.axisOffset;
+        // 柱寸法シフト（axisOffsetは既に外向きなので同じ符号を掛ける＝さらに外側へ）。
+        const e = Math.sign(axisOffset) * bandShift;
+        axisOffset += e;
 
-      // 外壁は常に「室外側（室内方向の逆）」に生成する
-      // （p.axisOffset は常に室内方向を指すため、outer/courtyard とも反転する）
-      let axisOffset = -p.axisOffset;
-      // 柱寸法シフト（axisOffsetは既に外向きなので同じ符号を掛ける＝さらに外側へ）。
-      const e = Math.sign(axisOffset) * bandShift;
-      axisOffset += e;
-
-      if (!byLoopType.has(loopType)) byLoopType.set(loopType, []);
-      byLoopType.get(loopType).push({ ...p, axisOffset, backingOffset: e || null, bandOffset: e || null });
+        if (!byLoopType.has(loopType)) byLoopType.set(loopType, []);
+        byLoopType.get(loopType).push({ ...piece, axisOffset, backingOffset: e || null, bandOffset: e || null });
+      }
     }
   }
 
@@ -639,16 +709,17 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
       return cornerMap.get(key);
     };
     for (const p of rawParams) {
+      // 開口で切った端（clipStart／clipEnd）は隅ではないので登録しない
       if (!p.isVertical) {
-        ensureCorner(p.axisCLId, p.startCLId).hOffset = p.axisOffset;
-        ensureCorner(p.axisCLId, p.endCLId).hOffset   = p.axisOffset;
+        if (p.clipStart == null) ensureCorner(p.axisCLId, p.startCLId).hOffset = p.axisOffset;
+        if (p.clipEnd == null)   ensureCorner(p.axisCLId, p.endCLId).hOffset   = p.axisOffset;
       } else {
-        ensureCorner(p.startCLId, p.axisCLId).vOffset = p.axisOffset;
-        ensureCorner(p.endCLId,   p.axisCLId).vOffset = p.axisOffset;
+        if (p.clipStart == null) ensureCorner(p.startCLId, p.axisCLId).vOffset = p.axisOffset;
+        if (p.clipEnd == null)   ensureCorner(p.endCLId,   p.axisCLId).vOffset = p.axisOffset;
       }
     }
     // 自由端の明示評価（F-3・QA是正版）。loopType（outer/courtyard）ごとの生成対象の辺で評価する
-    // ——このloopTypeで開口辺除外により生じた自由端も、通しの辺（自由端にならない）も同じ述語で判定する。
+    // ——このloopTypeで開口の区間を除いたことにより生じた自由端も、通しの辺（自由端にならない）も同じ述語で判定する。
     const freeEnds = wrapFreeEnds ? freeEndsOf(rawParams, graph) : null;
 
     // (axisCLId, axisOffset) でグループ化してマージ
@@ -677,14 +748,19 @@ export function generateExteriorWalls(graph, { wallBase = DEFAULT_WALL_BASE, wal
           startOffset = cornerMap.get(`${seg.startCLId}:${axisCLId}`)?.hOffset ?? 0;
           endOffset   = cornerMap.get(`${seg.endCLId}:${axisCLId}`)?.hOffset   ?? 0;
         }
+        // 開口で切った端: 壁の端は切った座標（直交する壁が無いので隅のオフセットは使わない）
+        if (seg.clipStart != null) startOffset = seg.clipStart - startCL.effectiveValue;
+        if (seg.clipEnd != null)   endOffset   = seg.clipEnd - endCL.effectiveValue;
 
         // 自由端ぶんの外向きprotrusionを上乗せする（F-3）。
         ({ startOffset, endOffset } = applyFreeEndProtrusion(
-          freeEnds, isVertical, axisCL.effectiveValue + axisOffset, startCL, endCL, startOffset, endOffset, offset));
+          freeEnds, isVertical, axisCL.effectiveValue + axisOffset, startCL, endCL, startOffset, endOffset, offset,
+          { clipStart: seg.clipStart ?? null, clipEnd: seg.clipEnd ?? null }));
 
         // 端点ルール: 軸CLの線分範囲を越える部分ははねだし付きで止める（帯シフト分だけ
         // 突出許容量も広げる——帯自体が外側へ寄っているため）。
-        const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset + bandShift);
+        const clipped = clipToAxisExtent(axisCL, startCL, startOffset, endCL, endOffset, offset + bandShift,
+          { clipStart: seg.clipStart ?? null, clipEnd: seg.clipEnd ?? null });
         if (!clipped) continue;
 
         const w = graph.addWall(axisCL, axisOffset, isVertical, startCL, clipped.startOffset, endCL, clipped.endOffset, {
@@ -1031,6 +1107,8 @@ export function restoreWallsFromSnapshots(graph, snapshots) {
   return walls;
 }
 
+const CORNER_EPS = 1e-6;
+
 /**
  * 出隅（外側に凸な角）の取り合いを閉じる。
  *
@@ -1052,16 +1130,24 @@ export function restoreWallsFromSnapshots(graph, snapshots) {
  * @param {import('@core').Wall[]} walls
  * @returns {number} 端点を伸ばした箇所の数
  */
-const CORNER_EPS = 1e-6;
-
 export function closeConvexCorners(walls) {
   const verticals = [], horizontals = [];
   for (const w of walls) {
     if (w.wallFinish == null) continue; // 仕上げ厚不明（手動壁）は対象外
     (w.isVertical ? verticals : horizontals).push(w);
   }
-  // wallの端a（'start'|'end'）が相手の軸CLで終端しているか。
-  const endAt = (w, cl) => (w.clStart === cl ? 'start' : w.clEnd === cl ? 'end' : null);
+  // wallの端a（'start'|'end'）が相手(other)の軸CLで終端している**隅**か。
+  // 端の線（clStart/clEnd）が相手の軸CLであることに加え、壁の端の実座標が相手の壁の材（materialRange）の
+  // 内側にあること（core/wall.js isWallEndAtCorner）——階段の開口で切った壁（clipEdgeParamsByOpenings）は
+  // 端の線が元の辺の端のままでも、実際の端は開口の座標にあり、相手の材の外＝隅ではない。これを隅とみなすと
+  // 補修（仕上げ脱出・読込み時の _healDerivedGeometry）が切った端を隅まで伸ばし戻して開口を塞ぐ。
+  // 判定は保存済みの座標だけで行うので、保存後・読込み後の補修でも同じ結果になる（距離の閾値を持たないので、
+  // 開口の端が隅に近くても切った端を取り違えない）。
+  const endAt = (w, cl, other) => {
+    const a = w.clStart === cl ? 'start' : w.clEnd === cl ? 'end' : null;
+    if (!a) return null;
+    return isWallEndAtCorner(w, a, [other]) ? a : null;
+  };
   // 端aの外向き符号（その端がどちらへ伸びれば「長くなる」か）。
   const outward = (w, a) => Math.sign(a === 'end' ? w.coord2 - w.coord1 : w.coord1 - w.coord2) || 1;
   // 壁wの材（下地帯∪仕上げ帯）のうち、向きdの側の外面。仕上げ面合わせ等で下地が仕上げ面より
@@ -1086,7 +1172,7 @@ export function closeConvexCorners(walls) {
   const plans = [];
   for (const v of verticals) {
     for (const h of horizontals) {
-      const va = endAt(v, h.axisCL), ha = endAt(h, v.axisCL);
+      const va = endAt(v, h.axisCL, h), ha = endAt(h, v.axisCL, v);
       if (!va || !ha) continue; // 互いに終端し合っていない＝T字・X字
       // 欠けが生じるのは**互いの仕上げ面が向いている側**の象限だけ（そこが出隅）。
       // 各々が「相手の材が張り出している向き」へ終端していることを両方向で確かめる
@@ -1121,4 +1207,15 @@ export function closeConvexCorners(walls) {
     if (p.at === 'end') p.wall.endOffset = p.offset; else p.wall.startOffset = p.offset;
   }
   return best.size;
+}
+
+/**
+ * 階の壁の導出ジオメトリ（出隅の取り合い）を閉じ直す。読み込み経路（FloorSwapManager activate/swap/peek の
+ * _healDerivedGeometry）・仕上げ脱出の壁再生成（wallRegeneration.js）・同座標ピース結合後の階の復元
+ * （finish/floorCLMap.js mergeAdjacentDividers）が共有する唯一の入口。冪等。
+ * @param {object} graph
+ * @returns {number} 端点を伸ばした箇所の数
+ */
+export function healDerivedGeometry(graph) {
+  return runInAction(() => closeConvexCorners([...graph.walls]));
 }

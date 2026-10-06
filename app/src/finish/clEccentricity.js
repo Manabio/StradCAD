@@ -23,6 +23,7 @@ const SPAN_OVERLAP_EPS = 5; // mm
 // 壁の軸CL±この距離(mm)をサンプリングして室の帰属側を判定する。edgeClassify.js の
 // ADJACENT_SAMPLE_EPS と同水準。
 const SIDE_SAMPLE_EPS = 10; // mm
+const CORNER_FOLLOW_EPS = 0.5; // mm 隅の端の offset と w の変更前 axisOffset の一致の許容差
 
 // ----------------------------------------------------------------
 // 内部ヘルパー
@@ -259,9 +260,11 @@ export function applyCLEccentricity(graph, clId, { materialMap } = {}) {
   // 直接の対象壁（axisOffset等）・コーナー追従壁（startOffset/endOffset）の両方が乗る
   // 汎用スナップショット。初回遭遇時点＝真の変更前値のみを1件記録する
   // （trimStairUnderJunctions と同じ流儀。同一壁への複数回の書換えを重複記録しない）。
+  const axisBefore = new Map(); // wallId -> 変更前の axisOffset（隅追従の「隅の端」の判定に使う）
   const captureBefore = (w) => {
     if (touchedIds.has(w.id)) return;
     touchedIds.add(w.id);
+    axisBefore.set(w.id, w.axisOffset);
     changed.push({
       wall: w, axisOffset: w.axisOffset, wallFinish: w.wallFinish,
       backingOffset: w.backingOffset, backingDepth: w.backingDepth, finishSide: w.finishSide,
@@ -338,11 +341,16 @@ export function applyCLEccentricity(graph, clId, { materialMap } = {}) {
       if (wid === w.id) continue;
       const p = graph.shapeMap.get(wid);
       if (!p) continue;
-      if (p.clStart.id === w.axisCL.id && p.startOffset !== w.axisOffset) {
+      // 隅の端だけ追従する: 端の offset が w の変更前の axisOffset と一致する端（コーナーマップ規約どおり
+      // 相手辺の axisOffset を持つ端）。階段の開口で切った端（端CLのままだが offset は開口の座標までの距離）は
+      // 一致しないので追従せず、開口を塞がない。変更前の値は captureBefore 済みの値（w を変える前に採取）。
+      const wBefore = axisBefore.get(w.id);
+      const atCorner = (off) => Math.abs(off - wBefore) < CORNER_FOLLOW_EPS;
+      if (p.clStart.id === w.axisCL.id && p.startOffset !== w.axisOffset && atCorner(p.startOffset)) {
         captureBefore(p);
         p.startOffset = w.axisOffset;
       }
-      if (p.clEnd.id === w.axisCL.id && p.endOffset !== w.axisOffset) {
+      if (p.clEnd.id === w.axisCL.id && p.endOffset !== w.axisOffset && atCorner(p.endOffset)) {
         captureBefore(p);
         p.endOffset = w.axisOffset;
       }

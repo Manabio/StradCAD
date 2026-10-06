@@ -307,6 +307,53 @@ test('【syncUpperFloors】undoEntry を渡すと、undo で2階の吹抜けが�
   assert.equal(voidRooms(decodeFloor(project, g2.plane, ctx.store.get('p2'))).length, 1);
 });
 
+test('【syncUpperFloors】2階の既存部屋が足元を覆っていても吹抜けが置かれ、部屋は足元を失う。undo で部屋のセルが戻り、redo で再び削れる', async () => {
+  const { project, graphs } = setupProject(3);
+  const [g1, g2] = graphs;
+  addPerFloorV(graphs); // 足元＝左半分 [0,500]x[0,1000]
+  placeStair(project, g1);
+  const leftHalf = worldToCell(250, 500, g2).key;
+  const rightHalf = worldToCell(750, 500, g2).key;
+  const room = g2.addRoom(new Set([leftHalf, rightHalf]), '居室');
+  const ctx = makeSyncCtx(project, graphs);
+  const undoEntry = undoManager.push(() => {}, () => {});
+
+  await syncUpperFloors(project, g1, { undoEntry, peekFn: ctx.peekFn, saveFloorFn: ctx.saveFloorFn });
+  const after = decodeFloor(project, g2.plane, ctx.store.get('p2'));
+  assert.equal(voidRooms(after).length, 1, '足元に吹抜けが置かれた');
+  assert.deepEqual([...refreshCells(after.roomMap.get(room.id).cells, after)], [rightHalf], '居室は足元（左半分）を失い右半分だけ');
+  const p2After = bytesOf(ctx.store, 'p2');
+
+  undoManager.undo();
+  const undone = decodeFloor(project, g2.plane, ctx.store.get('p2'));
+  assert.equal(voidRooms(undone).length, 0, 'undo で吹抜けが消える');
+  assert.deepEqual([...refreshCells(undone.roomMap.get(room.id).cells, undone)].sort(), [leftHalf, rightHalf].sort(), 'undo で居室のセルが戻る');
+
+  undoManager.redo();
+  assert.ok(bytesOf(ctx.store, 'p2').equals(p2After), 'redo で再び吹抜け＋削れた居室');
+});
+
+test('【syncUpperFloors】2階の中心線の区間が足元の辺に届かないと区間が延び、undo で区間も戻る（before/after の合成）', async () => {
+  const { project, graphs } = setupProject(3);
+  const [g1, g2] = graphs;
+  addPerFloorV(graphs); // x=500（足元の右辺）
+  placeStair(project, g1);
+  const x500 = g2.centerLines.find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === 500);
+  g2.setCenterLineExtentRef(x500, 'lo', null, 0);
+  g2.setCenterLineExtentRef(x500, 'hi', null, 300); // 足元（y 0..1000）の右辺に届かない
+  const ctx = makeSyncCtx(project, graphs);
+  const undoEntry = undoManager.push(() => {}, () => {});
+  const extentOf = (g) => { const c = g.centerLines.find(x => x.centerLineType === CenterLineType.VERTICAL && x.value === 500); return [c.extentLo, c.extentHi]; };
+
+  await syncUpperFloors(project, g1, { undoEntry, peekFn: ctx.peekFn, saveFloorFn: ctx.saveFloorFn });
+  const after = decodeFloor(project, g2.plane, ctx.store.get('p2'));
+  assert.deepEqual(extentOf(after), [0, 1000], '区間が足元の辺（y 0..1000）まで延びた');
+  assert.equal(voidRooms(after).length, 1);
+
+  undoManager.undo();
+  assert.deepEqual(extentOf(decodeFloor(project, g2.plane, ctx.store.get('p2'))), [0, 300], 'undo で区間が元に戻る');
+});
+
 test('【syncUpperFloors】直上階がアクティブ階のとき（起点探索経由）はメモリ上のグラフを直接更新し、saveFloor しない', async () => {
   const { project, graphs } = setupProject(3);
   const [g1, g2] = graphs;
