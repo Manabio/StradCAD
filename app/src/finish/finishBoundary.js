@@ -112,6 +112,9 @@ export async function runFinishEntryBoundary(graph, project, { loadFloorFn = nul
 // 受け入れる／R3 階切替だけ／R4 その階の2回目以降の無編集の脱出から速くなれば良い（印は文書へ保存せず
 // メモリ上だけ）。戻り値は { skipped }（呼び出し元は使っていない）。
 export async function runFinishExitBoundary(graph, project, fmode, { goingToStructure = false, stamps = null } = {}) {
+  // 開いたままの命名ダイアログの候補部屋は、脱出境界（壁再生成・無編集スキップ判定）より前に取り消す。
+  // dispose はこの境界の後に呼ばれる（App.jsx のモード再ロード effect）ため、dispose だけでは遅い。
+  fmode?.discardNamingDialog?.();
   if (stamps && (await stamps.canSkip(graph, project)).skip) return { skipped: true };
   const stampProbe = stamps ? await stamps.beginFullExit(graph, project, fmode) : null;
   const undoFns = [];

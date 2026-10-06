@@ -169,7 +169,7 @@ test('【不変条件・B2b】startDrag は屋根セルの直接クリックで 
 
 test('【不変条件・B2b】屋根セルを部屋ドラッグの除外対象に含める行（isRoofFeature）が残っている（屋根は広げない・取り込まない）', () => {
   assert.ok(stateLines.includes(
-    'if (room.feature !== RoomFeature.STAIR_VOID && !isShaftFeature(room.feature) && !isRoofFeature(room.feature)) continue;'),
+    'if (!isShaftFeature(room.feature) && !isRoofFeature(room.feature)) continue;'),
   '_roomExcludedStairKeys の屋根除外の行が見つからない');
 });
 

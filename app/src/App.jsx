@@ -281,6 +281,8 @@ const App = observer(() => {
     const g = project.activeGraph;
     const prep = fmode.prepareStairNaming(id, payload);
     if (!prep) return; // Room が既に無い等の退化ケース（関門に入らない）
+    // 下階の階段の吹抜けとの部分的な重なりは、関門に入る前に止める（ダイアログは開いたまま）。
+    if (prep.rejection) { setToast({ msg: prep.rejection, key: Date.now() }); return; }
     beginUiTransition();
     await runBusy('階段の指定', async () => {
       let rejection;

@@ -299,6 +299,12 @@ export const ERR_ELEVATOR_NOT_UNASSIGNED = '昇降機は未指定のエリアか
 // 候補のセルが階段・他の部屋と重なる場合。
 export const ERR_ROOF_NOT_UNASSIGNED = '屋根は未指定のエリアから指定してください。';
 
+// 続きの階段の指定（FinishModeState._stairVoidRejection）の拒否文言。直下階の階段の吹抜け（STAIR_VOID）を
+// 含む範囲を階段以外（なし・吹抜け・屋根・昇降機）で確定しようとした場合。
+export const ERR_STAIR_VOID_NOT_STAIR = '下の階の階段の吹抜けを含む範囲は、階段としてだけ指定できます。';
+// 同、範囲が吹抜けの一部だけと重なる場合（吹抜けは全体を含めて指定する）。
+export const ERR_STAIR_VOID_PARTIAL = '下の階の階段の吹抜けは、全体を含めて指定してください。';
+
 // 屋根を付けた直後の警告（finish/roof/roofFloorCheck.js findUpperRoomsOverCells）。屋根の上の階の同じ
 // 位置に屋内の部屋があるとき。警告だけで、上の階の部屋は自動では変更しない。floorLabels は階名の配列。
 export const ERR_ROOF_UPPER_ROOMS = (floorLabels) =>

@@ -19,7 +19,8 @@ import { buildingEquipmentCatalog, equipmentSpanLabelOf } from '../finish/equipm
 import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { isValidRoofFieldValue } from '../finish/roof/roofInput.js';
-import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED, ERR_ROOM_DELETE_HAS_STAIR_CHILD } from '../error.js';
+import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED, ERR_ROOM_DELETE_HAS_STAIR_CHILD, ERR_STAIR_VOID_NOT_STAIR, ERR_STAIR_VOID_PARTIAL } from '../error.js';
+import { stairVoidsTouching } from '../finish/stair/stairVoidReconcile.js';
 import {
   RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME, applyDefaultBaseboard,
   ElevatorEquipmentCategory, DEFAULT_EV_USAGE, isDefaultRoofSpec,
@@ -419,8 +420,9 @@ export class FinishModeState {
    * 部屋ドラッグから除外する自階階段・昇降路セルの Set（メソッド名は階段専用だった名残で変えていない）。
    * 破れ線先セルのうち、直下階に階段が無い（＝階段下エリア）ものは部屋ドラッグを許容するため
    * 除外対象から外す。屋根（ROOF）のセルも除外する（屋根の拡張は削除→指定し直し。屋根と屋内部屋が
-   * 1室に統合される経路を断つ）。階段吹抜け（STAIR_VOID。最上階の自動管理 Room）のセルも除外する
-   * （commitDrag の rooms 走査から外れるため、除外しないと二重割当の部屋が作れてしまう）。
+   * 1室に統合される経路を断つ）。階段吹抜け（STAIR_VOID。直下階の階段の吹抜け）のセルは除外しない——
+   * 続きの階段を指定するため吹抜けの中からドラッグを始められる必要がある。吹抜けとの二重所有は
+   * 確定（applyNaming の階段変換）で吹抜けを吸収して解く（部分的な重なりは _stairVoidRejection が拒否）。
    * isShaftFeature を持つ全 Room（昇降路）のセルも除外する——区分・部分指定・器具行の有無を
    * 問わない（旧データの未登録昇降路も同時に除外。2-5・S3裁定Q2）。
    */
@@ -441,7 +443,7 @@ export class FinishModeState {
       }
     }
     for (const room of this.graph.rooms) {
-      if (room.feature !== RoomFeature.STAIR_VOID && !isShaftFeature(room.feature) && !isRoofFeature(room.feature)) continue;
+      if (!isShaftFeature(room.feature) && !isRoofFeature(room.feature)) continue;
       for (const key of refreshCells(room.cells, this.graph)) stairKeys.add(key);
     }
     return stairKeys;
@@ -598,6 +600,11 @@ export class FinishModeState {
       const cells = refreshCells(s.cells, this.graph);
       if (cells.has(pointerKey)) { stair = s; break; }
     }
+    // 直下階の階段の吹抜け（STAIR_VOID）のセルから始めたときは、見下げ選択で止めずドラッグを始める
+    // （続きの階段は吹抜けの中から選択順で指定する）。動かさずに離した（タップ。commitDrag の tap）ときだけ
+    // 従来の見下げ選択（lowerTapStairId。見下げ先が無ければ何もしない）へ戻す。
+    let lowerTapStairId = null;
+    let startedInVoid = false;
 
     if (stair) {
       const beyond = this._beyondBreakOf(stair);
@@ -615,7 +622,17 @@ export class FinishModeState {
       // 優先4: 破れ線先だが下階階段なし → 階段下エリアとして下の部屋ドラッグへフォールスルー
     } else {
       const lower = this._lowerStairForPoint(wx, wy);
-      if (lower) {
+      if (this._isStairVoidCell(pointerKey)) {
+        if (floorHeightAbove(this.project, this.project?.activePlane) == null) {
+          // 上階が無い（最上階）では階段を指定できない（階段化の選択肢が無効）ので、吹抜けからドラッグを始めない
+          // （始めても階段以外では確定できず行き止まりになる）。従来どおり見下げ選択か何もしない。
+          if (lower) this._selectStair(lower.id);
+          return;
+        }
+        // 吹抜けのセル: 見下げ選択で止めずドラッグを始める（タップなら commitDrag が見下げ選択か何もしない）。
+        startedInVoid = true;
+        lowerTapStairId = lower ? lower.id : null;
+      } else if (lower) {
         this._selectStair(lower.id); // 優先3: 自階に階段が無い箇所での下階階段の見下げ
         return;
       }
@@ -634,7 +651,18 @@ export class FinishModeState {
       visitedCells: new Map(cells.map(c => [c.key, c])),
       stairKeys,
       startCellKey: cells[0].key, // ドラッグ開始セル（階段セル除外後）。commitDragの所属判定に使う
+      startedInVoid,              // 吹抜けのセルから始めたか（タップなら部屋を作らない）
+      lowerTapStairId,            // 吹抜けから始めたときの見下げ先（タップ時の選択先。無ければ null）
     };
+  }
+
+  /** key が階段吹抜け（STAIR_VOID）部屋のセル（現行グリッドへ展開して比較）か。 */
+  _isStairVoidCell(key) {
+    for (const room of this.graph.rooms) {
+      if (room.feature !== RoomFeature.STAIR_VOID) continue;
+      if (refreshCells(room.cells, this.graph).has(key)) return true;
+    }
+    return false;
   }
 
   updateDrag(wx, wy) {
@@ -667,11 +695,19 @@ export class FinishModeState {
    * commitDrag には到達しない。feature=STAIR・昇降路（isShaftFeature）の部屋は cells ドリフトに
    * 備えて防御的に除外する（セル除外で通常到達しないはずだが、newCells に混入した場合の二重の守り）。
    */
-  commitDrag() {
+  commitDrag({ tap = false } = {}) {
     const state = this.dragState;
     if (!state) return;
     const newCells = new Set(state.visitedCells.keys());
     if (newCells.size === 0) { this.dragState = null; return; }
+    // 吹抜けのセルから始めて動かさずに離した（tap。ポインタの移動量で決める。訪れたセル数では、吹抜けが
+    // 1連結領域のとき同じ形の指定とタップを見分けられない）: 従来どおり下階階段の見下げ選択。見下げ先が
+    // 読み込まれていないときは何もしない（吹抜けのタップで候補部屋を作らない）。
+    if (tap && state.startedInVoid) {
+      if (state.lowerTapStairId) this._selectStair(state.lowerTapStairId);
+      else this.dragState = null;
+      return;
+    }
     const startCellKey = state.startCellKey;
     // ダイアログを開く際に渡す選択順セルキー配列（挿入順。フェーズ4の上り口ヒント用）
     const cellOrder = [...state.visitedCells.keys()];
@@ -692,16 +728,23 @@ export class FinishModeState {
     const rooms = this.graph.rooms.filter(r =>
       r.feature !== RoomFeature.STAIR && r.feature !== RoomFeature.STAIR_VOID
       && r.feature !== RoomFeature.UNDEFINED && !isShaftFeature(r.feature) && !isRoofFeature(r.feature));
-    const overlapping = rooms.filter(r => [...cellsOf(r)].some(c => newCells.has(c)));
+    // 判定1・2は階段吹抜け（STAIR_VOID）のセルを除いた nonVoidNew で比べる——既存部屋が吹抜けのセルを
+    // 取り込む経路を作らない（吹抜けは確定時に applyNaming の階段変換だけが吸収する）。判定3は newCells のまま。
+    const voidKeys = new Set();
+    for (const r of this.graph.rooms) {
+      if (r.feature === RoomFeature.STAIR_VOID) for (const c of cellsOf(r)) voidKeys.add(c);
+    }
+    const nonVoidNew = voidKeys.size === 0 ? newCells : new Set([...newCells].filter(c => !voidKeys.has(c)));
+    const overlapping = nonVoidNew.size === 0 ? [] : rooms.filter(r => [...cellsOf(r)].some(c => nonVoidNew.has(c)));
 
     if (overlapping.length > 0) {
       // 判定1: 既存部屋と完全一致 — 全体選択のみ（セルは変えない・ダイアログは開かない）
-      const exactMatch = overlapping.find(r => setsEqual(cellsOf(r), newCells));
+      const exactMatch = overlapping.find(r => setsEqual(cellsOf(r), nonVoidNew));
       if (exactMatch) { this._selectExistingRoom(exactMatch.id); return; }
 
       // 判定2: 重複する全部屋が newCells に包含される — 拡張・統合
       // （例: A部屋とB部屋を合わせてドラッグ → 一つの大きな部屋に）
-      const allContained = overlapping.every(r => [...cellsOf(r)].every(c => newCells.has(c)));
+      const allContained = overlapping.every(r => [...cellsOf(r)].every(c => nonVoidNew.has(c)));
       if (allContained) {
         const dominant = overlapping.reduce((a, b) =>
           cellsOf(b).size > cellsOf(a).size ? b : a
@@ -719,7 +762,7 @@ export class FinishModeState {
             }
           }
         }
-        dominant.setCells(newCells);
+        dominant.setCells(nonVoidNew);
         dominant.generatedWallIds.clear();
         for (const r of overlapping) {
           if (r.id !== dominant.id) this.graph.removeRoom(r.id);
@@ -839,6 +882,8 @@ export class FinishModeState {
   prepareElevatorNaming(roomId, payload) {
     const room = this.graph.roomMap.get(roomId);
     if (!room) return { rejection: null, cells: null };
+    const voidReason = this._stairVoidRejection(room, payload.feature).rejection;
+    if (voidReason) return { rejection: voidReason, cells: null };
     const reason = validateElevatorInstall({
       graph: this.graph, room, kind: payload.kind,
       isNewCandidate: this.namingIsNew && this.namingRoomId === roomId,
@@ -863,12 +908,42 @@ export class FinishModeState {
    * 状態は一切変えない。cells は階段になる Room のセル（applyNaming が Stair に渡す room.cells と同じ）、
    * indoor は payload の区分が屋外でないか（isIndoorStair は確定後の kind を見る＝applyNaming が
    * room.setKind(payload.kind) した結果と同じ）。roomId が存在しなければ null。
-   * @returns {{cells: Set<string>, indoor: boolean}|null}
+   * rejection は直下階の階段の吹抜けとの重なりの拒否文言（_stairVoidRejection。部分的な重なり）。
+   * 無ければ null。
+   * @returns {{cells: Set<string>, indoor: boolean, rejection: string|null}|null}
    */
   prepareStairNaming(roomId, payload) {
     const room = this.graph.roomMap.get(roomId);
     if (!room) return null;
-    return { cells: new Set(room.cells), indoor: payload.kind !== RoomKind.EXTERIOR };
+    return {
+      cells: new Set(room.cells), indoor: payload.kind !== RoomKind.EXTERIOR,
+      rejection: this._stairVoidRejection(room, payload.feature).rejection,
+    };
+  }
+
+  /**
+   * 続きの階段の指定（直下階の階段の吹抜け STAIR_VOID を含む部屋）の事前検証。状態は変えない。
+   * 吹抜けに触れていなければ rejection なし。
+   * - 階段以外への命名（ERR_STAIR_VOID_NOT_STAIR）は新規候補（namingIsNew && namingRoomId === room.id）だけ拒否する。
+   *   既存部屋の属性変更で吹抜けと重なる非階段は旧データ（二重所有の旧状態）の可能性があり、止めない。
+   * - 階段への新規変換（既に階段の部屋は対象外）は新規候補でなくても判定する: 一部だけ重なる吹抜けがあれば
+   *   ERR_STAIR_VOID_PARTIAL、全体が含まれる吹抜けは absorbed（階段変換の確定で applyNaming が消す。
+   *   命名ダイアログを開いたまま脱出・階切替して残った候補をカードから階段化した場合の二重所有を作らない）。
+   * 部屋自身が吹抜けの場合は自分を absorbed に含めない。
+   * @returns {{rejection: string|null, absorbed: object[]}}
+   */
+  _stairVoidRejection(room, feature) {
+    const none = { rejection: null, absorbed: [] };
+    const { absorbed: touched, partial } = stairVoidsTouching(this.graph, room.cells);
+    const absorbed = touched.filter(v => v.id !== room.id);
+    if (absorbed.length === 0 && !partial) return none;
+    if (feature !== RoomFeature.STAIR) {
+      const isNewCandidate = this.namingIsNew && this.namingRoomId === room.id;
+      return isNewCandidate ? { rejection: ERR_STAIR_VOID_NOT_STAIR, absorbed: [] } : none;
+    }
+    if (room.feature === RoomFeature.STAIR) return none; // 既に階段（名前変更等）。セルは動かない
+    if (partial) return { rejection: ERR_STAIR_VOID_PARTIAL, absorbed: [] };
+    return { rejection: null, absorbed };
   }
 
   /**
@@ -906,6 +981,11 @@ export class FinishModeState {
       this._pendingDialogUndo = null;
       return null;
     }
+
+    // 直下階の階段の吹抜けを含む新規候補は階段としてだけ・全体を含めてだけ確定できる（昇降機の検証より前。
+    // 何も変更せず拒否＝ダイアログは開いたまま）。通れば absorbed を階段変換の枝で消す。
+    const voidCheck = this._stairVoidRejection(room, feature);
+    if (voidCheck.rejection) { this.lastNamingRejection = voidCheck.rejection; return null; }
 
     const isNewInstall = this.isElevatorInstallIntent(roomId, payload);
     if (equipment && !isNewInstall) {
@@ -983,6 +1063,8 @@ export class FinishModeState {
         if (cls.arrivalTurnSteps) opts.arrivalTurnSteps = cls.arrivalTurnSteps;
         if (cls.totalSteps) opts.totalSteps = cls.totalSteps;
         convertedStair = this.graph.addStair(opts);
+        // 続きの階段: 全体を含むと確かめた下階の階段の吹抜けは階段の足元になるので消す（同じ undo エントリの中）
+        for (const v of voidCheck.absorbed) this.graph.removeRoom(v.id);
         // 直進階段は破れ線位置（FL+1600）の分割CLで階段下の指定経路を用意する（stairUnderSplit.js）
         ensureUnderStairSplit(convertedStair, this.graph, this._selfStairRiser(convertedStair));
         this.selectedStairId = convertedStair.id;
@@ -1025,9 +1107,11 @@ export class FinishModeState {
   /**
    * 屋根（ROOF）の新規指定の事前検証。拒否理由の文言（error.js）を返す。通れば null。
    * 1. 新規候補（ダイアログを開いた未指定エリアの Room）でない、または部分指定
-   * 2. 候補のセルが、階段・階段吹抜け・昇降路・屋根のセル、または未定義以外の他の部屋のセルと重なる
+   * 2. 候補のセルが、階段・昇降路・屋根のセル、または未定義以外の他の部屋のセルと重なる
    *    （commitDrag の未指定経路は claimed セルを除くため通常到達しない二重の守り）
-   * 防御のための重複: 「部分指定」と「blocked（階段・昇降路・屋根のセル）」の条件は、後ろの「他の部屋の
+   * 階段吹抜け（STAIR_VOID）との重なりは、これより前に _stairVoidRejection が拒否する（applyNaming の先頭。
+   * 吹抜けのセルは _roomExcludedStairKeys の対象外になったが、他の部屋との重なり判定で同じく弾かれる）。
+   * 防御のための重複:「部分指定」と「blocked（階段・昇降路・屋根のセル）」の条件は、後ろの「他の部屋の
    * セルと重なる」判定でも先に拒否されるため、単独の変異ではテストが赤にならない（意図した重複）。
    * @returns {string|null}
    */
@@ -1403,7 +1487,17 @@ export class FinishModeState {
 
   // ---- Lifecycle ----
 
+  /**
+   * 開いている命名ダイアログを取り消す（新規候補ならその部屋を消す。cancelNaming と同じ）。
+   * 候補が吹抜けと同セルのまま残ると、後で階段化したとき二重所有になる。モード切替・階切替の脱出境界の前
+   * （finishBoundary.js runFinishExitBoundary の先頭）と dispose から呼ぶ。
+   */
+  discardNamingDialog() {
+    if (this.namingRoomId) this.cancelNaming(this.namingRoomId);
+  }
+
   dispose() {
+    this.discardNamingDialog();
     this.cancelDrag();
     this._pendingDialogUndo = null;
     this.selectedEquipmentId = null;

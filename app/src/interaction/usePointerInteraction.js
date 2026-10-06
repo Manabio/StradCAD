@@ -614,7 +614,11 @@ export function usePointerInteraction({
     // ---- 仕上げモード ----
     if (appMode === 'finish') {
       if (finishDragDownRef.current && modeRef.current?.dragState) {
-        modeRef.current?.commitDrag();
+        // タップ（押下点からほぼ動いていない）かは移動量で決める（吹抜けから始めた部屋ドラッグが、
+        // 吹抜けと同じ形の1連結領域でも続きの階段の指定になるように。訪れたセル数では決められない）
+        const down = finishDragDownRef.current;
+        const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
+        modeRef.current?.commitDrag({ tap: tapDist < 8 });
       }
       finishDragDownRef.current = null;
       drag.current = null;

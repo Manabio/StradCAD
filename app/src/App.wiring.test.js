@@ -538,6 +538,15 @@ test('【配線・B1b】convertStairFromNaming: 事前チェック（上の階�
   assert.ok(lines.includes('setToast({ msg: ERR_STAIR_UPPER_CHECK_FAILED, key: Date.now() });'), '確認失敗のトーストが無い');
 });
 
+test('【配線・ステップ4】convertStairFromNaming: 下階の階段の吹抜けとの重なりの拒否（prep.rejection）は、関門（beginUiTransition）に入る前にトーストしてreturnする', () => {
+  const body = extractFunctionBody(readAppSrc(), 'async function convertStairFromNaming');
+  const lines = body.split('\n').map(l => l.trim());
+  const rejectIdx = lines.indexOf('if (prep.rejection) { setToast({ msg: prep.rejection, key: Date.now() }); return; }');
+  const gateIdx = lines.indexOf('beginUiTransition();');
+  assert.ok(rejectIdx >= 0, 'prep.rejection のトースト＋return の1行が1行まるごとの形で見つからない');
+  assert.ok(gateIdx >= 0 && rejectIdx < gateIdx, `拒否のreturnは関門に入る前（拒否:${rejectIdx}、関門:${gateIdx}）`);
+});
+
 test('【配線・B1b】applyRoomNaming: 再入フラグ stairChecked の既定は false（既定が true だと事前チェックが丸ごと無効になる）', () => {
   const src = readAppSrc();
   const lines = stripCommentLines(src).split('\n').map(l => l.trim());

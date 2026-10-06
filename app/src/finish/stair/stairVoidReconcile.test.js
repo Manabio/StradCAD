@@ -8,7 +8,7 @@ import { translateCellSet, collectNeededCLs } from '../floorCLMap.js';
 import { serializeGraph } from '../../graphSnapshot.js';
 import { makeRoomUndefined } from '../roomUndefined.js';
 import { ensureStairRooms } from '../roomReinterpret.js';
-import { reconcileStairVoids } from './stairVoidReconcile.js';
+import { reconcileStairVoids, stairVoidsTouching } from './stairVoidReconcile.js';
 
 // X:[0,1000,2000] Y:[0,1000]（全階共通の通り芯）。per-floor CL H500 を両階に置く（階段の足元の上端）
 function setup({ perFloorCL = true } = {}) {
@@ -345,4 +345,51 @@ test('失敗系: belowGraph が null / graph が null なら throw する（黙�
   const { below, above, sg } = setup();
   assert.throws(() => reconcileStairVoids(above, null, sg), /belowGraph/);
   assert.throws(() => reconcileStairVoids(null, below, sg), /graph/);
+});
+
+// ---- stairVoidsTouching（続きの階段の指定が吸収する吹抜けと、拒否する部分重なりを分ける） ----
+
+function addVoid(g, keys) {
+  const room = g.addRoom(new Set(keys));
+  room.setFeature(RoomFeature.STAIR_VOID);
+  return room;
+}
+
+test('stairVoidsTouching: 吹抜けの全体が cells に含まれれば absorbed（partial=false）。吹抜けより広い cells でも同じ', () => {
+  const { above } = setup();
+  const v = addVoid(above, [leftKey(above)]);
+  const exact = stairVoidsTouching(above, new Set([leftKey(above)]));
+  assert.deepEqual(exact.absorbed.map(r => r.id), [v.id]);
+  assert.equal(exact.partial, false);
+  const wider = stairVoidsTouching(above, new Set([leftKey(above), rightKey(above)]));
+  assert.deepEqual(wider.absorbed.map(r => r.id), [v.id]);
+  assert.equal(wider.partial, false);
+});
+
+test('stairVoidsTouching: 吹抜けの一部だけ重なれば partial=true（absorbed に入れない）', () => {
+  const { above } = setup();
+  addVoid(above, [leftKey(above), rightKey(above)]);
+  const r = stairVoidsTouching(above, new Set([leftKey(above)]));
+  assert.deepEqual(r.absorbed, []);
+  assert.equal(r.partial, true);
+});
+
+test('stairVoidsTouching: 全体を含む吹抜けと部分重なりの吹抜けが混在すれば absorbed と partial の両方が出る', () => {
+  const { above } = setup();
+  above.addCenterLine(CenterLineType.HORIZONTAL, 500, { labeled: false, discipline: Discipline.ARCH });
+  const lowerLeft = worldToCell(500, 750, above).key;
+  const whole = addVoid(above, [leftKey(above)]);
+  addVoid(above, [rightKey(above), lowerLeft]);
+  const r = stairVoidsTouching(above, new Set([leftKey(above), rightKey(above)]));
+  assert.deepEqual(r.absorbed.map(x => x.id), [whole.id]);
+  assert.equal(r.partial, true);
+});
+
+test('【失敗系】stairVoidsTouching: 重ならない吹抜け・吹抜けでない部屋・吹抜けが無い階は、どちらにも入らない', () => {
+  const { above } = setup();
+  assert.deepEqual(stairVoidsTouching(above, new Set([leftKey(above)])), { absorbed: [], partial: false }, '吹抜けが無い');
+  addVoid(above, [rightKey(above)]);
+  above.addRoom(new Set([leftKey(above)]), '居間');
+  assert.deepEqual(stairVoidsTouching(above, new Set([leftKey(above)])), { absorbed: [], partial: false }, '重ならない吹抜け・通常の部屋は無視');
+  assert.deepEqual(stairVoidsTouching(above, new Set()), { absorbed: [], partial: false }, 'cells が空');
 });

@@ -149,3 +149,26 @@ export function reconcileStairVoids(graph, belowGraph, structGraph) {
   }
   return result;
 }
+
+/**
+ * cells（候補の部屋のセル）に触れる階段吹抜け（STAIR_VOID）を、全体が含まれるものと一部だけ重なるものに分ける
+ * （純関数・読むだけ）。続きの階段の指定（FinishModeState.applyNaming）が、吸収してよい吹抜けと
+ * 拒否すべき部分的な重なりを見分けるのに使う。両辺を refreshCells で現行グリッドの原子セルへ展開して比べる。
+ * 重ならない吹抜けはどちらにも入らない。展開後が空の吹抜けは触れていないとみなす。
+ * @returns {{ absorbed: Array<object>, partial: boolean }} absorbed＝セルが全部 cells に含まれる吹抜け
+ */
+export function stairVoidsTouching(graph, cells) {
+  const mine = refreshCells(cells, graph);
+  const absorbed = [];
+  let partial = false;
+  for (const room of graph.rooms) {
+    if (room.feature !== RoomFeature.STAIR_VOID) continue;
+    const own = refreshCells(room.cells, graph);
+    if (own.size === 0) continue;
+    const hit = [...own].filter(k => mine.has(k)).length;
+    if (hit === 0) continue;
+    if (hit === own.size) absorbed.push(room);
+    else partial = true;
+  }
+  return { absorbed, partial };
+}
