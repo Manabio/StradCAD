@@ -73,6 +73,9 @@ export async function openDocumentFileTarget(fileName = defaultDocumentFileName(
       return { kind: 'handle', handle, name: handle.name };
     } catch (e) {
       if (e && e.name === 'AbortError') return null;
+      // SecurityError（user activation 切れ・iframe 内）等はダウンロードへ切り替えず失敗として伝える
+      // （ユーザー裁定2026-10-07 案A。呼び出し順は同期で activation は切れないはずで、切れたらバグ。
+      // 退避で隠さず「保存に失敗」で気づけるようにする）。
       throw e;
     }
   }
