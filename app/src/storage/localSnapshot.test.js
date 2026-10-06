@@ -1,11 +1,12 @@
 // 読込みファイル名（localSnapshot.js）の単体テスト。localStorage は最小スタブ。
 // importDocument / resetAll は store.js（IDB 依存）を実行せず、既存前例
 // （catalog/catalogRegistryWiring.test.js）に倣いソース文字列で配線を検査する。
-import { test, beforeEach } from 'node:test';
+import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   getOpenedFileName, setOpenedFileName, clearOpenedFileName, saveNameFromOpenedFileName,
+  openDocumentFileTarget, writeDocumentFileTarget,
 } from './localSnapshot.js';
 
 const mem = new Map();
@@ -34,6 +35,86 @@ test('get/set/clear: 未設定は null、往復、クリアで null に戻る', 
   assert.equal(getOpenedFileName(), '家.stq');
   clearOpenedFileName();
   assert.equal(getOpenedFileName(), null);
+});
+
+function stubPicker(impl) {
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: impl ? { showSaveFilePicker: impl } : {} });
+}
+afterEach(() => { delete globalThis.window; delete globalThis.document; });
+
+test('openDocumentFileTarget: ピッカー対応なら .stq を補った suggestedName を渡し、確定名はハンドルの name', async () => {
+  let opts;
+  stubPicker(async (o) => { opts = o; return { name: '家 (1).stq' }; });
+  const t = await openDocumentFileTarget('家');
+  assert.equal(opts.suggestedName, '家.stq');
+  assert.equal(t.kind, 'handle');
+  assert.equal(t.name, '家 (1).stq');
+});
+
+test('writeDocumentFileTarget: handle は createWritable へ json を write して close', async () => {
+  const calls = [];
+  const handle = { name: 'a.stq', createWritable: async () => ({ write: async (j) => calls.push(['w', j]), close: async () => calls.push(['c']) }) };
+  await writeDocumentFileTarget({ kind: 'handle', handle, name: 'a.stq' }, '{"x":1}');
+  assert.deepEqual(calls, [['w', '{"x":1}'], ['c']]);
+});
+
+test('writeDocumentFileTarget: write が失敗したら例外を伝え、ストリームを abort して close しない', async () => {
+  const calls = [];
+  const handle = { name: 'a.stq', createWritable: async () => ({
+    write: async () => { throw new Error('disk'); },
+    close: async () => calls.push('close'),
+    abort: async () => calls.push('abort'),
+  }) };
+  await assert.rejects(() => writeDocumentFileTarget({ kind: 'handle', handle, name: 'a.stq' }, '{}'), /disk/);
+  assert.deepEqual(calls, ['abort']);
+});
+
+test('writeDocumentFileTarget: createWritable が失敗したら例外を伝える', async () => {
+  const handle = { name: 'a.stq', createWritable: async () => { throw new Error('denied'); } };
+  await assert.rejects(() => writeDocumentFileTarget({ kind: 'handle', handle, name: 'a.stq' }, '{}'), /denied/);
+});
+
+test('openDocumentFileTarget: AbortError は null、他の例外は throw', async () => {
+  stubPicker(async () => { const e = new Error('x'); e.name = 'AbortError'; throw e; });
+  assert.equal(await openDocumentFileTarget('家'), null);
+  stubPicker(async () => { throw new Error('boom'); });
+  await assert.rejects(() => openDocumentFileTarget('家'), /boom/);
+});
+
+test('非対応ブラウザ: kind download・要求名、書込みは a.download に .stq 名', async () => {
+  stubPicker(null);
+  const t = await openDocumentFileTarget('家');
+  assert.deepEqual(t, { kind: 'download', name: '家.stq' });
+  const a = { click() {}, remove() {} };
+  globalThis.document = { createElement: () => a, body: { appendChild() {} } };
+  const origURL = { c: URL.createObjectURL, r: URL.revokeObjectURL };
+  URL.createObjectURL = () => 'blob:x'; URL.revokeObjectURL = () => {};
+  try {
+    await writeDocumentFileTarget(t, '{}');
+  } finally { URL.createObjectURL = origURL.c; URL.revokeObjectURL = origURL.r; }
+  assert.equal(a.download, '家.stq');
+});
+
+const appSrc = fs.readFileSync(new URL('../App.jsx', import.meta.url), 'utf8');
+
+test('App.jsx: handleSaveConfirm はピッカーを exportDocument より前に呼び、確定名を保存・表示へ反映', () => {
+  const m = /async function handleSaveConfirm\(fileName\) \{([\s\S]*?)\r?\n {2}\}\r?\n/.exec(appSrc);
+  assert.ok(m, 'handleSaveConfirm が見つからない');
+  const body = m[1];
+  const openIdx   = body.indexOf('openDocumentFileTarget(');
+  const cancelIdx = body.search(/if \(!target\) return;/);
+  const idleIdx   = body.indexOf('structuralSync.whenIdle(');
+  const exportIdx = body.indexOf('exportDocument(');
+  const writeIdx  = body.indexOf('writeDocumentFileTarget(');
+  const nameIdx   = body.indexOf('setOpenedFileName(target.name)');
+  const stateIdx  = body.indexOf('setOpenedFileNameState(target.name)');
+  for (const [k, v] of Object.entries({ openIdx, cancelIdx, idleIdx, exportIdx, writeIdx, nameIdx, stateIdx })) {
+    assert.ok(v >= 0, `${k} が見つからない`);
+  }
+  // ピッカー → 取消の早期 return → 構造同期待ち → export → 書込み → （成功後に）名前の更新、の順
+  assert.ok(openIdx < cancelIdx && cancelIdx < idleIdx, '取消の return はピッカー直後・whenIdle より前');
+  assert.ok(idleIdx < exportIdx && exportIdx < writeIdx, 'whenIdle → exportDocument → 書込み の順');
+  assert.ok(writeIdx < nameIdx && writeIdx < stateIdx, 'ファイル名の更新は書込みの後（失敗時に更新しない）');
 });
 
 const storeSrc = fs.readFileSync(new URL('../store.js', import.meta.url), 'utf8');

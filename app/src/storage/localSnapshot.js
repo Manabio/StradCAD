@@ -12,8 +12,8 @@ export function clearLocalAutosave() {
   localStorage.removeItem(LEGACY_AUTOSAVE_KEY);
 }
 
-// 「読込み」した文書ファイル名（File.name そのまま・拡張子付き）の localStorage キー。読込みは
-// location.reload() を伴うため reload をまたいで残す。キー文字列の唯一の所有者はこのモジュール。
+// オープン中の文書ファイル名（読込みした File.name、または保存で確定した名前。拡張子付き）の
+// localStorage キー。読込みは location.reload() を伴うため reload をまたいで残す。キー文字列の唯一の所有者はこのモジュール。
 const OPENED_FILE_NAME_KEY = 'strad-opened-file-name';
 
 // 読込みした文書ファイル名。未設定なら null。
@@ -55,6 +55,45 @@ export function downloadDocumentFile(json, fileName = defaultDocumentFileName())
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+// 保存先の確定（2段階）。showSaveFilePicker は transient user activation を要するため、
+// 呼び出し側は時間のかかる await（構造同期待ち・exportDocument）より前に openDocumentFileTarget を呼ぶこと。
+// 書込み（writeDocumentFileTarget）は後でよい。
+// 戻り値: { kind:'handle', handle, name } = 実際に保存される名前（ブラウザが「(1)」等を付けた名前を含む）／
+//   { kind:'download', name } = 非対応ブラウザ（実名は取得不能なので要求名）／null = ユーザーが取消。
+export async function openDocumentFileTarget(fileName = defaultDocumentFileName()) {
+  const requested = fileName.endsWith('.stq') ? fileName : `${fileName}.stq`;
+  if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: requested,
+        types: [{ description: 'strad 文書', accept: { 'application/json': ['.stq'] } }],
+      });
+      return { kind: 'handle', handle, name: handle.name };
+    } catch (e) {
+      if (e && e.name === 'AbortError') return null;
+      throw e;
+    }
+  }
+  return { kind: 'download', name: requested };
+}
+
+// openDocumentFileTarget で得た保存先へ json を書き込む。書込み途中の失敗（ディスク満杯・権限取消等）は
+// ストリームを abort（一時ファイルを残さない）してから例外を伝える。呼び出し側はその場合ファイル名を更新しないこと。
+export async function writeDocumentFileTarget(target, json) {
+  if (target.kind === 'handle') {
+    const w = await target.handle.createWritable();
+    try {
+      await w.write(json);
+      await w.close();
+    } catch (e) {
+      await w.abort?.();
+      throw e;
+    }
+    return;
+  }
+  downloadDocumentFile(json, target.name);
 }
 
 // 「ファイルを開く」で読み込んだバイト列（JSON=旧形式 or FlatBuffers=新形式）を

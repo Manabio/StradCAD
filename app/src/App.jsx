@@ -70,7 +70,7 @@ import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
 import { floorWriteGeneration } from './storage/floorWriteGeneration.js';
 import { createFinishExitStamps } from './finish/finishExitStamp.js';
-import { parseOpenedFileBytes, downloadDocumentFile, defaultDocumentFileName, getOpenedFileName, saveNameFromOpenedFileName } from './storage/localSnapshot.js';
+import { parseOpenedFileBytes, openDocumentFileTarget, writeDocumentFileTarget, defaultDocumentFileName, getOpenedFileName, setOpenedFileName, saveNameFromOpenedFileName } from './storage/localSnapshot.js';
 import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { isDocumentEnvelope } from './storage/documentFile.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
@@ -156,7 +156,7 @@ const App = observer(() => {
   const [showCalibration, setShowCalibration] = useState(false);
   const [showSiteDialog,  setShowSiteDialog]  = useState(false);
   const [saveDialogDefaultName, setSaveDialogDefaultName] = useState(null); // 非null=保存ファイル名ダイアログ表示中
-  const [openedFileName] = useState(getOpenedFileName); // 読込みしたファイル名（読込みは reload を伴うので起動時に1回読めばよい）
+  const [openedFileName, setOpenedFileNameState] = useState(getOpenedFileName); // オープン中のファイル名（読込みで設定・保存で確定名に更新。読込みは reload を伴うので起動時に1回読む）
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
   const [CatalogMaintenancePanelComp, setCatalogMaintenancePanelComp] = useState(null); // 動的import済みのパネル本体（null=未ロード/非表示）
   const [CatalogResolveDialogComp, setCatalogResolveDialogComp] = useState(null); // 指示UI（ステップ6-3）ダイアログ本体（動的import済み。null=未ロード/非表示）
@@ -1889,16 +1889,22 @@ const App = observer(() => {
     beginUiTransition();
     await runBusy('保存', async () => {
       try {
+        // 保存先の確定（ピッカー）は user activation を要するため、関門に入った直後（runBusy は fn を
+        // 同期で呼ぶ）・時間のかかる await（whenIdle・exportDocument）より前に行う。ピッカー表示中も関門の中。
+        const target = await openDocumentFileTarget(fileName);
+        if (!target) return; // 取消
         // 実行中の構造同期（建具・通り芯削除起因）が完了する前に保存すると、途中状態を書き出したうえで
         // clearDirty（未保存扱いの解除）してしまう（structural/structuralSync.js参照）。関門の中で待つ
         // （不変条件3。関門の外で待つと待ち時間中の入力が塞がれない）。
         await structuralSync.whenIdle();
         const json = await exportDocument();
-        downloadDocumentFile(json, fileName);
+        await writeDocumentFileTarget(target, json);
+        setOpenedFileName(target.name);
+        setOpenedFileNameState(target.name);
         setToast({ msg: '保存しました', key: Date.now() });
       } catch (e) {
         // 固有文言を保つため自前でcatchする（performUndoと同じ前例。内部呼び出し元は無い）
-        console.error('[保存] exportDocument failed:', e);
+        console.error('[保存] failed:', e);
         setToast({ msg: '保存に失敗しました', key: Date.now() });
       }
     });
