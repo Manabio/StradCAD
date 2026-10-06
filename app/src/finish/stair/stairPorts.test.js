@@ -531,6 +531,99 @@ test('床の確認（矩折）: 上り口は自階、到達口は上階の隣が
   assert.deepEqual(stairPortCandidates(stair, graph, 'arrival', { floorGraph: up.graph }).sides, [END, RIGHT], '西が吹抜けなら左（西）は候補外');
 });
 
+// ---- 到達口の床の未確認扱い（上階の部屋割り前）----
+
+test('床の確認（到達口・上階の部屋割り前）: 隣が全部部屋なしなら幾何だけの候補・floorChecked=false（U字・直進・矩折）。上り口は変わらない', () => {
+  // U字（等長 2 行）: 到達口は a2（下辺・左辺・内側が隣）。上階は足元に部屋なし
+  const u = equalRows();
+  const uStair = addByOrder(u.graph, u.order.map(n => u.c[n]));
+  uStair.setField('sections', [8, 5, 8]);
+  const none = world();
+  assert.deepEqual(stairPortCandidates(uStair, u.graph, 'arrival', { floorGraph: none.graph }), { sides: [END, RIGHT], floorChecked: false }, 'U字: 部屋が1つも無い');
+  const far = world();
+  room(far, 3, 0); // 足元から離れた部屋だけ（graph に部屋はあるが隣は全部部屋なし）
+  assert.deepEqual(stairPortCandidates(uStair, u.graph, 'arrival', { floorGraph: far.graph }), { sides: [END, RIGHT], floorChecked: false }, 'U字: 離れた部屋だけ');
+  // 上り口は自階: 隣に部屋が無ければ現行どおり床なし＝候補外・floorChecked=true
+  assert.deepEqual(stairPortCandidates(uStair, u.graph, 'entry', { floorGraph: none.graph }), { sides: [], floorChecked: true }, 'U字: 上り口は未確認扱いにしない');
+
+  // 直進（3 行）: 到達口＝最上行
+  const { graph: sg, stair: sStair } = straightStair(ROWS3);
+  const sNone = world();
+  assert.deepEqual(stairPortCandidates(sStair, sg, 'arrival', { floorGraph: sNone.graph }), { sides: [END, LEFT, RIGHT], floorChecked: false }, '直進: 部屋が1つも無い');
+  const sFar = world();
+  room(sFar, 3, 4);
+  assert.deepEqual(stairPortCandidates(sStair, sg, 'arrival', { floorGraph: sFar.graph }).floorChecked, false, '直進: 離れた部屋だけ');
+  assert.deepEqual(stairPortCandidates(sStair, sg, 'entry', { floorGraph: sNone.graph }), { sides: [], floorChecked: true }, '直進: 上り口は変わらない');
+
+  // 矩折（3 行ずつ）: 到達口＝アーム2の末端の行
+  const { graph: lg, stair: lStair } = lTurnStair();
+  const wide = () => grid([-1000, 0, 1000, 2000, 3000, 4000, 5000, 6000], [-1000, 0, 1000, 2000, 3000, 4000, 5000, 6000]);
+  assert.deepEqual(stairPortCandidates(lStair, lg, 'arrival', { floorGraph: wide().graph }), { sides: [END, LEFT, RIGHT], floorChecked: false }, '矩折: 部屋が1つも無い');
+  const lFar = wide();
+  room(lFar, 0, 6);
+  assert.deepEqual(stairPortCandidates(lStair, lg, 'arrival', { floorGraph: lFar.graph }).floorChecked, false, '矩折: 離れた部屋だけ');
+  assert.deepEqual(stairPortCandidates(lStair, lg, 'entry', { floorGraph: wide().graph }), { sides: [], floorChecked: true }, '矩折: 上り口は変わらない');
+});
+
+test('床の確認（到達口・本番形）: N+1 に足元と同 footprint の STAIR_VOID だけ→未確認扱い。STAIR_VOID＋隣に床の部屋1つ→床で絞る', () => {
+  // 足元と同 footprint の STAIR_VOID を置く（world の格子は x -1000〜、y -1000〜。cell(i,j) は x=-1000+1000i, y=-1000+1000j）
+  const voidOf = (w, cols, rows) => {
+    const keys = new Set();
+    for (const i of cols) for (const j of rows) keys.add(w.cell(i, j));
+    w.graph.addRoom(keys).setFeature(RoomFeature.STAIR_VOID);
+  };
+  // U字（x 0〜2000, y 0〜3000）
+  const u = equalRows();
+  const uStair = addByOrder(u.graph, u.order.map(n => u.c[n]));
+  uStair.setField('sections', [8, 5, 8]);
+  const wu = world();
+  voidOf(wu, [1, 2], [1, 2, 3]);
+  assert.deepEqual(stairPortCandidates(uStair, u.graph, 'arrival', { floorGraph: wu.graph }), { sides: [END, RIGHT], floorChecked: false }, 'U字: STAIR_VOID だけ');
+  const wu2 = world();
+  voidOf(wu2, [1, 2], [1, 2, 3]);
+  room(wu2, 1, 4);
+  assert.deepEqual(stairPortCandidates(uStair, u.graph, 'arrival', { floorGraph: wu2.graph }), { sides: [END], floorChecked: true }, 'U字: 隣の床の部屋が1つ→床で絞る');
+  // 足元の外へはみ出した STAIR_VOID（走行端の下 y 3000〜4000 まで）が隣にあっても部屋割りの手がかりにしない
+  const wu3 = world();
+  voidOf(wu3, [1, 2], [1, 2, 3, 4]);
+  assert.deepEqual(stairPortCandidates(uStair, u.graph, 'arrival', { floorGraph: wu3.graph }), { sides: [END, RIGHT], floorChecked: false }, 'U字: はみ出した STAIR_VOID');
+  // 直進（x 0〜1000, y 0〜3000）
+  const { graph: sg, stair: sStair } = straightStair(ROWS3);
+  const ws = world();
+  voidOf(ws, [1], [1, 2, 3]);
+  assert.deepEqual(stairPortCandidates(sStair, sg, 'arrival', { floorGraph: ws.graph }), { sides: [END, LEFT, RIGHT], floorChecked: false }, '直進: STAIR_VOID だけ');
+  const ws2 = world();
+  voidOf(ws2, [1], [1, 2, 3]);
+  room(ws2, 1, 0);
+  assert.deepEqual(stairPortCandidates(sStair, sg, 'arrival', { floorGraph: ws2.graph }), { sides: [END], floorChecked: true }, '直進: 隣の床の部屋が1つ→床で絞る');
+  // 矩折（x 0〜4000, y 0〜4000 のうち L 字の 7 セル）
+  const { graph: lg, stair: lStair } = lTurnStair();
+  const wide = () => grid([-1000, 0, 1000, 2000, 3000, 4000, 5000, 6000], [-1000, 0, 1000, 2000, 3000, 4000, 5000, 6000]);
+  const lVoid = (w) => {
+    const keys = new Set();
+    for (const i of [1, 2, 3, 4]) keys.add(w.cell(i, 4)); // アーム1＋コーナー（y 3000〜4000, x 0〜4000）
+    for (const j of [1, 2, 3]) keys.add(w.cell(4, j));    // アーム2（x 3000〜4000, y 0〜3000）
+    w.graph.addRoom(keys).setFeature(RoomFeature.STAIR_VOID);
+  };
+  const wl = wide();
+  lVoid(wl);
+  assert.deepEqual(stairPortCandidates(lStair, lg, 'arrival', { floorGraph: wl.graph }), { sides: [END, LEFT, RIGHT], floorChecked: false }, '矩折: STAIR_VOID だけ');
+  const wl2 = wide();
+  lVoid(wl2);
+  room(wl2, 4, 0); // 到達口の走行端の外（北）に床の部屋
+  const r = stairPortCandidates(lStair, lg, 'arrival', { floorGraph: wl2.graph });
+  assert.equal(r.floorChecked, true, '矩折: 隣の床の部屋が1つ→床で絞る');
+  assert.deepEqual(r.sides, [END], '矩折: 部屋のある辺（end）だけ');
+});
+
+test('床の確認（到達口）: 隣に部屋が1つでもあれば現行どおり床で絞る（部屋なしの辺は床なし）', () => {
+  const { graph, stair } = straightStair(ROWS3);
+  // 到達口の隣: 左（列 0・行 1）・右（列 2・行 1）・上（列 1・行 0）。上だけ部屋がある
+  const up = world();
+  room(up, 1, 0);
+  assert.deepEqual(stairPortCandidates(stair, graph, 'arrival', { floorGraph: up.graph }), { sides: [END], floorChecked: true });
+});
+
 test('候補（矩折）: 曲がり階段（FLARED）は buildLTurn を共有するが end だけ（出入口は走行端固定）。resolvePorts は null、portZoneLen は 0', () => {
   const { graph, stair } = lTurnStair({ sections: [6, 2, 10], entrySide: LEFT }, { type: StairType.FLARED });
   assert.deepEqual(stairPortCandidates(stair, graph, 'entry'), { sides: [END], floorChecked: false });

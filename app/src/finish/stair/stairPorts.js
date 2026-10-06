@@ -311,7 +311,8 @@ function makeEdgesOk(stair, graph, f, floorGraph) {
   };
   const cellToRoom = floorGraph ? buildEnclosureCellToRoom(floorGraph) : null;
   // 辺の外側（dt,ds の向き）の隣が床か
-  const floorOutside = (ta, sa, tb, sb, dt, ds) => {
+  // 区間ごとの隣の部屋（なし=null）を返す。floorOutside と未確認判定が共有する。
+  const outsideRooms = (ta, sa, tb, sb, dt, ds) => {
     const pa = f.pt(ta, sa), pb = f.pt(tb, sb);
     const tm = (ta + tb) / 2, sm = (sa + sb) / 2;
     const p0 = f.pt(tm, sm), p1 = f.pt(tm + dt * 0.01, sm + ds * 0.01);
@@ -322,17 +323,32 @@ function makeEdgesOk(stair, graph, f, floorGraph) {
     const hi = vertical ? Math.max(pa.y, pb.y) : Math.max(pa.x, pb.x);
     const grid = gridIndexOf(floorGraph);
     const cuts = [lo, ...(vertical ? grid.yValues : grid.xValues).filter(v => v > lo + EDGE_EPS_MM && v < hi - EDGE_EPS_MM).sort((x, y) => x - y), hi];
+    const rooms = [];
     for (let i = 0; i + 1 < cuts.length; i++) {
       const m = (cuts[i] + cuts[i + 1]) / 2;
       const px = (vertical ? p0.x : m) + ox, py = (vertical ? m : p0.y) + oy;
       const cell = worldToCell(px, py, floorGraph);
-      if (!hasFloor(cell ? cellToRoom.get(cell.key) : null)) return false;
+      rooms.push(cell ? cellToRoom.get(cell.key) ?? null : null);
     }
-    return true;
+    return rooms;
   };
-  return (edges) => edges.length > 0 && edges.every(e =>
+  const floorOutside = (ta, sa, tb, sb, dt, ds) => outsideRooms(ta, sa, tb, sb, dt, ds).every(hasFloor);
+  let skipFloor = false;
+  const edgesOk = (edges) => edges.length > 0 && edges.every(e =>
     onOutline(f.pt(e.ta, e.sa), f.pt(e.tb, e.sb))
-    && (!floorGraph || floorOutside(e.ta, e.sa, e.tb, e.sb, e.dt, e.ds)));
+    && (!floorGraph || skipFloor || floorOutside(e.ta, e.sa, e.tb, e.sb, e.dt, e.ds)));
+  // 上階の部屋割り前の判定: 調べる辺（edgeLists の全辺・全区間）の隣に部屋が1つも無ければ「床は未確認」として
+  // 以後の edgesOk の床判定を外し、false を返す（＝floorChecked=false）。部屋が1つでもあれば true（床で絞る）。
+  edgesOk.confirmFloor = (edgeLists) => {
+    if (!floorGraph) return false;
+    // 調べるのは外周の辺（他の階段セルと共有しない）だけ。内側の辺の隣は足元の階段吹抜けに当たる。
+    // 階段吹抜けは足元の外へはみ出していても部屋割りの手がかりにしない。
+    const anyRoom = edgeLists.flat().filter(e => onOutline(f.pt(e.ta, e.sa), f.pt(e.tb, e.sb))).some(e =>
+      outsideRooms(e.ta, e.sa, e.tb, e.sb, e.dt, e.ds).some(r => !!r && r.feature !== RoomFeature.STAIR_VOID));
+    if (!anyRoom) skipFloor = true;
+    return anyRoom;
+  };
+  return edgesOk;
 }
 
 // 取りつき蹴上を足しても直進部が MIN_RUN_RISERS 以上残るか（portSideChange と同じ判定）。
@@ -347,7 +363,6 @@ function stepsRemainOk(stair, port, zoneMm) {
 
 // 直進系: 区画は先頭の行（上り口）・末尾の行（到達口）。辺 end は行の走行端、側面は行のセルの側辺。
 function straightPortCandidates(stair, graph, port, floorGraph) {
-  const floorChecked = !!floorGraph;
   const fallback = { sides: [StairPortSide.END], floorChecked: false };
   const info = straightPortInfoOf(measureStairSpans(stair, graph));
   const rows = straightEndRows(stair, graph);
@@ -374,6 +389,8 @@ function straightPortCandidates(stair, graph, port, floorGraph) {
       tb: isEntry ? Math.min(c.tFar, tExit) : c.tFar, sb: line, dt: 0, ds,
     }));
 
+  // 到達口は上階の部屋割り前（隣が全部部屋なし）なら床は未確認
+  const floorChecked = isEntry ? !!floorGraph : edgesOk.confirmFloor([endEdges, sideEdges(0, -1), sideEdges(1, 1)]);
   const sides = [];
   if (edgesOk(endEdges)) sides.push(StairPortSide.END);
   if (hasZone && straightRemains && stepsRemainOk(stair, port, zoneMm)) {
@@ -390,7 +407,6 @@ function straightPortCandidates(stair, graph, port, floorGraph) {
 // 側面はアームの幅方向の外周側（高い側 v=1／u=1）と空象限側（低い側 v=runV／u=runU）。辺は正規化座標 (u,v) を
 // (t,s) として makeEdgesOk へ渡す（f.pt が (u,v)→world）。他の階段セルと共有する辺は外形線分上でないので自動で外れる。
 function lTurnPortCandidates(stair, graph, port, floorGraph) {
-  const floorChecked = !!floorGraph;
   const fallback = { sides: [StairPortSide.END], floorChecked: false };
   const info = lTurnPortInfoOf(measureStairSpans(stair, graph));
   const rows = lTurnEndRows(stair, graph);
@@ -420,6 +436,7 @@ function lTurnPortCandidates(stair, graph, port, floorGraph) {
     loEdges = side(c => c.uLo <= runU + eU, runU, -1);
   }
 
+  const floorChecked = isEntry ? !!floorGraph : edgesOk.confirmFloor([endEdges, hiEdges, loEdges]);
   const sides = [];
   if (edgesOk(endEdges)) sides.push(StairPortSide.END);
   if (hasZone && straightRemains && stepsRemainOk(stair, port, zoneMm)) {
@@ -448,7 +465,6 @@ function lTurnPortCandidates(stair, graph, port, floorGraph) {
 export function stairPortCandidates(stair, graph, port, { floorGraph = null } = {}) {
   if (!stair || !graph) throw new Error('stairPortCandidates: stair と graph が必要');
   checkPort(port);
-  const floorChecked = !!floorGraph;
   const fallback = { sides: [StairPortSide.END], floorChecked: false };
   if (STRAIGHT_TYPES.has(stair.type)) return straightPortCandidates(stair, graph, port, floorGraph);
   if (L_TURN_TYPES.has(stair.type)) return lTurnPortCandidates(stair, graph, port, floorGraph);
@@ -486,6 +502,8 @@ export function stairPortCandidates(stair, graph, port, { floorGraph = null } = 
   const stepsOk = () => stepsRemainOk(stair, port, z.zoneLen);
   const straightRemains = z.longer || z.laneLen - z.zoneLen > PORT_EPS_MM;
 
+  const isEntry = port === 'entry';
+  const floorChecked = isEntry ? !!floorGraph : edgesOk.confirmFloor([endEdges, outerEdges, innerEdges]);
   const sides = [];
   if (edgesOk(endEdges)) sides.push(StairPortSide.END);
   const consider = (edges, s, isInner) => {
