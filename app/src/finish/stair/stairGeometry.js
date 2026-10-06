@@ -204,16 +204,40 @@ const WALL_BASE  = DEFAULT_WALL_BASE;                        // mm — 既定壁
 const WALL_INSET = WALL_BASE / 2 + DEFAULT_WALL_FINISH;       // mm — 中心線から壁仕上げ面まで逃げる量
 // （壁生成側の offset = wallBase/2 + wallFinish と同一規約。踏面・外周とも壁仕上げ面どまりにする）
 
+// 上り口が側面（取りつき回転部。区画の基端は閉じた壁）か。走行端（開口）は false。
+// buildStraight / buildStraightLanding / uTurnLayout / buildLTurn が使うのと同じ解決（spans が無ければ false）。
+function entryIsSidePort(stair, spans) {
+  switch (stair.type) {
+    case StairType.STRAIGHT:
+      return straightPortsOf(stair, spans)?.entry === 'side';
+    case StairType.STRAIGHT_LANDING:
+      return !!measuredLengths(spans, 3) && straightPortsOf(stair, spans)?.entry === 'side';
+    case StairType.SWITCHBACK:
+    case StairType.WINDING: {
+      // 自動（null）でも張り出すレーンは内側（隣レーン側）の側面になるため hasSidePort では判定しない
+      const ms = measuredLengths(spans, 3);
+      if (!ms) return false;
+      const ports = resolveUTurnPorts(stair, { laneLenA: ms[0], laneLenB: ms[2], firstRowA: spans?.firstRowA, firstRowB: spans?.firstRowB });
+      return ports.entry !== 'end';
+    }
+    case StairType.L_TURN:
+      return lTurnPortsOf(stair, spans)?.entry === 'side';
+    default:
+      return false;
+  }
+}
+
 // 設置エリア矩形 b の各辺を、隣接壁の中心線から壁厚/2だけ内側へ逃がす。
 // 幅方向（走行方向に直交する両側線）は常に逃がす。走行方向の2辺（始端=登り口／終端=上階到達）は、
 // 設置階（install）は登り口を除く終端のみ、設置階上階（upper）は登り口・終端とも逃がす。
+// ただし上り口が側面（spans で解決。区画の基端は壁）なら install でも始端を逃がす（upper と同じ枠）。
 // graph を渡すと、逃がす先を faceRect(refreshCells(stair.cells, graph), graph) の実壁面
 // （壁が生成済みの辺のみ）に差し替える——CL偏芯で壁位置が変わっても取り合う（機能1）。
 // faceRect が退化矩形として null を返した場合（F8）も含め、壁が無い・解決不能な辺は
 // 従来どおり固定 WALL_INSET へフォールバックする。view別ルールは graph の有無で変えない。
 // 戻り値の sideInsetMm は幅方向の実際の逃げ量（graph 無指定・壁無しは WALL_INSET）の
 // 最大値——resolveStairSideLines が snapToFootprintEdge の許容差を動的に決めるのに使う（F2）。
-export function insetStairBounds(stair, b, view, graph = null) {
+export function insetStairBounds(stair, b, view, graph = null, spans = null) {
   const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
   const face = graph ? faceRect(refreshCells(stair.cells, graph), graph) : null;
   const faceOr = (hasWall, faceVal, fallback) => (face && hasWall) ? faceVal : fallback;
@@ -228,7 +252,8 @@ export function insetStairBounds(stair, b, view, graph = null) {
     y2 = faceOr(face?.hasWall.bottom, face?.y2, y2 - WALL_INSET);
     sideInsetMm = Math.max(y1 - b.y1, b.y2 - y2);
   }
-  const insetEntry = view !== 'install';
+  // 始端は install では開口（走行端の上り口）なので逃がさない。上り口が側面なら区画の基端は壁なので upper と同じく壁表面で止める
+  const insetEntry = view !== 'install' || entryIsSidePort(stair, spans);
   switch (stair.upDirection) {
     case 'down':  // 始端=y1 終端=y2
       if (insetEntry) y1 = faceOr(face?.hasWall.top,    face?.y1, y1 + WALL_INSET);
@@ -1366,7 +1391,7 @@ export function buildStairGeometry(stair, b, opts) {
   // insetView … 設置枠の逃がし規則だけ別ビューのものを使う（既定は view と同じ）。
   // install の破れ線から先を upper ジオメトリで描き足すとき、登り口辺の逃がしが view で
   // 食い違うと実線（install）と点線（描き足し）が同一辺上で段差になるため、そこだけ揃える。
-  const { sideInsetMm, ...bi } = insetStairBounds(stair, b, opts.insetView ?? opts.view, opts.graph ?? null);
+  const { sideInsetMm, ...bi } = insetStairBounds(stair, b, opts.insetView ?? opts.view, opts.graph ?? null, opts.spans ?? null);
   let geom;
   if (stair.type === StairType.STRAIGHT_LANDING) geom = buildStraightLanding(stair, bi, opts);
   else if (stair.type === StairType.SWITCHBACK)  geom = buildSwitchback(stair, bi, opts);

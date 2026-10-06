@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StairPortSide } from '@core';
 import { classifyStairArea, measureStairSpans } from './stairClassify.js';
-import { stairPortEdges, buildStairGeometry, resolveUTurnPorts, stairSegmentDims, cellsBeyondBreak } from './stairGeometry.js';
+import { stairPortEdges, buildStairGeometry, insetStairBounds, resolveUTurnPorts, stairSegmentDims, cellsBeyondBreak } from './stairGeometry.js';
 import { portSideChange, resetPortSides, alignPortTurnSteps } from './stairSectionEdit.js';
 import { roomBounds } from '../gridCells.js';
 import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
@@ -48,7 +48,9 @@ test('往路が長い f,b,c,d,a: 上り口の既定は内側＝f の左辺（e �
   assert.deepEqual(edge(stair, graph, 'arrival'), [{ isVertical: false, value: 2000, lo: 0, hi: 1000 }]);
   // 矢印（U）は f の左辺の中点 (1000, 2500) から横向きに入る
   const arrow = geom(stair, graph, 'install').arrows[0];
-  assert.deepEqual([arrow.x1, arrow.y1], [1000, 2500]);
+  // 上り口が側面なので install でも基端は壁表面（y=3000−57.5）で止まり、辺の中点は 2500 より 28.75 mm 内側
+  assert.equal(arrow.x1, 1000);
+  assert.ok(Math.abs(arrow.y1 - 2500) <= 60, `${arrow.y1}`);
   near(arrow.points.slice(0, 4), [1000, 2500, 1500, 2500]);
   // f の下辺（走行端）は出入口ではなく側面線になる
   const bottom = geom(stair, graph, 'upper').outline.find(s => Math.abs(s.y1 - s.y2) < 1e-9 && Math.abs(s.y1 - 3000) < 60);
@@ -367,6 +369,26 @@ test('張り出し区間が 2 行以上でも、側面の出入口は区画の�
   // 走行端は b4 の下辺 1 本（辺の数は走行端を変えない）
   stair.setField('entrySide', StairPortSide.END);
   assert.deepEqual(edge(stair, graph, 'entry'), [{ isVertical: false, value: 5000, lo: 1000, hi: 2000 }]);
+});
+
+test('【install の基端】上り口が側面（自動の内側・右）なら基端は upper と同じく壁表面で止まる。走行端は設置枠の縁（CL）まで', () => {
+  const { graph, c } = overhangTwoRowsLayout();
+  const stair = addByOrder(graph, c, ['b4', 'b3', 'b2', 'b1', 'c', 'd', 'a1', 'a2']);
+  const b = roomBounds(stair.cells, graph);
+  const spans = measureStairSpans(stair, graph);
+  const inset = (view) => insetStairBounds(stair, b, view, null, spans);
+  for (const side of [null, StairPortSide.LEFT, StairPortSide.RIGHT]) {
+    stair.setField('entrySide', side);
+    assert.deepEqual(inset('install'), inset('upper'), `entrySide=${side}`);
+    assert.equal(inset('install').y2, b.y2 - inset('install').sideInsetMm, `entrySide=${side}: 基端は壁表面`);
+    // 放射線の端点も壁表面の枠内
+    const g = buildStairGeometry(stair, b, { view: 'install', detail: true, riser: 200, spans, laneGapMm: 0 });
+    const ys = g.treads.flatMap(t => [t.y1, t.y2]);
+    assert.ok(Math.max(...ys) <= inset('install').y2 + 1e-6 && Math.max(...ys) >= inset('install').y2 - 1e-6, `entrySide=${side}: 最も基端の踏面線の端点は壁表面`);
+  }
+  stair.setField('entrySide', StairPortSide.END);
+  assert.equal(inset('install').y2, b.y2, '走行端は CL のまま（開口）');
+  assert.equal(inset('upper').y2, b.y2 - inset('upper').sideInsetMm, 'upper は従来どおり壁表面');
 });
 
 test('旧語彙の出入口の辺（inner/outer）を保存した文書を読むと null（自動）になる。end/left/right は往復する', () => {

@@ -14,7 +14,7 @@ import { makeFrame } from './stairFrame.js';
 import { roomBounds, cellBoundsFromKey } from '../gridCells.js';
 import { portSideChange, resetPortSides, sectionsForType } from './stairSectionEdit.js';
 
-const { LEFT, RIGHT } = StairPortSide;
+const { LEFT, RIGHT, END } = StairPortSide;
 
 function straight(ys, cols = 2, extra = {}) {
   const graph = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
@@ -32,7 +32,7 @@ const geom = (stair, graph, view, detail = true) => buildStairGeometry(stair, ro
   view, detail, riser: RISER, spans: measureStairSpans(stair, graph), laneGapMm: 0, graph,
 });
 // build が使う（壁厚ぶん inset した）枠
-const frameOf = (stair, graph, view) => makeFrame(stair, insetStairBounds(stair, roomBounds(stair.cells, graph), view, graph));
+const frameOf = (stair, graph, view) => makeFrame(stair, insetStairBounds(stair, roomBounds(stair.cells, graph), view, graph, measureStairSpans(stair, graph)));
 const near = (a, b, tol = 1e-6) => Math.abs(a - b) <= tol;
 // 点 p を端点に持つ斜めの踏面線（扇形の放射線）の本数
 const radialsAt = (g, p) => g.treads.filter(t => (near(t.x1, p.x) && near(t.y1, p.y)) || (near(t.x2, p.x) && near(t.y2, p.y)))
@@ -281,6 +281,45 @@ test('portSideChange（直進）: 総蹴上数を保つ。上り口・到達口�
   assert.equal(portSideChange({ ...s, sections: [5, 1, 4] }, 'entry', LEFT, 1000), null, '区間数が合わない sections');
 });
 
+// 始端（上り口側）の座標。走行方向 up は y2、down は y1、right は x1、left は x2 が始端
+const entryCoord = (dir, bd) => ({ up: bd.y2, down: bd.y1, right: bd.x1, left: bd.x2 })[dir];
+
+test('【install の基端】上り口が側面なら基端（t=0）は upper と同じく壁表面で止まる。走行端（開口）は従来どおり設置枠の縁まで（4方向×flip）', () => {
+  const spans = { lengths: [3000], firstRow: 1000, lastRow: 1000, rowCount: 3 };
+  for (const dir of ['up', 'right', 'down', 'left']) {
+    for (const flip of [false, true]) {
+      const horizontal = dir === 'right' || dir === 'left';
+      const b = horizontal ? { x1: 0, y1: 0, x2: 3000, y2: 2000 } : { x1: 0, y1: 0, x2: 2000, y2: 3000 };
+      const base = { type: StairType.STRAIGHT, upDirection: dir, flip, sections: [11], tread: 250, nosing: 0 };
+      const side = { ...base, entrySide: LEFT, entryTurnSteps: 4 };
+      const name = `${dir} flip=${flip}`;
+      // 側面: install の枠は upper と同じ（始端も壁表面）
+      const inst = insetStairBounds(side, b, 'install', null, spans);
+      assert.deepEqual(inst, insetStairBounds(side, b, 'upper', null, spans), name);
+      const w = inst.sideInsetMm;
+      assert.ok(Math.abs(entryCoord(dir, inst) - entryCoord(dir, b)) === w, `${name}: 始端は ${w}mm 内側`);
+      // 描画（扇形の放射線・出口境界）は壁表面の枠の内側だけ
+      const g = buildStairGeometry(side, b, { view: 'install', detail: true, riser: RISER, spans, laneGapMm: 0 });
+      const pts = g.treads.flatMap(t => [{ x: t.x1, y: t.y1 }, { x: t.x2, y: t.y2 }]);
+      assert.ok(pts.every(p => p.x >= inst.x1 - 1e-6 && p.x <= inst.x2 + 1e-6 && p.y >= inst.y1 - 1e-6 && p.y <= inst.y2 + 1e-6), `${name}: 踏面線は壁表面の枠内`);
+      const atBase = pts.filter(p => Math.abs((horizontal ? p.x : p.y) - entryCoord(dir, inst)) < 1e-6);
+      assert.ok(atBase.length >= 2, `${name}: 放射線の端点が基端の壁表面にある`);
+      // 走行端: 従来どおり始端は設置枠の縁（逃がさない）
+      const end = insetStairBounds({ ...base, entrySide: END, entryTurnSteps: 0 }, b, 'install', null, spans);
+      assert.equal(entryCoord(dir, end), entryCoord(dir, b), `${name}: 走行端は CL のまま`);
+      assert.equal(entryCoord(dir, insetStairBounds({ ...base }, b, 'install', null, spans)), entryCoord(dir, b), `${name}: 自動（走行端）も同じ`);
+    }
+  }
+});
+
+test('【失敗系】install の基端: 実測が無い（spans なし）・区画が選べない側面は走行端と同じ枠のまま', () => {
+  const b = { x1: 0, y1: 0, x2: 2000, y2: 3000 };
+  const side = { type: StairType.STRAIGHT, upDirection: 'up', flip: false, sections: [11], entrySide: LEFT, entryTurnSteps: 4 };
+  assert.equal(insetStairBounds(side, b, 'install', null, null).y2, 3000, 'spans なし');
+  const one = { lengths: [1000], firstRow: 1000, lastRow: 1000, rowCount: 1 }; // 1 行: 直進部が残らない → 走行端
+  assert.equal(insetStairBounds(side, b, 'install', null, one).y2, 3000, '1 行');
+});
+
 // ---- 踊場付直進（区画が各直進部の中に収まるとき。実測は合成: 3 行並びの実測では先頭の行が直進部全体になり選べない）----
 
 test('踊場付直進: 上り口・到達口が側面なら区画を除いた区間が直進部。扇形・段数字・総蹴上数・破れ位置が取りつき分ずれる', () => {
@@ -309,7 +348,7 @@ test('踊場付直進: 上り口・到達口が側面なら区画を除いた区
   // install の破れ位置: 全蹴上数 18 のマス番号 8（FL+1600/200）から取りつき 2 を引いて直進部のマス 6（run1 の 5 マス＋踊場）。
   // 踊場の起点 L1=2000mm の位置
   const gi = view('install');
-  const fi = makeFrame(stair, insetStairBounds(stair, b, 'install', null));
+  const fi = makeFrame(stair, insetStairBounds(stair, b, 'install', null, spans));
   const c = fi.pt(2000 / 5000, 0.5);
   assert.ok(near((gi.breakLine[1].y1 + gi.breakLine[3].y2) / 2, c.y, 1e-6), `破れ線は踊場の起点: ${JSON.stringify(gi.breakLine)}`);
 });

@@ -40,7 +40,7 @@ const geom = (stair, graph, view, { riser = RISER, detail = true } = {}) => buil
 });
 // build が使う（壁厚ぶん inset した）枠での (u,v) → world と world → (u,v)
 function frames(stair, graph, view) {
-  const bi = insetStairBounds(stair, roomBounds(stair.cells, graph), view, graph);
+  const bi = insetStairBounds(stair, roomBounds(stair.cells, graph), view, graph, measureStairSpans(stair, graph));
   const pt = (fx, fy) => ({ x: bi.x1 + fx * (bi.x2 - bi.x1), y: bi.y1 + fy * (bi.y2 - bi.y1) });
   return { tw: normToWorld(stair, pt), norm: worldToNorm(stair, bi) };
 }
@@ -78,6 +78,28 @@ test('【失敗系】lTurnEndRows: セルが無い・L 字として実測でき�
   assert.equal(lTurnPortInfoOf(null), null);
   assert.equal(lTurnPortInfoOf({ lengths: [3000, 1000, 3000], widths: [1000, 1000] }), null, '区画の行が無い実測（曲がり階段）');
   assert.equal(lTurnPortInfoOf({ lengths: [3000], firstRow: 1000, lastRow: 1000 }), null);
+});
+
+test('【install の基端】上り口が側面なら基端（u=0）は upper と同じく壁表面で止まる。走行端は設置枠の縁（CL）まで（4方向×flip）', () => {
+  const spans = { lengths: [3000, 1000, 3000], widths: [1000, 1000], firstRow: 1000, lastRow: 1000 };
+  const b = { x1: 0, y1: 0, x2: 4000, y2: 4000 };
+  const entryCoord = (dir, bd) => ({ up: bd.y2, down: bd.y1, right: bd.x1, left: bd.x2 })[dir];
+  for (const dir of ['up', 'right', 'down', 'left']) {
+    for (const flip of [false, true]) {
+      for (const side of [LEFT, RIGHT]) {
+        const name = `${dir} flip=${flip} ${side}`;
+        const stair = { type: StairType.L_TURN, upDirection: dir, flip, sections: [6, 1, 10], tread: 250, entrySide: side, entryTurnSteps: 4 };
+        const inst = insetStairBounds(stair, b, 'install', null, spans);
+        assert.deepEqual(inst, insetStairBounds(stair, b, 'upper', null, spans), name);
+        assert.equal(Math.abs(entryCoord(dir, inst) - entryCoord(dir, b)), inst.sideInsetMm, `${name}: 始端は壁表面`);
+        const g = buildStairGeometry(stair, b, { view: 'install', detail: true, riser: RISER, spans, laneGapMm: 0 });
+        const pts = g.treads.flatMap(t => [{ x: t.x1, y: t.y1 }, { x: t.x2, y: t.y2 }]);
+        assert.ok(pts.every(p => p.x >= inst.x1 - 1e-6 && p.x <= inst.x2 + 1e-6 && p.y >= inst.y1 - 1e-6 && p.y <= inst.y2 + 1e-6), `${name}: 踏面線は壁表面の枠内`);
+      }
+      const end = insetStairBounds({ type: StairType.L_TURN, upDirection: dir, flip, sections: [10, 1, 10], tread: 250 }, b, 'install', null, spans);
+      assert.equal(entryCoord(dir, end), entryCoord(dir, b), `${dir} flip=${flip}: 走行端は CL のまま`);
+    }
+  }
 });
 
 test('上り口が左（アーム1の内側＝空象限側）: 先頭の行が取りつき回転部。扇形の放射線は蹴上−1 本（pivot＝出口と側辺の角）、段数字は取りつき分ずれる', () => {
