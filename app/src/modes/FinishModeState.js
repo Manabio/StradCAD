@@ -21,6 +21,7 @@ import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { isValidRoofFieldValue } from '../finish/roof/roofInput.js';
 import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED, ERR_ROOM_DELETE_HAS_STAIR_CHILD, ERR_STAIR_VOID_NOT_STAIR, ERR_STAIR_VOID_PARTIAL } from '../error.js';
 import { stairVoidsTouching } from '../finish/stair/stairVoidReconcile.js';
+import { buildStairChains } from '../finish/stair/stairChains.js';
 import {
   RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME, applyDefaultBaseboard,
   ElevatorEquipmentCategory, DEFAULT_EV_USAGE, isDefaultRoofSpec,
@@ -69,6 +70,9 @@ export class FinishModeState {
   // ---- 直下階の階段（見下げ表示のヒット判定用。init() で peek しロード） ----
   lowerStairs = []; // Array<{ stair, cellBounds }>（cellBounds は下階graphで解決したワールド矩形配列）
 
+  // ---- 他の採用階のグラフ（階段の連鎖の導出用。init() で peek しロード。自階はライブの this.graph を使う） ----
+  otherFloors = []; // Array<{ plane, graph, generation }>（アクティブ階を除く採用階。elevation 昇順。graph は読めなければ null）
+
   // ---- 直上階の吹抜け（部屋カードのCH自動計算用。init() で peek しロード） ----
   upperVoids = []; // Array<{ cellBounds, ch }>（cellBounds は上階graphで解決したワールド矩形配列、ch は吹抜け部屋のCH実効値）
   upperFloorHeight = null; // 当該階FL標高〜直上階FL標高の差(mm)。上階が無ければ null
@@ -95,7 +99,7 @@ export class FinishModeState {
   constructor(graph, project = null) {
     this.graph = graph;
     this.project = project;
-    this._disposed = false; // dispose() 後の非同期継続（_loadLowerStairs 等）の書き込みを止めるガード
+    this._disposed = false; // dispose() 後の非同期継続（_loadStairChains 等）の書き込みを止めるガード
     // 仕上げモード突入後に applyNaming() で確定した Room ID を記録する。
     // FinishModeState はモード切替のたびに new で生成されるため、
     // フロアプランモードに戻ると自動的にリセットされる。
@@ -134,7 +138,9 @@ export class FinishModeState {
       selectedStairId: observable,
       selectedEquipmentId: observable,
       lowerStairs:     observable.ref,
-      upperVoids:      observable.ref,
+      otherFloors:     observable.ref,
+      stairChains:     computed,
+      upperVoids:     observable.ref,
       upperFloorHeight: observable,
       materialsLoaded: observable,
       materialError:   observable,
@@ -245,7 +251,10 @@ export class FinishModeState {
       this.catalogResolveRows = catalogResolveRows;
     });
 
-    await Promise.all([this._loadLowerStairs(), this._loadUpperVoids()]);
+    // peek は採用階ごとに1回だけ済ませ、直下階の見下げ・直上階の吹抜けはその結果から同期で導出する
+    await this._loadStairChains();
+    this._loadLowerStairs();
+    this._loadUpperVoids();
 
     return { ok: error === null, error, catalogResolveRows };
   }
@@ -300,56 +309,100 @@ export class FinishModeState {
   }
 
   /**
-   * 直下階（activePlaneの1つ下の採用フロア）の階段を peek し、見下げクリック判定用に保持する。
-   * 直下階が無い場合は空配列のまま。App.jsx の upperStairEntries（描画用）と同じ peek 経路を使う。
-   * peek は非同期（IDB読込）のため、待機中に dispose() されるとモード切替後の古い状態を
-   * 書き込んでしまう（App.jsx のモード再ロード effect の cancelled ガードと同じ問題）。_disposed を見て止める。
+   * 突入時の peek を1系統にまとめる。アクティブ階以外の採用階を1階につき1回だけ peek し、結果を
+   * otherFloors（{ plane, graph, generation }）へ保持する。直下階の見下げ（_loadLowerStairs）・直上階の吹抜け
+   * （_loadUpperVoids）・階段の連鎖（stairChains）はこの結果から同期で導出する（再 peek しない）。
+   * 採用階の数−1回を超えて peek しない。アクティブ階が採用階に無い（検討案の平面）ときは peek しない。
+   * 各階の peek の前後で書込み世代を読み、同じときだけ generation に記録する（違えば null＝peek 中に書かれた。
+   * finish/finishExitStamp.js が「直下階キャッシュが新鮮か」の判定に使う）。
+   * 読みの失敗は握りつぶさず reject する（init も reject のまま）。従来は直下階・直上階の peek だけが失敗の
+   * 対象だったが、全採用階の peek が対象になるため、遠い階の読み失敗でも init が失敗する（範囲が広がる）。
+   * 他階の階段の一覧は仕上げモード中に変わらない前提（階段の指定・削除は自階にだけ起き、上階への連動は
+   * 吹抜けの増減だけ）なので再 peek しない。自階の階段の増減は stairChains が this.graph（ライブ）を読む
+   * computed のため自動で反映される。peek は非同期（IDB読込）で、待機中に dispose() されるとモード切替後の
+   * 古い状態を書き込んでしまう（App.jsx のモード再ロード effect の cancelled ガードと同じ問題）ため
+   * _disposed を見て止める。
    */
-  async _loadLowerStairs() {
+  async _loadStairChains() {
     const project = this.project;
     const planes = project?.planes ?? [];
-    const active = project?.activePlane;
-    const idx = planes.findIndex(p => p.id === active?.id);
-    const below = idx > 0 ? planes[idx - 1] : null;
-    if (!below || !active) {
-      this._lowerGraph = null;
-      this.lowerGraphGeneration = null;
-      if (!this._disposed) runInAction(() => { this.lowerStairs = []; });
-      return;
-    }
-    // peek の前後で直下階の書込み世代を読み、同じときだけ記録する（違えば null＝peek 中に書かれた。
-    // finish/finishExitStamp.js が「直下階キャッシュが新鮮か」の判定に使う）。
-    const genBefore = floorWriteGeneration(below.id);
-    const temp = await floorSwapManager.peek(below, project.structGraph);
+    const activeId = project?.activePlane?.id;
+    const others = planes.some(p => p.id === activeId) ? planes.filter(p => p.id !== activeId) : [];
+    const peeked = await Promise.all(others.map(async plane => {
+      const before = floorWriteGeneration(plane.id);
+      const graph = await floorSwapManager.peek(plane, project.structGraph);
+      const after = floorWriteGeneration(plane.id);
+      return { plane, graph: graph ?? null, generation: before === after ? after : null };
+    }));
     if (this._disposed) return;
+    runInAction(() => { this.otherFloors = peeked; });
+  }
+
+  /** otherFloors から planeId の peek 結果（無ければ undefined）。 */
+  _otherFloor(planeId) {
+    return this.otherFloors.find(e => e.plane.id === planeId);
+  }
+
+  /**
+   * 直下階（activePlaneの1つ下の採用フロア）の階段を、見下げクリック判定用に保持する（同期。
+   * 直下階のグラフは _loadStairChains が peek 済みの otherFloors から取る）。直下階が無い場合は空配列のまま。
+   * _lowerGraph（finishBoundary の peek 代わりの注入）と lowerGraphGeneration もここで決める。
+   */
+  _loadLowerStairs() {
+    if (this._disposed) return;
+    const planes = this.project?.planes ?? [];
+    const idx = planes.findIndex(p => p.id === this.project?.activePlane?.id);
+    const entry = idx > 0 ? this._otherFloor(planes[idx - 1].id) : null;
+    const temp = entry?.graph ?? null;
     this._lowerGraph = temp;
-    const genAfter = floorWriteGeneration(below.id);
-    this.lowerGraphGeneration = genBefore === genAfter ? genAfter : null;
+    this.lowerGraphGeneration = temp ? entry.generation : null;
     runInAction(() => {
-      this.lowerStairs = temp.stairs.map(s => ({
-        stair: s,
-        cellBounds: cellBoundsList(s.cells, temp),
-      }));
+      this.lowerStairs = temp
+        ? temp.stairs.map(s => ({ stair: s, cellBounds: cellBoundsList(s.cells, temp) }))
+        : [];
     });
   }
 
   /**
-   * 直上階（activePlaneの1つ上の採用フロア）の吹抜け（feature='void'）を peek し、
-   * 部屋カードの CH 自動計算（voidCHAbove）用に保持する。直上階が無ければ空のまま。
-   * _loadLowerStairs と同じ peek 経路・_disposed ガード。
+   * 階段の連鎖。採用階（アクティブ階はライブの this.graph、他階は _loadStairChains の peek 結果）から導出する。
+   * 読めなかった階（peek 結果が無い・graph が null）は graph なしの階として渡し、その位置で連鎖を切る。
+   * アクティブ階が採用階に無い（検討案の平面など）ときは自階だけ。
    */
-  async _loadUpperVoids() {
+  get stairChains() {
     const project = this.project;
-    const planes = project?.planes ?? [];
     const active = project?.activePlane;
+    if (!active) return [];
+    const planes = project.planes ?? [];
+    const floors = planes.some(p => p.id === active.id)
+      ? planes.map(p => (p.id === active.id
+        ? { plane: p, graph: this.graph }
+        : { plane: p, graph: this._otherFloor(p.id)?.graph ?? null }))
+      : [{ plane: active, graph: this.graph }];
+    return buildStairChains(floors, project.structGraph);
+  }
+
+  /** 連鎖メンバー { planeId, stairId } の階段本体。自階はライブのグラフ、他階は peek 結果。無ければ null。 */
+  stairOfMember(member) {
+    if (member.planeId === this.project?.activePlane?.id) return this.graph.stairMap.get(member.stairId) ?? null;
+    return this._otherFloor(member.planeId)?.graph?.stairMap.get(member.stairId) ?? null;
+  }
+
+  /**
+   * 直上階（activePlaneの1つ上の採用フロア）の吹抜け（feature='void'）を、部屋カードの CH 自動計算
+   * （voidCHAbove）用に保持する（同期。直上階のグラフは _loadStairChains が peek 済みの otherFloors から取る）。
+   * 直上階が無ければ空のまま。
+   */
+  _loadUpperVoids() {
+    if (this._disposed) return;
+    const planes = this.project?.planes ?? [];
+    const active = this.project?.activePlane;
     const idx = planes.findIndex(p => p.id === active?.id);
     const above = idx >= 0 && idx + 1 < planes.length ? planes[idx + 1] : null;
-    if (!above || !active) {
-      if (!this._disposed) runInAction(() => { this.upperVoids = []; this.upperFloorHeight = null; });
+    const temp = above ? this._otherFloor(above.id)?.graph : null;
+    if (!above || !active || !temp) {
+      runInAction(() => { this.upperVoids = []; this.upperFloorHeight = null; });
       return;
     }
-    const temp = await floorSwapManager.peek(above, project.structGraph);
-    if (this._disposed) return;
     const voids = temp.rooms
       .filter(r => r.feature === RoomFeature.VOID)
       .map(r => ({
@@ -1511,6 +1564,7 @@ export class FinishModeState {
     this.materialsLoaded = false;
     this.materialError   = null;
     this.lowerStairs     = [];
+    this.otherFloors     = [];
     this._lowerGraph     = null;
     this.lowerGraphGeneration = null;
     this.upperVoids      = [];

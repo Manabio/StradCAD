@@ -44,7 +44,7 @@ export function removeStairOnFloor(graph, stair) {
 // srcStair の footprint を dstGraph の現行グリッドのセル集合へ写す。写せない・空なら null。
 // translateCellSet は src 側の shapeMap（無ければ structGraph）でCL idを引き、dst 側では type:value で
 // 対応CLを探すため、下階→上階にも上階→下階にも使える（対応CLが dst に在る限り）。
-function mapFootprint(srcStair, srcGraph, structGraph, dstGraph) {
+export function mapFootprint(srcStair, srcGraph, structGraph, dstGraph) {
   const translated = translateCellSet(srcStair.cells, srcGraph, structGraph, dstGraph);
   if (!translated) return null;
   const cells = refreshCells(translated, dstGraph);
