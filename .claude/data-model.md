@@ -239,6 +239,12 @@ Y2〜Y1が1セルで、通り上にはY2〜-3500と-2000〜Y1の2本が分断し
 ## 屋内階段の直上1階のfootprintは階段吹抜け（feature=STAIR_VOID）で表す
 設置階Nの階段は階段実体をN+1へ複製しない（階段は次階への到達手段）が、N+1でfootprintを「屋内」として外壁生成・境界分類に参加させる必要があるため、直上1階だけに自動管理Room（`feature=STAIR_VOID`・無名・kind=INTERIOR）を置く（屋外階段は対象外）。置く・直す・片付けるは`reconcileStairVoids`1つが担う（設計意図・不採用案は`.claude/stair-model.md`「上階展開のモデル」）。ユーザー指定の吹抜け（`feature=VOID`）とは描画・操作の扱いが異なる: STAIR_VOIDは塗り・仕上げ表・内周壁・部屋再解釈のすべてから除外し、一切描画しない。部屋ドラッグは、続きの階段を指定するときだけ吹抜けのセルを含めてよい（確定時に吸収する）。同footprintに階段が指定されるとペアRoomへ転用される（ensureStairRoomsのfootprint一致判定）。仕上げ突入時の整合・階操作の整合による指定・転用・削除はundo対象外（階操作は階操作エントリが包含する）。
 
+### 階段まわりの壁の3規則（ユーザー指示2026-10-06）
+1. 設置階Nの階段の上り口の辺に壁を建てない（自階の全階段の出入口辺＝`stairPortEdges`を開口にする）。
+2. 上階N+1の下り口（直下階の階段の到達辺）に壁を建てない。開口にする条件は「直下階の屋内階段の足元が自階で階段の空間（STAIR_VOID **または** 続きの階段のペア部屋STAIR）になっている」こと——吹抜けの有無を見ると、続きの階段を指定して吹抜けが吸収された階で外れる（続きの階段の形・口が下階と違っても、下り口は直下階の階段が決める）。屋外階段・足元が通常の部屋になっている階段は対象外（`resolveStairContext`）。
+3. N+1の外壁判定は、STAIR_VOID・ペア部屋を屋内として数える（kind軸のみ。featureを見ない）。足元が未割当なら屋外扱いで外壁が足元の縁に誤生成されるため、吹抜けの整合（reconcile）が先に置かれていることが前提。
+3規則は`finish/stairWallRules.test.js`が本番の脱出境界経由で固定する。
+
 ## floorDatum/floorLevel・templateKey/customOverridesは「共有基準＋疎な例外」
 床レベルは階のfloorDatumを基準に逸脱する部屋のみfloorLevelを持つ。壁材・壁仕上げ・天井高さは内装マスター（templateKey）参照+個別上書き（customOverrides、マスタ値と同値なら自動的に空に戻す）。同じパターンを`PlanGraph.structureOverride`（主構造の階例外）でも使う。
 

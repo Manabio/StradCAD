@@ -12,6 +12,8 @@ import { refreshCells, cellBoundsFromKey, cellBoundsList } from '../gridCells.js
 import { cellsBeyondBreak, stairPortEdges } from './stairGeometry.js';
 import { findUnderStairSplitCLs } from './stairUnderSplit.js';
 import { floorHeightAbove } from './stairDimensions.js';
+import { mapFootprint } from './stairRemoval.js';
+import { isIndoorStair } from './stairVoidReconcile.js';
 
 /**
  * @param {import('@core').Stair} stair
@@ -111,9 +113,22 @@ export async function resolveStairContext(graph, project, peek) {
   const floorHeight = floorHeightAbove(project, graph.plane);
   const stairUnderEntries = resolveStairUnderEntries(graph, { lowerStairCellBounds, floorHeight });
 
+  // 直下階の屋内階段の到達辺（下り口）は、自階でその足元が階段の空間（階段吹抜け STAIR_VOID、または続きの
+  // 階段のペア部屋 STAIR。吸収で吹抜けが無くなっても同じ）になっているとき、常に開口にする（規則2。形が
+  // 違う続きの階段でも、下り口は直下階の階段が決める）。屋外階段は上に何も置かないので対象外。
   const extraStairOpenings = [];
-  if (belowGraph && graph.rooms.some(r => r.feature === RoomFeature.STAIR_VOID)) {
-    extraStairOpenings.push(...belowGraph.stairs.flatMap(s => stairPortEdges(s, belowGraph, ['arrival'])));
+  if (belowGraph) {
+    const stairSpace = new Set();
+    for (const r of graph.rooms) {
+      if (r.feature !== RoomFeature.STAIR_VOID && r.feature !== RoomFeature.STAIR) continue;
+      for (const key of refreshCells(r.cells, graph)) stairSpace.add(key);
+    }
+    for (const s of belowGraph.stairs) {
+      if (!isIndoorStair(belowGraph, s)) continue;
+      const cells = mapFootprint(s, belowGraph, project.structGraph, graph);
+      if (!cells || ![...cells].some(key => stairSpace.has(key))) continue;
+      extraStairOpenings.push(...stairPortEdges(s, belowGraph, ['arrival']));
+    }
   }
   return { stairUnderEntries, extraStairOpenings };
 }
