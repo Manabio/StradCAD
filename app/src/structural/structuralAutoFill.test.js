@@ -364,7 +364,7 @@ test('【WP-B2改訂】autoFillStairLandingBeams: 到達階に同footprintの階
   assert.equal(onArrival.skippedConflicts, 0);
 });
 
-test('【WP-B2改訂】autoFillStairLandingBeams: 最上階（コピーが無くSTAIR_VOID Roomのみ）でもfootprint一致のRoomからshimでLGを1本生成する', () => {
+test('【WP-B2改訂】autoFillStairLandingBeams: 直上階（続きの階段が無くSTAIR_VOID Roomのみ）でもfootprint一致のRoomからshimでLGを1本生成する', () => {
   const { project, graphs } = makeProjectWithNFloors([0, 2400]);
   const [floor1, floor2] = graphs;
   makeSwitchbackFixture(floor1, StructuralMaterialType.RC);
@@ -698,11 +698,11 @@ test('【失敗系・WP-B2改訂】autoFillStairLandingBeams: belowGraph.stairs�
   });
 });
 
-test('【失敗系・WP-B2改訂】autoFillStairLandingBeams: 到達階に一致するコピー・STAIR_VOID Roomのどちらも無ければ0本・例外なし', () => {
+test('【失敗系・WP-B2改訂】autoFillStairLandingBeams: 到達階に同 footprint の続きの階段・STAIR_VOID Roomのどちらも無ければ0本・例外なし', () => {
   const { project, graphs } = makeProjectWithNFloors([0, 2400]);
   const [floor1, floor2] = graphs;
   makeSwitchbackFixture(floor1, StructuralMaterialType.STEEL);
-  // floor2には何も置かない（上階自動設置が未反映の想定）。
+  // floor2には何も置かない（続きの階段も階段吹抜けも無い想定）。
   assert.doesNotThrow(() => {
     assert.equal(autoFillStairLandingBeams(floor2, project, null, floor1).created.length, 0);
   });

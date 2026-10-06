@@ -12,8 +12,6 @@ import { makeStorePeek, makeStoreSave, decodeFloor } from '../finish/equipment/e
 import { syncUpperFloors } from '../finish/stair/stairFloorSync.js';
 import { setupProject, addPerFloorV, placeStair } from '../finish/stair/stairRemovalTestFixtures.js';
 
-const RIGHT_HALF = [[750, 500]];
-
 // 3階建ての1階に階段を指定して直上階へ展開済み（2階は階段吹抜け・3階は何も無い）。
 // g2 は保存バイト列を復号した2階（本番の peek 同型）。
 async function twoFloors() {
@@ -53,17 +51,6 @@ test('【失敗系】deleteStair: 存在しない id は差分なし＝lastStair
   state.deleteStair('no-such-stair');
   assert.equal(state.lastStairUndoEntry, null);
   assert.equal(undoManager._undoStack.length, before);
-});
-
-// ---- 削除の拒否（続きの階段）は撤廃済み ----
-
-test('stairDeleteBlockReason は撤廃済み（どの階の階段も自階で削除できる）。2階で新設した階段を2階で deleteStair できる', async () => {
-  const { project, g2 } = await twoFloors();
-  const state = new FinishModeState(g2, project);
-  assert.equal(state.stairDeleteBlockReason, undefined, '削除拒否の判定メソッドは無い');
-  const own = placeStair(project, g2, { pts: RIGHT_HALF });
-  state.deleteStair(own.stair.id);
-  assert.equal(g2.stairMap.has(own.stair.id), false, '2階の階段は拒否されず消える');
 });
 
 // ---- isStairRemovalIntent ----

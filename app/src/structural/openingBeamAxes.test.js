@@ -52,7 +52,7 @@ test('openingBeamSourcesFor: 主構造の選択子がslabOpenings以外（木造
 
 // 2026-09-30再裁定: 構造未定（UNSPECIFIED_RULES）でも開口由来梁芯（規則O）は出す。柱・梁は
 // isStructureSpecifiedでゲートされ生成されないが、autoFillOpeningBeamAxes はそのゲートに乗らない
-// ——昇降機・階段の上階自動設置で構造未定のまま開口だけが先に生まれる階でも梁芯が出るようにする
+// ——昇降機の上階自動設置・階段吹抜けの整合で構造未定のまま開口だけが先に生まれる階でも梁芯が出るようにする
 // （structureRules.js UNSPECIFIED_RULES.openingBeamAxes 参照）。
 test('openingBeamSourcesFor: 構造未定（structureOverride未設定・project省略）でも開口由来梁芯を返す（2026-09-30再裁定）', () => {
   const { graph } = makeRectOpeningGraph();
@@ -452,8 +452,8 @@ test('【QA是正・2026-09-28】openingBeamSourcesFor: 矩形1つ＋L字1つが
 });
 
 // slabOpening.test.js makeSwitchbackBeyondFixture相当（returnKeyレーンが矩形の破れ先セル）。
-// 同じフットプリントの階段を2つのグラフ（自階F・下階F-1）に独立に作る——上階自動設置
-// （stairFloorSync.js syncUpperFloors）のコピーはaddStairで新規idを発番するため、
+// 同じフットプリントの階段を2つのグラフ（自階F・下階F-1）に独立に作る——上階の続きの階段は
+// ユーザーが指定するもので（階段の実体は上階へ複製しない）idを共有しないため、
 // 実フィクスチャでもidを共有せず、世界座標のフットプリントだけを一致させる。
 function makeSwitchbackStairGraph(xOffset = 0) {
   const graph = makeGraph();
@@ -485,7 +485,7 @@ test('【QA是正・2026-09-28】openingBeamSourcesFor: belowGraphが無けれ�
 
 test('【QA是正・2026-09-28】openingBeamSourcesFor: belowGraphに同じフットプリントの階段（到達元）があれば破れ先が源になる', () => {
   const belowGraph = makeSwitchbackStairGraph(); // F-1（到達元）
-  const graph = makeSwitchbackStairGraph();      // F（自階。上階自動設置のコピー相当・同じフットプリント）
+  const graph = makeSwitchbackStairGraph();      // F（自階。ユーザーが指定した続きの階段・同じフットプリント）
   graph.structureOverride = 'S造';
   const sources = openingBeamSourcesFor(graph, {}, { riserOf: () => 200, belowGraph });
   assert.ok(sources.length > 0, '破れ先(returnKey)は矩形1セルなので規則Oの対象になる');
@@ -521,8 +521,8 @@ test('【Major-2是正・T2】recomputeStructuralForGraph: 上階（同フット
   g2.structureOverride = 'S造';
 
   // 同じフットプリントの階段（switchback。returnKeyレーンが矩形の破れ先セル）をg1・g2の両方へ
-  // 設置する——g2は「上階自動設置のコピー」を模す（syncUpperFloors自体はstairFloorSync.test.jsで
-  // 別途検証済みのため、ここではフットプリント一致という結果だけを直接再現する）。
+  // 設置する——g2は「同じフットプリントでユーザーが指定した続きの階段」を模す（上階の整合
+  // 自体はstairFloorSync.test.jsで別途検証済みのため、ここではフットプリント一致という結果だけを直接再現する）。
   function addSwitchbackStair(g) {
     const x0 = g.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
     const xm = g.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -585,7 +585,7 @@ function addSteelSwitchbackStair(g) {
   }) };
 }
 
-test('【ステップ7】踊り場受け梁(LG)と開口由来梁芯(規則O)は辺・座標とも重複しない（鉄骨SWITCHBACK階段・中間階コピー）', async () => {
+test('【ステップ7】踊り場受け梁(LG)と開口由来梁芯(規則O)は辺・座標とも重複しない（鉄骨SWITCHBACK階段・中間階の続きの階段）', async () => {
   const project = new Project('proj-lg-vs-opening', 'test');
   const { graph: g1 } = project.addPlane(0, '1階', 'p1');
   const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
@@ -593,7 +593,7 @@ test('【ステップ7】踊り場受け梁(LG)と開口由来梁芯(規則O)は
   g2.structureOverride = 'S造';
 
   // 鉄骨SWITCHBACK階段（makeSwitchbackStairGraphと同じフットプリント）を1階(到達元)・2階
-  // (上階自動設置のコピー相当)の両方に設置する。1階はさらに「踊り場を持つ階」として
+  // (同じフットプリントでユーザーが指定した続きの階段)の両方に設置する。1階はさらに「踊り場を持つ階」として
   // floorHeightAbove(g1)=3000(2階の標高)で踊り場受け梁(LG)が解決できる。
   addSteelSwitchbackStair(g1);
   addSteelSwitchbackStair(g2);
@@ -648,15 +648,14 @@ test('【ステップ7】踊り場受け梁(LG)と開口由来梁芯(規則O)は
 
 // ---- QA指摘: 上のテストはg1(LG)とg2(開口)という階が違うグラフ間の平面座標比較——同一graph内
 // でLGと開口由来小梁が共存する構成も確認する。3階建て（1F設置・2F自身が同フットプリントの
-// コピーで自身の踊り場と開口を両方持つ・3Fは2Fの上に存在するだけ=floorHeightAbove(2F)を
+// 続きの階段で自身の踊り場と開口を両方持つ・3Fは2Fの上に存在するだけ=floorHeightAbove(2F)を
 // 解決するためのダミー階）を組む。【N1是正・QA指摘】比較はspanKey（axisCL.id:clStart.id:
 // clEnd.id）の一致では行わない——LG（階段のARCH CL上）と開口由来小梁（規則Oの梁芯CL上）は
 // 乗るCLの種類自体が違うため、idが一致することはそもそも無く、LGがfront辺（開口と同じ座標）
 // を拾う不良を入れてもspanKey比較では検出できない（恒真化）。重複を防いでいるのはLGが
 // back辺に固定されていること（幾何的事実）なので、座標（axisCL.value・区間の重なり）で
 // 直接確認する。小梁を実際に生成させるため、階段の外周に通り芯とfootprint（main部屋）を敷く
-// （wallGateが階段の小さな部屋だけではfootprintを認めず小梁が0本になるため。
-// makeOpeningTestDoc.mjsの通り芯格子と同じ理由）。
+// （wallGateが階段の小さな部屋だけではfootprintを認めず小梁が0本になるため）。
 function addSteelSwitchbackStairWithFootprint(g, structGraph) {
   const GRID = { labeled: true, discipline: Discipline.STRUCT };
   const findOrAddAxis = (type, value) => structGraph.centerLines.find(c => c.centerLineType === type && c.value === value)
@@ -685,7 +684,7 @@ test('【ステップ7・同一graph内】recomputeStructuralForGraph: 3階建�
   g1.structureOverride = 'S造';
   g2.structureOverride = 'S造';
 
-  // 1F=到達元、2F=フットプリント一致のコピー（2F自身が「踊り場を持つ階」でもあり
+  // 1F=到達元、2F=フットプリント一致の続きの階段（2F自身が「踊り場を持つ階」でもあり
   // 「1Fの到達元階段から破れ先開口を受ける階」でもある）。
   addSteelSwitchbackStairWithFootprint(g1, project.structGraph);
   addSteelSwitchbackStairWithFootprint(g2, project.structGraph);
@@ -838,7 +837,7 @@ test('【ステップ7・変異ガード】landingEdgeCLs: back辺(y=0)とfront�
 // ---- 実装指示書ステップ7・項目2: STRAIGHT系階段のriser感度 ----
 // slabOpening.test.js の makeStraightRunFixture（QA指摘F3）と同じ8セル直進階段
 // （x方向1000mmピッチ・upDirection='right'。riser=200→破れ先x:[7000,8000]の1セル、
-// riser=400→破れ先x:[3000,8000]の5セル）を、上階自動設置のコピー(g2)として2階建てへ組む。
+// riser=400→破れ先x:[3000,8000]の5セル）を、同じフットプリントの続きの階段(g2)として2階建てへ組む。
 function makeStraightRunStairGraph(planeId) {
   const graph = makeGraph(planeId);
   const opt = { labeled: false, discipline: Discipline.ARCH };

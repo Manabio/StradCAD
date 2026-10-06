@@ -736,12 +736,12 @@ test('findUnresolvableCells: スラブが片辺しか失わないなら復元不
 });
 
 // ---- 階段（Stair.cells）: ペアRoom（feature===STAIR）を一時的に
-// 失った旧データ（core/stair.js「上階自動設置分」・ensureStairRooms参照）でも、Room判定に
+// 失った旧データ（core/stair.js「旧データ」・ensureStairRooms参照）でも、Room判定に
 // 頼らずStair.cells自体を直接判定する ----
 
 test('findUnresolvableCells: ペアRoomを持たない階段（Stair.roomId===null）でも、Stair.cellsの片辺の参照だけで復元不能として返す', () => {
   const { graph, cellA } = makeTwoCellGraph();
-  graph.addStair({ cells: new Set([cellA]), roomId: null }); // 旧データ・上階自動設置分の再現
+  graph.addStair({ cells: new Set([cellA]), roomId: null }); // 旧データの再現
   const [leftId] = cellA.split(':');
 
   assert.deepEqual(findUnresolvableCells(graph, leftId), [cellA],

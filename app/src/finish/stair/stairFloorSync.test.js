@@ -386,7 +386,7 @@ test('【syncUpperFloors・失敗系】直上階の peek が失敗したら握�
 });
 
 // ---- syncUpperStairInteriors（仕上げ脱出時の内装コピー）: 直上1階の STAIR_VOID／同 footprint のペア部屋だけ。 ----
-// 3階にも同 footprint の吹抜けを置いておき、コピーも peek も保存もされないことを見る。
+// 3階にも同 footprint の吹抜けを置いておき、内装のコピーも peek も保存もされないことを見る。
 async function interiorsCtx() {
   const { project, graphs } = setupProject(3);
   const [g1, g2, g3] = graphs;

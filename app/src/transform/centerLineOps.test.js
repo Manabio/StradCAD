@@ -1341,7 +1341,7 @@ test('deleteCenterLineWithUndo（非struct分岐）: 無関係な旧データの
   assert.notEqual(undoManager.peekUndo(), beforeTop, 'undoは通常どおり積まれるはず');
 });
 
-test('deleteCenterLineWithUndo異常系: ペアRoomを持たない階段（Stair.roomId===null。旧データ・上階自動設置分の再現）のセル辺を担う中心線の削除もERR_CL_DELETE_UNRESOLVABLEで拒否される', async () => {
+test('deleteCenterLineWithUndo異常系: ペアRoomを持たない階段（Stair.roomId===null。旧データの再現）のセル辺を担う中心線の削除もERR_CL_DELETE_UNRESOLVABLEで拒否される', async () => {
   const { project, graph } = makeProjectWithGraph();
   const opts = { labeled: false, discipline: Discipline.ARCH };
   const left  = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opts); // 削除対象
@@ -2351,7 +2351,7 @@ test('deleteCenterLineWithUndo: 部屋0件・壁も鍵も無い階（壁の材�
 });
 
 test('deleteCenterLineWithUndo: 部屋はあるが壁を一度も持ったことのない階（wallFreshnessKey未設定・壁0本）では壁再生成が走る（2026-09-30再裁定）', async () => {
-  // 昇降機・階段の上階自動設置は部屋だけを書き壁を書かない——その階が次の境界（本関数の削除）で
+  // 昇降機の上階自動設置・階段吹抜けの整合は部屋だけを書き壁を書かない——その階が次の境界（本関数の削除）で
   // 壁を持てることを固定する回帰テスト。
   const { project, graph } = makeProjectWithGraph();
   const { xm } = addAdjacentRoomsWithWalls(graph); // regenerateWallsを一度も通していない（部屋2件・壁0本・鍵null）
