@@ -197,6 +197,24 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
   `stairGeometry.js straightLikeBreakMm` の1か所で、build・`cellsBeyondBreak`（`beyondBreakStraightLike`）・
   `straightBreakMm`（階段下分割CL）の3か所が共有する（片方だけ直さない）。寸法は「取付 段数N」（直進の前後）。
   展開図（`elevation/section/*`）は取りつき回転部に未追従（U字と同じ先送り）。
+- 矩折（`L_TURN`。ステップ9c）の区画は**アーム1の基端の行（上り口。u 最小）・アーム2の末端の行（到達口。v 最小）**。行は
+  正規化座標 (u,v)（`stairFrame.js normToWorld`/`worldToNorm`）で測ったその端に接するセル群（幅方向に分割されていれば複数セルで
+  1行。終端がそろわなければ短い方。`stairClassify.js lTurnEndRows`。保存セルで測る）。left/right はその口を歩く向き
+  （上り口はアーム1を +u へ、到達口はアーム2を −v へ）の左右で、アームの幅方向の高低へ変換する（`stairPorts.js sideToHi`。
+  高い側＝外周側 v=1／u=1、低い側＝コーナーの空象限に面する内側 v=runV／u=runU）。上り口とアーム2・到達口は別のアームなので
+  互いに影響しない（`resolveLTurnPorts`）。選べる条件は U字・直進系と同じ関数（外周・床・直進部2段以上。`lTurnPortCandidates`
+  → `makeEdgesOk`）。取りつき蹴上はアーム1（`sections[0]`）・アーム2（`sections[2]`）から引く（`portRunIndex`）。
+  取りつき回転部は区画を `emitPortTurnZone` で埋め、直進部は区画の外側（アーム1は zoneU から、アーム2は zoneV まで）に詰める
+  （`buildLTurn`）。破れ位置（FL+1600）は直進系と同じ原則で、取りつきを含む総蹴上数で `breakStepOf` を引き、マス番号から
+  上り口の取りつき分を引いて直進部の番号に直し、側面の口があるときだけ [1, 最終マス] に収める。この換算は
+  `stairGeometry.js lTurnBreakState` の1か所で、`buildLTurn` と `cellsBeyondBreak`（`beyondBreakLTurnLike`）が共有する
+  （区画の有無は `lTurnPortsOf` で両者とも保存セルの実測から）。**曲がり階段（`FLARED`）は `buildLTurn` を共有するが出入口は
+  走行端に固定**（先送り。`hasPortSides` が偽・`portSideChange` は null）。到達口の区画は **upper の図だけ**に描く
+  （install では到達口を描かず、外周は走行端の辺のまま。区画は破れ先なので手前クリップで消え、点線は view:'upper' から描く）。
+  `cellsBeyondBreak` のアーム分けは実測の runU/runV（`lTurnLayout` と同じ）で行い（実測できなければ従来の0.5象限判定）、
+  上り口が側面のとき区画の行（uHi ≤ zoneU）は破れ手前として先に入れない（build は破れ線を区画の出口に引くため）。残る限界:
+  アーム1・アーム2 の途中で破れるときは1セル内で判定できないので破れ先に入れない（従来どおり。完全非可視の境界のみ先）。階段下分割CL（`stairUnderSplit.js`）は直進
+  （`STRAIGHT`）だけを扱うので矩折の破れ位置は参照しない。展開図は取りつき回転部に未追従（U字・直進系と同じ先送り）。
 - `Stair` の項目を列挙する箇所は4つ（FBS `schema/graphFbs.js`・`graphSnapshot.js`・`finish/stair/stairFloorSync.js`・`finish/finishUndo.js`）。項目を足すときは全部に足す（finishUndo だけは採取側をキー集合の突合テスト、復元側を全項目往復テストが検出する。他3つは機械検出が無い）。
 - 階段はRoomを残したまま設置する（`Stair.roomId`リンク。理由と不変条件は`.claude/data-model.md`）。
 - 2a壁も脱出のたびに導出し直す（他の壁と同じライフサイクル。壁の再生成をFinishModeStateから

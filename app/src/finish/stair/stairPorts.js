@@ -11,8 +11,9 @@ import { StairType, StairPortSide, RoomFeature } from '@core';
 import { roomBounds, cellBoundsList, outlineSegments, worldToCell, gridIndexOf } from '../gridCells.js';
 import { buildEnclosureCellToRoom, ADJACENT_SAMPLE_EPS } from '../edgeClassify.js';
 import {
-  uTurnCellInfos, uTurnSpans, defaultPortTurnSteps, defaultSections, straightEndRows, measureStairSpans,
+  uTurnCellInfos, uTurnSpans, defaultPortTurnSteps, defaultSections, straightEndRows, measureStairSpans, lTurnEndRows,
 } from './stairClassify.js';
+import { lTurnAxes } from './stairFrame.js';
 
 export const PORT_EPS_MM = 0.5; // mm — レーン長の差を「張り出し」とみなす閾値
 const EDGE_EPS_MM = 0.5;        // mm — 辺が外形線分上にあるかの判定許容差
@@ -23,7 +24,9 @@ export const PORT_RUN_INDEX = { entry: 0, arrival: 2 };
 /** 出入口の辺を選べる型。U字（折返し・回り）と直進系（直進・踊場付直進）。 */
 export const U_TURN_TYPES = new Set([StairType.SWITCHBACK, StairType.WINDING]);
 export const STRAIGHT_TYPES = new Set([StairType.STRAIGHT, StairType.STRAIGHT_LANDING]);
-export const hasPortSides = (type) => U_TURN_TYPES.has(type) || STRAIGHT_TYPES.has(type);
+/** 矩折（L字。区画はアーム1の基端の行＝上り口・アーム2の末端の行＝到達口）。曲がり階段（FLARED）は走行端固定（先送り）。 */
+export const L_TURN_TYPES = new Set([StairType.L_TURN]);
+export const hasPortSides = (type) => U_TURN_TYPES.has(type) || STRAIGHT_TYPES.has(type) || L_TURN_TYPES.has(type);
 /** 取りつき蹴上が属する直進部の sections 添字（直進は区間が1つなので上り口・到達口とも 0）。 */
 export const portRunIndex = (type, port) => (type === StairType.STRAIGHT ? 0 : PORT_RUN_INDEX[port]);
 /** 出入口の辺を選べる型の sections の区間数（直進 1／それ以外 3）。 */
@@ -141,6 +144,10 @@ export function resolveStairPorts(stair, info) {
 
 /** 解決結果を保存値の語彙（end|left|right）へ戻す（StairPanel の選択表示用）。 */
 export function portSideValue(stair, port, resolved) {
+  if (L_TURN_TYPES.has(stair.type)) {
+    const hi = port === 'entry' ? resolved.entryHi : resolved.arrivalHi;
+    return hi == null ? StairPortSide.END : sideOfHi(stair, port, hi);
+  }
   const s = port === 'entry' ? resolved.entryS : resolved.arrivalS;
   return s == null ? StairPortSide.END : sideOfS(stair, port, s);
 }
@@ -184,8 +191,74 @@ export function resolveStraightPorts(stair, info) {
   };
 }
 
-/** 型を問わない出入口の解決（U字・直進系。他の型や実測できないときは null）。StairPanel が使う。 */
+/**
+ * 矩折の側面の辺（left/right）を、その口が乗るアームの幅方向の高低（1＝高い側＝外周の辺 v=1／u=1、0＝低い側＝
+ * コーナーの空象限に面する内側の辺 v=runV／u=runU）へ変換する。left/right はその口を歩くときの進行方向から見た向き
+ * （上り口はアーム1を +u へ、到達口はアーム2を −v へ歩く）で flip に依存しない。
+ * @param {object} stair
+ * @param {'entry'|'arrival'} port
+ * @param {string} side - StairPortSide.LEFT | RIGHT
+ * @returns {0|1}
+ */
+export function sideToHi(stair, port, side) {
+  checkPort(port);
+  if (side !== StairPortSide.LEFT && side !== StairPortSide.RIGHT) throw new Error(`側面の辺は left/right のみ: ${side}`);
+  const ax = lTurnAxes(stair);
+  const w = port === 'entry' ? ax.u : { x: -ax.v.x, y: -ax.v.y }; // 歩く向き（world）
+  const left = { x: w.y, y: -w.x };                               // y 下向き座標の進行方向の左
+  const hiAxis = port === 'entry' ? ax.v : ax.u;                  // 幅方向（高い側へ向かう world ベクトル）
+  const hiIsLeft = left.x * hiAxis.x + left.y * hiAxis.y > 0;
+  return (side === StairPortSide.LEFT) === hiIsLeft ? 1 : 0;
+}
+
+/** sideToHi の逆（幅方向の高低 → left/right）。 */
+export function sideOfHi(stair, port, hi) {
+  return hi === sideToHi(stair, port, StairPortSide.LEFT) ? StairPortSide.LEFT : StairPortSide.RIGHT;
+}
+
+/**
+ * measureStairSpans（矩折）の結果を、側面の出入口の解決・候補列挙が使う形へ写す。実測できなければ null。
+ * 区画は アーム1の基端の行（上り口 firstRow）・アーム2の末端の行（到達口 lastRow）。
+ * @returns {{ L1:number, L2:number, uLen:number, vLen:number, firstRow:number, lastRow:number }|null}
+ *   L1/L2 はアーム1・アーム2の走行長、uLen/vLen は設置枠の u軸・v軸の全長（区画長を正規化へ換算する分母）。
+ */
+export function lTurnPortInfoOf(spans) {
+  const ls = spans?.lengths, ws = spans?.widths;
+  if (!Array.isArray(ls) || ls.length !== 3 || !Array.isArray(ws) || ws.length !== 2) return null;
+  if (!(spans.firstRow > 0) || !(spans.lastRow > 0)) return null;
+  return { L1: ls[0], L2: ls[2], uLen: ls[0] + ls[1], vLen: ls[2] + ws[0], firstRow: spans.firstRow, lastRow: spans.lastRow };
+}
+
+/**
+ * 矩折の出入口を解決する。自動（null）は走行端。保存された側面が幾何上選べない（区画を除くとそのアームの直進部が
+ * 残らない）ときは走行端へ戻す。上り口（アーム1）と到達口（アーム2）は別のアームなので互いに影響しない。
+ * @param {object} stair
+ * @param {ReturnType<typeof lTurnPortInfoOf>} info
+ * @returns {{ entry:'end'|'side', arrival:'end'|'side', entryHi:(0|1|null), arrivalHi:(0|1|null),
+ *   zoneU:number, zoneV:number, zone1Mm:number, zone2Mm:number }}
+ *   entryHi/arrivalHi は側面の辺の幅方向の高低（end は null）。zoneU/zoneV は区画長を正規化（u軸・v軸）した値
+ *   （走行端は 0）、zone1Mm/zone2Mm は mm。
+ */
+export function resolveLTurnPorts(stair, info) {
+  const sideOf = (v) => (v === StairPortSide.LEFT || v === StairPortSide.RIGHT ? v : null);
+  const eSide = sideOf(stair.entrySide), aSide = sideOf(stair.arrivalSide);
+  const entryOk = !!(info && eSide && info.firstRow > PORT_EPS_MM && info.L1 - info.firstRow > PORT_EPS_MM);
+  const arrivalOk = !!(info && aSide && info.lastRow > PORT_EPS_MM && info.L2 - info.lastRow > PORT_EPS_MM);
+  return {
+    entry: entryOk ? 'side' : 'end', arrival: arrivalOk ? 'side' : 'end',
+    entryHi: entryOk ? sideToHi(stair, 'entry', eSide) : null,
+    arrivalHi: arrivalOk ? sideToHi(stair, 'arrival', aSide) : null,
+    zoneU: entryOk ? info.firstRow / info.uLen : 0, zoneV: arrivalOk ? info.lastRow / info.vLen : 0,
+    zone1Mm: entryOk ? info.firstRow : 0, zone2Mm: arrivalOk ? info.lastRow : 0,
+  };
+}
+
+/** 型を問わない出入口の解決（U字・直進系・矩折。他の型や実測できないときは null）。StairPanel が使う。 */
 export function resolvePorts(stair, spans) {
+  if (L_TURN_TYPES.has(stair.type)) {
+    const info = lTurnPortInfoOf(spans);
+    return info ? resolveLTurnPorts(stair, info) : null;
+  }
   if (STRAIGHT_TYPES.has(stair.type)) {
     const info = straightPortInfoOf(spans);
     return info ? resolveStraightPorts(stair, info) : null;
@@ -200,6 +273,10 @@ export function resolvePorts(stair, spans) {
 /** 型を問わない、口の区画の長さ（mm。実測できなければ 0）。 */
 export function portZoneLen(stair, spans, port) {
   checkPort(port);
+  if (L_TURN_TYPES.has(stair.type)) {
+    const info = lTurnPortInfoOf(spans);
+    return info ? (port === 'entry' ? info.firstRow : info.lastRow) : 0;
+  }
   if (STRAIGHT_TYPES.has(stair.type)) {
     const info = straightPortInfoOf(spans);
     return info ? (port === 'entry' ? info.firstRow : info.lastRow) : 0;
@@ -309,9 +386,55 @@ function straightPortCandidates(stair, graph, port, floorGraph) {
   return { sides, floorChecked };
 }
 
+// 矩折: 区画は上り口＝アーム1の基端の行（u 最小）・到達口＝アーム2の末端の行（v 最小）。辺 end は行の走行端、
+// 側面はアームの幅方向の外周側（高い側 v=1／u=1）と空象限側（低い側 v=runV／u=runU）。辺は正規化座標 (u,v) を
+// (t,s) として makeEdgesOk へ渡す（f.pt が (u,v)→world）。他の階段セルと共有する辺は外形線分上でないので自動で外れる。
+function lTurnPortCandidates(stair, graph, port, floorGraph) {
+  const floorChecked = !!floorGraph;
+  const fallback = { sides: [StairPortSide.END], floorChecked: false };
+  const info = lTurnPortInfoOf(measureStairSpans(stair, graph));
+  const rows = lTurnEndRows(stair, graph);
+  if (!info || !rows) return fallback;
+  const { f, runU, runV, eU, eV, firstCells, lastCells } = rows;
+  const isEntry = port === 'entry';
+  const zoneMm = isEntry ? info.firstRow : info.lastRow;
+  const armMm = isEntry ? info.L1 : info.L2;
+  const hasZone = zoneMm > PORT_EPS_MM;
+  const straightRemains = armMm - zoneMm > PORT_EPS_MM;
+  const edgesOk = makeEdgesOk(stair, graph, f, floorGraph);
+
+  let endEdges, hiEdges, loEdges;
+  if (isEntry) {
+    const zoneU = zoneMm / info.uLen;
+    endEdges = firstCells.map(c => ({ ta: 0, sa: c.vLo, tb: 0, sb: c.vHi, dt: -1, ds: 0 }));
+    const side = (pick, line, ds) => firstCells.filter(c => pick(c))
+      .map(c => ({ ta: c.uLo, sa: line, tb: Math.min(c.uHi, zoneU), sb: line, dt: 0, ds }));
+    hiEdges = side(c => c.vHi >= 1 - eV, 1, 1);
+    loEdges = side(c => c.vLo <= runV + eV, runV, -1);
+  } else {
+    const zoneV = zoneMm / info.vLen;
+    endEdges = lastCells.map(c => ({ ta: c.uLo, sa: 0, tb: c.uHi, sb: 0, dt: 0, ds: -1 }));
+    const side = (pick, line, dt) => lastCells.filter(c => pick(c))
+      .map(c => ({ ta: line, sa: c.vLo, tb: line, sb: Math.min(c.vHi, zoneV), dt, ds: 0 }));
+    hiEdges = side(c => c.uHi >= 1 - eU, 1, 1);
+    loEdges = side(c => c.uLo <= runU + eU, runU, -1);
+  }
+
+  const sides = [];
+  if (edgesOk(endEdges)) sides.push(StairPortSide.END);
+  if (hasZone && straightRemains && stepsRemainOk(stair, port, zoneMm)) {
+    if (edgesOk(hiEdges)) sides.push(sideOfHi(stair, port, 1));
+    if (edgesOk(loEdges)) sides.push(sideOfHi(stair, port, 0));
+  }
+  const order = { [StairPortSide.END]: 0, [StairPortSide.LEFT]: 1, [StairPortSide.RIGHT]: 2 };
+  sides.sort((x, y) => order[x] - order[y]);
+  return { sides, floorChecked };
+}
+
 /**
- * 出入口の候補（保存値の語彙 end|left|right）を列挙する。U字（SWITCHBACK/WINDING）と直進系（STRAIGHT/
- * STRAIGHT_LANDING。区画は先頭・末尾の行）。他型（矩折ほか）は走行端だけ。
+ * 出入口の候補（保存値の語彙 end|left|right）を列挙する。U字（SWITCHBACK/WINDING）・直進系（STRAIGHT/
+ * STRAIGHT_LANDING。区画は先頭・末尾の行）・矩折（L_TURN。区画はアーム1の基端の行・アーム2の末端の行）。
+ * 他型（曲がり階段・中空きほか）は走行端だけ。
  *   (a) 幾何: 区画の辺（end・s=0・s=1）を構成するセルの辺がすべて外形線分上（他の階段セルと共有しない）。
  *       内側は張り出すレーンのみ。区画を除いた直進部が残り、直進部の実段数が 2 以上に保てること。
  *   (b) 床: floorGraph を渡したとき、辺の外側の隣セルがすべて床のある部屋であること。
@@ -328,6 +451,7 @@ export function stairPortCandidates(stair, graph, port, { floorGraph = null } = 
   const floorChecked = !!floorGraph;
   const fallback = { sides: [StairPortSide.END], floorChecked: false };
   if (STRAIGHT_TYPES.has(stair.type)) return straightPortCandidates(stair, graph, port, floorGraph);
+  if (L_TURN_TYPES.has(stair.type)) return lTurnPortCandidates(stair, graph, port, floorGraph);
   if (!U_TURN_TYPES.has(stair.type)) return fallback;
   const b = roomBounds(stair.cells, graph);
   const us = uTurnSpans(stair, graph, b);

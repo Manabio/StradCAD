@@ -177,10 +177,10 @@ test('resetPortSides: 反転・上り方向の変更で辺を自動へ戻し取�
   for (const [k, v] of Object.entries(fixed)) stair.setField(k, v);
   assert.equal(stair.totalSteps, 16, '消える蹴上は直進部へ戻る（総蹴上数は保つ）');
   assert.equal(stair.entryTurnSteps, 0);
-  // 側面に解決されている口は触らない／出入口の辺を選べない型（矩折ほか）は {}
+  // 側面に解決されている口は触らない／出入口の辺を選べない型（曲がり階段ほか）は {}
   assert.deepEqual(alignPortTurnSteps(stair, { entry: 'inner', arrival: 'outer' }), {});
-  assert.deepEqual(resetPortSides({ type: StairType.L_TURN }), {});
-  assert.deepEqual(alignPortTurnSteps({ type: StairType.L_TURN }, { entry: 'end', arrival: 'end' }), {});
+  assert.deepEqual(resetPortSides({ type: StairType.FLARED }), {});
+  assert.deepEqual(alignPortTurnSteps({ type: StairType.FLARED }, { entry: 'end', arrival: 'end' }), {});
 });
 
 test('復路が長い b,c,d,a,e: 到達口側の取りつき回転部 e は復路の続き番号で、到達番号は総蹴上数', () => {

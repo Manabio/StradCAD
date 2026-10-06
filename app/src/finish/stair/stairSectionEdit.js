@@ -54,7 +54,7 @@ export function sectionsForType(type, stair) {
 /**
  * 出入口の辺（上り口 'entry'／到達口 'arrival'）を切り替えたときに Stair へ書くフィールド。
  * 総蹴上数（totalSteps）は変えない: 取りつき回転部の蹴上を足すぶん、その口のレーンの直進部（sections の
- * 往路 0／復路 2）を同じ数だけ減らす（直進部は 2 段以上。守れなければ null＝その側面は選べない）。
+ * 往路 0／復路 2。矩折はアーム1 0／アーム2 2）を同じ数だけ減らす（直進部は 2 段以上。守れなければ null＝その側面は選べない）。
  * 走行端へ戻すと取りつき 0 にして、その蹴上を直進部へ戻す。側面へ切り替えるとき蹴上数が 0 なら
  * 初期値（鉄骨 0・木造 区画の長さ÷踏面。defaultPortTurnSteps）を入れる。蹴上数が既にあれば辺だけ替える。
  * @param {number} zoneMm - 区画（張り出し区間／等長レーンの基端の行）の長さ（stairPorts.js portZone の zoneLen）
@@ -62,6 +62,8 @@ export function sectionsForType(type, stair) {
  *   直進部が 2 段未満になる・sections が組めないときは null
  */
 export function portSideChange(stair, port, side, zoneMm) {
+  // 出入口を選べない型（曲がり階段・中空きほか）は切替不可（type 未指定の素のオブジェクトは U字・直進系として扱う）
+  if (stair.type != null && !hasPortSides(stair.type)) return null;
   const sideField = port === 'entry' ? 'entrySide' : 'arrivalSide';
   const stepsField = stepsFieldOf(port);
   const idx = portRunIndex(stair.type, port);
@@ -109,7 +111,7 @@ function foldTurnSteps(stair, ports) {
 /**
  * 昇り方向・反転を変えたときに出入口を自動へ戻す書込み（辺の向きが物理的に入れ替わるため）:
  * entrySide/arrivalSide を null、取りつき蹴上を 0（その蹴上は直進部へ戻して総蹴上数を保つ）。
- * 出入口の辺を選べない型（矩折ほか）は {}。
+ * 出入口の辺を選べない型（曲がり階段・中空きほか）は {}。
  */
 export function resetPortSides(stair) {
   if (!hasPortSides(stair.type)) return {};

@@ -109,5 +109,7 @@ test('resetPortSides/alignPortTurnSteps（直進系）: 取りつき蹴上は直
   assert.deepEqual(resetPortSides(stair), { entrySide: null, arrivalSide: null, entryTurnSteps: 0, arrivalTurnSteps: 0, sections: [15] });
   assert.deepEqual(alignPortTurnSteps(stair, { entry: 'end', arrival: 'side' }), { entryTurnSteps: 0, sections: [11] });
   assert.deepEqual(alignPortTurnSteps(stair, { entry: 'side', arrival: 'side' }), {});
-  assert.deepEqual(resetPortSides({ type: StairType.L_TURN }), {});
+  assert.deepEqual(resetPortSides({ type: StairType.FLARED }), {});
+  assert.deepEqual(resetPortSides({ type: StairType.OPEN_WELL }), {});
+  assert.equal(portSideChange({ type: StairType.FLARED, sections: [8, 2, 8], structure: 'WOOD', tread: 250, entryTurnSteps: 0 }, 'entry', StairPortSide.LEFT, 1000), null, '曲がり階段は切替不可');
 });

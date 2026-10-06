@@ -41,3 +41,41 @@ export function makeFrame(stair, b) {
   };
   return { vertical, runLength, pt, tOf, sOf };
 }
+
+// L字／中空きの正規化(u,v)→world 写像（buildLTurn/buildOpenWell と同一）。pt は fx,fy∈[0,1]→world。
+// stairGeometry.js（描画）と stairClassify.js（L字の端の行の実測）・stairPorts.js が共有する（循環import回避で本ファイルに置く）。
+export function normToWorld(stair, pt) {
+  return (u, v) => {
+    const vv = stair.flip ? 1 - v : v;
+    switch (stair.upDirection) {
+      case 'left':  return pt(1 - u, vv);
+      case 'down':  return pt(vv, u);
+      case 'up':    return pt(vv, 1 - u);
+      default:      return pt(u, vv);
+    }
+  };
+}
+
+// L字／中空きの world → 正規化(u,v) 逆写像（normToWorld の逆）。fx,fy は b 内の比率。
+export function worldToNorm(stair, b) {
+  const W = (b.x2 - b.x1) || 1, H = (b.y2 - b.y1) || 1;
+  return ({ x, y }) => {
+    const fx = (x - b.x1) / W, fy = (y - b.y1) / H;
+    switch (stair.upDirection) {
+      case 'left':  return { u: 1 - fx, v: stair.flip ? 1 - fy : fy };
+      case 'down':  return { u: fy,     v: stair.flip ? 1 - fx : fx };
+      case 'up':    return { u: 1 - fy, v: stair.flip ? 1 - fx : fx };
+      default:      return { u: fx,     v: stair.flip ? 1 - fy : fy }; // right
+    }
+  };
+}
+
+/**
+ * 正規化軸 u・v の増加方向を指す world 単位ベクトル（上り口の側面の left/right を u・v の高低へ変換する用）。
+ * @returns {{ u:{x:number,y:number}, v:{x:number,y:number} }}
+ */
+export function lTurnAxes(stair) {
+  const tw = normToWorld(stair, (fx, fy) => ({ x: fx, y: fy }));
+  const o = tw(0, 0), u = tw(1, 0), v = tw(0, 1);
+  return { u: { x: u.x - o.x, y: u.y - o.y }, v: { x: v.x - o.x, y: v.y - o.y } };
+}

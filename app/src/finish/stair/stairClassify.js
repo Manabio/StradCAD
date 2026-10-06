@@ -1,7 +1,7 @@
 import { roomBounds, cellBoundsFromKey } from '../gridCells.js';
 import { StairType, StructuralMaterialType, totalStepsFromSections } from '@core';
 import { STAIR_LIMITS } from './stairDimensions.js';
-import { makeFrame } from './stairFrame.js';
+import { makeFrame, normToWorld, worldToNorm } from './stairFrame.js';
 import { resolveStairPath } from './stairPath.js';
 
 // 直進階段の標準比率ヒント（踏面方向:走行長 ≒ 3:14）。段数推定の妥当性チェック用。
@@ -299,6 +299,63 @@ export function straightEndRows(stair, graph, b = null) {
     f, L, tEps, sEps, near, far, firstCells, lastCells, rowCount,
     firstRowMm: roundMm((Math.min(...firstCells.map(c => c.tFar)) - near) * L),
     lastRowMm: roundMm((far - Math.max(...lastCells.map(c => c.tNear))) * L),
+  };
+}
+
+// L字（L_TURN/FLARED）のセル実測の寸法。歩行順 [アーム1走行長 L1, コーナー（u軸寸）cu, アーム2走行長 L2]・
+// アーム1幅 cv・アーム2幅 cu と、設置枠の u軸全長 uLen（=L1+cu）・v軸全長 vLen（=L2+cv）。実測できなければ null。
+// u軸（アーム1の走行軸）は upDirection が left/right のとき水平（normToWorld と同じ対応）。
+function lTurnDims(stair, graph, b) {
+  const cc = lTurnCornerCell(stair.cells, graph, b);
+  if (!cc || !(cc.cw > 0) || !(cc.ch > 0)) return null;
+  const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
+  const cu = vertical ? cc.ch : cc.cw; // コーナーのu軸寸 = アーム2幅
+  const cv = vertical ? cc.cw : cc.ch; // コーナーのv軸寸 = アーム1幅
+  const uLen = vertical ? b.y2 - b.y1 : b.x2 - b.x1;
+  const vLen = vertical ? b.x2 - b.x1 : b.y2 - b.y1;
+  const L1 = uLen - cu, L2 = vLen - cv;
+  if (!(L1 > 0) || !(L2 > 0)) return null;
+  return { L1, cu, L2, cv, uLen, vLen };
+}
+
+/**
+ * 矩折（L_TURN）の両端の「行」の実測。区画（側面の出入口に取りつく回転部）は、上り口がアーム1の基端の行
+ * （u 最小。u=0 から始まるセル群）、到達口がアーム2の末端の行（v 最小。v=0 に接するセル群）。
+ * 行＝その端に接するセル群（アームの幅方向に分割されていれば複数セルで1行）で、走行長は行内で終端が
+ * そろわなければ短い方に合わせる。正規化座標 (u,v)（normToWorld/worldToNorm）で測り、保存セルで測る
+ * （呼び出し側は保存セルの stair を渡す。細分化後のセルで測り直さない）。
+ * @returns {{ f:{pt:(u:number,v:number)=>{x:number,y:number}}, runU:number, runV:number, uLen:number, vLen:number,
+ *   eU:number, eV:number, firstCells:object[], lastCells:object[], firstRowMm:number, lastRowMm:number }|null}
+ *   runU/runV はアーム1・アーム2の走行終端（コーナー前縁。正規化）。firstCells/lastCells は
+ *   { uLo, uHi, vLo, vHi }（正規化）。f.pt は (u,v) → world（辺の列挙が makeFrame と同じ形で使う）。
+ *   firstRowMm/lastRowMm は mm。L字として実測できない・アームのセルが無いときは null。
+ */
+export function lTurnEndRows(stair, graph, b = null) {
+  if (!graph || !stair?.cells || stair.cells.size === 0) return null;
+  const bb = b ?? roomBounds(stair.cells, graph);
+  if (![bb.x1, bb.y1, bb.x2, bb.y2].every(Number.isFinite)) return null;
+  const d = lTurnDims(stair, graph, bb);
+  if (!d) return null;
+  const norm = worldToNorm(stair, bb);
+  const eU = SPAN_EPS / d.uLen, eV = SPAN_EPS / d.vLen;
+  const runU = d.L1 / d.uLen, runV = d.L2 / d.vLen;
+  const cells = [];
+  for (const key of stair.cells) {
+    const cb = cellBoundsFromKey(key, graph);
+    if (!cb) continue;
+    const p = norm({ x: cb.x1, y: cb.y1 }), q = norm({ x: cb.x2, y: cb.y2 });
+    cells.push({ key, uLo: Math.min(p.u, q.u), uHi: Math.max(p.u, q.u), vLo: Math.min(p.v, q.v), vHi: Math.max(p.v, q.v) });
+  }
+  const arm1 = cells.filter(c => c.vLo >= runV - eV && c.uHi <= runU + eU);
+  const arm2 = cells.filter(c => c.uLo >= runU - eU && c.vHi <= runV + eV);
+  const firstCells = arm1.filter(c => c.uLo <= eU);
+  const lastCells = arm2.filter(c => c.vLo <= eV);
+  if (firstCells.length === 0 || lastCells.length === 0) return null;
+  const pt = (fx, fy) => ({ x: bb.x1 + fx * (bb.x2 - bb.x1), y: bb.y1 + fy * (bb.y2 - bb.y1) });
+  return {
+    f: { pt: normToWorld(stair, pt) }, runU, runV, uLen: d.uLen, vLen: d.vLen, eU, eV, firstCells, lastCells,
+    firstRowMm: roundMm(Math.min(...firstCells.map(c => c.uHi)) * d.uLen),
+    lastRowMm: roundMm(Math.min(...lastCells.map(c => c.vHi)) * d.vLen),
   };
 }
 
@@ -768,17 +825,12 @@ export function measureStairSpans(stair, graph) {
     }
     case StairType.L_TURN:
     case StairType.FLARED: {
-      const cc = lTurnCornerCell(stair.cells, graph, b);
-      if (!cc || !(cc.cw > 0) || !(cc.ch > 0)) return null;
-      // 歩行順 [アーム1走行長, コーナー（u軸寸）, アーム2走行長]。widths=[アーム1幅, アーム2幅]。
-      // u軸（アーム1の走行軸）は upDirection が left/right のとき水平（normToWorld と同じ対応）。
-      const cu = vertical ? cc.ch : cc.cw; // コーナーのu軸寸 = アーム2幅
-      const cv = vertical ? cc.cw : cc.ch; // コーナーのv軸寸 = アーム1幅
-      const uLen = vertical ? b.y2 - b.y1 : b.x2 - b.x1;
-      const vLen = vertical ? b.x2 - b.x1 : b.y2 - b.y1;
-      const L1 = uLen - cu, L2 = vLen - cv;
-      if (!(L1 > 0) || !(L2 > 0)) return null;
-      return { lengths: [L1, cu, L2], widths: [cv, cu] };
+      const d = lTurnDims(stair, graph, b);
+      if (!d) return null;
+      const base = { lengths: [d.L1, d.cu, d.L2], widths: [d.cv, d.cu] };
+      // 矩折だけ、アーム1の基端の行（上り口の区画）とアーム2の末端の行（到達口の区画）も返す（曲がり階段は走行端固定）
+      const rows = stair.type === StairType.L_TURN ? lTurnEndRows(stair, graph, b) : null;
+      return rows ? { ...base, firstRow: rows.firstRowMm, lastRow: rows.lastRowMm } : base;
     }
     default:
       return null;

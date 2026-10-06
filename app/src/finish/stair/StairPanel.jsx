@@ -134,6 +134,8 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
     const t = e.target.value;
     // 直進⇄踊り場付直進は区間数が変わるので、側面の出入口を自動へ戻し取りつき蹴上を直進部へ戻してから切り替える
     if (STRAIGHT_TYPES.has(stair.type) && STRAIGHT_TYPES.has(t)) applyFields(resetPortSides(stair));
+    // 矩折→曲がり（出入口を選べない型）も同様（曲がりは走行端固定で取りつき蹴上を描かないため、残すと総蹴上数と図がずれる）
+    if (hasPortSides(stair.type) && !hasPortSides(t)) applyFields(resetPortSides(stair));
     stair.setField('type', t);
     // 切替先タイプと区間数が合わないsections（未初期化・直進[1区間]↔踊り場付[3区間]等）は既定値で
     // 組み直し、折返し⇄回りの切替では回転部の段数を型に揃える（stairSectionEdit.js）。

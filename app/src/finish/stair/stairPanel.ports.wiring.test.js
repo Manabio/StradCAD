@@ -60,5 +60,6 @@ test('【配線】出入口の解決は U字・直進系を型で分ける resol
   assert.ok(panel.has('if (hasPortSides(stair.type)) {'), 'afterEdit が出入口を選べる型で判定する行が見つからない');
   assert.ok(panel.has('const resolved = resolvePorts(stair, measureStairSpans(stair, graph));'), 'afterEdit の解決行が見つからない');
   assert.ok(panel.has('if (STRAIGHT_TYPES.has(stair.type) && STRAIGHT_TYPES.has(t)) applyFields(resetPortSides(stair));'), '直進系の型切替で出入口を自動へ戻す行が見つからない');
+  assert.ok(panel.has('if (hasPortSides(stair.type) && !hasPortSides(t)) applyFields(resetPortSides(stair));'), '矩折→曲がりの型切替で出入口を自動へ戻す行が見つからない');
   assert.equal(countOf(panel.src, 'U_TURN_TYPES'), 0, 'U字限定の判定は残さない');
 });
