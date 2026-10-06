@@ -162,7 +162,7 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
 - 破れ線の位置判定（クリック・ヒット領域用の`cellsBeyondBreak`）は描画側buildと同じ関数
   （`lTurnBreakState`等）を共有する。破れ位置ルールを変えるときは片側だけ直さないこと。
 - OPEN_WELL のアーム長は正規化固定比（aw）で、セル実測をまだ反映しない（L_TURN/FLAREDは反映済み）。
-- 出入口の辺（折返し・回り。ステップ9a）の自由度は `entrySide`/`arrivalSide`（`StairPortSide`＝end|left|right）。
+- 出入口の辺（折返し・回り。直進系・矩折は下記）の自由度は `entrySide`/`arrivalSide`（`StairPortSide`＝end|left|right）。
   left/right は**その口を歩くときの進行方向**（上り口は upDirection、到達口は逆向き）から見た向きで flip に
   依存しない（`finish/stair/stairPorts.js sideToS` が makeFrame の s へ変換する唯一の場所。幾何は内部で
   inner/outer を使い、変換は `resolveStairPorts` 1か所）。旧値 inner/outer は読込みで null（互換なし）。
@@ -184,9 +184,8 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
   `resolveStairPath` の `entryStrip`）。その「内側」の上り口は相手レーンの外側の辺（s=1）になる。
   総蹴上数はこの蹴上を含む（`Stair.setField` が同期）。sections の交互列（偶数=直進部）はそのまま
   ——取りつき回転部は sections に入れず別フィールドに持つ（先頭を回転部にすると区間数3を前提にする
-  消費側が壊れる）。展開図（`elevation/section/*`）は復路レーン長を往路と同じとみなし、取りつき回転部も
-  未追従（別件）。
-- 直進系（`STRAIGHT`・`STRAIGHT_LANDING`。ステップ9b）の区画は**先頭の行（上り口）・末尾の行（到達口）**。行＝走行軸の始点
+  消費側が壊れる）。**展開図（`elevation/section/*`）は全型で取りつき回転部に未追従**（先送り。U字は復路レーン長も往路と同じとみなす）。
+- 直進系（`STRAIGHT`・`STRAIGHT_LANDING`）の区画は**先頭の行（上り口）・末尾の行（到達口）**。行＝走行軸の始点
   tNear がそろったセル群（幅方向に分割されていれば複数セルで1行。`stairClassify.js straightEndRows`。走行長は行内で終端が
   そろわなければ短い方）。区画の側辺（left/right）が出入口で、区画の走行端の辺は通常の外周になり、区画が取りつきの回転部
   （`emitPortTurnZone`）、直進部は区画を除いた区間（`stairGeometry.js buildStraight`/`buildStraightLanding`）。選べる条件は
@@ -198,8 +197,7 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
   含む総蹴上数で `breakStepOf` を引き、マス番号から上り口の取りつき分を引いて直進部の mm に換算する**。この換算は
   `stairGeometry.js straightLikeBreakMm` の1か所で、build・`cellsBeyondBreak`（`beyondBreakStraightLike`）・
   `straightBreakMm`（階段下分割CL）の3か所が共有する（片方だけ直さない）。寸法は「取付 段数N」（直進の前後）。
-  展開図（`elevation/section/*`）は取りつき回転部に未追従（U字と同じ先送り）。
-- 矩折（`L_TURN`。ステップ9c）の区画は**アーム1の基端の行（上り口。u 最小）・アーム2の末端の行（到達口。v 最小）**。行は
+- 矩折（`L_TURN`）の区画は**アーム1の基端の行（上り口。u 最小）・アーム2の末端の行（到達口。v 最小）**。行は
   正規化座標 (u,v)（`stairFrame.js normToWorld`/`worldToNorm`）で測ったその端に接するセル群（幅方向に分割されていれば複数セルで
   1行。終端がそろわなければ短い方。`stairClassify.js lTurnEndRows`。保存セルで測る）。left/right はその口を歩く向き
   （上り口はアーム1を +u へ、到達口はアーム2を −v へ）の左右で、アームの幅方向の高低へ変換する（`stairPorts.js sideToHi`。
@@ -216,7 +214,7 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
   `cellsBeyondBreak` のアーム分けは実測の runU/runV（`lTurnLayout` と同じ）で行い（実測できなければ従来の0.5象限判定）、
   上り口が側面のとき区画の行（uHi ≤ zoneU）は破れ手前として先に入れない（build は破れ線を区画の出口に引くため）。残る限界:
   アーム1・アーム2 の途中で破れるときは1セル内で判定できないので破れ先に入れない（従来どおり。完全非可視の境界のみ先）。階段下分割CL（`stairUnderSplit.js`）は直進
-  （`STRAIGHT`）だけを扱うので矩折の破れ位置は参照しない。展開図は取りつき回転部に未追従（U字・直進系と同じ先送り）。
+  （`STRAIGHT`）だけを扱うので矩折の破れ位置は参照しない。
 - `Stair` の項目を列挙する箇所は4つ（FBS `schema/graphFbs.js`・`graphSnapshot.js`・`finish/stair/stairFloorSync.js`・`finish/finishUndo.js`）。項目を足すときは全部に足す（finishUndo だけは採取側をキー集合の突合テスト、復元側を全項目往復テストが検出する。他3つは機械検出が無い）。
 - 階段はRoomを残したまま設置する（`Stair.roomId`リンク。理由と不変条件は`.claude/data-model.md`）。
 - 2a壁も脱出のたびに導出し直す（他の壁と同じライフサイクル。壁の再生成をFinishModeStateから
@@ -225,15 +223,23 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
   クリップを行わずセル矩形（KEEP_MARGIN拡張）のまま採用する——弦の無限延長が別アーム側の
   破れ線先セルを誤って切ってしまうため。斜めの破れ線と厳密には一致しない（セル粒度）。
 
+## 上階展開のモデル（直上1階の階段吹抜けと reconcile）
+ユーザー裁定2026-10-06（Q1〜Q12。2026-07-07の「上階へ階段を自動設置する」方針を覆した）。
+- **置くのは設置階Nの直上1階の階段吹抜け（STAIR_VOID）だけ**。N+2以上・屋外階段には何も置かない。続けて上るときはN+1でユーザーが階段を指定する（吹抜けのセルを含めてドラッグでき、確定時に吸収。部分重なり・階段以外への命名は拒否。同footprintの吹抜けは`ensureStairRooms`がペア部屋へ転用）。
+- **「続きの階段」は保存しない導出**: 隣接階で足元が重なるユーザー指定の階段の連なり（`stairChains.js`。系列idを持たない）。階段タブはこれを1グループにまとめる。構造の規則LGは到達階の踊り場を常に**下階の階段の形**で読む——続きの階段は下階と形が違いうるため。
+- **整合の入口は純関数`reconcileStairVoids`（`stairVoidReconcile.js`）1つ**。階段の指定（`syncUpperFloors`＝直上1階だけ）・階段の削除・階操作のfollower・仕上げモード突入（`reconcileOnFinishEntry`。undo対象外）のすべてがこれを呼ぶ。孤児（どの足元とも一致しない吹抜け）と重複は自動で片付ける（未定義化／削除）。足元を写せない階段が1つでもあれば孤児判定は見送る（安全側）。比較は原子セルへ展開して行う（生のセルだと格子の細かさの違いで吹抜けが増殖する）。
+- **不採用案**: B「何も置かない」＝上階で階段のfootprintが屋内でなくなり外壁が誤生成される。C「階段を1階分だけ複製」＝上階で形を変える経路が無い・整合を階操作／削除／突入の各経路が個別に持つ問題が残る。旧方式（全上階へ階段を自動コピー）は、横断ルール（階追加・削除・中間階判定）が経路ごとに増え続けたため廃止。
+- 階段は仕様未確定期につき旧データの互換は持たない。
+- 既知の限界: 吸収した吹抜けの壁は仕上げ脱出の全再生成まで残る／仕上げモード中に他階の階段が変わっても階段タブの連鎖・見下げの索引は突入時のまま／CL移動などパネル外の経路で出入口が`end`に変わっても取りつき蹴上は残る。
+
 ## 上階展開の位置に屋根があるときは階段の指定を拒否する
-通り芯だけでできた階段（`syncUpperFloors`は何も展開しない既存の挙動）でも、屋根の真下なら安全側で拒否する（2026-10-02リード裁定）。階段の新規指定（`applyRoomNaming`の部屋→階段）は、上に採用フロアがあるとき非同期の関門（`App.jsx convertStairFromNaming`）で、上階展開の位置（中間階の階段・最上階の階段吹抜け）に屋根（ROOF）が無いかを確定前に確かめ、あれば何も変更せず拒否する（`finish/stair/stairRoofConflict.js`。理由と既知の限界＝階追加・並べ替えの自動展開は拒否しない点は`.claude/data-model.md`の屋根の節）。
+階段の新規指定（`applyRoomNaming`の部屋→階段）は、上に採用フロアがあるとき非同期の関門（`App.jsx convertStairFromNaming`）で、**直上1階**の同footprintに屋根（ROOF）が無いかを確定前に確かめ、あれば何も変更せず拒否する（`finish/stair/stairRoofConflict.js`。屋外階段は上階展開が無いのでpeekしない）。2階以上離れた階は置く対象でないので見ない。通り芯だけでできた階段も整合の対象なので、予測と実際は一致する。理由と既知の限界（階追加・並べ替えの整合は拒否せず見送る点）は`.claude/data-model.md`の屋根の節。
 
 ## 階操作（追加・挿入・並替・階変更・削除）への追従は`floorOrderChange.js`が担う
-上階の自動設置（`syncUpperFloorsAuto`）・直下階の階段削除は、階の並びを変える経路（挿入・下階追加・削除・ドラッグ移動・階変更）から個別に呼ばれず、`floorOrderFollowers`レジストリの`stairUpperSync`／`stairsBelowRemoval`に登録して行う。同期ルールが今後変わったら、この2つのfollowerだけ直せば全経路に効く（`.claude/floor-design.md`「階の並びを変える操作が他の階へ波及する処理」参照）。
+階段の上下の整合は、階の並びを変える経路（挿入・下階追加・削除・ドラッグ移動・階変更）から個別に呼ばれず、`floorOrderFollowers`レジストリの`stairsBelowRemoval`（DELETEのみ。直下階の階段を`removeStairOnFloor`で正規に消す）・`stairVoidReconcile`（全種別。採用階の隣接全ペアを下から整え、最下階は直下が無いので吹抜けを全部孤児として未定義化。整合か保存の失敗時は保存済みの階とアクティブ階を変更前へ戻す）に登録して行う。同期ルールが今後変わったら、この2つのfollowerだけ直せば全経路に効く（`.claude/floor-design.md`「階の並びを変える操作が他の階へ波及する処理」参照）。
 
-## 階段の削除は設置階だけ。上の階へ連動する
-- 設置階で削除すると、上の階の同 footprint の階段と最上階の階段吹抜けを `runStairRemoval`（`finish/stair/stairFloorSync.js`）が連動して消し、undo 1回で全階が戻る。ペア部屋・吹抜けは各階の区分の規則で未定義化か削除。上の階に補完した中心線は残す（未定義部屋のセルが参照する）が、階段下の分割CLは階段に属するので一緒に戻す。
-- 最上階の階段吹抜けを自動指定するときの重なり判定（`addStairVoidRoom`）は、両辺を現行の格子の原子セルへ展開してから比べる。生のセルのまま比べると、格子が直下階より細かい階で既存の吹抜けを見落とし、仕上げ突入のたびに増える（2026-10-05修正）。既に重複した吹抜けは自動では消さない（ユーザー裁定2026-10-05「増殖を止めるだけ」）。既知の限界: 上記の連動削除は同じ足元の階段吹抜けを1つしか消さない／重複した文書をUI操作だけで直せるとは限らない（実測）。
-- 中間階は「直下の採用階に同 footprint の階段がある」で判定して拒否する。`Stair` に自動設置の印が無いので、手動で同じ位置に指定した階段とは区別しない。直下階へ footprint を写せないときは「続く階段ではない」とする（直下階にその格子が無ければ同 footprint の階段も在りえないため）。
-- 階段を消す入口は3つ（階段タブ＝`App.jsx deleteStairCascade`、階段のペア部屋のカード削除＝`deleteStairRoomCascade`、属性で階段を外す＝`revertStairFromNaming`）で、すべて同じ関門（`runStairRemoval`）を通す。違いは設置階の確定の本体だけ（`deleteStair`／従来の `deleteRoom`／`applyNaming`）で、カード削除の自階の結果は従来の `deleteRoom` と同じ（部分指定の子の道連れ削除を含む）。`revertStairToRoom`（未配線）を配線するときも同じ。再指定では上の階の未定義部屋からセルを引き抜く（引き抜かないとペア部屋・吹抜けができず点線が出ない）。
-- **部分指定に階段を含む部屋の削除は拒否する**（`roomDeleteBlockReason`。道連れで消える子・孫に階段のペア部屋がある場合。親の削除のカスケードが階段を自階だけ消し、上の階の分身・吹抜けが残る・中間階でも消せてしまうため。「先に階段を削除」と案内。判定は削除と同じ列挙 `_childRoomsOf` から導く）。
+## 階段の削除は自階の階段ごと。直上階の吹抜けだけ連動する
+- どの階の階段も自分の階で消せる（途中階の削除拒否は撤廃）。設置階Nの階段を消すと、N+1の同footprintの吹抜けを**全部**未定義化する（`runStairRemoval`。`finish/stair/stairFloorSync.js`）。N+1の階段（続きの階段）は残し、削除後に自階と直下階の間で`reconcileStairVoids`をかけるので、続きの階段を消せば直下階の階段の吹抜けがその階に復活する。undo 1回で全階が戻る（階操作に伴う削除は元からundo対象外）。補完した中心線は残す（未定義部屋のセルが参照する）が、階段下の分割CLは階段に属するので一緒に戻す。
+- 吹抜けの重複・孤児は整合が自動で片付けるので、削除側は個数を数えない（旧版は連動削除が同じ足元の吹抜けを1つしか消さず、重複も放置した。ユーザー裁定2026-10-05「増殖を止めるだけ」は整合の導入で上書き）。
+- 階段を消す入口は3つ（階段タブ＝`App.jsx deleteStairCascade`、階段のペア部屋のカード削除＝`deleteStairRoomCascade`、属性で階段を外す＝`revertStairFromNaming`）で、すべて同じ関門（`runStairRemoval`）を通す。違いは設置階の確定の本体だけ（`deleteStair`／従来の `deleteRoom`／`applyNaming`）で、カード削除の自階の結果は従来の `deleteRoom` と同じ（部分指定の子の道連れ削除を含む）。`revertStairToRoom`（未配線）を配線するときも同じ。再指定では上の階の未定義部屋からセルを引き抜く（引き抜かないと直上階に吹抜けを置けない）。
+- **部分指定に階段を含む部屋の削除は拒否する**（`roomDeleteBlockReason`。道連れで消える子・孫に階段のペア部屋がある場合。親の削除のカスケードが階段を自階だけ消し、直上階の吹抜けが残るため。「先に階段を削除」と案内。判定は削除と同じ列挙 `_childRoomsOf` から導く）。

@@ -1,12 +1,13 @@
 /**
  * CL偏芯（内壁指定のあるCLの偏芯仕様）の階またぎ連動。
  *
- * 階段に面する壁の偏芯は設置階〜最上階まで、吹抜け（feature=VOID）に面する壁の偏芯は
+ * 階段・階段吹抜けに面する壁の偏芯はそれらのある階どうし（設置階とその直上階の吹抜け、
+ * 続きの階段があればその上まで）、吹抜け（feature=VOID）に面する壁の偏芯は
  * その吹抜けの階と直下階の間で共通（連動）にする。同一CL上に壁は1つだけ（要件）のため、
  * この2ルールだけで延長上の壁（同一CLを共有する他の内壁区間）も自然に共有される
  * ——CL単位で spec を複製すれば足り、壁1本ずつを個別に追従させる実装は不要。
- * 昇降路（isShaftFeature。昇降機）は全階同位置のため、階段と同じ「設置階〜最上階」ルールに
- * 合流させる（裁定Q7・2026-09-28）。
+ * 昇降路（isShaftFeature。昇降機）は全階同位置のため、階段と同じ連動ルール
+ * （Room のある階どうし）に合流させる（裁定Q7・2026-09-28）。
  *
  * 方式: spec レコードの複製。floorSwapManager.peek → set/removeCLEccentricity →
  * applyCLEccentricity → saveFloor という stairFloorSync.js と同じ階またぎ同期パターンに乗る
@@ -35,9 +36,9 @@ import { RoomFeature, isShaftFeature } from '@core';
 /**
  * 部屋一覧から「階段」「吹抜け」いずれの連動ルールに関わるかを返す純関数
  * （stair: STAIR|STAIR_VOID または昇降路（isShaftFeature。昇降機）に接する内壁、
- * void: VOID に接する内壁）。STAIR_VOID を stair 側に含めるのは、最上階の階段吹抜け直下
+ * void: VOID に接する内壁）。STAIR_VOID を stair 側に含めるのは、階段の直上階の吹抜け
  * （＝階段設置階の続き）も階段連動グループに含めるため。昇降路を stair 側に含めるのは、
- * 全階同位置で偏芯を揃えたい範囲が階段と同じ「設置階〜最上階」だから（裁定Q7）。
+ * 全階同位置で偏芯を揃えたい範囲が階段と同じ連動ルールだから（裁定Q7）。
  */
 export function shaftOrStairLinks(rooms) {
   let stair = false, isVoid = false;
@@ -170,7 +171,7 @@ export async function propagateCLEccentricities(project, activeGraph, clIds, { m
 
 /**
  * プル側（F3）: 自階の INTERIOR_WALL エッジが乗る CL のうち、まだ偏芯レコードを持たない
- * （＝ユーザー未編集）ものについて、連動先（階段は設置階〜最上階、吹抜けはその階と直下階）に
+ * （＝ユーザー未編集）ものについて、連動先（階段・階段吹抜けはそれらのある階、吹抜けはその階と直下階）に
  * 既存の偏芯指定があれば取り込む。自階に既にレコードがある CL は上書きしない。
  * 複数の連動先に指定がある場合は階インデックスが近い方を優先する（同点はどちらでもよい）。
  *

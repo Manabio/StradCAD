@@ -97,7 +97,7 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
   // （install が設置階の正であり、upper は直下階由来。重複時は install を優先）
   const installStairIds = new Set(installEntries.map(e => e.id));
   // footprint が自階 install 階段と重なる upper エントリ（下階階段が自階の
-  // 自動設置階段と同じ位置に見下げ表示される場合）は installOverlap を付与し、
+  // 続きの階段（ユーザー指定）と同じ位置に見下げ表示される場合）は installOverlap を付与し、
   // StairLayer 側でプリミティブ別に独立フィルタする: 矢印は install の破れ線で
   // クリップ、踏面線は破れ線先セル（beyondBreakBounds。cellsBeyondBreak で
   // 全タイプ単一ソース判定済み）の中点判定、段数字はアンカー点判定で破れ先の

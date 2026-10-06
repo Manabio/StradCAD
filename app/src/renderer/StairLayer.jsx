@@ -28,7 +28,7 @@ const STAIR_STROKE = '#1e293b';
  *   wallGraph は側面線の壁有無を判定するグラフ（upper エントリ＝表示中の階。壁の無い区間は
  *   床の端 floorEdge として実線で描く）。省略時（install）は graph の壁で判定する。
  *   installOverlap/clipAgainstId/beyondBreakBounds は、footprint が自階 install 階段と重なる
- *   upper エントリ（下階階段の見下げが自階の自動設置階段と同じ位置に表示される場合)に
+ *   upper エントリ（下階階段の見下げが自階の続きの階段と同じ位置に表示される場合)に
  *   App.jsx が付与する。
  *
  *   ■ 破れ線から先＝見下げの表現

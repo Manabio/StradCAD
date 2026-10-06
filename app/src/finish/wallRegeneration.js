@@ -112,7 +112,7 @@ export async function loadMaterialMap() {
  * @param {Array<{stair, room, splitCLIds}>} [opts.stairUnderEntries] - 階段下部屋（2a）。
  *   FinishModeState.stairUnderRooms(graph) / finish/stair/stairUnderRooms.js の
  *   resolveStairUnderEntries(graph, …) の戻り相当
- * @param {Array} [opts.extraStairOpenings] - 直下階階段の到達辺（最上階の階段吹抜けの下り口）。
+ * @param {Array} [opts.extraStairOpenings] - 直下階階段の到達辺（階段吹抜けの下り口）。
  *   floorSwapManager.peek の結果を呼び出し側が解決して渡す
  * @returns {Promise<{ regenerated: boolean, undoFns: Function[], redoFns: Function[] }>}
  *   regenerated=false は materialMap が無く壁を一切触らなかったことを示す
@@ -203,7 +203,7 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
   // 最上階（階段実体なし・階段吹抜けのみ）は直下階の階段の到達辺＝下り口を開口に加える
   // （世界座標は全階共通のため、直下階グラフで計算した辺をそのまま使える）。
   const stairOpenings = graph.stairs.flatMap(s => stairPortEdges(s, graph));
-  // 直下階階段の到達辺（最上階の階段吹抜けの下り口）は呼び出し側が floorSwapManager.peek
+  // 直下階階段の到達辺（階段吹抜けの下り口）は呼び出し側が floorSwapManager.peek
   // で解決済みのものを渡す（このモジュールは floorSwapManager を import しない）。
   stairOpenings.push(...extraStairOpenings);
 

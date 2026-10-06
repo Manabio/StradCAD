@@ -287,7 +287,7 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
     );
   }
 
-  // ステップ5: 階段設置階の上階（自動設置ペアRoom・最上階の階段吹抜け）へ、設置階ペアRoomの
+  // ステップ5: 階段設置階の上階（続きの階段のペアRoom・直上階の階段吹抜け）へ、設置階ペアRoomの
   // 内装（templateKey・customOverrides）を同期コピーする（階段仕上げ材の参照）。壁は
   // この同期では生成しない——新モデルでは階段ペアRoom・吹抜けも通常のRoomと同じ経路
   // （ステップ1〜3）で壁を持つため、上階の壁はその階自身が仕上げモードを脱出した際に

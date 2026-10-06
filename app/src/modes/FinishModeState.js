@@ -109,7 +109,7 @@ export class FinishModeState {
     // まとめるため、確定まで push を保留する。キャンセル時は破棄（作成＋取消＝差分なし）。
     this._pendingDialogUndo = null;
     // 直近の applyNaming が積んだ undo エントリ（非observable）。階段変換時、
-    // App.jsx が上階自動設置（syncUpperFloors）の巻き戻しを同じエントリへ合成するために参照する。
+    // App.jsx が直上階の階段吹抜けの整合（syncUpperFloors）の巻き戻しを同じエントリへ合成するために参照する。
     this.lastNamingUndoEntry = null;
     // applyNaming が昇降機の設置を拒否したときの文言（非observable。lastNamingUndoEntryと同じ
     // 「フィールドで受け渡す」流儀。App.jsx が直後に読んでトースト表示する）。

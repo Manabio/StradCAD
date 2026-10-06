@@ -14,7 +14,7 @@ undoは「`undoManager.push`されたものだけ」戻せる。**graphを変え
 フロア切替はIDBから**同一graphオブジェクト**へ復元されるため、エントリが握るgraph参照は切替後に再び有効になる（これがフロアまたぎundoの成立条件）。
 
 ## 確定が非同期な付随変更はamendで同一エントリへ合成する
-階段変換→上階自動設置のように操作の後から非同期で確定する変更は、新規エントリにせず`undoManager.amend`で元エントリへ合成する（Ctrl+Z 1回で揃って戻る）。昇降機の設置・削除・用途変更（`finish/equipment/equipmentFloorSync.js`）も同じ形——他階への保存を伴うが、いずれもアクティブ階のundoエントリへ`amend`で合成する（詳細は`.claude/equipment-model.md`参照）。
+階段変換→直上階の階段吹抜けの整合のように操作の後から非同期で確定する変更は、新規エントリにせず`undoManager.amend`で元エントリへ合成する（Ctrl+Z 1回で揃って戻る）。昇降機の設置・削除・用途変更（`finish/equipment/equipmentFloorSync.js`）も同じ形——他階への保存を伴うが、いずれもアクティブ階のundoエントリへ`amend`で合成する（詳細は`.claude/equipment-model.md`参照）。
 
 ## amendの落とし穴: notifyを伴うエントリはamendを使わない（段階(c)・2026-09-25、CL偏芯=段階(e)・2026-09-26）
 `undoManager.amend`はredo=「元の操作→追加分」・undo=「追加分→元の操作」の順で合成するため、構造同期（`structuralSync.js`）へのnotifyのような「他の状態がすべて確定してから最後に呼びたい」処理を追加分・元側のどちらに置いても順序が崩れる——notifyを元側（先発エントリ）に入れるとredo時に他階save（追加分）より先に同期が走り、追加分（amendされた側）に入れるとundo時にstructGraph・自階の復元（元側）より先に走る。`transform/centerLineOps.js`の`promoteCenterToGridWithUndo`/`demoteGridToCenterWithUndo`（通り芯⇔中心線の変換）は、この理由で`amendFloorUndoRecords`（内部で`undoManager.amend`を呼ぶ）を使わず、他階レコードの適用（`applyFloorUndoRecords`）を`structGraph`・自階の復元と**同じundo/redoクロージャの中**に、notifyの**直前**として組み込むinline方式にする（順序: struct復元→自階復元→他階レコード適用→notify）。昇格（他の平面の中心線の吸収。`applyCenterLineAbsorptionForValues`。線種変更の移籍一本化・2026-09-30以降。旧`recallPromotedCenterLineDuplicates`は分身方式の廃止に伴い削除）は「push→await吸収」の構造を保つため、`undoEntry`（amend用）の代わりに`undoRecords`（配列参照。クロージャ実行時点の中身を読む）を渡す——`propagateDemotedCenterLine`と同形の「beforeを常に採ってpush」規約にする。吸収の書込みは移籍が確定した**後**に行い、失敗した場合は他の平面・共有グラフ・自階をすべて巻き戻して（`rollbackFloorRecords`）undoエントリを積まない——分身の自己修復（回収失敗時に降格→昇格を繰り返せば再生成される、という旧設計の前提）は廃止に伴い不要になった。CL偏芯（`applyCLEccentricityWithUndo`）も同じ理由で`finish/eccentricityFloorSync.js`の`propagateCLEccentricities`をamend廃止・`undoRecords`配列方式へ切り替えた（下記節参照）。**ASSUMED**: IDBトランザクション順序（save呼び出しが同じクロージャ内でnotifyより前にあることに依存。readwriteの後に作られたreadonlyは完了を待つIDB仕様に依存）は実機のIndexedDBでは未確認（node:testの`storage/db.js`スタブでのみ検証済み）。
@@ -40,10 +40,10 @@ CL操作（`transform/centerLineOps.js`の`addCenterLineFromDialog`・`commitCLM
 仕上げモード undo（`finish/finishUndo.js`）は階段を項目ごとに列挙して写すため、`Stair` に項目を足したら `snapshotStairs`／`restoreStairs` の列挙も足す。採取側の列挙漏れは `finishUndo.test.js` のキー集合の突合テストが、復元側の渡し忘れは全項目を既定値以外にした往復テスト（fixture の項目集合も `Stair` と突合）が検出する。
 
 ## 階操作（追加・挿入・並替・階変更）は「全採用フロアのbefore/afterバイト列比較＋Planeメタ比較」で1エントリ
-plane作成・新階同期（階段・昇降機の複製）・切替・全階の構造再計算が複数階へ波及するため、逆操作ではなく前後比較で記録する（`withFloorOpUndo`。`beginUiTransition()`は呼び出し元が直前に呼ぶ）。全採用階のPlaneメタ（elevation・startFloor・name・stories。`collectPlaneMetas`）もbefore/afterで持つため、追加階が無い並替・階変更でもメタに差があれば1エントリ積む。積むかどうか・差分（`addedPlanes`・`changedSiblings`・`hasChanges`）は`floorOps.js`の純関数`diffFloorOpSnapshot`へ委譲し、`withFloorOpUndo`自身は判定しない。redoは**同一planeId**でplaneを再作成してbytesを書き戻す（IDが変わると以降のundo/redoサイクルとIDBキーが壊れる）。フロー内の構造再計算は個別pushを抑止する（二重記録防止。`recomputeActiveStructural(pushUndo=false)`）。階削除は従来どおりundo無し（下記「undo対象外」節）。
+plane作成・新階同期（階段吹抜けの整合・昇降機の複製）・切替・全階の構造再計算が複数階へ波及するため、逆操作ではなく前後比較で記録する（`withFloorOpUndo`。`beginUiTransition()`は呼び出し元が直前に呼ぶ）。全採用階のPlaneメタ（elevation・startFloor・name・stories。`collectPlaneMetas`）もbefore/afterで持つため、追加階が無い並替・階変更でもメタに差があれば1エントリ積む。積むかどうか・差分（`addedPlanes`・`changedSiblings`・`hasChanges`）は`floorOps.js`の純関数`diffFloorOpSnapshot`へ委譲し、`withFloorOpUndo`自身は判定しない。redoは**同一planeId**でplaneを再作成してbytesを書き戻す（IDが変わると以降のundo/redoサイクルとIDBキーが壊れる）。フロー内の構造再計算は個別pushを抑止する（二重記録防止。`recomputeActiveStructural(pushUndo=false)`）。階削除は従来どおりundo無し（下記「undo対象外」節）。
 
 ## undo対象外（意図的な割り切り）
-- `ensureTopStairVoid`・`syncUpperFloorsAuto`単体（階追加経由は階追加エントリが包含）: 冪等なデータ修復・自動同期
+- 仕上げモード突入時の階段吹抜けの整合（`reconcileOnFinishEntry`）: 冪等なデータ修復。階操作のfollower（`stairVoidReconcile`）は階操作エントリが包含するが、階削除は元からundo対象外。階段の削除は別（`runStairRemoval`が1エントリに合成し、undoで全階が戻る）
 - 階削除とそれに伴う昇降機の再採番（`renumberEquipmentAfterFloorRemoval`）: 現行の階削除の扱い（undo不可）に従う
 - `syncRoofPlane`・構造モード突入時の自動補完: 建物形状が変われば作り直す冪等インフラ
 - 階操作の屋根平面の高さ追従（`roofPlaneHeight`follower。`followRoofPlaneToTop`）: 屋根平面はPlaneメタ・バイト列どちらのundo記録の対象外（`collectPlaneMetas`/`collectFloorBytes`は`project.planes`のみを見る）。最上階idが変わる作り直しは階操作では行わず次の構造モード突入の`syncRoofPlane`に任せる（§「階操作は～」節参照）

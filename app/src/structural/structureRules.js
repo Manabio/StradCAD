@@ -380,7 +380,7 @@ export const UNSPECIFIED_RULES = Object.freeze({
   // isStructureSpecifiedの趣旨（主構造未確定の階では柱・梁を生成しない）に揃えてnull上書きしたが、
   // 2026-09-30に再裁定: 柱・梁は生成しないが開口由来梁芯は出す（structuralAutoFill.js
   // autoFillOpeningBeamAxes は isStructureSpecified でゲートされておらず、柱・梁の生成とは独立に
-  // 動く——構造未定のまま昇降機・階段の上階自動設置で開口だけが先に生まれる階でも、開口由来梁芯が
+  // 動く——構造未定のまま昇降機の上階自動設置・階段吹抜けの整合で開口だけが先に生まれる階でも、開口由来梁芯が
   // 全階そろうようにする）。継承のまま'slabOpenings'を明示して意図を残す。
   openingBeamAxes: 'slabOpenings',
   // 【裁定・2026-10-02】STEEL_RULES（RC_RULES の spread）を継承すると 'flat' になるが、主構造が未定のときは

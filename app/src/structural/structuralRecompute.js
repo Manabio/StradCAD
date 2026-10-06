@@ -130,8 +130,8 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // （屋根専用平面は自階に階段を持たないため`!isRoof`も明示——isRoofPlaneは常にstairs0本のはずだが
   // 意図を読み取りやすくするため条件式に残す）。
   const needsBelowForOpenings = ownRules.openingBeamAxes === 'slabOpenings' && !isRoof && targetGraph.stairs.length > 0;
-  // 踊り場受け梁（role:'landing'）は「下から階段が到達している」徴候（自階に上階自動設置の階段
-  // コピーがある、または最上階なら階段吹抜けSTAIR_VOID Roomがある）があるときだけ下階を覗く
+  // 踊り場受け梁（role:'landing'）は「下から階段が到達している」徴候（自階にユーザー指定の続きの
+  // 階段がある、または階段吹抜けSTAIR_VOID Roomがある）があるときだけ下階を覗く
   // （structural/structuralAutoFill.js autoFillStairLandingBeams。ユーザー裁定2026-09-28）。
   // 屋根専用平面は対象外（屋根には階段が到達しない）。
   const needsBelowForLanding = !isRoof
