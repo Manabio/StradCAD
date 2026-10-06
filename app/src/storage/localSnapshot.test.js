@@ -117,6 +117,18 @@ test('App.jsx: handleSaveConfirm はピッカーを exportDocument より前に�
   assert.ok(writeIdx < nameIdx && writeIdx < stateIdx, 'ファイル名の更新は書込みの後（失敗時に更新しない）');
 });
 
+test('App.jsx: handleSaveConfirm は書込み失敗時に markDirty して未保存扱いへ戻し、例外を外側へ伝える', () => {
+  const m = /async function handleSaveConfirm\(fileName\) \{([\s\S]*?)\r?\n {2}\}\r?\n/.exec(appSrc);
+  assert.ok(m, 'handleSaveConfirm が見つからない');
+  // writeDocumentFileTarget を囲む try/catch の中に markDirty() と throw があること
+  const w = /try \{\s*await writeDocumentFileTarget\(target, json\);\s*\} catch \((\w+)\) \{([\s\S]*?)\n\s*\}/.exec(m[1]);
+  assert.ok(w, 'writeDocumentFileTarget を囲む try/catch が見つからない');
+  assert.match(w[2], /^\s*markDirty\(\);$/m, '書込み失敗時に markDirty() していない');
+  assert.match(w[2], new RegExp(`^\\s*throw ${w[1]};$`, 'm'), '書込み失敗の例外を外側（失敗トースト）へ伝えていない');
+  // 外側の catch（失敗トースト）の前に markDirty が無いこと＝exportDocument 以前の失敗では dirty を触らない
+  assert.equal((m[1].match(/markDirty\(\)/g) || []).length, 1, 'markDirty は書込み失敗の1箇所だけ');
+});
+
 const storeSrc = fs.readFileSync(new URL('../store.js', import.meta.url), 'utf8');
 
 test('store.js: importDocument は fileName で設定・無ければ消去し、検証より後に触る', () => {

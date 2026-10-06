@@ -1898,7 +1898,14 @@ const App = observer(() => {
         // （不変条件3。関門の外で待つと待ち時間中の入力が塞がれない）。
         await structuralSync.whenIdle();
         const json = await exportDocument();
-        await writeDocumentFileTarget(target, json);
+        try {
+          await writeDocumentFileTarget(target, json);
+        } catch (e) {
+          // exportDocument 内の saveToIDB が clearDirty 済みだが、ファイルには書けていない（ディスク満杯・
+          // 権限取消等）ので未保存扱いへ戻す（離脱警告が出るように。QA指摘L1・ユーザー裁定2026-10-07）。
+          markDirty();
+          throw e;
+        }
         setOpenedFileName(target.name);
         setOpenedFileNameState(target.name);
         setToast({ msg: '保存しました', key: Date.now() });
