@@ -1,0 +1,499 @@
+{
+ "probe": "stairChainProbe",
+ "commit": "cc286ed",
+ "source": "moku4",
+ "summary": {
+  "floorCount": 3,
+  "perFloor": [
+   {
+    "name": "1階",
+    "stairs": 1,
+    "stairVoids": 0,
+    "voids": 0,
+    "pairRooms": 1,
+    "continuationStairs": 0
+   },
+   {
+    "name": "2階",
+    "stairs": 1,
+    "stairVoids": 0,
+    "voids": 0,
+    "pairRooms": 1,
+    "continuationStairs": 1
+   },
+   {
+    "name": "3階",
+    "stairs": 0,
+    "stairVoids": 1,
+    "voids": 0,
+    "pairRooms": 0,
+    "continuationStairs": 0
+   }
+  ],
+  "resyncScenarioCount": 1,
+  "resyncStairVoidsTotal": 1,
+  "resyncStairsTotal": 1,
+  "resyncAllMatchStored": true,
+  "stairsTotal": 2,
+  "stairVoidsTotal": 1,
+  "continuationStairsTotal": 1,
+  "upperSlabRectsTotal": 2,
+  "ruleOEffectiveSourcesTotal": 0,
+  "ruleOSteelSourcesTotal": 8
+ },
+ "resyncScenarios": [
+  {
+   "originFloor": "1階",
+   "originFootprints": [
+    "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
+   ],
+   "matchesStored": true,
+   "upper": [
+    {
+     "name": "2階",
+     "stairs": [
+      "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
+     ],
+     "stairVoids": [],
+     "pairRooms": [
+      "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
+     ]
+    },
+    {
+     "name": "3階",
+     "stairs": [],
+     "stairVoids": [
+      "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
+     ],
+     "pairRooms": []
+    }
+   ]
+  }
+ ],
+ "floors": [
+  {
+   "planeId": "bbd87430-3f98-421a-8d9d-759bf4afc7df",
+   "name": "1階",
+   "elevation": 0,
+   "floorHeight": 3000,
+   "stairs": [
+    {
+     "type": "switchback",
+     "structure": "WOOD",
+     "cells": [
+      "0,-8190,1820,-7280",
+      "0,-9100,910,-8190",
+      "910,-9100,1820,-8190"
+     ],
+     "totalSteps": 10,
+     "sections": [
+      5,
+      1,
+      5
+     ],
+     "riser": null,
+     "tread": 250,
+     "hasRoomId": true,
+     "roomLinkResolved": true,
+     "roomFeature": "stair",
+     "entrySide": null,
+     "arrivalSide": null,
+     "entryTurnSteps": 0,
+     "arrivalTurnSteps": 0,
+     "riserEffective": 300,
+     "continuation": false
+    }
+   ],
+   "stairVoids": [],
+   "voids": [],
+   "pairRooms": [
+    {
+     "cells": [
+      "0,-8190,1820,-7280",
+      "0,-9100,910,-8190",
+      "910,-9100,1820,-8190"
+     ],
+     "linkedStairFootprints": [
+      "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
+     ]
+    }
+   ],
+   "upperSlab": {
+    "upperPlaneId": "20252dcb-f57c-4370-a189-6c1f0fb64cff",
+    "rects": [
+     {
+      "x1": 910,
+      "y1": -9100,
+      "x2": 1747.5,
+      "y2": -8190
+     }
+    ]
+   },
+   "ownFloorOpeningEdges": [
+    {
+     "isVertical": false,
+     "coord": -8190,
+     "lo": 910,
+     "hi": 1820,
+     "outwardSign": 1,
+     "onGrid": false,
+     "source": "stairBeyond",
+     "sources": [
+      "stairBeyond"
+     ]
+    },
+    {
+     "isVertical": false,
+     "coord": -9100,
+     "lo": 910,
+     "hi": 1820,
+     "outwardSign": -1,
+     "onGrid": true,
+     "source": "stairBeyond",
+     "sources": [
+      "stairBeyond"
+     ]
+    },
+    {
+     "isVertical": true,
+     "coord": 1820,
+     "lo": -9100,
+     "hi": -8190,
+     "outwardSign": 1,
+     "onGrid": true,
+     "source": "stairBeyond",
+     "sources": [
+      "stairBeyond"
+     ]
+    },
+    {
+     "isVertical": true,
+     "coord": 910,
+     "lo": -9100,
+     "hi": -8190,
+     "outwardSign": -1,
+     "onGrid": false,
+     "source": "stairBeyond",
+     "sources": [
+      "stairBeyond"
+     ]
+    }
+   ],
+   "ruleO": {
+    "effectiveStructure": "木造（在来）",
+    "effective": [],
+    "steel": []
+   }
+  },
+  {
+   "planeId": "20252dcb-f57c-4370-a189-6c1f0fb64cff",
+   "name": "2階",
+   "elevation": 3000,
+   "floorHeight": 3000,
+   "stairs": [
+    {
+     "type": "switchback",
+     "structure": "WOOD",
+     "cells": [
+      "0,-8190,1820,-7280",
+      "0,-9100,910,-8190",
+      "910,-9100,1820,-8190"
+     ],
+     "totalSteps": 10,
+     "sections": [
+      5,
+      1,
+      5
+     ],
+     "riser": null,
+     "tread": 250,
+     "hasRoomId": true,
+     "roomLinkResolved": true,
+     "roomFeature": "stair",
+     "entrySide": null,
+     "arrivalSide": null,
+     "entryTurnSteps": 0,
+     "arrivalTurnSteps": 0,
+     "riserEffective": 300,
+     "continuation": true
+    }
+   ],
+   "stairVoids": [],
+   "voids": [],
+   "pairRooms": [
+    {
+     "cells": [
+      "0,-8190,1820,-7280",
+      "0,-9100,910,-8190",
+      "910,-9100,1820,-8190"
+     ],
+     "linkedStairFootprints": [
+      "0,-8190,1820,-7280|0,-9100,910,-8190|910,-9100,1820,-8190"
+     ]
+    }
+   ],
+   "upperSlab": {
+    "upperPlaneId": "5cee1b45-98b5-4e40-a53a-4e5c6679c6c6",
+    "rects": [
+     {
+      "x1": 72.5,
+      "y1": -9027.5,
+      "x2": 1747.5,
+      "y2": -7352.5
+     }
+    ]
+   },
+   "ownFloorOpeningEdges": [
+    {
+     "isVertical": false,
+     "coord": -8190,
+     "lo": 910,
+     "hi": 1820,
+     "outwardSign": 1,
+     "onGrid": false,
+     "source": "stairBeyond",
+     "sources": [
+      "stairBeyond"
+     ]
+    },
+    {
+     "isVertical": false,
+     "coord": -9100,
+     "lo": 910,
+     "hi": 1820,
+     "outwardSign": -1,
+     "onGrid": true,
+     "source": "stairBeyond",
+     "sources": [
+      "stairBeyond"
+     ]
+    },
+    {
+     "isVertical": true,
+     "coord": 1820,
+     "lo": -9100,
+     "hi": -8190,
+     "outwardSign": 1,
+     "onGrid": true,
+     "source": "stairBeyond",
+     "sources": [
+      "stairBeyond"
+     ]
+    },
+    {
+     "isVertical": true,
+     "coord": 910,
+     "lo": -9100,
+     "hi": -8190,
+     "outwardSign": -1,
+     "onGrid": false,
+     "source": "stairBeyond",
+     "sources": [
+      "stairBeyond"
+     ]
+    }
+   ],
+   "ruleO": {
+    "effectiveStructure": "木造（在来）",
+    "effective": [],
+    "steel": [
+     {
+      "isVertical": false,
+      "coord": -8190,
+      "lo": 910,
+      "hi": 1820,
+      "outwardSign": 1,
+      "through": true,
+      "onGrid": false,
+      "rcBacked": false,
+      "source": "stairBeyond",
+      "sources": [
+       "stairBeyond"
+      ],
+      "beamWidthUnresolved": false
+     },
+     {
+      "isVertical": false,
+      "coord": -9100,
+      "lo": 910,
+      "hi": 1820,
+      "outwardSign": -1,
+      "through": true,
+      "onGrid": true,
+      "rcBacked": false,
+      "source": "stairBeyond",
+      "sources": [
+       "stairBeyond"
+      ],
+      "beamWidthUnresolved": false
+     },
+     {
+      "isVertical": true,
+      "coord": 1820,
+      "lo": -9100,
+      "hi": -8190,
+      "outwardSign": 1,
+      "through": false,
+      "onGrid": true,
+      "rcBacked": false,
+      "source": "stairBeyond",
+      "sources": [
+       "stairBeyond"
+      ],
+      "beamWidthUnresolved": false
+     },
+     {
+      "isVertical": true,
+      "coord": 910,
+      "lo": -9100,
+      "hi": -8190,
+      "outwardSign": -1,
+      "through": false,
+      "onGrid": false,
+      "rcBacked": false,
+      "source": "stairBeyond",
+      "sources": [
+       "stairBeyond"
+      ],
+      "beamWidthUnresolved": false
+     }
+    ]
+   }
+  },
+  {
+   "planeId": "5cee1b45-98b5-4e40-a53a-4e5c6679c6c6",
+   "name": "3階",
+   "elevation": 6000,
+   "floorHeight": null,
+   "stairs": [],
+   "stairVoids": [
+    {
+     "cells": [
+      "0,-8190,1820,-7280",
+      "0,-9100,910,-8190",
+      "910,-9100,1820,-8190"
+     ]
+    }
+   ],
+   "voids": [],
+   "pairRooms": [],
+   "upperSlab": null,
+   "ownFloorOpeningEdges": [
+    {
+     "isVertical": false,
+     "coord": -7280,
+     "lo": 0,
+     "hi": 1820,
+     "outwardSign": 1,
+     "onGrid": true,
+     "source": "stairVoid",
+     "sources": [
+      "stairVoid"
+     ]
+    },
+    {
+     "isVertical": false,
+     "coord": -9100,
+     "lo": 0,
+     "hi": 1820,
+     "outwardSign": -1,
+     "onGrid": true,
+     "source": "stairVoid",
+     "sources": [
+      "stairVoid"
+     ]
+    },
+    {
+     "isVertical": true,
+     "coord": 0,
+     "lo": -9100,
+     "hi": -7280,
+     "outwardSign": -1,
+     "onGrid": true,
+     "source": "stairVoid",
+     "sources": [
+      "stairVoid"
+     ]
+    },
+    {
+     "isVertical": true,
+     "coord": 1820,
+     "lo": -9100,
+     "hi": -7280,
+     "outwardSign": 1,
+     "onGrid": true,
+     "source": "stairVoid",
+     "sources": [
+      "stairVoid"
+     ]
+    }
+   ],
+   "ruleO": {
+    "effectiveStructure": "木造（在来）",
+    "effective": [],
+    "steel": [
+     {
+      "isVertical": false,
+      "coord": -7280,
+      "lo": 0,
+      "hi": 1820,
+      "outwardSign": 1,
+      "through": true,
+      "onGrid": true,
+      "rcBacked": false,
+      "source": "stairVoid",
+      "sources": [
+       "stairVoid"
+      ],
+      "beamWidthUnresolved": false
+     },
+     {
+      "isVertical": false,
+      "coord": -9100,
+      "lo": 0,
+      "hi": 1820,
+      "outwardSign": -1,
+      "through": true,
+      "onGrid": true,
+      "rcBacked": false,
+      "source": "stairVoid",
+      "sources": [
+       "stairVoid"
+      ],
+      "beamWidthUnresolved": false
+     },
+     {
+      "isVertical": true,
+      "coord": 0,
+      "lo": -9100,
+      "hi": -7280,
+      "outwardSign": -1,
+      "through": false,
+      "onGrid": true,
+      "rcBacked": false,
+      "source": "stairVoid",
+      "sources": [
+       "stairVoid"
+      ],
+      "beamWidthUnresolved": false
+     },
+     {
+      "isVertical": true,
+      "coord": 1820,
+      "lo": -9100,
+      "hi": -7280,
+      "outwardSign": 1,
+      "through": false,
+      "onGrid": true,
+      "rcBacked": false,
+      "source": "stairVoid",
+      "sources": [
+       "stairVoid"
+      ],
+      "beamWidthUnresolved": false
+     }
+    ]
+   }
+  }
+ ]
+}
