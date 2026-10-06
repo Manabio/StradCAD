@@ -249,15 +249,9 @@ export function detectUTurn(cells, graph, isVertical, b) {
   return null;
 }
 
-/**
- * U字の各セルを走行軸 t・幅方向 s の区間へ写し、レーン（A=往路 s<0.5／B=復路 s>0.5／null=回転部ほか）に
- * 分類する。uTurnSpans（区間実測）と stairPorts.js（出入口の候補列挙）が同じ分類を使う。
- * 回転部が取れない（遠端に接するセルが無い・回転部が走行全長を占める）なら null。
- * @returns {{ f:object, L:number, tEps:number, tRun:number, isBaseStrip:(c:object)=>boolean,
- *   infos:{ key:string, cb:object, tNear:number, tFar:number, sLo:number, sHi:number,
- *     fullWidth:boolean, farTouching:boolean, lane:'A'|'B'|null }[] }|null}
- */
-export function uTurnCellInfos(stair, graph, b = null) {
+// 各セルを走行軸 t・幅方向 s の区間へ写した一覧（uTurnCellInfos・straightEndRows が共有する下地。レーン分類は含まない）。
+// @returns {{ f:object, L:number, tEps:number, sEps:number, acrossLen:number, infos:object[] }|null}
+function cellFrameInfos(stair, graph, b = null) {
   if (!graph || !stair?.cells || stair.cells.size === 0) return null;
   const bb = b ?? roomBounds(stair.cells, graph);
   if (![bb.x1, bb.y1, bb.x2, bb.y2].every(Number.isFinite)) return null;
@@ -276,6 +270,50 @@ export function uTurnCellInfos(stair, graph, b = null) {
     const sLo = Math.min(s1, s2), sHi = Math.max(s1, s2);
     infos.push({ key, cb, tNear, tFar, sLo, sHi, fullWidth: sLo <= sEps && sHi >= 1 - sEps, farTouching: tFar >= 1 - tEps, lane: null });
   }
+  return { f, L, tEps, sEps, acrossLen, infos };
+}
+
+// t（比率）経由の往復で生じる 1e-13 級の丸め誤差を落とす（区間長は mm。消費側は等値比較もする）
+const roundMm = (v) => Math.round(v * 1e6) / 1e6;
+
+/**
+ * 直進系（STRAIGHT・STRAIGHT_LANDING）の先頭・末尾の「行」の実測。行＝走行軸の始点 tNear がそろったセル群
+ * （幅方向に分割されていれば複数セル）。側面の出入口の区画（取りつき回転部）は先頭の行（上り口）・末尾の行
+ * （到達口）の全体で、走行長は行内で終端がそろわないとき短い方に合わせる。
+ * @returns {{ f:object, L:number, tEps:number, sEps:number, near:number, far:number,
+ *   firstCells:object[], lastCells:object[], firstRowMm:number, lastRowMm:number, rowCount:number }|null}
+ *   firstRowMm/lastRowMm は先頭／末尾の行の走行長（mm）。rowCount は行の数。セルが無ければ null。
+ */
+export function straightEndRows(stair, graph, b = null) {
+  const base = cellFrameInfos(stair, graph, b);
+  if (!base || base.infos.length === 0) return null;
+  const { f, L, tEps, sEps, infos } = base;
+  const near = Math.min(...infos.map(c => c.tNear)), far = Math.max(...infos.map(c => c.tFar));
+  const firstCells = infos.filter(c => c.tNear <= near + tEps);
+  const lastCells = infos.filter(c => c.tFar >= far - tEps);
+  let rowCount = 0, prev = -Infinity;
+  for (const t of infos.map(c => c.tNear).sort((p, q) => p - q)) {
+    if (t > prev + tEps) { rowCount++; prev = t; }
+  }
+  return {
+    f, L, tEps, sEps, near, far, firstCells, lastCells, rowCount,
+    firstRowMm: roundMm((Math.min(...firstCells.map(c => c.tFar)) - near) * L),
+    lastRowMm: roundMm((far - Math.max(...lastCells.map(c => c.tNear))) * L),
+  };
+}
+
+/**
+ * U字の各セルを走行軸 t・幅方向 s の区間へ写し、レーン（A=往路 s<0.5／B=復路 s>0.5／null=回転部ほか）に
+ * 分類する。uTurnSpans（区間実測）と stairPorts.js（出入口の候補列挙）が同じ分類を使う。
+ * 回転部が取れない（遠端に接するセルが無い・回転部が走行全長を占める）なら null。
+ * @returns {{ f:object, L:number, tEps:number, tRun:number, isBaseStrip:(c:object)=>boolean,
+ *   infos:{ key:string, cb:object, tNear:number, tFar:number, sLo:number, sHi:number,
+ *     fullWidth:boolean, farTouching:boolean, lane:'A'|'B'|null }[] }|null}
+ */
+export function uTurnCellInfos(stair, graph, b = null) {
+  const base = cellFrameInfos(stair, graph, b);
+  if (!base) return null;
+  const { f, L, tEps, infos } = base;
   // 基端側の全幅セル（レーンが始まるより手前にある全幅セル）は回転部ではなく往路の取りつき
   //（設置階上階スラブの張り出し下の踏み込み。実データ moku2-2）。往路レーンAの被覆に数える。
   const laneInfos = infos.filter(c => !c.fullWidth);
@@ -694,7 +732,9 @@ export function classifyStairArea(cells, graph, floorHeight = null, entryCellKey
  * 設置セルから区間長（歩行順・sections 対応の mm 配列）を実測する（区間長指定の描画反映用）。
  * セル割りから導出できないタイプ・形状は null（描画側は 踏面寸×マス数 の合成にフォールバック）。
  * L_TURN/FLARED は widths（[アーム1幅, アーム2幅] mm）も返す（アーム帯の実測反映用）。
- * @returns {{ lengths:number[], widths?:number[] }|null}
+ * 直進系（STRAIGHT・STRAIGHT_LANDING）は先頭・末尾の行の走行長（firstRow/lastRow）と行数（rowCount）も返す
+ * （側面の出入口の区画。straightEndRows）。STRAIGHT の lengths は [全長]。
+ * @returns {{ lengths:number[], widths?:number[], firstRow?:number, lastRow?:number, rowCount?:number }|null}
  */
 export function measureStairSpans(stair, graph) {
   if (!graph || !stair?.cells || stair.cells.size === 0) return null;
@@ -702,13 +742,22 @@ export function measureStairSpans(stair, graph) {
   const b = roomBounds(stair.cells, graph);
   if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return null;
   switch (stair.type) {
+    case StairType.STRAIGHT: {
+      // 区間は1つ（全長）。先頭・末尾の行は側面の出入口の区画（stairPorts.js）が使う。
+      const rows = straightEndRows(stair, graph, b);
+      if (!rows) return null;
+      return { lengths: [rows.L], firstRow: rows.firstRowMm, lastRow: rows.lastRowMm, rowCount: rows.rowCount };
+    }
     case StairType.STRAIGHT_LANDING: {
       const spans = runSpans(stair.cells, graph, vertical);
       if (spans.length !== 3) return null;
       const lens = spans.map(s => s.hi - s.lo);
       // 歩行順（昇り始端→終端）に並べる: 昇りが軸負方向（up/left）なら反転
       if (stair.upDirection === 'up' || stair.upDirection === 'left') lens.reverse();
-      return { lengths: lens };
+      const rows = straightEndRows(stair, graph, b);
+      return rows
+        ? { lengths: lens, firstRow: rows.firstRowMm, lastRow: rows.lastRowMm, rowCount: rows.rowCount }
+        : { lengths: lens };
     }
     case StairType.SWITCHBACK:
     case StairType.WINDING: {

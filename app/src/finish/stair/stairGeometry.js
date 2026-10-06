@@ -1,7 +1,7 @@
 import { StairType, totalStepsFromSections } from '@core';
 import { cellBoundsFromKey, roomBounds, cellBoundsList, outlineSegments, refreshCells } from '../gridCells.js';
 import { measureStairSpans, uTurnSpans, MIN_LANDING, defaultSections } from './stairClassify.js';
-import { resolveStairPorts } from './stairPorts.js';
+import { resolveStairPorts, resolveStraightPorts, straightPortInfoOf, hasSidePort } from './stairPorts.js';
 import { makeFrame } from './stairFrame.js';
 export { makeFrame }; // 定義は stairFrame.js（stairClassify.js と共有。循環import回避）。既存importパスは維持。
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../wallGeneration.js';
@@ -138,7 +138,10 @@ function breakStepOf(totalRisers, riser, view) {
 // overhang（mm）だけ線方向へ CL からはり出す（中心線の端のはね出しと同じ扱い）。
 // wideSide: 破断線は幅方向から30°傾くため s=0側/s=1側で走行方向の見えがかり長さが異なる（I字の
 // 「破れ線の広い方」判定用）。0=s=0側が広い／1=s=1側が広い／null=破れなし（install以外）。
-function frameDecor(f, topT, view, b, overhang = 0) {
+// ports（直進系の側面の出入口。null＝両口とも走行端）: { entry, arrival } は null か { s, tExit }（側面の辺の
+// 幅方向 s と区画の出口 t。上り口の区画は [0, tExit]、到達口の区画は [tExit, 1]）。側面の口は区画の側辺が
+// thin+port、走行端の辺は通常の外周（side）になり、矢印は側辺の中点から入る（U字と同じ折れ線）。
+function frameDecor(f, topT, view, b, overhang = 0, ports = null) {
   const c00 = f.pt(0, 0), c01 = f.pt(0, 1), c10 = f.pt(topT, 0), c11 = f.pt(topT, 1);
   let breakLine = null;
   let sideEnd0 = c10, sideEnd1 = c11;
@@ -153,6 +156,7 @@ function frameDecor(f, topT, view, b, overhang = 0) {
     const proj = (p) => (p.x - c00.x) * tx + (p.y - c00.y) * ty;
     wideSide = proj(p1) >= proj(p2) ? 0 : 1;
   }
+  if (ports) return sidePortFrame(f, topT, view, { c00, c01, c10, c11, sideEnd0, sideEnd1 }, ports, { breakLine, breakInset, wideSide });
   const outline = [
     { ...seg(c00, c01), thin: true, port: 'entry' }, // c00-c01=区画初段
     { ...seg(c00, sideEnd0), side: true },
@@ -164,6 +168,34 @@ function frameDecor(f, topT, view, b, overhang = 0) {
     ? runArrow(f.pt(0, 0.5), f.pt(topT, 0.5), 'U')
     : runArrow(f.pt(topT, 0.5), f.pt(0, 0.5), 'D');
   return { outline, breakLine, arrows: [arrow], breakInset, wideSide };
+}
+
+// frameDecor の側面の出入口版（直進系）。上り口・到達口が側面なら、その口の区画の側辺を出入口（thin+port）に、
+// 区画の走行端の辺を通常の外周（side）にする。install では到達口を描かない（破れ線の先）。
+function sidePortFrame(f, topT, view, { c00, c01, c10, c11, sideEnd0, sideEnd1 }, { entry, arrival: arrivalPort }, extra) {
+  const arrival = view === 'install' ? null : arrivalPort;
+  const outline = [entry ? { ...seg(c00, c01), side: true } : { ...seg(c00, c01), thin: true, port: 'entry' }];
+  for (const [s, from, to, top] of [[0, c00, sideEnd0, c10], [1, c01, sideEnd1, c11]]) {
+    let start = from, end = to;
+    if (entry?.s === s) { // 区画 [0, tExit] の側辺が上り口
+      start = f.pt(entry.tExit, s);
+      outline.push({ ...seg(from, start), thin: true, port: 'entry' });
+    }
+    if (arrival?.s === s) { // 区画 [tExit, 1] の側辺が到達口
+      end = f.pt(arrival.tExit, s);
+      outline.push({ ...seg(end, top), thin: true, port: 'arrival' });
+    }
+    outline.push({ ...seg(start, end), side: true });
+  }
+  if (view !== 'install') outline.push(arrival ? { ...seg(c10, c11), side: true } : { ...seg(c10, c11), thin: true, port: 'arrival' });
+  // 矢印: 側面の口は側辺の中点から横向きに入って（出て）走行軸の中心線へ折れる。走行端の口は端の中点
+  const lead = (port, tMid) => (port ? [f.pt(tMid, port.s), f.pt(tMid, 0.5)] : null);
+  const entryLead = lead(entry, entry ? entry.tExit / 2 : 0) ?? [f.pt(0, 0.5)];
+  const arrivalLead = lead(arrival, arrival ? (arrival.tExit + 1) / 2 : 1) ?? [f.pt(topT, 0.5)];
+  const arrow = view === 'install'
+    ? (entry ? uTurnArrow([...entryLead, f.pt(topT, 0.5)], 'U') : runArrow(f.pt(0, 0.5), f.pt(topT, 0.5), 'U'))
+    : uTurnArrow([...arrivalLead, ...entryLead.slice().reverse()], 'D');
+  return { outline, arrows: [arrow], ...extra };
 }
 
 const WALL_BASE  = DEFAULT_WALL_BASE;                        // mm — 既定壁下地厚（壁生成の既定値と同一）
@@ -321,56 +353,142 @@ function straightCellStartMm(run, L, cell) {
 
 /**
  * 直進（STRAIGHT・1区間）の install 破れ位置（走行軸mm・上り口基点）。
- * buildStraight／beyondBreakStraightLike と同じ breakStepOf→straightCellStartMm を使い、
+ * buildStraight／beyondBreakStraightLike と同じ straightLikeBreakMm を使い、
  * 階段下分割CL（stairUnderSplit.js）と破れ位置を単一ソース化する。直進1区間でなければ null。
- * @param {object} stair - type/sections/totalSteps を持つ Stair（相当）
+ * @param {object} stair - type/sections/totalSteps/entryTurnSteps/arrivalTurnSteps を持つ Stair（相当）
  * @param {number} runLength - 走行方向の全長(mm)
  * @param {number|null} riser - 蹴上(mm)。null なら breakStepOf が既定比率にフォールバックする。
+ * @param {ReturnType<typeof resolveStraightPorts>|null} [ports] - 側面の出入口の解決結果（resolveStraightPortsOf）。
+ *   null＝両口とも走行端。
  */
-export function straightBreakMm(stair, runLength, riser) {
+export function straightBreakMm(stair, runLength, riser, ports = null) {
   const { parts, totalSteps } = stairParts(getSections(stair));
   if (parts.length !== 1) return null;
-  const breakCell = breakStepOf(totalSteps, riser, 'install');
-  return straightCellStartMm(parts[0], runLength, breakCell);
+  return straightLikeBreakMm(parts, totalSteps, riser, straightTurnOf(stair, ports, runLength), [runLength]);
 }
 
 // 踊り場付直進（STRAIGHT_LANDING）: マス番号→走行軸mm（そのマスの基点側境界）。
 // build側（buildStraightLanding）と cellsBeyondBreak 側で共有し、破れ位置判定を単一ソース化する。
-function straightLandingCellStartMm(run1, land, run2, L1, LD, L2, cell) {
+// zoneE/zoneA は側面の出入口の区画（取りつき回転部）の長さ。直進部は区画を除いた区間（zoneE から始まり、
+// 最後の直進部は zoneA だけ短い）。
+function straightLandingCellStartMm(run1, land, run2, L1, LD, L2, cell, zoneE = 0, zoneA = 0) {
   const landingEnd = L1 + LD;
-  if (cell <= run1.cells) return (cell - 1) * (L1 / run1.cells);
+  if (cell <= run1.cells) return zoneE + (cell - 1) * ((L1 - zoneE) / run1.cells);
   if (cell === land.numberStart) return L1;
-  return landingEnd + (cell - run2.numberStart) * (L2 / run2.cells);
+  return landingEnd + (cell - run2.numberStart) * ((L2 - zoneA) / run2.cells);
+}
+
+// 側面の出入口の解決結果（resolveStraightPorts）を、描画・破れ位置が使う取りつき蹴上数と区画長（lengthMm の単位の mm）へ。
+// 区画長は実測全長（ports.total）に対する比率で lengthMm へ写す（描画は壁厚ぶん inset した枠なので全長が違う）。
+// 走行端の口は 0。ports が null（両口とも走行端）なら全部 0。
+function straightTurnOf(stair, ports, lengthMm) {
+  if (!ports) return { turnE: 0, turnA: 0, zoneE: 0, zoneA: 0 };
+  const k = lengthMm / ports.total;
+  return {
+    turnE: ports.entry !== 'end' ? Math.max(0, stair.entryTurnSteps ?? 0) : 0,
+    turnA: ports.arrival !== 'end' ? Math.max(0, stair.arrivalTurnSteps ?? 0) : 0,
+    zoneE: ports.zoneE * k, zoneA: ports.zoneA * k,
+  };
+}
+
+// 直進系の側面の出入口の解決。保存値が走行端・自動のみ、実測できない、側面が幾何上選べないときは null（従来どおり）。
+function straightPortsOf(stair, spans) {
+  if (!hasSidePort(stair)) return null;
+  const info = straightPortInfoOf(spans);
+  if (!info) return null;
+  const r = resolveStraightPorts(stair, info);
+  return r.entry === 'end' && r.arrival === 'end' ? null : r;
+}
+
+/**
+ * 直進系（STRAIGHT・STRAIGHT_LANDING）の側面の出入口を解決する（stairUnderSplit.js 等、graph から呼ぶ側の入口）。
+ * @returns {ReturnType<typeof resolveStraightPorts>|null} 両口とも走行端なら null
+ */
+export function resolveStraightPortsOf(stair, graph) {
+  return hasSidePort(stair) ? straightPortsOf(stair, measureStairSpans(stair, graph)) : null;
+}
+
+/**
+ * 直進系の install 破れ位置（走行軸mm・上り口基点）の単一ソース（build・cellsBeyondBreak・straightBreakMm が共有）。
+ * 破れの高さ（FL+1600）は取りつき回転部の蹴上を含む総蹴上数で決め、そのマス番号から上り口の取りつき分を引いて
+ * 直進部（区画を除いた区間）のマス番号に直し、区画の長さぶん進めた位置の mm にする。側面の口があるときは
+ * 直進部の外（取りつき回転部の中）へ出ないよう [1, 最終マス] に収める。
+ * @param {object[]} parts - stairParts の parts（直進は1、踊場付直進は3）
+ * @param {number} totalSteps - stairParts の totalSteps（取りつき蹴上を含まない）
+ * @param {{ turnE:number, turnA:number, zoneE:number, zoneA:number }} turn - straightTurnOf の結果（lens と同じ mm の単位）
+ * @param {number[]} lens - 区間の長さ（区画を含む）。直進 [全長]、踊場付直進 [L1, LD, L2]
+ */
+function straightLikeBreakMm(parts, totalSteps, riser, turn, lens) {
+  const { turnE, turnA, zoneE, zoneA } = turn;
+  const raw = breakStepOf(totalSteps + turnE + turnA, riser, 'install') - turnE;
+  // 走行端のままなら breakStepOf が既に [1, 総蹴上数−1] に収めるので clamp しても結果は変わらない（従来式のまま）。
+  // 側面の口があるときだけ、取りつきを引いた番号が直進部の外へ出ないよう収める
+  const ported = zoneE > 0 || zoneA > 0;
+  const lastCell = totalSteps - 1;
+  const cell = ported ? Math.min(lastCell, Math.max(1, raw)) : raw;
+  if (parts.length === 1) return zoneE + straightCellStartMm(parts[0], lens[0] - zoneE - zoneA, cell);
+  const [run1, land, run2] = parts;
+  const [L1, LD, L2] = lens;
+  return straightLandingCellStartMm(run1, land, run2, L1, LD, L2, cell, zoneE, zoneA);
 }
 
 // ---- 直進階段 ----
-function buildStraight(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
+// 側面の出入口（直進系。sp＝straightPortsOf の結果、turn＝straightTurnOf の結果。frame の t 比率 lengthMm 基準）
+// を frameDecor へ渡す形にする。走行端の口は null。
+function straightFramePorts(sp, turn, lengthMm) {
+  if (!sp) return null;
+  return {
+    entry: sp.entry !== 'end' ? { s: sp.entryS, tExit: turn.zoneE / lengthMm } : null,
+    arrival: sp.arrival !== 'end' ? { s: sp.arrivalS, tExit: 1 - turn.zoneA / lengthMm } : null,
+  };
+}
+
+// 直進階段
+function buildStraight(stair, b, { view, detail, riser, spans = null, breakOverhangMm = 0 }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const run = parts[0];
   const L = f.runLength;          // 区間長 = 設置枠の走行全長
-  const pitch = L / run.cells;
-  const breakCell = breakStepOf(totalSteps, riser, view);
-  const shownMm = view === 'install' ? straightCellStartMm(run, L, breakCell) : L;
+  // 側面の出入口（取りつき回転部）。区画を除いた区間が直進部（zoneE から zoneA 手前まで）
+  const sp = straightPortsOf(stair, spans);
+  const turn = straightTurnOf(stair, sp, L);
+  const { turnE, turnA, zoneE, zoneA } = turn;
+  const runL = L - zoneE - zoneA;
+  const pitch = runL / run.cells;
+  const totalStepsAll = totalSteps + turnE + turnA;
+  const shownMm = view === 'install' ? straightLikeBreakMm(parts, totalSteps, riser, turn, [L]) : L;
+  run.numberStart += turnE; // 段数字は取りつき回転部の蹴上ぶん後ろへずれる（破れ位置の換算は取りつきを除いた番号）
   const topT = shownMm / L;
   const nosingMm = detail ? stair.nosing * (view === 'install' ? -1 : 1) : 0;
 
-  const { outline, breakLine, arrows, breakInset, wideSide } = frameDecor(f, topT, view, b, breakOverhangMm);
+  const { outline, breakLine, arrows, breakInset, wideSide } = frameDecor(f, topT, view, b, breakOverhangMm, straightFramePorts(sp, turn, L));
   // I字: 破れ線が広い方（走行方向により長く見えがかる側＝文字をより多く描画できる側）へ寄せる。
   // 破れがない（upper）場合は既定で外周寄り（1-NUM_OUT）に置く。
   const numS = wideSide === 0 ? NUM_OUT : 1 - NUM_OUT;
   const out = { treads: [], stepNumbers: [] };
+  if (sp?.entry === 'side') emitPortTurnZone(out, f, { tBase: 0, tExit: zoneE / L, sEdge: sp.entryS, sFar: 1 - sp.entryS, sExitLo: 0, sExitHi: 1, enterFromEdge: true }, turnE, 1, { detail });
   emitRun(out, run, pitch, {
-    treadLine: (mm) => line(f.pt(clamp01(mm / L), 0), f.pt(clamp01(mm / L), 1)),
-    labelPt:   (mm) => f.pt(mm / L, numS),
+    treadLine: (mm) => line(f.pt(clamp01((zoneE + mm) / L), 0), f.pt(clamp01((zoneE + mm) / L), 1)),
+    labelPt:   (mm) => f.pt((zoneE + mm) / L, numS),
   }, {
     detail,
-    limitMm:       view === 'install' ? shownMm - breakInset : Infinity,
-    numberLimitMm: view === 'install' ? shownMm : Infinity,
+    limitMm:       view === 'install' ? shownMm - breakInset - zoneE : Infinity,
+    numberLimitMm: view === 'install' ? shownMm - zoneE : Infinity,
     nosingMm,
   });
-  // 到達番号は最終マスの続き（到達辺から NUM_GAP ピッチ先＝上階の床側）
-  if (view !== 'install') emitArrival(out, totalSteps, f.pt(1 + NUM_GAP / run.cells, numS), f.pt(1, numS), detail);
+  if (view !== 'install') {
+    if (sp?.arrival === 'side') {
+      // 到達口の区画 [tExit, 1]（取りつき回転部。歩行の入口は走行側）。到達番号は側辺の外側
+      const tExit = 1 - zoneA / L, tP = (tExit + 1) / 2;
+      emitPortTurnZone(out, f, { tBase: 1, tExit, sEdge: sp.arrivalS, sFar: 1 - sp.arrivalS, sExitLo: 0, sExitHi: 1, enterFromEdge: false }, turnA, totalSteps + turnE, { detail });
+      const acrossLen = (f.vertical ? b.x2 - b.x1 : b.y2 - b.y1) || 1;
+      const sOut = sp.arrivalS === 1 ? 1 : -1; // 辺の外側へ向かう s の符号
+      emitArrival(out, totalStepsAll, f.pt(tP, sp.arrivalS + sOut * (NUM_GAP * pitch) / acrossLen), f.pt(tP, sp.arrivalS), detail);
+    } else {
+      // 到達番号は最終マスの続き（到達辺から NUM_GAP ピッチ先＝上階の床側）
+      emitArrival(out, totalStepsAll, f.pt(1 + NUM_GAP * (runL / L) / run.cells, numS), f.pt(1, numS), detail);
+    }
+  }
   return { ...out, outline, arrows, breakLine };
 }
 
@@ -388,18 +506,23 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverh
   const L2 = ms ? ms[2] : run2.cells * tread;
   const landingEnd = L1 + LD;
   const budget = (landingEnd + L2) || 1;
-  const pitch1 = L1 / run1.cells, pitch2 = L2 / run2.cells;
+  // 側面の出入口（実測があるときだけ）。区画（取りつき回転部）は実測と同じ mm の単位で、直進部は区画を除いた区間
+  const sp = ms ? straightPortsOf(stair, spans) : null;
+  const turn = straightTurnOf(stair, sp, sp ? sp.total : 1);
+  const { turnE, turnA, zoneE, zoneA } = turn;
+  const pitch1 = (L1 - zoneE) / run1.cells, pitch2 = (L2 - zoneA) / run2.cells;
   const tAt = (mm) => mm / budget;
+  const totalStepsAll = totalSteps + turnE + turnA;
 
   // 破れ位置: マス番号（=蹴上の続き番号）→ 走行軸mm（そのマスの基点側境界）
-  const breakCell = breakStepOf(totalSteps, riser, view);
   const shownMm = view === 'install'
-    ? straightLandingCellStartMm(run1, land, run2, L1, LD, L2, breakCell)
+    ? straightLikeBreakMm(parts, totalSteps, riser, turn, [L1, LD, L2])
     : budget;
+  for (const p of parts) p.numberStart += turnE; // 段数字は取りつき回転部の蹴上ぶん後ろへずれる
   const topT = tAt(shownMm);
   const nosingMm = detail ? stair.nosing * (view === 'install' ? -1 : 1) : 0;
 
-  const { outline, breakLine, arrows, breakInset, wideSide } = frameDecor(f, topT, view, b, breakOverhangMm);
+  const { outline, breakLine, arrows, breakInset, wideSide } = frameDecor(f, topT, view, b, breakOverhangMm, straightFramePorts(sp, turn, budget));
   const limitMm = view === 'install' ? shownMm - breakInset : Infinity; // 破れ線が両側線を切り始める手前（踏面線用）
   const numberLimitMm = view === 'install' ? shownMm : Infinity; // 段数文字用（マスが破れ手前なら番号を出す。インセット非依存）
   // I字: 破れ線が広い方へ寄せる（破れなしは既定で外周寄り）。区間全体で同じ側に統一する。
@@ -409,11 +532,13 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverh
   const lineAt = (mm) => line(f.pt(clamp01(tAt(mm)), 0), f.pt(clamp01(tAt(mm)), 1));
   const pushBoundary = (mm) => { if (mm > 1e-6 && mm < limitMm - 1e-6) out.treads.push(lineAt(mm)); };
 
-  // 直進部1（踊場入口境界=区間終端は踊場側が描く）
+  // 上り口が側面なら、直進部1の手前（[0, zoneE]）が取りつき回転部
+  if (sp?.entry === 'side') emitPortTurnZone(out, f, { tBase: 0, tExit: tAt(zoneE), sEdge: sp.entryS, sFar: 1 - sp.entryS, sExitLo: 0, sExitHi: 1, enterFromEdge: true }, turnE, 1, { detail });
+  // 直進部1（踊場入口境界=区間終端は踊場側が描く）。区画を除いた区間が zoneE から始まる
   emitRun(out, run1, pitch1, {
-    treadLine: lineAt,
-    labelPt:   (mm) => f.pt(tAt(mm), numS),
-  }, { detail, limitMm, numberLimitMm, nosingMm });
+    treadLine: (mm) => lineAt(zoneE + mm),
+    labelPt:   (mm) => f.pt(tAt(zoneE + mm), numS),
+  }, { detail, limitMm: limitMm - zoneE, numberLimitMm: numberLimitMm - zoneE, nosingMm });
   // 踊場: 入口・後縁の境界と番号（初段=下手側の run1 と同じ幅方向位置、入口境界線近く）
   pushBoundary(L1 + nosingMm);
   pushBoundary(landingEnd);
@@ -426,7 +551,18 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverh
     treadLine: (mm) => lineAt(landingEnd + mm),
     labelPt:   (mm) => f.pt(tAt(landingEnd + mm), numS),
   }, { detail, limitMm: limitMm - landingEnd, numberLimitMm: numberLimitMm - landingEnd, nosingMm });
-  if (view !== 'install') emitArrival(out, totalSteps, f.pt(1 + tAt(NUM_GAP * pitch2), numS), f.pt(1, numS), detail);
+  if (view !== 'install') {
+    if (sp?.arrival === 'side') {
+      // 到達口の区画 [tExit, 1]（取りつき回転部）。到達番号は側辺の外側
+      const tExit = tAt(budget - zoneA), tP = (tExit + 1) / 2;
+      emitPortTurnZone(out, f, { tBase: 1, tExit, sEdge: sp.arrivalS, sFar: 1 - sp.arrivalS, sExitLo: 0, sExitHi: 1, enterFromEdge: false }, turnA, totalSteps + turnE, { detail });
+      const acrossLen = (f.vertical ? b.x2 - b.x1 : b.y2 - b.y1) || 1;
+      const sOut = sp.arrivalS === 1 ? 1 : -1; // 辺の外側へ向かう s の符号
+      emitArrival(out, totalStepsAll, f.pt(tP, sp.arrivalS + sOut * (NUM_GAP * pitch2) / acrossLen), f.pt(tP, sp.arrivalS), detail);
+    } else {
+      emitArrival(out, totalStepsAll, f.pt(1 + tAt(NUM_GAP * pitch2), numS), f.pt(1, numS), detail);
+    }
+  }
   return { ...out, outline, arrows, breakLine };
 }
 
@@ -1356,8 +1492,14 @@ function segmentSpans(stair, b, spans) {
   switch (stair.type) {
     case StairType.STRAIGHT: {
       const f = makeFrame(stair, b);
+      // 側面の出入口に取りつく回転部は蹴上数そのもの（フィールド名を index に持たせる。U字と同じ）
+      const sp = straightPortsOf(stair, spans);
+      const turn = straightTurnOf(stair, sp, f.runLength);
+      const tE = turn.zoneE / f.runLength, tA = 1 - turn.zoneA / f.runLength;
       return [
-        [f.pt(0, 0), f.pt(1, 0), `直進 踏面${parts[0].cells}`, 0],
+        ...(sp?.entry === 'side' ? [[f.pt(0, 0), f.pt(tE, 0), `取付 段数${stair.entryTurnSteps ?? 0}`, 'entryTurnSteps']] : []),
+        [f.pt(tE, 0), f.pt(tA, 0), `直進 踏面${parts[0].cells}`, 0],
+        ...(sp?.arrival === 'side' ? [[f.pt(tA, 0), f.pt(1, 0), `取付 段数${stair.arrivalTurnSteps ?? 0}`, 'arrivalTurnSteps']] : []),
       ];
     }
     case StairType.STRAIGHT_LANDING: {
@@ -1369,10 +1511,14 @@ function segmentSpans(stair, b, spans) {
       const L2 = ms ? ms[2] : run2.cells * tread;
       const budget = (L1 + LD + L2) || 1;
       const tAt = (mm) => mm / budget;
+      const sp = ms ? straightPortsOf(stair, spans) : null;
+      const { zoneE, zoneA } = straightTurnOf(stair, sp, sp ? sp.total : 1);
       return [
-        [f.pt(0, 0),            f.pt(tAt(L1), 0),      `最初 踏面${run1.cells}`, 0],
+        ...(sp?.entry === 'side' ? [[f.pt(0, 0), f.pt(tAt(zoneE), 0), `取付 段数${stair.entryTurnSteps ?? 0}`, 'entryTurnSteps']] : []),
+        [f.pt(tAt(zoneE), 0),   f.pt(tAt(L1), 0),      `最初 踏面${run1.cells}`, 0],
         [f.pt(tAt(L1), 0),      f.pt(tAt(L1 + LD), 0), '踊り場',                 null],
-        [f.pt(tAt(L1 + LD), 0), f.pt(1, 0),            `直進 踏面${run2.cells}`, 2],
+        [f.pt(tAt(L1 + LD), 0), f.pt(tAt(budget - zoneA), 0), `直進 踏面${run2.cells}`, 2],
+        ...(sp?.arrival === 'side' ? [[f.pt(tAt(budget - zoneA), 0), f.pt(1, 0), `取付 段数${stair.arrivalTurnSteps ?? 0}`, 'arrivalTurnSteps']] : []),
       ];
     }
     case StairType.SWITCHBACK:
@@ -1471,23 +1617,27 @@ function worldToNorm(stair, b) {
 
 // I字（STRAIGHT/STRAIGHT_LANDING）: breakStepOf のマス番号→走行軸mm→セル境界照合。
 // セルの基点側境界（走行軸tの小さい方）が破れ位置以降なら「先」。
-function beyondBreakStraightLike(stair, graph, riser) {
+// stair は現行分割へ展開したセルを持つ shim（セルの列挙に使う）、orig は保存セルの元の階段。区画（先頭・末尾の行）と
+// 区間長の実測は build・straightBreakMm と同じ保存セルで測る（細分化後のセルで測ると、区切り線が行を横切るとき
+// 区画が縮んで破れ位置が食い違う）。
+function beyondBreakStraightLike(stair, graph, riser, orig) {
   const b = roomBounds(stair.cells, graph);
   if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return new Set();
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
-  const breakCell = breakStepOf(totalSteps, riser, 'install');
 
+  // 破れ位置は build と同じ straightLikeBreakMm（側面の出入口の取りつき回転部を除いた直進部で換算する）
   let breakMm;
   if (parts.length === 1) {
-    const [run] = parts;
-    breakMm = straightCellStartMm(run, f.runLength, breakCell);
+    const turn = straightTurnOf(stair, resolveStraightPortsOf(orig, graph), f.runLength);
+    breakMm = straightLikeBreakMm(parts, totalSteps, riser, turn, [f.runLength]);
   } else if (parts.length === 3) {
-    const [run1, land, run2] = parts;
-    const ms = measuredLengths(measureStairSpans(stair, graph), 3);
+    const spans = measureStairSpans(orig, graph);
+    const ms = measuredLengths(spans, 3);
     if (!ms) return new Set(); // 区間長が実測できない（区間長指定が無い）→ 導出不能
-    const [L1, LD, L2] = ms;
-    breakMm = straightLandingCellStartMm(run1, land, run2, L1, LD, L2, breakCell);
+    const sp = straightPortsOf(stair, spans);
+    const turn = straightTurnOf(stair, sp, sp ? sp.total : 1);
+    breakMm = straightLikeBreakMm(parts, totalSteps, riser, turn, ms);
   } else {
     return new Set();
   }
@@ -1515,10 +1665,12 @@ function beyondBreakStraightLike(stair, graph, riser) {
 // 誤認され破れ先に誤分類されていた）。tRun は uTurnSpans の実測（measureStairSpans が使うのと
 // 同じ値）から求め、build側の uTurnLayout と同じ tRun に一致させる。不等長レーンでも、復路側
 //（s>0.5）のレーンセルは基端の位置によらず全部が「先」になる。
-function beyondBreakUTurnLike(stair, graph) {
+// tRun は build（stair.cells＝保存セル）と同じ保存セルの orig で測る。細分化後のセルで測ると、区切り線が
+// 回り段の列を横切ったとき遠端に接さなくなったセルが復路と誤認される（stair は現行分割のセルの shim で、列挙にだけ使う）。
+function beyondBreakUTurnLike(stair, graph, orig) {
   const b = roomBounds(stair.cells, graph);
   if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return new Set();
-  const us = uTurnSpans(stair, graph, b);
+  const us = uTurnSpans(orig, graph, b);
   if (!us) return new Set(); // U字構造として認識できない → 導出不能
   const f = makeFrame(stair, b);
   const tRun = us.tRun;
@@ -1620,14 +1772,17 @@ export function cellsBeyondBreak(stair, graph, riser) {
   const shim = {
     type: stair.type, upDirection: stair.upDirection, flip: stair.flip,
     sections: stair.sections, totalSteps: stair.totalSteps, cells,
+    // 直進系の破れ位置は側面の出入口の取りつき分で換算する（落とすと破れ先セルが取りつき分ずれる）
+    entrySide: stair.entrySide, arrivalSide: stair.arrivalSide,
+    entryTurnSteps: stair.entryTurnSteps, arrivalTurnSteps: stair.arrivalTurnSteps,
   };
   switch (stair.type) {
     case StairType.STRAIGHT:
     case StairType.STRAIGHT_LANDING:
-      return beyondBreakStraightLike(shim, graph, riser);
+      return beyondBreakStraightLike(shim, graph, riser, stair);
     case StairType.SWITCHBACK:
     case StairType.WINDING:
-      return beyondBreakUTurnLike(shim, graph);
+      return beyondBreakUTurnLike(shim, graph, stair);
     case StairType.L_TURN:
     case StairType.FLARED:
       return beyondBreakLTurnLike(shim, graph, riser);

@@ -19,7 +19,7 @@
 import { CenterLineType, RoomFeature, StairType } from '@core';
 import { isUnderStairSplitKind } from '../../core/centerLineKindPolicy.js';
 import { cellBoundsFromKey, getCellsInRect, roomBounds } from '../gridCells.js';
-import { straightBreakMm } from './stairGeometry.js';
+import { straightBreakMm, resolveStraightPortsOf } from './stairGeometry.js';
 
 const EPS = 1e-6;       // mm — extent 同定の一致許容（生成時と同じ値をそのまま持つため実質完全一致）
 const VALUE_EPS = 0.01; // mm — 破れ位置 value の一致許容（蹴上経由の float 算術の揺れ吸収）
@@ -69,7 +69,7 @@ function desiredSplit(stair, graph, riser) {
   if (!b) return null;
   const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
   const runLength = vertical ? b.y2 - b.y1 : b.x2 - b.x1;
-  const breakMm = straightBreakMm(stair, runLength, riser);
+  const breakMm = straightBreakMm(stair, runLength, riser, resolveStraightPortsOf(stair, graph));
   if (breakMm == null || breakMm <= EPS || breakMm >= runLength - EPS) return null;
   // 走行軸 t=0（上り口）の原点・向きは makeFrame の coordAt と同じ対応
   let value;

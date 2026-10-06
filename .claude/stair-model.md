@@ -184,6 +184,19 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
   ——取りつき回転部は sections に入れず別フィールドに持つ（先頭を回転部にすると区間数3を前提にする
   消費側が壊れる）。展開図（`elevation/section/*`）は復路レーン長を往路と同じとみなし、取りつき回転部も
   未追従（別件）。
+- 直進系（`STRAIGHT`・`STRAIGHT_LANDING`。ステップ9b）の区画は**先頭の行（上り口）・末尾の行（到達口）**。行＝走行軸の始点
+  tNear がそろったセル群（幅方向に分割されていれば複数セルで1行。`stairClassify.js straightEndRows`。走行長は行内で終端が
+  そろわなければ短い方）。区画の側辺（left/right）が出入口で、区画の走行端の辺は通常の外周になり、区画が取りつきの回転部
+  （`emitPortTurnZone`）、直進部は区画を除いた区間（`stairGeometry.js buildStraight`/`buildStraightLanding`）。選べる条件は
+  U字と同じ関数（外周・床・直進部2段以上）に型分岐を足したもの（`stairPorts.js straightPortCandidates`）: 1行だけの直進は
+  側面が候補外、両口とも側面なら3行以上（上り口を先に確保し、到達口は残りに収まるときだけ。`resolveStraightPorts`）。
+  取りつき蹴上は直進が区間1つなので上り口・到達口とも `sections[0]` から引く（`portRunIndex`）。踊場付直進は区画が各直進部
+  （最初・最後の区間）の中に収まる必要がある——実測が3行並び（踊場付直進と判定される条件）では先頭の行が直進部全体に
+  なるため、現状の分類では側面は選べない（実測を合成した幾何テストだけが踏む）。**破れ位置（FL+1600）は取りつきの蹴上を
+  含む総蹴上数で `breakStepOf` を引き、マス番号から上り口の取りつき分を引いて直進部の mm に換算する**。この換算は
+  `stairGeometry.js straightLikeBreakMm` の1か所で、build・`cellsBeyondBreak`（`beyondBreakStraightLike`）・
+  `straightBreakMm`（階段下分割CL）の3か所が共有する（片方だけ直さない）。寸法は「取付 段数N」（直進の前後）。
+  展開図（`elevation/section/*`）は取りつき回転部に未追従（U字と同じ先送り）。
 - `Stair` の項目を列挙する箇所は4つ（FBS `schema/graphFbs.js`・`graphSnapshot.js`・`finish/stair/stairFloorSync.js`・`finish/finishUndo.js`）。項目を足すときは全部に足す（finishUndo だけは採取側をキー集合の突合テスト、復元側を全項目往復テストが検出する。他3つは機械検出が無い）。
 - 階段はRoomを残したまま設置する（`Stair.roomId`リンク。理由と不変条件は`.claude/data-model.md`）。
 - 2a壁も脱出のたびに導出し直す（他の壁と同じライフサイクル。壁の再生成をFinishModeStateから

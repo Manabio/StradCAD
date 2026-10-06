@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Stair, StairType, StairPortSide } from '@core';
-import { applySectionDimEdit, sectionsForType, isTurnStepsDim, portSideChange } from './stairSectionEdit.js';
+import { applySectionDimEdit, sectionsForType, isTurnStepsDim, portSideChange, resetPortSides, alignPortTurnSteps } from './stairSectionEdit.js';
 
 test('回り階段の回転部（index1）に R=0 を入れると sections[1]=1・タイプは SWITCHBACK に導出', () => {
   const r = applySectionDimEdit({ type: StairType.WINDING, sections: [5, 5, 4], totalSteps: 13 }, 1, 0);
@@ -78,8 +78,36 @@ test('【失敗系】portSideChange: 直進部が 2 段未満になる側面は�
   assert.equal(portSideChange(stair, 'entry', StairPortSide.END, 1000).entryTurnSteps, 0, '走行端へは常に切り替えられる');
   stair.setField('structure', 'STEEL');
   assert.deepEqual(portSideChange(stair, 'entry', StairPortSide.LEFT, 1000), { entrySide: 'left', entryTurnSteps: 0 });
-  // 区間数が合わない sections（直進など）の stair で取りつきを足す・戻す切替は組めない
-  const bad = { type: StairType.STRAIGHT, structure: 'WOOD', tread: 250, sections: [13], entryTurnSteps: 0 };
+  // 区間数が合わない sections（直進に 3 区間など。直進は 1 区間）の stair で取りつきを足す・戻す切替は組めない
+  const bad = { type: StairType.STRAIGHT, structure: 'WOOD', tread: 250, sections: [13, 1, 5], entryTurnSteps: 0 };
   assert.equal(portSideChange(bad, 'entry', StairPortSide.LEFT, 1000), null);
   assert.equal(portSideChange({ ...bad, entryTurnSteps: 3 }, 'entry', StairPortSide.END, 1000), null);
+});
+
+test('portSideChange（直進）: 総蹴上数を保つ。区間が 1 つなので上り口・到達口とも sections[0] から引き、戻すと sections[0] へ戻る', () => {
+  const stair = new Stair('s', { type: StairType.STRAIGHT, sections: [15] });
+  assert.equal(stair.totalSteps, 15);
+  const apply = (fields) => { for (const [k, v] of Object.entries(fields)) stair.setField(k, v); };
+  apply(portSideChange(stair, 'entry', StairPortSide.LEFT, 1000));
+  assert.deepEqual([stair.sections, stair.entryTurnSteps, stair.totalSteps], [[11], 4, 15]);
+  apply(portSideChange(stair, 'arrival', StairPortSide.RIGHT, 1000));
+  assert.deepEqual([stair.sections, stair.arrivalTurnSteps, stair.totalSteps], [[7], 4, 15]);
+  apply(portSideChange(stair, 'entry', StairPortSide.END, 1000));
+  assert.deepEqual([stair.sections, stair.entryTurnSteps, stair.totalSteps], [[11], 0, 15]);
+  // 直進部が 2 段未満になる側面は拒否
+  const small = new Stair('t', { type: StairType.STRAIGHT, sections: [5] });
+  assert.equal(portSideChange(small, 'arrival', StairPortSide.LEFT, 1000), null);
+  // 踊場付直進の到達口は復路側（sections[2]）から引く
+  const landing = new Stair('u', { type: StairType.STRAIGHT_LANDING, sections: [8, 1, 9] });
+  assert.deepEqual(portSideChange(landing, 'arrival', StairPortSide.LEFT, 1000).sections, [8, 1, 5]);
+  assert.deepEqual(portSideChange(landing, 'entry', StairPortSide.LEFT, 1000).sections, [4, 1, 9]);
+});
+
+test('resetPortSides/alignPortTurnSteps（直進系）: 取りつき蹴上は直進部（sections[0]）へ戻り総蹴上数を保つ。矩折ほかは {}', () => {
+  const stair = new Stair('s', { type: StairType.STRAIGHT, sections: [7], entrySide: StairPortSide.LEFT, entryTurnSteps: 4, arrivalSide: StairPortSide.RIGHT, arrivalTurnSteps: 4 });
+  assert.equal(stair.totalSteps, 15);
+  assert.deepEqual(resetPortSides(stair), { entrySide: null, arrivalSide: null, entryTurnSteps: 0, arrivalTurnSteps: 0, sections: [15] });
+  assert.deepEqual(alignPortTurnSteps(stair, { entry: 'end', arrival: 'side' }), { entryTurnSteps: 0, sections: [11] });
+  assert.deepEqual(alignPortTurnSteps(stair, { entry: 'side', arrival: 'side' }), {});
+  assert.deepEqual(resetPortSides({ type: StairType.L_TURN }), {});
 });

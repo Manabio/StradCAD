@@ -54,6 +54,39 @@ test('ensureUnderStairSplit: 直進階段の破れ線位置に無ラベルの中
   assert.equal(findUnderStairSplitCLs(stair, graph).length, 1, '重複生成されない');
 });
 
+// 幅 0..1000・走行 0..3000 を 3 行（先頭・末尾の行は 1000mm）に割った直進階段（北向き。t=0 が y=3000）
+function makeThreeRowStraight(extra) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const V = [0, 1000].map(v => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH }));
+  const H = [0, 1000, 2000, 3000].map(v => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH }));
+  const cells = new Set([2, 1, 0].map(j => `${V[0].id}:${H[j].id}:${V[1].id}:${H[j + 1].id}`));
+  const stair = graph.addStair({ type: StairType.STRAIGHT, cells, upDirection: 'up', flip: false, ...extra });
+  return { graph, stair };
+}
+
+test('ensureUnderStairSplit（直進・側面の上り口）: 破れ位置は取りつき回転部の蹴上を含む総蹴上数で決め、直進部の mm で測る（stairGeometry の straightBreakMm と同じ換算）', () => {
+  // 取りつきなし: 総蹴上数 15・FL+1600/200＝マス 8 → 7×(3000/14)＝1500mm → y=3000−1500
+  const plain = makeThreeRowStraight({ sections: [15] });
+  ensureUnderStairSplit(plain.stair, plain.graph, 200);
+  assert.ok(Math.abs(findUnderStairSplitCLs(plain.stair, plain.graph)[0].value - 1500) < 0.01);
+  // 上り口が左（側面）で取りつき 4 段（sections [11]）: マス 8−4＝4 → 区画 1000＋3×(2000/10)＝1600mm → y=1400
+  const side = makeThreeRowStraight({ sections: [11], entrySide: 'left', entryTurnSteps: 4 });
+  ensureUnderStairSplit(side.stair, side.graph, 200);
+  const found = findUnderStairSplitCLs(side.stair, side.graph);
+  assert.equal(found.length, 1);
+  assert.ok(Math.abs(found[0].value - 1400) < 0.01, `value=${found[0].value}`);
+  // 選べない側面（1 行しかない）は走行端と同じ位置
+  const one = makeStraightStairGraph();
+  one.stair.setField('sections', [15]);
+  one.stair.setField('entrySide', 'left');
+  one.stair.setField('entryTurnSteps', 4);
+  ensureUnderStairSplit(one.stair, one.graph, 200);
+  const plainOne = makeStraightStairGraph();
+  plainOne.stair.setField('sections', [15]);
+  ensureUnderStairSplit(plainOne.stair, plainOne.graph, 200);
+  assert.equal(findUnderStairSplitCLs(one.stair, one.graph)[0].value, findUnderStairSplitCLs(plainOne.stair, plainOne.graph)[0].value);
+});
+
 // ---- isSplitCLFor（非公開）を findUnderStairSplitCLs 経由で総当り ----
 test('findUnderStairSplitCLs: 4種別×labeled2値の総当り（幾何署名を満たしても中心線（center）以外は分割CLと認めない）', () => {
   const cases = [

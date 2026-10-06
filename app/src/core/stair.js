@@ -29,7 +29,7 @@ export class Stair {
     flip        = false,
     sections    = null,    // 区間別・実段数（歩行順。偶数=直進部、奇数=踊場・周回部）。未指定はnull
     roomId      = null,    // 変換元 Room の ID（旧データ・上階自動設置分は null）
-    entrySide   = null,    // 上り口の辺（StairPortSide。折返し・回り階段のみ。幾何上選べない値は自動に戻る。null=自動）
+    entrySide   = null,    // 上り口の辺（StairPortSide。折返し・回り・直進系のみ。幾何上選べない値は自動に戻る。null=自動）
     arrivalSide = null,    // 到達口（下り口）の辺（同上）
     entryTurnSteps   = 0,  // 側面の上り口に取りつく回転部（張り出し区間）の蹴上数。0=平場。出入口が走行端なら 0
     arrivalTurnSteps = 0,  // 側面の到達口に取りつく回転部の蹴上数（同上）

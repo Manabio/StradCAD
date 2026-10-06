@@ -10,7 +10,7 @@
 import { StairType, StairPortSide } from '@core';
 import { defaultSections } from './stairGeometry.js';
 import { defaultPortTurnSteps } from './stairClassify.js';
-import { MIN_RUN_RISERS, PORT_RUN_INDEX, stepsFieldOf } from './stairPorts.js';
+import { MIN_RUN_RISERS, portRunIndex, portSectionCount, hasPortSides, stepsFieldOf } from './stairPorts.js';
 
 const U_TURN = new Set([StairType.SWITCHBACK, StairType.WINDING]);
 
@@ -64,14 +64,15 @@ export function sectionsForType(type, stair) {
 export function portSideChange(stair, port, side, zoneMm) {
   const sideField = port === 'entry' ? 'entrySide' : 'arrivalSide';
   const stepsField = stepsFieldOf(port);
-  const idx = PORT_RUN_INDEX[port];
+  const idx = portRunIndex(stair.type, port);
+  const count = portSectionCount(stair.type);
   const cur = Math.max(0, stair[stepsField] ?? 0);
   const out = { [sideField]: side };
   if (side === StairPortSide.END) {
     out[stepsField] = 0;
     if (cur > 0) {
       const sections = [...(stair.sections ?? defaultSections(stair) ?? [])];
-      if (sections.length !== 3) return null;
+      if (sections.length !== count) return null;
       sections[idx] += cur;
       out.sections = sections;
     }
@@ -82,7 +83,7 @@ export function portSideChange(stair, port, side, zoneMm) {
   out[stepsField] = want;
   if (want > 0) {
     const sections = [...(stair.sections ?? defaultSections(stair) ?? [])];
-    if (sections.length !== 3 || sections[idx] - want < MIN_RUN_RISERS) return null;
+    if (sections.length !== count || sections[idx] - want < MIN_RUN_RISERS) return null;
     sections[idx] -= want;
     out.sections = sections;
   }
@@ -99,18 +100,19 @@ function foldTurnSteps(stair, ports) {
     if (cur === 0) continue;
     out[field] = 0;
     sections ??= [...(stair.sections ?? defaultSections(stair) ?? [])];
-    if (sections.length === 3) sections[PORT_RUN_INDEX[port]] += cur;
+    if (sections.length === portSectionCount(stair.type)) sections[portRunIndex(stair.type, port)] += cur;
   }
-  if (sections?.length === 3) out.sections = sections;
+  if (sections?.length === portSectionCount(stair.type)) out.sections = sections;
   return out;
 }
 
 /**
  * 昇り方向・反転を変えたときに出入口を自動へ戻す書込み（辺の向きが物理的に入れ替わるため）:
- * entrySide/arrivalSide を null、取りつき蹴上を 0（その蹴上は直進部へ戻して総蹴上数を保つ）。U字以外は {}。
+ * entrySide/arrivalSide を null、取りつき蹴上を 0（その蹴上は直進部へ戻して総蹴上数を保つ）。
+ * 出入口の辺を選べない型（矩折ほか）は {}。
  */
 export function resetPortSides(stair) {
-  if (!U_TURN.has(stair.type)) return {};
+  if (!hasPortSides(stair.type)) return {};
   return { entrySide: null, arrivalSide: null, ...foldTurnSteps(stair, ['entry', 'arrival']) };
 }
 
@@ -120,7 +122,7 @@ export function resetPortSides(stair) {
  * @param {{ entry:string, arrival:string }} resolved
  */
 export function alignPortTurnSteps(stair, resolved) {
-  if (!U_TURN.has(stair.type)) return {};
+  if (!hasPortSides(stair.type)) return {};
   return foldTurnSteps(stair, [
     ...(resolved.entry === StairPortSide.END ? ['entry'] : []),
     ...(resolved.arrival === StairPortSide.END ? ['arrival'] : []),

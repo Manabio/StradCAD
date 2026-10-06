@@ -3,11 +3,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StairPortSide, RoomFeature, RoomKind } from '@core';
-import { classifyStairArea } from './stairClassify.js';
+import { classifyStairArea, measureStairSpans, straightEndRows } from './stairClassify.js';
 import { makeFrame } from './stairFrame.js';
 import { portSideChange } from './stairSectionEdit.js';
 import {
   sideToS, sideOfS, portSideValue, portSpansOf, portZone, resolveStairPorts, stairPortCandidates,
+  straightPortInfoOf, resolveStraightPorts, resolvePorts, portZoneLen,
 } from './stairPorts.js';
 
 const { END, LEFT, RIGHT } = StairPortSide;
@@ -297,13 +298,142 @@ test('候補の直進部判定は sections=null の階段でも portSideChange �
 
 // ---- 失敗系 ----
 
-test('【失敗系】stairPortCandidates: stair/graph が null・口が不正なら throw。U字以外は走行端のみ（floorChecked=false）', () => {
+test('【失敗系】stairPortCandidates: stair/graph が null・口が不正なら throw。U字・直進系以外（矩折ほか）は走行端のみ（floorChecked=false）', () => {
   const { graph, c } = threeRows();
   const stair = addByOrder(graph, ['f', 'b', 'c', 'd', 'a'].map(n => c[n]));
   assert.throws(() => stairPortCandidates(null, graph, 'entry'), /stair/);
   assert.throws(() => stairPortCandidates(stair, null, 'entry'), /graph/);
   assert.throws(() => stairPortCandidates(stair, graph, 'middle'), /entry/);
   assert.throws(() => stairPortCandidates(stair, graph, undefined), /entry/);
-  const straight = graph.addStair({ type: StairType.STRAIGHT, cells: new Set([c.a, c.e]) });
-  assert.deepEqual(stairPortCandidates(straight, graph, 'entry'), { sides: [END], floorChecked: false });
+  const lTurn = graph.addStair({ type: StairType.L_TURN, cells: new Set([c.a, c.e]) });
+  assert.deepEqual(stairPortCandidates(lTurn, graph, 'entry'), { sides: [END], floorChecked: false });
+});
+
+// ---- 直進系（ステップ9b。区画は先頭・末尾の行）----
+
+// 直進（北向き）: 幅 cols 列 × 行の高さ ys の階段。上り口＝最下行（y が大きい側）、t=0 が下端
+function straightStair(ys, cols = 1, extra = {}) {
+  const g = grid(Array.from({ length: cols + 1 }, (_, i) => i * 1000), ys);
+  const keys = [];
+  for (let j = ys.length - 2; j >= 0; j--) for (let i = 0; i < cols; i++) keys.push(g.cell(i, j));
+  const stair = g.graph.addStair({ type: StairType.STRAIGHT, cells: new Set(keys), upDirection: 'up', flip: false, sections: [15], ...extra });
+  return { ...g, stair };
+}
+const ROWS3 = [0, 1000, 2000, 3000];
+
+test('straightEndRows: 先頭・末尾の行の走行長と行数。幅方向に分割された行は1行、走行方向に分割された行は別の行', () => {
+  const { graph, stair } = straightStair([0, 1000, 2000, 2400, 3000], 2);
+  const r = straightEndRows(stair, graph);
+  assert.equal(r.firstRowMm, 600, '先頭（上り口＝最下行 y 2400〜3000）');
+  assert.equal(r.lastRowMm, 1000, '末尾（最上行 y 0〜1000）');
+  assert.equal(r.rowCount, 4);
+  assert.equal(r.firstCells.length, 2, '幅方向に 2 セルの行は 1 行');
+  assert.equal(r.lastCells.length, 2);
+  assert.equal(r.L, 3000);
+  // 1 行だけなら先頭＝末尾＝全長
+  const one = straightStair([0, 1000]);
+  const r1 = straightEndRows(one.stair, one.graph);
+  assert.deepEqual([r1.firstRowMm, r1.lastRowMm, r1.rowCount], [1000, 1000, 1]);
+});
+
+test('【失敗系】straightEndRows: セルが無い階段は null。measureStairSpans（直進）の firstRow/lastRow/rowCount と一致', () => {
+  const { graph, stair } = straightStair(ROWS3, 2);
+  assert.equal(straightEndRows({ ...stair, cells: new Set() }, graph), null);
+  const spans = measureStairSpans(stair, graph);
+  assert.deepEqual(spans, { lengths: [3000], firstRow: 1000, lastRow: 1000, rowCount: 3 });
+  assert.equal(straightPortInfoOf(null), null);
+  assert.equal(straightPortInfoOf({ lengths: [3000] }), null, '先頭・末尾の行が無い実測は null');
+});
+
+test('候補（直進 3 行）: 上り口・到達口とも end・左・右。区画は先頭・末尾の行', () => {
+  const { graph, stair } = straightStair(ROWS3, 2);
+  assert.deepEqual(stairPortCandidates(stair, graph, 'entry'), { sides: [END, LEFT, RIGHT], floorChecked: false });
+  assert.deepEqual(stairPortCandidates(stair, graph, 'arrival'), { sides: [END, LEFT, RIGHT], floorChecked: false });
+});
+
+test('候補（直進 1 行）: 区画が全体で直進部が残らないので end だけ（上り口・到達口とも）', () => {
+  const { graph, stair } = straightStair([0, 1000], 2);
+  assert.deepEqual(stairPortCandidates(stair, graph, 'entry').sides, [END]);
+  assert.deepEqual(stairPortCandidates(stair, graph, 'arrival').sides, [END]);
+});
+
+test('候補（直進 2 行）: 片方の口だけなら側面が選べる。相手の口が側面なら全長に収まらず end だけ（両口とも側面は 3 行以上）', () => {
+  const { graph, stair } = straightStair([0, 1000, 2000], 2);
+  assert.deepEqual(stairPortCandidates(stair, graph, 'entry').sides, [END, LEFT, RIGHT]);
+  assert.deepEqual(stairPortCandidates(stair, graph, 'arrival').sides, [END, LEFT, RIGHT]);
+  stair.setField('entrySide', LEFT);
+  assert.deepEqual(stairPortCandidates(stair, graph, 'arrival').sides, [END], '上り口が側面なら到達口の側面は直進部が残らない');
+  stair.setField('entrySide', null);
+  stair.setField('arrivalSide', RIGHT);
+  assert.deepEqual(stairPortCandidates(stair, graph, 'entry').sides, [END]);
+  // 3 行なら両口とも側面にできる
+  const three = straightStair(ROWS3, 2, { entrySide: LEFT });
+  assert.deepEqual(stairPortCandidates(three.stair, three.graph, 'arrival').sides, [END, LEFT, RIGHT]);
+});
+
+test('候補（直進）: 取りつき蹴上を足すと直進部が 2 段未満になる側面は候補外。鉄骨は蹴上 0 なので残る', () => {
+  const { graph, stair } = straightStair(ROWS3, 2, { sections: [5] });
+  assert.deepEqual(stairPortCandidates(stair, graph, 'entry').sides, [END], '5−4=1 段');
+  stair.setField('structure', 'STEEL');
+  assert.deepEqual(stairPortCandidates(stair, graph, 'entry').sides, [END, LEFT, RIGHT]);
+  // 上り口・到達口は同じ sections[0] から引く（sections[0] は上り口の取りつき分を引いた後の値）
+  const both = straightStair(ROWS3, 2, { sections: [9], entrySide: LEFT, entryTurnSteps: 4 });
+  assert.deepEqual(stairPortCandidates(both.stair, both.graph, 'arrival').sides, [END, LEFT, RIGHT], '9−4=5 ≥ 2');
+  both.stair.setField('sections', [5]);
+  assert.deepEqual(stairPortCandidates(both.stair, both.graph, 'arrival').sides, [END], '5−4=1 段');
+});
+
+test('床の確認（直進）: 上り口は自階、到達口は上階の隣が床のある部屋のときだけ。床なし・部屋なしは候補外', () => {
+  const { graph, stair } = straightStair(ROWS3);
+  // 階段は x 0〜1000, y 0〜3000。上り口＝最下行（y 2000〜3000）: 左 x -1000〜0（列 0・行 3）・右（列 2・行 3）・下（列 1・行 4）
+  const entrySides = (left, right, below = true) => {
+    const w = world();
+    if (below) room(w, 1, 4);
+    if (left !== undefined) room(w, 0, 3, left);
+    if (right !== undefined) room(w, 2, 3, right);
+    return stairPortCandidates(stair, graph, 'entry', { floorGraph: w.graph });
+  };
+  assert.deepEqual(entrySides(null, null), { sides: [END, LEFT, RIGHT], floorChecked: true });
+  assert.deepEqual(entrySides(RoomFeature.VOID, null).sides, [END, RIGHT], '左が吹抜けなら左は候補外（北向きの左＝西）');
+  assert.deepEqual(entrySides(null, RoomFeature.STAIR_VOID).sides, [END, LEFT]);
+  assert.deepEqual(entrySides(null, undefined).sides, [END, LEFT], '右が部屋なしなら右は候補外');
+  assert.deepEqual(entrySides(null, null, false).sides, [LEFT, RIGHT], '走行端の外が部屋なしなら end も候補外');
+  // 到達口＝最上行（y 0〜1000）。上階の隣: 左（列 0・行 1）・右（列 2・行 1）・上（列 1・行 0）。到達口は逆向きに歩くので左右が逆
+  const up = world();
+  room(up, 1, 0); room(up, 0, 1); room(up, 2, 1, RoomFeature.VOID);
+  assert.deepEqual(stairPortCandidates(stair, graph, 'arrival', { floorGraph: up.graph }).sides, [END, RIGHT], '到達口から見て右＝西は床、左＝東は吹抜け');
+});
+
+test('resolveStraightPorts: 自動は走行端。保存値 left/right は進行方向の左右で s へ。区画が全長・直進部を食うときは走行端へ戻す', () => {
+  const { graph, stair } = straightStair(ROWS3, 2);
+  const info = straightPortInfoOf(measureStairSpans(stair, graph));
+  assert.deepEqual(resolveStraightPorts(stair, info), { entry: 'end', arrival: 'end', entryS: null, arrivalS: null, zoneE: 0, zoneA: 0, total: 3000 });
+  const withSides = { ...stair, entrySide: LEFT, arrivalSide: LEFT };
+  const r = resolveStraightPorts(withSides, info);
+  assert.deepEqual([r.entry, r.arrival, r.entryS, r.arrivalS, r.zoneE, r.zoneA], ['side', 'side', 0, 1, 1000, 1000], '北向きの上り口の左＝s 0、到達口は逆向きなので左＝s 1');
+  // 2 行: 上り口を先に確保し、到達口は残りに収まらないので走行端
+  const two = straightStair([0, 1000, 2000], 2);
+  const info2 = straightPortInfoOf(measureStairSpans(two.stair, two.graph));
+  const r2 = resolveStraightPorts({ ...two.stair, entrySide: RIGHT, arrivalSide: RIGHT }, info2);
+  assert.deepEqual([r2.entry, r2.arrival], ['side', 'end']);
+  // 1 行・実測なし
+  const one = straightStair([0, 1000], 2);
+  const info1 = straightPortInfoOf(measureStairSpans(one.stair, one.graph));
+  assert.equal(resolveStraightPorts({ ...one.stair, entrySide: LEFT }, info1).entry, 'end');
+  assert.equal(resolveStraightPorts({ ...stair, entrySide: LEFT }, null).entry, 'end');
+  // portSideValue（保存値の語彙へ戻す）
+  assert.equal(portSideValue(withSides, 'entry', r), LEFT);
+  assert.equal(portSideValue(withSides, 'arrival', r), LEFT);
+});
+
+test('resolvePorts/portZoneLen: 型を問わない入口。直進は先頭・末尾の行、U字は区画、矩折ほかは null／0', () => {
+  const { graph, stair } = straightStair(ROWS3, 2);
+  const spans = measureStairSpans(stair, graph);
+  assert.equal(portZoneLen(stair, spans, 'entry'), 1000);
+  assert.equal(portZoneLen(stair, spans, 'arrival'), 1000);
+  assert.equal(resolvePorts(stair, spans).entry, 'end');
+  assert.equal(resolvePorts({ ...stair, type: StairType.L_TURN }, spans), null);
+  assert.equal(portZoneLen({ ...stair, type: StairType.L_TURN }, spans, 'entry'), 0);
+  assert.equal(resolvePorts(stair, null), null, '実測できない直進は null');
+  assert.throws(() => portZoneLen(stair, spans, 'middle'), /entry/);
 });

@@ -4,7 +4,7 @@ import { computeStairDimensions, floorHeightAbove } from './stairDimensions.js';
 import { roomBounds } from '../gridCells.js';
 import { measureStairSpans } from './stairClassify.js';
 import { stairFigurePrimitives } from './stairFigure.js';
-import { portSpansOf, portZone, resolveStairPorts, portSideValue, stairPortCandidates } from './stairPorts.js';
+import { resolvePorts, portZoneLen, portSideValue, stairPortCandidates, hasPortSides, STRAIGHT_TYPES } from './stairPorts.js';
 import { applySectionDimEdit, sectionsForType, sameSections, portSideChange, resetPortSides, alignPortTurnSteps } from './stairSectionEdit.js';
 import { resetUnderStairSplit } from './stairUnderSplit.js';
 import { AutoScaledFigure } from '../../structural/sectionFigure/AutoScaledFigure.jsx';
@@ -51,13 +51,12 @@ const STRUCTURE_OPTIONS = [
   { value: StructuralMaterialType.STEEL, label: '鉄骨' },
 ];
 
-// 折返し・回り階段の出入口の辺（候補が2つ以上あるときだけ表示。左右はその口を歩く向きから見る）
+// 折返し・回り・直進系の階段の出入口の辺（候補が2つ以上あるときだけ表示。左右はその口を歩く向きから見る）
 const PORT_SIDE_LABELS = {
   [StairPortSide.END]:   '走行端',
   [StairPortSide.LEFT]:  '左（上りから見て）',
   [StairPortSide.RIGHT]: '右（上りから見て）',
 };
-const U_TURN_TYPES = new Set([StairType.SWITCHBACK, StairType.WINDING]);
 
 const DIRECTION_OPTIONS = [
   { value: 'up',    label: '上(↑)' },
@@ -89,8 +88,7 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
     : null;
   // 出入口の辺（折返し・回り階段。stairGeometry.js と同じ解決）と、選べる候補（床のある部屋に面する辺だけ。
   // 上り口は自階、到達口は上階の床で確かめる。上階が読めなければ幾何だけで絞り、注記を出す）
-  const portInfo = validB && U_TURN_TYPES.has(stair.type) ? portSpansOf(spans) : null;
-  const ports = portInfo ? resolveStairPorts(stair, portInfo) : null;
+  const ports = validB ? resolvePorts(stair, spans) : null;
   const portRows = ports ? ['entry', 'arrival'].map(port => {
     const cands = stairPortCandidates(stair, graph, port, { floorGraph: port === 'entry' ? graph : upperGraph });
     const current = portSideValue(stair, port, ports);
@@ -101,7 +99,7 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
   // 出入口の切替: 走行端へ戻すと取りつき回転部は 0、側面へ切り替えると初期蹴上数を入れる。総蹴上数は保つ
   // （直進部が 2 段未満になる切替は何もしない。stairSectionEdit.js）
   const onPortSideChange = (port) => (e) => withFinishUndo(graph, () => {
-    const fields = portSideChange(stair, port, e.target.value, portZone(portInfo, port).zoneLen);
+    const fields = portSideChange(stair, port, e.target.value, portZoneLen(stair, spans, port));
     if (!fields) return;
     applyFields(fields);
     afterEdit();
@@ -113,9 +111,9 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
   // 出入口が走行端なのに取りつき蹴上が残る状態は 0 にそろえる（編集で解決が変わりうるため）。
   const afterEdit = () => {
     if (!graph) return;
-    if (U_TURN_TYPES.has(stair.type)) {
-      const info = portSpansOf(measureStairSpans(stair, graph));
-      if (info) applyFields(alignPortTurnSteps(stair, resolveStairPorts(stair, info)));
+    if (hasPortSides(stair.type)) {
+      const resolved = resolvePorts(stair, measureStairSpans(stair, graph));
+      if (resolved) applyFields(alignPortTurnSteps(stair, resolved));
     }
     const r = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps) : null);
     resetUnderStairSplit(stair, graph, r);
@@ -134,6 +132,8 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
 
   const onTypeChange = (e) => withFinishUndo(graph, () => {
     const t = e.target.value;
+    // 直進⇄踊り場付直進は区間数が変わるので、側面の出入口を自動へ戻し取りつき蹴上を直進部へ戻してから切り替える
+    if (STRAIGHT_TYPES.has(stair.type) && STRAIGHT_TYPES.has(t)) applyFields(resetPortSides(stair));
     stair.setField('type', t);
     // 切替先タイプと区間数が合わないsections（未初期化・直進[1区間]↔踊り場付[3区間]等）は既定値で
     // 組み直し、折返し⇄回りの切替では回転部の段数を型に揃える（stairSectionEdit.js）。

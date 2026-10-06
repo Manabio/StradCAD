@@ -46,11 +46,19 @@ test('【配線】ラベルは「走行端」「左（上りから見て）」�
 });
 
 test('【配線】辺の切替は portSideChange（総蹴上数を保つ。null＝直進部が足りず拒否）。反転・上り方向の変更で resetPortSides、編集後に alignPortTurnSteps', () => {
-  assert.ok(panel.has('const fields = portSideChange(stair, port, e.target.value, portZone(portInfo, port).zoneLen);'), 'portSideChange の呼び出し行が見つからない');
+  assert.ok(panel.has('const fields = portSideChange(stair, port, e.target.value, portZoneLen(stair, spans, port));'), 'portSideChange の呼び出し行が見つからない');
   assert.ok(panel.has('if (!fields) return;'), '拒否（null）で何もしない行が見つからない');
   assert.ok(panel.has("<select style={inputStyle} value={stair.upDirection} onChange={e => withFinishUndo(graph, () => { stair.setField('upDirection', e.target.value); applyFields(resetPortSides(stair)); afterEdit(); })}>"),
     '昇り方向の handler（resetPortSides 込み）の行が見つからない');
   assert.ok(panel.has("<input type=\"checkbox\" checked={stair.flip} onChange={e => withFinishUndo(graph, () => { stair.setField('flip', e.target.checked); applyFields(resetPortSides(stair)); afterEdit(); })} />"),
     '反転の handler（resetPortSides 込み）の行が見つからない');
-  assert.ok(panel.has('if (info) applyFields(alignPortTurnSteps(stair, resolveStairPorts(stair, info)));'), 'afterEdit の取りつき蹴上のそろえ行が見つからない');
+  assert.ok(panel.has('if (resolved) applyFields(alignPortTurnSteps(stair, resolved));'), 'afterEdit の取りつき蹴上のそろえ行が見つからない');
+});
+
+test('【配線】出入口の解決は U字・直進系を型で分ける resolvePorts（直進系にも辺の select が出る）。直進⇄踊り場付直進の型切替では先に resetPortSides', () => {
+  assert.ok(panel.has('const ports = validB ? resolvePorts(stair, spans) : null;'), '型を問わない解決の行が見つからない');
+  assert.ok(panel.has('if (hasPortSides(stair.type)) {'), 'afterEdit が出入口を選べる型で判定する行が見つからない');
+  assert.ok(panel.has('const resolved = resolvePorts(stair, measureStairSpans(stair, graph));'), 'afterEdit の解決行が見つからない');
+  assert.ok(panel.has('if (STRAIGHT_TYPES.has(stair.type) && STRAIGHT_TYPES.has(t)) applyFields(resetPortSides(stair));'), '直進系の型切替で出入口を自動へ戻す行が見つからない');
+  assert.equal(countOf(panel.src, 'U_TURN_TYPES'), 0, 'U字限定の判定は残さない');
 });
