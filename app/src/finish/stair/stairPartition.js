@@ -19,7 +19,7 @@
  * 主構造の判定は structural/structureRules.js の isTraditionalWoodStructure（core非依存の静的データのみ）。
  */
 
-import { StairType } from '@core';
+import { StairType, RoomKind } from '@core';
 import { roomBounds } from '../gridCells.js';
 import { makeFrame } from './stairFrame.js';
 import { uTurnSpans, defaultSections } from './stairClassify.js';
@@ -78,9 +78,26 @@ function slopeTop(stair, floorHeight) {
  * }|null}
  */
 export function resolveStairPartition(stair, graph, { structure = null, continuesAbove = false, floorHeight = null } = {}) {
-  if (!stair || stair.type !== StairType.SWITCHBACK) return null;
   if (!isTraditionalWoodStructure(structure)) return null;
+  const g = stairPartitionGeometry(stair, graph);
+  if (!g) return null;
+  return {
+    ...g,
+    thickness: { backing: PARTITION_BACKING_MM, finish: PARTITION_FINISH_MM, total: PARTITION_THICKNESS_MM },
+    top: continuesAbove ? FULL : (slopeTop(stair, floorHeight) ?? FULL),
+  };
+}
 
+/**
+ * 隔て壁の幾何だけ（主構造の判定を含まない）。SWITCHBACK で uTurnSpans が取れなければ null。
+ * 壁の生成（stairPartitionWalls.js。主構造は呼び出し側が見る）と識別（stairPartitionLines）が共有する。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @returns {{isVertical:boolean, axisValue:number, lo:number, hi:number,
+ *   entryEnd:{x:number,y:number}, landingEnd:{x:number,y:number}}|null}
+ */
+export function stairPartitionGeometry(stair, graph) {
+  if (!stair || stair.type !== StairType.SWITCHBACK) return null;
   const b = roomBounds(stair.cells, graph);
   if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return null;
   const us = uTurnSpans(stair, graph, b);
@@ -99,7 +116,58 @@ export function resolveStairPartition(stair, graph, { structure = null, continue
     lo: Math.min(along(entryEnd), along(landingEnd)),
     hi: Math.max(along(entryEnd), along(landingEnd)),
     entryEnd, landingEnd,
-    thickness: { backing: PARTITION_BACKING_MM, finish: PARTITION_FINISH_MM, total: PARTITION_THICKNESS_MM },
-    top: continuesAbove ? FULL : (slopeTop(stair, floorHeight) ?? FULL),
   };
+}
+
+/**
+ * 屋内の SWITCHBACK 全部の隔て壁の線（座標）。主構造は見ない——構造の除外・腰壁の除外が
+ * 「壁が隔て壁か」を座標で照合するための材料（Wall に種別を持たない理由は .claude/stair-model.md）。
+ * 屋外階段（ペア部屋が EXTERIOR）は壁を持たないため含めない。
+ * 主構造では絞らない（識別側は構造に依らず座標で照合する）。在来以外では隔て壁が無いが、
+ * isStairPartitionWall の形の照合（仕上げ12.5・軸±57.5・下地90/0）＋区間の収まりが同時に成り立つ壁は
+ * 通常の生成物にはまず無いため、誤一致しない（あっても従来は構造の源から外れる程度）。
+ * @param {object} graph
+ * @returns {Array<{isVertical:boolean, axisValue:number, lo:number, hi:number}>}
+ */
+export function stairPartitionLines(graph) {
+  const out = [];
+  for (const stair of graph?.stairs ?? []) {
+    if (graph.roomMap?.get(stair.roomId)?.kind === RoomKind.EXTERIOR) continue;
+    const g = stairPartitionGeometry(stair, graph);
+    if (g) out.push({ isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi });
+  }
+  return out;
+}
+
+const AXIS_TOL_MM = 0.5;
+const OFFSET_TOL_MM = 0.01;
+// 隔て壁の材の厚み方向の最大幅の片側（総厚115の半分=57.5 に取り合いの余裕 0.5）。2a のレーン壁
+// （帯 50〜165 / 50〜62.5）は軸からの距離が大きく外れる。
+const PARTITION_HALF_EXTENT_MM = 58;
+
+/**
+ * wall が隔て壁（stairPartitionWalls.js が生成したもの）か。座標照合:
+ * 内壁（isRoomWall かつ非外壁）・同じ向き・軸が隔て壁の線と一致・生成時の形
+ * （仕上げ12.5・下地オフセット0・軸オフセット±57.5・下地90または0）・材が軸±58 に収まる・
+ * 壁の区間（coord1..coord2）が線の [lo,hi] に収まる（両端 0.5mm）。
+ * 「重なる」ではなく「収まる」で見る理由: レーン間中心線の延長上にある普通の部屋壁は、在来の自由端の
+ * 柱包み（wrapFreeEnds）で端が階段側へはね出して線の区間に入りうる。生成側は常に [lo,hi] の
+ * 部分区間で作るので、収まり判定なら取りこぼさず、はみ出した部屋壁を誤って拾わない。
+ * @param {import('@core').Wall} wall
+ * @param {Array<{isVertical:boolean, axisValue:number, lo:number, hi:number}>} lines stairPartitionLines の戻り
+ */
+export function isStairPartitionWall(wall, lines) {
+  if (!lines || lines.length === 0) return false;
+  if (!wall.isRoomWall || wall.isExteriorWall) return false;
+  const axis = wall.axisCL.effectiveValue;
+  const mr = wall.materialRange;
+  const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
+  if (wall.wallFinish !== PARTITION_FINISH_MM || wall.backingOffset !== 0) return false;
+  if (Math.abs(Math.abs(wall.axisOffset) - (PARTITION_BACKING_MM / 2 + PARTITION_FINISH_MM)) > OFFSET_TOL_MM) return false;
+  if (wall.backingDepth !== 0 && wall.backingDepth !== PARTITION_BACKING_MM) return false;
+  return lines.some(l =>
+    wall.isVertical === l.isVertical
+    && Math.abs(axis - l.axisValue) < AXIS_TOL_MM
+    && mr.lo >= l.axisValue - PARTITION_HALF_EXTENT_MM && mr.hi <= l.axisValue + PARTITION_HALF_EXTENT_MM
+    && lo >= l.lo - AXIS_TOL_MM && hi <= l.hi + AXIS_TOL_MM);
 }

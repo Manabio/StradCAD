@@ -24,6 +24,7 @@ import {
   resolveBackingOwnership, applyBackingOwnership, healDerivedGeometry, isInteriorWallTarget,
 } from './wallGeneration.js';
 import { buildCellToRoom } from './edgeClassify.js';
+import { generateStairPartitionWalls } from './stair/stairPartitionWalls.js';
 import { woodBaseColumnWidthMm, woodColumnWidthMm, rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
@@ -255,6 +256,21 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
     const r = room;
     undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); r.generatedWallIds.clear(); });
     redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots).forEach(w => r.generatedWallIds.add(w.id)); });
+  }
+
+  // ステップ2a': 在来木造の折返し階段の隔て壁（レーン間中心線上の2枚。隔て壁 S2）。どの Room の
+  // generatedWallIds にも入れない（2aのクリップ・偏芯・所有権解決・外壁オーナー化の対象外。識別は
+  // 座標照合 stairPartition.js isStairPartitionWall）。2a が受け持った区間は underEdges で差し引く。
+  // claimedEdges は足さない。手動壁との重なりは見ない（stairPartitionWalls.js の既知の限界）。
+  // undo/redo は2aと同型（控えたスナップショットで復元／id で削除）。
+  {
+    const partitionWalls = generateStairPartitionWalls(graph, { structure: effectiveStructure(graph, project), underEdges });
+    if (partitionWalls.length > 0) {
+      const snapshots = partitionWalls.map(snapshotWall);
+      const wallIds = partitionWalls.map(w => w.id);
+      undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); });
+      redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots); });
+    }
   }
 
   // ステップ2: 新規壁生成（対象: UNDEFINED・部分指定（referenceRoomIds あり。親が外周壁を

@@ -16,6 +16,7 @@ import { buildStairChains } from '../../src/finish/stair/stairChains.js';
 import { uTurnSpans } from '../../src/finish/stair/stairClassify.js';
 import { roomBounds } from '../../src/finish/gridCells.js';
 import { resolveStairPartition } from '../../src/finish/stair/stairPartition.js';
+import { generateStairPartitionWalls } from '../../src/finish/stair/stairPartitionWalls.js';
 
 const DEFAULTS = ['moku2', 'moku4', 'moku5'].map(n => `D:/tatsuya/Download/${n}.stq`);
 const files = process.argv.length > 2 ? process.argv.slice(2) : DEFAULTS;
@@ -39,7 +40,7 @@ function centerLinesAt(graph, project, isVerticalWall, axisValue) {
   return found;
 }
 
-let total = 0, wood = 0, nonNull = 0, withCL = 0;
+let total = 0, wood = 0, nonNull = 0, withCL = 0, wallsMade = 0, expectedWalls = 0;
 for (const file of files) {
   if (!fs.existsSync(file)) { console.log(`## ${file}: (無し・スキップ)`); continue; }
   const { project } = loadDocument(file);
@@ -51,6 +52,18 @@ for (const file of files) {
 
   for (const plane of planes) {
     const graph = project.graphMap.get(plane.id);
+    // S2: 軸CL・端CL（lo/hi）が既存の分割線CLとして解決でき、隔て壁が2枚ずつ生成されるか。
+    // 無ければ黙って生成されない設計のため、在来SWITCHBACKの数×2 と実際の枚数を突き合わせる。
+    // 生成した壁は読み込んだメモリ上のグラフに足すだけ（保存しない）。確認後に取り除く。
+    {
+      const st = effectiveStructure(graph, project) ?? null;
+      const nSw = isTraditionalWoodStructure(st) ? graph.stairs.filter(x => x.type === StairType.SWITCHBACK).length : 0;
+      const made = generateStairPartitionWalls(graph, { structure: st, underEdges: [] });
+      expectedWalls += nSw * 2; wallsMade += made.length;
+      console.log(`  [${plane.name}] 隔て壁の生成: 期待 ${nSw * 2} 枚 / 実際 ${made.length} 枚${made.length === nSw * 2 ? '' : '  **不一致（CL未解決の階段あり）**'}`);
+      for (const w of made) console.log(`      ${w.isVertical ? 'V' : 'H'} axis=${r1(w.axisCL.effectiveValue)} off=${w.axisOffset} span=[${r1(Math.min(w.coord1, w.coord2))},${r1(Math.max(w.coord1, w.coord2))}] dep=${w.backingDepth}`);
+      made.forEach(w => graph.removeShape(w.id));
+    }
     for (const stair of graph.stairs) {
       total++;
       const structure = effectiveStructure(graph, project) ?? null;
@@ -79,3 +92,4 @@ for (const file of files) {
   }
 }
 console.log(`\n合計 階段=${total} / 在来SWITCHBACK=${wood} / descriptor有=${nonNull} / うち軸上に中心線あり=${withCL}`);
+console.log(`隔て壁 期待=${expectedWalls} 実際=${wallsMade}`);

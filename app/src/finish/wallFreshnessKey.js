@@ -21,8 +21,10 @@ import { effectiveStructure, woodColumnSectionId } from '../structural/structure
  * wallGeneration.js の cornerMap 構築源を広げ、自由端をCL端から柱包み分はね出す）。鍵の入力
  * （実効主構造）は変えていないが生成式が変わったため既存キーを一律不一致にする。
  * v4 = 昇降路壁材（shaftWallMaterial）を鍵に追加 2026-09-28。
+ * v5 = 在来木造の折返し階段の隔て壁を生成（finish/stair/stairPartitionWalls.js）。鍵の入力は
+ * 変えていないが生成する壁が増えたため既存キーを一律不一致にする。
  */
-export const WALL_KEY_VERSION = 'v4';
+export const WALL_KEY_VERSION = 'v5';
 
 /**
  * graph（1階分）の壁再生成に必要な入力から鍵文字列を作る。

@@ -17,6 +17,7 @@ import { worldToCell } from './gridCells.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
 import { cellsBeyondBreak } from './stair/stairGeometry.js';
 import { stairUnderRoomsOf } from './stair/stairUnderRooms.js';
+import { stairPartitionLines, isStairPartitionWall } from './stair/stairPartition.js';
 import { roomCeilingHeight } from './roomMetrics.js';
 
 export const CAP_THICKNESS   = 30;   // mm — 天端の帯の厚さ（仕様2026-08。壁上端から下へ）
@@ -272,6 +273,8 @@ export function kneeDropWallGeometry(graph, key, cellToRoom) {
  */
 export function isEligibleWallSpan(wall, graph) {
   if (wall.isExteriorWall) return false;
+  // 隔て壁（在来木造の折返し階段）は対象外（S5 までの暫定。座標照合）
+  if (isStairPartitionWall(wall, stairPartitionLines(graph))) return false;
   for (const stair of graph.stairs) {
     const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
     if (beyond.size === 0) continue;

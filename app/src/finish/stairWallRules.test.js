@@ -12,6 +12,9 @@ import { runFinishEntryBoundary, runFinishExitBoundary } from './finishBoundary.
 import { loadMaterialMap } from './wallRegeneration.js';
 import { stairPortEdges } from './stair/stairGeometry.js';
 import { refreshCells, cellBoundsFromKey } from './gridCells.js';
+import { stairPartitionLines, isStairPartitionWall } from './stair/stairPartition.js';
+import { selfWallSegments } from '../structural/wallBeamAxes.js';
+import { isEligibleWallSpan } from './kneeDropWall.js';
 
 const X = [-3000, 0, 1000, 4000];
 const Y = [-3000, 0, 1500, 3000, 6000];
@@ -346,4 +349,54 @@ test('規則2・3(e)【3階建て・N+1が中間階】吹抜け／別形のペ�
   });
   assertOpen(c.upper.graph, stairPortEdges(c.stair, c.lower.graph, ['arrival'])[0], '別形ペア部屋の下り口');
   assert.notEqual(show(wallsNear(c.upper.graph, WEST, { extOnly: true })), '', '西辺は外壁（ペア部屋）');
+});
+
+// ---- 隔て壁（在来木造の折返し階段。レーン間中心線上の2枚）が規則1を崩さない ----
+async function makeWoodSwitchbackFloor({ columnWidth = null } = {}) {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, 'p1', 'p1');
+  graph.structureOverride = '木造（在来）';
+  if (columnWidth) graph.setWoodColumnWidthMm(columnWidth);
+  const mk = (t, v) => graph.addCenterLine(t, v, { labeled: false, discipline: Discipline.ARCH });
+  const xs = [-3000, 0, 1000, 2000, 5000].map(v => mk(CenterLineType.VERTICAL, v));
+  const ys = [-3000, 0, 1000, 4000, 6000].map(v => mk(CenterLineType.HORIZONTAL, v));
+  const key = (c, r) => `${xs[c].id}:${ys[r].id}:${xs[c + 1].id}:${ys[r + 1].id}`;
+  // 階段: 踊り場（y0〜1000）＋左右レーン（y1000〜4000）。周りは居室
+  const cells = new Set([key(1, 1), key(2, 1), key(1, 2), key(2, 2)]);
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) if (!cells.has(key(c, r))) graph.addRoom(new Set([key(c, r)]), `部屋${c}${r}`);
+  const pair = graph.addRoom(new Set(cells), '階段');
+  pair.setFeature(RoomFeature.STAIR);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, roomId: pair.id, sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+  await exitWalls(project, graph);
+  return { project, graph, stair };
+}
+
+test('隔て壁【在来・折返し階段（本番経路）】脱出後にレーン間中心線上へ隔て壁2枚が建ち、上り口の辺には壁が建たない（規則1）', async () => {
+  const { graph, stair } = await makeWoodSwitchbackFloor();
+  const mids = graph.walls.filter(w => w.isVertical && w.axisCL.effectiveValue === 1000 && Math.abs(Math.abs(w.axisOffset) - 57.5) < 0.01 && Math.max(w.coord1, w.coord2) < 4100);
+  assert.equal(mids.length, 2, `レーン間中心線 x=1000 上に隔て壁2枚（実際 ${show(dump(graph).filter(w => w.v && w.axis > 900 && w.axis < 1100))}）`);
+  assert.deepEqual(mids.map(w => w.backingDepth).sort(), [0, 90]);
+  for (const w of mids) {
+    assert.deepEqual([Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)], [1000, 4000], '区間は両レーンが並走する y1000〜4000');
+  }
+  for (const e of stairPortEdges(stair, graph, ['entry'])) assertOpen(graph, e, '上り口');
+});
+
+test('隔て壁【識別】レーン間中心線の延長上（階段の下側 y4000〜6000 を x=1000 で2室に分けた）の部屋壁は、柱包みで端がはね出しても隔て壁と識別されず、構造・腰壁の対象に残る', async () => {
+  // 柱寸120（既定。境界壁は軸±72.5・下地120）と柱寸90（軸±57.5・下地90＝隔て壁と同じ形。形の照合だけでは外れない）の両方
+  for (const columnWidth of [null, 90]) {
+  const { graph } = await makeWoodSwitchbackFloor({ columnWidth });
+  const lines = stairPartitionLines(graph);
+  const ext = graph.walls.filter(w => w.isVertical && w.axisCL.effectiveValue === 1000 && Math.min(w.coord1, w.coord2) > 3900);
+  assert.equal(ext.length, 2, `前提: 延長上の境界壁2枚（実際 ${show(dump(graph).filter(w => w.v && w.axis > 900 && w.axis < 1100))}）`);
+  if (columnWidth === 90) assert.ok(ext.some(w => Math.abs(Math.abs(w.axisOffset) - 57.5) < 0.01 && w.backingDepth === 90), '前提: 柱寸90では延長上の壁が隔て壁と同じ形（軸±57.5・下地90）');
+  for (const w of ext) {
+    assert.equal(isStairPartitionWall(w, lines), false, `延長上の部屋壁は偽（off ${w.axisOffset} span ${Math.min(w.coord1, w.coord2)}〜${Math.max(w.coord1, w.coord2)}）`);
+    assert.equal(isEligibleWallSpan(w, graph), true, '腰壁・垂れ壁の対象に残る');
+  }
+  assert.ok(selfWallSegments(graph).some(sg => sg.isVertical && Math.abs(sg.coord - 1000) < 100 && sg.lo >= 3900 && sg.hi >= 5900),
+    '構造の壁区間に x=1000・y4000〜6000 の線が残る');
+  }
 });

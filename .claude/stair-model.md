@@ -247,3 +247,6 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
 - 吹抜けの重複・孤児は整合が自動で片付けるので、削除側は個数を数えない（旧版は連動削除が同じ足元の吹抜けを1つしか消さず、重複も放置した。ユーザー裁定2026-10-05「増殖を止めるだけ」は整合の導入で上書き）。
 - 階段を消す入口は3つ（階段タブ＝`App.jsx deleteStairCascade`、階段のペア部屋のカード削除＝`deleteStairRoomCascade`、属性で階段を外す＝`revertStairFromNaming`）で、すべて同じ関門（`runStairRemoval`）を通す。違いは設置階の確定の本体だけ（`deleteStair`／従来の `deleteRoom`／`applyNaming`）で、カード削除の自階の結果は従来の `deleteRoom` と同じ（部分指定の子の道連れ削除を含む）。`revertStairToRoom`（未配線）を配線するときも同じ。再指定では上の階の未定義部屋からセルを引き抜く（引き抜かないと直上階に吹抜けを置けない）。
 - **部分指定に階段を含む部屋の削除は拒否する**（`roomDeleteBlockReason`。道連れで消える子・孫に階段のペア部屋がある場合。親の削除のカスケードが階段を自階だけ消し、直上階の吹抜けが残るため。「先に階段を削除」と案内。判定は削除と同じ列挙 `_childRoomsOf` から導く）。
+
+## 在来木造の折返し階段の隔て壁（平面の生成規則）
+判定と幾何は`finish/stair/stairPartition.js`（`stairPartitionGeometry`＝主構造を見ない幾何、`resolveStairPartition`＝在来のみの記述子）、壁の生成は`stairPartitionWalls.js`。壁の形・2a区間の差し引き・識別を座標照合にした理由は`.claude/data-model.md`「階段まわりの壁の3規則」の隔て壁の段落。区間は両レーンが並走する部分（短い方の基端〜回転部前縁）で、2aが受け持つ区間は2aの壁に任せる。構造・腰壁からの除外はS5までの暫定で、S5で柱・梁（上階床梁があれば上下で柱を切る等）を設計するときに外す。

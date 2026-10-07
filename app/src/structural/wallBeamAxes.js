@@ -9,6 +9,7 @@ import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.
 import { structuralAnchorAt, beamAxisAt, beamAxesAt, spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
+import { stairPartitionLines, isStairPartitionWall } from '../finish/stair/stairPartition.js';
 import { peekVia } from './structuralPeek.js';
 import { rulesFor, backingRulesFor, isTraditionalWoodStructure, effectiveStructure } from './structureRules.js';
 
@@ -192,8 +193,12 @@ function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking, cache = u
   const cached = cache?.get(sourceGraph, requireBeamAxisBacking);
   if (cached) return cached.map(s => ({ ...s }));
   const out = [];
+  // 在来木造の折返し階段の隔て壁は構造の源にしない（S5 で構造を設計するまでの暫定。
+  // 識別は座標照合。finish/stair/stairPartitionWalls.js）
+  const partitionLines = stairPartitionLines(sourceGraph);
   for (const wall of sourceGraph.walls) {
     if (!isBackingOwnerWall(wall)) continue;
+    if (isStairPartitionWall(wall, partitionLines)) continue;
     if (requireBeamAxisBacking && !backingRulesFor(backingClassOf(wallBackingCode(sourceGraph, wall))).beamAxisSource) continue;
     // 梁芯位置＝下地帯の中心（wall.axisValueは仕上げ面の位置のため使わない。設計書§2.3(2)）。
     // 柱寸法が基準より細い階の外壁下地帯シフト（structural/structureRules.js
@@ -278,8 +283,10 @@ export function selfWallSegments(graph, cache = undefined) {
  */
 export function wallBackingCenters(graph) {
   const out = [];
+  const partitionLines = stairPartitionLines(graph); // 隔て壁は除外（wallBeamSourcesFromGraph と同じ）
   for (const wall of graph.walls) {
     if (!isBackingOwnerWall(wall)) continue;
+    if (isStairPartitionWall(wall, partitionLines)) continue;
     // wallBeamSourcesFromGraph と同じ理由（柱寸法シフトの見た目の帯移動を追従対象に持ち込まない。
     // 上記コメント参照）でwall.bandOffsetを差し引く（isExteriorWallでは判定しない。QA F1。
     // wallBackingCenterCoordに集約——単一の情報源）。
