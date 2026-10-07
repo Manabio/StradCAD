@@ -4,15 +4,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline, StairType, RoomKind, RoomFeature } from '@core';
-import { generateStairPartitionWalls } from './stairPartitionWalls.js';
+import { generateStairPartitionWalls, wrapStairPartitionFreeEnds } from './stairPartitionWalls.js';
 import { stairPartitionLines, isStairPartitionWall, PARTITION_BACKING_MM, PARTITION_FINISH_MM } from './stairPartition.js';
 import { selfWallSegments, wallBackingCenters, autoFillWallBeamAxes } from '../../structural/wallBeamAxes.js';
-import { autoFillWoodColumns } from '../../structural/woodAutoFill.js';
-import { TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
+import { autoFillWoodColumns, conformWoodSections } from '../../structural/woodAutoFill.js';
+import { TRADITIONAL_WOOD_STRUCTURE, woodColumnWidthMm } from '../../structural/structureRules.js';
+import { stairPartitionEnds } from '../../structural/wallFreeEnds.js';
 import { isEligibleWallSpan } from '../kneeDropWall.js';
 import { WALL_KEY_VERSION } from '../wallFreshnessKey.js';
 import { runFinishExitBoundary } from '../finishBoundary.js';
-import { loadMaterialMap } from '../wallRegeneration.js';
+import { loadMaterialMap, regenerateWalls } from '../wallRegeneration.js';
 import { cellsBeyondBreak } from './stairGeometry.js';
 import { undoManager } from '../../undoManager.js';
 
@@ -164,23 +165,28 @@ test('識別 stairPartitionLines/isStairPartitionWall: 隔て壁2枚は真。普
   // 同軸 ±57.5 でも区間が線の [1000,4000] からはみ出す壁は偽（柱包みではね出した延長上の部屋壁。収まり判定）
   const yTop = H(3942.5), y6 = H(6000);
   assert.equal(isStairPartitionWall(graph.addWall(x1, 57.5, true, yTop, 0, y6, 0, room), lines), false, '区間が線からはみ出す');
-  assert.equal(isStairPartitionWall(graph.addWall(x1, 57.5, true, y1, -57.5, y4, 0, room), lines), false, '始端がはみ出す');
+  // 識別は設計上の端（端CL）で見る: 物理端が柱包みで線の外へはね出していても、端CLが線内なら真（隔て壁自身の柱包み）
+  assert.equal(isStairPartitionWall(graph.addWall(x1, 57.5, true, y1, -57.5, y4, 57.5, room), lines), true, '物理端がはね出しても設計上の端が線内なら真');
+  // 否定例: 端CL自体が線の外（延長上の部屋壁。物理端が柱包みで線の端まで入り込んでも偽）
+  const yOut = H(942.5);
+  assert.equal(isStairPartitionWall(graph.addWall(x1, 57.5, true, yOut, 57.5, y4, 0, room), lines), false, '始端CLが線の外');
   // スパンが重ならない同軸の壁は偽（y 4000〜5000）
   const y5 = H(5000);
   assert.equal(isStairPartitionWall(graph.addWall(x1, 57.5, true, y4, 0, y5, 0, room), lines), false, 'スパンが線と重ならない');
 });
 
 // 構造・腰壁の除外用: 外周の4壁（下地オーナー）を足した建物。隔て壁の端 y=4000 が T 字取り合いになる。
-function addOuterWalls(graph, V, H) {
+// bottom=false で下辺（y=4000。隔て壁の上り口側の端）の壁を省く＝上り口側も自由端になる
+function addOuterWalls(graph, V, H, { bottom = true } = {}) {
   const own = { isRoomWall: true, wallFinish: 12.5, backingOffset: 0, backingDepth: 90, finishSide: 1 };
   graph.addWall(V(0), 57.5, true, H(0), 0, H(4000), 0, own);
   graph.addWall(V(2000), -57.5, true, H(0), 0, H(4000), 0, { ...own, finishSide: -1 });
   graph.addWall(H(0), 57.5, false, V(0), 0, V(2000), 0, own);
-  graph.addWall(H(4000), -57.5, false, V(0), 0, V(2000), 0, { ...own, finishSide: -1 });
+  if (bottom) graph.addWall(H(4000), -57.5, false, V(0), 0, V(2000), 0, { ...own, finishSide: -1 });
 }
 const colSig = (graph) => graph.columns.map(c => `${c.verticalCL.effectiveValue}:${c.horizontalCL.effectiveValue}`).sort();
 
-test('構造の除外: selfWallSegments・wallBackingCenters に隔て壁は含まれず他の壁は含まれる。柱は隔て壁の有無で同じ数・同じ位置', () => {
+test('構造の除外: selfWallSegments・wallBackingCenters に隔て壁は含まれず他の壁は含まれる。柱は基準（隔て壁なし）に両端の柱2本だけ加わる', () => {
   const withPart = makeStair(EQUAL_UP);
   addOuterWalls(withPart.graph, withPart.V, withPart.H);
   const base = makeStair(EQUAL_UP);
@@ -202,7 +208,8 @@ test('構造の除外: selfWallSegments・wallBackingCenters に隔て壁は含�
     autoFillWoodColumns(t.graph, t.project, null);
   }
   assert.ok(base.graph.columns.length > 0, '前提: 柱が立つ構成');
-  assert.deepEqual(colSig(withPart.graph), colSig(base.graph));
+  // 隔て壁は壁ソースに入らない（梁芯CL・通し梁・階柱寸の柱が湧かない）。足されるのは両端の柱（点源＝stairPartitionEnds）だけ
+  assert.deepEqual(colSig(withPart.graph), [...colSig(base.graph), '1000:1000', '1000:4000'].sort());
 });
 
 test('腰壁・垂れ壁: isEligibleWallSpan は隔て壁で false、普通の内壁で true、外壁・2a壁は従来どおり false', () => {
@@ -292,6 +299,8 @@ test('本番経路【冪等】2回脱出しても隔て壁を含む壁の形状�
   assert.equal(partitionWalls(graph).length, 2);
 });
 
+// 注: 在来の脱出は構造再計算のエントリを積み、その redo は壁を含む全体を復元する。そのためこのテストは壁エントリ単独の
+// redo の値までは守れない——それは下の『redoFns 単体』のテストが守る。
 test('本番経路【undo/redo】脱出の undo で隔て壁が消え、redo で同じ値に戻る', async () => {
   const { project, graph, fmode } = await makeFixtureNo2a();
   await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
@@ -313,4 +322,217 @@ test('【失敗系】本番経路: 主構造がS造なら脱出しても隔て�
   await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
   assert.equal(partitionWalls(graph).length, 0);
   assert.equal(graph.walls.some(w => Math.abs(w.axisCL.effectiveValue - 1000) < 1 && w.isVertical && Math.abs(Math.abs(w.axisOffset) - 57.5) < 0.01 && w.backingDepth === 90), false);
+});
+
+// ---- 両端の構造柱（90角。structural/wallFreeEnds.js stairPartitionEnds ＝ woodAutoFill.js の点源）----
+// 構造再計算の1パス相当（壁由来の梁芯CL→柱→断面そろえ）。下辺の壁を省いた建物で両端とも自由端にする。
+function buildColumns({ bottom = false, floorWidth = null, withPartition = true } = {}) {
+  const t = makeStair(EQUAL_UP);
+  if (floorWidth) t.graph.setWoodColumnWidthMm(floorWidth);
+  addOuterWalls(t.graph, t.V, t.H, { bottom });
+  if (withPartition) gen(t.graph);
+  const pass = () => {
+    autoFillWallBeamAxes(t.graph, selfWallSegments(t.graph));
+    const r = autoFillWoodColumns(t.graph, t.project, null);
+    conformWoodSections(t.graph, t.project);
+    return r;
+  };
+  pass();
+  const colAt = (x, y) => t.graph.columns.find(c => c.verticalCL.effectiveValue === x && c.horizontalCL.effectiveValue === y);
+  return { ...t, pass, colAt };
+}
+
+test('両端の柱【自由端×2】(1000,1000)(1000,4000) に90角の構造柱が立つ。auto・standard・由来freeEnd・断面 WOOD-90x90・個別柱寸90', () => {
+  const { colAt, graph } = buildColumns();
+  const ends = stairPartitionEnds(graph);
+  assert.deepEqual(ends.map(e => [e.x, e.y, e.free]), [[1000, 1000, true], [1000, 4000, true]], '点源: 両端とも自由端');
+  for (const y of [1000, 4000]) {
+    const c = colAt(1000, y);
+    assert.ok(c, `(1000,${y}) に柱`);
+    assert.equal(c.woodColumnWidthMm, 90);
+    assert.equal(woodColumnWidthMm(graph, null), 120, '階の柱寸は120のまま');
+    assert.equal(c.sectionDefId, 'WOOD-90x90');
+    assert.equal(c.role, 'standard');
+    assert.equal(c.dimensionStatus, 'auto');
+    assert.equal(c.woodColumnOrigins, 'freeEnd');
+  }
+});
+
+test('両端の柱【冪等】2回目のパスは生成・撤去が空で、個別柱寸・断面・由来は不変', () => {
+  const { pass, colAt } = buildColumns();
+  const ids = [colAt(1000, 1000).id, colAt(1000, 4000).id];
+  const r = pass();
+  assert.deepEqual([r.created.length, r.removed.length], [0, 0]);
+  assert.deepEqual([colAt(1000, 1000).id, colAt(1000, 4000).id], ids);
+  assert.equal(colAt(1000, 1000).woodColumnWidthMm, 90);
+  assert.equal(colAt(1000, 4000).sectionDefId, 'WOOD-90x90');
+});
+
+test('両端の柱【手動削除】柱を削除すると除外集合に載り、再計算しても復活しない（反対側は残る）', () => {
+  const { pass, colAt, graph } = buildColumns();
+  graph.removeColumn(colAt(1000, 1000).id);
+  pass();
+  assert.equal(colAt(1000, 1000), undefined, '復活しない');
+  assert.ok(colAt(1000, 4000), '反対側は残る');
+});
+
+test('両端の柱【非自由端】上り口側の端に壁がある（T字）と、その端の柱は階の柱寸（個別柱寸null）。他方は90', () => {
+  const { colAt, graph } = buildColumns({ bottom: true });
+  assert.deepEqual(stairPartitionEnds(graph).map(e => [e.y, e.free]), [[1000, true], [4000, false]]);
+  assert.ok(colAt(1000, 4000), '柱は立つ（点源は非自由端でも出す）');
+  assert.equal(colAt(1000, 4000).woodColumnWidthMm, null);
+  assert.equal(colAt(1000, 4000).sectionDefId, 'WOOD-120x120');
+  assert.equal(colAt(1000, 1000).woodColumnWidthMm, 90);
+});
+
+test('両端の柱【階の柱寸が90】柱は立ち、個別柱寸は null（階の値と同値を作らない）', () => {
+  const { colAt } = buildColumns({ floorWidth: 90 });
+  for (const y of [1000, 4000]) {
+    assert.ok(colAt(1000, y));
+    assert.equal(colAt(1000, y).woodColumnWidthMm, null);
+    assert.equal(colAt(1000, y).sectionDefId, 'WOOD-90x90');
+  }
+});
+
+test('両端の柱【階の柱寸の変更に追従】120→90 で個別柱寸が null に、90→120 で再び90に戻る（書き戻し）', () => {
+  const { pass, colAt, graph } = buildColumns();
+  assert.equal(colAt(1000, 1000).woodColumnWidthMm, 90);
+  graph.setWoodColumnWidthMm(90);
+  pass();
+  assert.equal(colAt(1000, 1000).woodColumnWidthMm, null, '階=90 なら個別指定は消える');
+  graph.setWoodColumnWidthMm(120);
+  pass();
+  assert.equal(colAt(1000, 1000).woodColumnWidthMm, 90, '階=120 に戻せば90角へ');
+  assert.equal(colAt(1000, 1000).sectionDefId, 'WOOD-90x90');
+});
+
+test('【失敗系】両端の柱: S造・STRAIGHT・隔て壁なし（2a が受け持つ等）では隔て壁の柱は立たず CL も増えない', () => {
+  const base = buildColumns({ withPartition: false });
+  assert.equal(base.colAt(1000, 1000), undefined, '隔て壁が無ければ柱なし');
+  assert.deepEqual(stairPartitionEnds(base.graph), []);
+  // 隔て壁の有無で CL の本数は同じ（点源は CL を作らない）
+  assert.equal(clCount(buildColumns().graph), clCount(base.graph), '柱の点源は CL を新設しない');
+  // S造: 壁は生成済みでも主構造がS造なら点源は空
+  const s = buildColumns();
+  s.graph.structureOverride = 'S造';
+  assert.deepEqual(stairPartitionEnds(s.graph), []);
+  // STRAIGHT: 隔て壁自体が出ない
+  const st = makeStair(EQUAL_UP, { type: StairType.STRAIGHT });
+  addOuterWalls(st.graph, st.V, st.H, { bottom: false });
+  assert.equal(gen(st.graph).length, 0);
+  autoFillWallBeamAxes(st.graph, selfWallSegments(st.graph));
+  const before = clCount(st.graph); // 梁芯CLの生成後（柱の点源が増やさないことを見る）
+  autoFillWoodColumns(st.graph, st.project, null);
+  assert.equal(st.graph.columns.some(c => c.verticalCL.effectiveValue === 1000), false);
+  assert.equal(clCount(st.graph), before, 'CL を増やさない');
+  // 端CL（y=1000）が壁生成の後で補助線になった＝柱のアンカー解決不能な端: その端に柱を立てず CL も作らない（点源側の continue）
+  const na = buildColumns({ withPartition: true });
+  const endCL = na.graph.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 1000);
+  endCL.lineType = 'dashed';
+  na.graph.removeColumn(na.colAt(1000, 1000).id);
+  na.graph.excludedColumnSlots.clear();
+  const clBefore = clCount(na.graph);
+  na.pass();
+  assert.equal(na.colAt(1000, 1000), undefined, 'アンカーが解決できない端には柱を立てない');
+  assert.ok(na.colAt(1000, 4000), '解決できる端は立つ（前提・検出力）');
+  assert.equal(clCount(na.graph), clBefore, 'CL を作らない');
+  // 端CLが梁芯だと隔て壁自体が出ない（生成側の規律）
+  const noAnchor = makeStair(EQUAL_UP, {}, { clProps: (type, v) => (type === CenterLineType.HORIZONTAL && v === 1000 ? { discipline: Discipline.FUSE } : {}) });
+  addOuterWalls(noAnchor.graph, noAnchor.V, noAnchor.H, { bottom: false });
+  assert.equal(gen(noAnchor.graph).length, 0);
+});
+
+test('2a の差し引きで切れた端（y=2500）には柱を立てず柱包みもしない。線の端（y=4000）だけが端', () => {
+  const t = makeStair(EQUAL_UP);
+  t.H(2500);
+  addOuterWalls(t.graph, t.V, t.H, { bottom: false });
+  const ws = gen(t.graph, { underEdges: [{ isVertical: true, value: 1000, lo: 1000, hi: 2500 }] });
+  assert.deepEqual(ws.map(w => [Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)]), [[2500, 4000], [2500, 4000]]);
+  assert.deepEqual(stairPartitionEnds(t.graph).map(e => [e.y, e.free]), [[4000, true]], '線端（4000）だけ。2500 は返さない');
+  autoFillWallBeamAxes(t.graph, selfWallSegments(t.graph));
+  autoFillWoodColumns(t.graph, t.project, null);
+  const at = (y) => t.graph.columns.find(c => c.verticalCL.effectiveValue === 1000 && c.horizontalCL.effectiveValue === y);
+  assert.equal(at(2500), undefined, '切れた端には柱なし');
+  assert.ok(at(4000), '線端には柱');
+  wrapStairPartitionFreeEnds(t.graph);
+  const owner = ws[0];
+  const sgn = Math.sign(owner.clEnd.effectiveValue - owner.clStart.effectiveValue) || 1;
+  const [startSide, endSide] = [owner.startOffset, owner.endOffset].map(o => o * sgn);
+  assert.equal(owner.clStart.effectiveValue === 2500 ? startSide : endSide, 0, '2500 側は柱包みしない');
+});
+
+// ---- 隔て壁の自由端の柱包み（wrapStairPartitionFreeEnds。本番経路で壁が出そろった後に適用）----
+const physSpan = (w) => [Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)];
+
+test('本番経路【柱包み】自由端（踊り場側）だけ物理端が端CL−57.5へはね出し、外壁に突き当たる端（上り口側）は延ばさない。2枚とも隔て壁と識別され、構造の壁区間・腰壁の対象に入らない。柱は自由端だけ90角', async () => {
+  const { project, graph, fmode } = await makeFixtureNo2a();
+  await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
+  const ends = stairPartitionEnds(graph);
+  assert.equal(ends.length, 2);
+  assert.deepEqual(ends.map(e => [e.y, e.free]), [[1000, true], [4000, false]], '前提: 踊り場側は自由端・上り口側は外壁（y=4000）に突き当たる');
+  const parts = partitionWalls(graph);
+  assert.equal(parts.length, 2);
+  for (const w of parts) {
+    assert.deepEqual(physSpan(w), [1000 - 57.5, 4000], '自由端の側だけ端CL−57.5（設計上の端は y1000〜4000 のまま）');
+    assert.deepEqual([Math.min(w.clStart.effectiveValue, w.clEnd.effectiveValue), Math.max(w.clStart.effectiveValue, w.clEnd.effectiveValue)], [1000, 4000]);
+    assert.equal(isEligibleWallSpan(w, graph), false, '腰壁・垂れ壁の対象外');
+  }
+  assert.equal(selfWallSegments(graph).some(s => s.isVertical && Math.abs(s.coord - 1000) < 1), false, '構造の壁区間に入らない');
+  const cols = graph.columns.filter(c => c.verticalCL.effectiveValue === 1000).map(c => [c.horizontalCL.effectiveValue, c.woodColumnWidthMm]).sort((a, b) => a[0] - b[0]);
+  assert.deepEqual(cols, [[1000, 90], [4000, null]], '柱は両端に立つが90角は自由端だけ');
+});
+
+test('本番経路【柱包み・undo/redo】脱出の undo で隔て壁が消え、redo ではね出し込みの値に戻る', async () => {
+  const { project, graph, fmode } = await makeFixtureNo2a();
+  await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
+  assert.deepEqual(partitionWalls(graph).map(physSpan), [[942.5, 4000], [942.5, 4000]], '前提: はね出している');
+  undoManager.undo();
+  undoManager.undo();
+  assert.equal(partitionWalls(graph).length, 0);
+  undoManager.redo();
+  undoManager.redo();
+  assert.deepEqual(partitionWalls(graph).map(physSpan), [[942.5, 4000], [942.5, 4000]], 'redo ではね出し込みの値');
+});
+
+test('wrapStairPartitionFreeEnds【冪等・非自由端】2回呼んでも二重に延びない。壁が建つ（T字の）端は延ばさない', () => {
+  const { graph } = buildColumns({ bottom: true });
+  const first = wrapStairPartitionFreeEnds(graph);
+  assert.deepEqual(first.map(c => c.after), [{ startOffset: -57.5, endOffset: 0 }, { startOffset: -57.5, endOffset: 0 }], '自由端（y1000）だけ');
+  assert.deepEqual(wrapStairPartitionFreeEnds(graph), [], '2回目は変化なし');
+  const [owner] = graph.walls.filter(w => isStairPartitionWall(w, stairPartitionLines(graph)));
+  assert.equal(owner.startOffset, -57.5);
+  assert.equal(owner.endOffset, 0);
+});
+
+test('regenerateWalls【柱包み・redoFns 単体】undoFns を逆順→redoFns を順に実行すると、隔て壁がはね出し込みの値で戻る（構造再計算の復元に頼らない）', async () => {
+  const { project, graph, fmode } = await makeFixtureNo2a();
+  const { regenerated, undoFns, redoFns } = await regenerateWalls(graph, { materialMap: fmode.materialMap, project, stairUnderEntries: [], extraStairOpenings: [] });
+  assert.equal(regenerated, true);
+  const wrapped = partitionWalls(graph).map(physSpan);
+  assert.deepEqual(wrapped, [[942.5, 4000], [942.5, 4000]], '前提: はね出している');
+  [...undoFns].reverse().forEach(f => f());
+  assert.equal(partitionWalls(graph).length, 0, 'undo で消える');
+  redoFns.forEach(f => f());
+  assert.deepEqual(partitionWalls(graph).map(physSpan), wrapped, 'redo ではね出し込みの値');
+});
+
+test('2a の差し引きの端が線端から 150mm 以内（y=3900）でも端扱いにしない（線端との一致は 0.5mm）', () => {
+  const t = makeStair(EQUAL_UP);
+  t.H(3900);
+  addOuterWalls(t.graph, t.V, t.H, { bottom: false });
+  const ws = gen(t.graph, { underEdges: [{ isVertical: true, value: 1000, lo: 1000, hi: 3900 }] });
+  assert.equal(ws.length, 2, '前提: 残り区間 3900〜4000 に2枚');
+  assert.deepEqual(stairPartitionEnds(t.graph).map(e => e.y), [4000], '3900 は返さない');
+});
+
+test('両端の柱【手動の個別柱寸を守る】端の柱に「この部材」で105を入れて再計算しても105のまま（断面 WOOD-105x105）。null→90 は書く', () => {
+  const { pass, colAt } = buildColumns();
+  const c = colAt(1000, 1000);
+  c.setField('woodColumnWidthMm', 105);
+  pass();
+  assert.equal(colAt(1000, 1000).woodColumnWidthMm, 105, '明示値は上書きしない');
+  assert.equal(colAt(1000, 1000).sectionDefId, 'WOOD-105x105');
+  colAt(1000, 4000).setField('woodColumnWidthMm', null); // 点源が入れた値が消えた状態 → 90 を書き戻す
+  pass();
+  assert.equal(colAt(1000, 4000).woodColumnWidthMm, 90);
 });

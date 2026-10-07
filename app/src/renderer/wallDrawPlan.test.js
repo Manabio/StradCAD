@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
 import { Plane, PlanGraph, Project, StairType, CenterLineType, Discipline, edgeKey, StructuralMaterialType, ShapeType } from '@core';
-import { generateStairPartitionWalls } from '../finish/stair/stairPartitionWalls.js';
+import { generateStairPartitionWalls, wrapStairPartitionFreeEnds } from '../finish/stair/stairPartitionWalls.js';
 import { studRects } from './wallStudLayout.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
@@ -600,8 +600,8 @@ test('【結合・QA F8 test3】buildWallDrawPlan: 柱寸105で生成した外�
   }
 });
 
-// ---- 折返し階段の隔て壁の端部材（structural/wallEndMember.js stairPartitionEndMembers）の配線 ----
-test('buildWallDrawPlan: 隔て壁（実生成）は両端に90角の端部材が載り、間柱は端部材の間（柱面から10mm空け）だけに立つ。薄壁には下地材が無い', () => {
+// ---- 折返し階段の隔て壁（両端は90角の構造柱。structural/wallFreeEnds.js stairPartitionEnds）の描画 ----
+test('buildWallDrawPlan: 隔て壁の両端の90角の実柱の間に間柱が柱面から10mm空けて立ち（端部材は出さない）、自由端で仕上げが柱を回り込む。薄壁には下地材が無い', () => {
   const project = new Project('proj', 'test');
   const { graph } = project.addPlane(0, '1階', 'p1');
   graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
@@ -612,18 +612,27 @@ test('buildWallDrawPlan: 隔て壁（実生成）は両端に90角の端部材�
   const cells = new Set(rects.map(([x1, y1, x2, y2]) => `${V.get(x1).id}:${H.get(y1).id}:${V.get(x2).id}:${H.get(y2).id}`));
   graph.addStair({ type: StairType.SWITCHBACK, cells, sections: [6, 1, 6], flip: false, upDirection: 'up' });
   const [owner, thin] = generateStairPartitionWalls(graph, { structure: TRADITIONAL_WOOD_STRUCTURE });
+  // 両端の90角の構造柱（本番は woodAutoFill.js が立てる。ここは描画の配線だけを見るので直接足す）
+  for (const y of [1000, 4000]) graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-90x90', V.get(1000), H.get(y), { woodColumnWidthMm: 90 });
+  // 柱包み（本番は wallRegeneration.js の末尾）。両端とも自由端
+  runInAction(() => wrapStairPartitionFreeEnds(graph));
+  assert.deepEqual([owner.coord1, owner.coord2], [942.5, 4057.5]);
 
   const plan = buildWallDrawPlan(graph, LodLevel.DETAIL);
   const studs = plan.wallStuds.get(owner.id);
-  assert.deepEqual(studs.endMembers, [{ center: 1045, depth: 90 }, { center: 3955, depth: 90 }]);
+  assert.deepEqual(studs.endMembers, [], '端部材は出さない（両端は構造柱）');
   assert.ok(studs.centers.length > 0);
-  for (const c of studs.centers) {
-    assert.ok(c - studs.depth / 2 >= 1100 - 1e-9 && c + studs.depth / 2 <= 3900 + 1e-9, `間柱 ${c} は端部材の面（1090/3910）から10mm空けた [1100,3900] に収まる`);
-  }
+  assert.ok(Math.abs(Math.min(...studs.centers) - studs.depth / 2 - 1055) < 1e-9, '最初の間柱は柱面（1045）から10mm空けた 1055 から');
+  assert.ok(Math.abs(Math.max(...studs.centers) + studs.depth / 2 - 3945) < 1e-9, '最後の間柱は柱面（3955）から10mm空けた 3945 まで');
   assert.equal(plan.wallStuds.has(thin.id), false, '薄壁（下地なし）には下地材を出さない');
-  const rects2 = studRects(owner.isVertical, owner.backingRange, studs).filter(r => r.kind === 'endMember');
-  assert.deepEqual(rects2.map(r => [r.x, r.y, r.width, r.height]), [[955, 1000, 90, 90], [955, 3910, 90, 90]]);
-  // 非在来（S造）では端部材は出さない
+  assert.equal(studRects(owner.isVertical, owner.backingRange, studs).some(r => r.kind === 'endMember'), false);
+  // 自由端: 仕上げが柱（面 955／4045）を回り込む＝木口線（ecap）が柱面の位置に出る
+  const ecapAt = plan.wallLines.get(owner.id).lines.filter(l => l.kind === 'ecap').map(l => l.at).sort((a, b) => a - b);
+  assert.deepEqual(ecapAt, [955, 4045]);
+  // 薄壁側も含めた全厚の端キャップ（cap）が物理端（942.5/4057.5）に出る＝薄壁（942.5〜955）の端も閉じる
+  const caps = plan.wallLines.get(owner.id).lines.filter(l => l.kind === 'cap');
+  assert.deepEqual(caps.map(l => [l.at, l.lo, l.hi]).sort((a, b) => a[0] - b[0]), [[942.5, 942.5, 1057.5], [4057.5, 942.5, 1057.5]]);
+  // 非在来（S造）では下地材の割付自体を出さない
   graph.structureOverride = 'S造';
   const steel = buildWallDrawPlan(graph, LodLevel.DETAIL).wallStuds.get(owner.id);
   assert.deepEqual(steel?.endMembers ?? [], []);

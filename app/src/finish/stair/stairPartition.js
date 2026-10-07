@@ -149,25 +149,49 @@ const PARTITION_HALF_EXTENT_MM = 58;
  * wall が隔て壁（stairPartitionWalls.js が生成したもの）か。座標照合:
  * 内壁（isRoomWall かつ非外壁）・同じ向き・軸が隔て壁の線と一致・生成時の形
  * （仕上げ12.5・下地オフセット0・軸オフセット±57.5・下地90または0）・材が軸±58 に収まる・
- * 壁の区間（coord1..coord2）が線の [lo,hi] に収まる（両端 0.5mm）。
+ * 壁の設計上の区間（clStart/clEnd.effectiveValue の min/max。柱包みのはね出しを含まない）が
+ * 線の [lo,hi] に収まる（両端 0.5mm）。
  * 「重なる」ではなく「収まる」で見る理由: レーン間中心線の延長上にある普通の部屋壁は、在来の自由端の
  * 柱包み（wrapFreeEnds）で端が階段側へはね出して線の区間に入りうる。生成側は常に [lo,hi] の
- * 部分区間で作るので、収まり判定なら取りこぼさず、はみ出した部屋壁を誤って拾わない。
+ * 部分区間で作るので、収まり判定なら取りこぼさず、延長上の部屋壁を誤って拾わない（その壁の端CL自体が
+ * 線の外にあるため偽）。物理端（coord1/coord2）でなく設計上の端で見る理由: 隔て壁自身も自由端の柱包みで
+ * 物理端が端CL±57.5 へはね出す（stairPartitionWalls.js wrapStairPartitionFreeEnds）ので、物理端で
+ * 見ると柱包み後に識別から漏れて構造の源・腰壁の対象へ混入する。
  * @param {import('@core').Wall} wall
  * @param {Array<{isVertical:boolean, axisValue:number, lo:number, hi:number}>} lines stairPartitionLines の戻り
  */
 export function isStairPartitionWall(wall, lines) {
-  if (!lines || lines.length === 0) return false;
-  if (!wall.isRoomWall || wall.isExteriorWall) return false;
+  return matchStairPartitionLine(wall, lines) != null;
+}
+
+/**
+ * isStairPartitionWall の判定に使った線（一致した先頭の line）を返す。偽なら null。
+ * 隔て壁の端が線の端（lo/hi）かどうかを呼び出し側が見るために共有する（二重実装しない）。
+ * @param {import('@core').Wall} wall
+ * @param {Array<{isVertical:boolean, axisValue:number, lo:number, hi:number}>} lines
+ * @returns {{isVertical:boolean, axisValue:number, lo:number, hi:number}|null}
+ */
+export function matchStairPartitionLine(wall, lines) {
+  if (!lines || lines.length === 0) return null;
+  if (!wall.isRoomWall || wall.isExteriorWall) return null;
   const axis = wall.axisCL.effectiveValue;
   const mr = wall.materialRange;
-  const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
-  if (wall.wallFinish !== PARTITION_FINISH_MM || wall.backingOffset !== 0) return false;
-  if (Math.abs(Math.abs(wall.axisOffset) - (PARTITION_BACKING_MM / 2 + PARTITION_FINISH_MM)) > OFFSET_TOL_MM) return false;
-  if (wall.backingDepth !== 0 && wall.backingDepth !== PARTITION_BACKING_MM) return false;
-  return lines.some(l =>
+  const { lo, hi } = partitionDesignRange(wall);
+  if (wall.wallFinish !== PARTITION_FINISH_MM || wall.backingOffset !== 0) return null;
+  if (Math.abs(Math.abs(wall.axisOffset) - (PARTITION_BACKING_MM / 2 + PARTITION_FINISH_MM)) > OFFSET_TOL_MM) return null;
+  if (wall.backingDepth !== 0 && wall.backingDepth !== PARTITION_BACKING_MM) return null;
+  return lines.find(l =>
     wall.isVertical === l.isVertical
     && Math.abs(axis - l.axisValue) < AXIS_TOL_MM
     && mr.lo >= l.axisValue - PARTITION_HALF_EXTENT_MM && mr.hi <= l.axisValue + PARTITION_HALF_EXTENT_MM
-    && lo >= l.lo - AXIS_TOL_MM && hi <= l.hi + AXIS_TOL_MM);
+    && lo >= l.lo - AXIS_TOL_MM && hi <= l.hi + AXIS_TOL_MM) ?? null;
+}
+
+/**
+ * 壁の設計上の区間 {lo,hi}（clStart/clEnd.effectiveValue の min/max。startOffset/endOffset を含まない）。
+ * @param {import('@core').Wall} wall
+ */
+export function partitionDesignRange(wall) {
+  const a = wall.clStart.effectiveValue, b = wall.clEnd.effectiveValue;
+  return { lo: Math.min(a, b), hi: Math.max(a, b) };
 }

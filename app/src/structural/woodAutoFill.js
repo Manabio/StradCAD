@@ -34,7 +34,8 @@ import { worldToCell } from '../finish/gridCells.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { bareColumnRect } from '../finish/columnWrap.js';
 import { findHostWall } from '../openings/openingGeometry.js';
-import { selfWallFreeEnds } from './wallFreeEnds.js';
+import { selfWallFreeEnds, stairPartitionEnds } from './wallFreeEnds.js';
+import { PARTITION_BACKING_MM } from '../finish/stair/stairPartition.js';
 import { ColumnOrigin, mergeSlot, formatColumnOrigins } from './columnOrigins.js';
 
 // isKneeDropFreeEnd／selfWallFreeEndsの実体は wallFreeEnds.js（腰壁・垂れ壁の端部材
@@ -269,6 +270,27 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
     const horizontalCL = findBeamAnchorCL(graph, CenterLineType.HORIZONTAL, p.y) ?? findCenterAnchorCL(graph, CenterLineType.HORIZONTAL, p.y);
     if (!verticalCL || !horizontalCL) continue;
     mergeSlot(slots, columnSlotKey(verticalCL, horizontalCL), { verticalCL, horizontalCL }, [ColumnOrigin.WALL]);
+  }
+  // 折返し階段の隔て壁の両端（隔て壁 S3'。ユーザー裁定2026-10-07「回転部の柱は通り芯交点に配置」）。
+  // 隔て壁は構造の壁ソースから除外してある（wallBeamAxes.js）ので3a・F-1には現れない——ここが唯一の点源。
+  // アンカーは3aと同じ2段（resolveWoodColumnAnchorCL。CLは新設しない。どちらか解決できなければ見送る）。
+  // 由来は'freeEnd'（新しい由来語・色は足さない）。slotsに入れるので撤去ループで撤去されず、除外集合
+  // （excludedColumnSlots）・wallGateは生成ループが共通に掛ける（3bと同じ）。
+  // 90角: 個別柱寸（woodColumnWidthMm）を90にする。自由端（柱包みをする端）だけ——T字等の非自由端は
+  // 階の柱寸のまま（null。「個別指定＝階の値と同値」を作らない排他規則 columnWidthScope.js）。
+  const partitionWidthByKey = new Map();
+  const floorWidthMm = woodColumnWidthMm(graph, project);
+  for (const e of stairPartitionEnds(graph, project, wallSourceCache, segments)) {
+    const axisType = e.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+    const crossType = e.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+    const axisCL = resolveWoodColumnAnchorCL(graph, axisType, e.coord);
+    const crossCL = resolveWoodColumnAnchorCL(graph, crossType, e.along);
+    if (!axisCL || !crossCL) continue;
+    const verticalCL = e.isVertical ? axisCL : crossCL;
+    const horizontalCL = e.isVertical ? crossCL : axisCL;
+    const key = columnSlotKey(verticalCL, horizontalCL);
+    mergeSlot(slots, key, { verticalCL, horizontalCL }, [ColumnOrigin.FREE_END]);
+    partitionWidthByKey.set(key, (e.free && floorWidthMm !== PARTITION_BACKING_MM) ? PARTITION_BACKING_MM : null);
   }
 
   // ループ不変（3a/3b/3h-2/袖柱/3iで共通に使う）なので先に1回だけ解決する（3b近接ガード・3iの安全弁が
@@ -750,9 +772,11 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
       const gateHorizontalCL = woodAxisOffset && !woodAxisOffset.isVertical ? { value: horizontalCL.value + woodAxisOffset.offset } : horizontalCL;
       if (!wallGate.intersectionInBuilding(gateVerticalCL, gateHorizontalCL)) continue;
     }
-    created.push(graph.addColumn(rules.baseMaterial, columnSection, verticalCL, horizontalCL, {
+    const partitionWidth = partitionWidthByKey.get(key) ?? null;
+    created.push(graph.addColumn(rules.baseMaterial, partitionWidth ? woodRectSectionKey(partitionWidth, partitionWidth) ?? columnSection : columnSection, verticalCL, horizontalCL, {
       ...(woodJambRef ? { woodJambRef } : woodAxisOffset ? { woodAxisOffset } : {}),
       woodColumnOrigins: formatColumnOrigins(origins),
+      ...(partitionWidth ? { woodColumnWidthMm: partitionWidth } : {}),
     }));
   }
   const removed = [];
@@ -772,6 +796,15 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
       if (formatted !== column.woodColumnOrigins) {
         column.setField('woodColumnOrigins', formatted);
         originsUpdated.push(column.id);
+      }
+      // 隔て壁の端の柱の個別柱寸（90）の書き戻し（毎パス再計算。階の柱寸が変わって「階の値と同値」になる／
+      // 非自由端へ変わるときは null へ戻す）。書き戻すのは現在値が null か 90（＝この点源が入れた値）のときだけ。
+      // 柱カード「この部材」でユーザーが入れた個別柱寸（105/120等。dimensionStatus は auto のまま）は上書きしない。
+      // 点源に無い柱（partitionWidthByKey に無いキー）も触らない。
+      if (partitionWidthByKey.has(columnAnchorKey(column))) {
+        const want = partitionWidthByKey.get(columnAnchorKey(column));
+        const cur = column.woodColumnWidthMm ?? null;
+        if ((cur === null || cur === PARTITION_BACKING_MM) && cur !== want) column.setField('woodColumnWidthMm', want);
       }
       continue;
     }

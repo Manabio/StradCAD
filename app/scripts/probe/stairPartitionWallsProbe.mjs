@@ -49,12 +49,16 @@ for (const plane of project.planes) {
   // ここで2aを無効にしているわけではない。
   await runFinishExitBoundary(graph, project, { materialMap, stairUnderRooms: () => [] }, { goingToStructure: false });
 }
-await sweepUntilConverged(project, 'desc', 8, () => {});
+const sweeps = await sweepUntilConverged(project, 'desc', 8, () => {});
+console.log('収束 sweep 数 =', sweeps);
 
 // 隔て壁の座標署名: 軸±57.5 で backingDepth 90 / 0・wallFinish 12.5・非外壁・部屋壁
 const isPartitionLike = (w) => w.isRoomWall && !w.isExteriorWall && w.wallFinish === 12.5 && Math.abs(Math.abs(w.axisOffset) - 57.5) < 0.01
   && w.backingOffset === 0 && (w.backingDepth === 90 || w.backingDepth === 0);
-const out = {};
+// 隔て壁の両端（S3'。柱の点源）。基準コミット（stairPartitionEnds が無い）でも動くよう動的 import で守る
+let stairPartitionEnds = null;
+try { ({ stairPartitionEnds } = await import('../../src/structural/wallFreeEnds.js')); } catch { /* 基準側 */ }
+const out = { __sweeps: sweeps };
 for (const plane of project.planes) {
   const g = project.graphMap.get(plane.id);
   const sig = (w) => [w.isVertical ? 'V' : 'H', r(w.axisCL.effectiveValue), r(w.axisOffset), r(Math.min(w.coord1, w.coord2)), r(Math.max(w.coord1, w.coord2)),
@@ -63,7 +67,13 @@ for (const plane of project.planes) {
   const others = g.walls.filter(w => !isPartitionLike(w)).map(sig).sort();
   const cols = g.columns.map(c => [c.role, c.materialType, c.sectionDefId, c.memberNo, r(c.verticalCL.effectiveValue), r(c.horizontalCL.effectiveValue)].join('|')).sort();
   const beams = g.beams.map(b => [b.role, b.materialType, b.sectionDefId, b.memberNo, b.isVertical ? 'V' : 'H', r(b.axisCL.effectiveValue), r(b.clStart.effectiveValue), r(b.clEnd.effectiveValue), b.beamType ?? ''].join('|')).sort();
-  out[plane.name] = { partition, others, cols, beams };
+  // 両端の柱（座標が点源に一致するもの）の個別柱寸・断面・由来・free
+  const ends = (typeof stairPartitionEnds === 'function' ? stairPartitionEnds(g, project) : []).map(e => {
+    const c = g.columns.find(col => Math.abs(col.verticalCL.effectiveValue - e.x) < 1 && Math.abs(col.horizontalCL.effectiveValue - e.y) < 1);
+    return [r(e.x), r(e.y), e.free ? 'free' : 'tee', c ? [c.woodColumnWidthMm ?? 'null', c.sectionDefId, c.woodColumnOrigins ?? '', c.dimensionStatus].join('/') : 'NO-COLUMN'].join('|');
+  }).sort();
+  out[plane.name] = { partition, others, cols, beams, ends };
+  if (ends.length) console.log('  隔て壁の端:', ends.join('  '));
   console.log(`[${plane.name}] 壁(隔て壁以外)=${others.length} 隔て壁=${partition.length} 柱=${cols.length} 梁=${beams.length}`);
 }
 const file = path.join(outDir, `stairPartitionWalls-${tag}.json`);

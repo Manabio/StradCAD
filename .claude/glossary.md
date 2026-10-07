@@ -444,7 +444,7 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 `.claude/plan-wall-region.md`「仕上げモード背景の補助線」節。
 
 ## 隔て壁
-在来木造の折返し階段の往路・復路レーンの間（レーン間中心線）に立つ壁（下地90＋両面PB12.5の2枚）。`finish/stair/stairPartitionWalls.js`が仕上げ脱出で生成し、識別は座標照合（`stairPartition.js`）。設計意図は`.claude/data-model.md`「階段まわりの壁の3規則」。
+在来木造の折返し階段の往路・復路レーンの間（レーン間中心線）に立つ壁（下地90＋両面PB12.5の2枚）。`finish/stair/stairPartitionWalls.js`が仕上げ脱出で生成し、識別は座標照合（`stairPartition.js`）。両端には90角の構造柱が立ち、自由端の側は壁が柱を包む（`structural/wallFreeEnds.js stairPartitionEnds`）。設計意図は`.claude/data-model.md`「階段まわりの壁の3規則」・`.claude/structural-model.md`「隔て壁の両端の柱」。
 
 ## 外壁判定線
 仕上げモード背景が太線で描く、外壁ループ（建物外周・中庭境界）の判定用の線（`finish/wallGeneration.js`

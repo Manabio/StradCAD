@@ -23,8 +23,10 @@ import { effectiveStructure, woodColumnSectionId } from '../structural/structure
  * v4 = 昇降路壁材（shaftWallMaterial）を鍵に追加 2026-09-28。
  * v5 = 在来木造の折返し階段の隔て壁を生成（finish/stair/stairPartitionWalls.js）。鍵の入力は
  * 変えていないが生成する壁が増えたため既存キーを一律不一致にする。
+ * v6 = 隔て壁の自由端の柱包み（stairPartitionWalls.js wrapStairPartitionFreeEnds。両端の柱が90角の構造柱に
+ * なり、自由端の側の壁を端CL±57.5へはね出す）。鍵の入力は変えていないが生成式が変わったため一律不一致にする。
  */
-export const WALL_KEY_VERSION = 'v5';
+export const WALL_KEY_VERSION = 'v6';
 
 /**
  * graph（1階分）の壁再生成に必要な入力から鍵文字列を作る。

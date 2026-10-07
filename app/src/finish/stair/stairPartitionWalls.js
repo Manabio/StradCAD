@@ -16,15 +16,18 @@
  * 対象外）。識別は座標照合（stairPartition.js isStairPartitionWall）。
  *
  * 既知の限界: 手動壁との重なりは見ない（同位置に手動壁があれば二重になる）。
- * 構造（梁芯・柱）・腰壁からの除外は S5 までの暫定（structural/wallBeamAxes.js・finish/kneeDropWall.js）。
+ * 構造の壁ソース（梁芯・通し梁・階柱寸の柱）・腰壁からの除外は維持（structural/wallBeamAxes.js・
+ * finish/kneeDropWall.js。解除すると梁芯CL等が湧く）。両端の柱は structural/wallFreeEnds.js
+ * stairPartitionEnds が唯一の点源で、壁の自由端の柱包みは末尾の wrapStairPartitionFreeEnds。
  *
  * 純モジュール: store.js / snap.js / *.jsx を静的 import しない。
  */
 import { CenterLineType, RoomKind } from '@core';
 import { sameCoordCounterparts, isFinishCellDivider, coversAlongAxis } from '../../core/centerLineKindPolicy.js';
 import { isTraditionalWoodStructure } from '../../structural/structureRules.js';
+import { stairPartitionEnds } from '../../structural/wallFreeEnds.js';
 import {
-  stairPartitionGeometry, PARTITION_BACKING_MM, PARTITION_FINISH_MM,
+  stairPartitionGeometry, stairPartitionLines, isStairPartitionWall, PARTITION_BACKING_MM, PARTITION_FINISH_MM,
 } from './stairPartition.js';
 
 const TOL_MM = 0.5;
@@ -90,4 +93,46 @@ export function generateStairPartitionWalls(graph, { structure = null, underEdge
     }
   }
   return walls;
+}
+
+/**
+ * 隔て壁の自由端の柱包み（隔て壁 S3'）。両端は構造柱（90角）が立つ（structural/wallFreeEnds.js
+ * stairPartitionEnds。woodAutoFill.js が点源にする）ので、他の在来の自由端（wallGeneration.js
+ * applyFreeEndProtrusion。F-3）と同じく壁の端を柱の外面まで延ばす——自由端の側だけ、物理端を端CLから
+ * 外向きに OWNER_OFFSET_MM（下地の片側45＋仕上げ12.5＝F-3 の式 wallBase/2+wallFinish と同値）はね出す。
+ * オーナー壁・薄壁の両方（同じ設計上の端）。符号規則も applyFreeEndProtrusion と同じ
+ * （sign = Math.sign(endCL−startCL)||1、始端 −sign・終端 +sign）。
+ *
+ * 生成時（generateStairPartitionWalls）には隣室壁・外壁が無く自由端を判定できないので、壁が出そろった
+ * 後（wallRegeneration.js の最後）で呼ぶ。自由端は直交壁が無い＝コーナーオフセットを持たないので、
+ * オフセットは**加算でなく絶対値で置く**（再実行しても二重に延びない）。
+ * 非自由端（T字等）・自由端でない側は触らない。変更した壁の before/after を返す（呼び出し側が undo/redo にする）。
+ * 呼び出し側は action で包むこと（Wall のフィールドを直接書く）。
+ * @param {object} graph
+ * @param {object} [project]
+ * @returns {Array<{id:string, before:{startOffset:number,endOffset:number}, after:{startOffset:number,endOffset:number}}>}
+ */
+export function wrapStairPartitionFreeEnds(graph, project) {
+  const ends = stairPartitionEnds(graph, project).filter(e => e.free);
+  if (ends.length === 0) return [];
+  const lines = stairPartitionLines(graph);
+  const changes = [];
+  for (const w of graph.walls) {
+    if (!isStairPartitionWall(w, lines)) continue;
+    const axis = w.axisCL.effectiveValue;
+    const sv = w.clStart.effectiveValue, ev = w.clEnd.effectiveValue;
+    const sign = Math.sign(ev - sv) || 1;
+    const isFree = (along) => ends.some(e => e.isVertical === w.isVertical
+      && Math.abs(e.coord - axis) < TOL_MM && Math.abs(e.along - along) < TOL_MM);
+    const before = { startOffset: w.startOffset, endOffset: w.endOffset };
+    const after = {
+      startOffset: isFree(sv) ? -sign * OWNER_OFFSET_MM : w.startOffset,
+      endOffset: isFree(ev) ? sign * OWNER_OFFSET_MM : w.endOffset,
+    };
+    if (after.startOffset === before.startOffset && after.endOffset === before.endOffset) continue;
+    w.startOffset = after.startOffset;
+    w.endOffset = after.endOffset;
+    changes.push({ id: w.id, before, after });
+  }
+  return changes;
 }

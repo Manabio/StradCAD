@@ -42,7 +42,8 @@ import { graphComputed } from './graphDerived.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { selfWallSegments } from '../structural/wallBeamAxes.js';
 import { wallRunFreeEnds } from '../structural/woodFraming.js';
-import { allEndMembers } from '../structural/wallEndMember.js';
+import { stairPartitionEnds } from '../structural/wallFreeEnds.js';
+import { kneeDropEndMembers } from '../structural/wallEndMember.js';
 
 // 略図LOD で返す下地重複防止の空集合（読み取り専用として共有する）。
 const EMPTY_SET = new Set();
@@ -239,7 +240,12 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
   // 柱生成＝structural/woodAutoFill.js と同じ判定・同じ入力 selfWallSegments(graph)）の世界座標一覧。
   // 腰壁・垂れ壁の辺の自由端でも壁端延長・巻きは行うため、ここでは絞り込まない。
   const wrapFreeEnds = !schematic && rulesFor(effectiveStructure(graph)).wallFreeEnd === 'columnWrap';
-  const freeEndPoints = wrapFreeEnds ? wallRunFreeEnds(selfWallSegments(graph)) : null;
+  // 折返し階段の隔て壁の自由端（stairPartitionEnds。構造の壁ソースから除外してあるので上の集合には出ない）も
+  // 足す——隔て壁の仕上げ（薄壁を含む）が柱を回り込む。薄壁は下地帯中心(backingAxisValue)が軸と一致して拾われる。
+  const ownSegments = wrapFreeEnds ? selfWallSegments(graph) : null;
+  const freeEndPoints = wrapFreeEnds
+    ? [...wallRunFreeEnds(ownSegments), ...stairPartitionEnds(graph, undefined, undefined, ownSegments).filter(e => e.free)]
+    : null;
   const region = schematic ? null : resolveWallRegionLines(walls, {
     junctions: wallJunctions, openingsByWall, kneeDropOverlays, endpointAtByWall,
     columnWraps, clipGroups, detail, freeEndPoints,
@@ -269,10 +275,9 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
     // 腰壁・垂れ壁の端部材（在来木造だけ・structural/wallEndMember.js）。1レンダー分まとめて1回解決し、
     // 壁ごとに (a) columnIntervals へ端部材区間を合流（既存どおり柱面から studColumnClearanceMm(10) を
     // 空けた間柱が立つ。二系統の割付を作らない）、(b) resolveWallStuds へ endMembers として渡す。
-    // 端部材は腰壁・垂れ壁の自由端に加え、折返し階段の隔て壁の両端（90角）も含む（allEndMembers）。
-    // このstudLayout==='betweenColumns'ゲートはallEndMembers内部のrules.framingゲートと実質
+    // このstudLayout==='betweenColumns'ゲートはkneeDropEndMembers内部のrules.framingゲートと実質
     // 二重（QA指摘2026-09-19。両方在来木造のみを指すため片方だけの変異では検出できない——両方を守ること）。
-    const endMembersByWall = rules.studLayout === 'betweenColumns' ? allEndMembers(graph) : null;
+    const endMembersByWall = rules.studLayout === 'betweenColumns' ? kneeDropEndMembers(graph) : null;
     for (const wall of walls) {
       if (wall.wallFinish == null || !wall.backingRange || deferredBackingIds.has(wall.id)) continue;
       const wallEndMembers = endMembersByWall?.get(wall.id) ?? [];

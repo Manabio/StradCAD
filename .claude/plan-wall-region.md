@@ -53,6 +53,8 @@
 仕上げ材が端を回り込む。腰壁・垂れ壁の辺の自由端でも延び・巻きは行う（構造柱だけを立てないのは
 `structural/woodAutoFill.js`側の判断）。
 
+**隔て壁（在来の折返し階段）の自由端**は壁生成側の経路に乗らない（隣室壁・外壁が出そろう前に作るため自由端を判定できない）。壁が出そろった後の後処理（`finish/stair/stairPartitionWalls.js wrapStairPartitionFreeEnds`。`wallRegeneration.js`末尾）で、`structural/wallFreeEnds.js stairPartitionEnds`の自由端の側だけ`startOffset`/`endOffset`を端CLから±57.5（wallBase/2+wallFinish）に**絶対値で**置く（直交壁が無い端はコーナーオフセットを持たず、再実行しても二重に延びない）。そのため隔て壁のundo/redoは後処理の後に取る（内周壁の遅延pushと同じ型）。描画側は`wallDrawPlan.js`の`freeEndPoints`へ隔て壁の自由端を足して仕上げの回り込みを出す。
+
 **壁生成側**（`finish/wallGeneration.js`）: 当初「コーナーマップの構築源を階段開口辺の除外前の
 全辺へ広げる」方式（幻コーナー）を試みたが、実データ（moku4）で3つの不具合を生んで廃止した——
 ①開口と**同一直線上**（コーナーではない）の自由端を拾えない、②反対面の薄壁の自由端と食い違う、

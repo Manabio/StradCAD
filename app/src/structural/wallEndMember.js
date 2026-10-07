@@ -8,19 +8,12 @@
 // **壁下地材**」——ここでは保存せず（新エンティティ・新FBSフィールドを持たない）、壁の描画のたびに
 // 導出するだけの値として扱う。
 //
-// 端部材の点源は2つ（allEndMembers が合流する）:
-//   (1) 腰壁・垂れ壁の自由端（kneeDropEndMembers）
-//   (2) 折返し階段の隔て壁の両端（stairPartitionEndMembers。90角・壁の区間の内側。構造柱ではない）
-//
 // core.js/.jsx/store.js/snap.js を静的に引かない。node:test から単体 import 可能に保つ
 // （.claude structural-model.md「抽出純モジュールはnode:testから単体import可能に保つ」規律）。
 import { rulesFor, effectiveStructure, woodColumnWidthMm } from './structureRules.js';
 import { selfWallSegments } from './wallBeamAxes.js';
 import { wallRunFreeEnds } from './woodFraming.js';
 import { kneeDropWallAtFreeEnd } from './wallFreeEnds.js';
-import {
-  stairPartitionLines, isStairPartitionWall, PARTITION_BACKING_MM,
-} from '../finish/stair/stairPartition.js';
 
 /**
  * 在来木造の腰壁・垂れ壁の自由端に立つ端部材を、壁idごとに列挙する。
@@ -64,54 +57,5 @@ export function kneeDropEndMembers(graph, project) {
     arr.push({ along: fe.along, widthMm, mode, heightMm });
     result.set(wall.id, arr);
   }
-  return result;
-}
-
-/**
- * 折返し階段の隔て壁（下地オーナー壁）の両端に立つ90角の端部材を、壁idごとに列挙する。
- *
- * 構造柱ではない（腰壁の端部材と同じ壁下地材。保存せず描画のたびに導出する）。隔て壁は
- * 構造の壁ソースから除外されている（wallBeamAxes.js）ため自由端でなく、柱も立たない——この端部材が
- * 隔て端部の「90角の材」（問題.md）を担う。S5 で階段が上階へ続く層は構造柱へ置き換わる。
- *
- * 幅は階の柱寸ではなく PARTITION_BACKING_MM（90）固定（仕様が90角・下地帯も90）。下地帯
- * [CL−45, CL+45] を埋める。
- * 位置は壁の区間の**内側**（along = lo+45 / hi−45＝下地帯の端90mmを占める）。隔て壁は端CLでちょうど
- * 終わり、柱包みの延長（F-3）も受けない（自由端でないため）ので、端CL中心に置くと踊り場側・取りつき側へ
- * 45mmはみ出す。
- * 区間が180mm未満（2本が重なる）なら出さない。下地の無い薄壁（backingDepth 0）は対象外。
- * 非在来（rules.framing なし）は空Map。
- * @param {object} graph
- * @param {object} [project]
- * @returns {Map<string, Array<{along:number, widthMm:number, mode:'partition', heightMm:null}>>}
- */
-export function stairPartitionEndMembers(graph, project) {
-  const result = new Map();
-  const rules = rulesFor(effectiveStructure(graph, project));
-  if (!rules.framing) return result;
-  const lines = stairPartitionLines(graph);
-  if (lines.length === 0) return result;
-  for (const wall of graph.walls) {
-    if (wall.backingDepth !== PARTITION_BACKING_MM) continue;
-    if (!isStairPartitionWall(wall, lines)) continue;
-    const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
-    if (hi - lo < PARTITION_BACKING_MM * 2) continue;
-    const half = PARTITION_BACKING_MM / 2;
-    result.set(wall.id, [
-      { along: lo + half, widthMm: PARTITION_BACKING_MM, mode: 'partition', heightMm: null },
-      { along: hi - half, widthMm: PARTITION_BACKING_MM, mode: 'partition', heightMm: null },
-    ]);
-  }
-  return result;
-}
-
-/**
- * 全端部材（腰壁・垂れ壁の自由端 ∪ 隔て壁の両端）。呼び出し側（renderer/wallDrawPlan.js）が
- * 1回の呼びで済むよう合流する（壁idは両者で排他: 隔て壁は構造の壁ソース外で腰壁対象外）。
- * @returns {Map<string, Array<{along:number, widthMm:number, mode:string, heightMm:number|null}>>}
- */
-export function allEndMembers(graph, project) {
-  const result = kneeDropEndMembers(graph, project);
-  for (const [id, arr] of stairPartitionEndMembers(graph, project)) result.set(id, [...(result.get(id) ?? []), ...arr]);
   return result;
 }

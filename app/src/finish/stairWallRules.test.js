@@ -379,7 +379,11 @@ test('隔て壁【在来・折返し階段（本番経路）】脱出後にレ�
   assert.equal(mids.length, 2, `レーン間中心線 x=1000 上に隔て壁2枚（実際 ${show(dump(graph).filter(w => w.v && w.axis > 900 && w.axis < 1100))}）`);
   assert.deepEqual(mids.map(w => w.backingDepth).sort(), [0, 90]);
   for (const w of mids) {
-    assert.deepEqual([Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)], [1000, 4000], '区間は両レーンが並走する y1000〜4000');
+    // 設計上の区間（端CL）は両レーンが並走する y1000〜4000。物理端は自由端の側だけ端CLから柱包み分（57.5）はね出す。
+    // 踊り場側（y1000）は自由端＝−57.5。上り口側（y4000）は壁が建たない辺だが、下の部屋の境界壁（x=1000 の延長上）と
+    // 同じ線上に連なるので自由端ではない＝はね出さない。
+    assert.deepEqual([Math.min(w.clStart.effectiveValue, w.clEnd.effectiveValue), Math.max(w.clStart.effectiveValue, w.clEnd.effectiveValue)], [1000, 4000]);
+    assert.deepEqual([Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)], [942.5, 4000], `物理端（実際 ${w.coord1}〜${w.coord2}）`);
   }
   for (const e of stairPortEdges(stair, graph, ['entry'])) assertOpen(graph, e, '上り口');
 });

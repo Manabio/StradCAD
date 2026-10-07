@@ -24,7 +24,7 @@ import {
   resolveBackingOwnership, applyBackingOwnership, healDerivedGeometry, isInteriorWallTarget,
 } from './wallGeneration.js';
 import { buildCellToRoom } from './edgeClassify.js';
-import { generateStairPartitionWalls } from './stair/stairPartitionWalls.js';
+import { generateStairPartitionWalls, wrapStairPartitionFreeEnds } from './stair/stairPartitionWalls.js';
 import { woodBaseColumnWidthMm, woodColumnWidthMm, rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
@@ -262,16 +262,11 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
   // generatedWallIds にも入れない（2aのクリップ・偏芯・所有権解決・外壁オーナー化の対象外。識別は
   // 座標照合 stairPartition.js isStairPartitionWall）。2a が受け持った区間は underEdges で差し引く。
   // claimedEdges は足さない。手動壁との重なりは見ない（stairPartitionWalls.js の既知の限界）。
-  // undo/redo は2aと同型（控えたスナップショットで復元／id で削除）。
-  {
-    const partitionWalls = generateStairPartitionWalls(graph, { structure: effectiveStructure(graph, project), underEdges });
-    if (partitionWalls.length > 0) {
-      const snapshots = partitionWalls.map(snapshotWall);
-      const wallIds = partitionWalls.map(w => w.id);
-      undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); });
-      redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots); });
-    }
-  }
+  // undo/redo は2aと同型（id で削除／控えたスナップショットで復元）だが、柱包み（末尾の
+  // wrapStairPartitionFreeEnds。自由端の判定に隣室壁・外壁が要るので壁が出そろった後）の反映後に
+  // スナップショットを取るため push を末尾へ遅延する（内周壁の遅延 push と同じ型。生成時のままだと
+  // redo がはね出し前の壁を復元する）。
+  const partitionWalls = generateStairPartitionWalls(graph, { structure: effectiveStructure(graph, project), underEdges });
 
   // ステップ2: 新規壁生成（対象: UNDEFINED・部分指定（referenceRoomIds あり。親が外周壁を
   // 担う）・2a部屋を除く全Room）。generatedWallIds ゲート（size>0でskip）は撤廃した
@@ -514,6 +509,20 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
       undoFns.push(apply('before'));
       redoFns.push(apply('after'));
     }
+  }
+
+  // ステップ3.7: 隔て壁の自由端の柱包み（stairPartitionWalls.js wrapStairPartitionFreeEnds）。
+  // 自室壁・隣接部屋壁・外壁・階段下壁が出そろい、取り合い（3.5・3.6）が済んだこの時点でないと
+  // 自由端（直交する壁が無い端）を判定できない。Wall のフィールドを直接書くので action で包む。
+  // 隔て壁の undo/redo はここで確定する（2a' の遅延 push。はね出し込みの最終状態を控える）。
+  // undo は逆順実行のため隔て壁の削除が先に走り、先行ステップの id ベースの差分は対象不在で無害化される。
+  if (partitionWalls.length > 0) {
+    runInAction(() => wrapStairPartitionFreeEnds(graph, project));
+    const live = partitionWalls.filter(w => graph.shapeMap.has(w.id));
+    const snapshots = live.map(snapshotWall);
+    const wallIds = live.map(w => w.id);
+    undoFns.push(() => { wallIds.forEach(id => graph.removeShape(id)); });
+    redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots); });
   }
 
   return { regenerated: true, undoFns, redoFns };
