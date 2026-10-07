@@ -68,7 +68,7 @@ export function betweenColumnsStudCenters(segments, columnIntervals, spec) {
  * @param {{layout:string, backing:object|null, columnIntervals:Array<[number,number]>, studCuts:Array<[number,number]>,
  *   endMembers:Array<{along:number, widthMm:number}>}} deps
  *   layout: rules.studLayout／backing: rules.backing（'betweenColumns' の値。無ければ固定ピッチへ）／
- *   endMembers: 腰壁・垂れ壁の自由端の端部材（structural/wallEndMember.js kneeDropEndMembers。この壁id分だけ）。
+ *   endMembers: 端部材（structural/wallEndMember.js allEndMembers＝腰壁・垂れ壁の自由端＋折返し階段の隔て壁の両端。この壁id分だけ。幅は各要素のwidthMm）。
  *   意味・値（along/widthMm）は変えず center/depth へ写すだけ——layout!=='betweenColumns' は常に空。
  * @returns {{centers:number[], depth:number, endMembers:Array<{center:number, depth:number}>}|null}
  *   並べる区間が無ければ null（backingSpan:null＝天板輪郭で描かれる壁は端部材も出さない。既存の
@@ -93,7 +93,7 @@ export function resolveWallStuds(plan, { layout, backing = null, columnIntervals
  * `renderer/ShapesLayer.jsx`（Konva描画）と`scripts/probe/planSegments.mjs`（回帰比較）が
  * 同じ幾何（isVerticalによるx/y・幅/高さの入れ替え、下地帯中心backingCenterVからのオフセット）を
  * 共有する単一の供給源（二重記述しない——QA指摘2026-09-19: JSX側に直接書くとテストが守れない）。
- * 厚み方向は壁の下地帯（backingRange）全幅、長さ方向の幅は間柱＝`studs.depth`・端部材＝各要素の`depth`
+ * 厚み方向は壁の下地帯（backingRange）全幅、長さ方向の幅は間柱＝`studs.depth`・端部材＝各要素の`depth`（allEndMembersの各widthMm）
  * （柱寸）——値は`resolveWallStuds`が返したものをそのまま使うだけで、ここでは導出しない。
  * @param {boolean} isVertical - 壁の向き（shape.isVertical）
  * @param {{lo:number, hi:number}} backingRange - 壁の下地帯（shape.backingRange。plan/studsとは別に

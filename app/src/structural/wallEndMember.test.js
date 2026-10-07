@@ -2,8 +2,10 @@
 // woodAutoFill.test.js と同じく実 core.js（Plane/PlanGraph/Wall）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '../core.js';
-import { kneeDropEndMembers } from './wallEndMember.js';
+import { Plane, PlanGraph, Project, StairType, CenterLineType, Discipline, edgeKey } from '../core.js';
+import { kneeDropEndMembers, stairPartitionEndMembers, allEndMembers } from './wallEndMember.js';
+import { generateStairPartitionWalls } from '../finish/stair/stairPartitionWalls.js';
+import { PARTITION_BACKING_MM } from '../finish/stair/stairPartition.js';
 import { selfWallFreeEnds } from './wallFreeEnds.js';
 import { wallRunFreeEnds } from './woodFraming.js';
 import { selfWallSegments } from './wallBeamAxes.js';
@@ -151,4 +153,80 @@ test('不変条件はS造など非在来では成立しない（selfWallFreeEnds
     'S造でも腰壁指定の自由端はselfWallFreeEndsから除かれる（主構造を見ないため）');
   // ↑除かれた自由端(1000,1000)はkneeDropEndMembersにも出ないため、両者を合わせても全自由端には
   // ならない——不変条件はこの非在来のケースでは成立しない（実害は無い。上記コメント参照）。
+});
+
+// ---- 折返し階段の隔て壁の端部材（stairPartitionEndMembers / allEndMembers）----
+// フィクスチャは finish/stair/stairPartitionWalls.test.js の makeStair/EQUAL_UP と同じ構成
+// （軸 x=1000・区間 y1000〜4000）を generateStairPartitionWalls の本番生成で作る。
+const EQUAL_UP = [[0, 0, 2000, 1000], [0, 1000, 1000, 4000], [1000, 1000, 2000, 4000]];
+
+function makePartitionGraph(structure = TRADITIONAL_WOOD_STRUCTURE, rects = EQUAL_UP) {
+  const project = new Project('proj', 'test');
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const vs = new Map(), hs = new Map();
+  const mk = (type, map, v) => map.get(v) ?? map.set(v, graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH })).get(v);
+  const V = (v) => mk(CenterLineType.VERTICAL, vs, v);
+  const H = (v) => mk(CenterLineType.HORIZONTAL, hs, v);
+  const cells = new Set(rects.map(([x1, y1, x2, y2]) => `${V(x1).id}:${H(y1).id}:${V(x2).id}:${H(y2).id}`));
+  graph.addStair({ type: StairType.SWITCHBACK, cells, sections: [6, 1, 6], flip: false, upDirection: 'up' });
+  const [owner, thin] = generateStairPartitionWalls(graph, { structure: TRADITIONAL_WOOD_STRUCTURE });
+  graph.structureOverride = structure;
+  return { graph, owner, thin };
+}
+
+test('stairPartitionEndMembers: 隔て壁のオーナー壁の両端（区間の内側 lo+45 / hi−45・幅90・mode=partition）に出る。薄壁には出ない', () => {
+  const { graph, owner, thin } = makePartitionGraph();
+  assert.equal(owner.backingDepth, PARTITION_BACKING_MM);
+  const members = stairPartitionEndMembers(graph, PROJECT);
+  assert.equal(members.size, 1);
+  assert.deepEqual(members.get(owner.id), [
+    { along: 1045, widthMm: 90, mode: 'partition', heightMm: null },
+    { along: 3955, widthMm: 90, mode: 'partition', heightMm: null },
+  ]);
+  assert.equal(members.has(thin.id), false);
+});
+
+test('【失敗系】stairPartitionEndMembers: 180mm未満の区間・非在来・隔て壁でない壁（通常の下地壁）は空', () => {
+  const short = makePartitionGraph(TRADITIONAL_WOOD_STRUCTURE, [[0, 0, 2000, 1000], [0, 1000, 1000, 1150], [1000, 1000, 2000, 1150]]);
+  assert.equal(short.owner.backingDepth, PARTITION_BACKING_MM, '対照: 短い区間でもオーナー壁は生成される');
+  assert.equal(stairPartitionEndMembers(short.graph, PROJECT).size, 0, '180mm未満は2本が重なるので出さない');
+
+  const steel = makePartitionGraph('S造');
+  assert.equal(stairPartitionEndMembers(steel.graph, PROJECT).size, 0, '非在来は空');
+
+  const g = makeWoodGraph();
+  const x0 = g.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = g.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  addBackingWall(g, { axisValue: 0, clStart: x0, clEnd: x1, isVertical: false });
+  assert.equal(stairPartitionEndMembers(g, PROJECT).size, 0, '階段が無ければ空');
+});
+
+test('【失敗系】stairPartitionEndMembers: 隔て壁の線上にない下地深さ90の部屋壁には出ない（形だけ同じ壁を拾わない）', () => {
+  const { graph, owner } = makePartitionGraph();
+  const mkCL = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const axis = mkCL(CenterLineType.VERTICAL, 5000);
+  const y0 = mkCL(CenterLineType.HORIZONTAL, 0), y3 = mkCL(CenterLineType.HORIZONTAL, 3000);
+  const other = graph.addWall(axis, 57.5, true, y0, 0, y3, 0,
+    { isRoomWall: true, wallFinish: 12.5, backingOffset: 0, backingDepth: PARTITION_BACKING_MM, finishSide: 1 });
+  assert.equal(other.backingDepth, PARTITION_BACKING_MM, '対照: 隔て壁と同じ形（線だけ違う）');
+  const members = stairPartitionEndMembers(graph, PROJECT);
+  assert.equal(members.size, 1);
+  assert.equal(members.has(owner.id), true);
+  assert.equal(members.has(other.id), false);
+});
+
+test('allEndMembers: 腰壁の自由端の端部材と隔て壁の端部材が壁idごとに両方入る・隔て壁は自由端（構造柱の点源）に現れない', () => {
+  const { graph, owner } = makePartitionGraph();
+  const a0 = graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const a1 = graph.addCenterLine(CenterLineType.VERTICAL, 6000, { labeled: true, discipline: Discipline.STRUCT });
+  const hw = addBackingWall(graph, { axisValue: 9000, clStart: a0, clEnd: a1, isVertical: false });
+  graph.setKneeDropWall(edgeKey(hw.axisCL.id, a0.id, a1.id), { knee: { topHeight: 900 } });
+  const all = allEndMembers(graph, PROJECT);
+  assert.equal(all.size, 2);
+  assert.deepEqual(all.get(owner.id).map(e => e.mode), ['partition', 'partition']);
+  assert.deepEqual(all.get(hw.id).map(e => e.mode), ['knee', 'knee']);
+  // 隔て壁の端は selfWallSegments（構造の壁ソース）に入らないので自由端にならず、柱とも二重にならない
+  const freeAlongOwnerAxis = wallRunFreeEnds(selfWallSegments(graph)).filter(fe => fe.x === 1000 || fe.y === 1000);
+  assert.equal(freeAlongOwnerAxis.length, 0);
 });
