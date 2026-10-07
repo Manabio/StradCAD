@@ -13,6 +13,11 @@
 import { resolveSwitchbackSpanLengths } from '../finish/stair/stairClassify.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from './elevationStyle.js';
 
+// 在来木造階段の踏面板の厚み（ユーザー指示2026-10-07「木造（在来）で階段は、踏面の厚みは30、
+// 蹴込板は垂直に」）。stairRunProfile の opts.treadThicknessMm へ渡す（sectionStair.js の
+// stairContribution が stair.structure===WOOD の flight に載せる）。
+export const WOOD_TREAD_THICKNESS_MM = 30;
+
 /**
  * 直進区間1本ぶんの踏面プロファイル（蹴上→踏面を段数ぶん繰り返すジグザグ線）をローカル座標で作る。
  * 最終段の踏面は次区間（踊り場・上階床）の床がその役割を兼ねるため出さない
@@ -27,12 +32,15 @@ import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from './eleva
  *   真下で、点列・その並び（段鼻＝奇数index）は一切変わらない。>0なら蹴上を蹴込ぶん奥へ引っ込め、
  *   段鼻の出を1本の水平セグメントとして点列へ挟む（ユーザー実機指摘2026-08「階段の蹴上、踏面に
  *   加え、蹴込を20で描画」）。
+ * @param {{treadThicknessMm?:number}} [opts] - treadThicknessMm: 段板（踏面板）の厚み。0（既定）
+ *   なら従来の斜めの蹴上。>0 かつ蹴込>0 なら垂直の蹴込板＋出幅 k・厚み分の段鼻面を持つ輪郭
+ *   （WOOD_TREAD_THICKNESS_MM）。
  * @returns {{points:Array<[number,number]>, noses:Array<[number,number]>, endX:number, endY:number}}
  *   noses は段鼻（各段の踏面の先端）。蹴込を入れると点列の刻みが1段2点→3点に変わるため、
  *   **消費側がindexの偶奇から段鼻を推測できなくなる**——ここで明示的に返す（ささらの上端線は
  *   この段鼻列から作る。stringerPrimitives参照）。
  */
-export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1, nosingMm = 0) {
+export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1, nosingMm = 0, opts = {}) {
   const steps = Math.max(1, Math.round(n));
   // 踏面（段鼻〜段鼻のピッチ）は **区間長 ÷ (段数−1)**（ユーザー実機検算2026-08「3500左CLの上が
   // 1段目踏面、右へ2500いったところが踊り場高さ、かつ11段目」＝10ピッチ×250）。区間長は
@@ -42,12 +50,29 @@ export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1
   const treadMm = steps > 1 ? runLengthMm / (steps - 1) : runLengthMm;
   // 蹴込は踏面を超えない（超えると蹴上が前段の段鼻より手前へ回り込み、輪郭が自己交差する）。
   const k = Math.max(0, Math.min(nosingMm || 0, treadMm));
+  // 段板の厚み（opts.treadThicknessMm。既定0＝従来）。>0 なら蹴込板は**垂直**になり、踏面板は
+  // 蹴込ぶん（k）蹴込板より前へ出て、段鼻面（厚み分の縦）と k 長の下面を持つ。蹴上より薄い範囲に
+  // クランプ（riser−1。蹴上以上だと下面が前段の踏面へ食い込み自己交差する）。蹴込0（k=0）では
+  // 段鼻面と蹴込板が同一直線になり従来の垂直な蹴上と同一（点列も同じ）。
+  const t = Math.max(0, Math.min(opts.treadThicknessMm || 0, riserMm - 1));
+  const thick = t > 0 && k > 0;
   const points = [];
   const noses = [];
   let x = startX, y = startY; // x は「現在の段の段鼻」の位置（蹴上の足元は x+dir*k）
   points.push([x + dir * k, y]); // 上り口の床は蹴上の足元（段鼻から蹴込ぶん奥）で階段に接する
   for (let i = 0; i < steps; i++) {
     y -= riserMm;
+    if (thick) {
+      // 在来木造（ユーザー指示2026-10-07「踏面の厚みは30、蹴込板は垂直に」）。y は上向き負なので
+      // 踏面板の下面は y+t。最終段（踊り場・上階床への上り）は蹴込板を床の高さまで垂直に上げて
+      // 終える（その上の踏面は次区間の床が兼ねる）。段鼻 noses は従来と同じ位置（踏面前端の天端）。
+      const rx = x + dir * k;
+      noses.push([x, y]);
+      if (i === steps - 1) { points.push([rx, y]); break; }
+      points.push([rx, y + t], [x, y + t], [x, y]);
+      x += dir * treadMm; points.push([x + dir * k, y]);
+      continue;
+    }
     // 蹴上は**斜めの断面**（ユーザー実機指摘2026-08「踊り場への上り、最後の蹴上面も蹴込つけて
     // 斜め断面に」）——足元(x+dir*k)から段鼻(x)へ1本の斜線で上がる。蹴込0なら垂直になり
     // 従来と完全に同一（点列も同じ）。**最終段（踊り場への上り）も同じループで処理する**ので

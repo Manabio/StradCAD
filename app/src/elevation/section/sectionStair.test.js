@@ -102,10 +102,60 @@ test('【WP-E3】stairPrimitivesForCut: 往路レーンを縦断する切断はS
   assert.equal(prims.length, 1);
   assert.equal(prims[0].type, 'polyline');
   assert.equal(prims[0].weight, 'medium', 'ジグザグはSILHOUETTE(medium)のはず');
-  // 最終段の踏面は次区間（踊り場）の床が兼ねるため出さない。蹴上は蹴込ぶん傾いた斜線1本
-  // なので、蹴込の有無に関わらず 起点1+蹴上6+踏面5。
-  assert.equal(prims[0].points.length, 1 + 6 + 5,
-    '往路の段数(6)ぶんの蹴上6点＋踏面5点＋起点があるはず');
+  // 木造（在来。既定）は段板厚30・垂直の蹴込板（ユーザー指示2026-10-07）。最終段の踏面は次区間
+  // （踊り場）の床が兼ねるため出さない。起点1＋(蹴込板上端・段鼻面下端・段鼻 の3点＋踏面1点)×5段
+  // ＋最終段は蹴込板の上端1点。
+  assert.equal(prims[0].points.length, 1 + 5 * 4 + 1,
+    '往路の段数(6)ぶん: 起点＋5段×(蹴込板・下面・段鼻面・踏面)＋最終段の蹴込板上端');
+});
+
+test('【在来木造の段板】stairPrimitivesForCut: 鉄骨は従来の斜めの蹴上（起点1+蹴上6+踏面5）のまま・木造は踏面板30厚の垂直蹴込板', () => {
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: 3000, worldLo: 1500, worldHi: 4500, bands: [] }];
+  const zig = structure => {
+    const graph = makeGraph();
+    const { stair } = makeSwitchbackFixture(graph, structure);
+    const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+    return { c, p: stairPrimitivesForCut(c, cut, columns).find(p => p.type === 'polyline' && p.points.length > 2) };
+  };
+  const steel = zig(StructuralMaterialType.STEEL);
+  assert.equal(steel.c.flights[0].treadThicknessMm, 0, '鉄骨の flight は段板厚0');
+  assert.equal(steel.p.points.length, 1 + 6 + 5, '鉄骨は従来どおり斜めの蹴上');
+  const wood = zig(StructuralMaterialType.WOOD);
+  assert.equal(wood.c.flights[0].treadThicknessMm, 30);
+  assert.equal(wood.c.flights[1].treadThicknessMm, 30, '復路も同じ');
+  // 往路 B1 の輪郭: 1段目は 蹴込板(垂直)→段鼻面の下端(高さ30手前)→段鼻→…。蹴上200・段鼻の出20。
+  const pts = wood.p.points;
+  // 向き・面端のクランプに依らない形で: 蹴込板は垂直、下面は水平、段鼻面は垂直で高さ30。
+  assert.ok(pts[0][1] === 0, '起点は設置階FL（-0を許容）');
+  assert.equal(pts[0][0], pts[1][0], '蹴込板は垂直（x不変）');
+  assert.equal(pts[1][1], -200 + 30, '蹴込板は踏面板の下面まで');
+  assert.equal(pts[2][1], pts[1][1], '下面は水平');
+  assert.equal(pts[3][0], pts[2][0], '段鼻面は垂直');
+  assert.equal(pts[3][1], -200, '段鼻面の上端は段鼻の高さ');
+  assert.equal(pts[2][1] - pts[3][1], 30, '段鼻面の高さは30');
+});
+
+test('【失敗系・在来木造の段板】stairContribution: RC（WOOD以外）は段板厚0', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.RC);
+  assert.equal(stairContribution(stair, graph, FLOOR_HEIGHT).flights[0].treadThicknessMm, 0);
+});
+
+test('【在来木造の段板】stairCutFloorProfile: 床の輪郭は歩行面のまま（段板厚の下面を混ぜない＝木造でも鉄骨と同形）', () => {
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const prof = structure => {
+    const graph = makeGraph();
+    const { stair } = makeSwitchbackFixture(graph, structure);
+    return stairCutFloorProfile(stairContribution(stair, graph, FLOOR_HEIGHT), cut);
+  };
+  assert.deepEqual(prof(StructuralMaterialType.WOOD), prof(StructuralMaterialType.STEEL));
 });
 
 // ---- 横切る→梯子（段数=steps） ----

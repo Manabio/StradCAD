@@ -580,7 +580,11 @@ test('stairFaceSequence: seq2は踊り場床断面線(太線)を含み、面端�
   // 引いてx=0の値にする。
   const zigzag = seq2.content.find(p => p.type === 'polyline' && p.weight === silhouetteWeight);
   assert.ok(zigzag, 'seq2に階段断面のジグザグ(polyline)があるはず');
-  const sorted = zigzag.points.map(([x, y]) => [x, -y]).sort((a, b) => a[0] - b[0]);
+  // 木造（在来）は段板厚30・垂直の蹴込板（ユーザー指示2026-10-07）で、点列に踏面板の下面
+  // （高さが蹴上の整数倍でない点）が挟まる。床の輪郭＝歩行面なので、それらを除いた点列で比べる。
+  const sorted = zigzag.points.map(([x, y]) => [x, -y])
+    .filter(([, z]) => Math.abs(z / riser - Math.round(z / riser)) < 1e-9)
+    .sort((a, b) => a[0] - b[0]);
   const pitch = sorted[4][0] - sorted[2][0]; // 段2つ先の対応点までのx＝踏面ピッチ
   const zAtSorted = (pts, x) => {
     for (let i = 0; i + 1 < pts.length; i++) {

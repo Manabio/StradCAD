@@ -297,6 +297,70 @@ test('【失敗系・実機指摘】stairRunProfile: 蹴込が踏面を超えて
   assert.equal(points[0][0] - noses[0][0], 250);
 });
 
+// ---- ユーザー指示2026-10-07「木造（在来）で階段は、踏面の厚みは30、蹴込板は垂直に」 ----
+test('【在来木造】stairRunProfile: 段板厚30・蹴込20 → 蹴込板は垂直・踏面板は20出て段鼻面の高さ30', () => {
+  // 3段・蹴上200・区間長500（踏面250）・蹴込20・段板30。y は上向き負。
+  //  [20,0]                         起点（蹴込板の足元）
+  //  [20,-170] [0,-170] [0,-200]     1段目: 蹴込板(垂直)→踏面板の下面(20)→段鼻面(30)
+  //  [270,-200]                      踏面（段鼻→次の蹴込板の足元）
+  //  [270,-370] [250,-370] [250,-400] 2段目
+  //  [520,-400]
+  //  [520,-600]                      最終段: 蹴込板を床の高さまで垂直に（踏面は次区間の床が兼ねる）
+  const { points, noses, endX, endY } = stairRunProfile(3, 200, 500, 0, 0, 1, 20, { treadThicknessMm: 30 });
+  assert.deepEqual(points, [
+    [20, 0], [20, -170], [0, -170], [0, -200], [270, -200],
+    [270, -370], [250, -370], [250, -400], [520, -400], [520, -600],
+  ]);
+  assert.deepEqual(noses, [[0, -200], [250, -400], [500, -600]], '段鼻は踏面前端の天端（従来と同じ位置）');
+  assert.equal(endX, 500);
+  assert.equal(endY, -600);
+  // 蹴込板の線分（高さが変わる線分）は x 一定＝垂直。
+  for (let i = 0; i + 1 < points.length; i++) {
+    const [a, b] = [points[i], points[i + 1]];
+    if (a[1] !== b[1] && a[0] !== b[0]) assert.fail(`斜めの線分が残っている: ${a} → ${b}`);
+  }
+});
+
+test('【在来木造】stairRunProfile: dir=-1（左向き）でも鏡像で同じ形', () => {
+  const r = stairRunProfile(3, 200, 500, 0, 0, -1, 20, { treadThicknessMm: 30 });
+  const l = stairRunProfile(3, 200, 500, 0, 0, 1, 20, { treadThicknessMm: 30 });
+  assert.deepEqual(r.points, l.points.map(([x, y]) => [-x || 0, y]));
+});
+
+test('【回帰】stairRunProfile: treadThicknessMm 省略・0 は従来（斜めの蹴上）と同一', () => {
+  for (const k of [0, 20]) {
+    const a = stairRunProfile(4, 200, 900, 0, 0, 1, k);
+    const b = stairRunProfile(4, 200, 900, 0, 0, 1, k, { treadThicknessMm: 0 });
+    const c = stairRunProfile(4, 200, 900, 0, 0, 1, k, {});
+    assert.deepEqual(b, a);
+    assert.deepEqual(c, a);
+  }
+});
+
+test('【在来木造】stairRunProfile: 蹴込0なら段板厚があっても垂直の蹴上と同一（重複点を作らない）', () => {
+  const a = stairRunProfile(3, 200, 500, 0, 0, 1, 0);
+  const b = stairRunProfile(3, 200, 500, 0, 0, 1, 0, { treadThicknessMm: 30 });
+  assert.deepEqual(b, a);
+  for (let i = 0; i + 1 < b.points.length; i++) {
+    assert.notDeepEqual(b.points[i], b.points[i + 1], '長さ0の線分が無い');
+  }
+});
+
+test('【失敗系・在来木造】stairRunProfile: 段板厚が蹴上以上でも蹴上−1にクランプし自己交差しない', () => {
+  const { points } = stairRunProfile(3, 20, 500, 0, 0, 1, 20, { treadThicknessMm: 30 });
+  // クランプ後の厚み=19: 下面は y=-20+19=-1（前段の踏面 y=0 より上）。
+  assert.deepEqual(points.slice(0, 4), [[20, 0], [20, -1], [0, -1], [0, -20]]);
+  // 蹴上が1以下ならクランプして厚み0（従来形）。
+  assert.deepEqual(stairRunProfile(2, 1, 500, 0, 0, 1, 20, { treadThicknessMm: 30 }),
+    stairRunProfile(2, 1, 500, 0, 0, 1, 20));
+});
+
+test('【失敗系・在来木造】stairRunProfile: 1段でも壊れない（起点→垂直の蹴込板）', () => {
+  const { points, noses } = stairRunProfile(1, 200, 500, 0, 0, 1, 20, { treadThicknessMm: 30 });
+  assert.deepEqual(points, [[20, 0], [20, -200]]);
+  assert.deepEqual(noses, [[0, -200]]);
+});
+
 // ---- ユーザー実機指摘2026-08: 「鉄骨階段ささらの上端は、踏面先端で巾木同寸」 ----
 // 上端線を段鼻の勾配線から巾木高さぶん上へ上げることで、踊り場桁枠side辺の上端
 // （landing.z + baseboardHeightMm。sectionStair.jsのlandingFramePrimitives）と踊り場の縁で

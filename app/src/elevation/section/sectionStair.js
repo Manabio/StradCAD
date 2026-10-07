@@ -78,7 +78,7 @@ import { roomBounds, refreshCells } from '../../finish/gridCells.js';
 import { makeFrame, LANE_GAP } from '../../finish/stair/stairGeometry.js';
 import { landingRect } from '../../finish/stair/stairLanding.js';
 import {
-  resolveSwitchbackParams, stairRunProfile, stringerPrimitives, stringerBandGeometry,
+  resolveSwitchbackParams, stairRunProfile, stringerPrimitives, stringerBandGeometry, WOOD_TREAD_THICKNESS_MM,
   STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM, STEEL_LANDING_FRAME_DEPTH_MM,
 } from '../elevationStairSection.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
@@ -131,6 +131,9 @@ export function stairContribution(stair, graph, floorHeight) {
   const acrossLo = Math.min(s0World, s1World), acrossHi = Math.max(s0World, s1World);
   const acrossMid = (acrossLo + acrossHi) / 2;
 
+  // 段板の厚み: 木造階段（stair.structure===WOOD。展開が他でも分岐している単位）だけ30（在来木造の
+  // 仕様。ユーザー指示2026-10-07）。鉄骨・RCは0＝従来の斜めの蹴上。
+  const treadThicknessMm = stair.structure === StructuralMaterialType.WOOD ? WOOD_TREAD_THICKNESS_MM : 0;
   const tRun = len1 / (len1 + landingLen);
   const p0 = f.pt(0, 0), pRun = f.pt(tRun, 0);
   const coordAt0   = vertical ? p0.y   : p0.x;
@@ -141,7 +144,7 @@ export function stairContribution(stair, graph, floorHeight) {
     runLo: Math.min(coordAt0, coordAtRun), runHi: Math.max(coordAt0, coordAtRun),
     travelSign: coordAtRun >= coordAt0 ? 1 : -1,
     acrossLo: Math.min(s0World, acrossMid), acrossHi: Math.max(s0World, acrossMid),
-    baseZ: 0, riserMm: riser, steps: n1, lengthMm: len1, nosingMm: stair.nosing ?? 0,
+    baseZ: 0, riserMm: riser, steps: n1, lengthMm: len1, nosingMm: stair.nosing ?? 0, treadThicknessMm,
   };
   const landingZ = n1 * riser;
   // WP-E5b修正: makeFrameのt軸は「往路(t:0→tRun)＋踊り場(t:tRun→1)」の1往復ぶんの長さしか
@@ -154,7 +157,7 @@ export function stairContribution(stair, graph, floorHeight) {
     runLo: outbound.runLo, runHi: outbound.runHi,
     travelSign: -outbound.travelSign,
     acrossLo: Math.min(s1World, acrossMid), acrossHi: Math.max(s1World, acrossMid),
-    baseZ: landingZ, riserMm: riser, steps: n2, lengthMm: len2, nosingMm: stair.nosing ?? 0,
+    baseZ: landingZ, riserMm: riser, steps: n2, lengthMm: len2, nosingMm: stair.nosing ?? 0, treadThicknessMm,
   };
 
   // WP-A1: 踊り場の世界矩形は finish/stair/stairLanding.js の landingRect（単一情報源）へ載せ替え
@@ -455,13 +458,16 @@ function clipPolylineAboveOccluder(points, seg) {
 // のopts.outerBound（面ローカルx絶対値。QA是正2026-09-12その6で増分から絶対値へ変更）。
 // 最終段の鼻が面端の外（上階のはり出しぶん）へ残るかはこのクランプ幅で決まる
 // （展開図一般化Phase 6b-2「一体設計」）。
-function computeFlightProfile(flight, cut, columns, outerBound) {
+// opts.surfaceOnly: 段板の厚みを無視した歩行面の輪郭（床プロファイル stairCutFloorProfile 用。
+// 下面の切欠きを床線に混ぜない）。
+function computeFlightProfile(flight, cut, columns, outerBound, opts = {}) {
   const worldStart = flight.travelSign > 0 ? flight.runLo : flight.runHi;
   const localDir = flight.travelSign * cut.dirSign; // ローカルx方向の歩行方向
   const startX = localXOf(cut, worldStart);
   const runLengthMm = flight.lengthMm ?? (flight.runHi - flight.runLo);
   const { points, noses } = stairRunProfile(
-    flight.steps, flight.riserMm, runLengthMm, startX, -flight.baseZ, localDir, flight.nosingMm ?? 0);
+    flight.steps, flight.riserMm, runLengthMm, startX, -flight.baseZ, localDir, flight.nosingMm ?? 0,
+    { treadThicknessMm: opts.surfaceOnly ? 0 : flight.treadThicknessMm ?? 0 });
   const range = fullColumnsXRange(columns, cut, outerBound);
   if (!range) return { points: [], noses: [] }; // 列が面の描画範囲と交わらない＝この面には描かない
   const { loX, hiX } = range;
@@ -1117,7 +1123,7 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
   for (const flight of contribution.flights ?? []) {
     if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) continue;
     const points = clipStringerToAnchors(
-      computeFlightProfile(flight, cut, columns).points, contribution.unit, flight);
+      computeFlightProfile(flight, cut, columns, undefined, { surfaceOnly: true }).points, contribution.unit, flight);
     if (!points || points.length < 2) continue;
     // 図座標y=-z。`|| 0`は-0を避ける（baseZ=0の典型ケース。flightZBoundsと同じ理由）。
     const pts = points.map(([x, y]) => [x, -y || 0]).sort((a, b) => a[0] - b[0]);
