@@ -37,7 +37,7 @@ const edge = (stair, graph, port) => stairPortEdges(stair, graph, [port]);
 const near = (actual, expected, tol = 60) =>
   assert.ok(actual.every((v, i) => Math.abs(v - expected[i]) <= tol), `${JSON.stringify(actual)} ≈ ${JSON.stringify(expected)}`);
 const geom = (stair, graph, view) => buildStairGeometry(stair, roomBounds(stair.cells, graph), {
-  view, detail: true, riser: 200, spans: measureStairSpans(stair, graph), laneGapMm: 0,
+  view, detail: true, riser: 200, spans: measureStairSpans(stair, graph), laneGap: false,
 });
 
 test('往路が長い f,b,c,d,a: 上り口の既定は内側＝f の左辺（e 側）。到達口は a の下辺のまま', () => {
@@ -382,7 +382,7 @@ test('【install の基端】上り口が側面（自動の内側・右）なら
     assert.deepEqual(inset('install'), inset('upper'), `entrySide=${side}`);
     assert.equal(inset('install').y2, b.y2 - inset('install').sideInsetMm, `entrySide=${side}: 基端は壁表面`);
     // 放射線の端点も壁表面の枠内
-    const g = buildStairGeometry(stair, b, { view: 'install', detail: true, riser: 200, spans, laneGapMm: 0 });
+    const g = buildStairGeometry(stair, b, { view: 'install', detail: true, riser: 200, spans, laneGap: false });
     const ys = g.treads.flatMap(t => [t.y1, t.y2]);
     assert.ok(Math.max(...ys) <= inset('install').y2 + 1e-6 && Math.max(...ys) >= inset('install').y2 - 1e-6, `entrySide=${side}: 最も基端の踏面線の端点は壁表面`);
   }

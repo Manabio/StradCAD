@@ -19,7 +19,7 @@ function setup() {
   const cls = classifyStairArea(cells, lower, 2800, [key]);
   const stair = lower.addStair({ type: cls.type, cells, upDirection: cls.upDirection, flip: cls.flip, sections: cls.sections });
   const geom = buildStairGeometry(stair, roomBounds(cells, lower), {
-    view: 'upper', detail: true, riser: 200, spans: measureStairSpans(stair, lower), laneGapMm: 0,
+    view: 'upper', detail: true, riser: 200, spans: measureStairSpans(stair, lower), laneGap: false,
   });
   return { lower, stair, geom };
 }

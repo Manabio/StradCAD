@@ -6,15 +6,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { StairType, totalStepsFromSections } from '@core';
-import { buildStairGeometry, makeFrame, LANE_GAP } from './stairGeometry.js';
+import { buildStairGeometry, makeFrame } from './stairGeometry.js';
 
 const BOUNDS = { x1: 0, y1: 0, x2: 2000, y2: 4000 };
 const EPS = 1e-3;
 const stairOf = (sections, upDirection = 'up', flip = false, type = StairType.WINDING) => ({
   type, upDirection, flip, tread: 250, totalSteps: totalStepsFromSections(sections), sections,
 });
-const build = (stair, { laneGapMm = LANE_GAP, view = 'upper', detail = true } = {}) =>
-  buildStairGeometry(stair, BOUNDS, { view, detail, riser: null, spans: null, laneGapMm });
+const build = (stair, { laneGap = true, view = 'upper', detail = true } = {}) =>
+  buildStairGeometry(stair, BOUNDS, { view, detail, riser: null, spans: null, laneGap });
 const near = (a, b) => Math.abs(a - b) < EPS;
 const same = (p, q) => near(p.x, q.x) && near(p.y, q.y);
 const ends = (s) => [{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }];
@@ -123,7 +123,7 @@ test('WINDING n=6: 段数字・矢印・閉じ辺・外形は変更前と同一'
 test('WINDING あき0（簡略LOD）: 周回部の踏面線は変更前と一致する（sA=0.5 で共有辺は pivot から奥の辺中点へ）', () => {
   for (const upDirection of DIRS) {
     const stair = stairOf([7, 6, 4], upDirection);
-    const g = build(stair, { laneGapMm: 0, detail: false });
+    const g = build(stair, { laneGap: false, detail: false });
     assert.equal(g.treads.filter((s) => s.heavy).length, 0);
     // 変更前の共有辺 = pivot(tRun,0.5) → perim(0.5)=(1,0.5)。新共有辺 pivot→(1,sA=0.5) と端点が同じ。
     const { f, norm } = normOf(stair, g);
@@ -137,7 +137,7 @@ test('WINDING あき0（簡略LOD）: 周回部の踏面線は変更前と一致
 
 test('WINDING あき0: 全踏面線が変更前と同一（up/flip=false の写し）', () => {
   // 変更前の踏面線は共有辺も含め pivot (950+50=1000, 1556.6) 起点。共有辺は (1000,1556.6)→(1000,57.5) で同じ。
-  const g = build(stairOf([7, 6, 4]), { laneGapMm: 0, detail: false });
+  const g = build(stairOf([7, 6, 4]), { laneGap: false, detail: false });
   assert.ok(hasSeg(g.treads, { x1: 1000, y1: 1556.624872, x2: 1000, y2: 57.5 }));
 });
 

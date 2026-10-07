@@ -201,3 +201,14 @@ test('partitionOutline: N+1 の上り口辺（CL y=3000）に壁があり開口�
   }
 });
 
+// ---- stairLaneGap（あきを付けるか。簡略LODだけ付けない）----
+test('buildStairEntries: stairLaneGap は簡略LODで false、標準・詳細LODで true', () => {
+  const graph = { stairs: [] };
+  const project = { planes: [], activePlane: null };
+  const gap = (lodLevel) => buildStairEntries(graph, project, {
+    appMode: 'finish', viewport: { lodLevel }, upperStairEntriesPeek: null, stairBreakOverhangMm: 0,
+  }).stairLaneGap;
+  assert.equal(gap(LodLevel.SCHEMATIC), false);
+  assert.equal(gap(LodLevel.STANDARD), true);
+  assert.equal(gap(LodLevel.DETAIL), true);
+});

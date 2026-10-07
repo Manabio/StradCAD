@@ -57,7 +57,7 @@ export const StairLayer = observer(({
   entries = [],
   viewport,
   detail = false,
-  laneGapMm = 0,
+  laneGap = false,
   breakOverhangMm = 0,
   stepNumbers: showStepNumbers = true,
   selectedStairId = null,
@@ -71,7 +71,7 @@ export const StairLayer = observer(({
   // 省略LODでは破れ先の破線を細線にする（ユーザー決定）。
   const schematic = viewport.lodLevel === LodLevel.SCHEMATIC;
 
-  // laneGapMm（折返し階段の往路・復路の間のあき）・breakOverhangMm（破れ線の見た目端部の
+  // laneGap（折返し階段の往路・復路の間のあき）・breakOverhangMm（破れ線の見た目端部の
   // はり出し量）は呼び出し側（App.jsx）で1度だけ算出して渡す（2a壁の描画クリップ計算
   // stairUnderClip.js とここで同じ値を使い、描かれる破れ線とクリップ線のズレを防ぐ）。
 
@@ -85,12 +85,12 @@ export const StairLayer = observer(({
       return null;
     }
     const resolve = (g) => (graph ? resolveStairSideLines(stair, graph, g, { wallGraph }) : g);
-    const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGapMm, breakOverhangMm, graph });
+    const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGap, breakOverhangMm, graph });
     // install エントリは、破れ線から先（＝切断高より上に続く上り部分）を点線で描き足すため、
     // 破断のない全段ジオメトリ（upper ビュー）も併せて作る。実際に描くのは破れ先だけで、
     // 段数字・矢印は install 側が既に持つため使わない（線分プリミティブのみ流用する）。
     const beyondBuilt = view === 'install'
-      ? buildStairGeometry(stair, b, { view: 'upper', insetView: 'install', detail, riser, spans, laneGapMm, breakOverhangMm, graph })
+      ? buildStairGeometry(stair, b, { view: 'upper', insetView: 'install', detail, riser, spans, laneGap, breakOverhangMm, graph })
       : null;
     return { e, geom: resolve(built), beyondGeom: beyondBuilt ? resolve(beyondBuilt) : null };
   });

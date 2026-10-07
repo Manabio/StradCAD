@@ -120,6 +120,20 @@ export function stairPartitionGeometry(stair, graph) {
 }
 
 /**
+ * この階段の隔て壁が実際に立つか。壁の生成（generateStairPartitionWalls）と同じ条件:
+ * 実効主構造が在来木造・屋内（ペア部屋が EXTERIOR でない）・SWITCHBACK の幾何が取れる。
+ * レーンあき（stairGeometry.js laneGapMmFor）の判定に使う。
+ * @param {import('@core').Stair} stair
+ * @param {object|null} graph
+ * @param {string|null|undefined} structure 実効主構造（effectiveStructure）
+ */
+export function stairHasPartition(stair, graph, structure) {
+  if (!graph || !isTraditionalWoodStructure(structure)) return false;
+  if (graph.roomMap?.get(stair.roomId)?.kind === RoomKind.EXTERIOR) return false;
+  return stairPartitionGeometry(stair, graph) !== null;
+}
+
+/**
  * 屋内の SWITCHBACK 全部の隔て壁の線（座標）。主構造は見ない——構造の除外・腰壁の除外が
  * 「壁が隔て壁か」を座標で照合するための材料（Wall に種別を持たない理由は .claude/stair-model.md）。
  * 屋外階段（ペア部屋が EXTERIOR）は壁を持たないため含めない。

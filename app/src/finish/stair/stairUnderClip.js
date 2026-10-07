@@ -117,7 +117,7 @@ function intersectAtCross(p1, p2, cross) {
  * @param {object} graph
  * @param {Array<{stair, bounds:{x1,y1,x2,y2}, riser:number|null, spans, graph}>} installEntries
  *   App.jsx が算出する install ビューの階段エントリ（StairLayer と共有。二重計算しない）。
- * @param {{laneGapMm?:number, breakOverhangMm?:number, detail?:boolean,
+ * @param {{laneGap?:boolean, breakOverhangMm?:number, detail?:boolean,
  *   lowerStairCellBounds?:{x1,y1,x2,y2}[]}} opts
  *   lowerStairCellBounds … 直下階の階段の見下げ表示（upperEntries）の実セル占有矩形。中間階
  *   （下階階段の見下げ位置と重なる）は2a不成立としてクリップしない（FinishModeState.stairUnderRooms
@@ -125,7 +125,7 @@ function intersectAtCross(p1, p2, cross) {
  * @returns {Map<string, {x:number,y:number}[][]> | null}
  */
 export function stairUnderWallClips(graph, installEntries, opts = {}) {
-  const { laneGapMm = 0, breakOverhangMm = 0, detail = false, lowerStairCellBounds = [] } = opts;
+  const { laneGap = false, breakOverhangMm = 0, detail = false, lowerStairCellBounds = [] } = opts;
   const clips = new Map();
 
   for (const entry of installEntries) {
@@ -155,7 +155,7 @@ export function stairUnderWallClips(graph, installEntries, opts = {}) {
     let halfPlane = null;
     if (HALF_PLANE_TYPES.has(stair.type)) {
       const geom = buildStairGeometry(stair, bounds, {
-        view: 'install', detail, riser, spans, laneGapMm, breakOverhangMm, graph,
+        view: 'install', detail, riser, spans, laneGap, breakOverhangMm, graph,
       });
       const pts = breakLineToPoints(geom.breakLine);
       if (pts.length >= 2) {

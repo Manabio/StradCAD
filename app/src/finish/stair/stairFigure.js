@@ -1,4 +1,4 @@
-import { buildStairGeometry, makeFrame, stairSegmentDims, insetStairBounds, LANE_GAP } from './stairGeometry.js';
+import { buildStairGeometry, makeFrame, stairSegmentDims, insetStairBounds } from './stairGeometry.js';
 import { DEFAULT_GAP_PX, orderDimsByLength, resolveDimOverlaps } from '../../structural/sectionFigure/sectionGeometry.js';
 
 // ================================================================
@@ -26,7 +26,7 @@ function gapMm(scale, b) {
 // graph は指定時、insetStairBounds が実壁面（CL偏芯を反映した壁位置）へ取り合うのに使う
 // （省略時は従来どおり固定 WALL_INSET。機能1）。
 export function stairFigurePrimitives(stair, b, { riser = null, scale = null, spans = null, graph = null } = {}) {
-  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans, laneGapMm: LANE_GAP, graph });
+  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans, laneGap: true, graph });
   const prims = [];
 
   // 外周（実線／dashed は破線）

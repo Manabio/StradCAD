@@ -6,7 +6,7 @@
 import { LodLevel } from '../../viewport.js';
 import { floorHeightAbove } from './stairDimensions.js';
 import { measureStairSpans } from './stairClassify.js';
-import { cellsBeyondBreak, LANE_GAP } from './stairGeometry.js';
+import { cellsBeyondBreak } from './stairGeometry.js';
 import { stairUnderWallClips } from './stairUnderClip.js';
 import { roomBounds, cellBoundsList, refreshCells } from '../gridCells.js';
 import { shouldShowPlanFigure } from '../../renderer/planFigureVisibility.js';
@@ -75,7 +75,7 @@ export function buildUpperStairPeekEntries(belowGraph, floorHeight) {
  *   overhangMm(viewport, false)（snap.js）で算出して渡す。本モジュールはsnap.jsに依存しない）
  * @param {Array|null} [opts.upperSlabOpenings] 直上階のスラブ開口矩形（slabOpening.js）。
  *   破れ線から先を点線で描くときの可視範囲。null=上階なし／未解決（クリップしない）
- * @returns {{ isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips }}
+ * @returns {{ isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips }}
  */
 export function buildStairEntries(graph, project, { appMode, viewport, upperStairEntriesPeek, upperSlabOpenings = null, stairBreakOverhangMm }) {
   // isStairMode: 階段は平面図一式の一部なので、壁・建具・柱とまったく同じ述語で出し入れする
@@ -147,9 +147,10 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
         })
     : [];
 
-  // 折返し階段の往路・復路の間のあき（簡略LODのみ0）。
+  // 折返し階段の往路・復路の間にあきを付けるか（簡略LODは付けない）。あきの値は buildStairGeometry 内で
+  // laneGapMmFor が確定する（鉄骨100・隔て壁が立つ木造115・それ以外の木造0）。
   // StairLayer の描画と2a壁クリップ計算の双方へ渡す（描かれる破れ線とクリップ線のズレ防止）。
-  const stairLaneGapMm = viewport.lodLevel === LodLevel.SCHEMATIC ? 0 : LANE_GAP;
+  const stairLaneGap = viewport.lodLevel !== LodLevel.SCHEMATIC;
 
   // 2a壁（階段下部屋の偏芯壁）の破れ線より階段踏面側を描画しないための、壁ID→クリップ多角形。
   // StairLayer と同じ条件（isStairMode）でゲートする——階段を描くモードでは必ずクリップも
@@ -160,12 +161,12 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
   // null を返す（毎レンダー新規の空Mapを渡し続けて observer の差分検出が無駄に走るのを防ぐ）。
   const stairUnderClips = isStairMode && upperStairEntriesPeek !== null
     ? stairUnderWallClips(graph, installEntries, {
-        laneGapMm: stairLaneGapMm,
+        laneGap: stairLaneGap,
         breakOverhangMm: stairBreakOverhangMm,
         detail: viewport.lodLevel === LodLevel.DETAIL,
         lowerStairCellBounds: upperEntries.map(e => e.cellBounds).filter(Boolean).flat(),
       })
     : null;
 
-  return { isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips };
+  return { isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips };
 }

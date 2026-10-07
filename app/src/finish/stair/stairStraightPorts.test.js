@@ -29,7 +29,7 @@ function straight(ys, cols = 2, extra = {}) {
 const ROWS3 = [0, 1000, 2000, 3000];
 const RISER = 200;
 const geom = (stair, graph, view, detail = true) => buildStairGeometry(stair, roomBounds(stair.cells, graph), {
-  view, detail, riser: RISER, spans: measureStairSpans(stair, graph), laneGapMm: 0, graph,
+  view, detail, riser: RISER, spans: measureStairSpans(stair, graph), laneGap: false, graph,
 });
 // build が使う（壁厚ぶん inset した）枠
 const frameOf = (stair, graph, view) => makeFrame(stair, insetStairBounds(stair, roomBounds(stair.cells, graph), view, graph, measureStairSpans(stair, graph)));
@@ -144,7 +144,7 @@ function assertBreakAt(stair, graph, riser, expectMm, name) {
   const beyond = cellsBeyondBreak(stair, graph, riser);
   const expected = [...stair.cells].filter(k => 3000 - cellBoundsFromKey(k, graph).y2 >= mm - 1e-6).sort();
   assert.deepEqual([...beyond].sort(), expected, `${name}: 破れ先セル`);
-  const g = buildStairGeometry(stair, roomBounds(stair.cells, graph), { view: 'install', detail: true, riser, spans: measureStairSpans(stair, graph), laneGapMm: 0, graph });
+  const g = buildStairGeometry(stair, roomBounds(stair.cells, graph), { view: 'install', detail: true, riser, spans: measureStairSpans(stair, graph), laneGap: false, graph });
   const c = frameOf(stair, graph, 'install').pt(mm / 3000, 0.5);
   assert.ok(near((g.breakLine[1].y1 + g.breakLine[3].y2) / 2, c.y, 1e-6), `${name}: build の破れ線`);
   return { mm, beyond };
@@ -180,7 +180,7 @@ test('【失敗系】踊場付直進: 区画（firstRow）が最初の直進部�
   assert.equal(r.entry, 'end');
   const b = { x1: 0, y1: 0, x2: 1000, y2: 3600 };
   const plain = { ...stair, entrySide: null, entryTurnSteps: 0 };
-  const build = (s) => buildStairGeometry(s, b, { view: 'upper', detail: true, riser: RISER, spans, laneGapMm: 0 });
+  const build = (s) => buildStairGeometry(s, b, { view: 'upper', detail: true, riser: RISER, spans, laneGap: false });
   assert.equal(build(stair).outline.filter(s => s.port === 'entry').length, 1);
   assert.ok(build(stair).outline.filter(s => s.port === 'entry').every(s => s.thin && Math.abs(s.y1 - s.y2) < 1e-6), '出入口は端の辺（水平）のまま');
   assert.deepEqual(build(stair).outline, build(plain).outline);
@@ -299,7 +299,7 @@ test('【install の基端】上り口が側面なら基端（t=0）は upper �
       const w = inst.sideInsetMm;
       assert.ok(Math.abs(entryCoord(dir, inst) - entryCoord(dir, b)) === w, `${name}: 始端は ${w}mm 内側`);
       // 描画（扇形の放射線・出口境界）は壁表面の枠の内側だけ
-      const g = buildStairGeometry(side, b, { view: 'install', detail: true, riser: RISER, spans, laneGapMm: 0 });
+      const g = buildStairGeometry(side, b, { view: 'install', detail: true, riser: RISER, spans, laneGap: false });
       const pts = g.treads.flatMap(t => [{ x: t.x1, y: t.y1 }, { x: t.x2, y: t.y2 }]);
       assert.ok(pts.every(p => p.x >= inst.x1 - 1e-6 && p.x <= inst.x2 + 1e-6 && p.y >= inst.y1 - 1e-6 && p.y <= inst.y2 + 1e-6), `${name}: 踏面線は壁表面の枠内`);
       const atBase = pts.filter(p => Math.abs((horizontal ? p.x : p.y) - entryCoord(dir, inst)) < 1e-6);
@@ -329,7 +329,7 @@ test('踊場付直進: 上り口・到達口が側面なら区画を除いた区
   };
   const b = { x1: 0, y1: 0, x2: 1000, y2: 5000 };
   const spans = { lengths: [2000, 1000, 2000], firstRow: 500, lastRow: 500, rowCount: 5 };
-  const view = (v) => buildStairGeometry(stair, b, { view: v, detail: true, riser: RISER, spans, laneGapMm: 0 });
+  const view = (v) => buildStairGeometry(stair, b, { view: v, detail: true, riser: RISER, spans, laneGap: false });
   const g = view('upper');
   const f = makeFrame(stair, insetStairBounds(stair, b, 'upper', null));
   // run1 5 マス＋踊場 1＋run2 7 マス＝13 マス、到達番号 14（＝c+1）、取りつき 2＋2 を足した 18 が総蹴上数

@@ -22,12 +22,12 @@
  *
  * 純モジュール: store.js / snap.js / *.jsx を静的 import しない。
  */
-import { CenterLineType, RoomKind } from '@core';
+import { CenterLineType } from '@core';
 import { sameCoordCounterparts, isFinishCellDivider, coversAlongAxis } from '../../core/centerLineKindPolicy.js';
 import { isTraditionalWoodStructure } from '../../structural/structureRules.js';
 import { stairPartitionEnds } from '../../structural/wallFreeEnds.js';
 import {
-  stairPartitionGeometry, stairPartitionLines, isStairPartitionWall, PARTITION_BACKING_MM, PARTITION_FINISH_MM,
+  stairPartitionGeometry, stairHasPartition, stairPartitionLines, isStairPartitionWall, PARTITION_BACKING_MM, PARTITION_FINISH_MM,
 } from './stairPartition.js';
 
 const TOL_MM = 0.5;
@@ -70,10 +70,9 @@ export function generateStairPartitionWalls(graph, { structure = null, underEdge
   if (!isTraditionalWoodStructure(structure)) return [];
   const walls = [];
   for (const stair of graph.stairs) {
-    // 屋外階段は壁なし（wallRegeneration の屋外部屋と同じ扱い。stairPartition.js stairPartitionLines と同条件）
+    // 立つか（在来・屋内・SWITCHBACK）の出どころは stairHasPartition 1つ（レーンあきも同じ述語）
+    if (!stairHasPartition(stair, graph, structure)) continue;
     const g = stairPartitionGeometry(stair, graph);
-    if (!g) continue;
-    if (graph.roomMap.get(stair.roomId)?.kind === RoomKind.EXTERIOR) continue;
     const [axisType, endType] = g.isVertical
       ? [CenterLineType.VERTICAL, CenterLineType.HORIZONTAL]
       : [CenterLineType.HORIZONTAL, CenterLineType.VERTICAL];

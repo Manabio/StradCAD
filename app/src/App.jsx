@@ -2411,7 +2411,7 @@ const App = observer(() => {
   // ジオメトリと stairUnderClip.js の breakLine 抽出用で別々に呼ばれる——後者は前者の
   // 出力を再利用しない、別計算）。upperStairEntries は finish/floorplan 以外または
   // 階・モード切替直後の1フレームは null（未解決。該当useEffect参照）。
-  const { isStairMode, installEntries, upperEntries, stairLaneGapMm, stairBreakOverhangMm, stairUnderClips } =
+  const { isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips } =
     buildStairEntries(graph, project, {
       appMode, viewport, upperStairEntriesPeek: upperStairEntries, upperSlabOpenings,
       stairBreakOverhangMm: overhangMm(viewport, false), // stairEntries.js は snap.js に依存しないため、ここで算出して渡す
@@ -2667,7 +2667,7 @@ const App = observer(() => {
             isStairMode={isStairMode}
             installEntries={installEntries}
             upperEntries={upperEntries}
-            stairLaneGapMm={stairLaneGapMm}
+            stairLaneGap={stairLaneGap}
             stairBreakOverhangMm={stairBreakOverhangMm}
             stairUnderClips={stairUnderClips}
             structComposition={structComposition}

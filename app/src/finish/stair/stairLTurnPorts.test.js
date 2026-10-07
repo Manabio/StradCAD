@@ -36,7 +36,7 @@ function lTurn(extra = {}, { arm1 = 3, arm2 = 3, type = StairType.L_TURN, w1 = 1
 }
 const RISER = 200;
 const geom = (stair, graph, view, { riser = RISER, detail = true } = {}) => buildStairGeometry(stair, roomBounds(stair.cells, graph), {
-  view, detail, riser, spans: measureStairSpans(stair, graph), laneGapMm: 0, graph,
+  view, detail, riser, spans: measureStairSpans(stair, graph), laneGap: false, graph,
 });
 // build が使う（壁厚ぶん inset した）枠での (u,v) → world と world → (u,v)
 function frames(stair, graph, view) {
@@ -92,7 +92,7 @@ test('【install の基端】上り口が側面なら基端（u=0）は upper �
         const inst = insetStairBounds(stair, b, 'install', null, spans);
         assert.deepEqual(inst, insetStairBounds(stair, b, 'upper', null, spans), name);
         assert.equal(Math.abs(entryCoord(dir, inst) - entryCoord(dir, b)), inst.sideInsetMm, `${name}: 始端は壁表面`);
-        const g = buildStairGeometry(stair, b, { view: 'install', detail: true, riser: RISER, spans, laneGapMm: 0 });
+        const g = buildStairGeometry(stair, b, { view: 'install', detail: true, riser: RISER, spans, laneGap: false });
         const pts = g.treads.flatMap(t => [{ x: t.x1, y: t.y1 }, { x: t.x2, y: t.y2 }]);
         assert.ok(pts.every(p => p.x >= inst.x1 - 1e-6 && p.x <= inst.x2 + 1e-6 && p.y >= inst.y1 - 1e-6 && p.y <= inst.y2 + 1e-6), `${name}: 踏面線は壁表面の枠内`);
       }

@@ -87,7 +87,7 @@ test('往路が長い f,b,c,d,a: 区間実測 [2000,1000,1000]、上り口は張
   // 短い復路の基端より手前（e との境界）の往路内側（通り芯 x=1000）が上り口辺（thin/port）になり、
   // f の下辺（走行端）は階段の外周（side）になる
   const b = roomBounds(stair.cells, graph);
-  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: false, riser: null, spans: measureStairSpans(stair, graph), laneGapMm: 0 });
+  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: false, riser: null, spans: measureStairSpans(stair, graph), laneGap: false });
   //（upper ビューの外周は壁厚ぶん内側へ inset されるため、端点は 2000/3000 から 100mm 未満ずれる）
   const innerPort = geom.outline.find(s => s.port === 'entry' && s.x1 === 1000 && s.x2 === 1000
     && Math.abs(Math.min(s.y1, s.y2) - 2000) < 100 && Math.abs(Math.max(s.y1, s.y2) - 3000) < 100);

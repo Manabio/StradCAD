@@ -1,4 +1,6 @@
-import { StairType, totalStepsFromSections } from '@core';
+import { StairType, StructuralMaterialType, totalStepsFromSections } from '@core';
+import { PARTITION_THICKNESS_MM, stairHasPartition } from './stairPartition.js';
+import { effectiveStructure } from '../../structural/structureRules.js';
 import { cellBoundsFromKey, roomBounds, cellBoundsList, outlineSegments, refreshCells } from '../gridCells.js';
 import { measureStairSpans, uTurnSpans, MIN_LANDING, defaultSections } from './stairClassify.js';
 import {
@@ -18,7 +20,29 @@ const line = (p, q) => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y });
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
 
 export const LABEL_OUT = 150; // mm — U/D ラベルを始点（踏面1本目線）の外側へ押し出す距離（文字サイズ200mmの1文字ぶん踏面線側へ寄せた値）
-export const LANE_GAP = 100; // mm — 折返し・回り階段の往路・復路の間のあき（標準・詳細LOD。簡略は0を渡す）
+export const LANE_GAP = 100; // mm — 鉄骨の折返し・回り階段の往路・復路の間のあき（標準・詳細LOD。簡略は0を渡す）
+
+/**
+ * 折返し・回り階段の往路・復路レーンの間のあき(mm)の唯一の決め方（2026-10-08 裁定）。
+ *   - 簡略LOD … 0（中央仕切り1本）
+ *   - 木造（stair.structure===WOOD）で隔て壁が実際に立つ（stairHasPartition＝壁の生成条件と同じ述語:
+ *     階の実効主構造が在来・屋内・SWITCHBACK）… 隔て壁の総厚 PARTITION_THICKNESS_MM（115）。
+ *     踏面は壁面（レーン間中心線±57.5）で止まり、レーン内側端の線は壁面線と一致する。
+ *   - 木造で隔て壁が立たない（2×4・S造の建物、回り階段、屋外）… 0（仕切りが無いのであきも無い）。
+ *   - 上記以外（鉄骨ほか。structure 未設定を含む）… LANE_GAP（100）。
+ *   「100mm のあき」は鉄骨階段のもので、木造は対象外（ユーザー裁定 2026-10-08）。
+ * 構造別の判定はここだけ（buildStairGeometry が laneGap:boolean を受け、ここで値を確定する）。
+ * @param {import('@core').Stair} stair
+ * @param {object|null} graph 隔て壁が立つか（stairHasPartition）の判定に使う。null なら立たない扱い。
+ * @param {{ simplified?: boolean }} [opts]
+ */
+export function laneGapMmFor(stair, graph, { simplified = false } = {}) {
+  if (simplified) return 0;
+  if (stair?.structure === StructuralMaterialType.WOOD) {
+    return stairHasPartition(stair, graph, effectiveStructure(graph)) ? PARTITION_THICKNESS_MM : 0;
+  }
+  return LANE_GAP;
+}
 const NUM_GAP   = 1 / 4; // 段数数字を基点側の線（踏面線／踊場・周回部の入口境界線）から離す量（区間内比率）
 const NUM_OUT   = 0.15;  // 段数字を幅方向の外周側（隣接壁側）へ寄せる位置（外側端からの距離。レーン/アーム/全幅で共通利用）
 const TURN_OUT  = 0.7;   // 踊場・周回部（マスw≥2）の2段目以降を pivot→外周 の混合で外周部近くへ寄せる比率
@@ -758,7 +782,7 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
     labelPt:   (mm) => f.pt(tStartA + tAt(mm), NUM_OUT),        // 外側 s=0 寄せ
   }, { detail });
   // 踊場（両レーンをまたぐ平場）: 前縁境界（往路側・復路側）と番号。
-  // あき（LANE_GAP）の閉じ辺＝内側ささらが取りつく踊り場線は、ささらと同じ太さで描く（heavy）。
+  // あき（laneGapMm）の閉じ辺＝内側ささらが取りつく踊り場線は、ささらと同じ太さで描く（heavy）。
   // あき0のとき sA===sB===0.5 で閉じ辺は生まれず、従来どおり 0..0.5 / 0.5..1 の2本になる。
   out.treads.push(lineS(tRun, 0, sA));
   if (halfGap > 0) out.treads.push({ ...lineS(tRun, sA, sB), heavy: true });
@@ -1362,10 +1386,11 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
  *   insetStairBounds が実壁面の解決に使う）
  * @param {{ x1,y1,x2,y2 }} b - 設置エリアの包絡矩形（ワールド座標。呼び出し側で解決）
  * @param {{ view:'install'|'upper', detail:boolean, riser:number|null,
- *           spans?:{lengths:number[]}|null, laneGapMm?:number, breakOverhangMm?:number, graph?:object|null }} opts
+ *           spans?:{lengths:number[]}|null, laneGap?:boolean, breakOverhangMm?:number, graph?:object|null }} opts
  *   spans … セル割りから実測した区間長（measureStairSpans）。区間長指定の反映用。null なら合成。
- *   laneGapMm … 折返し・回り階段（SWITCHBACK/WINDING）の往路・復路の間のあき(mm)。
- *   標準・詳細LODは LANE_GAP、簡略LODは0（従来どおり中央仕切り1本）を渡す。
+ *   laneGap … 折返し・回り階段（SWITCHBACK/WINDING）の往路・復路の間にあきを付けるか（boolean）。
+ *   標準・詳細LODは true、簡略LOD・未指定は false（従来どおり中央仕切り1本）。あきの値(mm)は
+ *   graph を使って laneGapMmFor が確定する（鉄骨100・隔て壁が立つ木造115・それ以外の木造0）。
  *   回り階段の扇形 pivot はあき幅のうち段数が低い方＝往路の内側端（tRun, sA）。
  *   breakOverhangMm … 破れ線の見た目の両端を線方向へ CL からはり出す量(mm)。中心線の端の
  *   はね出しと同じ扱いで、描画側が overhangMm(viewport) を渡す（既定0＝はり出しなし）。
@@ -1387,7 +1412,9 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
  *   sideInsetMm … insetStairBounds が幅方向に実際に適用した逃げ量の最大値(mm)。
  *   resolveStairSideLines が snapToFootprintEdge の許容差を動的に決めるのに使う（F2）。
  */
-export function buildStairGeometry(stair, b, opts) {
+export function buildStairGeometry(stair, b, rawOpts) {
+  // 各 build* へは確定したあき(mm)を laneGapMm として渡す（内部用。呼び出し側の入力は laneGap:boolean）。
+  const opts = { ...rawOpts, laneGapMm: laneGapMmFor(stair, rawOpts.graph ?? null, { simplified: !rawOpts.laneGap }) };
   // insetView … 設置枠の逃がし規則だけ別ビューのものを使う（既定は view と同じ）。
   // install の破れ線から先を upper ジオメトリで描き足すとき、登り口辺の逃がしが view で
   // 食い違うと実線（install）と点線（描き足し）が同一辺上で段差になるため、そこだけ揃える。
@@ -1472,7 +1499,7 @@ export function stairPortEdges(stair, graph, ports = ['entry', 'arrival']) {
   if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) return [];
 
   const spans = measureStairSpans(stair, graph);
-  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: false, riser: null, spans, laneGapMm: 0 });
+  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: false, riser: null, spans, laneGap: false });
   const outline = outlineSegments(boundsList);
   // 出入口が footprint 内部の辺に乗る場合（全幅の取りつきセルと復路の境界＝設置階上階スラブの張り出しの縁。
   // moku2-2）は外形線分に無いので、セル境界の辺へスナップする。
