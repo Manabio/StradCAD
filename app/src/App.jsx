@@ -1148,7 +1148,7 @@ const App = observer(() => {
       // 脱出: 部屋ごとの壁自動生成・外壁再生成・構造反映を確定。
       enter: (graph) => runFinishEntryBoundary(graph, project, { loadFloorFn: loadFloor }),
       // 階切替（floorSwitch）のときだけ省略の印を渡す（無編集の階の脱出を丸ごと省く。モード切替は常に全部行う）。
-      exit: (graph, { toMode, floorSwitch }) => runFinishExitBoundary(graph, project, modeRef.current, { goingToStructure: toMode === 'structure', stamps: floorSwitch ? getFinishExitStamps() : null }),
+      exit: (graph, { toMode, floorSwitch }) => runFinishExitBoundary(graph, project, modeRef.current, { goingToStructure: toMode === 'structure', stamps: floorSwitch ? getFinishExitStamps() : null, saveActiveFloorFn: saveFloor }),
     },
     structure: {
       // 突入: 構造情報ダイアログ・図面合成の構築・全階の自動補完反映。脱出: バインディング停止・確定保存・他階反映。

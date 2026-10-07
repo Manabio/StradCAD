@@ -18,6 +18,7 @@ import { wallFreshnessKey } from './wallFreshnessKey.js';
 import { wallBackingCenters, mapBackingCenterMoves } from '../structural/wallBeamAxes.js';
 import { followWallBeamAxes } from '../structural/wallBeamAxisFollow.js';
 import { refreshWallsAllFloors } from '../wallRefresh.js';
+import { serializeGraph } from '../graphSnapshot.js';
 // finish/clEccentricity.js は edgeComposition.js 経由で materials/materialData.js（材マスタ全件）を
 // 静的に引くため、コード分割維持のため動的 import する（materialData.js のヘッダコメント参照）。
 
@@ -111,7 +112,11 @@ export async function runFinishEntryBoundary(graph, project, { loadFloorFn = nul
 // 裁定: R1 完全一致のときだけ省く／R2 無編集の階切替で undo エントリが積まれなくなるのを
 // 受け入れる／R3 階切替だけ／R4 その階の2回目以降の無編集の脱出から速くなれば良い（印は文書へ保存せず
 // メモリ上だけ）。戻り値は { skipped }（呼び出し元は使っていない）。
-export async function runFinishExitBoundary(graph, project, fmode, { goingToStructure = false, stamps = null } = {}) {
+//
+// saveActiveFloorFn（省略可。省略＝何もしない＝IDB を持たない単体テスト・probe の旧経路）:
+// (planeId, bytes) を受けて自階を floors ストアへ書く関数（本番は storage/db.js saveFloor）。
+// 他階の処理を始める前に、再生成直後の自階をここで書く（構造脱出 App.jsx runStructuralExitBoundary と同じ）。
+export async function runFinishExitBoundary(graph, project, fmode, { goingToStructure = false, stamps = null, saveActiveFloorFn = null } = {}) {
   // 開いたままの命名ダイアログの候補部屋は、脱出境界（壁再生成・無編集スキップ判定）より前に取り消す。
   // dispose はこの境界の後に呼ばれる（App.jsx のモード再ロード effect）ため、dispose だけでは遅い。
   fmode?.discardNamingDialog?.();
@@ -286,6 +291,14 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
       () => { redoFns.forEach(fn => fn()); },
     );
   }
+
+  // 自階の保存: 以降の他階の処理（ステップ5の上階の階段内装同期・上階の構造反映＝在来では直下階の壁から
+  // 梁芯を作る・鍵不一致の他階の壁 sweep＝直下階の階段の到達辺を読む）は、いずれも自階を
+  // floorSwapManager.peek＝IDB から読む。アクティブ階の auto-save は dirty 印だけで IDB へ書かない
+  // （保存は swap/saveNow のときだけ）ため、書かないと古い自階（例: 階段指定前）を読んで他階の壁が
+  // 誤って生成され、その鍵が新値で保存されて後から直らない。だからその前に再生成直後の自階を書く。
+  // stamps で省いた脱出（上の早期 return）は無編集＝IDB と一致しているはずなので書かない。
+  if (saveActiveFloorFn) await saveActiveFloorFn(graph.plane.id, serializeGraph(graph));
 
   // ステップ5: 階段設置階の上階（続きの階段のペアRoom・直上階の階段吹抜け）へ、設置階ペアRoomの
   // 内装（templateKey・customOverrides）を同期コピーする（階段仕上げ材の参照）。壁は

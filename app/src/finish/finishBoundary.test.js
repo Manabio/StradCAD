@@ -539,7 +539,7 @@ const codeLines = (src) => src.split(/\r?\n/).filter(l => !l.trim().startsWith('
 
 test('【配線】App.jsx: finish.exit は floorSwitch のときだけ保管庫を渡す／保管庫は本物の loadFloor・floorWriteGeneration で作る', () => {
   const code = codeLines(readSrc('App.jsx'));
-  assert.match(code, /^\s*exit: \(graph, \{ toMode, floorSwitch \}\) => runFinishExitBoundary\(graph, project, modeRef\.current, \{ goingToStructure: toMode === 'structure', stamps: floorSwitch \? getFinishExitStamps\(\) : null \}\),$/m);
+  assert.match(code, /^\s*exit: \(graph, \{ toMode, floorSwitch \}\) => runFinishExitBoundary\(graph, project, modeRef\.current, \{ goingToStructure: toMode === 'structure', stamps: floorSwitch \? getFinishExitStamps\(\) : null, saveActiveFloorFn: saveFloor \}\),$/m);
   assert.match(code, /createFinishExitStamps\(\{ loadFloorFn: loadFloor, generationOf: floorWriteGeneration \}\)/);
   assert.match(code, /^\s*const finishExitStampsRef = useRef\(null\);$/m);
 });

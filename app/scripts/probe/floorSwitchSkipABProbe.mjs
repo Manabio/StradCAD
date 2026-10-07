@@ -20,7 +20,8 @@
 //     catalogthick: 内壁下地材の材料の厚み（x・y）を変える文書同梱 overlay を立てる（壁の結果が変わる入力。立てられなければその旨を出す）
 //
 // 【通している関数列（実アプリの階切替 App.jsx switchFloorKeepingMode と同じ）】
-//   structuralSync.whenIdle → 脱出境界（runFinishExitBoundary。modeRef.current＝実物の FinishModeState。A は stamps つき）
+//   structuralSync.whenIdle → 脱出境界（runFinishExitBoundary。modeRef.current＝実物の FinishModeState。A は stamps つき。
+//   本番どおり saveActiveFloorFn: saveFloor を渡す＝省かない脱出で自階を IDB へ書く）
 //   → swap（FloorSwapManager.swap。whenCenterLineOpsIdle → runBusy('階切替')）→ 突入境界（runFinishEntryBoundary。本番と同じ
 //   { loadFloorFn: loadFloor }）→ 旧 FinishModeState を dispose → new FinishModeState(graph, project) → init。
 // 【省いた段】finishExitQuiescenceProbe.mjs と同じ（store.js・App.jsx の React state・上階階段などの3つの peek effect・
@@ -215,7 +216,7 @@ async function runOne(file, useStamps) {
     const undoBefore = undoManager._undoStack.length;
     rec.last = null;
     const t0 = performance.now();
-    const ret = await runFinishExitBoundary(fromGraph, project, fmode, { goingToStructure: false, stamps });
+    const ret = await runFinishExitBoundary(fromGraph, project, fmode, { goingToStructure: false, stamps, saveActiveFloorFn: saveFloor });
     const exitMs = performance.now() - t0;
     const skipped = ret?.skipped === true;
     rows.push({ t, from: fromPlane.name, skipped, reason: rec.last?.reason ?? (stamps ? '?' : '-'), ms: exitMs, undoAdded: undoManager._undoStack.length - undoBefore });

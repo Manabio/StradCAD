@@ -29,7 +29,8 @@
 // 書込みの呼び出し元は、シムの put で取ったスタックから推定する。
 //
 // 【実アプリの階切替（App.jsx switchFloorKeepingMode）との対応】
-//   structuralSync.whenIdle → 脱出境界（runFinishExitBoundary。modeRef.current＝実物の FinishModeState）
+//   structuralSync.whenIdle → 脱出境界（runFinishExitBoundary。modeRef.current＝実物の FinishModeState。
+//   本番どおり saveActiveFloorFn: saveFloor を渡す＝脱出で自階を IDB へ書く）
 //   → switchFloor（store.js 607-632）→ 突入境界（runFinishEntryBoundary。本番と同じ { loadFloorFn: loadFloor }）
 //   → mode 再ロード effect（旧 FinishModeState を dispose → new FinishModeState(graph, project) → init）。
 // ・store.js は react・localStorage を引くため Node から import できない。switchFloor は同じ呼び出し順を再現した:
@@ -60,7 +61,7 @@
 import { runInAction } from 'mobx';
 import { loadDocument } from './loadDoc.mjs';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
-import { loadFloor } from '../../src/storage/db.js';
+import { loadFloor, saveFloor } from '../../src/storage/db.js';
 import { floorWriteGeneration } from '../../src/storage/floorWriteGeneration.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from '../../src/finish/finishBoundary.js';
 import { FinishModeState } from '../../src/modes/FinishModeState.js';
@@ -302,14 +303,15 @@ async function runDocument(file) {
     const prev = lastExit.get(fromPlane.id) ?? null;
     const skippable = !!(prev && prev.marked && floorBytesEqual(plainBefore, prev.plain));
 
-    await runFinishExitBoundary(fromGraph, project, fmode, { goingToStructure: false });
+    await runFinishExitBoundary(fromGraph, project, fmode, { goingToStructure: false, saveActiveFloorFn: saveFloor });
     calls.exit++;
 
     const plainExit = serializeGraph(fromGraph);
     const canonAfter = serializeGraphCanonicalWalls(fromGraph);
     const exitWrites = writeLog.map(w => ({ ...w }));
+    // 「他階」への書込みだけを数える。脱出した階自身は本番どおり脱出で IDB へ書かれる（saveActiveFloorFn）ため除く。
     const changedGens = allPlanes
-      .filter(p => floorWriteGeneration(p.id) !== gensBefore.get(p.id))
+      .filter(p => p.id !== fromPlane.id && floorWriteGeneration(p.id) !== gensBefore.get(p.id))
       .map(p => p.name);
     const wallsReplaced = fromGraph.walls.filter(w => !wallIdsBefore.has(w.id)).length;
     const regenerated = regenCalls.get(fromPlane.id) - regenBefore;
