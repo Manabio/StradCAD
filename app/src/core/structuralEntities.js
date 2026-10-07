@@ -110,8 +110,10 @@ export function spanKey(axisCL, clA, clB) {
 // role:'roofBeam'（小屋梁。structural/woodRoofFraming.js）も同じ理由で 'roofBeam:' を前置する——
 // 小屋梁は載る梁の軸CLを端のCLにするため、同じ spanKey の大梁（壁線の通し梁の候補）と
 // キーを共有しうる。名前空間を分けないと、小屋梁を削除しただけで同じ区間の大梁の生成まで抑止される。
+// role:'partitionBeam'（隔て梁。structural/stairPartitionBeams.js）も同じ理由で 'partitionBeam:' を前置する
+// （端のCLは床梁・大梁と共有する座標なので同 spanKey がありうる）。
 // 他roleは従来どおり spanKey そのもの（既存文書の除外集合と互換。PlanGraph.addBeam/removeBeam・挙動不変）。
-const EXCLUSION_NAMESPACED_ROLES = new Set(['sill', 'roofBeam']);
+const EXCLUSION_NAMESPACED_ROLES = new Set(['sill', 'roofBeam', 'partitionBeam']);
 export function beamExclusionKey(role, axisCL, clA, clB) {
   const key = spanKey(axisCL, clA, clB);
   return EXCLUSION_NAMESPACED_ROLES.has(role) ? `${role}:${key}` : key;
@@ -370,7 +372,7 @@ export class StructuralBeam extends StructuralEntity {
     // 小梁・床梁・基礎梁・軒桁・母屋・垂木・踊り場受け梁・小屋梁はサブクラスを増やさず role + 既定値の組み合わせで表現する。
     // roofBeam＝在来木造の小屋梁（beamType '小屋梁'・記号KB。母屋・棟木と直交して軒桁等へ架かる実体の部材。
     // 棟木・母屋・束は保存せず描画時に導く。.claude/structural-model.md「小屋組」の節）。
-    this.role             = props.role             ?? 'primary'; // primary/secondary/floor/foundation/eaves/roof/landing/roofBeam/sill
+    this.role             = props.role             ?? 'primary'; // primary/secondary/floor/foundation/eaves/roof/landing/roofBeam/sill/partitionBeam（隔て梁。beamType '隔て梁'・記号PG。在来木造の折返し階段の隔て壁の真上・90角）
     // 接合方法（'RIGID'=剛接合 / 'PIN'=ピン接合）。鉄骨の梁でのみ意味を持つ（isPinJoint/hasRigidJoint 参照）。
     // 既定は剛接合。ただし小梁・床梁（PIN_ROLES。梁芯CL追加・床梁自動生成で生成される）だけはピン接合を
     // 初期値にする——生成側（structuralAutoFill/beamAxisMove/woodAutoFill）ではなくここで既定を決めることで、

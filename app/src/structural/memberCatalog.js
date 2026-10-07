@@ -23,7 +23,7 @@ export const MEMBER_GROUPS = [
   { key: 'column',  mapName: 'columnMap',  category: MEMBER_CATEGORY.COLUMN_LIKE, label: '柱・杭',     iconShape: 'square' },
   { key: 'footing', mapName: 'footingMap', category: MEMBER_CATEGORY.BOX_LIKE,    label: '基礎・柱脚', iconShape: 'box' },
   { key: 'beam',    mapName: 'beamMap',    category: MEMBER_CATEGORY.ROD,         label: '梁',         iconShape: 'band',
-    filter: b => b.role !== 'secondary' && b.role !== 'landing' && b.role !== 'floor' && b.role !== 'roofBeam' },
+    filter: b => b.role !== 'secondary' && b.role !== 'landing' && b.role !== 'floor' && b.role !== 'roofBeam' && b.role !== 'partitionBeam' },
   { key: 'beamSub', mapName: 'beamMap',    category: MEMBER_CATEGORY.ROD,         label: '小梁',       iconShape: 'band',
     filter: b => b.role === 'secondary', allowManualAdd: false, hideWhenEmpty: true },
   // 踊り場受け梁（WP-B。小梁と同型＝通り芯グリッドではなく階段の踊り場辺から自動生成するため
@@ -38,6 +38,9 @@ export const MEMBER_GROUPS = [
   // 小屋組の無い階・非在来ではセクション自体を隠す）。
   { key: 'beamRoof', mapName: 'beamMap', category: MEMBER_CATEGORY.ROD,           label: '小屋梁',     iconShape: 'band',
     filter: b => b.role === 'roofBeam', allowManualAdd: false, hideWhenEmpty: true },
+  // 隔て梁（在来木造の折返し階段の隔て壁の真上。隔て壁 S5。自動生成のみ＝手動追加UIなし。無い階では隠す）。
+  { key: 'beamPartition', mapName: 'beamMap', category: MEMBER_CATEGORY.ROD,       label: '隔て梁',     iconShape: 'band',
+    filter: b => b.role === 'partitionBeam', allowManualAdd: false, hideWhenEmpty: true },
   { key: 'slab',  mapName: 'slabMap',    category: MEMBER_CATEGORY.PLANE_H,     label: 'スラブ',     iconShape: 'plane' },
   { key: 'wall',    mapName: 'wallMap',    category: MEMBER_CATEGORY.PLANE_V,     label: '耐力壁',     iconShape: 'wall' },
 ];
@@ -99,6 +102,7 @@ export function memberSymbol(entity, mapName) {
         case 'roof':       return entity.beamType === '垂木' ? 'RF' : 'PR'; // 垂木 / 母屋
         case 'landing':    return 'LG'; // 踊り場受け梁
         case 'roofBeam':   return 'KB'; // 小屋梁
+        case 'partitionBeam': return 'PG'; // 隔て梁
         default:           return 'G';  // 大梁
       }
     case 'slabMap':
@@ -112,6 +116,13 @@ export function memberSymbol(entity, mapName) {
     default:
       return '?';
   }
+}
+
+// 在来木造の非基礎梁カードの「梁幅：」読み取り専用行の説明文（MemberListTab.jsx が使う）。
+// 通常の梁は「下階柱同寸」（conformWoodSections が下階の柱寸へ揃える）。隔て梁（role:'partitionBeam'）は
+// 隔て壁の下地と同寸の90角固定で階の柱寸に従わないため、別の文言にする。
+export function woodBeamWidthNote(entity, widthMm) {
+  return entity?.role === 'partitionBeam' ? `${widthMm}mm（隔て壁と同寸・固定）` : `${widthMm}mm（下階柱同寸）`;
 }
 
 // 自動補完用の既定材料・断面（sectionCatalog.js の実在キーを参照）。

@@ -12,6 +12,7 @@ import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure
 import { stairPartitionEnds } from './wallFreeEnds.js';
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
+import { autoFillStairPartitionBeams } from './stairPartitionBeams.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { ROOF_COLUMN_CLASS } from './roofColumnFilter.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
@@ -688,7 +689,8 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const isRoof = graph.plane.isRoofPlane;
   // 下階の隔て壁の両端の柱（頭つなぎの起点から除く。woodAutoFill.js autoFillWoodWallBeams の belowTieExcludePts）。
   // 識別は幾何（下階graphの stairPartitionEnds の点とAXIS座標が一致する柱）。由来集合は使わない。
-  const belowTieExcludePts = belowGraph ? stairPartitionEnds(belowGraph, project).map(e => ({ x: e.x, y: e.y })) : [];
+  const belowPartitionEnds = belowGraph ? stairPartitionEnds(belowGraph, project) : []; // 隔て梁（stairPartitionBeams.js）も使う。1回だけ求める
+  const belowTieExcludePts = belowPartitionEnds.map(e => ({ x: e.x, y: e.y }));
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
   // 屋根の軒桁(eaves)は下階の主構造に従うため、判定軸は belowMainStructure 側で別に行う。
   const ownSpecified = isStructureSpecified(graph, project);
@@ -777,8 +779,12 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 生成・撤去が確定した直後に呼ぶ——小屋梁の位置・端の host は確定済みの大梁を前提にするため。
   // roofRegions===undefined は何もしない。
   const roofFramingResult = autoFillWoodRoofFraming(graph, project, roofRegions);
-  const newRoofBeams = [...roofBeamsResult.created, ...roofFramingResult.created];
-  const removedRoofBeams = [...roofBeamsResult.removed, ...roofFramingResult.removed];
+  // 隔て梁（在来木造の折返し階段の隔て壁の真上。隔て壁 S5）。屋根専用平面は対象外。条件は !isRoof だけ——
+  // 非在来へ切り替わった直後の auto の撤去も本関数が担う（土台と同じ。関数内で framing を見る）。
+  const partitionBeamsResult = !isRoof
+    ? autoFillStairPartitionBeams(graph, project, belowPartitionEnds) : { created: [], removed: [] };
+  const newRoofBeams = [...roofBeamsResult.created, ...roofFramingResult.created, ...partitionBeamsResult.created];
+  const removedRoofBeams = [...roofBeamsResult.removed, ...roofFramingResult.removed, ...partitionBeamsResult.removed];
   // 梁芯CL（discipline:'fuse'）ごとの小梁自動生成。wallGate は直接引かない
   // （直交大梁に挟まれている＝大梁のフットプリント判定を継承するため。上のnewBeams生成後に呼ぶ）。
   // 出自を問わず全梁芯が対象のため、壁由来の梁芯（newWallBeamAxes）もそのまま拾う。beamPlacement:'wallRuns'
@@ -835,6 +841,8 @@ export function convertMembersToEffectiveMaterial(graph, project, belowMainStruc
     // 小屋梁（role:'roofBeam'）も変換対象外——在来木造専用の概念（断面は柱同寸の幅×小屋梁の成の表）。
     // 非在来へ切替えたときの撤去は小屋梁の生成処理（C2b）が担う。ここで材種を変えると木造専用の断面が壊れる。
     if (beam.role === 'roofBeam') continue;
+    // 隔て梁（role:'partitionBeam'）も同じ理由で変換対象外（在来木造専用・90角固定。撤去は stairPartitionBeams.js が担う）。
+    if (beam.role === 'partitionBeam') continue;
     // 基礎梁=主構造非依存の常時RC。軒桁=下階主構造、それ以外(床梁)=自階主構造。出所が未確定なら変換しない。
     if (beam.role !== 'foundation' && !(beam.role === 'eaves' ? belowSpecified : ownSpecified)) continue;
     const targetMaterial = beam.role === 'foundation' ? StructuralMaterialType.RC

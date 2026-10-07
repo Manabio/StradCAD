@@ -40,7 +40,7 @@ const FOUNDATION_ROLE = 'foundation';
 // 梁のうち展開図に描かない役割（基礎梁に加え、土台=role:'sill'。床下の横架材で室内展開に寄与しない。
 // QA裁定Minor-1・2026-09-18——階段帯はclipを通さないため、除外しないと床下の土台線がそのまま出る）。
 // 小屋梁（role:'roofBeam'。小屋伏図の構造モード専用で展開図・断面に出さない。ユーザー裁定2026-10-02）も除く。
-const EXCLUDED_BEAM_ROLES = new Set([FOUNDATION_ROLE, 'sill', 'roofBeam']);
+const EXCLUDED_BEAM_ROLES = new Set([FOUNDATION_ROLE, 'sill', 'roofBeam', 'partitionBeam']);
 
 /**
  * @typedef {{isVertical:boolean, axisWorld:number, spanLo:number, spanHi:number,

@@ -38,6 +38,10 @@ import { selfWallFreeEnds, stairPartitionEnds } from './wallFreeEnds.js';
 import { PARTITION_BACKING_MM } from '../finish/stair/stairPartition.js';
 import { ColumnOrigin, mergeSlot, formatColumnOrigins } from './columnOrigins.js';
 
+// 隔て梁（role:'partitionBeam'。stairPartitionBeams.js）の断面＝隔て壁の下地と同寸の90角（'WOOD-90x90'）。
+// 生成（stairPartitionBeams.js）と conformWoodSections が共有する（stairPartitionBeams.js が本ファイルを import するので定義はここ）。
+export const PARTITION_BEAM_SECTION = woodRectSectionKey(PARTITION_BACKING_MM, PARTITION_BACKING_MM);
+
 // isKneeDropFreeEnd／selfWallFreeEndsの実体は wallFreeEnds.js（腰壁・垂れ壁の端部材
 // structural/wallEndMember.js が同じ述語を共有するため2026-09-19に切り出した。二系統禁止）。
 
@@ -85,7 +89,7 @@ function findCenterAnchorCL(graph, centerLineType, coord) {
 // CLは新設しない（どちらも無ければnull）。裁定（QA F2・2026-09-16）：3b限定の「±柱幅/2の寄せ」
 // （3段目）は実データ3文書（moku1/moku2/2026模試）で使用0回・テスト0件・アンカー述語の3つ目の
 // コピーだったため削除した——アンカーが無い候補はCLを新設せず素直に見送る。
-function resolveWoodColumnAnchorCL(graph, centerLineType, coord) {
+export function resolveWoodColumnAnchorCL(graph, centerLineType, coord) {
   return findBeamAnchorCL(graph, centerLineType, coord) ?? findCenterAnchorCL(graph, centerLineType, coord);
 }
 
@@ -1730,6 +1734,13 @@ export function conformWoodSections(graph, project) {
     if (beam.role === 'sill') {
       if (beam.sectionDefId === columnSection) continue; // 常に柱同寸の正角（幅・成とも）
       beam.setField('sectionDefId', columnSection);
+      updated.push(beam.id);
+      continue;
+    }
+    if (beam.role === 'partitionBeam') {
+      // 隔て梁（階段の隔て壁と同寸 90×90。階の柱寸・梁幅に依らない）。auto だけ揃え、locked/calculated は触らない
+      if (beam.dimensionStatus !== 'auto' || beam.sectionDefId === PARTITION_BEAM_SECTION) continue;
+      beam.setField('sectionDefId', PARTITION_BEAM_SECTION);
       updated.push(beam.id);
       continue;
     }

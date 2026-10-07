@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   memberSymbol, MEMBER_GROUPS, NUMBERED_MAPS, FIELD_DEFS_BY_CATEGORY, SIGNATURE_FIELDS_BY_MAP, MEMBER_CATEGORY,
   noJoinSignatureFor, joinSignatureFor, memberSignature, isIndividuallyNumbered, memberGroupKey, memberOrderKey,
-  isMemberNumberLocked,
+  isMemberNumberLocked, woodBeamWidthNote,
 } from './memberCatalog.js';
 import { makeBeam, makeColumn } from './memberTestFixtures.js';
 import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRules.js';
@@ -734,4 +734,13 @@ test('【失敗系・ステップA】memberGroupKey: columnMapはrules.numbering
   assert.equal(memberGroupKey(common, 'columnMap', unspecifiedRules, undefined, 'p1'), sig, '非在来（columnGroupScope="building"）はplaneId指定時も付与しない');
   const beam = makeBeam('b1', 'WOOD-120x120', { materialType: 'WOOD', role: 'primary' });
   assert.equal(memberGroupKey(beam, 'beamMap', woodRules, undefined, 'p1'), memberSignature(beam, 'beamMap'), 'beamMapはcolumnGroupScopeの対象外＝planeIdを付与しない');
+});
+
+test('woodBeamWidthNote: 通常の梁は「下階柱同寸」、隔て梁は「隔て壁と同寸・固定」。MemberListTab.jsx の梁幅行がこの関数を使う', () => {
+  assert.equal(woodBeamWidthNote({ role: 'primary' }, 120), '120mm（下階柱同寸）');
+  assert.equal(woodBeamWidthNote({ role: 'floor' }, 105), '105mm（下階柱同寸）');
+  assert.equal(woodBeamWidthNote({ role: 'partitionBeam' }, 90), '90mm（隔て壁と同寸・固定）');
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
+  assert.ok(src.includes('woodBeamWidthNote(representative, findSectionEntry(representative.sectionDefId)?.width)'), '梁幅行が woodBeamWidthNote を通る');
+  assert.equal(src.includes('mm（下階柱同寸）'), false, 'JSX に文言を直書きしない');
 });

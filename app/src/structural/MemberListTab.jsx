@@ -13,7 +13,7 @@ import {
   MEMBER_GROUPS, REMOVE_FN_BY_MAP, FIELD_DEFS_BY_CATEGORY,
   materialLabel, sectionAspectRatio, sectionIconShape, memberSymbol, memberSignature, memberSizeKey,
   FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME, UNNUMBERED_TAG, memberGroupKey, noJoinSignatureFor, joinSignatureFor,
-  memberOrderKey, isIndividuallyNumbered, isMemberNumberLocked,
+  memberOrderKey, isIndividuallyNumbered, isMemberNumberLocked, woodBeamWidthNote,
 } from './memberCatalog.js';
 import { showsWoodBeamDepthFields, woodBeamDepthOptions, woodBeamDepthFieldView } from './woodBeamDepthInput.js';
 import { alignToOuterFace, isRigidFrameStructure, beamAxisCenterLines,
@@ -1412,7 +1412,7 @@ const MemberCard = observer(({
             <div style={cardRowStyle}>
               <div style={cardFieldStyle}>
                 <span style={cardLabelStyle}>梁幅：</span>
-                <span style={{ fontSize: 12, color: '#64748b' }}>{findSectionEntry(representative.sectionDefId)?.width}mm（下階柱同寸）</span>
+                <span style={{ fontSize: 12, color: '#64748b' }}>{woodBeamWidthNote(representative, findSectionEntry(representative.sectionDefId)?.width)}</span>
               </div>
             </div>
           )}
