@@ -736,3 +736,18 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   3変異で確かめる。「どの階を他階として扱うか」の条件が2箇所以上に書かれていたら、1つの関数へ寄せる
   （片方だけ直すと同じ型の漏れになる）。屋根専用平面・検討案を含めるかどうか（`project.planes` は除く・
   `project.planeMap` は含む）も、テストの名前に書いて固定する。
+
+### `git stash`→`pop` で作業ツリーが CRLF に変わり、改行 LF 決め打ちのソース走査テストが赤になった（2026-10-07 iOS の読込み修正）
+
+- **症状**: builder が「全スイート pass」と報告した直後、リードが HEAD の件数を取るために `git stash`→`npm test`→
+  `git stash pop` した。`core.autocrlf=true` のため pop で書き戻された4ファイルが LF→CRLF に変わり、builder が
+  App.jsx のソース文字列を自前で走査して書いた配線テスト（`indexOf('\n  }\n')`）が -1 を返し、`slice` が
+  ファイル末尾まで伸びて別関数の `restoreGraph(` に当たって赤になった。QA の再実行で初めて検出された。
+- **誤った直感**: 「App.jsx のソースを文字列として読んで分岐の行を確認する」流儀を、行区切り `'\n'` 決め打ちの
+  自前走査で新しく書く。「stash→pop は内容を変えないのでテストの再実行は不要」。
+- **正しい動き**: (1) App.jsx の配線テストは既存の共用ヘルパー `app/src/uiBusySourceScan.js`
+  （`readAppSrc`・`stripCommentLines`（`/\r?\n/` 対応）・`extractFunctionBody`（中括弧対応で切り出す））を使い、
+  自前のソース走査を増やさない。自前にするなら `.replace(/\r\n/g, '\n')` と `assert.ok(end >= 0)` を必ず入れる。
+  (2) `git stash`→`pop` や `git checkout` の後は作業ツリーの改行コードが変わりうるので、pop した後に全スイートを
+  走らせ直してから報告する（`git ls-files --eol` で `i/lf w/crlf` なら要注意）。(3) QA は builder の
+  「全件 pass」を信用せず、必ず作業ツリーの現状で再実行する。
