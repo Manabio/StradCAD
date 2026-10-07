@@ -18,6 +18,7 @@
 import { roomBounds, refreshCells, cellBoundsFromKey } from '../gridCells.js';
 import { makeFrame } from './stairGeometry.js';
 import { resolveSwitchbackSpanLengths } from './stairClassify.js';
+import { riserOf } from './stairDimensions.js';
 
 // mm — cellBoundsFromKeyの実測値とlandingRectの計算値を突き合わせる際の許容差
 // （stairClassify.jsのSTRAIGHT_ENTRY_MID_EPS等と同スケール）。
@@ -134,8 +135,8 @@ export function landingEdgeCLs(stair, graph) {
  * 踊り場の絶対z（設置階FL基準・mm）= n1（往路の段数）× riser（蹴上）。WP-B2（踊り場受け梁の
  * 既定天端レベル算出）向け。riser式は elevation/elevationStairSection.js の
  * resolveSwitchbackParams と同じ（stair.riser優先・無ければ階高/総段数）だが、finish/stair/
- * 配下は elevation/ に依存しない方針（ファイル冒頭コメント参照）のためここに複製する
- * （circular import回避が目的の意図的な重複。riser式を変更する場合は両方揃えること）。
+ * 配下は elevation/ に依存しない方針（ファイル冒頭コメント参照）のため、stairDimensions.js の
+ * riserOf（stair.riser優先・無ければ階高/総段数。唯一の供給源）を使う。elevation側の式を変える場合は riserOf も揃えること。
  * SWITCHBACK以外・riserが求まらない（floorHeight未確定かつstair.riserも未指定）場合はnull。
  * @param {import('@core').Stair} stair
  * @param {object} graph
@@ -145,7 +146,7 @@ export function landingEdgeCLs(stair, graph) {
 export function landingZ(stair, graph, floorHeight) {
   const spanInfo = resolveSwitchbackSpanLengths(stair, graph);
   if (!spanInfo) return null;
-  const riser = stair?.riser ?? (floorHeight != null ? floorHeight / spanInfo.totalSteps : null);
+  const riser = riserOf(stair, floorHeight);
   if (riser == null) return null;
   // 側面の上り口に取りつく回転部（entryTurnSteps）の蹴上は往路の手前に積まれる
   return (spanInfo.n1 + (stair.entryTurnSteps || 0)) * riser;

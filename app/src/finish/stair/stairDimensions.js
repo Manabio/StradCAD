@@ -37,8 +37,18 @@ export function floorHeightBelow(project, plane) {
  * @returns {number|null}
  */
 export function stairRiserOf(stair, project, plane) {
-  const fh = floorHeightAbove(project, plane);
-  return stair.riser ?? (fh != null ? fh / Math.max(1, stair.totalSteps) : null);
+  return riserOf(stair, floorHeightAbove(project, plane));
+}
+
+/**
+ * 蹴上(mm)の式の唯一の供給源: 明示指定（stair.riser）優先・無ければ階高/総段数。階高が未解決（null）で
+ * 明示指定も無ければ null。stairRiserOf・stairLanding.js の landingZ・stairPartition.js が共有する。
+ * @param {import('@core').Stair} stair
+ * @param {number|null} floorHeight - 設置階〜上階の階高(mm)
+ * @returns {number|null}
+ */
+export function riserOf(stair, floorHeight) {
+  return stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps) : null);
 }
 
 // 基準法上の寸法制限
