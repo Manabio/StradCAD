@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairWallGapZones, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt } from './sectionStair.js';
 import { stairRunProfile, stringerBandGeometry } from '../elevationStairSection.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
@@ -993,59 +993,88 @@ test('【WP-A2】stairPrimitivesForCut: RC(鉄筋コンクリート造)も踊り
     'RCは段部のジグザグ本体(SILHOUETTE)がそのまま描かれる（ささら横付け隠しはSTEEL限定）のはず');
 });
 
-// ---- 実機フィードバック第3弾D: stairWallGapZones（壁側の空き検出） ----
-function makeFlightD(overrides) {
-  return { isVertical: true, runLo: 0, runHi: 3000, travelSign: 1, acrossLo: 0, acrossHi: 1000,
-    baseZ: 0, riserMm: 200, steps: 6, lengthMm: 1200, ...overrides };
+// ---- 踊り場の床の端＝登り出す flight の1段目の蹴込板の足元（段鼻の位置から蹴込ぶん奥） ----
+// 復路レーン（x=1500）を縦断する切断。踊り場は y=0..1500、復路は y=1500（段鼻）から 4500 側へ登り出す。
+function landingFloorLine(nosing, structure = StructuralMaterialType.STEEL) {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, structure);
+  stair.nosing = nosing;
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 1500, lo: 0, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: 4500, worldLo: 0, worldHi: 4500, bands: [] }];
+  const z = c.landings[0].z;
+  const line = stairPrimitivesForCut(c, cut, columns).find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === -z && p.y2 === -z);
+  return { line, c, cut, z };
 }
 
-test('【実機フィードバック第3弾D】stairWallGapZones: 復路レーンの外側(壁側)に室の空きがあれば壁までの区間を返す', () => {
-  const outbound = makeFlightD({ acrossLo: 0, acrossHi: 1000, baseZ: 0 });
-  const inbound = makeFlightD({ acrossLo: 1000, acrossHi: 2000, baseZ: 1200 });
-  const contribution = { flights: [outbound, inbound], landings: [], structure: null };
-  const cut = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2400 }, dirSign: 1 };
-  const zones = stairWallGapZones(contribution, cut);
-  assert.equal(zones.length, 1, '復路側(x=2000〜2400)だけに壁側の空きがあるはず');
-  assert.ok(Math.abs(zones[0].loX - 2000) < 1e-6 && Math.abs(zones[0].hiX - 2400) < 1e-6,
-    `zoneはx=2000〜2400のはず（実際:${JSON.stringify(zones[0])}）`);
+test('【踊り場の床】蹴込>0: 復路の登り出し側の端は1段目の蹴込板の足元（段鼻＋蹴込）まで届く・反対側は不変', () => {
+  for (const structure of [StructuralMaterialType.STEEL, StructuralMaterialType.WOOD]) {
+    const { line, c, cut } = landingFloorLine(20, structure);
+    const foot = stairRunProfile(1, 200, 100, localXOf(cut, 1500), 0, 1, 20).points[0][0];
+    assert.equal(foot, 1520);
+    assert.equal(line.x1, 0, '踊り場の奥側の端は不変');
+    assert.equal(line.x2, foot, `床線は復路の蹴込板の足元(1520)まで（${structure}）`);
+    const prof = stairCutFloorProfile(c, cut, null);
+    // 床の輪郭は flight の先頭点で元から連続（単一供給源化のみ。変更前でも通る）。
+    assert.ok(prof.some(([x, z]) => x === foot && z === c.landings[0].z), '床の輪郭は足元で踊り場の高さを持つ');
+  }
 });
 
-test('【実機フィードバック第3弾D】stairWallGapZones: 両側に壁側の空きがあれば2区間返す', () => {
-  const outbound = makeFlightD({ acrossLo: 0, acrossHi: 1000, baseZ: 0 });
-  const inbound = makeFlightD({ acrossLo: 1000, acrossHi: 2000, baseZ: 1200 });
-  const contribution = { flights: [outbound, inbound], landings: [], structure: null };
-  const cut = { line: { isVertical: false, axisValue: 1500, lo: -400, hi: 2400 }, dirSign: 1 };
-  const zones = stairWallGapZones(contribution, cut);
-  assert.equal(zones.length, 2, '往路側(x=-400〜0)・復路側(x=2000〜2400)の2区間があるはず');
+test('【踊り場の床】dirSign=-1 の面でも復路の登り出し側が足元まで届く', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  stair.nosing = 20;
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 1500, lo: 0, hi: 4500 },
+    viewSign: 1, dirSign: -1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: 4500, worldLo: 0, worldHi: 4500, bands: [] }];
+  const z = c.landings[0].z;
+  const line = stairPrimitivesForCut(c, cut, columns).find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === -z && p.y2 === -z);
+  assert.equal(line.x1, 2980);
+  assert.equal(line.x2, 4500);
 });
 
-test('【失敗系・実機フィードバック第3弾D】stairWallGapZones: 壁厚のズレ相当(150mm未満)の差は空きとみなさない', () => {
-  const outbound = makeFlightD({ acrossLo: 0, acrossHi: 1000, baseZ: 0 });
-  const inbound = makeFlightD({ acrossLo: 1000, acrossHi: 2000, baseZ: 1200 });
-  const contribution = { flights: [outbound, inbound], landings: [], structure: null };
-  // 壁面は半壁厚(57.5mm)ぶんだけ内側——WALL_GAP_MIN_MM(150)未満のため空き扱いしない。
-  const cut = { line: { isVertical: false, axisValue: 1500, lo: 57.5, hi: 1942.5 }, dirSign: 1 };
-  const zones = stairWallGapZones(contribution, cut);
-  assert.equal(zones.length, 0, '半壁厚程度のズレは空きとみなさないはず');
+test('【失敗系・踊り場の床】列の範囲が踊り場の前縁で終わるときは足元まで延ばさない', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  stair.nosing = 20;
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 1500, lo: 0, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: 1500, worldLo: 0, worldHi: 1500, bands: [] }];
+  const z = c.landings[0].z;
+  const line = stairPrimitivesForCut(c, cut, columns).find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === -z && p.y2 === -z);
+  assert.ok(line.x2 <= 1500, `列の外へ延ばさない（実際:${line.x2}）`);
 });
 
-test('【失敗系・実機フィードバック第3弾D】stairWallGapZones: WOOD(isSteel=false)でもレーン同士の内側境界は壁側と誤判定しない（回帰）', () => {
-  // isSteel=false（structure未指定）はladderAcrossRangeを適用しないため、往路flightの
-  // acrossHi(=1000。復路との内側境界)をそのまま使う——これを誤って壁側(cut.line.hi)と
-  // 比較すると、内側境界〜壁までの区間を誤検出してしまう不具合があった（実装時に発見・修正）。
-  const outbound = makeFlightD({ acrossLo: 0, acrossHi: 1000, baseZ: 0 });
-  const inbound = makeFlightD({ acrossLo: 1000, acrossHi: 2000, baseZ: 1200 });
-  const contribution = { flights: [outbound, inbound], landings: [], structure: null }; // WOOD相当
-  const cut = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2000 }, dirSign: 1 }; // 壁=室の真の外縁とちょうど一致
-  const zones = stairWallGapZones(contribution, cut);
-  assert.equal(zones.length, 0, '内側境界(x=1000)を壁側と誤判定して空きを作らないはず');
+test('【踊り場の床】蹴込0: 床線の端は段鼻（踊り場前縁）のまま＝従来と同一', () => {
+  const { line } = landingFloorLine(0);
+  assert.equal(line.x1, 0);
+  assert.equal(line.x2, 1500);
 });
 
-test('【失敗系・実機フィードバック第3弾D】stairWallGapZones: contribution=nullは例外を投げず空配列', () => {
-  const cut = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2000 }, dirSign: 1 };
-  assert.deepEqual(stairWallGapZones(null, cut), []);
+test('【失敗系・踊り場の床】往路レーンの縦断では蹴込があっても踊り場の床を延ばさない（登り出すflightが無い）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
+  stair.nosing = 20;
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = {
+    seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 0, hi: 4500 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const columns = [{ x0: 0, x1: 4500, worldLo: 0, worldHi: 4500, bands: [] }];
+  const z = c.landings[0].z;
+  const line = stairPrimitivesForCut(c, cut, columns).find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === -z);
+  assert.equal(line.x1, 0);
+  assert.equal(line.x2, 1500, '往路側は踊り場の前縁まで（蹴込板の足元はこの床の外側）');
 });
-
 
 // ---- 断面線（下側の輪郭）: stairCutFloorProfile（ユーザー明示指示2026-09「展開図では、
 // 断面線の外は描画しない」）。切っている（縦断している）寄与だけが断面線に現れる ----

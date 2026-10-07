@@ -976,6 +976,12 @@ seq4は左端＝seq2の鏡像）。実機「6」ではC左・D1左・D1右・B�
   （`WOOD_TREAD_THICKNESS_MM`）を載せる（判定は`stair.structure`＝階段自体の材種。建物の構造〔在来/2×4・S造の中の木造階段〕では区別しない。裁定待ち）。
   **床の輪郭`stairCutFloorProfile`は歩行面のまま**（`computeFlightProfile`の`surfaceOnly`。
   下面の切欠きを床線・遮蔽に混ぜない）。梯子（正面視）・ささら（鉄骨）は不変。
+- **踊り場の床の端＝登り出すflightの蹴込板の足元**（2026-10-08）: 踊り場から登り出すflight
+  （`flight.baseZ==landing.z`＝折返しの復路）を縦断する面では、踊り場の床線
+  （`landingFloorSpanX`。`landingCutPrimitives`と`stairCutFloorProfile`が共有。足元は列の範囲で挟む）を、段鼻位置
+  （踊り場前縁）ではなく`flightRunProfile`の先頭点＝足元（段鼻＋蹴込k）まで延ばす。従来は
+  蹴込ぶん（20mm）の隙間が空いていた。蹴込0は足元＝段鼻で不変。往路の最終段側（蹴込板が踊り場の
+  床と蹴込ぶん重なるT字）は変えない。床の輪郭は flight の先頭点で元から連続しており、統一のため同じ範囲を使う。
 
 **切断線の位置（ユーザー実機フィードバック2026-08-23で全面訂正）**: SWITCHBACKのseq2/4の
 切断線は「往復間のレーン境界（100mmあきの中）」ではなく**往路レーンの中央**（`acrossCoordAt(0.25)`）、
@@ -1219,7 +1225,7 @@ hだけ上へそのまま平行移動した連続ポリラインとして描く�
   `flight.baseZ<cut.baseFloorZ`のとき明示的にdash指定）と壁断面の見えがかり（一般規則の
   'wall'/'cut'/'cutAlong'。sectionEmit.js）だけ**、という裁定。
 - **D: ささらの外側(壁側)〜壁の空きにアキX（2026-10-07 撤回。seq1 に出さない。`elevationStairSequence.js`の`wallGapXMarks`は削除。
-  `stairWallGapZones`は残置・未使用＝整理候補）**。（以下は撤回前の記録）`stairWallGapZones`（sectionStair.js。新規export）が、
+  `stairWallGapZones`・`WALL_GAP_MIN_MM`も削除済み）**。（以下は撤回前の記録。関数は現存しない）`stairWallGapZones`（sectionStair.js。新規export）が、
   crossesFlightする各flightについて、ladderAcross（LANE_GAP調整済み。isSteel=falseはflight自身の
   境界をそのまま使う）の「室の真の外縁trueAcrossLo/Hiに一致する側」だけをcut.line.lo/hi（壁）と
   比較し、`WALL_GAP_MIN_MM`（=150。ASSUMED既定値）を明確に上回る差があれば空き区間を返す

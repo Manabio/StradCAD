@@ -460,14 +460,19 @@ function clipPolylineAboveOccluder(points, seg) {
 // （展開図一般化Phase 6b-2「一体設計」）。
 // opts.surfaceOnly: 段板の厚みを無視した歩行面の輪郭（床プロファイル stairCutFloorProfile 用。
 // 下面の切欠きを床線に混ぜない）。
-function computeFlightProfile(flight, cut, columns, outerBound, opts = {}) {
+// クランプ前の点列・段鼻列（computeFlightProfile と踊り場の床の端 landingFloorSpanX の単一供給源）。
+function flightRunProfile(flight, cut, opts = {}) {
   const worldStart = flight.travelSign > 0 ? flight.runLo : flight.runHi;
   const localDir = flight.travelSign * cut.dirSign; // ローカルx方向の歩行方向
   const startX = localXOf(cut, worldStart);
   const runLengthMm = flight.lengthMm ?? (flight.runHi - flight.runLo);
-  const { points, noses } = stairRunProfile(
+  return { ...stairRunProfile(
     flight.steps, flight.riserMm, runLengthMm, startX, -flight.baseZ, localDir, flight.nosingMm ?? 0,
-    { treadThicknessMm: opts.surfaceOnly ? 0 : flight.treadThicknessMm ?? 0 });
+    { treadThicknessMm: opts.surfaceOnly ? 0 : flight.treadThicknessMm ?? 0 }), startX };
+}
+
+function computeFlightProfile(flight, cut, columns, outerBound, opts = {}) {
+  const { points, noses } = flightRunProfile(flight, cut, opts);
   const range = fullColumnsXRange(columns, cut, outerBound);
   if (!range) return { points: [], noses: [] }; // 列が面の描画範囲と交わらない＝この面には描かない
   const { loX, hiX } = range;
@@ -503,54 +508,6 @@ export function ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, gapMm) {
   const acrossLo = flight.acrossLo > trueAcrossLo + GAP_EPS ? flight.acrossLo + half : flight.acrossLo;
   const acrossHi = flight.acrossHi < trueAcrossHi - GAP_EPS ? flight.acrossHi - half : flight.acrossHi;
   return { acrossLo, acrossHi };
-}
-
-// ASSUMED（実機フィードバック第3弾D。設計書に厳密な閾値の明記が無いための解釈）: flightの
-// acrossLo/acrossHi（stairContributionのroomBounds由来・生のCL境界）とcut.line.lo/hi（壁仕上げ
-// 面へスナップ済み）は、階段が室の全幅を占める通常構成でも半壁厚ぶん（既存コメント
-// 「roomBounds由来・生の室境界とcut.line.lo/hi…は半壁厚ぶんズレることがある」。
-// computeFlightZigzagPoints参照）ズレる——これをそのまま「壁側の空き」と誤検出しないよう、
-// 一般的な壁厚半分（50〜75mm程度）を明確に上回る閾値でのみ実在の空きとみなす。
-const WALL_GAP_MIN_MM = 150;
-
-/**
- * 実機フィードバック第3弾D: 階段の構造（stair.cells由来のflight.acrossLo/acrossHi）が室の
- * 全幅（cut.line.lo/hi＝壁）まで届かない構成（stairwell内に階段以外の空きがある実機構成。
- * 通常のraycast=probeColumnは壁・部屋の有無だけで判定するため、この「階段の構造そのものが
- * 届かない帯」は別途明示的に検出する必要がある）で、ささらの外側（壁側）〜壁の区間を
- * crossesFlightするcut上のローカルx範囲として返す（空きが無い側は含めない。WALL_GAP_MIN_MM
- * 未満の差は半壁厚ズレ等のノイズとして無視する）。
- * WOOD等（isSteel=false）はladderAcrossRangeを適用せずflight自身のacrossLo/acrossHiを使う
- * （LANE_GAPの調整はSTEELの梯子・ささら描画と同じ既定に合わせる）。
- * @param {{flights:Flight[], landings:Landing[], structure:string|null}|null} contribution
- * @param {import('./sectionTypes.js').SectionCut} cut
- * @returns {Array<{loX:number, hiX:number}>}
- */
-export function stairWallGapZones(contribution, cut) {
-  if (!contribution) return [];
-  const isSteel = contribution.structure === StructuralMaterialType.STEEL;
-  const acrossExtents = [...(contribution.flights ?? []), ...(contribution.landings ?? [])];
-  const trueAcrossLo = acrossExtents.length ? Math.min(...acrossExtents.map(e => e.acrossLo)) : 0;
-  const trueAcrossHi = acrossExtents.length ? Math.max(...acrossExtents.map(e => e.acrossHi)) : 0;
-  const wallLo = Math.min(cut.line.lo, cut.line.hi), wallHi = Math.max(cut.line.lo, cut.line.hi);
-  const zones = [];
-  for (const flight of contribution.flights ?? []) {
-    if (!crossesFlight(flight, cut)) continue;
-    const ladderAcross = isSteel ? ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, LANE_GAP) : flight;
-    // 「外側(壁側)」の判定はladderAcrossRangeと同じ基準（flight自身のacrossLo/acrossHiが
-    // 室の真の外縁trueAcrossLo/Hiに一致する側だけを壁側とみなす）——一致しない側はレーン同士が
-    // 接する内側の境界であり、壁とは無関係（比較すると誤検出する。実機フィードバック第3弾D
-    // 修正: WOOD等isSteel=falseでladderAcrossRangeを適用しない構成で、往路flightの内側境界
-    // (隣レーンとの境界)を誤って壁側と比較してしまうバグがあったため）。
-    if (flight.acrossLo <= trueAcrossLo + GAP_EPS && ladderAcross.acrossLo > wallLo + WALL_GAP_MIN_MM) {
-      zones.push({ loX: localXOf(cut, wallLo), hiX: localXOf(cut, ladderAcross.acrossLo) });
-    }
-    if (flight.acrossHi >= trueAcrossHi - GAP_EPS && ladderAcross.acrossHi < wallHi - WALL_GAP_MIN_MM) {
-      zones.push({ loX: localXOf(cut, ladderAcross.acrossHi), hiX: localXOf(cut, wallHi) });
-    }
-  }
-  // localXOfはdirSignにより順序が反転しうるため、各zoneをloX<hiXへ正規化する。
-  return zones.map(z => ({ loX: Math.min(z.loX, z.hiX), hiX: Math.max(z.loX, z.hiX) }));
 }
 
 // レーンを横切る: 正面視の梯子（DETAIL。全段=steps）。flight.baseZがcut.baseFloorZより低い
@@ -925,7 +882,35 @@ function innerStringerSilhouette(flight, cut, ladderAcross, trueAcrossLo, trueAc
 // 踊り場のレーン縦断: 床のCUT水平線1本（columns中、踊り場のrun範囲と重なる列のx範囲のみ）。
 // 実機フィードバック第3弾C: 踊り場床CUT線もCUT断面のためneverDowngrade:true
 // （baseFloorZより下でも太線実線のまま。stringerRectLines冒頭コメント参照）。
-function landingCutPrimitives(landing, stairIsVertical, cut, columns) {
+/**
+ * 踊り場の床（縦断）のローカルx範囲 {loX,hiX}。踊り場から**登り出す**flight（flight.baseZ==landing.z。
+ * 折返し階段の復路）がこの切断を縦断するとき、その1段目の蹴込板の足元（stairRunProfile の先頭点＝
+ * 段鼻の位置から蹴込ぶん奥）まで床を延ばす——踊り場の床は段鼻の下にも続き、蹴込板の足元で終わる
+ * （延ばさないと蹴込ぶんの隙間が空く。蹴込0なら足元＝段鼻で従来と同一）。
+ * 足元は列の範囲（fullColumnsXRange。computeFlightProfile と同じ扱い）で挟んでから延ばす。
+ * SWITCHBACK（flight 2本）ではbaseZ条件なしでも結果は同じ＝将来の多段踊り場のための保険。
+ * 範囲が無い（列と交わらない・幅0）ときはnull。
+ */
+function landingFloorSpanX(landing, flights, cut, columns, spanLo, spanHi) {
+  const range = columns ? columnsXRangeOverlapping(columns, cut, spanLo, spanHi) : null;
+  const xs = range ? [range.loX, range.hiX] : [localXOf(cut, spanLo), localXOf(cut, spanHi)];
+  let loX = Math.min(...xs), hiX = Math.max(...xs);
+  if (hiX - loX <= GAP_EPS) return null;
+  const edgeA = localXOf(cut, landing.runLo), edgeB = localXOf(cut, landing.runHi);
+  const edgeLo = Math.min(edgeA, edgeB), edgeHi = Math.max(edgeA, edgeB);
+  for (const flight of flights ?? []) {
+    if (Math.abs(flight.baseZ - landing.z) > GAP_EPS) continue;
+    if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) continue;
+    const { points, startX } = flightRunProfile(flight, cut, { surfaceOnly: true });
+    const colRange = fullColumnsXRange(columns, cut);
+    const footX = colRange ? Math.min(colRange.hiX, Math.max(colRange.loX, points[0][0])) : points[0][0];
+    if (Math.abs(startX - edgeLo) <= GAP_EPS) loX = Math.min(loX, footX);
+    else if (Math.abs(startX - edgeHi) <= GAP_EPS) hiX = Math.max(hiX, footX);
+  }
+  return { loX, hiX };
+}
+
+function landingCutPrimitives(landing, flights, stairIsVertical, cut, columns) {
   const lengthwise = isLengthwiseCut(
     stairIsVertical, landing.acrossLo, landing.acrossHi, landing.runLo, landing.runHi, cut);
   // 正面視（レーンを横切る切断＝seq1の踊り場前縁）でも踊り場の床は切断されている
@@ -939,7 +924,9 @@ function landingCutPrimitives(landing, stairIsVertical, cut, columns) {
   const [spanLo, spanHi] = lengthwise
     ? [landing.runLo, landing.runHi]
     : [landing.acrossLo, landing.acrossHi];
-  const range = columnsXRangeOverlapping(columns, cut, spanLo, spanHi);
+  const range = lengthwise
+    ? landingFloorSpanX(landing, flights, cut, columns, spanLo, spanHi)
+    : columnsXRangeOverlapping(columns, cut, spanLo, spanHi);
   if (!range) return [];
   return [emitLine(cut, range.loX, landing.z, range.hiX, landing.z, ElevationLineRole.CUT, { neverDowngrade: true })];
 }
@@ -1143,10 +1130,9 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
     ?? cut.line.isVertical;
   for (const landing of contribution.landings ?? []) {
     if (!isLengthwiseCut(stairIsVertical, landing.acrossLo, landing.acrossHi, landing.runLo, landing.runHi, cut)) continue;
-    const range = columns ? columnsXRangeOverlapping(columns, cut, landing.runLo, landing.runHi) : null;
-    const xs = range ? [range.loX, range.hiX] : [localXOf(cut, landing.runLo), localXOf(cut, landing.runHi)];
-    const loX = Math.min(...xs), hiX = Math.max(...xs);
-    if (hiX - loX <= GAP_EPS) continue;
+    const span = landingFloorSpanX(landing, contribution.flights, cut, columns, landing.runLo, landing.runHi);
+    if (!span) continue;
+    const { loX, hiX } = span;
     parts.push([[loX, landing.z], [hiX, landing.z]]);
   }
   if (parts.length === 0) return null;
@@ -1290,7 +1276,7 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
     }
   }
   for (const landing of contribution.landings ?? []) {
-    prims.push(...landingCutPrimitives(landing, stairIsVertical, cut, columns));
+    prims.push(...landingCutPrimitives(landing, contribution.flights, stairIsVertical, cut, columns));
     // WP-A2: 踊り場の桁枠（front/back/side桁。STEEL・RCが対象。ユーザー裁定2026-08-23）。
     if (hasFrame) {
       const mitreX = isSteel ? landingSideMitreX(contribution, landing, cut, columns) : null;
