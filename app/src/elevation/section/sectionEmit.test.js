@@ -340,6 +340,18 @@ test('【WP-E2・線種テーブル】emitOpenGapMarks: baseFloorZより上の�
   for (const p of prims) assert.equal(p.dash, 'center');
 });
 
+// ---- cut.openGapMarks（2026-10-07「踊場、回転部に『アキ』は不要」。折返し階段 seq1/seq3 が false） ----
+test('【2026-10-07】emitOpenGapMarks: cut.openGapMarks===false ならアキ標記は一切出ない（同じ列で未指定は出る）', () => {
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 500, z1: 2400 }] },
+  ];
+  const base = emitOpenGapMarks(columns, makeCut());
+  assert.ok(base.some(p => p.type === 'line') && base.some(p => p.type === 'text'), '前提: 未指定ならバツと「ア キ」が出る');
+  assert.deepEqual(emitOpenGapMarks(columns, makeCut({ openGapMarks: false })), []);
+  assert.deepEqual(emitOpenGapMarks(columns, makeCut({ openGapMarks: undefined })), base, 'undefined は未指定と同じ');
+  assert.deepEqual(emitOpenGapMarks(columns, makeCut({ openGapMarks: true })), base, 'true は従来どおり');
+});
+
 test('【WP-E2・線種テーブル】emitOpenGapMarks: 床断面より下のアキXはdash:dashed', () => {
   const cut = makeCut({ baseFloorZ: 500 });
   const columns = [

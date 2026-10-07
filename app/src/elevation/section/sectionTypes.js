@@ -41,7 +41,12 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   anchorRoom?: object,
  *   face?: object,
  *   ends?: {openLo:boolean, openHi:boolean, wallLessLo:boolean, wallLessHi:boolean},
+ *   openGapMarks?: boolean,
  * }} SectionCut
+ *   openGapMarks（任意）… false のときその切断の面にアキのバツ・「ア キ」を標記しない
+ *   （`emitOpenGapMarks`が空配列を返す）。未指定・true は従来どおり標記する。折返し階段の
+ *   踊り場前縁の切断（seq1/seq3。`switchbackCuts.js`）が false（ユーザー指示2026-10-07
+ *   「踊場、回転部に『アキ』は不要」）。
  *   face（任意）… 面固有の値の供給元（展開図一般化Phase 8で「面を要求しない」よう`opts`へ
  *   降格した。`sectionContent.js`内で直読みするのは`layerRunWindowsOf`のみ。ほかに
  *   `sectionStructure.js:166`（半壁厚の許容。`cut.face`が無ければ0）・`:299`（`faceAxis`。

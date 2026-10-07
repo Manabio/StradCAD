@@ -22,10 +22,9 @@
  *   1   踊り場前縁（見返り・全幅）: 往路・復路の踏面梯子線を重ねる（踊り場より下の往路は破線）。
  *   2   W_out1（実際の壁面。上り口端〜踊り場前縁まで）: 往路の断面プロファイル＋踊り場区間の
  *       床・天井断面線＋往復間の壁（実在すれば）の断面。
- *   2.5 レーン境界（往路・復路の間の壁が実在する場合のみ）: 往路側からの断面。
  *   3   W_landing（全幅）: 踊り場の壁。階段の重ね描きなし。
  *   4   W_out2（seq2の鏡像構成）: 復路の断面プロファイル＋往復間の壁の断面。
- *   4.5 レーン境界 復路側（同上）。
+ *   （旧2.5/4.5＝レーン境界の面は、2/4と切断が同一のため2026-10-07に廃止）
  *   5   W_out2の残り区間: 復路の断面を反対側（踊り場が右端）から見た図。
  *
  * STRAIGHT/STRAIGHT_LANDINGのシーケンス（§6.2。straightCuts.js参照）:
@@ -43,11 +42,11 @@ import { buildCutContent, upperFloorCutWallEndsOf } from './section/sectionConte
 import { cutDrawRange, localXOf } from './section/sectionTypes.js';
 import { layerDirectlyAboveSelf, isRealRoom } from './section/sectionLayerStack.js';
 import {
-  emitLine, splitGapMarksByStair, dashHorizontalsBehindStair,
+  splitGapMarksByStair, dashHorizontalsBehindStair,
   joinToStairProfile,
 } from './section/sectionEmit.js';
 import {
-  stairPrimitivesForCut, stairWallGapZones, stairFaceOccluderRects, stairCutFloorProfile,
+  stairPrimitivesForCut, stairFaceOccluderRects, stairCutFloorProfile,
 } from './section/sectionStair.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
@@ -57,20 +56,12 @@ import {
   floorProfileFromSegments, mergeFloorProfiles, drawnFloorProfileZMax,
 } from './elevationFloorProfile.js';
 import {
-  ElevationLineRole, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM,
+  GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM,
 } from './elevationStyle.js';
 import { graphList } from '../graphReadScope.js';
 
 function flatFloorSegments(run, floorDeltaMm, chMm) {
   return [{ loX: 0, hiX: run, floorDeltaMm, chMm }];
-}
-
-// 往路（entry→landing）の勾配天井プロファイル。上り口側は1F天井（ceilLowAbs）、踊り場側は
-// 上階天井（ceilTopAbs）。かつてupperCeilCapped時は全区間ceilLowAbsで水平にする短絡が
-// あったが、ユーザー実機指摘2026-08（「2FL天井断面線は、3500左CLの外へ延長して終わる」）で
-// 廃止した（buildLaneFloorAndCeilingのコメント参照）。
-function outboundCeilingProfile(run, ceilLowAbs, ceilTopAbs) {
-  return [[0, ceilLowAbs], [run, ceilTopAbs]];
 }
 
 // ==== ユーザー実機フィードバック2026-08-23第3弾 項目A ====
@@ -244,21 +235,12 @@ function buildLaneFloorAndCeiling(
 // （「設置階FLは階段断面に出会ったらそこが終点」の一般化）。一般規則のレイキャスト
 // （probeColumn/emitColumns）は階段自体の占有形状を知らず、壁の見えがかりだけで塞ぎ判定する
 // ため、この重なりだけは切断定義の出力側で後処理として取り除く。
-// 実機フィードバック第3弾D: 「ささらの外側(壁側)〜壁」×「z=0〜1F天井(ceilLowAbs)」の矩形に
-// アキX（踊り場線=cut.baseFloorZで上下分割: 上=一点鎖線(center)・下=破線。emitOpenGapMarksと
-// 同じ様式）を明示的に生成する——stairWallGapZones（sectionStair.js）が返すゾーンは
-// 「階段の構造(stair.cells由来)が室の全幅まで届かない」帯で、通常のraycast(probeColumn)は
-// 壁・部屋の有無だけで判定するため自動検出できない（コーディネーター裁定）。
-// ceilLowAbs（1F天井。sectionStair.js側は知らない値のため、ここで受け取って合成する）。
 // 実機フィードバック第3弾F: 往復間の壁が2F腰壁（kneeDrop.knee指定）の場合、seq1では一般規則
-// （'cut'kind＝両端の縦線2本のみ・水平の上端線は無し）ではなく「上端水平線のみ・両端縦線なし」
-// の腰壁表現に差し替える。腰壁の上（上端〜2F天井）と横（腰壁の無い側＝隣接する既存のアキX）を
-// つないだL字アキに一点鎖線Xを1組で描く——既存のemitOpenGapMarks（連結成分のX化）と同じ
-// 「対角頂点を結ぶ」考え方を、post-hoc（content側で隣接する既存アキXを探して合成）で流用する
-// （ASSUMED: sectionStair.js/sectionEmit.js側の生のcolumns情報はcontentForCutの外へ出てこない
-// ため、生のbands同士の厳密な連結計算ではなく、既に生成済みの2Fアキ相当のX(dash:'center'・
-// z範囲がtopZ〜ceilTopAbsと重なるもの)をx方向の隣接で探して吸収する形にした）。
-export function kneeWallCapContent(content, cut, kneeDrop, floorHeight, ceilTopAbs) {
+// （'cut'kind＝両端の縦線2本のみ）の両端縦線を除く。
+// **アキのバツ（旧第3弾D「ささらの外側〜壁の空き」・第3弾Fの「腰壁の上＋横のL字アキ」の合成）は
+// 廃止**（ユーザー指示2026-10-07「踊場、回転部に『アキ』は不要」。踊り場前縁の切断seq1/seq3は
+// `cut.openGapMarks=false`でアキを標記しない。旧裁定2026-08〜09を撤回）。
+export function kneeWallCapContent(content, cut, kneeDrop, floorHeight) {
   if (!kneeDrop?.knee) return content;
   const topZ = floorHeight + kneeDrop.knee.topHeight;
 
@@ -267,68 +249,13 @@ export function kneeWallCapContent(content, cut, kneeDrop, floorHeight, ceilTopA
     p.type === 'line' && p.x1 === p.x2 &&
     Math.abs(Math.min(p.y1, p.y2) - (-topZ)) < GAP_EPS && Math.abs(Math.max(p.y1, p.y2) - (-floorHeight)) < GAP_EPS);
   if (wallEdges.length === 0) return content; // 該当する壁縁が無ければ何もしない（防御的）
-  const wallXs = [...new Set(wallEdges.map(p => p.x1))].sort((a, b) => a - b);
-  const wallLoX = wallXs[0], wallHiX = wallXs[wallXs.length - 1];
-  const rest = content.filter(p => !wallEdges.includes(p));
 
   // 天端のCUT水平線はここでは描かない: `emitColumns`の`cutWallTopEdges`が「見えている天井より
   // 下で終わる切断壁」の天端を壁ごとに1本描くようになったため（ユーザー実機指摘2026-08「6」D）。
   // ここでも描くと同じ線が2本になる（seq1の既存テスト「上端水平線が1本」で検出される）。
-  // 本関数に残る役割は「'cut'両端縦線の除去」と「腰壁の上＋横のL字アキの合成」の2つ。
-
-  // 腰壁の上(topZ〜ceilTopAbs)〜横（腰壁の無い側）のL字アキ: 既存のアキX（dash:'center'の
-  // 対角線ペア）のうちz範囲が[topZ,ceilTopAbs]と重なり、x範囲が壁の左右いずれかに隣接する
-  // ものを探し、壁の上のアキと合成して1組のXへ描き直す（無ければ壁の上だけで1組描く）。
-  const centerDiagonalPairs = groupDiagonalPairs(rest.filter(p =>
-    p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && p.dash === 'center'));
-  let mergedLoX = wallLoX, mergedHiX = wallHiX;
-  let mergedZLo = topZ, mergedZHi = ceilTopAbs;
-  const absorbed = [];
-  for (const pair of centerDiagonalPairs) {
-    const xs = pair.flatMap(p => [p.x1, p.x2]);
-    const ys = pair.flatMap(p => [p.y1, p.y2]);
-    const pLoX = Math.min(...xs), pHiX = Math.max(...xs);
-    const pZLo = -Math.max(...ys), pZHi = -Math.min(...ys);
-    const zOverlaps = pZLo < mergedZHi - GAP_EPS && pZHi > mergedZLo - GAP_EPS;
-    const xAdjacent = Math.abs(pHiX - mergedLoX) < GAP_EPS || Math.abs(pLoX - mergedHiX) < GAP_EPS;
-    if (zOverlaps && xAdjacent) {
-      mergedLoX = Math.min(mergedLoX, pLoX); mergedHiX = Math.max(mergedHiX, pHiX);
-      mergedZLo = Math.min(mergedZLo, pZLo); mergedZHi = Math.max(mergedZHi, pZHi);
-      absorbed.push(...pair);
-    }
-  }
-  const remaining = rest.filter(p => !absorbed.includes(p));
-  const xMark = [
-    emitLine(cut, mergedLoX, mergedZLo, mergedHiX, mergedZHi, ElevationLineRole.DETAIL, { dash: 'center' }),
-    emitLine(cut, mergedLoX, mergedZHi, mergedHiX, mergedZLo, ElevationLineRole.DETAIL, { dash: 'center' }),
-  ];
-  return [...remaining, ...xMark];
-}
-
-// dash:'center'の対角線配列を2本ずつ(X字1組)にまとめる（emitOpenGapMarksは常に2本1組で
-// 連続して積むため、単純に配列の並び順でペアリングする）。
-function groupDiagonalPairs(diagonals) {
-  const pairs = [];
-  for (let i = 0; i + 1 < diagonals.length; i += 2) pairs.push([diagonals[i], diagonals[i + 1]]);
-  return pairs;
-}
-
-function wallGapXMarks(cut, contribution, ceilLowAbs) {
-  const zones = stairWallGapZones(contribution, cut);
-  if (zones.length === 0) return [];
-  const baseFloorZ = cut.baseFloorZ ?? 0;
-  const prims = [];
-  for (const { loX, hiX } of zones) {
-    if (ceilLowAbs > baseFloorZ + GAP_EPS) {
-      prims.push(emitLine(cut, loX, baseFloorZ, hiX, ceilLowAbs, ElevationLineRole.DETAIL, { dash: 'center' }));
-      prims.push(emitLine(cut, loX, ceilLowAbs, hiX, baseFloorZ, ElevationLineRole.DETAIL, { dash: 'center' }));
-    }
-    if (baseFloorZ > GAP_EPS) {
-      prims.push(emitLine(cut, loX, 0, hiX, baseFloorZ, ElevationLineRole.DETAIL));
-      prims.push(emitLine(cut, loX, baseFloorZ, hiX, 0, ElevationLineRole.DETAIL));
-    }
-  }
-  return prims;
+  // 本関数に残る役割は「'cut'両端縦線の除去」だけ（腰壁の上＋横のL字アキの一点鎖線Xの合成は、
+  // 踊り場前縁の切断にアキを標記しない裁定〔2026-10-07〕で廃止した）。
+  return content.filter(p => !wallEdges.includes(p));
 }
 
 /**
@@ -468,6 +395,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 過小計上になりうるため、`stairOverhangOuter`（`localXOf`から直接出す絶対値。cutDrawRange
   // 自身と同じ基準）を別途用意する。
   const overhang = upperOverhangOf(pcut, columns);
+  // （seq1/seq3はアキを標記しない＝2026-10-07撤回。以下はseq2/4/5等アキが出る面の話）
   // アキのバツは、手前に階段が描かれる区間だけ破線へ落とす（ユーザー実機指摘2026-08「6」C
   // 「但し、階段に隠れる部分は破線」）。隠れる範囲はプリミティブからの逆算ではなくflight自身の
   // 見付け矩形（stairFaceOccluderRects）から求める。
@@ -642,11 +570,10 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // 「その切断が見ている面」との食い違いが再発する（ユーザー明示指示2026-08その11。seq2/seq4参照）。
   const {
     cuts, wEntry, wLanding, underFloorZ, hasRoomUnder,
-    ceilTopAbs, ceilLowAbs, contribution, kneeDrop,
+    ceilTopAbs, ceilLowAbs, kneeDrop,
   } = cutTable;
   const { landingLen } = cutTable.params;
   const floorHeight = opts.floorHeight;
-  const hasCut = seqNo => cuts.some(c => c.seqNo === seqNo);
   const cutOf = seqNo => cuts.find(c => c.seqNo === seqNo);
   // 壁のない端部の延長量（content側。図形側elevationFigure.jsのdrawnX0/drawnXRunと同じ値を使い、
   // 同じ端で線の長さを揃える）。倍率決定の1パス目は未指定＝既定の仮値（elevationStyle.js）。
@@ -712,13 +639,10 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     upperFloorCutEnds: fields1.upperFloorCutEnds,
     // 上階の床が実在する端だけ2FL線を許すgate（上部吹抜けを持つ部屋帯と共通。upperOverhangOf）。
     upperFloorEnds: fields1.upperFloorEnds,
-    // 実機フィードバック第3弾D: ささらの外側(壁側)〜壁の空きにアキXを足す（wallGapXMarks参照）。
-    // 実機フィードバック第3弾F: 往復間の壁が2F腰壁（kneeDrop.knee）なら両端縦線を上端水平線
-    // へ差し替え、腰壁の上＋横のL字アキに一点鎖線Xを合成する（kneeWallCapContent参照）。
-    content: [
-      ...kneeWallCapContent(fields1.content, cutOf('1'), kneeDrop, floorHeight, ceilTopAbs),
-      ...wallGapXMarks(cutOf('1'), contribution, ceilLowAbs),
-    ],
+    // 実機フィードバック第3弾F: 往復間の壁が2F腰壁（kneeDrop.knee）なら両端縦線を除く
+    // （kneeWallCapContent参照）。アキのバツは踊り場前縁（seq1/seq3）には出さない
+    // （ユーザー指示2026-10-07。旧「第3弾D」のささら外側のアキXも撤回）。
+    content: kneeWallCapContent(fields1.content, cutOf('1'), kneeDrop, floorHeight),
     skipBaseboard: true, skipWallLabel: true,
   });
 
@@ -766,18 +690,6 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     });
   }
 
-  // ---- 2.5: レーン境界 往路側（midWallがあれば） ----
-  if (hasCut('2.5')) {
-    const midOutFace = cutOf('2.5').face;
-    entries.push({
-      seqNo: '2.5', face: midOutFace,
-      floorSegments: flatFloorSegments(midOutFace.run, 0, ceilLowAbs),
-      ceilingProfile: outboundCeilingProfile(midOutFace.run, ceilLowAbs, ceilTopAbs),
-      ...contentFields(cutOf('2.5'), { ceilLowAbs, floorHeight }),
-      skipBaseboard: true, skipWallLabel: true,
-    });
-  }
-
   // ---- 3: W_landing（全幅。階段の重ね描きなし） ----
   const rawSegments3 = flatFloorSegments(wLanding.run, underFloorZ, ceilTopAbs - underFloorZ);
   const floorProfile3 = floorProfileFor(cutOf('3'), rawSegments3);
@@ -817,17 +729,6 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       floorProfile: floorProfile4,
       ceilingProfile: ceilingProfile4,
       ...contentFields(cutOf('4'), { ceilLowAbs, floorHeight }, floorProfile4),
-      skipBaseboard: true, skipWallLabel: true,
-    });
-  }
-
-  // ---- 4.5: レーン境界 復路側（あれば。踊り場が左端） ----
-  if (hasCut('4.5')) {
-    const midRetFace = cutOf('4.5').face;
-    entries.push({
-      seqNo: '4.5', face: midRetFace,
-      floorSegments: flatFloorSegments(midRetFace.run, underFloorZ, ceilTopAbs - underFloorZ),
-      ...contentFields(cutOf('4.5'), { ceilLowAbs, floorHeight }),
       skipBaseboard: true, skipWallLabel: true,
     });
   }
@@ -876,9 +777,9 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
 
 // 面の左右の端で「踊り場スラブが切れる」のはどちら側か。
 //   - 幅方向に横断する面（seq1=上り口・seq3=踊り場の壁）は面の全長で踊り場を横切る＝両端とも踊り場側。
-//   - 走行方向の面（seq2/2.5/5は上り口が左・踊り場が右、seq4/4.5はその鏡像）は片側だけ。
+//   - 走行方向の面（seq2/5は上り口が左・踊り場が右、seq4はその鏡像）は片側だけ。
 // 走行方向の面のもう一方の端（上り口側）は、壁の向こうの通常の部屋の断面（1F天井・2FL）が現れる。
-const LANDING_END_BY_SEQ = { '1': 'both', '2': 'right', '2.5': 'right', '3': 'both', '4': 'left', '4.5': 'left', '5': 'right' };
+const LANDING_END_BY_SEQ = { '1': 'both', '2': 'right', '3': 'both', '4': 'left', '5': 'right' };
 
 /**
  * 階段帯の高さ寸法（CH寸法）の鎖を面ごと・左右の端ごとに決める（ユーザー明示指示2026-08その12）。

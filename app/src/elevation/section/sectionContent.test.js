@@ -8,7 +8,8 @@ import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { roomBounds } from '../../finish/gridCells.js';
 import { composeRoomFaces } from '../elevationFaceList.js';
 import { buildBandLayers } from './sectionBandLayers.js';
-import { buildSectionFromLine, clipInsideSlabSolids } from './sectionContent.js';
+import { buildSectionFromLine, buildCutContent, clipInsideSlabSolids } from './sectionContent.js';
+import { makeProbeContext } from './sectionProbe.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './sectionCutPlane.js';
 import { wallLessEndAt } from '../elevationFaces.js';
 
@@ -69,6 +70,20 @@ test('【失敗系・Phase 8】buildSectionFromLine: layers=[]（候補ゼロ）
   assert.equal(columns[0].bands[0].kind, 'open', '候補が無い＝床から天井まで全域アキのはず');
   assert.ok(Array.isArray(content), 'contentは常に配列で返る（例外を投げない）');
   assert.ok(content.some(p => p.type === 'text'), '全域アキなのでアキ標記(text)が出るはず');
+});
+
+test('【2026-10-07】buildCutContent: cut.openGapMarks===false は探査延長を載せた後のcutにも残り、全域アキでもアキ標記が出ない（未指定は出る）', () => {
+  const mk = extra => ({
+    seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 4000 },
+    layers: [], viewSign: 1, dirSign: 1, zRange: { loZ: 0, hiZ: CH }, baseFloorZ: 0, ...extra,
+  });
+  const run = extra => buildCutContent(mk(extra), makeProbeContext([]), { endExtendMm: 0 });
+  const base = run({});
+  assert.ok(base.gapMarks.some(p => p.type === 'text') && base.gapMarks.some(p => p.type === 'line'), '前提: 未指定なら全域アキにバツと「ア キ」が出る');
+  const off = run({ openGapMarks: false });
+  assert.equal(off.cut.openGapMarks, false, 'withProbeExtensionの後のcutにも属性が残る');
+  assert.deepEqual(off.gapMarks, []);
+  assert.equal(off.content.some(p => p.type === 'text'), false);
 });
 
 test('【失敗系・Phase 8】buildSectionFromLine: zRangeが退化(loZ===hiZ)でも例外を投げずcontentが空で返る', () => {

@@ -9,7 +9,7 @@
  * `switchbackCuts(stair, graph, opts)`（faces引数なし）に対し、本ファイルは`faces`
  * （composeRoomFaces結果）を第2引数として要求する——往路・復路間の壁（2F=upperGraphの
  * レーン境界CL壁）の実壁検出・face記述子（wEntry/wLanding/wOut1/wOut2/midOutFace/
- * midRetFace/outFace5）自体は、既存 elevationStairSequence.js の classifyFaces/findMidWall
+ * outFace5）自体は、既存 elevationStairSequence.js の classifyFaces/findMidWall
  * （実壁面へ隅スナップ済みのcomposeRoomFaces結果に基づく、実機で検証済みのロジック）から
  * 移設してそのまま再利用する形にした（sectionFace.js のfaceFromCutへの一般化は見送り）。
  * cut.line/viewSign/dirSignだけをW(t,s)から独立に再導出し、facesはcuts配列の`face`
@@ -319,7 +319,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // ではなく、階段自身の歩行方向（幅方向=往路(s=0)→復路(s=1)、走行方向=上り口(t=0)→踊り場(t=tRun)）
   // が「ローカルx昇順」になるよう独立に導出する（reorientFace参照。ファイル冒頭の役割コメントも
   // 参照）。widthDirSign: seq1/seq3（幅方向の全幅線）用——s=0側(往路)がlocalX=0(左)になる向き。
-  // seq2DirSign: seq2/2.5（走行方向の全長線）用——t=0側(上り口)がlocalX=0(左)になる向き。
+  // seq2DirSign: seq2（走行方向の全長線）用——t=0側(上り口)がlocalX=0(左)になる向き。
   const widthDirSign = Math.sign(acrossCoordAt(1) - acrossCoordAt(0)) || 1;
   const seq2DirSign = Math.sign(travelCoordAt(tRun) - travelCoordAt(0)) || 1;
   const seq4DirSign = -seq2DirSign; // seq4はseq2の鏡像（踊り場が左・上り口が右）
@@ -373,7 +373,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const seq1ViewSign = Math.sign(travelCoordAt(0) - tRunTravel) || 1; // 上り口向き(-t方向)
   const seq3ViewSign = Math.sign(travelCoordAt(1) - tRunTravel) || 1; // 踊り場奥向き(+t方向)
 
-  // ---- seq2/2.5/4/4.5: 往路レーン中央 W(0,0.25→1,0.25)（走行方向の全長線。ユーザー実機
+  // ---- seq2/4: 往路レーン中央 W(0,0.25→1,0.25)（走行方向の全長線。ユーザー実機
   // フィードバック2026-08-23で「レーン境界（100mmあき内）で切って往路側壁を見る」から
   // 「往路レーンの中を切って復路側／往路外側を見る」へ修正。切断線が往路Flightの中を通るため、
   // isLengthwiseCutが従来どおり成立し（flight.acrossLo/acrossHi内）、第3層はFlightを縦断する
@@ -392,21 +392,19 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // が見えがかり候補——「s=1側が見える」viewSignは、line位置に関わらずwidthDirSignと同符号になる
   // （0.25→1・0.5→1・0.75→1のいずれも同じ向き。s<1の基準点なら常に成り立つ幾何）。
   // towardS0はその逆符号（s=0側=往路外側の壁が見える向き）。
-  const towardS1 = widthDirSign;   // 復路側(s=1向き)を見る（seq2/2.5・seq5）
-  const towardS0 = -widthDirSign;  // 往路外側(s=0向き)を見る（seq4/4.5）
+  const towardS1 = widthDirSign;   // 復路側(s=1向き)を見る（seq2・seq5）
+  const towardS0 = -widthDirSign;  // 往路外側(s=0向き)を見る（seq4）
 
   // 階段第3層（stairContribution）は各cutで該当するレーンのみを渡す——outboundLaneLineは
-  // seq2/2.5/4/4.5が共有するため（同じ切断線をtowardS1/towardS0の逆向きから見る）、
+  // seq2/4が共有するため（同じ切断線をtowardS1/towardS0の逆向きから見る）、
   // どちらのレーンを描くかは切断線の幾何だけでは自明でも、視線前方に来る「他レーン」の判定
   // （見えがかりのささら等）は別途必要——切断定義表（本ファイル）が「どちらの歩行順シーケンスか」を
   // 知っている唯一の場所であるため、ここでレーンを明示的に選ぶ（WP-E5bリスク3の対応。
   // 2026-08-23実機修正でも維持）。
   const outboundFlight = contribution?.flights?.[0] ?? null;
   const inboundFlight = contribution?.flights?.[1] ?? null;
-  const outboundOnly = outboundFlight ? { flights: [outboundFlight], landings: [], structure: contribution.structure, unit: contribution.unit } : null;
   const outboundWithLanding = outboundFlight
     ? { flights: [outboundFlight], landings: contribution.landings, structure: contribution.structure, unit: contribution.unit } : null;
-  const inboundOnly = inboundFlight ? { flights: [inboundFlight], landings: [], structure: contribution.structure, unit: contribution.unit } : null;
   // seq3（踊り場の壁。W_landing）用: 踊り場だけを渡す。旧実装は§6.1表の「階段寄与: なし」を
   // そのままstairCut:nullにしていたが、ユーザー実機指摘2026-08「6」A「踊り場断面線、その左右壁
   // との取り合いに（折返し階段外回りの）ささら断面、上下にささらの見えがかり（横線2本）」——
@@ -420,15 +418,13 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const inboundWithLanding = inboundFlight
     ? { flights: [inboundFlight], landings: contribution.landings, structure: contribution.structure, unit: contribution.unit }
     : null;
-  // （旧コメント）QA修正でseq4がoutboundWithLandingを使うようになったため
-  // 未使用——seq2.5/4.5/5はoutboundOnly/inboundOnlyのみ使う（踊り場は各々のフルフェイス側
-  // （seq2/seq4）だけが持てば十分なため）。
+  // 旧seq2.5/4.5（往路・復路を分けて描く面）は、seq2/4と切断線・視線・向き・層・z範囲が同一で
+  // 違いが無いため2026-10-07に廃止した（ユーザー指示「差異がなければ、一本で」）。
   // WP-2026-08-23実機フィードバック「往路と復路の間に壁が無ければ復路直進部のささらが見える」
   // 対応: seq2のみ、視線前方（towardS1）にある復路(inbound)をsecondaryFlightsとして渡す
   // （sectionStair.jsのstairPrimitivesForCutが壁の有無をcolumns経由で判定し、無ければ
-  // 近い側のささらだけを見えがかりで描く）。seq2.5は壁が実在するときだけ生成される
-  // （if(wall)ブロック）ため、secondaryFlightsを渡しても壁自体がisBlockedByWallで検出され
-  // 常に非表示になる——付与しても実害は無いが、意味が無いため付与しない（seq2のみに限定）。
+  // 近い側のささらだけを見えがかりで描く）。壁が実在すれば壁自体がisBlockedByWallで検出され
+  // 常に非表示になる。seq4（towardS0）には復路が視線の背後なので付与しない（seq2のみに限定）。
   const outboundWithLandingSeq2 = outboundWithLanding && inboundFlight
     ? { ...outboundWithLanding, secondaryFlights: [inboundFlight] } : outboundWithLanding;
 
@@ -446,13 +442,11 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     letter: letterOf(wOut1.isVertical, wOut2.inward),
     hasRealWall: !!wall, kind: 'stairMid',
   } : null;
-  const midOutFlightFace = wall
-    ? reorientFace(buildMidWallFace(wall, wOut2.inward, entryWorld, landingStartWorld, faces), seq2DirSign)
-    : null;
 
   const cuts = [
     {
       seqNo: '1', face: wEntry, line: seq13Line, viewSign: seq1ViewSign, dirSign: wEntry.dirSign,
+      openGapMarks: false, // 踊り場前縁・回転部にアキは標記しない（ユーザー指示2026-10-07）
       layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, chDimSplitAbsYs: [floorHeight],
       stairCut: contribution, // 往路・復路とも正面梯子として重なるため両方渡す（§6.1「往路=正面梯子(下)／復路=正面梯子(上)」）
     },
@@ -470,14 +464,9 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       layers, zRange: zRangeUpper, baseFloorZ: 0, stairCut: outboundWithLandingSeq2,
     },
   ];
-  if (wall) {
-    cuts.push({
-      seqNo: '2.5', face: midOutFlightFace, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
-      layers, zRange: zRangeUpper, baseFloorZ: 0, stairCut: outboundOnly,
-    });
-  }
   cuts.push({
     seqNo: '3', face: wLanding, line: seq3Line, viewSign: seq3ViewSign, dirSign: wLanding.dirSign,
+    openGapMarks: false, // 同上（踊り場の壁を見る面にもアキは標記しない）
     // §6.1表「階段寄与: なし」＝段の重ね描きなし。踊り場の断面・桁枠は描く（landingOnly参照）。
     layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: landingOnly,
   });
@@ -492,13 +481,6 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     seqNo: '4', face: reorientFace(wOut1, seq4DirSign), line: outboundLaneLine, viewSign: towardS0, dirSign: seq4DirSign,
     layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: outboundWithLanding,
   });
-  if (wall) {
-    const midRetFace = reorientFace(buildMidWallFace(wall, wOut1.inward, landingStartWorld, entryWorld, faces), seq4DirSign);
-    cuts.push({
-      seqNo: '4.5', face: midRetFace, line: outboundLaneLine, viewSign: towardS0, dirSign: seq4DirSign,
-      layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundOnly,
-    });
-  }
   {
     // ==== ユーザー実機指摘2026-08「6」D2（面の取り違え）====
     // seq5は「復路レーンの中を切って9時方向＝復路が接している外側の壁（wOut2）を見る」面。
@@ -507,7 +489,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     // 入らず「Y2が3500の右」「踊場断面は図の右側・階段断面は左側」という構図にならなかった。
     // 面は**wOut2の全長**（踊り場ぶんを含む）を使い、向きはseq2側（踊り場が右・上り口が左）に
     // 揃える——ユーザー指定「踊場断面は図の右側、階段断面は左側に現れる」。
-    // stairCutも復路だけ（inboundOnly）では踊り場の断面が出ないため、踊り場を含めて渡す。
+    // stairCutも復路だけでは踊り場の断面が出ないため、踊り場を含めて渡す。
     const retFace5 = reorientFace(wOut2, seq2DirSign);
     cuts.push({
       seqNo: '5', face: retFace5, line: inboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,

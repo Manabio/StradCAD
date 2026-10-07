@@ -194,7 +194,7 @@ export function straightCuts(stair, faces, graph, opts = {}) {
   if (hasLanding) {
     // 踊り場壁（seq3。§6.2「STRAIGHT_LANDINGはseq[1,2,3(踊り場壁),4,5]」）: 実壁が見つかった
     // 場合のみ挿入する（多くの実際の踊り場は単なる平坦部で壁を持たないため。switchbackCutsの
-    // seq2.5/4.5と同じ「wallがあれば挿入」パターン）。見つからなければ3項目のまま
+    // 旧switchbackのseq2.5/4.5（廃止）と同じ「wallがあれば挿入」パターン）。見つからなければ3項目のまま
     // （視線は折り返さないため全て同方向＝seq4/5のdirSignはseq2と同一のまま変わらない）。
     const wallGraph = opts.upperGraph ?? graph; // 往復間の壁と同じ探索対象層規約（switchbackCuts.js参照）
     const landingWall = findLandingWall(wallGraph, wEntry, landingWorld, acrossLo, acrossHi);

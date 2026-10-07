@@ -88,13 +88,13 @@ test('【WP-E5】switchbackCuts: 往復間の壁が無ければcuts=[1,2,3,4,5]'
   assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
 });
 
-test('【WP-E5】switchbackCuts: 往復間の壁があればcuts=[1,2,2.5,3,4,4.5,5]', () => {
+test('【WP-E5】switchbackCuts: 往復間の壁があってもcuts=[1,2,3,4,5]（旧2.5/4.5は2026-10-07に廃止）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
   const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result);
-  assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5']);
+  assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
 });
 
 test('【WP-E5】switchbackCuts: 各cutのbaseFloorZ/zRangeが§6.1表どおり', () => {
@@ -111,7 +111,7 @@ test('【WP-E5】switchbackCuts: 各cutのbaseFloorZ/zRangeが§6.1表どおり'
   for (const c of result.cuts) assert.equal(c.zRange.hiZ, OPTS.chUpperAbsMm);
 });
 
-test('【WP-E5】switchbackCuts: upperGraph経由でmidWallが検出されればcuts=2.5/4.5を含む', () => {
+test('【WP-E5】switchbackCuts: upperGraph経由でmidWallが検出されてもcutは増えず、seq2のfaceがhasRealWall=true・axisCL=wall.axisCL', () => {
   const graph = makeGraph('p1');
   const upperGraph = makeGraph('p2');
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph });
@@ -119,7 +119,33 @@ test('【WP-E5】switchbackCuts: upperGraph経由でmidWallが検出されれば
   const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] });
   const result = switchbackCuts(stair, faces, graph, { ...OPTS, upperGraph, layers });
   assert.ok(result.wall, 'upperGraph.walls経由でmidWallが見つかるはず');
-  assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5']);
+  assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
+  const seq2 = result.cuts.find(c => c.seqNo === '2');
+  assert.equal(seq2.face.hasRealWall, true);
+  assert.equal(seq2.face.axisCL, result.wall.axisCL);
+});
+
+test('【WP-E5】switchbackCuts: 往復間の壁が無ければseq2のfaceはhasRealWall=false（cutは5本）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.equal(result.wall, null);
+  assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
+  assert.equal(result.cuts.find(c => c.seqNo === '2').face.hasRealWall, false);
+});
+
+test('【2026-10-07 アキ不要】switchbackCuts: seq1/seq3 は openGapMarks===false・seq2/4/5 は未指定（アキは従来どおり）', () => {
+  for (const withMidWall of [false, true]) {
+    const graph = makeGraph();
+    const { room, stair } = makeSwitchbackFixture(graph, { withMidWall });
+    const faces = composeRoomFaces(room, graph);
+    const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+    const byNo = Object.fromEntries(result.cuts.map(c => [c.seqNo, c]));
+    assert.equal(byNo['1'].openGapMarks, false);
+    assert.equal(byNo['3'].openGapMarks, false);
+    for (const n of ['2', '4', '5']) assert.equal(byNo[n].openGapMarks, undefined, `seq${n}は標記する側のまま`);
+  }
 });
 
 test('【WP-E5】switchbackCuts: 腰壁指定はkneeDropが解決される', () => {
@@ -281,8 +307,8 @@ test('【失敗系・QA修正・実機フィードバック】switchbackCuts: se
 });
 
 // ==== ユーザー実機フィードバック2026-08-23: 切断線の位置・視線方向の再定義 ====
-test('【ユーザー実機フィードバック2026-08-23】switchbackCuts: seq2/2.5/4/4.5の切断線は往路レーン中央(acrossCoordAt(0.25)=500)を共有し、' +
-  'seq2/2.5はtowardS1(復路向き=+1)・seq4/4.5はtowardS0(往路外側向き=-1)になる', () => {
+test('【ユーザー実機フィードバック2026-08-23】switchbackCuts: seq2/4の切断線は往路レーン中央(acrossCoordAt(0.25)=500)を共有し、' +
+  'seq2はtowardS1(復路向き=+1)・seq4はtowardS0(往路外側向き=-1)になる', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
@@ -291,15 +317,13 @@ test('【ユーザー実機フィードバック2026-08-23】switchbackCuts: seq
 
   // フィクスチャ: x0=0,xm=1000,x1=2000（vertical CL）・upDirection='up'・flip=false
   // → 走行軸vertical・幅方向acrossLo=0/acrossHi=2000・往路レーン中央=0.25*2000=500。
-  for (const seqNo of ['2', '2.5', '4', '4.5']) {
+  for (const seqNo of ['2', '4']) {
     assert.equal(bySeq[seqNo].line.axisValue, 500,
       `${seqNo}の切断線は往路レーン中央(x=500)のはず（実際:${bySeq[seqNo].line.axisValue}）`);
     assert.equal(bySeq[seqNo].line.isVertical, true, `${seqNo}の切断線は縦（走行軸と同じ向き）のはず`);
   }
   assert.equal(bySeq['2'].viewSign, 1, 'seq2は復路側(towardS1=+1)を見るはず');
-  assert.equal(bySeq['2.5'].viewSign, 1, 'seq2.5もseq2と同じ向き(towardS1=+1)を見るはず（同じ切断線）');
   assert.equal(bySeq['4'].viewSign, -1, 'seq4は往路外側(towardS0=-1)を見るはず');
-  assert.equal(bySeq['4.5'].viewSign, -1, 'seq4.5もseq4と同じ向き(towardS0=-1)を見るはず（同じ切断線）');
   // seq5は復路レーン中央(0.75*2000=1500)。
   assert.equal(bySeq['5'].line.axisValue, 1500, 'seq5の切断線は復路レーン中央(x=1500)のはず');
   assert.equal(bySeq['5'].viewSign, 1, 'seq5はtowardS1(+1)を見るはず（現行の向きを踏襲）');
@@ -315,7 +339,7 @@ test('【ユーザー実機フィードバック2026-08-23・不具合1修正】
   const bySeq = Object.fromEntries(table.cuts.map(c => [c.seqNo, c]));
 
   assert.ok(table.contribution.unit, '前提: contribution.unitが存在するはず');
-  for (const seqNo of ['2', '2.5', '4', '4.5', '5']) {
+  for (const seqNo of ['2', '4', '5']) {
     assert.equal(bySeq[seqNo].stairCut.unit, table.contribution.unit,
       `${seqNo}のstairCut.unitはcontribution.unitと同一オブジェクトのはず`);
   }

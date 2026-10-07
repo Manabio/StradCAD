@@ -131,6 +131,12 @@
 体裁だけが漏れており、1階の天井線は延びるのに2階の天井線がCLで止まっていた。延ばすのは
 **面の端に一致する側だけ**で、区間の内側の境界（吹抜けとの境目）は動かさない。
 
+**踊り場前縁の切断（折返し階段の seq1・seq3）はアキを標記しない**（ユーザー指示2026-10-07「踊場、回転部に『アキ』は不要」。
+`switchbackCuts.js`が seq1/seq3 に `openGapMarks: false` を付け、`emitOpenGapMarks`が空配列を返す。
+`SectionCut.openGapMarks`は任意で、未指定・true は従来どおり標記する。階段の他の面〔seq2/4/5〕と通常の面は不変）。
+下記・後述の「6」C のバツに関する旧裁定（2026-08/09。13.stq「6」C にバツを求めたもの）のうち、階段の
+seq1/seq3 の面に関するものは**この指示で撤回**した（一般規則としては他の面で有効）。
+
 **アキ（バツ・「ア キ」）は、面を横切る切断壁の天端の上の空気を含めない**（`sectionEmit.js`の
 `emitOpenGapMarks`。ユーザー実機指摘2026-08「「5」D1: 2階のバツが、Y1から2000CL側、開口端部を
 正しく拾っていない」）——アキは**その面の平面に壁が無い範囲**の標記で、直交する壁を越えた先の
@@ -841,8 +847,8 @@ seq2の切断は**往路レーンの中**を通るため、視線の手前には
 面の左右の端ごとに断面プロファイルが決まる——**踊り場スラブが切れる端**は`[1FL→踊り場][踊り場→上階天井]`
 （階段下に部屋があるときは踊り場より下が別室で帯の床が踊り場になるため`[踊り場→2FL][2FL→2F天井]`）、
 **切れない端**は壁の向こうの通常断面`[1FL→1F天井][2FL→2F天井]`。踊り場側がどちらの端かは
-歩行順で決まる（幅方向に横断するseq1/seq3は両端とも踊り場側、走行方向のseq2/2.5/5は右端・
-seq4/4.5は左端＝seq2の鏡像）。実機「6」ではC左・D1左・D1右・B右・D2右の5箇所×2本＝10本になる。
+歩行順で決まる（幅方向に横断するseq1/seq3は両端とも踊り場側、走行方向のseq2/5は右端・
+seq4は左端＝seq2の鏡像）。実機「6」ではC左・D1左・D1右・B右・D2右の5箇所×2本＝10本になる。
 
 判断は`elevationStairSequence.js`の`stairChDimChains`が**一括で持つ**（面の床・天井の継ぎ目だけでは
 決まらない——踊り場スラブ・壁の向こうの部屋の断面が要るため、帯レイアウト側では判定できない）。
@@ -971,13 +977,15 @@ seq4/4.5は左端＝seq2の鏡像）。実機「6」ではC左・D1左・D1右�
   **床の輪郭`stairCutFloorProfile`は歩行面のまま**（`computeFlightProfile`の`surfaceOnly`。
   下面の切欠きを床線・遮蔽に混ぜない）。梯子（正面視）・ささら（鉄骨）は不変。
 
-**切断線の位置（ユーザー実機フィードバック2026-08-23で全面訂正）**: SWITCHBACKのseq2/2.5/4/4.5の
+**切断線の位置（ユーザー実機フィードバック2026-08-23で全面訂正）**: SWITCHBACKのseq2/4の
 切断線は「往復間のレーン境界（100mmあきの中）」ではなく**往路レーンの中央**（`acrossCoordAt(0.25)`）、
 seq5は**復路レーンの中央**（`acrossCoordAt(0.75)`）——実機で「往路と復路の間に壁が無ければ復路直進部の
 ささらが見える」ため、切断線はレーンの中を通り視線はもう一方のレーン側へ向く、という指摘に基づく
-（`switchbackCuts.js`の`outboundLaneLine`/`inboundLaneLine`・`towardS1`/`towardS0`）。seq2/2.5は
-視線が復路側（`towardS1`）、seq4/4.5は視線が往路の外側（`towardS0`）——4つとも同じ`outboundLaneLine`を
-共有し向きだけが逆になる。この結果、往復間の壁（実在すれば）は「切断線と同一直線上＝cutAlong」では
+（`switchbackCuts.js`の`outboundLaneLine`/`inboundLaneLine`・`towardS1`/`towardS0`）。seq2は
+視線が復路側（`towardS1`）、seq4は視線が往路の外側（`towardS0`）——2つとも同じ`outboundLaneLine`を
+共有し向きだけが逆になる。**B/Dは各1本**（ユーザー指示2026-10-07「B1とB2：切断面の違いは？差異がなければ、一本で」。
+旧seq2.5/4.5＝往路だけ／復路だけを描く面は、seq2/4と切断線・視線・向き・層・z範囲がすべて同一で
+同じ切断の重複だったため廃止。往復間の壁は`seq2.face.hasRealWall`・`axisCL`で表す）。この結果、往復間の壁（実在すれば）は「切断線と同一直線上＝cutAlong」では
 なく通常の見えがかり壁（`wall`。距離のある側面。SILHOUETTE=中線）として検出されるようになった
 （旧仕様はcutAlongの3線輪郭＝CUT太線だった。腰壁のz範囲キャップ自体はcutAlong/wall共通のため維持）。
 
@@ -1210,7 +1218,8 @@ hだけ上へそのまま平行移動した連続ポリラインとして描く�
   経由しないため元から降格対象外）。**降格が残るのは踏面梯子（正面視。`flightLadderPrimitives`が
   `flight.baseZ<cut.baseFloorZ`のとき明示的にdash指定）と壁断面の見えがかり（一般規則の
   'wall'/'cut'/'cutAlong'。sectionEmit.js）だけ**、という裁定。
-- **D: ささらの外側(壁側)〜壁の空きにアキX**。`stairWallGapZones`（sectionStair.js。新規export）が、
+- **D: ささらの外側(壁側)〜壁の空きにアキX（2026-10-07 撤回。seq1 に出さない。`elevationStairSequence.js`の`wallGapXMarks`は削除。
+  `stairWallGapZones`は残置・未使用＝整理候補）**。（以下は撤回前の記録）`stairWallGapZones`（sectionStair.js。新規export）が、
   crossesFlightする各flightについて、ladderAcross（LANE_GAP調整済み。isSteel=falseはflight自身の
   境界をそのまま使う）の「室の真の外縁trueAcrossLo/Hiに一致する側」だけをcut.line.lo/hi（壁）と
   比較し、`WALL_GAP_MIN_MM`（=150。ASSUMED既定値）を明確に上回る差があれば空き区間を返す
@@ -1228,7 +1237,7 @@ hだけ上へそのまま平行移動した連続ポリラインとして描く�
   DETAIL+dashedになる（neverDowngrade指定は不要）。STEEL限定。seq1では往路(outbound.baseZ=0)は
   該当・復路(inbound.baseZ=landingAbs=cut.baseFloorZ)は非該当になり、「往路梯子限定」という
   実機指示をこの条件だけで自然に満たす。
-- **F: 2F腰壁（往復間の壁がkneeDrop.knee指定）はseq1で上端水平線のみ・両端縦線なし**。
+- **F: 2F腰壁（往復間の壁がkneeDrop.knee指定）はseq1で上端水平線のみ・両端縦線なし（L字アキXの合成は2026-10-07 撤回。縦線の除去だけが残る）**。（以下の L字アキ合成の説明は撤回前の記録）
   一般規則（'cut'kind＝両端の縦線2本のみ描く。水平の上端線は無し）を、seq1に限り
   `kneeWallCapContent`（elevationStairSequence.js。post-hocでcontentを書き換える）が専用表現へ
   差し替える: z=floorHeight〜floorHeight+topHeightちょうどの縦線2本（'cut'kindの両端縁）を検出・
@@ -1966,7 +1975,7 @@ LANE_GAPを片側だけ詰めるのと同じ基準（単一情報源）。**内�
 
 **見えがかり壁の探索は帯自身の部屋の広がりまで**（`sectionProbe.js`の`withinViewRoom`。`cut.bandRoom`の
 `roomBounds`包絡矩形に壁の手前側の面が入るか）。範囲外の壁は候補から落ち、その区間は`open`帯になるので
-`emitOpenGapMarks`がアキ（一点鎖線のバツ）を描く。実機症状「6」C: 1F部分(z0..2400)が6m先の別室の壁(d6000)を
+`emitOpenGapMarks`がアキ（一点鎖線のバツ）を描く（階段の seq1/seq3 は2026-10-07以降描かない）。実機症状「6」C: 1F部分(z0..2400)が6m先の別室の壁(d6000)を
 拾って見えがかり壁になり、ユーザー指摘の「3500の面を表す…四角にアキ・バツ」が出ていなかった。
 *却下した判定2つ*: ①壁の手前の1点プローブで所有Roomが同一か→階段室から「階段下」室を見通すのは正常なので
 全て消え、確認済みテストが落ちた。②視線方向の所有Roomの矩形→列ごとに部屋が入れ替わり狭い方で切ってしまう。

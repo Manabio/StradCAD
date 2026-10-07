@@ -220,7 +220,7 @@ Web Locks APIで1タブだけを編集セッションの持ち主にする排他
 
 ## 階段帯の面シーケンス（展開図）
 階段部屋の展開図を、A/B/C/Dの部屋一周順ではなく「階段を上っていく順番」で並べたもの
-（`elevation/elevationStairSequence.js`の`stairFaceSequence`。SWITCHBACK=1〜5(+2.5/4.5)、
+（`elevation/elevationStairSequence.js`の`stairFaceSequence`。SWITCHBACK=1〜5、
 STRAIGHT/STRAIGHT_LANDING=1〜4(+踊り場壁)。中身は下記「2.5D断面エンジン」が組み立てる。
 WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバック）。設計意図は
 `.claude/elevation-model.md`「階をまたぐ2層帯」節。

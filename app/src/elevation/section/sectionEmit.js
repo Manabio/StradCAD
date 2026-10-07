@@ -1156,10 +1156,15 @@ export function joinToStairProfile(wallContent, stairContent, cut, ref) {
  * 1組ずつXを描く。
  * @param {import('./sectionTypes.js').SectionColumn[]} columns
  * @param {import('./sectionTypes.js').SectionCut} cut
+ * `cut.openGapMarks === false` の切断は標記しない（空配列。ユーザー指示2026-10-07「踊場、回転部に
+ * 『アキ』は不要」——折返し階段の踊り場前縁の切断 seq1/seq3。階段の他の面・通常の面は従来どおり）。
+ * これに伴い、以下の「6」C のバツに関する旧裁定（2026-08/09）のうち**階段の seq1/seq3 の面**に
+ * 関するものは撤回済み（一般規則としては他の面で有効）。
  * @param {{ceilZ?:number}} [emitCtx]
  * @returns {object[]}
  */
 export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
+  if (cut?.openGapMarks === false) return [];
   const ceilZ = emitCtx.ceilZ;
   // **床断面の延長端（壁のない端部のはね出し）にはアキを描かない**（ユーザー明示指示2026-08
   // 「床断面延長端に『アキ・バツ』は描画不要」）——延長は「線を図の外へ延ばす」ために探査範囲を

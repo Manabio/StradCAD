@@ -9,7 +9,7 @@ import { composeRoomFaces } from './elevationFaceList.js';
 import { letterOf } from './elevationFaces.js';
 import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf } from './elevationStairSequence.js';
 import { localXOf } from './section/sectionTypes.js';
-import { switchbackCuts } from './section/cuts/switchbackCuts.js';
+import { switchbackCuts, buildMidWallFace } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { buildStairBand } from './elevationStair.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
@@ -17,6 +17,8 @@ import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { drawnFloorProfileZAt } from './elevationFloorProfile.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
+import { buildCutContent } from './section/sectionContent.js';
+import { makeProbeContext } from './section/sectionProbe.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -118,41 +120,60 @@ test('stairFaceSequence: 往路・復路の間に壁が無ければ seqNo は [1
   assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5']);
 });
 
-// ---- midWallがあれば ['1','2','2.5','3','4','4.5','5'] ----
-test('stairFaceSequence: 往路・復路の間に実壁があれば seqNo は [1,2,2.5,3,4,4.5,5]', () => {
+// ---- midWallがあっても ['1','2','3','4','5']（旧2.5/4.5は2026-10-07に廃止。seq2/4と切断が同一） ----
+test('stairFaceSequence: 往路・復路の間に実壁があっても seqNo は [1,2,3,4,5]（2.5/4.5は出ない）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
 
   const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(entries);
-  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5']);
+  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5']);
+  assert.equal(entries.find(e => e.seqNo === '2').face.hasRealWall, true);
 });
 
-// ---- リード裁定バグ修正: buildMidWallFaceがloWorld/hiWorldを未ソートでlo/hiに詰めていたため、
-// travelSign<0のfixture（このmakeSwitchbackFixtureの構成。entryWorld>landingStartWorld）で
-// seq2.5/4.5のface.runが負値になっていた。elevationFaceList.jsの断片化レシピと同じ
-// Math.min/max正規化で修正——run>0、かつ幅が上り口端〜踊り場前縁の実距離に一致することを固定する ----
-test('【mutation証跡用】stairFaceSequence: travelSign<0のfixtureでもseq2.5/4.5のface.runは正で、上り口端〜踊り場前縁の実距離に近い', () => {
+// ---- 失敗系: 壁が無ければseq2のfaceはhasRealWall=false（5面のまま） ----
+test('【失敗系】stairFaceSequence: 往復間の壁が無ければ seq2 の face.hasRealWall は false で5面', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.equal(entries.length, 5);
+  assert.equal(entries.find(e => e.seqNo === '2').face.hasRealWall, false);
+});
+
+// ---- 同じ展開記号の面が2面以上のときだけ番号が付き、1面だけなら付かない（2026-10-07） ----
+test('stairFaceSequence: 同じ記号の面が複数なら番号つき・1面だけなら番号なし（seq4の記号に数字が無い）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
 
   const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
-  const seq2 = entries.find(e => e.seqNo === '2');
-  const seq25 = entries.find(e => e.seqNo === '2.5');
-  const seq45 = entries.find(e => e.seqNo === '4.5');
-  assert.ok(seq25 && seq45, 'wall実在時はseq2.5/4.5が存在するはず');
+  const labels = entries.map(e => e.face.label);
+  for (const l of labels) {
+    const letter = l.replace(/\d+$/, '');
+    const same = labels.filter(x => x.replace(/\d+$/, '') === letter);
+    if (same.length === 1) assert.equal(l, letter, `単独の記号${l}に番号が付いている`);
+    else assert.match(l, /\d+$/, `複数ある記号${l}に番号が無い`);
+  }
+  assert.doesNotMatch(entries.find(e => e.seqNo === '4').face.label, /\d/);
+});
 
-  // seq2（wOut1本体。composeRoomFacesから直接得た実際の壁面）のlaneLenOnFace
-  // （上り口端〜踊り場前縁の実距離）を、buildMidWallFace経由のseq2.5/4.5と独立に突き合わせる。
-  const expectedWidth = seq2.floorSegments[0].hiX;
-  assert.ok(seq25.face.run > 0, `seq2.5のface.runは正のはず（実際:${seq25.face.run}）`);
-  assert.ok(seq45.face.run > 0, `seq4.5のface.runは正のはず（実際:${seq45.face.run}）`);
-  assert.ok(Math.abs(seq25.face.run - expectedWidth) < 200,
-    `seq2.5のface.run(${seq25.face.run})は上り口端〜踊り場前縁の実距離(${expectedWidth})に近いはず`);
-  assert.ok(Math.abs(seq45.face.run - expectedWidth) < 200,
-    `seq4.5のface.run(${seq45.face.run})は上り口端〜踊り場前縁の実距離(${expectedWidth})に近いはず`);
+// ---- buildMidWallFaceの回帰（travelSign<0＝loWorld>hiWorldでもface.runが正）。旧seq2.5/4.5の廃止後も
+// straightCuts.js（直進階段の壁の面）が使うため、ガードを直接固定する ----
+test('【mutation証跡用】buildMidWallFace: loWorld>hiWorldでも run は正で、実距離に近い', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
+  const faces = composeRoomFaces(room, graph);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.ok(table.wall);
+  assert.ok(table.entryWorld > table.landingStartWorld, '前提: travelSign<0（loWorld>hiWorld）の構成');
+
+  const face = buildMidWallFace(table.wall, table.wOut2.inward, table.entryWorld, table.landingStartWorld, faces);
+  const expected = table.entryWorld - table.landingStartWorld;
+  assert.ok(face.run > 0, `face.runは正のはず（実際:${face.run}）`);
+  assert.ok(Math.abs(face.run - expected) < 200, `face.run(${face.run})は実距離(${expected})に近いはず`);
 });
 
 // ---- 勾配天井: seq2のceilingProfileは上り口端=chLower・踊り場端=ceilTop ----
@@ -599,7 +620,7 @@ test('stairFaceSequence: seq2は踊り場床断面線(太線)を含み、面端�
     `(${zZigzagAtX0})と一致するはず（ピッチ:${pitch}・蹴上:${riser}）`);
 });
 
-// ---- seq2/2.5は断面プロファイル(polyline)を含み、鋼構造は踏面がCUTでその向こうにささらが重なる ----
+// ---- seq2は断面プロファイル(polyline)を含み、鋼構造は踏面がCUTでその向こうにささらが重なる ----
 // 期待値更新（ユーザー実機フィードバック2026-08-23。switchbackCuts.jsの切断線再定義で切断線が
 // 実際に往路レーンの中を縦断するようになったため、「段部はササラの横に付く（横付け）なので
 // 側面視では隠す」という旧仕様（WP-E3〜E5b）は撤回した）: 側面視(seq2)では踏面のジグザグ自体を
@@ -737,7 +758,7 @@ test('【mutation証跡用】stairFaceSequence: seq3(W_landing)の床yはlanding
 });
 
 // ---- ユーザー実機指示第2弾（根本的訂正）: 往復間の壁は1F(graph)ではなく2F(upperGraph)の壁 ----
-test('stairFaceSequence: 往復間の壁がupperGraphのみにある場合、opts.upperGraph経由で検出されseq2.5/4.5が出る', () => {
+test('stairFaceSequence: 往復間の壁がupperGraphのみにある場合、opts.upperGraph経由で検出されても5面で、seq2のfaceが実壁になる', () => {
   const graph = makeGraph('p1');
   const upperGraph = makeGraph('p2');
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph });
@@ -748,8 +769,9 @@ test('stairFaceSequence: 往復間の壁がupperGraphのみにある場合、opt
   assert.equal(graphHasMid, false, 'graph.wallsには往復間の壁が無いはず（upperGraph限定の配置）');
 
   const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) });
-  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5'],
-    'upperGraph.walls経由でmidWallが検出され、seq2.5/4.5が出るはず');
+  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5']);
+  assert.equal(entries.find(e => e.seqNo === '2').face.hasRealWall, true,
+    'upperGraph.walls経由でmidWallが検出されるはず');
 });
 
 // ---- 失敗系: opts.upperGraph未指定時は従来どおりgraph.walls（1F）で検出する（後方互換フォールバック） ----
@@ -759,7 +781,8 @@ test('【失敗系】stairFaceSequence: opts.upperGraph未指定なら従来ど�
   const faces = composeRoomFaces(room, graph);
 
   const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }); // upperGraph未指定
-  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '2.5', '3', '4', '4.5', '5']);
+  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5']);
+  assert.equal(entries.find(e => e.seqNo === '2').face.hasRealWall, true);
 });
 
 // ---- ユーザー実機指示第2弾: 腰壁（knee）の実高さがseq1の壁エッジ・seq2の壁断面に反映される ----
@@ -1401,12 +1424,12 @@ test('【失敗系・ユーザー実機フィードバック2026-08-23第3弾・
   assert.ok(Array.isArray(seq2.ceilingProfile) && seq2.ceilingProfile.length >= 2, '例外を投げず既存の形のceilingProfileを返すはず');
 });
 
-// ---- 実機フィードバック第3弾D: seq1で「復路ささらの外側(壁側)〜壁」×「z=0〜1F天井」にアキX ----
+// ---- 実機フィードバック第3弾D→2026-10-07撤回: 踊り場前縁(seq1)・踊り場の壁(seq3)にアキは標記しない ----
 // stair.cellsが室の全幅をカバーしない構成（stairwell内に階段以外の空きがある実機構成）を
 // 独自フィクスチャで再現する: 室(room)はx:[0,2600]の単純矩形（踊り場列・復路列とも
 // x=2000〜2600ぶん幅を追加）だが、stair.cells自体は従来どおりx:[0,2000]の3セルのまま
 // （階段の構造は室の右端まで届かない＝復路レーンの外側と壁の間に600mmの空きができる）。
-test('【実機フィードバック第3弾D】stairFaceSequence: 室が階段の構造(stair.cells)より広ければseq1の壁側にアキXが出る（踊り場線で上=一点鎖線・下=破線に分割）', () => {
+test('【2026-10-07 アキ不要】stairFaceSequence: 室が階段の構造(stair.cells)より広くても seq1/seq3 にアキのバツ・「ア キ」は出ない（他の面は従来どおり）', () => {
   const graph = makeGraph();
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -1440,55 +1463,67 @@ test('【実機フィードバック第3弾D】stairFaceSequence: 室が階段�
   const faces = composeRoomFaces(room, graph);
   const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
-  const n1 = 6, riser = OPTS.floorHeight / 12;
-  const landingAbs = n1 * riser;
 
-  const centerDiagonals = seq1.content.filter(p =>
-    p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && p.dash === 'center');
-  const dashedDiagonals = seq1.content.filter(p =>
-    p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && p.dash === 'dashed');
-  assert.equal(centerDiagonals.length, 2, '踊り場線より上(landingAbs〜1F天井)に一点鎖線のXが1組(2本)出るはず');
-  assert.equal(dashedDiagonals.length, 2, '踊り場線より下(0〜landingAbs)に破線のXが1組(2本)出るはず');
-  for (const p of [...centerDiagonals, ...dashedDiagonals]) {
-    assert.ok(Math.abs(p.x1 - seq1.face.run) < 1e-6 || Math.abs(p.x2 - seq1.face.run) < 1e-6,
-      'Xの一端は面端(壁の位置。x=face.run)にあるはず');
-  }
-  for (const p of centerDiagonals) {
-    assert.ok(Math.max(-p.y1, -p.y2) <= OPTS.chLowerMm + 1e-6 && Math.min(-p.y1, -p.y2) >= landingAbs - 1e-6,
-      '一点鎖線のXはlandingAbs〜chLowerMmの範囲のはず');
+  // 注: この fixture で seq1 のバツを出していたのは撤回前の wallGapXMarks（削除済み）で、一般規則のアキは元々出ない。
+  // よって本テストは「旧合成Xの復活」の回帰ガード。openGapMarks の効きは sectionEmit/sectionContent/switchbackCuts の各テストと
+  // 実データ（13.stq の dump 差分）で固定する。
+  const isX = p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && (p.dash === 'center' || p.dash === 'dashed');
+  const isGapLabel = p => p.type === 'text' && p.text === 'ア キ';
+  const seq3 = entries.find(e => e.seqNo === '3');
+  for (const e of [seq1, seq3]) {
+    assert.equal(e.content.filter(isX).length, 0, `seq${e.seqNo}にアキのバツ（一点鎖線・破線の対角線）は出ないはず`);
+    assert.equal(e.content.filter(isGapLabel).length, 0, `seq${e.seqNo}に「ア キ」は出ないはず`);
   }
 });
 
-test('【失敗系・実機フィードバック第3弾D】stairFaceSequence: 室の全幅が階段の構造とちょうど一致するfixtureはseq1に壁側のアキXが出ない（回帰）', () => {
+test('【2026-10-07 アキ不要・統合】stairFaceSequence: seq1/seq3 で一般規則の open 帯が出る構成でも ×・「ア キ」が出ず、seq2 では出る', () => {
+  // moku4 2階の A と同じ形: 往復間の壁（seq1 が切断する）の左右の奥に壁が無く open になる。
+  // 面（faces）は壁を消す前に作り、探査側（graph）だけ入口側(y=4500)と踊り場奥(y=0)の壁を消す。
   const graph = makeGraph();
-  const { room, stair } = makeSwitchbackFixture(graph);
-  stair.setField('structure', StructuralMaterialType.STEEL);
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
-  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
-  const seq1 = entries.find(e => e.seqNo === '1');
-  const wallGapDiagonals = seq1.content.filter(p =>
-    p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 &&
-    (Math.abs(p.x1 - seq1.face.run) < 1e-6 || Math.abs(p.x2 - seq1.face.run) < 1e-6 ||
-     Math.abs(p.x1 - 0) < 1e-6 || Math.abs(p.x2 - 0) < 1e-6));
-  assert.equal(wallGapDiagonals.length, 0, '室が階段の構造ちょうどに収まるfixtureでは壁側のアキXは出ないはず');
+  for (const w of graph.walls) if (!w.isVertical && [0, 4500].includes(w.axisCL.effectiveValue)) graph.removeShape(w.id);
+  const opts = { ...OPTS, layers: buildBandLayers(graph) };
+
+  const isX = p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2 && (p.dash === 'center' || p.dash === 'dashed');
+  const isLabel = p => p.type === 'text' && p.text === 'ア キ';
+  const entries = stairFaceSequence(stair, faces, graph, opts);
+  for (const n of ['1', '3']) {
+    const e = entries.find(x => x.seqNo === n);
+    assert.equal(e.content.filter(isX).length, 0, `seq${n}にアキのバツは出ないはず`);
+    assert.equal(e.content.filter(isLabel).length, 0, `seq${n}に「ア キ」は出ないはず`);
+  }
+  assert.ok(entries.find(x => x.seqNo === '2').content.some(isLabel), '対照: seq2 には従来どおり「ア キ」が出る');
+
+  // 対照: 同じ切断で openGapMarks を外すと、open 帯（左右2区間）にアキが出る＝構成が空振りでない。
+  const table = switchbackCuts(stair, faces, graph, opts);
+  for (const n of ['1', '3']) {
+    const cut = table.cuts.find(c => c.seqNo === n);
+    assert.equal(cut.openGapMarks, false);
+    const off = buildCutContent(cut, makeProbeContext(cut.layers), { endExtendMm: 0 });
+    assert.deepEqual(off.gapMarks, []);
+    const on = buildCutContent({ ...cut, openGapMarks: undefined }, makeProbeContext(cut.layers), { endExtendMm: 0 });
+    assert.ok(on.gapMarks.filter(isLabel).length >= 2, `seq${n}: 属性を外せば左右の open 帯に「ア キ」が出る`);
+    assert.ok(on.gapMarks.filter(isX).length >= 4);
+  }
 });
 
-// ---- 実機フィードバック第3弾F: kneeWallCapContent（2F腰壁の上端水平線+L字アキ合成） ----
+// ---- 実機フィードバック第3弾F: kneeWallCapContent（2F腰壁の両端縦線の除去。L字アキ合成は2026-10-07廃止） ----
 const F_CUT = { seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 2000 }, viewSign: 1, dirSign: 1, zRange: { loZ: 0, hiZ: 4800 }, baseFloorZ: 0 };
-const F_FLOOR_HEIGHT = 2400, F_TOP_HEIGHT = 900, F_CEIL_TOP_ABS = 4800;
+const F_FLOOR_HEIGHT = 2400, F_TOP_HEIGHT = 900;
 const F_KNEE_DROP = { knee: { topHeight: F_TOP_HEIGHT } };
 
 test('【失敗系・実機フィードバック第3弾F】kneeWallCapContent: kneeDropが無ければcontentをそのまま返す', () => {
   const content = [{ type: 'line', x1: 0, y1: 0, x2: 100, y2: 0, weight: 'thick' }];
-  assert.deepEqual(kneeWallCapContent(content, F_CUT, null, F_FLOOR_HEIGHT, F_CEIL_TOP_ABS), content);
+  assert.deepEqual(kneeWallCapContent(content, F_CUT, null, F_FLOOR_HEIGHT), content);
 });
 
-test('【実機フィードバック第3弾F→2026-08で天端の担当を移管】kneeWallCapContent: 壁の両端縦線を除去する（天端の水平線はemitColumns側が描く。隣接するアキが無ければ壁自身の範囲だけでX）', () => {
+test('【実機フィードバック第3弾F→2026-08で天端の担当を移管】kneeWallCapContent: 壁の両端縦線を除去する（天端の水平線はemitColumns側が描く。アキのXは足さない）', () => {
   const wallEdge1 = { type: 'line', x1: 1000, y1: -2400, x2: 1000, y2: -3300, weight: 'medium' };
   const wallEdge2 = { type: 'line', x1: 1050, y1: -2400, x2: 1050, y2: -3300, weight: 'thick' };
   const other = { type: 'line', x1: 0, y1: 0, x2: 500, y2: 0, weight: 'thick' };
   const content = [other, wallEdge1, wallEdge2];
-  const result = kneeWallCapContent(content, F_CUT, F_KNEE_DROP, F_FLOOR_HEIGHT, F_CEIL_TOP_ABS);
+  const result = kneeWallCapContent(content, F_CUT, F_KNEE_DROP, F_FLOOR_HEIGHT);
 
   assert.ok(result.includes(other), '無関係な線はそのまま残るはず');
   assert.equal(result.includes(wallEdge1) || result.includes(wallEdge2), false, '壁の両端縦線は除去されるはず');
@@ -1498,32 +1533,25 @@ test('【実機フィードバック第3弾F→2026-08で天端の担当を移�
   const topLine = result.find(p => p.type === 'line' && p.y1 === p.y2 && Math.abs(p.y1 - (-3300)) < 1e-6);
   assert.equal(topLine, undefined, '上端水平線はここでは描かない（emitColumns側の担当）');
 
-  const centerDiagonals = result.filter(p => p.dash === 'center');
-  assert.equal(centerDiagonals.length, 2, 'X(2本)が1組あるはず');
-  const xs = centerDiagonals.flatMap(p => [p.x1, p.x2]);
-  assert.ok(Math.min(...xs) >= 1000 - 1e-6 && Math.max(...xs) <= 1050 + 1e-6,
-    '隣接するアキが無ければXは壁自身のx範囲(1000〜1050)のままのはず');
+  assert.equal(result.filter(p => p.dash === 'center').length, 0, 'アキのX（一点鎖線）は足さないはず（2026-10-07 廃止）');
+  assert.deepEqual(result, [other], '縦線2本だけが除かれ、他は不変');
 });
 
-test('【実機フィードバック第3弾F】kneeWallCapContent: 隣接する既存のアキX(dash:center)を壁の上のXと合成し、1組の大きなXにする', () => {
+test('【実機フィードバック第3弾F→2026-10-07】kneeWallCapContent: 隣接する既存のアキX(dash:center)があっても合成せずそのまま残す（吸収しない）', () => {
   const wallEdge1 = { type: 'line', x1: 1000, y1: -2400, x2: 1000, y2: -3300, weight: 'medium' };
   const wallEdge2 = { type: 'line', x1: 1050, y1: -2400, x2: 1050, y2: -3300, weight: 'thick' };
   // 隣接するアキX（壁のhiX=1050にちょうど接し、z範囲もtopZ(3300)〜ceilTopAbs(4800)と一致）。
   const adjX1 = { type: 'line', x1: 1050, y1: -3300, x2: 1400, y2: -4800, weight: 'thin', dash: 'center' };
   const adjX2 = { type: 'line', x1: 1050, y1: -4800, x2: 1400, y2: -3300, weight: 'thin', dash: 'center' };
   const content = [wallEdge1, wallEdge2, adjX1, adjX2];
-  const result = kneeWallCapContent(content, F_CUT, F_KNEE_DROP, F_FLOOR_HEIGHT, F_CEIL_TOP_ABS);
+  const result = kneeWallCapContent(content, F_CUT, F_KNEE_DROP, F_FLOOR_HEIGHT);
 
-  const centerDiagonals = result.filter(p => p.dash === 'center');
-  assert.equal(centerDiagonals.length, 2, '合成後もX(2本)は1組のはず（隣接する別のXにはならない）');
-  const xs = centerDiagonals.flatMap(p => [p.x1, p.x2]);
-  assert.ok(Math.abs(Math.min(...xs) - 1000) < 1e-6 && Math.abs(Math.max(...xs) - 1400) < 1e-6,
-    `合成後のXはx=1000〜1400（壁+隣接アキの結合範囲）のはず（実際:${JSON.stringify(centerDiagonals)}）`);
+  assert.deepEqual(result, [adjX1, adjX2], '縦線だけ除かれ、既存のアキXは同一オブジェクトのまま（合成・移動しない）');
 });
 
 test('【失敗系・実機フィードバック第3弾F】kneeWallCapContent: 該当する壁の両端縦線が見つからなければcontentをそのまま返す', () => {
   const content = [{ type: 'line', x1: 0, y1: 0, x2: 100, y2: 0, weight: 'thick' }];
-  const result = kneeWallCapContent(content, F_CUT, F_KNEE_DROP, F_FLOOR_HEIGHT, F_CEIL_TOP_ABS);
+  const result = kneeWallCapContent(content, F_CUT, F_KNEE_DROP, F_FLOOR_HEIGHT);
   assert.deepEqual(result, content);
 });
 
