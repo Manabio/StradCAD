@@ -276,6 +276,32 @@ export function segmentInsideRect(x1, y1, x2, y2, r) {
   return t1 - t0 > 1e-9 ? [t0, t1] : null;
 }
 
+// 線分が**凸多角形**（頂点列 [[x,y],...]。向きは不問）の内側にある媒介変数区間[t0,t1]（Cyrus-Beck。
+// 交わらなければnull）。segmentInsideRectの斜め辺版——**辺上は内側と判定する**（同じ規約）。
+// 斜めの天端を持つ壁の帯（台形）を遮蔽物としてアキのバツから差し引くのに使う（sectionEmit.js）。
+export function segmentInsideConvex(x1, y1, x2, y2, poly) {
+  const dx = x2 - x1, dy = y2 - y1;
+  let area2 = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const [ax, ay] = poly[i], [bx, by] = poly[(i + 1) % poly.length];
+    area2 += ax * by - bx * ay;
+  }
+  const sgn = area2 >= 0 ? 1 : -1;
+  let t0 = 0, t1 = 1;
+  for (let i = 0; i < poly.length; i++) {
+    const [ax, ay] = poly[i], [bx, by] = poly[(i + 1) % poly.length];
+    const ex = bx - ax, ey = by - ay;
+    // 内側 ⇔ sgn*cross(e, p-a) >= 0。p=p1+t*d で c(t)=c0+cd*t。
+    const c0 = sgn * (ex * (y1 - ay) - ey * (x1 - ax));
+    const cd = sgn * (ex * dy - ey * dx);
+    if (Math.abs(cd) < 1e-9) { if (c0 < 0) return null; continue; }
+    const t = -c0 / cd;
+    if (cd > 0) { if (t > t0) t0 = t; } else if (t < t1) t1 = t;
+    if (t0 > t1) return null;
+  }
+  return t1 - t0 > 1e-9 ? [t0, t1] : null;
+}
+
 // 媒介変数区間の集合を昇順・非重複へ統合する。
 export function mergeIntervals(list) {
   const sorted = [...list].sort((a, b) => a[0] - b[0]);
@@ -320,13 +346,14 @@ export function isZeroLengthLine(p) {
 }
 
 // 線分から矩形の和に入る区間を取り除き、残った区間だけの線分列にする。
+// 要素が `poly`（凸多角形の頂点列）を持てばそちらで判定する（斜めの辺を持つ遮蔽物。矩形の外接箱は無視）。
 // QA是正2026-09・B: 入力自体が長さゼロ（縮退した列の境界等から生成された「点」）なら
 // 素通りさせず捨てる——素通りさせると矩形と重ならない限り点のまま最終出力へ残ってしまう。
 export function subtractRectsFromLine(p, rects) {
   if (isZeroLengthLine(p)) return [];
   if (!rects.length) return [p];
   const cut = mergeIntervals(rects
-    .map(r => segmentInsideRect(p.x1, p.y1, p.x2, p.y2, r))
+    .map(r => (r.poly ? segmentInsideConvex(p.x1, p.y1, p.x2, p.y2, r.poly) : segmentInsideRect(p.x1, p.y1, p.x2, p.y2, r)))
     .filter(Boolean));
   if (!cut.length) return [p];
   const at = t => ({ x: p.x1 + (p.x2 - p.x1) * t, y: p.y1 + (p.y2 - p.y1) * t });

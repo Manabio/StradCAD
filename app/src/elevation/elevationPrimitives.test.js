@@ -1,7 +1,10 @@
 // elevationPrimitives.js の appendRoomNameFrame のテスト（QA G5・項目9/10）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendRoomNameFrame, subtractRectsFromPrimitives, translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
+import {
+  appendRoomNameFrame, subtractRectsFromPrimitives, translatePrimitive, mirrorPrimitiveX,
+  segmentInsideConvex, subtractRectsFromLine,
+} from './elevationPrimitives.js';
 
 // translatePrimitive / mirrorPrimitiveX は同じプリミティブ型集合を扱う（片方にだけ型を追加すると、その型だけ
 // 移動/反転されない無言バグ）。展開図の建具ドラッグ起点 'hit'（elevationFigure.js）が両方で扱われることを固定する
@@ -90,4 +93,38 @@ test('appendRoomNameFrame: leftX/rightX未指定はfigureBounds(primitives)のmi
   const triangles = prims.filter(p => p.type === 'miterTriangle');
   assert.ok(triangles.some(t => t.x === 0), 'leftX省略時はfigureBoundsのminX(0)を使うはず');
   assert.ok(triangles.some(t => t.x === 4000), 'rightX省略時はfigureBoundsのmaxX(4000)を使うはず');
+});
+
+// ---- 凸多角形（斜めの天端の台形）で線分を切る ----
+// 台形: 底辺 y=0（x 0..100）・上辺は左 y=-20・右 y=-60 の斜線（y は下向き正＝図の座標。上が負）。
+const TRAPEZOID = [[0, 0], [100, 0], [100, -60], [0, -20]];
+test('segmentInsideConvex: 台形を斜めに貫く線分の内側区間（向きが逆の頂点列でも同じ）', () => {
+  // y=-10 の水平線: 台形の内側は x=0..100 全部（斜線は x=0 で -20・x=100 で -60 なので -10 は常に下）
+  assert.deepEqual(segmentInsideConvex(-50, -10, 150, -10, TRAPEZOID), [0.25, 0.75]);
+  assert.deepEqual(segmentInsideConvex(-50, -10, 150, -10, [...TRAPEZOID].reverse()), [0.25, 0.75]);
+  // y=-40 の水平線: 斜線 y=-20-0.4x が -40 になる x=50 から右が内側（斜線の下）
+  const [t0, t1] = segmentInsideConvex(0, -40, 100, -40, TRAPEZOID);
+  assert.ok(Math.abs(t0 - 0.5) < 1e-9 && Math.abs(t1 - 1) < 1e-9, `${t0}..${t1}`);
+});
+
+test('segmentInsideConvex: 線分全体が内側なら [0,1]', () => {
+  assert.deepEqual(segmentInsideConvex(10, -5, 90, -5, TRAPEZOID), [0, 1]);
+});
+
+test('【失敗系】segmentInsideConvex: 斜線の上を通る線分・離れた線分・辺に平行な外側の線分は null。辺上は内側', () => {
+  assert.equal(segmentInsideConvex(0, -70, 100, -70, TRAPEZOID), null, '斜線より上');
+  assert.equal(segmentInsideConvex(200, 0, 300, 0, TRAPEZOID), null, '離れている');
+  assert.equal(segmentInsideConvex(0, 10, 100, 10, TRAPEZOID), null, '底辺の外側に平行');
+  assert.deepEqual(segmentInsideConvex(0, 0, 100, 0, TRAPEZOID), [0, 1], '底辺そのもの＝辺上は内側（segmentInsideRect と同じ規約）');
+});
+
+test('subtractRectsFromLine: poly を持つ遮蔽物は斜めの辺で線分を切る（矩形の外接箱では切らない）', () => {
+  const line = { type: 'line', x1: 0, y1: -40, x2: 100, y2: -40, weight: 'thin' };
+  const box = { xLo: 0, xHi: 100, yLo: -60, yHi: 0, poly: TRAPEZOID };
+  const out = subtractRectsFromLine(line, [box]);
+  // 台形に入るのは x=50..100。残るのは x=0..50 だけ。
+  assert.equal(out.length, 1);
+  assert.ok(Math.abs(out[0].x1 - 0) < 1e-9 && Math.abs(out[0].x2 - 50) < 1e-9, JSON.stringify(out));
+  // poly が無ければ従来の矩形（外接箱）で全部切れる。
+  assert.deepEqual(subtractRectsFromLine(line, [{ xLo: 0, xHi: 100, yLo: -60, yHi: 0 }]), []);
 });

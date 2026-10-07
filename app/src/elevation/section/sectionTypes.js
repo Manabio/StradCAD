@@ -78,6 +78,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   nearEdgeOpen?:boolean, farEdgeOpen?:boolean,
  *   openingPassThrough?:boolean,
  *   farFloorZ?:number|null, farCeilZ?:number|null, farDepthMm?:number,
+ *   profiledTop?:boolean, topEdge?:{zAtLo:number, zAtHi:number}|{zAtX0:number, zAtX1:number},
  * }} ZBand
  *   hidden（展開図一般化Phase 6b-2。`sectionHits.js`の`isHiddenWall`該当の実体）＝
  *   「そこに壁は実在するが描かない」区間。`wall`/`distMm`/`openingPassThrough`/`far*`等の
@@ -93,6 +94,11 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   `open`のfarFloorZ/farCeilZ/farDepthMm（Phase4）＝`sectionHits.js`の`visibleBandsOf`が
  *   付帯情報として載せる「上限内の最も近いfloorFace/ceilFaceのzと深度」（`splitOpenByFarFace`の
  *   入力）。該当が無ければ常にundefined。
+ *   profiledTop（壁の天端プロファイル＝隔て壁の斜め天端を持つ壁の帯。cut/cutAlong/wall）＝天端は
+ *   腰壁の笠木ではないため、天端の下の細線（kneeCap）を描かない。topEdge（wall帯だけ）＝斜めの天端の線の
+ *   両端の高さ。probe直後（sectionHits.js）は世界座標の lo/hi 側＝{zAtLo, zAtHi}、列（SectionColumn）の帯は
+ *   図のローカルx（x0側/x1側）＝{zAtX0, zAtX1}（buildColumnsが向き＝dirSignに合わせて入れ替える）。
+ *   帯の z1 は天端の高い側（斜線は z1 を超えない）。
  */
 
 /**

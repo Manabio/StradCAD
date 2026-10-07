@@ -30,7 +30,9 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import { isRealRoom, baseLayerOf, orderLayerStack, layersAboveOf } from './sectionLayerStack.js';
 import { effectiveStructure } from '../../structural/structureRules.js';
-import { stairPartitionDescriptors, partitionTopZAt, matchStairPartitionLine } from '../../finish/stair/stairPartition.js';
+import {
+  stairPartitionDescriptors, partitionTopZAt, partitionTopCrossings, matchStairPartitionLine,
+} from '../../finish/stair/stairPartition.js';
 import { stairContinuesAbove } from '../../finish/stair/stairChains.js';
 import {
   cutProbeRange, isCutWall, isCutAlongWall, isSightlineShape,
@@ -66,7 +68,11 @@ function buildWallTopProfiles(layers, layer, floorZFor) {
     const { desc, stair } = descs[lines.indexOf(line)];
     // 絶対zの基準は階段室の床（spaceIndex.floorZFor＝実効FL・datum・floorOffset を含む。層の floorZMm 直でない）
     const baseZ = floorZFor(graph.roomMap?.get(stair.roomId) ?? null, layer);
-    out.set(w.id, { zAt: along => baseZ + partitionTopZAt(desc, along) });
+    // crossings … 斜めの天端が各 z（絶対）を横切る along（昇順）。列の境界（collectCutBreaks）の材料。
+    out.set(w.id, {
+      zAt: along => baseZ + partitionTopZAt(desc, along),
+      crossings: zLevels => partitionTopCrossings(desc, (zLevels ?? []).map(z => z - baseZ)),
+    });
   }
   return out;
 }
@@ -91,7 +97,7 @@ function buildWallTopProfiles(layers, layer, floorZFor) {
  */
 export function makeProbeContext(layers, opts = {}) {
   const spaceIndex = buildSpaceIndex(layers, opts);
-  const wallTopByLayer = new Map(); // layer -> Map<wallId, {zAt}>
+  const wallTopByLayer = new Map(); // layer -> Map<wallId, {zAt, crossings}>
   function wallTopProfileFor(layer) {
     let m = wallTopByLayer.get(layer);
     if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor); wallTopByLayer.set(layer, m); }
@@ -113,7 +119,7 @@ export function makeProbeContext(layers, opts = {}) {
     componentOf: spaceIndex.componentOf,
     componentAt: spaceIndex.componentAt,
     // 壁の天端プロファイル（関所 kneeDropZRangesAt の wallTop 引数）。隔て壁（在来木造の折返し階段）が
-    // 斜め天端のとき {zAt(along)→絶対z} を壁idで引く。層ごとに1回だけ作る（stairPartitionLines 等が重い）。
+    // 斜め天端のとき {zAt(along)→絶対z, crossings(zLevels)→along[]} を壁idで引く。層ごとに1回だけ作る（stairPartitionLines 等が重い）。
     wallTopProfileFor,
   };
 }
@@ -145,6 +151,13 @@ export function collectCutBreaks(cut, probeCtx) {
   // line.lo/hiのままで動かさないので、既存のローカルx座標は一切ずれない。
   const { lo: probeLo, hi: probeHi } = cutProbeRange(line);
   const values = new Set([probeLo, probeHi]);
+  // 斜めの天端（壁の天端プロファイル）が横切ると列の中で水平線（上階FL・切断の床/上端）をまたぐ高さ。
+  // 斜線を頭打ちにする高さ（切断の天井断面 cut.ceilProfile・プロファイルを持つ壁の層の各部屋の実効天井）も含める
+  // ——列が斜線の途中で天井をまたぐと、列全体が水平へ倒れて斜線より下の空気に壁を描いてしまう。
+  const slopeLevels = [...layers.map(l => l?.floorZMm), cut.baseFloorZ, cut.zRange?.loZ, cut.zRange?.hiZ,
+    ...(cut.ceilProfile ?? []).map(s => s?.ceilZ)].filter(Number.isFinite);
+  const ceilLevelsOf = layer => (graphList(layer.graph, 'rooms') ?? [])
+    .map(room => probeCtx.floorZOf(room, layer) + probeCtx.chOf(room, layer.graph)).filter(Number.isFinite);
   const addIfInside = v => { if (v > probeLo + GAP_EPS && v < probeHi - GAP_EPS) values.add(v); };
   // 面の端そのものは常に列境界にする（延長した場合、面の内と外を1列に融合させない）。
   addIfInside(line.lo); addIfInside(line.hi);
@@ -175,6 +188,11 @@ export function collectCutBreaks(cut, probeCtx) {
       } else if (isSightlineShape(w, line, cut.viewSign)) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         addIfInsideLayer(c1); addIfInsideLayer(c2);
+        // 斜めの天端が水平線の高さを横切る位置も列の境界にする（列の中で斜線が水平線をまたがない）。
+        const prof = probeCtx?.wallTopProfileFor?.(layer)?.get(w.id);
+        for (const a of prof?.crossings?.([...slopeLevels, ...ceilLevelsOf(layer)]) ?? []) {
+          if (a > c1 + GAP_EPS && a < c2 - GAP_EPS) addIfInsideLayer(a);
+        }
       }
     }
     for (const o of graphList(layer.graph, 'openings') ?? []) {

@@ -56,7 +56,11 @@ function bandsEqual(a, b) {
       && (band.farDepthMm ?? null) === (other.farDepthMm ?? null)
       // Phase5: extendedFromZ（下端をfarFloorZまで伸ばした帯の、伸ばす前のz0。emitOpenGapMarksの
       // 一点鎖線/破線切替の判定材料）も同じ理由で比較する。
-      && (band.extendedFromZ ?? null) === (other.extendedFromZ ?? null);
+      && (band.extendedFromZ ?? null) === (other.extendedFromZ ?? null)
+      // 斜めの天端の線（topEdge）が違う列は別の帯——斜線の傾き・位置は列ごとに決まるので統合しない。
+      && (band.profiledTop ?? false) === (other.profiledTop ?? false)
+      && (band.topEdge?.zAtX0 ?? null) === (other.topEdge?.zAtX0 ?? null)
+      && (band.topEdge?.zAtX1 ?? null) === (other.topEdge?.zAtX1 ?? null);
   });
 }
 
@@ -177,7 +181,14 @@ function clipBandsToVisible(columns, air, i) {
       }
     }
     if (band.z0 >= ceilZ - GAP_EPS) continue;
-    out.push(band.z1 > ceilZ ? { ...band, z1: ceilZ } : band);
+    if (band.z1 > ceilZ) {
+      // 天井で打ち切ると斜めの天端の線（topEdge）は帯の上端を超えてしまう——水平の上端に戻す。
+      const clipped = { ...band, z1: ceilZ };
+      delete clipped.topEdge;
+      out.push(clipped);
+    } else {
+      out.push(band);
+    }
   }
   return out;
 }
@@ -341,9 +352,16 @@ export function buildColumns(cut, probeCtx) {
     // 呼び出し側（elevationVoid.js）から渡す。probeColumn自体はzRange全域を返す契約のまま
     // （不変条件テストが依存）で、描画対象の切り出しはここで行う。
     const ceilZ = ceilProfileZAt(cut.ceilProfile, Math.min(localA, localB), Math.max(localA, localB));
+    // 斜めの天端の線（topEdge）は probe では世界座標の lo/hi 側＝{zAtLo,zAtHi}。図のローカルx（x0側/x1側）へ
+    // 向きを合わせて入れ替える（dirSign<0 だと worldLo が図の右＝x1 側になる）。
+    const loIsX0 = localA <= localB;
+    const bands = probeColumn(cut, worldMid, probeCtx, { worldLo, worldHi }).map(b => (b.topEdge
+      ? { ...b, topEdge: loIsX0
+        ? { zAtX0: b.topEdge.zAtLo, zAtX1: b.topEdge.zAtHi }
+        : { zAtX0: b.topEdge.zAtHi, zAtX1: b.topEdge.zAtLo } }
+      : b));
     rawColumns.push({
-      x0: Math.min(localA, localB), x1: Math.max(localA, localB), worldLo, worldHi, ceilZ,
-      bands: probeColumn(cut, worldMid, probeCtx),
+      x0: Math.min(localA, localB), x1: Math.max(localA, localB), worldLo, worldHi, ceilZ, bands,
     });
   }
   rawColumns.sort((a, b) => a.x0 - b.x0); // dirSign<0だとworld昇順とlocal昇順が逆転するため並べ替える

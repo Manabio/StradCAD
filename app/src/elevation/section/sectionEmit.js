@@ -19,6 +19,10 @@ import {
   mergeIntervals, segmentInsideRect, subtractRectsFromLine, isZeroLengthLine,
 } from '../elevationPrimitives.js';
 
+// アキの下辺が1本の直線か（斜めの天端の上＝台形）の判定の許容差。列ごとの斜線の端の値は同じ式から出るので
+// 実際には浮動小数の誤差（1e-9級）しか出ないが、GAP_EPS（1e-6）ちょうどに頼らない。
+const SLOPE_FIT_EPS_MM = 0.01;
+
 /**
  * §5.6最終フィルタの唯一の適用箇所（emitLine(x1,z1,x2,z2,role)の1箇所だけで適用する、という
  * 設計方針どおり）。線分の両端がともに「baseFloorZより下」または「天井断面より上」（向こう側）
@@ -242,7 +246,9 @@ function cutWallTopEdges(columns, cut, ceilZ, emitCtx) {
     .filter(r => r.band.z1 < topZ - GAP_EPS)
     .flatMap(r => [
       emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, ElevationLineRole.CUT, { ceilZ }),
-      ...kneeCapUnderline(cut, r.x0, r.x1, r.band.z1, r.band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT)),
+      // 笠木の帯は腰壁・垂れ壁のもの——天端プロファイルの壁（隔て壁の斜め天端）には無い。
+      ...(r.band.profiledTop ? []
+        : kneeCapUnderline(cut, r.x0, r.x1, r.band.z1, r.band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT))),
     ]);
 }
 
@@ -261,7 +267,7 @@ function cutWallTopEdges(columns, cut, ceilZ, emitCtx) {
  *   scale は表示倍率(px/mm)。見付の1px保証（elevationStyle.js kneeCapFaceMm）に使う。
  */
 function appendKneeCapEndFaces(prims, cut, col, band, ctx) {
-  if (!band.isKneeDrop) return;
+  if (!band.isKneeDrop || band.profiledTop) return; // 天端プロファイルの壁に笠木の端面は無い
   const top = (col.ceilZ ?? ctx.ceilZ ?? Infinity);
   if (!(band.z1 < top - GAP_EPS)) return; // 天井まで届く壁＝天端が露出していない
   // 端面: 外側の線は凹み側面線（中線）、内側は細線。余白1px保証は中線×細線の線幅で取る。
@@ -742,13 +748,19 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         const atSpaceCeil = upperBand?.kind === 'slab' && Number.isFinite(upperBand.ceilZ)
           && Math.abs(upperBand.ceilZ - band.z1) < GAP_EPS;
         const topRole = atSpaceCeil ? ElevationLineRole.SILHOUETTE : role;
-        if (!hiddenByCutWall(col, band.z1) && !atSectionLevel(band.z1)
-            && !ownedBySectionSlab(sectionSlabs, col, band.z1)
+        // 斜めの天端（band.topEdge。隔て壁）: 天端は列の両端の高さを結ぶ斜線。斜線は FL・CH の高さに
+        // 端が触れても列の境界で切れているだけ（列の境界は斜面が水平線を横切る位置で割ってある）なので、
+        // 水平線との重なり判定（atSectionLevel・ownedBySectionSlab）は対象外。
+        const slope = band.topEdge ?? null;
+        if (!hiddenByCutWall(col, band.z1) && (slope || !atSectionLevel(band.z1))
+            && (slope || !ownedBySectionSlab(sectionSlabs, col, band.z1))
             && ownsBoundary(band, neighborBandAt(col, band.z1, +1))) {
-          prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, topRole, { ceilZ, forceDash: beyondBand }));
+          prims.push(slope
+            ? emitLine(cut, col.x0, slope.zAtX0, col.x1, slope.zAtX1, topRole, { ceilZ, forceDash: beyondBand })
+            : emitLine(cut, col.x0, band.z1, col.x1, band.z1, topRole, { ceilZ, forceDash: beyondBand }));
           // 腰壁の天端（仕様2026-08）: 見えがかりでも天端の帯は見えるので下端を細線で足す。
           // 天端の水平線を実際に描いた場合だけ——遮蔽で消した縁の下に帯だけ残ると嘘になる。
-          if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
+          if (band.isKneeDrop && !band.profiledTop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
             prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(topRole)));
           }
         }
@@ -798,15 +810,20 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           const wholeBand = [{ z0: band.z0, z1: band.z1 }];
           const loRanges = (splitByCutWall && !endsAtGap(prev) && !atFaceEndLo) ? []
             : prev ? uncoveredZRanges(prev, band) : (emitCtx.openEndLo ? [] : wholeBand);
+          // 斜めの天端の帯は、端の縦線を**その端での天端の高さ**までにする（帯の上端 z1 は高い側の値）。
           for (const r of loRanges) {
             const x = wallEndXAt(columns, i, -1, r.z0, col.x0);
-            prims.push(Object.assign(emitLine(cut, x, r.z0, x, r.z1, role, { ceilZ }),{__o:'recessLo'}));
+            const zTop = band.topEdge ? Math.min(r.z1, band.topEdge.zAtX0) : r.z1;
+            if (zTop - r.z0 <= GAP_EPS) continue;
+            prims.push(Object.assign(emitLine(cut, x, r.z0, x, zTop, role, { ceilZ }),{__o:'recessLo'}));
           }
           const hiRanges = (splitByCutWall && !endsAtGap(next) && !atFaceEndHi) ? []
             : next ? uncoveredZRanges(next, band) : (emitCtx.openEndHi ? [] : wholeBand);
           for (const r of hiRanges) {
             const x = wallEndXAt(columns, i, +1, r.z0, col.x1);
-            prims.push(Object.assign(emitLine(cut, x, r.z0, x, r.z1, role, { ceilZ }),{__o:'recessHi'}));
+            const zTop = band.topEdge ? Math.min(r.z1, band.topEdge.zAtX1) : r.z1;
+            if (zTop - r.z0 <= GAP_EPS) continue;
+            prims.push(Object.assign(emitLine(cut, x, r.z0, x, zTop, role, { ceilZ }),{__o:'recessHi'}));
           }
           // 腰壁の端部抑え（仕様2026-08「追加したい腰壁の仕様」）: 天端の帯は壁が終わる端でも
           // 見えるので、その端に**帯の見付ぶん内側の細線**を足す（端の中線は上の凹み側面線が
@@ -951,15 +968,22 @@ function splitSegmentAtZ(a, b, splitZ) {
  * sectionProbe.jsが付与）に絞るのが要点——実体一般で差し引くと、開口の下の普通の壁まで
  * 対象になり、WP-E7 D1の確認済み仕様「開口が2階アキと連続すると1組の**大きな**X」が
  * 細切れになる（実際にそう作り込んで既存テストが落ちた）。
+ * 斜めの天端の帯（`topEdge`。隔て壁）は天端が斜線の台形を遮蔽物にする（`poly`。帯の上端 z1 は高い側の
+ * 値なので矩形で見ると斜線の下の空気を壁と誤る）。
  */
 function obstructionRects(columns, x0, x1, z0, z1) {
   const rects = [];
   for (const col of columns) {
     if (col.x1 <= x0 + GAP_EPS || col.x0 >= x1 - GAP_EPS) continue;
     for (const b of col.bands) {
-      if (!b.isKneeDrop || b.openingPassThrough) continue;
+      if (!(b.isKneeDrop || b.topEdge) || b.openingPassThrough) continue;
       if (!overlapsZ(b, { z0, z1 })) continue;
-      rects.push({ xLo: col.x0, xHi: col.x1, yLo: zToY(b.z1), yHi: zToY(b.z0) });
+      const rect = { xLo: col.x0, xHi: col.x1, yLo: zToY(b.z1), yHi: zToY(b.z0) };
+      if (b.topEdge) {
+        rect.poly = [[col.x0, zToY(b.z0)], [col.x1, zToY(b.z0)],
+          [col.x1, zToY(b.topEdge.zAtX1)], [col.x0, zToY(b.topEdge.zAtX0)]];
+      }
+      rects.push(rect);
     }
   }
   return rects;
@@ -1161,11 +1185,17 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
         // （階段の桁の間の隙間等）が輪郭の高さまで誤って持ち上げられる（実機「6」C）。
         const z0 = b.z0;
         if (b.z1 - z0 <= GAP_EPS) continue;
+        // 直下に斜めの天端の帯（topEdge）があれば、アキの下辺は斜線（帯の上端 z0 は斜面の高い側）。
+        // 下辺の両端の高さ（列の x0側・x1側）をセルに持たせ、バツの下の隅と「ア キ」の置き場を斜線に合わせる。
+        const below = col.bands.find(x => x.topEdge && Math.abs(x.z1 - z0) < GAP_EPS);
         // structZ0: 一点鎖線/破線の切替（下記dash）専用のz0。`sectionEngine.js`の
         // `splitOpenByFarFace`が遠側床へ下端を伸ばした帯（`b.extendedFromZ`＝伸ばす前のz0）は、
         // 様式判定では**伸ばす前**のまま扱う——遠側（別の部屋）の低い床へ伸びただけで、
         // この帯自身が階層の下へ潜ったわけではない（実機「11'」A2）。
-        cells.push({ colIndex, x0, x1, z0, z1: b.z1, structZ0: b.extendedFromZ ?? z0 });
+        cells.push({
+          colIndex, x0, x1, z0, z1: b.z1, structZ0: b.extendedFromZ ?? z0,
+          colX0: col.x0, colX1: col.x1, lo0: below?.topEdge.zAtX0 ?? z0, lo1: below?.topEdge.zAtX1 ?? z0,
+        });
       }
     }
   });
@@ -1206,21 +1236,25 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     const x0 = Math.min(...g.map(c => c.x0));
     const x1 = Math.max(...g.map(c => c.x1));
     if (x1 - x0 < minGapWidthMm) continue; // 標記を置けない幅＝アキ・バツごと省略
-    const z0 = Math.min(...g.map(c => c.z0));
+    const z0 = Math.min(...g.map(c => Math.min(c.z0, c.lo0, c.lo1)));
     const z1 = Math.max(...g.map(c => c.z1));
+    // セルの下辺の高さ（斜めの天端の帯の上では斜線。無ければ z0 の水平線）。
+    const lowAt = (c, x) => (c.colX1 - c.colX0 > GAP_EPS
+      ? c.lo0 + (c.lo1 - c.lo0) * Math.min(1, Math.max(0, (x - c.colX0) / (c.colX1 - c.colX0)))
+      : c.lo0);
     // **バツの4点は空き面の実際の隅**（ユーザー実機指摘2026-08「6」C「バツの４点は、空き面の
     // 最も大きい対角を頂点とする」「2Fのアキ・バツ左下点は、左側壁断面と腰壁上端の交点へ移動」）。
     // 外接矩形の隅は、成分がL字（腰壁が食い込む等）だとアキでない場所に落ちる。左右それぞれの
     // 端にあるセルのz範囲から、その端での実際の上下を取る（矩形なら外接矩形と一致＝挙動不変）。
     const atX = x => g.filter(c => c.x0 <= x + GAP_EPS && c.x1 >= x - GAP_EPS);
-    const edgeZ = (x, fallbackLo, fallbackHi) => {
+    const edgeZ = (x, xEdge, fallbackLo, fallbackHi) => {
       const cs = atX(x);
       return cs.length
-        ? { lo: Math.min(...cs.map(c => c.z0)), hi: Math.max(...cs.map(c => c.z1)) }
+        ? { lo: Math.min(...cs.map(c => lowAt(c, xEdge))), hi: Math.max(...cs.map(c => c.z1)) }
         : { lo: fallbackLo, hi: fallbackHi };
     };
-    const L = edgeZ(x0 + GAP_EPS, z0, z1);
-    const R = edgeZ(x1 - GAP_EPS, z0, z1);
+    const L = edgeZ(x0 + GAP_EPS, x0, z0, z1);
+    const R = edgeZ(x1 - GAP_EPS, x1, z0, z1);
     // **開放スパンのアキは高低差に追従する**（ユーザー裁定2026-09「高低差」＝バツの床は遠側床に
     // 着く）——下端は遠側の床、上端は近側/遠側の天井の低い方（既存の「開放先の天井が低ければ
     // そこまで」と同じ規約）。Phase 5（設計`.claude/elevation-redesign.md`§5.5）:
@@ -1271,7 +1305,12 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // 独立に描くと必ず二重になる。しかも矩形は中線なので、後から重なって**断面＝太線という
     // 線種の情報を上書きしてしまう**（実機「5」A: X2通りの壁の断面（太線）の上に、アキ矩形の
     // 左辺（中線）が重なっていた）。抜けの範囲はバツと「ア キ」で足りる。
-    const isRect = g.every(c => Math.abs(c.z0 - z0) < GAP_EPS && Math.abs(c.z1 - z1) < GAP_EPS);
+    // **矩形または台形**＝上辺が水平で下辺が1本の直線（水平なら矩形。斜めの天端の上のアキは台形）。
+    // 下辺が1本の直線かは、全セルの下辺の両端が L→R の直線の上にあるかで見る。
+    const lowLineAt = x => L.lo + (R.lo - L.lo) * (x - x0) / (x1 - x0);
+    const isRect = g.every(c => Math.abs(c.z1 - z1) < GAP_EPS
+      && Math.abs(lowAt(c, c.x0) - lowLineAt(c.x0)) < SLOPE_FIT_EPS_MM
+      && Math.abs(lowAt(c, c.x1) - lowLineAt(c.x1)) < SLOPE_FIT_EPS_MM);
     // QA是正2026-09（Phase 6b-2 C-5の回帰）: 旧ゲート（`dash==='center'`＝成分単位のexempt判定）は
     // 線分ごとの分割（C-5）導入後、矩形の成分でも**上片がcenterのまま**なのに「成分全体としては
     // 非exempt（dash変数は'dashed'）」というだけの理由で「ア キ」が一切出なくなっていた。
@@ -1281,7 +1320,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     const hasUpperCenterPiece = exempt || z1 > baseFloorZ + GAP_EPS;
     if (isRect && hasUpperCenterPiece) {
       // 中心は矩形の中心（クランプ後のz範囲＝バツと同じ範囲）で採る——線と文字が食い違わないため。
-      const tLo = Math.min(L.lo, R.lo), tHi = Math.max(L.hi, R.hi);
+      const tLo = (L.lo + R.lo) / 2, tHi = Math.max(L.hi, R.hi); // 台形なら下辺の中点の高さ（矩形は L.lo===R.lo）
       prims.push({ type: 'text', x: (x0 + x1) / 2, y: zToY((tLo + tHi) / 2),
         text: 'ア キ', anchor: 'middle', baseline: 'middle' });
     }
