@@ -611,9 +611,9 @@ test('S3失敗系: 既存の部分指定の候補（判定3-その他セル）�
   const leftCell = worldToCell(1000, 1500, graph);
   const midCell  = worldToCell(3000, 1500, graph);
   const parent = graph.addRoom(new Set([leftCell.key, midCell.key]), '親');
-  parent.setNamePosition(1000, 1500); // 名前セルはleft。midは「その他セル」
+  parent.setNamePosition(1000, 1500); // 名前セルはleft（名前セルかどうかは判定に影響しない）
 
-  state.startDrag(3000, 1500); // midのみ（親の名前セルではない）
+  state.startDrag(3000, 1500); // midのみ（親の全セルとは不一致）
   state.commitDrag();
   assert.equal(state.namingIsNew, true, '前提: 判定3-その他セルは新規部分指定として開く');
   const partialRoomId = state.namingRoomId;

@@ -1,6 +1,6 @@
 // 部屋名ラベルの配置ルール（単一情報源）。
-// 描画（FinishModeLayer.jsx）と名前セルのクリック判定（FinishModeState._nameCellKeyOf）の
-// 両方がこのアンカーを参照する——二重実装だと片方だけ直ってクリック位置と表示がずれるため。
+// 描画（FinishModeLayer.jsx の部屋名）がこのアンカーを参照する単一情報源。平面の RoomLabelsLayer が
+// 共有するのは showsRoomNameLabel だけ（位置は自前で計算）。名前セルのクリック判定は 2026-10-07 に廃止した。
 import { cellBoundsFromKey, roomBounds, refreshCells } from './gridCells.js';
 import { isRoofFeature } from '../core/constants.js';
 

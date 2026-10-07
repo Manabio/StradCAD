@@ -81,9 +81,10 @@ test('【失敗系・QA G2】FinishModeState.commitDrag: 既存部屋と完全�
 });
 
 // ================================================================
-// ステップ1（部屋編集の導線変更）: commitDrag の判定1・判定3-部分指定・判定3-名前セルは
+// ステップ1（部屋編集の導線変更）: commitDrag の判定1・判定3-部分指定は
 // ダイアログを開かず選択のみ（既存部屋の名称・区分・属性の編集は仕上げ表・内部タブのカードへ移した）。
-// 判定2（統合）・判定3-その他セル/未指定（新規Room）は従来どおりダイアログを開く（回帰の固定）。
+// 判定2（統合）・判定3-その他セル（名前セル含む）/未指定（新規Room）はダイアログを開く（回帰の固定）。
+// 名前セル→選択のみの規則は 2026-10-07 に廃止（親/単一部屋のセルは名前セルでも新規部分指定）。
 // ================================================================
 
 // 3セル横並びグリッド: left[0,2000] / mid[2000,4000] / right[4000,6000] × y[0,3000]
@@ -99,7 +100,7 @@ function makeThreeCellGraph() {
   return graph;
 }
 
-test('FinishModeState.commitDrag【判定3-名前セル】: 単一部屋の名前セルをドラッグすると選択のみ（ダイアログ・undoエントリなし）', () => {
+test('FinishModeState.commitDrag【判定3-その他セル】: 単一部屋の名前セルをドラッグしても新規部分指定のダイアログを開く（名前セル規則の廃止・2026-10-07）', () => {
   const graph = makeThreeCellGraph();
   const state = new FinishModeState(graph, null);
   // left+midの2セルからなる単一の親部屋（referenceRoomIds空）。名前セルをleftへ明示固定する。
@@ -112,12 +113,16 @@ test('FinishModeState.commitDrag【判定3-名前セル】: 単一部屋の名�
   state.startDrag(1000, 1500); // leftセルのみをドラッグ（親部屋の全セルとは不一致）
   state.commitDrag();
 
-  assert.equal(state.namingRoomId, null, '判定3-名前セルはダイアログを開かないはず');
-  assert.equal(state.selectedRoomId, room.id, '名前セルの部屋が選択されるはず');
-  assert.equal(state.dragState, null);
+  assert.ok(state.namingRoomId, '名前セルでもダイアログを開くはず');
+  assert.notEqual(state.namingRoomId, room.id, '新規部分指定のIDのはず（親のIDではない）');
+  assert.equal(state.namingIsNew, true);
+  const newRoom = graph.roomMap.get(state.namingRoomId);
+  assert.deepEqual([...newRoom.referenceRoomIds], [room.id], '新規部分指定は親を参照するはず');
+  assert.deepEqual([...refreshCells(newRoom.cells, graph)], [leftCell.key], '新規部分指定のセルは開始セルだけのはず');
   assert.deepEqual([...refreshCells(room.cells, graph)].sort(), [leftCell.key, midCell.key].sort(),
-    '部屋のセルは変わらないはず');
-  assert.equal(undoManager._undoStack.length, undoCountBefore, 'undoエントリを積まないはず');
+    '親のセルは変わらないはず');
+  assert.equal(undoManager._undoStack.length, undoCountBefore, 'ダイアログ確定前はundoを積まないはず');
+  assert.notEqual(state._pendingDialogUndo, null, 'undoは確定まで保留されるはず');
 });
 
 test('FinishModeState.commitDrag【判定3-部分指定】: 部分指定を含む重複ドラッグ（完全一致・完全包含のいずれでもない）は部分指定を選択のみ', () => {
@@ -185,13 +190,13 @@ test('【回帰】FinishModeState.commitDrag【判定3-未指定】: 未指定�
   assert.equal(state.namingIsNew, true);
 });
 
-test('【回帰】FinishModeState.commitDrag【判定3-その他セル】: 親/単一部屋の名前セル以外をドラッグすると新規部分指定のダイアログを開く', () => {
+test('【回帰】FinishModeState.commitDrag【判定3-その他セル】: 親/単一部屋の名前セル以外のセルをドラッグしても新規部分指定のダイアログを開く', () => {
   const graph = makeThreeCellGraph();
   const state = new FinishModeState(graph, null);
   const leftCell = worldToCell(1000, 1500, graph);
   const midCell  = worldToCell(3000, 1500, graph);
   const parent = graph.addRoom(new Set([leftCell.key, midCell.key]), '親');
-  parent.setNamePosition(1000, 1500); // 名前セルはleft。midは「その他セル」になる
+  parent.setNamePosition(1000, 1500); // 名前セルはleft。midは名前セル以外
 
   const undoCountBefore = undoManager._undoStack.length;
   state.startDrag(3000, 1500); // midのみ（親の名前セルではない・親の全セルとも不一致）
@@ -205,6 +210,66 @@ test('【回帰】FinishModeState.commitDrag【判定3-その他セル】: 親/�
   assert.deepEqual([...newRoom.referenceRoomIds], [parent.id], '新規部分指定は親を参照するはず');
   // 新規作成（判定3）はダイアログ確定（applyNaming）までundoを保留する契約——この時点ではまだ積まれない
   assert.equal(undoManager._undoStack.length, undoCountBefore, 'ダイアログ確定前はundoを積まないはず');
+});
+
+test('【回帰】FinishModeState.commitDrag: 玄関・ホールを削除して両セルを新ホールに指定したあと、元玄関セルのクリックで新規部分指定が始まる（名前アンカーが元玄関セルでも）', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const leftCell = worldToCell(1000, 1500, graph);
+  const midCell  = worldToCell(3000, 1500, graph);
+  const entrance = graph.addRoom(new Set([leftCell.key]), '玄関');
+  const hall     = graph.addRoom(new Set([midCell.key]), 'ホール');
+
+  state.deleteRoom(entrance.id);
+  state.deleteRoom(hall.id);
+  for (const id of [entrance.id, hall.id]) {
+    assert.equal(graph.roomMap.get(id)?.feature, RoomFeature.UNDEFINED, '削除した部屋は未定義の残置部屋になるはず');
+  }
+
+  state.startDrag(1000, 1500);
+  state.updateDrag(3000, 1500);
+  state.commitDrag();
+  const newHallId = state.namingRoomId;
+  assert.ok(newHallId, '未指定扱いで新ホールの命名ダイアログが開くはず');
+  const newHall = graph.roomMap.get(newHallId);
+  state.applyNaming(newHallId, { name: '新ホール', kind: newHall.kind, feature: null });
+  assert.equal(graph.roomMap.has(entrance.id), false, '新ホールのセルを覆われた残置部屋は消えるはず');
+  assert.equal(graph.roomMap.has(hall.id), false);
+
+  state.startDrag(1000, 1500); // 元玄関セル（新ホールの名前アンカーがここに来うる）
+  state.commitDrag({ tap: true });
+
+  assert.equal(state.namingIsNew, true, '新規部分指定のダイアログが開くはず');
+  const partial = graph.roomMap.get(state.namingRoomId);
+  assert.ok(partial);
+  assert.notEqual(partial.id, newHallId);
+  assert.deepEqual([...partial.referenceRoomIds], [newHallId]);
+  assert.deepEqual([...refreshCells(partial.cells, graph)], [leftCell.key]);
+});
+
+// 名前セル規則の廃止でタップのたびに候補Roomが作られるようになったため、キャンセルで差分ゼロへ戻る経路を固定する。
+test('【失敗系】commitDrag: 複数セルの親部屋をタップして開いた新規部分指定をキャンセルすると元に戻る', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const leftCell = worldToCell(1000, 1500, graph);
+  const midCell  = worldToCell(3000, 1500, graph);
+  const parent = graph.addRoom(new Set([leftCell.key, midCell.key]), '親');
+  const roomsBefore = graph.rooms.length;
+  const undoCountBefore = undoManager._undoStack.length;
+
+  state.startDrag(1000, 1500);
+  state.commitDrag({ tap: true });
+  assert.equal(state.namingIsNew, true, '新規部分指定のダイアログが開くはず');
+  assert.equal(graph.rooms.length, roomsBefore + 1, '候補Roomが1件作られるはず');
+
+  state.cancelNaming(state.namingRoomId);
+
+  assert.equal(graph.rooms.length, roomsBefore, '候補Roomが消えて元の件数に戻るはず');
+  assert.equal(undoManager._undoStack.length, undoCountBefore, 'undoエントリを積まないはず');
+  assert.equal(state._pendingDialogUndo, null, '保留undoは破棄されるはず');
+  assert.equal(state.namingRoomId, null);
+  assert.deepEqual([...refreshCells(parent.cells, graph)].sort(), [leftCell.key, midCell.key].sort(),
+    '親のセルは変わらないはず');
 });
 
 // ---- 屋外部屋（非階段）の外部タブ連動（_syncExteriorRows）----

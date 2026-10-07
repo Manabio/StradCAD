@@ -1,5 +1,5 @@
 // roomNameAnchor（部屋名ラベルの配置ルール単一情報源）のテスト。
-// 描画（FinishModeLayer.jsx）とクリック判定（FinishModeState._nameCellKeyOf）の共通契約。
+// 描画（FinishModeLayer.jsx 等）が参照する配置の契約。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, ROOF_ROOM_NAME } from '@core';

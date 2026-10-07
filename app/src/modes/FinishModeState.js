@@ -1,5 +1,5 @@
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
-import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList, worldToCell } from '../finish/gridCells.js';
+import { regionCellsAt, refreshCells, cellBoundsFromKey, cellBoundsList } from '../finish/gridCells.js';
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { ensureUnderStairSplit, removeUnderStairSplit } from '../finish/stair/stairUnderSplit.js';
@@ -10,7 +10,6 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { floorWriteGeneration } from '../storage/floorWriteGeneration.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
 import { normalizePartialDominance } from '../finish/roomReinterpret.js';
-import { roomNameAnchor } from '../finish/roomLabel.js';
 import { makeRoomUndefined, subtractCellsFromUndefinedRooms } from '../finish/roomUndefined.js';
 import { selfFloorEquipmentCatalog, nextEquipmentNo, equipmentFloorSpanLabel } from '../finish/equipment/equipmentNumbering.js';
 import { equipmentAtCell } from '../finish/equipment/equipmentGeometry.js';
@@ -751,12 +750,13 @@ export class FinishModeState {
    *   完全一致                 → 全体選択のみ（ダイアログは開かない）                    [判定1]
    *   複数部屋を完全包含        → 統合（dominantに吸収）・既存ダイアログ                [判定2]
    *   開始セルが部分指定        → その部分指定を全体選択のみ（ダイアログは開かない）      [判定3-部分指定]
-   *   開始セルが親/単一の名前セル → その部屋を全体選択のみ（ダイアログは開かない）        [判定3-名前セル]
-   *   開始セルが親/単一のその他セル → 新規部分指定（cells=newCells∩その部屋）・新規ダイアログ [判定3-その他セル]
+   *   開始セルが親/単一のセル（名前セル含む） → 新規部分指定（cells=newCells∩その部屋）・新規ダイアログ [判定3-その他セル]
    *   開始セルが未指定           → 新規部屋（newCellsから全部屋所属セルを除外）・新規ダイアログ [判定3-未指定]
    * ダイアログは新規Room（判定2の統合先・判定3のその他セル/未指定）の命名専用。既存部屋の
    * 名称・区分・属性の編集は仕上げ表・内部タブのカード（onApplyNaming）へ移した。選択のみの
-   * 分岐（判定1・判定3-部分指定・判定3-名前セル）はセルも undo も変更しない。
+   * 分岐（判定1・判定3-部分指定）はセルも undo も変更しない。
+   * 「名前セル→選択のみ」は廃止（2026-10-07）: 部屋編集は仕上げ表のカードへ移り全体選択は判定1と仕上げ表で
+   * 足りる一方、自動配置の名前アンカーが削除済み部屋のセル上に来ると新ホール等への部分指定を始められなかった。
    * 階段エリアのセル（開始セルが自階階段）は startDrag 側で既に選択処理済みで
    * commitDrag には到達しない。feature=STAIR・昇降路（isShaftFeature）の部屋は cells ドリフトに
    * 備えて防御的に除外する（セル除外で通常到達しないはずだが、newCells に混入した場合の二重の守り）。
@@ -853,12 +853,8 @@ export class FinishModeState {
     // 親/単一部屋（referenceRoomIds 空）
     const owner = rooms.find(r => r.referenceRoomIds.size === 0 && cellsOf(r).has(startCellKey));
     if (owner) {
-      if (this._nameCellKeyOf(owner) === startCellKey) {
-        // 名前セル — その部屋を全体選択のみ（ダイアログは開かない）
-        this._selectExistingRoom(owner.id);
-        return;
-      }
-      // その他セル — 新規部分指定（cells = newCells ∩ その部屋の現在セル）
+      // 名前セルかどうかによらず新規部分指定（2026-10-07 名前セル規則の廃止）
+      // — 新規部分指定（cells = newCells ∩ その部屋の現在セル）
       const cells = new Set([...newCells].filter(c => cellsOf(owner).has(c)));
       const room = this.graph.addRoom(cells, '', crypto.randomUUID(), new Set([owner.id]));
       applyDefaultBaseboard(room); // QA G2: ユーザー新規作成経路でのみ巾木初期値を適用
@@ -886,19 +882,6 @@ export class FinishModeState {
   }
 
   /**
-   * room の「名前セル」（名前の表示アンカーを worldToCell したセルキー）。無名部屋は null（＝名前セルなし扱い）。
-   * アンカー算出は FinishModeLayer.jsx の部屋名描画と同じ roomNameAnchor（roomLabel.js）を使う
-   * （namePosition 明示 > 最大面積セル中心。親は部分指定に奪われていないセルから選ぶ）。
-   */
-  _nameCellKeyOf(room) {
-    if (!room.name) return null;
-    const anchor = roomNameAnchor(room, this.graph);
-    if (!anchor) return null;
-    const cell = worldToCell(anchor.x, anchor.y, this.graph);
-    return cell ? cell.key : null;
-  }
-
-  /**
    * ドラッグ確定後、部屋名ダイアログを開く（既存部屋 or 新規部屋）共通処理。
    * cellOrder（選択順セルキー配列）は階段変換時の上り口ヒントとして applyNaming が使う。
    */
@@ -912,7 +895,7 @@ export class FinishModeState {
   }
 
   /**
-   * commitDrag の判定1・判定3-部分指定・判定3-名前セル用: ダイアログを開かずその部屋を選択するだけ。
+   * commitDrag の判定1・判定3-部分指定用: ダイアログを開かずその部屋を選択するだけ。
    * セルは変更せず、undo エントリも積まない。
    */
   _selectExistingRoom(roomId) {
