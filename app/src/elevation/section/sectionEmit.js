@@ -124,7 +124,7 @@ function subtractZ(ranges, nb) {
  * @param {object} band
  * @returns {{z0:number,z1:number}[]}
  */
-function uncoveredZRanges(col, band) {
+function uncoveredZRanges(col, band, side = null) {
   if (!col) return [{ z0: band.z0, z1: band.z1 }];
   let ranges = [{ z0: band.z0, z1: band.z1 }];
   for (const nb of col.bands) {
@@ -180,7 +180,10 @@ function uncoveredZRanges(col, band) {
       // 続いていなければ残る（「5」B: 上階の壁が腰壁で終わっている）。
       ranges = subtractZ(ranges, { z0: band.z0, z1: cutTop });
     }
-    ranges = subtractZ(ranges, nb);
+    // 斜め・柱頭の天端の帯（topEdge）は境界での天端の高さまでしか覆わない（帯の上端 z1 は高い側の値）。
+    // side: 隣接列が自列の手前側（'prev'＝その x1 が境界）か向こう側（'next'＝その x0 が境界）か。
+    const nbTop = side && nb.topEdge ? Math.min(nb.z1, side === 'prev' ? nb.topEdge.zAtX1 : nb.topEdge.zAtX0) : nb.z1;
+    ranges = subtractZ(ranges, nbTop === nb.z1 ? nb : { z0: nb.z0, z1: nbTop });
   }
   return ranges.filter(r => r.z1 - r.z0 > GAP_EPS);
 }
@@ -702,11 +705,21 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           }
           continue;
         }
+        // 同じ軸CLの切断壁の表裏で高さが違う（隔て壁の埋込み柱の立ち上がり）とき、隣の断面に覆われた高さの縁は
+        // 壁の内部なので描かない（覆われていない高さだけ縦線を引く）。
+        const edgeRanges = nbCol => (nbCol?.bands ?? [])
+          .filter(b => b.kind === 'cut' && !!b.wall?.axisCL && b.wall.axisCL === band.wall?.axisCL && overlapsZ(b, band))
+          .reduce((rs, b) => subtractZ(rs, b), [{ z0: band.z0, z1: band.z1 }])
+          .filter(r => r.z1 - r.z0 > GAP_EPS);
         if (hidden !== 'hi' && !sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
-          prims.push(Object.assign(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
+          for (const r of edgeRanges(prev)) {
+            prims.push(Object.assign(emitLine(cut, col.x0, r.z0, col.x0, r.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
+          }
         }
         if (hidden !== 'lo' && !sameWall(matchingBand(next, band.z0, band.z1, 'cut'))) {
-          prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
+          for (const r of edgeRanges(next)) {
+            prims.push(Object.assign(emitLine(cut, col.x1, r.z0, col.x1, r.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
+          }
         }
       } else if (band.kind === 'wall') {
         // 見えがかり壁面の輪郭（上端・下端）。水平線（縮退）はemitLineの単独判定では
@@ -809,7 +822,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         {
           const wholeBand = [{ z0: band.z0, z1: band.z1 }];
           const loRanges = (splitByCutWall && !endsAtGap(prev) && !atFaceEndLo) ? []
-            : prev ? uncoveredZRanges(prev, band) : (emitCtx.openEndLo ? [] : wholeBand);
+            : prev ? uncoveredZRanges(prev, band, 'prev') : (emitCtx.openEndLo ? [] : wholeBand);
           // 斜めの天端の帯は、端の縦線を**その端での天端の高さ**までにする（帯の上端 z1 は高い側の値）。
           for (const r of loRanges) {
             const x = wallEndXAt(columns, i, -1, r.z0, col.x0);
@@ -818,7 +831,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
             prims.push(Object.assign(emitLine(cut, x, r.z0, x, zTop, role, { ceilZ }),{__o:'recessLo'}));
           }
           const hiRanges = (splitByCutWall && !endsAtGap(next) && !atFaceEndHi) ? []
-            : next ? uncoveredZRanges(next, band) : (emitCtx.openEndHi ? [] : wholeBand);
+            : next ? uncoveredZRanges(next, band, 'next') : (emitCtx.openEndHi ? [] : wholeBand);
           for (const r of hiRanges) {
             const x = wallEndXAt(columns, i, +1, r.z0, col.x1);
             const zTop = band.topEdge ? Math.min(r.z1, band.topEdge.zAtX1) : r.z1;

@@ -4,7 +4,7 @@
 // 端 y=4000 で上階FL+800=3200、踊り場側 y=1000 で 7段鼻×200+800=2200）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature, edgeKey } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature, edgeKey, StructuralMaterialType } from '@core';
 import { makeProbeContext, collectCutBreaks } from './sectionProbe.js';
 import { probeColumnHits, kneeDropZRangesAt } from './sectionHits.js';
 import { buildColumns, buildSectionFigure } from './sectionEngine.js';
@@ -487,4 +487,149 @@ test('S4-2 emit: cut 経路は踊り場端の断面が zAtLandingEnd（2200）�
   assert.ok(cap.length >= 1, '断面の上端（太線）が z=2200');
   const under = lines.filter(p => p.weight === 'thin' && !p.dash && Math.abs(p.y1 - p.y2) < 1e-6 && p.y1 < 0 && p.y1 > -2200);
   assert.equal(under.length, 0, '2200 より下に笠木の細線なし');
+});
+
+// ======== S4b: 埋込み柱の立ち上がり（upstands）========
+// 隔て壁の端の 90角柱（壁の下地材そのもの）。踊り場側 y=1000..1090（芯 y=1045）・上り口側 y=3910..4000（芯 y=3955）。
+// 柱頭＝直上の層の FL（2400）。踊り場側の天端は y=1000..1090 で 2200..2230（柱頭より低い＝柱が出る）、
+// 上り口側は 3167 付近（> 柱頭の 2400 …この寸法では柱頭が低い＝出ない側の対照）。
+function addEndColumns(graph, V, H, { ys = [1045, 3955], role, sec = 'WOOD-90x90', x = 1000 } = {}) {
+  return ys.map(y => {
+    const c = graph.addColumn(StructuralMaterialType.WOOD, sec, V(x), H(y), {});
+    if (role) c.role = role;
+    return c;
+  });
+}
+function upstandFixture({ above = 'void', ...opts } = {}) {
+  const f1 = makeFloor('p1', 0, { stairRects: EQUAL_UP, partition: true });
+  addEndColumns(f1.graph, f1.V, f1.H, opts);
+  const f2 = above === 'stair' ? makeFloor('p2', 1, { stairRects: EQUAL_UP }) : makeFloor('p2', 1, { voidRects: EQUAL_UP });
+  const layers = [{ graph: f1.graph, floorZMm: 0, role: 'self' }, { graph: f2.graph, floorZMm: FH, role: 'above' }];
+  return { f1, f2, layers, ctx: makeProbeContext(layers) };
+}
+test('S4b プロファイル: オーナー壁は踊り場側・上り口側の柱の区間（壁の長さ方向）を柱頭＝直上の層のFLまでの立ち上がりに持つ。薄壁（柱を隠さない）は持たない', () => {
+  const { f1, layers, ctx } = upstandFixture();
+  const [owner, thin] = f1.walls;
+  assert.deepEqual(ctx.wallTopProfileFor(layers[0]).get(owner.id).upstands,
+    [{ lo: 1000, hi: 1090, topZ: FH }]); // 上り口側（3910..4000）は斜めの天端が柱頭より高く壁の中＝upstand にしない
+  assert.deepEqual(ctx.wallTopProfileFor(layers[0]).get(thin.id).upstands, []);
+});
+
+test('S4b kneeDropZRangesAt: 点が柱の中→柱頭まで・topAt なし／span が柱面に接するだけ→斜めのまま（境界の回帰）／span が柱と重なる→柱頭・水平', () => {
+  const { graph, walls } = makeFloor('p1', 0, { stairRects: EQUAL_UP, partition: true });
+  const w = walls[0];
+  const top = { zAt: a => 2200 + (a - 1000) / 3, upstands: [{ lo: 1000, hi: 1090, topZ: 3000 }] };
+  const inside = kneeDropZRangesAt(graph, w, 1045, 0, 6000, top)[0];
+  near(inside.z1, 3000); assert.equal(inside.topAt, undefined); near(inside.upstandTopZ, 3000);
+  near(kneeDropZRangesAt(graph, w, 1045, 0, 2800, top)[0].z1, 2800, 'ceilZ でクランプ');
+  const slope = kneeDropZRangesAt(graph, w, 1300, 0, 6000, top)[0];
+  assert.equal(typeof slope.topAt, 'function'); assert.equal(slope.upstandTopZ, undefined);
+  const touch = kneeDropZRangesAt(graph, w, 1300, 0, 6000, top, { worldLo: 1090, worldHi: 1600 })[0];
+  near(touch.z1, 2400); assert.equal(typeof touch.topAt, 'function', '柱面で接するだけの隣の列は斜めのまま');
+  const touchLo = kneeDropZRangesAt(graph, w, 500, 0, 6000, top, { worldLo: 800, worldHi: 1000 })[0];
+  assert.equal(typeof touchLo.topAt, 'function', '柱の外側の面で接する列も斜めのまま');
+  const overlap = kneeDropZRangesAt(graph, w, 1100, 0, 6000, top, { worldLo: 1050, worldHi: 1600 })[0];
+  near(overlap.z1, 3000); assert.equal(overlap.topAt, undefined);
+  const low = kneeDropZRangesAt(graph, w, 1045, 0, 6000, { zAt: () => 3500, upstands: [{ lo: 1000, hi: 1090, topZ: 3000 }] })[0];
+  near(low.z1, 3500); assert.equal(typeof low.topAt, 'function', '斜めの天端が柱頭より高ければ柱は壁の中');
+});
+
+test('S4b 列の境界: 柱の面（y=1090）が列を割る（壁の中に収まる上り口側 y=3910 は割らない）。柱が無ければ割らない', () => {
+  const { layers, ctx } = upstandFixture();
+  const b = collectCutBreaks(slopeCut(layers), ctx);
+  assert.ok(hasBreak(b, 1090), String(b));
+  assert.ok(!hasBreak(b, 3910), '壁の中に収まる上り口側の柱面では割らない');
+  const none = upstandFixture({ ys: [] });
+  const b0 = collectCutBreaks(slopeCut(none.layers), none.ctx);
+  assert.ok(!hasBreak(b0, 1090) && !hasBreak(b0, 3910), String(b0));
+});
+
+test('S4b wallFace: 踊り場側の柱は柱頭の高さの水平の天端（topEdge 平ら）・隣は斜めのまま（端が柱頭へ化けない）・上り口側の柱は斜めの天端が柱頭より高く壁の中', () => {
+  const { layers, ctx } = upstandFixture();
+  const cols = buildColumns(slopeCut(layers), ctx);
+  const w = c => cols.find(x => x.x0 === c).bands.find(b => b.kind === 'wall');
+  near(w(1000).z1, FH); near(w(1000).topEdge.zAtX0, FH); near(w(1000).topEdge.zAtX1, FH);
+  near(w(1090).topEdge.zAtX0, 2230); near(w(1090).topEdge.zAtX1, 2400);
+  for (const x of [1600, 3955]) {
+    assert.ok(Math.abs(w(x).topEdge.zAtX0 - w(x).topEdge.zAtX1) > 1, `x=${x} は斜めのまま`);
+    assert.ok(w(x).z1 > FH + 700, `x=${x} の天端は柱頭（${FH}）より高い`);
+  }
+  near(w(3955).topEdge.zAtX1, 3200);
+});
+
+test('S4b emit: 柱頭の水平線と両面の縦線（柱の左面は斜面の端 2230 から柱頭まで）。dirSign<0 では鏡像', () => {
+  const { layers, ctx } = upstandFixture();
+  const lines = linesOf(buildSectionFigure(slopeCut(layers), ctx).content).filter(p => p.weight === 'medium');
+  assert.ok(lines.some(p => sameLine(p, 1000, -2400, 1090, -2400)), '柱頭の水平線');
+  assert.ok(lines.some(p => sameLine(p, 1000, 0, 1000, -2400)), '端の縦線は柱頭まで');
+  assert.ok(lines.some(p => sameLine(p, 1090, -2230, 1090, -2400)), '柱面の縦線は斜面の端から柱頭まで');
+  assert.ok(lines.some(p => sameLine(p, 1090, -2230, 1600, -2400)), '斜線は柱面から続く');
+  assert.equal(lines.filter(p => Math.abs(p.x1 - 1090) < 1e-6 && Math.abs(p.x2 - 1090) < 1e-6 && p.y2 > -2230 + 1e-6).length, 0, '柱面の下（壁の中）に縦線なし');
+  const rev = linesOf(buildSectionFigure(slopeCut(layers, { dirSign: -1 }), ctx).content).filter(p => p.weight === 'medium');
+  assert.ok(rev.some(p => sameLine(p, 3910, -2400, 4000, -2400)), '鏡像: 柱頭の水平線');
+  assert.ok(rev.some(p => sameLine(p, 3910, -2230, 3910, -2400)), '鏡像: 柱面の縦線');
+});
+
+test('S4b cut 経路: 柱の位置（y=1045・1090）の隔て壁の断面は柱頭まで、柱の外（y=1500）は斜めのまま。断面の内側の縦線は引かない', () => {
+  const { f1, layers, ctx } = upstandFixture();
+  const cut = y => ({ ...cutAt(layers, y), zRange: { loZ: 0, hiZ: 6000 }, ceilProfile: undefined });
+  const owner = f1.walls[0];
+  const z = y => probeColumnHits(cut(y), 1000, ctx).hits.filter(h => h.kind === 'cut' && h.wall === owner).map(h => h.z1);
+  near(z(1045)[0], FH); near(z(1090)[0], FH);
+  near(z(1500)[0], 2200 + 500 / 3);
+  const lines = linesOf(buildSectionFigure(cut(1045), ctx).content).filter(p => p.weight === 'thick' && Math.abs(p.x1 - p.x2) < 1e-6);
+  const dups = lines.filter(p => lines.some(q => q !== p && Math.abs(q.x1 - p.x1) < 1e-6 && Math.min(p.y1, p.y2) < Math.max(q.y1, q.y2) - 1e-6
+    && Math.max(p.y1, p.y2) > Math.min(q.y1, q.y2) + 1e-6));
+  assert.deepEqual(dups, [], '同じ x の縦の太線が重ならない');
+});
+
+test('【失敗系・S4b】柱なし／柱が壁に収まらない（厚み方向に20mmずれ）／杭（foundation）／続く層／直上の層なし／非在来は upstand を持たず S4-2 と同じ出力', () => {
+  // 対照（柱の CL＝列の境界は同じで、杭にして upstand だけ無い）
+  const pile = upstandFixture({ role: 'foundation' });
+  const out = fx => JSON.stringify(buildSectionFigure(slopeCut(fx.layers), fx.ctx).content);
+  const flatBands = fx => buildColumns(slopeCut(fx.layers), fx.ctx).flatMap(c => c.bands)
+    .filter(b => b.topEdge && Math.abs(b.topEdge.zAtX0 - b.topEdge.zAtX1) < 1e-6);
+  const upOf = fx => fx.ctx.wallTopProfileFor(fx.layers[0]).get(fx.f1.walls[0].id)?.upstands ?? [];
+  assert.equal(flatBands(upstandFixture()).length, 1, '正の対照: 踊り場側の柱に平らな天端が出る');
+  assert.deepEqual(upOf(pile), []); assert.equal(flatBands(pile).length, 0);
+  const noCol = upstandFixture({ ys: [] });
+  assert.deepEqual(upOf(noCol), []); assert.equal(flatBands(noCol).length, 0);
+  const off = upstandFixture({ x: 1020 });
+  assert.deepEqual(upOf(off), [], '柱面 975..1065 は壁の帯 955..1057.5 に収まらない');
+  assert.equal(flatBands(off).length, 0);
+  assert.equal(out(off).replace(/1020/g, '1000'), out(pile).replace(/1020/g, '1000'), '杭と同じ出力');
+  const steel = upstandFixture(); steel.f1.graph.structureOverride = 'S造';
+  assert.equal(steel.ctx.wallTopProfileFor(steel.layers[0]).size, 0);
+  const cont = upstandFixture({ above: 'stair' });
+  assert.equal(cont.ctx.wallTopProfileFor(cont.layers[0]).size, 0, '続く層はプロファイルなし＝フルハイト');
+  assert.equal(flatBands(cont).length, 0);
+  const f1 = makeFloor('p1', 0, { stairRects: EQUAL_UP, partition: true });
+  addEndColumns(f1.graph, f1.V, f1.H);
+  const soloLayer = { graph: f1.graph, floorZMm: 0, role: 'self' };
+  assert.equal(makeProbeContext([soloLayer]).wallTopProfileFor(soloLayer).size, 0, '直上の層なし');
+});
+
+test('S4b 柱頭の基準: 実効FL（floorOffsetMm）込み。斜めの天端と同じ座標系（offset 100 → 柱頭 2300・zAt(1000)=2100／offset 0 は 2400・2200）', () => {
+  const { f1, layers } = upstandFixture();
+  const owner = f1.walls[0];
+  const prof = opts => makeProbeContext(layers, opts).wallTopProfileFor(layers[0]).get(owner.id);
+  const p100 = prof({ floorOffsetMm: 100 });
+  near(p100.upstands[0].topZ, 2300); near(p100.zAt(1000), 2100);
+  const p0 = prof({});
+  near(p0.upstands[0].topZ, 2400); near(p0.zAt(1000), 2200);
+});
+
+test('S4b 上限で頭打ち: 視線の上限（上に実の部屋の床 2400）が柱頭（3000）より低いと、柱の列の wallFace 帯は上限の高さで topEdge なし（柱頭の線を上限の上へ出さない）', () => {
+  const { f1 } = upstandFixture();
+  const f2r = makeFloor('p2', 1, { roomRects: EQUAL_UP });
+  const layers = [{ graph: f1.graph, floorZMm: 0, role: 'self' }, { graph: f2r.graph, floorZMm: FH, role: 'above' }];
+  const ctx = makeProbeContext(layers);
+  const orig = ctx.wallTopProfileFor;
+  ctx.wallTopProfileFor = l => { const m = orig(l); for (const p of m.values()) p.upstands = (p.upstands ?? []).map(u => ({ ...u, topZ: 3000 })); return m; };
+  const hits = probeColumnHits(slopeCut(layers), 1045, ctx, { worldLo: 1000, worldHi: 1090 }).hits
+    .filter(h => h.kind === 'wallFace' && h.wall === f1.walls[0]);
+  assert.ok(hits.length >= 1);
+  for (const h of hits) { near(h.z1, 2400); assert.equal(h.topEdge, undefined); }
+  const r = kneeDropZRangesAt(f1.graph, f1.walls[0], 1045, 0, 2800, { zAt: () => 2200, upstands: [{ lo: 1000, hi: 1090, topZ: 3000 }] }, { worldLo: 1000, worldHi: 1090 })[0];
+  near(r.z1, 2800); near(r.upstandTopZ, 3000);
 });

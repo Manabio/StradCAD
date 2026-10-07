@@ -395,13 +395,23 @@ function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
  * @param {{worldLo:number, worldHi:number}|null} [span] - 列の幅（wallTop があるときだけ使う）。あれば天端は
  *   **幅の両端の高い方**（max）で取る——斜面を水平の帯で近似するとき、遮る範囲を広めに倒す（隠すべきものを
  *   描かない側）。省略は pointCoord の1点。
- * @returns {Array<{z0:number, z1:number, topAt?:(along:number)=>number}>} 1件 or 2件（z0昇順）。wallTopで潰れたら0件
+ * @returns {Array<{z0:number, z1:number, topAt?:(along:number)=>number, upstandTopZ?:number}>} 1件 or 2件（z0昇順）。wallTopで潰れたら0件。
+ *   upstandTopZ は埋込み柱の立ち上がり（wallTop.upstands）が効いた件の柱頭（このとき topAt は持たない）
  */
 export function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ, wallTop = null, span = null) {
   if (wallTop) {
-    const top = span ? Math.max(wallTop.zAt(span.worldLo), wallTop.zAt(span.worldHi)) : wallTop.zAt(pointCoord);
+    let top = span ? Math.max(wallTop.zAt(span.worldLo), wallTop.zAt(span.worldHi)) : wallTop.zAt(pointCoord);
+    // 埋込み柱の立ち上がり（upstands）: 点は閉区間・幅は正の幅で重なるときだけ（柱面で接するだけの隣の列を
+    // 「柱の中」にすると、隣の斜めの列の topEdge が柱頭の高さへ化ける）。効いたら天端は水平（topAt なし・upstandTopZ）。
+    let upstandTopZ = null;
+    for (const u of wallTop.upstands ?? []) {
+      const hit = span
+        ? Math.min(span.worldHi, u.hi) - Math.max(span.worldLo, u.lo) > GAP_EPS
+        : pointCoord >= u.lo - GAP_EPS && pointCoord <= u.hi + GAP_EPS;
+      if (hit && u.topZ > top) { top = u.topZ; upstandTopZ = u.topZ; }
+    }
     const z1 = Math.min(ceilZ, top);
-    return z1 > floorZ ? [{ z0: floorZ, z1, topAt: wallTop.zAt }] : [];
+    return z1 > floorZ ? [{ z0: floorZ, z1, ...(upstandTopZ != null ? { upstandTopZ } : { topAt: wallTop.zAt }) }] : [];
   }
   let records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, POINT_QUERY_EPS_MM);
   if (records.length === 0) {
@@ -441,6 +451,10 @@ function wallTopOf(probeCtx, layer, wall) {
  * @returns {{zAtLo:number, zAtHi:number}|null}
  */
 function topEdgeOf(range, span) {
+  // 埋込み柱の立ち上がり（upstandTopZ）: 天端は柱頭の高さの水平線。上限で頭打ちされたら柱頭に届かない＝線なし。
+  if (range.upstandTopZ != null) {
+    return span && range.z1 >= range.upstandTopZ - GAP_EPS ? { zAtLo: range.z1, zAtHi: range.z1 } : null;
+  }
   if (!span || !range.topAt) return null;
   const zAtLo = range.topAt(span.worldLo), zAtHi = range.topAt(span.worldHi);
   if (Math.abs(zAtLo - zAtHi) < GAP_EPS) return null;

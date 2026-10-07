@@ -34,6 +34,7 @@ import {
   stairPartitionDescriptors, partitionTopZAt, partitionTopCrossings, matchStairPartitionLine,
 } from '../../finish/stair/stairPartition.js';
 import { stairContinuesAbove } from '../../finish/stair/stairChains.js';
+import { isColumnInsideWall, bareColumnRect } from '../../finish/columnWrap.js';
 import {
   cutProbeRange, isCutWall, isCutAlongWall, isSightlineShape,
   buildLayerStack, probeColumn,
@@ -69,9 +70,24 @@ function buildWallTopProfiles(layers, layer, floorZFor) {
     // 絶対zの基準は階段室の床（spaceIndex.floorZFor＝実効FL・datum・floorOffset を含む。層の floorZMm 直でない）
     const baseZ = floorZFor(graph.roomMap?.get(stair.roomId) ?? null, layer);
     // crossings … 斜めの天端が各 z（絶対）を横切る along（昇順）。列の境界（collectCutBreaks）の材料。
+    // upstands … 壁が平面で隠している構造柱（壁の下地材そのもの）の区間 [lo,hi]（壁の長さ方向）。
+    //   区間では柱頭（topZ＝直上の層の FL。柱脚固定で1層分）まで立ち上がる。直上の層が無ければ descs が空でここに来ない。
+    const upstands = [];
+    for (const col of graphList(graph, 'columns') ?? []) {
+      if (col.role === 'foundation') continue; // 杭
+      const rect = bareColumnRect(col, layer.floorZMm);
+      if (!isColumnInsideWall(rect, [w])) continue;
+      const [lo, hi] = w.isVertical ? [rect.yLo, rect.yHi] : [rect.xLo, rect.xHi];
+      // 柱頭は斜めの天端と同じ基準（実効FL・floorOffsetMm 込み）の直上の層のFL
+      const topZ = floorZFor(null, above);
+      // 柱頭が両面の斜めの天端以下なら柱は壁の中に収まり何も出ない＝upstand にしない（列を無駄に割らない）
+      if (topZ <= Math.min(baseZ + partitionTopZAt(desc, lo), baseZ + partitionTopZAt(desc, hi)) + GAP_EPS) continue;
+      upstands.push({ lo, hi, topZ });
+    }
     out.set(w.id, {
       zAt: along => baseZ + partitionTopZAt(desc, along),
       crossings: zLevels => partitionTopCrossings(desc, (zLevels ?? []).map(z => z - baseZ)),
+      upstands,
     });
   }
   return out;
@@ -192,6 +208,10 @@ export function collectCutBreaks(cut, probeCtx) {
         const prof = probeCtx?.wallTopProfileFor?.(layer)?.get(w.id);
         for (const a of prof?.crossings?.([...slopeLevels, ...ceilLevelsOf(layer)]) ?? []) {
           if (a > c1 + GAP_EPS && a < c2 - GAP_EPS) addIfInsideLayer(a);
+        }
+        // 埋込み柱の立ち上がり区間の両端（柱面）も列の境界にする（柱頭の縦線を柱面に出す）。
+        for (const u of prof?.upstands ?? []) {
+          for (const a of [u.lo, u.hi]) if (a > c1 + GAP_EPS && a < c2 - GAP_EPS) addIfInsideLayer(a);
         }
       }
     }
