@@ -310,6 +310,17 @@ export const StairLayer = observer(({
       ),
       afterJsx: (
         <>
+          {/* N+1 平面に見える下階の隔て壁の天端の輪郭（判断は buildStairEntries 側。ここは写すだけ） */}
+          {(e.partitionOutline ?? []).map((seg, i) => (
+            <Line
+              key={`ptn${i}`}
+              points={[seg.x1, seg.y1, seg.x2, seg.y2]}
+              stroke={STAIR_STROKE}
+              strokeWidth={px(viewport.lineWeightsPx.thin)}
+              lineCap="square"
+              listening={false}
+            />
+          ))}
           {beyondLines}
           {breakLine}
           {arrows}

@@ -10,6 +10,10 @@ import { cellsBeyondBreak, LANE_GAP } from './stairGeometry.js';
 import { stairUnderWallClips } from './stairUnderClip.js';
 import { roomBounds, cellBoundsList, refreshCells } from '../gridCells.js';
 import { shouldShowPlanFigure } from '../../renderer/planFigureVisibility.js';
+import { rectFromMm, unionBoundary, unq } from '../../renderer/orthoRegion.js';
+import { partitionPlanRects } from './stairPartition.js';
+import { slabOpeningRects } from './slabOpening.js';
+import { clipSegmentsToRects } from './segmentClip.js';
 
 // 矩形2つが実質的に重なる（浮動小数の際どい接触は無視）か。EPS(mm) 未満の重なりは無視する。
 const RECT_OVERLAP_EPS = 1; // mm
@@ -23,6 +27,24 @@ function rectsOverlap(a, b) {
 export function anyCellBoundsOverlap(listA, listB) {
   if (!listA?.length || !listB?.length) return false;
   return listA.some(a => listB.some(b => rectsOverlap(a, b)));
+}
+
+// N+1 平面に見える、下階 N の隔て壁の天端の輪郭線（合併境界）。下階の隔て壁（オーナー壁＋薄壁）の
+// 矩形の合併境界を、自階（N+1）のスラブ開口で切る。FL より上も下も上から見れば切断高より下なので
+// 高さでは分けない。壁が無ければ []。開口が1つも重ならなければ切らない（slabOpeningBounds と同じ安全側）。
+function partitionOutlineOf(e, getOpenings) {
+  const rects = partitionPlanRects(e.stair, e.graph).map(r => rectFromMm(r.xLo, r.xHi, r.yLo, r.yHi)).filter(Boolean);
+  if (rects.length === 0) return [];
+  const segs = unionBoundary(rects).map(ed => (ed.vertical
+    ? { x1: unq(ed.at), y1: unq(ed.lo), x2: unq(ed.at), y2: unq(ed.hi) }
+    : { x1: unq(ed.lo), y1: unq(ed.at), x2: unq(ed.hi), y2: unq(ed.at) }));
+  const openings = getOpenings().filter(r => anyCellBoundsOverlap([r], e.cellBounds));
+  return clipSegmentsToRects(segs, openings);
+}
+
+function withPartitionOutline(entry, getOpenings) {
+  const partitionOutline = partitionOutlineOf(entry, getOpenings);
+  return partitionOutline.length > 0 ? { ...entry, partitionOutline } : entry;
 }
 
 // 上階ビュー peek 用: 直下階の階段を、上階表現（全段）の描画用エントリへ解決する
@@ -106,6 +128,9 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
   // （初回マウント時の見た目は元々空だったため変化なし）。中間階ガードの安全側判定は
   // 下記 stairUnderClips 側で null を別途見て行う。isStairMode===false でも空配列に
   // 揃える（site・structure モードでの無駄なフィルタ・マップ計算を止める）。
+  // 自階のスラブ開口は必要なときだけ1回計算し、全エントリで共有する
+  let selfOpenings = null;
+  const getSelfOpenings = () => (selfOpenings ??= slabOpeningRects(graph) ?? []);
   const upperEntries = isStairMode
     ? (upperStairEntriesPeek ?? [])
         .filter(e => !installStairIds.has(e.id))
@@ -118,7 +143,7 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
                 ...e, wallGraph: graph, installOverlap: true, clipAgainstId: overlapInstall.id,
                 beyondBreakBounds: overlapInstall.beyondBreakBounds,
               }
-            : { ...e, wallGraph: graph };
+            : withPartitionOutline({ ...e, wallGraph: graph }, getSelfOpenings);
         })
     : [];
 

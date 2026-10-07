@@ -6,9 +6,10 @@ import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomKind } fro
 import { measureStairSpans, uTurnSpans } from './stairClassify.js';
 import { portSpansOf, resolveStairPorts } from './stairPorts.js';
 import { roomBounds } from '../gridCells.js';
+import { generateStairPartitionWalls } from './stairPartitionWalls.js';
 import {
   partitionTopZAt, partitionTopCrossings, stairPartitionDescriptors,
-  resolveStairPartition, PARTITION_BACKING_MM, PARTITION_FINISH_MM, PARTITION_TOP_ABOVE_NOSING_MM, PARTITION_THICKNESS_MM,
+  resolveStairPartition, partitionPlanRects, PARTITION_BACKING_MM, PARTITION_FINISH_MM, PARTITION_TOP_ABOVE_NOSING_MM, PARTITION_THICKNESS_MM,
 } from './stairPartition.js';
 
 const WOOD = '木造（在来）';
@@ -213,4 +214,47 @@ test('stairPartitionDescriptors: continuesAbove の true→full・false→slope�
   assert.equal(d({ continuesAbove: () => false }).length, 1, '対照（屋内）');
   pair.setKind(RoomKind.EXTERIOR);
   assert.deepEqual(d({ continuesAbove: () => false }), []);
+});
+
+// ---- partitionPlanRects（N+1 平面の天端の輪郭の材料。壁の有無が唯一の情報源）----
+test('partitionPlanRects: 隔て壁（オーナー壁＋薄壁）があれば軸±57.5 の幅の矩形2つ（x 942.5〜1057.5 に畳める）', () => {
+  const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
+  generateStairPartitionWalls(graph, { structure: WOOD });
+  const rs = partitionPlanRects(stair, graph);
+  assert.equal(rs.length, 2);
+  const sorted = [...rs].sort((a, b) => a.xLo - b.xLo);
+  assert.deepEqual(sorted.map(r => [r.xLo, r.xHi, r.yLo, r.yHi]), [[942.5, 955, 1000, 4000], [955, 1057.5, 1000, 4000]]);
+});
+
+test('partitionPlanRects: 柱包みではね出した物理端を含む', () => {
+  const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
+  for (const w of generateStairPartitionWalls(graph, { structure: WOOD })) w.startOffset = -57.5;
+  const rs = partitionPlanRects(stair, graph);
+  assert.deepEqual(rs.map(r => [r.yLo, r.yHi]), [[942.5, 4000], [942.5, 4000]]);
+});
+
+test('partitionPlanRects: 水平軸（flip・右上り）は x が長さ方向・y が厚み方向', () => {
+  const { graph, stair } = makeStair(
+    [[3000, 0, 4000, 2000], [0, 0, 3000, 1000], [0, 1000, 3000, 2000]], { upDirection: 'right', flip: true });
+  generateStairPartitionWalls(graph, { structure: WOOD });
+  const rs = partitionPlanRects(stair, graph);
+  assert.equal(rs.length, 2);
+  assert.ok(rs.every(r => r.xLo === 0 && r.xHi === 3000 && r.yLo >= 942.5 && r.yHi <= 1057.5));
+});
+
+test('partitionPlanRects【失敗系】壁なし・非 SWITCHBACK・屋外階段・形の違う壁は []', () => {
+  const a = makeStair(EQUAL_UP, { upDirection: 'up' });
+  assert.deepEqual(partitionPlanRects(a.stair, a.graph), [], '壁なし');
+  const b = makeStair(EQUAL_UP, { type: StairType.STRAIGHT });
+  assert.deepEqual(partitionPlanRects(b.stair, b.graph), [], '非 SWITCHBACK');
+  assert.deepEqual(partitionPlanRects(null, a.graph), []);
+  const c = makeStair(EQUAL_UP, { upDirection: 'up' });
+  generateStairPartitionWalls(c.graph, { structure: WOOD });
+  const room = c.graph.addRoom(new Set(c.stair.cells), '階段');
+  room.kind = RoomKind.EXTERIOR;
+  c.stair.roomId = room.id;
+  assert.deepEqual(partitionPlanRects(c.stair, c.graph), [], '屋外階段');
+  const d = makeStair(EQUAL_UP, { upDirection: 'up' });
+  for (const w of generateStairPartitionWalls(d.graph, { structure: WOOD })) w.wallFinish = 9;
+  assert.deepEqual(partitionPlanRects(d.stair, d.graph), [], '仕上げ厚の違う壁は拾わない');
 });

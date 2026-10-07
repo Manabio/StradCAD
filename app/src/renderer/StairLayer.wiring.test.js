@@ -43,3 +43,19 @@ test('【不変条件】StairLayer は矢じり chevronPoints を ./chevron.js �
   assert.ok(!/CHEVRON_ANGLE/.test(src), '角度の定数が残っている');
   assert.match(src, /^\s*points=\{chevronPoints\(pts, px\(10\)\)\}\s*$/m);
 });
+
+// N+1 平面の下階の隔て壁の天端の輪郭。判断（線分の算出・開口でのクリップ）は stairEntries.js にあり、
+// ここは e.partitionOutline を細線・実線（dash なし）で写すだけ。L字結合（stairLineRenderProps）には入れない。
+test('【不変条件】StairLayer は e.partitionOutline を細線の実線 <Line> で描き、結合プリミティブには渡さない', () => {
+  const code = src.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.equal((code.match(/e\.partitionOutline/g) ?? []).length, 1);
+  assert.match(code, /\(e\.partitionOutline \?\? \[\]\)\.map\(\(seg, i\) => \(/);
+  assert.match(code, /^\s*points=\{\[seg\.x1, seg\.y1, seg\.x2, seg\.y2\]\}\s*$/m);
+  assert.match(code, /^\s*strokeWidth=\{px\(viewport\.lineWeightsPx\.thin\)\}\s*$/m);
+  assert.equal((code.match(/partitionOutline/g) ?? []).length, 1, 'treadSegs/outlineSegs など結合側には載せない');
+  const block = code.slice(code.indexOf('.map((seg, i) => ('), code.indexOf('))}', code.indexOf('.map((seg, i) => (')));
+  assert.ok(block.includes('<Line'), '輪郭の <Line> の塊が取れていない');
+  assert.ok(!/dash/.test(block), '実線（dash なし）');
+  assert.ok(block.includes('stroke={STAIR_STROKE}'));
+  assert.ok(block.includes('listening={false}'));
+});

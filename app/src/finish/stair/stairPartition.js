@@ -259,3 +259,28 @@ export function stairPartitionDescriptors(graph, { structure = null, floorHeight
   }
   return out;
 }
+
+/**
+ * 隔て壁の平面の矩形群（mm・量子化なし）。N+1 平面の「隔て壁の天端の輪郭」（stairEntries.js）の材料。
+ * graph（下階 N）の壁のうち、この階段の隔て壁の線に一致するもの（オーナー壁＋薄壁。柱包みの
+ * はね出しを含む物理端）を、長さ方向 [coord の min,max]・厚み方向 materialRange の矩形にする。
+ * 構造（在来か）は見ない——壁があるかどうかが唯一の情報源。屋外階段・SWITCHBACK 以外・壁なしは []。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @returns {Array<{xLo:number,xHi:number,yLo:number,yHi:number}>}
+ */
+export function partitionPlanRects(stair, graph) {
+  if (!stair || !graph) return [];
+  if (graph.roomMap?.get(stair.roomId)?.kind === RoomKind.EXTERIOR) return [];
+  const g = stairPartitionGeometry(stair, graph);
+  if (!g) return [];
+  const lines = [{ isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi }];
+  const out = [];
+  for (const w of graph.walls ?? []) {
+    if (!matchStairPartitionLine(w, lines)) continue;
+    const a = Math.min(w.coord1, w.coord2), b = Math.max(w.coord1, w.coord2);
+    const { lo, hi } = w.materialRange;
+    out.push(g.isVertical ? { xLo: lo, xHi: hi, yLo: a, yHi: b } : { xLo: a, xHi: b, yLo: lo, yHi: hi });
+  }
+  return out;
+}
