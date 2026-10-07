@@ -148,6 +148,37 @@ test('【実機修正】solidPrimitivesForFace: 柱芯が室内側へずれ壁�
   assert.equal(Math.round(xs[1] - xs[0]), 300 + 2 * COVER_MM, '見付け幅は覆い込み後のはず');
 });
 
+// 実機 moku1-3（在来木造）2026-10-07「外壁の中にある柱が描画される」: 外壁は backingDepth を明示しない
+// 対称壁で materialRange が軸〜外面の片側 [0,72.5] だけのため、通り芯中心の120角柱がどの壁にも
+// 「収まらず」出隅・入隅で柱型が出ていた。下地帯 [-60,60] を含めた材で判定すれば壁の中＝描かない。
+test('【実機修正2026-10】structuralColumnContribution: 外壁の下地帯に収まる通り芯上の柱は柱型にしない', () => {
+  const exterior = {
+    isVertical: false, materialRange: { lo: 0, hi: 72.5 }, backingRange: { lo: -60, hi: 60 },
+    coord1: -72.5, coord2: 14632.5, wallFinish: 12.5, axisCL: { effectiveValue: 0 },
+  };
+  const corner = { role: 'standard', sectionDefId: 'WOOD-120x120', x: 0, y: 0, rotation: 0 };
+  const solids = structuralColumnContribution([
+    { graph: { walls: [exterior], columns: [corner] }, floorZMm: 0, role: 'self' },
+  ]);
+  assert.equal(solids.length, 0, '外壁の材に収まる120角柱は寄与しないはず');
+});
+
+// 「壁の中か」はその柱が立つ階の壁だけで判定する（平面 columnWrapSolids の hidden と同じ入力）。
+// 全層の壁で判定すると、1階に壁の無い大部屋に立つ独立柱が真上の2階間仕切り壁に「収まって」消える。
+test('【失敗系】structuralColumnContribution: 上階の壁は下階の柱を隠さない（判定は柱の階の壁だけ）', () => {
+  const upperWall = {
+    isVertical: false, materialRange: { lo: -60, hi: 72.5 }, backingRange: { lo: -60, hi: 60 },
+    coord1: -4000, coord2: 4000, wallFinish: 12.5, axisCL: { effectiveValue: 0 },
+  };
+  const column = { role: 'standard', sectionDefId: 'WOOD-120x120', x: 0, y: 0, rotation: 0 };
+  const solids = structuralColumnContribution([
+    { graph: { walls: [], columns: [column] }, floorZMm: 0, role: 'self' },
+    { graph: { walls: [upperWall], columns: [] }, floorZMm: 2800, role: 'above' },
+  ]);
+  assert.equal(solids.length, 1, '1階に壁が無い独立柱は2階の壁があっても柱型として残るはず');
+  assert.equal(solids[0].baseZ, 0);
+});
+
 // 実機ログ（2階・□-200×200×9.0）の再現: 仕上げ薄壁は材厚が壁芯から45mm室内側にあるため、
 // 「柱の断面が壁芯をまたぐか」では壁を貫いて室内へ出ている柱まで落ちていた。
 // 面の壁芯 -7000 / 干渉壁の材厚 [-6955,-6942.5] / 柱の外面 -6975 という実データの関係を固定する。

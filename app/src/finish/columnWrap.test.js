@@ -95,6 +95,62 @@ test('isColumnInsideWall: 材厚に完全に収まる柱だけ真（はみ出す
   assert.equal(isColumnInsideWall({ xLo: 0, xHi: 105, yLo: 0, yHi: 100 }, []), false, '壁が無ければ偽');
 });
 
+// 実機 moku1-3（在来木造・2026-10-07「外壁の中にある柱が描画される」）の外壁の値をそのまま固定する:
+// 外壁は backingDepth を明示しない対称壁で materialRange は軸〜外面の片側 [0,72.5] しか返さず、
+// 下地帯 backingRange は [-60,60]。通り芯中心の120角柱は片側には収まらないが、材（下地帯∪仕上げ帯）
+// には収まる＝壁の中。
+test('【実機修正2026-10】isColumnInsideWall: 外壁（片側だけのmaterialRange）でも下地帯を含めた材に収まる柱は壁の中', () => {
+  const exterior = {
+    isVertical: false, materialRange: { lo: 0, hi: 72.5 }, backingRange: { lo: -60, hi: 60 },
+    coord1: -72.5, coord2: 14632.5, wallFinish: 12.5, axisCL: { effectiveValue: 0 },
+  };
+  const corner = { xLo: -60, xHi: 60, yLo: -60, yHi: 60 }; // 出隅の通し柱（壁のスパン端）
+  assert.equal(isColumnInsideWall(corner, [exterior]), true, '120角は下地帯120＋仕上げに収まる');
+  assert.equal(isColumnInsideWall({ ...corner, xLo: 3580, xHi: 3700 }, [exterior]), true, '中間の管柱も同じ');
+  // 柱寸アップで室内側へ張り出す柱（外壁面固定の裁定2026-09-17）は材からはみ出す＝平面で壁仕上げに
+  // 影響する柱。展開図の柱型と平面の柱壁が同じ答えになる。
+  assert.equal(isColumnInsideWall({ ...corner, yLo: -60, yHi: 90 }, [exterior]), false, '壁より太い柱は室内へ出る');
+});
+
+test('【失敗系】isColumnInsideWall: 下地を持たない薄壁（backingRange=null）は片側の材厚だけで判定し、軸をまたぐ柱を隠さない', () => {
+  const thin = {
+    isVertical: false, materialRange: { lo: 0, hi: 72.5 }, backingRange: null,
+    coord1: -72.5, coord2: 14632.5, wallFinish: 12.5, axisCL: { effectiveValue: 0 },
+  };
+  assert.equal(isColumnInsideWall({ xLo: -60, xHi: 60, yLo: -60, yHi: 60 }, [thin]), false);
+  assert.equal(isColumnInsideWall({ xLo: -60, xHi: 60, yLo: 10, yHi: 60 }, [thin]), true, '薄壁の材厚の中なら従来どおり真');
+});
+
+// 実 Wall の getter（backingDepth===null の対称フォールバック・backingOffset の帯シフト）で同じ答えに
+// なることを固定する——素のオブジェクトのテストだけだと core/wall.js の式が変わっても気づけない。
+test('【実機修正2026-10】isColumnInsideWall: 実Wallの外壁（backingDepth未指定の対称壁）でも通り芯上の柱は壁の中', () => {
+  const { graph, y0, x0, x1 } = makeGridRoom();
+  // generateExteriorWalls と同じ作り: axisOffset = wallBase/2 + wallFinish（室外側＝この部屋では y<0）・
+  // backingDepth 未指定。
+  const exterior = graph.addWall(y0, -72.5, false, x0, -72.5, x1, 72.5, { wallFinish: 12.5 });
+  assert.deepEqual(exterior.materialRange, { lo: -72.5, hi: 0 }, '前提: 軸〜外面の片側だけ');
+  assert.deepEqual(exterior.backingRange, { lo: -60, hi: 60 }, '前提: 下地帯は軸中心120');
+  assert.equal(isColumnInsideWall(bareColumnRect({ sectionDefId: 'WOOD-120x120', x: 2000, y: 0 }), [exterior]), true);
+  // 柱寸105の階（外壁面固定の裁定2026-09-17）: 帯が 7.5 外へシフトし、同じく外へ寄った105角柱も帯の中。
+  const shifted = graph.addWall(y0, -80, false, x0, -72.5, x1, 72.5,
+    { wallFinish: 12.5, backingOffset: -7.5, bandOffset: -7.5 });
+  assert.deepEqual(shifted.backingRange, { lo: -67.5, hi: 52.5 }, '前提: 帯が7.5外へ寄る');
+  assert.equal(isColumnInsideWall(bareColumnRect({ sectionDefId: 'WOOD-105x105', x: 2000, y: -7.5 }), [shifted]), true);
+  assert.equal(isColumnInsideWall(bareColumnRect({ sectionDefId: 'WOOD-120x120', x: 2000, y: 0 }), [shifted]), false,
+    '帯より室内へ張り出す柱（柱寸アップ）は壁の中ではない');
+});
+
+test('【失敗系】isColumnInsideWall: 外壁の端より外に立つ柱は隠さない（スパン許容は materialRange の幅のまま）', () => {
+  const exterior = {
+    isVertical: false, materialRange: { lo: 0, hi: 72.5 }, backingRange: { lo: -60, hi: 60 },
+    coord1: 0, coord2: 3000, wallFinish: 12.5, axisCL: { effectiveValue: 0 },
+  };
+  const col = y => ({ xLo: 3000 + y, xHi: 3120 + y, yLo: -60, yHi: 60 });
+  assert.equal(isColumnInsideWall(col(-120), [exterior]), true, '端に収まる柱');
+  assert.equal(isColumnInsideWall(col(-50), [exterior]), true, '隅の取り合いぶん（72.5以内）のはみ出しは許容');
+  assert.equal(isColumnInsideWall(col(-40), [exterior]), false, '80mm はみ出す柱は壁の外（下地帯込み132.5まで広げない）');
+});
+
 // ---- 包み ----
 // 壁1枚を作るヘルパ（材厚・スパン・層構成・軸CL）。
 // axisValue（仕上げ面）・faceDir は実Wallと同じ関係で導く——材(materialRange)の遠位端が

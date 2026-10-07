@@ -46,6 +46,34 @@ function rangesOverlap(aLo, aHi, bLo, bHi) {
   return aLo < bHi - GAP_EPS && aHi > bLo + GAP_EPS;
 }
 
+/**
+ * 壁が部材（柱・梁）を**隠せる材**の厚み方向範囲＝materialRange ∪ backingRange。
+ * 「壁の中に納まる部材は描かない」判定（本ファイル isColumnInsideWall・展開図の梁
+ * elevation/section/sectionStructure.js isInsideWall/isBeamInWallAt）が共有する唯一の供給源
+ * ——判定が2系統に分かれると、同じ外壁で柱は隠れるのに梁は出る、という食い違いが起きる
+ * （ユーザー指示2026-10-07「隠す範囲を1箇所に集約して柱と共有」）。
+ *
+ * 対称壁（backingDepth===null）の materialRange は「軸〜自面の片側」しか返さない（core/wall.js）。
+ * 内壁は下地オーナー解決（wallGeneration.js）で backingDepth を明示するため materialRange が
+ * 下地帯全体を含むが、**外壁は backingDepth を明示しない対称壁のまま**（generateExteriorWalls）で
+ * 軸〜外面の片側（実機: [CL, CL+72.5]・下地帯は [CL-60, CL+60]）しか返さず、通り芯中心の柱が
+ * 収まらず「壁の中の柱」が展開図に柱型として出ていた（ユーザー実機指摘2026-10-07 moku1-3
+ * 「外壁の中にある柱が描画される」。構造種別によらず外壁生成は共通なので一般解で直す）。
+ * 下地帯は実在する材（renderer/planWallRegion.js と同じ扱い）なので隠す範囲に含める。
+ * 下地を持たない薄壁（backingRange===null）・材厚不明の壁は materialRange そのまま（null 可）。
+ * @param {object} wall - Wall またはその代替（materialRange/backingRange を持つ）
+ * @returns {{lo:number, hi:number}|null}
+ */
+export function wallConcealRange(wall) {
+  return concealRangeOf(wall?.materialRange ?? null, wall?.backingRange ?? null);
+}
+
+function concealRangeOf(mr, br) {
+  if (!mr) return null;
+  if (!br) return mr;
+  return { lo: Math.min(mr.lo, br.lo), hi: Math.max(mr.hi, br.hi) };
+}
+
 // ================================================================
 // 壁ビュー（描画ホットパス用の POJO スナップショット）
 //
@@ -72,6 +100,8 @@ function makeWallView(wall, capOutlineIds) {
     wall,
     isVertical: wall.isVertical,
     mr,
+    // 柱を隠せる材の厚み方向範囲（wallConcealRange 参照。mr/br は上で1回だけ読んだ値を使う）。
+    concealRange: concealRangeOf(mr, br),
     spanLo: Math.min(c1, c2), spanHi: Math.max(c1, c2),
     wallFinish: wall.wallFinish ?? 0,
     // 軸CLを持たない壁（手動作成の退化データ・テストダブル）はfin線を解決できない＝取り合わない。
@@ -181,8 +211,10 @@ function columnMeetsWallView(rect, view) {
 }
 
 /**
- * 柱の平面矩形が、いずれかの壁の材厚に収まり（厚み方向は完全に）、かつその壁のスパンに
- * 収まっているか（＝壁に隠れて見えない柱か。梁の `isInsideWall` と同じ考え方・同じ許容量）。
+ * 柱の平面矩形が、いずれかの壁の材（厚み方向は wallConcealRange に完全に）に収まり、
+ * かつその壁のスパンに収まっているか（＝壁に隠れて見えない柱か。梁の `isInsideWall` と同じ
+ * 考え方・同じ許容量）。壁より太い柱（柱寸アップ・鋼管柱など、平面で壁仕上げに影響する柱）は
+ * 収まらないので偽＝平面の柱壁（columnWrapSolids の hidden:false）と展開図の柱型が同じ判定で揃う。
  * スパン方向は壁厚ぶんの食い違いを許容する——柱・梁はCL間を張るのに対し、壁は隅で
  * `chamferWalls` が半壁厚ほど詰めるため、完全被覆を要求するとこの規則が実データで発動しない。
  * @param {ColumnRect} rect
@@ -195,7 +227,7 @@ export function isColumnInsideWall(rect, walls) {
 
 function isColumnInsideWallSet(rect, set) {
   for (const view of set.all) {
-    const mr = view.mr;
+    const mr = view.concealRange;
     if (!mr) continue;
     // 腰壁・垂れ壁は平面切断高さに無い＝柱を隠さない（柱はその上まで伸びている）。
     if (view.capOutline) continue;
@@ -203,7 +235,10 @@ function isColumnInsideWallSet(rect, set) {
       ? [rect.xLo, rect.xHi, rect.yLo, rect.yHi]
       : [rect.yLo, rect.yHi, rect.xLo, rect.xHi];
     if (!(acrossLo >= mr.lo - GAP_EPS && acrossHi <= mr.hi + GAP_EPS)) continue;
-    const tol = Math.abs(mr.hi - mr.lo); // 隅の取り合い（chamferWalls）ぶんの許容
+    // 隅の取り合い（chamferWalls）ぶんの許容。concealRange ではなく materialRange の幅のまま——
+    // 隠す範囲を下地帯まで広げてもスパン方向の許容まで広げる理由は無い（外壁で 72.5→132.5 に
+    // 広がると、壁の端から外へ立つ柱まで隠れうる。QA所見2026-10-07）。
+    const tol = Math.abs(view.mr.hi - view.mr.lo);
     if (spanLo >= view.spanLo - tol - GAP_EPS && spanHi <= view.spanHi + tol + GAP_EPS) return true;
   }
   return false;

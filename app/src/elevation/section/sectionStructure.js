@@ -22,7 +22,9 @@
 import { findSectionEntry } from '../../structural/sectionCatalog.js';
 // 柱の仕上げ包みの幾何は平面図（renderer/StructuralLayer.jsx）と共有する単一の情報源から取る
 // ——同じ柱が図面ごとに違う太さで描かれないため（finish/columnWrap.js のヘッダ参照）。
-import { bareColumnRect, isColumnInsideWall, wrapColumnWithFinish } from '../../finish/columnWrap.js';
+import {
+  bareColumnRect, isColumnInsideWall, wrapColumnWithFinish, wallConcealRange,
+} from '../../finish/columnWrap.js';
 import { rulesFor, effectiveStructure } from '../../structural/structureRules.js';
 import { ElevationLineRole, GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
@@ -60,9 +62,11 @@ const EXCLUDED_BEAM_ROLES = new Set([FOUNDATION_ROLE, 'sill', 'roofBeam']);
  * 梁の平面占有帯が、いずれかの壁の材厚（`Wall.materialRange`）の中に完全に収まり、かつ
  * その壁のスパンが梁のスパンを覆っているか（＝壁に隠れて見えない梁か）。
  *
- * 壁厚を`materialRange`から求める規約は`switchbackCuts.js`の往復間の壁検出と同じ
- * （壁厚をハードコードしない）。厚み方向は**完全に収まる**ことを要求する——壁より太い梁は
- * 一部が室内へ現れるため隠さない。
+ * 隠せる材の範囲は柱と同じ`wallConcealRange`（materialRange ∪ backingRange。finish/columnWrap.js
+ * が唯一の供給源——外壁は対称壁のまま materialRange が軸〜外面の片側しか返さないため、
+ * materialRange だけで判定すると通り芯上の胴差・桁が「壁の外」になる。ユーザー指示2026-10-07）。
+ * 壁厚をハードコードしない規約は`switchbackCuts.js`の往復間の壁検出と同じ。厚み方向は
+ * **完全に収まる**ことを要求する——壁より太い梁は一部が室内へ現れるため隠さない。
  *
  * スパン方向は「壁厚ぶんの食い違い」を許容する（完全被覆を要求しない）——梁はCLからCLまで
  * 張るのに対し、壁は隅で隣接壁と取り合うため`chamferWalls`がstart/endOffsetを半壁厚ほど
@@ -80,14 +84,21 @@ function isInsideWall(beam, walls) {
   const bSpanLo = Math.min(beam.coord1, beam.coord2), bSpanHi = Math.max(beam.coord1, beam.coord2);
   for (const wall of walls) {
     if (wall.isVertical !== beam.isVertical) continue; // 同じ向きの壁だけが梁を丸ごと隠せる
-    const mr = wall.materialRange;
-    if (!mr) continue;
-    if (!(bLo >= mr.lo - GAP_EPS && bHi <= mr.hi + GAP_EPS)) continue;
-    const tol = Math.abs(mr.hi - mr.lo); // 隅の取り合い（chamferWalls）ぶんの許容
+    const cr = wallConcealRange(wall);
+    if (!cr) continue;
+    if (!(bLo >= cr.lo - GAP_EPS && bHi <= cr.hi + GAP_EPS)) continue;
+    const tol = wallSpanTolMm(wall); // 隅の取り合い（chamferWalls）ぶんの許容
     const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
     if (bSpanLo >= wLo - tol - GAP_EPS && bSpanHi <= wHi + tol + GAP_EPS) return true;
   }
   return false;
+}
+
+// スパン方向の許容＝materialRange の幅（隠す範囲 concealRange の幅ではない。下地帯まで広げても
+// 長さ方向の許容を広げる理由は無い——isColumnInsideWall と同じ裁定・QA所見2026-10-07）。
+function wallSpanTolMm(wall) {
+  const mr = wall.materialRange;
+  return mr ? Math.abs(mr.hi - mr.lo) : 0;
 }
 
 /**
@@ -108,10 +119,10 @@ function isBeamInWallAt(beam, walls, atCoord) {
   const bLo = beam.axisWorld - halfW, bHi = beam.axisWorld + halfW;
   for (const wall of walls) {
     if (wall.isVertical !== beam.isVertical) continue;
-    const mr = wall.materialRange;
-    if (!mr) continue;
-    if (!(bLo >= mr.lo - GAP_EPS && bHi <= mr.hi + GAP_EPS)) continue;
-    const tol = Math.abs(mr.hi - mr.lo); // 隅の取り合い（chamferWalls）ぶんの許容。isInsideWall参照
+    const cr = wallConcealRange(wall); // 柱と同じ「隠せる材」の範囲（isInsideWall参照）
+    if (!cr) continue;
+    if (!(bLo >= cr.lo - GAP_EPS && bHi <= cr.hi + GAP_EPS)) continue;
+    const tol = wallSpanTolMm(wall); // 隅の取り合い（chamferWalls）ぶんの許容。isInsideWall参照
     const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
     if (atCoord >= wLo - tol - GAP_EPS && atCoord <= wHi + tol + GAP_EPS) return true;
   }
@@ -226,15 +237,23 @@ export function structuralColumnContribution(layers) {
   // 通り芯の交点には自動補完で柱が立つため、外壁の中に納まる管柱まで柱型として描くと
   // 壁面の途中に実在しない縦線2本が出る＝実機の「C2のX2上のエッジ線」の正体）。
   // 壁より太い柱は室内へ出るため従来どおり柱型として描く（架構としての柱型は正しい表現）。
+  //
+  // 「壁の中か」は**その柱が立つ階の壁だけ**で判定する（平面図 `columnWrapSolids` の hidden と
+  // 同じ入力＝同じ答え。ユーザー指示2026-10-07「平面判定で柱が大きくて壁仕上げに影響が出る時も
+  // あるので、展開描画時に判別できるようにする」）。全層の壁で判定すると、1階に壁の無い大部屋の
+  // 中に立つ柱が、真上の2階の間仕切り壁に「収まって」隠れる。包み（wrapColumnWithFinish）の
+  // 接続索引（wallAxes）だけは従来どおり全層の壁で解く——実機「5」D1のように、面の壁が上階側に
+  // しか無い柱をその面へ出す経路が wallsBlockingCut の注記のとおり実在するため。
   const walls = (layers ?? []).flatMap(l => l.graph?.walls ?? []);
   const result = [];
   for (const layer of layers ?? []) {
     // 柱包みを持たない構造（在来木造。structureRules.js drawing.columnFinishWrap）は素の断面で柱型を出す。
     const noCover = !rulesFor(effectiveStructure(layer.graph)).drawing.columnFinishWrap;
+    const ownWalls = layer.graph?.walls ?? [];
     for (const column of layer.graph?.columns ?? []) {
       if (column.role === FOUNDATION_ROLE) continue; // 杭は展開図に描かない
       const bare = bareColumnRect(column, layer.floorZMm);
-      if (isColumnInsideWall(bare, walls)) continue;
+      if (isColumnInsideWall(bare, ownWalls)) continue;
       result.push(wrapColumnWithFinish(bare, walls, { noCover }));
     }
   }

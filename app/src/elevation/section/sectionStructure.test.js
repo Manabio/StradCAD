@@ -165,6 +165,48 @@ test('【実機指摘】structuralPrimitivesForCut: 切断位置で壁の中に�
   void beam;
 });
 
+// ---- ユーザー指示2026-10-07「隠す範囲を1箇所に集約して柱と共有」 ----
+// 外壁は backingDepth 未指定の対称壁で materialRange が軸〜外面の片側 [0,72.5] しか返さない（実機
+// moku1-3）。柱と同じ wallConcealRange（下地帯 [-60,60] を含む）で判定しないと、通り芯上の胴差・桁
+// （幅120）が「壁の外」になり、階段帯などクリップの無い帯に断面が出る。
+const exteriorWallFake = {
+  isVertical: false, materialRange: { lo: 0, hi: 72.5 }, backingRange: { lo: -60, hi: 60 },
+  coord1: -72.5, coord2: 3712.5, wallFinish: 12.5, axisCL: { effectiveValue: 0 },
+};
+const girderOnAxis = (sectionWidth = 120) => ({
+  role: 'primary', isVertical: false, axisValue: 0, coord1: 0, coord2: 3640,
+  sectionWidth, sectionDefId: 'WOOD-120x120', levelOffset: 0,
+});
+
+test('【集約2026-10】structuralContribution: 外壁の下地帯に収まる通り芯上の梁は寄与しない（柱と同じ隠す範囲）', () => {
+  const layer = { graph: { walls: [exteriorWallFake], beams: [girderOnAxis()] }, floorZMm: 0, role: 'self' };
+  assert.deepEqual(structuralContribution([layer]), [], '幅120の胴差は下地帯120＋仕上げに収まるはず');
+  const fat = { graph: { walls: [exteriorWallFake], beams: [girderOnAxis(150)] }, floorZMm: 0, role: 'self' };
+  assert.equal(structuralContribution([fat]).length, 1, '壁より太い梁は室内へ出るので従来どおり寄与する');
+});
+
+test('【集約2026-10】structuralPrimitivesForCut: 切断位置の判定も柱と同じ隠す範囲（外壁の中の胴差は描かない）', () => {
+  // 全スパン基準では落ちない（梁が壁より長い）構成にして、切断位置の判定だけを通す。
+  const longGirder = { ...girderOnAxis(), coord1: -5000, coord2: 8000 };
+  const contribution = structuralContribution([{ graph: { walls: [], beams: [longGirder] }, floorZMm: 0, role: 'self' }]);
+  assert.equal(contribution.length, 1, '前提: 壁の無い層では寄与する');
+  const cutAt = (walls, axisValue) => ({
+    seqNo: 'x', line: { isVertical: true, axisValue, lo: -1000, hi: 1000 },
+    viewSign: 1, dirSign: 1, layers: [{ graph: { walls }, floorZMm: 0, role: 'self' }],
+    zRange: { loZ: -500, hiZ: 3000 }, baseFloorZ: 0,
+  });
+  assert.deepEqual(structuralPrimitivesForCut(contribution, cutAt([exteriorWallFake], 1820), []), [],
+    '外壁が覆う位置で切った断面は描かないはず');
+  assert.equal(structuralPrimitivesForCut(contribution, cutAt([exteriorWallFake], 6000), []).length, 4,
+    '壁の無い位置で切れば従来どおり断面（矩形4辺）');
+});
+
+test('【失敗系・集約2026-10】structuralContribution: 下地を持たない薄壁（backingRange=null）の片側の材厚は通り芯上の梁を隠さない', () => {
+  const thin = { ...exteriorWallFake, backingRange: null };
+  const layer = { graph: { walls: [thin], beams: [girderOnAxis()] }, floorZMm: 0, role: 'self' };
+  assert.equal(structuralContribution([layer]).length, 1);
+});
+
 test('【WP-C】structuralPrimitivesForCut: 切断線が梁に平行かつ幅の帯内・spanが重なると上端/下端/両端縦線(4本・DETAIL細線)を出す', () => {
   const graph = makeGraph();
   addHorizontalBeam(graph, 500);
