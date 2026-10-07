@@ -3,7 +3,7 @@
 // （各階の階段はユーザーの個別指定。上階への吹抜けの展開は行わない）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStairChains, isChainOpen } from './stairChains.js';
+import { buildStairChains, isChainOpen, stairContinuesAbove, findContinuation } from './stairChains.js';
 import { setupProject, addPerFloorV, placeStair } from './stairRemovalTestFixtures.js';
 
 const LEFT = [250, 500];
@@ -118,4 +118,32 @@ test('isChainOpen: 既定は閉・選択中の階段を含むグループは開�
 test('isChainOpen: ユーザーの開閉の操作（overrides）が既定より優先される', () => {
   assert.equal(isChainOpen(chainOf, null, new Map([['k', true]])), true);
   assert.equal(isChainOpen(chainOf, 's1', new Map([['k', false]])), false);
+});
+
+test('stairContinuesAbove: 上階に足元が重なる階段があれば true・別位置なら false・上階の graph が無ければ null', () => {
+  const { project, graphs } = setupProject(3);
+  addPerFloorV(graphs);
+  const s1 = placeStair(project, graphs[0], { pts: [LEFT] }).stair;
+  const s2 = placeStair(project, graphs[1], { pts: [LEFT] }).stair;
+  assert.equal(stairContinuesAbove(s1, graphs[0], graphs[1], project.structGraph), true);
+  assert.equal(stairContinuesAbove(s2, graphs[1], graphs[2], project.structGraph), false, '3F に階段なし');
+  assert.equal(stairContinuesAbove(s2, graphs[1], null, project.structGraph), null);
+  assert.equal(stairContinuesAbove(s2, graphs[1], undefined, project.structGraph), null);
+});
+
+test('stairContinuesAbove: 上階の階段が別位置なら false（足元が重ならない）', () => {
+  const { project, graphs } = setupProject(3);
+  addPerFloorV(graphs);
+  const s1 = placeStair(project, graphs[0], { pts: [LEFT] }).stair;
+  placeStair(project, graphs[1], { pts: [RIGHT] });
+  assert.equal(stairContinuesAbove(s1, graphs[0], graphs[1], project.structGraph), false);
+});
+
+test('findContinuation: isClaimed が真の階段は選ばない', () => {
+  const { project, graphs } = setupProject(2);
+  addPerFloorV(graphs);
+  const s1 = placeStair(project, graphs[0], { pts: [LEFT] }).stair;
+  const s2 = placeStair(project, graphs[1], { pts: [LEFT] }).stair;
+  assert.equal(findContinuation(s1, graphs[0], graphs[1], project.structGraph)?.id, s2.id);
+  assert.equal(findContinuation(s1, graphs[0], graphs[1], project.structGraph, t => t.id === s2.id), null);
 });

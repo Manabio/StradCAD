@@ -28,13 +28,48 @@ import { buildSpaceIndex } from '../space/spaceModel.js';
 import { collectRunBreaks } from '../elevationFloorProfile.js';
 import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
-import { isRealRoom, baseLayerOf } from './sectionLayerStack.js';
+import { isRealRoom, baseLayerOf, orderLayerStack, layersAboveOf } from './sectionLayerStack.js';
+import { effectiveStructure } from '../../structural/structureRules.js';
+import { stairPartitionDescriptors, partitionTopZAt, matchStairPartitionLine } from '../../finish/stair/stairPartition.js';
+import { stairContinuesAbove } from '../../finish/stair/stairChains.js';
 import {
   cutProbeRange, isCutWall, isCutAlongWall, isSightlineShape,
   buildLayerStack, probeColumn,
 } from './sectionHits.js';
 
 export { probeColumn };
+
+// layer の直上の層。層の比較式は sectionLayerStack.js の既存ヘルパー（orderLayerStack・layersAboveOf）に任せる。
+function layerDirectlyAbove(layers, layer) {
+  const stack = orderLayerStack((layers ?? []).map(l => ({ layer: l })));
+  return layersAboveOf(stack, { layer })[0]?.layer ?? null;
+}
+
+// 層の隔て壁（オーナー壁・薄壁とも）→ 天端プロファイル。直上の層が無ければ階高が決まらず
+// 斜め天端にできない（full＝プロファイルなし）。続きの階段（上階に重なる階段）があれば full。
+function buildWallTopProfiles(layers, layer, floorZFor) {
+  const out = new Map();
+  const graph = layer.graph;
+  if (!graph) return out;
+  const above = layerDirectlyAbove(layers, layer);
+  const structGraph = graph._structGraph;
+  const descs = stairPartitionDescriptors(graph, {
+    structure: effectiveStructure(graph),
+    floorHeight: above ? above.floorZMm - layer.floorZMm : null,
+    continuesAbove: stair => stairContinuesAbove(stair, graph, above?.graph ?? null, structGraph),
+  }).filter(d => d.desc.top.kind === 'slope');
+  if (descs.length === 0) return out;
+  const lines = descs.map(d => d.line);
+  for (const w of graphList(graph, 'walls') ?? []) {
+    const line = matchStairPartitionLine(w, lines);
+    if (!line) continue;
+    const { desc, stair } = descs[lines.indexOf(line)];
+    // 絶対zの基準は階段室の床（spaceIndex.floorZFor＝実効FL・datum・floorOffset を含む。層の floorZMm 直でない）
+    const baseZ = floorZFor(graph.roomMap?.get(stair.roomId) ?? null, layer);
+    out.set(w.id, { zAt: along => baseZ + partitionTopZAt(desc, along) });
+  }
+  return out;
+}
 
 /**
  * layers（各{graph,floorZMm,role}）から、レイキャストに必要な索引（層別cellToRoom・
@@ -56,6 +91,12 @@ export { probeColumn };
  */
 export function makeProbeContext(layers, opts = {}) {
   const spaceIndex = buildSpaceIndex(layers, opts);
+  const wallTopByLayer = new Map(); // layer -> Map<wallId, {zAt}>
+  function wallTopProfileFor(layer) {
+    let m = wallTopByLayer.get(layer);
+    if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor); wallTopByLayer.set(layer, m); }
+    return m;
+  }
   return {
     cellToRoomByLayer: spaceIndex.cellToRoomByLayer,
     cellToRoomFor: spaceIndex.cellToRoomFor,
@@ -71,6 +112,9 @@ export function makeProbeContext(layers, opts = {}) {
     // 呼ばれるまで計算しない（spaceIndex側の遅延初期化のまま）。
     componentOf: spaceIndex.componentOf,
     componentAt: spaceIndex.componentAt,
+    // 壁の天端プロファイル（関所 kneeDropZRangesAt の wallTop 引数）。隔て壁（在来木造の折返し階段）が
+    // 斜め天端のとき {zAt(along)→絶対z} を壁idで引く。層ごとに1回だけ作る（stairPartitionLines 等が重い）。
+    wallTopProfileFor,
   };
 }
 

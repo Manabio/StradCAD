@@ -10,6 +10,35 @@ import { mapFootprint } from './stairRemoval.js';
 const memberKey = (planeId, stairId) => `${planeId}:${stairId}`;
 
 /**
+ * 階段 stair（loGraph の階）の続き（hiGraph＝直上階で足元が重なる階段）を返す。無ければ null。
+ * 足元を直上階へ写し（写せなければ null）、直上階の階段のうち原子セルが1つでも重なる最初の1つ。
+ * isClaimed(t) が真の階段は選ばない（buildStairChains が「既に別の下階の続き」を除くのに使う）。
+ * @param {object} stair
+ * @param {object} loGraph
+ * @param {object} hiGraph
+ * @param {object} structGraph
+ * @param {(t:object)=>boolean} [isClaimed]
+ * @returns {object|null}
+ */
+export function findContinuation(stair, loGraph, hiGraph, structGraph, isClaimed = () => false) {
+  const mapped = mapFootprint(stair, loGraph, structGraph, hiGraph);
+  if (!mapped) return null;
+  return (hiGraph.stairs ?? []).find(t =>
+    !isClaimed(t)
+    && [...refreshCells(t.cells, hiGraph)].some(k => mapped.has(k))) ?? null;
+}
+
+/**
+ * 階段の上に続きの階段があるか。upperGraph が無ければ null（未知。呼び出し側は安全側＝フルハイトへ倒す）。
+ * 型は問わない（上に重なる階段があれば続き）。
+ * @returns {boolean|null}
+ */
+export function stairContinuesAbove(stair, graph, upperGraph, structGraph) {
+  if (!upperGraph) return null;
+  return findContinuation(stair, graph, upperGraph, structGraph) != null;
+}
+
+/**
  * 階段の連鎖を作る。
  * 各階の階段の足元を直上階へ写し（写せなければ連鎖はそこで切れる）、直上階の階段のうち原子セルが
  * 1つでも重なるものを「続き」とする（部分重なりは指定時に拒否されるので、重なれば続き）。
@@ -38,11 +67,8 @@ export function buildStairChains(floors, structGraph) {
     const lo = floors[i], hi = floors[i + 1];
     if (!lo.graph || !hi.graph) continue; // 読めなかった階をまたぐ続きは作らない（その位置で切れる）
     for (const stair of lo.graph.stairs) {
-      const mapped = mapFootprint(stair, lo.graph, structGraph, hi.graph);
-      if (!mapped) continue;
-      const cont = hi.graph.stairs.find(t =>
-        !claimed.has(memberKey(hi.plane.id, t.id))
-        && [...refreshCells(t.cells, hi.graph)].some(k => mapped.has(k)));
+      const cont = findContinuation(stair, lo.graph, hi.graph, structGraph,
+        t => claimed.has(memberKey(hi.plane.id, t.id)));
       if (!cont) continue;
       const next = { planeId: hi.plane.id, stairId: cont.id };
       nextOf.set(memberKey(lo.plane.id, stair.id), next);

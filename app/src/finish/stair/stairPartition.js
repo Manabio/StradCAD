@@ -195,3 +195,67 @@ export function partitionDesignRange(wall) {
   const a = wall.clStart.effectiveValue, b = wall.clEnd.effectiveValue;
   return { lo: Math.min(a, b), hi: Math.max(a, b) };
 }
+
+const alongOf = (desc, p) => (desc.isVertical ? p.y : p.x);
+
+/**
+ * 隔て壁の天端の高さ（設置階 FL 基準の z）を長さ方向の世界座標 along で返す単一情報源。
+ * top が full なら null（制限なし＝層の天井まで）。slope なら entryEnd〜landingEnd の along の間を
+ * 線形補間し、端の外は端の値でクランプする。
+ * @param {{isVertical:boolean, entryEnd:{x:number,y:number}, landingEnd:{x:number,y:number}, top:object}} desc
+ * @param {number} along
+ * @returns {number|null}
+ */
+export function partitionTopZAt(desc, along) {
+  const top = desc?.top;
+  if (!top || top.kind !== 'slope') return null;
+  const a0 = alongOf(desc, desc.entryEnd), a1 = alongOf(desc, desc.landingEnd);
+  if (a0 === a1) return top.zAtLandingEnd;
+  const t = Math.min(1, Math.max(0, (along - a0) / (a1 - a0)));
+  return top.zAtEntryEnd + (top.zAtLandingEnd - top.zAtEntryEnd) * t;
+}
+
+/**
+ * 斜めの天端が各 z（設置階 FL 基準）を横切る along（昇順）。slope でなければ・斜面の z の範囲の外の
+ * z（端の値と一致するものを含む）は返さない。展開図の列境界（S4-2）の材料。
+ * @param {object} desc
+ * @param {number[]} zLevels
+ * @returns {number[]}
+ */
+export function partitionTopCrossings(desc, zLevels) {
+  const top = desc?.top;
+  if (!top || top.kind !== 'slope') return [];
+  const a0 = alongOf(desc, desc.entryEnd), a1 = alongOf(desc, desc.landingEnd);
+  const z0 = top.zAtEntryEnd, z1 = top.zAtLandingEnd;
+  if (a0 === a1 || z0 === z1) return [];
+  const zlo = Math.min(z0, z1), zhi = Math.max(z0, z1);
+  const out = [];
+  for (const z of zLevels ?? []) {
+    if (!(z > zlo && z < zhi)) continue;
+    out.push(a0 + (a1 - a0) * (z - z0) / (z1 - z0));
+  }
+  return out.sort((p, q) => p - q);
+}
+
+/**
+ * 屋内の SWITCHBACK 全部について、隔て壁の線（stairPartitionLines と同形）と天端つきの幾何
+ * （resolveStairPartition）を返す。matchStairPartitionLine(wall, lines) で壁→desc を引ける
+ * （line は戻り値の line をそのまま渡す）。非在来（structure）なら空。
+ * @param {object} graph
+ * @param {{ structure:string|null, floorHeight?:number|null,
+ *   continuesAbove?:(stair:object)=>boolean|null }} opts
+ *   continuesAbove … 上に続きの階段があるか。null/未指定は不明＝フルハイト（安全側）。
+ * @returns {Array<{stair:object, line:{isVertical:boolean, axisValue:number, lo:number, hi:number}, desc:object}>}
+ */
+export function stairPartitionDescriptors(graph, { structure = null, floorHeight = null, continuesAbove = null } = {}) {
+  const out = [];
+  if (!isTraditionalWoodStructure(structure)) return out;
+  for (const stair of graph?.stairs ?? []) {
+    if (graph.roomMap?.get(stair.roomId)?.kind === RoomKind.EXTERIOR) continue;
+    const cont = continuesAbove ? continuesAbove(stair) : null;
+    const desc = resolveStairPartition(stair, graph, { structure, continuesAbove: cont !== false, floorHeight });
+    if (!desc) continue;
+    out.push({ stair, line: { isVertical: desc.isVertical, axisValue: desc.axisValue, lo: desc.lo, hi: desc.hi }, desc });
+  }
+  return out;
+}

@@ -389,9 +389,16 @@ function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
  * @param {number} pointCoord - 点クエリ位置（wall自身の長さ方向座標）
  * @param {number} floorZ
  * @param {number} ceilZ
- * @returns {Array<{z0:number, z1:number}>} 1件 or 2件（z0昇順）
+ * @param {{zAt:(along:number)=>number}|null} [wallTop] - 壁の天端プロファイル（絶対z。隔て壁の斜め天端）。
+ *   あれば腰壁・垂れ壁より先に判定し、[floorZ, min(ceilZ, zAt(pointCoord))] の1件を返す
+ *   （天端≦床なら空）。各件は topAt（along→天端z）を持つ。無ければ従来どおり。
+ * @returns {Array<{z0:number, z1:number, topAt?:(along:number)=>number}>} 1件 or 2件（z0昇順）。wallTopで潰れたら0件
  */
-function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ) {
+export function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ, wallTop = null) {
+  if (wallTop) {
+    const z1 = Math.min(ceilZ, wallTop.zAt(pointCoord));
+    return z1 > floorZ ? [{ z0: floorZ, z1, topAt: wallTop.zAt }] : [];
+  }
   let records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, POINT_QUERY_EPS_MM);
   if (records.length === 0) {
     const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
@@ -413,6 +420,12 @@ function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ) {
     return [{ z0: dropBase, z1: ceilZ }];
   }
   return [{ z0: floorZ, z1: ceilZ }];
+}
+
+// 層ごとの壁の天端プロファイル（probeCtx.wallTopProfileFor。隔て壁の斜め天端）から壁1本分を引く。
+// probeCtx がプロファイルを持たない（スタブ等）・該当壁なしは null＝従来どおり。
+function wallTopOf(probeCtx, layer, wall) {
+  return probeCtx?.wallTopProfileFor?.(layer)?.get(wall.id) ?? null;
 }
 
 /**
@@ -734,7 +747,7 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
         const mr = w.materialRange;
         if (worldMid < mr.lo - GAP_EPS || worldMid > mr.hi + GAP_EPS) continue;
         // アキ（腰壁＋垂れ壁）は2つの帯になる（kneeDropZRangesAt）ため、候補も範囲ごとに積む。
-        for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, line.axisValue, info.floorZ, info.ceilZ)) {
+        for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, line.axisValue, info.floorZ, info.ceilZ, wallTopOf(probeCtx, layer, w))) {
           // **仮想断面がその壁の建具を切っているか**（ユーザー明示指示2026-09「仮想断面抽出時、
           // 建具を切っているものがないか判定する処理を追加して反映させて」）。切断壁における
           // 「壁の長さ方向の位置」は切断線の軸そのもの（line.axisValue）——見えがかり壁が
@@ -752,7 +765,7 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
         // （pointCoord=worldMid。壁自身の長さ方向＝cutのrun方向と一致するためwallと同じ規約）。
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
-        for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, info.ceilZ)) {
+        for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, info.ceilZ, wallTopOf(probeCtx, layer, w))) {
           hits.push({ kind: 'cutAlong', wall: w, layer, distMm: 0, z0, z1,
             isKneeDrop: isKneeDropRange(z0, z1, info), hidden });
         }
@@ -769,7 +782,7 @@ export function probeColumnHits(cut, worldMid, probeCtx) {
           layerStack, info, roomAtWallPosition(w, worldMid, cut.viewSign, probeCtx), cut.zRange?.hiZ ?? 0,
           wallContinuesOnLayer(w, worldMid),
         );
-        for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, capZ)) {
+        for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, capZ, wallTopOf(probeCtx, layer, w))) {
           // 腰壁・垂れ壁指定で高さが制限された壁か（アキのバツのクリップ対象。sectionEmit.jsの
           // obstructionRects。ユーザー実機指摘2026-08「6」C「バツが腰壁と交差する場合はクリップ」）。
           const isKneeDrop = isKneeDropRange(z0, z1, { floorZ: info.floorZ, ceilZ: capZ });

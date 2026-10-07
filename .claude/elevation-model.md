@@ -1453,6 +1453,10 @@ cutを組んで`buildCutContent`へ渡す薄い層。`face`は必須引数では
 INV2は「役割名にも配列順にも依存していない」ことの実行可能な証明であり、層まわりの新しい分岐を
 入れた瞬間に落ちる——層の判断をここへ足すときは、まずこの3本を通すこと。
 
+## 壁の天端プロファイル（関所の一般の引数。隔て壁 S4-1）
+壁のz範囲の関所`section/sectionHits.js kneeDropZRangesAt`（cut・cutAlong・wallFaceの3経路が共有）に省略可能な引数`wallTop`（`{zAt(along)→絶対z}`）を持たせた。あれば腰壁・垂れ壁より先に判定し`[床, min(天井, zAt(pointCoord))]`を返す（天端≦床なら空。各件は`topAt`も持つ）。`probeCtx.wallTopProfileFor(layer)`が層ごとに1回だけ`Map<壁id, {zAt}>`を作る（`sectionProbe.js`。構造は`effectiveStructure(layer.graph)`・階高は直上の層との差・続き判定は`stairContinuesAbove`）。供給元は在来木造の折返し階段の隔て壁の天端（`finish/stair/stairPartition.js partitionTopZAt`が単一情報源。最上層＝斜め、続く層・直上の層なし・階高/蹴上が決まらない・非在来＝プロファイルなし＝従来どおりフルハイト）。壁の種類を関所へ持ち込まず、「天端が位置の関数」という一般の引数だけを足した（特例を増やさない裁定）。
+既知の限界（S4-2へ）: wallFace経路は列の中央の高さの水平線で、斜線にはならない（列境界を斜線の交点で割る`partitionTopCrossings`は関数だけ用意済みで未配線）。cut経路は`min(info.ceilZ, zAt)`でクランプするため、踊り場端で天端が自階の天井を超える構成（例: 階高3000・CH2400・踊り場端2600）では天井で止まる。
+
 ## 空間セル索引（`space/spaceModel.js`。展開図一般化Phase 1・2・2026-09）
 床天井の式（「帯のローカルz=0 ≡ その帯の部屋の実効FL」を含む）は`space/spaceModel.js`の
 `buildSpaceIndex`へ集約し、ここを唯一の置き場所とした。`sectionProbe.js`の`makeProbeContext`は

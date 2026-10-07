@@ -2,11 +2,12 @@
 // フィクスチャは座標の矩形（x1,y1,x2,y2）から CL とセルキーを作る（y下向き正）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomKind } from '@core';
 import { measureStairSpans, uTurnSpans } from './stairClassify.js';
 import { portSpansOf, resolveStairPorts } from './stairPorts.js';
 import { roomBounds } from '../gridCells.js';
 import {
+  partitionTopZAt, partitionTopCrossings, stairPartitionDescriptors,
   resolveStairPartition, PARTITION_BACKING_MM, PARTITION_FINISH_MM, PARTITION_TOP_ABOVE_NOSING_MM, PARTITION_THICKNESS_MM,
 } from './stairPartition.js';
 
@@ -167,4 +168,49 @@ test('【失敗系】stair が null / セルが空: 例外なく null', () => {
   assert.equal(resolveStairPartition(null, graph, opts()), null);
   const empty = graph.addStair({ type: StairType.SWITCHBACK, cells: new Set(), sections: [6, 1, 6], upDirection: 'up' });
   assert.equal(resolveStairPartition(empty, graph, opts()), null);
+});
+
+// ---- S4-1: 天端の単一情報源 ----
+test('partitionTopZAt: 両端・中点・端の外のクランプ（等長 up: entryEnd y=4000 で3200・landingEnd y=1000 で2200）', () => {
+  const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
+  const p = resolveStairPartition(stair, graph, opts());
+  assert.equal(partitionTopZAt(p, 4000), 3200);
+  assert.equal(partitionTopZAt(p, 1000), 2200);
+  assert.equal(partitionTopZAt(p, 2500), 2700);
+  assert.equal(partitionTopZAt(p, 5000), 3200, 'entry 側の外は端の値');
+  assert.equal(partitionTopZAt(p, 0), 2200, 'landing 側の外は端の値');
+});
+
+test('partitionTopZAt: full（続く層）・desc なしは null', () => {
+  const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
+  assert.equal(partitionTopZAt(resolveStairPartition(stair, graph, opts({ continuesAbove: true })), 2500), null);
+  assert.equal(partitionTopZAt(null, 2500), null);
+});
+
+test('partitionTopCrossings: 斜線が横切る z は1交点・範囲外（端の値ちょうど含む）は0交点・full は空', () => {
+  const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
+  const p = resolveStairPartition(stair, graph, opts());
+  assert.deepEqual(partitionTopCrossings(p, [2700]), [2500]);
+  assert.deepEqual(partitionTopCrossings(p, [2800, 2600]), [2200, 2800], '昇順で返す');
+  assert.deepEqual(partitionTopCrossings(p, [2200, 3200, 1000, 4000]), []);
+  assert.deepEqual(partitionTopCrossings(resolveStairPartition(stair, graph, opts({ continuesAbove: true })), [2700]), []);
+});
+
+test('stairPartitionDescriptors: continuesAbove の true→full・false→slope・null/未指定→full・非在来→空・屋外階段は除外', () => {
+  const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
+  const d = (o) => stairPartitionDescriptors(graph, { structure: WOOD, floorHeight: FH, ...o });
+  assert.equal(d({ continuesAbove: () => true })[0].desc.top.kind, 'full');
+  assert.equal(d({ continuesAbove: () => false })[0].desc.top.kind, 'slope');
+  assert.equal(d({ continuesAbove: () => null })[0].desc.top.kind, 'full');
+  assert.equal(d({})[0].desc.top.kind, 'full');
+  assert.equal(d({ continuesAbove: () => false, floorHeight: null })[0].desc.top.kind, 'full', '階高が決まらなければ full');
+  const got = d({ continuesAbove: () => false })[0];
+  assert.equal(got.stair, stair);
+  assert.deepEqual(got.line, { isVertical: true, axisValue: 1000, lo: 1000, hi: 4000 });
+  assert.deepEqual(stairPartitionDescriptors(graph, { structure: 'S造', floorHeight: FH, continuesAbove: () => false }), []);
+  const pair = graph.addRoom(new Set(stair.cells), '階段');
+  stair.roomId = pair.id;
+  assert.equal(d({ continuesAbove: () => false }).length, 1, '対照（屋内）');
+  pair.setKind(RoomKind.EXTERIOR);
+  assert.deepEqual(d({ continuesAbove: () => false }), []);
 });
