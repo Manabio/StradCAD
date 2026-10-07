@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   getOpenedFileName, getOpenedFileInfo, setOpenedFileName, clearOpenedFileName, saveNameFromOpenedFileName,
-  openDocumentFileTarget, writeDocumentFileTarget,
+  openDocumentFileTarget, writeDocumentFileTarget, supportsSaveFilePicker,
 } from './localSnapshot.js';
 
 const mem = new Map();
@@ -56,6 +56,17 @@ function stubPicker(impl) {
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: impl ? { showSaveFilePicker: impl } : {} });
 }
 afterEach(() => { delete globalThis.window; delete globalThis.document; });
+
+test('supportsSaveFilePicker: showSaveFilePicker が関数のときだけ true（無い・関数でない・window 自体が無い→false）', () => {
+  stubPicker(async () => ({ name: 'a.stq' }));
+  assert.equal(supportsSaveFilePicker(), true);
+  stubPicker(null); // window はあるがピッカーが無い（Firefox・Safari 等）
+  assert.equal(supportsSaveFilePicker(), false);
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { showSaveFilePicker: 1 } });
+  assert.equal(supportsSaveFilePicker(), false, '関数でなければ非対応');
+  delete globalThis.window;
+  assert.equal(supportsSaveFilePicker(), false, 'window が無くても例外にせず false');
+});
 
 test('openDocumentFileTarget: ピッカー対応なら .stq を補った suggestedName を渡し、確定名はハンドルの name', async () => {
   let opts;
@@ -169,4 +180,17 @@ test('store.js: resetAll は clearOpenedFileName を呼ぶ', () => {
   const m = /export async function resetAll\(\) \{([\s\S]*?)\n\}/.exec(storeSrc);
   assert.ok(m);
   assert.match(m[1], /^ {2}clearOpenedFileName\(\);$/m);
+});
+
+// 配線: メニュー「保存」はピッカー対応なら SaveFileDialog を出さず handleSaveConfirm へ直行し、
+// 非対応なら従来どおり setSaveDialogDefaultName でダイアログを開く（ユーザー裁定2026-10-07）。
+test('App.jsx 配線: 保存メニューはピッカー対応ならダイアログを飛ばして直接保存、非対応ならダイアログを開く', () => {
+  const src = fs.readFileSync(new URL('../App.jsx', import.meta.url), 'utf8');
+  const code = src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  const m = code.match(/if \(id === 'save'\) \{([\s\S]*?)\n {4}\}/);
+  assert.ok(m, "'save' 分岐が見つからない");
+  assert.match(m[1], /if \(supportsSaveFilePicker\(\)\) return handleSaveConfirm\(defaultName\);/,
+    'ピッカー対応時に handleSaveConfirm へ直行していない');
+  assert.match(m[1], /setSaveDialogDefaultName\(defaultName\);/,
+    '非対応時にダイアログを開く経路が無い');
 });

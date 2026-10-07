@@ -72,6 +72,13 @@ export function downloadDocumentFile(json, fileName = defaultDocumentFileName())
   URL.revokeObjectURL(url);
 }
 
+// OS の保存ダイアログ（showSaveFilePicker）が使えるか。使えるなら名前も OS 側で指定できるので、
+// アプリ側のファイル名ダイアログ（SaveFileDialog）は出さない（ユーザー裁定2026-10-07。二重入力の解消）。
+// 非対応ブラウザ（<a download> 退避）では名前を指定できる場所が他に無いため、アプリ側のダイアログを出す。
+export function supportsSaveFilePicker() {
+  return typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
+}
+
 // 保存先の確定（2段階）。showSaveFilePicker は transient user activation を要するため、
 // 呼び出し側は時間のかかる await（構造同期待ち・exportDocument）より前に openDocumentFileTarget を呼ぶこと。
 // 書込み（writeDocumentFileTarget）は後でよい。
@@ -80,7 +87,7 @@ export function downloadDocumentFile(json, fileName = defaultDocumentFileName())
 //   null = ユーザーが取消。
 export async function openDocumentFileTarget(fileName = defaultDocumentFileName()) {
   const requested = fileName.endsWith('.stq') ? fileName : `${fileName}.stq`;
-  if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
+  if (supportsSaveFilePicker()) {
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: requested,

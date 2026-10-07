@@ -70,7 +70,7 @@ import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
 import { floorWriteGeneration } from './storage/floorWriteGeneration.js';
 import { createFinishExitStamps } from './finish/finishExitStamp.js';
-import { parseOpenedFileBytes, openDocumentFileTarget, writeDocumentFileTarget, defaultDocumentFileName, getOpenedFileInfo, setOpenedFileName, saveNameFromOpenedFileName } from './storage/localSnapshot.js';
+import { parseOpenedFileBytes, openDocumentFileTarget, writeDocumentFileTarget, defaultDocumentFileName, getOpenedFileInfo, setOpenedFileName, saveNameFromOpenedFileName, supportsSaveFilePicker } from './storage/localSnapshot.js';
 import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { isDocumentEnvelope } from './storage/documentFile.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
@@ -1873,8 +1873,13 @@ const App = observer(() => {
       return;
     }
     if (id === 'save') {
-      // まずファイル名指定ダイアログを開く（確定時に handleSaveConfirm が保存を実行する）
-      setSaveDialogDefaultName(openedFile ? saveNameFromOpenedFileName(openedFile.name) : defaultDocumentFileName());
+      const defaultName = openedFile ? saveNameFromOpenedFileName(openedFile.name) : defaultDocumentFileName();
+      // OS の保存ダイアログが使えるブラウザでは名前も OS 側で指定できるので、アプリ側のファイル名ダイアログを
+      // 出さず直接保存へ進む（ユーザー裁定2026-10-07。二重入力の解消）。メニュー項目のクリック→ここ→
+      // handleSaveConfirm→openDocumentFileTarget は同期でつながるので user activation は切れない。
+      // 非対応ブラウザ（<a download> 退避）では名前を指定できる場所が他に無いため、従来どおりダイアログを開く。
+      if (supportsSaveFilePicker()) return handleSaveConfirm(defaultName);
+      setSaveDialogDefaultName(defaultName);
       return;
     }
     if (id === 'settings') {
