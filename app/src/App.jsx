@@ -72,7 +72,6 @@ import { floorWriteGeneration } from './storage/floorWriteGeneration.js';
 import { createFinishExitStamps } from './finish/finishExitStamp.js';
 import { parseOpenedFileBytes, openDocumentFileTarget, writeDocumentFileTarget, defaultDocumentFileName, getOpenedFileInfo, setOpenedFileName, saveNameFromOpenedFileName, supportsSaveFilePicker } from './storage/localSnapshot.js';
 import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
-import { isDocumentEnvelope } from './storage/documentFile.js';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
 import {
   confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind,
@@ -1952,8 +1951,7 @@ const App = observer(() => {
     const reader = new FileReader();
     reader.onload = (ev) => {
       // FileReaderの読み込みは非同期のため、ここ（onload）までの間にundo/階切替等で関門が開く
-      // 隙間がある——旧形式分岐のrestoreGraphは関門の外から同期でgraphへ書くため、onload冒頭でも
-      // 改めてisUiBusy()を見る（QA指摘・入力規制ステップ5再報告）。
+      // 隙間がある——onload冒頭でも改めてisUiBusy()を見る（QA指摘・入力規制ステップ5再報告）。
       if (isUiBusy()) {
         setToast({ msg: '処理中のため読み込めませんでした', key: Date.now() });
         return;
@@ -1962,36 +1960,31 @@ const App = observer(() => {
       try {
         parsed = parseOpenedFileBytes(new Uint8Array(ev.target.result));
       } catch {
-        setToast({ msg: 'ファイルの読み込みに失敗しました', key: Date.now() });
-        return;
-      }
-      // 文書ファイル（全階・plane一覧・通り芯/構造情報・敷地）: 保存ドキュメントを丸ごと
-      // 置き換えて reload（通常のブート復元経路をそのまま使う。resetAll と同じ理由）
-      if (isDocumentEnvelope(parsed)) {
+        // 所定外のファイル（accept を外したため任意のファイルが選べる）。グラフへは何も書かずに止める。
         setFloorConfirm({
-          message: '文書ファイルを読み込みます。現在の内容（保存していない編集を含む）は置き換えられます。よろしいですか？',
-          buttons: [
-            { label: '読込み',     value: 'ok', primary: true },
-            { label: 'キャンセル', value: 'cancel' },
-          ],
-          onSelect: (v) => {
-            setFloorConfirm(null);
-            if (v !== 'ok') return;
-            // onSelectはConfirmDialogのコールバックでguardUiを経由しないが、runDocumentImport自身が
-            // 自前でcatch済みのためrejectしない。
-            void runDocumentImport(parsed, file.name);
-          },
+          message: 'このファイルは読み込めません。StradCAD の文書ファイル（.stq）ではありません。',
+          buttons: [{ label: 'OK', value: 'ok', primary: true }],
+          onSelect: () => setFloorConfirm(null),
         });
         return;
       }
-      // 旧形式（単一グラフ FlatBuffers / 旧JSONスナップショット）: アクティブ階へ復元。onload冒頭の
-      // isUiBusy()ガードで関門中の同期書込みを防いでいるため、ここでの追加の関門は不要。
-      try {
-        restoreGraph(graph, parsed);
-        setToast({ msg: 'ファイルを読み込みました', key: Date.now() });
-      } catch {
-        setToast({ msg: 'ファイルの読み込みに失敗しました', key: Date.now() });
-      }
+      // 文書ファイル（全階・plane一覧・通り芯/構造情報・敷地）: 保存ドキュメントを丸ごと
+      // 置き換えて reload（通常のブート復元経路をそのまま使う。resetAll と同じ理由）。
+      // parseOpenedFileBytes は文書エンベロープだけを返す（旧形式は読み込まない）。
+      setFloorConfirm({
+        message: '文書ファイルを読み込みます。現在の内容（保存していない編集を含む）は置き換えられます。よろしいですか？',
+        buttons: [
+          { label: '読込み',     value: 'ok', primary: true },
+          { label: 'キャンセル', value: 'cancel' },
+        ],
+        onSelect: (v) => {
+          setFloorConfirm(null);
+          if (v !== 'ok') return;
+          // onSelectはConfirmDialogのコールバックでguardUiを経由しないが、runDocumentImport自身が
+          // 自前でcatch済みのためrejectしない。
+          void runDocumentImport(parsed, file.name);
+        },
+      });
     };
     reader.readAsArrayBuffer(file);
   }
@@ -2488,11 +2481,12 @@ const App = observer(() => {
         isLandscape={isLandscape}
       />
 
-      {/* ファイル選択 (hidden) */}
+      {/* ファイル選択 (hidden)。accept は付けない: iOS の Files は OS に未登録の拡張子（.stq）を
+          accept に含むと全ファイルをグレーアウトして選べなくなるため。選別は読込み後の内容判定
+          （parseOpenedFileBytes）で行う。 */}
       <input
         ref={fileInputRef}
         type="file"
-        accept=".stq,application/json"
         style={{ display: 'none' }}
         onChange={handleFileOpen}
       />

@@ -3,6 +3,8 @@
 // 旧「読込み/書出し」メニューが使っていた localStorage 自動保存（単一グラフ）は廃止済み——
 // 残骸キーの掃除だけを clearLocalAutosave が担う。
 
+import { isDocumentEnvelope } from './documentFile.js';
+
 // 旧・単一グラフ自動保存のキー（廃止済み。現在は掃除のためだけに参照する）。
 const LEGACY_AUTOSAVE_KEY = 'strad-autosave';
 
@@ -122,10 +124,20 @@ export async function writeDocumentFileTarget(target, json) {
   downloadDocumentFile(json, target.name);
 }
 
-// 「ファイルを開く」で読み込んだバイト列（JSON=旧形式 or FlatBuffers=新形式）を
-// restoreGraph に渡せる形へパースする。不正な内容は例外を投げる。
+// 「ファイルを開く」で読み込んだバイト列を文書エンベロープ（JSON・format 'stq-document'）へパースする。
+// 受け入れるのは文書エンベロープだけ（旧形式＝単一グラフ FlatBuffers・旧JSONスナップショットは
+// 読み込まない。ユーザー裁定2026-10-07）。それ以外（空・先頭が '{' でない・JSON として不正・
+// format 違い）は例外を投げる——隠し input に accept を付けない（iOS 対応）ため、任意のファイルが
+// ここへ来る。グラフへ何も書き込む前に判定が済む。先頭バイト検査は巨大バイナリをデコードせず即拒否する
+// ため。BOM・先頭空白は受理しない（本アプリは書かない）。
 export function parseOpenedFileBytes(bytes) {
-  return bytes[0] === 0x7B // '{' = JSON
-    ? JSON.parse(new TextDecoder().decode(bytes))
-    : bytes;
+  if (bytes[0] !== 0x7B) throw new Error('StradCAD の文書ファイルではありません'); // '{' = JSON
+  let data;
+  try {
+    data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } catch {
+    throw new Error('JSONとして読めません');
+  }
+  if (!isDocumentEnvelope(data)) throw new Error('StradCAD の文書ファイルではありません');
+  return data;
 }

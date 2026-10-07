@@ -279,8 +279,8 @@ test('【失敗系】CenterLine.beamAxisOrigin が既知の値以外（未知の
 // （＝Uint8Array）で採り restoreGraph(graph, bytes) で戻すため、下の「FlatBuffers encode→decode」
 // テストと同一の restoreGraph(bytes)→decode→applySnapshot 経路に収束する（REASONED。
 // centerLineOps.js:184-196 で確認）。よってundo経路専用のテストは書き分けない。
-// plain object経路（旧JSON文書ファイルの読込み。App.jsx:1536 restoreGraph(graph, parsed)。
-// storage/localSnapshot.js parseOpenedFileBytesがJSON.parseした素のオブジェクトをそのまま渡す）は
+// plain object経路（本番の呼び出し元は無くなった。restoreGraph の plain object 分岐は残っているので、
+// その回帰を防ぐために固定している）は
 // decode()を経由せず applySnapshot が d.feature を直接読む（graphSnapshot.js:757-762）ため、
 // 別経路として下に固定する。
 test('Room.feature=\'elevatorEquipment\'（昇降機）は FlatBuffers encode→decode で往復する', () => {

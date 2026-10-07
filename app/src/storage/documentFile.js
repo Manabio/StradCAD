@@ -2,9 +2,8 @@
 // エンベロープ構築・パース。IndexedDB・DOM に依存しない純モジュール
 // （node:test から単体 import 可能に保つこと）。
 //
-// エンベロープは JSON（先頭 '{'）——「読込み」の形式判別（parseOpenedFileBytes が先頭バイトで
-// JSON / FlatBuffers を判別する）を変えずに、旧形式（単一グラフ FlatBuffers・旧JSONスナップ
-// ショット）と共存させるため。旧JSONスナップショットとは format キーの有無で区別する。
+// エンベロープは JSON（先頭 '{'）。「読込み」は文書エンベロープ（format キー一致）だけを受け入れ、
+// それ以外のファイルは parseOpenedFileBytes が拒否する（旧形式の読込み互換は無い）。
 //
 // catalogs（カタログ束の同梱）は optional。version は 1 のまま——旧 .stq
 // （catalogs 無し）はそのまま開け、新 .stq を旧ビルドで開いても catalogs は未知キーとして
@@ -53,7 +52,7 @@ export function buildDocumentJson({ floors, struct, planes, site, info, bootPlan
   });
 }
 
-/** パース済みJSONが文書エンベロープかどうか（旧JSONスナップショットとの区別）。 */
+/** パース済みJSONが文書エンベロープかどうか（format キーの一致）。 */
 export function isDocumentEnvelope(data) {
   return !!data && typeof data === 'object' && data.format === FORMAT;
 }

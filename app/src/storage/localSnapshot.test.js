@@ -6,8 +6,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   getOpenedFileName, getOpenedFileInfo, setOpenedFileName, clearOpenedFileName, saveNameFromOpenedFileName,
-  openDocumentFileTarget, writeDocumentFileTarget, supportsSaveFilePicker,
+  openDocumentFileTarget, writeDocumentFileTarget, supportsSaveFilePicker, parseOpenedFileBytes,
 } from './localSnapshot.js';
+import { buildDocumentJson } from './documentFile.js';
+import { readAppSrc, stripCommentLines, extractFunctionBody } from '../uiBusySourceScan.js';
 
 const mem = new Map();
 Object.defineProperty(globalThis, 'localStorage', {
@@ -193,4 +195,65 @@ test('App.jsx 配線: 保存メニューはピッカー対応ならダイアロ�
     'ピッカー対応時に handleSaveConfirm へ直行していない');
   assert.match(m[1], /setSaveDialogDefaultName\(defaultName\);/,
     '非対応時にダイアログを開く経路が無い');
+});
+
+// ---- parseOpenedFileBytes: 文書エンベロープだけを受け入れる（旧形式は読まない。ユーザー裁定2026-10-07） ----
+const enc = (s) => new TextEncoder().encode(s);
+
+test('parseOpenedFileBytes: 正規の文書エンベロープ（buildDocumentJson の出力）は受理し、パース済みオブジェクトを返す', () => {
+  const json = buildDocumentJson({ floors: [{ planeId: 'p1', bytes: new Uint8Array([1, 2, 3]) }], bootPlaneId: 'p1' });
+  const parsed = parseOpenedFileBytes(enc(json));
+  assert.equal(parsed.format, 'stq-document');
+  assert.equal(parsed.bootPlaneId, 'p1');
+  assert.equal(parsed.floors.length, 1);
+});
+
+test('parseOpenedFileBytes: 所定外のバイト列はすべて例外（PNG・乱数・空・平文・format 無し JSON・配列・壊れた JSON・旧形式 FlatBuffers 相当）', () => {
+  const cases = {
+    PNG: new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13]),
+    乱数: new Uint8Array([0x13, 0xA7, 0x5C, 0xFE, 0x00, 0x91, 0x42]),
+    空: new Uint8Array(0),
+    平文: enc('hello world'),
+    'format 無し JSON': enc('{"a":1}'),
+    'format 違い': enc('{"format":"other","floors":[]}'),
+    配列: enc('[]'),
+    '壊れた JSON': enc('{"format":"stq-document"'),
+    '不正 UTF-8': new Uint8Array([0x7B, 0xFF, 0xFE, 0x7D]),
+    '文字列値の中の不正 UTF-8（fatal 無しだと U+FFFD に化けて受理される）': new Uint8Array([
+      ...enc('{"format":"stq-document","floors":[],"x":"'), 0xFF, ...enc('"}'),
+    ]),
+    'BOM 付きの正規 JSON（本アプリは BOM を書かない）': new Uint8Array([
+      0xEF, 0xBB, 0xBF, ...enc(buildDocumentJson({ floors: [] })),
+    ]),
+    '旧形式 FlatBuffers 相当（先頭が { でない）': new Uint8Array([0x10, 0x00, 0x00, 0x00, 0x53, 0x54, 0x52, 0x44]),
+  };
+  for (const [name, bytes] of Object.entries(cases)) {
+    assert.throws(() => parseOpenedFileBytes(bytes), Error, `${name} が受理された`);
+  }
+});
+
+// 配線（ソース文字列検査。コメント行を除いた本体に対して1行まるごと一致で固定する）。
+// 改行コード（LF/CRLF）に依存しないよう、共用ヘルパー（中括弧対応で関数本体を切り出す）を使う。
+const appCode = stripCommentLines(readAppSrc().replace(/\{\/\*[\s\S]*?\*\/\}/g, ''));
+
+test('App.jsx 配線: 隠しファイル input に accept を付けない（iOS の Files は未登録拡張子でグレーアウトするため）', () => {
+  const m = appCode.match(/<input\s+ref=\{fileInputRef\}[\s\S]*?\/>/);
+  assert.ok(m, 'fileInputRef の input が見つからない');
+  assert.doesNotMatch(m[0], /accept=/);
+});
+
+test('App.jsx 配線: handleFileOpen は旧形式の restoreGraph を呼ばず、所定外は「読み込めません」の確認ダイアログを出す', () => {
+  const body = extractFunctionBody(readAppSrc(), 'function handleFileOpen(e)');
+  assert.doesNotMatch(body, /restoreGraph\(/);
+  assert.doesNotMatch(body, /isDocumentEnvelope/);
+  const catchIdx = body.indexOf('} catch {');
+  const dlgIdx = body.search(/^\s*message: 'このファイルは読み込めません。StradCAD の文書ファイル（\.stq）ではありません。',$/m);
+  const nextIdx = body.indexOf('runDocumentImport(parsed, file.name)');
+  assert.ok(catchIdx >= 0 && dlgIdx > catchIdx && nextIdx > dlgIdx, '例外時のダイアログ→成功時の読込み、の順で見つからない');
+  assert.match(body, /^\s*setFloorConfirm\(\{$/m);
+  assert.match(body, /^\s*buttons: \[\{ label: 'OK', value: 'ok', primary: true \}\],$/m);
+  assert.match(body, /^\s*onSelect: \(\) => setFloorConfirm\(null\),$/m);
+  // ダイアログの直後で return する（落ちずに成功側の読込み確認へ進まない）
+  assert.match(body, /onSelect: \(\) => setFloorConfirm\(null\),\s*\}\);\s*return;\s*\}/,
+    'catch ブロックで onSelect → }); → return; → } の順になっていない');
 });
