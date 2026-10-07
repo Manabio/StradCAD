@@ -1067,9 +1067,12 @@ export function wallLineThroughRuns(wallSegments, freeEnds = []) {
  *   再計算内で壁区間（selfWallSegments）をmemoするキャッシュ（ステップC）。省略時は従来どおり
  *   自前で全走査する（freeEndGraphのselfWallFreeEnds算出にだけ使う——wallSegments自体は呼び出し側が
  *   渡す値をそのまま使う）。
+ * @param {Array<{x:number, y:number}>} [belowTieExcludePts] - 頭つなぎ（フェーズB）の起点から除く下階柱のAXIS座標
+ *   （折返し階段の隔て壁の両端の柱。ユーザー裁定2026-10-07「吹抜けを横切る頭つなぎは不可・隔て壁は柱脚固定で1層分は梁なし」）。
+ *   通し梁の下階柱分割（フェーズA）と支持点判定には従来どおり含める。省略＝従来と同じ。
  * @returns {{created: object[], removed: string[]}}
  */
-export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = null, belowColumns = [], selfGate = buildSelfFootprintGate(graph), freeEndGraph = graph, wallSourceCache = undefined) {
+export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = null, belowColumns = [], selfGate = buildSelfFootprintGate(graph), freeEndGraph = graph, wallSourceCache = undefined, belowTieExcludePts = []) {
   void wallGate; // 未使用（互換のため残置。QA裁定2026-09-18）。ゲートは末尾のselfGateが担う——理由は上記JSDoc参照。
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing || !(wallSegments?.length)) return { created: [], removed: [] };
@@ -1225,8 +1228,15 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
       hiCL: beam.clStart.effectiveValue <= beam.clEnd.effectiveValue ? beam.clEnd : beam.clStart,
     });
   }
-  const belowTiePts = belowPts.map(pt => ({ ...pt, kind: 'below' }));
-  const selfCarrierPts = graph.columns.filter(c => c.role !== 'foundation').map(c => ({ x: c.axisX, y: c.axisY, kind: 'self' }));
+  const belowTiePts = belowPts
+    .filter(pt => !belowTieExcludePts.some(e => Math.abs(e.x - pt.x) < CL_OVERLAP_TOL_MM && Math.abs(e.y - pt.y) < CL_OVERLAP_TOL_MM))
+    .map(pt => ({ ...pt, kind: 'below' }));
+  // 自階の隔て壁の端の柱も受梁（柱の下の梁）の起点から除く——隔て壁は柱脚が固定されていれば1層分は梁なしでよい
+  // （ユーザー裁定2026-10-07）。下階側の除外（belowTieExcludePts）と対になる。
+  const ownPartitionPts = stairPartitionEnds(graph, project, wallSourceCache).map(e => ({ x: e.x, y: e.y }));
+  const selfCarrierPts = graph.columns.filter(c => c.role !== 'foundation')
+    .filter(c => !ownPartitionPts.some(e => Math.abs(e.x - c.axisX) < CL_OVERLAP_TOL_MM && Math.abs(e.y - c.axisY) < CL_OVERLAP_TOL_MM))
+    .map(c => ({ x: c.axisX, y: c.axisY, kind: 'self' }));
   const supportSegments = [...emitted, ...lockedSegments];
   // supportPoints（第3引数）=belowPts: 端点一致の候補が「下階柱で既に支持済み」かどうかの判定に使う
   // （指摘B。no-opにせず候補評価へ進めるかどうかの分岐）。

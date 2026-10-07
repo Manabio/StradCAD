@@ -9,6 +9,7 @@ import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBe
 import { peekVia } from './structuralPeek.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
+import { stairPartitionEnds } from './wallFreeEnds.js';
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
@@ -297,10 +298,11 @@ export function autoFillBeams(graph, project, role = 'primary', wallGate = null)
  *  省略時（undefined）はそちら側が既定値（graph自身）を使うため実体階は従来と同値。
  *  wallSourceCache は autoFillWoodWallBeams の同名引数（ステップC）をそのまま素通しする——
  *  省略時（undefined）はそちら側が毎回全走査するため従来と同値。
+ *  belowTieExcludePts は autoFillWoodWallBeams の同名引数をそのまま素通しする（省略＝従来と同値）。
  *  @returns {{created: object[], removed: string[]}} */
-export function autoFillBeamsForStructure(graph, project, role, wallGate = null, wallSegments = [], belowColumns = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined) {
+export function autoFillBeamsForStructure(graph, project, role, wallGate = null, wallSegments = [], belowColumns = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, belowTieExcludePts = []) {
   if (role === 'primary' && rulesFor(effectiveStructure(graph, project)).beamPlacement === 'wallRuns') {
-    return autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache);
+    return autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache, belowTieExcludePts);
   }
   return autoFillBeams(graph, project, role, wallGate);
 }
@@ -684,6 +686,9 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null, below
 export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined, roofColumnFilter = null) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
+  // 下階の隔て壁の両端の柱（頭つなぎの起点から除く。woodAutoFill.js autoFillWoodWallBeams の belowTieExcludePts）。
+  // 識別は幾何（下階graphの stairPartitionEnds の点とAXIS座標が一致する柱）。由来集合は使わない。
+  const belowTieExcludePts = belowGraph ? stairPartitionEnds(belowGraph, project).map(e => ({ x: e.x, y: e.y })) : [];
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
   // 屋根の軒桁(eaves)は下階の主構造に従うため、判定軸は belowMainStructure 側で別に行う。
   const ownSpecified = isStructureSpecified(graph, project);
@@ -734,7 +739,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const updatedLandingBeams = landingResult.updated;
   const beamKind = foundation ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
   const beamsResult = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure))
-    ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments, belowColumns, selfGate, freeEndGraph, wallSourceCache)
+    ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments, belowColumns, selfGate, freeEndGraph, wallSourceCache, belowTieExcludePts)
     : { created: [], removed: [] };
   const newBeams = beamsResult.created;
   const removedBeams = beamsResult.removed;
@@ -765,7 +770,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // （autoFillRoofBeamsの材種決定に使う「1つ下の階」の値）とは別軸。
   const roofBeamsResult = (isRoof && belowMainStructure !== UNSPECIFIED_STRUCTURE)
     ? (rulesFor(structure).roofBeamPlacement === 'wallRuns'
-        ? autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache)
+        ? autoFillWoodWallBeams(graph, project, wallSegments, wallGate, belowColumns, selfGate, freeEndGraph ?? graph, wallSourceCache, belowTieExcludePts)
         : autoFillRoofBeams(graph, project, belowMainStructure, wallGate))
     : { created: [], removed: [] };
   // 小屋梁（在来木造の主屋根・下屋。ステップC2b・C2d-2）。軒桁・頭つなぎ・壁線の通し梁（role:'primary'）の

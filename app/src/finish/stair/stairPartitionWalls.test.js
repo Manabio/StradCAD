@@ -3,13 +3,15 @@
 // finishBoundary.test.js makeStairUnder2aFixture（SWITCHBACK＋2a部屋）の構成を流用する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline, StairType, RoomKind, RoomFeature } from '@core';
+import { Project, PlanGraph, Plane, StructuralMaterialType, CenterLineType, Discipline, StairType, RoomKind, RoomFeature } from '@core';
+import { buildSelfFootprintGate } from '../../structural/wallGate.js';
 import { generateStairPartitionWalls, wrapStairPartitionFreeEnds } from './stairPartitionWalls.js';
 import { stairPartitionLines, isStairPartitionWall, PARTITION_BACKING_MM, PARTITION_FINISH_MM } from './stairPartition.js';
 import { selfWallSegments, wallBackingCenters, autoFillWallBeamAxes } from '../../structural/wallBeamAxes.js';
-import { autoFillWoodColumns, conformWoodSections } from '../../structural/woodAutoFill.js';
+import { autoFillWoodColumns, autoFillWoodWallBeams, conformWoodSections } from '../../structural/woodAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE, woodColumnWidthMm } from '../../structural/structureRules.js';
 import { stairPartitionEnds } from '../../structural/wallFreeEnds.js';
+import { autoFillStructuralGrid } from '../../structural/structuralAutoFill.js';
 import { isEligibleWallSpan } from '../kneeDropWall.js';
 import { WALL_KEY_VERSION } from '../wallFreshnessKey.js';
 import { runFinishExitBoundary } from '../finishBoundary.js';
@@ -535,4 +537,106 @@ test('両端の柱【手動の個別柱寸を守る】端の柱に「この部�
   colAt(1000, 4000).setField('woodColumnWidthMm', null); // 点源が入れた値が消えた状態 → 90 を書き戻す
   pass();
   assert.equal(colAt(1000, 4000).woodColumnWidthMm, 90);
+});
+
+// ---- 頭つなぎの起点から隔て壁の端の柱を除く（S3'-fix。ユーザー裁定2026-10-07）----
+// 1階に隔て壁＋両端の柱、2階に階段の上を囲む壁（x=0/2000・y=0/4000）。2階の autoFillWoodWallBeams を下階の柱で回す。
+function buildTwoFloors(exclude) {
+  const t = buildColumns({ bottom: true });
+  const g2 = t.project.addPlane(3000, '2階', 'p2').graph;
+  g2.structureOverride = WOOD;
+  const mk = (type, map, v) => map.get(v) ?? map.set(v, g2.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH })).get(v);
+  const vs = new Map(), hs = new Map();
+  addOuterWalls(g2, (v) => mk(CenterLineType.VERTICAL, vs, v), (v) => mk(CenterLineType.HORIZONTAL, hs, v));
+  mk(CenterLineType.HORIZONTAL, hs, 1000); // 2階にも踊り場前縁の分割線CLがある（頭つなぎのアンカー）
+  mk(CenterLineType.VERTICAL, vs, 1000); // レーン間中心線（梁の分割点のアンカー）
+  // 2階の床（自階フットプリント。頭つなぎの自階ゲートが見る）
+  const V = (v) => mk(CenterLineType.VERTICAL, vs, v), H = (v) => mk(CenterLineType.HORIZONTAL, hs, v);
+  g2.addRoom(new Set([[0, 0, 2000, 1000], [0, 1000, 2000, 4000]].map(([x1, y1, x2, y2]) => `${V(x1).id}:${H(y1).id}:${V(x2).id}:${H(y2).id}`)), '居室');
+  autoFillWallBeamAxes(g2, selfWallSegments(g2));
+  const pts = exclude ? stairPartitionEnds(t.graph, t.project).map(e => ({ x: e.x, y: e.y })) : [];
+  autoFillWoodWallBeams(g2, t.project, selfWallSegments(g2), null, t.graph.columns, undefined, g2, undefined, pts);
+  return { ...t, g2 };
+}
+const beamsOnH = (g, y) => g.beams.filter(b => !b.isVertical && b.axisCL.effectiveValue === y);
+
+test('頭つなぎ【隔て壁の端の柱を起点から除く】2階の y=1000（踊り場前縁）に頭つなぎができない。除外なし（従来）ではできる。上り口辺（y=4000）の梁は下階柱で分割される', () => {
+  const withEx = buildTwoFloors(true);
+  const without = buildTwoFloors(false);
+  assert.ok(beamsOnH(without.g2, 1000).length > 0, '対照（従来）: 頭つなぎができる');
+  assert.equal(beamsOnH(withEx.g2, 1000).length, 0, '除外すると頭つなぎができない');
+  const split = beamsOnH(withEx.g2, 4000).map(b => [b.clStart.effectiveValue, b.clEnd.effectiveValue].sort((a, c) => a - c));
+  assert.ok(split.some(([, b]) => b === 1000) && split.some(([a]) => a === 1000), '上り口辺の梁は x=1000 で分割される（フェーズAは除外しない）');
+});
+
+test('【失敗系】頭つなぎの除外: 隔て壁の無い下階では除外点が空・柱に一致しない除外点（AXIS座標が許容外）は何も除かず、従来どおり頭つなぎができる', () => {
+  const none = buildColumns({ withPartition: false });
+  assert.deepEqual(stairPartitionEnds(none.graph, none.project), [], '隔て壁の無い下階では除外点が空');
+  // 柱の位置から外れた除外点（1000,1000 から 10mm ずれ）は柱を除かない
+  const t = buildColumns({ bottom: true });
+  const g2 = t.project.addPlane(3000, '2階', 'p2').graph;
+  g2.structureOverride = WOOD;
+  const vs = new Map(), hs = new Map();
+  const mk = (type, map, v) => map.get(v) ?? map.set(v, g2.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH })).get(v);
+  const V = (v) => mk(CenterLineType.VERTICAL, vs, v), H = (v) => mk(CenterLineType.HORIZONTAL, hs, v);
+  addOuterWalls(g2, V, H); H(1000); V(1000);
+  g2.addRoom(new Set([[0, 0, 2000, 1000], [0, 1000, 2000, 4000]].map(([x1, y1, x2, y2]) => `${V(x1).id}:${H(y1).id}:${V(x2).id}:${H(y2).id}`)), '居室');
+  autoFillWallBeamAxes(g2, selfWallSegments(g2));
+  autoFillWoodWallBeams(g2, t.project, selfWallSegments(g2), null, t.graph.columns, undefined, g2, undefined, [{ x: 1010, y: 1010 }]);
+  assert.ok(beamsOnH(g2, 1000).length > 0);
+});
+
+test('受梁【自階の隔て壁の端の柱の下に梁を作らない】隔て壁の柱だけが立つ階では、その柱の下に受梁ができない（柱脚固定。S3\'-fix）', () => {
+  const t = buildColumns({ bottom: true });
+  const g = t.graph;
+  const room = [[0, 0, 2000, 1000], [0, 1000, 2000, 4000]].map(([x1, y1, x2, y2]) => `${t.V(x1).id}:${t.H(y1).id}:${t.V(x2).id}:${t.H(y2).id}`);
+  g.addRoom(new Set(room), '居室');
+  t.V(1000);
+  autoFillWallBeamAxes(g, selfWallSegments(g));
+  autoFillWoodWallBeams(g, t.project, selfWallSegments(g), null, []);
+  assert.ok(t.colAt(1000, 1000), '前提: 隔て壁の端の柱が立つ');
+  assert.equal(g.beams.some(b => !b.isVertical && b.axisCL.effectiveValue === 1000), false, '柱の下の受梁ができない');
+});
+
+test('頭つなぎ【配線】本番の入口 autoFillStructuralGrid（belowGraph を渡す。structuralRecompute.js と同じ呼び方）でも、2階の踊り場前縁に頭つなぎができない', () => {
+  const t = buildColumns({ bottom: true });
+  const g2 = t.project.addPlane(3000, '2階', 'p2').graph;
+  g2.structureOverride = WOOD;
+  const vs = new Map(), hs = new Map();
+  const mk = (type, map, v) => map.get(v) ?? map.set(v, g2.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH })).get(v);
+  const V = (v) => mk(CenterLineType.VERTICAL, vs, v), H = (v) => mk(CenterLineType.HORIZONTAL, hs, v);
+  addOuterWalls(g2, V, H); H(1000); V(1000);
+  g2.addRoom(new Set([[0, 0, 2000, 1000], [0, 1000, 2000, 4000]].map(([x1, y1, x2, y2]) => `${V(x1).id}:${H(y1).id}:${V(x2).id}:${H(y2).id}`)), '居室');
+  autoFillWallBeamAxes(g2, selfWallSegments(g2));
+  autoFillStructuralGrid(g2, t.project, WOOD, null, [], selfWallSegments(g2), [], t.graph.columns, [], undefined, undefined, undefined, [], t.graph);
+  assert.ok(g2.beams.some(b => !b.isVertical && b.axisCL.effectiveValue === 4000), '前提: 梁の生成は走っている');
+  assert.equal(g2.beams.some(b => !b.isVertical && b.axisCL.effectiveValue === 1000), false, '踊り場前縁の頭つなぎができない');
+});
+
+test('頭つなぎ【屋根経路の配線】屋根専用平面で belowGraph＝最上階（隔て壁あり）のとき、屋根の梁（structuralAutoFill.js の wallRuns 経路）でも隔て壁の柱は頭つなぎの起点にならない', () => {
+  const t = buildColumns({ bottom: true });
+  const top = t.graph;
+  top.addRoom(new Set([[0, 0, 2000, 1000], [0, 1000, 2000, 4000]].map(([x1, y1, x2, y2]) => `${t.V(x1).id}:${t.H(y1).id}:${t.V(x2).id}:${t.H(y2).id}`)), '居室');
+  t.V(1000);
+  const roof = new PlanGraph(new Plane('roof1', 6000, '小屋伏図', 2, 1, false, null, 0, true, 'p1'));
+  roof.structureOverride = WOOD;
+  const vs = new Map(), hs = new Map();
+  const mk = (type, map, v) => map.get(v) ?? map.set(v, roof.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH })).get(v);
+  for (const v of [0, 1000, 2000]) mk(CenterLineType.VERTICAL, vs, v);
+  for (const v of [0, 1000, 4000]) mk(CenterLineType.HORIZONTAL, hs, v);
+  const segs = selfWallSegments(top);
+  autoFillStructuralGrid(roof, t.project, WOOD, null, [], segs, [], top.columns, [], buildSelfFootprintGate(top), top, undefined, [], top);
+  assert.ok(roof.beams.some(b => !b.isVertical && b.axisCL.effectiveValue === 4000), '前提: 屋根の梁（軒桁）の生成が走っている');
+  assert.equal(roof.beams.some(b => !b.isVertical && b.axisCL.effectiveValue === 1000), false, '踊り場前縁に頭つなぎができない');
+});
+
+test('受梁【対照】同じ構成から隔て壁を外し、同位置に通常の柱を置くと y=1000 に受梁ができる（上のテストの除外が効いている証拠）', () => {
+  const t = buildColumns({ bottom: true, withPartition: false });
+  const g = t.graph;
+  g.addRoom(new Set([[0, 0, 2000, 1000], [0, 1000, 2000, 4000]].map(([x1, y1, x2, y2]) => `${t.V(x1).id}:${t.H(y1).id}:${t.V(x2).id}:${t.H(y2).id}`)), '居室');
+  t.V(1000);
+  g.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', t.V(1000), t.H(1000), {});
+  autoFillWallBeamAxes(g, selfWallSegments(g));
+  autoFillWoodWallBeams(g, t.project, selfWallSegments(g), null, []);
+  assert.equal(g.beams.some(b => !b.isVertical && b.axisCL.effectiveValue === 1000 && b.beamType === '受梁'), true);
 });
