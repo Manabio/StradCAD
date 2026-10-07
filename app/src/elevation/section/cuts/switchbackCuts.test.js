@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../../elevationFaceList.js';
-import { switchbackCuts, stairBandWallFilter } from './switchbackCuts.js';
+import { switchbackCuts, stairBandWallFilter, LANDING_CUT_INSET_MM } from './switchbackCuts.js';
 import { cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
 import { buildBandLayers } from '../sectionBandLayers.js';
 
@@ -387,9 +387,65 @@ test('【失敗系】switchbackCuts: 非対称な隅でもseq3/seq5の面の走�
     'seq3の切断線の枠はwLanding(自分のface)のrunのはず');
   assert.notEqual(bySeq['3'].line.hi - bySeq['3'].line.lo, table.wEntry.run,
     'seq3の切断線の枠がwEntry(seq1と共有)のrunだと、seq3のcontentが面に対してずれる');
-  // 切断の**位置**(axisValue)はseq1と共有したまま（枠だけを分けた変更であることの明示）。
-  assert.equal(bySeq['3'].line.axisValue, bySeq['1'].line.axisValue,
-    'seq1とseq3は同じ位置（踊り場前縁）で切る——分けたのは枠(lo/hi)だけ');
+  // 切断の**位置**: seq3だけ踊り場側へ LANDING_CUT_INSET_MM 入れる（2026-10-08。専用テスト参照）。
+  assert.equal(Math.abs(bySeq['3'].line.axisValue - bySeq['1'].line.axisValue), LANDING_CUT_INSET_MM);
+});
+
+test('【2026-10-08】switchbackCuts: seq3の切断線は踊り場前縁から踊り場側へLANDING_CUT_INSET_MMだけ入り、seq1は前縁のまま。下限・基準床は踊り場', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  const t = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const bySeq = Object.fromEntries(t.cuts.map(c => [c.seqNo, c]));
+  // 階段下に部屋が無くても seq3 の基準床・下限は踊り場（平場の踊り場）
+  const g2 = makeGraph('p2');
+  const f2 = makeSwitchbackFixture(g2, { withRoomUnder: false });
+  const t2 = switchbackCuts(f2.stair, composeRoomFaces(f2.room, g2), g2, { ...OPTS, layers: buildBandLayers(g2) });
+  const s3 = t2.cuts.find(c => c.seqNo === '3');
+  assert.equal(s3.baseFloorZ, t2.landingAbs, '階段下に部屋が無くてもseq3の基準床は踊り場');
+  assert.equal(s3.zRange.loZ, t2.landingAbs);
+  // フィクスチャの踊り場は y=0..1500（階段の走行方向は y 減少）。前縁は y=1500、踊り場側は y<1500。
+  assert.equal(bySeq['1'].line.axisValue, 1500, 'seq1は踊り場前縁のまま');
+  assert.equal(bySeq['3'].line.axisValue, 1500 - LANDING_CUT_INSET_MM, 'seq3は踊り場側へ入る');
+  assert.equal(Math.sign(bySeq['3'].line.axisValue - 1500), bySeq['3'].viewSign, '入れる向きは視線の前方(踊り場奥向き)');
+  assert.equal(bySeq['3'].zRange.loZ, t.landingAbs, 'seq3の探査下限は踊り場');
+  assert.equal(bySeq['3'].baseFloorZ, t.landingAbs);
+  assert.equal(bySeq['1'].zRange.loZ, 0, 'seq1は不変');
+});
+
+// 踊り場の奥行き(y=0..depth)だけを変えた階段室でseq1/seq3のcutを組む
+function cutsWithLandingDepth(depth) {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, depth, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4500, { labeled: false, discipline: Discipline.ARCH });
+  const cells = new Set([`${x0.id}:${y0.id}:${x1.id}:${ym.id}`, `${x0.id}:${ym.id}:${xm.id}:${y1.id}`, `${xm.id}:${ym.id}:${x1.id}:${y1.id}`]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+  const t = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.ok(t, '浅い踊り場でもcutsは組める');
+  return { t, bySeq: Object.fromEntries(t.cuts.map(c => [c.seqNo, c])) };
+}
+
+test('【失敗系・2026-10-08】switchbackCuts: 踊り場の奥行きがLANDING_CUT_INSET_MM以下ならseq3は前縁のまま切る（踊り場の外へ出さない）', () => {
+  const { t, bySeq } = cutsWithLandingDepth(60);
+  assert.ok(t.params.landingLen <= LANDING_CUT_INSET_MM, `前提: 踊り場が浅い（実際:${t.params.landingLen}）`);
+  assert.equal(bySeq['3'].line.axisValue, bySeq['1'].line.axisValue, '浅い踊り場ではseq3も前縁で切る');
+});
+
+test('【境界・2026-10-08】switchbackCuts: 踊り場の奥行きがちょうどLANDING_CUT_INSET_MMなら前縁のまま、1mm深ければ入る', () => {
+  const exact = cutsWithLandingDepth(LANDING_CUT_INSET_MM);
+  assert.equal(exact.t.params.landingLen, LANDING_CUT_INSET_MM, '前提: 奥行きがちょうど100');
+  assert.equal(exact.bySeq['3'].line.axisValue, exact.bySeq['1'].line.axisValue, '奥行き==inset（>の境界）は前縁のまま');
+  const deeper = cutsWithLandingDepth(LANDING_CUT_INSET_MM + 1);
+  assert.equal(Math.abs(deeper.bySeq['3'].line.axisValue - deeper.bySeq['1'].line.axisValue), LANDING_CUT_INSET_MM, '1mm深ければ入る');
 });
 
 // ---- 階段下部屋の2a壁は階段の展開図から見えない（ユーザー実機指摘2026-09「「6」D1:

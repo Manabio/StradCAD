@@ -34,6 +34,17 @@ import { isWallHiddenForBand } from '../sectionHits.js';
 const MID_WALL_TOL_MM = 300; // 壁厚程度の許容差（往路・復路間の壁の実在判定。既存実装と同値）
 
 /**
+ * seq3（踊り場の壁を見る面）の切断線を、踊り場前縁から踊り場側（+t）へ入れる量（mm）。
+ * 前提: 木造・薄壁（柱包み57.5・柱半幅45）に対する余裕。RCの厚壁(200以上)や150角超の柱では
+ * 回り込みがこの量を超え、再び切断面にかかりうる。
+ * 端で接する壁（階段下の壁・往復レーン境界の壁の端）と柱包み（壁の物理範囲が±57.5mm
+ * 回り込む）が踊り場前縁の切断面にかかって断面（帯）になるのを避ける——踊り場は平場で、
+ * そこには隔て板は無い（ユーザー裁定2026-10-08）。柱包みの回り込み(57.5)・柱の半幅(45)より
+ * 大きく、踊り場の奥行きに対して小さい値。踊り場がこれ以下の奥行きなら入れない（前縁のまま）。
+ */
+export const LANDING_CUT_INSET_MM = 100;
+
+/**
  * 階段下（破れ線先セル）の部屋情報。判定は仕上げモード側と同じ単一情報源
  * （`cellsBeyondBreak` × `stairUnderRoomsOf`）に委譲する——展開図が独自判定を持つと
  * 階段下壁の生成（`stairUnderWalls.js`）と食い違うため。
@@ -363,15 +374,20 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // 踊り場桁枠のささら断面が面の右端＝Y2壁の仕上げ面を突き抜けて壁の中に描かれていた）。
   // 切断線の**位置**(axisValue)はW(t,s)から導く値のままでよい——揃えるのは枠(lo/hi)だけ。
 
-  // ---- seq1/seq3: 踊り場前縁 W(tRun,0→1)（幅方向の全幅線。リード裁定で両方ともこの位置の
-  // 切断線を共有する——設計書§6.1表のseq3の元位置W(1)からの意図保存の逸脱。理由:
-  // wLandingを「距離のある見えがかり候補」として自然に検出させ、seq3の床基準(landingAbs)を
-  // 保ったまま「踊り場の奥行き分だけ離れた壁」を一般規則で出すため）。
-  // axisValue（切断位置）は共有し、枠だけ各々のfaceに合わせる（上の不変条件）。
-  const seq13Line = { isVertical: wEntry.isVertical, axisValue: tRunTravel, lo: wEntry.lo, hi: wEntry.hi };
-  const seq3Line = { isVertical: wLanding.isVertical, axisValue: tRunTravel, lo: wLanding.lo, hi: wLanding.hi };
+  // ---- seq1/seq3: 幅方向の全幅線。seq1は踊り場前縁 W(tRun,0→1)、seq3は前縁から
+  // LANDING_CUT_INSET_MMだけ踊り場側（2026-10-08。旧: 両者が前縁を共有。設計書§6.1表のseq3の
+  // 元位置W(1)からの意図保存の逸脱で、wLandingを「距離のある見えがかり候補」として自然に検出
+  // させるため）。枠(lo/hi)は各々のfaceに合わせる（上の不変条件）。
+  const seq1Line = { isVertical: wEntry.isVertical, axisValue: tRunTravel, lo: wEntry.lo, hi: wEntry.hi };
   const seq1ViewSign = Math.sign(travelCoordAt(0) - tRunTravel) || 1; // 上り口向き(-t方向)
   const seq3ViewSign = Math.sign(travelCoordAt(1) - tRunTravel) || 1; // 踊り場奥向き(+t方向)
+  // seq3だけ踊り場側へ入れる（LANDING_CUT_INSET_MM。踊り場の奥行きが足りなければ前縁のまま）。
+  // 向きは踊り場奥向き(+t)＝seq3ViewSignと同じ（視線の前方へ進める）。
+  const seq3Inset = landingLen > LANDING_CUT_INSET_MM ? LANDING_CUT_INSET_MM : 0;
+  const seq3Line = {
+    isVertical: wLanding.isVertical, axisValue: tRunTravel + seq3ViewSign * seq3Inset,
+    lo: wLanding.lo, hi: wLanding.hi,
+  };
 
   // ---- seq2/4: 往路レーン中央 W(0,0.25→1,0.25)（走行方向の全長線。ユーザー実機
   // フィードバック2026-08-23で「レーン境界（100mmあき内）で切って往路側壁を見る」から
@@ -445,7 +461,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
 
   const cuts = [
     {
-      seqNo: '1', face: wEntry, line: seq13Line, viewSign: seq1ViewSign, dirSign: wEntry.dirSign,
+      seqNo: '1', face: wEntry, line: seq1Line, viewSign: seq1ViewSign, dirSign: wEntry.dirSign,
       openGapMarks: false, // 踊り場前縁・回転部にアキは標記しない（ユーザー指示2026-10-07）
       layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, chDimSplitAbsYs: [floorHeight],
       stairCut: contribution, // 往路・復路とも正面梯子として重なるため両方渡す（§6.1「往路=正面梯子(下)／復路=正面梯子(上)」）
@@ -468,7 +484,8 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     seqNo: '3', face: wLanding, line: seq3Line, viewSign: seq3ViewSign, dirSign: wLanding.dirSign,
     openGapMarks: false, // 同上（踊り場の壁を見る面にもアキは標記しない）
     // §6.1表「階段寄与: なし」＝段の重ね描きなし。踊り場の断面・桁枠は描く（landingOnly参照）。
-    layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: landingOnly,
+    // 平場の踊り場: 踊り場レベルより上だけを描く（下は描かない。下限・基準床とも踊り場。ユーザー裁定2026-10-08）。
+    layers, zRange: { loZ: landingAbs, hiZ: ceilTopAbs }, baseFloorZ: landingAbs, stairCut: landingOnly,
   });
   cuts.push({
     // QA実機フィードバック修正: seq4のstairCutは復路(inbound)ではなく往路(outbound)——

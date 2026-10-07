@@ -691,7 +691,8 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   }
 
   // ---- 3: W_landing（全幅。階段の重ね描きなし） ----
-  const rawSegments3 = flatFloorSegments(wLanding.run, underFloorZ, ceilTopAbs - underFloorZ);
+  // 平場の踊り場: 床は常に踊り場レベル（階段下に部屋が無くても下は描かない。2026-10-08裁定）。
+  const rawSegments3 = flatFloorSegments(wLanding.run, cutTable.landingAbs, ceilTopAbs - cutTable.landingAbs);
   const floorProfile3 = floorProfileFor(cutOf('3'), rawSegments3);
   entries.push({
     seqNo: '3', face: wLanding,

@@ -757,6 +757,67 @@ test('【mutation証跡用】stairFaceSequence: seq3(W_landing)の床yはlanding
     `seq3のfloorDeltaMmはlandingAbs(${landingAbs})のはず（実際:${seq3.floorSegments[0].floorDeltaMm}）`);
 });
 
+// ---- 2026-10-08 裁定: seq3は踊り場前縁から踊り場側へ入れて切り、踊り場レベルより上だけ描く ----
+// 往復間の壁（x=1000）を柱包みぶん(57.5)踊り場側(y<1500)へ回り込ませた構成。
+function makeWrappedPartitionFixture(graph, { withRoomUnder = true } = {}) {
+  const fx = makeSwitchbackFixture(graph, { withRoomUnder });
+  const cl = (isV, v) => [...graph.centerLines].find(c => (c.centerLineType === CenterLineType.VERTICAL) === isV && c.effectiveValue === v);
+  graph.addWall(cl(true, 1000), 50, true, cl(false, 1500), -57.5, cl(false, 4500), 0, {});
+  return fx;
+}
+// 面の内側(0<x<run)にある縦のTHICK線の本数（面端の壁輪郭を除く）
+const interiorThickVerticals = e => e.content.filter(p => p.type === 'line' && p.weight === 'thick' &&
+  Math.abs(p.x1 - p.x2) < 1e-6 && p.x1 > 1e-6 && p.x1 < e.face.run - 1e-6).length;
+
+test('【2026-10-08】stairFaceSequence: 踊り場側へ回り込んだ隔て壁は、seq1では断面になるがseq3(踊り場側へ入れて切る)では断面にならない', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeWrappedPartitionFixture(graph);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const seq1 = entries.find(e => e.seqNo === '1');
+  const seq3 = entries.find(e => e.seqNo === '3');
+  assert.ok(interiorThickVerticals(seq1) >= 2, `前提: seq1は隔て壁の2縁(THICK縦線)を持つ（実際:${interiorThickVerticals(seq1)}）`);
+  assert.equal(interiorThickVerticals(seq3), 0, 'seq3は隔て壁を断面にしない');
+});
+
+test('【2026-10-08】stairFaceSequence: seq3は踊り場レベルより下に何も描かない（踊り場の床線は残る）。階段下の部屋の有無によらない', () => {
+  for (const withRoomUnder of [true, false]) {
+    const graph = makeGraph();
+    const { room, stair } = makeWrappedPartitionFixture(graph, { withRoomUnder });
+    const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+    const seq3 = entries.find(e => e.seqNo === '3');
+    const landingAbs = 6 * (OPTS.floorHeight / 12);
+    const zs = seq3.content.flatMap(p => p.type === 'line' ? [-p.y1, -p.y2] : (p.points ?? []).map(q => -q.y));
+    assert.ok(zs.length > 0, 'seq3のcontentは空でない');
+    assert.ok(Math.min(...zs) >= landingAbs - 1e-6, `withRoomUnder=${withRoomUnder}: 踊り場(${landingAbs})より下の線が無いはず（最小z:${Math.min(...zs)}）`);
+    assert.ok(seq3.content.some(p => p.type === 'line' && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - landingAbs) < 1e-6),
+      '踊り場の床線(水平)は残る');
+  }
+});
+
+test('【2026-10-08】seq3のcut単体（床輪郭なし）でも、踊り場レベルより下の線を探査しない（階段下に部屋が無い構成）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeWrappedPartitionFixture(graph, { withRoomUnder: false });
+  const table = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const cut = table.cuts.find(c => c.seqNo === '3');
+  const content = buildCutContent(cut, makeProbeContext(cut.layers), { endExtendMm: 0 }).content;
+  const zs = content.flatMap(p => p.type === 'line' ? [-p.y1, -p.y2] : []);
+  assert.ok(zs.length > 0, 'contentは空でない');
+  assert.ok(Math.min(...zs) >= table.landingAbs - 1e-6, `踊り場(${table.landingAbs})より下の線が無いはず（最小z:${Math.min(...zs)}）`);
+});
+
+test('【2026-10-08】stairFaceSequence: 踊り場前縁のCLで終わり柱包みで踊り場側へ57.5回り込む別の壁（x=500）も、seq3では断面にならない（seq1では断面）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  const seqOf = no => stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }).find(e => e.seqNo === no);
+  const before1 = seqOf('1').content.length, before3 = seqOf('3').content.length;
+  const cl = (isV, v) => [...graph.centerLines].find(c => (c.centerLineType === CenterLineType.VERTICAL) === isV && c.effectiveValue === v);
+  const x500 = graph.addCenterLine(CenterLineType.VERTICAL, 500, { labeled: false, discipline: Discipline.ARCH });
+  graph.addWall(x500, 50, true, cl(false, 1500), -57.5, cl(false, 4500), 0, {});
+  assert.ok(seqOf('1').content.length > before1, '前提: seq1(前縁で切る)ではこの壁が断面として増える');
+  assert.equal(seqOf('3').content.length, before3, 'seq3は踊り場側へ入れて切るので、回り込んだ壁を断面にしない');
+});
+
 // ---- ユーザー実機指示第2弾（根本的訂正）: 往復間の壁は1F(graph)ではなく2F(upperGraph)の壁 ----
 test('stairFaceSequence: 往復間の壁がupperGraphのみにある場合、opts.upperGraph経由で検出されても5面で、seq2のfaceが実壁になる', () => {
   const graph = makeGraph('p1');
@@ -1497,9 +1558,11 @@ test('【2026-10-07 アキ不要・統合】stairFaceSequence: seq1/seq3 で一�
 
   // 対照: 同じ切断で openGapMarks を外すと、open 帯（左右2区間）にアキが出る＝構成が空振りでない。
   const table = switchbackCuts(stair, faces, graph, opts);
+  // 対照は seq1 のみ: seq3 は切断線を踊り場側へ入れた（2026-10-08）ため往復間の壁を切らず、open 帯自体が出ない。
   for (const n of ['1', '3']) {
     const cut = table.cuts.find(c => c.seqNo === n);
     assert.equal(cut.openGapMarks, false);
+    if (n === '3') continue;
     const off = buildCutContent(cut, makeProbeContext(cut.layers), { endExtendMm: 0 });
     assert.deepEqual(off.gapMarks, []);
     const on = buildCutContent({ ...cut, openGapMarks: undefined }, makeProbeContext(cut.layers), { endExtendMm: 0 });
@@ -1800,10 +1863,11 @@ test('【実機指摘】stairFaceSequence: 階段下に部屋が無ければ帯�
   const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq1 = entries.find(e => e.seqNo === '1');
   const seq3 = entries.find(e => e.seqNo === '3');
-  for (const [no, e] of [['1', seq1], ['3', seq3]]) {
-    assert.equal(e.floorSegments.length, 1, `seq${no}は全幅1区間のはず`);
-    assert.equal(e.floorSegments[0].floorDeltaMm, 0, `seq${no}の床は1FL(0)のはず`);
-  }
+  assert.equal(seq1.floorSegments.length, 1, 'seq1は全幅1区間のはず');
+  assert.equal(seq1.floorSegments[0].floorDeltaMm, 0, 'seq1の床は1FL(0)のはず');
+  // seq3は平場の踊り場: 階段下に部屋が無くても床は踊り場レベル（2026-10-08裁定）。
+  assert.equal(seq3.floorSegments.length, 1, 'seq3は全幅1区間のはず');
+  assert.ok(seq3.floorSegments[0].floorDeltaMm > 0, 'seq3の床は踊り場レベルのはず');
 });
 
 test('【実機指摘】stairFaceSequence: 階段下に部屋があれば従来どおり踊り場が帯の床（回帰）', () => {
@@ -1997,6 +2061,7 @@ test('【失敗系】stairFaceSequence: 階段下に部屋が無ければ壁の�
   const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
 
   for (const e of entries) {
+    if (e.seqNo === '3') continue; // seq3は平場の踊り場から上だけ（2026-10-08裁定。専用テスト参照）
     assert.ok(e.floorSegments.every(s => (s.floorDeltaMm ?? 0) === 0),
       `seq${e.seqNo}: 階段下に部屋が無ければ帯の床は設置階FL(0)のはず`);
     const toFloor = e.content.some(p => p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-6 &&
