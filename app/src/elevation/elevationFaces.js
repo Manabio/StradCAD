@@ -16,6 +16,7 @@ import { cutPlaneOffsetMm } from './section/sectionCutPlane.js';
 import { isRealRoom } from './section/sectionLayerStack.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { graphList } from '../graphReadScope.js';
+import { DEFAULT_STAIR_ROOM_NAME } from '../finish/roomNamingOptions.js';
 import { SPLIT_MERGE_EPS_MM, PROBE_EPS_MM } from './elevationStyle.js';
 
 // struct CL は graph._structGraph.shapeMap に格納されるため両方を検索する（finish/*.js と同じ規約）。
@@ -24,8 +25,23 @@ function getShape(graph, id) {
 }
 
 /**
- * 展開図の対象部屋。屋内・有名・feature が null または STAIR（階段）または VOID（吹抜け。WP-V1）
+ * 展開図での部屋の表示名（見出し枠・失敗通知・ログの単一の供給源）。
+ * 名前があればそれ、無名の階段室（feature=STAIR）は既定名「階段」、それ以外の無名は ''。
+ * @param {{name?:string, feature?:string|null}} room
+ * @returns {string}
+ */
+export function elevationRoomDisplayName(room) {
+  if (room.name) return room.name;
+  return room.feature === RoomFeature.STAIR ? DEFAULT_STAIR_ROOM_NAME : '';
+}
+
+/**
+ * 展開図の対象部屋。屋内・feature が null または STAIR（階段）または VOID（吹抜け。WP-V1）
  * のみ採用する（STAIR_VOID・UNDEFINED・屋外は除外）。graph.rooms の登録順のまま返す。
+ * 名前は null/VOID では必須（無名は除外）だが、**階段室（STAIR）は無名でも対象**にする
+ * （ユーザー裁定2026-10-07: 無名でも階段室は展開図の対象・見出しは「階段」を既定名とする。
+ * 旧仕様＝無名は一律除外では、名前を付けない階段室の展開図が出なかった）。表示名は
+ * `elevationRoomDisplayName` を通す。
  * STAIR_VOID（最上階の屋内階段footprintへ自動指定される描画・操作対象外の自動管理Room）は
  * 追加しない——自動管理・無名のため `r.name !== ''` で既に落ちるが、意図を明示するコメント。
  * QA修正: 部分指定（`referenceRoomIds`が非空。親の壁際セルの一部を占め`floorLevel`等を上書き
@@ -38,7 +54,7 @@ function getShape(graph, id) {
  */
 export function selectElevationRooms(graph) {
   return (graphList(graph, 'rooms') ?? []).filter(r =>
-    r.kind === RoomKind.INTERIOR && r.name !== '' &&
+    r.kind === RoomKind.INTERIOR && (r.name !== '' || r.feature === RoomFeature.STAIR) &&
     (r.feature == null || r.feature === RoomFeature.STAIR || r.feature === RoomFeature.VOID) &&
     !(r.referenceRoomIds?.size > 0));
 }

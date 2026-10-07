@@ -99,6 +99,16 @@ test('【QA F3】buildStairBand: 部屋名の枠(rect+text)と留め三角(miter
   assert.ok(band.primitives.some(p => p.type === 'miterTriangle'), '留め三角(miterTriangle)が無い');
 });
 
+// ---- 裁定2026-10-07: 無名の階段室の帯は見出し・roomName とも既定名「階段」 ----
+test('buildStairBand: 無名の階段室は band.roomName と見出しテキストが「階段」になる', () => {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 2000, 4000, '');
+  room.setFeature(RoomFeature.STAIR);
+  const band = buildStairBand(room, graph, null);
+  assert.equal(band.roomName, '階段');
+  assert.ok(band.primitives.some(p => p.type === 'text' && p.text === '階段'), '見出しテキスト「階段」が無い');
+});
+
 // ---- 面間ギャップは壁中心線(faceBoundaryLocalX)同士がgapModelMmになるよう配置する（ユーザー仕様。
 // elevationBand.test.jsの同名テストの階段帯版。buildStairBandもlayoutBandFacesを共有するため
 // 同じ配置規則になるはず） ----

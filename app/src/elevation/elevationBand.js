@@ -15,7 +15,7 @@ import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCu
 import { structuralColumnContribution } from './section/sectionStructure.js';
 import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling, flightNoseZAt } from './section/sectionStair.js';
 import { graphList } from '../graphReadScope.js';
-import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt } from './elevationFaces.js';
+import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDisplayName } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { buildFaceFigure, segEndProfile } from './elevationFigure.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments } from './elevationFloorProfile.js';
@@ -332,7 +332,8 @@ export function finalizeBand(room, graph, primitives, opts = {}) {
   // 描いた**完全同一の線**が重なりうる（面端の縦線＝体裁としての端の縦線かつ壁断面の縁など）。
   // 帯が確定するこの1箇所で畳む（dedupeCoincidentLines。見た目は不変・視覚回帰の差分だけが減る）。
   const prims = dedupeCoincidentLines(primitives);
-  appendRoomNameFrame(prims, room.name, { nameGapModelMm, leftX: leftAnchorX, rightX: rightAnchorX });
+  const displayName = elevationRoomDisplayName(room);
+  appendRoomNameFrame(prims, displayName, { nameGapModelMm, leftX: leftAnchorX, rightX: rightAnchorX });
 
   // 部屋の実効FL(当該階FLからの相対レベル)ぶん全体を平行移動する。
   // 調整項目6: boundsはfloorOffset適用前（基準。floorOffset=0のときの描画範囲）の座標系で
@@ -368,7 +369,7 @@ export function finalizeBand(room, graph, primitives, opts = {}) {
   const upwardSlackMm   = Math.max(0, floorOffset);  // 帯自身が上へせり出す量（floorOffset>0）
 
   return {
-    roomId: room.id, roomName: room.name, primitives: shifted, bounds,
+    roomId: room.id, roomName: displayName, primitives: shifted, bounds,
     heightMm: bounds.height + downwardSlackMm, widthMm: bounds.width, faceCount,
     leftAnchorX, topMarginMm: upwardSlackMm,
     heightUnits, unitHeightMm: bounds.height / heightUnits,

@@ -513,6 +513,35 @@ test('【失敗系】selectElevationRooms: 屋外・無名・STAIR_VOID等は対
   void unnamed;
 });
 
+// ---- 裁定2026-10-07: 無名でも階段室（feature=STAIR）は対象。無名の通常部屋・VOID・STAIR_VOID は除外のまま ----
+test('selectElevationRooms: 無名の階段室は対象、無名の通常部屋・VOID・STAIR_VOID・屋外階段は対象外', async () => {
+  const { RoomKind, RoomFeature } = await import('@core');
+  const { selectElevationRooms } = await import('./elevationFaces.js');
+  const graph = makeGraph();
+  const plain = graph.addRoom(new Set(), '');
+  const voidRoom = graph.addRoom(new Set(), '');
+  voidRoom.setFeature(RoomFeature.VOID);
+  const stairVoid = graph.addRoom(new Set(), '');
+  stairVoid.setFeature(RoomFeature.STAIR_VOID);
+  const unnamedStair = graph.addRoom(new Set(), '');
+  unnamedStair.setFeature(RoomFeature.STAIR);
+  const outerStair = graph.addRoom(new Set(), '');
+  outerStair.setFeature(RoomFeature.STAIR);
+  outerStair.setKind(RoomKind.EXTERIOR);
+  assert.deepEqual(selectElevationRooms(graph).map(r => r.id), [unnamedStair.id]);
+  void plain;
+});
+
+test('elevationRoomDisplayName: 名前があればそれ・無名の階段室は「階段」・無名の他は空文字', async () => {
+  const { RoomFeature } = await import('@core');
+  const { elevationRoomDisplayName } = await import('./elevationFaces.js');
+  assert.equal(elevationRoomDisplayName({ name: 'LDK', feature: null }), 'LDK');
+  assert.equal(elevationRoomDisplayName({ name: '階段A', feature: RoomFeature.STAIR }), '階段A');
+  assert.equal(elevationRoomDisplayName({ name: '', feature: RoomFeature.STAIR }), '階段');
+  assert.equal(elevationRoomDisplayName({ name: '', feature: null }), '');
+  assert.equal(elevationRoomDisplayName({ name: '', feature: RoomFeature.VOID }), '');
+});
+
 // ---- QA修正: 部分指定（referenceRoomIds非空）は独自の帯を持たず親の帯内で表現されるため、
 // selectElevationRoomsの対象から除外する（除外しないと親・部分指定の両方に同じ壁面が
 // 重複して展開されてしまう不具合があった） ----

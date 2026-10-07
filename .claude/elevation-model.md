@@ -545,10 +545,17 @@ Round Fフィクスチャが中心線を明示的に`labeled:false`で作って�
 `Math.max(0,floorOffset)`を加える（両方に一律`Math.abs`を加えると使わない側が過剰予約になる）。段差高さ自体の寸法線は描かない
 （この`floorOffset`は部屋帯全体の階基準ズレで、次節の壁際の段差とは別物）。
 
-## 床の段差プロファイル（部分指定）
+## 展開図の対象部屋（selectElevationRooms）
+**無名でも階段室（feature=STAIR）は展開図の対象**（ユーザー裁定2026-10-07。旧仕様は無名を一律除外し、名前を付けない階段室の展開図が出なかった）。
+通常部屋・吹抜け（VOID）は従来どおり有名のみ、STAIR_VOID・屋外・部分指定は対象外のまま。見出し・失敗通知・ログの表示名は
+`elevationRoomDisplayName(room)`（`elevationFaces.js`）が唯一の供給源で、無名の階段室は既定名「階段」（仕上げ表の階段室の表示名と同じ）。
+`room.name` を直接読まない（`elevationRoomName.wiring.test.js`で固定）。既定名の定数は`finish/roomNamingOptions.js`の`DEFAULT_STAIR_ROOM_NAME`（仕上げ表・階段のfeature選択肢のlabelと同じ出どころ）。
+吹抜け帯の上階の部屋の拾い（`elevationVoid.js` `upperFaceRooms`）にも無名の階段室が入る（名前付きは従来から）。
+
 **`selectElevationRooms`は部分指定（`referenceRoomIds`非空）を対象から除外する**（QA修正）——部分指定は独自の展開図帯を持たず、
 親の帯の中で下記の段差プロファイルとして表現されるため。除外しないと親・部分指定の両方に同じ壁面が重複して展開されてしまう。
 
+## 床の段差プロファイル（部分指定）
 部分指定Room（`referenceRoomIds`で親を参照。`.claude/glossary.md`）が親の壁際セルの一部を占め`floorLevel`が異なる場合、床線は段差付きの
 階段状polylineになる。`elevationFloorProfile.js`の`wallAdjacentFloorSegments(face, parentRoom, graph)`が、面に接する親自身のセル
 （`finish/gridCells.js`の`refreshCells`/`cellBoundsFromKey`を再利用）を壁沿いに拾い、部分指定のセル集合に含まれていればその

@@ -1,7 +1,7 @@
 import { makeObservable, observable, action, computed, runInAction, reaction } from 'mobx';
 import { RoomFeature } from '@core';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
-import { selectElevationRooms } from '../elevation/elevationFaces.js';
+import { selectElevationRooms, elevationRoomDisplayName } from '../elevation/elevationFaces.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
 import { buildStairBand } from '../elevation/elevationStair.js';
 import { buildVoidBand, buildRoomBandWithVoidAbove, findOverlappingRoom } from '../elevation/elevationVoid.js';
@@ -322,7 +322,7 @@ export class ElevationModeState {
         // 同じ表を同じ校正値から引いて渡す。
         dimFootGapModelMm, scale, lineWeightsPx: resolveLineWeightsPx(screenPxPerMm),
       }),
-      (err, room) => console.error(`[elevation] 部屋「${room.name}」の帯構築に失敗:`, err),
+      (err, room) => console.error(`[elevation] 部屋「${elevationRoomDisplayName(room) || room.id}」の帯構築に失敗:`, err),
     );
 
     const error = failedRoomNames.length > 0

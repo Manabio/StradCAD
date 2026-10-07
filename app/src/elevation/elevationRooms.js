@@ -7,6 +7,7 @@
  * materialError（既存のトースト経路）へ渡せるようにする（QA F4: 以前は1部屋の異常が
  * unhandled rejection になり、キャンバスが真っ白のまま何も通知されなかった）。
  */
+import { elevationRoomDisplayName } from './elevationFaces.js';
 
 /**
  * @param {Array<{id:string, name:string}>} rooms
@@ -22,7 +23,7 @@ export function buildBandsSafely(rooms, buildOne, onError = () => {}) {
       bands.push(buildOne(room));
     } catch (err) {
       onError(err, room);
-      failedRoomNames.push(room.name || room.id);
+      failedRoomNames.push(elevationRoomDisplayName(room) || room.id);
     }
   }
   return { bands, failedRoomNames };

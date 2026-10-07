@@ -2,6 +2,9 @@
 // 選択肢の唯一の供給源。STAIR_VOID／UNDEFINED は自動管理でユーザーは選べない。
 import { RoomKind, RoomFeature, isShaftFeature, isRoofFeature } from '@core';
 
+// 階段室の既定名（無名の階段室の表示名。仕上げ表・展開図が共有する単一の出どころ）。
+export const DEFAULT_STAIR_ROOM_NAME = '階段';
+
 export const ROOM_KIND_OPTIONS = Object.freeze([
   { value: RoomKind.INTERIOR, label: '屋内' },
   { value: RoomKind.EXTERIOR, label: '屋外' },
@@ -9,7 +12,7 @@ export const ROOM_KIND_OPTIONS = Object.freeze([
 
 export const ROOM_FEATURE_OPTIONS = Object.freeze([
   { value: null,               label: 'なし' },
-  { value: RoomFeature.STAIR,  label: '階段' },
+  { value: RoomFeature.STAIR,  label: DEFAULT_STAIR_ROOM_NAME },
   { value: RoomFeature.VOID,   label: '吹抜け' },
   { value: RoomFeature.ELEVATOR_EQUIPMENT, label: '昇降機' },
   { value: RoomFeature.ROOF,   label: '屋根' },

@@ -15,7 +15,7 @@ import {
 import { shaftWallMaterialOptions } from './shaftWallMaterialOptions.js';
 import { floorHeightAbove } from './stair/stairDimensions.js';
 import {
-  ROOM_KIND_OPTIONS, CARD_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature,
+  ROOM_KIND_OPTIONS, CARD_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature, DEFAULT_STAIR_ROOM_NAME,
 } from './roomNamingOptions.js';
 import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
@@ -713,7 +713,7 @@ const RoomCard = observer(({ room, mode, isExpanded, isDragging, isOver,
         <CardNameInput room={room} onApplyNaming={onApplyNaming} />
       ) : (
         <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
-          {room.name || (room.feature === RoomFeature.STAIR ? '階段' : '（名称未設定）')}
+          {room.name || (room.feature === RoomFeature.STAIR ? DEFAULT_STAIR_ROOM_NAME : '（名称未設定）')}
         </span>
       )}
       <span style={{ color: '#94a3b8', fontSize: 11 }}>{isExpanded ? '▼' : '◀'}</span>
