@@ -12,11 +12,12 @@ import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure
 import { stairPartitionEnds } from './wallFreeEnds.js';
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
-import { autoFillStairPartitionBeams } from './stairPartitionBeams.js';
+import { autoFillStairPartitionBeams, stairPartitionBeamSpans } from './stairPartitionBeams.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { ROOF_COLUMN_CLASS } from './roofColumnFilter.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
 import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisExtentsAfterCreate } from './openingBeamAxes.js';
+import { autoFillWoodOpeningBeams } from './woodOpeningBeams.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -694,8 +695,12 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null, below
  *  roofCellKeys: 小屋組の対象の下屋のセルキー集合（roofFramingRegions.js leanToFramingCellKeys）。床梁
  *  （autoFillWoodFloorBeams）へそのまま素通しし、その区画には床梁を作らない。省略時は従来どおり。
  *  roofColumnFilter: 柱貫通（roofColumnFilter.js buildRoofColumnFilter を自階の graph から作った結果）。
- *  autoFillColumnsForStructure へそのまま素通しする——省略時（null）は柱の生成・撤去は従来と完全に同じ。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined, roofColumnFilter = null) {
+ *  autoFillColumnsForStructure へそのまま素通しする——省略時（null）は柱の生成・撤去は従来と完全に同じ。
+ *  openingComponents: 在来木造の吹抜け小梁の入力（openingBeamAxes.js openingEdgeComponents の結果。
+ *  structureRules.js openingBeamAxes:'slabOpeningsDirect' のときだけ呼び出し側が渡す）。大梁の生成直後に
+ *  woodOpeningBeams.js autoFillWoodOpeningBeams へそのまま渡す——省略時（undefined）は何もしない
+ *  （[] なら auto の小梁を撤去する）。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined, roofColumnFilter = null, openingComponents = undefined) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 下階の隔て壁の両端の柱（頭つなぎの起点から除く。woodAutoFill.js autoFillWoodWallBeams の belowTieExcludePts）。
@@ -754,8 +759,15 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const beamsResult = (!isRoof && ownSpecified && structureHasMemberKind(beamKind, structure))
     ? autoFillBeamsForStructure(graph, project, foundation ? 'foundation' : 'primary', wallGate, wallSegments, belowColumns, selfGate, freeEndGraph, wallSourceCache, belowTieExcludePts)
     : { created: [], removed: [] };
-  const newBeams = beamsResult.created;
-  const removedBeams = beamsResult.removed;
+  // 在来木造の吹抜けの辺の小梁（role:'secondary'。woodOpeningBeams.js）。壁線の通し梁（大梁）の確定直後・
+  // 土台／床梁の前——梁のある辺の判定が確定済みの実梁を読み、床梁のセル抽出は大梁（primary）だけを見る。
+  // openingComponents===undefined（在来でない・屋根専用平面・基礎伏図）は何もしない。
+  const openingBeamsResult = (!isRoof && !foundation && ownSpecified)
+    ? autoFillWoodOpeningBeams(graph, project, openingComponents, wallSegments,
+      openingComponents ? stairPartitionBeamSpans(graph, project, belowPartitionEnds) : [])
+    : { created: [], removed: [] };
+  const newBeams = [...beamsResult.created, ...openingBeamsResult.created];
+  const removedBeams = [...beamsResult.removed, ...openingBeamsResult.removed];
   // 在来木造の土台（role:'sill'、記号SL。基礎伏図＝最下階専用。「1階の壁下ならびに、基礎上には
   // 必ずある」）。基礎梁（role:'foundation'）の生成・撤去が確定した直後、床梁の前に呼ぶ——候補源(b)が
   // 確定済みの基礎梁スパンを読むため。呼び出し条件は`foundation`のみ（`beamPlacement`条件は付けない。

@@ -45,7 +45,10 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 **昇降機**＝建築基準法上の総称（EV／エスカレーター／DWを含む。並列の選択肢ではない）。**器具**＝EV等1基（`EquipmentRow`）。**昇降路**＝器具が占めるセル集合のRoomで、属性が昇降機（`RoomFeature.ELEVATOR_EQUIPMENT`。`SHAFT_FEATURES`・`isShaftFeature`。床を持たない＝上階スラブの開口。展開図は描かない）。**設置階**＝その器具の行が存在する最下階（保存せず導出）。**グループ**＝同じ器具idを持つ全階の行と昇降路Room。共通仕様「昇降路」（per-floor `shaftWallMaterial`・`shaftSoundproof`）で壁材を一括指定し、部屋個別の内装は持たない・仕上げ表内部タブに出ない。設計意図は`.claude/equipment-model.md`。
 
 ## 規則O（開口由来梁芯）
-S造・RC造・SRC造で、床開口（吹抜け・昇降路・階段吹抜け・下階に到達元の階段がある破れ先）を囲むセル境界CLから梁芯CL（由来`'opening'`）を自動生成する規則（`structural/openingBeamAxes.js`）。壁由来梁芯・在来木造の床梁割付けと並ぶ梁芯の第3の発生源。開口以外の中心線を対象にする規則Cは未裁定。設計意図は`.claude/structural-model.md`「規則O」節。
+S造・RC造・SRC造で、床開口（吹抜け・昇降路・階段吹抜け・下階に到達元の階段がある破れ先）を囲むセル境界CLから梁芯CL（由来`'opening'`）を自動生成する規則（`structural/openingBeamAxes.js`）。壁由来梁芯・在来木造の床梁割付けと並ぶ梁芯の第3の発生源。どの辺に・どの順で架けるかは「吹抜け小梁の共通仕様」の計画器が決める。開口以外の中心線を対象にする規則Cは未裁定。設計意図は`.claude/structural-model.md`「規則O」節。
+
+## 吹抜け小梁の共通仕様（計画器）
+床開口の矩形の4辺について「梁のない辺」だけに小梁を架け、梁長（＝支え間のスパン。辺長ではない）が最短の辺から順に架け、手動配置の梁を優先する、主構造を問わない規則（2026-10-08）。実体は純関数`structural/openingEdgePlan.js planOpeningEdgeBeams`で、S造系は規則O、在来木造は`structural/woodOpeningBeams.js`が接続先。**梁あり辺**＝辺座標か逃げ後座標から`coverTol`（max(0.5, 梁幅/2)）以内に平行な支えがある辺。**手動配置の梁**＝`dimensionStatus!=='auto'`の梁のうち、自動生成の吹抜け小梁を固定しただけのもの（S造系＝軸CLがOPENING由来の梁、在来木造＝FLOOR_BEAM由来の軸に乗る小梁(secondary)）を除いたもの。設計意図は`.claude/structural-model.md`「吹抜け小梁の共通仕様」節。
 
 ## 開口辺（floorOpeningEdges）
 自階の床開口をセル境界CL上の辺として列挙する純関数（`finish/stair/slabOpening.js`）。情報源は`openingCellSets`（吹抜け・昇降路・階段吹抜けの占有セル∪自階の階段の破れ先セル）1つ。規則Oの入力。設計意図は`.claude/structural-model.md`「規則O」節。

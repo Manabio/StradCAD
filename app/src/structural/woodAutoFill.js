@@ -952,7 +952,7 @@ export function wallLineThroughRuns(wallSegments, freeEnds = []) {
 /**
  * 在来木造の壁線上の通し梁（role:'primary'、記号G。ステップ3c-2）・頭つなぎ／受梁（役柱の直上・直下、
  * ステップ3h）を自動生成し、候補に無い自動生成の梁（role:'primary'|'secondary', dimensionStatus==='auto'）を
- * 撤去する。通り芯グリッドの大梁・梁芯CL上の小梁（autoFillBeams/autoFillSecondaryBeams）の代わりに
+ * 撤去する（実体階の role:'secondary' は対象外＝woodOpeningBeams.js が担う）。通り芯グリッドの大梁・梁芯CL上の小梁（autoFillBeams/autoFillSecondaryBeams）の代わりに
  * こちらが生成する——呼び出し側（structural/structuralAutoFill.js autoFillBeamsForStructure）が
  * 主構造ルールの選択子（beamPlacement:'wallRuns'）で振り分ける。
  *
@@ -1023,9 +1023,10 @@ export function wallLineThroughRuns(wallSegments, freeEnds = []) {
  *    一緒に止まる）。
  *  - 撤去は graph.beamMap.delete を直接使う（graph.removeBeam は使わない＝excludedBeamSlots を汚さない。
  *    deleteClassificationOverflow・resolveSecondaryBeamsForAxis と同じ規律）。子スリーブは連鎖削除する。
- *    対象は主構造材種の role:'primary'|'secondary' のうち dimensionStatus==='auto' のみ
- *    （locked/calculated は保持）。分割前の旧・全長梁（auto）はここで候補から外れて撤去される
- *    （移行専用の処理は持たない）。
+ *    対象は主構造材種の dimensionStatus==='auto' のみ（locked/calculated は保持）で、role は実体階が
+ *    'primary'、屋根専用平面が 'primary'|'secondary'|'eaves'。実体階の role:'secondary'（吹抜けの辺の小梁・旧方式の
+ *    小梁）の撤去は woodOpeningBeams.js autoFillWoodOpeningBeams が担う。分割前の旧・全長梁（auto）は
+ *    ここで候補から外れて撤去される（移行専用の処理は持たない）。
  *  - **候補スロットに旧方式の小梁（role:'secondary'）が既に居座っている場合は、それを道を空けてから
  *    通し梁(role:'primary')へ置き換える**（`existing` 判定は role:'primary' の占有だけを「満たされた」と
  *    みなす——role を見ずに spanKey だけで判定すると、梁芯CL方式で生成された旧・小梁が同じ位置に残った
@@ -1274,7 +1275,9 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
   // 屋根専用平面のときだけ、旧方式（通り芯グリッド）の軒桁（role:'eaves'）も撤去対象に加える
   // （既存のautoな軒桁を占有物として道を空ける。ステップ5・アーキ裁定2）。手動固定
   // （dimensionStatus!=='auto'）の軒桁は下のガードでそのまま保全される。
-  const removableRoles = isRoof ? ['primary', 'secondary', 'eaves'] : ['primary', 'secondary'];
+  // 実体階の role:'secondary'（吹抜けの辺の小梁・旧方式の小梁）の撤去は woodOpeningBeams.js
+  // autoFillWoodOpeningBeams が担う（ここでも撤去すると、毎回撤去→再生成で id が入れ替わり収束しない）。
+  const removableRoles = isRoof ? ['primary', 'secondary', 'eaves'] : ['primary'];
   for (const beam of [...graph.beamMap.values()]) {
     if (beam.materialType !== rules.baseMaterial) continue;
     if (!removableRoles.includes(beam.role)) continue;
@@ -1524,9 +1527,11 @@ function floorBeamIsVertical(w, h) {
 // （以前は除外用のexcludeKey引数を持っていたが、冪等性には寄与せずroleも見ないため同一spanKeyの
 // primaryまで素通ししうる欠陥だった。QA指摘により削除——existingFloorKeysの先行continue一本化）。
 // （小屋梁の生成 structural/woodRoofFraming.js も同じ判定を共有するため export する。）
+// role:'secondary'（吹抜けの辺の小梁。woodOpeningBeams.js）も占有物に数える——床梁が小梁と同じ軸に二重に載らないように。
+// 吹抜け小梁側も同じ関数で二重生成を防ぐ（自分自身は呼び出し側の spanKey 一致で先に continue）。
 export function axisSpanOccupied(graph, materialType, isVertical, coord, lo, hi, tol) {
   return graph.beams.some(b =>
-    b.materialType === materialType && (b.role === 'primary' || b.role === 'floor') &&
+    b.materialType === materialType && (b.role === 'primary' || b.role === 'floor' || b.role === 'secondary') &&
     b.isVertical === isVertical && Math.abs(b.axisValue - coord) < tol &&
     Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) < hi - tol &&
     Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue) > lo + tol);

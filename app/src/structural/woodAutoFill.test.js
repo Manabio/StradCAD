@@ -9,6 +9,7 @@ import {
   autoFillWoodSillBeams, nearestAnchorCL, dedupeColumnsByAxis, woodBeamDepthMarkSignature,
 } from './woodAutoFill.js';
 import { addManualBeam } from './manualMemberAdd.js';
+import { autoFillWoodOpeningBeams } from './woodOpeningBeams.js';
 import { wallRunFreeEnds } from './woodFraming.js';
 import { WOOD_STUD_CODE_BY_SIZE } from '../finish/materials/backingClass.js';
 import { autoFillColumnsForStructure, autoFillStructuralGrid, autoFillBeamsForStructure, convertMembersToEffectiveMaterial } from './structuralAutoFill.js';
@@ -2121,14 +2122,18 @@ test('【失敗系・A-1】autoFillWoodWallBeams: footprint境界を挟まない
   assert.ok(!outsideOnly, 'footprint境界の外側だけの区間([-3000,-1500]相当)は生成されない（従来どおり）');
 });
 
-test('autoFillWoodWallBeams: 除外スロット（excludedBeamSlots）に居座る旧方式の自動小梁は候補扱いにならず撤去される（生成も撤去もされず残り続ける事故の回帰）', () => {
+test('除外スロット（excludedBeamSlots）に居座る旧方式の自動小梁は、壁線の通し梁の生成では撤去されず、吹抜け小梁の掃引（autoFillWoodOpeningBeams）が撤去する（生成も撤去もされず残り続ける事故の回帰）', () => {
   const { graph, x0, x2, y0 } = makeTwoRoomGraph();
   const segs = selfWallSegments(graph);
   const stale = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y0, false, x0, x2, { role: 'secondary', beamType: '小梁' });
   graph.excludedBeamSlots.add(spanKey(y0, x0, x2)); // ユーザーがこのスロットを明示削除済みという想定
   const { created, removed } = autoFillWoodWallBeams(graph, PROJECT, segs);
   assert.equal(created.filter(b => !b.isVertical && Math.abs(b.axisValue - y0.value) < 1).length, 0, '除外スロットには生成しない');
-  assert.deepEqual(removed, [stale.id], '除外スロットに居座る旧・自動小梁は撤去される（候補扱いにしないことで撤去対象に含める）');
+  // 実体階の role:'secondary' の撤去は吹抜け小梁の掃引が担う（autoFillWoodWallBeams の removableRoles は primary のみ）。
+  assert.deepEqual(removed, [], '壁線の通し梁の生成は auto の小梁を撤去しない');
+  assert.equal(graph.beamMap.has(stale.id), true);
+  const swept = autoFillWoodOpeningBeams(graph, PROJECT, [], segs);
+  assert.deepEqual(swept.removed, [stale.id], '候補に無い旧・自動小梁は吹抜け小梁の掃引が撤去する');
   assert.equal(graph.beamMap.has(stale.id), false);
 });
 
@@ -4497,7 +4502,7 @@ test('【不変条件】structuralRecompute.js: wallRunSegments を autoFillStru
   // 小屋梁の生成（ステップC2b）で15番目の引数としてroofRegions（屋根専用平面は主屋根の region 配列）が加わった。
   // 実体階は C2b〜C2c では undefined＝小屋梁に触れなかったが、C2d-2 から下屋の region 配列（無ければ []）を渡す。
   // 下屋の範囲の床梁ガード（ステップC2d-1）で16番目の引数としてroofCellKeys（実体階だけ対象の下屋のセルキー集合）が加わった。
-  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter\)/.test(src),
+  assert.ok(/autoFillStructuralGrid\(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph\?\.columns \?\? \[\], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents\)/.test(src),
     'autoFillStructuralGrid へ wallSegments・aboveColumns・belowColumns・aboveBeamSegments・selfGate・freeEndGraph・wallSourceCache・openingSources・belowGraph・roofRegions・roofCellKeys を渡していない');
   assert.ok(/removedBeams\.length > 0/.test(src), 'removedBeams が changed の判定に含まれていない');
 });

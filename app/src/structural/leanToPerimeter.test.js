@@ -120,7 +120,7 @@ test('【配線】structuralRecompute.js: 実体階だけ下屋を1回導き（C
   assert.ok(/^\s{2}const roofRegions = isRoof \? \(mainRegion \? \[mainRegion\] : \[\]\) : leanTo\.regions;$/m.test(src), '実体階は下屋の regions を小屋梁の生成へ渡す（屋根専用平面は主屋根の region のまま）');
   assert.equal((src.match(/leanToFraming\(/g) ?? []).length, 1, '下屋の導出は1回（部屋を二重に走査しない）');
   assert.ok(/^\s{2}const selfGate = buildSelfFootprintGate\(isRoof \? \(belowGraph \?\? targetGraph\) : targetGraph, footprintCache, \{ roofPerimeterCellKeys: roofCellKeys \}\);$/m.test(src), 'selfGate へ roofPerimeterCellKeys を渡す行');
-  assert.ok(/aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter\)\);$/m.test(src), 'autoFillStructuralGrid へ roofCellKeys（と柱貫通の roofColumnFilter）を渡す行');
+  assert.ok(/aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents\)\);$/m.test(src), 'autoFillStructuralGrid へ roofCellKeys（と柱貫通の roofColumnFilter）を渡す行');
 });
 
 // ---- 統合（recomputeStructuralForGraph）----

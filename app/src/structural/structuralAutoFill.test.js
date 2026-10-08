@@ -751,10 +751,10 @@ test('【不変条件】structuralRecompute.js: openingBeamSourcesForを呼び�
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralRecompute.js'), 'utf8');
-  assert.ok(/import \{ openingBeamSourcesFor \} from '\.\/openingBeamAxes\.js';/.test(src),
-    'openingBeamAxes.jsのopeningBeamSourcesForをimportしていない');
+  assert.ok(/import \{ openingBeamSourcesFor, openingEdgeComponents \} from '\.\/openingBeamAxes\.js';/.test(src),
+    'openingBeamAxes.jsのopeningBeamSourcesFor・openingEdgeComponents（在来木造の吹抜け小梁の入力）をimportしていない');
   assert.ok(/openingBeamSourcesFor\(targetGraph, project,/.test(src), 'openingBeamSourcesForの呼び出しが無い');
-  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter\)/.test(src),
+  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents\)/.test(src),
     'autoFillStructuralGridの末尾引数にopeningSources, belowGraph, roofRegions, roofCellKeysを渡していない（belowGraphはWP-B2改訂＝踊り場受け梁の到達階生成、roofRegionsはC2b＝小屋梁の生成、roofCellKeysはC2d-1＝下屋の範囲の床梁ガードが追加した引数）');
 });
 

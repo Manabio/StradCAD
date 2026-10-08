@@ -43,7 +43,7 @@ test('structureRules: 6種の主構造キーすべてにルールがあり、isR
     assert.ok(typeof r.foundation.hasBase === 'function' && typeof r.foundation.hasMatSlab === 'function');
     assert.ok(['fixed', 'spanDivisor'].includes(r.foundation.beamSizing.kind));
     assert.ok([null, 'rcBacking', 'selfAndBelow'].includes(r.wallBeamAxes));
-    assert.ok([null, 'slabOpenings'].includes(r.openingBeamAxes));
+    assert.ok([null, 'slabOpenings', 'slabOpeningsDirect'].includes(r.openingBeamAxes));
   }
 });
 
@@ -89,7 +89,7 @@ test('structureRules: 木造系（在来・2×4）の判定・基礎種別・基
   assert.equal(isTraditionalWoodStructure('木造（2"×4"）'), false, '2×4は在来ではない');
   assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).wallBeamAxes, 'selfAndBelow', '在来だけ壁由来の梁芯を自階＋下階から生成');
   assert.equal(rulesFor('木造（2"×4"）').wallBeamAxes, null, '2×4は壁自体が構造体＝壁下に梁を入れない');
-  assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).openingBeamAxes, null, '在来木造は階段開口処理(stairOpeningRuns)が別に担う（規則O対象外）');
+  assert.equal(rulesFor(TRADITIONAL_WOOD_STRUCTURE).openingBeamAxes, 'slabOpeningsDirect', '在来木造は梁芯 extent 方式ではなく実梁を直接生成する（woodOpeningBeams.js）');
   assert.equal(rulesFor('木造（2"×4"）').openingBeamAxes, null);
 });
 

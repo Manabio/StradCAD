@@ -231,7 +231,8 @@ const WOOD_RULES = Object.freeze({
   // 壁由来の梁芯生成源（(3)）: 自階＋1つ下の実体階の下地オーナー壁（下地材の種別は問わない）。在来のみ。
   wallBeamAxes: null,
   // 床開口（吹抜け・昇降路・階段開口）を囲むセル境界CLから梁芯を生成する規則O
-  // （structural/openingBeamAxes.js）。木造は在来の階段開口処理（stairOpeningRuns）が別に担うためnull。
+  // （structural/openingBeamAxes.js）。2×4 は壁自体が構造体で梁を生成しないためnull。
+  // 在来木造は 'slabOpeningsDirect'（梁を直接生成。TRADITIONAL_WOOD のプロファイル側で上書き）。
   openingBeamAxes: null,
   // 外壁アルミサッシはフィン下地直付け（openings/sashDetailCatalog.js）。
   sashFinDirect: true,
@@ -331,6 +332,9 @@ export const STRUCTURE_RULES = Object.freeze({
       framing: TRADITIONAL_WOOD_FRAMING, backing: TRADITIONAL_WOOD_BACKING,
       columnPlacement: 'wallIntersections', columnSizing: 'fixed', studLayout: 'betweenColumns',
       beamPlacement: 'wallRuns',
+      // 床開口の辺の小梁: 木造在来は梁芯 extent 方式（'slabOpenings'）ではなく実梁を直接生成する
+      // （structural/woodOpeningBeams.js。梁のない辺だけ・最短スパン優先。openingBeamSourcesFor は源を返さない）。
+      openingBeamAxes: 'slabOpeningsDirect',
       // 小屋伏図にも梁・柱ルールを適用する（ユーザー指示2026-09-19）。屋根専用平面の既存の軒桁
       // （role:'eaves'、通り芯グリッド方式）を、自階（最上階）の壁線上の通し梁（role:'primary'、
       // beamPlacement同様woodAutoFill.js autoFillWoodWallBeams）へ置換する（在来限定。他の主構造は

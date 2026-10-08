@@ -412,7 +412,7 @@ test('【配線】structuralRecompute.js: 通り芯交点方式の実体階だ�
   const lines = codeLines(src);
   assert.ok(lines.includes("const roofColumnFilter = (!isRoof && ownRules.columnPlacement !== 'wallIntersections')"), 'フィルタの条件の行');
   assert.ok(lines.includes('? withGraphReadScope(targetGraph, () => buildRoofColumnFilter(targetGraph)) : null;'), 'フィルタの導出の行');
-  assert.ok(/aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter\)\);$/m.test(src), 'autoFillStructuralGrid へ渡す行');
+  assert.ok(/aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents\)\);$/m.test(src), 'autoFillStructuralGrid へ渡す行');
   assert.equal((src.match(/buildRoofColumnFilter\(/g) ?? []).length, 1, 'フィルタの導出は1か所');
 });
 
@@ -426,7 +426,7 @@ test('【配線】structuralOrchestration.js: 下階の柱（autoFillColumnsForS
 
 test('【配線】structuralAutoFill.js: autoFillStructuralGrid → autoFillColumnsForStructure → autoFillColumns へフィルタを素通しする', () => {
   const lines = codeLines(readSrc('structuralAutoFill.js'));
-  assert.ok(lines.some(l => l.endsWith('roofRegions = undefined, roofCellKeys = undefined, roofColumnFilter = null) {')), 'autoFillStructuralGrid の引数');
+  assert.ok(lines.some(l => l.endsWith('roofRegions = undefined, roofCellKeys = undefined, roofColumnFilter = null, openingComponents = undefined) {')), 'autoFillStructuralGrid の引数');
   assert.ok(lines.some(l => l.endsWith('aboveBeamSegments, belowColumns, wallSourceCache, roofColumnFilter) : { created: [], removed: [], originsUpdated: [] };')), 'autoFillColumnsForStructure への受け渡し');
   assert.ok(lines.includes('return autoFillColumns(graph, project, wallGate, roofColumnFilter);'), 'autoFillColumns への受け渡し');
   assert.ok(lines.includes('export function autoFillColumns(graph, project, wallGate = null, roofColumnFilter = null) {'));

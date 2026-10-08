@@ -487,8 +487,12 @@ export class StructuralBeam extends StructuralEntity {
   // allowSecondaryHost は openingHostRefIds(this.axisCL) が perpCL.id を含む場合のみ true——
   // 開口由来の短辺小梁が、自身の extent で明示参照している通し小梁にも取りつくため
   // （ステップ5。開口由来でない梁芯・木造の床梁は従来どおり大梁(primary)のみで止まる）。
+  // 在来木造の吹抜け小梁（openingBeamAxes:'slabOpeningsDirect'。woodOpeningBeams.js）は、端の直交CL上に
+  // 小梁が跨ぐ場合もその縁で止まる（2段目が1段目の小梁の面に取りつく。findHostBeam は primary を優先）。
+  // 他の主構造は従来どおり（無関係な小梁を host にしない）。
   _hostEndCenterAndHalfWidth(perpCL, beams, clearance) {
-    const allowSecondaryHost = openingHostRefIds(this.axisCL).has(perpCL.id);
+    const allowSecondaryHost = openingHostRefIds(this.axisCL).has(perpCL.id)
+      || (this.role === 'secondary' && rulesFor(effectiveStructure(this._planGraph)).openingBeamAxes === 'slabOpeningsDirect');
     const host = findHostBeam(beams, perpCL.id, !this.isVertical, this.axisValue, { allowSecondaryHost, allowRoofBeamHost: this.role === 'roofBeam' });
     if (!host) return { center: perpCL.effectiveValue + _axisOffset(this._planGraph, perpCL.id), half: 0 };
     return { center: host.axisValue, half: host.sectionWidth / 2 + clearance };

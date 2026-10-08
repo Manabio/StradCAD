@@ -100,8 +100,11 @@ function backingOuterFaceOnEdge(graph, edge) {
     if (wall.backingRange == null) continue; // isBackingOwnerWall(wall)と同じ判定（wallBeamAxes.js）
     const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
     const overlap = Math.min(hi, edge.hi) - Math.max(lo, edge.lo);
-    if (overlap <= 0) continue;
-    const halfWidth = (wall.backingRange.hi - wall.backingRange.lo) / 2;
+    // 辺の角に同一軸の壁の端が壁の下地帯幅ぶん（＋許容誤差）入り込むだけ（隣室との間仕切が角で終わる）の
+    // 壁は辺の壁ではない——数えると目標座標が壁厚ぶん外へずれる。入り込みがそれ以下なら除外する。
+    const bandWidth = wall.backingRange.hi - wall.backingRange.lo;
+    if (overlap <= bandWidth + CL_OVERLAP_TOL_MM) continue;
+    const halfWidth = bandWidth / 2;
     const face = wallBackingCenterCoord(wall) + edge.outwardSign * halfWidth; // 下地帯の外側の面（絶対座標）
     if (best == null || edge.outwardSign * face > edge.outwardSign * best) best = face; // 外側へ最も出ている面
   }
@@ -115,7 +118,7 @@ function backingOuterFaceOnEdge(graph, edge) {
  * @param {ReturnType<typeof rulesFor>} rules
  * @returns {number|null}
  */
-function defaultBeamWidthMm(rules) {
+export function defaultBeamWidthMm(rules) {
   return findSectionEntry(rules.defaultSections.beam)?.width ?? null;
 }
 
@@ -130,7 +133,7 @@ function defaultBeamWidthMm(rules) {
  * @param {ReturnType<typeof rulesFor>} rules
  * @returns {{coord:number, beamWidthUnresolved:boolean}}
  */
-function edgeTarget(graph, edge, rules) {
+export function edgeTarget(graph, edge, rules) {
   const outerFace = backingOuterFaceOnEdge(graph, edge);
   if (outerFace == null) return { coord: edge.coord, beamWidthUnresolved: false };
   const beamWidth = defaultBeamWidthMm(rules);
