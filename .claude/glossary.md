@@ -38,6 +38,9 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 ## 立体（Solid）・footprint
 平面の断面解決の入力。実体を「平面の占有形（footprint＝矩形の和＋穴、または単純多角形）＋高さ範囲（zLo..zHi、自階FL=0の絶対mm）」へ正規化したもの。単一の情報源は`plan/planSolids.js`。設計意図は`.claude/plan-section.md`。
 
+## marks・innerLines（立体の注記・内側の線）
+立体（Solid）が持つ任意項目。`innerLines`＝立体の内側の線（下屋の外形線・棟木・隅木・谷木。壁で切る前の線）、`marks`＝`{anchor, prims}`の注記（下屋の傾斜ラベル）。解決器は`innerLines`を輪郭と同じに遮蔽判定し、`marks`は基準点（anchor）が見えるときだけ出す。`drawEdges:false`の立体は輪郭を描かず遮蔽にだけ使う。設計意図は`.claude/plan-section.md`「S5」。
+
 ## 見えがかり（below）・切断（cut）
 平面の断面解決（`plan/planSectionFigure.js`）での立体の分類。切断面（FL+切断高）より下に収まる立体が**見えがかり**（輪郭を細線）、切断面をまたぐ立体が**切断**（輪郭を太線）、切断面以上にある立体は非表示（above）。許容0.5mm。設計意図は`.claude/plan-section.md`。
 

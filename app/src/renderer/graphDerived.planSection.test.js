@@ -94,6 +94,25 @@ test('通り芯ドラッグ中は再計算せず前回の線を返し続ける�
   dispose();
 });
 
+test('peek 未解決の間は自階だけの計算が1回（鍵 pending）、peek 到着後に通常の鍵で1回。同じ状態の再描画では再計算しない', () => {
+  const { upper: { graph }, lowerA } = upperAndLowers();
+  const memo = countingMemo();
+  let belowPeek = undefined;
+  let out = null;
+  const dispose = autorun(() => { out = planSolidsLayerResolve({ graph, belowPeek, memo }); });
+  assert.equal(memo.calls, 1, '未解決の間は自階だけの計算が1回');
+  assert.ok(Array.isArray(out) && out.length > 0, '未解決でも自階の線は描く');
+  assert.equal(planSolidsLayerResolve({ graph, belowPeek: undefined, memo }), out, '同じ pending の再描画は再利用');
+  assert.equal(memo.calls, 1);
+  belowPeek = peekOf(graph, lowerA);
+  dispose();
+  const d2 = autorun(() => { out = planSolidsLayerResolve({ graph, belowPeek, memo }); });
+  assert.equal(memo.calls, 2, 'peek 到着後は通常の鍵で1回');
+  planSolidsLayerResolve({ graph, belowPeek, memo });
+  assert.equal(memo.calls, 2, '以後は再利用');
+  d2();
+});
+
 test('ドラッグ中に前回の結果が無ければ null（描かない）。ドラッグを終えると計算する', () => {
   const { upper: { graph, cx } } = upperAndLowers();
   const memo = countingMemo();

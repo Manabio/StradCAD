@@ -16,17 +16,23 @@
  * @typedef {'floor'|'wall'|'column'|'beam'|'roof'|'stairTread'|'generic'} SolidKind
  *   stairTread は予約（S2 では生成しない。純粋な踏面幾何が無い——S7 の前に stairTreadSolids が要る）。
  * @typedef {{points:number[], role:string}} InnerLine
- *   立体の内側の線（屋根の棟木など）。S2 では生成しない（形だけ予約）。
+ *   立体の内側の線（屋根の外形線・棟木・隅木・谷木。S5 から屋根が生成）。points は折れ線（閉じるなら先頭の点を末尾へ足す）。
+ * @typedef {{anchor:{x:number,y:number}, prims:Array<object>}} Mark
+ *   立体に付く注記（屋根の傾斜ラベル）。prims は `{kind:'arrow',key,points,head}|{kind:'text',key,x,y,text,fontSizeMm}`。
+ *   解決器が anchor の可視判定で出し入れする。
  * @typedef {{
  *   kind: SolidKind,
  *   footprint: Footprint,
  *   zLo: number, zHi: number,
  *   zAt?: (x:number, y:number) => number,
  *   innerLines?: InnerLine[],
+ *   marks?: Mark[],
+ *   drawEdges?: boolean,
  *   source: {kind: string, id: string, layerFloorZ?: number, role?: string, part?: number},
  *   style?: {dash?: number[]},
  * }} Solid
- *   zAt は勾配のある立体（屋根）だけが持つ。style は汎用立体だけ。
+ *   zAt は勾配のある立体（屋根）だけが持つ。style は汎用立体だけ。drawEdges:false は footprint を遮蔽専用にする（輪郭を描かない。
+ *   既定 true。屋根が使う）。
  * @typedef {{graph: object|null, floorZMm: number, role: 'self'|'above'|'below', ceilZMm?: number}} SolidLayer
  */
 import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, edgeKey } from '@core';
@@ -42,6 +48,7 @@ import { stairFilterFor } from '../structural/openingBeamAxes.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
 import { drainArrivalTime } from '../structural/roofFramingGeometry.js';
+import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { normalizeRect, isValidRect } from './planGeometry.js';
 
 /** 出力の kind 順（固定）。 */
@@ -204,11 +211,12 @@ export function floorSolidOf(layer, opts = {}) {
 
 /**
  * 下屋の屋根面の高さ関数。水下から内側へ向かう到達時刻 T（structural/roofFramingGeometry.js drainArrivalTime）を
- * 勾配 slope/10 の高さへ写す。**最高点＝層の FL**（設計上の仮定。ASSUMED）、水下（T=0）と軒の出（範囲外）が最も低い。
- * T の最大は、水下・矩形の座標の格子点と、その座標対の中点の組での評価の最大で近似する（左右対称な寄棟・切妻・片流れでは厳密。
- * 左右非対称の L 字の谷では最高点が FL から数 mm ずれうる）。
- * 水下が無い・到達時刻が作れない形（valid=false）・勾配が不正は平ら（zAt = FL）。
- * @returns {((x:number,y:number)=>number)|null} null＝平ら
+ * 勾配 slope/10 の高さへ写す。**軒先（水下 T=0）と軒の出（範囲外）が層の FL、最高点が FL + k·tMax**（k＝勾配/10。
+ * S5 で「最高点＝FL」から訂正。「軒先＝FL」は設計上の仮定。ASSUMED）。
+ * tMax は、水下・矩形の座標の格子点と、その座標対の中点の組での評価の最大で近似する（左右対称な寄棟・切妻・片流れでは厳密。
+ * 左右非対称の L 字の谷では最高点が数 mm ずれうる）。
+ * 水下が無い・到達時刻が作れない形（valid=false）・勾配が不正は平ら（zAt なし。zHi = FL）。
+ * @returns {{zAt: (x:number,y:number)=>number, zTop: number}|null} null＝平ら
  */
 function roofZAtOf(layer, region) {
   const rects = region.rect ? [region.rect] : region.rects;
@@ -229,17 +237,23 @@ function roofZAtOf(layer, region) {
   }
   if (!(tMax > 0)) return null;
   const k = slope / 10;
-  return (x, y) => {
-    const raw = arrival.T(x, y);
-    const t = raw === Infinity ? tMax : Math.min(Math.max(raw, 0), tMax); // 軒の出（範囲外 -Infinity）は水下の高さ
-    return layer.floorZMm + k * (t - tMax);
+  return {
+    zTop: layer.floorZMm + k * tMax,
+    // 軒の出（範囲外 -Infinity）は軒先＝FL。T が tMax を超える・Infinity は最高点
+    zAt: (x, y) => layer.floorZMm + k * Math.min(Math.max(arrival.T(x, y), 0), tMax),
   };
 }
 
+/** 閉じた外形線の点列は先頭の点を末尾へ足す（解決器は閉じる辺を作らない）。 */
+const innerLinePoints = ({ points, closed }) => (closed ? [...points, points[0], points[1]] : points);
+
 /**
- * 下屋（屋根セルを持つ階の屋根の部屋）の立体。外形は region.outline（軒の出・壁との取り合いを含む閉路）の多角形。
- * outline が複数の閉路なら閉路ごとに1件（source.part）。outline の無い region は矩形のときだけ矩形の閉路で代用し、
- * 矩形でなければ落とす。主屋根（最上階の屋根）は常に切断面より上なので立体化しない（拡張点: ここ）。
+ * 下屋（屋根セルを持つ階の屋根の部屋）の立体。外形は region.outline（軒の出・壁との取り合いを含む閉路）の多角形で、
+ * **遮蔽専用**（drawEdges:false。屋内に接する出幅0の辺を描かない裁定は壁の無い階でも有効で、幾何だけでは再現できないため）。
+ * 描く線は innerLines（壁で切る前の外形線 exposedPaths・棟木・隅木・谷木。`roofPlanRegionFigure`）で、外壁面どまりは
+ * 壁立体の遮蔽が導く。傾斜ラベルは marks。複数の閉路なら閉路ごとに1件（source.part）で、線とラベルは最初の1件だけに付ける。
+ * outline の無い region は矩形のときだけ矩形の閉路で代用し、矩形でなければ落とす。主屋根（最上階の屋根）は常に切断面より
+ * 上なので立体化しない（拡張点: ここ）。
  */
 function roofSolids(layer) {
   const out = [];
@@ -249,18 +263,23 @@ function roofSolids(layer) {
       const { x1, y1, x2, y2 } = region.rect;
       loops.push([x1, y1, x2, y1, x2, y2, x1, y2]);
     }
-    const zAt = roofZAtOf(layer, region);
+    const slope = roofZAtOf(layer, region);
+    const figure = roofPlanRegionFigure(region);
+    const innerLines = figure.lines.map(l => ({ role: l.role, points: innerLinePoints(l) }));
+    const marks = figure.labels.map(l => ({ anchor: l.anchor, prims: l.prims })); // 解決器が weight・cls・detailOnly を付ける
+    let first = true;
     loops.forEach((poly, part) => {
       if (poly.length < 6 || !poly.every(Number.isFinite)) return;
-      let zLo = layer.floorZMm;
-      if (zAt) {
-        for (let i = 0; i + 1 < poly.length; i += 2) zLo = Math.min(zLo, zAt(poly[i], poly[i + 1]));
-      }
       const solid = {
-        kind: 'roof', footprint: { poly }, zLo, zHi: layer.floorZMm,
+        kind: 'roof', footprint: { poly }, zLo: layer.floorZMm, zHi: slope ? slope.zTop : layer.floorZMm, drawEdges: false,
         source: baseSource(layer, 'roof', region.key, { part }),
       };
-      if (zAt) solid.zAt = zAt;
+      if (slope) solid.zAt = slope.zAt;
+      if (first) {
+        if (innerLines.length > 0) solid.innerLines = innerLines;
+        if (marks.length > 0) solid.marks = marks;
+        first = false;
+      }
       out.push(solid);
     });
   }

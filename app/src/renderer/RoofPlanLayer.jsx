@@ -6,6 +6,8 @@ import { graphComputed } from './graphDerived.js';
 const ROOF_PLAN_COLOR = '#1e293b'; // 階段・吹抜けと同じ線色
 
 /**
+ * 【S5 から未使用】下屋は PlanSolidsLayer（平面の断面解決。屋根立体＋解決器）が描く。このレイヤは新旧比較の基準として残してあり、
+ * 目視 OK 後の S5b で roofPlanFigure・roofPlanWallTrim とともに削除する（.claude/plan-section.md「S5」）。
  * 下屋の平面表示（軒先の線・棟木・隅木・谷木の細い実線と、詳細 LOD の傾斜ラベル＝水下向きの矢印・「屋根」・「（傾斜N/10）」）。
  * 図形の判断は finish/roof/roofPlanFigure.js（純モジュール）で、ここは Konva 要素へ写すだけ（表示するモードの判断は SceneLayers の showPlanFigure）。
  * 図形は graph 単位に memo する（graphComputed。実装方針9）。LOD は memo の外で絞る（キーに符号化しないため）。

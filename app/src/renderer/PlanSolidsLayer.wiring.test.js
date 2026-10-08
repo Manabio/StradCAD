@@ -27,21 +27,21 @@ test('【不変条件】PlanSolidsLayer.jsx の import は react・mobx・react-
   assert.equal(imports.length, 6, `import 行: ${imports.length}`);
   assert.match(layer, /^import \{ useRef \} from 'react';$/m);
   assert.match(layer, /^import \{ observer \} from 'mobx-react-lite';$/m);
-  assert.match(layer, /^import \{ Group, Line \} from 'react-konva';$/m);
-  assert.match(layer, /^import \{ planSolidsLayerResolve \} from '\.\.\/plan\/planSolidsLayerFilter\.js';$/m);
+  assert.match(layer, /^import \{ Group, Line, Text \} from 'react-konva';$/m);
+  assert.match(layer, /^import \{ planSolidsLayerResolve, visiblePlanPrimitives \} from '\.\.\/plan\/planSolidsLayerFilter\.js';$/m);
   assert.match(layer, /^import \{ stairRiserOf \} from '\.\.\/finish\/stair\/stairDimensions\.js';$/m);
   assert.match(layer, /^import \{ graphComputed \} from '\.\/graphDerived\.js';$/m);
   for (const line of imports) assert.ok(!/store\.js|snap\.js|appViewport/.test(line), `禁止の import: ${line}`);
 });
 
 test('【配線】PlanSolidsLayer.jsx は判断を planSolidsLayerResolve に任せ、memo は graphComputed・前回の線は ref（同じ階のものだけ）・蹴上は stairRiserOf（1行まるごと）', () => {
-  assert.match(layer, /^\s*const prims = planSolidsLayerResolve\(\{\s*$/m);
+  assert.match(layer, /^\s*const resolved = planSolidsLayerResolve\(\{\s*$/m);
   assert.match(layer, /^\s*graph, belowPeek, memo: graphComputed,\s*$/m);
   assert.match(layer, /^\s*prevPrims: prevRef\.current\?\.planeId === graph\.plane\.id \? prevRef\.current\.prims : null,\s*$/m);
   assert.match(layer, /^\s*selfRiserOf: s => stairRiserOf\(s, project, graph\.plane\),\s*$/m);
-  assert.match(layer, /^\s*if \(prims\) prevRef\.current = \{ planeId: graph\.plane\.id, prims \};\s*$/m);
+  assert.match(layer, /^\s*if \(resolved\) prevRef\.current = \{ planeId: graph\.plane\.id, prims: resolved \};\s*$/m, 'ref には LOD で絞る前の線を持つ');
   assert.match(layer, /^\s*const prevRef = useRef\(null\);/m);
-  assert.match(layer, /^\s*if \(!prims \|\| prims\.length === 0\) return null;\s*$/m);
+  assert.match(layer, /^\s*if \(!resolved \|\| resolved\.length === 0\) return null;\s*$/m);
   assert.equal(count(layer, /graphComputed/g), 2, 'import と memo 引数だけ（置き場・鍵はレイヤに書かない）');
   assert.equal(count(layer, /planSolidsLayerResolve\(/g), 1);
   assert.equal(count(layer, /graph\.plane\.id\}:/g), 0, '鍵の文字列はレイヤに無い（planSolidsLayerCacheSpec が唯一の場所）');
@@ -53,36 +53,61 @@ test('【配線】planSolidsLayerFilter.js: 置き場・鍵・使う peek は pl
   assert.match(filter, /^\s*const peek = belowPeek && belowPeek\.activePlaneId === graph\.plane\.id \? belowPeek : null;\s*$/m);
   assert.match(filter, /^\s*const cutZ = planCutHeightMmOf\(graph\.plane\);\s*$/m);
   assert.match(filter, /^\s*home: peek\?\.graph \?\? graph,\s*$/m);
-  assert.match(filter, /^\s*key: `planSection:\$\{graph\.plane\.id\}:\$\{cutZ\}:\$\{peek\?\.graph\?\.plane\?\.id \?\? '-'\}`,\s*$/m);
-  assert.match(filter, /^\s*if \(!graph \|\| belowPeek === undefined\) return null;\s*$/m);
+  assert.match(filter, /^\s*key: `planSection:\$\{graph\.plane\.id\}:\$\{cutZ\}:\$\{peek\?\.graph\?\.plane\?\.id \?\? \(belowPeek === undefined \? 'pending' : '-'\)\}`,\s*$/m);
+  assert.match(filter, /^\s*if \(!graph\) return null;\s*$/m);
+  assert.equal(count(filter, /belowPeek === undefined/g), 1, '未解決は鍵の pending だけで扱う（描かない分岐を持たない）');
   assert.match(filter, /^\s*if \(isCenterLineDragging\(graph\)\) return prevPrims;\s*$/m);
   assert.match(filter, /^\s*return memo\(home, key, \(\) => planSolidsLayerPrimitives\(\{ graph, belowPeek: peek, selfRiserOf, cutZ \}\)\);\s*$/m);
   assert.match(filter, /^\s*return \(graph\?\.centerLines \?\? \[\]\)\.some\(cl => \(cl\.pendingDelta \?\? 0\) !== 0\);\s*$/m);
 });
 
-test('【配線】PlanSolidsLayer.jsx は <Line を1つだけ。線幅は viewport.lineWeightsPx[p.weight]・dash は p.dash・strokeScaleEnabled={false}・listening={false}（Group にも）。LOD 分岐は無い', () => {
-  assert.equal(count(layer, /<Line\b/g), 1);
-  assert.equal(count(layer, /listening=\{false\}/g), 2, 'Group と Line');
+test('【配線】PlanSolidsLayer.jsx は <Line を3つ（線・矢印本体・矢じり）と <Text を1つだけ。Line は細線を含む viewport.lineWeightsPx[p.weight]・strokeScaleEnabled={false}・listening={false}、Text は fontSize={p.fontSizeMm}・listening={false}（Group にも）', () => {
+  assert.equal(count(layer, /<Line\b/g), 3, '線・矢印本体・矢じり');
+  assert.equal(count(layer, /<Text\b/g), 1);
+  assert.equal(count(layer, /listening=\{false\}/g), 5, 'Group・Line 3本・Text の5箇所');
   assert.match(layer, /^\s*<Group name="plan-solids" listening=\{false\}>\s*$/m);
-  const el = (layer.match(/<Line\b[\s\S]*?\/>/g) ?? [])[0];
-  assert.ok(el, '<Line 要素が見つかる');
-  for (const re of [/^\s*key=\{p\.key\}\s*$/m, /^\s*points=\{p\.points\}\s*$/m, /^\s*stroke=\{PLAN_SOLIDS_COLOR\}\s*$/m,
-    /^\s*strokeWidth=\{viewport\.lineWeightsPx\[p\.weight\]\}\s*$/m, /^\s*dash=\{p\.dash\}\s*$/m,
-    /^\s*strokeScaleEnabled=\{false\}\s*$/m, /^\s*listening=\{false\}\s*$/m]) assert.match(el, re, String(re));
+  const lines = layer.match(/<Line\b[\s\S]*?\/>/g) ?? [];
+  assert.equal(lines.length, 3);
+  for (const el of lines) { // 要素ごとに1行まるごと（行末コメントに残す変異を検出）
+    assert.match(el, /^\s*listening=\{false\}\s*$/m, 'Line の listening={false}');
+    assert.match(el, /^\s*strokeWidth=\{viewport\.lineWeightsPx\[p\.weight\]\}\s*$/m, 'Line の線幅は p.weight（thin/thick）');
+    assert.match(el, /^\s*strokeScaleEnabled=\{false\}\s*$/m, 'Line は画面px固定');
+    assert.match(el, /^\s*stroke=\{PLAN_SOLIDS_COLOR\}\s*$/m);
+  }
+  assert.match(lines[0], /^\s*points=\{p\.points\}\s*$/m, 'arrow 本体');
+  assert.match(lines[1], /^\s*points=\{p\.head\}\s*$/m, '矢じり');
+  assert.match(lines[1], /^\s*lineCap="round"\s*$/m);
+  assert.match(lines[1], /^\s*lineJoin="round"\s*$/m);
+  assert.match(lines[2], /^\s*points=\{p\.points\}\s*$/m);
+  assert.match(lines[2], /^\s*key=\{p\.key\}\s*$/m);
+  assert.match(lines[2], /^\s*dash=\{p\.dash\}\s*$/m, '線は dash を渡す');
+  const text = (layer.match(/<Text\b[\s\S]*?\/>/g) ?? [])[0];
+  assert.ok(text, '<Text 要素が見つかる');
+  for (const re of [/^\s*x=\{p\.x\}\s*$/m, /^\s*y=\{p\.y\}\s*$/m, /^\s*text=\{p\.text\}\s*$/m, /^\s*fontSize=\{p\.fontSizeMm\}\s*$/m,
+    /^\s*fill=\{PLAN_SOLIDS_COLOR\}\s*$/m, /^\s*listening=\{false\}\s*$/m]) assert.match(text, re, String(re));
   assert.match(layer, /^const PLAN_SOLIDS_COLOR = '#1e293b';/m);
-  assert.equal(count(layer, /lodLevel/g), 0, 'LOD 分岐は入れない（線幅は px で倍率非依存）');
+  assert.match(layer, /^\s*if \(p\.kind === 'text'\) \{\s*$/m);
+  assert.match(layer, /^\s*if \(p\.kind === 'arrow'\) \{\s*$/m);
   assert.equal(count(layer, /appMode/g), 0, '表示するモードの判断は SceneLayers の showPlanFigure');
 });
 
-test('【配線】SceneLayers は <PlanSolidsLayer> を showPlanFigure で1行まるごとの形でゲートし、RoofPlanLayer の直後・EquipmentSymbolLayer の前に置き、belowPlanPeek を渡す', () => {
+test('【配線】PlanSolidsLayer.jsx の LOD 分岐は visiblePlanPrimitives(resolved, viewport.lodLevel) の1行だけ（memo の外・判断は純モジュール）', () => {
+  assert.match(layer, /^\s*const prims = visiblePlanPrimitives\(resolved, viewport\.lodLevel\);\s*$/m);
+  assert.equal(count(layer, /lodLevel/g), 1, 'LOD の参照は visiblePlanPrimitives への引数だけ');
+  assert.equal(count(layer, /visiblePlanPrimitives\(/g), 1);
+  assert.ok(layer.indexOf('visiblePlanPrimitives(') > layer.indexOf('planSolidsLayerResolve({'), 'resolve（memo）の後で絞る');
+});
+
+test('【配線】SceneLayers は <PlanSolidsLayer> を showPlanFigure で1行まるごとの形でゲートし、VoidLayer の後・EquipmentSymbolLayer の前に置き、belowPlanPeek を渡す。RoofPlanLayer は使わない', () => {
   assert.match(scene,
     /^\s*\{showPlanFigure && <PlanSolidsLayer graph=\{graph\} project=\{project\} viewport=\{viewport\} belowPeek=\{belowPlanPeek\} \/>\}\s*$/m);
   assert.match(scene, /^\s*import \{ PlanSolidsLayer \} from '\.\/PlanSolidsLayer\.jsx';\s*$/m);
   assert.equal(count(scene, /<PlanSolidsLayer\b/g), 1);
   assert.match(scene, /^\s*const showPlanFigure = shouldShowPlanFigure\(appMode\);\s*$/m);
   assert.match(scene, /^\s*structComposition, upperVoidCrosses, belowPlanPeek,\s*$/m);
-  const roofAt = scene.indexOf('<RoofPlanLayer'), solidsAt = scene.indexOf('<PlanSolidsLayer'), equipAt = scene.indexOf('<EquipmentSymbolLayer');
-  assert.ok(roofAt >= 0 && solidsAt > roofAt && equipAt > solidsAt, `順序 RoofPlanLayer(${roofAt}) < PlanSolidsLayer(${solidsAt}) < EquipmentSymbolLayer(${equipAt})`);
+  assert.equal(count(scene, /RoofPlanLayer/g), 0, '下屋は PlanSolidsLayer が描く（S5）');
+  const voidAt = scene.indexOf('<VoidLayer'), solidsAt = scene.indexOf('<PlanSolidsLayer'), equipAt = scene.indexOf('<EquipmentSymbolLayer');
+  assert.ok(voidAt >= 0 && solidsAt > voidAt && equipAt > solidsAt, `順序 VoidLayer(${voidAt}) < PlanSolidsLayer(${solidsAt}) < EquipmentSymbolLayer(${equipAt})`);
 });
 
 test('【配線】App.jsx の上階ビュー peek の effect が、同じ peek から belowPlanPeek を set し（新しい peek を増やさない）、SceneLayers へ渡す', () => {
@@ -110,9 +135,10 @@ test('【配線】App.jsx の上階ビュー peek の effect が、同じ peek �
 
 test('【不変条件】planSolidsLayerFilter.js（純モジュール）は store.js・snap.js・.jsx・react-konva・graphDerived・mobx を import しない。描く種別の集合は1か所', () => {
   const imports = filter.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 3);
+  assert.equal(imports.length, 4);
   for (const line of imports) assert.ok(!/store\.js|snap\.js|\.jsx|react-konva|graphDerived|mobx/.test(line), `禁止の import: ${line}`);
-  assert.match(filter, /^export const S4_DRAWN_KINDS = Object\.freeze\(\['beam', 'generic'\]\);\s*$/m);
+  assert.match(filter, /^export const S4_DRAWN_KINDS = Object\.freeze\(\['beam', 'generic', 'roof'\]\);\s*$/m);
+  assert.match(filter, /^\s*return lod === LodLevel\.DETAIL \? prims : prims\.filter\(p => !p\.detailOnly\);\s*$/m);
   assert.match(filter, /^\s*return \(prims \?\? \[\]\)\.filter\(p => S4_DRAWN_KINDS\.includes\(p\?\.source\?\.kind\)\);\s*$/m);
   assert.match(filter, /^\s*return drawnPrimitives\(planSectionFigure\(solids, cutZ\)\);\s*$/m);
 });

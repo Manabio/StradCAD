@@ -7,6 +7,7 @@ import {
 } from './planSolids.js';
 import { isInsideFootprint } from './planGeometry.js';
 import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
+import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { columnWrapSolids } from '../finish/columnWrap.js';
 import {
@@ -280,7 +281,7 @@ test('床: 階段の破れ先は、下階に同じ階段があるときだけ穴
 
 // ================================================================ 下屋
 
-test('下屋・片流れ: footprint は region.outline の多角形。勾配は水下へ下がり、最高点＝層のFL', () => {
+test('下屋・片流れ: footprint は region.outline の多角形。勾配は水下（軒先＝FL）から壁へ上がり、最高点＝FL + k·tMax', () => {
   const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
   g.interior([[0, 1]]);
   g.roof([[1, 1]]); // 屋内（左）に接する片流れ。高い側＝壁の x=2000、水下＝右の x=4000
@@ -292,22 +293,92 @@ test('下屋・片流れ: footprint は region.outline の多角形。勾配は�
   assert.deepEqual(roof.footprint, { poly: regions[0].outline[0].points });
   assert.equal(typeof roof.zAt, 'function');
   const zs = [2000, 2500, 3000, 3500, 4000].map(x => roof.zAt(x, 2000));
-  assert.deepEqual(zs, [2800, 2650, 2500, 2350, 2200], '水上（壁）→ 水下で 0.3/mm（勾配3）ずつ下がる');
-  assert.equal(roof.zHi, 2800, '最高点＝FL');
-  assert.equal(roof.zLo, 2200, '最低点＝水下の高さ（軒の出も同じ高さ）');
-  assert.equal(roof.zAt(4400, 2000), 2200, '軒の出（範囲外）は水下と同じ高さ');
+  assert.deepEqual(zs, [3400, 3250, 3100, 2950, 2800], '水上（壁）x=2000 が最高点 → 水下 x=4000 の軒先＝FL へ 0.3/mm（勾配3）ずつ下がる');
+  assert.equal(roof.zHi, 3400, '最高点＝FL + k·tMax（0.3×2000）');
+  assert.equal(roof.zLo, 2800, '最低点＝軒先＝FL');
+  assert.equal(roof.zAt(4400, 2000), 2800, '軒の出（範囲外）も軒先＝FL');
+  assert.equal(roof.drawEdges, false, 'footprint は遮蔽専用（輪郭を描かない）');
   assert.equal(roof.source.id, regions[0].key);
 });
 
-test('下屋・寄棟: 棟の上が FL、軒先が最低。傾斜は短手の中央から', () => {
+test('下屋・寄棟: 軒先が FL、棟が FL + k·tMax。傾斜は短手の中央から', () => {
   const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
   g.roof([[0, 0], [1, 0], [2, 0]]).roofSpec.setField('shape', RoofShape.HIP);
   const [roof] = ofKind(planSolids(self(g.graph)), 'roof');
   assert.ok(roof, '寄棟の下屋が立体になる');
-  assert.equal(roof.zAt(3000, 750), 0, '棟（短手 1500 の中央）＝FL');
-  assert.equal(roof.zAt(3000, 0), -225, '軒先 = −(1500/2)×0.3');
-  assert.ok(roof.zAt(3000, 400) > roof.zAt(3000, 100) && roof.zAt(3000, 400) < 0, '棟へ向かって単調に上がる');
-  assert.deepEqual([roof.zLo, roof.zHi], [-225, 0]);
+  assert.equal(roof.zAt(3000, 750), 225, '棟（短手 1500 の中央）＝ k·tMax = 0.3×750');
+  assert.equal(roof.zAt(3000, 0), 0, '軒先＝FL');
+  assert.equal(roof.zAt(3000, -455), 0, '軒の出（範囲外。T=−∞）も FL（clamp。外すと −∞）');
+  assert.ok(roof.zAt(3000, 400) > roof.zAt(3000, 100) && roof.zAt(3000, 400) < 225, '棟へ向かって単調に上がる');
+  assert.deepEqual([roof.zLo, roof.zHi], [0, 225]);
+});
+
+test('下屋・S5: innerLines＝壁で切る前の線（外形線・棟木・隅木。roofPlanRegionFigure と同じ）、marks＝水下ごとの傾斜ラベル。どちらも part 0 の1件だけ', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
+  g.roof([[0, 0], [1, 0], [2, 0]]).roofSpec.setField('shape', RoofShape.HIP);
+  const [region] = leanToPlanRegions(g.graph);
+  const fig = roofPlanRegionFigure(region);
+  const roofs = ofKind(planSolids(self(g.graph)), 'roof');
+  assert.equal(roofs.length, region.outline.length);
+  const [first, ...rest] = roofs;
+  assert.deepEqual(first.innerLines.map(l => l.role), fig.lines.map(l => l.role));
+  assert.deepEqual(first.innerLines.map(l => l.role).sort(), ['hip', 'hip', 'hip', 'hip', 'outline', 'ridge']);
+  assert.equal(first.marks.length, 4, '寄棟は水下4面＝ラベル4');
+  assert.deepEqual(first.marks.map(m => m.anchor), fig.labels.map(l => l.anchor));
+  for (const m of first.marks) assert.deepEqual(m.prims.map(p => p.kind), ['arrow', 'text', 'text']);
+  for (const r of rest) assert.ok(!r.innerLines && !r.marks, '2つ目以降の閉路には付けない');
+});
+
+test('下屋・S5: 閉じた外形線は先頭の点を末尾へ足す（解決器は閉じる辺を作らない）。開いた折れ線はそのまま', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
+  g.roof([[1, 1]]); // 屋内に接しない単独の下屋＝外形線は閉路
+  const [region] = leanToPlanRegions(g.graph);
+  assert.equal(region.exposedPaths[0].closed, true, '前提: 閉路');
+  const [roof] = ofKind(planSolids(self(g.graph)), 'roof');
+  const outline = roof.innerLines.find(l => l.role === 'outline').points;
+  assert.equal(outline.length, region.exposedPaths[0].points.length + 2);
+  assert.deepEqual(outline.slice(-2), outline.slice(0, 2), '先頭の点が末尾にある');
+  const open = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
+  open.interior([[0, 1]]);
+  open.roof([[1, 1]]);
+  const [openRegion] = leanToPlanRegions(open.graph);
+  assert.equal(openRegion.exposedPaths[0].closed, false, '前提: 開路');
+  const [openRoof] = ofKind(planSolids(self(open.graph)), 'roof');
+  assert.deepEqual(openRoof.innerLines.find(l => l.role === 'outline').points, openRegion.exposedPaths[0].points);
+});
+
+test('下屋・S5: 壁があっても innerLines は壁で切る前の線（通り芯まで。外壁面どまりは解決器が壁立体の遮蔽で導く）', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000]);
+  g.interior([[0, 1]]);
+  g.roof([[1, 1], [2, 1]]);
+  g.graph.addWall(g.cy[1], -75, false, g.cx[0], 0, g.cx[1], 0, { wallFinish: 12.5 }); // 北の外壁。外面 y=1425
+  assert.ok(g.graph.walls.length > 0, '前提: 壁がある');
+  const [region] = leanToPlanRegions(g.graph);
+  const [roof] = ofKind(planSolids(self(g.graph)), 'roof');
+  const outline = roof.innerLines.find(l => l.role === 'outline').points;
+  assert.deepEqual(outline, region.exposedPaths[0].points, '壁の有無に依らず exposedPaths のまま');
+  assert.equal(outline[1], 1500, '端は通り芯 y=1500（外壁面 1425 まで戻していない）');
+});
+
+test('下屋・S5: 複数の閉路（屋内を囲む環状の下屋）は閉路ごとに1件。線とラベルは part 0 だけ（二重に描かない）', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 2000, 4000, 6000]);
+  g.interior([[1, 1]]);
+  g.roof([[0, 0], [1, 0], [2, 0], [0, 1], [2, 1], [0, 2], [1, 2], [2, 2]]).roofSpec.setField('shape', RoofShape.HIP);
+  const [region] = leanToPlanRegions(g.graph);
+  assert.equal(region.outline.length, 2, '前提: 外周と穴の2閉路');
+  const roofs = ofKind(planSolids(self(g.graph)), 'roof');
+  assert.deepEqual(roofs.map(r => r.source.part), [0, 1]);
+  assert.ok(roofs[0].innerLines.length > 0 && roofs[0].marks.length > 0);
+  assert.ok(!roofs[1].innerLines && !roofs[1].marks);
+  assert.ok(roofs.every(r => r.drawEdges === false));
+});
+
+test('下屋・S5: 外形線だけの region（陸屋根）は棟木・隅木・ラベルが無い（innerLines は外形線のみ・marks なし）', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
+  g.roof([[0, 0], [1, 0], [2, 0]]).roofSpec.setField('shape', RoofShape.FLAT);
+  const [roof] = ofKind(planSolids(self(g.graph)), 'roof');
+  assert.deepEqual(roof.innerLines.map(l => l.role), ['outline']);
+  assert.equal(roof.marks, undefined);
 });
 
 test('下屋・失敗系: 外形線だけの region（陸屋根）は平ら（zAt なし・zLo=zHi=FL）。屋根が無い階は立体なし', () => {

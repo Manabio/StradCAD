@@ -71,7 +71,7 @@ export function addColumnAt(graph, x, y, { sectionDefId = 'WOOD-105x105', materi
 export const rect = (x1, y1, x2, y2) => ({ x1, y1, x2, y2 });
 
 /**
- * 立体のリテラル（汎用立体の入力・期待値用）。extra: id / style / layerFloorZ（省略＝自階）/ part / zAt / innerLines。
+ * 立体のリテラル（汎用立体の入力・期待値用）。extra: id / style / layerFloorZ（省略＝自階）/ part / zAt / innerLines / marks / drawEdges。
  */
 export function solid(kind, footprint, zLo, zHi, extra = {}) {
   return {
@@ -84,6 +84,8 @@ export function solid(kind, footprint, zLo, zHi, extra = {}) {
     ...(extra.style ? { style: extra.style } : {}),
     ...(extra.zAt ? { zAt: extra.zAt } : {}),
     ...(extra.innerLines ? { innerLines: extra.innerLines } : {}),
+    ...(extra.marks ? { marks: extra.marks } : {}),
+    ...(extra.drawEdges !== undefined ? { drawEdges: extra.drawEdges } : {}),
   };
 }
 

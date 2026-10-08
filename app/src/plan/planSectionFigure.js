@@ -15,7 +15,8 @@
  *
  * 遮蔽（線分 S の区間の中点 p が遮蔽物 O の footprint の**厳密な内側**。境界の上は隠さない）:
  *   (i)  top(O,p) > top(S,p)+EPS
- *   (ii) O が floor で top(O,p) >= top(S,p)-EPS（床は同じ高さでも勝つ。梁の天端が床面と同点＝床の下）
+ *   (ii) O が面材（SURFACE_KINDS＝floor・roof）で top(O,p) >= top(S,p)-EPS（面材は同じ高さでも勝つ。梁の天端が
+ *        床面・屋根面と同点＝その下。S5 で屋根を加えた）
  *   (iii) O も S も cut（同じ高さで隠し合い、和の輪郭だけが残る）
  *   top は cut の立体なら cutZ、below なら zHi（zAt があれば zAt(p)）。S 自身・above は遮蔽物にしない。
  *   (iii) の補足: cut 同士で S の線が O の境界の上にあるときは、面を接する（S と O の内側が線の反対側）なら共有面なので隠し、
@@ -31,12 +32,17 @@
  * @typedef {import('./planSolids.js').Solid} Solid
  * @typedef {{
  *   kind: 'line', key: string, points: [number, number, number, number],
- *   weight: 'thick'|'thin', dash?: number[], cls: 'cut'|'below',
+ *   weight: 'thick'|'thin', dash?: number[], cls: 'cut'|'below', detailOnly: false,
  *   source: {kind: string, id: string, layerFloorZ?: number, role?: string, part?: number},
  * }} LinePrimitive
  *   weight は viewport.lineWeightsPx のキー名。dash は汎用立体の style.dash だけが付ける。
  *   kind:'polygon'（ポシェ）は予約だけで生成しない。
- * @typedef {LinePrimitive} Primitive
+ * @typedef {{
+ *   kind: 'arrow'|'text', key: string, weight: 'thin', cls: 'below', detailOnly: true, source: object,
+ * }} MarkPrimitive
+ *   立体の marks（傾斜ラベル）の出力。arrow は points・head、text は x・y・text・fontSizeMm を持つ（立体の mark の prims のまま）。
+ *   anchor が線の点と同じ可視判定で見えるときだけ出る。LOD の絞りは呼び出し側（planSolidsLayerFilter.visiblePlanPrimitives）。
+ * @typedef {LinePrimitive|MarkPrimitive} Primitive
  */
 import { SOLID_KIND_ORDER } from './planSolids.js';
 import {
@@ -56,6 +62,8 @@ const GEO_TOL = 1e-6;
 const NUDGE = 1e-3; // 共有辺の上の点が和の内部かを見る斜め押し
 const SIDE_PROBE = 0.01; // 線の両側のどちらが内側かを見る距離
 const CLS_RANK = { cut: 0, below: 1 };
+/** 面材（同じ高さでも下の線に勝つ立体の種別。規則 (ii)）。床と屋根（梁の天端＝FL は床・屋根の下）。 */
+const SURFACE_KINDS = Object.freeze(['floor', 'roof']);
 const DIAGONALS = [[1, 1], [-1, 1], [1, -1], [-1, -1]];
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -144,9 +152,28 @@ function onSegment(e, x, y) {
 
 // ---------------------------------------------------------------- 立体の準備
 
+const finiteList = (a, min, even) => Array.isArray(a) && a.length >= min && (!even || a.length % 2 === 0) && a.every(Number.isFinite);
+
+/** marks の検証。anchor が有限・prims に有効な arrow/text が1つ以上ある mark だけ残す（不正は黙って捨てる）。 */
+function validMarks(marks) {
+  const out = [];
+  for (const m of Array.isArray(marks) ? marks : []) {
+    const a = m?.anchor;
+    if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.y) || !Array.isArray(m.prims)) continue;
+    const prims = m.prims.filter(p => {
+      if (!p || typeof p.key !== 'string') return false;
+      if (p.kind === 'arrow') return finiteList(p.points, 4, true) && finiteList(p.head, 2, true);
+      if (p.kind === 'text') return Number.isFinite(p.x) && Number.isFinite(p.y) && typeof p.text === 'string' && Number.isFinite(p.fontSizeMm) && p.fontSizeMm > 0;
+      return false;
+    });
+    if (prims.length > 0) out.push({ anchor: { x: a.x, y: a.y }, prims });
+  }
+  return out;
+}
+
 /**
  * Solid を解決用の記録へ。検証に通らない・above は null。
- * 記録: {solid, cls, kind, footprint, edges, bounds, lines, zAt, slopedCut, layerZ, windowed, rank}
+ * 記録: {solid, cls, kind, footprint, edges, bounds, lines, marks, zAt, slopedCut, layerZ, windowed, rank}
  */
 function prepareSolid(s, cutZ, eps) {
   if (!s || !Number.isFinite(s.zLo) || !Number.isFinite(s.zHi) || s.zLo > s.zHi) return null;
@@ -156,7 +183,8 @@ function prepareSolid(s, cutZ, eps) {
   else cls = 'cut';
   const prepared = prepareFootprint(s.footprint);
   if (!prepared) return null;
-  const lines = prepared.edges.map(points => ({ points, role: null }));
+  // drawEdges:false の立体（下屋）は輪郭を描かない（遮蔽用の edges は保持する）
+  const lines = s.drawEdges === false ? [] : prepared.edges.map(points => ({ points, role: null }));
   for (const inner of s.innerLines ?? []) {
     const p = inner?.points;
     if (!Array.isArray(p) || p.length < 4 || p.length % 2 !== 0 || !p.every(Number.isFinite)) continue;
@@ -166,7 +194,7 @@ function prepareSolid(s, cutZ, eps) {
   const layerZ = Number.isFinite(s.source?.layerFloorZ) ? s.source.layerFloorZ : 0;
   return {
     solid: s, cls, kind: s.kind, footprint: prepared.footprint, edges: prepared.edges,
-    bounds: footprintBounds(prepared.footprint), lines, zAt,
+    bounds: footprintBounds(prepared.footprint), lines, marks: validMarks(s.marks), zAt,
     slopedCut: cls === 'cut' && zAt !== null, layerZ, windowed: layerZ < 0, rank: 0,
   };
 }
@@ -254,7 +282,7 @@ export function planSectionFigure(solids, cutZ, opts = {}) {
       for (const [x1, y1, x2, y2] of pieces) {
         const cls = S.slopedCut ? 'below' : S.cls;
         const prim = {
-          kind: 'line', key: '', points: [x1, y1, x2, y2], weight: PLAN_LINE_STYLE[cls].weight, cls,
+          kind: 'line', key: '', points: [x1, y1, x2, y2], weight: PLAN_LINE_STYLE[cls].weight, cls, detailOnly: false,
           source: { ...S.solid.source, ...(line.role ? { role: line.role } : {}) },
         };
         const dash = S.kind === 'generic' ? S.solid.style?.dash : null;
@@ -274,13 +302,36 @@ export function planSectionFigure(solids, cutZ, opts = {}) {
       || pa[0] - pb[0] || pa[1] - pb[1];
   });
   const counters = new Map();
-  return out.map(({ prim }) => {
+  const lines = out.map(({ prim }) => {
     const base = `${prim.cls}:${prim.source.kind}:${prim.source.id}`;
     const n = counters.get(base) ?? 0;
     counters.set(base, n + 1);
     prim.key = `${base}:${n}`;
     return prim;
   });
+  return [...lines, ...resolveMarks(recs, { cutZ, eps, windowRects, inWindow })];
+}
+
+/**
+ * 立体の marks（傾斜ラベルなどの注記）を解く。基準点（anchor）が線の点と同じ可視判定（buildVisibleAt）で見えるときだけ、
+ * その mark の prims を出す（新しい規則は持たない）。出力は細線・below・詳細だけ（detailOnly:true）。順序は立体の順→mark の順。
+ */
+function resolveMarks(recs, ctx) {
+  const out = [];
+  for (const S of recs) {
+    if (S.marks.length === 0 || (S.windowed && ctx.windowRects.length === 0)) continue;
+    for (const { anchor, prims } of S.marks) {
+      const cands = recs.filter(O => O !== S && bboxOverlap(O.bounds, anchor.x, anchor.y, anchor.x, anchor.y));
+      if (!buildVisibleAt(S, cands, ctx, 0, 0)(anchor.x, anchor.y)) continue;
+      for (const p of prims) {
+        out.push({
+          ...p, key: `below:${S.solid.source.kind}:${S.solid.source.id}:${p.key}`,
+          weight: PLAN_LINE_STYLE.below.weight, cls: 'below', detailOnly: true, source: { ...S.solid.source },
+        });
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -288,7 +339,7 @@ export function planSectionFigure(solids, cutZ, opts = {}) {
  * 遮蔽候補を線分の外接矩形で絞り（最適化。結果は絞らなくても同じ）、輪郭との交点で区間に切って判定する。
  */
 function resolveLine(S, pts, recs, ctx) {
-  const { cutZ, eps, sampleMm, windowRects, inWindow } = ctx;
+  const { eps, sampleMm, windowRects } = ctx;
   const [ax, ay, bx, by] = pts;
   const rx = bx - ax, ry = by - ay;
   const len2 = rx * rx + ry * ry;
@@ -316,42 +367,7 @@ function resolveLine(S, pts, recs, ctx) {
 
   const pointAt = t => [rx === 0 ? ax : ax + rx * t, ry === 0 ? ay : ay + ry * t];
 
-  const visibleAt = (x, y) => {
-    if (S.slopedCut && !(S.zAt(x, y) < cutZ)) return false;
-    if (S.windowed && !inWindow(x, y)) return false;
-    const tS = topAt(S, cutZ, x, y);
-    const cS = clsAt(S, cutZ, x, y);
-    for (const O of cands) {
-      if (insideRec(O, x, y)) {
-        if (hides(O, x, y, tS, cS)) return false;
-      } else if (cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut' && O.edges.some(e => onSegment(e, x, y))) {
-        if (sharedFaceHidden(S, O, x, y, nx, ny)) return false;
-      }
-    }
-    return !hiddenByUnion(x, y, cS);
-  };
-
-  // O が点 (x,y)（O の厳密な内部）で S を隠す z 規則: (i) 高い方が勝つ (ii) 床は同じ高さでも勝つ (iii) cut 同士は隠し合う
-  const hides = (O, x, y, tS, cS) => {
-    const tO = topAt(O, cutZ, x, y);
-    if (tO > tS + eps) return true; // (i)
-    if (O.kind === 'floor' && tO >= tS - eps) return true; // (ii)
-    return cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut'; // (iii)
-  };
-
-  // 遮蔽物の**和の内部**: p がどの遮蔽物の厳密内部でもなくても、p の斜め4点（±NUDGE）がそれぞれ何らかの遮蔽物の
-  // 厳密内部にあり、その遮蔽物が上の規則で隠すなら p は隠れる（4点すべてで成立したときだけ）。隣り合う壁の継ぎ目・
-  // 矩形群の共有辺の上の線がこれで消える。和の外縁（外へ出る斜め点がある）と単独の立体の面に接する線は残る。
-  const hiddenByUnion = (x, y, cS) => {
-    const near = cands.filter(O => !(x + NUDGE < O.bounds.x1 || x - NUDGE > O.bounds.x2 || y + NUDGE < O.bounds.y1 || y - NUDGE > O.bounds.y2));
-    if (near.length === 0) return false;
-    for (const [dx, dy] of DIAGONALS) {
-      const qx = x + dx * NUDGE, qy = y + dy * NUDGE;
-      const tS = topAt(S, cutZ, qx, qy);
-      if (!near.some(O => insideRec(O, qx, qy) && hides(O, qx, qy, tS, cS))) return false;
-    }
-    return true;
-  };
+  const visibleAt = buildVisibleAt(S, cands, ctx, nx, ny);
 
   const slopeRelevant = S.zAt !== null || cands.some(O => O.zAt !== null);
   const visible = []; // [t0,t1]
@@ -399,6 +415,50 @@ function resolveLine(S, pts, recs, ctx) {
     const [x2, y2] = t1 === 1 ? [bx, by] : pointAt(t1);
     return [round6(x1), round6(y1), round6(x2), round6(y2)];
   });
+}
+
+/**
+ * S の点 (x,y) が見えるか（遮蔽候補 cands に隠されないか）の判定関数。線の点（resolveLine）と傾斜ラベルの基準点
+ * （marks の anchor）が**同じ可視判定**を使う。(nx,ny) は線の法線（共有面の判定用。点だけのときは 0,0＝共有面の特例なし）。
+ */
+function buildVisibleAt(S, cands, ctx, nx, ny) {
+  const { cutZ, eps, inWindow } = ctx;
+  // O が点 (x,y)（O の厳密な内部）で S を隠す z 規則: (i) 高い方が勝つ (ii) 面材（床・屋根）は同じ高さでも勝つ (iii) cut 同士は隠し合う
+  const hides = (O, x, y, tS, cS) => {
+    const tO = topAt(O, cutZ, x, y);
+    if (tO > tS + eps) return true; // (i)
+    if (SURFACE_KINDS.includes(O.kind) && tO >= tS - eps) return true; // (ii)
+    return cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut'; // (iii)
+  };
+
+  // 遮蔽物の**和の内部**: p がどの遮蔽物の厳密内部でもなくても、p の斜め4点（±NUDGE）がそれぞれ何らかの遮蔽物の
+  // 厳密内部にあり、その遮蔽物が上の規則で隠すなら p は隠れる（4点すべてで成立したときだけ）。隣り合う壁の継ぎ目・
+  // 矩形群の共有辺の上の線がこれで消える。和の外縁（外へ出る斜め点がある）と単独の立体の面に接する線は残る。
+  const hiddenByUnion = (x, y, cS) => {
+    const near = cands.filter(O => !(x + NUDGE < O.bounds.x1 || x - NUDGE > O.bounds.x2 || y + NUDGE < O.bounds.y1 || y - NUDGE > O.bounds.y2));
+    if (near.length === 0) return false;
+    for (const [dx, dy] of DIAGONALS) {
+      const qx = x + dx * NUDGE, qy = y + dy * NUDGE;
+      const tS = topAt(S, cutZ, qx, qy);
+      if (!near.some(O => insideRec(O, qx, qy) && hides(O, qx, qy, tS, cS))) return false;
+    }
+    return true;
+  };
+
+  return (x, y) => {
+    if (S.slopedCut && !(S.zAt(x, y) < cutZ)) return false;
+    if (S.windowed && !inWindow(x, y)) return false;
+    const tS = topAt(S, cutZ, x, y);
+    const cS = clsAt(S, cutZ, x, y);
+    for (const O of cands) {
+      if (insideRec(O, x, y)) {
+        if (hides(O, x, y, tS, cS)) return false;
+      } else if (cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut' && O.edges.some(e => onSegment(e, x, y))) {
+        if (sharedFaceHidden(S, O, x, y, nx, ny)) return false;
+      }
+    }
+    return !hiddenByUnion(x, y, cS);
+  };
 }
 
 /**

@@ -49,21 +49,19 @@ test('【配線・強化】SceneLayers は EquipmentSymbolLayer のゲート行�
     'symbols={computeEquipmentSymbols( が1行まるごとの形で見つからない');
 });
 
-// 下屋の平面表示（ステップ1）: RoofPlanLayer は平面図一式の述語 showPlanFigure（構造モード・展開モードだけ偽）で出し入れし、
-// VoidLayer のブロックの直後・EquipmentSymbolLayer の前に置く。新しいモード述語は作らない。
-test('【配線・強化】SceneLayers は <RoofPlanLayer> を showPlanFigure で1行まるごとの形でゲートする（appMode の直書き・別条件にしない）', () => {
-  assert.match(codeOnly, /^\s*\{showPlanFigure && <RoofPlanLayer graph=\{graph\} viewport=\{viewport\} \/>\}\s*$/m,
-    '{showPlanFigure && <RoofPlanLayer graph={graph} viewport={viewport} />} が1行まるごとの形で見つからない');
-  assert.match(codeOnly, /^\s*import \{ RoofPlanLayer \} from '\.\/RoofPlanLayer\.jsx';\s*$/m);
-  assert.equal((codeOnly.match(/<RoofPlanLayer\b/g) || []).length, 1, '使うのは1箇所だけ');
+// 下屋の平面表示（S5）: 下屋は PlanSolidsLayer（平面の断面解決。屋根立体＋解決器）が描くので、SceneLayers は RoofPlanLayer を使わない
+// （旧 RoofPlanLayer.jsx は比較の基準として残すが、どこからも import されない）。PlanSolidsLayer は showPlanFigure でゲートし、
+// VoidLayer のブロックの直後・EquipmentSymbolLayer の前に置く（配線は PlanSolidsLayer.wiring.test.js）。
+test('【配線】SceneLayers は RoofPlanLayer を import も使用もしない（下屋は PlanSolidsLayer が描く）。showPlanFigure の定義は既存の述語のまま', () => {
+  assert.equal((codeOnly.match(/RoofPlanLayer/g) || []).length, 0, 'RoofPlanLayer が出ない');
   assert.match(codeOnly, /^\s*const showPlanFigure = shouldShowPlanFigure\(appMode\);\s*$/m, 'showPlanFigure の定義は既存の述語のまま');
 });
 
-test('【配線】SceneLayers は <RoofPlanLayer> を VoidLayer のブロックの直後・EquipmentSymbolLayer の前に置く', () => {
+test('【配線】SceneLayers は <PlanSolidsLayer> を VoidLayer のブロックの直後・EquipmentSymbolLayer の前に置く', () => {
   const voidAt = codeOnly.indexOf('<VoidLayer');
-  const roofAt = codeOnly.indexOf('<RoofPlanLayer');
+  const solidsAt = codeOnly.indexOf('<PlanSolidsLayer');
   const equipAt = codeOnly.indexOf('<EquipmentSymbolLayer');
-  assert.ok(voidAt >= 0 && roofAt > voidAt && equipAt > roofAt, `順序 VoidLayer(${voidAt}) < RoofPlanLayer(${roofAt}) < EquipmentSymbolLayer(${equipAt})`);
+  assert.ok(voidAt >= 0 && solidsAt > voidAt && equipAt > solidsAt, `順序 VoidLayer(${voidAt}) < PlanSolidsLayer(${solidsAt}) < EquipmentSymbolLayer(${equipAt})`);
 });
 
 // QA指摘W4（昇降機の仕様追加 ステップ4・S4）: catalogは建物全体（全採用階。project.equipmentIndex経由）

@@ -235,7 +235,7 @@ test('途中の階の床が更に下の層を隠す。同じ位置に穴があ�
 
 test('勾配: 下の梁を roof の zAt が隠す区間の切り替わりが ±1mm で正しい', () => {
   const roof = solid('roof', { poly: [0, 0, 2000, 0, 2000, 2000, 0, 2000] }, -2000, 0, { id: 'r', zAt: x => -2000 + x });
-  const beam = solid('beam', sq(200, 900, 1800, 1000), -1237, -1037, { id: 'b' }); // 天端 -1037 → roof が -1036.5 を超える x=963.5 から隠れる
+  const beam = solid('beam', sq(200, 900, 1800, 1000), -1237, -1037, { id: 'b' }); // 天端 -1037 → 面材の roof が -1037.5 以上になる x=962.5 から隠れる（同点でも勝つ）
   const prims = fig([roof, beam]);
   const beamLines = ofId(prims, 'b');
   assert.equal(beamLines.length, 3, '水平2本＋隠れない側の端の辺');
@@ -243,27 +243,27 @@ test('勾配: 下の梁を roof の zAt が隠す区間の切り替わりが ±1
   assert.equal(horizontals.length, 2);
   for (const p of horizontals) {
     near(Math.min(p.points[0], p.points[2]), 200, 0, '始点');
-    near(Math.max(p.points[0], p.points[2]), 963.5, 1, '切り替わり点（roof の上端が梁の天端+EPS を超える所）');
+    near(Math.max(p.points[0], p.points[2]), 962.5, 1, '切り替わり点（roof の上端が梁の天端−EPS 以上になる所）');
   }
   assert.ok(beamLines.some(p => p.points[0] === 200 && p.points[2] === 200), 'x=200 の端の辺は残る');
   assert.ok(!beamLines.some(p => p.points[0] === 1800 && p.points[2] === 1800), 'x=1800 の端の辺は roof に隠れる');
 });
 
-test('勾配: 区間の端から半ステップ内で可視が切り替わっても取りこぼさない（始端側 x=0..25・終端側 x=975..1000）', () => {
-  const beam = solid('beam', sq(0, 100, 1000, 200), -200, 0, { id: 'b' }); // 天端 0。roof が 0.5 を超えると隠れる
+test('勾配: 区間の端から半ステップ内で可視が切り替わっても取りこぼさない（始端側 x=0..15・終端側 x=985..1000）', () => {
+  const beam = solid('beam', sq(0, 100, 1000, 200), -200, 0, { id: 'b' }); // 天端 0。面材の roof が −0.5 以上になると隠れる
   const horizontals = prims => nonEmpty(ofId(prims, 'b').filter(p => p.points[1] === p.points[3]), '水平辺');
   const startSide = solid('roof', { poly: [-500, 0, 1500, 0, 1500, 300, -500, 300] }, -52, 150, { id: 'r', zAt: x => 0.1 * x - 2 });
   const a = horizontals(fig([startSide, beam]));
   assert.equal(a.length, 2);
   for (const p of a) {
     near(Math.min(p.points[0], p.points[2]), 0, 0, '始点');
-    near(Math.max(p.points[0], p.points[2]), 25, 1, '始端側の切り替わり');
+    near(Math.max(p.points[0], p.points[2]), 15, 1, '始端側の切り替わり');
   }
   const endSide = solid('roof', { poly: [-500, 0, 1500, 0, 1500, 300, -500, 300] }, -52, 150, { id: 'r', zAt: x => 0.1 * (1000 - x) - 2 });
   const b = horizontals(fig([endSide, beam]));
   assert.equal(b.length, 2);
   for (const p of b) {
-    near(Math.min(p.points[0], p.points[2]), 975, 1, '終端側の切り替わり');
+    near(Math.min(p.points[0], p.points[2]), 985, 1, '終端側の切り替わり');
     near(Math.max(p.points[0], p.points[2]), 1000, 0, '終点');
   }
 });
@@ -389,4 +389,98 @@ test('順序: cls（cut→below）→ source.kind 固定表 → 層の FL 降順
   }
   assert.equal(prims[0].cls, 'cut');
   assert.equal(prims.at(-1).cls, 'below');
+});
+
+// ================================================================ S5: 下屋（drawEdges・面材の同点・marks）
+
+const ROOF_POLY = { poly: [0, 0, 4000, 0, 4000, 2000, 0, 2000] };
+const arrowMark = (anchor, key = 'm:arrow:0') => ({
+  anchor, prims: [
+    { kind: 'arrow', key, points: [anchor.x, anchor.y, anchor.x + 900, anchor.y], head: [1, 2, 3, 4, 5, 6] },
+    { kind: 'text', key: 'm:text:0', x: anchor.x, y: anchor.y + 100, text: '屋根', fontSizeMm: 200 },
+  ],
+});
+
+test('S5 drawEdges:false: 輪郭は描かず innerLines だけ描く。遮蔽物としては働く（中の梁は隠れる）', () => {
+  const roof = solid('roof', ROOF_POLY, 0, 0, { id: 'r', drawEdges: false, innerLines: [{ points: [0, 1000, 4000, 1000], role: 'ridge' }] });
+  const prims = fig([roof]);
+  assert.deepEqual(sortedLines(prims), [[0, 1000, 4000, 1000]], '輪郭4辺は出ず、内側の線だけ');
+  assert.equal(prims[0].source.role, 'ridge');
+  // drawEdges 省略・true は輪郭を描く（既存の挙動）
+  assert.equal(fig([solid('roof', ROOF_POLY, 0, 0, { id: 'r' })]).length, 4);
+  assert.equal(fig([solid('roof', ROOF_POLY, 0, 0, { id: 'r', drawEdges: true })]).length, 4);
+  // 遮蔽は drawEdges に依らない
+  const beam = solid('beam', sq(500, 500, 3500, 600), -200, 0, { id: 'b' });
+  assert.equal(ofId(fig([roof, beam]), 'b').length, 0, 'drawEdges:false の roof も梁を隠す');
+});
+
+test('S5 面材の同点: roof は同じ高さの梁に勝つ。梁は roof の線を隠さない。切断の壁は roof の線を隠す', () => {
+  const roof = solid('roof', ROOF_POLY, 0, 0, { id: 'r', drawEdges: false, innerLines: [{ points: [0, 1000, 4000, 1000], role: 'ridge' }] });
+  const sameTop = solid('beam', sq(500, 1500, 3500, 1600), -200, 0, { id: 'b' });
+  assert.equal(ofId(fig([roof, sameTop]), 'b').length, 0, '梁の天端＝roof の天端なら roof が勝つ');
+  const higher = solid('beam', sq(500, 1500, 3500, 1600), -200, 100, { id: 'b' });
+  assert.equal(ofId(fig([roof, higher]), 'b').length, 4, '梁の天端が roof より高ければ梁は見える');
+  const across = solid('beam', sq(1000, 800, 1100, 1200), -200, 0, { id: 'b2' });
+  assert.deepEqual(sortedLines(ofId(fig([roof, across]), 'r')), [[0, 1000, 4000, 1000]], '梁（同点）は roof の棟木を隠さない');
+  const wall = solid('wall', sq(1000, 800, 1200, 1200), 0, 2400, { id: 'w' });
+  assert.deepEqual(sortedLines(ofId(fig([roof, wall]), 'r')), [[0, 1000, 1000, 1000], [1200, 1000, 4000, 1000]], '切断の壁の内側の区間は消える（外壁面どまりの元）');
+});
+
+test('S5 innerLines の閉路: 先頭の点を末尾へ足した折れ線は全辺が線になる（足さないと最後の辺が欠ける）', () => {
+  const loop = (pts) => fig([solid('roof', ROOF_POLY, 0, 0, { id: 'r', drawEdges: false, innerLines: [{ points: pts, role: 'outline' }] })]);
+  assert.equal(loop([100, 100, 900, 100, 900, 900, 100, 900, 100, 100]).length, 4);
+  assert.equal(loop([100, 100, 900, 100, 900, 900, 100, 900]).length, 3);
+});
+
+test('S5 marks: anchor が見えるときだけ prims を出す（細線・below・detailOnly・key 形式）。線は detailOnly:false', () => {
+  const roof = solid('roof', ROOF_POLY, 0, 0, { id: 'r1', drawEdges: false, marks: [arrowMark({ x: 1000, y: 1000 })], innerLines: [{ points: [0, 1000, 4000, 1000], role: 'ridge' }] });
+  const prims = fig([roof]);
+  const marks = nonEmpty(prims.filter(p => p.kind !== 'line'), 'marks');
+  assert.deepEqual(marks.map(p => p.kind), ['arrow', 'text']);
+  for (const p of marks) {
+    assert.equal(p.weight, 'thin');
+    assert.equal(p.cls, 'below');
+    assert.equal(p.detailOnly, true);
+    assert.equal(p.source.kind, 'roof');
+  }
+  assert.deepEqual(marks.map(p => p.key), ['below:roof:r1:m:arrow:0', 'below:roof:r1:m:text:0']);
+  assert.deepEqual(marks[0].points, [1000, 1000, 1900, 1000], '座標は mark のまま');
+  assert.equal(marks[1].text, '屋根');
+  prims.filter(p => p.kind === 'line').forEach(p => assert.equal(p.detailOnly, false));
+  assert.equal(new Set(prims.map(p => p.key)).size, prims.length, 'key は一意');
+});
+
+test('S5 marks: anchor が切断の壁の面のちょうど上（境界）なら出る（境界は隠さない規則）。1mm 内側なら落ちる', () => {
+  const mk = anchor => solid('roof', ROOF_POLY, 0, 0, { id: 'r', drawEdges: false, marks: [arrowMark(anchor)] });
+  const wall = solid('wall', sq(900, 900, 1000, 1100), 0, 2400, { id: 'w' }); // 東の面は x=1000
+  const labelCount = prims => prims.filter(p => p.kind !== 'line').length;
+  assert.equal(labelCount(fig([mk({ x: 1000, y: 1000 }), wall])), 2, '壁の面 x=1000 の上 → ラベル1件（矢印＋文字）');
+  assert.equal(labelCount(fig([mk({ x: 999, y: 1000 }), wall])), 0, '壁の内側は落ちる');
+});
+
+test('S5 marks: anchor が切断の壁の内側・より高い roof の内側なら prims 全部が落ちる。外なら出る', () => {
+  const mk = anchor => solid('roof', ROOF_POLY, 0, 0, { id: 'r', drawEdges: false, marks: [arrowMark(anchor)] });
+  const wall = solid('wall', sq(900, 900, 1100, 1100), 0, 2400, { id: 'w' });
+  const labelCount = prims => prims.filter(p => p.kind !== 'line').length;
+  assert.equal(labelCount(fig([mk({ x: 1000, y: 1000 }), wall])), 0, '壁の内側');
+  assert.equal(labelCount(fig([mk({ x: 1500, y: 1000 }), wall])), 2, '壁の外');
+  const taller = solid('roof', { poly: [800, 800, 1200, 800, 1200, 1200, 800, 1200] }, 0, 300, { id: 'r2', drawEdges: false });
+  assert.equal(labelCount(fig([mk({ x: 1000, y: 1000 }), taller])), 0, 'より高い roof の内側');
+  assert.equal(labelCount(fig([mk({ x: 1000, y: 1000 })])), 2, '遮蔽物が無ければ出る');
+});
+
+test('【失敗系】S5 marks: 不正な mark（anchor 非有限・prims 欠落・不正な prim）は捨てる。壊れた marks でも例外にしない', () => {
+  const good = arrowMark({ x: 1000, y: 1000 });
+  const marks = [
+    { anchor: { x: NaN, y: 0 }, prims: good.prims },
+    { anchor: { x: 0, y: Infinity }, prims: good.prims },
+    { anchor: null, prims: good.prims },
+    { anchor: { x: 500, y: 500 } },
+    { anchor: { x: 500, y: 500 }, prims: [{ kind: 'arrow', key: 'a', points: [0, 0, NaN, 0], head: [1, 2] }, { kind: 'text', key: 't', x: 0, y: 0, text: 5, fontSizeMm: 200 }, { kind: 'line', key: 'l' }, null, { kind: 'text', x: 0, y: 0, text: 'x', fontSizeMm: 200 }] },
+    null, 'x',
+    good,
+  ];
+  const prims = fig([solid('roof', ROOF_POLY, 0, 0, { id: 'r', drawEdges: false, marks })]);
+  assert.deepEqual(prims.filter(p => p.kind !== 'line').map(p => p.key), ['below:roof:r:m:arrow:0', 'below:roof:r:m:text:0'], '有効な mark だけ残る');
+  assert.deepEqual(fig([solid('roof', ROOF_POLY, 0, 0, { id: 'r', marks: 'bad' })]).filter(p => p.kind !== 'line'), []);
 });

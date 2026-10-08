@@ -12,6 +12,9 @@ import { leanToPlanRegions } from '../../structural/roofFramingRegions.js';
 import { roofFramingLines } from '../../structural/roofFramingGeometry.js';
 import { createLeanToRoofSpec } from './roofDefaults.js';
 import { LodLevel } from '../../viewport.js';
+import { planSolidsLayerPrimitives, visiblePlanPrimitives } from '../../plan/planSolidsLayerFilter.js';
+import { roofLineDiffs, labelKeys } from '../../plan/roofPlanCompare.js';
+import { wallConcealRange } from '../columnWrap.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
 
@@ -588,4 +591,196 @@ test('T-C2 奥行の違う L字（水下の中点がセルの境目に乗る）:
       }
     }
   }
+});
+
+// ================================================================ 新経路（S5: 屋根立体＋解決器）との一致
+// 旧 roofPlanFigure（端止め trim 済み）と、PlanSolidsLayer が描く新経路（planSolidsLayerPrimitives の roof の線・ラベル。
+// 外壁面どまりは壁立体の遮蔽が導く）が、線として（折れ線→線分→重なりを結合した区間で）同じで、ラベルは座標・文字まで同じ。
+
+const CUT_Z = 1500;
+const newPath = graph => planSolidsLayerPrimitives({ graph, cutZ: CUT_Z });
+const fmtDiff = diffs => diffs.map(d => `${d.cls}:${d.roles.join('/')}:${d.points.join(',')}`).join(' | ');
+
+/** 旧と新が一致することを確かめる。比較が空振りしないよう、旧の線が1本以上あることも確かめる。 */
+function assertSameAsOld(graph, label, { expectLines = true } = {}) {
+  const oldPrims = roofPlanFigureAll(graph);
+  const newPrims = newPath(graph);
+  if (expectLines) assert.ok(oldPrims.some(p => p.kind === 'line'), `${label}: 前提: 旧の線がある`);
+  assert.equal(fmtDiff(roofLineDiffs(oldPrims, newPrims)), '', `${label}: 線の差分`);
+  assert.deepEqual(labelKeys(newPrims), labelKeys(oldPrims), `${label}: ラベルは座標・文字まで同じ`);
+}
+
+test('新経路との一致: 壁なしの各形（片流れ・切妻・寄棟・L字・U字・段違い・陸屋根）で線とラベルが旧と同じ', () => {
+  const cases = {
+    '片流れ（矩形）': () => { const g = makeGrid([0, 2000, 4000], [0, 1500, 3000]); g.roof([[0, 1], [1, 1]]); return g.graph; },
+    '切妻のけらば延長': () => { const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]); g.roof([[0, 0], [1, 0], [0, 1], [1, 1]]); return g.graph; },
+    '寄棟（矩形）': () => { const g = makeGrid([0, 4000, 8000], [0, 4000]); g.roof([[0, 0], [1, 0]], RoofShape.HIP); return g.graph; },
+    'L字の寄棟（谷木）': () => { const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]); g.roof([[0, 0], [1, 0], [0, 1]], RoofShape.HIP); return g.graph; },
+    'L字の片流れ（屋内に接する2辺の回り込み）': () => { const g = makeGrid([0, 3640, 5460], [0, 3640, 5460]); g.interior([[0, 0]]); g.roof([[0, 1], [1, 1], [1, 0]]); return g.graph; },
+    'U字の片流れ（向かい合う水下の棟木）': () => { const g = makeGrid([0, 1820, 3640, 5460], [0, 3640, 7280]); g.interior([[1, 0]]); g.roof([[0, 0], [2, 0], [0, 1], [1, 1], [2, 1]], RoofShape.MONO); return g.graph; },
+    '切妻のL字（腕ごとの棟木）': () => { const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]); g.roof([[0, 0], [1, 0], [0, 1]]); return g.graph; },
+    '明示切妻のL字': () => { const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]); g.roof([[1, 1], [2, 1], [1, 2]], RoofShape.GABLE); return g.graph; },
+    '屋内辺を除く': () => { const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000]); g.interior([[0, 1]]); g.roof([[1, 1], [2, 1]]); return g.graph; },
+    '切妻のL字 roof-test8 型': () => makeGableL().graph,
+    '壁に接する寄棟 roof-test6 型': () => { const g = makeGrid([3640, 9100], [-7280, -3640, 0]); g.interior([[0, 0]]); g.roof([[0, 1]], RoofShape.HIP); return g.graph; },
+    'L字の寄棟 roof-test9 型': () => { const g = makeGrid([3640, 7280, 9100], [-9884, -3640, 0]); g.interior([[0, 0]]); g.roof([[0, 1], [1, 1], [1, 0]], RoofShape.HIP); return g.graph; },
+    '屋根が複数（離れている）': () => { const g = makeGrid([0, 4000, 8000, 12000], [0, 4000, 8000, 12000]); g.roof([[0, 0]], RoofShape.HIP); g.roof([[2, 2]], RoofShape.GABLE); return g.graph; },
+  };
+  for (const [label, build] of Object.entries(cases)) assertSameAsOld(build(), label);
+  // 外形線だけの region（段違い・棟違い・陸屋根）: 線は外形線だけ・ラベルなし
+  for (const [label, build] of Object.entries({
+    '段違いの L字の片流れ': () => { const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]); g.roof([[1, 1], [2, 1], [1, 2]]); return g.graph; },
+    '陸屋根': () => { const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]); g.roof([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.FLAT); return g.graph; },
+    '棟違い': () => { const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]); g.roof([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.STAGGERED); return g.graph; },
+  })) {
+    const g = build();
+    assertSameAsOld(g, label);
+    assert.equal(newPath(g).filter(p => p.kind !== 'line').length, 0, `${label}: ラベルなし`);
+    assert.ok(newPath(g).every(p => p.source.role === 'outline'), `${label}: 外形線だけ`);
+  }
+});
+
+test('新経路との一致: 壁あり＝外壁面どまり（片流れの外形線の端・寄棟の隅木の上端・切妻のL字）を壁立体の遮蔽が導き、旧の端止めと同じ線になる', () => {
+  // 片流れ: 外形線の折り返しの両端が外壁の外面（y=1425・3075）で止まる
+  const a = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000]);
+  a.interior([[0, 1]]);
+  a.roof([[1, 1], [2, 1]]);
+  addWallOn(a.graph, a.cy[1], -75, false, a.cx[0], a.cx[1]);
+  addWallOn(a.graph, a.cy[2], 75, false, a.cx[0], a.cx[1]);
+  assertSameAsOld(a.graph, '片流れ・壁あり');
+  const outline = newPath(a.graph).filter(p => p.source.role === 'outline');
+  assert.ok(outline.some(p => p.points.includes(1425)) && outline.some(p => p.points.includes(3075)), '新経路の外形線が外壁面 y=1425・3075 で止まる');
+  // 寄棟: 壁に当たる隅木の上端が 45° に外壁面まで戻る
+  const b = makeGrid([0, 4000, 8000, 12000], [0, 4000, 8000]);
+  b.interior([[0, 0], [1, 0], [2, 0]]);
+  b.roof([[0, 1], [1, 1], [2, 1]], RoofShape.HIP);
+  addWallOn(b.graph, b.cy[1], 75, false, b.cx[0], b.cx[3]);
+  addWallOn(b.graph, b.cx[0], -75, true, b.cy[0], b.cy[1]);
+  addWallOn(b.graph, b.cx[3], 75, true, b.cy[0], b.cy[1]);
+  assertSameAsOld(b.graph, '寄棟・壁あり');
+  // 切妻のL字（roof-test8 型）
+  const c = makeGableL();
+  addWallOn(c.graph, c.cy[1], 75, false, c.cx[0], c.cx[1]);
+  addWallOn(c.graph, c.cx[1], 75, true, c.cy[0], c.cy[1]);
+  addWallOn(c.graph, c.cx[0], -75, true, c.cy[0], c.cy[1]);
+  addWallOn(c.graph, c.cy[0], -75, false, c.cx[0], c.cx[1]);
+  assertSameAsOld(c.graph, '切妻のL字・壁あり');
+  // 壁なしとの比較: 壁の有無で新経路の線が変わる（遮蔽が効いている）
+  const bare = makeGableL();
+  assert.notEqual(JSON.stringify(newPath(c.graph).map(p => p.points)), JSON.stringify(newPath(bare.graph).map(p => p.points)), '壁ありでは端が外壁面まで戻る');
+});
+
+test('新経路との一致: 壁に当たらない端・離れた壁・T3（上が全部壁の切妻と片流れ）・壁の4方向×形状・ラベル不動', () => {
+  // 壁に当たらない端・reach の外の壁は変えない
+  const a = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000]);
+  a.interior([[0, 1]]);
+  a.roof([[1, 1], [2, 1]]);
+  addWallOn(a.graph, a.cx[0], 75, true, a.cy[1], a.cy[2]);
+  const far = addWallOn(a.graph, a.cx[3], 75, true, a.cy[0], a.cy[1]);
+  // 差分は1つだけ: 屋根の辺（y 1500..3000）から離れた壁 x=6000 が、上の軒先の線 y=1045 を横切る所（壁の覆い）。旧は端止めの対象でないので
+  // 線を引き続け、新は壁の中に線を描かない（壁立体の遮蔽。許す差分 (a)）。端の止まり方（壁に当たらない端）は旧と同じ
+  const diffs = roofLineDiffs(roofPlanFigureAll(a.graph), newPath(a.graph));
+  const cover = wallConcealRange(far);
+  assert.deepEqual(diffs.map(d => [d.cls, d.roles.join(), d.points[1], d.points[3], d.points[0], d.points[2]]),
+    [['old', 'outline', 1045, 1045, cover.lo, cover.hi]], '壁の覆いの区間だけが旧のみ');
+  assert.deepEqual(labelKeys(newPath(a.graph)), labelKeys(roofPlanFigureAll(a.graph)));
+  // T3
+  for (const [shape, bottomHalf] of [[RoofShape.GABLE, false], [RoofShape.MONO, false], [RoofShape.GABLE, true], [RoofShape.MONO, true]]) {
+    const g = makeGrid([0, 4000, 8000], [0, 4000, 8000, 12000]);
+    g.interior([[0, 0], [1, 0]]);
+    if (bottomHalf) g.interior([[0, 2]]);
+    const room = g.roof([[0, 1], [1, 1]], shape);
+    if (shape === RoofShape.MONO) room.roofSpec.setField('highSide', 'top');
+    assertSameAsOld(g.graph, `T3 ${shape} 下辺の左半分${bottomHalf ? 'も壁' : 'は壁でない'}`);
+  }
+  // 壁の4方向 × 形状
+  const sides = {
+    top: { grid: [[0, 4000, 8000], [0, 4000, 8000]], roof: [[0, 1], [1, 1]], interior: [[0, 0], [1, 0]] },
+    bottom: { grid: [[0, 4000, 8000], [0, 4000, 8000]], roof: [[0, 0], [1, 0]], interior: [[0, 1], [1, 1]] },
+    left: { grid: [[0, 4000, 8000], [0, 4000, 8000]], roof: [[1, 0], [1, 1]], interior: [[0, 0], [0, 1]] },
+    right: { grid: [[0, 4000, 8000], [0, 4000, 8000]], roof: [[0, 0], [0, 1]], interior: [[1, 0], [1, 1]] },
+  };
+  for (const [side, f] of Object.entries(sides)) {
+    for (const shape of [null, RoofShape.GABLE, RoofShape.HIP]) {
+      const g = makeGrid(...f.grid);
+      g.interior(f.interior);
+      g.roof(f.roof, shape);
+      assertSameAsOld(g.graph, `${side}の壁・${shape ?? '片流れ'}`);
+    }
+  }
+  // 一部だけ接する辺（規則で作れない形）と壁に接しない寄棟
+  const part = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  part.interior([[0, 0]]);
+  part.roof([[0, 1], [1, 1]], RoofShape.HIP);
+  assertSameAsOld(part.graph, '一部だけ壁の辺（外形線だけ）');
+  // ラベル不動: 壁ありでもラベルの座標は壁なしと同じ
+  const w = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  w.interior([[0, 0], [1, 0]]);
+  w.roof([[0, 1], [1, 1]], RoofShape.HIP);
+  const labelsBare = labelKeys(newPath(w.graph));
+  addWallOn(w.graph, w.cy[1], 75, false, w.cx[0], w.cx[2]);
+  assert.ok(labelsBare.length > 0, '前提: ラベルがある');
+  assert.deepEqual(labelKeys(newPath(w.graph)), labelsBare, '新経路でもラベルは壁の有無で動かない');
+  assertSameAsOld(w.graph, 'ラベル不動・壁あり');
+});
+
+test('新経路との一致: 奥行の違う L字・十字・本体＋突起（ラベルの数＝水下の数。位置は旧と同じ）', () => {
+  const build = (xs, ys, cells, interiorCells = null) => {
+    const g = makeGrid(xs, ys);
+    if (interiorCells) g.interior(interiorCells);
+    g.roof(cells, RoofShape.GABLE);
+    return g.graph;
+  };
+  assertSameAsOld(build([4550, 7280, 9100], [-9884, -3640, 0], [[0, 1], [1, 1], [1, 0]], [[0, 0]]), 'roof-test8 の横の腕を x=4550 始まり');
+  assertSameAsOld(build([0, 2730, 7280], [0, 5460, 6370], [[0, 0], [1, 0], [0, 1]]), '本体＋突起');
+  assertSameAsOld(build([0, 3640, 5460, 9100], [0, 3640, 7280, 10920], [[1, 0], [0, 1], [1, 1], [2, 1], [1, 2]]), '十字');
+  for (const [label, f] of Object.entries({
+    '右の腕が浅い': { xs: [0, 3640, 5460], ys: [0, 3640, 7280], roof: [[1, 0], [0, 1], [1, 1]] },
+    '左右を入れ替えた形': { xs: [0, 3640, 7280], ys: [0, 3640, 5460], roof: [[0, 1], [1, 0], [1, 1]] },
+  })) {
+    const g = makeGrid(f.xs, f.ys);
+    g.interior([[0, 0]]);
+    g.roof(f.roof);
+    assertSameAsOld(g.graph, label);
+  }
+});
+
+test('新経路との差分（許す差分 (c)）: 角で接する別々の下屋の軒の重なりは、旧は両方の線を描き、新は他方の屋根面の内側の線を隠す（旧のみ・他の屋根の内側だけ。新のみは無い）', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  g.roof([[0, 0]], RoofShape.HIP);
+  g.roof([[1, 1]], RoofShape.GABLE);
+  const diffs = roofLineDiffs(roofPlanFigureAll(g.graph), newPath(g.graph));
+  assert.ok(diffs.length > 0, '前提: 差分がある（軒の重なり x,y 3545..4455）');
+  assert.ok(diffs.every(d => d.cls === 'old'), '新のみの線は無い');
+  assert.ok(diffs.every(d => d.points.every(v => v >= 3545 - 0.1 && v <= 4455 + 0.1)), '差分は軒の重なりの正方形の中だけ');
+  assert.deepEqual(labelKeys(newPath(g.graph)), labelKeys(roofPlanFigureAll(g.graph)), 'ラベルは同じ');
+});
+
+test('新経路: 傾斜は roofSpec.slope の値（ラベルの文字）。LOD の絞りは visiblePlanPrimitives（DETAIL 以外はラベルを落とし、線は同数）', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  const room = g.roof([[0, 0], [1, 0], [0, 1], [1, 1]], RoofShape.HIP);
+  room.roofSpec.setField('slope', 4.5);
+  const prims = newPath(g.graph);
+  assert.ok(prims.filter(p => p.kind === 'text' && p.text !== '屋根').every(p => p.text === '（傾斜4.5/10）'));
+  assert.equal(new Set(prims.map(p => p.key)).size, prims.length, 'key は一意');
+  const lineCount = prims.filter(p => p.kind === 'line').length;
+  assert.ok(lineCount > 0 && prims.some(p => p.kind !== 'line'), '前提: 線もラベルもある');
+  for (const lod of [LodLevel.SCHEMATIC, LodLevel.STANDARD]) {
+    const shown = visiblePlanPrimitives(prims, lod);
+    assert.equal(shown.filter(p => p.kind === 'arrow' || p.kind === 'text').length, 0, `${lod}: ラベル 0 件`);
+    assert.equal(shown.filter(p => p.kind === 'line').length, lineCount, `${lod}: 線は同数`);
+  }
+  assert.equal(visiblePlanPrimitives(prims, LodLevel.DETAIL).length, prims.length, 'DETAIL は全部');
+});
+
+test('【失敗系】新経路: graph 無し・屋根の無い階・屋根でない部屋・範囲が不正な屋根は roof の線もラベルも出ない', () => {
+  assert.deepEqual(planSolidsLayerPrimitives({ graph: null, cutZ: CUT_Z }), []);
+  const none = makeGrid([0, 4000], [0, 3000]);
+  none.interior([[0, 0]]);
+  assert.deepEqual(newPath(none.graph).filter(p => p.source.kind === 'roof'), []);
+  const bad = makeGrid([0, 4000], [0, 3000]);
+  const room = bad.roof([[0, 0]]);
+  room.cells.clear();
+  room.cells.add('no:such:cell:key');
+  assert.deepEqual(newPath(bad.graph).filter(p => p.source.kind === 'roof'), []);
 });

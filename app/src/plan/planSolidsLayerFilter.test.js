@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import { RoomFeature, StairType } from '@core';
 import {
   S4_DRAWN_KINDS, drawnPrimitives, planSolidsLayerPrimitives, planSolidsLayerCacheSpec, planSolidsLayerResolve, isCenterLineDragging,
+  visiblePlanPrimitives,
 } from './planSolidsLayerFilter.js';
+import { LodLevel } from '../viewport.js';
 import { planSolids } from './planSolids.js';
 import { isInsideFootprint } from './planGeometry.js';
 import { makeGrid, makeRoomGraph, addBeamH, addColumnAt, linesOf } from './planTestFixtures.js';
@@ -14,10 +16,34 @@ const prim = (kind, cls = 'below') => ({ kind: 'line', key: `${kind}-${cls}`, po
 
 // ================================================================ 絞り込み
 
-test('S4 で描く種別は梁と汎用立体だけ（固定）。柱・壁・床・屋根・階段の段は描かない', () => {
-  assert.deepEqual([...S4_DRAWN_KINDS], ['beam', 'generic']);
+test('描く種別は梁・汎用立体（S4）と下屋＝屋根（S5）だけ（固定）。柱・壁・床・階段の段は描かない', () => {
+  assert.deepEqual([...S4_DRAWN_KINDS], ['beam', 'generic', 'roof']);
   const kinds = ['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'generic'];
-  assert.deepEqual(drawnPrimitives(kinds.map(k => prim(k))).map(p => p.source.kind), ['beam', 'generic']);
+  assert.deepEqual(drawnPrimitives(kinds.map(k => prim(k))).map(p => p.source.kind), ['beam', 'roof', 'generic']);
+  // ラベル（arrow・text）も source.kind で同じ集合に絞る
+  const label = { kind: 'arrow', key: 'a', points: [0, 0, 1, 0], head: [], weight: 'thin', cls: 'below', detailOnly: true, source: { kind: 'roof', id: 'r' } };
+  assert.deepEqual(drawnPrimitives([label, { ...label, source: { kind: 'wall', id: 'w' } }]), [label]);
+});
+
+test('visiblePlanPrimitives: 詳細（DETAIL）は全部、他の LOD は detailOnly（ラベル）を落とす。線（detailOnly:false か未指定）は全 LOD で残り、順序と入力は不変', () => {
+  const input = [{ key: 'line', detailOnly: false }, { key: 'arrow', detailOnly: true }, { key: 'plain' }, { key: 'text', detailOnly: true }];
+  const before = JSON.stringify(input);
+  assert.deepEqual(visiblePlanPrimitives(input, LodLevel.DETAIL).map(p => p.key), ['line', 'arrow', 'plain', 'text']);
+  for (const lod of [LodLevel.SCHEMATIC, LodLevel.STANDARD]) assert.deepEqual(visiblePlanPrimitives(input, lod).map(p => p.key), ['line', 'plain'], lod);
+  assert.deepEqual(visiblePlanPrimitives([], LodLevel.DETAIL), []);
+  assert.deepEqual(visiblePlanPrimitives([], LodLevel.STANDARD), []);
+  assert.equal(JSON.stringify(input), before);
+});
+
+test('自階の下屋: planSolidsLayerPrimitives は roof の線（外形線）とラベル（arrow・text）を返す。ラベルは detailOnly、線は detailOnly:false', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 1500, 3000]);
+  g.roof([[0, 1], [1, 1]]);
+  const prims = planSolidsLayerPrimitives({ graph: g.graph, cutZ: CUT });
+  const roofLines = prims.filter(p => p.kind === 'line' && p.source.kind === 'roof');
+  assert.ok(roofLines.length > 0 && roofLines.every(p => p.detailOnly === false && p.cls === 'below' && p.weight === 'thin'));
+  const labels = prims.filter(p => p.kind === 'arrow' || p.kind === 'text');
+  assert.deepEqual(labels.map(p => p.kind), ['arrow', 'text', 'text'], '片流れは水下1面＝矢印・屋根・傾斜');
+  assert.ok(labels.every(p => p.detailOnly === true && p.source.kind === 'roof'));
 });
 
 test('絞り込みは順序を保ち、入力を変えない。未定義・不正な要素は落とす（例外にしない）', () => {
@@ -160,19 +186,32 @@ test('planSolidsLayerCacheSpec: 置き場は直下階 peek の graph（無けれ
   assert.equal(planSolidsLayerCacheSpec(graph, null).key, `planSection:${graph.plane.id}:1800:-`, '鍵に切断高が入る');
 });
 
-test('planSolidsLayerResolve: belowPeek の3状態——undefined（未解決）は描かず compute を呼ばない／null（下階なし）と peek ありは解決する', () => {
+test('planSolidsLayerCacheSpec: peek 未解決（undefined）は自階だけの層・置き場は自階・鍵は下階 "-" と区別した pending', () => {
+  const { graph } = roomWithBeams();
+  const pending = planSolidsLayerCacheSpec(graph, undefined);
+  assert.ok(pending.home === graph);
+  assert.equal(pending.key, `planSection:${graph.plane.id}:1500:pending`);
+  assert.equal(pending.peek, null);
+});
+
+test('planSolidsLayerResolve: belowPeek の3状態——undefined（未解決）は自階だけで解決して描く（下階の線なし）／null（下階なし）と peek ありも解決する。peek が届くと通常の鍵で再計算', () => {
   const { graph } = roomWithBeams();
   const lower = makeRoomGraph(0, 0, 4000, 4000, { id: 'lower' }).graph;
-  let memoCalls = 0;
-  const memo = (home, key, compute) => { memoCalls++; return compute(); };
-  assert.equal(planSolidsLayerResolve({ graph, belowPeek: undefined, memo }), null);
-  assert.equal(memoCalls, 0, '未解決の間は memo も compute も呼ばない');
+  addBeamH(lower, { axis: 1000, from: 500, to: 3500, levelOffset: 1000 });
+  const calls = [];
+  const memo = (home, key, compute) => { calls.push(key); return compute(); };
+  const pending = planSolidsLayerResolve({ graph, belowPeek: undefined, memo });
+  assert.ok(Array.isArray(pending) && pending.length > 0, '未解決でも自階の線は描く');
+  assert.ok(pending.every(p => (p.source.layerFloorZ ?? 0) === 0), '下階の線は出ない');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /:pending$/);
   const noBelow = planSolidsLayerResolve({ graph, belowPeek: null, memo });
   assert.ok(Array.isArray(noBelow) && noBelow.length > 0);
-  assert.equal(memoCalls, 1);
+  assert.match(calls[1], /:-$/);
   const withPeek = planSolidsLayerResolve({ graph, belowPeek: { graph: lower, floorHeightMm: 2800, activePlaneId: graph.plane.id }, memo });
   assert.ok(Array.isArray(withPeek));
-  assert.equal(memoCalls, 2);
+  assert.match(calls[2], /:lower$/, 'peek が届くと通常の鍵で再計算');
+  assert.equal(calls.length, 3);
   assert.equal(planSolidsLayerResolve({ graph: null, belowPeek: null, memo }), null, 'graph なし');
 });
 

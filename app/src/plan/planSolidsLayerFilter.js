@@ -2,9 +2,9 @@
  * 平面の断面解決（S3 の planSectionFigure）を新レイヤ `renderer/PlanSolidsLayer.jsx`（S4）へ渡すための純モジュール。
  * 「何を描くか」の集合と、層スタックの組み立て（自階＋直下階）をここ1か所に置く。
  *
- * S4 で描くのは**今の平面に無い種類だけ**（梁・汎用立体）。柱・壁・床・屋根は既存レイヤが描くので、
- * 解決器には全立体を渡して**遮蔽物としてだけ**参加させ、出力の線のうち source.kind が S4_DRAWN_KINDS のものだけを描く。
- * S5（屋根）・S6（吹抜け）で既存レイヤを寄せるときに、この集合を広げる。
+ * 描くのは S4＝梁・汎用立体、S5＝下屋（屋根の外形線・棟木・隅木・谷木と傾斜ラベル）。柱・壁・床は既存レイヤが描くので、
+ * 解決器には全立体を渡して**遮蔽物としてだけ**参加させ、出力のうち source.kind が S4_DRAWN_KINDS のものだけを描く。
+ * S6（吹抜け）で既存レイヤを寄せるときに、この集合を広げる。
  *
  * store.js / snap.js / *.jsx / graphDerived を import しない（node:test から単体 import 可）。
  *
@@ -13,13 +13,24 @@
 import { planCutHeightMmOf } from '@core';
 import { planSolids } from './planSolids.js';
 import { planSectionFigure } from './planSectionFigure.js';
+import { LodLevel } from '../viewport.js';
 
-/** S4 で新レイヤが描く線の source.kind（唯一の場所）。 */
-export const S4_DRAWN_KINDS = Object.freeze(['beam', 'generic']);
+/** 新レイヤが描く線・ラベルの source.kind（唯一の場所）。S4＝梁・汎用立体、S5＝下屋（屋根）を加えた。 */
+export const S4_DRAWN_KINDS = Object.freeze(['beam', 'generic', 'roof']);
 
-/** 解決器の出力から、S4 で描く種別の線だけを残す（順序は保つ）。 */
+/** 解決器の出力から、描く種別の線・ラベルだけを残す（順序は保つ）。 */
 export function drawnPrimitives(prims) {
   return (prims ?? []).filter(p => S4_DRAWN_KINDS.includes(p?.source?.kind));
+}
+
+/**
+ * 表示する図形。詳細（DETAIL）は全部、他の LOD は詳細だけの図形（detailOnly。下屋の傾斜ラベル＝矢印・文字）を除く。
+ * 線は全 LOD で出す。memo（graphComputed）は LOD に依らず、レイヤが viewport.lodLevel でここへ絞る。
+ * @param {Array<{detailOnly?: boolean}>} prims planSolidsLayerPrimitives の結果
+ * @param {string} lod LodLevel
+ */
+export function visiblePlanPrimitives(prims, lod) {
+  return lod === LodLevel.DETAIL ? prims : prims.filter(p => !p.detailOnly);
 }
 
 /**
@@ -66,23 +77,25 @@ export function planSolidsLayerCacheSpec(graph, belowPeek) {
   const cutZ = planCutHeightMmOf(graph.plane);
   return {
     home: peek?.graph ?? graph,
-    key: `planSection:${graph.plane.id}:${cutZ}:${peek?.graph?.plane?.id ?? '-'}`,
+    key: `planSection:${graph.plane.id}:${cutZ}:${peek?.graph?.plane?.id ?? (belowPeek === undefined ? 'pending' : '-')}`,
     peek, cutZ,
   };
 }
 
 /**
  * レイヤが描く線の決定（ドラッグ中・未解決・キャッシュ）。
- *   - graph なし／belowPeek が undefined（下階の peek が未解決。null は「下階なし」で解決済み）→ null（compute を呼ばない）
+ *   - graph なし → null
  *   - 通り芯ドラッグ中 → prevPrims（前回の結果。無ければ null）。memo も呼ばない
- *   - それ以外 → memo(home, key, compute)（graphComputed）
+ *   - それ以外 → memo(home, key, compute)（graphComputed）。belowPeek が undefined（下階の peek が未解決。階切替直後。
+ *     null は「下階なし」で解決済み）の間は**自階だけの層**で解決して描く（鍵は下階 '-' と区別して 'pending'。下屋などが
+ *     階切替のたびに消えないため）。peek が届くと通常の鍵で再計算され、下階の線だけが後から現れる
  * @param {{graph: object|null, belowPeek: object|null|undefined, prevPrims?: Primitive[]|null,
  *   memo: (home: object, key: string, compute: () => Primitive[]) => Primitive[],
  *   selfRiserOf?: (stair: object) => number|null}} args
  * @returns {Primitive[]|null}
  */
 export function planSolidsLayerResolve({ graph, belowPeek, prevPrims = null, memo, selfRiserOf }) {
-  if (!graph || belowPeek === undefined) return null;
+  if (!graph) return null;
   if (isCenterLineDragging(graph)) return prevPrims;
   const { home, key, peek, cutZ } = planSolidsLayerCacheSpec(graph, belowPeek);
   return memo(home, key, () => planSolidsLayerPrimitives({ graph, belowPeek: peek, selfRiserOf, cutZ }));

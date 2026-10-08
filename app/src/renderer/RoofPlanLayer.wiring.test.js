@@ -90,7 +90,10 @@ test('【配線】roofPlanFigure.js は region ごとの線を trimRoofPlanLines
 test('【配線】roofPlanFigure.js は水下ごとの基準点（drainFaceAnchors）から傾斜ラベルを作る（面を間引かない＝傾斜面1つにつき1つ）。矢じりは renderer/chevron.js（1行まるごと）', () => {
   assert.match(figure, /^\s*const anchors = drainFaceAnchors\(\{ rects: region\.rect \? \[region\.rect\] : region\.rects, drains: region\.planDrains, tolMm \}\);\s*$/m);
   assert.equal(count(figure, /anchors\s*\.filter\(/g), 0, '基準点を間引かない');
-  assert.match(figure, /^\s*out\.push\(\.\.\.roofSlopeLabelPrimitives\(\{ key: region\.key, anchors, slope: region\.slope \}\)\);\s*$/m);
+  // S5: 線とラベルの作り方は roofPlanRegionFigure に抽出（解決器の innerLines・marks と旧 roofPlanFigure の共通の入口）。ラベルは基準点ごと
+  assert.match(figure, /^\s*prims: roofSlopeLabelPrimitives\(\{ key: region\.key, anchors: \[a\], slope: region\.slope \}\),\s*$/m);
+  assert.match(figure, /^\s*out\.push\(\.\.\.figure\.labels\.flatMap\(l => l\.prims\)\);\s*$/m);
+  assert.equal(count(figure, /roofPlanRegionFigure\(/g), 2, '定義と、旧 roofPlanFigure からの呼び出し');
   assert.match(figure, /^\s*import \{ chevronPoints \} from '\.\.\/\.\.\/renderer\/chevron\.js';\s*$/m);
   assert.equal(count(figure, /drainFaceAnchors\(/g), 1);
   assert.equal(count(figure, /chevronPoints\(/g), 1);

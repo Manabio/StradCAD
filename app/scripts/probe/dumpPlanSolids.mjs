@@ -34,15 +34,17 @@ for (const src of sources) {
       graph, belowPeek, selfRiserOf: s => stairRiserOf(s, project, plane), cutZ: planCutHeightMmOf(plane),
     });
     const ms = performance.now() - t0;
-    const lines = prims.map(p => ({
+    // S5 から下屋の傾斜ラベル（arrow・text）も出るので、線（kind:'line'）だけを数える（ラベルは roof の線と別に labels で出す）
+    const labels = prims.filter(p => p.kind !== 'line').length;
+    const lines = prims.filter(p => p.kind === 'line').map(p => ({
       key: p.key, cls: p.cls, kind: p.source.kind, id: p.source.id, layerFloorZ: p.source.layerFloorZ ?? 0,
       weight: p.weight, points: p.points.map(r1),
     })).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     fs.writeFileSync(path.join(outDir, `planSolids-${safe(doc)}-${safe(plane.name)}.json`), JSON.stringify(lines, null, 1));
     const counts = {};
     for (const l of lines) counts[`${l.cls}/${l.kind}`] = (counts[`${l.cls}/${l.kind}`] ?? 0) + 1;
-    summary.push({ doc, floor: plane.name, below: below?.name ?? null, lines: lines.length, counts, ms: Math.round(ms) });
+    summary.push({ doc, floor: plane.name, below: below?.name ?? null, lines: lines.length, labels, counts, ms: Math.round(ms) });
   });
 }
 fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 1));
-for (const s of summary) console.log(`${s.doc}\t${s.floor}\t下階=${s.below ?? '-'}\t${s.lines}本\t${JSON.stringify(s.counts)}\t${s.ms}ms`);
+for (const s of summary) console.log(`${s.doc}\t${s.floor}\t下階=${s.below ?? '-'}\t${s.lines}本\tラベル${s.labels}\t${JSON.stringify(s.counts)}\t${s.ms}ms`);
