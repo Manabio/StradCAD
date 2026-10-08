@@ -2,9 +2,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, StairType } from '@core';
-import { getAllCells } from '../gridCells.js';
+import { getAllCells, cellBoundsFromKey } from '../gridCells.js';
+import { faceRect } from '../wallFaces.js';
 
-import { slabOpeningRects, floorOpeningEdges, floorOpeningCellRects } from './slabOpening.js';
+import { slabOpeningRects, floorOpeningEdges, floorOpeningCellRects, floorOpeningGroups } from './slabOpening.js';
 
 // 2×1マス（x:0-1000-2000, y:0-1500）のグリッドを持つグラフとセルキーを作る。
 function makeGrid() {
@@ -659,4 +660,127 @@ test('floorOpeningCellRects【失敗系】: graphがnull・開口の無い階は
   graph.addRoom(new Set([left])).setFeature(RoomFeature.VOID);
   graph.removeShape(xm.id);
   assert.deepEqual(floorOpeningCellRects(graph), []);
+});
+
+// ---- floorOpeningGroups（注記＝×・上階破線の単位。S6a） ----
+const addRow = (graph, id, cellKeys, roomId) =>
+  graph.addEquipmentRow({ id, category: 'ev', usage: 'passenger', no: 1, cellKeys: new Set(cellKeys), roomId });
+
+test('floorOpeningGroups: 矩形の吹抜けは室ごと。cellRect＝CL値・innerRect＝faceRect（壁内面）', () => {
+  const { graph, left, x0, y0, y1 } = makeGrid();
+  const room = graph.addRoom(new Set([left]));
+  room.setFeature(RoomFeature.VOID);
+  graph.addWall(x0, 57.5, true, y0, 0, y1, 0, { isRoomWall: true, wallFinish: 12.5 });
+  const groups = floorOpeningGroups(graph);
+  assert.equal(groups.length, 1);
+  const g = groups[0];
+  assert.deepEqual([g.id, g.kind, g.feature], [room.id, 'void', RoomFeature.VOID]);
+  assert.deepEqual(g.cellRect, { x1: 0, y1: 0, x2: 1000, y2: 1500 }, '壁があってもCL値のまま');
+  const f = faceRect(new Set([left]), graph);
+  assert.deepEqual(g.innerRect, { x1: f.x1, y1: f.y1, x2: f.x2, y2: f.y2 }, '不変条件: ×の端点＝セル集合の faceRect');
+  assert.ok(g.innerRect.x1 > 0, '左辺は壁の内面');
+  assert.deepEqual([...g.cellKeys], [left]);
+});
+
+test('floorOpeningGroups: 器具2基の昇降路は器具行ごとに2件（id＝行 id・feature＝昇降機）。行は並びが id 昇順', () => {
+  const { graph, left, right } = makeGrid();
+  const room = graph.addRoom(new Set([left, right]), '');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  addRow(graph, 'eq2', [right], room.id);
+  addRow(graph, 'eq1', [left], room.id);
+  const groups = floorOpeningGroups(graph);
+  assert.deepEqual(groups.map(g => [g.id, g.kind, g.feature]), [
+    ['eq1', 'shaft', RoomFeature.ELEVATOR_EQUIPMENT], ['eq2', 'shaft', RoomFeature.ELEVATOR_EQUIPMENT],
+  ]);
+  assert.deepEqual(groups[0].cellRect, { x1: 0, y1: 0, x2: 1000, y2: 1500 });
+  assert.deepEqual(groups[1].cellRect, { x1: 1000, y1: 0, x2: 2000, y2: 1500 });
+});
+
+test('floorOpeningGroups: 器具行の無い昇降路は室 id で1件', () => {
+  const { graph, left, right } = makeGrid();
+  const room = graph.addRoom(new Set([left, right]), '');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  const groups = floorOpeningGroups(graph);
+  assert.equal(groups.length, 1);
+  assert.deepEqual([groups[0].id, groups[0].kind], [room.id, 'shaft']);
+  assert.deepEqual(groups[0].cellRect, { x1: 0, y1: 0, x2: 2000, y2: 1500 });
+});
+
+test('floorOpeningGroups: L字は cellRect・innerRect とも null（×なし）。グループ自体は残る', () => {
+  const { graph, topKey, blKey } = makeLShapeGrid();
+  graph.addRoom(new Set([topKey, blKey])).setFeature(RoomFeature.VOID);
+  const groups = floorOpeningGroups(graph);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].cellRect, null);
+  assert.equal(groups[0].innerRect, null);
+  assert.equal(groups[0].cellKeys.size, 2);
+});
+
+test('floorOpeningGroups: 階段吹抜け・階段の破れ先は rect なし。種類順 void→shaft→stairVoid→stairBeyond', () => {
+  const { graph, right } = makeGrid();
+  graph.addRoom(new Set([right])).setFeature(RoomFeature.STAIR_VOID);
+  const sv = floorOpeningGroups(graph);
+  assert.deepEqual(sv.map(g => [g.kind, g.cellRect, g.innerRect]), [['stairVoid', null, null]]);
+
+  const { graph: gb } = makeSwitchbackBeyondFixture();
+  const beyond = floorOpeningGroups(gb);
+  assert.equal(beyond.length, 1);
+  assert.deepEqual([beyond[0].kind, beyond[0].id, beyond[0].cellRect, beyond[0].innerRect], ['stairBeyond', gb.stairs[0].id, null, null]);
+  assert.deepEqual(floorOpeningGroups(gb, { stairFilter: () => false }), [], '絞られたら穴にしない');
+
+  const mixed = makeGrid();
+  mixed.graph.addRoom(new Set([mixed.right])).setFeature(RoomFeature.STAIR_VOID);
+  mixed.graph.addRoom(new Set([mixed.left])).setFeature(RoomFeature.VOID);
+  assert.deepEqual(floorOpeningGroups(mixed.graph).map(g => g.kind), ['void', 'stairVoid']);
+});
+
+test('floorOpeningGroups【失敗系】: 孤児器具行（室なし・昇降路でない室）とCL無し行は0件で例外にならない。graph null は空', () => {
+  assert.deepEqual(floorOpeningGroups(null), []);
+  const a = makeGrid();
+  addRow(a.graph, 'eqOrphan', [a.left], 'no-such-room-id');
+  assert.doesNotThrow(() => floorOpeningGroups(a.graph));
+  assert.deepEqual(floorOpeningGroups(a.graph), [], '室が無い行は穴が無いので×も無い');
+
+  const b = makeGrid();
+  const plain = b.graph.addRoom(new Set([b.left])); // 通常の部屋
+  addRow(b.graph, 'eqInPlain', [b.left], plain.id);
+  assert.deepEqual(floorOpeningGroups(b.graph), [], '昇降路でない室を指す行も穴ではない');
+
+  const c = makeGrid();
+  const room = c.graph.addRoom(new Set([c.left]), '');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  addRow(c.graph, 'eqBroken', ['no-such-cl-1:no-such-cl-2:no-such-cl-3:no-such-cl-4'], room.id);
+  assert.deepEqual(floorOpeningGroups(c.graph), [], 'CLが解決できない行は穴にしない');
+});
+
+test('floorOpeningGroups【失敗系】: 室のセルが解決できない昇降路室（器具行のセルは有効）は穴が無いので0件', () => {
+  const { graph, left } = makeGrid();
+  const room = graph.addRoom(new Set(['no-such-cl-1:no-such-cl-2:no-such-cl-3:no-such-cl-4']), '');
+  room.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  addRow(graph, 'eq1', [left], room.id);
+  assert.doesNotThrow(() => floorOpeningGroups(graph));
+  assert.deepEqual(floorOpeningGroups(graph), []);
+});
+
+test('floorOpeningCellRects: sources は畳む前に絞る（STAIR_VOID が先でも後続の VOID のセルが落ちない）。省略は従来どおり', () => {
+  const { graph, left } = makeGrid();
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.STAIR_VOID);
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.VOID);
+  assert.deepEqual(floorOpeningCellRects(graph, { sources: ['void', 'shaft'] }),
+    [{ x1: 0, y1: 0, x2: 1000, y2: 1500, source: 'void' }]);
+  assert.deepEqual(floorOpeningCellRects(graph).map(r => r.source), ['stairVoid'], '省略時は初出に畳む（従来）');
+});
+
+test('floorOpeningGroups: void+shaft グループのセルの和＝floorOpeningCellRects の void/shaft セル（不変条件）', () => {
+  const { graph, left, right } = makeGrid();
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.VOID);
+  const ev = graph.addRoom(new Set([right]), '');
+  ev.setFeature(RoomFeature.ELEVATOR_EQUIPMENT);
+  addRow(graph, 'eq1', [right], ev.id);
+  const key = b => `${b.x1},${b.y1},${b.x2},${b.y2}`;
+  const fromGroups = floorOpeningGroups(graph).filter(g => g.kind === 'void' || g.kind === 'shaft')
+    .flatMap(g => [...g.cellKeys].map(k => key(cellBoundsFromKey(k, graph)))).sort();
+  const fromRects = floorOpeningCellRects(graph, { sources: ['void', 'shaft'] }).map(key).sort();
+  assert.ok(fromRects.length > 0, '空の一致で通さない');
+  assert.deepEqual(fromGroups, fromRects);
 });

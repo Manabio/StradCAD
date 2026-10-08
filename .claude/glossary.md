@@ -44,6 +44,9 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 ## 見えがかり（below）・切断（cut）
 平面の断面解決（`plan/planSectionFigure.js`）での立体の分類。切断面（FL+切断高）より下に収まる立体が**見えがかり**（輪郭を細線）、切断面をまたぐ立体が**切断**（輪郭を太線）、切断面以上にある立体は非表示（above）。許容0.5mm。設計意図は`.claude/plan-section.md`。
 
+## 注記（hole marks）
+床の穴（開口グループ）に付く表示記号。自階の吹抜け・昇降路の×（一点鎖線）と、直下階に描く上階吹抜けの×・外形（破線・VOIDだけ「上部吹抜け」）。解決器の線ではなく、遮蔽を掛けない。`plan/planHoleMarks.js planHoleMarks`が`slabOpening.js floorOpeningGroups`（×の端点＝グループの`innerRect`＝faceRect）から導く。設計意図は`.claude/plan-section.md`「S6」。
+
 ## 屋根専用平面（isRoofPlane）
 構造モードのみに存在する合成Plane。`project.planes`/`orderedTabs`から除外、`project.roofPlane`で個別アクセス。
 

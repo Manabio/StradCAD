@@ -11,8 +11,8 @@
  * store.js / snap.js / .jsx に依存しない（node:test から単体 import 可）。
  */
 import { RoomFeature, isShaftFeature, isGridCenterLine } from '@core';
-import { cellBoundsList, refreshCells, roomBounds, getCellsInRect, gridIndexOf, outlineSegments, cellBoundsFromKey, isActiveAcrossRange } from '../gridCells.js';
-import { faceRect } from '../wallFaces.js';
+import { cellBoundsList, refreshCells, roomBounds, getCellsInRect, gridIndexOf, outlineSegments, cellBoundsFromKey, isActiveAcrossRange, isRectangularCellSet } from '../gridCells.js';
+import { faceRect, footprintBoundaryCLs } from '../wallFaces.js';
 import { cellsBeyondBreak } from './stairGeometry.js';
 
 // 境界CL一致判定の許容差(mm)。resolveStairSideLines の WALL_AXIS_CL_EPS と同一規約
@@ -44,13 +44,13 @@ function openingCellSets(upperGraph, riserOf, stairFilter = () => true) {
     if (cells.size > 0) {
       const source = room.feature === RoomFeature.STAIR_VOID ? 'stairVoid'
         : isShaftFeature(room.feature) ? 'shaft' : 'void';
-      sets.push({ cells, source, feature: room.feature });
+      sets.push({ cells, source, feature: room.feature, roomId: room.id });
     }
   }
   for (const stair of upperGraph.stairs) {
     if (!stairFilter(stair)) continue;
     const beyond = cellsBeyondBreak(stair, upperGraph, riserOf(stair));
-    if (beyond.size > 0) sets.push({ cells: beyond, source: 'stairBeyond' });
+    if (beyond.size > 0) sets.push({ cells: beyond, source: 'stairBeyond', stairId: stair.id });
   }
   return sets;
 }
@@ -311,12 +311,15 @@ function resolveEdgeSide(isVertical, value, lo, hi, cellRecords) {
  * @param {object|null} graph 自階のグラフ
  * @param {{riserOf?: (stair:object)=>number|null, stairFilter?: (stair:object)=>boolean}} [opts]
  *   floorOpeningEdges と同じ意味（stairFilter＝破れ先を開口にする階段の絞り込み。既定は全階段）。
+ *   sources＝読むセットの source（'void'|'shaft'|'stairVoid'|'stairBeyond'）の絞り込み。**セルを畳む前**に適用する
+ *   （畳んだ後に絞ると、先に出た別 source にセルを取られて落ちる）。省略は全部。
  * @returns {Array<{x1:number,y1:number,x2:number,y2:number,source:string}>}
  */
-export function floorOpeningCellRects(graph, { riserOf = () => null, stairFilter = () => true } = {}) {
+export function floorOpeningCellRects(graph, { riserOf = () => null, stairFilter = () => true, sources = null } = {}) {
   if (!graph) return [];
   const byKey = new Map();
   for (const { cells, source } of openingCellSets(graph, riserOf, stairFilter)) {
+    if (sources && !sources.includes(source)) continue; // 初出 source でまとめる前に絞る（指定外のセットは読み飛ばす）
     for (const key of cells) {
       if (byKey.has(key)) continue;
       const b = cellBoundsFromKey(key, graph);
@@ -328,6 +331,63 @@ export function floorOpeningCellRects(graph, { riserOf = () => null, stairFilter
     }
   }
   return [...byKey.values()].sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1);
+}
+
+// 開口グループ1件を組み立てる。cellRect＝セル境界CLの値（壁の有無・厚みに左右されない）、innerRect＝壁内4頂点（faceRect）。
+// どちらも矩形のセル集合で、4境界CLと faceRect が解決できたときだけ入る（それ以外は null）。
+function openingGroupOf(id, kind, feature, cells, graph) {
+  let cellRect = null, innerRect = null;
+  const hasCross = kind === 'void' || kind === 'shaft'; // 階段吹抜け・破れ先に×は無い
+  if (hasCross && isRectangularCellSet(cells, graph)) {
+    const b = footprintBoundaryCLs(cells, graph);
+    const f = faceRect(cells, graph);
+    if (b && f) {
+      cellRect = { x1: b.left.effectiveValue, y1: b.top.effectiveValue, x2: b.right.effectiveValue, y2: b.bottom.effectiveValue };
+      innerRect = { x1: f.x1, y1: f.y1, x2: f.x2, y2: f.y2 };
+    }
+  }
+  return { id, kind, feature: feature ?? null, cellKeys: cells, cellRect, innerRect };
+}
+
+const GROUP_KIND_ORDER = ['void', 'shaft', 'stairVoid', 'stairBeyond'];
+
+/**
+ * 自階の床開口を「開口グループ」（×などの注記の単位）で列挙する（平面の注記 plan/planHoleMarks.js の源）。
+ * 開口セルの情報源は floorOpeningCellRects・floorOpeningEdges と同じ openingCellSets（唯一）。
+ * 分け方: 吹抜け（void）は室ごと（id＝室 id）。昇降路（shaft）は器具行を持つ室なら器具行ごと
+ * （id＝行 id・feature＝ELEVATOR_EQUIPMENT・セルは行のセル。同じ室の器具どうしの境界には壁が無い）、
+ * 器具行が無い室は室ごと。階段吹抜け・階段の破れ先は cellRect・innerRect とも null（×の対象外）。
+ * 室が無い／昇降路でない室を指す器具行（孤児行）は穴が無いのでグループにしない。
+ * 不変条件: 「×の端点＝そのグループのセル集合の faceRect」（階段の描画幅・openingParts の上階クリップと同じ供給源）。
+ * @param {object|null} graph
+ * @param {{riserOf?: (stair:object)=>number|null, stairFilter?: (stair:object)=>boolean}} [opts] floorOpeningCellRects と同じ
+ * @returns {Array<{id:string, kind:'void'|'shaft'|'stairVoid'|'stairBeyond', feature:string|null, cellKeys:Set<string>,
+ *   cellRect:{x1:number,y1:number,x2:number,y2:number}|null, innerRect:{x1:number,y1:number,x2:number,y2:number}|null}>}
+ *   並びは kind（void→shaft→stairVoid→stairBeyond）→ id。
+ */
+export function floorOpeningGroups(graph, { riserOf = () => null, stairFilter = () => true } = {}) {
+  if (!graph) return [];
+  const rows = graph.equipmentRows ?? [];
+  const groups = [];
+  for (const set of openingCellSets(graph, riserOf, stairFilter)) {
+    if (set.source === 'stairBeyond') {
+      groups.push(openingGroupOf(set.stairId, 'stairBeyond', null, set.cells, graph));
+    } else if (set.source === 'stairVoid') {
+      groups.push(openingGroupOf(set.roomId, 'stairVoid', set.feature, set.cells, graph));
+    } else if (set.source === 'shaft' && rows.some(r => r.roomId === set.roomId)) {
+      for (const row of rows) {
+        if (row.roomId !== set.roomId) continue;
+        const cells = refreshCells(row.cellKeys, graph);
+        if (cells.size === 0) continue; // セルが解決できない（CL無し等）行は穴にしない
+        groups.push(openingGroupOf(row.id, 'shaft', RoomFeature.ELEVATOR_EQUIPMENT, cells, graph));
+      }
+    } else {
+      groups.push(openingGroupOf(set.roomId, set.source, set.feature, set.cells, graph));
+    }
+  }
+  groups.sort((a, b) => (GROUP_KIND_ORDER.indexOf(a.kind) - GROUP_KIND_ORDER.indexOf(b.kind))
+    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return groups;
 }
 
 /**
