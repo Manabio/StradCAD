@@ -16,7 +16,7 @@ import { autoFillStairPartitionBeams } from './stairPartitionBeams.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { ROOF_COLUMN_CLASS } from './roofColumnFilter.js';
 import { autoFillWallBeamAxes } from './wallBeamAxes.js';
-import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisShortExtents } from './openingBeamAxes.js';
+import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisExtentsAfterCreate } from './openingBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -366,15 +366,26 @@ export function secondaryBeamSpansFor(graph, cl) {
     findHostBeam(graph.beams, p.id, !isVertical, cl.effectiveValue, { allowSecondaryHost: beamCrossSet.has(p) }));
 }
 
-/** beamAxisCenterLines(graph) の走査順を「参照集合(openingHostRefCLs)が空（通し辺・壁由来・その他。
- *  従来と同じhost判定）→ 参照集合が非空（短辺・参照先の梁芯をhostに含めうる）」の2群に安定ソート
- *  （同順位内は元の順を保つ）する——開口由来かどうかでは分けない（openingHostRefCLsは開口由来でない
- *  梁芯には常に空を返すため、空/非空の2群だけで「参照する側は参照される側より後」を保証できる）。
- *  短辺の小梁が生成条件を満たすには、参照先の梁芯（通し辺の開口由来梁芯、または壁由来梁芯等）が
- *  先に小梁を持っている必要があるため（ステップ5-4。autoFillSecondaryBeams専用、収束ループには乗せない）。 */
+/** beamAxisCenterLines(graph) の走査順を、参照の深さ（rank）で安定ソート（同順位内は元の順を保つ）する。
+ *  rank＝参照集合(openingHostRefCLs)が空なら0、そうでなければ 1＋参照先のrankの最大（メモ化。循環は1）。
+ *  開口由来かどうかでは分けない（openingHostRefCLsは開口由来でない梁芯には常に空を返す）。
+ *  開口の梁が別の開口の梁を支えにする（参照の参照）ため、参照する側は参照される側より後になる。
+ *  小梁が生成条件を満たすには、参照先の梁芯が先に小梁を持っている必要があるため
+ *  （ステップ5-4。autoFillSecondaryBeams専用、収束ループには乗せない）。 */
 function orderForSecondaryBeamFill(cls) {
-  const rank = (cl) => openingHostRefCLs(cl).length === 0 ? 0 : 1;
-  return cls.map((cl, i) => ({ cl, i })).sort((a, b) => (rank(a.cl) - rank(b.cl)) || (a.i - b.i)).map(x => x.cl);
+  const memo = new Map();
+  const visiting = new Set();
+  const rank = (cl) => {
+    if (memo.has(cl)) return memo.get(cl);
+    if (visiting.has(cl)) return 1; // 循環
+    visiting.add(cl);
+    const refs = openingHostRefCLs(cl);
+    const r = refs.length === 0 ? 0 : 1 + Math.max(...refs.map(rank));
+    visiting.delete(cl);
+    memo.set(cl, r);
+    return r;
+  };
+  return cls.map((cl, i) => ({ cl, i, r: rank(cl) })).sort((a, b) => (a.r - b.r) || (a.i - b.i)).map(x => x.cl);
 }
 
 /** 梁芯CL（discipline:'fuse'）ごとに、この梁芯を跨ぐ直交大梁(role:'primary')を持つ通り芯の
@@ -710,12 +721,12 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 床開口（吹抜け・昇降路・階段吹抜け・階段の破れ先）由来の梁芯CL自動生成（規則O）。
   // 壁由来梁芯の直後・柱より前——重複ガード（findBeamAnchorCL）が壁由来梁芯も対象に含むため。
   const newOpeningBeamAxes = autoFillOpeningBeamAxes(graph, openingSources);
-  // M-1'是正・QA指摘: 短辺のextent張り直し2段目（autoFillOpeningBeamAxesの直後）。開口の形状変化で
-  // 新たに必要になった通し辺は上のautoFillOpeningBeamAxesで今しがた生成されたばかりのため、
-  // reconcileOpeningBeamAxes内（生成前）の1段目では短辺の期待extentが解決できず静的値に
-  // フォールバックしていた——ここでもう一度、短辺だけ対象に張り直すことで同じ再計算1回の中で
+  // M-1'是正・QA指摘: extent張り直し2段目（autoFillOpeningBeamAxesの直後）。開口の形状変化で
+  // 新たに必要になった先置きの辺（後の辺の支え）は上のautoFillOpeningBeamAxesで今しがた生成された
+  // ばかりのため、reconcileOpeningBeamAxes内（生成前）の1段目では期待extentが解決できず静的値に
+  // フォールバックしていた——ここでもう一度、全源を対象に張り直すことで同じ再計算1回の中で
   // 収束させる（呼ばないと次の再計算までchanged=trueが続く。1パス打ち切りの構造同期で問題化）。
-  const retargetedOpeningBeamAxesShort = retargetOpeningBeamAxisShortExtents(graph, openingSources);
+  const retargetedOpeningBeamAxesAfterCreate = retargetOpeningBeamAxisExtentsAfterCreate(graph, openingSources);
   // 柱は主構造ルールの配置源（通り芯交点／壁交点）で振り分ける。壁交点方式は候補に無い自動柱の撤去も返す。
   const columnsResult = (!isRoof && ownSpecified && structureHasMemberKind(MEMBER_KIND.COLUMN, structure))
     ? autoFillColumnsForStructure(graph, project, wallGate, aboveColumns, wallSegments, aboveBeamSegments, belowColumns, wallSourceCache, roofColumnFilter) : { created: [], removed: [], originsUpdated: [] };
@@ -796,7 +807,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     // m-5是正・QA指摘: 開口由来梁芯の再ラベル（→WALL）・extent張り直し（reconcileOpeningBeamAxes）は
     // 「新規/撤去した梁」ではないため newBeams/removedBeams には混ぜず、別枠で返す
     // （structuralRecompute.js の changed 判定はこの配列の長さも見る）。
-    changedOpeningBeamAxes: [...relabeledOpeningBeamAxes, ...retargetedOpeningBeamAxes, ...retargetedOpeningBeamAxesShort],
+    changedOpeningBeamAxes: [...relabeledOpeningBeamAxes, ...retargetedOpeningBeamAxes, ...retargetedOpeningBeamAxesAfterCreate],
     newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newOpeningBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
     removedBeams: [...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes, ...removedLandingG, ...removedStaleLandingBeams],
     // 踊り場受け梁の既存auto LGへのlevelOffset再計算更新（QA指摘F1是正）。新規/撤去した梁ではないため

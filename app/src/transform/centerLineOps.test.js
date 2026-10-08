@@ -8019,7 +8019,7 @@ test('【T3・m-4是正】commitCLMoveOp: 下地オーナー壁の乗る開口�
   const project = {};
 
   const sources = openingBeamSourcesFor(graph, project);
-  const leftSrc = sources.find(s => s.isVertical && s.through === false);
+  const leftSrc = sources.find(s => s.axisCLId === xa.id); // S2: 通し/短辺の区別が無くなったため軸CLで特定
   assert.equal(leftSrc.coord, 1790, '前提: 壁面を逃げた座標(1790)に開口由来梁芯の生成源がある');
   const created = autoFillOpeningBeamAxes(graph, sources);
   const shortLeft = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && Math.abs(cl.value - 1790) < 1);
@@ -8066,41 +8066,79 @@ test('commitCLMoveOp: 開口由来（centerLineKind===beam）の梁芯を手動�
   assert.equal(restored.beamAxisOrigin, BeamAxisOrigin.OPENING, 'undoで由来もopeningへ戻る（グラフスナップショット方式）');
 });
 
-test('【T6】commitCLMoveOp: 通し辺を通り芯へ重ねる移動→吸収→短辺の参照が通り芯へ張り替わる→undo/redo往復（統合経路。m-4是正のフォールバック対応があって初めて成立する）', () => {
-  const { graph, ya, y0 } = makeRcVoidGraphForFollow();
-  const project = {};
-  const sources = openingBeamSourcesFor(graph, project);
-  const created = autoFillOpeningBeamAxes(graph, sources);
-  const throughTop = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
-  const shortLeft = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
-  const shortRight = created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 5000);
-  assert.equal(shortLeft.extentLoRef?.clId, throughTop.id, '前提: 短辺が通し辺(y=1000)をextentLoRefで参照している');
-  assert.equal(shortRight.extentLoRef?.clId, throughTop.id, '前提: もう片方の短辺も同じ通し辺を参照している');
-  const throughTopId = throughTop.id;
-  const y0Id = y0.id;
+// 【S2で書換】旧: 通し辺（水平辺）の中心線 ya を通り芯 y0 へ重ねると、辺は onGrid の源として残るため
+// mapOpeningSourceMoves が追従 move を出し、followWallBeamAxes が通し辺を吸収して短辺の参照を通り芯へ
+// 張り替えていた（commit 時に完結）。新: 通り芯上の辺は源にならない（covered）ため move は出ず、
+// commit 直後は旧梁芯が残る。次の再計算（reconcileOpeningBeamAxes の座標照合＋extent 張り直し）が
+// 孤児として撤去し、その梁芯を参照していた辺の extent を通り芯へ張り替える（構造同期は commit 直後に走る）。
+test('【T6】commitCLMoveOp: 開口の辺の中心線を通り芯へ重ねる→再計算で旧梁芯が撤去され参照が通り芯へ張り替わる→undo後/redo後の再計算でも座標・参照先が整合する（参照切れゼロ）', async () => {
+  const project = new Project('proj-t6', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph } = project.addPlane(3000, '2階', 'p2');
+  g1.structureOverride = 'RC造(ラーメン)';
+  graph.structureOverride = 'RC造(ラーメン)';
+  const GRID = { labeled: true, discipline: Discipline.STRUCT };
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, GRID);
+  const xa = graph.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH);
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, ARCH);
+  graph.addCenterLine(CenterLineType.VERTICAL, 8000, GRID);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, GRID);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, GRID);
+  const voidKey = getAllCells(graph).find(c => c.x1 === 2000 && c.x2 === 5000 && c.y1 === 1000 && c.y2 === 3000).key;
+  graph.addRoom(new Set([voidKey])).setFeature(RoomFeature.VOID);
 
-  // ya（通し辺=throughTopの下敷きの中心線。y=1000）をy=0（通り芯y0）へ重ねる。
-  // floorOpeningEdgesはこの移動で辺のaxisCLを ya→y0 へ動的に差し替えるため、
-  // mapOpeningSourceMovesのフォールバック対応（m-4是正）が無いと追従moveが検出できず、
-  // 通し辺は吸収されずに孤立して残ってしまう。
-  ya.pendingDelta = -1000; // 1000 → 0
-  const { toast } = commitCLMoveOp(graph, project, ya, 1000);
-  assert.equal(toast, null);
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  const recompute = () => recomputeStructuralForGraph(graph, project, 'RC造(ラーメン)', g1);
+  const opening = (type) => graph.centerLines
+    .filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING && cl.centerLineType === type)
+    .sort((a, b) => a.value - b.value);
+  const valuesOf = (type) => opening(type).map(cl => cl.value);
+  // 参照切れゼロ: 開口由来梁芯の extent 参照先がすべて graph に存在する。
+  const assertNoDangling = (msg) => {
+    for (const cl of opening(CenterLineType.VERTICAL).concat(opening(CenterLineType.HORIZONTAL))) {
+      for (const ref of [cl.extentLoRef, cl.extentHiRef]) {
+        if (ref) assert.ok(graph.centerLines.some(c => c.id === ref.clId), `${msg}: 参照切れ（${cl.value}）`);
+      }
+    }
+  };
+  const hLoRefIds = () => opening(CenterLineType.HORIZONTAL).map(cl => cl.extentLoRef?.clId);
+  try {
+    await recompute();
+    assert.deepEqual(valuesOf(CenterLineType.VERTICAL), [2000, 5000], '前提: 垂直の開口梁芯は x=2000,5000');
+    assert.deepEqual(valuesOf(CenterLineType.HORIZONTAL), [1000, 3000]);
+    const v2000 = opening(CenterLineType.VERTICAL)[0];
+    assert.deepEqual(hLoRefIds(), [v2000.id, v2000.id], '前提: 水平辺は先に通った垂直辺(x=2000)を参照している');
 
-  assert.equal(graph.shapeMap.has(throughTopId), false, '通し辺(旧梁芯)は吸収されて撤去される');
-  assert.equal(shortLeft.extentLoRef?.clId, y0Id, '短辺のextentLoRefが吸収先の通り芯(y0)idへ張り替わる');
-  assert.equal(shortRight.extentLoRef?.clId, y0Id, 'もう片方の短辺も同様に張り替わる');
+    // xa（垂直辺の下敷きの中心線。x=2000）を x=0（通り芯 x0）へ重ねる。
+    xa.pendingDelta = -2000;
+    const { toast } = commitCLMoveOp(graph, project, xa, 2000);
+    assert.equal(toast, null);
+    assert.equal(xa.value, 0, '中心線は動く');
+    await recompute();
+    assert.deepEqual(valuesOf(CenterLineType.VERTICAL), [5000], 'commit後の再計算: 旧梁芯(x=2000)は撤去され、x=0 には作られない（通り芯が覆う）');
+    assert.deepEqual(hLoRefIds(), [x0.id, x0.id], '水平辺の参照が通り芯(x0)へ張り替わる');
+    assertNoDangling('commit後');
 
-  undoManager.undo();
-  assert.equal(ya.value, 1000, 'undoで中心線の座標が戻る');
-  assert.equal(graph.shapeMap.has(throughTopId), true, 'undoで撤去された通し辺(旧梁芯)が同idで復元する');
-  assert.equal(shortLeft.extentLoRef?.clId, throughTopId, 'undoで短辺のextentLoRefが元の通し辺idへ戻る');
-  assert.equal(shortRight.extentLoRef?.clId, throughTopId, 'undoでもう片方の短辺も元へ戻る');
+    undoManager.undo();
+    assert.equal(xa.value, 2000, 'undoで中心線の座標が戻る');
+    await recompute();
+    assert.deepEqual(valuesOf(CenterLineType.VERTICAL), [2000, 5000], 'undo後の再計算: x=2000 の梁芯が作り直される（限界: id は変わる）');
+    const v2000b = opening(CenterLineType.VERTICAL)[0];
+    assert.deepEqual(hLoRefIds(), [v2000b.id, v2000b.id], '水平辺の参照が作り直された垂直辺へ戻る');
+    assertNoDangling('undo後');
 
-  undoManager.redo();
-  assert.equal(ya.value, 0, 'redoで中心線の座標が再び動く');
-  assert.equal(graph.shapeMap.has(throughTopId), false, 'redoで通し辺が再び吸収される');
-  assert.equal(shortLeft.extentLoRef?.clId, y0Id, 'redoで短辺のextentLoRefが再び通り芯へ張り替わる');
-  assert.equal(shortRight.extentLoRef?.clId, y0Id, 'redoでもう片方の短辺も再び張り替わる');
+    undoManager.redo();
+    assert.equal(xa.value, 0, 'redoで中心線が再び動く');
+    await recompute();
+    assert.deepEqual(valuesOf(CenterLineType.VERTICAL), [5000], 'redo後の再計算: 再び x=2000 の梁芯は無い');
+    assert.deepEqual(hLoRefIds(), [x0.id, x0.id]);
+    assertNoDangling('redo後');
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
 });
 

@@ -3,16 +3,18 @@
 // ため対象外＝structureRules.js openingBeamAxes:null）。壁由来の梁芯（wallBeamAxes.js）と同じ
 // ライフサイクル関数（graph.addCenterLine・discipline:FUSE・beamAxisOrigin）へ薄く乗せる。
 // 設計意図は .claude/structural-model.md 参照。
-import { CenterLineType, Discipline } from '../core.js';
+import { CenterLine, CenterLineType, Discipline } from '../core.js';
+import { resolveCLById } from '../core/clRefResolve.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
 import { beamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { findSectionEntry } from './sectionCatalog.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import {
-  findBeamAnchorCL, wallBeamAxisExcludeKey, bracketExtent, wallBackingCenterCoord, wallBeamSourcesFor,
+  findBeamAnchorCL, wallBeamAxisExcludeKey, wallBackingCenterCoord, wallBeamSourcesFor,
   isProtectedWallBeamAxis,
 } from './wallBeamAxes.js';
+import { planOpeningEdgeBeams } from './openingEdgePlan.js';
 import { floorOpeningEdges } from '../finish/stair/slabOpening.js';
 import { roomBounds } from '../finish/gridCells.js';
 
@@ -142,7 +144,7 @@ function edgeTarget(graph, edge, rules) {
  * 一致すれば向き別に整理して返す。一致しなければnull（非矩形・複数開口の合成等は
  * ステップ4bで扱う——現状は空配列＋診断へフォールバック）。
  * @param {ReturnType<typeof floorOpeningEdges>} edges
- * @returns {{v1:object, v2:object, h1:object, h2:object, throughIsVertical:boolean}|null}
+ * @returns {{v1:object, v2:object, h1:object, h2:object}|null}
  */
 function rectangularSidesOf(edges) {
   const verts = edges.filter(e => e.isVertical);
@@ -157,81 +159,110 @@ function rectangularSidesOf(edges) {
   if (!closeTo(v2.lo, h1.coord) || !closeTo(v2.hi, h2.coord)) return null;
   if (!closeTo(h1.lo, v1.coord) || !closeTo(h1.hi, v2.coord)) return null;
   if (!closeTo(h2.lo, v1.coord) || !closeTo(h2.hi, v2.coord)) return null;
-  const width = v2.coord - v1.coord, height = h2.coord - h1.coord;
-  // 通し方向（Q2）: 外接矩形の長辺方向を通し。beamJunction.jsの出隅規則と同じ言葉
-  // 「長い方が勝ち、同長はX」——同長(width===height)はfalse（水平辺=isVertical:falseが通し）。
-  const throughIsVertical = height > width;
-  return { v1, v2, h1, h2, throughIsVertical };
+  return { v1, v2, h1, h2 };
 }
 
 /**
- * edge の軸方向・座標・区間が rcWallAxisSources（RC下地の下地オーナー壁由来の梁芯生成源。
- * wallBeamAxes.js wallBeamSourcesFor の結果）のいずれかと一致するか（I-9是正）。
- * RC造の開口辺にRC下地壁があると、壁由来梁芯（壁芯）と開口梁芯（外面+クリアランス）が平行に
- * 2本立ってしまう——RC壁は自身が梁の役目を持つ（structureRules.js wallBeamAxes:'rcBacking'で
- * 壁芯に梁芯が立つ）ため、その辺は生成対象から外し、壁芯の梁芯（autoFillWallBeamAxesが先に
- * 生成済み）を参照する。判定は同じ軸方向・辺の区間[lo,hi]と重なり・壁芯座標が辺座標の許容差内
- * （RECT_EPS_MM）——壁芯とCLがほぼ一致する通常配置だけを対象にする。
- * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} rcWallAxisSources
- * @param {{isVertical:boolean, coord:number, lo:number, hi:number}} edge
- * @returns {boolean}
+ * 床開口の辺を連結成分ごとに分け、矩形の成分だけを4辺の配列で返す（S造系の規則Oと、在来木造の
+ * 吹抜け小梁（S3）が共有する入口）。矩形でない成分・複数開口の合成はスキップ（診断は
+ * openingBeamSourcesDiagnostics）。
+ * @param {object} graph
+ * @param {{riserOf?: (stair:object)=>number|null, belowGraph?: object|null}} [opts]
+ * @returns {Array<Array<ReturnType<typeof floorOpeningEdges>[number]>>} 矩形成分ごとの4辺
  */
-function isRcBackedEdge(rcWallAxisSources, edge) {
-  return rcWallAxisSources.some(s => s.isVertical === edge.isVertical
-    && Math.min(s.hi, edge.hi) - Math.max(s.lo, edge.lo) > 0
-    && Math.abs(s.coord - edge.coord) < RECT_EPS_MM);
+export function openingEdgeComponents(graph, { riserOf = () => null, belowGraph = null } = {}) {
+  const edges = floorOpeningEdges(graph, { riserOf, stairFilter: stairFilterFor(graph, belowGraph) });
+  return groupByConnectivity(edges).filter(c => rectangularSidesOf(c));
 }
 
 /**
- * 単一の矩形成分（rectangularSidesOfの戻り値）から梁芯生成源（プレーン配列）を組み立てる。
- * openingBeamSourcesForが連結成分ごとに呼ぶ（二重実装しない）。
+ * 計画器（planOpeningEdgeBeams）へ渡す支え線（host）を集める（S/RC/SRC/未定。設計 D1）:
+ *   (a) 通り芯（beamPlacement!=='wallRuns' のとき全長。通り芯上に大梁が立つ前提の代理）
+ *   (b) RC下地壁由来の梁芯源（rcWallAxisSources。clIdは壁由来梁芯が既にあればそのid）
+ *   (c) 手動配置の梁（dimensionStatus!=='auto' の primary／secondary。clIdは梁の軸CL）。
+ *       ただし軸CLの beamAxisOrigin が OPENING の梁は除く——規則O自身が作った小梁をユーザーが
+ *       部材リストで固定（locked）しただけで辺が covered になり、架け方が組み替わる／中心線移動で
+ *       旧梁芯が残って平行2本になるため。踊り場受け梁 LG（role 'landing'）も含めない（踊り場レベルの梁で
+ *       床レベルの開口縁梁とは別。リード裁定）。
+ *   (d) 由来 USER の梁芯（ユーザーが置いた梁芯。clId＝そのCL）
  * @param {object} graph
  * @param {ReturnType<typeof rulesFor>} rules
- * @param {{v1:object, v2:object, h1:object, h2:object, throughIsVertical:boolean}} rect
- * @param {Array} rcWallAxisSources I-9是正: RC下地の下地オーナー壁由来の梁芯生成源（無ければ[]）
- * @returns {Array} openingBeamSourcesForと同じ形の配列
+ * @param {Array} rcWallAxisSources
+ * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number, kind:string, clId?:string}>}
  */
-function sourcesForRect(graph, rules, rect, rcWallAxisSources = []) {
-  const { v1, v2, h1, h2, throughIsVertical } = rect;
-  const throughEdges = throughIsVertical ? [v1, v2] : [h1, h2];
-  const shortEdges = throughIsVertical ? [h1, h2] : [v1, v2];
-
-  // skip=true（onGrid・I-9のRC下地壁一致）の辺はcoord=edge.coordのまま生成しない
-  // （autoFillOpeningBeamAxes参照）。findBeamAnchorCLの許容差内に既存の梁芯（通り芯・壁芯）が
-  // あるため、後段の重複ガードが自然にそれを再利用する。
-  const targetOf = (edge) => (edge.onGrid || isRcBackedEdge(rcWallAxisSources, edge))
-    ? { coord: edge.coord, beamWidthUnresolved: false, rcBacked: !edge.onGrid && isRcBackedEdge(rcWallAxisSources, edge) }
-    : { ...edgeTarget(graph, edge, rules), rcBacked: false };
-
-  const throughTargets = throughEdges.map(edge => ({ edge, ...targetOf(edge) }));
-
-  const sources = [];
-  for (const { edge, coord, beamWidthUnresolved, rcBacked } of throughTargets) {
-    sources.push({
-      isVertical: edge.isVertical, coord, lo: edge.lo, hi: edge.hi,
-      outwardSign: edge.outwardSign, through: true, onGrid: edge.onGrid, rcBacked,
-      source: edge.source, sources: edge.sources, beamWidthUnresolved,
-      axisCLId: edge.axisCL, // 辺が乗る軸CLのid（ステップ6: 再計算照合・中心線移動追従が
-      // 「同じ辺」を前後で対応づけるのに使う。梁芯生成には使わない）。
+function openingHostsFor(graph, rules, rcWallAxisSources) {
+  const hosts = [];
+  if (rules.beamPlacement !== 'wallRuns') {
+    for (const cl of graph.gridXs) hosts.push({ isVertical: true, coord: cl.value, lo: -Infinity, hi: Infinity, kind: 'grid', clId: cl.id });
+    for (const cl of graph.gridYs) hosts.push({ isVertical: false, coord: cl.value, lo: -Infinity, hi: Infinity, kind: 'grid', clId: cl.id });
+  }
+  for (const s of rcWallAxisSources) {
+    const type = s.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+    const cl = findBeamAnchorCL(graph, type, s.coord);
+    hosts.push({ isVertical: s.isVertical, coord: s.coord, lo: s.lo, hi: s.hi, kind: 'wall', ...(cl ? { clId: cl.id } : {}) });
+  }
+  for (const beam of graph.beams) {
+    if (beam.dimensionStatus === 'auto' || (beam.role !== 'primary' && beam.role !== 'secondary')) continue;
+    if (beam.axisCL.beamAxisOrigin === BeamAxisOrigin.OPENING) continue; // 規則O自身の梁芯に乗る梁は手動配置ではない
+    const a = beam.clStart.effectiveValue, b = beam.clEnd.effectiveValue;
+    hosts.push({
+      isVertical: beam.isVertical, coord: beam.axisCL.effectiveValue, lo: Math.min(a, b), hi: Math.max(a, b),
+      kind: 'beam', clId: beam.axisCL.id,
     });
   }
-  // 短辺のspanRefs: throughTargetsはcoord昇順（v1/v2・h1/h2のソート順）のまま——
-  // 短辺自身のlo/hiも同じ昇順（辺は外接矩形の対辺いっぱいに一致済み）なので対応は位置そのまま。
-  const [loThrough, hiThrough] = throughTargets;
-  for (const edge of shortEdges) {
-    const target = targetOf(edge);
-    sources.push({
-      isVertical: edge.isVertical, coord: target.coord, lo: edge.lo, hi: edge.hi,
-      outwardSign: edge.outwardSign, through: false, onGrid: edge.onGrid, rcBacked: target.rcBacked,
-      source: edge.source, sources: edge.sources, beamWidthUnresolved: target.beamWidthUnresolved,
-      axisCLId: edge.axisCL,
-      spanRefs: {
-        lo: { kind: loThrough.edge.onGrid ? 'grid' : 'opening', coord: loThrough.coord },
-        hi: { kind: hiThrough.edge.onGrid ? 'grid' : 'opening', coord: hiThrough.coord },
-      },
+  for (const cl of beamAxisCenterLines(graph)) {
+    if (cl.beamAxisOrigin !== BeamAxisOrigin.USER) continue;
+    if (cl.centerLineType !== CenterLineType.VERTICAL && cl.centerLineType !== CenterLineType.HORIZONTAL) continue;
+    hosts.push({
+      isVertical: cl.centerLineType === CenterLineType.VERTICAL, coord: cl.effectiveValue,
+      lo: cl.extentLo ?? -Infinity, hi: cl.extentHi ?? Infinity, kind: 'user', clId: cl.id,
     });
   }
-  return sources;
+  return hosts;
+}
+
+/**
+ * 単一の矩形成分（4辺）を計画器へ通し、配置・被覆・除外・支え不足に分けた結果を返す。
+ * openingBeamSourcesFor／Diagnostics が連結成分ごとに呼ぶ（二重実装しない）。
+ * @param {object} graph
+ * @param {ReturnType<typeof rulesFor>} rules
+ * @param {Array} edges4 openingEdgeComponents の1成分
+ * @param {ReturnType<typeof openingHostsFor>} hosts
+ * @returns {ReturnType<typeof planOpeningEdgeBeams>}
+ */
+function planForRect(graph, rules, edges4, hosts) {
+  const edges = edges4.map(edge => {
+    const t = edgeTarget(graph, edge, rules);
+    return { ...edge, target: t.coord, beamWidthUnresolved: t.beamWidthUnresolved };
+  });
+  const coverTol = Math.max(CL_OVERLAP_TOL_MM, (defaultBeamWidthMm(rules) ?? 0) / 2);
+  return planOpeningEdgeBeams(edges, hosts, {
+    coverTol,
+    canPlace: edge => !graph.excludedWallBeamAxes.has(wallBeamAxisExcludeKey(edge.isVertical, edge.target)),
+  });
+}
+
+/** 計画の配置結果（placed）を、梁芯生成源（プレーンオブジェクト）へ写す。 */
+function sourceOfPlaced({ edge, target, order, loRef, hiRef, through }) {
+  return {
+    isVertical: edge.isVertical, coord: target, lo: edge.lo, hi: edge.hi,
+    outwardSign: edge.outwardSign, through,
+    source: edge.source, sources: edge.sources, beamWidthUnresolved: edge.beamWidthUnresolved,
+    axisCLId: edge.axisCL, // 辺が乗る軸CLのid（ステップ6: 再計算照合・中心線移動追従が
+    // 「同じ辺」を前後で対応づけるのに使う。梁芯生成には使わない）。
+    order, spanRefs: { lo: loRef, hi: hiRef },
+  };
+}
+
+/** 矩形成分すべてを計画し、(rules, hosts) の組と成分ごとの計画結果を返す。 */
+function planAllComponents(graph, project, rules, opts) {
+  const components = openingEdgeComponents(graph, opts);
+  if (components.length === 0) return { components, plans: [] };
+  // I-9是正: RC下地の下地オーナー壁由来の梁芯生成源（自階のみ。wallBeamAxes.js
+  // autoFillWallBeamAxesが先に同じ位置へ梁芯を生成済み）。RC造以外は空配列。
+  const rcWallAxisSources = rules.wallBeamAxes === 'rcBacking' ? wallBeamSourcesFor(graph, project, null) : [];
+  const hosts = openingHostsFor(graph, rules, rcWallAxisSources);
+  return { components, plans: components.map(c => planForRect(graph, rules, c, hosts)) };
 }
 
 /**
@@ -241,8 +272,10 @@ function sourcesForRect(graph, rules, rect, rcWallAxisSources = []) {
  * ごとに独立して矩形判定する——「矩形のみ」（Q3）は開口1つずつの意味であり、複数の独立した
  * 開口が同一階にあっても、矩形の成分だけ処理し非矩形の成分はスキップする（診断は
  * openingBeamSourcesDiagnostics 参照）。
- * onGridの辺（isGridCenterLine(axis)）は生成対象に含めない（不変条件6・通り芯上の辺は大梁の
- * 領分）——ただし短辺のextent参照のためその位置を`through:true`のソース自身に持たせる。
+ * 各矩形成分の4辺は計画器（openingEdgePlan.js planOpeningEdgeBeams）に通す: 既に梁のある辺
+ * （通り芯・RC下地壁・手動梁・由来USERの梁芯が重なる）・除外集合にある辺・支えが片側に無い辺は
+ * 源にしない。残りは支え間のスパンが短い辺から順に（order昇順）源になり、後の辺は先に置いた辺を
+ * 支え（spanRefs）にする。through＝両端の支えがどちらも開口の梁でない（=通し）。
  * 破れ先（source:'stairBeyond'）は`belowGraph`（1つ下の実体階）に「同じ階段（到達元）」が
  * あるときだけ源になる——設置階自身の破れ先は開口ではない（stairFilterFor参照）。
  * @param {object} graph
@@ -255,26 +288,16 @@ function sourcesForRect(graph, rules, rect, rcWallAxisSources = []) {
  *   テスト用のDI引数（Minor-6。defaultSections.beamが未知の断面キーのrulesを注入し
  *   beamWidthUnresolvedの経路を実データのrulesFor改変なしで検証できるようにする）。
  * @returns {Array<{isVertical:boolean, coord:number, lo:number, hi:number, outwardSign:1|-1,
- *   through:boolean, onGrid:boolean, rcBacked:boolean, source:string, sources:string[],
- *   beamWidthUnresolved:boolean,
- *   spanRefs?: {lo:{kind:'grid'|'opening', coord:number}, hi:{kind:'grid'|'opening', coord:number}}}>}
+ *   through:boolean, source:string, sources:string[], beamWidthUnresolved:boolean, axisCLId:string,
+ *   order:number,
+ *   spanRefs:{lo:{kind:string, coord:number, clId?:string}, hi:{kind:string, coord:number, clId?:string}}}>}
  */
 export function openingBeamSourcesFor(graph, project, { riserOf = () => null, belowGraph = null, rules: rulesOverride = undefined } = {}) {
   const rules = rulesOverride ?? rulesFor(effectiveStructure(graph, project));
   if (rules.openingBeamAxes !== 'slabOpenings') return [];
-  const edges = floorOpeningEdges(graph, { riserOf, stairFilter: stairFilterFor(graph, belowGraph) });
-  if (edges.length === 0) return [];
-  // I-9是正: RC下地の下地オーナー壁由来の梁芯生成源（自階のみ。wallBeamAxes.js
-  // autoFillWallBeamAxesが先に同じ位置へ梁芯を生成済み——重複させない）。RC造以外は空配列。
-  const rcWallAxisSources = rules.wallBeamAxes === 'rcBacking' ? wallBeamSourcesFor(graph, project, null) : [];
-
-  const sources = [];
-  for (const component of groupByConnectivity(edges)) {
-    const rect = rectangularSidesOf(component);
-    if (!rect) continue; // 非矩形の成分はスキップ（診断はopeningBeamSourcesDiagnostics）
-    sources.push(...sourcesForRect(graph, rules, rect, rcWallAxisSources));
-  }
-  return sources;
+  // 非矩形の成分はスキップ（診断はopeningBeamSourcesDiagnostics）。
+  const { plans } = planAllComponents(graph, project, rules, { riserOf, belowGraph });
+  return plans.flatMap(plan => plan.placed.map(sourceOfPlaced));
 }
 
 /**
@@ -286,25 +309,38 @@ export function openingBeamSourcesFor(graph, project, { riserOf = () => null, be
  *   rules?: ReturnType<typeof rulesFor>}} [opts] - rulesはopeningBeamSourcesForと同じDI引数（Minor-6）。
  * @returns {{skipped: 'notApplicable'|'noOpenings'|'nonRectangular'|null, edgeCount?:number,
  *   componentCount?:number, rectangularCount?:number, nonRectangularCount?:number,
- *   beamWidthUnresolvedCount?:number}}
+ *   beamWidthUnresolvedCount?:number, coveredCount?:number, excludedCount?:number, unsupportedCount?:number,
+ *   edges?: Array<{isVertical:boolean, coord:number, target:number,
+ *     status:'placed'|'covered'|'excluded'|'unsupported', span?:number, order?:number, loRef?:object, hiRef?:object}>}}
  */
 export function openingBeamSourcesDiagnostics(graph, project, { riserOf = () => null, belowGraph = null, rules: rulesOverride = undefined } = {}) {
   const rules = rulesOverride ?? rulesFor(effectiveStructure(graph, project));
   if (rules.openingBeamAxes !== 'slabOpenings') return { skipped: 'notApplicable' };
   const edges = floorOpeningEdges(graph, { riserOf, stairFilter: stairFilterFor(graph, belowGraph) });
   if (edges.length === 0) return { skipped: 'noOpenings' };
-  const rcWallAxisSources = rules.wallBeamAxes === 'rcBacking' ? wallBeamSourcesFor(graph, project, null) : [];
   const components = groupByConnectivity(edges);
-  const rectangularComponents = components.filter(c => rectangularSidesOf(c));
-  const nonRectangularCount = components.length - rectangularComponents.length;
-  // Minor-6: 実際に生成される源（sourcesForRect）まで組み立て、梁幅が解決できなかった件数を数える。
-  const beamWidthUnresolvedCount = rectangularComponents
-    .flatMap(c => sourcesForRect(graph, rules, rectangularSidesOf(c), rcWallAxisSources))
-    .filter(s => s.beamWidthUnresolved).length;
+  const { plans } = planAllComponents(graph, project, rules, { riserOf, belowGraph });
+  const rectangularCount = plans.length;
+  const nonRectangularCount = components.length - rectangularCount;
+  // Minor-6: 実際に生成される源（placed）まで組み立て、梁幅が解決できなかった件数を数える。
+  const beamWidthUnresolvedCount = plans
+    .flatMap(p => p.placed).filter(p => p.edge.beamWidthUnresolved).length;
+  // 辺ごとの判定表（probeの説明用。status＝placed／covered／excluded／unsupported）。
+  const table = [];
+  for (const p of plans) {
+    const base = e => ({ isVertical: e.isVertical, coord: e.coord, target: e.target });
+    for (const x of p.placed) table.push({ ...base(x.edge), status: 'placed', span: x.span, order: x.order, loRef: x.loRef, hiRef: x.hiRef });
+    for (const x of p.covered) table.push({ ...base(x.edge), status: 'covered' });
+    for (const x of p.excluded) table.push({ ...base(x.edge), status: 'excluded' });
+    for (const x of p.unsupported) table.push({ ...base(x.edge), status: 'unsupported' });
+  }
+  const count = key => plans.reduce((n, p) => n + p[key].length, 0);
   return {
-    skipped: rectangularComponents.length === 0 ? 'nonRectangular' : null,
+    skipped: rectangularCount === 0 ? 'nonRectangular' : null,
     edgeCount: edges.length, componentCount: components.length,
-    rectangularCount: rectangularComponents.length, nonRectangularCount, beamWidthUnresolvedCount,
+    rectangularCount, nonRectangularCount, beamWidthUnresolvedCount,
+    coveredCount: count('covered'), excludedCount: count('excluded'), unsupportedCount: count('unsupported'),
+    edges: table,
   };
 }
 
@@ -312,27 +348,21 @@ export function openingBeamSourcesDiagnostics(graph, project, { riserOf = () => 
  * 開口源（openingBeamSourcesForの1件）が要求するextent（範囲の根拠）を求める（M-1是正・QA指摘。
  * autoFillOpeningBeamAxes（新規生成）とreconcileOpeningBeamAxes（既存梁芯の役割照合・張り直し）が
  * 同じ計算を共有する——二重実装しない）。
- *   - 通し辺（src.through）: 直交通り芯（gridXs/gridYs）でbracketExtentし、その通り芯idを参照する
- *     （見つからなければ静的値src.lo/hiへフォールバック）。
- *   - 短辺（!src.through）: spanRefs.lo/hiの座標にある通し側CL（findBeamAnchorCL）を参照する
- *     （見つからなければ静的値src.spanRefs.lo/hi.coordへフォールバック）。
+ * 両端とも同じ手順: spanRefs.X.clId のCL（graph に今もあれば）→ 無ければ spanRefs.X.coord にある
+ * 梁芯・通り芯（findBeamAnchorCL）→ それも無ければ静的値 spanRefs.X.coord。
  * @param {object} graph
  * @param {object} src openingBeamSourcesForの1件
  * @returns {{loRef: {clId:string, offset:number}|null, hiRef: {clId:string, offset:number}|null,
  *   lo: number|null, hi: number|null}}
  */
 function extentTargetFor(graph, src) {
-  if (src.through) {
-    const gridCLs = src.isVertical ? graph.gridYs : graph.gridXs; // 直交通り芯（value昇順）
-    const { loCL, hiCL } = bracketExtent(gridCLs, src.lo, src.hi);
-    return {
-      loRef: loCL ? { clId: loCL.id, offset: 0 } : null, lo: loCL ? null : src.lo,
-      hiRef: hiCL ? { clId: hiCL.id, offset: 0 } : null, hi: hiCL ? null : src.hi,
-    };
-  }
   const orthoType = src.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-  const loCL = findBeamAnchorCL(graph, orthoType, src.spanRefs.lo.coord);
-  const hiCL = findBeamAnchorCL(graph, orthoType, src.spanRefs.hi.coord);
+  const resolve = (ref) => {
+    const byId = ref.clId != null ? resolveCLById(graph.shapeMap, graph._structGraph, ref.clId, CenterLine) : null;
+    return byId ?? findBeamAnchorCL(graph, orthoType, ref.coord);
+  };
+  const loCL = resolve(src.spanRefs.lo);
+  const hiCL = resolve(src.spanRefs.hi);
   return {
     loRef: loCL ? { clId: loCL.id, offset: 0 } : null, lo: loCL ? null : src.spanRefs.lo.coord,
     hiRef: hiCL ? { clId: hiCL.id, offset: 0 } : null, hi: hiCL ? null : src.spanRefs.hi.coord,
@@ -342,24 +372,19 @@ function extentTargetFor(graph, src) {
 /**
  * openingBeamSourcesFor の結果から梁芯CLを生成する（同期・純生成。autoFillWallBeamAxes と同型）。
  * autoFillStructuralGrid の autoFillWallBeamAxes 直後で呼ぶ。
- *   - onGrid・rcBackedのソースは生成しない（不変条件6＝通り芯・I-9＝RC下地壁の壁芯梁芯。
- *     いずれも既に対象位置に梁芯／通り芯がある）。
- *   - 通し辺を先に、短辺を後に処理する（短辺のextent参照先＝通し辺の梁芯が先に生成されている必要があるため）。
+ *   - 梁のある辺（通り芯・RC下地壁・手動梁）は源に含まれない（openingBeamSourcesFor＝計画器が除く）。
+ *   - 源のorder昇順（先に置く辺が先。後の辺のextent参照先が先に生成されている必要があるため）。
  *   - 除外集合（graph.excludedWallBeamAxes）にあれば生成しない（wallBeamAxisExcludeKeyを共用）。
  *   - 重複ガード: findBeamAnchorCL（通り芯・梁芯の第1候補）が返せば再利用し、由来未設定なら書き戻す。
- *   - 通し辺のextentは壁由来と同じbracketExtent（直交通り芯で挟む）。
- *   - 短辺のextentはspanRefsのcoordから、通し方向のCL（findBeamAnchorCL）を解決して参照する
- *     （見つからなければ静的extentへフォールバック）。
+ *   - extentは両端ともextentTargetFor（spanRefsのclId→座標のCL→静的値）。
  * @param {object} graph
  * @param {ReturnType<typeof openingBeamSourcesFor>} openingSources
  * @returns {import('../core.js').CenterLine[]} 新規作成した梁芯CLの配列
  */
 export function autoFillOpeningBeamAxes(graph, openingSources) {
   const created = [];
-  const ordered = [...openingSources.filter(s => s.through), ...openingSources.filter(s => !s.through)];
+  const ordered = [...openingSources].sort((a, b) => a.order - b.order); // 安定ソート
   for (const src of ordered) {
-    if (src.onGrid || src.rcBacked) continue; // 通り芯上の辺（不変条件6）・RC下地壁の辺（I-9）は生成しない
-
     const centerLineType = src.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
     const excludeKey = wallBeamAxisExcludeKey(src.isVertical, src.coord);
     if (graph.excludedWallBeamAxes.has(excludeKey)) continue;
@@ -393,8 +418,8 @@ export function autoFillOpeningBeamAxes(graph, openingSources) {
  * 由来を切り替え済み。transform/centerLineOps.js commitCLMoveOp参照）・`WALL`等は対象外）:
  *   1. 座標（effectiveValue）と向きが openingSources のどれとも CL_OVERLAP_TOL_MM 以内で一致しない
  *      梁芯を孤児候補、一致する梁芯を一致候補とする。
- *   2.（M-1是正・QA指摘）一致候補について、一致した源から求まる期待extent（通し＝bracketExtent、
- *      短辺＝spanRefsの座標にある通し側CL。extentTargetFor）と現状のextentLoRef/HiRefを比較し、
+ *   2.（M-1是正・QA指摘）一致候補について、一致した源から求まる期待extent（spanRefsの支え。
+ *      extentTargetFor）と現状のextentLoRef/HiRefを比較し、
  *      違えば**同idのまま**graph.setCenterLineExtentRefで張り直す（座標が一致しても、開口の形状が
  *      変わって「どの通り芯／どの通し辺を参照すべきか」という役割が変わることがあるため——
  *      座標一致だけでは検出できない）。張り直した梁芯に乗るrole:'secondary'かつ
@@ -422,8 +447,8 @@ export function autoFillOpeningBeamAxes(graph, openingSources) {
 /**
  * graph の梁芯CL（beamAxisOrigin===OPENING）のうち、座標（effectiveValue）と向きが openingSources の
  * いずれかと CL_OVERLAP_TOL_MM 以内で一致するものを{cl, src}の配列で返す（一致候補。孤児は含まない）。
- * reconcileOpeningBeamAxes（1段目・通し/短辺とも）とretargetOpeningBeamAxisShortExtents（2段目・
- * 短辺のみ）が共有する走査（二重実装しない）。
+ * reconcileOpeningBeamAxes（1段目）とretargetOpeningBeamAxisExtentsAfterCreate（2段目）が
+ * 共有する走査（二重実装しない）。
  * @param {object} graph
  * @param {ReturnType<typeof openingBeamSourcesFor>} openingSources
  * @returns {Array<{cl: import('../core.js').CenterLine, src: object}>}
@@ -486,24 +511,22 @@ function retargetMatchedOpeningExtents(graph, matched) {
 }
 
 /**
- * 短辺（!src.through）だけを対象に、matchedOpeningCandidates→retargetMatchedOpeningExtentsを
+ * 全ての一致候補を対象に、matchedOpeningCandidates→retargetMatchedOpeningExtentsを
  * もう一度実行する（M-1'是正・QA指摘）。`autoFillStructuralGrid`内で`autoFillOpeningBeamAxes`の
  * **直後**に呼ぶこと——reconcileOpeningBeamAxes（autoFillOpeningBeamAxesの直前）の時点では、
- * 開口の形状変化で新たに必要になった通し辺がまだ存在しないため、短辺の期待extent
- * （spanRefsの座標にあるfindBeamAnchorCL）が解決できず静的値へフォールバックする——
- * autoFillOpeningBeamAxesが新しい通し辺を生成した直後にもう一度この関数を呼ぶことで、
- * 同じ再計算1回の中で短辺の参照を新しい通し辺のidへ張り直せる（1パスで収束させる。
+ * 先に置く辺（支えになる開口梁芯）がまだ存在しないため、後の辺の期待extent
+ * （spanRefsのclId／座標のfindBeamAnchorCL）が解決できず静的値へフォールバックする——
+ * autoFillOpeningBeamAxesが新しい梁芯を生成した直後にもう一度この関数を呼ぶことで、
+ * 同じ再計算1回の中で参照を新しい梁芯のidへ張り直せる（1パスで収束させる。
  * 呼ばないと次の再計算でchanged=trueになり続け、S造/RC造の構造同期は1パス打ち切り
  * （structuralOrchestration.js）のため利用者の操作なしに再計算が繰り返し必要になってしまう）。
- * 通し辺（src.through）は対象にしない——通し辺の期待extentはbracketExtent（直交通り芯）で
- * autoFillOpeningBeamAxesの前後で変わらないため、1段目（reconcileOpeningBeamAxes内）だけで足りる。
+ * 通し・短辺の区別はなくなった（支えが開口梁芯か通り芯かは源ごとの結果）ため全源が対象。
  * @param {object} graph
  * @param {ReturnType<typeof openingBeamSourcesFor>} openingSources 現況の開口由来生成源
  * @returns {import('../core.js').CenterLine[]} 張り直した梁芯CLの配列（m-5・changed判定に使う）
  */
-export function retargetOpeningBeamAxisShortExtents(graph, openingSources) {
-  const matched = matchedOpeningCandidates(graph, openingSources).filter(({ src }) => !src.through);
-  return retargetMatchedOpeningExtents(graph, matched);
+export function retargetOpeningBeamAxisExtentsAfterCreate(graph, openingSources) {
+  return retargetMatchedOpeningExtents(graph, matchedOpeningCandidates(graph, openingSources));
 }
 
 export function reconcileOpeningBeamAxes(graph, openingSources, wallSources) {

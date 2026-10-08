@@ -728,21 +728,21 @@ test('【不変条件】structuralAutoFill.js: autoFillStructuralGrid はautoFil
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralAutoFill.js'), 'utf8');
-  assert.ok(/import \{ autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisShortExtents \} from '\.\/openingBeamAxes\.js';/.test(src),
-    'openingBeamAxes.jsのautoFillOpeningBeamAxes/reconcileOpeningBeamAxes/retargetOpeningBeamAxisShortExtentsをimportしていない');
+  assert.ok(/import \{ autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisExtentsAfterCreate \} from '\.\/openingBeamAxes\.js';/.test(src),
+    'openingBeamAxes.jsのautoFillOpeningBeamAxes/reconcileOpeningBeamAxes/retargetOpeningBeamAxisExtentsAfterCreateをimportしていない');
   const wallIdx = src.indexOf('autoFillWallBeamAxes(graph, wallSources)');
   const reconcileIdx = src.indexOf('reconcileOpeningBeamAxes(graph, openingSources, wallSources)');
   const openingIdx = src.indexOf('autoFillOpeningBeamAxes(graph, openingSources)');
-  const retargetShortIdx = src.indexOf('retargetOpeningBeamAxisShortExtents(graph, openingSources)');
+  const retargetShortIdx = src.indexOf('retargetOpeningBeamAxisExtentsAfterCreate(graph, openingSources)');
   assert.ok(wallIdx >= 0 && reconcileIdx >= 0 && openingIdx >= 0 && retargetShortIdx >= 0
     && reconcileIdx > wallIdx && openingIdx > reconcileIdx && retargetShortIdx > openingIdx,
     'reconcileOpeningBeamAxesはautoFillWallBeamAxesの直後・autoFillOpeningBeamAxesの直前に呼び、' +
-    'retargetOpeningBeamAxisShortExtentsはautoFillOpeningBeamAxesの直後に呼ぶ（ステップ6・M-1\'是正）');
+    'retargetOpeningBeamAxisExtentsAfterCreateはautoFillOpeningBeamAxesの直後に呼ぶ（ステップ6・M-1\'是正）');
   assert.ok(/newBeams: \[.*newOpeningBeamAxes.*\]/.test(src), 'newOpeningBeamAxesをnewBeamsへ含めていない');
   assert.ok(/removedBeams: \[.*removedOpeningBeamAxes.*\]/.test(src),
     'removedOpeningBeamAxesをremovedBeamsへ含めていない（ステップ6の撤去がchanged判定に乗る必要がある）');
-  assert.ok(/changedOpeningBeamAxes: \[.*retargetedOpeningBeamAxesShort.*\]/.test(src),
-    'retargetedOpeningBeamAxesShortをchangedOpeningBeamAxesへ含めていない（M-1\'是正・changed判定に乗る必要がある）');
+  assert.ok(/changedOpeningBeamAxes: \[.*retargetedOpeningBeamAxesAfterCreate.*\]/.test(src),
+    'retargetedOpeningBeamAxesAfterCreateをchangedOpeningBeamAxesへ含めていない（M-1\'是正・changed判定に乗る必要がある）');
 });
 
 test('【不変条件】structuralRecompute.js: openingBeamSourcesForを呼び、autoFillStructuralGridの末尾引数へ渡す', async () => {
@@ -765,7 +765,10 @@ test('autoFillStructuralGrid: openingSourcesを渡すと規則Oの梁芯（disci
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: true, discipline: Discipline.STRUCT });
   const project = { planes: [graph.plane], structuralInfo: { mainStructure: 'RC造(ラーメン)', foundationType: 'ベタ基礎' } };
   const openingSources = [
-    { isVertical: false, coord: 2000, lo: 1000, hi: 5000, outwardSign: -1, through: true, onGrid: false, source: 'void', sources: ['void'], beamWidthUnresolved: false },
+    // S2: 全ソースが order と spanRefs（両端の支え）を持つ。
+    { isVertical: false, coord: 2000, lo: 1000, hi: 5000, outwardSign: -1, through: true, order: 0,
+      spanRefs: { lo: { kind: 'grid', coord: 0, clId: x0.id }, hi: { kind: 'grid', coord: 8000, clId: x1.id } },
+      source: 'void', sources: ['void'], beamWidthUnresolved: false },
   ];
   const r = autoFillStructuralGrid(graph, project, 'RC造(ラーメン)', null, [], [], [], [], [], undefined, undefined, undefined, openingSources);
   const created = r.newBeams.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 2000);
@@ -970,8 +973,9 @@ test('【ステップ5・I-9】RC下地壁の通し辺では短辺小梁が壁�
   const wallSources = wallBeamSourcesFor(graph, project, null);
   assert.ok(wallSources.some(s => !s.isVertical && Math.abs(s.coord - 3000) < 1), '前提: RC下地壁が壁由来梁芯の源になっている');
   const openingSources = openingBeamSourcesFor(graph, project);
-  const topSrc = openingSources.find(s => !s.isVertical && s.through === true && Math.abs(s.coord - 3000) < 1);
-  assert.equal(topSrc.rcBacked, true, '前提: y=3000の通し辺はRC下地壁ありでrcBacked:true');
+  // S2: RC下地壁（壁由来の梁芯源）が host として辺を覆う＝源にならない（旧 rcBacked:true の源）。
+  assert.ok(!openingSources.some(s => !s.isVertical && Math.abs(s.coord - 3000) < 1),
+    '前提: y=3000の辺はRC下地壁が覆うため開口由来の源にならない');
 
   // autoFillStructuralGrid内部の順序（autoFillWallBeamAxes→autoFillOpeningBeamAxes→…→autoFillSecondaryBeams）
   // をそのまま通す（openingBeamSourcesFor→autoFillStructuralGridの実配線どおり）。
@@ -994,7 +998,9 @@ test('【ステップ5・I-9】RC下地壁の通し辺では短辺小梁が壁�
   assert.equal(shortSecondaries.length, 1, '短辺V2000の小梁がちょうど1本（壁由来小梁をhostにできる）');
   const [lo, hi] = [shortSecondaries[0].coord1, shortSecondaries[0].coord2].sort((a, b) => a - b);
   assert.equal(lo, 3200, '壁由来小梁の縁(y=3000側。300/2+50=200)で止まる');
-  assert.equal(hi, 3800, '開口由来小梁の縁(y=4000側)で止まる');
+  // 【S2で期待値を変更】旧3800（水平の通し辺y=4000の小梁の縁）。新: スパンの短い垂直辺(壁芯〜通り芯Y=10000の7000)が
+  // 先に通るため、通り芯Y=10000の大梁の縁(300/2+50=200手前)まで伸びる。
+  assert.equal(hi, 9800, '通り芯Y=10000の大梁の縁で止まる');
 
   // 冪等: 2回目で本数が増えない。
   const before = graph.beams.filter(b => b.role === 'secondary').length;

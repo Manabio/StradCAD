@@ -14,7 +14,7 @@ import { coordLo as _coordLo, coordHi as _coordHi } from './_internal.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { rulesFor, effectiveStructure, PIN_BEAM_END_CLEARANCE_MM } from '../structural/structureRules.js';
 import { jambAxisValue } from '../structural/woodFraming.js';
-import { BeamAxisOrigin, centerLineKind } from './centerLine.js';
+import { BeamAxisOrigin, isGridCenterLine } from './centerLine.js';
 
 // ---- module-private helpers（構造部材の平面位置導出。core/_internal とは別に構造専用） ----
 
@@ -326,8 +326,9 @@ export function findHostPrimaryBeam(beams, perpCLId, hostIsVertical, coord, tole
 // オブジェクト配列（通し辺の梁芯が短辺の extentLoRef/extentHiRef で参照される場合のみ非空）。参照先の
 // 由来（beamAxisOrigin）は問わない——壁由来（wall）の梁芯を参照していてもそのまま含める（I-9是正の
 // RC下地壁がある通し辺は壁芯の梁芯を再利用するため、短辺が参照する側になる。T1参照）。開口由来でない
-// 梁芯・参照先が梁芯CL（centerLineKind==='beam'）でない（通り芯・中心線など）場合は空配列——
-// 「短辺の小梁が参照先の小梁にも取りつく」許可（findHostBeamのallowSecondaryHost）を与える唯一の条件に
+// 梁芯は空配列、参照先が通り芯（isGridCenterLine。secondaryBeamSpansFor の gridCross に既にある）の
+// 参照は除き、通り芯以外（梁芯・手動梁の乗る中心線など）は含める——
+// 「後の辺の小梁が参照先の小梁にも取りつく」許可（findHostBeamのallowSecondaryHost）を与える唯一の条件に
 // する（structuralAutoFill.secondaryBeamSpansFor・StructuralBeam._hostEndCenterAndHalfWidth が共有。
 // .claude/structural-model.md 参照）。
 // 参照解決はPlanGraphが設定する _extentLoCL/_extentHiCL（resolveCL後の実CL参照）を読む——CLの内部
@@ -336,8 +337,8 @@ export function findHostPrimaryBeam(beams, perpCLId, hostIsVertical, coord, tole
 export function openingHostRefCLs(cl) {
   const cls = [];
   if (cl.beamAxisOrigin !== BeamAxisOrigin.OPENING) return cls;
-  if (cl.extentLoRef != null && cl._extentLoCL && centerLineKind(cl._extentLoCL) === 'beam') cls.push(cl._extentLoCL);
-  if (cl.extentHiRef != null && cl._extentHiCL && centerLineKind(cl._extentHiCL) === 'beam') cls.push(cl._extentHiCL);
+  if (cl.extentLoRef != null && cl._extentLoCL && !isGridCenterLine(cl._extentLoCL)) cls.push(cl._extentLoCL);
+  if (cl.extentHiRef != null && cl._extentHiCL && !isGridCenterLine(cl._extentHiCL)) cls.push(cl._extentHiCL);
   return cls;
 }
 
