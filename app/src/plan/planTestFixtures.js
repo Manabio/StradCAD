@@ -70,7 +70,65 @@ export function addColumnAt(graph, x, y, { sectionDefId = 'WOOD-105x105', materi
 
 export const rect = (x1, y1, x2, y2) => ({ x1, y1, x2, y2 });
 
-/** 立体のリテラル（汎用立体の入力・期待値用）。 */
+/**
+ * 立体のリテラル（汎用立体の入力・期待値用）。extra: id / style / layerFloorZ（省略＝自階）/ part / zAt / innerLines。
+ */
 export function solid(kind, footprint, zLo, zHi, extra = {}) {
-  return { kind, footprint, zLo, zHi, source: { kind, id: extra.id ?? `${kind}-1` }, ...(extra.style ? { style: extra.style } : {}) };
+  return {
+    kind, footprint, zLo, zHi,
+    source: {
+      kind, id: extra.id ?? `${kind}-1`,
+      ...(extra.layerFloorZ !== undefined ? { layerFloorZ: extra.layerFloorZ } : {}),
+      ...(extra.part !== undefined ? { part: extra.part } : {}),
+    },
+    ...(extra.style ? { style: extra.style } : {}),
+    ...(extra.zAt ? { zAt: extra.zAt } : {}),
+    ...(extra.innerLines ? { innerLines: extra.innerLines } : {}),
+  };
+}
+
+/** 線 [x1,y1,x2,y2] を (x,y) の辞書順で小さい端から並べた新しい配列（向きに依らない比較用）。 */
+export function normLine(p) {
+  const [a, b, c, d] = p;
+  return a < c || (a === c && b <= d) ? [a, b, c, d] : [c, d, a, b];
+}
+
+/** プリミティブから cls（省略＝全部）・source.kind（省略＝全部）で絞った線。 */
+export function linesOf(prims, cls, kind) {
+  return prims.filter(p => (!cls || p.cls === cls) && (!kind || p.source.kind === kind));
+}
+
+/** 線を向き正規化・小数6桁・辞書順に並べた配列（個々の線のまま。結合しない）。 */
+export function sortedLines(prims) {
+  return prims.map(p => normLine(p.points).map(v => Math.round(v * 1e6) / 1e6))
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]);
+}
+
+/** 同じ直線上で重なる・接する線を1本に結んだ線の配列（和の輪郭の比較用。軸平行の線だけ対象）。 */
+export function mergedLines(prims) {
+  const groups = new Map();
+  for (const p of sortedLines(prims)) {
+    const vertical = p[0] === p[2];
+    if (!vertical && p[1] !== p[3]) throw new Error('mergedLines は軸平行の線だけ');
+    const key = `${vertical ? 'v' : 'h'}:${vertical ? p[0] : p[1]}`;
+    if (!groups.has(key)) groups.set(key, { vertical, value: vertical ? p[0] : p[1], ivs: [] });
+    groups.get(key).ivs.push(vertical ? [p[1], p[3]] : [p[0], p[2]]);
+  }
+  const out = [];
+  for (const g of groups.values()) {
+    g.ivs.sort((a, b) => a[0] - b[0]);
+    let cur = null;
+    const flush = () => cur && out.push(g.vertical ? [g.value, cur[0], g.value, cur[1]] : [cur[0], g.value, cur[1], g.value]);
+    for (const [lo, hi] of g.ivs) {
+      if (cur && lo <= cur[1] + 1e-6) cur[1] = Math.max(cur[1], hi);
+      else { flush(); cur = [lo, hi]; }
+    }
+    flush();
+  }
+  return out.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]);
+}
+
+/** 線の長さの総和。 */
+export function totalLength(prims) {
+  return prims.reduce((s, p) => s + Math.hypot(p.points[2] - p.points[0], p.points[3] - p.points[1]), 0);
 }
