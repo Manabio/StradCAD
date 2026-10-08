@@ -47,7 +47,40 @@ function innerFaceOf(edge, dim, beams, beamHalfWidthOf) {
 }
 
 /**
+ * 内側矩形を横断する梁で区切った区間（1方向）。横断梁＝この方向の軸が帯ごと内側矩形の内側（厳密）にあり、
+ * 区間が内側矩形の全長を覆う梁（途中で終わる梁は分割しない。縁梁は帯が内側面に接するので横断ではない）。
+ * 各梁の描画面（軸±半幅）の間は区間に含めない。潰れた区間（幅≦0）は返さない。
+ * @param {boolean} vertical true＝縦梁（軸がx）で x 方向を区切る
+ * @returns {Array<[number, number]>}
+ */
+function crossSpans(inner, vertical, beams, beamHalfWidthOf) {
+  const lo = vertical ? inner.x1 : inner.y1, hi = vertical ? inner.x2 : inner.y2;
+  const sLo = vertical ? inner.y1 : inner.x1, sHi = vertical ? inner.y2 : inner.x2;
+  const cuts = [];
+  for (const b of beams) {
+    if (NON_BOUNDARY_ROLES.has(b.role)) continue;
+    if (b.isVertical !== vertical) continue;
+    const half = beamHalfWidthOf(b) ?? 0;
+    if (!(b.axisValue - half > lo) || !(b.axisValue + half < hi)) continue;
+    const a = b.clStart.effectiveValue, c = b.clEnd.effectiveValue;
+    if (Math.min(a, c) > sLo + CL_OVERLAP_TOL_MM || Math.max(a, c) < sHi - CL_OVERLAP_TOL_MM) continue;
+    cuts.push({ axis: b.axisValue, half });
+  }
+  cuts.sort((p, q) => p.axis - q.axis || p.half - q.half);
+  const spans = [];
+  let start = lo;
+  for (const { axis, half } of cuts) {
+    if (axis - half - start > 0) spans.push([start, axis - half]);
+    start = Math.max(start, axis + half);
+  }
+  if (hi - start > 0) spans.push([start, hi]);
+  return spans;
+}
+
+/**
  * 矩形成分ごとの×（対角線2本）。成分の並び順どおり・成分内は「左上-右下」「左下-右上」の順。
+ * 内側の矩形を全長で横断する梁があれば、その梁の描画面で区切った小矩形ごとに×を出す
+ * （小矩形は y→x の昇順。inner＝その小矩形）。
  * 内側の矩形が潰れる（幅・高さ≦0）成分、4辺そろわない成分は出さない。
  * @param {Array<Array<{isVertical:boolean, coord:number, lo:number, hi:number, outwardSign:1|-1, componentId?:string}>>} components
  *   openingEdgeComponents の戻り値（成分ごとの4辺）
@@ -69,8 +102,15 @@ export function openingCrossSegments(components, beams, { beamHalfWidthOf }) {
     };
     if (!(inner.x2 - inner.x1 > 0) || !(inner.y2 - inner.y1 > 0)) return;
     const componentId = edges[0].componentId ?? String(index);
-    out.push({ componentId, x1: inner.x1, y1: inner.y1, x2: inner.x2, y2: inner.y2, inner });
-    out.push({ componentId, x1: inner.x1, y1: inner.y2, x2: inner.x2, y2: inner.y1, inner });
+    const xs = crossSpans(inner, true, beams, beamHalfWidthOf);
+    const ys = crossSpans(inner, false, beams, beamHalfWidthOf);
+    for (const [y1, y2] of ys) {
+      for (const [x1, x2] of xs) {
+        const sub = { x1, y1, x2, y2 };
+        out.push({ componentId, x1, y1, x2, y2, inner: sub });
+        out.push({ componentId, x1, y1: y2, x2, y2: y1, inner: sub });
+      }
+    }
   });
   return out;
 }

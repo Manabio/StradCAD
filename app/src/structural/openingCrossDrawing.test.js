@@ -78,14 +78,15 @@ test('openingCrossSegments: 柱外面合わせで通り芯より内側へ入っ�
 
 test('openingCrossSegments: 内向きの探索幅は min(探索距離, 開口寸法/2)——対辺側の梁は採らない', () => {
   // 内向き探索距離（300）を超える梁
-  const deep = [beam(true, 0 - OPENING_CROSS_SEARCH_MM - 1, -4000, 1000)];
+  const deep = [beam(true, 0 - OPENING_CROSS_SEARCH_MM - 1, -4000, -2500)]; // 区間は途中まで（横断梁にしない）
   assert.equal(openingCrossSegments([rectEdges()], deep, opts)[0].inner.x2, 0);
   // 幅400の開口: 右辺(400)から内向き250は dim/2=200 を超えるので採らない（左辺側の梁として扱われる）
   const narrow = rectEdges(0, 400, 0, 400);
-  const mid = [beam(true, 150, -1000, 1000)];
+  // （区間は開口の途中まで＝横断梁にならない。縁梁の選択だけを見る）
+  const mid = [beam(true, 150, -1000, 200)];
   assert.equal(openingCrossSegments([narrow], mid, opts)[0].inner.x2, 400);
   // 内向き150（<200）は採る
-  const ok = [beam(true, 250, -1000, 1000)];
+  const ok = [beam(true, 250, -1000, 200)];
   assert.equal(openingCrossSegments([narrow], ok, opts)[0].inner.x2, 250 - HALF);
 });
 
@@ -111,9 +112,9 @@ test('openingCrossSegments: 最寄りが同距離なら外向きを採る（入�
     const beams = xs.map(x => beam(true, x, -4000, 1000));
     assert.equal(openingCrossSegments([rectEdges()], beams, opts)[0].inner.x2, 20 - HALF, xs.join());
   }
-  // 右辺(x=0, 外向き+)に対し外向き+50 と 内向き−50
+  // 右辺(x=0, 外向き+)に対し外向き+50 と 内向き−50（区間は途中まで＝横断梁にしない）
   for (const xs of [[50, -50], [-50, 50]]) {
-    const beams = xs.map(x => beam(true, x, -4000, 1000));
+    const beams = xs.map(x => beam(true, x, -4000, -2500));
     assert.equal(openingCrossSegments([rectEdges()], beams, opts)[0].inner.x2, 50 - HALF, xs.join());
   }
 });
@@ -154,6 +155,80 @@ test('openingCrossSegments: 梁の半幅で内側矩形が潰れる成分は出�
 
 test('openingCrossSegments: 4辺そろわない成分は出さない', () => {
   assert.deepEqual(openingCrossSegments([rectEdges().slice(0, 3)], [], opts), []);
+});
+
+const subs = segs => segs.filter((_, i) => i % 2 === 0).map(s => [s.inner.x1, s.inner.y1, s.inner.x2, s.inner.y2]);
+
+test('openingCrossSegments: 横断梁（中央の横梁）の面で区切り、上下に×（小矩形2・対角線4）', () => {
+  const beams = [...fourBeams(), beam(false, -2750, -3000, 0)];
+  const segs = openingCrossSegments([rectEdges()], beams, opts);
+  assert.equal(segs.length, 4);
+  assert.deepEqual(subs(segs), [[-2985, -3580, -15, -2765], [-2985, -2735, -15, -1920]]);
+  assert.deepEqual([segs[1].x1, segs[1].y1, segs[1].x2, segs[1].y2], [-2985, -2765, -15, -3580]);
+  assert.deepEqual([segs[3].x1, segs[3].y1, segs[3].x2, segs[3].y2], [-2985, -1920, -15, -2735]);
+});
+
+test('openingCrossSegments: 縦横の横断梁で格子（小矩形4）。y→x の決定的な順', () => {
+  const beams = [...fourBeams(), beam(false, -2750, -3000, 0), beam(true, -1500, -4000, 1000)];
+  const segs = openingCrossSegments([rectEdges()], beams, opts);
+  assert.equal(segs.length, 8);
+  const expected = [
+    [-2985, -3580, -1515, -2765], [-1485, -3580, -15, -2765],
+    [-2985, -2735, -1515, -1920], [-1485, -2735, -15, -1920],
+  ];
+  assert.deepEqual(subs(segs), expected);
+  assert.deepEqual(subs(openingCrossSegments([rectEdges()], [...beams].reverse(), opts)), expected);
+});
+
+test('openingCrossSegments: 区間が全長を覆わない梁（開口の途中で終わる）は分割しない', () => {
+  const beams = [...fourBeams(), beam(false, -2750, -3000, -1500)];
+  assert.equal(openingCrossSegments([rectEdges()], beams, opts).length, 2);
+  const beams2 = [...fourBeams(), beam(false, -2750, -1500, 0)];
+  assert.equal(openingCrossSegments([rectEdges()], beams2, opts).length, 2);
+});
+
+test('openingCrossSegments: 帯が内側面に接する梁（縁部材）は横断ではない。内側矩形は不変', () => {
+  // 軸 -2985+15=-2970 の縦梁は帯 -2985..-2955 が内側面 x1=-2985 に接する
+  const beams = [...fourBeams(), beam(true, -2970, -4000, 1000)];
+  const segs = openingCrossSegments([rectEdges()], beams, opts);
+  assert.equal(segs.length, 2);
+  assert.deepEqual(segs[0].inner, { x1: -2985, y1: -3580, x2: -15, y2: -1920 });
+});
+
+test('openingCrossSegments: 半幅0（略図）の横断梁は面が軸に一致', () => {
+  const beams = [...fourBeams(), beam(false, -2750, -3000, 0)];
+  const segs = openingCrossSegments([rectEdges()], beams, { beamHalfWidthOf: () => 0 });
+  assert.deepEqual(subs(segs), [[-3000, -3595, 0, -2750], [-3000, -2750, 0, -1905]]);
+});
+
+test('openingCrossSegments: 小屋梁・基礎梁・土台は横断梁として分割しない', () => {
+  for (const role of ['roofBeam', 'foundation', 'sill']) {
+    const beams = [...fourBeams(), beam(false, -2750, -3000, 0, role)];
+    assert.equal(openingCrossSegments([rectEdges()], beams, opts).length, 2, role);
+  }
+  assert.equal(openingCrossSegments([rectEdges()], [...fourBeams(), beam(false, -2750, -3000, 0, 'secondary')], opts).length, 4);
+});
+
+test('openingCrossSegments: 横断梁の帯同士が重なって潰れる小矩形は出さない', () => {
+  // 軸 -2755 と -2745（半幅15）→ 間の幅 -2740..-2760 は負
+  const beams = [...fourBeams(), beam(false, -2755, -3000, 0), beam(false, -2745, -3000, 0)];
+  const segs = openingCrossSegments([rectEdges()], beams, opts);
+  assert.deepEqual(subs(segs), [[-2985, -3580, -15, -2770], [-2985, -2730, -15, -1920]]);
+});
+
+test('openingCrossSegments: 同方向の横断梁2本は入力順によらず同じ3小矩形が同じ順で出る', () => {
+  const b1 = beam(false, -3200, -3000, 0), b2 = beam(false, -2300, -3000, 0);
+  const expected = [[-2985, -3580, -15, -3215], [-2985, -3185, -15, -2315], [-2985, -2285, -15, -1920]];
+  for (const order of [[b1, b2], [b2, b1]]) {
+    assert.deepEqual(subs(openingCrossSegments([rectEdges()], [...fourBeams(), ...order], opts)), expected);
+  }
+});
+
+test('openingCrossSegments: 帯が入れ子の横断梁は外側の帯にかからない（半幅は梁ごと）', () => {
+  const outer = { ...beam(false, -2750, -3000, 0), half: 30 }, inner = { ...beam(false, -2745, -3000, 0), half: 5 };
+  const o = { beamHalfWidthOf: b => b.half ?? HALF };
+  const segs = openingCrossSegments([rectEdges()], [...fourBeams(), outer, inner], o);
+  assert.deepEqual(subs(segs), [[-2985, -3580, -15, -2780], [-2985, -2720, -15, -1920]]);
 });
 
 test('openingCrossSegments: 成分の並び順どおり（componentId 無しは添字）', () => {
