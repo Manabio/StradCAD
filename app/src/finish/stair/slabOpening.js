@@ -304,6 +304,33 @@ function resolveEdgeSide(isVertical, value, lo, hi, cellRecords) {
 }
 
 /**
+ * 自階の床開口を**セル矩形**で列挙する（平面の立体モデル plan/planSolids.js の「床の穴」の源。
+ * 開口セルの情報源は floorOpeningEdges と同じ openingCellSets＝唯一）。複数の開口セットで重なるセルは1件に畳む
+ * （source は初出）。L字など非矩形の開口はセル矩形の集まりのまま返す（穴の判定は矩形ごとの内側判定で足りる）。
+ * 並びは y1→x1 昇順（決定的）。削除済みCLを指すキーは落とす。
+ * @param {object|null} graph 自階のグラフ
+ * @param {{riserOf?: (stair:object)=>number|null, stairFilter?: (stair:object)=>boolean}} [opts]
+ *   floorOpeningEdges と同じ意味（stairFilter＝破れ先を開口にする階段の絞り込み。既定は全階段）。
+ * @returns {Array<{x1:number,y1:number,x2:number,y2:number,source:string}>}
+ */
+export function floorOpeningCellRects(graph, { riserOf = () => null, stairFilter = () => true } = {}) {
+  if (!graph) return [];
+  const byKey = new Map();
+  for (const { cells, source } of openingCellSets(graph, riserOf, stairFilter)) {
+    for (const key of cells) {
+      if (byKey.has(key)) continue;
+      const b = cellBoundsFromKey(key, graph);
+      if (!b) continue;
+      byKey.set(key, {
+        x1: Math.min(b.x1, b.x2), y1: Math.min(b.y1, b.y2),
+        x2: Math.max(b.x1, b.x2), y2: Math.max(b.y1, b.y2), source,
+      });
+    }
+  }
+  return [...byKey.values()].sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1);
+}
+
+/**
  * 自階の床開口（吹抜け・昇降路・階段吹抜け・階段の破れ先）を「セル境界CL上の辺」として列挙する
  * （層A・実装指示書ステップ3。純関数）。梁芯生成（ステップ4）が受け梁の位置を求める入力になる。
  *

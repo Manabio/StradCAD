@@ -43,6 +43,16 @@ const FOUNDATION_ROLE = 'foundation';
 const EXCLUDED_BEAM_ROLES = new Set([FOUNDATION_ROLE, 'sill', 'roofBeam', 'partitionBeam']);
 
 /**
+ * 梁の成（せい）mm。カタログ断面の height → 梁自身の beamDepth → 既定 105 の順。
+ * 展開図の寄与（structuralContribution）と平面の立体モデル（plan/planSolids.js）が共有する唯一の式。
+ * @param {object} beam - graph.beams の1件
+ * @returns {number}
+ */
+export function beamDepthMm(beam) {
+  return findSectionEntry(beam?.sectionDefId)?.height ?? beam?.beamDepth ?? DEFAULT_DEPTH_MM;
+}
+
+/**
  * @typedef {{isVertical:boolean, axisWorld:number, spanLo:number, spanHi:number,
  *   widthMm:number, topZ:number, depthMm:number, role:string}} BeamSolid
  */
@@ -201,7 +211,7 @@ export function structuralContribution(layers) {
       if (EXCLUDED_BEAM_ROLES.has(beam.role)) continue; // 追加仕様2026-08: 基礎梁／土台(role:'sill')は展開図に描かない
       if (isInsideWall(beam, walls)) continue;
       const entry = findSectionEntry(beam.sectionDefId);
-      const depthMm = entry?.height ?? beam.beamDepth ?? DEFAULT_DEPTH_MM;
+      const depthMm = beamDepthMm(beam);
       result.push({
         section: entry ?? null, // 断面形状（H形鋼のフランジ・ウェブ等）を作図で使う
         isVertical: beam.isVertical,

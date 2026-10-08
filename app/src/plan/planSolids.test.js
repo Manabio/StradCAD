@@ -1,0 +1,416 @@
+// planSolids.js（平面の立体モデル。S2）の単体テスト。実物の PlanGraph / Plane で組む。
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { RoomFeature, StairType, RoofShape, edgeKey } from '@core';
+import {
+  planSolids, floorSolidOf, SOLID_KIND_ORDER, layerCeilZ,
+} from './planSolids.js';
+import { isInsideFootprint } from './planGeometry.js';
+import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
+import {
+  makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid,
+} from './planTestFixtures.js';
+
+const ofKind = (solids, kind) => solids.filter(s => s.kind === kind);
+const self = graph => [fakeLayer({ graph })];
+
+// ================================================================ 梁
+
+test('梁: 天端 = 層のFL + levelOffset、下端 = 天端 − 成。footprint は 芯±幅/2 × スパンの帯。source は梁id・role', () => {
+  const graph = fakeLayer().graph;
+  const beam = addBeamH(graph, { axis: 1000, from: 0, to: 2000, levelOffset: -20 }); // STEEL-H200x100（幅100・成200）
+  const beams = ofKind(planSolids([fakeLayer({ graph, floorZMm: 2800, role: 'above' })]), 'beam');
+  assert.equal(beams.length, 1);
+  const [b] = beams;
+  assert.deepEqual(b.footprint, { rects: [rect(0, 950, 2000, 1050)] });
+  assert.equal(b.zHi, 2780, 'zHi = floorZMm(2800) + levelOffset(-20)');
+  assert.equal(b.zLo, 2580, 'zLo = zHi − 成(200)');
+  assert.deepEqual(b.source, { kind: 'beam', id: beam.id, layerFloorZ: 2800, role: 'primary' });
+});
+
+test('梁: 基礎梁・土台・小屋梁は立体にしない。隔て梁・踊り場受け梁を含む他の役割は立体にする', () => {
+  const graph = fakeLayer().graph;
+  const excluded = ['foundation', 'sill', 'roofBeam'];
+  const included = ['primary', 'secondary', 'floor', 'landing', 'partitionBeam'];
+  [...excluded, ...included].forEach((role, i) => addBeamH(graph, { axis: 1000 + i * 500, role }));
+  const roles = ofKind(planSolids(self(graph)), 'beam').map(s => s.source.role);
+  assert.equal(roles.length, included.length, '含める役割だけが残る');
+  assert.deepEqual([...roles].sort(), [...included].sort());
+});
+
+test('梁: 成は断面カタログ → beamDepth → 既定105。未知の断面でも例外にしない', () => {
+  const graph = fakeLayer().graph;
+  const unknown = addBeamH(graph, { axis: 500, sectionDefId: 'NO-SUCH-SECTION', material: 'WOOD' });
+  const withDepth = addBeamH(graph, { axis: 1500, sectionDefId: 'NO-SUCH-SECTION', material: 'WOOD' });
+  withDepth.beamDepth = 240;
+  const beams = ofKind(planSolids(self(graph)), 'beam');
+  assert.equal(beams.length, 2);
+  const depthOf = id => { const s = beams.find(b => b.source.id === id); return s.zHi - s.zLo; };
+  assert.equal(depthOf(unknown.id), 105, '未知の断面＝既定105');
+  assert.equal(depthOf(withDepth.id), 240, 'カタログに無ければ beamDepth');
+});
+
+// ================================================================ 柱
+
+test('柱: 足元 = 層のFL、上端 = 層の天井。ceilZMm があればそれ。杭（foundation）は立体にしない', () => {
+  const graph = fakeLayer().graph;
+  const col = addColumnAt(graph, 1000, 2000);
+  addColumnAt(graph, 3000, 2000, { role: 'foundation' });
+  const normal = ofKind(planSolids([fakeLayer({ graph, floorZMm: 2800, role: 'above' })]), 'column');
+  assert.equal(normal.length, 1, '杭は除く');
+  assert.deepEqual(normal[0].footprint, { rects: [rect(947.5, 1947.5, 1052.5, 2052.5)] });
+  assert.equal(normal[0].zLo, 2800);
+  assert.equal(normal[0].zHi, 2800 + 2400, '既定の天井高 2400');
+  assert.equal(normal[0].source.id, col.id);
+  const below = ofKind(planSolids([fakeLayer({ graph, floorZMm: -2800, role: 'below', ceilZMm: -500 })]), 'column');
+  assert.equal(below[0].zHi, -500, '層が持つ ceilZMm を優先');
+});
+
+test('柱: 仕上げ包みを持つ構造（S造）は壁に接する面が包まれた外形、在来木造は素の断面', () => {
+  const place = (structure) => {
+    const { graph } = makeRoomGraph(0, 0, 4000, 4000);
+    graph.structureOverride = structure;
+    addColumnAt(graph, 250, 2000); // 壁面（x=57.5）から150mm以内＝取り合う
+    const cols = ofKind(planSolids(self(graph)), 'column');
+    assert.equal(cols.length, 1);
+    return cols[0].footprint.rects[0];
+  };
+  const bare = rect(197.5, 1947.5, 302.5, 2052.5);
+  assert.deepEqual(place(TRADITIONAL_WOOD_STRUCTURE), bare, '在来木造は包みなし');
+  const wrapped = place('S造');
+  assert.ok(wrapped.x1 < bare.x1 && wrapped.x2 > bare.x2 && wrapped.y1 < bare.y1 && wrapped.y2 > bare.y2,
+    `S造は包まれて外形が広がる: ${JSON.stringify(wrapped)}`);
+});
+
+// ================================================================ 壁
+
+function southWallOf(graph, axis = 4000) {
+  const wall = graph.walls.find(w => !w.isVertical && w.axisCL.effectiveValue === axis);
+  assert.ok(wall, '前提: 壁がある');
+  return wall;
+}
+const wallSolidsOf = (graph, wall) => ofKind(planSolids(self(graph)), 'wall')
+  .filter(s => s.source.id === wall.id).sort((a, b) => a.source.part - b.source.part);
+
+test('壁: 全高の壁は FL〜天井。厚み方向は隠せる材の範囲（材＋下地）、長さは壁の端から端', () => {
+  const { graph } = makeRoomGraph(0, 0, 4000, 4000);
+  const walls = ofKind(planSolids(self(graph)), 'wall');
+  assert.equal(walls.length, 4);
+  assert.ok(walls.every(s => s.zLo === 0 && s.zHi === 2400));
+  const south = wallSolidsOf(graph, southWallOf(graph));
+  assert.equal(south.length, 1);
+  assert.deepEqual(south[0].footprint, { rects: [rect(57.5, 3942.5, 3942.5, 4045)] });
+});
+
+test('壁: 腰壁（knee）は FL〜腰高さ、垂れ壁（drop）は垂れ下端〜天井', () => {
+  const { graph, cx } = makeRoomGraph(0, 0, 4000, 4000);
+  const wall = southWallOf(graph);
+  const key = edgeKey(wall.axisCL.id, cx[0].id, cx[1].id);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 } });
+  assert.deepEqual(wallSolidsOf(graph, wall).map(s => [s.zLo, s.zHi]), [[0, 800]]);
+  graph.setKneeDropWall(key, { drop: { bottomHeight: 600 } });
+  assert.deepEqual(wallSolidsOf(graph, wall).map(s => [s.zLo, s.zHi]), [[1800, 2400]]);
+});
+
+test('壁: 腰壁＋垂れ壁の両方はアキ（四角い穴）で 2 件（part 0・1）。他の壁は全高のまま', () => {
+  const { graph, cx } = makeRoomGraph(0, 0, 4000, 4000);
+  const wall = southWallOf(graph);
+  graph.setKneeDropWall(edgeKey(wall.axisCL.id, cx[0].id, cx[1].id), { knee: { topHeight: 800 }, drop: { bottomHeight: 600 } });
+  const parts = wallSolidsOf(graph, wall);
+  assert.deepEqual(parts.map(s => [s.source.part, s.zLo, s.zHi]), [[0, 0, 800], [1, 1800, 2400]]);
+  const others = ofKind(planSolids(self(graph)), 'wall').filter(s => s.source.id !== wall.id);
+  assert.equal(others.length, 3);
+  assert.ok(others.every(s => s.zLo === 0 && s.zHi === 2400));
+});
+
+test('壁: 腰壁レコードの端で壁を分割する（1本の壁が複数区間にまたがる）。レコードが無い区間は全高', () => {
+  // 4000 に区切りCLのある 2 セルの部屋（南の壁は 1 本につながる）
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  g.interior([[0, 0], [1, 0]], { walls: true });
+  const wall = southWallOf(g.graph);
+  g.graph.setKneeDropWall(edgeKey(wall.axisCL.id, g.cx[0].id, g.cx[1].id), { knee: { topHeight: 800 } });
+  const parts = wallSolidsOf(g.graph, wall);
+  assert.equal(parts.length, 2, 'レコード端（x=4000）で 2 区間');
+  assert.deepEqual(parts.map(s => [s.footprint.rects[0].x1, s.footprint.rects[0].x2, s.zLo, s.zHi]), [
+    [57.5, 4000, 0, 800],
+    [4000, 7942.5, 0, 2400],
+  ]);
+});
+
+test('壁: 上端は壁ごとに1つ（両側の部屋の天井高）。レコードの有無で区間ごとに変わらない', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  const room = g.interior([[0, 0], [1, 0]], { walls: true });
+  room.setOverride('ceilingHeight', '3000');
+  const wall = southWallOf(g.graph);
+  g.graph.setKneeDropWall(edgeKey(wall.axisCL.id, g.cx[0].id, g.cx[1].id), { drop: { bottomHeight: 600 } });
+  const parts = wallSolidsOf(g.graph, wall);
+  assert.deepEqual(parts.map(s => [s.zLo, s.zHi]), [[2400, 3000], [0, 3000]], '垂れ壁区間も他の区間も上端は部屋CH 3000');
+});
+
+test('壁: レコードの無い全高の壁の上端も部屋の天井高（層の既定2400でない）。層の ceilZMm があればそれが優先', () => {
+  const { graph, room } = makeRoomGraph(0, 0, 4000, 4000);
+  room.setOverride('ceilingHeight', '3000');
+  const walls = ofKind(planSolids(self(graph)), 'wall');
+  assert.equal(walls.length, 4);
+  assert.ok(walls.every(s => s.zLo === 0 && s.zHi === 3000));
+  const withLayerCeil = ofKind(planSolids([fakeLayer({ graph, ceilZMm: 2700 })]), 'wall');
+  assert.ok(withLayerCeil.length === 4 && withLayerCeil.every(s => s.zHi === 2700));
+});
+
+test('壁: 隅で壁端がレコード端の外へはみ出しても細片を作らない（垂れ壁 x4000..8000・壁端 8057.5・部屋CH3000）', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  g.interior([[0, 0], [1, 0]], { walls: true }).setOverride('ceilingHeight', '3000');
+  const wall = southWallOf(g.graph);
+  g.graph.setKneeDropWall(edgeKey(wall.axisCL.id, g.cx[1].id, g.cx[2].id), { drop: { bottomHeight: 1000 } });
+  wall[wall.coord2 > wall.coord1 ? 'endOffset' : 'startOffset'] = 57.5; // 隅の取り合い（実データの形）
+  assert.equal(Math.max(wall.coord1, wall.coord2), 8057.5, '前提: 壁端がレコード端 8000 の外へ 57.5');
+  const parts = wallSolidsOf(g.graph, wall);
+  const spans = parts.map(s => [s.footprint.rects[0].x1, s.footprint.rects[0].x2, s.zLo, s.zHi]);
+  assert.deepEqual(spans, [[57.5, 4000, 0, 3000], [4000, 8057.5, 2000, 3000]]);
+  assert.ok(spans.every(([a, b]) => b - a >= 150), '長さ150未満の細片が無い');
+});
+
+test('壁: 2セルとも同じ腰壁レコードを持つ1本の壁は、同じ高さの隣り合う区間を結合して 1 件', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  g.interior([[0, 0], [1, 0]], { walls: true });
+  const wall = southWallOf(g.graph);
+  g.graph.setKneeDropWall(edgeKey(wall.axisCL.id, g.cx[0].id, g.cx[1].id), { knee: { topHeight: 800 } });
+  g.graph.setKneeDropWall(edgeKey(wall.axisCL.id, g.cx[1].id, g.cx[2].id), { knee: { topHeight: 800 } });
+  const parts = wallSolidsOf(g.graph, wall);
+  assert.equal(parts.length, 1);
+  assert.deepEqual([parts[0].footprint.rects[0].x1, parts[0].footprint.rects[0].x2, parts[0].zLo, parts[0].zHi], [57.5, 7942.5, 0, 800]);
+});
+
+// ================================================================ 床
+
+test('床: 建物範囲のセル矩形・zLo=zHi=FL・穴なしは holes 空。部屋が無い階は床なし', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  g.interior([[0, 0], [1, 0]]);
+  const floors = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 2800, role: 'above' })]), 'floor');
+  assert.equal(floors.length, 1);
+  assert.deepEqual(floors[0].footprint, { rects: [rect(0, 0, 2000, 3000), rect(2000, 0, 4000, 3000)], holes: [] });
+  assert.equal(floors[0].zLo, 2800);
+  assert.equal(floors[0].zHi, 2800);
+  assert.deepEqual(planSolids(self(fakeLayer().graph)), [], '部屋も実体も無い階は何も出さない');
+  assert.equal(floorSolidOf(fakeLayer()), null);
+});
+
+test('床: rects は y1→x1 昇順（部屋のセルの登録順に依らない）', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000, 6000]);
+  g.interior([[1, 1], [0, 1], [1, 0], [0, 0]]); // 逆順で登録
+  const [floor] = ofKind(planSolids(self(g.graph)), 'floor');
+  assert.deepEqual(floor.footprint.rects, [
+    rect(0, 0, 2000, 3000), rect(2000, 0, 4000, 3000), rect(0, 3000, 2000, 6000), rect(2000, 3000, 4000, 6000),
+  ]);
+});
+
+test('床: 吹抜けのセルは穴（内側判定で床でなくなる）。穴の周りは床のまま', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
+  g.interior([[0, 0], [2, 0]]);
+  g.feature([[1, 0]], RoomFeature.VOID);
+  const [floor] = ofKind(planSolids(self(g.graph)), 'floor');
+  assert.ok(floor, '床がある');
+  assert.deepEqual(floor.footprint.holes, [rect(2000, 0, 4000, 3000)]);
+  assert.equal(isInsideFootprint(floor.footprint, 3000, 1500), false, '吹抜けの中は床でない');
+  assert.equal(isInsideFootprint(floor.footprint, 1000, 1500), true);
+  assert.equal(isInsideFootprint(floor.footprint, 5000, 1500), true);
+});
+
+test('床: L字の穴はセル矩形の集まり（3セル）。切り欠きのセルは床のまま', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000, 6000]);
+  g.interior([[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]]);
+  g.feature([[1, 0], [2, 0], [2, 1]], RoomFeature.VOID);
+  const [floor] = ofKind(planSolids(self(g.graph)), 'floor');
+  assert.equal(floor.footprint.holes.length, 3, 'L字の 3 セルがそれぞれ穴の矩形');
+  assert.equal(isInsideFootprint(floor.footprint, 3000, 1500), false);
+  assert.equal(isInsideFootprint(floor.footprint, 5000, 1500), false);
+  assert.equal(isInsideFootprint(floor.footprint, 5000, 4500), false);
+  assert.equal(isInsideFootprint(floor.footprint, 3000, 4500), true, 'L字の切り欠き（セル(1,1)）は床');
+});
+
+test('床: 屋根セルは建物範囲に入らない（下屋の下に床を張らない）', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 1500]);
+  g.interior([[0, 0]]);
+  g.roof([[1, 0]]);
+  const [floor] = ofKind(planSolids(self(g.graph)), 'floor');
+  assert.deepEqual(floor.footprint.rects, [rect(0, 0, 2000, 1500)]);
+  assert.equal(isInsideFootprint(floor.footprint, 3000, 750), false);
+});
+
+function switchbackGraph() {
+  const g = makeGrid([0, 1000, 2000], [0, 1500, 4500]);
+  const { graph, cx, cy } = g;
+  const landing = `${cx[0].id}:${cy[0].id}:${cx[2].id}:${cy[1].id}`;
+  const outbound = `${cx[0].id}:${cy[1].id}:${cx[1].id}:${cy[2].id}`;
+  const ret = `${cx[1].id}:${cy[1].id}:${cx[2].id}:${cy[2].id}`;
+  const room = graph.addRoom(new Set([landing, outbound]), '階段'); // 破れ先 ret は部屋に含めない
+  graph.addStair({
+    type: StairType.SWITCHBACK, cells: new Set([landing, outbound, ret]), roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+  return graph;
+}
+
+test('床: 階段の破れ先は、下階に同じ階段があるときだけ穴。無い・別位置なら穴にしない', () => {
+  const graph = switchbackGraph();
+  const layers = self(graph);
+  const riserOf = () => 200;
+  const holesWith = belowGraphOf => ofKind(planSolids(layers, { riserOf, belowGraphOf }), 'floor')[0].footprint.holes;
+  assert.deepEqual(holesWith(undefined), [], '下階を渡さない（設置階自身）＝穴なし');
+  assert.deepEqual(holesWith(() => null), [], '下階が無い');
+  assert.deepEqual(holesWith(() => switchbackGraph()), [rect(1000, 1500, 2000, 4500)], '下階に同じ階段＝破れ先が穴');
+  const other = makeGrid([0, 1000, 2000], [0, 1500, 4500]).graph; // 階段の無い下階
+  assert.deepEqual(holesWith(() => other), [], '下階に階段が無い＝穴なし');
+});
+
+// ================================================================ 下屋
+
+test('下屋・片流れ: footprint は region.outline の多角形。勾配は水下へ下がり、最高点＝層のFL', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
+  g.interior([[0, 1]]);
+  g.roof([[1, 1]]); // 屋内（左）に接する片流れ。高い側＝壁の x=2000、水下＝右の x=4000
+  const regions = leanToPlanRegions(g.graph);
+  assert.equal(regions.length, 1, '前提: 下屋の region がある');
+  const roofs = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 2800, role: 'above' })]), 'roof');
+  assert.equal(roofs.length, 1);
+  const [roof] = roofs;
+  assert.deepEqual(roof.footprint, { poly: regions[0].outline[0].points });
+  assert.equal(typeof roof.zAt, 'function');
+  const zs = [2000, 2500, 3000, 3500, 4000].map(x => roof.zAt(x, 2000));
+  assert.deepEqual(zs, [2800, 2650, 2500, 2350, 2200], '水上（壁）→ 水下で 0.3/mm（勾配3）ずつ下がる');
+  assert.equal(roof.zHi, 2800, '最高点＝FL');
+  assert.equal(roof.zLo, 2200, '最低点＝水下の高さ（軒の出も同じ高さ）');
+  assert.equal(roof.zAt(4400, 2000), 2200, '軒の出（範囲外）は水下と同じ高さ');
+  assert.equal(roof.source.id, regions[0].key);
+});
+
+test('下屋・寄棟: 棟の上が FL、軒先が最低。傾斜は短手の中央から', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
+  g.roof([[0, 0], [1, 0], [2, 0]]).roofSpec.setField('shape', RoofShape.HIP);
+  const [roof] = ofKind(planSolids(self(g.graph)), 'roof');
+  assert.ok(roof, '寄棟の下屋が立体になる');
+  assert.equal(roof.zAt(3000, 750), 0, '棟（短手 1500 の中央）＝FL');
+  assert.equal(roof.zAt(3000, 0), -225, '軒先 = −(1500/2)×0.3');
+  assert.ok(roof.zAt(3000, 400) > roof.zAt(3000, 100) && roof.zAt(3000, 400) < 0, '棟へ向かって単調に上がる');
+  assert.deepEqual([roof.zLo, roof.zHi], [-225, 0]);
+});
+
+test('下屋・失敗系: 外形線だけの region（陸屋根）は平ら（zAt なし・zLo=zHi=FL）。屋根が無い階は立体なし', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
+  g.roof([[0, 0], [1, 0], [2, 0]]).roofSpec.setField('shape', RoofShape.FLAT);
+  assert.equal(leanToPlanRegions(g.graph)[0].outlineOnly, true, '前提: outlineOnly');
+  const roofs = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 100, role: 'above' })]), 'roof');
+  assert.equal(roofs.length, 1);
+  assert.equal(roofs[0].zAt, undefined);
+  assert.deepEqual([roofs[0].zLo, roofs[0].zHi], [100, 100]);
+  assert.deepEqual(ofKind(planSolids(self(makeRoomGraph(0, 0, 4000, 4000).graph)), 'roof'), []);
+});
+
+// ================================================================ 汎用立体
+
+test('汎用立体: 検証を通ったものは kind=generic で最後に続く（矩形は正規化、style・source を保つ）', () => {
+  const extras = [
+    solid('generic', { rects: [rect(500, 900, 100, 100)] }, 2000, 2100, { id: 'pipe-b', style: { dash: [8, 4] } }),
+    solid('generic', { poly: [0, 0, 100, 0, 100, 100] }, -50, 50, { id: 'duct-a' }),
+  ];
+  const { graph } = makeRoomGraph(0, 0, 4000, 4000);
+  const out = planSolids(self(graph), { extraSolids: extras });
+  const tail = out.slice(-2);
+  assert.deepEqual(tail.map(s => s.source.id), ['duct-a', 'pipe-b'], 'id 順');
+  assert.ok(tail.every(s => s.kind === 'generic'));
+  assert.deepEqual(tail[1].footprint, { rects: [rect(100, 100, 500, 900)] }, '逆順の矩形は正規化');
+  assert.deepEqual(tail[1].style, { dash: [8, 4] });
+  assert.deepEqual([tail[1].zLo, tail[1].zHi], [2000, 2100]);
+});
+
+test('汎用立体・失敗系: 高さが逆・非有限・footprint が空/不正・generic 以外の kind・null は黙って捨てる', () => {
+  const ok = solid('generic', { rects: [rect(0, 0, 10, 10)] }, 0, 10, { id: 'ok' });
+  const bad = [
+    solid('generic', { rects: [rect(0, 0, 10, 10)] }, 10, 0, { id: 'inverted' }),
+    solid('generic', { rects: [rect(0, 0, 10, 10)] }, NaN, 10, { id: 'nan-z' }),
+    solid('generic', { rects: [rect(0, 0, 10, 10)] }, 0, Infinity, { id: 'inf-z' }),
+    solid('generic', { rects: [] }, 0, 10, { id: 'empty' }),
+    solid('generic', { rects: [rect(0, 0, 10, 10), rect(0, 0, 0, 10)] }, 0, 10, { id: 'mixed-valid-invalid' }),
+    solid('generic', { rects: [rect(0, 0, 0, 10)] }, 0, 10, { id: 'flat-rect' }),
+    solid('generic', { rects: [rect(0, 0, NaN, 10)] }, 0, 10, { id: 'nan-rect' }),
+    solid('generic', { poly: [0, 0, 10, 0] }, 0, 10, { id: 'short-poly' }),
+    solid('generic', { poly: [0, 0, 10, 0, 10, NaN] }, 0, 10, { id: 'nan-poly' }),
+    solid('generic', undefined, 0, 10, { id: 'no-footprint' }),
+    solid('wall', { rects: [rect(0, 0, 10, 10)] }, 0, 10, { id: 'wrong-kind' }),
+    null,
+  ];
+  const out = planSolids([], { extraSolids: [...bad, ok] });
+  assert.deepEqual(out.map(s => s.source.id), ['ok'], '通るのは ok だけ');
+});
+
+// ================================================================ 層スタックと順序
+
+function threeStoreyLayers() {
+  const a = makeRoomGraph(0, 0, 4000, 4000, { id: 'f3', startFloor: 3 });
+  addBeamH(a.graph, { axis: 2000, levelOffset: -100, role: 'floor' });
+  const s = makeRoomGraph(0, 0, 4000, 4000, { id: 'f2', startFloor: 2 });
+  addBeamH(s.graph, { axis: 2000, levelOffset: -100, role: 'floor' });
+  addColumnAt(s.graph, 1000, 1000);
+  const b = makeRoomGraph(0, 0, 4000, 4000, { id: 'f1', startFloor: 1 });
+  addColumnAt(b.graph, 1000, 1000);
+  return [
+    fakeLayer({ graph: s.graph, floorZMm: 0, role: 'self' }),
+    fakeLayer({ graph: a.graph, floorZMm: 2800, role: 'above' }),
+    fakeLayer({ graph: b.graph, floorZMm: -2800, role: 'below', ceilZMm: -400 }),
+  ];
+}
+
+test('層スタック3段: 各層から床・壁・柱・梁が出て、層のFLの高い順→kind表の順に並ぶ', () => {
+  const layers = threeStoreyLayers();
+  const out = planSolids(layers);
+  assert.ok(out.length > 0);
+  const zs = out.map(s => s.source.layerFloorZ);
+  assert.deepEqual([...new Set(zs)], [2800, 0, -2800], '上階→自階→下階');
+  assert.deepEqual(zs, [...zs].sort((p, q) => q - p), '層のFLは降順で連続');
+  for (const z of [2800, 0, -2800]) {
+    const mine = out.filter(s => s.source.layerFloorZ === z);
+    const ranks = mine.map(s => SOLID_KIND_ORDER.indexOf(s.kind));
+    assert.ok(ranks.length > 0 && ranks.every(r => r >= 0));
+    assert.deepEqual(ranks, [...ranks].sort((p, q) => p - q), `FL ${z}: kind 表の順`);
+  }
+  const kindsAt = z => new Set(out.filter(s => s.source.layerFloorZ === z).map(s => s.kind));
+  assert.deepEqual([...kindsAt(2800)].sort(), ['beam', 'floor', 'wall']);
+  assert.deepEqual([...kindsAt(0)].sort(), ['beam', 'column', 'floor', 'wall']);
+  assert.deepEqual([...kindsAt(-2800)].sort(), ['column', 'floor', 'wall']);
+  const belowColumn = out.find(s => s.kind === 'column' && s.source.layerFloorZ === -2800);
+  assert.equal(belowColumn.zHi, -400, '下階の柱の上端は層の ceilZMm');
+});
+
+test('順序は決定的: 入力の層を逆順にしても、同じ層の中の梁を逆順に足しても、出力は同一', () => {
+  const layers = threeStoreyLayers();
+  const forward = planSolids(layers);
+  const reversed = planSolids([...layers].reverse());
+  assert.ok(forward.length > 0);
+  assert.deepEqual(reversed, forward);
+  const g = fakeLayer().graph;
+  [['b3', 3000], ['b1', 1000], ['b2', 2000]].forEach(([id, axis]) => addBeamH(g, { axis, id }));
+  const ids = ofKind(planSolids(self(g)), 'beam').map(s => s.source.id);
+  assert.deepEqual(ids, ['b1', 'b2', 'b3'], '同じ kind は source.id 昇順（追加順に依らない）');
+});
+
+test('失敗系: 層が無い・空配列・graph が null の層・FL が非有限の層は飛ばす（例外にしない）', () => {
+  assert.deepEqual(planSolids(undefined), []);
+  assert.deepEqual(planSolids(null), []);
+  assert.deepEqual(planSolids([]), []);
+  assert.deepEqual(planSolids([{ graph: null, floorZMm: 0, role: 'self' }, { graph: undefined, floorZMm: 0, role: 'above' }]), []);
+  const { graph } = makeRoomGraph(0, 0, 4000, 4000);
+  assert.deepEqual(planSolids([{ graph, floorZMm: NaN, role: 'self' }]), []);
+  const out = planSolids([{ graph: null, floorZMm: 2800, role: 'above' }, fakeLayer({ graph })]);
+  assert.ok(out.length > 0, 'graph が null の層だけ飛ばし、他の層は出る');
+  assert.ok(out.every(s => s.source.layerFloorZ === 0));
+});
+
+test('layerCeilZ: 層の ceilZMm → graph.defaultCeilingHeight → 既定2400 の順', () => {
+  const graph = fakeLayer().graph;
+  assert.equal(layerCeilZ({ graph, floorZMm: 100 }), 2500);
+  graph.setDefaultCeilingHeight(2700);
+  assert.equal(layerCeilZ({ graph, floorZMm: 100 }), 2800);
+  assert.equal(layerCeilZ({ graph, floorZMm: 100, ceilZMm: 900 }), 900);
+  assert.equal(layerCeilZ({ graph: null, floorZMm: 100 }), 2500, 'graph が無ければ既定');
+});

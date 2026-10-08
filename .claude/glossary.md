@@ -35,6 +35,9 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 ## 切断高（planCutHeightMm）
 平面図の水平切断面の高さ（FL+mm）。Planeの属性で既定1500。読み口は`planCutHeightMmOf(plane)`。設計意図は`.claude/plan-section.md`。
 
+## 立体（Solid）・footprint
+平面の断面解決の入力。実体を「平面の占有形（footprint＝矩形の和＋穴、または単純多角形）＋高さ範囲（zLo..zHi、自階FL=0の絶対mm）」へ正規化したもの。単一の情報源は`plan/planSolids.js`。設計意図は`.claude/plan-section.md`。
+
 ## 屋根専用平面（isRoofPlane）
 構造モードのみに存在する合成Plane。`project.planes`/`orderedTabs`から除外、`project.roofPlane`で個別アクセス。
 

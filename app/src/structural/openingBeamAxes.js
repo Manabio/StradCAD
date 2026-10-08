@@ -54,7 +54,7 @@ function hasMatchingStairBelow(stair, graph, belowGraph) {
  * @param {object|null} belowGraph
  * @returns {(stair:object)=>boolean}
  */
-function stairFilterFor(graph, belowGraph) {
+export function stairFilterFor(graph, belowGraph) {
   return (stair) => belowGraph != null && hasMatchingStairBelow(stair, graph, belowGraph);
 }
 

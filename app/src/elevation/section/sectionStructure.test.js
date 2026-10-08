@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '@core';
-import { structuralContribution, structuralPrimitivesForCut } from './sectionStructure.js';
+import { structuralContribution, structuralPrimitivesForCut, beamDepthMm } from './sectionStructure.js';
 import { cutDrawRange } from './sectionTypes.js';
 
 function makeGraph(name = 'p1') {
@@ -59,6 +59,17 @@ test('【Minor-1・QA裁定2026-09-18】structuralContribution: 土台（role:\'
   addHorizontalBeam(graph, -100, 'sill');
   const contribution = structuralContribution([{ graph, floorZMm: 0, role: 'self' }]);
   assert.deepEqual(contribution, [], '土台は床下の横架材で室内展開に寄与しないため除外される（階段帯はclipを通さないため床下線が出る）');
+});
+
+test('beamDepthMm: カタログ断面の成 → beamDepth → 既定105。structuralContribution の depthMm と同じ式', () => {
+  assert.equal(beamDepthMm({ sectionDefId: 'STEEL-H200x100', beamDepth: 999 }), 200, 'カタログが優先');
+  assert.equal(beamDepthMm({ sectionDefId: 'NO-SUCH', beamDepth: 240 }), 240);
+  assert.equal(beamDepthMm({ sectionDefId: 'NO-SUCH', beamDepth: null }), 105);
+  assert.equal(beamDepthMm(undefined), 105, '梁が無くても例外にしない');
+  const graph = makeGraph();
+  addHorizontalBeam(graph, 0);
+  const [b] = structuralContribution([{ graph, floorZMm: 0, role: 'self' }]);
+  assert.equal(b.depthMm, 200, 'STEEL-H200x100 の成');
 });
 
 test('【C2a】structuralContribution: 小屋梁（role:\'roofBeam\'）は展開図・断面の加算寄与に含まれない。他roleは従来どおり含まれる', () => {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, StairType } from '@core';
 import { getAllCells } from '../gridCells.js';
 
-import { slabOpeningRects, floorOpeningEdges } from './slabOpening.js';
+import { slabOpeningRects, floorOpeningEdges, floorOpeningCellRects } from './slabOpening.js';
 
 // 2×1マス（x:0-1000-2000, y:0-1500）のグリッドを持つグラフとセルキーを作る。
 function makeGrid() {
@@ -619,4 +619,44 @@ test('floorOpeningEdges【失敗系b】: セルキーが指すCLが削除済み�
 
 test('floorOpeningEdges【失敗系c】: graphがnullなら空配列', () => {
   assert.deepEqual(floorOpeningEdges(null), []);
+});
+
+// ---- floorOpeningCellRects（平面の立体モデルの「床の穴」。開口セルの情報源は floorOpeningEdges と同じ） ----
+test('floorOpeningCellRects: 吹抜け・昇降路の占有セルがセル矩形になる（source付き・y1→x1昇順）', () => {
+  const { graph, left, right } = makeGrid();
+  graph.addRoom(new Set([right])).setFeature(RoomFeature.STAIR_VOID);
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.VOID);
+  const rects = floorOpeningCellRects(graph);
+  assert.deepEqual(rects, [
+    { x1: 0, y1: 0, x2: 1000, y2: 1500, source: 'void' },
+    { x1: 1000, y1: 0, x2: 2000, y2: 1500, source: 'stairVoid' },
+  ]);
+});
+
+test('floorOpeningCellRects: 複数の開口で重なるセルは1件に畳み、source は初出の部屋', () => {
+  const { graph, left, right } = makeGrid();
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.VOID);
+  graph.addRoom(new Set([left, right])).setFeature(RoomFeature.STAIR_VOID);
+  const rects = floorOpeningCellRects(graph);
+  assert.deepEqual(rects, [
+    { x1: 0, y1: 0, x2: 1000, y2: 1500, source: 'void' },
+    { x1: 1000, y1: 0, x2: 2000, y2: 1500, source: 'stairVoid' },
+  ]);
+});
+
+test('floorOpeningCellRects: 階段の破れ先は stairFilter が通すときだけ。既定は通す', () => {
+  const { graph } = makeSwitchbackBeyondFixture();
+  const all = floorOpeningCellRects(graph);
+  assert.equal(all.length, 1, '破れ先は矩形1セル');
+  assert.equal(all[0].source, 'stairBeyond');
+  assert.deepEqual(floorOpeningCellRects(graph, { stairFilter: () => false }), [], '絞られたら穴にしない');
+});
+
+test('floorOpeningCellRects【失敗系】: graphがnull・開口の無い階は空配列。削除済みCLを指すセルは落ちる', () => {
+  assert.deepEqual(floorOpeningCellRects(null), []);
+  assert.deepEqual(floorOpeningCellRects(makeGrid().graph), []);
+  const { graph, xm, left } = makeGrid();
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.VOID);
+  graph.removeShape(xm.id);
+  assert.deepEqual(floorOpeningCellRects(graph), []);
 });
