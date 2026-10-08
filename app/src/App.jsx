@@ -35,20 +35,21 @@ import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBo
 import { computeVoidCrosses } from './finish/voidGeometry.js';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP, UNNUMBERED_TAG } from './structural/memberCatalog.js';
-import { CenterLineType, OpeningCategory, isRoofFeature } from '@core';
+import { CenterLineType, OpeningCategory, isRoofFeature, planCutHeightMmOf } from '@core';
 import { upperAdoptedPlanes, findUpperRoomsOverCells } from './finish/roof/roofFloorCheck.js';
 import { isHitTestTarget } from './core/centerLineKindPolicy.js';
 import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
   applyFloorBytes, blocksFloorRemoval, diffFloorOpSnapshot,
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
-  computeFloorDeleteReorder, computeFloorInsert, collectPlaneMetas, applyPlaneMetas,
+  computeFloorDeleteReorder, computeFloorInsert, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm,
 } from './floorOps.js';
 import { applyFloorOrderChange, FLOOR_ORDER_KIND } from './floorOrderChange.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { buildFloorChipModel } from './ui/floorChipModel.js';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
 import { FloorChangeDialog } from './ui/FloorChangeDialog.jsx';
+import { PlanCutHeightDialog } from './ui/PlanCutHeightDialog.jsx';
 import { LongPressIndicator } from './renderer/LongPressIndicator.jsx';
 import { CLMoveInput } from './renderer/CLMoveInput.jsx';
 import { AxisFaceInput }     from './renderer/AxisFaceInput.jsx';
@@ -152,6 +153,7 @@ const App = observer(() => {
   const [floorDialog,    setFloorDialog]    = useState(null); // { isLowest }
   const [floorConfirm,   setFloorConfirm]   = useState(null); // { message, buttons, onSelect }
   const [floorChangeDlg, setFloorChangeDlg] = useState(null); // { planeId }
+  const [planCutHeightDlg, setPlanCutHeightDlg] = useState(null); // { planeId }
   const [showCalibration, setShowCalibration] = useState(false);
   const [showSiteDialog,  setShowSiteDialog]  = useState(false);
   const [saveDialogDefaultName, setSaveDialogDefaultName] = useState(null); // 非null=保存ファイル名ダイアログ表示中
@@ -1417,7 +1419,7 @@ const App = observer(() => {
         await runBusy(label + 'のredo', async () => {
           applyPlaneMetas(project, metasAfter);
           for (const pl of addedPlanes) {
-            addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id);
+            addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm);
             const bytes = addedBytes.get(pl.id);
             if (bytes != null) await saveFloor(pl.id, bytes);
           }
@@ -1447,7 +1449,7 @@ const App = observer(() => {
       await applyFloorOrderChange(project, {
         kind: FLOOR_ORDER_KIND.INSERT,
         updates,
-        addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories),
+        addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm),
         sourceGraph: project.activeGraph,
         newStartFloor: newPlane.startFloor,
         ui: floorOrderUi(),
@@ -1478,7 +1480,7 @@ const App = observer(() => {
             const sf   = subtractSkipZero(prevFloor, 1);
             const name = makeFloorName(sf, 1);
             const elev = lowestElevation - 3000 * i;
-            const result = addFloor(elev, name, sf, 1);
+            const result = addFloor(elev, name, sf, 1, undefined, currentPlane.planCutHeightMm); // 切断高は表示中の階から複製
             lastPlane = result.plane;
             prevFloor = sf;
           }
@@ -1504,7 +1506,7 @@ const App = observer(() => {
         await applyFloorOrderChange(project, {
           kind: FLOOR_ORDER_KIND.INSERT,
           updates,
-          addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories),
+          addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm),
           sourceGraph: project.activeGraph,
           newStartFloor: newPlane.startFloor,
           ui: floorOrderUi(),
@@ -1573,6 +1575,11 @@ const App = observer(() => {
       return;
     }
 
+    if (action === 'cut-height') {
+      setPlanCutHeightDlg({ planeId });
+      return;
+    }
+
     if (action === 'add-alt') {
       const refId = plane.isAlternative ? plane.referenceId : planeId;
       const refPlane = project.planeMap.get(refId);
@@ -1586,7 +1593,7 @@ const App = observer(() => {
         onSelect: async (v) => {
           setFloorConfirm(null);
           if (v === 'cancel') return;
-          await runAddAlternative(v, refId, refPlane).catch(reportFloorTransitionError); // guardUi層と同じ握り方（未捕捉rejection化を防ぐ）
+          await runAddAlternative(v, refId, refPlane, plane).catch(reportFloorTransitionError); // guardUi層と同じ握り方（未捕捉rejection化を防ぐ）
         },
       });
       return;
@@ -1686,7 +1693,7 @@ const App = observer(() => {
   // レンダーごとに束縛され直すため、switchFloor後もこの関数が捕まえたままの値を参照する——階切替後の
   // フロア参照はproject.activeGraphを読み直すのが原則だが、ここは意図的にswitchFloor前の値を使う）。
 
-  async function runAddAlternative(v, refId, refPlane) {
+  async function runAddAlternative(v, refId, refPlane, sourcePlane) {
     beginUiTransition();
     await runBusy('階操作', async () => {
       const altCount = [...project.planeMap.values()]
@@ -1701,7 +1708,7 @@ const App = observer(() => {
       // （＝状態を一切変えない）ため、addAlternativeFloorより前に置く（線種変更の移籍一本化
       // ステップ2・2026-09-30）。
       const bytes = v === 'yes' ? serializeGraphWithFreshLineIds(graph) : null;
-      const result   = addAlternativeFloor(refId, altName);
+      const result   = addAlternativeFloor(refId, altName, sourcePlane);
       if (!result) return;
       // 切替に失敗したら以降（複製元の書き戻し）を進めない（F1・2026-09-27）。
       if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
@@ -1764,7 +1771,7 @@ const App = observer(() => {
       const bytes = project.activePlaneId === planeId
         ? serializeGraphWithFreshLineIds(graph)
         : null;
-      const result  = addAlternativeFloor(refId, newName);
+      const result  = addAlternativeFloor(refId, newName, plane);
       if (!result) return;
       // 切替に失敗したら複製元の書き戻しを進めない（F1・2026-09-27）。
       if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
@@ -1799,6 +1806,20 @@ const App = observer(() => {
         ui: floorOrderUi(),
       });
     });
+  }
+
+  // 平面の切断高の変更。Plane の属性だけを書く同期操作（graph/IDB は書かない）ため関門は不要で、
+  // ダイアログの onConfirm が guardUi で包まれていれば足りる。undo/redo も属性の書き戻しのみ。
+  // Plane メタは自動 dirty 追跡の対象外なので markDirty() を明示する。
+  function runPlanCutHeight(planeId, mm) {
+    setPlanCutHeightDlg(null);
+    const changed = setPlanCutHeightMm(project, planeId, mm);
+    if (!changed) return;
+    markDirty();
+    undoManager.push(
+      () => { setPlanCutHeightMm(project, planeId, changed.before); markDirty(); },
+      () => { setPlanCutHeightMm(project, planeId, changed.after); markDirty(); },
+    );
   }
 
   // ---- 三斜 線分長さ確定（NumPad/テキスト入力からの確定） ----
@@ -2609,6 +2630,14 @@ const App = observer(() => {
           currentStartFloor={project.planeMap.get(floorChangeDlg.planeId)?.startFloor ?? 1}
           onConfirm={guardUi(n => runFloorChange(floorChangeDlg.planeId, n))}
           onCancel={() => setFloorChangeDlg(null)}
+        />
+      )}
+
+      {planCutHeightDlg && (
+        <PlanCutHeightDialog
+          currentHeightMm={planCutHeightMmOf(project.planeMap.get(planCutHeightDlg.planeId))}
+          onConfirm={guardUi(mm => runPlanCutHeight(planCutHeightDlg.planeId, mm))}
+          onCancel={() => setPlanCutHeightDlg(null)}
         />
       )}
 

@@ -18,7 +18,7 @@ export function loadDocument(path) {
   const { planes, activePlaneId } = doc.planes ? decodePlanes(doc.planes) : { planes: [], activePlaneId: null };
   for (const p of planes) {
     project.addPlane(p.elevation, p.name, p.id, p.startFloor, p.stories,
-      p.isAlternative, p.referenceId, p.altIndex, p.isRoofPlane, p.roofForPlaneId);
+      p.isAlternative, p.referenceId, p.altIndex, p.isRoofPlane, p.roofForPlaneId, p.planCutHeightMm);
   }
   for (const f of doc.floors) {
     const graph = project.graphMap.get(f.planeId);

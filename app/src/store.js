@@ -159,6 +159,7 @@ async function restorePlanesFromIDB() {
       const { graph: newGraph } = project.addPlane(
         m.elevation, m.name, m.id, m.startFloor, m.stories,
         m.isAlternative, m.referenceId, m.altIndex, m.isRoofPlane, m.roofForPlaneId,
+        m.planCutHeightMm,
       );
       if (!hasBytes) addDefaultDimensionLines(newGraph);
     }
@@ -174,6 +175,7 @@ async function restorePlanesFromIDB() {
       p.altIndex       = m.altIndex;
       p.isRoofPlane    = m.isRoofPlane;
       p.roofForPlaneId = m.roofForPlaneId;
+      p.planCutHeightMm = m.planCutHeightMm;
     }
     for (const id of result.toRemove) project.removePlane(id);
     if (result.activePlaneId) project.activePlaneId = result.activePlaneId;
@@ -534,10 +536,12 @@ bootReady.catch(console.error);
  * @param {number} startFloor  開始階番号（デフォルト 1）
  * @param {number} stories     層数（デフォルト 1）
  * @param {string} [planeId]   plane.id（省略時は新規発番。階追加 undo の redo が同一 ID で再作成するために指定する）
+ * @param {number} [planCutHeightMm]  平面の切断高（省略時は既定。階追加時は元の階の値を渡して複製する）
  * @returns {{ plane, graph }}
  */
-export function addFloor(elevation, name, startFloor = 1, stories = 1, planeId = crypto.randomUUID()) {
-  const result = project.addPlane(elevation, name, planeId, startFloor, stories);
+export function addFloor(elevation, name, startFloor = 1, stories = 1, planeId = crypto.randomUUID(), planCutHeightMm = undefined) {
+  const result = project.addPlane(elevation, name, planeId, startFloor, stories,
+    false, null, 0, false, null, planCutHeightMm);
 
   // 新フロアにも寸法線を追加
   addDefaultDimensionLines(result.graph);
@@ -549,8 +553,9 @@ export function addFloor(elevation, name, startFloor = 1, stories = 1, planeId =
  * 検討フロアを追加する。
  * @param {string} referenceId  親採用の plane.id
  * @param {string} name         検討の名称
+ * @param {object} [sourcePlane] 複製元の平面（切断高の引継ぎ元。省略時は親採用）
  */
-export function addAlternativeFloor(referenceId, name) {
+export function addAlternativeFloor(referenceId, name, sourcePlane = undefined) {
   const refPlane = project.planeMap.get(referenceId);
   if (!refPlane) return null;
 
@@ -562,6 +567,7 @@ export function addAlternativeFloor(referenceId, name) {
     refPlane.elevation, name, newPlaneId,
     refPlane.startFloor, refPlane.stories,
     true, referenceId, altCount,
+    false, null, (sourcePlane ?? refPlane).planCutHeightMm, // 切断高は複製元の平面（省略時は採用階）から引き継ぐ
   );
 
   addDefaultDimensionLines(result.graph);

@@ -233,7 +233,8 @@ export function computeFloorInsert(planes, currentPlaneId, stories) {
     const newStartFloor = subtractSkipZero(currentTopFloor, n - 1);
     const newElevation  = current.elevation + (current.stories - n) * 3000;
     const newName       = makeFloorName(newStartFloor, n);
-    const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories: n };
+    const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories: n,
+      planCutHeightMm: current.planCutHeightMm }; // 平面の切断高は表示中の階から複製
 
     const updates = [];
     for (let i = 0; i <= idx; i++) {
@@ -254,7 +255,8 @@ export function computeFloorInsert(planes, currentPlaneId, stories) {
   const newStartFloor  = addSkipZero(topFloor, 1);
   const newName        = makeFloorName(newStartFloor, stories);
   const newElevation   = current.elevation + current.stories * 3000;
-  const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories };
+  const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories,
+    planCutHeightMm: current.planCutHeightMm }; // 平面の切断高は表示中の階から複製
 
   const arr = [...planes];
   arr.splice(idx + 1, 0, { id: null, ...newPlane });
@@ -307,7 +309,23 @@ export function applyFloorInsert(project, updates, addNewFloor) {
 export function collectPlaneMetas(project) {
   return project.planes.map(p => ({
     id: p.id, name: p.name, startFloor: p.startFloor, elevation: p.elevation, stories: p.stories,
+    planCutHeightMm: p.planCutHeightMm,
   }));
+}
+
+// ---- 階の平面切断高の変更（applyPlaneMetas 経由）----
+// 検討案を含む任意の plane が対象。不正値（有限の正数でない）・plane 未検出・変化なしは何もせず null。
+// 変更したら { before, after }（undo/redo はこの値で同関数を呼び直す）。
+export function setPlanCutHeightMm(project, planeId, mm) {
+  const plane = project.planeMap.get(planeId);
+  if (!plane || !Number.isFinite(mm) || mm <= 0) return null;
+  const before = plane.planCutHeightMm;
+  if (before === mm) return null;
+  applyPlaneMetas(project, [{
+    id: plane.id, name: plane.name, startFloor: plane.startFloor, elevation: plane.elevation,
+    stories: plane.stories, planCutHeightMm: mm,
+  }]);
+  return { before, after: mm };
 }
 
 // ---- 階操作（追加・ドラッグ移動・階変更）のundoに積むべき差分（計算部。振り直し一本化 ステップ4）----
@@ -343,7 +361,8 @@ function planeMetasEqual(a, b) {
   for (let i = 0; i < a.length; i++) {
     const x = a[i], y = b[i];
     if (x.id !== y.id || x.name !== y.name || x.startFloor !== y.startFloor
-      || x.elevation !== y.elevation || x.stories !== y.stories) return false;
+      || x.elevation !== y.elevation || x.stories !== y.stories
+      || x.planCutHeightMm !== y.planCutHeightMm) return false;
   }
   return true;
 }
@@ -363,6 +382,7 @@ export function applyPlaneMetas(project, metas) {
       plane.startFloor = m.startFloor;
       plane.elevation  = m.elevation;
       if (m.stories !== undefined) plane.stories = m.stories;
+      if (m.planCutHeightMm !== undefined) plane.planCutHeightMm = m.planCutHeightMm; // undefined なら触らない
     }
   });
 }

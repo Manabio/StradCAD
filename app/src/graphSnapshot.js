@@ -431,6 +431,7 @@ export function serializePlanes(project) {
       startFloor: p.startFloor, stories: p.stories,
       isAlternative: p.isAlternative, referenceId: p.referenceId ?? null,
       altIndex: p.altIndex, isRoofPlane: p.isRoofPlane, roofForPlaneId: p.roofForPlaneId ?? null,
+      planCutHeightMm: p.planCutHeightMm,
     })),
     activePlaneId: project.activePlaneId ?? null,
   });

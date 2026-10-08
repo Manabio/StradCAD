@@ -17,6 +17,7 @@ const EXPECTED_EXPORTS = [
   'DEFAULT_EXTERIOR_WALL_BACKING',
   'DEFAULT_FLOOR_BACKING',
   'DEFAULT_INTERIOR_WALL_BACKING',
+  'DEFAULT_PLAN_CUT_HEIGHT_MM',
   'DEFAULT_ROOM_CEILING_HEIGHT',
   'DEFAULT_ROOM_FLOOR_LEVEL',
   'DEFAULT_SHAFT_WALL_MATERIAL',
@@ -116,6 +117,7 @@ const EXPECTED_EXPORTS = [
   'isTopFloorPlane',
   'openingHostRefCLs',
   'openingHostRefIds',
+  'planCutHeightMmOf',
   'spanKey',
   'totalStepsFromSections',
 ].sort();

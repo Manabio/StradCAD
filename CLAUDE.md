@@ -44,6 +44,7 @@ app/src/
 | 図面合成（複数階×複数カテゴリ）の設計意図 | `.claude/figure.md` |
 | モード切替アーキテクチャ | `.claude/mode-system.md` |
 | 階・Plane設計。入力の関門（uiBusy）の節を含む | `.claude/floor-design.md` |
+| 平面の断面解決（立体＋水平切断）。切断高の階属性 | `.claude/plan-section.md` |
 | 階段モデルの設計意図 | `.claude/stair-model.md` |
 | IndexedDB永続化 | `.claude/persistence-idb.md` |
 | Undo/Redo（またぎ・スナップショット方式） | `.claude/undo-redo.md` |

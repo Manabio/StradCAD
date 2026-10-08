@@ -12,7 +12,7 @@
  * あり、topHeight/bottomHeight を増やさない。
  */
 
-import { edgeKey } from '@core';
+import { edgeKey, DEFAULT_PLAN_CUT_HEIGHT_MM, planCutHeightMmOf } from '@core';
 import { worldToCell } from './gridCells.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
 import { cellsBeyondBreak } from './stair/stairGeometry.js';
@@ -26,7 +26,11 @@ export const CAP_THICKNESS   = 30;   // mm — 天端の帯の厚さ（仕様202
 // 出るのは**厚み方向だけ**——長さ方向は壁端で止まる（ユーザー確定2026-08）ため、平面の天端は
 // 壁のスパンをそのまま使い capLo/capHi（厚み方向）にだけこの出幅を足す。
 export const CAP_OVERHANG    = 12;
-export const PLAN_CUT_HEIGHT = 1500; // mm — 平面切断高さ
+/**
+ * 平面切断高さの**既定値**のみ（旧参照・テスト用のエイリアス）。階ごとの値は Plane.planCutHeightMm で、
+ * 新規コードは必ず `planCutHeightMmOf(graph.plane)` で読むこと。
+ */
+export const PLAN_CUT_HEIGHT = DEFAULT_PLAN_CUT_HEIGHT_MM; // mm
 
 // 天井高さが解決できない（区間の両側とも部屋がない）ときのエラーメッセージ。
 // validateKneeDropWall と KneeDropWallDialog（フィールド未入力でも先出しする上部固定ブロック）の
@@ -336,8 +340,8 @@ export function validateKneeDropWall(kneeTop, dropBottom, ceilingHeight) {
  * （wallJunctionResolve.js の resolveWallTJunctions と同様、毎レンダー解決）。
  *
  * 優先順位（同一区間に腰壁・垂れ壁が同居する場合）: 腰壁が平面切断高さを貫く
- * （topHeight > PLAN_CUT_HEIGHT）ときは常に通常の壁帯描画を優先し、垂れ壁のオーバーレイも
- * 出さない（要件の明示規則）。腰壁が貫かない（<=PLAN_CUT_HEIGHT）ときは腰壁の天板輪郭が
+ * （topHeight > 階の切断高）ときは常に通常の壁帯描画を優先し、垂れ壁のオーバーレイも
+ * 出さない（要件の明示規則）。腰壁が貫かない（<=階の切断高）ときは腰壁の天板輪郭が
  * 常に優先される（腰壁天板より低い切断面には他に描くものが無いため）。腰壁指定が無い区間
  * でのみ垂れ壁の判定（切断面が壁本体を貫くか）を行う。
  * @param {object} graph
@@ -348,6 +352,7 @@ export function resolveKneeDropOverlays(graph) {
   const result = new Map();
   if (graph.kneeDropWalls.size === 0) return result;
   const cellToRoom = buildCellToRoom(graph);
+  const cutHeight = planCutHeightMmOf(graph.plane); // 階の属性（Plane.planCutHeightMm）
 
   for (const [key, rec] of graph.kneeDropWalls) {
     if (!rec.knee && !rec.drop) continue;
@@ -359,7 +364,7 @@ export function resolveKneeDropOverlays(graph) {
     if (rec.knee) {
       // topHeight は「平面での壁の高さ」（planWallHeight）の情報源も兼ねる——壁同士の
       // 取り合いで高い方を優先するための比較に使う。
-      if (rec.knee.topHeight <= PLAN_CUT_HEIGHT) {
+      if (rec.knee.topHeight <= cutHeight) {
         overlay = { mode: 'knee', capLo, capHi, topHeight: rec.knee.topHeight };
       }
     } else if (rec.drop) {
@@ -367,7 +372,7 @@ export function resolveKneeDropOverlays(graph) {
       // 垂れ壁の下端（床からの高さ = ceilingHeight - bottomHeight）が平面切断高さより上にあれば、
       // 切断面は壁本体を貫かない（notCutByPlane）——このときだけ天板輪郭の破線オーバーレイを出す。
       // 下端が切断面以下（=切断面が壁本体を貫く）なら通常の壁帯描画のまま。
-      const notCutByPlane = ceilingHeight != null && (ceilingHeight - rec.drop.bottomHeight) > PLAN_CUT_HEIGHT;
+      const notCutByPlane = ceilingHeight != null && (ceilingHeight - rec.drop.bottomHeight) > cutHeight;
       if (notCutByPlane) overlay = { mode: 'drop', capLo, capHi };
     }
     if (!overlay) continue;

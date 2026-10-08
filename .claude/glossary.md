@@ -32,6 +32,9 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 ## Plane / 採用・検討
 1フロア分のデータ単位。`isAlternative=false`が採用（実案）、`true`が検討（代替案、親採用を`referenceId`で参照）。
 
+## 切断高（planCutHeightMm）
+平面図の水平切断面の高さ（FL+mm）。Planeの属性で既定1500。読み口は`planCutHeightMmOf(plane)`。設計意図は`.claude/plan-section.md`。
+
 ## 屋根専用平面（isRoofPlane）
 構造モードのみに存在する合成Plane。`project.planes`/`orderedTabs`から除外、`project.roofPlane`で個別アクセス。
 

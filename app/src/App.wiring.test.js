@@ -207,7 +207,7 @@ test('【配線・強化】App.jsx: runAddAlternative はserializeGraphWithFresh
     '振り直し無しのserializeGraph(graph)呼び出しが残っている');
 
   const serializeIdx = body.indexOf('serializeGraphWithFreshLineIds(graph)');
-  const addAltIdx    = body.indexOf('addAlternativeFloor(refId, altName)');
+  const addAltIdx    = body.indexOf('addAlternativeFloor(refId, altName');
   assert.ok(serializeIdx >= 0 && addAltIdx >= 0 && serializeIdx < addAltIdx,
     'serializeGraphWithFreshLineIds(graph) がaddAlternativeFloor(refId, altName)より前にない');
 
@@ -230,7 +230,7 @@ test('【配線・強化】App.jsx: runCopyAlternative はserializeGraphWithFres
     '振り直し無しのserializeGraph(graph)呼び出しが残っている');
 
   const serializeIdx = body.indexOf('serializeGraphWithFreshLineIds(graph)');
-  const addAltIdx    = body.indexOf('addAlternativeFloor(refId, newName)');
+  const addAltIdx    = body.indexOf('addAlternativeFloor(refId, newName');
   assert.ok(serializeIdx >= 0 && addAltIdx >= 0 && serializeIdx < addAltIdx,
     'serializeGraphWithFreshLineIds(graph) がaddAlternativeFloor(refId, newName)より前にない');
 
@@ -370,7 +370,7 @@ test('【配線・強化】App.jsx: redoFloorOp は addFloor の前に applyPlan
   const body = extractFunctionBody(appSrc, 'async function redoFloorOp');
 
   const applyIdx = body.indexOf('applyPlaneMetas(project, metasAfter);');
-  const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id);');
+  const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm);');
   assert.ok(applyIdx >= 0 && addIdx >= 0, 'applyPlaneMetas(metasAfter) または addFloor( 呼び出しが見つからない');
   assert.ok(applyIdx < addIdx, 'applyPlaneMetas(project, metasAfter) が addFloor( より前にない');
 });
@@ -448,6 +448,47 @@ test('【配線・強化】App.jsx: FloorChangeDialogのonConfirmはguardUi(n =>
   const code = stripCommentLines(appSrc);
   assert.match(code, /<FloorChangeDialog[\s\S]{0,300}onConfirm=\{guardUi\(n => runFloorChange\(floorChangeDlg\.planeId, n\)\)\}/,
     'FloorChangeDialogのonConfirmがguardUi(n => runFloorChange(floorChangeDlg.planeId, n))で包まれていない');
+});
+
+test('【配線】App.jsx: 切断高 — cut-height メニューはダイアログを開き、onConfirm は guardUi で包まれ、runPlanCutHeight は setPlanCutHeightMm→markDirty→undoManager.push の順', () => {
+  const appSrc = readAppSrc();
+  const code = stripCommentLines(appSrc);
+  assert.match(code, /action === 'cut-height'\) \{\s*setPlanCutHeightDlg\(\{ planeId \}\);/, "'cut-height' がダイアログを開いていない");
+  assert.match(code, /<PlanCutHeightDialog[\s\S]{0,300}onConfirm=\{guardUi\(mm => runPlanCutHeight\(planCutHeightDlg\.planeId, mm\)\)\}/,
+    'PlanCutHeightDialogのonConfirmがguardUiで包まれていない');
+  const body = extractFunctionBody(appSrc, 'function runPlanCutHeight');
+  const setIdx = body.indexOf('setPlanCutHeightMm(project, planeId, mm)');
+  const dirtyIdx = body.indexOf('markDirty();');
+  const pushIdx = body.indexOf('undoManager.push(');
+  assert.ok(setIdx >= 0 && setIdx < dirtyIdx && dirtyIdx < pushIdx, 'setPlanCutHeightMm → markDirty → undoManager.push の順になっていない');
+});
+
+test('【配線】App.jsx: 切断高の複製 — 上階追加・一般階追加は newPlane.planCutHeightMm、下階追加は currentPlane.planCutHeightMm、redo は pl.planCutHeightMm を addFloor の第6引数へ渡す', () => {
+  const code = stripCommentLines(readAppSrc());
+  const upper = code.match(/addPlane: \(\) => addFloor\(newPlane\.elevation, newPlane\.name, newPlane\.startFloor, newPlane\.stories, undefined, newPlane\.planCutHeightMm\),/g) ?? [];
+  assert.equal(upper.length, 2, '上階追加（executeAddUpper）と一般階追加の2箇所');
+  const upperBody = extractFunctionBody(readAppSrc(), 'async function executeAddUpper');
+  assert.ok(upperBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm)'), 'executeAddUpper が切断高を渡していない');
+  const confirmBody = extractFunctionBody(readAppSrc(), 'async function handleAddFloorConfirm');
+  assert.ok(confirmBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm)'), 'handleAddFloorConfirm（general）が切断高を渡していない');
+  assert.ok(confirmBody.includes('addFloor(elev, name, sf, 1, undefined, currentPlane.planCutHeightMm)'), '下階追加が currentPlane の切断高を渡していない');
+});
+
+test('【配線】App.jsx: 検討案の作成（add-alt）・案コピーは複製元の平面を addAlternativeFloor の第3引数へ渡す', () => {
+  const appSrc = readAppSrc();
+  const add = extractFunctionBody(appSrc, 'async function runAddAlternative');
+  assert.ok(add.includes('addAlternativeFloor(refId, altName, sourcePlane)'), 'runAddAlternative が sourcePlane を渡していない');
+  const copy = extractFunctionBody(appSrc, 'async function runCopyAlternative');
+  assert.ok(copy.includes('addAlternativeFloor(refId, newName, plane)'), 'runCopyAlternative が plane を渡していない');
+  const menu = extractFunctionBody(appSrc, 'function handleFloorMenuAction');
+  assert.ok(menu.includes('runAddAlternative(v, refId, refPlane, plane)'), 'add-alt の呼び出し元が複製元 plane を渡していない');
+});
+
+test('【配線】App.jsx: runPlanCutHeight の undo は changed.before、redo は changed.after（この順に出現）', () => {
+  const body = extractFunctionBody(readAppSrc(), 'function runPlanCutHeight');
+  const b = body.indexOf('setPlanCutHeightMm(project, planeId, changed.before)');
+  const a = body.indexOf('setPlanCutHeightMm(project, planeId, changed.after)');
+  assert.ok(b >= 0 && a >= 0 && b < a, 'undo(before) → redo(after) の順になっていない');
 });
 
 // ================================================================

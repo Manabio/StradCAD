@@ -254,6 +254,39 @@ test('【失敗系】planWallHeight: 切断高さ超の腰壁・垂れ壁・オ�
     '垂れ壁は対象外（確定した規則は腰壁のみ）');
 });
 
+// ---- 階の切断高（S1）: 判定は定数ではなく graph.plane.planCutHeightMm を読む ----
+test('resolveKneeDropOverlays: 切断高を下げると、既定では貫かない高さの腰壁も切断面に切られる（階の値を読む）', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 1500 } }); // 既定 1500 以下＝天板輪郭
+  assert.ok(resolveKneeDropOverlays(graph).size > 0, '既定の切断高では天板輪郭');
+  graph.plane.planCutHeightMm = 1200;
+  assert.equal(resolveKneeDropOverlays(graph).size, 0, '切断高 1200 では 1500 の腰壁は切断面に切られる');
+  graph.plane.planCutHeightMm = 1600;
+  assert.ok(resolveKneeDropOverlays(graph).size > 0, '切断高を上げると再び天板輪郭');
+});
+
+test('resolveKneeDropOverlays: 垂れ壁の「切断面を貫かない」判定も階の切断高で動く', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { drop: { bottomHeight: 1400 } }); // 天井高(既定)−1400 が下端
+  graph.plane.planCutHeightMm = 100;   // 下端が切断面より上＝貫かない→破線
+  const high = resolveKneeDropOverlays(graph).size;
+  graph.plane.planCutHeightMm = 99999; // 下端が切断面以下＝貫く→通常描画
+  const low = resolveKneeDropOverlays(graph).size;
+  assert.ok(high > 0 && low === 0, `high=${high} low=${low}`);
+});
+
+test('【失敗系】resolveKneeDropOverlays: 切断高が不正（0・NaN）の階は既定 1500 として判定する', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 1500 } });
+  for (const bad of [0, NaN, -1, null]) {
+    graph.plane.planCutHeightMm = bad;
+    assert.ok(resolveKneeDropOverlays(graph).size > 0, `不正値 ${bad} は既定扱い`);
+  }
+});
+
 // 実機2026-09の回帰: 区間の端の交差部にできる短い駒は**半分だけ**が区間内に入る。これを腰壁と
 // 見なすと、区間の外側で続く全高の壁の取り合い（T字・十字）が壊れる（実機で4本が失われた）。
 // 構成壁の判定は変えない——駒は全高のまま扱い、描画の可否は取り合い側（覆われた角）で決める。

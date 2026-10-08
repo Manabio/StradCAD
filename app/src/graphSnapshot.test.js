@@ -14,7 +14,7 @@ import {
   serializeGraphWithFreshLineIds,
 } from './graphSnapshot.js';
 import { editSiteLineLength } from './transform/siteEdit.js';
-import { decode, ROOM_FEATURE_ENC, ROOM_FEATURE_DEC } from './schema/graphFbs.js';
+import { encode, decode, ROOM_FEATURE_ENC, ROOM_FEATURE_DEC } from './schema/graphFbs.js';
 import { base64ToBytes } from './storage/documentFile.js';
 import { BeamAxisOrigin } from './core/centerLine.js';
 import { remapLineIdsInSnapshot, makeFreshLineIdMap, findLineIdOccurrences } from './lineIdRemap.js';
@@ -1691,6 +1691,40 @@ test('serializePlanes → decodePlanes: 地下階(startFloor:-1)・stories:2・a
   assert.equal(byId.b1.startFloor, -1, '負のstartFloor（地下階）は readPlane の "r.f64(START_FLOOR) || 1" フォールバックで1に化けない');
   assert.equal(byId.b1.stories, 2, 'stories:2は "|| 1" フォールバックで1に化けない');
   assert.equal(byId.alt1.altIndex, 2, 'altIndex:2は0扱いされず往復する');
+});
+
+// ---- 平面の切断高（S1。Plane.planCutHeightMm）----
+test('serializePlanes → decodePlanes: planCutHeightMm が階ごとに往復する（既定値の階・変更した階・検討階）', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '1階', 'p1', 1, 1);
+  project.addPlane(3000, '2階', 'p2', 2, 1);
+  project.addPlane(6000, '3階', 'p3', 3, 1);
+  project.addPlane(0, '検討A', 'alt1', 1, 1, true, 'p1', 0);
+  project.planeMap.get('p2').planCutHeightMm = 1200;
+  project.planeMap.get('p3').planCutHeightMm = 1234.5;
+  project.planeMap.get('alt1').planCutHeightMm = 900;
+
+  const { planes } = decodePlanes(serializePlanes(project));
+  const byId = Object.fromEntries(planes.map(p => [p.id, p]));
+  assert.equal(byId.p1.planCutHeightMm, 1500, '既定の階は既定値');
+  assert.equal(byId.p2.planCutHeightMm, 1200);
+  assert.equal(byId.p3.planCutHeightMm, 1234.5);
+  assert.equal(byId.alt1.planCutHeightMm, 900);
+});
+
+test('decodePlanes: 切断高フィールドの無い旧データ（フィールド無し・0）は既定 1500 になる', () => {
+  // 旧10フィールド版が書いたバイト列と同等（フィールド10が欠落＝書込みは 0 を省略する）
+  const bytes = encode({
+    planes: [
+      { id: 'old', elevation: 0, name: '1階', startFloor: 1, stories: 1, isAlternative: false,
+        referenceId: null, altIndex: 0, isRoofPlane: false, roofForPlaneId: null },
+      { id: 'zero', elevation: 3000, name: '2階', startFloor: 2, stories: 1, isAlternative: false,
+        referenceId: null, altIndex: 0, isRoofPlane: false, roofForPlaneId: null, planCutHeightMm: 0 },
+    ],
+    activePlaneId: 'old',
+  });
+  const { planes } = decodePlanes(bytes);
+  assert.deepEqual(planes.map(p => p.planCutHeightMm), [1500, 1500]);
 });
 
 // ---- 失敗パス: decodePlanesへの不正バイト列 ----

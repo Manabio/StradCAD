@@ -104,7 +104,7 @@ export {
 // PLANE (平面 = XY平面 1枚 + 高さ 1つ) — core/plane.js。
 // ================================================================
 
-export { Plane } from './core/plane.js';
+export { Plane, DEFAULT_PLAN_CUT_HEIGHT_MM, planCutHeightMmOf } from './core/plane.js';
 
 // ================================================================
 // PLAN GRAPH (ngraph ラッパ — 平面図の主グラフ) — core/planGraph.js。
