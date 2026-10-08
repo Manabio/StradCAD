@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Text } from 'react-konva';
 import { LodLevel } from '../viewport.js';
+import { openingCrossDash } from './dimensionStyle.js';
 import { computeVoidCrosses, ownVoidCellRects, visibleUpperVoidCrosses, showsUpperVoidLabel, UPPER_VOID_DASH_PX } from '../finish/voidGeometry.js';
 
 const VOID_CROSS_COLOR  = '#1e293b'; // ×の色（StepSectionLayer の断面線と同系）
@@ -106,7 +107,7 @@ export const VoidLayer = observer(({ graph, viewport, upperCrosses = [] }) => {
         const r = insetRect(c, inset);
         if (!r) return null; // 退化矩形（F8）→ 描画スキップ
         const lineProps = {
-          stroke: VOID_CROSS_COLOR, strokeWidth: thin, dash: [12, 4, 2, 4],
+          stroke: VOID_CROSS_COLOR, strokeWidth: thin, dash: openingCrossDash(thin),
           strokeScaleEnabled: false, listening: false,
         };
         return (

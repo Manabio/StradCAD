@@ -149,7 +149,7 @@ export function edgeTarget(graph, edge, rules) {
  * @param {ReturnType<typeof floorOpeningEdges>} edges
  * @returns {{v1:object, v2:object, h1:object, h2:object}|null}
  */
-function rectangularSidesOf(edges) {
+export function rectangularSidesOf(edges) {
   const verts = edges.filter(e => e.isVertical);
   const horzs = edges.filter(e => !e.isVertical);
   if (verts.length !== 2 || horzs.length !== 2) return null;

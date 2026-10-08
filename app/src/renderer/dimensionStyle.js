@@ -14,3 +14,10 @@ export const GRID_LINE_DASH_RATIO = Object.freeze([24, 3, 6, 3]);
 export function gridLineDash(strokeWidthPx) {
   return GRID_LINE_DASH_RATIO.map(r => r * strokeWidthPx);
 }
+
+// 吹抜け・EV の×（平面 VoidLayer.jsx の自階・構造モード StructuralLayer.jsx）の一点破線。
+// 通り芯と同じ線幅 d 基準: 長線144d／すき間3d／点6d／すき間3d（周期 156d）。
+export const OPENING_CROSS_DASH_RATIO = Object.freeze([144, 3, 6, 3]);
+export function openingCrossDash(strokeWidthPx) {
+  return OPENING_CROSS_DASH_RATIO.map(r => r * strokeWidthPx);
+}

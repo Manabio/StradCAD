@@ -85,3 +85,9 @@ test('【不変条件】VoidLayer.jsx は上階破線の描画に visibleUpperCr
   assert.equal(rawUpperMapMatches.length, 0,
     '生の upperCrosses.map( がコード本体に残っている（visibleUpperCrosses 経由に置き換わっていないはず）');
 });
+
+test('【不変条件】VoidLayer.jsx: 自階の×は openingCrossDash(thin) の一点破線（固定配列 [12, 4, 2, 4] ではない）。上階の破線 UPPER_VOID_DASH_PX は別', () => {
+  assert.ok(/strokeWidth: thin, dash: openingCrossDash\(thin\),/.test(codeOnly), '自階の×の dash が openingCrossDash(thin) でない');
+  assert.ok(!/\[12, 4, 2, 4\]/.test(codeOnly), '固定の [12, 4, 2, 4] が残っている');
+  assert.ok(/dash=\{UPPER_VOID_DASH_PX\}/.test(codeOnly), '上階の破線 UPPER_VOID_DASH_PX が変わっている');
+});

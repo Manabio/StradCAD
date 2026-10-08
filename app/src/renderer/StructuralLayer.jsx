@@ -7,9 +7,12 @@ import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { resolveBeamJunctionSpans } from '../structural/beamJunction.js';
 import {
   framingColumnGroups, framingColor, framingColorOverride, columnSectionSize, framingColumnLineWeight,
-  beamDepthMarks, pickMembersOnFigure, pickColumnsOnFigure, columnRenderSize, ROOF_FRAMING_DASH,
+  FRAMING_MONO_COLOR, beamDepthMarks, pickMembersOnFigure, pickColumnsOnFigure, columnRenderSize, ROOF_FRAMING_DASH,
 } from '../structural/framingDrawing.js';
 import { roofFramingFigurePrimitives, roofFramingEaveCorners } from '../structural/roofFramingRegions.js';
+import { openingEdgeComponents } from '../structural/openingBeamAxes.js';
+import { openingCrossSegments } from '../structural/openingCrossDrawing.js';
+import { stairRiserOf } from '../finish/stair/stairDimensions.js';
 import { planColumnWraps } from './wallDrawPlan.js';
 import { columnWrapRenderProps, columnWrapStrokeWidth } from '../structural/columnWrapLineJoin.js';
 import { graphComputed } from './graphDerived.js';
@@ -18,7 +21,7 @@ import { ColumnSymbol, ColumnCrossMark } from './ColumnSymbol.jsx';
 import { columnOriginMarkKey } from './originColorKey.js';
 import { originColor } from './canvasStyle.js';
 import { groupPropsForStyle, dashForStyle } from '../figure/figureStyle.js';
-import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX } from './dimensionStyle.js';
+import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX, openingCrossDash } from './dimensionStyle.js';
 import { memberSelectionRects, MEMBER_SELECTION_COLOR, MEMBER_SELECTION_FILL, MEMBER_SELECTION_STROKE_PX } from '../structural/memberSelection.js';
 
 export const COLOR_BY_MATERIAL = {
@@ -502,6 +505,26 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   const backColumnGroups  = columnGroups.filter(g => !(pickColumns && g.category === 'columnMapSelf'));
   const frontColumnGroups = columnGroups.filter(g => pickColumns && g.category === 'columnMapSelf');
 
+  // 床開口の×（吹抜け・昇降路・階段吹抜け・破れ先）。角は周囲の梁の内側の面（梁が無い辺は辺のCL座標）。
+  // 成分は構造の再計算（structuralRecompute.js）と同じ openingEdgeComponents(riserOf・belowGraph)。
+  // belowGraph＝柱の供給階（columnMap。構造モードでは1つ下の階）。屋根専用平面・基礎伏図は床開口が無いので描かない。
+  // 梁の半幅は実描画幅（beamRenderWidth）と同じ値＝略図の単線では軸線に届く。
+  // belowGraph は compute の外で解決し、キャッシュの置き場にする（graphComputed は (graph,key) ごとに最初の
+  // クロージャを使い回すため、下階の peek が替わる＝構造モードへ入り直すたびに別の置き場へ計算し直し、
+  // 古い peek を握り続けない）。キーは主題階×LOD。
+  const openingBelowGraph = column?.graph && column.graph !== beam?.graph ? column.graph : null;
+  const openingCrossList = (composition.subjectPlane?.isRoofPlane === true || foundationBeams.length > 0 || !beam?.graph)
+    ? []
+    : graphComputed(openingBelowGraph ?? beam.graph, `openingCross:${beam.graph.plane.id}:${lod}`, () => {
+        const belowGraph = openingBelowGraph;
+        const components = openingEdgeComponents(beam.graph, {
+          riserOf: (s) => stairRiserOf(s, project, beam.graph.plane), belowGraph,
+        });
+        return openingCrossSegments(components, beam.graph.beams, {
+          beamHalfWidthOf: b => (beamRenderWidth(b, lod) ?? 0) / 2,
+        });
+      });
+
   return (
     <>
       {backColumnGroups.map(renderColumnGroup)}
@@ -616,6 +639,14 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
           ]);
         })}
       </Group>
+      {openingCrossList.length > 0 && (
+        <Group {...groupPropsForStyle(beam?.spec.style)}>
+          {openingCrossList.map((s, i) => (
+            <Line key={`openingCross:${s.componentId}:${i}`} points={[s.x1, s.y1, s.x2, s.y2]}
+              stroke={FRAMING_MONO_COLOR} strokeWidth={viewport.lineWeightsPx.thin} dash={openingCrossDash(viewport.lineWeightsPx.thin)} strokeScaleEnabled={false} listening={false} />
+          ))}
+        </Group>
+      )}
       {frontColumnGroups.map(renderColumnGroup)}
       <Group {...groupPropsForStyle(beam?.spec.style)}>
         {beamDepthMarkList.flatMap(mark => {
