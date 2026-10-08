@@ -180,6 +180,11 @@ const App = observer(() => {
   // 2a壁クリップ（stairUnderClips）の中間階ガードは null の間、安全側で判定不能扱いにする
   // （QA指摘: 切替直後の1フレームは前の階の値が残ってしまい中間階ガードが効かない）。
   const [upperStairEntries, setUpperStairEntries] = useState(null);
+  // 平面の断面解決の下階の層: 直下の採用階の peek {graph, floorHeightMm, activePlaneId}。3状態——
+  // undefined=未解決（初回・階/モード切替直後。upperStairEntries の null に対応。レイヤは描かない）／
+  // null=下階なし（解決済み。upperStairEntries の [] に対応）／オブジェクト=あり。上階ビューの peek と同じ effect が埋める。
+  // 既知の限界: 同じ階・同じモードのまま直下階の中身や階高が変わっても peek は作り直さない（upperStairEntries と同じ）。
+  const [belowPlanPeek, setBelowPlanPeek] = useState(undefined);
   // 直上階の吹抜け（feature=VOID）を peek して直下階（自階）へ投影表示するための×座標
   const [upperVoidCrosses, setUpperVoidCrosses] = useState([]);
   // 直上階のスラブ開口（＝上階に床が無い領域）のワールド矩形。破れ線から先の階段を点線で
@@ -795,19 +800,26 @@ const App = observer(() => {
     // 新しい階・モードの解決が終わるまで「未解決」（null）にする——解決前は前の階の値が
     // 残ったまま中間階ガード（stairUnderClips）が誤判定しうるため（QA指摘）。
     setUpperStairEntries(null);
+    setBelowPlanPeek(undefined); // 未解決（upperStairEntries の null に対応）
     (async () => {
       const planes = project.planes; // elevation 昇順
       const active = project.activePlane;
       const idx = planes.findIndex(p => p.id === active?.id);
       const below = idx > 0 ? planes[idx - 1] : null;
       if (!below || !active || !shouldShowPlanFigure(appMode)) {
-        if (!cancelled) setUpperStairEntries([]);
+        if (!cancelled) {
+          setUpperStairEntries([]);
+          setBelowPlanPeek(null); // 下階なし＝解決済み（upperStairEntries の [] に対応）
+        }
         return;
       }
       const temp = await floorSwapManager.peek(below, project.structGraph);
       if (cancelled) return;
       const floorHeight = active.elevation - below.elevation; // 直下階の階高
       setUpperStairEntries(buildUpperStairPeekEntries(temp, floorHeight));
+      // 平面の断面解決（PlanSolidsLayer）の下階の層。同じ peek を使い回す（新しい peek を増やさない）。
+      // activePlaneId＝この peek が属する自階（階切替直後に前の階の peek を読ませないための照合用）。
+      setBelowPlanPeek({ graph: temp, floorHeightMm: floorHeight, activePlaneId: active.id });
     })().catch(console.error); // 非オーナータブでは peek → openDB が reject する（unhandled rejection防止）
     return () => { cancelled = true; };
   }, [appMode, activeFloorId, floorSyncTick, planesKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2701,6 +2713,7 @@ const App = observer(() => {
             stairUnderClips={stairUnderClips}
             structComposition={structComposition}
             upperVoidCrosses={upperVoidCrosses}
+            belowPlanPeek={belowPlanPeek}
             snapPoint={snapPoint}
             cursorWorld={cursorWorld}
             clPreview={clPreview}

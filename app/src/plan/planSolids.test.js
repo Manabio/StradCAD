@@ -8,6 +8,7 @@ import {
 import { isInsideFootprint } from './planGeometry.js';
 import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
+import { columnWrapSolids } from '../finish/columnWrap.js';
 import {
   makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid,
 } from './planTestFixtures.js';
@@ -81,6 +82,19 @@ test('柱: 仕上げ包みを持つ構造（S造）は壁に接する面が包�
   const wrapped = place('S造');
   assert.ok(wrapped.x1 < bare.x1 && wrapped.x2 > bare.x2 && wrapped.y1 < bare.y1 && wrapped.y2 > bare.y2,
     `S造は包まれて外形が広がる: ${JSON.stringify(wrapped)}`);
+});
+
+test('柱: 壁の中に完全に納まる柱（columnWrapSolids の hidden）も立体として残す（見える／見えないは幾何が決める）', () => {
+  const { graph } = makeRoomGraph(0, 0, 4000, 4000);
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  // 南の壁の材厚（y=3942.5..4045）に収まる 90 角を、壁の長さの中ほどに置く
+  addColumnAt(graph, 2000, 3993.75, { sectionDefId: 'WOOD-90x90' });
+  addColumnAt(graph, 1000, 2000, { sectionDefId: 'WOOD-90x90' }); // 壁から離れた柱（対照）
+  const wrap = columnWrapSolids(graph, { noCover: true });
+  assert.deepEqual(wrap.map(w => w.hidden).sort(), [false, true], '前提: 1本は壁に埋まる（hidden）・1本は埋まらない');
+  const cols = ofKind(planSolids(self(graph)), 'column');
+  assert.equal(cols.length, 2, '壁に埋まる柱も落とさない');
+  assert.ok(cols.some(c => c.footprint.rects[0].y1 > 3942.5 && c.footprint.rects[0].y2 < 4045), '壁の中の柱の立体がある');
 });
 
 // ================================================================ 壁

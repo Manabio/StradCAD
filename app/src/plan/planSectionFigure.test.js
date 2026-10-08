@@ -157,6 +157,28 @@ test('境界上は隠さない: 壁の面に接する below 梁の辺は残る',
   assert.equal(linesOf(prims, 'below', 'beam').length, 4);
 });
 
+test('遮蔽（和の内部）: 隣り合う 2 つの cut 壁の継ぎ目の上に乗る below 梁の線は消える。単独の壁の面に接する辺と和の外縁は残る', () => {
+  const w1 = solid('wall', sq(0, 0, 100, 1000), 0, 2400, { id: 'w1' });
+  const w2 = solid('wall', sq(100, 0, 200, 1000), 0, 2400, { id: 'w2' }); // w1 と x=100 の継ぎ目で接する
+  const seam = solid('beam', sq(100, 300, 600, 400), -200, 0, { id: 'seam' }); // 左辺 x=100 が継ぎ目の上（y 300..400）
+  const prims = fig([w1, w2, seam]);
+  const lines = sortedLines(ofId(prims, 'seam'));
+  assert.ok(!lines.some(l => l[0] === 100 && l[2] === 100), `継ぎ目の上の線が残っている: ${JSON.stringify(lines)}`);
+  // 壁の外へ出る部分（x>200 の上辺・下辺）は残る
+  assert.deepEqual(lines, [[200, 300, 600, 300], [200, 400, 600, 400], [600, 300, 600, 400]]);
+  // 和の外縁: 梁の右辺が和（x=0..200）の外縁 x=200 の上にあるとき、外へ出る斜め点があるので残る
+  const edge = fig([w1, w2, solid('beam', sq(200, 300, 600, 400), -200, 0, { id: 'edge' })]);
+  assert.ok(sortedLines(ofId(edge, 'edge')).some(l => l[0] === 200 && l[2] === 200), '和の外縁の上の線は残る');
+});
+
+test('遮蔽（和の内部）: 継ぎ目の先に隙間があれば、その隙間（斜め点が壁の外）では線が残る', () => {
+  const w1 = solid('wall', sq(0, 0, 100, 1000), 0, 2400, { id: 'w1' });
+  const w2 = solid('wall', sq(100, 0, 200, 300), 0, 2400, { id: 'w2' }); // y 300 より先は w2 が無い
+  const beam = solid('beam', sq(100, 100, 600, 700), -200, 0, { id: 'b' }); // 左辺 x=100 が y100..300 は継ぎ目、300..700 は w1 の面
+  const left = sortedLines(ofId(fig([w1, w2, beam]), 'b')).filter(l => l[0] === 100 && l[2] === 100);
+  assert.deepEqual(left, [[100, 300, 100, 700]], '継ぎ目（y100..300）だけ消え、w1 の面に接するだけの部分は残る');
+});
+
 test('遮蔽: above の立体は遮蔽物にしない', () => {
   const prims = fig([
     solid('generic', sq(0, 0, 2000, 2000), 3000, 3200, { id: 'up' }),

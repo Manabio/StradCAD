@@ -274,6 +274,9 @@ const G1_ALLOWLIST = {
     reason: 'mergeAdjacentDividers（snapshot.centerLines。保存形式の中間オブジェクトから、id で指定された' +
       '接する2本の中心線のエントリを引いて1本に結合する）。相手は呼び出し元が種別・座標で選び済み' +
       '（sameCoordCounterparts経由）のid指定で、ここでの走査は相手選択ではない。' },
+  'plan/planSolidsLayerFilter.js': { count: 1, category: 'not-partner-selection',
+    reason: 'isCenterLineDragging（全 CL の pendingDelta が 0 でないかの真偽。平面の断面解決レイヤが通り芯ドラッグ中は' +
+      '前回の線を描き続けるための判定）。相手の選択ではなく、種別を問わず「どれかがドラッグ中か」を見るだけ。' },
   'graphSnapshot.js': { count: 2, category: 'not-partner-selection',
     reason: 'restoreStructCLs/applySnapshot。永続化からの全件復元（snapshot.centerLines）——種別を問わず' +
       '全件を作り直す責務のため種別条件を持たない。' },

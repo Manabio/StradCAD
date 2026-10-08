@@ -56,6 +56,7 @@ const GEO_TOL = 1e-6;
 const NUDGE = 1e-3; // 共有辺の上の点が和の内部かを見る斜め押し
 const SIDE_PROBE = 0.01; // 線の両側のどちらが内側かを見る距離
 const CLS_RANK = { cut: 0, below: 1 };
+const DIAGONALS = [[1, 1], [-1, 1], [1, -1], [-1, -1]];
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -117,15 +118,14 @@ function prepareFootprint(fp) {
   return { footprint: holes.length > 0 ? { rects, holes } : { rects }, edges };
 }
 
-/** 点が footprint の和の内部か。辺の上は外。ただし矩形群の**共有辺の上**（斜め4点がすべて内側）は内部。 */
+/**
+ * 点が footprint の厳密な内部か。辺の上は外。矩形群の共有辺の上・複数の立体の継ぎ目の上は、ここでは外とし、
+ * 呼び出し側の「和の内部」判定（resolveLine の hiddenByUnion。斜め4点）が扱う。
+ */
 function insideInterior(fp, x, y) {
-  if (isInsideFootprint(fp, x, y)) {
-    // isInsideFootprint は穴の「内側」だけを除くので、穴の縁の上の点は内側と数えてしまう。縁の上は外とする
-    return !(fp.holes ?? []).some(h => x >= h.x1 && x <= h.x2 && y >= h.y1 && y <= h.y2);
-  }
-  if (!fp.rects) return false;
-  return isInsideFootprint(fp, x + NUDGE, y + NUDGE) && isInsideFootprint(fp, x - NUDGE, y + NUDGE)
-    && isInsideFootprint(fp, x + NUDGE, y - NUDGE) && isInsideFootprint(fp, x - NUDGE, y - NUDGE);
+  if (!isInsideFootprint(fp, x, y)) return false;
+  // isInsideFootprint は穴の「内側」だけを除くので、穴の縁の上の点は内側と数えてしまう。縁の上は外とする
+  return !(fp.holes ?? []).some(h => x >= h.x1 && x <= h.x2 && y >= h.y1 && y <= h.y2);
 }
 
 function insideRec(rec, x, y) {
@@ -323,13 +323,32 @@ function resolveLine(S, pts, recs, ctx) {
     const cS = clsAt(S, cutZ, x, y);
     for (const O of cands) {
       if (insideRec(O, x, y)) {
-        const tO = topAt(O, cutZ, x, y);
-        if (tO > tS + eps) return false; // (i)
-        if (O.kind === 'floor' && tO >= tS - eps) return false; // (ii)
-        if (cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut') return false; // (iii)
+        if (hides(O, x, y, tS, cS)) return false;
       } else if (cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut' && O.edges.some(e => onSegment(e, x, y))) {
         if (sharedFaceHidden(S, O, x, y, nx, ny)) return false;
       }
+    }
+    return !hiddenByUnion(x, y, cS);
+  };
+
+  // O が点 (x,y)（O の厳密な内部）で S を隠す z 規則: (i) 高い方が勝つ (ii) 床は同じ高さでも勝つ (iii) cut 同士は隠し合う
+  const hides = (O, x, y, tS, cS) => {
+    const tO = topAt(O, cutZ, x, y);
+    if (tO > tS + eps) return true; // (i)
+    if (O.kind === 'floor' && tO >= tS - eps) return true; // (ii)
+    return cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut'; // (iii)
+  };
+
+  // 遮蔽物の**和の内部**: p がどの遮蔽物の厳密内部でもなくても、p の斜め4点（±NUDGE）がそれぞれ何らかの遮蔽物の
+  // 厳密内部にあり、その遮蔽物が上の規則で隠すなら p は隠れる（4点すべてで成立したときだけ）。隣り合う壁の継ぎ目・
+  // 矩形群の共有辺の上の線がこれで消える。和の外縁（外へ出る斜め点がある）と単独の立体の面に接する線は残る。
+  const hiddenByUnion = (x, y, cS) => {
+    const near = cands.filter(O => !(x + NUDGE < O.bounds.x1 || x - NUDGE > O.bounds.x2 || y + NUDGE < O.bounds.y1 || y - NUDGE > O.bounds.y2));
+    if (near.length === 0) return false;
+    for (const [dx, dy] of DIAGONALS) {
+      const qx = x + dx * NUDGE, qy = y + dy * NUDGE;
+      const tS = topAt(S, cutZ, qx, qy);
+      if (!near.some(O => insideRec(O, qx, qy) && hides(O, qx, qy, tS, cS))) return false;
     }
     return true;
   };

@@ -11,6 +11,7 @@ import { RoomLabelsLayer } from './RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './StepSectionLayer.jsx';
 import { VoidLayer } from './VoidLayer.jsx';
 import { RoofPlanLayer } from './RoofPlanLayer.jsx';
+import { PlanSolidsLayer } from './PlanSolidsLayer.jsx';
 import { EquipmentSymbolLayer } from './EquipmentSymbolLayer.jsx';
 import { computeEquipmentSymbols } from '../finish/equipment/equipmentFigure.js';
 import { buildingEquipmentCatalog } from '../finish/equipment/buildingEquipment.js';
@@ -38,7 +39,7 @@ import { ElevationLayer } from './ElevationLayer.jsx';
 export const SceneLayers = observer(({
   graph, project, appMode, mode, modeRef, viewport, size, columnAxisMode,
   isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips,
-  structComposition, upperVoidCrosses,
+  structComposition, upperVoidCrosses, belowPlanPeek,
   snapPoint, cursorWorld, clPreview, clDialog, menu,
   onMemberClick, setStatusMenu,
   onOpeningTagClick, onElevationOpeningClick,
@@ -161,6 +162,8 @@ export const SceneLayers = observer(({
               <VoidLayer graph={graph} viewport={viewport} upperCrosses={upperVoidCrosses} />
             )}
             {showPlanFigure && <RoofPlanLayer graph={graph} viewport={viewport} />}
+            {/* 平面の断面解決で描く、今の平面に無い種類（梁・汎用立体。S4）。下屋の直後。 */}
+            {showPlanFigure && <PlanSolidsLayer graph={graph} project={project} viewport={viewport} belowPeek={belowPlanPeek} />}
             {/* 昇降機器具の図中記号（「EV」「EV1」等）。室名が出るモード（floorplan・finish）に揃える
                 （planFigureVisibility.js shouldShowEquipmentSymbols）。catalogは建物全体（全採用階。
                 buildingEquipmentCatalog。project.equipmentIndex を App.jsx の effect が埋める。

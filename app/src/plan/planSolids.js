@@ -32,7 +32,7 @@
 import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, edgeKey } from '@core';
 import { beamDepthMm } from '../elevation/section/sectionStructure.js';
 import { kneeDropZRangesAt } from '../elevation/section/sectionHits.js';
-import { bareColumnRect, wrapColumnWithFinish, wallConcealRange } from '../finish/columnWrap.js';
+import { columnWrapSolids, wallConcealRange } from '../finish/columnWrap.js';
 import { kneeDropRecordsOnAxis, effectiveCeilingHeight } from '../finish/kneeDropWall.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { cellBoundsList } from '../finish/gridCells.js';
@@ -54,7 +54,6 @@ export const SOLID_KIND_ORDER = Object.freeze(['floor', 'wall', 'column', 'beam'
  * ここで先回りして落とさない。
  */
 const EXCLUDED_BEAM_ROLES = new Set(['foundation', 'sill', 'roofBeam']);
-const FOUNDATION_ROLE = 'foundation'; // 柱の杭
 
 const SPAN_EPS_MM = 1; // 壁の分割点を端から離す最小量・潰れた区間の下限
 
@@ -92,19 +91,17 @@ function beamSolids(layer) {
 
 function columnSolids(layer) {
   const graph = layer.graph;
-  const walls = graph.walls ?? [];
   // 柱包みを持たない構造（在来木造）は素の断面（展開図の structuralColumnContribution と同じ判定）。
   const noCover = !rulesFor(effectiveStructure(graph)).drawing.columnFinishWrap;
   const zHi = layerCeilZ(layer);
   const out = [];
-  for (const column of graph.columns ?? []) {
-    if (column.role === FOUNDATION_ROLE) continue; // 杭
-    // 壁の中に納まる柱もここでは落とさない（見える／見えないは幾何が決める）。
-    const wrapped = wrapColumnWithFinish(bareColumnRect(column, layer.floorZMm), walls, { noCover });
+  // 壁の集合は columnWrapSolids が1回だけ作る（柱ごとに作り直すと moku1-6 で planSolids の約64%）。
+  // 壁の中に納まる柱（hidden）もここでは落とさない（見える／見えないは幾何が決める）。杭は columnWrapSolids が除く。
+  for (const { column, wrapped } of columnWrapSolids(graph, { noCover })) {
     const rect = { x1: wrapped.xLo, y1: wrapped.yLo, x2: wrapped.xHi, y2: wrapped.yHi };
     if (!isValidRect(rect)) continue;
     out.push({
-      kind: 'column', footprint: { rects: [rect] }, zLo: wrapped.baseZ, zHi,
+      kind: 'column', footprint: { rects: [rect] }, zLo: layer.floorZMm, zHi,
       source: baseSource(layer, 'column', column.id, column.role ? { role: column.role } : {}),
     });
   }

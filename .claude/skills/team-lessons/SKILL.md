@@ -751,3 +751,17 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   (2) `git stash`→`pop` や `git checkout` の後は作業ツリーの改行コードが変わりうるので、pop した後に全スイートを
   走らせ直してから報告する（`git ls-files --eol` で `i/lf w/crlf` なら要注意）。(3) QA は builder の
   「全件 pass」を信用せず、必ず作業ツリーの現状で再実行する。
+
+### 「graphComputed でキャッシュするからドラッグ中も軽い」と受け取った（2026-10-08 平面の断面解決 S4 の QA 指摘）
+
+- **症状**: 新レイヤの計算を `graphComputed` で memo したので「再レンダーでは再計算しない」と報告した。QA の実測で、
+  通り芯ドラッグ中は `CenterLine.pendingDelta`／`effectiveValue`（observable）が毎フレーム変わり、梁・壁の座標が
+  依存に入っているため**毎フレーム全再計算**（moku1-6 の2階で 50〜105ms を7回）だった。キャッシュが効くのは
+  「依存する observable が変わらない再レンダー（viewport・ポインタ移動）」だけ。
+- **誤った直感**: 「memo があるから重い計算はドラッグ中も 1 回で済む」。memo の鍵（自階×切断高×直下階）には
+  ドラッグ中の座標が入らないのに、計算の中身（梁・壁の座標）は座標に依存することを突き合わせなかった。
+- **正しい動き**: 重い導出をレイヤに足すときは、(1) compute が読む observable を列挙し、ドラッグ中に変わるもの
+  （`pendingDelta`・`effectiveValue`・壁の座標）が含まれるかを確かめる。含まれるなら、ドラッグ中の扱い
+  （前回の結果を描き続ける等）を設計に入れる。(2) 「ドラッグ中は compute 0 回、戻すと 1 回」を、実 graph を
+  `autorun` で観測して `pendingDelta` を書き換えるテストで固定する（MobX の computed は観測者がいなければ
+  毎回再計算するので、観測なしのテストは何も証明しない）。(3) 実機のドラッグ中の所要時間を実測して報告する。
