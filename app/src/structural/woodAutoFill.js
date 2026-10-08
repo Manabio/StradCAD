@@ -22,6 +22,7 @@ import {
 import { selfWallSegments, findBeamAnchorCL, ensureAutoBeamAxisCL, bracketAutoBeamAxisExtent, wallBackingCenterCoord } from './wallBeamAxes.js';
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
 import { beamGridCells } from './framingCells.js';
+import { rectangularSidesOf, edgeTarget } from './openingBeamAxes.js';
 import {
   woodBeamDepthForSpans, koyaBeamDepthForSpans, woodBeamSectionForDepth, isValidManualDepth, crossingBeamLoadCoords,
   mergeWallIntervals, throughBeamRuns, propagateBeamDepths, pointsOnWallLines, columnSplitPoints,
@@ -1557,8 +1558,9 @@ function lockedFullBeamOverlap(graph, materialType, isVertical, coord, lo, hi, t
  * 在来木造の床梁（role:'floor'、記号FB、ステップ3e-2）を、梁で4辺囲まれたセル（framingCells.js
  * beamGridCells）のうち短辺が floorBeamMaxPitchMm(1820) を超えるものへ自動生成し、候補に無い
  * 自動生成の床梁を撤去する。
- *  - セル抽出は木造の大梁（role:'primary'）から作った線分（coord=axisValue、lo/hi=clStart/clEnd.effectiveValue
- *    の min/max）に beamGridCells を適用する（finish/gridCells.js は梁芯を含まないため端が host に届かず使わない）。
+ *  - セル抽出は木造の大梁（role:'primary'）と、openingComponents が渡されたときの開口辺の小梁（role:'secondary'。
+ *    開口辺と平行・辺座標または逃げ後座標から max(0.5, 梁幅/2) 以内・区間が重なるものだけ。無関係な手動小梁は含めない）
+ *    から作った線分（coord=axisValue、lo/hi=clStart/clEnd.effectiveValue の min/max）に beamGridCells を適用する（finish/gridCells.js は梁芯を含まないため端が host に届かず使わない）。
  *  - 必要判定: min(短辺,長辺) <= floorBeamMaxPitchMm なら床梁なし（両辺が1820超のときだけ生成）。
  *  - 方向: 短辺方向に架ける（材軸＝短辺と平行）。長辺方向に n=ceil(長辺/1820) 等分し、内部の n-1 本を
  *    等間隔で置く（floorBeamIsVertical。正方形は材軸＝X＝横梁）。
@@ -1587,18 +1589,40 @@ function lockedFullBeamOverlap(graph, materialType, isVertical, coord, lo, hi, t
  *    leanToFramingCellKeys）の中にある区画には作らない（屋根の下に床は無い）。下屋の外周に大梁が出る
  *    ようになると下屋の範囲にも梁で囲まれた区画ができるため。候補にならないので既存の auto の床梁は
  *    上の撤去ループで消える。省略・空集合なら従来どおり。
+ *  - 床開口ガード（openingComponents）: セルの中心が床開口（吹抜け・昇降路・階段吹抜け。矩形成分）の中にある
+ *    区画には作らない（開口の上に床は無い）。壁の無い辺の開口は吹抜け小梁（role:'secondary'）がセルを
+ *    分けるため、小梁もセルの辺・端部アンカーに含める。候補にならない既存の auto の床梁は撤去ループで消える。
+ *    undefined なら従来どおり。
  * @param {object} graph
  * @param {object} project
  * @param {Map<string,string>|Set<string>} [roofCellKeys] - 小屋組の対象の下屋のセル（キーの有無だけを見る）
+ * @param {Array<Array<object>>} [openingComponents] - openingBeamAxes.js openingEdgeComponents の結果（矩形成分ごとの4辺）
  * @returns {{created: object[], removed: string[]}}
  */
-export function autoFillWoodFloorBeams(graph, project, roofCellKeys = undefined) {
+export function autoFillWoodFloorBeams(graph, project, roofCellKeys = undefined, openingComponents = undefined) {
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing) return { created: [], removed: [] };
   const maxPitch = TRADITIONAL_WOOD_FRAMING.floorBeamMaxPitchMm;
 
   const primaries = graph.beams.filter(b => b.materialType === rules.baseMaterial && b.role === 'primary');
-  const lines = primaries.map(b => ({
+  // 吹抜けの辺の小梁（role:'secondary'。woodOpeningBeams.js が床梁より先に生成する）もセルの辺にする——
+  // 壁の無い辺で開口が区画を分けるため。端部アンカー（findEdgeBeam）も同じ集合から引く。
+  // 開口辺の小梁だけを幾何で選ぶ（開口辺と平行・辺座標または逃げ後座標から max(0.5, 梁幅/2) 以内・区間が重なる。
+  // 由来や dimensionStatus は見ない＝固定された開口小梁も辺になる）。無関係な手動小梁を辺にすると
+  // 「内部に梁が入る区画は作らない」で部屋の床梁が全部消えるため、openingComponents が無ければ primary だけ。
+  const openingEdges = (openingComponents ?? []).filter(c => rectangularSidesOf(c)).flat()
+    .map(edge => ({ edge, target: edgeTarget(graph, edge, rules).coord }));
+  const secondaries = openingEdges.length === 0 ? [] : graph.beams.filter(b => {
+    if (b.materialType !== rules.baseMaterial || b.role !== 'secondary') return false;
+    const lo = Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue);
+    const hi = Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue);
+    const tol = Math.max(0.5, (b.sectionWidth ?? 0) / 2);
+    return openingEdges.some(({ edge, target }) => edge.isVertical === b.isVertical
+      && (Math.abs(b.axisValue - edge.coord) <= tol || Math.abs(b.axisValue - target) <= tol)
+      && Math.min(hi, edge.hi) - Math.max(lo, edge.lo) > 0.5);
+  });
+  const edgeBeams = [...primaries, ...secondaries];
+  const lines = edgeBeams.map(b => ({
     isVertical: b.isVertical,
     coord: b.axisValue,
     lo: Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue),
@@ -1613,11 +1637,24 @@ export function autoFillWoodFloorBeams(graph, project, roofCellKeys = undefined)
       return !!hit && roofCellKeys.has(hit.key);
     })))
     : null;
+  // 床開口（吹抜け・昇降路・階段吹抜け）の矩形。中心がその中にある区画には作らない（開口の上に床は無い）。
+  // undefined は従来どおり何もしない。
+  const openingRects = (openingComponents ?? []).map(rectangularSidesOf).filter(Boolean)
+    .map(s => ({ x1: s.v1.coord, x2: s.v2.coord, y1: s.h1.coord, y2: s.h2.coord }));
+  const inOpening = (cell) => {
+    const cx = (cell.x1 + cell.x2) / 2, cy = (cell.y1 + cell.y2) / 2;
+    return openingRects.some(r => cx > r.x1 && cx < r.x2 && cy > r.y1 && cy < r.y2);
+  };
 
   // セルの辺（isVertical, coord）を作っている大梁自身を座標で逆引きする（clStart/clEndのアンカーに使う。
   // beamGridCellsは線分の集合しか返さないため、生成元の梁オブジェクトへ戻す必要がある）。
-  function findEdgeBeam(isVertical, coord) {
-    return primaries.find(b => b.isVertical === isVertical && Math.abs(b.axisValue - coord) < CL_OVERLAP_TOL_MM) ?? null;
+  // 同じ座標に複数の梁がある場合は辺の区間[lo,hi]を1本で覆う梁を優先する（吹抜け小梁は部分区間のため）。
+  function findEdgeBeam(isVertical, coord, lo, hi) {
+    const onLine = edgeBeams.filter(b => b.isVertical === isVertical && Math.abs(b.axisValue - coord) < CL_OVERLAP_TOL_MM);
+    const covering = onLine.find(b =>
+      Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) <= lo + CL_OVERLAP_TOL_MM &&
+      Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue) >= hi - CL_OVERLAP_TOL_MM);
+    return covering ?? onLine[0] ?? null;
   }
 
   const candidateKeys = new Set();
@@ -1631,6 +1668,7 @@ export function autoFillWoodFloorBeams(graph, project, roofCellKeys = undefined)
     const w = cell.x2 - cell.x1, h = cell.y2 - cell.y1;
     if (Math.min(w, h) <= maxPitch) continue; // 短辺が1820以下なら床梁不要
     if (roofCells?.has(cell)) continue; // 対象の下屋の区画（屋根の下に床は無い）
+    if (inOpening(cell)) continue; // 床開口の区画（開口の上に床は無い）
 
     const isVertical = floorBeamIsVertical(w, h);
     const longLen = isVertical ? w : h;
@@ -1641,8 +1679,9 @@ export function autoFillWoodFloorBeams(graph, project, roofCellKeys = undefined)
     if (n < 2) continue; // 内部位置が無い（理論上min(w,h)>maxPitch判定と矛盾しないための安全弁）
 
     // 材軸の直交CL＝セルの短辺を作っている大梁自身のaxisCL（材軸と直交する向きの大梁）。
-    const startEdge = findEdgeBeam(!isVertical, shortLo);
-    const endEdge = findEdgeBeam(!isVertical, shortHi);
+    const longHi = isVertical ? cell.x2 : cell.y2;
+    const startEdge = findEdgeBeam(!isVertical, shortLo, longLo, longHi);
+    const endEdge = findEdgeBeam(!isVertical, shortHi, longLo, longHi);
     if (!startEdge || !endEdge) continue; // 理論上beamGridCellsの被覆保証により必ず見つかるはずの安全弁
     const clStart = startEdge.axisCL, clEnd = endEdge.axisCL;
 

@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { findHostBeam, findHostPrimaryBeam, openingHostRefCLs, openingHostRefIds, beamExclusionKey, spanKey } from './structuralEntities.js';
 import { BeamAxisOrigin } from './centerLine.js';
+import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from '../structural/structureRules.js';
+import { findSectionEntry } from '../structural/sectionCatalog.js';
 
 function makeGraph() {
   return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -136,6 +138,45 @@ test('【失敗系・変異(4)検出用】開口由来でない小梁の自由�
 
   // 修正後の実装: hostは見つからない（xAに大梁(primary)が無いため）ので自由端＝CL位置(3000)で止まる。
   assert.equal(beamB.coord2, 3000, 'xA上のsecondary梁Cをhostにせず、CL位置で自由端になる');
+});
+
+// 床梁（role:'floor'）の端: 在来木造では同座標の小梁(secondary)を host にして面（axis ± 半幅＋clearance 0）で止まる。
+// S造では従来どおり小梁を host にしない（CL 位置で止まる）。
+function floorEndFixture(structure, material, section) {
+  const graph = makeGraph();
+  graph.structureOverride = structure;
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  const xS = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const axis = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: false, discipline: Discipline.FUSE });
+  const small = graph.addBeam(material, section, xS, true, y0, y1, { role: 'secondary' });
+  const floor = graph.addBeam(material, section, axis, false, x0, xS, { role: 'floor' });
+  return { graph, floor, small };
+}
+
+test('在来木造: 床梁の端は同座標の小梁を host にして、小梁の面（axis − 半幅、clearance 0）で止まる', () => {
+  const section = rulesFor(TRADITIONAL_WOOD_STRUCTURE).defaultSections.beam;
+  const { graph, floor, small } = floorEndFixture(TRADITIONAL_WOOD_STRUCTURE, StructuralMaterialType.WOOD, section);
+  const span = floor.spanForHostBeams(graph.beams, 0);
+  assert.equal(span.coord2, 3000 - small.sectionWidth / 2);
+  assert.ok(small.sectionWidth > 0 && span.coord2 < 3000, '前提: 半幅ぶん手前で止まる');
+});
+
+test('【T5】在来木造: 床梁の端の CL に大梁と小梁が両方あれば大梁の面（大梁 axis − 大梁半幅）で止まる（primary 優先）', () => {
+  const { graph, floor, small } = floorEndFixture(TRADITIONAL_WOOD_STRUCTURE, StructuralMaterialType.WOOD, 'WOOD-105x105');
+  const wideKey = 'WOOD-120x240';
+  assert.ok(findSectionEntry(wideKey), '前提: 断面がカタログにある');
+  const y0 = graph.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 0);
+  const y1 = graph.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 10000);
+  const primary = graph.addBeam(StructuralMaterialType.WOOD, wideKey, small.axisCL, true, y0, y1, { role: 'primary' });
+  assert.notEqual(primary.sectionWidth, small.sectionWidth, '前提: 幅が違う');
+  assert.equal(floor.spanForHostBeams(graph.beams, 0).coord2, 3000 - primary.sectionWidth / 2);
+});
+
+test('【対照】S造: 床梁の端は小梁を host にしない（CL 位置で止まる。従来どおり）', () => {
+  const { graph, floor } = floorEndFixture('S造', StructuralMaterialType.STEEL, SEC);
+  assert.equal(floor.spanForHostBeams(graph.beams, 0).coord2, 3000);
 });
 
 // ---- beamExclusionKey: 小屋梁（roofBeam）は sill と同じく role の名前空間つき。既存の role の鍵は不変（C2b） ----

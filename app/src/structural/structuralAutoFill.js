@@ -783,7 +783,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 自然に0本だが、将来（ステップ5）屋根の梁をrole:'primary'へ切り替えた際に床梁が生えるのを防ぐ
   // 明示ガード）。
   const floorBeamsResult = !isRoof && rulesFor(structure).beamPlacement === 'wallRuns'
-    ? autoFillWoodFloorBeams(graph, project, roofCellKeys) : { created: [], removed: [] };
+    ? autoFillWoodFloorBeams(graph, project, roofCellKeys, openingComponents) : { created: [], removed: [] };
   // 小屋伏図にも梁・柱ルールを適用する計画（ステップ5）: 屋根専用平面の梁は主構造ルールの選択子
   // roofBeamPlacement（structureRules.js。ステップ2）で振り分ける——在来木造（'wallRuns'）は
   // 通り芯グリッドの軒桁（role:'eaves'）の代わりに、自階（＝最上階。wallSegments・selfGateは

@@ -277,7 +277,7 @@ test('【不変条件】structuralAutoFill.js: autoFillStructuralGrid はbeamPla
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralAutoFill.js'), 'utf8');
   // C2d-1: 第3引数に対象の下屋のセルキー集合（roofCellKeys）を渡す。呼び出し行まるごと一致で固定する（配線の確認は leanToPerimeter.test.js）。
-  assert.ok(/^\s*\? autoFillWoodFloorBeams\(graph, project, roofCellKeys\) : \{ created: \[\], removed: \[\] \};$/m.test(src), 'autoFillWoodFloorBeams(graph, project, roofCellKeys) の呼び出しが無い');
+  assert.ok(/^\s*\? autoFillWoodFloorBeams\(graph, project, roofCellKeys, openingComponents\) : \{ created: \[\], removed: \[\] \};$/m.test(src), 'autoFillWoodFloorBeams(graph, project, roofCellKeys, openingComponents) の呼び出しが無い');
   assert.ok(/floorBeamsResult\.created/.test(src), 'floorBeamsResult.created をnewBeamsへ含めていない');
   assert.ok(/floorBeamsResult\.removed/.test(src), 'floorBeamsResult.removed をremovedBeamsへ含めていない');
 });
