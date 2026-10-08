@@ -41,6 +41,9 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 ## marks・innerLines（立体の注記・内側の線）
 立体（Solid）が持つ任意項目。`innerLines`＝立体の内側の線（下屋の外形線・棟木・隅木・谷木。壁で切る前の線）、`marks`＝`{anchor, prims}`の注記（下屋の傾斜ラベル）。解決器は`innerLines`を輪郭と同じに遮蔽判定し、`marks`は基準点（anchor）が見えるときだけ出す。`drawEdges:false`の立体は輪郭を描かず遮蔽にだけ使う。設計意図は`.claude/plan-section.md`「S5」。
 
+## 段の立体（stairTread）
+階段のマス（踏面・踊り場・回り段）1つを、天端=番号×蹴上・厚み0の立体にしたもの。平面の断面解決で**遮蔽物としてだけ**働き（`drawEdges:false`・面材）、線は持たない。階段の線は`StairLayer`だけが描く。多角形は`stairGeometry.js`の`collectCells`、立体化は`finish/stair/stairTreads.js`と`plan/planSolids.js`。設計意図は`.claude/plan-section.md`「S7b」。
+
 ## 見えがかり（below）・切断（cut）
 平面の断面解決（`plan/planSectionFigure.js`）での立体の分類。切断面（FL+切断高）より下に収まる立体が**見えがかり**（輪郭を細線）、切断面をまたぐ立体が**切断**（輪郭を太線）、切断面以上にある立体は非表示（above）。許容0.5mm。設計意図は`.claude/plan-section.md`。
 **隙間の規則**＝切断の遮蔽物の間の幅が`PLAN_GAP_CLOSE_MM`（20mm）以下の隙間は見えがかりの線を覗かせない（壁の角の仕上げ厚12.5mmの切り欠きから下の梁が覗く短線を消す）。下階の層は窓（自階の床の穴）の中に全種別を細線で描く（S6c）。

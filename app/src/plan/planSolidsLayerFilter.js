@@ -15,7 +15,10 @@ import { planSolids } from './planSolids.js';
 import { planSectionFigure } from './planSectionFigure.js';
 import { LodLevel } from '../viewport.js';
 
-/** 新レイヤが**自階**で描く線・ラベルの source.kind（唯一の場所）。S4＝梁・汎用立体、S5＝下屋（屋根）を加えた。 */
+/**
+ * 新レイヤが**自階**で描く線・ラベルの source.kind（唯一の場所）。S4＝梁・汎用立体、S5＝下屋（屋根）を加えた。
+ * 階段の段（stairTread。S7b）は含めない——遮蔽専用（drawEdges:false で線を持たない）で、階段の線を描くのは StairLayer だけ。
+ */
 export const S4_DRAWN_KINDS = Object.freeze(['beam', 'generic', 'roof']);
 
 /**

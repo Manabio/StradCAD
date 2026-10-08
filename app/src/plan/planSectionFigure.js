@@ -15,7 +15,7 @@
  *
  * 遮蔽（線分 S の区間の中点 p が遮蔽物 O の footprint の**厳密な内側**。境界の上は隠さない）:
  *   (i)  top(O,p) > top(S,p)+EPS
- *   (ii) O が面材（SURFACE_KINDS＝floor・roof）で top(O,p) >= top(S,p)-EPS（面材は同じ高さでも勝つ。梁の天端が
+ *   (ii) O が面材（SURFACE_KINDS＝floor・roof・stairTread）で top(O,p) >= top(S,p)-EPS（面材は同じ高さでも勝つ。梁の天端が
  *        床面・屋根面と同点＝その下。S5 で屋根を加えた）
  *   (iii) O も S も cut（同じ高さで隠し合い、和の輪郭だけが残る）
  *   top は cut の立体なら cutZ、below なら zHi（zAt があれば zAt(p)）。S 自身・above は遮蔽物にしない。
@@ -71,8 +71,8 @@ const GEO_TOL = 1e-6;
 const NUDGE = 1e-3; // 共有辺の上の点が和の内部かを見る斜め押し
 const SIDE_PROBE = 0.01; // 線の両側のどちらが内側かを見る距離
 const CLS_RANK = { cut: 0, below: 1 };
-/** 面材（同じ高さでも下の線に勝つ立体の種別。規則 (ii)）。床と屋根（梁の天端＝FL は床・屋根の下）。 */
-const SURFACE_KINDS = Object.freeze(['floor', 'roof']);
+/** 面材（同じ高さでも下の線に勝つ立体の種別。規則 (ii)）。床と屋根（梁の天端＝FL は床・屋根の下）と階段の段（天端の面。S7b）。 */
+const SURFACE_KINDS = Object.freeze(['floor', 'roof', 'stairTread']);
 const DIAGONALS = [[1, 1], [-1, 1], [1, -1], [-1, -1]];
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);

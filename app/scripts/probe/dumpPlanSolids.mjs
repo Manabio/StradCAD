@@ -6,8 +6,8 @@
 //   穴の外    … 下階の層の線で、端点・中点が自階の床の穴の和（閉区間）の外にあるもの（窓の外に出ていないか）
 // 参考値（二重描画の見積もり）:
 //   階段吹抜け内の壁 … 下階の壁の線の中点が自階の stairVoid の穴の中にあるもの（21 文書で 251 本）。StairLayer の隔て壁の輪郭
-//                      （partitionOutlineOf）と重なるのは実測 8 本だけで、残りは今回はじめて見える線（段板が立体でないため、
-//                      段の下に隠れるはずの壁も描かれる。S7b で解消。ユーザー了承済み）
+//                      （partitionOutlineOf）と重なるのは実測 8 本だけで、残りは今回はじめて見える線（S6c 時点の件数。S7b 以降は段より低い
+//                      壁の部分だけ消える〔28.3m＝下階の壁の総延長 375.6m の約 7%〕。段より高い壁は残る。分割で 251→265 本）
 //   短線(<20mm) … 隙間の規則（plan/planSectionFigure.js PLAN_GAP_CLOSE_MM）の効果を見る
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/dumpPlanSolids.mjs <出力先ディレクトリ> [src.stq ...]
 //   src を省略すると 13 / moku4 / moku1-6 / wood-void-test / plan-solids-test（D:/tatsuya/Download）。

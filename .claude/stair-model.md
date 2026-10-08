@@ -164,6 +164,8 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
 - 見た目の破れ線の始点・終点は中心線・通り芯にとめる: 始点=外周壁CL（extendBreakEndToCL）、
   終点=内側の通り芯（U字=レーン間中心線s=0.5、L字・中空き=吹抜け・ウェル境界線）。
   レーンあき（LANE_GAP）やinset端で止めない（widthVisで延長。D・breakInsetは実幅のまま）
+- マスの多角形（`collectCells:true` のときだけ戻り値の`cells`）も同じエミッタから取る。型側は`emitTurn`へ`cellPoly(j)`を供給するだけ
+  （放射状は`fanCellPoly`）。破れの上限・段鼻は適用しない。平面の断面解決の段の立体（`stairTreads.js`）が使う。型を足すときは`cellPoly`も渡す（無いと遮蔽しない）
 
 ## UIは踏面数でたずねる
 図中編集の区間寸法は踏面数（マス数）で表示・入力し、sections（実段数）への換算

@@ -14,7 +14,7 @@
  * @typedef {import('./planGeometry.js').Rect} Rect
  * @typedef {import('./planGeometry.js').Footprint} Footprint
  * @typedef {'floor'|'wall'|'column'|'beam'|'roof'|'stairTread'|'generic'} SolidKind
- *   stairTread は予約（S2 では生成しない。純粋な踏面幾何が無い——S7 の前に stairTreadSolids が要る）。
+ *   stairTread は階段の段（S7b）。厚み 0（zLo = zHi = 天端）・drawEdges:false の遮蔽専用（描くのは StairLayer だけ）。
  * @typedef {{points:number[], role:string}} InnerLine
  *   立体の内側の線（屋根の外形線・棟木・隅木・谷木。S5 から屋根が生成）。points は折れ線（閉じるなら先頭の点を末尾へ足す）。
  * @typedef {{anchor:{x:number,y:number}, prims:Array<object>}} Mark
@@ -43,6 +43,8 @@ import { kneeDropRecordsOnAxis, effectiveCeilingHeight } from '../finish/kneeDro
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { cellBoundsList } from '../finish/gridCells.js';
 import { floorOpeningCellRects } from '../finish/stair/slabOpening.js';
+import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
+import { riserOf } from '../finish/stair/stairDimensions.js';
 import { footprintCellKeys } from '../structural/wallGate.js';
 import { stairFilterFor } from '../structural/openingBeamAxes.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
@@ -286,6 +288,34 @@ function roofSolids(layer) {
   return out;
 }
 
+// ---------------------------------------------------------------- 階段の段
+
+const polyArea2 = p => p.reduce((s, _, i) => (i % 2 ? s : s + p[i] * p[(i + 3) % p.length] - p[(i + 2) % p.length] * p[i + 1]), 0);
+
+/**
+ * 階段の段（マス）の立体。**遮蔽専用**（drawEdges:false。階段の線を描くのは StairLayer だけ）。段 n の天端は
+ * 層の FL + n × 蹴上、厚みは 0（zLo = zHi。段板の厚みは使わない＝限界）。蹴上が求まらない階段は立体にしない（遮蔽しない）。
+ * 多角形はマスごとに1件（source.id＝階段 id・source.part＝段数字と同じ番号）。不正な多角形（6 要素未満・非有限・面積 0）は捨てる。
+ * @param {SolidLayer} layer
+ * @param {(stair:object)=>number|null} riserFor 階段の蹴上（層ごとに決める。planSolids の riserForLayer）
+ */
+function stairTreadSolids(layer, riserFor) {
+  const out = [];
+  const insetView = layer.role === 'self' ? 'install' : 'upper'; // 自階は設置階の逃がし（StairLayer の beyondBuilt と同じ）、下階は見下げ
+  for (const stair of layer.graph.stairs ?? []) {
+    for (const t of stairTreadFootprints(stair, layer.graph, { riser: riserFor(stair), insetView })) {
+      const p = t.poly;
+      if (p.length < 6 || p.length % 2 !== 0 || !p.every(Number.isFinite) || Math.abs(polyArea2(p)) < 1e-6) continue;
+      const z = layer.floorZMm + t.topZ;
+      out.push({
+        kind: 'stairTread', footprint: { poly: p }, zLo: z, zHi: z, drawEdges: false,
+        source: baseSource(layer, 'stairTread', stair.id, { part: t.number }),
+      });
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- 汎用立体
 
 /**
@@ -325,17 +355,24 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  * graph が無い層は飛ばす。層が空・無ければ []。
  * @param {SolidLayer[]} layers  `elevation/section/sectionBandLayers.js buildBandLayers` の戻り値と同型
  * @param {{riserOf?: (stair:object)=>number|null, belowGraphOf?: (graph:object)=>object|null, extraSolids?: Solid[]}} [opts]
- *   riserOf＝階段の蹴上（破れ先の位置）。belowGraphOf＝graph の直下階の graph（無ければ null。破れ先を穴にするかの判定）。
+ *   riserOf＝最上の層の階段の蹴上（破れ先の位置・段の高さ）。下の層の階段は直上の層との階高から求める（stairTreadSolids）。belowGraphOf＝graph の直下階の graph（無ければ null。破れ先を穴にするかの判定）。
  * @returns {Solid[]}
  */
 export function planSolids(layers, opts = {}) {
   const entries = []; // {solid, layerZ, roleRank}
+  const floorZs = (layers ?? []).filter(l => l?.graph && Number.isFinite(l.floorZMm)).map(l => l.floorZMm).sort((a, b) => a - b);
   for (const layer of layers ?? []) {
     if (!layer?.graph || !Number.isFinite(layer.floorZMm)) continue;
     let cellToRoom = null;
     const lazyCellToRoom = () => (cellToRoom ??= buildCellToRoom(layer.graph));
+    // 階段の蹴上は層ごとに1本: 直上の層があればその階高（直上の FL − この層の FL）から、無ければ（最上の層＝自階）opts.riserOf。
+    // 明示指定（stair.riser）は riserOf が優先する。下階の層に自階の riserOf を使うと階高の違う階で段の高さがずれる
+    const upperZ = floorZs.find(z => z > layer.floorZMm);
+    const riserForLayer = upperZ !== undefined
+      ? stair => riserOf(stair, upperZ - layer.floorZMm)
+      : stair => opts.riserOf?.(stair) ?? null;
     const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom), ...columnSolids(layer),
-      ...beamSolids(layer), ...roofSolids(layer)].filter(Boolean);
+      ...beamSolids(layer), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer)].filter(Boolean);
     for (const solid of solids) entries.push({ solid, layerZ: layer.floorZMm, roleRank: ROLE_RANK[layer.role] ?? 3 });
   }
   const kindRank = k => SOLID_KIND_ORDER.indexOf(k);

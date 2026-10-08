@@ -1,6 +1,6 @@
 {
  "probe": "stairChainProbe",
- "commit": "dcf40aa",
+ "commit": "87c4ae5",
  "source": "moku4",
  "summary": {
   "floorCount": 3,
@@ -39,7 +39,7 @@
   "continuationStairsTotal": 1,
   "upperSlabRectsTotal": 2,
   "ruleOEffectiveSourcesTotal": 0,
-  "ruleOSteelSourcesTotal": 8
+  "ruleOSteelSourcesTotal": 2
  },
  "resyncScenarios": [
   {
@@ -300,38 +300,6 @@
       "hi": 1820,
       "outwardSign": 1,
       "through": true,
-      "onGrid": false,
-      "rcBacked": false,
-      "source": "stairBeyond",
-      "sources": [
-       "stairBeyond"
-      ],
-      "beamWidthUnresolved": false
-     },
-     {
-      "isVertical": false,
-      "coord": -9100,
-      "lo": 910,
-      "hi": 1820,
-      "outwardSign": -1,
-      "through": true,
-      "onGrid": true,
-      "rcBacked": false,
-      "source": "stairBeyond",
-      "sources": [
-       "stairBeyond"
-      ],
-      "beamWidthUnresolved": false
-     },
-     {
-      "isVertical": true,
-      "coord": 1820,
-      "lo": -9100,
-      "hi": -8190,
-      "outwardSign": 1,
-      "through": false,
-      "onGrid": true,
-      "rcBacked": false,
       "source": "stairBeyond",
       "sources": [
        "stairBeyond"
@@ -345,8 +313,6 @@
       "hi": -8190,
       "outwardSign": -1,
       "through": false,
-      "onGrid": false,
-      "rcBacked": false,
       "source": "stairBeyond",
       "sources": [
        "stairBeyond"
@@ -427,68 +393,7 @@
    "ruleO": {
     "effectiveStructure": "木造（在来）",
     "effective": [],
-    "steel": [
-     {
-      "isVertical": false,
-      "coord": -7280,
-      "lo": 0,
-      "hi": 1820,
-      "outwardSign": 1,
-      "through": true,
-      "onGrid": true,
-      "rcBacked": false,
-      "source": "stairVoid",
-      "sources": [
-       "stairVoid"
-      ],
-      "beamWidthUnresolved": false
-     },
-     {
-      "isVertical": false,
-      "coord": -9100,
-      "lo": 0,
-      "hi": 1820,
-      "outwardSign": -1,
-      "through": true,
-      "onGrid": true,
-      "rcBacked": false,
-      "source": "stairVoid",
-      "sources": [
-       "stairVoid"
-      ],
-      "beamWidthUnresolved": false
-     },
-     {
-      "isVertical": true,
-      "coord": 0,
-      "lo": -9100,
-      "hi": -7280,
-      "outwardSign": -1,
-      "through": false,
-      "onGrid": true,
-      "rcBacked": false,
-      "source": "stairVoid",
-      "sources": [
-       "stairVoid"
-      ],
-      "beamWidthUnresolved": false
-     },
-     {
-      "isVertical": true,
-      "coord": 1820,
-      "lo": -9100,
-      "hi": -7280,
-      "outwardSign": 1,
-      "through": false,
-      "onGrid": true,
-      "rcBacked": false,
-      "source": "stairVoid",
-      "sources": [
-       "stairVoid"
-      ],
-      "beamWidthUnresolved": false
-     }
-    ]
+    "steel": []
    }
   }
  ]

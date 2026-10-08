@@ -343,6 +343,11 @@ function measuredLengths(spans, count) {
 
 // ---- 共通描画（直進部・踊場・周回部の2プリミティブ。タイプ側は区間内位置→ワールドの写像だけを渡す）----
 
+// 各 build* の出力の入れ物。collectCells:true のときだけ cells（マスの多角形 {number, poly}）を持つ
+//（false・省略では cells キー自体を作らない＝既存の出力は完全に不変）。マスの多角形も踏面線・段数字と同じエミッタ
+//（emitRun・emitTurn）から取り、型側は emitTurn の geo.cellPoly を供給するだけ（写像のみ。stair-model.md）。
+const newOut = (collectCells) => (collectCells ? { treads: [], stepNumbers: [], cells: [] } : { treads: [], stepNumbers: [] });
+
 // 直進部: 区間内のマス境界線（1..cells-1。区間終端の境界は接続する踊場・周回部／外周が描く）と
 // マス番号（続き番号）。axis.treadLine(mm)/axis.labelPt(mm) は区間基点からの距離→ワールドの写像。
 // limitMm は破れ線の手前で止める上限（区間内の距離。単位は axis と同じであれば mm でなくてもよい）。
@@ -350,6 +355,14 @@ function measuredLengths(spans, count) {
 // （breakInset ぶん手前＝limitMm）で止める必要があるが、段数文字（点）は「属するマスが破れの手前か」
 // という離散判定（numberLimitMm＝インセットなしの破れ位置）だけで決まる。共有ゲートにしないこと。
 function emitRun(out, part, pitch, axis, { detail, limitMm = Infinity, numberLimitMm = limitMm, nosingMm = 0 }) {
+  // マスの多角形（out.cells があるときだけ。S7b: 平面の断面解決の遮蔽物）。踏面線と同じ axis.treadLine で
+  // 前後の境界線を取る四角形。破れの上限（limitMm）・段鼻（nosingMm）は適用しない（描画の都合であり、マスの占有ではない）
+  if (out.cells) {
+    for (let k = 1; k <= part.cells; k++) {
+      const a = axis.treadLine((k - 1) * pitch), b = axis.treadLine(k * pitch);
+      out.cells.push({ number: part.numberStart + k - 1, poly: [a.x1, a.y1, a.x2, a.y2, b.x2, b.y2, b.x1, b.y1] });
+    }
+  }
   for (let k = 1; k < part.cells; k++) {
     const mm = k * pitch + nosingMm;
     if (mm <= 1e-6 || mm >= limitMm) continue;
@@ -368,6 +381,13 @@ function emitRun(out, part, pitch, axis, { detail, limitMm = Infinity, numberLim
 // geo.entryPt() で「直前区間と同じ幅方向位置」かつ「入口境界線近く」に置く。マスw≥2の2段目以降は
 // 放射境界 w-1 本（geo.radialLine）と外周部近くの番号（geo.cellPt）。区間の入口・出口境界はタイプ側が描く。
 function emitTurn(out, part, geo, { detail }) {
+  // マスの多角形（out.cells があるときだけ）。型側が cellPoly(j)（j=1..cells）を供給する。無ければ積まない（遮蔽しない＝安全側）
+  if (out.cells && geo.cellPoly) {
+    for (let j = 1; j <= part.cells; j++) {
+      const poly = geo.cellPoly(j);
+      if (poly) out.cells.push({ number: part.numberStart + j - 1, poly });
+    }
+  }
   if (part.cells > 1) {
     for (let j = 1; j < part.cells; j++) out.treads.push(geo.radialLine(j / part.cells));
   }
@@ -378,6 +398,24 @@ function emitTurn(out, part, geo, { detail }) {
     const p = geo.cellPt((j - 0.5) / part.cells);
     out.stepNumbers.push({ x: p.x, y: p.y, text: String(part.numberStart + j - 1) });
   }
+}
+
+// 点の列 → [x,y,...]
+const flatPts = (pts) => pts.flatMap((p) => [p.x, p.y]);
+
+// 放射状マス j（1..w）の多角形。[放射線 j-1 の始点・終点, 間にある外周の角, 放射線 j の終点・始点]。
+// radialLine は emitTurn の geo.radialLine と同じもの（u=(j-1)/w, j/w を同じ式で渡すので特例の放射線も一致する）。
+// cornerUs は外周の折れ点の u、cornerPt(u) はその点。連続する同一点（共通の pivot など）は1つにする。
+function fanCellPoly(radialLine, w, j, cornerUs, cornerPt) {
+  const u0 = (j - 1) / w, u1 = j / w;
+  const r0 = radialLine(u0), r1 = radialLine(u1);
+  const pts = [{ x: r0.x1, y: r0.y1 }, { x: r0.x2, y: r0.y2 }];
+  for (const u of cornerUs) if (u > u0 + 1e-9 && u < u1 - 1e-9) pts.push(cornerPt(u));
+  pts.push({ x: r1.x2, y: r1.y2 }, { x: r1.x1, y: r1.y1 });
+  const same = (p, q) => Math.abs(p.x - q.x) < 1e-6 && Math.abs(p.y - q.y) < 1e-6;
+  const uniq = pts.filter((p, i) => i === 0 || !same(p, pts[i - 1]));
+  if (uniq.length > 1 && same(uniq[0], uniq[uniq.length - 1])) uniq.pop();
+  return flatPts(uniq);
 }
 
 // pivot から perim（外周点）へ TURN_OUT ぶん寄せた点（回り・曲がり部の2段目以降を外周部近くへ）。
@@ -495,7 +533,7 @@ function straightFramePorts(sp, turn, lengthMm) {
 }
 
 // 直進階段
-function buildStraight(stair, b, { view, detail, riser, spans = null, breakOverhangMm = 0 }) {
+function buildStraight(stair, b, { view, detail, riser, spans = null, breakOverhangMm = 0, collectCells = false }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const run = parts[0];
@@ -516,7 +554,7 @@ function buildStraight(stair, b, { view, detail, riser, spans = null, breakOverh
   // I字: 破れ線が広い方（走行方向により長く見えがかる側＝文字をより多く描画できる側）へ寄せる。
   // 破れがない（upper）場合は既定で外周寄り（1-NUM_OUT）に置く。
   const numS = wideSide === 0 ? NUM_OUT : 1 - NUM_OUT;
-  const out = { treads: [], stepNumbers: [] };
+  const out = newOut(collectCells);
   if (sp?.entry === 'side') emitPortTurnZone(out, f, { tBase: 0, tExit: zoneE / L, sEdge: sp.entryS, sFar: 1 - sp.entryS, sExitLo: 0, sExitHi: 1, enterFromEdge: true }, turnE, 1, { detail });
   emitRun(out, run, pitch, {
     treadLine: (mm) => line(f.pt(clamp01((zoneE + mm) / L), 0), f.pt(clamp01((zoneE + mm) / L), 1)),
@@ -546,7 +584,7 @@ function buildStraight(stair, b, { view, detail, riser, spans = null, breakOverh
 // ---- 踊り場付直進階段 ----
 // 走行軸上に 直進部 → 踊場（マス1・平坦バンド）→ 直進部 を配置する。区間長はセル実測
 //（区間長指定）があればそれを使い、無ければ 踏面寸×マス数＋最小踊場 を合成して枠に引き伸ばす。
-function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverhangMm = 0 }) {
+function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverhangMm = 0, collectCells = false }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [run1, land, run2] = parts;
@@ -579,7 +617,7 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverh
   // I字: 破れ線が広い方へ寄せる（破れなしは既定で外周寄り）。区間全体で同じ側に統一する。
   const numS = wideSide === 0 ? NUM_OUT : 1 - NUM_OUT;
 
-  const out = { treads: [], stepNumbers: [] };
+  const out = newOut(collectCells);
   const lineAt = (mm) => line(f.pt(clamp01(tAt(mm)), 0), f.pt(clamp01(tAt(mm)), 1));
   const pushBoundary = (mm) => { if (mm > 1e-6 && mm < limitMm - 1e-6) out.treads.push(lineAt(mm)); };
 
@@ -595,7 +633,9 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverh
   pushBoundary(landingEnd);
   const landEntryMm = L1 + NUM_GAP * pitch1; // 直進部と同じ離れ（pitch1基準）
   if (landEntryMm < numberLimitMm) {
-    emitTurn(out, land, { entryPt: () => f.pt(tAt(landEntryMm), numS) }, { detail });
+    // 踊場のマス: 走行軸 L1〜landingEnd の全幅の矩形（マス1の平場）
+    const cellPoly = () => flatPts([f.pt(tAt(L1), 0), f.pt(tAt(landingEnd), 0), f.pt(tAt(landingEnd), 1), f.pt(tAt(L1), 1)]);
+    emitTurn(out, land, { entryPt: () => f.pt(tAt(landEntryMm), numS), cellPoly }, { detail });
   }
   // 直進部2（最終境界=上階到達辺は frameDecor の outline が描く）
   emitRun(out, run2, pitch2, {
@@ -665,10 +705,12 @@ function emitPortTurnZone(out, f, { tBase, tExit, sEdge, sFar, sExitLo, sExitHi,
   const lerp = (p, q, k) => ({ x: p.x + (q.x - p.x) * k, y: p.y + (q.y - p.y) * k });
   const perim = (u) => u <= 0.5 ? lerp(path[0], path[1], u / 0.5) : lerp(path[1], path[2], (u - 0.5) / 0.5);
   const part = { kind: 'turn', risers: steps, cells: steps, numberStart, index: -1 };
+  const radialLine = (u) => line(P, perim(u));
   emitTurn(out, part, {
-    radialLine: (u) => line(P, perim(u)),
+    radialLine,
     cellPt: (u) => radialMix(P, perim(u)),
     entryPt: () => radialMix(P, perim(0.5 / steps)),
+    cellPoly: (j) => fanCellPoly(radialLine, steps, j, [0.5], perim),
   }, { detail });
 }
 
@@ -752,7 +794,7 @@ function uTurnPortAnchor(f, { tBaseA, tBaseB, tExitA, tExitB, entryFull }, side,
 // install の破れは常に踊場との接続部（復路の初段線＝tRun）。FL+1600/riser では位置決めしない。
 // 復路の段数字は install では表示しない（初段線位置＝破れの始点のため、初段に続き番号を置けない）。
 // 踏面線は、破れ線（対角）に触れるまで吹抜け側から描画できる分だけ描く。
-function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOverhangMm = 0 }) {
+function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOverhangMm = 0, collectCells = false }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [runA, land, runB] = parts;
@@ -774,7 +816,7 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
   const sA = 0.5 - halfGap, sB = 0.5 + halfGap;
   const cA = sA / 2, cB = (sB + 1) / 2; // 各レーンの幅方向中心（矢印用）
 
-  const out = { treads: [], stepNumbers: [] };
+  const out = newOut(collectCells);
   // 往路（レーンA s:0→sA）
   if (ports.entry !== 'end') emitPortTurn(out, f, layout, 'A', turnStepsE, 1, sA, { detail }); // 取りつき回転部
   emitRun(out, runA, pitchA, {
@@ -789,7 +831,10 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
   out.treads.push(lineS(tRun, sB, 1));
   const tMid = (tRun + 1) / 2;
   // 初段=下手側（往路runA）と同じ幅方向位置（NUM_OUT）・同じ離れ（pitchA基準）で入口境界線近くに置く
-  emitTurn(out, land, { entryPt: () => f.pt(tRun + tAt(NUM_GAP * pitchA), NUM_OUT) }, { detail });
+  emitTurn(out, land, {
+    entryPt: () => f.pt(tRun + tAt(NUM_GAP * pitchA), NUM_OUT),
+    cellPoly: () => flatPts([c(tRun, 0), c(1, 0), c(1, 1), c(tRun, 1)]), // 踊場は両レーンをまたぐ全幅の矩形
+  }, { detail });
 
   // 復路（レーンB s:sB→1、踊場から base へ戻る）と、始点＝直進部2（復路）の初段＝踊場との
   // 接続部（tRun）と外周部（s=1、隣接壁側）の交点に固定した破れ線を、共通の幾何から作る。
@@ -856,7 +901,7 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
 // install の破れは常に周回部との接続部（復路の初段線＝tRun）。FL+1600/riser では位置決めしない。
 // 復路の段数字は install では表示しない（初段線位置＝破れの始点のため、初段に続き番号を置けない）。
 // 踏面線は、破れ線（対角）に触れるまで吹抜け側から描画できる分だけ描く。
-function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverhangMm = 0 }) {
+function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverhangMm = 0, collectCells = false }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [runA, turn, runB] = parts;
@@ -876,7 +921,7 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
   const sA = 0.5 - halfGap, sB = 0.5 + halfGap;
   const cA = sA / 2, cB = (sB + 1) / 2; // 各レーンの幅方向中心（矢印用）
 
-  const out = { treads: [], stepNumbers: [] };
+  const out = newOut(collectCells);
   // 往路（レーンA s:0→sA）
   if (ports.entry !== 'end') emitPortTurn(out, f, layout, 'A', turnStepsE, 1, sA, { detail }); // 取りつき回転部
   emitRun(out, runA, pitchA, {
@@ -902,10 +947,12 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
   // その共有辺になり、他の放射線と同じ pivot P から奥の辺（外壁側）へ垂直（走行軸に平行）に引く
   // （ユーザー指示 2026-10-06「pivot はこの踏面だけ変えず、そこから外壁へ向かって垂直線」）。
   // 奇数では u=0.5 の放射線が存在せず現状のまま。あき0では sA=0.5 で perim(0.5)=(1,0.5) と一致し従来の線と同じ。
+  const windingRadial = (u) => (u === 0.5 ? line(P, f.pt(1, sA)) : line(P, perim(u)));
   emitTurn(out, turn, {
-    radialLine: (u) => (u === 0.5 ? line(P, f.pt(1, sA)) : line(P, perim(u))),
+    radialLine: windingRadial,
     cellPt: (u) => radialMix(P, perim(u)),
     entryPt: () => f.pt(tRun + tAt(NUM_GAP * pitchA), NUM_OUT),
+    cellPoly: (j) => fanCellPoly(windingRadial, turn.cells, j, [1 / 3, 2 / 3], perim), // 外周の角は奥の辺の両端（u=1/3・2/3）
   }, { detail });
   // 復路（レーンB s:sB→1）と、始点＝直進部2（復路）の初段＝周回部との接続部（tRun）と
   // 外周部（s=1、隣接壁側）の交点に固定した破れ線を、共通の幾何から作る。
@@ -1022,7 +1069,7 @@ function lTurnBreakState(run1, run2, totalSteps, riser, view, { turnE = 0, turnA
   };
 }
 
-function buildLTurn(stair, b, { view, detail, riser, spans, breakOverhangMm = 0 }) {
+function buildLTurn(stair, b, { view, detail, riser, spans, breakOverhangMm = 0, collectCells = false }) {
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [run1, corner, run2] = parts;
   const W = b.x2 - b.x1, H = b.y2 - b.y1;
@@ -1061,7 +1108,7 @@ function buildLTurn(stair, b, { view, detail, riser, spans, breakOverhangMm = 0 
   const awayDirArm1 = unit(toWorld(0, runV).x - toWorld(runU, runV).x, toWorld(0, runV).y - toWorld(runU, runV).y);
   const awayDirArm2 = unit(toWorld(1, 0).x - toWorld(1, runV).x, toWorld(1, 0).y - toWorld(1, runV).y);
 
-  const out = { treads: [], stepNumbers: [] };
+  const out = newOut(collectCells);
   let breakLine = null;
   let breakDiag = null;           // 破れ線の対角（矢印・踏面線を正確に接続するため）
   let breakInset = 0;             // mm
@@ -1138,10 +1185,12 @@ function buildLTurn(stair, b, { view, detail, riser, spans, breakOverhangMm = 0 
     const pivot = toWorld(runU, runV);
     // 初段=下手側（arm1）と同じ幅方向位置（1-NUM_OUT）・同じ離れ（pitch1基準）で入口境界線近くに置く。
     // 2段目以降は pivot→外周 の混合（TURN_OUT）で外周部近くへ寄せる。
+    const cornerRadial = (t) => line(pivot, perimCorner(t));
     emitTurn(out, corner, {
-      radialLine: (t) => line(pivot, perimCorner(t)),
+      radialLine: cornerRadial,
       cellPt: (t) => radialMix(pivot, perimCorner(t)),
       entryPt: () => toWorld(runU + NUM_GAP * pitch1, 1 - NUM_OUT),
+      cellPoly: (j) => fanCellPoly(cornerRadial, corner.cells, j, [0.5], perimCorner), // 外周の角は (1,1)（t=0.5）
     }, { detail });
   }
   if (drawArm2) {
@@ -1229,7 +1278,7 @@ function openWellBreakState(run1, land1, land2, totalSteps, riser, view) {
 
 // ---- 中空き階段（OPEN_WELL）----
 // 中央に吹抜け（well）を持ち、下→踊場1→右→踊場2→上 の3直進部+2踊場（各マス1）がC字に囲む。
-function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
+function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0, collectCells = false }) {
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [run1, land1, run2, land2, run3] = parts;
   const W = b.x2 - b.x1, H = b.y2 - b.y1;
@@ -1260,7 +1309,7 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
   const uAxisLen = Math.hypot(toWorld(1, 0).x - toWorld(0, 0).x, toWorld(1, 0).y - toWorld(0, 0).y);
   const vAxisLen = Math.hypot(toWorld(0, 1).x - toWorld(0, 0).x, toWorld(0, 1).y - toWorld(0, 0).y);
 
-  const out = { treads: [], stepNumbers: [] };
+  const out = newOut(collectCells);
   let breakLine = null;
   let breakInset = 0; // mm
   let bpU1 = null, bpV = null, bpU3 = null; // 各アーム内の破れ位置（正規化。マスの基点側境界）
@@ -1331,7 +1380,10 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
     out.treads.push(lineUV(runW, 1 - aw, runW, 1));  // 踊場1入口境界（下アーム側）
     out.treads.push(lineUV(runW, 1 - aw, 1, 1 - aw)); // 踊場1出口境界（右アーム側）
     // 初段=下手側（下アーム）と同じ幅方向位置・同じ離れ（pitch1基準）で入口境界線近くに置く
-    emitTurn(out, land1, { entryPt: () => toWorld(runW + NUM_GAP * pitch1, midBottom) }, { detail });
+    emitTurn(out, land1, {
+      entryPt: () => toWorld(runW + NUM_GAP * pitch1, midBottom),
+      cellPoly: () => flatPts([toWorld(runW, 1 - aw), toWorld(1, 1 - aw), toWorld(1, 1), toWorld(runW, 1)]), // 右下の角（u runW→1 × v 1-aw→1）
+    }, { detail });
   }
   // 右アーム（u runW→1, v rV0→rV1）下→上。踊場2入口境界は踊場側が描く。
   if (drawRight) {
@@ -1344,7 +1396,10 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
     out.treads.push(lineUV(runW, aw, 1, aw));   // 踊場2入口境界（右アーム側）
     out.treads.push(lineUV(runW, 0, runW, aw)); // 踊場2出口境界（上アーム側）
     // 初段=下手側（右アーム）と同じ幅方向位置・同じ離れ（pitch2基準）で入口境界線近くに置く
-    emitTurn(out, land2, { entryPt: () => toWorld(midRight, aw - NUM_GAP * pitch2) }, { detail });
+    emitTurn(out, land2, {
+      entryPt: () => toWorld(midRight, aw - NUM_GAP * pitch2),
+      cellPoly: () => flatPts([toWorld(runW, 0), toWorld(1, 0), toWorld(1, aw), toWorld(runW, aw)]), // 右上の角（u runW→1 × v 0→aw）
+    }, { detail });
   }
   // 上アーム（u runW→0, v 0→aw）右→左。左端（上階到達）は outline が描く。
   if (drawTop) {
@@ -1395,13 +1450,17 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0 }) {
  *   breakOverhangMm … 破れ線の見た目の両端を線方向へ CL からはり出す量(mm)。中心線の端の
  *   はね出しと同じ扱いで、描画側が overhangMm(viewport) を渡す（既定0＝はり出しなし）。
  *   見た目のみで、側線連結・踏面クリップ等の実端点幾何には影響しない。
+ *   collectCells … true のときだけ戻り値に cells（マスの多角形）を付ける（false・省略では cells キー自体を付けない）。
+ *   遮蔽用（S7b）には view:'upper' で呼ぶ。破れ位置の上限・段鼻は適用しない。
  *   graph … 指定時、insetStairBounds が faceRect(stair.cells, graph) の実壁面へ取り合う
  *   （CL偏芯で壁位置が変わっても追従。機能1）。未指定は従来どおり固定 WALL_INSET。
  * @returns {{
  *   treads:{x1,y1,x2,y2,heavy?}[], outline:{x1,y1,x2,y2,dashed,thin?,port?,side?}[],
  *   arrows:{x1,y1,x2,y2,labelX,labelY,label}[], breakLine:{x1,y1,x2,y2}[]|null,
  *   stepNumbers:{x,y,text,clipX?,clipY?}[],
+ *   cells?:{number:number, poly:number[]}[],
  * }}
+ *   cells … collectCells:true のときだけ。number は段数字と同じ続き番号（到達番号は含まない）、poly は [x,y,...] の単純多角形。
  *   stepNumbers の clipX/clipY … 間引き判定用のアンカー（省略時は x/y）。到達番号だけは
  *   描画位置が図の外（上階の床側）に出るため、判定は到達辺上の点で行う。
  *   treads の heavy … レーンあきの閉じ辺（内側ささらが取りつく踊り場線）。ささらと同じ太さで描く。

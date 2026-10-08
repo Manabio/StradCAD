@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomFeature, StairType } from '@core';
 import {
-  S4_DRAWN_KINDS, BELOW_DRAWN_KINDS, drawnPrimitives, planSolidsLayerPrimitives, planSolidsLayerCacheSpec, planSolidsLayerResolve, isCenterLineDragging,
+  S4_DRAWN_KINDS, BELOW_DRAWN_KINDS, drawnPrimitives, planSolidsLayerPrimitives, planSolidsLayerSolids, planSolidsLayerCacheSpec, planSolidsLayerResolve, isCenterLineDragging,
   visiblePlanPrimitives,
 } from './planSolidsLayerFilter.js';
 import { LodLevel } from '../viewport.js';
@@ -178,7 +178,9 @@ function switchback(id) {
 
 test('蹴上（破れ先の位置）を問われるのは自階の階段だけ。下階に同じ階段があると破れ先が穴になり、その中の下階の梁が見える', () => {
   const self = switchback('upper'), lower = switchback('lower');
-  const beam = addBeamH(lower, { axis: 3000, from: 1200, to: 1800, levelOffset: 1000 }); // 破れ先のセル（x1000..2000×y1500..4500）の中
+  // 破れ先のセル（x1000..2000×y1500..4500）の中で、自階の段（切断高 1500 以下の段は y3900 まで）の外・
+  // 下階の段の天端（FL+233〜2567）より上の梁（天端 FL+2700）にする——段の下の梁は隠れる（S7b。別テスト）
+  const beam = addBeamH(lower, { axis: 4200, from: 1200, to: 1800, levelOffset: 2700 });
   const asked = [];
   const selfRiserOf = stair => { asked.push(stair); return 150; };
   const belowPeek = { graph: lower, floorHeightMm: 2800 };
@@ -190,6 +192,22 @@ test('蹴上（破れ先の位置）を問われるのは自階の階段だけ�
   assert.ok(!planSolidsLayerPrimitives({ graph: self, selfRiserOf, cutZ: CUT }).some(p => p.source.id === beam.id));
   // 蹴上の供給源が無い（省略）でも例外にしない
   assert.doesNotThrow(() => planSolidsLayerPrimitives({ graph: self, belowPeek, cutZ: CUT }));
+});
+
+test('S7b 階段の段は遮蔽物としてだけ参加する: 線は自階でも下階（全種別を描く層）でも 0 本。階段の下の梁は隠れ、段より高い梁は見える', () => {
+  const self = switchback('upper'), lower = switchback('lower');
+  // 破れ先のセルの中。自階の段（y1500〜3900・天端 FL+1050〜1500）の下、下階の段（y1442〜4442・天端 FL-1167〜-233）の下
+  const underSelf = addBeamH(lower, { axis: 3000, from: 1200, to: 1800, levelOffset: 1000 });
+  const underLower = addBeamH(lower, { axis: 4200, from: 1200, to: 1800, levelOffset: 1000 }); // 自階の段の外・下階の段の下
+  const above = addBeamH(lower, { axis: 4200, from: 1200, to: 1800, levelOffset: 2700 });      // 下階の段より高い
+  const prims = planSolidsLayerPrimitives({ graph: self, belowPeek: { graph: lower, floorHeightMm: 2800 }, selfRiserOf: () => 150, cutZ: CUT });
+  assert.equal(prims.filter(p => p.source.kind === 'stairTread').length, 0, '段の線は出ない（描くのは StairLayer）');
+  assert.ok(prims.some(p => p.source.id === above.id), '前提: 段より高い梁は見える');
+  assert.ok(!prims.some(p => p.source.id === underSelf.id), '自階の段の下の梁は隠れる');
+  assert.ok(!prims.some(p => p.source.id === underLower.id), '下階の段の下の梁は隠れる');
+  // 蹴上の供給源が無い（selfRiserOf 省略）と自階の段は立体にならない（遮蔽しない＝安全側）。下階は階高から求まる
+  const solids = planSolidsLayerSolids({ graph: self, belowPeek: { graph: lower, floorHeightMm: 2800 } });
+  assert.deepEqual([...new Set(solids.filter(s => s.kind === 'stairTread').map(s => s.source.layerFloorZ))], [-2800], '自階の蹴上が無ければ下階の段だけ');
 });
 
 // ================================================================ 置き場・鍵・3状態・ドラッグ中

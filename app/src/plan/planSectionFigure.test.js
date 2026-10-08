@@ -565,3 +565,42 @@ test('隙間の規則: 下階の層（窓の中）の below の線にも働く',
   const prims = fig([floor, ...wallsWithGap(12.5), lower]);
   assert.deepEqual(horizontalAt(prims, 'lb', 300), [[-200, 300, 0, 300], [212.5, 300, 400, 300]]);
 });
+
+// ================================================================ S7b: 階段の段（遮蔽専用の面材）
+
+const tread = (z, extra = {}) => solid('stairTread', sq(0, 0, 1000, 1000), z, z, { id: 's', part: 1, drawEdges: false, ...extra });
+
+test('S7b 段は面材: 天端と同点の梁は隠れ、天端+1 の梁は見える（梁の外形が段の内側にある場合）', () => {
+  const same = solid('beam', sq(200, 400, 800, 500), 100, 300, { id: 'b' });
+  assert.equal(ofId(fig([tread(300), same]), 'b').length, 0, '天端が同点なら段が勝つ');
+  const higher = solid('beam', sq(200, 400, 800, 500), 101, 301, { id: 'b' });
+  assert.equal(nonEmpty(ofId(fig([tread(300), higher]), 'b'), '天端+1 の梁').length, 4, '段より高い梁は見える');
+  const lower = solid('beam', sq(200, 400, 800, 500), -100, 100, { id: 'b' });
+  assert.equal(ofId(fig([tread(300), lower]), 'b').length, 0, '段より低い梁は隠れる');
+  // 段の外にはみ出す梁は、はみ出した部分だけ残る
+  const across = solid('beam', sq(-500, 400, 500, 500), 100, 300, { id: 'b' });
+  const lines = nonEmpty(ofId(fig([tread(300), across]), 'b'), 'はみ出した梁');
+  assert.ok(lines.every(p => Math.max(p.points[0], p.points[2]) <= 1e-6),
+    `段の内側（x0..1000）に線が残らず x<=0 の部分だけ: ${JSON.stringify(lines.map(p => p.points))}`);
+});
+
+test('S7b 切断面より上の段は遮蔽物にならない（above は捨てる）。切断高ちょうど・切断高以下の段は働く', () => {
+  const beam = solid('beam', sq(200, 400, 800, 500), 1000, 1300, { id: 'b' });
+  assert.equal(nonEmpty(ofId(fig([tread(1800), beam]), 'b'), '切断面より上の段').length, 4, '段の天端 1800 > 切断高 1500 は非表示＝遮蔽しない');
+  assert.equal(ofId(fig([tread(1500), beam]), 'b').length, 0, '天端が切断高ちょうどの段は below＝遮蔽する');
+  assert.equal(ofId(fig([tread(1300), beam]), 'b').length, 0, '天端が梁と同点なら遮蔽する');
+});
+
+test('S7b 段そのものは線を出さない（drawEdges:false）。自階でも下階の層（窓の中）でも 0 本', () => {
+  assert.deepEqual(fig([tread(300)]), []);
+  const floor = solid('floor', { rects: [rect(-1000, -1000, 2000, 2000)], holes: [rect(-500, -500, 1500, 1500)] }, 0, 0, { id: 'f0', layerFloorZ: 0 });
+  const lowerTread = tread(-1000, { layerFloorZ: -3000 });
+  const withFloor = fig([floor, lowerTread]);
+  assert.ok(withFloor.length > 0 && withFloor.every(p => p.source.kind === 'floor'), '前提: 出るのは床の線だけ（段の線は 0 本）');
+  // 下階の梁は窓の中で下階の段に隠れる（段が遮蔽物として働く）
+  const lowerBeam = solid('beam', sq(200, 400, 800, 500), -1300, -1100, { id: 'lb', layerFloorZ: -3000 });
+  assert.equal(nonEmpty(ofId(fig([floor, lowerBeam]), 'lb'), '段が無ければ窓の中の梁は見える').length, 4);
+  assert.equal(ofId(fig([floor, lowerTread, lowerBeam]), 'lb').length, 0, '下階の段（天端 -1000）が梁（天端 -1100）を隠す');
+  // 参考: 描画を許すと（drawEdges 省略）段の輪郭は出る＝上の 0 本は drawEdges:false によるもの
+  assert.equal(fig([solid('stairTread', sq(0, 0, 1000, 1000), 300, 300, { id: 's' })]).length, 4);
+});

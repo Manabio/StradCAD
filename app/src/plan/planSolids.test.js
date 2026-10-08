@@ -10,6 +10,7 @@ import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { columnWrapSolids } from '../finish/columnWrap.js';
+import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import {
   makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid,
 } from './planTestFixtures.js';
@@ -498,4 +499,67 @@ test('layerCeilZ: 層の ceilZMm → graph.defaultCeilingHeight → 既定2400 �
   assert.equal(layerCeilZ({ graph, floorZMm: 100 }), 2800);
   assert.equal(layerCeilZ({ graph, floorZMm: 100, ceilZMm: 900 }), 900);
   assert.equal(layerCeilZ({ graph: null, floorZMm: 100 }), 2500, 'graph が無ければ既定');
+});
+
+// ================================================================ 階段の段（S7b）
+
+test('階段の段: マスごとに1件の立体（kind stairTread・遮蔽専用 drawEdges:false）。天端 = FL + 番号 × 蹴上、厚み 0。source は階段 id・part＝番号', () => {
+  const graph = switchbackGraph();
+  const stair = graph.stairs[0];
+  const treads = ofKind(planSolids(self(graph), { riserOf: () => 200 }), 'stairTread');
+  assert.equal(treads.length, stair.totalSteps - 1, '到達番号（上階の床）は段にしない');
+  treads.forEach((t, i) => {
+    assert.equal(t.zLo, t.zHi, '厚み 0');
+    assert.equal(t.zHi, (i + 1) * 200, `段 ${i + 1} の天端`);
+    assert.equal(t.drawEdges, false);
+    assert.deepEqual(t.source, { kind: 'stairTread', id: String(stair.id), layerFloorZ: 0, part: i + 1 });
+    assert.ok(t.footprint.poly.length >= 6 && t.footprint.poly.every(Number.isFinite));
+  });
+  const all = planSolids(self(graph), { riserOf: () => 200 });
+  const rank = k => SOLID_KIND_ORDER.indexOf(k);
+  assert.deepEqual(all.map(s => rank(s.kind)), [...all.map(s => rank(s.kind))].sort((a, b) => a - b), '出力は kind 表の順（stairTread は roof の後）');
+});
+
+test('階段の段: 蹴上は層ごとに1本——直上の層があればその階高から（下階）、最上の層は opts.riserOf。明示の stair.riser が優先', () => {
+  const upper = switchbackGraph(), lower = switchbackGraph();
+  const layers = [fakeLayer({ graph: upper }), fakeLayer({ graph: lower, floorZMm: -2800, role: 'below' })];
+  const run = (opts) => planSolids(layers, opts).filter(s => s.kind === 'stairTread');
+  const tops = (solids, floorZ) => solids.filter(s => s.source.layerFloorZ === floorZ).map(s => s.zHi);
+  const solids = run({ riserOf: () => 150 });
+  assert.deepEqual(tops(solids, 0), Array.from({ length: 11 }, (_, i) => (i + 1) * 150), '自階は opts.riserOf');
+  const H = 2800 / 12; // 12 蹴上
+  assert.deepEqual(tops(solids, -2800).map(z => Math.round(z * 1e6) / 1e6), Array.from({ length: 11 }, (_, i) => Math.round((-2800 + (i + 1) * H) * 1e6) / 1e6),
+    '下階は階高 2800 / 総蹴上 12（opts.riserOf を使わない）');
+  lower.stairs[0].setField('riser', 100);
+  assert.deepEqual(tops(run({ riserOf: () => 150 }), -2800), Array.from({ length: 11 }, (_, i) => -2800 + (i + 1) * 100), '明示 riser が階高由来より優先');
+  // 3 層: 中間の層の蹴上はその直上の層との階高から
+  const mid = switchbackGraph();
+  const three = [fakeLayer({ graph: upper }), fakeLayer({ graph: mid, floorZMm: -2400, role: 'below' }), fakeLayer({ graph: switchbackGraph(), floorZMm: -4800, role: 'below' })];
+  const t3 = planSolids(three, { riserOf: () => 150 }).filter(s => s.kind === 'stairTread');
+  assert.ok(Math.abs(tops(t3, -2400)[10] - (-2400 + 11 * (2400 / 12))) < 1e-6, '中間の層: 階高 2400');
+  assert.ok(Math.abs(tops(t3, -4800)[10] - (-4800 + 11 * (2400 / 12))) < 1e-6, '最下の層: 階高 2400（直上の中間の層との差）');
+});
+
+test('階段の段: 設置枠の逃がし（insetView）は自階の層が install・下階の層が upper（入れ替えると多角形が変わる）', () => {
+  const upper = switchbackGraph(), lower = switchbackGraph();
+  const layers = [fakeLayer({ graph: upper }), fakeLayer({ graph: lower, floorZMm: -2800, role: 'below' })];
+  const treads = planSolids(layers, { riserOf: () => 200 }).filter(s => s.kind === 'stairTread');
+  const polys = z => treads.filter(s => s.source.layerFloorZ === z).map(s => s.footprint.poly);
+  const expect = (graph, riser, insetView) => stairTreadFootprints(graph.stairs[0], graph, { riser, insetView }).map(t => t.poly);
+  const selfInstall = expect(upper, 200, 'install'), selfUpper = expect(upper, 200, 'upper');
+  assert.notDeepEqual(selfInstall, selfUpper, '前提: このフィクスチャは install と upper で多角形が違う');
+  assert.deepEqual(polys(0), selfInstall, '自階は install');
+  assert.deepEqual(polys(-2800), expect(lower, 2800 / 12, 'upper'), '下階は upper');
+});
+
+test('階段の段: 蹴上が求まらない（riserOf が無い・null を返す）なら立体にしない。階段が無い階も 0 件。順序は層・配列の入力順に依らない', () => {
+  const graph = switchbackGraph();
+  assert.equal(ofKind(planSolids(self(graph)), 'stairTread').length, 0, 'riserOf なし');
+  assert.equal(ofKind(planSolids(self(graph), { riserOf: () => null }), 'stairTread').length, 0, 'riserOf が null');
+  assert.equal(ofKind(planSolids(self(makeRoomGraph(0, 0, 4000, 4000).graph), { riserOf: () => 200 }), 'stairTread').length, 0, '階段なし');
+  const layers = [fakeLayer({ graph }), fakeLayer({ graph: switchbackGraph(), floorZMm: -2800, role: 'below' })];
+  const a = planSolids(layers, { riserOf: () => 200 });
+  const b = planSolids([...layers].reverse(), { riserOf: () => 200 });
+  assert.ok(a.some(s => s.kind === 'stairTread'));
+  assert.deepEqual(b.map(s => [s.kind, s.source.layerFloorZ, s.source.id, s.source.part]), a.map(s => [s.kind, s.source.layerFloorZ, s.source.id, s.source.part]));
 });
