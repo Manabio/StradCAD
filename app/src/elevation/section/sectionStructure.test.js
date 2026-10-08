@@ -262,3 +262,28 @@ test('【失敗系・WP-C】structuralPrimitivesForCut: contribution空配列・
   assert.deepEqual(structuralPrimitivesForCut([], cut), []);
   assert.deepEqual(structuralPrimitivesForCut(undefined, cut), []);
 });
+
+// ---- 断面線（floorProfile）より下の梁は描かない（2026-10-08裁定「断面の外側は描かない」）----
+test('【2026-10-08】structuralPrimitivesForCut: 断面線があるとき、上端が輪郭より下の梁（設置階FLの梁）は出さず、輪郭に接する踊り場受け梁は残す', () => {
+  const cut = {
+    seqNo: 'x', line: { isVertical: true, axisValue: 1000, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: -500, hiZ: 3000 }, baseFloorZ: 0,
+  };
+  const profile = [[0, 1200], [2000, 1200]];
+  const gFloor = makeGraph('f');
+  addHorizontalBeam(gFloor, 0, 'floor'); // 上端0＝設置階FL・成200（輪郭1200に届かない＝階段下に浮く）
+  const floorBeam = structuralContribution([{ graph: gFloor, floorZMm: 0, role: 'self' }]);
+  assert.ok(structuralPrimitivesForCut(floorBeam, cut, [], null).length > 0, '前提: 輪郭なしでは描かれる');
+  assert.deepEqual(structuralPrimitivesForCut(floorBeam, cut, [], profile), [], '輪郭より下の梁は出さない');
+
+  const gLanding = makeGraph('l');
+  addHorizontalBeam(gLanding, 890, 'landing'); // 踊り場受け梁（天は踊り場1200より下がる）は落とさない
+  const gUpper = makeGraph('u');
+  addHorizontalBeam(gUpper, 1100, 'floor'); // 天1100＋成200≧輪郭1200＝階段寄与に届く梁は残す
+  const landingBeam = structuralContribution([{ graph: gLanding, floorZMm: 0, role: 'self' }]);
+  assert.equal(structuralPrimitivesForCut(landingBeam, cut, [], profile).length,
+    structuralPrimitivesForCut(landingBeam, cut, [], null).length, '踊り場受け梁は従来どおり');
+  const reaching = structuralContribution([{ graph: gUpper, floorZMm: 0, role: 'self' }]);
+  assert.equal(structuralPrimitivesForCut(reaching, cut, [], profile).length,
+    structuralPrimitivesForCut(reaching, cut, [], null).length, '輪郭に梁成以内で届く梁は従来どおり');
+});

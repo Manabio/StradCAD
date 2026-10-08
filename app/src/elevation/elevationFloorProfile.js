@@ -565,6 +565,8 @@ function clipSegmentAboveProfile(profile, x1, z1, x2, z2) {
     if (!keepL && !keepR) continue;
     const t = dl / (dl - dr);
     const xc = xl + (xr - xl) * t;
+    // 端点だけが輪郭に触れる（交点が片の端と一致）場合は長さ0の線になる——残すと図に積もるので落とす。
+    if (keepL ? xc - xl <= GAP_EPS : xr - xc <= GAP_EPS) continue;
     if (keepL) addRun([xl, zLineAt(xl)], [xc, zLineAt(xc)]);
     else addRun([xc, zLineAt(xc)], [xr, zLineAt(xr)]);
   }
@@ -574,18 +576,20 @@ function clipSegmentAboveProfile(profile, x1, z1, x2, z2) {
 
 /**
  * **断面線の外は描画しない**（ユーザー明示指示2026-09「展開図では、断面線の外は描画しない」
- * 「階段下に部屋がある場合、断面下は描画しない」）——その面の断面線（`profile`。帯の床と
+ * 「階段下に部屋がある場合、断面下は描画しない」。2026-10-08: 木造は部屋が無くても断面線が
+ * 繋がる＝同様に下は描かない）——その面の断面線（`profile`。帯の床と
  * 縦断する階段寄与を合成した折れ線）より下を落とす。
  *
  * 適用対象は**壁の断面・見えがかり・建具の姿**だけ。呼び出し側で次の3つを対象外にする:
  * - **階段自身の断面**（踊り場桁枠・ささら断面は踊り場から桁成ぶん下がる）＝断面線そのもの
  * - **階段の見えがかり**（正面視の破線梯子・1FL足元線・ささらの端面）＝ユーザー裁定2026-09で
  *   「階段は描く」（実機「6」C）
- * - **アキ（`emitOpenGapMarks`のバツ・「ア キ」）**＝展開図一般化Phase 6b-2 C-2（設計
- *   `.claude/elevation-redesign.md`§5.11）でこの輪郭クリップの対象から外れた。アキの下端は
- *   もう`sectionHits.js`の`visibleBandsOf`が決めたband自身の値をそのまま使う——ここで
- *   二重にクリップすると、`open`帯が輪郭より下へ正しく伸びている区間（階段の桁の間の隙間等）を
- *   誤って持ち上げてしまう。
+ * - **アキ（`emitOpenGapMarks`のバツ・「ア キ」）**＝この関数のクリップ対象ではない。展開図一般化
+ *   Phase 6b-2 C-2（設計`.claude/elevation-redesign.md`§5.11）でアキの下端は
+ *   `sectionHits.js`の`visibleBandsOf`が決めたband自身の値になった。**ただし階段帯だけは
+ *   2026-10-08裁定でC-2の「二重にクランプしない」を撤回**し、断面線（`profile`）を
+ *   `emitCtx.gapFloorProfile`としてemitOpenGapMarks（sectionEmit.js）へ渡して、アキのセルの下限を
+ *   同じ輪郭へ持ち上げる（断面の外側＝階段下にはアキを出さない）。この関数自体は触れない。
  * 構造梁も同じ理由で対象外（踊り場受け梁は踊り場から梁成ぶん下がる断面）。
  *
  * 水平線は「輪郭より下のときだけ落とす」非対称な扱い——輪郭とちょうど同じ高さの線

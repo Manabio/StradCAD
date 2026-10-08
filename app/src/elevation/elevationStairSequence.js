@@ -49,6 +49,7 @@ import {
   stairPrimitivesForCut, stairFaceOccluderRects, stairCutFloorProfile,
 } from './section/sectionStair.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
+import { stairSectionIsClosed } from './elevationStairSection.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
 import { labelFaces, letterOf, upperFloorEndsOf, wallLessEndAt } from './elevationFaces.js';
 import {
@@ -266,7 +267,7 @@ export function kneeWallCapContent(content, cut, kneeDrop, floorHeight) {
  * （ジグザグの最下点＝踊り場側の段鼻）が終点になる。
  * **段鼻の出の手計算ではなく輪郭から導出する**——断面線とレーンの床線が同じ1つの情報源
  * （profile）から出るので、両者が食い違いようがない。
- * profile未指定（階段下に部屋が無い）は何もしない＝従来どおり区間いっぱい。
+ * profile未指定（階段下に部屋が無く、断面線も繋がらない＝鉄骨など）は何もしない＝従来どおり区間いっぱい。
  * 可視範囲が空の区間は`{lo:hiX, hi:loX}`（反転＝空。elevationFigure側でnull＝非描画になる）。
  * @param {object[]} segs - floorSegments
  * @param {Array<[number,number]>|null} profile - 断面線（下側の輪郭）
@@ -376,14 +377,17 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // visibleBandsOf）が答えを持つようになったため、`cut`へ`drawFloorProfile`を載せて
   // emitOpenGapMarks（sectionEmit.js）へ渡す経路は廃止した——`cut`は常に`rawCut`のまま
   // （旧実装の`{...rawCut, drawFloorProfile}`のクローンは不要になった）。
-  // 階段下に部屋が無い面では呼び出し側がnullを渡す（＝下限なし＝従来どおり設置階FLまで描く）。
+  // 断面線の無い面（鉄骨で階段下に部屋が無い面・seq1/seq3）では呼び出し側がnullを渡す（＝下限なし＝
+  // 設置階FLまで描く）。木造は部屋が無くても断面線が繋がるので渡される（2026-10-08裁定）。
   const cut = rawCut;
   // 拡張済みcut（探査延長＋帯の部屋の包絡矩形つき）はレイキャストだけでなく構造材の判定でも使う
   // ——「室内を空中で横断する梁の見えがかり」がbandRoomBoundsを見るため（sectionStructure.js）。
   // 共通経路（section/sectionContent.js）: 探査延長・端の凹み側面線の抑制・壁断面／見えがかり・
   // アキのバツまでは吹抜けの多層帯とまったく同じ処理を通る。ここから下が階段固有の後段加工。
   const { cut: pcut, columns, wallPrims, gapMarks: rawGapMarks } =
-    buildCutContent(cut, probeCtx, { endExtendMm, bandRoomBounds, upperPlaneOverhang: true });
+    buildCutContent(cut, probeCtx, {
+      endExtendMm, bandRoomBounds, upperPlaneOverhang: true, gapFloorProfile: drawFloorProfile,
+    });
   // 展開図一般化Phase 6b-2「一体設計」(.claude/elevation-redesign.md§5.12):
   // 階段自身の幾何（踏面CUT・ささら・桁枠）の描画範囲は`cutDrawRange`を、上階の平面が面端より
   // 外へ続く量（`upperOverhang`）だけ広げたもの——2FLへ到達する終端を、上階の床のはり出しと
@@ -410,8 +414,10 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 見えなくなるが、アキ・バツのために破線で右側壁断面線まで」）。
   // 展開図一般化Phase 6b-2 C-2: gapMarksは**ここに含めない**——壁プリミティブ（wallContent）
   // だけが下の`clipContentAboveDrawnProfile`（輪郭より下を落とす処理）の対象になる。
-  // アキ（gapMarks）は輪郭ではなくband自身の下端をそのまま使うため、二重クリップしない
-  // （最終contentへは下で別途合流させる）。
+  // アキ（gapMarks）は輪郭ではなくband自身の下端を使う（最終contentへは下で別途合流させる）。
+  // ただし**階段帯に限り**、断面線（drawFloorProfile）があるときはアキのセルの下限もその輪郭へ
+  // 持ち上げる（2026-10-08裁定。C-2の「二重にクランプしない」を階段帯だけ撤回——上の
+  // `buildCutContent`へ`gapFloorProfile`で渡し、sectionEmit.jsのemitOpenGapMarksが適用する）。
   const wallContent = dashHorizontalsBehindStair(wallPrims, occluders);
   // 下ささらの見えがかりのうち「断面内部（実体で囲まれた矩形の厳密内部）」に入る区間は
   // `stairPrimitivesForCut`が自身の出口（x終端クリップの前）で`columns`だけから一般判定する
@@ -422,7 +428,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   const stairContent = stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts);
   // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
   // clipWallFloorEdgeUnderZigzag（階段ジグザグの向こうの壁縁除去）の対象には含めない。
-  const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns);
+  const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile);
   // 階段の断面プロファイルとの取り合い（ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
   const joined = zRef
     ? joinToStairProfile(wallContent, stairContent, pcut,
@@ -552,7 +558,8 @@ function buildStraightFaceSequence(stair, faces, graph, opts) {
  *   floorProfile?:Array<[number,number]>|null,
  *   content:object[], skipBaseboard:true, skipWallLabel:true, floorSpanX?:object}>|null}
  *   floorProfile … その面の**断面線（下側の輪郭）**（elevationFloorProfile.jsのFloorProfile）。階段下に
- *   部屋が無ければnull（＝下限なし）。elevationStair.jsのfaceOverride経由でbuildFaceFigureへ
+ *   部屋が無く、かつ縦断する階段の断面線が繋がらない（鉄骨等）か、縦断する階段寄与が無い面（seq1/seq3）
+ *   はnull（＝下限なし）。elevationStair.jsのfaceOverride経由でbuildFaceFigureへ
  *   渡り、面端の縦線の下端に使う（contentのクリップ・floorSegments[].flatLineSpanXと同じ輪郭）。
  */
 export function stairFaceSequence(stair, faces, graph, opts = {}) {
@@ -589,17 +596,23 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // 面に直交し、かつ芯が面の範囲内にある面にだけ載せる（面と平行なB/D側には出ない）。
   // **断面線（下側の輪郭）**（ユーザー明示指示2026-09「展開図では、断面線の外は描画しない」
   // 「階段下に部屋がある場合、断面下は描画しない」「階段下に部屋がない場合、…階段下の設置階の
-  // 床断面または（連続する階段なら）階段の一部まで描画」）。**分岐は階段下部屋の有無ひとつ**
-  // ——部屋が無ければnull（＝下限なし＝従来どおり設置階FLまで描く。帯の床が設置階FL(=0)で、
-  // その下には元から何も無い）。部屋があるときは「帯の床（floorSegmentsのステップ関数）」と
+  // 床断面または（連続する階段なら）階段の一部まで描画」）。当初は「階段下部屋の有無ひとつ」で
+  // 分岐し、部屋が無ければnull（＝下限なし＝設置階FLまで描く）としたが、木造については
+  // 2026-10-08に下記の2条件へ改めた（鉄骨は従来どおり）。断面線があるときは「帯の床（floorSegmentsのステップ関数）」と
   // 「この切断が**縦断する**階段寄与」のmaxで、2FL断面→階段断面→踊り場断面→壁断面と続く
   // 閉じた輪郭になる（実機「6」D2のご指摘）。この輪郭1つが、contentのクリップ・アキの下限・
   // 区間の床線の範囲（withFlatLineSpans）すべての単一情報源。
+  // **分岐は2条件の論理和**（ユーザー裁定2026-10-08「階段断面、踊り場、壁、設置階上階天井で展開断面が
+  // 完結しており、その外側（階段下等）は描画しない」「『階段下部屋の有無』は鉄骨階段の判定として正しい。
+  // 主要構造が木造の階段は、断面線が繋がっているか/いないか。蹴込板がなく踏面だけの階段は下を描く」）:
+  // (a) 階段下部屋がある、または (b) この切断が縦断する階段寄与があり、その断面線が繋がっている
+  // （`stairSectionIsClosed`＝現状は木造・RC）。縦断する階段寄与の無い面（seq1/seq3）は従来どおりnull。
   const floorProfileFor = (cut, segs) => {
-    if (!hasRoomUnder) return null;
+    const stairPart = cut ? stairCutFloorProfile(cut.stairCut ?? null, cut, null) : null;
+    const closed = hasRoomUnder || (stairPart && stairSectionIsClosed(stair));
+    if (!closed) return null;
     const bandProfile = floorProfileFromSegments(segs);
-    if (!cut) return bandProfile;
-    return mergeFloorProfiles(bandProfile, stairCutFloorProfile(cut.stairCut ?? null, cut, null));
+    return stairPart ? mergeFloorProfiles(bandProfile, stairPart) : bandProfile;
   };
   const midWall = cutTable.wall ?? null;
   const midWallCLXs = face => {

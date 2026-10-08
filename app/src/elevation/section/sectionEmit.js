@@ -14,6 +14,7 @@ import {
   zToY, cutDrawRange, localXOf, hasCutWallStandingOn, slabRuns, cutWallRuns, slabJunctionOf,
 } from './sectionTypes.js';
 import { openingSectionPrimitives } from '../../openings/openingSection.js';
+import { drawnFloorProfileZMax } from '../elevationFloorProfile.js';
 import { FRAME_OVERHANG_MM } from '../../openings/openingPlanSymbolGeometry.js';
 import {
   mergeIntervals, segmentInsideRect, subtractRectsFromLine, isZeroLengthLine,
@@ -1160,7 +1161,9 @@ export function joinToStairProfile(wallContent, stairContent, cut, ref) {
  * 『アキ』は不要」——折返し階段の踊り場前縁の切断 seq1/seq3。階段の他の面・通常の面は従来どおり）。
  * これに伴い、以下の「6」C のバツに関する旧裁定（2026-08/09）のうち**階段の seq1/seq3 の面**に
  * 関するものは撤回済み（一般規則としては他の面で有効）。
- * @param {{ceilZ?:number}} [emitCtx]
+ * @param {{ceilZ?:number, gapFloorProfile?:Array<[number,number]>|null}} [emitCtx]
+ *   gapFloorProfile … 断面線。あればアキのセルの下限をこの輪郭へ持ち上げる（階段帯のみが渡す。
+ *   2026-10-08裁定「断面が完結しており、その外側（階段下等）は描画しない」）。null・省略は下限なし。
  * @returns {object[]}
  */
 export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
@@ -1201,7 +1204,11 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
         // 'hidden'として実体を持つ）かは既にband自身（sectionHits.jsのvisibleBandsOf）が答えを
         // 持っている。二重にクランプすると、hidden実体の手前側にあるはずの本来のアキ下端
         // （階段の桁の間の隙間等）が輪郭の高さまで誤って持ち上げられる（実機「6」C）。
-        const z0 = b.z0;
+        // **例外（階段帯だけ。2026-10-08裁定）**: 断面線（emitCtx.gapFloorProfile）があるときは、
+        // 断面線より下（階段下など断面の外側）にはアキを出さない——セルの下限を輪郭へ持ち上げる。
+        // 渡されない帯（部屋帯・吹抜け帯・断面線の無い面＝鉄骨で部屋なし／seq1・seq3）は従来どおりband自身の下端。
+        const fz = drawnFloorProfileZMax(emitCtx.gapFloorProfile, x0, x1);
+        const z0 = Math.max(b.z0, fz);
         if (b.z1 - z0 <= GAP_EPS) continue;
         // 直下に斜めの天端の帯（topEdge）があれば、アキの下辺は斜線（帯の上端 z0 は斜面の高い側）。
         // 下辺の両端の高さ（列の x0側・x1側）をセルに持たせ、バツの下の隅と「ア キ」の置き場を斜線に合わせる。
@@ -1212,7 +1219,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
         // この帯自身が階層の下へ潜ったわけではない（実機「11'」A2）。
         cells.push({
           colIndex, x0, x1, z0, z1: b.z1, structZ0: b.extendedFromZ ?? z0,
-          colX0: col.x0, colX1: col.x1, lo0: below?.topEdge.zAtX0 ?? z0, lo1: below?.topEdge.zAtX1 ?? z0,
+          colX0: col.x0, colX1: col.x1, lo0: Math.max(below?.topEdge.zAtX0 ?? z0, fz), lo1: Math.max(below?.topEdge.zAtX1 ?? z0, fz),
         });
       }
     }

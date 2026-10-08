@@ -303,7 +303,8 @@ export function clipInsideSlabSolids(prims, columns) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
  * @param {{endExtendMm?:number, bandRoomBounds?:object|null, scale?:number,
- *   upperPlaneOverhang?:boolean}} [opts]
+ *   upperPlaneOverhang?:boolean, gapFloorProfile?:Array<[number,number]>|null}} [opts]
+ *   gapFloorProfile … アキのセルの下限にする断面線（階段帯のみ。elevationStairSequence.js）。省略＝下限なし。
  * @returns {{cut:object, columns:object[], emitCtx:object,
  *   wallPrims:object[], gapMarks:object[], content:object[]}}
  *   cut … 探査延長・包絡矩形・層ごとの探査窓を載せた後の cut（後段の階段・構造材もこれを使う。
@@ -316,7 +317,10 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   );
   const columns = buildColumns(pcut, probeCtx);
   // scale（px/mm）はアキ標記の省略判定に使う（sectionEmit.jsのemitOpenGapMarks）。
-  const emitCtx = { ...emitCtxForCut(pcut), scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null };
+  const emitCtx = {
+    ...emitCtxForCut(pcut), scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
+    gapFloorProfile: opts.gapFloorProfile ?? null,
+  };
   // 壁content（断面・見えがかり・凹み側面線）は「断面内部は描画しない」の一般判定
   // （`clipInsideSlabSolids`）を通してから返す。
   const wallPrims = clipInsideSlabSolids(emitColumns(columns, pcut, emitCtx), columns);

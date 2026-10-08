@@ -28,7 +28,7 @@ import {
 import { rulesFor, effectiveStructure } from '../../structural/structureRules.js';
 import { ElevationLineRole, GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
-import { halfWallThicknessMm } from '../elevationFloorProfile.js';
+import { halfWallThicknessMm, drawnFloorProfileZMax } from '../elevationFloorProfile.js';
 import { emitLine, nearestSightlineDistMm } from './sectionEmit.js';
 
 // 断面成(depthMm)のフォールバック既定値（sectionDefIdがカタログに無く・beamDepthも未設定の
@@ -451,10 +451,16 @@ function sectionOutline(cut, xLo, xHi, zTop, depthMm, entry) {
  * @param {BeamSolid[]} contribution
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {import('./sectionTypes.js').SectionColumn[]} [columns]
+ * @param {Array<[number,number]>|null} [floorProfile] - 断面線（階段帯。2026-10-08裁定「断面の外側は
+ *   描かない」）。あれば、**梁の天が輪郭より梁成以上下に離れている**梁（＝階段寄与の anchor に接して
+ *   いない。階段下に浮く設置階FLの梁）の断面・平行見えがかりを丸ごと落とす。踊り場受け梁（role:'landing'。
+ *   天は踊り場より梁成ぶん＋α下がる）と、上階FL・踊り場に天が梁成以内で届く梁は残す。省略・null は従来どおり。
  * @returns {object[]}
  */
-export function structuralPrimitivesForCut(contribution, cut, columns) {
+export function structuralPrimitivesForCut(contribution, cut, columns, floorProfile = null) {
   const prims = [];
+  const belowProfile = (xa, xb, beam) => beam.role !== 'landing'
+    && beam.topZ + beam.depthMm < drawnFloorProfileZMax(floorProfile, xa, xb) - GAP_EPS;
   // 見えがかりの奥行き判定は壁と共通（ユーザー明示指示2026-08「既存の構造材見えがかり処理経路も
   // 含める」）——その切断で最も手前の壁面から上限以上奥にある材は、別の空間のものなので描かない。
   const nearestMm = nearestSightlineDistMm(columns);
@@ -479,6 +485,7 @@ export function structuralPrimitivesForCut(contribution, cut, columns) {
       if (!withinCutDrawRange(cut, x, halfW)) continue;
       // **切断位置で壁の中に納まる梁は描かない**（isBeamInWallAt参照）。
       if (isBeamInWallAt(beam, wallsOf(cut), cut.line.axisValue)) continue;
+      if (belowProfile(x - halfW, x + halfW, beam)) continue;
       prims.push(...sectionOutline(cut, x - halfW, x + halfW, beam.topZ, beam.depthMm, beam.section));
       continue;
     }
@@ -513,6 +520,7 @@ export function structuralPrimitivesForCut(contribution, cut, columns) {
     if (!parallel) continue;
     const xLo = localXOf(cut, beam.spanLo), xHi = localXOf(cut, beam.spanHi);
     const loX = Math.min(xLo, xHi), hiX = Math.max(xLo, xHi);
+    if (belowProfile(loX, hiX, beam)) continue;
     const zTop = beam.topZ, zBot = beam.topZ - beam.depthMm;
     prims.push(emitLine(cut, loX, zTop, hiX, zTop, ElevationLineRole.DETAIL));
     prims.push(emitLine(cut, loX, zBot, hiX, zBot, ElevationLineRole.DETAIL));

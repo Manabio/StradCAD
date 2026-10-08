@@ -599,3 +599,17 @@ test('【失敗系】mergeFloorProfiles: μm幅の準垂直な段差があって
       `入力のz範囲(-5000..1000)の外の値が出ている: ${JSON.stringify([x, z])}`);
   }
 });
+
+test('【失敗系・2026-10-08】clipContentAboveDrawnProfile: 端点だけが断面線に触れる水平線は長さ0の線を残さず落とす（触れない側は従来どおり残す）', () => {
+  const rising = [[0, 0], [1000, 2000]];
+  const touching = [{ type: 'line', x1: 0, y1: 0, x2: 1000, y2: 0, weight: 'medium' }];
+  assert.deepEqual(clipContentAboveDrawnProfile(touching, rising), [], '輪郭の上に出る部分が無い（z=0は輪郭より下へ潜る）');
+  // 逆向き（右端で触れる）も同様
+  const falling = [[0, 2000], [1000, 0]];
+  assert.deepEqual(clipContentAboveDrawnProfile([{ type: 'line', x1: 0, y1: 0, x2: 1000, y2: 0, weight: 'medium' }], falling), []);
+  // 輪郭の上へ出る部分があれば従来どおり残る
+  const crossing = [{ type: 'line', x1: 0, y1: -1000, x2: 1000, y2: -1000, weight: 'medium' }];
+  const out = clipContentAboveDrawnProfile(crossing, rising);
+  assert.equal(out.length, 1);
+  assert.ok(Math.abs(out[0].x1) < 1e-6 && Math.abs(out[0].x2 - 500) < 1e-6, `x 0..500（輪郭より上）が残る: ${out[0].x1}..${out[0].x2}`);
+});

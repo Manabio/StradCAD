@@ -10,6 +10,7 @@
  *
  * ローカル座標は elevationFigure.js と同じ（x=0起点、yは上向き負・床=0）。
  */
+import { StructuralMaterialType } from '@core';
 import { resolveSwitchbackSpanLengths } from '../finish/stair/stairClassify.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from './elevationStyle.js';
 
@@ -17,6 +18,23 @@ import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from './eleva
 // 蹴込板は垂直に」）。stairRunProfile の opts.treadThicknessMm へ渡す（sectionStair.js の
 // stairContribution が stair.structure===WOOD の flight に載せる）。
 export const WOOD_TREAD_THICKNESS_MM = 30;
+
+/**
+ * 階段の断面線（flight の下側の輪郭）が**繋がっている＝階段下の空間が蹴込板で閉じている**か
+ * （ユーザー裁定2026-10-08「主要構造が木造の階段…は、断面線が繋がっているか/いないか。蹴込板がなく、
+ * 踏面だけで構成された階段は、（階段）下を描く」）。展開図の階段帯は、階段下部屋が無くても
+ * これが true なら断面線より下（階段下）を描かない。鉄骨（ささら＋踏面で下が空く）は false＝
+ * 従来どおり「階段下部屋の有無」だけで決まる。
+ * 現状は WOOD ⇔ 蹴込板あり（WOOD_TREAD_THICKNESS_MM の輪郭は垂直の蹴込板を持つ）。RC も true
+ * （ユーザー裁定2026-10-08: RC 階段は斜スラブで下面まで断面線が繋がる）。false は鉄骨（ささら＋踏面で下が空く）だけ。将来 Stair に
+ * 「蹴込板なし」属性が入ったら、木造でもそれが立つ階段は false を返す（踏面だけの階段は下を描く）。
+ * 属性は今は追加しない。
+ * @param {{structure?:*}|null|undefined} stair
+ * @returns {boolean}
+ */
+export function stairSectionIsClosed(stair) {
+  return stair?.structure === StructuralMaterialType.WOOD || stair?.structure === StructuralMaterialType.RC;
+}
 
 /**
  * 直進区間1本ぶんの踏面プロファイル（蹴上→踏面を段数ぶん繰り返すジグザグ線）をローカル座標で作る。

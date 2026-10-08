@@ -2065,3 +2065,50 @@ test('【失敗系】emitCtxForCut: cut.faceが無ければopenEndLo/Hiはfalse�
   assert.equal(ctx.openEndLo, false);
   assert.equal(ctx.openEndHi, false);
 });
+
+// ---- emitCtx.gapFloorProfile（2026-10-08裁定: 階段帯は断面線より下にアキを出さない） ----
+test('【2026-10-08】emitOpenGapMarks: gapFloorProfile があればアキのセルの下限を断面線へ持ち上げる（バツ・「ア キ」とも）', () => {
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+  ];
+  const plain = emitOpenGapMarks(columns, makeCut());
+  const lifted = emitOpenGapMarks(columns, makeCut(), { gapFloorProfile: [[0, 1200], [1000, 1200]] });
+  const lowest = prims => Math.min(...prims.filter(p => p.type === 'line').flatMap(p => [-p.y1, -p.y2]));
+  assert.equal(lowest(plain), 0, '前提: 持ち上げなしは帯の下端(0)から');
+  assert.equal(lowest(lifted), 1200, '断面線(1200)へ持ち上がる');
+  const label = ps => ps.find(p => p.type === 'text');
+  assert.ok(-label(lifted).y > -label(plain).y, '「ア キ」も上がる');
+});
+
+test('【失敗系・2026-10-08】emitOpenGapMarks: gapFloorProfile が null・未指定なら持ち上げなし／断面線より上の帯・断面線に潰される帯の扱い', () => {
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+  ];
+  const plain = emitOpenGapMarks(columns, makeCut());
+  assert.deepEqual(emitOpenGapMarks(columns, makeCut(), { gapFloorProfile: null }), plain, 'null は持ち上げなし');
+  assert.deepEqual(emitOpenGapMarks(columns, makeCut(), {}), plain, '未指定は持ち上げなし');
+  // 帯が丸ごと断面線より下なら標記を出さない
+  assert.deepEqual(emitOpenGapMarks(columns, makeCut(), { gapFloorProfile: [[0, 2400], [1000, 2400]] }), [],
+    '帯が断面線の下に収まるならアキは出ない');
+  // 断面線より上にある帯（上階側のアキ）は不変
+  const upper = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'open', z0: 2400, z1: 4800 }] }];
+  assert.deepEqual(emitOpenGapMarks(upper, makeCut(), { gapFloorProfile: [[0, 1200], [1000, 1200]] }),
+    emitOpenGapMarks(upper, makeCut()), '断面線より上のアキ（上階側）は変わらない');
+});
+
+test('【2026-10-08】emitOpenGapMarks: 斜め天端の帯の上のアキは、gapFloorProfile で左下隅・右下隅とも持ち上がる（lo0/lo1）', () => {
+  const columns = [
+    { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [
+      { kind: 'wall', z0: 0, z1: 2000, topEdge: { zAtX0: 1000, zAtX1: 2000 } },
+      { kind: 'open', z0: 2000, z1: 4000 },
+    ] },
+  ];
+  const lines = ps => ps.filter(p => p.type === 'line');
+  const base = lines(emitOpenGapMarks(columns, makeCut()));
+  const lowAt = (ps, x) => Math.min(...ps.flatMap(p => [[p.x1, p.y1], [p.x2, p.y2]]).filter(([px]) => Math.abs(px - x) < 1e-6).map(([, y]) => -y));
+  assert.equal(lowAt(base, 0), 1000, '前提: 持ち上げなしは斜め天端どおり（左下1000）');
+  assert.equal(lowAt(base, 1000), 2000, '前提: 右下2000');
+  const lifted = lines(emitOpenGapMarks(columns, makeCut(), { gapFloorProfile: [[0, 1500], [1000, 1500]] }));
+  assert.equal(lowAt(lifted, 0), 1500, '左下隅は輪郭1500へ');
+  assert.equal(lowAt(lifted, 1000), 2000, '右下隅は天端2000のまま（輪郭より高い）');
+});

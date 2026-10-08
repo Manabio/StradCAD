@@ -14,7 +14,8 @@ import { buildFaceFigure } from './elevationFigure.js';
 import { buildStairBand } from './elevationStair.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
-import { drawnFloorProfileZAt } from './elevationFloorProfile.js';
+import { drawnFloorProfileZAt, floorProfileFromSegments, mergeFloorProfiles } from './elevationFloorProfile.js';
+import { stairCutFloorProfile } from './section/sectionStair.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
 import { buildCutContent } from './section/sectionContent.js';
@@ -2055,12 +2056,25 @@ test('stairFaceSequence: 階段下に部屋があると、壁の縦線はどの�
   }
 });
 
-test('【失敗系】stairFaceSequence: 階段下に部屋が無ければ壁の縦線は設置階FL(0)まで描く（クリップしない）', () => {
+// ---- 断面線より下を描くか（2026-10-08裁定。旧「部屋が無ければ必ず1FLまで」は木造について撤回）----
+// 鉄骨＝階段下部屋の有無だけ／木造＝断面線が繋がっている（蹴込板）ので部屋が無くても断面線より下は描かない。
+const LANE_SEQS = ['2', '4', '5'];
+const buildNoRoom = (structure, extra = {}) => {
   const graph = makeGraph();
-  const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: false });
-  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: false, ...extra.fixture });
+  stair.setField('structure', structure);
+  const faces = composeRoomFaces(room, graph);
+  const opts = { ...OPTS, layers: buildBandLayers(graph), ...extra.opts };
+  return { graph, stair, faces, opts, entries: stairFaceSequence(stair, faces, graph, opts) };
+};
+const horizontalAt = (e, z, loX, hiX) => e.content.filter(p => p.type === 'line' && Math.abs(p.y1 - p.y2) < 1e-6 &&
+  Math.abs(-p.y1 - z) < 1e-6 && Math.max(p.x1, p.x2) > loX + 1 && Math.min(p.x1, p.x2) < hiX - 1);
+
+test('【失敗系】stairFaceSequence: 鉄骨・階段下に部屋が無ければ断面線は無く、壁の縦線は設置階FL(0)まで描く（従来どおり）', () => {
+  const { entries } = buildNoRoom(StructuralMaterialType.STEEL);
 
   for (const e of entries) {
+    assert.equal(e.floorProfile, null, `seq${e.seqNo}: 鉄骨・部屋なしは断面線なし（下限なし）`);
     if (e.seqNo === '3') continue; // seq3は平場の踊り場から上だけ（2026-10-08裁定。専用テスト参照）
     assert.ok(e.floorSegments.every(s => (s.floorDeltaMm ?? 0) === 0),
       `seq${e.seqNo}: 階段下に部屋が無ければ帯の床は設置階FL(0)のはず`);
@@ -2068,6 +2082,84 @@ test('【失敗系】stairFaceSequence: 階段下に部屋が無ければ壁の�
       Math.abs(Math.min(-p.y1, -p.y2)) < 1e-6);
     assert.ok(toFloor, `seq${e.seqNo}: 設置階FL(0)まで届く縦線があるはず`);
   }
+});
+
+test('stairFaceSequence: 木造・階段下に部屋が無くても seq2/4/5 は断面線を持ち、壁・見えがかりは断面線より下へ出ない', () => {
+  const { entries, stair, faces, graph, opts } = buildNoRoom(StructuralMaterialType.WOOD);
+  const landingAbs = switchbackCuts(stair, faces, graph, opts).landingAbs;
+  const detailWeight = weightForRole(ElevationLineRole.DETAIL);
+
+  for (const e of entries) {
+    if (!LANE_SEQS.includes(e.seqNo)) {
+      assert.equal(e.floorProfile, null, `seq${e.seqNo}: 縦断する階段寄与が無い面は従来どおり断面線なし`);
+      continue;
+    }
+    assert.ok(e.floorProfile?.length > 0, `seq${e.seqNo}: 木造は部屋が無くても断面線がある`);
+    for (const p of e.content) {
+      if (p.type !== 'line' || p.weight === detailWeight) continue;
+      for (const [x, y] of [[p.x1, p.y1], [p.x2, p.y2]]) {
+        assert.ok(-y >= drawnFloorProfileZAt(e.floorProfile, x) - 1e-6,
+          `seq${e.seqNo}: (${x},${-y})が断面線より下にある`);
+      }
+    }
+    // 階段の下の設置階FL(0)の水平線（床線）は、レーンの区間（x 0..踊り場手前）に無い
+    assert.deepEqual(horizontalAt(e, 0, 0, e.face.run - 1500), [], `seq${e.seqNo}: 階段の下にFL(0)の水平線は描かない`);
+  }
+  // 踊り場側の面端の縦線は踊り場レベルから立つ（FL(0)から立てない）
+  const seq2 = entries.find(e => e.seqNo === '2');
+  const landingSide = seq2.content.filter(p => p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-6 && Math.abs(p.x1 - seq2.face.run) < 1e-6);
+  assert.ok(landingSide.length > 0 && landingSide.every(p => Math.min(-p.y1, -p.y2) >= landingAbs - 1e-6),
+    `seq2: 踊り場側の面端の縦線は踊り場レベル(${landingAbs})から立つ`);
+});
+
+test('stairFaceSequence: 木造・部屋なしで踊り場の上が開口なら、アキのバツと「ア キ」は踊り場レベルより下に出ない（鉄骨は従来どおり下まで）', () => {
+  const lowestGapZ = (structure) => {
+    const upperGraph = makeGraph('p2');
+    const { stair, faces, graph, opts } = buildNoRoom(structure, {
+      fixture: { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true },
+      opts: { upperGraph },
+    });
+    const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] });
+    const seq2 = stairFaceSequence(stair, faces, graph, { ...opts, layers }).find(e => e.seqNo === '2');
+    const diag = seq2.content.filter(p => p.type === 'line' && p.dash === 'center');
+    const labels = seq2.content.filter(p => p.type === 'text' && p.text === 'ア キ');
+    assert.ok(diag.length >= 2 && labels.length >= 1, `前提: ${structure}のseq2にバツと「ア キ」が出る`);
+    return {
+      landingAbs: switchbackCuts(stair, faces, graph, { ...opts, layers }).landingAbs,
+      diagMin: Math.min(...diag.flatMap(p => [-p.y1, -p.y2])),
+      labelMin: Math.min(...labels.map(p => -p.y)),
+    };
+  };
+  const wood = lowestGapZ(StructuralMaterialType.WOOD);
+  assert.ok(wood.diagMin >= wood.landingAbs - 1e-6, `木造: バツの最下点(${wood.diagMin})は踊り場レベル(${wood.landingAbs})以上`);
+  assert.ok(wood.labelMin >= wood.landingAbs - 1e-6, `木造: 「ア キ」(${wood.labelMin})は踊り場レベル以上`);
+  const steel = lowestGapZ(StructuralMaterialType.STEEL);
+  assert.ok(steel.diagMin < steel.landingAbs - 1e-6, `鉄骨(対照): バツは従来どおり踊り場レベルより下まで伸びる（${steel.diagMin}）`);
+});
+
+test('【回帰】stairFaceSequence: 階段下に部屋があれば木造・鉄骨とも断面線は従来式（帯の床＋縦断する階段寄与）のまま', () => {
+  for (const structure of [StructuralMaterialType.WOOD, StructuralMaterialType.STEEL]) {
+    const graph = makeGraph();
+    const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: true });
+    stair.setField('structure', structure);
+    const faces = composeRoomFaces(room, graph);
+    const opts = { ...OPTS, layers: buildBandLayers(graph) };
+    const entries = stairFaceSequence(stair, faces, graph, opts);
+    const table = switchbackCuts(stair, faces, graph, opts);
+    for (const e of entries) {
+      const cut = table.cuts.find(c => c.seqNo === e.seqNo);
+      const band = floorProfileFromSegments(e.floorSegments.map(({ loX, hiX, floorDeltaMm }) => ({ loX, hiX, floorDeltaMm })));
+      const expected = mergeFloorProfiles(band, stairCutFloorProfile(cut.stairCut ?? null, cut, null));
+      assert.ok(e.floorProfile?.length > 0, `${structure} seq${e.seqNo}: 部屋ありは断面線がある`);
+      assert.deepEqual(e.floorProfile, expected, `${structure} seq${e.seqNo}: 従来式と同じ`);
+    }
+  }
+});
+
+test('stairFaceSequence: 木造・部屋なしの seq1/seq3 は縦断する階段寄与が無いので断面線なし（従来どおり）', () => {
+  const { entries } = buildNoRoom(StructuralMaterialType.WOOD);
+  assert.equal(entries.find(e => e.seqNo === '1').floorProfile, null);
+  assert.equal(entries.find(e => e.seqNo === '3').floorProfile, null);
 });
 
 

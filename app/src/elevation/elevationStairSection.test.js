@@ -1,9 +1,9 @@
 // elevationStairSection.js（折返し階段の断面プロファイル。項目12）のテスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { StairType } from '@core';
+import { StairType, StructuralMaterialType } from '@core';
 import {
-  stairRunProfile, buildSwitchbackSectionPrimitives, resolveSwitchbackParams,
+  stairSectionIsClosed, stairRunProfile, buildSwitchbackSectionPrimitives, resolveSwitchbackParams,
   treadLadderLines, stringerPrimitives, stringerBandGeometry, STEEL_STRINGER_DEPTH_MM,
 } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
@@ -419,4 +419,18 @@ test('【失敗系・実機指摘】stringerBandGeometry: mitreDepthMm未指定�
 test('【失敗系・実機指摘】stringerBandGeometry: 段鼻が1点以下ならnull（描画側は空配列）', () => {
   assert.equal(stringerBandGeometry([[0, 0]], 300, {}), null);
   assert.equal(stringerBandGeometry(null, 300, {}), null);
+});
+
+// ---- stairSectionIsClosed（2026-10-08裁定: 木造＝断面線が繋がる／鉄骨・RC＝繋がらない） ----
+test('stairSectionIsClosed: 木造（蹴込板）・RC（斜スラブ）は断面線が繋がる＝true', () => {
+  assert.equal(stairSectionIsClosed({ structure: StructuralMaterialType.WOOD }), true);
+  assert.equal(stairSectionIsClosed({ structure: StructuralMaterialType.RC }), true);
+});
+
+test('【失敗系】stairSectionIsClosed: 鉄骨・構造未指定・階段なしは false（階段下部屋の有無だけで決まる従来の扱い）', () => {
+  assert.equal(stairSectionIsClosed({ structure: StructuralMaterialType.STEEL }), false);
+  assert.equal(stairSectionIsClosed({ structure: null }), false);
+  assert.equal(stairSectionIsClosed({}), false);
+  assert.equal(stairSectionIsClosed(null), false);
+  assert.equal(stairSectionIsClosed(undefined), false);
 });
