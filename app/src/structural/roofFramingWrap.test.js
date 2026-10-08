@@ -6,7 +6,9 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape } from '@core';
 import { roofOutline, roofOutlineExposedPaths, eaveBeamCorners } from './roofFramingGeometry.js';
 import { leanToFramingRegions, leanToPlanRegions, mainRoofFramingRegion } from './roofFramingRegions.js';
-import { roofPlanFigure } from '../finish/roof/roofPlanFigure.js';
+import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
+import { planSolidsLayerPrimitives } from '../plan/planSolidsLayerFilter.js';
+import { mergedLinePieces, newLineRecords, toSegments, toRecord } from '../plan/roofPlanCompare.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 
@@ -126,11 +128,16 @@ test('主屋根（屋内に接する辺が無い）は回り込みの対象外: 
   assert.equal(main.outline[0].points.length, 8, '4頂点（回り込みの点が入らない）');
 });
 
+// 平面に描かれる下屋の外形線（PlanSolidsLayer の経路。壁立体の遮蔽で外壁面どまり）を、同一直線上で結合した区間（ソート済み）で見る
+const resolvedOutline = graph => mergedLinePieces(newLineRecords(planSolidsLayerPrimitives({ graph, cutZ: 1500 }).filter(p => p.source.role === 'outline')));
+const polylinePieces = points => mergedLinePieces(toSegments(points).map(s => toRecord(s)).filter(Boolean));
+
 test('(g2) 平面: 外形線の開いた折れ線が (X4,Y1) を回り込む。壁が無ければ通り芯の線 (10465,0)・Y3 の線 (6825,-7280) まで', () => {
   const { graph } = moku231();
   const [plan] = leanToPlanRegions(graph);
   assert.deepEqual(plan.exposedPaths, [{ points: [6825, -7280, 6825, -10465, 15015, -10465, 15015, 455, 10465, 455, 10465, 0], closed: false }]);
-  assert.deepEqual(roofPlanFigure(graph).find(p => p.role === 'outline').points, [6825, -7280, 6825, -10465, 15015, -10465, 15015, 455, 10465, 455, 10465, 0], '壁が無ければ通り芯まで');
+  assert.deepEqual(roofPlanRegionFigure(plan).lines.find(l => l.role === 'outline').points, [6825, -7280, 6825, -10465, 15015, -10465, 15015, 455, 10465, 455, 10465, 0], '壁が無ければ通り芯まで');
+  assert.deepEqual(resolvedOutline(graph), polylinePieces([6825, -7280, 6825, -10465, 15015, -10465, 15015, 455, 10465, 455, 10465, 0]), '解決器の線も壁が無ければ通り芯まで');
 });
 
 test('(h) 平面: 折り返しの線は Y1 の外壁の外面で止まる（製品の graph.addWall の壁）。(X3,Y3) 側は Y3 の壁の外面で止まる（今のまま）', () => {
@@ -139,6 +146,5 @@ test('(h) 平面: 折り返しの線は Y1 の外壁の外面で止まる（製�
   const north = graph.addWall(cy[1], -75, false, cx[0], 0, cx[3], 0, { wallFinish: 12.5 }); // Y3（y=-7280）の外壁。屋根側（-y）の外面 -7355
   assert.deepEqual(south.materialRange, { lo: 0, hi: 75 }, '前提');
   assert.deepEqual(north.materialRange, { lo: -7355, hi: -7280 }, '前提');
-  const outline = roofPlanFigure(graph).find(p => p.role === 'outline');
-  assert.deepEqual(outline.points, [6825, -7355, 6825, -10465, 15015, -10465, 15015, 455, 10465, 455, 10465, 75]);
+  assert.deepEqual(resolvedOutline(graph), polylinePieces([6825, -7355, 6825, -10465, 15015, -10465, 15015, 455, 10465, 455, 10465, 75]), '壁立体の遮蔽が外壁面どまりにする');
 });

@@ -1,4 +1,4 @@
-// 下屋の平面表示（軒先の線・棟木・隅木・谷木。ステップ1。finish/roof/roofPlanFigure.js）を実データで目視確認するための
+// 下屋の平面表示（軒先の線・棟木・隅木・谷木。finish/roof/roofPlanFigure.js roofPlanRegionFigure）を実データで目視確認するための
 // テスト用 .stq を作るスクリプト。入力文書の**全下屋（RoomFeature.ROOF の部屋）の形状（roofSpec.shape）を指定値に差し替える**。
 // 壁・境界・部屋・セルは変えない（屋根の形状は壁・境界に影響しない）。
 //
@@ -6,7 +6,7 @@
 //   1. loadDoc.mjs で入力を読み、往復テスト（読み→書き→読みで部屋・壁・柱・梁のダイジェスト一致）を先に通す。
 //   2. 全階の下屋の shape を指定値にし、構造再計算を sweepOrder.mjs sweepUntilConverged（本番の反映パスと同じ順序）で収束させる
 //      （在来木造では下屋の小屋梁・外周の梁が形状で変わるため）。
-//   3. roofPlanFigure の要約（下屋のある階ごとの role 別の線の数）と計算時間（ms）を出す。
+//   3. roofPlanRegionFigure の要約（下屋のある階ごとの role 別の線の数）と計算時間（ms）を出す。
 //   4. 書いて読み直したダイジェスト一致・全下屋が指定の shape のまま残ることを確かめてから保存する（既存ファイルは上書きしない）。
 //
 // 使い方（app/ で）:
@@ -23,8 +23,14 @@ import { buildDocumentJson, parseDocumentEnvelope } from '../../src/storage/docu
 import { Project, RoomFeature, RoofShape, ROOF_SHAPE_LABELS } from '../../src/core.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { leanToPlanRegions } from '../../src/structural/roofFramingRegions.js';
-import { roofPlanFigure } from '../../src/finish/roof/roofPlanFigure.js';
+import { roofPlanRegionFigure } from '../../src/finish/roof/roofPlanFigure.js';
 import { sweepUntilConverged } from './sweepOrder.mjs';
+
+/** 壁で切る前の下屋の図形（線 {kind:'line', role, points, closed} とラベル。region ごとに 線→ラベル）。 */
+const roofPlanPrims = (graph) => leanToPlanRegions(graph).flatMap(region => {
+  const figure = roofPlanRegionFigure(region);
+  return [...figure.lines.map(l => ({ kind: 'line', role: l.role, points: l.points, closed: l.closed })), ...figure.labels.flatMap(l => l.prims)];
+});
 
 const args = process.argv.slice(2);
 const summaryOnly = args[0] === '--summary';
@@ -85,9 +91,9 @@ function decodeDocument(json) {
 
 const roofRoomsOf = (graph) => graph.rooms.filter(r => r.feature === RoomFeature.ROOF && r.roofSpec);
 
-/** roofPlanFigure の要約（下屋のある階ごとに role 別の線の数・region・計算時間）。 */
+/** roofPlanRegionFigure の要約（下屋のある階ごとに role 別の線の数・region・計算時間）。 */
 function printSummary(project) {
-  console.log('--- roofPlanFigure の要約（下屋のある階ごと） ---');
+  console.log('--- roofPlanRegionFigure の要約（下屋のある階ごと） ---');
   let any = false;
   for (const plane of project.planes) {
     const graph = project.graphMap.get(plane.id);
@@ -98,7 +104,7 @@ function printSummary(project) {
     let prims = [];
     for (let i = 0; i < 6; i++) { // 初回（JIT 前）と、続く5回の最小
       const t0 = performance.now();
-      prims = roofPlanFigure(graph);
+      prims = roofPlanPrims(graph);
       times.push(performance.now() - t0);
     }
     const counts = { outline: 0, ridge: 0, hip: 0, valley: 0 };
@@ -107,7 +113,7 @@ function printSummary(project) {
     for (const p of lines) counts[p.role]++;
     const regionMs = (() => { const t0 = performance.now(); leanToPlanRegions(graph); return performance.now() - t0; })();
     console.log(`  [${plane.name || '(無名)'}${plane.isAlternative ? '・検討案' : ''}] 下屋 ${rooms.length} 部屋: 外形線 ${counts.outline} / 棟木 ${counts.ridge} / 隅木 ${counts.hip} / 谷木 ${counts.valley}（線 ${lines.length} 本）・傾斜ラベル ${arrows.length} 面`
-      + `  roofPlanFigure 初回 ${times[0].toFixed(1)}ms・以降の最小 ${Math.min(...times.slice(1)).toFixed(1)}ms（leanToPlanRegions 単体 ${regionMs.toFixed(1)}ms）`);
+      + `  roofPlanRegionFigure 初回 ${times[0].toFixed(1)}ms・以降の最小 ${Math.min(...times.slice(1)).toFixed(1)}ms（leanToPlanRegions 単体 ${regionMs.toFixed(1)}ms）`);
     for (const a of arrows) { // 傾斜ラベルの面ごとの flow（矢印の向き）と基準点（矢印の中点）
       const [tx, ty, hx, hy] = a.points;
       const flow = Math.abs(hx - tx) > Math.abs(hy - ty) ? (hx > tx ? '右' : '左') : (hy > ty ? '下' : '上');

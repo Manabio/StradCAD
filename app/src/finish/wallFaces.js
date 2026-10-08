@@ -7,7 +7,6 @@
  * ——生成前・削除後でも常に何らかの矩形が得られる。
  */
 import { graphList, scopedValue } from '../graphReadScope.js';
-import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 
 // axisCL.id → その軸上の壁。innerWallFaceAt は「部屋×面の端」ごとに呼ばれるため、
 // 毎回 graph.walls を全走査すると O(面数×壁数) になる。読み取りスコープ内では索引を使い回す
@@ -104,36 +103,6 @@ export function outerWallFaceAt(graph, cl, { isVertical, outward, spanLo, spanHi
     const hi = backing ? Math.max(material.hi, backing.hi) : material.hi;
     const face = outward > 0 ? hi : lo;
     if (best == null || (outward > 0 ? face > best : face < best)) best = face;
-  }
-  return best;
-}
-
-/**
- * 座標 coord の直線上の壁（isVertical が同じで、axisCL.effectiveValue が coord と CL_OVERLAP_TOL_MM 以内）のうち、
- * 壁の区間（coord1〜coord2）が点 at（壁に沿う座標）から reachMm 以内で最も近い1本の、実在する材（material∪backing）の
- * 外側の面（outward>0 なら上端 hi・<0 なら下端 lo）を返す。近さが同じ（FACE_EPS 以内）壁が複数あれば最も外の面。
- * 該当する壁がなければ null（呼び出し側は通り芯の座標のままにする）。outerWallFaceAt と違い CL の id でなく座標で引く
- * （下屋の平面の線は CL を持たないため）。壁が無い階は常に null。
- * @param {{isVertical:boolean, coord:number, at:number, reachMm:number, outward:1|-1}} p
- *   outward＝壁から面へ向かう側（壁の外側ではなく、見る側の符号。1なら材範囲の hi）
- * @returns {number|null}
- */
-export function outerWallFaceNear(graph, { isVertical, coord, at, reachMm, outward }) {
-  let bestDist = Infinity;
-  let best = null;
-  for (const w of graphList(graph, 'walls') ?? []) {
-    if (w.isVertical !== isVertical) continue;
-    if (Math.abs(w.axisCL.effectiveValue - coord) > CL_OVERLAP_TOL_MM) continue;
-    const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
-    const dist = Math.max(wLo - at, at - wHi, 0);
-    if (dist > reachMm) continue;
-    const material = w.materialRange;
-    const backing = w.backingRange;
-    const lo = backing ? Math.min(material.lo, backing.lo) : material.lo;
-    const hi = backing ? Math.max(material.hi, backing.hi) : material.hi;
-    const face = outward > 0 ? hi : lo;
-    if (dist < bestDist - FACE_EPS) { bestDist = dist; best = face; }
-    else if (dist <= bestDist + FACE_EPS && (outward > 0 ? face > best : face < best)) best = face;
   }
   return best;
 }

@@ -1,29 +1,23 @@
 /**
- * 下屋の平面表示の図形（軒先の線・棟木・隅木・谷木。ステップ1＝線だけ）の純モジュール。
- * renderer/RoofPlanLayer.jsx は結果を Konva 要素へ写すだけ。store.js・snap.js・.jsx・react-konva を静的に import しない
- * （node:test から単体で import できる）。graphDerived も import しない（memo は呼び出し側の jsx）。
+ * 下屋の平面表示の図形（軒先の線・棟木・隅木・谷木と傾斜ラベル）の純モジュール。
+ * plan/planSolids.js roofSolids が屋根立体の innerLines・marks として使い、平面の断面解決（plan/planSectionFigure.js）が
+ * 壁立体の遮蔽で外壁面どまりにして、renderer/PlanSolidsLayer.jsx が描く。store.js・snap.js・.jsx・react-konva・graphDerived を
+ * 静的に import しない（node:test から単体で import できる）。
  *
  * 対象は下屋（RoomFeature.ROOF の部屋）だけ。主屋根は対象外。全構造種別で出す（structural/roofFramingRegions.js
  * leanToPlanRegions。構造ゲートなし）。母屋・束・小屋梁は描かない。線は細い実線1本で、全 LOD で同じ。
  *
- * primitive: { kind:'line', key, role:'outline'|'ridge'|'hip'|'valley', points:number[], closed:boolean, detailOnly:false }
- *   outline＝軒先・けらばの外形線（壁の中に重なる部分は除く）、ridge＝棟木（切妻はけらばの外形線まで・寄棟は延ばさない。
+ * 線の role: outline＝軒先・けらばの外形線、ridge＝棟木（切妻はけらばの外形線まで・寄棟は延ばさない。
  *   L字の下屋の片流れ・切妻は水下の場の線＝伏図と同じ線。片流れは向かい合う水下があるときだけ）、
  *   hip＝隅木（軒の角まで）、valley＝谷木（軒先の線の入隅の角まで。伏図と違い平面だけ延ばす）。
- * 壁に当たる線の端（外形線の開いた端・棟木・隅木・谷木）は、通り芯ではなく描かれている壁の屋根側の外壁面で止める
- * （roofPlanWallTrim.js。壁が無い階は通り芯のまま）。
  * L字の切妻は腕ごとに棟木（軒・けらばは gableArmDrainsOf。水下を持つ region）。水下は屋内に接する部分を除く（壁へ下る面は作らない。
  * 振り分けは leanToDrainRoute）。棟違い・全周が壁・向かい合う壁の間・けらばの無い切妻の L字は軒先の線だけ（outlineOnly）。
  * 詳細（DETAIL）だけ、傾斜面（水下）ごとに水下向きの矢印・「屋根」・「（傾斜N/10）」を出す（detailOnly:true の arrow・text。
- * visibleRoofPlanPrimitives が他の LOD で除く）。矢じりは renderer/chevron.js（依存なしの純モジュール）。
+ * plan/planSolidsLayerFilter.js visiblePlanPrimitives が他の LOD で除く）。矢じりは renderer/chevron.js（依存なしの純モジュール）。
  */
 import { CL_OVERLAP_TOL_MM, DEFAULT_ROOF_SLOPE } from '../../core/constants.js';
 import { roofRidgeLines, roofHipDiagonals, extendLinesToOutline, extendDiagonalsToOutline, drainFaceAnchors } from '../../structural/roofFramingGeometry.js';
 import { chevronPoints } from '../../renderer/chevron.js';
-import { leanToPlanRegions } from '../../structural/roofFramingRegions.js';
-import { outerWallFaceNear } from '../wallFaces.js';
-import { trimRoofPlanLinesAtWalls } from './roofPlanWallTrim.js';
-import { LodLevel } from '../../viewport.js';
 
 const segment = line => (line.isVertical
   ? [line.coord, line.lo, line.coord, line.hi]
@@ -31,8 +25,7 @@ const segment = line => (line.isVertical
 
 /**
  * 下屋1つ（leanToPlanRegions の region）の、壁で切る前の線と傾斜ラベル。純関数・graph を読まない。
- * 平面の断面解決（plan/planSolids.js roofSolids の innerLines・marks）と、旧 roofPlanFigure（端止めの前の線）の
- * 共通の入口＝線の作り方の唯一の場所。外壁面どまりは呼び出し側（解決器＝壁立体の遮蔽／旧＝trimRoofPlanLinesAtWalls）が行う。
+ * 平面の断面解決（plan/planSolids.js roofSolids の innerLines・marks）へ渡す線の作り方の唯一の場所。外壁面どまりは解決器（壁立体の遮蔽）が行うので、ここでは壁を読まない。
  * lines は外形線（exposedPaths。閉路は closed:true で先頭の点を末尾へ足さない）→棟木→隅木・谷木の順。外形線だけの region
  * （outlineOnly）は棟木・隅木・谷木・ラベルを出さない。labels は水下の基準点ごと（anchor＝基準点・prims＝矢印→「屋根」→傾斜の表記）。
  * @param {object} region leanToPlanRegions の要素
@@ -67,29 +60,6 @@ export function roofPlanRegionFigure(region) {
     prims: roofSlopeLabelPrimitives({ key: region.key, anchors: [a], slope: region.slope }),
   }));
   return { lines, labels };
-}
-
-/**
- * 平面に描く下屋の図形（graph の屋根の部屋ごとに、外形線→棟木→隅木→谷木の順）。屋根が無い・graph が無い階は []。
- * 戻り値は読み取り専用（呼び出し側が memo して複数レンダーで共有する）。
- * @param {object|null} graph 屋根セルのある階の graph
- * @returns {Array<object>} 線 { kind:'line', key, role:'outline'|'ridge'|'hip'|'valley', points, closed, detailOnly:false } のあとに、
- *   region ごとに傾斜ラベル（kind:'arrow'|'text'。roofSlopeLabelPrimitives）
- */
-export function roofPlanFigure(graph) {
-  const out = [];
-  const tolMm = CL_OVERLAP_TOL_MM;
-  const faceAt = q => outerWallFaceNear(graph, q);
-  for (const region of leanToPlanRegions(graph)) {
-    const figure = roofPlanRegionFigure(region);
-    const counts = { outline: 0, ridge: 0, hip: 0, valley: 0 };
-    const lines = figure.lines.map(l => ({ kind: 'line', key: `${region.key}:${l.role}:${counts[l.role]++}`, role: l.role, points: l.points, closed: l.closed, detailOnly: false }));
-    // 壁に当たる端は通り芯でなく外壁面で止める（壁が無ければ通り芯のまま）。壁を探す距離は出幅（軒・けらば）の大きい方
-    const reachMm = Math.max(0, ...region.edges.map(e => e.overhangMm)) + tolMm;
-    out.push(...trimRoofPlanLinesAtWalls(lines, { faceAt, zeroZones: region.zeroZones, reachMm, tolMm }));
-    out.push(...figure.labels.flatMap(l => l.prims));
-  }
-  return out;
 }
 
 /** ラベルの寸法（ワールド mm。ユーザー指示2026-10-04の裁定）。文字は階段の矢印ラベル（StairLayer.jsx）と同じ 200。 */
@@ -144,14 +114,4 @@ export function roofSlopeLabelPrimitives({ key, anchors, slope }) {
     out.push({ kind: 'text', key: `${key}:text:${drainIndex}:slope`, ...slopeAt, text: slopeText, fontSizeMm: F, detailOnly: true });
   }
   return out;
-}
-
-/**
- * 表示する図形。詳細（DETAIL）は全部、他の LOD は詳細だけの図形（detailOnly。ステップ2の文字・矢印）を除く。
- * 線は全 LOD で出す。
- * @param {Array<{detailOnly:boolean}>} primitives roofPlanFigure の結果
- * @param {string} lod LodLevel
- */
-export function visibleRoofPlanPrimitives(primitives, lod) {
-  return lod === LodLevel.DETAIL ? primitives : primitives.filter(p => !p.detailOnly);
 }

@@ -215,7 +215,7 @@ function planOutlineOnlyRegion(room, graph) {
  * 平面に描く下屋（屋根セルのある階の屋根の部屋）ごとの region。構造ゲートは見ない（全構造種別で出す。project 不要）。
  * 部屋ごとに framingRegionOfRoom の結果（伏図と同じ幾何）、無ければ平面専用の補完 region（planOutlineOnlyRegion）。
  * どちらも平面用に exposedPaths（roofOutlineExposedPaths。壁の中に重なる部分を除いた外形線）・slope（roofSpec.slope）・
- * zeroZones（屋内に接する区間。壁に当たる線の端を外壁面で止める finish/roof/roofPlanWallTrim.js が使う）を足す
+ * zeroZones（屋内に接する区間。S5b で旧 roofPlanWallTrim.js〔壁に当たる線の端止め〕が消え、今は読む製品コードが無い）を足す
  * ・planDrains（傾斜ラベルの水下。planDrainsOf）を足す
  * （伏図用の region＝leanToFramingRegions には足さない）。範囲が空・不正・roofSpec が無い部屋は出ない。
  * 戻り値は読み取り専用（renderer の graphComputed が共有する）。

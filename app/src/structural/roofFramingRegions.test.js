@@ -736,7 +736,7 @@ test('【平面】leanToPlanRegions: 木造の矩形の下屋は leanToFramingRe
   assert.deepEqual(plan[0].exposedPaths, [{ points: [1545, 1500, 1545, 1045, 6455, 1045, 6455, 3455, 1545, 3455, 1545, 3000], closed: false }]);
   assert.deepEqual(leanToFramingRegions(graph, project), before, '平面用の導出は伏図用の結果を変えない（exposedPaths・slope を伏図用 region に足さない）');
   assert.ok(!('exposedPaths' in framing[0]) && !('slope' in framing[0]) && !('zeroZones' in framing[0]));
-  // 平面用 region は屋内に接する区間（壁に当たる線の端を外壁面で止める roofPlanWallTrim.js が使う）を持つ
+  // 平面用 region は屋内に接する区間（zeroZones。旧 roofPlanWallTrim.js の入力だった）を持つ
   assert.deepEqual(plan[0].zeroZones, [{ isVertical: true, coord: 2000, lo: 1500, hi: 3000, outward: -1 }]);
 });
 

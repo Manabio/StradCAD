@@ -50,7 +50,7 @@ test('【配線・強化】SceneLayers は EquipmentSymbolLayer のゲート行�
 });
 
 // 下屋の平面表示（S5）: 下屋は PlanSolidsLayer（平面の断面解決。屋根立体＋解決器）が描くので、SceneLayers は RoofPlanLayer を使わない
-// （旧 RoofPlanLayer.jsx は比較の基準として残すが、どこからも import されない）。PlanSolidsLayer は showPlanFigure でゲートし、
+// （旧 RoofPlanLayer.jsx は S5b で削除済み。再導入の検出）。PlanSolidsLayer は showPlanFigure でゲートし、
 // EquipmentSymbolLayer の前に置く（配線は PlanSolidsLayer.wiring.test.js）。
 test('【配線】SceneLayers は RoofPlanLayer を import も使用もしない（下屋は PlanSolidsLayer が描く）。showPlanFigure の定義は既存の述語のまま', () => {
   assert.equal((codeOnly.match(/RoofPlanLayer/g) || []).length, 0, 'RoofPlanLayer が出ない');

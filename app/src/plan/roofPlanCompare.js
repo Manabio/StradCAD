@@ -1,10 +1,11 @@
 /**
- * 下屋の平面図形の新旧比較の道具（テスト・probe 専用。製品コードからは import しない）。
- * 旧＝finish/roof/roofPlanFigure.js roofPlanFigure（端止め trim 済み）、新＝plan/planSolidsLayerFilter.js の roof の線
- * （解決器が壁立体の遮蔽で外壁面どまりを導いた結果）が、**線として同じ**かを見る。
- * 折れ線→線分→同一直線上の重なりを結合→区間の突き合わせ（0.5mm の許容）で、一致（both）・旧のみ（old）・新のみ（new）の
- * 区間に分ける。S5（`.claude/plan-section.md`）の関門 probe（scripts/probe/dumpRoofPlanCompare.mjs）と
- * `roofPlanFigure.test.js` の比較テストが共有する。
+ * 下屋の平面図形の比較の道具（テスト・probe 専用。製品コードからは import しない）。
+ * 「壁で切る前の図形」（finish/roof/roofPlanFigure.js roofPlanRegionFigure の線）と、plan/planSolidsLayerFilter.js の roof の線
+ * （解決器が壁立体の遮蔽で外壁面どまりを導いた結果）が、**線として同じ**かを見る。壁の無い階では完全に一致し、壁のある階では
+ * 壁の覆いの区間だけが図形のみになる。
+ * 折れ線→線分→同一直線上の重なりを結合→区間の突き合わせ（0.5mm の許容）で、一致（both）・図形のみ（figure）・解決器のみ（new）の
+ * 区間に分ける。`finish/roof/roofPlanFigure.test.js` と、回帰の関門 `scripts/probe/dumpRoofPlanCompare.mjs`
+ * （golden-roof/ と比較。`mergedLinePieces`・`labelKeys`）が共有する。S5b 以前は旧 roofPlanFigure（端止め trim 済み）との比較だった。
  */
 
 const TOL = 0.5;
@@ -42,12 +43,12 @@ function unionIntervals(ivs) {
 }
 
 /**
- * 旧・新の線分の記録（toRecord）から区間の突き合わせをして、{cls:'both'|'old'|'new', roles, len, points} の配列を返す。
+ * 図形・解決器の線分の記録（toRecord）から区間の突き合わせをして、{cls:'both'|'figure'|'new', roles, len, points} の配列を返す。
  * 0.5mm 未満の区間は捨てる。
  */
-export function comparePieces(oldRecs, newRecs) {
+export function comparePieces(figureRecs, newRecs) {
   const groups = new Map(); // angleKey -> {dx, dy, items:[{set, rec}]}
-  for (const [set, recs] of [['old', oldRecs], ['new', newRecs]]) {
+  for (const [set, recs] of [['figure', figureRecs], ['new', newRecs]]) {
     for (const rec of recs) {
       if (!groups.has(rec.angleKey)) groups.set(rec.angleKey, { dx: rec.dx, dy: rec.dy, items: [] });
       groups.get(rec.angleKey).items.push({ set, rec });
@@ -66,18 +67,18 @@ export function comparePieces(oldRecs, newRecs) {
       byOff.get(k).push(it);
     }
     for (const [off, items] of byOff) {
-      const oldU = unionIntervals(items.filter(i => i.set === 'old').map(i => [i.rec.t0, i.rec.t1]));
+      const figU = unionIntervals(items.filter(i => i.set === 'figure').map(i => [i.rec.t0, i.rec.t1]));
       const newU = unionIntervals(items.filter(i => i.set === 'new').map(i => [i.rec.t0, i.rec.t1]));
-      const bps = [...new Set([...oldU, ...newU].flat())].sort((a, b) => a - b);
+      const bps = [...new Set([...figU, ...newU].flat())].sort((a, b) => a - b);
       const inU = (u, m) => u.some(([a, b]) => a < m && m < b);
       const local = [];
       let cur = null;
       const flush = () => { if (cur) { local.push(cur); cur = null; } };
       for (let i = 0; i + 1 < bps.length; i++) {
         const m = (bps[i] + bps[i + 1]) / 2;
-        const o = inU(oldU, m), n = inU(newU, m);
+        const o = inU(figU, m), n = inU(newU, m);
         if (!o && !n) { flush(); continue; }
-        const cls = o && n ? 'both' : o ? 'old' : 'new';
+        const cls = o && n ? 'both' : o ? 'figure' : 'new';
         if (cur && cur.cls === cls && Math.abs(cur.t1 - bps[i]) < 1e-6) cur.t1 = bps[i + 1];
         else { flush(); cur = { cls, t0: bps[i], t1: bps[i + 1], off, dx: g.dx, dy: g.dy }; }
       }
@@ -95,11 +96,14 @@ export function comparePieces(oldRecs, newRecs) {
   })).filter(p => p.len >= TOL);
 }
 
-/** 旧の primitive（roofPlanFigure の線。role・closed を持つ）の線分の記録。 */
-export const oldLineRecords = prims => prims.filter(p => p.kind === 'line')
+/** 線分の記録（toRecord）を同一直線上で結合した区間の「x1,y1,x2,y2」（0.1 丸め）。ソート済み。golden 用。 */
+export const mergedLinePieces = recs => comparePieces([], recs).map(p => p.points.join(',')).sort();
+
+/** 図形（roofPlanRegionFigure の線を {points, closed, role} にしたもの。kind:'line' だけ拾う）の線分の記録。 */
+export const figureLineRecords = prims => prims.filter(p => p.kind === 'line')
   .flatMap(p => toSegments(p.points, p.closed).map(s => toRecord(s, p.role))).filter(Boolean);
 
-/** 新の primitive（解決器の出力のうち source.kind==='roof'・自階の線）の線分の記録。 */
+/** 解決器の primitive（planSolidsLayerPrimitives の出力のうち source.kind==='roof'・自階の線）の線分の記録。 */
 export const newLineRecords = prims => prims.filter(p => p.kind === 'line' && p.source?.kind === 'roof' && (p.source.layerFloorZ ?? 0) === 0)
   .map(p => toRecord(p.points, p.source.role ?? '?')).filter(Boolean);
 
@@ -108,6 +112,6 @@ export const labelKeys = prims => prims.filter(p => p.kind === 'arrow' || p.kind
   ? `arrow|${p.points.map(r1).join(',')}|${p.head.map(r1).join(',')}`
   : `text|${r1(p.x)},${r1(p.y)}|${p.text}|${p.fontSizeMm}`)).sort();
 
-/** 旧新の線の差分の区間（both 以外）。空なら線として同じ。 */
-export const roofLineDiffs = (oldPrims, newPrims) =>
-  comparePieces(oldLineRecords(oldPrims), newLineRecords(newPrims)).filter(p => p.cls !== 'both');
+/** 図形と解決器の線の差分の区間（both 以外）。空なら線として同じ。 */
+export const roofLineDiffs = (figurePrims, newPrims) =>
+  comparePieces(figureLineRecords(figurePrims), newLineRecords(newPrims)).filter(p => p.cls !== 'both');

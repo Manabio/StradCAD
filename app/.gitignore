@@ -24,9 +24,10 @@ dist-ssr
 *.sw?
 
 # 調査用プローブ（scripts/probe）の出力。コミットするのはスクリプトと
-# golden/・golden13/・golden11/・golden-regen/・golden-structperf/・golden-void/ だけ。
+# golden/・golden13/・golden11/・golden-regen/・golden-structperf/・golden-void/・golden-roof/ だけ。
 scripts/probe/*/
 !scripts/probe/golden-void/
+!scripts/probe/golden-roof/
 !scripts/probe/golden/
 !scripts/probe/golden13/
 !scripts/probe/golden-regen/
