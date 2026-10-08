@@ -23,6 +23,9 @@
  *   同じ側に重なる外周なら index の小さい方だけが描く（重複線を出さない）。
  *   勾配のある立体が絡む区間は slopeSampleMm ごとに可視を調べ、変わる所を 0.5mm まで二分探索して切る。
  *
+ * 隙間の規則（below の線だけ。cut の線は消えない。全層に適用）: cut の遮蔽物の間の幅が PLAN_GAP_CLOSE_MM（20mm）以下の
+ * 隙間は覗かせない（壁の角の仕上げ厚 12.5mm の切り欠きから下の梁が短線で覗く現象。closeNarrowGaps）。
+ *
  * 層: 自階（source.layerFloorZ === 0。省略も自階）はどこでも見える。下階（layerFloorZ < 0）の線は**自階の床の穴の和の
  * 中だけ**（窓）に限る。自階に floor が無ければ下階は一切出さない。上階（layerFloorZ > 0）は cutZ が階高より低い限り
  * 全部 above なので 0 件。
@@ -54,6 +57,12 @@ export const PLAN_LINE_STYLE = Object.freeze({
   cut: Object.freeze({ weight: 'thick' }),
   below: Object.freeze({ weight: 'thin' }),
 });
+
+/**
+ * 隙間の規則の幅（mm。唯一の場所）。切断の遮蔽物（cut）の間の幅がこれ以下の隙間は、below の線を覗かせない（closeNarrowGaps）。
+ * 壁の角の仕上げ厚の切り欠きが 12.5mm なので、それを覆う 20。
+ */
+export const PLAN_GAP_CLOSE_MM = 20;
 
 const DEFAULT_EPS_MM = 0.5;
 const DEFAULT_SLOPE_SAMPLE_MM = 100;
@@ -403,17 +412,61 @@ function resolveLine(S, pts, recs, ctx) {
     if (cur) visible.push([start, t1]);
   }
 
-  // 接する区間を結び、EPS 未満の断片を捨てる
+  // 接する区間を結び、隙間の規則（below だけ）と EPS 未満の断片の除去をかける
   const merged = [];
   for (const iv of visible) {
     const last = merged[merged.length - 1];
     if (last && (iv[0] - last[1]) * len < GEO_TOL) last[1] = iv[1];
     else merged.push([iv[0], iv[1]]);
   }
-  return merged.filter(([t0, t1]) => (t1 - t0) * len >= eps).map(([t0, t1]) => {
+  // 勾配のある cut（slopedCut）の可視部分は cls 'below' で出るので、規則の対象（出力の cls が below のもの）に含める
+  const kept = (S.cls === 'below' || S.slopedCut) && merged.length > 0 ? closeNarrowGaps(merged, { ax, ay, bx, by, len, pointAt }, cands, ctx) : merged;
+  return kept.filter(([t0, t1]) => (t1 - t0) * len >= eps).map(([t0, t1]) => {
     const [x1, y1] = t0 === 0 ? [ax, ay] : pointAt(t0);
     const [x2, y2] = t1 === 1 ? [bx, by] : pointAt(t1);
     return [round6(x1), round6(y1), round6(x2), round6(y2)];
+  });
+}
+
+const distToEdge = (e, x, y) => {
+  const [ax, ay, bx, by] = e;
+  const dx = bx - ax, dy = by - ay;
+  const l2 = dx * dx + dy * dy;
+  const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2));
+  return Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
+};
+
+/**
+ * 隙間の規則（below の線だけ。cut の線は対象外＝この規則で消えない）: 切断の遮蔽物（cut）の間の幅が PLAN_GAP_CLOSE_MM 以下の
+ * 隙間は覗かせない。壁の角の仕上げ厚（12.5mm）の切り欠きから、下の梁が 20mm 未満の短線で覗く現象を消す（2026-10-08 ユーザー裁定）。
+ * 可視区間のうち長さが PLAN_GAP_CLOSE_MM 以下で、**両側とも**次のどちらかで縁取られているものを隠す:
+ *  (i) 隣の不可視区間が cut の遮蔽物の内側（区間の端のすぐ外の点が cut の遮蔽物の内側）
+ *  (ii) 線自身の端点で、その点が cut の遮蔽物の輪郭の上か内側（eps 以内）
+ * cut 以外（床・屋根・below の立体）に隠された区間や、cut に縁取られない短線（below の立体同士の間など）は残す。
+ * 長さの比較は <=（ちょうど PLAN_GAP_CLOSE_MM は隠し、それを超えると残す）。
+ * @param {Array<[number, number]>} merged 結合済みの可視区間（媒介変数 t）
+ */
+function closeNarrowGaps(merged, line, cands, ctx) {
+  const { ax, ay, bx, by, len, pointAt } = line;
+  const { cutZ, eps } = ctx;
+  const cutCands = cands.filter(O => O.cls === 'cut');
+  if (cutCands.length === 0) return merged;
+  const cutAt = (O, x, y) => clsAt(O, cutZ, x, y) === 'cut';
+  // 点が cut の遮蔽物の内側か（単独の内側、または斜め4点がそれぞれ何らかの cut の内側＝隣り合う cut の継ぎ目の上）
+  const insideCut = (x, y) => {
+    if (cutCands.some(O => cutAt(O, x, y) && insideRec(O, x, y))) return true;
+    return DIAGONALS.every(([dx, dy]) => {
+      const qx = x + dx * NUDGE, qy = y + dy * NUDGE;
+      return cutCands.some(O => cutAt(O, qx, qy) && insideRec(O, qx, qy));
+    });
+  };
+  const onCutOutline = (x, y) => cutCands.some(O => cutAt(O, x, y) && (insideRec(O, x, y) || O.edges.some(e => distToEdge(e, x, y) <= eps)));
+  const probe = SIDE_PROBE / len;
+  return merged.filter(([t0, t1]) => {
+    if ((t1 - t0) * len > PLAN_GAP_CLOSE_MM + GEO_TOL) return true;
+    const left = t0 <= 0 ? onCutOutline(ax, ay) : insideCut(...pointAt(t0 - probe));
+    const right = t1 >= 1 ? onCutOutline(bx, by) : insideCut(...pointAt(t1 + probe));
+    return !(left && right);
   });
 }
 

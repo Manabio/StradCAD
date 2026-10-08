@@ -1,7 +1,7 @@
 // planSectionFigure.js（平面の断面解決器。S3）の単体テスト。立体はリテラル（planTestFixtures.js solid）で組む。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planSectionFigure, PLAN_LINE_STYLE } from './planSectionFigure.js';
+import { planSectionFigure, PLAN_LINE_STYLE, PLAN_GAP_CLOSE_MM } from './planSectionFigure.js';
 import { SOLID_KIND_ORDER } from './planSolids.js';
 import {
   rect, solid, linesOf, sortedLines, mergedLines, totalLength,
@@ -483,4 +483,85 @@ test('【失敗系】S5 marks: 不正な mark（anchor 非有限・prims 欠落�
   const prims = fig([solid('roof', ROOF_POLY, 0, 0, { id: 'r', drawEdges: false, marks })]);
   assert.deepEqual(prims.filter(p => p.kind !== 'line').map(p => p.key), ['below:roof:r:m:arrow:0', 'below:roof:r:m:text:0'], '有効な mark だけ残る');
   assert.deepEqual(fig([solid('roof', ROOF_POLY, 0, 0, { id: 'r', marks: 'bad' })]).filter(p => p.kind !== 'line'), []);
+});
+
+// ================================================================ 隙間の規則（below の線だけ。cut の遮蔽物の間の狭い隙間は覗かせない）
+
+/** 縦の壁 w1（x 0..100）と w2（x gapEnd..gapEnd+100）。どちらも y 0..1000・cut。間の隙間は 100..gapEnd。 */
+const wallsWithGap = gapMm => [
+  solid('wall', sq(0, 0, 100, 1000), 0, 2400, { id: 'w1' }),
+  solid('wall', sq(100 + gapMm, 0, 200 + gapMm, 1000), 0, 2400, { id: 'w2' }),
+];
+/** y=300 の水平線だけ（向き正規化済み）。 */
+const horizontalAt = (prims, id, y) => sortedLines(ofId(prims, id)).filter(l => l[1] === y && l[3] === y);
+
+test('隙間の規則: 定数は 20。壁の角の仕上げ厚の切り欠き（12.5mm）から覗く below の梁の線は消える（壁の中・切り欠きの両側の線は従来どおり）', () => {
+  assert.equal(PLAN_GAP_CLOSE_MM, 20);
+  const beam = solid('beam', sq(-200, 300, 400, 400), -200, 0, { id: 'b' });
+  const prims = fig([...wallsWithGap(12.5), beam]);
+  assert.deepEqual(horizontalAt(prims, 'b', 300), [[-200, 300, 0, 300], [212.5, 300, 400, 300]], '切り欠き x100..112.5 の線が消える。壁の中も消える');
+  assert.deepEqual(horizontalAt(prims, 'b', 400), [[-200, 400, 0, 400], [212.5, 400, 400, 400]]);
+  assert.ok(nonEmpty(ofId(prims, 'b'), '梁の線').every(p => p.cls === 'below'));
+});
+
+test('隙間の規則: 閾値の境界は <=（ちょうど 20mm の隙間は隠し、20.5mm は残す）。25mm の隙間は残る', () => {
+  const beam = solid('beam', sq(-200, 300, 400, 400), -200, 0, { id: 'b' });
+  const at = gap => horizontalAt(fig([...wallsWithGap(gap), beam]), 'b', 300);
+  assert.deepEqual(at(PLAN_GAP_CLOSE_MM), [[-200, 300, 0, 300], [220, 300, 400, 300]], 'ちょうど 20: 隠す');
+  assert.deepEqual(at(PLAN_GAP_CLOSE_MM + 0.5), [[-200, 300, 0, 300], [100, 300, 120.5, 300], [220.5, 300, 400, 300]], '20.5: 残す');
+  assert.deepEqual(at(25), [[-200, 300, 0, 300], [100, 300, 125, 300], [225, 300, 400, 300]], '25: 残す');
+});
+
+test('隙間の規則: 切り欠きの中に収まる短い線（端点が両側の壁の輪郭の上）は隠す。切り欠きの縁に沿う長い線は残る', () => {
+  // 梁（x100..112.5 × y300..700）の上辺・下辺は長さ 12.5 の短線で、両端が w1 の右面・w2 の左面の上
+  const slot = solid('beam', sq(100, 300, 112.5, 700), -200, 0, { id: 'slot' });
+  const prims = fig([...wallsWithGap(12.5), slot]);
+  assert.deepEqual(sortedLines(ofId(prims, 'slot')), [[100, 300, 100, 700], [112.5, 300, 112.5, 700]], '短い蓋の線 2 本だけが消える');
+  // 壁が無ければ（端点が cut の輪郭の上でない）短い線も残る
+  assert.equal(sortedLines(ofId(fig([slot]), 'slot')).length, 4);
+});
+
+test('隙間の規則: cut に縁取られない短線は残る（below の立体同士の間の隙間・片側だけ cut の短線）', () => {
+  const beam = solid('beam', sq(-200, 300, 400, 400), -200, 0, { id: 'b' });
+  // 壁が cut でなく below（天端 1000）なら、隙間 12.5mm は残る
+  const lowWalls = wallsWithGap(12.5).map(w => ({ ...w, zHi: 1000 }));
+  assert.deepEqual(horizontalAt(fig([...lowWalls, beam]), 'b', 300), [[-200, 300, 0, 300], [100, 300, 112.5, 300], [212.5, 300, 400, 300]], 'below 同士の間');
+  // 片側だけ cut（w2 が無い）: 梁の右端が w1 の外へ 10mm だけ出た短線は、右が端点で cut の上でないので残る
+  const short = solid('beam', sq(-200, 300, 110, 400), -200, 0, { id: 'short' });
+  assert.deepEqual(horizontalAt(fig([wallsWithGap(12.5)[0], short]), 'short', 300), [[-200, 300, 0, 300], [100, 300, 110, 300]]);
+});
+
+test('隙間の規則: cut の線は対象外（cut の壁どうしの隙間 12.5mm の線は残る）。below の線にだけ働く', () => {
+  // cut の汎用立体 s（0..2400）の線 y=300 は、cut の壁 w1・w2 の中では隠れ、切り欠きの 12.5mm は残る
+  const s = solid('generic', sq(-200, 300, 400, 400), 0, 2400, { id: 's' });
+  const prims = fig([...wallsWithGap(12.5), s]);
+  const lines = prims.filter(p => p.source.id === 's');
+  nonEmpty(lines, 's の線');
+  assert.ok(lines.every(p => p.cls === 'cut'));
+  assert.ok(horizontalAt(prims, 's', 300).some(l => l[0] === 100 && l[2] === 112.5), '切り欠きの 12.5mm の cut の線は残る');
+});
+
+test('隙間の規則: 切り欠きの片側が cut の2枚の壁の継ぎ目（線がちょうど継ぎ目の上）でも隠す。両側が継ぎ目の版も', () => {
+  const beam = solid('beam', sq(-200, 60, 400, 400), -200, 0, { id: 'b' }); // 上辺 y=60 が A1／A2 の継ぎ目の上
+  const a = [solid('wall', sq(0, 0, 100, 60), 0, 2400, { id: 'a1' }), solid('wall', sq(0, 60, 100, 1000), 0, 2400, { id: 'a2' })];
+  const c = solid('wall', sq(112.5, 0, 300, 1000), 0, 2400, { id: 'c' });
+  assert.deepEqual(horizontalAt(fig([...a, c, beam]), 'b', 60), [[-200, 60, 0, 60], [300, 60, 400, 60]], '左の壁が継ぎ目の上でも切り欠き 100..112.5 は消える');
+  const c12 = [solid('wall', sq(112.5, 0, 300, 60), 0, 2400, { id: 'c1' }), solid('wall', sq(112.5, 60, 300, 1000), 0, 2400, { id: 'c2' })];
+  assert.deepEqual(horizontalAt(fig([...a, ...c12, beam]), 'b', 60), [[-200, 60, 0, 60], [300, 60, 400, 60]], '両側が継ぎ目でも消える');
+});
+
+test('隙間の規則: 勾配のある cut（可視部分は below で出る）にも働く。cut の壁の間の 12.5mm が消える', () => {
+  const s = solid('generic', sq(-200, 300, 400, 400), -1000, 3000, { id: 'sl', zAt: () => 100 }); // 切断面をまたぐが zAt<cutZ なので全域 below
+  const prims = fig([...wallsWithGap(12.5), s]);
+  const mine = nonEmpty(ofId(prims, 'sl'), '勾配 cut の線');
+  assert.ok(mine.every(p => p.cls === 'below'), '前提: 出力は below');
+  assert.deepEqual(horizontalAt(prims, 'sl', 300), [[-200, 300, 0, 300], [212.5, 300, 400, 300]]);
+});
+
+test('隙間の規則: 下階の層（窓の中）の below の線にも働く', () => {
+  // 自階の床の穴（x-500..1000 × y0..1000）の窓の上に自階の cut の壁が立ち、その間の 12.5mm の隙間から下階の梁が覗く場合は消える
+  const floor = solid('floor', { rects: [rect(-1000, -1000, 2000, 2000)], holes: [rect(-500, 0, 1000, 1000)] }, 0, 0, { id: 'f0', layerFloorZ: 0 });
+  const lower = solid('beam', sq(-200, 300, 400, 400), -3200, -3000, { id: 'lb', layerFloorZ: -3000 });
+  const prims = fig([floor, ...wallsWithGap(12.5), lower]);
+  assert.deepEqual(horizontalAt(prims, 'lb', 300), [[-200, 300, 0, 300], [212.5, 300, 400, 300]]);
 });
