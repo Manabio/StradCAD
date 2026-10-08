@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomFeature, StairType } from '@core';
 import {
-  S4_DRAWN_KINDS, drawnPrimitives, planSolidsLayerPrimitives, planSolidsLayerCacheSpec, planSolidsLayerResolve, isCenterLineDragging,
+  S4_DRAWN_KINDS, BELOW_DRAWN_KINDS, drawnPrimitives, planSolidsLayerPrimitives, planSolidsLayerCacheSpec, planSolidsLayerResolve, isCenterLineDragging,
   visiblePlanPrimitives,
 } from './planSolidsLayerFilter.js';
 import { LodLevel } from '../viewport.js';
@@ -16,10 +16,15 @@ const prim = (kind, cls = 'below') => ({ kind: 'line', key: `${kind}-${cls}`, po
 
 // ================================================================ 絞り込み
 
-test('描く種別は梁・汎用立体（S4）と下屋＝屋根（S5）だけ（固定）。柱・壁・床・階段の段は描かない', () => {
+test('自階で描く種別は梁・汎用立体（S4）と下屋＝屋根（S5）だけ（固定）。柱・壁・床・階段の段は描かない。下階の層（layerFloorZ<0）は全種別（S6c）', () => {
   assert.deepEqual([...S4_DRAWN_KINDS], ['beam', 'generic', 'roof']);
+  assert.equal(BELOW_DRAWN_KINDS, 'all');
   const kinds = ['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'generic'];
   assert.deepEqual(drawnPrimitives(kinds.map(k => prim(k))).map(p => p.source.kind), ['beam', 'roof', 'generic']);
+  const lowerPrim = k => ({ ...prim(k), source: { kind: k, id: 'x', layerFloorZ: -2800 } });
+  assert.deepEqual(drawnPrimitives(kinds.map(lowerPrim)).map(p => p.source.kind), kinds, '下階の層は全種別（順序も保つ）');
+  const selfZero = k => ({ ...prim(k), source: { kind: k, id: 'x', layerFloorZ: 0 } });
+  assert.deepEqual(drawnPrimitives(kinds.map(selfZero)).map(p => p.source.kind), ['beam', 'roof', 'generic'], 'layerFloorZ 0 は自階');
   // ラベル（arrow・text）も source.kind で同じ集合に絞る
   const label = { kind: 'arrow', key: 'a', points: [0, 0, 1, 0], head: [], weight: 'thin', cls: 'below', detailOnly: true, source: { kind: 'roof', id: 'r' } };
   assert.deepEqual(drawnPrimitives([label, { ...label, source: { kind: 'wall', id: 'w' } }]), [label]);
@@ -112,7 +117,7 @@ function twoFloors() {
   return { self, below, inHole, underFloor };
 }
 
-test('直下階: 自階の床の穴（吹抜け）の中の下階の梁だけが細線で出る。床の下の梁は出ない。層は layerFloorZ=-階高', () => {
+test('直下階: 自階の床の穴（吹抜け）の中の下階の梁が細線で出る（壁・柱・床は S6c の別テスト）。床の下の梁は出ない。層は layerFloorZ=-階高', () => {
   const { self, below, inHole, underFloor } = twoFloors();
   const belowPeek = { graph: below.graph, floorHeightMm: 2800 };
   const prims = planSolidsLayerPrimitives({ graph: self.graph, belowPeek, cutZ: CUT });
@@ -122,6 +127,28 @@ test('直下階: 自階の床の穴（吹抜け）の中の下階の梁だけが
   const mine = prims.filter(p => p.source.id === inHole.id);
   assert.ok(mine.every(p => p.cls === 'below' && p.weight === 'thin' && p.source.layerFloorZ === -2800));
   assert.ok(mine.every(p => p.points[0] >= 2000 - 1e-6 && p.points[2] <= 4000 + 1e-6), '線は穴（x2000..4000）の中');
+});
+
+test('S6c 下階の層は全種別（壁・柱・床・梁）を細線で描く。窓（自階の床の穴）の中だけ。自階の壁・柱・床は引き続き出さない', () => {
+  const { self, below } = twoFloors();
+  addColumnAt(below.graph, 3000, 1500); // 吹抜けの下の柱
+  const prims = planSolidsLayerPrimitives({ graph: self.graph, belowPeek: { graph: below.graph, floorHeightMm: 2800 }, cutZ: CUT });
+  const lower = prims.filter(p => (p.source.layerFloorZ ?? 0) < 0);
+  const kindsOf = ps => new Set(ps.map(p => p.source.kind));
+  for (const k of ['wall', 'column', 'floor', 'beam']) assert.ok(kindsOf(lower).has(k), `下階の ${k} の線が出る: ${[...kindsOf(lower)]}`);
+  assert.ok(lower.every(p => p.cls === 'below' && p.weight === 'thin' && p.source.layerFloorZ === -2800), '下階の層は全部 below（細線）。cut は無い');
+  for (const p of lower) {
+    const [x1, y1, x2, y2] = p.points;
+    assert.ok(Math.min(x1, x2) >= 2000 - 1e-6 && Math.max(x1, x2) <= 4000 + 1e-6 && Math.min(y1, y2) >= -1e-6 && Math.max(y1, y2) <= 4000 + 1e-6, `線が穴（x2000..4000 × y0..4000）の中: ${JSON.stringify(p.points)}`);
+  }
+  // 自階の壁・柱・床は S4 の集合のまま（出さない）
+  const selfPrims = prims.filter(p => (p.source.layerFloorZ ?? 0) === 0);
+  assert.ok(selfPrims.every(p => S4_DRAWN_KINDS.includes(p.source.kind)), `自階は S4 の種別だけ: ${[...kindsOf(selfPrims)]}`);
+  // 下階が無い・階高が不正なら下階の層の線は種別を問わず出ない
+  for (const belowPeek of [null, { graph: below.graph, floorHeightMm: 0 }, { graph: below.graph, floorHeightMm: NaN }, { graph: null, floorHeightMm: 2800 }]) {
+    const none = planSolidsLayerPrimitives({ graph: self.graph, belowPeek, cutZ: CUT });
+    assert.equal(none.filter(p => (p.source.layerFloorZ ?? 0) < 0).length, 0);
+  }
 });
 
 test('直下階が無い（belowPeek なし）、または階高が不正（0・負・非数）なら下階の線は出ない（例外にしない）', () => {

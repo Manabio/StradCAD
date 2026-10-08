@@ -2,9 +2,9 @@
  * 平面の断面解決（S3 の planSectionFigure）を新レイヤ `renderer/PlanSolidsLayer.jsx`（S4）へ渡すための純モジュール。
  * 「何を描くか」の集合と、層スタックの組み立て（自階＋直下階）をここ1か所に置く。
  *
- * 描くのは S4＝梁・汎用立体、S5＝下屋（屋根の外形線・棟木・隅木・谷木と傾斜ラベル）。柱・壁・床は既存レイヤが描くので、
- * 解決器には全立体を渡して**遮蔽物としてだけ**参加させ、出力のうち source.kind が S4_DRAWN_KINDS のものだけを描く。
- * S6（吹抜け）で既存レイヤを寄せるときに、この集合を広げる。
+ * 自階で描くのは S4＝梁・汎用立体、S5＝下屋（屋根の外形線・棟木・隅木・谷木と傾斜ラベル）。自階の柱・壁・床は既存レイヤが
+ * 描くので、解決器には全立体を渡して**遮蔽物としてだけ**参加させ、出力のうち source.kind が S4_DRAWN_KINDS のものだけを描く。
+ * 下階の層（自階の床の穴の窓越し）は S6c から全種別を細線で描く（BELOW_DRAWN_KINDS）。壁・柱・床を既存レイヤが描いていないため。
  *
  * store.js / snap.js / *.jsx / graphDerived を import しない（node:test から単体 import 可）。
  *
@@ -15,12 +15,24 @@ import { planSolids } from './planSolids.js';
 import { planSectionFigure } from './planSectionFigure.js';
 import { LodLevel } from '../viewport.js';
 
-/** 新レイヤが描く線・ラベルの source.kind（唯一の場所）。S4＝梁・汎用立体、S5＝下屋（屋根）を加えた。 */
+/** 新レイヤが**自階**で描く線・ラベルの source.kind（唯一の場所）。S4＝梁・汎用立体、S5＝下屋（屋根）を加えた。 */
 export const S4_DRAWN_KINDS = Object.freeze(['beam', 'generic', 'roof']);
 
-/** 解決器の出力から、描く種別の線・ラベルだけを残す（順序は保つ）。 */
+/**
+ * 新レイヤが**下階の層**（layerFloorZ < 0。自階の床の穴の窓越しに見える線）で描く source.kind（唯一の場所）。
+ * 'all'＝全種別（壁・柱・床・梁・屋根・汎用立体。S6c）。下階の層の立体は全部 below（細線）で、窓の中だけに出る。
+ * 自階の壁・柱・床は既存レイヤ（ShapesLayer など）が描くので S4_DRAWN_KINDS のまま。
+ */
+export const BELOW_DRAWN_KINDS = 'all';
+
+/** 層（layerFloorZ。省略は自階）と source.kind から、描く種別かを決める（唯一の判定）。 */
+const isDrawn = (kind, layerFloorZ) => ((layerFloorZ ?? 0) < 0
+  ? BELOW_DRAWN_KINDS === 'all' || BELOW_DRAWN_KINDS.includes(kind)
+  : S4_DRAWN_KINDS.includes(kind));
+
+/** 解決器の出力から、描く種別の線・ラベルだけを残す（順序は保つ。自階は S4_DRAWN_KINDS、下階の層は BELOW_DRAWN_KINDS）。 */
 export function drawnPrimitives(prims) {
-  return (prims ?? []).filter(p => S4_DRAWN_KINDS.includes(p?.source?.kind));
+  return (prims ?? []).filter(p => p?.source?.kind != null && isDrawn(p.source.kind, p.source.layerFloorZ));
 }
 
 /**
@@ -34,17 +46,17 @@ export function visiblePlanPrimitives(prims, lod) {
 }
 
 /**
- * 自階（＋あれば直下階）を層スタックにして解決し、描く線を返す。上階は渡さない（切断高が階高より低い限り 0 件で、費用だけ掛かる）。
+ * 自階（＋あれば直下階）の層スタックから立体を作る（解決の入力。planSolidsLayerPrimitives と probe の穴の検査が共有）。
+ * 上階は渡さない（切断高が階高より低い限り 0 件で、費用だけ掛かる）。
  * @param {{
  *   graph: object|null,
  *   belowPeek?: {graph: object|null, floorHeightMm: number}|null  直下の採用階の peek と、その階の階高（直下階 FL〜自階 FL）。無ければ null
  *   selfRiserOf?: (stair:object)=>number|null  自階の階段の蹴上（破れ先の位置）。省略は null 扱い
- *   cutZ: number  切断高（自階 FL からの mm。planCutHeightMmOf(graph.plane)）
  * }} args
- * @returns {Primitive[]}
+ * @returns {import('./planSolids.js').Solid[]}
  */
-export function planSolidsLayerPrimitives({ graph, belowPeek = null, selfRiserOf = () => null, cutZ }) {
-  if (!graph || !Number.isFinite(cutZ)) return [];
+export function planSolidsLayerSolids({ graph, belowPeek = null, selfRiserOf = () => null }) {
+  if (!graph) return [];
   const belowGraph = belowPeek?.graph ?? null;
   const layers = [{ graph, floorZMm: 0, role: 'self' }];
   if (belowGraph && Number.isFinite(belowPeek.floorHeightMm) && belowPeek.floorHeightMm > 0) {
@@ -52,8 +64,17 @@ export function planSolidsLayerPrimitives({ graph, belowPeek = null, selfRiserOf
   }
   // 蹴上（破れ先の位置）を問われるのは自階の階段だけ: 破れ先が穴になるのは「下階に同じ階段があるとき」で、下階の床の
   // 穴は更に下の階が要るため求めない（belowGraphOf が下階に null を返す＝下階の階段は破れ先を問われない）。
-  const solids = planSolids(layers, { riserOf: selfRiserOf, belowGraphOf: g => (g === graph ? belowGraph : null) });
-  return drawnPrimitives(planSectionFigure(solids, cutZ));
+  return planSolids(layers, { riserOf: selfRiserOf, belowGraphOf: g => (g === graph ? belowGraph : null) });
+}
+
+/**
+ * 自階（＋あれば直下階）を層スタックにして解決し、描く線を返す。cutZ＝切断高（自階 FL からの mm。planCutHeightMmOf(graph.plane)）。
+ * 引数は planSolidsLayerSolids と cutZ。graph なし・cutZ が有限でなければ空配列。
+ * @returns {Primitive[]}
+ */
+export function planSolidsLayerPrimitives({ graph, belowPeek = null, selfRiserOf = () => null, cutZ }) {
+  if (!graph || !Number.isFinite(cutZ)) return [];
+  return drawnPrimitives(planSectionFigure(planSolidsLayerSolids({ graph, belowPeek, selfRiserOf }), cutZ));
 }
 
 /**

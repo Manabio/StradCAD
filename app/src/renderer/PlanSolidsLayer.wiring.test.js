@@ -1,6 +1,6 @@
 // 平面の断面解決の新レイヤ（S4）: renderer/PlanSolidsLayer.jsx が、判断を純モジュール（plan/planSolidsLayerFilter.js）に
 // 任せて写すだけであること、SceneLayers・App.jsx の配線を、ソーステキスト検査で固定する（.jsx は node:test から
-// 単体 import できないため。RoofPlanLayer.wiring.test.js と同じ型）。コメント行・ブロックコメントを除いた本体に対し、
+// 単体 import できないため）。コメント行・ブロックコメントを除いた本体に対し、
 // m フラグの行頭・行末アンカーで1行まるごと照合する（行末コメントで式を無効化する変異を検出するため）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -209,8 +209,11 @@ test('【不変条件】planSolidsLayerFilter.js（純モジュール）は stor
   for (const line of imports) assert.ok(!/store\.js|snap\.js|\.jsx|react-konva|graphDerived|mobx/.test(line), `禁止の import: ${line}`);
   assert.match(filter, /^export const S4_DRAWN_KINDS = Object\.freeze\(\['beam', 'generic', 'roof'\]\);\s*$/m);
   assert.match(filter, /^\s*return lod === LodLevel\.DETAIL \? prims : prims\.filter\(p => !p\.detailOnly\);\s*$/m);
-  assert.match(filter, /^\s*return \(prims \?\? \[\]\)\.filter\(p => S4_DRAWN_KINDS\.includes\(p\?\.source\?\.kind\)\);\s*$/m);
-  assert.match(filter, /^\s*return drawnPrimitives\(planSectionFigure\(solids, cutZ\)\);\s*$/m);
+  assert.match(filter, /^export const BELOW_DRAWN_KINDS = 'all';\s*$/m, '下階の層は全種別（S6c）。集合は1か所');
+  assert.match(filter, /^\s*: S4_DRAWN_KINDS\.includes\(kind\)\);\s*$/m);
+  assert.match(filter, /^\s*return \(prims \?\? \[\]\)\.filter\(p => p\?\.source\?\.kind != null && isDrawn\(p\.source\.kind, p\.source\.layerFloorZ\)\);\s*$/m);
+  assert.equal(count(filter, /S4_DRAWN_KINDS\.includes\(/g), 1, '自階の集合の判定は isDrawn の1か所');
+  assert.match(filter, /^\s*return drawnPrimitives\(planSectionFigure\(planSolidsLayerSolids\(\{ graph, belowPeek, selfRiserOf \}\), cutZ\)\);\s*$/m);
 });
 
 test('【配線】planSolidsLayerFilter.js は自階（FL=0）＋直下階（FL=-階高）の2層だけを解決器へ渡す（上階は渡さない）', () => {

@@ -25,13 +25,14 @@
 - 立体と切断高から**線だけ**を解く純関数（多角形演算なし。描画の接続は S4 以降）。分類は3区分——`zHi<=cutZ+EPS` 見えがかり（細線）／`zLo>=cutZ-EPS` 非表示／それ以外 切断（太線）。EPS=0.5mm。腰壁の天端がちょうど切断高なら見えがかり。
 - 遮蔽は輪郭線を遮蔽物の輪郭との交点で区間に切り、区間の中点が遮蔽物の**厳密な内側**かで決める。**単独の立体の境界の上は隠さない**（壁の面に接する梁の辺が残る）。ただし点 p の斜め4点（±0.001）がそれぞれ何らかの遮蔽物の厳密内部で、その遮蔽物が下の規則で p を隠すなら、**遮蔽物の和の内部**として隠す（隣り合う壁・矩形群の継ぎ目の上の線が消える。和の外縁は外へ出る斜め点があるので残る。矩形群の共有辺の特例はこの一般判定へ吸収）。隠すのは (i) 相手の上端が高い (ii) 相手が面材（床・屋根。S5 で屋根を加えた）で上端が同じ以上（**面材が同点で勝つ**——梁の天端は床面・屋根面と同点）(iii) 双方が切断（同じ高さで隠し合い和の輪郭だけが残る）。
 - 切断同士で線が相手の境界の上にあるときは、面を接する側（柱と壁・隣の壁）は共有面なので隠し、同じ側に重なる外周は片方（canonical 順の先）だけが描く。`isInsideFootprint` は穴の縁の上を内側と数えるので、解決器側で縁の上は外にする。
+- **隙間の規則**（`closeNarrowGaps`。ユーザー裁定 2026-10-08）: 切断（cut）の遮蔽物の間の幅が `PLAN_GAP_CLOSE_MM`（20mm。単一の定数）以下の隙間は、**見えがかり（below）の線**を覗かせない。壁の角の仕上げ厚の切り欠き（12.5mm）から下の梁が短線で覗いていた（全文書で 67 本）のを消す。可視区間が 20mm 以下で、**両側とも**「隣の不可視区間が cut の遮蔽物の内側」か「線自身の端点が cut の遮蔽物の輪郭の上・内側」で縁取られているものだけを隠す。cut の線は対象外（この規則で消えない）。cut に縁取られない短線（below 同士の間など）と、cut でない短線は残す。長さの比較は `<=`（ちょうど 20 は隠し、20.5 は残す）。自階・下階の層とも適用。壁が下階の層でも同じ（下階の壁の 12.5mm の端の蓋は cut に縁取られないので残る＝後述 S6c）。
 - 層: 自階はどこでも見える。下階は**自階の床の穴の和の中だけ**（窓）で、途中の階の床・下階自身の床が更に隠す。自階に床が無ければ下階は出ない。上階は切断高が階高より低い限り全部非表示で 0 件。
 - 勾配のある立体（`zAt`）は区間を `slopeSampleMm`（100）ごとに調べ、可視が変わる所を二分探索（精度0.5mm。サンプルは区間の両端の内側にも置く）で切る。切断面をまたぐ勾配立体は `zAt<cutZ` の部分の輪郭だけを細線にし、**等高線は出さない**（受容する限界）。
 - 線種の対応は `PLAN_LINE_STYLE` の**1か所**（cut=thick・below=thin。`weight` は `viewport.lineWeightsPx` のキー）。`dash` は汎用立体の `style.dash` だけが付ける。出力順は cls→kind 表→層FL降順→id→座標で決定的（入力順に依らない）。
 - 実データ（moku1-6 の2階＋1階: 立体304件→線319本・約20ms、13 の2階＋1階: 163件→245本・約6ms）。ドラッグ中の再描画に使うので、S4 で `graphComputed` のキャッシュを前提にする。
 
 ## S4: 新レイヤ（`renderer/PlanSolidsLayer.jsx`）
-- **描くのは梁と汎用立体だけ（S5 で下屋＝屋根を追加）**（`plan/planSolidsLayerFilter.js S4_DRAWN_KINDS`、唯一の場所）。柱・壁・床は既存レイヤ（ShapesLayer）が描くので、解決器には全立体を渡して**遮蔽物としてだけ**参加させ、出力のうち `source.kind` が集合に入るものだけを描く。S6（吹抜け）で既存レイヤを寄せるときにこの集合を広げる。
+- **自階で描くのは梁と汎用立体だけ（S5 で下屋＝屋根を追加）**（`plan/planSolidsLayerFilter.js S4_DRAWN_KINDS`、唯一の場所）。自階の柱・壁・床は既存レイヤ（ShapesLayer）が描くので、解決器には全立体を渡して**遮蔽物としてだけ**参加させ、出力のうち `source.kind` が集合に入るものだけを描く。下階の層は S6c から全種別（`BELOW_DRAWN_KINDS`）。
 - 表示するモードは `shouldShowPlanFigure`（構造モードの伏図は対象外）。層は**自階＋直下の採用階だけ**（上階は渡さない＝切断高が階高より低い限り 0 件で費用だけ掛かる）。直下階の peek は App.jsx の上階ビュー用の既存 effect が同じ peek から `belowPlanPeek` として持つ（新しい peek を増やさない）。
 - キャッシュは `graphComputed`。**置き場は直下階 peek の graph（無ければ自階）、鍵は自階×切断高×直下階**——置き場を自階に固定すると、階を切り替えて下階の peek が替わっても古い peek 基準の結果を握り続ける（StructuralLayer の床開口の×と同じ。`renderer/graphDerived.planSection.test.js`）。`belowPlanPeek.activePlaneId` が自階と違うものは使わない（階切替直後の1フレーム）。
 - 通り芯・中心線のドラッグ中（どれかの `pendingDelta` が 0 でない）は、`graphComputed` が毎フレーム全再計算になる（moku1-6 の2階で 50〜105ms）ので、**前回の線を描き続ける**（ref に保持。ドラッグ終了で1回だけ再計算）。`belowPlanPeek` は3状態（undefined＝未解決〔階切替直後〕は**自階だけの層で解決して描く**＝鍵は `pending`、置き場は自階。下屋・自階の梁が切替のたびに消えないため〔S5 で「描かない」から変更〕。peek が届くと通常の鍵で再計算され下階の線だけが後から現れる／null＝下階なし／オブジェクト）。判断は純関数 `planSolidsLayerResolve`、置き場・鍵は `planSolidsLayerCacheSpec` の1か所。
@@ -41,13 +42,13 @@
 - 検証用: `scripts/probe/makePlanSolidsTestDoc.mjs`（moku4 の2階に手動梁2本。細線の帯と太線の帯）、`scripts/probe/dumpPlanSolids.mjs`（文書・階ごとの線と件数）。
 
 ## S5: 下屋を解決器へ寄せる（`RoofPlanLayer` → `PlanSolidsLayer`）
-- 下屋の線・傾斜ラベルは屋根立体（`planSolids.js roofSolids`）＋解決器が出し、`PlanSolidsLayer` が描く（`S4_DRAWN_KINDS` に `'roof'`）。`SceneLayers` から `RoofPlanLayer` は外した。旧 `roofPlanFigure`・`RoofPlanLayer.jsx`・`roofPlanWallTrim.js` は**比較の基準として残す**（削除は目視 OK 後）。比較の道具は `plan/roofPlanCompare.js` と `scripts/probe/dumpRoofPlanCompare.mjs`（roof-test1〜10・moku1-6 で旧と新の線が一致、ラベルは座標・文字まで一致）。
-- **線は壁で切る前のまま `innerLines` に入れる**（外形線 `exposedPaths`・棟木・隅木・谷木。線の作り方は `roofPlanFigure.js roofPlanRegionFigure` の1か所で、旧 `roofPlanFigure` も同じ関数を呼んでから端を止める）。**外壁面どまりは壁立体（切断）の遮蔽が導く**——壁の厚みは `wallConcealRange`（材∪下地）で、旧の `outerWallFaceNear` と同じ定義。閉じた外形線は先頭の点を末尾へ足す（解決器は閉じる辺を作らない）。
+- 下屋の線・傾斜ラベルは屋根立体（`planSolids.js roofSolids`）＋解決器が出し、`PlanSolidsLayer` が描く（`S4_DRAWN_KINDS` に `'roof'`）。`SceneLayers` から `RoofPlanLayer` は外した。旧 `roofPlanFigure`・`RoofPlanLayer.jsx`・`roofPlanWallTrim.js`・`wallFaces.js outerWallFaceNear` は目視 OK 後の **S5b で削除済み**。旧と新は S5 の時点で roof-test1〜10・moku1-6 の全階で線が一致（ラベルは座標・文字まで一致）しており、その出力を **`scripts/probe/golden-roof/`**（下屋のある 18 階。golden は 19 ファイルで、roof-test4 は下屋なしの空）に残して、関門 `scripts/probe/dumpRoofPlanCompare.mjs` が golden と比べる（意図した変更のときだけ `--write`）。比較の道具は `plan/roofPlanCompare.js`（壁で切る前の図形 vs 解決器の線）。
+- **線は壁で切る前のまま `innerLines` に入れる**（外形線 `exposedPaths`・棟木・隅木・谷木。線の作り方は `roofPlanFigure.js roofPlanRegionFigure` の1か所）。**外壁面どまりは壁立体（切断）の遮蔽が導く**——壁の厚みは `wallConcealRange`（材∪下地）で、旧 `outerWallFaceNear` と同じ定義だった。閉じた外形線は先頭の点を末尾へ足す（解決器は閉じる辺を作らない）。
 - **footprint は遮蔽専用**（Solid の `drawEdges:false`）。屋内に接する出幅0の辺を描かない裁定は壁の無い階でも効き、幾何だけでは再現できないため、輪郭は描かず `innerLines` だけ描く。複数の閉路は閉路ごとに1件で、線とラベルは part 0 だけに付ける。
 - **屋根の高さ**: 軒先と軒の出が層の FL、最高点が FL + k·tMax（S2 の「最高点＝FL」を訂正。「軒先＝FL」は設計上の仮定）。面材（`SURFACE_KINDS`＝床・屋根）は同じ高さでも下の線に勝つ——下屋の下の梁（天端 FL）は屋根に隠れる（moku1-6 の2階で梁の線 80→26）。
 - **ラベルは `marks`**（`{anchor, prims}`）。基準点が線の点と同じ可視判定で見えるときだけ prims を出す（新規則なし）。出力は細線・below・`detailOnly:true`、線は `detailOnly:false`。LOD の絞りは memo の外・層側（`visiblePlanPrimitives`）。
 - 限界: L1 壁の無い階（またはその区間）では端が通り芯まで（旧と同じ）。L2 穴を持つ outline（屋内を囲む環状の下屋）は穴の閉路も屋根面として塗り、屋内側の線を隠しうる（実データに 0 件。出たら対応）。L3 k·tMax ≥ 切断高の下屋は勾配が切断面をまたぎ、上の線が消える。L4 梁の levelOffset が正で屋根より高ければ屋根の上に出る。壁が下屋の軒先の線を横切る所（隣の建物の壁など）は線が途切れる（旧は引き続けた。設計 D1 の帰結としてユーザー側で受容した許す差分 (a)）。伏図だけの規則（胴差の勝ちと延長）は平面の対象外。
-- 受容した限界（ユーザー裁定）: 階切替・モード切替のたびに自階だけの計算（pending）が1回増える（moku1-6 2階 86ms・roof-test9 67ms・moku4-1 79ms）。graphComputed は keepAlive でないため pending の結果は再利用されない。通り芯ドラッグ中は下屋の線も前回の線のまま追従しない（旧 RoofPlanLayer は毎フレーム追従。moku1-6 2階で 28 本中 7 本の CL で出力が変わる）。
+- 受容した限界（ユーザー裁定）: 階切替・モード切替のたびに自階だけの計算（pending）が1回増える（moku1-6 2階 86ms・roof-test9 67ms・moku4-1 79ms）。graphComputed は keepAlive でないため pending の結果は再利用されない。通り芯ドラッグ中は下屋の線も前回の線のまま追従しない（削除した旧 RoofPlanLayer は毎フレーム追従していた。moku1-6 2階で 28 本中 7 本の CL で出力が変わる）。
 
 ## S6: 吹抜けの注記（`plan/planHoleMarks.js`。S6a＝純モジュール、S6b＝`PlanSolidsLayer` へ配線・旧 `VoidLayer`／`voidGeometry` 削除）
 - 自階の×と直下階の上階吹抜け破線は、解決器の線ではなく**穴に付く注記**。穴の単位は `slabOpening.js floorOpeningGroups`（吹抜け＝室ごと、昇降路＝器具行ごと〔行が無ければ室ごと〕、階段吹抜け・破れ先＝×なし）。
@@ -57,7 +58,13 @@
 - **配線（S6b）**: `PlanSolidsLayer` が Group `plan-hole-marks` で描く。**自階の×はドラッグ追従のため memo の外**（`planHoleMarksOf` を毎レンダーで呼ぶ。解決器の「ドラッグ中は前回のまま」に入れない——旧 VoidLayer の×はドラッグに追従していた）。**上階の穴は peek した graph に memo**（`graphComputed(abovePeek.graph, 'planHoleGroups', …)`。peek の graph はドラッグで変わらない）。`abovePlanPeek` は App.jsx の上階 peek の既存 effect が持つ3状態（undefined＝未解決／null＝上階なし／`{graph, activePlaneId}`）で、`activePlaneId` が自階と違う peek は使わない。描画への写像は純関数 `planHoleMarkPrimitives`（太線1本分の内側・対角2本・外形・ラベル位置。dashKind→破線の写像は `HOLE_MARK_DASH` の1か所）で、LOD SCHEMATIC はラベルだけ落とす。
 - 描画順は「梁・下屋 → 注記」（旧は注記が先）。受容する限界: 同じ階のままモード切替・floorSyncTick で上部吹抜けの破線が peek 完了まで一瞬消える（旧は前回値を出し続けたが、階切替直後に前の階の破線が残る不良があった）。
 - 回帰の関門は `scripts/probe/dumpVoidCompare.mjs`（`golden-void/` と比較。golden は S6a 時点で旧経路と新経路が一致していた出力を採取、20文書55階。意図した変更のときだけ `--write`）。
-- 下階の層を全種別で描くのは S6c（別コミット・目視後）。
+
+## S6c: 下階の層を全種別で描く
+- 下階の層（`layerFloorZ<0`。自階の床の穴の窓越し）は**壁・柱・床・梁・屋根・汎用立体の全種別を細線で描く**（`planSolidsLayerFilter.js BELOW_DRAWN_KINDS='all'`、唯一の場所）。自階は従来どおり `S4_DRAWN_KINDS`（自階の壁・柱・床は既存レイヤが描く）。判定は `isDrawn` の1か所で、層は `source.layerFloorZ` で決まる。下階の立体は全部 below なので細線（cut は出ない。probe の検査で 0）。
+- **二重描画（実測。受容）**: 階段吹抜けの穴の中の下階の壁の線は 21 文書で 251 本。このうち `StairLayer` の隔て壁の輪郭（`partitionOutlineOf`）と重なるのは 8 本（moku4-2・wood-void-test）だけで、残り 243 本は StairLayer が描かない壁で、今回はじめて見える線（13 の2階の折返し階段の中央壁など）。段板は立体ではないので、段の下に隠れるはずの下階の壁も描かれる（S7b で解消）。ユーザー了承済み。
+- 窓の中だけに出る（穴の外 0。probe `dumpPlanSolids.mjs` が下階の層の線を穴の和に照らして検査する）。
+- 隙間の規則で消えない 12.5mm の短線が 148 本残る（21 文書）。内訳は薄壁の端の蓋 43、厚い壁の辺の断片 105（うち 44 は下階の2枚の壁の継ぎ目で、同じ位置を2枚が描く重複）。縁取りの条件を遮蔽物全般に広げれば実データでちょうどこの 148 本だけ消えるが、既存テスト「below 同士の間の隙間は残す」と衝突するためユーザー裁定待ち。
+- 隙間の規則の限界（受容）: 勾配のある cut の遮蔽物と隣り合う区間では、外側を探す距離が 0.01mm と短い。
 
 ## 注意
 - 切断面に関わる他の箇所は、S2 以降で立体モデルへ寄せる際に階の値（`planCutHeightMmOf`）を読む形へ揃える。

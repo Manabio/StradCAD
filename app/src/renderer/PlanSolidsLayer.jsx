@@ -13,6 +13,7 @@ const PLAN_SOLIDS_COLOR = '#1e293b'; // 階段・吹抜け・下屋と同じ線�
  * 平面の「立体＋水平切断」で描く線とラベル。梁・汎用立体（S4）と下屋（S5。外形線・棟木・隅木・谷木と、詳細 LOD の傾斜ラベル＝
  * 水下向きの矢印・「屋根」・「（傾斜N/10）」）。切断高より下は細線の見えがかり、切断面をまたぐ梁は太線。柱・壁・床は既存レイヤが
  * 描くので、ここでは遮蔽物としてだけ解決に参加する（描く種別の集合は plan/planSolidsLayerFilter.js S4_DRAWN_KINDS）。
+ * 下階の層（自階の床の穴の窓越し）は S6c から壁・柱・床も含む全種別を細線で描く（BELOW_DRAWN_KINDS。階段吹抜け内の下階の壁のうち StairLayer の隔て壁の輪郭と重なるのは一部〔実測 251 本中 8 本〕で、残りは今回はじめて見える線。段板は立体でないので段の下に隠れるはずの壁も描かれる〔S7b で解消〕。受容）。
  * 表示するモードの判断は SceneLayers の showPlanFigure。
  * 層は自階＋直下階（belowPeek。App.jsx が直下階を peek して渡す）。判断は純関数 planSolidsLayerResolve に集約:
  *   belowPeek の3状態（undefined＝未解決→自階だけで解いて描く／null＝下階なし／オブジェクト＝あり。upperStairEntries の null／[] と同じ作法）、
