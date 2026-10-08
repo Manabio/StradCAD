@@ -60,7 +60,7 @@
 
 ## S7a: 安全網（平面の線の golden。コードは変えない）
 - 壁: `scripts/probe/golden-regen/<文書>/`（11・13・14・moku1・moku1-6・moku4 の 6 文書、DETAIL LOD。2026-10-09 再採取＝9/17 以降の階段関連の変更〔階段吹抜け再設計・隔て板〕による差を基準更新）。壁 UUID が毎回変わるのでバイト比較は不可、`diffPlanRegen.mjs <今> <golden>` の mismatch 0 で比べる。更新は `dumpPlanRegen.mjs <出力先> <.stq>` の上書き採取。
-- 階段: `golden-stair-plan/`（13・14・moku1-6・moku4・wood-void-test・opening-test・plan-solids-test、上下 peek 込みの StairLayer 相当の線。`dumpStairPlan.mjs`、StairLayer の判断を複製しているので StairLayer を変えたら写像も見直す）。下屋 `golden-roof/`・吹抜け `golden-void/`・解決器 `dumpPlanSolids.mjs`（件数検査）。比較は各 probe を引数なしで実行（差分で exit 1）、更新は `--write`。
+- 階段: `golden-stair-plan/`（13・14・moku1-6・moku4・wood-void-test・opening-test・plan-solids-test、上下 peek 込みの StairLayer 相当の線。`dumpStairPlan.mjs`、StairLayer の判断を複製しているので StairLayer を変えたら写像も見直す）。下屋 `golden-roof/`・吹抜け `golden-void/`・解決器 `dumpPlanSolids.mjs`（件数検査）。比較は各 probe を引数なしで実行（差分で exit 1）、更新は `--write`。moku1-6 の golden-stair-plan・golden-regen は 2026-10-09 に回り階段の隔て壁（あき 115・1階に隔て壁）に合わせて再採取。
 - 注意: 切断面に関わる他の箇所は、S2 以降で立体モデルへ寄せる際に階の値（`planCutHeightMmOf`）を読む形へ揃える。
 
 ## S7b 段（階段の段を遮蔽物にする）

@@ -277,7 +277,7 @@ export function kneeDropWallGeometry(graph, key, cellToRoom) {
  */
 export function isEligibleWallSpan(wall, graph) {
   if (wall.isExteriorWall) return false;
-  // 隔て壁（在来木造の折返し階段）は対象外（S5 までの暫定。座標照合）
+  // 隔て壁（在来木造の折返し・回り階段〔U 字系〕）は対象外（S5 までの暫定。座標照合）
   if (isStairPartitionWall(wall, stairPartitionLines(graph))) return false;
   for (const stair of graph.stairs) {
     const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);

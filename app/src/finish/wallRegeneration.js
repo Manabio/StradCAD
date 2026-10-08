@@ -258,7 +258,7 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
     redoFns.push(() => { restoreWallsFromSnapshots(graph, snapshots).forEach(w => r.generatedWallIds.add(w.id)); });
   }
 
-  // ステップ2a': 在来木造の折返し階段の隔て壁（レーン間中心線上の2枚。隔て壁 S2）。どの Room の
+  // ステップ2a': 在来木造の折返し・回り階段（U 字系）の隔て壁（レーン間中心線上の2枚。隔て壁 S2）。どの Room の
   // generatedWallIds にも入れない（2aのクリップ・偏芯・所有権解決・外壁オーナー化の対象外。識別は
   // 座標照合 stairPartition.js isStairPartitionWall）。2a が受け持った区間は underEdges で差し引く。
   // claimedEdges は足さない。手動壁との重なりは見ない（stairPartitionWalls.js の既知の限界）。

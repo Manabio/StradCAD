@@ -67,7 +67,7 @@ function woodOpeningHosts(graph, rules) {
  * @param {Array<Array<object>>|undefined} openingComponents
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} wallSegments
  * @param {Array<{isVertical:boolean, axisValue:number, lo:number, hi:number}>} [partitionSpans] - 隔て梁
- *   （stairPartitionBeams.js stairPartitionBeamSpans の計画値）。折返し階段の隔て壁の真上の梁で、開口辺に乗る辺は
+ *   （stairPartitionBeams.js stairPartitionBeamSpans の計画値）。折返し・回り階段（U 字系）の隔て壁の真上の梁で、開口辺に乗る辺は
  *   「梁あり」として除く。計画値を使うのは、隔て梁の生成が本関数の後（同じ再計算の中）で実梁がまだ無いため。
  *   支え（直交辺の掛け先）にはしない——隔て梁の端は開口辺の梁に載る側（stairPartitionBeams.js 冒頭）。
  * @returns {{created: object[], removed: string[]}}

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { StairType, StructuralMaterialType, Plane, PlanGraph, CenterLineType, Discipline, RoomKind } from '@core';
 import { buildStairGeometry, laneGapMmFor, LANE_GAP } from './stairGeometry.js';
-import { PARTITION_THICKNESS_MM } from './stairPartition.js';
+import { PARTITION_THICKNESS_MM, stairHasPartition } from './stairPartition.js';
 
 const BOUNDS = { x1: 0, y1: 0, x2: 2000, y2: 4000 };
 const stairOf = (type) => ({
@@ -40,12 +40,23 @@ test('laneGapMmFor: 在来の屋内 SWITCHBACK の木造=隔て壁厚115', () =>
   assert.equal(PARTITION_THICKNESS_MM, 115);
   assert.equal(gapOf(mk(StructuralMaterialType.WOOD)), 115);
 });
-test('laneGapMmFor: 木造でも屋外・回り階段・2×4・S造の建物は隔て壁が立たないので0', () => {
-  const ext = mk(StructuralMaterialType.WOOD); exterior(ext);
-  assert.equal(gapOf(ext), 0, '屋外');
-  assert.equal(gapOf(mk(StructuralMaterialType.WOOD, StairType.WINDING)), 0, '回り階段');
-  assert.equal(gapOf(mk(StructuralMaterialType.WOOD, StairType.SWITCHBACK, '木造（2"×4"）')), 0, '2×4');
-  assert.equal(gapOf(mk(StructuralMaterialType.WOOD, StairType.SWITCHBACK, 'S造')), 0, 'S造の建物');
+test('laneGapMmFor: 在来の屋内 WINDING（回り階段）の木造=隔て壁厚115（2026-10-09 回り階段も隔て壁の対象）', () => {
+  assert.equal(gapOf(mk(StructuralMaterialType.WOOD, StairType.WINDING)), 115);
+});
+test('laneGapMmFor: 木造でも屋外・2×4・S造の建物は隔て壁が立たないので0（SWITCHBACK・WINDING とも）', () => {
+  for (const type of [StairType.SWITCHBACK, StairType.WINDING]) {
+    const ext = mk(StructuralMaterialType.WOOD, type); exterior(ext);
+    assert.equal(gapOf(ext), 0, `${type} 屋外`);
+    assert.equal(gapOf(mk(StructuralMaterialType.WOOD, type, '木造（2"×4"）')), 0, `${type} 2×4`);
+    assert.equal(gapOf(mk(StructuralMaterialType.WOOD, type, 'S造')), 0, `${type} S造の建物`);
+  }
+});
+test('laneGapMmFor: 在来の建物の鉄骨階段は隔て壁が立たず、あきは100（SWITCHBACK・WINDING とも。0 でも 115 でもない）', () => {
+  for (const type of [StairType.SWITCHBACK, StairType.WINDING]) {
+    const m = mk(StructuralMaterialType.STEEL, type, WOOD_TRAD);
+    assert.equal(gapOf(m), LANE_GAP, type);
+    assert.equal(stairHasPartition(m.stair, m.graph, WOOD_TRAD), false, type);
+  }
 });
 test('laneGapMmFor: 鉄骨=100（建物の構造に依らない）・structure 未設定=100・簡略=0', () => {
   assert.equal(gapOf(mk(StructuralMaterialType.STEEL)), LANE_GAP);
@@ -71,6 +82,23 @@ test('SWITCHBACK 在来の木造: 閉じ辺（heavy）が中央±57.5、踏面�
   const xs = g.treads.flatMap(s => [s.x1, s.x2, s.y1, s.y2]);
   assert.ok(xs.some(v => Math.abs(Math.abs(v - mid) - 57.5) < 1e-6), '±57.5 に踏面端が無い');
   assert.ok(!xs.some(v => Math.abs(Math.abs(v - mid) - 50) < 1e-6), '±50 に踏面端が残っている');
+});
+
+test('WINDING 在来の木造: 閉じ辺（heavy）が中央±57.5（幅115）、踏面端もそこで止まり ±50 は残らない', () => {
+  const g = geomOf(mk(StructuralMaterialType.WOOD, StairType.WINDING), true);
+  const heavy = g.treads.filter(s => s.heavy);
+  assert.equal(heavy.length, 1);
+  assert.ok(Math.abs(len(heavy[0]) - 115) < 1e-6, `幅=${len(heavy[0])}`);
+  const xs = g.treads.flatMap(s => [s.x1, s.x2, s.y1, s.y2]);
+  assert.ok(xs.some(v => Math.abs(Math.abs(v - mid) - 57.5) < 1e-6), '±57.5 に踏面端が無い');
+  assert.ok(!xs.some(v => Math.abs(Math.abs(v - mid) - 50) < 1e-6), '±50 に踏面端が残っている');
+});
+
+test('WINDING 木造で隔て壁が立たない（2×4）・鉄骨（在来の建物）: 木造はあき0・閉じ辺なし／鉄骨は幅100', () => {
+  const w24 = mk(StructuralMaterialType.WOOD, StairType.WINDING, '木造（2"×4"）');
+  assert.equal(geomOf(w24, true).treads.filter(s => s.heavy).length, 0);
+  const steel = geomOf(mk(StructuralMaterialType.STEEL, StairType.WINDING), true).treads.filter(s => s.heavy);
+  assert.ok(Math.abs(len(steel[0]) - 100) < 1e-6);
 });
 
 test('SWITCHBACK 鉄骨: 従来どおり中央±50（不変）', () => {

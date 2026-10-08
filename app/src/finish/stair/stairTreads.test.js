@@ -189,6 +189,23 @@ test('SWITCHBACK のあき: 100（鉄骨）・115（在来の木造で隔て壁�
   }
 });
 
+test('WINDING のあき 115（在来の木造で隔て壁が立つ）: 往路・復路の踏面は軸 x=1000 から ±57.5 の内側に入らず、面積の和はあき分だけ減る。周回部は全幅', () => {
+  for (const sections of [[6, 2, 6], [6, 3, 6]]) {
+    const { graph, stair } = uTurn(StairType.WINDING, { sections, buildingStructure: '木造（在来）' });
+    const g = build(stair, graph);
+    const turnFrom = sections[0], turnTo = sections[0] + sections[1] - 1; // 周回部のマス番号（直進部 n は n-1 マス）
+    const lanes = g.cells.filter(c => c.number < turnFrom || c.number > turnTo);
+    assert.ok(lanes.length >= 8, `前提: 往路・復路のマスがある: ${lanes.length}`);
+    const dx = lanes.flatMap(c => c.poly.filter((_, i) => i % 2 === 0).map(x => Math.abs(x - 1000)));
+    assert.ok(Math.min(...dx) > 57.5 - 1e-6, `レーンのマスが壁面の内側に入る: 最小 |x-1000|=${Math.min(...dx)}`);
+    assert.ok(dx.some(d => Math.abs(d - 57.5) < 1e-6), '壁面（±57.5）で止まっている');
+    assert.ok(near(areaSum(g.cells), inner(2000, 4000) - 115 * LANE_LEN), `${sections}: ${areaSum(g.cells)}`);
+    const turn = g.cells.filter(c => c.number >= turnFrom && c.number <= turnTo);
+    const tx = turn.flatMap(c => c.poly.filter((_, i) => i % 2 === 0));
+    assert.ok(Math.min(...tx) < 1000 - 57.5 && Math.max(...tx) > 1000 + 57.5, '周回部は軸をまたぐ全幅');
+  }
+});
+
 test('WINDING のあき 100（鉄骨）でも周回部は全幅の帯（扇形の和）で、面積の和はあき分だけ減る', () => {
   for (const sections of [[6, 2, 6], [6, 3, 6]]) {
     const { graph, stair } = uTurn(StairType.WINDING, { sections, structure: StructuralMaterialType.STEEL });

@@ -25,8 +25,10 @@ import { effectiveStructure, woodColumnSectionId } from '../structural/structure
  * 変えていないが生成する壁が増えたため既存キーを一律不一致にする。
  * v6 = 隔て壁の自由端の柱包み（stairPartitionWalls.js wrapStairPartitionFreeEnds。両端の柱が90角の構造柱に
  * なり、自由端の側の壁を端CL±57.5へはね出す）。鍵の入力は変えていないが生成式が変わったため一律不一致にする。
+ * v7 = 回り階段（WINDING）にも隔て壁を生成・鉄骨の階段には生成しない（stairPartition.js 2026-10-09）。鍵の入力は
+ * 変えていないが生成する壁が変わったため一律不一致にする。
  */
-export const WALL_KEY_VERSION = 'v6';
+export const WALL_KEY_VERSION = 'v7';
 
 /**
  * graph（1階分）の壁再生成に必要な入力から鍵文字列を作る。

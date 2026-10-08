@@ -1,5 +1,5 @@
 /**
- * 在来木造の折返し階段（SWITCHBACK）の隔て壁（平面）の生成（隔て壁 S2）。
+ * 在来木造の折返し・回り階段（SWITCHBACK・WINDING。木造の階段のみ）の隔て壁（平面）の生成（隔て壁 S2）。
  *
  * 隔て壁は往路・復路レーンの間（レーン間中心線 s=0.5）に立つ。形は「下地オーナー壁＋仕上げ薄壁」
  * （.claude/stair-model.md・finish/wallGeneration.js の所有権解決と同じ2枚方式）:
@@ -70,7 +70,7 @@ export function generateStairPartitionWalls(graph, { structure = null, underEdge
   if (!isTraditionalWoodStructure(structure)) return [];
   const walls = [];
   for (const stair of graph.stairs) {
-    // 立つか（在来・屋内・SWITCHBACK）の出どころは stairHasPartition 1つ（レーンあきも同じ述語）
+    // 立つか（在来・木造の階段・屋内・SWITCHBACK/WINDING）の出どころは stairHasPartition 1つ（レーンあきも同じ述語）
     if (!stairHasPartition(stair, graph, structure)) continue;
     const g = stairPartitionGeometry(stair, graph);
     const [axisType, endType] = g.isVertical

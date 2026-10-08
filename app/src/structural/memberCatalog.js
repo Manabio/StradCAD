@@ -38,7 +38,7 @@ export const MEMBER_GROUPS = [
   // 小屋組の無い階・非在来ではセクション自体を隠す）。
   { key: 'beamRoof', mapName: 'beamMap', category: MEMBER_CATEGORY.ROD,           label: '小屋梁',     iconShape: 'band',
     filter: b => b.role === 'roofBeam', allowManualAdd: false, hideWhenEmpty: true },
-  // 隔て梁（在来木造の折返し階段の隔て壁の真上。隔て壁 S5。自動生成のみ＝手動追加UIなし。無い階では隠す）。
+  // 隔て梁（在来木造の折返し・回り階段（U 字系）の隔て壁の真上。隔て壁 S5。自動生成のみ＝手動追加UIなし。無い階では隠す）。
   { key: 'beamPartition', mapName: 'beamMap', category: MEMBER_CATEGORY.ROD,       label: '隔て梁',     iconShape: 'band',
     filter: b => b.role === 'partitionBeam', allowManualAdd: false, hideWhenEmpty: true },
   { key: 'slab',  mapName: 'slabMap',    category: MEMBER_CATEGORY.PLANE_H,     label: 'スラブ',     iconShape: 'plane' },

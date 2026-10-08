@@ -8,12 +8,13 @@ import { buildSelfFootprintGate } from '../../structural/wallGate.js';
 import { generateStairPartitionWalls, wrapStairPartitionFreeEnds } from './stairPartitionWalls.js';
 import { stairPartitionLines, isStairPartitionWall, PARTITION_BACKING_MM, PARTITION_FINISH_MM } from './stairPartition.js';
 import { selfWallSegments, wallBackingCenters, autoFillWallBeamAxes } from '../../structural/wallBeamAxes.js';
-import { autoFillWoodColumns, autoFillWoodWallBeams, conformWoodSections } from '../../structural/woodAutoFill.js';
+import { autoFillWoodColumns, autoFillWoodWallBeams, conformWoodSections, conformWoodBacking } from '../../structural/woodAutoFill.js';
 import { TRADITIONAL_WOOD_STRUCTURE, woodColumnWidthMm } from '../../structural/structureRules.js';
 import { stairPartitionEnds } from '../../structural/wallFreeEnds.js';
 import { autoFillStructuralGrid } from '../../structural/structuralAutoFill.js';
 import { isEligibleWallSpan } from '../kneeDropWall.js';
-import { WALL_KEY_VERSION } from '../wallFreshnessKey.js';
+import { WALL_KEY_VERSION, wallFreshnessKey } from '../wallFreshnessKey.js';
+import { refreshWallsForGraph } from '../../wallRefresh.js';
 import { runFinishExitBoundary } from '../finishBoundary.js';
 import { loadMaterialMap, regenerateWalls } from '../wallRegeneration.js';
 import { cellsBeyondBreak } from './stairGeometry.js';
@@ -77,11 +78,50 @@ test('【失敗系】在来木造以外（S造・RC・2x4・null）は0枚', () 
   assert.equal(graph.walls.length, 0);
 });
 
-test('【失敗系】SWITCHBACK 以外（STRAIGHT・WINDING）は0枚', () => {
-  for (const type of [StairType.STRAIGHT, StairType.WINDING]) {
+test('在来・WINDING（回り階段）: SWITCHBACK と同じくオーナー壁＋薄壁の2枚。軸x=1000・区間1000〜4000・識別される', () => {
+  const { graph } = makeStair(EQUAL_UP, { type: StairType.WINDING, sections: [6, 3, 6] });
+  const walls = gen(graph);
+  assert.equal(walls.length, 2);
+  const [owner, thin] = walls;
+  for (const w of walls) {
+    assert.equal(w.axisCL.value, 1000);
+    assert.deepEqual([Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)], [1000, 4000]);
+  }
+  assert.deepEqual([owner.axisOffset, owner.backingDepth, owner.finishSide], [57.5, 90, 1]);
+  assert.deepEqual([thin.axisOffset, thin.backingDepth, thin.finishSide], [-57.5, 0, -1]);
+  const lines = stairPartitionLines(graph);
+  assert.deepEqual(lines, [{ isVertical: true, axisValue: 1000, lo: 1000, hi: 4000 }]);
+  assert.ok(walls.every(w => isStairPartitionWall(w, lines)));
+});
+
+test('【失敗系】U 字系以外（STRAIGHT・STRAIGHT_LANDING・L_TURN・FLARED・OPEN_WELL）は、U 字に見えるセルでも0枚', () => {
+  for (const type of [StairType.STRAIGHT, StairType.STRAIGHT_LANDING, StairType.L_TURN, StairType.FLARED, StairType.OPEN_WELL]) {
     const { graph } = makeStair(EQUAL_UP, { type });
     assert.equal(gen(graph).length, 0, type);
+    assert.equal(graph.walls.length, 0, type);
   }
+});
+
+test('【失敗系】鉄骨の階段（SWITCHBACK・WINDING）は在来の建物でも0枚。対照: 木造の階段は2枚', () => {
+  for (const type of [StairType.SWITCHBACK, StairType.WINDING]) {
+    const wood = makeStair(EQUAL_UP, { type });
+    assert.equal(gen(wood.graph).length, 2, `対照 ${type}`);
+    const steel = makeStair(EQUAL_UP, { type });
+    steel.stair.structure = StructuralMaterialType.STEEL;
+    assert.equal(gen(steel.graph).length, 0, `鉄骨 ${type}`);
+    assert.equal(steel.graph.walls.length, 0, `鉄骨 ${type}`);
+  }
+});
+
+test('【失敗系】WINDING でも分割線 CL（軸・端）が欠けると0枚で CL を作らない（軸が梁芯・端が補助線）', () => {
+  const noAxis = makeStair(EQUAL_UP, { type: StairType.WINDING },
+    { clProps: (type, v) => (type === CenterLineType.VERTICAL && v === 1000 ? { discipline: Discipline.FUSE } : {}) });
+  const before = clCount(noAxis.graph);
+  assert.equal(gen(noAxis.graph).length, 0);
+  assert.equal(clCount(noAxis.graph), before);
+  const noEnd = makeStair(EQUAL_UP, { type: StairType.WINDING },
+    { clProps: (type, v) => (type === CenterLineType.HORIZONTAL && v === 1000 ? { discipline: Discipline.ARCH, lineType: 'dashed' } : {}) });
+  assert.equal(gen(noEnd.graph).length, 0);
 });
 
 test('【失敗系】ペア部屋が屋外（EXTERIOR）の階段は0枚（屋外階段は壁なし）。対照: 屋内なら2枚', () => {
@@ -230,6 +270,24 @@ test('鮮度キーの版は v5 以上（隔て壁の生成で壁集合が変わ�
   assert.ok(Number(WALL_KEY_VERSION.slice(1)) >= 5, WALL_KEY_VERSION);
 });
 
+test('鮮度キーの版は v7 以上（回り階段にも隔て壁を立て、鉄骨階段には立てない＝生成する壁が変わったため）', () => {
+  assert.ok(Number(WALL_KEY_VERSION.slice(1)) >= 7, WALL_KEY_VERSION);
+});
+
+test('読込み時の回帰【v6 の鍵・WINDING・隔て壁なし】refreshWallsForGraph が再生成し、隔て壁2枚が立つ。現行の鍵のままなら何もしない', async () => {
+  const { project, graph, fmode } = await makeFixtureNo2a({ type: StairType.WINDING, sections: [6, 3, 6] });
+  assert.equal(partitionWalls(graph).length, 0, '前提: 隔て壁なし（v6 時代に保存された状態）');
+  conformWoodBacking(graph, project); // refresh が鍵比較の前に行う下地材そろえを先に済ませ、鍵の差を版だけにする
+  const current = wallFreshnessKey(graph, project);
+  assert.ok(current.startsWith(`${WALL_KEY_VERSION}|`));
+  graph.setWallFreshnessKey(current.replace(WALL_KEY_VERSION, 'v6'));
+  const regen = await refreshWallsForGraph(graph, project, () => Promise.resolve(fmode.materialMap), { peek: async () => null, pushUndo: false });
+  assert.equal(regen, true, 'v6 の鍵は不一致＝再生成する');
+  assert.equal(partitionWalls(graph).length, 2);
+  // 対照: 再生成後の鍵は現行版で、続けて呼んでも何もしない
+  assert.equal(await refreshWallsForGraph(graph, project, () => Promise.resolve(fmode.materialMap), { peek: async () => null, pushUndo: false }), false);
+});
+
 // ---- 本番経路（runFinishExitBoundary: 全削除→2a→隔て壁→隣室壁→外壁） ----
 // finishBoundary.test.js makeStairUnder2aFixture と同じ構成（SWITCHBACK・L字部屋＋階段下の2a部屋）。2a 部屋は
 // 階段下の領域がレーン間中心線 x=1000 の全区間を受け持つため、隔て壁は2a区間の差し引きで0枚になる。
@@ -269,7 +327,7 @@ test('本番経路【2aが全区間を受け持つ】隔て壁は0枚。ルー�
 });
 
 // 2a の無い SWITCHBACK（EQUAL_UP と同形。周囲に壁はない）。本番経路の冪等・undo/redo・規則1
-async function makeFixtureNo2a() {
+async function makeFixtureNo2a({ type = StairType.SWITCHBACK, sections = [6, 1, 6], structure = null } = {}) {
   const project = new Project('proj', 'test');
   const { graph } = project.addPlane(0, '1階', 'p1');
   graph.structureOverride = WOOD;
@@ -282,8 +340,9 @@ async function makeFixtureNo2a() {
   const pair = graph.addRoom(new Set(cells), '階段');
   pair.setFeature(RoomFeature.STAIR);
   const stair = graph.addStair({
-    type: StairType.SWITCHBACK, cells, roomId: pair.id, sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+    type, cells, roomId: pair.id, sections, riser: null, upDirection: 'up', flip: false,
   });
+  if (structure) stair.structure = structure;
   const materialMap = await loadMaterialMap();
   // fmode.stairUnderRooms は本番経路では使われない（finishBoundary は resolveStairContext で2aを自分で解決する）。
   // ここで2aを無効にしているわけではない。
@@ -299,6 +358,15 @@ test('本番経路【冪等】2回脱出しても隔て壁を含む壁の形状�
   await runFinishExitBoundary(graph, project, fmode, { goingToStructure: false });
   assert.deepEqual(shapeSet(graph), first);
   assert.equal(partitionWalls(graph).length, 2);
+});
+
+test('本番経路【WINDING】脱出で隔て壁2枚（オーナー＋薄壁）。鉄骨の WINDING は在来の建物でも出ない', async () => {
+  const wood = await makeFixtureNo2a({ type: StairType.WINDING, sections: [6, 3, 6] });
+  await runFinishExitBoundary(wood.graph, wood.project, wood.fmode, { goingToStructure: false });
+  assert.equal(partitionWalls(wood.graph).length, 2, '木造の WINDING');
+  const steel = await makeFixtureNo2a({ type: StairType.WINDING, sections: [6, 3, 6], structure: StructuralMaterialType.STEEL });
+  await runFinishExitBoundary(steel.graph, steel.project, steel.fmode, { goingToStructure: false });
+  assert.equal(partitionWalls(steel.graph).length, 0, '鉄骨の WINDING');
 });
 
 // 注: 在来の脱出は構造再計算のエントリを積み、その redo は壁を含む全体を復元する。そのためこのテストは壁エントリ単独の

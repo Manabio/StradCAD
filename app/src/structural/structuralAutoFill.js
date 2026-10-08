@@ -802,7 +802,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 生成・撤去が確定した直後に呼ぶ——小屋梁の位置・端の host は確定済みの大梁を前提にするため。
   // roofRegions===undefined は何もしない。
   const roofFramingResult = autoFillWoodRoofFraming(graph, project, roofRegions);
-  // 隔て梁（在来木造の折返し階段の隔て壁の真上。隔て壁 S5）。屋根専用平面は対象外。条件は !isRoof だけ——
+  // 隔て梁（在来木造の折返し・回り階段（U 字系）の隔て壁の真上。隔て壁 S5）。屋根専用平面は対象外。条件は !isRoof だけ——
   // 非在来へ切り替わった直後の auto の撤去も本関数が担う（土台と同じ。関数内で framing を見る）。
   const partitionBeamsResult = !isRoof
     ? autoFillStairPartitionBeams(graph, project, belowPartitionEnds) : { created: [], removed: [] };

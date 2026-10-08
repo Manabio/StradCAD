@@ -148,7 +148,7 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
     : [];
 
   // 折返し階段の往路・復路の間にあきを付けるか（簡略LODは付けない）。あきの値は buildStairGeometry 内で
-  // laneGapMmFor が確定する（鉄骨100・隔て壁が立つ木造115・それ以外の木造0）。
+  // laneGapMmFor が確定する（鉄骨100・隔て壁が立つ木造115〔折返し・回り〕・それ以外の木造0）。
   // StairLayer の描画と2a壁クリップ計算の双方へ渡す（描かれる破れ線とクリップ線のズレ防止）。
   const stairLaneGap = viewport.lodLevel !== LodLevel.SCHEMATIC;
 

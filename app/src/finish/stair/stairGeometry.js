@@ -26,9 +26,9 @@ export const LANE_GAP = 100; // mm — 鉄骨の折返し・回り階段の往�
  * 折返し・回り階段の往路・復路レーンの間のあき(mm)の唯一の決め方（2026-10-08 裁定）。
  *   - 簡略LOD … 0（中央仕切り1本）
  *   - 木造（stair.structure===WOOD）で隔て壁が実際に立つ（stairHasPartition＝壁の生成条件と同じ述語:
- *     階の実効主構造が在来・屋内・SWITCHBACK）… 隔て壁の総厚 PARTITION_THICKNESS_MM（115）。
+ *     階の実効主構造が在来・木造の階段・屋内・SWITCHBACK/WINDING）… 隔て壁の総厚 PARTITION_THICKNESS_MM（115）。
  *     踏面は壁面（レーン間中心線±57.5）で止まり、レーン内側端の線は壁面線と一致する。
- *   - 木造で隔て壁が立たない（2×4・S造の建物、回り階段、屋外）… 0（仕切りが無いのであきも無い）。
+ *   - 木造で隔て壁が立たない（2×4・S造の建物、屋外）… 0（仕切りが無いのであきも無い）。
  *   - 上記以外（鉄骨ほか。structure 未設定を含む）… LANE_GAP（100）。
  *   「100mm のあき」は鉄骨階段のもので、木造は対象外（ユーザー裁定 2026-10-08）。
  * 構造別の判定はここだけ（buildStairGeometry が laneGap:boolean を受け、ここで値を確定する）。
@@ -1445,7 +1445,7 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0, col
  *   spans … セル割りから実測した区間長（measureStairSpans）。区間長指定の反映用。null なら合成。
  *   laneGap … 折返し・回り階段（SWITCHBACK/WINDING）の往路・復路の間にあきを付けるか（boolean）。
  *   標準・詳細LODは true、簡略LOD・未指定は false（従来どおり中央仕切り1本）。あきの値(mm)は
- *   graph を使って laneGapMmFor が確定する（鉄骨100・隔て壁が立つ木造115・それ以外の木造0）。
+ *   graph を使って laneGapMmFor が確定する（鉄骨100・隔て壁が立つ木造115〔折返し・回り〕・それ以外の木造0）。
  *   回り階段の扇形 pivot はあき幅のうち段数が低い方＝往路の内側端（tRun, sA）。
  *   breakOverhangMm … 破れ線の見た目の両端を線方向へ CL からはり出す量(mm)。中心線の端の
  *   はね出しと同じ扱いで、描画側が overhangMm(viewport) を渡す（既定0＝はり出しなし）。

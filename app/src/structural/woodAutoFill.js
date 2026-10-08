@@ -276,7 +276,7 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
     if (!verticalCL || !horizontalCL) continue;
     mergeSlot(slots, columnSlotKey(verticalCL, horizontalCL), { verticalCL, horizontalCL }, [ColumnOrigin.WALL]);
   }
-  // 折返し階段の隔て壁の両端（隔て壁 S3'。ユーザー裁定2026-10-07「回転部の柱は通り芯交点に配置」）。
+  // 折返し・回り階段（U 字系）の隔て壁の両端（隔て壁 S3'。ユーザー裁定2026-10-07「回転部の柱は通り芯交点に配置」）。
   // 隔て壁は構造の壁ソースから除外してある（wallBeamAxes.js）ので3a・F-1には現れない——ここが唯一の点源。
   // アンカーは3aと同じ2段（resolveWoodColumnAnchorCL。CLは新設しない。どちらか解決できなければ見送る）。
   // 由来は'freeEnd'（新しい由来語・色は足さない）。slotsに入れるので撤去ループで撤去されず、除外集合
@@ -1074,7 +1074,7 @@ export function wallLineThroughRuns(wallSegments, freeEnds = []) {
  *   自前で全走査する（freeEndGraphのselfWallFreeEnds算出にだけ使う——wallSegments自体は呼び出し側が
  *   渡す値をそのまま使う）。
  * @param {Array<{x:number, y:number}>} [belowTieExcludePts] - 頭つなぎ（フェーズB）の起点から除く下階柱のAXIS座標
- *   （折返し階段の隔て壁の両端の柱。ユーザー裁定2026-10-07「吹抜けを横切る頭つなぎは不可・隔て壁は柱脚固定で1層分は梁なし」）。
+ *   （折返し・回り階段（U 字系）の隔て壁の両端の柱。ユーザー裁定2026-10-07「吹抜けを横切る頭つなぎは不可・隔て壁は柱脚固定で1層分は梁なし」）。
  *   通し梁の下階柱分割（フェーズA）と支持点判定には従来どおり含める。省略＝従来と同じ。
  * @returns {{created: object[], removed: string[]}}
  */

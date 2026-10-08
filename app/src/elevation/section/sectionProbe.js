@@ -134,7 +134,7 @@ export function makeProbeContext(layers, opts = {}) {
     // 呼ばれるまで計算しない（spaceIndex側の遅延初期化のまま）。
     componentOf: spaceIndex.componentOf,
     componentAt: spaceIndex.componentAt,
-    // 壁の天端プロファイル（関所 kneeDropZRangesAt の wallTop 引数）。隔て壁（在来木造の折返し階段）が
+    // 壁の天端プロファイル（関所 kneeDropZRangesAt の wallTop 引数）。隔て壁（在来木造の折返し・回り階段（U 字系））が
     // 斜め天端のとき {zAt(along)→絶対z, crossings(zLevels)→along[]} を壁idで引く。層ごとに1回だけ作る（stairPartitionLines 等が重い）。
     wallTopProfileFor,
   };

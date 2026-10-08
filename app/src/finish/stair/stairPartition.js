@@ -1,5 +1,7 @@
 /**
- * 在来木造の折返し階段（SWITCHBACK）の「隔て壁（隔て板）」の判定と幾何を返す純モジュール。
+ * 在来木造の折返し・回り階段（SWITCHBACK・WINDING の U 字系）の「隔て壁（隔て板）」の判定と幾何を返す純モジュール。
+ * 立つ条件＝在来の建物 × 木造の階段（Stair.structure。鉄骨の階段は立たない）× 屋内 × PARTITION_STAIR_TYPES ×
+ * 幾何が取れる（2026-10-09 ユーザー規則）。
  *
  * 隔て壁は往路・復路レーンの間（レーン間中心線 s=0.5）に立つ壁。仕様（問題.md）:
  *   - 端部（踊り場側）に90角の材を建てる（下地厚 PARTITION_BACKING_MM）
@@ -19,7 +21,7 @@
  * 主構造の判定は structural/structureRules.js の isTraditionalWoodStructure（core非依存の静的データのみ）。
  */
 
-import { StairType, RoomKind } from '@core';
+import { StairType, RoomKind, StructuralMaterialType } from '@core';
 import { roomBounds } from '../gridCells.js';
 import { makeFrame } from './stairFrame.js';
 import { uTurnSpans, defaultSections } from './stairClassify.js';
@@ -37,6 +39,20 @@ export const PARTITION_THICKNESS_MM = PARTITION_BACKING_MM + 2 * PARTITION_FINIS
 
 const FULL = Object.freeze({ kind: 'full' });
 
+/**
+ * 隔て壁の対象になる型（往路・復路のレーンが s=0.5 で接して走る U 字系）。型依存はこの集合と
+ * stairPartitionGeometry の判定1か所だけ（「タイプ依存は写像のみ」）。OPEN_WELL は中央に吹抜けがあって
+ * レーンが接しない・L_TURN/FLARED/直進系はレーン間が無いので対象外。uTurnSpans はセルだけで判定し型を
+ * 見ないため、この型判定を外すと OPEN_WELL 等が誤って非 null になる。
+ */
+export const PARTITION_STAIR_TYPES = new Set([StairType.SWITCHBACK, StairType.WINDING]);
+
+// 木造の階段（Stair.structure。既定 WOOD）か。鉄骨の階段は隔て壁を持たない（2026-10-09 ユーザー規則。
+// 建物が在来木造でも鉄骨階段は壁で仕切らない）。壁の生成・あき・天端など「立つか」の判定にだけ使い、
+// 識別用の stairPartitionLines・partitionPlanRects には入れない（構造切替後に残る古い壁が構造の
+// 壁ソースへ漏れないよう、識別は構造に依らず座標で照合する）。
+const isWoodStair = (stair) => stair?.structure === StructuralMaterialType.WOOD;
+
 // 斜め天端。復路直進部の開始段＝復路の最初の踏面。stairGeometry.js buildSwitchback では
 // 踏面番号 = 往路マス数(n1-1) + 踊り場マス数(sections[1]) + 1 に取りつき回転部の蹴上数(entryTurnSteps)
 // を足した値（stairParts の numberStart＋ numberStart += turnStepsE）。踏面 k の面は k×蹴上
@@ -44,6 +60,7 @@ const FULL = Object.freeze({ kind: 'full' });
 // よって復路の最初の踏面の段鼻高さ = (entryTurnSteps + sections[0] + sections[1]) × riser。
 // entryTurnSteps は landingZ と同じく無条件に足す: 出入口が走行端のとき 0 に保たれるのは portSideChange 側
 // （Stair の仕様）で、ここで ports を再解決せず landingZ と揃える。
+// WINDING も同式: 回転部は sections[1]=w マス（番号 a-1+1…a-1+w）で、復路の最初の踏面は a-1+w+1 = sections[0]+sections[1]。
 // riser・sections が解決できなければ null（呼び出し側はフルハイトへ安全側に倒す）。
 function slopeTop(stair, floorHeight) {
   const sections = stair.sections ?? defaultSections(stair);
@@ -59,8 +76,9 @@ function slopeTop(stair, floorHeight) {
 }
 
 /**
- * 折返し階段の隔て壁の幾何を返す。隔て壁が無い（対象外）なら null。
- * 対象は在来木造・SWITCHBACK のみ。WINDING（回り階段）は仕様未裁定のため対象外。
+ * 折返し・回り階段の隔て壁の幾何を返す。隔て壁が無い（対象外）なら null。
+ * 対象は在来の建物の木造の階段・SWITCHBACK/WINDING のみ（鉄骨の階段は立たない）。
+ * WINDING も SWITCHBACK と同じ式（区間は回転部の手前で止まる＝回転部の中へは延ばさない。天端も型で分けない）。
  * 両レーンが並走する区間だけに立つ（短い方のレーンの基端〜回転部前縁 tRun）。
  * 既知の限界（裁定事項）: 復路レーンが長い場合も上り口側の天端は上階FL+800のままとしている。
  *
@@ -78,7 +96,7 @@ function slopeTop(stair, floorHeight) {
  * }|null}
  */
 export function resolveStairPartition(stair, graph, { structure = null, continuesAbove = false, floorHeight = null } = {}) {
-  if (!isTraditionalWoodStructure(structure)) return null;
+  if (!isTraditionalWoodStructure(structure) || !isWoodStair(stair)) return null;
   const g = stairPartitionGeometry(stair, graph);
   if (!g) return null;
   return {
@@ -89,7 +107,7 @@ export function resolveStairPartition(stair, graph, { structure = null, continue
 }
 
 /**
- * 隔て壁の幾何だけ（主構造の判定を含まない）。SWITCHBACK で uTurnSpans が取れなければ null。
+ * 隔て壁の幾何だけ（主構造・階段の構造材の判定を含まない）。PARTITION_STAIR_TYPES 以外・uTurnSpans が取れなければ null。
  * 壁の生成（stairPartitionWalls.js。主構造は呼び出し側が見る）と識別（stairPartitionLines）が共有する。
  * @param {import('@core').Stair} stair
  * @param {object} graph
@@ -97,7 +115,7 @@ export function resolveStairPartition(stair, graph, { structure = null, continue
  *   entryEnd:{x:number,y:number}, landingEnd:{x:number,y:number}}|null}
  */
 export function stairPartitionGeometry(stair, graph) {
-  if (!stair || stair.type !== StairType.SWITCHBACK) return null;
+  if (!stair || !PARTITION_STAIR_TYPES.has(stair.type)) return null;
   const b = roomBounds(stair.cells, graph);
   if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return null;
   const us = uTurnSpans(stair, graph, b);
@@ -121,20 +139,20 @@ export function stairPartitionGeometry(stair, graph) {
 
 /**
  * この階段の隔て壁が実際に立つか。壁の生成（generateStairPartitionWalls）と同じ条件:
- * 実効主構造が在来木造・屋内（ペア部屋が EXTERIOR でない）・SWITCHBACK の幾何が取れる。
+ * 実効主構造が在来木造・木造の階段・屋内（ペア部屋が EXTERIOR でない）・SWITCHBACK/WINDING の幾何が取れる。
  * レーンあき（stairGeometry.js laneGapMmFor）の判定に使う。
  * @param {import('@core').Stair} stair
  * @param {object|null} graph
  * @param {string|null|undefined} structure 実効主構造（effectiveStructure）
  */
 export function stairHasPartition(stair, graph, structure) {
-  if (!graph || !isTraditionalWoodStructure(structure)) return false;
+  if (!graph || !isTraditionalWoodStructure(structure) || !isWoodStair(stair)) return false;
   if (graph.roomMap?.get(stair.roomId)?.kind === RoomKind.EXTERIOR) return false;
   return stairPartitionGeometry(stair, graph) !== null;
 }
 
 /**
- * 屋内の SWITCHBACK 全部の隔て壁の線（座標）。主構造は見ない——構造の除外・腰壁の除外が
+ * 屋内の SWITCHBACK/WINDING 全部の隔て壁の線（座標）。主構造・階段の構造材は見ない——構造の除外・腰壁の除外が
  * 「壁が隔て壁か」を座標で照合するための材料（Wall に種別を持たない理由は .claude/stair-model.md）。
  * 屋外階段（ペア部屋が EXTERIOR）は壁を持たないため含めない。
  * 主構造では絞らない（識別側は構造に依らず座標で照合する）。在来以外では隔て壁が無いが、
@@ -252,9 +270,9 @@ export function partitionTopCrossings(desc, zLevels) {
 }
 
 /**
- * 屋内の SWITCHBACK 全部について、隔て壁の線（stairPartitionLines と同形）と天端つきの幾何
+ * 屋内の SWITCHBACK/WINDING 全部について、隔て壁の線（stairPartitionLines と同形）と天端つきの幾何
  * （resolveStairPartition）を返す。matchStairPartitionLine(wall, lines) で壁→desc を引ける
- * （line は戻り値の line をそのまま渡す）。非在来（structure）なら空。
+ * （line は戻り値の line をそのまま渡す）。非在来（structure）なら空。鉄骨の階段は含めない。
  * @param {object} graph
  * @param {{ structure:string|null, floorHeight?:number|null,
  *   continuesAbove?:(stair:object)=>boolean|null }} opts
@@ -278,7 +296,7 @@ export function stairPartitionDescriptors(graph, { structure = null, floorHeight
  * 隔て壁の平面の矩形群（mm・量子化なし）。N+1 平面の「隔て壁の天端の輪郭」（stairEntries.js）の材料。
  * graph（下階 N）の壁のうち、この階段の隔て壁の線に一致するもの（オーナー壁＋薄壁。柱包みの
  * はね出しを含む物理端）を、長さ方向 [coord の min,max]・厚み方向 materialRange の矩形にする。
- * 構造（在来か）は見ない——壁があるかどうかが唯一の情報源。屋外階段・SWITCHBACK 以外・壁なしは []。
+ * 構造（在来か）は見ない——壁があるかどうかが唯一の情報源。屋外階段・U 字系以外・壁なしは []。
  * @param {import('@core').Stair} stair
  * @param {object} graph
  * @returns {Array<{xLo:number,xHi:number,yLo:number,yHi:number}>}

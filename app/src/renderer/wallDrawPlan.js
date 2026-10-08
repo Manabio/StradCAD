@@ -240,7 +240,7 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
   // 柱生成＝structural/woodAutoFill.js と同じ判定・同じ入力 selfWallSegments(graph)）の世界座標一覧。
   // 腰壁・垂れ壁の辺の自由端でも壁端延長・巻きは行うため、ここでは絞り込まない。
   const wrapFreeEnds = !schematic && rulesFor(effectiveStructure(graph)).wallFreeEnd === 'columnWrap';
-  // 折返し階段の隔て壁の自由端（stairPartitionEnds。構造の壁ソースから除外してあるので上の集合には出ない）も
+  // 折返し・回り階段（U 字系）の隔て壁の自由端（stairPartitionEnds。構造の壁ソースから除外してあるので上の集合には出ない）も
   // 足す——隔て壁の仕上げ（薄壁を含む）が柱を回り込む。薄壁は下地帯中心(backingAxisValue)が軸と一致して拾われる。
   const ownSegments = wrapFreeEnds ? selfWallSegments(graph) : null;
   const freeEndPoints = wrapFreeEnds

@@ -193,7 +193,7 @@ function wallBeamSourcesFromGraph(sourceGraph, requireBeamAxisBacking, cache = u
   const cached = cache?.get(sourceGraph, requireBeamAxisBacking);
   if (cached) return cached.map(s => ({ ...s }));
   const out = [];
-  // 在来木造の折返し階段の隔て壁は構造の源にしない（S5 で構造を設計するまでの暫定。
+  // 在来木造の折返し・回り階段（U 字系）の隔て壁は構造の源にしない（S5 で構造を設計するまでの暫定。
   // 識別は座標照合。finish/stair/stairPartitionWalls.js）
   const partitionLines = stairPartitionLines(sourceGraph);
   for (const wall of sourceGraph.walls) {

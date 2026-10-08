@@ -2,14 +2,14 @@
 // フィクスチャは座標の矩形（x1,y1,x2,y2）から CL とセルキーを作る（y下向き正）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomKind } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomKind, StructuralMaterialType } from '@core';
 import { measureStairSpans, uTurnSpans } from './stairClassify.js';
 import { portSpansOf, resolveStairPorts } from './stairPorts.js';
 import { roomBounds } from '../gridCells.js';
 import { generateStairPartitionWalls } from './stairPartitionWalls.js';
 import {
   partitionTopZAt, partitionTopCrossings, stairPartitionDescriptors,
-  resolveStairPartition, partitionPlanRects, PARTITION_BACKING_MM, PARTITION_FINISH_MM, PARTITION_TOP_ABOVE_NOSING_MM, PARTITION_THICKNESS_MM,
+  resolveStairPartition, partitionPlanRects, stairHasPartition, stairPartitionLines, PARTITION_STAIR_TYPES, PARTITION_BACKING_MM, PARTITION_FINISH_MM, PARTITION_TOP_ABOVE_NOSING_MM, PARTITION_THICKNESS_MM,
 } from './stairPartition.js';
 
 const WOOD = '木造（在来）';
@@ -152,11 +152,62 @@ test('【失敗系】在来木造以外（RC・S・2x4・null）は null', () =>
   }
 });
 
-test('【失敗系】SWITCHBACK 以外（STRAIGHT・WINDING）は null', () => {
-  for (const type of [StairType.STRAIGHT, StairType.WINDING]) {
+// ---- WINDING（回り階段）も隔て壁の対象（2026-10-09 ユーザー規則）----
+// sections [6,3,6] → 総蹴上 5+3+5+1=14。階高 2800 → 蹴上 200。復路の最初の踏面の番号 = 6+3 = 9 → 段鼻 1800
+test('在来・WINDING・等長レーン(up): SWITCHBACK と同じ式（軸x=1000・区間y1000〜4000・端点・厚み）。天端は (s0+s1)×蹴上+800', () => {
+  const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up', type: StairType.WINDING, sections: [6, 3, 6] });
+  const sw = makeStair(EQUAL_UP, { upDirection: 'up' });
+  const p = resolveStairPartition(stair, graph, opts({ floorHeight: 2800 }));
+  assert.equal(p.isVertical, true);
+  assert.equal(p.axisValue, 1000);
+  assert.deepEqual([p.lo, p.hi], [1000, 4000], '区間は短い方のレーン基端〜回転部前縁 tRun（回転部の中へは延ばさない）');
+  assert.deepEqual(p.entryEnd, { x: 1000, y: 4000 });
+  assert.deepEqual(p.landingEnd, { x: 1000, y: 1000 });
+  assert.deepEqual(p.thickness, { backing: 90, finish: 12.5, total: 115 });
+  assert.deepEqual(p.top, { kind: 'slope', zAtEntryEnd: 3600, zAtLandingEnd: (6 + 3) * 200 + 800 });
+  const g = resolveStairPartition(sw.stair, sw.graph, opts());
+  assert.deepEqual([p.axisValue, p.lo, p.hi, p.entryEnd, p.landingEnd], [g.axisValue, g.lo, g.hi, g.entryEnd, g.landingEnd], '幾何は型で分けない');
+});
+
+test('在来・WINDING・不等長レーン: 区間は短い方のレーン基端まで。続く層はフルハイト', () => {
+  const { graph, stair } = makeStair(
+    [[0, 0, 2000, 1000], [0, 1000, 1000, 3000], [0, 3000, 1000, 4000], [1000, 1000, 2000, 3000]],
+    { upDirection: 'up', type: StairType.WINDING, sections: [6, 3, 6] });
+  const p = resolveStairPartition(stair, graph, opts({ continuesAbove: true }));
+  assert.deepEqual([p.lo, p.hi], [1000, 3000]);
+  assert.deepEqual(p.top, { kind: 'full' });
+});
+
+test('【失敗系】U 字系以外（STRAIGHT・STRAIGHT_LANDING・L_TURN・FLARED・OPEN_WELL）は、U 字に見えるセルでも null（型判定が唯一の砦）', () => {
+  assert.deepEqual([...PARTITION_STAIR_TYPES].sort(), [StairType.SWITCHBACK, StairType.WINDING].sort());
+  for (const type of [StairType.STRAIGHT, StairType.STRAIGHT_LANDING, StairType.L_TURN, StairType.FLARED, StairType.OPEN_WELL]) {
     const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up', type });
+    assert.notEqual(uTurnSpans(stair, graph, roomBounds(stair.cells, graph)), null, `前提: ${type} でもセルだけなら U 字に見える`);
     assert.equal(resolveStairPartition(stair, graph, opts()), null, type);
+    assert.equal(stairHasPartition(stair, graph, WOOD), false, type);
+    assert.deepEqual(stairPartitionLines(graph), [], type);
   }
+});
+
+// ---- 鉄骨の階段は隔て壁を持たない（建物が在来木造でも。2026-10-09 ユーザー規則）----
+test('鉄骨の SWITCHBACK/WINDING: 在来の建物でも stairHasPartition・resolveStairPartition・stairPartitionDescriptors は偽/null/空。対照: 木造は真', () => {
+  for (const type of [StairType.SWITCHBACK, StairType.WINDING]) {
+    const wood = makeStair(EQUAL_UP, { upDirection: 'up', type });
+    assert.equal(stairHasPartition(wood.stair, wood.graph, WOOD), true, `対照 ${type}（木造の階段）`);
+    assert.notEqual(resolveStairPartition(wood.stair, wood.graph, opts()), null);
+    assert.equal(stairPartitionDescriptors(wood.graph, { structure: WOOD, floorHeight: FH }).length, 1);
+    const steel = makeStair(EQUAL_UP, { upDirection: 'up', type });
+    steel.stair.structure = StructuralMaterialType.STEEL;
+    assert.equal(stairHasPartition(steel.stair, steel.graph, WOOD), false, `鉄骨 ${type}`);
+    assert.equal(resolveStairPartition(steel.stair, steel.graph, opts()), null, `鉄骨 ${type}`);
+    assert.deepEqual(stairPartitionDescriptors(steel.graph, { structure: WOOD, floorHeight: FH }), [], `鉄骨 ${type}`);
+  }
+});
+
+test('識別は構造に依らない: 鉄骨の階段でも stairPartitionLines は線を返す（構造切替後に残る古い壁を構造の壁ソースへ漏らさない）', () => {
+  const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
+  stair.structure = StructuralMaterialType.STEEL;
+  assert.deepEqual(stairPartitionLines(graph), [{ isVertical: true, axisValue: 1000, lo: 1000, hi: 4000 }]);
 });
 
 test('【失敗系】uTurnSpans が取れない（回転部が走行全長を占める）階段は null', () => {
@@ -223,6 +274,13 @@ test('partitionPlanRects: 隔て壁（オーナー壁＋薄壁）があれば軸
   const rs = partitionPlanRects(stair, graph);
   assert.equal(rs.length, 2);
   const sorted = [...rs].sort((a, b) => a.xLo - b.xLo);
+  assert.deepEqual(sorted.map(r => [r.xLo, r.xHi, r.yLo, r.yHi]), [[942.5, 955, 1000, 4000], [955, 1057.5, 1000, 4000]]);
+});
+
+test('partitionPlanRects: WINDING の隔て壁も SWITCHBACK と同じ矩形2つ（N+1 平面の輪郭の材料）', () => {
+  const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up', type: StairType.WINDING, sections: [6, 3, 6] });
+  generateStairPartitionWalls(graph, { structure: WOOD });
+  const sorted = [...partitionPlanRects(stair, graph)].sort((a, b) => a.xLo - b.xLo);
   assert.deepEqual(sorted.map(r => [r.xLo, r.xHi, r.yLo, r.yHi]), [[942.5, 955, 1000, 4000], [955, 1057.5, 1000, 4000]]);
 });
 
