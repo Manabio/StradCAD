@@ -1,6 +1,6 @@
 // 昇降機の仕様追加ステップ3（S4・平面のハイライト）: SceneLayers.jsx が <FinishModeLayer> へ
 // mode.selectedEquipmentCellKeys を highlightCellKeys として渡していることをソーステキスト検査で
-// 固定する（.jsx は node:test から単体 import できないため。VoidLayer.wiring.test.js と同じ型。
+// 固定する（.jsx は node:test から単体 import できないため。PlanSolidsLayer.wiring.test.js と同じ型。
 // コメントは除外して検査する）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -51,17 +51,19 @@ test('【配線・強化】SceneLayers は EquipmentSymbolLayer のゲート行�
 
 // 下屋の平面表示（S5）: 下屋は PlanSolidsLayer（平面の断面解決。屋根立体＋解決器）が描くので、SceneLayers は RoofPlanLayer を使わない
 // （旧 RoofPlanLayer.jsx は比較の基準として残すが、どこからも import されない）。PlanSolidsLayer は showPlanFigure でゲートし、
-// VoidLayer のブロックの直後・EquipmentSymbolLayer の前に置く（配線は PlanSolidsLayer.wiring.test.js）。
+// EquipmentSymbolLayer の前に置く（配線は PlanSolidsLayer.wiring.test.js）。
 test('【配線】SceneLayers は RoofPlanLayer を import も使用もしない（下屋は PlanSolidsLayer が描く）。showPlanFigure の定義は既存の述語のまま', () => {
   assert.equal((codeOnly.match(/RoofPlanLayer/g) || []).length, 0, 'RoofPlanLayer が出ない');
   assert.match(codeOnly, /^\s*const showPlanFigure = shouldShowPlanFigure\(appMode\);\s*$/m, 'showPlanFigure の定義は既存の述語のまま');
 });
 
-test('【配線】SceneLayers は <PlanSolidsLayer> を VoidLayer のブロックの直後・EquipmentSymbolLayer の前に置く', () => {
-  const voidAt = codeOnly.indexOf('<VoidLayer');
+test('【配線】SceneLayers は VoidLayer を使わず、<PlanSolidsLayer abovePeek=…> を EquipmentSymbolLayer の前に置く（吹抜けの注記も PlanSolidsLayer が描く）', () => {
+  assert.equal(codeOnly.indexOf('VoidLayer'), -1, 'VoidLayer は削除済み');
+  assert.equal(codeOnly.indexOf('upperVoidCrosses'), -1);
   const solidsAt = codeOnly.indexOf('<PlanSolidsLayer');
   const equipAt = codeOnly.indexOf('<EquipmentSymbolLayer');
-  assert.ok(voidAt >= 0 && solidsAt > voidAt && equipAt > solidsAt, `順序 VoidLayer(${voidAt}) < PlanSolidsLayer(${solidsAt}) < EquipmentSymbolLayer(${equipAt})`);
+  assert.ok(solidsAt >= 0 && equipAt > solidsAt, `順序 PlanSolidsLayer(${solidsAt}) < EquipmentSymbolLayer(${equipAt})`);
+  assert.ok(/<PlanSolidsLayer [^>]*abovePeek=\{abovePlanPeek\}/.test(codeOnly), 'abovePeek を渡す');
 });
 
 // QA指摘W4（昇降機の仕様追加 ステップ4・S4）: catalogは建物全体（全採用階。project.equipmentIndex経由）

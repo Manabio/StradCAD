@@ -1,6 +1,6 @@
 // 下屋の平面表示（ステップ1・裁定2026-10-04「屋根の室名は隠す」）: renderer/RoomLabelsLayer.jsx が室名ラベルを出す判断を
 // 純モジュール finish/roomLabel.js の showsRoomNameLabel に任せている（jsx は feature を直接見ない）ことを、
-// ソーステキスト検査で固定する（.jsx は node:test から単体 import できないため。VoidLayer.wiring.test.js と同じ型）。
+// ソーステキスト検査で固定する（.jsx は node:test から単体 import できないため。PlanSolidsLayer.wiring.test.js と同じ型）。
 // コメントを除いた本体に対し、m フラグの行頭・行末アンカーで1行まるごと照合する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

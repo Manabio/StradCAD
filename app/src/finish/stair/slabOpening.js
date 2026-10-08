@@ -73,7 +73,7 @@ export function slabOpeningRects(upperGraph, { riserOf = () => null } = {}) {
 }
 
 // 開口1つぶんの {cells, face}。非矩形（1つの矩形で表せない）は face を null にし、
-// 呼び出し側がセル矩形へフォールバックする（voidGeometry.js と同じ「矩形のみ」方針）。
+// 呼び出し側がセル矩形へフォールバックする（吹抜けの×〔floorOpeningGroups〕と同じ「矩形のみ」方針）。
 function openingParts(upperGraph, riserOf) {
   return openingCellSets(upperGraph, riserOf).map(({ cells }) => {
     const cl = roomBounds(cells, upperGraph);

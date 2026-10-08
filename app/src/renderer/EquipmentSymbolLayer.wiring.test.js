@@ -1,6 +1,6 @@
 // 昇降機の仕様追加ステップ3 S5（描画）: renderer/EquipmentSymbolLayer.jsx が
 // 供給された値（symbols）だけを描き、graph を読んで幾何を計算していないことをソーステキスト検査で
-// 固定する（.jsx は node:test から単体 import できないため。VoidLayer.wiring.test.js と同じ型。
+// 固定する（.jsx は node:test から単体 import できないため。PlanSolidsLayer.wiring.test.js と同じ型。
 // コメントは除外して検査する）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

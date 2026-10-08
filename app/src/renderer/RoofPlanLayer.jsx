@@ -11,7 +11,7 @@ const ROOF_PLAN_COLOR = '#1e293b'; // 階段・吹抜けと同じ線色
  * 下屋の平面表示（軒先の線・棟木・隅木・谷木の細い実線と、詳細 LOD の傾斜ラベル＝水下向きの矢印・「屋根」・「（傾斜N/10）」）。
  * 図形の判断は finish/roof/roofPlanFigure.js（純モジュール）で、ここは Konva 要素へ写すだけ（表示するモードの判断は SceneLayers の showPlanFigure）。
  * 図形は graph 単位に memo する（graphComputed。実装方針9）。LOD は memo の外で絞る（キーに符号化しないため）。
- * 線幅は VoidLayer と同方式（strokeScaleEnabled=false・px 値をそのまま渡す）。矢印は本体と矢じり（head）の2本の Line、文字は Text。
+ * 線幅は PlanSolidsLayer と同方式（strokeScaleEnabled=false・px 値をそのまま渡す）。矢印は本体と矢じり（head）の2本の Line、文字は Text。
  */
 export const RoofPlanLayer = observer(({ graph, viewport }) => {
   if (!graph) return null;

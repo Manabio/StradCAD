@@ -30,7 +30,7 @@
  * 端点が偶然一致しても互いに影響しない。
  */
 import { resolvePlanLinePointsMmScaledStroke } from '../../renderer/planLineJoin.js';
-import { UPPER_VOID_DASH_PX } from '../voidGeometry.js';
+import { UPPER_VOID_DASH_PX } from '../../plan/planHoleMarks.js';
 
 // 上り部分（install 側の破れ先の外周線）の破線パターン（スクリーンpx）。見下げ（isDownView）は
 // 実線になった（裁定2026-10-06）ため、これを使うのは beyondLines だけ。

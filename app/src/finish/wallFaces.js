@@ -2,7 +2,7 @@
  * 部屋・階段の footprint 境界CLと、その内壁実面（壁仕上げ材の内側の角）の解決（純関数群）。
  *
  * CL偏芯の階またぎ連動（finish/eccentricityFloorSync.js）で偏芯指定・修正された壁と、
- * 階段の描画幅（stairGeometry.js の insetStairBounds）・吹抜けの×領域（voidGeometry.js）を
+ * 階段の描画幅（stairGeometry.js の insetStairBounds）・吹抜けの×領域（slabOpening.js floorOpeningGroups の innerRect）を
  * 取り合わせるために使う。壁が無い辺は cl.effectiveValue（芯）へフォールバックする
  * ——生成前・削除後でも常に何らかの矩形が得られる。
  */

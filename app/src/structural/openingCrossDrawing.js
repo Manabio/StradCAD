@@ -1,7 +1,7 @@
 // 構造モード（伏図）の床開口の×（純モジュール。react-konva / store.js / snap.js / .jsx を引かない）。
 // 吹抜け・昇降路・階段吹抜け・破れ先など、openingBeamAxes.js openingEdgeComponents が返す矩形成分ごとに、
 // 開口を囲む梁の「内側の面」を角とする×（対角線2本）を返す。梁の無い辺は辺のCL座標（edge.coord）で代用する。
-// 平面図の吹抜け×（finish/voidGeometry.js computeVoidCrosses。壁の内面基準）とは基準が違うため別実装。
+// 平面図の吹抜け×（plan/planHoleMarks.js。slabOpening.js floorOpeningGroups の innerRect＝壁の内面基準）とは基準が違うため別実装。
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { rectangularSidesOf } from './openingBeamAxes.js';
 

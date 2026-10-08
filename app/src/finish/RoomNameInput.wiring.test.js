@@ -1,6 +1,6 @@
 // RoomNameInput.jsx（部屋名ダイアログ）は区分/属性の2セレクタで構成される（ステップ2b）。
 // .jsx は node:test から単体 import できないため、ソーステキスト検査で配線を固定する
-// （renderer/VoidLayer.wiring.test.js と同じ型。ブロックコメント・行コメントを除去してから検査する
+// （renderer/PlanSolidsLayer.wiring.test.js と同じ型。ブロックコメント・行コメントを除去してから検査する
 // ——team-lessons「ソース文字列を正規表現で検査する配線テストが、コメント文にも一致して変異を見逃す」対応）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

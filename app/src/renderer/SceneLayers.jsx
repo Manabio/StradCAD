@@ -9,7 +9,6 @@ import { FinishModeLayer } from '../finish/FinishModeLayer.jsx';
 import { StairLayer } from './StairLayer.jsx';
 import { RoomLabelsLayer } from './RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './StepSectionLayer.jsx';
-import { VoidLayer } from './VoidLayer.jsx';
 import { PlanSolidsLayer } from './PlanSolidsLayer.jsx';
 import { EquipmentSymbolLayer } from './EquipmentSymbolLayer.jsx';
 import { computeEquipmentSymbols } from '../finish/equipment/equipmentFigure.js';
@@ -38,7 +37,7 @@ import { ElevationLayer } from './ElevationLayer.jsx';
 export const SceneLayers = observer(({
   graph, project, appMode, mode, modeRef, viewport, size, columnAxisMode,
   isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips,
-  structComposition, upperVoidCrosses, belowPlanPeek,
+  structComposition, belowPlanPeek, abovePlanPeek,
   snapPoint, cursorWorld, clPreview, clDialog, menu,
   onMemberClick, setStatusMenu,
   onOpeningTagClick, onElevationOpeningClick,
@@ -156,12 +155,9 @@ export const SceneLayers = observer(({
             {/* 段差断面: 段差線は全LOD（略図＝細線 / 標準・詳細＝中線）、ハッチ・寸法は詳細のみ
                 ——レイヤー内部でLOD分岐する */}
             {appMode === 'floorplan' && <StepSectionLayer graph={graph} viewport={viewport} />}
-            {/* 吹抜けも平面図一式の一部（階段吹抜けと同じ peek 由来）——壁・階段と同じ述語で出す。 */}
-            {showPlanFigure && (
-              <VoidLayer graph={graph} viewport={viewport} upperCrosses={upperVoidCrosses} />
-            )}
-            {/* 平面の断面解決で描く線とラベル（梁・汎用立体〔S4〕・下屋〔S5〕）。吹抜けの直後。 */}
-            {showPlanFigure && <PlanSolidsLayer graph={graph} project={project} viewport={viewport} belowPeek={belowPlanPeek} />}
+            {/* 平面の断面解決で描く線とラベル（梁・汎用立体〔S4〕・下屋〔S5〕）と、吹抜け・昇降路の注記（×・上部吹抜け〔S6〕。
+                階段吹抜けと同じ peek 由来）——壁・階段と同じ述語で出す。 */}
+            {showPlanFigure && <PlanSolidsLayer graph={graph} project={project} viewport={viewport} belowPeek={belowPlanPeek} abovePeek={abovePlanPeek} />}
             {/* 昇降機器具の図中記号（「EV」「EV1」等）。室名が出るモード（floorplan・finish）に揃える
                 （planFigureVisibility.js shouldShowEquipmentSymbols）。catalogは建物全体（全採用階。
                 buildingEquipmentCatalog。project.equipmentIndex を App.jsx の effect が埋める。

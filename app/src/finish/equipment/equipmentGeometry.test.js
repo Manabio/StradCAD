@@ -1,6 +1,6 @@
 // finish/equipment/equipmentGeometry.js（昇降機器具の幾何。graphを読むだけの純関数）の単体テスト。
 // 呼び出し側が実際に渡す形（PlanGraphのRoom・graph.equipmentRows）を入力にする
-// （finish/voidGeometry.test.js・finish/stair/slabOpening.test.js と同じ方針）。
+// （plan/planHoleMarks.test.js・finish/stair/slabOpening.test.js と同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, RoomKind } from '@core';

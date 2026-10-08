@@ -32,7 +32,6 @@ import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/st
 import { shouldShowPlanFigure, shouldShowEquipmentSymbols } from './renderer/planFigureVisibility.js';
 import { slabOpeningRects } from './finish/stair/slabOpening.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
-import { computeVoidCrosses } from './finish/voidGeometry.js';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP, UNNUMBERED_TAG } from './structural/memberCatalog.js';
 import { CenterLineType, OpeningCategory, isRoofFeature, planCutHeightMmOf } from '@core';
@@ -185,8 +184,10 @@ const App = observer(() => {
   // null=下階なし（解決済み。upperStairEntries の [] に対応）／オブジェクト=あり。上階ビューの peek と同じ effect が埋める。
   // 既知の限界: 同じ階・同じモードのまま直下階の中身や階高が変わっても peek は作り直さない（upperStairEntries と同じ）。
   const [belowPlanPeek, setBelowPlanPeek] = useState(undefined);
-  // 直上階の吹抜け（feature=VOID）を peek して直下階（自階）へ投影表示するための×座標
-  const [upperVoidCrosses, setUpperVoidCrosses] = useState([]);
+  // 平面の断面解決の上階の穴（吹抜け・昇降路の注記。PlanSolidsLayer が直下階へ破線で投影する）: 直上の採用階の peek
+  // {graph, activePlaneId}。belowPlanPeek と同じ3状態——undefined=未解決／null=上階なし／オブジェクト=あり。
+  // 世界座標は全階共通なので peek した graph から求めた穴の座標をそのまま自階へ描ける（stairFloorSync.js の stairPortEdges と同じ前提）。
+  const [abovePlanPeek, setAbovePlanPeek] = useState(undefined);
   // 直上階のスラブ開口（＝上階に床が無い領域）のワールド矩形。破れ線から先の階段を点線で
   // 描くときの可視範囲に使う。null=上階が無い／未解決（クリップしない＝安全側）。
   const [upperSlabOpenings, setUpperSlabOpenings] = useState(null);
@@ -824,25 +825,26 @@ const App = observer(() => {
     return () => { cancelled = true; };
   }, [appMode, activeFloorId, floorSyncTick, planesKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 吹抜け直下の階ビュー: 直上階（elevation が1つ上の採用フロア）を peek し、その吹抜け
-  // （feature=VOID）の×座標を自階へ投影表示する（世界座標は全階共通のため peek 結果の座標を
-  // そのまま使える。stairFloorSync.js の stairPortEdges と同じ前提）。CL偏芯の階またぎ連動
+  // 吹抜け直下の階ビュー: 直上階（elevation が1つ上の採用フロア）を peek し、その吹抜け・昇降路の穴
+  // （abovePlanPeek。PlanSolidsLayer が注記の破線を自階へ投影する）とスラブ開口を求める（世界座標は全階共通のため
+  // peek 結果の座標をそのまま使える。stairFloorSync.js の stairPortEdges と同じ前提）。CL偏芯の階またぎ連動
   // （floorSyncTick）でも再計算する——連動先の壁面位置が変わりうるため。
   useEffect(() => {
     let cancelled = false;
+    setAbovePlanPeek(undefined); // 未解決（belowPlanPeek と同じ3状態）
     (async () => {
       const planes = project.planes; // elevation 昇順
       const active = project.activePlane;
       const idx = planes.findIndex(p => p.id === active?.id);
       const above = idx >= 0 && idx + 1 < planes.length ? planes[idx + 1] : null;
       if (!above || !active || !shouldShowPlanFigure(appMode)) {
-        setUpperVoidCrosses([]);
+        setAbovePlanPeek(null); // 上階なし＝解決済み
         setUpperSlabOpenings(null); // 上階なし＝スラブ開口は判定不能（クリップしない）
         return;
       }
       const temp = await floorSwapManager.peek(above, project.structGraph);
       if (cancelled) return;
-      setUpperVoidCrosses(computeVoidCrosses(temp));
+      setAbovePlanPeek({ graph: temp, activePlaneId: active.id });
       // 上階スラブの開口（吹抜け・階段吹抜けRoom＋上階階段の破れ先セル）。上階階段の破れ位置は
       // その階の蹴上で決まるため、上階のさらに上との階高から riser を解決して渡す。
       const riserOf = (s) => stairRiserOf(s, project, above);
@@ -2712,8 +2714,8 @@ const App = observer(() => {
             stairBreakOverhangMm={stairBreakOverhangMm}
             stairUnderClips={stairUnderClips}
             structComposition={structComposition}
-            upperVoidCrosses={upperVoidCrosses}
             belowPlanPeek={belowPlanPeek}
+            abovePlanPeek={abovePlanPeek}
             snapPoint={snapPoint}
             cursorWorld={cursorWorld}
             clPreview={clPreview}

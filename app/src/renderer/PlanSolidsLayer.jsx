@@ -2,6 +2,8 @@ import { useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Text } from 'react-konva';
 import { planSolidsLayerResolve, visiblePlanPrimitives } from '../plan/planSolidsLayerFilter.js';
+import { planHoleMarksOf, planHoleMarkPrimitives } from '../plan/planHoleMarks.js';
+import { floorOpeningGroups } from '../finish/stair/slabOpening.js';
 import { stairRiserOf } from '../finish/stair/stairDimensions.js';
 import { graphComputed } from './graphDerived.js';
 
@@ -18,8 +20,11 @@ const PLAN_SOLIDS_COLOR = '#1e293b'; // 階段・吹抜け・下屋と同じ線�
  *   それ以外は graphComputed で memo（置き場は直下階 peek の graph、鍵は自階×切断高×直下階）。
  * LOD は memo の外で viewport.lodLevel により絞る（visiblePlanPrimitives。ラベルは詳細だけ。memo の鍵に符号化しない）。
  * 線幅は strokeScaleEnabled=false・px 値をそのまま渡す。矢印は本体と矢じり（head）の2本の Line、文字は Text。
+ * 吹抜け・昇降路の注記（S6）も描く（Group "plan-hole-marks"）: 自階の×（一点鎖線）と、直下階に描く上階吹抜けの×・外形・「上部吹抜け」（破線）。
+ * 注記は穴（plan/planHoleMarks.js）から導く切断面上の記号で、遮蔽の解決は通さない。自階の×はドラッグ追従のため memo の外で毎回求め、
+ * 上階の穴（abovePeek。App.jsx が上階を peek して渡す。3状態は belowPeek と同じ）は peek した graph に memo する。LOD はラベルだけ落とす。
  */
-export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek }) => {
+export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, abovePeek }) => {
   const prevRef = useRef(null); // { planeId, prims }: ドラッグ中に描き続ける前回の線（階が違えば使わない）
   if (!graph) return null;
   const resolved = planSolidsLayerResolve({
@@ -28,9 +33,18 @@ export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek }
     selfRiserOf: s => stairRiserOf(s, project, graph.plane),
   });
   if (resolved) prevRef.current = { planeId: graph.plane.id, prims: resolved };
-  if (!resolved || resolved.length === 0) return null;
-  const prims = visiblePlanPrimitives(resolved, viewport.lodLevel);
+  const prims = resolved ? visiblePlanPrimitives(resolved, viewport.lodLevel) : [];
+  // 吹抜け・昇降路の注記（S6）。上階の穴は peek した graph（ドラッグで変わらない）に memo、自階の×は memo の外
+  // （通り芯ドラッグ中も追従する。planHoleMarksOf）。自階と違う階の peek（階切替直後の1フレーム）は使わない。
+  const aboveGroups = abovePeek?.activePlaneId === graph.plane.id
+    ? graphComputed(abovePeek.graph, 'planHoleGroups', () => floorOpeningGroups(abovePeek.graph, { stairFilter: () => false }))
+    : undefined;
+  const holePrims = planHoleMarkPrimitives(planHoleMarksOf(graph, aboveGroups), {
+    thickPx: viewport.lineWeightsPx.thick, thinPx: viewport.lineWeightsPx.thin, scale: viewport.scaleX, lod: viewport.lodLevel,
+  });
+  if (prims.length === 0 && holePrims.length === 0) return null;
   return (
+    <>
     <Group name="plan-solids" listening={false}>
       {prims.flatMap(p => {
         if (p.kind === 'text') {
@@ -82,5 +96,31 @@ export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek }
         )];
       })}
     </Group>
+    <Group name="plan-hole-marks" listening={false}>
+      {holePrims.map(p => (p.kind === 'text' ? (
+        <Text
+          key={p.key}
+          x={p.x}
+          y={p.y}
+          text={p.text}
+          fontSize={p.fontSize}
+          fill={PLAN_SOLIDS_COLOR}
+          offsetX={p.offsetX}
+          listening={false}
+        />
+      ) : (
+        <Line
+          key={p.key}
+          points={p.points}
+          closed={p.closed}
+          stroke={PLAN_SOLIDS_COLOR}
+          strokeWidth={viewport.lineWeightsPx.thin}
+          dash={p.dash}
+          strokeScaleEnabled={false}
+          listening={false}
+        />
+      )))}
+    </Group>
+    </>
   );
 });

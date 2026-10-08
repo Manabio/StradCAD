@@ -1,7 +1,7 @@
 // 昇降機の仕様追加ステップ3（S4・平面のハイライト）: FinishModeLayer.jsx が highlightCellKeys
 // を受け取り、選択中の部屋の輪郭線と同じ流儀（cellBoundsList→outlineSegments）で描いている
 // ことをソーステキスト検査で固定する（.jsx は node:test から単体 import できないため。
-// VoidLayer.wiring.test.js と同じ型。コメントは除外して検査する）。
+// renderer/PlanSolidsLayer.wiring.test.js と同じ型。コメントは除外して検査する）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

@@ -532,8 +532,8 @@ const BOUNDARY_EPS = 1e-6;
  * cells（refresh済み。worldToCell由来のキー集合）が非空で、現在の格子上の完全な矩形かどうか。
  * 全キーが cellBoundsFromKey で解決でき、包絡矩形の中の全現行セル（getCellsInRect）が cells に
  * 含まれるときだけ true（L字・中空き・未解決キーを含む集合は false）。
- * voidGeometry.js computeVoidCrosses・finish/equipment/equipmentOps.js（installEquipment の矩形判定）
- * が共通で使う（前者は挙動不変の置き換え）。
+ * finish/stair/slabOpening.js floorOpeningGroups（吹抜けの×の矩形判定）・finish/equipment/equipmentOps.js
+ * （installEquipment の矩形判定）が共通で使う。
  */
 export function isRectangularCellSet(cells, graph) {
   if (!cells || cells.size === 0) return false;

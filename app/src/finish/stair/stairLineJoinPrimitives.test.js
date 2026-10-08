@@ -11,7 +11,7 @@ import {
   buildStairJoinPrimitives, resolveStairLinePointsMm, stairLineRenderProps,
   stairDownviewDashPx,
 } from './stairLineJoinPrimitives.js';
-import { UPPER_VOID_DASH_PX } from '../voidGeometry.js';
+import { UPPER_VOID_DASH_PX } from '../../plan/planHoleMarks.js';
 import { clipSegmentsBeyondBreak } from './beyondBreakClip.js';
 
 const WEIGHTS = { thin: 1, medium: 2 };

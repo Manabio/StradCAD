@@ -50,7 +50,7 @@ export function lineWeightPx(lineWeight, lineWeightsPx, pxPerMm) {
  * ワールド座標のGroup（Konvaの親Groupが scaleX/scaleY を持つ）内に描く線の strokeWidth。
  * **実スクリーンpx固定の太さ**（`lineWeightPx`）を scale で割って世界mm相当へ戻す
  * ——Konvaが親Groupのscaleを掛け直すので、画面上はズームに関わらず指定pxちょうどになる。
- * SiteLinesLayer・StairLayer・StepSectionLayer・VoidLayer が個別に書いていた
+ * SiteLinesLayer・StairLayer・StepSectionLayer が個別に書いていた
  * 「実px ÷ scale」と同じ式で、壁・建具・一般図形・構造部材・柱包みもこれを使う。
  *
  * 旧実装は `Math.max(1 / scale, lineWeight)`（＝画面上 `max(1, mm × scale)` px）で、

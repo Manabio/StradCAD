@@ -9,13 +9,15 @@
  * 線幅のインセット（太線1本分）・ラベルの配置は viewport に依存するので、純関数は mm の矩形までを返し、
  * 描く側が `insetRect`・`labelPlacement` を使う。store.js / snap.js / *.jsx を import しない（node:test から単体 import 可）。
  *
- * 注: voidGeometry.js（旧経路）と同じ規則のコピーを含む。旧経路の削除（S6b）で voidGeometry 側を消す。
+ * 描画への写像は純関数 `planHoleMarkPrimitives`（線の座標・破線・ラベル位置まで）。レイヤ（PlanSolidsLayer）は Konva へ写すだけ。
  */
 import { RoomFeature } from '@core';
-import { floorOpeningCellRects } from '../finish/stair/slabOpening.js';
+import { floorOpeningCellRects, floorOpeningGroups } from '../finish/stair/slabOpening.js';
+import { openingCrossDash } from '../renderer/dimensionStyle.js';
+import { LodLevel } from '../viewport.js';
 
 /**
- * 「上部吹抜け」（直下階に描く上階吹抜けの×・外形）の破線パターン（スクリーンpx）。voidGeometry.js の同名定数のコピー。
+ * 「上部吹抜け」（直下階に描く上階吹抜けの×・外形）の破線パターン（スクリーンpx）。
  * 平面の「見えない線」の破線パターンの供給源（階段の上り部分の破線 stairDownviewDashPx もこれを参照する）。
  */
 export const UPPER_VOID_DASH_PX = [8, 4];
@@ -38,7 +40,6 @@ const isFiniteRect = r => !!r && [r.x1, r.y1, r.x2, r.y2].every(Number.isFinite)
 /**
  * rect が rects（同一格子とは限らない矩形群）の和集合に eps 許容で覆われているか。rect を rects の境界値で
  * 小矩形に分割し、各小矩形の中心がいずれかの矩形に入るかで判定する。判定した小矩形が 0 件（rect 自体が退化）は覆われていない扱い。
- * voidGeometry.js isCoveredByUnion のコピー。
  */
 export function rectCoveredByUnion(rect, rects, eps = CELL_RECT_EPS_MM) {
   const xs = new Set([rect.x1, rect.x2]);
@@ -83,7 +84,7 @@ export function insetRect(r, inset) {
 }
 
 /**
- * 「上部吹抜け」ラベルの配置（×の上側三角領域で自身の対角線と重ならない位置。VoidLayer.jsx labelPlacement のコピー）。
+ * 「上部吹抜け」ラベルの配置（×の上側三角領域で自身の対角線と重ならない位置）。
  * 1行「上部吹抜け」→ 入らなければ2行「上部」「吹抜け」→ それでも入らなければ中心から H/4 上へ1行をクランプ。
  * 退化矩形は null。
  * @returns {{lines:string[], cx:number, y:number, widths:number[], lineHeight:number}|null}
@@ -120,7 +121,7 @@ export function labelPlacement(r, fontSize, gap, margin) {
 /**
  * 自階の「吹抜け・昇降路の穴」のセル矩形（種類 void・shaft だけ。階段吹抜け・破れ先は含めない）。
  * 直下階の上部吹抜け破線を出すかの被覆判定に使う。セルを畳む前に source を絞るので、階段吹抜けと重なるセルも落ちない
- * （旧 ownVoidCellRects と同じ集合。どちらも室のセルから求め、器具行は見ない）。
+ * （室のセルから求め、器具行は見ない）。
  * @param {object|null} graph
  * @returns {Array<{x1:number,y1:number,x2:number,y2:number}>}
  */
@@ -169,4 +170,75 @@ export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups } = {}) {
     });
   }
   return marks;
+}
+
+/**
+ * 自階の graph から注記を求める（レイヤが毎レンダーで呼ぶ経路）。graphComputed の外に置く: 自階の×は通り芯ドラッグ中も
+ * 追従する（CL の effectiveValue＝pendingDelta 込みを読む）ので、memo も「ドラッグ中は前回のまま」も掛けない。
+ * ×は void・shaft だけ使うので階段系（破れ先の蹴上が要る）は求めない（stairFilter: () => false）。
+ * @param {object|null} graph
+ * @param {Array<object>|null|undefined} aboveGroups 上階の floorOpeningGroups（null＝上階なし・undefined＝未解決）
+ */
+export function planHoleMarksOf(graph, aboveGroups) {
+  if (!graph) return [];
+  return planHoleMarks({
+    selfGroups: floorOpeningGroups(graph, { stairFilter: () => false }),
+    selfVoidCells: aboveGroups?.length ? selfVoidHoleRects(graph) : [],
+    aboveGroups,
+  });
+}
+
+const LABEL_FONT_SIZE_PX = 12;// 「上部吹抜け」のスクリーン上表示サイズ(px)
+const LABEL_MARGIN_PX = 2;     // ×の斜線・矩形端からの余白(px)
+const LABEL_GAP_PX = 2;        // 2行表示時の行間(px)
+
+/**
+ * dashKind → 破線パターン（スクリーンpx）の写像（唯一の場所）。
+ * 'openingCross'＝一点鎖線（renderer/dimensionStyle.js openingCrossDash が供給源。線幅 d 基準）、'upperVoid'＝UPPER_VOID_DASH_PX。
+ */
+export const HOLE_MARK_DASH = Object.freeze({
+  openingCross: thinPx => openingCrossDash(thinPx),
+  upperVoid: () => UPPER_VOID_DASH_PX,
+});
+
+/**
+ * planHoleMarks の出力を描画プリミティブ（mm 座標の線・文字）へ写す。
+ *   - 線: 矩形を「太線1本分内側」（thickPx/scale mm）へ縮めた対角2本。upperVoid は外形（閉じた矩形）も同じ破線で。
+ *     縮めて退化（幅・高さ 0 以下）する矩形は何も出さない。
+ *   - 文字: label のある mark だけ「上部吹抜け」（1行／2行／クランプ。labelPlacement）。LOD SCHEMATIC では出さない（線は全 LOD で出す）。
+ * 線幅はすべて thin（レイヤが viewport.lineWeightsPx.thin を渡す）。
+ * @param {ReturnType<typeof planHoleMarks>} marks
+ * @param {{thickPx:number, thinPx:number, scale:number, lod:string}} view
+ * @returns {Array<
+ *   {kind:'line', key:string, points:number[], dash:number[], closed:boolean} |
+ *   {kind:'text', key:string, x:number, y:number, text:string, fontSize:number, offsetX:number}>}
+ */
+export function planHoleMarkPrimitives(marks, { thickPx, thinPx, scale, lod }) {
+  const out = [];
+  const inset = thickPx / scale;
+  const fontSize = LABEL_FONT_SIZE_PX / scale;
+  const gap = LABEL_GAP_PX / scale;
+  const margin = LABEL_MARGIN_PX / scale;
+  for (const m of marks ?? []) {
+    const r = insetRect(m.rect, inset);
+    if (!r) continue; // 退化矩形 → 描画スキップ（座標が交差した×を描かない）
+    const dash = HOLE_MARK_DASH[m.dashKind](thinPx);
+    out.push({ kind: 'line', key: `${m.key}:d1`, points: [r.x1, r.y1, r.x2, r.y2], dash, closed: false });
+    out.push({ kind: 'line', key: `${m.key}:d2`, points: [r.x2, r.y1, r.x1, r.y2], dash, closed: false });
+    if (m.outline) {
+      out.push({ kind: 'line', key: `${m.key}:outline`, points: [r.x1, r.y1, r.x2, r.y1, r.x2, r.y2, r.x1, r.y2], dash, closed: true });
+    }
+    if (m.label && lod !== LodLevel.SCHEMATIC) {
+      const label = labelPlacement(r, fontSize, gap, margin);
+      if (label) {
+        label.lines.forEach((text, i) => {
+          out.push({
+            kind: 'text', key: `${m.key}:label${i}`, x: label.cx, y: label.y + i * (label.lineHeight + gap),
+            text, fontSize, offsetX: label.widths[i] / 2,
+          });
+        });
+      }
+    }
+  }
+  return out;
 }

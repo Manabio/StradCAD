@@ -1,5 +1,5 @@
 // FinishTable.jsx（仕上げ表）の配線不変条件。.jsx は node:test から単体 import できないため、
-// ソーステキスト検査で固定する（renderer/VoidLayer.wiring.test.js と同じ型。ブロックコメント・
+// ソーステキスト検査で固定する（renderer/PlanSolidsLayer.wiring.test.js と同じ型。ブロックコメント・
 // 行コメントを除去してから検査する——team-lessons「ソース文字列を正規表現で検査する配線テストが、
 // コメント文にも一致して変異を見逃す」対応）。
 import { test } from 'node:test';

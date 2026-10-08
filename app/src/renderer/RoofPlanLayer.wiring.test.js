@@ -1,6 +1,6 @@
 // 下屋の平面表示（ステップ1）: renderer/RoofPlanLayer.jsx が、図形の判断を純モジュール（finish/roof/roofPlanFigure.js）に
 // 任せて写すだけであることを、ソーステキスト検査で固定する（.jsx は node:test から単体 import できないため。
-// VoidLayer.wiring.test.js と同じ型）。コメント行・ブロックコメントを除いた本体に対し、m フラグの行頭・行末アンカーで
+// PlanSolidsLayer.wiring.test.js と同じ型）。コメント行・ブロックコメントを除いた本体に対し、m フラグの行頭・行末アンカーで
 // 1行まるごと照合する（行末コメントで式を無効化する変異を検出するため）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

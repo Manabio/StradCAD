@@ -37,7 +37,7 @@ import {
 
 // 項目4: 壁2段書きの省略判定用テキスト幅概算。renderText（figurePrimitivesKonva.jsx）は
 // size省略時fontSize=12を使うため、ここでも同じ12pxを使う。
-// QA G1: 全角主体ラベル向けのVoidLayer.jsx方式（1文字=fontSize幅）を全文字一律で使うと、
+// QA G1: 全角主体ラベル向けの plan/planHoleMarks.js labelPlacement 方式（1文字=fontSize幅）を全文字一律で使うと、
 // 壁2段書きは「壁：PB ア)12.5」のように変換後は半角ASCII（記号・数値・アルファベット）が
 // 主体になるため幅を約1.5倍も過大概算し、通常サイズの面でも省略され気味になってしまう
 // （項目3の材名変換がほぼ描画されない事態）。文字クラス別に幅係数を分ける

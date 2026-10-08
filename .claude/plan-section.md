@@ -32,7 +32,7 @@
 
 ## S4: 新レイヤ（`renderer/PlanSolidsLayer.jsx`）
 - **描くのは梁と汎用立体だけ（S5 で下屋＝屋根を追加）**（`plan/planSolidsLayerFilter.js S4_DRAWN_KINDS`、唯一の場所）。柱・壁・床は既存レイヤ（ShapesLayer）が描くので、解決器には全立体を渡して**遮蔽物としてだけ**参加させ、出力のうち `source.kind` が集合に入るものだけを描く。S6（吹抜け）で既存レイヤを寄せるときにこの集合を広げる。
-- 表示するモードは VoidLayer と同じ `shouldShowPlanFigure`（構造モードの伏図は対象外）。層は**自階＋直下の採用階だけ**（上階は渡さない＝切断高が階高より低い限り 0 件で費用だけ掛かる）。直下階の peek は App.jsx の上階ビュー用の既存 effect が同じ peek から `belowPlanPeek` として持つ（新しい peek を増やさない）。
+- 表示するモードは `shouldShowPlanFigure`（構造モードの伏図は対象外）。層は**自階＋直下の採用階だけ**（上階は渡さない＝切断高が階高より低い限り 0 件で費用だけ掛かる）。直下階の peek は App.jsx の上階ビュー用の既存 effect が同じ peek から `belowPlanPeek` として持つ（新しい peek を増やさない）。
 - キャッシュは `graphComputed`。**置き場は直下階 peek の graph（無ければ自階）、鍵は自階×切断高×直下階**——置き場を自階に固定すると、階を切り替えて下階の peek が替わっても古い peek 基準の結果を握り続ける（StructuralLayer の床開口の×と同じ。`renderer/graphDerived.planSection.test.js`）。`belowPlanPeek.activePlaneId` が自階と違うものは使わない（階切替直後の1フレーム）。
 - 通り芯・中心線のドラッグ中（どれかの `pendingDelta` が 0 でない）は、`graphComputed` が毎フレーム全再計算になる（moku1-6 の2階で 50〜105ms）ので、**前回の線を描き続ける**（ref に保持。ドラッグ終了で1回だけ再計算）。`belowPlanPeek` は3状態（undefined＝未解決〔階切替直後〕は**自階だけの層で解決して描く**＝鍵は `pending`、置き場は自階。下屋・自階の梁が切替のたびに消えないため〔S5 で「描かない」から変更〕。peek が届くと通常の鍵で再計算され下階の線だけが後から現れる／null＝下階なし／オブジェクト）。判断は純関数 `planSolidsLayerResolve`、置き場・鍵は `planSolidsLayerCacheSpec` の1か所。
 - 受容する限界: 同じ階・同じモードのまま直下階の中身や階高が変わっても peek は作り直さない（`upperStairEntries` と同じ）。
@@ -49,12 +49,15 @@
 - 限界: L1 壁の無い階（またはその区間）では端が通り芯まで（旧と同じ）。L2 穴を持つ outline（屋内を囲む環状の下屋）は穴の閉路も屋根面として塗り、屋内側の線を隠しうる（実データに 0 件。出たら対応）。L3 k·tMax ≥ 切断高の下屋は勾配が切断面をまたぎ、上の線が消える。L4 梁の levelOffset が正で屋根より高ければ屋根の上に出る。壁が下屋の軒先の線を横切る所（隣の建物の壁など）は線が途切れる（旧は引き続けた。設計 D1 の帰結としてユーザー側で受容した許す差分 (a)）。伏図だけの規則（胴差の勝ちと延長）は平面の対象外。
 - 受容した限界（ユーザー裁定）: 階切替・モード切替のたびに自階だけの計算（pending）が1回増える（moku1-6 2階 86ms・roof-test9 67ms・moku4-1 79ms）。graphComputed は keepAlive でないため pending の結果は再利用されない。通り芯ドラッグ中は下屋の線も前回の線のまま追従しない（旧 RoofPlanLayer は毎フレーム追従。moku1-6 2階で 28 本中 7 本の CL で出力が変わる）。
 
-## S6: 吹抜けの注記（`plan/planHoleMarks.js`。S6a＝純モジュールのみ・配線は S6b）
+## S6: 吹抜けの注記（`plan/planHoleMarks.js`。S6a＝純モジュール、S6b＝`PlanSolidsLayer` へ配線・旧 `VoidLayer`／`voidGeometry` 削除）
 - 自階の×と直下階の上階吹抜け破線は、解決器の線ではなく**穴に付く注記**。穴の単位は `slabOpening.js floorOpeningGroups`（吹抜け＝室ごと、昇降路＝器具行ごと〔行が無ければ室ごと〕、階段吹抜け・破れ先＝×なし）。
 - **×の端点＝グループのセル集合の `faceRect`（`innerRect`）**。階段の描画幅・`openingParts` の上階クリップと同じ供給源で、切断の遮蔽物から導き直さない（部分壁・吹抜け縁の腰壁・対称壁の backingRange・張り出す柱で結果が変わるため）。矩形でない・faceRect が解決できないグループは×なし。
 - 注記は**切断面上で遮蔽しない**（吹抜け内の柱の上にも重なる。伏図の×が梁で分割されるのとは違う）。上階破線は上階の床の穴の縁を示す表示記号で、穴の遮蔽規則 (a) とは別。上階の void・shaft の `cellRect` が自階の void・shaft のセル矩形の和（`selfVoidHoleRects`。`floorOpeningCellRects` の `sources` で畳む前に絞る）に覆われれば出さない。ラベルは VOID だけ。
-- 旧経路（`voidGeometry.js`）との差は、**穴が無ければ×も無い**ことの帰結だけ: 孤児器具行（室が無い／昇降路でない室を指す行）と、室のセルが解決できない昇降路には×を出さない。比較 probe は `scripts/probe/dumpVoidCompare.mjs`（実データでは完全一致・該当 0 件）。
-- 下階の層を全種別で描くのは S6c（別コミット・目視後）。S6b で `VoidLayer` 等を配線し、`voidGeometry.js` の重複を消す。
+- 旧経路（`voidGeometry.js`）との差は、**穴が無ければ×も無い**ことの帰結だけ: 孤児器具行（室が無い／昇降路でない室を指す行）と、室のセルが解決できない昇降路には×を出さない（実データでは該当 0 件）。
+- **配線（S6b）**: `PlanSolidsLayer` が Group `plan-hole-marks` で描く。**自階の×はドラッグ追従のため memo の外**（`planHoleMarksOf` を毎レンダーで呼ぶ。解決器の「ドラッグ中は前回のまま」に入れない——旧 VoidLayer の×はドラッグに追従していた）。**上階の穴は peek した graph に memo**（`graphComputed(abovePeek.graph, 'planHoleGroups', …)`。peek の graph はドラッグで変わらない）。`abovePlanPeek` は App.jsx の上階 peek の既存 effect が持つ3状態（undefined＝未解決／null＝上階なし／`{graph, activePlaneId}`）で、`activePlaneId` が自階と違う peek は使わない。描画への写像は純関数 `planHoleMarkPrimitives`（太線1本分の内側・対角2本・外形・ラベル位置。dashKind→破線の写像は `HOLE_MARK_DASH` の1か所）で、LOD SCHEMATIC はラベルだけ落とす。
+- 描画順は「梁・下屋 → 注記」（旧は注記が先）。受容する限界: 同じ階のままモード切替・floorSyncTick で上部吹抜けの破線が peek 完了まで一瞬消える（旧は前回値を出し続けたが、階切替直後に前の階の破線が残る不良があった）。
+- 回帰の関門は `scripts/probe/dumpVoidCompare.mjs`（`golden-void/` と比較。golden は S6a 時点で旧経路と新経路が一致していた出力を採取、20文書55階。意図した変更のときだけ `--write`）。
+- 下階の層を全種別で描くのは S6c（別コミット・目視後）。
 
 ## 注意
 - 切断面に関わる他の箇所は、S2 以降で立体モデルへ寄せる際に階の値（`planCutHeightMmOf`）を読む形へ揃える。
