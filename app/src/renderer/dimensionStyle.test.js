@@ -18,8 +18,8 @@ test('gridLineDash: 周期は 36d、比率定数は書き換え不可', () => {
   assert.ok(Object.isFrozen(GRID_LINE_DASH_RATIO));
 });
 
-test('openingCrossDash: 線幅2pxで [288,6,12,6]、周期は 156d、比率定数は書き換え不可', () => {
-  assert.deepEqual(openingCrossDash(2), [288, 6, 12, 6]);
-  assert.equal(openingCrossDash(1).reduce((a, b) => a + b, 0), 156);
+test('openingCrossDash: 線幅2pxで [288,12,12,12]、周期は 162d、比率定数は書き換え不可', () => {
+  assert.deepEqual(openingCrossDash(2), [288, 12, 12, 12]);
+  assert.equal(openingCrossDash(1).reduce((a, b) => a + b, 0), 162);
   assert.ok(Object.isFrozen(OPENING_CROSS_DASH_RATIO));
 });

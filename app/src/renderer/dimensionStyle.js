@@ -16,8 +16,8 @@ export function gridLineDash(strokeWidthPx) {
 }
 
 // 吹抜け・EV の×（平面 VoidLayer.jsx の自階・構造モード StructuralLayer.jsx）の一点破線。
-// 通り芯と同じ線幅 d 基準: 長線144d／すき間3d／点6d／すき間3d（周期 156d）。
-export const OPENING_CROSS_DASH_RATIO = Object.freeze([144, 3, 6, 3]);
+// 通り芯と同じ線幅 d 基準: 長線144d／すき間6d／点6d／すき間6d（周期 162d。ユーザー指定2026-10-08）。
+export const OPENING_CROSS_DASH_RATIO = Object.freeze([144, 6, 6, 6]);
 export function openingCrossDash(strokeWidthPx) {
   return OPENING_CROSS_DASH_RATIO.map(r => r * strokeWidthPx);
 }
