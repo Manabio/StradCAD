@@ -59,7 +59,7 @@ export const PLAN_LINE_STYLE = Object.freeze({
 });
 
 /**
- * 隙間の規則の幅（mm。唯一の場所）。切断の遮蔽物（cut）の間の幅がこれ以下の隙間は、below の線を覗かせない（closeNarrowGaps）。
+ * 隙間の規則の幅（mm。唯一の場所）。遮蔽物の間の幅がこれ以下の隙間は、below の線を覗かせない（closeNarrowGaps）。
  * 壁の角の仕上げ厚の切り欠きが 12.5mm なので、それを覆う 20。
  */
 export const PLAN_GAP_CLOSE_MM = 20;
@@ -193,7 +193,10 @@ function prepareSolid(s, cutZ, eps) {
   const prepared = prepareFootprint(s.footprint);
   if (!prepared) return null;
   // drawEdges:false の立体（下屋）は輪郭を描かない（遮蔽用の edges は保持する）
-  const lines = s.drawEdges === false ? [] : prepared.edges.map(points => ({ points, role: null }));
+  // 見えがかり（below）の輪郭辺のうち、辺そのものの長さが PLAN_GAP_CLOSE_MM 以下のものは線にしない（薄壁の木口・小さな段差。
+  // 2026-10-09 ユーザー裁定「残りも描画しない」）。遮蔽用の edges は保持する。cut の立体・innerLines・marks は対象外
+  const isShortEdge = ([x1, y1, x2, y2]) => cls === 'below' && Math.hypot(x2 - x1, y2 - y1) <= PLAN_GAP_CLOSE_MM + GEO_TOL;
+  const lines = s.drawEdges === false ? [] : prepared.edges.filter(e => !isShortEdge(e)).map(points => ({ points, role: null }));
   for (const inner of s.innerLines ?? []) {
     const p = inner?.points;
     if (!Array.isArray(p) || p.length < 4 || p.length % 2 !== 0 || !p.every(Number.isFinite)) continue;
@@ -420,7 +423,7 @@ function resolveLine(S, pts, recs, ctx) {
     else merged.push([iv[0], iv[1]]);
   }
   // 勾配のある cut（slopedCut）の可視部分は cls 'below' で出るので、規則の対象（出力の cls が below のもの）に含める
-  const kept = (S.cls === 'below' || S.slopedCut) && merged.length > 0 ? closeNarrowGaps(merged, { ax, ay, bx, by, len, pointAt }, cands, ctx) : merged;
+  const kept = (S.cls === 'below' || S.slopedCut) && merged.length > 0 ? closeNarrowGaps(S, merged, { ax, ay, bx, by, len, pointAt }, cands, ctx) : merged;
   return kept.filter(([t0, t1]) => (t1 - t0) * len >= eps).map(([t0, t1]) => {
     const [x1, y1] = t0 === 0 ? [ax, ay] : pointAt(t0);
     const [x2, y2] = t1 === 1 ? [bx, by] : pointAt(t1);
@@ -437,40 +440,51 @@ const distToEdge = (e, x, y) => {
 };
 
 /**
- * 隙間の規則（below の線だけ。cut の線は対象外＝この規則で消えない）: 切断の遮蔽物（cut）の間の幅が PLAN_GAP_CLOSE_MM 以下の
- * 隙間は覗かせない。壁の角の仕上げ厚（12.5mm）の切り欠きから、下の梁が 20mm 未満の短線で覗く現象を消す（2026-10-08 ユーザー裁定）。
- * 可視区間のうち長さが PLAN_GAP_CLOSE_MM 以下で、**両側とも**次のどちらかで縁取られているものを隠す:
- *  (i) 隣の不可視区間が cut の遮蔽物の内側（区間の端のすぐ外の点が cut の遮蔽物の内側）
- *  (ii) 線自身の端点で、その点が cut の遮蔽物の輪郭の上か内側（eps 以内）
- *  (iii) 可視区間の内部端で、その点が cut の遮蔽物の輪郭の上か内側（eps 以内）
- * cut 以外（床・屋根・below の立体）に隠された区間や、cut に縁取られない短線（below の立体同士の間など）は残す。
- * ただし区間の端点そのものが cut の輪郭の上なら、反対側の隣が床などで隠れていても (ii)(iii) で縁取りとみなす。
+ * 隙間の規則（below の線だけ。cut の線は対象外＝この規則で消えない）: 遮蔽物（cut でも below でも）の間の幅が
+ * PLAN_GAP_CLOSE_MM 以下の隙間は覗かせない。壁の角の仕上げ厚（12.5mm）の切り欠きから、下の梁が 20mm 未満の短線で覗く現象を消す
+ * （2026-10-08 ユーザー裁定。縁取りを cut に限らず遮蔽物全般へ広げたのは 2026-10-09 ユーザー裁定「下階の 12.5mm 短線も描画しない」）。
+ * 可視区間のうち長さが PLAN_GAP_CLOSE_MM 以下で、**両側とも**次のどれかで縁取られているものを隠す:
+ *  (i) 隣の不可視区間が遮蔽物の内側（区間の端のすぐ外の点が遮蔽物の内側）
+ *  (ii) 線自身の端点で、その点が遮蔽物の輪郭の上か内側（eps 以内）
+ *  (iii) 可視区間の内部端で、その点が遮蔽物の輪郭の上か内側（eps 以内）
+ * 遮蔽物＝cut の立体、または天端が S の天端以上（隠す高い立体・面材と、隠し合わない同じ高さの立体）。S より低い立体は縁取りにならない。片側が自由端（どの遮蔽物にも縁取られない）の短線は残す。
+ * 区間の端点そのものが遮蔽物の輪郭の上なら、反対側の隣が床などで隠れていても (ii)(iii) で縁取りとみなす。
  * 長さの比較は <=（ちょうど PLAN_GAP_CLOSE_MM は隠し、それを超えると残す）。
+ * @param {object} S 線の持ち主の立体
  * @param {Array<[number, number]>} merged 結合済みの可視区間（媒介変数 t）
  */
-function closeNarrowGaps(merged, line, cands, ctx) {
+function closeNarrowGaps(S, merged, line, cands, ctx) {
   const { ax, ay, bx, by, len, pointAt } = line;
   const { cutZ, eps } = ctx;
-  const cutCands = cands.filter(O => O.cls === 'cut');
-  if (cutCands.length === 0) return merged;
-  const cutAt = (O, x, y) => clsAt(O, cutZ, x, y) === 'cut';
-  // 点が cut の遮蔽物の内側か（単独の内側、または斜め4点がそれぞれ何らかの cut の内側＝隣り合う cut の継ぎ目の上）
-  const insideCut = (x, y) => {
-    if (cutCands.some(O => cutAt(O, x, y) && insideRec(O, x, y))) return true;
+  if (cands.length === 0) return merged;
+  // O が点 (x,y) で縁取りになる遮蔽物か（cut は常に。cut でなくても天端が S 以上なら。同じ高さの below は隠し合わないが線の端を縁取る）
+  const occAt = (O, x, y) => clsAt(O, cutZ, x, y) === 'cut' || topAt(O, cutZ, x, y) >= topAt(S, cutZ, x, y) - eps;
+  // 点が遮蔽物の内側か（単独の内側、または斜め4点がそれぞれ何らかの遮蔽物の内側＝隣り合う遮蔽物の継ぎ目の上）
+  const insideOcc = (x, y) => {
+    if (cands.some(O => insideRec(O, x, y) && occAt(O, x, y))) return true;
     return DIAGONALS.every(([dx, dy]) => {
       const qx = x + dx * NUDGE, qy = y + dy * NUDGE;
-      return cutCands.some(O => cutAt(O, qx, qy) && insideRec(O, qx, qy));
+      return cands.some(O => insideRec(O, qx, qy) && occAt(O, qx, qy));
     });
   };
-  const onCutOutline = (x, y) => cutCands.some(O => cutAt(O, x, y) && (insideRec(O, x, y) || O.edges.some(e => distToEdge(e, x, y) <= eps)));
+  const onOccOutline = (x, y) => cands.some(O => occAt(O, x, y) && (insideRec(O, x, y) || O.edges.some(e => distToEdge(e, x, y) <= eps)));
   const probe = SIDE_PROBE / len;
   return merged.filter(([t0, t1]) => {
     if ((t1 - t0) * len > PLAN_GAP_CLOSE_MM + GEO_TOL) return true;
-    // (iii) 内部端も、端点が cut の輪郭の上なら縁取り（結合した長い外形線の端にある切り欠き）
-    const left = t0 <= 0 ? onCutOutline(ax, ay) : insideCut(...pointAt(t0 - probe)) || onCutOutline(...pointAt(t0));
-    const right = t1 >= 1 ? onCutOutline(bx, by) : insideCut(...pointAt(t1 + probe)) || onCutOutline(...pointAt(t1));
+    // (iii) 内部端も、端点が遮蔽物の輪郭の上なら縁取り（結合した長い外形線の端にある切り欠き）
+    const left = t0 <= 0 ? onOccOutline(ax, ay) : insideOcc(...pointAt(t0 - probe)) || onOccOutline(...pointAt(t0));
+    const right = t1 >= 1 ? onOccOutline(bx, by) : insideOcc(...pointAt(t1 + probe)) || onOccOutline(...pointAt(t1));
     return !(left && right);
   });
+}
+
+/** O が点 (x,y) で S（高さ tS・クラス cS）を隠す z 規則: (i) 高い方が勝つ (ii) 面材（床・屋根）は同じ高さでも勝つ (iii) cut 同士は隠し合う */
+function hidesAt(O, x, y, tS, cS, ctx) {
+  const { cutZ, eps } = ctx;
+  const tO = topAt(O, cutZ, x, y);
+  if (tO > tS + eps) return true; // (i)
+  if (SURFACE_KINDS.includes(O.kind) && tO >= tS - eps) return true; // (ii)
+  return cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut'; // (iii)
 }
 
 /**
@@ -478,14 +492,9 @@ function closeNarrowGaps(merged, line, cands, ctx) {
  * （marks の anchor）が**同じ可視判定**を使う。(nx,ny) は線の法線（共有面の判定用。点だけのときは 0,0＝共有面の特例なし）。
  */
 function buildVisibleAt(S, cands, ctx, nx, ny) {
-  const { cutZ, eps, inWindow } = ctx;
-  // O が点 (x,y)（O の厳密な内部）で S を隠す z 規則: (i) 高い方が勝つ (ii) 面材（床・屋根）は同じ高さでも勝つ (iii) cut 同士は隠し合う
-  const hides = (O, x, y, tS, cS) => {
-    const tO = topAt(O, cutZ, x, y);
-    if (tO > tS + eps) return true; // (i)
-    if (SURFACE_KINDS.includes(O.kind) && tO >= tS - eps) return true; // (ii)
-    return cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut'; // (iii)
-  };
+  const { cutZ, inWindow } = ctx;
+  // O が点 (x,y)（O の厳密な内部）で S を隠すか（hidesAt）
+  const hides = (O, x, y, tS, cS) => hidesAt(O, x, y, tS, cS, ctx);
 
   // 遮蔽物の**和の内部**: p がどの遮蔽物の厳密内部でもなくても、p の斜め4点（±NUDGE）がそれぞれ何らかの遮蔽物の
   // 厳密内部にあり、その遮蔽物が上の規則で隠すなら p は隠れる（4点すべてで成立したときだけ）。隣り合う壁の継ぎ目・

@@ -485,7 +485,7 @@ test('【失敗系】S5 marks: 不正な mark（anchor 非有限・prims 欠落�
   assert.deepEqual(fig([solid('roof', ROOF_POLY, 0, 0, { id: 'r', marks: 'bad' })]).filter(p => p.kind !== 'line'), []);
 });
 
-// ================================================================ 隙間の規則（below の線だけ。cut の遮蔽物の間の狭い隙間は覗かせない）
+// ================================================================ 隙間の規則（below の線だけ。遮蔽物の間の狭い隙間は覗かせない）
 
 /** 縦の壁 w1（x 0..100）と w2（x gapEnd..gapEnd+100）。どちらも y 0..1000・cut。間の隙間は 100..gapEnd。 */
 const wallsWithGap = gapMm => [
@@ -517,8 +517,8 @@ test('隙間の規則: 切り欠きの中に収まる短い線（端点が両側
   const slot = solid('beam', sq(100, 300, 112.5, 700), -200, 0, { id: 'slot' });
   const prims = fig([...wallsWithGap(12.5), slot]);
   assert.deepEqual(sortedLines(ofId(prims, 'slot')), [[100, 300, 100, 700], [112.5, 300, 112.5, 700]], '短い蓋の線 2 本だけが消える');
-  // 壁が無ければ（端点が cut の輪郭の上でない）短い線も残る
-  assert.equal(sortedLines(ofId(fig([slot]), 'slot')).length, 4);
+  // 壁が無くても、below の輪郭辺のうち辺の長さが 20 以下の短辺は最初から線にならない（長辺 2 本だけ）
+  assert.equal(sortedLines(ofId(fig([slot]), 'slot')).length, 2);
 });
 
 test('隙間の規則: 長い外形線の途中の端（内部端）が cut の輪郭の上なら縁取りになる。結合した壁の切り欠きの 12.5mm は隠れる', () => {
@@ -531,9 +531,6 @@ test('隙間の規則: 長い外形線の途中の端（内部端）が cut の�
   assert.deepEqual(horizontalAt(fig([a, c, f, beam]), 'b', 300), [], '切り欠きの上辺 12.5mm は覗かせない');
   // 対照: 左の縁取り（壁 a）が無ければ短線は残る
   assert.deepEqual(horizontalAt(fig([c, f, beam]), 'b', 300), [[100, 300, 112.5, 300]]);
-  // 対照: 内部端だけが cut の輪郭の上で、反対側の隣が cut でない立体（below の壁）に縁取られているだけなら残る
-  const lowA = { ...a, zHi: 1000 };
-  assert.deepEqual(horizontalAt(fig([lowA, c, f, beam]), 'b', 300), [[100, 300, 112.5, 300]]);
 });
 
 test('隙間の規則: 内部端が左側（t0 側）で cut の輪郭の上でも隠す（右側の版の鏡像）', () => {
@@ -545,14 +542,70 @@ test('隙間の規則: 内部端が左側（t0 側）で cut の輪郭の上で�
   assert.deepEqual(horizontalAt(fig([c, f, beam]), 'b', 300), [[-112.5, 300, -100, 300]], '対照: 右の縁取り（壁 a）が無ければ残る');
 });
 
-test('隙間の規則: cut に縁取られない短線は残る（below の立体同士の間の隙間・片側だけ cut の短線）', () => {
+test('隙間の規則: below 同士の間でも ≤20 なら隠す（2026-10-09 裁定）。閾値 20/20.5 も below 同士で同じ', () => {
   const beam = solid('beam', sq(-200, 300, 400, 400), -200, 0, { id: 'b' });
-  // 壁が cut でなく below（天端 1000）なら、隙間 12.5mm は残る
-  const lowWalls = wallsWithGap(12.5).map(w => ({ ...w, zHi: 1000 }));
-  assert.deepEqual(horizontalAt(fig([...lowWalls, beam]), 'b', 300), [[-200, 300, 0, 300], [100, 300, 112.5, 300], [212.5, 300, 400, 300]], 'below 同士の間');
-  // 片側だけ cut（w2 が無い）: 梁の右端が w1 の外へ 10mm だけ出た短線は、右が端点で cut の上でないので残る
+  // 壁が cut でなく below（天端 1000）でも、梁（天端 0）を隠す遮蔽物なので隙間 12.5mm は隠す
+  const low = gap => wallsWithGap(gap).map(w => ({ ...w, zHi: 1000 }));
+  const at = gap => horizontalAt(fig([...low(gap), beam]), 'b', 300);
+  assert.deepEqual(at(12.5), [[-200, 300, 0, 300], [212.5, 300, 400, 300]], 'below 同士の間 12.5: 隠す');
+  assert.deepEqual(at(PLAN_GAP_CLOSE_MM), [[-200, 300, 0, 300], [220, 300, 400, 300]], 'ちょうど 20: 隠す');
+  assert.deepEqual(at(PLAN_GAP_CLOSE_MM + 0.5), [[-200, 300, 0, 300], [100, 300, 120.5, 300], [220.5, 300, 400, 300]], '20.5: 残す');
+});
+
+test('隙間の規則: 梁を隠さない低い立体は縁取りにならない。片側が自由端の短線（どの遮蔽物の輪郭の上でもない）は残る', () => {
+  const beam = solid('beam', sq(-200, 300, 400, 400), -200, 0, { id: 'b' });
+  // w2 が梁より低い（天端 -300）なら w2 は梁を隠さない＝隙間の右の縁取りにならない
+  const [w1, w2] = wallsWithGap(12.5).map(w => ({ ...w, zHi: 1000 }));
+  const lowRight = { ...w2, zLo: -1000, zHi: -300 };
+  assert.deepEqual(horizontalAt(fig([w1, lowRight, beam]), 'b', 300), [[-200, 300, 0, 300], [100, 300, 400, 300]], '右が隠さない立体: 梁は w1 の右から先がすべて見える');
+  // 片側だけ遮蔽物（w2 が無い）: 梁の右端が w1 の外へ 10mm だけ出た短線は、右の端点がどの輪郭の上でもないので残る
   const short = solid('beam', sq(-200, 300, 110, 400), -200, 0, { id: 'short' });
   assert.deepEqual(horizontalAt(fig([wallsWithGap(12.5)[0], short]), 'short', 300), [[-200, 300, 0, 300], [100, 300, 110, 300]]);
+  const lowW1 = { ...wallsWithGap(12.5)[0], zHi: 1000 };
+  assert.deepEqual(horizontalAt(fig([lowW1, short]), 'short', 300), [[-200, 300, 0, 300], [100, 300, 110, 300]], 'below の壁でも同じ');
+});
+
+test('隙間の規則: 線自身の端点が同じ高さの立体（隠し合わない below）の輪郭の上なら縁取りになる。低い立体なら残る', () => {
+  // 梁 s（天端 0）の上辺 y=300（x100..112.5）。左端は cut の壁 a の面の上、右端は同じ天端の梁 e の角（e は s を隠さない）
+  const a = solid('wall', sq(0, 0, 100, 1000), 0, 2400, { id: 'a' });
+  // 短辺の規則（輪郭辺の長さ ≤20 は線にしない）の対象外にするため、s の線は innerLines で与える
+  const s = solid('beam', sq(100, 300, 112.5, 400), -200, 0, { id: 's', drawEdges: false, innerLines: [{ points: [100, 300, 112.5, 300], role: null }] });
+  const e = solid('beam', sq(112.5, 300, 200, 400), -200, 0, { id: 'e' });
+  assert.deepEqual(horizontalAt(fig([a, e, s]), 's', 300), [], '同じ高さの隣の角に縁取られた 12.5mm は覗かせない');
+  const lowE = { ...e, zLo: -400, zHi: -300 };
+  assert.deepEqual(horizontalAt(fig([a, lowE, s]), 's', 300), [[100, 300, 112.5, 300]], '対照: 隣が低ければ自由端なので残る');
+});
+
+test('短辺の規則: below の輪郭辺は辺の長さが ≤20 なら線にしない（12.5 は消え、20 まで消え、20.5 は残る）。cut の立体・innerLines は対象外', () => {
+  const wide = w => solid('beam', sq(0, 0, w, 500), -200, 0, { id: 'b' });
+  const tops = prims => horizontalAt(prims, 'b', 0);
+  // w=12.5: 上辺・下辺（長さ 12.5）は消え、縦の長辺 2 本だけ
+  assert.deepEqual(sortedLines(ofId(fig([wide(12.5)]), 'b')), [[0, 0, 0, 500], [12.5, 0, 12.5, 500]]);
+  assert.deepEqual(tops(fig([wide(PLAN_GAP_CLOSE_MM)])), [], 'ちょうど 20: 消える');
+  assert.deepEqual(tops(fig([wide(PLAN_GAP_CLOSE_MM + 0.5)])), [[0, 0, 20.5, 0]], '20.5: 残る');
+  // cut の立体の短辺は残る（4 本）
+  const cutBeam = solid('generic', sq(0, 0, 12.5, 500), 0, 2400, { id: 'c' });
+  assert.equal(sortedLines(ofId(fig([cutBeam]), 'c')).length, 4);
+  // 短い innerLines は対象外
+  const inner = solid('roof', ROOF_POLY, 0, 0, { id: 'r', drawEdges: false, innerLines: [{ points: [0, 100, 12.5, 100], role: 'ridge' }] });
+  assert.deepEqual(sortedLines(ofId(fig([inner]), 'r')), [[0, 100, 12.5, 100]]);
+});
+
+test('短辺の規則: 長い辺の一部が 15mm だけ見えている線（自由端）は残る。辺の全長で判定する', () => {
+  // 梁 b（x 0..400）の上辺 y=0 は、x 0..385 が cut の壁 w に隠され、385..400 の 15mm だけ見える（右端は梁の角＝自由端）
+  const w = solid('wall', sq(-100, -100, 385, 100), 0, 2400, { id: 'w' });
+  const b = solid('beam', sq(0, 0, 400, 500), -200, 0, { id: 'b' });
+  assert.deepEqual(horizontalAt(fig([w, b]), 'b', 0), [[385, 0, 400, 0]]);
+});
+
+test('隙間の規則: 内部端が below の遮蔽物の輪郭の上なら縁取りになる（cut の版の below 版）。反対側が自由端なら残る', () => {
+  // 梁の上辺 y=300（x100..300）。x112.5 以降は床 f に隠れ、その先頭に低い壁 c（below・天端 1000）の角がある。左は壁 a（below）の面
+  const a = solid('wall', sq(0, 0, 100, 1000), 0, 1000, { id: 'a' });
+  const c = solid('wall', sq(112.5, 300, 130, 1000), 0, 1000, { id: 'c' });
+  const f = solid('floor', sq(112.5, 200, 300, 400), 0, 0, { id: 'f' });
+  const beam = solid('beam', sq(100, 300, 300, 400), -200, 0, { id: 'b' });
+  assert.deepEqual(horizontalAt(fig([a, c, f, beam]), 'b', 300), [], 'below の輪郭の上の内部端でも切り欠きの上辺は覗かせない');
+  assert.deepEqual(horizontalAt(fig([c, f, beam]), 'b', 300), [[100, 300, 112.5, 300]], '対照: 左の縁取り（壁 a）が無ければ残る');
 });
 
 test('隙間の規則: cut の線は対象外（cut の壁どうしの隙間 12.5mm の線は残る）。below の線にだけ働く', () => {
