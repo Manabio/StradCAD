@@ -442,7 +442,9 @@ const distToEdge = (e, x, y) => {
  * 可視区間のうち長さが PLAN_GAP_CLOSE_MM 以下で、**両側とも**次のどちらかで縁取られているものを隠す:
  *  (i) 隣の不可視区間が cut の遮蔽物の内側（区間の端のすぐ外の点が cut の遮蔽物の内側）
  *  (ii) 線自身の端点で、その点が cut の遮蔽物の輪郭の上か内側（eps 以内）
+ *  (iii) 可視区間の内部端で、その点が cut の遮蔽物の輪郭の上か内側（eps 以内）
  * cut 以外（床・屋根・below の立体）に隠された区間や、cut に縁取られない短線（below の立体同士の間など）は残す。
+ * ただし区間の端点そのものが cut の輪郭の上なら、反対側の隣が床などで隠れていても (ii)(iii) で縁取りとみなす。
  * 長さの比較は <=（ちょうど PLAN_GAP_CLOSE_MM は隠し、それを超えると残す）。
  * @param {Array<[number, number]>} merged 結合済みの可視区間（媒介変数 t）
  */
@@ -464,8 +466,9 @@ function closeNarrowGaps(merged, line, cands, ctx) {
   const probe = SIDE_PROBE / len;
   return merged.filter(([t0, t1]) => {
     if ((t1 - t0) * len > PLAN_GAP_CLOSE_MM + GEO_TOL) return true;
-    const left = t0 <= 0 ? onCutOutline(ax, ay) : insideCut(...pointAt(t0 - probe));
-    const right = t1 >= 1 ? onCutOutline(bx, by) : insideCut(...pointAt(t1 + probe));
+    // (iii) 内部端も、端点が cut の輪郭の上なら縁取り（結合した長い外形線の端にある切り欠き）
+    const left = t0 <= 0 ? onCutOutline(ax, ay) : insideCut(...pointAt(t0 - probe)) || onCutOutline(...pointAt(t0));
+    const right = t1 >= 1 ? onCutOutline(bx, by) : insideCut(...pointAt(t1 + probe)) || onCutOutline(...pointAt(t1));
     return !(left && right);
   });
 }

@@ -521,6 +521,30 @@ test('隙間の規則: 切り欠きの中に収まる短い線（端点が両側
   assert.equal(sortedLines(ofId(fig([slot]), 'slot')).length, 4);
 });
 
+test('隙間の規則: 長い外形線の途中の端（内部端）が cut の輪郭の上なら縁取りになる。結合した壁の切り欠きの 12.5mm は隠れる', () => {
+  // 梁の上辺 y=300（x100..300）。x112.5 以降は床 f（cut でない面材）に隠れ、その先頭に壁 c の角（輪郭の上）がある。
+  // 切り欠き x100..112.5 の可視区間は、左が壁 a の面、右の内部端（x=112.5）が c の輪郭の上で、隣は cut の内部でない
+  const a = solid('wall', sq(0, 0, 100, 1000), 0, 2400, { id: 'a' });
+  const c = solid('wall', sq(112.5, 300, 130, 1000), 0, 2400, { id: 'c' });
+  const f = solid('floor', sq(112.5, 200, 300, 400), 0, 0, { id: 'f' });
+  const beam = solid('beam', sq(100, 300, 300, 400), -200, 0, { id: 'b' });
+  assert.deepEqual(horizontalAt(fig([a, c, f, beam]), 'b', 300), [], '切り欠きの上辺 12.5mm は覗かせない');
+  // 対照: 左の縁取り（壁 a）が無ければ短線は残る
+  assert.deepEqual(horizontalAt(fig([c, f, beam]), 'b', 300), [[100, 300, 112.5, 300]]);
+  // 対照: 内部端だけが cut の輪郭の上で、反対側の隣が cut でない立体（below の壁）に縁取られているだけなら残る
+  const lowA = { ...a, zHi: 1000 };
+  assert.deepEqual(horizontalAt(fig([lowA, c, f, beam]), 'b', 300), [[100, 300, 112.5, 300]]);
+});
+
+test('隙間の規則: 内部端が左側（t0 側）で cut の輪郭の上でも隠す（右側の版の鏡像）', () => {
+  const a = solid('wall', sq(-100, 0, 0, 1000), 0, 2400, { id: 'a' });
+  const c = solid('wall', sq(-130, 300, -112.5, 1000), 0, 2400, { id: 'c' });
+  const f = solid('floor', sq(-300, 200, -112.5, 400), 0, 0, { id: 'f' });
+  const beam = solid('beam', sq(-300, 300, -100, 400), -200, 0, { id: 'b' });
+  assert.deepEqual(horizontalAt(fig([a, c, f, beam]), 'b', 300), [], '左の内部端でも切り欠きの上辺は覗かせない');
+  assert.deepEqual(horizontalAt(fig([c, f, beam]), 'b', 300), [[-112.5, 300, -100, 300]], '対照: 右の縁取り（壁 a）が無ければ残る');
+});
+
 test('隙間の規則: cut に縁取られない短線は残る（below の立体同士の間の隙間・片側だけ cut の短線）', () => {
   const beam = solid('beam', sq(-200, 300, 400, 400), -200, 0, { id: 'b' });
   // 壁が cut でなく below（天端 1000）なら、隙間 12.5mm は残る

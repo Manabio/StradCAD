@@ -11,8 +11,9 @@ import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { columnWrapSolids } from '../finish/columnWrap.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
+import { planSectionFigure } from './planSectionFigure.js';
 import {
-  makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid,
+  makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid, linesOf, mergedLines, totalLength,
 } from './planTestFixtures.js';
 
 const ofKind = (solids, kind) => solids.filter(s => s.kind === kind);
@@ -196,6 +197,100 @@ test('壁: 2セルとも同じ腰壁レコードを持つ1本の壁は、同じ�
   const parts = wallSolidsOf(g.graph, wall);
   assert.equal(parts.length, 1);
   assert.deepEqual([parts[0].footprint.rects[0].x1, parts[0].footprint.rects[0].x2, parts[0].zLo, parts[0].zHi], [57.5, 7942.5, 0, 800]);
+});
+
+// ---- 同じ芯で接する帯の結合（下地の壁＋仕上げの薄壁。見下げは帯の外形だけ）
+
+// graph.walls を壁の代役（芯 CL id・帯 materialRange・区間 coord1/2）で差し替えた下階の層。
+function wallDoubleLayer(doubles, floorZMm = -3000) {
+  const graph = Object.create(fakeLayer().graph); // 実 PlanGraph を継承し walls だけ差し替える
+  const walls = doubles.map(({ id, isVertical = true, axis = 'A', band: [lo, hi], span: [c1, c2] }) => ({
+    id, isVertical, axisCL: { id: axis }, coord1: c1, coord2: c2, materialRange: { lo, hi }, backingRange: null,
+  }));
+  Object.defineProperty(graph, 'walls', { value: walls });
+  return fakeLayer({ graph, floorZMm, role: 'below' });
+}
+const wallsOf = layer => ofKind(planSolids([layer]), 'wall');
+const OWNER = { id: 'owner', band: [325, 427.5], span: [100, 3100] };
+const THIN = { id: 'thin', band: [312.5, 325], span: [100, 3100] };
+
+test('壁の結合: 同じ芯・同じ高さで帯が接し区間が重なる2枚は 1 件（rects 2 個・mergedIds）。代表は壁 id 最小', () => {
+  const walls = wallsOf(wallDoubleLayer([THIN, OWNER]));
+  assert.equal(walls.length, 1);
+  assert.deepEqual(walls[0].footprint, { rects: [rect(325, 100, 427.5, 3100), rect(312.5, 100, 325, 3100)] });
+  assert.equal(walls[0].source.id, 'owner');
+  assert.deepEqual(walls[0].source.mergedIds, ['owner', 'thin']);
+  assert.deepEqual([walls[0].zLo, walls[0].zHi], [-3000, -600]);
+});
+
+test('壁の結合: 見下げの線は帯の外形だけ。下地/仕上げの境目（x=325）は描かず、外側の面（312.5・427.5）は残る', () => {
+  const layer = wallDoubleLayer([OWNER, THIN]);
+  const floor = solid('floor', { rects: [rect(0, 0, 1000, 4000)], holes: [rect(0, 0, 1000, 4000)] }, 0, 0, { id: 'f0', layerFloorZ: 0 });
+  const prims = planSectionFigure([...planSolids([layer]), floor], 1000);
+  const wallLines = linesOf(prims, 'below', 'wall');
+  const verticals = mergedLines(wallLines).filter(l => l[0] === l[2]).map(l => l[0]);
+  assert.deepEqual(verticals, [312.5, 427.5], `境目 325 の線が無い: ${JSON.stringify(mergedLines(wallLines))}`);
+  assert.equal(totalLength(wallLines.filter(p => p.points[0] === 325 && p.points[2] === 325)), 0);
+});
+
+test('壁の結合: 高さ範囲が違う（腰壁＋全高の壁）・芯 CL が違う・向きが違う・区間が重ならない・帯が離れている壁は別のまま', () => {
+  const kinds = {
+    '芯CLが違う': [OWNER, { ...THIN, axis: 'B' }],
+    '向きが違う': [OWNER, { ...THIN, isVertical: false }],
+    '区間が重ならない（端が接するだけ）': [OWNER, { ...THIN, span: [3100, 4000] }],
+    '帯が離れている': [OWNER, { ...THIN, band: [100, 300] }],
+  };
+  for (const [name, doubles] of Object.entries(kinds)) {
+    const walls = wallsOf(wallDoubleLayer(doubles));
+    assert.equal(walls.length, 2, name);
+    assert.ok(walls.every(w => w.source.mergedIds === undefined && w.footprint.rects.length === 1), name);
+  }
+  // 高さ範囲が違う: 腰壁レコードのある側だけ [0,800] になり、全高 [0,2400] の隣と結合しない
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  g.interior([[0, 0], [1, 0]], { walls: true });
+  const wall = southWallOf(g.graph);
+  g.graph.setKneeDropWall(edgeKey(wall.axisCL.id, g.cx[0].id, g.cx[1].id), { knee: { topHeight: 800 } });
+  const parts = wallSolidsOf(g.graph, wall);
+  assert.deepEqual(parts.map(s => [s.zLo, s.zHi]), [[0, 800], [0, 2400]]);
+  assert.ok(parts.every(s => s.source.mergedIds === undefined), '同じ壁の高さ違いの区間は結合しない');
+});
+
+test('壁の結合: 高さ範囲が違う区間とは、区間が重なり帯が接していても結合しない（同じ高さの区間とだけ結合する）', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  g.interior([[0, 0], [1, 0]], { walls: true });
+  const real = southWallOf(g.graph);
+  g.graph.setKneeDropWall(edgeKey(real.axisCL.id, g.cx[0].id, g.cx[1].id), { knee: { topHeight: 800 } });
+  // 腰壁レコードの端（x=4000）より 0.5mm だけ先まで伸びる薄壁（仕上げ）。端が 1mm 未満なので分割されず、腰壁区間（中点の高さ）の1件になる。
+  // 全高の区間（4000..）とは 0.5mm 重なり、帯も接するが、高さが違うので混ぜない
+  const thin = { ...Object.create(real), id: 'thin', axisCL: real.axisCL, isVertical: false, coord1: 57.5, coord2: 4000.5,
+    materialRange: { lo: 4045, hi: 4057.5 }, backingRange: null, clStart: undefined, clEnd: undefined };
+  const graph = Object.create(g.graph);
+  Object.defineProperty(graph, 'walls', { value: [...g.graph.walls.filter(w => w !== real), real, thin] });
+  const walls = ofKind(planSolids([fakeLayer({ graph, ceilZMm: 2400 })]), 'wall').filter(s => s.footprint.rects[0].y1 >= 3942.5);
+  assert.deepEqual(walls.map(s => [s.zLo, s.zHi, s.footprint.rects.length]).sort((a, b) => a[1] - b[1]), [[0, 800, 2], [0, 2400, 1]]);
+  assert.equal(walls.find(s => s.zHi === 2400).source.mergedIds, undefined);
+});
+
+test('壁の結合: 壁の入力順を逆にしても、立体（source・rects の順）と線の key まで同一', () => {
+  const floor = solid('floor', { rects: [rect(0, 0, 1000, 4000)], holes: [rect(0, 0, 1000, 4000)] }, 0, 0, { id: 'f0', layerFloorZ: 0 });
+  const run = order => {
+    const solids = planSolids([wallDoubleLayer(order)]);
+    return { solids, prims: planSectionFigure([...solids, floor], 1000) };
+  };
+  const a = run([OWNER, THIN]), b = run([THIN, OWNER]);
+  assert.deepEqual(b.solids, a.solids);
+  assert.deepEqual(b.prims.map(p => [p.key, p.points]), a.prims.map(p => [p.key, p.points]));
+});
+
+test('壁の結合: 連鎖（A-B-C と順に接する）は 1 件にまとまり、出力順は入力の壁の順に依らない', () => {
+  const MID = { id: 'mid', band: [427.5, 440], span: [100, 3100] };
+  const a = wallsOf(wallDoubleLayer([OWNER, THIN, MID]));
+  const b = wallsOf(wallDoubleLayer([MID, THIN, OWNER]));
+  assert.equal(a.length, 1);
+  assert.equal(a[0].footprint.rects.length, 3);
+  assert.deepEqual([...a[0].source.mergedIds].sort(), ['mid', 'owner', 'thin']);
+  assert.equal(b.length, 1);
+  assert.equal(b[0].footprint.rects.length, 3);
 });
 
 // ================================================================ 床

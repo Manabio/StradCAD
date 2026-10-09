@@ -28,7 +28,7 @@
  *   innerLines?: InnerLine[],
  *   marks?: Mark[],
  *   drawEdges?: boolean,
- *   source: {kind: string, id: string, layerFloorZ?: number, role?: string, part?: number},
+ *   source: {kind: string, id: string, layerFloorZ?: number, role?: string, part?: number, mergedIds?: string[]},
  *   style?: {dash?: number[]},
  * }} Solid
  *   zAt は勾配のある立体（屋根）だけが持つ。style は汎用立体だけ。drawEdges:false は footprint を遮蔽専用にする（輪郭を描かない。
@@ -129,6 +129,7 @@ function wallSolids(layer, cellToRoom) {
   const graph = layer.graph;
   const hasRecords = (graph.kneeDropWalls?.size ?? 0) > 0;
   const out = [];
+  const meta = []; // out と同じ添字: 結合判定用 {axisId, vertical, band, along}
   for (const wall of graph.walls ?? []) {
     const cr = wallConcealRange(wall);
     if (!cr || !(cr.hi - cr.lo > 0)) continue;
@@ -162,8 +163,62 @@ function wallSolids(layer, cellToRoom) {
           kind: 'wall', footprint: { rects: [rect] }, zLo: r.z0, zHi: r.z1,
           source: baseSource(layer, 'wall', wall.id, { part: part++ }),
         });
+        meta.push({ axisId: wall.axisCL?.id ?? null, vertical: !!wall.isVertical, band: [cr.lo, cr.hi], along: [span.lo, span.hi] });
       }
     }
+  }
+  return mergeTouchingWalls(out, meta);
+}
+
+/**
+ * 同じ芯 CL の上で、同じ高さ範囲（zLo・zHi）の壁の立体のうち、帯（厚み方向の隠せる範囲）が接する・重なり、かつ長さ方向の区間が
+ * 重なるものを 1 件の立体（footprint.rects を複数持つ）にまとめる。下地の壁と仕上げの薄壁（隔て板など）が同じ芯で並んでも、
+ * 見下げは**帯の外形だけ**を描く（下地/仕上げの境目は描かない）。遮蔽は同じ矩形の和なので不変。
+ * 代表は壁 id 最小の立体（入力順に依らない）で、source は代表の壁 id・part に `mergedIds`（まとめた壁 id 全部）を足す。1 件だけのものは不変。
+ */
+function mergeTouchingWalls(solids, meta) {
+  const n = solids.length;
+  const parent = solids.map((_, i) => i);
+  const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const groups = new Map();
+  for (let i = 0; i < n; i++) {
+    if (meta[i].axisId == null) continue;
+    const key = `${meta[i].vertical}|${meta[i].axisId}|${solids[i].zLo}|${solids[i].zHi}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(i);
+  }
+  const TOL = 1e-6;
+  for (const idxs of groups.values()) {
+    for (let a = 0; a < idxs.length; a++) {
+      for (let b = a + 1; b < idxs.length; b++) {
+        const A = meta[idxs[a]], B = meta[idxs[b]];
+        const touchBand = A.band[0] <= B.band[1] + TOL && B.band[0] <= A.band[1] + TOL;
+        const overlapAlong = Math.min(A.along[1], B.along[1]) - Math.max(A.along[0], B.along[0]) > TOL;
+        if (!touchBand || !overlapAlong) continue;
+        const ra = find(idxs[a]), rb = find(idxs[b]);
+        if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb); // 代表は最小添字（最初に出した立体）
+      }
+    }
+  }
+  const members = new Map(); // 代表添字 → 構成員の添字（昇順）
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (!members.has(r)) members.set(r, []);
+    members.get(r).push(i);
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const ms = members.get(i);
+    if (!ms) continue; // 他の代表にまとめられた
+    if (ms.length === 1) { out.push(solids[i]); continue; }
+    // 代表は壁 id 最小（同じ id は part 最小）。graph.walls の順に依らず source.id・線の key を決める
+    const sorted = [...ms].sort((p, q) => cmp(solids[p].source.id, solids[q].source.id) || (solids[p].source.part ?? 0) - (solids[q].source.part ?? 0));
+    const rep = solids[sorted[0]];
+    out.push({
+      ...rep,
+      footprint: { rects: sorted.flatMap(k => solids[k].footprint.rects) },
+      source: { ...rep.source, mergedIds: [...new Set(sorted.map(k => solids[k].source.id))] },
+    });
   }
   return out;
 }
