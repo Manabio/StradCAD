@@ -11,7 +11,8 @@
  * ローカル座標は elevationFigure.js と同じ（x=0起点、yは上向き負・床=0）。
  */
 import { StructuralMaterialType } from '@core';
-import { resolveSwitchbackSpanLengths, resolveUTurnSpanLengths } from '../finish/stair/stairClassify.js';
+import { resolveSwitchbackSpanLengths, resolveUTurnSpanLengths, measureStairSpans } from '../finish/stair/stairClassify.js';
+import { resolveStairPorts } from '../finish/stair/stairPorts.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from './elevationStyle.js';
 
 // 在来木造階段の踏面板の厚み（ユーザー指示2026-10-07「木造（在来）で階段は、踏面の厚みは30、
@@ -50,7 +51,9 @@ export function stairSectionIsClosed(stair) {
  *   真下で、点列・その並び（段鼻＝奇数index）は一切変わらない。>0なら蹴上を蹴込ぶん奥へ引っ込め、
  *   段鼻の出を1本の水平セグメントとして点列へ挟む（ユーザー実機指摘2026-08「階段の蹴上、踏面に
  *   加え、蹴込を20で描画」）。
- * @param {{treadThicknessMm?:number}} [opts] - treadThicknessMm: 段板（踏面板）の厚み。0（既定）
+ * @param {{treadThicknessMm?:number, leadSteps?:number, leadMm?:number}} [opts] - leadSteps/leadMm:
+ *   先頭の leadSteps 段が占める走行長（側面の上り口の区画。resolveUTurnSectionParams の entryZoneMm）。
+ *   treadThicknessMm:段板（踏面板）の厚み。0（既定）
  *   なら従来の斜めの蹴上。>0 かつ蹴込>0 なら垂直の蹴込板＋出幅 k・厚み分の段鼻面を持つ輪郭
  *   （WOOD_TREAD_THICKNESS_MM）。
  * @returns {{points:Array<[number,number]>, noses:Array<[number,number]>, endX:number, endY:number}}
@@ -60,12 +63,27 @@ export function stairSectionIsClosed(stair) {
  */
 export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1, nosingMm = 0, opts = {}) {
   const steps = Math.max(1, Math.round(n));
+  // 取りつき段 0 の側面の上り口: 区画 leadMm は平場（床のまま）で、1段目の蹴上は区画の出口から始まる。
+  // 直進部は残り長さを同じ規則で割る（平面は区画を平場にして残りを割る）。
+  if (!(opts.leadSteps > 0) && opts.leadMm > 0 && opts.leadMm < runLengthMm) {
+    const inner = stairRunProfile(n, riserMm, runLengthMm - opts.leadMm, startX + dir * opts.leadMm, startY, dir, nosingMm,
+      { treadThicknessMm: opts.treadThicknessMm });
+    return { ...inner, points: [[startX, startY], ...inner.points] };
+  }
   // 踏面（段鼻〜段鼻のピッチ）は **区間長 ÷ (段数−1)**（ユーザー実機検算2026-08「3500左CLの上が
   // 1段目踏面、右へ2500いったところが踊り場高さ、かつ11段目」＝10ピッチ×250）。区間長は
   // 「1段目の位置〜次区間（踊り場・上階床）の床の位置」であり、その間に現れる踏面はsteps−1枚
   // ——最終段の踏面は次区間の床が兼ねる（本関数のヘッダの既存仕様）。
   // 旧実装は `runLengthMm / steps` で割っており、踏面が1枚ぶん細く・最終段の踏面も余分に描いていた。
-  const treadMm = steps > 1 ? runLengthMm / (steps - 1) : runLengthMm;
+  // 先頭の leadSteps 段だけ別ピッチ（側面の上り口に取りつく回転部の区画。区画の走行長 leadMm を等分）。
+  // 残りは区間長の残り（runLengthMm−leadMm）を同じ規則（÷(残り段数−1)）で割る。lead 無しは従来と同値。
+  const lead = opts.leadMm > 0 && opts.leadMm < runLengthMm ? Math.max(0, Math.min(Math.round(opts.leadSteps || 0), steps - 1)) : 0;
+  const leadMm = lead > 0 ? opts.leadMm : 0;
+  const leadPitch = lead > 0 ? leadMm / lead : 0;
+  const mainSteps = steps - lead, mainLen = runLengthMm - leadMm;
+  const mainPitch = mainSteps > 1 ? mainLen / (mainSteps - 1) : mainLen;
+  const treadMm = lead > 0 ? Math.min(leadPitch, mainPitch) : mainPitch;
+  const pitchAt = (i) => (i < lead ? leadPitch : mainPitch);
   // 蹴込は踏面を超えない（超えると蹴上が前段の段鼻より手前へ回り込み、輪郭が自己交差する）。
   const k = Math.max(0, Math.min(nosingMm || 0, treadMm));
   // 段板の厚み（opts.treadThicknessMm。既定0＝従来）。>0 なら蹴込板は**垂直**になり、踏面板は
@@ -88,7 +106,7 @@ export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1
       noses.push([x, y]);
       if (i === steps - 1) { points.push([rx, y]); break; }
       points.push([rx, y + t], [x, y + t], [x, y]);
-      x += dir * treadMm; points.push([x + dir * k, y]);
+      x += dir * pitchAt(i); points.push([x + dir * k, y]);
       continue;
     }
     // 蹴上は**斜めの断面**（ユーザー実機指摘2026-08「踊り場への上り、最後の蹴上面も蹴込つけて
@@ -100,7 +118,7 @@ export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1
     // 最終段の踏面は描かない（次区間の床が兼ねる）。区間の総走行長は (steps-1)*treadMm =
     // runLengthMm のままなので endX は従来と同じ＝呼び出し側の配置は不変。
     // 踏面は段鼻から次の蹴上の足元まで＝踏面ピッチ＋蹴込ぶんの水平線。
-    if (i < steps - 1) { x += dir * treadMm; points.push([x + dir * k, y]); }
+    if (i < steps - 1) { x += dir * pitchAt(i); points.push([x + dir * k, y]); }
   }
   return { points, noses, endX: x, endY: y };
 }
@@ -138,15 +156,34 @@ export function resolveSwitchbackParams(stair, graph, floorHeight) {
  * @param {import('@core').Stair} stair
  * @param {object} graph
  * @param {number|null} floorHeight
+ * 側面の上り口に取りつく回転部（entryTurnSteps）は、平面（stairGeometry.js の buildSwitchback/buildWinding の
+ * turnStepsE）と同じ述語 `ports.entry !== 'end'` のときだけ効かせる。entryTurnSteps＝有効な蹴上数
+ * （走行端なら 0）、entryZoneMm＝その区画（往路の基端〜直進部の始端）の走行長（側面の上り口なら
+ * entryTurnSteps=0 でも区画長＝平場。走行端・区画が往路全長以上なら 0）。
+ * 往路の段は「区画に entryTurnSteps 段（等ピッチ）＋直進部に n1 段（等ピッチ）」。
  * @returns {{totalSteps:number, riser:number, n1:number, n2:number, turnCells:number,
- *   len1:number, landingLen:number, len2:number}|null}
+ *   len1:number, landingLen:number, len2:number, entryTurnSteps:number, entryZoneMm:number}|null}
  */
 export function resolveUTurnSectionParams(stair, graph, floorHeight) {
   if (floorHeight == null) return null;
   const spanInfo = resolveUTurnSpanLengths(stair, graph);
   if (!spanInfo) return null;
   const riser = stair.riser ?? floorHeight / spanInfo.totalSteps;
-  return { ...spanInfo, riser };
+  const wanted = Math.max(0, stair.entryTurnSteps ?? 0);
+  let entryTurnSteps = 0, entryZoneMm = 0;
+  {
+    const spans = measureStairSpans(stair, graph);
+    const ports = resolveStairPorts(stair, {
+      laneLenA: spanInfo.len1, laneLenB: spanInfo.len2, firstRowA: spans?.firstRowA, firstRowB: spans?.firstRowB,
+    });
+    if (ports.entry !== 'end') {
+      entryTurnSteps = wanted;
+      const zone = ports.zoneA[1];
+      // 取りつき段 0 でも区画は平場として残す（平面と同じ）。区画が往路の全長以上（直進部が残らない）なら一様ピッチのまま
+      entryZoneMm = zone > 0 && zone < spanInfo.len1 ? zone : 0;
+    }
+  }
+  return { ...spanInfo, riser, entryTurnSteps, entryZoneMm };
 }
 
 /**

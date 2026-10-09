@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers } from './sectionStair.js';
-import { stairRunProfile, stringerBandGeometry } from '../elevationStairSection.js';
+import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from '../elevationStairSection.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
 function makeGraph(name = 'p1') {
@@ -1695,4 +1695,157 @@ test('【回帰・2026-10-09】stairPrimitivesForCut: 踊り場だけ（flights�
   const noAxis = { ...contribution, landings: [{ ...landing, isVertical: undefined }] };
   const wrong = stairPrimitivesForCut(noAxis, cutAt('1', { isVertical: false, axisValue: 1000, lo: 0, hi: 2000 }), columns);
   assert.notEqual(Math.round(wrong[0]?.x2 - wrong[0]?.x1), 2000);
+});
+
+// ==== 側面の上り口に取りつく回転部（entryTurnSteps）への追従（ユーザー承認2026-10-09）====
+// 往路の基端の行（y3500..4500。区画1000mm）を切ったフィクスチャ。entrySide='left' が側面の上り口になる
+// （'right' は隣レーン側＝張り出しが無いので自動＝走行端に戻る）。折返し [6,1,6]＋取りつき1段＝総蹴上13。
+function makeSideEntryFixture(graph, { type = StairType.SWITCHBACK, sections = [6, 1, 6], entrySide = 'left', entryTurnSteps = 1, flip = false } = {}) {
+  const V = v => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const H = v => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = V(0), xm = V(1000), x1 = V(2000);
+  const y0 = H(0), ym = H(1500), yz = H(3500), y1 = H(4500);
+  // 往路レーンは flip=false で西(x0..xm)・flip=true で東(xm..x1)。往路側の列だけ基端の行(y3500..4500)で切る
+  const [aL, aR, bL, bR] = flip ? [xm, x1, x0, xm] : [x0, xm, xm, x1];
+  const cells = new Set([
+    `${x0.id}:${y0.id}:${x1.id}:${ym.id}`, `${aL.id}:${ym.id}:${aR.id}:${yz.id}`,
+    `${aL.id}:${yz.id}:${aR.id}:${y1.id}`, `${bL.id}:${ym.id}:${bR.id}:${y1.id}`,
+  ]);
+  const room = graph.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({
+    type, cells, roomId: room.id, sections, riser: null, upDirection: 'up', flip,
+    structure: StructuralMaterialType.WOOD, entrySide, entryTurnSteps,
+  });
+  return { room, stair };
+}
+const SIDE_RISER = FLOOR_HEIGHT / 13;
+const flightNoses = (f) => stairRunProfile(f.steps, f.riserMm, f.lengthMm, 0, 0, 1, 0, { leadSteps: f.leadSteps, leadMm: f.leadMm })
+  .noses.map(([x, y]) => [Math.round(x * 1000) / 1000, Math.round(-y * 1000) / 1000]);
+
+test('【2026-10-09】stairContribution(SWITCHBACK): 側面の上り口の取りつき1段は往路の段数と踊り場の高さに入り、区画1000mmが先頭の1段、直進部の6段は残り2000mmを等ピッチ', () => {
+  const graph = makeGraph();
+  const { stair } = makeSideEntryFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const [o, i] = c.flights;
+  assert.equal(o.steps, 7, '取りつき1段＋直進部6段');
+  assert.equal(o.leadSteps, 1);
+  assert.equal(o.leadMm, 1000, '区画＝往路の基端の行');
+  assert.equal(c.landings[0].z, 7 * SIDE_RISER, '踊り場＝(n1+entryTurnSteps)×蹴上（stairLanding.js landingZ と同じ規約）');
+  assert.equal(i.baseZ, 7 * SIDE_RISER);
+  assert.ok(Math.abs(i.baseZ + i.steps * i.riserMm - FLOOR_HEIGHT) < 1e-9, '復路の終端が上階FL');
+  // 平面の踏面線（区画の出口＝1000、以降 400 ピッチ）と段鼻の位置（走行方向の距離）・踏面番号の高さ（k×蹴上）が一致する
+  assert.deepEqual(flightNoses(o), [0, 1000, 1400, 1800, 2200, 2600, 3000].map((x, k) => [x, Math.round((k + 1) * SIDE_RISER * 1000) / 1000]));
+});
+
+test('【2026-10-09】flightNoseZAt: 区画の中と直進部で別ピッチ（区画の出口で2段目の段鼻、以降は直進部のピッチ）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSideEntryFixture(graph);
+  const o = stairContribution(stair, graph, FLOOR_HEIGHT).flights[0]; // 北向き(travelSign=-1)。基端は runHi
+  const at = (d) => flightNoseZAt(o, o.runHi - d);
+  assert.ok(Math.abs(at(0) - SIDE_RISER) < 1e-9, '基端で1段目の段鼻');
+  assert.ok(Math.abs(at(500) - 1.5 * SIDE_RISER) < 1e-9, '区画の中は区画を等分（1000/1段）');
+  assert.ok(Math.abs(at(1000) - 2 * SIDE_RISER) < 1e-9, '区画の出口＝2段目の段鼻');
+  assert.ok(Math.abs(at(1200) - 2.5 * SIDE_RISER) < 1e-9, '直進部は400ピッチ');
+  assert.ok(Math.abs(at(3000) - 7 * SIDE_RISER) < 1e-9, '終端＝回転部の1段目の高さ');
+});
+
+test('【2026-10-09】stairContribution(WINDING): 側面の上り口の取りつき1段で回転部の最初の短冊は (n1+1)×蹴上、復路baseZ・終端が一貫する', () => {
+  const graph = makeGraph();
+  const { stair } = makeSideEntryFixture(graph, { type: StairType.WINDING, sections: [5, 6, 5] });
+  assert.equal(stair.totalSteps, 5 + 6 + 5 - 1 + 1);
+  const r = FLOOR_HEIGHT / 16;
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  assert.deepEqual(c.landings.map(l => l.z), [6, 7, 8, 9, 10, 11].map(k => k * r));
+  assert.equal(c.flights[0].steps, 6);
+  assert.equal(c.flights[0].baseZ + c.flights[0].steps * r, c.landings[0].z);
+  assert.equal(c.flights[1].baseZ, 11 * r);
+  assert.ok(Math.abs(c.flights[1].baseZ + c.flights[1].steps * r - FLOOR_HEIGHT) < 1e-9);
+  assert.equal(c.flights[0].leadMm, 1000);
+});
+
+test('【2026-10-09】stairContribution: entryTurnSteps=0 でも側面の上り口なら区画1000は平場（lead 0段）で、直進部の6段は残り2000を等分（平面と同じ）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSideEntryFixture(graph, { entryTurnSteps: 0 });
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const o = c.flights[0];
+  assert.equal(o.steps, 6);
+  assert.equal(o.leadSteps, 0);
+  assert.equal(o.leadMm, 1000);
+  assert.equal(c.landings[0].z, 6 * (FLOOR_HEIGHT / 12), '踊り場は n1×蹴上のまま');
+  // 段鼻は区画の出口(1000)から 400 ピッチ（最初の段鼻は区画の出口で z=蹴上1段）
+  assert.deepEqual(flightNoses(o).map(([x]) => x), [1000, 1400, 1800, 2200, 2600, 3000]);
+  assert.ok(Math.abs(flightNoseZAt(o, o.runHi - 500) - FLOOR_HEIGHT / 12) < 1e-9, '平場の上は始端の段鼻の高さのまま');
+});
+
+test('【回帰・2026-10-09】stairContribution: 上り口が走行端（end）なら entryTurnSteps=0 は従来どおり（往路全長で等ピッチ・先導なし）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSideEntryFixture(graph, { entryTurnSteps: 0, entrySide: 'end' });
+  const o = stairContribution(stair, graph, FLOOR_HEIGHT).flights[0];
+  assert.equal(o.steps, 6);
+  assert.equal(o.leadSteps, undefined);
+  assert.equal(o.leadMm, undefined);
+  assert.deepEqual(flightNoses(o).map(([x]) => x), [0, 600, 1200, 1800, 2400, 3000]);
+});
+
+test('【2026-10-09】flip=true の側面の上り口（WINDING）でも区画は上り口側（runHi）にあり、区画の中の高さは区画内の値', () => {
+  for (const entrySide of ['left', 'right']) {
+    const graph = makeGraph(`f${entrySide}`);
+    const { stair } = makeSideEntryFixture(graph, { type: StairType.WINDING, sections: [5, 6, 5], entrySide, flip: true });
+    const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+    const o = c.flights[0];
+    if (o.leadMm == null) continue; // flip で内側になった側は張り出しが無く自動＝走行端
+    const r = FLOOR_HEIGHT / 16;
+    assert.equal(o.leadMm, 1000);
+    assert.equal(o.travelSign, -1, '北向き＝基端は runHi');
+    assert.ok(Math.abs(flightNoseZAt(o, o.runHi - 500) - 1.5 * r) < 1e-9, `区画の中（1段/1000）の高さ: ${flightNoseZAt(o, o.runHi - 500)}`);
+    assert.ok(Math.abs(flightNoseZAt(o, o.runHi - 3000) - (5 + 1) * r) < 1e-9, '終端は回転部の1段目');
+    assert.equal(stairContribution(stair, graph, FLOOR_HEIGHT).landings[0].z, 6 * r);
+    return;
+  }
+  assert.fail('flip=true で側面の上り口になる側が無い');
+});
+
+// 走行端で entryTurnSteps>0 の状態は stairSectionEdit.js portSideChange が作らない（不変条件）。landingZ/slopeTop は
+// それを無条件に足すが、この不変条件で平面側と整合する。ここは不変条件を外れたデータが来ても展開図が平面の述語
+// （ports.entry !== 'end'）に従って無視することを固定する。
+test('【失敗系・2026-10-09】entryTurnSteps は上り口が走行端（自動／end）なら効かない（平面 turnStepsE と同じ述語）', () => {
+  for (const entrySide of ['right', null, 'end']) {
+    const graph = makeGraph();
+    const { stair } = makeSideEntryFixture(graph, { entrySide });
+    const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+    assert.equal(c.flights[0].steps, 6, `entrySide=${entrySide}: 往路は n1 段のまま`);
+    assert.equal(c.flights[0].leadSteps, undefined);
+    assert.equal(c.landings[0].z, 6 * (FLOOR_HEIGHT / 13), `entrySide=${entrySide}: 踊り場は n1×蹴上`);
+  }
+});
+
+test('resolveUTurnSectionParams: 有効な取りつき蹴上数と区画の走行長を返す（走行端では0・floorHeight未確定はnullの失敗系を含む）', () => {
+  const graph = makeGraph();
+  const side = makeSideEntryFixture(graph).stair;
+  const p = resolveUTurnSectionParams(side, graph, FLOOR_HEIGHT);
+  assert.equal(p.entryTurnSteps, 1);
+  assert.equal(p.entryZoneMm, 1000);
+  assert.equal(p.n1, 6, 'n1 は sections[0] のまま（取りつきは足さない）');
+  assert.equal(p.riser, SIDE_RISER, '蹴上＝階高/総蹴上（取りつき込み）');
+  const g2 = makeGraph('p2');
+  assert.deepEqual(
+    (({ entryTurnSteps, entryZoneMm }) => ({ entryTurnSteps, entryZoneMm }))(resolveUTurnSectionParams(makeSideEntryFixture(g2, { entrySide: 'end' }).stair, g2, FLOOR_HEIGHT)),
+    { entryTurnSteps: 0, entryZoneMm: 0 });
+  assert.equal(resolveUTurnSectionParams(side, graph, null), null);
+});
+
+test('stairRunProfile: leadSteps/leadMm 無し・0・範囲外は従来と同じ点列（先導は区間の途中で別ピッチになるだけ）', () => {
+  const base = stairRunProfile(6, 160, 3000, 100, 0, 1);
+  const flat = stairRunProfile(6, 160, 3000, 100, 0, 1, 0, { leadSteps: 0, leadMm: 1000 });
+  assert.deepEqual(flat.noses.map(([x]) => x), [1100, 1500, 1900, 2300, 2700, 3100], '取りつき0段の区画は平場、段鼻は区画の出口から残り2000を等分');
+  assert.deepEqual(flat.points[0], [100, 0], '平場は床のまま始端から');
+  assert.deepEqual(stairRunProfile(6, 160, 3000, 100, 0, 1, 0, { leadSteps: 0, leadMm: 3000 }), base, '区画が全長以上なら無効');
+  assert.deepEqual(stairRunProfile(6, 160, 3000, 100, 0, 1, 0, { leadSteps: 2, leadMm: 3000 }), base, '取りつき段ありでも区画が全長以上なら無効（段鼻が終端に重ならない）');
+  assert.deepEqual(stairRunProfile(6, 160, 3000, 100, 0, 1, 0, { leadSteps: 2, leadMm: 4000 }), base);
+  assert.deepEqual(stairRunProfile(6, 160, 3000, 100, 0, 1, 0, { leadSteps: 2, leadMm: 0 }), base, '区画長0は無効');
+  const lead = stairRunProfile(6, 160, 3000, 100, 0, 1, 0, { leadSteps: 2, leadMm: 1000 });
+  assert.deepEqual(lead.noses.map(([x]) => Math.round(x * 1000) / 1000), [100, 600, 1100, 1766.667, 2433.333, 3100],
+    '先頭2段は区画1000を500ピッチ、残り4段は残り2000を ÷(4-1) ピッチ');
+  assert.ok(Math.abs(lead.endX - 3100) < 1e-9, '区間の総走行長は不変');
 });

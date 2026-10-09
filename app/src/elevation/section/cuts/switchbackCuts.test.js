@@ -17,6 +17,7 @@ function makeGraph(name = 'p1') {
 function makeSwitchbackFixture(graph, {
   withMidWall = false, midWallGraph = null, withRoomUnder = true, asymmetricEnds = false,
   type = StairType.SWITCHBACK, sections = [6, 1, 6],
+  sideEntry = null, // { entryTurnSteps, entrySide }: 往路の基端の行（y3500..4500）を切り、側面の上り口にする
 } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -29,6 +30,12 @@ function makeSwitchbackFixture(graph, {
   const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
   const returnKey   = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
   const cells = new Set([landingKey, outboundKey, returnKey]);
+  if (sideEntry) {
+    const yz = graph.addCenterLine(CenterLineType.HORIZONTAL, 3500, { labeled: false, discipline: Discipline.ARCH });
+    cells.delete(outboundKey);
+    cells.add(`${x0.id}:${ym.id}:${xm.id}:${yz.id}`);
+    cells.add(`${x0.id}:${yz.id}:${xm.id}:${y1.id}`);
+  }
 
   const room = graph.addRoom(cells, '階段');
   generateRoomWallsFromOutline(graph, room);
@@ -70,7 +77,7 @@ function makeSwitchbackFixture(graph, {
 
   const stair = graph.addStair({
     type, cells, roomId: room.id,
-    sections, riser: null, upDirection: 'up', flip: false,
+    sections, riser: null, upDirection: 'up', flip: false, ...(sideEntry ?? {}),
   });
   // withRoomUnder（既定true）: 実機確認済みの表現（踊り場が基準床）は「階段下に部屋がある場合」。
   if (withRoomUnder) {
@@ -89,6 +96,26 @@ test('【WP-E5】switchbackCuts: 往復間の壁が無ければcuts=[1,2,3,4,5]'
   const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result);
   assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
+});
+
+test('【2026-10-09】switchbackCuts: 側面の上り口に取りつく回転部（entryTurnSteps=1）があれば踊り場の高さは (n1+1)×蹴上（stairContributionと同じ）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { sideEntry: { entryTurnSteps: 1, entrySide: 'left' }, withRoomUnder: false });
+  const faces = composeRoomFaces(room, graph);
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.ok(result);
+  assert.equal(result.params.entryTurnSteps, 1);
+  assert.equal(result.landingAbs, 7 * (2400 / 13), '(n1=6 + 取りつき1) × (階高/総蹴上13)');
+  assert.equal(result.landingAbs, result.contribution.landings[0].z, '帯の基準床と踊り場の面の高さが一致する');
+});
+
+test('【回帰・2026-10-09】switchbackCuts: 走行端の上り口（側面なし）では entryTurnSteps が入っていても踊り場の高さは n1×蹴上のまま', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { sideEntry: { entryTurnSteps: 1, entrySide: 'end' }, withRoomUnder: false });
+  const faces = composeRoomFaces(room, graph);
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.equal(result.params.entryTurnSteps, 0);
+  assert.equal(result.landingAbs, 6 * (2400 / 13));
 });
 
 test('【WP-E5】switchbackCuts: 往復間の壁があってもcuts=[1,2,3,4,5]（旧2.5/4.5は2026-10-07に廃止）', () => {

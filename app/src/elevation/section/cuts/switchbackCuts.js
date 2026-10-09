@@ -308,8 +308,8 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
 
   const params = resolveUTurnSectionParams(stair, graph, floorHeight);
   if (!params) return null;
-  const { n1, riser, landingLen } = params;
-  const landingAbs = n1 * riser;
+  const { n1, riser, landingLen, entryTurnSteps } = params;
+  const landingAbs = (n1 + entryTurnSteps) * riser; // 取りつき回転部の蹴上を含む（sectionStair.js stairContribution の landingZ と同じ）
   const isSteel = stair.structure === StructuralMaterialType.STEEL;
   // ユーザー実機指摘2026-08「階段・踊り場下の描画方法は、下に部屋がある・なしで異なる。
   // 現時点の描画は下に部屋がある場合」: 階段下に部屋が**無い**なら、踊り場の下は同じ空間として

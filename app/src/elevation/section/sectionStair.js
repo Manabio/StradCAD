@@ -93,7 +93,8 @@ import { clipPrimitivesToXRange, subtractRectsFromPrimitives } from '../elevatio
 /**
  * @typedef {{isVertical:boolean, runLo:number, runHi:number, travelSign:1|-1,
  *   acrossLo:number, acrossHi:number, baseZ:number, riserMm:number, steps:number,
- *   lengthMm:number}} Flight
+ *   lengthMm:number, leadSteps?:number, leadMm?:number}} Flight
+ *   leadSteps/leadMm は往路だけ（側面の上り口に取りつく回転部の段数と区画の走行長。steps に含む）。
  * @typedef {{isVertical:boolean, axisWorld:number, spanLo:number, spanHi:number,
  *   kind:'front'|'back'|'side'}} LandingFrameEdge
  * @typedef {{runLo:number, runHi:number, acrossLo:number, acrossHi:number, z:number,
@@ -118,7 +119,7 @@ export function stairContribution(stair, graph, floorHeight) {
   if (!stair || !U_TURN_TYPES.has(stair.type)) return null;
   const params = resolveUTurnSectionParams(stair, graph, floorHeight);
   if (!params) return null;
-  const { n1, n2, riser, len1, landingLen, len2, turnCells } = params;
+  const { n1, n2, riser, len1, landingLen, len2, turnCells, entryTurnSteps, entryZoneMm } = params;
   const isWinding = stair.type === StairType.WINDING;
 
   const bounds = roomBounds(refreshCells(stair.cells, graph), graph);
@@ -150,9 +151,12 @@ export function stairContribution(stair, graph, floorHeight) {
     runLo: Math.min(coordAt0, coordAtRun), runHi: Math.max(coordAt0, coordAtRun),
     travelSign: coordAtRun >= coordAt0 ? 1 : -1,
     acrossLo: Math.min(s0World, acrossMid), acrossHi: Math.max(s0World, acrossMid),
-    baseZ: 0, riserMm: riser, steps: n1, lengthMm: len1, nosingMm: stair.nosing ?? 0, treadThicknessMm,
+    // 側面の上り口に取りつく回転部（entryTurnSteps）の蹴上は往路の手前に積まれる（stairLanding.js landingZ と
+    // 同じ規約）。その段は区画（entryZoneMm）に等ピッチで置き、直進部の n1 段は残りの長さを割る。
+    baseZ: 0, riserMm: riser, steps: n1 + entryTurnSteps, lengthMm: len1, nosingMm: stair.nosing ?? 0, treadThicknessMm,
+    ...(entryZoneMm > 0 ? { leadSteps: entryTurnSteps, leadMm: entryZoneMm } : {}),
   };
-  const landingZ = n1 * riser;
+  const landingZ = (n1 + entryTurnSteps) * riser;
   // WP-E5b修正: makeFrameのt軸は「往路(t:0→tRun)＋踊り場(t:tRun→1)」の1往復ぶんの長さしか
   // 確保していない（SWITCHBACKは復路が並走する別レーンで戻るため、room bboxの走行軸長は
   // len1+landingLenで足りる。t=tRun→1の区間は踊り場の奥行きそのもの）。
@@ -488,7 +492,10 @@ function flightRunProfile(flight, cut, opts = {}) {
   const runLengthMm = flight.lengthMm ?? (flight.runHi - flight.runLo);
   return { ...stairRunProfile(
     flight.steps, flight.riserMm, runLengthMm, startX, -flight.baseZ, localDir, flight.nosingMm ?? 0,
-    { treadThicknessMm: opts.surfaceOnly ? 0 : flight.treadThicknessMm ?? 0 }), startX };
+    {
+      treadThicknessMm: opts.surfaceOnly ? 0 : flight.treadThicknessMm ?? 0,
+      leadSteps: flight.leadSteps, leadMm: flight.leadMm,
+    }), startX };
 }
 
 function computeFlightProfile(flight, cut, columns, outerBound, opts = {}) {
@@ -776,7 +783,16 @@ export function flightNoseZAt(flight, runCoord) {
   const d = Math.min(Math.max((runCoord - worldStart) * flight.travelSign, 0), runLengthMm);
   const steps = Math.max(1, Math.round(flight.steps));
   // stairRunProfileと同じ踏面ピッチ（区間長÷(段数−1)）。1段の区間は段鼻が1つ＝一定高さ。
-  const t = steps > 1 && runLengthMm > 0 ? d / (runLengthMm / (steps - 1)) : 0;
+  // 先頭 leadSteps 段（側面の上り口の区画 leadMm）だけ別ピッチ（区画を等分）。
+  let t;
+  if (flight.leadMm > 0 && flight.leadSteps >= 0 && flight.leadSteps < steps) {
+    const mainSteps = steps - flight.leadSteps, mainLen = runLengthMm - flight.leadMm;
+    t = d <= flight.leadMm
+      ? (flight.leadSteps > 0 ? d / (flight.leadMm / flight.leadSteps) : 0) // 取りつき段0＝平場（始端の段鼻の高さのまま）
+      : flight.leadSteps + (mainSteps > 1 && mainLen > 0 ? (d - flight.leadMm) / (mainLen / (mainSteps - 1)) : 0);
+  } else {
+    t = steps > 1 && runLengthMm > 0 ? d / (runLengthMm / (steps - 1)) : 0;
+  }
   return flight.baseZ + flight.riserMm * (1 + t);
 }
 
