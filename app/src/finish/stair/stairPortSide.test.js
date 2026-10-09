@@ -109,7 +109,8 @@ test('折返し階段（SWITCHBACK）でも、あきがあると内側の上り�
 // ---- 段板は端部の柱の角にそのまま取りつく（2026-10-09 ユーザー裁定の角の対応表。逃がさない）----
 // 柱は PB で包まれていれば PB の外面（通り芯±57.5）、包まれていなければ柱材の面（±45）。1＝上り口側・往路側、
 // 2＝回転部側・往路側、3＝回転部側・復路側、4＝上り口側・復路側（回転部側の柱が P1〜P4、入口柱が Q1〜Q4）。
-//   1|2 の段鼻・復路の到達辺（15|16。ユーザー未指定の仮定）＝ 入口柱の上り口側の面（Q1・Q4 の y）
+//   1|2 の段鼻 ＝ 入口柱の上り口側の面（Q1 の y）
+//   復路の到達辺（15|16。2026-10-09 裁定で確定）＝ 入口柱の回転部側の面（Q3 の y）。最終段の段板は柱に当たって止まる
 //   5|6（往路側の前縁）＝ 回転部側の柱の上り口側の面（P1・P4 の y）。往路側の放射線 5|6〜7|8 の起点 ＝ P1
 //   11|12（復路側の前縁）＝ 回転部側の柱の回転部側の面（P2・P3 の y）。復路側の放射線 8|9〜10|11 の起点 ＝ P2
 const H = PARTITION_BACKING_MM / 2; // 柱材の半幅 45
@@ -135,7 +136,7 @@ test('隔て壁あり・張り出し（f,b,c,d,a）: 1|2 の段鼻と到達辺�
       const stair = addByOrder(graph, c, ['f', 'b', 'c', 'd', 'a'], { entryTurnSteps });
       woodStair(graph, stair);
       setup(graph);
-      const yQ = 2000 + half, yPA = 1000 + half, yPB = 1000 - half; // 通り芯 y=2000（入口柱）・1000（回転部側の柱）。上り口は南（y が大きい側）
+      const yQ = 2000 + half, yQ3 = 2000 - half, yPA = 1000 + half, yPB = 1000 - half; // 通り芯 y=2000（入口柱）・1000（回転部側の柱）。上り口は南（y が大きい側）
       const g = gapGeom(stair, graph, 'upper');
       // 往路（x>1000）: Q の面 yQ から P1 の面 yPA まで等分
       const laneA = g.treads.filter(t => horiz(t) && Math.min(t.x1, t.x2) > 1000).map(t => t.y1).sort((p, q) => q - p);
@@ -143,14 +144,15 @@ test('隔て壁あり・張り出し（f,b,c,d,a）: 1|2 の段鼻と到達辺�
       assert.equal(laneA[laneA.length - 1], yPA, `${tag}: 往路側の前縁＝P1 の面`);
       const pitchA = (yQ - yPA) / (laneA.length - 1);
       laneA.forEach((y, i) => assert.ok(Math.abs(y - (yQ - i * pitchA)) < 1e-6, `${tag}: 往路の等分 ${laneA}`));
-      // 復路（x<1000）: P2 の面 yPB（11|12）から到達辺 yQ まで等分
+      // 復路（x<1000）: P3 の面 yPB（11|12）から到達辺 yQ3 まで等分（往路と同じ長さ・同ピッチ）
       const laneB = g.treads.filter(t => horiz(t) && Math.max(t.x1, t.x2) < 1000).map(t => t.y1).sort((p, q) => p - q);
       assert.ok(Math.abs(laneB[0] - yPB) < 1e-6, `${tag}: 復路側の前縁（11|12）＝P2・P3 の面 ${laneB[0]}`);
-      const pitchB = (yQ - yPB) / laneB.length;
+      const pitchB = (yQ3 - yPB) / laneB.length;
       laneB.forEach((y, i) => assert.ok(Math.abs(y - (yPB + i * pitchB)) < 1e-6, `${tag}: 復路の等分 ${laneB}`));
-      // 到達辺（15|16）は Q4 の y。隔て板の仕上げ面（x=942.5）から壁仕上げ面まで
+      assert.ok(Math.abs((yQ3 - yPB) - (yQ - yPA)) < 1e-6, `${tag}: 復路の区間長＝往路の区間長（P3 面〜Q3 面＝Q1 面〜P1 面）`);
+      // 到達辺（15|16）は Q3 の y。隔て板の仕上げ面（x=942.5）から壁仕上げ面まで
       const arrival = portSegs(g, 'arrival');
-      assert.ok(arrival.length > 0 && arrival.every(s => s.y1 === yQ && s.y2 === yQ && Math.abs(Math.max(s.x1, s.x2) - 942.5) < 1e-6), `${tag}: ${JSON.stringify(arrival)}`);
+      assert.ok(arrival.length > 0 && arrival.every(s => Math.abs(s.y1 - yQ3) < 1e-6 && Math.abs(s.y2 - yQ3) < 1e-6 && Math.abs(Math.max(s.x1, s.x2) - 942.5) < 1e-6), `${tag}: ${JSON.stringify(arrival)}`);
       // 出入口の辺 x=942.5 は基端（壁面 2942.5）から Q の面まで（区画 1 段目の出口）
       const entry = portSegs(g, 'entry');
       assert.ok(entry.length > 0 && entry.every(s => Math.abs(s.x1 - 942.5) < 1e-6 && Math.abs(Math.min(s.y1, s.y2) - yQ) < 1e-6 && Math.abs(Math.max(s.y1, s.y2) - 2942.5) < 1e-6), `${tag}: ${JSON.stringify(entry)}`);
@@ -162,7 +164,7 @@ test('隔て壁あり・張り出し（f,b,c,d,a）: 1|2 の段鼻と到達辺�
   }
 });
 
-test('隔て壁あり: 寸法鎖が柱の面で切れる（取付 2942.5→Q / 往路 Q→P1 / 復路 Q→P2）。graph を渡さなければ従来の積み方', () => {
+test('隔て壁あり: 寸法鎖が柱の面で切れる（取付 2942.5→Q1 / 往路 Q1→P1 / 復路 Q3→P3）。graph を渡さなければ従来の積み方', () => {
   for (const [name, half, setup] of VARIANTS) {
     const { graph, c } = layout();
     const stair = addByOrder(graph, c, ['f', 'b', 'c', 'd', 'a']);
@@ -174,10 +176,10 @@ test('隔て壁あり: 寸法鎖が柱の面で切れる（取付 2942.5→Q / �
     const dims = stairSegmentDims(stair, bi, 300, spans, graph);
     const by = (re) => dims.find(d => re.test(d.label));
     const span = (d) => [d.from, d.to].map(v => Math.round(v * 1e6) / 1e6);
-    const yQ = 2000 + half, yPA = 1000 + half, yPB = 1000 - half;
+    const yQ = 2000 + half, yQ3 = 2000 - half, yPA = 1000 + half, yPB = 1000 - half;
     assert.deepEqual(span(by(/^取付/)), [2942.5, yQ], name);
     assert.deepEqual(span(by(/^往路/)), [yQ, yPA], name);
-    assert.deepEqual(span(by(/^復路/)), [yQ, yPB], name);
+    assert.deepEqual(span(by(/^復路/)), [yQ3, yPB], name);
     const plain = stairSegmentDims(stair, bi, 300, spans);
     assert.notDeepEqual(span(plain.find(d => /^往路/.test(d.label))), [yQ, yPA], `${name}: graph なしは柱に合わせない`);
   }

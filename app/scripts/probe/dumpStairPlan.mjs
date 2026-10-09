@@ -10,6 +10,11 @@
 //   node --import ./scripts/testSetup.mjs scripts/probe/dumpStairPlan.mjs            … golden と比較（差分があれば終了コード 1）
 //   node --import ./scripts/testSetup.mjs scripts/probe/dumpStairPlan.mjs --write    … golden を書き直す（意図した変更のときだけ）
 //   文書を指定するときは末尾に *.stq のパスを並べる（golden は同名 .json）。省略すると DEFAULT_DOCS（D:/tatsuya/Download）。
+// 壁の再生成（既定）… 実アプリは文書を開くと鮮度キー（v7）で全階の壁を再生成し、在来の隔て壁の柱は PB 包み
+//   （通り芯±57.5）になる。保存済みのままだと包みが無く柱材の面（±45）で階段を描いてしまうので、既定では
+//   dumpElevFigure.mjs --regen／dumpPlanRegen.mjs と同じ手順（conformWoodBacking → resolveStairContext →
+//   regenerateWalls。graphMapPeek は project.graphMap）で全階を再生成してから描く。--no-regen で保存済みの壁のまま比べる。
+//   golden はこの既定（再生成後）で採る。
 // 環境変数 NO_PEEK=1 … 上下 peek を渡さない変異（検出力確認用: peek 経路が出力に効いていることの確認）。
 // 前提（ASSUMED の根拠）: Viewport は実クラスを使い scaleX を縮尺 1/50（DETAIL LOD）に固定、校正値は loadCalibration の既定。
 import fs from 'node:fs';
@@ -32,6 +37,9 @@ const DEFAULT_DOCS = ['13', '14', 'moku1-6', 'moku4', 'wood-void-test', 'opening
 const GOLDEN_DIR = path.resolve(import.meta.dirname, 'golden-stair-plan');
 const args = process.argv.slice(2);
 const write = args.includes('--write');
+const regen = !args.includes('--no-regen');
+const unknownOption = args.find(a => a.startsWith('-') && a !== '--write' && a !== '--no-regen');
+if (unknownOption) { console.error(`unknown option: ${unknownOption}`); process.exit(1); }
 const srcArgs = args.filter(a => a.endsWith('.stq'));
 const sources = srcArgs.length ? srcArgs : DEFAULT_DOCS.map(n => `D:/tatsuya/Download/${n}.stq`);
 const noPeek = process.env.NO_PEEK === '1';
@@ -155,12 +163,35 @@ function floorDump(project, planes, idx, peeks) {
   return Object.fromEntries(Object.entries(result).sort(([a], [b]) => byKey(a, b)));
 }
 
+// 実アプリが文書を開いたときと同じ全階の壁再生成（dumpElevFigure.mjs --regen と同手順）。階ごとの壁数・隔て壁数は stderr。
+async function regenerateAllWalls(project) {
+  const { runInAction } = await import('mobx');
+  const { resolveStairContext } = await import('../../src/finish/stair/stairUnderRooms.js');
+  const { regenerateWalls, loadMaterialMap } = await import('../../src/finish/wallRegeneration.js');
+  const { conformWoodBacking } = await import('../../src/structural/woodAutoFill.js');
+  const { isStairPartitionWall, stairPartitionLines } = await import('../../src/finish/stair/stairPartition.js');
+  const materialMap = await loadMaterialMap();
+  const graphMapPeek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  for (const p of project.planes) {
+    const graph = project.graphMap.get(p.id);
+    if (!graph) continue;
+    runInAction(() => conformWoodBacking(graph, project));
+    const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, graphMapPeek);
+    const before = graph.walls.length;
+    await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings });
+    const lines = stairPartitionLines(graph);
+    const partitions = [...graph.walls].filter(w => isStairPartitionWall(w, lines)).length;
+    console.error(`[regen] ${p.name}: 壁 ${before}→${graph.walls.length}・隔て壁 ${partitions}`);
+  }
+}
+
 let bad = 0;
 console.log('doc\tfloor\tinstall/upper\t線数\t判定');
 for (const src of sources) {
   const doc = path.basename(src, '.stq');
   let project;
   try { ({ project } = loadDocument(src)); } catch (e) { console.log(`${doc}\t(読み込み失敗: ${e.message})`); bad++; continue; }
+  if (regen) await regenerateAllWalls(project);
   const planes = project.planes;
   const now = {};
   planes.forEach((plane, idx) => {
