@@ -93,6 +93,6 @@ function stairDimPrimitives(stair, b, riser, g, spans, graph = null) {
   prims.push({ type: 'text', x: (b.x1 + b.x2) / 2, y: b.y2 + g * 2, text: notes.join('  '), anchor: 'middle', baseline: 'hanging', size: 11, fill: '#334155' });
 
   // タイプ別セグメント（踊り場・回り部・各アーム・各直進部）を、その場に踏面数／長さの寸法線で注記
-  prims.push(...stairSegmentDims(stair, bi, g, spans));
+  prims.push(...stairSegmentDims(stair, bi, g, spans, graph));
   return prims;
 }

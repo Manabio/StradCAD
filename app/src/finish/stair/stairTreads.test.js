@@ -8,11 +8,15 @@ import { measureStairSpans } from './stairClassify.js';
 import { roomBounds } from '../gridCells.js';
 import { landingZ } from './stairLanding.js';
 import { stairTreadFootprints } from './stairTreads.js';
+import { PARTITION_BACKING_MM, PARTITION_THICKNESS_MM } from './stairPartition.js';
+import { generateStairPartitionWalls } from './stairPartitionWalls.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
 
 const { LEFT } = StairPortSide;
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
 const INSET = 57.5; // 設置枠から壁仕上げ面まで（壁の無いフィクスチャの既定）
 const RISER = 200;
+const COLUMN_HALF = PARTITION_BACKING_MM / 2; // 隔て壁端の柱（90 角）の柱材の半幅
 const LANE_LEN = 3000; // uTurn フィクスチャの往路・復路の走行部の長さ（セルの実測 y 1000〜4000。レーンの間のあきはこの長さに沿う）
 
 // ---------------------------------------------------------------- フィクスチャ
@@ -175,11 +179,12 @@ test('破れの上限は多角形に適用しない: STRAIGHT の install（FL+1
 });
 
 test('SWITCHBACK のあき: 100（鉄骨）・115（在来の木造で隔て壁が立つ）のとき往路と復路の間にあきができ、面積の和はあき分だけ減る', () => {
-  const full = inner(2000, 4000), laneLen = LANE_LEN;
-  for (const [label, fx, gap] of [
-    ['鉄骨', uTurn(StairType.SWITCHBACK, { structure: StructuralMaterialType.STEEL }), 100],
-    ['在来の木造（隔て壁 115）', uTurn(StairType.SWITCHBACK, { buildingStructure: '木造（在来）' }), 115],
-    ['在来以外の木造（あき 0）', uTurn(StairType.SWITCHBACK), 0],
+  const full = inner(2000, 4000);
+  for (const [label, fx, gap, laneLen] of [
+    ['鉄骨', uTurn(StairType.SWITCHBACK, { structure: StructuralMaterialType.STEEL }), 100, LANE_LEN],
+    // 隔て壁が立つと、あきが空く範囲は基端の壁面から復路側の前縁（回転部側の柱の回転部側の面＝通り芯 y=1000 から柱材の半幅だけ奥）まで
+    ['在来の木造（隔て壁 115）', uTurn(StairType.SWITCHBACK, { buildingStructure: '木造（在来）' }), 115, LANE_LEN - INSET + COLUMN_HALF],
+    ['在来以外の木造（あき 0）', uTurn(StairType.SWITCHBACK), 0, LANE_LEN],
   ]) {
     const g = build(fx.stair, fx.graph);
     assert.ok(near(areaSum(g.cells), full - gap * laneLen), `${label}: ${areaSum(g.cells)} ≒ ${full - gap * laneLen}`);
@@ -192,6 +197,11 @@ test('SWITCHBACK のあき: 100（鉄骨）・115（在来の木造で隔て壁�
 test('WINDING のあき 115（在来の木造で隔て壁が立つ）: 往路・復路の踏面は軸 x=1000 から ±57.5 の内側に入らず、面積の和はあき分だけ減る。周回部は全幅', () => {
   for (const sections of [[6, 2, 6], [6, 3, 6]]) {
     const { graph, stair } = uTurn(StairType.WINDING, { sections, buildingStructure: '木造（在来）' });
+    // 隔て壁（柱包み付き）を足す: 柱は PB の外面（通り芯±57.5）なので、回り段の起点 P1・P2 はレーン内側端（x=942.5/1057.5）に載る
+    for (const w of generateStairPartitionWalls(graph, { structure: TRADITIONAL_WOOD_STRUCTURE })) {
+      const sign = Math.sign(w.clEnd.effectiveValue - w.clStart.effectiveValue) || 1;
+      w.startOffset = -sign * 57.5; w.endOffset = sign * 57.5;
+    }
     const g = build(stair, graph);
     const turnFrom = sections[0], turnTo = sections[0] + sections[1] - 1; // 周回部のマス番号（直進部 n は n-1 マス）
     const lanes = g.cells.filter(c => c.number < turnFrom || c.number > turnTo);
@@ -199,7 +209,8 @@ test('WINDING のあき 115（在来の木造で隔て壁が立つ）: 往路・
     const dx = lanes.flatMap(c => c.poly.filter((_, i) => i % 2 === 0).map(x => Math.abs(x - 1000)));
     assert.ok(Math.min(...dx) > 57.5 - 1e-6, `レーンのマスが壁面の内側に入る: 最小 |x-1000|=${Math.min(...dx)}`);
     assert.ok(dx.some(d => Math.abs(d - 57.5) < 1e-6), '壁面（±57.5）で止まっている');
-    assert.ok(near(areaSum(g.cells), inner(2000, 4000) - 115 * LANE_LEN), `${sections}: ${areaSum(g.cells)}`);
+    // あきが空くのは基端の壁面（y=3942.5）から復路側の前縁（回転部側の柱の PB の回転部側の面＝通り芯 y=1000 の奥 57.5）まで
+    assert.ok(near(areaSum(g.cells), inner(2000, 4000) - 115 * (LANE_LEN - INSET + PARTITION_THICKNESS_MM / 2)), `${sections}: ${areaSum(g.cells)}`);
     const turn = g.cells.filter(c => c.number >= turnFrom && c.number <= turnTo);
     const tx = turn.flatMap(c => c.poly.filter((_, i) => i % 2 === 0));
     assert.ok(Math.min(...tx) < 1000 - 57.5 && Math.max(...tx) > 1000 + 57.5, '周回部は軸をまたぐ全幅');

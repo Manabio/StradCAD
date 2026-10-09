@@ -1,5 +1,5 @@
 import { StairType, StructuralMaterialType, totalStepsFromSections } from '@core';
-import { PARTITION_THICKNESS_MM, stairHasPartition } from './stairPartition.js';
+import { PARTITION_THICKNESS_MM, PARTITION_BACKING_MM, stairHasPartition, stairPartitionGeometry, partitionPlanRects } from './stairPartition.js';
 import { effectiveStructure } from '../../structural/structureRules.js';
 import { cellBoundsFromKey, roomBounds, cellBoundsList, outlineSegments, refreshCells } from '../gridCells.js';
 import { measureStairSpans, uTurnSpans, MIN_LANDING, defaultSections } from './stairClassify.js';
@@ -43,6 +43,35 @@ export function laneGapMmFor(stair, graph, { simplified = false } = {}) {
   }
   return LANE_GAP;
 }
+
+/**
+ * 隔て壁が立つ階段の、端部の柱（90角。PARTITION_BACKING_MM）の位置の元になる 2 点（レーン間中心線上の通り芯の点）。
+ * 段板は柱に逃がしなしで取りつくので、uTurnLayout が柱の面に区間境界を合わせる（柱の面は、PB 包みがあれば PB の外面、
+ * 無ければ柱材の面。通り芯からの半幅は隔て壁の矩形から求め [PARTITION_BACKING_MM/2, PARTITION_THICKNESS_MM/2] に収める。
+ * 角の対応表は stair-model.md。2026-10-09 ユーザー裁定）。あきが隔て壁の総厚（laneGapMmFor が隔て壁ありと確定した値）でなければ null＝従来の積み方。
+ * @param {import('@core').Stair} stair
+ * @param {object|null} graph
+ * @param {number} laneGapMm laneGapMmFor の結果
+ * @returns {{ entryEnd:{x:number,y:number}, landingEnd:{x:number,y:number}, entryHalfMm:number, landingHalfMm:number }|null}
+ */
+function partitionFrameFor(stair, graph, laneGapMm) {
+  if (laneGapMm !== PARTITION_THICKNESS_MM || !graph) return null;
+  const g = stairPartitionGeometry(stair, graph);
+  if (!g) return null;
+  // 柱の通り芯から階段側の面までの距離 mm。PB で包まれていれば PB の外面（隔て壁の物理端 partitionPlanRects）、
+  // 壁が無い・包まれていなければ柱材の面（PARTITION_BACKING_MM/2）。
+  const col = PARTITION_BACKING_MM / 2, pb = PARTITION_THICKNESS_MM / 2;
+  const along = (p) => (g.isVertical ? p.y : p.x);
+  const eA = along(g.entryEnd), lA = along(g.landingEnd);
+  const dir = Math.sign(eA - lA) || 1; // 入口柱は回転部側の柱から +dir 側
+  const rects = partitionPlanRects(stair, graph);
+  const spans = rects.flatMap(r => (g.isVertical ? [r.yLo, r.yHi] : [r.xLo, r.xHi]));
+  const half = (outward) => (spans.length === 0 ? col : Math.min(pb, Math.max(col, outward)));
+  const entryHalfMm = half((Math.max(...spans.map(v => v * dir)) - eA * dir));
+  const landingHalfMm = half((lA * dir - Math.min(...spans.map(v => v * dir))));
+  return { entryEnd: g.entryEnd, landingEnd: g.landingEnd, entryHalfMm, landingHalfMm };
+}
+
 const NUM_GAP   = 1 / 4; // 段数数字を基点側の線（踏面線／踊場・周回部の入口境界線）から離す量（区間内比率）
 const NUM_OUT   = 0.15;  // 段数字を幅方向の外周側（隣接壁側）へ寄せる位置（外側端からの距離。レーン/アーム/全幅で共通利用）
 const PORT_TURN_ONE_INSET_MM = 150; // 取りつき区画が1段のとき、番号を出入口辺から内側へ寄せる量
@@ -667,7 +696,15 @@ function buildStraightLanding(stair, b, { view, detail, riser, spans, breakOverh
 // 等長（従来の平行レーン）では tBaseA = tBaseB = 0 になり、従来と同じ幾何を返す。
 // 出入口が側面（inner/outer。resolveUTurnPorts）のレーンでは、区画 [tBase, tExit]（張り出し区間、
 // 等長レーンなら基端の行）が出入口に取りつく回転部（emitPortTurnZone）になり、直進部は tExit から始まる。
-function uTurnLayout(stair, f, b, runA, runB, tread, spans) {
+//
+// partition（隔て壁が立つとき。partitionFrameFor）がある実測レイアウトでは、段板が端部の柱の角にそのまま取りつく
+//（逃がさない。ユーザー裁定 2026-10-09 の角の対応表。柱は PB 包みがあれば PB の外面、無ければ柱材の面）:
+//   入口柱の上り口側の面 tQ（Q1・Q4 の y）＝ 短いレーンの基端（張り出す往路の取りつき区画の出口＝2段目の段鼻、
+//     復路の到達辺）。等長レーン（柱が基端の壁の中）は動かさない
+//   回転部側の柱の上り口側の面 tRunA（P1・P4 の y）＝ 往路側の踊場・周回部の前縁
+//   回転部側の柱の回転部側の面 tRun（P2・P3 の y）＝ 復路側の前縁
+// 柱の往路側の面の幅方向 s は column.sA（P1・P2 の s。回り段の往路側・復路側の放射線の起点の s）で返す。
+function uTurnLayout(stair, f, b, runA, runB, tread, spans, partition = null) {
   const acrossLen = f.vertical ? (b.x2 - b.x1) : (b.y2 - b.y1);
   const ms = measuredLengths(spans, 3);
   const laneLenA = ms ? ms[0] : runA.cells * tread;
@@ -676,10 +713,23 @@ function uTurnLayout(stair, f, b, runA, runB, tread, spans) {
   const depth = ms ? Math.max(1, f.runLength - laneMax) : Math.max(acrossLen * 0.5, tread);
   const budget = (laneMax + depth) || 1;
   const tAt = (mm) => mm / budget;
-  const tRun = tAt(laneMax);             // 区間境界＝踊場・周回部の前縁
-  const tBaseA = tRun - tAt(laneLenA);   // 往路の基端（上り口辺）
-  const tBaseB = tRun - tAt(laneLenB);   // 復路の基端（設置階上階への到達辺）
+  let tRun = tAt(laneMax);             // 区間境界＝踊場・周回部の前縁（復路側）
+  let tRunA = tRun;                    // 同（往路側。隔て壁の柱に合わせるときだけ tRun と分かれる）
+  let tBaseA = tRun - tAt(laneLenA);   // 往路の基端（上り口辺）
+  let tBaseB = tRun - tAt(laneLenB);   // 復路の基端（設置階上階への到達辺）
   const ports = resolveUTurnPorts(stair, { laneLenA, laneLenB, firstRowA: spans?.firstRowA, firstRowB: spans?.firstRowB });
+  let column = null;
+  if (ms && partition) {
+    const dtE = partition.entryHalfMm / f.runLength, dtL = partition.landingHalfMm / f.runLength;
+    const tQ = f.tOf(partition.entryEnd) - dtE;
+    const tPA = f.tOf(partition.landingEnd) - dtL, tPB = f.tOf(partition.landingEnd) + dtL;
+    const baseA = laneLenA < laneMax - 1e-6 ? tQ : tBaseA; // 短いレーンの基端だけが入口柱の位置
+    const baseB = laneLenB < laneMax - 1e-6 ? tQ : tBaseB;
+    if (tPA > Math.max(baseA, baseB) + 1e-9 && tPB > tPA) { // 区間が残らないほど短ければ従来の積み方
+      tRunA = tPA; tRun = tPB; tBaseA = baseA; tBaseB = baseB;
+      column = { sA: f.sOf(partition.landingEnd) - partition.landingHalfMm / (acrossLen || 1) };
+    }
+  }
   // 側面の出入口の区画の出口 tExit（直進部の始端）。張り出し区間なら相手レーンの基端、等長レーンなら基端の行の終端
   const tExitA = ports.entryLonger   ? tBaseB : tBaseA + tAt(ports.zoneA[1]);
   const tExitB = ports.arrivalLonger ? tBaseA : tBaseB + tAt(ports.zoneB[1]);
@@ -688,8 +738,8 @@ function uTurnLayout(stair, f, b, runA, runB, tread, spans) {
   // 往路の張り出し（取りつき）が全幅セルなら、取りつき回転部は s 0→1 の全幅、その「内側」の辺は s=1
   const entryFull = !!(ms && spans?.entryFull) && ports.entryLonger;
   return {
-    laneLenA, laneLenB, tAt, tRun, tBaseA, tBaseB, ports, tExitA, tExitB, tStartA, tStartB, entryFull,
-    pitchA: (tRun - tStartA) * budget / runA.cells,
+    laneLenA, laneLenB, tAt, tRun, tRunA, tBaseA, tBaseB, ports, tExitA, tExitB, tStartA, tStartB, entryFull, column,
+    pitchA: (tRunA - tStartA) * budget / runA.cells,
     pitchB: (tRun - tStartB) * budget / runB.cells,
   };
 }
@@ -725,11 +775,12 @@ function emitPortTurnZone(out, f, { tBase, tExit, sEdge, sFar, sExitLo, sExitHi,
 }
 
 // U字版: レーン（A=上り口／B=到達口）の区画を emitPortTurnZone へ渡す薄い wrapper。
-function emitPortTurn(out, f, { tBaseA, tBaseB, tExitA, tExitB, ports, entryFull }, lane, steps, numberStart, sLaneInner, { detail }) {
+// sEdgeInner = 隣レーン側の辺の s（隔て板の帯の復路側の面 sB。あき0なら 0.5。uTurnLaneOutline の内側の出入口の辺と同じ）。
+function emitPortTurn(out, f, { tBaseA, tBaseB, tExitA, tExitB, ports, entryFull }, lane, steps, numberStart, sLaneInner, sEdgeInner, { detail }) {
   const side = lane === 'A' ? ports.entry : ports.arrival;
   const tBase = lane === 'A' ? tBaseA : tBaseB, tExit = lane === 'A' ? tExitA : tExitB;
   const sOuter = lane === 'A' ? 0 : 1;
-  const sInner = lane === 'A' && entryFull ? 1 : 0.5; // 隣レーン側の辺（全幅の取りつきなら相手レーンの外側）
+  const sInner = lane === 'A' && entryFull ? 1 : sEdgeInner; // 隣レーン側の辺（全幅の取りつきなら相手レーンの外側）
   const sEdge = side === 'inner' ? sInner : sOuter; // 出入口辺
   const sFar  = side === 'inner' ? sOuter : sInner; // 出入口辺と反対の辺
   emitPortTurnZone(out, f, { tBase, tExit, sEdge, sFar, sExitLo: sOuter, sExitHi: sLaneInner, enterFromEdge: lane === 'A' }, steps, numberStart, { detail });
@@ -752,19 +803,20 @@ export function resolveUTurnPorts(stair, info) {
 // 往路の取りつきが全幅セル（entryFull）なら、張り出し区間は s 0→1 の全幅: 基端は全幅の辺、相手レーン側の
 // 外側の辺（s=1、tBaseA〜tBaseB）が「内側」の出入口、復路の到達辺（t=tBaseB、s 0.5→1）は取りつきと
 // 復路の間の内部線（設置階上階スラブの張り出しの縁）になる。
-function uTurnLaneOutline(c, { tRun, tBaseA, tBaseB, tExitA, tExitB, entryFull }, sA, sB, halfGap, ports) {
+function uTurnLaneOutline(c, { tRun, tRunA, tBaseA, tBaseB, tExitA, tExitB, entryFull, column }, sA, sB, halfGap, ports) {
   const tPart = Math.max(tBaseA, tBaseB);
   const portOr = (s, isPort, port) => (isPort ? { ...s, thin: true, port } : { ...s, side: true });
   const head = [
     portOr(seg(c(tBaseA, 0), c(tBaseA, 0.5)), ports.entry === 'end', 'entry'),     // base側（往路出発＝区画初段）
   ];
   if (entryFull) head.push({ ...seg(c(tBaseA, 0.5), c(tBaseA, 1)), side: true }); // 全幅の取りつきの基端（相手レーン側半分）
-  head.push(portOr(seg(c(tBaseB, 0.5), c(tBaseB, 1)), ports.arrival === 'end', 'arrival')); // base側（復路到達＝設置階上階の最終段）
+  // base側（復路到達＝設置階上階の最終段）。隔て壁の柱に合わせるときは隔て板の仕上げ面（sB）から壁仕上げ面まで（15|16 = Q4 起点）
+  head.push(portOr(seg(c(tBaseB, column ? sB : 0.5), c(tBaseB, 1)), ports.arrival === 'end', 'arrival'));
   // レーンA外側（上り口が外側なら張り出し区間を出入口にして残りを側面に）
   if (ports.entry === 'outer') {
     head.push({ ...seg(c(tBaseA, 0), c(tExitA, 0)), thin: true, port: 'entry' });
-    head.push({ ...seg(c(tExitA, 0), c(tRun, 0)), side: true });
-  } else head.push({ ...seg(c(tBaseA, 0), c(tRun, 0)), side: true });
+    head.push({ ...seg(c(tExitA, 0), c(tRunA, 0)), side: true });
+  } else head.push({ ...seg(c(tBaseA, 0), c(tRunA, 0)), side: true });
   // レーンB外側（全幅の取りつきでは、その相手レーン側の辺 tBaseA〜tBaseB が「内側」の上り口）
   if (entryFull) head.push(portOr(seg(c(tBaseA, 1), c(tBaseB, 1)), ports.entry === 'inner', 'entry'));
   if (ports.arrival === 'outer') {
@@ -778,7 +830,7 @@ function uTurnLaneOutline(c, { tRun, tBaseA, tBaseB, tExitA, tExitB, entryFull }
   else if (tBaseA < tBaseB - 1e-9) head.push(portOr(seg(c(tBaseA, sB), c(tBaseB, sB)), ports.entry === 'inner', 'entry'));    // 往路が長い
   else if (tBaseB < tBaseA - 1e-9) head.push(portOr(seg(c(tBaseB, sB), c(tBaseA, sB)), ports.arrival === 'inner', 'arrival')); // 復路が長い
   const tail = [
-    seg(c(tPart, sA), c(tRun, sA)),  // 中央仕切り（往路内側。あき時は2本になる）
+    seg(c(tPart, sA), c(tRunA, sA)), // 中央仕切り（往路内側。あき時は2本になる）
     ...(halfGap > 0 ? [seg(c(tPart, sB), c(tRun, sB))] : []), // 復路内側（あき時のみ）
   ];
   return { head, tail };
@@ -806,12 +858,12 @@ function uTurnPortAnchor(f, { tBaseA, tBaseB, tExitA, tExitB, entryFull }, side,
 // install の破れは常に踊場との接続部（復路の初段線＝tRun）。FL+1600/riser では位置決めしない。
 // 復路の段数字は install では表示しない（初段線位置＝破れの始点のため、初段に続き番号を置けない）。
 // 踏面線は、破れ線（対角）に触れるまで吹抜け側から描画できる分だけ描く。
-function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOverhangMm = 0, collectCells = false }) {
+function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, partition = null, breakOverhangMm = 0, collectCells = false }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [runA, land, runB] = parts;
-  const layout = uTurnLayout(stair, f, b, runA, runB, stair.tread, spans);
-  const { tAt, tRun, tBaseB, tStartA, pitchA, pitchB, ports } = layout;
+  const layout = uTurnLayout(stair, f, b, runA, runB, stair.tread, spans, partition);
+  const { tAt, tRun, tRunA, tBaseB, tStartA, pitchA, pitchB, ports } = layout;
   // 側面の出入口に取りつく回転部の蹴上数（出入口が走行端なら 0）。段数字はその分だけ後ろへずれる。
   const turnStepsE = ports.entry   !== 'end' ? Math.max(0, stair.entryTurnSteps ?? 0) : 0;
   const turnStepsA = ports.arrival !== 'end' ? Math.max(0, stair.arrivalTurnSteps ?? 0) : 0;
@@ -830,7 +882,7 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
 
   const out = newOut(collectCells);
   // 往路（レーンA s:0→sA）
-  if (ports.entry !== 'end') emitPortTurn(out, f, layout, 'A', turnStepsE, 1, sA, { detail }); // 取りつき回転部
+  if (ports.entry !== 'end') emitPortTurn(out, f, layout, 'A', turnStepsE, 1, sA, layout.column ? sB : 0.5, { detail }); // 取りつき回転部
   emitRun(out, runA, pitchA, {
     treadLine: (mm) => lineS(tStartA + tAt(mm), 0, sA),
     labelPt:   (mm) => f.pt(tStartA + tAt(mm), NUM_OUT),        // 外側 s=0 寄せ
@@ -838,14 +890,17 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
   // 踊場（両レーンをまたぐ平場）: 前縁境界（往路側・復路側）と番号。
   // あき（laneGapMm）の閉じ辺＝内側ささらが取りつく踊り場線は、ささらと同じ太さで描く（heavy）。
   // あき0のとき sA===sB===0.5 で閉じ辺は生まれず、従来どおり 0..0.5 / 0.5..1 の2本になる。
-  out.treads.push(lineS(tRun, 0, sA));
+  // 往路側の前縁だけ隔て壁の柱の面（tRunA）に取りつく。復路側は tRun のまま（二つが同じなら従来どおり）。
+  out.treads.push(lineS(tRunA, 0, sA));
   if (halfGap > 0) out.treads.push({ ...lineS(tRun, sA, sB), heavy: true });
   out.treads.push(lineS(tRun, sB, 1));
   const tMid = (tRun + 1) / 2;
   // 初段=下手側（往路runA）と同じ幅方向位置（NUM_OUT）・同じ離れ（pitchA基準）で入口境界線近くに置く
   emitTurn(out, land, {
-    entryPt: () => f.pt(tRun + tAt(NUM_GAP * pitchA), NUM_OUT),
-    cellPoly: () => flatPts([c(tRun, 0), c(1, 0), c(1, 1), c(tRun, 1)]), // 踊場は両レーンをまたぐ全幅の矩形
+    entryPt: () => f.pt(tRunA + tAt(NUM_GAP * pitchA), NUM_OUT),
+    cellPoly: () => flatPts(tRunA === tRun
+      ? [c(tRun, 0), c(1, 0), c(1, 1), c(tRun, 1)] // 踊場は両レーンをまたぐ全幅の矩形
+      : [c(tRunA, 0), c(1, 0), c(1, 1), c(tRun, 1), c(tRun, sA), c(tRunA, sA)]), // 前縁が往路側だけ柱の面まで出る
   }, { detail });
 
   // 復路（レーンB s:sB→1、踊場から base へ戻る）と、始点＝直進部2（復路）の初段＝踊場との
@@ -878,14 +933,14 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
       treadLine: (mm) => lineS(tRun - tAt(mm), sB, 1),
       labelPt:   (mm) => f.pt(tRun - tAt(mm), 1 - NUM_OUT), // 外側 s=1 寄せ
     }, { detail });
-    if (ports.arrival !== 'end') emitPortTurn(out, f, layout, 'B', turnStepsA, totalSteps + turnStepsE, sB, { detail }); // 取りつき回転部
+    if (ports.arrival !== 'end') emitPortTurn(out, f, layout, 'B', turnStepsA, totalSteps + turnStepsE, sB, 0.5, { detail }); // 取りつき回転部
   }
 
   // 外周（base 側・両レーン外側・踊り場の三方）＋ 中央仕切り。base側は往路出発／復路到達(設置階上階)で2分割する。
   const lanes = uTurnLaneOutline(c, layout, sA, sB, halfGap, ports);
   const outline = [
     ...lanes.head,                                  // base側（往路出発・復路到達）と各レーン外側
-    { ...seg(c(tRun, 0), c(1, 0)), side: true },    // 踊り場側面A
+    { ...seg(c(tRunA, 0), c(1, 0)), side: true },   // 踊り場側面A
     { ...seg(c(tRun, 1), c(1, 1)), side: true },    // 踊り場側面B
     { ...seg(c(1, 0), c(1, 1)), side: true },       // 踊り場奥
     ...lanes.tail,                                  // 中央仕切り
@@ -913,12 +968,12 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
 // install の破れは常に周回部との接続部（復路の初段線＝tRun）。FL+1600/riser では位置決めしない。
 // 復路の段数字は install では表示しない（初段線位置＝破れの始点のため、初段に続き番号を置けない）。
 // 踏面線は、破れ線（対角）に触れるまで吹抜け側から描画できる分だけ描く。
-function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverhangMm = 0, collectCells = false }) {
+function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, partition = null, breakOverhangMm = 0, collectCells = false }) {
   const f = makeFrame(stair, b);
   const { parts, totalSteps } = stairParts(getSections(stair));
   const [runA, turn, runB] = parts;
-  const layout = uTurnLayout(stair, f, b, runA, runB, stair.tread, spans);
-  const { tAt, tRun, tBaseB, tStartA, pitchA, pitchB, ports } = layout;
+  const layout = uTurnLayout(stair, f, b, runA, runB, stair.tread, spans, partition);
+  const { tAt, tRun, tRunA, tBaseB, tStartA, pitchA, pitchB, ports } = layout;
   // 側面の出入口に取りつく回転部の蹴上数（出入口が走行端なら 0）。段数字はその分だけ後ろへずれる。
   const turnStepsE = ports.entry   !== 'end' ? Math.max(0, stair.entryTurnSteps ?? 0) : 0;
   const turnStepsA = ports.arrival !== 'end' ? Math.max(0, stair.arrivalTurnSteps ?? 0) : 0;
@@ -935,7 +990,7 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
 
   const out = newOut(collectCells);
   // 往路（レーンA s:0→sA）
-  if (ports.entry !== 'end') emitPortTurn(out, f, layout, 'A', turnStepsE, 1, sA, { detail }); // 取りつき回転部
+  if (ports.entry !== 'end') emitPortTurn(out, f, layout, 'A', turnStepsE, 1, sA, layout.column ? sB : 0.5, { detail }); // 取りつき回転部
   emitRun(out, runA, pitchA, {
     treadLine: (mm) => lineS(tStartA + tAt(mm), 0, sA),
     labelPt:   (mm) => f.pt(tStartA + tAt(mm), NUM_OUT),        // 外側 s=0 寄せ
@@ -944,12 +999,11 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
   // pivot はあき幅（sA..sB）のうち段数が低い方＝往路の内側端（tRun, sA）に置く。
   // 出口境界はあき部の閉じ辺（sA..sB）と連続して sA→1 で描く（pivot への放射と同一直線）。
   // 閉じ辺＝内側ささらが取りつく踊り場線だけ、ささらと同じ太さで描く（heavy）。
-  out.treads.push(lineS(tRun, 0, sA));    // 入口境界（往路側）
+  out.treads.push(lineS(tRunA, 0, sA));   // 入口境界（往路側。隔て壁の柱に合わせるときは柱材の面 tRunA）
   if (halfGap > 0) out.treads.push({ ...lineS(tRun, sA, sB), heavy: true }); // あき閉じ辺
   out.treads.push(lineS(tRun, sB, 1));    // 出口境界（復路側）
-  const P = f.pt(tRun, sA);
   const perim = (u) => {
-    if (u <= 1 / 3) { const k = u / (1 / 3);           return f.pt(tRun + k * (1 - tRun), 0); }
+    if (u <= 1 / 3) { const k = u / (1 / 3);           return f.pt(tRunA + k * (1 - tRunA), 0); }
     if (u <= 2 / 3) { const k = (u - 1 / 3) / (1 / 3); return f.pt(1, k); }
     const k = (u - 2 / 3) / (1 / 3);                   return f.pt(1 - k * (1 - tRun), 1);
   };
@@ -959,11 +1013,19 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
   // その共有辺になり、他の放射線と同じ pivot P から奥の辺（外壁側）へ垂直（走行軸に平行）に引く
   // （ユーザー指示 2026-10-06「pivot はこの踏面だけ変えず、そこから外壁へ向かって垂直線」）。
   // 奇数では u=0.5 の放射線が存在せず現状のまま。あき0では sA=0.5 で perim(0.5)=(1,0.5) と一致し従来の線と同じ。
-  const windingRadial = (u) => (u === 0.5 ? line(P, f.pt(1, sA)) : line(P, perim(u)));
+  // 隔て壁の柱に合わせるとき（layout.column）の放射線の起点（2026-10-09 角の対応表）:
+  //   往路側半分（u<0.5。5|6〜7|8）＝ P1（柱の上り口側の面×往路側の面、前縁 tRunA）
+  //   復路側半分（u≥0.5。8|9〜10|11）＝ P2（柱の回転部側の面×往路側の面、前縁 tRun）。u=0.5 は P2 から奥の辺へ垂直
+  // 柱が無いとき（column null）は従来どおり全放射線が P=(tRun, sA)。
+  const col = layout.column;
+  const sPivot = col ? col.sA : sA;
+  const pivotA = f.pt(tRunA, sPivot), P2 = f.pt(tRun, sPivot);
+  const pivotOf = (u) => (col && u < 0.5 ? pivotA : P2);
+  const windingRadial = (u) => (u === 0.5 ? line(P2, f.pt(1, sPivot)) : line(pivotOf(u), perim(u)));
   emitTurn(out, turn, {
     radialLine: windingRadial,
-    cellPt: (u) => radialMix(P, perim(u)),
-    entryPt: () => f.pt(tRun + tAt(NUM_GAP * pitchA), NUM_OUT),
+    cellPt: (u) => radialMix(pivotOf(u), perim(u)),
+    entryPt: () => f.pt(tRunA + tAt(NUM_GAP * pitchA), NUM_OUT),
     cellPoly: (j) => fanCellPoly(windingRadial, turn.cells, j, [1 / 3, 2 / 3], perim), // 外周の角は奥の辺の両端（u=1/3・2/3）
   }, { detail });
   // 復路（レーンB s:sB→1）と、始点＝直進部2（復路）の初段＝周回部との接続部（tRun）と
@@ -996,13 +1058,13 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
       treadLine: (mm) => lineS(tRun - tAt(mm), sB, 1),
       labelPt:   (mm) => f.pt(tRun - tAt(mm), 1 - NUM_OUT), // 外側 s=1 寄せ
     }, { detail });
-    if (ports.arrival !== 'end') emitPortTurn(out, f, layout, 'B', turnStepsA, totalSteps + turnStepsE, sB, { detail }); // 取りつき回転部
+    if (ports.arrival !== 'end') emitPortTurn(out, f, layout, 'B', turnStepsA, totalSteps + turnStepsE, sB, 0.5, { detail }); // 取りつき回転部
   }
 
   const lanes = uTurnLaneOutline(c, layout, sA, sB, halfGap, ports);
   const outline = [
     ...lanes.head,                                   // base側（往路出発・復路到達）と各レーン外側
-    { ...seg(c(tRun, 0), c(1, 0)), side: true },     // 回り部側面A
+    { ...seg(c(tRunA, 0), c(1, 0)), side: true },    // 回り部側面A
     { ...seg(c(1, 0), c(1, 1)), side: true },        // 回り部奥
     { ...seg(c(1, 1), c(tRun, 1)), side: true },     // 回り部側面B
     ...lanes.tail,                                   // 中央仕切り
@@ -1485,7 +1547,8 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0, col
  */
 export function buildStairGeometry(stair, b, rawOpts) {
   // 各 build* へは確定したあき(mm)を laneGapMm として渡す（内部用。呼び出し側の入力は laneGap:boolean）。
-  const opts = { ...rawOpts, laneGapMm: laneGapMmFor(stair, rawOpts.graph ?? null, { simplified: !rawOpts.laneGap }) };
+  const laneGapMm = laneGapMmFor(stair, rawOpts.graph ?? null, { simplified: !rawOpts.laneGap });
+  const opts = { ...rawOpts, laneGapMm, partition: partitionFrameFor(stair, rawOpts.graph ?? null, laneGapMm) };
   // insetView … 設置枠の逃がし規則だけ別ビューのものを使う（既定は view と同じ）。
   // install の破れ線から先を upper ジオメトリで描き足すとき、登り口辺の逃がしが view で
   // 食い違うと実線（install）と点線（描き足し）が同一辺上で段差になるため、そこだけ揃える。
@@ -1681,7 +1744,7 @@ export function resolveStairSideLines(stair, graph, geom, opts = {}) {
 // 返り値: [ [worldPointA, worldPointB, label, sectionsIndex|null], ... ]。sectionsIndex は
 // stair.sections の対応インデックス（＝図中編集の対象。null は固定値・読取専用＝平踊場）。
 // ラベル・編集値は踏面数（マス数）で表す（段数はたずねない）。
-function segmentSpans(stair, b, spans) {
+function segmentSpans(stair, b, spans, partition = null) {
   const { parts } = stairParts(getSections(stair));
   const tread = stair.tread;
   switch (stair.type) {
@@ -1720,15 +1783,15 @@ function segmentSpans(stair, b, spans) {
     case StairType.WINDING: {
       const f = makeFrame(stair, b);
       const [runA, turn, runB] = parts;
-      const { tRun, tBaseA, tBaseB, tStartA, tStartB, ports } = uTurnLayout(stair, f, b, runA, runB, tread, spans);
+      const { tRun, tRunA, tBaseA, tBaseB, tStartA, tStartB, ports } = uTurnLayout(stair, f, b, runA, runB, tread, spans, partition);
       // 回転部は「段数 R」（取りつきの往路・復路各1段を除く回転部固有の蹴上数＝マス数−1）でたずねる。
       // R=0（平踊り場）↔ SWITCHBACK、R>0 ↔ WINDING。両タイプとも編集可（stairSectionEdit.js が型を導出）。
       // 側面の出入口に取りつく回転部（張り出し区間）は蹴上数そのもの（フィールド名を index に持たせる）。
       const turnSteps = turn.cells - 1;
       return [
         ...(ports.entry !== 'end' ? [[f.pt(tBaseA, 0), f.pt(tStartA, 0), `取付 段数${stair.entryTurnSteps ?? 0}`, 'entryTurnSteps']] : []),
-        [f.pt(tStartA, 0), f.pt(tRun, 0), `往路 踏面${runA.cells}`, 0],
-        [f.pt(tRun, 0),    f.pt(1, 0),    turnSteps > 0 ? `回り 段数${turnSteps}` : '踊り場 段数0', 1],
+        [f.pt(tStartA, 0), f.pt(tRunA, 0), `往路 踏面${runA.cells}`, 0],
+        [f.pt(tRunA, 0),   f.pt(1, 0),    turnSteps > 0 ? `回り 段数${turnSteps}` : '踊り場 段数0', 1],
         [f.pt(tStartB, 1), f.pt(tRun, 1), `復路 踏面${runB.cells}`, 2],
         ...(ports.arrival !== 'end' ? [[f.pt(tBaseB, 1), f.pt(tStartB, 1), `取付 段数${stair.arrivalTurnSteps ?? 0}`, 'arrivalTurnSteps']] : []),
       ];
@@ -1776,9 +1839,11 @@ function segmentSpans(stair, b, spans) {
  * プリミティブ（AutoScaledFigure 形式）を返す。g は外側への張り出し量(mm)。
  * sections のインデックスを持つ区間は editable（図中クリックで踏面数を編集）にする。
  * spans はセル実測の区間長（measureStairSpans。null なら合成）。
+ * graph は隔て壁の柱に合わせた区間（uTurnLayout の partition）を図と同じに求めるために使う（省略・隔て壁なしは従来どおり）。
  */
-export function stairSegmentDims(stair, b, g, spans) {
-  const segs = segmentSpans(stair, b, spans);
+export function stairSegmentDims(stair, b, g, spans, graph = null) {
+  const partition = graph ? partitionFrameFor(stair, graph, laneGapMmFor(stair, graph)) : null;
+  const segs = segmentSpans(stair, b, spans, partition);
   if (segs.length === 0) return [];
   const cx = (b.x1 + b.x2) / 2, cy = (b.y1 + b.y2) / 2;
   const OUT = g * 2; // 全長寸法（g）のさらに外側へ寸法鎖を並べる
