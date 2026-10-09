@@ -1,7 +1,7 @@
 {
  "1階": {
   "install|5460,-7280,7280,-4550|winding|15": [
-   "{\"role\":\"arrow\",\"points\":[6370,-5077.5,6817.5,-5077.5,6817.5,-6825,5922.5,-6825,5922.5,-6184.136],\"width\":null,\"dash\":null,\"cls\":\"label=U@6220,-5077.5\"}",
+   "{\"role\":\"arrow\",\"points\":[6312.5,-5077.5,6817.5,-5077.5,6817.5,-6825,5922.5,-6825,5922.5,-6184.136],\"width\":null,\"dash\":null,\"cls\":\"label=U@6162.5,-5077.5\"}",
    "{\"role\":\"beyond\",\"points\":[6312.5,-5532.5,6312.5,-5958.969],\"width\":26.4583,\"dash\":[105.833,52.917],\"cls\":\"\"}",
    "{\"role\":\"beyond\",\"points\":[6370,-5532.5,5532.5,-5532.5],\"width\":13.2292,\"dash\":[105.833,52.917],\"cls\":\"\"}",
    "{\"role\":\"break\",\"points\":[5301.795,-6542.5,5844.558,-6229.136],\"width\":null,\"dash\":null,\"cls\":\"\"}",
@@ -19,8 +19,8 @@
    "{\"role\":\"number\",\"points\":[6956.25,-6271.875],\"width\":null,\"dash\":null,\"cls\":\"text=4\"}",
    "{\"role\":\"number\",\"points\":[6956.25,-6499.375],\"width\":null,\"dash\":null,\"cls\":\"text=5\"}",
    "{\"role\":\"number\",\"points\":[6973.5,-6844.125],\"width\":null,\"dash\":null,\"cls\":\"text=6\"}",
+   "{\"role\":\"outline\",\"points\":[6312.5,-4622.5,6312.5,-5532.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:entry\"}",
    "{\"role\":\"outline\",\"points\":[6312.5,-5958.969,6312.5,-6442.5],\"width\":26.4583,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"outline\",\"points\":[6370,-4622.5,6370,-5532.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:entry\"}",
    "{\"role\":\"outline\",\"points\":[6427.5,-5525.885,6427.5,-6442.5],\"width\":26.4583,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"tread\",\"points\":[6312.5,-6215,5869.042,-6215],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"tread\",\"points\":[6312.5,-6442.5,5532.5,-6442.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
@@ -39,7 +39,7 @@
  },
  "2階": {
   "upper|5460,-7280,7280,-4550|winding|15": [
-   "{\"role\":\"arrow\",\"points\":[5922.5,-5532.5,5922.5,-6825,6817.5,-6825,6817.5,-5077.5,6370,-5077.5],\"width\":null,\"dash\":null,\"cls\":\"label=D@5922.5,-5382.5\"}",
+   "{\"role\":\"arrow\",\"points\":[5922.5,-5532.5,5922.5,-6825,6817.5,-6825,6817.5,-5077.5,6312.5,-5077.5],\"width\":null,\"dash\":null,\"cls\":\"label=D@5922.5,-5382.5\"}",
    "{\"role\":\"number\",\"points\":[5783.75,-5475.625],\"width\":null,\"dash\":null,\"cls\":\"text=15\"}",
    "{\"role\":\"number\",\"points\":[5783.75,-5703.125],\"width\":null,\"dash\":null,\"cls\":\"text=14\"}",
    "{\"role\":\"number\",\"points\":[5783.75,-5930.625],\"width\":null,\"dash\":null,\"cls\":\"text=13\"}",
@@ -55,8 +55,8 @@
    "{\"role\":\"number\",\"points\":[6956.25,-6271.875],\"width\":null,\"dash\":null,\"cls\":\"text=4\"}",
    "{\"role\":\"number\",\"points\":[6956.25,-6499.375],\"width\":null,\"dash\":null,\"cls\":\"text=5\"}",
    "{\"role\":\"number\",\"points\":[6973.5,-6844.125],\"width\":null,\"dash\":null,\"cls\":\"text=6\"}",
+   "{\"role\":\"outline\",\"points\":[6312.5,-4622.5,6312.5,-5532.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:entry\"}",
    "{\"role\":\"outline\",\"points\":[6312.5,-5532.5,6312.5,-6442.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"outline\",\"points\":[6370,-4622.5,6370,-5532.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:entry\"}",
    "{\"role\":\"outline\",\"points\":[6370,-5532.5,5532.5,-5532.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:arrival\"}",
    "{\"role\":\"outline\",\"points\":[6427.5,-5532.5,6427.5,-6442.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"tread\",\"points\":[6312.5,-5760,5532.5,-5760],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",

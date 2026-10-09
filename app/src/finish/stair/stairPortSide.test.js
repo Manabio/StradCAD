@@ -4,9 +4,9 @@
 // フィクスチャは 2列×3行のセル格子（y下向き正）:  d c / a b / e f
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StairPortSide } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StairPortSide, StructuralMaterialType } from '@core';
 import { classifyStairArea, measureStairSpans } from './stairClassify.js';
-import { stairPortEdges, buildStairGeometry, insetStairBounds, resolveUTurnPorts, stairSegmentDims, cellsBeyondBreak } from './stairGeometry.js';
+import { stairPortEdges, buildStairGeometry, laneGapMmFor, insetStairBounds, resolveUTurnPorts, stairSegmentDims, cellsBeyondBreak } from './stairGeometry.js';
 import { portSideChange, resetPortSides, alignPortTurnSteps } from './stairSectionEdit.js';
 import { roomBounds } from '../gridCells.js';
 import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
@@ -55,6 +55,72 @@ test('往路が長い f,b,c,d,a: 上り口の既定は内側＝f の左辺（e �
   // f の下辺（走行端）は出入口ではなく側面線になる
   const bottom = geom(stair, graph, 'upper').outline.find(s => Math.abs(s.y1 - s.y2) < 1e-9 && Math.abs(s.y1 - 3000) < 60);
   assert.ok(bottom && bottom.side && !bottom.port, JSON.stringify(bottom));
+});
+
+// 内側の出入口辺と矢印の始点は、通り芯(0.5)ではなく隔て板（あき）の帯の向こう側の面（1段目の段板を隔て板側の柱で支える。2026-10-09 ユーザー指摘 moku1-6）
+const gapGeom = (stair, graph, view) => buildStairGeometry(stair, roomBounds(stair.cells, graph), {
+  view, detail: true, riser: 200, spans: measureStairSpans(stair, graph), laneGap: true, graph,
+});
+const portSegs = (g, port) => g.outline.filter(s => s.port === port);
+
+test('あきがあるとき内側の上り口は、辺も矢印の始点（U の丸）も帯の向こう側の面（在来＋隔て壁 115 → 中心から 57.5、鉄骨 100 → 50）', () => {
+  for (const [label, setup, half] of [
+    ['在来＋隔て壁', (graph, stair) => { graph.setStructureOverride('木造（在来）'); stair.structure = StructuralMaterialType.WOOD; }, 57.5],
+    ['鉄骨', (graph, stair) => { stair.structure = StructuralMaterialType.STEEL; }, 50],
+  ]) {
+    const { graph, c } = layout();
+    const stair = addByOrder(graph, c, ['f', 'b', 'c', 'd', 'a']);
+    setup(graph, stair);
+    assert.equal(laneGapMmFor(stair, graph), half * 2, label);
+    const g = gapGeom(stair, graph, 'install');
+    const segs = portSegs(g, 'entry');
+    assert.ok(segs.length > 0, label);
+    for (const s of segs) {
+      assert.ok(Math.abs(s.x1 - (1000 - half)) < 1e-6 && Math.abs(s.x2 - (1000 - half)) < 1e-6, `${label}: 上り口の辺は帯の向こう側の面 x=${1000 - half}: ${JSON.stringify(s)}`);
+    }
+    assert.ok(Math.abs(g.arrows[0].x1 - (1000 - half)) < 1e-6, `${label}: 矢印の始点 ${g.arrows[0].x1}`);
+    assert.ok(g.arrows[0].labelX < g.arrows[0].x1, `${label}: ラベルは辺の外側（西）`);
+  }
+});
+
+test('折返し階段（SWITCHBACK）でも、あきがあると内側の上り口の辺と U の丸は帯の向こう側の面（sB）。buildSwitchback のアンカーを守る', () => {
+  // 全幅の踊り場 cd（SWITCHBACK）＋往路 b,bf（bf が往路だけの張り出し）＋復路 a。上り口は bf の左辺（内側）
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const V = (v) => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const H = (v) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = V(0), x1 = V(1000), x2 = V(2000), y0 = H(0), y1 = H(1000), y2 = H(2000), y3 = H(3000);
+  const k = (l, t, r, b) => `${l.id}:${t.id}:${r.id}:${b.id}`;
+  const c = { cd: k(x0, y0, x2, y1), a: k(x0, y1, x1, y2), b: k(x1, y1, x2, y2), bf: k(x1, y2, x2, y3) };
+  const stair = addByOrder(graph, c, ['bf', 'b', 'cd', 'a']);
+  graph.setStructureOverride('木造（在来）');
+  stair.structure = StructuralMaterialType.WOOD;
+  assert.equal(stair.type, StairType.SWITCHBACK);
+  assert.equal(laneGapMmFor(stair, graph), 115);
+  const g = gapGeom(stair, graph, 'install');
+  const segs = portSegs(g, 'entry');
+  assert.ok(segs.length > 0, JSON.stringify(g.outline));
+  for (const s of segs) assert.ok(Math.abs(s.x1 - 942.5) < 1e-6 && Math.abs(s.x2 - 942.5) < 1e-6, JSON.stringify(s));
+  assert.ok(Math.abs(g.arrows[0].x1 - 942.5) < 1e-6, `${g.arrows[0].x1}`);
+});
+
+test('あきがあるとき内側の到達口の辺と下り矢印の始点は復路レーンの内側端（sB）', () => {
+  const { graph, c } = layout();
+  const stair = addByOrder(graph, c, ['b', 'c', 'd', 'a', 'e']);
+  graph.setStructureOverride('木造（在来）');
+  stair.structure = StructuralMaterialType.WOOD;
+  const g = gapGeom(stair, graph, 'upper');
+  const segs = portSegs(g, 'arrival');
+  assert.ok(segs.length > 0);
+  for (const s of segs) assert.ok(Math.abs(s.x1 - 942.5) < 1e-6 && Math.abs(s.x2 - 942.5) < 1e-6, JSON.stringify(s));
+  assert.ok(Math.abs(g.arrows[0].x1 - 942.5) < 1e-6, `${g.arrows[0].x1}`);
+});
+
+test('【失敗系】あき 0（簡略）なら内側の出入口辺・矢印の始点は従来どおり通り芯 x=1000', () => {
+  const { graph, c } = layout();
+  const stair = addByOrder(graph, c, ['f', 'b', 'c', 'd', 'a']);
+  const g = geom(stair, graph, 'install');
+  for (const s of portSegs(g, 'entry')) assert.equal(s.x1, 1000);
+  assert.equal(g.arrows[0].x1, 1000);
 });
 
 test('上り口を「走行端」「右（上りから見て）」へ切り替えると出入口辺が f の下辺（i 側）／右辺へ移る。左は既定（内側）と同じ辺', () => {

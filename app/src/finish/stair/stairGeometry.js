@@ -764,8 +764,9 @@ function uTurnLaneOutline(c, { tRun, tBaseA, tBaseB, tExitA, tExitB, entryFull }
   // 張り出し区間の内側（通り芯 s=0.5）: 出入口が内側ならそこが出入口、でなければ階段の外周
   //（全幅の取りつきでは内部＝線なし）
   if (entryFull) { /* 取りつきが全幅: s=0.5 は内部 */ }
-  else if (tBaseA < tBaseB - 1e-9) head.push(portOr(seg(c(tBaseA, 0.5), c(tBaseB, 0.5)), ports.entry === 'inner', 'entry'));    // 往路が長い
-  else if (tBaseB < tBaseA - 1e-9) head.push(portOr(seg(c(tBaseB, 0.5), c(tBaseA, 0.5)), ports.arrival === 'inner', 'arrival')); // 復路が長い
+  // あき時は帯の向こう側の面 sB が上り口・到達口とも辺（1段目の段板を隔て板側の柱で支える）。あき0では 0.5。
+  else if (tBaseA < tBaseB - 1e-9) head.push(portOr(seg(c(tBaseA, sB), c(tBaseB, sB)), ports.entry === 'inner', 'entry'));    // 往路が長い
+  else if (tBaseB < tBaseA - 1e-9) head.push(portOr(seg(c(tBaseB, sB), c(tBaseA, sB)), ports.arrival === 'inner', 'arrival')); // 復路が長い
   const tail = [
     seg(c(tPart, sA), c(tRun, sA)),  // 中央仕切り（往路内側。あき時は2本になる）
     ...(halfGap > 0 ? [seg(c(tPart, sB), c(tRun, sB))] : []), // 復路内側（あき時のみ）
@@ -776,11 +777,12 @@ function uTurnLaneOutline(c, { tRun, tBaseA, tBaseB, tExitA, tExitB, entryFull }
 // U字系の出入口のアンカー。lead = 矢印が出入口の辺からレーン中心へ入る折れ線（end なら基端の1点）、
 // clip = 到達番号のクリップ点（辺上）、outside(mm) = 辺の外側 mm の点（到達番号の置き場）。
 // 側面の出入口は張り出し区間 [tBase, tBaseOther] の中点に置く。
-function uTurnPortAnchor(f, { tBaseA, tBaseB, tExitA, tExitB, entryFull }, side, lane, cLane, acrossLen) {
+// sLaneInner = 内側の出入口辺の s。隔て板（あき）の帯の向こう側の面＝上り口も到達口も sB（1段目の段板を隔て板側の柱で支える）。あき0なら 0.5。
+function uTurnPortAnchor(f, { tBaseA, tBaseB, tExitA, tExitB, entryFull }, side, lane, cLane, acrossLen, sLaneInner = 0.5) {
   const tBase = lane === 'A' ? tBaseA : tBaseB, tExit = lane === 'A' ? tExitA : tExitB;
   if (side === 'end') return { lead: [f.pt(tBase, cLane)], clip: null, outside: null };
   const tP = (tBase + tExit) / 2;
-  const sInner = lane === 'A' && entryFull ? 1 : 0.5; // 全幅の取りつきなら「内側」＝相手レーンの外側の辺
+  const sInner = lane === 'A' && entryFull ? 1 : sLaneInner; // 全幅の取りつきなら「内側」＝相手レーンの外側の辺
   const sEdge = side === 'inner' ? sInner : (lane === 'A' ? 0 : 1);
   const sOut  = side === 'inner' ? (lane === 'A' ? 1 : -1) : (lane === 'A' ? -1 : 1); // 辺の外側へ向かう s の符号
   return {
@@ -883,8 +885,8 @@ function buildSwitchback(stair, b, { view, detail, spans, laneGapMm = 0, breakOv
   // 突き当たるまで。upper(D)はいちばん大きい踏面番号側（復路基部＝かみがた）を始点に、
   // 番号の小さい方（往路基部）へ向かう。
   // 出入口が側面（張り出し区間の内側／外側）なら、矢印は辺の中点から横向きに入って（出て）レーン中心へ折れる。
-  const anchorA = uTurnPortAnchor(f, layout, ports.entry, 'A', cA, acrossLen);
-  const anchorB = uTurnPortAnchor(f, layout, ports.arrival, 'B', cB, acrossLen);
+  const anchorA = uTurnPortAnchor(f, layout, ports.entry, 'A', cA, acrossLen, sB);
+  const anchorB = uTurnPortAnchor(f, layout, ports.arrival, 'B', cB, acrossLen, sB);
   const arrows = [isInstall
     ? uTurnArrow([...anchorA.lead, f.pt(tMid, cA), f.pt(tMid, cB), breakDiag.atPoint(f.pt(tRun, cB))], 'U')
     : uTurnArrow([...anchorB.lead, f.pt(tMid, cB), f.pt(tMid, cA), ...anchorA.lead.slice().reverse()], 'D')];
@@ -999,8 +1001,8 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, breakOverh
   // U字矢印: 折り返し階段と同じ（破れ線の対角に突き当たるまで延長）。
   const tMid = (tRun + 1) / 2;
   // 出入口が側面（張り出し区間の内側／外側）なら、矢印は辺の中点から横向きに入って（出て）レーン中心へ折れる。
-  const anchorA = uTurnPortAnchor(f, layout, ports.entry, 'A', cA, acrossLen);
-  const anchorB = uTurnPortAnchor(f, layout, ports.arrival, 'B', cB, acrossLen);
+  const anchorA = uTurnPortAnchor(f, layout, ports.entry, 'A', cA, acrossLen, sB);
+  const anchorB = uTurnPortAnchor(f, layout, ports.arrival, 'B', cB, acrossLen, sB);
   const arrows = [isInstall
     ? uTurnArrow([...anchorA.lead, f.pt(tMid, cA), f.pt(tMid, cB), breakDiag.atPoint(f.pt(tRun, cB))], 'U')
     : uTurnArrow([...anchorB.lead, f.pt(tMid, cB), f.pt(tMid, cA), ...anchorA.lead.slice().reverse()], 'D')];
