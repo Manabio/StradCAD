@@ -300,7 +300,7 @@ test('stairContribution: 隔て壁が立たない（鉄骨）なら踊り場は 
   assert.equal(c.frame.frontA, c.frame.front);
 });
 
-test('stairContribution(WINDING): 往路側の短冊は frontA から、復路側の短冊は front から奥へ並ぶ（隔て板の柱あり）', () => {
+test('stairContribution(WINDING): 往路側のセルは frontA、復路側のセルは front に前縁がある（隔て板の柱あり）', () => {
   const { graph, stair } = equalFixture(StairType.WINDING, 'up', false);
   addPartitionWalls(graph);
   const c = stairContribution(stair, graph, FLOOR_HEIGHT);
@@ -319,7 +319,7 @@ test('stairContribution(WINDING): 往路側の短冊は frontA から、復路�
   }
 });
 
-test('stairContribution(WINDING・奇数の回り段 3・5 ＋柱): 復路レーンを縦断すると短冊の縁ごとに蹴上が出る（本数＝復路側の短冊数−1・位置＝front から奥への等分）', () => {
+test('stairContribution(WINDING・奇数の回り段 3・5 ＋柱): 各レーンを縦断するとセルの縁ごとに蹴上が出る（本数＝通るセル数−1）', () => {
   for (const w of [3, 5]) {
     const { graph, stair } = equalFixture(StairType.WINDING, 'up', false);
     stair.setField('sections', [6, w, 6]);
@@ -542,7 +542,7 @@ test('seq1 の切断位置を frontA±1e-3 ずらしても stairPrimitivesForCut
     assert.deepEqual(render(1e-3), base, `${name}: +1e-3`);
     assert.deepEqual(render(-1e-3), base, `${name}: -1e-3`);
   }
-  // WINDING（短冊の前縁が frontA）でも同じ
+  // WINDING（回転部の最初のセルの前縁が frontA）でも同じ
   const w = equalFixture(StairType.WINDING, 'up', false);
   addPartitionWalls(w.graph);
   const cw = stairContribution(w.stair, w.graph, FLOOR_HEIGHT);

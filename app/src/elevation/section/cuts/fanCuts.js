@@ -6,8 +6,8 @@
  * 表現できないため、今回のWP-E6スコープでは対応しない。呼び出し側（elevationStairSequence.js）
  * はnullを受けて既存のcomposeRoomFaces+rotateFacesToStartフォールバック経路（手書きの2層枠）を
  * そのまま使う。
- * WINDING（回り階段）は2026-10-09に対象から外した——回転部を段付きの踊り場（短冊の列。
- * section/windingTurnSteps.js）に近似して switchbackCuts の経路へ通す（ユーザー裁定案A）。
+ * WINDING（回り階段）は2026-10-09に対象から外した——回転部を段付きの踊り場（平面の段の多角形を
+ * 切断線で切った Landing。section/turnCellSlices.js）にして switchbackCuts の経路へ通す（ユーザー裁定案A）。
  * @module
  */
 import { StairType } from '@core';

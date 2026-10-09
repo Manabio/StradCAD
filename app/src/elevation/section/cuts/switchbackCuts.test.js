@@ -498,7 +498,7 @@ test('【失敗系・S2a QA】switchbackCuts: 踊り場が壁の面より浅く�
   assert.equal(ib.runLo, back, '復路の始点は揃えた前縁（奥）');
 });
 
-test('【失敗系・S2a QA L2】switchbackCuts(WINDING): 浅い踊り場で前縁を奥に揃えても、復路側の短冊は奥の壁の面を越えず（奥行き0）、cuts は組める', () => {
+test('【失敗系・S2a QA L2】switchbackCuts(WINDING): 浅い踊り場で前縁を奥に揃えても、復路は奥の壁の面を越えず、cuts は組める', () => {
   const { t, stair, graph } = cutsWithLandingDepth(100, { wood: true, winding: true });
   const { back } = t.contribution.frame;
   const raw = uTurnPlanLayout(stair, graph).run;

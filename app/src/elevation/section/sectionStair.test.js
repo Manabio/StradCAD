@@ -1593,7 +1593,7 @@ test('【失敗系・実機指摘2026-09-14】flightNoseZAt: lengthMm未定義�
   assert.equal(flightNoseZAt(f, 1200), 600, '中央＝踏面ピッチ(600)×2ぶん進んだ段鼻');
 });
 
-// ==== 回り階段（WINDING）: 回転部を段付きの踊り場（短冊の列）として扱う（ユーザー裁定2026-10-09 案A）====
+// ==== 回り階段（WINDING）: 回転部を段付きの踊り場（平面の段の多角形を切断線で切ったもの）として扱う（ユーザー裁定2026-10-09 案A）====
 // フィクスチャは折返しと同じ構成（回転部 y:0-1500・往路 x:0-1000・復路 x:1000-2000・y:1500-4500）で、
 // 型と sections だけ [5,6,5]（総蹴上15・階高2400で蹴上160）へ差し替える。
 const WINDING_RISER = FLOOR_HEIGHT / 15;
@@ -1664,7 +1664,7 @@ test('【回帰・2026-10-09】stairContribution(SWITCHBACK): 踊り場は1枚�
   assert.equal(c.flights[1].baseZ, c.landings[0].z);
 });
 
-test('【失敗系・2026-10-09】stairContribution(WINDING): 回転部のマス数が整数でなければ短冊が作れずnull（例外なし）', () => {
+test('【失敗系・2026-10-09】stairContribution(WINDING): 回転部のマス数が整数でなければ回転部が作れずnull（例外なし）', () => {
   const graph = makeGraph();
   const { stair } = makeWindingFixture(graph, [5, 2.5, 5]);
   assert.equal(stairContribution(stair, graph, FLOOR_HEIGHT), null);
@@ -1676,7 +1676,7 @@ function cutAt(seqNo, line) {
 const riserLine = (cut, x, zA, zB) => ({ x: Math.round(x), zA: Math.round(zA), zB: Math.round(zB) });
 const riserOf = (cut, p) => riserLine(cut, p.x1, -p.y1, -p.y2);
 
-test('【2026-10-09】landingStepRisers: 回転部を縦断する切断は短冊の走行方向の共有辺ごとにCUTの縦線（w=6の往路側半幅で2本）', () => {
+test('【2026-10-09】landingStepRisers: 回転部を縦断する切断はセルの走行方向の共有辺ごとにCUTの縦線（w=6の往路側半幅で2本）', () => {
   const graph = makeGraph();
   const { stair } = makeWindingFixture(graph);
   const c = stairContribution(stair, graph, FLOOR_HEIGHT);
@@ -1712,14 +1712,14 @@ test('【回帰・2026-10-09】landingStepRisers: 折返しの踊り場（1枚�
   assert.deepEqual(landingStepRisers(c.landings, true, cutAt('1', { isVertical: false, axisValue: 1500, lo: 0, hi: 2000 })), []);
 });
 
-test('【失敗系・2026-10-09】landingStepRisers: 同じ高さ・縁を共有しない・切断にかからない短冊の組は引かない', () => {
+test('【失敗系・2026-10-09】landingStepRisers: 同じ高さ・縁を共有しない・切断にかからない踊り場の組は引かない', () => {
   const a = { runLo: 0, runHi: 500, acrossLo: 0, acrossHi: 1000, z: 800, isVertical: true };
   const cut = cutAt('2', { isVertical: true, axisValue: 500, lo: 0, hi: 4500 });
   const at = (extra) => landingStepRisers([a, { ...a, runLo: 500, runHi: 1000, ...extra }], true, cut);
   assert.equal(at({ z: 960 }).length, 1, '前提: 隣り合って高さが違えば引く');
   assert.deepEqual(at({ z: 800 }), [], '同じ高さは引かない');
   assert.deepEqual(at({ z: 960, runLo: 600, runHi: 1100 }), [], '縁を共有しない（隙間がある）');
-  assert.deepEqual(at({ z: 960, acrossLo: 1200, acrossHi: 2000 }), [], '切断が縦断しない幅の短冊は組にしない');
+  assert.deepEqual(at({ z: 960, acrossLo: 1200, acrossHi: 2000 }), [], '切断が縦断しない幅の踊り場は組にしない');
   assert.deepEqual(landingStepRisers(undefined, true, cut), []);
   assert.deepEqual(landingStepRisers([], true, cut), []);
 });
@@ -1735,7 +1735,7 @@ test('【2026-10-09】stairPrimitivesForCut/stairCutFloorProfile(WINDING): 回�
   const columns = [{ x0: 0, x1: 4500, worldLo: 0, worldHi: 4500, bands: [] }];
   const prims = stairPrimitivesForCut(landingOnly, cut, columns, { includeLadder: false });
   const horizontals = prims.filter(p => p.type === 'line' && p.y1 === p.y2).map(p => Math.round(-p.y1)).sort((a, b) => a - b);
-  assert.deepEqual(horizontals, [5, 6, 7].map(k => Math.round(k * WINDING_RISER)), '往路側の短冊3枚ぶんの床線');
+  assert.deepEqual(horizontals, [5, 6, 7].map(k => Math.round(k * WINDING_RISER)), '往路側のセル3枚ぶんの床線');
   assert.equal(prims.filter(p => p.type === 'line' && p.x1 === p.x2).length, 2, '蹴上の縦線2本');
   const profile = stairCutFloorProfile(c, cut);
   const zs = profile.map(([, z]) => z);
@@ -1818,7 +1818,7 @@ test('【2026-10-09】flightNoseZAt: 区画の中と直進部で別ピッチ（�
   assert.ok(Math.abs(at(3000) - 7 * SIDE_RISER) < 1e-9, '終端＝回転部の1段目の高さ');
 });
 
-test('【2026-10-09】stairContribution(WINDING): 側面の上り口の取りつき1段で回転部の最初の短冊は (n1+1)×蹴上、復路baseZ・終端が一貫する', () => {
+test('【2026-10-09】stairContribution(WINDING): 側面の上り口の取りつき1段で回転部の最初のセルは (n1+1)×蹴上、復路baseZ・終端が一貫する', () => {
   const graph = makeGraph();
   const { stair } = makeSideEntryFixture(graph, { type: StairType.WINDING, sections: [5, 6, 5] });
   assert.equal(stair.totalSteps, 5 + 6 + 5 - 1 + 1);

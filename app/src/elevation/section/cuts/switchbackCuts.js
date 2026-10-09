@@ -279,7 +279,7 @@ export function buildMidWallFace(wall, inward, loWorld, hiWorld, faces, hasRealW
 
 /**
  * U字系（SWITCHBACK/WINDING）階段の切断定義表（§6.1）を組み立てる。WINDING は回転部を段付きの
- * 踊り場（stairContribution の短冊）として同じ表に通す（seq3 の前縁+LANDING_CUT_INSET_MM も共通）。
+ * 踊り場（stairContribution の turnCells を切断線で切ったもの）として同じ表に通す（seq3 の前縁+LANDING_CUT_INSET_MM も共通）。
  * U字系以外・stair.cellsが空・floorHeight未確定・面分類が解決できない・階段寄与が求まらない場合は
  * null（elevationStairSequence.jsのフォールバック契約と同じ）。
  *
