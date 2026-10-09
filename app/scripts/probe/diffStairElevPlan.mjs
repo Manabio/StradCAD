@@ -17,7 +17,8 @@
 //   階段由来の蹴上を取る。階段の polyline（木造=SILHOUETTE のジグザグ・鉄骨=CUT のジグザグ）の縦線＋回り段の
 //   landingStepRisers（content に実在するもののみ）。隔て板・柱・壁の縦線・鉄骨ささらの DETAIL 輪郭は数えない。
 //   面ローカル x → 世界は cutOriginWorld + x*dirSign（sectionTypes.js worldOf）。
-// 平面側: buildStairGeometry(view:'upper', insetView:'install', detail, laneGap) の treads（放射線・直線とも線分）と、
+// 平面側: buildStairGeometry(view:'upper', insetView:'install', detail:false, laneGap) の treads（放射線・直線とも線分）と、
+//   detail:false＝段のセル境界（stairTreadFootprints と同じ）。直進系の詳細 LOD の ±nosing（20mm）のずれは照合しない（裁定待ち）。
 //   階段の基端・終端の辺（outline のうち走行方向に直交する外周）を切断線で切った交点。
 // 切断面の種別: 縦断（切断線が階段の走行軸に平行＝蹴上の縦線が出る）／横断（梯子の水平線だけ＝縦線なし。未検査）。
 // 判定: OK／NG／「—（未検査）」。未検査＝横断・階段なし、または面端を除いて展開図・平面とも蹴上が 0 本の縦断。
@@ -36,7 +37,7 @@ import { stairBandWallFilter, switchbackCuts } from '../../src/elevation/section
 import { straightCuts } from '../../src/elevation/section/cuts/straightCuts.js';
 import { stairFaceSequence } from '../../src/elevation/elevationStairSequence.js';
 import { buildBandLayers } from '../../src/elevation/section/sectionBandLayers.js';
-import { stairPortEdges, buildStairGeometry, uTurnPlanLayout } from '../../src/finish/stair/stairGeometry.js';
+import { stairPortEdges, buildStairGeometry, uTurnPlanLayout, straightPlanLayout } from '../../src/finish/stair/stairGeometry.js';
 import { measureStairSpans } from '../../src/finish/stair/stairClassify.js';
 import { floorHeightAbove } from '../../src/finish/stair/stairDimensions.js';
 import { roomCeilingHeight } from '../../src/finish/roomMetrics.js';
@@ -169,7 +170,9 @@ const WEIGHT_ZIGZAG = new Set([weightForRole(ElevationLineRole.SILHOUETTE), weig
 // 階段由来の蹴上: ジグザグの polyline（content の polyline は階段のものだけ）の段鼻＋content に実在する回り段の蹴上線
 function stairRiserLocalXs(content, cut, stair, edgeXs) {
   const zigzag = content.filter(p => p.type === 'polyline' && WEIGHT_ZIGZAG.has(p.weight));
-  const xs = noseLocalXs(zigzag, { nosingMm: stair.nosing ?? 0, edgeXs });
+  // 蹴込は flight が持つ値（U 字系は stair.nosing・直進系は 0＝垂直の蹴上）。stair.nosing を直接使うと直進系の最終段を誤補正する
+  const nosingMm = Math.max(0, ...(cut.stairCut?.flights ?? []).map(f => f.nosingMm ?? 0));
+  const xs = noseLocalXs(zigzag, { nosingMm, edgeXs });
   const contribution = cut.stairCut ? withCutLandings(cut.stairCut, cut) : null;
   if (contribution) {
     const turnRisers = landingStepRisers(contribution.landings, stairAxisIsVertical(contribution, cut), cut);
@@ -182,8 +185,11 @@ function stairRiserLocalXs(content, cut, stair, edgeXs) {
 function planGeometry(stair, graph, project) {
   const floorHeight = floorHeightAbove(project, graph.plane);
   const riser = stair.riser ?? (floorHeight / Math.max(1, stair.totalSteps));
+  // detail:false＝段のセルの境界（stairTreadFootprints・straightPlanLayout と同じ位置）。直進系の平面は詳細 LOD（detail:true）で踏面線を
+  // ±nosing ずらして描く（buildStraight の nosingMm。U 字系は無し）ので、detail:true だと直進系の蹴上が一律に蹴込ぶんずれて見える。
+  // 展開図はセルの境界に揃える（ずらし分は平面側の描画規約で、本 probe の対象外）
   return buildStairGeometry(stair, roomBounds(stair.cells, graph), {
-    view: 'upper', insetView: 'install', detail: true, riser, spans: measureStairSpans(stair, graph), laneGap: true, graph,
+    view: 'upper', insetView: 'install', detail: false, riser, spans: measureStairSpans(stair, graph), laneGap: true, graph,
   });
 }
 
@@ -191,8 +197,17 @@ function planGeometry(stair, graph, project) {
 // 蹴上の辺として数える（外周には踊り場の奥壁など蹴上でない辺も含まれるため）。
 //   U 字系: uTurnPlanLayout の baseA（走行端の上り口か取りつき段ありのとき最初の蹴上の辺）と startB（最後の蹴上の辺）
 //     — stairPlanAlign.test.js の planOut/planIn と同じ定義。
-//   直進系: stairPortEdges の entry・arrival の辺。
+//   直進系: straightPlanLayout の exitA（最後の直進部の終端＝最後の蹴上の辺）・base（走行端の上り口か取りつき段ありのとき最初の蹴上の辺）・
+//     end（到達口の区画に段があるとき、区画の外縁の上階の床との蹴上）。
 function boundaryRunValues(stair, graph) {
+  if (stair.type === StairType.STRAIGHT || stair.type === StairType.STRAIGHT_LANDING) {
+    const p = straightPlanLayout(stair, graph);
+    if (!p) return [];
+    const vals = [p.run.exitA];
+    if (p.entryPort === 'end' || p.entryTurnSteps >= 1) vals.push(p.run.base);
+    if (p.arrivalPort !== 'end' && p.arrivalTurnSteps >= 1) vals.push(p.run.end);
+    return vals;
+  }
   if (stair.type === StairType.SWITCHBACK || stair.type === StairType.WINDING) {
     const p = uTurnPlanLayout(stair, graph);
     if (!p) return [];
@@ -201,7 +216,7 @@ function boundaryRunValues(stair, graph) {
     if (p.arrivalPort !== 'end' && p.arrivalTurnSteps >= 1) vals.push(p.run.baseB); // 到達口の区画の外縁（上階の床との蹴上）
     return vals;
   }
-  return stairPortEdges(stair, graph, ['entry', 'arrival']).map(e => ({ value: e.value, isVertical: e.isVertical }));
+  return [];
 }
 
 const rows = [];

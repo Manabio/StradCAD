@@ -72,7 +72,7 @@
  *     解消は別途defer）。
  */
 import { StairType, StructuralMaterialType, DEFAULT_BASEBOARD_HEIGHT } from '@core';
-import { uTurnPlanLayout, LANE_GAP } from '../../finish/stair/stairGeometry.js';
+import { uTurnPlanLayout, straightPlanLayout, LANE_GAP } from '../../finish/stair/stairGeometry.js';
 import { U_TURN_TYPES } from '../../finish/stair/stairPorts.js';
 import { sliceTurnCells } from './turnCellSlices.js';
 import { stairTreadFootprints } from '../../finish/stair/stairTreads.js';
@@ -97,8 +97,10 @@ export const STAIR_RUN_TOL_MM = 0.5;
 /**
  * @typedef {{isVertical:boolean, runLo:number, runHi:number, travelSign:1|-1,
  *   acrossLo:number, acrossHi:number, baseZ:number, riserMm:number, steps:number,
- *   lengthMm:number, underSteps?:number}} Flight
+ *   lengthMm:number, underSteps?:number, overSteps?:number, entryRunMm?:number}} Flight
  *   直進部だけ（側面の口に取りつく区画〔上り口 e 段・到達口 a 段〕は含まない。区画は zoneCells を切断線で切った Landing）。
+ *   entryRunMm は直進系の往路だけ（上り口が側面のとき、基端から flight の始端までの走行長。crossesFlight が基端側へ広げる）。
+ *   overSteps は最後の flight だけ（到達口の区画の段数 a）。underSteps と対称で、正面視の梯子の上端（上階の床の段鼻）まで本数を足す（幾何は持たない）。
  *   underSteps は往路だけ（上り口の区画の段数 e）。区画の段は直進部の足元の下に続くので、レーンを正面から見る見付け（梯子・遮蔽矩形・
  *   ささら端面）と、flight より手前の走行座標の高さ（flightNoseZAt）だけが使う。幾何（走行方向の位置・段鼻列）は一切持たない。
  * @typedef {{isVertical:boolean, axisWorld:number, spanLo:number, spanHi:number,
@@ -190,6 +192,7 @@ export function stairContribution(stair, graph, floorHeight) {
     // 復路の足元＝回転部の最後の段の高さ。折返し（turnCells=1）は踊り場の高さそのもの。
     baseZ: landingZ + (turnCells - 1) * riser, riserMm: riser, steps: n2, lengthMm: Math.abs(run.startB - frontC),
     nosingMm: stair.nosing ?? 0, treadThicknessMm,
+    ...(arrivalTurnSteps > 0 ? { overSteps: arrivalTurnSteps } : {}),
     ...treadAcross(across.sB, across.s1),
   };
 
@@ -206,30 +209,16 @@ export function stairContribution(stair, graph, floorHeight) {
   // 平面の段の多角形（stairTreadFootprints の install。回転部・側面の口の取りつき区画で共有。1 回だけ呼ぶ）
   const footprints = isWinding || entryNumbers || arrivalNumbers
     ? stairTreadFootprints(stair, graph, { riser, insetView: 'install' }) : [];
-  // 取りつき区画のセル（上り口 e 個・到達口 a 個）。番号の範囲は uTurnPlanLayout が供給する（式を複製しない）。
-  // 段 n の天端は n×蹴上（topZ）。件数が蹴上数と違えば null。
-  const zoneCellsOf = (nums) => (nums
-    ? footprints.filter(c => c.number >= nums.from && c.number <= nums.to).map(({ poly, number, topZ }) => ({ poly, number, z: topZ }))
-    : []);
-  const zoneCells = { entry: zoneCellsOf(entryNumbers), arrival: zoneCellsOf(arrivalNumbers) };
-  if (zoneCells.entry.length !== entryTurnSteps || zoneCells.arrival.length !== arrivalTurnSteps) return null;
-  // 取りつき段 0（平場）の側面の口: セルが無いので矩形のセルを作る。上り口は床（z=0）、到達口は上階の床の高さ（復路の最後の蹴上が乗る平場）。
-  const rectPoly = (r0, r1, a0, a1) => (vertical ? [a0, r0, a1, r0, a1, r1, a0, r1] : [r0, a0, r1, a0, r1, a1, r0, a1]);
-  const topFloorZ = layout.totalSteps * riser;
-  if (layout.entryPort !== 'end' && entryTurnSteps === 0 && Math.abs(run.exitA - run.baseA) > GAP_EPS) {
-    zoneCells.entry.push({ poly: rectPoly(run.baseA, run.exitA, across.s0, across.sA), z: 0, number: 0 });
-  }
-  if (layout.arrivalPort !== 'end' && arrivalTurnSteps === 0 && Math.abs(run.baseB - run.startB) > GAP_EPS) {
-    zoneCells.arrival.push({ poly: rectPoly(run.startB, run.baseB, across.sB, across.s1), z: topFloorZ, number: layout.totalSteps });
-  }
-  // 区画の外縁（上り口辺 baseA・到達辺 baseB）の外側の高さ。上り口の外は床（0）、到達口の外は上階の床。
-  // 到達辺の縦線＝復路の最終蹴上（最後のセルの天端→上階床）、到達口の平場 z=topFloorZ。到達口が側面の実データが無く合成テストだけで
-  // 決めた暫定規則（問題.md Q2/Q3・2026-10-09）。上階スラブの小口と重なる見込み。目視裁定待ち。
+  // 取りつき区画のセル（上り口 e 個・到達口 a 個）と平場（段 0）の矩形、区画の外縁。番号の範囲は uTurnPlanLayout が供給する。
+  // 区画の外縁（上り口辺 baseA・到達辺 baseB）の外側の高さは、上り口の外が床（0）、到達口の外が上階の床。
   // 既知の別件: 両口とも側面＋隔て板の柱がある構成で、平面の上り口セルと到達口セルが x 1000..1057.5 で重なる（平面側の既存挙動、T1 では直さない）。
-  const zoneEdge = {
-    entry: zoneCells.entry.length ? { run: run.baseA, outerZ: 0 } : null,
-    arrival: zoneCells.arrival.length ? { run: run.baseB, outerZ: topFloorZ } : null,
-  };
+  const topFloorZ = layout.totalSteps * riser;
+  const zones = portZoneCells(footprints, vertical, topFloorZ, layout.totalSteps, {
+    entry: { numbers: entryNumbers, steps: entryTurnSteps, on: layout.entryPort !== 'end', rect: [run.baseA, run.exitA, across.s0, across.sA], edgeRun: run.baseA },
+    arrival: { numbers: arrivalNumbers, steps: arrivalTurnSteps, on: layout.arrivalPort !== 'end', rect: [run.startB, run.baseB, across.sB, across.s1], edgeRun: run.baseB },
+  });
+  if (!zones) return null;
+  const { zoneCells, zoneEdge } = zones;
   let landings;
   let turnCellPolys = null;
   if (isWinding) {
@@ -280,6 +269,101 @@ export function stairContribution(stair, graph, floorHeight) {
     // zoneCells＝側面の口の取りつき区画のセル（上り口・到達口。平場は矩形）、zoneEdge＝区画の外縁の位置と外側の高さ
     zoneCells, zoneEdge,
     frame: { frontA: frontAC, front: frontC, back: run.back },
+  };
+}
+
+/**
+ * 側面の口の取りつき区画のセル（上り口 e 個・到達口 a 個）と、段 0（平場）の矩形のセル、区画の外縁（edgeRun）の外側の高さを返す
+ * （U 字系の stairContribution と直進系の straightContribution が共有）。セルは footprints（stairTreadFootprints の install）から
+ * 番号の範囲（entryNumbers/arrivalNumbers。平面の layout が供給）で拾い、段 n の天端は n×蹴上（topZ）。件数が蹴上数と違えば null。
+ * 取りつき段 0 の側面の口: セルが無いので矩形のセルを作る。上り口は床（z=0）、到達口は上階の床の高さ（最後の蹴上が乗る平場）。
+ * 到達辺の縦線＝最終蹴上（最後のセルの天端→上階床）。到達口が側面の実データが無く合成テストだけで決めた暫定規則
+ * （問題.md Q2/Q3・2026-10-09）。上階スラブの小口と重なる見込み。目視裁定待ち。
+ * @param {{number:number, poly:number[], topZ:number}[]} footprints
+ * @param {boolean} vertical 走行軸が縦（y）か
+ * @param {number} topFloorZ 上階の床の高さ（総蹴上数×蹴上）
+ * @param {number} flatNumber 到達口の平場の矩形に付ける番号（総蹴上数）
+ * @param {{entry:object, arrival:object}} zones 各口 { numbers:{from,to}|null, steps, on（側面か）, rect:[run0, run1, across0, across1], edgeRun }
+ */
+function portZoneCells(footprints, vertical, topFloorZ, flatNumber, { entry, arrival }) {
+  const rectPoly = (r0, r1, a0, a1) => (vertical ? [a0, r0, a1, r0, a1, r1, a0, r1] : [r0, a0, r1, a0, r1, a1, r0, a1]);
+  const cellsOf = (z) => (z.numbers
+    ? footprints.filter(c => c.number >= z.numbers.from && c.number <= z.numbers.to).map(({ poly, number, topZ }) => ({ poly, number, z: topZ }))
+    : []);
+  const entryCells = cellsOf(entry), arrivalCells = cellsOf(arrival);
+  if (entryCells.length !== entry.steps || arrivalCells.length !== arrival.steps) return null;
+  const addFlat = (cells, z, flatZ, number) => {
+    const [r0, r1, a0, a1] = z.rect;
+    if (z.on && z.steps === 0 && Math.abs(r1 - r0) > GAP_EPS) cells.push({ poly: rectPoly(r0, r1, a0, a1), z: flatZ, number });
+  };
+  addFlat(entryCells, entry, 0, 0);
+  addFlat(arrivalCells, arrival, topFloorZ, flatNumber);
+  return {
+    zoneCells: { entry: entryCells, arrival: arrivalCells },
+    zoneEdge: {
+      entry: entryCells.length ? { run: entry.edgeRun, outerZ: 0 } : null,
+      arrival: arrivalCells.length ? { run: arrival.edgeRun, outerZ: topFloorZ } : null,
+    },
+  };
+}
+
+/**
+ * 直進系（STRAIGHT/STRAIGHT_LANDING）階段の3D寄与を、U字系と同じ区分線形モデル（Flight[]・Landing[]）で返す。
+ * 走行方向の位置は平面の解決値 straightPlanLayout（設置階の install 枠）だけから取り、CL 区間長（measureStairSpans の len1/landingLen/len2）や
+ * 通り芯の枠から再計算しない（平面の線と展開図の蹴上を一致させる。elevation-model.md）。側面の口（上り口 e 段・到達口 a 段）の区画は
+ * 平面のセル（stairTreadFootprints の install。番号は layout の entryNumbers/arrivalNumbers）を zoneCells として持ち、切断線ごとに
+ * withCutLandings が切る（直進部の flight は区画を含まない）。平場（段 0）は矩形のセル。出入口が走行端なら区画は無い。
+ * flight: STRAIGHT は start1〜exitA の n1 段（足元は e×蹴上）、STRAIGHT_LANDING は start1〜land1 の n1 段・踊り場（z=(e+n1)×蹴上）・
+ * land2〜exitA の n2 段。上り口が側面なら flight1 は entryRunMm（区画の長さ）だけ手前まで正面視（crossesFlight）の対象にする
+ * （seq1 は上り口辺 base に立つ。ユーザー裁定待ち Q4 の推奨）。
+ * 構造別の部材（unit・段板厚・蹴込）は持たない（従来どおり。U字系の stairContribution とは別）。
+ * 直進系でない・floorHeight 未確定・平面の枠が求まらない・区画のセルが番号の範囲から拾えない場合は null。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph 設置階の graph
+ * @param {number|null} floorHeight 設置階〜上階の階高(mm)
+ */
+export function straightContribution(stair, graph, floorHeight) {
+  if (!stair || floorHeight == null) return null;
+  const layout = straightPlanLayout(stair, graph);
+  if (!layout) return null;
+  const { vertical, run, across, hasLanding, n1, n2, entryNumbers, arrivalNumbers } = layout;
+  const e = layout.entryTurnSteps, a = layout.arrivalTurnSteps;
+  const riser = stair.riser ?? floorHeight / Math.max(2, stair.totalSteps ?? 2);
+  const acrossLo = Math.min(across.s0, across.s1), acrossHi = Math.max(across.s0, across.s1);
+  const flightOf = (from, to, baseZ, steps, extra = {}) => ({
+    isVertical: vertical, runLo: Math.min(from, to), runHi: Math.max(from, to), travelSign: to >= from ? 1 : -1,
+    acrossLo, acrossHi, baseZ, riserMm: riser, steps, lengthMm: Math.abs(to - from), ...extra,
+  });
+  const entryRunMm = Math.abs(run.start1 - run.base);
+  const first = flightOf(run.start1, hasLanding ? run.land1 : run.exitA, e * riser, n1, {
+    ...(e > 0 ? { underSteps: e } : {}),
+    ...(!hasLanding && a > 0 ? { overSteps: a } : {}),
+    ...(entryRunMm > GAP_EPS ? { entryRunMm } : {}),
+  });
+  let flights, landings;
+  if (hasLanding) {
+    const landingZ = (n1 + e) * riser;
+    landings = [{ runLo: Math.min(run.land1, run.land2), runHi: Math.max(run.land1, run.land2), acrossLo, acrossHi, z: landingZ }];
+    flights = [first, flightOf(run.land2, run.exitA, landingZ, n2, a > 0 ? { overSteps: a } : {})];
+  } else {
+    landings = [];
+    flights = [first];
+  }
+  const footprints = entryNumbers || arrivalNumbers ? stairTreadFootprints(stair, graph, { riser, insetView: 'install' }) : [];
+  const topFloorZ = layout.totalSteps * riser;
+  const zones = portZoneCells(footprints, vertical, topFloorZ, layout.totalSteps, {
+    entry: { numbers: entryNumbers, steps: e, on: layout.entryPort === 'side', rect: [run.base, run.exitE, across.s0, across.s1], edgeRun: run.base },
+    arrival: { numbers: arrivalNumbers, steps: a, on: layout.arrivalPort === 'side', rect: [run.exitA, run.end, across.s0, across.s1], edgeRun: run.end },
+  });
+  if (!zones) return null;
+  return {
+    flights, landings, structure: stair.structure ?? null,
+    isVertical: vertical, forwardSign: Math.sign(run.end - run.base) || 1,
+    zoneCells: zones.zoneCells, zoneEdge: zones.zoneEdge,
+    // 切断定義表（straightCuts.js）が切断線を置く走行軸上の位置と幅方向の範囲（平面の解決値）
+    frame: { base: run.base, land1: run.land1, land2: run.land2, exitA: run.exitA, end: run.end },
+    across: { s0: across.s0, s1: across.s1, mid: across.mid },
+    riser, n1, n2, hasLanding,
   };
 }
 
@@ -615,7 +699,7 @@ function flightLadderPrimitives(flight, cut, columns, ladderAcross, treadSection
   const { loX, hiX } = range;
   const frontZ0 = frontBaseZ(flight);
   const dashed = frontZ0 < (cut.baseFloorZ ?? 0) - GAP_EPS;
-  const steps = Math.max(0, Math.round(flight.steps)) + (flight.underSteps ?? 0);
+  const steps = Math.max(0, Math.round(flight.steps)) + (flight.underSteps ?? 0) + (flight.overSteps ?? 0);
   const prims = [];
   // 切断線が flight の**内部**（端から STAIR_RUN_TOL_MM より奥）にあるとき、その位置の段板は実際に切られている
   // （seq1 の frontA で復路の初段を切る。S2a QA 裁定(a)）。段板の天端に CUT を出す（木造は段板厚の矩形、
@@ -848,8 +932,12 @@ export function stairFaceOccluderRects(contribution, cut) {
 // seq1 の切断線は往路側の前縁 frontA（往路の終端）に置くので、この含みに依存する。
 // export: 展開図一般化Phase 6b-1のstairFaceHitsが同じ判定を再利用する）。
 export function crossesFlight(flight, cut) {
+  // entryRunMm＝上り口が側面の直進系で、flight の始端より手前（基端 base 〜 区画の出口）の長さ。基端に立つ正面視（seq1）も
+  // この flight を正面から見る（区画の段は underSteps で足元の下に続く）。始端側（走行の手前）だけ広げる
+  const ext = flight.entryRunMm ?? 0;
+  const lo = flight.runLo - (flight.travelSign < 0 ? 0 : ext), hi = flight.runHi + (flight.travelSign < 0 ? ext : 0);
   return cut.line.isVertical !== flight.isVertical &&
-    cut.line.axisValue >= flight.runLo - STAIR_RUN_TOL_MM && cut.line.axisValue <= flight.runHi + STAIR_RUN_TOL_MM;
+    cut.line.axisValue >= lo - STAIR_RUN_TOL_MM && cut.line.axisValue <= hi + STAIR_RUN_TOL_MM;
 }
 
 /**
