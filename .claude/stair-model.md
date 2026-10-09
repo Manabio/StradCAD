@@ -210,7 +210,7 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
   `resolveStairPath` の `entryStrip`）。その「内側」の上り口は相手レーンの外側の辺（s=1）になる。
   総蹴上数はこの蹴上を含む（`Stair.setField` が同期）。sections の交互列（偶数=直進部）はそのまま
   ——取りつき回転部は sections に入れず別フィールドに持つ（先頭を回転部にすると区間数3を前提にする
-  消費側が壊れる）。**展開図（`elevation/section/*`）はU字系（折返し・回り）の上り口の取りつきだけ追従**（`resolveUTurnSectionParams` が平面と同じ述語 `ports.entry !== 'end'` で有効段数と区画長を返し、往路は区画に取りつき段を等分＋直進部の n1 段は残りを等分、踊り場・回転部の高さは `(n1+entryTurnSteps)×蹴上`。取りつき段 0 でも側面の上り口なら区画は平場で、平面と同じく直進部は残りを等分。走行端の上り口は往路全長の等ピッチ）。**到達口の取りつき（`arrivalTurnSteps`）と直進系・矩折・曲がり階段は展開図が未追従**（先送り。U字は復路レーン長も往路と同じとみなす）。
+  消費側が壊れる）。**展開図（`elevation/section/*`）はU字系・直進系の上り口・到達口の取りつき区画を平面のセル多角形で描く**（下の不変条件。段数 0 の側面の口は平場、走行端の口は区画なし）。**矩折・曲がり階段は展開図が未追従**（先送り）。
 - 直進系（`STRAIGHT`・`STRAIGHT_LANDING`）の区画は**先頭の行（上り口）・末尾の行（到達口）**。行＝走行軸の始点
   tNear がそろったセル群（幅方向に分割されていれば複数セルで1行。`stairClassify.js straightEndRows`。走行長は行内で終端が
   そろわなければ短い方）。区画の側辺（left/right）が出入口で、区画の走行端の辺は通常の外周になり、区画が取りつきの回転部
@@ -277,7 +277,7 @@ L_TURN/FLAREDはlengthsに加えアーム幅（widths）も実測し、アーム
 - 2段目の段鼻（1|2）＝Q1 の面（入口柱の上り口側の面。x は往路側 PB 面から壁仕上げまで）。1段目の区画は壁面からここまで（出入口辺は sB 面）。復路の到達辺（15|16）＝Q3 の面（入口柱の回転部側の面。**ユーザー裁定 2026-10-09 確定**。15 段目の段板は柱に当たって止まる。復路の区間は P3 面〜Q3 面で往路と同じ長さ・同ピッチになる。`uTurnLayout` の短いレーンの基端 `baseB` の 1 行）。
 - 往路側の前縁（5|6）＝P1 の面、往路側の放射線（5|6〜7|8）の起点＝P1。復路側の前縁（11|12。P2→P3→壁）＝P2・P3 の面、復路側の放射線（8|9〜10|11。8|9 は P2 から奥の辺へ垂直）の起点＝P2。マス8は P1 と P2 の2起点の多角形。往路・復路の踏面は各柱面の間を等分。
 - 等長レーン（柱が基端の壁の中）の基端と、隔て壁が立たない場合（鉄骨の階段・2×4・屋外・OPEN_WELL）は従来の積み方。型依存は写像（`uTurnLayout`／`buildWinding`）の中だけ。展開図は通り芯の枠なので絶対座標は平面とずれる（elevation-model.md 参照）。
-- `uTurnPlanLayout(stair, graph)`＝展開図が共有する平面（install 枠）の解決値（走行軸の世界座標 run・幅方向 across・口・段数。描画と同じ `resolveUTurnPlan` から数値だけ返す）。**不変条件: U 字系の展開図（直進部・踊り場・回転部）はこの関数と `stairTreadFootprints`（install）の値だけを使い、CL 区間長から再計算しない**（回転部は踏面の多角形を切断線で切る。`elevation/section/turnCellSlices.js`）。
+- `uTurnPlanLayout(stair, graph)`＝展開図が共有する平面（install 枠）の解決値（走行軸の世界座標 run・幅方向 across・口・段数。描画と同じ `resolveUTurnPlan` から数値だけ返す）。**不変条件: 展開図の走行方向の位置は、U 字系（折返し・回り）なら `uTurnPlanLayout`、直進系（STRAIGHT／STRAIGHT_LANDING）なら `straightPlanLayout` と、`stairTreadFootprints`（install）の値だけから取り、CL 区間長・通り芯の枠から再計算しない**（回転部・取りつき区画は踏面の多角形を切断線で切る。`elevation/section/turnCellSlices.js`。L_TURN／FLARED／OPEN_WELL は対象外のまま）。両 layout は番号の単一供給源 `entryNumbers`／`arrivalNumbers` も返す（到達口は S+e..S+e+a−1、最後＝totalSteps−1、到達辺の先が上階床）。展開図で番号を数え直さない。
 L2（解消 2026-10-09）: 展開図は WINDING も回転部を段付きの踊り場にして`switchbackCuts`で切る（`LANDING_CUT_INSET_MM`が効き、C 面の切断は前縁+100）。近似と限界は elevation-model.md「回り階段の展開」。
 判定と幾何は`finish/stair/stairPartition.js`（`stairPartitionGeometry`＝主構造を見ない幾何、`resolveStairPartition`＝在来のみの記述子）、壁の生成は`stairPartitionWalls.js`。壁の形・2a区間の差し引き・識別を座標照合にした理由は`.claude/data-model.md`「階段まわりの壁の3規則」の隔て壁の段落。区間は両レーンが並走する部分（短い方の基端〜回転部前縁）で、2aが受け持つ区間は2aの壁に任せる。識別は壁の**設計上の端**（端CL）が線に収まるかで見る（柱包みで物理端がはね出しても外れない）。両端（S3'）は90角の**構造柱**（`structural/wallFreeEnds.js stairPartitionEnds`が点源。structural-model.md「隔て壁の両端の柱」）で、自由端の側だけ壁を柱の外面まで延ばす（`wrapStairPartitionFreeEnds`。仕上げ脱出の壁再生成の末尾。F-3と同じ式・符号。undo/redoはその後処理の後に取る）。S3の端部材方式は撤回済み。2aの差し引きで切れた端（線の端でない端）には柱を立てず、柱包みもしない（線端との一致は0.5mm）。既知の限界: 上り口側が下の部屋の境界壁と同一線上に続くときは自由端でなく柱は階の柱寸で、この構成では相手の部屋壁が柱包みで隔て壁側へ最大57.5mm重なる（別タスク）。両端の柱は頭つなぎ・受梁の起点から外す（吹抜けを横切る頭つなぎは不可・柱脚固定で1層分は梁なし。裁定2026-10-07。structural-model.md）。隔て壁の端と同じ座標に立つ柱は由来に関係なく頭つなぎ・受梁の起点にならない（上り口側が部屋壁と同じ線上に続く構成では、その部屋壁の柱も梁なしになる。ユーザー確認待ち）。構造の壁ソース（梁芯・通し梁）・腰壁からの除外は維持し、上階の短柱・床梁の下で柱を切る設計はS5。
 
