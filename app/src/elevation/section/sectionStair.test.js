@@ -39,6 +39,18 @@ function makeSwitchbackFixture(graph, structure = StructuralMaterialType.WOOD) {
 }
 
 const FLOOR_HEIGHT = 2400;
+// 踊り場の奥・左右の外縁は平面（uTurnPlanLayout）と同じ壁の仕上げ面。フィクスチャの壁（generateRoomWallsFromOutline。
+// 通り芯から室内側へ 57.5）の面。直下のテストでフィクスチャの壁から導出して固定する。
+const WALL_FACE_MM = 57.5;
+
+test('【前提】フィクスチャの外壁の仕上げ面は通り芯から WALL_FACE_MM 室内側（他テストの期待値の根拠）', () => {
+  const graph = makeGraph();
+  makeSwitchbackFixture(graph);
+  const back = [...graph.walls].find(w => !w.isVertical && w.axisCL.effectiveValue === 0);
+  const right = [...graph.walls].find(w => w.isVertical && w.axisCL.effectiveValue === 2000);
+  assert.equal(back.materialRange.hi, WALL_FACE_MM);
+  assert.equal(right.materialRange.lo, 2000 - WALL_FACE_MM);
+});
 
 test('【WP-E3】stairContribution: SWITCHBACKフィクスチャからflights(2本)・landings(1件)が組み立つ', () => {
   const graph = makeGraph();
@@ -169,11 +181,32 @@ test('【WP-E3】stairPrimitivesForCut: 往路レーンを横切る切断はDETA
   };
   const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [] }];
   const prims = stairPrimitivesForCut(c, cut, columns);
-  assert.equal(prims.length, 6, '往路の段数(steps=6)ぶんの梯子線のはず');
-  for (const p of prims) {
-    assert.equal(p.type, 'line');
-    assert.equal(p.weight, 'thin', '梯子はDETAIL(thin)のはず');
-  }
+  // 切断線 y=3000 は往路 flight(1500..4500, 6段, 踏面ピッチ600)の内部＝基端(4500)から1500 のところで、
+  // 段2(2.5 の切り捨て)の段板(天端 z=(1+2)×蹴上)が実際に切られる。その天端の梯子線は CUT の段板矩形(木造: 厚30)に替わる。
+  assert.equal(prims.length, 5 + 4, '梯子 5 本(切られる段を除く) + 段板の断面矩形 4 本');
+  assert.equal(prims.filter(p => p.weight === 'thin').length, 5, '梯子はDETAIL(thin)のはず');
+  assert.equal(prims.filter(p => p.weight === 'thick').length, 4, '切られる段板は CUT(thick)');
+  const treadZ = 3 * c.flights[0].riserMm;
+  assert.ok(prims.every(p => p.type === 'line'));
+  assert.ok(!prims.some(p => p.weight === 'thin' && p.y1 === -treadZ), '切られる段の天端に細い梯子線は残さない');
+  assert.ok(prims.some(p => p.weight === 'thick' && p.y1 === -treadZ && p.y2 === -treadZ), '段板の天端のCUT');
+  assert.ok(prims.some(p => p.weight === 'thick' && p.y1 === -(treadZ - 30) && p.y2 === -(treadZ - 30)), '段板の下面(厚30)のCUT');
+});
+
+test('【S2a QA】stairPrimitivesForCut: 切断線が flight の端ちょうど（±許容幅）なら従来どおり梯子だけ、端から許容幅を超えて内側なら段板のCUTが出る', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [] }];
+  const cutAt = (v) => ({ seqNo: '1', line: { isVertical: false, axisValue: v, lo: 0, hi: 2000 }, viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0 });
+  const thick = (v) => stairPrimitivesForCut({ ...c, landings: [], flights: [c.flights[0]] }, cutAt(v), columns).filter(p => p.weight === 'thick').length;
+  assert.equal(thick(4500), 0, '往路の基端ちょうど');
+  assert.equal(thick(4500 - 0.001), 0, '基端から 1e-3 内側（許容幅内）');
+  assert.equal(thick(1500 + 0.001), 0, '前縁側の端から 1e-3 内側');
+  assert.equal(thick(3000), 4, '内部');
+  assert.equal(thick(4500 - 2), 4, '許容幅(0.5)を超えて内側');
+  const off = stairPrimitivesForCut({ ...c, landings: [], flights: [c.flights[0]] }, cutAt(3000), columns, { treadSection: false });
+  assert.equal(off.filter(p => p.weight === 'thick').length, 0, 'treadSection:false（階段下の部屋の見えがかり）は内部でも段板の断面を出さない');
 });
 
 // ---- 踊り場→CUT床線 ----
@@ -275,7 +308,7 @@ test('【実機フィードバック第3弾C】stairPrimitivesForCut: ささら�
   const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
   const c = stairContribution(stair, graph, FLOOR_HEIGHT);
   const cut = {
-    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    seqNo: '1', line: { isVertical: false, axisValue: 4500, lo: 0, hi: 2000 }, // flight の端ちょうど（段板の断面は出ない）
     viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 },
     baseFloorZ: 3000, // 全高より高いbaseFloorZにして、ささら矩形を強制的に「向こう側」にする
   };
@@ -443,15 +476,15 @@ test('【終端】stairPrimitivesForCut: outerBound省略でもcutDrawRangeを�
   const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
   const c = stairContribution(stair, graph, FLOOR_HEIGHT);
   const landingAbs = 1200;
-  // cut.lineを往路flightの幅(acrossLo:0,acrossHi:1000)より内側(50..1950)に取り、壁centerlineと
-  // 壁内側面の半壁厚ズレを模す——acrossLo(world0)はcutDrawRangeの外(local-50)になる。
+  // cut.lineを往路flightの幅(acrossLo:57.5=壁の仕上げ面,acrossHi:1000)より内側(100..1900)に取り、
+  // 壁面より内側へ寄った切断枠を模す——acrossLo(world57.5)はcutDrawRangeの外(local-42.5)になる。
   const cut = {
-    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 50, hi: 1950 },
+    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 100, hi: 1900 },
     viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: landingAbs,
   };
-  const columns = [{ x0: 0, x1: 1900, worldLo: 50, worldHi: 1950, bands: [] }];
+  const columns = [{ x0: 0, x1: 1800, worldLo: 100, worldHi: 1900, bands: [] }];
   const prims = stairPrimitivesForCut(c, cut, columns);
-  const range = { lo: 0, hi: 1900 }; // cutDrawRange(cut)（probeExtend無し）
+  const range = { lo: 0, hi: 1800 }; // cutDrawRange(cut)（probeExtend無し）
   for (const p of prims) {
     if (p.type === 'line') {
       assert.ok(Math.min(p.x1, p.x2) >= range.lo - 1e-6 && Math.max(p.x1, p.x2) <= range.hi + 1e-6,
@@ -463,16 +496,16 @@ test('【終端】stairPrimitivesForCut: outerBound省略でもcutDrawRangeを�
       }
     }
   }
-  // QA是正（2026-09-12その2）: 往路flightのacrossLo(world0→local-50)はcutDrawRangeの外だが、
+  // QA是正（2026-09-12その2）: 往路flightのacrossLo(world57.5→local-42.5)はcutDrawRangeの外だが、
   // ささらの端面（stringerEndCapPrimitives）は**削除ではなく境界(local0)へクランプ**されて
-  // 残る——壁centerline位置の情報を消さず、描画範囲の端に寄るだけ。
+  // 残る——壁面位置の情報を消さず、描画範囲の端に寄るだけ。
   const dashedAtOuter = prims.filter(p =>
     p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && Math.abs(p.x1 - range.lo) < 1e-6);
   assert.equal(dashedAtOuter.length, 1,
     'stairDrawRangeの外(acrossLo)にあったささらの端面は境界(local0)へクランプされて1本残るはず');
-  // 内側(acrossHi。LANE_GAP/2ぶん詰めたworld950→local(950-50)=900)は範囲内なので元のまま残る。
+  // 内側(acrossHi。LANE_GAP/2ぶん詰めたworld950→local(950-100)=850)は範囲内なので元のまま残る。
   const dashedAtInner = prims.some(p =>
-    p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && Math.abs(p.x1 - 900) < 1e-6);
+    p.type === 'line' && p.x1 === p.x2 && p.dash === 'dashed' && Math.abs(p.x1 - 850) < 1e-6);
   assert.ok(dashedAtInner, 'stairDrawRangeの内側(acrossHi)のささらの端面は元の位置のまま残るはず');
 });
 
@@ -593,7 +626,7 @@ test('【WP-E3】stairPrimitivesForCut: structure=STEELならレーンを横切�
   const { stair } = makeSwitchbackFixture(graph, StructuralMaterialType.STEEL);
   const c = stairContribution(stair, graph, FLOOR_HEIGHT);
   const cut = {
-    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    seqNo: '1', line: { isVertical: false, axisValue: 4500, lo: 0, hi: 2000 }, // flight の端ちょうど（段板の断面は出ない）
     viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
   };
   const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [] }];
@@ -709,7 +742,7 @@ test('【失敗系・WP-E3】stairPrimitivesForCut: structure=WOOD(既定)はレ
   const { stair } = makeSwitchbackFixture(graph); // 既定=WOOD
   const c = stairContribution(stair, graph, FLOOR_HEIGHT);
   const cut = {
-    seqNo: '1', line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 },
+    seqNo: '1', line: { isVertical: false, axisValue: 4500, lo: 0, hi: 2000 }, // flight の端ちょうど（段板の断面は出ない）
     viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
   };
   const columns = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [] }];
@@ -797,10 +830,10 @@ test('【WP-A2】stairContribution: landing.frame.edgesは4辺（front/back各1�
   const sides = edges.filter(e => e.kind === 'side');
   assert.equal(sides.length, 2);
   assert.equal(front.axisWorld, 1500, 'frontはoutbound/inboundのrunLo(=踊り場との境界y=1500)のはず');
-  assert.equal(back.axisWorld, 0, 'backは反対側(y=0)のはず');
+  assert.equal(back.axisWorld, WALL_FACE_MM, 'backは反対側(y=0の奥壁の仕上げ面)のはず');
   assert.equal(front.isVertical, false);
   assert.equal(back.isVertical, false);
-  assert.deepEqual(sides.map(e => e.axisWorld).sort((a, b) => a - b), [0, 2000]);
+  assert.deepEqual(sides.map(e => e.axisWorld).sort((a, b) => a - b), [WALL_FACE_MM, 2000 - WALL_FACE_MM]);
   for (const s of sides) assert.equal(s.isVertical, true);
 });
 
@@ -1015,7 +1048,7 @@ test('【踊り場の床】蹴込>0: 復路の登り出し側の端は1段目の
     const { line, c, cut } = landingFloorLine(20, structure);
     const foot = stairRunProfile(1, 200, 100, localXOf(cut, 1500), 0, 1, 20).points[0][0];
     assert.equal(foot, 1520);
-    assert.equal(line.x1, 0, '踊り場の奥側の端は不変');
+    assert.equal(line.x1, WALL_FACE_MM, '踊り場の奥側の端は不変（奥壁の仕上げ面）');
     assert.equal(line.x2, foot, `床線は復路の蹴込板の足元(1520)まで（${structure}）`);
     const prof = stairCutFloorProfile(c, cut, null);
     // 床の輪郭は flight の先頭点で元から連続（単一供給源化のみ。変更前でも通る）。
@@ -1036,7 +1069,7 @@ test('【踊り場の床】dirSign=-1 の面でも復路の登り出し側が足
   const z = c.landings[0].z;
   const line = stairPrimitivesForCut(c, cut, columns).find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === -z && p.y2 === -z);
   assert.equal(line.x1, 2980);
-  assert.equal(line.x2, 4500);
+  assert.equal(line.x2, 4500 - WALL_FACE_MM, 'dirSign=-1: 奥壁の仕上げ面(world57.5)は local 4442.5');
 });
 
 test('【失敗系・踊り場の床】列の範囲が踊り場の前縁で終わるときは足元まで延ばさない', () => {
@@ -1056,7 +1089,7 @@ test('【失敗系・踊り場の床】列の範囲が踊り場の前縁で終�
 
 test('【踊り場の床】蹴込0: 床線の端は段鼻（踊り場前縁）のまま＝従来と同一', () => {
   const { line } = landingFloorLine(0);
-  assert.equal(line.x1, 0);
+  assert.equal(line.x1, WALL_FACE_MM);
   assert.equal(line.x2, 1500);
 });
 
@@ -1072,7 +1105,7 @@ test('【失敗系・踊り場の床】往路レーンの縦断では蹴込が�
   const columns = [{ x0: 0, x1: 4500, worldLo: 0, worldHi: 4500, bands: [] }];
   const z = c.landings[0].z;
   const line = stairPrimitivesForCut(c, cut, columns).find(p => p.type === 'line' && p.weight === 'thick' && p.y1 === -z);
-  assert.equal(line.x1, 0);
+  assert.equal(line.x1, WALL_FACE_MM);
   assert.equal(line.x2, 1500, '往路側は踊り場の前縁まで（蹴込板の足元はこの床の外側）');
 });
 
@@ -1618,8 +1651,10 @@ test('【2026-10-09】landingStepRisers: 回転部を縦断する切断は短冊
   assert.equal(risers.length, 2);
   assert.ok(risers.every(p => p.type === 'line' && p.x1 === p.x2 && p.weight === 'thick'), '縦線・CUT（thick）');
   const got = risers.map(p => riserOf(cut, p)).sort((a, b) => a.x - b.x);
-  // 走行方向は y 減少。短冊 y:[1000,1500]→[500,1000]→[0,500]（z 800→960→1120）の境界は y=1000, 500。
-  assert.deepEqual(got.map(r => [localXOf(cut, 1000), localXOf(cut, 500)].includes(r.x)), [true, true]);
+  // 走行方向は y 減少。回転部は前縁 y=1500〜奥壁の面 y=WALL_FACE_MM を3等分した短冊（z 800→960→1120）で、
+  // 往路側半幅の共有辺は y=1500+k×(WALL_FACE_MM−1500)/3（k=1,2）。
+  const edgeY = k => 1500 + k * (WALL_FACE_MM - 1500) / 3;
+  assert.deepEqual(got.map(r => r.x), [edgeY(1), edgeY(2)].map(y => Math.round(localXOf(cut, y))).sort((a, b) => a - b));
   const zPairs = got.map(r => [r.zA, r.zB].sort((a, b) => a - b));
   assert.deepEqual(zPairs.map(p => p.map(z => Math.round(z / WINDING_RISER))).sort((p, q) => p[0] - q[0]), [[5, 6], [6, 7]]);
 });

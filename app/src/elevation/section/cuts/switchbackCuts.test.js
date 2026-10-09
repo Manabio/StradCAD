@@ -5,7 +5,9 @@ import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMate
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../../elevationFaceList.js';
 import { switchbackCuts, stairBandWallFilter, classifyFaces, LANDING_CUT_INSET_MM } from './switchbackCuts.js';
-import { cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
+import { cellsBeyondBreak, uTurnPlanLayout } from '../../../finish/stair/stairGeometry.js';
+import { generateStairPartitionWalls } from '../../../finish/stair/stairPartitionWalls.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from '../../../structural/structureRules.js';
 import { buildBandLayers } from '../sectionBandLayers.js';
 
 function makeGraph(name = 'p1') {
@@ -443,8 +445,11 @@ test('【2026-10-08】switchbackCuts: seq3の切断線は踊り場前縁から�
   assert.equal(bySeq['1'].zRange.loZ, 0, 'seq1は不変');
 });
 
+const WALL_FACE_MM = 57.5; // 奥壁(y=0)の仕上げ面（generateRoomWallsFromOutline の壁厚115の半分）
+const planDepth = t => Math.abs(t.contribution.frame.back - t.contribution.frame.front);
+
 // 踊り場の奥行き(y=0..depth)だけを変えた階段室でseq1/seq3のcutを組む
-function cutsWithLandingDepth(depth) {
+function cutsWithLandingDepth(depth, { wood = false, winding = false } = {}) {
   const graph = makeGraph();
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -456,26 +461,122 @@ function cutsWithLandingDepth(depth) {
   const room = graph.addRoom(cells, '階段');
   generateRoomWallsFromOutline(graph, room);
   const stair = graph.addStair({
-    type: StairType.SWITCHBACK, cells, roomId: room.id,
-    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+    type: winding ? StairType.WINDING : StairType.SWITCHBACK, cells, roomId: room.id,
+    sections: [6, winding ? 2 : 1, 6], riser: null, upDirection: 'up', flip: false,
   });
+  if (wood) { // 柱の面(通り芯±45)が奥を越えうる構成
+    graph.setStructureOverride('木造（在来）');
+    stair.structure = StructuralMaterialType.WOOD;
+    generateStairPartitionWalls(graph, { structure: TRADITIONAL_WOOD_STRUCTURE });
+  }
   const t = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(t, '浅い踊り場でもcutsは組める');
-  return { t, bySeq: Object.fromEntries(t.cuts.map(c => [c.seqNo, c])) };
+  return { t, bySeq: Object.fromEntries(t.cuts.map(c => [c.seqNo, c])), stair, graph };
 }
 
 test('【失敗系・2026-10-08】switchbackCuts: 踊り場の奥行きがLANDING_CUT_INSET_MM以下ならseq3は前縁のまま切る（踊り場の外へ出さない）', () => {
   const { t, bySeq } = cutsWithLandingDepth(60);
-  assert.ok(t.params.landingLen <= LANDING_CUT_INSET_MM, `前提: 踊り場が浅い（実際:${t.params.landingLen}）`);
+  assert.ok(planDepth(t) <= LANDING_CUT_INSET_MM, `前提: 踊り場が浅い（平面の奥行き:${planDepth(t)}）`);
   assert.equal(bySeq['3'].line.axisValue, bySeq['1'].line.axisValue, '浅い踊り場ではseq3も前縁で切る');
 });
 
-test('【境界・2026-10-08】switchbackCuts: 踊り場の奥行きがちょうどLANDING_CUT_INSET_MMなら前縁のまま、1mm深ければ入る', () => {
-  const exact = cutsWithLandingDepth(LANDING_CUT_INSET_MM);
-  assert.equal(exact.t.params.landingLen, LANDING_CUT_INSET_MM, '前提: 奥行きがちょうど100');
+test('【失敗系・S2a QA】switchbackCuts: 踊り場が壁の面より浅く前縁が奥を越える構成でも、前縁は奥に揃い seq1/seq3 は階段室の外へ出ず例外なし', () => {
+  const { t, bySeq, stair, graph } = cutsWithLandingDepth(100, { wood: true });
+  const { front, frontA, back } = t.contribution.frame;
+  const raw = uTurnPlanLayout(stair, graph).run;
+  assert.ok((raw.front - raw.back) * Math.sign(raw.back - raw.baseA) > 0, `前提: 平面の前縁が奥を越える（front=${raw.front} back=${raw.back}）`);
+  assert.equal(front, back, `前縁は奥(back)に揃う ${JSON.stringify(t.contribution.frame)}`);
+  assert.equal(frontA, raw.frontA, '往路側の前縁(P1 の面)は奥を越えていないのでそのまま');
+  assert.equal(bySeq['3'].line.axisValue, back, 'seq3 は階段室の外へ出ない（奥行き0なので前縁のまま）');
+  assert.equal(bySeq['1'].line.axisValue, frontA);
+  assert.equal(t.contribution.landings[0].runLo, t.contribution.landings[0].runHi, '踊り場は奥行き0（前後逆転しない）');
+  // L1: front==back に揃えても seq3 の視線は踊り場奥向き（往路の走行の向き）で、上り口側を向かない
+  assert.equal(bySeq['3'].viewSign, Math.sign(back - raw.baseA), 'seq3 の視線は奥向き');
+  // L2: 復路の flight も揃えた前縁から始まり、奥の壁の面を越えて残らない（-y 方向に進む配置なので runLo>=back）
+  const ib = t.contribution.flights[1];
+  assert.ok(ib.runLo >= back - 1e-9 && ib.runHi >= ib.runLo, `復路が奥(${back})を越えない runLo=${ib.runLo}`);
+  assert.equal(ib.runLo, back, '復路の始点は揃えた前縁（奥）');
+});
+
+test('【失敗系・S2a QA L2】switchbackCuts(WINDING): 浅い踊り場で前縁を奥に揃えても、復路側の短冊は奥の壁の面を越えず（奥行き0）、cuts は組める', () => {
+  const { t, stair, graph } = cutsWithLandingDepth(100, { wood: true, winding: true });
+  const { back } = t.contribution.frame;
+  const raw = uTurnPlanLayout(stair, graph).run;
+  assert.ok((raw.front - raw.back) * Math.sign(raw.back - raw.baseA) > 0, '前提: 平面の前縁が奥を越える');
+  assert.ok(t.contribution.landings.every(l => l.runLo >= back - 1e-9), '短冊はどれも奥の壁の面を越えない');
+  assert.ok(t.contribution.landings.some(l => l.runHi - l.runLo > 0 && l.acrossLo < l.acrossHi), '往路側の短冊は奥行きを持つ');
+});
+
+test('【S2a QA L3】switchbackCuts: landingStartWorld は平面の踊り場の奥行き |back−front|（CL 区間長ではない）から取る（前縁が分かれる木造）', () => {
+  const { t } = woodPartitionTable();
+  const { frontA, front, back } = t.contribution.frame;
+  assert.ok(Math.abs(frontA - front) > 1, '前提: 前縁が分かれる');
+  const travelSign = Math.sign(t.wLanding.faceValue - t.wEntry.faceValue) || 1;
+  assert.equal(t.landingStartWorld, t.wLanding.faceValue - travelSign * Math.abs(back - front));
+  assert.notEqual(Math.abs(back - front), t.params.landingLen, '前提: CL 区間長とは違う値（取り違えを検出できる）');
+});
+
+// 踊り場の奥行きの基準は平面の解決値（contribution.frame の front〜back。CL の区間長ではない）。
+// フィクスチャの奥壁(y=0)の仕上げ面は通り芯から WALL_FACE_MM 室内側なので、通り芯の深さ d の平面の奥行きは d−WALL_FACE_MM。
+test('【境界・2026-10-08】switchbackCuts: 平面の踊り場の奥行きがちょうどLANDING_CUT_INSET_MMなら前縁のまま、1mm深ければ入る', () => {
+  const exact = cutsWithLandingDepth(LANDING_CUT_INSET_MM + WALL_FACE_MM);
+  assert.equal(planDepth(exact.t), LANDING_CUT_INSET_MM, '前提: 平面の奥行きがちょうど100');
   assert.equal(exact.bySeq['3'].line.axisValue, exact.bySeq['1'].line.axisValue, '奥行き==inset（>の境界）は前縁のまま');
-  const deeper = cutsWithLandingDepth(LANDING_CUT_INSET_MM + 1);
+  const deeper = cutsWithLandingDepth(LANDING_CUT_INSET_MM + WALL_FACE_MM + 1);
   assert.equal(Math.abs(deeper.bySeq['3'].line.axisValue - deeper.bySeq['1'].line.axisValue), LANDING_CUT_INSET_MM, '1mm深ければ入る');
+});
+
+// ---- S2a（2026-10-09）: seq1/seq3 の位置は平面の解決値（contribution.frame）から取る ----
+// 木造＋隔て壁（PB 包み）で前縁が往路側 frontA と復路側 front に分かれる階段室を組む
+function woodPartitionTable({ steel = false } = {}) {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withRoomUnder: false });
+  if (!steel) graph.setStructureOverride('木造（在来）');
+  stair.structure = steel ? StructuralMaterialType.STEEL : StructuralMaterialType.WOOD;
+  if (!steel) {
+    for (const w of generateStairPartitionWalls(graph, { structure: TRADITIONAL_WOOD_STRUCTURE })) {
+      const sign = Math.sign(w.clEnd.effectiveValue - w.clStart.effectiveValue) || 1;
+      w.startOffset = -sign * 57.5;
+      w.endOffset = sign * 57.5;
+    }
+  }
+  const t = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.ok(t);
+  return { t, bySeq: Object.fromEntries(t.cuts.map(c => [c.seqNo, c])), graph, stair };
+}
+
+test('【S2a】switchbackCuts: seq1 は往路側の前縁 frontA（隔て壁の柱の面）、seq3 は復路側の前縁 front から踊り場側へ LANDING_CUT_INSET_MM', () => {
+  const { t, bySeq } = woodPartitionTable();
+  const { frontA, front, back } = t.contribution.frame;
+  assert.ok(Math.abs(frontA - front) > 1, `前提: 前縁が分かれる（frontA=${frontA} front=${front}）`);
+  assert.equal(bySeq['1'].line.axisValue, frontA, 'seq1=frontA');
+  const toward = Math.sign(back - front);
+  assert.equal(bySeq['3'].line.axisValue, front + toward * LANDING_CUT_INSET_MM, 'seq3=front+100（踊り場側）');
+  assert.equal(bySeq['3'].viewSign, toward, 'seq3 の視線は踊り場奥向き');
+  assert.equal(bySeq['1'].viewSign, -toward, 'seq1 の視線は上り口向き');
+});
+
+test('【S2a】switchbackCuts: 隔て壁が立たない（鉄骨）なら frontA=front で、seq1=front・seq3=front+100 のまま（従来と同じ並び）', () => {
+  const { t, bySeq } = woodPartitionTable({ steel: true });
+  const { frontA, front, back } = t.contribution.frame;
+  assert.equal(frontA, front);
+  assert.equal(bySeq['1'].line.axisValue, front);
+  assert.equal(bySeq['3'].line.axisValue, front + Math.sign(back - front) * LANDING_CUT_INSET_MM);
+});
+
+test('【S2a】switchbackCuts: cut ごとの寄与は contribution の展開で、isVertical・frame・turnCells・踊り場の全件を落とさない', () => {
+  const { t, bySeq } = woodPartitionTable();
+  const c = t.contribution;
+  for (const seqNo of ['1', '2', '3', '4', '5']) {
+    const s = bySeq[seqNo].stairCut;
+    assert.ok(s, `seq${seqNo}`);
+    assert.equal(s.isVertical, c.isVertical, `seq${seqNo}: isVertical`);
+    assert.deepEqual(s.frame, c.frame, `seq${seqNo}: frame`);
+    assert.equal(s.turnCells, c.turnCells, `seq${seqNo}: turnCells`);
+    assert.equal(s.landings.length, c.landings.length, `seq${seqNo}: 踊り場（本体＋延長）`);
+  }
+  assert.equal(c.landings.length, 2, '前提: 本体＋延長の 2 枚');
+  assert.deepEqual(bySeq['3'].stairCut.flights, [], 'seq3 は踊り場だけ（段の重ね描きなし）');
 });
 
 // ---- 階段下部屋の2a壁は階段の展開図から見えない（ユーザー実機指摘2026-09「「6」D1:

@@ -725,6 +725,8 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       const raw = stairHiddenByCeil ? [] : stairPrimitivesForCut(opts.stairOver, pcut, columns, {
         includeStringerSightline: stringerSightlineVisible(face, graph, opts.stairOver, bandRoomBounds),
         stringerSightlineLowerOnly: true,
+        // 階段下の部屋では階段は上を通る見えがかり（ユーザー実機確認済みの「階段の高さ」の細線）。段板の断面は出さない。
+        treadSection: false,
       });
       // 天井が張られている範囲では、その上の階段は天井に隠れる（clipStairUnderCeiling）。
       const { prims: shown, crossXs } = clipStairUnderCeiling(raw, ceilAbs);
