@@ -841,6 +841,12 @@ seq2の切断は**往路レーンの中**を通るため、視線の手前には
 ——法線オフセットぶんの突き出し（実機フィードバック第3弾B）はFL側で起きるため。回帰テストの
 許容差も踊り場側の端にだけ与える。復路の見えがかり（`secondaryFlights`）も同じ経路を通る。
 
+## 回り階段（WINDING）の展開（ユーザー裁定2026-10-09 案A「回転部を段付きの踊り場で近似」）
+- 回転部（回り段 w マス）は`windingTurnSteps.js`で奥行き方向の短冊（Landing）の列に割り、段ごとに高さを替える（往路側の半幅が手前→奥、奇数なら奥に全幅の段、復路側の半幅が奥→手前。高さ＝往路の段数×蹴上＋(段番号−1)×蹴上）。復路の足元は回転部の最後の段（折返しは踊り場1枚で従来どおり）。w=1 が折返しの踊り場そのもの。短冊の間の蹴上は`landingStepRisers`がCUTの縦線で足し、床の輪郭は`stairCutFloorProfile`のmax合成で段状になる。`switchbackCuts`に通すので`LANDING_CUT_INSET_MM`（C面の切断を前縁+100）も効く。
+- 区間長・段数は`resolveUTurnSpanLengths`（`stairClassify.js`。折返し＋回りの唯一の供給源）。**構造側（`resolveSwitchbackSpanLengths`・`landingRect`・`landingZ`）は折返し専用のまま閉じる**——開くと`structuralAutoFill`が回り階段にも踊り場受け梁を作る。展開図は型判定なしの`uTurnTurnRect`で矩形だけ借りる。`fanCuts`は L_TURN/FLARED/OPEN_WELL だけ。
+- 隔て板がある階段室の面は6枚になり、レーン境界（s≈0.5）の実壁の面が外壁側の面と同じ側に入る。`classifyFaces`は同じ側に外壁側の面があればそれを除く（`mergeFaces`が先頭基準のため。実壁でない2a壁の面は従来どおり）。
+- 限界: (La) 短冊は等奥行きで、実際の扇形の割りとは最大 D/6（D＝回転部の奥行き）ずれる (Lb) 回転部の向こう側の段（見えがかり）は描かない (Lc) CH寸法の鎖は踊り場の高さ（往路の終端）のまま (Ld) 側面の取りつき回転部（`entryTurnSteps`）は階段寄与が無視する（折返しと同じ既存の限界） (Le) 桁枠は短冊に付けない（鉄骨の回り階段でトリム結合もしない）。回り階段の下の部屋の展開図にも階段が出る（`stairContributionOverRoom`の既存規則の帰結。受容）。
+
 ## 階段の高さ寸法（CH寸法）の記入ルール（ユーザー明示指示2026-08その12）
 規則は2つだけ: **(1)寸法は「床断面・踊り場断面・天井断面のいずれかから、いずれかまで」を1本とする**
 **(2)帯の左から端を順に見て、前の端と高さが変わったときだけ記入する**（先頭の端は必ず記入）。
@@ -904,8 +910,9 @@ seq4は左端＝seq2の鏡像）。実機「6」ではC左・D1左・D1右・B�
 (c)`upperGraph.defaultCeilingHeight`。
 
 1. **第1層 切断定義（`section/cuts/`）**: タイプ別に「どこを・どちらを向いて・どう切るか」の表だけを持つ。
-   `switchbackCuts.js`（SWITCHBACK。往路・復路の2レーン＋踊り場）・`straightCuts.js`（STRAIGHT/STRAIGHT_LANDING。
-   単一レーン＋任意の踊り場）・`fanCuts.js`（WINDING/L_TURN/FLARED/OPEN_WELL。扇形レーン・回り段・矩折コーナーは
+   `switchbackCuts.js`（SWITCHBACK/WINDING＝U字系。往路・復路の2レーン＋踊り場。WINDINGは回転部を段付きの
+   踊り場に近似して同じ表に通す。後述「回り階段の展開」）・`straightCuts.js`（STRAIGHT/STRAIGHT_LANDING。
+   単一レーン＋任意の踊り場）・`fanCuts.js`（L_TURN/FLARED/OPEN_WELL。扇形レーン・矩折コーナーは
    第3層Flightの区分線形モデルで表現できないため常にnull）。返り値は`SectionCut[]`（切断線・視線方向・図のx昇順
    対応・高さ範囲・第3層Flight/Landingへの参照）。往復間の壁・踊り場壁のような「区間を横断する実壁」は
    `graph.walls`をレーン間/踊り場位置のCL座標で直読みして検出し、実在しなければ該当seqを挿入しない（合成面
@@ -2009,7 +2016,7 @@ LANE_GAPを片側だけ詰めるのと同じ基準（単一情報源）。**内�
 **帯のRoomは列によらず一定でなければならない**、が要点。
 
 defer（未実装）: 傾斜天井の作図・開口の内法寸法線・巾木見切り目地・家具設備電気・屋外部屋・展開図上の編集・印刷/PDF・
-SWITCHBACK以外の階段断面（WINDING/L_TURN/FLARED/OPEN_WELL）・展開図の建具「姿」クリックでのパネル連携（記号丸のみ対応）・
+U字系以外の階段断面（L_TURN/FLARED/OPEN_WELL）・展開図の建具「姿」クリックでのパネル連携（記号丸のみ対応）・
 他階の建具の2層帯への描画（吹抜け帯の下階建具・階段帯の上階建具）。
 
 **廃止した仕様: 最上階キャップ（`upperCeilCapped`）**。「上階が最上階（`floorHeightAbove`がnull）かつ上階Roomの

@@ -40,7 +40,10 @@ function makeGraph(name = 'p1') {
 // ある」構成を作る。既定の3セル構成では階段の走行部が上り口側の壁までいっぱいに広がるため、
 // 階段の足元は常に面の端（またはその外）に来てしまい、「レーンの1FL線ははり出し側にだけ残る」
 // （flatLineSpanX.loを付けない）という規約を空スパンと区別できない。
-function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null, upperLandingOnly = false, withRoomUnder = true, entryGapMm = 0 } = {}) {
+function makeSwitchbackFixture(graph, {
+  withMidWall = false, midWallGraph = null, upperLandingOnly = false, withRoomUnder = true, entryGapMm = 0,
+  type = StairType.SWITCHBACK, sections = [6, 1, 6],
+} = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
@@ -98,8 +101,8 @@ function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null
   }
 
   const stair = graph.addStair({
-    type: StairType.SWITCHBACK, cells, roomId: room.id,
-    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+    type, cells, roomId: room.id,
+    sections, riser: null, upDirection: 'up', flip: false,
   });
   if (withRoomUnder) {
     const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
@@ -108,7 +111,7 @@ function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null
   return { room, stair, midWall };
 }
 
-const OPTS = { floorHeight: 2400, chUpperAbsMm: 4800, chLowerMm: 2400 };
+const OPTS ={ floorHeight: 2400, chUpperAbsMm: 4800, chLowerMm: 2400 };
 
 // ---- midWallが無ければ ['1','2','3','4','5'] ----
 test('stairFaceSequence: 往路・復路の間に壁が無ければ seqNo は [1,2,3,4,5]', () => {
@@ -2466,4 +2469,39 @@ test('【失敗系】stairFaceSequence: はり出しの先が上階のSTAIR_VOID
   assert.equal(entry.upperFloorEnds?.hi, false,
     'STAIR_VOIDも実床が無い（isRealRoomの判定は全モジュール共通）');
   assert.equal(lines.length, 0);
+});
+
+// ---- 回り階段（WINDING）: 回転部を段付きの踊り場として折返しのエンジンに通す（ユーザー裁定2026-10-09 案A）----
+// フィクスチャは折返しと同構成で sections [5,6,5]（総蹴上15・階高2400で蹴上160）。回転部の段は z=800,960,1120,…
+test('【2026-10-09】stairFaceSequence(WINDING): nullにならず seq1..5 が組まれ、seq2 の断面に回転部の段ごとのCUT水平線と蹴上が出る', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { type: StairType.WINDING, sections: [5, 6, 5] });
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.ok(entries, 'WINDINGでもフォールバック（null）にならない');
+  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5']);
+  const riser = 2400 / 15;
+  const thick = weightForRole(ElevationLineRole.CUT);
+  const seq2 = entries.find(e => e.seqNo === '2');
+  const hz = z => seq2.content.filter(p => p.type === 'line' && p.weight === thick && p.y1 === p.y2 && Math.abs(-p.y1 - z) < 1e-6);
+  for (const k of [5, 6, 7]) assert.ok(hz(k * riser).length >= 1, `z=${k * riser} のCUT水平線（回転部の段）が出る`);
+  const risers = seq2.content.filter(p => p.type === 'line' && p.weight === thick && p.x1 === p.x2
+    && [[5, 6], [6, 7]].some(([a, b]) => Math.abs(-p.y1 - a * riser) < 1e-6 && Math.abs(-p.y2 - b * riser) < 1e-6
+      || Math.abs(-p.y2 - a * riser) < 1e-6 && Math.abs(-p.y1 - b * riser) < 1e-6));
+  assert.equal(risers.length, 2, '段と段の間の蹴上の縦線');
+  // 断面線（下側の輪郭）は回転部で段状に上がり（単調非減少）、階段の高さ（往路の終端800）より下がらない。
+  const fp = seq2.floorProfile;
+  assert.ok(fp && fp.length > 1, '縦断する階段寄与があるのでfloorProfileが付く');
+  const atTurn = fp.filter(([, z]) => z >= 5 * riser - 1e-6).map(([, z]) => z);
+  assert.ok(atTurn.includes(5 * riser) && atTurn.includes(6 * riser) && atTurn.includes(7 * riser),
+    `回転部の段の高さが輪郭に現れる: ${JSON.stringify(fp)}`);
+});
+
+test('【回帰・2026-10-09】stairFaceSequence: L_TURN/FLARED/OPEN_WELL は従来どおりnull（フォールバック）', () => {
+  for (const type of [StairType.L_TURN, StairType.FLARED, StairType.OPEN_WELL]) {
+    const graph = makeGraph();
+    const { room, stair } = makeSwitchbackFixture(graph, { type, sections: [6, 2, 6] });
+    const faces = composeRoomFaces(room, graph);
+    assert.equal(stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null, type);
+  }
 });

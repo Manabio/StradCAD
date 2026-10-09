@@ -32,5 +32,6 @@ scripts/probe/*/
 !scripts/probe/golden13/
 !scripts/probe/golden-regen/
 !scripts/probe/golden-stair-plan/
+!scripts/probe/golden-elev-moku16/
 !scripts/probe/golden11/
 !scripts/probe/golden-structperf/

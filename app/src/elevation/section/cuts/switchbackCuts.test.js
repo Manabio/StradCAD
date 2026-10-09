@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../../elevationFaceList.js';
-import { switchbackCuts, stairBandWallFilter, LANDING_CUT_INSET_MM } from './switchbackCuts.js';
+import { switchbackCuts, stairBandWallFilter, classifyFaces, LANDING_CUT_INSET_MM } from './switchbackCuts.js';
 import { cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
 import { buildBandLayers } from '../sectionBandLayers.js';
 
@@ -14,7 +14,10 @@ function makeGraph(name = 'p1') {
 }
 
 // elevationStairSequence.test.jsのmakeSwitchbackFixtureと同一構成。
-function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null, withRoomUnder = true, asymmetricEnds = false } = {}) {
+function makeSwitchbackFixture(graph, {
+  withMidWall = false, midWallGraph = null, withRoomUnder = true, asymmetricEnds = false,
+  type = StairType.SWITCHBACK, sections = [6, 1, 6],
+} = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
@@ -66,8 +69,8 @@ function makeSwitchbackFixture(graph, { withMidWall = false, midWallGraph = null
   }
 
   const stair = graph.addStair({
-    type: StairType.SWITCHBACK, cells, roomId: room.id,
-    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+    type, cells, roomId: room.id,
+    sections, riser: null, upDirection: 'up', flip: false,
   });
   // withRoomUnder（既定true）: 実機確認済みの表現（踊り場が基準床）は「階段下に部屋がある場合」。
   if (withRoomUnder) {
@@ -519,4 +522,76 @@ test('stairBandWallFilter: 階段下に部屋があれば、階段室自身の�
     '階段室自身の空気ボリュームと階段下部屋を隔てる壁は「数えない」(false)はず');
   assert.equal(wallFilter(exteriorWall), true,
     '建物の外に面する自室の外壁は従来どおり「数える」(true)はず');
+});
+
+// ---- 回り階段（WINDING）: 回転部を段付きの踊り場として折返しのエンジンに通す（ユーザー裁定2026-10-09 案A）----
+// フィクスチャ: 踊り場=回転部 y:0-1500／往路・復路 y:1500-4500。sections [5,6,5]＝総蹴上15・階高2400で蹴上160。
+const WINDING_FIXTURE = { type: StairType.WINDING, sections: [5, 6, 5] };
+const WINDING_RISER = 2400 / 15;
+
+function windingTable(extra = {}) {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { ...WINDING_FIXTURE, ...extra });
+  const t = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  return { t, graph, room, stair };
+}
+
+test('【2026-10-09】switchbackCuts(WINDING): cuts=[1..5]、回転部の最初の段が基準床（往路段数×蹴上）、seq3は前縁+LANDING_CUT_INSET_MM（L2解消）', () => {
+  const { t } = windingTable();
+  assert.ok(t, 'WINDINGでもcutsが組める');
+  assert.deepEqual(t.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
+  assert.equal(t.params.turnCells, 6);
+  assert.equal(t.landingAbs, 5 * WINDING_RISER);
+  const bySeq = Object.fromEntries(t.cuts.map(c => [c.seqNo, c]));
+  assert.equal(bySeq['1'].line.axisValue, 1500, 'seq1は回転部の前縁');
+  assert.equal(bySeq['3'].line.axisValue, 1500 - LANDING_CUT_INSET_MM, 'seq3は前縁から回転部側へ入る');
+  assert.equal(bySeq['3'].zRange.loZ, t.landingAbs);
+  assert.equal(t.contribution.landings.length, 6, '回転部は6枚の短冊（段付きの踊り場）');
+});
+
+test('【2026-10-09】switchbackCuts(WINDING): 復路の足元は回転部の最後の段（折返しの踊り場の高さではない）', () => {
+  const { t } = windingTable();
+  const [outbound, inbound] = t.contribution.flights;
+  assert.equal(outbound.baseZ, 0);
+  assert.equal(inbound.baseZ, (5 + 5) * WINDING_RISER, '復路baseZ=(n1+turnCells-1)×蹴上');
+  assert.equal(inbound.baseZ, t.contribution.landings.at(-1).z);
+});
+
+test('【失敗系・2026-10-09】switchbackCuts: L_TURN/FLARED/OPEN_WELLは対象外でnull（回り階段だけがU字系に加わった）', () => {
+  for (const type of [StairType.L_TURN, StairType.FLARED, StairType.OPEN_WELL]) {
+    const graph = makeGraph();
+    const { room, stair } = makeSwitchbackFixture(graph, { type, sections: [6, 2, 6] });
+    const result = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+    assert.equal(result, null, `${type}はnullのはず`);
+  }
+});
+
+test('【失敗系・2026-10-09】switchbackCuts(WINDING): 階段寄与が求まらない（回転部のマス数が整数でない）なら例外を投げずnull', () => {
+  const { t } = windingTable({ sections: [5, 2.5, 5] });
+  assert.equal(t, null);
+});
+
+// ---- classifyFaces: 往路・復路の間（s≈0.5）の実壁の面は外壁側の面を押しのけない（§R）----
+function midLaneFrame() {
+  // 縦の走行軸（y）。幅 x:0-2000（s=x/2000）、走行 y:4500→0（t=(4500-y)/4500）。
+  return { vertical: true, sOf: p => p.x / 2000, tOf: p => (4500 - p.y) / 4500 };
+}
+const vFace = (faceValue, extra = {}) => ({ isVertical: true, faceValue, lo: 0, hi: 4500, kind: 'wall', hasRealWall: true, ...extra });
+
+test('【§R】classifyFaces: 隔て板の面（s=0.468の実壁）が面リストの先頭にあっても、wOut1は外壁側の面になる', () => {
+  const faces = [vFace(936), vFace(0), vFace(2000)];
+  const c = classifyFaces(faces, midLaneFrame());
+  assert.equal(c.wOut1.faceValue, 0, '外壁側の面が基準になる');
+  assert.equal(c.wOut2.faceValue, 2000);
+});
+
+test('【§R】classifyFaces: その側に外壁側の面が無ければ、レーン境界の面をその側の面として残す（部屋がレーン境界までの構成）', () => {
+  const c = classifyFaces([vFace(1000), vFace(2000)], midLaneFrame());
+  assert.equal(c.wOut1.faceValue, 1000);
+  assert.equal(c.wOut2.faceValue, 2000);
+});
+
+test('【§R】classifyFaces: 実壁でない面（hasRealWall:false。階段下部屋の2a壁）は従来どおり先頭なら基準のまま', () => {
+  const c = classifyFaces([vFace(1000, { hasRealWall: false }), vFace(0)], midLaneFrame());
+  assert.equal(c.wOut1.faceValue, 1000, '既存の挙動を変えない');
 });

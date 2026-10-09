@@ -29,6 +29,21 @@ const EDGE_EPS_MM = 1;
 function computeLandingFrame(stair, graph) {
   const spanInfo = resolveSwitchbackSpanLengths(stair, graph);
   if (!spanInfo) return null;
+  return uTurnTurnRect(stair, graph, spanInfo);
+}
+
+/**
+ * U字系（SWITCHBACK/WINDING）の回転部（踊り場・回り段）の世界矩形。型判定を持たない純粋な幾何
+ * （区間長は呼び出し側が resolveSwitchbackSpanLengths / resolveUTurnSpanLengths の値を渡す）。
+ * landingRect・landingEdgeCLs は SWITCHBACK 専用のまま（computeLandingFrame が型判定してここを呼ぶ）。
+ * 展開図は WINDING の回転部の矩形をここから取る（回り階段に踊り場受け梁は作らないため構造側は開かない）。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @param {{len1:number, landingLen:number, len2:number}} spanInfo
+ * @returns {{vertical:boolean, rect:{x1:number,y1:number,x2:number,y2:number}, frontIsLo:boolean}|null}
+ */
+export function uTurnTurnRect(stair, graph, spanInfo) {
+  if (!spanInfo) return null;
   const bounds = roomBounds(refreshCells(stair.cells, graph), graph);
   if (![bounds.x1, bounds.y1, bounds.x2, bounds.y2].every(Number.isFinite)) return null;
 

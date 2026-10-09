@@ -11,7 +11,7 @@
  * ローカル座標は elevationFigure.js と同じ（x=0起点、yは上向き負・床=0）。
  */
 import { StructuralMaterialType } from '@core';
-import { resolveSwitchbackSpanLengths } from '../finish/stair/stairClassify.js';
+import { resolveSwitchbackSpanLengths, resolveUTurnSpanLengths } from '../finish/stair/stairClassify.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from './elevationStyle.js';
 
 // 在来木造階段の踏面板の厚み（ユーザー指示2026-10-07「木造（在来）で階段は、踏面の厚みは30、
@@ -124,6 +124,26 @@ export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1
 export function resolveSwitchbackParams(stair, graph, floorHeight) {
   if (floorHeight == null) return null;
   const spanInfo = resolveSwitchbackSpanLengths(stair, graph);
+  if (!spanInfo) return null;
+  const riser = stair.riser ?? floorHeight / spanInfo.totalSteps;
+  return { ...spanInfo, riser };
+}
+
+/**
+ * U字系（SWITCHBACK/WINDING）の断面計算パラメータ。resolveSwitchbackParams と同じ式
+ * （riser＝stair.riser ?? 階高/総段数）で、区間長・段数の元だけ resolveUTurnSpanLengths
+ * （turnCells＝回転部のマス数を含む）に替えたもの。WINDING の展開図が回転部を段付きの踊り場として
+ * 折返しのエンジンに通すための入口（resolveSwitchbackParams は SWITCHBACK 専用のまま）。
+ * U字系以外・floorHeight未確定はnull。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @param {number|null} floorHeight
+ * @returns {{totalSteps:number, riser:number, n1:number, n2:number, turnCells:number,
+ *   len1:number, landingLen:number, len2:number}|null}
+ */
+export function resolveUTurnSectionParams(stair, graph, floorHeight) {
+  if (floorHeight == null) return null;
+  const spanInfo = resolveUTurnSpanLengths(stair, graph);
   if (!spanInfo) return null;
   const riser = stair.riser ?? floorHeight / spanInfo.totalSteps;
   return { ...spanInfo, riser };

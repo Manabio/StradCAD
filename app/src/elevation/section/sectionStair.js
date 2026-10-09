@@ -7,8 +7,8 @@
  * 挙動不変のまま呼ぶ）・resolveSwitchbackParams（区間長・段数の単一情報源）・makeFrame
  * （finish/stair/stairGeometry.js。flip/upDirection吸収済み）。梯子（正面視の水平線）は
  * treadLadderLinesを使わずemitLine経由で組み立てる（§5.6最終フィルタ・baseFloorZ以下の
- * 明示的な破線指定を両立させるため。WP-E5b）。今回のスコープはSWITCHBACKのみ
- * （resolveSwitchbackParams自体がSWITCHBACK以外null）。
+ * 明示的な破線指定を両立させるため。WP-E5b）。対象はU字系（SWITCHBACK/WINDING。
+ * resolveUTurnSectionParamsがU字系以外null）。
  *
  * h(t)は関数で持たず区分線形のFlight[]で表す（設計書§4のコメントどおり。既存部品の前提形）。
  * WP-E5b修正: stairContributionの復路(inbound)flightは、makeFrameのt軸が「往路+踊り場」ぶんの
@@ -76,9 +76,11 @@
 import { StairType, StructuralMaterialType, DEFAULT_BASEBOARD_HEIGHT } from '@core';
 import { roomBounds, refreshCells } from '../../finish/gridCells.js';
 import { makeFrame, LANE_GAP } from '../../finish/stair/stairGeometry.js';
-import { landingRect } from '../../finish/stair/stairLanding.js';
+import { landingRect, uTurnTurnRect } from '../../finish/stair/stairLanding.js';
+import { U_TURN_TYPES } from '../../finish/stair/stairPorts.js';
+import { windingTurnSteps } from './windingTurnSteps.js';
 import {
-  resolveSwitchbackParams, stairRunProfile, stringerPrimitives, stringerBandGeometry, WOOD_TREAD_THICKNESS_MM,
+  resolveUTurnSectionParams, stairRunProfile, stringerPrimitives, stringerBandGeometry, WOOD_TREAD_THICKNESS_MM,
   STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM, STEEL_LANDING_FRAME_DEPTH_MM,
 } from '../elevationStairSection.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
@@ -95,25 +97,29 @@ import { clipPrimitivesToXRange, subtractRectsFromPrimitives } from '../elevatio
  * @typedef {{isVertical:boolean, axisWorld:number, spanLo:number, spanHi:number,
  *   kind:'front'|'back'|'side'}} LandingFrameEdge
  * @typedef {{runLo:number, runHi:number, acrossLo:number, acrossHi:number, z:number,
- *   frame:{edges:LandingFrameEdge[]}}} Landing
+ *   frame:{edges:LandingFrameEdge[]}, isVertical?:boolean, turnStep?:number}} Landing
+ *   isVertical/turnStep は WINDING の短冊だけが持つ（走行軸の向き・回転部内の段番号。桁枠 edges は空）。
  * @typedef {{structure:string|null, stringerThicknessMm:number, stringerDepthMm:number,
  *   landingFrameDepthMm:number, baseboardHeightMm:number, anchorZs:number[]}} StairUnit
  */
 
 /**
- * 階段（SWITCHBACKのみ）の3D寄与を、タイプ非依存の区分線形モデル（Flight[]・Landing[]）で返す。
- * SWITCHBACK以外・floorHeight未確定・stair.cellsから設置枠が求まらない場合はnull
- * （resolveSwitchbackParamsのnull契約をそのまま延長）。
+ * 階段（U字系＝SWITCHBACK/WINDING）の3D寄与を、タイプ非依存の区分線形モデル（Flight[]・Landing[]）で返す。
+ * WINDING は回転部を段付きの踊り場（短冊 Landing の列。windingTurnSteps.js）へ近似し、復路の
+ * baseZ は回転部の最後の段の高さ（折返しは踊り場1枚で従来どおり）。
+ * U字系以外・floorHeight未確定・stair.cellsから設置枠が求まらない場合はnull
+ * （resolveUTurnSectionParamsのnull契約をそのまま延長）。
  * @param {import('@core').Stair} stair
  * @param {object} graph
  * @param {number|null} floorHeight - 設置階〜上階の階高(mm)
  * @returns {{flights:Flight[], landings:Landing[], structure:string|null, unit:StairUnit}|null}
  */
 export function stairContribution(stair, graph, floorHeight) {
-  if (!stair || stair.type !== StairType.SWITCHBACK) return null;
-  const params = resolveSwitchbackParams(stair, graph, floorHeight);
+  if (!stair || !U_TURN_TYPES.has(stair.type)) return null;
+  const params = resolveUTurnSectionParams(stair, graph, floorHeight);
   if (!params) return null;
-  const { n1, n2, riser, len1, landingLen, len2 } = params;
+  const { n1, n2, riser, len1, landingLen, len2, turnCells } = params;
+  const isWinding = stair.type === StairType.WINDING;
 
   const bounds = roomBounds(refreshCells(stair.cells, graph), graph);
   if (!bounds) return null;
@@ -157,13 +163,16 @@ export function stairContribution(stair, graph, floorHeight) {
     runLo: outbound.runLo, runHi: outbound.runHi,
     travelSign: -outbound.travelSign,
     acrossLo: Math.min(s1World, acrossMid), acrossHi: Math.max(s1World, acrossMid),
-    baseZ: landingZ, riserMm: riser, steps: n2, lengthMm: len2, nosingMm: stair.nosing ?? 0, treadThicknessMm,
+    // 復路の足元＝回転部の最後の段の高さ。折返し（turnCells=1）は踊り場の高さそのもの。
+    baseZ: landingZ + (turnCells - 1) * riser, riserMm: riser, steps: n2, lengthMm: len2,
+    nosingMm: stair.nosing ?? 0, treadThicknessMm,
   };
 
   // WP-A1: 踊り場の世界矩形は finish/stair/stairLanding.js の landingRect（単一情報源）へ載せ替え
   // た（挙動不変。旧実装はここでcoordAtRun/coordAt1・acrossLo/acrossHiから直接組み立てていた式を
-  // そのまま landingRect へ移設しただけ）。
-  const rect = landingRect(stair, graph);
+  // そのまま landingRect へ移設しただけ）。WINDING は回転部の矩形を uTurnTurnRect（型判定なしの
+  // 同じ幾何。landingRect/landingEdgeCLs は構造側のため SWITCHBACK 専用のまま）から取る。
+  const rect = isWinding ? uTurnTurnRect(stair, graph, params)?.rect : landingRect(stair, graph);
   if (!rect) return null;
   const landing = vertical
     ? { runLo: rect.y1, runHi: rect.y2, acrossLo: rect.x1, acrossHi: rect.x2, z: landingZ }
@@ -172,6 +181,15 @@ export function stairContribution(stair, graph, floorHeight) {
   // stairLanding.jsのlandingEdgeCLsと同じ判定式（ファイル冒頭ASSUMED参照）。
   const frontIsLo = Math.abs(coordAtRun - landing.runLo) < GAP_EPS;
   landing.frame = { edges: landingFrameEdges(landing, vertical, frontIsLo) };
+  // WINDING: 回転部を段付きの踊り場（短冊の列）へ近似する（windingTurnSteps.js）。桁枠は持たない。
+  // 回転部の矩形（landing）は手前の縁 front＝t=tRun側・奥の縁＝t=1側。
+  const landings = isWinding
+    ? windingTurnSteps({
+      vertical, runFront: frontIsLo ? landing.runLo : landing.runHi, runBack: frontIsLo ? landing.runHi : landing.runLo,
+      acrossS0: s0World, acrossMid, acrossS1: s1World, z0: landingZ, riser, cells: turnCells,
+    })
+    : [landing];
+  if (landings.length === 0) return null;
 
   // ユーザー実機フィードバック2026-08-23「踊り場断面上に巾木同寸」対応: 階段Room
   // （stair.roomId。graph.roomMap）のRoomFinish.baseboardHeightをparseBaseboardHeightMm
@@ -192,7 +210,7 @@ export function stairContribution(stair, graph, floorHeight) {
     anchorZs: [...new Set([0, floorHeight, landingZ])].sort((a, b) => a - b),
   };
 
-  return { flights: [outbound, inbound], landings: [landing], structure: stair.structure ?? null, unit };
+  return { flights: [outbound, inbound], landings, structure: stair.structure ?? null, unit };
 }
 
 // 踊り場矩形(runLo/runHi×acrossLo/acrossHi)の外周4辺を世界座標(axisWorld)で表す（WP-A2）。
@@ -349,9 +367,11 @@ function computeFlightZigzagPoints(flight, cut, columns, outerBound) {
 // flightのどちらの端が踊り場に接するかを返す（stairRunProfileの点列は歩行順なので、
 // 段鼻列の先頭=flight.baseZ・末尾=baseZ+steps*riser）。往路は末尾が踊り場、復路は先頭が踊り場。
 // 接する端だけを、踊り場桁枠の下端（＝上端+桁成）の水平線でトリムする。
-function landingMitreOpts(flight, landings, unit) {
+function landingMitreOpts(flight, allLandings, unit) {
   const D = unit?.landingFrameDepthMm;
-  if (D == null || !landings?.length) return {};
+  // 回り階段の短冊（turnStep）は桁枠を持たない＝取り合う相手の桁枠が無いのでトリムしない。
+  const landings = (allLandings ?? []).filter(l => l.turnStep == null);
+  if (D == null || !landings.length) return {};
   const startZ = flight.baseZ;
   const endZ = flight.baseZ + flight.steps * flight.riserMm;
   const at = z => landings.find(l => Math.abs(l.z - z) < GAP_EPS) ?? null;
@@ -932,6 +952,48 @@ function landingCutPrimitives(landing, flights, stairIsVertical, cut, columns) {
 }
 
 /**
+ * 段付きの踊り場（回り階段の短冊。windingTurnSteps.js）の隣り合う2枚の間の蹴上を、CUTの縦線で返す。
+ * 隣り合う＝高さが GAP_EPS を超えて違い、かつ縁を共有する2枚:
+ *   - 切断が両方を縦断する（側面視）… 走行方向の共有辺の位置に z_a→z_b の縦線。
+ *   - 切断が走行軸に直交して両方を横切る（正面視）… 幅方向の共有辺（レーン境界）の位置に縦線。
+ * 折返し（踊り場1枚）・高さの同じ踊り場・縁を共有しない踊り場は引かない（0本）。
+ * 縦線は面の描画範囲（stairDrawRange）の外に出さない。床の輪郭そのもの（段状）は
+ * stairCutFloorProfile の max 合成が受け持つ。
+ * @param {Landing[]|undefined} landings
+ * @param {boolean} stairIsVertical
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {object[]}
+ */
+export function landingStepRisers(landings, stairIsVertical, cut) {
+  const ls = landings ?? [];
+  const prims = [];
+  const draw = stairDrawRange(cut);
+  const near = (p, q) => Math.abs(p - q) <= GAP_EPS;
+  const lengthwiseOf = l => isLengthwiseCut(stairIsVertical, l.acrossLo, l.acrossHi, l.runLo, l.runHi, cut);
+  const crossingOf = l => cut.line.isVertical !== stairIsVertical &&
+    cut.line.axisValue >= l.runLo - GAP_EPS && cut.line.axisValue <= l.runHi + GAP_EPS;
+  for (let i = 0; i < ls.length; i++) {
+    for (let j = i + 1; j < ls.length; j++) {
+      const a = ls[i], b = ls[j];
+      if (Math.abs(a.z - b.z) <= GAP_EPS) continue;
+      let edge = null; // 共有辺の世界座標
+      if (lengthwiseOf(a) && lengthwiseOf(b)) {
+        if (near(a.runHi, b.runLo)) edge = a.runHi;
+        else if (near(b.runHi, a.runLo)) edge = a.runLo;
+      } else if (crossingOf(a) && crossingOf(b)) {
+        if (near(a.acrossHi, b.acrossLo)) edge = a.acrossHi;
+        else if (near(b.acrossHi, a.acrossLo)) edge = a.acrossLo;
+      }
+      if (edge == null) continue;
+      const x = localXOf(cut, edge);
+      if (x < draw.lo - GAP_EPS || x > draw.hi + GAP_EPS) continue;
+      prims.push(emitLine(cut, x, a.z, x, b.z, ElevationLineRole.CUT, { neverDowngrade: true }));
+    }
+  }
+  return prims;
+}
+
+/**
  * ジグザグ点列（stairRunProfileの出力。ささらの側面視輪郭=stringerPrimitivesの入力）の端部を、
  * flightのbaseZ・baseZ+steps×riserMm（登り口FL・下り口FL）へ水平カットする（WP-A2。設計書
  * §8 AMBIGUITY F）。全ての点のyをこの範囲へクランプし、最初・最後の点は範囲の境界ちょうどへ
@@ -1090,6 +1152,21 @@ export function landingFramePrimitives(landing, cut, columns, unit, mitreX = nul
 }
 
 /**
+ * 階段の走行軸の向き（isVertical）。flightsが空でも（seq3は踊り場だけを受け取る）踊り場から取る:
+ * flights[0] → landings[0].isVertical（桁枠を持たない回り階段の短冊） → landings[0] の side 辺 →
+ * 最後の退避として切断線自身の向き。stairPrimitivesForCut と stairCutFloorProfile が共有する。
+ * @param {{flights?:Flight[], landings?:Landing[]}} contribution
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {boolean}
+ */
+export function stairAxisIsVertical(contribution, cut) {
+  return contribution.flights?.[0]?.isVertical
+    ?? contribution.landings?.[0]?.isVertical
+    ?? contribution.landings?.[0]?.frame?.edges?.find(e => e.kind === 'side')?.isVertical
+    ?? cut.line.isVertical;
+}
+
+/**
  * この切断（cut）の**断面線（下側の輪郭）**のうち、**階段が受け持つ部分**をFloorProfile
  * （elevationFloorProfile.jsのtypedef。`[[localX, absZ]]`・x昇順・範囲外は端点値を保持）で返す。
  * contributionがnull、または縦断する寄与が1つも無ければnull（＝この面の断面線に階段は現れない）。
@@ -1124,10 +1201,8 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
     pts[pts.length - 1] = [pts[pts.length - 1][0], baseAtLoX ? topZ : baseZ];
     parts.push(pts);
   }
-  // 踊り場の向き（走行軸）はstairPrimitivesForCutと同じ導出（flightsが空でも踊り場のside辺から取る）。
-  const stairIsVertical = contribution.flights?.[0]?.isVertical
-    ?? contribution.landings?.[0]?.frame?.edges?.find(e => e.kind === 'side')?.isVertical
-    ?? cut.line.isVertical;
+  // 踊り場の向き（走行軸）はstairPrimitivesForCutと同じ導出（flightsが空でも踊り場から取る）。
+  const stairIsVertical = stairAxisIsVertical(contribution, cut);
   for (const landing of contribution.landings ?? []) {
     if (!isLengthwiseCut(stairIsVertical, landing.acrossLo, landing.acrossHi, landing.runLo, landing.runHi, cut)) continue;
     const span = landingFloorSpanX(landing, contribution.flights, cut, columns, landing.runLo, landing.runHi);
@@ -1192,9 +1267,8 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   // `flights[0] ?? cut.line.isVertical`だと切断線自身の向きへフォールバックし、
   // isLengthwiseCut/crossingの判定が反転して踊り場の断面・桁枠がほとんど出なかった。
   // 踊り場のside辺（走行軸に平行な辺）の向きが階段の向きそのもの（landingFramePrimitivesと同じ導出）。
-  const stairIsVertical = contribution.flights[0]?.isVertical
-    ?? contribution.landings?.[0]?.frame?.edges?.find(e => e.kind === 'side')?.isVertical
-    ?? cut.line.isVertical;
+  // 桁枠を持たない踊り場（回り階段の短冊）は landing.isVertical を持つ（stairAxisIsVertical）。
+  const stairIsVertical = stairAxisIsVertical(contribution, cut);
   const isSteel = contribution.structure === StructuralMaterialType.STEEL;
   // WP-A2: 踊り場桁枠の生成対象（STEEL・RC。ユーザー裁定2026-08-23）。ささら本体(isSteel)とは
   // 独立したゲート——RC階段はささらを持たないがコンクリート桁枠は持つ。
@@ -1284,6 +1358,8 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
         laneGapLocalX(contribution, cut, trueAcrossLo, trueAcrossHi, isSteel)));
     }
   }
+  // 段付きの踊り場（回り階段）の蹴上。踊り場が1枚（折返し）なら0本。
+  prims.push(...landingStepRisers(contribution.landings, stairIsVertical, cut));
   // ささら側面視（鉄骨のみ。§6「鉄骨階段のみ」）: 各レーンのジグザグ点列ごとに桁成ぶん下げた
   // 輪郭（DETAIL＝切断面の向こう側にあるこのレーン自身のささら）を追加する。ユーザー指示
   // 「見えかがりは細線」対応（stringerPrimitives参照。2026-08-23実機修正でジグザグ自体が

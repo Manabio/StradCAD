@@ -567,7 +567,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     return buildStraightFaceSequence(stair, faces, graph, opts);
   }
   if (stair && UNSUPPORTED_FAN_LANE_TYPES.includes(stair.type)) {
-    return fanLaneCuts(stair); // 常にnull（扇形レーン未対応。fanCuts.js参照）
+    return fanLaneCuts(stair); // 常にnull（L_TURN/FLARED/OPEN_WELL＝扇形レーン未対応。fanCuts.js参照。WINDINGは下のswitchbackCutsへ）
   }
 
   const cutTable = switchbackCuts(stair, faces, graph, opts);

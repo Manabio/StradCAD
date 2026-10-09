@@ -5,7 +5,12 @@
 // buildRoomBandWithVoidAbove を通る。全部屋を buildRoomBand で作ると**実機が通らない経路**を
 // 比較してしまい、階段室（例: 11.stq 1階の「6」）の差分を取り逃がす。
 //
-// 使い方: node dumpElevFigure.mjs [outDir] [src.stq]
+// 使い方: node dumpElevFigure.mjs [outDir] [src.stq] [--regen]
+//   --regen  保存済みの壁のまま比べず、実アプリが文書を開いたときと同じく全階の壁を再生成してから描く
+//            （dumpPlanRegen.mjs と同じ手順: conformWoodBacking → resolveStairContext → regenerateWalls）。
+//            隔て板（在来木造の折返し・回り階段の隔て壁）のように、壁の生成規則が変わって保存済みの
+//            文書に壁が無いものを展開図の基準に含めたいときに使う（moku1-6 の golden-elev-moku16）。
+//            階ごとの壁数と隔て壁数を標準エラーへ出す（再生成で壁が実際に入ったことの裏取り）。
 import fs from 'node:fs';
 import path from 'node:path';
 import { RoomFeature } from '../../src/core.js';
@@ -19,12 +24,14 @@ import { floorHeightAbove, floorHeightBelow } from '../../src/finish/stair/stair
 import { collectGridCLs } from '../../src/elevation/elevationPrimitives.js';
 import { withGraphReadScope } from '../../src/graphReadScope.js';
 
-const rawArgs = process.argv.slice(2);
-const unknownOption = rawArgs.find(a => a.startsWith('-'));
+const allArgs = process.argv.slice(2);
+const unknownOption = allArgs.find(a => a.startsWith('-') && a !== '--regen');
 if (unknownOption) {
   console.error(`unknown option: ${unknownOption}`);
   process.exit(1);
 }
+const regen = allArgs.includes('--regen');
+const rawArgs = allArgs.filter(a => !a.startsWith('-'));
 const outDir = rawArgs[0] ?? path.join(import.meta.dirname, 'golden');
 const src = rawArgs[1] ?? 'D:/tatsuya/Download/11.stq';
 fs.mkdirSync(outDir, { recursive: true });
@@ -42,6 +49,26 @@ function norm(p) {
 }
 
 const { project } = loadDocument(src);
+if (regen) {
+  const { runInAction } = await import('mobx');
+  const { resolveStairContext } = await import('../../src/finish/stair/stairUnderRooms.js');
+  const { regenerateWalls, loadMaterialMap } = await import('../../src/finish/wallRegeneration.js');
+  const { conformWoodBacking } = await import('../../src/structural/woodAutoFill.js');
+  const { isStairPartitionWall, stairPartitionLines } = await import('../../src/finish/stair/stairPartition.js');
+  const materialMap = await loadMaterialMap();
+  const graphMapPeek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  for (const p of project.planes) {
+    const graph = project.graphMap.get(p.id);
+    if (!graph) continue;
+    runInAction(() => conformWoodBacking(graph, project));
+    const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, graphMapPeek);
+    const before = graph.walls.length;
+    await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings });
+    const lines = stairPartitionLines(graph);
+    const partitions = [...graph.walls].filter(w => isStairPartitionWall(w, lines)).length;
+    console.error(`[regen] ${p.name}: 壁 ${before}→${graph.walls.length}・隔て壁 ${partitions}`);
+  }
+}
 const tabs = project.orderedTabs;
 const summary = [];
 for (let i = 0; i < tabs.length; i++) {

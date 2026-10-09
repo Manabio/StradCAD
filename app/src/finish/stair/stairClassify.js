@@ -856,6 +856,41 @@ export function resolveSwitchbackSpanLengths(stair, graph) {
   const n1 = sections ? Math.max(1, sections[0]) : Math.round(totalSteps / 2);
   const n2 = sections ? Math.max(1, sections[2]) : totalSteps - n1;
 
+  return spanLengthsOf(stair, graph, { totalSteps, n1, n2 });
+}
+
+/**
+ * U字系（SWITCHBACK/WINDING）の区間長と段数。展開図が回り階段を「段付きの踊り場」として折返しの
+ * エンジンに通すための単一情報源（resolveSwitchbackSpanLengths は SWITCHBACK 専用のまま——
+ * 踊り場矩形・踊り場受け梁・landingZ の構造側は開かない）。
+ * 戻り値は resolveSwitchbackSpanLengths に turnCells（回転部のマス数。SWITCHBACK は 1・WINDING は
+ * sections[1]）を足した形。WINDING の sections は stair.sections ?? defaultSections(stair)
+ * （n1=sections[0]・n2=sections[2]）。区間長は measureStairSpans の [往路, 回転部の深さ, 復路]。
+ * U字系以外・stair 未指定は null。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @returns {{totalSteps:number, n1:number, n2:number, turnCells:number, len1:number, landingLen:number, len2:number}|null}
+ */
+export function resolveUTurnSpanLengths(stair, graph) {
+  if (!stair) return null;
+  if (stair.type === StairType.SWITCHBACK) {
+    const base = resolveSwitchbackSpanLengths(stair, graph);
+    return base ? { ...base, turnCells: 1 } : null;
+  }
+  if (stair.type !== StairType.WINDING) return null;
+  const sections = Array.isArray(stair.sections) && stair.sections.length === 3
+    ? stair.sections : defaultSections(stair);
+  if (!Array.isArray(sections) || sections.length !== 3 || !sections.every(Number.isFinite)) return null;
+  const totalSteps = Math.max(2, stair.totalSteps ?? 2);
+  return spanLengthsOf(stair, graph, {
+    totalSteps, n1: Math.max(1, sections[0]), n2: Math.max(1, sections[2]), turnCells: Math.max(1, sections[1]),
+  });
+}
+
+// 型判定なしの内部計算: 段数（steps）に、実測優先（measureStairSpans）・合成フォールバック
+// （tread×マス数）の区間長 len1/landingLen/len2 を足す。
+function spanLengthsOf(stair, graph, steps) {
+  const { n1, n2 } = steps;
   const spans = measureStairSpans(stair, graph);
   const tread = stair.tread > 0 ? stair.tread : 250;
   const [len1, landingLen, len2] = spans?.lengths ?? [
@@ -864,5 +899,5 @@ export function resolveSwitchbackSpanLengths(stair, graph) {
     tread * Math.max(1, n2 - 1),
   ];
 
-  return { totalSteps, n1, n2, len1, landingLen, len2 };
+  return { ...steps, len1, landingLen, len2 };
 }

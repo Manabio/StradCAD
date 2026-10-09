@@ -18,20 +18,24 @@
  * （壁面ベース）を疎結合に保てる利点がある（WP-E5bリスク3として報告済み）。
  * @module
  */
-import { StairType, StructuralMaterialType, CenterLineType } from '@core';
+import { StructuralMaterialType, CenterLineType } from '@core';
 import { roomBounds } from '../../../finish/gridCells.js';
 import { makeFrame, cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
 import { stairUnderRoomsOf } from '../../../finish/stair/stairUnderRooms.js';
+import { U_TURN_TYPES } from '../../../finish/stair/stairPorts.js';
 import { letterOf, letterForDirSign, DIR_SIGN, perpFaceAt } from '../../elevationFaces.js';
 import { kneeDropRecordFor } from '../../elevationFaceList.js';
 import { localXOf as localXOfFace } from '../../elevationFigure.js';
-import { resolveSwitchbackParams } from '../../elevationStairSection.js';
+import { resolveUTurnSectionParams } from '../../elevationStairSection.js';
 import { stairContribution } from '../sectionStair.js';
 import { graphList } from '../../../graphReadScope.js';
 import { makeProbeContext } from '../sectionProbe.js';
 import { isWallHiddenForBand } from '../sectionHits.js';
 
 const MID_WALL_TOL_MM = 300; // 壁厚程度の許容差（往路・復路間の壁の実在判定。既存実装と同値）
+// 走行軸に平行な面のうち、幅方向 s がこの範囲にあるものは往路・復路の間の面（外壁側ではない）。
+const MID_LANE_S_LO = 0.25;
+const MID_LANE_S_HI = 0.75;
 
 /**
  * seq3（踊り場の壁を見る面）の切断線を、踊り場前縁から踊り場側（+t）へ入れる量（mm）。
@@ -127,6 +131,7 @@ function mergeFaces(list) {
  */
 export function classifyFaces(faces, f) {
   const buckets = { entry: [], landing: [], out1: [], out2: [] };
+  const midFaces = new Set();
   for (const face of faces) {
     if (face.kind === 'step') continue;
     const pt = facePoint(face);
@@ -136,7 +141,17 @@ export function classifyFaces(faces, f) {
     } else {
       const s = f.sOf(pt);
       (Math.abs(s) <= Math.abs(s - 1) ? buckets.out1 : buckets.out2).push(face);
+      if (face.hasRealWall !== false && s > MID_LANE_S_LO && s < MID_LANE_S_HI) midFaces.add(face);
     }
+  }
+  // 往路・復路の間（s≈0.5）にある**実壁の面**（隔て板の面・レーン境界の壁）は外壁側の面ではない。
+  // 同点で out1 へ入るため、同じ側に外壁側の面があるなら除く（mergeFaces が list[0] 基準なので、
+  // 面の並び次第で faceValue が隔て板の面になりうる）。その側に外壁側の面が無い（部屋がレーン境界
+  // までしか無い）ときは、境界の面がその側の面を務めるので残す。実壁でない面（hasRealWall:false。
+  // 階段下部屋の2a壁などの除外壁）は従来どおり（レーン境界の面を担う既存の挙動を変えない）。
+  for (const key of ['out1', 'out2']) {
+    const outer = buckets[key].filter(face => !midFaces.has(face));
+    if (outer.length > 0) buckets[key] = outer;
   }
   return {
     wEntry: mergeFaces(buckets.entry), wLanding: mergeFaces(buckets.landing),
@@ -263,9 +278,10 @@ export function buildMidWallFace(wall, inward, loWorld, hiWorld, faces, hasRealW
 }
 
 /**
- * SWITCHBACK階段の切断定義表（§6.1）を組み立てる。SWITCHBACK以外・stair.cellsが空・
- * floorHeight未確定・面分類が解決できない場合はnull（elevationStairSequence.jsの
- * フォールバック契約と同じ）。
+ * U字系（SWITCHBACK/WINDING）階段の切断定義表（§6.1）を組み立てる。WINDING は回転部を段付きの
+ * 踊り場（stairContribution の短冊）として同じ表に通す（seq3 の前縁+LANDING_CUT_INSET_MM も共通）。
+ * U字系以外・stair.cellsが空・floorHeight未確定・面分類が解決できない・階段寄与が求まらない場合は
+ * null（elevationStairSequence.jsのフォールバック契約と同じ）。
  *
  * 設計からの逸脱: §4の宣言シグネチャは`switchbackCuts(stair, graph, opts)`（faces無し）だが、
  * 本実装は`faces`（composeRoomFacesの結果）を第2引数として要求する（ファイル冒頭コメント参照）。
@@ -285,12 +301,12 @@ export function buildMidWallFace(wall, inward, loWorld, hiWorld, faces, hasRealW
  *   代わりに、classifyFaces由来の実面をそのまま使う——理由は上記コメント参照）。
  */
 export function switchbackCuts(stair, faces, graph, opts = {}) {
-  if (!stair || stair.type !== StairType.SWITCHBACK) return null;
+  if (!stair || !U_TURN_TYPES.has(stair.type)) return null;
   if (!stair.cells || stair.cells.size === 0) return null;
   const floorHeight = opts.floorHeight;
   if (floorHeight == null) return null;
 
-  const params = resolveSwitchbackParams(stair, graph, floorHeight);
+  const params = resolveUTurnSectionParams(stair, graph, floorHeight);
   if (!params) return null;
   const { n1, riser, landingLen } = params;
   const landingAbs = n1 * riser;
@@ -358,6 +374,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const entryWorld = wEntry.faceValue;
 
   const contribution = stairContribution(stair, graph, floorHeight);
+  if (!contribution) return null; // 踊り場矩形・回転部の短冊が求まらない（以降は contribution を前提にする）
 
   if (!Array.isArray(opts.layers)) return null; // QA指摘F5: opts.layersは必須（本番は必ず渡す）
   const layers = opts.layers;
