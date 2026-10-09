@@ -5,7 +5,7 @@ import { roomBounds } from '../gridCells.js';
 import { measureStairSpans } from './stairClassify.js';
 import { stairFigurePrimitives } from './stairFigure.js';
 import { resolvePorts, portZoneLen, portSideValue, stairPortCandidates, hasPortSides, STRAIGHT_TYPES } from './stairPorts.js';
-import { applySectionDimEdit, sectionsForType, sameSections, portSideChange, resetPortSides, alignPortTurnSteps } from './stairSectionEdit.js';
+import { applySectionDimEdit, sectionsForType, sameSections, portSideChange, resetPortSides, alignPortTurnSteps, clampPortTurnStepsEdit } from './stairSectionEdit.js';
 import { resetUnderStairSplit } from './stairUnderSplit.js';
 import { AutoScaledFigure } from '../../structural/sectionFigure/AutoScaledFigure.jsx';
 import { annotatedFigure } from '../../structural/sectionFigure/sectionGeometry.js';
@@ -154,7 +154,7 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
       stair.setField('sections', sections);
       if (type !== stair.type) stair.setField('type', type);
     } else if (dim.target) {
-      stair.setField(dim.target, value);
+      stair.setField(dim.target, clampPortTurnStepsEdit(stair, dim.target, value));
     }
     afterEdit();
   });

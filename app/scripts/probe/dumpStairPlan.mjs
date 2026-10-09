@@ -169,6 +169,7 @@ async function regenerateAllWalls(project) {
   const { resolveStairContext } = await import('../../src/finish/stair/stairUnderRooms.js');
   const { regenerateWalls, loadMaterialMap } = await import('../../src/finish/wallRegeneration.js');
   const { conformWoodBacking } = await import('../../src/structural/woodAutoFill.js');
+  const { alignPortStairsOnGraph } = await import('../../src/finish/stair/stairSectionEdit.js');
   const { isStairPartitionWall, stairPartitionLines } = await import('../../src/finish/stair/stairPartition.js');
   const materialMap = await loadMaterialMap();
   const graphMapPeek = async (plane) => project.graphMap.get(plane.id) ?? null;
@@ -176,6 +177,8 @@ async function regenerateAllWalls(project) {
     const graph = project.graphMap.get(p.id);
     if (!graph) continue;
     runInAction(() => conformWoodBacking(graph, project));
+    const aligned = runInAction(() => alignPortStairsOnGraph(graph));
+    if (aligned) console.error(`[regen] ${p.name}: 木造の側面の取りつき蹴上 0 を 1 へそろえた`);
     const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, graphMapPeek);
     const before = graph.walls.length;
     await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings });

@@ -7,10 +7,10 @@
 // R は同時にタイプを導出する: R=0 → SWITCHBACK（平踊り場）、R>0 → WINDING（回り段）。
 // 回転部がユーザーの分割セル（2×2 等）か全幅の踊り場セルかによらず R だけで型が決まる
 // （既存データの保存値は再分類しない。この換算は編集時にだけ働く）。
-import { StairType, StairPortSide } from '@core';
+import { StairType, StairPortSide, StructuralMaterialType } from '@core';
 import { defaultSections } from './stairGeometry.js';
-import { defaultPortTurnSteps } from './stairClassify.js';
-import { MIN_RUN_RISERS, portRunIndex, portSectionCount, hasPortSides, stepsFieldOf } from './stairPorts.js';
+import { defaultPortTurnSteps, measureStairSpans } from './stairClassify.js';
+import { MIN_RUN_RISERS, portRunIndex, portSectionCount, hasPortSides, resolvePorts, stepsFieldOf } from './stairPorts.js';
 
 const U_TURN = new Set([StairType.SWITCHBACK, StairType.WINDING]);
 
@@ -119,16 +119,65 @@ export function resetPortSides(stair) {
 }
 
 /**
- * 解決した出入口（resolveStairPorts の結果）が走行端なのに取りつき蹴上が残っている状態を 0 にそろえる書込み
- * （描画は走行端の取りつきを無視するため、残すと総蹴上数と図の段数字がずれる。蹴上は直進部へ戻す）。
+ * 解決した出入口（resolveStairPorts の結果）に取りつき蹴上をそろえる書込み。
+ * - 走行端なのに取りつき蹴上が残っている → 0 にする（描画は走行端の取りつきを無視するため、残すと総蹴上数と
+ *   図の段数字がずれる。蹴上は直進部へ戻す）。
+ * - 鉄骨以外（木造・RC・未設定）の側面の口で蹴上が 0（平場）→ 1 にする（defaultPortTurnSteps の初期値と同じ規則。
+ *   木造の隔て板の柱が段板を支える区画はその一例。ユーザー裁定 2026-10-09）。その口のレーンの直進部から 1 段引いて総蹴上数を保つ。直進部が
+ *   MIN_RUN_RISERS 未満になるときは sections をそのままにして蹴上だけ 1 にする（総蹴上数は +1）。
+ *   鉄骨の平場 0（踏み込み踊り場）はそのまま。
  * @param {{ entry:string, arrival:string }} resolved
  */
 export function alignPortTurnSteps(stair, resolved) {
   if (!hasPortSides(stair.type)) return {};
-  return foldTurnSteps(stair, [
-    ...(resolved.entry === StairPortSide.END ? ['entry'] : []),
-    ...(resolved.arrival === StairPortSide.END ? ['arrival'] : []),
-  ]);
+  const ports = ['entry', 'arrival'];
+  const out = foldTurnSteps(stair, ports.filter(p => resolved[p] === StairPortSide.END));
+  if (stair.structure === StructuralMaterialType.STEEL) return out;
+  const count = portSectionCount(stair.type);
+  let sections = out.sections ? [...out.sections] : null;
+  for (const port of ports) {
+    const side = resolved[port];
+    const field = stepsFieldOf(port);
+    if (!side || side === StairPortSide.END || Math.max(0, stair[field] ?? 0) > 0) continue;
+    out[field] = 1;
+    sections ??= [...(stair.sections ?? defaultSections(stair) ?? [])];
+    if (sections.length !== count) continue;
+    const idx = portRunIndex(stair.type, port);
+    if (sections[idx] - 1 >= MIN_RUN_RISERS) sections[idx] -= 1;
+    out.sections = sections;
+  }
+  return out;
+}
+
+/**
+ * 図中寸法から取りつき蹴上（entryTurnSteps/arrivalTurnSteps）を直接編集するときの入力値の下限。
+ * 鉄骨以外は側面の取りつきに平場（0）を置かない。0 を書いてから alignPortTurnSteps で 1 へ戻すと、そのたびに
+ * 直進部から 1 段ずつ削られるため、書込みの手前で 1 に止める。鉄骨・他のフィールドは値そのまま。
+ */
+export function clampPortTurnStepsEdit(stair, field, value) {
+  if (field !== 'entryTurnSteps' && field !== 'arrivalTurnSteps') return value;
+  if (stair.structure === StructuralMaterialType.STEEL) return value;
+  return Math.max(1, value);
+}
+
+/**
+ * 読込み・壁再生成の境界（wallRefresh.js refreshWallsForGraph）で、graph の出入口を選べる型の全階段に
+ * alignPortTurnSteps を適用する（保存済みデータの、鉄骨以外の側面の平場 0 を 1 へ・走行端に残った蹴上を 0 へ
+ * そろえる）。冪等。undo には積まない。出入口の辺が自動（null）でも区画の張り出しで側面に解決されうるので、
+ * 保存値の辺では絞らず全件を実測する（1 階段 1.5ms 以下）。
+ * @returns {boolean} 1 つでも書き換えたか
+ */
+export function alignPortStairsOnGraph(graph) {
+  let changed = false;
+  for (const stair of graph.stairs) {
+    if (!hasPortSides(stair.type)) continue;
+    const resolved = resolvePorts(stair, measureStairSpans(stair, graph));
+    if (!resolved) continue;
+    const fields = alignPortTurnSteps(stair, resolved);
+    for (const [k, v] of Object.entries(fields)) stair.setField(k, v);
+    if (Object.keys(fields).length > 0) changed = true;
+  }
+  return changed;
 }
 
 export const sameSections = (a, b) =>

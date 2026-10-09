@@ -20,6 +20,7 @@ import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { refreshWallsAllFloors, refreshWallsForGraph, hasNeverBuiltWalls } from './wallRefresh.js';
 import { regenerateWalls, loadMaterialMap } from './finish/wallRegeneration.js';
 import { wallFreshnessKey, WALL_KEY_VERSION } from './finish/wallFreshnessKey.js';
+import { classifyStairArea } from './finish/stair/stairClassify.js';
 import { recomputeStructuralForGraph } from './structural/structuralRecompute.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { conformWoodBacking } from './structural/woodAutoFill.js';
@@ -316,6 +317,85 @@ test('refreshWallsForGraph: force:trueなら鍵一致でも壁を作り直す（
   assert.ok(wallIdsAfter.size > 0, '再生成後も壁は存在するはず');
   assert.ok([...wallIdsBefore].every(id => !wallIdsAfter.has(id)),
     '壁は全削除→再生成されるため、force再生成後は旧壁idが1つも残らないはず');
+});
+
+// 木造の側面の出入口の取りつき蹴上 0（平場）は読込み時の sweep で 1 へそろう（stairSectionEdit.js alignPortStairsOnGraph。
+// 階段の蹴上は鍵の入力でないため、書き換えたときだけ鍵一致でも再生成する）。鉄骨は不変。
+async function stairPortRefresh(structure) {
+  const { project, graph } = makeSinglePlaneProject();
+  const V = (v) => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const H = (v) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = V(0), x1 = V(1000), x2 = V(2000), y0 = H(0), y1 = H(1000), y2 = H(2000), y3 = H(3000);
+  const k = (l, t, r, b) => `${l.id}:${t.id}:${r.id}:${b.id}`;
+  const c = { d: k(x0, y0, x1, y1), c: k(x1, y0, x2, y1), a: k(x0, y1, x1, y2), b: k(x1, y1, x2, y2), f: k(x1, y2, x2, y3) };
+  graph.addRoom(new Set([c.d]), '部屋');
+  await seedInitialWalls(graph, project);
+  const keys = ['f', 'b', 'c', 'd', 'a'].map(n => c[n]);
+  const cells = new Set(keys);
+  const cls = classifyStairArea(cells, graph, 2800, keys);
+  const sections = [...cls.sections];
+  sections[0] += cls.entryTurnSteps ?? 0;
+  const stair = graph.addStair({ type: cls.type, cells, upDirection: cls.upDirection, flip: cls.flip, sections, structure, entryTurnSteps: 0, arrivalTurnSteps: 0 });
+  const total = stair.totalSteps;
+  assert.equal(wallFreshnessKey(graph, project), graph.wallFreshnessKey, '前提: 鍵は一致している');
+  const materialMap = await loadMaterialMap();
+  const run = () => refreshWallsForGraph(graph, project, () => Promise.resolve(materialMap), { peek: async () => null, pushUndo: false });
+  return { stair, total, run, entryTurn: cls.entryTurnSteps ?? 0 };
+}
+
+test('refreshWallsForGraph: 木造・側面の上り口・蹴上 0 の階段は、鍵一致でも e=1 にそろえて壁を作り直す（総蹴上数不変・2 回目は何もしない）', async () => {
+  const { stair, total, run, entryTurn } = await stairPortRefresh(StructuralMaterialType.WOOD);
+  assert.ok(entryTurn >= 1, '前提: 木造の既定は側面の口で 1 以上');
+  assert.equal(await run(), true);
+  assert.equal(stair.entryTurnSteps, 1);
+  assert.equal(stair.totalSteps, total);
+  assert.equal(await run(), false, '冪等: そろった後は鍵一致で何もしない');
+});
+
+test('refreshWallsAllFloors【他階】: 木造・側面・e=0 の階段を持つ非アクティブ階は saveFloorFn が呼ばれ changedPlaneIds に入り、保存を復元すると e=1', async () => {
+  const project = new Project('proj', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2, plane: p2 } = project.addPlane(3000, '2階', 'p2');
+  project.activePlaneId = 'p1';
+  addRectRoom(g1, '1F');
+  const V = (v) => g2.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const H = (v) => g2.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = V(0), x1 = V(1000), x2 = V(2000), y0 = H(0), y1 = H(1000), y2 = H(2000), y3 = H(3000);
+  const k = (l, t, r, b) => `${l.id}:${t.id}:${r.id}:${b.id}`;
+  const c = { d: k(x0, y0, x1, y1), c: k(x1, y0, x2, y1), a: k(x0, y1, x1, y2), b: k(x1, y1, x2, y2), f: k(x1, y2, x2, y3) };
+  g2.addRoom(new Set([c.d]), '部屋');
+  await seedInitialWalls(g2, project);
+  const keys = ['f', 'b', 'c', 'd', 'a'].map(n => c[n]);
+  const cells = new Set(keys);
+  const cls = classifyStairArea(cells, g2, 2800, keys);
+  const sections = [...cls.sections];
+  sections[0] += cls.entryTurnSteps ?? 0;
+  const stair = g2.addStair({ type: cls.type, cells, upDirection: cls.upDirection, flip: cls.flip, sections, structure: StructuralMaterialType.WOOD, entryTurnSteps: 0, arrivalTurnSteps: 0 });
+  assert.equal(wallFreshnessKey(g2, project), g2.wallFreshnessKey, '前提: 鍵は一致している');
+
+  const peekMap = { p1: g1, p2: g2 };
+  const peek = async (plane) => peekMap[plane.id] ?? null;
+  const store = new Map();
+  const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
+  try {
+    const result = await refreshWallsAllFloors(project, { pushUndo: false, peek, saveFloorFn });
+    assert.ok(result.changedPlaneIds.includes('p2'), JSON.stringify(result.changedPlaneIds));
+    assert.ok(store.has('p2'), 'p2 が saveFloorFn で保存された');
+    const decoded = decodeFloor(project, p2, store.get('p2'));
+    assert.equal(decoded.stairs.length, 1);
+    assert.equal(decoded.stairs[0].entryTurnSteps, 1, '保存を復元すると e=1');
+    assert.equal(stair.entryTurnSteps, 1);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+});
+
+test('【失敗系】refreshWallsForGraph: 鉄骨の階段の平場 0 はそのまま、鍵一致なら何もしない', async () => {
+  const { stair, run } = await stairPortRefresh(StructuralMaterialType.STEEL);
+  assert.equal(await run(), false);
+  assert.equal(stair.entryTurnSteps, 0);
 });
 
 test('refreshWallsForGraph: forceでも部屋0件・壁も鍵も無い階（壁の材料が無い）は対象外のまま', async () => {

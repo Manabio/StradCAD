@@ -16,6 +16,7 @@ import { serializeGraph } from './graphSnapshot.js';
 import { loadMaterialMap, regenerateWalls } from './finish/wallRegeneration.js';
 import { wallFreshnessKey } from './finish/wallFreshnessKey.js';
 import { resolveStairContext } from './finish/stair/stairUnderRooms.js';
+import { alignPortStairsOnGraph } from './finish/stair/stairSectionEdit.js';
 import { conformWoodBacking } from './structural/woodAutoFill.js';
 import { wallBackingCenters, mapBackingCenterMoves } from './structural/wallBeamAxes.js';
 import { followWallBeamAxes } from './structural/wallBeamAxisFollow.js';
@@ -81,13 +82,18 @@ export async function refreshWallsForGraph(
   // 「下地材は変わったのに鍵は一致」という矛盾状態になりうる）。materialMap 不要のため
   // 鍵比較の前に置く（ステップ5: 鍵比較だけなら materialMap を要求しない）。
   const backingChanges = runInAction(() => conformWoodBacking(graph, project));
+  // 木造の側面の出入口の取りつき蹴上 0（平場）を 1 へそろえる（保存済みデータの修復。stairSectionEdit.js
+  // alignPortStairsOnGraph。2026-10-09 裁定。undo には積まない）。階段の蹴上は鍵の入力ではないため、
+  // 書き換えたときは鍵一致でも壁を作り直す。通常は総蹴上数が保たれ隔て板の段鼻位置（nosingIndex＝e+s0+s1）も
+  // 変わらないが、直進部が MIN 未満で総蹴上数が +1 になる場合は変わるため、安全側で再生成する。
+  const stairPortsAligned = runInAction(() => alignPortStairsOnGraph(graph));
 
   const keyBefore = graph.wallFreshnessKey;
   const keyNow = wallFreshnessKey(graph, project);
   // 鍵一致: 何もしない（saveFloorもしない・materialMapも要求しない）。force指定時は鍵一致でも
   // 素通りさせない——CL削除直後は鍵の入力（下地材・主構造・柱断面・部屋の壁材/壁仕上げ）が
   // 変わらないまま部屋の分割/併合だけが起きうるため。
-  if (!force && keyNow === keyBefore) return false;
+  if (!force && !stairPortsAligned && keyNow === keyBefore) return false;
 
   // 鍵不一致の階が実際に見つかった時点で初めて materialMap を要求する（getMaterialMap が
   // 呼び出し元で1個にメモ化されているため、複数階が不一致でもロードは1回だけになる）。
