@@ -750,7 +750,10 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   自前のソース走査を増やさない。自前にするなら `.replace(/\r\n/g, '\n')` と `assert.ok(end >= 0)` を必ず入れる。
   (2) `git stash`→`pop` や `git checkout` の後は作業ツリーの改行コードが変わりうるので、pop した後に全スイートを
   走らせ直してから報告する（`git ls-files --eol` で `i/lf w/crlf` なら要注意）。(3) QA は builder の
-  「全件 pass」を信用せず、必ず作業ツリーの現状で再実行する。
+  「全件 pass」を信用せず、必ず作業ツリーの現状で再実行する。(4) HEAD の基準（golden・dump・件数）を採るときは
+  `git stash` を使わない。変更ファイルを scratchpad へバイト単位で退避 → ソースだけ `git checkout -- <file>` で
+  HEAD に戻す → 採取 → 退避分を書き戻す → md5 を元と照合、の手順にする（2026-10-09〜10 展開図の階段を平面に
+  揃える T1/T2 の QA で確立。worktree もジャンクションも要らない。pop の CRLF 化も起きない）。
 
 ### 「graphComputed でキャッシュするからドラッグ中も軽い」と受け取った（2026-10-08 平面の断面解決 S4 の QA 指摘）
 
