@@ -14,7 +14,7 @@ import { PARTITION_THICKNESS_MM } from '../../finish/stair/stairPartition.js';
 import { generateStairPartitionWalls } from '../../finish/stair/stairPartitionWalls.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
 import { stairRunProfile } from '../elevationStairSection.js';
-import { stairContribution, stairAxisIsVertical, ladderAcrossRange, landingStepRisers, stairPrimitivesForCut } from './sectionStair.js';
+import { stairContribution, stairAxisIsVertical, ladderAcrossRange, landingStepRisers, stairPrimitivesForCut, withCutLandings } from './sectionStair.js';
 import { localXOf } from './sectionTypes.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
@@ -265,7 +265,7 @@ test('stairContribution: 往路・復路の端・取りつき区画 leadMm・段
     assert.equal(ib.baseZ, (p.n1 + e + p.turnCells - 1) * ob.riserMm, `${tag}: 復路の足元＝(n1+e+w−1)×蹴上`);
     assert.deepEqual(c.frame, { frontA: p.run.frontA, front: p.run.front, back: p.run.back }, tag);
     assert.equal(c.isVertical, p.vertical, tag);
-    assert.equal(c.turnCells, p.turnCells, tag);
+    assert.equal(c.turnCellCount, p.turnCells, tag);
   }
 });
 
@@ -306,18 +306,17 @@ test('stairContribution(WINDING): 往路側の短冊は frontA から、復路�
   const c = stairContribution(stair, graph, FLOOR_HEIGHT);
   const p = uTurnPlanLayout(stair, graph);
   assert.ok(Math.abs(p.run.frontA - p.run.front) > 1);
-  const touches = (l, v) => Math.abs(l.acrossLo - v) < 1e-6 || Math.abs(l.acrossHi - v) < 1e-6;
-  // 往路側の半幅の短冊（s0 に接し s1 に接しない）・復路側の半幅の短冊（s1 に接し s0 に接しない）
-  const onlyA = c.landings.filter(l => touches(l, p.across.s0) && !touches(l, p.across.s1));
-  const onlyB = c.landings.filter(l => touches(l, p.across.s1) && !touches(l, p.across.s0));
-  assert.ok(onlyA.length > 0 && onlyB.length > 0, '往路側・復路側の短冊がある');
-  const runsOf = (ls) => ls.flatMap(l => [l.runLo, l.runHi]);
+  // 回転部の多角形（w=2: 往路側 6・復路側 7）。走行軸の座標 r（縦走行は y）の範囲で前縁と奥を確かめる
+  const runsOfPoly = (cell) => cell.poly.filter((_, i) => i % 2 === 1);
   const near = (arr, v) => arr.some(x => Math.abs(x - v) < 1e-6);
-  assert.ok(near(runsOf(onlyA), p.run.frontA), '往路側の短冊は frontA から');
-  assert.ok(!near(runsOf(onlyA), p.run.front), '往路側の短冊は front を境にしない');
-  assert.ok(near(runsOf(onlyB), p.run.front), '復路側の短冊は front から');
-  assert.ok(!near(runsOf(onlyB), p.run.frontA), '復路側の短冊は frontA を境にしない');
-  assert.ok(near(runsOf([...onlyA, ...onlyB]), p.run.back), '奥は back');
+  const [cellA, cellB] = c.turnCells;
+  assert.ok(near(runsOfPoly(cellA), p.run.frontA), '往路側のセルは frontA（P1 の面）に前縁がある');
+  assert.ok(near(runsOfPoly(cellB), p.run.front), '復路側のセルは front（P2・P3 の面）に前縁がある');
+  assert.ok(near(runsOfPoly(cellB), p.run.back) && near(runsOfPoly(cellA), p.run.back), '奥は back（壁の面）');
+  const sign = Math.sign(p.run.back - p.run.baseA);
+  for (const cell of c.turnCells) {
+    assert.ok(runsOfPoly(cell).every(r => (r - p.run.back) * sign <= 1e-6), '回転部のセルは奥の壁の面を越えない');
+  }
 });
 
 test('stairContribution(WINDING・奇数の回り段 3・5 ＋柱): 復路レーンを縦断すると短冊の縁ごとに蹴上が出る（本数＝復路側の短冊数−1・位置＝front から奥への等分）', () => {
@@ -328,21 +327,127 @@ test('stairContribution(WINDING・奇数の回り段 3・5 ＋柱): 復路レー
     const c = stairContribution(stair, graph, FLOOR_HEIGHT);
     const p = uTurnPlanLayout(stair, graph);
     assert.ok(c && Math.abs(p.run.frontA - p.run.front) > 1, `w=${w}: 前提`);
-    const ib = c.flights[1];
-    const laneX = (ib.acrossLo + ib.acrossHi) / 2;
-    const cut = { seqNo: '5', line: { isVertical: true, axisValue: laneX, lo: -1e5, hi: 1e5 }, viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 9000 }, baseFloorZ: 0 };
-    const risers = landingStepRisers(c.landings, true, cut);
-    const n = (w - 1) / 2 + 1; // 復路側の短冊数（奥の半幅を含む）
-    assert.equal(risers.length, n - 1, `w=${w}: 復路縦断の蹴上の本数`);
-    const want = Array.from({ length: n - 1 }, (_, i) => localXOf(cut, p.run.front + (i + 1) * (p.run.back - p.run.front) / n)).map(x => Math.round(x * 1000) / 1000).sort((a, b) => a - b);
-    assert.deepEqual(risers.map(r => Math.round(r.x1 * 1000) / 1000).sort((a, b) => a - b), want, `w=${w}: 位置＝復路側の短冊の境界`);
-    // 往路側の短冊も同様（frontA から）
-    const ob = c.flights[0];
-    const cutA = { ...cut, line: { ...cut.line, axisValue: (ob.acrossLo + ob.acrossHi) / 2 } };
-    const nA = (w - 1) / 2 + 1;
-    const wantA = Array.from({ length: nA - 1 }, (_, i) => localXOf(cutA, p.run.frontA + (i + 1) * (p.run.back - p.run.frontA) / nA)).map(x => Math.round(x * 1000) / 1000).sort((a, b) => a - b);
-    assert.deepEqual(landingStepRisers(c.landings, true, cutA).map(r => Math.round(r.x1 * 1000) / 1000).sort((a, b) => a - b), wantA, `w=${w}: 往路側`);
+    assert.equal(c.turnCells.length, w, `w=${w}: 回転部の多角形が w 枚`);
+    for (const [lane, fl] of [['復路', c.flights[1]], ['往路', c.flights[0]]]) {
+      const cut = { seqNo: '5', line: { isVertical: true, axisValue: (fl.acrossLo + fl.acrossHi) / 2, lo: -1e5, hi: 1e5 }, viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 9000 }, baseFloorZ: 0 };
+      const sliced = withCutLandings(c, cut).landings;
+      // 各レーンは回転部のセルを（w+1）/2 枚か w/2 枚通り、隣り合う2枚の縁（放射線）ごとに蹴上が1本出る
+      const risers = landingStepRisers(sliced, true, cut);
+      assert.equal(risers.length, sliced.length - 1, `w=${w} ${lane}: 蹴上の本数＝通るセル数−1`);
+      assert.ok(sliced.length >= Math.floor(w / 2), `w=${w} ${lane}: セルを通る`);
+    }
   }
+});
+
+// 回転部の主ゲート: レーン線で切った回転部の Landing の境界（蹴上の走行座標）＝平面の踏面線（放射線）とレーン線の交点
+function turnBoundaryCheck(graph, stair, tag) {
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  assert.ok(c, tag);
+  const g = installGeom(stair, graph);
+  const vertical = c.isVertical;
+  const hitsOn = (v) => g.treads.flatMap((t) => {
+    const [pa, qa, pr, qr] = vertical ? [t.x1, t.x2, t.y1, t.y2] : [t.y1, t.y2, t.x1, t.x2];
+    if ((pa - v) * (qa - v) > 0 || Math.abs(pa - qa) < 1e-9) return [];
+    return [pr + (qr - pr) * (v - pa) / (qa - pa)];
+  });
+  for (const [lane, fl] of [['往路', c.flights[0]], ['復路', c.flights[1]]]) {
+    const v = (fl.acrossLo + fl.acrossHi) / 2;
+    const cut = { seqNo: '2', line: { isVertical: vertical, axisValue: v, lo: -1e5, hi: 1e5 }, viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 9000 }, baseFloorZ: 0 };
+    const sliced = withCutLandings(c, cut).landings.sort((a, b) => a.runLo - b.runLo);
+    assert.ok(sliced.length >= 1, `${tag} ${lane}: 回転部を通る`);
+    // 蹴上＝隣り合うセル同士が共有する縁（高さが違うもの）
+    const edges = [];
+    for (let i = 0; i + 1 < sliced.length; i++) {
+      if (Math.abs(sliced[i].runHi - sliced[i + 1].runLo) <= TOL && Math.abs(sliced[i].z - sliced[i + 1].z) > 1e-6) edges.push((sliced[i].runHi + sliced[i + 1].runLo) / 2);
+    }
+    const lo = sliced[0].runLo, hi = sliced.at(-1).runHi;
+    const planInside = hitsOn(v).filter(r => r > lo + TOL && r < hi - TOL);
+    assertSameSet(edges, planInside, `${tag} ${lane}`);
+    // landingStepRisers が同じ本数を出す（縁の共有を拾えている）
+    assert.equal(landingStepRisers(sliced, vertical, cut).length, edges.length, `${tag} ${lane}: landingStepRisers の本数`);
+  }
+  return c;
+}
+
+test('回転部の主ゲート: 木造＋隔て板（柱材/PB 包み）× 回り段 w=2・3・4・5・6 × flip で、レーン線で切った回転部の蹴上＝平面の放射線∩レーン線（両方向）', () => {
+  for (const w of [2, 3, 4, 5, 6]) {
+    for (const flip of [false, true]) {
+      for (const [name, setup] of VARIANTS) {
+        const { graph, stair } = equalFixture(StairType.WINDING, 'up', flip);
+        stair.setField('sections', [6, w, 6]);
+        setup(graph);
+        turnBoundaryCheck(graph, stair, `w=${w}/flip=${flip}/${name}`);
+      }
+    }
+  }
+});
+
+test('回転部の主ゲート: 張り出し（f,b,c,d,a）の回り階段 × 取りつき回転部 0/1 段 × 柱材/PB 包み、鉄骨 WINDING（柱なし）でも一致する', () => {
+  for (const [name, setup] of VARIANTS) {
+    for (const e of [0, 1]) {
+      const { graph, stair } = overhangFixture(e);
+      setup(graph);
+      turnBoundaryCheck(graph, stair, `張り出し/${name}/e=${e}`);
+    }
+  }
+  for (const w of [2, 3, 4]) {
+    const { graph, stair } = equalFixture(StairType.WINDING, 'up', false, { wood: false });
+    stair.setField('sections', [6, w, 6]);
+    turnBoundaryCheck(graph, stair, `鉄骨 w=${w}`);
+  }
+});
+
+test('横切る線が「一部のセルにしかない頂点」の 0.5mm 以内に来ても、全セルが同じ座標で切られ縁が連続し、蹴上が落ちない', () => {
+  for (const [label, { graph, stair }] of [
+    ['鉄骨 up w=5', (() => { const f = equalFixture(StairType.WINDING, 'up', false, { wood: false }); f.stair.setField('sections', [6, 5, 6]); return f; })()],
+    ['木造+柱 down w=5', (() => { const f = equalFixture(StairType.WINDING, 'down', false); f.stair.setField('sections', [6, 5, 6]); addPartitionWalls(f.graph); return f; })()],
+  ]) {
+    const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+    assert.ok(c, label);
+    const vertical = c.isVertical;
+    const runsOf = (cell) => cell.poly.filter((_, i) => i % 2 === (vertical ? 1 : 0));
+    const allRuns = [...new Set(c.turnCells.flatMap(runsOf).map(r => Math.round(r * 1e6) / 1e6))];
+    // 一部のセルにしかない頂点の走行座標（全セルが持つ座標・1 セルだけが持つ座標は除く）
+    const partial = allRuns.filter(r => {
+      const n = c.turnCells.filter(cell => runsOf(cell).some(x => Math.abs(x - r) < 1e-6)).length;
+      return n >= 2 && n < c.turnCells.length;
+    });
+    assert.ok(partial.length > 0, `${label}: 前提: 一部のセルにしかない頂点がある`);
+    for (const r of partial) {
+      const at = (dv) => {
+        const cut = { seqNo: '1', line: { isVertical: !vertical, axisValue: r + dv, lo: -1e5, hi: 1e5 }, viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 9000 }, baseFloorZ: 0 };
+        const sl = withCutLandings(c, cut).landings;
+        return { sl, risers: landingStepRisers(sl, vertical, cut).length };
+      };
+      const base = at(0);
+      for (const dv of [-0.45, -0.3, 0.3, 0.45]) {
+        const { sl, risers } = at(dv);
+        // 近接する端同士は完全に一致する（隙間・重なりが残らない）
+        for (let i = 0; i < sl.length; i++) for (let j = i + 1; j < sl.length; j++) {
+          for (const d of [Math.abs(sl[i].acrossHi - sl[j].acrossLo), Math.abs(sl[j].acrossHi - sl[i].acrossLo)]) {
+            assert.ok(d < 1e-6 || d > 1, `${label} r=${r} dv=${dv}: 縁が 1mm 未満の隙間/重なりで食い違う (${d})`);
+          }
+        }
+        assert.equal(risers, base.risers, `${label} r=${r} dv=${dv}: 蹴上の本数が頂点ちょうどの線と同じ`);
+      }
+    }
+  }
+});
+
+test('回転部の切断線 seq1（frontA）は辺に乗るので奥（+t）側のセルを採る。±1e-3 の揺れでも同じセル', () => {
+  const { graph, stair } = equalFixture(StairType.WINDING, 'up', false);
+  stair.setField('sections', [6, 4, 6]);
+  addPartitionWalls(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const p = uTurnPlanLayout(stair, graph);
+  const stepsAt = (dv) => withCutLandings(c, { line: { isVertical: !c.isVertical, axisValue: p.run.frontA + dv, lo: -1e5, hi: 1e5 } })
+    .landings.map(l => l.turnStep).sort((a, b) => a - b);
+  const first = p.firstTurnNumber;
+  assert.deepEqual(stepsAt(0), [first], 'frontA は往路側の最初のセルの前縁（奥側のセル）だけ');
+  assert.deepEqual(stepsAt(1e-3), [first]);
+  assert.deepEqual(stepsAt(-1e-3), [first]);
+  // 前縁の手前(上り口側へ 5mm)は回転部の外＝セルなし
+  assert.deepEqual(stepsAt(-5 * Math.sign(p.run.back - p.run.baseA)), []);
 });
 
 // seq1 相当の横断切断（走行軸に直交・全幅）。columns は幅方向の全範囲を 1 列で渡す

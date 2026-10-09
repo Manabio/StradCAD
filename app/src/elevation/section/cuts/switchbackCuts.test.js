@@ -503,8 +503,9 @@ test('【失敗系・S2a QA L2】switchbackCuts(WINDING): 浅い踊り場で前�
   const { back } = t.contribution.frame;
   const raw = uTurnPlanLayout(stair, graph).run;
   assert.ok((raw.front - raw.back) * Math.sign(raw.back - raw.baseA) > 0, '前提: 平面の前縁が奥を越える');
-  assert.ok(t.contribution.landings.every(l => l.runLo >= back - 1e-9), '短冊はどれも奥の壁の面を越えない');
-  assert.ok(t.contribution.landings.some(l => l.runHi - l.runLo > 0 && l.acrossLo < l.acrossHi), '往路側の短冊は奥行きを持つ');
+  // S2b: 回転部は平面の段の多角形そのもの（切断線ごとに切る）。揃えた前縁(復路の flight)は奥を越えない
+  assert.equal(t.contribution.turnCells.length, 2, '回転部の多角形が w=2 枚');
+  assert.ok(t.contribution.flights[1].runLo >= back - 1e-9, '復路は奥の壁の面を越えない');
 });
 
 test('【S2a QA L3】switchbackCuts: landingStartWorld は平面の踊り場の奥行き |back−front|（CL 区間長ではない）から取る（前縁が分かれる木造）', () => {
@@ -674,7 +675,8 @@ test('【2026-10-09】switchbackCuts(WINDING): cuts=[1..5]、回転部の最初�
   assert.equal(bySeq['1'].line.axisValue, 1500, 'seq1は回転部の前縁');
   assert.equal(bySeq['3'].line.axisValue, 1500 - LANDING_CUT_INSET_MM, 'seq3は前縁から回転部側へ入る');
   assert.equal(bySeq['3'].zRange.loZ, t.landingAbs);
-  assert.equal(t.contribution.landings.length, 6, '回転部は6枚の短冊（段付きの踊り場）');
+  assert.equal(t.contribution.turnCells.length, 6, '回転部は平面の段の多角形6枚（切断線ごとに withCutLandings が切る）');
+  assert.ok(t.cuts.every(c => c.seqNo === '3' ? (c.stairCut.turnCells ?? []).length === 6 : true), 'seq3（踊り場だけの寄与）も回転部の多角形を落とさない');
 });
 
 test('【2026-10-09】switchbackCuts(WINDING): 復路の足元は回転部の最後の段（折返しの踊り場の高さではない）', () => {
@@ -682,7 +684,7 @@ test('【2026-10-09】switchbackCuts(WINDING): 復路の足元は回転部の最
   const [outbound, inbound] = t.contribution.flights;
   assert.equal(outbound.baseZ, 0);
   assert.equal(inbound.baseZ, (5 + 5) * WINDING_RISER, '復路baseZ=(n1+turnCells-1)×蹴上');
-  assert.equal(inbound.baseZ, t.contribution.landings.at(-1).z);
+  assert.equal(inbound.baseZ, t.contribution.turnCells.at(-1).z);
 });
 
 test('【失敗系・2026-10-09】switchbackCuts: L_TURN/FLARED/OPEN_WELLは対象外でnull（回り階段だけがU字系に加わった）', () => {

@@ -450,7 +450,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // との取り合いに（折返し階段外回りの）ささら断面、上下にささらの見えがかり（横線2本）」——
   // 「階段（段）の重ね描きなし」であって、踊り場そのものの断面・桁枠は必要だった。
   // flightsは空のまま＝段の梯子・ジグザグは出ない（表の意図は維持する）。
-  const landingOnly = (contribution.landings ?? []).length > 0
+  const landingOnly = ((contribution.landings ?? []).length > 0 || (contribution.turnCells ?? []).length > 0)
     ? { ...contribution, flights: [] }
     : null;
   // 復路+踊り場。seq5（D2＝復路レーンから外側の壁を見る面）が使う——ユーザー実機指摘2026-08

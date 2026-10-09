@@ -74,7 +74,8 @@
 import { StairType, StructuralMaterialType, DEFAULT_BASEBOARD_HEIGHT } from '@core';
 import { uTurnPlanLayout, LANE_GAP } from '../../finish/stair/stairGeometry.js';
 import { U_TURN_TYPES } from '../../finish/stair/stairPorts.js';
-import { windingTurnSteps } from './windingTurnSteps.js';
+import { sliceTurnCells } from './turnCellSlices.js';
+import { stairTreadFootprints } from '../../finish/stair/stairTreads.js';
 import {
   resolveUTurnSectionParams, stairRunProfile, stringerPrimitives, stringerBandGeometry, WOOD_TREAD_THICKNESS_MM,
   STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM, STEEL_LANDING_FRAME_DEPTH_MM,
@@ -120,7 +121,8 @@ export const STAIR_RUN_TOL_MM = 0.5;
  * @param {object} graph
  * @param {number|null} floorHeight - 設置階〜上階の階高(mm)
  * @returns {{flights:Flight[], landings:Landing[], structure:string|null, unit:StairUnit,
- *   isVertical:boolean, turnCells:number, frame:{frontA:number, front:number, back:number}}|null}
+ *   isVertical:boolean, turnCellCount:number, turnCells:{poly:number[], z:number, number:number}[],
+ *   forwardSign:1|-1, frame:{frontA:number, front:number, back:number}}|null}
  */
 export function stairContribution(stair, graph, floorHeight) {
   if (!stair || !U_TURN_TYPES.has(stair.type)) return null;
@@ -192,13 +194,17 @@ export function stairContribution(stair, graph, floorHeight) {
   const frontIsLo = frontC <= run.back;
   landing.frame = { edges: landingFrameEdges(landing, vertical, frontIsLo) };
   let landings;
+  let turnCellPolys = null;
   if (isWinding) {
-    // WINDING: 回転部を段付きの踊り場（短冊の列）へ近似する（windingTurnSteps.js）。桁枠は持たない。
-    // 往路側の短冊は frontA から、復路側は front から奥へ等分する（平面の扇形とは一致しない近似＝S2b で置換）。
-    landings = windingTurnSteps({
-      vertical, runFront: frontAC, runFrontB: frontC, runBack: run.back,
-      acrossS0: across.s0, acrossMid, acrossS1: across.s1, z0: landingZ, riser, cells: turnCells,
-    });
+    // WINDING: 回転部は平面の段の多角形（扇形セル。stairTreadFootprints の install）を持ち、切断線ごとに
+    // withCutLandings が切って段付きの踊り場（Landing）にする（turnCellSlices.js）。桁枠は持たない。
+    // z は従来の短冊と同じ段の天端（landingZ＋(段番号−最初の回転段)×蹴上）。件数が回転部のマス数と違えば null。
+    const first = layout.firstTurnNumber;
+    turnCellPolys = stairTreadFootprints(stair, graph, { riser, insetView: 'install' })
+      .filter(c => c.number >= first && c.number < first + turnCells)
+      .map(({ poly, number }) => ({ poly, number, z: landingZ + (number - first) * riser }));
+    if (turnCellPolys.length !== turnCells) return null;
+    landings = [];
   } else {
     landings = [landing];
     if (Math.abs(frontAC - frontC) > GAP_EPS) {
@@ -209,7 +215,6 @@ export function stairContribution(stair, graph, floorHeight) {
       });
     }
   }
-  if (landings.length === 0) return null;
 
   // ユーザー実機フィードバック2026-08-23「踊り場断面上に巾木同寸」対応: 階段Room
   // （stair.roomId。graph.roomMap）のRoomFinish.baseboardHeightをparseBaseboardHeightMm
@@ -233,7 +238,9 @@ export function stairContribution(stair, graph, floorHeight) {
   return {
     flights: [outbound, inbound], landings, structure: stair.structure ?? null, unit,
     // 走行軸の向き・回転部のマス数・走行軸上の前縁/奥（切断線の位置決めに使う。switchbackCuts.js）
-    isVertical: vertical, turnCells, frame: { frontA: frontAC, front: frontC, back: run.back },
+    // turnCellCount＝回転部のマス数 w、turnCells＝WINDING の回転部の多角形（折返しは空）、forwardSign＝回転部の奥(+t)の走行軸上の符号
+    isVertical: vertical, turnCellCount: turnCells, turnCells: turnCellPolys ?? [], forwardSign: fwd,
+    frame: { frontA: frontAC, front: frontC, back: run.back },
   };
 }
 
@@ -658,6 +665,7 @@ function laneGapLocalX(contribution, cut, trueAcrossLo, trueAcrossHi, isSteel) {
  */
 export function stairOccluderRects(contribution, cut) {
   if (!contribution || !cut?.line) return [];
+  contribution = withCutLandings(contribution, cut);
   const isSteel = contribution.structure === StructuralMaterialType.STEEL;
   const acrossExtents = [...(contribution.flights ?? []), ...(contribution.landings ?? [])];
   if (acrossExtents.length === 0) return [];
@@ -725,6 +733,7 @@ export function stairOccluderRects(contribution, cut) {
  */
 export function stairFaceHits(contribution, cut) {
   if (!contribution || !cut?.line) return [];
+  contribution = withCutLandings(contribution, cut);
   const isSteel = contribution.structure === StructuralMaterialType.STEEL;
   const acrossExtents = [...(contribution.flights ?? []), ...(contribution.landings ?? [])];
   if (acrossExtents.length === 0) return [];
@@ -1230,6 +1239,21 @@ export function landingFramePrimitives(landing, cut, columns, unit, mitreX = nul
 }
 
 /**
+ * 切断線ごとに、WINDING の回転部（contribution.turnCells＝平面の段の多角形）をその線で切った Landing を
+ * landings へ足した寄与を返す（turnCellSlices.js）。公開の入口（stairPrimitivesForCut・stairCutFloorProfile・
+ * stairFaceHits・stairOccluderRects）が先頭で呼ぶ。回転部の多角形が無い（折返し・STRAIGHT 系）・切断線が
+ * 無いときは寄与そのまま。同じ寄与に二重に足さないよう、足した結果には cutSliced を立てて冪等にする。
+ * @param {object} contribution
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ */
+export function withCutLandings(contribution, cut) {
+  if (!contribution || contribution.cutSliced || !contribution.turnCells?.length || !cut?.line) return contribution;
+  const isVertical = stairAxisIsVertical(contribution, cut);
+  const slices = sliceTurnCells(contribution.turnCells, cut.line, isVertical, contribution.forwardSign ?? 1);
+  return { ...contribution, landings: [...(contribution.landings ?? []), ...slices], cutSliced: true };
+}
+
+/**
  * 階段の走行軸の向き（isVertical）。contribution.isVertical（stairContribution が返す）が最優先。無ければ
  * flightsが空でも（seq3は踊り場だけを受け取る）踊り場から取る:
  * flights[0] → landings[0].isVertical（桁枠を持たない回り階段の短冊） → landings[0] の side 辺 →
@@ -1263,6 +1287,7 @@ export function stairAxisIsVertical(contribution, cut) {
  */
 export function stairCutFloorProfile(contribution, cut, columns = null) {
   if (!contribution) return null;
+  contribution = withCutLandings(contribution, cut);
   const parts = [];
   for (const flight of contribution.flights ?? []) {
     if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) continue;
@@ -1342,6 +1367,7 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
  */
 export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   if (!contribution) return [];
+  contribution = withCutLandings(contribution, cut);
   const outerBound = opts.outerBound;
   const prims = [];
   // 階段の走行軸の向き。**flightsが空でも踊り場から取れる**ようにする（ユーザー実機指摘2026-08
