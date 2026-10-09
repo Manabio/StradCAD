@@ -45,7 +45,9 @@ export function laneGapMmFor(stair, graph, { simplified = false } = {}) {
 }
 const NUM_GAP   = 1 / 4; // 段数数字を基点側の線（踏面線／踊場・周回部の入口境界線）から離す量（区間内比率）
 const NUM_OUT   = 0.15;  // 段数字を幅方向の外周側（隣接壁側）へ寄せる位置（外側端からの距離。レーン/アーム/全幅で共通利用）
-const TURN_OUT  = 0.7;   // 踊場・周回部（マスw≥2）の2段目以降を pivot→外周 の混合で外周部近くへ寄せる比率
+const PORT_TURN_ONE_INSET_MM = 150; // 取りつき区画が1段のとき、番号を出入口辺から内側へ寄せる量
+const PORT_TURN_ONE_TOWARD_EXIT = 0.5; // 同、区画の中点（矢印線）から出口境界へ寄せる比率（0=矢印線上・1=出口線上）
+const TURN_OUT  = 0.7;  // 踊場・周回部（マスw≥2）の2段目以降を pivot→外周 の混合で外周部近くへ寄せる比率
 
 const BREAK_TILT = Math.PI / 6; // 30° — 破断線を踏面（＝幅）方向から傾ける角度。全階段共通。
 // 縦連なり踏面を切る（垂直で切る＝幅が水平）→ 水平から30°、横連なり踏面を切る（水平で切る＝幅が垂直）→ 水平から60° の "/"。
@@ -706,10 +708,18 @@ function emitPortTurnZone(out, f, { tBase, tExit, sEdge, sFar, sExitLo, sExitHi,
   const perim = (u) => u <= 0.5 ? lerp(path[0], path[1], u / 0.5) : lerp(path[1], path[2], (u - 0.5) / 0.5);
   const part = { kind: 'turn', risers: steps, cells: steps, numberStart, index: -1 };
   const radialLine = (u) => line(P, perim(u));
+  // 1段（全幅の平場）の番号: 出入口辺（矢印の入る辺）から PORT_TURN_ONE_INSET_MM だけ内側、幅方向は区画の
+  // 中点（矢印線）と出口境界の間の中点（矢印線・出口線・隔て板の帯を避ける）。区画の枠座標（辺→遠端、基端→出口）で補間する
+  const oneStepPt = () => {
+    const dist = Math.hypot(exitFar.x - P.x, exitFar.y - P.y) || 1;
+    const k = Math.min(0.5, PORT_TURN_ONE_INSET_MM / dist);
+    const row0 = lerp(edgeFar, corner, k), row1 = lerp(P, exitFar, k); // 基端の行・出口の行（辺から k だけ内側）
+    return lerp(row0, row1, 0.5 + 0.5 * PORT_TURN_ONE_TOWARD_EXIT);
+  };
   emitTurn(out, part, {
     radialLine,
     cellPt: (u) => radialMix(P, perim(u)),
-    entryPt: () => radialMix(P, perim(0.5 / steps)),
+    entryPt: () => (steps === 1 ? oneStepPt() : radialMix(P, perim(0.5 / steps))),
     cellPoly: (j) => fanCellPoly(radialLine, steps, j, [0.5], perim),
   }, { detail });
 }

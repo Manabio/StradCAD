@@ -315,6 +315,27 @@ test('【実データ moku2-2】全幅の最下段セル f から b へ: f は�
   assert.ok(runTreads.length > 0 && runTreads.every(t => t.y1 > 940 && t.y1 < 2060), JSON.stringify(runTreads));
 });
 
+// 取りつき区画が1段（全幅の平場）の番号は、出入口辺の近く（内側 150mm）かつ矢印線と出口境界線の間（矢印線・出口線に載らない）。
+// 2段以上の扇形は従来どおり（pivot から外周へ 70%）。2026-10-09 ユーザー目視 moku1-6（取付段数 1）
+test('取りつき区画が1段のとき番号「1」は出入口辺寄り・矢印線と出口境界線の間。2段なら従来の扇形位置のまま', () => {
+  const { graph, c } = layout();
+  const one = addByOrder(graph, c, ['f', 'b', 'c', 'd', 'a'], { entryTurnSteps: 1 });
+  const g = geom(one, graph, 'upper');
+  const n1 = g.stepNumbers.find(n => n.text === '1');
+  const edgeX = 1000, arrowY = 2500; // 出入口辺（f の左辺）と、その中点を渡る矢印線
+  const exitY = 2000; // 区画 f の出口境界（直進部の初段線）
+  assert.ok(n1, JSON.stringify(g.stepNumbers));
+  assert.ok(Math.abs(n1.x - edgeX - 150) <= 10, `辺から 150mm 内側: ${n1.x} / 辺 ${edgeX}`);
+  assert.ok(Math.abs(n1.y - arrowY) > 100, `矢印線から離れる: ${n1.y} / ${arrowY}`);
+  assert.ok(Math.abs(n1.y - exitY) > 100, `出口線から離れる: ${n1.y}`);
+  assert.ok((n1.y - arrowY) * (n1.y - exitY) < 0, `矢印線と出口線の間: ${n1.y}`);
+  // 2段: 扇形の初段は pivot（辺×出口線の角）から外周へ寄せた従来位置＝辺から 150mm より遠い
+  const l2 = layout();
+  const two = addByOrder(l2.graph, l2.c, ['f', 'b', 'c', 'd', 'a'], { entryTurnSteps: 2 });
+  const n2 = geom(two, l2.graph, 'upper').stepNumbers.find(n => n.text === '1');
+  assert.ok(n2 && Math.abs(n2.x - edgeX - 150) > 100, `${JSON.stringify(n2)}`);
+});
+
 test('【実データ moku2-2】上り口を走行端へ切り替えると f の基端（往路側半分）が上り口になる', () => {
   const { graph, c } = fullBaseLayout();
   const stair = addByOrder(graph, c, ['f', 'b', 'cd', 'a']);
