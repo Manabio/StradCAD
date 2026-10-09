@@ -4,10 +4,13 @@
 //
 // 使い方:
 //   node --import ./scripts/testSetup.mjs scripts/probe/diffStairElevPlan.mjs <src.stq> [階名...]
-//        [--entry-turn-steps N] [--json out] [--verbose] [--tol MM]
+//        [--entry-turn-steps N] [--arrival-turn-steps N] [--json out] [--verbose] [--tol MM]
 //   階名を省略すると全階。--entry-turn-steps N は、読込み・壁再生成（dumpElevFigure.mjs --regen と同じ順）のあとで
 //   メモリ上の「出入口が側面の」全階段の取りつき蹴上 entryTurnSteps を N にし（直進部から差し引いて総蹴上数を保つ）、
 //   alignPortStairsOnGraph を通さずに壁だけ再生成し直す（align を通すと鉄骨以外の 0 が 1 に戻るため）。
+//   --arrival-turn-steps N は同様に「到達口が側面の」全階段の arrivalTurnSteps を N にする（復路の直進部から差し引く）。
+//   実データの到達口は走行端ばかり（復路のレーンが 1 行しかない）で、該当する階段が無ければ「書き換えなし」と出る
+//   （到達口の区画の単体照合は stairPlanAlign.test.js）。
 //
 // 展開図側の取り出し（実経路）:
 //   buildStairBand と同じ前処理（elevationStair.js の層・CH_upper 解決）で stairFaceSequence を呼び、各 entry の content から
@@ -50,24 +53,25 @@ import {
   DEFAULT_TOL_MM, noseLocalXs, verticalLineXs, localToWorldRun, planCrossings, summarizeCut, totalOf, formatRows, uniqueSorted,
 } from './stairElevPlanDiff.mjs';
 
-const USAGE = 'usage: diffStairElevPlan.mjs <src.stq> [階名...] [--entry-turn-steps N] [--json out] [--verbose] [--tol MM]';
+const USAGE = 'usage: diffStairElevPlan.mjs <src.stq> [階名...] [--entry-turn-steps N] [--arrival-turn-steps N] [--json out] [--verbose] [--tol MM]';
 function usageError(msg) { console.error(`${msg}\n${USAGE}`); process.exit(2); }
 
 // ---- 引数 ----
 const argv = process.argv.slice(2);
 const positional = [];
-const opt = { entryTurnSteps: null, json: null, verbose: false, tol: DEFAULT_TOL_MM };
+const opt = { entryTurnSteps: null, arrivalTurnSteps: null, json: null, verbose: false, tol: DEFAULT_TOL_MM };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--verbose') opt.verbose = true;
-  else if (a === '--entry-turn-steps' || a === '--json' || a === '--tol') {
+  else if (a === '--entry-turn-steps' || a === '--arrival-turn-steps' || a === '--json' || a === '--tol') {
     const v = argv[++i];
     if (v == null || v.startsWith('--')) usageError(`${a} に値がありません`);
     if (a === '--json') opt.json = v;
     else {
       const n = Number(v);
-      if (!Number.isFinite(n) || (a === '--entry-turn-steps' && (!Number.isInteger(n) || n < 0)) || (a === '--tol' && n <= 0)) usageError(`${a} の値が不正です: ${v}`);
-      if (a === '--tol') opt.tol = n; else opt.entryTurnSteps = n;
+      const isSteps = a === '--entry-turn-steps' || a === '--arrival-turn-steps';
+      if (!Number.isFinite(n) || (isSteps && (!Number.isInteger(n) || n < 0)) || (a === '--tol' && n <= 0)) usageError(`${a} の値が不正です: ${v}`);
+      if (a === '--tol') opt.tol = n; else if (a === '--entry-turn-steps') opt.entryTurnSteps = n; else opt.arrivalTurnSteps = n;
     }
   } else if (a.startsWith('--')) usageError(`unknown option: ${a}`);
   else positional.push(a);
@@ -99,9 +103,11 @@ async function regenerateAllWalls(project, { align }) {
   }
 }
 
-// 出入口が側面の全階段の entryTurnSteps を N にする（総蹴上数は直進部で保つ）。
-// 直進部が MIN_RUN_RISERS を割る階段は書き換えず skipped に積む。{changed, skipped} を返す。
-async function overrideEntryTurnSteps(project, n) {
+// 出入口 port（'entry'|'arrival'）が側面の全階段の取りつき蹴上（entryTurnSteps / arrivalTurnSteps）を N にする
+// （総蹴上数は直進部で保つ）。直進部が MIN_RUN_RISERS を割る階段は書き換えず skipped に積む。{changed, skipped} を返す。
+async function overrideTurnSteps(project, port, n) {
+  const field = port === 'entry' ? 'entryTurnSteps' : 'arrivalTurnSteps';
+  const flag = port === 'entry' ? '--entry-turn-steps' : '--arrival-turn-steps';
   const { runInAction } = await import('mobx');
   let changed = 0;
   const skipped = [];
@@ -111,22 +117,23 @@ async function overrideEntryTurnSteps(project, n) {
     for (const stair of graph.stairs) {
       if (!hasPortSides(stair.type)) continue;
       const resolved = resolvePorts(stair, measureStairSpans(stair, graph));
-      if (!resolved || !resolved.entry || resolved.entry === StairPortSide.END) continue;
-      const cur = stair.entryTurnSteps ?? 0;
+      const side = resolved?.[port];
+      if (!side || side === StairPortSide.END) continue;
+      const cur = stair[field] ?? 0;
       if (cur === n) continue;
       let sections = null;
       if (Array.isArray(stair.sections)) {
         sections = [...stair.sections];
-        const idx = portRunIndex(stair.type, 'entry');
+        const idx = portRunIndex(stair.type, port);
         sections[idx] += cur - n;
         if (sections[idx] < MIN_RUN_RISERS) {
-          skipped.push(`${p.name}/${stair.roomId}: 直進部が ${sections[idx]} 段（< ${MIN_RUN_RISERS}）になるため --entry-turn-steps ${n} を適用せず除外（e=${cur} のまま）`);
+          skipped.push(`${p.name}/${stair.roomId}: 直進部が ${sections[idx]} 段（< ${MIN_RUN_RISERS}）になるため ${flag} ${n} を適用せず除外（${field}=${cur} のまま）`);
           continue;
         }
       }
       runInAction(() => {
         if (sections) stair.setField('sections', sections);
-        stair.setField('entryTurnSteps', n);
+        stair.setField(field, n);
       });
       changed++;
     }
@@ -191,6 +198,7 @@ function boundaryRunValues(stair, graph) {
     if (!p) return [];
     const vals = [p.run.startB];
     if (p.entryPort === 'end' || p.entryTurnSteps >= 1) vals.push(p.run.baseA);
+    if (p.arrivalPort !== 'end' && p.arrivalTurnSteps >= 1) vals.push(p.run.baseB); // 到達口の区画の外縁（上階の床との蹴上）
     return vals;
   }
   return stairPortEdges(stair, graph, ['entry', 'arrival']).map(e => ({ value: e.value, isVertical: e.isVertical }));
@@ -204,14 +212,21 @@ if (floorFilter.length > 0) {
   for (const f of floorFilter) if (!names.has(f)) usageError(`階が見つかりません: ${f}（あるのは ${[...names].join(', ')}）`);
 }
 await regenerateAllWalls(project, { align: true });
-if (opt.entryTurnSteps != null) {
-  const { changed, skipped } = await overrideEntryTurnSteps(project, opt.entryTurnSteps);
+// 取りつき蹴上の上書き（上り口・到達口。どちらか／両方）。書き換えがあれば壁を再生成する（align は通さない）
+let overridden = false;
+for (const [port, flag, n, label] of [
+  ['entry', '--entry-turn-steps', opt.entryTurnSteps, '上り口'],
+  ['arrival', '--arrival-turn-steps', opt.arrivalTurnSteps, '到達口'],
+]) {
+  if (n == null) continue;
+  const { changed, skipped } = await overrideTurnSteps(project, port, n);
   notes.push(changed > 0
-    ? `--entry-turn-steps ${opt.entryTurnSteps}: 側面の上り口の階段 ${changed} 件を書き換えて壁を再生成`
-    : `--entry-turn-steps ${opt.entryTurnSteps}: 書き換えなし（側面の上り口の階段は既に ${opt.entryTurnSteps}、または無い／除外。再生成もしていない）`);
-  for (const s of skipped) notes.push(s);
-  if (changed > 0) await regenerateAllWalls(project, { align: false });
+    ? `${flag} ${n}: 側面の${label}の階段 ${changed} 件を書き換えて壁を再生成`
+    : `${flag} ${n}: 書き換えなし（側面の${label}の階段は既に ${n}、または無い／除外。再生成もしていない）`);
+  for (const sk of skipped) notes.push(sk);
+  if (changed > 0) overridden = true;
 }
+if (overridden) await regenerateAllWalls(project, { align: false });
 
 const tabs = project.orderedTabs;
 for (let i = 0; i < tabs.length; i++) {

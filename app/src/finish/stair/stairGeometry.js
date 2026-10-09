@@ -888,6 +888,9 @@ function resolveUTurnPlan(stair, b, { spans, laneGapMm = 0, partition = null }) 
  *     front 復路側の前縁／startB 復路直進部の終端（到達側）／baseB 復路の基端（到達辺）／back 踊場・周回部の奥
  *   across … 幅方向の世界座標（縦走行なら x・横走行なら y）: s0 往路外側／sA 往路内側／sB 復路内側／s1 復路外側／mid 通り芯
  *   entryPort/arrivalPort … 'end'|'inner'|'outer'。entryTurnSteps/arrivalTurnSteps … 取りつき回転部の蹴上数（走行端なら 0）
+ *   entryNumbers/arrivalNumbers … 取りつき区画のマスの段数字の範囲 {from,to}（蹴上数 0 〔平場〕・走行端は null）。
+ *     上り口 1..e、到達口 S+e..S+e+a−1（S＝stairParts の総マス数+1）。stairTreadFootprints の number と同じ
+ *   totalSteps … 総蹴上数 S+e+a（最終番号＝上階の床。段 n の天端は n×蹴上）
  *   n1/n2 … 往路・復路の直進部の蹴上数。turnCells … 回転部のマス数。firstTurnNumber … 回転部の最初の段数字
  *   hasColumn … 隔て壁の柱の面に合わせた区間か（frontA と front が分かれうる）
  * 求まらないとき（U字系でない／階段・graph なし／セルが無い／設置枠が不正）は null（stairTreadFootprints と同じ条件）。
@@ -905,9 +908,13 @@ export function uTurnPlanLayout(stair, graph) {
   const partition = partitionFrameFor(stair, graph, laneGapMm);
   const inset = insetStairBounds(stair, b, 'install', graph, spans);
   const bi = { x1: inset.x1, y1: inset.y1, x2: inset.x2, y2: inset.y2 };
-  const { f, parts, layout, sA, sB, turnStepsE, turnStepsA } = resolveUTurnPlan(stair, bi, { spans, laneGapMm, partition });
+  const { f, parts, totalSteps, layout, sA, sB, turnStepsE, turnStepsA } = resolveUTurnPlan(stair, bi, { spans, laneGapMm, partition });
   const runAt = (t) => { const p = f.pt(t, 0.5); return f.vertical ? p.y : p.x; };
   const acrossAt = (s) => { const p = f.pt(0, s); return f.vertical ? p.x : p.y; };
+  // 取りつき区画のマスの段数字の範囲（buildSwitchback/buildWinding が emitPortTurn へ渡す numberStart と同じ式の単一供給源）。
+  // 上り口は 1..e、到達口は直進部・回転部の続き番号の次から a 個（最後の番号＝総蹴上数−1。到達番号＝上階の床は含まない）。
+  const entryNumbers = turnStepsE > 0 ? { from: 1, to: turnStepsE } : null;
+  const arrivalNumbers = turnStepsA > 0 ? { from: totalSteps + turnStepsE, to: totalSteps + turnStepsE + turnStepsA - 1 } : null;
   return {
     vertical: f.vertical,
     run: {
@@ -916,7 +923,8 @@ export function uTurnPlanLayout(stair, graph) {
     },
     across: { s0: acrossAt(0), sA: acrossAt(sA), sB: acrossAt(sB), s1: acrossAt(1), mid: acrossAt(0.5) },
     entryPort: layout.ports.entry, arrivalPort: layout.ports.arrival,
-    entryTurnSteps: turnStepsE, arrivalTurnSteps: turnStepsA,
+    entryTurnSteps: turnStepsE, arrivalTurnSteps: turnStepsA, entryNumbers, arrivalNumbers,
+    totalSteps: totalSteps + turnStepsE + turnStepsA,
     n1: parts[0].risers, n2: parts[2].risers, turnCells: parts[1].cells, firstTurnNumber: parts[1].numberStart,
     hasColumn: !!layout.column,
   };

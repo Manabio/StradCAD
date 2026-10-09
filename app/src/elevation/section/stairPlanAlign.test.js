@@ -14,7 +14,7 @@ import { PARTITION_THICKNESS_MM } from '../../finish/stair/stairPartition.js';
 import { generateStairPartitionWalls } from '../../finish/stair/stairPartitionWalls.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
 import { stairRunProfile } from '../elevationStairSection.js';
-import { stairContribution, stairAxisIsVertical, ladderAcrossRange, landingStepRisers, stairPrimitivesForCut, withCutLandings } from './sectionStair.js';
+import { stairContribution, stairAxisIsVertical, ladderAcrossRange, landingStepRisers, stairPrimitivesForCut, withCutLandings, stairOccluderRects, stairFaceHits } from './sectionStair.js';
 import { localXOf } from './sectionTypes.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
@@ -43,21 +43,36 @@ function overhangFixture(entryTurnSteps) {
 
 // 折返し（SWITCHBACK）の側面の上り口: 往路の基端の行（y3500..4500）を切り、取りつき回転部 entryTurnSteps 段を載せる
 // （switchbackCuts.test.js の sideEntry と同じ構成。往路 x0..1000・復路 x1000..2000・踊り場 y0..1500）
-// arrival=true なら復路の基端の行（y3500..4500）も切り、到達口を側面（右）にする（到達口の区画は展開図では未追従）
-function sideEntrySwitchback(entryTurnSteps, { arrival = false } = {}) {
+// arrival=true なら復路の基端の行（y3500..4500）も切り、到達口を側面（外側）にする（arrivalTurnSteps 段の区画）。
+// flip=true は往路が東・復路が西（左右の側面指定は進行方向基準なので、flip では側面になる側を探して選ぶ）
+function sideEntrySwitchback(entryTurnSteps, { arrival = false, arrivalTurnSteps = 1, flip = false, structure = StructuralMaterialType.WOOD } = {}) {
   const graph = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
   const V = (v) => graph.addCenterLine(CenterLineType.VERTICAL, v, ARCH);
   const Hh = (v) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, ARCH);
   const x0 = V(0), xm = V(1000), x1 = V(2000), y0 = Hh(0), ym = Hh(1500), yz = Hh(3500), y1 = Hh(4500);
   const k = (l, t, r, b) => `${l.id}:${t.id}:${r.id}:${b.id}`;
-  const cells = new Set([k(x0, y0, x1, ym), k(x0, ym, xm, yz), k(x0, yz, xm, y1),
-    ...(arrival ? [k(xm, ym, x1, yz), k(xm, yz, x1, y1)] : [k(xm, ym, x1, y1)])]);
-  const stair = graph.addStair({
-    type: StairType.SWITCHBACK, cells, sections: [6, 1, 6], upDirection: 'up', flip: false, entryTurnSteps, entrySide: 'left',
-    ...(arrival ? { arrivalSide: 'left', arrivalTurnSteps: 1 } : {}), // 復路の外側の側面（'right' は内側＝区画にならず走行端のまま）
-  });
-  graph.setStructureOverride('木造（在来）');
-  stair.structure = StructuralMaterialType.WOOD;
+  // 往路の列（flip=false は西 x0..xm・true は東 xm..x1）。復路は反対の列
+  const [aL, aR, bL, bR] = flip ? [xm, x1, x0, xm] : [x0, xm, xm, x1];
+  const cells = new Set([k(x0, y0, x1, ym), k(aL, ym, aR, yz), k(aL, yz, aR, y1),
+    ...(arrival ? [k(bL, ym, bR, yz), k(bL, yz, bR, y1)] : [k(bL, ym, bR, y1)])]);
+  const make = (entrySide, arrivalSide) => {
+    const g = graph;
+    const st = g.addStair({
+      type: StairType.SWITCHBACK, cells, sections: [6, 1, 6], upDirection: 'up', flip, entryTurnSteps, entrySide,
+      ...(arrival ? { arrivalSide, arrivalTurnSteps } : {}),
+    });
+    st.structure = structure;
+    return st;
+  };
+  // 側面の口になる辺（'left'/'right'）を探す: 上り口は往路の外側、到達口は復路の外側（内側は区画にならず走行端のまま）
+  let stair = null;
+  for (const [es, as] of [['left', 'left'], ['left', 'right'], ['right', 'left'], ['right', 'right']]) {
+    const cand = make(es, as);
+    const p = uTurnPlanLayout(cand, graph);
+    if (p && p.entryPort !== 'end' && (!arrival || p.arrivalPort !== 'end')) { stair = cand; break; }
+    graph.removeStair?.(cand.id);
+  }
+  graph.setStructureOverride('木造（在来）'); // 隔て壁の生成規則（addPartitionWalls で明示的に足したときだけ壁が立つ）。階段の構造は stair.structure
   return { graph, stair };
 }
 
@@ -107,14 +122,11 @@ function planRunsAcross(segs, vertical, across) {
   return out;
 }
 
-// 展開図の flight の蹴上（段鼻）の走行座標（世界）。lead 区画（側面の上り口の取りつき段）は skipLead で除く
-function elevationNoses(flight, { skipLead = false } = {}) {
-  const prof = stairRunProfile(flight.steps, flight.riserMm, flight.lengthMm, 0, 0, 1, 0,
-    { leadSteps: flight.leadSteps, leadMm: flight.leadMm });
+// 展開図の flight の蹴上（段鼻）の走行座標（世界）。flight は直進部だけ（側面の口の区画は zoneCells のスライスで別に照合する）
+function elevationNoses(flight) {
+  const prof = stairRunProfile(flight.steps, flight.riserMm, flight.lengthMm, 0, 0, 1, 0);
   const worldStart = flight.travelSign > 0 ? flight.runLo : flight.runHi;
-  let xs = prof.noses.map(([x]) => x);
-  if (skipLead && flight.leadMm > 0) xs = xs.filter(x => x >= flight.leadMm - TOL);
-  return xs.map(x => worldStart + flight.travelSign * x);
+  return prof.noses.map(([x]) => worldStart + flight.travelSign * x);
 }
 
 // 集合として ±TOL で一致するか（両方向）。差分は文言に出す
@@ -124,8 +136,8 @@ function assertSameSet(actual, expected, tag) {
   assert.deepEqual({ miss, extra }, { miss: [], extra: [] }, `${tag}: 展開図の蹴上=${JSON.stringify(actual)} 平面の踏面線=${JSON.stringify(expected)}`);
 }
 
-// 往路・復路の蹴上の集合を平面の踏面線と突き合わせる。e>=2 の取りつき回転部（扇形）は直進部だけ（skipLead）
-function assertFlightsMatchPlan(graph, stair, tag, { skipLead = false } = {}) {
+// 往路・復路の蹴上の集合を平面の踏面線と突き合わせる（直進部だけ。取りつき区画の扇形は zoneBoundaryCheck）
+function assertFlightsMatchPlan(graph, stair, tag) {
   const c = stairContribution(stair, graph, FLOOR_HEIGHT);
   assert.ok(c, tag);
   const p = uTurnPlanLayout(stair, graph);
@@ -133,12 +145,11 @@ function assertFlightsMatchPlan(graph, stair, tag, { skipLead = false } = {}) {
   const vertical = c.isVertical;
   const [ob, ib] = c.flights;
   const mid = (f) => (f.acrossLo + f.acrossHi) / 2;
-  // 往路: レーン中央を横切る踏面線 ∪（走行端の上り口か取りつき段ありのとき基端＝最初の蹴上の辺）
+  // 往路: レーン中央を横切る踏面線（側面の上り口なら区画の出口境界も踏面線）∪（走行端の上り口なら基端＝最初の蹴上の辺）
   const lo = ob.runLo - TOL, hi = ob.runHi + TOL;
   const planOut = planRunsAcross(g.treads, vertical, mid(ob)).filter(r => r >= lo && r <= hi);
-  if (!skipLead && (p.entryPort === 'end' || p.entryTurnSteps >= 1)) planOut.push(p.run.baseA);
-  const exitFilter = skipLead ? planOut.filter(r => Math.abs(r - p.run.baseA) >= Math.abs(p.run.exitA - p.run.baseA) - TOL) : planOut;
-  assertSameSet(elevationNoses(ob, { skipLead }), exitFilter, `${tag} 往路`);
+  if (p.entryPort === 'end') planOut.push(p.run.baseA);
+  assertSameSet(elevationNoses(ob), planOut, `${tag} 往路`);
   // flight の走行範囲（runLo/runHi。切断線が flight を横切るかの判定に使う）は蹴上の範囲と矛盾しない
   const obNoses = elevationNoses(ob);
   const obEnd = ob.travelSign > 0 ? ob.runHi : ob.runLo;
@@ -164,7 +175,8 @@ test('主ゲート: 張り出し（f,b,c,d,a。classifyStairArea が WINDING と
       setup(graph);
       const { c, p } = assertFlightsMatchPlan(graph, stair, tag);
       assert.equal(p.entryTurnSteps, e, tag);
-      assert.equal(c.flights[0].steps, p.n1 + e, `${tag}: 往路の蹴上数＝直進部＋取りつき段`);
+      assert.equal(c.flights[0].steps, p.n1, `${tag}: 往路の蹴上数＝直進部だけ（取りつき段は区画のセル）`);
+      assert.equal(c.zoneCells.entry.length, 1, `${tag}: 上り口の区画のセルは 1 枚（e=1 の 1 段、e=0 の平場の矩形）`);
     }
   }
 });
@@ -178,7 +190,7 @@ test('主ゲート: 折返し（SWITCHBACK）の側面の上り口 × 隔て壁�
       const p = uTurnPlanLayout(stair, graph);
       assert.notEqual(p.entryPort, 'end', `${tag}: 前提: 側面の上り口（entrySide 'left'＝外側）`);
       const { c } = assertFlightsMatchPlan(graph, stair, tag);
-      assert.equal(c.flights[0].steps, p.n1 + e, tag);
+      assert.equal(c.flights[0].steps, p.n1, tag);
     }
   }
 });
@@ -197,12 +209,15 @@ test('主ゲート: 到達口が側面（区画あり）でも、復路は front
   }
 });
 
-test('主ゲート: 取りつき回転部 2 段以上は、区画の扇形（S2b）を除いた直進部の蹴上が平面の踏面線と一致する', () => {
+test('主ゲート: 取りつき回転部 2・3 段（扇形の区画）でも直進部の蹴上が平面の踏面線と一致する（区画は zoneBoundaryCheck）', () => {
   for (const [name, setup] of VARIANTS) {
-    const tag = `e=2/${name}`;
-    const { graph, stair } = overhangFixture(2);
-    setup(graph);
-    assertFlightsMatchPlan(graph, stair, tag, { skipLead: true });
+    for (const e of [2, 3]) {
+      const tag = `e=${e}/${name}`;
+      const { graph, stair } = overhangFixture(e);
+      setup(graph);
+      const { c } = assertFlightsMatchPlan(graph, stair, tag);
+      assert.equal(c.flights[0].steps, uTurnPlanLayout(stair, graph).n1, tag);
+    }
   }
 });
 
@@ -241,7 +256,7 @@ test('主ゲート: 鉄骨（隔て壁なし・あき 100）の SWITCHBACK/WINDI
 
 // ---------------------------------------------------------------- stairContribution の形
 
-test('stairContribution: 往路・復路の端・取りつき区画 leadMm・段数が uTurnPlanLayout と一致し、復路の足元は回転部の最後の段の高さ', () => {
+test('stairContribution: 往路（直進部）・復路の端・段数が uTurnPlanLayout と一致し、往路の足元は区画の最後の段・復路の足元は回転部の最後の段の高さ', () => {
   for (const e of [0, 1]) {
     const { graph, stair } = overhangFixture(e);
     addPartitionWalls(graph);
@@ -249,19 +264,19 @@ test('stairContribution: 往路・復路の端・取りつき区画 leadMm・段
     const p = uTurnPlanLayout(stair, graph);
     const [ob, ib] = c.flights;
     const tag = `e=${e}`;
-    assert.equal(ob.runLo, Math.min(p.run.baseA, p.run.frontA), tag);
-    assert.equal(ob.runHi, Math.max(p.run.baseA, p.run.frontA), tag);
-    assert.equal(ob.travelSign, p.run.frontA > p.run.baseA ? 1 : -1, tag);
-    assert.equal(ob.lengthMm, Math.abs(p.run.frontA - p.run.baseA), tag);
-    assert.equal(ob.steps, p.n1 + e, tag);
-    assert.equal(ob.leadMm, Math.abs(p.run.exitA - p.run.baseA), `${tag}: 側面の上り口は取りつき区画の走行長`);
-    assert.equal(ob.leadSteps, e, tag);
+    assert.equal(ob.runLo, Math.min(p.run.startA, p.run.frontA), tag);
+    assert.equal(ob.runHi, Math.max(p.run.startA, p.run.frontA), tag);
+    assert.equal(ob.travelSign, p.run.frontA > p.run.startA ? 1 : -1, tag);
+    assert.equal(ob.lengthMm, Math.abs(p.run.frontA - p.run.startA), tag);
+    assert.equal(ob.steps, p.n1, `${tag}: 直進部の蹴上数だけ`);
+    assert.equal(ob.baseZ, e * ob.riserMm, `${tag}: 足元＝区画の最後の段の天端`);
+    assert.notEqual(p.run.startA, p.run.baseA, `${tag}: 側面の上り口は始端が区画の出口（上り口辺ではない）`);
+    assert.equal('leadMm' in ob || 'leadSteps' in ob, false, tag);
     assert.equal(ib.runLo, Math.min(p.run.front, p.run.startB), tag);
     assert.equal(ib.runHi, Math.max(p.run.front, p.run.startB), tag);
     assert.equal(ib.travelSign, p.run.startB > p.run.front ? 1 : -1, `${tag}: 復路は front から startB へ歩く`);
     assert.equal(ib.lengthMm, Math.abs(p.run.startB - p.run.front), tag);
     assert.equal(ib.steps, p.n2, tag);
-    assert.equal(ib.leadMm, undefined, `${tag}: 復路に取りつき区画はない`);
     assert.equal(ib.baseZ, (p.n1 + e + p.turnCells - 1) * ob.riserMm, `${tag}: 復路の足元＝(n1+e+w−1)×蹴上`);
     assert.deepEqual(c.frame, { frontA: p.run.frontA, front: p.run.front, back: p.run.back }, tag);
     assert.equal(c.isVertical, p.vertical, tag);
@@ -353,7 +368,9 @@ function turnBoundaryCheck(graph, stair, tag) {
   for (const [lane, fl] of [['往路', c.flights[0]], ['復路', c.flights[1]]]) {
     const v = (fl.acrossLo + fl.acrossHi) / 2;
     const cut = { seqNo: '2', line: { isVertical: vertical, axisValue: v, lo: -1e5, hi: 1e5 }, viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 9000 }, baseFloorZ: 0 };
-    const sliced = withCutLandings(c, cut).landings.sort((a, b) => a.runLo - b.runLo);
+    // 回転部のスライスだけ（取りつき区画のスライスは zoneBoundaryCheck）
+    const first = uTurnPlanLayout(stair, graph).firstTurnNumber, w = c.turnCellCount;
+    const sliced = withCutLandings(c, cut).landings.filter(l => l.turnStep >= first && l.turnStep < first + w).sort((a, b) => a.runLo - b.runLo);
     assert.ok(sliced.length >= 1, `${tag} ${lane}: 回転部を通る`);
     // 蹴上＝隣り合うセル同士が共有する縁（高さが違うもの）
     const edges = [];
@@ -578,4 +595,193 @@ test('PARTITION_THICKNESS_MM の前提: 隔て壁の総厚が 0 でないフィ�
   const p = uTurnPlanLayout(stair, graph);
   assert.equal(p.hasColumn, true);
   assert.ok(Math.abs(Math.abs(p.across.sB - p.across.sA) - PARTITION_THICKNESS_MM) < 1e-6);
+});
+
+// ---------------------------------------------------------------- 側面の口に取りつく区画（上り口 e 段・到達口 a 段）
+
+// 区画の主ゲート: レーン線で切った区画の Landing の境界（蹴上の走行座標）＝平面の踏面線（放射線）とレーン線の交点。
+// 区画の外縁（上り口辺 baseA・到達辺 baseB）の段差は edgeRiser（外側の高さとの縦線 1 本）で、位置は平面の基端・到達辺。
+// 期待値は buildStairGeometry の描画線（installGeom）と uTurnPlanLayout の端から取る（stairContribution の値の写しにしない）。
+function zoneBoundaryCheck(graph, stair, port, tag) {
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  assert.ok(c, tag);
+  const p = uTurnPlanLayout(stair, graph);
+  const g = installGeom(stair, graph);
+  const vertical = c.isVertical;
+  const lane = port === 'entry' ? c.flights[0] : c.flights[1];
+  const v = (lane.acrossLo + lane.acrossHi) / 2;
+  const cut = { seqNo: '2', line: { isVertical: vertical, axisValue: v, lo: -1e5, hi: 1e5 }, viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 9000 }, baseFloorZ: 0 };
+  const zoneNums = new Set(c.zoneCells[port].map(z => z.number));
+  const sliced = withCutLandings(c, cut).landings.filter(l => l.turnStep != null && zoneNums.has(l.turnStep)).sort((a, b) => a.runLo - b.runLo);
+  assert.ok(sliced.length >= 1, `${tag} ${port}: 区画を通る`);
+  const hitsOn = g.treads.flatMap((t) => {
+    const [pa, qa, pr, qr] = vertical ? [t.x1, t.x2, t.y1, t.y2] : [t.y1, t.y2, t.x1, t.x2];
+    if ((pa - v) * (qa - v) > 0 || Math.abs(pa - qa) < 1e-9) return [];
+    return [pr + (qr - pr) * (v - pa) / (qa - pa)];
+  });
+  // 区画の内部の蹴上＝隣り合うスライスが共有する縁（高さが違うもの）。高さは 1 段（蹴上）ずつ違う
+  const edges = [];
+  for (let i = 0; i + 1 < sliced.length; i++) {
+    if (Math.abs(sliced[i].runHi - sliced[i + 1].runLo) <= TOL && Math.abs(sliced[i].z - sliced[i + 1].z) > 1e-6) {
+      edges.push((sliced[i].runHi + sliced[i + 1].runLo) / 2);
+      assert.ok(Math.abs(Math.abs(sliced[i].z - sliced[i + 1].z) - lane.riserMm) < 1e-6, `${tag} ${port}: 隣り合う段は蹴上 1 段ぶん`);
+    }
+  }
+  const lo = sliced[0].runLo, hi = sliced.at(-1).runHi;
+  assertSameSet(edges, hitsOn.filter(r => r > lo + TOL && r < hi - TOL), `${tag} ${port}`);
+  // 段の高さ＝番号×蹴上（stairTreadFootprints の規約。到達番号〔上階の床〕は含まない）
+  for (const l of sliced) {
+    assert.ok(Math.abs(l.z - l.turnStep * lane.riserMm) < 1e-6, `${tag} ${port}: 段 ${l.turnStep} の天端＝番号×蹴上`);
+  }
+  // 外縁の段差: 上り口辺（上り口）・到達辺（到達口）に端が接するスライスだけが edgeRiser を持ち、位置は平面の基端・到達辺
+  const edgeRun = port === 'entry' ? p.run.baseA : p.run.baseB;
+  const outerZ = port === 'entry' ? 0 : p.totalSteps * lane.riserMm;
+  const withEdge = sliced.filter(l => l.edgeRiser);
+  assert.equal(withEdge.length, 1, `${tag} ${port}: 外縁の段差は 1 本`);
+  for (const l of withEdge) {
+    assert.ok(Math.abs(l.edgeRiser.run - edgeRun) < 1e-9 && l.edgeRiser.outerZ === outerZ, `${tag} ${port}: 外縁の位置と外側の高さ`);
+    assert.ok(Math.abs(l.runLo - edgeRun) <= TOL || Math.abs(l.runHi - edgeRun) <= TOL, `${tag} ${port}: スライスの端が外縁に接する`);
+  }
+  // 平面の外縁（baseA / baseB）の外周線もレーン線と交わる位置にある（蹴上の縦線を引く位置の裏取り）
+  const outline = planRunsAcross(g.outline, vertical, v);
+  assert.ok(outline.some(r => Math.abs(r - edgeRun) <= TOL), `${tag} ${port}: 平面の外周に外縁の辺がある`);
+  // landingStepRisers が内部の縁＋外縁の段差を縦線として出す
+  assert.equal(landingStepRisers(sliced, vertical, cut).length, edges.length + withEdge.length, `${tag} ${port}: landingStepRisers の本数`);
+  return { c, p, sliced, edges, withEdge };
+}
+
+test('区画の主ゲート: 張り出し（f,b,c,d,a）の回り階段の上り口 e=1・2・3 × 柱材/PB 包みで、区画の蹴上＝平面の放射線∩レーン線、外縁 baseA の段差 1 本', () => {
+  for (const [name, setup] of VARIANTS) {
+    for (const e of [1, 2, 3]) {
+      const { graph, stair } = overhangFixture(e);
+      setup(graph);
+      const { c, p } = zoneBoundaryCheck(graph, stair, 'entry', `張り出し/${name}/e=${e}`);
+      assert.equal(c.zoneCells.entry.length, e, '区画のセルは e 枚');
+      assert.deepEqual(p.entryNumbers, { from: 1, to: e });
+    }
+  }
+});
+
+test('区画の主ゲート: 折返しの側面の上り口 e=1・2・3 × 柱材/PB 包み × flip で、区画の蹴上＝平面の放射線∩レーン線（直進部も一致）', () => {
+  for (const flip of [false, true]) {
+    for (const [name, setup] of VARIANTS) {
+      for (const e of [1, 2, 3]) {
+        const tag = `折返し/flip=${flip}/${name}/e=${e}`;
+        const { graph, stair } = sideEntrySwitchback(e, { flip });
+        assert.ok(stair, `${tag}: 前提: 側面の上り口になる辺がある`);
+        setup(graph);
+        zoneBoundaryCheck(graph, stair, 'entry', tag);
+        assertFlightsMatchPlan(graph, stair, tag);
+      }
+    }
+  }
+});
+
+test('区画の主ゲート: 到達口の区画 a=1・2・3（上り口の区画 e=0・1 と併用）× 柱材/PB 包み × flip で、区画の蹴上＝平面の放射線∩レーン線、復路は front〜startB', () => {
+  for (const flip of [false, true]) {
+    for (const [name, setup] of VARIANTS) {
+      for (const [e, a] of [[0, 1], [0, 2], [1, 3]]) {
+        const tag = `到達口/flip=${flip}/${name}/e=${e}/a=${a}`;
+        const { graph, stair } = sideEntrySwitchback(e, { arrival: true, arrivalTurnSteps: a, flip });
+        assert.ok(stair, `${tag}: 前提`);
+        setup(graph);
+        const { c, p } = zoneBoundaryCheck(graph, stair, 'arrival', tag);
+        assert.equal(c.zoneCells.arrival.length, a, `${tag}: 区画のセルは a 枚`);
+        assert.deepEqual(p.arrivalNumbers, { from: p.totalSteps - a, to: p.totalSteps - 1 }, `${tag}: 到達口の番号は総蹴上数−a〜総蹴上数−1`);
+        assert.equal(c.flights[1].steps, p.n2, `${tag}: 復路は直進部の n2 段だけ`);
+        // 復路の足元＋n2 段の終端＝区画の最初のセルの天端（最後の蹴上が区画の最初のセルへ上がる）
+        const ib = c.flights[1];
+        assert.ok(Math.abs(ib.baseZ + ib.steps * ib.riserMm - c.zoneCells.arrival[0].z) < 1e-6, `${tag}: 復路の終端＝区画の最初のセルの天端`);
+        assertFlightsMatchPlan(graph, stair, tag);
+        if (e > 0) zoneBoundaryCheck(graph, stair, 'entry', tag);
+      }
+    }
+  }
+});
+
+test('区画の主ゲート: 取りつき段 0（平場）は矩形のセル。上り口は z=0 で外縁の段差なし、到達口は上階の床の高さで外縁の段差なし', () => {
+  const { graph, stair } = sideEntrySwitchback(0, { arrival: true, arrivalTurnSteps: 0 });
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const p = uTurnPlanLayout(stair, graph);
+  assert.equal(p.entryNumbers, null, '蹴上 0 の区画には番号がない');
+  assert.equal(p.arrivalNumbers, null);
+  const r = c.flights[0].riserMm;
+  assert.deepEqual(c.zoneCells.entry.map(z => [z.z, z.number]), [[0, 0]]);
+  assert.deepEqual(c.zoneCells.arrival.map(z => [z.z, z.number]), [[p.totalSteps * r, p.totalSteps]], '到達口の平場は上階の床の高さ（総蹴上数×蹴上）');
+  for (const [port, lane, from, to] of [['entry', c.flights[0], p.run.baseA, p.run.exitA], ['arrival', c.flights[1], p.run.startB, p.run.baseB]]) {
+    const v = (lane.acrossLo + lane.acrossHi) / 2;
+    const cut = { seqNo: '2', line: { isVertical: c.isVertical, axisValue: v, lo: -1e5, hi: 1e5 }, viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 9000 }, baseFloorZ: 0 };
+    const sl = withCutLandings(c, cut).landings.filter(l => l.turnStep === c.zoneCells[port][0].number);
+    assert.equal(sl.length, 1, `${port}: 平場は 1 枚`);
+    assert.ok(Math.abs(sl[0].runLo - Math.min(from, to)) < 1e-9 && Math.abs(sl[0].runHi - Math.max(from, to)) < 1e-9, `${port}: 走行方向は ${from}〜${to}`);
+    assert.equal(sl[0].edgeRiser, undefined, `${port}: 平場は外側と同じ高さなので段差なし`);
+    assert.equal(landingStepRisers(sl, c.isVertical, cut).length, 0, `${port}: 蹴上の縦線は出ない`);
+  }
+  assertFlightsMatchPlan(graph, stair, '平場');
+});
+
+test('区画の主ゲート: 鉄骨（あき 100）の側面の上り口 e=2・到達口 a=2 でも区画の蹴上＝平面の放射線∩レーン線（あきは区画のセルに影響しない）', () => {
+  for (const flip of [false, true]) {
+    const { graph, stair } = sideEntrySwitchback(2, { arrival: true, arrivalTurnSteps: 2, flip, structure: StructuralMaterialType.STEEL });
+    assert.ok(stair);
+    const tag = `鉄骨/flip=${flip}`;
+    zoneBoundaryCheck(graph, stair, 'entry', tag);
+    zoneBoundaryCheck(graph, stair, 'arrival', tag);
+    assertFlightsMatchPlan(graph, stair, tag);
+  }
+});
+
+test('区画の外縁の段差は、レーンを縦断する切断の stairPrimitivesForCut に CUT の縦線として出る（外側の高さ→区画の天端）。横断の切断では出ない', () => {
+  const { graph, stair } = sideEntrySwitchback(2, { arrival: true, arrivalTurnSteps: 2 });
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const p = uTurnPlanLayout(stair, graph);
+  const ob = c.flights[0];
+  const v = (ob.acrossLo + ob.acrossHi) / 2;
+  const cut = { seqNo: '2', line: { isVertical: c.isVertical, axisValue: v, lo: -1e5, hi: 1e5 }, viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 9000 }, baseFloorZ: 0 };
+  const columns = [{ x0: -1e4, x1: 1e4, worldLo: -1e4, worldHi: 1e4, bands: [] }];
+  const prims = stairPrimitivesForCut(c, cut, columns);
+  const x = localXOf(cut, p.run.baseA);
+  const sl = withCutLandings(c, cut).landings.find(l => l.edgeRiser?.run === p.run.baseA);
+  assert.ok(sl, '上り口の区画の外縁に接するスライス');
+  const vline = prims.filter(q => q.type === 'line' && q.weight === 'thick' && Math.abs(q.x1 - x) < 1e-6 && Math.abs(q.x2 - x) < 1e-6
+    && Math.abs(Math.min(q.y1, q.y2) - -sl.z) < 1e-6 && Math.abs(Math.max(q.y1, q.y2) - 0) < 1e-6);
+  assert.equal(vline.length, 1, '上り口辺の位置に、床(0)から区画の天端までの CUT の縦線が 1 本');
+  // 横断の切断（レーンに直交）では外縁の段差は出ない。上り口辺ちょうどを横切る線は区画のセルを切る（スライスは出る）が縦線は持たない
+  for (const axisValue of [p.run.frontA, p.run.baseA]) {
+    const crossCut = { ...cut, seqNo: '1', line: { isVertical: !c.isVertical, axisValue, lo: -1e5, hi: 1e5 } };
+    const sliced = withCutLandings(c, crossCut).landings;
+    assert.equal(sliced.filter(l => l.edgeRiser).length, 0, `横断 ${axisValue}: 外縁の段差は持たない`);
+    if (axisValue === p.run.baseA) assert.ok(sliced.some(l => l.turnStep === 1), '前提: 上り口辺ちょうどの横断は区画のセルを切る');
+  }
+});
+
+test('失敗系: 切断線が非有限・切断線なし・切るセルが無い寄与は、区画のスライスを足さず例外も投げない（landings は変わらない）', () => {
+  const { graph, stair } = sideEntrySwitchback(2, { arrival: true, arrivalTurnSteps: 1 });
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const n0 = c.landings.length;
+  assert.equal(withCutLandings(c, { line: { isVertical: true, axisValue: NaN } }).landings.length, n0, '非有限の位置');
+  assert.equal(withCutLandings(c, { line: { isVertical: 'x', axisValue: 1 } }).landings.length, n0, '向きが不正');
+  assert.equal(withCutLandings(c, {}), c, '切断線なしは寄与そのまま');
+  const bare = { ...c, zoneCells: { entry: [], arrival: [] }, turnCells: [] };
+  assert.equal(withCutLandings(bare, { line: { isVertical: true, axisValue: 1 } }), bare, '切るセルが無ければ寄与そのまま');
+  assert.equal(withCutLandings(null, { line: {} }), null);
+});
+
+test('seq1（frontA）の梯子は、足元の下に続く上り口の区画の段（e=2）の踏面も含む（床〜踊り場の全段が見付けに入る）。遮蔽矩形・ヒットも足元は床から', () => {
+  const { graph, stair } = sideEntrySwitchback(2);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const p = uTurnPlanLayout(stair, graph);
+  const ob = c.flights[0];
+  const r = ob.riserMm;
+  const { cut, columns } = seq1LikeCut(c, p, p.run.frontA);
+  const prims = stairPrimitivesForCut({ ...c, flights: [ob], landings: [] }, cut, columns);
+  const rungs = prims.filter(q => q.type === 'line' && q.weight === 'thin' && q.y1 === q.y2).map(q => Math.round(-q.y1 * 1000) / 1000);
+  for (let k = 1; k <= p.n1 + 2; k++) {
+    assert.ok(rungs.some(z => Math.abs(z - k * r) < 1e-3), `${k} 段目の踏面（z=${k * r}）の梯子: ${JSON.stringify(rungs)}`);
+  }
+  // 見付けの矩形・ヒット: 足元は床（区画の段も含む）から踊り場の高さまで
+  const rect = stairOccluderRects({ ...c, flights: [ob], landings: [] }, cut).find(q => q.zHi > q.zLo);
+  assert.ok(Math.abs(rect.zLo - 0) < 1e-9 && Math.abs(rect.zHi - (p.n1 + 2) * r) < 1e-6, `遮蔽矩形 z: ${rect.zLo}〜${rect.zHi}`);
+  const hit = stairFaceHits({ ...c, flights: [ob], landings: [] }, cut).find(h => h.part === 'tread');
+  assert.ok(Math.abs(hit.z0 - 0) < 1e-9 && Math.abs(hit.z1 - (p.n1 + 2) * r) < 1e-6, `ヒット z: ${hit.z0}〜${hit.z1}`);
 });

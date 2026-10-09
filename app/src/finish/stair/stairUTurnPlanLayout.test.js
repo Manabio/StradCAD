@@ -7,6 +7,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMate
 import { classifyStairArea, measureStairSpans } from './stairClassify.js';
 import { buildStairGeometry, uTurnPlanLayout } from './stairGeometry.js';
 import { roomBounds } from '../gridCells.js';
+import { stairTreadFootprints } from './stairTreads.js';
 import { PARTITION_BACKING_MM, PARTITION_THICKNESS_MM } from './stairPartition.js';
 import { generateStairPartitionWalls } from './stairPartitionWalls.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
@@ -203,4 +204,68 @@ test('uTurnPlanLayout の呼び出しは描画に影響しない: 前後で buil
     assert.deepEqual(g2, g1, type);
     assert.deepEqual(uTurnPlanLayout(stair, graph), p1, type);
   }
+});
+
+// ---------------------------------------------------------------- 取りつき区画の段数字の範囲（展開図が区画のセルを番号で拾う単一供給源）
+
+// 折返し [6,1,6]。往路・復路の基端の行（y3500..4500）を切り、上り口・到達口を側面（外側）にする（stairPlanAlign.test.js の sideEntrySwitchback と同構成）
+function sideBothFixture(entryTurnSteps, arrivalTurnSteps) {
+  const graph = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  const V = (v) => graph.addCenterLine(CenterLineType.VERTICAL, v, ARCH);
+  const Hh = (v) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, ARCH);
+  const x0 = V(0), xm = V(1000), x1 = V(2000), y0 = Hh(0), ym = Hh(1500), yz = Hh(3500), y1 = Hh(4500);
+  const k = (l, t, r, b) => `${l.id}:${t.id}:${r.id}:${b.id}`;
+  const cells = new Set([k(x0, y0, x1, ym), k(x0, ym, xm, yz), k(x0, yz, xm, y1), k(xm, ym, x1, yz), k(xm, yz, x1, y1)]);
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells, sections: [6, 1, 6], upDirection: 'up', flip: false,
+    entrySide: 'left', arrivalSide: 'left', entryTurnSteps, arrivalTurnSteps,
+  });
+  stair.structure = StructuralMaterialType.WOOD;
+  graph.setStructureOverride('木造（在来）');
+  return { graph, stair };
+}
+
+test('entryNumbers / arrivalNumbers は stairTreadFootprints の段数字と同じ範囲（上り口 1..e・到達口 総蹴上数−a..総蹴上数−1）で、全マスの番号を余りなく分ける', () => {
+  for (const [e, a] of [[0, 0], [1, 0], [2, 2], [3, 1], [0, 3], [1, 3]]) {
+    const { graph, stair } = sideBothFixture(e, a);
+    const p = uTurnPlanLayout(stair, graph);
+    const tag = `e=${e}/a=${a}`;
+    assert.equal(p.entryTurnSteps, e, tag);
+    assert.equal(p.arrivalTurnSteps, a, tag);
+    assert.equal(p.totalSteps, stair.totalSteps, `${tag}: 総蹴上数は Stair の総蹴上数（sections＋e＋a）`);
+    assert.deepEqual(p.entryNumbers, e > 0 ? { from: 1, to: e } : null, tag);
+    assert.deepEqual(p.arrivalNumbers, a > 0 ? { from: stair.totalSteps - a, to: stair.totalSteps - 1 } : null, tag);
+    // 描画側のマスの番号（emitPortTurn が numberStart を渡す）と一致: 上り口 1..e、直進部・回転部、到達口の順に 1..総蹴上数−1 を余りなく分ける
+    const nums = stairTreadFootprints(stair, graph, { riser: 100, insetView: 'install' }).map(c => c.number).sort((x, y) => x - y);
+    assert.deepEqual(nums, Array.from({ length: stair.totalSteps - 1 }, (_, i) => i + 1), `${tag}: 段数字は 1..総蹴上数−1（到達番号は含まない）`);
+    // 範囲内のセルの多角形は区画の矩形に含まれる（±0.5）: 上り口 baseA..exitA × s0..（隣レーン側の内縁 sB まで）、到達口 startB..baseB × （内縁 sA から）..s1。
+    // 区画のセルは出口境界線（s0..sA / sB..s1）より隣レーン側へ、隔て板の面（sB / sA）または中央まで張り出す
+    const fps = stairTreadFootprints(stair, graph, { riser: 100, insetView: 'install' });
+    const within = (range, runA, runB, accA, accB) => {
+      const cells = range ? fps.filter(c => c.number >= range.from && c.number <= range.to) : [];
+      const [r0, r1] = [Math.min(runA, runB), Math.max(runA, runB)], [a0, a1] = [Math.min(accA, accB), Math.max(accA, accB)];
+      for (const c of cells) {
+        for (let i = 0; i < c.poly.length; i += 2) {
+          const [rr, aa] = p.vertical ? [c.poly[i + 1], c.poly[i]] : [c.poly[i], c.poly[i + 1]];
+          assert.ok(rr >= r0 - 0.5 && rr <= r1 + 0.5 && aa >= a0 - 0.5 && aa <= a1 + 0.5, `${tag}: セル ${c.number} の頂点 (${rr},${aa}) が区画の矩形外`);
+        }
+      }
+      return cells.length;
+    };
+    assert.equal(within(p.entryNumbers, p.run.baseA, p.run.exitA, p.across.s0, p.across.sB), e, `${tag}: 上り口の範囲のセルは e 個で矩形内`);
+    assert.equal(within(p.arrivalNumbers, p.run.startB, p.run.baseB, p.across.sA, p.across.s1), a, `${tag}: 到達口の範囲のセルは a 個で矩形内`);
+    // 直進部・回転部の番号と重ならない: 上り口の次は直進部、到達口の前は復路の直進部（回転部の最初の番号＝e+n1）
+    assert.equal(p.firstTurnNumber, e + p.n1, tag);
+  }
+});
+
+test('取りつき区画が走行端の口（entrySide/arrivalSide が end・自動）なら entryNumbers/arrivalNumbers は null（蹴上数が残っていても平面の述語で無視）', () => {
+  const { graph, stair } = sideBothFixture(2, 2);
+  stair.entrySide = 'end';
+  stair.arrivalSide = 'end';
+  const p = uTurnPlanLayout(stair, graph);
+  assert.equal(p.entryTurnSteps, 0);
+  assert.equal(p.arrivalTurnSteps, 0);
+  assert.equal(p.entryNumbers, null);
+  assert.equal(p.arrivalNumbers, null);
 });
