@@ -234,7 +234,8 @@ export function computeFloorInsert(planes, currentPlaneId, stories) {
     const newElevation  = current.elevation + (current.stories - n) * 3000;
     const newName       = makeFloorName(newStartFloor, n);
     const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories: n,
-      planCutHeightMm: current.planCutHeightMm }; // 平面の切断高は表示中の階から複製
+      planCutHeightMm: current.planCutHeightMm, // 平面の切断高は表示中の階から複製
+      ceilingCutHeightMm: current.ceilingCutHeightMm }; // 天伏の切断高も同じ
 
     const updates = [];
     for (let i = 0; i <= idx; i++) {
@@ -256,7 +257,8 @@ export function computeFloorInsert(planes, currentPlaneId, stories) {
   const newName        = makeFloorName(newStartFloor, stories);
   const newElevation   = current.elevation + current.stories * 3000;
   const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories,
-    planCutHeightMm: current.planCutHeightMm }; // 平面の切断高は表示中の階から複製
+    planCutHeightMm: current.planCutHeightMm, // 平面の切断高は表示中の階から複製
+    ceilingCutHeightMm: current.ceilingCutHeightMm }; // 天伏の切断高も同じ
 
   const arr = [...planes];
   arr.splice(idx + 1, 0, { id: null, ...newPlane });
@@ -310,6 +312,7 @@ export function collectPlaneMetas(project) {
   return project.planes.map(p => ({
     id: p.id, name: p.name, startFloor: p.startFloor, elevation: p.elevation, stories: p.stories,
     planCutHeightMm: p.planCutHeightMm,
+    ceilingCutHeightMm: p.ceilingCutHeightMm,
   }));
 }
 
@@ -324,6 +327,19 @@ export function setPlanCutHeightMm(project, planeId, mm) {
   applyPlaneMetas(project, [{
     id: plane.id, name: plane.name, startFloor: plane.startFloor, elevation: plane.elevation,
     stories: plane.stories, planCutHeightMm: mm,
+  }]);
+  return { before, after: mm };
+}
+
+// ---- 階の天伏切断高の変更（setPlanCutHeightMm と同型。applyPlaneMetas 経由）----
+export function setCeilingCutHeightMm(project, planeId, mm) {
+  const plane = project.planeMap.get(planeId);
+  if (!plane || !Number.isFinite(mm) || mm <= 0) return null;
+  const before = plane.ceilingCutHeightMm;
+  if (before === mm) return null;
+  applyPlaneMetas(project, [{
+    id: plane.id, name: plane.name, startFloor: plane.startFloor, elevation: plane.elevation,
+    stories: plane.stories, ceilingCutHeightMm: mm,
   }]);
   return { before, after: mm };
 }
@@ -362,7 +378,8 @@ function planeMetasEqual(a, b) {
     const x = a[i], y = b[i];
     if (x.id !== y.id || x.name !== y.name || x.startFloor !== y.startFloor
       || x.elevation !== y.elevation || x.stories !== y.stories
-      || x.planCutHeightMm !== y.planCutHeightMm) return false;
+      || x.planCutHeightMm !== y.planCutHeightMm
+      || x.ceilingCutHeightMm !== y.ceilingCutHeightMm) return false;
   }
   return true;
 }
@@ -383,6 +400,7 @@ export function applyPlaneMetas(project, metas) {
       plane.elevation  = m.elevation;
       if (m.stories !== undefined) plane.stories = m.stories;
       if (m.planCutHeightMm !== undefined) plane.planCutHeightMm = m.planCutHeightMm; // undefined なら触らない
+      if (m.ceilingCutHeightMm !== undefined) plane.ceilingCutHeightMm = m.ceilingCutHeightMm; // 同上
     }
   });
 }

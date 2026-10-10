@@ -377,8 +377,9 @@ function stairTreadSolids(layer, riserFor) {
 /**
  * 天井の立体（見上げ＝天伏モード専用。`opts.ceilings === true` のときだけ、自階の層に足す）。
  * 部屋ごとに1件（セル矩形の和）、面材（解決器の SURFACE_KINDS）で厚み 0（zLo = zHi = 層の FL + 天井面の高さ zMm。床段差込み）。
- * 輪郭は既定どおり描く。限界（裁定待ち）: 部屋ごとに別立体のため、同じ高さで隣り合う部屋も壁の無い境界では見切り線が出る
- * （同じ立体の矩形群の共有辺だけが消える）。算出は ceiling/ceilingSurfaces.js。
+ * 輪郭は既定どおり描く。部屋ごとに別立体のため、同じ高さで隣り合う部屋も壁の無い境界では見切り線が出る
+ * （同じ立体の矩形群の共有辺だけが消える）。裁定 2026-10-10: 細線グレー（ceiling/ceilingBoundaryStyle.js の後処理）。
+ * 算出は ceiling/ceilingSurfaces.js。
  * @param {SolidLayer} layer
  */
 function ceilingSolids(layer) {

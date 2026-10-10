@@ -189,7 +189,7 @@ for (const v of VARIANTS) {
   restoreStructCLs(project2.structGraph, project2.structuralInfo, doc.struct, project2.memberGroupLedger);
   const { planes: decodedPlanes, activePlaneId } = decodePlanes(doc.planes);
   for (const p of decodedPlanes) {
-    project2.addPlane(p.elevation, p.name, p.id, p.startFloor, p.stories, p.isAlternative, p.referenceId, p.altIndex, p.isRoofPlane, p.roofForPlaneId, p.planCutHeightMm);
+    project2.addPlane(p.elevation, p.name, p.id, p.startFloor, p.stories, p.isAlternative, p.referenceId, p.altIndex, p.isRoofPlane, p.roofForPlaneId, p.planCutHeightMm, p.ceilingCutHeightMm);
   }
   for (const f of doc.floors) {
     const g = project2.graphMap.get(f.planeId);

@@ -3,9 +3,10 @@ import './AddCLDialog.css';
 import { parsePlanCutHeightInput } from './planCutHeightInput.js';
 
 /**
- * 平面の切断高ダイアログ — FL+mm の入力（階の属性。0以下・非数は確定不可）
+ * 切断高ダイアログ — FL+mm の入力（階の属性。0以下・非数は確定不可）。
+ * 平面の切断高と天伏の切断高で共用する（title で出し分ける。別コンポーネントを複製しない）。
  */
-export function PlanCutHeightDialog({ currentHeightMm, onConfirm, onCancel }) {
+export function PlanCutHeightDialog({ currentHeightMm, onConfirm, onCancel, title = '平面の切断高', label = 'FL+ (mm)' }) {
   const [val, setVal] = useState(String(currentHeightMm));
 
   function handleConfirm() {
@@ -24,9 +25,9 @@ export function PlanCutHeightDialog({ currentHeightMm, onConfirm, onCancel }) {
     <>
       <div className="cl-dialog-backdrop" onPointerDown={onCancel} />
       <div className="cl-dialog" onKeyDown={handleKeyDown}>
-        <div className="cl-dialog-title">平面の切断高</div>
+        <div className="cl-dialog-title">{title}</div>
         <label className="cl-dialog-row">
-          <span className="cl-dialog-label">FL+ (mm)</span>
+          <span className="cl-dialog-label">{label}</span>
           <input
             type="number"
             className="cl-dialog-input"

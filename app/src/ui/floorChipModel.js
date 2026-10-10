@@ -13,6 +13,7 @@ export function buildFloorMenuItems(project, plane) {
     if (i > 0)                 items.push({ id: 'move-down', label: '◀ 前の案へ' });
     if (i < alts.length - 1)   items.push({ id: 'move-up',   label: '次の案へ ▶' });
     items.push({ id: 'cut-height', label: '切断高' });
+    items.push({ id: 'ceiling-cut-height', label: '天伏切断高' });
     items.push({ id: 'promote',    label: '採用' });
     items.push({ id: 'copy-alt',   label: '案コピー' });
     items.push({ id: 'delete-alt', label: '削除', danger: true });
@@ -25,6 +26,7 @@ export function buildFloorMenuItems(project, plane) {
   const items = [];
   if (isLowest || isLowest === isHighest) items.push({ id: 'floor-change', label: '階変更' });
   items.push({ id: 'cut-height', label: '切断高' });
+  items.push({ id: 'ceiling-cut-height', label: '天伏切断高' });
   if (i >= 2)                items.push({ id: 'move-down', label: '▼ 下の階へ' });
   if (!isHighest && i >= 1)  items.push({ id: 'move-up',   label: '▲ 上の階へ' });
   if (!isLowest && !isHighest) items.push({ id: 'mezzanine', label: '中間階に' });

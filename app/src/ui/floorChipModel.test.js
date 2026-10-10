@@ -16,3 +16,18 @@ test('buildFloorMenuItems: 採用階（最下・中間・最上）と検討案�
     assert.equal(cut.label, '切断高');
   }
 });
+
+test('buildFloorMenuItems: 「天伏切断高」(ceiling-cut-height) が「切断高」の直後にある（採用階・検討案とも）', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '1階', 'p1', 1, 1);
+  project.addPlane(3000, '2階', 'p2', 2, 1);
+  project.addPlane(6000, '3階', 'p3', 3, 1);
+  project.addPlane(0, '検討A', 'alt1', 1, 1, true, 'p1', 0);
+  for (const id of ['p1', 'p2', 'p3', 'alt1']) {
+    const items = buildFloorMenuItems(project, project.planeMap.get(id));
+    const at = items.findIndex(i => i.id === 'cut-height');
+    assert.equal(items[at + 1]?.id, 'ceiling-cut-height', `${id}: 切断高の隣`);
+    assert.equal(items[at + 1].label, '天伏切断高');
+    assert.equal(items.filter(i => i.id === 'ceiling-cut-height').length, 1);
+  }
+});

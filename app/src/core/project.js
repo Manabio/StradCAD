@@ -171,9 +171,10 @@ export class Project {
 
   addPlane(elevation, name, id = crypto.randomUUID(), startFloor = 1, stories = 1,
            isAlternative = false, referenceId = null, altIndex = 0,
-           isRoofPlane = false, roofForPlaneId = null, planCutHeightMm = undefined) {
+           isRoofPlane = false, roofForPlaneId = null, planCutHeightMm = undefined,
+           ceilingCutHeightMm = undefined) {
     const plane = new Plane(id, elevation, name, startFloor, stories, isAlternative, referenceId, altIndex,
-                             isRoofPlane, roofForPlaneId, planCutHeightMm);
+                             isRoofPlane, roofForPlaneId, planCutHeightMm, ceilingCutHeightMm);
     const graph = new PlanGraph(plane);
     graph._structGraph = this.structGraph; // 全階共通の通り芯を参照
     graph._structuralInfo = this.structuralInfo; // 建物全体の構造情報（主構造ルールの解決用）

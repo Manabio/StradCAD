@@ -6,6 +6,7 @@
 - 切断高は **Plane の属性**（`planCutHeightMm`、FL+mm、既定 1500）。建物一律の定数ではなく階ごとに持つ（ユーザー裁定 2026-10-08 (b)）。既定値は従来の `finish/kneeDropWall.js PLAN_CUT_HEIGHT` と同値で、S1 は動作変化なし。
 - 読み口は **`planCutHeightMmOf(plane)` 唯一**。0・負・非数・欠落は既定へ倒す。新規コードは Plane のフィールドを直接読まず、`PLAN_CUT_HEIGHT` も使わない（後者は既定値の別名として残すだけ）。
 - 旧データ（FBS にフィールドが無い）は既定値。FBS は 0 を「未設定」として省略するので、読み側の `|| 既定` と対になる。 階追加時は**複製**する（途中階挿入・下階追加は表示中の階、検討案の作成・案コピーは複製元の平面の値。屋根専用平面は構造モード専用で切断高を読まないため既定のまま）。 変更は階チップのメニュー「切断高」から。undo は Plane メタの書き戻し（`floorOps.setPlanCutHeightMm` → `applyPlaneMetas`）で、`planCutHeightMm` が undefined のメタは値を触らない。Plane メタは自動 dirty 追跡の対象外なので変更時に `markDirty()` を明示する。
+- 天伏は専用の切断高 `ceilingCutHeightMm`（同型。読み口 `ceilingCutHeightMmOf`。裁定 2026-10-10。腰壁・垂れ壁など平面専用の判定は `planCutHeightMmOf` のまま）。「見上げ（天伏。S1b）」参照。
 - 腰壁・垂れ壁の天板輪郭の判定（`resolveKneeDropOverlays`）は階の値を読む。graphComputed 経由でも Plane は observable のため再計算される。
 
 ## S2: 立体モデル（`plan/planSolids.js`）
@@ -66,10 +67,10 @@
 - 注意: 切断面に関わる他の箇所は、S2 以降で立体モデルへ寄せる際に階の値（`planCutHeightMmOf`）を読む形へ揃える。
 
 ## 見上げ（天伏。S1b）
-- 天伏モード（appMode `'ceiling'`）は同じ立体＋解決器を**向きだけ反転**して使う。向きは `renderer/planFigureVisibility.js planSectionDirection(appMode)` の1か所（'ceiling'→'up'、他→'down'）。切断高は階の `planCutHeightMmOf` のまま（見上げ専用の属性は作らない。ユーザー裁定待ち）。**見下げの出力はバイト不変**が関門（`dumpPlanSolids`・`dumpRoofPlanCompare`・`dumpVoidCompare` の差分 0）。
+- 天伏モード（appMode `'ceiling'`）は同じ立体＋解決器を**向きだけ反転**して使う。向きは `renderer/planFigureVisibility.js planSectionDirection(appMode)` の1か所（'ceiling'→'up'、他→'down'）。切断高は**天伏専用の階の属性 `ceilingCutHeightMm`**（読み口 `ceilingCutHeightMmOf` 唯一。`planCutHeightMm` と同型＝0・負・非数・欠落は既定・FBS は PLN 末尾に追加し 0=未設定・階追加時は複製・メニュー「天伏切断高」・undo は `setCeilingCutHeightMm` → `applyPlaneMetas`。ユーザー裁定 2026-10-10。既定 1500 は ASSUMED）。見上げの鍵・解決の cutZ はこれを使い、見下げは `planCutHeightMmOf` のまま。**見下げの出力はバイト不変**が関門（`dumpPlanSolids`・`dumpRoofPlanCompare`・`dumpVoidCompare` の差分 0）。
 - 方式は**鏡像ラッパー** `plan/planSectionUp.js planSectionFigureUp`: 立体の z を符号反転（zLo'=-zHi・zHi'=-zLo・zAt'=-zAt、切断高も反転）して `planSectionFigure` を呼ぶ。解決器本体は見上げのために1行も変えていない（変えたのは面材の種別に `'ceiling'` を足しただけ）。見下げの分類・遮蔽の規則がそのまま「天井面・床の下面が手前」の意味になる。
 - **窓規則（下階は自階の床の穴の中だけ）は見上げでは使わない**: 鏡像では自階の床（z=0）が非表示側に落ち、上階の層が「下階」扱いで窓を要求してしまう。そこで全立体の `source.layerFloorZ` を 0 に置き換え（元の値は `viewLayerFloorZ` に退避し、出力で戻す）、窓判定を無効にする。上階の中身は**上階スラブ（面材・z=階高）と天井面の同点遮蔽**で隠れ、天井の無い所（吹抜け・階段）と上階スラブの穴の中だけが見える。
-- **天井の立体**（kind `'ceiling'`）は `opts.ceilings===true` のときだけ自階の層に足す（`planSolids.js ceilingSolids`。省略の見下げは出力不変）。面材・厚み0・高さ＝FL＋部屋の床段差＋部屋の天井高（`zMm`。部分指定の子は CH が段差で補正されるので親と同じ天井面。壁の上端は段差を含めない別系統）。算出は `ceiling/ceilingSurfaces.js`（屋内で feature なしの部屋だけ。吹抜け・階段・階段吹抜け・屋根・昇降路・未定義・屋外は天井なし。セルの帰属は `buildCellToRoom`＝部分指定の子が親を上書き）。**限界**: 部屋ごとの別立体なので、同じ高さで隣り合う部屋の境目の線は消えない（解決器は「相手の厳密な内側」だけを隠すため。同じ立体の矩形群の共有辺だけが消える）。壁（切断）の下は壁が隠す。- **自階で描く種別**は `UP_SELF_DRAWN_KINDS`（天井・梁・汎用立体。壁・柱は ShapesLayer が描くので遮蔽物としてだけ参加）、**上階の層は全種別を細線で**（`UP_ABOVE_DRAWN_KINDS='all'`）。層は自階（FL=0）＋直上の採用階（FL=+階高。App.jsx の `abovePlanPeek.floorHeightMm`）。下階は見ない。上階スラブの階段の破れ先は、自階に同じ階段があるときだけ穴になる（`belowGraphOf` は上階→自階）。最上の層は上階なので、蹴上は上階の plane で解く（`aboveRiserOf`）。
+- **天井の立体**（kind `'ceiling'`）は `opts.ceilings===true` のときだけ自階の層に足す（`planSolids.js ceilingSolids`。省略の見下げは出力不変）。面材・厚み0・高さ＝FL＋部屋の床段差＋部屋の天井高（`zMm`。部分指定の子は CH が段差で補正されるので親と同じ天井面。壁の上端は段差を含めない別系統）。算出は `ceiling/ceilingSurfaces.js`（屋内で feature なしの部屋だけ。吹抜け・階段・階段吹抜け・屋根・昇降路・未定義・屋外は天井なし。セルの帰属は `buildCellToRoom`＝部分指定の子が親を上書き）。部屋ごとの別立体なので、同じ高さで隣り合う部屋の境目の線は解決器からは両立体の2本が出る（解決器は「相手の厳密な内側」だけを隠すため。同じ立体の矩形群の共有辺だけが消える）。**同じ高さの境目は細線グレー**（裁定 2026-10-10）: `ceiling/ceilingBoundaryStyle.js` が出力の後処理で該当区間だけ `style:'ceilingBoundary'` を付けて1本に畳む（見上げの経路 `planSolidsLayerPrimitivesUp` だけ。見下げは通さない）。段差（高さが違う境界）・外形は通常の細線。壁（切断）の下は壁が隠す。- **自階で描く種別**は `UP_SELF_DRAWN_KINDS`（天井・梁・汎用立体。壁・柱は ShapesLayer が描くので遮蔽物としてだけ参加）、**上階の層は全種別を細線で**（`UP_ABOVE_DRAWN_KINDS='all'`）。層は自階（FL=0）＋直上の採用階（FL=+階高。App.jsx の `abovePlanPeek.floorHeightMm`）。下階は見ない。上階スラブの階段の破れ先は、自階に同じ階段があるときだけ穴になる（`belowGraphOf` は上階→自階）。最上の層は上階なので、蹴上は上階の plane で解く（`aboveRiserOf`）。
 - 鍵は `planSection:up:自階:切断高:上階|pending|-`（見下げの `planSection:…` と別。同じ graph を置き場にしても衝突しない）、置き場は上階 peek の graph。吹抜けの注記は見上げでは**自階の×だけ**（上階の穴の破線は出さない。上階スラブの穴の縁が実線で出るため）。
 - 検証: `dumpPlanSolids.mjs --up`（自階＋直上階の線と件数・所要時間）。
 

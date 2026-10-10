@@ -1727,6 +1727,42 @@ test('decodePlanes: 切断高フィールドの無い旧データ（フィール
   assert.deepEqual(planes.map(p => p.planCutHeightMm), [1500, 1500]);
 });
 
+// ---- 天伏の切断高（Plane.ceilingCutHeightMm。planCutHeightMm と同型）----
+test('serializePlanes → decodePlanes: ceilingCutHeightMm が階ごとに往復する（既定値の階・変更した階・検討階）。平面の切断高とは独立', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '1階', 'p1', 1, 1);
+  project.addPlane(3000, '2階', 'p2', 2, 1);
+  project.addPlane(6000, '3階', 'p3', 3, 1);
+  project.addPlane(0, '検討A', 'alt1', 1, 1, true, 'p1', 0);
+  project.planeMap.get('p2').ceilingCutHeightMm = 2200;
+  project.planeMap.get('p2').planCutHeightMm = 1200;
+  project.planeMap.get('p3').ceilingCutHeightMm = 2234.5;
+  project.planeMap.get('alt1').ceilingCutHeightMm = 1900;
+
+  const { planes } = decodePlanes(serializePlanes(project));
+  const byId = Object.fromEntries(planes.map(p => [p.id, p]));
+  assert.equal(byId.p1.ceilingCutHeightMm, 1500, '既定の階は既定値');
+  assert.equal(byId.p2.ceilingCutHeightMm, 2200);
+  assert.equal(byId.p2.planCutHeightMm, 1200);
+  assert.equal(byId.p3.ceilingCutHeightMm, 2234.5);
+  assert.equal(byId.alt1.ceilingCutHeightMm, 1900);
+});
+
+test('decodePlanes: 天伏の切断高フィールドの無い旧データ（フィールド無し・0）は既定 1500 になる。平面の切断高は保つ', () => {
+  const bytes = encode({
+    planes: [
+      { id: 'old', elevation: 0, name: '1階', startFloor: 1, stories: 1, isAlternative: false,
+        referenceId: null, altIndex: 0, isRoofPlane: false, roofForPlaneId: null, planCutHeightMm: 1100 },
+      { id: 'zero', elevation: 3000, name: '2階', startFloor: 2, stories: 1, isAlternative: false,
+        referenceId: null, altIndex: 0, isRoofPlane: false, roofForPlaneId: null, planCutHeightMm: 1200, ceilingCutHeightMm: 0 },
+    ],
+    activePlaneId: 'old',
+  });
+  const { planes } = decodePlanes(bytes);
+  assert.deepEqual(planes.map(p => p.ceilingCutHeightMm), [1500, 1500]);
+  assert.deepEqual(planes.map(p => p.planCutHeightMm), [1100, 1200]);
+});
+
 // ---- 失敗パス: decodePlanesへの不正バイト列 ----
 test('decodePlanes: 不正なバイト列（他データの断片）を渡しても例外を投げず、planes:[]・activePlaneId:nullへグレースフルにフォールバックする', () => {
   // graphFbs.js の手書きreaderはフィールド不在時にデフォルト値（空vec/空str）を返す設計のため、

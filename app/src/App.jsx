@@ -34,14 +34,14 @@ import { slabOpeningRects } from './finish/stair/slabOpening.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP, UNNUMBERED_TAG } from './structural/memberCatalog.js';
-import { CenterLineType, OpeningCategory, isRoofFeature, planCutHeightMmOf } from '@core';
+import { CenterLineType, OpeningCategory, isRoofFeature, planCutHeightMmOf, ceilingCutHeightMmOf } from '@core';
 import { upperAdoptedPlanes, findUpperRoomsOverCells } from './finish/roof/roofFloorCheck.js';
 import { isHitTestTarget } from './core/centerLineKindPolicy.js';
 import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
   applyFloorBytes, blocksFloorRemoval, diffFloorOpSnapshot,
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
-  computeFloorDeleteReorder, computeFloorInsert, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm,
+  computeFloorDeleteReorder, computeFloorInsert, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm, setCeilingCutHeightMm,
 } from './floorOps.js';
 import { applyFloorOrderChange, FLOOR_ORDER_KIND } from './floorOrderChange.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
@@ -154,6 +154,7 @@ const App = observer(() => {
   const [floorConfirm,   setFloorConfirm]   = useState(null); // { message, buttons, onSelect }
   const [floorChangeDlg, setFloorChangeDlg] = useState(null); // { planeId }
   const [planCutHeightDlg, setPlanCutHeightDlg] = useState(null); // { planeId }
+  const [ceilingCutHeightDlg, setCeilingCutHeightDlg] = useState(null); // { planeId }（天伏の切断高）
   const [showCalibration, setShowCalibration] = useState(false);
   const [showSiteDialog,  setShowSiteDialog]  = useState(false);
   const [saveDialogDefaultName, setSaveDialogDefaultName] = useState(null); // 非null=保存ファイル名ダイアログ表示中
@@ -1436,7 +1437,7 @@ const App = observer(() => {
         await runBusy(label + 'のredo', async () => {
           applyPlaneMetas(project, metasAfter);
           for (const pl of addedPlanes) {
-            addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm);
+            addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm, pl.ceilingCutHeightMm);
             const bytes = addedBytes.get(pl.id);
             if (bytes != null) await saveFloor(pl.id, bytes);
           }
@@ -1466,7 +1467,7 @@ const App = observer(() => {
       await applyFloorOrderChange(project, {
         kind: FLOOR_ORDER_KIND.INSERT,
         updates,
-        addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm),
+        addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm),
         sourceGraph: project.activeGraph,
         newStartFloor: newPlane.startFloor,
         ui: floorOrderUi(),
@@ -1497,7 +1498,7 @@ const App = observer(() => {
             const sf   = subtractSkipZero(prevFloor, 1);
             const name = makeFloorName(sf, 1);
             const elev = lowestElevation - 3000 * i;
-            const result = addFloor(elev, name, sf, 1, undefined, currentPlane.planCutHeightMm); // 切断高は表示中の階から複製
+            const result = addFloor(elev, name, sf, 1, undefined, currentPlane.planCutHeightMm, currentPlane.ceilingCutHeightMm); // 切断高（平面・天伏）は表示中の階から複製
             lastPlane = result.plane;
             prevFloor = sf;
           }
@@ -1523,7 +1524,7 @@ const App = observer(() => {
         await applyFloorOrderChange(project, {
           kind: FLOOR_ORDER_KIND.INSERT,
           updates,
-          addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm),
+          addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm),
           sourceGraph: project.activeGraph,
           newStartFloor: newPlane.startFloor,
           ui: floorOrderUi(),
@@ -1594,6 +1595,11 @@ const App = observer(() => {
 
     if (action === 'cut-height') {
       setPlanCutHeightDlg({ planeId });
+      return;
+    }
+
+    if (action === 'ceiling-cut-height') {
+      setCeilingCutHeightDlg({ planeId });
       return;
     }
 
@@ -1836,6 +1842,18 @@ const App = observer(() => {
     undoManager.push(
       () => { setPlanCutHeightMm(project, planeId, changed.before); markDirty(); },
       () => { setPlanCutHeightMm(project, planeId, changed.after); markDirty(); },
+    );
+  }
+
+  // 天伏の切断高の変更。runPlanCutHeight と同型（Plane 属性だけを書く同期操作。markDirty 明示）。
+  function runCeilingCutHeight(planeId, mm) {
+    setCeilingCutHeightDlg(null);
+    const changed = setCeilingCutHeightMm(project, planeId, mm);
+    if (!changed) return;
+    markDirty();
+    undoManager.push(
+      () => { setCeilingCutHeightMm(project, planeId, changed.before); markDirty(); },
+      () => { setCeilingCutHeightMm(project, planeId, changed.after); markDirty(); },
     );
   }
 
@@ -2657,6 +2675,15 @@ const App = observer(() => {
           currentHeightMm={planCutHeightMmOf(project.planeMap.get(planCutHeightDlg.planeId))}
           onConfirm={guardUi(mm => runPlanCutHeight(planCutHeightDlg.planeId, mm))}
           onCancel={() => setPlanCutHeightDlg(null)}
+        />
+      )}
+
+      {ceilingCutHeightDlg && (
+        <PlanCutHeightDialog
+          title="天伏の切断高"
+          currentHeightMm={ceilingCutHeightMmOf(project.planeMap.get(ceilingCutHeightDlg.planeId))}
+          onConfirm={guardUi(mm => runCeilingCutHeight(ceilingCutHeightDlg.planeId, mm))}
+          onCancel={() => setCeilingCutHeightDlg(null)}
         />
       )}
 

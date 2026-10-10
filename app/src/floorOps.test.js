@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   floorBytesEqual, computeFloorReorder, computeFloorChangeReorder, computeAltReorder, resolveChipReorderTarget,
   reconcilePlanes, blocksFloorRemoval, renumberPlanesFrom, computeFloorDeleteReorder,
-  computeFloorInsert, applyFloorInsert, collectPlaneMetas, applyPlaneMetas, diffFloorOpSnapshot, setPlanCutHeightMm,
+  computeFloorInsert, applyFloorInsert, collectPlaneMetas, applyPlaneMetas, diffFloorOpSnapshot, setPlanCutHeightMm, setCeilingCutHeightMm,
 } from './floorOps.js';
 import { Project } from './core/project.js';
 
@@ -301,7 +301,7 @@ test('computeFloorInsert: 1〜5階の3階へ挿入すると1・2・3・4・5・6
   }
   const insert = computeFloorInsert(project.planes, 'p3', 1);
   assert.ok(insert);
-  assert.deepEqual(insert.newPlane, { name: '4階', startFloor: 4, elevation: 9000, stories: 1, planCutHeightMm: 1500 });
+  assert.deepEqual(insert.newPlane, { name: '4階', startFloor: 4, elevation: 9000, stories: 1, planCutHeightMm: 1500, ceilingCutHeightMm: 1500 });
   // 挿入で旧4階・5階がそれぞれ1つずつ繰り上がる
   assert.deepEqual(insert.updates, [
     { id: 'p4', name: '5階', startFloor: 5, elevation: 12000 },
@@ -329,7 +329,7 @@ test('computeFloorInsert: 地下の途中階（B2）から挿入すると、B2�
 
   const insert = computeFloorInsert(project.planes, 'B2', 1);
   // n=1なので新階はB2の元の番号・高さをそのまま受け取る
-  assert.deepEqual(insert.newPlane, { name: '地下2階', startFloor: -2, elevation: 0, stories: 1, planCutHeightMm: 1500 });
+  assert.deepEqual(insert.newPlane, { name: '地下2階', startFloor: -2, elevation: 0, stories: 1, planCutHeightMm: 1500, ceilingCutHeightMm: 1500 });
   assert.deepEqual(insert.updates, [
     { id: 'B2', name: '地下3階', startFloor: -3, elevation: -3000 },
   ]);
@@ -352,7 +352,7 @@ test('computeFloorInsert: 地下の最上の地階（B1）から挿入すると�
   project.addPlane(6000, '1階',    'F1', 1,  1);
 
   const insert = computeFloorInsert(project.planes, 'B1', 1);
-  assert.deepEqual(insert.newPlane, { name: '地下1階', startFloor: -1, elevation: 3000, stories: 1, planCutHeightMm: 1500 });
+  assert.deepEqual(insert.newPlane, { name: '地下1階', startFloor: -1, elevation: 3000, stories: 1, planCutHeightMm: 1500, ceilingCutHeightMm: 1500 });
   assert.deepEqual(insert.updates, [
     { id: 'B2', name: '地下3階', startFloor: -3, elevation: -3000 },
     { id: 'B1', name: '地下2階', startFloor: -2, elevation: 0 },
@@ -372,7 +372,7 @@ test('computeFloorInsert: 全階地下（B2・B1のみ）でB1から挿入する
   project.addPlane(3000, '地下1階', 'B1', -1, 1);
 
   const insert = computeFloorInsert(project.planes, 'B1', 1);
-  assert.deepEqual(insert.newPlane, { name: '地下1階', startFloor: -1, elevation: 3000, stories: 1, planCutHeightMm: 1500 });
+  assert.deepEqual(insert.newPlane, { name: '地下1階', startFloor: -1, elevation: 3000, stories: 1, planCutHeightMm: 1500, ceilingCutHeightMm: 1500 });
   assert.deepEqual(insert.updates, [
     { id: 'B2', name: '地下3階', startFloor: -3, elevation: -3000 },
     { id: 'B1', name: '地下2階', startFloor: -2, elevation: 0 },
@@ -386,7 +386,7 @@ test('computeFloorInsert: 地下の途中階（B2）から一般階2階分を挿
   project.addPlane(6000, '1階',    'F1', 1,  1);
 
   const insert = computeFloorInsert(project.planes, 'B2', 2);
-  assert.deepEqual(insert.newPlane, { name: '一般階', startFloor: -3, elevation: -3000, stories: 2, planCutHeightMm: 1500 });
+  assert.deepEqual(insert.newPlane, { name: '一般階', startFloor: -3, elevation: -3000, stories: 2, planCutHeightMm: 1500, ceilingCutHeightMm: 1500 });
   assert.deepEqual(insert.updates, [
     { id: 'B2', name: '地下4階', startFloor: -4, elevation: -6000 },
   ]);
@@ -401,7 +401,7 @@ test('computeFloorInsert: 複層の地階（G: -3〜-2, stories2）から挿入�
   project.addPlane(9000, '1階',    'F1', 1,  1);
 
   const insert = computeFloorInsert(project.planes, 'G', 1);
-  assert.deepEqual(insert.newPlane, { name: '地下2階', startFloor: -2, elevation: 3000, stories: 1, planCutHeightMm: 1500 });
+  assert.deepEqual(insert.newPlane, { name: '地下2階', startFloor: -2, elevation: 3000, stories: 1, planCutHeightMm: 1500, ceilingCutHeightMm: 1500 });
   assert.deepEqual(insert.updates, [
     { id: 'G', name: '一般階', startFloor: -4, elevation: -3000 }, // Gの最上段は-3(旧-2から1つ下)
   ]);
@@ -442,7 +442,7 @@ test('【対照】computeFloorInsert: 地上階（2階）からの挿入は上�
   project.addPlane(6000, '3階', 'F3', 3, 1);
 
   const insert = computeFloorInsert(project.planes, 'F2', 1);
-  assert.deepEqual(insert.newPlane, { name: '3階', startFloor: 3, elevation: 6000, stories: 1, planCutHeightMm: 1500 });
+  assert.deepEqual(insert.newPlane, { name: '3階', startFloor: 3, elevation: 6000, stories: 1, planCutHeightMm: 1500, ceilingCutHeightMm: 1500 });
   assert.deepEqual(insert.updates, [
     { id: 'F3', name: '4階', startFloor: 4, elevation: 9000 },
   ]);
@@ -478,7 +478,7 @@ test('【失敗系】computeFloorInsert: 表示中の階が最上階なら updat
   for (let i = 1; i <= 3; i++) project.addPlane((i - 1) * 3000, `${i}階`, `p${i}`, i, 1);
   const insert = computeFloorInsert(project.planes, 'p3', 1);
   assert.deepEqual(insert.updates, []);
-  assert.deepEqual(insert.newPlane, { name: '4階', startFloor: 4, elevation: 9000, stories: 1, planCutHeightMm: 1500 });
+  assert.deepEqual(insert.newPlane, { name: '4階', startFloor: 4, elevation: 9000, stories: 1, planCutHeightMm: 1500, ceilingCutHeightMm: 1500 });
 });
 
 test('【失敗系】computeFloorInsert: currentPlaneId が未検出なら null', () => {
@@ -649,6 +649,73 @@ test('setPlanCutHeightMm: 変更すると { before, after } を返し、同値�
   assert.equal(setPlanCutHeightMm(project, 'gone', 1000), null);
   assert.equal(project.planeMap.get('p2').planCutHeightMm, 1000);
   assert.equal(project.planeMap.get('p1').planCutHeightMm, 1100); // 他階は不変
+});
+
+// ---- 天伏の切断高（ceilingCutHeightMm。planCutHeightMm と同型）----
+
+function makeThreeFloorsWithCeilingCutHeights() {
+  const project = makeThreeFloorsWithCutHeights();
+  project.planeMap.get('p1').ceilingCutHeightMm = 2100;
+  project.planeMap.get('p2').ceilingCutHeightMm = 2200;
+  project.planeMap.get('p3').ceilingCutHeightMm = 2300;
+  return project;
+}
+
+test('collectPlaneMetas / applyPlaneMetas: ceilingCutHeightMm が往復する（平面の切断高とは独立）', () => {
+  const project = makeThreeFloorsWithCeilingCutHeights();
+  const before = collectPlaneMetas(project);
+  assert.deepEqual(before.map(m => m.ceilingCutHeightMm), [2100, 2200, 2300]);
+  assert.deepEqual(before.map(m => m.planCutHeightMm), [1100, 1200, 1300]);
+  project.planeMap.get('p2').ceilingCutHeightMm = 900;
+  applyPlaneMetas(project, before);
+  assert.equal(project.planeMap.get('p2').ceilingCutHeightMm, 2200);
+});
+
+test('applyPlaneMetas: ceilingCutHeightMm が undefined のエントリでは天伏の切断高を触らない（平面の切断高だけ書いても同様）', () => {
+  const project = makeThreeFloorsWithCeilingCutHeights();
+  applyPlaneMetas(project, [{ id: 'p2', name: '2階', startFloor: 2, elevation: 3000 }]);
+  assert.equal(project.planeMap.get('p2').ceilingCutHeightMm, 2200);
+  applyPlaneMetas(project, [{ id: 'p2', name: '2階', startFloor: 2, elevation: 3000, planCutHeightMm: 800 }]);
+  assert.equal(project.planeMap.get('p2').ceilingCutHeightMm, 2200);
+  assert.equal(project.planeMap.get('p2').planCutHeightMm, 800);
+});
+
+test('diffFloorOpSnapshot: 天伏の切断高だけの変化も metasChanged になる', () => {
+  const project = makeThreeFloorsWithCeilingCutHeights();
+  const metasBefore = collectPlaneMetas(project);
+  project.planeMap.get('p3').ceilingCutHeightMm = 2400;
+  const d = diffFloorOpSnapshot({ before: new Map(), after: new Map(), metasBefore, metasAfter: collectPlaneMetas(project) });
+  assert.equal(d.metasChanged, true);
+});
+
+test('computeFloorInsert: 新階は表示中の階の天伏の切断高を複製する（途中階 p2・地下の分岐も）', () => {
+  const project = makeThreeFloorsWithCeilingCutHeights();
+  assert.equal(computeFloorInsert(project.planes, 'p2', 1).newPlane.ceilingCutHeightMm, 2200);
+  const b = new Project('proj', 'test');
+  b.addPlane(0, '地下2階', 'B2', -2, 1);
+  b.addPlane(3000, '地下1階', 'B1', -1, 1);
+  b.addPlane(6000, '1階', 'F1', 1, 1);
+  b.planeMap.get('B2').ceilingCutHeightMm = 1900;
+  assert.equal(computeFloorInsert(b.planes, 'B2', 1).newPlane.ceilingCutHeightMm, 1900);
+});
+
+test('setCeilingCutHeightMm: 変更すると { before, after } を返し、undo/redo の往復ができる。同値・不正値・未検出 plane は null で何も変えない。平面の切断高は不変', () => {
+  const project = makeThreeFloorsWithCeilingCutHeights();
+  const changed = setCeilingCutHeightMm(project, 'p2', 1000);
+  assert.deepEqual(changed, { before: 2200, after: 1000 });
+  assert.equal(project.planeMap.get('p2').ceilingCutHeightMm, 1000);
+  assert.equal(project.planeMap.get('p2').planCutHeightMm, 1200, '平面の切断高は不変');
+  setCeilingCutHeightMm(project, 'p2', changed.before); // undo
+  assert.equal(project.planeMap.get('p2').ceilingCutHeightMm, 2200);
+  setCeilingCutHeightMm(project, 'p2', changed.after); // redo
+  assert.equal(project.planeMap.get('p2').ceilingCutHeightMm, 1000);
+  assert.equal(setCeilingCutHeightMm(project, 'p2', 1000), null);
+  for (const bad of [0, -5, NaN, Infinity, undefined]) {
+    assert.equal(setCeilingCutHeightMm(project, 'p2', bad), null);
+  }
+  assert.equal(setCeilingCutHeightMm(project, 'gone', 1000), null);
+  assert.equal(project.planeMap.get('p2').ceilingCutHeightMm, 1000);
+  assert.equal(project.planeMap.get('p1').ceilingCutHeightMm, 2100); // 他階は不変
 });
 
 // ---- ステップ1: renumberPlanesFrom（振り直しの純関数）----

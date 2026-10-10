@@ -402,6 +402,38 @@ test('見上げの鍵: planSection:up:… で見下げの鍵と衝突しない�
   assert.notEqual(down.key, a.key);
 });
 
+test('見上げの切断高: up の cutZ と鍵は天伏の切断高（ceilingCutHeightMm）を使う。平面の切断高を変えても up は変わらず、天伏の切断高を変えると up だけ変わる（down は逆）', () => {
+  const { self } = upScene();
+  const g = self.graph;
+  const tailOf = (spec, id) => spec.key.split(`${id}:`)[1];
+  assert.equal(planSolidsLayerCacheSpec(g, null, 'up').cutZ, 1500);
+  g.plane.planCutHeightMm = 1800;
+  const up1 = planSolidsLayerCacheSpec(g, null, 'up');
+  assert.equal(up1.cutZ, 1500, '平面の切断高を変えても up は不変');
+  assert.equal(up1.key, `planSection:up:${g.plane.id}:1500:-`);
+  const down1 = planSolidsLayerCacheSpec(g, null, 'down');
+  assert.equal(down1.cutZ, 1800);
+  assert.equal(down1.key, `planSection:${g.plane.id}:1800:-`);
+  g.plane.ceilingCutHeightMm = 2100;
+  const up2 = planSolidsLayerCacheSpec(g, null, 'up');
+  assert.equal(up2.cutZ, 2100, '天伏の切断高を変えると up が変わる');
+  assert.equal(up2.key, `planSection:up:${g.plane.id}:2100:-`);
+  assert.equal(planSolidsLayerCacheSpec(g, null, 'down').key, down1.key, '天伏の切断高は down の鍵に影響しない');
+  assert.equal(tailOf(up2, g.plane.id), '2100:-');
+  // 不正値（0・負・非数）は既定へ倒れる（読み口は ceilingCutHeightMmOf）
+  for (const bad of [0, -1, NaN, undefined]) {
+    g.plane.ceilingCutHeightMm = bad;
+    assert.equal(planSolidsLayerCacheSpec(g, null, 'up').cutZ, 1500, `値 ${String(bad)}`);
+  }
+  // planSolidsLayerResolve の up は天伏の切断高の鍵で memo する
+  g.plane.ceilingCutHeightMm = 1500;
+  const memoCalls = [];
+  planSolidsLayerResolve({ graph: g, abovePeek: undefined, direction: 'up', memo: (h, k, c) => { memoCalls.push(k); return c(); } });
+  g.plane.ceilingCutHeightMm = 1700;
+  planSolidsLayerResolve({ graph: g, abovePeek: undefined, direction: 'up', memo: (h, k, c) => { memoCalls.push(k); return c(); } });
+  assert.deepEqual(memoCalls, [`planSection:up:${g.plane.id}:1500:pending`, `planSection:up:${g.plane.id}:1700:pending`]);
+});
+
 test('見上げ: planSolidsLayerResolve は abovePeek を使う。同じ graph・同じ置き場で down の後に up を呼んでも down の結果を使い回さない', () => {
   const { self, abovePeek } = upScene({ selfVoid: true });
   const peekDown = { graph: abovePeek.graph, floorHeightMm: 2800, activePlaneId: self.graph.plane.id };

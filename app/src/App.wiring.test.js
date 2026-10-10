@@ -370,7 +370,7 @@ test('【配線・強化】App.jsx: redoFloorOp は addFloor の前に applyPlan
   const body = extractFunctionBody(appSrc, 'async function redoFloorOp');
 
   const applyIdx = body.indexOf('applyPlaneMetas(project, metasAfter);');
-  const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm);');
+  const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm, pl.ceilingCutHeightMm);');
   assert.ok(applyIdx >= 0 && addIdx >= 0, 'applyPlaneMetas(metasAfter) または addFloor( 呼び出しが見つからない');
   assert.ok(applyIdx < addIdx, 'applyPlaneMetas(project, metasAfter) が addFloor( より前にない');
 });
@@ -463,15 +463,33 @@ test('【配線】App.jsx: 切断高 — cut-height メニューはダイアロ�
   assert.ok(setIdx >= 0 && setIdx < dirtyIdx && dirtyIdx < pushIdx, 'setPlanCutHeightMm → markDirty → undoManager.push の順になっていない');
 });
 
-test('【配線】App.jsx: 切断高の複製 — 上階追加・一般階追加は newPlane.planCutHeightMm、下階追加は currentPlane.planCutHeightMm、redo は pl.planCutHeightMm を addFloor の第6引数へ渡す', () => {
+test('【配線】App.jsx: 切断高の複製 — 上階追加・一般階追加は newPlane.planCutHeightMm、下階追加は currentPlane.planCutHeightMm、redo は pl.planCutHeightMm を addFloor の第6引数へ渡し、天伏の切断高（ceilingCutHeightMm）を第7引数へ渡す', () => {
   const code = stripCommentLines(readAppSrc());
-  const upper = code.match(/addPlane: \(\) => addFloor\(newPlane\.elevation, newPlane\.name, newPlane\.startFloor, newPlane\.stories, undefined, newPlane\.planCutHeightMm\),/g) ?? [];
+  const upper = code.match(/addPlane: \(\) => addFloor\(newPlane\.elevation, newPlane\.name, newPlane\.startFloor, newPlane\.stories, undefined, newPlane\.planCutHeightMm, newPlane\.ceilingCutHeightMm\),/g) ?? [];
   assert.equal(upper.length, 2, '上階追加（executeAddUpper）と一般階追加の2箇所');
   const upperBody = extractFunctionBody(readAppSrc(), 'async function executeAddUpper');
-  assert.ok(upperBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm)'), 'executeAddUpper が切断高を渡していない');
+  assert.ok(upperBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm)'), 'executeAddUpper が切断高を渡していない');
   const confirmBody = extractFunctionBody(readAppSrc(), 'async function handleAddFloorConfirm');
-  assert.ok(confirmBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm)'), 'handleAddFloorConfirm（general）が切断高を渡していない');
-  assert.ok(confirmBody.includes('addFloor(elev, name, sf, 1, undefined, currentPlane.planCutHeightMm)'), '下階追加が currentPlane の切断高を渡していない');
+  assert.ok(confirmBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm)'), 'handleAddFloorConfirm（general）が切断高を渡していない');
+  assert.ok(confirmBody.includes('addFloor(elev, name, sf, 1, undefined, currentPlane.planCutHeightMm, currentPlane.ceilingCutHeightMm)'), '下階追加が currentPlane の切断高を渡していない');
+});
+
+test('【配線】App.jsx: 天伏切断高 — ceiling-cut-height メニューは天伏用ダイアログを開き（PlanCutHeightDialog を title で共用）、onConfirm は guardUi で包まれ、runCeilingCutHeight は setCeilingCutHeightMm→markDirty→undoManager.push の順、undo は before・redo は after', () => {
+  const appSrc = readAppSrc();
+  const code = stripCommentLines(appSrc);
+  assert.match(code, /action === 'ceiling-cut-height'\) \{\s*setCeilingCutHeightDlg\(\{ planeId \}\);/, "'ceiling-cut-height' がダイアログを開いていない");
+  assert.match(code, /<PlanCutHeightDialog\s+title="天伏の切断高"[\s\S]{0,300}onConfirm=\{guardUi\(mm => runCeilingCutHeight\(ceilingCutHeightDlg\.planeId, mm\)\)\}/,
+    '天伏用 PlanCutHeightDialog の onConfirm が guardUi で包まれていない');
+  assert.match(code, /currentHeightMm=\{ceilingCutHeightMmOf\(project\.planeMap\.get\(ceilingCutHeightDlg\.planeId\)\)\}/, '現在値は ceilingCutHeightMmOf で読む');
+  assert.equal((code.match(/<PlanCutHeightDialog\b/g) ?? []).length, 2, '別コンポーネントを複製せず同じダイアログを2回使う');
+  const body = extractFunctionBody(appSrc, 'function runCeilingCutHeight');
+  const setIdx = body.indexOf('setCeilingCutHeightMm(project, planeId, mm)');
+  const dirtyIdx = body.indexOf('markDirty();');
+  const pushIdx = body.indexOf('undoManager.push(');
+  assert.ok(setIdx >= 0 && setIdx < dirtyIdx && dirtyIdx < pushIdx, 'setCeilingCutHeightMm → markDirty → undoManager.push の順になっていない');
+  const b = body.indexOf('setCeilingCutHeightMm(project, planeId, changed.before); markDirty();');
+  const a = body.indexOf('setCeilingCutHeightMm(project, planeId, changed.after); markDirty();');
+  assert.ok(b >= 0 && a >= 0 && b < a, 'undo(before)+markDirty → redo(after)+markDirty の順になっていない');
 });
 
 test('【配線】App.jsx: 検討案の作成（add-alt）・案コピーは複製元の平面を addAlternativeFloor の第3引数へ渡す', () => {

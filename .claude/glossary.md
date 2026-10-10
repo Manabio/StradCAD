@@ -33,7 +33,7 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 1フロア分のデータ単位。`isAlternative=false`が採用（実案）、`true`が検討（代替案、親採用を`referenceId`で参照）。
 
 ## 切断高（planCutHeightMm）
-平面図の水平切断面の高さ（FL+mm）。Planeの属性で既定1500。読み口は`planCutHeightMmOf(plane)`。設計意図は`.claude/plan-section.md`。
+平面図の水平切断面の高さ（FL+mm）。Planeの属性で既定1500。読み口は`planCutHeightMmOf(plane)`。天伏（見上げ）は専用の`ceilingCutHeightMm`（読み口`ceilingCutHeightMmOf`。既定1500は仮）。設計意図は`.claude/plan-section.md`。
 
 ## 立体（Solid）・footprint
 平面の断面解決の入力。実体を「平面の占有形（footprint＝矩形の和＋穴、または単純多角形）＋高さ範囲（zLo..zHi、自階FL=0の絶対mm）」へ正規化したもの。単一の情報源は`plan/planSolids.js`。設計意図は`.claude/plan-section.md`。

@@ -14,7 +14,7 @@ import { normalizeSubType } from '../openings/openingCatalog.js';
 import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION } from '../structural/structureRules.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { StairPortSide } from '../core/constants.js';
-import { DEFAULT_PLAN_CUT_HEIGHT_MM } from '../core/plane.js';
+import { DEFAULT_PLAN_CUT_HEIGHT_MM, DEFAULT_CEILING_CUT_HEIGHT_MM } from '../core/plane.js';
 
 // CenterLine.beamAxisOrigin の許容値集合（BeamAxisOriginの値のみ。未知の文字列はnullへ正規化する
 // ——破損データ・将来削除された由来値がそのままUIへ漏れて未知の色分岐に落ちるのを防ぐ）。
@@ -213,12 +213,14 @@ const CE = { CL_ID: 0, MODE: 1, VALUE: 2, SIDE: 3, BACKING: 4 };
 // KneeDropWall（腰壁・垂れ壁レコード）: 5 フィールド
 const KDW = { KEY: 0, HAS_KNEE: 1, KNEE_TOP: 2, HAS_DROP: 3, DROP_BOTTOM: 4 };
 
-// Plane（plane一覧のメタデータ）: 11 フィールド
+// Plane（plane一覧のメタデータ）: 12 フィールド
 const PLN = {
   ID: 0, ELEV: 1, NAME: 2, START_FLOOR: 3, STORIES: 4,
   IS_ALT: 5, REF_ID: 6, ALT_INDEX: 7, IS_ROOF: 8, ROOF_FOR: 9,
   // 末尾追加（平面の切断高 FL+mm。無い/0 の旧データは読み側で既定 1500）
   PLAN_CUT_HEIGHT: 10,
+  // 末尾追加（天伏の切断高 FL+mm。無い/0 の旧データは読み側で既定 DEFAULT_CEILING_CUT_HEIGHT_MM）
+  CEILING_CUT_HEIGHT: 11,
 };
 
 // Site（敷地図全体）: 5 フィールド
@@ -806,7 +808,7 @@ function writePlane(b, p) {
   const sRefId   = b.createString(p.referenceId ?? '');
   const sRoofFor = b.createString(p.roofForPlaneId ?? '');
 
-  b.startObject(11);
+  b.startObject(12);
   b.addFieldOffset(PLN.ID,           sId,   0);
   b.addFieldFloat64(PLN.ELEV,        p.elevation ?? 0, 0.0);
   b.addFieldOffset(PLN.NAME,         sName, 0);
@@ -818,6 +820,7 @@ function writePlane(b, p) {
   b.addFieldInt8(PLN.IS_ROOF,        p.isRoofPlane ? 1 : 0, 0);
   b.addFieldOffset(PLN.ROOF_FOR,     sRoofFor, 0);
   b.addFieldFloat64(PLN.PLAN_CUT_HEIGHT, p.planCutHeightMm ?? 0, 0.0); // 0=未設定（読み側で既定）
+  b.addFieldFloat64(PLN.CEILING_CUT_HEIGHT, p.ceilingCutHeightMm ?? 0, 0.0); // 同上
   return b.endObject();
 }
 
@@ -1548,6 +1551,7 @@ function readPlane(bb, tablePos) {
     isRoofPlane:    r.i8(PLN.IS_ROOF) !== 0,
     roofForPlaneId: r.str(PLN.ROOF_FOR) || null,
     planCutHeightMm: r.f64(PLN.PLAN_CUT_HEIGHT) || DEFAULT_PLAN_CUT_HEIGHT_MM,
+    ceilingCutHeightMm: r.f64(PLN.CEILING_CUT_HEIGHT) || DEFAULT_CEILING_CUT_HEIGHT_MM,
   };
 }
 

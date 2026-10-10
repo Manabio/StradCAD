@@ -24,7 +24,8 @@ const count = (text, re) => (text.match(re) || []).length;
 
 test('【不変条件】PlanSolidsLayer.jsx の import は react・mobx・react-konva・@core・純モジュール・graphDerived だけ（store.js / snap.js を引かない）', () => {
   const imports = layer.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 8, `import 行: ${imports.length}`);
+  assert.equal(imports.length, 9, `import 行: ${imports.length}`);
+  assert.match(layer, /^import \{ CEILING_BOUNDARY_STYLE \} from '\.\.\/ceiling\/ceilingBoundaryStyle\.js';$/m);
   assert.match(layer, /^import \{ planHoleMarksOf, planHoleMarkPrimitives \} from '\.\.\/plan\/planHoleMarks\.js';$/m);
   assert.match(layer, /^import \{ floorOpeningGroups \} from '\.\.\/finish\/stair\/slabOpening\.js';$/m);
   assert.match(layer, /^import \{ useRef \} from 'react';$/m);
@@ -55,7 +56,7 @@ test('【配線】PlanSolidsLayer.jsx は判断を planSolidsLayerResolve に任
 
 test('【配線】planSolidsLayerFilter.js: 置き場・鍵・使う peek は planSolidsLayerCacheSpec の1か所。自階と違う階の peek は使わない。ドラッグ中は prevPrims・未解決（undefined）は null（1行まるごと）', () => {
   assert.match(filter, /^\s*const peek = belowPeek && belowPeek\.activePlaneId === graph\.plane\.id \? belowPeek : null;\s*$/m);
-  assert.match(filter, /^\s*const cutZ = planCutHeightMmOf\(graph\.plane\);\s*$/m);
+  assert.match(filter, /^\s*const cutZ = direction === 'up' \? ceilingCutHeightMmOf\(graph\.plane\) : planCutHeightMmOf\(graph\.plane\);\s*$/m, '見上げは天伏専用の切断高、見下げは平面の切断高');
   assert.match(filter, /^\s*home: peek\?\.graph \?\? graph,\s*$/m);
   assert.match(filter, /^\s*const tail = `\$\{graph\.plane\.id\}:\$\{cutZ\}:\$\{peek\?\.graph\?\.plane\?\.id \?\? \(belowPeek === undefined \? 'pending' : '-'\)\}`;\s*$/m);
   assert.match(filter, /^\s*key: direction === 'up' \? `planSection:up:\$\{tail\}` : `planSection:\$\{tail\}`,\s*$/m, '見下げの鍵は planSection:…（従来のまま）、見上げは planSection:up:…');
@@ -81,8 +82,9 @@ test('【配線】PlanSolidsLayer.jsx は <Line を3つ（線・矢印本体・�
     assert.match(el, /^\s*listening=\{false\}\s*$/m, 'Line の listening={false}');
     assert.match(el, /^\s*strokeWidth=\{viewport\.lineWeightsPx\[p\.weight\]\}\s*$/m, 'Line の線幅は p.weight（thin/thick）');
     assert.match(el, /^\s*strokeScaleEnabled=\{false\}\s*$/m, 'Line は画面px固定');
-    assert.match(el, /^\s*stroke=\{PLAN_SOLIDS_COLOR\}\s*$/m);
   }
+  for (const el of [lines[0], lines[1]]) assert.match(el, /^\s*stroke=\{PLAN_SOLIDS_COLOR\}\s*$/m);
+  assert.match(lines[2], /^\s*stroke=\{p\.style === CEILING_BOUNDARY_STYLE \? CEILING_BOUNDARY_COLOR : PLAN_SOLIDS_COLOR\}\s*$/m, '同じ高さの天井の境目だけ細線グレー');
   assert.match(lines[0], /^\s*points=\{p\.points\}\s*$/m, 'arrow 本体');
   assert.match(lines[1], /^\s*points=\{p\.head\}\s*$/m, '矢じり');
   assert.match(lines[1], /^\s*lineCap="round"\s*$/m);
@@ -95,6 +97,7 @@ test('【配線】PlanSolidsLayer.jsx は <Line を3つ（線・矢印本体・�
   for (const re of [/^\s*x=\{p\.x\}\s*$/m, /^\s*y=\{p\.y\}\s*$/m, /^\s*text=\{p\.text\}\s*$/m, /^\s*fontSize=\{p\.fontSizeMm\}\s*$/m,
     /^\s*fill=\{PLAN_SOLIDS_COLOR\}\s*$/m, /^\s*listening=\{false\}\s*$/m]) assert.match(text, re, String(re));
   assert.match(layer, /^const PLAN_SOLIDS_COLOR = '#1e293b';/m);
+  assert.match(layer, /^const CEILING_BOUNDARY_COLOR = '#9ca3af';/m);
   assert.match(layer, /^\s*if \(p\.kind === 'text'\) \{\s*$/m);
   assert.match(layer, /^\s*if \(p\.kind === 'arrow'\) \{\s*$/m);
   assert.equal(count(layer, /appMode/g), 0, '表示するモードの判断は SceneLayers の showPlanFigure');
@@ -212,8 +215,12 @@ test('【配線】App.jsx の上階 peek の effect が abovePlanPeek を3状態
 
 test('【不変条件】planSolidsLayerFilter.js（純モジュール）は store.js・snap.js・.jsx・react-konva・graphDerived・mobx を import しない。描く種別の集合は1か所', () => {
   const imports = filter.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 5);
+  assert.equal(imports.length, 7);
   assert.match(filter, /^import \{ planSectionFigureUp \} from '\.\/planSectionUp\.js';$/m);
+  assert.match(filter, /^import \{ ceilingSurfacesOf \} from '\.\.\/ceiling\/ceilingSurfaces\.js';$/m);
+  assert.match(filter, /^import \{ markSameHeightCeilingBoundaries \} from '\.\.\/ceiling\/ceilingBoundaryStyle\.js';$/m);
+  assert.match(filter, /^\s*return markSameHeightCeilingBoundaries\(drawn, ceilingSurfacesOf\(graph\)\);\s*$/m, '同じ高さの境界の印は見上げの経路だけ');
+  assert.equal(count(filter, /markSameHeightCeilingBoundaries\(/g), 1, '見下げの経路に印を通さない');
   for (const line of imports) assert.ok(!/store\.js|snap\.js|\.jsx|react-konva|graphDerived|mobx/.test(line), `禁止の import: ${line}`);
   assert.match(filter, /^export const S4_DRAWN_KINDS = Object\.freeze\(\['beam', 'generic', 'roof'\]\);\s*$/m);
   assert.match(filter, /^\s*return lod === LodLevel\.DETAIL \? prims : prims\.filter\(p => !p\.detailOnly\);\s*$/m);

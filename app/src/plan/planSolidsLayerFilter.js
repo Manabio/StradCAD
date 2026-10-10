@@ -10,7 +10,9 @@
  *
  * @typedef {import('./planSectionFigure.js').Primitive} Primitive
  */
-import { planCutHeightMmOf } from '@core';
+import { planCutHeightMmOf, ceilingCutHeightMmOf } from '@core';
+import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
+import { markSameHeightCeilingBoundaries } from '../ceiling/ceilingBoundaryStyle.js';
 import { planSolids } from './planSolids.js';
 import { planSectionFigure } from './planSectionFigure.js';
 import { planSectionFigureUp } from './planSectionUp.js';
@@ -123,7 +125,9 @@ export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf 
  */
 export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRiserOf = () => null, cutZ }) {
   if (!graph || !Number.isFinite(cutZ)) return [];
-  return drawnPrimitives(planSectionFigureUp(planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf }), cutZ), 'up');
+  const drawn = drawnPrimitives(planSectionFigureUp(planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf }), cutZ), 'up');
+  // 同じ高さで隣り合う部屋の天井の境目は細線グレー（裁定 2026-10-10）。見下げの経路は通らない
+  return markSameHeightCeilingBoundaries(drawn, ceilingSurfacesOf(graph));
 }
 
 /**
@@ -148,7 +152,8 @@ export function isCenterLineDragging(graph) {
  */
 export function planSolidsLayerCacheSpec(graph, belowPeek, direction = 'down') {
   const peek = belowPeek && belowPeek.activePlaneId === graph.plane.id ? belowPeek : null;
-  const cutZ = planCutHeightMmOf(graph.plane);
+  // 見上げは天伏専用の切断高（裁定 2026-10-10）、見下げは平面の切断高
+  const cutZ = direction === 'up' ? ceilingCutHeightMmOf(graph.plane) : planCutHeightMmOf(graph.plane);
   const tail = `${graph.plane.id}:${cutZ}:${peek?.graph?.plane?.id ?? (belowPeek === undefined ? 'pending' : '-')}`;
   return {
     home: peek?.graph ?? graph,
