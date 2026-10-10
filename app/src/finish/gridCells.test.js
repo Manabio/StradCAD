@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { withGraphReadScope } from '../graphReadScope.js';
 import {
+  CEILING_CELL_GRID, regionCellsAt,
   worldToCell, worldToCellInIndex, gridIndexOf, getCellsInRect, getAllCells, refreshCells, cellBoundsFromKey,
   gridDividerSegments, isDividerCL, isActiveAcrossRange,
   isRectangularCellSet, boundsShareEdge, connectedCellComponents,
@@ -283,4 +284,100 @@ test('connectedCellComponents: 辺で隣接する2セルは1成分にまとま�
   const comps = connectedCellComponents(cells, graph);
   assert.equal(comps.length, 1);
   assert.equal(comps[0].size, 2);
+});
+
+// ================================================================
+// 天井芯（S8a）: 分割の変種（grid）。天伏の天井セルだけを割り、仕上げの格子には一切現れない
+// ================================================================
+
+// 2x2の格子（0/1000/2000）に、x=500 の天井芯を足した組と、足さない組（比較用）。
+// CL の id を固定する（2つのグラフで key を直接比べるため）。天井芯は全高(extent 未確定)に及ぶ。
+function makeFixedGrid(withCeiling) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  [0, 1000, 2000].forEach((v, i) => graph.addCenterLine(CenterLineType.VERTICAL, v, {
+    labeled: i !== 1, discipline: i !== 1 ? Discipline.STRUCT : Discipline.ARCH,
+  }, `v${i}`));
+  [0, 1000, 2000].forEach((v, i) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, {
+    labeled: i !== 1, discipline: i !== 1 ? Discipline.STRUCT : Discipline.ARCH,
+  }, `h${i}`));
+  const ceilingCL = withCeiling
+    ? graph.addCenterLine(CenterLineType.VERTICAL, 500, { labeled: false, discipline: Discipline.CEILING }, 'cc')
+    : null;
+  return { graph, ceilingCL };
+}
+function makeWithAndWithoutCeiling() {
+  const plain = makeFixedGrid(false);
+  const withC = makeFixedGrid(true);
+  return { plain, withC, ceilingCL: withC.ceilingCL };
+}
+const cellRect = c => `${c.x1},${c.y1},${c.x2},${c.y2}`;
+
+test('天井芯: 既定（仕上げ）の worldToCell・regionCellsAt・getAllCells・gridIndexOf は天井芯の有無で一切変わらない（allXValues も含む）', () => {
+  const { plain, withC } = makeWithAndWithoutCeiling();
+  for (const [x, y] of [[250, 500], [750, 500], [1500, 500], [500, 1500], [-10, 0]]) {
+    assert.deepEqual(worldToCell(x, y, withC.graph), worldToCell(x, y, plain.graph), `worldToCell(${x},${y})`);
+    assert.deepEqual(regionCellsAt(x, y, withC.graph), regionCellsAt(x, y, plain.graph), `regionCellsAt(${x},${y})`);
+  }
+  assert.deepEqual(getAllCells(withC.graph), getAllCells(plain.graph));
+  const a = gridIndexOf(withC.graph), b = gridIndexOf(plain.graph);
+  assert.deepEqual(a.xValues, b.xValues, '仕上げの分割格子 xValues');
+  assert.deepEqual(a.allXValues, b.allXValues, '展開図の区間刻み allXValues に天井芯の座標(500)が入らない');
+  assert.deepEqual(a.allYValues, b.allYValues);
+  assert.ok(!a.allXValues.includes(500));
+  assert.deepEqual(a.verticals.map(s => s.id), b.verticals.map(s => s.id), '仕上げの分割線（verticals）に天井芯が入らない');
+});
+
+test('天井芯: CEILING_CELL_GRID では天井芯で割れる。天井芯が無ければ仕上げと key も順序も一致する', () => {
+  const { plain, withC, ceilingCL } = makeWithAndWithoutCeiling();
+  // 天井芯なし: 天井の格子＝仕上げの格子
+  assert.deepEqual(getAllCells(plain.graph, CEILING_CELL_GRID), getAllCells(plain.graph), '天井芯なしなら getAllCells が一致（key・順序とも）');
+  assert.deepEqual(worldToCell(250, 500, plain.graph, CEILING_CELL_GRID), worldToCell(250, 500, plain.graph));
+  // 天井芯あり（全高）: 左列の2セルが x=500 で2つずつに割れる（仕上げは4セルのまま、天井は6セル）
+  assert.equal(getAllCells(withC.graph).length, 4);
+  const ceilingCells = getAllCells(withC.graph, CEILING_CELL_GRID);
+  assert.equal(ceilingCells.length, 6);
+  const left  = worldToCell(250, 500, withC.graph, CEILING_CELL_GRID);
+  const right = worldToCell(750, 500, withC.graph, CEILING_CELL_GRID);
+  assert.deepEqual([left.x1, left.x2, right.x1, right.x2], [0, 500, 500, 1000]);
+  assert.ok(left.key.split(':')[2] === ceilingCL.id && right.key.split(':')[0] === ceilingCL.id, '境界の識別子は天井芯のid');
+  // region（連結領域）も天井芯で分かれる
+  assert.deepEqual(regionCellsAt(250, 500, withC.graph, CEILING_CELL_GRID).map(cellRect), ['0,0,500,1000']);
+  assert.equal(regionCellsAt(250, 500, withC.graph).length, 1, '仕上げの領域は1セル(0..1000)');
+  // 天井芯の無い側（右列）のセルは仕上げと同じ key
+  const rightCol = worldToCell(1500, 500, withC.graph, CEILING_CELL_GRID);
+  assert.equal(rightCol.key, worldToCell(1500, 500, withC.graph).key);
+});
+
+test('天井芯: 仕上げの key と天井の key は衝突しない（割れたセルの key は天井芯idを含み、仕上げの key 集合に無い）。cellBoundsFromKey は天井 key を解ける', () => {
+  const { withC, ceilingCL } = makeWithAndWithoutCeiling();
+  const finishKeys = new Set(getAllCells(withC.graph).map(c => c.key));
+  const split = getAllCells(withC.graph, CEILING_CELL_GRID).filter(c => c.key.includes(ceilingCL.id));
+  assert.equal(split.length, 4, '天井芯を境界に持つ天井セルは左列2セル×左右の4つ');
+  for (const c of split) {
+    assert.ok(!finishKeys.has(c.key), `天井セルの key が仕上げの key と衝突: ${c.key}`);
+    assert.deepEqual(cellBoundsFromKey(c.key, withC.graph), { x1: c.x1, x2: c.x2, y1: c.y1, y2: c.y2 }, 'cellBoundsFromKey が天井 key を解く');
+  }
+});
+
+test('天井芯: 読み取りスコープ内でも仕上げと天井のキャッシュが混ざらない（同じ点の問い合わせが変種ごとに別の答え）', () => {
+  const { withC } = makeWithAndWithoutCeiling();
+  withGraphReadScope(withC.graph, () => {
+    const f1 = worldToCell(250, 500, withC.graph);
+    const c1 = worldToCell(250, 500, withC.graph, CEILING_CELL_GRID);
+    const f2 = worldToCell(250, 500, withC.graph);
+    const c2 = worldToCell(250, 500, withC.graph, CEILING_CELL_GRID);
+    assert.equal(f1.x2, 1000);
+    assert.equal(c1.x2, 500);
+    assert.equal(f2, f1, '仕上げの結果はキャッシュされ同一');
+    assert.equal(c2, c1, '天井の結果はキャッシュされ同一');
+    assert.notEqual(gridIndexOf(withC.graph), gridIndexOf(withC.graph, CEILING_CELL_GRID), '索引も変種ごとに別');
+  });
+});
+
+test('天井芯: 部分長の天井芯は extent の範囲だけ割る（L字併合は仕上げと同じ規則）', () => {
+  const { withC, ceilingCL } = makeWithAndWithoutCeiling();
+  // 天井芯を上段(y:0..1000)だけに短縮: 下段のセル(0..1000 x 1000..2000)は割れない
+  ceilingCL.setProps({ _extentLo: 0, _extentHi: 1000 });
+  assert.equal(worldToCell(250, 500, withC.graph, CEILING_CELL_GRID).x2, 500, '上段は割れる');
+  assert.equal(worldToCell(250, 1500, withC.graph, CEILING_CELL_GRID).x2, 1000, '下段は割れない');
 });

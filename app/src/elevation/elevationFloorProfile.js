@@ -21,6 +21,7 @@ import { refreshCells, cellBoundsFromKey, worldToCell, gridIndexOf } from '../fi
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { graphList, scopedValue } from '../graphReadScope.js';
+import { isCeilingOnlyKind } from '../core/centerLineKindPolicy.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
 // PROBE_EPS_MM: 自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり
 // 分割されない）場合に、runの伸びる方向へ覗き込むプローブ距離（elevationOpenSpan.jsと共通。
@@ -54,7 +55,9 @@ export function collectRunBreaks(graph, isVertical, lo, hi) {
 /** run方向のCL（isVertical面ならHORIZONTAL）のうち、value に一致するものを返す。 */
 export function findRunCLAt(graph, isVertical, value) {
   const type = isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-  return (graphList(graph, 'centerLines') ?? []).find(cl => cl.centerLineType === type && cl.value === value) ?? null;
+  // 天伏専用の天井芯は除く（同座標の中心線より先に並んでも掴まない）
+  return (graphList(graph, 'centerLines') ?? []).find(cl =>
+    cl.centerLineType === type && cl.value === value && !isCeilingOnlyKind(cl)) ?? null;
 }
 
 /**

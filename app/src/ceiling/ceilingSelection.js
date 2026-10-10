@@ -4,8 +4,9 @@
  * 選択の単位は「ドラッグでなぞったセルだけ」（矩形の補完はしない。連結も要求しない）。
  * 部屋を超えては選べない: ドラッグ開始セルの所属（owner）と同じ所属のセルだけを足し、他の所属のセルは捨てる
  * （ドラッグは続き、戻れば再び受け付ける）。所属の索引は ceilingOwners.js（選択専用。描画の天井面とは述語 roomHasCeiling だけを共有）。
+ * セルは天井セル（仕上げのセルを天井芯でさらに割った格子。ceilingGrid.js）。
  */
-import { regionCellsAt } from '../finish/gridCells.js';
+import { ceilingRegionCellsAt } from './ceilingGrid.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 
 const MAX_SAMPLES = 4096; // 1回の move で補間する点数の上限（極端に小さい stepMm での暴走防止）
@@ -19,7 +20,7 @@ const sameOwner = (a, b) => a.kind === b.kind && a.id === b.id;
 export function beginCeilingDrag(graph, owners, wx, wy) {
   if (!Number.isFinite(wx) || !Number.isFinite(wy)) return null;
   return withGraphReadScope(graph, () => {
-    const region = regionCellsAt(wx, wy, graph);
+    const region = ceilingRegionCellsAt(wx, wy, graph);
     if (region.length === 0) return null;
     const owner = owners.get(region[0].key);
     if (!owner) return null;
@@ -58,7 +59,7 @@ export function extendCeilingDrag(graph, owners, drag, wx, wy, stepMm) {
       const x = from.x + (wx - from.x) * t;
       const y = from.y + (wy - from.y) * t;
       if (insideAny(visited, x, y)) continue;
-      for (const c of regionCellsAt(x, y, graph)) {
+      for (const c of ceilingRegionCellsAt(x, y, graph)) {
         if (visited.has(c.key)) continue;
         const o = owners.get(c.key);
         if (!o || !sameOwner(o, drag.owner)) continue;

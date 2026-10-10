@@ -157,6 +157,21 @@ test('【WP-E5】switchbackCuts: upperGraph経由でmidWallが検出されても
   assert.equal(seq2.face.axisCL, result.wall.axisCL);
 });
 
+test('【S8a】switchbackCuts: 往復間の同座標に天井芯が先に並んでいても、壁が無いときの midCL（seq2 の axisCL）は中心線', () => {
+  const graph = makeGraph();
+  // 天井芯を先に登録する（列挙で中心線より先に並ぶ。素の find なら天井芯を掴む）
+  const ceiling = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING });
+  const { room, stair } = makeSwitchbackFixture(graph);
+  assert.equal(graph.centerLines[0].id, ceiling.id, '前提: 天井芯が配列の先頭');
+  const faces = composeRoomFaces(room, graph);
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const axisCL = result.cuts.find(c => c.seqNo === '2').face.axisCL;
+  assert.ok(axisCL, '前提: seq2 の面は midCL を軸に持つ');
+  assert.notEqual(axisCL.id, ceiling.id, '天井芯を掴まない');
+  assert.equal(axisCL.discipline, Discipline.ARCH);
+  assert.equal(axisCL.value, 1000);
+});
+
 test('【WP-E5】switchbackCuts: 往復間の壁が無ければseq2のfaceはhasRealWall=false（cutは5本）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph);

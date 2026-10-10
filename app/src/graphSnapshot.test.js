@@ -16,7 +16,7 @@ import {
 import { editSiteLineLength } from './transform/siteEdit.js';
 import { encode, decode, ROOM_FEATURE_ENC, ROOM_FEATURE_DEC } from './schema/graphFbs.js';
 import { base64ToBytes } from './storage/documentFile.js';
-import { BeamAxisOrigin } from './core/centerLine.js';
+import { BeamAxisOrigin, centerLineKind } from './core/centerLine.js';
 import { remapLineIdsInSnapshot, makeFreshLineIdMap, findLineIdOccurrences } from './lineIdRemap.js';
 import { findDuplicateLineIds } from './lineIdUniqueness.js';
 
@@ -2773,6 +2773,50 @@ test('【S5】plain 経路（decodeFloorSnapshot→JSON→restoreGraph）でも�
   const restored = makeGraph();
   restoreGraph(restored, JSON.parse(JSON.stringify(snapshot)));
   assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()), living.ceilingZones.map(z => z.toData()));
+});
+
+// ---- 天井芯（S8a）: discipline 'ceiling' の CL は文字列のまま往復する（FBS 変更なし）。天井芯 id 入りの区画のセルも往復する ----
+test('【S8a】天井芯（discipline ceiling）の CL と、天井芯 id 入りの区画セルを含むグラフはバイト一致で往復する（スキーマ変更なし）', () => {
+  const { graph, living, cellA } = makeGraphWithZones(null);
+  const ceilingCL = graph.addCenterLine(CenterLineType.VERTICAL, 500, {
+    labeled: false, discipline: Discipline.CEILING, extentLo: 0, extentHi: 1000,
+  });
+  const x0 = cellA.split(':')[0];
+  const halfKey = `${x0}:${cellA.split(':')[1]}:${ceilingCL.id}:${cellA.split(':')[3]}`; // 天井芯で割れた左半分の key
+  living.setCeilingZones(restoreCeilingZones([{ id: 'zc', cells: [halfKey], heightMm: 2700, shape: 'slope', dims: [500, 90] }]));
+
+  const bytes = serializeGraph(graph);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+  const back = restored.centerLines.find(c => c.id === ceilingCL.id);
+  assert.ok(back, '天井芯が復元される');
+  assert.equal(back.discipline, 'ceiling');
+  assert.equal(centerLineKind(back), 'ceiling');
+  assert.equal(back.labeled, false);
+  assert.deepEqual([back.value, back.extentLo, back.extentHi], [500, 0, 1000]);
+  assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()),
+    [{ id: 'zc', cells: [halfKey], heightMm: 2700, shape: 'slope', dims: [500, 90] }]);
+  // 復元先のグラフは寸法線などを自動で足すため、全体のバイト列は元と一致しない（天井芯に限らない既存の性質）。
+  // 比較は CL と部屋の部分（天井芯・区画が入る所）と、復元→書き出しの冪等性（2周目から先は変わらない）で行う。
+  const snapBefore = decodeFloorSnapshot(bytes);
+  const snapAfter = decodeFloorSnapshot(serializeGraph(restored));
+  assert.deepEqual(snapAfter.centerLines, snapBefore.centerLines, 'CL 一式（天井芯を含む）が往復で一致');
+  assert.deepEqual(snapAfter.rooms, snapBefore.rooms, '部屋（区画のセル＝天井芯 id 入りを含む）が往復で一致');
+  const twice = makeGraph();
+  restoreGraph(twice, serializeGraph(restored));
+  assert.deepEqual([...serializeGraph(twice)], [...serializeGraph(restored)], '復元→書き出しは2周目から変わらない');
+});
+
+test('【S8a・失敗系】天井芯を持たない旧版が開くと discipline が未知でも落ちず、中心線として復元される（前方互換なしの受容の実測）', () => {
+  // 旧版の centerLineKind は 'ceiling' を知らず既定の 'center' に落とす。ここでは現行コードで discipline を
+  // 'ceiling' 以外の未知文字列にしても復元できる（文字列のまま往復する）ことで、スキーマが discipline を検証しないことを確かめる。
+  const graph = makeGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 700, { labeled: false, discipline: 'future-kind' });
+  const restored = makeGraph();
+  assert.doesNotThrow(() => restoreGraph(restored, serializeGraph(graph)));
+  const cl = restored.centerLines.find(c => c.value === 700);
+  assert.equal(cl.discipline, 'future-kind');
+  assert.equal(centerLineKind(cl), 'center', '未知の discipline は中心線種別に落ちる（旧版が天井芯を開いたときと同じ）');
 });
 
 // i 番目の部屋の FBS テーブルに、フィールド番号 fieldNo が書かれているか（vtable の有無）を直接読む。

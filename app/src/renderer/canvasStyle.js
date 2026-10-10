@@ -28,6 +28,7 @@ export const ORIGIN_HUES = Object.freeze({
   above:       { h: 28,  s: 95 },                         // 濃いオレンジ＝上階荷重の自動判断
   supportSpan: { h: 120, s: 70 },                         // 濃い緑   ＝支持長の自動判断
   generated:   { h: 217, s: 91, lift: ORIGIN_LIGHT_LIFT }, // やや明るい青＝壁・床梁割付けからの自動生成
+  ceiling:     { h: 300, s: 70 },                         // マゼンタ ＝天井芯（天伏だけの分割線。色は目視対象）
 });
 
 // 該当なし（'none'・未知キー・null）は黒。

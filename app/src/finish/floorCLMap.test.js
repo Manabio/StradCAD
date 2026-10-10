@@ -109,6 +109,26 @@ test('translateCLId: per-floor CL（中心線）は対象階の同type:value CL�
   assert.equal(translateCLId(srcOnly.id, g1, project.structGraph, g2), null, '対象階に対応するCLが無ければnull');
 });
 
+// 天井芯（S8a）は階固有の天伏だけの線——他階の対応CL探索（findCounterpartCL の述語なし呼び出し）で掴まない。
+// 上階に同座標の天井芯が先に並んでいても、translateCLId は中心線を返す。
+test('天井芯: 上階に同座標の天井芯と中心線があるとき translateCLId は中心線を返す（天井芯を掴まない）', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const srcCl = g1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const ceiling = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING }); // 先に並ぶ
+  const dstCl = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  assert.equal(g2.centerLines[0].id, ceiling.id, '前提: 天井芯が配列の先頭（素の find なら天井芯を返してしまう）');
+  assert.equal(translateCLId(srcCl.id, g1, project.structGraph, g2), dstCl.id);
+  assert.equal(findCounterpartCL(g2, CenterLineType.VERTICAL, 1000)?.id, dstCl.id);
+});
+
+test('【失敗系】天井芯: 上階に同座標の天井芯しかないとき translateCLId は null（対応する中心線が無い）', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const srcCl = g1.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING });
+  assert.equal(translateCLId(srcCl.id, g1, project.structGraph, g2), null);
+  assert.equal(findCounterpartCL(g2, CenterLineType.VERTICAL, 1000), null);
+});
+
 // ---- 【失敗系】QA指摘: shapeMap.get(id) がCLでない形状（壁等）を返すケース。
 // 「解決できなければnull」というtranslateCLIdの契約が、findCounterpartCLの引数ガード追加後も
 // 保たれることを確認する（cl.centerLineType/cl.valueがundefinedのままfindCounterpartCLへ渡っても

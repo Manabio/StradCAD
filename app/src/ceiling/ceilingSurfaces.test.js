@@ -1,8 +1,9 @@
 // ceilingSurfaces.js（天井面の算出）の単体テスト。実物の PlanGraph / Room で組む。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomFeature, RoomKind, CeilingZone, StairType } from '@core';
+import { RoomFeature, RoomKind, CeilingZone, StairType, CenterLineType, Discipline } from '@core';
 import { roomHasCeiling, ceilingSurfacesOf } from './ceilingSurfaces.js';
+import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
 import { makeGrid, rect } from '../plan/planTestFixtures.js';
 
 test('roomHasCeiling: 屋内で feature なしだけが天井を持つ。屋外・吹抜け・階段・階段吹抜け・屋根・昇降路・未定義・null は持たない', () => {
@@ -181,6 +182,53 @@ test('【失敗系】階段の対の部屋: 階段が天井を持たない（対
   const lone = orphan.feature([[0, 0]], RoomFeature.STAIR);
   lone.setCeilingZones([new CeilingZone({ id: 'zz', cells: [orphan.cell(0, 0)], heightMm: 2300 })]);
   assert.deepEqual(ceilingSurfacesOf(orphan.graph), [], 'roomId で結びつく階段が無い STAIR 部屋');
+});
+
+// ---- 天井芯（S8a）: 天井セルは仕上げのセルを天井芯でさらに割った格子 ----
+// 2セルの部屋（x:0..2000 / 2000..4000）の左セルを x=1000 の天井芯で割る
+function ceilingLineFixture() {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  room.setOverride('ceilingHeight', '2400');
+  const cc = g.graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const half = x => worldToCell(x, 1500, g.graph, CEILING_CELL_GRID).key;
+  return { g, room, cc, left: half(500), right: half(1500) };
+}
+
+test('天井芯: 割った片側だけに区画を持たせると、もう片側は部屋の CH のまま（天井芯の両側で別の面）', () => {
+  const { g, room, left } = ceilingLineFixture();
+  room.setCeilingZones([new CeilingZone({ id: 'z', cells: [left], heightMm: 2800 })]);
+  assert.deepEqual(ceilingSurfacesOf(g.graph), [
+    { roomId: room.id, zoneId: null, rects: [rect(1000, 0, 2000, 3000), rect(2000, 0, 4000, 3000)], zMm: 2400, shape: 'flat', dims: [], chMm: 2400 },
+    { roomId: room.id, zoneId: 'z', rects: [rect(0, 0, 1000, 3000)], zMm: 2800, shape: 'flat', dims: [], chMm: 2800 },
+  ]);
+});
+
+test('天井芯: 区画のセルが仕上げの key（S5 の区画）でも、天井の分割へ展開される（天井芯の両側が同じ区画になる）', () => {
+  const { g, room } = ceilingLineFixture();
+  room.setCeilingZones([new CeilingZone({ id: 'z', cells: [g.cell(0, 0)], heightMm: 2800 })]);
+  const out = ceilingSurfacesOf(g.graph);
+  assert.deepEqual(out.find(s => s.zoneId === 'z').rects, [rect(0, 0, 1000, 3000), rect(1000, 0, 2000, 3000)]);
+  assert.deepEqual(out.find(s => s.zoneId === null).rects, [rect(2000, 0, 4000, 3000)]);
+});
+
+test('天井芯を追加→片側に区画→天井芯を削除: 区画の天井 key は解けず、そのセルは部屋の CH に戻る（受容。例外にしない）', () => {
+  const { g, room, cc, left } = ceilingLineFixture();
+  room.setCeilingZones([new CeilingZone({ id: 'z', cells: [left], heightMm: 2800 })]);
+  assert.ok(ceilingSurfacesOf(g.graph).some(s => s.zoneId === 'z'));
+  g.graph.removeCenterLine(cc.id);
+  assert.doesNotThrow(() => ceilingSurfacesOf(g.graph));
+  assert.deepEqual(ceilingSurfacesOf(g.graph), [
+    { roomId: room.id, zoneId: null, rects: [rect(0, 0, 2000, 3000), rect(2000, 0, 4000, 3000)], zMm: 2400, shape: 'flat', dims: [], chMm: 2400 },
+  ]);
+});
+
+test('天井芯が1本も無い階の天井面は、天井芯を足して消した後と同じ（区画なしの出力が変わらない）', () => {
+  const { g, room, cc } = ceilingLineFixture();
+  g.graph.removeCenterLine(cc.id);
+  assert.deepEqual(ceilingSurfacesOf(g.graph), [
+    { roomId: room.id, zoneId: null, rects: [rect(0, 0, 2000, 3000), rect(2000, 0, 4000, 3000)], zMm: 2400, shape: 'flat', dims: [], chMm: 2400 },
+  ]);
 });
 
 test('【失敗系】セルが解決できない部屋（CL 削除で消失したキー）は出さない。例外にしない', () => {

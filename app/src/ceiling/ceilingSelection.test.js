@@ -1,7 +1,7 @@
 // 天伏の天井セル選択（純モジュール）。所属の優先・ドラッグでなぞったセルだけ・部屋を超えない。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomKind, RoomFeature, StairType } from '@core';
+import { RoomKind, RoomFeature, StairType, CenterLineType, Discipline } from '@core';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { buildCeilingCellOwners, stairHasCeiling } from './ceilingOwners.js';
 import { beginCeilingDrag, extendCeilingDrag } from './ceilingSelection.js';
@@ -202,4 +202,48 @@ test('L字: 連結領域（短縮した通り芯で結合したセル群）は�
   assert.ok(![...d.visited.values()].some(c => c.x2 <= 1000 && c.y2 <= 1000), '左上のセルは入っていない');
   const d2 = extendCeilingDrag(g.graph, owners, d, 500, 500, 0);
   assert.equal(d2.visited.size, 3, '左上へなぞるとそのセルが足される');
+});
+
+// ---- 天井芯（S8a）: 天井セルは仕上げのセルを天井芯でさらに割った格子 ----
+test('天井芯: 部屋のセルが天井芯の両側の2つに割れ、所属の索引・選択とも天井セル単位になる。天井芯の無い部屋は従来どおり', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  g.graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const owners = buildCeilingCellOwners(g.graph);
+  assert.equal(owners.size, 3, '仕上げの2セル→天井の3セル');
+  assert.ok(!owners.has(g.cell(0, 0)), '割れた仕上げ key は索引に載らない（天井 key で載る）');
+  assert.ok(owners.has(g.cell(1, 0)), '割れていないセルは仕上げと同じ key');
+  for (const o of owners.values()) assert.deepEqual(o, { kind: 'room', id: room.id, rowId: room.id });
+  // 左半分から始めたドラッグは左半分だけ
+  const d0 = beginCeilingDrag(g.graph, owners, 500, 1500);
+  assert.equal(d0.visited.size, 1);
+  assert.deepEqual([...d0.visited.values()].map(c => [c.x1, c.x2]), [[0, 1000]]);
+  // 天井芯をまたいで右半分へなぞると同じ所属として足される（部屋は超えていない）
+  const d1 = extendCeilingDrag(g.graph, owners, d0, 1500, 1500, 100);
+  assert.deepEqual([...d1.visited.values()].map(c => [c.x1, c.x2]).sort((a, b) => a[0] - b[0]), [[0, 1000], [1000, 2000]]);
+});
+
+test('天井芯: 天井芯の片側が別の部屋でも、ドラッグは開始セルの所属のセルだけを足す（部屋を超えない）', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const a = g.interior([[0, 0]]);
+  g.interior([[1, 0]]);
+  g.graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const owners = buildCeilingCellOwners(g.graph);
+  const d0 = beginCeilingDrag(g.graph, owners, 500, 1500);
+  assert.equal(d0.owner.id, a.id);
+  const d1 = extendCeilingDrag(g.graph, owners, d0, 3000, 1500, 100); // 右の部屋まで
+  assert.deepEqual([...d1.visited.values()].map(c => c.x2).sort((x, y) => x - y), [1000, 2000], '自分の部屋の2つの天井セルだけ');
+});
+
+test('【失敗系】天井芯: 天井芯を削除すると、割れていた天井 key は索引から消え、選択の要約は解けた分だけ（begin は元の仕上げのセルから始まる）', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  g.interior([[0, 0], [1, 0]]);
+  g.graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const before = buildCeilingCellOwners(g.graph);
+  const [halfKey] = [...before.keys()].filter(k => k.includes('cc'));
+  g.graph.removeCenterLine('cc');
+  const after = buildCeilingCellOwners(g.graph);
+  assert.equal(after.size, 2);
+  assert.ok(!after.has(halfKey), '消えた天井芯を含む key は索引にない');
+  assert.equal(beginCeilingDrag(g.graph, after, 500, 1500).visited.size, 1);
 });

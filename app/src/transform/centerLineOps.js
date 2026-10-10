@@ -1564,7 +1564,9 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
   // 移籍して通り芯化）に入らず、通り芯・中心線・補助線が3本併存する（並び順依存。QA指摘）。
   // 走査は sameCoordCounterparts（core/centerLineKindPolicy.js）経由——種別条件の無い素の
   // graph.centerLines 走査を個別に書かない（過去に3回、非表示の梁芯が誤って障害物に混入した教訓）。
-  const sameCoord = sameCoordCounterparts(graph, { centerLineType: clType, value });
+  // 単体追加だけ天井芯（天伏専用の種別）も相手に含める（includeCeilingOnly）——同座標の天井芯との共存は
+  // COEXISTENCE で判定する。スパン配列の通り芯追加（上）は既定のまま天井芯の座標を飛ばさない。
+  const sameCoord = sameCoordCounterparts(graph, { centerLineType: clType, value, includeCeilingOnly: true });
   // 優先順は CL_KINDS の並びそのもの（通り芯＞中心線＞補助線＞梁芯）——並び順に依存させないための
   // 規約であり、種別ごとの拒否・共存ルール自体はこの順に依存しない。
   const existing = sameCoord.find(cl => centerLineKind(cl) === kind)

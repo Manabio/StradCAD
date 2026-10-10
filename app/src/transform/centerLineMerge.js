@@ -7,7 +7,7 @@
 // 共線判定＋端点一致判定という純粋な2Dベクトル演算1本で行う（RADIALは getCenterLineSegment
 // が null を返すため自動的に対象外になる。将来ジオメトリが定義されればそこに分岐を足すだけでよい）。
 import { CenterLineType } from '@core';
-import { mergeCandidates } from '../core/centerLineKindPolicy.js';
+import { mergeCandidates, isCeilingOnlyKind } from '../core/centerLineKindPolicy.js';
 
 // 重複拒否(OVERLAP_TOL=0.5mm、緩い判定)とは別の、端点厳密一致用の許容誤差
 export const CL_MERGE_EPS_MM = 1e-6;
@@ -87,11 +87,32 @@ export function findCenterLineMergeMatch(graph, segment, centerLineType, kind, e
   return null;
 }
 
+// loser を extentLoRef/extentHiRef で参照している天井芯の付け替え計画（survivor へ。offset は維持）。
+function ceilingRefMovesOf(graph, loser, survivor) {
+  const moves = [];
+  for (const cl of graph.referencingCenterLines(loser.id, { includeRefId: false })) {
+    if (!isCeilingOnlyKind(cl)) continue;
+    for (const [side, ref] of [['lo', cl.extentLoRef], ['hi', cl.extentHiRef]]) {
+      if (ref?.clId !== loser.id) continue;
+      moves.push({ cl, side, before: ref, after: { ...ref, clId: survivor.id } });
+    }
+  }
+  return moves;
+}
+
 // survivor（実CL）に loser（実CL）を吸収させる。loser を削除する前に、削除すると壊れる外部参照
 // （壁・柱・梁・他の中心線のextent参照等）がないかを確認し、あればブロックする。
 // @returns {{blocked:true}|{blocked:false, undo:Function, redo:Function}}
 export function absorbCenterLine(graph, survivor, loser, touch) {
-  if (graph.hasExternalCenterLineReferences(loser.id)) return { blocked: true };
+  // 天伏専用の天井芯（平面で見えない線）の端部参照は結合を止めない（裁定 2026-10-10）。結合で消える loser を
+  // 参照している天井芯は、同軸・同座標で残る survivor へ付け替える（座標は不変）。
+  if (graph.hasExternalCenterLineReferences(loser.id, { ignoreCeilingOnly: true })) return { blocked: true };
+  const ceilingRefMoves = ceilingRefMovesOf(graph, loser, survivor);
+  const moveCeilingRefs = (toSurvivor) => {
+    for (const m of ceilingRefMoves) {
+      graph.setCenterLineExtentRef(m.cl, m.side, toSurvivor ? m.after : m.before, null);
+    }
+  };
 
   const survivorSide = touch.touchA === 'p1' ? 'lo' : 'hi';
   const loserFarSide = touch.touchB === 'p1' ? 'hi' : 'lo'; // loserの触れた側の反対
@@ -119,6 +140,7 @@ export function absorbCenterLine(graph, survivor, loser, touch) {
   const apply = (desc) => graph.setCenterLineExtentRef(survivor, survivorSide, desc.ref, desc.staticValue);
 
   apply(farDescriptor);
+  moveCeilingRefs(true);
   graph.removeCenterLine(loser.id);
 
   return {
@@ -126,9 +148,11 @@ export function absorbCenterLine(graph, survivor, loser, touch) {
     undo: () => {
       graph.addCenterLine(loserSnapshot.centerLineType, loserSnapshot.value, loserSnapshot.props, loserSnapshot.id);
       apply(beforeDescriptor);
+      moveCeilingRefs(false);
     },
     redo: () => {
       apply(farDescriptor);
+      moveCeilingRefs(true);
       graph.removeCenterLine(loserSnapshot.id);
     },
   };

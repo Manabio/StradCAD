@@ -3,13 +3,13 @@
  * 天伏パネルが「選んだセル群の天井高」を Room.ceilingZones へ書くときの、区画配列の組み立て。graph は変えない
  * （戻り値の配列をパネルが withFinishUndo の中で room.setCeilingZones に渡す。CeilingModeState も graph を変えない）。
  *
- * 書くときの正規化（.claude/ceiling-model.md「天井区画（S5）」）: 確定のたびにその部屋の全区画を refreshCells で
- * 今の分割へ展開し直し、解けないキーを捨て、区画をまたいだ重複は先勝ちにし、空になった区画を消す。部屋の所属との交差は
+ * 書くときの正規化（.claude/ceiling-model.md「天井区画（S5）」）: 確定のたびにその部屋の全区画を ceilingRefreshCells で
+ * 今の天井セルの分割（仕上げの分割＋天井芯。S8a）へ展開し直し、解けないキーを捨て、区画をまたいだ重複は先勝ちにし、空になった区画を消す。部屋の所属との交差は
  * 書くときは取らない（読む側 ceilingSurfaces.js が Z1 として取る）。
  * 階段所属のセル群への入力は S6b まで無効（パネルが disabled にする）。この関数群は部屋の区画だけを扱う。
  */
 import { CeilingZone, CeilingShape } from '@core';
-import { refreshCells } from '../finish/gridCells.js';
+import { ceilingRefreshCells } from './ceilingGrid.js';
 import { isEmptyCeilingZone, normalizeCeilingShape } from '../core/ceilingZone.js';
 
 const isValidHeight = mm => typeof mm === 'number' && Number.isFinite(mm) && mm > 0;
@@ -22,7 +22,7 @@ export function normalizeZones(graph, room) {
   const claimed = new Set();
   const out = [];
   for (const zone of room?.ceilingZones ?? []) {
-    const cells = [...refreshCells(new Set(zone.cells), graph)].filter(k => !claimed.has(k));
+    const cells = [...ceilingRefreshCells(new Set(zone.cells), graph)].filter(k => !claimed.has(k));
     const next = zone.withCells(cells);
     if (isEmptyCeilingZone(next)) continue;
     for (const k of next.cells) claimed.add(k);
@@ -33,7 +33,7 @@ export function normalizeZones(graph, room) {
 
 /** cellKeys を今の分割へ展開した集合（解けないキーは捨てる）。 */
 function resolveKeys(graph, cellKeys) {
-  return refreshCells(new Set(cellKeys ?? []), graph);
+  return ceilingRefreshCells(new Set(cellKeys ?? []), graph);
 }
 
 /** 各区画から keys を差し引き、空になった区画を消す。 */

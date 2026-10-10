@@ -8,7 +8,7 @@ import { buildRoomFaces } from './elevationFaces.js';
 import {
   wallAdjacentFloorSegments, drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm,
   familyCeilingSegments, floorProfileFromSegments, mergeFloorProfiles,
-  drawnFloorProfileZAt, drawnFloorProfileZMax, clipContentAboveDrawnProfile,
+  drawnFloorProfileZAt, drawnFloorProfileZMax, clipContentAboveDrawnProfile, findRunCLAt,
 } from './elevationFloorProfile.js';
 
 function makeGraph() {
@@ -29,6 +29,15 @@ function makeSplitRoom(graph, name = 'LDK') {
   generateRoomWallsFromOutline(graph, room);
   return { room, x0, xMid, x1, y0, y1, leftKey, rightKey };
 }
+
+test('【S8a】findRunCLAt: 同じ座標に天井芯（先）と中心線（後）があるとき中心線を返す。天井芯しか無ければ null', () => {
+  const graph = makeGraph();
+  const ceiling = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING });
+  assert.equal(findRunCLAt(graph, false, 2000), null, '天井芯だけなら見つからない');
+  const center = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  assert.equal(graph.centerLines[0].id, ceiling.id, '前提: 天井芯が先頭');
+  assert.equal(findRunCLAt(graph, false, 2000)?.id, center.id);
+});
 
 test('wallAdjacentFloorSegments: 部分指定が右半分を占めfloorLevelが異なるとき、面Aは左=0・右=段差の2区間になる', () => {
   const graph = makeGraph();

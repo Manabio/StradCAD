@@ -222,12 +222,16 @@ const RE_CENTERLINES   = /\.centerLines\b/g;
 // 直後が`,`か`}`で終わるものだけを対象にする——`{ centerLines: graph.centerLines }`のような
 // オブジェクトリテラル構築（値がドットを含む式）はエイリアス部分が単純識別子でないため一致しない。
 const RE_DESTRUCTURE_CENTERLINES = /[{,]\s*centerLines\s*(?::\s*[A-Za-z_$][\w$]*\s*)?[,}]/g;
+// graphList(graph, 'centerLines')（graphReadScope.js。読み取りスコープ内キャッシュ経由の CL 全件列挙）。`.centerLines` の
+// プロパティアクセスを経由しないため RE_CENTERLINES を素通りする（QA S8a Blocker 3）。文字列リテラル 'centerLines' を
+// 見るので withoutComments 側で数える。
+const RE_GRAPHLIST_CENTERLINES = /graphList\([^)]*['"]centerLines['"]\)/g;
 const RE_LABELED       = /\.labeled\b/g;
 // centerLineKind(x) <op> 'kind' は左右どちらの辺にリテラルが来てもよい形に対応する
 // （op = ===/!==/==/!=。`[!=]==?` は「!か=」+「=」+「省略可能な=」の3要素で4通りの演算子を
 // 1本の文字クラスで拾う——例: '===' は '='(class)+'='(必須)+'='(任意)、'!=' は '!'(class)+'='(必須)）。
 const RE_INLINE_KIND   =
-  /centerLineKind\([^)]*\)\s*[!=]==?\s*'(?:struct|center|aux|beam)'|'(?:struct|center|aux|beam)'\s*[!=]==?\s*centerLineKind\([^)]*\)/g;
+  /centerLineKind\([^)]*\)\s*[!=]==?\s*'(?:struct|center|aux|beam|ceiling)'|'(?:struct|center|aux|beam|ceiling)'\s*[!=]==?\s*centerLineKind\([^)]*\)/g;
 // G4: `.discipline`／`.lineType` を比較演算子つきで使う形のみ対象（代入・コピーは対象外）。
 // 定数側（Discipline.<定数> / 文字列リテラル。'・"どちらも）は比較の左右どちらの辺に来てもよい。
 // Discipline.<定数>は core/constants.js で素の文字列（'arch'/'struct'/'fuse'…）のため、
@@ -312,6 +316,15 @@ const G1_ALLOWLIST = {
     reason: 'applyCenterLineAbsorptionOnPromote内、復号後のsnapshot.centerLines（保存形式の中間オブジェクト。' +
       'graphインスタンスではない）から吸収する中心線のエントリを除くための走査——lineIdRemap.js' +
       'makeFreshLineIdMapと同じ「snapshot.centerLinesの列挙」であり、種別条件のない全件操作（相手選択ではない）。' },
+  // 以下4件は graphList(graph, 'centerLines')（読み取りスコープ経由の全件列挙）。RE_GRAPHLIST_CENTERLINES で数える。
+  'elevation/elevationFloorProfile.js': { count: 1, category: 'not-partner-selection',
+    reason: 'findRunCLAt。value 一致の最初を返す走査——種別条件あり（天井芯 isCeilingOnlyKind を除外済み。同座標の天井芯が先に並んでも中心線を返す回帰テストあり）。' },
+  'elevation/section/cuts/switchbackCuts.js': { count: 1, category: 'not-partner-selection',
+    reason: 'midCL（往復間の壁が無いときの同位置の中心線）の探索。許容差内の最初の CL——種別条件あり（天井芯 isCeilingOnlyKind を除外済み。回帰テストあり）。' },
+  'elevation/elevationPrimitives.js': { count: 1, category: 'not-partner-selection',
+    reason: 'collectGridCLs。isGridCenterLine（通り芯だけ）で絞る——種別条件あり（天井芯は通り芯でないので入らない）。' },
+  'finish/gridCells.js': { count: 1, category: 'not-partner-selection',
+    reason: 'buildGridIndex。格子索引の構築——分割線の判定は grid.isDivider（変種ごとの種別ポリシー）、allXValues/allYValues は天井芯除外済み、clById は id 解決のみ。`all` も天井芯を含むが buildGridIndex 内部のみ（外部から読まれない）。' },
   'transform/followerGraph.js': { count: 3, category: 'not-partner-selection',
     reason: 'gatherShapes・collectFollowerOffsets候補集め＋gatherShapesの戻り値 `{ centerLines, walls, ' +
       'diagonals }`（shorthandオブジェクトリテラル構築。分割代入検出RE_DESTRUCTURE_CENTERLINESと同じ' +
@@ -361,8 +374,6 @@ const G3_ALLOWLIST = {
       '（線種変更の移籍一本化・ステップ6・2026-09-30: COEXISTENCE同種別分岐の梁芯重複ガード' +
       '（sameCoord.some(cl=>centerLineKind(cl)===\'beam\')）は、struct追加時の梁芯拒否を' +
       'addGridLinesWithFloorAbsorptionの吸収判定へ置き換えたことで削除し、3件→2件になった。）' },
-  'ui/circleRef.js': { count: 1, category: 'not-partner-selection',
-    reason: 'circleRefKindLabel。参照候補CLの表示ラベル文言（「梁芯」/「中心線」）を決めるUI表示ロジック。' },
 };
 
 // ---- G4: 生の `discipline`／`lineType` を比較演算子つきで種別の代用に読む ----
@@ -403,7 +414,10 @@ const files = listProductFiles();
 
 test('【ガード G1】app/src 配下の製品コードは graph.centerLines を種別条件なしに直接走査しない（プロパティアクセス・分割代入の両形。許可ドメイン=core/・renderer/・schema/。それ以外は allowlist の件数のみ許可）', () => {
   const actual = buildActual(files, [RE_CENTERLINES, RE_DESTRUCTURE_CENTERLINES], isG1Exempt, 'codeOnly');
-  assertAgainstAllowlist(actual, G1_ALLOWLIST, 'G1 (.centerLines / 分割代入)',
+  // graphList(graph, 'centerLines') 経由の列挙も同じ allowlist で数える（文字列リテラルを見るので withoutComments）
+  const viaGraphList = buildActual(files, RE_GRAPHLIST_CENTERLINES, isG1Exempt, 'withoutComments');
+  for (const [rel, n] of Object.entries(viaGraphList)) actual[rel] = (actual[rel] ?? 0) + n;
+  assertAgainstAllowlist(actual, G1_ALLOWLIST, "G1 (.centerLines / 分割代入 / graphList 'centerLines')",
     '相手選択（種別ベースで候補を絞る処理）なら centerLineKindPolicy.js の走査API（orthoAnchorCandidates' +
     '(ForNew)・sameDirectionObstacles・sameCoordCounterparts・mergeCandidates・candidatesVisibleIn等。' +
     '無ければ追加）経由に直してください。相手選択でなければ本ファイルの G1_ALLOWLIST に理由付きで追加' +
@@ -445,6 +459,7 @@ test('【ガード自己診断】G3・G4 の検出正規表現が意図した形
   const shouldMatchOnce = [
     "centerLineKind(cl) !== 'beam'",           // G3: !==（M-1前は===のみだった）
     "'beam' === centerLineKind(cl)",           // G3: リテラル左辺
+    "centerLineKind(cl) === 'ceiling'",        // G3: 天井芯（S8a）
     'cl.discipline === Discipline.STRUCT',     // G4: discipline×定数
     'Discipline.FUSE !== a.b.discipline',      // G4: discipline×定数・リテラル左辺・!==
     "cl.discipline === 'struct'",              // G4: discipline×生文字列リテラル（QA指摘M-1の抜け道）
@@ -465,6 +480,10 @@ test('【ガード自己診断】G3・G4 の検出正規表現が意図した形
   for (const s of shouldNotMatch) {
     assert.equal(totalMatches(s), 0, `一致してはいけない形が一致した: ${JSON.stringify(s)}`);
   }
+  // G1 の graphList 形
+  assert.equal(countMatches("(graphList(graph, 'centerLines') ?? [])", RE_GRAPHLIST_CENTERLINES), 1);
+  assert.equal(countMatches('(graphList(graph, "centerLines") ?? [])', RE_GRAPHLIST_CENTERLINES), 1, 'ダブルクォートも当たる');
+  assert.equal(countMatches("graphList(wallGraph, 'walls')", RE_GRAPHLIST_CENTERLINES), 0);
 });
 
 test('【ガード自己診断】allowlist の全エントリは category が既定の2種のいずれかで、reason が空でない', () => {

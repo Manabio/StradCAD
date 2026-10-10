@@ -1,8 +1,9 @@
 // ceilingZones.js（天井区画の書込みの組み立て）の単体テスト。実物の PlanGraph / Room で組む。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CeilingZone } from '@core';
+import { CeilingZone, CenterLineType, Discipline } from '@core';
 import { assignZoneShape, clearZoneCells, zoneStateOfCells, normalizeZones } from './ceilingZones.js';
+import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
 import { makeGrid, assignZoneHeight } from '../plan/planTestFixtures.js';
 
 // 3セル（c0 c1 c2）が1部屋の階
@@ -153,4 +154,37 @@ test('assignZoneShape: 形状に合わない寸法は平面に落とす（区画
   assert.equal(room.ceilingZones.find(z => z.cells.includes(c1)).heightMm, null, '傾斜は基準高 null（部屋の CH）の区画を作れる');
   room.setCeilingZones(assignZoneShape(graph, room, [c0, c1], { heightMm: null, shape: 'flat', dims: [] }));
   assert.deepEqual([...room.ceilingZones], [], '平面で null は区画を残さない');
+});
+
+// ---- 天井芯（S8a）: 区画のセルは天井セル（天井芯で割れた格子）の key ----
+function ceilingSetup() {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  const cc = g.graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const half = x => worldToCell(x, 1500, g.graph, CEILING_CELL_GRID).key;
+  return { g, graph: g.graph, room, cc, left: half(500), right: half(1500), whole: g.cell(1, 0) };
+}
+
+test('天井芯: 天井セルの片側だけに高さを指定できる。反対側は none、同じ天井セルは uniform', () => {
+  const { graph, room, left, right } = ceilingSetup();
+  room.setCeilingZones(assignZoneHeight(graph, room, [left], 2800));
+  assert.deepEqual(room.ceilingZones[0].cells, [left]);
+  assert.equal(zoneStateOfCells(graph, room, [left]).state, 'uniform');
+  assert.equal(zoneStateOfCells(graph, room, [right]).state, 'none', '天井芯の反対側は区画の外');
+  assert.equal(zoneStateOfCells(graph, room, [left, right]).state, 'mixed');
+});
+
+test('天井芯: 仕上げの key（割れる前のセル）を指定すると天井芯の両側の2つの天井セルへ展開されて区画になる', () => {
+  const { graph, room, g, left, right } = ceilingSetup();
+  room.setCeilingZones(assignZoneHeight(graph, room, [g.cell(0, 0)], 2800));
+  assert.deepEqual([...room.ceilingZones[0].cells].sort(), [left, right].sort());
+});
+
+test('【失敗系】天井芯を削除すると、天井 key の区画は解けず normalizeZones が捨てる（空の区画は消える）。解けない key の指定は何も足さない', () => {
+  const { graph, room, cc, left, right } = ceilingSetup();
+  room.setCeilingZones(assignZoneHeight(graph, room, [left, right], 2800));
+  assert.equal(room.ceilingZones.length, 1);
+  graph.removeCenterLine(cc.id);
+  assert.deepEqual(normalizeZones(graph, room), [], '解けた key が無く区画が消える');
+  assert.deepEqual(assignZoneHeight(graph, room, [left], 3000).length, 0, '解けない key へは区画を足さない');
 });

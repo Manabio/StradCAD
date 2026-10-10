@@ -3,7 +3,8 @@
  * 天伏モードの見上げ（plan/planSolids.js の ceiling 立体）が使う。部屋ごとに「セル矩形の和」と「天井の高さ」を返す。
  *
  * 天井を持つ部屋＝屋内（kind === INTERIOR）かつ feature なし。吹抜け・階段・階段吹抜け・屋根・昇降路・未定義は天井を持たない。
- * セルの帰属は buildCellToRoom（部分指定の子が親のセルを上書きする。床立体 floorSolidOf と同じセル→矩形の口）。
+ * セルの帰属は buildCeilingCellToRoom（buildCellToRoom〔部分指定の子が親のセルを上書きする。床立体 floorSolidOf と同じセル→矩形の口〕を
+ * 天井セル＝仕上げのセルを天井芯でさらに割った格子へ展開したもの。天井芯が無ければ buildCellToRoom と一致。ceilingGrid.js）。
  * 述語 roomHasCeiling は ceilingOwners.js（選択の索引）と共有。索引そのものへの一本化は見送り: 実データの --up の合計が 340→337 本に変わった
  * （buildCellToRoom は天井を持たない部屋〔階段ペア・吹抜け〕も帰属を取り、その上の屋内部屋の天井を落とす。索引は取らない）。
  * 高さ zMm＝層の FL からの天井面の高さ＝部屋の床段差（effectiveFloorLevel(room)−effectiveFloorLevel(null)）＋roomCeilingHeight(graph, room).mm。
@@ -12,8 +13,8 @@
  */
 import { CeilingShape } from '../core/constants.js';
 import { roomHasCeiling, stairHasCeiling } from './ceilingOwners.js';
-import { buildCellToRoom } from '../finish/edgeClassify.js';
-import { cellBoundsFromKey, refreshCells } from '../finish/gridCells.js';
+import { buildCeilingCellToRoom, ceilingRefreshCells } from './ceilingGrid.js';
+import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { normalizeRect, isValidRect } from '../plan/planGeometry.js';
 
@@ -38,7 +39,9 @@ const byRow = (a, b) => a.y1 - b.y1 || a.x1 - b.x1;
  */
 export function ceilingSurfacesOf(graph) {
   if (!graph) return [];
-  const cellToRoom = buildCellToRoom(graph);
+  // 読み取りスコープ（withGraphReadScope）で包まない: 呼び元（plan/planSolids.js）は MobX の追跡下で呼ぶことがあり、
+  // スコープは内側の Reaction で依存を取るため外側の observer が部屋・CL の変更に反応しなくなる。
+  const cellToRoom = buildCeilingCellToRoom(graph);
   // 階段の対の部屋（S6b）: 天井を持たない部屋（feature STAIR）だが、階段が天井を持つなら区画の面だけを出す（残りは出さない）
   const pairRooms = new Set();
   for (const stair of graph.stairs) {
@@ -67,7 +70,7 @@ export function ceilingSurfacesOf(graph) {
     const zoneFaces = [];
     for (const zone of room.ceilingZones) {
       const rects = [];
-      for (const key of refreshCells(new Set(zone.cells), graph)) {
+      for (const key of ceilingRefreshCells(new Set(zone.cells), graph)) {
         if (taken.has(key) || !rectByKey.has(key)) continue;
         taken.add(key);
         rects.push(rectByKey.get(key));

@@ -54,6 +54,9 @@ export function clExtent(cl, graph, viewport, width, height) {
 // 操作できなくなるが、構造モード専用の線という仕様どおり）。線種（一点鎖線[12,4,2,4]・opacity1）は
 // 柱芯線（下のaxisLines）と同一にするが、strokeは由来色（originColor経由。柱芯線axisLinesは今回
 // 対象外のため引き続き固定色#3b82f6のまま）。
+// 天井芯の線種（二点鎖線。一点鎖線[12,4,2,4]と見分ける。天伏だけに描く）
+export const CEILING_LINE_DASH = [12, 4, 2, 4, 2, 4];
+
 export const CenterLinesLayer = observer(({ graph, viewport, width, height, columnAxisMode = false, axisLineCoords = null, appMode }) => {
   if (!graph) return null;
   const b = viewportBounds(viewport, width, height);
@@ -78,7 +81,9 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
     // 見ておらず種別ベースと同値だったため変化なし。centerLineKindPolicy.test.js にピン留めテストあり）。
     if (!isRenderTarget(cl, appMode)) return null;
     // 描画スタイル判定用（opacityを柱芯線と同格にする。strokeは由来色。フィルタとは別の用途で残す）。
-    const isBeamAxis = centerLineKind(cl) === 'beam';
+    const kind = centerLineKind(cl);
+    const isBeamAxis = kind === 'beam';
+    const isCeilingAxis = kind === 'ceiling';
 
     const ext = clExtent(cl, graph, viewport, width, height);
     const [p1, p2] = ext ?? (isV ? [b.yMin, b.yMax] : [b.xMin, b.xMax]);
@@ -95,10 +100,10 @@ export const CenterLinesLayer = observer(({ graph, viewport, width, height, colu
         points={points}
         stroke={originColor(centerLineOriginColorKey(cl))}
         strokeWidth={viewport.lineWeightsPx.thin}
-        dash={isAux ? undefined : centerLineKind(cl) === 'struct' ? gridLineDash(viewport.lineWeightsPx.thin) : [12, 4, 2, 4]}
+        dash={isAux ? undefined : kind === 'struct' ? gridLineDash(viewport.lineWeightsPx.thin) : isCeilingAxis ? CEILING_LINE_DASH : [12, 4, 2, 4]}
         strokeScaleEnabled={false}
         listening={false}
-        opacity={cl.labeled || isBeamAxis ? 1 : 0.5}
+        opacity={cl.labeled || isBeamAxis || isCeilingAxis ? 1 : 0.5}
       />
     );
   });

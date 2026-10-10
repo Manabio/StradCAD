@@ -53,7 +53,9 @@
 import { centerLineKind, isGridCenterLine } from './centerLine.js';
 import { CenterLineType, CL_OVERLAP_TOL_MM } from './constants.js';
 
-export const CL_KINDS = Object.freeze(['struct', 'center', 'aux', 'beam']);
+// 末尾の 'ceiling'（天井芯。天伏モードの天井セルだけを割る線。S8a・2026-10-10）は既存4種別の並びを変えない
+// ——CL_KINDS の並びは addCenterLineFromDialog の相手選択の優先順にも使われる。
+export const CL_KINDS = Object.freeze(['struct', 'center', 'aux', 'beam', 'ceiling']);
 
 // ui/ModeBar.jsx の MODES（mode値）∪ ['opening']。建具モードはモードバーにボタンを持たないが、
 // App.jsx の appMode としては存在する（ModeBar.jsx冒頭コメント参照。平面モードでの建具追加・
@@ -81,11 +83,22 @@ function assertKnownMode(appMode) {
 export const VISIBLE_KINDS_BY_MODE = Object.freeze({
   floorplan: Object.freeze(['struct', 'center', 'aux']),
   finish:    Object.freeze(['struct', 'center', 'aux']),
-  ceiling:   Object.freeze(['struct', 'center', 'aux']),
+  // 天伏は天井芯だけが「可視＝操作対象」。通り芯・中心線・補助線は下の DISPLAY_ONLY_KINDS_BY_MODE（描くだけ）。
+  ceiling:   Object.freeze(['ceiling']),
   opening:   Object.freeze(['struct', 'center', 'aux']),
   structure: Object.freeze(['struct', 'beam']),
   site:      Object.freeze([]),
   elevation: Object.freeze([]),
+});
+
+// ---- 原始事実1b: 描くだけの種別表（可視モード表の外） ----
+// appMode で描画はするが、ヒットにも・関係の導出（kindsVisibleWith＝直交端部候補・同方向障害物・移動スナップ
+// 吸着先）にも入れない種別。天伏モードは通り芯・中心線・補助線を「天井芯を引く目印」として描くが、
+// 操作はできず（hitTestKinds に入らない）、天井芯の移動・延長の相手にもならない
+// （VISIBLE_KINDS_BY_MODE へ足すと可視＝操作対象の導出に全部乗ってしまうため別表にする。2026-10-10 設計）。
+// 読むのは kindsRenderedIn（→ isRenderTarget）だけ。
+export const DISPLAY_ONLY_KINDS_BY_MODE = Object.freeze({
+  ceiling: Object.freeze(['struct', 'center', 'aux']),
 });
 
 // ---- 原始事実2: ヒット除外表 ----
@@ -123,11 +136,16 @@ export const HIT_EXCLUDED_KINDS_BY_MODE = Object.freeze({
 //                 promoteCenterToGridWithUndo が担う。'forbidden'との違い: 同座標に両方が
 //                 「残ることはない」点は共通だが、'forbidden'は追加自体を拒否するのに対し
 //                 'absorb'は既存を消して追加を通す）
+//
+// 天井芯（ceiling。S8a）: 既存4行の ceiling 列はすべて 'allowed'（天井芯は天伏だけの線で、他種別と同座標に
+// あっても平面・仕上げ・構造の関係を変えない）。ceiling 行は、天伏で見える通り芯・中心線の上には引けない
+// （そこは既にセルの分割線）、補助線・梁芯とは共存可、同種別は 'extent'（重ならなければ可）。
 export const COEXISTENCE = Object.freeze({
-  struct: Object.freeze({ struct: 'forbidden', center: 'promote',  aux: 'allowed',   beam: 'absorb'    }),
-  center: Object.freeze({ struct: 'forbidden', center: 'extent',   aux: 'allowed',   beam: 'allowed'   }),
-  aux:    Object.freeze({ struct: 'allowed',   center: 'allowed',  aux: 'extent',    beam: 'allowed'   }),
-  beam:   Object.freeze({ struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent'   }),
+  struct:  Object.freeze({ struct: 'forbidden', center: 'promote',   aux: 'allowed',   beam: 'absorb',    ceiling: 'allowed' }),
+  center:  Object.freeze({ struct: 'forbidden', center: 'extent',    aux: 'allowed',   beam: 'allowed',   ceiling: 'allowed' }),
+  aux:     Object.freeze({ struct: 'allowed',   center: 'allowed',   aux: 'extent',    beam: 'allowed',   ceiling: 'allowed' }),
+  beam:    Object.freeze({ struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent',    ceiling: 'allowed' }),
+  ceiling: Object.freeze({ struct: 'forbidden', center: 'forbidden', aux: 'allowed',   beam: 'allowed',   ceiling: 'extent'  }),
 });
 
 // ---- 原始事実4: 直交端部アンカーの特例 ----
@@ -139,6 +157,19 @@ export const COEXISTENCE = Object.freeze({
 // のような labeled と種別が食い違う異常値）による乖離は解消済み。
 export const ORTHO_ANCHOR_OVERRIDE = Object.freeze({
   beam: Object.freeze(['struct']),
+  // 天井芯の端部は、天伏で見える分割線（通り芯・中心線）と同じ天井芯だけ（補助線は天伏では描くだけの目印で
+  // 端部アンカーにしない）。可視表から導けない（天伏の可視は ceiling のみ）ため明示の特例。
+  ceiling: Object.freeze(['struct', 'center', 'ceiling']),
+});
+
+// ---- 原始事実4b: 同方向の移動障害物の特例 ----
+// sameDirectionObstacleKinds は既定で kindsVisibleWith（主体と同じモードで可視な種別の和）。天井芯は天伏で
+// 自分しか可視でないため、そのままでは通り芯・中心線を越えて動いてしまう——分割線（通り芯・中心線）と他の
+// 天井芯を越えない特例を置く。逆向き（平面で中心線を動かすとき天井芯を障害物にするか）は障害物にしない
+// （kindsVisibleWith('center') に ceiling が入らないため）＝受容。越えて逆転した天井芯の矩形は読む側で
+// min/max に正規化する（ceiling/ceilingGrid.js）。
+export const SAME_DIRECTION_OBSTACLE_OVERRIDE = Object.freeze({
+  ceiling: Object.freeze(['struct', 'center', 'ceiling']),
 });
 
 // ---- 原始事実5: 小表 ----
@@ -152,18 +183,19 @@ export const WALL_ANCHOR_KINDS = Object.freeze(['aux']);
 // 直交CL・壁のどちらも無い位置では、はね出しではなくポインタ座標をキリ良く丸めた静的値
 // （centerLineOps.js L452-456/476-480 の roundToNiceCoord。フリーエンドポイント）になる。
 export const EXTENT_ANCHOR_STYLE = Object.freeze({
-  struct: 'none', center: 'ref', aux: 'overhang', beam: 'ref',
+  struct: 'none', center: 'ref', aux: 'overhang', beam: 'ref', ceiling: 'ref',
 });
-// 端点ルール（isEndpointAt）の対象種別（中心線・梁芯。補助線はフリー端点を持つため対象外）。
-export const ENDPOINT_RULE_KINDS = Object.freeze(['center', 'beam']);
-// 端点ルールの対象（中心線・梁芯）のうち、端点からの延長を許す種別。梁芯は自動生成（小梁の自動補完・
-// 再ブラケット）との干渉が未評価のため除外。補助線はもともと端点ルールの対象外。
+// 端点ルール（isEndpointAt）の対象種別（中心線・梁芯・天井芯。補助線はフリー端点を持つため対象外）。
+export const ENDPOINT_RULE_KINDS = Object.freeze(['center', 'beam', 'ceiling']);
+// 端点ルールの対象（中心線・梁芯・天井芯）のうち、端点からの延長を許す種別。梁芯は自動生成（小梁の自動補完・
+// 再ブラケット）との干渉が未評価のため除外。補助線はもともと端点ルールの対象外。天井芯は中心線と同じ扱い
+// （S8a。操作の配線は S8b）。
 // 2026-10-03 ユーザー裁定。短縮は端点では不可のまま（メニューは削除を出す）。
-export const ENDPOINT_EXTENDABLE_KINDS = Object.freeze(['center']);
+export const ENDPOINT_EXTENDABLE_KINDS = Object.freeze(['center', 'ceiling']);
 // 延長が、現在の端から延長先までに掛かる同軸・同種別の別ピースを持つとき延長を禁じる種別。延長後の結合
 // （mergeCenterLineChain）は端が1組だけ一致すれば隣接とみなすため、重なったピースを隣接と誤認して相手を
-// 吸収し、相手が消える（2026-10-03 ユーザー裁定）。補助線・梁芯の延長は従来どおり（対象外）。
-export const EXTEND_OVERLAP_FORBIDDEN_KINDS = Object.freeze(['center']);
+// 吸収し、相手が消える（2026-10-03 ユーザー裁定）。補助線・梁芯の延長は従来どおり（対象外）。天井芯は中心線と同じ。
+export const EXTEND_OVERLAP_FORBIDDEN_KINDS = Object.freeze(['center', 'ceiling']);
 // 常に全軸（ガター~ガター）に及ぶ種別（＝端部候補・障害物判定で「extentを持たない」として扱う種別）。
 // VERIFIED（renderer/CenterLinesLayer.jsx clExtent L23-31）: 通り芯の `trim:true` はガター～ガター
 // ではなく直交labeled CLの端でカットするが、これは描画（画面上の線分の長さ）だけの話——
@@ -244,6 +276,17 @@ export const BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE = Object.freeze({ structure: Obje
 // 生フィールド判定）では分割線に不参加だったが、種別ベースでは参加する
 // （finish/gridCells.test.js「【旧データ限定・種別ベースへ統一】」参照）。
 export const FINISH_CELL_DIVIDER_KINDS = Object.freeze(['center']);
+
+// ---- 原始事実10b: 天井セルの分割線になる種別（通り芯側を除く） ----
+// finish/gridCells.js の CEILING_CELL_GRID（天伏の天井セルだけを割る格子）の分割線: 仕上げと同じ「通り芯＋
+// 中心線」に天井芯を足したもの（isCeilingCellDivider ⊇ isFinishCellDivider）。天井芯は仕上げの分割線には
+// ならない（FINISH_CELL_DIVIDER_KINDS に入れない）——仕上げ・壁・階段・昇降機・構造・展開図のセルは天井芯で割れない。
+export const CEILING_CELL_DIVIDER_KINDS = Object.freeze(['center', 'ceiling']);
+
+// ---- 原始事実10c: 天伏専用の種別 ----
+// 天伏モードの天井セル以外のどこにも現れてはならない種別（天井芯）。展開図の区間刻み（allXValues/allYValues）や
+// 他階の対応CL探索（sameCoordCounterparts の既定）から除くために使う。
+export const CEILING_ONLY_KINDS = Object.freeze(['ceiling']);
 
 // ---- 原始事実11: 階段下分割CLとして認める種別 ----
 // finish/stair/stairUnderSplit.js ensureUnderStairSplit が生成し、isSplitCLFor が幾何署名
@@ -425,6 +468,17 @@ export function kindsVisibleIn(appMode) {
   return VISIBLE_KINDS_BY_MODE[appMode];
 }
 
+/**
+ * appMode で描画する種別＝可視表 ∪ 描くだけの種別表（DISPLAY_ONLY_KINDS_BY_MODE。CL_KINDS の順）。
+ * 描画（isRenderTarget）だけがこれを読む——ヒット・関係の導出は可視表（kindsVisibleIn）のまま。
+ */
+export function kindsRenderedIn(appMode) {
+  const visible = kindsVisibleIn(appMode);
+  const displayOnly = DISPLAY_ONLY_KINDS_BY_MODE[appMode] ?? [];
+  if (displayOnly.length === 0) return visible;
+  return CL_KINDS.filter(k => visible.includes(k) || displayOnly.includes(k));
+}
+
 /** appMode でポインタヒット対象になる種別（可視種別からヒット除外分を引く）。 */
 export function hitTestKinds(appMode) {
   const visible = kindsVisibleIn(appMode);
@@ -459,7 +513,8 @@ export function orthoAnchorKinds(kind) {
  * `other.labeled` で通り芯扱いを判定していた分は解消。ステップ4、2026-09-19）。
  */
 export function sameDirectionObstacleKinds(kind) {
-  return kindsVisibleWith(kind);
+  assertKnownKind(kind);
+  return SAME_DIRECTION_OBSTACLE_OVERRIDE[kind] ?? kindsVisibleWith(kind);
 }
 
 /**
@@ -770,11 +825,15 @@ export function sameDirectionObstacles(graph, subject) {
  * 集める」役割のみを持つ）。
  * exclude は同一グラフ内の既存CLを自分自身として除外する用途（オブジェクト参照比較）——異なる
  * グラフインスタンス間（例: 他階を peek した一時グラフ）の同一id除外にはならない。
+ * includeCeilingOnly（既定 false）: 天伏専用の種別（天井芯。CEILING_ONLY_KINDS）を相手に含めるか。既定では
+ * 含めない——天井芯は階固有の天伏だけの線で、他階の対応CL探索・入替えガード・通り芯のスパン追加の
+ * 同座標スキップなど「平面・仕上げ・構造」側の同座標判定に混ざってはならない（同座標の中心線を取り違える）。
+ * 同座標の追加の重複判定（transform/centerLineOps.js 単体追加）だけ true で呼ぶ。
  * @param {{centerLines: Array}} graph
- * @param {{centerLineType: string, value: number, tolMm?: number, exclude?: object|null}} opts
+ * @param {{centerLineType: string, value: number, tolMm?: number, exclude?: object|null, includeCeilingOnly?: boolean}} opts
  * @returns {Array}
  */
-export function sameCoordCounterparts(graph, { centerLineType, value, tolMm = CL_OVERLAP_TOL_MM, exclude = null }) {
+export function sameCoordCounterparts(graph, { centerLineType, value, tolMm = CL_OVERLAP_TOL_MM, exclude = null, includeCeilingOnly = false }) {
   if (centerLineType == null) {
     throw new Error(`sameCoordCounterparts: centerLineTypeは必須です（実際: ${centerLineType}）`);
   }
@@ -782,12 +841,13 @@ export function sameCoordCounterparts(graph, { centerLineType, value, tolMm = CL
     throw new Error(`sameCoordCounterparts: valueは数値である必要があります（実際: ${value}）`);
   }
   return graph.centerLines.filter(other =>
-    other !== exclude && other.centerLineType === centerLineType && Math.abs(other.value - value) < tolMm);
+    other !== exclude && other.centerLineType === centerLineType && Math.abs(other.value - value) < tolMm &&
+    (includeCeilingOnly || !isCeilingOnlyKind(other)));
 }
 
-/** cl が appMode で描画対象か（可視モード表そのもの）。 */
+/** cl が appMode で描画対象か（可視モード表 ∪ 描くだけの種別表。kindsRenderedIn）。 */
 export function isRenderTarget(cl, appMode) {
-  return kindsVisibleIn(appMode).includes(centerLineKind(cl));
+  return kindsRenderedIn(appMode).includes(centerLineKind(cl));
 }
 
 /** cl が appMode でポインタヒット対象か。 */
@@ -811,6 +871,26 @@ export function isHitTestTarget(cl, appMode) {
  */
 export function isFinishCellDivider(cl) {
   return isGridCenterLine(cl) || FINISH_CELL_DIVIDER_KINDS.includes(centerLineKind(cl));
+}
+
+/**
+ * cl が天伏の天井セルの分割線（finish/gridCells.js CEILING_CELL_GRID）として扱われるか
+ * （isFinishCellDivider ∪ 天井芯。CEILING_CELL_DIVIDER_KINDS参照）。
+ * 実在の CenterLine またはそのPOJOスナップショット専用（isFinishCellDivider と同じ注意）。
+ * @param {object} cl
+ * @returns {boolean}
+ */
+export function isCeilingCellDivider(cl) {
+  return isGridCenterLine(cl) || CEILING_CELL_DIVIDER_KINDS.includes(centerLineKind(cl));
+}
+
+/**
+ * cl が天伏専用の種別（天井芯。CEILING_ONLY_KINDS）か。実在の CenterLine またはそのPOJOスナップショット専用。
+ * @param {object} cl
+ * @returns {boolean}
+ */
+export function isCeilingOnlyKind(cl) {
+  return CEILING_ONLY_KINDS.includes(centerLineKind(cl));
 }
 
 /**

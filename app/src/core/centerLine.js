@@ -116,11 +116,12 @@ export class CenterLine extends Shape {
   }
 }
 
-// CenterLine の種別（通り芯/中心/補助線）を discipline・lineType から判定する
+// CenterLine の種別（通り芯/中心/補助線/梁芯/天井芯）を discipline・lineType から判定する
 export function centerLineKind(cl) {
   if (cl.lineType === 'dashed') return 'aux';
   if (cl.discipline === Discipline.STRUCT) return 'struct';
   if (cl.discipline === Discipline.FUSE) return 'beam';
+  if (cl.discipline === Discipline.CEILING) return 'ceiling';
   return 'center';
 }
 

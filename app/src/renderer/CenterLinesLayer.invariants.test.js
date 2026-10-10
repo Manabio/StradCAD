@@ -56,12 +56,14 @@ test('【不変条件・変更していない証拠】柱芯オフセット線(a
   assert.ok(/stroke="#3b82f6"/.test(axisLinesRegion), 'axisLines のstrokeが固定色#3b82f6のままではない（対象外の変更）');
 });
 
-test('【不変条件・変更していない証拠】CenterLinesLayer本体: dashは通り芯だけ長鎖線化し中心線・梁芯は[12,4,2,4]のまま、opacityは変更していない', () => {
-  // 通り芯（struct）だけ長鎖線 gridLineDash、補助線は実線、それ以外（中心線・梁芯）は従来の [12,4,2,4]。
-  assert.ok(bodyCodeOnly.includes("dash={isAux ? undefined : centerLineKind(cl) === 'struct' ? gridLineDash(viewport.lineWeightsPx.thin) : [12, 4, 2, 4]}"),
-    '通り芯のみ gridLineDash・他は [12, 4, 2, 4] のdash式が見つからない（中心線・梁芯の一点鎖線が変わっている）');
-  assert.ok(bodyCodeOnly.includes('opacity={cl.labeled || isBeamAxis ? 1 : 0.5}'),
-    'opacity={cl.labeled || isBeamAxis ? 1 : 0.5} が見つからない（opacityを今回変更していない証拠が崩れている）');
+test('【不変条件・変更していない証拠】CenterLinesLayer本体: dashは通り芯だけ長鎖線化し中心線・梁芯は[12,4,2,4]のまま（天井芯だけ二点鎖線 CEILING_LINE_DASH）、opacityは梁芯・天井芯を1にしそれ以外は変更していない', () => {
+  // 通り芯（struct）だけ長鎖線 gridLineDash、補助線は実線、天井芯（S8a）は二点鎖線、それ以外（中心線・梁芯）は従来の [12,4,2,4]。
+  assert.ok(bodyCodeOnly.includes("dash={isAux ? undefined : kind === 'struct' ? gridLineDash(viewport.lineWeightsPx.thin) : isCeilingAxis ? CEILING_LINE_DASH : [12, 4, 2, 4]}"),
+    '通り芯のみ gridLineDash・天井芯のみ CEILING_LINE_DASH・他は [12, 4, 2, 4] のdash式が見つからない（中心線・梁芯の一点鎖線が変わっている）');
+  assert.ok(bodyCodeOnly.includes('opacity={cl.labeled || isBeamAxis || isCeilingAxis ? 1 : 0.5}'),
+    'opacity={cl.labeled || isBeamAxis || isCeilingAxis ? 1 : 0.5} が見つからない（通り芯・梁芯・天井芯以外のopacityを変更していない証拠が崩れている）');
+  // 天井芯の線種は梁芯の一点鎖線[12,4,2,4]と見分けられる二点鎖線（定数の値を固定する）
+  assert.ok(/export const CEILING_LINE_DASH = \[12, 4, 2, 4, 2, 4\];/.test(readSource()), 'CEILING_LINE_DASH が二点鎖線[12,4,2,4,2,4]でない');
 });
 
 // ガター帯の出入り: CL本体（clLines・全種別）・柱芯線（axisLines）は gutterClipRects().area の clip 付き

@@ -17,6 +17,8 @@ import { Project } from './project.js';
 import { PlanGraph } from './planGraph.js';
 import {
   CL_KINDS, APP_MODES, VISIBLE_KINDS_BY_MODE, HIT_EXCLUDED_KINDS_BY_MODE, COEXISTENCE,
+  DISPLAY_ONLY_KINDS_BY_MODE, SAME_DIRECTION_OBSTACLE_OVERRIDE, kindsRenderedIn,
+  CEILING_CELL_DIVIDER_KINDS, CEILING_ONLY_KINDS, isCeilingCellDivider, isCeilingOnlyKind,
   ORTHO_ANCHOR_OVERRIDE, WALL_ANCHOR_KINDS, EXTENT_ANCHOR_STYLE, ENDPOINT_RULE_KINDS, FULL_SPAN_KINDS,
   CONVERT_BLOCKING_KINDS, CROSS_FLOOR_COUNTERPART_KINDS, OPENING_BOUNDARY_KINDS,
   CONVERT_SUBJECT_KINDS, BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE,
@@ -67,24 +69,49 @@ function addCLOfKind(graph, project, clType, value, kind) {
     case 'center': return graph.addCenterLine(clType, value, { labeled: false, discipline: Discipline.ARCH });
     case 'aux':    return graph.addCenterLine(clType, value, { labeled: false, lineType: 'dashed' });
     case 'beam':   return graph.addCenterLine(clType, value, { labeled: false, discipline: Discipline.FUSE });
+    case 'ceiling': return graph.addCenterLine(clType, value, { labeled: false, discipline: Discipline.CEILING });
     default: throw new Error(`未知のCL種別: ${kind}`);
   }
 }
+
+// kind → discipline（種別ごとの生成規約。aux は lineType:'dashed' で別途決まるので discipline は ARCH）。
+function disciplineOfKind(kind) {
+  return { struct: Discipline.STRUCT, beam: Discipline.FUSE, ceiling: Discipline.CEILING }[kind] ?? Discipline.ARCH;
+}
+
+// 製品の追加ダイアログ（addCenterLineFromDialog）が newKind として扱える種別。天井芯の追加は S8b で配線する。
+const DIALOG_ADDABLE_KINDS = CL_KINDS.filter(k => k !== 'ceiling');
 
 // ================================================================
 // A. 原始事実（表そのもの）
 // ================================================================
 
-test('VISIBLE_KINDS_BY_MODE: floorplan/finish/ceiling/opening=[struct,center,aux]、structure=[struct,beam]、site/elevation=[]', () => {
+test('VISIBLE_KINDS_BY_MODE: floorplan/finish/opening=[struct,center,aux]、ceiling=[ceiling]（S8a。天伏は天井芯だけが操作対象）、structure=[struct,beam]、site/elevation=[]', () => {
   assert.deepEqual({ ...VISIBLE_KINDS_BY_MODE }, {
     floorplan: ['struct', 'center', 'aux'],
     finish:    ['struct', 'center', 'aux'],
-    ceiling:   ['struct', 'center', 'aux'],
+    ceiling:   ['ceiling'],
     opening:   ['struct', 'center', 'aux'],
     structure: ['struct', 'beam'],
     site:      [],
     elevation: [],
   });
+});
+
+test('DISPLAY_ONLY_KINDS_BY_MODE: 天伏は通り芯・中心線・補助線を描くだけ（可視表・ヒット・導出には入らない）', () => {
+  assert.deepEqual(Object.fromEntries(Object.entries(DISPLAY_ONLY_KINDS_BY_MODE).map(([k, v]) => [k, [...v]])), { ceiling: ['struct', 'center', 'aux'] });
+  // 描くだけの種別は可視表と重ならない（重なると「描くだけ」の意味が消える）
+  for (const [mode, kinds] of Object.entries(DISPLAY_ONLY_KINDS_BY_MODE)) {
+    for (const k of kinds) assert.ok(!VISIBLE_KINDS_BY_MODE[mode].includes(k), `${mode}: ${k} が可視表にも描くだけ表にもある`);
+  }
+});
+
+test('kindsRenderedIn: 可視表 ∪ 描くだけ表（CL_KINDS順）。天伏だけが増え、他モードは可視表と同一', () => {
+  assert.deepEqual(kindsRenderedIn('ceiling'), ['struct', 'center', 'aux', 'ceiling']);
+  for (const mode of APP_MODES.filter(m => m !== 'ceiling')) {
+    assert.deepEqual(kindsRenderedIn(mode), [...VISIBLE_KINDS_BY_MODE[mode]], `mode=${mode}`);
+  }
+  assert.throws(() => kindsRenderedIn('renovation'), /未知のappMode: renovation/);
 });
 
 test('【不変条件】APP_MODES は ui/ModeBar.jsx の MODES の mode 値 ∪ [\'opening\'] と一致する', () => {
@@ -99,24 +126,26 @@ test('HIT_EXCLUDED_KINDS_BY_MODE: structure=[struct]のみ、他モードは除�
   assert.deepEqual({ ...HIT_EXCLUDED_KINDS_BY_MODE }, { structure: ['struct'] });
 });
 
-test('COEXISTENCE: 16セルの値を固定する（原始事実の書き写し。製品コードとの実際の一致はセクションCで別途検証する）', () => {
+test('COEXISTENCE: 25セルの値を固定する（原始事実の書き写し。製品コードとの実際の一致はセクションCで別途検証する）', () => {
   assert.deepEqual(
     Object.fromEntries(CL_KINDS.map(k => [k, { ...COEXISTENCE[k] }])),
     {
       // struct.beam は 'forbidden' から 'absorb' へ改めた（リード裁定・線種変更の移籍一本化
       // ステップ6是正・2026-09-30。centerLineKindPolicy.js COEXISTENCE定義のコメント参照）。
-      struct: { struct: 'forbidden', center: 'promote',  aux: 'allowed',   beam: 'absorb'    },
-      center: { struct: 'forbidden', center: 'extent',   aux: 'allowed',   beam: 'allowed'   },
-      aux:    { struct: 'allowed',   center: 'allowed',  aux: 'extent',    beam: 'allowed'   },
-      beam:   { struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent'   },
+      // ceiling 列・行は S8a（天井芯。既存4行の ceiling 列は全部 allowed）。
+      struct:  { struct: 'forbidden', center: 'promote',   aux: 'allowed',   beam: 'absorb',  ceiling: 'allowed' },
+      center:  { struct: 'forbidden', center: 'extent',    aux: 'allowed',   beam: 'allowed', ceiling: 'allowed' },
+      aux:     { struct: 'allowed',   center: 'allowed',   aux: 'extent',    beam: 'allowed', ceiling: 'allowed' },
+      beam:    { struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent',  ceiling: 'allowed' },
+      ceiling: { struct: 'forbidden', center: 'forbidden', aux: 'allowed',   beam: 'allowed', ceiling: 'extent'  },
     },
   );
 });
 
 test('小表: WALL_ANCHOR_KINDS・EXTENT_ANCHOR_STYLE・ENDPOINT_RULE_KINDS・FULL_SPAN_KINDS・CONVERT_BLOCKING_KINDS', () => {
   assert.deepEqual([...WALL_ANCHOR_KINDS], ['aux']);
-  assert.deepEqual({ ...EXTENT_ANCHOR_STYLE }, { struct: 'none', center: 'ref', aux: 'overhang', beam: 'ref' });
-  assert.deepEqual([...ENDPOINT_RULE_KINDS], ['center', 'beam']);
+  assert.deepEqual({ ...EXTENT_ANCHOR_STYLE }, { struct: 'none', center: 'ref', aux: 'overhang', beam: 'ref', ceiling: 'ref' });
+  assert.deepEqual([...ENDPOINT_RULE_KINDS], ['center', 'beam', 'ceiling']);
   assert.deepEqual([...FULL_SPAN_KINDS], ['struct']);
   assert.deepEqual(
     Object.fromEntries(Object.entries(CONVERT_BLOCKING_KINDS).map(([k, v]) => [k, [...v]])),
@@ -132,8 +161,8 @@ test('CROSS_FLOOR_COUNTERPART_KINDS: 他階の入替え相手種別は中心線�
 // 無かった——CL_KINDSは transform/centerLineOps.js addCenterLineFromDialog の existing 選択の
 // 優先順（同種別優先の次に使う順）としてそのままimportされて使われるため、この並びが壊れると
 // 追加・変換の帰結が広範囲で変わる（M-1参照）。
-test('【不変条件】CL_KINDS の並びは 通り芯・中心線・補助線・梁芯 で固定されている', () => {
-  assert.deepEqual([...CL_KINDS], ['struct', 'center', 'aux', 'beam']);
+test('【不変条件】CL_KINDS の並びは 通り芯・中心線・補助線・梁芯・天井芯 で固定されている（既存4種別の順は不変・天井芯は末尾）', () => {
+  assert.deepEqual([...CL_KINDS], ['struct', 'center', 'aux', 'beam', 'ceiling']);
 });
 
 // 【不変条件】QA指摘m-2: error.js は無import（extractedModuleImportInvariant）のため
@@ -169,6 +198,12 @@ test('【不変条件】原始事実の表（VISIBLE_KINDS_BY_MODE・COEXISTENCE
   assert.ok(Object.isFrozen(CONVERT_SUBJECT_KINDS));
   assert.ok(Object.isFrozen(BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE));
   for (const v of Object.values(BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE)) assert.ok(Object.isFrozen(v));
+  assert.ok(Object.isFrozen(DISPLAY_ONLY_KINDS_BY_MODE));
+  for (const v of Object.values(DISPLAY_ONLY_KINDS_BY_MODE)) assert.ok(Object.isFrozen(v));
+  assert.ok(Object.isFrozen(SAME_DIRECTION_OBSTACLE_OVERRIDE));
+  for (const v of Object.values(SAME_DIRECTION_OBSTACLE_OVERRIDE)) assert.ok(Object.isFrozen(v));
+  assert.ok(Object.isFrozen(CEILING_CELL_DIVIDER_KINDS));
+  assert.ok(Object.isFrozen(CEILING_ONLY_KINDS));
 });
 
 test('OPENING_BOUNDARY_KINDS: 建具がまたげない境界種別は通り芯・中心線（補助線・梁芯はまたげる）', () => {
@@ -187,13 +222,20 @@ test('orthoAnchorKinds: center/aux は通り芯・中心線・補助線、beam �
   // （このテストが固定する orthoAnchorKinds('aux') の値と一致。移行前の挙動は下記セクションCの
   // 「m5」テストでピン留めしていたが、移行に伴い期待値を反転済み）。
   assert.deepEqual(orthoAnchorKinds('beam'), ['struct']);
+  // 天井芯（S8a）: 天伏で見える分割線（通り芯・中心線）と天井芯。補助線・梁芯は端部にしない（明示の特例）
+  assert.deepEqual(orthoAnchorKinds('ceiling'), ['struct', 'center', 'ceiling']);
 });
 
-test('sameDirectionObstacleKinds: struct→全4種、center/aux→通り芯・中心線・補助線、beam→通り芯・梁芯', () => {
+test('sameDirectionObstacleKinds: struct→通り芯・中心線・補助線・梁芯、center/aux→通り芯・中心線・補助線、beam→通り芯・梁芯、ceiling→通り芯・中心線・天井芯（特例）', () => {
   assert.deepEqual(sameDirectionObstacleKinds('struct'), ['struct', 'center', 'aux', 'beam']);
   assert.deepEqual(sameDirectionObstacleKinds('center'), ['struct', 'center', 'aux']);
   assert.deepEqual(sameDirectionObstacleKinds('aux'), ['struct', 'center', 'aux']);
   assert.deepEqual(sameDirectionObstacleKinds('beam'), ['struct', 'beam']);
+  // 天井芯の移動は分割線（通り芯・中心線）と他の天井芯を越えない。逆向き（平面で中心線を動かす）は天井芯を障害物にしない
+  assert.deepEqual(sameDirectionObstacleKinds('ceiling'), ['struct', 'center', 'ceiling']);
+  for (const k of ['struct', 'center', 'aux', 'beam']) {
+    assert.ok(!sameDirectionObstacleKinds(k).includes('ceiling'), `sameDirectionObstacleKinds(${k}) に ceiling が入ってはならない`);
+  }
 });
 
 // 「forbidden ペアは必ず sameDirectionObstacleKinds に含まれる」は、COEXISTENCE が双方向とも
@@ -221,30 +263,49 @@ test('moveSnapTargetKinds: struct/center/auxはいずれも通り芯・中心線
   assert.deepEqual(moveSnapTargetKinds('center'), ['struct', 'center', 'aux']);
   assert.deepEqual(moveSnapTargetKinds('aux'), ['struct', 'center', 'aux']);
   assert.deepEqual(moveSnapTargetKinds('beam'), ['struct', 'beam']);
+  // 天井芯（S8a）: 天伏で可視＝ヒット可能なのは天井芯だけなので、吸着先も天井芯だけ（通り芯・中心線へは吸着しない）
+  assert.deepEqual(moveSnapTargetKinds('ceiling'), ['ceiling']);
   // sameDirectionObstacleKinds（障害物集合）とは別の関係であることの確認: struct×beamは障害物集合では
   // 含まれるが吸着先集合では含まれない（findCLMoveSnapがmoving=structでも梁芯へ吸着しない現行仕様）。
   assert.ok(sameDirectionObstacleKinds('struct').includes('beam'));
   assert.ok(!moveSnapTargetKinds('struct').includes('beam'));
+  // 平面で中心線等を動かすとき天井芯は吸着先でもない
+  for (const k of ['struct', 'center', 'aux', 'beam']) {
+    assert.ok(!moveSnapTargetKinds(k).includes('ceiling'), `moveSnapTargetKinds(${k}) に ceiling が入ってはならない`);
+  }
 });
 
-// ceiling（天伏）を APP_MODES へ足した前後で導出表が変わらないことの固定（可視集合が finish と同一
-// なので和集合・ヒット可能モード集合とも結果は不変のはず）。期待値は変更前のリテラル。
-test('【不変条件】ceiling 追加前後で kindsVisibleWith・sameDirectionObstacleKinds・moveSnapTargetKinds・orthoAnchorKinds が全種別で不変', () => {
+// 天伏の可視を天井芯のみへ変え（S8a）、天井芯の種別を足した前後で、既存4種別の導出表が全モードで変わらないことの固定。
+// 期待値は変更前のリテラル（既存4行）と、新種別 ceiling の行。「既存4種別の導出に 'ceiling' が入らない」もここで固定する。
+test('【不変条件】天井芯の追加前後で kindsVisibleWith・sameDirectionObstacleKinds・moveSnapTargetKinds・orthoAnchorKinds が既存4種別で不変、ceiling の行は固定', () => {
   const expected = {
-    kindsVisibleWith:           { struct: ['struct', 'center', 'aux', 'beam'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct', 'beam'] },
-    sameDirectionObstacleKinds: { struct: ['struct', 'center', 'aux', 'beam'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct', 'beam'] },
-    moveSnapTargetKinds:        { struct: ['struct', 'center', 'aux'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct', 'beam'] },
-    orthoAnchorKinds:           { struct: ['struct', 'center', 'aux', 'beam'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct'] },
+    kindsVisibleWith:           { struct: ['struct', 'center', 'aux', 'beam'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct', 'beam'], ceiling: ['ceiling'] },
+    sameDirectionObstacleKinds: { struct: ['struct', 'center', 'aux', 'beam'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct', 'beam'], ceiling: ['struct', 'center', 'ceiling'] },
+    moveSnapTargetKinds:        { struct: ['struct', 'center', 'aux'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct', 'beam'], ceiling: ['ceiling'] },
+    orthoAnchorKinds:           { struct: ['struct', 'center', 'aux', 'beam'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct'], ceiling: ['struct', 'center', 'ceiling'] },
   };
   const fns = { kindsVisibleWith, sameDirectionObstacleKinds, moveSnapTargetKinds, orthoAnchorKinds };
   for (const [name, fn] of Object.entries(fns)) {
     for (const kind of CL_KINDS) assert.deepEqual(fn(kind), expected[name][kind], `${name}(${kind})`);
   }
+  // hitTestKinds も全モードで固定（天伏だけが変わる）
+  assert.deepEqual(
+    Object.fromEntries(APP_MODES.map(m => [m, hitTestKinds(m)])),
+    {
+      floorplan: ['struct', 'center', 'aux'], finish: ['struct', 'center', 'aux'], ceiling: ['ceiling'],
+      opening: ['struct', 'center', 'aux'], structure: ['beam'], site: [], elevation: [],
+    },
+  );
 });
 
-test('ceiling は finish と可視・ヒットとも同一（天伏は仕上げ表の編集モードで CL の扱いは仕上げと同じ）', () => {
-  assert.deepEqual([...kindsVisibleIn('ceiling')], [...kindsVisibleIn('finish')]);
-  assert.deepEqual(hitTestKinds('ceiling'), hitTestKinds('finish'));
+test('天伏（ceiling）は天井芯だけがヒット対象で、描画は天井芯＋通り芯・中心線・補助線（S8a。旧: 仕上げと同一）', () => {
+  assert.deepEqual([...kindsVisibleIn('ceiling')], ['ceiling']);
+  assert.deepEqual(hitTestKinds('ceiling'), ['ceiling']);
+  assert.deepEqual(kindsRenderedIn('ceiling'), ['struct', 'center', 'aux', 'ceiling']);
+  // 仕上げ（finish）は従来のまま通り芯・中心線・補助線（天伏の変更が仕上げへ漏れない）
+  assert.deepEqual([...kindsVisibleIn('finish')], ['struct', 'center', 'aux']);
+  assert.deepEqual(hitTestKinds('finish'), ['struct', 'center', 'aux']);
+  assert.deepEqual(kindsRenderedIn('finish'), ['struct', 'center', 'aux']);
 });
 
 test('coexistenceAt: 引数の向きで結果が変わる非対称セル（struct×centerはpromote、center×structはforbidden）', () => {
@@ -281,19 +342,21 @@ function makeDuckCL(kind, labeled, centerLineType) {
     case 'center': return { ...base, discipline: Discipline.ARCH,   lineType: 'center' };
     case 'aux':    return { ...base, discipline: Discipline.ARCH,   lineType: 'dashed' };
     case 'beam':   return { ...base, discipline: Discipline.FUSE,   lineType: 'center' };
+    case 'ceiling': return { ...base, discipline: Discipline.CEILING, lineType: 'center' };
     default: throw new Error(`未知のCL種別: ${kind}`);
   }
 }
 
-// isConvertSubject総当り: 4種別（kind）×labeled(2値)×centerLineType(3値)×direction(2値)=48通り。
+// isConvertSubject総当り: 5種別（kind）×labeled(2値)×centerLineType(3値)×direction(2値)=60通り。
 // 期待値はリテラルの表で固定する（isConvertSubject自身の式を再計算しない）。
 // [labeled:false, labeled:true] の順。centerLineType===RADIALは表を使わず常にfalse（除外）。
+// 天井芯は昇格・降格の主体にならない（CONVERT_SUBJECT_KINDS に入れない）。
 const ISCONVERT_SUBJECT_EXPECTED = {
-  promote: { struct: [false, false], center: [true, true], aux: [false, false], beam: [false, false] },
-  demote:  { struct: [false, true],  center: [false, false], aux: [false, false], beam: [false, false] },
+  promote: { struct: [false, false], center: [true, true], aux: [false, false], beam: [false, false], ceiling: [false, false] },
+  demote:  { struct: [false, true],  center: [false, false], aux: [false, false], beam: [false, false], ceiling: [false, false] },
 };
 
-test('isConvertSubject: 総当り（4種別×labeled2値×centerLineType3値×direction2値）', () => {
+test('isConvertSubject: 総当り（5種別×labeled2値×centerLineType3値×direction2値）', () => {
   for (const direction of ['promote', 'demote']) {
     for (const kind of CL_KINDS) {
       for (const [i, labeled] of [false, true].entries()) {
@@ -331,7 +394,7 @@ test('BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE: structureモードのみ梁芯を対象
   assert.deepEqual({ ...BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE }, { structure: ['beam'] });
 });
 
-test('usesBeamAxisMoveSnap: 総当り（4種別×全appMode。structureかつ梁芯のときのみtrue）', () => {
+test('usesBeamAxisMoveSnap: 総当り（5種別×全appMode。structureかつ梁芯のときのみtrue）', () => {
   for (const appMode of APP_MODES) {
     for (const kind of CL_KINDS) {
       const cl = makeDuckCL(kind, true, CenterLineType.VERTICAL);
@@ -346,10 +409,10 @@ test('【失敗系】usesBeamAxisMoveSnap: 未知のappModeはthrowする', () =
   assert.throws(() => usesBeamAxisMoveSnap(cl, 'unknown'), /未知のappMode: unknown/);
 });
 
-test('hitTestKinds: floorplan/finish/opening=通り芯・中心線・補助線、structure=梁芯のみ', () => {
+test('hitTestKinds: floorplan/finish/opening=通り芯・中心線・補助線、ceiling=天井芯のみ、structure=梁芯のみ', () => {
   assert.deepEqual(hitTestKinds('floorplan'), ['struct', 'center', 'aux']);
   assert.deepEqual(hitTestKinds('finish'), ['struct', 'center', 'aux']);
-  assert.deepEqual(hitTestKinds('ceiling'), ['struct', 'center', 'aux']);
+  assert.deepEqual(hitTestKinds('ceiling'), ['ceiling']);
   assert.deepEqual(hitTestKinds('opening'), ['struct', 'center', 'aux']);
   assert.deepEqual(hitTestKinds('structure'), ['beam']);
   // site/elevation は可視モード表が空集合のため hitTestKinds も空になる。snap.js
@@ -363,25 +426,26 @@ test('hitTestKinds: floorplan/finish/opening=通り芯・中心線・補助線�
 });
 
 test('allowsWallAnchor / extentAnchorStyle / hasEndpointRule / spansEntireAxis / isOpeningBoundaryKind', () => {
-  assert.deepEqual(CL_KINDS.map(allowsWallAnchor), [false, false, true, false]); // struct,center,aux,beam
-  assert.deepEqual(CL_KINDS.map(extentAnchorStyle), ['none', 'ref', 'overhang', 'ref']);
-  assert.deepEqual(CL_KINDS.map(hasEndpointRule), [false, true, false, true]);
-  assert.deepEqual(CL_KINDS.map(spansEntireAxis), [true, false, false, false]);
-  assert.deepEqual(CL_KINDS.map(isOpeningBoundaryKind), [true, true, false, false]);
+  // struct,center,aux,beam,ceiling
+  assert.deepEqual(CL_KINDS.map(allowsWallAnchor), [false, false, true, false, false]);
+  assert.deepEqual(CL_KINDS.map(extentAnchorStyle), ['none', 'ref', 'overhang', 'ref', 'ref']);
+  assert.deepEqual(CL_KINDS.map(hasEndpointRule), [false, true, false, true, true]);
+  assert.deepEqual(CL_KINDS.map(spansEntireAxis), [true, false, false, false, false]);
+  assert.deepEqual(CL_KINDS.map(isOpeningBoundaryKind), [true, true, false, false, false]);
 });
 
-test('ENDPOINT_EXTENDABLE_KINDS / allowsExtendFromEndpoint: 端点からの延長は中心線のみ（梁芯・補助線・通り芯は不可）', () => {
-  assert.deepEqual([...ENDPOINT_EXTENDABLE_KINDS], ['center']);
+test('ENDPOINT_EXTENDABLE_KINDS / allowsExtendFromEndpoint: 端点からの延長は中心線・天井芯のみ（梁芯・補助線・通り芯は不可）', () => {
+  assert.deepEqual([...ENDPOINT_EXTENDABLE_KINDS], ['center', 'ceiling']);
   assert.ok(Object.isFrozen(ENDPOINT_EXTENDABLE_KINDS));
-  assert.deepEqual(CL_KINDS.map(allowsExtendFromEndpoint), [false, true, false, false]); // struct,center,aux,beam
+  assert.deepEqual(CL_KINDS.map(allowsExtendFromEndpoint), [false, true, false, false, true]); // struct,center,aux,beam,ceiling
   for (const k of ENDPOINT_EXTENDABLE_KINDS) assert.ok(hasEndpointRule(k), '延長を許す種別は端点ルールの対象の部分集合');
   assert.throws(() => allowsExtendFromEndpoint('wood'), /未知のCL種別: wood/);
 });
 
-test('EXTEND_OVERLAP_FORBIDDEN_KINDS / forbidsExtendOverSameAxisPiece: 延長の重なり禁止は中心線のみ（梁芯・補助線・通り芯は対象外）', () => {
-  assert.deepEqual([...EXTEND_OVERLAP_FORBIDDEN_KINDS], ['center']);
+test('EXTEND_OVERLAP_FORBIDDEN_KINDS / forbidsExtendOverSameAxisPiece: 延長の重なり禁止は中心線・天井芯のみ（梁芯・補助線・通り芯は対象外）', () => {
+  assert.deepEqual([...EXTEND_OVERLAP_FORBIDDEN_KINDS], ['center', 'ceiling']);
   assert.ok(Object.isFrozen(EXTEND_OVERLAP_FORBIDDEN_KINDS));
-  assert.deepEqual(CL_KINDS.map(forbidsExtendOverSameAxisPiece), [false, true, false, false]); // struct,center,aux,beam
+  assert.deepEqual(CL_KINDS.map(forbidsExtendOverSameAxisPiece), [false, true, false, false, true]); // struct,center,aux,beam,ceiling
   assert.throws(() => forbidsExtendOverSameAxisPiece('wood'), /未知のCL種別: wood/);
 });
 
@@ -587,6 +651,53 @@ test('sameCoordCounterparts: value・centerLineTypeが一致するCLを種別を
   assert.equal(sameCoordCounterparts(graph, { centerLineType: CenterLineType.VERTICAL, value: 1000, tolMm: 0.3 }).some(c => c.id === tolBoundary.id), false, 'tolMmを狭めれば境界外になる');
 });
 
+test('sameCoordCounterparts: 天井芯（天伏専用）は既定で相手に含めない。includeCeilingOnly:true のときだけ含める（S8a）', () => {
+  const { graph } = makeProjectWithGraph();
+  const center  = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const ceiling = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING });
+  assert.equal(centerLineKind(ceiling), 'ceiling', '前提: discipline=CEILINGは天井芯種別');
+
+  const base = { centerLineType: CenterLineType.VERTICAL, value: 1000 };
+  assert.deepEqual(sameCoordCounterparts(graph, base).map(c => c.id), [center.id], '既定では天井芯を除く（同座標の中心線だけ）');
+  assert.deepEqual(sameCoordCounterparts(graph, { ...base, includeCeilingOnly: false }).map(c => c.id), [center.id]);
+  assert.deepEqual(
+    sameCoordCounterparts(graph, { ...base, includeCeilingOnly: true }).map(c => c.id).sort(),
+    [center.id, ceiling.id].sort(), 'includeCeilingOnly:true なら天井芯も含む',
+  );
+  // 座標が合わなければ天井芯があっても空
+  assert.deepEqual(sameCoordCounterparts(graph, { ...base, value: 2000, includeCeilingOnly: true }), []);
+});
+
+test('isCeilingCellDivider / isCeilingOnlyKind: 天井セルの分割線は仕上げの分割線 ∪ 天井芯（補助線・梁芯は分割線にならない）。天井芯は仕上げの分割線にならない（S8a）', () => {
+  assert.deepEqual([...CEILING_CELL_DIVIDER_KINDS], ['center', 'ceiling']);
+  assert.deepEqual([...CEILING_ONLY_KINDS], ['ceiling']);
+  const { graph, project } = makeProjectWithGraph();
+  let v = 1000;
+  for (const kind of CL_KINDS) {
+    for (const labeled of [true, false]) {
+      const cl = kind === 'struct'
+        ? project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, { labeled, discipline: Discipline.STRUCT })
+        : graph.addCenterLine(CenterLineType.VERTICAL, v, {
+          labeled, discipline: disciplineOfKind(kind), lineType: kind === 'aux' ? 'dashed' : 'center',
+        });
+      v += 1000;
+      const finish = kind === 'struct' ? labeled : kind === 'center';
+      const ceilingDiv = finish || kind === 'ceiling';
+      assert.equal(isFinishCellDivider(cl), finish, `isFinishCellDivider kind=${kind} labeled=${labeled}`);
+      assert.equal(isCeilingCellDivider(cl), ceilingDiv, `isCeilingCellDivider kind=${kind} labeled=${labeled}`);
+      assert.equal(isCeilingOnlyKind(cl), kind === 'ceiling', `isCeilingOnlyKind kind=${kind}`);
+      // 包含関係: 仕上げの分割線は必ず天井の分割線（上位集合）
+      if (isFinishCellDivider(cl)) assert.ok(isCeilingCellDivider(cl), `finish ⊆ ceiling 違反 kind=${kind}`);
+    }
+  }
+});
+
+test('【失敗系】isCeilingCellDivider / isCeilingOnlyKind: discipline/lineTypeを持たない仮想候補は黙って中心線扱い（天井の分割線になるが天伏専用ではない）', () => {
+  const virtual = { labeled: false };
+  assert.equal(isCeilingCellDivider(virtual), true);
+  assert.equal(isCeilingOnlyKind(virtual), false);
+});
+
 // QA指摘（ステップ7再QA・Minor E）: 許容誤差が「開区間」（`<`であって`<=`ではない）であることを
 // 直接固定するテストが無かった（`<`→`<=`の変異がフルsuiteで緑になっていた）。
 // 浮動小数の丸め誤差で不安定にならないよう、CL位置は0・照合値はCL_OVERLAP_TOL_MM自体（=0.5、2進で
@@ -670,7 +781,7 @@ test('【失敗系】gridCenterLinesOnAxis: centerLineTypeが未指定/nullはth
 const VISIBLE_KINDS_LITERAL = {
   floorplan: ['struct', 'center', 'aux'],
   finish:    ['struct', 'center', 'aux'],
-  ceiling:   ['struct', 'center', 'aux'],
+  ceiling:   ['ceiling'],
   opening:   ['struct', 'center', 'aux'],
   structure: ['struct', 'beam'],
   site:      [],
@@ -753,13 +864,33 @@ test('isMergeCandidate: 肯定側（補助線×補助線=true、補助線×中�
   assert.equal(isMergeCandidate(auxA, auxLabeledLegacy), false, '相手がlabeled:trueならfalse');
 });
 
-test('isRenderTarget / isHitTestTarget: 4種別×6appModeの全組み合わせが VISIBLE_KINDS_BY_MODE / hitTestKinds の予測と一致する', () => {
+test('isRenderTarget / isHitTestTarget: 5種別×7appModeの全組み合わせが kindsRenderedIn（可視表 ∪ 描くだけ表）/ hitTestKinds の予測と一致する', () => {
   const { project, graph } = makeProjectWithGraph();
   for (const kind of CL_KINDS) {
     const cl = addCLOfKind(graph, project, CenterLineType.VERTICAL, (CL_KINDS.indexOf(kind) + 1) * 1000, kind);
     for (const mode of APP_MODES) {
-      assert.equal(isRenderTarget(cl, mode), VISIBLE_KINDS_BY_MODE[mode].includes(kind), `isRenderTarget ${kind}×${mode}`);
+      const rendered = new Set([...VISIBLE_KINDS_BY_MODE[mode], ...(DISPLAY_ONLY_KINDS_BY_MODE[mode] ?? [])]);
+      assert.equal(isRenderTarget(cl, mode), rendered.has(kind), `isRenderTarget ${kind}×${mode}`);
+      assert.equal(isRenderTarget(cl, mode), kindsRenderedIn(mode).includes(kind), `isRenderTarget≡kindsRenderedIn ${kind}×${mode}`);
       assert.equal(isHitTestTarget(cl, mode), hitTestKinds(mode).includes(kind), `isHitTestTarget ${kind}×${mode}`);
+    }
+  }
+});
+
+test('天伏: 描くだけの通り芯・中心線・補助線は描画対象だがヒット対象ではない。天井芯は両方（S8a）', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const expectRender = { struct: true, center: true, aux: true, beam: false, ceiling: true };
+  const expectHit    = { struct: false, center: false, aux: false, beam: false, ceiling: true };
+  for (const kind of CL_KINDS) {
+    const cl = addCLOfKind(graph, project, CenterLineType.VERTICAL, (CL_KINDS.indexOf(kind) + 1) * 1000, kind);
+    assert.equal(isRenderTarget(cl, 'ceiling'), expectRender[kind], `render ${kind}`);
+    assert.equal(isHitTestTarget(cl, 'ceiling'), expectHit[kind], `hit ${kind}`);
+    // 天井芯は天伏以外のどのモードでも描かない・ヒットしない（他モードに漏らさない）
+    if (kind === 'ceiling') {
+      for (const mode of APP_MODES.filter(m => m !== 'ceiling')) {
+        assert.equal(isRenderTarget(cl, mode), false, `天井芯が ${mode} で描画対象になっている`);
+        assert.equal(isHitTestTarget(cl, mode), false, `天井芯が ${mode} でヒット対象になっている`);
+      }
     }
   }
 });
@@ -795,7 +926,7 @@ test('FINISH_CELL_DIVIDER_KINDS: セル分割線になる種別（通り芯側�
   assert.deepEqual([...FINISH_CELL_DIVIDER_KINDS], ['center']);
 });
 
-test('isFinishCellDivider: 4種別×labeled2値の総当り（通り芯=labeled必須、中心線=labeledの値を問わず常にtrue、補助線・梁芯=常にfalse）', () => {
+test('isFinishCellDivider: 5種別×labeled2値の総当り（通り芯=labeled必須、中心線=labeledの値を問わず常にtrue、補助線・梁芯・天井芯=常にfalse）', () => {
   const { graph, project } = makeProjectWithGraph();
   let v = 1000;
   for (const kind of CL_KINDS) {
@@ -804,7 +935,7 @@ test('isFinishCellDivider: 4種別×labeled2値の総当り（通り芯=labeled�
         ? project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, { labeled, discipline: Discipline.STRUCT })
         : graph.addCenterLine(CenterLineType.VERTICAL, v, {
           labeled,
-          discipline: kind === 'beam' ? Discipline.FUSE : Discipline.ARCH,
+          discipline: disciplineOfKind(kind),
           lineType: kind === 'aux' ? 'dashed' : 'center',
         });
       v += 1000;
@@ -838,7 +969,7 @@ test('UNDER_STAIR_SPLIT_KINDS: 階段下分割CLとして認める種別は中�
   assert.deepEqual([...UNDER_STAIR_SPLIT_KINDS], ['center']);
 });
 
-test('isUnderStairSplitKind: 4種別×labeled2値の総当り（中心線のみtrue。labeledの値を問わない）', () => {
+test('isUnderStairSplitKind: 5種別×labeled2値の総当り（中心線のみtrue。labeledの値を問わない。天井芯はfalse）', () => {
   const { graph, project } = makeProjectWithGraph();
   let v = 1000;
   for (const kind of CL_KINDS) {
@@ -847,7 +978,7 @@ test('isUnderStairSplitKind: 4種別×labeled2値の総当り（中心線のみt
         ? project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, { labeled, discipline: Discipline.STRUCT })
         : graph.addCenterLine(CenterLineType.VERTICAL, v, {
           labeled,
-          discipline: kind === 'beam' ? Discipline.FUSE : Discipline.ARCH,
+          discipline: disciplineOfKind(kind),
           lineType: kind === 'aux' ? 'dashed' : 'center',
         });
       v += 1000;
@@ -857,7 +988,7 @@ test('isUnderStairSplitKind: 4種別×labeled2値の総当り（中心線のみt
 });
 
 // ---- axisLineKindOf: finish/edgeClassify.js classifyAxisLineType の判定本体 ----
-test('axisLineKindOf: 4種別×labeled2値の総当り（struct=labeled必須でgrid、aux=常にaux、center/beam=常にcenter）', () => {
+test('axisLineKindOf: 5種別×labeled2値の総当り（struct=labeled必須でgrid、aux=常にaux、center/beam/ceiling=常にcenter）', () => {
   const { graph, project } = makeProjectWithGraph();
   let v = 1000;
   for (const kind of CL_KINDS) {
@@ -866,7 +997,7 @@ test('axisLineKindOf: 4種別×labeled2値の総当り（struct=labeled必須で
         ? project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, { labeled, discipline: Discipline.STRUCT })
         : graph.addCenterLine(CenterLineType.VERTICAL, v, {
           labeled,
-          discipline: kind === 'beam' ? Discipline.FUSE : Discipline.ARCH,
+          discipline: disciplineOfKind(kind),
           lineType: kind === 'aux' ? 'dashed' : 'center',
         });
       v += 1000;
@@ -1149,7 +1280,7 @@ test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexiste
   function placeExisting(graph, project, kind, extentLo, extentHi) {
     if (kind === 'struct') return project.structGraph.addCenterLine(clType, value, { labeled: true, discipline: Discipline.STRUCT });
     if (kind === 'aux') return graph.addCenterLine(clType, value, { labeled: false, lineType: 'dashed', extentLo, extentHi });
-    const discipline = kind === 'beam' ? Discipline.FUSE : Discipline.ARCH;
+    const discipline = disciplineOfKind(kind);
     return graph.addCenterLine(clType, value, { labeled: false, discipline, extentLo, extentHi });
   }
   function makeBracketedFixture() {
@@ -1159,7 +1290,9 @@ test('COEXISTENCE: 製品コード addCenterLineFromDialog の帰結が coexiste
     return { project, graph };
   }
 
-  for (const newKind of CL_KINDS) {
+  // newKind は追加ダイアログで扱える4種別（天井芯の追加は S8b）、既存側は天井芯を含む全5種別
+  // （既存の天井芯との共存は 'allowed'——単体追加が天井芯も相手に含める includeCeilingOnly 経路を通す）。
+  for (const newKind of DIALOG_ADDABLE_KINDS) {
     for (const existingKind of CL_KINDS) {
       const outcome = coexistenceAt(newKind, existingKind);
       const label = `${newKind}→${existingKind}(${outcome})`;
@@ -1476,6 +1609,7 @@ function addCLOfKindLabeled(graph, project, clType, value, kind, labeled) {
     case 'center': return graph.addCenterLine(clType, value, { labeled, discipline: Discipline.ARCH });
     case 'aux':    return graph.addCenterLine(clType, value, { labeled, lineType: 'dashed' });
     case 'beam':   return graph.addCenterLine(clType, value, { labeled, discipline: Discipline.FUSE });
+    case 'ceiling': return graph.addCenterLine(clType, value, { labeled, discipline: Discipline.CEILING });
     default: throw new Error(`未知のCL種別: ${kind}`);
   }
 }
@@ -1489,11 +1623,11 @@ test('structuralAnchorKinds: primary=[struct,beam]、secondary=[center]、any=[s
   assert.deepEqual([...SUPPORT_SPAN_COLUMN_KINDS], ['struct', 'center']);
 });
 
-test('isStructuralAnchor: 4種別×labeled2値×tier3段の総当り（labeledの値は結果を左右しない——通り芯側もlabeled不問）', () => {
+test('isStructuralAnchor: 5種別×labeled2値×tier3段の総当り（labeledの値は結果を左右しない——通り芯側もlabeled不問。天井芯はどのtierにも入らない）', () => {
   const EXPECTED = {
-    primary:   { struct: true,  center: false, aux: false, beam: true },
-    secondary: { struct: false, center: true,  aux: false, beam: false },
-    any:       { struct: true,  center: true,  aux: false, beam: true },
+    primary:   { struct: true,  center: false, aux: false, beam: true,  ceiling: false },
+    secondary: { struct: false, center: true,  aux: false, beam: false, ceiling: false },
+    any:       { struct: true,  center: true,  aux: false, beam: true,  ceiling: false },
   };
   for (const tier of ['primary', 'secondary', 'any']) {
     for (const kind of CL_KINDS) {
@@ -1658,6 +1792,7 @@ test('structuralSyncScopeOfKind: struct→"all"（FLOOR_SHARED_KINDS＝全階共
   assert.equal(structuralSyncScopeOfKind('center'), 'activeAndAbove');
   assert.equal(structuralSyncScopeOfKind('aux'), null, '補助線は直接には構造を起動しない（中心線のextent参照経由の間接効果のみ。段階(d)で別途対応）');
   assert.equal(structuralSyncScopeOfKind('beam'), null, '梁芯は専用経路（wallBeamAxes.js）を持つため対象外（条件10）');
+  assert.equal(structuralSyncScopeOfKind('ceiling'), null, '天井芯は天伏だけの線で構造を起動しない（S8a）');
 });
 
 test('FLOOR_SHARED_KINDS は struct のみ（通り芯だけが project.structGraph に置かれ全階共有される）', () => {

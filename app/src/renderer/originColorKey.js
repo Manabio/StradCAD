@@ -21,13 +21,14 @@ import { LodLevel } from '../viewport.js';
  *   'struct' → 'grid'（通り芯由来）
  *   'center' → 'center'（中心線由来）
  *   'aux'    → 'aux'（補助・手動）
+ *   'ceiling' → 'ceiling'（天井芯。天伏だけの分割線。S8a）
  *   'beam'   → cl.beamAxisOrigin（ステップ2で新設した由来フィールド）で分岐する:
  *              wall/floorBeam/roofBeam/opening（壁・床梁割付け・小屋梁割付け・床開口からの自動生成）→ 'generated'
  *              center（中心線由来。S造向け・未実装。色キーのみ予約）→ 'center'
  *              user（AddCLDialogから追加）→ 'aux'
  *              null（既存データ・不明）→ 'none'
  * @param {import('../core/centerLine.js').CenterLine} cl
- * @returns {'grid'|'center'|'aux'|'generated'|'none'}
+ * @returns {'grid'|'center'|'aux'|'ceiling'|'generated'|'none'}
  */
 export function centerLineOriginColorKey(cl) {
   const kind = centerLineKind(cl);
@@ -43,7 +44,7 @@ export function centerLineOriginColorKey(cl) {
       default:                        return 'none';
     }
   }
-  return kind; // 'center' | 'aux'
+  return kind; // 'center' | 'aux' | 'ceiling'
 }
 
 /**

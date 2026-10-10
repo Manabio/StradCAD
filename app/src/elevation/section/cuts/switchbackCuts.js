@@ -29,6 +29,7 @@ import { localXOf as localXOfFace } from '../../elevationFigure.js';
 import { resolveUTurnSectionParams } from '../../elevationStairSection.js';
 import { stairContribution } from '../sectionStair.js';
 import { graphList } from '../../../graphReadScope.js';
+import { isCeilingOnlyKind } from '../../../core/centerLineKindPolicy.js';
 import { makeProbeContext } from '../sectionProbe.js';
 import { isWallHiddenForBand } from '../sectionHits.js';
 
@@ -369,7 +370,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const midAcross = acrossCoordAt(0.5);
   const midCLType = wOut1.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
   const midCL = wall?.axisCL ?? (graphList(graph, 'centerLines') ?? []).find(cl =>
-    cl.centerLineType === midCLType && Math.abs(cl.effectiveValue - midAcross) <= MID_WALL_TOL_MM) ?? null;
+    cl.centerLineType === midCLType && !isCeilingOnlyKind(cl) && Math.abs(cl.effectiveValue - midAcross) <= MID_WALL_TOL_MM) ?? null;
   const kneeDrop = wall ? kneeDropRecordFor(wall, wallGraph) : null;
 
   const ceilTopAbs = opts.chUpperAbsMm;

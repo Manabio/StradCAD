@@ -122,6 +122,61 @@ test('mergeCenterLineChain: 仮想候補（discipline/lineType無し）でもkin
   assert.equal(graph.shapeMap.has(wrongNeighborCenter.id), true, 'center種別の候補は結合されず残ったまま');
 });
 
+// ---- 天井芯（S8a）の端部参照は中心線の結合を止めず、残るピースへ付け替わる（裁定 2026-10-10） ----
+function makeMergeFixture() {
+  const graph = makeGraph();
+  const survivor = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: 0, extentHi: 1000,
+  });
+  const loser = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, {
+    labeled: false, discipline: Discipline.ARCH, extentLo: 1000, extentHi: 2000,
+  });
+  // 天井芯（縦）が loser を下端の直交アンカーとして参照している
+  const ceiling = graph.addCenterLine(CenterLineType.VERTICAL, 500, {
+    labeled: false, discipline: Discipline.CEILING, extentLoRef: { clId: loser.id, offset: 0 }, extentHi: 3000,
+  });
+  return { graph, survivor, loser, ceiling };
+}
+
+test('天井芯が参照するピースを結合: merged=true・天井芯の extentRef は残るピースの id・座標は不変。undo/redo で参照が戻る/移る', () => {
+  const { graph, survivor, loser, ceiling } = makeMergeFixture();
+  assert.equal(ceiling.extentLo, 1000, '前提: 天井芯の下端は loser の value');
+  const result = mergeCenterLineChain(graph, survivor, { kind: 'center' });
+  assert.equal(result.merged, true, '天井芯の参照では結合は止まらない');
+  assert.equal(graph.shapeMap.has(loser.id), false);
+  assert.equal(ceiling.extentLoRef.clId, survivor.id);
+  assert.equal(ceiling.extentLoRef.offset, 0);
+  assert.equal(ceiling.extentLo, 1000, '座標は不変');
+  assert.deepEqual(graph.referencingCenterLines(survivor.id).map(c => c.id), [ceiling.id]);
+
+  result.undo();
+  assert.equal(graph.shapeMap.has(loser.id), true);
+  assert.equal(ceiling.extentLoRef.clId, loser.id, 'undo で参照が戻る');
+  assert.equal(ceiling.extentLo, 1000);
+  result.redo();
+  assert.equal(graph.shapeMap.has(loser.id), false);
+  assert.equal(ceiling.extentLoRef.clId, survivor.id, 'redo で再び付け替わる');
+  assert.equal(ceiling.extentLo, 1000);
+});
+
+test('【失敗系】天井芯以外の CL（中心線）が loser を extentRef で参照していれば従来どおり結合は止まる。hasExternalCenterLineReferences の除外は天井芯だけ', () => {
+  const { graph, survivor, loser, ceiling } = makeMergeFixture();
+  graph.removeCenterLine(ceiling.id);
+  const centerRef = graph.addCenterLine(CenterLineType.VERTICAL, 700, {
+    labeled: false, discipline: Discipline.ARCH, extentLoRef: { clId: loser.id, offset: 0 }, extentHi: 3000,
+  });
+  assert.equal(graph.hasExternalCenterLineReferences(loser.id, { ignoreCeilingOnly: true }), true);
+  assert.equal(mergeCenterLineChain(graph, survivor, { kind: 'center' }).merged, false);
+  assert.equal(graph.shapeMap.has(loser.id), true);
+  assert.equal(centerRef.extentLoRef.clId, loser.id);
+});
+
+test('hasExternalCenterLineReferences: 既定は天井芯の参照も数え、ignoreCeilingOnly:true のときだけ数えない', () => {
+  const { graph, loser } = makeMergeFixture();
+  assert.equal(graph.hasExternalCenterLineReferences(loser.id), true);
+  assert.equal(graph.hasExternalCenterLineReferences(loser.id, { ignoreCeilingOnly: true }), false);
+});
+
 // ---- getCenterLineSegment / segmentsCollinearTouching（純ジオメトリ関数）の直接テスト ----
 
 test('getCenterLineSegment: RADIAL・extent未確定・ゼロ長はnull', () => {

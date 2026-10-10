@@ -27,7 +27,9 @@ import {
   promoteCenterToGridWithUndo, demoteGridToCenterWithUndo, setCenterLineStructuralListener,
   applyCLEccentricityWithUndo, whenCenterLineOpsIdle, bakeCLValue, isCenterLineStillDeletable,
 } from './centerLineOps.js';
-import { CL_KINDS, coexistenceAt } from '../core/centerLineKindPolicy.js';
+import {
+  CL_KINDS, coexistenceAt, sameDirectionObstacles, isMoveSnapTarget, sameDirectionObstacleKinds, moveSnapTargetKinds,
+} from '../core/centerLineKindPolicy.js';
 import { BeamAxisOrigin, CenterLine } from '../core/centerLine.js';
 import { regenerateWalls, loadMaterialMap } from '../finish/wallRegeneration.js';
 import { wallFreshnessKey } from '../finish/wallFreshnessKey.js';
@@ -4503,6 +4505,48 @@ test('【失敗系】addCenterLineFromDialog: スパン配列バッチモード�
   assert.deepEqual(result.suggestWood.newValues, [5000], '1000.4は既存1000の重複としてtolMm境界内で除外される');
 });
 
+// ---- 天井芯（S8a）: 天伏だけの線。他モード（平面）の追加・移動に影響しない ----
+test('天井芯: スパン配列の通り芯追加は同座標の天井芯を「既存」として飛ばさない（sameCoordCounterparts の既定は天井芯を除く）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING });
+  const result = await addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical' }, value: [1000, 2000], kind: 'struct', refId: null, refOffset: 0 },
+    null,
+  );
+  assert.equal(result.done, true);
+  assert.deepEqual(result.suggestWood.newValues, [1000, 2000], '天井芯と同座標の1000も通り芯として追加される');
+  const values = project.structGraph.centerLines.filter(c => c.centerLineType === CenterLineType.VERTICAL).map(c => c.value).sort((a, b) => a - b);
+  assert.deepEqual(values, [1000, 2000]);
+});
+
+test('天井芯: 単体追加は同座標の天井芯を相手に含める（共存は allowed のため追加は通り、天井芯は残る）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const ceiling = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.CEILING });
+  const result = await addCenterLineFromDialog(
+    graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 0 }, value: 1000, kind: 'aux', refId: null, refOffset: 0 },
+    { scaleDenominator: 100 },
+  );
+  assert.equal(result.done, true);
+  assert.ok(graph.shapeMap.has(ceiling.id), '天井芯は残る');
+  assert.equal(graph.centerLines.filter(c => centerLineKind(c) === 'aux').length, 1);
+});
+
+test('天井芯: 平面で中心線を動かすとき天井芯は障害物でも吸着先でもない（逆向きは受容）', () => {
+  const { graph } = makeProjectWithGraph();
+  const subject = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const ceiling = graph.addCenterLine(CenterLineType.VERTICAL, 500, { labeled: false, discipline: Discipline.CEILING });
+  const center = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+  assert.deepEqual(sameDirectionObstacles(graph, subject).map(c => c.id), [center.id], '障害物は中心線だけ（天井芯を越えて動ける）');
+  assert.equal(isMoveSnapTarget(subject, ceiling), false);
+  assert.equal(isMoveSnapTarget(subject, center), true);
+  assert.ok(!sameDirectionObstacleKinds('center').includes('ceiling'));
+  assert.ok(!moveSnapTargetKinds('center').includes('ceiling'));
+  // 逆に天井芯の移動は分割線（中心線）を越えない
+  assert.deepEqual(sameDirectionObstacles(graph, ceiling).map(c => c.id).sort(), [subject.id, center.id].sort());
+});
+
 test('addCenterLineFromDialog: 通り芯を既存通り芯と同座標に追加しようとするとdone:falseでERR_CL_DUPLICATE、undoは積まれない', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
@@ -5353,8 +5397,11 @@ test('【失敗系】addCenterLineFromDialog: 補助線の追加extentは直交C
 // （centerLineOps.js）もCL_KINDSをそのまま使うため、importして使うと期待値・実測値の両方が
 // 同じ壊れたCL_KINDSを経由してしまい、CL_KINDS自体の並びが壊れる変異を検出できない
 // （QA指摘M-1・QAのcombi.mjsと同じ方針。下のassertで現在値と一致することは別途確認する）。
-test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合の重複判定を総当りで照合する（新規4種別×既存部分集合16通り×extent2通り=128ケース、QA指摘M-1）', async () => {
-  const KINDS = ['struct', 'center', 'aux', 'beam'];
+test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合の重複判定を総当りで照合する（新規4種別×既存部分集合32通り〔天井芯を含む5種別〕×extent2通り=256ケース、QA指摘M-1・S8a）', async () => {
+  const KINDS = ['struct', 'center', 'aux', 'beam', 'ceiling'];
+  // 追加ダイアログが新規として扱える種別（天井芯の追加は S8b）。既存側には天井芯も置く
+  // （単体追加が天井芯も相手に含める includeCeilingOnly 経路。共存は 'allowed' で、天井芯は何も邪魔しない）。
+  const NEW_KINDS = KINDS.filter(k => k !== 'ceiling');
   assert.deepEqual(KINDS, [...CL_KINDS], '前提: ハードコードした優先順はCL_KINDSの現在値と一致する（CL_KINDS自体が壊れたらこのassertで検出する）');
   const VALUE = 1000;
   const clType = CenterLineType.VERTICAL;
@@ -5395,13 +5442,14 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
       case 'center': return graph.addCenterLine(clType, VALUE, { labeled: false, discipline: Discipline.ARCH, ...e });
       case 'aux':    return graph.addCenterLine(clType, VALUE, { labeled: false, lineType: 'dashed', ...e });
       case 'beam':   return graph.addCenterLine(clType, VALUE, { labeled: false, discipline: Discipline.FUSE, ...e });
+      case 'ceiling': return graph.addCenterLine(clType, VALUE, { labeled: false, discipline: Discipline.CEILING, ...e });
       default: throw new Error(`未知のCL種別: ${kind}`);
     }
   }
 
   let caseCount = 0;
-  for (const newKind of KINDS) {
-    for (let mask = 0; mask < 16; mask++) {
+  for (const newKind of NEW_KINDS) {
+    for (let mask = 0; mask < 32; mask++) {
       const present = KINDS.filter((_, i) => mask & (1 << i));
       for (const ext of [false, true]) {
         caseCount++;
@@ -5476,7 +5524,7 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
       }
     }
   }
-  assert.equal(caseCount, 128, '4種別×16マスク×2extent=128ケースを網羅する');
+  assert.equal(caseCount, 256, '新規4種別×32マスク×2extent=256ケースを網羅する');
 });
 
 // ---- promoteCenterToGridWithUndo / demoteGridToCenterWithUndo ----

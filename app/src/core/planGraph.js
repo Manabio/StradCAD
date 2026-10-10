@@ -23,6 +23,7 @@ import {
 } from './clQuery.js';
 import { chamferWalls as _chamferWalls, trimIntersectingWalls as _trimIntersectingWalls } from './wallChamfer.js';
 import { resolveCLById, resolveWallById, resolveExtentRef, resolveNewCenterLineRefs } from './clRefResolve.js';
+import { isCeilingOnlyKind } from './centerLineKindPolicy.js';
 import {
   ShapeType, ShapeKind, CenterLineType,
   DEFAULT_EXTERIOR_WALL_BACKING,
@@ -869,28 +870,32 @@ export class PlanGraph {
   // （_reparentChildCenterLinesで繰り上がるため安全）が、structural/wallBeamAxes.js
   // orphanedWallBeamAxes（明示的な中心線削除に限る壁由来梁芯の道連れ削除）は繰り上げの有無に
   // かかわらず「他から参照されている構造」を道連れにしない側へ倒すため既定(true)のまま使う。
-  isReferencedByOtherCL(id, { includeRefId = true } = {}) {
-    return this.referencingCenterLines(id, { includeRefId }).length > 0;
+  isReferencedByOtherCL(id, { includeRefId = true, includeCeilingOnly = true } = {}) {
+    return this.referencingCenterLines(id, { includeRefId, includeCeilingOnly }).length > 0;
   }
 
   // id の CenterLine をextentLoRef/extentHiRef・refIdで参照している他のCenterLineの一覧
   // （段階(d)・2026-09-25。core/centerLineKindPolicy.jsのstructuralSyncScopeForCenterLineが
   // 「参照元の種別のscopeを合成する」ために使う）。isReferencedByOtherCLはこれの真偽値版。
-  referencingCenterLines(id, { includeRefId = true } = {}) {
+  // includeCeilingOnly: false にすると天伏専用の天井芯（平面で見えない線）からの参照を数えない。
+  referencingCenterLines(id, { includeRefId = true, includeCeilingOnly = true } = {}) {
     return this.centerLines.filter(other =>
       other.id !== id &&
+      (includeCeilingOnly || !isCeilingOnlyKind(other)) &&
       (other.extentLoRef?.clId === id || other.extentHiRef?.clId === id || (includeRefId && other.refId === id))
     );
   }
 
   // id の CenterLine を削除すると壊れる外部参照があるか（結合による削除の安全ガード用）
   // refId 単体の参照は _reparentChildCenterLines で繰り上がるため対象外。
-  hasExternalCenterLineReferences(id) {
+  // ignoreCeilingOnly: true なら天井芯からの extent 参照を数えない（中心線の結合が天井芯に止められないように。
+  // 結合側が天井芯の参照を残るピースへ付け替える。transform/centerLineMerge.js）。
+  hasExternalCenterLineReferences(id, { ignoreCeilingOnly = false } = {}) {
     const refs = this._structuralRefsToCL(id);
     const usesStruct = refs.shapes.length > 0 || refs.columns.length > 0 || refs.beams.length > 0
       || refs.walls.length > 0 || refs.footings.length > 0 || refs.sleeves.length > 0;
     if (usesStruct) return true;
-    return this.isReferencedByOtherCL(id, { includeRefId: false });
+    return this.isReferencedByOtherCL(id, { includeRefId: false, includeCeilingOnly: !ignoreCeilingOnly });
   }
 
   // 削除される CL を直接参照している子 CL の参照を繰り上げる

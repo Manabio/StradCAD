@@ -1,4 +1,4 @@
-const KIND_LABEL = { struct: '通り芯', center: '中心線', aux: '補助線', beam: '梁芯' };
+export const KIND_LABEL = { struct: '通り芯', center: '中心線', aux: '補助線', beam: '梁芯', ceiling: '天井芯' };
 
 // QA指摘m-3: 未知種別は KIND_LABEL[kind] が undefined のまま文言へ埋め込まれ、黙って
 // 「…があるため…」の「…」が"undefined"になってしまう（呼び出し元のバグを握り潰す）。

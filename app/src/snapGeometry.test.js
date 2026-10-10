@@ -237,7 +237,7 @@ test('【旧データ限定・種別ベースへ統一】findNearestCenterLineEn
 const HIT_TEST_KINDS_LITERAL = {
   floorplan: ['struct', 'center', 'aux'],
   finish:    ['struct', 'center', 'aux'],
-  ceiling:   ['struct', 'center', 'aux'],
+  ceiling:   ['ceiling'], // S8a: 天伏で操作（ヒット）できるのは天井芯だけ（通り芯・中心線・補助線は描くだけ）
   opening:   ['struct', 'center', 'aux'],
   structure: ['beam'],
   site:      [],
@@ -250,12 +250,13 @@ test('HIT_TEST_KINDS_LITERAL: 実装（hitTestKinds）の値と一致する（�
   for (const mode of APP_MODES) assert.deepEqual(HIT_TEST_KINDS_LITERAL[mode], hitTestKinds(mode), `mode=${mode}`);
 });
 
-test('findNearestCenterLine: 4種別×6モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）と一致する', () => {
+test('findNearestCenterLine: 5種別×7モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）と一致する', () => {
   const clProps = {
     struct: { labeled: true,  discipline: Discipline.STRUCT },
     center: { labeled: false, discipline: Discipline.ARCH },
     aux:    { labeled: false, lineType: 'dashed' },
     beam:   { labeled: false, discipline: Discipline.FUSE },
+    ceiling: { labeled: false, discipline: Discipline.CEILING },
   };
   for (const kind of CL_KINDS) {
     const graph = makeGraph();
@@ -273,12 +274,13 @@ test('findNearestCenterLine: 4種別×6モードの拾われる/拾われない�
   }
 });
 
-test('findNearestCenterLineEndpoint: 4種別×6モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）∧非struct と一致する（通り芯はリテラル表に含まれてもspansEntireAxisで別途除外される）', () => {
+test('findNearestCenterLineEndpoint: 5種別×7モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）∧非struct と一致する（通り芯はリテラル表に含まれてもspansEntireAxisで別途除外される）', () => {
   const clProps = {
     struct: { labeled: true,  discipline: Discipline.STRUCT, extentLo: 0, extentHi: 3000 },
     center: { labeled: false, discipline: Discipline.ARCH,   extentLo: 0, extentHi: 3000 },
     aux:    { labeled: false, lineType: 'dashed',             extentLo: 0, extentHi: 3000 },
     beam:   { labeled: false, discipline: Discipline.FUSE,    extentLo: 0, extentHi: 3000 },
+    ceiling: { labeled: false, discipline: Discipline.CEILING, extentLo: 0, extentHi: 3000 },
   };
   for (const kind of CL_KINDS) {
     const graph = makeGraph();

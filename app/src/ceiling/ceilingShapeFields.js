@@ -8,7 +8,8 @@
  */
 import { CEILING_SHAPE_DIM_COUNT, SLOPE_DIRS_DEG, ARC_AXES_DEG, validCeilingDims } from '../core/ceilingZone.js';
 import { CeilingShape as Shape, StairType } from '../core/constants.js';
-import { cellBoundsFromKey, refreshCells } from '../finish/gridCells.js';
+import { cellBoundsFromKey } from '../finish/gridCells.js';
+import { ceilingRefreshCells } from './ceilingGrid.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
 
@@ -79,8 +80,9 @@ export function stairCeilingSlopeDefaults(graph, stair, cellKeys, floorHeight) {
   const deg = UP_DIRECTION_TO_DEG[stair.upDirection];
   const riser = riserOf(stair, floorHeight);
   if (!room || deg === undefined || riser == null) return null;
-  const sel = cellsBounds(refreshCells(new Set(cellKeys ?? []), graph), graph);
-  const all = cellsBounds(refreshCells(stair.cells, graph), graph);
+  // 選択は天井セル（天井芯で割れた key）。仕上げの refreshCells で展開すると天井芯の片側が仕上げセル全体へ広がるため、天井版で展開する
+  const sel = cellsBounds(ceilingRefreshCells(new Set(cellKeys ?? []), graph), graph);
+  const all = cellsBounds(ceilingRefreshCells(stair.cells, graph), graph);
   if (!sel || !all) return null;
   const alongX = deg === 0 || deg === 180;
   const selLen = alongX ? sel.x2 - sel.x1 : sel.y2 - sel.y1;

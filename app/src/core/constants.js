@@ -9,6 +9,7 @@ export const Discipline = Object.freeze({
   ARCH:   'arch',    // 意匠
   STRUCT: 'struct',  // 構造
   FUSE:   'fuse',    // 伏図
+  CEILING: 'ceiling', // 天井芯（天伏モードの天井セルだけを割る線。種別 'ceiling'）
   MEP:    'mep',     // 設備
   ELEC:   'elec',    // 電気
 });

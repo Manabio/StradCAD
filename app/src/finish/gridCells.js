@@ -1,6 +1,16 @@
 import { CenterLineType, isGridCenterLine } from '@core';
-import { isFinishCellDivider } from '../core/centerLineKindPolicy.js';
+import { isFinishCellDivider, isCeilingCellDivider, isCeilingOnlyKind } from '../core/centerLineKindPolicy.js';
 import { scopedValue, graphList } from '../graphReadScope.js';
+
+// ================================================================
+// 分割の変種（grid）
+// ================================================================
+// 同じ格子アルゴリズムを「どのCLを分割線にするか」だけ差し替えて使う。既定は仕上げ（FINISH_CELL_GRID）で、
+// 仕上げ・壁・階段・昇降機・構造・展開図はすべてこれ。天伏の天井セルだけが CEILING_CELL_GRID
+// （仕上げの分割線＋天井芯）を渡す。末尾の省略可能引数で受けるため、既存の呼び出しは何も変わらない。
+// 変種ごとにスコープ内キャッシュの鍵を分ける（finish は従来の文字列のまま。ceiling だけ接頭辞を足す）。
+export const FINISH_CELL_GRID = Object.freeze({ id: 'finish', isDivider: isFinishCellDivider });
+export const CEILING_CELL_GRID = Object.freeze({ id: 'ceiling', isDivider: isCeilingCellDivider });
 
 // ================================================================
 // グリッド索引（分割格子のスナップショット）
@@ -29,13 +39,14 @@ function snapshotCL(cl) {
   };
 }
 
-function buildGridIndex(graph) {
+function buildGridIndex(graph, grid) {
   const verticals = [], horizontals = [], all = [], clById = new Map();
   for (const cl of graphList(graph, 'centerLines') ?? []) {
     const s = snapshotCL(cl);
+    // all・clById は変種によらず全CL（天井芯を含む）——cellBoundsFromKey が天井芯 id 入りの天井セルの key を解ける
     all.push(s);
     clById.set(s.id, s);
-    if (!isDividerCL(s)) continue;
+    if (!grid.isDivider(s)) continue;
     if (s.centerLineType === CenterLineType.VERTICAL) verticals.push(s);
     else if (s.centerLineType === CenterLineType.HORIZONTAL) horizontals.push(s);
   }
@@ -45,7 +56,8 @@ function buildGridIndex(graph) {
   const yValues = [...new Set(horizontals.map(h => h.value))];
   // allXValues/allYValues は「分割CLに限らない全CLの座標値」（展開図の区間刻み
   // ＝elevationFloorProfile.js の collectRunBreaks が使う。分割格子とは別の集合）。
-  const valuesOfType = t => [...new Set(all.filter(c => c.centerLineType === t).map(c => c.value))]
+  // 天伏専用の天井芯は含めない（展開図の区間が天井芯で刻まれてはならない。仕上げ変種でも天井変種でも同じ）。
+  const valuesOfType = t => [...new Set(all.filter(c => c.centerLineType === t && !isCeilingOnlyKind(c)).map(c => c.value))]
     .sort((a, b) => a - b);
   return {
     verticals, horizontals, xValues, yValues, all, clById,
@@ -61,8 +73,9 @@ function buildGridIndex(graph) {
  * 返り値の CL は POJO（id/value/labeled/discipline/lineType/extentLo/extentHi/centerLineType/cl）
  * ——実 CL と同じフィールド名のため isDividerCL / isActiveAcrossRange はそのまま使える。
  */
-export function gridIndexOf(graph) {
-  return scopedValue(graph, GRID_INDEX_KEY, () => buildGridIndex(graph));
+export function gridIndexOf(graph, grid = FINISH_CELL_GRID) {
+  const key = grid.id === 'finish' ? GRID_INDEX_KEY : `${GRID_INDEX_KEY}:${grid.id}`;
+  return scopedValue(graph, key, () => buildGridIndex(graph, grid));
 }
 
 // ================================================================
@@ -95,8 +108,8 @@ export function isActiveAcrossRange(cl, rangeLo, rangeHi) {
 }
 
 // 区間 [lo, hi] 内に存在する全 CL 値をブレークポイントとして収集
-function collectBreaks(graph, centerLineType, lo, hi) {
-  const g = gridIndexOf(graph);
+function collectBreaks(graph, centerLineType, lo, hi, grid) {
+  const g = gridIndexOf(graph, grid);
   const values = new Set([lo, hi]);
   const src = centerLineType === CenterLineType.VERTICAL ? g.xValues
     : centerLineType === CenterLineType.HORIZONTAL ? g.yValues : [];
@@ -164,13 +177,15 @@ function columnPiece(horizontals, colLo, colHi, wy) {
  * 列優先の正準マージで一意な平面分割を定義する。どの点から呼んでもセル同士は
  * 重ならず、同じ領域片には同じキー・同じ矩形が返る。
  *
+ * @param {object} [grid]  分割の変種（既定は仕上げ。天伏の天井セルは CEILING_CELL_GRID）
  * @returns {{ key, x1, x2, y1, y2 } | null}
  *   key = "leftId:topId:rightId:bottomId"（4 CL で境界を完全に記述。L字の内部
  *   分割位置に接する辺では、その区間で非アクティブなCLが識別子として使われる）
  */
-export function worldToCell(wx, wy, graph) {
+export function worldToCell(wx, wy, graph, grid = FINISH_CELL_GRID) {
   // 同じ点への再問い合わせが多い（面ごと・区間ごとのプローブ）ためスコープ内でmemo化する。
-  return scopedValue(graph, `gridCells:p:${wx},${wy}`, () => _worldToCell(wx, wy, graph));
+  const key = grid.id === 'finish' ? `gridCells:p:${wx},${wy}` : `gridCells:${grid.id}:p:${wx},${wy}`;
+  return scopedValue(graph, key, () => _worldToCell(wx, wy, graph, grid));
 }
 
 /**
@@ -185,8 +200,8 @@ export function worldToCellInIndex(wx, wy, index) {
   return _worldToCellFromIndex(wx, wy, index);
 }
 
-function _worldToCell(wx, wy, graph) {
-  return _worldToCellFromIndex(wx, wy, gridIndexOf(graph));
+function _worldToCell(wx, wy, graph, grid) {
+  return _worldToCellFromIndex(wx, wy, gridIndexOf(graph, grid));
 }
 
 function _worldToCellFromIndex(wx, wy, index) {
@@ -240,13 +255,14 @@ function _worldToCellFromIndex(wx, wy, index) {
  * 向こう側のセルも同じ領域とみなして flood-fill で集める。通常の格子では
  * 自セル1個、部分短縮でL字化した領域ではそれを構成する矩形セル群が返る。
  *
+ * @param {object} [grid]  分割の変種（既定は仕上げ）
  * @returns {Array<{ key, x1, x2, y1, y2 }>} セルなしなら空配列
  */
-export function regionCellsAt(wx, wy, graph) {
-  const start = worldToCell(wx, wy, graph);
+export function regionCellsAt(wx, wy, graph, grid = FINISH_CELL_GRID) {
+  const start = worldToCell(wx, wy, graph, grid);
   if (!start) return [];
 
-  const { verticals, horizontals, xValues, yValues } = gridIndexOf(graph);
+  const { verticals, horizontals, xValues, yValues } = gridIndexOf(graph, grid);
 
   const cells = new Map([[start.key, start]]);
   const queue = [start];
@@ -259,8 +275,8 @@ export function regionCellsAt(wx, wy, graph) {
       if (isSeparatingAt(edgeCLs, edgeValue, breaks[i], breaks[i + 1])) continue;
       const mid = (breaks[i] + breaks[i + 1]) / 2;
       const cell = isVerticalEdge
-        ? worldToCell(probeOrtho, mid, graph)
-        : worldToCell(mid, probeOrtho, graph);
+        ? worldToCell(probeOrtho, mid, graph, grid)
+        : worldToCell(mid, probeOrtho, graph, grid);
       if (cell && !cells.has(cell.key)) {
         cells.set(cell.key, cell);
         queue.push(cell);
@@ -288,10 +304,11 @@ export function regionCellsAt(wx, wy, graph) {
  * ワールド矩形 [xMin,xMax] × [yMin,yMax] 内に存在する全セルを列挙する。
  * 矩形内の全 CL 値をブレークポイントとし、各小区間の中点から worldToCell を呼ぶ。
  * extent 外の分割は worldToCell が自然に無効化するため正しい集合が得られる。
+ * grid は分割の変種（既定は仕上げ）。
  */
-export function getCellsInRect(xMin, yMin, xMax, yMax, graph) {
-  const xBreaks = collectBreaks(graph, CenterLineType.VERTICAL,   xMin, xMax);
-  const yBreaks = collectBreaks(graph, CenterLineType.HORIZONTAL, yMin, yMax);
+export function getCellsInRect(xMin, yMin, xMax, yMax, graph, grid = FINISH_CELL_GRID) {
+  const xBreaks = collectBreaks(graph, CenterLineType.VERTICAL,   xMin, xMax, grid);
+  const yBreaks = collectBreaks(graph, CenterLineType.HORIZONTAL, yMin, yMax, grid);
 
   const seen = new Set();
   const result = [];
@@ -299,7 +316,7 @@ export function getCellsInRect(xMin, yMin, xMax, yMax, graph) {
     for (let j = 0; j < yBreaks.length - 1; j++) {
       const midX = (xBreaks[i] + xBreaks[i + 1]) / 2;
       const midY = (yBreaks[j] + yBreaks[j + 1]) / 2;
-      const cell = worldToCell(midX, midY, graph);
+      const cell = worldToCell(midX, midY, graph, grid);
       if (cell && !seen.has(cell.key)) {
         seen.add(cell.key);
         result.push(cell);
@@ -310,15 +327,15 @@ export function getCellsInRect(xMin, yMin, xMax, yMax, graph) {
 }
 
 /**
- * グラフ全体の全有効セルを列挙する（FinishModeLayer のグリッド背景描画用）。
+ * グラフ全体の全有効セルを列挙する（FinishModeLayer のグリッド背景描画用）。grid は分割の変種（既定は仕上げ）。
  */
-export function getAllCells(graph) {
-  const { verticals: allXs, horizontals: allYs } = gridIndexOf(graph);
+export function getAllCells(graph, grid = FINISH_CELL_GRID) {
+  const { verticals: allXs, horizontals: allYs } = gridIndexOf(graph, grid);
   if (allXs.length < 2 || allYs.length < 2) return [];
   return getCellsInRect(
     allXs[0].value, allYs[0].value,
     allXs[allXs.length - 1].value, allYs[allYs.length - 1].value,
-    graph,
+    graph, grid,
   );
 }
 
