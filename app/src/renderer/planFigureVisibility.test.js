@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers, shouldShowColumnOriginMarks,
-  shouldShowEquipmentSymbols,
+  shouldShowEquipmentSymbols, planSectionDirection,
 } from './planFigureVisibility.js';
 
 // 行コメントを落としてから照合する（コメント中の言及を「コード上の参照」と誤検知しないため。
@@ -17,6 +17,17 @@ test('shouldShowPlanFigure: 平面・建具・仕上げ・敷地は平面図一�
   for (const mode of ['floorplan', 'opening', 'finish', 'site']) {
     assert.equal(shouldShowPlanFigure(mode), true, mode);
   }
+});
+
+test('planSectionDirection: 天伏（ceiling）は見上げ（up）、他のモードは見下げ（down）。未知・欠落のモードも down', () => {
+  assert.equal(planSectionDirection('ceiling'), 'up');
+  for (const mode of ['floorplan', 'opening', 'finish', 'site', 'structure', 'elevation', 'unknown', '', 'Ceiling', undefined, null]) {
+    assert.equal(planSectionDirection(mode), 'down', String(mode));
+  }
+});
+
+test('shouldShowPlanFigure: 天伏（ceiling）も平面図一式を描く（見上げの向きだけが違う）', () => {
+  assert.equal(shouldShowPlanFigure('ceiling'), true);
 });
 
 test('shouldShowPlanFigure: 伏図（構造）と展開図は描かない', () => {

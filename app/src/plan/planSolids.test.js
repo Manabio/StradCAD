@@ -658,3 +658,68 @@ test('階段の段: 蹴上が求まらない（riserOf が無い・null を返�
   assert.ok(a.some(s => s.kind === 'stairTread'));
   assert.deepEqual(b.map(s => [s.kind, s.source.layerFloorZ, s.source.id, s.source.part]), a.map(s => [s.kind, s.source.layerFloorZ, s.source.id, s.source.part]));
 });
+
+// ================================================================ 天井（見上げ。opts.ceilings）
+
+test('天井: opts.ceilings を省略（または true 以外）なら ceiling は 0 件で、出力は ceilings:true の出力から天井を除いたものと deepEqual（見下げは不変）', () => {
+  const { graph } = makeRoomGraph(0, 0, 4000, 4000);
+  const base = planSolids(self(graph));
+  assert.equal(ofKind(base, 'ceiling').length, 0);
+  for (const ceilings of [false, undefined, 1, 'true']) assert.deepEqual(planSolids(self(graph), { ceilings }), base, String(ceilings));
+  const withCeilings = planSolids(self(graph), { ceilings: true });
+  assert.equal(ofKind(withCeilings, 'ceiling').length, 1);
+  assert.deepEqual(withCeilings.filter(s => s.kind !== 'ceiling'), base);
+});
+
+test('天井: 高さ＝層のFL＋部屋の天井高（厚み0）。矩形はセルの和、source は部屋 id・層のFL。自階の層にだけ付き、上階・下階の層には付かない', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const a = g.interior([[0, 0]]);
+  const b = g.interior([[1, 0]]);
+  b.setOverride('ceilingHeight', '2200');
+  const out = planSolids([fakeLayer({ graph: g.graph, floorZMm: 100 })], { ceilings: true });
+  const ceilings = ofKind(out, 'ceiling'); // 出力順は source.id（部屋 id）順なので id で引く
+  assert.equal(ceilings.length, 2);
+  const ofRoom = room => ceilings.find(s => s.source.id === room.id);
+  assert.deepEqual(ofRoom(a).footprint, { rects: [rect(0, 0, 2000, 3000)] });
+  assert.equal(ofRoom(a).zLo, 100 + 2400, '既定の天井高 2400');
+  assert.equal(ofRoom(a).zHi, 100 + 2400);
+  assert.deepEqual(ofRoom(a).source, { kind: 'ceiling', id: a.id, layerFloorZ: 100 });
+  assert.equal(ofRoom(b).zHi, 100 + 2200, '部屋の天井高 2200 は FL＋2200');
+  assert.ok(ceilings.every(s => s.drawEdges === undefined), '輪郭は既定どおり描く');
+  const layers = [fakeLayer({ graph: g.graph, floorZMm: 2800, role: 'above' }), fakeLayer({ graph: g.graph }), fakeLayer({ graph: g.graph, floorZMm: -2800, role: 'below' })];
+  assert.deepEqual(ofKind(planSolids(layers, { ceilings: true }), 'ceiling').map(s => s.source.layerFloorZ), [0, 0]);
+});
+
+test('天井の床段差: 部分指定の子（床段差 400・自分の CH 欄なし）の天井の zHi は親と同じ FL+2400。FL−150・CH 2400 の部屋は FL+2250', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
+  const parent = g.interior([[0, 0], [1, 0]]);
+  parent.setOverride('ceilingHeight', '2400');
+  const child = g.graph.addRoom(new Set([g.cell(1, 0)]), '小上がり', undefined, new Set([parent.id]));
+  child.setFloorLevel(400);
+  const low = g.interior([[2, 0]]);
+  low.setFloorLevel(-150);
+  low.setOverride('ceilingHeight', '2400');
+  const ceilings = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 100 })], { ceilings: true }), 'ceiling');
+  const zHi = room => ceilings.find(s => s.source.id === room.id).zHi;
+  assert.equal(zHi(parent), 100 + 2400);
+  assert.equal(zHi(child), 100 + 2400);
+  assert.equal(zHi(low), 100 + 2250);
+});
+
+test('天井: 屋外・吹抜け・階段・階段吹抜け・未定義・屋根の部屋には作らない', () => {
+  const g = makeGrid([0, 1000, 2000, 3000, 4000, 5000, 6000], [0, 1000]);
+  const keep = g.interior([[0, 0]]);
+  g.feature([[1, 0]], RoomFeature.VOID);
+  g.feature([[2, 0]], RoomFeature.STAIR);
+  g.feature([[3, 0]], RoomFeature.STAIR_VOID);
+  g.feature([[4, 0]], RoomFeature.UNDEFINED);
+  g.roof([[5, 0]]);
+  assert.deepEqual(ofKind(planSolids(self(g.graph), { ceilings: true }), 'ceiling').map(s => s.source.id), [keep.id]);
+});
+
+test('SOLID_KIND_ORDER: ceiling は stairTread と generic の間。既存種別の相対順は不変', () => {
+  assert.deepEqual([...SOLID_KIND_ORDER], ['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'ceiling', 'generic']);
+  const out = planSolids(self(makeRoomGraph(0, 0, 4000, 4000).graph), { ceilings: true });
+  const rank = k => SOLID_KIND_ORDER.indexOf(k);
+  assert.deepEqual(out.map(s => rank(s.kind)), [...out.map(s => rank(s.kind))].sort((p, q) => p - q), '出力は kind 表の順');
+});

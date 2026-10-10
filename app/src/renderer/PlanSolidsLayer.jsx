@@ -24,23 +24,27 @@ const PLAN_SOLIDS_COLOR = '#1e293b'; // 階段・吹抜け・下屋と同じ線�
  * 吹抜け・昇降路の注記（S6）も描く（Group "plan-hole-marks"）: 自階の×（一点鎖線）と、直下階に描く上階吹抜けの×・外形・「上部吹抜け」（破線）。
  * 注記は穴（plan/planHoleMarks.js）から導く切断面上の記号で、遮蔽の解決は通さない。自階の×はドラッグ追従のため memo の外で毎回求め、
  * 上階の穴（abovePeek。App.jsx が上階を peek して渡す。3状態は belowPeek と同じ）は peek した graph に memo する。LOD はラベルだけ落とす。
+ * direction 'up'（天伏。SceneLayers が planSectionDirection(appMode) で渡す）は見上げ: 自階＋直上階（abovePeek）を解き、注記は自階の×だけ
+ * （`.claude/plan-section.md`「見上げ（天伏）」）。省略・'down' は従来どおり。
  */
-export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, abovePeek }) => {
+export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, abovePeek, direction = 'down' }) => {
   const prevRef = useRef(null); // { planeId, prims }: ドラッグ中に描き続ける前回の線（階が違えば使わない）
   if (!graph) return null;
   const resolved = planSolidsLayerResolve({
-    graph, belowPeek, memo: graphComputed,
-    prevPrims: prevRef.current?.planeId === graph.plane.id ? prevRef.current.prims : null,
+    graph, belowPeek, abovePeek, direction, memo: graphComputed,
+    prevPrims: prevRef.current?.planeId === graph.plane.id && prevRef.current.direction === direction ? prevRef.current.prims : null,
     selfRiserOf: s => stairRiserOf(s, project, graph.plane),
+    aboveRiserOf: s => stairRiserOf(s, project, abovePeek.graph.plane),
   });
-  if (resolved) prevRef.current = { planeId: graph.plane.id, prims: resolved };
+  if (resolved) prevRef.current = { planeId: graph.plane.id, direction, prims: resolved };
   const prims = resolved ? visiblePlanPrimitives(resolved, viewport.lodLevel) : [];
   // 吹抜け・昇降路の注記（S6）。上階の穴は peek した graph（ドラッグで変わらない）に memo、自階の×は memo の外
   // （通り芯ドラッグ中も追従する。planHoleMarksOf）。自階と違う階の peek（階切替直後の1フレーム）は使わない。
-  const aboveGroups = abovePeek?.activePlaneId === graph.plane.id
+  // 見上げ（天伏）は自階の×だけ（上階の穴の破線は出さない。上階スラブの穴の縁が実線で出るため。求めず、注記へは null を渡す）
+  const aboveGroups = direction !== 'up' && abovePeek?.activePlaneId === graph.plane.id
     ? graphComputed(abovePeek.graph, 'planHoleGroups', () => floorOpeningGroups(abovePeek.graph, { stairFilter: () => false }))
     : undefined;
-  const holePrims = planHoleMarkPrimitives(planHoleMarksOf(graph, aboveGroups), {
+  const holePrims = planHoleMarkPrimitives(planHoleMarksOf(graph, direction === 'up' ? null : aboveGroups), {
     thickPx: viewport.lineWeightsPx.thick, thinPx: viewport.lineWeightsPx.thin, scale: viewport.scaleX, lod: viewport.lodLevel,
   });
   if (prims.length === 0 && holePrims.length === 0) return null;

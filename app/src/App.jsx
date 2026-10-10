@@ -847,7 +847,7 @@ const App = observer(() => {
       }
       const temp = await floorSwapManager.peek(above, project.structGraph);
       if (cancelled) return;
-      setAbovePlanPeek({ graph: temp, activePlaneId: active.id });
+      setAbovePlanPeek({ graph: temp, floorHeightMm: above.elevation - active.elevation, activePlaneId: active.id });
       // 上階スラブの開口（吹抜け・階段吹抜けRoom＋上階階段の破れ先セル）。上階階段の破れ位置は
       // その階の蹴上で決まるため、上階のさらに上との階高から riser を解決して渡す。
       const riserOf = (s) => stairRiserOf(s, project, above);

@@ -71,8 +71,8 @@ const GEO_TOL = 1e-6;
 const NUDGE = 1e-3; // 共有辺の上の点が和の内部かを見る斜め押し
 const SIDE_PROBE = 0.01; // 線の両側のどちらが内側かを見る距離
 const CLS_RANK = { cut: 0, below: 1 };
-/** 面材（同じ高さでも下の線に勝つ立体の種別。規則 (ii)）。床と屋根（梁の天端＝FL は床・屋根の下）と階段の段（天端の面。S7b）。 */
-const SURFACE_KINDS = Object.freeze(['floor', 'roof', 'stairTread']);
+/** 面材（同じ高さでも下の線に勝つ立体の種別。規則 (ii)）。床と屋根（梁の天端＝FL は床・屋根の下）と階段の段（天端の面。S7b）と天井（見上げ。planSectionUp.js）。 */
+const SURFACE_KINDS = Object.freeze(['floor', 'roof', 'stairTread', 'ceiling']);
 const DIAGONALS = [[1, 1], [-1, 1], [1, -1], [-1, -1]];
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);

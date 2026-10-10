@@ -9,21 +9,25 @@
 //                      （partitionOutlineOf）と重なるのは実測 8 本だけで、残りは今回はじめて見える線（S6c 時点の件数。S7b 以降は段より低い
 //                      壁の部分だけ消える〔28.3m＝下階の壁の総延長 375.6m の約 7%〕。段より高い壁は残る。分割で 251→265 本）
 //   短線(<20mm) … 隙間の規則（plan/planSectionFigure.js PLAN_GAP_CLOSE_MM）の効果を見る
-// 使い方: node --import ./scripts/testSetup.mjs scripts/probe/dumpPlanSolids.mjs <出力先ディレクトリ> [src.stq ...]
+// 使い方: node --import ./scripts/testSetup.mjs scripts/probe/dumpPlanSolids.mjs [--up] <出力先ディレクトリ> [src.stq ...]
 //   src を省略すると 13 / moku4 / moku1-6 / wood-void-test / plan-solids-test（D:/tatsuya/Download）。
 //   出力: <出力先>/planSolids-<文書名>-<階名>.json と summary.json
+//   --up（天伏の見上げ）: 各階を自階＋直上階で解く（planSolidsLayerPrimitivesUp）。出力は planSolidsUp-<文書名>-<階名>.json と
+//     summary-up.json。件数は層（自階／上階）×cls×kind と細線／太線の本数、所要時間。下階cut・穴の外の検査は見下げ専用なので行わない。
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadDocument } from './loadDoc.mjs';
 import { planCutHeightMmOf } from '../../src/core.js';
-import { planSolidsLayerPrimitives, planSolidsLayerSolids } from '../../src/plan/planSolidsLayerFilter.js';
+import { planSolidsLayerPrimitives, planSolidsLayerPrimitivesUp, planSolidsLayerSolids } from '../../src/plan/planSolidsLayerFilter.js';
 import { stairRiserOf } from '../../src/finish/stair/stairDimensions.js';
 import { floorOpeningCellRects } from '../../src/finish/stair/slabOpening.js';
 import { stairFilterFor } from '../../src/structural/openingBeamAxes.js';
 
-const outDir = process.argv[2] ?? path.join(import.meta.dirname, 'golden-plan-solids');
+const UP = process.argv.includes('--up');
+const args = process.argv.slice(2).filter(a => a !== '--up');
+const outDir = args[0] ?? path.join(import.meta.dirname, 'golden-plan-solids');
 const DEFAULT_SRC = ['13', 'moku4', 'moku1-6', 'wood-void-test', 'plan-solids-test'].map(n => `D:/tatsuya/Download/${n}.stq`);
-const sources = process.argv.length > 3 ? process.argv.slice(3) : DEFAULT_SRC;
+const sources = args.length > 1 ? args.slice(1) : DEFAULT_SRC;
 fs.mkdirSync(outDir, { recursive: true });
 
 const safe = s => s.replace(/[^\w一-龥ぁ-んァ-ヶー-]/g, '_');
@@ -43,6 +47,29 @@ for (const src of sources) {
     const belowGraph = below ? project.graphMap.get(below.id) : null;
     const belowPeek = belowGraph ? { graph: belowGraph, floorHeightMm: plane.elevation - below.elevation } : null;
     const selfRiserOf = s => stairRiserOf(s, project, plane);
+    if (UP) {
+      const above = idx + 1 < planes.length ? planes[idx + 1] : null;
+      const aboveGraph = above ? project.graphMap.get(above.id) : null;
+      const abovePeek = aboveGraph ? { graph: aboveGraph, floorHeightMm: above.elevation - plane.elevation } : null;
+      const u0 = performance.now();
+      const upPrims = planSolidsLayerPrimitivesUp({ graph, abovePeek, selfRiserOf, cutZ: planCutHeightMmOf(plane) });
+      const upMs = performance.now() - u0;
+      const upLines = upPrims.filter(p => p.kind === 'line').map(p => ({
+        key: p.key, cls: p.cls, kind: p.source.kind, id: p.source.id, layerFloorZ: p.source.layerFloorZ ?? 0,
+        weight: p.weight, points: p.points.map(r1),
+      })).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+      fs.writeFileSync(path.join(outDir, `planSolidsUp-${safe(doc)}-${safe(plane.name)}.json`), JSON.stringify(upLines, null, 1));
+      const upCounts = {};
+      for (const l of upLines) {
+        const k = `${l.layerFloorZ > 0 ? '上階' : '自階'}:${l.cls}/${l.kind}`;
+        upCounts[k] = (upCounts[k] ?? 0) + 1;
+      }
+      summary.push({
+        doc, floor: plane.name, above: above?.name ?? null, lines: upLines.length, thin: upLines.filter(l => l.weight === 'thin').length,
+        thick: upLines.filter(l => l.weight === 'thick').length, counts: upCounts, ms: Math.round(upMs),
+      });
+      return;
+    }
     const t0 = performance.now();
     const prims = planSolidsLayerPrimitives({ graph, belowPeek, selfRiserOf, cutZ: planCutHeightMmOf(plane) });
     const ms = performance.now() - t0;
@@ -75,6 +102,15 @@ for (const src of sources) {
       shortLines: short.map(l => ({ key: l.key, points: l.points })), lower: lower.length, belowCut, outside, stairVoidWalls, ms: Math.round(ms),
     });
   });
+}
+if (UP) {
+  fs.writeFileSync(path.join(outDir, 'summary-up.json'), JSON.stringify(summary, null, 1));
+  for (const s of summary) {
+    console.log(`${s.doc}\t${s.floor}\t上階=${s.above ?? '-'}\t${s.lines}本(細線${s.thin}・太線${s.thick})\t${JSON.stringify(s.counts)}\t${s.ms}ms`);
+  }
+  const total = key => summary.reduce((n, s) => n + s[key], 0);
+  console.log(`見上げ 合計: ${total('lines')}本（細線${total('thin')}・太線${total('thick')}）`);
+  process.exit(0);
 }
 fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 1));
 for (const s of summary) {

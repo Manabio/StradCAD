@@ -13,7 +13,7 @@
  *
  * @typedef {import('./planGeometry.js').Rect} Rect
  * @typedef {import('./planGeometry.js').Footprint} Footprint
- * @typedef {'floor'|'wall'|'column'|'beam'|'roof'|'stairTread'|'generic'} SolidKind
+ * @typedef {'floor'|'wall'|'column'|'beam'|'roof'|'stairTread'|'ceiling'|'generic'} SolidKind
  *   stairTread は階段の段（S7b）。厚み 0（zLo = zHi = 天端）・drawEdges:false の遮蔽専用（描くのは StairLayer だけ）。
  * @typedef {{points:number[], role:string}} InnerLine
  *   立体の内側の線（屋根の外形線・棟木・隅木・谷木。S5 から屋根が生成）。points は折れ線（閉じるなら先頭の点を末尾へ足す）。
@@ -52,9 +52,10 @@ import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
 import { drainArrivalTime } from '../structural/roofFramingGeometry.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { normalizeRect, isValidRect } from './planGeometry.js';
+import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 
 /** 出力の kind 順（固定）。 */
-export const SOLID_KIND_ORDER = Object.freeze(['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'generic']);
+export const SOLID_KIND_ORDER = Object.freeze(['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'ceiling', 'generic']);
 
 /**
  * 梁のうち立体にしない役割。基礎梁・土台は床下、小屋梁は小屋組で、平面の切断面（FL+切断高）に関わらない。
@@ -371,6 +372,22 @@ function stairTreadSolids(layer, riserFor) {
   return out;
 }
 
+// ---------------------------------------------------------------- 天井
+
+/**
+ * 天井の立体（見上げ＝天伏モード専用。`opts.ceilings === true` のときだけ、自階の層に足す）。
+ * 部屋ごとに1件（セル矩形の和）、面材（解決器の SURFACE_KINDS）で厚み 0（zLo = zHi = 層の FL + 天井面の高さ zMm。床段差込み）。
+ * 輪郭は既定どおり描く。限界（裁定待ち）: 部屋ごとに別立体のため、同じ高さで隣り合う部屋も壁の無い境界では見切り線が出る
+ * （同じ立体の矩形群の共有辺だけが消える）。算出は ceiling/ceilingSurfaces.js。
+ * @param {SolidLayer} layer
+ */
+function ceilingSolids(layer) {
+  return ceilingSurfacesOf(layer.graph).map(({ roomId, rects, zMm }) => ({
+    kind: 'ceiling', footprint: { rects }, zLo: layer.floorZMm + zMm, zHi: layer.floorZMm + zMm,
+    source: baseSource(layer, 'ceiling', roomId),
+  }));
+}
+
 // ---------------------------------------------------------------- 汎用立体
 
 /**
@@ -409,7 +426,8 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  * source.id 順で続く。
  * graph が無い層は飛ばす。層が空・無ければ []。
  * @param {SolidLayer[]} layers  `elevation/section/sectionBandLayers.js buildBandLayers` の戻り値と同型
- * @param {{riserOf?: (stair:object)=>number|null, belowGraphOf?: (graph:object)=>object|null, extraSolids?: Solid[]}} [opts]
+ * @param {{riserOf?: (stair:object)=>number|null, belowGraphOf?: (graph:object)=>object|null, extraSolids?: Solid[], ceilings?: boolean}} [opts]
+ *   ceilings＝true のときだけ self の層に天井立体（kind 'ceiling'。見上げ用）を足す。省略（見下げ）の出力は不変。
  *   riserOf＝最上の層の階段の蹴上（破れ先の位置・段の高さ）。下の層の階段は直上の層との階高から求める（stairTreadSolids）。belowGraphOf＝graph の直下階の graph（無ければ null。破れ先を穴にするかの判定）。
  * @returns {Solid[]}
  */
@@ -427,7 +445,8 @@ export function planSolids(layers, opts = {}) {
       ? stair => riserOf(stair, upperZ - layer.floorZMm)
       : stair => opts.riserOf?.(stair) ?? null;
     const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom), ...columnSolids(layer),
-      ...beamSolids(layer), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer)].filter(Boolean);
+      ...beamSolids(layer), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer),
+      ...(opts.ceilings === true && layer.role === 'self' ? ceilingSolids(layer) : [])].filter(Boolean);
     for (const solid of solids) entries.push({ solid, layerZ: layer.floorZMm, roleRank: ROLE_RANK[layer.role] ?? 3 });
   }
   const kindRank = k => SOLID_KIND_ORDER.indexOf(k);

@@ -13,6 +13,7 @@
 import { planCutHeightMmOf } from '@core';
 import { planSolids } from './planSolids.js';
 import { planSectionFigure } from './planSectionFigure.js';
+import { planSectionFigureUp } from './planSectionUp.js';
 import { LodLevel } from '../viewport.js';
 
 /**
@@ -33,9 +34,27 @@ const isDrawn = (kind, layerFloorZ) => ((layerFloorZ ?? 0) < 0
   ? BELOW_DRAWN_KINDS === 'all' || BELOW_DRAWN_KINDS.includes(kind)
   : S4_DRAWN_KINDS.includes(kind));
 
-/** 解決器の出力から、描く種別の線・ラベルだけを残す（順序は保つ。自階は S4_DRAWN_KINDS、下階の層は BELOW_DRAWN_KINDS）。 */
-export function drawnPrimitives(prims) {
-  return (prims ?? []).filter(p => p?.source?.kind != null && isDrawn(p.source.kind, p.source.layerFloorZ));
+/**
+ * 見上げ（天伏）で**自階**に描く source.kind（唯一の場所）。天井・梁・汎用立体。壁・柱は ShapesLayer が描くので遮蔽物としてだけ参加する
+ * （自階の床・下屋は鏡像で非表示側に落ちる）。
+ */
+export const UP_SELF_DRAWN_KINDS = Object.freeze(['ceiling', 'beam', 'generic']);
+
+/** 見上げで**上階の層**（layerFloorZ > 0）に描く source.kind。'all'＝全種別を細線で（天井の無い所＝吹抜け・穴の中だけ見える）。 */
+export const UP_ABOVE_DRAWN_KINDS = 'all';
+
+/** 見上げの isDrawn（層は layerFloorZ。上階の層は > 0、自階は 0・省略）。 */
+const isDrawnUp = (kind, layerFloorZ) => ((layerFloorZ ?? 0) > 0
+  ? UP_ABOVE_DRAWN_KINDS === 'all' || UP_ABOVE_DRAWN_KINDS.includes(kind)
+  : UP_SELF_DRAWN_KINDS.includes(kind));
+
+/**
+ * 解決器の出力から、描く種別の線・ラベルだけを残す（順序は保つ）。
+ * direction 'down'（既定。見下げ）＝自階は S4_DRAWN_KINDS、下階の層は BELOW_DRAWN_KINDS。'up'（見上げ）＝自階は UP_SELF_DRAWN_KINDS、上階の層は UP_ABOVE_DRAWN_KINDS。
+ */
+export function drawnPrimitives(prims, direction = 'down') {
+  const drawn = direction === 'up' ? isDrawnUp : isDrawn;
+  return (prims ?? []).filter(p => p?.source?.kind != null && drawn(p.source.kind, p.source.layerFloorZ));
 }
 
 /**
@@ -81,6 +100,33 @@ export function planSolidsLayerPrimitives({ graph, belowPeek = null, selfRiserOf
 }
 
 /**
+ * 見上げ（天伏）用の立体: 自階（FL=0）＋直上の採用階（FL=+階高。role 'above'）の層スタック。自階に天井立体を足す（ceilings:true）。
+ * 下階は見ない（belowGraphOf は常に null）。
+ * 最上の層は上階なので、蹴上（段の高さ・破れ先の位置）は上階の plane で解く aboveRiserOf（planSolids の「最上の層は opts.riserOf」）。
+ * 自階の階段の蹴上は自階〜上階の階高から求まる。上階スラブの階段の破れ先は、下階（見上げでは自階）に同じ階段があるときだけ穴になる。
+ * @param {{graph: object|null, abovePeek?: {graph: object|null, floorHeightMm: number}|null, aboveRiserOf?: (stair:object)=>number|null}} args
+ * @returns {import('./planSolids.js').Solid[]}
+ */
+export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf = () => null }) {
+  if (!graph) return [];
+  const aboveGraph = abovePeek?.graph ?? null;
+  const layers = [{ graph, floorZMm: 0, role: 'self' }];
+  if (aboveGraph && Number.isFinite(abovePeek.floorHeightMm) && abovePeek.floorHeightMm > 0) {
+    layers.push({ graph: aboveGraph, floorZMm: abovePeek.floorHeightMm, role: 'above' });
+  }
+  return planSolids(layers, { riserOf: aboveRiserOf, belowGraphOf: g => (g === aboveGraph ? graph : null), ceilings: true });
+}
+
+/**
+ * 見上げの線（自階＋直上階。planSectionFigureUp）。cutZ＝切断高（自階 FL からの mm）。graph なし・cutZ が有限でなければ空配列。
+ * @returns {Primitive[]}
+ */
+export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRiserOf = () => null, cutZ }) {
+  if (!graph || !Number.isFinite(cutZ)) return [];
+  return drawnPrimitives(planSectionFigureUp(planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf }), cutZ), 'up');
+}
+
+/**
  * 通り芯・中心線をドラッグ中か（どれかの CL の pendingDelta が 0 でない）。ドラッグ中は effectiveValue が毎フレーム変わり、
  * 梁・壁の座標が変わって全再計算になる（moku1-6 の2階で 50〜105ms/回）ので、レイヤは前回の結果を描き続ける。
  * graph.centerLines は階固有の CL と通り芯（structGraph）の両方を返す。
@@ -94,14 +140,19 @@ export function isCenterLineDragging(graph) {
  * 置き場は**直下階 peek の graph**（無ければ自階）、鍵は自階×切断高×直下階。graphComputed は (graph,key) ごとに最初の
  * compute を使い回すので、置き場を自階に固定すると階を切り替えて下階の peek が替わっても古い peek 基準の結果を握り続ける。
  * `belowPeek.activePlaneId` が自階と違うもの（階切替直後の1フレームに前の階の peek が残る）は使わない（peek=null）。
+ * direction 'up'（見上げ）は peek に**直上階**の peek を渡す。鍵は `planSection:up:…`（見下げの鍵と衝突しない）、置き場は上階 peek の graph（無ければ自階）。
+ * @param {object} graph
+ * @param {object|null|undefined} belowPeek  direction 'down' は直下階の peek、'up' は直上階の peek（undefined＝未解決／null＝その階なし）
+ * @param {'down'|'up'} [direction]
  * @returns {{home: object, key: string, peek: object|null, cutZ: number}}
  */
-export function planSolidsLayerCacheSpec(graph, belowPeek) {
+export function planSolidsLayerCacheSpec(graph, belowPeek, direction = 'down') {
   const peek = belowPeek && belowPeek.activePlaneId === graph.plane.id ? belowPeek : null;
   const cutZ = planCutHeightMmOf(graph.plane);
+  const tail = `${graph.plane.id}:${cutZ}:${peek?.graph?.plane?.id ?? (belowPeek === undefined ? 'pending' : '-')}`;
   return {
     home: peek?.graph ?? graph,
-    key: `planSection:${graph.plane.id}:${cutZ}:${peek?.graph?.plane?.id ?? (belowPeek === undefined ? 'pending' : '-')}`,
+    key: direction === 'up' ? `planSection:up:${tail}` : `planSection:${tail}`,
     peek, cutZ,
   };
 }
@@ -113,14 +164,20 @@ export function planSolidsLayerCacheSpec(graph, belowPeek) {
  *   - それ以外 → memo(home, key, compute)（graphComputed）。belowPeek が undefined（下階の peek が未解決。階切替直後。
  *     null は「下階なし」で解決済み）の間は**自階だけの層**で解決して描く（鍵は下階 '-' と区別して 'pending'。下屋などが
  *     階切替のたびに消えないため）。peek が届くと通常の鍵で再計算され、下階の線だけが後から現れる
- * @param {{graph: object|null, belowPeek: object|null|undefined, prevPrims?: Primitive[]|null,
+ * direction 'up'（見上げ・天伏）は belowPeek でなく abovePeek（直上階。3状態は同じ）を使い、見上げの線を解く。省略・'down' は従来どおり。
+ * @param {{graph: object|null, belowPeek: object|null|undefined, abovePeek?: object|null|undefined, direction?: 'down'|'up', prevPrims?: Primitive[]|null,
  *   memo: (home: object, key: string, compute: () => Primitive[]) => Primitive[],
- *   selfRiserOf?: (stair: object) => number|null}} args
+ *   selfRiserOf?: (stair: object) => number|null,
+ *   aboveRiserOf?: (stair: object) => number|null  direction 'up' の上階の階段の蹴上（上階の plane で解く）}} args
  * @returns {Primitive[]|null}
  */
-export function planSolidsLayerResolve({ graph, belowPeek, prevPrims = null, memo, selfRiserOf }) {
+export function planSolidsLayerResolve({ graph, belowPeek, abovePeek, direction = 'down', prevPrims = null, memo, selfRiserOf, aboveRiserOf }) {
   if (!graph) return null;
   if (isCenterLineDragging(graph)) return prevPrims;
+  if (direction === 'up') {
+    const spec = planSolidsLayerCacheSpec(graph, abovePeek, 'up');
+    return memo(spec.home, spec.key, () => planSolidsLayerPrimitivesUp({ graph, abovePeek: spec.peek, aboveRiserOf, cutZ: spec.cutZ }));
+  }
   const { home, key, peek, cutZ } = planSolidsLayerCacheSpec(graph, belowPeek);
   return memo(home, key, () => planSolidsLayerPrimitives({ graph, belowPeek: peek, selfRiserOf, cutZ }));
 }

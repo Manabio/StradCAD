@@ -14,6 +14,12 @@ export function shouldShowPlanFigure(appMode) {
   return appMode !== 'structure' && appMode !== 'elevation';
 }
 
+// 平面の断面解決の**向き**: 天伏モード（'ceiling'）は切断高より上を見上げる（'up'）、他のモードは見下げる（'down'。未知のモードも）。
+// 向きの判断の唯一の供給源（PlanSolidsLayer へは SceneLayers がこの値を渡す）。
+export function planSectionDirection(appMode) {
+  return appMode === 'ceiling' ? 'up' : 'down';
+}
+
 // 平面図の**注記**（階段の段数字）を描くモードか。図形（上記）と違い注記は平面モード限定
 // ——室名（RoomLabelsLayer）・段差断面（StepSectionLayer）と同じ「注記は平面のみ」の扱い。
 // ユーザー決定2026-09: 他モードへ遷移しても階段の図は出したままにするが、段数字は出さない

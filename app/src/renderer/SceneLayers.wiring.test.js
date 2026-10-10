@@ -64,6 +64,7 @@ test('【配線】SceneLayers は VoidLayer を使わず、<PlanSolidsLayer abov
   const equipAt = codeOnly.indexOf('<EquipmentSymbolLayer');
   assert.ok(solidsAt >= 0 && equipAt > solidsAt, `順序 PlanSolidsLayer(${solidsAt}) < EquipmentSymbolLayer(${equipAt})`);
   assert.ok(/<PlanSolidsLayer [^>]*abovePeek=\{abovePlanPeek\}/.test(codeOnly), 'abovePeek を渡す');
+  assert.ok(/<PlanSolidsLayer [^>]*direction=\{planSectionDirection\(appMode\)\}/.test(codeOnly), '向き（見上げ／見下げ）は planSectionDirection(appMode) で渡す');
 });
 
 // QA指摘W4（昇降機の仕様追加 ステップ4・S4）: catalogは建物全体（全採用階。project.equipmentIndex経由）

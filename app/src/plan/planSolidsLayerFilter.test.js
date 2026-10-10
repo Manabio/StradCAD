@@ -4,9 +4,10 @@ import assert from 'node:assert/strict';
 import { RoomFeature, StairType } from '@core';
 import {
   S4_DRAWN_KINDS, BELOW_DRAWN_KINDS, drawnPrimitives, planSolidsLayerPrimitives, planSolidsLayerSolids, planSolidsLayerCacheSpec, planSolidsLayerResolve, isCenterLineDragging,
-  visiblePlanPrimitives,
+  visiblePlanPrimitives, UP_SELF_DRAWN_KINDS, UP_ABOVE_DRAWN_KINDS, planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp,
 } from './planSolidsLayerFilter.js';
 import { LodLevel } from '../viewport.js';
+import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { planSolids } from './planSolids.js';
 import { isInsideFootprint } from './planGeometry.js';
 import { makeGrid, makeRoomGraph, addBeamH, addColumnAt, linesOf } from './planTestFixtures.js';
@@ -286,4 +287,144 @@ test('切断高が梁を分類する: 切断高を 1100 に下げると天端 12
   assert.deepEqual(clsOf(lowCut, low.id), ['cut']);
   const hiCut = planSolidsLayerPrimitives({ graph, cutZ: 2100 });
   assert.deepEqual(clsOf(hiCut, cut.id), ['below']);
+});
+
+// ================================================================ 見上げ（direction 'up'）
+
+const outline4 = (x1, y1, x2, y2) => [[x1, y1, x2, y1], [x1, y2, x2, y2], [x1, y1, x1, y2], [x2, y1, x2, y2]]
+  .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]);
+const sortedPts = prims => prims.map(p => {
+  const [a, b, c, d] = p.points;
+  return a < c || (a === c && b <= d) ? [a, b, c, d] : [c, d, a, b];
+}).sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]);
+
+/** 自階（天井 2400）と上階（梁の下端 2600・天端 2800）。上階の peek は階高 2800。 */
+function upScene({ selfVoid = false, selfWalls = true } = {}) {
+  const self = makeGrid([0, 4000], [0, 4000], { id: 'low', startFloor: 1 });
+  if (selfVoid) self.feature([[0, 0]], RoomFeature.VOID); else self.interior([[0, 0]], { walls: selfWalls });
+  const above = makeGrid([0, 4000], [0, 4000], { id: 'high', startFloor: 2 });
+  above.interior([[0, 0]], { walls: true });
+  const beam = addBeamH(above.graph, { axis: 1000, from: 500, to: 3500 }); // H200x100・天端=上階FL
+  return { self, above, beam, abovePeek: { graph: above.graph, floorHeightMm: 2800, activePlaneId: self.graph.plane.id } };
+}
+
+test('見上げ: 自階で描く種別は天井・梁・汎用立体、上階の層は全種別（固定）。direction 省略は従来どおり', () => {
+  assert.deepEqual([...UP_SELF_DRAWN_KINDS], ['ceiling', 'beam', 'generic']);
+  assert.equal(UP_ABOVE_DRAWN_KINDS, 'all');
+  const kinds = ['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'ceiling', 'generic'];
+  const at = (k, z) => ({ ...prim(k), source: { kind: k, id: 'x', ...(z === undefined ? {} : { layerFloorZ: z }) } });
+  assert.deepEqual(drawnPrimitives(kinds.map(k => at(k)), 'up').map(p => p.source.kind), ['beam', 'ceiling', 'generic'], '自階（省略）');
+  assert.deepEqual(drawnPrimitives(kinds.map(k => at(k, 0)), 'up').map(p => p.source.kind), ['beam', 'ceiling', 'generic'], '自階（0）');
+  assert.deepEqual(drawnPrimitives(kinds.map(k => at(k, 2800)), 'up').map(p => p.source.kind), kinds, '上階の層は全種別');
+  assert.deepEqual(drawnPrimitives(kinds.map(k => at(k)), 'down').map(p => p.source.kind), ['beam', 'roof', 'generic'], 'down は S4 の集合');
+  assert.deepEqual(drawnPrimitives(kinds.map(k => at(k))), drawnPrimitives(kinds.map(k => at(k)), 'down'), '省略＝down');
+});
+
+test('見上げ: 自階の天井の外形は細線で出るが、壁・床は出さない。上階の梁は天井（下端 2400 ≦ 梁の下端 2600）に隠れる', () => {
+  const { self, abovePeek, beam } = upScene({ selfWalls: false });
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+  assert.deepEqual(sortedPts(prims.filter(p => p.source.kind === 'ceiling')), outline4(0, 0, 4000, 4000));
+  assert.ok(prims.filter(p => p.source.kind === 'ceiling').every(p => p.cls === 'below' && p.weight === 'thin' && p.source.layerFloorZ === 0));
+  assert.ok(!prims.some(p => p.source.id === beam.id), '天井が上階の梁を隠す');
+  assert.ok(prims.every(p => !('viewLayerFloorZ' in p.source)));
+});
+
+test('見上げ: 壁のある部屋では天井の外形は壁（切断）が隠す。壁そのものは描かない（ShapesLayer の仕事）。残るのは壁の取り合いの隅の短い断片だけ', () => {
+  const { self, abovePeek } = upScene();
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+  assert.ok(!prims.some(p => p.source.kind === 'wall' && (p.source.layerFloorZ ?? 0) === 0), '自階の壁は描かない');
+  const ceil = prims.filter(p => p.source.kind === 'ceiling');
+  assert.ok(ceil.length > 0 && ceil.every(p => Math.hypot(p.points[2] - p.points[0], p.points[3] - p.points[1]) <= 57.5 + 1e-6), `隅の 57.5mm 以下の断片だけ: ${JSON.stringify(sortedPts(ceil))}`);
+});
+
+test('見上げ: 自階に天井が無い（吹抜け）と、上階の梁が細線（layerFloorZ=階高）で見える。上階が無い・階高が不正なら上階の線は出ない', () => {
+  const { self, abovePeek, beam } = upScene({ selfVoid: true });
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+  const mine = prims.filter(p => p.source.id === beam.id);
+  assert.deepEqual(sortedPts(mine), outline4(500, 950, 3500, 1050));
+  assert.ok(mine.every(p => p.cls === 'below' && p.weight === 'thin' && p.source.layerFloorZ === 2800));
+  for (const peek of [null, undefined, { ...abovePeek, floorHeightMm: 0 }, { ...abovePeek, floorHeightMm: NaN }, { graph: null, floorHeightMm: 2800 }]) {
+    const none = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek: peek, cutZ: CUT });
+    assert.equal(none.filter(p => (p.source.layerFloorZ ?? 0) > 0).length, 0);
+  }
+  assert.deepEqual(planSolidsLayerPrimitivesUp({ graph: null, cutZ: CUT }), []);
+  assert.deepEqual(planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: NaN }), []);
+});
+
+test('見上げ: 立体の層は自階（FL=0・ceiling あり）＋直上階（FL=階高・role above・ceiling なし）。下階は渡さない', () => {
+  const { self, abovePeek } = upScene();
+  const solids = planSolidsLayerSolidsUp({ graph: self.graph, abovePeek });
+  assert.deepEqual([...new Set(solids.map(s => s.source.layerFloorZ))].sort((a, b) => a - b), [0, 2800]);
+  assert.deepEqual(solids.filter(s => s.kind === 'ceiling').map(s => s.source.layerFloorZ), [0]);
+  assert.equal(planSolidsLayerSolids({ graph: self.graph }).filter(s => s.kind === 'ceiling').length, 0, '見下げの立体に天井は無い');
+});
+
+test('見上げ: 上階に破れ先のある階段があり、自階に同じ階段があると、上階スラブに穴が開く。穴の縁が細線（layerFloorZ=階高）で出る。蹴上は上階の aboveRiserOf で解く', () => {
+  const low = switchback('low'), high = switchback('high');
+  // 破れ先のセル（x1000..2000×y1500..4500）を上階の別室でも覆い、上階の床がそこにも張られるようにする
+  const cells = [...high.stairs[0].cells];
+  const retKey = cells.find(k => { const b = cellBoundsFromKey(k, high); return b.x1 === 1000 && b.y1 === 1500; });
+  high.addRoom(new Set([retKey]), '部屋');
+  const abovePeek = { graph: high, floorHeightMm: 2800, activePlaneId: low.plane.id };
+  const asked = [];
+  const aboveRiserOf = s => { asked.push(s); return 150; };
+  const solids = planSolidsLayerSolidsUp({ graph: low, abovePeek, aboveRiserOf });
+  const upFloor = solids.find(s => s.kind === 'floor' && s.source.layerFloorZ === 2800);
+  assert.ok(upFloor, '上階の床がある');
+  assert.ok((upFloor.footprint.holes ?? []).some(h => h.x1 === 1000 && h.y1 === 1500 && h.x2 === 2000 && h.y2 === 4500), `破れ先が穴: ${JSON.stringify(upFloor.footprint.holes)}`);
+  assert.ok(asked.length > 0 && asked.every(s => high.stairs.includes(s)), '最上の層＝上階の階段の蹴上を aboveRiserOf で問う');
+  // 自階に同じ階段が無ければ穴にならない
+  const noStair = makeGrid([0, 1000, 2000], [0, 1500, 4500], { id: 'bare' });
+  noStair.interior([[0, 0], [0, 1], [1, 0], [1, 1]]);
+  const flat = planSolidsLayerSolidsUp({ graph: noStair.graph, abovePeek: { ...abovePeek, activePlaneId: noStair.graph.plane.id }, aboveRiserOf });
+  assert.equal((flat.find(s => s.kind === 'floor' && s.source.layerFloorZ === 2800).footprint.holes ?? []).length, 0);
+  // 穴の縁の線: 天井の無い所（自階の部屋の外）で上階の床の縁が細線で出る
+  const prims = planSolidsLayerPrimitivesUp({ graph: low, abovePeek, aboveRiserOf, cutZ: CUT });
+  const edge = prims.filter(p => p.source.kind === 'floor' && p.source.layerFloorZ === 2800);
+  assert.ok(edge.length > 0 && edge.every(p => p.cls === 'below' && p.weight === 'thin'), `穴の縁が細線で出る: ${edge.length}`);
+});
+
+test('見上げの鍵: planSection:up:… で見下げの鍵と衝突しない。置き場は上階 peek の graph（無ければ自階）、pending／- の区別、階の違う peek は使わない', () => {
+  const { self, above, abovePeek } = upScene();
+  const g = self.graph;
+  const a = planSolidsLayerCacheSpec(g, abovePeek, 'up');
+  assert.equal(a.key, `planSection:up:${g.plane.id}:1500:high`);
+  assert.ok(a.home === above.graph && a.peek === abovePeek);
+  assert.equal(planSolidsLayerCacheSpec(g, null, 'up').key, `planSection:up:${g.plane.id}:1500:-`);
+  assert.equal(planSolidsLayerCacheSpec(g, undefined, 'up').key, `planSection:up:${g.plane.id}:1500:pending`);
+  assert.ok(planSolidsLayerCacheSpec(g, undefined, 'up').home === g);
+  const stale = planSolidsLayerCacheSpec(g, { ...abovePeek, activePlaneId: 'other' }, 'up');
+  assert.ok(stale.home === g && stale.peek === null);
+  // 見下げの鍵は従来の文字列のまま（direction 省略・'down'）
+  const down = planSolidsLayerCacheSpec(g, { graph: above.graph, floorHeightMm: 2800, activePlaneId: g.plane.id });
+  assert.equal(down.key, `planSection:${g.plane.id}:1500:high`);
+  assert.equal(planSolidsLayerCacheSpec(g, null, 'down').key, `planSection:${g.plane.id}:1500:-`);
+  assert.notEqual(down.key, a.key);
+});
+
+test('見上げ: planSolidsLayerResolve は abovePeek を使う。同じ graph・同じ置き場で down の後に up を呼んでも down の結果を使い回さない', () => {
+  const { self, abovePeek } = upScene({ selfVoid: true });
+  const peekDown = { graph: abovePeek.graph, floorHeightMm: 2800, activePlaneId: self.graph.plane.id };
+  // graphComputed と同じ「(home, key) ごとに最初の compute を使い回す」memo
+  const cache = new Map();
+  const memo = (home, key, compute) => {
+    if (!cache.has(home)) cache.set(home, new Map());
+    const m = cache.get(home);
+    if (!m.has(key)) m.set(key, compute());
+    return m.get(key);
+  };
+  const down = planSolidsLayerResolve({ graph: self.graph, belowPeek: peekDown, abovePeek, direction: 'down', memo });
+  const up = planSolidsLayerResolve({ graph: self.graph, belowPeek: peekDown, abovePeek, direction: 'up', memo });
+  assert.ok(down !== up, '別の鍵＝別の計算');
+  assert.ok(up.some(p => (p.source.layerFloorZ ?? 0) > 0), 'up は上階の線を含む');
+  assert.ok(!down.some(p => (p.source.layerFloorZ ?? 0) > 0), 'down は上階の線を含まない');
+  assert.ok(up.every(p => p.source.kind !== 'ceiling' || p.source.layerFloorZ === 0));
+  assert.ok(planSolidsLayerResolve({ graph: self.graph, belowPeek: peekDown, abovePeek, direction: 'up', memo }) === up, '同じ鍵は使い回す');
+  // abovePeek が undefined（未解決）でも belowPeek があっても up は pending の鍵で自階だけを解く
+  const keys = [];
+  planSolidsLayerResolve({ graph: self.graph, belowPeek: peekDown, abovePeek: undefined, direction: 'up', memo: (h, k, c) => { keys.push(k); return c(); } });
+  assert.match(keys[0], /^planSection:up:.*:pending$/);
+  assert.equal(planSolidsLayerResolve({ graph: null, abovePeek, direction: 'up', memo }), null);
+  self.cx[0].pendingDelta = 5;
+  assert.equal(planSolidsLayerResolve({ graph: self.graph, abovePeek, direction: 'up', prevPrims: ['prev'], memo }).length, 1, 'ドラッグ中は前回の線');
 });
