@@ -63,17 +63,22 @@ test('【配線】CeilingPanel.jsx（S10）: 行の天井材・仕上げの Mate
   assert.match(code, /^import \{ withFinishUndo \} from '\.\.\/finish\/finishUndo\.js';\s*$/m);
 });
 
-test('【配線】CeilingPanel.jsx（S10）: 三角は区画のある部屋の行だけ（無い行は同幅の空白）。クリックは toggleExpandedRow で行選択へ伝播させない。内訳は zoneDetailRows／remainderRow', () => {
+test('【配線】CeilingPanel.jsx（S11）: 三角は常に出す（区画の有無で出し分けない）。クリックは toggleExpandedRow で行選択へ伝播させない。展開行は選択ブロック→内訳（rowZoneDetail）。上段は無い', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
-  assert.match(code, /^\s*const hasZones = !!room && room\.ceilingZones\.length > 0;\s*$/m);
-  assert.match(code, /^\s*\{hasZones \? \(\s*$/m);
-  assert.match(code, /^\s*\) : <span style=\{triangleGap\} \/>\}\s*$/m);
+  assert.ok(!/hasZones/.test(code), '三角の出し分け（hasZones）が残っている');
+  assert.ok(!/triangleGap/.test(code), '列ずれ防止の空白が残っている');
+  assert.match(code, /^\s*<div style=\{\{ display: 'flex', alignItems: 'center', gap: 2 \}\}>\s*\n\s*<button\s*\n\s*aria-label=\{expanded[^]*?\n\s*<\/button>\s*\n\s*<span>\{row\.name\}<\/span>\s*$/m,
+    '三角のボタンは行のラッパー div の直下で無条件（直前に条件式・直後に閉じの式を挟まない）');
   assert.match(code, /^\s*aria-label=\{expanded \? '内訳を閉じる' : '内訳を開く'\}\s*$/m);
+  assert.match(code, /^\s*\{expanded && \(\s*$/m);
+  assert.match(code, /^\s*<ZoneDetail graph=\{graph\} row=\{row\} \/>\s*$/m);
+  assert.match(code, /^\s*const \{ zones, rest, pairMissing \} = rowZoneDetail\(graph, row\);\s*$/m, '内訳は rowZoneDetail だけから');
+  assert.ok(!/zoneDetailRows\(|remainderRow\(|stairZoneDetailRows\(/.test(code), 'パネルは個別の内訳関数を直接呼ばない');
+  assert.match(code, /^\s*else if \(zones\.length === 0 && !rest\) empty = /m, '区画なしは zones と rest の両方が空のとき');
+  assert.match(code, /区画なし（部屋 CH \$\{dash\(row\.ch\)\}）/);
+  assert.match(code, /区画なし（対の部屋なし）/);
   assert.match(code, /^\s*onClick=\{e => \{ e\.stopPropagation\(\); mode\.toggleExpandedRow\(row\.id\); \}\}\s*$/m);
   assert.match(code, /^\s*const expanded = mode\.expandedRowId === row\.id;\s*$/m);
-  assert.match(code, /^\s*\{expanded && hasZones && \(\s*$/m);
-  assert.match(code, /^\s*const zones = zoneDetailRows\(graph, room\);\s*$/m);
-  assert.match(code, /^\s*const rest = remainderRow\(graph, room\);\s*$/m);
 });
 
 test('【配線】CeilingPanel.jsx: 部屋の無い階段（room が null）では天井材・仕上げの select は disabled で「—」の1択', () => {
@@ -252,8 +257,9 @@ test('【配線】SceneLayers: CeilingSelectionLayer は ceiling のときだけ
   assert.ok(gate < code.indexOf('<ShapesLayer'), 'CeilingSelectionLayer が ShapesLayer より後ろにある');
 });
 
-test('【配線】CeilingPanel.jsx: 選択の要約は selectionSummary(graph, mode.selection)、行の強調は selectedRoomId との一致（階段の行も）', () => {
+test('【配線】CeilingPanel.jsx（S11）: 選択の要約は展開行の中だけ（selection.owner.rowId === row.id のとき selectionSummary）、行の強調は selectedRoomId との一致（階段の行も）', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
-  assert.match(code, /^\s*const summary = selectionSummary\(graph, mode\.selection\);\s*$/m);
+  assert.match(code, /^\s*const summary = expanded && mode\.selection && mode\.selection\.owner\.rowId === row\.id \? selectionSummary\(graph, mode\.selection\) : null;\s*$/m);
+  assert.equal((code.match(/selectionSummary\(/g) ?? []).length, 1, '要約を引くのは行の中の1か所だけ（上段なし）');
   assert.match(code, /^\s*background: row\.id === mode\.selectedRoomId \? '#eff6ff' : '#fff',\s*$/m);
 });

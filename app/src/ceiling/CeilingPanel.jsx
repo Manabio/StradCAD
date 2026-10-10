@@ -5,7 +5,7 @@ import { BottomSheet } from '../ui/BottomSheet.jsx';
 import { MaterialSelect } from '../finish/FinishTable.jsx';
 import { withFinishUndo } from '../finish/finishUndo.js';
 import { markDirty } from '../dirtyState.js';
-import { interiorRows, stairRows, selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom, zoneDetailRows, remainderRow } from './ceilingPanelRows.js';
+import { interiorRows, stairRows, selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom, rowZoneDetail } from './ceilingPanelRows.js';
 import { assignZoneShape, clearZoneCells } from './ceilingZones.js';
 import { CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, parseCeilingZoneDraft, stairCeilingSlopeDefaults } from './ceilingShapeFields.js';
 
@@ -13,12 +13,12 @@ import { CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, parseCei
 // パネルは App から渡る graph prop を使う（mode に graph を持たせない。階切替で古い graph を抱える穴を作らないため）。
 // 部屋の無い階段の行（kind==='stair'）は行タップの選択対象外（タップしても selectRoom を呼ばない）。
 // ただしキャンバスのドラッグ選択（S2）で選ばれたときは強調する（selectedRoomId === row.id）。
-// タブ列の上に選択中のセルの要約を1行出す（selectionSummary）。
+// 上段は持たない。選択中のセル群の要約と区画の欄（CeilingZoneFields）は、選択した部屋の展開した行の中に出す（S11）。
 // 表の各行で天井材・仕上げの MaterialSelect を直接編集する（S10。「仕上げは部屋に1つ」なので入口は行だけ）。
 // 書込み先は部屋の customOverrides（ceilingPanel／ceilingFinish。ceilingWriteTargetRoom が行の所属から解く。階段行は対の部屋）。
 // 部屋の無い階段の行は disabled の「—」。undo は仕上げ表の master 欄と同じ withFinishUndo（欄単位で1エントリ）＋markDirty。
-// CH は読むだけ（区画が効いていれば最小～最大の表記。区画の書込みは上段の CeilingZoneFields）。
-// 選択された行は展開する（mode.expandedRowId。アコーディオン）。区画のある部屋の行は先頭の三角で内訳（zoneDetailRows／remainderRow）を開閉。
+// CH は読むだけ（区画が効いていれば最小～最大の表記。区画の書込みは展開行内の CeilingZoneFields）。
+// 選択された行は展開する（mode.expandedRowId。アコーディオン）。三角は常に出し、展開行は 選択ブロック（選択がその行の所属のときだけ）→内訳（zoneDetailRows／remainderRow）。
 // 行の組み立ては ceilingPanelRows.js、区画の組み立ては ceilingZones.js。
 
 const TABS = [
@@ -63,13 +63,15 @@ const RowMaterialSelect = observer(({ graph, mode, room, field }) => {
 });
 
 const triangleStyle = { width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontSize: 11, lineHeight: '16px', color: '#475569', flexShrink: 0 };
-const triangleGap = { display: 'inline-block', width: 16, flexShrink: 0 };
 
-// 展開した行の内訳（読むだけ。編集は上段の CeilingZoneFields）
-const ZoneDetail = observer(({ graph, room }) => {
-  const zones = zoneDetailRows(graph, room);
-  const rest = remainderRow(graph, room);
+// 展開した行の内訳（読むだけ。編集は同じ展開行内の CeilingZoneFields）
+// 部屋行は部屋所属のセル（zoneDetailRows＋残り）、階段行は対の部屋の区画のうちその階段所属のセル（stairZoneDetailRows。残りなし）
+const ZoneDetail = observer(({ graph, row }) => {
+  const { zones, rest, pairMissing } = rowZoneDetail(graph, row);
   const line = { fontSize: 12, color: '#374151', padding: '2px 0' };
+  let empty = null;
+  if (pairMissing) empty = '区画なし（対の部屋なし）';
+  else if (zones.length === 0 && !rest) empty = row.kind === 'stair' ? '区画なし' : `区画なし（部屋 CH ${dash(row.ch)}）`;
   return (
     <div style={{ padding: '4px 8px 6px 24px' }}>
       {zones.map(z => (
@@ -78,16 +80,16 @@ const ZoneDetail = observer(({ graph, room }) => {
         </div>
       ))}
       {rest && <div style={line}>残り: 部屋 CH {dash(rest.chLabel)}｜{rest.cellCount}セル</div>}
+      {empty && <div style={line}>{empty}</div>}
     </div>
   );
 });
 
 // 表の1行（部屋名｜天井材｜仕上げ｜CH）。区画がある部屋は先頭に三角を出し、開くと下に内訳。選択された行は展開される（mode.expandedRowId）
-const CeilingRow = observer(({ graph, mode, row }) => {
-  const room = row.kind === 'room' ? graph.roomMap.get(row.id) : null;
+const CeilingRow = observer(({ graph, mode, row, floorHeight }) => {
   const target = ceilingWriteTargetRoom(graph, { owner: { kind: row.kind, id: row.id } });
-  const hasZones = !!room && room.ceilingZones.length > 0;
   const expanded = mode.expandedRowId === row.id;
+  const summary = expanded && mode.selection && mode.selection.owner.rowId === row.id ? selectionSummary(graph, mode.selection) : null;
   return (
     <>
       <tr
@@ -99,15 +101,13 @@ const CeilingRow = observer(({ graph, mode, row }) => {
       >
         <td style={cellStyle}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            {hasZones ? (
-              <button
-                aria-label={expanded ? '内訳を閉じる' : '内訳を開く'}
-                onClick={e => { e.stopPropagation(); mode.toggleExpandedRow(row.id); }}
-                style={triangleStyle}
-              >
-                {expanded ? '▾' : '▸'}
-              </button>
-            ) : <span style={triangleGap} />}
+            <button
+              aria-label={expanded ? '内訳を閉じる' : '内訳を開く'}
+              onClick={e => { e.stopPropagation(); mode.toggleExpandedRow(row.id); }}
+              style={triangleStyle}
+            >
+              {expanded ? '▾' : '▸'}
+            </button>
             <span>{row.name}</span>
           </div>
         </td>
@@ -118,10 +118,21 @@ const CeilingRow = observer(({ graph, mode, row }) => {
         ))}
         <td style={cellStyle}>{dash(row.ch)}</td>
       </tr>
-      {expanded && hasZones && (
+      {expanded && (
         <tr style={{ background: '#f1f5f9' }}>
           <td colSpan={COLUMNS.length} style={{ ...cellStyle, padding: 0 }}>
-            <ZoneDetail graph={graph} room={room} />
+            {summary && (
+              <>
+                <div style={{ padding: '6px 10px', fontSize: 12, color: '#1e3a8a', background: '#eff6ff', borderBottom: '1px solid #e2e8f0' }}>
+                  選択中: {summary.cellCount}セル
+                  {summary.zone && summary.zone.state !== 'none' && (
+                    <>｜区画 {summary.zone.state === 'uniform' ? zoneSummaryText(summary.zone) : '混在'}</>
+                  )}
+                </div>
+                <CeilingZoneFields key={zoneFieldKey(mode.selection)} graph={graph} selection={mode.selection} zone={summary.zone ?? null} floorHeight={floorHeight ?? null} />
+              </>
+            )}
+            <ZoneDetail graph={graph} row={row} />
           </td>
         </tr>
       )}
@@ -255,20 +266,8 @@ const CeilingZoneFields = observer(({ graph, selection, zone, floorHeight }) => 
 
 export const CeilingPanel = observer(({ graph, mode, isLandscape, floorHeight }) => {
   const rows = mode.activeTab === 'stair' ? stairRows(graph, mode.materialMap) : interiorRows(graph, mode.materialMap);
-  const summary = selectionSummary(graph, mode.selection);
   const inner = (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      {summary && (
-        <div style={{ padding: '6px 10px', fontSize: 12, color: '#1e3a8a', background: '#eff6ff', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
-          選択中: {summary.name}／{summary.cellCount}セル／CH {dash(summary.ch)}
-          {summary.zone && summary.zone.state !== 'none' && (
-            <>／区画 {summary.zone.state === 'uniform' ? zoneSummaryText(summary.zone) : '混在'}</>
-          )}
-        </div>
-      )}
-      {mode.selection && (
-        <CeilingZoneFields key={zoneFieldKey(mode.selection)} graph={graph} selection={mode.selection} zone={summary?.zone ?? null} floorHeight={floorHeight ?? null} />
-      )}
       <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', flexShrink: 0 }}>
         {TABS.map(tab => (
           <button
@@ -307,7 +306,7 @@ export const CeilingPanel = observer(({ graph, mode, isLandscape, floorHeight })
             </thead>
             <tbody>
               {rows.map(row => (
-                <CeilingRow key={row.id} graph={graph} mode={mode} row={row} />
+                <CeilingRow key={row.id} graph={graph} mode={mode} row={row} floorHeight={floorHeight} />
               ))}
             </tbody>
           </table>

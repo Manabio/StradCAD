@@ -156,6 +156,19 @@ function dimsLabelOf(shape, dims) {
  * @returns {Array<{zoneId: string, shapeLabel: string, heightLabel: string, dimsLabel: string, cellCount: number}>}
  */
 export function zoneDetailRows(graph, room) {
+  return zoneRowsBy(graph, room, o => o.kind === 'room' && o.rowId === room.id);
+}
+
+/**
+ * 階段行の内訳（zoneDetailRows と同型）。対の部屋（stair.roomId）の区画のうち、その階段に所属するセル
+ * （所属索引で kind==='stair' かつ id===stair.id）を持つ区画だけ。セル数は階段所属のセルの数。残りは出さない。対の部屋が無ければ []。
+ */
+export function stairZoneDetailRows(graph, stair) {
+  const room = graph && stair?.roomId ? graph.roomMap.get(stair.roomId) : null;
+  return zoneRowsBy(graph, room, o => o.kind === 'stair' && o.id === stair.id);
+}
+
+function zoneRowsBy(graph, room, isMine) {
   if (!graph || !room || room.ceilingZones.length === 0) return [];
   const owners = ceilingCellOwnersOf(graph);
   const taken = new Set();
@@ -163,7 +176,8 @@ export function zoneDetailRows(graph, room) {
   for (const zone of room.ceilingZones) {
     let cellCount = 0;
     for (const key of ceilingRefreshCells(new Set(zone.cells), graph)) {
-      if (taken.has(key) || owners.get(key)?.rowId !== room.id) continue;
+      const owner = owners.get(key);
+      if (taken.has(key) || !owner || !isMine(owner)) continue;
       taken.add(key);
       cellCount++;
     }
@@ -188,11 +202,35 @@ export function remainderRow(graph, room) {
   if (!graph || !room || room.ceilingZones.length === 0 || !roomHasCeiling(room)) return null;
   const owners = ceilingCellOwnersOf(graph);
   const mine = new Set();
-  for (const [key, owner] of owners) if (owner.rowId === room.id) mine.add(key);
+  for (const [key, owner] of owners) if (owner.kind === 'room' && owner.rowId === room.id) mine.add(key);
   for (const zone of room.ceilingZones) {
     for (const key of ceilingRefreshCells(new Set(zone.cells), graph)) mine.delete(key);
   }
   return mine.size === 0 ? null : { chLabel: roomCeilingHeight(graph, room).raw, cellCount: mine.size };
+}
+
+/**
+ * 展開行の内訳（唯一の入口。ZoneDetail はこれだけを呼ぶ）。行の id に対応する部屋 R（room.id。対の部屋を持つ階段の行も room.id）について、
+ *   zones = zoneDetailRows(R)〔部屋所属のセル〕＋ R を対の部屋とする全階段の stairZoneDetailRows〔階段所属のセル〕
+ *           （同じ区画が両方に出れば1行にまとめセル数を合算。順は R.ceilingZones の順）
+ *   rest  = remainderRow(R)〔部屋所属の残りだけ〕
+ * 内部タブの STAIR ペア部屋の行と階段タブの同じ部屋の行は同じ結果になる。R が無い行（部屋の無い階段・参照切れ）は pairMissing。
+ * @returns {{zones: ReturnType<typeof zoneDetailRows>, rest: ReturnType<typeof remainderRow>, pairMissing: boolean}}
+ */
+export function rowZoneDetail(graph, row) {
+  const room = graph && row ? graph.roomMap.get(row.id) : null;
+  if (!room) return { zones: [], rest: null, pairMissing: true };
+  const merged = new Map();
+  const add = list => {
+    for (const z of list) {
+      const prev = merged.get(z.zoneId);
+      merged.set(z.zoneId, prev ? { ...prev, cellCount: prev.cellCount + z.cellCount } : z);
+    }
+  };
+  add(zoneDetailRows(graph, room));
+  for (const stair of graph.stairs) if (stair.roomId === room.id) add(stairZoneDetailRows(graph, stair));
+  const zones = room.ceilingZones.map(z => merged.get(z.id)).filter(Boolean);
+  return { zones, rest: remainderRow(graph, room), pairMissing: false };
 }
 
 /** 仕上げ表の内部タブと同じ部屋・同じ並び・同じ表示名。 */
@@ -211,10 +249,11 @@ export function stairRows(graph, materialMap = null) {
   return graph.stairs.map(stair => {
     const room = stair.roomId ? graph.roomMap.get(stair.roomId) : null;
     if (room) return roomRow(graph, room, room.name || DEFAULT_STAIR_ROOM_NAME, materialMap, zoneLabels);
+    // 行 id は所属の rowId（ceilingOwners と同じ stair.roomId ?? stair.id）に揃える。参照切れの roomId でも選択がこの行に出る
     return {
-      id: stair.id,
+      id: stair.roomId ?? stair.id,
       kind: 'stair',
-      name: `${STAIR_TYPE_LABEL[stair.type] ?? stair.type} ${stair.totalSteps}段`,
+      name: stair.roomId ? DEFAULT_STAIR_ROOM_NAME : `${STAIR_TYPE_LABEL[stair.type] ?? stair.type} ${stair.totalSteps}段`,
       ceilingBoard: null,
       ceilingFinish: null,
       ch: null,

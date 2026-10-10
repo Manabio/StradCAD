@@ -6,7 +6,10 @@ import { makeGrid, assignZoneHeight } from '../plan/planTestFixtures.js';
 import { assignZoneShape } from './ceilingZones.js';
 import { interiorTabRooms, interiorRoomDisplayName } from '../finish/interiorTabRooms.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
-import { interiorRows, stairRows, selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom, materialDisplay, zoneDetailRows, remainderRow } from './ceilingPanelRows.js';
+import { ceilingSurfacesOf } from './ceilingSurfaces.js';
+import { buildCeilingCellOwners } from './ceilingOwners.js';
+import { DEFAULT_STAIR_ROOM_NAME } from '../finish/roomNamingOptions.js';
+import { rowZoneDetail, interiorRows, stairRows,selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom, materialDisplay, zoneDetailRows, stairZoneDetailRows, remainderRow } from './ceilingPanelRows.js';
 
 const XS = [0, 1000, 2000, 3000, 4000, 5000, 6000];
 
@@ -134,11 +137,12 @@ test('stairRows: 部屋の無い階段の行は kind=stair で選択対象外、
   assert.ok(interiorRows(g.graph).every(r => r.kind === 'room'));
 });
 
-test('【失敗系】stairRows: 階段が無い階は空配列。変換元の部屋が消えた階段も例外にせず「タイプ 段数」で出す', () => {
+test('【失敗系】stairRows: 階段が無い階は空配列。変換元の部屋が消えた階段も例外にせず出す（行 id は所属の rowId＝roomId、名前は既定名。S11 の裁定。roomId の無い階段は「タイプ 段数」）', () => {
   const g = makeGrid(XS, [0, 1000]);
   assert.deepEqual(stairRows(g.graph), []);
-  const s = g.graph.addStair({ type: StairType.STRAIGHT, roomId: 'gone', totalSteps: 12 });
-  assert.deepEqual(stairRows(g.graph).map(r => [r.id, r.name]), [[s.id, '直進 12段']]);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: 'gone', totalSteps: 12 });
+  const bare = g.graph.addStair({ type: StairType.STRAIGHT, totalSteps: 12 });
+  assert.deepEqual(stairRows(g.graph).map(r => [r.id, r.name]), [['gone', DEFAULT_STAIR_ROOM_NAME], [bare.id, '直進 12段']]);
 });
 
 test('selectionSummary: 部屋の選択は 名前・解けたセル数・CH(raw)。selection が null なら null', () => {
@@ -301,17 +305,118 @@ test('zoneDetailRows／remainderRow: 同じ区画が複数セルなら cellCount
   assert.equal(remainderRow(g.graph, r), null);
 });
 
-test('zoneDetailRows／remainderRow: 階段行（対の部屋）の区画は内訳に出るが、残りは出さない（階段の対の部屋は残りを描かない）', () => {
+test('stairZoneDetailRows: 階段行（対の部屋）の区画は内訳に出るが、残りは出さない（階段の対の部屋は残りを描かない）', () => {
   const g = makeGrid(XS, [0, 1000]);
   const pair = g.feature([[0, 0], [1, 0]], RoomFeature.STAIR);
   pair.setOverride('ceilingHeight', '2400');
   g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(0, 0), g.cell(1, 0)]) });
   pair.setCeilingZones(assignZoneShape(g.graph, pair, [g.cell(0, 0)], { heightMm: 2500, shape: 'slope', dims: [1000, 0] }));
-  const rows = zoneDetailRows(g.graph, pair);
+  const rows = stairZoneDetailRows(g.graph, g.graph.stairs.find(s => s.roomId === pair.id));
   assert.equal(rows.length, 1);
   assert.equal(rows[0].dimsLabel, 'ライズ 1000・上がる向き → 右');
   assert.equal(rows[0].cellCount, 1);
   assert.equal(remainderRow(g.graph, pair), null);
+});
+
+test('stairZoneDetailRows／zoneDetailRows: 対の部屋に「階段所属のセルだけの区画」と「部屋所属のセルだけの区画」があると、階段行には前者だけ・部屋行には後者だけ', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const r = g.interior([[0, 0], [1, 0]]);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: r.id, cells: new Set([g.cell(2, 0)]) });
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(0, 0)], { heightMm: 2800, shape: 'flat', dims: [] }));
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(2, 0)], { heightMm: 2500, shape: 'slope', dims: [500, 0] }));
+  const stair = g.graph.stairs.find(s => s.roomId === r.id);
+  const onStair = stairZoneDetailRows(g.graph, stair);
+  assert.deepEqual(onStair.map(z => z.shapeLabel), ['傾斜']);
+  assert.equal(onStair[0].cellCount, 1);
+  const onRoom = zoneDetailRows(g.graph, r);
+  assert.deepEqual(onRoom.map(z => z.shapeLabel), ['平面']);
+  assert.equal(onRoom[0].cellCount, 1);
+});
+
+// ---- 画面の経路（stairRows／interiorRows の出力 → rowZoneDetail）----
+
+const rowOf = (rows, id) => rows.find(r => r.id === id);
+const surfaceCellCount = (graph, roomId) => ceilingSurfacesOf(graph).filter(s => s.roomId === roomId).reduce((n, s) => n + s.rects.length, 0);
+
+test('rowZoneDetail: STAIR ペア部屋を対にする階段の行（stairRows）は区画1件・セル数1・残りなし', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const pair = g.feature([[0, 0], [1, 0]], RoomFeature.STAIR);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(0, 0), g.cell(1, 0)]) });
+  pair.setCeilingZones(assignZoneShape(g.graph, pair, [g.cell(0, 0)], { heightMm: 2500, shape: 'slope', dims: [1000, 0] }));
+  const row = rowOf(stairRows(g.graph), pair.id);
+  assert.equal(row.kind, 'room', '前提: 対の部屋を持つ階段の行は roomRow');
+  const d = rowZoneDetail(g.graph, row);
+  assert.equal(d.zones.length, 1);
+  assert.equal(d.zones[0].cellCount, 1);
+  assert.equal(d.rest, null);
+  assert.equal(d.pairMissing, false);
+});
+
+test('rowZoneDetail: 屋内部屋を対にする階段で階段セルが部屋の外 → 内部タブの行は 部屋所属の区画＋残り＋階段所属の区画。セル数の合計は天井面と一致', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const r = g.interior([[0, 0], [1, 0]]);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: r.id, cells: new Set([g.cell(2, 0)]) });
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(0, 0)], { heightMm: 2800, shape: 'flat', dims: [] }));
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(2, 0)], { heightMm: 2500, shape: 'slope', dims: [500, 0] }));
+  const d = rowZoneDetail(g.graph, rowOf(interiorRows(g.graph), r.id));
+  assert.deepEqual(d.zones.map(z => z.shapeLabel), ['平面', '傾斜']);
+  assert.equal(d.rest.cellCount, 1);
+  const total = d.zones.reduce((n, z) => n + z.cellCount, 0) + d.rest.cellCount;
+  assert.equal(total, surfaceCellCount(g.graph, r.id), 'セル数の合計は ceilingSurfacesOf の面のセル数');
+  assert.deepEqual(rowZoneDetail(g.graph, rowOf(stairRows(g.graph), r.id)), d, '階段タブの同じ部屋の行も同じ結果');
+});
+
+test('rowZoneDetail: 2a が階段セルに重なる → 2a の行には 2a の区画、階段（ペア部屋）の行には階段所属の区画。セルは重複しない', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const pair = g.feature([[2, 0], [3, 0]], RoomFeature.STAIR);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(2, 0), g.cell(3, 0)]) });
+  pair.setCeilingZones([new CeilingZone({ id: 'zp', cells: [g.cell(2, 0), g.cell(3, 0)], heightMm: 2300 })]);
+  const under = g.interior([[2, 0]]);
+  under.setCeilingZones([new CeilingZone({ id: 'zu', cells: [g.cell(2, 0)], heightMm: 2200 })]);
+  const u = rowZoneDetail(g.graph, rowOf(interiorRows(g.graph), under.id));
+  const s = rowZoneDetail(g.graph, rowOf(stairRows(g.graph), pair.id));
+  assert.deepEqual(u.zones.map(z => [z.zoneId, z.cellCount]), [['zu', 1]]);
+  assert.deepEqual(s.zones.map(z => [z.zoneId, z.cellCount]), [['zp', 1]], '2a が取ったセルは階段の区画から落ちる');
+});
+
+test('rowZoneDetail: 同じ対の部屋を持つ2つの階段は、それぞれの階段所属のセルだけを数える（行は合算）', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const pair = g.feature([[0, 0], [1, 0]], RoomFeature.STAIR);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(0, 0)]) });
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(1, 0)]) });
+  pair.setCeilingZones([new CeilingZone({ id: 'z', cells: [g.cell(0, 0), g.cell(1, 0)], heightMm: 2300 })]);
+  const [s1, s2] = g.graph.stairs;
+  assert.equal(stairZoneDetailRows(g.graph, s1)[0].cellCount, 1);
+  assert.equal(stairZoneDetailRows(g.graph, s2)[0].cellCount, 1);
+  const d = rowZoneDetail(g.graph, rowOf(stairRows(g.graph), pair.id));
+  assert.equal(d.zones.length, 1, '同じ区画は1行にまとめる');
+  assert.equal(d.zones[0].cellCount, 2);
+});
+
+test('【失敗系】rowZoneDetail／stairRows: 参照切れの roomId の階段は行 id が所属の rowId と一致（選択が行に出る）で pairMissing。部屋の無い階段も pairMissing', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: 'ghost', cells: new Set([g.cell(0, 0)]) });
+  g.graph.addStair({ type: StairType.STRAIGHT, cells: new Set([g.cell(1, 0)]) });
+  const [dangling, bare] = stairRows(g.graph);
+  const owners = buildCeilingCellOwners(g.graph);
+  assert.equal(dangling.id, 'ghost');
+  assert.equal(dangling.name, DEFAULT_STAIR_ROOM_NAME);
+  assert.equal(owners.get(g.cell(0, 0)).rowId, dangling.id, '所属の rowId と行 id が一致');
+  assert.equal(bare.id, g.graph.stairs[1].id);
+  assert.equal(owners.get(g.cell(1, 0)).rowId, bare.id);
+  for (const row of [dangling, bare]) assert.deepEqual(rowZoneDetail(g.graph, row), { zones: [], rest: null, pairMissing: true });
+  assert.deepEqual(rowZoneDetail(null, dangling), { zones: [], rest: null, pairMissing: true });
+});
+
+test('【失敗系】stairZoneDetailRows: 対の部屋なし・区画なし・graph／stair null は []', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  g.graph.addStair({ type: StairType.STRAIGHT, cells: new Set([g.cell(0, 0)]) });
+  assert.deepEqual(stairZoneDetailRows(g.graph, g.graph.stairs[0]), []);
+  const pair = g.feature([[1, 0]], RoomFeature.STAIR);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(1, 0)]) });
+  assert.deepEqual(stairZoneDetailRows(g.graph, g.graph.stairs.find(s => s.roomId === pair.id)), []);
+  assert.deepEqual(stairZoneDetailRows(g.graph, null), []);
+  assert.deepEqual(stairZoneDetailRows(null, g.graph.stairs[0]), []);
 });
 
 test('【失敗系】zoneDetailRows／remainderRow: 区画の無い部屋・room null・graph null は []／null。効かない区画（解けないキー）は出さない', () => {

@@ -26,8 +26,7 @@ test('【配線】S10: 材の書込み（setOverride／clearOverride）は行の
   assert.equal(count(/room\.setOverride\(/g), 1);
   assert.equal(count(/room\.clearOverride\(/g), 1);
   assert.match(src, /withFinishUndo\(graph, \(\) => \(v === '' \? room\.clearOverride\(field\.key\) : room\.setOverride\(field\.key, v\)\)\)/);
-  assert.equal(count(/graph\.roomMap\.get\(row\.id\)/g), 1, 'roomMap 直引きは三角の判定・内訳用の1か所だけ（書込み先は target）');
-  assert.match(src, /^\s*const room = row\.kind === 'room' \? graph\.roomMap\.get\(row\.id\) : null;\s*$/m);
+  assert.equal(count(/graph\.roomMap\.get\(row\.id\)/g), 0, '行から部屋を直引きしない（書込み先は target、内訳は rowZoneDetail）');
   assert.match(src, /^\s*<RowMaterialSelect graph=\{graph\} mode=\{mode\} room=\{target\} field=\{f\} \/>\s*$/m, '書込み先は target（ceilingWriteTargetRoom）');
 });
 
@@ -60,9 +59,15 @@ test('【配線】書込み先は ceilingZoneTargetRoom（部屋、階段は対�
   assert.match(src, /^\s*disabled=\{disabled \|\| !f\}\s*$/m, '使わない寸法欄は disabled');
 });
 
-test('【配線】区画の欄は選択があるときだけ出す', () => {
-  assert.match(src, /^\s*\{mode\.selection && \(\s*$/m);
-  assert.match(src, /^\s*<CeilingZoneFields key=\{zoneFieldKey\(mode\.selection\)\} graph=\{graph\} selection=\{mode\.selection\} zone=\{summary\?\.zone \?\? null\} floorHeight=\{floorHeight \?\? null\} \/>\s*$/m, '階高を区画の欄へ渡す');
+test('【配線】S11: 区画の欄は選択した部屋の展開行の中だけ（上段なし）。選択ブロック（summary が真のとき）の後に内訳が続く', () => {
+  assert.equal(count(/<CeilingZoneFields /g), 1, '欄の描画は1か所だけ');
+  assert.match(src, /^\s*\{summary && \(\s*$/m);
+  assert.match(src, /^\s*<CeilingZoneFields key=\{zoneFieldKey\(mode\.selection\)\} graph=\{graph\} selection=\{mode\.selection\} zone=\{summary\.zone \?\? null\} floorHeight=\{floorHeight \?\? null\} \/>\s*$/m, '階高を区画の欄へ渡す');
+  assert.ok(src.indexOf('<CeilingZoneFields ') > src.indexOf('const CeilingRow'), '欄は CeilingRow の中（上段ではない）');
+  assert.ok(src.indexOf('<CeilingZoneFields ') < src.indexOf('<ZoneDetail graph'), '選択ブロックが内訳より上');
+  assert.ok(!/\{mode\.selection && \(/.test(src), '上段の選択ガードが残っている');
+  assert.ok(!/選択中: \{summary\.name\}/.test(src), '上段の要約が残っている');
+  assert.match(src, /<CeilingRow key=\{row\.id\} graph=\{graph\} mode=\{mode\} row=\{row\} floorHeight=\{floorHeight\} \/>/, '階高を行へ渡す');
   assert.match(src, /^const zoneFieldKey = selection => `\$\{selection\.owner\.kind\}:\$\{selection\.owner\.id\}:\$\{\[\.\.\.selection\.cellKeys\]\.sort\(\)\.join\(','\)\}`;\s*$/m, '選択が変わったら欄を作り直す（入力途中の下書きを持ち越さない）');
   assert.match(src, /^\s*const \[draft, setDraft\] = useState\(\(\) => \{\s*$/m, '下書きは useState（MobX に入れない）');
 });
