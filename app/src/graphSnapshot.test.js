@@ -2749,17 +2749,17 @@ function makeGraphWithZones(zonesData) {
   return { graph, living, bed, cellA, cellB };
 }
 const ZONES_FULL = ({ cellA, cellB }) => [
-  { id: 'za', cells: [cellA], heightMm: null, shape: 'dome', dims: [1200, 300.5] },
-  { id: 'zb', cells: [cellB], heightMm: 2750.5, shape: 'flat', dims: [] },
+  { id: 'za', cells: [cellA], heightMm: null, shape: 'dome', dims: [1200] },
+  { id: 'zb', cells: [cellB], heightMm: 2750.5, shape: 'slope', dims: [1500.5, 270] },
 ];
 
-test('【S5】FlatBuffers encode→decode: 区画（高さ null と有限・shape dome・dims [1200, 300.5]）が往復する。区画の無い部屋は []', () => {
+test('【S5・S6a】FlatBuffers encode→decode: 区画（高さ null と有限・dome の dims [1200]・slope の dims [1500.5, 270]）が往復する。区画の無い部屋は []', () => {
   const { graph, living, bed, cellA, cellB } = makeGraphWithZones(ZONES_FULL);
   const restored = makeGraph();
   restoreGraph(restored, serializeGraph(graph));
   assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()), [
-    { id: 'za', cells: [cellA], heightMm: null, shape: 'dome', dims: [1200, 300.5] },
-    { id: 'zb', cells: [cellB], heightMm: 2750.5, shape: 'flat', dims: [] },
+    { id: 'za', cells: [cellA], heightMm: null, shape: 'dome', dims: [1200] },
+    { id: 'zb', cells: [cellB], heightMm: 2750.5, shape: 'slope', dims: [1500.5, 270] },
   ]);
   assert.deepEqual([...restored.roomMap.get(bed.id).ceilingZones], []);
   assert.ok(Object.isFrozen(restored.roomMap.get(living.id).ceilingZones));
@@ -2813,15 +2813,15 @@ test('【S5・失敗系】旧データ（ceilingZones が無い snapshot）は [
   const snapshot = decodeFloorSnapshot(serializeGraph(graph));
   const plain = snapshot.rooms.find(r => r.id === living.id);
   plain.ceilingZones = [
-    { id: 'ok', cells: [cellB, cellA, cellA], heightMm: -5, shape: 'pyramid', dims: [NaN, 7] },
+    { id: 'ok', cells: [cellB, cellA, cellA], heightMm: 2600, shape: 'slope', dims: [0, 45] },
     { id: '', cells: [cellA], heightMm: 2400 },
     { id: 'empty', cells: [cellA], heightMm: null },
   ];
   const restored = makeGraph();
   restoreGraph(restored, snapshot);
   assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()), [
-    { id: 'ok', cells: [cellA, cellB].sort(), heightMm: null, shape: 'flat', dims: [7] },
-  ], '高さ -5→null・未知 shape→flat・dims の NaN 除外（dims が残るので区画は残る）。id なしと指定なし（先の区画にセルも取られた）は捨てる');
+    { id: 'ok', cells: [cellA, cellB].sort(), heightMm: 2600, shape: 'flat', dims: [] },
+  ], '壊れた傾斜（ライズ 0・向き 45）は区画を捨てずセルと高さを残して flat・[] へ落ちる。id なしと指定なし（先の区画にセルも取られた）は捨てる');
 
   delete snapshot.rooms.find(r => r.id === living.id).ceilingZones; // 旧データ（キー自体が無い）
   const old = makeGraph();
@@ -2844,5 +2844,5 @@ test('【S5】階の複製・検討案のコピー（serializeGraphWithFreshLine
       assert.ok(!origIds.has(id), '旧 id のまま残っていない');
     }
   }
-  assert.deepEqual(room.ceilingZones.map(z => [z.id, z.heightMm, z.shape, z.dims]), [['za', null, 'dome', [1200, 300.5]], ['zb', 2750.5, 'flat', []]]);
+  assert.deepEqual(room.ceilingZones.map(z => [z.id, z.heightMm, z.shape, z.dims]), [['za', null, 'dome', [1200]], ['zb', 2750.5, 'slope', [1500.5, 270]]]);
 });

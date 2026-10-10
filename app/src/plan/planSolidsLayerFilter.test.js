@@ -11,6 +11,7 @@ import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { planSolids } from './planSolids.js';
 import { isInsideFootprint } from './planGeometry.js';
 import { makeGrid, makeRoomGraph, addBeamH, addColumnAt, linesOf } from './planTestFixtures.js';
+import { assignZoneShape } from '../ceiling/ceilingZones.js';
 
 const CUT = 1500;
 const prim = (kind, cls = 'below') => ({ kind: 'line', key: `${kind}-${cls}`, points: [0, 0, 1, 0], weight: 'thin', cls, source: { kind, id: 'x' } });
@@ -335,6 +336,47 @@ test('見上げ: 壁のある部屋では天井の外形は壁（切断）が隠
   assert.ok(!prims.some(p => p.source.kind === 'wall' && (p.source.layerFloorZ ?? 0) === 0), '自階の壁は描かない');
   const ceil = prims.filter(p => p.source.kind === 'ceiling');
   assert.ok(ceil.length > 0 && ceil.every(p => Math.hypot(p.points[2] - p.points[0], p.points[3] - p.points[1]) <= 57.5 + 1e-6), `隅の 57.5mm 以下の断片だけ: ${JSON.stringify(sortedPts(ceil))}`);
+});
+
+/** 4000 角の 1 部屋に、全体の傾斜天井（低い側 2400・ライズ 2000・右へ上がる）を付けた自階。壁なし。 */
+function slopeScene() {
+  const self = makeGrid([0, 4000], [0, 4000], { id: 'low', startFloor: 1 });
+  const room = self.interior([[0, 0]]);
+  room.setCeilingZones(assignZoneShape(self.graph, room, [self.cell(0, 0)], { heightMm: 2400, shape: 'slope', dims: [2000, 0] }));
+  return { self, room };
+}
+const markPrims = prims => prims.filter(p => p.kind === 'arrow' || p.kind === 'text');
+
+test('見上げの傾斜天井（S6a）: 切断高が傾斜の途中（z=3000 は x=1200）にあるとき、輪郭は切断高より上の部分（x>1200）だけで、等高線（x=1200 の交線）は出ない', () => {
+  const { self } = slopeScene();
+  const lines = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: 3000 }).filter(p => p.kind === 'line' && p.source.kind === 'ceiling');
+  assert.ok(lines.length > 0);
+  assert.ok(lines.every(p => p.cls === 'below' && p.weight === 'thin'));
+  for (const p of lines) {
+    assert.ok(Math.min(p.points[0], p.points[2]) >= 1200 - 1, `切断高より下（x<1200）の線が出ている: ${JSON.stringify(p.points)}`);
+  }
+  assert.ok(!lines.some(p => Math.abs(p.points[0] - 1200) < 1 && Math.abs(p.points[2] - 1200) < 1), '等高線は出ない');
+  assert.ok(lines.some(p => p.points[0] === 4000 && p.points[2] === 4000), '高い側の端の辺は出る');
+  // 切断高が傾斜の全体より下なら、輪郭は 4 辺そろう
+  const full = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: 1500 }).filter(p => p.kind === 'line' && p.source.kind === 'ceiling');
+  assert.deepEqual(sortedPts(full), outline4(0, 0, 4000, 4000));
+});
+
+test('見上げの傾斜天井: 注記（矢印・文字）は詳細 LOD だけ。基準点（面の中心）が切断高より上なら出て、下に入れば消える。平面の天井には付かない', () => {
+  const { self } = slopeScene();
+  const marks = cutZ => markPrims(planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ }));
+  const shown = marks(3000); // 中心 x=2000 の高さ 3400 > 3000
+  assert.deepEqual(shown.map(p => p.kind).sort(), ['arrow', 'text']);
+  assert.ok(shown.every(p => p.detailOnly === true && p.source.kind === 'ceiling' && p.cls === 'below'));
+  assert.equal(shown.find(p => p.kind === 'text').text, '傾斜 CH2400〜4400');
+  assert.equal(marks(3600).length, 0, '中心の高さ 3400 ≦ 切断高 3600 なら基準点が見えず消える');
+  // LOD: 詳細以外では注記を除く
+  const all = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: 3000 });
+  assert.equal(markPrims(visiblePlanPrimitives(all, LodLevel.DETAIL)).length, 2);
+  assert.equal(markPrims(visiblePlanPrimitives(all, LodLevel.STANDARD)).length, 0);
+  // 平面の天井
+  const flat = makeRoomGraph(0, 0, 4000, 4000);
+  assert.equal(markPrims(planSolidsLayerPrimitivesUp({ graph: flat.graph, cutZ: 1500 })).length, 0);
 });
 
 test('見上げ: 自階に天井が無い（吹抜け）と、上階の梁が細線（layerFloorZ=階高）で見える。上階が無い・階高が不正なら上階の線は出ない', () => {

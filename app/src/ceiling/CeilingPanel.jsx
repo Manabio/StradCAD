@@ -5,9 +5,9 @@ import { BottomSheet } from '../ui/BottomSheet.jsx';
 import { MaterialSelect } from '../finish/FinishTable.jsx';
 import { withFinishUndo } from '../finish/finishUndo.js';
 import { markDirty } from '../dirtyState.js';
-import { parsePlanCutHeightInput } from '../ui/planCutHeightInput.js';
-import { interiorRows, stairRows, selectionSummary, ceilingWriteTargetRoom, ceilingZoneTargetRoom } from './ceilingPanelRows.js';
-import { assignZoneHeight, clearZoneCells } from './ceilingZones.js';
+import { interiorRows, stairRows, selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom } from './ceilingPanelRows.js';
+import { assignZoneShape, clearZoneCells } from './ceilingZones.js';
+import { CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, parseCeilingZoneDraft } from './ceilingShapeFields.js';
 
 // 天伏モードの専用パネル（仕上げ表とは独立。仕上げ表との共有はデータと純モジュール＋材選択の部品 MaterialSelect だけ）。
 // パネルは App から渡る graph prop を使う（mode に graph を持たせない。階切替で古い graph を抱える穴を作らないため）。
@@ -70,47 +70,118 @@ const CeilingMaterialFields = observer(({ graph, mode, room }) => {
 // 選択が変わったら入力途中の text を捨てるため、欄を選択の識別子で作り直す
 const zoneFieldKey = selection => `${selection.owner.kind}:${selection.owner.id}:${[...selection.cellKeys].sort().join(',')}`;
 
-const ZONE_STATE_PLACEHOLDER = { none: '部屋のCH', mixed: '混在' };
+// 要約の区画表記: 平面は高さ、他は形状名＋基準高（null は部屋のCH）
+const zoneSummaryText = z => {
+  const h = z.heightMm == null ? '部屋のCH' : `${z.heightMm}mm`;
+  return z.shape === 'flat' ? h : `${CEILING_SHAPE_OPTIONS.find(o => o.value === z.shape)?.label ?? z.shape} ${h}`;
+};
 
-// 区画の高さの欄（S5）。選択中のセル群へ「部屋の FL からの天井高」を区画として書く。書込み先は所属が部屋のときだけ
-// （階段所属は傾斜と同時の S6 まで disabled）。確定は withFinishUndo で1エントリ＋markDirty。部屋の CH 欄（override）には書かない。
-// 確定後も選択は保つ。0 以下・非数は確定せずメッセージを出す。
-const CeilingZoneField = observer(({ graph, selection, zone }) => {
-  const [text, setText] = useState('');
-  const [error, setError] = useState(false);
+const DIM_SLOTS = 2; // 寸法欄の数（CEILING_SHAPE_DIM_COUNT の最大。形状が違っても欄を共用する）
+const defaultDims = shape => CEILING_DIM_FIELDS[shape].map(f => (f.input === 'select' ? String(f.options[0].value) : ''));
+
+// 下書きの初期値。既存の区画が一様ならその形状・寸法・基準高、無い（none）・混在なら平面＋空（空の基準高＝部屋の CH）
+function initialDraft(zone) {
+  if (zone?.state === 'uniform') {
+    return { shape: zone.shape, height: zone.heightMm == null ? '' : String(zone.heightMm), dims: zone.dims.map(String) };
+  }
+  return { shape: 'flat', height: '', dims: [] };
+}
+
+const fieldLabelStyle = { display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' };
+
+// 区画の形状・寸法の欄（S5 の高さ欄を S6a で拡張）。選択中のセル群へ「形状（平面／傾斜）・基準高・寸法1／寸法2」を区画として書く。
+// 基準高の意味は形状で変わる（平面＝天井高／傾斜＝低い側。空欄＝部屋の CH）。寸法欄は汎用の2欄で、形状ごとにラベルと入力の種類が変わり、使わない欄は disabled。
+// 書込み先は所属が部屋のときだけ（階段所属は S6b まで disabled。円弧・ドームも S6b まで選べない）。
+// 下書きは useState（MobX に入れない）。確定は withFinishUndo で1エントリ＋markDirty。部屋の CH 欄（override）には書かない。
+// 確定後も選択・下書きは保つ。検証は parseCeilingZoneDraft（エラーは欄の下に1行）。
+const CeilingZoneFields = observer(({ graph, selection, zone }) => {
+  const [draft, setDraft] = useState(() => initialDraft(zone));
+  const [error, setError] = useState('');
   const room = ceilingZoneTargetRoom(graph, selection);
   const disabled = !room;
+  const fields = CEILING_DIM_FIELDS[draft.shape];
+  const patch = p => { setDraft(d => ({ ...d, ...p })); setError(''); };
+  const setDim = (i, v) => patch({ dims: Array.from({ length: DIM_SLOTS }, (_, k) => (k === i ? v : (draft.dims[k] ?? ''))) });
   const commit = () => {
-    const mm = parsePlanCutHeightInput(text);
-    if (mm == null) { setError(true); return; }
-    setError(false);
-    withFinishUndo(graph, () => room.setCeilingZones(assignZoneHeight(graph, room, selection.cellKeys, mm)));
+    // 既存データの初期値として未対応の形状（円弧・ドーム）が下書きに入っていても確定させない（S6b で解禁）
+    if (CEILING_SHAPE_OPTIONS.find(o => o.value === draft.shape)?.disabled) { setError('この形状は未対応です'); return; }
+    const result = parseCeilingZoneDraft(draft, { spanMm: selectionSpanMm(graph, selection) });
+    if (!result.ok) { setError(result.error); return; }
+    setError('');
+    withFinishUndo(graph, () => room.setCeilingZones(assignZoneShape(graph, room, selection.cellKeys, result.value)));
     markDirty();
-    setText('');
   };
   const clear = () => {
     withFinishUndo(graph, () => room.setCeilingZones(clearZoneCells(graph, room, selection.cellKeys)));
     markDirty();
   };
-  const placeholder = zone?.state === 'uniform' ? String(zone.heightMm) : (ZONE_STATE_PLACEHOLDER[zone?.state] ?? '部屋のCH');
-  const title = disabled ? '階段の天井高さの指定は傾斜天井と同時に対応します（現在は部屋のセルのみ）' : undefined;
+  const title = disabled ? '階段の天井の指定は階段に沿った傾斜と同時に対応します（現在は部屋のセルのみ）' : undefined;
+  const stop = e => { e.stopPropagation(); if (e.key === 'Enter' && !disabled) commit(); };
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: '1px solid #e2e8f0', background: '#fafafa', flexShrink: 0, fontSize: 12, color: '#374151' }}>
-      <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>区画の高さ：</span>
-      <input
-        type="number"
-        value={text}
-        disabled={disabled}
-        title={title}
-        placeholder={placeholder}
-        onChange={e => { setText(e.target.value); setError(false); }}
-        onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' && !disabled) commit(); }}
-        style={{ width: 90, fontSize: 12, borderColor: error ? '#dc2626' : undefined }}
-      />
-      <span>mm</span>
-      <button onClick={commit} disabled={disabled} title={title} style={{ fontSize: 12 }}>確定</button>
-      <button onClick={clear} disabled={disabled || zone?.state === 'none'} title={title} style={{ fontSize: 12 }}>区画を解除</button>
-      {error && <span style={{ color: '#dc2626' }}>正の数を入力してください</span>}
+    <div style={{ padding: '6px 10px', borderBottom: '1px solid #e2e8f0', background: '#fafafa', flexShrink: 0, fontSize: 12, color: '#374151', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <label style={fieldLabelStyle}>
+          <span style={{ fontWeight: 700 }}>形状：</span>
+          <select
+            value={draft.shape}
+            disabled={disabled}
+            title={title}
+            onChange={e => patch({ shape: e.target.value, dims: defaultDims(e.target.value) })}
+            style={{ fontSize: 12 }}
+          >
+            {CEILING_SHAPE_OPTIONS.map(o => (
+              <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <label style={fieldLabelStyle}>
+          <span style={{ fontWeight: 700 }}>{CEILING_BASE_LABEL[draft.shape]}：</span>
+          <input
+            type="number"
+            value={draft.height}
+            disabled={disabled}
+            title={title}
+            placeholder="部屋のCH"
+            onChange={e => patch({ height: e.target.value })}
+            onKeyDown={stop}
+            style={{ width: 80, fontSize: 12, borderColor: error ? '#dc2626' : undefined }}
+          />
+          <span>mm</span>
+        </label>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        {Array.from({ length: DIM_SLOTS }, (_, i) => {
+          const f = fields[i];
+          const value = draft.dims[i] ?? '';
+          return (
+            <label key={i} style={fieldLabelStyle}>
+              <span style={{ fontWeight: 700 }}>{f ? `寸法${i + 1}（${f.label}）` : `寸法${i + 1}`}：</span>
+              {f && f.input === 'select' ? (
+                <select value={value} disabled={disabled} title={title} onChange={e => setDim(i, e.target.value)} style={{ fontSize: 12 }}>
+                  {f.options.map(o => <option key={o.value} value={String(o.value)}>{o.label}</option>)}
+                </select>
+              ) : (
+                <input
+                  type="number"
+                  value={f ? value : ''}
+                  disabled={disabled || !f}
+                  title={title}
+                  placeholder={f ? '' : '—'}
+                  onChange={e => setDim(i, e.target.value)}
+                  onKeyDown={stop}
+                  style={{ width: 80, fontSize: 12, borderColor: error ? '#dc2626' : undefined }}
+                />
+              )}
+              {f?.unit && <span>{f.unit}</span>}
+            </label>
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <button onClick={commit} disabled={disabled} title={title} style={{ fontSize: 12 }}>確定</button>
+        <button onClick={clear} disabled={disabled || zone?.state === 'none'} title={title} style={{ fontSize: 12 }}>区画を解除</button>
+      </div>
+      {error && <div style={{ color: '#dc2626' }}>{error}</div>}
     </div>
   );
 });
@@ -124,7 +195,7 @@ export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
         <div style={{ padding: '6px 10px', fontSize: 12, color: '#1e3a8a', background: '#eff6ff', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
           選択中: {summary.name}／{summary.cellCount}セル／CH {dash(summary.ch)}
           {summary.zone && summary.zone.state !== 'none' && (
-            <>／区画 {summary.zone.state === 'uniform' ? `${summary.zone.heightMm}mm` : '混在'}</>
+            <>／区画 {summary.zone.state === 'uniform' ? zoneSummaryText(summary.zone) : '混在'}</>
           )}
         </div>
       )}
@@ -132,7 +203,7 @@ export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
         <CeilingMaterialFields graph={graph} mode={mode} room={ceilingWriteTargetRoom(graph, mode.selection)} />
       )}
       {mode.selection && (
-        <CeilingZoneField key={zoneFieldKey(mode.selection)} graph={graph} selection={mode.selection} zone={summary?.zone ?? null} />
+        <CeilingZoneFields key={zoneFieldKey(mode.selection)} graph={graph} selection={mode.selection} zone={summary?.zone ?? null} />
       )}
       <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', flexShrink: 0 }}>
         {TABS.map(tab => (

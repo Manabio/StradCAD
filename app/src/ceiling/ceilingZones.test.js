@@ -2,8 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CeilingZone } from '@core';
-import { assignZoneHeight, clearZoneCells, zoneStateOfCells, normalizeZones } from './ceilingZones.js';
-import { makeGrid } from '../plan/planTestFixtures.js';
+import { assignZoneShape, clearZoneCells, zoneStateOfCells, normalizeZones } from './ceilingZones.js';
+import { makeGrid, assignZoneHeight } from '../plan/planTestFixtures.js';
 
 // 3セル（c0 c1 c2）が1部屋の階
 function setup() {
@@ -87,21 +87,70 @@ test('【失敗系】部屋 null は [] を返し何もしない。高さが 0�
   const { graph, room, c0, c1 } = setup();
   assert.deepEqual(assignZoneHeight(graph, null, [c0], 2400), []);
   assert.deepEqual(clearZoneCells(graph, null, [c0]), []);
-  assert.deepEqual(zoneStateOfCells(graph, null, [c0]), { state: 'none', heightMm: null });
+  assert.deepEqual(zoneStateOfCells(graph, null, [c0]), { state: 'none', heightMm: null, shape: 'flat', dims: [] });
   room.setCeilingZones(assignZoneHeight(graph, room, [c0], 2400));
   for (const bad of [0, -100, NaN, Infinity, '2400', null, undefined]) {
     assert.deepEqual(zoneData(assignZoneHeight(graph, room, [c1], bad)), [{ cells: [c0], heightMm: 2400 }], String(bad));
   }
+  const SLOPE = { heightMm: 2400, shape: 'slope', dims: [800, 0] };
+  assert.deepEqual(assignZoneShape(graph, null, [c0], SLOPE), []);
+  for (const bad of [0, -100, NaN, Infinity, '2400', undefined]) {
+    assert.deepEqual(zoneData(assignZoneShape(graph, room, [c1], { ...SLOPE, heightMm: bad })), [{ cells: [c0], heightMm: 2400 }], `assignZoneShape ${String(bad)}`);
+  }
 });
 
-test('zoneStateOfCells: none（区画なし）／uniform（同じ高さ。heightMm）／mixed（区画あり・なしの混在、または違う高さ）', () => {
+test('zoneStateOfCells: none（区画なし）／uniform（同じ形状・高さ・寸法。heightMm・shape・dims）／mixed（区画あり・なしの混在、または違う区画）', () => {
   const { graph, room, c0, c1, c2 } = setup();
-  assert.deepEqual(zoneStateOfCells(graph, room, [c0, c1]), { state: 'none', heightMm: null });
+  const state = (s, heightMm, shape = 'flat', dims = []) => ({ state: s, heightMm, shape, dims });
+  assert.deepEqual(zoneStateOfCells(graph, room, [c0, c1]), state('none', null));
   room.setCeilingZones(assignZoneHeight(graph, room, [c0], 2400));
   room.setCeilingZones(assignZoneHeight(graph, room, [c1], 2600));
-  assert.deepEqual(zoneStateOfCells(graph, room, [c0]), { state: 'uniform', heightMm: 2400 });
-  assert.deepEqual(zoneStateOfCells(graph, room, [c0, c1]), { state: 'mixed', heightMm: null }, '違う高さ');
-  assert.deepEqual(zoneStateOfCells(graph, room, [c1, c2]), { state: 'mixed', heightMm: null }, '区画あり・なし');
-  assert.deepEqual(zoneStateOfCells(graph, room, [c2]), { state: 'none', heightMm: null });
-  assert.deepEqual(zoneStateOfCells(graph, room, []), { state: 'none', heightMm: null });
+  assert.deepEqual(zoneStateOfCells(graph, room, [c0]), state('uniform', 2400));
+  assert.deepEqual(zoneStateOfCells(graph, room, [c0, c1]), state('mixed', null), '違う高さ');
+  assert.deepEqual(zoneStateOfCells(graph, room, [c1, c2]), state('mixed', null), '区画あり・なし');
+  assert.deepEqual(zoneStateOfCells(graph, room, [c2]), state('none', null));
+  assert.deepEqual(zoneStateOfCells(graph, room, []), state('none', null));
+  // 形状・寸法（S6a）: 傾斜の区画は shape・dims を返す。高さが同じでも形状か寸法が違えば mixed
+  room.setCeilingZones(assignZoneShape(graph, room, [c2], { heightMm: 2400, shape: 'slope', dims: [800, 90] }));
+  assert.deepEqual(zoneStateOfCells(graph, room, [c2]), state('uniform', 2400, 'slope', [800, 90]));
+  assert.deepEqual(zoneStateOfCells(graph, room, [c0, c2]), state('mixed', null), '同じ高さ 2400 でも平面と傾斜は別');
+  room.setCeilingZones(assignZoneShape(graph, room, [c1], { heightMm: 2400, shape: 'slope', dims: [800, 270] }));
+  assert.deepEqual(zoneStateOfCells(graph, room, [c1, c2]), state('mixed', null), '向きが違えば別の区画');
+});
+
+test('assignZoneShape: 同じ (shape, 高さ, dims) の区画へ足し id を維持。dims が違えば別区画。再確定は不変で undo を積まない', () => {
+  const { graph, room, c0, c1, c2 } = setup();
+  const S = dims => ({ heightMm: 2400, shape: 'slope', dims });
+  room.setCeilingZones(assignZoneShape(graph, room, [c0], S([800, 0])));
+  const id = room.ceilingZones[0].id;
+  assert.equal(room.ceilingZones[0].shape, 'slope');
+  assert.deepEqual([...room.ceilingZones[0].dims], [800, 0]);
+  room.setCeilingZones(assignZoneShape(graph, room, [c1], S([800, 0])));
+  assert.equal(room.ceilingZones.length, 1, '同じ形状・高さ・寸法なら足す');
+  assert.equal(room.ceilingZones[0].id, id);
+  assert.deepEqual(room.ceilingZones[0].cells, [c0, c1].sort());
+  room.setCeilingZones(assignZoneShape(graph, room, [c2], S([800, 90])));
+  assert.equal(room.ceilingZones.length, 2, '向きが違えば別区画');
+  room.setCeilingZones(assignZoneShape(graph, room, [c2], S([900, 90])));
+  assert.equal(room.ceilingZones.length, 2, 'ライズが違えば別区画（c2 は元の区画から移る）');
+  assert.deepEqual([...room.ceilingZones.find(z => z.cells.includes(c2)).dims], [900, 90]);
+  room.setCeilingZones(assignZoneShape(graph, room, [c2], { heightMm: 2400, shape: 'flat', dims: [] }));
+  assert.equal(room.ceilingZones.length, 2, '平面は別の区画');
+  assert.equal(room.ceilingZones.find(z => z.cells.includes(c2)).shape, 'flat');
+  // 全セルの再確定は区画の配列を変えない（id 維持）
+  const before = room.ceilingZones.map(z => z.toData());
+  room.setCeilingZones(assignZoneShape(graph, room, [c0, c1], S([800, 0])));
+  assert.deepEqual(room.ceilingZones.map(z => z.toData()), before);
+});
+
+test('assignZoneShape: 形状に合わない寸法は平面に落とす（区画は作る）。平面で基準高 null は指定なし＝解除と同じ', () => {
+  const { graph, room, c0, c1 } = setup();
+  room.setCeilingZones(assignZoneShape(graph, room, [c0], { heightMm: 2600, shape: 'slope', dims: [0, 45] }));
+  assert.equal(room.ceilingZones[0].shape, 'flat');
+  assert.deepEqual([...room.ceilingZones[0].dims], []);
+  assert.equal(room.ceilingZones[0].heightMm, 2600);
+  room.setCeilingZones(assignZoneShape(graph, room, [c1], { heightMm: null, shape: 'slope', dims: [800, 0] }));
+  assert.equal(room.ceilingZones.find(z => z.cells.includes(c1)).heightMm, null, '傾斜は基準高 null（部屋の CH）の区画を作れる');
+  room.setCeilingZones(assignZoneShape(graph, room, [c0, c1], { heightMm: null, shape: 'flat', dims: [] }));
+  assert.deepEqual([...room.ceilingZones], [], '平面で null は区画を残さない');
 });

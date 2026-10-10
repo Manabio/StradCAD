@@ -10,6 +10,7 @@
  * 数値化できない欄は既定天井高（isFallback）の mm を使う。部分指定の子（自分の CH 欄なし）は CH が床段差で補正されるので親と同じ天井面になる。
  * 壁の上端（planSolids.js wallCeilZ）は床段差を含めない（別系統。ここでは裁定により含める）。
  */
+import { CeilingShape } from '../core/constants.js';
 import { roomHasCeiling } from './ceilingOwners.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { cellBoundsFromKey, refreshCells } from '../finish/gridCells.js';
@@ -27,9 +28,10 @@ const byRow = (a, b) => a.y1 - b.y1 || a.x1 - b.x1;
  * 天井区画（S5。Room.ceilingZones）がある部屋は「残り（zoneId: null。部屋の CH）→ 区画の配列順」の面に分ける。区画のセルは
  * refreshCells で今の分割に展開し、buildCellToRoom がこの部屋に帰属させるセルだけを採る（Z1。区画の旧キーが解けない・他の部屋に取られた
  * セルは捨てる＝部屋の CH に戻る）。同じセルが複数の区画にあれば先勝ち。空の面は出さない。区画の無い部屋の出力は区画導入前と同じ（zoneId は null）。
- * 区画の zMm＝床段差＋(heightMm ?? 部屋の CH)。
+ * 区画の zMm＝床段差＋(heightMm ?? 部屋の CH)。shape・dims は区画の形状・寸法（残りは flat・[]）、chMm は基準の CH（床段差を含まない。
+ * 平面＝天井高／傾斜＝低い側。S6a）。
  * @param {object} graph
- * @returns {Array<{roomId: string, zoneId: string|null, rects: Array<{x1:number,y1:number,x2:number,y2:number}>, zMm: number}>}
+ * @returns {Array<{roomId: string, zoneId: string|null, rects: Array<{x1:number,y1:number,x2:number,y2:number}>, zMm: number, shape: string, dims: number[], chMm: number}>}
  */
 export function ceilingSurfacesOf(graph) {
   if (!graph) return [];
@@ -50,7 +52,8 @@ export function ceilingSurfacesOf(graph) {
     if (!rectByKey) continue;
     // 床段差（階基準 floorDatum からの差）＋CH。子の CH を床段差で補正する roomCeilingHeight と同じ基準
     const floorStep = graph.effectiveFloorLevel(room) - graph.effectiveFloorLevel(null);
-    const roomZ = floorStep + roomCeilingHeight(graph, room).mm;
+    const roomCh = roomCeilingHeight(graph, room).mm;
+    const roomZ = floorStep + roomCh;
     const taken = new Set();
     const zoneFaces = [];
     for (const zone of room.ceilingZones) {
@@ -62,13 +65,14 @@ export function ceilingSurfacesOf(graph) {
       }
       if (rects.length === 0) continue;
       rects.sort(byRow);
-      zoneFaces.push({ roomId: room.id, zoneId: zone.id, rects, zMm: floorStep + (zone.heightMm ?? roomCeilingHeight(graph, room).mm) });
+      const chMm = zone.heightMm ?? roomCh;
+      zoneFaces.push({ roomId: room.id, zoneId: zone.id, rects, zMm: floorStep + chMm, shape: zone.shape, dims: [...zone.dims], chMm });
     }
     const rest = [];
     for (const [key, rect] of rectByKey) if (!taken.has(key)) rest.push(rect);
     if (rest.length > 0) {
       rest.sort(byRow);
-      out.push({ roomId: room.id, zoneId: null, rects: rest, zMm: roomZ });
+      out.push({ roomId: room.id, zoneId: null, rects: rest, zMm: roomZ, shape: CeilingShape.FLAT, dims: [], chMm: roomCh });
     }
     out.push(...zoneFaces);
   }

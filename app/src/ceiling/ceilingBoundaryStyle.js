@@ -16,13 +16,16 @@ export const CEILING_BOUNDARY_STYLE = 'ceilingBoundary';
 
 /**
  * 同じ高さ（|Δz| ≦ EPS）の別々の天井面が矩形の辺を共有する区間（軸平行）を列挙する。同一面の内側の辺は対象外。
- * @param {Array<{rects: Array<{x1:number,y1:number,x2:number,y2:number}>, zMm: number}>} surfaces
+ * 対象は平面（shape が flat または省略）どうしだけ——傾斜系の境界は高さが一定でなく、通常の細線のまま（S6a）。
+ * @param {Array<{rects: Array<{x1:number,y1:number,x2:number,y2:number}>, zMm: number, shape?: string}>} surfaces
  * @returns {Array<{horizontal: boolean, c: number, lo: number, hi: number}>}  horizontal: y=c 上の x 区間／false: x=c 上の y 区間
  */
 export function sameHeightBoundarySegments(surfaces) {
   const out = [];
+  const isFlat = s => (s.shape ?? 'flat') === 'flat';
   for (let i = 0; i < surfaces.length; i++) {
     for (let j = i + 1; j < surfaces.length; j++) {
+      if (!isFlat(surfaces[i]) || !isFlat(surfaces[j])) continue;
       if (!(Math.abs(surfaces[i].zMm - surfaces[j].zMm) <= EPS)) continue;
       for (const a of surfaces[i].rects) {
         for (const b of surfaces[j].rects) {

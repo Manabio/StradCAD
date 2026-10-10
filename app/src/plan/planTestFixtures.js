@@ -4,6 +4,7 @@ import {
   Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, RoomKind, RoomFeature,
 } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { assignZoneShape } from '../ceiling/ceilingZones.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 
 export const ARCH = { labeled: false, discipline: Discipline.ARCH };
@@ -69,6 +70,11 @@ export function addColumnAt(graph, x, y, { sectionDefId = 'WOOD-105x105', materi
 }
 
 export const rect = (x1, y1, x2, y2) => ({ x1, y1, x2, y2 });
+
+/** テスト用: セル群に平面で天井高 mm を指定した後の区画配列（assignZoneShape の平面版。本番の口ではない）。 */
+export function assignZoneHeight(graph, room, cellKeys, mm) {
+  return assignZoneShape(graph, room, cellKeys, { heightMm: mm, shape: 'flat', dims: [] });
+}
 
 /**
  * 立体のリテラル（汎用立体の入力・期待値用）。extra: id / style / layerFloorZ（省略＝自階）/ part / zAt / innerLines / marks / drawEdges。

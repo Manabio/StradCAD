@@ -53,6 +53,7 @@ import { drainArrivalTime } from '../structural/roofFramingGeometry.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { normalizeRect, isValidRect } from './planGeometry.js';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
+import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
 
 /** 出力の kind 順（固定）。 */
 export const SOLID_KIND_ORDER = Object.freeze(['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'ceiling', 'generic']);
@@ -383,11 +384,17 @@ function stairTreadSolids(layer, riserFor) {
  * @param {SolidLayer} layer
  */
 function ceilingSolids(layer) {
-  return ceilingSurfacesOf(layer.graph).map(({ roomId, zoneId, rects, zMm }) => ({
-    kind: 'ceiling', footprint: { rects }, zLo: layer.floorZMm + zMm, zHi: layer.floorZMm + zMm,
+  return ceilingSurfacesOf(layer.graph).map(({ roomId, zoneId, rects, zMm, shape, dims, chMm }) => {
     // 区画（S5）の面は `${roomId}#${zoneId}`、残り（部屋の CH）は roomId のまま（区画の無い文書の key・順序は不変）
-    source: baseSource(layer, 'ceiling', zoneId ? `${roomId}#${zoneId}` : roomId),
-  }));
+    const id = zoneId ? `${roomId}#${zoneId}` : roomId;
+    // 形状（S6a）: 傾斜は下屋と同じく zAt（勾配）を付ける。基準高の絶対 z＝層の FL＋床段差込みの zMm。平面は zAt なし・厚み 0 のまま
+    const { zLo, zHi, zAt } = ceilingShapeSolidZ({ shape, dims, baseZ: layer.floorZMm + zMm, rects });
+    const solid = { kind: 'ceiling', footprint: { rects }, zLo, zHi, source: baseSource(layer, 'ceiling', id) };
+    if (zAt) solid.zAt = zAt;
+    const marks = ceilingShapeMarks({ key: id, shape, dims, chMm, rects });
+    if (marks.length > 0) solid.marks = marks;
+    return solid;
+  });
 }
 
 // ---------------------------------------------------------------- 汎用立体

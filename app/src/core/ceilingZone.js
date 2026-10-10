@@ -17,8 +17,43 @@ import { CeilingShape } from './constants.js';
 /** CeilingZone の項目集合（toData() のキーと一致する。唯一の定義）。 */
 export const CEILING_ZONE_KEYS = Object.freeze(['id', 'cells', 'heightMm', 'shape', 'dims']);
 
-const SHAPE_VALUES = new Set(Object.values(CeilingShape));
 const finite = v => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * 形状ごとの寸法の個数（汎用の「寸法1・寸法2…」欄。形状が違っても欄を共用する。S6a）。
+ *   flat=[] ／ slope=[ライズ mm>0, 上がる向き 度] ／ arc=[ライズ mm>0, 軸 度] ／ dome=[ライズ mm>0]
+ * heightMm（基準高）の意味は形状で変わる: 平面＝天井高／傾斜＝低い側の高さ／円弧・ドーム＝周縁の高さ（null＝部屋の CH）。
+ */
+export const CEILING_SHAPE_DIM_COUNT = Object.freeze({
+  [CeilingShape.FLAT]: 0, [CeilingShape.SLOPE]: 2, [CeilingShape.ARC]: 2, [CeilingShape.DOME]: 1,
+});
+/** 傾斜の「上がる向き」（度。y 下向き座標で 0=+x 右・90=+y 下・180=左・270=上）。 */
+export const SLOPE_DIRS_DEG = Object.freeze([0, 90, 180, 270]);
+/** 円弧の軸（度。0=x に平行・90=y に平行）。 */
+export const ARC_AXES_DEG = Object.freeze([0, 90]);
+
+/** 寸法の個数と値域が形状に合うか（個数は過不足なし。ライズ>0、向き・軸は列挙値）。未知の shape は false。 */
+export function validCeilingDims(shape, dims) {
+  const n = CEILING_SHAPE_DIM_COUNT[shape];
+  if (n === undefined || !Array.isArray(dims) || dims.length !== n || !dims.every(finite)) return false;
+  if (shape === CeilingShape.FLAT) return true;
+  if (!(dims[0] > 0)) return false;
+  if (shape === CeilingShape.SLOPE) return SLOPE_DIRS_DEG.includes(dims[1]);
+  if (shape === CeilingShape.ARC) return ARC_AXES_DEG.includes(dims[1]);
+  return true;
+}
+
+/**
+ * 形状と寸法を正規化する。余分な dims は形状の個数へ切り詰め、足りない・非有限・値域外（ライズ≤0、向き・軸が列挙外）・未知の shape は
+ * 平面（flat・寸法なし）に落とす（区画そのものは捨てない）。
+ * @returns {{shape: string, dims: number[]}}
+ */
+export function normalizeCeilingShape(shape, dims) {
+  const n = CEILING_SHAPE_DIM_COUNT[shape];
+  if (n === undefined || !Array.isArray(dims)) return { shape: CeilingShape.FLAT, dims: [] };
+  const cut = dims.slice(0, n);
+  return validCeilingDims(shape, cut) ? { shape, dims: cut } : { shape: CeilingShape.FLAT, dims: [] };
+}
 
 /** 文字列だけを残し、空文字・重複を除いて昇順にした凍結配列。 */
 function normalizeCells(cells) {
@@ -35,8 +70,8 @@ export class CeilingZone {
     this.id = id;                              // 区画 id（部屋の中で一意。uuid）
     this.cells = normalizeCells(cells);        // セルキー（重複なし・昇順）
     this.heightMm = heightMm;                  // 部屋の FL からの天井高 mm | null（null＝部屋の CH）
-    this.shape = shape;                        // CeilingShape（S5 は常に flat）
-    this.dims = Object.freeze([...dims]);      // 形状の寸法（S5 は常に空）
+    this.shape = shape;                        // CeilingShape
+    this.dims = Object.freeze([...dims]);      // 形状の寸法（個数・意味は CEILING_SHAPE_DIM_COUNT）
     Object.freeze(this);
   }
 
@@ -47,17 +82,19 @@ export class CeilingZone {
 
   /**
    * plain object から CeilingZone を作る（壊れた値は正規化。id が非文字列・空なら null）:
-   * cells は空でない文字列だけ・重複除去・昇順／heightMm は有限かつ >0 だけ採り他は null／未知の shape は 'flat'／dims は有限数だけ。
+   * cells は空でない文字列だけ・重複除去・昇順／heightMm は有限かつ >0 だけ採り他は null／
+   * shape・dims は normalizeCeilingShape（未知 shape・個数違い・非有限・値域外は flat・寸法なし。余分な dims は切り詰め。区画は捨てない）。
    * @returns {CeilingZone|null}
    */
   static fromData(d) {
     if (!d || typeof d.id !== 'string' || d.id === '') return null;
+    const { shape, dims } = normalizeCeilingShape(d.shape, d.dims);
     return new CeilingZone({
       id: d.id,
       cells: Array.isArray(d.cells) ? d.cells : [],
       heightMm: finite(d.heightMm) && d.heightMm > 0 ? d.heightMm : null,
-      shape: SHAPE_VALUES.has(d.shape) ? d.shape : CeilingShape.FLAT,
-      dims: Array.isArray(d.dims) ? d.dims.filter(finite) : [],
+      shape,
+      dims,
     });
   }
 

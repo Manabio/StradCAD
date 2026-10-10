@@ -5,8 +5,13 @@ import assert from 'node:assert/strict';
 import * as core from '@core';
 
 const EXPECTED_EXPORTS = [
+  'ARC_AXES_DEG',
   'Arc',
+  'CEILING_SHAPE_DIM_COUNT',
   'CEILING_ZONE_KEYS',
+  'SLOPE_DIRS_DEG',
+  'normalizeCeilingShape',
+  'validCeilingDims',
   'CL_OVERLAP_TOL_MM',
   'CeilingShape',
   'CeilingZone',

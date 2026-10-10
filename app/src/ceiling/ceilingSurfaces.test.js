@@ -28,8 +28,8 @@ test('2部屋: 部屋ごとにセル矩形の和と天井高（FL からの mm�
   a.setOverride('ceilingHeight', '2600');
   b.setOverride('ceilingHeight', '2200');
   assert.deepEqual(ceilingSurfacesOf(g.graph), [
-    { roomId: a.id, zoneId: null, rects: [rect(0, 0, 2000, 3000)], zMm: 2600 },
-    { roomId: b.id, zoneId: null, rects: [rect(2000, 0, 4000, 3000)], zMm: 2200 },
+    { roomId: a.id, zoneId: null, rects: [rect(0, 0, 2000, 3000)], zMm: 2600, shape: 'flat', dims: [], chMm: 2600 },
+    { roomId: b.id, zoneId: null, rects: [rect(2000, 0, 4000, 3000)], zMm: 2200, shape: 'flat', dims: [], chMm: 2200 },
   ]);
 });
 
@@ -48,8 +48,8 @@ test('部分指定: 子が持つセルは子の天井になり、親の矩形か
   const child = g.graph.addRoom(new Set([g.cell(1, 0)]), '小上がり', undefined, new Set([parent.id]));
   child.setOverride('ceilingHeight', '2100');
   assert.deepEqual(ceilingSurfacesOf(g.graph), [
-    { roomId: parent.id, zoneId: null, rects: [rect(0, 0, 2000, 3000)], zMm: 2400 },
-    { roomId: child.id, zoneId: null, rects: [rect(2000, 0, 4000, 3000)], zMm: 2100 },
+    { roomId: parent.id, zoneId: null, rects: [rect(0, 0, 2000, 3000)], zMm: 2400, shape: 'flat', dims: [], chMm: 2400 },
+    { roomId: child.id, zoneId: null, rects: [rect(2000, 0, 4000, 3000)], zMm: 2100, shape: 'flat', dims: [], chMm: 2100 },
   ]);
 });
 
@@ -96,12 +96,12 @@ test('天井区画（S5）: 区画のある部屋は「残り（zoneId null・�
   room.setOverride('ceilingHeight', '2400');
   room.setCeilingZones([
     new CeilingZone({ id: 'zA', cells: [g.cell(3, 0)], heightMm: 2800 }),
-    new CeilingZone({ id: 'zB', cells: [g.cell(1, 0)], heightMm: null, shape: 'dome', dims: [500] }),
+    new CeilingZone({ id: 'zB', cells: [g.cell(1, 0)], heightMm: null, shape: 'slope', dims: [500, 90] }),
   ]);
   assert.deepEqual(ceilingSurfacesOf(g.graph), [
-    { roomId: room.id, zoneId: null, rects: [rect(0, 0, 1000, 1000), rect(2000, 0, 3000, 1000)], zMm: 100 + 2400 },
-    { roomId: room.id, zoneId: 'zA', rects: [rect(3000, 0, 4000, 1000)], zMm: 100 + 2800 },
-    { roomId: room.id, zoneId: 'zB', rects: [rect(1000, 0, 2000, 1000)], zMm: 100 + 2400 },
+    { roomId: room.id, zoneId: null, rects: [rect(0, 0, 1000, 1000), rect(2000, 0, 3000, 1000)], zMm: 100 + 2400, shape: 'flat', dims: [], chMm: 2400 },
+    { roomId: room.id, zoneId: 'zA', rects: [rect(3000, 0, 4000, 1000)], zMm: 100 + 2800, shape: 'flat', dims: [], chMm: 2800 },
+    { roomId: room.id, zoneId: 'zB', rects: [rect(1000, 0, 2000, 1000)], zMm: 100 + 2400, shape: 'slope', dims: [500, 90], chMm: 2400 },
   ]);
 });
 

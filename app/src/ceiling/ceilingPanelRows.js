@@ -46,11 +46,14 @@ export function zoneChLabelsByRoom(graph) {
     if (!heights.has(room.id)) heights.set(room.id, { hasZone: false, mms: [], rawRange: false });
     const h = heights.get(room.id);
     if (s.zoneId) h.hasZone = true;
-    if (zone?.heightMm != null) { h.mms.push(zone.heightMm); continue; }
+    // 平面以外（傾斜・円弧・ドーム）は基準高〜基準高＋ライズ（図のラベルと同じ範囲。zHi − zLo）
+    const rise = s.shape !== 'flat' && Number.isFinite(s.dims?.[0]) ? s.dims[0] : 0;
+    if (zone?.heightMm != null) { h.mms.push(zone.heightMm, zone.heightMm + rise); continue; }
     // 部屋の CH を使う面。欄が数値化できないレンジ表記なら既定値と合成せず raw のまま出す（利用者の入力を消さない）
     const rawCh = room.getFinishInfo().ceilingHeight;
     if (rawCh != null && rawCh !== '' && !Number.isFinite(Number(rawCh))) h.rawRange = true;
-    h.mms.push(roomCeilingHeight(graph, room).mm);
+    const base = roomCeilingHeight(graph, room).mm;
+    h.mms.push(base, base + rise);
   }
   for (const [id, { hasZone, mms, rawRange }] of heights) {
     if (!hasZone || rawRange) continue; // 効いている区画なし／部屋 CH がレンジ表記＝従来どおり（raw）
@@ -76,8 +79,8 @@ function roomRow(graph, room, name, materialMap, zoneLabels) {
  * 選択中の天井セルの要約（パネル上段）。selection が無ければ null。
  * name・ch は行（内部＋階段）から owner.rowId で引く（見つからなければ name='—'・ch=null）。
  * cellCount は現行の格子で解けるキーの数（CL 削除などで消えたキーは数えない）。
- * zone … 選択セル群の天井区画の状態（S5。zoneStateOfCells）。所属が部屋のときだけ。階段所属は null（階段の区画入力は S6）。
- * @returns {{name: string, cellCount: number, ch: string|null, zone: {state: 'none'|'uniform'|'mixed', heightMm: number|null}|null} | null}
+ * zone … 選択セル群の天井区画の状態（S5。zoneStateOfCells。S6a から shape・dims を含む）。所属が部屋のときだけ。階段所属は null（階段の区画入力は S6b）。
+ * @returns {{name: string, cellCount: number, ch: string|null, zone: {state: 'none'|'uniform'|'mixed', heightMm: number|null, shape: string, dims: number[]}|null} | null}
  */
 export function selectionSummary(graph, selection) {
   if (!selection) return null;
@@ -88,6 +91,22 @@ export function selectionSummary(graph, selection) {
     ? zoneStateOfCells(graph, graph.roomMap.get(selection.owner.id) ?? null, selection.cellKeys)
     : null;
   return { name: row ? row.name : '—', cellCount, ch: row ? row.ch : null, zone };
+}
+
+/**
+ * 選択中のセル群の外接矩形の幅（x 方向・y 方向。mm）。円弧のライズ上限（幅/2）の検査用（S6b で円弧を解禁するとき使う）。解けるセルが無ければ null。
+ * @returns {{xMm: number, yMm: number}|null}
+ */
+export function selectionSpanMm(graph, selection) {
+  if (!selection) return null;
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const key of selection.cellKeys) {
+    const b = cellBoundsFromKey(key, graph);
+    if (!b) continue;
+    x1 = Math.min(x1, b.x1, b.x2); x2 = Math.max(x2, b.x1, b.x2);
+    y1 = Math.min(y1, b.y1, b.y2); y2 = Math.max(y2, b.y1, b.y2);
+  }
+  return Number.isFinite(x1) ? { xMm: x2 - x1, yMm: y2 - y1 } : null;
 }
 
 /**

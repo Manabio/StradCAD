@@ -6,11 +6,11 @@
  * 書くときの正規化（.claude/ceiling-model.md「天井区画（S5）」）: 確定のたびにその部屋の全区画を refreshCells で
  * 今の分割へ展開し直し、解けないキーを捨て、区画をまたいだ重複は先勝ちにし、空になった区画を消す。部屋の所属との交差は
  * 書くときは取らない（読む側 ceilingSurfaces.js が Z1 として取る）。
- * 階段所属のセル群への入力は S6（傾斜と同時）まで無効（パネルが disabled にする）。この関数群は部屋の区画だけを扱う。
+ * 階段所属のセル群への入力は S6b まで無効（パネルが disabled にする）。この関数群は部屋の区画だけを扱う。
  */
 import { CeilingZone, CeilingShape } from '@core';
 import { refreshCells } from '../finish/gridCells.js';
-import { isEmptyCeilingZone } from '../core/ceilingZone.js';
+import { isEmptyCeilingZone, normalizeCeilingShape } from '../core/ceilingZone.js';
 
 const isValidHeight = mm => typeof mm === 'number' && Number.isFinite(mm) && mm > 0;
 
@@ -43,32 +43,37 @@ function subtractKeys(zones, keys) {
     .filter(z => !isEmptyCeilingZone(z));
 }
 
+const sameDims = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
 /**
- * cellKeys に天井高 heightMm を指定した後の、部屋の区画配列。
- * 全区画から cellKeys を差し引く（Z2: 既存区画のセルは奪う）→ 空を消す → 平面（flat）で同じ高さの区画があればそこへ足し、
- * 無ければ新しい区画（uuid）を末尾に足す。部屋の CH と同じ高さでも区画として残す。
- * 部屋が null・cellKeys が空（解けるキーが無い）・heightMm が正の有限数でない場合は何も足さない
+ * cellKeys に天井の形状（shape・dims）と基準高 heightMm を指定した後の、部屋の区画配列（S6a。assignZoneHeight の一般化）。
+ * shape・dims は normalizeCeilingShape で正規化（形状に合わない寸法は平面に落とす）。基準高は null（部屋の CH）か正の有限数。
+ * 全区画から cellKeys を差し引く（Z2: 既存区画のセルは奪う）→ 空を消す → **同じ (shape, heightMm, dims)** の区画があればそこへ足し（id 維持）、
+ * 無ければ新しい区画（uuid）を末尾に足す。部屋の CH と同じ高さでも区画として残す。平面で基準高 null は「指定なし」なので区画の解除と同じ。
+ * 部屋が null・cellKeys が空（解けるキーが無い）・基準高が null でも正の有限数でもない場合は何も足さない
  * （部屋 null は []、他は正規化しただけの現在の区画配列）。
  * @param {object} graph
  * @param {import('@core').Room|null} room
  * @param {Iterable<string>} cellKeys
- * @param {number} heightMm  部屋の FL からの天井高
+ * @param {{heightMm: number|null, shape: string, dims: number[]}} spec  heightMm は部屋の FL からの基準高
  * @returns {CeilingZone[]}
  */
-export function assignZoneHeight(graph, room, cellKeys, heightMm) {
+export function assignZoneShape(graph, room, cellKeys, { heightMm, shape, dims }) {
   if (!room) return [];
   const zones = normalizeZones(graph, room);
   const keys = resolveKeys(graph, cellKeys);
-  if (keys.size === 0 || !isValidHeight(heightMm)) return zones;
-  // 同じ高さの flat 区画は差し引く前に探す（全セルの再確定で区画が一度空になって id が変わるのを避ける）
-  const target = zones.find(z => z.shape === CeilingShape.FLAT && z.dims.length === 0 && z.heightMm === heightMm);
+  if (keys.size === 0 || (heightMm !== null && !isValidHeight(heightMm))) return zones;
+  const spec = normalizeCeilingShape(shape, dims);
+  if (heightMm === null && spec.shape === CeilingShape.FLAT) return subtractKeys(zones, keys);
+  // 同じ (shape, 高さ, dims) の区画は差し引く前に探す（全セルの再確定で区画が一度空になって id が変わるのを避ける）
+  const target = zones.find(z => z.shape === spec.shape && z.heightMm === heightMm && sameDims(z.dims, spec.dims));
   if (target) {
     return zones
       .map(z => (z === target ? z.withCells([...z.cells, ...keys]) : z.withCells(z.cells.filter(k => !keys.has(k)))))
       .filter(z => !isEmptyCeilingZone(z));
   }
   const rest = subtractKeys(zones, keys);
-  rest.push(new CeilingZone({ id: crypto.randomUUID(), cells: [...keys], heightMm }));
+  rest.push(new CeilingZone({ id: crypto.randomUUID(), cells: [...keys], heightMm, shape: spec.shape, dims: spec.dims }));
   return rest;
 }
 
@@ -84,11 +89,12 @@ export function clearZoneCells(graph, room, cellKeys) {
 
 /**
  * cellKeys の区画の状態。'none'＝どのセルも区画に属さない（部屋の CH）／'uniform'＝全セルが同じ高さの区画（heightMm にその高さ）／
- * 'mixed'＝区画あり・なしが混在、または違う区画（高さ）にまたがる。解けないキーは数えない。部屋 null・セルなしは 'none'。
- * @returns {{state: 'none'|'uniform'|'mixed', heightMm: number|null}}
+ * 'mixed'＝区画あり・なしが混在、または違う区画（形状・高さ・寸法のどれかが違う）にまたがる。解けないキーは数えない。部屋 null・セルなしは 'none'。
+ * 'uniform' は shape・dims にその区画の形状・寸法（none・mixed は flat・[]）。
+ * @returns {{state: 'none'|'uniform'|'mixed', heightMm: number|null, shape: string, dims: number[]}}
  */
 export function zoneStateOfCells(graph, room, cellKeys) {
-  const none = { state: 'none', heightMm: null };
+  const none = { state: 'none', heightMm: null, shape: CeilingShape.FLAT, dims: [] };
   if (!room) return none;
   const zones = normalizeZones(graph, room);
   const zoneOf = new Map();
@@ -98,9 +104,9 @@ export function zoneStateOfCells(graph, room, cellKeys) {
   for (const key of resolveKeys(graph, cellKeys)) {
     const z = zoneOf.get(key) ?? null;
     if (z && !firstZone) firstZone = z;
-    labels.add(z ? (z.shape === CeilingShape.FLAT ? `h${z.heightMm}` : `z${z.id}`) : '-');
+    labels.add(z ? `${z.shape}|${z.heightMm}|${z.dims.join(',')}` : '-');
   }
   if (labels.size === 0 || (labels.size === 1 && labels.has('-'))) return none;
-  if (labels.size === 1) return { state: 'uniform', heightMm: firstZone.heightMm };
-  return { state: 'mixed', heightMm: null };
+  if (labels.size === 1) return { state: 'uniform', heightMm: firstZone.heightMm, shape: firstZone.shape, dims: [...firstZone.dims] };
+  return { state: 'mixed', heightMm: null, shape: CeilingShape.FLAT, dims: [] };
 }

@@ -75,7 +75,7 @@ export function roofSlopeText(n) {
 }
 
 /** 文字列の推定幅（半角 ASCII 0.5・それ以外 1.0 ×文字サイズ。elevationFigure.js の方式）。 */
-function estimatedTextWidth(text, fontSizeMm) {
+export function estimatedTextWidth(text, fontSizeMm) {
   let w = 0;
   for (const ch of text) w += (ch.codePointAt(0) < 0x80 ? 0.5 : 1) * fontSizeMm;
   return w;

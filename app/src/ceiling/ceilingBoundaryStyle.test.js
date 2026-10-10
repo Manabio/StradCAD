@@ -4,10 +4,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { markSameHeightCeilingBoundaries, sameHeightBoundarySegments, CEILING_BOUNDARY_STYLE } from './ceilingBoundaryStyle.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
-import { assignZoneHeight } from './ceilingZones.js';
+import { assignZoneShape } from './ceilingZones.js';
 import { planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp, drawnPrimitives } from '../plan/planSolidsLayerFilter.js';
 import { planSectionFigureUp } from '../plan/planSectionUp.js';
-import { makeGrid, rect } from '../plan/planTestFixtures.js';
+import { makeGrid, rect, assignZoneHeight } from '../plan/planTestFixtures.js';
 
 const CUT = 1500;
 const line = (key, points, kind = 'ceiling', extra = {}) => ({
@@ -215,4 +215,31 @@ test('区画どうしの境界: 同じ高さでも別の区画（flat・高さ�
   ceil = ceilingLines(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
   const marked = onX(ceil, 2000).filter(p => p.style === CEILING_BOUNDARY_STYLE);
   assert.equal(marked.length, 1, '同じ高さの区画どうしの境界はグレー1本');
+});
+
+// ---- 形状（S6a）: 灰色の対象は平面どうしだけ ----
+
+test('sameHeightBoundarySegments: 傾斜の面が一方でも入る組は対象外（基準高が同じでも）。shape 省略は平面と見なす', () => {
+  const flat = surf([rect(0, 0, 2000, 3000)], 2400);
+  const next = { ...surf([rect(2000, 0, 4000, 3000)], 2400) };
+  assert.equal(sameHeightBoundarySegments([flat, next]).length, 1, '前提: 省略どうしは対象（S5 の挙動）');
+  assert.equal(sameHeightBoundarySegments([{ ...flat, shape: 'flat' }, { ...next, shape: 'flat' }]).length, 1);
+  assert.deepEqual(sameHeightBoundarySegments([{ ...flat, shape: 'slope' }, { ...next, shape: 'flat' }]), [], '傾斜|平面');
+  assert.deepEqual(sameHeightBoundarySegments([{ ...flat, shape: 'flat' }, { ...next, shape: 'slope' }]), [], '平面|傾斜');
+  assert.deepEqual(sameHeightBoundarySegments([{ ...flat, shape: 'slope' }, { ...next, shape: 'slope' }]), [], '傾斜|傾斜');
+});
+
+test('傾斜の区画と平面の境界は通常の細線（グレーの印なし）。基準高が同じ平面どうしの境界はグレーのまま', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0], [2, 0]]);
+  room.setOverride('ceilingHeight', '2400');
+  room.setCeilingZones(assignZoneShape(g.graph, room, [g.cell(1, 0)], { heightMm: 2400, shape: 'slope', dims: [1000, 0] }));
+  const lineOnly = prims => ceilingLines(prims).filter(p => p.kind === 'line'); // 傾斜の注記（arrow・text）は除く
+  const ceil = lineOnly(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
+  assert.ok(onX(ceil, 2000).length > 0, '前提: 傾斜の左端（基準高＝低い側）と平面の境界に線が出る');
+  assert.ok(ceil.every(p => p.style === undefined), `傾斜に接する境界にグレーの印が付いている: ${JSON.stringify(ceil.filter(p => p.style).map(norm))}`);
+  // 対照: 傾斜を平面（同じ高さ）に置き換えるとグレーの印が付く
+  room.setCeilingZones(assignZoneShape(g.graph, room, [g.cell(1, 0)], { heightMm: 2400, shape: 'flat', dims: [] }));
+  const flatCeil = lineOnly(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
+  assert.ok(flatCeil.some(p => p.style === CEILING_BOUNDARY_STYLE), '対照: 平面どうしならグレー');
 });

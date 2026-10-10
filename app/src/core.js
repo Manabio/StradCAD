@@ -78,7 +78,7 @@ export { RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec } from './core/roofSpec.js'
 // CEILING ZONE (天井区画) — core/ceilingZone.js。Room.ceilingZones が持つ。
 // ================================================================
 
-export { CeilingZone, CEILING_ZONE_KEYS, restoreCeilingZones } from './core/ceilingZone.js';
+export { CeilingZone, CEILING_ZONE_KEYS, restoreCeilingZones, CEILING_SHAPE_DIM_COUNT, SLOPE_DIRS_DEG, ARC_AXES_DEG, validCeilingDims, normalizeCeilingShape } from './core/ceilingZone.js';
 
 // ================================================================
 // STAIR (階段) — core/stair.js。

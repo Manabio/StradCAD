@@ -7,11 +7,11 @@ import { undoManager } from '../undoManager.js';
 import { withFinishUndo, snapshotFinishState, restoreFinishState } from '../finish/finishUndo.js';
 import { makeRoomUndefined } from '../finish/roomUndefined.js';
 import { normalizePartialDominance } from '../finish/roomReinterpret.js';
-import { assignZoneHeight, clearZoneCells } from './ceilingZones.js';
+import { assignZoneShape, clearZoneCells } from './ceilingZones.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
-import { makeGrid, ARCH, rect } from '../plan/planTestFixtures.js';
+import { makeGrid, ARCH, rect, assignZoneHeight } from '../plan/planTestFixtures.js';
 
-const FULL = { id: 'z1', heightMm: 2700, shape: 'dome', dims: [1200, 300.5] };
+const FULL = { id: 'z1', heightMm: 2700, shape: 'slope', dims: [1200, 270] };
 
 test('不変条件: 仕上げ undo の snapshot の room.ceilingZones[0] のキー集合は CEILING_ZONE_KEYS と一致する', () => {
   const g = makeGrid([0, 1000], [0, 1000]);
@@ -59,6 +59,25 @@ test('undo: withFinishUndo で区画を足すと 1 エントリ。undo で空、
   withFinishUndo(g.graph, () => live.setCeilingZones(clearZoneCells(g.graph, live, [g.cell(1, 0)])));
   assert.equal(undoManager._undoStack.length, before, '差分なしなら積まない');
   undoManager.undo(); // 後続のテストに積みっぱなしにしない
+});
+
+test('傾斜の区画（S6a）: undo/redo で shape・dims が戻る。同じ形状・寸法での再確定は不変で undo を積まない', () => {
+  const g = makeGrid([0, 1000, 2000], [0, 1000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  const cells = [g.cell(0, 0), g.cell(1, 0)];
+  const spec = { heightMm: 2300, shape: 'slope', dims: [1200, 270] };
+  const stack = undoManager._undoStack.length;
+  withFinishUndo(g.graph, () => room.setCeilingZones(assignZoneShape(g.graph, room, cells, spec)));
+  assert.equal(undoManager._undoStack.length, stack + 1);
+  const before = room.ceilingZones.map(z => z.toData());
+  withFinishUndo(g.graph, () => room.setCeilingZones(assignZoneShape(g.graph, room, cells, spec)));
+  assert.equal(undoManager._undoStack.length, stack + 1, '再確定は積まない');
+  assert.deepEqual(room.ceilingZones.map(z => z.toData()), before);
+  undoManager.undo();
+  assert.deepEqual([...g.graph.roomMap.get(room.id).ceilingZones], []);
+  undoManager.redo();
+  assert.deepEqual(g.graph.roomMap.get(room.id).ceilingZones.map(z => z.toData()), before, 'shape・dims・高さが戻る');
+  undoManager.undo();
 });
 
 test('区画全体を同じ高さで再確定しても区画配列（id・cells）は不変で、withFinishUndo はエントリを積まない', () => {

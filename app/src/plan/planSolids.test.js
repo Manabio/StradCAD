@@ -12,9 +12,9 @@ import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { columnWrapSolids } from '../finish/columnWrap.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { planSectionFigure } from './planSectionFigure.js';
-import { assignZoneHeight } from '../ceiling/ceilingZones.js';
+import { assignZoneShape } from '../ceiling/ceilingZones.js';
 import {
-  makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid, linesOf, mergedLines, totalLength,
+  makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid, linesOf, mergedLines, totalLength, assignZoneHeight,
 } from './planTestFixtures.js';
 
 const ofKind = (solids, kind) => solids.filter(s => s.kind === kind);
@@ -738,6 +738,39 @@ test('天井区画（S5）: 区画のある部屋は「残り（source.id=部屋
   a.setCeilingZones([]);
   const back = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 50 })], { ceilings: true }), 'ceiling');
   assert.deepEqual(back.map(s => s.source.id).sort(), [a.id, plain.id].sort());
+});
+
+test('天井の傾斜（S6a）: 傾斜の区画の立体は zAt を持ち、zLo＝基準高（FL＋床段差＋低い側）・zHi＝＋ライズ。平面の面・区画の無い文書は zAt・marks なし', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
+  const a = g.interior([[0, 0], [1, 0]]);
+  const plain = g.interior([[2, 0]]);
+  a.setFloorLevel(100);
+  a.setCeilingZones(assignZoneShape(g.graph, a, [g.cell(1, 0)], { heightMm: 2300, shape: 'slope', dims: [1200, 0] }));
+  const zoneId = a.ceilingZones[0].id;
+  const ceilings = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 50 })], { ceilings: true }), 'ceiling');
+  const sl = ceilings.find(s => s.source.id === `${a.id}#${zoneId}`);
+  assert.equal(typeof sl.zAt, 'function');
+  assert.equal(sl.zLo, 50 + 100 + 2300);
+  assert.equal(sl.zHi, 50 + 100 + 2300 + 1200);
+  assert.equal(sl.zAt(2000, 1500), 50 + 100 + 2300, '低い側（左端）');
+  assert.equal(sl.zAt(4000, 1500), 50 + 100 + 2300 + 1200, '高い側（右端）');
+  assert.equal(sl.source.id, `${a.id}#${zoneId}`);
+  assert.equal(sl.marks.length, 1);
+  const [arrow, text] = sl.marks[0].prims;
+  assert.equal(arrow.kind, 'arrow');
+  assert.equal(text.text, '傾斜 CH2300〜3500', '基準 CH は床段差を含まない');
+  for (const s of ceilings.filter(c => c !== sl)) {
+    assert.equal(s.zAt, undefined, `平面: ${s.source.id}`);
+    assert.equal(s.marks, undefined);
+    assert.equal(s.zLo, s.zHi);
+  }
+  assert.ok(ceilings.some(s => s.source.id === plain.id));
+});
+
+test('天井の傾斜: 平面だけの文書の天井立体は区画導入前と同じ形（zAt・marks のキーを持たない）', () => {
+  const { graph } = makeRoomGraph(0, 0, 4000, 4000);
+  const [c] = ofKind(planSolids(self(graph), { ceilings: true }), 'ceiling');
+  assert.deepEqual(Object.keys(c).sort(), ['footprint', 'kind', 'source', 'zHi', 'zLo']);
 });
 
 test('SOLID_KIND_ORDER: ceiling は stairTread と generic の間。既存種別の相対順は不変', () => {
