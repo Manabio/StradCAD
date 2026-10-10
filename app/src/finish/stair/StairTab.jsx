@@ -1,19 +1,9 @@
 import { useEffect, useState } from 'react';
 import { observer } from 'mobx-react-lite';
-import { StairType } from '@core';
+import { STAIR_TYPE_LABEL as TYPE_LABEL } from './stairTypeLabel.js';
 import { StairEditor } from './StairPanel.jsx';
 import { stairChainTitle, stairFloorName, chainArrivalPlane } from './stairFloorLabel.js';
 import { isChainOpen } from './stairChains.js';
-
-const TYPE_LABEL = {
-  [StairType.STRAIGHT]:         '直進',
-  [StairType.STRAIGHT_LANDING]: '踊り場付直進',
-  [StairType.SWITCHBACK]:       '屈折',
-  [StairType.WINDING]:          '回り',
-  [StairType.L_TURN]:           '矩折',
-  [StairType.FLARED]:           '曲がり',
-  [StairType.OPEN_WELL]:        '中空き',
-};
 
 const rowStyle   = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 };
 const labelStyle = { fontSize: 12, color: '#475569', width: 64, flexShrink: 0 };

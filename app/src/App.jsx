@@ -73,6 +73,7 @@ import { createFinishExitStamps } from './finish/finishExitStamp.js';
 import { parseOpenedFileBytes, openDocumentFileTarget, writeDocumentFileTarget, defaultDocumentFileName, getOpenedFileInfo, setOpenedFileName, saveNameFromOpenedFileName, supportsSaveFilePicker } from './storage/localSnapshot.js';
 import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
+import { CeilingPanel }        from './ceiling/CeilingPanel.jsx';
 import {
   confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind,
 } from './transform/siteEdit.js';
@@ -136,7 +137,7 @@ function buildColumnAxisRefs(graph, type) {
 // モード切替失敗時のトースト文言用（ui/ModeBar.jsx MODESのlabelと同じ日本語。ModeBarは
 // 'opening'ボタンを持たないため、モード切替のappMode全種別をここで別に持つ）。
 const MODE_LOAD_LABELS = Object.freeze({
-  floorplan: '平面', finish: '仕上げ', structure: '構造', opening: '建具', elevation: '展開', site: '敷地',
+  floorplan: '平面', finish: '仕上げ', ceiling: '天伏', structure: '構造', opening: '建具', elevation: '展開', site: '敷地',
 });
 
 const App = observer(() => {
@@ -724,6 +725,8 @@ const App = observer(() => {
             await s.init(); // 材データの動的ロード・照合・直下階階段のロード
             return s;
           })
+        : appMode === 'ceiling'
+          ? import('./modes/CeilingModeState.js').then(m => new m.CeilingModeState())
         : appMode === 'structure'
           ? import('./modes/StructuralModeState.js').then(async m => {
               const s = new m.StructuralModeState(graph);
@@ -2407,6 +2410,8 @@ const App = observer(() => {
   const cursor = menu || clDialog ? 'default'
                : isPanning        ? 'grabbing'
                : appMode === 'finish' ? (isDragging ? 'crosshair' : 'default')
+               // 天伏はパン専用で isDragging は常に無い（パン中は上の isPanning が勝つ）
+               : appMode === 'ceiling' ? 'default'
                : appMode === 'site'   ? (mode?.siteDrawState ? 'crosshair' : 'default')
                : appMode === 'elevation' ? 'grab'
                : appMode === 'opening' ? ((nearOpening || nearWall) ? 'pointer' : 'default')
@@ -2811,6 +2816,11 @@ const App = observer(() => {
           onConfirmTriangle={handleConfirmTriangle}
           onCycleLineKind={handleCycleLineKind}
         />
+      )}
+
+      {/* 天伏モード: 専用パネル（内部・階段の一覧。仕上げ表とは独立） */}
+      {appMode === 'ceiling' && mode && (
+        <CeilingPanel graph={graph} mode={mode} isLandscape={isLandscape} />
       )}
 
       {/* 建具モード: 記号別採番リスト＋姿図・数値編集パネル */}

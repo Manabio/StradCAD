@@ -479,3 +479,6 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 `computeExteriorWallSegments`）。壁の上に重ねて描くため、`finish/finishGuideGeometry.js`
 `exteriorGuideSegments`が外壁の外面（`wallFaces.js` `outerWallFaceAt`）へ移して描く。設計意図は
 `.claude/plan-wall-region.md`「仕上げモード背景の補助線」節。
+
+## 天伏
+天井伏図モード（`appMode==='ceiling'`。ModeBar の「天伏」）。見上げ図＋天井欄の指定を行う。仕上げモードとは独立の State（`modes/CeilingModeState.js`）・専用パネル（`ceiling/CeilingPanel.jsx`）を持ち、仕上げ表との共有はデータ（Room の天井欄）と純モジュールだけ。

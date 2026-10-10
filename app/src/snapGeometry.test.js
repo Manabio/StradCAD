@@ -237,6 +237,7 @@ test('【旧データ限定・種別ベースへ統一】findNearestCenterLineEn
 const HIT_TEST_KINDS_LITERAL = {
   floorplan: ['struct', 'center', 'aux'],
   finish:    ['struct', 'center', 'aux'],
+  ceiling:   ['struct', 'center', 'aux'],
   opening:   ['struct', 'center', 'aux'],
   structure: ['beam'],
   site:      [],

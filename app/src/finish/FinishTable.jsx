@@ -10,12 +10,13 @@ import { roomCeilingHeight } from './roomMetrics.js';
 import { parseSlopeInput } from './exteriorLevelInput.js';
 import {
   RoomFeature, RoomKind, ExteriorLevelRef, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
-  isShaftFeature, ShaftSoundproof, isTopFloorPlane,
+  ShaftSoundproof, isTopFloorPlane,
 } from '@core';
+import { interiorTabRooms, interiorRoomDisplayName } from './interiorTabRooms.js';
 import { shaftWallMaterialOptions } from './shaftWallMaterialOptions.js';
 import { floorHeightAbove } from './stair/stairDimensions.js';
 import {
-  ROOM_KIND_OPTIONS, CARD_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature, DEFAULT_STAIR_ROOM_NAME,
+  ROOM_KIND_OPTIONS, CARD_FEATURE_OPTIONS, featureToSelectValue, selectValueToFeature,
 } from './roomNamingOptions.js';
 import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
@@ -473,17 +474,8 @@ export const FinishTable = observer(({
 // ================================================================
 
 const InteriorTable = observer(({ graph, mode, selectedRoomId, onSelectRoom, onApplyNaming, onDeleteStairRoom, stairEnabled, floorName }) => {
-  // 屋外部屋（kind===EXTERIOR）は階段の有無によらず除外する（外部タブが担当。非階段は
-  // 部位の仕上げレベル入力、屋外階段は階段タブ＋外部タブの部位「階段」行）。
-  // 屋内階段（kind===INTERIOR）は通常部屋と同じカードで表示する
-  // （続きの階段のペアRoomも同様に表示される＝意図どおり）。
-  // 階段吹抜け（STAIR_VOID）は自動管理 Room のため引き続き表に出さない。
-  // 未定義の部屋（UNDEFINED）も表に出さない（B: 名前未確定のため命名対象外）。
-  // 昇降路（昇降機）は共通仕様「昇降路」で一括指定するため内部タブに出さない（Q5）。
-  const rooms = graph.rooms.filter(r =>
-    r.kind !== RoomKind.EXTERIOR
-    && r.feature !== RoomFeature.STAIR_VOID && r.feature !== RoomFeature.UNDEFINED
-    && !isShaftFeature(r.feature));
+  // 内部タブに載せる部屋の述語は finish/interiorTabRooms.js（天伏パネルと共用。除外の理由もそちら）。
+  const rooms = interiorTabRooms(graph);
 
   const [dragId, setDragId]             = useState(null);
   const [overIndex, setOverIndex]       = useState(null);
@@ -713,7 +705,7 @@ const RoomCard = observer(({ room, mode, isExpanded, isDragging, isOver,
         <CardNameInput room={room} onApplyNaming={onApplyNaming} />
       ) : (
         <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
-          {room.name || (room.feature === RoomFeature.STAIR ? DEFAULT_STAIR_ROOM_NAME : '（名称未設定）')}
+          {interiorRoomDisplayName(room)}
         </span>
       )}
       <span style={{ color: '#94a3b8', fontSize: 11 }}>{isExpanded ? '▼' : '◀'}</span>

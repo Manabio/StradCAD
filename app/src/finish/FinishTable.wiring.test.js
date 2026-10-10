@@ -31,15 +31,17 @@ test('【不変条件】昇降路 壁仕上げ材・防音材の変更は withFi
     'graph.setShaftSoundproof(v) が withFinishUndo(graph, () => …) の直接引数になっていない');
 });
 
-test('【不変条件】InteriorTable の部屋一覧フィルタ（const rooms = graph.rooms.filter(...)）は !isShaftFeature(r.feature) を含む（昇降路は内部タブに出さない）', () => {
-  const startNeedle = 'const rooms = graph.rooms.filter(';
-  const startIdx = codeOnly.indexOf(startNeedle);
-  assert.ok(startIdx >= 0, 'const rooms = graph.rooms.filter( が見つからない');
-  const endIdx = codeOnly.indexOf(');', startIdx);
-  assert.ok(endIdx >= 0, 'const rooms = graph.rooms.filter( の閉じ );  が見つからない');
-  const filterBlock = codeOnly.slice(startIdx, endIdx + 2);
-  assert.ok(/!isShaftFeature\(r\.feature\)/.test(filterBlock),
-    'const rooms = graph.rooms.filter(...) の範囲に !isShaftFeature(r.feature) が見つからない');
+// 述語は純モジュール finish/interiorTabRooms.js へ抽出（天伏パネルと共用）。昇降路を除く振る舞いは
+// interiorTabRooms.test.js が固定する。ここでは InteriorTable がその関数を通ることを固定する。
+test('【不変条件】InteriorTable の部屋一覧は interiorTabRooms(graph) を通る（述語の二重定義をしない）', () => {
+  assert.ok(codeOnly.split(/\r?\n/).some(l => l.trim() === 'const rooms = interiorTabRooms(graph);'),
+    'const rooms = interiorTabRooms(graph); の行が見つからない');
+  assert.ok(!/graph\.rooms\.filter\(/.test(codeOnly), 'FinishTable.jsx に graph.rooms.filter( が残っている（述語の二重定義）');
+});
+
+test('【不変条件】RoomCard の表示名は {interiorRoomDisplayName(room)} を通る（インライン式に戻さない）', () => {
+  assert.match(codeOnly, /^\s*\{interiorRoomDisplayName\(room\)\}\s*$/m);
+  assert.ok(!/名称未設定/.test(codeOnly), 'FinishTable.jsx に「名称未設定」の直書きが残っている');
 });
 
 // ---- ステップ1（部屋編集の導線変更）: RoomCard が名称入力・区分/属性セレクタ・onApplyNaming を持つ ----

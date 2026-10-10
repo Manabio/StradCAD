@@ -10,6 +10,7 @@ import { TOP_BAR } from '../layout.js';
 const MODES = [
   { mode: 'floorplan', label: '平面' },
   { mode: 'finish',    label: '仕上げ' },
+  { mode: 'ceiling',   label: '天伏' },
   { mode: 'structure', label: '構造' },
   { mode: 'site',      label: '敷地' },
   { mode: 'elevation', label: '展開' },

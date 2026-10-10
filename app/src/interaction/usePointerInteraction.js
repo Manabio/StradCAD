@@ -215,6 +215,13 @@ export function usePointerInteraction({
       return;
     }
 
+    // ---- 天伏モード（S1a: キャンバス操作はパンだけ。通り芯の編集メニュー・長押しの汎用経路に落とさない）----
+    if (appMode === 'ceiling') {
+      drag.current = { lastX: clientX, lastY: clientY };
+      setIsPanning(true);
+      return;
+    }
+
     // ---- 敷地モード ----
     if (appMode === 'site') {
       const inGutter = isInGutter(clientX, clientY, size.width, size.height);
@@ -452,6 +459,18 @@ export function usePointerInteraction({
       return;
     }
 
+    // ---- 天伏モード（パンのみ）----
+    if (appMode === 'ceiling') {
+      if (drag.current) {
+        const dx = clientX - drag.current.lastX;
+        const dy = clientY - drag.current.lastY;
+        drag.current.lastX = clientX;
+        drag.current.lastY = clientY;
+        viewport.pan(dx, dy);
+      }
+      return;
+    }
+
     // ---- 敷地モード ----
     if (appMode === 'site') {
       if (drag.current) {
@@ -626,6 +645,13 @@ export function usePointerInteraction({
       return;
     }
 
+    // ---- 天伏モード（パンのみ）----
+    if (appMode === 'ceiling') {
+      drag.current = null;
+      setIsPanning(false);
+      return;
+    }
+
     // ---- 敷地モード ----
     if (appMode === 'site') {
       drag.current = null;
@@ -768,6 +794,11 @@ export function usePointerInteraction({
     if (appMode === 'finish') {
       modeRef.current?.cancelDrag();
       finishDragDownRef.current = null;
+      drag.current = null;
+      setIsPanning(false);
+      return;
+    }
+    if (appMode === 'ceiling') {
       drag.current = null;
       setIsPanning(false);
       return;

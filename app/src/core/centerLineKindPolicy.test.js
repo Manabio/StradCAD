@@ -75,10 +75,11 @@ function addCLOfKind(graph, project, clType, value, kind) {
 // A. 原始事実（表そのもの）
 // ================================================================
 
-test('VISIBLE_KINDS_BY_MODE: floorplan/finish/opening=[struct,center,aux]、structure=[struct,beam]、site/elevation=[]', () => {
+test('VISIBLE_KINDS_BY_MODE: floorplan/finish/ceiling/opening=[struct,center,aux]、structure=[struct,beam]、site/elevation=[]', () => {
   assert.deepEqual({ ...VISIBLE_KINDS_BY_MODE }, {
     floorplan: ['struct', 'center', 'aux'],
     finish:    ['struct', 'center', 'aux'],
+    ceiling:   ['struct', 'center', 'aux'],
     opening:   ['struct', 'center', 'aux'],
     structure: ['struct', 'beam'],
     site:      [],
@@ -226,6 +227,26 @@ test('moveSnapTargetKinds: struct/center/auxはいずれも通り芯・中心線
   assert.ok(!moveSnapTargetKinds('struct').includes('beam'));
 });
 
+// ceiling（天伏）を APP_MODES へ足した前後で導出表が変わらないことの固定（可視集合が finish と同一
+// なので和集合・ヒット可能モード集合とも結果は不変のはず）。期待値は変更前のリテラル。
+test('【不変条件】ceiling 追加前後で kindsVisibleWith・sameDirectionObstacleKinds・moveSnapTargetKinds・orthoAnchorKinds が全種別で不変', () => {
+  const expected = {
+    kindsVisibleWith:           { struct: ['struct', 'center', 'aux', 'beam'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct', 'beam'] },
+    sameDirectionObstacleKinds: { struct: ['struct', 'center', 'aux', 'beam'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct', 'beam'] },
+    moveSnapTargetKinds:        { struct: ['struct', 'center', 'aux'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct', 'beam'] },
+    orthoAnchorKinds:           { struct: ['struct', 'center', 'aux', 'beam'], center: ['struct', 'center', 'aux'], aux: ['struct', 'center', 'aux'], beam: ['struct'] },
+  };
+  const fns = { kindsVisibleWith, sameDirectionObstacleKinds, moveSnapTargetKinds, orthoAnchorKinds };
+  for (const [name, fn] of Object.entries(fns)) {
+    for (const kind of CL_KINDS) assert.deepEqual(fn(kind), expected[name][kind], `${name}(${kind})`);
+  }
+});
+
+test('ceiling は finish と可視・ヒットとも同一（天伏は仕上げ表の編集モードで CL の扱いは仕上げと同じ）', () => {
+  assert.deepEqual([...kindsVisibleIn('ceiling')], [...kindsVisibleIn('finish')]);
+  assert.deepEqual(hitTestKinds('ceiling'), hitTestKinds('finish'));
+});
+
 test('coexistenceAt: 引数の向きで結果が変わる非対称セル（struct×centerはpromote、center×structはforbidden）', () => {
   assert.equal(coexistenceAt('struct', 'center'), 'promote');
   assert.equal(coexistenceAt('center', 'struct'), 'forbidden');
@@ -328,6 +349,7 @@ test('【失敗系】usesBeamAxisMoveSnap: 未知のappModeはthrowする', () =
 test('hitTestKinds: floorplan/finish/opening=通り芯・中心線・補助線、structure=梁芯のみ', () => {
   assert.deepEqual(hitTestKinds('floorplan'), ['struct', 'center', 'aux']);
   assert.deepEqual(hitTestKinds('finish'), ['struct', 'center', 'aux']);
+  assert.deepEqual(hitTestKinds('ceiling'), ['struct', 'center', 'aux']);
   assert.deepEqual(hitTestKinds('opening'), ['struct', 'center', 'aux']);
   assert.deepEqual(hitTestKinds('structure'), ['beam']);
   // site/elevation は可視モード表が空集合のため hitTestKinds も空になる。snap.js
@@ -648,6 +670,7 @@ test('【失敗系】gridCenterLinesOnAxis: centerLineTypeが未指定/nullはth
 const VISIBLE_KINDS_LITERAL = {
   floorplan: ['struct', 'center', 'aux'],
   finish:    ['struct', 'center', 'aux'],
+  ceiling:   ['struct', 'center', 'aux'],
   opening:   ['struct', 'center', 'aux'],
   structure: ['struct', 'beam'],
   site:      [],
