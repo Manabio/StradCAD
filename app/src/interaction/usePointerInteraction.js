@@ -95,14 +95,14 @@ export function usePointerInteraction({
   const gutterLongPress = useLongPress({
     onStart:  (sx, sy) => {
       setPressPos({ x: sx, y: sy });
-      if (gutterCLRef.current) modeRef.current?.preloadMove(gutterCLRef.current);
+      if (gutterCLRef.current) modeRef.current?.preloadMove(gutterCLRef.current, { graph, project });
     },
     onFire:   async () => {
       setPressPos(null);
       const cl = gutterCLRef.current;
       gutterCLRef.current = null;
       if (cl) {
-        const err = await modeRef.current?.startMove(cl);
+        const err = await modeRef.current?.startMove(cl, { graph, project });
         if (err) onToast(err);
       }
     },
@@ -130,6 +130,12 @@ export function usePointerInteraction({
     onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
     onFire:   (sx, sy) => {
       setPressPos(null);
+      // 天伏: 長押しはセルのドラッグ選択ではなくメニュー（天井芯の操作）。進行中のドラッグ選択を捨てて、
+      // 離したときの確定（commitDrag）も走らせない。選択済みの内容（selection）は保つ。
+      if (appMode === 'ceiling') {
+        modeRef.current?.cancelDrag();
+        ceilingDragDownRef.current = null;
+      }
       const snap         = snapRef.current;
       const clEndpoint   = nearCLEndpointRef.current;
       const cl           = nearCLRef.current;
@@ -153,7 +159,7 @@ export function usePointerInteraction({
       });
       if (!state) return;
       // 移動を選ばれたときに備え、移動範囲の計算（他フロアのIDB読み込みを含む）を先読みしておく。
-      if (state.clState?.canMove) modeRef.current.preloadMove(cl);
+      if (state.clState?.canMove) modeRef.current.preloadMove(cl, { graph, project });
       setMenu({
         pos: { x: sx, y: sy }, items: state.items, snap, worldPos: viewport.screenToWorld(sx, sy),
         cl: clEndpoint ? clEndpoint.cl : cl, wall, opening,
@@ -219,8 +225,15 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 天伏モード（ガター内はパン。それ以外は天井セルのドラッグ選択。通り芯の編集メニュー・長押しの汎用経路に落とさない）----
+    // ---- 天伏モード（ガター内はパン。描画エリアは天井セルのドラッグ選択＋天井芯の長押しメニュー。S8b）----
+    // ガターの通り芯長押し（gutterLongPress）には入らない（通り芯の編集は天伏では不可）。長押しは描画エリアの
+    // 汎用 longPress を共有し、成立（onFire）でセルのドラッグ選択を捨ててメニューを出す。移動中は汎用の移動へ。
     if (appMode === 'ceiling') {
+      // 移動中は押下位置（ガター含む）に関わらず確定の再プレスとして記録する（汎用経路と同じ順序）
+      if (modeRef.current?.moveState) {
+        moveDownRef.current = { x: clientX, y: clientY };
+        return;
+      }
       const inGutter = isInGutter(clientX, clientY, size.width, size.height);
       if (inGutter) {
         drag.current = { lastX: clientX, lastY: clientY };
@@ -229,6 +242,8 @@ export function usePointerInteraction({
         ceilingDragDownRef.current = { x: clientX, y: clientY };
         const world = viewport.screenToWorld(clientX, clientY);
         modeRef.current?.startDrag(graph, world.x, world.y);
+        updateSnap(clientX, clientY); // 長押しメニューの対象（天井芯・端点・空）を押下点で解決する
+        longPress.begin(clientX, clientY);
       }
       return;
     }
@@ -470,8 +485,8 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 天伏モード（パン、または天井セルのドラッグ選択）----
-    if (appMode === 'ceiling') {
+    // ---- 天伏モード（パン、または天井セルのドラッグ選択。天井芯の移動中は汎用の CL 移動へ落とす）----
+    if (appMode === 'ceiling' && !modeRef.current?.moveState) {
       if (drag.current) {
         const dx = clientX - drag.current.lastX;
         const dy = clientY - drag.current.lastY;
@@ -480,6 +495,8 @@ export function usePointerInteraction({
         viewport.pan(dx, dy);
         return;
       }
+      // 閾値を超えて動いたら長押し（メニュー）を取り消す。パンにはしない（ドラッグ選択を続ける）
+      if (longPress.move(clientX, clientY)) longPress.abort();
       if (ceilingDragDownRef.current && modeRef.current?.dragState) {
         const world = viewport.screenToWorld(clientX, clientY);
         modeRef.current?.updateDrag(graph, world.x, world.y, CEILING_DRAG_SAMPLE_PX / viewport.scaleX);
@@ -661,15 +678,17 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 天伏モード（パン終了、または天井セル選択の確定）----
-    if (appMode === 'ceiling') {
-      if (ceilingDragDownRef.current) {
+    // ---- 天伏モード（パン終了、または天井セル選択の確定。天井芯の移動中は下の汎用の CL 移動確定へ落とす）----
+    if (appMode === 'ceiling' && !modeRef.current?.moveState) {
+      // 長押しが成立していれば（メニューを出した／出さなかった）セル選択は確定しない（onFire が捨てている）
+      if (ceilingDragDownRef.current && !longPress.hasFired()) {
         // dragState が無くても呼ぶ（選べない所・空白のタップで選択を解除するため）。タップは仕上げと同じ移動量 8px 未満
         const down = ceilingDragDownRef.current;
         const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
         modeRef.current?.commitDrag({ tap: tapDist < 8 });
       }
       ceilingDragDownRef.current = null;
+      longPress.abort();
       drag.current = null;
       setIsPanning(false);
       return;
@@ -824,6 +843,14 @@ export function usePointerInteraction({
     if (appMode === 'ceiling') {
       modeRef.current?.cancelDrag();
       ceilingDragDownRef.current = null;
+      longPress.abort();
+      // 天井芯の移動中にキャンバス外へ出たら移動をキャンセル（汎用の CL 移動と同じ）
+      if (modeRef.current?.moveState) {
+        moveDownRef.current = null;
+        modeRef.current?.cancelMove();
+        setSnapPoint(null);
+        setCursorWorld(null);
+      }
       drag.current = null;
       setIsPanning(false);
       return;

@@ -47,7 +47,7 @@ import { addCenterLineFromDialog } from '../transform/centerLineOps.js';
 import { computeMoveRange, collectFollowerOffsets } from '../transform/followerGraph.js';
 import { beamAxisMoveRange } from '../structural/beamAxisMove.js';
 import { checkPromoteToGridGuards, checkDemoteToCenterGuards } from '../transform/centerLineConvert.js';
-import { findBracketingCLs, findCLMoveSnap, findBeamAxisMoveSnap } from '../snapGeometry.js';
+import { findBracketingCLs, findCLMoveSnap, findBeamAxisMoveSnap, findNearbyCenterLines } from '../snapGeometry.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -1506,12 +1506,38 @@ test('【不変条件】snap.js: resolvePointerTargets の CL 種別フィルタ
     "'beam' のインライン比較が残っている（旧条件 appMode==='structure'?k==='beam':k!=='beam' への回帰）");
 });
 
-test('【不変条件】App.jsx: CL追加メニューの参照候補がポリシー（isHitTestTarget / hitTestKinds）で絞られる', () => {
+// S8b: CL追加の参照候補の絞りを isHitTestTarget → isRenderTarget に替えた（天伏では中心線・補助線・天井芯が描かれ、
+// 目印の中心線を「基準からの距離」の参照に選べる必要がある）。天伏以外の全モードで両者が同値であること＝既存モードの
+// 結果が不変であることをここで固定する（5種別×天伏以外の全 appMode）。
+test('【不変条件】isRenderTarget と isHitTestTarget は天伏以外の全 appMode で全種別について同値（CL追加の参照候補の絞り替えが既存モードで不変）。天伏だけが異なる', () => {
+  const kinds = {
+    struct:  { labeled: true,  discipline: Discipline.STRUCT },
+    center:  { labeled: false, discipline: Discipline.ARCH },
+    aux:     { labeled: false, discipline: Discipline.ARCH, lineType: 'dashed' },
+    beam:    { labeled: false, discipline: Discipline.FUSE },
+    ceiling: { labeled: false, discipline: Discipline.CEILING },
+  };
+  const { graph } = makeProjectWithGraph();
+  Object.entries(kinds).forEach(([, props], i) => graph.addCenterLine(CenterLineType.VERTICAL, 1000 * (i + 1), props));
+  // 絞りの入力は findNearbyCenterLines の結果（通り芯＝spansEntireAxis は常に除かれる）。閾値を大きくして全件を拾う。
+  const nearby = findNearbyCenterLines(graph, 0, 0, 1e9, 1, 1, CenterLineType.VERTICAL);
+  assert.deepEqual(nearby.map(centerLineKind).sort(), ['aux', 'beam', 'ceiling', 'center'], '入力に通り芯は含まれない');
+  const ids = (list) => list.map(cl => cl.id);
+  for (const mode of APP_MODES.filter(m => m !== 'ceiling')) {
+    assert.deepEqual(ids(nearby.filter(cl => isRenderTarget(cl, mode))), ids(nearby.filter(cl => isHitTestTarget(cl, mode))),
+      `${mode}: 描画対象とヒット対象の絞りが食い違う`);
+  }
+  assert.deepEqual(nearby.filter(cl => isRenderTarget(cl, 'ceiling')).map(centerLineKind).sort(), ['aux', 'ceiling', 'center'], '天伏: 中心線・補助線・天井芯を参照に選べる');
+  assert.deepEqual(nearby.filter(cl => isHitTestTarget(cl, 'ceiling')).map(centerLineKind), ['ceiling'], '（旧: ヒット対象で絞ると天井芯しか選べない）');
+});
+
+test('【不変条件】App.jsx: CL追加メニューの参照候補がポリシー（isRenderTarget / isHitTestTarget / hitTestKinds）で絞られる', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
   const idx = src.indexOf('findNearbyCenterLines(');
   assert.ok(idx >= 0, 'findNearbyCenterLines( の呼び出しが見つからない');
   const code = stripLineComments(src.slice(idx, idx + 500));
   assert.ok(
+    /\.filter\(cl\s*=>\s*isRenderTarget\(cl,\s*appMode\)\)/.test(code) ||
     /\.filter\(cl\s*=>\s*isHitTestTarget\(cl,\s*appMode\)\)/.test(code) ||
     /\.filter\(cl\s*=>\s*hitTestKinds\(appMode\)\.includes\(centerLineKind\(cl\)\)\)/.test(code),
     'findNearbyCenterLines(...) の直後にポリシー（isHitTestTarget/hitTestKinds）由来のフィルタが見つからない'

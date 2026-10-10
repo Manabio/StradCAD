@@ -40,6 +40,7 @@ import { openingBeamSourcesFor, autoFillOpeningBeamAxes } from '../structural/op
 import { getAllCells } from '../finish/gridCells.js';
 import { findFloorsBlockingGridDeletion, findFloorsWithSameLineId } from './centerLineFloorSync.js';
 import { withProductionPeek, decodeFloor } from './centerLineTestFixtures.js';
+import { resolveMoveRange } from './followerGraph.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -4545,6 +4546,153 @@ test('天井芯: 平面で中心線を動かすとき天井芯は障害物でも
   assert.ok(!moveSnapTargetKinds('center').includes('ceiling'));
   // 逆に天井芯の移動は分割線（中心線）を越えない
   assert.deepEqual(sameDirectionObstacles(graph, ceiling).map(c => c.id).sort(), [subject.id, center.id].sort());
+});
+
+// ---- 天井芯の操作（S8b）: 追加・移動・削除 ----
+
+const ARCH_CL = { labeled: false, discipline: Discipline.ARCH };
+const CEILING_CL = { labeled: false, discipline: Discipline.CEILING };
+const ceilingDialog = (value, perpCoord) => ({ clDialog: { type: 'vertical', worldCoord: value, perpCoord }, value, kind: 'ceiling', refId: null, refOffset: 0 });
+
+test('天井芯の追加: extent は中心線を参照し、discipline=CEILING・labeled=false。undo で消え redo で戻る（構造同期は起動しない）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, ARCH_CL);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, ARCH_CL);
+  const syncCalls = [];
+  setCenterLineStructuralListener((...args) => syncCalls.push(args));
+  try {
+    const beforeTop = undoManager.peekUndo();
+    const result = await addCenterLineFromDialog(graph, project, ceilingDialog(2000, 1500), { scaleDenominator: 100 });
+    assert.deepEqual({ done: result.done, toast: result.toast, suggestWood: result.suggestWood }, { done: true, toast: null, suggestWood: null });
+    const added = graph.centerLines.filter(c => centerLineKind(c) === 'ceiling');
+    assert.equal(added.length, 1);
+    const [cl] = added;
+    assert.equal(cl.discipline, Discipline.CEILING);
+    assert.equal(cl.labeled, false);
+    assert.equal(cl.value, 2000);
+    assert.deepEqual(cl.extentLoRef, { clId: y0.id, offset: 0 }, '下側の端部は直交する中心線を参照する');
+    assert.deepEqual(cl.extentHiRef, { clId: y1.id, offset: 0 });
+    assert.notEqual(undoManager.peekUndo(), beforeTop, 'undo が積まれる');
+
+    undoManager.undo();
+    assert.equal(graph.centerLines.filter(c => centerLineKind(c) === 'ceiling').length, 0, 'undo で消える');
+    undoManager.redo();
+    assert.equal(graph.centerLines.filter(c => centerLineKind(c) === 'ceiling').length, 1, 'redo で戻る');
+    assert.equal(syncCalls.length, 0, '天井芯は構造同期を起動しない（scope=null）');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('天井芯の追加: 基準の中心線（refId）を指定すると refId・refOffset を保ち、基準の移動に追従する', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  const base = graph.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_CL);
+  const result = await addCenterLineFromDialog(graph, project,
+    { clDialog: { type: 'vertical', worldCoord: 2500, perpCoord: 0 }, value: 2500, kind: 'ceiling', refId: base.id, refOffset: 1500 },
+    { scaleDenominator: 100 });
+  assert.equal(result.done, true);
+  const cl = graph.centerLines.find(c => centerLineKind(c) === 'ceiling');
+  assert.equal(cl.refId, base.id);
+  assert.equal(cl.refOffset, 1500);
+  base.pendingDelta = 200;
+  assert.equal(cl.effectiveValue, 2700, '基準の中心線の移動に天井芯が追従する');
+  base.pendingDelta = 0;
+});
+
+test('【失敗系】天井芯の追加: 同座標の中心線・通り芯があれば拒否（done:false・ERR_CL_DUPLICATE(既存の種別)・undo なし）。補助線とは共存する', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH_CL);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, lineType: 'dashed', discipline: Discipline.ARCH });
+  const beforeTop = undoManager.peekUndo();
+
+  const onCenter = await addCenterLineFromDialog(graph, project, ceilingDialog(2000, 0), { scaleDenominator: 100 });
+  assert.deepEqual({ done: onCenter.done, toast: onCenter.toast }, { done: false, toast: ERR_CL_DUPLICATE('center') });
+  const onStruct = await addCenterLineFromDialog(graph, project, ceilingDialog(3000, 0), { scaleDenominator: 100 });
+  assert.deepEqual({ done: onStruct.done, toast: onStruct.toast }, { done: false, toast: ERR_CL_DUPLICATE('struct') });
+  assert.equal(undoManager.peekUndo(), beforeTop, '拒否では undo を積まない');
+  assert.equal(graph.centerLines.filter(c => centerLineKind(c) === 'ceiling').length, 0);
+
+  const onAux = await addCenterLineFromDialog(graph, project, ceilingDialog(4000, 0), { scaleDenominator: 100 });
+  assert.equal(onAux.done, true, '補助線とは共存できる');
+  assert.equal(graph.centerLines.filter(c => centerLineKind(c) === 'ceiling').length, 1);
+});
+
+test('天井芯の追加: 同種の隣接する天井芯は結合し（undo で往復）、extent が重なる天井芯は拒否する', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0, ARCH_CL);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH_CL);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, ARCH_CL);
+  const first = await addCenterLineFromDialog(graph, project, ceilingDialog(2000, 500), { scaleDenominator: 100 });
+  assert.equal(first.done, true);
+  const ceilings = () => graph.centerLines.filter(c => centerLineKind(c) === 'ceiling');
+  assert.equal(ceilings().length, 1);
+
+  const overlap = await addCenterLineFromDialog(graph, project, ceilingDialog(2000, 500), { scaleDenominator: 100 });
+  assert.deepEqual({ done: overlap.done, toast: overlap.toast }, { done: false, toast: ERR_CL_DUPLICATE('ceiling') }, '重なる区間は拒否');
+
+  const adjacent = await addCenterLineFromDialog(graph, project, ceilingDialog(2000, 1500), { scaleDenominator: 100 });
+  assert.equal(adjacent.done, true);
+  assert.equal(ceilings().length, 1, '隣接する同種の天井芯は 1 本に結合する');
+  assert.equal(ceilings()[0].extentLo, 0);
+  assert.equal(ceilings()[0].extentHi, 2000);
+
+  undoManager.undo();
+  assert.equal(ceilings().length, 1, 'undo で結合前（追加分は仮想候補のため既存の 1 本）に戻る');
+  assert.equal(ceilings()[0].extentHi, 1000, '既存の天井芯の extent も結合前に戻る');
+});
+
+test('天井芯の移動範囲: 同方向の中心線・他の天井芯で止まり、補助線は越える（resolveMoveRange）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_CL);
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, ARCH_CL);
+  graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, lineType: 'dashed', discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 3500, CEILING_CL);
+  const moving = graph.addCenterLine(CenterLineType.VERTICAL, 2500, CEILING_CL);
+  const result = await resolveMoveRange(project, graph, moving);
+  assert.deepEqual(result.range, { min: 1000, max: 3500 }, '下は中心線 1000（補助線 1500 は越える）、上は他の天井芯 3500');
+});
+
+test('天井芯の移動確定: commitCLMoveOp は座標を bake して undo/redo で往復し、構造同期を起動しない', () => {
+  const { project, graph } = makeProjectWithGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 2000, CEILING_CL);
+  const syncCalls = [];
+  setCenterLineStructuralListener((...args) => syncCalls.push(args));
+  try {
+    cl.pendingDelta = 500;
+    const result = commitCLMoveOp(graph, project, cl, 2000);
+    assert.equal(result.toast, null);
+    assert.equal(cl.value, 2500);
+    assert.equal(cl.pendingDelta, 0);
+    undoManager.undo();
+    assert.equal(cl.value, 2000, 'undo で元の座標');
+    undoManager.redo();
+    assert.equal(cl.value, 2500, 'redo で移動後');
+    assert.equal(syncCalls.length, 0, '構造同期なし');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('天井芯の削除: 壁の再生成を呼ばず（regenerateWallsFn 0 回）、壁 id は不変。undo で戻る', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  const wallIdsBefore = new Set(graph.walls.map(w => w.id));
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 2000, CEILING_CL);
+  const clId = cl.id;
+  let regenCalls = 0;
+  const result = await deleteCenterLineWithUndo(graph, project, cl, {
+    regenerateWallsFn: async (g, o) => { regenCalls += 1; return regenerateWalls(g, o); },
+  });
+  assert.equal(result.toast, null);
+  assert.equal(regenCalls, 0, '天井芯の削除は壁の再生成を呼ばない');
+  assert.equal(graph.shapeMap.has(clId), false, '天井芯は消える');
+  assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, '壁 id は不変');
+
+  undoManager.undo();
+  assert.equal(graph.shapeMap.has(clId), true, 'undo で天井芯が戻る');
 });
 
 test('addCenterLineFromDialog: 通り芯を既存通り芯と同座標に追加しようとするとdone:falseでERR_CL_DUPLICATE、undoは積まれない', async () => {

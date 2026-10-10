@@ -1,4 +1,7 @@
-import { makeObservable, observable, action, runInAction } from 'mobx';
+import { makeObservable, observable, action, computed, runInAction } from 'mobx';
+import { resolveMoveRange } from '../transform/followerGraph.js';
+import { runBusy } from '../uiBusy.js';
+import { prepareCenterLineMove } from './clMove.js';
 import { buildCeilingCellOwners } from '../ceiling/ceilingOwners.js';
 import { beginCeilingDrag, extendCeilingDrag } from '../ceiling/ceilingSelection.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
@@ -23,6 +26,8 @@ export class CeilingModeState {
   activeTab      = 'interior'; // 'interior' | 'stair'
   selection      = null;     // null | { owner, cellKeys: Set<string> }（確定した天井セルの選択）
   dragState      = null;     // null | { owner, visited, lastWorld, owners }（ドラッグ中）
+  moveState      = null;     // null | { cl, originalValue, range }（天井芯の移動中。S8b。FloorplanModeState.moveState と同形）
+  _pendingPreload = null;    // { clId, promise } | null — 長押し中の移動範囲の先読み結果（graph は持たず promise だけ）
 
   // ---- 材データ（突入時ロード。dispose では解放せず、モードのインスタンスごと捨てられる。FinishModeState と同名・同じ意味） ----
   materialsLoaded = false;   // ロード完了フラグ
@@ -45,6 +50,12 @@ export class CeilingModeState {
       activeTab:      observable,
       selection:      observable.ref,
       dragState:      observable.ref,
+      moveState:      observable.ref,
+      isMoving:       computed,
+      startMove:      action,
+      updateMove:     action,
+      commitMove:     action,
+      cancelMove:     action,
       selectRoom:     action,
       setActiveTab:   action,
       startDrag:      action,
@@ -137,9 +148,57 @@ export class CeilingModeState {
   /** 確定した選択のセルキー集合。 */
   get selectedCellKeys() { return this.selection ? this.selection.cellKeys : NO_KEYS; }
 
+  // ---- 天井芯の移動（長押しメニューの「移動」。S8b）----
+  // FloorplanModeState の CL 移動と同じ形・同じ文言（範囲解決は modes/clMove.js prepareCenterLineMove が共有）。
+  // graph・project は保持せず、呼び出しごとに ctx = { graph, project } で受ける（階切替で古い graph を抱えない。
+  // new CeilingModeState() の引数なし生成を保つ）。確定は transform/centerLineOps.js commitCLMoveOp
+  // （App 側 commitCLMove。最後に commitMove を呼ぶ）。
+
+  /** 長押し開始時に呼ぶ移動範囲の先読み（確定までの待ち時間を使う）。ctx が無ければ何もしない。 */
+  preloadMove(cl, ctx) {
+    if (!ctx) return;
+    this._pendingPreload = { clId: cl.id, promise: resolveMoveRange(ctx.project, ctx.graph, cl) };
+  }
+
+  /** 移動を開始する。範囲計算が閾値超過なら moveState を立てずエラー文言を返す（成功は null）。
+   *  ctx は必須。省略はプログラミングエラーとして例外（エラー文言では返さない）。 */
+  async startMove(cl, ctx) {
+    if (!ctx) throw new Error('CeilingModeState.startMove: ctx（{ graph, project }）が必要です');
+    const pending = this._pendingPreload;
+    this._pendingPreload = null;
+    return runBusy('移動準備', async () => {
+      const { moveState, error } = await prepareCenterLineMove(ctx.project, ctx.graph, cl, pending);
+      if (error) return error;
+      runInAction(() => { this.moveState = moveState; });
+      return null;
+    });
+  }
+
+  updateMove(newValue) {
+    if (!this.moveState) return;
+    runInAction(() => {
+      // cl.value は確定済み座標のまま保持し、pendingDelta だけ更新する（FloorplanModeState.updateMove と同じ）。
+      const { cl, range } = this.moveState;
+      const clamped = Math.min(Math.max(newValue, range.min), range.max);
+      cl.pendingDelta = clamped - cl.value;
+    });
+  }
+
+  commitMove() { this.moveState = null; }
+
+  cancelMove() {
+    if (this.moveState) {
+      runInAction(() => { this.moveState.cl.pendingDelta = 0; });
+    }
+    this.moveState = null;
+  }
+
+  get isMoving() { return this.moveState !== null; }
+
   // ---- Lifecycle ----
 
   dispose() {
+    this.cancelMove();
     this.cancelDrag();
     this.selection = null;
     this.selectRoom(null);

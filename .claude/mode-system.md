@@ -15,7 +15,7 @@ Reactフックはコンポーネント外の`import()`非同期ロードと組�
 ジェスチャー追跡用の一時ref（drawDownRef, gutterCLRef等）はモードモジュールに入れない。モード固有の永続的な状態のみモードクラスに置く。ポインタ配線のカスタムフック`interaction/usePointerInteraction.js`も同じ理由でApp.jsx側に含める（modes/には置かない）。
 
 ## ガター操作とキャンバス操作は完全に分離する
-ガター内の`pointerDown`は通常の`longPress`を呼ばず`gutterLongPress`を使う。ガター内ではスナップも無効。新しいガター操作を追加する際もこの分離を維持する。
+ガター内の`pointerDown`は通常の`longPress`を呼ばず`gutterLongPress`を使う。ガター内ではスナップも無効。新しいガター操作を追加する際もこの分離を維持する。天伏モードはガター内がパンだけで、描画エリアはセルのドラッグ選択と汎用`longPress`（天井芯のメニュー）を共有する（成立で`onFire`がドラッグ選択を捨てる。`moveState`中は汎用のCL移動へ落とす）。
 
 ## フロア切替直後の古いgraph参照に注意
 `switchFloor`はasync。完了直後は`project.activeGraph`を直接読み直すこと。イベントハンドラのローカル変数`graph`（render時点のクロージャ）は古いフロアを指す。詳細は`.claude/floor-design.md`参照。

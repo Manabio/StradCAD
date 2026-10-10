@@ -18,7 +18,7 @@ import { findCenterDimensionLegEndpoint } from './renderer/gutterLabelHits.js';
 // 再エクスポートし、既存の import 元（App.jsx・interaction/usePointerInteraction.js 等）を壊さない。
 import {
   overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLine, findNearbyCenterLines,
-  findNearestCenterLineEndpoint, findCLMoveSnap, findBeamAxisMoveSnap,
+  findNearestCenterLineEndpoint, findCLMoveSnap, findBeamAxisMoveSnap, pointerTargetScope, legEndpointForMode,
 } from './snapGeometry.js';
 export {
   overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLine, findNearbyCenterLines,
@@ -123,13 +123,20 @@ export function resolvePointerTargets(graph, viewport, clientX, clientY, opts = 
     return { snap: null, nearCL: null, nearCLEndpoint: null, nearWall: null, nearOpening: null, world: null };
   }
   const world = viewport.screenToWorld(clientX, clientY);
-  const snap  = findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY);
+  // 何を解決するかは pointerTargetScope（snapGeometry.js）に集約——天伏は交点・壁・建具を解決しない（S8b）。
+  const scope = pointerTargetScope(appMode);
+  const snap  = scope.intersection
+    ? findNearestIntersection(graph, world.x, world.y, SNAP_THRESHOLD_PX, viewport.scaleX, viewport.scaleY)
+    : null;
   // hitTestKinds(appMode) は走査前に1回だけ呼ぶ（CLごとに新しい配列を作らない。未知appModeのthrowも
   // 走査前に出る）。
   const hitKinds = hitTestKinds(appMode);
   const clKindFilter = k => hitKinds.includes(k);
   const clEndpointTip = findNearestCenterLineEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, clKindFilter);
-  const clEndpointLeg = findCenterDimensionLegEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, width, height, appMode, columnAxisMode);
+  // CENTER寸法の足も突端と同じ対象種別に絞る（legEndpointForMode。平面・構造では従来どおり素通し）。
+  const clEndpointLeg = legEndpointForMode(
+    findCenterDimensionLegEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, width, height, appMode, columnAxisMode),
+    appMode);
   let clEndpointCand = clEndpointTip;
   if (clEndpointLeg && (!clEndpointTip
     || clEndpointPerpDist(clEndpointLeg.cl, world.x, world.y, viewport.scaleX, viewport.scaleY)
@@ -143,7 +150,7 @@ export function resolvePointerTargets(graph, viewport, clientX, clientY, opts = 
     // 平面要素（壁・開口）を丸ごと対象外にする——部材ごとにメニュー項目を間引く方式では、
     // 柱の上の長押しで建具ラジアルが出る等の取りこぼしが残り、カーソルの pointer 表示（App.jsx）も
     // 見えない壁に反応してしまう。モード単位の一箇所で塞ぐのがこの規律の単一の真実源。
-    const planTargets = appMode !== 'structure';
+    const planTargets = scope.planTargets;
     const openingCand = planTargets ? findOpeningAt(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY) : null;
     const wallCand    = planTargets ? findNearestWall(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY) : null;
     const candidates = [];

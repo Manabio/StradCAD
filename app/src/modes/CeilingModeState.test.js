@@ -3,7 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { autorun, isObservable } from 'mobx';
-import { StairType } from '@core';
+import { StairType, CenterLineType, Discipline } from '@core';
+import { isUiBusy } from '../uiBusy.js';
+import { ERR_CL_MOVE_LOAD_FAILED } from '../error.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { CeilingModeState } from './CeilingModeState.js';
 import { FinishModeState } from './FinishModeState.js';
@@ -224,4 +226,95 @@ test('CeilingModeState.init: 材データは FinishModeState.init と同じ材�
   const finish = new FinishModeState(g.graph, null);
   await Promise.all([ceiling.init(), finish.init()]);
   assert.deepEqual([...ceiling.materialMap.keys()].sort(), [...finish.materialMap.keys()].sort());
+});
+
+// ---- 天井芯の移動（S8b）: preloadMove / startMove / updateMove / commitMove / cancelMove ----
+// graph・project は呼び出しごとに ctx で受け、State は保持しない。
+
+function moveSetup() {
+  const g = makeGrid(XS, YS);
+  const cl = g.graph.addCenterLine(CenterLineType.VERTICAL, 500, { labeled: false, discipline: Discipline.CEILING });
+  return { g, cl, ctx: { graph: g.graph, project: {} } };
+}
+
+test('CeilingModeState.startMove: ctx で範囲を解決して moveState を立て（isMoving）、updateMove は範囲にクランプして pendingDelta だけ動かす', async () => {
+  const { cl, ctx } = moveSetup();
+  const state = new CeilingModeState();
+  assert.equal(state.isMoving, false);
+  const err = await state.startMove(cl, ctx);
+  assert.equal(err, null);
+  assert.equal(state.isMoving, true);
+  assert.equal(state.moveState.cl, cl);
+  assert.equal(state.moveState.originalValue, 500);
+  assert.deepEqual(state.moveState.range, { min: 0, max: 1000 }, '隣の中心線（x=0・x=1000）で止まる');
+
+  state.updateMove(700);
+  assert.equal(cl.value, 500, 'cl.value は確定まで動かさない');
+  assert.equal(cl.pendingDelta, 200);
+  state.updateMove(5000);
+  assert.equal(cl.effectiveValue, 1000, '範囲の上限にクランプ');
+  state.updateMove(-5000);
+  assert.equal(cl.effectiveValue, 0, '範囲の下限にクランプ');
+
+  state.commitMove();
+  assert.equal(state.moveState, null);
+  assert.equal(state.isMoving, false);
+});
+
+test('CeilingModeState.cancelMove: pendingDelta を 0 に戻して moveState を閉じる。moveState が無いときは何もしない', async () => {
+  const { cl, ctx } = moveSetup();
+  const state = new CeilingModeState();
+  assert.doesNotThrow(() => state.cancelMove());
+  await state.startMove(cl, ctx);
+  state.updateMove(800);
+  assert.equal(cl.pendingDelta, 300);
+  state.cancelMove();
+  assert.equal(cl.pendingDelta, 0);
+  assert.equal(state.moveState, null);
+});
+
+test('CeilingModeState.dispose: 移動中なら cancelMove して pendingDelta を戻す', async () => {
+  const { cl, ctx } = moveSetup();
+  const state = new CeilingModeState();
+  await state.startMove(cl, ctx);
+  state.updateMove(900);
+  state.dispose();
+  assert.equal(cl.pendingDelta, 0);
+  assert.equal(state.moveState, null);
+});
+
+test('CeilingModeState.preloadMove: 先読みを startMove が一度だけ使う。graph・project は State に残らない', async () => {
+  const { cl, ctx } = moveSetup();
+  const state = new CeilingModeState();
+  state.preloadMove(cl, ctx);
+  assert.equal(state._pendingPreload.clId, cl.id);
+  await state.startMove(cl, ctx);
+  assert.equal(state._pendingPreload, null, '使い切り');
+  assert.equal(state.graph, undefined);
+  assert.equal(state.project, undefined);
+  const holds = (v) => v === ctx.graph || v === ctx.project;
+  assert.ok(!Object.values(state).some(holds), 'State が graph／project を保持している');
+  assert.deepEqual(Object.keys(state.moveState).sort(), ['cl', 'originalValue', 'range']);
+});
+
+test('【失敗系】CeilingModeState: ctx 無しの preloadMove は何もせず、startMove は例外（moveState なし）', async () => {
+  const { cl } = moveSetup();
+  const state = new CeilingModeState();
+  state.preloadMove(cl);
+  assert.equal(state._pendingPreload, null);
+  await assert.rejects(() => state.startMove(cl), /ctx/);
+  assert.equal(state.moveState, null);
+});
+
+test('【失敗系】CeilingModeState.startMove: 先読みが reject なら ERR_CL_MOVE_LOAD_FAILED を返し、関門は戻って moveState は立たない', async () => {
+  const { cl, ctx } = moveSetup();
+  const state = new CeilingModeState();
+  state._pendingPreload = { clId: cl.id, promise: Promise.reject(new Error('IDB読込失敗')) };
+  const orig = console.error;
+  console.error = () => {};
+  let err;
+  try { err = await state.startMove(cl, ctx); } finally { console.error = orig; }
+  assert.equal(err, ERR_CL_MOVE_LOAD_FAILED);
+  assert.equal(isUiBusy(), false);
+  assert.equal(state.moveState, null);
 });

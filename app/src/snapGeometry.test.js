@@ -11,6 +11,7 @@ import {
 import {
   findNearestCenterLine, findNearestCenterLineEndpoint, findBracketingCLs, nonLabeledClExtent,
   findNearbyCenterLines, clSideReachesCenterBoundary, findCLMoveSnap, findBeamAxisMoveSnap,
+  pointerTargetScope, legEndpointForMode,
 } from './snapGeometry.js';
 import { CL_KINDS, APP_MODES, hitTestKinds, spansEntireAxis } from './core/centerLineKindPolicy.js';
 
@@ -580,4 +581,39 @@ test('【失敗系】findBeamAxisMoveSnap: 片側に障害物（通り芯・梁�
   // hi側に通り芯・梁芯が無い
   const snap = findBeamAxisMoveSnap(graph, moving, 6000, 0, 50, SCALE, SCALE);
   assert.equal(snap, null);
+});
+
+// ---- ポインタ候補解決の appMode 別の判断（S8b。snap.js resolvePointerTargets が使う） ----
+
+test('pointerTargetScope: 天伏は交点・壁・建具のどれも解決しない。構造は壁・建具だけ除く。他の全モードは従来どおり全部解決する', () => {
+  assert.deepEqual(pointerTargetScope('ceiling'), { intersection: false, planTargets: false });
+  assert.deepEqual(pointerTargetScope('structure'), { intersection: true, planTargets: false });
+  for (const mode of APP_MODES.filter(m => m !== 'ceiling' && m !== 'structure')) {
+    assert.deepEqual(pointerTargetScope(mode), { intersection: true, planTargets: true }, mode);
+  }
+});
+
+test('legEndpointForMode: CENTER寸法の足は appMode のヒット対象種別だけ通す（平面系=中心線・構造=梁芯は従来どおり、天伏=天井芯だけ）', () => {
+  const graph = makeGraph();
+  const legOf = (props, value) => ({ cl: graph.addCenterLine(CenterLineType.VERTICAL, value, props), side: 'lo' });
+  const legs = {
+    struct:  legOf({ labeled: true,  discipline: Discipline.STRUCT }, 100),
+    center:  legOf({ labeled: false, discipline: Discipline.ARCH }, 200),
+    aux:     legOf({ labeled: false, discipline: Discipline.ARCH, lineType: 'dashed' }, 300),
+    beam:    legOf({ labeled: false, discipline: Discipline.FUSE }, 400),
+    ceiling: legOf({ labeled: false, discipline: Discipline.CEILING }, 500),
+  };
+  assert.equal(legEndpointForMode(null, 'ceiling'), null, '足が無ければ null');
+  // 実際に足を持つのは意匠中心線（平面系）と梁芯（構造）。その組合せは従来どおり素通し（既存モード不変）
+  for (const mode of ['floorplan', 'finish', 'opening']) assert.equal(legEndpointForMode(legs.center, mode), legs.center, `${mode}/center`);
+  assert.equal(legEndpointForMode(legs.beam, 'structure'), legs.beam, 'structure/beam');
+  // 天伏: 中心線・補助線・通り芯・梁芯の足は落とし、天井芯だけ通す
+  for (const k of ['struct', 'center', 'aux', 'beam']) assert.equal(legEndpointForMode(legs[k], 'ceiling'), null, `ceiling/${k}`);
+  assert.equal(legEndpointForMode(legs.ceiling, 'ceiling'), legs.ceiling);
+  // ヒット表（hitTestKinds）との一致: どのモード・種別でも 通す ⇔ hitTestKinds に含まれる
+  for (const mode of APP_MODES) {
+    for (const [k, leg] of Object.entries(legs)) {
+      assert.equal(legEndpointForMode(leg, mode) !== null, hitTestKinds(mode).includes(k), `${mode}/${k}`);
+    }
+  }
 });

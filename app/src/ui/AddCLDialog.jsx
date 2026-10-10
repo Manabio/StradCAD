@@ -12,8 +12,11 @@ const KINDS = [
 
 const BEAM_KIND = { id: 'beam', label: '梁芯', hint: '小梁を生成する梁芯（伏図）' };
 
+// 天伏の追加は天井芯（天井セルを分割する線。S8b）だけ。通り芯・中心・補助線は天伏では引かない。
+const CEILING_KIND = { id: 'ceiling', label: '天井芯', hint: '天井セルを分割する線（天伏専用）' };
+
 // appMode ごとに出す種別を絞る。未登録モード（floorplan/finish/site）は従来通り KINDS 全種。
-const KINDS_BY_MODE = { structure: [BEAM_KIND] };
+const KINDS_BY_MODE = { structure: [BEAM_KIND], ceiling: [CEILING_KIND] };
 
 /**
  * 通り芯追加ダイアログ

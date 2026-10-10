@@ -1439,10 +1439,11 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
     return { done: true, toast: null, suggestWood: { clType, newValues } };
   }
 
-  // extent 計算: center・beam（梁芯は中心線相当の処理を共用）は直交CL参照、aux は3ケース判定（壁・CL・フリー）
+  // extent 計算: center・beam・ceiling（梁芯・天井芯は中心線相当の処理を共用）は直交CL参照、aux は3ケース判定（壁・CL・フリー）
+  // 判定は extentAnchorStyle（'ref'＝直交CL参照）に揃える——天井芯（S8b）を種別名の列挙に足さない。
   let extentProps = {};
   let newExtentLo = null, newExtentHi = null;
-  if (kind === 'center' || kind === 'beam') {
+  if (extentAnchorStyle(kind) === 'ref') {
     // 直交端部候補は orthoAnchorCandidatesForNew（core/centerLineKindPolicy.js）経由で選ぶ——
     // 種別の許可（center: 通り芯・中心線・補助線／beam: 通り芯のみ。ORTHO_ANCHOR_OVERRIDE特例。
     // autoFillSecondaryBeamsが見るgraph.gridXs/Ysは通り芯のみのため、梁芯の候補を中心線・補助線
@@ -1621,6 +1622,10 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
     if (kind === 'beam' && coexistenceAt(kind, existingKind) === 'forbidden') {
       return { done: false, toast: ERR_CL_DUPLICATE(existingKind), suggestWood: null };
     }
+    // 天井芯（S8b）: 天伏で見える分割線（通り芯・中心線）と同座標には引けない（COEXISTENCE.ceiling）。
+    if (kind === 'ceiling' && coexistenceAt(kind, existingKind) === 'forbidden') {
+      return { done: false, toast: ERR_CL_DUPLICATE(existingKind), suggestWood: null };
+    }
 
     if (coexistenceAt(kind, existingKind) === 'promote') {
       // 線種変更の移籍一本化・ステップ5（2026-09-30）: 削除して作り直す旧経路を廃止し、メニューと
@@ -1659,6 +1664,7 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
     ...(kind === 'struct' ? { discipline: Discipline.STRUCT } : {}),
     ...(kind === 'aux'    ? { labeled: false, lineType: 'dashed' } : {}),
     ...(kind === 'beam'   ? { discipline: Discipline.FUSE, labeled: false, beamAxisOrigin: BeamAxisOrigin.USER } : {}),
+    ...(kind === 'ceiling' ? { discipline: Discipline.CEILING, labeled: false } : {}),
     ...(isRefResolvable ? { refId, refOffset: refOffset ?? 0 } : {}),
   };
 

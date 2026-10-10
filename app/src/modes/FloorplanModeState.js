@@ -1,6 +1,7 @@
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
-import { ERR_DRAW, ERR_CL_MOVE_TOO_DEEP, ERR_CL_MOVE_TOO_MANY, ERR_CL_MOVE_LOAD_FAILED } from '../error.js';
+import { ERR_DRAW } from '../error.js';
 import { resolveMoveRange } from '../transform/followerGraph.js';
+import { prepareCenterLineMove } from './clMove.js';
 import { runBusy } from '../uiBusy.js';
 
 export class FloorplanModeState {
@@ -74,31 +75,14 @@ export class FloorplanModeState {
   // 呼ぶため、beginUiTransitionをここより前に挟むと準備中の移動そのものを壊してしまう
   // （入力規制ステップ3）。
   async startMove(cl) {
-    const promise = (this._pendingPreload?.clId === cl.id)
-      ? this._pendingPreload.promise
-      : resolveMoveRange(this.project, this.graph, cl);
+    const pending = this._pendingPreload;
     this._pendingPreload = null;
 
     return runBusy('移動準備', async () => {
-      let result;
-      try {
-        result = await promise;
-      } catch (e) {
-        console.error(e);
-        return ERR_CL_MOVE_LOAD_FAILED;
-      }
-
-      if (result.exceeded) {
-        const msgs = [];
-        const { depth, count } = result.exceeded;
-        if (depth) msgs.push(ERR_CL_MOVE_TOO_DEEP(depth.actual - depth.max, depth.max));
-        if (count) msgs.push(ERR_CL_MOVE_TOO_MANY(count.actual - count.max, count.max));
-        return msgs.join(' ');
-      }
-
-      runInAction(() => {
-        this.moveState = { cl, originalValue: cl.value, range: result.range };
-      });
+      // 範囲解決とエラー文言は modes/clMove.js（天伏モードと共有）
+      const { moveState, error } = await prepareCenterLineMove(this.project, this.graph, cl, pending);
+      if (error) return error;
+      runInAction(() => { this.moveState = moveState; });
       return null;
     });
   }

@@ -278,3 +278,41 @@ test('buildMenuState: isUnresolvable未算出=undefined（補助線・梁芯）�
   assert.ok(item);
   assert.equal(item.disabled, false);
 });
+
+// ---- 天伏モード（S8b）: 天井芯の追加・移動・削除・延長/短縮だけ。交点・壁・開口は null ----
+
+test('buildMenuState: 天伏の空白の長押しは 垂直線・水平線（天井芯の追加）を出す', () => {
+  const state = buildMenuState('ceiling', { snap: null, cl: null, clEndpoint: null, opening: null, wall: null });
+  assert.equal(state.context, CONTEXT.EMPTY);
+  assert.deepEqual(state.items.map(i => i.id), ['cl-v', 'cl-h']);
+});
+
+test('buildMenuState: 天伏の天井芯の線上は 移動・削除（偏芯・中心/通り芯入替えは出ない）', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  const state = buildMenuState('ceiling', {
+    snap: null, cl, clEndpoint: null, opening: null, wall: null,
+    canMove: true, hasInteriorWall: false, canToCenter: false, // 呼び出し側（interiorWallSpans 空・convertMenuFlags が floorplan 限定）の算出値
+  });
+  assert.equal(state.context, CONTEXT.CENTER_LINE);
+  assert.deepEqual(state.items.map(i => i.id), ['cl-move', 'cl-del']);
+  assert.ok(state.items.every(i => i.disabled !== true));
+});
+
+test('buildMenuState: 天伏の天井芯の端点は 延長＋短縮|削除（通り芯化は出ない）', () => {
+  const cl = { id: 'cl1', centerLineType: 'Y' };
+  const state = buildMenuState('ceiling', {
+    snap: null, cl: null, clEndpoint: { cl, side: 'hi' }, opening: null, wall: null,
+    canExtend: true, canShorten: false, canToGrid: false,
+  });
+  assert.equal(state.context, CONTEXT.CENTER_LINE_ENDPOINT);
+  assert.deepEqual(state.items.map(i => i.id), ['cl-extend', 'cl-del']);
+});
+
+test('buildMenuState: 天伏の交点・壁・開口の長押しは null（メニューを出さない。多層防御）', () => {
+  const cl = { id: 'cl1', centerLineType: 'X' };
+  assert.equal(buildMenuState('ceiling', { snap: { id: 'n1' }, cl: null, clEndpoint: null, opening: null, wall: null }), null, 'INTERSECTION');
+  assert.equal(buildMenuState('ceiling', { snap: null, cl: null, clEndpoint: null, opening: null, wall: { id: 'w1' }, wallEligible: true }), null, 'WALL');
+  assert.equal(buildMenuState('ceiling', { snap: null, cl: null, clEndpoint: null, opening: { id: 'o1' }, wall: null }), null, 'OPENING');
+  // 他モードの同じ入力は null にならない（天伏だけのガードであること）
+  assert.notEqual(buildMenuState('floorplan', { snap: { id: 'n1' }, cl, clEndpoint: null, opening: null, wall: null }), null);
+});

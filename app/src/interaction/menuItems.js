@@ -138,6 +138,10 @@ export function buildMenuState(appMode, {
 }) {
   const context = detectContext(snap, cl, opening, wall, clEndpoint);
   if (appMode === 'opening' && context !== CONTEXT.WALL && context !== CONTEXT.OPENING) return null;
+  // 天伏（S8b）は天井芯の追加（空）・移動/削除（線上）・延長/短縮/削除（端点）だけ。交点・壁・開口の
+  // メニューは出さない（snap.js が天伏ではそれらの候補自体を解決しない——ここは多層防御）。
+  if (appMode === 'ceiling'
+      && context !== CONTEXT.CENTER_LINE && context !== CONTEXT.CENTER_LINE_ENDPOINT && context !== CONTEXT.EMPTY) return null;
   // 構造モードの壁・開口メニュー抑止はここでは行わない——snap.js resolvePointerTargets が同モードでは
   // 壁・開口の候補解決自体をスキップするため、context が WALL/OPENING になること自体がない
   // （部材ごとの間引きではなくモード単位の一箇所で塞ぐ規律。.claude/structural-model.md 参照）。

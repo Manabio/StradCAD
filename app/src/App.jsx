@@ -36,7 +36,7 @@ import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP, UNNUMBERED_TAG } from './structural/memberCatalog.js';
 import { CenterLineType, OpeningCategory, isRoofFeature, planCutHeightMmOf, ceilingCutHeightMmOf } from '@core';
 import { upperAdoptedPlanes, findUpperRoomsOverCells } from './finish/roof/roofFloorCheck.js';
-import { isHitTestTarget } from './core/centerLineKindPolicy.js';
+import { isRenderTarget } from './core/centerLineKindPolicy.js';
 import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
   applyFloorBytes, blocksFloorRemoval, diffFloorOpSnapshot,
@@ -2221,7 +2221,7 @@ const App = observer(() => {
   // 呼ばない（interruptCurrentActionがcancelMoveを呼び、いま準備している移動そのものを壊すため。
   // ガター長押しのonFireはポインタ押下中に発火するのでblur/中断も不要。入力規制ステップ3）。
   async function startCenterLineMove(cl) {
-    const err = await modeRef.current?.startMove(cl);
+    const err = await modeRef.current?.startMove(cl, { graph, project });
     if (err) setToast({ msg: err, key: Date.now() });
   }
 
@@ -2232,17 +2232,16 @@ const App = observer(() => {
       const pos  = menu.worldPos;
       const clType = isV ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
       // findNearbyCenterLines は全モード共通（構造モードの梁芯追加ダイアログでも使う）ため、
-      // 種別の絞り込みはここ（appMode既知の呼び出し側）で行う——ヒット可能種別
-      // （core/centerLineKindPolicy.js isHitTestTarget）に揃える。findNearbyCenterLines自体が
-      // 種別ベース（centerLineKindPolicy.spansEntireAxis）で通り芯を常に除外するため、ここでの
-      // 絞り込みは実質「梁芯かどうか」だけが効く
-      // ——isHitTestTarget(cl,'structure')はkind==='beam'のみtrue・それ以外の4モードは
-      // ['struct','center','aux']（通り芯は上記で既に除外済みのため center/aux のみ通る）で、従来の
-      // `appMode==='structure' ? beam : !beam` と同じ結果になる。
+      // 種別の絞り込みはここ（appMode既知の呼び出し側）で行う——描画対象種別
+      // （core/centerLineKindPolicy.js isRenderTarget）に揃える。天伏S8bでヒット対象から替えた:
+      // 天伏では中心線・補助線・天井芯が描かれ、どれも「基準からの距離」の参照に選べる
+      // （refId で天井芯が中心線に追従）が、ヒット対象（天伏は天井芯だけ）で絞ると目印の中心線を選べない。
+      // 天伏以外のモードで結果が不変なのは、findNearbyCenterLines が先に通り芯（struct）を常に除くため
+      // （構造モードで描画対象とヒット対象が食い違うのは struct だけ）。
       const nearbyCLs = findNearbyCenterLines(
         graph, pos.x, pos.y, SNAP_THRESHOLD_PX * 2,
         viewport.scaleX, viewport.scaleY, clType
-      ).filter(cl => isHitTestTarget(cl, appMode));
+      ).filter(cl => isRenderTarget(cl, appMode));
       setClDialog({
         type:       isV ? 'vertical' : 'horizontal',
         worldCoord: isV ? pos.x : pos.y,
@@ -2340,8 +2339,8 @@ const App = observer(() => {
   // 構造同期を起動する。ここは削除・入替え（handleDeleteCenterLine・handleConvertCenterLine）と
   // 同型で、実行中の構造同期が他階IDBを読み書きしている最中に始めると競合するため先にwhenIdle()を
   // 関門の中で待つ（.claude/undo-redo.md「落とし穴」参照）。scopeの判定のためにはcenterLineKindPolicyを
-  // importしない（判定はapplyCLEccentricityWithUndo側に閉じる。既存のisHitTestTargetのimportは
-  // 別用途——findNearbyCenterLinesのヒット可能種別絞り込み）。失敗しても連動先の壁面位置が
+  // importしない（判定はapplyCLEccentricityWithUndo側に閉じる。既存のisRenderTargetのimportは
+  // 別用途——findNearbyCenterLinesの描画対象種別絞り込み）。失敗しても連動先の壁面位置が
   // 変わりうる（部分適用の可能性）ため、setFloorSyncTickは関門の外のfinallyで必ず回す。
   async function handleEccConfirm(rec, materialMap) {
     if (!eccDialog) return;
@@ -2432,8 +2431,8 @@ const App = observer(() => {
   const cursor = menu || clDialog ? 'default'
                : isPanning        ? 'grabbing'
                : appMode === 'finish' ? (isDragging ? 'crosshair' : 'default')
-               // 天伏はパン専用で isDragging は常に無い（パン中は上の isPanning が勝つ）
-               : appMode === 'ceiling' ? 'default'
+               // 天伏: 天井芯の移動中は 'grab'（平面と同じ）。それ以外は 'default'（パン中は上の isPanning が勝つ）
+               : appMode === 'ceiling' ? (isMoving ? 'grab' : 'default')
                : appMode === 'site'   ? (mode?.siteDrawState ? 'crosshair' : 'default')
                : appMode === 'elevation' ? 'grab'
                : appMode === 'opening' ? ((nearOpening || nearWall) ? 'pointer' : 'default')

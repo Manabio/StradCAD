@@ -5,7 +5,34 @@
 // これらの関数を必要とするケースがある）。snap.js は本モジュールを import して同名を再エクスポートし、
 // 既存の import 元（App.jsx・CenterLinesLayer.jsx 等）を壊さない。
 import { CenterLineType, DimensionKind, DimensionSide, centerLineKind } from './core.js';
-import { isMoveSnapTarget, sameDirectionObstacles, spansEntireAxis, gridCenterLinesOnAxis } from './core/centerLineKindPolicy.js';
+import { isMoveSnapTarget, sameDirectionObstacles, spansEntireAxis, gridCenterLinesOnAxis, hitTestKinds } from './core/centerLineKindPolicy.js';
+
+// ----------------------------------------------------------------
+// ポインタ位置の候補解決（snap.js resolvePointerTargets）が appMode ごとに持つ判断。spatialIndex に依存しない
+// 純関数のため node:test から検証できるようここに置く（snap.js が使う。ファイル冒頭コメント参照）。
+// ----------------------------------------------------------------
+
+/**
+ * どの候補を解決するか。intersection=交点スナップ（斜線・円弧・削除のメニューの対象）、planTargets=壁・建具。
+ * 構造モードは壁・建具を描かない（候補にしない）。天伏は天井芯の操作だけなので交点・壁・建具のどれも解決しない
+ * （S8b。メニューは天井芯の追加・移動・削除・延長/短縮に限る）。
+ */
+export function pointerTargetScope(appMode) {
+  return {
+    intersection: appMode !== 'ceiling',
+    planTargets:  appMode !== 'structure' && appMode !== 'ceiling',
+  };
+}
+
+/**
+ * CENTER寸法の足の端点ヒット（{cl, side}|null）を、appMode のヒット対象種別（hitTestKinds）に絞る。足は意匠中心線
+ * （構造モードでは梁芯）の寸法行にだけあるため、平面・構造では常にそのまま通る。天伏は中心線の寸法行を描くが操作
+ * 対象は天井芯だけなので足を落とす。
+ */
+export function legEndpointForMode(leg, appMode) {
+  if (!leg) return null;
+  return hitTestKinds(appMode).includes(centerLineKind(leg.cl)) ? leg : null;
+}
 
 // 本ファイル内の「通り芯」判定は2通りを使い分ける——ヒット・参照候補（端・範囲という概念を持つ線か）
 // は種別のみで決まるため spansEntireAxis（labeled不問）、直交通り芯の列挙・集計はガター○ラベルの

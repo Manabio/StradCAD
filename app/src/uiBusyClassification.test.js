@@ -160,8 +160,8 @@ const EXEMPT = [
   },
   {
     name: 'startCenterLineMove',
-    reason: 'App.jsxの本体はmodeRef.current?.startMove(cl)をawaitしtoastを出すだけで、関門（runBusy）は'
-      + 'FloorplanModeState.startMoveの内部で開く（beginUiTransitionをここで呼ぶとinterruptCurrentActionが'
+    reason: 'App.jsxの本体はmodeRef.current?.startMove(cl, { graph, project })をawaitしtoastを出すだけで、関門（runBusy）は'
+      + 'FloorplanModeState／CeilingModeStateのstartMoveの内部で開く（beginUiTransitionをここで呼ぶとinterruptCurrentActionが'
       + 'cancelMoveを呼び準備中の移動を壊すため、意図的にApp.jsx側では関門に入らない）。恒久的に対象外（ステップ3）。',
   },
 ];
