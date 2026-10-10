@@ -11,6 +11,7 @@ import { floorWriteGeneration } from '../storage/floorWriteGeneration.js';
 import { snapshotFinishState, pushFinishUndo, withFinishUndo } from '../finish/finishUndo.js';
 import { normalizePartialDominance } from '../finish/roomReinterpret.js';
 import { makeRoomUndefined, subtractCellsFromUndefinedRooms } from '../finish/roomUndefined.js';
+import { roomsLosingCeilingZones } from '../finish/roomDeleteCeilingNotice.js';
 import { selfFloorEquipmentCatalog, nextEquipmentNo, equipmentFloorSpanLabel } from '../finish/equipment/equipmentNumbering.js';
 import { equipmentAtCell } from '../finish/equipment/equipmentGeometry.js';
 import { equipmentHighlightKeys } from '../finish/equipment/equipmentTab.js';
@@ -1291,6 +1292,14 @@ export class FinishModeState {
     };
     walk(roomId);
     return ids;
+  }
+
+  /**
+   * roomId の削除（本人＋道連れの子孫）で天伏の天井区画が消えるか（削除確認の注意の判定。S9）。
+   * @returns {boolean}
+   */
+  roomDeleteLosesCeilingZones(roomId) {
+    return roomsLosingCeilingZones(this.graph, [roomId, ...this._cascadedRoomIds(roomId)]);
   }
 
   /**

@@ -27,9 +27,14 @@ export const RoomDeleteConfirm = observer(({ graph, mode, deleteConfirm, onClose
   }
   const childCount = graph.rooms.filter(r => r.referenceRoomIds.has(deleteConfirm.roomId)).length;
   const suffix = childCount > 0 ? `（部分指定${childCount}件も削除されます）` : '';
+  // 天伏の天井区画を持つ部屋（本人＋道連れで消える子孫）があれば1行足す（件数は出さない）
+  const lostCeiling = mode.roomDeleteLosesCeilingZones(deleteConfirm.roomId);
   return (
     <ConfirmDialog
-      message={`「${deleteConfirm.roomName || '（名称未設定）'}」を削除しますか？${suffix}`}
+      message={<>
+        {`「${deleteConfirm.roomName || '（名称未設定）'}」を削除しますか？${suffix}`}
+        {lostCeiling && <><br />指定された天伏情報も削除されます。よろしいですか？</>}
+      </>}
       buttons={[
         { label: 'キャンセル', value: 'cancel' },
         { label: '削除', value: 'ok', danger: true },

@@ -123,12 +123,13 @@ test('Z1（読む側の交差）: 部屋のセルが減ると区画のデータ�
   assert.deepEqual(zoneOf().map(s => s.rects), [[rect(1000, 0, 2000, 1000)]], 'セルを戻すと描画も戻る');
 });
 
-test('Z1: 別の部屋に取られたセル（buildCellToRoom の帰属が他の部屋）は、区画に入っていても描画しない', () => {
+test('Z1: 別の部屋に取られたセル（所属索引の帰属が他の部屋）は、区画に入っていても描画しない', () => {
   const g = makeGrid([0, 1000, 2000], [0, 1000]);
   const a = g.interior([[0, 0], [1, 0]]);
   const [, c1] = [g.cell(0, 0), g.cell(1, 0)];
   a.setCeilingZones(assignZoneHeight(g.graph, a, [c1], 2700));
-  const b = g.graph.addRoom(new Set([c1]), '後勝ち'); // 同じセルを後の部屋が持つ（buildCellToRoom は後勝ち）
+  // 同じセルを部分指定の子が持つ（所属索引は子を優先。部屋の並び順に依存しない）
+  const b = g.graph.addRoom(new Set([c1]), '子', undefined, new Set([a.id]));
   const surfaces = ceilingSurfacesOf(g.graph);
   assert.deepEqual(surfaces.filter(s => s.roomId === a.id).map(s => s.zoneId), [null], 'a の区画は空になり出ない');
   assert.deepEqual(surfaces.filter(s => s.roomId === b.id).map(s => s.zoneId), [null]);

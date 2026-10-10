@@ -1,7 +1,7 @@
 /**
  * 天井セルの所属（純モジュール。react・store.js・snap.js・.jsx を静的に引かない）。
- * 天伏の「選択」（ceilingSelection.js）専用の所属の索引。描画の天井面（ceilingSurfaces.js）とは述語 roomHasCeiling だけを
- * 共有し、描画は buildCellToRoom のまま（索引へ寄せると --up の合計が変わるため見送り）。
+ * 天伏の所属の唯一の索引。選択（ceilingSelection.js）と描画の天井面（ceilingSurfaces.js）の両方がこれを使う
+ * （S9・裁定 2026-10-10。親と部分指定の優先は並び順に依存しない。部分指定どうしが同じセルを持つときだけ部屋順の先勝ち）。
  *
  * セルキーは天井セル（仕上げのセルを天井芯でさらに割った格子。ceilingGrid.js）。
  * Owner = { kind: 'room'|'stair', id, rowId }。rowId は天伏パネルの行 id（部屋は room.id、階段は stair.roomId ?? stair.id）。
@@ -34,34 +34,41 @@ export function stairHasCeiling(graph, stair) {
  * @returns {Map<string, {kind:'room'|'stair', id:string, rowId:string}>}
  */
 export function buildCeilingCellOwners(graph) {
+  if (!graph) return new Map();
+  return withGraphReadScope(graph, () => ceilingCellOwnersOf(graph));
+}
+
+/**
+ * buildCeilingCellOwners の本体（読み取りスコープで包まない版）。MobX の追跡下から呼ぶ描画（ceilingSurfacesOf）用——
+ * スコープは内側の Reaction で依存を取るため、外側の observer が部屋・CL の変更に反応しなくなる。
+ */
+export function ceilingCellOwnersOf(graph) {
   const owners = new Map();
   if (!graph) return owners;
-  return withGraphReadScope(graph, () => {
-    // 天井を持たない部分指定の子（VOID 等）のセルは親に渡さない（描画の buildCellToRoom の後勝ち＝天井なし、と一致）
-    const excluded = new Set();
-    for (const room of graph.rooms) {
-      if (room.referenceRoomIds.size > 0 && !roomHasCeiling(room)) {
-        for (const key of ceilingRefreshCells(room.cells, graph)) excluded.add(key);
+  // 天井を持たない部分指定の子（VOID 等）のセルは親に渡さない（天井なし）
+  const excluded = new Set();
+  for (const room of graph.rooms) {
+    if (room.referenceRoomIds.size > 0 && !roomHasCeiling(room)) {
+      for (const key of ceilingRefreshCells(room.cells, graph)) excluded.add(key);
+    }
+  }
+  const rooms = graph.rooms.filter(roomHasCeiling);
+  for (const partial of [true, false]) {
+    for (const room of rooms) {
+      if ((room.referenceRoomIds.size > 0) !== partial) continue;
+      for (const key of ceilingRefreshCells(room.cells, graph)) {
+        if (!partial && excluded.has(key)) continue;
+        if (!owners.has(key)) owners.set(key, { kind: 'room', id: room.id, rowId: room.id });
       }
     }
-    const rooms = graph.rooms.filter(roomHasCeiling);
-    for (const partial of [true, false]) {
-      for (const room of rooms) {
-        if ((room.referenceRoomIds.size > 0) !== partial) continue;
-        for (const key of ceilingRefreshCells(room.cells, graph)) {
-          if (!partial && excluded.has(key)) continue;
-          if (!owners.has(key)) owners.set(key, { kind: 'room', id: room.id, rowId: room.id });
-        }
-      }
+  }
+  // 階段: 天井を持つ部屋が無いセルだけ。同じセルを持つ階段は graph.stairs の順の先勝ち
+  for (const stair of graph.stairs) {
+    if (!stairHasCeiling(graph, stair)) continue;
+    const rowId = stair.roomId ?? stair.id;
+    for (const key of ceilingRefreshCells(stair.cells, graph)) {
+      if (!owners.has(key)) owners.set(key, { kind: 'stair', id: stair.id, rowId });
     }
-    // 階段: 天井を持つ部屋が無いセルだけ。同じセルを持つ階段は graph.stairs の順の先勝ち
-    for (const stair of graph.stairs) {
-      if (!stairHasCeiling(graph, stair)) continue;
-      const rowId = stair.roomId ?? stair.id;
-      for (const key of ceilingRefreshCells(stair.cells, graph)) {
-        if (!owners.has(key)) owners.set(key, { kind: 'stair', id: stair.id, rowId });
-      }
-    }
-    return owners;
-  });
+  }
+  return owners;
 }

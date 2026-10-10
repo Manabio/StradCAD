@@ -2,44 +2,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CenterLineType, Discipline } from '@core';
-import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { getAllCells, refreshCells, CEILING_CELL_GRID } from '../finish/gridCells.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
-import { ceilingRegionCellsAt, ceilingCellsWithin, ceilingRefreshCells, buildCeilingCellToRoom } from './ceilingGrid.js';
+import { ceilingRegionCellsAt, ceilingCellsWithin, ceilingRefreshCells } from './ceilingGrid.js';
 
 /** 縦の天井芯を value に足す（extent 未確定＝全高）。 */
 function addCeilingV(graph, value, id = `cc${value}`) {
   return graph.addCenterLine(CenterLineType.VERTICAL, value, { labeled: false, discipline: Discipline.CEILING }, id);
 }
 const rectOf = c => `${c.x1},${c.y1},${c.x2},${c.y2}`;
-
-test('天井芯なし: buildCeilingCellToRoom は buildCellToRoom と key も順序も一致する（部分指定の子の後勝ちを含む）', () => {
-  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
-  const parent = g.interior([[0, 0], [1, 0], [2, 0]]);
-  g.graph.addRoom(new Set([g.cell(1, 0)]), '子', 'child-1', new Set([parent.id]));
-  const base = buildCellToRoom(g.graph);
-  const ceiling = buildCeilingCellToRoom(g.graph);
-  assert.ok(base.size >= 3, '前提: 比較対象が空でない');
-  assert.deepEqual([...ceiling.keys()], [...base.keys()], 'key とその順序が一致');
-  assert.deepEqual([...ceiling.values()].map(r => r.id), [...base.values()].map(r => r.id), '所属する部屋（後勝ち）も一致');
-  assert.equal(ceiling.get(g.cell(1, 0)).id, 'child-1', '子のセルは子');
-});
-
-test('天井芯あり: 部屋のセルが天井芯の両側の2つに割れ、どちらも同じ部屋に属する。仕上げの buildCellToRoom は変わらない', () => {
-  const g = makeGrid([0, 2000, 4000], [0, 3000]);
-  const room = g.interior([[0, 0], [1, 0]]);
-  const cc = addCeilingV(g.graph, 1000);
-  const finish = buildCellToRoom(g.graph);
-  assert.equal(finish.size, 2, '仕上げのセルは割れない（天井芯は仕上げの分割線ではない）');
-  const ceiling = buildCeilingCellToRoom(g.graph);
-  assert.equal(ceiling.size, 3);
-  const nextToCeilingCL = [...ceiling.keys()].filter(k => k.includes(cc.id));
-  assert.equal(nextToCeilingCL.length, 2, '天井芯を境界に持つ天井セルは左右の2つ');
-  for (const r of ceiling.values()) assert.equal(r.id, room.id);
-  // 右のセル(2000..4000)は仕上げのセルと同じ key のまま
-  assert.ok(ceiling.has(g.cell(1, 0)));
-});
 
 test('ceilingCellsWithin: 矩形に掛かる天井セルを返す（仕上げの getCellsInRect と同じ展開）。反転した矩形（x1>x2）も min/max に正規化して展開する', () => {
   const g = makeGrid([0, 2000, 4000], [0, 3000]);

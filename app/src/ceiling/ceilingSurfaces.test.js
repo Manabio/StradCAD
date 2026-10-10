@@ -3,7 +3,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomFeature, RoomKind, CeilingZone, StairType, CenterLineType, Discipline } from '@core';
 import { roomHasCeiling, ceilingSurfacesOf } from './ceilingSurfaces.js';
-import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
+import { worldToCell, CEILING_CELL_GRID, cellBoundsFromKey } from '../finish/gridCells.js';
+import { buildCeilingCellOwners } from './ceilingOwners.js';
+import { normalizeRect } from '../plan/planGeometry.js';
 import { makeGrid, rect } from '../plan/planTestFixtures.js';
 
 test('roomHasCeiling: 屋内で feature なしだけが天井を持つ。屋外・吹抜け・階段・階段吹抜け・屋根・昇降路・未定義・null は持たない', () => {
@@ -182,6 +184,95 @@ test('【失敗系】階段の対の部屋: 階段が天井を持たない（対
   const lone = orphan.feature([[0, 0]], RoomFeature.STAIR);
   lone.setCeilingZones([new CeilingZone({ id: 'zz', cells: [orphan.cell(0, 0)], heightMm: 2300 })]);
   assert.deepEqual(ceilingSurfacesOf(orphan.graph), [], 'roomId で結びつく階段が無い STAIR 部屋');
+});
+
+// ---- 所属の統一（S9）: 描画は選択と同じ索引（buildCeilingCellOwners）を使う ----
+const surfaceKey = s => `${s.roomId}|${s.zoneId}|${s.zMm}|${s.shape}|${JSON.stringify(s.rects)}`;
+const surfaceSet = graph => ceilingSurfacesOf(graph).map(surfaceKey).sort();
+
+test('S9: 部屋の並び順（子を親の前／親を先）を変えても面の集合（roomId・zoneId・rects・zMm）が同じ', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
+  const parent = g.interior([[0, 0], [1, 0], [2, 0]]);
+  parent.setOverride('ceilingHeight', '2400');
+  const child = g.graph.addRoom(new Set([g.cell(1, 0)]), '子', undefined, new Set([parent.id]));
+  child.setOverride('ceilingHeight', '2100');
+  parent.setCeilingZones([new CeilingZone({ id: 'z', cells: [g.cell(0, 0), g.cell(1, 0)], heightMm: 2800 })]);
+  g.graph.reorderRooms([parent.id, child.id]);
+  const a = surfaceSet(g.graph);
+  g.graph.reorderRooms([child.id, parent.id]);
+  const b = surfaceSet(g.graph);
+  assert.deepEqual(b, a);
+  assert.ok(a.some(k => k.startsWith(`${child.id}|null|2100`)), '子のセルは子の面');
+});
+
+test('S9: 部分指定どうし（兄弟 A・B）が同じセルを持つとき、全順列で面と選択の所属が一致する（部屋順の先勝ち）', () => {
+  const g = makeGrid([0, 1000, 2000, 3000], [0, 1000]);
+  const parent = g.interior([[0, 0], [1, 0], [2, 0]]);
+  const a = g.graph.addRoom(new Set([g.cell(1, 0)]), 'A', undefined, new Set([parent.id]));
+  const b = g.graph.addRoom(new Set([g.cell(1, 0)]), 'B', undefined, new Set([parent.id]));
+  const ids = [parent.id, a.id, b.id];
+  const perms = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+  const cell = g.cell(1, 0);
+  const rectKey = r => `${r.x1},${r.y1},${r.x2},${r.y2}`;
+  const target = rectKey(rect(1000, 0, 2000, 1000));
+  for (const p of perms) {
+    const order = p.map(i => ids[i]);
+    g.graph.reorderRooms(order);
+    const owner = buildCeilingCellOwners(g.graph).get(cell);
+    const expected = order.find(id => id === a.id || id === b.id); // 部分指定どうしは部屋順の先勝ち
+    assert.equal(owner.id, expected, `順序 ${p}: 選択の所属は先に並んだ兄弟`);
+    const holders = ceilingSurfacesOf(g.graph).filter(s => s.rects.some(r => rectKey(r) === target)).map(s => s.roomId);
+    assert.deepEqual(holders, [owner.id], `順序 ${p}: 面も選択の所属と同じ部屋だけ`);
+  }
+});
+
+test('S9: ルート部屋2つが同じセルを持つとき、後ろの部屋の区画がそのセルに書かれていても先勝ちで描かれない', () => {
+  const g = makeGrid([0, 1000, 2000], [0, 1000]);
+  const first = g.interior([[0, 0], [1, 0]]);
+  const second = g.graph.addRoom(new Set([g.cell(1, 0)]), '後ろ');
+  second.setCeilingZones([new CeilingZone({ id: 'zz', cells: [g.cell(1, 0)], heightMm: 2900 })]);
+  const owners = buildCeilingCellOwners(g.graph);
+  assert.equal(owners.get(g.cell(1, 0)).id, first.id, '先に並んだ部屋が所属');
+  const out = ceilingSurfacesOf(g.graph);
+  assert.ok(!out.some(s => s.zoneId === 'zz'), '後ろの部屋の区画は描かれない');
+  assert.ok(!out.some(s => s.roomId === second.id), '後ろの部屋の面は出ない');
+});
+
+function ownerFixture() {
+  const g = makeGrid([0, 1000, 2000, 3000, 4000, 5000], [0, 1000]);
+  const plain = g.interior([[0, 0], [1, 0]]);
+  const pair = g.feature([[2, 0]], RoomFeature.STAIR);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(2, 0)]) });
+  pair.setCeilingZones([new CeilingZone({ id: 'z1', cells: [g.cell(2, 0)], heightMm: 2300 })]);
+  const under = g.interior([[2, 0]]); // 階段下部屋（2a）: 所属索引では部屋が勝つ
+  g.feature([[3, 0]], RoomFeature.VOID);
+  return { g, plain, pair, under };
+}
+
+test('S9: 選択の所属で kind room のセルは必ずその部屋の面に含まれ、索引に無いセルは面に含まれない（全セル突合）', () => {
+  const { g } = ownerFixture();
+  const owners = buildCeilingCellOwners(g.graph);
+  const surfaces = ceilingSurfacesOf(g.graph);
+  const rectOf = key => normalizeRect(cellBoundsFromKey(key, g.graph));
+  const has = (roomId, r) => surfaces.some(s => s.roomId === roomId && s.rects.some(q => q.x1 === r.x1 && q.y1 === r.y1 && q.x2 === r.x2 && q.y2 === r.y2));
+  for (let i = 0; i < 5; i++) {
+    const key = g.cell(i, 0);
+    const o = owners.get(key);
+    const r = rectOf(key);
+    if (o?.kind === 'room') assert.ok(has(o.rowId, r), `セル ${i}: 索引の部屋の面に含まれる`);
+    else if (!o) assert.ok(!surfaces.some(s => s.rects.some(q => q.x1 === r.x1 && q.x2 === r.x2)), `セル ${i}: 索引に無いセルは面にならない`);
+  }
+  assert.equal(owners.get(g.cell(2, 0)).kind, 'room', '階段下部屋が取る');
+});
+
+test('S9: 階段所属のセルは対の部屋の区画の面だけ（区画外は出さない）。対の部屋が無い階段は描かない', () => {
+  const g = makeGrid([0, 1000, 2000, 3000], [0, 1000]);
+  const pair = g.feature([[0, 0], [1, 0]], RoomFeature.STAIR);
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(0, 0), g.cell(1, 0)]) });
+  pair.setCeilingZones([new CeilingZone({ id: 'z1', cells: [g.cell(0, 0)], heightMm: 2300 })]);
+  g.graph.addStair({ type: StairType.STRAIGHT, cells: new Set([g.cell(2, 0)]) }); // roomId なし
+  const out = ceilingSurfacesOf(g.graph);
+  assert.deepEqual(out.map(s => [s.roomId, s.zoneId, s.rects]), [[pair.id, 'z1', [rect(0, 0, 1000, 1000)]]]);
 });
 
 // ---- 天井芯（S8a）: 天井セルは仕上げのセルを天井芯でさらに割った格子 ----

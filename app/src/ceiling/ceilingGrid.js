@@ -12,7 +12,6 @@
  * 天井高に戻る（S5 と同じ受容）。
  */
 import { CEILING_CELL_GRID, regionCellsAt, getCellsInRect, cellBoundsFromKey } from '../finish/gridCells.js';
-import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { scopedValue } from '../graphReadScope.js';
 
 /** 点 (wx, wy) を含む天井セルの連結領域（regionCellsAt の天井版）。 */
@@ -59,20 +58,4 @@ export function ceilingRefreshCells(keys, graph) {
     return hit;
   }
   return refreshOnce(keys, graph);
-}
-
-/**
- * 天井セル key → 部屋の索引（buildCellToRoom の各 (key, room) を天井セルへ展開したもの。後勝ちの順序は同じ）。
- * 天井芯が無ければ buildCellToRoom と key も順序も一致する。
- * @returns {Map<string, import('@core').Room>}
- */
-export function buildCeilingCellToRoom(graph) {
-  // withGraphReadScope で包まない: 呼び元（ceilingSurfacesOf）は MobX の追跡下で呼ばれることがあり、スコープは
-  // 内側の Reaction で依存を取るため外側の observer が反応しなくなる。呼び元がスコープ内なら自然にキャッシュが効く。
-  const m = new Map();
-  for (const [key, room] of buildCellToRoom(graph)) {
-    const b = cellBoundsFromKey(key, graph);
-    for (const cell of ceilingCellsWithin(b, graph)) m.set(cell.key, room);
-  }
-  return m;
 }
