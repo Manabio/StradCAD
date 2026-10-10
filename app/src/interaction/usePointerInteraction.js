@@ -36,6 +36,9 @@ import { canExtendCenterLine, canShortenCenterLine } from '../transform/centerLi
 import { interiorWallSpans } from '../finish/edgeClassify.js';
 import { isEligibleWallSpan } from '../finish/kneeDropWall.js';
 
+// 天伏モードのドラッグ選択で move を補間するサンプル間隔（スクリーン px。速いドラッグでセルを飛ばさない）。
+const CEILING_DRAG_SAMPLE_PX = 4;
+
 // project, graph, size, appMode, columnAxisMode, modeRef, menu, setMenu, onToast, onUndo, onRedo,
 // onExitOpeningMode は毎レンダー App.jsx から渡す（useCallback/useMemo で固定しない——
 // modeRef.current・graph の鮮度が「毎レンダー再生成」前提に依存する）。
@@ -79,6 +82,7 @@ export function usePointerInteraction({
   const gutterCLRef       = useRef(null); // ガター長押し中のCL
   const axisLabelRef      = useRef(null); // 柱芯ラベル長押し中: { cl, sx, sy }
   const finishDragDownRef = useRef(null); // 仕上げモード: pointerDown 座標
+  const ceilingDragDownRef = useRef(null); // 天伏モード: pointerDown 座標
   const siteDrawDownRef   = useRef(null); // 敷地モード: ドラッグ開始スクリーン座標
   const elevationDragRef  = useRef(null); // 展開モード: { x, y, axis:'h'|'v'|null, roomId }
   const openingDownRef    = useRef(null); // 建具ドラッグ開始判定用: { clientX, clientY, opening }
@@ -215,10 +219,17 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 天伏モード（S1a: キャンバス操作はパンだけ。通り芯の編集メニュー・長押しの汎用経路に落とさない）----
+    // ---- 天伏モード（ガター内はパン。それ以外は天井セルのドラッグ選択。通り芯の編集メニュー・長押しの汎用経路に落とさない）----
     if (appMode === 'ceiling') {
-      drag.current = { lastX: clientX, lastY: clientY };
-      setIsPanning(true);
+      const inGutter = isInGutter(clientX, clientY, size.width, size.height);
+      if (inGutter) {
+        drag.current = { lastX: clientX, lastY: clientY };
+        setIsPanning(true);
+      } else {
+        ceilingDragDownRef.current = { x: clientX, y: clientY };
+        const world = viewport.screenToWorld(clientX, clientY);
+        modeRef.current?.startDrag(graph, world.x, world.y);
+      }
       return;
     }
 
@@ -459,7 +470,7 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 天伏モード（パンのみ）----
+    // ---- 天伏モード（パン、または天井セルのドラッグ選択）----
     if (appMode === 'ceiling') {
       if (drag.current) {
         const dx = clientX - drag.current.lastX;
@@ -467,6 +478,11 @@ export function usePointerInteraction({
         drag.current.lastX = clientX;
         drag.current.lastY = clientY;
         viewport.pan(dx, dy);
+        return;
+      }
+      if (ceilingDragDownRef.current && modeRef.current?.dragState) {
+        const world = viewport.screenToWorld(clientX, clientY);
+        modeRef.current?.updateDrag(graph, world.x, world.y, CEILING_DRAG_SAMPLE_PX / viewport.scaleX);
       }
       return;
     }
@@ -645,8 +661,15 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 天伏モード（パンのみ）----
+    // ---- 天伏モード（パン終了、または天井セル選択の確定）----
     if (appMode === 'ceiling') {
+      if (ceilingDragDownRef.current) {
+        // dragState が無くても呼ぶ（選べない所・空白のタップで選択を解除するため）。タップは仕上げと同じ移動量 8px 未満
+        const down = ceilingDragDownRef.current;
+        const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
+        modeRef.current?.commitDrag({ tap: tapDist < 8 });
+      }
+      ceilingDragDownRef.current = null;
       drag.current = null;
       setIsPanning(false);
       return;
@@ -799,6 +822,8 @@ export function usePointerInteraction({
       return;
     }
     if (appMode === 'ceiling') {
+      modeRef.current?.cancelDrag();
+      ceilingDragDownRef.current = null;
       drag.current = null;
       setIsPanning(false);
       return;
@@ -909,6 +934,7 @@ export function usePointerInteraction({
     axisLabelRef.current = null;
     moveDownRef.current = null;
     finishDragDownRef.current = null;
+    ceilingDragDownRef.current = null;
     siteDrawDownRef.current = null;
     elevationDragRef.current = null;
     touchTapRef.current = null;

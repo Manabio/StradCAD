@@ -1,12 +1,14 @@
 import { observer } from 'mobx-react-lite';
 import { ModePanel } from '../ui/ModePanel.jsx';
 import { BottomSheet } from '../ui/BottomSheet.jsx';
-import { interiorRows, stairRows } from './ceilingPanelRows.js';
+import { interiorRows, stairRows, selectionSummary } from './ceilingPanelRows.js';
 
 // 天伏モードの専用パネル（仕上げ表とは独立。仕上げ表との共有はデータと純モジュールだけ）。
 // パネルは App から渡る graph prop を使う（mode に graph を持たせない。階切替で古い graph を抱える穴を作らないため）。
-// 部屋の無い階段の行（kind==='stair'）は選択対象外（タップしても selectRoom を呼ばず、強調もしない）。
-// S1a' は読むだけ（天井材の編集は S3、天井区画は S5）。行の組み立ては ceilingPanelRows.js。
+// 部屋の無い階段の行（kind==='stair'）は行タップの選択対象外（タップしても selectRoom を呼ばない）。
+// ただしキャンバスのドラッグ選択（S2）で選ばれたときは強調する（selectedRoomId === row.id）。
+// タブ列の上に選択中のセルの要約を1行出す（selectionSummary）。
+// 天井材・仕上げ・CH は読むだけ（天井材の編集は S3、天井区画は S5）。行の組み立ては ceilingPanelRows.js。
 
 const TABS = [
   { id: 'interior', label: '内部' },
@@ -26,8 +28,14 @@ const dash = (v) => (v == null || v === '' ? '—' : v);
 
 export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
   const rows = mode.activeTab === 'stair' ? stairRows(graph) : interiorRows(graph);
+  const summary = selectionSummary(graph, mode.selection);
   const inner = (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+      {summary && (
+        <div style={{ padding: '6px 10px', fontSize: 12, color: '#1e3a8a', background: '#eff6ff', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
+          選択中: {summary.name}／{summary.cellCount}セル／CH {dash(summary.ch)}
+        </div>
+      )}
       <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', flexShrink: 0 }}>
         {TABS.map(tab => (
           <button
@@ -71,7 +79,7 @@ export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
                   onClick={() => { if (row.kind === 'room') mode.selectRoom(row.id); }}
                   style={{
                     cursor: row.kind === 'room' ? 'pointer' : 'default',
-                    background: row.kind === 'room' && row.id === mode.selectedRoomId ? '#eff6ff' : '#fff',
+                    background: row.id === mode.selectedRoomId ? '#eff6ff' : '#fff',
                   }}
                 >
                   {COLUMNS.map(c => (

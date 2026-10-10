@@ -462,7 +462,8 @@ test('【配線】usePointerInteraction: pointerup の仕上げ分岐は押下�
   const lines = trimmedLines(readSrc('../interaction/usePointerInteraction.js'));
   assert.ok(lines.includes('modeRef.current?.commitDrag({ tap: tapDist < 8 });'), 'commitDrag({ tap: ... }) の1行が見つからない');
   assert.ok(lines.includes('const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);'), 'tapDist の1行が見つからない');
-  assert.equal(lines.filter(l => l.includes('.commitDrag(')).length, 1, 'commitDrag の呼び出しは1か所だけ');
+  // 仕上げ分岐と天伏分岐（S2。同じ作法）の2か所だけ。天伏側の詳細は ceilingModeWiring.test.js
+  assert.equal(lines.filter(l => l.includes('.commitDrag(')).length, 2, 'commitDrag の呼び出しは仕上げ・天伏の2か所だけ');
 });
 
 test('【配線】runFinishExitBoundary: 命名ダイアログの候補の取り消しが、無編集スキップ判定（stamps.canSkip）より前にある', () => {

@@ -6,6 +6,7 @@ import { INSET } from '../layout.js';
 import { OpeningsLayer } from './OpeningsLayer.jsx';
 import { ShapesLayer } from './ShapesLayer.jsx';
 import { FinishModeLayer } from '../finish/FinishModeLayer.jsx';
+import { CeilingSelectionLayer } from '../ceiling/CeilingSelectionLayer.jsx';
 import { StairLayer } from './StairLayer.jsx';
 import { RoomLabelsLayer } from './RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './StepSectionLayer.jsx';
@@ -97,6 +98,9 @@ export const SceneLayers = observer(({
                 previewCells={mode.previewCells}
                 highlightCellKeys={mode.selectedEquipmentCellKeys}
               />
+            )}
+            {appMode === 'ceiling' && mode && (
+              <CeilingSelectionLayer graph={graph} viewport={viewport} selectedCellKeys={mode.selectedCellKeys} previewCells={mode.previewCells} />
             )}
             {isStairMode && (
               <StairLayer

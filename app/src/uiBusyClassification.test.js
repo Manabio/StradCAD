@@ -351,7 +351,7 @@ test('【分類・§5-4後半】usePointerInteraction.js: resetGestureRefs はgu
 // 消さない。仕上げモードでドラッグ中にESC／関門突入すると、dragStateが残ったままプレビュー・
 // crosshairが消えず、pointermove/pointerupの`finishDragDownRef.current && dragState`条件で
 // commitDragも飛ばされる（QA指摘）。interruptCurrentActionの本体にcancelDragの呼び出しがある
-// ことを固定する（cancelDragを持つのはFinishModeStateのみ。他モードはno-op）。
+// ことを固定する（cancelDragを持つのは仕上げ・天伏のState。他モードはno-op）。
 test('【分類・QA指摘】App.jsx: interruptCurrentAction はmodeRef.current?.cancelDrag?.()を呼ぶ', () => {
   const appSrc = readAppSrc();
   const body = extractFunctionBody(appSrc, 'function interruptCurrentAction');

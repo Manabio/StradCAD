@@ -12,6 +12,7 @@
  *   ch … roomCeilingHeight(graph, room).raw（レンジ表記は原文のまま）。部屋の無い階段は null。
  */
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
+import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { interiorTabRooms, interiorRoomDisplayName } from '../finish/interiorTabRooms.js';
 import { STAIR_TYPE_LABEL } from '../finish/stair/stairTypeLabel.js';
 import { DEFAULT_STAIR_ROOM_NAME } from '../finish/roomNamingOptions.js';
@@ -25,6 +26,20 @@ function roomRow(graph, room, name) {
     ceilingFinish: room.finish?.ceilingMaterial || null,
     ch: roomCeilingHeight(graph, room).raw,
   };
+}
+
+/**
+ * 選択中の天井セルの要約（パネル上段）。selection が無ければ null。
+ * name・ch は行（内部＋階段）から owner.rowId で引く（見つからなければ name='—'・ch=null）。
+ * cellCount は現行の格子で解けるキーの数（CL 削除などで消えたキーは数えない）。
+ * @returns {{name: string, cellCount: number, ch: string|null} | null}
+ */
+export function selectionSummary(graph, selection) {
+  if (!selection) return null;
+  const row = [...interiorRows(graph), ...stairRows(graph)].find(r => r.id === selection.owner.rowId);
+  let cellCount = 0;
+  for (const key of selection.cellKeys) if (cellBoundsFromKey(key, graph)) cellCount++;
+  return { name: row ? row.name : '—', cellCount, ch: row ? row.ch : null };
 }
 
 /** 仕上げ表の内部タブと同じ部屋・同じ並び・同じ表示名。 */

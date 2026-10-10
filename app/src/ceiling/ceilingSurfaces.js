@@ -4,20 +4,20 @@
  *
  * 天井を持つ部屋＝屋内（kind === INTERIOR）かつ feature なし。吹抜け・階段・階段吹抜け・屋根・昇降路・未定義は天井を持たない。
  * セルの帰属は buildCellToRoom（部分指定の子が親のセルを上書きする。床立体 floorSolidOf と同じセル→矩形の口）。
+ * 述語 roomHasCeiling は ceilingOwners.js（選択の索引）と共有。索引そのものへの一本化は見送り: 実データの --up の合計が 340→337 本に変わった
+ * （buildCellToRoom は天井を持たない部屋〔階段ペア・吹抜け〕も帰属を取り、その上の屋内部屋の天井を落とす。索引は取らない）。
  * 高さ zMm＝層の FL からの天井面の高さ＝部屋の床段差（effectiveFloorLevel(room)−effectiveFloorLevel(null)）＋roomCeilingHeight(graph, room).mm。
  * 数値化できない欄は既定天井高（isFallback）の mm を使う。部分指定の子（自分の CH 欄なし）は CH が床段差で補正されるので親と同じ天井面になる。
  * 壁の上端（planSolids.js wallCeilZ）は床段差を含めない（別系統。ここでは裁定により含める）。
  */
-import { RoomKind } from '@core';
+import { roomHasCeiling } from './ceilingOwners.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { normalizeRect, isValidRect } from '../plan/planGeometry.js';
 
 /** 部屋が天井を持つか（唯一の述語）。 */
-export function roomHasCeiling(room) {
-  return room?.kind === RoomKind.INTERIOR && room.feature == null;
-}
+export { roomHasCeiling };
 
 /**
  * 天井を持つ部屋ごとの天井面。セルが1つも解決できない部屋は出さない。順序は graph.rooms の順、矩形は (y1, x1) 順（決定的）。

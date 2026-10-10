@@ -5,7 +5,7 @@ import { RoomKind, RoomFeature, StairType } from '@core';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { interiorTabRooms, interiorRoomDisplayName } from '../finish/interiorTabRooms.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
-import { interiorRows, stairRows } from './ceilingPanelRows.js';
+import { interiorRows, stairRows, selectionSummary } from './ceilingPanelRows.js';
 
 const XS = [0, 1000, 2000, 3000, 4000, 5000, 6000];
 
@@ -83,4 +83,28 @@ test('【失敗系】stairRows: 階段が無い階は空配列。変換元の部
   assert.deepEqual(stairRows(g.graph), []);
   const s = g.graph.addStair({ type: StairType.STRAIGHT, roomId: 'gone', totalSteps: 12 });
   assert.deepEqual(stairRows(g.graph).map(r => [r.id, r.name]), [[s.id, '直進 12段']]);
+});
+
+test('selectionSummary: 部屋の選択は 名前・解けたセル数・CH(raw)。selection が null なら null', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const a = g.interior([[0, 0], [1, 0]]);
+  const sel = { owner: { kind: 'room', id: a.id, rowId: a.id }, cellKeys: new Set([g.cell(0, 0), g.cell(1, 0)]) };
+  assert.deepEqual(selectionSummary(g.graph, sel), { name: '居間', cellCount: 2, ch: roomCeilingHeight(g.graph, a).raw });
+  assert.equal(selectionSummary(g.graph, null), null);
+});
+
+test('selectionSummary: 部屋の無い階段は 名前「タイプ 段数」・ch=null', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const s = g.graph.addStair({ type: StairType.STRAIGHT, totalSteps: 12, cells: new Set([g.cell(0, 0)]) });
+  const sel = { owner: { kind: 'stair', id: s.id, rowId: s.id }, cellKeys: new Set([g.cell(0, 0)]) };
+  assert.deepEqual(selectionSummary(g.graph, sel), { name: '直進 12段', cellCount: 1, ch: null });
+});
+
+test('【失敗系】selectionSummary: 解けないキーは数えない。行が見つからなければ名前「—」・ch=null（例外にしない）', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const a = g.interior([[0, 0]]);
+  const sel = { owner: { kind: 'room', id: a.id, rowId: a.id }, cellKeys: new Set([g.cell(0, 0), 'gone:gone:gone:gone']) };
+  assert.equal(selectionSummary(g.graph, sel).cellCount, 1);
+  const lost = { owner: { kind: 'room', id: 'x', rowId: 'x' }, cellKeys: new Set([g.cell(0, 0)]) };
+  assert.deepEqual(selectionSummary(g.graph, lost), { name: '—', cellCount: 1, ch: null });
 });
