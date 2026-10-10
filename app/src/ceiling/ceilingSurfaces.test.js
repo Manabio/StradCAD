@@ -1,7 +1,7 @@
 // ceilingSurfaces.js（天井面の算出）の単体テスト。実物の PlanGraph / Room で組む。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomFeature, RoomKind, CeilingZone } from '@core';
+import { RoomFeature, RoomKind, CeilingZone, StairType } from '@core';
 import { roomHasCeiling, ceilingSurfacesOf } from './ceilingSurfaces.js';
 import { makeGrid, rect } from '../plan/planTestFixtures.js';
 
@@ -123,6 +123,64 @@ test('天井区画: 天井を持たない部屋（吹抜け・屋外など）の
   const hole = g.feature([[1, 0]], RoomFeature.VOID);
   hole.setCeilingZones([new CeilingZone({ id: 'z', cells: [g.cell(1, 0)], heightMm: 2500 })]);
   assert.deepEqual(ceilingSurfacesOf(g.graph).map(s => [s.roomId, s.zoneId]), [[keep.id, null]]);
+});
+
+// 階段の対の部屋（S6b）: feature STAIR の部屋は天井を持たないが、階段が天井を持ち区画があれば区画の面だけ出す
+function stairPairFixture() {
+  const g = makeGrid([0, 1000, 2000, 3000, 4000, 5000], [0, 1000]);
+  const plain = g.interior([[0, 0]]);
+  const pair = g.feature([[1, 0], [2, 0], [3, 0]], RoomFeature.STAIR);
+  pair.setOverride('ceilingHeight', '2400');
+  const stair = g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([1, 2, 3].map(i => g.cell(i, 0))) });
+  return { g, plain, pair, stair };
+}
+
+test('階段の対の部屋（S6b）: 区画のセルだけが面になる（残りのセルの面は出さない）。zMm・shape・dims・chMm は区画のとおり', () => {
+  const { g, plain, pair } = stairPairFixture();
+  pair.setCeilingZones([new CeilingZone({ id: 'z1', cells: [g.cell(1, 0), g.cell(2, 0)], heightMm: 2300, shape: 'slope', dims: [1600, 0] })]);
+  assert.deepEqual(ceilingSurfacesOf(g.graph), [
+    { roomId: plain.id, zoneId: null, rects: [rect(0, 0, 1000, 1000)], zMm: 2400, shape: 'flat', dims: [], chMm: 2400 },
+    { roomId: pair.id, zoneId: 'z1', rects: [rect(1000, 0, 2000, 1000), rect(2000, 0, 3000, 1000)], zMm: 2300, shape: 'slope', dims: [1600, 0], chMm: 2300 },
+  ]);
+});
+
+test('階段の対の部屋: 床段差のある対の部屋の区画は zMm＝床段差＋heightMm・chMm＝heightMm（T2）', () => {
+  const { g, pair } = stairPairFixture();
+  pair.setFloorLevel(100);
+  pair.setCeilingZones([new CeilingZone({ id: 'z1', cells: [g.cell(1, 0)], heightMm: 2300 })]);
+  const s = ceilingSurfacesOf(g.graph).find(x => x.zoneId === 'z1');
+  assert.equal(s.zMm, 2400);
+  assert.equal(s.chMm, 2300);
+});
+
+test('階段の対の部屋: 区画の無い階段は従来どおり天井を描かない', () => {
+  const { g, plain } = stairPairFixture();
+  assert.deepEqual(ceilingSurfacesOf(g.graph).map(s => s.roomId), [plain.id]);
+});
+
+test('階段の対の部屋: 階段下部屋（2a。後の部屋が取ったセル）は区画から落ち、そのセルは取った部屋の天井になる', () => {
+  const { g, pair } = stairPairFixture();
+  pair.setCeilingZones([new CeilingZone({ id: 'z1', cells: [g.cell(1, 0), g.cell(2, 0)], heightMm: 2300 })]);
+  const under = g.interior([[2, 0]]);
+  const out = ceilingSurfacesOf(g.graph);
+  assert.deepEqual(out.find(s => s.zoneId === 'z1').rects, [rect(1000, 0, 2000, 1000)], '2a が取ったセルは落ちる');
+  assert.ok(out.some(s => s.roomId === under.id && s.zoneId === null && s.rects[0].x1 === 2000));
+});
+
+test('【失敗系】階段の対の部屋: 階段が天井を持たない（対の部屋が屋外）・対の部屋が消えた階段は区画を無視する。階段に結びつかない STAIR 部屋の区画も無視', () => {
+  const { g, pair } = stairPairFixture();
+  pair.setCeilingZones([new CeilingZone({ id: 'z1', cells: [g.cell(1, 0)], heightMm: 2300 })]);
+  pair.setKind(RoomKind.EXTERIOR);
+  assert.ok(!ceilingSurfacesOf(g.graph).some(s => s.roomId === pair.id), '屋外階段');
+  pair.setKind(RoomKind.INTERIOR);
+  assert.ok(ceilingSurfacesOf(g.graph).some(s => s.roomId === pair.id), '屋内なら出る');
+  g.graph.removeRoom(pair.id);
+  assert.doesNotThrow(() => ceilingSurfacesOf(g.graph));
+  assert.ok(!ceilingSurfacesOf(g.graph).some(s => s.roomId === pair.id), '対の部屋が消えた階段');
+  const orphan = makeGrid([0, 1000], [0, 1000]);
+  const lone = orphan.feature([[0, 0]], RoomFeature.STAIR);
+  lone.setCeilingZones([new CeilingZone({ id: 'zz', cells: [orphan.cell(0, 0)], heightMm: 2300 })]);
+  assert.deepEqual(ceilingSurfacesOf(orphan.graph), [], 'roomId で結びつく階段が無い STAIR 部屋');
 });
 
 test('【失敗系】セルが解決できない部屋（CL 削除で消失したキー）は出さない。例外にしない', () => {

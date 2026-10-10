@@ -767,6 +767,32 @@ test('天井の傾斜（S6a）: 傾斜の区画の立体は zAt を持ち、zLo�
   assert.ok(ceilings.some(s => s.source.id === plain.id));
 });
 
+test('天井の円弧・ドーム（S6b）: 立体は zAt を持ち zLo＝基準高・zHi＝＋ライズ、注記は矢印なしの text 1つ（円弧は R 付き）', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
+  const a = g.interior([[0, 0], [1, 0], [2, 0]]);
+  a.setFloorLevel(100);
+  // 円弧は軸0（x に平行）で幅=y=3000 → ライズ 500: R=(1500²+500²)/1000=2500。ドームは右のセルだけ
+  a.setCeilingZones(assignZoneShape(g.graph, a, [g.cell(0, 0), g.cell(1, 0)], { heightMm: 2300, shape: 'arc', dims: [500, 0] }));
+  a.setCeilingZones(assignZoneShape(g.graph, a, [g.cell(2, 0)], { heightMm: 2200, shape: 'dome', dims: [600] }));
+  const [arcZone, domeZone] = a.ceilingZones;
+  const ceilings = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 50 })], { ceilings: true }), 'ceiling');
+  const arc = ceilings.find(s => s.source.id === `${a.id}#${arcZone.id}`);
+  assert.equal(typeof arc.zAt, 'function');
+  assert.equal(arc.zLo, 50 + 100 + 2300);
+  assert.equal(arc.zHi, 50 + 100 + 2300 + 500);
+  assert.equal(arc.zAt(2000, 1500), 50 + 100 + 2300 + 500, '中心線（y=1500）が頂点');
+  assert.ok(Math.abs(arc.zAt(2000, 0) - (50 + 100 + 2300)) < 1e-9, '縁（y=0）は基準高');
+  assert.equal(arc.marks.length, 1);
+  assert.deepEqual(arc.marks[0].prims.map(p => p.kind), ['text'], '矢印なし');
+  assert.equal(arc.marks[0].prims[0].text, '円弧 CH2300〜2800 R=2500', '基準 CH は床段差を含まない');
+  const dome = ceilings.find(s => s.source.id === `${a.id}#${domeZone.id}`);
+  assert.equal(dome.zLo, 50 + 100 + 2200);
+  assert.equal(dome.zHi, 50 + 100 + 2200 + 600);
+  assert.equal(dome.zAt(5000, 1500), 50 + 100 + 2200 + 600, '外接矩形の中心が頂点');
+  assert.equal(dome.zAt(4000, 1500), 50 + 100 + 2200, '周縁');
+  assert.equal(dome.marks[0].prims[0].text, 'ドーム CH2200〜2800');
+});
+
 test('天井の傾斜: 平面だけの文書の天井立体は区画導入前と同じ形（zAt・marks のキーを持たない）', () => {
   const { graph } = makeRoomGraph(0, 0, 4000, 4000);
   const [c] = ofKind(planSolids(self(graph), { ceilings: true }), 'ceiling');

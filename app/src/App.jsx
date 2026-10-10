@@ -2851,7 +2851,7 @@ const App = observer(() => {
 
       {/* 天伏モード: 専用パネル（内部・階段の一覧。仕上げ表とは独立） */}
       {appMode === 'ceiling' && mode && (
-        <CeilingPanel graph={graph} mode={mode} isLandscape={isLandscape} />
+        <CeilingPanel graph={graph} mode={mode} isLandscape={isLandscape} floorHeight={floorHeightAbove(project, project.activePlane)} />
       )}
 
       {/* 建具モード: 記号別採番リスト＋姿図・数値編集パネル */}

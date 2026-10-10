@@ -1,6 +1,6 @@
 // CeilingPanel.jsx の配線（ソーステキスト走査。.jsx は react を静的に引くため node:test から直接 import できない）。
 // 区画の形状・寸法の欄（S5 の高さ欄を S6a で拡張）: 確定・解除が withFinishUndo で包まれ markDirty される／検証は parseCeilingZoneDraft／
-// 階段所属は disabled／円弧・ドームは disabled（S6b で解禁）／keydown は伝播させない。1行まるごと一致（m フラグ）で判定する。
+// 部屋の無い階段は disabled（階段は対の部屋へ書く。S6b）／円弧・ドームも選べる／keydown は伝播させない。1行まるごと一致（m フラグ）で判定する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -30,19 +30,20 @@ test('【配線】入力の検証は parseCeilingZoneDraft（失敗は欄の下�
   assert.equal(count(/onKeyDown=\{stop\}/g), 2, '基準高と寸法の数値欄');
 });
 
-test('【配線】形状 select は CEILING_SHAPE_OPTIONS から作り、各 option の disabled は表の disabled（円弧・ドームは S6a で選べない）', () => {
+test('【配線】形状 select は CEILING_SHAPE_OPTIONS から作り、どの option も disabled にしない（円弧・ドームも S6b で選べる）', () => {
   assert.match(src, /^\s*\{CEILING_SHAPE_OPTIONS\.map\(o => \(\s*$/m);
-  assert.match(src, /^\s*<option key=\{o\.value\} value=\{o\.value\} disabled=\{o\.disabled\}>\{o\.label\}<\/option>\s*$/m);
+  assert.match(src, /^\s*<option key=\{o\.value\} value=\{o\.value\}>\{o\.label\}<\/option>\s*$/m);
+  assert.ok(!/o\.disabled/.test(src), '形状の option に disabled が残っている');
   assert.match(src, /^\s*onChange=\{e => patch\(\{ shape: e\.target\.value, dims: defaultDims\(e\.target\.value\) \}\)\}\s*$/m, '形状を変えたら寸法の下書きを作り直す');
   assert.match(src, /^\s*<span style=\{\{ fontWeight: 700 \}\}>\{CEILING_BASE_LABEL\[draft\.shape\]\}：<\/span>\s*$/m, '基準高のラベルは形状ごと');
 });
 
-test('【配線】未対応の形状（disabled）が下書きに入っていても確定せず、エラー時は数値欄が赤枠になる', () => {
-  assert.match(src, /^\s*if \(CEILING_SHAPE_OPTIONS\.find\(o => o\.value === draft\.shape\)\?\.disabled\) \{ setError\('この形状は未対応です'\); return; \}\s*$/m);
+test('【配線】円弧・ドームの確定ガード（未対応エラー）は無く、エラー時は数値欄が赤枠になる', () => {
+  assert.ok(!/この形状は未対応です/.test(src), '未対応の確定ガードが残っている');
   assert.equal(count(/borderColor: error \? '#dc2626' : undefined/g), 2, '基準高と寸法の数値欄');
 });
 
-test('【配線】書込み先は ceilingZoneTargetRoom（部屋所属のみ）。無ければ入力・確定が disabled（階段所属は S6b まで無効）', () => {
+test('【配線】書込み先は ceilingZoneTargetRoom（部屋、階段は対の部屋）。無ければ（部屋の無い階段）入力・確定が disabled', () => {
   assert.match(src, /^\s*const room = ceilingZoneTargetRoom\(graph, selection\);\s*$/m);
   assert.match(src, /^\s*const disabled = !room;\s*$/m);
   assert.match(src, /^\s*disabled=\{disabled\}\s*$/m);
@@ -52,7 +53,15 @@ test('【配線】書込み先は ceilingZoneTargetRoom（部屋所属のみ）�
 
 test('【配線】区画の欄は選択があるときだけ出す', () => {
   assert.match(src, /^\s*\{mode\.selection && \(\s*$/m);
-  assert.match(src, /^\s*<CeilingZoneFields key=\{zoneFieldKey\(mode\.selection\)\} graph=\{graph\} selection=\{mode\.selection\} zone=\{summary\?\.zone \?\? null\} \/>\s*$/m);
+  assert.match(src, /^\s*<CeilingZoneFields key=\{zoneFieldKey\(mode\.selection\)\} graph=\{graph\} selection=\{mode\.selection\} zone=\{summary\?\.zone \?\? null\} floorHeight=\{floorHeight \?\? null\} \/>\s*$/m, '階高を区画の欄へ渡す');
   assert.match(src, /^const zoneFieldKey = selection => `\$\{selection\.owner\.kind\}:\$\{selection\.owner\.id\}:\$\{\[\.\.\.selection\.cellKeys\]\.sort\(\)\.join\(','\)\}`;\s*$/m, '選択が変わったら欄を作り直す（入力途中の下書きを持ち越さない）');
-  assert.match(src, /^\s*const \[draft, setDraft\] = useState\(\(\) => initialDraft\(zone\)\);\s*$/m, '下書きは useState（MobX に入れない）');
+  assert.match(src, /^\s*const \[draft, setDraft\] = useState\(\(\) => \{\s*$/m, '下書きは useState（MobX に入れない）');
+});
+
+test('【配線】階段所属の初期値: 階段のときだけ stairCeilingSlopeDefaults(graph, stair, selection.cellKeys, floorHeight) を initialDraft へ渡す。CeilingPanel は floorHeight を prop で受ける', () => {
+  assert.match(src, /^\s*const stair = selection\.owner\.kind === 'stair' \? graph\.stairMap\.get\(selection\.owner\.id\) : null;\s*$/m);
+  assert.match(src, /^\s*return initialDraft\(zone, stair \? stairCeilingSlopeDefaults\(graph, stair, selection\.cellKeys, floorHeight\) : null\);\s*$/m);
+  assert.equal(count(/stairCeilingSlopeDefaults\(/g), 1, '呼び出しは初期値の1か所だけ');
+  assert.match(src, /^const CeilingZoneFields = observer\(\(\{ graph, selection, zone, floorHeight \}\) => \{\s*$/m);
+  assert.match(src, /^export const CeilingPanel = observer\(\(\{ graph, mode, isLandscape, floorHeight \}\) => \{\s*$/m);
 });

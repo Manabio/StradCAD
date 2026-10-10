@@ -79,7 +79,7 @@ function roomRow(graph, room, name, materialMap, zoneLabels) {
  * 選択中の天井セルの要約（パネル上段）。selection が無ければ null。
  * name・ch は行（内部＋階段）から owner.rowId で引く（見つからなければ name='—'・ch=null）。
  * cellCount は現行の格子で解けるキーの数（CL 削除などで消えたキーは数えない）。
- * zone … 選択セル群の天井区画の状態（S5。zoneStateOfCells。S6a から shape・dims を含む）。所属が部屋のときだけ。階段所属は null（階段の区画入力は S6b）。
+ * zone … 選択セル群の天井区画の状態（S5。zoneStateOfCells。S6a から shape・dims を含む）。書込み先の部屋（部屋、階段は対の部屋）があるときだけ。無ければ null。
  * @returns {{name: string, cellCount: number, ch: string|null, zone: {state: 'none'|'uniform'|'mixed', heightMm: number|null, shape: string, dims: number[]}|null} | null}
  */
 export function selectionSummary(graph, selection) {
@@ -87,14 +87,14 @@ export function selectionSummary(graph, selection) {
   const row = [...interiorRows(graph), ...stairRows(graph)].find(r => r.id === selection.owner.rowId);
   let cellCount = 0;
   for (const key of selection.cellKeys) if (cellBoundsFromKey(key, graph)) cellCount++;
-  const zone = selection.owner.kind === 'room'
-    ? zoneStateOfCells(graph, graph.roomMap.get(selection.owner.id) ?? null, selection.cellKeys)
-    : null;
+  const zoneRoom = ceilingZoneTargetRoom(graph, selection);
+  // 部屋所属は部屋が消えていても 'none'（従来どおり）。階段所属は対の部屋があるときだけ（無ければ null）
+  const zone = zoneRoom || selection.owner.kind === 'room' ? zoneStateOfCells(graph, zoneRoom, selection.cellKeys) : null;
   return { name: row ? row.name : '—', cellCount, ch: row ? row.ch : null, zone };
 }
 
 /**
- * 選択中のセル群の外接矩形の幅（x 方向・y 方向。mm）。円弧のライズ上限（幅/2）の検査用（S6b で円弧を解禁するとき使う）。解けるセルが無ければ null。
+ * 選択中のセル群の外接矩形の幅（x 方向・y 方向。mm）。円弧のライズ上限（幅/2）の検査用（parseCeilingZoneDraft が軸で x/y を選ぶ）。解けるセルが無ければ null。
  * @returns {{xMm: number, yMm: number}|null}
  */
 export function selectionSpanMm(graph, selection) {
@@ -110,13 +110,13 @@ export function selectionSpanMm(graph, selection) {
 }
 
 /**
- * 選択中のセル群へ区画の高さを書ける部屋（S5）。所属が部屋のときだけその部屋。階段所属（S6 まで無効）・解けない所属は null。
- * 天井材・仕上げの書込み先 ceilingWriteTargetRoom（階段は対の部屋）とは別: 区画は階段のセルに対しては入力させない。
+ * 選択中のセル群へ区画（高さ・形状・寸法）を書ける部屋（S5。S6b で階段所属を解禁）。所属が部屋ならその部屋、
+ * 階段なら対の部屋（stair.roomId）。部屋の無い階段・解けない所属は null（パネルは disabled）。
+ * 書込み先の解決は天井材・仕上げの ceilingWriteTargetRoom と同じ。
  * @returns {import('../core/room.js').Room | null}
  */
 export function ceilingZoneTargetRoom(graph, selection) {
-  if (!selection || selection.owner.kind !== 'room') return null;
-  return graph.roomMap.get(selection.owner.id) ?? null;
+  return ceilingWriteTargetRoom(graph, selection);
 }
 
 /**

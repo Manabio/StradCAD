@@ -224,7 +224,41 @@ test('selectionSpanMm: 2×1 セルの外接幅 {xMm,yMm}。解けないキーだ
   assert.equal(selectionSpanMm(g.graph, null), null);
 });
 
-test('selectionSummary の zone と ceilingZoneTargetRoom: 部屋所属は区画の状態、階段所属は zone=null で書込み先なし（S6 まで無効）。解けない所属も null', () => {
+test('CH 欄のレンジ（S6b）: 円弧・ドームも基準高〜基準高＋ライズ（階段の対の部屋の区画も階段の行に出る）', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const r = g.interior([[0, 0], [1, 0]]);
+  r.setOverride('ceilingHeight', '2400');
+  const ch = () => interiorRows(g.graph).find(x => x.id === r.id).ch;
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(0, 0), g.cell(1, 0)], { heightMm: 2400, shape: 'arc', dims: [500, 0] }));
+  assert.equal(ch(), '2400～2900', '円弧');
+  r.setCeilingZones([]);
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(0, 0), g.cell(1, 0)], { heightMm: 2400, shape: 'dome', dims: [700] }));
+  assert.equal(ch(), '2400～3100', 'ドーム');
+  const pair = g.feature([[2, 0], [3, 0]], RoomFeature.STAIR);
+  pair.setOverride('ceilingHeight', '2400');
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(2, 0), g.cell(3, 0)]) });
+  pair.setCeilingZones(assignZoneShape(g.graph, pair, [g.cell(2, 0), g.cell(3, 0)], { heightMm: 2400, shape: 'slope', dims: [1800, 0] }));
+  assert.equal(stairRows(g.graph).find(x => x.id === pair.id).ch, '2400～4200');
+});
+
+test('ceilingZoneTargetRoom と selectionSummary.zone（S6b）: 階段所属は対の部屋（stair.roomId）が書込み先で zone はその部屋の区画の状態。部屋の無い階段・消えた所属は null', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const pair = g.feature([[0, 0], [1, 0]], RoomFeature.STAIR);
+  const withRoom = g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(0, 0), g.cell(1, 0)]) });
+  const bare = g.graph.addStair({ type: StairType.STRAIGHT, cells: new Set([g.cell(2, 0)]) });
+  const sel = (stair, rowId, cells) => ({ owner: { kind: 'stair', id: stair.id, rowId }, cellKeys: new Set(cells) });
+  const s1 = sel(withRoom, pair.id, [g.cell(0, 0)]);
+  assert.equal(ceilingZoneTargetRoom(g.graph, s1), pair);
+  assert.deepEqual(selectionSummary(g.graph, s1).zone, { state: 'none', heightMm: null, shape: 'flat', dims: [] });
+  pair.setCeilingZones(assignZoneShape(g.graph, pair, [g.cell(0, 0)], { heightMm: 2500, shape: 'slope', dims: [1000, 270] }));
+  assert.deepEqual(selectionSummary(g.graph, s1).zone, { state: 'uniform', heightMm: 2500, shape: 'slope', dims: [1000, 270] });
+  const s2 = sel(bare, bare.id, [g.cell(2, 0)]);
+  assert.equal(ceilingZoneTargetRoom(g.graph, s2), null, '部屋の無い階段');
+  assert.equal(selectionSummary(g.graph, s2).zone, null);
+  assert.equal(ceilingZoneTargetRoom(g.graph, { owner: { kind: 'stair', id: 'gone', rowId: 'gone' }, cellKeys: new Set() }), null);
+});
+
+test('selectionSummary の zone と ceilingZoneTargetRoom: 部屋所属は区画の状態。階段所属で階段が解けなければ null。解けない所属も null', () => {
   const g = makeGrid(XS, [0, 1000]);
   const a = g.interior([[0, 0], [1, 0]]);
   a.setCeilingZones(assignZoneHeight(g.graph, a, [g.cell(0, 0)], 2600));

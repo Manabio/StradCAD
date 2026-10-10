@@ -2,8 +2,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CeilingShape, CEILING_SHAPE_DIM_COUNT, SLOPE_DIRS_DEG, ARC_AXES_DEG } from '../core.js';
+import { RoomFeature, StairType } from '@core';
+import { makeGrid } from '../plan/planTestFixtures.js';
 import {
-  CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, UP_DIRECTION_TO_DEG, parseCeilingZoneDraft,
+  CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, UP_DIRECTION_TO_DEG, parseCeilingZoneDraft, stairCeilingSlopeDefaults,
 } from './ceilingShapeFields.js';
 
 test('表の網羅: 全形状に ラベル・基準高ラベル・寸法欄があり、寸法欄の個数は CEILING_SHAPE_DIM_COUNT と一致する', () => {
@@ -19,9 +21,80 @@ test('表の網羅: 全形状に ラベル・基準高ラベル・寸法欄が�
   assert.equal(CEILING_SHAPE_OPTIONS.length, Object.values(CeilingShape).length);
 });
 
-test('S6a: 平面・傾斜は選べて、円弧・ドームは disabled（S6b で解禁）', () => {
+test('S6b: 4形状とも選べる（disabled なし）', () => {
   const dis = Object.fromEntries(CEILING_SHAPE_OPTIONS.map(o => [o.value, !!o.disabled]));
-  assert.deepEqual(dis, { flat: false, slope: false, arc: true, dome: true });
+  assert.deepEqual(dis, { flat: false, slope: false, arc: false, dome: false });
+});
+
+// ---- stairCeilingSlopeDefaults（直進系の階段からの傾斜の初期値）----
+function stairFixture({ type = StairType.STRAIGHT, upDirection = 'right', totalSteps = 16, riser = null, withRoom = true, cols = 4 } = {}) {
+  const g = makeGrid([0, 1000, 2000, 3000, 4000].slice(0, cols + 1), [0, 1000]);
+  const cells = Array.from({ length: cols }, (_, i) => [i, 0]);
+  const room = g.feature(cells, RoomFeature.STAIR);
+  room.setOverride('ceilingHeight', '2400');
+  const stair = g.graph.addStair({
+    type, upDirection, totalSteps, riser, roomId: withRoom ? room.id : null,
+    cells: new Set(cells.map(([i, j]) => g.cell(i, j))),
+  });
+  return { g, room, stair, key: i => g.cell(i, 0) };
+}
+
+test('stairCeilingSlopeDefaults: 直進の階段全体を選ぶと 向き＝upDirection・基準高＝対の部屋の CH・ライズ＝蹴上×段数＝階高', () => {
+  const { g, stair, key } = stairFixture({ upDirection: 'right' });
+  assert.deepEqual(stairCeilingSlopeDefaults(g.graph, stair, [0, 1, 2, 3].map(key), 3200),
+    { heightMm: 2400, shape: 'slope', dims: [3200, 0] });
+});
+
+test('stairCeilingSlopeDefaults: upDirection 4方向が度に変わる（up は縦長の階段で上り方向の長さを測る）', () => {
+  for (const [dir, deg] of [['right', 0], ['left', 180]]) {
+    const { g, stair, key } = stairFixture({ upDirection: dir });
+    assert.equal(stairCeilingSlopeDefaults(g.graph, stair, [0, 1, 2, 3].map(key), 3200).dims[1], deg, dir);
+  }
+  const g = makeGrid([0, 1000], [0, 1000, 2000, 3000, 4000]);
+  const room = g.feature([[0, 0], [0, 1], [0, 2], [0, 3]], RoomFeature.STAIR);
+  for (const [dir, deg] of [['down', 90], ['up', 270]]) {
+    const stair = g.graph.addStair({ upDirection: dir, totalSteps: 16, roomId: room.id, cells: new Set([0, 1, 2, 3].map(j => g.cell(0, j))) });
+    assert.deepEqual(stairCeilingSlopeDefaults(g.graph, stair, [0, 1, 2, 3].map(j => g.cell(0, j)), 3200).dims, [3200, deg], dir);
+  }
+});
+
+test('stairCeilingSlopeDefaults: 区画が階段の一部ならライズは上り方向の長さの比で按分（半分→階高の半分）。蹴上の明示指定は階高より優先', () => {
+  const { g, stair, key } = stairFixture();
+  assert.deepEqual(stairCeilingSlopeDefaults(g.graph, stair, [key(0), key(1)], 3200).dims, [1600, 0]);
+  assert.deepEqual(stairCeilingSlopeDefaults(g.graph, stair, [key(3)], 3200).dims, [800, 0], '1/4');
+  const explicit = stairFixture({ riser: 150 });
+  assert.deepEqual(stairCeilingSlopeDefaults(explicit.g.graph, explicit.stair, [0, 1, 2, 3].map(explicit.key), 3200).dims, [2400, 0], '150×16');
+});
+
+test('stairCeilingSlopeDefaults: 選択が階段の外接矩形より長くてもライズは階高を超えない（T1）', () => {
+  const g = makeGrid([0, 1000, 2000, 3000, 4000], [0, 1000]);
+  const room = g.feature([[0, 0], [1, 0]], RoomFeature.STAIR);
+  const stair = g.graph.addStair({ type: StairType.STRAIGHT, upDirection: 'right', totalSteps: 16, roomId: room.id, cells: new Set([g.cell(0, 0), g.cell(1, 0)]) });
+  const d = stairCeilingSlopeDefaults(g.graph, stair, [0, 1, 2].map(i => g.cell(i, 0)), 3200);
+  assert.equal(d.dims[0], 3200);
+});
+
+test('stairCeilingSlopeDefaults: 踊り場付直進も対象', () => {
+  const { g, stair, key } = stairFixture({ type: StairType.STRAIGHT_LANDING });
+  assert.deepEqual(stairCeilingSlopeDefaults(g.graph, stair, [0, 1, 2, 3].map(key), 3200).dims, [3200, 0]);
+});
+
+test('【失敗系】stairCeilingSlopeDefaults: 蹴上が決まらない（最上階＝階高 null かつ明示なし）・折返し/回り/矩折・対の部屋なし・向き不明・選択が解けない・null 引数は null', () => {
+  const full = k => [0, 1, 2, 3].map(k);
+  const top = stairFixture();
+  assert.equal(stairCeilingSlopeDefaults(top.g.graph, top.stair, full(top.key), null), null, '階高 null');
+  for (const type of [StairType.SWITCHBACK, StairType.WINDING, StairType.L_TURN, StairType.FLARED]) {
+    const s = stairFixture({ type });
+    assert.equal(stairCeilingSlopeDefaults(s.g.graph, s.stair, full(s.key), 3200), null, type);
+  }
+  const bare = stairFixture({ withRoom: false });
+  assert.equal(stairCeilingSlopeDefaults(bare.g.graph, bare.stair, full(bare.key), 3200), null, '対の部屋なし');
+  const odd = stairFixture({ upDirection: 'sideways' });
+  assert.equal(stairCeilingSlopeDefaults(odd.g.graph, odd.stair, full(odd.key), 3200), null, '向き不明');
+  const ok = stairFixture();
+  assert.equal(stairCeilingSlopeDefaults(ok.g.graph, ok.stair, ['gone:gone:gone:gone'], 3200), null, '選択が解けない');
+  assert.equal(stairCeilingSlopeDefaults(ok.g.graph, null, full(ok.key), 3200), null);
+  assert.equal(stairCeilingSlopeDefaults(null, ok.stair, full(ok.key), 3200), null);
 });
 
 test('選択欄の選択肢は core の列挙（向き・軸）と一致する', () => {

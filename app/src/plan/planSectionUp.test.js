@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { planSectionFigureUp } from './planSectionUp.js';
 import { solid, rect, linesOf, mergedLines, sortedLines } from './planTestFixtures.js';
+import { ceilingShapeSolidZ } from '../ceiling/ceilingShape.js';
 
 const C = 1500;
 const H = 2800;
@@ -115,6 +116,25 @@ test('勾配のある立体（zAt）も鏡像で扱う: 切断面より上の部
   assert.ok(lines.every(p => Math.min(p.points[0], p.points[2]) >= 3000 - 1), `zAt が切断高より上（x>3000）の部分だけ: ${JSON.stringify(sortedLines(lines))}`);
   assert.equal(roof.zAt, zAt);
   assert.equal(zAt(2000), 1000);
+});
+
+test('円弧・ドームの天井（S6b）: 切断高が途中にあるとき、切断高より上に残る輪郭だけが出て等高線は出ない。全体が切断高より上なら外形 4 辺', () => {
+  const rects = [rect(0, 0, 4000, 2000)];
+  const up = (shape, dims, base) => {
+    const { zLo, zHi, zAt } = ceilingShapeSolidZ({ shape, dims, baseZ: base, rects });
+    return planSectionFigureUp([solid('ceiling', { rects }, zLo, zHi, { id: 'c', layerFloorZ: 0, zAt })], C);
+  };
+  // 円弧（軸0: y 方向が幅）。基準 1200 < 切断高 1500 < 頂点 2200: 縁（y=0・2000 の線）は 1200 で切断高の下 → 妻の両端 x=0・4000 の線の切断高より上の部分だけ
+  const arc = linesOf(up('arc', [1000, 0], 1200), null, 'ceiling');
+  assert.equal(arc.length, 2, JSON.stringify(sortedLines(arc)));
+  assert.ok(arc.every(p => p.points[0] === p.points[2] && (p.points[0] === 0 || p.points[0] === 4000)), '内部の等高線は出ない');
+  assert.ok(arc.every(p => p.cls === 'below' && p.weight === 'thin'));
+  assert.ok(arc.every(p => Math.min(p.points[1], p.points[3]) > 0 && Math.max(p.points[1], p.points[3]) < 2000), '縁（切断高の下）は含まない');
+  // ドーム: 周縁がすべて基準 1200（切断高の下）。中央の盛り上がりだけが切断高より上だが、輪郭は周縁なので何も出ない（等高線なし）
+  assert.equal(up('dome', [1000], 1200).length, 0);
+  // 全体が切断高より上（基準 1600）なら円弧・ドームとも外形 4 辺
+  assert.deepEqual(sortedLines(up('arc', [1000, 0], 1600)), outline(0, 0, 4000, 2000));
+  assert.deepEqual(sortedLines(up('dome', [800], 1600)), outline(0, 0, 4000, 2000));
 });
 
 test('【失敗系】切断高が有限でなければ TypeError。非有限の z・null の立体は捨てる（例外にしない）。配列でない入力は空', () => {

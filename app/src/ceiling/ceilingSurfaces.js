@@ -11,7 +11,7 @@
  * 壁の上端（planSolids.js wallCeilZ）は床段差を含めない（別系統。ここでは裁定により含める）。
  */
 import { CeilingShape } from '../core/constants.js';
-import { roomHasCeiling } from './ceilingOwners.js';
+import { roomHasCeiling, stairHasCeiling } from './ceilingOwners.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { cellBoundsFromKey, refreshCells } from '../finish/gridCells.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
@@ -28,6 +28,9 @@ const byRow = (a, b) => a.y1 - b.y1 || a.x1 - b.x1;
  * 天井区画（S5。Room.ceilingZones）がある部屋は「残り（zoneId: null。部屋の CH）→ 区画の配列順」の面に分ける。区画のセルは
  * refreshCells で今の分割に展開し、buildCellToRoom がこの部屋に帰属させるセルだけを採る（Z1。区画の旧キーが解けない・他の部屋に取られた
  * セルは捨てる＝部屋の CH に戻る）。同じセルが複数の区画にあれば先勝ち。空の面は出さない。区画の無い部屋の出力は区画導入前と同じ（zoneId は null）。
+ * 階段の対の部屋（stair.roomId。feature STAIR で roomHasCeiling は偽）は、stairHasCeiling(graph, stair) が真で区画を持つときだけ、
+ * 区画の面を出す（S6b。区画のセルのうち buildCellToRoom でその部屋に帰属するセルだけ＝階段下部屋 2a が取ったセルは落ちる）。
+ * 区画の無い階段は従来どおり天井を描かない（区画に入らなかった残りのセルの面も出さない）。
  * 区画の zMm＝床段差＋(heightMm ?? 部屋の CH)。shape・dims は区画の形状・寸法（残りは flat・[]）、chMm は基準の CH（床段差を含まない。
  * 平面＝天井高／傾斜＝低い側。S6a）。
  * @param {object} graph
@@ -36,9 +39,15 @@ const byRow = (a, b) => a.y1 - b.y1 || a.x1 - b.x1;
 export function ceilingSurfacesOf(graph) {
   if (!graph) return [];
   const cellToRoom = buildCellToRoom(graph);
+  // 階段の対の部屋（S6b）: 天井を持たない部屋（feature STAIR）だが、階段が天井を持つなら区画の面だけを出す（残りは出さない）
+  const pairRooms = new Set();
+  for (const stair of graph.stairs) {
+    const room = stair.roomId ? graph.roomMap.get(stair.roomId) : null;
+    if (room && !roomHasCeiling(room) && room.ceilingZones.length > 0 && stairHasCeiling(graph, stair)) pairRooms.add(room);
+  }
   const rectsByRoom = new Map(); // room → Map<セルキー, 矩形>
   for (const [key, room] of cellToRoom) {
-    if (!roomHasCeiling(room)) continue;
+    if (!roomHasCeiling(room) && !pairRooms.has(room)) continue;
     const b = cellBoundsFromKey(key, graph);
     if (!b) continue;
     const rect = normalizeRect(b);
@@ -70,7 +79,7 @@ export function ceilingSurfacesOf(graph) {
     }
     const rest = [];
     for (const [key, rect] of rectByKey) if (!taken.has(key)) rest.push(rect);
-    if (rest.length > 0) {
+    if (rest.length > 0 && !pairRooms.has(room)) {
       rest.sort(byRow);
       out.push({ roomId: room.id, zoneId: null, rects: rest, zMm: roomZ, shape: CeilingShape.FLAT, dims: [], chMm: roomCh });
     }

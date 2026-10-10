@@ -7,7 +7,7 @@ import { withFinishUndo } from '../finish/finishUndo.js';
 import { markDirty } from '../dirtyState.js';
 import { interiorRows, stairRows, selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom } from './ceilingPanelRows.js';
 import { assignZoneShape, clearZoneCells } from './ceilingZones.js';
-import { CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, parseCeilingZoneDraft } from './ceilingShapeFields.js';
+import { CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, parseCeilingZoneDraft, stairCeilingSlopeDefaults } from './ceilingShapeFields.js';
 
 // 天伏モードの専用パネル（仕上げ表とは独立。仕上げ表との共有はデータと純モジュール＋材選択の部品 MaterialSelect だけ）。
 // パネルは App から渡る graph prop を使う（mode に graph を持たせない。階切替で古い graph を抱える穴を作らないため）。
@@ -79,10 +79,14 @@ const zoneSummaryText = z => {
 const DIM_SLOTS = 2; // 寸法欄の数（CEILING_SHAPE_DIM_COUNT の最大。形状が違っても欄を共用する）
 const defaultDims = shape => CEILING_DIM_FIELDS[shape].map(f => (f.input === 'select' ? String(f.options[0].value) : ''));
 
-// 下書きの初期値。既存の区画が一様ならその形状・寸法・基準高、無い（none）・混在なら平面＋空（空の基準高＝部屋の CH）
-function initialDraft(zone) {
+// 下書きの初期値。既存の区画が一様ならその形状・寸法・基準高。区画が無い（none）階段所属で直進系なら階段に沿った傾斜
+// （stairCeilingSlopeDefaults。折返し・回り等や算出できないときは null）。それ以外（混在など）は平面＋空（空の基準高＝部屋の CH）
+function initialDraft(zone, slopeDefaults) {
   if (zone?.state === 'uniform') {
     return { shape: zone.shape, height: zone.heightMm == null ? '' : String(zone.heightMm), dims: zone.dims.map(String) };
+  }
+  if (zone?.state === 'none' && slopeDefaults) {
+    return { shape: slopeDefaults.shape, height: String(slopeDefaults.heightMm), dims: slopeDefaults.dims.map(String) };
   }
   return { shape: 'flat', height: '', dims: [] };
 }
@@ -90,12 +94,15 @@ function initialDraft(zone) {
 const fieldLabelStyle = { display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' };
 
 // 区画の形状・寸法の欄（S5 の高さ欄を S6a で拡張）。選択中のセル群へ「形状（平面／傾斜）・基準高・寸法1／寸法2」を区画として書く。
-// 基準高の意味は形状で変わる（平面＝天井高／傾斜＝低い側。空欄＝部屋の CH）。寸法欄は汎用の2欄で、形状ごとにラベルと入力の種類が変わり、使わない欄は disabled。
-// 書込み先は所属が部屋のときだけ（階段所属は S6b まで disabled。円弧・ドームも S6b まで選べない）。
+// 基準高の意味は形状で変わる（平面＝天井高／傾斜＝低い側／円弧・ドーム＝周縁。空欄＝部屋の CH）。寸法欄は汎用の2欄で、形状ごとにラベルと入力の種類が変わり、使わない欄は disabled。
+// 書込み先は所属が部屋ならその部屋、階段なら対の部屋（部屋の無い階段は disabled）。区画の無い直進系の階段は、初期値が階段に沿った傾斜（floorHeight は階高）。
 // 下書きは useState（MobX に入れない）。確定は withFinishUndo で1エントリ＋markDirty。部屋の CH 欄（override）には書かない。
 // 確定後も選択・下書きは保つ。検証は parseCeilingZoneDraft（エラーは欄の下に1行）。
-const CeilingZoneFields = observer(({ graph, selection, zone }) => {
-  const [draft, setDraft] = useState(() => initialDraft(zone));
+const CeilingZoneFields = observer(({ graph, selection, zone, floorHeight }) => {
+  const [draft, setDraft] = useState(() => {
+    const stair = selection.owner.kind === 'stair' ? graph.stairMap.get(selection.owner.id) : null;
+    return initialDraft(zone, stair ? stairCeilingSlopeDefaults(graph, stair, selection.cellKeys, floorHeight) : null);
+  });
   const [error, setError] = useState('');
   const room = ceilingZoneTargetRoom(graph, selection);
   const disabled = !room;
@@ -103,8 +110,6 @@ const CeilingZoneFields = observer(({ graph, selection, zone }) => {
   const patch = p => { setDraft(d => ({ ...d, ...p })); setError(''); };
   const setDim = (i, v) => patch({ dims: Array.from({ length: DIM_SLOTS }, (_, k) => (k === i ? v : (draft.dims[k] ?? ''))) });
   const commit = () => {
-    // 既存データの初期値として未対応の形状（円弧・ドーム）が下書きに入っていても確定させない（S6b で解禁）
-    if (CEILING_SHAPE_OPTIONS.find(o => o.value === draft.shape)?.disabled) { setError('この形状は未対応です'); return; }
     const result = parseCeilingZoneDraft(draft, { spanMm: selectionSpanMm(graph, selection) });
     if (!result.ok) { setError(result.error); return; }
     setError('');
@@ -115,7 +120,7 @@ const CeilingZoneFields = observer(({ graph, selection, zone }) => {
     withFinishUndo(graph, () => room.setCeilingZones(clearZoneCells(graph, room, selection.cellKeys)));
     markDirty();
   };
-  const title = disabled ? '階段の天井の指定は階段に沿った傾斜と同時に対応します（現在は部屋のセルのみ）' : undefined;
+  const title = disabled ? '部屋の無い階段には天井の区画を指定できません' : undefined;
   const stop = e => { e.stopPropagation(); if (e.key === 'Enter' && !disabled) commit(); };
   return (
     <div style={{ padding: '6px 10px', borderBottom: '1px solid #e2e8f0', background: '#fafafa', flexShrink: 0, fontSize: 12, color: '#374151', display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -130,7 +135,7 @@ const CeilingZoneFields = observer(({ graph, selection, zone }) => {
             style={{ fontSize: 12 }}
           >
             {CEILING_SHAPE_OPTIONS.map(o => (
-              <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
+              <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
         </label>
@@ -186,7 +191,7 @@ const CeilingZoneFields = observer(({ graph, selection, zone }) => {
   );
 });
 
-export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
+export const CeilingPanel = observer(({ graph, mode, isLandscape, floorHeight }) => {
   const rows = mode.activeTab === 'stair' ? stairRows(graph, mode.materialMap) : interiorRows(graph, mode.materialMap);
   const summary = selectionSummary(graph, mode.selection);
   const inner = (
@@ -203,7 +208,7 @@ export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
         <CeilingMaterialFields graph={graph} mode={mode} room={ceilingWriteTargetRoom(graph, mode.selection)} />
       )}
       {mode.selection && (
-        <CeilingZoneFields key={zoneFieldKey(mode.selection)} graph={graph} selection={mode.selection} zone={summary?.zone ?? null} />
+        <CeilingZoneFields key={zoneFieldKey(mode.selection)} graph={graph} selection={mode.selection} zone={summary?.zone ?? null} floorHeight={floorHeight ?? null} />
       )}
       <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', flexShrink: 0 }}>
         {TABS.map(tab => (

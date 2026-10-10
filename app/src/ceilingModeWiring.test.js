@@ -23,9 +23,9 @@ test('【配線】App.jsx: ceiling のローダーは CeilingModeState を new �
   assert.match(appCode, /^\s*: appMode === 'ceiling'\s*$/m);
 });
 
-test('【配線】App.jsx: CeilingPanel は appMode === ceiling && mode のときだけマウントし、graph/mode/isLandscape を渡す', () => {
+test('【配線】App.jsx: CeilingPanel は appMode === ceiling && mode のときだけマウントし、graph/mode/isLandscape と階高 floorHeight（仕上げ表と同じ floorHeightAbove）を渡す', () => {
   assert.match(appCode, /^\s*\{appMode === 'ceiling' && mode && \(\s*$/m);
-  assert.match(appCode, /^\s*<CeilingPanel graph=\{graph\} mode=\{mode\} isLandscape=\{isLandscape\} \/>\s*$/m);
+  assert.match(appCode, /^\s*<CeilingPanel graph=\{graph\} mode=\{mode\} isLandscape=\{isLandscape\} floorHeight=\{floorHeightAbove\(project, project\.activePlane\)\} \/>\s*$/m);
   assert.match(appCode, /^import \{ CeilingPanel \} +from '\.\/ceiling\/CeilingPanel\.jsx';\s*$/m);
 });
 
