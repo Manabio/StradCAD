@@ -1,7 +1,7 @@
 // ceilingSurfaces.js（天井面の算出）の単体テスト。実物の PlanGraph / Room で組む。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomFeature, RoomKind } from '@core';
+import { RoomFeature, RoomKind, CeilingZone } from '@core';
 import { roomHasCeiling, ceilingSurfacesOf } from './ceilingSurfaces.js';
 import { makeGrid, rect } from '../plan/planTestFixtures.js';
 
@@ -28,8 +28,8 @@ test('2部屋: 部屋ごとにセル矩形の和と天井高（FL からの mm�
   a.setOverride('ceilingHeight', '2600');
   b.setOverride('ceilingHeight', '2200');
   assert.deepEqual(ceilingSurfacesOf(g.graph), [
-    { roomId: a.id, rects: [rect(0, 0, 2000, 3000)], zMm: 2600 },
-    { roomId: b.id, rects: [rect(2000, 0, 4000, 3000)], zMm: 2200 },
+    { roomId: a.id, zoneId: null, rects: [rect(0, 0, 2000, 3000)], zMm: 2600 },
+    { roomId: b.id, zoneId: null, rects: [rect(2000, 0, 4000, 3000)], zMm: 2200 },
   ]);
 });
 
@@ -48,8 +48,8 @@ test('部分指定: 子が持つセルは子の天井になり、親の矩形か
   const child = g.graph.addRoom(new Set([g.cell(1, 0)]), '小上がり', undefined, new Set([parent.id]));
   child.setOverride('ceilingHeight', '2100');
   assert.deepEqual(ceilingSurfacesOf(g.graph), [
-    { roomId: parent.id, rects: [rect(0, 0, 2000, 3000)], zMm: 2400 },
-    { roomId: child.id, rects: [rect(2000, 0, 4000, 3000)], zMm: 2100 },
+    { roomId: parent.id, zoneId: null, rects: [rect(0, 0, 2000, 3000)], zMm: 2400 },
+    { roomId: child.id, zoneId: null, rects: [rect(2000, 0, 4000, 3000)], zMm: 2100 },
   ]);
 });
 
@@ -87,6 +87,42 @@ test('天井を持たない部屋（吹抜け・階段・屋根・屋外・未�
   assert.deepEqual(ceilingSurfacesOf(g.graph).map(s => s.roomId), [keep.id]);
   assert.deepEqual(ceilingSurfacesOf(makeGrid([0, 1000], [0, 1000]).graph), []);
   assert.deepEqual(ceilingSurfacesOf(null), []);
+});
+
+test('天井区画（S5）: 区画のある部屋は「残り（zoneId null・部屋の CH）→ 区画の配列順」の面に分かれる。zMm は床段差を含む。高さ null の区画は部屋の CH', () => {
+  const g = makeGrid([0, 1000, 2000, 3000, 4000], [0, 1000]);
+  const room = g.interior([[0, 0], [1, 0], [2, 0], [3, 0]]);
+  room.setFloorLevel(100);
+  room.setOverride('ceilingHeight', '2400');
+  room.setCeilingZones([
+    new CeilingZone({ id: 'zA', cells: [g.cell(3, 0)], heightMm: 2800 }),
+    new CeilingZone({ id: 'zB', cells: [g.cell(1, 0)], heightMm: null, shape: 'dome', dims: [500] }),
+  ]);
+  assert.deepEqual(ceilingSurfacesOf(g.graph), [
+    { roomId: room.id, zoneId: null, rects: [rect(0, 0, 1000, 1000), rect(2000, 0, 3000, 1000)], zMm: 100 + 2400 },
+    { roomId: room.id, zoneId: 'zA', rects: [rect(3000, 0, 4000, 1000)], zMm: 100 + 2800 },
+    { roomId: room.id, zoneId: 'zB', rects: [rect(1000, 0, 2000, 1000)], zMm: 100 + 2400 },
+  ]);
+});
+
+test('天井区画: 同じセルが複数の区画にあれば先勝ち。空になった面（全セルが先の区画に取られた・解けない）と空の残りは出さない', () => {
+  const g = makeGrid([0, 1000, 2000], [0, 1000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  const [c0, c1] = [g.cell(0, 0), g.cell(1, 0)];
+  room.setCeilingZones([
+    new CeilingZone({ id: 'first', cells: [c0, c1], heightMm: 2500 }),
+    new CeilingZone({ id: 'second', cells: [c1], heightMm: 2900 }),
+    new CeilingZone({ id: 'ghost', cells: ['gone:gone:gone:gone'], heightMm: 3000 }),
+  ]);
+  assert.deepEqual(ceilingSurfacesOf(g.graph).map(s => [s.zoneId, s.zMm]), [['first', 2500]], '残りも second も ghost も出ない');
+});
+
+test('天井区画: 天井を持たない部屋（吹抜け・屋外など）の区画は無視する。区画の無い部屋の出力は zoneId null のまま', () => {
+  const g = makeGrid([0, 1000, 2000], [0, 1000]);
+  const keep = g.interior([[0, 0]]);
+  const hole = g.feature([[1, 0]], RoomFeature.VOID);
+  hole.setCeilingZones([new CeilingZone({ id: 'z', cells: [g.cell(1, 0)], heightMm: 2500 })]);
+  assert.deepEqual(ceilingSurfacesOf(g.graph).map(s => [s.roomId, s.zoneId]), [[keep.id, null]]);
 });
 
 test('【失敗系】セルが解決できない部屋（CL 削除で消失したキー）は出さない。例外にしない', () => {

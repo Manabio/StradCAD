@@ -485,3 +485,6 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 
 ## 天伏
 天井伏図モード（`appMode==='ceiling'`。ModeBar の「天伏」）。見上げ図＋天井欄の指定を行う。仕上げモードとは独立の State（`modes/CeilingModeState.js`）・専用パネル（`ceiling/CeilingPanel.jsx`）を持ち、仕上げ表との共有はデータ（Room の天井欄）と純モジュールだけ。
+
+## 天井区画
+天伏で選んだセル群ごとの天井高（と将来の形状・寸法）。`Room.ceilingZones`（不変の`CeilingZone`）に持ち、部屋のCH欄には書かない。設計意図は`.claude/ceiling-model.md`「天井区画（S5）」。

@@ -1,9 +1,13 @@
+import { useState } from 'react';
 import { observer } from 'mobx-react-lite';
 import { ModePanel } from '../ui/ModePanel.jsx';
 import { BottomSheet } from '../ui/BottomSheet.jsx';
 import { MaterialSelect } from '../finish/FinishTable.jsx';
 import { withFinishUndo } from '../finish/finishUndo.js';
-import { interiorRows, stairRows, selectionSummary, ceilingWriteTargetRoom } from './ceilingPanelRows.js';
+import { markDirty } from '../dirtyState.js';
+import { parsePlanCutHeightInput } from '../ui/planCutHeightInput.js';
+import { interiorRows, stairRows, selectionSummary, ceilingWriteTargetRoom, ceilingZoneTargetRoom } from './ceilingPanelRows.js';
+import { assignZoneHeight, clearZoneCells } from './ceilingZones.js';
 
 // 天伏モードの専用パネル（仕上げ表とは独立。仕上げ表との共有はデータと純モジュール＋材選択の部品 MaterialSelect だけ）。
 // パネルは App から渡る graph prop を使う（mode に graph を持たせない。階切替で古い graph を抱える穴を作らないため）。
@@ -13,7 +17,8 @@ import { interiorRows, stairRows, selectionSummary, ceilingWriteTargetRoom } fro
 // 要約の下に、選択中のセル群の天井材・仕上げの MaterialSelect を2つ出す（S3）。「仕上げは部屋に1つ」なので
 // 書込み先は常に部屋の customOverrides（ceilingPanel／ceilingFinish。ceilingWriteTargetRoom が所属から解く）。
 // 部屋の無い階段なら disabled の「—」。undo は仕上げ表の master 欄と同じ withFinishUndo（欄単位で1エントリ）。
-// 表の天井材・仕上げは読むだけ（略称表示）、CH は読むだけ（天井区画は S5）。行の組み立ては ceilingPanelRows.js。
+// 表の天井材・仕上げは読むだけ（略称表示）、CH は読むだけ（区画が効いていれば最小～最大の表記。区画の書込みは下の「区画の高さ」欄）。
+// 行の組み立ては ceilingPanelRows.js、区画の組み立ては ceilingZones.js。
 
 const TABS = [
   { id: 'interior', label: '内部' },
@@ -62,6 +67,54 @@ const CeilingMaterialFields = observer(({ graph, mode, room }) => {
   );
 });
 
+// 選択が変わったら入力途中の text を捨てるため、欄を選択の識別子で作り直す
+const zoneFieldKey = selection => `${selection.owner.kind}:${selection.owner.id}:${[...selection.cellKeys].sort().join(',')}`;
+
+const ZONE_STATE_PLACEHOLDER = { none: '部屋のCH', mixed: '混在' };
+
+// 区画の高さの欄（S5）。選択中のセル群へ「部屋の FL からの天井高」を区画として書く。書込み先は所属が部屋のときだけ
+// （階段所属は傾斜と同時の S6 まで disabled）。確定は withFinishUndo で1エントリ＋markDirty。部屋の CH 欄（override）には書かない。
+// 確定後も選択は保つ。0 以下・非数は確定せずメッセージを出す。
+const CeilingZoneField = observer(({ graph, selection, zone }) => {
+  const [text, setText] = useState('');
+  const [error, setError] = useState(false);
+  const room = ceilingZoneTargetRoom(graph, selection);
+  const disabled = !room;
+  const commit = () => {
+    const mm = parsePlanCutHeightInput(text);
+    if (mm == null) { setError(true); return; }
+    setError(false);
+    withFinishUndo(graph, () => room.setCeilingZones(assignZoneHeight(graph, room, selection.cellKeys, mm)));
+    markDirty();
+    setText('');
+  };
+  const clear = () => {
+    withFinishUndo(graph, () => room.setCeilingZones(clearZoneCells(graph, room, selection.cellKeys)));
+    markDirty();
+  };
+  const placeholder = zone?.state === 'uniform' ? String(zone.heightMm) : (ZONE_STATE_PLACEHOLDER[zone?.state] ?? '部屋のCH');
+  const title = disabled ? '階段の天井高さの指定は傾斜天井と同時に対応します（現在は部屋のセルのみ）' : undefined;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: '1px solid #e2e8f0', background: '#fafafa', flexShrink: 0, fontSize: 12, color: '#374151' }}>
+      <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>区画の高さ：</span>
+      <input
+        type="number"
+        value={text}
+        disabled={disabled}
+        title={title}
+        placeholder={placeholder}
+        onChange={e => { setText(e.target.value); setError(false); }}
+        onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' && !disabled) commit(); }}
+        style={{ width: 90, fontSize: 12, borderColor: error ? '#dc2626' : undefined }}
+      />
+      <span>mm</span>
+      <button onClick={commit} disabled={disabled} title={title} style={{ fontSize: 12 }}>確定</button>
+      <button onClick={clear} disabled={disabled || zone?.state === 'none'} title={title} style={{ fontSize: 12 }}>区画を解除</button>
+      {error && <span style={{ color: '#dc2626' }}>正の数を入力してください</span>}
+    </div>
+  );
+});
+
 export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
   const rows = mode.activeTab === 'stair' ? stairRows(graph, mode.materialMap) : interiorRows(graph, mode.materialMap);
   const summary = selectionSummary(graph, mode.selection);
@@ -70,10 +123,16 @@ export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
       {summary && (
         <div style={{ padding: '6px 10px', fontSize: 12, color: '#1e3a8a', background: '#eff6ff', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
           選択中: {summary.name}／{summary.cellCount}セル／CH {dash(summary.ch)}
+          {summary.zone && summary.zone.state !== 'none' && (
+            <>／区画 {summary.zone.state === 'uniform' ? `${summary.zone.heightMm}mm` : '混在'}</>
+          )}
         </div>
       )}
       {mode.selection && (
         <CeilingMaterialFields graph={graph} mode={mode} room={ceilingWriteTargetRoom(graph, mode.selection)} />
+      )}
+      {mode.selection && (
+        <CeilingZoneField key={zoneFieldKey(mode.selection)} graph={graph} selection={mode.selection} zone={summary?.zone ?? null} />
       )}
       <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', flexShrink: 0 }}>
         {TABS.map(tab => (

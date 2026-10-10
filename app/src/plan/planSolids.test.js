@@ -12,6 +12,7 @@ import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { columnWrapSolids } from '../finish/columnWrap.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { planSectionFigure } from './planSectionFigure.js';
+import { assignZoneHeight } from '../ceiling/ceilingZones.js';
 import {
   makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid, linesOf, mergedLines, totalLength,
 } from './planTestFixtures.js';
@@ -715,6 +716,28 @@ test('天井: 屋外・吹抜け・階段・階段吹抜け・未定義・屋根
   g.feature([[4, 0]], RoomFeature.UNDEFINED);
   g.roof([[5, 0]]);
   assert.deepEqual(ofKind(planSolids(self(g.graph), { ceilings: true }), 'ceiling').map(s => s.source.id), [keep.id]);
+});
+
+test('天井区画（S5）: 区画のある部屋は「残り（source.id=部屋 id）＋区画（source.id=部屋id#区画id）」の別立体になり、区画の zHi は FL＋床段差＋区画の高さ。区画の無い部屋の source.id・個数は不変', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
+  const a = g.interior([[0, 0], [1, 0]]);
+  const plain = g.interior([[2, 0]]);
+  a.setFloorLevel(100);
+  a.setCeilingZones(assignZoneHeight(g.graph, a, [g.cell(1, 0)], 2700));
+  const zoneId = a.ceilingZones[0].id;
+  const ceilings = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 50 })], { ceilings: true }), 'ceiling');
+  assert.deepEqual(ceilings.map(s => s.source.id).sort(), [a.id, `${a.id}#${zoneId}`, plain.id].sort());
+  const rest = ceilings.find(s => s.source.id === a.id);
+  const zone = ceilings.find(s => s.source.id === `${a.id}#${zoneId}`);
+  assert.deepEqual(rest.footprint, { rects: [rect(0, 0, 2000, 3000)] });
+  assert.deepEqual(zone.footprint, { rects: [rect(2000, 0, 4000, 3000)] });
+  assert.equal(rest.zHi, 50 + 100 + 2400, '残り: 床段差 100＋部屋の CH（自分の CH 欄なし＝既定 2400）');
+  assert.equal(zone.zHi, 50 + 100 + 2700, '区画: 床段差 100＋区画の高さ 2700');
+  assert.equal(ceilings.find(s => s.source.id === plain.id).zHi, 50 + 2400);
+  // 区画の無い文書: 区画を外せば出力は区画導入前と同じ（id は部屋 id のみ）
+  a.setCeilingZones([]);
+  const back = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 50 })], { ceilings: true }), 'ceiling');
+  assert.deepEqual(back.map(s => s.source.id).sort(), [a.id, plain.id].sort());
 });
 
 test('SOLID_KIND_ORDER: ceiling は stairTread と generic の間。既存種別の相対順は不変', () => {

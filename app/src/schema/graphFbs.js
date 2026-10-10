@@ -137,7 +137,12 @@ const RS = {
   EAVE_OVERHANG: 5, GABLE_OVERHANG: 6, SOFFIT: 7, NOTE: 8, HIGH_SIDE: 9, RIDGE_DIRECTION: 10, COLUMN_THROUGH: 11,
 };
 
-// Room: 31 フィールド
+// CeilingZone（天井区画。Room.ceilingZones）: 6 フィールド。項目集合は core/ceilingZone.js の CEILING_ZONE_KEYS が唯一の定義。
+// HAS_HEIGHT/HEIGHT は floorLevel と同じ HAS 方式（heightMm null＝部屋の CH）。SHAPE は 'flat' 以外のときだけ書く（無ければ読みは 'flat'）。
+// DIMS（f64 vector）は空でないときだけ書く。正規化は復元側の restoreCeilingZones。
+const CZ = { ID: 0, CELLS: 1, HAS_HEIGHT: 2, HEIGHT: 3, SHAPE: 4, DIMS: 5 };
+
+// Room: 32 フィールド
 const RM = {
   ID: 0, NAME: 1, CELLS: 2, REF_IDS: 3, GEN_WALL_IDS: 4,
   HAS_POS: 5, POS_X: 6, POS_Y: 7,
@@ -153,6 +158,7 @@ const RM = {
   HAS_EXT_LEVEL: 25, EXT_LEVEL: 26, EXT_LEVEL_REF: 27, // おさえ(mm) / 基準（room=0 / gl=1）
   HAS_EXT_SLOPE: 28, EXT_SLOPE: 29, // 勾配 1/N の N
   ROOF_SPEC: 30, // 屋根の仕様（RS テーブル。feature=roof の部屋だけが持つ。無ければフィールド自体を書かない）
+  CEILING_ZONES: 31, // 天井区画（CZ テーブルの vector。区画が無い部屋は vector 自体を書かない＝既存文書のバイト列は不変）
 };
 
 // Room.kind 列挙値エンコード（VOID は旧データデコード専用。書き込みは INTERIOR/EXTERIOR のみ）
@@ -360,6 +366,13 @@ function writeVec(b, items, fn) {
 /** 文字列配列を FlatBuffers vector として書き込む */
 function writeStrVec(b, strings) {
   return writeVec(b, strings, (b2, s) => b2.createString(s));
+}
+
+/** 数値配列を float64 vector として書き込む */
+function writeF64Vec(b, nums) {
+  b.startVector(8, nums.length, 8);
+  for (let i = nums.length - 1; i >= 0; i--) b.addFloat64(nums[i]);
+  return b.endVector();
 }
 
 /** 共通スタイルプロパティの文字列を事前生成する */
@@ -698,8 +711,25 @@ function writeRoofSpec(b, rs) {
   return b.endObject();
 }
 
+function writeCeilingZone(b, z) {
+  const sId       = b.createString(z.id);
+  const cellsVec  = writeStrVec(b, z.cells ?? []);
+  const sShape    = z.shape && z.shape !== 'flat' ? b.createString(z.shape) : 0; // flat は書かない
+  const dimsVec   = z.dims?.length ? writeF64Vec(b, z.dims) : 0;                  // 空は書かない
+  b.startObject(6);
+  b.addFieldOffset(CZ.ID,         sId,      0);
+  b.addFieldOffset(CZ.CELLS,      cellsVec, 0);
+  b.addFieldInt8(CZ.HAS_HEIGHT,   z.heightMm != null ? 1 : 0, 0);
+  b.addFieldFloat64(CZ.HEIGHT,    z.heightMm ?? 0.0, 0.0);
+  b.addFieldOffset(CZ.SHAPE,      sShape,   0);
+  b.addFieldOffset(CZ.DIMS,       dimsVec,  0);
+  return b.endObject();
+}
+
 function writeRoom(b, rm) {
   const roofSpecOff = writeRoofSpec(b, rm.roofSpec ?? null);
+  // 区画が無い部屋は vector を作らない（区画の無い全文書のバイト列を不変に保つ）
+  const ceilingZonesVec = rm.ceilingZones?.length ? writeVec(b, rm.ceilingZones, writeCeilingZone) : 0;
   const cellsVec    = writeStrVec(b, rm.cells);
   const refIdsVec   = writeStrVec(b, rm.referenceRoomIds);
   const genWallVec  = writeStrVec(b, rm.generatedWallIds);
@@ -727,7 +757,7 @@ function writeRoom(b, rm) {
   const kindEnc    = isLegacyVoidKind ? ROOM_KIND_ENC.interior : (ROOM_KIND_ENC[rm.kind] ?? 0);
   const featureVal = isLegacyVoidKind ? 'void' : (rm.feature ?? null);
 
-  b.startObject(31);
+  b.startObject(32);
   b.addFieldOffset(RM.ID,           sId,          0);
   b.addFieldOffset(RM.NAME,         sName,        0);
   b.addFieldOffset(RM.CELLS,        cellsVec,     0);
@@ -759,6 +789,7 @@ function writeRoom(b, rm) {
   b.addFieldInt8(RM.HAS_EXT_SLOPE,   rm.exteriorSlope != null ? 1 : 0, 0);
   b.addFieldFloat64(RM.EXT_SLOPE,    rm.exteriorSlope ?? 0.0, 0.0);
   b.addFieldOffset(RM.ROOF_SPEC,     roofSpecOff,  0);
+  b.addFieldOffset(RM.CEILING_ZONES, ceilingZonesVec, 0);
   return b.endObject();
 }
 
@@ -1216,6 +1247,16 @@ function makeReader(bb, tablePos) {
       for (let i = 0; i < len; i++) out.push(bb.__string(start + i * 4));
       return out;
     },
+    f64Vec: n => {
+      const o = f(n);
+      if (!o) return [];
+      const vecOff = tablePos + o;
+      const len    = bb.__vector_len(vecOff);
+      const start  = bb.__vector(vecOff);
+      const out    = [];
+      for (let i = 0; i < len; i++) out.push(bb.readFloat64(start + i * 8));
+      return out;
+    },
   };
 }
 
@@ -1458,6 +1499,18 @@ function readRoofSpec(bb, tablePos) {
   };
 }
 
+// 天井区画の plain 表現（CeilingZone.toData と同じキー集合）。値の正規化は復元側の restoreCeilingZones。
+function readCeilingZone(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    id:       r.str(CZ.ID),
+    cells:    r.strVec(CZ.CELLS),
+    heightMm: r.i8(CZ.HAS_HEIGHT) ? r.f64(CZ.HEIGHT) : null,
+    shape:    r.str(CZ.SHAPE) || 'flat',
+    dims:     r.f64Vec(CZ.DIMS),
+  };
+}
+
 function readRoom(bb, tablePos) {
   const r = makeReader(bb, tablePos);
   const ovrKeys = r.strVec(RM.OVR_KEYS);
@@ -1500,6 +1553,7 @@ function readRoom(bb, tablePos) {
     exteriorLevelRef: EXT_LEVEL_REF_DEC[r.i8(RM.EXT_LEVEL_REF)] ?? 'room',
     exteriorSlope:    r.i8(RM.HAS_EXT_SLOPE) ? r.f64(RM.EXT_SLOPE) : null,
     roofSpec:         readRoofSpec(bb, r.nested(RM.ROOF_SPEC)),
+    ceilingZones:     r.vec(RM.CEILING_ZONES, readCeilingZone),
   };
 }
 

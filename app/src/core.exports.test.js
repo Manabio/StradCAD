@@ -6,7 +6,10 @@ import * as core from '@core';
 
 const EXPECTED_EXPORTS = [
   'Arc',
+  'CEILING_ZONE_KEYS',
   'CL_OVERLAP_TOL_MM',
+  'CeilingShape',
+  'CeilingZone',
   'CenterLine',
   'CenterLineType',
   'Circle',
@@ -122,6 +125,7 @@ const EXPECTED_EXPORTS = [
   'openingHostRefCLs',
   'openingHostRefIds',
   'planCutHeightMmOf',
+  'restoreCeilingZones',
   'spanKey',
   'totalStepsFromSections',
 ].sort();

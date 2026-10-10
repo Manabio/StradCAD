@@ -383,9 +383,10 @@ function stairTreadSolids(layer, riserFor) {
  * @param {SolidLayer} layer
  */
 function ceilingSolids(layer) {
-  return ceilingSurfacesOf(layer.graph).map(({ roomId, rects, zMm }) => ({
+  return ceilingSurfacesOf(layer.graph).map(({ roomId, zoneId, rects, zMm }) => ({
     kind: 'ceiling', footprint: { rects }, zLo: layer.floorZMm + zMm, zHi: layer.floorZMm + zMm,
-    source: baseSource(layer, 'ceiling', roomId),
+    // 区画（S5）の面は `${roomId}#${zoneId}`、残り（部屋の CH）は roomId のまま（区画の無い文書の key・順序は不変）
+    source: baseSource(layer, 'ceiling', zoneId ? `${roomId}#${zoneId}` : roomId),
   }));
 }
 

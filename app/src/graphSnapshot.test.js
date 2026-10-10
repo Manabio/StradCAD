@@ -4,7 +4,7 @@ import {
   Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef,
   DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF, ShaftSoundproof, StairType,
   ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE, StructuralMaterialType, edgeKey,
-  RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec,
+  RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec, CEILING_ZONE_KEYS, restoreCeilingZones,
 } from './core.js';
 import { NON_DEFAULT_ROOF_SPEC } from './finish/roofTestFixtures.js';
 import { ByteBuffer } from 'flatbuffers';
@@ -2729,4 +2729,120 @@ test('【失敗系】serializeGraphWithFreshLineIds: newIdが同じ値を2回返
 
   const bytesAfter = serializeGraph(graph);
   assert.deepEqual(bytesAfter, bytesBefore, '入力グラフのバイト列は振り直し失敗の前後で変わらない');
+});
+
+// ---- 天井区画（S5。Room.ceilingZones。FBS の CZ テーブル＋RM.CEILING_ZONES=31。区画が無い部屋は vector を書かない） ----
+// 2部屋（居間・寝室）を持つ階。居間の区画に zones を付ける。
+function makeGraphWithZones(zonesData) {
+  const graph = makeGraph();
+  const opt = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    opt);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   1000, opt);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL,   2000, opt);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    opt);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, opt);
+  const cellA = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const cellB = `${x1.id}:${y0.id}:${x2.id}:${y1.id}`;
+  const living = graph.addRoom(new Set([cellA, cellB]), '居間');
+  const bed = graph.addRoom(new Set(), '寝室');
+  living.setCeilingZones(restoreCeilingZones(zonesData ? zonesData({ cellA, cellB }) : []));
+  return { graph, living, bed, cellA, cellB };
+}
+const ZONES_FULL = ({ cellA, cellB }) => [
+  { id: 'za', cells: [cellA], heightMm: null, shape: 'dome', dims: [1200, 300.5] },
+  { id: 'zb', cells: [cellB], heightMm: 2750.5, shape: 'flat', dims: [] },
+];
+
+test('【S5】FlatBuffers encode→decode: 区画（高さ null と有限・shape dome・dims [1200, 300.5]）が往復する。区画の無い部屋は []', () => {
+  const { graph, living, bed, cellA, cellB } = makeGraphWithZones(ZONES_FULL);
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()), [
+    { id: 'za', cells: [cellA], heightMm: null, shape: 'dome', dims: [1200, 300.5] },
+    { id: 'zb', cells: [cellB], heightMm: 2750.5, shape: 'flat', dims: [] },
+  ]);
+  assert.deepEqual([...restored.roomMap.get(bed.id).ceilingZones], []);
+  assert.ok(Object.isFrozen(restored.roomMap.get(living.id).ceilingZones));
+});
+
+test('【S5】plain 経路（decodeFloorSnapshot→JSON→restoreGraph）でも往復し、読み側の区画のキー集合は CEILING_ZONE_KEYS', () => {
+  const { graph, living } = makeGraphWithZones(ZONES_FULL);
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  const plain = snapshot.rooms.find(r => r.id === living.id);
+  for (const z of plain.ceilingZones) assert.deepEqual(Object.keys(z).sort(), [...CEILING_ZONE_KEYS].sort());
+  const restored = makeGraph();
+  restoreGraph(restored, JSON.parse(JSON.stringify(snapshot)));
+  assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()), living.ceilingZones.map(z => z.toData()));
+});
+
+// i 番目の部屋の FBS テーブルに、フィールド番号 fieldNo が書かれているか（vtable の有無）を直接読む。
+function roomHasField(bytes, roomIdx, fieldNo) {
+  const bb = new ByteBuffer(bytes);
+  const root = bb.readInt32(bb.position()) + bb.position();
+  const vecOff = root + bb.__offset(root, 4 + 9 * 2); // GS.ROOMS=9
+  const table = bb.__indirect(bb.__vector(vecOff) + roomIdx * 4);
+  return bb.__offset(table, 4 + fieldNo * 2) !== 0;
+}
+
+test('【S5】区画の無い部屋は RM.CEILING_ZONES(31) を書かない（空の vector も作らない）。区画のある部屋だけが書く（読み取りの対照つき）', () => {
+  const { graph, living, bed } = makeGraphWithZones(ZONES_FULL);
+  const bytes = serializeGraph(graph);
+  const idx = id => graph.roomOrder.indexOf(id);
+  assert.equal(roomHasField(bytes, idx(living.id), 31), true, '対照: 区画のある部屋は書く（読み取りヘルパーが効いている）');
+  assert.equal(roomHasField(bytes, idx(living.id), 2), true, '対照: 既存フィールド CELLS(2)');
+  assert.equal(roomHasField(bytes, idx(bed.id), 31), false, '区画の無い部屋は書かない');
+  living.setCeilingZones([]);
+  assert.equal(roomHasField(serializeGraph(graph), idx(living.id), 31), false, 'setCeilingZones([]) 後も書かない');
+});
+
+test('【S5】区画の無いグラフのバイト列は不変: ceilingZones のキーが無い snapshot の encode と一致し、区画を付けて外しても元と一致する', () => {
+  const { graph, living, cellA } = makeGraphWithZones(null);
+  const base = serializeGraph(graph);
+  const snap = decodeFloorSnapshot(base);
+  snap.rooms.forEach(r => { delete r.ceilingZones; });
+  assert.deepEqual([...encodeFloorSnapshot(snap)], [...base], '旧形式（キー無し）と同じバイト列＝空の vector を書かない');
+
+  living.setCeilingZones(restoreCeilingZones([{ id: 'za', cells: [cellA], heightMm: 2400 }]));
+  assert.ok(serializeGraph(graph).length > base.length, '区画ありは CZ ぶん長くなる');
+  living.setCeilingZones([]);
+  assert.deepEqual([...serializeGraph(graph)], [...base], 'setCeilingZones([]) 後も元と同じ（1バイトも変わらない）');
+});
+
+test('【S5・失敗系】旧データ（ceilingZones が無い snapshot）は []。壊れた区画は復元で正規化され、不正は捨てられる', () => {
+  const { graph, living, cellA, cellB } = makeGraphWithZones(ZONES_FULL);
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  const plain = snapshot.rooms.find(r => r.id === living.id);
+  plain.ceilingZones = [
+    { id: 'ok', cells: [cellB, cellA, cellA], heightMm: -5, shape: 'pyramid', dims: [NaN, 7] },
+    { id: '', cells: [cellA], heightMm: 2400 },
+    { id: 'empty', cells: [cellA], heightMm: null },
+  ];
+  const restored = makeGraph();
+  restoreGraph(restored, snapshot);
+  assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()), [
+    { id: 'ok', cells: [cellA, cellB].sort(), heightMm: null, shape: 'flat', dims: [7] },
+  ], '高さ -5→null・未知 shape→flat・dims の NaN 除外（dims が残るので区画は残る）。id なしと指定なし（先の区画にセルも取られた）は捨てる');
+
+  delete snapshot.rooms.find(r => r.id === living.id).ceilingZones; // 旧データ（キー自体が無い）
+  const old = makeGraph();
+  restoreGraph(old, snapshot);
+  assert.deepEqual([...old.roomMap.get(living.id).ceilingZones], []);
+});
+
+test('【S5】階の複製・検討案のコピー（serializeGraphWithFreshLineIds）では区画のセルの線 id も振り直され、部屋のセルと同じ新 id を指す', () => {
+  const { graph, living } = makeGraphWithZones(ZONES_FULL);
+  const copy = makeGraph();
+  restoreGraph(copy, serializeGraphWithFreshLineIds(graph));
+  const room = copy.roomMap.get(living.id);
+  assert.equal(room.ceilingZones.length, 2);
+  const roomCellIds = new Set([...room.cells].flatMap(k => k.split(':')));
+  const origIds = new Set([...living.cells].flatMap(k => k.split(':')));
+  for (const z of room.ceilingZones) {
+    assert.ok(z.cells.every(c => room.cells.has(c)), '区画のセルは部屋のセルと同じ新キー');
+    for (const id of z.cells.flatMap(k => k.split(':'))) {
+      assert.ok(roomCellIds.has(id));
+      assert.ok(!origIds.has(id), '旧 id のまま残っていない');
+    }
+  }
+  assert.deepEqual(room.ceilingZones.map(z => [z.id, z.heightMm, z.shape, z.dims]), [['za', null, 'dome', [1200, 300.5]], ['zb', 2750.5, 'flat', []]]);
 });

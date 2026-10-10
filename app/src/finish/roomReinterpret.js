@@ -14,7 +14,7 @@
 //                            （少ない方の cells が空になれば部屋自体を削除）
 // ================================================================
 
-import { Room, RoomFeature, isShaftFeature, isRoofFeature } from '@core';
+import { Room, RoomFeature, isShaftFeature, isRoofFeature, restoreCeilingZones } from '@core';
 import {
   lostSides, cellInteriorPoint, regionCellsAt, refreshCells, cellBoundsFromKey, worldToCell,
   gridIndexOf, isActiveAcrossRange,
@@ -594,6 +594,7 @@ export function snapshotRoomsState(graph) {
         kind: r.kind, feature: r.feature, templateKey: r.templateKey, floorLevel: r.floorLevel,
         exteriorSlope: r.exteriorSlope, exteriorLevelRef: r.exteriorLevelRef, exteriorLevel: r.exteriorLevel,
         roofSpec: r.roofSpec ? r.roofSpec.toData() : null,
+        ceilingZones: r.ceilingZones.map(z => z.toData()),
         namePosition: r.namePosition ? { x: r.namePosition.x, y: r.namePosition.y } : null,
         generatedWallIds: [...r.generatedWallIds],
         customOverrides: [...r.customOverrides],
@@ -615,6 +616,7 @@ export function restoreRoomsState(graph, snap) {
     if (d.exteriorLevelRef) room.setExteriorLevelRef(d.exteriorLevelRef);
     if (d.exteriorLevel != null) room.setExteriorLevel(d.exteriorLevel);
     restoreRoofSpecInto(room, d.roofSpec); // I1（ROOF なら補う／ROOF でなければ捨てる）
+    room.setCeilingZones(restoreCeilingZones(d.ceilingZones)); // 旧スナップショット（キー欠落）は []
     if (d.namePosition) room.setNamePosition(d.namePosition.x, d.namePosition.y);
     for (const [k, v] of d.customOverrides) room.customOverrides.set(k, v);
     for (const [k, v] of Object.entries(d.finish)) if (v) room.finish.setField(k, v);

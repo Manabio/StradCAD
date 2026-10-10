@@ -1,5 +1,5 @@
 import { runInAction } from 'mobx';
-import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec } from '@core';
+import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec, restoreCeilingZones } from '@core';
 import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 import { applyDocumentCodeNormalization } from './catalog/codeNormalization.js';
@@ -126,6 +126,8 @@ function buildSnapshot(graph) {
           exteriorLevel:    r.exteriorLevel ?? null,
           // 屋根の仕様（feature=roof の部屋だけ。無ければ null＝キー集合は RoofSpec.toData が唯一の定義）
           roofSpec:         r.roofSpec ? r.roofSpec.toData() : null,
+          // 天井区画（天伏）。キー集合は CeilingZone.toData が唯一の定義。区画なしは [] （FBS は vector 自体を書かない）
+          ceilingZones:     r.ceilingZones.map(z => z.toData()),
           // 個別上書きポケット（選択された材のみが結果的に永続化される）
           overrides:        [...r.customOverrides].map(([key, value]) => ({ key, value: String(value) })),
           finish: {
@@ -883,6 +885,7 @@ function applySnapshot(graph, snapshot) {
       if (d.exteriorLevelRef) room.setExteriorLevelRef(d.exteriorLevelRef);
       if (d.exteriorLevel != null) room.setExteriorLevel(d.exteriorLevel);
       restoreRoofSpecInto(room, d.roofSpec); // I1（ROOF なら補う／ROOF でなければ捨てる）
+      room.setCeilingZones(restoreCeilingZones(d.ceilingZones)); // 旧データ（キー欠落）は []。正規化は restoreCeilingZones
       for (const [key, val] of Object.entries(d.finish ?? {})) {
         if (val) room.finish.setField(key, val);
       }

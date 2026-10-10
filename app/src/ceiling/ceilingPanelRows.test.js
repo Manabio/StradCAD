@@ -1,11 +1,12 @@
 // 天伏パネルの行の組み立て（純モジュール）。内部タブは仕上げ表の述語（interiorTabRooms）と一致する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomKind, RoomFeature, StairType, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH } from '@core';
+import { RoomKind, RoomFeature, StairType, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH, CeilingZone } from '@core';
 import { makeGrid } from '../plan/planTestFixtures.js';
+import { assignZoneHeight } from './ceilingZones.js';
 import { interiorTabRooms, interiorRoomDisplayName } from '../finish/interiorTabRooms.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
-import { interiorRows, stairRows, selectionSummary, ceilingWriteTargetRoom, materialDisplay } from './ceilingPanelRows.js';
+import { interiorRows, stairRows, selectionSummary, ceilingWriteTargetRoom, ceilingZoneTargetRoom, materialDisplay } from './ceilingPanelRows.js';
 
 const XS = [0, 1000, 2000, 3000, 4000, 5000, 6000];
 
@@ -144,7 +145,7 @@ test('selectionSummary: 部屋の選択は 名前・解けたセル数・CH(raw)
   const g = makeGrid(XS, [0, 1000]);
   const a = g.interior([[0, 0], [1, 0]]);
   const sel = { owner: { kind: 'room', id: a.id, rowId: a.id }, cellKeys: new Set([g.cell(0, 0), g.cell(1, 0)]) };
-  assert.deepEqual(selectionSummary(g.graph, sel), { name: '居間', cellCount: 2, ch: roomCeilingHeight(g.graph, a).raw });
+  assert.deepEqual(selectionSummary(g.graph, sel), { name: '居間', cellCount: 2, ch: roomCeilingHeight(g.graph, a).raw, zone: { state: 'none', heightMm: null } });
   assert.equal(selectionSummary(g.graph, null), null);
 });
 
@@ -152,7 +153,7 @@ test('selectionSummary: 部屋の無い階段は 名前「タイプ 段数」・
   const g = makeGrid(XS, [0, 1000]);
   const s = g.graph.addStair({ type: StairType.STRAIGHT, totalSteps: 12, cells: new Set([g.cell(0, 0)]) });
   const sel = { owner: { kind: 'stair', id: s.id, rowId: s.id }, cellKeys: new Set([g.cell(0, 0)]) };
-  assert.deepEqual(selectionSummary(g.graph, sel), { name: '直進 12段', cellCount: 1, ch: null });
+  assert.deepEqual(selectionSummary(g.graph, sel), { name: '直進 12段', cellCount: 1, ch: null, zone: null });
 });
 
 test('【失敗系】selectionSummary: 解けないキーは数えない。行が見つからなければ名前「—」・ch=null（例外にしない）', () => {
@@ -161,5 +162,53 @@ test('【失敗系】selectionSummary: 解けないキーは数えない。行�
   const sel = { owner: { kind: 'room', id: a.id, rowId: a.id }, cellKeys: new Set([g.cell(0, 0), 'gone:gone:gone:gone']) };
   assert.equal(selectionSummary(g.graph, sel).cellCount, 1);
   const lost = { owner: { kind: 'room', id: 'x', rowId: 'x' }, cellKeys: new Set([g.cell(0, 0)]) };
-  assert.deepEqual(selectionSummary(g.graph, lost), { name: '—', cellCount: 1, ch: null });
+  assert.deepEqual(selectionSummary(g.graph, lost), { name: '—', cellCount: 1, ch: null, zone: { state: 'none', heightMm: null } });
+});
+
+// ---- 天井区画（S5）----
+
+test('CH 欄: 区画が効いている部屋は「残りの部屋 CH＋各区画の高さ」の最小～最大、全部同じなら数値。区画の無い部屋・効く区画の無い部屋は従来の raw。部屋の CH 欄（override）は書き換えない', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const mixed = g.interior([[0, 0], [1, 0]]);
+  mixed.setOverride('ceilingHeight', '2400');
+  mixed.setCeilingZones(assignZoneHeight(g.graph, mixed, [g.cell(1, 0)], 2800));
+  const same = g.interior([[2, 0]]);
+  same.setOverride('ceilingHeight', '2400');
+  same.setCeilingZones(assignZoneHeight(g.graph, same, [g.cell(2, 0)], 2400)); // 全域が区画＝残りなし
+  const ghost = g.interior([[3, 0]]);
+  ghost.setOverride('ceilingHeight', '2300～2500');
+  ghost.setCeilingZones([new CeilingZone({ id: 'z', cells: ['gone:gone:gone:gone'], heightMm: 2900 })]); // 効かない
+  const plain = g.interior([[4, 0]]);
+  plain.setOverride('ceilingHeight', '2350');
+  const ch = id => interiorRows(g.graph).find(r => r.id === id).ch;
+  assert.equal(ch(mixed.id), '2400～2800');
+  assert.equal(ch(same.id), '2400');
+  assert.equal(ch(ghost.id), '2300～2500', '効く区画なし＝raw のまま');
+  assert.equal(ch(plain.id), '2350');
+  assert.equal(mixed.getFinishInfo().ceilingHeight, '2400', 'override は変えない');
+  assert.equal(stairRows(g.graph).length, 0);
+});
+
+test('部屋 CH がレンジ表記で区画がある場合は raw のまま（既定値と合成しない）。区画の高さが全面に効いて部屋 CH を使う面が無ければ区画の表記', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const r = g.interior([[0, 0], [1, 0]]);
+  r.setOverride('ceilingHeight', '2300～2500');
+  r.setCeilingZones(assignZoneHeight(g.graph, r, [g.cell(1, 0)], 2800));
+  assert.equal(interiorRows(g.graph).find(x => x.id === r.id).ch, '2300～2500');
+  r.setCeilingZones(assignZoneHeight(g.graph, r, [g.cell(0, 0)], 2800));
+  assert.equal(interiorRows(g.graph).find(x => x.id === r.id).ch, '2800', '部屋 CH を使う面が無ければ区画だけ');
+});
+
+test('selectionSummary の zone と ceilingZoneTargetRoom: 部屋所属は区画の状態、階段所属は zone=null で書込み先なし（S6 まで無効）。解けない所属も null', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const a = g.interior([[0, 0], [1, 0]]);
+  a.setCeilingZones(assignZoneHeight(g.graph, a, [g.cell(0, 0)], 2600));
+  const sel = cells => ({ owner: { kind: 'room', id: a.id, rowId: a.id }, cellKeys: new Set(cells) });
+  assert.deepEqual(selectionSummary(g.graph, sel([g.cell(0, 0)])).zone, { state: 'uniform', heightMm: 2600 });
+  assert.deepEqual(selectionSummary(g.graph, sel([g.cell(0, 0), g.cell(1, 0)])).zone, { state: 'mixed', heightMm: null });
+  assert.equal(ceilingZoneTargetRoom(g.graph, sel([g.cell(0, 0)])), a);
+  const stair = { owner: { kind: 'stair', id: 's', rowId: 's' }, cellKeys: new Set() };
+  assert.equal(ceilingZoneTargetRoom(g.graph, stair), null);
+  assert.equal(ceilingZoneTargetRoom(g.graph, null), null);
+  assert.equal(ceilingZoneTargetRoom(g.graph, { owner: { kind: 'room', id: 'x', rowId: 'x' }, cellKeys: new Set() }), null);
 });

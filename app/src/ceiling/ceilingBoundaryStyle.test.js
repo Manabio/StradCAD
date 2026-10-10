@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { markSameHeightCeilingBoundaries, sameHeightBoundarySegments, CEILING_BOUNDARY_STYLE } from './ceilingBoundaryStyle.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
+import { assignZoneHeight } from './ceilingZones.js';
 import { planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp, drawnPrimitives } from '../plan/planSolidsLayerFilter.js';
 import { planSectionFigureUp } from '../plan/planSectionUp.js';
 import { makeGrid, rect } from '../plan/planTestFixtures.js';
@@ -181,4 +182,37 @@ test('壁のある境界: 解決器が天井の線を隠すので、境界に印
   const ceil = ceilingLines(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
   assert.ok(ceil.every(p => p.style === undefined), `印なし: ${JSON.stringify(ceil.filter(p => p.style).map(norm))}`);
   assert.ok(onX(ceil, 2000).every(p => lengthOf([p]) <= 57.5 + 1e-6), '境界の線は壁の隅の短い断片だけ');
+});
+
+// ---- 天井区画（S5）どうし・区画と残りの境界 ----
+
+test('区画と残りの境界: 高さが違えば印なしの1本（段差の見切り線）、同じ高さ（部屋の CH と同値の区画）ならグレーの印あり', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  room.setOverride('ceilingHeight', '2400');
+  room.setCeilingZones(assignZoneHeight(g.graph, room, [g.cell(1, 0)], 2800));
+  let ceil = ceilingLines(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
+  assert.deepEqual(onX(ceil, 2000).map(norm), [[2000, 0, 2000, 3000]], '段差の境界は1本');
+  assert.ok(ceil.every(p => p.style === undefined), '高さ違いは無印');
+
+  room.setCeilingZones(assignZoneHeight(g.graph, room, [g.cell(1, 0)], 2400));
+  ceil = ceilingLines(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
+  const boundary = onX(ceil, 2000);
+  assert.equal(boundary.length, 1);
+  assert.equal(boundary[0].style, CEILING_BOUNDARY_STYLE, '同じ高さの区画と残りの境界はグレー');
+});
+
+test('区画どうしの境界: 同じ高さでも別の区画（flat・高さ違いは別区画）。高さ違いは印なし、同じ高さを別区画に持たせた境界は印あり', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0], [2, 0]]);
+  room.setCeilingZones(assignZoneHeight(g.graph, room, [g.cell(0, 0)], 2500));
+  room.setCeilingZones(assignZoneHeight(g.graph, room, [g.cell(1, 0)], 2800));
+  let ceil = ceilingLines(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
+  assert.ok(onX(ceil, 2000).every(p => p.style === undefined), '2500|2800 は段差＝無印');
+  // 同じ高さの別区画は assign が束ねるので、直接 2 区画を置く（S6 で形状の違う同高さ区画がありうる箱の確認）
+  const [z0, z1] = room.ceilingZones;
+  room.setCeilingZones([z0.withHeight(2600), z1.withHeight(2600)]);
+  ceil = ceilingLines(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
+  const marked = onX(ceil, 2000).filter(p => p.style === CEILING_BOUNDARY_STYLE);
+  assert.equal(marked.length, 1, '同じ高さの区画どうしの境界はグレー1本');
 });

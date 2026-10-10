@@ -165,6 +165,9 @@ export class Room {
     // 屋根の仕様（RoofSpec | null）。不変条件 I1: feature===ROOF ⇔ roofSpec≠null。
     // 付与で作るのは仕上げモード（FinishModeState.applyNaming）、ROOF でなくなれば setFeature が捨てる。
     this.roofSpec         = null;
+    // 天井区画（CeilingZone の凍結配列。天伏モードで選んだセル群ごとの天井高。.claude/ceiling-model.md「天井区画（S5）」）。
+    // setFeature/setKind では消さない（customOverrides と同じ。天井を持たない部屋の区画は読む側が無視する）。
+    this.ceilingZones     = Object.freeze([]);
     this.generatedWallIds = new Set(); // 自動生成された Wall の ID を管理（非 observable）
     makeObservable(this, {
       name:                observable,
@@ -180,6 +183,8 @@ export class Room {
       exteriorLevel:       observable,
       roofSpec:            observable.ref,
       setRoofSpec:         action,
+      ceilingZones:        observable.ref,
+      setCeilingZones:     action,
       setName:             action,
       addCell:             action,
       removeCell:          action,
@@ -206,6 +211,7 @@ export class Room {
     if (feature !== RoomFeature.ROOF) this.roofSpec = null; // I1: ROOF でなくなれば屋根の仕様は捨てる
   }
   setRoofSpec(spec)          { this.roofSpec = spec; } // RoofSpec | null（作るのは仕上げモードの付与／復元）
+  setCeilingZones(zones)     { this.ceilingZones = Object.freeze([...zones]); } // CeilingZone[]（置換。差し引き・正規化は ceiling/ceilingZones.js）
   setNamePosition(x, y)     { this.namePosition = { x, y }; }
   setFloorLevel(mm)         { this.floorLevel = mm; } // mm | null（null = 階基準どおり）
   setExteriorSlope(n)       { this.exteriorSlope = n; } // 勾配1/N の N | null

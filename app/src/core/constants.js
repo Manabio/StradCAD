@@ -97,6 +97,13 @@ export const ROOF_SHAPE_LABELS = Object.freeze({
   [RoofShape.STAGGERED]: '棟違い',
   [RoofShape.FLAT]:      '陸屋根',
 });
+// 天井区画の形状（CeilingZone.shape。core/ceilingZone.js）。S5 は 'flat' だけを使う（傾斜・円弧・ドームは S6 以降。箱だけ先に持つ）。
+export const CeilingShape = Object.freeze({
+  FLAT:  'flat',  // 平面
+  SLOPE: 'slope', // 傾斜
+  ARC:   'arc',   // 円弧
+  DOME:  'dome',  // ドーム
+});
 // 片流れの高い側（RoofSpec.highSide。null＝自動で、表示時に finish/roof/roofGeometry.js resolveRoofHighSide が導く）。
 // y 軸は下向き正なので top＝y が小さい辺、left＝x が小さい辺。
 export const RoofHighSide = Object.freeze({

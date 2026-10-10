@@ -23,5 +23,8 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 ## Roomの屋根の仕様（`RM.ROOF_SPEC`→`RS`テーブル）はfeature=roofの部屋だけが持つ
 屋根でない部屋はフィールド自体を書かない（屋根の無い文書のバイト列は不変）。`RS`の項目集合は`core/roofSpec.js`の`ROOF_SPEC_KEYS`が唯一の定義で、読み書きは plain の`toData()`形をそのまま通す。`HIGH_SIDE=9`（片流れの高い側）・末尾の`RIDGE_DIRECTION=10`（切妻の棟木の向き）は文字列で、null（自動）のとき文字列もフィールドも書かず、読みは無ければnull（旧データ・使わない文書のバイト列は不変）。`COLUMN_THROUGH=11`（柱貫通）はint8でtrueのときだけ書き、無ければ読みはfalse（同じくバイト列は不変）。形状null（自動）は空文字、出幅0は正当な値なのでHASフラグを持たず読み側で既定へ読み替えない（正規化は復元側の`RoofSpec.fromData`）。
 
+## Roomの天井区画（`RM.CEILING_ZONES=31`→`CZ`テーブルのvector）は区画のある部屋だけが書く
+区画の無い部屋は空のvectorも作らない（区画の無い文書のバイト列は不変。`FloorSwapManager`のバイト列比較にも響くため）。項目集合は`core/ceilingZone.js`の`CEILING_ZONE_KEYS`が唯一の定義。`HEIGHT`はfloorLevelと同じHAS方式（null＝部屋のCH）、`SHAPE`は`'flat'`以外のときだけ文字列を書き（無ければflat）、`DIMS`（float64のvector）は空でないときだけ書く。float64のvectorは本ファイルで初めて使う（`writeF64Vec`/reader`f64Vec`）。読みはplainのまま返し、正規化（壊れた値・重複キー・空区画）は復元側の`restoreCeilingZones`。
+
 ## 主屋根（`GS.MAIN_ROOF_SPEC=53`→同じ`RS`テーブル）は既定値のとき書かない
 最上階の階ごと設定（`PlanGraph.mainRoofSpec`）。`graphSnapshot.buildSnapshot`が`isDefaultRoofSpec`で既定値なら`null`にし、`encode`は`null`のとき何も書かない（フィールド自体を省く）ので、主屋根を編集していない文書のバイト列は1バイトも変わらない（読み側は無ければ`restoreGraph`の`clear()`の既定値）。`RS`の読み書きは下屋と共用（`writeRoofSpec`/`readRoofSpec`）。

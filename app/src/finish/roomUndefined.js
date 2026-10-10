@@ -16,6 +16,7 @@ export function makeRoomUndefined(room) {
   room.setFeature(RoomFeature.UNDEFINED);
   room.setTemplateKey(null);
   room.customOverrides.clear();
+  room.setCeilingZones([]); // 天井区画も初期化（仕上げ関連。天井を持たない未定義に区画は残さない）
   for (const f of FINISH_FIELDS) room.finish.setField(f, '');
   room.setFloorLevel(null);
   room.namePosition = null;
