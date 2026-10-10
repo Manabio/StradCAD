@@ -3,7 +3,7 @@
  * RoomFinish / ExteriorFinishRow / Room）。core.js から分離。
  */
 import { makeObservable, observable, action } from 'mobx';
-import { RoomKind, RoomFeature, ExteriorLevelRef, DEFAULT_WALL_MATERIAL } from './constants.js';
+import { RoomKind, RoomFeature, ExteriorLevelRef, DEFAULT_WALL_MATERIAL, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH } from './constants.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
@@ -256,11 +256,15 @@ export class Room {
    * 内装マスター + 個別上書きをマージした、壁・天井フィールドの実効値。
    * 壁材（wallMaterial）はマスター・上書きとも未指定なら既定（せっこうボード t=12.5）に
    * フォールバックする（壁描画の仕上げ厚導出が部屋の壁材を単一情報源とするため）。
+   * 天井材（ceilingPanel）・天井仕上げ（ceilingFinish）も同様に既定（せっこうボード t=9.5／ビニールクロス）。
    */
   getFinishInfo() {
     const master = this._master();
     const info = { ...master, ...Object.fromEntries(this.customOverrides) };
     if (!info.wallMaterial) info.wallMaterial = DEFAULT_WALL_MATERIAL;
+    // 天井材・天井仕上げ（S3）も読み時に既定を補う（保存データへは書かない。旧文書にも既定が出る）
+    if (!info.ceilingPanel) info.ceilingPanel = DEFAULT_CEILING_PANEL;
+    if (!info.ceilingFinish) info.ceilingFinish = DEFAULT_CEILING_FINISH;
     return info;
   }
 }

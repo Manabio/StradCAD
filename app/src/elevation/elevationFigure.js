@@ -26,6 +26,7 @@ import {
 } from './elevationFloorProfile.js';
 import { solidPrimitivesForFace } from './elevationSolids.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
+import { formatMaterialLabel } from '../finish/materials/materialLabel.js';
 import {
   ElevationLineRole, weightForRole, faceGapLimitMm,
   WALL_LABEL_LINE_GAP_MM,
@@ -73,18 +74,9 @@ export function estimateWallLabelWidthPx(text) {
 // 移した——ユーザー明示指示2026-09「建具の断面描画方法：各建具が断面の描画方法を所持する」。
 // 帯の全幅も建具ごとに変わるため openingSectionWidthMm で引く。
 
-/**
- * 材名の展開図表示用言い換え（項目3。表示専用の変換——材マスター側のデータ（materialData.js）は
- * 変更しない）。「せっこうボード」→「PB」（複合名「強化せっこうボード」等も部分一致で「強化PB」に
- * なる。単純な文字列置換のため）、「t=<数値>」→「ア)<数値>」（せっこうボードに限らず全材共通。
- * 仕様に略記の指定が無いためt=表記の変換のみ全材適用する）。
- * @param {string} name
- * @returns {string}
- */
-export function formatMaterialLabel(name) {
-  if (typeof name !== 'string') return name;
-  return name.replace(/せっこうボード/g, 'PB').replace(/t=(\d+(?:\.\d+)?)/g, 'ア)$1');
-}
+// 材名の表示用言い換え（項目3）の本体は finish/materials/materialLabel.js（天伏パネルと共有）。
+// 既存の import 先（elevationVoid.js・テスト）を壊さないため同名で re-export する。
+export { formatMaterialLabel };
 
 /**
  * 巾木文字列（自由入力。RoomFinish.baseboardHeight）から高さ(mm)を解釈する。

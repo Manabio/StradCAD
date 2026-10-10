@@ -55,6 +55,19 @@ test('collectUsedMaterialCodes: 4系統（backing4フィールド・room overrid
   );
 });
 
+test('collectUsedMaterialCodes【S3】: 天井材・天井仕上げ（ceilingPanel／ceilingFinish）の override も使用中として収集する。未知キーは収集しない', () => {
+  const codes = collectUsedMaterialCodes(baseSnapshot({
+    rooms: [{ id: 'r1', overrides: [
+      { key: 'ceilingPanel', value: '301000000001' },
+      { key: 'ceilingFinish', value: '302000000001' },
+      { key: 'ceilingFoo', value: '301000000077' },
+    ] }],
+  }));
+  assert.ok(codes.has('301000000001'), '天井材');
+  assert.ok(codes.has('302000000001'), '天井仕上げ');
+  assert.ok(!codes.has('301000000077'), '未知キーは対象外');
+});
+
 test('collectUsedMaterialCodes【QA F2/T4】: shaftWallMaterial（昇降路壁材）も収集対象に含む', () => {
   const codes = collectUsedMaterialCodes(baseSnapshot({ shaftWallMaterial: '301000000020' }));
   assert.ok(codes.has('301000000020'), 'shaftWallMaterialのコードが収集されていない');

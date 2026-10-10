@@ -11,9 +11,15 @@ import { readAppSrc, stripCommentLines, extractArrowFunctionBody, extractFunctio
 const readSrc = (rel) => fs.readFileSync(path.resolve(import.meta.dirname, rel), 'utf8');
 const appCode = stripCommentLines(readAppSrc());
 
-test('【配線】App.jsx: ceiling のローダーは CeilingModeState を new して返す（init なし・floorplan と同型）', () => {
+test('【配線】App.jsx: ceiling のローダーは CeilingModeState を new して await s.init() してから返す（材データのロード。finish と同型）', () => {
   assert.match(appCode,
-    /^\s*\? import\('\.\/modes\/CeilingModeState\.js'\)\.then\(m => new m\.CeilingModeState\(\)\)\s*$/m);
+    /^\s*\? import\('\.\/modes\/CeilingModeState\.js'\)\.then\(async m => \{\s*$/m);
+  const start = appCode.indexOf("import('./modes/CeilingModeState.js')");
+  assert.ok(start >= 0, 'CeilingModeState のローダーが見つからない');
+  const block = appCode.slice(start, appCode.indexOf('})', start));
+  assert.match(block, /^\s*const s = new m\.CeilingModeState\(\);\s*$/m);
+  assert.match(block, /^\s*await s\.init\(\);/m);
+  assert.match(block, /^\s*return s;\s*$/m);
   assert.match(appCode, /^\s*: appMode === 'ceiling'\s*$/m);
 });
 
@@ -36,11 +42,40 @@ test('【配線】App.jsx: 天伏は仕上げ表パネルを出さず、modeBoun
 test('【配線】CeilingPanel.jsx: タブは mode.setActiveTab、行は ceilingPanelRows、横長は ModePanel・縦長は BottomSheet（title 天伏）', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
   assert.match(code, /^\s*onClick=\{\(\) => mode\.setActiveTab\(tab\.id\)\}\s*$/m);
-  assert.match(code, /^\s*const rows = mode\.activeTab === 'stair' \? stairRows\(graph\) : interiorRows\(graph\);\s*$/m);
+  assert.match(code, /^\s*const rows = mode\.activeTab === 'stair' \? stairRows\(graph, mode\.materialMap\) : interiorRows\(graph, mode\.materialMap\);\s*$/m);
   assert.match(code, /^\s*onClick=\{\(\) => \{ if \(row\.kind === 'room'\) mode\.selectRoom\(row\.id\); \}\}\s*$/m);
   assert.match(code, /<ModePanel title="天伏" /);
   assert.match(code, /<BottomSheet title="天伏" /);
-  assert.ok(!/FinishTable|FinishModeState/.test(code), 'CeilingPanel が仕上げ表／FinishModeState を引いている');
+  // S3 で材選択の部品 MaterialSelect だけは仕上げ表から共用する（旧: FinishTable 全般を禁止）。表本体・State は引かない。
+  assert.ok(!/FinishModeState|<FinishTable\b/.test(code), 'CeilingPanel が FinishModeState／仕上げ表本体を引いている');
+  const finishTableImports = code.split(/\r?\n/).filter(l => /^import .* from '.*FinishTable/.test(l));
+  assert.deepEqual(finishTableImports, ["import { MaterialSelect } from '../finish/FinishTable.jsx';"]);
+});
+
+test('【配線】CeilingPanel.jsx: 天井材・仕上げの MaterialSelect 2つ（panel／finish）が setOverride／clearOverride を withFinishUndo で包んで部屋に書く。書込み先は ceilingWriteTargetRoom', () => {
+  const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
+  assert.match(code, /^\s*\{ key: 'ceilingPanel', {2}label: '天井材', category: 'panel' \},\s*$/m);
+  assert.match(code, /^\s*\{ key: 'ceilingFinish', label: '仕上げ', category: 'finish' \},\s*$/m);
+  assert.match(code, /^\s*onChange=\{v => withFinishUndo\(graph, \(\) => \(v === '' \? room\.clearOverride\(f\.key\) : room\.setOverride\(f\.key, v\)\)\)\}\s*$/m);
+  assert.match(code, /^\s*<CeilingMaterialFields graph=\{graph\} mode=\{mode\} room=\{ceilingWriteTargetRoom\(graph, mode\.selection\)\} \/>\s*$/m);
+  assert.match(code, /^\s*\{mode\.selection && \(\s*$/m);
+  assert.match(code, /^import \{ withFinishUndo \} from '\.\.\/finish\/finishUndo\.js';\s*$/m);
+});
+
+test('【配線】CeilingPanel.jsx: 部屋の無い階段（room が null）では天井材・仕上げの select は disabled で「—」の1択', () => {
+  const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
+  assert.match(code, /^\s*<select disabled value="" style=\{\{ flex: 1, minWidth: 0 \}\} title="部屋の無い階段には天井材・仕上げを指定できません">\s*$/m);
+  assert.match(code, /^\s*<option value="">—<\/option>\s*$/m);
+});
+
+test('【配線】FinishTable.jsx: INTERIOR_FIELDS の天井グループは 天井材(panel)・仕上げ(finish)・H・周り縁 の4列で、旧 ceilingMaterial を持たない', () => {
+  const code = stripCommentLines(readSrc('finish/FinishTable.jsx'));
+  assert.match(code, /^\s*\{ key: 'ceilingPanel',\s+label: '天井材',\s+group: '天井', groupSpan: 4, kind: 'material', category: 'panel',\s+source: 'master' \},\s*$/m);
+  assert.match(code, /^\s*\{ key: 'ceilingFinish',\s+label: '仕上げ',\s+group: null,\s+groupSpan: 0, kind: 'material', category: 'finish', source: 'master' \},\s*$/m);
+  assert.match(code, /^\s*\{ key: 'ceilingHeight',\s+label: 'H',/m);
+  assert.match(code, /^\s*\{ key: 'cornice',\s+label: '周り縁',/m);
+  assert.ok(!/ceilingMaterial/.test(code), 'FinishTable.jsx に旧 ceilingMaterial が残っている');
+  assert.match(code, /^\s*\['ceilingPanel', 'ceilingFinish'\],\s*$/m);
 });
 
 // ---- usePointerInteraction.js: 天伏はガター内パン・ピンチ＋天井セルのドラッグ選択（S2）----

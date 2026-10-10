@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature, ROOF_SPEC_KEYS } from '@core';
-import { FinishModeState } from './FinishModeState.js';
+import { FinishModeState, MATERIAL_CODE_OVERRIDE_FIELDS } from './FinishModeState.js';
+import { enumerateMaterialCodeRefs, ROOM_MATERIAL_OVERRIDE_KEYS } from '../catalog/codeNormalization.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { restoreGraph, serializeGraph } from '../graphSnapshot.js';
@@ -576,6 +577,22 @@ test('FinishModeState.init: CL偏芯のbackingが既知コードならmaterialEr
 
   assert.equal(result.ok, true);
   assert.equal(state.materialError, null);
+});
+
+// ---- S3: 天井材・天井仕上げ（customOverrides.ceilingPanel / ceilingFinish）も材照合対象 ----
+test('ROOM_MATERIAL_OVERRIDE_KEYS（codeNormalization）と MATERIAL_CODE_OVERRIDE_FIELDS（FinishModeState）は同じ集合（双方向。片方だけ余分でも赤）', () => {
+  const a = new Set(ROOM_MATERIAL_OVERRIDE_KEYS);
+  const b = new Set(MATERIAL_CODE_OVERRIDE_FIELDS);
+  assert.deepEqual([...a].filter(k => !b.has(k)), [], 'codeNormalization にだけあるキー');
+  assert.deepEqual([...b].filter(k => !a.has(k)), [], 'FinishModeState にだけあるキー');
+});
+
+test('MATERIAL_CODE_OVERRIDE_FIELDS【S3】: 壁材・壁仕上げ・天井材・天井仕上げの4キー。codeNormalization の走査器と同じ集合', () => {
+  assert.deepEqual([...MATERIAL_CODE_OVERRIDE_FIELDS], ['wallMaterial', 'wallFinish', 'ceilingPanel', 'ceilingFinish']);
+  const refs = enumerateMaterialCodeRefs({
+    rooms: [{ id: 'r', overrides: MATERIAL_CODE_OVERRIDE_FIELDS.map(key => ({ key, value: '301000000001' })) }],
+  });
+  assert.deepEqual(refs.map(r => r.key), [...MATERIAL_CODE_OVERRIDE_FIELDS]);
 });
 
 // ---- ステップ7b: interiorMastersはcomposeCatalog(INTERIOR_MASTER)の結果（Map）----

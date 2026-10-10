@@ -36,7 +36,8 @@ const INTERIOR_FIELDS = [
   { key: 'wallFinish',        label: '壁仕上げ', group: null,   groupSpan: 0, kind: 'material', category: 'finish', source: 'master' },
   { key: 'dadoMaterial',      label: '腰仕上げ', group: null,   groupSpan: 0, kind: 'text',   source: 'finish' },
   { key: 'dadoHeight',        label: '腰H',      group: null,   groupSpan: 0, kind: 'text',   source: 'finish' },
-  { key: 'ceilingMaterial',   label: '仕上げ',   group: '天井', groupSpan: 3, kind: 'text',   source: 'finish' },
+  { key: 'ceilingPanel',      label: '天井材',   group: '天井', groupSpan: 4, kind: 'material', category: 'panel',  source: 'master' },
+  { key: 'ceilingFinish',     label: '仕上げ',   group: null,   groupSpan: 0, kind: 'material', category: 'finish', source: 'master' },
   { key: 'ceilingHeight',     label: 'H',        group: null,   groupSpan: 0, kind: 'text',   source: 'master' },
   { key: 'cornice',           label: '周り縁',   group: null,   groupSpan: 0, kind: 'text',   source: 'finish' },
   { key: 'note',              label: '備考',     group: '備考', groupSpan: 1, kind: 'text',   source: 'finish' },
@@ -53,7 +54,8 @@ const CARD_FIELD_LABELS = {
   wallFinish:        '壁仕上げ',
   dadoMaterial:      '腰仕上げ',
   dadoHeight:        '腰 H',
-  ceilingMaterial:   '天井',
+  ceilingPanel:      '天井材',
+  ceilingFinish:     '天井仕上げ',
   ceilingHeight:     'CH',
   cornice:           '廻り縁',
 };
@@ -69,8 +71,9 @@ const CARD_SECTIONS = [
     ['wallFinish', 'dadoHeight'],
   ] },
   { title: '天井・廻り縁', rows: [
-    ['ceilingMaterial', 'cornice'],
-    ['__bbox_placeholder', 'ceilingHeight'],
+    ['ceilingPanel', 'ceilingFinish'],
+    ['ceilingHeight', 'cornice'],
+    ['__bbox_placeholder', null],
   ] },
 ];
 
@@ -212,7 +215,7 @@ const TAB_TO_CATEGORY = {
 // 材選択ドロップダウン（カテゴリで材マスタをフィルタ。値は材コード）
 // R13: 文書同梱材が本体（user/builtin）と不一致の材は、名称の後ろに≠を付けオレンジで示す
 // （<option>の色は実機で効かない可能性があるため、≠とtitleは必ず付ける）。
-const MaterialSelect = observer(({ mode, category, value, onChange, style, disabled = false, title }) => {
+export const MaterialSelect = observer(({ mode, category, value, onChange, style, disabled = false, title }) => {
   const materials = mode?.getMaterialsByCategory(category) ?? [];
   return (
     <select

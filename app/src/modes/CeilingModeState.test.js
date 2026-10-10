@@ -190,3 +190,38 @@ test('CeilingModeState: 別の行の selectRoom で選択を解除し、同じ�
   assert.equal(state.selection, null);
   assert.equal(state.selectedRoomId, b.id);
 });
+
+// ---- S3: 材データ（init）----
+test('CeilingModeState.init: 未ロードでは materialMap=null・選択肢は空。init 後は materialMap と getMaterialsByCategory が使え、結果は { ok:true, error:null }', async () => {
+  const state = new CeilingModeState();
+  assert.equal(state.materialsLoaded, false);
+  assert.equal(state.materialMap, null);
+  assert.deepEqual(state.getMaterialsByCategory('panel'), []);
+  assert.equal(state.materialDiff('301000000001'), null);
+
+  const result = await state.init();
+
+  assert.deepEqual(result, { ok: true, error: null });
+  assert.equal(state.materialsLoaded, true);
+  assert.equal(state.materialError, null);
+  assert.equal(state.materialMap.get('301000000001').name, 'せっこうボード t=9.5');
+  assert.equal(state.materialMap.get('302000000001').name, 'ビニールクロス');
+  const panels = state.getMaterialsByCategory('panel');
+  assert.ok(panels.length > 0 && panels.every(m => m.category === 'panel'));
+  assert.ok(panels.some(m => m.code === '301000000001'));
+  assert.ok(state.getMaterialsByCategory('finish').some(m => m.code === '302000000001'));
+});
+
+test('【失敗系】CeilingModeState.getMaterialsByCategory: 未知のカテゴリは空配列（例外にしない）', async () => {
+  const state = new CeilingModeState();
+  await state.init();
+  assert.deepEqual(state.getMaterialsByCategory('no-such-category'), []);
+});
+
+test('CeilingModeState.init: 材データは FinishModeState.init と同じ材マスタ（コード集合が一致）', async () => {
+  const { g } = setup();
+  const ceiling = new CeilingModeState();
+  const finish = new FinishModeState(g.graph, null);
+  await Promise.all([ceiling.init(), finish.init()]);
+  assert.deepEqual([...ceiling.materialMap.keys()].sort(), [...finish.materialMap.keys()].sort());
+});

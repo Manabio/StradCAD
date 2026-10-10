@@ -2317,6 +2317,35 @@ test('【仮定確認・ステップ6-3着手前】restoreGraph(graph, serialize
   assert.equal(graph.roomMap.size, 1, '部屋は重複せず1件のまま');
 });
 
+// S3: 天井材・天井仕上げ（customOverrides.ceilingPanel / ceilingFinish）は FBS の汎用 override として往復し、
+// 旧の自由文字列 finish.ceilingMaterial も不変（データとして残す）。既定は読み時補完なので保存データには出ない。
+test('【S3】serializeGraph→restoreGraph: ceilingPanel／ceilingFinish の override と旧 finish.ceilingMaterial の文字列が往復で不変。未指定の部屋には override が増えない', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL,   8000, { labeled: false, discipline: Discipline.ARCH });
+  const withOv = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'LDK');
+  const plain = graph.addRoom(new Set([`${x1.id}:${y0.id}:${x2.id}:${y1.id}`]), '寝室');
+  withOv.setOverride('ceilingPanel', '301000000002');
+  withOv.setOverride('ceilingFinish', '302000000001');
+  withOv.finish.setField('ceilingMaterial', 'PB t=9.5 + VC');
+
+  restoreGraph(graph, serializeGraph(graph));
+
+  const a = graph.roomMap.get(withOv.id);
+  assert.equal(a.customOverrides.get('ceilingPanel'), '301000000002');
+  assert.equal(a.customOverrides.get('ceilingFinish'), '302000000001');
+  assert.equal(a.getFinishInfo().ceilingPanel, '301000000002');
+  assert.equal(a.finish.ceilingMaterial, 'PB t=9.5 + VC');
+  const b = graph.roomMap.get(plain.id);
+  assert.equal(b.customOverrides.has('ceilingPanel'), false);
+  assert.equal(b.customOverrides.has('ceilingFinish'), false);
+  assert.equal(b.getFinishInfo().ceilingPanel, '301000000001'); // 旧文書でも既定が出る
+  assert.equal(b.getFinishInfo().ceilingFinish, '302000000001');
+});
+
 // QA指摘Minor-3（2026-09-22）: 上記の仮定確認に、構造参照（structGraph由来）のaxisCLを持つ壁と
 // Edge.overridesを含むグラフの自己往復を1本追加する——restoreGraphは自グラフをclear()するが
 // graph._structGraph（project.structGraph）はclear()しないため、通り芯参照の壁も無音消失せず

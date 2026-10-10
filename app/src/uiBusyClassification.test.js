@@ -202,8 +202,10 @@ const PENDING_COUNT = 0;
 // 階段のペア部屋のカード削除の入口 deleteStairRoomCascade（GATED。3つ目の同型の関門。共通化せず本体を並べる——
 // 共通関数に寄せると各入口は薄いラッパー（EXEMPT）になり、関門の順序の固定が1箇所へ寄って検出力が落ちるため）の
 // runBusy(コールバックが1件加わったため40→41。
+// 天伏モード（S3）のローダー .then(async m => { ... await s.init() ... }) が加わったため41→42
+// （モード切替 effect のローダーで、finish／structure 等と同型の EXEMPT。入力の関門は通らない）。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 41;
+const ANON_CALLBACK_COUNT = 42;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

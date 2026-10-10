@@ -53,7 +53,7 @@ const MATERIAL_CODE_GRAPH_FIELDS    = [
   'interiorWallBacking', 'ceilingBacking', 'floorBacking',
   'shaftWallMaterial',
 ]; // per-floor 設定
-const MATERIAL_CODE_OVERRIDE_FIELDS = ['wallMaterial', 'wallFinish'];               // Room.customOverrides
+export const MATERIAL_CODE_OVERRIDE_FIELDS = ['wallMaterial', 'wallFinish', 'ceilingPanel', 'ceilingFinish']; // Room.customOverrides
 
 export class FinishModeState {
   dragState      = null; // { currentCell, visitedCells: Map, stairKeys: Set, startCellKey } | null

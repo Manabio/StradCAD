@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Room } from './room.js';
-import { DEFAULT_WALL_MATERIAL } from './constants.js';
+import { DEFAULT_WALL_MATERIAL, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH } from './constants.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 
 // ---- (a) getFinishInfo()の戻り値形状は旧INTERIOR_MASTERS[key]直参照と完全に同型 ----
@@ -17,7 +17,11 @@ import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 test('getFinishInfo(): templateKeyをbuiltinのキーに設定すると、旧INTERIOR_MASTERS[key]直参照と完全に同型の戻り値になる（labelは含み・keyは含まない）', () => {
   const room = new Room('r1', '居間', new Set(), new Set(), undefined, 'LIVING_ROOM');
   const info = room.getFinishInfo();
-  assert.deepStrictEqual(info, { ...INTERIOR_MASTERS.LIVING_ROOM }, '旧INTERIOR_MASTERS.LIVING_ROOM直参照と完全に同型でない');
+  // S3: 旧直参照の形に、読み時補完の天井材・天井仕上げの既定2キーが加わる（それ以外は完全一致）
+  assert.deepStrictEqual(
+    info,
+    { ...INTERIOR_MASTERS.LIVING_ROOM, ceilingPanel: DEFAULT_CEILING_PANEL, ceilingFinish: DEFAULT_CEILING_FINISH },
+    '旧INTERIOR_MASTERS.LIVING_ROOM直参照＋天井既定2キーと完全に同型でない');
   assert.equal('key' in info, false, 'getFinishInfo()の戻り値にkeyが含まれている（loadBuiltin形式の混入＝退行）');
   assert.equal('label' in info, true, 'getFinishInfo()の戻り値にlabelが含まれていない（旧実装もlabelを返していたはず）');
 });
@@ -33,7 +37,38 @@ test('getFinishInfo(): templateKeyがnull（既定）ならwallMaterialが既定
 test('getFinishInfo(): templateKeyが未登録キーなら{}扱い＋既定壁材フォールバックのみ（従来どおり）', () => {
   const room = new Room('r1', '未登録', new Set(), new Set(), undefined, 'NOT_A_REAL_KEY');
   const info = room.getFinishInfo();
-  assert.deepEqual(info, { wallMaterial: DEFAULT_WALL_MATERIAL });
+  assert.deepEqual(info, {
+    wallMaterial: DEFAULT_WALL_MATERIAL,
+    ceilingPanel: DEFAULT_CEILING_PANEL,
+    ceilingFinish: DEFAULT_CEILING_FINISH,
+  });
+});
+
+// ---- S3: 天井材・天井仕上げ（customOverrides.ceilingPanel / ceilingFinish）の読み時既定 ----
+test('getFinishInfo(): 天井材・天井仕上げは未指定なら既定（せっこうボード t=9.5／ビニールクロス）。保存データ（customOverrides）には書かない', () => {
+  const room = new Room('r1', '居間', new Set(), new Set());
+  const info = room.getFinishInfo();
+  assert.equal(info.ceilingPanel, '301000000001');
+  assert.equal(info.ceilingFinish, '302000000001');
+  assert.equal(room.customOverrides.size, 0);
+});
+
+test('getFinishInfo(): ceilingPanel／ceilingFinish の override があればその値。clearOverride で既定に戻る', () => {
+  const room = new Room('r1', '居間', new Set(), new Set());
+  room.setOverride('ceilingPanel', '301000000002');
+  room.setOverride('ceilingFinish', '999999999999');
+  assert.equal(room.getFinishInfo().ceilingPanel, '301000000002');
+  assert.equal(room.getFinishInfo().ceilingFinish, '999999999999');
+  room.clearOverride('ceilingPanel');
+  room.clearOverride('ceilingFinish');
+  assert.equal(room.getFinishInfo().ceilingPanel, DEFAULT_CEILING_PANEL);
+  assert.equal(room.getFinishInfo().ceilingFinish, DEFAULT_CEILING_FINISH);
+});
+
+test('【失敗系】getFinishInfo(): override が空文字なら既定へフォールバックする（壁材と同じ）', () => {
+  const room = new Room('r1', '居間', new Set(), new Set());
+  room.setOverride('ceilingPanel', '');
+  assert.equal(room.getFinishInfo().ceilingPanel, DEFAULT_CEILING_PANEL);
 });
 
 // ---- (d) setOverrideのfield in master判定はkey/label除去後でも現行どおり ----

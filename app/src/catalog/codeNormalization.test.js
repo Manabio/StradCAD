@@ -90,6 +90,34 @@ test('normalizeSnapshotCodes: rooms[].overridesのkey=wallFinishも正規化す�
   assert.equal(result.rooms[0].overrides[0].value, '102000000001');
 });
 
+// S3: 天井材・天井仕上げ（key=ceilingPanel / ceilingFinish）も壁材・壁仕上げと同じく照合・正規化の対象
+test('enumerateMaterialCodeRefs【S3】: rooms[].overrides の ceilingPanel／ceilingFinish を key 付きで列挙する。未知キーは対象外のまま', () => {
+  const refs = enumerateMaterialCodeRefs(baseSnapshot({
+    rooms: [{ id: 'r1', overrides: [
+      { key: 'ceilingPanel', value: '301000000001' },
+      { key: 'ceilingFinish', value: '302000000001' },
+      { key: 'ceilingHeight', value: '2400' },
+      { key: 'ceilingUnknown', value: '301000000001' },
+    ] }],
+  })).filter(r => r.location === 'room');
+  assert.deepEqual(refs.map(r => [r.key, r.code]), [['ceilingPanel', '301000000001'], ['ceilingFinish', '302000000001']]);
+});
+
+test('normalizeSnapshotCodes【S3】: rooms[].overrides の ceilingPanel／ceilingFinish も正規化し、未解決（null）は unresolved に積む', () => {
+  const table = buildCodeTable({ legacy: { '111111111150': '301000000001', '111111111160': null } });
+  const snapshot = baseSnapshot({
+    rooms: [{ id: 'r1', overrides: [
+      { key: 'ceilingPanel', value: '111111111150' },
+      { key: 'ceilingFinish', value: '111111111160' },
+      { key: 'ceilingHeight', value: '111111111150' }, // 対象外キーは不変
+    ] }],
+  });
+  const { snapshot: result, unresolved } = normalizeSnapshotCodes(snapshot, table);
+  assert.equal(result.rooms[0].overrides[0].value, '301000000001');
+  assert.equal(result.rooms[0].overrides[2].value, '111111111150');
+  assert.ok(unresolved.some(u => u.code === '111111111160' && u.key === 'ceilingFinish'), '削除材の天井仕上げが未解決に積まれていない');
+});
+
 test('normalizeSnapshotCodes: edges[].overridesは12桁コード形式のvalueだけ正規化する', () => {
   const table = buildCodeTable({ legacy: { '111111111150': '102000000001' } });
   const { snapshot } = normalizeSnapshotCodes(baseSnapshot(), table);

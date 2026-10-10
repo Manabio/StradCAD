@@ -222,6 +222,8 @@ export const DimensionSide = Object.freeze({
 
 // 既定材コード（材マスタ materialData.js 参照）
 export const DEFAULT_WALL_MATERIAL         = '301000000002'; // 部屋の壁材既定: せっこうボード t=12.5（面材）
+export const DEFAULT_CEILING_PANEL         = '301000000001'; // 部屋の天井材既定: せっこうボード t=9.5（面材。customOverrides.ceilingPanel の読み時補完）
+export const DEFAULT_CEILING_FINISH        = '302000000001'; // 部屋の天井仕上げ既定: ビニールクロス（customOverrides.ceilingFinish の読み時補完）
 export const DEFAULT_EXTERIOR_WALL_BACKING = '101400000005'; // 外壁下地: □-90×45 間柱（下地材）
 export const DEFAULT_INTERIOR_WALL_BACKING = '101400000005'; // 内壁下地: □-90×45 間柱（下地材）
 export const DEFAULT_CEILING_BACKING       = '101400000012'; // 天井下地: □-45×36 杉等・野縁（下地材、表示のみ）

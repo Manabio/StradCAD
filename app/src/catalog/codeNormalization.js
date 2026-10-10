@@ -69,8 +69,12 @@ function isRoofSpecMaterialCode(spec, field) {
   return !!spec && typeof spec[field] === 'string' && spec[field] !== '';
 }
 
+// 部屋の材コード override のキー（壁材・壁仕上げ・天井材・天井仕上げ）。FinishModeState の
+// MATERIAL_CODE_OVERRIDE_FIELDS と同じ集合（一致は codeNormalization.test.js が固定する）。
+export const ROOM_MATERIAL_OVERRIDE_KEYS = ['wallMaterial', 'wallFinish', 'ceilingPanel', 'ceilingFinish'];
+
 function isRoomMaterialOverride(ov) {
-  return !!ov && (ov.key === 'wallMaterial' || ov.key === 'wallFinish');
+  return !!ov && ROOM_MATERIAL_OVERRIDE_KEYS.includes(ov.key);
 }
 
 function isEdgeMaterialOverride(ov) {

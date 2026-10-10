@@ -727,7 +727,11 @@ const App = observer(() => {
             return s;
           })
         : appMode === 'ceiling'
-          ? import('./modes/CeilingModeState.js').then(m => new m.CeilingModeState())
+          ? import('./modes/CeilingModeState.js').then(async m => {
+              const s = new m.CeilingModeState();
+              await s.init(); // 材データの動的ロード（天井材・仕上げの表示名と選択肢）
+              return s;
+            })
         : appMode === 'structure'
           ? import('./modes/StructuralModeState.js').then(async m => {
               const s = new m.StructuralModeState(graph);

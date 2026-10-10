@@ -7,6 +7,7 @@ import {
   Plane, PlanGraph, ShaftSoundproof, ElevatorEquipmentCategory, DEFAULT_EV_USAGE, EvUsage,
   Stair, StairType, StairPortSide, StructuralMaterialType, totalStepsFromSections,
   RoomKind, RoomFeature, RoofSpec, ROOF_SPEC_KEYS,
+  CenterLineType, Discipline, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH,
 } from '../core.js';
 import { NON_DEFAULT_ROOF_SPEC } from './roofTestFixtures.js';
 import { undoManager } from '../undoManager.js';
@@ -30,6 +31,48 @@ test('shaftWallMaterial を withFinishUndo 経由で変えて undo すると元�
 
   undoManager.redo();
   assert.equal(graph.shaftWallMaterial, after, 'redo で変更後の値に戻らない');
+});
+
+function graphWithRoom() {
+  const graph = freshGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), '居間');
+  return { graph, roomId: room.id };
+}
+
+test('天井材・天井仕上げ（ceilingPanel／ceilingFinish）を withFinishUndo 経由で変えて undo/redo すると、既定 ⇔ 変更後に戻る（undo 後は override 自体が無い）', () => {
+  const { graph, roomId } = graphWithRoom();
+  for (const [key, def, next] of [
+    ['ceilingPanel', DEFAULT_CEILING_PANEL, '301000000002'],
+    ['ceilingFinish', DEFAULT_CEILING_FINISH, '302000000002'],
+  ]) {
+    assert.equal(graph.roomMap.get(roomId).getFinishInfo()[key], def, `前提: ${key} は既定`);
+    withFinishUndo(graph, () => graph.roomMap.get(roomId).setOverride(key, next));
+    assert.equal(graph.roomMap.get(roomId).getFinishInfo()[key], next);
+
+    undoManager.undo();
+    const afterUndo = graph.roomMap.get(roomId); // 復元で Room は作り直される
+    assert.equal(afterUndo.getFinishInfo()[key], def, `${key}: undo で既定に戻らない`);
+    assert.equal(afterUndo.customOverrides.has(key), false, `${key}: undo 後も override が残っている`);
+
+    undoManager.redo();
+    assert.equal(graph.roomMap.get(roomId).customOverrides.get(key), next, `${key}: redo で戻らない`);
+  }
+});
+
+test('天井材の clearOverride も withFinishUndo で1件の undo になり、undo で override が戻る', () => {
+  const { graph, roomId } = graphWithRoom();
+  withFinishUndo(graph, () => graph.roomMap.get(roomId).setOverride('ceilingPanel', '301000000002'));
+  withFinishUndo(graph, () => graph.roomMap.get(roomId).clearOverride('ceilingPanel'));
+  assert.equal(graph.roomMap.get(roomId).getFinishInfo().ceilingPanel, DEFAULT_CEILING_PANEL);
+
+  undoManager.undo(); // clearOverride だけが戻る
+  assert.equal(graph.roomMap.get(roomId).customOverrides.get('ceilingPanel'), '301000000002');
+  undoManager.redo();
+  assert.equal(graph.roomMap.get(roomId).customOverrides.has('ceilingPanel'), false);
 });
 
 test('shaftSoundproof を withFinishUndo 経由で変えて undo すると元の値に戻る', () => {
