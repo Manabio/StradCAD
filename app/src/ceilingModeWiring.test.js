@@ -52,19 +52,33 @@ test('【配線】CeilingPanel.jsx: タブは mode.setActiveTab、行は ceiling
   assert.deepEqual(finishTableImports, ["import { MaterialSelect } from '../finish/FinishTable.jsx';"]);
 });
 
-test('【配線】CeilingPanel.jsx: 天井材・仕上げの MaterialSelect 2つ（panel／finish）が setOverride／clearOverride を withFinishUndo で包んで部屋に書く。書込み先は ceilingWriteTargetRoom', () => {
+test('【配線】CeilingPanel.jsx（S10）: 行の天井材・仕上げの MaterialSelect 2つ（panel／finish）が setOverride／clearOverride を withFinishUndo で包んで部屋に書く。書込み先は行から ceilingWriteTargetRoom。上段に CeilingMaterialFields は無い', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
   assert.match(code, /^\s*\{ key: 'ceilingPanel', {2}label: '天井材', category: 'panel' \},\s*$/m);
   assert.match(code, /^\s*\{ key: 'ceilingFinish', label: '仕上げ', category: 'finish' \},\s*$/m);
-  assert.match(code, /^\s*onChange=\{v => withFinishUndo\(graph, \(\) => \(v === '' \? room\.clearOverride\(f\.key\) : room\.setOverride\(f\.key, v\)\)\)\}\s*$/m);
-  assert.match(code, /^\s*<CeilingMaterialFields graph=\{graph\} mode=\{mode\} room=\{ceilingWriteTargetRoom\(graph, mode\.selection\)\} \/>\s*$/m);
-  assert.match(code, /^\s*\{mode\.selection && \(\s*$/m);
+  assert.match(code, /^\s*onChange=\{v => \{ withFinishUndo\(graph, \(\) => \(v === '' \? room\.clearOverride\(field\.key\) : room\.setOverride\(field\.key, v\)\)\); markDirty\(\); \}\}\s*$/m);
+  assert.match(code, /^\s*const target = ceilingWriteTargetRoom\(graph, \{ owner: \{ kind: row\.kind, id: row\.id \} \}\);\s*$/m);
+  assert.match(code, /^\s*<RowMaterialSelect graph=\{graph\} mode=\{mode\} room=\{target\} field=\{f\} \/>\s*$/m);
+  assert.ok(!/CeilingMaterialFields/.test(code), '上段の CeilingMaterialFields が残っている');
   assert.match(code, /^import \{ withFinishUndo \} from '\.\.\/finish\/finishUndo\.js';\s*$/m);
+});
+
+test('【配線】CeilingPanel.jsx（S10）: 三角は区画のある部屋の行だけ（無い行は同幅の空白）。クリックは toggleExpandedRow で行選択へ伝播させない。内訳は zoneDetailRows／remainderRow', () => {
+  const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
+  assert.match(code, /^\s*const hasZones = !!room && room\.ceilingZones\.length > 0;\s*$/m);
+  assert.match(code, /^\s*\{hasZones \? \(\s*$/m);
+  assert.match(code, /^\s*\) : <span style=\{triangleGap\} \/>\}\s*$/m);
+  assert.match(code, /^\s*aria-label=\{expanded \? '内訳を閉じる' : '内訳を開く'\}\s*$/m);
+  assert.match(code, /^\s*onClick=\{e => \{ e\.stopPropagation\(\); mode\.toggleExpandedRow\(row\.id\); \}\}\s*$/m);
+  assert.match(code, /^\s*const expanded = mode\.expandedRowId === row\.id;\s*$/m);
+  assert.match(code, /^\s*\{expanded && hasZones && \(\s*$/m);
+  assert.match(code, /^\s*const zones = zoneDetailRows\(graph, room\);\s*$/m);
+  assert.match(code, /^\s*const rest = remainderRow\(graph, room\);\s*$/m);
 });
 
 test('【配線】CeilingPanel.jsx: 部屋の無い階段（room が null）では天井材・仕上げの select は disabled で「—」の1択', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
-  assert.match(code, /^\s*<select disabled value="" style=\{\{ flex: 1, minWidth: 0 \}\} title="部屋の無い階段には天井材・仕上げを指定できません">\s*$/m);
+  assert.match(code, /^\s*<select disabled value="" style=\{\{ width: '100%', minWidth: 0, fontSize: 12 \}\} title="部屋の無い階段には天井材・仕上げを指定できません">\s*$/m);
   assert.match(code, /^\s*<option value="">—<\/option>\s*$/m);
 });
 

@@ -3,7 +3,7 @@
 天井伏図モード（appMode `'ceiling'`。ModeBar の「天伏」）。見上げ図の描画と、天井欄の指定を行うための専用モード。用語は `glossary.md`「天伏」。
 
 ## 構造（S1a'）
-- **仕上げモードとは独立**: 専用の State（`modes/CeilingModeState.js`）・専用パネル（`ceiling/CeilingPanel.jsx`。内部／階段タブ。当面は読むだけ）を持つ。仕上げ表との兼用案は捨てた（ユーザー裁定 2026-10-10）。共有するのは**データ（Room の天井欄）と純モジュール**（部屋の述語 `finish/interiorTabRooms.js`・階段タイプ表記）だけ。State は借りない（UI の部品は S3 で材選択の `MaterialSelect` だけ共用）。
+- **仕上げモードとは独立**: 専用の State（`modes/CeilingModeState.js`）・専用パネル（`ceiling/CeilingPanel.jsx`。内部／階段タブ。行で材を編集し、選択された行が展開する〔`expandedRowId`。アコーディオン＝1行だけ〕。区画のある部屋の行は先頭の三角で内訳〔区画ごとの形状・基準高・寸法・セル数＋残り〕を開閉。内訳は読むだけで編集は上段の区画欄。三角は区画の有無で出し、内訳には効いている区画だけが並ぶ。`zoneDetailRows`／`remainderRow` は `ceilingSurfacesOf` と同じ所属・先勝ちでセルを数え、階段の対の部屋は残りを出さない）を持つ。仕上げ表との兼用案は捨てた（ユーザー裁定 2026-10-10）。共有するのは**データ（Room の天井欄）と純モジュール**（部屋の述語 `finish/interiorTabRooms.js`・階段タイプ表記）だけ。State は借りない（UI の部品は S3 で材選択の `MaterialSelect` だけ共用）。
 - 境界処理（モード切替時の他階反映など）は持たない。パンのみのポインタ分岐、CL 種別ポリシーの ceiling 行は登録済み。
 
 ## 見上げ（S1b）
@@ -24,7 +24,7 @@
 - 旧の自由文字列 `RoomFinish.ceilingMaterial` はデータとして残す（FBS・スナップショット・復元は不変）が、仕上げ表の内部タブには出さない（天井グループは 天井材／仕上げ／H／周り縁 の4列）。旧文書の文字列は画面から見えなくなる。
 - 照合・保守: `MATERIAL_CODE_OVERRIDE_FIELDS`（FinishModeState）と `isRoomMaterialOverride`（codeNormalization）の両方に2キーを足し、読込み時の正規化・未解決コード検出・保存時の使用中判定の対象にする。
 - 表示: 材コードを材マスタ名に解き、`formatMaterialLabel`（`finish/materials/materialLabel.js`。展開図の壁2段書きと共有）で略称にする（「せっこうボード t=9.5」→「PB ア)9.5」）。解けないコードはコードのまま。
-- 天伏パネル: 選択中のセル群があれば要約の下に 天井材・仕上げ の `MaterialSelect`（仕上げ表の部品を共用）を出す。「仕上げは部屋に1つ」なので書込み先は常に部屋（所属が部屋ならその部屋、階段なら `stair.roomId` の部屋、部屋の無い階段は disabled の「—」。`ceilingWriteTargetRoom`）。変更は仕上げ表の master 欄と同じ `withFinishUndo` で1欄1エントリの undo。材データは `CeilingModeState.init()` が仕上げモードと同じ経路で読む（graph を持たないので自階コードの照合はせず `materialError` は常に null）。
+- 天伏パネル（S10 で入口を行へ移した。ユーザー指示 2026-10-10「部屋ごとに入力」）: **表の各行**に 天井材・仕上げ の `MaterialSelect`（仕上げ表の部品を共用）を置いて直接編集する。上段（選択中のセル群）は要約と区画の欄だけで、材の欄は持たない（材は部屋に1つ）。「仕上げは部屋に1つ」なので書込み先は常に部屋（行が部屋ならその部屋、階段行は `stair.roomId` の部屋、部屋の無い階段の行は disabled の「—」。`ceilingWriteTargetRoom` を行の所属で引く）。変更は仕上げ表の master 欄と同じ `withFinishUndo` で1欄1エントリの undo。材データは `CeilingModeState.init()` が仕上げモードと同じ経路で読む（graph を持たないので自階コードの照合はせず `materialError` は常に null）。
 
 ## 天井区画（S5）
 - 選んだセル群ごとの天井高を `Room.ceilingZones`（不変の `CeilingZone`＝`core/ceilingZone.js`。id・cells・heightMm・shape・dims）に持つ。形状・寸法（S6: 傾斜・円弧・ドーム）の箱は先に持ち、S5 は常に flat・寸法なし。高さは「部屋の FL からの CH」で、null は部屋の CH。

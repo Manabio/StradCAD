@@ -96,6 +96,47 @@ test('CeilingModeState: 階段のセルを選ぶと selectedRoomId は stair.id�
   assert.equal(state.activeTab, 'stair');
 });
 
+test('CeilingModeState（S10）: commitDrag で expandedRowId が owner.rowId になる（部屋・階段とも）。別の行を選べば移る。確定前は変わらない', () => {
+  const { g, a, stair } = setup();
+  const state = new CeilingModeState();
+  assert.equal(state.expandedRowId, null);
+  state.startDrag(g.graph, ...ctr(0, 0));
+  assert.equal(state.expandedRowId, null, '確定前は展開しない');
+  state.commitDrag();
+  assert.equal(state.expandedRowId, a.id);
+  drag(state, g, [[2, 0]]);
+  assert.equal(state.expandedRowId, stair.id);
+});
+
+test('CeilingModeState（S10）: 空白タップ（dragState なしの commitDrag({tap:true})）で選択・強調・展開をすべて解除する', () => {
+  const { g } = setup();
+  const state = new CeilingModeState();
+  drag(state, g, [[0, 0]]);
+  assert.notEqual(state.expandedRowId, null);
+  state.commitDrag({ tap: true });
+  assert.equal(state.selection, null);
+  assert.equal(state.selectedRoomId, null);
+  assert.equal(state.expandedRowId, null);
+});
+
+test('CeilingModeState（S10）: selectRoom で展開（アコーディオン＝1行だけ）、toggleExpandedRow で開閉、selectRoom(null)・dispose で null', () => {
+  const state = new CeilingModeState();
+  state.selectRoom('r1');
+  assert.equal(state.expandedRowId, 'r1');
+  state.toggleExpandedRow('r1');
+  assert.equal(state.expandedRowId, null, '開いている行のトグルで畳む');
+  state.toggleExpandedRow('r1');
+  assert.equal(state.expandedRowId, 'r1');
+  state.toggleExpandedRow('r2');
+  assert.equal(state.expandedRowId, 'r2', '別の行を開くと前の行は閉じる');
+  assert.equal(state.selectedRoomId, 'r1', '三角は選択を変えない');
+  state.selectRoom(null);
+  assert.equal(state.expandedRowId, null);
+  state.toggleExpandedRow('r1');
+  state.dispose();
+  assert.equal(state.expandedRowId, null);
+});
+
 test('CeilingModeState: ドラッグ中は previewCells に訪れたセルが出る。部屋を超えた分は入らない', () => {
   const { g } = setup();
   const state = new CeilingModeState();

@@ -6,7 +6,7 @@ import { makeGrid, assignZoneHeight } from '../plan/planTestFixtures.js';
 import { assignZoneShape } from './ceilingZones.js';
 import { interiorTabRooms, interiorRoomDisplayName } from '../finish/interiorTabRooms.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
-import { interiorRows, stairRows, selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom, materialDisplay } from './ceilingPanelRows.js';
+import { interiorRows, stairRows, selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom, materialDisplay, zoneDetailRows, remainderRow } from './ceilingPanelRows.js';
 
 const XS = [0, 1000, 2000, 3000, 4000, 5000, 6000];
 
@@ -270,4 +270,61 @@ test('selectionSummary の zone と ceilingZoneTargetRoom: 部屋所属は区画
   assert.equal(ceilingZoneTargetRoom(g.graph, stair), null);
   assert.equal(ceilingZoneTargetRoom(g.graph, null), null);
   assert.equal(ceilingZoneTargetRoom(g.graph, { owner: { kind: 'room', id: 'x', rowId: 'x' }, cellKeys: new Set() }), null);
+});
+
+// ---- 区画の内訳（S10）----
+
+test('zoneDetailRows／remainderRow: 平面・傾斜・円弧・ドームの表記（形状名・基準高・寸法・セル数）。基準高 null は「部屋 CH」。残りは部屋 CH とセル数', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const r = g.interior([[0, 0], [1, 0], [2, 0], [3, 0], [4, 0]]);
+  r.setOverride('ceilingHeight', '2400');
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(0, 0)], { heightMm: 2800, shape: 'flat', dims: [] }));
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(1, 0)], { heightMm: 2500, shape: 'slope', dims: [500, 270] }));
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(2, 0)], { heightMm: null, shape: 'arc', dims: [300, 0] }));
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(3, 0)], { heightMm: 2600, shape: 'dome', dims: [400] }));
+  const rows = zoneDetailRows(g.graph, r);
+  assert.deepEqual(rows.map(z => ({ shapeLabel: z.shapeLabel, heightLabel: z.heightLabel, dimsLabel: z.dimsLabel, cellCount: z.cellCount })), [
+    { shapeLabel: '平面', heightLabel: '2800', dimsLabel: '', cellCount: 1 },
+    { shapeLabel: '傾斜', heightLabel: '2500', dimsLabel: 'ライズ 500・上がる向き ↑ 上', cellCount: 1 },
+    { shapeLabel: '円弧', heightLabel: '部屋 CH', dimsLabel: 'ライズ 300・軸 横', cellCount: 1 },
+    { shapeLabel: 'ドーム', heightLabel: '2600', dimsLabel: 'ライズ 400', cellCount: 1 },
+  ]);
+  assert.deepEqual(rows.map(z => z.zoneId), r.ceilingZones.map(z => z.id), '区画の配列順');
+  assert.deepEqual(remainderRow(g.graph, r), { chLabel: '2400', cellCount: 1 });
+});
+
+test('zoneDetailRows／remainderRow: 同じ区画が複数セルなら cellCount はその数。全セルが区画なら残りは null', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const r = g.interior([[0, 0], [1, 0]]);
+  r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(0, 0), g.cell(1, 0)], { heightMm: 2800, shape: 'flat', dims: [] }));
+  assert.equal(zoneDetailRows(g.graph, r)[0].cellCount, 2);
+  assert.equal(remainderRow(g.graph, r), null);
+});
+
+test('zoneDetailRows／remainderRow: 階段行（対の部屋）の区画は内訳に出るが、残りは出さない（階段の対の部屋は残りを描かない）', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const pair = g.feature([[0, 0], [1, 0]], RoomFeature.STAIR);
+  pair.setOverride('ceilingHeight', '2400');
+  g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(0, 0), g.cell(1, 0)]) });
+  pair.setCeilingZones(assignZoneShape(g.graph, pair, [g.cell(0, 0)], { heightMm: 2500, shape: 'slope', dims: [1000, 0] }));
+  const rows = zoneDetailRows(g.graph, pair);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].dimsLabel, 'ライズ 1000・上がる向き → 右');
+  assert.equal(rows[0].cellCount, 1);
+  assert.equal(remainderRow(g.graph, pair), null);
+});
+
+test('【失敗系】zoneDetailRows／remainderRow: 区画の無い部屋・room null・graph null は []／null。効かない区画（解けないキー）は出さない', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const plain = g.interior([[0, 0]]);
+  assert.deepEqual(zoneDetailRows(g.graph, plain), []);
+  assert.equal(remainderRow(g.graph, plain), null);
+  assert.deepEqual(zoneDetailRows(g.graph, null), []);
+  assert.equal(remainderRow(g.graph, null), null);
+  assert.deepEqual(zoneDetailRows(null, plain), []);
+  assert.equal(remainderRow(null, plain), null);
+  const ghost = g.interior([[1, 0]]);
+  ghost.setCeilingZones([new CeilingZone({ id: 'z', cells: ['gone:gone:gone:gone'], heightMm: 2900 })]);
+  assert.deepEqual(zoneDetailRows(g.graph, ghost), []);
+  assert.deepEqual(remainderRow(g.graph, ghost), { chLabel: roomCeilingHeight(g.graph, ghost).raw, cellCount: 1 });
 });

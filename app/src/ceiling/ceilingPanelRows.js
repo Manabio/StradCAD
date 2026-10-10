@@ -20,6 +20,9 @@ import { STAIR_TYPE_LABEL } from '../finish/stair/stairTypeLabel.js';
 import { DEFAULT_STAIR_ROOM_NAME } from '../finish/roomNamingOptions.js';
 import { formatMaterialLabel } from '../finish/materials/materialLabel.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
+import { ceilingRefreshCells } from './ceilingGrid.js';
+import { ceilingCellOwnersOf, roomHasCeiling } from './ceilingOwners.js';
+import { CEILING_SHAPE_OPTIONS, CEILING_DIM_FIELDS } from './ceilingShapeFields.js';
 import { zoneStateOfCells } from './ceilingZones.js';
 
 /** 材コード → 表示名（略称表示）。materialMap が無い・コードが解けない・名前が無いときはコードのまま。 */
@@ -133,6 +136,63 @@ export function ceilingWriteTargetRoom(graph, selection) {
     return stair?.roomId ? (graph.roomMap.get(stair.roomId) ?? null) : null;
   }
   return null;
+}
+
+/** 区画の寸法の表記: CEILING_DIM_FIELDS のラベルで「ライズ 500・上がる向き ↑ 上」。select は選択肢の表示名。平面は空文字。 */
+function dimsLabelOf(shape, dims) {
+  return CEILING_DIM_FIELDS[shape]
+    .map((f, i) => {
+      const v = dims[i];
+      const text = f.input === 'select' ? (f.options.find(o => o.value === v)?.label ?? String(v)) : String(v);
+      return `${f.label} ${text}`;
+    })
+    .join('・');
+}
+
+/**
+ * 部屋の天井区画の内訳（展開行用。読むだけ）。区画の配列順に、実際に効くセル（今の天井セルへ展開し、所属索引が
+ * この部屋に帰属させるセル。ceilingSurfacesOf の面と同じ採り方・同じ先勝ち）を持つ区画だけ。
+ * heightLabel … 基準高。null（部屋の CH を使う）は「部屋 CH」、数値はそのまま文字列。
+ * @returns {Array<{zoneId: string, shapeLabel: string, heightLabel: string, dimsLabel: string, cellCount: number}>}
+ */
+export function zoneDetailRows(graph, room) {
+  if (!graph || !room || room.ceilingZones.length === 0) return [];
+  const owners = ceilingCellOwnersOf(graph);
+  const taken = new Set();
+  const out = [];
+  for (const zone of room.ceilingZones) {
+    let cellCount = 0;
+    for (const key of ceilingRefreshCells(new Set(zone.cells), graph)) {
+      if (taken.has(key) || owners.get(key)?.rowId !== room.id) continue;
+      taken.add(key);
+      cellCount++;
+    }
+    if (cellCount === 0) continue;
+    out.push({
+      zoneId: zone.id,
+      shapeLabel: CEILING_SHAPE_OPTIONS.find(o => o.value === zone.shape)?.label ?? zone.shape,
+      heightLabel: zone.heightMm == null ? '部屋 CH' : String(zone.heightMm),
+      dimsLabel: dimsLabelOf(zone.shape, zone.dims),
+      cellCount,
+    });
+  }
+  return out;
+}
+
+/**
+ * 区画に入らなかった残り（部屋の CH のまま）の行。区画が無い部屋・天井を持たない部屋（階段の対の部屋は残りを描かない）・
+ * 残りのセルが 0 のとき null。cellCount は zoneDetailRows と同じ採り方の残りのセル数。chLabel は部屋の CH 欄の原文（roomCeilingHeight().raw）。
+ * @returns {{chLabel: string, cellCount: number} | null}
+ */
+export function remainderRow(graph, room) {
+  if (!graph || !room || room.ceilingZones.length === 0 || !roomHasCeiling(room)) return null;
+  const owners = ceilingCellOwnersOf(graph);
+  const mine = new Set();
+  for (const [key, owner] of owners) if (owner.rowId === room.id) mine.add(key);
+  for (const zone of room.ceilingZones) {
+    for (const key of ceilingRefreshCells(new Set(zone.cells), graph)) mine.delete(key);
+  }
+  return mine.size === 0 ? null : { chLabel: roomCeilingHeight(graph, room).raw, cellCount: mine.size };
 }
 
 /** 仕上げ表の内部タブと同じ部屋・同じ並び・同じ表示名。 */

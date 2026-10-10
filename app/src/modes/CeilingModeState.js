@@ -23,6 +23,7 @@ const NO_KEYS = new Set();
 
 export class CeilingModeState {
   selectedRoomId = null;     // 一覧で強調中の行 id（部屋 id／部屋の無い階段は stair.id） | null
+  expandedRowId  = null;     // 内訳を開いている行 id（アコーディオン＝1行だけ） | null
   activeTab      = 'interior'; // 'interior' | 'stair'
   selection      = null;     // null | { owner, cellKeys: Set<string> }（確定した天井セルの選択）
   dragState      = null;     // null | { owner, visited, lastWorld, owners }（ドラッグ中）
@@ -47,6 +48,8 @@ export class CeilingModeState {
       materialMap:     observable.ref,
       materialDiffs:   observable.ref,
       selectedRoomId: observable,
+      expandedRowId:  observable,
+      toggleExpandedRow: action,
       activeTab:      observable,
       selection:      observable.ref,
       dragState:      observable.ref,
@@ -98,8 +101,12 @@ export class CeilingModeState {
   /** 行のタップ・選択の確定で強調行を変える。選択中のセルの所属と別の行なら、セルの選択は解除する。 */
   selectRoom(id) {
     this.selectedRoomId = id ?? null;
+    this.expandedRowId = this.selectedRoomId; // 選ばれた行は展開する（アコーディオン。解除なら畳む）
     if (this.selection && this.selection.owner.rowId !== this.selectedRoomId) this.selection = null;
   }
+
+  /** 三角のクリック。開いている行なら畳み、別の行なら切り替える（展開は1行だけ）。 */
+  toggleExpandedRow(id) { this.expandedRowId = this.expandedRowId === id ? null : (id ?? null); }
 
   setActiveTab(tab) {
     if (!CEILING_TABS.includes(tab)) throw new Error(`CeilingModeState.setActiveTab: 未知のタブです: ${tab}`);
@@ -130,11 +137,12 @@ export class CeilingModeState {
   commitDrag({ tap = false } = {}) {
     const state = this.dragState;
     if (!state) {
-      if (tap) { this.selection = null; this.selectedRoomId = null; }
+      if (tap) { this.selection = null; this.selectRoom(null); }
       return;
     }
     this.selection = { owner: state.owner, cellKeys: new Set(state.visited.keys()) };
     this.selectedRoomId = state.owner.rowId;
+    this.expandedRowId = state.owner.rowId;
     this.activeTab = state.owner.kind === 'stair' ? 'stair' : 'interior';
     this.dragState = null;
   }

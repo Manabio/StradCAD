@@ -18,8 +18,17 @@ test('【配線】区画の確定は withFinishUndo で room.setCeilingZones(ass
 
 test('【配線】区画の解除は withFinishUndo で room.setCeilingZones(clearZoneCells(...)) を包み、markDirty する', () => {
   assert.match(src, /^\s*withFinishUndo\(graph, \(\) => room\.setCeilingZones\(clearZoneCells\(graph, room, selection\.cellKeys\)\)\);\s*$/m);
-  assert.equal(count(/^\s*markDirty\(\);\s*$/gm), 2, '確定と解除でそれぞれ markDirty');
+  assert.equal(count(/^\s*markDirty\(\);\s*$/gm), 2, '確定と解除でそれぞれ markDirty（行の材の書込みは onChange 内の1行で markDirty）');
   assert.equal(count(/room\.setCeilingZones\(/g), 2, '区画の書込みは確定と解除の2か所だけで、どちらも withFinishUndo の中');
+});
+
+test('【配線】S10: 材の書込み（setOverride／clearOverride）は行の onChange の1か所だけで、withFinishUndo の中。部屋を直引きしない', () => {
+  assert.equal(count(/room\.setOverride\(/g), 1);
+  assert.equal(count(/room\.clearOverride\(/g), 1);
+  assert.match(src, /withFinishUndo\(graph, \(\) => \(v === '' \? room\.clearOverride\(field\.key\) : room\.setOverride\(field\.key, v\)\)\)/);
+  assert.equal(count(/graph\.roomMap\.get\(row\.id\)/g), 1, 'roomMap 直引きは三角の判定・内訳用の1か所だけ（書込み先は target）');
+  assert.match(src, /^\s*const room = row\.kind === 'room' \? graph\.roomMap\.get\(row\.id\) : null;\s*$/m);
+  assert.match(src, /^\s*<RowMaterialSelect graph=\{graph\} mode=\{mode\} room=\{target\} field=\{f\} \/>\s*$/m, '書込み先は target（ceilingWriteTargetRoom）');
 });
 
 test('【配線】入力の検証は parseCeilingZoneDraft（失敗は欄の下の1行へ）。Enter で確定、keydown は伝播させない', () => {

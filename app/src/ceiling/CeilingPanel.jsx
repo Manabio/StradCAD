@@ -5,7 +5,7 @@ import { BottomSheet } from '../ui/BottomSheet.jsx';
 import { MaterialSelect } from '../finish/FinishTable.jsx';
 import { withFinishUndo } from '../finish/finishUndo.js';
 import { markDirty } from '../dirtyState.js';
-import { interiorRows, stairRows, selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom } from './ceilingPanelRows.js';
+import { interiorRows, stairRows, selectionSummary, selectionSpanMm, ceilingWriteTargetRoom, ceilingZoneTargetRoom, zoneDetailRows, remainderRow } from './ceilingPanelRows.js';
 import { assignZoneShape, clearZoneCells } from './ceilingZones.js';
 import { CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, parseCeilingZoneDraft, stairCeilingSlopeDefaults } from './ceilingShapeFields.js';
 
@@ -14,10 +14,11 @@ import { CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, parseCei
 // 部屋の無い階段の行（kind==='stair'）は行タップの選択対象外（タップしても selectRoom を呼ばない）。
 // ただしキャンバスのドラッグ選択（S2）で選ばれたときは強調する（selectedRoomId === row.id）。
 // タブ列の上に選択中のセルの要約を1行出す（selectionSummary）。
-// 要約の下に、選択中のセル群の天井材・仕上げの MaterialSelect を2つ出す（S3）。「仕上げは部屋に1つ」なので
-// 書込み先は常に部屋の customOverrides（ceilingPanel／ceilingFinish。ceilingWriteTargetRoom が所属から解く）。
-// 部屋の無い階段なら disabled の「—」。undo は仕上げ表の master 欄と同じ withFinishUndo（欄単位で1エントリ）。
-// 表の天井材・仕上げは読むだけ（略称表示）、CH は読むだけ（区画が効いていれば最小～最大の表記。区画の書込みは下の「区画の高さ」欄）。
+// 表の各行で天井材・仕上げの MaterialSelect を直接編集する（S10。「仕上げは部屋に1つ」なので入口は行だけ）。
+// 書込み先は部屋の customOverrides（ceilingPanel／ceilingFinish。ceilingWriteTargetRoom が行の所属から解く。階段行は対の部屋）。
+// 部屋の無い階段の行は disabled の「—」。undo は仕上げ表の master 欄と同じ withFinishUndo（欄単位で1エントリ）＋markDirty。
+// CH は読むだけ（区画が効いていれば最小～最大の表記。区画の書込みは上段の CeilingZoneFields）。
+// 選択された行は展開する（mode.expandedRowId。アコーディオン）。区画のある部屋の行は先頭の三角で内訳（zoneDetailRows／remainderRow）を開閉。
 // 行の組み立ては ceilingPanelRows.js、区画の組み立ては ceilingZones.js。
 
 const TABS = [
@@ -36,34 +37,95 @@ const cellStyle = { padding: '6px 8px', fontSize: 12, borderBottom: '1px solid #
 
 const dash = (v) => (v == null || v === '' ? '—' : v);
 
-// 天井材・仕上げの欄（選択中のセル群の書込み先の部屋へ。空は clearOverride＝既定へ復帰）
-const CeilingMaterialFields = observer(({ graph, mode, room }) => {
-  const info = room ? room.getFinishInfo() : null;
-  const fields = [
-    { key: 'ceilingPanel',  label: '天井材', category: 'panel' },
-    { key: 'ceilingFinish', label: '仕上げ', category: 'finish' },
-  ];
+const MATERIAL_FIELDS = [
+  { key: 'ceilingPanel',  label: '天井材', category: 'panel' },
+  { key: 'ceilingFinish', label: '仕上げ', category: 'finish' },
+];
+
+// 行の天井材・仕上げの欄（書込み先の部屋へ。空は clearOverride＝既定へ復帰）。room が null（部屋の無い階段）は disabled の「—」
+const RowMaterialSelect = observer(({ graph, mode, room, field }) => {
+  if (!room) {
+    return (
+      <select disabled value="" style={{ width: '100%', minWidth: 0, fontSize: 12 }} title="部屋の無い階段には天井材・仕上げを指定できません">
+        <option value="">—</option>
+      </select>
+    );
+  }
   return (
-    <div style={{ display: 'flex', gap: 12, padding: '6px 10px', borderBottom: '1px solid #e2e8f0', background: '#fafafa', flexShrink: 0 }}>
-      {fields.map(f => (
-        <label key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0, fontSize: 12, color: '#374151' }}>
-          <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{f.label}：</span>
-          {room ? (
-            <MaterialSelect
-              mode={mode}
-              category={f.category}
-              value={info[f.key]}
-              onChange={v => withFinishUndo(graph, () => (v === '' ? room.clearOverride(f.key) : room.setOverride(f.key, v)))}
-              style={{ flex: 1, minWidth: 0 }}
-            />
-          ) : (
-            <select disabled value="" style={{ flex: 1, minWidth: 0 }} title="部屋の無い階段には天井材・仕上げを指定できません">
-              <option value="">—</option>
-            </select>
-          )}
-        </label>
+    <MaterialSelect
+      mode={mode}
+      category={field.category}
+      value={room.getFinishInfo()[field.key]}
+      onChange={v => { withFinishUndo(graph, () => (v === '' ? room.clearOverride(field.key) : room.setOverride(field.key, v))); markDirty(); }}
+      style={{ width: '100%', minWidth: 0, fontSize: 12 }}
+    />
+  );
+});
+
+const triangleStyle = { width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontSize: 11, lineHeight: '16px', color: '#475569', flexShrink: 0 };
+const triangleGap = { display: 'inline-block', width: 16, flexShrink: 0 };
+
+// 展開した行の内訳（読むだけ。編集は上段の CeilingZoneFields）
+const ZoneDetail = observer(({ graph, room }) => {
+  const zones = zoneDetailRows(graph, room);
+  const rest = remainderRow(graph, room);
+  const line = { fontSize: 12, color: '#374151', padding: '2px 0' };
+  return (
+    <div style={{ padding: '4px 8px 6px 24px' }}>
+      {zones.map(z => (
+        <div key={z.zoneId} style={line}>
+          {z.shapeLabel}｜基準高 {z.heightLabel}{z.dimsLabel && `｜${z.dimsLabel}`}｜{z.cellCount}セル
+        </div>
       ))}
+      {rest && <div style={line}>残り: 部屋 CH {dash(rest.chLabel)}｜{rest.cellCount}セル</div>}
     </div>
+  );
+});
+
+// 表の1行（部屋名｜天井材｜仕上げ｜CH）。区画がある部屋は先頭に三角を出し、開くと下に内訳。選択された行は展開される（mode.expandedRowId）
+const CeilingRow = observer(({ graph, mode, row }) => {
+  const room = row.kind === 'room' ? graph.roomMap.get(row.id) : null;
+  const target = ceilingWriteTargetRoom(graph, { owner: { kind: row.kind, id: row.id } });
+  const hasZones = !!room && room.ceilingZones.length > 0;
+  const expanded = mode.expandedRowId === row.id;
+  return (
+    <>
+      <tr
+        onClick={() => { if (row.kind === 'room') mode.selectRoom(row.id); }}
+        style={{
+          cursor: row.kind === 'room' ? 'pointer' : 'default',
+          background: row.id === mode.selectedRoomId ? '#eff6ff' : '#fff',
+        }}
+      >
+        <td style={cellStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            {hasZones ? (
+              <button
+                aria-label={expanded ? '内訳を閉じる' : '内訳を開く'}
+                onClick={e => { e.stopPropagation(); mode.toggleExpandedRow(row.id); }}
+                style={triangleStyle}
+              >
+                {expanded ? '▾' : '▸'}
+              </button>
+            ) : <span style={triangleGap} />}
+            <span>{row.name}</span>
+          </div>
+        </td>
+        {MATERIAL_FIELDS.map(f => (
+          <td key={f.key} style={cellStyle}>
+            <RowMaterialSelect graph={graph} mode={mode} room={target} field={f} />
+          </td>
+        ))}
+        <td style={cellStyle}>{dash(row.ch)}</td>
+      </tr>
+      {expanded && hasZones && (
+        <tr style={{ background: '#f1f5f9' }}>
+          <td colSpan={COLUMNS.length} style={{ ...cellStyle, padding: 0 }}>
+            <ZoneDetail graph={graph} room={room} />
+          </td>
+        </tr>
+      )}
+    </>
   );
 });
 
@@ -205,9 +267,6 @@ export const CeilingPanel = observer(({ graph, mode, isLandscape, floorHeight })
         </div>
       )}
       {mode.selection && (
-        <CeilingMaterialFields graph={graph} mode={mode} room={ceilingWriteTargetRoom(graph, mode.selection)} />
-      )}
-      {mode.selection && (
         <CeilingZoneFields key={zoneFieldKey(mode.selection)} graph={graph} selection={mode.selection} zone={summary?.zone ?? null} floorHeight={floorHeight ?? null} />
       )}
       <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', flexShrink: 0 }}>
@@ -248,18 +307,7 @@ export const CeilingPanel = observer(({ graph, mode, isLandscape, floorHeight })
             </thead>
             <tbody>
               {rows.map(row => (
-                <tr
-                  key={row.id}
-                  onClick={() => { if (row.kind === 'room') mode.selectRoom(row.id); }}
-                  style={{
-                    cursor: row.kind === 'room' ? 'pointer' : 'default',
-                    background: row.id === mode.selectedRoomId ? '#eff6ff' : '#fff',
-                  }}
-                >
-                  {COLUMNS.map(c => (
-                    <td key={c.key} style={cellStyle}>{c.key === 'name' ? row.name : dash(row[c.key])}</td>
-                  ))}
-                </tr>
+                <CeilingRow key={row.id} graph={graph} mode={mode} row={row} />
               ))}
             </tbody>
           </table>
