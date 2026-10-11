@@ -45,6 +45,20 @@ function woodOpeningHosts(graph, rules) {
 }
 
 /**
+ * 開口の辺が、隔て壁の踊り場側の端（柱）を貫く辺か（規則1: 木造階段の踊り場・回転部側の隔て板柱には床梁を渡さない。
+ * ユーザー指示 2026-10-12）。真＝辺と端の向きが直交し、端の along が辺の座標に一致し、端の coord が辺の区間内にある。
+ * 上り口側（side:'entry'）の端は対象外（上り口辺の小梁は残す）。
+ * @param {{isVertical:boolean, coord:number, lo:number, hi:number}} edge
+ * @param {Array<{isVertical:boolean, coord:number, along:number, side?:string}>} ends stairPartitionEnds の結果
+ */
+export function isLandingFrontEdge(edge, ends) {
+  return ends.some(e => e.side === 'landing'
+    && e.isVertical !== edge.isVertical
+    && Math.abs(edge.coord - e.along) < CL_OVERLAP_TOL_MM
+    && e.coord >= edge.lo - CL_OVERLAP_TOL_MM && e.coord <= edge.hi + CL_OVERLAP_TOL_MM);
+}
+
+/**
  * 在来木造の吹抜けの辺に小梁（role:'secondary'、beamType:'小梁'）を自動生成し、候補に無い自動生成の
  * 小梁（dimensionStatus==='auto'）を撤去する。
  *  - openingComponents: openingBeamAxes.js openingEdgeComponents の結果（矩形成分ごとの4辺）。
@@ -70,9 +84,13 @@ function woodOpeningHosts(graph, rules) {
  *   （stairPartitionBeams.js stairPartitionBeamSpans の計画値）。折返し・回り階段（U 字系）の隔て壁の真上の梁で、開口辺に乗る辺は
  *   「梁あり」として除く。計画値を使うのは、隔て梁の生成が本関数の後（同じ再計算の中）で実梁がまだ無いため。
  *   支え（直交辺の掛け先）にはしない——隔て梁の端は開口辺の梁に載る側（stairPartitionBeams.js 冒頭）。
+ * @param {Array<{isVertical:boolean, coord:number, along:number, side:string}>} [belowPartitionEnds] - 下階の
+ *   stairPartitionEnds。踊り場側（side:'landing'）の端が線上にある辺は架けない（isLandingFrontEdge。規則1）。
+ *   辺は計画の前に外す＝「梁あり」にも「除外」にもせず、他の辺の支えにも数えない。梁が載るのは下階の柱の頭で、
+ *   開口（stairBeyond）は下階に同じ階段があるときだけ生まれるので下階の端を使う。
  * @returns {{created: object[], removed: string[]}}
  */
-export function autoFillWoodOpeningBeams(graph, project, openingComponents, wallSegments, partitionSpans = []) {
+export function autoFillWoodOpeningBeams(graph, project, openingComponents, wallSegments, partitionSpans = [], belowPartitionEnds = []) {
   const none = { created: [], removed: [] };
   if (openingComponents === undefined) return none;
   const rules = rulesFor(effectiveStructure(graph, project));
@@ -88,6 +106,7 @@ export function autoFillWoodOpeningBeams(graph, project, openingComponents, wall
   // 成分ごとに計画する。スロットが除外済みの小梁を含む計画は、その辺を外して計画し直す。
   const plans = openingComponents.map(edges4 => {
     const edges = edges4
+      .filter(edge => !isLandingFrontEdge(edge, belowPartitionEnds))
       .map(edge => ({ ...edge, target: edgeTarget(graph, edge, rules).coord }))
       .filter(edge => !partitionSpans.some(s => s.isVertical === edge.isVertical
         && Math.min(Math.abs(s.axisValue - edge.coord), Math.abs(s.axisValue - edge.target)) <= coverTol

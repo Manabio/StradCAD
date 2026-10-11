@@ -84,11 +84,13 @@ const LINE_END_TOL_MM = 0.5;
  * free＝この端が他の壁と交わらない自由端か。自階の壁（selfWallSegments）に隔て壁自身を加えて
  * wallRunFreeEnds に掛け、その端が結果に出れば true（T字・取り合い＝false。柱は立つが柱包みはしない）。
  * 在来木造（rules.framing）以外は空。
+ * side＝'landing'（踊り場側の端）／'entry'（上り口側の端）。線の landingAlong と along の一致（LINE_END_TOL_MM）で決める
+ * （「端が辺の上にあるか」では上り口側も上り口辺に乗り区別できないため）。
  * @param {object} graph
  * @param {object} [project]
  * @param {ReturnType<import('./wallBeamAxes.js').createWallSourceCache>} [wallSourceCache] - selfWallSegments のmemo（省略可）
  * @param {Array} [selfSegments] - 呼び出し側が計算済みの selfWallSegments（あれば再計算しない）。絞り込み前のものを渡すこと
- * @returns {Array<{isVertical:boolean, coord:number, along:number, x:number, y:number, free:boolean}>}
+ * @returns {Array<{isVertical:boolean, coord:number, along:number, x:number, y:number, free:boolean, side:'landing'|'entry'}>}
  */
 export function stairPartitionEnds(graph, project, wallSourceCache = undefined, selfSegments = undefined) {
   if (!rulesFor(effectiveStructure(graph, project)).framing) return [];
@@ -119,7 +121,8 @@ export function stairPartitionEnds(graph, project, wallSourceCache = undefined, 
       seen.add(key);
       const free = freeEnds.some(fe => fe.isVertical === c.isVertical
         && Math.abs(fe.coord - c.coord) < WALL_JUNCTION_TOL_MM && Math.abs(fe.along - along) < WALL_JUNCTION_TOL_MM);
-      out.push({ isVertical: c.isVertical, coord: c.coord, along, x, y, free });
+      const side = Math.abs(along - c.line.landingAlong) <= LINE_END_TOL_MM ? 'landing' : 'entry';
+      out.push({ isVertical: c.isVertical, coord: c.coord, along, x, y, free, side });
     }
   }
   return out;

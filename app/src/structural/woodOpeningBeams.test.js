@@ -12,7 +12,9 @@ import { BeamAxisOrigin } from '../core/centerLine.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillStructuralGrid } from './structuralAutoFill.js';
 import { autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodBeamDepths } from './woodAutoFill.js';
-import { autoFillWoodOpeningBeams } from './woodOpeningBeams.js';
+import { autoFillWoodOpeningBeams, isLandingFrontEdge } from './woodOpeningBeams.js';
+import { generateStairPartitionWalls } from '../finish/stair/stairPartitionWalls.js';
+import { stairPartitionEnds } from './wallFreeEnds.js';
 import { openingEdgeComponents, edgeTarget } from './openingBeamAxes.js';
 import { selfWallSegments, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
@@ -439,4 +441,111 @@ test('【S3-11】描画端部: 2段目の小梁(secondary)は1段目の小梁の
   const span = v.spanForHostBeams(g2.beams, 0);
   // 縦辺 v は y=0 の通し梁（primary）の縁から、横辺 h の縁まで。h の半幅は材幅/2。
   assert.ok(Math.abs(span.coord2 - (h.axisValue - h.sectionWidth / 2)) < 0.01, `2段目の端は1段目の縁（実際 ${span.coord2}）`);
+});
+
+// ---- 規則1: 木造階段の踊り場・回転部側の隔て板柱には床梁を渡さない（ユーザー指示 2026-10-12）----
+// 1階: SWITCHBACK 階段（隔て壁 x=1000・y1000〜4000。踊り場側の端 y=1000・上り口側の端 y=4000）。2階: 親部屋「A」
+// （外周 0..2000×0..4000 だけ壁）。階段の破れ先の開口は x1000..2000・y1000..4000 で、壁の無い辺は踊り場前縁 y=1000 だけ
+// （x=1000 は隔て壁の線上・y=4000 と x=2000 は外周の壁）。
+const EQUAL_UP = [[0, 0, 2000, 1000], [0, 1000, 1000, 4000], [1000, 1000, 2000, 4000]];
+// EQUAL_UP を y 方向に鏡映（踊り場側が hi＝y=4000、上り口側が lo＝y=1000 になる）
+const EQUAL_DOWN = [[0, 3000, 2000, 4000], [0, 0, 1000, 3000], [1000, 0, 2000, 3000]];
+function makeLandingFixture({ lowerStructure = WOOD, upDirection = 'up', rects = EQUAL_UP } = {}) {
+  const project = new Project('proj-landing-front', 'test');
+  const mkFloor = (elevation, name, id, structure) => {
+    const { graph } = project.addPlane(elevation, name, id);
+    graph.structureOverride = structure;
+    const vs = new Map(), hs = new Map();
+    const mk = (type, map, v) => map.get(v) ?? map.set(v, graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH })).get(v);
+    const keys = rects.map(([x1, y1, x2, y2]) =>
+      `${mk(CenterLineType.VERTICAL, vs, x1).id}:${mk(CenterLineType.HORIZONTAL, hs, y1).id}:${mk(CenterLineType.VERTICAL, vs, x2).id}:${mk(CenterLineType.HORIZONTAL, hs, y2).id}`);
+    graph.addStair({ type: StairType.SWITCHBACK, cells: new Set(keys), sections: [6, 1, 6], flip: false, upDirection });
+    return graph;
+  };
+  const g1 = mkFloor(0, '1階', 'p1', lowerStructure);
+  generateStairPartitionWalls(g1, { structure: lowerStructure, underEdges: [] });
+  const g2 = mkFloor(3000, '2階', 'p2', WOOD);
+  const parent = g2.addRoom(new Set(getAllCells(g2).map(c => c.key)), 'A');
+  generateRoomWallsFromOutline(g2, parent);
+  return { project, g1, g2 };
+}
+async function recomputeLanding(f) {
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => f.project.graphMap.get(plane.id) ?? null;
+  try {
+    return await recomputeStructuralForGraph(f.g2, f.project, WOOD, f.g1);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+}
+const frontSmalls = g => smalls(g).filter(b => !b.isVertical && Math.abs(b.axisCL.effectiveValue - 1000) < 1);
+
+test('【規則1・stairPartitionEnds】端に side が付く: 踊り場側（y=1000）は landing、上り口側（y=4000）は entry', () => {
+  const { project, g1 } = makeLandingFixture();
+  const ends = stairPartitionEnds(g1, project);
+  assert.deepEqual(ends.map(e => [e.y, e.side]).sort((a, b) => a[0] - b[0]), [[1000, 'landing'], [4000, 'entry']]);
+});
+
+test('【規則1・isLandingFrontEdge】踊り場側の端が直交する辺の区間内にあれば真。上り口側の端・平行な辺・区間外・座標違いは偽', () => {
+  const ends = [
+    { isVertical: true, coord: 1000, along: 1000, side: 'landing' },
+    { isVertical: true, coord: 1000, along: 4000, side: 'entry' },
+  ];
+  assert.equal(isLandingFrontEdge({ isVertical: false, coord: 1000, lo: 1000, hi: 2000 }, ends), true, '踊り場前縁（端 x=1000 は区間の端）');
+  assert.equal(isLandingFrontEdge({ isVertical: false, coord: 1000, lo: 0, hi: 2000 }, ends), true, '区間の内側でも真');
+  assert.equal(isLandingFrontEdge({ isVertical: false, coord: 4000, lo: 1000, hi: 2000 }, ends), false, '上り口辺は上り口側の端だけなので偽（side の判別）');
+  assert.equal(isLandingFrontEdge({ isVertical: true, coord: 1000, lo: 1000, hi: 4000 }, ends), false, '端と平行な辺は偽');
+  assert.equal(isLandingFrontEdge({ isVertical: false, coord: 1000, lo: 1500, hi: 2000 }, ends), false, '区間の外は偽');
+  assert.equal(isLandingFrontEdge({ isVertical: false, coord: 1500, lo: 1000, hi: 2000 }, ends), false, '座標違いは偽');
+  assert.equal(isLandingFrontEdge({ isVertical: false, coord: 1000, lo: 1000, hi: 2000 }, []), false, '端なしは偽');
+});
+
+test('【規則1】1階の木造 U 字階段が2階に続くと、踊り場前縁（隔て壁の踊り場側の端が乗る辺）に小梁を架けない。踊り場側の端を通る梁も無い', async () => {
+  const f = makeLandingFixture();
+  const comps = openingEdgeComponents(f.g2, { belowGraph: f.g1 });
+  assert.equal(comps.length, 1, '前提: 階段の破れ先の開口が1成分');
+  await recomputeLanding(f);
+  assert.equal(frontSmalls(f.g2).length, 0, `踊り場前縁 y=1000 の小梁は無い（実際: ${smalls(f.g2).map(brief)}）`);
+  // 隔て壁の踊り場側の端 (1000,1000) を通る床梁・小梁は無い（端の点を区間内に含む水平梁が y=1000 に無い）
+  const through = f.g2.beams.filter(b => !b.isVertical && b.role !== 'partitionBeam' && Math.abs(b.axisCL.effectiveValue - 1000) < 1
+    && Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) < 1000 - 1 && Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue) > 1000 + 1);
+  assert.deepEqual(through.map(brief), [], '端の柱を貫く梁が無い');
+});
+
+test('【規則1・回帰】belowPartitionEnds=[]（従来）なら同じ辺に小梁が架かる。踊り場側の端を side:entry にしても架かる（side の判別）', () => {
+  const f = makeLandingFixture();
+  const segs = selfWallSegments(f.g2);
+  const comps = openingEdgeComponents(f.g2, { belowGraph: f.g1 });
+  const ends = stairPartitionEnds(f.g1, f.project);
+  assert.equal(ends.length, 2, '前提: 下階の隔て壁の端が2つ');
+  // 本番の autoFillStructuralGrid の前段（壁線の通し梁）を作ってから、小梁だけを引数違いで試す
+  autoFillStructuralGrid(f.g2, f.project, WOOD, null, [], segs, [], [], [], undefined, undefined, undefined, [], null, undefined, undefined, null, undefined);
+  const withOld = autoFillWoodOpeningBeams(f.g2, f.project, comps, segs, [], []);
+  assert.ok(withOld.created.some(b => !b.isVertical && Math.abs(b.axisCL.effectiveValue - 1000) < 1), `従来は y=1000 に小梁（実際: ${withOld.created.map(brief)}）`);
+  for (const b of withOld.created) f.g2.beamMap.delete(b.id);
+  const asEntry = autoFillWoodOpeningBeams(f.g2, f.project, comps, segs, [], ends.map(e => ({ ...e, side: 'entry' })));
+  assert.ok(asEntry.created.some(b => !b.isVertical && Math.abs(b.axisCL.effectiveValue - 1000) < 1), '全部 entry なら外さない');
+  for (const b of asEntry.created) f.g2.beamMap.delete(b.id);
+  const rule1 = autoFillWoodOpeningBeams(f.g2, f.project, comps, segs, [], ends);
+  assert.equal(rule1.created.filter(b => !b.isVertical && Math.abs(b.axisCL.effectiveValue - 1000) < 1).length, 0, '規則1で外れる');
+});
+
+test('【規則1・失敗系】下階が鉄骨階段（隔て壁なし）なら踊り場前縁の小梁は外さない', async () => {
+  const f = makeLandingFixture({ lowerStructure: StructuralMaterialType.STEEL });
+  assert.deepEqual(stairPartitionEnds(f.g1, f.project), [], '前提: 隔て壁の端が無い');
+  const comps = openingEdgeComponents(f.g2, { belowGraph: f.g1 });
+  assert.equal(comps.length, 1, '前提: 開口は残る');
+  await recomputeLanding(f);
+  assert.ok(frontSmalls(f.g2).length >= 1, `踊り場前縁 y=1000 に小梁が架かる（実際: ${smalls(f.g2).map(brief)}）`);
+});
+
+test('【規則1・逆向き】踊り場側が hi（y=3000。実データ moku4 系と同じ向き）でも side は踊り場側＝landing、踊り場前縁 y=3000 に小梁を架けない・上り口側 y=0 は外さない', async () => {
+  const f = makeLandingFixture({ upDirection: 'down', rects: EQUAL_DOWN });
+  const ends = stairPartitionEnds(f.g1, f.project);
+  assert.deepEqual(ends.map(e => [e.y, e.side]).sort((a, b) => a[0] - b[0]), [[0, 'entry'], [3000, 'landing']], '前提: 踊り場側が hi');
+  await recomputeLanding(f);
+  const at = y => smalls(f.g2).filter(b => !b.isVertical && Math.abs(b.axisCL.effectiveValue - y) < 1);
+  assert.equal(at(3000).length, 0, `踊り場前縁 y=3000 に小梁は無い（実際: ${smalls(f.g2).map(brief)}）`);
+  assert.ok(isLandingFrontEdge({ isVertical: false, coord: 3000, lo: 1000, hi: 2000 }, ends));
+  assert.ok(!isLandingFrontEdge({ isVertical: false, coord: 0, lo: 1000, hi: 2000 }, ends), '上り口側の端 y=0 は外さない');
 });

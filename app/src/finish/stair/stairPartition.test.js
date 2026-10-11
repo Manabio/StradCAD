@@ -207,7 +207,7 @@ test('鉄骨の SWITCHBACK/WINDING: 在来の建物でも stairHasPartition・re
 test('識別は構造に依らない: 鉄骨の階段でも stairPartitionLines は線を返す（構造切替後に残る古い壁を構造の壁ソースへ漏らさない）', () => {
   const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
   stair.structure = StructuralMaterialType.STEEL;
-  assert.deepEqual(stairPartitionLines(graph), [{ isVertical: true, axisValue: 1000, lo: 1000, hi: 4000 }]);
+  assert.deepEqual(stairPartitionLines(graph), [{ isVertical: true, axisValue: 1000, lo: 1000, hi: 4000, landingAlong: 1000 }]);
 });
 
 test('【失敗系】uTurnSpans が取れない（回転部が走行全長を占める）階段は null', () => {

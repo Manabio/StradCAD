@@ -159,14 +159,21 @@ export function stairHasPartition(stair, graph, structure) {
  * isStairPartitionWall の形の照合（仕上げ12.5・軸±57.5・下地90/0）＋区間の収まりが同時に成り立つ壁は
  * 通常の生成物にはまず無いため、誤一致しない（あっても従来は構造の源から外れる程度）。
  * @param {object} graph
- * @returns {Array<{isVertical:boolean, axisValue:number, lo:number, hi:number}>}
+ * landingAlong＝踊り場側の端の走行方向座標（lo/hi のどちらが踊り場側かを呼び出し側が見分ける材料。
+ * 規則1「踊り場側の隔て板柱には床梁を渡さない」＝woodOpeningBeams.js）。
+ * @returns {Array<{isVertical:boolean, axisValue:number, lo:number, hi:number, landingAlong:number}>}
  */
 export function stairPartitionLines(graph) {
   const out = [];
   for (const stair of graph?.stairs ?? []) {
     if (graph.roomMap?.get(stair.roomId)?.kind === RoomKind.EXTERIOR) continue;
     const g = stairPartitionGeometry(stair, graph);
-    if (g) out.push({ isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi });
+    if (g) {
+      out.push({
+        isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi,
+        landingAlong: g.isVertical ? g.landingEnd.y : g.landingEnd.x,
+      });
+    }
   }
   return out;
 }

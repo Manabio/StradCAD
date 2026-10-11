@@ -764,7 +764,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // openingComponents===undefined（在来でない・屋根専用平面・基礎伏図）は何もしない。
   const openingBeamsResult = (!isRoof && !foundation && ownSpecified)
     ? autoFillWoodOpeningBeams(graph, project, openingComponents, wallSegments,
-      openingComponents ? stairPartitionBeamSpans(graph, project, belowPartitionEnds) : [])
+      openingComponents ? stairPartitionBeamSpans(graph, project, belowPartitionEnds) : [], belowPartitionEnds)
     : { created: [], removed: [] };
   const newBeams = [...beamsResult.created, ...openingBeamsResult.created];
   const removedBeams = [...beamsResult.removed, ...openingBeamsResult.removed];

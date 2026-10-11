@@ -90,7 +90,7 @@ test('在来・WINDING（回り階段）: SWITCHBACK と同じくオーナー壁
   assert.deepEqual([owner.axisOffset, owner.backingDepth, owner.finishSide], [57.5, 90, 1]);
   assert.deepEqual([thin.axisOffset, thin.backingDepth, thin.finishSide], [-57.5, 0, -1]);
   const lines = stairPartitionLines(graph);
-  assert.deepEqual(lines, [{ isVertical: true, axisValue: 1000, lo: 1000, hi: 4000 }]);
+  assert.deepEqual(lines, [{ isVertical: true, axisValue: 1000, lo: 1000, hi: 4000, landingAlong: 1000 }]);
   assert.ok(walls.every(w => isStairPartitionWall(w, lines)));
 });
 
@@ -189,7 +189,7 @@ test('識別 stairPartitionLines/isStairPartitionWall: 隔て壁2枚は真。普
   const { graph, V, H } = makeStair(EQUAL_UP);
   const [owner, thin] = gen(graph);
   const lines = stairPartitionLines(graph);
-  assert.deepEqual(lines, [{ isVertical: true, axisValue: 1000, lo: 1000, hi: 4000 }]);
+  assert.deepEqual(lines, [{ isVertical: true, axisValue: 1000, lo: 1000, hi: 4000, landingAlong: 1000 }]);
   assert.equal(isStairPartitionWall(owner, lines), true);
   assert.equal(isStairPartitionWall(thin, lines), true);
   const x1 = V(1000), y1 = H(1000), y4 = H(4000);
