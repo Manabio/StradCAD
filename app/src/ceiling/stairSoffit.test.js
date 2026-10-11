@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { StairType, StructuralMaterialType, DEFAULT_ROOM_CEILING_HEIGHT, Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js';
-import { stairSoffitSolids, stairBelowCeilingMm, uTurnSoffitFromLayout, straightSoffitFromLayout } from './stairSoffit.js';
+import { stairSoffitSolids, stairBelowCeilingMm, uTurnSoffitFromLayout, straightSoffitFromLayout, clipSegmentToPieces } from './stairSoffit.js';
 import { uTurnPlanLayout, straightPlanLayout } from '../finish/stair/stairGeometry.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
@@ -73,15 +73,15 @@ test('WINDING（手計算の固定値。sections [5,6,5]・蹴上200・FL2800・
   // 三角の内側は平面補間（A1=(P_A,F_A,O_A) の重心）
   near(z((1000 + 57.5 + 57.5) / 3, (1000 + 1000 + 57.5) / 3), zA + 250 / 3, 'A1 の重心');
   near(sf.zLo, 2400, 'zLo'); near(sf.zHi, zEnd, 'zHi');
-  // 面の折れ目: 往路との境・復路との境・対角線 2 本（隔て板の角点 → 外側の奥の角）・あき 0 の往路/復路の境と A/B の境。6 本ちょうど
+  // 面の折れ目: 往路/復路との境（前縁）・対角線 2 本（ピボット → 外側の奥の角）・回転部 A/B の境・あき 0 の往路/復路の境。6 本ちょうど
   assert.deepEqual(sf.innerLines.map(l => l.role), Array(6).fill('stairSoffitFold'));
   assert.deepEqual(sf.innerLines.map(lineKey), [
     '57.5,1000,1000,1000',
     '1000,1000,1942.5,1000',
     '1000,1000,57.5,57.5',
     '1000,1000,1942.5,57.5',
-    '1000,1000,1000,4000', // あき 0（sA==sB）の往路 R_A と復路 R_B の境
-    '1000,1000,1000,57.5', // あき 0 の回転部 A と B の境（高さが食い違う共有辺）
+    '1000,1000,1000,57.5',  // 回転部 A と B の境（高さが食い違う共有辺）
+    '1000,1000,1000,4000',  // あき 0（sA==sB）の往路 R_A と復路 R_B の境
   ]);
 });
 
@@ -265,6 +265,7 @@ const MOKU43 = {
   pivotAcross: 865, hasColumn: true, firstTurnNumber: 5, turnCells: 6, totalSteps: 15,
 };
 const ctxOf = (zStart = 2400) => ({ zStart, zTop });
+const XA43 = 865 + (72.5 - 865) * (90 / 882.5); // 直線 P_A(865,-8235)→O_A(72.5,-7352.5) と前縁 y=-8145 の交点の幅方向
 const ZA43 = FL + 5 * RISER - DZ, ZB43 = FL + 10 * RISER - DZ, ZEND43 = FL + 15 * RISER - DZ;
 
 /** layout を向きごと変換する: sa＝幅方向の符号、sr＝走行方向の符号、swap＝vertical の反転（world への写しだけが変わる）。 */
@@ -307,43 +308,88 @@ function overlapProblems(sf) {
   return problems;
 }
 
-test('柱あり WINDING（moku4-3 の値）: 前縁は両レーン共通の -8145 の 1 本。対角線は隔て板の角点 (852.5,-8145)／(967.5,-8145) から。y=-8235（frontA）・x=865（ピボット）の線は無い', () => {
+test('柱あり WINDING（moku4-3 の値）: 前縁は両レーン共通の -8145 の 1 本。対角線はピボット (865,-8235)／(865,-8145) 基準で立体の中に切る。y=-8235 の横線は無い', () => {
   const sf = uTurnSoffitFromLayout(MOKU43, ctxOf());
   assert.deepEqual(sf.footprint.rects, [
-    { x1: 72.5, y1: -9100, x2: 852.5, y2: -8145 },       // 往路 R_A
-    { x1: 72.5, y1: -8145, x2: 852.5, y2: -7352.5 },     // 回転部 A（780 × 792.5 ≒ 正方形）
-    { x1: 852.5, y1: -8145, x2: 967.5, y2: -7352.5 },    // 隔て板の延長の帯 S
-    { x1: 967.5, y1: -8145, x2: 1747.5, y2: -7352.5 },   // 回転部 B
+    { x1: 72.5, y1: -9100, x2: 852.5, y2: -8145 },       // 往路 R_A（turnFront で終わる）
+    { x1: 72.5, y1: -8145, x2: 865, y2: -7352.5 },       // 回転部 A
+    { x1: 865, y1: -8145, x2: 1747.5, y2: -7352.5 },     // 回転部 B
     { x1: 967.5, y1: -9100, x2: 1747.5, y2: -8145 },     // 復路 R_B
   ]);
-  const qa = sf.footprint.rects[1];
-  assert.ok(Math.abs((qa.x2 - qa.x1) - (qa.y2 - qa.y1)) < 15, '回転部の矩形はほぼ正方形（対角線 45 度相当）');
-  assert.deepEqual(sf.innerLines.map(l => l.role), Array(4).fill('stairSoffitFold'));
+  // 往路側のピボット P_A=(865,-8235) は前縁より手前。対角線 P_A→O_A=(72.5,-7352.5) は x=852.5（レーンのあきの縁）から立体の中に入る
+  const yAt852 = -8235 + (865 - 852.5) / (865 - 72.5) * (-7352.5 + 8235);
+  assert.deepEqual(sf.innerLines.map(l => l.role), Array(5).fill('stairSoffitFold'));
   assert.deepEqual(sf.innerLines.map(l => lineKeyOf(l.points)), [
     '72.5,-8145,852.5,-8145',
     '967.5,-8145,1747.5,-8145',
-    '852.5,-8145,72.5,-7352.5',
-    '967.5,-8145,1747.5,-7352.5',
+    lineKeyOf([852.5, yAt852, 72.5, -7352.5]),
+    '865,-8145,1747.5,-7352.5',
+    '865,-8145,865,-7352.5',
   ]);
-  assert.ok(sf.innerLines.every(l => l.points[1] !== -8235 && l.points[3] !== -8235), 'frontA（柱の往路側の面）の線は無い');
-  assert.ok(sf.innerLines.every(l => l.points[0] !== 865 || l.points[2] !== 865), 'ピボット線は無い');
+  assert.ok(Math.abs(yAt852 - -8221.08) < 0.01, `切り口 ${yAt852}`);
+  assert.ok(sf.innerLines.every(l => !(l.points[1] === l.points[3] && l.points[1] === -8235)), 'frontA（柱の往路側の面）の横線は無い');
   // 手計算: dz≈384.1874542・FL2800 → zA=zTop(5)=3415.8125458、zB=zTop(10)=4415.8125458、Δ=1000
   near(ZA43, 3415.8125458, 'zA'); near(ZB43, 4415.8125458, 'zB');
-  near(sf.zAt(852.5, -8145), ZA43, 'P_A（隔て板の角点）');
+  const within1 = (a, b, msg) => assert.ok(Math.abs(a - b) < 1, `${msg}: ${a} vs ${b}`);
   near(sf.zAt(72.5, -8145), ZA43, 'F_A');
-  near(sf.zAt(967.5, -8145), ZB43, 'P_B');
+  within1(sf.zAt(866, -8145), ZB43, 'P_B（復路側のピボット。front=-8145）');
   near(sf.zAt(1747.5, -8145), ZB43, 'F_B');
-  near(sf.zAt(852.5, -7352.5), ZA43 + 500, 'I_A');
-  near(sf.zAt(967.5, -7352.5), ZA43 + 500, 'I_B');
+  near(sf.zAt(865, -7352.5), ZA43 + 500, 'I');
   near(sf.zAt(72.5, -7352.5), ZA43 + 250, 'O_A');
   near(sf.zAt(1747.5, -7352.5), ZA43 + 750, 'O_B');
-  near(sf.zAt(910, -8145), (ZA43 + ZB43) / 2, '帯 S の前縁の中点');
-  near(sf.zAt(881.25, -8145), ZA43 + 250, '帯 S の前縁の 1/4');
-  near(sf.zAt(910, -7352.5), ZA43 + 500, '帯 S の奥');
+  // 三角の重心（頂点の高さの平均）: A1=(X_A,F_A,O_A)・A2=(X_A,O_A,I)・B2=(P_B,I,O_B)・B1=(P_B,O_B,F_B)。X_A＝直線 P_A→O_A と前縁 y=-8145 の交点
+  assert.ok(Math.abs(XA43 - 784.17847) < 1e-4, 'X_A の幅方向（手計算: 865 + (72.5−865)×90/882.5）');
+  near(sf.zAt((XA43 + 72.5 + 72.5) / 3, (-8145 - 8145 - 7352.5) / 3), ZA43 + 250 / 3, 'A1 の重心');
+  near(sf.zAt((XA43 + 72.5 + 865) / 3, (-8145 - 7352.5 - 7352.5) / 3), ZA43 + 250, 'A2 の重心');
+  near(sf.zAt((865 + 865 + 1747.5) / 3, (-8145 - 7352.5 - 7352.5) / 3), ZA43 + 750, 'B2 の重心');
+  near(sf.zAt((865 + 1747.5 + 1747.5) / 3, (-8145 - 7352.5 - 8145) / 3), ZA43 + 1000 - 250 / 3, 'B1 の重心');
   near(sf.zAt(500, -9100), 2400, '往路の上り口');
   near(sf.zAt(500, -8145), ZA43, '往路の終端（前縁）');
   near(sf.zAt(1500, -9100), ZEND43, '復路の到達辺');
   assert.deepEqual(overlapProblems(sf), []);
+});
+
+test('回転部の 2 分線はピボットを通る直線: 直線の両側の点を手計算の平面で照合。R_A と Q_A は前縁 s0〜X_A で連続し、X_A〜pv だけ段差が残る', () => {
+  const sf = uTurnSoffitFromLayout(MOKU43, ctxOf());
+  const tf = -8145, back = -7352.5;
+  // 平面 z = z0 + ga(a−a0) + gr(r−r0) を 3 点 [a, r, z] から手計算（Cramer）で求める
+  const planeZ = (p, q, s) => {
+    const det = (q[0] - p[0]) * (s[1] - p[1]) - (s[0] - p[0]) * (q[1] - p[1]);
+    const ga = ((q[2] - p[2]) * (s[1] - p[1]) - (s[2] - p[2]) * (q[1] - p[1])) / det;
+    const gr = ((q[0] - p[0]) * (s[2] - p[2]) - (s[0] - p[0]) * (q[2] - p[2])) / det;
+    return (a, r) => p[2] + ga * (a - p[0]) + gr * (r - p[1]);
+  };
+  const X = [XA43, tf, ZA43], F = [72.5, tf, ZA43], O = [72.5, back, ZA43 + 250], I = [865, back, ZA43 + 500];
+  const a1 = planeZ(X, F, O), a2 = planeZ(X, O, I);
+  // F 側（直線の左）の点は A1 の平面、I 側（右）の点は A2 の平面
+  near(sf.zAt(460, tf + 0.001), a1(460, tf + 0.001), 'F 側 (460, 前縁直後) は A1');
+  near(sf.zAt(460, tf + 0.001), ZA43 + 250 * 0.001 / (back - tf), '前縁上の A1 は zA（case B で段差が無い）');
+  near(sf.zAt(300, -7900), a1(300, -7900), 'F 側 (300,-7900) は A1（直線は r=-7900 で a≈564）');
+  near(sf.zAt(700, -7900), a2(700, -7900), 'I 側 (700,-7900) は A2');
+  near(sf.zAt(800, -7900), a2(800, -7900), 'I 側 (800,-7900) は A2');
+  assert.ok(Math.abs(a1(800, -7900) - a2(800, -7900)) > 1, '前提: 2 平面は I 側で異なる（検出力）');
+  // 前縁 s0〜X_A で R_A と Q_A が連続（差 1e-4 以内）
+  for (const a of [72.5, 200, 460, 700, XA43 - 0.5]) {
+    const lo = sf.zAt(a, tf - 1e-6), hi = sf.zAt(a, tf + 1e-6);
+    assert.ok(Math.abs(lo - hi) < 1e-4, `a=${a}: R_A ${lo} vs Q_A ${hi}`);
+  }
+  // 残る段差は X_A〜852.5（R_A の幅の終わり）。A2 の前縁での高さは zA でない
+  const stepAt = a => Math.abs(sf.zAt(a, tf + 1e-6) - sf.zAt(a, tf - 1e-6));
+  assert.ok(stepAt(852.5) > 1 && stepAt(852.5) < 80, `x=852.5 の段差 ${stepAt(852.5)}（既知の限界）`);
+});
+
+test('clipSegmentToPieces: 2 矩形をまたぐ線は 1 本に結合／全体が外なら空／矩形の辺に沿う線／始点終点の入替えで同じ区間', () => {
+  const P = (a0, a1, r0, r1) => ({ a0, a1, r0, r1 });
+  const pieces = [P(0, 100, 0, 100), P(100, 200, 0, 100)];
+  assert.deepEqual(clipSegmentToPieces([-50, 50, 250, 50], pieces), [[0, 50, 200, 50]], '隣接する 2 矩形をまたぐ線は 1 本');
+  assert.deepEqual(clipSegmentToPieces([-50, 200, 250, 200], pieces), [], '全体が外');
+  assert.deepEqual(clipSegmentToPieces([0, 0, 200, 0], pieces), [[0, 0, 200, 0]], '矩形の辺に沿う線（2 矩形の境界で重複しても 1 本）');
+  const fwd = clipSegmentToPieces([10, 10, 190, 90], pieces), rev = clipSegmentToPieces([190, 90, 10, 10], pieces);
+  assert.equal(fwd.length, 1);
+  assert.deepEqual(rev[0].map(v => Math.round(v * 1e6) / 1e6), [fwd[0][2], fwd[0][3], fwd[0][0], fwd[0][1]].map(v => Math.round(v * 1e6) / 1e6), '入替えで同じ区間（端点が逆順）');
+  // 離れた 2 矩形をまたぐ線は 2 本のまま
+  assert.equal(clipSegmentToPieces([-50, 50, 450, 50], [P(0, 100, 0, 100), P(300, 400, 0, 100)]).length, 2);
+  assert.deepEqual(clipSegmentToPieces([5, 5, 5, 5], pieces), [], '長さ 0 の線は空');
 });
 
 for (const sa of [1, -1]) for (const sr of [1, -1]) for (const swap of [false, true]) {
@@ -351,12 +397,13 @@ for (const sa of [1, -1]) for (const sr of [1, -1]) for (const swap of [false, t
     const Lt = transformLayout(MOKU43, { sa, sr, swap });
     const sf = uTurnSoffitFromLayout(Lt, ctxOf());
     const W = worldOf(Lt, sa, sr);
-    assert.equal(sf.footprint.rects.length, 5);
+    assert.equal(sf.footprint.rects.length, 4);
     // 折れ目の端点は元の (a, r) を同じ写像で移したものと一致する
-    const expected = [[72.5, -8145, 852.5, -8145], [967.5, -8145, 1747.5, -8145], [852.5, -8145, 72.5, -7352.5], [967.5, -8145, 1747.5, -7352.5]]
+    const yAt852 = -8235 + (865 - 852.5) / (865 - 72.5) * (-7352.5 + 8235);
+    const expected = [[72.5, -8145, 852.5, -8145], [967.5, -8145, 1747.5, -8145], [852.5, yAt852, 72.5, -7352.5], [865, -8145, 1747.5, -7352.5], [865, -8145, 865, -7352.5]]
       .map(([a0, r0, a1, r1]) => lineKeyOf(norm([...W(a0, r0), ...W(a1, r1)])));
     assert.deepEqual(sf.innerLines.map(l => lineKeyOf(norm(l.points))), expected);
-    for (const [a, r, z] of [[852.5, -8145, ZA43], [72.5, -8145, ZA43], [967.5, -8145, ZB43], [1747.5, -8145, ZB43], [852.5, -7352.5, ZA43 + 500], [72.5, -7352.5, ZA43 + 250], [1747.5, -7352.5, ZA43 + 750], [910, -8145, (ZA43 + ZB43) / 2], [500, -9100, 2400], [1500, -9100, ZEND43]]) {
+    for (const [a, r, z] of [[72.5, -8145, ZA43], [1747.5, -8145, ZB43], [865, -7352.5, ZA43 + 500], [72.5, -7352.5, ZA43 + 250], [1747.5, -7352.5, ZA43 + 750], [(XA43 + 72.5 + 72.5) / 3, (-8145 - 8145 - 7352.5) / 3, ZA43 + 250 / 3], [(865 + 1747.5 + 1747.5) / 3, (-8145 - 7352.5 - 8145) / 3, ZA43 + 1000 - 250 / 3], [500, -9100, 2400], [1500, -9100, ZEND43]]) {
       near(sf.zAt(...W(a, r)), z, `(${a},${r})`);
     }
     assert.deepEqual(overlapProblems(sf), []);
@@ -445,13 +492,13 @@ function overhangColumnFixture() {
 }
 
 for (const type of [StairType.SWITCHBACK, StairType.WINDING]) for (const upDirection of ['up', 'down', 'left', 'right']) for (const flip of [false, true]) {
-  test(`柱あり（実物の layout）: ${type} upDirection=${upDirection} flip=${flip} — 矩形 5 枚（隔て板の帯 S あり）・折れ目が輪郭や互いに重ならない`, () => {
+  test(`柱あり（実物の layout）: ${type} upDirection=${upDirection} flip=${flip} — 矩形 4 枚・折れ目が輪郭や互いに重ならない`, () => {
     const { graph, stair } = columnFixture(type, upDirection, flip);
     const L = uTurnPlanLayout(stair, graph);
     assert.equal(L.hasColumn, true, '前提: 柱あり');
     assert.ok(Math.abs(L.across.sA - L.across.sB) >= 1, '前提: 隔て板の厚みぶんのあき');
     const [sf] = solidsOf(stair, graph);
-    assert.equal(sf.footprint.rects.length, 5);
+    assert.equal(sf.footprint.rects.length, 4);
     assert.deepEqual(overlapProblems(sf), []);
   });
 }
@@ -461,7 +508,7 @@ test('柱あり・張り出し（幅方向が反転・frontA≠front の実物�
   const L = uTurnPlanLayout(stair, graph);
   assert.ok(L.across.s0 > L.across.s1 && L.run.frontA !== L.run.front, '前提');
   const [sf] = solidsOf(stair, graph);
-  assert.equal(sf.footprint.rects.length, 5);
+  assert.equal(sf.footprint.rects.length, 4);
   const tf = Math.abs(L.run.back - L.run.frontA) <= Math.abs(L.run.back - L.run.front) ? L.run.frontA : L.run.front;
   const other = tf === L.run.frontA ? L.run.front : L.run.frontA;
   const runOf = l => (L.vertical ? [l.points[1], l.points[3]] : [l.points[0], l.points[2]]);
@@ -471,4 +518,11 @@ test('柱あり・張り出し（幅方向が反転・frontA≠front の実物�
   const a = sf.innerLines[0].points; // 往路との境: s0 → sA
   const pts = L.vertical ? [a[0], a[2]] : [a[1], a[3]];
   assert.deepEqual(pts, [L.across.s0, L.across.sA]);
+});
+
+test('あきのある踊り場（Δ=0・sA≠sB・柱なし）: 回転部 Q_A・Q_B は全面が平ら（zA）で、折れ目は前縁の 2 区間だけ', () => {
+  const L = { vertical: true, run: { baseA: 4000, frontA: 1000, front: 1000, baseB: 4000, back: 57.5 }, across: { s0: 57.5, sA: 940, sB: 1060, s1: 1942.5, mid: 1000 }, pivotAcross: 940, hasColumn: false, firstTurnNumber: 6, turnCells: 1, totalSteps: 12 };
+  const sf = uTurnSoffitFromLayout(L, { zStart: 2400, zTop });
+  assert.deepEqual(sf.innerLines.map(l => lineKeyOf(l.points)), ['57.5,1000,940,1000', '1060,1000,1942.5,1000']);
+  for (const [x, y] of [[57.5, 57.5], [500, 500], [940, 57.5], [940, 1000], [1000, 500], [1500, 600], [1942.5, 1000], [1942.5, 57.5]]) near(sf.zAt(x, y), zTop(6), `(${x},${y}) は平ら`);
 });

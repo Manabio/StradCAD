@@ -221,5 +221,17 @@ test('見上げの線・隔て壁の柱あり（frontA≠front）: 回転部の�
     for (let k = 1; k < spans.length; k++) assert.ok(spans[k][0] >= spans[k - 1][1] - 1e-6, `${type}: 前縁の線が重ならない ${JSON.stringify(spans)}`);
     const covered = spans.reduce((t, [a, b]) => t + (b - a), 0);
     assert.ok(Math.abs(covered - Math.abs(L.across.s1 - L.across.s0)) < 25, `${type}: 前縁の線は全幅を覆う（${covered}）`);
+    if (type === StairType.WINDING) { // 対角線は上階の回り段のピボット (pivotAcross, frontA)・(pivotAcross, front) と外側の奥の角を結ぶ直線上
+      const pv = L.pivotAcross, O = [[L.across.s0, L.run.back, pv, L.run.frontA], [L.across.s1, L.run.back, pv, L.run.front]];
+      for (const [ox, oy, px, py] of O) {
+        const diag = lines.filter(l => [[0, 1], [2, 3]].some(([i, k]) => Math.hypot(l.points[i] - ox, l.points[k] - oy) < 1));
+        assert.ok(diag.length > 0, `${type}: 外側の奥の角 (${ox},${oy}) から出る線`);
+        const hit = diag.some(l => {
+          const [qx, qy] = Math.hypot(l.points[0] - ox, l.points[1] - oy) < 1 ? [l.points[2], l.points[3]] : [l.points[0], l.points[1]];
+          return Math.abs((qx - ox) * (py - oy) - (qy - oy) * (px - ox)) < 1e-3 * Math.hypot(qx - ox, qy - oy) * Math.hypot(px - ox, py - oy) + 1;
+        });
+        assert.ok(hit, `${type}: 対角線がピボット (${px},${py}) と共線`);
+      }
+    }
   }
 });
