@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { RoomFeature, RoomKind, CeilingZone, StairType, CenterLineType, Discipline } from '@core';
 import { roomHasCeiling, ceilingSurfacesOf } from './ceilingSurfaces.js';
 import { worldToCell, CEILING_CELL_GRID, cellBoundsFromKey } from '../finish/gridCells.js';
-import { buildCeilingCellOwners } from './ceilingOwners.js';
+import { ceilingGroupsOf } from './ceilingGroups.js';
+import { buildCeilingCellOwners, ceilingCellOwnersOf } from './ceilingOwners.js';
 import { normalizeRect } from '../plan/planGeometry.js';
 import { makeGrid, rect } from '../plan/planTestFixtures.js';
 import { setRoomCeilingShape } from './roomCeilingShape.js';
@@ -373,4 +374,39 @@ test('【失敗系】セルが解決できない部屋（CL 削除で消失し�
   assert.doesNotThrow(() => ceilingSurfacesOf(g.graph));
   const ids = ceilingSurfacesOf(g.graph).map(s => s.roomId);
   assert.ok(ids.includes(ok.id) && !ids.includes(ghost.id));
+});
+
+// ---- 階段吹抜け（STAIR_VOID）: 平らな天井面。所属索引には載らない（裁定 2026-10-11） ----
+test('階段吹抜け: 屋内の STAIR_VOID は平らな面（zoneId null・flat・dims []）。zMm＝床段差＋既定天井高。順序は graph.rooms の順。所属索引・群には載らない', () => {
+  const g = makeGrid([0, 1000, 2000, 3000], [0, 1000]);
+  const a = g.interior([[0, 0]]);
+  const sv = g.feature([[1, 0], [2, 0]], RoomFeature.STAIR_VOID);
+  a.setOverride('ceilingHeight', '2600');
+  const out = ceilingSurfacesOf(g.graph);
+  assert.deepEqual(out, [
+    { roomId: a.id, zoneId: null, rects: [rect(0, 0, 1000, 1000)], zMm: 2600, shape: 'flat', dims: [], chMm: 2600 },
+    { roomId: sv.id, zoneId: null, rects: [rect(1000, 0, 2000, 1000), rect(2000, 0, 3000, 1000)], zMm: g.graph.defaultCeilingHeight, shape: 'flat', dims: [], chMm: g.graph.defaultCeilingHeight },
+  ]);
+  const owners = ceilingCellOwnersOf(g.graph);
+  for (const key of sv.cells) assert.ok(!owners.has(key), '所属索引に載らない');
+  assert.ok(![...owners.values()].some(o => o.rowId === sv.id), '索引の行にも載らない');
+  const { groupOfCell, groups } = ceilingGroupsOf(g.graph, owners);
+  for (const key of sv.cells) assert.ok(!groupOfCell.has(key), '群のセルにならない');
+  assert.ok(![...groups.values()].some(x => x.roomId === sv.id || x.owner?.rowId === sv.id), '群にならない');
+  assert.equal(roomHasCeiling(sv), false, 'roomHasCeiling は変えない');
+});
+
+test('【失敗系】階段吹抜け: 屋外の STAIR_VOID・セルが解決できない STAIR_VOID は面を出さない。索引に取られたセルは索引側（STAIR_VOID の面から除く）', () => {
+  const g = makeGrid([0, 1000, 2000], [0, 1000]);
+  const ext = g.feature([[0, 0]], RoomFeature.STAIR_VOID);
+  ext.setKind(RoomKind.EXTERIOR);
+  g.graph.addRoom(new Set(['nope:nope:nope:nope']), '消失').setFeature(RoomFeature.STAIR_VOID);
+  assert.deepEqual(ceilingSurfacesOf(g.graph), []);
+  const g2 = makeGrid([0, 1000, 2000], [0, 1000]);
+  const own = g2.interior([[0, 0]]);
+  const sv = g2.graph.addRoom(new Set([g2.cell(0, 0), g2.cell(1, 0)]), '重なり');
+  sv.setFeature(RoomFeature.STAIR_VOID);
+  const out = ceilingSurfacesOf(g2.graph);
+  assert.deepEqual(out.find(s => s.roomId === own.id).rects, [rect(0, 0, 1000, 1000)]);
+  assert.deepEqual(out.find(s => s.roomId === sv.id).rects, [rect(1000, 0, 2000, 1000)], '索引に載るセルは STAIR_VOID の面から除く');
 });

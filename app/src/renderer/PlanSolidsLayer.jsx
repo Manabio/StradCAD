@@ -26,8 +26,8 @@ const CEILING_BOUNDARY_COLOR = '#9ca3af'; // 天伏: 同じ高さで隣り合う
  * 吹抜け・昇降路の注記（S6）も描く（Group "plan-hole-marks"）: 自階の×（一点鎖線）と、直下階に描く上階吹抜けの×・外形・「上部吹抜け」（破線）。
  * 注記は穴（plan/planHoleMarks.js）から導く切断面上の記号で、遮蔽の解決は通さない。自階の×はドラッグ追従のため memo の外で毎回求め、
  * 上階の穴（abovePeek。App.jsx が上階を peek して渡す。3状態は belowPeek と同じ）は peek した graph に memo する。LOD はラベルだけ落とす。
- * direction 'up'（天伏。SceneLayers が planSectionDirection(appMode) で渡す）は見上げ: 自階＋直上階（abovePeek）を解き、注記は自階の×（階段吹抜けにも）と、
- * 直上階の階段吹抜け＝続きの無い階段の足元の上の実線の×だけ（`.claude/plan-section.md`「見上げ（天伏）」・`.claude/ceiling-model.md` S13b）。省略・'down' は従来どおり。
+ * direction 'up'（天伏。SceneLayers が planSectionDirection(appMode) で渡す）は見上げ: 自階＋直上階（abovePeek）を解き、注記は自階の×（void・shaft だけ。階段吹抜けは平らな天井面で×なし）と、
+ * 直上階の階段吹抜け＝続きの無い階段の足元の上の一点鎖線の×だけ（`.claude/plan-section.md`「見上げ（天伏）」・`.claude/ceiling-model.md` S13b）。省略・'down' は従来どおり。
  */
 export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, abovePeek, direction = 'down' }) => {
   const prevRef = useRef(null); // { planeId, prims }: ドラッグ中に描き続ける前回の線（階が違えば使わない）

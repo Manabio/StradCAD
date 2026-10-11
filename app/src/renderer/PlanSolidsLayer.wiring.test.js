@@ -141,7 +141,7 @@ test('【配線】PlanSolidsLayer.jsx の吹抜けの注記: Group plan-hole-mar
   assert.match(layer, /^\s*const aboveStairVoidGroups = direction === 'up' && peekMatches\s*$/m, '上階の階段吹抜けは見上げだけ。見下げでは求めない');
   assert.match(layer, /^\s*\? graphComputed\(abovePeek\.graph, 'planUpperStairVoidGroups', \(\) => floorOpeningGroups\(abovePeek\.graph, \{ stairFilter: \(\) => false, stairVoidRect: true \}\)\.filter\(g => g\.kind === 'stairVoid'\)\)\s*$/m);
   assert.match(layer, /^\s*: null;\s*$/m, '見下げ・照合できない peek は渡さない');
-  assert.equal(count(layer, /stairVoidRect: true/g), 1, 'stairVoidRect を渡すのは見上げの上階の1か所（自階は planHoleMarksOf の lookUp が渡す）');
+  assert.equal(count(layer, /stairVoidRect: true/g), 1, 'stairVoidRect を渡すのは見上げの上階の1か所（自階の STAIR_VOID は平らな天井面で×なし。stairVoidRect を渡さない）');
   assert.match(layer, /^\s*\? graphComputed\(abovePeek\.graph, 'planHoleGroups', \(\) => floorOpeningGroups\(abovePeek\.graph, \{ stairFilter: \(\) => false \}\)\)\s*$/m);
   assert.match(layer, /^\s*: undefined;\s*$/m, '照合できない peek は未解決扱い');
   assert.equal(count(layer, /graphComputed\(/g), 2, 'memo は上階の穴（見下げ）と上階の階段吹抜け（見上げ）の2回だけ（解決器の memo は planSolidsLayerResolve の中）');

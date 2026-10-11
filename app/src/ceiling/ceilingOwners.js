@@ -12,7 +12,8 @@
  *     親の所属にしない（裁定: 描画の後勝ち＝天井なしと一致させる）。これにより階段下部屋（2a）は、先に並んだ
  *     STAIR ペア部屋・VOID に取られず、階段のセルに重なっても部屋が勝つ。
  *   - 階段: 天井を持つ部屋が無いセルだけ（stairHasCeiling）。
- * 吹抜け・階段吹抜け・屋外・未定義・屋根・昇降路・屋外階段・下階の階段は索引に載らない（選べない・天井面にならない）。
+ * 吹抜け・屋外・未定義・屋根・昇降路・屋外階段・下階の階段は索引に載らない（選べない・天井面にならない）。
+ * 階段吹抜け（STAIR_VOID）も索引には載らない（選べない）が、索引外の平らな天井面になる（ceilingSurfaces.js stairVoidFace）。
  */
 import { RoomKind } from '@core';
 import { ceilingRefreshCells } from './ceilingGrid.js';

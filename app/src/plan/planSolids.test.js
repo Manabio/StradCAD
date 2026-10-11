@@ -707,15 +707,15 @@ test('天井の床段差: 部分指定の子（床段差 400・自分の CH 欄�
   assert.equal(zHi(low), 100 + 2250);
 });
 
-test('天井: 屋外・吹抜け・階段・階段吹抜け・未定義・屋根の部屋には作らない', () => {
+test('天井: 屋外・吹抜け・階段・未定義・屋根の部屋には作らない。階段吹抜けは平らな天井面を持つ（所属索引には載らない）', () => {
   const g = makeGrid([0, 1000, 2000, 3000, 4000, 5000, 6000], [0, 1000]);
   const keep = g.interior([[0, 0]]);
   g.feature([[1, 0]], RoomFeature.VOID);
   g.feature([[2, 0]], RoomFeature.STAIR);
-  g.feature([[3, 0]], RoomFeature.STAIR_VOID);
+  const sv = g.feature([[3, 0]], RoomFeature.STAIR_VOID);
   g.feature([[4, 0]], RoomFeature.UNDEFINED);
   g.roof([[5, 0]]);
-  assert.deepEqual(ofKind(planSolids(self(g.graph), { ceilings: true }), 'ceiling').map(s => s.source.id), [keep.id]);
+  assert.deepEqual(ofKind(planSolids(self(g.graph), { ceilings: true }), 'ceiling').map(s => s.source.id).sort(), [keep.id, sv.id].sort());
 });
 
 test('天井区画（S5）: 区画のある部屋は「残り（source.id=部屋 id）＋区画（source.id=部屋id#区画id）」の別立体になり、区画の zHi は FL＋床段差＋区画の高さ。区画の無い部屋の source.id・個数は不変', () => {

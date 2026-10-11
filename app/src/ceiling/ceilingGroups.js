@@ -7,6 +7,7 @@
  *   - 部屋の残り 'room' … owner.kind==='room' && owner.id===R.id のセルから、R の区画のセルを除いたもの（親・部分指定の子とも）。
  *   - 階段の残り 'stair' … owner.kind==='stair' && owner.id===S.id のセルから、対の部屋の区画のセルを除いたもの。
  * 不変条件: ceilingSurfacesOf の各面のキー集合は対応する群のセルと一致（区画の面⇔zone 群、残りの面⇔room 群）。
+ * ただし STAIR_VOID の面（索引外。ceilingSurfaces.js stairVoidFace）は群を持たないので除く。
  * 読み取りスコープで包まない（MobX の追跡下からも呼べるように。必要なら呼び側が withGraphReadScope で包む）。
  */
 import { ceilingRefreshCells } from './ceilingGrid.js';

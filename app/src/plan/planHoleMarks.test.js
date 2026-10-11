@@ -281,29 +281,31 @@ test('【失敗系】planHoleMarkPrimitives: インセットで退化する矩�
   assert.deepEqual(planHoleMarkPrimitives(undefined, VIEW), []);
 });
 
-test('planHoleMarkPrimitives: upperStairVoid（dashKind なし）は対角2本の実線だけ（dash なし・外形なし・文字なし）', () => {
+test('planHoleMarkPrimitives: upperStairVoid（dashKind openingCross）は対角2本の一点鎖線だけ（外形なし・文字なし）', () => {
   const m = planHoleMarks({ aboveStairVoidGroups: [grp('s', 'stairVoid', RoomFeature.STAIR_VOID, R)] });
-  assert.deepEqual(m.map(x => [x.key, x.role, x.dashKind, x.outline, x.label]), [['upperStairVoid:s', 'upperStairVoid', null, false, false]]);
+  assert.deepEqual(m.map(x => [x.key, x.role, x.dashKind, x.outline, x.label]), [['upperStairVoid:s', 'upperStairVoid', 'openingCross', false, false]]);
   const out = planHoleMarkPrimitives(m, VIEW);
   assert.deepEqual(out.map(p => p.key), ['upperStairVoid:s:d1', 'upperStairVoid:s:d2']);
   assert.deepEqual(out[0].points, [20, 20, 980, 1480]);
-  for (const p of out) assert.ok(!p.dash || p.dash.length === 0, '実線');
+  const cross = planHoleMarkPrimitives(planHoleMarks({ selfGroups: [grp('v', 'void', RoomFeature.VOID, R)] }), VIEW);
+  assert.deepEqual(out[0].dash, cross[0].dash, '自階の×と同じ一点鎖線');
+  assert.ok(out[0].dash.length > 0);
 });
 
-test('planHoleMarks: 階段吹抜けは自階 selfGroups では innerRect があれば cross、上階 aboveGroups（破線の経路）には決して入らない。void・shaft の出力は不変', () => {
+test('planHoleMarks: 階段吹抜けは自階 selfGroups では innerRect があっても cross にならない（平らな天井面）。上階 aboveGroups（破線の経路）にも入らない。void・shaft の出力は不変', () => {
   const sv = grp('s', 'stairVoid', RoomFeature.STAIR_VOID, R);
-  assert.deepEqual(planHoleMarks({ selfGroups: [sv] }).map(m => [m.key, m.role, m.dashKind]), [['cross:s', 'cross', 'openingCross']]);
+  assert.deepEqual(planHoleMarks({ selfGroups: [sv] }), [], '自階の階段吹抜けに×は出ない');
   assert.deepEqual(planHoleMarks({ aboveGroups: [sv] }), [], '上階の破線は void・shaft だけ');
   const v = grp('v', 'void', RoomFeature.VOID, R);
   assert.deepEqual(planHoleMarks({ selfGroups: [v], aboveGroups: [v] }), planHoleMarks({ selfGroups: [v], aboveGroups: [v], aboveStairVoidGroups: null }));
   assert.deepEqual(planHoleMarks({ aboveStairVoidGroups: [v, { ...sv, innerRect: null }, null] }), [], '失敗系: kind 違い・innerRect なし・null は捨てる');
 });
 
-test('planHoleMarksOf: 見下げ（既定）は階段吹抜けに×を出さない。lookUp で自階の STAIR_VOID に cross、aboveStairVoidGroups で実線の上階×。非矩形は出ない', () => {
+test('planHoleMarksOf: 自階の STAIR_VOID には見下げでも見上げでも×を出さない。aboveStairVoidGroups で一点鎖線の上階×（見上げだけ）', () => {
   const g1 = makeGrid();
   g1.graph.addRoom(new Set([g1.right])).setFeature(RoomFeature.STAIR_VOID);
   assert.deepEqual(planHoleMarksOf(g1.graph, null), [], '見下げ（既定）は不変');
-  assert.deepEqual(planHoleMarksOf(g1.graph, null, { lookUp: true }).map(m => m.role), ['cross']);
+  assert.deepEqual(planHoleMarksOf(g1.graph, null, { lookUp: true }), [], '見上げでも自階の STAIR_VOID に×は出ない');
   const g2 = makeGrid();
   g2.graph.addRoom(new Set([g2.left])).setFeature(RoomFeature.STAIR_VOID);
   const aboveSv = floorOpeningGroups(g2.graph, { stairFilter: () => false, stairVoidRect: true }).filter(g => g.kind === 'stairVoid');
