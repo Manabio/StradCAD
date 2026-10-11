@@ -9,7 +9,7 @@ import { measureStairSpans } from './stairClassify.js';
 import { cellsBeyondBreak } from './stairGeometry.js';
 import { stairUnderWallClips } from './stairUnderClip.js';
 import { roomBounds, cellBoundsList, refreshCells } from '../gridCells.js';
-import { shouldShowPlanFigure } from '../../renderer/planFigureVisibility.js';
+import { shouldShowStairFigure } from '../../renderer/planFigureVisibility.js';
 import { rectFromMm, unionBoundary, unq } from '../../renderer/orthoRegion.js';
 import { partitionPlanRects } from './stairPartition.js';
 import { slabOpeningRects } from './slabOpening.js';
@@ -78,13 +78,13 @@ export function buildUpperStairPeekEntries(belowGraph, floorHeight) {
  * @returns {{ isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips }}
  */
 export function buildStairEntries(graph, project, { appMode, viewport, upperStairEntriesPeek, upperSlabOpenings = null, stairBreakOverhangMm }) {
-  // isStairMode: 階段は平面図一式の一部なので、壁・建具・柱とまったく同じ述語で出し入れする
-  // （renderer/planFigureVisibility.js が単一の供給源。不具合2026-09「建具モードに入ると階段
+  // isStairMode: 階段は平面図一式の一部なので、壁・建具・柱と同じ述語系で出し入れする（天伏だけは除く。
+  // renderer/planFigureVisibility.js shouldShowStairFigure が単一の供給源。不具合2026-09「建具モードに入ると階段
   // 関連の図が消える」の根本原因は、ここだけモードの列挙が別だったこと）。描かない伏図
   // （structure）・展開図（elevation）では cellsBeyondBreak・refreshCells・measureStairSpans 等の
   // 無駄な計算と observable 購読（graph.stairs等）を空配列で止める（QA指摘）。
   // stairUnderClips のゲートも同じ変数で揃える。
-  const isStairMode = shouldShowPlanFigure(appMode);
+  const isStairMode = shouldShowStairFigure(appMode);
   const stairFh = floorHeightAbove(project, project.activePlane);
   const installEntries = isStairMode ? graph.stairs.map(s => {
     const riser = s.riser ?? (stairFh != null ? stairFh / Math.max(1, s.totalSteps) : null);

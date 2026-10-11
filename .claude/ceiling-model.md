@@ -96,12 +96,15 @@ N 階の天伏は「N の天井面際から N+1 の床を裏から見た図」�
 - 構造が未設定（null。RC 等で階段の既定構造が null）の階段は鉄骨と同じ扱い＝踏面線を全段描く（ユーザー裁定 2026-10-11）。
 - 既知の限界: 取りつき回転部（側面の出入口）は往路の平面に含める／L_TURN・FLARED・OPEN_WELL は裏面なし（木造でも踏面線も出ない）／回転部の面どうしは 1 蹴上の段差で接する（平らな面の集まり）／鉄骨の続きありは実データに無く合成テストのみ／裏面のパーツ（往路・回転部・復路）はそれぞれ外周を出すので、パーツが接する辺は同座標の線が 2 本重なる（見た目は 1 本。受容）。
 
-## 続きの無い階段の上（S13b）
-仕様「当該階の上階からその上階まで階段が無ければ、吹抜け（細線の×）を描く。設置階の上階の天伏は（その足元は）吹抜け」。続きの無い階段の足元の上には N+1 に STAIR_VOID が残る（`reconcileStairVoids`。続きがあれば吸収される）ので、判定は STAIR_VOID の有無だけでよく `matchingStairBelow` は見ない。裁定 Q8＝案1: **見上げでは STAIR_VOID をユーザー指定の吹抜け（VOID）と同じ扱い**にする（最上階へ上がる階段が通り抜けるため、その床は階段状に吹抜けている。天井面は描かない）。
-- N+1 の天伏: 自階の STAIR_VOID に VOID と同じ×（role `'cross'`・一点鎖線・細線）。
-- N の天伏: 足元の上の STAIR_VOID（直上階）に**細線の実線の×**（role `'upperStairVoid'`・dashKind なし）。外形・「上部吹抜け」ラベル・破線は付けない（上階スラブの穴の縁は解決器が実線で出すため）。VOID・昇降路の上階の破線は従来どおり見上げでは出さない。
-- 矩形は `floorOpeningGroups` の `stairVoidRect:true`（既定 false）で STAIR_VOID にも解決する。**見下げ（平面など）は不変**: 平面は STAIR_VOID に×も「上部吹抜け」も出さず、`selfVoidHoleRects` の被覆判定も STAIR_VOID を無視する。見下げの経路は `stairVoidRect` を渡さない（`planHoleMarksOf` の `lookUp` だけが渡す）。
-- 既知の限界: 非矩形の STAIR_VOID（回り階段の 5 セル等。moku1-6）は VOID の非矩形と同じく×なし。
+## 続きの無い階段の上（S13b。2026-10-11 に是正）
+仕様「当該階の上階からその上階まで階段が無ければ、吹抜け（細線の×）を描く。設置階の上階の天伏は平面」。続きの無い階段の足元の上には N+1 に STAIR_VOID が残る（`reconcileStairVoids`。続きがあれば吸収される）ので、判定は STAIR_VOID の有無だけでよく `matchingStairBelow` は見ない。
+- **N+1（STAIR_VOID のある階）の天伏**: STAIR_VOID は**平らな天井面**（既定の天井高。屋内の STAIR_VOID すべて＝最上階では屋根面の下、中間階では上階の床組が天井に隠れる。選択不可）。自階の×は出さない。当初（S13b）は床の穴の記号（VOID と同じ×）を持ち込んだが誤りだった（最上階の天伏に吹抜けは無い。ユーザー指摘 2026-10-11）ので撤回した。面は `ceilingSurfaces.js stairVoidFace`（zoneId null・flat・zMm＝床段差＋既定天井高。屋内の STAIR_VOID だけ）。**所属索引（`ceilingOwners`）には載せない**＝選べない・群にならない・パネルの行にならない（`roomHasCeiling` は変えない）。索引に載るセルと重なれば索引側が先。隣の部屋と同じ高さの境目は既存の後処理でグレー線。
+- **N の天伏**: 足元の上の STAIR_VOID（直上階）に細線の×（role `'upperStairVoid'`・**自階の×と同じ一点鎖線**〔dashKind `'openingCross'`〕）。外形・「上部吹抜け」ラベルは付けない（上階スラブの穴の縁は解決器が実線で出すため）。VOID・昇降路の上階の破線は従来どおり見上げでは出さない。
+- 矩形は `floorOpeningGroups` の `stairVoidRect:true`（既定 false）で STAIR_VOID にも解決する。使うのは上階の STAIR_VOID の×（`PlanSolidsLayer` が `aboveStairVoidGroups` を渡す）だけ。**見下げ（平面など）は不変**: 平面は STAIR_VOID に×も「上部吹抜け」も出さず、`selfVoidHoleRects` の被覆判定も STAIR_VOID を無視する。
+- 既知の限界: 非矩形の STAIR_VOID（回り階段の 5 セル等。moku1-6）は上階の×なし（平らな天井面は出る）。中間階の STAIR_VOID も面を出すので、moku1-6 2F では 3F の梁 6 本・壁 3 本が天井に隠れる（仕様どおり）。
+
+## 自階の階段を描かない（S13c）
+天伏では自階の階段の線・外周・矢印も、下階の階段の見下げ（upper エントリ）も描かない（裁定 Q7）。階段は上から見た姿ではなく、上階の裏面（S13a）と平らな天井面（S13b）で表す。述語は `renderer/planFigureVisibility.js shouldShowStairFigure`（`shouldShowPlanFigure` から 'ceiling' を除く）で、`stairEntries.js buildStairEntries` の `isStairMode` がこれを引く＝install・upper・2a壁の描画クリップ（stairUnderClips）がまとめて止まる（2a壁は切断された壁としてそのまま見える）。壁・建具・柱は従来どおり描く。
 
 ## 受容（ユーザー裁定 2026-10-10）
 とりあえず許容した点（直さない。必要になったら別課題）。

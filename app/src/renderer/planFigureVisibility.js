@@ -7,11 +7,19 @@
 // （不具合2026-09: 建具モード。仕上げ・敷地モードでも同じ穴が開いていた）。
 // 「壁を描くモード＝柱を描くモード」をこの述語ひとつに閉じ込め、レイヤー側の appMode 直書きを禁じる。
 //
-// 描かないのは2モードだけ:
+// 描かないのは2モードだけ（壁・建具・柱について。階段は下の shouldShowStairFigure で天伏も除く）:
 //   structure — 伏図（躯体の図）。平面図は描かず、柱は `StructuralLayer` が図面合成の帰属で描く。
 //   elevation — 室内展開図の専用画面（`SceneLayers` が早期returnし平面レイヤー群を一切通らない）。
 export function shouldShowPlanFigure(appMode) {
   return appMode !== 'structure' && appMode !== 'elevation';
+}
+
+// 階段の図（StairLayer の自階の階段・下階の階段〔upper〕・2a壁の描画クリップ）を描くモードか。
+// 平面図一式の述語（上）から天伏（'ceiling'）だけを除く。天伏は壁・建具・柱は描くが、階段は上から見た姿ではなく
+// 上階の裏面（planSolids の見上げ。S13a）で表すため、自階の階段の線・外周・矢印も下階の階段の見下げも描かない
+// （ユーザー裁定 Q7。2a壁は切断された壁としてそのまま見えるのでクリップも止める）。
+export function shouldShowStairFigure(appMode) {
+  return shouldShowPlanFigure(appMode) && appMode !== 'ceiling';
 }
 
 // 平面の断面解決の**向き**: 天伏モード（'ceiling'）は切断高より上を見上げる（'up'）、他のモードは見下げる（'down'。未知のモードも）。

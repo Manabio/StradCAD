@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers, shouldShowColumnOriginMarks,
+  shouldShowPlanFigure, shouldShowStairFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers, shouldShowColumnOriginMarks,
   shouldShowEquipmentSymbols, planSectionDirection,
 } from './planFigureVisibility.js';
 
@@ -28,6 +28,14 @@ test('planSectionDirection: 天伏（ceiling）は見上げ（up）、他のモ�
 
 test('shouldShowPlanFigure: 天伏（ceiling）も平面図一式を描く（見上げの向きだけが違う）', () => {
   assert.equal(shouldShowPlanFigure('ceiling'), true);
+});
+
+test('shouldShowStairFigure: 階段の図は平面・建具・仕上げ・敷地で描き、天伏（上階の裏面で表す）・伏図・展開図では描かない。未知のモードは shouldShowPlanFigure と同じく描く', () => {
+  for (const mode of ['floorplan', 'finish', 'opening', 'site']) assert.equal(shouldShowStairFigure(mode), true, mode);
+  for (const mode of ['ceiling', 'structure', 'elevation']) assert.equal(shouldShowStairFigure(mode), false, mode);
+  assert.equal(shouldShowStairFigure('ceiling'), false);
+  assert.equal(shouldShowStairFigure('foo'), true, '未知のモードは除外列挙（ceiling・structure・elevation）に無いので描く');
+  assert.equal(shouldShowPlanFigure('ceiling'), true, '壁・建具・柱は天伏でも描く（階段だけ別の述語）');
 });
 
 test('shouldShowPlanFigure: 伏図（構造）と展開図は描かない', () => {

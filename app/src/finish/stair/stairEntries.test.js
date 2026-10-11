@@ -5,6 +5,8 @@ import { generateStairPartitionWalls } from './stairPartitionWalls.js';
 import { LodLevel } from '../../viewport.js';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature } from '@core';
 import { classifyStairArea } from './stairClassify.js';
+import { cellsBeyondBreak } from './stairGeometry.js';
+import { regenerateWalls, loadMaterialMap } from '../wallRegeneration.js';
 
 // ---- anyCellBoundsOverlap（下階階段の見下げ upper エントリが自階 install エントリと同一
 //      footprint かどうかの判定。cellBounds 同士の総当たり。RECT_OVERLAP_EPS=1mm未満は無視） ----
@@ -95,6 +97,56 @@ test('buildStairEntries: upperEntries は installOverlap あり・なしとも w
   assert.equal(b.wallGraph, graph);
   assert.notEqual(a.graph, graph, 'footprint 用の graph は下階のまま');
   assert.equal(r.installEntries.every(e => !('wallGraph' in e)), true);
+});
+
+test('buildStairEntries: 天伏（ceiling）は自階の階段・下階の階段（upper）・2a壁クリップをすべて出さない（S13c）。同じ入力の仕上げモードでは出る', () => {
+  const graph = activeGraphWithStair();
+  const project = { planes: [], activePlane: null };
+  const viewport = { lodLevel: LodLevel.DETAIL };
+  const peek = [peekEntry('low-a', { x1: 0, y1: 0, x2: 1000, y2: 2800 }), peekEntry('low-b', { x1: 50000, y1: 50000, x2: 51000, y2: 52800 })];
+  const call = (appMode) => buildStairEntries(graph, project, { appMode, viewport, upperStairEntriesPeek: peek, stairBreakOverhangMm: 0 });
+  const ceiling = call('ceiling');
+  assert.equal(ceiling.isStairMode, false);
+  assert.deepEqual(ceiling.installEntries, []);
+  assert.deepEqual(ceiling.upperEntries, []);
+  const finish = call('finish');
+  assert.equal(finish.installEntries.length, 1, '対照: 仕上げモードでは同じ入力で出る');
+  assert.equal(finish.upperEntries.length, 2);
+});
+
+// 2a壁（階段下部屋の偏芯壁）のあるフィクスチャ（stairUnderWalls.test.js makeStairUnderFixture と同構成:
+// SWITCHBACK・L字部屋＋破れ先が階段下部屋）。壁を生成して stairUnderClips が実際に非 null になる状態を作る。
+async function graphWithStairUnderWalls() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const V = v => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const H = v => graph.addCenterLine(CenterLineType.HORIZONTAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = V(0), xm = V(1000), x1 = V(2000), y0 = H(0), ym = H(1500), y1 = H(4500);
+  const landingKey = `${x0.id}:${y0.id}:${x1.id}:${ym.id}`;
+  const outboundKey = `${x0.id}:${ym.id}:${xm.id}:${y1.id}`;
+  const returnKey = `${xm.id}:${ym.id}:${x1.id}:${y1.id}`;
+  const room = graph.addRoom(new Set([landingKey, outboundKey]), '階段');
+  const stair = graph.addStair({
+    type: StairType.SWITCHBACK, cells: new Set([landingKey, outboundKey, returnKey]), roomId: room.id,
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+  });
+  const under = graph.addRoom(new Set(cellsBeyondBreak(stair, graph, stair.riser ?? null)), '階段下');
+  await regenerateWalls(graph, { materialMap: await loadMaterialMap(), stairUnderEntries: [{ stair, room: under, splitCLIds: new Set() }] });
+  return { graph, under };
+}
+
+test('buildStairEntries【S13c】: 2a壁のある構成で、finish は stairUnderClips が非 null（壁ID→クリップ）、同じ入力の ceiling は null', async () => {
+  const { graph, under } = await graphWithStairUnderWalls();
+  assert.ok(under.generatedWallIds.size > 0, '前提: 2a壁が生成されている');
+  const project = { planes: [], activePlane: null };
+  const call = (appMode) => buildStairEntries(graph, project, {
+    appMode, viewport: { lodLevel: LodLevel.DETAIL }, upperStairEntriesPeek: [], stairBreakOverhangMm: 0,
+  });
+  const finish = call('finish');
+  assert.ok(finish.stairUnderClips instanceof Map && finish.stairUnderClips.size > 0, '前提（空振り防止）: finish ではクリップが出る');
+  for (const id of finish.stairUnderClips.keys()) assert.ok(under.generatedWallIds.has(id), 'キーは2a壁のID');
+  const ceiling = call('ceiling');
+  assert.equal(ceiling.stairUnderClips, null, '天伏ではクリップを出さない');
+  assert.deepEqual(ceiling.installEntries, []);
 });
 
 test('buildStairEntries: 平面を描かないモード（structure）では upperEntries は空（wallGraph を付ける対象が無い）', () => {
