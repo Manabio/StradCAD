@@ -106,6 +106,33 @@ export function resolveStairPartition(stair, graph, { structure = null, continue
   };
 }
 
+// U 字系の枠（roomBounds＋uTurnSpans＋makeFrame）。隔て壁の幾何と踊り場前縁の線が共有する単一の算出。
+function uTurnFrameOf(stair, graph) {
+  if (!stair || !PARTITION_STAIR_TYPES.has(stair.type)) return null;
+  const b = roomBounds(stair.cells, graph);
+  if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return null;
+  const us = uTurnSpans(stair, graph, b);
+  if (!us) return null;
+  return { us, f: makeFrame(stair, b) };
+}
+
+/**
+ * 踊り場前縁（往路・復路直進部と回転部の境＝接合辺）の線。階段 footprint を走行軸に直交して横切り、
+ * sideA/sideB はその両端（f.pt(tRun, 0)・f.pt(tRun, 1)＝階段の走行軸に平行な両側の辺との交点）。
+ * isVertical は走行軸が縦（y 方向）か。along＝前縁の走行方向座標（stairPartitionLines の landingAlong と同じ値）。
+ * PARTITION_STAIR_TYPES 以外・幾何が取れなければ null。主構造・階段の構造材は見ない。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @returns {{isVertical:boolean, along:number, sideA:{x:number,y:number}, sideB:{x:number,y:number}}|null}
+ */
+export function stairLandingFrontLine(stair, graph) {
+  const fr = uTurnFrameOf(stair, graph);
+  if (!fr) return null;
+  const { us, f } = fr;
+  const sideA = f.pt(us.tRun, 0), sideB = f.pt(us.tRun, 1);
+  return { isVertical: f.vertical, along: f.vertical ? sideA.y : sideA.x, sideA, sideB };
+}
+
 /**
  * 隔て壁の幾何だけ（主構造・階段の構造材の判定を含まない）。PARTITION_STAIR_TYPES 以外・uTurnSpans が取れなければ null。
  * 壁の生成（stairPartitionWalls.js。主構造は呼び出し側が見る）と識別（stairPartitionLines）が共有する。
@@ -115,12 +142,9 @@ export function resolveStairPartition(stair, graph, { structure = null, continue
  *   entryEnd:{x:number,y:number}, landingEnd:{x:number,y:number}}|null}
  */
 export function stairPartitionGeometry(stair, graph) {
-  if (!stair || !PARTITION_STAIR_TYPES.has(stair.type)) return null;
-  const b = roomBounds(stair.cells, graph);
-  if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite)) return null;
-  const us = uTurnSpans(stair, graph, b);
-  if (!us) return null;
-  const f = makeFrame(stair, b);
+  const fr = uTurnFrameOf(stair, graph);
+  if (!fr) return null;
+  const { us, f } = fr;
 
   const tEntry = us.tRun - Math.min(us.laneA, us.laneB) / f.runLength;
   const entryEnd = f.pt(tEntry, 0.5);

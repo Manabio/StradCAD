@@ -8,12 +8,13 @@
 // finish/kneeDropWall.js 経由で core.js への依存が生じ、woodFraming.js の依存先を頼る他の純モジュール
 // （woodColumnOffset.js）まで巻き込むため。ここは wallBeamAxes.js と同格（core.js依存を許すが
 // store.js/snap.js/.jsxは静的に引かない）の層に置く。
-import { wallRunFreeEnds, WALL_JUNCTION_TOL_MM } from './woodFraming.js';
+import { wallRunFreeEnds, pointsOnWallLines, WALL_JUNCTION_TOL_MM } from './woodFraming.js';
 import { wallBackingCenterCoord, selfWallSegments } from './wallBeamAxes.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import { kneeDropRecordForWallSpan } from '../finish/kneeDropWall.js';
 import {
   stairPartitionLines, matchStairPartitionLine, partitionDesignRange, PARTITION_BACKING_MM,
+  stairHasPartition, stairLandingFrontLine,
 } from '../finish/stair/stairPartition.js';
 
 /**
@@ -123,6 +124,49 @@ export function stairPartitionEnds(graph, project, wallSourceCache = undefined, 
         && Math.abs(fe.coord - c.coord) < WALL_JUNCTION_TOL_MM && Math.abs(fe.along - along) < WALL_JUNCTION_TOL_MM);
       const side = Math.abs(along - c.line.landingAlong) <= LINE_END_TOL_MM ? 'landing' : 'entry';
       out.push({ isVertical: c.isVertical, coord: c.coord, along, x, y, free, side });
+    }
+  }
+  return out;
+}
+
+/**
+ * 折返し・回り階段（U 字系）の接合辺（踊り場前縁。往路・復路の直進部と回転部の境）が、階段 footprint を囲む
+ * 走行軸に平行な両側の壁と取り合う点＝構造柱の点源（規則2。ユーザー指示2026-10-12「階段直進部と折返し接合辺が
+ * 壁と取り合う場合、柱を設ける」）。柱の生成（woodAutoFill.js）と、頭つなぎ・受梁の起点からの除外
+ * （woodAutoFill.js・structuralAutoFill.js。踊り場前縁に沿って吹抜けを横切る頭つなぎを作らない＝規則1）が共有する。
+ *
+ * 対象は在来木造（rules.framing）で stairHasPartition が真の階段（木造の U 字系・屋内）だけ＝隔て壁と同じ範囲。
+ * 前縁の両端（stairLandingFrontLine の sideA/sideB）を pointsOnWallLines に通し、走行軸に平行な壁
+ * （m.isVertical===line.isVertical。3i と同じ理由で、前縁の線上に直交する壁は拾わない）だけを残す。
+ * 候補が複数なら dist 最小→coord 昇順。側壁が無い端は返さない（「壁と取り合う場合」だけ）。
+ * 返す点は (m.coord, along)＝壁の下地帯の中心に寄せた座標。隔て壁は構造の壁ソースから除外済みなので側壁に混ざらない。
+ * @param {object} graph
+ * @param {object} [project]
+ * @param {ReturnType<import('./wallBeamAxes.js').createWallSourceCache>} [wallSourceCache]
+ * @param {Array} [selfSegments] - 呼び出し側が計算済みの selfWallSegments（あれば再計算しない）
+ * @returns {Array<{isVertical:boolean, coord:number, along:number, x:number, y:number}>}
+ */
+export function stairLandingFrontWallPoints(graph, project, wallSourceCache = undefined, selfSegments = undefined) {
+  const structure = effectiveStructure(graph, project);
+  if (!rulesFor(structure).framing) return [];
+  const out = [];
+  let segments = selfSegments;
+  for (const stair of graph.stairs ?? []) {
+    if (!stairHasPartition(stair, graph, structure)) continue;
+    const line = stairLandingFrontLine(stair, graph);
+    if (!line) continue;
+    segments ??= selfWallSegments(graph, wallSourceCache);
+    for (const pt of [line.sideA, line.sideB]) {
+      let best = null;
+      for (const m of pointsOnWallLines([pt], segments, WALL_JUNCTION_TOL_MM)) {
+        if (m.isVertical !== line.isVertical) continue;
+        if (!best || m.dist < best.dist || (m.dist === best.dist && m.coord < best.coord)) best = m;
+      }
+      if (!best) continue;
+      const x = line.isVertical ? best.coord : line.along;
+      const y = line.isVertical ? line.along : best.coord;
+      if (out.some(o => o.isVertical === line.isVertical && Math.abs(o.x - x) < LINE_END_TOL_MM && Math.abs(o.y - y) < LINE_END_TOL_MM)) continue;
+      out.push({ isVertical: line.isVertical, coord: best.coord, along: line.along, x, y });
     }
   }
   return out;

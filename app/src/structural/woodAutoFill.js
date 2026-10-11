@@ -35,7 +35,7 @@ import { worldToCell } from '../finish/gridCells.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { bareColumnRect } from '../finish/columnWrap.js';
 import { findHostWall } from '../openings/openingGeometry.js';
-import { selfWallFreeEnds, stairPartitionEnds } from './wallFreeEnds.js';
+import { selfWallFreeEnds, stairPartitionEnds, stairLandingFrontWallPoints } from './wallFreeEnds.js';
 import { PARTITION_BACKING_MM } from '../finish/stair/stairPartition.js';
 import { ColumnOrigin, mergeSlot, formatColumnOrigins } from './columnOrigins.js';
 
@@ -50,6 +50,29 @@ export const PARTITION_BEAM_SECTION = woodRectSectionKey(PARTITION_BACKING_MM, P
 // 共有のため。純モジュールから core.js 依存の woodAutoFill.js を import できない）。既存の import 元
 // （本ファイルの他関数・woodAutoFill.test.js）を壊さないよう再exportする。
 export { WALL_JUNCTION_TOL_MM };
+
+/**
+ * 壁上（isVertical・下地帯中心 wallCoord）の位置 along が、その壁の建具の外形を柱寸/2+jambClearance 広げた
+ * 開区間の内側か（境界＝ちょうどは許容）。3i（支持長の柱）と規則2（階段の接合辺と側壁の取り合いの柱）が共有する
+ * 「建具の袖には柱を立てない」述語。
+ * @param {object} graph
+ * @param {boolean} isVertical
+ * @param {number} wallCoord
+ * @param {number} along
+ * @param {number} columnWidth - 柱寸 mm
+ * @returns {boolean}
+ */
+function isInOpeningClearance(graph, isVertical, wallCoord, along, columnWidth) {
+  const half = columnWidth / 2 + TRADITIONAL_WOOD_BACKING.jambClearanceMm;
+  for (const o of graph.openings) {
+    if (o.isVertical !== isVertical) continue;
+    const hostWall = findHostBackingWall(o, graph);
+    if (!hostWall || Math.abs(wallBackingCenterCoord(hostWall) - wallCoord) >= CL_OVERLAP_TOL_MM) continue;
+    const oLo = Math.min(o.coord1, o.coord2), oHi = Math.max(o.coord1, o.coord2);
+    if (along > oLo - half + CL_OVERLAP_TOL_MM && along < oHi + half - CL_OVERLAP_TOL_MM) return true;
+  }
+  return false;
+}
 
 /**
  * 壁区間（プレーン配列 [{isVertical, coord, lo, hi}]。coord＝下地帯の中心、lo/hi＝壁の走行範囲）から、
@@ -297,17 +320,32 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
     mergeSlot(slots, key, { verticalCL, horizontalCL }, [ColumnOrigin.FREE_END]);
     partitionWidthByKey.set(key, (e.free && floorWidthMm !== PARTITION_BACKING_MM) ? PARTITION_BACKING_MM : null);
   }
-
-  // ループ不変（3a/3b/3h-2/袖柱/3iで共通に使う）なので先に1回だけ解決する（3b近接ガード・3iの安全弁が
-  // ここで使う。以前は3bのCL解決分より後ろで定義していたが、ガード追加のため前倒しした——他の
-  // 消費側（袖柱・オフセット候補）の計算順序・値は変えていない）。
+  // 規則2（ユーザー指示2026-10-12）: 折返し・回り階段（U 字系）の接合辺（踊り場前縁）が走行軸に平行な側壁と
+  // 取り合う位置に柱。アンカーは隔て壁の端と同じ2段（解決できなければ見送る＝CLは新設しない）、由来は
+  // 'wall'（壁と接合辺が取り合う位置＝壁交点の意味。新しい由来語は足さない）、柱寸は階の柱寸（個別指定にしない）。
+  // 側壁に建具が掛かる位置（建具の外形±(柱寸/2+jambClearance)）は3iと同じ述語で避ける。
+  // 階の柱断面と幅はループ不変（3a/3b/3h-2/袖柱/3i・規則2で共通に使う）なので、ここで1回だけ解決する（3b近接ガード・3iの安全弁も
+  // これを使う。以前は3bのCL解決分より後ろで定義していたが、ガード追加のため前倒しした——他の消費側（袖柱・オフセット候補）の
+  // 計算順序・値は変えていない）。
   const columnSection = woodColumnSectionId(graph, project) ?? rules.defaultSections.column;
+  const columnWidth = findSectionEntry(columnSection)?.width;
+  for (const e of stairLandingFrontWallPoints(graph, project, wallSourceCache, segments)) {
+    if (Number.isFinite(columnWidth) && isInOpeningClearance(graph, e.isVertical, e.coord, e.along, columnWidth)) continue;
+    const axisType = e.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+    const crossType = e.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+    const axisCL = resolveWoodColumnAnchorCL(graph, axisType, e.coord);
+    const crossCL = resolveWoodColumnAnchorCL(graph, crossType, e.along);
+    if (!axisCL || !crossCL) continue;
+    const verticalCL = e.isVertical ? axisCL : crossCL;
+    const horizontalCL = e.isVertical ? crossCL : axisCL;
+    mergeSlot(slots, columnSlotKey(verticalCL, horizontalCL), { verticalCL, horizontalCL }, [ColumnOrigin.WALL]);
+  }
+
   // 【AXISで統一】候補柱・既存柱・オフセット候補・袖柱のすべてAXIS（axisX/axisY。偏心を含まない）
   // 基準で重なり・近接を判定する——柱寸105の階で外壁上の共通柱に非ゼロ偏心（conformWoodColumnEccentricity。
   // ±(120-105)/2等）が付いていても、その偏心量に判定が左右されないようにするため
   // （.claude/structural-model.md「AXISで一致・ACTUALで止める」と同じ規律）。
   const axisOffsetOf = (cl) => graph.columnAxisOffsets.get(cl.id) ?? 0;
-  const columnWidth = findSectionEntry(columnSection)?.width;
   // 現時点のslots（候補柱。3a・このあと確定していく3b/3h-2/袖柱/3iを含む）＋既存柱（自階graph.columns。
   // role:'foundation'除く）のAXIS点列。3b近接ガード・3iの安全弁が共有する単一の抽出（二重実装しない）。
   // slotsは以後も成長するため、呼び出しのたびに読み直す（クロージャで`slots`を参照する関数）。
@@ -704,17 +742,8 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
           }
         }
         if (!best || !best.inRun) return false;
-        if (Number.isFinite(columnWidth)) {
-          // (b) その壁上の建具の外形を柱寸/2+clearance広げた開区間には立てない（境界＝ちょうどは許容）。
-          const half = columnWidth / 2 + TRADITIONAL_WOOD_BACKING.jambClearanceMm;
-          for (const o of graph.openings) {
-            if (o.isVertical !== seg.isVertical) continue;
-            const hostWall = findHostBackingWall(o, graph);
-            if (!hostWall || Math.abs(wallBackingCenterCoord(hostWall) - best.coord) >= CL_OVERLAP_TOL_MM) continue;
-            const oLo = Math.min(o.coord1, o.coord2), oHi = Math.max(o.coord1, o.coord2);
-            if (along > oLo - half + CL_OVERLAP_TOL_MM && along < oHi + half - CL_OVERLAP_TOL_MM) return false;
-          }
-        }
+        // (b) その壁上の建具の外形を柱寸/2+clearance広げた開区間には立てない（境界＝ちょうどは許容）。
+        if (Number.isFinite(columnWidth) && isInOpeningClearance(graph, seg.isVertical, best.coord, along, columnWidth)) return false;
         // (c) 候補位置を実CLペア／オフセットアンカーへ解決できなければ見送る（新設しない）。
         // (d) 除外集合（ユーザーが消した位置）・wallGate（フットプリント外）も生成ループと同じ述語で
         // 事前チェックする（QA裁定）——ここで弾いておかないと、実際には生成されない位置に「支持長を
@@ -1239,7 +1268,9 @@ export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = n
     .map(pt => ({ ...pt, kind: 'below' }));
   // 自階の隔て壁の端の柱も受梁（柱の下の梁）の起点から除く——隔て壁は柱脚が固定されていれば1層分は梁なしでよい
   // （ユーザー裁定2026-10-07）。下階側の除外（belowTieExcludePts）と対になる。
-  const ownPartitionPts = stairPartitionEnds(graph, project, wallSourceCache).map(e => ({ x: e.x, y: e.y }));
+  // 規則2の側壁の取り合いの柱（stairLandingFrontWallPoints）も同様に除く（踊り場前縁に沿って吹抜けを横切る頭つなぎ・受梁を作らない）。
+  const ownPartitionPts = [...stairPartitionEnds(graph, project, wallSourceCache), ...stairLandingFrontWallPoints(graph, project, wallSourceCache)]
+    .map(e => ({ x: e.x, y: e.y }));
   const selfCarrierPts = graph.columns.filter(c => c.role !== 'foundation')
     .filter(c => !ownPartitionPts.some(e => Math.abs(e.x - c.axisX) < CL_OVERLAP_TOL_MM && Math.abs(e.y - c.axisY) < CL_OVERLAP_TOL_MM))
     .map(c => ({ x: c.axisX, y: c.axisY, kind: 'self' }));

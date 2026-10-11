@@ -9,7 +9,7 @@ import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBe
 import { peekVia } from './structuralPeek.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
-import { stairPartitionEnds } from './wallFreeEnds.js';
+import { stairPartitionEnds, stairLandingFrontWallPoints } from './wallFreeEnds.js';
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { autoFillStairPartitionBeams, stairPartitionBeamSpans } from './stairPartitionBeams.js';
@@ -706,7 +706,9 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 下階の隔て壁の両端の柱（頭つなぎの起点から除く。woodAutoFill.js autoFillWoodWallBeams の belowTieExcludePts）。
   // 識別は幾何（下階graphの stairPartitionEnds の点とAXIS座標が一致する柱）。由来集合は使わない。
   const belowPartitionEnds = belowGraph ? stairPartitionEnds(belowGraph, project) : []; // 隔て梁（stairPartitionBeams.js）も使う。1回だけ求める
-  const belowTieExcludePts = belowPartitionEnds.map(e => ({ x: e.x, y: e.y }));
+  // 規則2（階段の接合辺と側壁の取り合いの柱。stairLandingFrontWallPoints）も頭つなぎの起点から除く。隔て梁には使わないので別に持つ。
+  const belowTieExcludePts = [...belowPartitionEnds, ...(belowGraph ? stairLandingFrontWallPoints(belowGraph, project) : [])]
+    .map(e => ({ x: e.x, y: e.y }));
   // 自階帰属の柱・梁・基礎は自階の主構造が確定するまで生成しない（autoFillColumns は自前でも同ガード）。
   // 屋根の軒桁(eaves)は下階の主構造に従うため、判定軸は belowMainStructure 側で別に行う。
   const ownSpecified = isStructureSpecified(graph, project);
