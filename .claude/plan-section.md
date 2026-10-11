@@ -75,7 +75,7 @@
 - **階段上の裏面（S13a）**: `planSolids` の見上げ専用オプション `opts.lookUp`（`planSolidsLayerSolidsUp` だけが true）。上階スラブの「下階に同じ足元の階段がある階段」の穴を破れ先でなく足元全体にし（`floorOpeningCellRects` の `stairExtent:'full'`）、木造は傾斜天井（`stairSoffit`）、鉄骨は段の輪郭（`drawEdges:true`）を足す。自階の続き階段の段は遮蔽に入れない（`stairsContinuedAbove`）。見下げ（lookUp なし）の出力は不変。設計意図は `.claude/ceiling-model.md`「階段上の裏面（S13a）」。
 - **天伏では階段の図を描かない（S13c）**: 自階の階段・下階の階段（upper）・2a壁クリップは `shouldShowStairFigure`（`renderer/planFigureVisibility.js`）で止める。階段は上階の裏面（S13a）と平らな天井面（S13b）で表す。設計意図は `.claude/ceiling-model.md`「自階の階段を描かない（S13c）」。
 - 鍵は `planSection:up:自階:切断高:上階|pending|-`（見下げの `planSection:…` と別。同じ graph を置き場にしても衝突しない）、置き場は上階 peek の graph。吹抜けの注記は見上げでは**自階の×（void・shaft だけ。STAIR_VOID は平らな天井面で×なし）と、直上階の STAIR_VOID＝続きの無い階段の足元の上の一点鎖線の×だけ**（上階の吹抜け・昇降路の破線は出さない。上階スラブの穴の縁が実線で出るため。`.claude/ceiling-model.md` S13b）。
-- 検証: `dumpPlanSolids.mjs --up`（自階＋直上階の線と件数・所要時間）。
+- 検証: `dumpPlanSolids.mjs --up`（自階＋直上階の線と件数・所要時間）。確認文書に `ceiling-steel-stair-test.stq`・`ceiling-wood-stair-test.stq`（`makeCeilingSteelStairTestDoc.mjs`。鉄骨で続きのある階段の stairTread 全段／木造の stairSoffit）。
 
 ## S7b 段（階段の段を遮蔽物にする）
 - `finish/stair/stairTreads.js stairTreadFootprints` が、描画と同じエミッタ（`stairGeometry.js` の `collectCells`）のマス多角形＋天端（番号×蹴上、厚み 0）を返し、`planSolids.js` が `stairTread` 立体にする。**遮蔽専用**（`drawEdges:false`・`S4_DRAWN_KINDS` に入れない）——階段の線を描くのは `StairLayer` だけ（二重に出さない）。`SURFACE_KINDS`（面材）に入れ、同点の梁・下階の壁は段に隠れる。
