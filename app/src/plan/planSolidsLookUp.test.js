@@ -197,7 +197,7 @@ test('見上げの線: 往路と回転部の境（共有辺）の線は同じ座
   }
 });
 
-test('見上げの線・隔て壁の柱あり（frontA≠front）: 回転部の前縁は back に近い方の y に全幅 1 本だけで、柱の往路側の面（frontA）の y に線が無い', () => {
+test('見上げの線・隔て壁の柱あり（frontA≠front）: 前縁はレーンごと（往路の前縁は往路レーンだけ・復路の前縁は復路レーンだけ）。対角線はピボットから全長', () => {
   for (const type of [StairType.SWITCHBACK, StairType.WINDING]) {
     const mk = id => {
       const g = makeGrid([0, 1000, 2000, 3000], [0, 1000, 4000], { id });
@@ -213,24 +213,22 @@ test('見上げの線・隔て壁の柱あり（frontA≠front）: 回転部の�
     const L = uTurnPlanLayout(high.stairs[0], high);
     assert.equal(L.hasColumn, true, `${type}: 前提: 柱あり`);
     assert.notEqual(L.run.frontA, L.run.front, `${type}: 前提: frontA≠front`);
-    const tf = Math.abs(L.run.back - L.run.frontA) <= Math.abs(L.run.back - L.run.front) ? L.run.frontA : L.run.front;
-    const other = tf === L.run.frontA ? L.run.front : L.run.frontA;
-    const horizAt = y => lines.filter(l => l.points[1] === l.points[3] && Math.abs(l.points[1] - y) < 1);
-    assert.equal(horizAt(other).length, 0, `${type}: back から遠い前縁（y=${other}）に線が無い`);
-    const spans = horizAt(tf).map(l => [Math.min(l.points[0], l.points[2]), Math.max(l.points[0], l.points[2])]).sort((p, q) => p[0] - q[0]);
-    for (let k = 1; k < spans.length; k++) assert.ok(spans[k][0] >= spans[k - 1][1] - 1e-6, `${type}: 前縁の線が重ならない ${JSON.stringify(spans)}`);
-    const covered = spans.reduce((t, [a, b]) => t + (b - a), 0);
-    assert.ok(Math.abs(covered - Math.abs(L.across.s1 - L.across.s0)) < 25, `${type}: 前縁の線は全幅を覆う（${covered}）`);
-    if (type === StairType.WINDING) { // 対角線は上階の回り段のピボット (pivotAcross, frontA)・(pivotAcross, front) と外側の奥の角を結ぶ直線上
-      const pv = L.pivotAcross, O = [[L.across.s0, L.run.back, pv, L.run.frontA], [L.across.s1, L.run.back, pv, L.run.front]];
+    const { frontA, front } = L.run, pvv = L.pivotAcross;
+    const horizAt = y => lines.filter(l => l.points[1] === l.points[3] && Math.abs(l.points[1] - y) < 1).map(l => [Math.min(l.points[0], l.points[2]), Math.max(l.points[0], l.points[2])]);
+    const within = (spans, lo, hi) => spans.every(([a, b]) => a >= Math.min(lo, hi) - 1 && b <= Math.max(lo, hi) + 1);
+    assert.ok(horizAt(frontA).length > 0 && horizAt(front).length > 0, `${type}: 往路・復路の前縁の線がある`);
+    assert.ok(within(horizAt(frontA), L.across.s0, pvv), `${type}: 往路の前縁（y=${frontA}）の線は往路レーン側 [s0, pivot] だけ（復路レーンに出ない）`);
+    assert.ok(within(horizAt(front), pvv, L.across.s1), `${type}: 復路の前縁（y=${front}）の線は復路レーン側 [pivot, s1] だけ（往路レーンに出ない）`);
+    if (type === StairType.WINDING) { // 対角線はピボット P_A=(pivot, frontA)・P_B=(pivot, front) から外側の奥の角まで（端点がピボット）で、共線
+      const O = [[L.across.s0, L.run.back, pvv, frontA], [L.across.s1, L.run.back, pvv, front]];
       for (const [ox, oy, px, py] of O) {
         const diag = lines.filter(l => [[0, 1], [2, 3]].some(([i, k]) => Math.hypot(l.points[i] - ox, l.points[k] - oy) < 1));
         assert.ok(diag.length > 0, `${type}: 外側の奥の角 (${ox},${oy}) から出る線`);
         const hit = diag.some(l => {
           const [qx, qy] = Math.hypot(l.points[0] - ox, l.points[1] - oy) < 1 ? [l.points[2], l.points[3]] : [l.points[0], l.points[1]];
-          return Math.abs((qx - ox) * (py - oy) - (qy - oy) * (px - ox)) < 1e-3 * Math.hypot(qx - ox, qy - oy) * Math.hypot(px - ox, py - oy) + 1;
+          return Math.hypot(qx - px, qy - py) < 1; // 反対側の端点がピボット（全長）
         });
-        assert.ok(hit, `${type}: 対角線がピボット (${px},${py}) と共線`);
+        assert.ok(hit, `${type}: 対角線がピボット (${px},${py}) から始まる`);
       }
     }
   }

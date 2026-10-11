@@ -10,15 +10,15 @@
  *
  * 高さは層の FL（N+1 の FL = floorZMm）基準の絶対 z。段 k の天端 = floorZMm + k × 蹴上（stairTreadFootprints と同じ）。
  * 裏面 = 天端 − dz。dz = STAIR_SOFFIT_THICKNESS_MM / cosθ（階段の傾斜に直交して測った厚みの垂直方向への換算。tanθ = 蹴上 / 踏面）。
- *   往路   … 矩形 R_A（幅 s0〜sA × 上り口 baseA 〜 回転部の前縁 turnFront）。baseA で「当該階天井」（N の階段の対の部屋の CH＋床段差。
- *            N の FL 基準の値で floorZMm は足さない。対の部屋が無ければ DEFAULT_ROOM_CEILING_HEIGHT）→ turnFront で 回転部の最初の段の天端 − dz zA の線形。
- *   回転部 … 前縁 turnFront は両レーン共通（frontA と front のうち back に近い方＝隔て板の端）。往路側 Q_A（s0〜pivotAcross × turnFront〜back）と
- *            復路側 Q_B（pivotAcross〜s1 × turnFront〜back）を、上階の階段の回り段のピボット (pivotAcross, frontA)／(pivotAcross, front) から
- *            外側の奥の角 (s0, back)／(s1, back) への直線で 2 つの三角形に分け、計 4 三角の平面で表す（回転部の段数によらない）。
+ *   往路   … 矩形 R_A（幅 s0〜sA × 上り口 baseA 〜 往路側の前縁 frontA）。baseA で「当該階天井」（N の階段の対の部屋の CH＋床段差。
+ *            N の FL 基準の値で floorZMm は足さない。対の部屋が無ければ DEFAULT_ROOM_CEILING_HEIGHT）→ frontA で 回転部の最初の段の天端 − dz zA の線形。
+ *   回転部 … 前縁はレーンごと（往路の直進部は frontA で終わり、復路は front から始まる。柱がなければ frontA == front）。往路側 Q_A（s0〜pivotAcross × frontA〜back）と
+ *            復路側 Q_B（pivotAcross〜s1 × front〜back）を、上階の階段の回り段のピボット P_A=(pivotAcross, frontA)／P_B=(pivotAcross, front)
+ *            （＝Q の前縁側の内側の角）から外側の奥の角 (s0, back)／(s1, back) への対角線で 2 つの三角形に分け、計 4 三角の平面で表す（回転部の段数によらない）。
  *            頂点の高さは回転部を角度で等分: ピボット・前縁の外側の角 = zA（往路側）／zB（復路側）、外側の奥の角 = zA+Δ/4・zA+3Δ/4、
  *            内側の奥 I = zA+Δ/2。Δ = zB − zA = 回転部固有の蹴上 × 蹴上（回転部のマス数−1）。踊り場（マス数 1）は Δ=0 で平ら。
  *            角度等分は「段数によらず 4 三角」から導いた既定（ユーザー裁定待ち）。
- *   復路   … 矩形 R_B（幅 sB〜s1 × turnFront 〜 到達辺 baseB）。turnFront で 最後の回転部マスの天端 − dz zB → baseB で 総蹴上の天端 − dz の線形。
+ *   復路   … 矩形 R_B（幅 sB〜s1 × 復路側の前縁 front 〜 到達辺 baseB）。front で 最後の回転部マスの天端 − dz zB → baseB で 総蹴上の天端 − dz の線形。
  *   直進系 … STRAIGHT は base → end の 1 矩形、STRAIGHT_LANDING は 直進部1 → 踊り場（平ら）→ 直進部2 の 3 矩形（区間ごとの線形）。
  * 既知の限界: 取りつき回転部（側面の出入口）を往路の平面に含める／L_TURN・FLARED・OPEN_WELL・蹴上が求まらない階段は裏面なし。
  */
@@ -26,7 +26,6 @@ import { StairType, StructuralMaterialType, DEFAULT_ROOM_CEILING_HEIGHT } from '
 import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js'; // 公開 API（core.js）には出さない内部定数
 import { uTurnPlanLayout, straightPlanLayout } from '../finish/stair/stairGeometry.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
-import { clipSegmentToRect } from '../finish/stair/segmentClip.js';
 
 const MIN_SPAN_MM = 1; // 矩形の辺の下限（これ未満は潰れた区間として作らない）
 const FOLD_ROLE = 'stairSoffitFold'; // 面の折れ目（innerLines の role）
@@ -115,34 +114,11 @@ function turnQuad(asm, rect, { P, F, O, I }) {
 const nearerTo = (base, x, y) => (Math.abs(x - base) <= Math.abs(y - base) ? x : y);
 
 /**
- * 線分 (a0,r0)→(a1,r1) のうち、部品（矩形）の和の中に入る区間を線分の列で返す（(a, r) 座標）。
- * 矩形ごとのクリップは既存の clipSegmentToRect（Liang–Barsky。segmentClip.js）。隣接する矩形をまたぐ線は
- * 接する断片になるので、元の線分上の位置（媒介変数）で並べて重なり・接するものを 1 本に結合する。始点終点の入替えで同じ区間になる。
- */
-export function clipSegmentToPieces(seg, pieces) {
-  const [a0, r0, a1, r1] = seg;
-  const da = a1 - a0, dr = r1 - r0, len2 = da * da + dr * dr;
-  if (len2 === 0) return [];
-  const tOf = (a, r) => ((a - a0) * da + (r - r0) * dr) / len2;
-  const spans = [];
-  for (const p of pieces) {
-    const c = clipSegmentToRect({ x1: a0, y1: r0, x2: a1, y2: r1 }, { x1: p.a0, y1: p.r0, x2: p.a1, y2: p.r1 });
-    if (c) spans.push([tOf(c.x1, c.y1), tOf(c.x2, c.y2)]);
-  }
-  spans.sort((x, y) => x[0] - y[0]);
-  const merged = [];
-  for (const [t0, t1] of spans) {
-    const last = merged[merged.length - 1];
-    if (last && t0 <= last[1] + 1e-9) last[1] = Math.max(last[1], t1); else merged.push([t0, t1]);
-  }
-  return merged.map(([t0, t1]) => [a0 + da * t0, r0 + dr * t0, a0 + da * t1, r0 + dr * t1]);
-}
-
-/**
  * uTurnPlanLayout の戻り値 L から U 字系の裏面の立体を作る（幾何の本体。layout を模した入力で単体テストできるよう export）。
  * 幅方向の向き（s0<s1 でも s0>s1 でも）・走行方向の向き・vertical のどれでも成り立つ（矩形は normalize、端は基準の辺からの距離で選ぶ）。
- * 回転部の前縁 turnFront は両レーン共通（frontA と front のうち back に近い方＝隔て板の端）。
- * 回転部の 2 分線は上階の階段の回り段の扇形のピボット（pivotAcross。往路側 (pivotAcross, frontA)・復路側 (pivotAcross, front)）から外側の奥の角へ。
+ * 回転部の前縁はレーンごと: 往路の直進部は frontA で終わり（R_A・Q_A）、復路は front から始まる（Q_B・R_B）。
+ * 回転部の 2 分線は上階の階段の回り段の扇形のピボット（pivotAcross。往路側 P_A=(pv, frontA)・復路側 P_B=(pv, front)＝Q_A・Q_B の前縁側の内側の角）から
+ * 外側の奥の角へ全長で引く。
  * @param {object} L uTurnPlanLayout の戻り値（pivotAcross を含む）
  * @param {{zStart:number, zTop:(n:number)=>number}} ctx
  */
@@ -157,45 +133,37 @@ export function uTurnSoffitFromLayout(L, { zStart, zTop }) {
   // 前提: partitionFrameFor が柱の面をレーンのあき [sA, sB] の中に収めるので pv は [sA, sB] の中（起きない見込み）。
   // 外へ出ると前縁の一部が描かれない／R_B の中に対角線のかけらが出るので、防御として [sA, sB] に丸める。
   const pv = Math.min(Math.max(L.pivotAcross, Math.min(sA, sB)), Math.max(sA, sB));
-  const back = run.back;
-  const tf = nearerTo(back, run.frontA, run.front); // 回転部の前縁（両レーン共通。柱なし・踊り場では frontA == front）
+  const { frontA, front, back } = run;
   const zI = zA + delta / 2;
 
-  const rA = asm.ramp(s0, sA, run.baseA, tf, zStart, zA);
-  const rB = asm.ramp(sB, s1, tf, run.baseB, zB, zEnd);
-  // 回転部 A（往路側）: ピボット P_A=(pv, frontA)・F_A=(s0, tf)・外側の奥の角 O_A=(s0, back)・内側の奥 I=(pv, back)
-  // 回転部 B（復路側）: P_B=(pv, front)・F_B=(s1, tf)・O_B=(s1, back)
-  // ピボットが前縁より手前（frontA ≠ tf）でも、P→O の直線で矩形を 2 分する。面（平面）の頂点は、その直線と前縁 tf の交点 X（高さ zA／zB）にする
-  // （P が前縁上なら X＝P）。これで R_A/Q_A の前縁 s0〜X_A で高さが連続する。X_A〜pv の区間は A2 の平面が前縁で zA でない分だけ段差が残る（既知の限界）。
-  // 線（対角線）はピボットから引いた直線を立体に切ったまま。線はピボットから、面の折れ目は前縁から。
-  const crossAtTf = (rP, aO, rO) => pv + (aO - pv) * ((tf - rP) / (rO - rP)); // 直線 P→O と r=tf の交点の幅方向
-  const xA = run.frontA === tf ? pv : crossAtTf(run.frontA, s0, back);
-  const xB = run.front === tf ? pv : crossAtTf(run.front, s1, back);
-  const qA = turnQuad(asm, { a0: s0, a1: pv, r0: tf, r1: back }, {
-    P: [xA, tf, zA], F: [s0, tf, zA], O: [s0, back, zA + delta / 4], I: [pv, back, zI],
+  const rA = asm.ramp(s0, sA, run.baseA, frontA, zStart, zA);
+  const rB = asm.ramp(sB, s1, front, run.baseB, zB, zEnd);
+  // 回転部 A（往路側）: P_A=(pv, frontA)・F_A=(s0, frontA)・外側の奥の角 O_A=(s0, back)・内側の奥 I=(pv, back)
+  // 回転部 B（復路側）: P_B=(pv, front)・F_B=(s1, front)・O_B=(s1, back)
+  const qA = turnQuad(asm, { a0: s0, a1: pv, r0: frontA, r1: back }, {
+    P: [pv, frontA, zA], F: [s0, frontA, zA], O: [s0, back, zA + delta / 4], I: [pv, back, zI],
   });
-  const qB = turnQuad(asm, { a0: pv, a1: s1, r0: tf, r1: back }, {
-    P: [xB, tf, zB], F: [s1, tf, zB], O: [s1, back, zA + 3 * delta / 4], I: [pv, back, zI],
+  const qB = turnQuad(asm, { a0: pv, a1: s1, r0: front, r1: back }, {
+    P: [pv, front, zB], F: [s1, front, zB], O: [s1, back, zA + 3 * delta / 4], I: [pv, back, zI],
   });
   if (!qA || !qB) return null; // 回転部が潰れている（求まらない）
-  const pieces = [rA, qA, qB, rB].filter(Boolean);
 
   const lines = [];
-  // 回転部の前縁（両レーン共通の 1 本）。R_A/Q_A・R_B/Q_B の共有辺だけ足す（残りは矩形の輪郭として出る）
-  if (rA) lines.push(asm.line(s0, tf, nearerTo(s0, sA, pv), tf));
-  if (rB) lines.push(asm.line(nearerTo(s1, sB, pv), tf, s1, tf));
-  if (delta > 0) { // 対角線（ピボット → 外側の奥の角）を立体の中に収まる区間に切る。踊り場は平らなので描かない
-    for (const seg of [[pv, run.frontA, s0, back], [pv, run.front, s1, back]]) {
-      for (const [a0, r0, a1, r1] of clipSegmentToPieces(seg, pieces)) lines.push(asm.line(a0, r0, a1, r1));
-    }
-    lines.push(asm.line(pv, tf, pv, back)); // 回転部 A と B の境（高さが食い違う共有辺）
+  // 前縁（レーンごと 1 本）。R_A/Q_A・R_B/Q_B の共有辺だけ足す（残りは矩形の輪郭として出る）
+  if (rA) lines.push(asm.line(s0, frontA, nearerTo(s0, sA, pv), frontA));
+  if (rB) lines.push(asm.line(nearerTo(s1, sB, pv), front, s1, front));
+  if (delta > 0) { // 対角線（ピボット → 外側の奥の角。全長）。踊り場は平らなので描かない
+    lines.push(asm.line(pv, frontA, s0, back));
+    lines.push(asm.line(pv, front, s1, back));
+    // 回転部 A と B の境（x=pv。高さが食い違う共有辺）。frontA〜front の区間は Q の輪郭として出る
+    lines.push(asm.line(pv, nearerTo(back, frontA, front), pv, back));
   }
   if (rA && rB && Math.abs(sA - sB) < MIN_SPAN_MM) { // あき 0: 往路 R_A と復路 R_B の境（高さが食い違う共有辺）
-    const lo = Math.max(Math.min(run.baseA, tf), Math.min(tf, run.baseB));
-    const hi = Math.min(Math.max(run.baseA, tf), Math.max(tf, run.baseB));
+    const lo = Math.max(Math.min(run.baseA, frontA), Math.min(front, run.baseB));
+    const hi = Math.min(Math.max(run.baseA, frontA), Math.max(front, run.baseB));
     if (hi - lo >= MIN_SPAN_MM) lines.push(asm.line(sA, lo, sA, hi));
   }
-  return asm.solid(pieces, lines, [zStart, zA, zB, zEnd, zA + delta / 4, zI, zA + 3 * delta / 4]);
+  return asm.solid([rA, qA, qB, rB], lines, [zStart, zA, zB, zEnd, zA + delta / 4, zI, zA + 3 * delta / 4]);
 }
 
 function uTurnSolid(stair, graph, ctx) {
