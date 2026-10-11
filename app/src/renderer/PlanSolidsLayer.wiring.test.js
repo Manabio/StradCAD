@@ -47,7 +47,7 @@ test('【配線】PlanSolidsLayer.jsx は判断を planSolidsLayerResolve に任
   assert.match(layer, /^\s*if \(resolved\) prevRef\.current = \{ planeId: graph\.plane\.id, direction, prims: resolved \};\s*$/m, 'ref には LOD で絞る前の線を持つ');
   assert.match(layer, /^\s*const prevRef = useRef\(null\);/m);
   assert.match(layer, /^\s*if \(prims\.length === 0 && holePrims\.length === 0\) return null;\s*$/m, '線も注記も無いときだけ null（ドラッグ直後で resolved が null でも注記は描く）');
-  assert.equal(count(layer, /graphComputed/g), 3, 'import・解決器の memo 引数・上階の穴の memo だけ（置き場・鍵はレイヤに書かない）');
+  assert.equal(count(layer, /graphComputed/g), 4, 'import・解決器の memo 引数・上階の穴の memo・上階の階段吹抜けの memo だけ（置き場・鍵はレイヤに書かない）');
   assert.equal(count(layer, /planSolidsLayerResolve\(/g), 1);
   assert.equal(count(layer, /graph\.plane\.id\}:/g), 0, '鍵の文字列はレイヤに無い（planSolidsLayerCacheSpec が唯一の場所）');
   // useRef は早期 return より前（フックの呼び出し順）
@@ -136,12 +136,17 @@ test('【配線】PlanSolidsLayer.jsx の吹抜けの注記: Group plan-hole-mar
   assert.match(marksPart, /^\s*strokeScaleEnabled=\{false\}\s*$/m);
   assert.match(marksPart, /^\s*offsetX=\{p\.offsetX\}\s*$/m);
   // 上階の穴: abovePeek の graph に memo（キー planHoleGroups）。自階の peek 照合は 1 行まるごと
-  assert.match(layer, /^\s*const aboveGroups = direction !== 'up' && abovePeek\?\.activePlaneId === graph\.plane\.id\s*$/m, '見上げでは上階の穴を求めない');
+  assert.match(layer, /^\s*const peekMatches = abovePeek\?\.activePlaneId === graph\.plane\.id;\s*$/m, '自階と違う階の peek は使わない（abovePeek null／graph なしは ?. で false）');
+  assert.match(layer, /^\s*const aboveGroups = direction !== 'up' && peekMatches\s*$/m, '見上げでは上階の穴を求めない');
+  assert.match(layer, /^\s*const aboveStairVoidGroups = direction === 'up' && peekMatches\s*$/m, '上階の階段吹抜けは見上げだけ。見下げでは求めない');
+  assert.match(layer, /^\s*\? graphComputed\(abovePeek\.graph, 'planUpperStairVoidGroups', \(\) => floorOpeningGroups\(abovePeek\.graph, \{ stairFilter: \(\) => false, stairVoidRect: true \}\)\.filter\(g => g\.kind === 'stairVoid'\)\)\s*$/m);
+  assert.match(layer, /^\s*: null;\s*$/m, '見下げ・照合できない peek は渡さない');
+  assert.equal(count(layer, /stairVoidRect: true/g), 1, 'stairVoidRect を渡すのは見上げの上階の1か所（自階は planHoleMarksOf の lookUp が渡す）');
   assert.match(layer, /^\s*\? graphComputed\(abovePeek\.graph, 'planHoleGroups', \(\) => floorOpeningGroups\(abovePeek\.graph, \{ stairFilter: \(\) => false \}\)\)\s*$/m);
   assert.match(layer, /^\s*: undefined;\s*$/m, '照合できない peek は未解決扱い');
-  assert.equal(count(layer, /graphComputed\(/g), 1, 'memo は上階の穴の1回だけ（解決器の memo は planSolidsLayerResolve の中）');
+  assert.equal(count(layer, /graphComputed\(/g), 2, 'memo は上階の穴（見下げ）と上階の階段吹抜け（見上げ）の2回だけ（解決器の memo は planSolidsLayerResolve の中）');
   // 自階の×: memo の外（graphComputed にも planSolidsLayerResolve にも入れない）。ドラッグ中も毎レンダーで求める
-  assert.match(layer, /^\s*const holePrims = planHoleMarkPrimitives\(planHoleMarksOf\(graph, direction === 'up' \? null : aboveGroups\), \{\s*$/m, '見上げの注記は自階の×だけ（上階の穴は null）');
+  assert.match(layer, /^\s*const holePrims = planHoleMarkPrimitives\(planHoleMarksOf\(graph, direction === 'up' \? null : aboveGroups, \{ lookUp: direction === 'up', aboveStairVoidGroups \}\), \{\s*$/m, '見上げの注記は自階の×＋上階の階段吹抜けの×（上階の吹抜け・昇降路の破線は null）。見下げは lookUp false');
   assert.match(layer, /^\s*thickPx: viewport\.lineWeightsPx\.thick, thinPx: viewport\.lineWeightsPx\.thin, scale: viewport\.scaleX, lod: viewport\.lodLevel,\s*$/m);
   assert.equal(count(layer, /planHoleMarksOf\(/g), 1);
   assert.equal(count(layer, /isCenterLineDragging/g), 0, 'レイヤはドラッグ判定をしない（解決器の中だけ）');
@@ -155,7 +160,7 @@ test('【配線】planHoleMarks.js: dashKind→破線の写像は HOLE_MARK_DASH
   assert.equal(count(marks, /openingCrossDash\(/g), 1);
   assert.match(marks, /^\s*openingCross: thinPx => openingCrossDash\(thinPx\),\s*$/m);
   assert.match(marks, /^\s*upperVoid: \(\) => UPPER_VOID_DASH_PX,\s*$/m);
-  assert.match(marks, /^\s*const dash = HOLE_MARK_DASH\[m\.dashKind\]\(thinPx\);\s*$/m);
+  assert.match(marks, /^\s*const dash = m\.dashKind \? HOLE_MARK_DASH\[m\.dashKind\]\(thinPx\) : undefined;/m, 'dashKind なし＝実線（上階の階段吹抜けの×）');
   assert.match(marks, /^\s*if \(m\.label && lod !== LodLevel\.SCHEMATIC\) \{\s*$/m, 'LOD でラベルだけ落とす条件');
   assert.match(marks, /^export const UPPER_VOID_DASH_PX = \[8, 4\];\s*$/m);
 });

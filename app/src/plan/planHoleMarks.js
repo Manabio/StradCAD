@@ -131,28 +131,34 @@ export function selfVoidHoleRects(graph) {
 }
 
 const isCrossGroup = g => (g?.kind === 'void' || g?.kind === 'shaft') && isFiniteRect(g.innerRect);
+// 自階の×の対象。階段吹抜けは innerRect が付いたとき（floorOpeningGroups の stairVoidRect＝見上げだけ）に限り void と同じ扱い。
+const isSelfCrossGroup = g => (isCrossGroup(g) || (g?.kind === 'stairVoid' && isFiniteRect(g.innerRect)));
+const isUpperStairVoidGroup = g => g?.kind === 'stairVoid' && isFiniteRect(g.innerRect);
 
 /**
  * 穴の注記を列挙する。
- *   - 自階の×（role 'cross'・dashKind 'openingCross'）: selfGroups の void・shaft で innerRect が解決できたもの。
+ *   - 自階の×（role 'cross'・dashKind 'openingCross'）: selfGroups の void・shaft（＋innerRect 付きの stairVoid＝見上げだけ）で innerRect が解決できたもの。
  *   - 上階の破線（role 'upperVoid'・dashKind 'upperVoid'・outline・VOID だけ label）: aboveGroups の void・shaft のうち、
  *     cellRect が selfVoidCells（自階の吹抜け・昇降路のセル矩形の和）に覆われないもの。上階の床の穴の縁を示す表示記号で、
  *     穴の遮蔽規則とは別。
- * 不正なグループ（innerRect なし・非有限）は捨てる。出力順は cross（入力順）→ upperVoid（入力順）。
+ * 不正なグループ（innerRect なし・非有限）は捨てる。出力順は cross（入力順）→ upperVoid（入力順）→ upperStairVoid（入力順）。
  * @param {{
  *   selfGroups?: Array<object>|null  自階の floorOpeningGroups
  *   selfVoidCells?: Array<{x1:number,y1:number,x2:number,y2:number}>|null  selfVoidHoleRects(自階)
  *   aboveGroups?: Array<object>|null|undefined  上階の floorOpeningGroups。null＝上階なし・undefined＝未解決（どちらも上階分なし）
+ *   aboveStairVoidGroups?: Array<object>|null  上階の階段吹抜けのグループ（見上げだけ。stairVoidRect で innerRect 付き）
  * }} args
- * @returns {Array<{key:string, role:'cross'|'upperVoid', rect:{x1:number,y1:number,x2:number,y2:number},
- *   cellRect:object|null, dashKind:'openingCross'|'upperVoid', outline:boolean, label:boolean,
+ *   - 見上げの下の階からの×（role 'upperStairVoid'・dashKind なし＝実線・outline/label なし）: aboveStairVoidGroups の
+ *     innerRect が解決できた階段吹抜け。上階スラブの穴の縁は解決器が実線で出すので外形・ラベル・破線は付けない。
+ * @returns {Array<{key:string, role:'cross'|'upperVoid'|'upperStairVoid', rect:{x1:number,y1:number,x2:number,y2:number},
+ *   cellRect:object|null, dashKind:'openingCross'|'upperVoid'|null, outline:boolean, label:boolean,
  *   source:{kind:string, id:string, feature:string|null}}>}
  *   rect＝innerRect（壁内4頂点）。cellRect＝上階の被覆判定に使った CL 値の矩形（cross は null 可）。
  */
-export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups } = {}) {
+export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveStairVoidGroups } = {}) {
   const marks = [];
   for (const g of selfGroups ?? []) {
-    if (!isCrossGroup(g)) continue;
+    if (!isSelfCrossGroup(g)) continue;
     marks.push({
       key: `cross:${g.id}`, role: 'cross', rect: { ...g.innerRect }, cellRect: g.cellRect ? { ...g.cellRect } : null,
       dashKind: 'openingCross', outline: false, label: false,
@@ -169,22 +175,34 @@ export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups } = {}) {
       source: { kind: g.kind, id: g.id, feature: g.feature ?? null },
     });
   }
+  for (const g of aboveStairVoidGroups ?? []) {
+    if (!isUpperStairVoidGroup(g)) continue;
+    marks.push({
+      key: `upperStairVoid:${g.id}`, role: 'upperStairVoid', rect: { ...g.innerRect }, cellRect: g.cellRect ? { ...g.cellRect } : null,
+      dashKind: null, outline: false, label: false,
+      source: { kind: g.kind, id: g.id, feature: g.feature ?? null },
+    });
+  }
   return marks;
 }
 
 /**
  * 自階の graph から注記を求める（レイヤが毎レンダーで呼ぶ経路）。graphComputed の外に置く: 自階の×は通り芯ドラッグ中も
  * 追従する（CL の effectiveValue＝pendingDelta 込みを読む）ので、memo も「ドラッグ中は前回のまま」も掛けない。
- * ×は void・shaft だけ使うので階段系（破れ先の蹴上が要る）は求めない（stairFilter: () => false）。
+ * ×は void・shaft（見上げでは stairVoid も）だけ使うので破れ先（蹴上が要る）は求めない（stairFilter: () => false）。
  * @param {object|null} graph
  * @param {Array<object>|null|undefined} aboveGroups 上階の floorOpeningGroups（null＝上階なし・undefined＝未解決）
+ * @param {{lookUp?: boolean, aboveStairVoidGroups?: Array<object>|null}} [opts]
+ *   lookUp＝天伏の見上げ（既定 false＝見下げ。出力不変）。true のとき自階の階段吹抜けにも×（STAIR_VOID は VOID と同じ扱い）。
+ *   aboveStairVoidGroups＝上階の階段吹抜けのグループ（stairVoidRect 付き）。足元の上の続きの無い階段の×（実線）。
  */
-export function planHoleMarksOf(graph, aboveGroups) {
+export function planHoleMarksOf(graph, aboveGroups, { lookUp = false, aboveStairVoidGroups = null } = {}) {
   if (!graph) return [];
   return planHoleMarks({
-    selfGroups: floorOpeningGroups(graph, { stairFilter: () => false }),
+    selfGroups: floorOpeningGroups(graph, { stairFilter: () => false, stairVoidRect: lookUp }),
     selfVoidCells: aboveGroups?.length ? selfVoidHoleRects(graph) : [],
     aboveGroups,
+    aboveStairVoidGroups: lookUp ? aboveStairVoidGroups : null,
   });
 }
 
@@ -210,7 +228,7 @@ export const HOLE_MARK_DASH = Object.freeze({
  * @param {ReturnType<typeof planHoleMarks>} marks
  * @param {{thickPx:number, thinPx:number, scale:number, lod:string}} view
  * @returns {Array<
- *   {kind:'line', key:string, points:number[], dash:number[], closed:boolean} |
+ *   {kind:'line', key:string, points:number[], dash:number[]|undefined, closed:boolean} |
  *   {kind:'text', key:string, x:number, y:number, text:string, fontSize:number, offsetX:number}>}
  */
 export function planHoleMarkPrimitives(marks, { thickPx, thinPx, scale, lod }) {
@@ -222,7 +240,7 @@ export function planHoleMarkPrimitives(marks, { thickPx, thinPx, scale, lod }) {
   for (const m of marks ?? []) {
     const r = insetRect(m.rect, inset);
     if (!r) continue; // 退化矩形 → 描画スキップ（座標が交差した×を描かない）
-    const dash = HOLE_MARK_DASH[m.dashKind](thinPx);
+    const dash = m.dashKind ? HOLE_MARK_DASH[m.dashKind](thinPx) : undefined; // dashKind なし＝実線
     out.push({ kind: 'line', key: `${m.key}:d1`, points: [r.x1, r.y1, r.x2, r.y2], dash, closed: false });
     out.push({ kind: 'line', key: `${m.key}:d2`, points: [r.x2, r.y1, r.x1, r.y2], dash, closed: false });
     if (m.outline) {

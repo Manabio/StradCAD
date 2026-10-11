@@ -748,6 +748,31 @@ test('floorOpeningGroups: 階段吹抜け・階段の破れ先は rect なし。
   assert.deepEqual(floorOpeningGroups(mixed.graph).map(g => g.kind), ['void', 'stairVoid']);
 });
 
+test('floorOpeningGroups: stairVoidRect=true で階段吹抜けにも cellRect・innerRect（faceRect）が付く。既定 false は null のまま・void は不変', () => {
+  const { graph, right, left } = makeGrid();
+  graph.addRoom(new Set([right])).setFeature(RoomFeature.STAIR_VOID);
+  graph.addRoom(new Set([left])).setFeature(RoomFeature.VOID);
+  const off = floorOpeningGroups(graph);
+  const on = floorOpeningGroups(graph, { stairVoidRect: true });
+  assert.deepEqual(off.find(g => g.kind === 'void'), on.find(g => g.kind === 'void'), 'void は既定でも true でも同じ');
+  assert.deepEqual(off.map(g => g.kind), ['void', 'stairVoid']);
+  const sv = on.find(g => g.kind === 'stairVoid');
+  assert.deepEqual(sv.cellRect, { x1: 1000, y1: 0, x2: 2000, y2: 1500 });
+  const f = faceRect(new Set([right]), graph);
+  assert.deepEqual(sv.innerRect, { x1: f.x1, y1: f.y1, x2: f.x2, y2: f.y2 }, '不変条件: innerRect＝セル集合の faceRect');
+  assert.deepEqual(off.find(g => g.kind === 'stairVoid').innerRect, null);
+});
+
+test('floorOpeningGroups【失敗系】: stairVoidRect=true でも非矩形の階段吹抜けは null、破れ先は null、graph null は空', () => {
+  const { graph, topKey, blKey } = makeLShapeGrid();
+  graph.addRoom(new Set([topKey, blKey])).setFeature(RoomFeature.STAIR_VOID);
+  const g = floorOpeningGroups(graph, { stairVoidRect: true });
+  assert.deepEqual(g.map(x => [x.kind, x.cellRect, x.innerRect]), [['stairVoid', null, null]]);
+  const { graph: gb } = makeSwitchbackBeyondFixture();
+  assert.deepEqual(floorOpeningGroups(gb, { stairVoidRect: true }).map(x => [x.kind, x.cellRect, x.innerRect]), [['stairBeyond', null, null]]);
+  assert.deepEqual(floorOpeningGroups(null, { stairVoidRect: true }), []);
+});
+
 test('floorOpeningGroups【失敗系】: 孤児器具行（室なし・昇降路でない室）とCL無し行は0件で例外にならない。graph null は空', () => {
   assert.deepEqual(floorOpeningGroups(null), []);
   const a = makeGrid();

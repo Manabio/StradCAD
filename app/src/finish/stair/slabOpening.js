@@ -341,9 +341,10 @@ export function floorOpeningCellRects(graph, { riserOf = () => null, stairFilter
 
 // 開口グループ1件を組み立てる。cellRect＝セル境界CLの値（壁の有無・厚みに左右されない）、innerRect＝壁内4頂点（faceRect）。
 // どちらも矩形のセル集合で、4境界CLと faceRect が解決できたときだけ入る（それ以外は null）。
-function openingGroupOf(id, kind, feature, cells, graph) {
+function openingGroupOf(id, kind, feature, cells, graph, stairVoidRect = false) {
   let cellRect = null, innerRect = null;
-  const hasCross = kind === 'void' || kind === 'shaft'; // 階段吹抜け・破れ先に×は無い
+  // 階段吹抜け・破れ先に×は無い。ただし stairVoidRect（天伏の見上げ）では階段吹抜けも吹抜けと同じに矩形を解決する
+  const hasCross = kind === 'void' || kind === 'shaft' || (stairVoidRect && kind === 'stairVoid');
   if (hasCross && isRectangularCellSet(cells, graph)) {
     const b = footprintBoundaryCLs(cells, graph);
     const f = faceRect(cells, graph);
@@ -363,6 +364,8 @@ const GROUP_KIND_ORDER = ['void', 'shaft', 'stairVoid', 'stairBeyond'];
  * 分け方: 吹抜け（void）は室ごと（id＝室 id）。昇降路（shaft）は器具行を持つ室なら器具行ごと
  * （id＝行 id・feature＝ELEVATOR_EQUIPMENT・セルは行のセル。同じ室の器具どうしの境界には壁が無い）、
  * 器具行が無い室は室ごと。階段吹抜け・階段の破れ先は cellRect・innerRect とも null（×の対象外）。
+ * ただし opts.stairVoidRect=true（天伏の見上げだけ。既定 false）では階段吹抜けにも void と同じ経路で cellRect・innerRect を解決する
+ * （非矩形は null＝×なし）。破れ先は常に null。
  * 室が無い／昇降路でない室を指す器具行（孤児行）は穴が無いのでグループにしない。
  * 不変条件: 「×の端点＝そのグループのセル集合の faceRect」（階段の描画幅・openingParts の上階クリップと同じ供給源）。
  * @param {object|null} graph
@@ -371,7 +374,7 @@ const GROUP_KIND_ORDER = ['void', 'shaft', 'stairVoid', 'stairBeyond'];
  *   cellRect:{x1:number,y1:number,x2:number,y2:number}|null, innerRect:{x1:number,y1:number,x2:number,y2:number}|null}>}
  *   並びは kind（void→shaft→stairVoid→stairBeyond）→ id。
  */
-export function floorOpeningGroups(graph, { riserOf = () => null, stairFilter = () => true } = {}) {
+export function floorOpeningGroups(graph, { riserOf = () => null, stairFilter = () => true, stairVoidRect = false } = {}) {
   if (!graph) return [];
   const rows = graph.equipmentRows ?? [];
   const groups = [];
@@ -379,7 +382,7 @@ export function floorOpeningGroups(graph, { riserOf = () => null, stairFilter = 
     if (set.source === 'stairBeyond') {
       groups.push(openingGroupOf(set.stairId, 'stairBeyond', null, set.cells, graph));
     } else if (set.source === 'stairVoid') {
-      groups.push(openingGroupOf(set.roomId, 'stairVoid', set.feature, set.cells, graph));
+      groups.push(openingGroupOf(set.roomId, 'stairVoid', set.feature, set.cells, graph, stairVoidRect));
     } else if (set.source === 'shaft' && rows.some(r => r.roomId === set.roomId)) {
       for (const row of rows) {
         if (row.roomId !== set.roomId) continue;
