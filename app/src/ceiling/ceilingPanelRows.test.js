@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { RoomKind, RoomFeature, StairType, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH, CeilingZone } from '@core';
 import { makeGrid, assignZoneHeight } from '../plan/planTestFixtures.js';
 import { assignZoneShape } from './ceilingZones.js';
+import { setRoomCeilingShape } from './roomCeilingShape.js';
 import { interiorTabRooms, interiorRoomDisplayName } from '../finish/interiorTabRooms.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
@@ -215,6 +216,27 @@ test('CH 欄のレンジ（S6a）: 傾斜の区画は低い側〜低い側＋ラ
   r.setCeilingZones([]);
   r.setCeilingZones(assignZoneShape(g.graph, r, [g.cell(1, 0)], { heightMm: null, shape: 'slope', dims: [1000, 90] }));
   assert.equal(ch(), '2400～3400', '傾斜の基準高 null＝部屋の CH を低い側に');
+});
+
+test('CH 欄のレンジ（S12a）: 区画が無くても残りの面（部屋の形状）が傾斜ならレンジ。平面に戻せば従来の raw。CH がレンジ表記なら raw のまま', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const r = g.interior([[0, 0], [1, 0]]);
+  const plain = g.interior([[2, 0]]);
+  r.setOverride('ceilingHeight', '2400');
+  plain.setOverride('ceilingHeight', '2350');
+  const ch = room => interiorRows(g.graph).find(x => x.id === room.id).ch;
+  assert.equal(r.ceilingZones.length, 0, '前提: 区画なし');
+  assert.equal(ch(r), '2400');
+  setRoomCeilingShape(r, { shape: 'slope', dims: [600, 0] });
+  assert.equal(ch(r), '2400～3000');
+  assert.equal(ch(plain), '2350', '形状なしの部屋は従来どおり');
+  setRoomCeilingShape(r, { shape: 'dome', dims: [250] });
+  assert.equal(ch(r), '2400～2650');
+  setRoomCeilingShape(r, { shape: 'flat', dims: [] });
+  assert.equal(ch(r), '2400');
+  r.setOverride('ceilingHeight', '2300～2500');
+  setRoomCeilingShape(r, { shape: 'slope', dims: [600, 0] });
+  assert.equal(ch(r), '2300～2500', '部屋 CH がレンジ表記なら raw のまま');
 });
 
 test('selectionSpanMm: 2×1 セルの外接幅 {xMm,yMm}。解けないキーだけ・セルなしは null、selection null も null', () => {

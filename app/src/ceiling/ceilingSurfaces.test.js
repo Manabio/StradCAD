@@ -7,6 +7,7 @@ import { worldToCell, CEILING_CELL_GRID, cellBoundsFromKey } from '../finish/gri
 import { buildCeilingCellOwners } from './ceilingOwners.js';
 import { normalizeRect } from '../plan/planGeometry.js';
 import { makeGrid, rect } from '../plan/planTestFixtures.js';
+import { setRoomCeilingShape } from './roomCeilingShape.js';
 
 test('roomHasCeiling: 屋内で feature なしだけが天井を持つ。屋外・吹抜け・階段・階段吹抜け・屋根・昇降路・未定義・null は持たない', () => {
   const g = makeGrid([0, 1000, 2000, 3000, 4000], [0, 1000]);
@@ -320,6 +321,49 @@ test('天井芯が1本も無い階の天井面は、天井芯を足して消し�
   assert.deepEqual(ceilingSurfacesOf(g.graph), [
     { roomId: room.id, zoneId: null, rects: [rect(0, 0, 2000, 3000), rect(2000, 0, 4000, 3000)], zMm: 2400, shape: 'flat', dims: [], chMm: 2400 },
   ]);
+});
+
+// ---- 部屋の形状（S12a）: 残りの面が部屋の形状を持つ ----
+
+test('S12a: 親部屋の残りの面が部屋の形状・寸法を持つ（zMm・chMm は従来どおり）。区画の面は不変', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  room.setOverride('ceilingHeight', '2400');
+  room.setCeilingZones([new CeilingZone({ id: 'z', cells: [g.cell(1, 0)], heightMm: 2800, shape: 'dome', dims: [300] })]);
+  const before = ceilingSurfacesOf(g.graph);
+  setRoomCeilingShape(room, { shape: 'slope', dims: [500, 90] });
+  assert.deepEqual(ceilingSurfacesOf(g.graph), [
+    { ...before[0], shape: 'slope', dims: [500, 90] },
+    before[1],
+  ]);
+  assert.deepEqual(before[0], { roomId: room.id, zoneId: null, rects: [rect(0, 0, 2000, 3000)], zMm: 2400, shape: 'flat', dims: [], chMm: 2400 });
+  assert.deepEqual(before[1].shape, 'dome', '区画の面は区画の形状');
+});
+
+test('S12a: 部分指定の子の残りには子の形状が効く（親の形状は継承しない）', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const parent = g.interior([[0, 0], [1, 0]]);
+  const child = g.graph.addRoom(new Set([g.cell(1, 0)]), '小上がり', undefined, new Set([parent.id]));
+  setRoomCeilingShape(parent, { shape: 'arc', dims: [300, 0] });
+  const by = id => ceilingSurfacesOf(g.graph).find(s => s.roomId === id);
+  assert.deepEqual([by(parent.id).shape, by(parent.id).dims], ['arc', [300, 0]]);
+  assert.deepEqual([by(child.id).shape, by(child.id).dims], ['flat', []], '子は継承しない');
+  setRoomCeilingShape(child, { shape: 'dome', dims: [200] });
+  assert.deepEqual([by(child.id).shape, by(child.id).dims], ['dome', [200]]);
+  assert.deepEqual(by(parent.id).rects, [rect(0, 0, 2000, 3000)], '矩形は不変');
+});
+
+test('S12a: 階段の対の部屋の残りは形状があっても描かない。形状の無い文書の出力は不変', () => {
+  const { g, plain, pair } = stairPairFixture();
+  const baseline = ceilingSurfacesOf(g.graph);
+  setRoomCeilingShape(pair, { shape: 'slope', dims: [500, 0] });
+  assert.deepEqual(ceilingSurfacesOf(g.graph), baseline, '対の部屋に形状を置いても面は増えない・変わらない');
+  assert.deepEqual(baseline.map(s => s.roomId), [plain.id]);
+  // 値を壊しても例外にせず平面
+  plain.customOverrides.set('ceilingShape', 'slope');
+  plain.customOverrides.set('ceilingDims', 'zzz');
+  assert.doesNotThrow(() => ceilingSurfacesOf(g.graph));
+  assert.deepEqual(ceilingSurfacesOf(g.graph), baseline, '壊れた値は平面');
 });
 
 test('【失敗系】セルが解決できない部屋（CL 削除で消失したキー）は出さない。例外にしない', () => {

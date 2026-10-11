@@ -13,6 +13,7 @@ import { columnWrapSolids } from '../finish/columnWrap.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { planSectionFigure } from './planSectionFigure.js';
 import { assignZoneShape } from '../ceiling/ceilingZones.js';
+import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 import {
   makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid, linesOf, mergedLines, totalLength, assignZoneHeight,
 } from './planTestFixtures.js';
@@ -791,6 +792,29 @@ test('天井の円弧・ドーム（S6b）: 立体は zAt を持ち zLo＝基準
   assert.equal(dome.zAt(5000, 1500), 50 + 100 + 2200 + 600, '外接矩形の中心が頂点');
   assert.equal(dome.zAt(4000, 1500), 50 + 100 + 2200, '周縁');
   assert.equal(dome.marks[0].prims[0].text, 'ドーム CH2200〜2800');
+});
+
+test('天井の部屋の形状（S12a）: 傾斜の残りの面の立体は zAt と marks を持つ。基準高は部屋の CH（床段差込み）。形状なしの部屋・戻した部屋は zAt・marks なし', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
+  const a = g.interior([[0, 0], [1, 0]]);
+  const plain = g.interior([[2, 0]]);
+  a.setFloorLevel(100);
+  a.setOverride('ceilingHeight', '2300');
+  setRoomCeilingShape(a, { shape: 'slope', dims: [1200, 0] });
+  const run = () => ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 50 })], { ceilings: true }), 'ceiling');
+  const sl = run().find(s => s.source.id === a.id);
+  assert.equal(typeof sl.zAt, 'function');
+  assert.equal(sl.zLo, 50 + 100 + 2300);
+  assert.equal(sl.zHi, 50 + 100 + 2300 + 1200);
+  assert.equal(sl.zAt(0, 1500), 50 + 100 + 2300, '低い側（左端）');
+  assert.equal(sl.zAt(4000, 1500), 50 + 100 + 2300 + 1200, '高い側（右端）');
+  assert.equal(sl.marks.length, 1);
+  assert.equal(sl.marks[0].prims[1].text, '傾斜 CH2300〜3500');
+  const other = run().find(s => s.source.id === plain.id);
+  assert.equal(other.zAt, undefined);
+  assert.equal(other.marks, undefined);
+  setRoomCeilingShape(a, { shape: 'flat', dims: [] });
+  assert.deepEqual(Object.keys(run().find(s => s.source.id === a.id)).sort(), ['footprint', 'kind', 'source', 'zHi', 'zLo'], '平面に戻せば従来の形');
 });
 
 test('天井の傾斜: 平面だけの文書の天井立体は区画導入前と同じ形（zAt・marks のキーを持たない）', () => {

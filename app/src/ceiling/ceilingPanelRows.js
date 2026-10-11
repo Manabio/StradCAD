@@ -24,6 +24,7 @@ import { ceilingRefreshCells } from './ceilingGrid.js';
 import { ceilingCellOwnersOf, roomHasCeiling } from './ceilingOwners.js';
 import { CEILING_SHAPE_OPTIONS, CEILING_DIM_FIELDS } from './ceilingShapeFields.js';
 import { zoneStateOfCells } from './ceilingZones.js';
+import { roomCeilingShapeOf } from './roomCeilingShape.js';
 
 /** 材コード → 表示名（略称表示）。materialMap が無い・コードが解けない・名前が無いときはコードのまま。 */
 export function materialDisplay(materialMap, code) {
@@ -40,15 +41,17 @@ export function materialDisplay(materialMap, code) {
  */
 export function zoneChLabelsByRoom(graph) {
   const labels = new Map();
-  if (!graph || graph.rooms.every(r => r.ceilingZones.length === 0)) return labels;
+  const plainRoom = r => r.ceilingZones.length === 0 && roomCeilingShapeOf(r).shape === 'flat'; // 区画なし・形状なし（S12a）
+  if (!graph || graph.rooms.every(plainRoom)) return labels;
   const heights = new Map(); // roomId → number[]
   for (const s of ceilingSurfacesOf(graph)) {
     const room = graph.roomMap.get(s.roomId);
-    if (!room || room.ceilingZones.length === 0) continue;
+    if (!room || plainRoom(room)) continue;
     const zone = s.zoneId ? room.ceilingZones.find(z => z.id === s.zoneId) : null;
     if (!heights.has(room.id)) heights.set(room.id, { hasZone: false, mms: [], rawRange: false });
     const h = heights.get(room.id);
-    if (s.zoneId) h.hasZone = true;
+    // 区画のある部屋、または残りの面が平面でない部屋（部屋の形状）はレンジ表記にする
+    if (s.zoneId || s.shape !== 'flat') h.hasZone = true;
     // 平面以外（傾斜・円弧・ドーム）は基準高〜基準高＋ライズ（図のラベルと同じ範囲。zHi − zLo）
     const rise = s.shape !== 'flat' && Number.isFinite(s.dims?.[0]) ? s.dims[0] : 0;
     if (zone?.heightMm != null) { h.mms.push(zone.heightMm, zone.heightMm + rise); continue; }

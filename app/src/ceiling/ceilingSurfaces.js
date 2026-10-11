@@ -9,8 +9,8 @@
  * 数値化できない欄は既定天井高（isFallback）の mm を使う。部分指定の子（自分の CH 欄なし）は CH が床段差で補正されるので親と同じ天井面になる。
  * 壁の上端（planSolids.js wallCeilZ）は床段差を含めない（別系統。ここでは裁定により含める）。
  */
-import { CeilingShape } from '../core/constants.js';
 import { roomHasCeiling, ceilingCellOwnersOf } from './ceilingOwners.js';
+import { roomCeilingShapeOf } from './roomCeilingShape.js';
 import { ceilingRefreshCells } from './ceilingGrid.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
@@ -30,7 +30,7 @@ const byRow = (a, b) => a.y1 - b.y1 || a.x1 - b.x1;
  * 階段の対の部屋（stair.roomId。feature STAIR で roomHasCeiling は偽）は、stairHasCeiling(graph, stair) が真で区画を持つときだけ、
  * 区画の面を出す（S6b。区画のセルのうち所属索引（ceilingCellOwnersOf）が階段所属としてその部屋に帰属させるセルだけ＝階段下部屋 2a が取ったセルは落ちる）。
  * 区画の無い階段は従来どおり天井を描かない（区画に入らなかった残りのセルの面も出さない）。
- * 区画の zMm＝床段差＋(heightMm ?? 部屋の CH)。shape・dims は区画の形状・寸法（残りは flat・[]）、chMm は基準の CH（床段差を含まない。
+ * 区画の zMm＝床段差＋(heightMm ?? 部屋の CH)。shape・dims は区画の形状・寸法（残りは部屋の形状 roomCeilingShapeOf。無ければ flat・[]。S12a）、chMm は基準の CH（床段差を含まない。
  * 平面＝天井高／傾斜＝低い側。S6a）。
  * @param {object} graph
  * @returns {Array<{roomId: string, zoneId: string|null, rects: Array<{x1:number,y1:number,x2:number,y2:number}>, zMm: number, shape: string, dims: number[], chMm: number}>}
@@ -85,7 +85,8 @@ export function ceilingSurfacesOf(graph) {
     for (const [key, rect] of rectByKey) if (!taken.has(key)) rest.push(rect);
     if (rest.length > 0 && !pairRooms.has(room)) {
       rest.sort(byRow);
-      out.push({ roomId: room.id, zoneId: null, rects: rest, zMm: roomZ, shape: CeilingShape.FLAT, dims: [], chMm: roomCh });
+      const { shape, dims } = roomCeilingShapeOf(room); // 部屋の形状（S12a。customOverrides。無ければ平面）
+      out.push({ roomId: room.id, zoneId: null, rects: rest, zMm: roomZ, shape, dims, chMm: roomCh });
     }
     out.push(...zoneFaces);
   }

@@ -8,6 +8,7 @@ import { assignZoneShape } from './ceilingZones.js';
 import { planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp, drawnPrimitives } from '../plan/planSolidsLayerFilter.js';
 import { planSectionFigureUp } from '../plan/planSectionUp.js';
 import { makeGrid, rect, assignZoneHeight } from '../plan/planTestFixtures.js';
+import { setRoomCeilingShape } from './roomCeilingShape.js';
 
 const CUT = 1500;
 const line = (key, points, kind = 'ceiling', extra = {}) => ({
@@ -227,6 +228,22 @@ test('sameHeightBoundarySegments: 傾斜の面が一方でも入る組は対象�
   assert.deepEqual(sameHeightBoundarySegments([{ ...flat, shape: 'slope' }, { ...next, shape: 'flat' }]), [], '傾斜|平面');
   assert.deepEqual(sameHeightBoundarySegments([{ ...flat, shape: 'flat' }, { ...next, shape: 'slope' }]), [], '平面|傾斜');
   assert.deepEqual(sameHeightBoundarySegments([{ ...flat, shape: 'slope' }, { ...next, shape: 'slope' }]), [], '傾斜|傾斜');
+});
+
+test('部屋の形状（S12a）: 傾斜の残りの面と、同じ基準高の平面の部屋との境界はグレーにならない。形状を外せばグレー', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const a = g.interior([[0, 0]]);
+  const b = g.interior([[1, 0]]);
+  a.setOverride('ceilingHeight', '2400');
+  b.setOverride('ceilingHeight', '2400');
+  setRoomCeilingShape(a, { shape: 'slope', dims: [1000, 0] });
+  const lineOnly = prims => ceilingLines(prims).filter(p => p.kind === 'line');
+  let ceil = lineOnly(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
+  assert.ok(onX(ceil, 2000).length > 0, '前提: 境界に線が出る');
+  assert.ok(ceil.every(p => p.style === undefined), `グレーの印が付いている: ${JSON.stringify(ceil.filter(p => p.style).map(norm))}`);
+  setRoomCeilingShape(a, { shape: 'flat', dims: [] });
+  ceil = lineOnly(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
+  assert.ok(ceil.some(p => p.style === CEILING_BOUNDARY_STYLE), '対照: 平面どうしならグレー');
 });
 
 test('傾斜の区画と平面の境界は通常の細線（グレーの印なし）。基準高が同じ平面どうしの境界はグレーのまま', () => {

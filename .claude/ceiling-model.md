@@ -56,6 +56,13 @@
 - 既知の限界: 円弧・ドームの基準は区画の外接矩形なので、L字など非矩形の区画では頂点が区画の外に出て、区画内では基準高＋ライズに届かない。ラベルと CH 列は基準高＋ライズを表示する。
 - 既知の限界: 天端の上限は設けない（階高・切断高を超えても弾かない）。パネルの CH 列と図のラベルは、円弧でライズが幅/2 を超える壊れたデータのときだけ上端がずれる（パネルは検証で弾くので通常起きない）。
 
+## 部屋の形状（S12a）
+- ユーザー指示 2026-10-11「形状・天井高・寸法1・寸法2は、親部屋に1つ、部分指定ごとに1つ、天伏ユーザ指定（区画）ごとに1つ」。区画以外の「部屋」の分を持たせる。天井高は既存の CH（`ceilingHeight`）で、形状の基準高を兼ねる。
+- **保存**: `Room.customOverrides` の2キー。`ceilingShape`（'slope'|'arc'|'dome'。**平面のときはキーを置かない**）と `ceilingDims`（'500,90' のカンマ区切り文字列）。FBS・graphSnapshot・仕上げ undo・`makeRoomUndefined`（`customOverrides.clear()`）は汎用の keys/vals なので変更なし。`wallFreshnessKey`（壁材・壁仕上げだけ）・`codeNormalization`（材キーだけ）には影響しない。
+- **読み書き**: `ceiling/roomCeilingShape.js`（純モジュール）。`roomCeilingShapeOf(room)`（`getFinishInfo()` から読み、`normalizeCeilingShape` を通す。不正・room null・getFinishInfo なしは平面・[]）／`setRoomCeilingShape(room, {shape, dims})`（先に正規化。平面なら2キーとも消す。undo は呼び側が `withFinishUndo` で包む）。天井高を天伏から書くときは `applyRoomCeilingHeightDraft`（原文不変は触らない＝仕上げ表のレンジ表記を壊さない／空は override を消す／正の数は数値で書く／それ以外は false）。
+- **効き方**: 見上げの「残り」の面（`ceilingSurfacesOf`。区画に入らなかったセル）だけが部屋の形状を持つ。区画の面は不変。**子は親の形状を継承しない**（部屋ごとに1つ。リード既定）。階段の対の部屋の残りは従来どおり描かない。傾斜・円弧・ドームの `zAt`・ラベルは `planSolids.ceilingSolids` が面を汎用に扱うので自動で付く。グレー境界は平面どうしだけなので、形状のある残りの面との境界は通常の細線。パネルの CH 欄は、区画が無くても残りが平面でなければレンジ（基準高〜基準高＋ライズ）。削除確認（`roomsLosingCeilingZones`）は区画に加えて平面でない形状も数える。
+- 既知の限界: 展開図の天井線・壁の上端は部屋の形状にも追従しない（区画と同じ）。`stairFloorSync.js` は未編集の上階ペア部屋へ overrides を丸ごと写すので形状キーも写る（ペア部屋は天井を持たないので実害なし）。UI からの入力は S12b/c。
+
 ## 天井芯（S8a）
 - **何か**: 天井セルだけを割る線（中心相当。ユーザー裁定 2026-10-10）。CL の新種別 `'ceiling'`（`discipline:'ceiling'`）。S8a は種別・ポリシー・描画・天井セルの分割まで、追加・削除・移動・延長の操作配線は S8b（下の節）。FBS は不変（discipline は文字列で往復。旧版で開くと中心線に落ちる＝前方互換なしを受容）。
 - **他モードに漏らさない**: 天井セルは仕上げのセルを天井芯でさらに割った格子（`gridCells.js` の `grid` 引数＝`CEILING_CELL_GRID`。`FINISH_CELL_GRID` が既定で、天井芯は仕上げの分割線に入らない）。天井だけを `ceiling/ceilingGrid.js`（`ceilingRegionCellsAt`・`ceilingCellsWithin`・`ceilingRefreshCells`）経由で読み、仕上げ・壁・階段・昇降機・構造・展開図は触らない。展開図の区間刻み（`allXValues`）と他階の対応CL探索（`sameCoordCounterparts` の既定）からも天井芯を除く。

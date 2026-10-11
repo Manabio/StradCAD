@@ -6,6 +6,7 @@ import path from 'node:path';
 import { CeilingZone } from '@core';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { roomsLosingCeilingZones } from './roomDeleteCeilingNotice.js';
+import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 
 const zone = (g) => new CeilingZone({ id: 'z', cells: [g.cell(0, 0)], heightMm: 2800 });
 
@@ -29,6 +30,25 @@ test('【失敗系】空配列・存在しない id・graph/roomIds なし・cei
   assert.equal(roomsLosingCeilingZones(null, ['a']), false);
   assert.equal(roomsLosingCeilingZones(g.graph, null), false);
   assert.equal(roomsLosingCeilingZones({ roomMap: new Map([['a', {}]]) }, ['a']), false, 'ceilingZones 未定義');
+});
+
+test('S12a: 区画が無くても、平面以外の天井形状を持つ部屋（本人・子）は true。平面は false。getFinishInfo の無い duck 型は例外なし false', () => {
+  const g = makeGrid([0, 1000, 2000], [0, 1000]);
+  const parent = g.interior([[0, 0], [1, 0]]);
+  const child = g.graph.addRoom(new Set([g.cell(1, 0)]), '子', undefined, new Set([parent.id]));
+  assert.equal(roomsLosingCeilingZones(g.graph, [parent.id, child.id]), false, '前提: 区画も形状もない');
+  setRoomCeilingShape(child, { shape: 'dome', dims: [300] });
+  assert.equal(roomsLosingCeilingZones(g.graph, [parent.id]), false, '親には無い');
+  assert.equal(roomsLosingCeilingZones(g.graph, [parent.id, child.id]), true, '子にだけある');
+  setRoomCeilingShape(child, { shape: 'flat', dims: [] });
+  setRoomCeilingShape(parent, { shape: 'slope', dims: [500, 90] });
+  assert.equal(roomsLosingCeilingZones(g.graph, [parent.id]), true, '本人にある');
+  setRoomCeilingShape(parent, { shape: 'flat', dims: [] });
+  assert.equal(roomsLosingCeilingZones(g.graph, [parent.id, child.id]), false, '平面に戻せば false');
+  parent.customOverrides.set('ceilingShape', 'slope'); // dims 無し＝壊れた値は平面扱い
+  assert.equal(roomsLosingCeilingZones(g.graph, [parent.id]), false);
+  assert.doesNotThrow(() => roomsLosingCeilingZones({ roomMap: new Map([['a', { ceilingZones: [] }], ['b', null]]) }, ['a', 'b']));
+  assert.equal(roomsLosingCeilingZones({ roomMap: new Map([['a', { ceilingZones: [] }]]) }, ['a']), false, 'getFinishInfo なし');
 });
 
 const src = fs.readFileSync(path.resolve(import.meta.dirname, 'RoomDeleteConfirm.jsx'), 'utf8');
