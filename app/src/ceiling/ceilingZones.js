@@ -78,6 +78,50 @@ export function assignZoneShape(graph, room, cellKeys, { heightMm, shape, dims }
 }
 
 /**
+ * 区画単位の書込み（S12b。ユーザー指定ごとに区画が1つ）。assignZoneShape と違い**同じ spec の区画へ統合しない**。
+ * cellKeys を今の分割へ展開 → 正規化済みの全区画から差し引く（Z2: 他の区画からセルを奪う。空になった区画は消える）→ 新しい区画（uuid）を末尾に足す。
+ * 部屋が null は { zones: [], zoneId: null }。解けるキーが無い・基準高が null でも正の有限数でもない・平面で基準高 null（指定なし）は、
+ * 何も足さず正規化しただけの現在の区画配列と zoneId null。
+ * @param {object} graph
+ * @param {import('@core').Room|null} room
+ * @param {Iterable<string>} cellKeys
+ * @param {{heightMm: number|null, shape: string, dims: number[]}} spec
+ * @returns {{zones: CeilingZone[], zoneId: string|null}}
+ */
+export function createZone(graph, room, cellKeys, { heightMm, shape, dims }) {
+  if (!room) return { zones: [], zoneId: null };
+  const zones = normalizeZones(graph, room);
+  const keys = resolveKeys(graph, cellKeys);
+  if (keys.size === 0 || (heightMm !== null && !isValidHeight(heightMm))) return { zones, zoneId: null };
+  const spec = normalizeCeilingShape(shape, dims);
+  if (heightMm === null && spec.shape === CeilingShape.FLAT) return { zones, zoneId: null };
+  const next = subtractKeys(zones, keys);
+  const zoneId = crypto.randomUUID();
+  next.push(new CeilingZone({ id: zoneId, cells: [...keys], heightMm, shape: spec.shape, dims: spec.dims }));
+  return { zones: next, zoneId };
+}
+
+/**
+ * 区画 zoneId の形状・基準高・寸法だけを差し替えた後の、部屋の区画配列。id とセルは保ち、他の区画と統合しない。
+ * 部屋 null は []。未知の zoneId・不正な基準高・平面で基準高 null（区画を空にする指定）は、正規化しただけの現在の区画配列（変更なし）。
+ * @returns {CeilingZone[]}
+ */
+export function updateZoneSpec(graph, room, zoneId, { heightMm, shape, dims }) {
+  if (!room) return [];
+  const zones = normalizeZones(graph, room);
+  if (!zones.some(z => z.id === zoneId) || (heightMm !== null && !isValidHeight(heightMm))) return zones;
+  const spec = normalizeCeilingShape(shape, dims);
+  if (heightMm === null && spec.shape === CeilingShape.FLAT) return zones;
+  return zones.map(z => (z.id === zoneId ? new CeilingZone({ ...z.toData(), heightMm, shape: spec.shape, dims: spec.dims }) : z));
+}
+
+/** 区画 zoneId を消した後の、部屋の区画配列（セルは部屋の残りへ戻る）。部屋 null は []。未知の zoneId は変更なし。 */
+export function removeZone(graph, room, zoneId) {
+  if (!room) return [];
+  return normalizeZones(graph, room).filter(z => z.id !== zoneId);
+}
+
+/**
  * cellKeys を区画から外した後の、部屋の区画配列（区画の解除）。完全一致に限らず、区画のセルから差し引いて空を消す。
  * 部屋が null は []。
  * @returns {CeilingZone[]}

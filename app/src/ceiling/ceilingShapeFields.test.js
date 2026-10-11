@@ -167,3 +167,14 @@ test('【失敗系】parseCeilingZoneDraft: 円弧のライズが幅/2 を超え
   assert.equal(parseCeilingZoneDraft(draft(0)).ok, true, '幅が無ければ検査しない');
   assert.match(parseCeilingZoneDraft(draft(0), { spanMm: span }).error, /幅/);
 });
+
+test('【失敗系】parseCeilingZoneDraft（S12b）: requireFlatHeight で平面の空欄は error（天井高を入力してください）。傾斜の空欄・平面の入力あり・オプション無しは従来どおり', () => {
+  const flat = h => ({ shape: 'flat', height: h, dims: [] });
+  const r = parseCeilingZoneDraft(flat(''), { requireFlatHeight: true });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /天井高を入力してください（区画をやめるときは解除）/);
+  assert.equal(parseCeilingZoneDraft(flat('   '), { requireFlatHeight: true }).ok, false, '空白だけも空欄');
+  assert.deepEqual(parseCeilingZoneDraft(flat('2400'), { requireFlatHeight: true }), { ok: true, value: { heightMm: 2400, shape: 'flat', dims: [] } });
+  assert.equal(parseCeilingZoneDraft({ shape: 'slope', height: '', dims: ['800', '0'] }, { requireFlatHeight: true }).ok, true, '傾斜の空欄は部屋の CH');
+  assert.deepEqual(parseCeilingZoneDraft(flat('')), { ok: true, value: { heightMm: null, shape: 'flat', dims: [] } }, 'オプション無しは従来どおり');
+});

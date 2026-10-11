@@ -103,14 +103,19 @@ const num = text => {
  *  - 基準高: 空＝null（部屋の CH）。入力があれば有限の正数。天端が切断高・階高を超えても弾かない。
  *  - 寸法: 形状の個数ぶん。ライズは有限の正数、向き・軸は列挙値。円弧はライズ ≤ 幅/2（軸に直交する幅）。
  * @param {{shape: string, height: string, dims: Array<string|number>}} draft
- * @param {{spanMm?: number|{xMm: number, yMm: number}|null}} [ctx]  円弧の幅。数値ならそのまま、{xMm,yMm} なら軸に直交する側（軸0=x に平行→yMm、軸90→xMm）。無ければ幅の検査をしない
+ * @param {{spanMm?: number|{xMm: number, yMm: number}|null, requireFlatHeight?: boolean}} [ctx]  spanMm … 円弧の幅。数値ならそのまま、{xMm,yMm} なら軸に直交する側（軸0=x に平行→yMm、軸90→xMm）。無ければ幅の検査をしない／
+ *   requireFlatHeight … 真なら平面で基準高が空欄を弾く（区画単位の欄。S12b）
  * @returns {{ok: true, value: {heightMm: number|null, shape: string, dims: number[]}} | {ok: false, error: string}}
  */
-export function parseCeilingZoneDraft(draft, { spanMm = null } = {}) {
+export function parseCeilingZoneDraft(draft, { spanMm = null, requireFlatHeight = false } = {}) {
   const shape = draft?.shape;
   const count = CEILING_SHAPE_DIM_COUNT[shape];
   if (count === undefined) return { ok: false, error: '形状が不正です' };
   const hText = String(draft.height ?? '').trim();
+  // 区画単位の欄（S12b）: 平面で空欄は「指定なし」＝区画が空になるので弾く（やめるときは解除）
+  if (requireFlatHeight && shape === Shape.FLAT && hText === '') {
+    return { ok: false, error: '天井高を入力してください（区画をやめるときは解除）' };
+  }
   let heightMm = null;
   if (hText !== '') {
     heightMm = Number(hText);

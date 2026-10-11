@@ -59,6 +59,18 @@ test('【失敗系】壊れた dims・未知の形状・個数違い・負のラ
   assert.deepEqual(roomCeilingShapeOf(room), { shape: 'flat', dims: [] }, 'dims キーなし');
 });
 
+test('【失敗系】dims の解析は厳密（S12b）: 空要素 "500,,90"・16進 "0x1F4,0"・余分な要素 "500,90,7"・指数 "5e2,90"・空白だけは平面。空白つきの正しい値と小数は読める', () => {
+  const room = room1();
+  for (const [shape, dims] of [['slope', '500,,90'], ['slope', '0x1F4,0'], ['slope', '500,90,7'], ['slope', '5e2,90'], ['slope', ',500'], ['slope', '  '], ['dome', '400,'], ['dome', '4 00']]) {
+    room.customOverrides.set(ROOM_CEILING_SHAPE_KEY, shape);
+    room.customOverrides.set(ROOM_CEILING_DIMS_KEY, dims);
+    assert.deepEqual(roomCeilingShapeOf(room), { shape: 'flat', dims: [] }, `${shape} / ${dims}`);
+  }
+  room.customOverrides.set(ROOM_CEILING_SHAPE_KEY, 'slope');
+  room.customOverrides.set(ROOM_CEILING_DIMS_KEY, ' 500.5 , 90 ');
+  assert.deepEqual(roomCeilingShapeOf(room), { shape: 'slope', dims: [500.5, 90] });
+});
+
 test('【失敗系】room が null／getFinishInfo を持たないときは平面', () => {
   assert.deepEqual(roomCeilingShapeOf(null), { shape: 'flat', dims: [] });
   assert.deepEqual(roomCeilingShapeOf(undefined), { shape: 'flat', dims: [] });

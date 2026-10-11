@@ -685,7 +685,7 @@ export function usePointerInteraction({
         // dragState が無くても呼ぶ（選べない所・空白のタップで選択を解除するため）。タップは仕上げと同じ移動量 8px 未満
         const down = ceilingDragDownRef.current;
         const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
-        modeRef.current?.commitDrag({ tap: tapDist < 8 });
+        modeRef.current?.commitDrag({ tap: tapDist < 8, ctx: { graph, project } });
       }
       ceilingDragDownRef.current = null;
       longPress.abort();

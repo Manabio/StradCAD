@@ -23,9 +23,9 @@ test('【配線】App.jsx: ceiling のローダーは CeilingModeState を new �
   assert.match(appCode, /^\s*: appMode === 'ceiling'\s*$/m);
 });
 
-test('【配線】App.jsx: CeilingPanel は appMode === ceiling && mode のときだけマウントし、graph/mode/isLandscape と階高 floorHeight（仕上げ表と同じ floorHeightAbove）を渡す', () => {
+test('【配線】App.jsx: CeilingPanel は appMode === ceiling && mode のときだけマウントし、graph/mode/isLandscape を渡す（階高は渡さない。階段の傾斜の初期値は commitDrag の ctx 側で引く。S12b）', () => {
   assert.match(appCode, /^\s*\{appMode === 'ceiling' && mode && \(\s*$/m);
-  assert.match(appCode, /^\s*<CeilingPanel graph=\{graph\} mode=\{mode\} isLandscape=\{isLandscape\} floorHeight=\{floorHeightAbove\(project, project\.activePlane\)\} \/>\s*$/m);
+  assert.match(appCode, /^\s*<CeilingPanel graph=\{graph\} mode=\{mode\} isLandscape=\{isLandscape\} \/>\s*$/m);
   assert.match(appCode, /^import \{ CeilingPanel \} +from '\.\/ceiling\/CeilingPanel\.jsx';\s*$/m);
 });
 
@@ -166,11 +166,12 @@ test('【配線】usePointerInteraction: pointerMove の ceiling 分岐は moveS
 test('【配線】usePointerInteraction: pointerUp の ceiling 分岐は moveState が無いときだけ。長押し成立（hasFired）なら commitDrag せず、tapDist<8 で commitDrag してから ref を戻し、longPress.abort してパンを解除して return（S8b）', () => {
   const body = extractArrowFunctionBody(pointerSrc, 'const handlePointerUp = (e) => {');
   const block = ceilingBlock(body, CEILING_IF_NOT_MOVING);
-  const commit = block.indexOf('modeRef.current?.commitDrag({ tap: tapDist < 8 });');
+  const commit = block.indexOf('modeRef.current?.commitDrag({ tap: tapDist < 8, ctx: { graph, project } });');
   const reset = block.indexOf('ceilingDragDownRef.current = null;');
   const gate = block.indexOf('if (ceilingDragDownRef.current && !longPress.hasFired()) {');
   assert.ok(gate >= 0 && gate < commit, 'up: if (ceilingDragDownRef.current && !longPress.hasFired()) { が commitDrag より前に無い');
-  assert.ok(commit >= 0, 'up: commitDrag({ tap: tapDist < 8 }) が無い');
+  assert.ok(commit >= 0, 'up: commitDrag({ tap: tapDist < 8, ctx: { graph, project } }) が無い（S12b: 区画の作成に ctx が要る）');
+  assert.equal(pointerSrc.split('commitDrag({ tap: tapDist < 8, ctx: { graph, project } })').length - 1, 1, 'ctx 付きの commitDrag は天伏の1箇所だけ（仕上げは ctx なし）');
   assert.ok(reset > commit, 'up: ref を戻すのが commitDrag より前にある（または無い）');
   assert.ok(block.indexOf('longPress.abort();') > reset, 'up: longPress.abort() が無い');
   for (const line of ['drag.current = null;', 'setIsPanning(false);', 'return;']) {

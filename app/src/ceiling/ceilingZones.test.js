@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CeilingZone, CenterLineType, Discipline } from '@core';
-import { assignZoneShape, clearZoneCells, zoneStateOfCells, normalizeZones } from './ceilingZones.js';
+import { assignZoneShape, clearZoneCells, zoneStateOfCells, normalizeZones, createZone, updateZoneSpec, removeZone } from './ceilingZones.js';
 import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
 import { makeGrid, assignZoneHeight } from '../plan/planTestFixtures.js';
 
@@ -154,6 +154,109 @@ test('assignZoneShape: 形状に合わない寸法は平面に落とす（区画
   assert.equal(room.ceilingZones.find(z => z.cells.includes(c1)).heightMm, null, '傾斜は基準高 null（部屋の CH）の区画を作れる');
   room.setCeilingZones(assignZoneShape(graph, room, [c0, c1], { heightMm: null, shape: 'flat', dims: [] }));
   assert.deepEqual([...room.ceilingZones], [], '平面で null は区画を残さない');
+});
+
+// ---- 区画単位の書込み（S12b）: createZone / updateZoneSpec / removeZone ----
+const FLAT = h => ({ heightMm: h, shape: 'flat', dims: [] });
+
+test('createZone: 新しい区画（uuid）を末尾に足し zoneId を返す。部屋は書き換えない（純関数）', () => {
+  const { graph, room, c0, c1 } = setup();
+  const r = createZone(graph, room, new Set([c1, c0]), FLAT(2400));
+  assert.equal(r.zones.length, 1);
+  assert.equal(r.zones[0].id, r.zoneId);
+  assert.match(r.zoneId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(r.zones[0].cells, [c0, c1].sort());
+  assert.deepEqual([...room.ceilingZones], [], '入力の部屋は変えない');
+});
+
+test('createZone: 同じ spec の区画があっても統合せず、新しい id の区画になる（assignZoneShape との違い）', () => {
+  const { graph, room, c0, c1, c2 } = setup();
+  room.setCeilingZones(createZone(graph, room, [c0], FLAT(2400)).zones);
+  const firstId = room.ceilingZones[0].id;
+  const r = createZone(graph, room, [c1], FLAT(2400));
+  assert.equal(r.zones.length, 2, '同じ高さ・形状でも別の区画');
+  assert.equal(r.zones[0].id, firstId);
+  assert.notEqual(r.zoneId, firstId);
+  assert.deepEqual(r.zones[0].cells, [c0], '既存の区画のセルは増えない');
+  assert.equal(assignZoneShape(graph, room, [c2], FLAT(2400)).length, 1, '（対照）assignZoneShape は同じ spec へ統合する');
+});
+
+test('createZone: 他の区画からセルを奪う（Z2）。奪われて空になった区画は消える', () => {
+  const { graph, room, c0, c1, c2 } = setup();
+  room.setCeilingZones(createZone(graph, room, [c0, c1], FLAT(2400)).zones);
+  room.setCeilingZones(createZone(graph, room, [c1, c2], FLAT(2600)).zones);
+  assert.deepEqual(zoneData(room.ceilingZones), [{ cells: [c0], heightMm: 2400 }, { cells: [c1, c2].sort(), heightMm: 2600 }]);
+  const r = createZone(graph, room, [c0], FLAT(3000));
+  assert.deepEqual(zoneData(r.zones), [{ cells: [c1, c2].sort(), heightMm: 2600 }, { cells: [c0], heightMm: 3000 }]);
+});
+
+test('createZone: 形状つき（傾斜・基準高 null）も作れる。平面で基準高 null は区画にならない', () => {
+  const { graph, room, c0, c1 } = setup();
+  const r = createZone(graph, room, [c0], { heightMm: null, shape: 'slope', dims: [800, 0] });
+  assert.equal(r.zones[0].shape, 'slope');
+  assert.equal(r.zones[0].heightMm, null);
+  const flatNull = createZone(graph, room, [c1], { heightMm: null, shape: 'flat', dims: [] });
+  assert.deepEqual([flatNull.zones.length, flatNull.zoneId], [0, null]);
+});
+
+test('【失敗系】createZone: 部屋 null は { zones: [], zoneId: null }。cellKeys 空・解けないキー・不正な基準高は変化なし（zoneId null）', () => {
+  const { graph, room, c0, c1 } = setup();
+  assert.deepEqual(createZone(graph, null, [c0], FLAT(2400)), { zones: [], zoneId: null });
+  room.setCeilingZones(createZone(graph, room, [c0], FLAT(2400)).zones);
+  const before = zoneData(room.ceilingZones);
+  for (const keys of [[], ['gone:gone:gone:gone'], null, undefined]) {
+    const r = createZone(graph, room, keys, FLAT(2600));
+    assert.equal(r.zoneId, null);
+    assert.deepEqual(zoneData(r.zones), before);
+  }
+  for (const bad of [0, -100, NaN, Infinity, '2400', undefined]) {
+    const r = createZone(graph, room, [c1], FLAT(bad));
+    assert.equal(r.zoneId, null, String(bad));
+    assert.deepEqual(zoneData(r.zones), before, String(bad));
+  }
+});
+
+test('updateZoneSpec: id とセルを保ち、形状・基準高・寸法だけ差し替える。同じ spec の別区画とも統合しない', () => {
+  const { graph, room, c0, c1, c2 } = setup();
+  room.setCeilingZones(createZone(graph, room, [c0], FLAT(2400)).zones);
+  room.setCeilingZones(createZone(graph, room, [c1, c2], FLAT(2600)).zones);
+  const [z0, z1] = room.ceilingZones;
+  const next = updateZoneSpec(graph, room, z1.id, { heightMm: 2400, shape: 'slope', dims: [800, 270] });
+  assert.equal(next.length, 2);
+  assert.deepEqual(next.map(z => z.id), [z0.id, z1.id], 'id と順序を保つ');
+  assert.deepEqual(next[1].cells, [c1, c2].sort(), 'セルを保つ');
+  assert.deepEqual([next[1].shape, next[1].heightMm, [...next[1].dims]], ['slope', 2400, [800, 270]]);
+  const same = updateZoneSpec(graph, room, z1.id, FLAT(2400));
+  assert.equal(same.length, 2, '高さ 2400 の flat になっても z0 と統合しない');
+  assert.deepEqual(same[0].cells, [c0]);
+  assert.deepEqual([...room.ceilingZones].map(z => z.toData()), [z0, z1].map(z => z.toData()), '部屋は書き換えない');
+});
+
+test('【失敗系】updateZoneSpec: 未知の id・不正な基準高・平面で null（区画を空にする指定）は変化なし。部屋 null は []', () => {
+  const { graph, room, c0 } = setup();
+  assert.deepEqual(updateZoneSpec(graph, null, 'x', FLAT(2400)), []);
+  room.setCeilingZones(createZone(graph, room, [c0], FLAT(2400)).zones);
+  const before = room.ceilingZones.map(z => z.toData());
+  const id = room.ceilingZones[0].id;
+  assert.deepEqual(updateZoneSpec(graph, room, 'unknown', FLAT(2600)).map(z => z.toData()), before);
+  for (const bad of [0, -1, NaN, '2600', undefined]) {
+    assert.deepEqual(updateZoneSpec(graph, room, id, FLAT(bad)).map(z => z.toData()), before, String(bad));
+  }
+  assert.deepEqual(updateZoneSpec(graph, room, id, { heightMm: null, shape: 'flat', dims: [] }).map(z => z.toData()), before);
+  // 形状に合わない寸法は平面に落ちる（区画は残る）
+  const dropped = updateZoneSpec(graph, room, id, { heightMm: 2700, shape: 'slope', dims: [0, 45] });
+  assert.deepEqual([dropped[0].shape, dropped[0].heightMm], ['flat', 2700]);
+});
+
+test('removeZone: 指定の区画だけを消す（セルは部屋の残りへ戻る）。【失敗系】未知の id は変化なし・部屋 null は []', () => {
+  const { graph, room, c0, c1 } = setup();
+  room.setCeilingZones(createZone(graph, room, [c0], FLAT(2400)).zones);
+  room.setCeilingZones(createZone(graph, room, [c1], FLAT(2400)).zones);
+  const [z0, z1] = room.ceilingZones;
+  assert.deepEqual(removeZone(graph, room, z0.id).map(z => z.id), [z1.id]);
+  assert.deepEqual(removeZone(graph, room, 'unknown').map(z => z.id), [z0.id, z1.id]);
+  assert.deepEqual(room.ceilingZones.map(z => z.id), [z0.id, z1.id], '部屋は書き換えない');
+  assert.deepEqual(removeZone(graph, null, z0.id), []);
 });
 
 // ---- 天井芯（S8a）: 区画のセルは天井セル（天井芯で割れた格子）の key ----

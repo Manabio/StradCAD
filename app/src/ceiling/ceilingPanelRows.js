@@ -24,7 +24,9 @@ import { ceilingRefreshCells } from './ceilingGrid.js';
 import { ceilingCellOwnersOf, roomHasCeiling } from './ceilingOwners.js';
 import { CEILING_SHAPE_OPTIONS, CEILING_DIM_FIELDS } from './ceilingShapeFields.js';
 import { zoneStateOfCells } from './ceilingZones.js';
+import { ceilingGroupsOf } from './ceilingGroups.js';
 import { roomCeilingShapeOf } from './roomCeilingShape.js';
+import { CeilingShape } from '../core/constants.js';
 
 /** 材コード → 表示名（略称表示）。materialMap が無い・コードが解けない・名前が無いときはコードのまま。 */
 export function materialDisplay(materialMap, code) {
@@ -41,7 +43,7 @@ export function materialDisplay(materialMap, code) {
  */
 export function zoneChLabelsByRoom(graph) {
   const labels = new Map();
-  const plainRoom = r => r.ceilingZones.length === 0 && roomCeilingShapeOf(r).shape === 'flat'; // 区画なし・形状なし（S12a）
+  const plainRoom = r => r.ceilingZones.length === 0 && roomCeilingShapeOf(r).shape === CeilingShape.FLAT; // 区画なし・形状なし（S12a）
   if (!graph || graph.rooms.every(plainRoom)) return labels;
   const heights = new Map(); // roomId → number[]
   for (const s of ceilingSurfacesOf(graph)) {
@@ -97,6 +99,21 @@ export function selectionSummary(graph, selection) {
   // 部屋所属は部屋が消えていても 'none'（従来どおり）。階段所属は対の部屋があるときだけ（無ければ null）
   const zone = zoneRoom || selection.owner.kind === 'room' ? zoneStateOfCells(graph, zoneRoom, selection.cellKeys) : null;
   return { name: row ? row.name : '—', cellCount, ch: row ? row.ch : null, zone };
+}
+
+/**
+ * 選択中の群（selection.groupId）の現在の姿。群が今は無い（undo などで消えた）・selection が無いときは null。
+ * room … 群の書込み先の部屋（zone・room 群は群の部屋、stair 群は対の部屋。無ければ null）／zone … zone 群の区画（なければ null）。
+ * MobX の追跡下から呼べるよう読み取りスコープで包まない（ceilingCellOwnersOf と同じ）。
+ * @returns {{group: import('./ceilingGroups.js').CeilingGroup, room: import('../core/room.js').Room|null, zone: import('@core').CeilingZone|null} | null}
+ */
+export function selectionGroupInfo(graph, selection) {
+  if (!graph || !selection) return null;
+  const group = ceilingGroupsOf(graph, ceilingCellOwnersOf(graph)).groups.get(selection.groupId);
+  if (!group) return null;
+  const room = group.roomId ? (graph.roomMap.get(group.roomId) ?? null) : null;
+  const zone = group.kind === 'zone' && room ? (room.ceilingZones.find(z => z.id === group.zoneId) ?? null) : null;
+  return { group, room, zone };
 }
 
 /**

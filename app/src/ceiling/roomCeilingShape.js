@@ -8,7 +8,7 @@
  * 子は親の形状を継承しない（部屋ごとに1つ）。
  */
 import { CeilingShape } from '../core/constants.js';
-import { normalizeCeilingShape } from '../core/ceilingZone.js';
+import { normalizeCeilingShape, CEILING_SHAPE_DIM_COUNT } from '../core/ceilingZone.js';
 
 export const ROOM_CEILING_SHAPE_KEY = 'ceilingShape';
 export const ROOM_CEILING_DIMS_KEY = 'ceilingDims';
@@ -26,8 +26,22 @@ export function roomCeilingShapeOf(room) {
   const rawShape = info?.[ROOM_CEILING_SHAPE_KEY];
   if (typeof rawShape !== 'string' || rawShape === '') return { shape: FLAT.shape, dims: [] };
   const rawDims = info[ROOM_CEILING_DIMS_KEY];
-  const dims = String(rawDims ?? '').split(',').map(s => s.trim()).filter(s => s !== '').map(Number);
-  return normalizeCeilingShape(rawShape, dims);
+  return normalizeCeilingShape(rawShape, parseDimsText(rawShape, rawDims));
+}
+
+const DIM_TOKEN = /^-?\d+(\.\d+)?$/;
+
+/**
+ * '500,90' を数値配列にする（厳密）。要素数が形状の個数と一致し、各要素が 10進の数値表記のときだけ Number にする。
+ * それ以外（空要素 '500,,90'・16進 '0x1F4'・個数違い・未知の形状）は null＝平面に落とす。
+ */
+function parseDimsText(shape, rawDims) {
+  const n = CEILING_SHAPE_DIM_COUNT[shape];
+  if (n === undefined) return null;
+  const tokens = String(rawDims ?? '').split(',').map(s => s.trim());
+  if (n === 0) return tokens.length === 1 && tokens[0] === '' ? [] : null;
+  if (tokens.length !== n || !tokens.every(t => DIM_TOKEN.test(t))) return null;
+  return tokens.map(Number);
 }
 
 /**

@@ -1,7 +1,8 @@
 /**
  * 天伏モードの天井セル選択（純モジュール。react・store.js・snap.js・.jsx を静的に引かない）。
  *
- * 選択の単位は「ドラッグでなぞったセルだけ」（矩形の補完はしない。連結も要求しない）。
+ * ここが組むのは「ドラッグでなぞったセルだけ」（矩形の補完はしない。連結も要求しない）。S12b から選択の単位は群（ceilingGroups.js）で、
+ * なぞったセルは選択中の群の残りで区画を作るジェスチャの中でだけ使う（CeilingModeState）。
  * 部屋を超えては選べない: ドラッグ開始セルの所属（owner）と同じ所属のセルだけを足し、他の所属のセルは捨てる
  * （ドラッグは続き、戻れば再び受け付ける）。所属の索引は ceilingOwners.js（選択専用。描画の天井面とは述語 roomHasCeiling だけを共有）。
  * セルは天井セル（仕上げのセルを天井芯でさらに割った格子。ceilingGrid.js）。
@@ -45,8 +46,9 @@ const insideAny = (visited, x, y) => {
  * 同じ所属のセルだけ足す。何も足さなければ同じ drag を返す（lastWorld だけ in place で進める。
  * 進めないと、他所属のセルを通って戻る経路が次回の直線補間で別のセルを横切ってしまう）。
  * 非有限座標は変更なし。stepMm が有限の正数でなければ終点だけを見る。
+ * allowed（S12b）… 与えれば、そのセルキーの集合の外は足さない（群の中だけをなぞる〔区画を作るジェスチャ〕）。省略は制限なし。
  */
-export function extendCeilingDrag(graph, owners, drag, wx, wy, stepMm) {
+export function extendCeilingDrag(graph, owners, drag, wx, wy, stepMm, allowed = null) {
   if (!drag || !Number.isFinite(wx) || !Number.isFinite(wy)) return drag;
   const from = drag.lastWorld;
   const dist = Math.hypot(wx - from.x, wy - from.y);
@@ -60,7 +62,7 @@ export function extendCeilingDrag(graph, owners, drag, wx, wy, stepMm) {
       const y = from.y + (wy - from.y) * t;
       if (insideAny(visited, x, y)) continue;
       for (const c of ceilingRegionCellsAt(x, y, graph)) {
-        if (visited.has(c.key)) continue;
+        if (visited.has(c.key) || (allowed && !allowed.has(c.key))) continue;
         const o = owners.get(c.key);
         if (!o || !sameOwner(o, drag.owner)) continue;
         if (!added) { visited = new Map(visited); added = true; }
