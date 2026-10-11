@@ -116,7 +116,7 @@ export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf 
   if (aboveGraph && Number.isFinite(abovePeek.floorHeightMm) && abovePeek.floorHeightMm > 0) {
     layers.push({ graph: aboveGraph, floorZMm: abovePeek.floorHeightMm, role: 'above' });
   }
-  return planSolids(layers, { riserOf: aboveRiserOf, belowGraphOf: g => (g === aboveGraph ? graph : null), ceilings: true });
+  return planSolids(layers, { riserOf: aboveRiserOf, belowGraphOf: g => (g === aboveGraph ? graph : null), ceilings: true, lookUp: true });
 }
 
 /**

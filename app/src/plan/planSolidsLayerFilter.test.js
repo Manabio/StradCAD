@@ -163,8 +163,8 @@ test('直下階が無い（belowPeek なし）、または階高が不正（0・
   assert.equal(has(planSolidsLayerPrimitives({ graph: self.graph, belowPeek: { graph: null, floorHeightMm: 2800 }, cutZ: CUT })), false);
 });
 
-function switchback(id) {
-  const g = makeGrid([0, 1000, 2000], [0, 1500, 4500], { id });
+function switchback(id, { wide = false } = {}) {
+  const g = makeGrid(wide ? [0, 1000, 2000, 3000] : [0, 1000, 2000], [0, 1500, 4500], { id });
   const { graph, cx, cy } = g;
   const landing = `${cx[0].id}:${cy[0].id}:${cx[2].id}:${cy[1].id}`;
   const outbound = `${cx[0].id}:${cy[1].id}:${cx[1].id}:${cy[2].id}`;
@@ -174,6 +174,7 @@ function switchback(id) {
     type: StairType.SWITCHBACK, cells: new Set([landing, outbound, ret]), roomId: room.id,
     sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
   });
+  if (wide) graph.addRoom(new Set([`${cx[2].id}:${cy[1].id}:${cx[3].id}:${cy[2].id}`]), '隣室'); // 階段の右隣（穴の外に残る床）
   return graph;
 }
 
@@ -412,7 +413,10 @@ test('見上げ: 上階に破れ先のある階段があり、自階に同じ階
   const solids = planSolidsLayerSolidsUp({ graph: low, abovePeek, aboveRiserOf });
   const upFloor = solids.find(s => s.kind === 'floor' && s.source.layerFloorZ === 2800);
   assert.ok(upFloor, '上階の床がある');
-  assert.ok((upFloor.footprint.holes ?? []).some(h => h.x1 === 1000 && h.y1 === 1500 && h.x2 === 2000 && h.y2 === 4500), `破れ先が穴: ${JSON.stringify(upFloor.footprint.holes)}`);
+  // 見上げの穴は破れ先でなく足元全体（S13a）: 踊り場（2セル）・往路・復路とも穴
+  const holes = upFloor.footprint.holes ?? [];
+  assert.deepEqual(holes.map(h => [h.x1, h.y1, h.x2, h.y2]).sort(), [[0, 0, 1000, 1500], [0, 1500, 1000, 4500], [1000, 0, 2000, 1500], [1000, 1500, 2000, 4500]].sort(),
+    `足元全体が穴: ${JSON.stringify(holes)}`);
   assert.ok(asked.length > 0 && asked.every(s => high.stairs.includes(s)), '最上の層＝上階の階段の蹴上を aboveRiserOf で問う');
   // 自階に同じ階段が無ければ穴にならない
   const noStair = makeGrid([0, 1000, 2000], [0, 1500, 4500], { id: 'bare' });
@@ -421,7 +425,11 @@ test('見上げ: 上階に破れ先のある階段があり、自階に同じ階
   assert.equal((flat.find(s => s.kind === 'floor' && s.source.layerFloorZ === 2800).footprint.holes ?? []).length, 0);
   // 穴の縁の線: 天井の無い所（自階の部屋の外）で上階の床の縁が細線で出る
   const prims = planSolidsLayerPrimitivesUp({ graph: low, abovePeek, aboveRiserOf, cutZ: CUT });
-  const edge = prims.filter(p => p.source.kind === 'floor' && p.source.layerFloorZ === 2800);
+  assert.equal(prims.filter(p => p.source.kind === 'floor' && p.source.layerFloorZ === 2800).length, 0, '足元全体が穴で上階の床が残らなければ縁も出ない');
+  // 階段の隣に上階の床が残ると、穴の縁（足元の全周）が細線で出る
+  const lowW = switchback('lowW', { wide: true }), highW = switchback('highW', { wide: true });
+  const wideUp = planSolidsLayerPrimitivesUp({ graph: lowW, abovePeek: { graph: highW, floorHeightMm: 2800, activePlaneId: lowW.plane.id }, aboveRiserOf, cutZ: CUT });
+  const edge = wideUp.filter(p => p.source.kind === 'floor' && p.source.layerFloorZ === 2800);
   assert.ok(edge.length > 0 && edge.every(p => p.cls === 'below' && p.weight === 'thin'), `穴の縁が細線で出る: ${edge.length}`);
 });
 

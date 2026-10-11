@@ -31,17 +31,23 @@ const RECT_EPS_MM = CL_OVERLAP_TOL_MM;
  * @param {object} stair
  * @param {object} graph stairが属するgraph（自階）
  * @param {object} belowGraph 1つ下の実体階のgraph
- * @returns {boolean}
+ * 返すのは一致した下階の階段（先頭の1つ）で、天伏の階段上の裏面が下階の階段の対の部屋の天井高を読むのに使う。
+ * @returns {object|null} 一致した belowGraph の階段。無ければ null
  */
-function hasMatchingStairBelow(stair, graph, belowGraph) {
+export function matchingStairBelow(stair, graph, belowGraph) {
   const rect = roomBounds(stair.cells, graph);
-  if (!Number.isFinite(rect.x1)) return false;
-  return belowGraph.stairs.some(s => {
+  if (!Number.isFinite(rect.x1)) return null;
+  return belowGraph.stairs.find(s => {
     const r2 = roomBounds(s.cells, belowGraph);
     return Number.isFinite(r2.x1)
       && Math.abs(rect.x1 - r2.x1) < RECT_EPS_MM && Math.abs(rect.x2 - r2.x2) < RECT_EPS_MM
       && Math.abs(rect.y1 - r2.y1) < RECT_EPS_MM && Math.abs(rect.y2 - r2.y2) < RECT_EPS_MM;
-  });
+  }) ?? null;
+}
+
+/** matchingStairBelow の真偽版（下階に同じ足元の階段があるか）。 */
+function hasMatchingStairBelow(stair, graph, belowGraph) {
+  return matchingStairBelow(stair, graph, belowGraph) !== null;
 }
 
 /**

@@ -52,7 +52,9 @@ for (const src of sources) {
       const aboveGraph = above ? project.graphMap.get(above.id) : null;
       const abovePeek = aboveGraph ? { graph: aboveGraph, floorHeightMm: above.elevation - plane.elevation } : null;
       const u0 = performance.now();
-      const upPrims = planSolidsLayerPrimitivesUp({ graph, abovePeek, selfRiserOf, cutZ: ceilingCutHeightMmOf(plane) });
+      // 上階の層の階段の蹴上は上階の plane で解く（PlanSolidsLayer.jsx と同じ。旧版は selfRiserOf を渡して上階の階段の段・裏面が出なかった）
+      const aboveRiserOf = above ? s => stairRiserOf(s, project, above) : undefined;
+      const upPrims = planSolidsLayerPrimitivesUp({ graph, abovePeek, aboveRiserOf, cutZ: ceilingCutHeightMmOf(plane) });
       const upMs = performance.now() - u0;
       const upLines = upPrims.filter(p => p.kind === 'line').map(p => ({
         key: p.key, cls: p.cls, kind: p.source.kind, id: p.source.id, layerFloorZ: p.source.layerFloorZ ?? 0,

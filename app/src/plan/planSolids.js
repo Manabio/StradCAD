@@ -35,7 +35,7 @@
  *   既定 true。屋根が使う）。
  * @typedef {{graph: object|null, floorZMm: number, role: 'self'|'above'|'below', ceilZMm?: number}} SolidLayer
  */
-import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, edgeKey } from '@core';
+import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, edgeKey } from '@core';
 import { beamDepthMm } from '../elevation/section/sectionStructure.js';
 import { kneeDropZRangesAt } from '../elevation/section/sectionHits.js';
 import { columnWrapSolids, wallConcealRange } from '../finish/columnWrap.js';
@@ -46,7 +46,7 @@ import { floorOpeningCellRects } from '../finish/stair/slabOpening.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
 import { footprintCellKeys } from '../structural/wallGate.js';
-import { stairFilterFor } from '../structural/openingBeamAxes.js';
+import { stairFilterFor, matchingStairBelow } from '../structural/openingBeamAxes.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
 import { drainArrivalTime } from '../structural/roofFramingGeometry.js';
@@ -54,6 +54,7 @@ import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { normalizeRect, isValidRect } from './planGeometry.js';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
+import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
 
 /** 出力の kind 順（固定）。 */
 export const SOLID_KIND_ORDER = Object.freeze(['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'ceiling', 'generic']);
@@ -258,7 +259,10 @@ export function floorSolidOf(layer, opts = {}) {
     .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1);
   if (rects.length === 0) return null;
   const below = opts.belowGraphOf?.(graph) ?? null;
-  const holes = floorOpeningCellRects(graph, { riserOf: opts.riserOf ?? (() => null), stairFilter: stairFilterFor(graph, below) })
+  const holes = floorOpeningCellRects(graph, {
+    riserOf: opts.riserOf ?? (() => null), stairFilter: stairFilterFor(graph, below),
+    stairExtent: opts.lookUp === true ? 'full' : 'beyond', // 見上げは続きの階段の足元全体が穴（階段の裏が見える。S13a）
+  })
     .map(({ x1, y1, x2, y2 }) => ({ x1, y1, x2, y2 }));
   return {
     kind: 'floor', footprint: { rects, holes }, zLo: layer.floorZMm, zHi: layer.floorZMm,
@@ -355,19 +359,61 @@ const polyArea2 = p => p.reduce((s, _, i) => (i % 2 ? s : s + p[i] * p[(i + 3) %
  * 多角形はマスごとに1件（source.id＝階段 id・source.part＝段数字と同じ番号）。不正な多角形（6 要素未満・非有限・面積 0）は捨てる。
  * @param {SolidLayer} layer
  * @param {(stair:object)=>number|null} riserFor 階段の蹴上（層ごとに決める。planSolids の riserForLayer）
+ * @param {Set<object>} [drawnStairs] 段の輪郭を描く階段（見上げの鉄骨の続き階段＝踏面線を全段描く。省略は全階段が遮蔽専用）
+ * @param {Set<object>} [skipStairs] 立体にしない階段（見上げの自階の続き階段。stairsContinuedAbove）
  */
-function stairTreadSolids(layer, riserFor) {
+function stairTreadSolids(layer, riserFor, drawnStairs = null, skipStairs = null) {
   const out = [];
   const insetView = layer.role === 'self' ? 'install' : 'upper'; // 自階は設置階の逃がし（StairLayer の beyondBuilt と同じ）、下階は見下げ
   for (const stair of layer.graph.stairs ?? []) {
+    if (skipStairs?.has(stair)) continue;
     for (const t of stairTreadFootprints(stair, layer.graph, { riser: riserFor(stair), insetView })) {
       const p = t.poly;
       if (p.length < 6 || p.length % 2 !== 0 || !p.every(Number.isFinite) || Math.abs(polyArea2(p)) < 1e-6) continue;
       const z = layer.floorZMm + t.topZ;
       out.push({
-        kind: 'stairTread', footprint: { poly: p }, zLo: z, zHi: z, drawEdges: false,
+        kind: 'stairTread', footprint: { poly: p }, zLo: z, zHi: z, drawEdges: drawnStairs?.has(stair) === true,
         source: baseSource(layer, 'stairTread', stair.id, { part: t.number }),
       });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- 階段上の裏面（見上げ）
+
+/**
+ * 見上げ（opts.lookUp）の上階の層で、**下階（自階）に同じ足元の階段がある**階段の扱いを決める（S13a）。
+ * 木造は踏面線を描かず階段裏の傾斜天井（stairSoffitSolids）を足す。鉄骨は踏面線を全段描く（stairTread の輪郭を有効にする）。
+ * @returns {{soffits: Solid[], drawnTreads: Set<object>}}
+ */
+function stairUndersideOf(layer, riserFor, belowGraph) {
+  const soffits = [], drawnTreads = new Set();
+  if (!belowGraph) return { soffits, drawnTreads };
+  for (const stair of layer.graph.stairs ?? []) {
+    const belowStair = matchingStairBelow(stair, layer.graph, belowGraph);
+    if (!belowStair) continue;
+    if (stair.structure === StructuralMaterialType.WOOD) {
+      soffits.push(...stairSoffitSolids({ stair, graph: layer.graph, belowStair, belowGraph, riser: riserFor(stair), floorZMm: layer.floorZMm }));
+    } else drawnTreads.add(stair);
+  }
+  return { soffits, drawnTreads };
+}
+
+/**
+ * 見上げ（opts.lookUp）の自階の層で、上階の層の階段と足元が一致する自階の階段（＝続きのある階段）。
+ * 判定は stairUndersideOf・床の穴（stairFilterFor）と同じ述語（matchingStairBelow）で、対象の上階の層も同じ入力
+ * （opts.belowGraphOf(上階の graph) が自階の graph のとき）に揃える＝穴・裏面・段の除外が食い違わない。上階の層が無い・belowGraphOf が無ければ空。
+ * 見上げは「N の天井面際から N+1 の床を裏から見る」ので、自階の続き階段の段は遮蔽に入れない（裁定 2026-10-11）。
+ */
+function stairsContinuedAbove(selfLayer, layers, opts) {
+  const out = new Set();
+  for (const above of layers) {
+    if (above?.role !== 'above' || !above.graph) continue;
+    if (opts.belowGraphOf?.(above.graph) !== selfLayer.graph) continue;
+    for (const stair of above.graph.stairs ?? []) {
+      const own = matchingStairBelow(stair, above.graph, selfLayer.graph);
+      if (own) out.add(own);
     }
   }
   return out;
@@ -435,8 +481,10 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  * source.id 順で続く。
  * graph が無い層は飛ばす。層が空・無ければ []。
  * @param {SolidLayer[]} layers  `elevation/section/sectionBandLayers.js buildBandLayers` の戻り値と同型
- * @param {{riserOf?: (stair:object)=>number|null, belowGraphOf?: (graph:object)=>object|null, extraSolids?: Solid[], ceilings?: boolean}} [opts]
+ * @param {{riserOf?: (stair:object)=>number|null, belowGraphOf?: (graph:object)=>object|null, extraSolids?: Solid[], ceilings?: boolean, lookUp?: boolean}} [opts]
  *   ceilings＝true のときだけ self の層に天井立体（kind 'ceiling'。見上げ用）を足す。省略（見下げ）の出力は不変。
+ *   lookUp＝true は見上げ（天伏。planSolidsLayerSolidsUp だけが渡す）: 上階スラブの続きの階段の穴を足元全体にし（floorSolidOf）、
+ *   上階の層の「下階に同じ足元の階段がある」階段について、木造は階段裏の傾斜天井（source.kind 'stairSoffit'）を足し、鉄骨は段の輪郭を描く（stairUndersideOf）。自階の続き階段の段は遮蔽に入れない（stairsContinuedAbove）。
  *   riserOf＝最上の層の階段の蹴上（破れ先の位置・段の高さ）。下の層の階段は直上の層との階高から求める（stairTreadSolids）。belowGraphOf＝graph の直下階の graph（無ければ null。破れ先を穴にするかの判定）。
  * @returns {Solid[]}
  */
@@ -453,8 +501,12 @@ export function planSolids(layers, opts = {}) {
     const riserForLayer = upperZ !== undefined
       ? stair => riserOf(stair, upperZ - layer.floorZMm)
       : stair => opts.riserOf?.(stair) ?? null;
+    const underside = opts.lookUp === true && layer.role === 'above'
+      ? stairUndersideOf(layer, riserForLayer, opts.belowGraphOf?.(layer.graph) ?? null) : null;
     const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom), ...columnSolids(layer),
-      ...beamSolids(layer), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer),
+      ...beamSolids(layer), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
+        opts.lookUp === true && layer.role === 'self' ? stairsContinuedAbove(layer, layers, opts) : null),
+      ...(underside?.soffits ?? []),
       ...(opts.ceilings === true && layer.role === 'self' ? ceilingSolids(layer) : [])].filter(Boolean);
     for (const solid of solids) entries.push({ solid, layerZ: layer.floorZMm, roleRank: ROLE_RANK[layer.role] ?? 3 });
   }

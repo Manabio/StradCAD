@@ -254,6 +254,10 @@ export const DEFAULT_SHAFT_SOUNDPROOF = ShaftSoundproof.NONE;
 export const DEFAULT_ROOM_FLOOR_LEVEL    = 0;    // FL初期値: 当該階FLからの相対高さmm（±0）
 export const DEFAULT_ROOM_CEILING_HEIGHT = 2400; // CH初期値: 部屋の床面から天井までの距離mm
 
+// 木造階段の裏（天伏の傾斜天井）の厚み(mm): 踏面表面から裏の天井仕上げ材の面までを、階段の傾斜に**直交して**測った厚み
+// （踏面の厚みではない）。垂直方向の下がりは 厚み / cosθ（tanθ = 蹴上 / 踏面）。ceiling/stairSoffit.js が使う。
+export const STAIR_SOFFIT_THICKNESS_MM = 300;
+
 // CL（中心線）の重複判定許容誤差(mm)。追加時の重複ガード（transform/centerLineOps.js）・梁芯移動の範囲クランプ内寄せ
 // （structural/beamAxisMove.js）の両方が同じ値・同じ目的（他CLと同一座標に到達させない）で共有する。
 export const CL_OVERLAP_TOL_MM = 0.5;

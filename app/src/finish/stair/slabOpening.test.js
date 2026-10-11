@@ -653,6 +653,20 @@ test('floorOpeningCellRects: 階段の破れ先は stairFilter が通すとき�
   assert.deepEqual(floorOpeningCellRects(graph, { stairFilter: () => false }), [], '絞られたら穴にしない');
 });
 
+test("floorOpeningCellRects: stairExtent 'full' は stairFilter を通った階段のセル全部が穴（既定 'beyond' は破れ先だけで出力不変）。蹴上が求まらなくても開く", () => {
+  const { graph } = makeSwitchbackBeyondFixture();
+  const beyond = floorOpeningCellRects(graph);
+  assert.deepEqual(floorOpeningCellRects(graph, { stairExtent: 'beyond' }), beyond, "明示の 'beyond' は既定と同じ");
+  const full = floorOpeningCellRects(graph, { stairExtent: 'full' });
+  const area = rs => rs.reduce((a, r) => a + (r.x2 - r.x1) * (r.y2 - r.y1), 0);
+  assert.equal(area(full), 2000 * 1500 + 2 * 1000 * 3000, '踊り場＋往路＋復路の全面積（現在の分割に展開されるのでセル数でなく面積で見る）');
+  assert.ok(area(full) > area(beyond));
+  assert.ok(full.every(r => r.source === 'stairBeyond'));
+  assert.ok(beyond.every(b => full.some(f => f.x1 === b.x1 && f.y1 === b.y1 && f.x2 === b.x2 && f.y2 === b.y2)), '破れ先は足元全体に含まれる');
+  assert.deepEqual(floorOpeningCellRects(graph, { stairExtent: 'full', stairFilter: () => false }), [], "'full' でも絞られた階段は穴にしない");
+  assert.deepEqual(floorOpeningCellRects(graph, { stairExtent: 'full', riserOf: () => null }), full, '蹴上なしでも全セル');
+});
+
 test('floorOpeningCellRects【失敗系】: graphがnull・開口の無い階は空配列。削除済みCLを指すセルは落ちる', () => {
   assert.deepEqual(floorOpeningCellRects(null), []);
   assert.deepEqual(floorOpeningCellRects(makeGrid().graph), []);

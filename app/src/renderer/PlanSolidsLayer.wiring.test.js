@@ -241,6 +241,7 @@ test('【配線】planSolidsLayerFilter.js: 見下げは自階（FL=0）＋直�
   assert.equal(count(filter, /role: 'above'/g), 1, '上階の層は見上げの1か所だけ');
   assert.equal(count(filter, /layers\.push\(/g), 2);
   assert.match(filter, /^\s*return planSolids\(layers, \{ riserOf: selfRiserOf, belowGraphOf: g => \(g === graph \? belowGraph : null\) \}\);\s*$/m, '見下げは ceilings を渡さない（出力不変）');
-  assert.match(filter, /^\s*return planSolids\(layers, \{ riserOf: aboveRiserOf, belowGraphOf: g => \(g === aboveGraph \? graph : null\), ceilings: true \}\);\s*$/m, '上階スラブの破れ先は自階に同じ階段があるとき穴。蹴上は上階の層（最上）');
+  assert.match(filter, /^\s*return planSolids\(layers, \{ riserOf: aboveRiserOf, belowGraphOf: g => \(g === aboveGraph \? graph : null\), ceilings: true, lookUp: true \}\);\s*$/m, '上階スラブの破れ先は自階に同じ階段があるとき穴。蹴上は上階の層（最上）。lookUp は見上げだけ（階段上の裏面。S13a）');
+  assert.equal(count(filter, /lookUp: true/g), 1, 'lookUp を渡すのは見上げの1か所だけ');
   assert.equal(count(filter, /ceilings: true/g), 1, '天井を足すのは見上げの1か所だけ');
 });

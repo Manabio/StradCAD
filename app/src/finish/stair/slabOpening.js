@@ -35,7 +35,10 @@ const WALL_AXIS_CL_EPS = 0.5;
 // 上階の自動コピーはしない＝設置階の直上1階にはSTAIR_VOIDだけが置かれる）があるときだけ。呼び出し側（openingBeamAxes.js openingBeamSourcesFor）がこの条件で絞る。
 // slabOpeningRectsは第3引数を渡さない＝挙動不変（upperGraph視点＝上階を覗く既存用途は
 // この誤認の対象外——upperGraph自身が「自階」ではなく常に「直上階」であり、呼び出し側の設計が異なる）。
-function openingCellSets(upperGraph, riserOf, stairFilter = () => true) {
+//
+// stairExtent（既定 'beyond'＝挙動不変）: 'full' なら stairFilter を通った階段は破れ先でなく**階段のセル全部**を開口にする
+// （見上げ＝天伏の上階スラブ。続きの階段の足元全体が穴で、下から階段の裏が見える。S13a。蹴上が求まらなくても開く）。
+function openingCellSets(upperGraph, riserOf, stairFilter = () => true, stairExtent = 'beyond') {
   const sets = [];
   for (const room of upperGraph.rooms) {
     if (room.feature !== RoomFeature.VOID && room.feature !== RoomFeature.STAIR_VOID
@@ -49,7 +52,9 @@ function openingCellSets(upperGraph, riserOf, stairFilter = () => true) {
   }
   for (const stair of upperGraph.stairs) {
     if (!stairFilter(stair)) continue;
-    const beyond = cellsBeyondBreak(stair, upperGraph, riserOf(stair));
+    const beyond = stairExtent === 'full'
+      ? refreshCells(stair.cells, upperGraph)
+      : cellsBeyondBreak(stair, upperGraph, riserOf(stair));
     if (beyond.size > 0) sets.push({ cells: beyond, source: 'stairBeyond', stairId: stair.id });
   }
   return sets;
@@ -313,12 +318,13 @@ function resolveEdgeSide(isVertical, value, lo, hi, cellRecords) {
  *   floorOpeningEdges と同じ意味（stairFilter＝破れ先を開口にする階段の絞り込み。既定は全階段）。
  *   sources＝読むセットの source（'void'|'shaft'|'stairVoid'|'stairBeyond'）の絞り込み。**セルを畳む前**に適用する
  *   （畳んだ後に絞ると、先に出た別 source にセルを取られて落ちる）。省略は全部。
+ *   stairExtent＝'beyond'（既定）は階段の破れ先、'full' は階段のセル全部（見上げ用。openingCellSets 参照）。
  * @returns {Array<{x1:number,y1:number,x2:number,y2:number,source:string}>}
  */
-export function floorOpeningCellRects(graph, { riserOf = () => null, stairFilter = () => true, sources = null } = {}) {
+export function floorOpeningCellRects(graph, { riserOf = () => null, stairFilter = () => true, sources = null, stairExtent = 'beyond' } = {}) {
   if (!graph) return [];
   const byKey = new Map();
-  for (const { cells, source } of openingCellSets(graph, riserOf, stairFilter)) {
+  for (const { cells, source } of openingCellSets(graph, riserOf, stairFilter, stairExtent)) {
     if (sources && !sources.includes(source)) continue; // 初出 source でまとめる前に絞る（指定外のセットは読み飛ばす）
     for (const key of cells) {
       if (byKey.has(key)) continue;
