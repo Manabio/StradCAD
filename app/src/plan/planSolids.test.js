@@ -12,10 +12,9 @@ import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { columnWrapSolids } from '../finish/columnWrap.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { planSectionFigure } from './planSectionFigure.js';
-import { assignZoneShape } from '../ceiling/ceilingZones.js';
 import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 import {
-  makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid, linesOf, mergedLines, totalLength, assignZoneHeight,
+  makeGrid, makeRoomGraph, fakeLayer, addBeamH, addColumnAt, rect, solid, linesOf, mergedLines, totalLength, assignZoneHeight, assignZoneSpec,
 } from './planTestFixtures.js';
 
 const ofKind = (solids, kind) => solids.filter(s => s.kind === kind);
@@ -746,7 +745,7 @@ test('天井の傾斜（S6a）: 傾斜の区画の立体は zAt を持ち、zLo�
   const a = g.interior([[0, 0], [1, 0]]);
   const plain = g.interior([[2, 0]]);
   a.setFloorLevel(100);
-  a.setCeilingZones(assignZoneShape(g.graph, a, [g.cell(1, 0)], { heightMm: 2300, shape: 'slope', dims: [1200, 0] }));
+  a.setCeilingZones(assignZoneSpec(g.graph, a, [g.cell(1, 0)], { heightMm: 2300, shape: 'slope', dims: [1200, 0] }));
   const zoneId = a.ceilingZones[0].id;
   const ceilings = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 50 })], { ceilings: true }), 'ceiling');
   const sl = ceilings.find(s => s.source.id === `${a.id}#${zoneId}`);
@@ -773,8 +772,8 @@ test('天井の円弧・ドーム（S6b）: 立体は zAt を持ち zLo＝基準
   const a = g.interior([[0, 0], [1, 0], [2, 0]]);
   a.setFloorLevel(100);
   // 円弧は軸0（x に平行）で幅=y=3000 → ライズ 500: R=(1500²+500²)/1000=2500。ドームは右のセルだけ
-  a.setCeilingZones(assignZoneShape(g.graph, a, [g.cell(0, 0), g.cell(1, 0)], { heightMm: 2300, shape: 'arc', dims: [500, 0] }));
-  a.setCeilingZones(assignZoneShape(g.graph, a, [g.cell(2, 0)], { heightMm: 2200, shape: 'dome', dims: [600] }));
+  a.setCeilingZones(assignZoneSpec(g.graph, a, [g.cell(0, 0), g.cell(1, 0)], { heightMm: 2300, shape: 'arc', dims: [500, 0] }));
+  a.setCeilingZones(assignZoneSpec(g.graph, a, [g.cell(2, 0)], { heightMm: 2200, shape: 'dome', dims: [600] }));
   const [arcZone, domeZone] = a.ceilingZones;
   const ceilings = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 50 })], { ceilings: true }), 'ceiling');
   const arc = ceilings.find(s => s.source.id === `${a.id}#${arcZone.id}`);

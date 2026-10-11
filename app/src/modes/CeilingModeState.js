@@ -6,6 +6,7 @@ import { buildCeilingCellOwners } from '../ceiling/ceilingOwners.js';
 import { beginCeilingDrag, extendCeilingDrag } from '../ceiling/ceilingSelection.js';
 import { ceilingGroupsOf, zoneGroupId } from '../ceiling/ceilingGroups.js';
 import { createZone } from '../ceiling/ceilingZones.js';
+import { nodePathOf } from '../ceiling/ceilingPanelRows.js';
 import { roomCeilingShapeOf } from '../ceiling/roomCeilingShape.js';
 import { stairCeilingSlopeDefaults } from '../ceiling/ceilingShapeFields.js';
 import { CeilingShape } from '../core/constants.js';
@@ -33,21 +34,8 @@ export const CEILING_TABS = Object.freeze(['interior', 'stair']);
 const NO_CELLS = Object.freeze([]);
 const NO_KEYS = new Set();
 
-/** 群 id → パネルの行 id（部屋は room.id、階段は stair.roomId ?? stair.id）。解けなければ null。 */
-function rowIdOfGroupId(graph, groupId) {
-  const sep = groupId.indexOf(':');
-  if (sep < 0) return null;
-  const kind = groupId.slice(0, sep);
-  const rest = groupId.slice(sep + 1);
-  if (kind === 'room') return rest;
-  if (kind === 'zone') return rest.split('#')[0];
-  if (kind === 'stair') { const s = graph.stairMap.get(rest); return s ? (s.roomId ?? s.id) : null; }
-  return null;
-}
-
 export class CeilingModeState {
-  selectedRoomId = null;     // 一覧で強調中の行 id（部屋 id／部屋の無い階段は stair.id） | null
-  expandedRowId  = null;     // 内訳を開いている行 id（アコーディオン＝1行だけ） | null
+  expandedPath   = [];       // パネルで開いているノード id の経路（最上位から。各段1つだけ＝アコーディオン）。ノード id は群 id
   activeTab      = 'interior'; // 'interior' | 'stair'
   selection      = null;     // null | { owner, groupId, cellKeys: Set<string> }（確定した群の選択。cellKeys は選んだ時点の写し）
   dragState      = null;     // null | { owner, visited, lastWorld, owners, intent: 'select'|'create', groupId, group, preview }（ドラッグ中）
@@ -71,9 +59,9 @@ export class CeilingModeState {
       materials:       observable.ref,
       materialMap:     observable.ref,
       materialDiffs:   observable.ref,
-      selectedRoomId: observable,
-      expandedRowId:  observable,
-      toggleExpandedRow: action,
+      expandedPath:   observable.ref,
+      selectedRoomId: computed,
+      toggleNode:     action,
       activeTab:      observable,
       selection:      observable.ref,
       dragState:      observable.ref,
@@ -83,7 +71,6 @@ export class CeilingModeState {
       updateMove:     action,
       commitMove:     action,
       cancelMove:     action,
-      selectRoom:     action,
       selectNode:     action,
       setActiveTab:   action,
       startDrag:      action,
@@ -123,15 +110,19 @@ export class CeilingModeState {
   /** 材コードの docDiffMap エントリ（{baseOrigin, diffFields, baseEntry}）。差分なし・未ロードは null。 */
   materialDiff(code) { return this.materialDiffs?.get(code) ?? null; }
 
-  /** 行のタップ・選択の確定で強調行を変える。選択中のセルの所属と別の行なら、セルの選択は解除する。 */
-  selectRoom(id) {
-    this.selectedRoomId = id ?? null;
-    this.expandedRowId = this.selectedRoomId; // 選ばれた行は展開する（アコーディオン。解除なら畳む）
-    if (this.selection && this.selection.owner.rowId !== this.selectedRoomId) this.selection = null;
+  /** 選択中の群 id（ModePanel／BottomSheet の raiseSignal 用）。三角の開閉（expandedPath）では変わらない＝シートを縮めない。選択なしは null。 */
+  get selectedRoomId() {
+    return this.selection?.groupId ?? null;
   }
 
-  /** 三角のクリック。開いている行なら畳み、別の行なら切り替える（展開は1行だけ）。 */
-  toggleExpandedRow(id) { this.expandedRowId = this.expandedRowId === id ? null : (id ?? null); }
+  /**
+   * 三角のクリック。depth 段目のノード id が開いていれば、その段以下を畳む（path.slice(0, depth)）。
+   * 別のノードなら、その段を id に付け替えて深い段を畳む（各段で開くのは1つだけ）。
+   */
+  toggleNode(depth, id) {
+    const path = this.expandedPath;
+    this.expandedPath = path[depth] === id ? path.slice(0, depth) : [...path.slice(0, depth), id];
+  }
 
   setActiveTab(tab) {
     if (!CEILING_TABS.includes(tab)) throw new Error(`CeilingModeState.setActiveTab: 未知のタブです: ${tab}`);
@@ -140,12 +131,14 @@ export class CeilingModeState {
 
   // ---- 天井セルの群選択と、選択中の残りからの区画の作成（S12b）----
 
-  /** 群 g を選択にして、行・タブを合わせる（owner は選択の所属。パネルの行 id は owner.rowId）。 */
-  _selectGroup(group, owner, groupId) {
+  /**
+   * 群 g を選択にして、展開の経路を合わせる（owner は選択の所属）。switchTab が真（キャンバスの選択）なら所属でタブを切り替え、
+   * 偽（パネルの行クリック）なら今のタブのまま。展開は path（行クリックなら押された行の祖先の経路）、無ければ nodePathOf（そのタブの木に無ければ畳む）。
+   */
+  _selectGroup(graph, group, owner, groupId, switchTab, path = null) {
     this.selection = { owner, groupId, cellKeys: new Set(group.cells) };
-    this.selectedRoomId = owner.rowId;
-    this.expandedRowId = owner.rowId;
-    this.activeTab = owner.kind === 'stair' ? 'stair' : 'interior';
+    if (switchTab) this.activeTab = owner.kind === 'stair' ? 'stair' : 'interior';
+    this.expandedPath = path ?? nodePathOf(graph, groupId, this.activeTab) ?? [];
   }
 
   /**
@@ -190,12 +183,13 @@ export class CeilingModeState {
   commitDrag({ tap = false, ctx } = {}) {
     const state = this.dragState;
     if (!state) {
-      if (tap) { this.selection = null; this.selectRoom(null); }
+      if (tap) { this.selection = null; this.expandedPath = []; }
       return;
     }
     this.dragState = null;
     if (state.intent === 'select') {
-      this._selectGroup(state.group, state.owner, state.groupId);
+      if (!ctx) throw new Error('CeilingModeState.commitDrag: 展開の経路を引くには ctx（{ graph, project }）が必要です');
+      this._selectGroup(ctx.graph, state.group, state.owner, state.groupId, true);
       return;
     }
     if (!ctx) throw new Error('CeilingModeState.commitDrag: 区画の作成には ctx（{ graph, project }）が必要です');
@@ -225,15 +219,16 @@ export class CeilingModeState {
   }
 
   /**
-   * 群 id のノードを選ぶ（パネルの行クリック用。S12c）。群のセルで選択を作り、行・タブを合わせる。
-   * セルが 0 件（群が無い）なら展開だけ（選択は変えない）。
+   * 群 id のノードを選ぶ（パネルの行クリック用。S12c）。群のセルで選択を作り、今のタブの木での経路を開く（タブは切り替えない）。
+   * セルが 0 件（群が無い。天井なしの部屋・全セルが区画に入った部屋の残りなど）なら展開だけ（選択は変えない）。
+   * 今のタブの木に無いノード（undo などで消えた区画）は展開を畳む（expandedPath = []）。
+   * path（行クリック時の、押された行の祖先を含む経路）があればそれをそのまま開く（同じ区画が2本の階段の下に出ても押した側が開く）。
    */
-  selectNode(graph, groupId) {
+  selectNode(graph, groupId, path = null) {
     const owners = buildCeilingCellOwners(graph);
     const group = withGraphReadScope(graph, () => ceilingGroupsOf(graph, owners)).groups.get(groupId);
-    if (group) { this._selectGroup(group, group.owner, groupId); return; }
-    const rowId = rowIdOfGroupId(graph, groupId);
-    if (rowId) this.expandedRowId = rowId;
+    if (group) { this._selectGroup(graph, group, group.owner, groupId, false, path); return; }
+    this.expandedPath = path ?? nodePathOf(graph, groupId, this.activeTab) ?? [];
   }
 
   /** ドラッグ中だけ消す（選択は保つ）。App.jsx の interruptCurrentAction が cancelDrag?.() で呼ぶ。 */
@@ -302,6 +297,6 @@ export class CeilingModeState {
     this.cancelMove();
     this.cancelDrag();
     this.selection = null;
-    this.selectRoom(null);
+    this.expandedPath = [];
   }
 }

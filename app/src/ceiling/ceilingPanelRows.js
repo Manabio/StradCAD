@@ -5,7 +5,11 @@
  * 既知の限界: CH は roomCeilingHeight().raw のみ。仕上げ表の内部タブが上階吹抜けの部屋で併記する計算値
  * （voidCHAbove）は出さない（S1a' の受容。他階 peek を持たないため）。
  *
- * 行: { id, kind, name, ceilingBoard, ceilingFinish, ch }
+ * パネルは木（ceilingPanelTree）→ 平らな行（ceilingPanelLines）を描くだけ。ノード id は天井セルの群 id（ceilingGroups.js。
+ * room:<id>／zone:<部屋id>#<区画id>／stair:<id>）で、選択（selection.groupId）とノードの一致が強調の唯一の判定。
+ * 並び替えは持たない（仕上げ表の部屋の並び＝graph.rooms の順をそのまま使う）。
+ *
+ * 行（interiorRows／stairRows が木の部屋・階段ノードの列を作る）: { id, kind, name, ceilingBoard, ceilingFinish, ch }
  *   kind … 'room'（部屋の行。選択できる）| 'stair'（部屋の無い階段の行。id は stair.id。選択対象外）。
  *   ceilingBoard … 天井材。room.getFinishInfo().ceilingPanel（既定は読み時補完）を materialMap で名前に解き
  *                  formatMaterialLabel で略称表示にした文字列（解けなければコードのまま）。
@@ -23,8 +27,7 @@ import { ceilingSurfacesOf } from './ceilingSurfaces.js';
 import { ceilingRefreshCells } from './ceilingGrid.js';
 import { ceilingCellOwnersOf, roomHasCeiling } from './ceilingOwners.js';
 import { CEILING_SHAPE_OPTIONS, CEILING_DIM_FIELDS } from './ceilingShapeFields.js';
-import { zoneStateOfCells } from './ceilingZones.js';
-import { ceilingGroupsOf } from './ceilingGroups.js';
+import { ceilingGroupsOf, roomGroupId, zoneGroupId, stairGroupId } from './ceilingGroups.js';
 import { roomCeilingShapeOf } from './roomCeilingShape.js';
 import { CeilingShape } from '../core/constants.js';
 
@@ -84,24 +87,6 @@ function roomRow(graph, room, name, materialMap, zoneLabels) {
 }
 
 /**
- * 選択中の天井セルの要約（パネル上段）。selection が無ければ null。
- * name・ch は行（内部＋階段）から owner.rowId で引く（見つからなければ name='—'・ch=null）。
- * cellCount は現行の格子で解けるキーの数（CL 削除などで消えたキーは数えない）。
- * zone … 選択セル群の天井区画の状態（S5。zoneStateOfCells。S6a から shape・dims を含む）。書込み先の部屋（部屋、階段は対の部屋）があるときだけ。無ければ null。
- * @returns {{name: string, cellCount: number, ch: string|null, zone: {state: 'none'|'uniform'|'mixed', heightMm: number|null, shape: string, dims: number[]}|null} | null}
- */
-export function selectionSummary(graph, selection) {
-  if (!selection) return null;
-  const row = [...interiorRows(graph), ...stairRows(graph)].find(r => r.id === selection.owner.rowId);
-  let cellCount = 0;
-  for (const key of selection.cellKeys) if (cellBoundsFromKey(key, graph)) cellCount++;
-  const zoneRoom = ceilingZoneTargetRoom(graph, selection);
-  // 部屋所属は部屋が消えていても 'none'（従来どおり）。階段所属は対の部屋があるときだけ（無ければ null）
-  const zone = zoneRoom || selection.owner.kind === 'room' ? zoneStateOfCells(graph, zoneRoom, selection.cellKeys) : null;
-  return { name: row ? row.name : '—', cellCount, ch: row ? row.ch : null, zone };
-}
-
-/**
  * 選択中の群（selection.groupId）の現在の姿。群が今は無い（undo などで消えた）・selection が無いときは null。
  * room … 群の書込み先の部屋（zone・room 群は群の部屋、stair 群は対の部屋。無ければ null）／zone … zone 群の区画（なければ null）。
  * MobX の追跡下から呼べるよう読み取りスコープで包まない（ceilingCellOwnersOf と同じ）。
@@ -114,6 +99,14 @@ export function selectionGroupInfo(graph, selection) {
   const room = group.roomId ? (graph.roomMap.get(group.roomId) ?? null) : null;
   const zone = group.kind === 'zone' && room ? (room.ceilingZones.find(z => z.id === group.zoneId) ?? null) : null;
   return { group, room, zone };
+}
+
+/**
+ * パネルが「選択中」として強調するノード id（＝群 id）。selection が無い・群が今は無い（undo などで消えた。S12b 持ち越し）ときは null
+ * （パネルは選択なし扱い。selection 自体は触らない）。
+ */
+export function selectedNodeId(graph, selection) {
+  return selectionGroupInfo(graph, selection) ? selection.groupId : null;
 }
 
 /**
@@ -133,17 +126,7 @@ export function selectionSpanMm(graph, selection) {
 }
 
 /**
- * 選択中のセル群へ区画（高さ・形状・寸法）を書ける部屋（S5。S6b で階段所属を解禁）。所属が部屋ならその部屋、
- * 階段なら対の部屋（stair.roomId）。部屋の無い階段・解けない所属は null（パネルは disabled）。
- * 書込み先の解決は天井材・仕上げの ceilingWriteTargetRoom と同じ。
- * @returns {import('../core/room.js').Room | null}
- */
-export function ceilingZoneTargetRoom(graph, selection) {
-  return ceilingWriteTargetRoom(graph, selection);
-}
-
-/**
- * 選択中のセル群の天井材・仕上げの書込み先の部屋（「仕上げは部屋に1つ」＝どのセル群でも書込み先は部屋）。
+ * 天井材・仕上げの書込み先の部屋（「仕上げは部屋に1つ」＝どのノードでも書込み先は部屋）。selection は {owner:{kind,id}} の形。
  * 所属が部屋ならその部屋、階段で stair.roomId の部屋があればその部屋、部屋の無い階段・解けない所属は null。
  * @returns {import('../core/room.js').Room | null}
  */
@@ -170,17 +153,10 @@ function dimsLabelOf(shape, dims) {
 }
 
 /**
- * 部屋の天井区画の内訳（展開行用。読むだけ）。区画の配列順に、実際に効くセル（今の天井セルへ展開し、所属索引が
+ * 階段の区画の内訳（階段タブの展開用。読むだけ）。区画の配列順に、実際に効くセル（今の天井セルへ展開し、所属索引が
  * この部屋に帰属させるセル。ceilingSurfacesOf の面と同じ採り方・同じ先勝ち）を持つ区画だけ。
  * heightLabel … 基準高。null（部屋の CH を使う）は「部屋 CH」、数値はそのまま文字列。
- * @returns {Array<{zoneId: string, shapeLabel: string, heightLabel: string, dimsLabel: string, cellCount: number}>}
- */
-export function zoneDetailRows(graph, room) {
-  return zoneRowsBy(graph, room, o => o.kind === 'room' && o.rowId === room.id);
-}
-
-/**
- * 階段行の内訳（zoneDetailRows と同型）。対の部屋（stair.roomId）の区画のうち、その階段に所属するセル
+ * 対の部屋（stair.roomId）の区画のうち、その階段に所属するセル
  * （所属索引で kind==='stair' かつ id===stair.id）を持つ区画だけ。セル数は階段所属のセルの数。残りは出さない。対の部屋が無ければ []。
  */
 export function stairZoneDetailRows(graph, stair) {
@@ -213,46 +189,6 @@ function zoneRowsBy(graph, room, isMine) {
   return out;
 }
 
-/**
- * 区画に入らなかった残り（部屋の CH のまま）の行。区画が無い部屋・天井を持たない部屋（階段の対の部屋は残りを描かない）・
- * 残りのセルが 0 のとき null。cellCount は zoneDetailRows と同じ採り方の残りのセル数。chLabel は部屋の CH 欄の原文（roomCeilingHeight().raw）。
- * @returns {{chLabel: string, cellCount: number} | null}
- */
-export function remainderRow(graph, room) {
-  if (!graph || !room || room.ceilingZones.length === 0 || !roomHasCeiling(room)) return null;
-  const owners = ceilingCellOwnersOf(graph);
-  const mine = new Set();
-  for (const [key, owner] of owners) if (owner.kind === 'room' && owner.rowId === room.id) mine.add(key);
-  for (const zone of room.ceilingZones) {
-    for (const key of ceilingRefreshCells(new Set(zone.cells), graph)) mine.delete(key);
-  }
-  return mine.size === 0 ? null : { chLabel: roomCeilingHeight(graph, room).raw, cellCount: mine.size };
-}
-
-/**
- * 展開行の内訳（唯一の入口。ZoneDetail はこれだけを呼ぶ）。行の id に対応する部屋 R（room.id。対の部屋を持つ階段の行も room.id）について、
- *   zones = zoneDetailRows(R)〔部屋所属のセル〕＋ R を対の部屋とする全階段の stairZoneDetailRows〔階段所属のセル〕
- *           （同じ区画が両方に出れば1行にまとめセル数を合算。順は R.ceilingZones の順）
- *   rest  = remainderRow(R)〔部屋所属の残りだけ〕
- * 内部タブの STAIR ペア部屋の行と階段タブの同じ部屋の行は同じ結果になる。R が無い行（部屋の無い階段・参照切れ）は pairMissing。
- * @returns {{zones: ReturnType<typeof zoneDetailRows>, rest: ReturnType<typeof remainderRow>, pairMissing: boolean}}
- */
-export function rowZoneDetail(graph, row) {
-  const room = graph && row ? graph.roomMap.get(row.id) : null;
-  if (!room) return { zones: [], rest: null, pairMissing: true };
-  const merged = new Map();
-  const add = list => {
-    for (const z of list) {
-      const prev = merged.get(z.zoneId);
-      merged.set(z.zoneId, prev ? { ...prev, cellCount: prev.cellCount + z.cellCount } : z);
-    }
-  };
-  add(zoneDetailRows(graph, room));
-  for (const stair of graph.stairs) if (stair.roomId === room.id) add(stairZoneDetailRows(graph, stair));
-  const zones = room.ceilingZones.map(z => merged.get(z.id)).filter(Boolean);
-  return { zones, rest: remainderRow(graph, room), pairMissing: false };
-}
-
 /** 仕上げ表の内部タブと同じ部屋・同じ並び・同じ表示名。 */
 export function interiorRows(graph, materialMap = null) {
   const zoneLabels = zoneChLabelsByRoom(graph);
@@ -279,4 +215,168 @@ export function stairRows(graph, materialMap = null) {
       ch: null,
     };
   });
+}
+
+// ---- 木（S12c）----
+
+const NO_CELLS = new Set();
+
+/**
+ * パネルのノード。
+ *   id … 群 id（roomGroupId／zoneGroupId／stairGroupId）  type … 'room' | 'zone' | 'stair'
+ *   name … 部屋名／「区画n」（部屋の区画の配列順）／階段名    ceilingBoard・ceilingFinish … 天井材・仕上げの表示（zone は null）
+ *   ch … 部屋・階段は行と同じ CH 欄、zone は基準高（平面以外は基準高～基準高＋ライズ。null の基準高は部屋の CH）
+ *   summary … zone の「形状｜寸法｜Nセル」（colSpan で天井材・仕上げの2列に出す）
+ *   room … 書込み先の部屋（階段は対の部屋、無ければ null）  zone … CeilingZone（zone のみ）
+ *   hasCeiling … room ノードのみ（roomHasCeiling）  cells … 同じ群 id の群のセル（群が無ければ空）
+ *   children … room: 区画のノード（room.ceilingZones の順。面が0件でも出す）→ 部分指定の子の部屋ノード／stair: その階段所属のセルを持つ区画
+ */
+function zoneNode(graph, room, zone, cellCount, groups) {
+  const id = zoneGroupId(room.id, zone.id);
+  const rise = zone.shape !== CeilingShape.FLAT && Number.isFinite(zone.dims[0]) ? zone.dims[0] : 0;
+  const base = zone.heightMm ?? roomCeilingHeight(graph, room).mm;
+  const shapeLabel = CEILING_SHAPE_OPTIONS.find(o => o.value === zone.shape)?.label ?? zone.shape;
+  return {
+    id,
+    type: 'zone',
+    name: `区画${room.ceilingZones.indexOf(zone) + 1}`,
+    summary: [shapeLabel, dimsLabelOf(zone.shape, zone.dims), `${cellCount}セル`].filter(Boolean).join('｜'),
+    ceilingBoard: null,
+    ceilingFinish: null,
+    ch: rise > 0 ? `${base}～${base + rise}` : String(base),
+    room,
+    zone,
+    cells: groups.get(id)?.cells ?? NO_CELLS,
+    children: [],
+  };
+}
+
+function interiorTree(graph, materialMap, groups) {
+  const rooms = interiorTabRooms(graph);
+  const rows = interiorRows(graph, materialMap);
+  const rowOf = new Map(rooms.map((r, i) => [r.id, rows[i]]));
+  // 部分指定の子は、タブにいる最初の親（graph.rooms の順）の下に入れ子。親がタブに無い子は最上位
+  const parentOf = new Map();
+  for (const r of rooms) {
+    if (r.referenceRoomIds.size === 0) continue;
+    const parent = rooms.find(p => p !== r && r.referenceRoomIds.has(p.id));
+    if (parent) parentOf.set(r.id, parent.id);
+  }
+  const kidsOf = new Map();
+  for (const r of rooms) {
+    const pid = parentOf.get(r.id);
+    if (pid) kidsOf.set(pid, [...(kidsOf.get(pid) ?? []), r]);
+  }
+  const placed = new Set();
+  const build = room => {
+    placed.add(room.id);
+    const row = rowOf.get(room.id);
+    const id = roomGroupId(room.id);
+    const zones = room.ceilingZones.map(z => zoneNode(graph, room, z, groups.get(zoneGroupId(room.id, z.id))?.cells.size ?? 0, groups));
+    const kids = (kidsOf.get(room.id) ?? []).filter(k => !placed.has(k.id)).map(build);
+    return {
+      id,
+      type: 'room',
+      name: row.name,
+      ceilingBoard: row.ceilingBoard,
+      ceilingFinish: row.ceilingFinish,
+      ch: row.ch,
+      room,
+      hasCeiling: roomHasCeiling(room),
+      cells: groups.get(id)?.cells ?? NO_CELLS,
+      children: [...zones, ...kids],
+    };
+  };
+  const roots = rooms.filter(r => !parentOf.has(r.id)).map(build);
+  for (const r of rooms) if (!placed.has(r.id)) roots.push(build(r)); // 参照の循環で取り残された部屋も最上位に出す
+  return roots;
+}
+
+function stairTree(graph, materialMap, groups) {
+  const rows = stairRows(graph, materialMap);
+  return graph.stairs.map((stair, i) => {
+    const row = rows[i];
+    const room = ceilingWriteTargetRoom(graph, { owner: { kind: 'stair', id: stair.id } });
+    const id = stairGroupId(stair.id);
+    const children = room
+      ? stairZoneDetailRows(graph, stair).map(d => zoneNode(graph, room, room.ceilingZones.find(z => z.id === d.zoneId), d.cellCount, groups))
+      : [];
+    return {
+      id,
+      type: 'stair',
+      name: row.name,
+      ceilingBoard: row.ceilingBoard,
+      ceilingFinish: row.ceilingFinish,
+      ch: row.ch,
+      room,
+      cells: groups.get(id)?.cells ?? NO_CELLS,
+      children,
+    };
+  });
+}
+
+/**
+ * パネルの木。内部タブは 仕上げ表と同じ部屋（interiorTabRooms）のうち親（referenceRoomIds なし）が最上位で、部分指定の子は親の下
+ * （親がタブに無い子は最上位）。階段タブは graph.stairs の順の階段が最上位。graph が null は []。
+ * @param {object} graph
+ * @param {'interior'|'stair'} tab
+ * @param {Map<string, object>|null} materialMap
+ */
+export function ceilingPanelTree(graph, tab, materialMap = null) {
+  if (!graph) return [];
+  const { groups } = ceilingGroupsOf(graph, ceilingCellOwnersOf(graph));
+  return tab === 'stair' ? stairTree(graph, materialMap, groups) : interiorTree(graph, materialMap, groups);
+}
+
+/**
+ * 木を expandedPath（各段で開いているノード id。各段1つだけ）に従って平らな行にする。行の種類:
+ *   'room' | 'zone' | 'stair' … ノードの行（node・expanded を持つ）
+ *   'roomFields' … 部屋ノードを開いたときの形状・天井高の欄（天井を持つ部屋のみ。先頭）／'zoneFields' … 区画ノードを開いたときの区画の欄
+ *   'note' … 欄の代わりの1行（text）。天井を持たない部屋は「天井なし」、区画の無い階段は「区画なし」（対の部屋が無ければ「区画なし（対の部屋なし）」）
+ * 部屋を開くと 欄 → 区画 → 子の部屋 の順（子は1段深い）。階段を開くと その階段の区画だけ（部屋レベルの欄は出さない）。
+ * ノードの行は path（最上位からその行までの祖先を含むノード id の経路）を持つ。行クリックはこれをそのまま expandedPath にする。
+ * @returns {Array<{key: string, nodeId: string, depth: number, type: string, node: object, expanded?: boolean, path?: string[], text?: string}>}
+ */
+export function ceilingPanelLines(tree, expandedPath = []) {
+  const lines = [];
+  // key は親からの経路（同じ対の部屋の区画が複数の階段の下に並んでも一意）
+  const walk = (nodes, depth, prefix, ancestors = []) => {
+    for (const node of nodes) {
+      const expanded = expandedPath[depth] === node.id;
+      const key = `${prefix}/${node.id}`;
+      const path = [...ancestors, node.id];
+      lines.push({ key, nodeId: node.id, depth, type: node.type, node, expanded, path });
+      if (!expanded) continue;
+      const inner = { nodeId: node.id, depth: depth + 1, node };
+      if (node.type === 'room') {
+        lines.push(node.hasCeiling
+          ? { ...inner, key: `${key}/fields`, type: 'roomFields' }
+          : { ...inner, key: `${key}/note`, type: 'note', text: '天井なし' });
+      } else if (node.type === 'zone') {
+        lines.push({ ...inner, key: `${key}/fields`, type: 'zoneFields' });
+      } else if (node.children.length === 0) {
+        lines.push({ ...inner, key: `${key}/note`, type: 'note', text: node.room ? '区画なし' : '区画なし（対の部屋なし）' });
+      }
+      walk(node.children, depth + 1, key, path);
+    }
+  };
+  walk(tree, 0, '');
+  return lines;
+}
+
+/**
+ * 群 id のノードを開くための expandedPath（最上位から自身までのノード id）。そのタブの木に無ければ null。
+ * 例: ['room:親', 'room:子', 'zone:子#Z']（部分指定の子の区画）、['stair:S', 'zone:R#Z']（階段タブ）。
+ */
+export function nodePathOf(graph, groupId, tab) {
+  const find = (nodes, trail) => {
+    for (const node of nodes) {
+      const path = [...trail, node.id];
+      if (node.id === groupId) return path;
+      const inner = find(node.children, path);
+      if (inner) return inner;
+    }
+    return null;
+  };
+  return find(ceilingPanelTree(graph, tab, null), []);
 }

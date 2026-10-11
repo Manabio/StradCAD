@@ -29,7 +29,8 @@ const byRow = (a, b) => a.y1 - b.y1 || a.x1 - b.x1;
  * セルは捨てる＝部屋の CH に戻る）。同じセルが複数の区画にあれば先勝ち。空の面は出さない。区画の無い部屋の出力は区画導入前と同じ（zoneId は null）。
  * 階段の対の部屋（stair.roomId。feature STAIR で roomHasCeiling は偽）は、stairHasCeiling(graph, stair) が真で区画を持つときだけ、
  * 区画の面を出す（S6b。区画のセルのうち所属索引（ceilingCellOwnersOf）が階段所属としてその部屋に帰属させるセルだけ＝階段下部屋 2a が取ったセルは落ちる）。
- * 区画の無い階段は従来どおり天井を描かない（区画に入らなかった残りのセルの面も出さない）。
+ * 区画の無い階段は従来どおり天井を描かない（区画に入らなかった残りのセルの面も出さない）。階段所属のセルは、対の部屋が天井を持つ屋内部屋でも
+ * 部屋の「残り」の面には混ぜない（S12c。ceilingGroupsOf の「階段の残り」と同じ規則。区画に入ったセルだけが区画の面になる）。
  * 区画の zMm＝床段差＋(heightMm ?? 部屋の CH)。shape・dims は区画の形状・寸法（残りは部屋の形状 roomCeilingShapeOf。無ければ flat・[]。S12a）、chMm は基準の CH（床段差を含まない。
  * 平面＝天井高／傾斜＝低い側。S6a）。
  * @param {object} graph
@@ -82,7 +83,8 @@ export function ceilingSurfacesOf(graph) {
       zoneFaces.push({ roomId: room.id, zoneId: zone.id, rects, zMm: floorStep + chMm, shape: zone.shape, dims: [...zone.dims], chMm });
     }
     const rest = [];
-    for (const [key, rect] of rectByKey) if (!taken.has(key)) rest.push(rect);
+    // 階段所属のセルは残りに混ぜない（ceilingGroupsOf の「階段の残り」＝天井を描かない。S12c）。区画に入れば区画の面になる（上）
+    for (const [key, rect] of rectByKey) if (!taken.has(key) && owners.get(key).kind !== 'stair') rest.push(rect);
     if (rest.length > 0 && !pairRooms.has(room)) {
       rest.sort(byRow);
       const { shape, dims } = roomCeilingShapeOf(room); // 部屋の形状（S12a。customOverrides。無ければ平面）

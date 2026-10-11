@@ -7,7 +7,7 @@ import { undoManager } from '../undoManager.js';
 import { withFinishUndo, snapshotFinishState, restoreFinishState } from '../finish/finishUndo.js';
 import { makeRoomUndefined } from '../finish/roomUndefined.js';
 import { normalizePartialDominance } from '../finish/roomReinterpret.js';
-import { assignZoneShape, clearZoneCells } from './ceilingZones.js';
+import { createZone, updateZoneSpec, removeZone } from './ceilingZones.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
 import { makeGrid, ARCH, rect, assignZoneHeight } from '../plan/planTestFixtures.js';
 
@@ -53,10 +53,10 @@ test('undo: withFinishUndo で区画を足すと 1 エントリ。undo で空、
   const back = g.graph.roomMap.get(room.id).ceilingZones;
   assert.deepEqual(back.map(z => [z.id, z.cells, z.heightMm]), [[id, [c0], 2400]], 'redo で同じ id・セル・高さに戻る');
 
-  // 差分なし: 区画の無い選択を解除してもエントリは積まない
+  // 差分なし: 存在しない区画の解除ではエントリを積まない
   const before = undoManager._undoStack.length;
   const live = g.graph.roomMap.get(room.id); // undo/redo で Room は作り直されるため引き直す
-  withFinishUndo(g.graph, () => live.setCeilingZones(clearZoneCells(g.graph, live, [g.cell(1, 0)])));
+  withFinishUndo(g.graph, () => live.setCeilingZones(removeZone(g.graph, live, 'no-such-zone')));
   assert.equal(undoManager._undoStack.length, before, '差分なしなら積まない');
   undoManager.undo(); // 後続のテストに積みっぱなしにしない
 });
@@ -67,10 +67,10 @@ test('傾斜の区画（S6a）: undo/redo で shape・dims が戻る。同じ形
   const cells = [g.cell(0, 0), g.cell(1, 0)];
   const spec = { heightMm: 2300, shape: 'slope', dims: [1200, 270] };
   const stack = undoManager._undoStack.length;
-  withFinishUndo(g.graph, () => room.setCeilingZones(assignZoneShape(g.graph, room, cells, spec)));
+  withFinishUndo(g.graph, () => room.setCeilingZones(createZone(g.graph, room, cells, spec).zones));
   assert.equal(undoManager._undoStack.length, stack + 1);
   const before = room.ceilingZones.map(z => z.toData());
-  withFinishUndo(g.graph, () => room.setCeilingZones(assignZoneShape(g.graph, room, cells, spec)));
+  withFinishUndo(g.graph, () => room.setCeilingZones(updateZoneSpec(g.graph, room, room.ceilingZones[0].id, spec)));
   assert.equal(undoManager._undoStack.length, stack + 1, '再確定は積まない');
   assert.deepEqual(room.ceilingZones.map(z => z.toData()), before);
   undoManager.undo();
@@ -80,21 +80,22 @@ test('傾斜の区画（S6a）: undo/redo で shape・dims が戻る。同じ形
   undoManager.undo();
 });
 
-test('区画全体を同じ高さで再確定しても区画配列（id・cells）は不変で、withFinishUndo はエントリを積まない', () => {
+test('区画を同じ spec で再確定（updateZoneSpec）しても区画配列（id・cells）は不変で、withFinishUndo はエントリを積まない。新規作成は同じ高さでも別の区画（統合しない）', () => {
   const g = makeGrid([0, 1000, 2000], [0, 1000]);
   const room = g.interior([[0, 0], [1, 0]]);
   const cells = [g.cell(0, 0), g.cell(1, 0)];
   room.setCeilingZones(assignZoneHeight(g.graph, room, cells, 2600));
   const before = room.ceilingZones.map(z => z.toData());
   const stack = undoManager._undoStack.length;
-  withFinishUndo(g.graph, () => room.setCeilingZones(assignZoneHeight(g.graph, room, cells, 2600)));
+  withFinishUndo(g.graph, () => room.setCeilingZones(updateZoneSpec(g.graph, room, before[0].id, { heightMm: 2600, shape: 'flat', dims: [] })));
   assert.deepEqual(room.ceilingZones.map(z => z.toData()), before, 'id も cells も不変');
   assert.equal(undoManager._undoStack.length, stack, 'undo エントリを積まない');
-  // 一部だけ別の高さへ→同じ高さの区画が id を保ったまま残りを受ける
+  // 一部を別の高さの新しい区画へ→さらに元と同じ高さの新しい区画にしても、元の区画へは統合しない
   room.setCeilingZones(assignZoneHeight(g.graph, room, [cells[1]], 2800));
   room.setCeilingZones(assignZoneHeight(g.graph, room, [cells[1]], 2600));
-  assert.equal(room.ceilingZones.length, 1);
-  assert.equal(room.ceilingZones[0].id, before[0].id, '元の区画へ足し戻す（id 維持）');
+  assert.equal(room.ceilingZones.length, 2);
+  assert.equal(room.ceilingZones[0].id, before[0].id);
+  assert.deepEqual(room.ceilingZones[0].cells, [cells[0]], '元の区画のセルは増えない');
 });
 
 test('makeRoomUndefined: 天井区画も空になる', () => {

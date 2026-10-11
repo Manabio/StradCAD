@@ -10,6 +10,7 @@ import { undoManager } from '../undoManager.js';
 import { isDirty, clearDirty } from '../dirtyState.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { roomGroupId, zoneGroupId, stairGroupId } from '../ceiling/ceilingGroups.js';
+import { selectedNodeId, nodePathOf, ceilingPanelTree, ceilingPanelLines } from '../ceiling/ceilingPanelRows.js';
 import { makeGrid, assignZoneHeight } from '../plan/planTestFixtures.js';
 import { CeilingModeState } from './CeilingModeState.js';
 import { FinishModeState } from './FinishModeState.js';
@@ -18,19 +19,44 @@ test('CeilingModeState: 既定値（選択なし・内部タブ）。graph を�
   const state = new CeilingModeState();
   assert.equal(state.graph, undefined);
   assert.equal(state.selectedRoomId, null);
+  assert.deepEqual(state.expandedPath, []);
   assert.equal(state.activeTab, 'interior');
   assert.ok(!(state instanceof FinishModeState));
   state.dispose();
 });
 
-test('CeilingModeState: selectRoom は observable に反映し、null・undefined で解除する', () => {
+test('CeilingModeState: selectedRoomId（raiseSignal 用）は選択中の群 id。三角の開閉（expandedPath）では変わらず再実行されない', () => {
   const state = new CeilingModeState();
   const seen = [];
   const stop = autorun(() => seen.push(state.selectedRoomId));
-  state.selectRoom('r1');
-  state.selectRoom(undefined);
+  state.toggleNode(0, 'room:r1');
+  state.toggleNode(1, 'zone:r1#z');
+  state.toggleNode(0, 'room:r1');
+  assert.deepEqual(seen, [null], '開閉だけでは変わらない＝BottomSheet が縮まない');
+  state.selection = { owner: { kind: 'room', id: 'r1', rowId: 'r1' }, groupId: 'room:r1', cellKeys: new Set() };
+  state.dispose();
   stop();
-  assert.deepEqual(seen, [null, 'r1', null]);
+  assert.deepEqual(seen, [null, 'room:r1', null]);
+});
+
+test('CeilingModeState（S12c）: toggleNode(depth, id) は、開いている id なら その段以下を畳み、別の id ならその段を付け替えて深い段を畳む（各段1つだけ）', () => {
+  const state = new CeilingModeState();
+  state.toggleNode(0, 'room:p');
+  state.toggleNode(1, 'room:c');
+  state.toggleNode(2, 'zone:c#z');
+  assert.deepEqual(state.expandedPath, ['room:p', 'room:c', 'zone:c#z']);
+  state.toggleNode(2, 'zone:c#z');
+  assert.deepEqual(state.expandedPath, ['room:p', 'room:c'], '開いている段のトグルでその段を畳む');
+  state.toggleNode(2, 'zone:c#z');
+  state.toggleNode(1, 'room:c');
+  assert.deepEqual(state.expandedPath, ['room:p'], '途中の段を畳むと深い段も畳まれる');
+  state.toggleNode(1, 'room:c');
+  state.toggleNode(1, 'zone:p#y');
+  assert.deepEqual(state.expandedPath, ['room:p', 'zone:p#y'], '別のノードに付け替えると深い段は畳まれる');
+  state.toggleNode(0, 'room:q');
+  assert.deepEqual(state.expandedPath, ['room:q'], '最上位の付け替えで子の段も畳まれる');
+  state.toggleNode(0, 'room:q');
+  assert.deepEqual(state.expandedPath, []);
 });
 
 test('CeilingModeState: setActiveTab は interior / stair を切り替える', () => {
@@ -50,10 +76,11 @@ test('【失敗系】CeilingModeState: 未知のタブ名は例外で、activeTa
 
 test('CeilingModeState: dispose で選択を解除する（タブは保つ）。dispose の二重呼びも例外にならない', () => {
   const state = new CeilingModeState();
-  state.selectRoom('r1');
+  state.toggleNode(0, 'room:r1');
   state.setActiveTab('stair');
   state.dispose();
   assert.equal(state.selectedRoomId, null);
+  assert.deepEqual(state.expandedPath, []);
   assert.equal(state.activeTab, 'stair');
   assert.doesNotThrow(() => state.dispose());
 });
@@ -76,7 +103,7 @@ function setup() {
 function drag(state, g, points, { tap = false } = {}) {
   state.startDrag(g.graph, ...ctr(...points[0]));
   for (const p of points.slice(1)) state.updateDrag(g.graph, ...ctr(...p), 0);
-  state.commitDrag({ tap });
+  state.commitDrag({ tap, ctx: { graph: g.graph, project: {} } });
 }
 
 test('CeilingModeState: start→update→commit で selection・selectedRoomId・activeTab が決まる（部屋 → 内部タブ）', () => {
@@ -85,7 +112,7 @@ test('CeilingModeState: start→update→commit で selection・selectedRoomId�
   state.setActiveTab('stair');
   drag(state, g, [[0, 0], [1, 0]]);
   assert.equal(state.dragState, null);
-  assert.equal(state.selectedRoomId, a.id);
+  assert.equal(state.selectedRoomId, roomGroupId(a.id));
   assert.equal(state.activeTab, 'interior');
   assert.deepEqual([...state.selection.cellKeys].sort(), [g.cell(0, 0), g.cell(1, 0)].sort());
   assert.equal(state.selection.owner.id, a.id);
@@ -96,49 +123,44 @@ test('CeilingModeState: 階段のセルを選ぶと selectedRoomId は stair.id�
   const { g, stair } = setup();
   const state = new CeilingModeState();
   drag(state, g, [[2, 0]]);
-  assert.equal(state.selectedRoomId, stair.id);
+  assert.equal(state.selectedRoomId, stairGroupId(stair.id));
   assert.equal(state.activeTab, 'stair');
 });
 
-test('CeilingModeState（S10）: commitDrag で expandedRowId が owner.rowId になる（部屋・階段とも）。別の行を選べば移る。確定前は変わらない', () => {
+test('CeilingModeState（S12c）: commitDrag で expandedPath が nodePathOf（部屋は [room:id]、階段は [stair:id]）になる。確定前は変わらない', () => {
   const { g, a, stair } = setup();
   const state = new CeilingModeState();
-  assert.equal(state.expandedRowId, null);
+  assert.deepEqual(state.expandedPath, []);
   state.startDrag(g.graph, ...ctr(0, 0));
-  assert.equal(state.expandedRowId, null, '確定前は展開しない');
-  state.commitDrag();
-  assert.equal(state.expandedRowId, a.id);
+  assert.deepEqual(state.expandedPath, [], '確定前は展開しない');
+  state.commitDrag({ ctx: { graph: g.graph, project: {} } });
+  assert.deepEqual(state.expandedPath, [roomGroupId(a.id)]);
   drag(state, g, [[2, 0]]);
-  assert.equal(state.expandedRowId, stair.id);
+  assert.deepEqual(state.expandedPath, [stairGroupId(stair.id)]);
 });
 
-test('CeilingModeState（S10）: 空白タップ（dragState なしの commitDrag({tap:true})）で選択・強調・展開をすべて解除する', () => {
+test('CeilingModeState（S12c）: 部分指定の子の区画を選ぶと expandedPath は 親→子→区画 の3段（キャンバス選択）', () => {
+  const g = makeGrid(XS, YS);
+  const parent = g.interior([[0, 0], [1, 0], [2, 0]]);
+  const child = g.graph.addRoom(new Set([g.cell(2, 0)]), '子', undefined, new Set([parent.id]));
+  child.setCeilingZones(assignZoneHeight(g.graph, child, [g.cell(2, 0)], 2300));
+  const zid = child.ceilingZones[0].id;
+  const state = new CeilingModeState();
+  drag(state, g, [[2, 0]]);
+  assert.equal(state.selection.groupId, zoneGroupId(child.id, zid));
+  assert.deepEqual(state.expandedPath, [roomGroupId(parent.id), roomGroupId(child.id), zoneGroupId(child.id, zid)]);
+  assert.equal(state.selectedRoomId, zoneGroupId(child.id, zid));
+});
+
+test('CeilingModeState（S12c）: 空白タップ（dragState なしの commitDrag({tap:true})）で選択・展開をすべて解除する', () => {
   const { g } = setup();
   const state = new CeilingModeState();
   drag(state, g, [[0, 0]]);
-  assert.notEqual(state.expandedRowId, null);
+  assert.notDeepEqual(state.expandedPath, []);
   state.commitDrag({ tap: true });
   assert.equal(state.selection, null);
   assert.equal(state.selectedRoomId, null);
-  assert.equal(state.expandedRowId, null);
-});
-
-test('CeilingModeState（S10）: selectRoom で展開（アコーディオン＝1行だけ）、toggleExpandedRow で開閉、selectRoom(null)・dispose で null', () => {
-  const state = new CeilingModeState();
-  state.selectRoom('r1');
-  assert.equal(state.expandedRowId, 'r1');
-  state.toggleExpandedRow('r1');
-  assert.equal(state.expandedRowId, null, '開いている行のトグルで畳む');
-  state.toggleExpandedRow('r1');
-  assert.equal(state.expandedRowId, 'r1');
-  state.toggleExpandedRow('r2');
-  assert.equal(state.expandedRowId, 'r2', '別の行を開くと前の行は閉じる');
-  assert.equal(state.selectedRoomId, 'r1', '三角は選択を変えない');
-  state.selectRoom(null);
-  assert.equal(state.expandedRowId, null);
-  state.toggleExpandedRow('r1');
-  state.dispose();
-  assert.equal(state.expandedRowId, null);
+  assert.deepEqual(state.expandedPath, []);
 });
 
 // S12b で書き換え（旧 S2: 「なぞったセルだけ」がプレビューだった。開始 1 セル→A を超えた分は入らない→戻って 2 セル、確定前は selection に出ない）。
@@ -171,7 +193,7 @@ test('CeilingModeState: 購読は 開始・確定 でだけ再実行され、sel
   state.updateDrag(g.graph, ...ctr(0, 0), 100);
   state.updateDrag(g.graph, ...ctr(1, 0), 100);
   assert.equal(seen.length, 2, 'select の update では再実行されない');
-  state.commitDrag();
+  state.commitDrag({ ctx: { graph: g.graph, project: {} } });
   assert.equal(seen.length, 3, '確定');
   assert.deepEqual(seen[2], [0, 'sel']);
   assert.equal(isObservable(state.selection), false, 'selection は observable.ref');
@@ -195,7 +217,7 @@ test('【失敗系】CeilingModeState: 選べないセルから始めたドラ�
   const before = state.selection;
   drag(state, g, [[0, 1], [1, 1]], { tap: false });
   assert.equal(state.selection, before);
-  assert.equal(state.selectedRoomId, a.id);
+  assert.equal(state.selectedRoomId, roomGroupId(a.id));
   assert.equal(state.dragState, null);
 });
 
@@ -205,7 +227,7 @@ test('CeilingModeState: タップは常に置き換え（別の部屋のタッ�
   drag(state, g, [[0, 0], [1, 0]]);
   drag(state, g, [[3, 0]], { tap: true });
   assert.deepEqual([...state.selection.cellKeys], [g.cell(3, 0)]);
-  assert.equal(state.selectedRoomId, b.id);
+  assert.equal(state.selectedRoomId, roomGroupId(b.id));
 });
 
 test('CeilingModeState: cancelDrag は dragState だけ消し、選択は保つ。関門の中断は cancelDrag?.() の名前に乗る', () => {
@@ -232,15 +254,19 @@ test('CeilingModeState: dispose で選択・ドラッグ・強調行がすべて
   assert.equal(state.selectedCellKeys.size, 0);
 });
 
-test('CeilingModeState: 別の行の selectRoom で選択を解除し、同じ行なら保つ', () => {
+test('CeilingModeState（S12c）: パネルの行クリック selectNode は別の群の選択に置き換え、タブは切り替えない（キャンバスの選択は所属でタブを切り替える）', () => {
   const { g, a, b } = setup();
   const state = new CeilingModeState();
   drag(state, g, [[0, 0]]);
-  state.selectRoom(a.id);
-  assert.ok(state.selection, '同じ行のタップでは保つ');
-  state.selectRoom(b.id);
-  assert.equal(state.selection, null);
-  assert.equal(state.selectedRoomId, b.id);
+  state.selectNode(g.graph, roomGroupId(b.id));
+  assert.equal(state.selection.groupId, roomGroupId(b.id));
+  assert.deepEqual([...state.selection.cellKeys], [g.cell(3, 0)]);
+  assert.deepEqual(state.expandedPath, [roomGroupId(b.id)]);
+  state.setActiveTab('stair');
+  state.selectNode(g.graph, roomGroupId(a.id)); // 階段タブの木に部屋ノードは無い
+  assert.equal(state.activeTab, 'stair', 'タブは切り替えない');
+  assert.equal(state.selection.groupId, roomGroupId(a.id), '群はあるので選択は作る');
+  assert.deepEqual(state.expandedPath, [], '今のタブの木に無ければ展開は畳む');
 });
 
 // ---- S3: 材データ（init）----
@@ -399,12 +425,12 @@ test('S12b 群選択: タップでも途中までのドラッグでも、選択�
   const { g, a, k } = groupSetup();
   const all = [0, 1, 2, 3].map(k).sort();
   const s1 = new CeilingModeState();
-  tapCell(s1, g, 1);
+  tapCell(s1, g, 1, 0, gctx(g.graph));
   assert.deepEqual([...s1.selection.cellKeys].sort(), all, 'タップ 1 セルでも A の 4 セル全部');
   assert.equal(s1.selection.groupId, roomGroupId(a.id));
-  assert.equal(s1.selectedRoomId, a.id);
+  assert.equal(s1.selectedRoomId, roomGroupId(a.id));
   const s2 = new CeilingModeState();
-  stroke(s2, g, [[0, 0], [1, 0]]);
+  stroke(s2, g, [[0, 0], [1, 0]], gctx(g.graph));
   assert.deepEqual([...s2.selection.cellKeys].sort(), all, '途中までのドラッグでも群全体');
   assert.equal(s2.dragState, null);
 });
@@ -426,7 +452,7 @@ test('S12b 作成: 選択中の残りを再タップすると 1 セルの区画�
   assert.equal(isDirty(), true);
   assert.equal(state.selection.groupId, zoneGroupId(a.id, z.id), '作った区画の群を選択');
   assert.deepEqual([...state.selection.cellKeys], [k(1)]);
-  assert.equal(state.expandedRowId, a.id);
+  assert.deepEqual(state.expandedPath, [roomGroupId(a.id), zoneGroupId(a.id, z.id)], '作った区画の行まで開く');
   a.setOverride('ceilingHeight', '2600');
   assert.equal(a.ceilingZones[0].heightMm, 2500, '数値固定: 親 CH に追従しない');
   undoManager.undo();
@@ -509,10 +535,10 @@ test('S12b 選択の置換: 別の群のタップで置き換え、空白のタ�
   assert.deepEqual([...state.selection.cellKeys], [k(3)]);
   tapCell(state, g, 4, 0, gctx(graph));
   assert.equal(state.selection.groupId, roomGroupId(b.id));
-  assert.equal(state.selectedRoomId, b.id);
+  assert.equal(state.selectedRoomId, roomGroupId(b.id));
   tapCell(state, g, 0, 1, gctx(graph)); // 空白
   assert.equal(state.selection, null);
-  assert.equal(state.expandedRowId, null);
+  assert.deepEqual(state.expandedPath, []);
   assert.equal(a.ceilingZones.length, 1, '置換・解除では区画を作らない');
 });
 
@@ -554,7 +580,7 @@ test('S12b 作成（階段）: 直進階段の残りを再ドラッグすると�
   assert.deepEqual([z.shape, z.heightMm, [...z.dims]], ['slope', roomCeilingHeight(graph, pair).mm, [1600, 0]], 'ライズ = 200×16 × 2/4');
   assert.equal(state.selection.groupId, zoneGroupId(pair.id, z.id));
   assert.equal(state.activeTab, 'stair');
-  assert.equal(state.expandedRowId, pair.id);
+  assert.deepEqual(state.expandedPath, [stairGroupId(stair.id), zoneGroupId(pair.id, z.id)], '階段タブでは 階段→区画');
   clearDirty();
   undoManager.undo();
   assert.equal(roomOf(graph, pair).ceilingZones.length, 0);
@@ -591,10 +617,14 @@ test('【失敗系】S12b: 対の部屋の無い階段の残りでは区画を�
   assert.equal(g.graph.rooms.length, 0);
 });
 
-test('【失敗系】S12b: intent create で ctx なしの commitDrag は例外（プログラミングエラー）。dragState は残さず、区画は作られない。select は ctx なしでよい', () => {
+test('【失敗系】S12b/S12c: ctx なしの commitDrag は select でも create でも例外（プログラミングエラー）。dragState は残さず、選択も区画も作られない', () => {
   const { g, graph, a } = groupSetup();
   const state = new CeilingModeState();
-  assert.doesNotThrow(() => tapCell(state, g, 0, 0), 'select は ctx 不要');
+  state.startDrag(g.graph, ...ctr(0, 0));
+  assert.throws(() => state.commitDrag({ tap: true }), /ctx/);
+  assert.equal(state.dragState, null);
+  assert.equal(state.selection, null);
+  tapCell(state, g, 0, 0, gctx(graph));
   state.startDrag(g.graph, ...ctr(1, 0));
   assert.throws(() => state.commitDrag({ tap: true }), /ctx/);
   assert.equal(state.dragState, null);
@@ -609,17 +639,70 @@ test('S12b selectNode: 群 id で選択を作る（行・タブも合う）。�
   const state = new CeilingModeState();
   state.selectNode(graph, zoneGroupId(a.id, zid));
   assert.equal(state.selection.groupId, zoneGroupId(a.id, zid));
-  assert.equal(state.selectedRoomId, a.id);
-  assert.equal(state.expandedRowId, a.id);
+  assert.equal(state.selectedRoomId, zoneGroupId(a.id, zid));
+  assert.deepEqual(state.expandedPath, [roomGroupId(a.id), zoneGroupId(a.id, zid)]);
   state.selectNode(graph, roomGroupId(b.id));
   assert.equal(state.selection.groupId, roomGroupId(b.id));
   const sel = state.selection;
   state.selectNode(graph, roomGroupId(a.id)); // A の残りは 0 セル（群なし）
   assert.equal(state.selection, sel, '選択は変えない');
-  assert.equal(state.expandedRowId, a.id, '展開だけ');
+  assert.deepEqual(state.expandedPath, [roomGroupId(a.id)], '展開だけ');
   state.selectNode(graph, 'bogus');
-  assert.equal(state.expandedRowId, a.id);
+  assert.deepEqual(state.expandedPath, [], '木に無いノードは展開を畳む');
   assert.equal(state.selection, sel);
+});
+
+test('S12c 持ち越し(1): 区画を作って undo すると、選択が指す区画の群は無くなる→パネルは選択なし扱い（selectedNodeId null）。その群 id の nodePathOf は null で、選び直しの展開は []', () => {
+  const { g, graph, a } = groupSetup();
+  const state = new CeilingModeState();
+  tapCell(state, g, 0, 0, gctx(graph));
+  tapCell(state, g, 1, 0, gctx(graph)); // 区画を作成して選択
+  const zoneId = state.selection.groupId;
+  assert.equal(selectedNodeId(graph, state.selection), zoneId, '作成直後は選択中のノード');
+  assert.equal(state.expandedPath.length, 2);
+  clearDirty();
+  undoManager.undo();
+  assert.equal(state.selection.groupId, zoneId, '選択は undo で追従しない（既知の限界）');
+  assert.equal(selectedNodeId(graph, state.selection), null, '群が無い選択は選択なし扱い');
+  assert.equal(nodePathOf(graph, zoneId, 'interior'), null);
+  state.selectNode(graph, zoneId);
+  assert.deepEqual(state.expandedPath, [], '木に無いノードの選択は展開を畳む');
+  assert.equal(roomOf(graph, a).ceilingZones.length, 0);
+});
+
+test('S12c Minor4: 同じ対の部屋の2本の階段にまたがる区画は両方の階段の下に出る。2本目の下の区画行のクリックは、その行の経路（line.path）を開く', () => {
+  const g = makeGrid(XS, YS);
+  const pair = g.feature([[0, 0], [1, 0]], RoomFeature.STAIR);
+  const s1 = g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(0, 0)]) });
+  const s2 = g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(1, 0)]) });
+  pair.setCeilingZones(assignZoneHeight(g.graph, pair, [g.cell(0, 0), g.cell(1, 0)], 2500));
+  const zid = zoneGroupId(pair.id, pair.ceilingZones[0].id);
+  const [S1, S2] = [stairGroupId(s1.id), stairGroupId(s2.id)];
+  const lines = ceilingPanelLines(ceilingPanelTree(g.graph, 'stair'), [S2]);
+  const under2 = lines.find(l => l.type === 'zone' && l.path[0] === S2);
+  assert.deepEqual(under2.path, [S2, zid]);
+  const state = new CeilingModeState();
+  state.setActiveTab('stair');
+  state.selectNode(g.graph, zid, under2.path);
+  assert.deepEqual(state.expandedPath, [S2, zid], '押された行（2本目の階段の下）の経路');
+  assert.equal(state.selection.groupId, zid);
+  state.selectNode(g.graph, zid);
+  assert.deepEqual(state.expandedPath, [S1, zid], '経路を渡さなければ nodePathOf＝最初に見つかる側（既知の限界）');
+});
+
+test('S12c 持ち越し(2): 部屋 CH がレンジ表記のとき、残りから作る新区画の高さは既定 CH（roomCeilingHeight().mm のフォールバック）で固定する', () => {
+  const { g, graph, a } = groupSetup();
+  a.setOverride('ceilingHeight', '2300～3500');
+  const expected = roomCeilingHeight(graph, a);
+  assert.equal(expected.isFallback, true, '前提: レンジ表記は数値化できず既定値に落ちる');
+  const state = new CeilingModeState();
+  tapCell(state, g, 0, 0, gctx(graph));
+  tapCell(state, g, 1, 0, gctx(graph));
+  assert.equal(a.ceilingZones.length, 1);
+  assert.equal(a.ceilingZones[0].heightMm, expected.mm);
+  assert.equal(a.getFinishInfo().ceilingHeight, '2300～3500', '部屋の CH 欄は変えない');
+  clearDirty();
+  undoManager.undo();
 });
 
 test('S12b: 群を選び直すと選択の cellKeys は選んだ時点の写し（undo で解除しない従来規則）', () => {

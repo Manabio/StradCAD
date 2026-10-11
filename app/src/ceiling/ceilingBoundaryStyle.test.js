@@ -4,10 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { markSameHeightCeilingBoundaries, sameHeightBoundarySegments, CEILING_BOUNDARY_STYLE } from './ceilingBoundaryStyle.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
-import { assignZoneShape } from './ceilingZones.js';
 import { planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp, drawnPrimitives } from '../plan/planSolidsLayerFilter.js';
 import { planSectionFigureUp } from '../plan/planSectionUp.js';
-import { makeGrid, rect, assignZoneHeight } from '../plan/planTestFixtures.js';
+import { makeGrid, rect, assignZoneHeight, assignZoneSpec } from '../plan/planTestFixtures.js';
 import { setRoomCeilingShape } from './roomCeilingShape.js';
 
 const CUT = 1500;
@@ -250,13 +249,13 @@ test('傾斜の区画と平面の境界は通常の細線（グレーの印な�
   const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
   const room = g.interior([[0, 0], [1, 0], [2, 0]]);
   room.setOverride('ceilingHeight', '2400');
-  room.setCeilingZones(assignZoneShape(g.graph, room, [g.cell(1, 0)], { heightMm: 2400, shape: 'slope', dims: [1000, 0] }));
+  room.setCeilingZones(assignZoneSpec(g.graph, room, [g.cell(1, 0)], { heightMm: 2400, shape: 'slope', dims: [1000, 0] }));
   const lineOnly = prims => ceilingLines(prims).filter(p => p.kind === 'line'); // 傾斜の注記（arrow・text）は除く
   const ceil = lineOnly(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
   assert.ok(onX(ceil, 2000).length > 0, '前提: 傾斜の左端（基準高＝低い側）と平面の境界に線が出る');
   assert.ok(ceil.every(p => p.style === undefined), `傾斜に接する境界にグレーの印が付いている: ${JSON.stringify(ceil.filter(p => p.style).map(norm))}`);
   // 対照: 傾斜を平面（同じ高さ）に置き換えるとグレーの印が付く
-  room.setCeilingZones(assignZoneShape(g.graph, room, [g.cell(1, 0)], { heightMm: 2400, shape: 'flat', dims: [] }));
+  room.setCeilingZones(assignZoneSpec(g.graph, room, [g.cell(1, 0)], { heightMm: 2400, shape: 'flat', dims: [] }));
   const flatCeil = lineOnly(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT }));
   assert.ok(flatCeil.some(p => p.style === CEILING_BOUNDARY_STYLE), '対照: 平面どうしならグレー');
 });

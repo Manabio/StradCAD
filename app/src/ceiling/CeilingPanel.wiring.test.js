@@ -27,8 +27,8 @@ test('【配線】S10: 材の書込み（setOverride／clearOverride）は行の
   assert.equal(count(/room\.setOverride\(/g), 1);
   assert.equal(count(/room\.clearOverride\(/g), 1);
   assert.match(src, /withFinishUndo\(graph, \(\) => \(v === '' \? room\.clearOverride\(field\.key\) : room\.setOverride\(field\.key, v\)\)\)/);
-  assert.equal(count(/graph\.roomMap\.get\(row\.id\)/g), 0, '行から部屋を直引きしない（書込み先は target、内訳は rowZoneDetail）');
-  assert.match(src, /^\s*<RowMaterialSelect graph=\{graph\} mode=\{mode\} room=\{target\} field=\{f\} \/>\s*$/m, '書込み先は target（ceilingWriteTargetRoom）');
+  assert.equal(count(/graph\.roomMap\.get\(/g), 0, 'パネルは部屋を直引きしない（書込み先は木のノードの room）');
+  assert.match(src, /^\s*<RowMaterialSelect graph=\{graph\} mode=\{mode\} room=\{node\.room\} field=\{f\} \/>\s*$/m, '書込み先はノードの room');
 });
 
 test('【配線】入力の検証は parseCeilingZoneDraft（失敗は欄の下の1行へ）。区画は requireFlatHeight。Enter で確定、keydown は伝播させない', () => {
@@ -54,7 +54,6 @@ test('【配線】円弧・ドームの確定ガード（未対応エラー）�
 
 test('【配線】S12b: 区画の欄は区画単位（key={zone.id}・props は graph/room/zone/spanMm）。選択（selection）を渡さない', () => {
   assert.equal(count(/<CeilingZoneFields /g), 1, '欄の描画は1か所だけ');
-  assert.match(src, /^\s*return zone && room \? <CeilingZoneFields key=\{zone\.id\} graph=\{graph\} room=\{room\} zone=\{zone\} spanMm=\{spanMm\} \/> : null;\s*$/m);
   assert.match(src, /^const CeilingZoneFields = observer\(\(\{ graph, room, zone, spanMm \}\) => \{\s*$/m);
   assert.match(src, /^\s*const \[draft, setDraft\] = useState\(\(\) => zoneDraft\(zone\)\);\s*$/m, '下書きは useState（MobX に入れない）。初期値は区画の値');
   assert.ok(!/selection=\{/.test(src), '欄へ選択を渡している');
@@ -67,19 +66,24 @@ test('【配線】S12b: 部屋の残りの欄 RoomCeilingFields は 天井高→
   assert.match(src, /^\s*if \(accepted\) setRoomCeilingShape\(room, result\.value\);\s*$/m);
   assert.match(src, /^\s*const result = parseCeilingZoneDraft\(\{ \.\.\.draft, height: '' \}, \{ spanMm \}\);/m, '形状・寸法だけ検証し、天井高は CH の規則で判定');
   assert.ok(src.indexOf('applyRoomCeilingHeightDraft(room') > src.indexOf('withFinishUndo(graph, () => {'), '書込みは withFinishUndo の中');
-  assert.match(src, /^\s*if \(!roomHasCeiling\(room\)\) return <div style=\{fieldsBoxStyle\}>天井なし<\/div>;\s*$/m);
-  assert.match(src, /階段の残りは天井を持ちません。セルを再タップ／ドラッグで区画を作れます/);
+  assert.match(src, /^\s*if \(!roomHasCeiling\(room\)\) return <div style=\{fieldsBoxStyle\}>天井なし<\/div>;\s*$/m, '欄は roomHasCeiling 条件（偽なら天井なし。木の側でも roomFields は天井を持つ部屋だけ）');
 });
 
-test('【配線】S11: 群の欄は選択した部屋の展開行の中だけ（上段なし）。選択ブロック（summary が真のとき）の後に内訳が続く', () => {
-  assert.equal(count(/<GroupFields /g), 1, '欄の描画は1か所だけ');
-  assert.match(src, /^\s*\{summary && \(\s*$/m);
-  assert.match(src, /^\s*<GroupFields graph=\{graph\} info=\{groupInfo\} \/>\s*$/m);
-  assert.match(src, /^\s*const groupInfo = summary \? selectionGroupInfo\(graph, mode\.selection\) : null;\s*$/m);
-  assert.ok(src.indexOf('<GroupFields ') > src.indexOf('const CeilingRow'), '欄は CeilingRow の中（上段ではない）');
-  assert.ok(src.indexOf('<GroupFields ') < src.indexOf('<ZoneDetail graph'), '選択ブロックが内訳より上');
+test('【配線】S12c: 欄は木の行の種類で描く。部屋の欄 RoomCeilingFields は roomFields の行だけ（key は部屋の値で作り直す）、区画の欄は zoneFields の行だけ（key={node.zone.id}）。上段・選択ブロックは無い', () => {
+  assert.equal(count(/<RoomCeilingFields /g), 1);
+  assert.equal(count(/<CeilingZoneFields /g), 1);
+  assert.match(src, /^\s*if \(line\.type === 'roomFields'\) \{\s*$/m);
+  assert.match(src, /^\s*if \(line\.type === 'zoneFields'\) \{\s*$/m);
+  assert.match(src, /^\s*<CeilingZoneFields key=\{node\.zone\.id\} graph=\{graph\} room=\{node\.room\} zone=\{node\.zone\} spanMm=\{selectionSpanMm\(graph, \{ cellKeys: node\.cells \}\)\} \/>\s*$/m);
+  assert.match(src, /^\s*<RoomCeilingFields key=\{key\} graph=\{graph\} room=\{node\.room\} spanMm=\{selectionSpanMm\(graph, \{ cellKeys: node\.cells \}\)\} \/>\s*$/m);
+  assert.match(src, /^\s*if \(line\.type === 'note'\) return /m, '天井なし・区画なしは注記の1行');
+  assert.ok(!/GroupFields|ZoneDetail|summary\.cellCount|選択中: /.test(src), '旧の選択ブロック・内訳が残っている');
   assert.ok(!/\{mode\.selection && \(/.test(src), '上段の選択ガードが残っている');
-  assert.ok(!/選択中: \{summary\.name\}/.test(src), '上段の要約が残っている');
-  assert.match(src, /<CeilingRow key=\{row\.id\} graph=\{graph\} mode=\{mode\} row=\{row\} \/>/);
   assert.match(src, /^export const CeilingPanel = observer\(\(\{ graph, mode, isLandscape \}\) => \{\s*$/m, '階高は受けない（階段の傾斜の初期値は CeilingModeState.commitDrag）');
+});
+
+test('【配線】S12c: 区画の行は天井材・仕上げの2列を colSpan=2 の1セルにまとめる。部屋・階段の行だけが材の select を持つ', () => {
+  assert.match(src, /^\s*\{node\.type === 'zone' \? \(\s*$/m);
+  assert.match(src, /^\s*<td colSpan=\{2\} style=\{\{ \.\.\.cellStyle, overflow: 'hidden', textOverflow: 'ellipsis' \}\}>\{node\.summary\}<\/td>\s*$/m);
+  assert.equal(count(/<RowMaterialSelect /g), 1);
 });

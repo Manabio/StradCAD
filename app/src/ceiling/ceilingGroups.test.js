@@ -84,6 +84,22 @@ test('不変条件: ceilingSurfacesOf の各面は対応する群のセルと一
   assert.ok(![...groups.values()].some(x => x.kind === 'stair' && surfaces.some(s => s.roomId === x.roomId && !s.zoneId)));
 });
 
+test('不変条件（S12c 持ち越し4）: 階段の roomId が天井を持つ屋内部屋を指し、階段のセルが部屋の外にあっても、階段の残りのセルは部屋の「残り」の面に混ざらず、面と群が一致する', () => {
+  const g = makeGrid(XS, YS);
+  const r = g.interior([[0, 0], [1, 0]]);
+  const stair = g.graph.addStair({ type: StairType.STRAIGHT, roomId: r.id, cells: new Set([g.cell(2, 0), g.cell(3, 0)]) });
+  r.setCeilingZones(assignZoneHeight(g.graph, r, [g.cell(3, 0)], 2500)); // 階段所属のセル(3,0) は区画に入る。(2,0) は階段の残り
+  const { groups } = groupsOf(g.graph);
+  assert.deepEqual(sortedCells(groups.get(stairGroupId(stair.id))), [g.cell(2, 0)], '階段の残り');
+  assert.deepEqual(sortedCells(groups.get(roomGroupId(r.id))), [g.cell(0, 0), g.cell(1, 0)].sort(), '部屋の残りは部屋所属のセルだけ');
+  const surfaces = ceilingSurfacesOf(g.graph);
+  const rest = surfaces.find(s => s.roomId === r.id && !s.zoneId);
+  assert.deepEqual(rest.rects.map(rectKey).sort(), rectsOfCells(g.graph, groups.get(roomGroupId(r.id)).cells), '残りの面は部屋の残りの群と一致（階段のセルを含まない）');
+  const zone = surfaces.find(s => s.zoneId);
+  assert.deepEqual(zone.rects.map(rectKey).sort(), rectsOfCells(g.graph, groups.get(zoneGroupId(r.id, r.ceilingZones[0].id)).cells), '階段所属のセルの区画は区画の面');
+  assert.equal(surfaces.length, 2, '階段の残りは面にならない');
+});
+
 test('群は部屋の並び順に依存しない（reorderRooms の全順列で同じ群）', () => {
   const { graph, a, child, pair, b } = setup();
   const ids = [a.id, child.id, pair.id, b.id];

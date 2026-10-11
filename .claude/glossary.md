@@ -489,6 +489,9 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 ## 天井区画
 天伏で選んだセル群ごとの天井の高さと形状・寸法。`Room.ceilingZones`（不変の`CeilingZone`）に持ち、部屋のCH欄には書かない。設計意図は`.claude/ceiling-model.md`「天井区画（S5）」「形状と寸法（S6a）」。
 
+## 群（天伏）
+天伏の選択の単位。所有された天井セルがちょうど1つの群に入る（区画の群／部屋の残り／階段の残り）。群 id は `room:<id>`・`zone:<部屋id>#<区画id>`・`stair:<id>` で、天伏パネルのノード id と共用する。設計意図は`.claude/ceiling-model.md`「構造（S1a'）」「選択（S2）」。
+
 ## 天井芯
 天伏の天井セルだけを割る線（CL の種別`'ceiling'`。`discipline:'ceiling'`・`labeled:false`・階固有）。天伏でだけ描き・操作でき（二点鎖線・マゼンタ。描画エリアの長押しメニューで追加・移動・削除・延長。S8b）、仕上げ・壁・階段・構造・展開図のセルは割らない。通り芯・中心線は天伏では描くだけの目印。設計意図は`.claude/ceiling-model.md`「天井芯（S8a）」。
 

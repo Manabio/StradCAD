@@ -32,6 +32,22 @@ test('書込みと読戻し: slope [500,90]・arc [300,0]・dome [400]。キー�
   assert.equal(room.customOverrides.get(ROOM_CEILING_DIMS_KEY), '500,90');
 });
 
+test('S12c 持ち越し3: dims は固定小数表記で書く（指数 "1e+21" を保存しない）。往復で同じ値に戻る。小数・通常の整数は従来どおり', () => {
+  const room = room1();
+  setRoomCeilingShape(room, { shape: 'slope', dims: [1e21, 90] });
+  assert.equal(room.customOverrides.get(ROOM_CEILING_DIMS_KEY), '1000000000000000000000,90');
+  assert.ok(!/e/i.test(room.customOverrides.get(ROOM_CEILING_DIMS_KEY)));
+  assert.deepEqual(roomCeilingShapeOf(room), { shape: 'slope', dims: [1e21, 90] }, '指数表記だと読み口が平面に落としていた');
+  setRoomCeilingShape(room, { shape: 'slope', dims: [1.25, 270] });
+  assert.equal(room.customOverrides.get(ROOM_CEILING_DIMS_KEY), '1.25,270');
+  assert.deepEqual(roomCeilingShapeOf(room), { shape: 'slope', dims: [1.25, 270] });
+  for (const v of [1e-7, 5e-7, 1.2345e-6]) { // 指数表記になる微小値も固定小数で書き、0 に潰れず読み戻せる
+    setRoomCeilingShape(room, { shape: 'dome', dims: [v] });
+    assert.ok(!/e/i.test(room.customOverrides.get(ROOM_CEILING_DIMS_KEY)), String(v));
+    assert.deepEqual(roomCeilingShapeOf(room), { shape: 'dome', dims: [v] }, `往復 ${v}`);
+  }
+});
+
 test('平面を書くと2キーとも消える。不正な指定（正規化で平面に落ちる）も同じ', () => {
   const room = room1();
   setRoomCeilingShape(room, { shape: 'slope', dims: [500, 90] });

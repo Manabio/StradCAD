@@ -10,8 +10,7 @@ import { LodLevel } from '../viewport.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { planSolids } from './planSolids.js';
 import { isInsideFootprint } from './planGeometry.js';
-import { makeGrid, makeRoomGraph, addBeamH, addColumnAt, linesOf } from './planTestFixtures.js';
-import { assignZoneShape } from '../ceiling/ceilingZones.js';
+import { makeGrid, makeRoomGraph, addBeamH, addColumnAt, linesOf, assignZoneSpec } from './planTestFixtures.js';
 
 const CUT = 1500;
 const prim = (kind, cls = 'below') => ({ kind: 'line', key: `${kind}-${cls}`, points: [0, 0, 1, 0], weight: 'thin', cls, source: { kind, id: 'x' } });
@@ -342,7 +341,7 @@ test('見上げ: 壁のある部屋では天井の外形は壁（切断）が隠
 function slopeScene() {
   const self = makeGrid([0, 4000], [0, 4000], { id: 'low', startFloor: 1 });
   const room = self.interior([[0, 0]]);
-  room.setCeilingZones(assignZoneShape(self.graph, room, [self.cell(0, 0)], { heightMm: 2400, shape: 'slope', dims: [2000, 0] }));
+  room.setCeilingZones(assignZoneSpec(self.graph, room, [self.cell(0, 0)], { heightMm: 2400, shape: 'slope', dims: [2000, 0] }));
   return { self, room };
 }
 const markPrims = prims => prims.filter(p => p.kind === 'arrow' || p.kind === 'text');

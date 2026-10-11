@@ -3,7 +3,7 @@
 // moku4.stq（在来木造・3階建て）の2階の主寝室（3640..7280 × -7280..-3640。仕上げのセルは1つ）に、天井芯を縦に1本
 // （x=5460。主寝室の中央）引き、天井芯の両側の天井セルへ高さの違う区画（左 2400・右 3000）を付ける。
 //   - 天井芯は discipline 'ceiling'・labeled:false。延長は通り芯 Y-7280・Y-3640 を直交端部に参照する（EXTENT_ANCHOR_STYLE.ceiling='ref'）。
-//   - 区画のセルは天井セル（仕上げのセルを天井芯でさらに割った格子）の key。書込みは本番と同じ ceiling/ceilingZones.js assignZoneHeight 相当。
+//   - 区画のセルは天井セル（仕上げのセルを天井芯でさらに割った格子）の key。書込みは本番と同じ ceiling/ceilingZones.js createZone（区画ごとに新規。統合しない）。
 // 手順:
 //   1. 往復テスト先行: 元の moku4 を「書いて読み直して」部屋・区画・CL のダイジェストが一致することを、編集前に確かめる。
 //   2. 編集（天井芯＋区画）。仕上げ・平面（見下げ）の出力が編集前後で変わらない（天井芯が他モードに漏れない）ことを確かめる。
@@ -18,7 +18,7 @@ import { serializeGraph, serializeStructCLs, serializePlanes, restoreGraph, rest
 import { buildDocumentJson, parseDocumentEnvelope } from '../../src/storage/documentFile.js';
 import { Project, CenterLineType, Discipline, planCutHeightMmOf, ceilingCutHeightMmOf } from '../../src/core.js';
 import { worldToCell, getAllCells, CEILING_CELL_GRID } from '../../src/finish/gridCells.js';
-import { assignZoneShape } from '../../src/ceiling/ceilingZones.js';
+import { createZone } from '../../src/ceiling/ceilingZones.js';
 import { ceilingSurfacesOf } from '../../src/ceiling/ceilingSurfaces.js';
 import { planSolidsLayerPrimitives, planSolidsLayerPrimitivesUp } from '../../src/plan/planSolidsLayerFilter.js';
 import { stairRiserOf } from '../../src/finish/stair/stairDimensions.js';
@@ -127,8 +127,8 @@ if (leftCell.x1 !== 3640 || leftCell.x2 !== CEILING_X || rightCell.x1 !== CEILIN
 }
 runInAction(() => {
   const flat = mm => ({ heightMm: mm, shape: 'flat', dims: [] });
-  room.setCeilingZones(assignZoneShape(g2, room, [leftCell.key], flat(2400)));
-  room.setCeilingZones(assignZoneShape(g2, room, [rightCell.key], flat(3000)));
+  room.setCeilingZones(createZone(g2, room, [leftCell.key], flat(2400)).zones);
+  room.setCeilingZones(createZone(g2, room, [rightCell.key], flat(3000)).zones);
 });
 
 // 天井面: 主寝室は「左 2400」「右 3000」の2面（天井芯の両側で別の高さ。残りの面は無い）

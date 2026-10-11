@@ -42,8 +42,9 @@ test('【配線】App.jsx: 天伏は仕上げ表パネルを出さず、modeBoun
 test('【配線】CeilingPanel.jsx: タブは mode.setActiveTab、行は ceilingPanelRows、横長は ModePanel・縦長は BottomSheet（title 天伏）', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
   assert.match(code, /^\s*onClick=\{\(\) => mode\.setActiveTab\(tab\.id\)\}\s*$/m);
-  assert.match(code, /^\s*const rows = mode\.activeTab === 'stair' \? stairRows\(graph, mode\.materialMap\) : interiorRows\(graph, mode\.materialMap\);\s*$/m);
-  assert.match(code, /^\s*onClick=\{\(\) => \{ if \(row\.kind === 'room'\) mode\.selectRoom\(row\.id\); \}\}\s*$/m);
+  assert.match(code, /^\s*const tree = ceilingPanelTree\(graph, mode\.activeTab, mode\.materialMap\);\s*$/m);
+  assert.match(code, /^\s*const lines = ceilingPanelLines\(tree, mode\.expandedPath\);\s*$/m);
+  assert.match(code, /^\s*onClick=\{\(\) => mode\.selectNode\(graph, node\.id, line\.path\)\}\s*$/m, '行クリックは群を選ぶ（タブは切り替えない）。開く経路は押された行の祖先（line.path）');
   assert.match(code, /<ModePanel title="天伏" /);
   assert.match(code, /<BottomSheet title="天伏" /);
   // S3 で材選択の部品 MaterialSelect だけは仕上げ表から共用する（旧: FinishTable 全般を禁止）。表本体・State は引かない。
@@ -57,28 +58,36 @@ test('【配線】CeilingPanel.jsx（S10）: 行の天井材・仕上げの Mate
   assert.match(code, /^\s*\{ key: 'ceilingPanel', {2}label: '天井材', category: 'panel' \},\s*$/m);
   assert.match(code, /^\s*\{ key: 'ceilingFinish', label: '仕上げ', category: 'finish' \},\s*$/m);
   assert.match(code, /^\s*onChange=\{v => \{ withFinishUndo\(graph, \(\) => \(v === '' \? room\.clearOverride\(field\.key\) : room\.setOverride\(field\.key, v\)\)\); markDirty\(\); \}\}\s*$/m);
-  assert.match(code, /^\s*const target = ceilingWriteTargetRoom\(graph, \{ owner: \{ kind: row\.kind, id: row\.id \} \}\);\s*$/m);
-  assert.match(code, /^\s*<RowMaterialSelect graph=\{graph\} mode=\{mode\} room=\{target\} field=\{f\} \/>\s*$/m);
+  assert.match(code, /^\s*<RowMaterialSelect graph=\{graph\} mode=\{mode\} room=\{node\.room\} field=\{f\} \/>\s*$/m, '書込み先はノードの room（階段は対の部屋。木の生成が ceilingWriteTargetRoom で解く）');
   assert.ok(!/CeilingMaterialFields/.test(code), '上段の CeilingMaterialFields が残っている');
   assert.match(code, /^import \{ withFinishUndo \} from '\.\.\/finish\/finishUndo\.js';\s*$/m);
 });
 
-test('【配線】CeilingPanel.jsx（S11）: 三角は常に出す（区画の有無で出し分けない）。クリックは toggleExpandedRow で行選択へ伝播させない。展開行は選択ブロック→内訳（rowZoneDetail）。上段は無い', () => {
+test('【配線】CeilingPanel.jsx（S12c）: 三角は行末の最後の <td> に全ノード無条件で出す（行頭に戻さない）。クリックは toggleNode(depth, id) で行の選択へ伝播させない', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
   assert.ok(!/hasZones/.test(code), '三角の出し分け（hasZones）が残っている');
-  assert.ok(!/triangleGap/.test(code), '列ずれ防止の空白が残っている');
-  assert.match(code, /^\s*<div style=\{\{ display: 'flex', alignItems: 'center', gap: 2 \}\}>\s*\n\s*<button\s*\n\s*aria-label=\{expanded[^]*?\n\s*<\/button>\s*\n\s*<span>\{row\.name\}<\/span>\s*$/m,
-    '三角のボタンは行のラッパー div の直下で無条件（直前に条件式・直後に閉じの式を挟まない）');
   assert.match(code, /^\s*aria-label=\{expanded \? '内訳を閉じる' : '内訳を開く'\}\s*$/m);
-  assert.match(code, /^\s*\{expanded && \(\s*$/m);
-  assert.match(code, /^\s*<ZoneDetail graph=\{graph\} row=\{row\} \/>\s*$/m);
-  assert.match(code, /^\s*const \{ zones, rest, pairMissing \} = rowZoneDetail\(graph, row\);\s*$/m, '内訳は rowZoneDetail だけから');
-  assert.ok(!/zoneDetailRows\(|remainderRow\(|stairZoneDetailRows\(/.test(code), 'パネルは個別の内訳関数を直接呼ばない');
-  assert.match(code, /^\s*else if \(zones\.length === 0 && !rest\) empty = /m, '区画なしは zones と rest の両方が空のとき');
-  assert.match(code, /区画なし（部屋 CH \$\{dash\(row\.ch\)\}）/);
-  assert.match(code, /区画なし（対の部屋なし）/);
-  assert.match(code, /^\s*onClick=\{e => \{ e\.stopPropagation\(\); mode\.toggleExpandedRow\(row\.id\); \}\}\s*$/m);
-  assert.match(code, /^\s*const expanded = mode\.expandedRowId === row\.id;\s*$/m);
+  assert.match(code, /^\s*onClick=\{e => \{ e\.stopPropagation\(\); mode\.toggleNode\(depth, node\.id\); \}\}\s*$/m);
+  // 三角のボタンは行（NodeRow）の最後の <td> の中。その後ろに <td> が続かない
+  const row = code.slice(code.indexOf('const NodeRow'), code.indexOf('const InnerRow'));
+  const lastTd = row.lastIndexOf('<td');
+  assert.ok(lastTd >= 0 && row.indexOf('<button', lastTd) > lastTd, '三角のボタンが最後の <td> の中にある');
+  assert.equal((row.match(/<button/g) ?? []).length, 1, '行に三角のボタンは1つ');
+  const firstTd = row.indexOf('<td');
+  assert.ok(!row.slice(firstTd, row.indexOf('</td>', firstTd)).includes('<button'), '先頭の <td>（部屋名）に三角を置かない');
+  assert.ok(!/toggleExpandedRow|expandedRowId|selectRoom\(/.test(code), '旧の展開 API が残っている');
+  assert.match(code, /^\s*\{ key: 'toggle',\s+label: '',\s+width: 28 \},\s*\n\];\s*$/m, '三角の列は COLUMNS の最後');
+});
+
+test('【配線】CeilingPanel.jsx（S12c）: 並び替えは持たない（draggable・onDrag* は0件）。パネルは ceilingPanelLines の出力を種類で描くだけで、旧行関数を直接呼ばない', () => {
+  const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
+  assert.equal((code.match(/draggable/g) ?? []).length, 0);
+  assert.equal((code.match(/onDrag|onDrop|dataTransfer/g) ?? []).length, 0);
+  assert.equal((code.match(/\binteriorRows\(|\bstairRows\(|\browZoneDetail\(|\bselectionGroupInfo\(|\bselectionSummary\(|\bzoneDetailRows\(|\bremainderRow\(|\bstairZoneDetailRows\(/g) ?? []).length, 0, '木の生成は ceilingPanelRows.js の中');
+  assert.equal((code.match(/ceilingPanelLines\(/g) ?? []).length, 1);
+  assert.equal((code.match(/ceilingPanelTree\(/g) ?? []).length, 1);
+  assert.match(code, /^\s*\{lines\.map\(line => \(\s*$/m);
+  assert.match(code, /^\s*<PanelLine key=\{line\.key\} graph=\{graph\} mode=\{mode\} line=\{line\} selectedId=\{selectedId\} \/>\s*$/m);
 });
 
 test('【配線】CeilingPanel.jsx: 部屋の無い階段（room が null）では天井材・仕上げの select は disabled で「—」の1択', () => {
@@ -258,9 +267,9 @@ test('【配線】SceneLayers: CeilingSelectionLayer は ceiling のときだけ
   assert.ok(gate < code.indexOf('<ShapesLayer'), 'CeilingSelectionLayer が ShapesLayer より後ろにある');
 });
 
-test('【配線】CeilingPanel.jsx（S11）: 選択の要約は展開行の中だけ（selection.owner.rowId === row.id のとき selectionSummary）、行の強調は selectedRoomId との一致（階段の行も）', () => {
+test('【配線】CeilingPanel.jsx（S12c）: 行の強調は選択中の群 id とノード id の一致だけ（selectedNodeId。群が今は無い選択は選択なし扱い）', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
-  assert.match(code, /^\s*const summary = expanded && mode\.selection && mode\.selection\.owner\.rowId === row\.id \? selectionSummary\(graph, mode\.selection\) : null;\s*$/m);
-  assert.equal((code.match(/selectionSummary\(/g) ?? []).length, 1, '要約を引くのは行の中の1か所だけ（上段なし）');
-  assert.match(code, /^\s*background: row\.id === mode\.selectedRoomId \? '#eff6ff' : '#fff',\s*$/m);
+  assert.match(code, /^\s*const selectedId = selectedNodeId\(graph, mode\.selection\);/m);
+  assert.match(code, /^\s*style=\{\{ cursor: 'pointer', background: node\.id === selectedId \? '#eff6ff' : '#fff' \}\}\s*$/m);
+  assert.ok(!/selectedRoomId === |=== mode\.selectedRoomId|owner\.rowId === /.test(code), '行 id／所属 rowId での強調判定が残っている');
 });

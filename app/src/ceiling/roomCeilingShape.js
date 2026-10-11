@@ -56,9 +56,19 @@ export function setRoomCeilingShape(room, { shape, dims }) {
     room.clearOverride(ROOM_CEILING_DIMS_KEY);
   } else {
     room.setOverride(ROOM_CEILING_SHAPE_KEY, norm.shape);
-    room.setOverride(ROOM_CEILING_DIMS_KEY, norm.dims.join(','));
+    room.setOverride(ROOM_CEILING_DIMS_KEY, norm.dims.map(formatDim).join(','));
   }
   return norm;
+}
+
+/**
+ * 寸法を固定小数表記にする（読み口 parseDimsText は指数表記 '1e-7' を受けない）。通常は String(d)、指数表記になる値だけ固定小数へ
+ * （整数は BigInt で桁をそのまま、小数は toFixed(20) で末尾の 0 を落とす。微小値が 0 に潰れて読み戻しで平面に落ちるのを避ける）。
+ */
+function formatDim(d) {
+  const s = String(d);
+  if (!/e/i.test(s)) return s;
+  return Number.isInteger(d) ? BigInt(d).toString() : d.toFixed(20).replace(/\.?0+$/, '');
 }
 
 /**
