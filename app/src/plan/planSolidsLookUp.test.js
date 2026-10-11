@@ -196,3 +196,30 @@ test('見上げの線: 往路と回転部の境（共有辺）の線は同じ座
     assert.ok(Math.abs(sideCovered - Math.abs(L.run.baseA - L.run.front)) < 1, `${type}: x=sA の境の線が front〜baseA を覆う（${sideCovered}）`);
   }
 });
+
+test('見上げの線・隔て壁の柱あり（frontA≠front）: 回転部の前縁は back に近い方の y に全幅 1 本だけで、柱の往路側の面（frontA）の y に線が無い', () => {
+  for (const type of [StairType.SWITCHBACK, StairType.WINDING]) {
+    const mk = id => {
+      const g = makeGrid([0, 1000, 2000, 3000], [0, 1000, 4000], { id });
+      g.interior([[2, 1]]);
+      g.graph.setStructureOverride('木造（在来）');
+      g.graph.addStair({ type, cells: new Set([g.cell(0, 0), g.cell(1, 0), g.cell(0, 1), g.cell(1, 1)]), sections: type === StairType.WINDING ? [5, 6, 5] : [6, 1, 6], flip: false, upDirection: 'up' }).structure = WOOD;
+      return g.graph;
+    };
+    const low = mk('low'), high = mk('high');
+    const abovePeek = { graph: high, floorHeightMm: FL, activePlaneId: low.plane.id };
+    const prims = planSolidsLayerPrimitivesUp({ graph: low, abovePeek, aboveRiserOf: () => 200, cutZ: CUT });
+    const lines = prims.filter(p => p.source.kind === 'stairSoffit');
+    const L = uTurnPlanLayout(high.stairs[0], high);
+    assert.equal(L.hasColumn, true, `${type}: 前提: 柱あり`);
+    assert.notEqual(L.run.frontA, L.run.front, `${type}: 前提: frontA≠front`);
+    const tf = Math.abs(L.run.back - L.run.frontA) <= Math.abs(L.run.back - L.run.front) ? L.run.frontA : L.run.front;
+    const other = tf === L.run.frontA ? L.run.front : L.run.frontA;
+    const horizAt = y => lines.filter(l => l.points[1] === l.points[3] && Math.abs(l.points[1] - y) < 1);
+    assert.equal(horizAt(other).length, 0, `${type}: back から遠い前縁（y=${other}）に線が無い`);
+    const spans = horizAt(tf).map(l => [Math.min(l.points[0], l.points[2]), Math.max(l.points[0], l.points[2])]).sort((p, q) => p[0] - q[0]);
+    for (let k = 1; k < spans.length; k++) assert.ok(spans[k][0] >= spans[k - 1][1] - 1e-6, `${type}: 前縁の線が重ならない ${JSON.stringify(spans)}`);
+    const covered = spans.reduce((t, [a, b]) => t + (b - a), 0);
+    assert.ok(Math.abs(covered - Math.abs(L.across.s1 - L.across.s0)) < 25, `${type}: 前縁の線は全幅を覆う（${covered}）`);
+  }
+});

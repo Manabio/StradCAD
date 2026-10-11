@@ -73,15 +73,16 @@ test('WINDING（手計算の固定値。sections [5,6,5]・蹴上200・FL2800・
   // 三角の内側は平面補間（A1=(P_A,F_A,O_A) の重心）
   near(z((1000 + 57.5 + 57.5) / 3, (1000 + 1000 + 57.5) / 3), zA + 250 / 3, 'A1 の重心');
   near(sf.zLo, 2400, 'zLo'); near(sf.zHi, zEnd, 'zHi');
-  // 面の折れ目: 往路との境・復路との境・対角線 2 本（ピボット → 外側の奥の角）・A と B の境。5 本ちょうど
+  // 面の折れ目: 往路との境・復路との境・対角線 2 本（隔て板の角点 → 外側の奥の角）・あき 0 の往路/復路の境と A/B の境。6 本ちょうど
   assert.deepEqual(sf.innerLines.map(l => l.role), Array(6).fill('stairSoffitFold'));
   assert.deepEqual(sf.innerLines.map(lineKey), [
     '57.5,1000,1000,1000',
     '1000,1000,1942.5,1000',
     '1000,1000,57.5,57.5',
     '1000,1000,1942.5,57.5',
-    '1000,57.5,1000,1000',
-  ].toSpliced(2, 0, '1000,1000,1000,4000')); // 3 本目: あき 0（sA==sB）の往路 R_A と復路 R_B の境
+    '1000,1000,1000,4000', // あき 0（sA==sB）の往路 R_A と復路 R_B の境
+    '1000,1000,1000,57.5', // あき 0 の回転部 A と B の境（高さが食い違う共有辺）
+  ]);
 });
 
 test('回転部の段数によらず 4 三角（sections [6,3,6] でも矩形 4 枚・対角線 2 本）。頂点の高さは段数ぶんの Δ を等分', () => {
@@ -306,32 +307,41 @@ function overlapProblems(sf) {
   return problems;
 }
 
-test('柱あり WINDING（moku4-3 の値）: 矩形 4 枚・折れ目 5 本。往路の線は sA（852.5）で止まり、ピボット 865 までは輪郭。P_A/P_B の高さを手計算で固定', () => {
+test('柱あり WINDING（moku4-3 の値）: 前縁は両レーン共通の -8145 の 1 本。対角線は隔て板の角点 (852.5,-8145)／(967.5,-8145) から。y=-8235（frontA）・x=865（ピボット）の線は無い', () => {
   const sf = uTurnSoffitFromLayout(MOKU43, ctxOf());
   assert.deepEqual(sf.footprint.rects, [
-    { x1: 72.5, y1: -9100, x2: 852.5, y2: -8235 },
-    { x1: 72.5, y1: -8235, x2: 865, y2: -7352.5 },
-    { x1: 865, y1: -8145, x2: 1747.5, y2: -7352.5 },
-    { x1: 967.5, y1: -9100, x2: 1747.5, y2: -8145 },
+    { x1: 72.5, y1: -9100, x2: 852.5, y2: -8145 },       // 往路 R_A
+    { x1: 72.5, y1: -8145, x2: 852.5, y2: -7352.5 },     // 回転部 A（780 × 792.5 ≒ 正方形）
+    { x1: 852.5, y1: -8145, x2: 967.5, y2: -7352.5 },    // 隔て板の延長の帯 S
+    { x1: 967.5, y1: -8145, x2: 1747.5, y2: -7352.5 },   // 回転部 B
+    { x1: 967.5, y1: -9100, x2: 1747.5, y2: -8145 },     // 復路 R_B
   ]);
+  const qa = sf.footprint.rects[1];
+  assert.ok(Math.abs((qa.x2 - qa.x1) - (qa.y2 - qa.y1)) < 15, '回転部の矩形はほぼ正方形（対角線 45 度相当）');
+  assert.deepEqual(sf.innerLines.map(l => l.role), Array(4).fill('stairSoffitFold'));
   assert.deepEqual(sf.innerLines.map(l => lineKeyOf(l.points)), [
-    '72.5,-8235,852.5,-8235',
+    '72.5,-8145,852.5,-8145',
     '967.5,-8145,1747.5,-8145',
-    '865,-8235,72.5,-7352.5',
-    '865,-8145,1747.5,-7352.5',
-    '865,-7352.5,865,-8145',
+    '852.5,-8145,72.5,-7352.5',
+    '967.5,-8145,1747.5,-7352.5',
   ]);
+  assert.ok(sf.innerLines.every(l => l.points[1] !== -8235 && l.points[3] !== -8235), 'frontA（柱の往路側の面）の線は無い');
+  assert.ok(sf.innerLines.every(l => l.points[0] !== 865 || l.points[2] !== 865), 'ピボット線は無い');
   // 手計算: dz≈384.1874542・FL2800 → zA=zTop(5)=3415.8125458、zB=zTop(10)=4415.8125458、Δ=1000
   near(ZA43, 3415.8125458, 'zA'); near(ZB43, 4415.8125458, 'zB');
-  const within1 = (a, b, msg) => assert.ok(Math.abs(a - b) < 1, `${msg}: ${a} vs ${b}`);
-  near(sf.zAt(865, -8235), ZA43, 'P_A（往路側のピボット。frontA=-8235）');
-  within1(sf.zAt(866, -8145), ZB43, 'P_B（復路側のピボット。front=-8145）');
-  near(sf.zAt(72.5, -8235), ZA43, 'F_A');
+  near(sf.zAt(852.5, -8145), ZA43, 'P_A（隔て板の角点）');
+  near(sf.zAt(72.5, -8145), ZA43, 'F_A');
+  near(sf.zAt(967.5, -8145), ZB43, 'P_B');
   near(sf.zAt(1747.5, -8145), ZB43, 'F_B');
-  near(sf.zAt(865, -7352.5), ZA43 + 500, 'I');
+  near(sf.zAt(852.5, -7352.5), ZA43 + 500, 'I_A');
+  near(sf.zAt(967.5, -7352.5), ZA43 + 500, 'I_B');
   near(sf.zAt(72.5, -7352.5), ZA43 + 250, 'O_A');
   near(sf.zAt(1747.5, -7352.5), ZA43 + 750, 'O_B');
+  near(sf.zAt(910, -8145), (ZA43 + ZB43) / 2, '帯 S の前縁の中点');
+  near(sf.zAt(881.25, -8145), ZA43 + 250, '帯 S の前縁の 1/4');
+  near(sf.zAt(910, -7352.5), ZA43 + 500, '帯 S の奥');
   near(sf.zAt(500, -9100), 2400, '往路の上り口');
+  near(sf.zAt(500, -8145), ZA43, '往路の終端（前縁）');
   near(sf.zAt(1500, -9100), ZEND43, '復路の到達辺');
   assert.deepEqual(overlapProblems(sf), []);
 });
@@ -341,12 +351,12 @@ for (const sa of [1, -1]) for (const sr of [1, -1]) for (const swap of [false, t
     const Lt = transformLayout(MOKU43, { sa, sr, swap });
     const sf = uTurnSoffitFromLayout(Lt, ctxOf());
     const W = worldOf(Lt, sa, sr);
-    assert.equal(sf.footprint.rects.length, 4);
-    // 折れ目の端点は元の (a, r) を同じ写像で移したものと一致する（往路の線は sA で止まる）
-    const expected = [[72.5, -8235, 852.5, -8235], [967.5, -8145, 1747.5, -8145], [865, -8235, 72.5, -7352.5], [865, -8145, 1747.5, -7352.5], [865, -7352.5, 865, -8145]]
+    assert.equal(sf.footprint.rects.length, 5);
+    // 折れ目の端点は元の (a, r) を同じ写像で移したものと一致する
+    const expected = [[72.5, -8145, 852.5, -8145], [967.5, -8145, 1747.5, -8145], [852.5, -8145, 72.5, -7352.5], [967.5, -8145, 1747.5, -7352.5]]
       .map(([a0, r0, a1, r1]) => lineKeyOf(norm([...W(a0, r0), ...W(a1, r1)])));
     assert.deepEqual(sf.innerLines.map(l => lineKeyOf(norm(l.points))), expected);
-    for (const [a, r, z] of [[865, -8235, ZA43], [72.5, -8235, ZA43], [1747.5, -8145, ZB43], [865, -7352.5, ZA43 + 500], [72.5, -7352.5, ZA43 + 250], [1747.5, -7352.5, ZA43 + 750], [500, -9100, 2400], [1500, -9100, ZEND43]]) {
+    for (const [a, r, z] of [[852.5, -8145, ZA43], [72.5, -8145, ZA43], [967.5, -8145, ZB43], [1747.5, -8145, ZB43], [852.5, -7352.5, ZA43 + 500], [72.5, -7352.5, ZA43 + 250], [1747.5, -7352.5, ZA43 + 750], [910, -8145, (ZA43 + ZB43) / 2], [500, -9100, 2400], [1500, -9100, ZEND43]]) {
       near(sf.zAt(...W(a, r)), z, `(${a},${r})`);
     }
     assert.deepEqual(overlapProblems(sf), []);
@@ -435,21 +445,28 @@ function overhangColumnFixture() {
 }
 
 for (const type of [StairType.SWITCHBACK, StairType.WINDING]) for (const upDirection of ['up', 'down', 'left', 'right']) for (const flip of [false, true]) {
-  test(`柱あり（実物の layout）: ${type} upDirection=${upDirection} flip=${flip} — 矩形 4 枚・折れ目が輪郭や互いに重ならない`, () => {
+  test(`柱あり（実物の layout）: ${type} upDirection=${upDirection} flip=${flip} — 矩形 5 枚（隔て板の帯 S あり）・折れ目が輪郭や互いに重ならない`, () => {
     const { graph, stair } = columnFixture(type, upDirection, flip);
-    assert.equal(uTurnPlanLayout(stair, graph).hasColumn, true, '前提: 柱あり');
+    const L = uTurnPlanLayout(stair, graph);
+    assert.equal(L.hasColumn, true, '前提: 柱あり');
+    assert.ok(Math.abs(L.across.sA - L.across.sB) >= 1, '前提: 隔て板の厚みぶんのあき');
     const [sf] = solidsOf(stair, graph);
-    assert.equal(sf.footprint.rects.length, 4);
+    assert.equal(sf.footprint.rects.length, 5);
     assert.deepEqual(overlapProblems(sf), []);
   });
 }
 
-test('柱あり・張り出し（幅方向が反転・frontA≠front・pivotAcross≠sA の実物の layout）: 折れ目が重ならず、往路の線は sA で止まる', () => {
+test('柱あり・張り出し（幅方向が反転・frontA≠front の実物の layout）: 前縁は back に近い方の 1 本だけ（frontA 側の線は無い）。折れ目が重ならず、往路の線は sA で止まる', () => {
   const { graph, stair } = overhangColumnFixture();
   const L = uTurnPlanLayout(stair, graph);
-  assert.ok(L.across.s0 > L.across.s1 && L.run.frontA !== L.run.front && L.pivotAcross !== L.across.sA, '前提');
+  assert.ok(L.across.s0 > L.across.s1 && L.run.frontA !== L.run.front, '前提');
   const [sf] = solidsOf(stair, graph);
-  assert.equal(sf.footprint.rects.length, 4);
+  assert.equal(sf.footprint.rects.length, 5);
+  const tf = Math.abs(L.run.back - L.run.frontA) <= Math.abs(L.run.back - L.run.front) ? L.run.frontA : L.run.front;
+  const other = tf === L.run.frontA ? L.run.front : L.run.frontA;
+  const runOf = l => (L.vertical ? [l.points[1], l.points[3]] : [l.points[0], l.points[2]]);
+  assert.ok(sf.innerLines.every(l => !runOf(l).every(v => Math.abs(v - other) < 1e-6)), 'back から遠い方の前縁（柱の面）には線が無い');
+  assert.equal(sf.innerLines.filter(l => runOf(l).every(v => Math.abs(v - tf) < 1e-6)).length, 2, '前縁の線は R_A 側と R_B 側の 2 区間（間の帯 S の前は輪郭）');
   assert.deepEqual(overlapProblems(sf), []);
   const a = sf.innerLines[0].points; // 往路との境: s0 → sA
   const pts = L.vertical ? [a[0], a[2]] : [a[1], a[3]];
