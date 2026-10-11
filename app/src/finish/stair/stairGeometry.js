@@ -938,6 +938,12 @@ function uTurnPortAnchor(f, { tBaseA, tBaseB, tExitA, tExitB, entryFull }, side,
   };
 }
 
+// 回り階段の扇形の放射線の起点の幅方向 s（単一供給源。buildWinding と uTurnPlanLayout が呼ぶ）。
+// 隔て壁の柱があれば柱の往路側の面 column.sA、無ければ往路の内側端 sA。
+export function turnPivotS(column, sA) {
+  return column ? column.sA : sA;
+}
+
 // U字系（屈折・回り）の描画前半を共有する解決部: 枠・区間（parts）・レイアウト・レーン幅方向の位置・取りつき回転部の蹴上数。
 // buildSwitchback / buildWinding / uTurnPlanLayout が同じ値を使う（parts の numberStart は取りつき回転部の蹴上ぶん後ろへずらして返す）。
 function resolveUTurnPlan(stair, b, { spans, laneGapMm = 0, partition = null }) {
@@ -972,6 +978,8 @@ function resolveUTurnPlan(stair, b, { spans, laneGapMm = 0, partition = null }) 
  *   totalSteps … 総蹴上数 S+e+a（最終番号＝上階の床。段 n の天端は n×蹴上）
  *   n1/n2 … 往路・復路の直進部の蹴上数。turnCells … 回転部のマス数。firstTurnNumber … 回転部の最初の段数字
  *   hasColumn … 隔て壁の柱の面に合わせた区間か（frontA と front が分かれうる）
+ *   pivotAcross … 回り階段（WINDING）の扇形の放射線の起点の幅方向座標（柱があれば柱の往路側の面 column.sA、無ければ sA）。
+ *     起点の走行位置は 往路側の半分＝frontA・復路側の半分＝front（buildWinding の pivotA・P2）
  * 求まらないとき（U字系でない／階段・graph なし／セルが無い／設置枠が不正）は null（stairTreadFootprints と同じ条件）。
  * @param {import('@core').Stair} stair
  * @param {object} graph 階段の設置階の graph
@@ -1001,6 +1009,7 @@ export function uTurnPlanLayout(stair, graph) {
       front: runAt(layout.tRun), startB: runAt(layout.tStartB), baseB: runAt(layout.tBaseB), back: runAt(1),
     },
     across: { s0: acrossAt(0), sA: acrossAt(sA), sB: acrossAt(sB), s1: acrossAt(1), mid: acrossAt(0.5) },
+    pivotAcross: acrossAt(turnPivotS(layout.column, sA)), // buildWinding の扇形の放射線の起点の幅方向（同じ turnPivotS）
     entryPort: layout.ports.entry, arrivalPort: layout.ports.arrival,
     entryTurnSteps: turnStepsE, arrivalTurnSteps: turnStepsA, entryNumbers, arrivalNumbers,
     totalSteps: totalSteps + turnStepsE + turnStepsA,
@@ -1153,7 +1162,7 @@ function buildWinding(stair, b, { view, detail, spans, laneGapMm = 0, partition 
   //   復路側半分（u≥0.5。8|9〜10|11）＝ P2（柱の回転部側の面×往路側の面、前縁 tRun）。u=0.5 は P2 から奥の辺へ垂直
   // 柱が無いとき（column null）は従来どおり全放射線が P=(tRun, sA)。
   const col = layout.column;
-  const sPivot = col ? col.sA : sA;
+  const sPivot = turnPivotS(col, sA);
   const pivotA = f.pt(tRunA, sPivot), P2 = f.pt(tRun, sPivot);
   const pivotOf = (u) => (col && u < 0.5 ? pivotA : P2);
   const windingRadial = (u) => (u === 0.5 ? line(P2, f.pt(1, sPivot)) : line(pivotOf(u), perim(u)));

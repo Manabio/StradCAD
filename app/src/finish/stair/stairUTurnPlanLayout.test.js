@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { classifyStairArea, measureStairSpans } from './stairClassify.js';
-import { buildStairGeometry, uTurnPlanLayout } from './stairGeometry.js';
+import { buildStairGeometry, uTurnPlanLayout, turnPivotS } from './stairGeometry.js';
 import { roomBounds } from '../gridCells.js';
 import { stairTreadFootprints } from './stairTreads.js';
 import { PARTITION_BACKING_MM, PARTITION_THICKNESS_MM } from './stairPartition.js';
@@ -268,4 +268,34 @@ test('取りつき区画が走行端の口（entrySide/arrivalSide が end・自
   assert.equal(p.arrivalTurnSteps, 0);
   assert.equal(p.entryNumbers, null);
   assert.equal(p.arrivalNumbers, null);
+});
+
+test('pivotAcross（回り階段の扇形の起点）: 柱ありは柱の往路側の面（通り芯 1000 から半幅ぶん）、柱なしは sA。向きの反転（s0>s1）でも同じ', () => {
+  // 等長レーン（s0<s1）: 往路側の面は通り芯より小さい側。柱材の面は 1000−45、PB の外面は 1000−57.5（＝sA）
+  for (const [name, half, setup] of VARIANTS) {
+    const { graph, stair } = equalFixture(StairType.WINDING, 'up', false);
+    setup(graph);
+    const p = uTurnPlanLayout(stair, graph);
+    assert.equal(p.hasColumn, true, name);
+    assert.ok(Math.abs(p.pivotAcross - (1000 - half)) < EPS, `${name}: pivotAcross ${p.pivotAcross}`);
+  }
+  // 張り出し（s0>s1 の反転した向き）: 往路側の面は通り芯より大きい側（1000+45・1000+57.5）。frontA≠front
+  for (const [name, half, setup] of VARIANTS) {
+    const { graph, stair } = overhangFixture(0);
+    setup(graph);
+    const p = uTurnPlanLayout(stair, graph);
+    assert.ok(p.across.s0 > p.across.s1, '幅方向が反転している');
+    assert.ok(Math.abs(p.pivotAcross - (1000 + half)) < EPS, `${name}: pivotAcross ${p.pivotAcross}`);
+    assert.notEqual(p.run.frontA, p.run.front);
+  }
+  // 柱なし（鉄骨・隔て壁が立たない）は sA
+  const steel = equalFixture(StairType.WINDING, 'up', false, { wood: false });
+  const q = uTurnPlanLayout(steel.stair, steel.graph);
+  assert.equal(q.hasColumn, false);
+  assert.equal(q.pivotAcross, q.across.sA);
+});
+
+test('turnPivotS: 柱があれば column.sA、無ければ sA（buildWinding と uTurnPlanLayout の単一供給源）', () => {
+  assert.equal(turnPivotS({ sA: 0.47 }, 0.5), 0.47);
+  assert.equal(turnPivotS(null, 0.5), 0.5);
 });

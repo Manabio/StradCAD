@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { StairType, StructuralMaterialType } from '@core';
 import { planSolids } from './planSolids.js';
 import { planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp } from './planSolidsLayerFilter.js';
+import { uTurnPlanLayout } from '../finish/stair/stairGeometry.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { makeGrid, fakeLayer } from './planTestFixtures.js';
 
@@ -35,11 +36,11 @@ const soffitsOf = solids => solids.filter(s => s.source.kind === 'stairSoffit');
 const treadsAt = (solids, z) => solids.filter(s => s.kind === 'stairTread' && s.source.layerFloorZ === z);
 const upHoles = solids => solids.find(s => s.kind === 'floor' && s.source.layerFloorZ === FL).footprint.holes ?? [];
 
-test('lookUp・木造: 上階の層に stairSoffit の立体が出る（往路・踊り場・復路の3件）。段は従来どおり遮蔽専用（drawEdges:false）', () => {
+test('lookUp・木造: 上階の層に stairSoffit の立体が階段 1 本につき 1 件出る。段は従来どおり遮蔽専用（drawEdges:false）', () => {
   const { layers, opts } = scene();
   const solids = planSolids(layers, { ...opts, lookUp: true });
   const soffits = soffitsOf(solids);
-  assert.equal(soffits.length, 3);
+  assert.equal(soffits.length, 1);
   assert.ok(soffits.every(s => s.kind === 'ceiling' && s.source.layerFloorZ === FL));
   assert.ok(treadsAt(solids, FL).length > 0 && treadsAt(solids, FL).every(s => s.drawEdges === false));
 });
@@ -136,19 +137,62 @@ const footprintEdges = fp => {
   return loops.flatMap(p => p.map((_, i) => i).filter(i => i % 2 === 0).map(i => [p[i], p[i + 1], p[(i + 2) % p.length], p[(i + 3) % p.length]]));
 };
 
-test('見上げ・木造: 自階の続き階段の段が切断高より上にあっても、裏面の各パーツ（往路・踊り場・復路）の外周が全部線として出る', () => {
+test('見上げ・木造: 自階の続き階段の段が切断高より上にあっても、裏面の外周（矩形群の輪郭）が全部線として出る', () => {
   // 自階の階段は区画数が違う（[4,1,4]）ので、自階の段の辺と裏面の矩形の辺がぴったり重ならない（重なると偶然見えて検出力が無い）
   const { low, abovePeek } = scene({ lowSections: [4, 1, 4] });
   const prims = planSolidsLayerPrimitivesUp({ graph: low, abovePeek, aboveRiserOf: () => 200, cutZ: CUT });
   const soffitLines = prims.filter(p => p.source.kind === 'stairSoffit');
   const soffits = soffitsOf(planSolidsLayerSolidsUp({ graph: low, abovePeek, aboveRiserOf: () => 200 }));
-  assert.equal(soffits.length, 3);
-  for (const sf of soffits) {
-    for (const [x1, y1, x2, y2] of footprintEdges(sf.footprint)) {
+  assert.equal(soffits.length, 1);
+  // 矩形群の外周の辺 = 1 つの矩形の辺のうち、他の矩形の辺と共有されない部分。ここでは各辺の中点が他の矩形の内部に入らないものを外周とみなす
+  const rects = soffits[0].footprint.rects;
+  const insideOther = (x, y, self) => rects.some(r => r !== self && x > r.x1 + 1e-6 && x < r.x2 - 1e-6 && y > r.y1 + 1e-6 && y < r.y2 - 1e-6);
+  const sharedEdge = (x, y, self) => rects.some(r => r !== self && onRectBoundary(x, y, r));
+  let checked = 0;
+  for (const r of rects) {
+    for (const [x1, y1, x2, y2] of footprintEdges({ rects: [r] })) {
       const mid = [(x1 + x2) / 2, (y1 + y2) / 2];
-      // 隣のパーツと共有する辺も、そのパーツ自身の線として出る（自階の段が手前の遮蔽物だと一部が消える）
-      const own = soffitLines.filter(l => l.source.part === sf.source.part).map(l => l.points);
-      assert.ok(own.some(l => onSegment(...mid, l)), `part ${sf.source.part} の辺 (${x1},${y1})-(${x2},${y2}) の中点が線になる`);
+      if (insideOther(...mid, r) || sharedEdge(...mid, r)) continue; // 同じ立体の矩形どうしの共有辺は輪郭ではない
+      checked++;
+      assert.ok(soffitLines.some(l => onSegment(...mid, l.points)), `外周の辺 (${x1},${y1})-(${x2},${y2}) の中点が線になる`);
     }
+  }
+  assert.ok(checked >= 6, `検出力: 外周の辺を ${checked} 本確かめた`);
+});
+
+/** 点が矩形の境界上（1mm 以内）にあるか。 */
+const onRectBoundary = (x, y, r) => x >= r.x1 - 1 && x <= r.x2 + 1 && y >= r.y1 - 1 && y <= r.y2 + 1
+  && (Math.abs(x - r.x1) < 1 || Math.abs(x - r.x2) < 1 || Math.abs(y - r.y1) < 1 || Math.abs(y - r.y2) < 1);
+
+test('見上げの線: 往路と回転部の境（共有辺）の線は同じ座標に 1 本だけ（2 本の平行線・重複線が無い）。WINDING と SWITCHBACK の両方', () => {
+  for (const type of [StairType.SWITCHBACK, StairType.WINDING]) {
+    const sections = type === StairType.WINDING ? [5, 6, 5] : [6, 1, 6];
+    const mk = id => {
+      const g = makeGrid([0, 1000, 2000, 3000], [0, 1000, 4000], { id });
+      g.interior([[2, 1]]);
+      g.graph.addStair({ type, cells: new Set([g.cell(0, 0), g.cell(1, 0), g.cell(0, 1), g.cell(1, 1)]), sections, flip: false, upDirection: 'up' }).structure = WOOD;
+      return g.graph;
+    };
+    const low = mk('low'), high = mk('high');
+    const abovePeek = { graph: high, floorHeightMm: FL, activePlaneId: low.plane.id };
+    const prims = planSolidsLayerPrimitivesUp({ graph: low, abovePeek, aboveRiserOf: () => 200, cutZ: CUT });
+    const lines = prims.filter(p => p.source.kind === 'stairSoffit');
+    assert.ok(lines.length > 0);
+    // 同じ座標（端点の組。向き不問）の線が 2 本以上ないこと
+    const keys = lines.map(l => { const [a, b, c, d] = l.points.map(v => Math.round(v)); return [[a, b], [c, d]].sort().join('|'); });
+    assert.equal(new Set(keys).size, keys.length, `${type}: 重複線なし`);
+    // 往路と回転部の境: 走行方向の座標 y=frontA（縦走行）上の線は、幅方向に重ならない（被覆の合計が重複を含まない）
+    const L = uTurnPlanLayout(high.stairs[0], high);
+    const onFront = lines.filter(l => l.points[1] === l.points[3] && Math.abs(l.points[1] - L.run.frontA) < 1);
+    const spans = onFront.map(l => [Math.min(l.points[0], l.points[2]), Math.max(l.points[0], l.points[2])]).sort((p, q) => p[0] - q[0]);
+    for (let k = 1; k < spans.length; k++) assert.ok(spans[k][0] >= spans[k - 1][1] - 1e-6, `${type}: frontA 上の線が重ならない ${JSON.stringify(spans)}`);
+    const covered = spans.reduce((t, [a, b]) => t + (b - a), 0);
+    assert.ok(Math.abs(covered - (L.across.s1 - L.across.s0)) < 1, `${type}: frontA の線は幅全体を 1 回ずつ覆う（${covered}）`);
+    // あき 0（sA==sB）: 往路と復路の境（x=sA、run front〜base）の線が出る。高さが食い違う境で、輪郭には現れない（1 立体化で消えない）
+    assert.ok(Math.abs(L.across.sA - L.across.sB) < 1, '前提: あき 0');
+    const sideSpans = lines.filter(l => l.points[0] === l.points[2] && Math.abs(l.points[0] - L.across.sA) < 1 && Math.min(l.points[1], l.points[3]) >= Math.min(L.run.front, L.run.baseA) - 1 && Math.max(l.points[1], l.points[3]) <= Math.max(L.run.front, L.run.baseA) + 1)
+      .map(l => [Math.min(l.points[1], l.points[3]), Math.max(l.points[1], l.points[3])]).sort((p, q) => p[0] - q[0]);
+    const sideCovered = sideSpans.reduce((t, [p, q]) => t + (q - p), 0);
+    assert.ok(Math.abs(sideCovered - Math.abs(L.run.baseA - L.run.front)) < 1, `${type}: x=sA の境の線が front〜baseA を覆う（${sideCovered}）`);
   }
 });
