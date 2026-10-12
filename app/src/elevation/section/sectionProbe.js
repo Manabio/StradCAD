@@ -172,7 +172,7 @@ export function collectCutBreaks(cut, probeCtx) {
   // 斜線を頭打ちにする高さ（切断の天井断面 cut.ceilProfile・プロファイルを持つ壁の層の各部屋の実効天井）も含める
   // ——列が斜線の途中で天井をまたぐと、列全体が水平へ倒れて斜線より下の空気に壁を描いてしまう。
   const slopeLevels = [...layers.map(l => l?.floorZMm), cut.baseFloorZ, cut.zRange?.loZ, cut.zRange?.hiZ,
-    ...(cut.ceilProfile ?? []).map(s => s?.ceilZ)].filter(Number.isFinite);
+    ...(cut.ceilProfile ?? []).flatMap(s => [s?.ceilZ, s?.ceilZHi])].filter(Number.isFinite);
   const ceilLevelsOf = layer => (graphList(layer.graph, 'rooms') ?? [])
     .map(room => probeCtx.floorZOf(room, layer) + probeCtx.chOf(room, layer.graph)).filter(Number.isFinite);
   const addIfInside = v => { if (v > probeLo + GAP_EPS && v < probeHi - GAP_EPS) values.add(v); };

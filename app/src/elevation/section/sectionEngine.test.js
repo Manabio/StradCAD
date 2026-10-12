@@ -276,3 +276,134 @@ test('【失敗系・WP-E4】buildSectionFigure: layers=[]（候補ゼロ）で�
 test('【失敗系・WP-E4】mergeColumns: 列0件でも例外を投げず空配列を返す', () => {
   assert.deepEqual(mergeColumns([]), []);
 });
+
+// ================================================================
+// 傾斜天井の受け口（E3a-1）: cut.ceilProfile の区間が ceilZHi（hiX での高さ）を持つと、列は
+// 低い側（ceilZ）で水平に打ち切られ、傾いた列には ceilEdge（図のx0側/x1側の高さ）が付く。
+// 切断壁の帯だけは天端が天井の斜線に沿う（ceilEdge付き・z1は高い側）。topEdge（隔て壁の斜めの天端）とは別物。
+// ================================================================
+const near = (actual, expected, msg) =>
+  assert.ok(Math.abs(actual - expected) < 1e-6, `${msg ?? ''} 期待 ${expected} 実際 ${actual}`);
+
+// 部屋 0..4000×0..3000（天井 roomCh）を y=1500 で x 方向に切る。切断線は世界x -100..4100（図のローカルx＝世界x+100）。
+// 壁の断面は左 x=100..157.5・右 x=4042.5..4100（壁厚115の半分が探査範囲の外端で切れる）。
+// 傾斜は loX=0..4200 で 2400→2820（1mmあたり0.1）。
+function slopeFixture(roomCh = '3000', profile) {
+  const graph = makeGraph();
+  const room = makeRectRoom(graph, 0, 0, 4000, 3000, 'S');
+  room.setOverride('ceilingHeight', roomCh);
+  const cut = {
+    seqNo: 'slope', line: { isVertical: false, axisValue: 1500, lo: -100, hi: 4100 },
+    viewSign: 1, dirSign: 1, layers: [{ graph, floorZMm: 0, role: 'self' }],
+    zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+    ceilProfile: profile ?? [{ loX: 0, hiX: 4200, ceilZ: 2400, ceilZHi: 2820 }],
+  };
+  return { cut, probeCtx: makeProbeContext(cut.layers) };
+}
+
+test('【傾斜の ceilProfile で壁の帯の天端が斜線になる】列にceilEdge・切断壁の帯は高い側まで残りceilEdge付き・他の帯は低い側で水平に打ち切る', () => {
+  const { cut, probeCtx } = slopeFixture();
+  const cols = buildColumns(cut, probeCtx);
+  assert.equal(cols.length, 5, '開口(0..100)・左の壁(100..157.5)・見えがかり壁・右の壁・開口');
+  const [openL, cutL, mid, cutR, openR] = cols;
+  // 列: ceilZ は低い側・ceilEdge は図の x0 側/x1 側の高さ
+  near(openL.ceilZ, 2400); near(openL.ceilEdge.zAtX0, 2400); near(openL.ceilEdge.zAtX1, 2410);
+  near(cutL.ceilZ, 2410); near(cutL.ceilEdge.zAtX0, 2410); near(cutL.ceilEdge.zAtX1, 2415.75);
+  near(mid.ceilZ, 2415.75); near(mid.ceilEdge.zAtX1, 2804.25);
+  near(cutR.ceilZ, 2804.25); near(cutR.ceilEdge.zAtX1, 2810);
+  near(openR.ceilZ, 2810); near(openR.ceilEdge.zAtX1, 2820);
+  // 切断壁の帯: 上端は高い側（3000まで伸びない）・ceilEdge が付く
+  const wallL = cutL.bands.find(b => b.kind === 'cut');
+  near(wallL.z1, 2415.75, '左の壁の上端は列の高い側'); near(wallL.ceilEdge.zAtX0, 2410); near(wallL.ceilEdge.zAtX1, 2415.75);
+  const wallR = cutR.bands.find(b => b.kind === 'cut');
+  near(wallR.z1, 2810); near(wallR.ceilEdge.zAtX0, 2804.25); near(wallR.ceilEdge.zAtX1, 2810);
+  // 他の帯（open・見えがかりの壁）は低い側で水平に打ち切る（ceilEdge を持たない）
+  const openBand = openL.bands.find(b => b.kind === 'open');
+  near(openBand.z1, 2400, '開口の帯は低い側で水平'); assert.equal(openBand.ceilEdge, undefined);
+  const seen = mid.bands.find(b => b.kind === 'wall');
+  near(seen.z1, 2415.75, '見えがかりの壁は低い側で水平'); assert.equal(seen.ceilEdge, undefined);
+});
+
+test('【傾斜の ceilProfile】出力: 天端の線は出さず（斜線は体裁が引く）・側縁は端の斜線の高さで止まり・天井の斜線より上に線が出ない', () => {
+  const { cut, probeCtx } = slopeFixture();
+  const lines = buildSectionFigure(cut, probeCtx).content.filter(p => p.type === 'line' && p.weight === 'thick');
+  const has = (x1, y1, x2, y2) => lines.some(p => Math.abs(p.x1 - x1) < 1e-6 && Math.abs(p.y1 - y1) < 1e-6
+    && Math.abs(p.x2 - x2) < 1e-6 && Math.abs(p.y2 - y2) < 1e-6);
+  assert.ok(lines.every(p => p.y1 === p.y2 ? p.y1 === 0 : p.x1 === p.x2),
+    '天端の線は出ない（天井の斜線は体裁が引く）。太線は床の水平線と側縁の縦線だけ');
+  assert.ok(!has(100, -2410, 157.5, -2415.75) && !has(4042.5, -2804.25, 4100, -2810), '天端の斜線は出ない');
+  assert.ok(has(100, 0, 100, -2410), '左の壁の左側縁は x=100 の斜線の高さ(2410)で止まる');
+  assert.ok(has(157.5, 0, 157.5, -2415.75), '左の壁の右側縁は x=157.5 の斜線の高さ(2415.75)で止まる');
+  assert.ok(has(4042.5, 0, 4042.5, -2804.25) && has(4100, 0, 4100, -2810), '右の壁の側縁も端の斜線の高さ');
+  const ceilAt = x => 2400 + x * 0.1;
+  for (const p of lines) {
+    assert.ok(-p.y1 <= ceilAt(p.x1) + 1e-6 && -p.y2 <= ceilAt(p.x2) + 1e-6,
+      `太線 (${p.x1},${-p.y1})-(${p.x2},${-p.y2}) が天井の斜線より上に出ている`);
+  }
+});
+
+test('【斜線の高い側に届かない壁は低い側で水平に打ち切る】壁の高さが天井の斜線の途中なら ceilEdge を付けない', () => {
+  const { cut, probeCtx } = slopeFixture('2412');
+  const cutL = buildColumns(cut, probeCtx)[1];
+  const wallL = cutL.bands.find(b => b.kind === 'cut');
+  near(wallL.z1, 2410, '壁(2412)は斜線の高い側(2415.75)に届かない＝列の低い側(2410)で水平に打ち切る');
+  assert.equal(wallL.ceilEdge, undefined);
+});
+
+test('【ceilEdge が違う列は結合しない】同じ ceilZ・同じ bands でも列の ceilEdge／帯の ceilEdge が違えば別の列のまま', () => {
+  const band = { kind: 'cut', z0: 0, z1: 2410 };
+  const col = (x0, x1, extra = {}, bandExtra = {}) =>
+    ({ x0, x1, worldLo: x0, worldHi: x1, ceilZ: 2400, bands: [{ ...band, ...bandExtra }], ...extra });
+  const edgeA = { zAtX0: 2400, zAtX1: 2410 }, edgeB = { zAtX0: 2410, zAtX1: 2420 };
+  assert.equal(mergeColumns([col(0, 100, { ceilEdge: edgeA }), col(100, 200, { ceilEdge: edgeB })]).length, 2, '列の傾きが違う');
+  assert.equal(mergeColumns([col(0, 100), col(100, 200, { ceilEdge: edgeA })]).length, 2, '平面の列と傾いた列');
+  assert.equal(mergeColumns([col(0, 100, {}, { ceilEdge: edgeA }), col(100, 200, {}, { ceilEdge: edgeB })]).length, 2, '帯の ceilEdge が違う');
+  assert.equal(mergeColumns([col(0, 100, { ceilEdge: edgeA }), col(100, 200, { ceilEdge: edgeA })]).length, 1, '全く同じなら従来どおり統合');
+});
+
+test('【失敗系・傾斜の ceilProfile】ceilZHi が ceilZ と同値・非有限なら平面と同じ（ceilEdge なし・列と出力が従来と同一）', () => {
+  const flat = slopeFixture('3000', [{ loX: 0, hiX: 4200, ceilZ: 2400 }]);
+  const baseCols = buildColumns(flat.cut, flat.probeCtx);
+  const baseContent = buildSectionFigure(flat.cut, flat.probeCtx).content;
+  for (const hi of [2400, NaN, Infinity, undefined]) {
+    const f = { cut: { ...flat.cut, ceilProfile: [{ loX: 0, hiX: 4200, ceilZ: 2400, ceilZHi: hi }] }, probeCtx: flat.probeCtx };
+    const cols = buildColumns(f.cut, f.probeCtx);
+    assert.deepEqual(cols, baseCols, `ceilZHi=${hi}: 列が平面と同一`);
+    assert.ok(cols.every(c => c.ceilEdge === undefined && c.bands.every(b => b.ceilEdge === undefined)), `ceilZHi=${hi}: ceilEdge なし`);
+    assert.deepEqual(buildSectionFigure(f.cut, f.probeCtx).content, baseContent, `ceilZHi=${hi}: 出力が平面と同一`);
+  }
+});
+
+test('【傾斜・通り芯で割れた内壁】共有CLの2室＋急勾配: 割れた両方の列の切断帯に ceilEdge が付き exposedSide は付かず、どの線も斜線より上に出ない', () => {
+  const graph = makeGraph();
+  const cl = (t, v) => graph.addCenterLine(t, v, { labeled: false, discipline: Discipline.ARCH });
+  const xa = cl(CenterLineType.VERTICAL, 0), xm = cl(CenterLineType.VERTICAL, 2000), xb = cl(CenterLineType.VERTICAL, 4000);
+  const ya = cl(CenterLineType.HORIZONTAL, 0), yb = cl(CenterLineType.HORIZONTAL, 3000);
+  for (const [l, r, n] of [[xa, xm, 'A'], [xm, xb, 'B']]) {
+    const room = graph.addRoom(new Set([`${l.id}:${ya.id}:${r.id}:${yb.id}`]), n);
+    generateRoomWallsFromOutline(graph, room);
+    room.setOverride('ceilingHeight', '4400');
+  }
+  // 天井 2400→4400（1mmあたり0.5）。内壁(x=2000±57.5)は共有CLで 1942.5..2000 / 2000..2057.5 の2列に割れる。
+  const cut = {
+    seqNo: 'split', line: { isVertical: false, axisValue: 1500, lo: 0, hi: 4000 }, viewSign: 1, dirSign: 1,
+    layers: [{ graph, floorZMm: 0, role: 'self' }], zRange: { loZ: 0, hiZ: 4400 }, baseFloorZ: 0,
+    ceilProfile: [{ loX: 0, hiX: 4000, ceilZ: 2400, ceilZHi: 4400 }],
+  };
+  const probeCtx = makeProbeContext(cut.layers);
+  const cols = buildColumns(cut, probeCtx);
+  const cutCols = cols.filter(c => c.bands.some(b => b.kind === 'cut'));
+  assert.equal(cutCols.length, 4, '外壁2枚と、内壁が共有CLで割れた2列');
+  for (const c of cutCols) {
+    const b = c.bands.find(x => x.kind === 'cut');
+    assert.ok(b.ceilEdge, `列 ${c.x0}..${c.x1} の切断帯に ceilEdge が付く`);
+    assert.equal(b.exposedSide, undefined, `列 ${c.x0}..${c.x1} に exposedSide は付かない`);
+  }
+  const innerLo = cols.find(c => c.x0 === 1942.5), innerHi = cols.find(c => c.x0 === 2000);
+  near(innerLo.bands[0].z1, 3400); near(innerHi.bands[0].z1, 3428.75, '割れた後半の列の上端は後半の高い側');
+  const ceilAt = x => 2400 + x * 0.5;
+  for (const p of buildSectionFigure(cut, probeCtx).content.filter(q => q.type === 'line')) {
+    assert.ok(-p.y1 <= ceilAt(p.x1) + 1e-6 && -p.y2 <= ceilAt(p.x2) + 1e-6,
+      `線 (${p.x1},${-p.y1})-(${p.x2},${-p.y2}) が天井の斜線より上に出ている（${p.weight}）`);
+  }
+});

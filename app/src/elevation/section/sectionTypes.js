@@ -84,7 +84,11 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   openingPassThrough?:boolean,
  *   farFloorZ?:number|null, farCeilZ?:number|null, farDepthMm?:number,
  *   profiledTop?:boolean, topEdge?:{zAtLo:number, zAtHi:number}|{zAtX0:number, zAtX1:number},
+ *   ceilEdge?:{zAtX0:number, zAtX1:number},
  * }} ZBand
+ *   ceilEdge（切断壁の帯だけ。`sectionEngine.js`の`clipBandsToVisible`が付ける）＝その列の天井断面が
+ *   傾いている（列の`ceilEdge`）とき、天端が天井の斜線に沿う帯の、列の両端（図のx0側/x1側）での高さ。
+ *   `topEdge`（隔て壁自身の斜めの天端。probeが決める）とは別の意味なので流用しない。帯の z1 は斜線の高い側。
  *   hidden（展開図一般化Phase 6b-2。`sectionHits.js`の`isHiddenWall`該当の実体）＝
  *   「そこに壁は実在するが描かない」区間。`wall`/`distMm`/`openingPassThrough`/`far*`等の
  *   付帯情報は一切持たない（他kindと違い実体の詳細を渡さない、という宣言そのもの）。
@@ -108,7 +112,10 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 
 /**
  * @typedef {{ x0:number, x1:number, worldLo:number, worldHi:number,
- *   bands:ZBand[], loCLId?:string, hiCLId?:string }} SectionColumn
+ *   bands:ZBand[], loCLId?:string, hiCLId?:string,
+ *   ceilZ?:number, ceilEdge?:{zAtX0:number, zAtX1:number} }} SectionColumn
+ *   ceilZ＝その列の天井断面の高さ（傾いていれば低い側。打ち切りは低い側で水平）。ceilEdge＝天井断面が
+ *   傾いている列だけ付く、列の両端（図のx0側/x1側）での天井の高さ。
  */
 
 /**
@@ -211,8 +218,9 @@ export function slabRuns(columns) {
 // 持つデータモデル**のため、実機の袖壁1枚が2つのWallに分かれており、壁参照でまとめると同じ
 // 断面が2つのrunに割れてしまう——同じz範囲で連続する列は1枚の壁の断面とみなす。
 // QA是正（2026-09-13・F4）: `sectionEmit.js`から移設（単一情報源化）。
+// 天端が天井の斜線に沿う帯（`ceilEdge`）は列ごとに上端 z1 が違うので、z1 ではなく「斜線に沿う」で束ねる。
 export function cutWallRuns(columns) {
-  return bandRuns(columns, 'cut', b => `${b.z0}|${b.z1}`);
+  return bandRuns(columns, 'cut', b => `${b.z0}|${b.ceilEdge ? 'ceilEdge' : b.z1}`);
 }
 
 /**
@@ -415,20 +423,35 @@ export function worldOf(cut, localX) {
  * ならない。nullを返すと**その列だけ打ち切りが効かず**、描かれている天井線より上の帯の側縁が
  * 面の端に出る（実測: 実機「5」で面の左端に z2400..3000 の中線が出た）。
  *
- * `sectionEngine.js`の列分割（`ceilZ`）が使う天井プロファイル解決の単一情報源（旧実装は
+ * `sectionEngine.js`の列分割（`ceilZ`・`ceilEdge`）が使う天井プロファイル解決の単一情報源（旧実装は
  * `sectionEngine.js`内の私設関数`ceilZAt`だった。展開図一般化Phase 6b-3でここへ集約）。
- * @param {Array<{loX:number, hiX:number, ceilZ:number}>|undefined} ceilProfile
+ * 返すのは区間の天井断面の**x0側・x1側の高さ**（傾斜天井の受け口）。
+ *
+ * 区間は`ceilZ`（loXでの高さ）と任意の`ceilZHi`（hiXでの高さ）で直線を表す——傾斜は厳密に直線
+ * なので1区間1線分（円弧・ドームも呼び出し側が折れ線へ刻んで同じ表現で渡す。列ごとに天井を
+ * サンプリングする方式は採らない）。`ceilZHi`が無い・非有限・`ceilZ`と同値・区間幅0なら平面
+ * （z0===z1）。範囲外の列は端の区間の**端点の値で水平**（先頭は`ceilZ`・末尾は端点の高さ）。
+ * 区間の`ceilZ`が非有限ならnull＝打ち切らない。
+ * @param {Array<{loX:number, hiX:number, ceilZ:number, ceilZHi?:number}>|undefined} ceilProfile
  * @param {number} x0
  * @param {number} x1
- * @returns {number|null}
+ * @returns {{z0:number, z1:number}|null}
  */
-export function ceilProfileZAt(ceilProfile, x0, x1) {
+export function ceilProfileEdgeAt(ceilProfile, x0, x1) {
   const prof = ceilProfile;
   if (!Array.isArray(prof) || prof.length === 0) return null;
   const mid = (x0 + x1) / 2;
   const hit = prof.find(s => mid >= s.loX - GAP_EPS && mid <= s.hiX + GAP_EPS)
     ?? (mid < prof[0].loX ? prof[0] : prof[prof.length - 1]);
-  return hit && Number.isFinite(hit.ceilZ) ? hit.ceilZ : null;
+  if (!hit || !Number.isFinite(hit.ceilZ)) return null;
+  const width = hit.hiX - hit.loX;
+  const sloped = Number.isFinite(hit.ceilZHi) && Math.abs(hit.ceilZHi - hit.ceilZ) > GAP_EPS && width > GAP_EPS;
+  if (!sloped) return { z0: hit.ceilZ, z1: hit.ceilZ };
+  const zAt = x => {
+    const t = Math.min(1, Math.max(0, (x - hit.loX) / width));
+    return hit.ceilZ + (hit.ceilZHi - hit.ceilZ) * t;
+  };
+  return { z0: zAt(x0), z1: zAt(x1) };
 }
 
 /**

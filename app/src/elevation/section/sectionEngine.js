@@ -23,7 +23,7 @@
  *     自身はfinish/stair側の詳細を知らない——第3層との結合点はこの1箇所に閉じる）。
  */
 import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
-import { localXOf, worldOf, ceilProfileZAt } from './sectionTypes.js';
+import { localXOf, worldOf, ceilProfileEdgeAt } from './sectionTypes.js';
 import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
 import { faceFromCut } from './sectionFace.js';
 import { emitColumns, emitOpenGapMarks, nearestSightlineDistMm } from './sectionEmit.js';
@@ -60,7 +60,10 @@ function bandsEqual(a, b) {
       // 斜めの天端の線（topEdge）が違う列は別の帯——斜線の傾き・位置は列ごとに決まるので統合しない。
       && (band.profiledTop ?? false) === (other.profiledTop ?? false)
       && (band.topEdge?.zAtX0 ?? null) === (other.topEdge?.zAtX0 ?? null)
-      && (band.topEdge?.zAtX1 ?? null) === (other.topEdge?.zAtX1 ?? null);
+      && (band.topEdge?.zAtX1 ?? null) === (other.topEdge?.zAtX1 ?? null)
+      // 天端が天井の斜線に沿う帯（ceilEdge。topEdgeとは別物）も同じ理由で、斜線が違う列は統合しない。
+      && (band.ceilEdge?.zAtX0 ?? null) === (other.ceilEdge?.zAtX0 ?? null)
+      && (band.ceilEdge?.zAtX1 ?? null) === (other.ceilEdge?.zAtX1 ?? null);
   });
 }
 
@@ -124,7 +127,8 @@ function sameCutWall(a, b) {
  * @param {Array<Array<{z0:number,z1:number}>>} air - 列ごとの到達可能な空気区間
  * @param {number} i
  * @param {import('./sectionTypes.js').ZBand} band
- * @returns {{side:'lo'|'hi'|null, topZ:number}} side===null なら天井より上は見えない
+ * @returns {{side:'lo'|'hi'|null, topZ:number, runEdgeZ?:number}} side===null なら天井より上は見えない。
+ *   runEdgeZ＝露出側の壁の連なりの端での天井の高さ（傾いた列は斜線の値）
  */
 function exposedAboveCeil(columns, air, i, band) {
   const col = columns[i];
@@ -139,7 +143,13 @@ function exposedAboveCeil(columns, air, i, band) {
     for (const iv of air[j] ?? []) {
       if (iv.z1 <= ceilZ + GAP_EPS) continue;                                 // 自分の天井より上を覆うか
       if (iv.z1 <= band.z0 + GAP_EPS || iv.z0 >= band.z1 - GAP_EPS) continue; // 帯のz範囲と重なるか
-      if (!Number.isFinite(best.topZ) || iv.z1 > best.topZ) best = { side, topZ: iv.z1 };
+      if (!Number.isFinite(best.topZ) || iv.z1 > best.topZ) {
+        // runEdgeZ: 壁の連なりの**露出側の端**での天井の高さ（傾いた列は斜線の値）。隣の空気がこれ以下なら
+        // 斜線の続きであって段違い天井ではない（clipBandsToVisible）。
+        const edgeCol = columns[side === 'lo' ? lo : hi];
+        const runEdgeZ = side === 'lo' ? (edgeCol.ceilEdge?.zAtX0 ?? edgeCol.ceilZ) : (edgeCol.ceilEdge?.zAtX1 ?? edgeCol.ceilZ);
+        best = { side, topZ: iv.z1, runEdgeZ };
+      }
     }
   }
   return best;
@@ -170,13 +180,28 @@ function clipBandsToVisible(columns, air, i) {
   const col = columns[i];
   const ceilZ = col.ceilZ;
   if (!Number.isFinite(ceilZ)) return col.bands;
+  // 天井断面が傾いている列（ceilEdge）の高い側。打ち切りは低い側（ceilZ）で水平が原則で、例外は
+  // 「低い側より下から始まり高い側まで届く切断壁」だけ——その壁の天端は天井の斜線に沿う。
+  const highZ = col.ceilEdge ? Math.max(col.ceilEdge.zAtX0, col.ceilEdge.zAtX1) : ceilZ;
   const out = [];
   for (const band of col.bands) {
     if (isCutBand(band) && band.z1 > ceilZ + GAP_EPS) {
       const exposed = exposedAboveCeil(columns, air, i, band);
-      if (exposed.side) {
+      // 腰壁・垂れ壁・建具で切れた区間・天端プロファイルの壁は対象外（天端が別の理由で決まる）。
+      const followsSlope = !!col.ceilEdge && band.z0 < ceilZ - GAP_EPS && band.z1 >= highZ - GAP_EPS
+        && !band.isKneeDrop && !band.openingPassThrough && !band.profiledTop && !band.topEdge;
+      // 傾いた列では、隣の空気が**壁の連なりの露出側の端での斜線の高さ以下**までなら、それは同じ斜線の続き
+      // （斜線上の隣の列は低い側が連なりの端の高さに等しい）であって段違い天井ではない＝例外にしない
+      // （斜線に沿う壁なら ceilEdge を付け、そうでなければ下の低い側での打ち切りへ回す）。
+      // 自列の highZ ではなく連なりの端で見る: 通り芯で割れた壁は前半の列より向こう端の斜線が高い。
+      const slopeContinues = !!col.ceilEdge && exposed.topZ <= (exposed.runEdgeZ ?? highZ) + GAP_EPS;
+      if (exposed.side && !slopeContinues) {
         out.push({ ...band, z1: Math.min(band.z1, exposed.topZ),
           exposedSide: band.isKneeDrop === true ? null : exposed.side });
+        continue;
+      }
+      if (followsSlope) {
+        out.push({ ...band, z1: highZ, ceilEdge: col.ceilEdge });
         continue;
       }
     }
@@ -202,7 +227,10 @@ export function mergeColumns(columns) {
   for (const col of columns) {
     const last = merged[merged.length - 1];
     // ceilZ（列ごとの天井断面高さ）が違う列は統合しない——天井の高さが変わる境界そのものだから。
-    const sameCeil = (last?.ceilZ ?? null) === (col.ceilZ ?? null);
+    // 傾き（ceilEdge）が違う列も同じ。
+    const sameCeil = (last?.ceilZ ?? null) === (col.ceilZ ?? null)
+      && (last?.ceilEdge?.zAtX0 ?? null) === (col.ceilEdge?.zAtX0 ?? null)
+      && (last?.ceilEdge?.zAtX1 ?? null) === (col.ceilEdge?.zAtX1 ?? null);
     if (last && sameCeil && Math.abs(last.x1 - col.x0) < GAP_EPS && bandsEqual(last.bands, col.bands)) {
       last.x1 = col.x1;
       // WP-E5b修正: dirSign<0のcutではbuildColumnsがraw列をworld昇順で作った後、local x昇順へ
@@ -351,7 +379,12 @@ export function buildColumns(cut, probeCtx) {
     // ——エンジン側で天井の有無を推測すると階段帯の見え方まで変わるため、区間の天井を知っている
     // 呼び出し側（elevationVoid.js）から渡す。probeColumn自体はzRange全域を返す契約のまま
     // （不変条件テストが依存）で、描画対象の切り出しはここで行う。
-    const ceilZ = ceilProfileZAt(cut.ceilProfile, Math.min(localA, localB), Math.max(localA, localB));
+    // 区間が傾いていれば ceilZ は低い側（打ち切りは低い側で水平）・高い側は ceilEdge（図のx0側/x1側の高さ。
+    // 傾いているときだけ付ける＝平面の列の形は従来どおり）。
+    const colX0 = Math.min(localA, localB), colX1 = Math.max(localA, localB);
+    const edge = ceilProfileEdgeAt(cut.ceilProfile, colX0, colX1);
+    const ceilZ = edge ? Math.min(edge.z0, edge.z1) : null;
+    const ceilEdge = edge && Math.abs(edge.z0 - edge.z1) > GAP_EPS ? { zAtX0: edge.z0, zAtX1: edge.z1 } : null;
     // 斜めの天端の線（topEdge）は probe では世界座標の lo/hi 側＝{zAtLo,zAtHi}。図のローカルx（x0側/x1側）へ
     // 向きを合わせて入れ替える（dirSign<0 だと worldLo が図の右＝x1 側になる）。
     const loIsX0 = localA <= localB;
@@ -361,7 +394,7 @@ export function buildColumns(cut, probeCtx) {
         : { zAtX0: b.topEdge.zAtHi, zAtX1: b.topEdge.zAtLo } }
       : b));
     rawColumns.push({
-      x0: Math.min(localA, localB), x1: Math.max(localA, localB), worldLo, worldHi, ceilZ, bands,
+      x0: colX0, x1: colX1, worldLo, worldHi, ceilZ, ...(ceilEdge ? { ceilEdge } : {}), bands,
     });
   }
   rawColumns.sort((a, b) => a.x0 - b.x0); // dirSign<0だとworld昇順とlocal昇順が逆転するため並べ替える

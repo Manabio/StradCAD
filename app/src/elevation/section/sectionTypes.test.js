@@ -5,7 +5,7 @@
 // （呼び出し側=sectionStair.jsのstairPrimitivesForCutと同じ組み立て方。「D1」の縮小再現）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isSolidBand, solidRectsOf, slabJunctionOf, slabSolidRectsOf, zToY, ceilProfileZAt } from './sectionTypes.js';
+import { isSolidBand, solidRectsOf, slabJunctionOf, slabSolidRectsOf, zToY, ceilProfileEdgeAt } from './sectionTypes.js';
 import { isStringer } from './sectionEmit.js';
 import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { ElevationLineRole, weightForRole } from '../elevationStyle.js';
@@ -251,9 +251,13 @@ test('【T-b・失敗系】solidRectsOf: 退化した帯(z0===z1)は矩形を作
   assert.deepEqual(solidRectsOf(columns), []);
 });
 
-// ---- ceilProfileZAt: sectionEngine.jsの列分割(ceilZ)・elevationBand.jsのstairOverが共有する
-// 天井プロファイル解決の単一情報源（展開図一般化Phase 6b-3・エンジン内単一情報源化）。
-// [x0,x1]の中点を含む区間のceilZを返す。範囲外は端の区間の値へクランプする。
+// ---- 天井プロファイル解決の単一情報源は ceilProfileEdgeAt（sectionEngine.jsの列分割が使う。展開図一般化
+// Phase 6b-3・エンジン内単一情報源化）。以下は旧 ceilProfileZAt（低い側の高さ。製品からは呼ばれなくなり削除）
+// の期待をそのまま引き継ぐ: [x0,x1]の中点を含む区間のceilZを返す。範囲外は端の区間の値へクランプする。
+const ceilProfileZAt = (profile, x0, x1) => {
+  const edge = ceilProfileEdgeAt(profile, x0, x1);
+  return edge ? Math.min(edge.z0, edge.z1) : null;
+};
 test('【ceilProfileZAt】区間一様なら[x0,x1]の位置に関わらず同じceilZを返す', () => {
   const profile = [{ loX: 0, hiX: 2000, ceilZ: 2400 }];
   assert.equal(ceilProfileZAt(profile, 0, 0), 2400);
@@ -285,4 +289,39 @@ test('【失敗系・ceilProfileZAt】profileの範囲外は端の区間の値�
 test('【失敗系・ceilProfileZAt】profileが無い・空なら打ち切らない(null)', () => {
   assert.equal(ceilProfileZAt(undefined, 0, 0), null);
   assert.equal(ceilProfileZAt([], 0, 0), null);
+});
+
+// ---- ceilProfileEdgeAt: 傾斜天井の受け口（E3a-1）。区間は ceilZ（loX）と任意の ceilZHi（hiX）で直線を表す。
+test('【ceilProfileEdgeAt】平面の区間はz0===z1・傾斜の区間は[x0,x1]の両端を線形補間する', () => {
+  assert.deepEqual(ceilProfileEdgeAt([{ loX: 0, hiX: 4000, ceilZ: 2400 }], 0, 1000), { z0: 2400, z1: 2400 });
+  const sloped = [{ loX: 0, hiX: 4000, ceilZ: 2400, ceilZHi: 3000 }];
+  assert.deepEqual(ceilProfileEdgeAt(sloped, 0, 4000), { z0: 2400, z1: 3000 });
+  assert.deepEqual(ceilProfileEdgeAt(sloped, 1000, 2000), { z0: 2550, z1: 2700 });
+  // ceilProfileZAt は傾いた区間では低い側を返す。
+  assert.equal(ceilProfileZAt(sloped, 1000, 2000), 2550);
+  assert.equal(ceilProfileZAt([{ loX: 0, hiX: 4000, ceilZ: 3000, ceilZHi: 2400 }], 0, 4000), 2400);
+});
+
+test('【ceilProfileEdgeAt】区間外は端の区間の端点の値で水平・区間ごとに別の傾き', () => {
+  const profile = [
+    { loX: 0, hiX: 1000, ceilZ: 2400, ceilZHi: 2800 },
+    { loX: 1000, hiX: 2000, ceilZ: 3000 },
+  ];
+  assert.deepEqual(ceilProfileEdgeAt(profile, -500, -100), { z0: 2400, z1: 2400 }, '先頭より手前＝先頭区間のloXの値');
+  assert.deepEqual(ceilProfileEdgeAt(profile, 2100, 2500), { z0: 3000, z1: 3000 }, '末尾より奥＝末尾区間の値');
+  assert.deepEqual(ceilProfileEdgeAt(profile, 0, 1000), { z0: 2400, z1: 2800 });
+  assert.deepEqual(ceilProfileEdgeAt(profile, 1000, 2000), { z0: 3000, z1: 3000 });
+  const lastSloped = [{ loX: 0, hiX: 1000, ceilZ: 2400, ceilZHi: 2800 }];
+  assert.deepEqual(ceilProfileEdgeAt(lastSloped, 1500, 1800), { z0: 2800, z1: 2800 }, '末尾が傾斜なら奥は hiX の高さで水平');
+});
+
+test('【失敗系・ceilProfileEdgeAt】profileが無い・空・ceilZ非有限はnull／ceilZHiが非有限・同値・区間幅0は平面', () => {
+  assert.equal(ceilProfileEdgeAt(undefined, 0, 0), null);
+  assert.equal(ceilProfileEdgeAt([], 0, 0), null);
+  assert.equal(ceilProfileEdgeAt([{ loX: 0, hiX: 1000, ceilZ: NaN, ceilZHi: 3000 }], 0, 500), null);
+  const flat = { z0: 2400, z1: 2400 };
+  assert.deepEqual(ceilProfileEdgeAt([{ loX: 0, hiX: 1000, ceilZ: 2400, ceilZHi: NaN }], 0, 1000), flat);
+  assert.deepEqual(ceilProfileEdgeAt([{ loX: 0, hiX: 1000, ceilZ: 2400, ceilZHi: Infinity }], 0, 1000), flat);
+  assert.deepEqual(ceilProfileEdgeAt([{ loX: 0, hiX: 1000, ceilZ: 2400, ceilZHi: 2400 }], 0, 1000), flat);
+  assert.deepEqual(ceilProfileEdgeAt([{ loX: 500, hiX: 500, ceilZ: 2400, ceilZHi: 3000 }], 500, 500), flat);
 });

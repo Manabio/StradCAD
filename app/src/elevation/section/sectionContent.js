@@ -30,7 +30,8 @@ import { makeProbeContext } from './sectionProbe.js';
  * 図側（`elevationVoid.js`のはり出し量）も**この関数で**端の高さを取る——探査側のgateと
  * 図側のgateが同じ1つの式を読むための共有（別々に書くと段差床の区間で静かに食い違う）。
  * @param {Array<{loX:number, hiX:number}>|undefined} prof
- * @param {(seg:object)=>number} zOf
+ * @param {(seg:object, atRunEnd:boolean)=>number} zOf - atRunEnd＝その区間の run 側の端（hiX）の値を求めるか
+ *   （傾いた天井の区間は端ごとに高さが違う。平面の区間は無視してよい）
  * @returns {{atLocal0:number, atLocalRun:number}|null}
  */
 export function endZOf(prof, zOf) {
@@ -40,7 +41,7 @@ export function endZOf(prof, zOf) {
     if (s.loX < first.loX) first = s;
     if (s.hiX > last.hiX) last = s;
   }
-  return { atLocal0: zOf(first), atLocalRun: zOf(last) };
+  return { atLocal0: zOf(first, false), atLocalRun: zOf(last, true) };
 }
 
 /**
@@ -123,7 +124,8 @@ function layerRunWindowsOf(cut) {
   if (!cut.face || layers.length < 2) return null;
   const selfLo = line.lo - (line.probeExtendLoMm ?? 0);
   const selfHi = line.hi + (line.probeExtendHiMm ?? 0);
-  const endCeilZ = endZOf(cut.ceilProfile, s => s.ceilZ);
+  // 傾いた天井の末尾区間は run 側の端が hiX での高さ（ceilZHi）。lo 端は ceilZ（loX での高さ）。
+  const endCeilZ = endZOf(cut.ceilProfile, (s, atRunEnd) => (atRunEnd && Number.isFinite(s.ceilZHi) ? s.ceilZHi : s.ceilZ));
   const endFloorZ = endZOf(cut.floorZProfile, s => s.floorZ);
   const selfFloorZ = layers.find(l => l?.role === 'self')?.floorZMm ?? 0;
   // QA是正2026-09（§5.12 D2-1是正・項目1/4）: 他層の窓の基準点は単一情報源`wallLessEndAt`

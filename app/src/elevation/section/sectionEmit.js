@@ -142,7 +142,9 @@ function uncoveredZRanges(col, band, side = null) {
     // 重複が表面化した——偶然の重複除去に頼らず、描かない理由の側で決める。
     if (nb.kind === 'cut') {
       if (!overlapsZ(nb, band)) continue;
-      ranges = subtractZ(ranges, nb);
+      // 天端が天井の斜線に沿う切断壁（ceilEdge）は、境界での斜線の高さまでしか覆わない。
+      const cutTop = side && nb.ceilEdge ? Math.min(nb.z1, side === 'prev' ? nb.ceilEdge.zAtX1 : nb.ceilEdge.zAtX0) : nb.z1;
+      ranges = subtractZ(ranges, cutTop === nb.z1 ? nb : { z0: nb.z0, z1: cutTop });
       continue;
     }
     // QA是正2026-09（Phase 6b-2 C-1後の実機回帰）: hidden帯（展開図一般化Phase 6b-2 C-1。
@@ -247,7 +249,8 @@ function cutWallTopEdges(columns, cut, ceilZ, emitCtx) {
   const topZ = ceilZ ?? cut.zRange?.hiZ ?? null;
   if (topZ == null) return [];
   return cutWallRuns(columns)
-    .filter(r => r.band.z1 < topZ - GAP_EPS)
+    // 天端が天井の斜線に沿う壁（ceilEdge）に水平の天端線は無い（斜めの天井線は体裁が引く）。
+    .filter(r => !r.band.ceilEdge && r.band.z1 < topZ - GAP_EPS)
     .flatMap(r => [
       emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, ElevationLineRole.CUT, { ceilZ }),
       // 笠木の帯は腰壁・垂れ壁のもの——天端プロファイルの壁（隔て壁の斜め天端）には無い。
@@ -362,17 +365,23 @@ function ceilStepSlabSection(columns, cut, ceilZ) {
     const a = columns[i], b = columns[i + 1];
     if (!Number.isFinite(a.ceilZ) || !Number.isFinite(b.ceilZ)) continue;
     if (Math.abs(a.ceilZ - b.ceilZ) < GAP_EPS) continue;
-    const zLow = Math.min(a.ceilZ, b.ceilZ), zHigh = Math.max(a.ceilZ, b.ceilZ);
+    // 傾いた天井（ceilEdge）の列どうしは、境界での天井の高さが続いていれば段差ではない（斜線の続き）。
+    // 段差の高さは境界での値（傾いた列は斜線の端の値）で見る。
+    const aZ = a.ceilEdge?.zAtX1 ?? a.ceilZ, bZ = b.ceilEdge?.zAtX0 ?? b.ceilZ;
+    if (Math.abs(aZ - bZ) < GAP_EPS) continue;
+    const zLow = Math.min(aZ, bZ), zHigh = Math.max(aZ, bZ);
     // 低い天井の側が「上階の床が実在する」と言っている場合だけ描く（sectionEngine.jsの
     // upperFloorZ）。上に部屋が無い＝床が無い境界に床の断面線を描いてはいけない
     // （ユーザー確定「吹抜けには天井断面まで水平断面が無い」）。
     // 境界のすぐ隣の列は**まだ吹抜けのセルの中**でありうる（天井段差の位置は壁の手前の面、
     // 上階の床が始まるのは壁の向こうの面で、半壁厚ずれる）ため、低い天井が続くあいだ
     // 外側へ走査して最初に見つかった値を使う。
-    const step = a.ceilZ < b.ceilZ ? -1 : +1; // 低い天井の側へ進む向き
+    const step = aZ < bZ ? -1 : +1; // 低い天井の側へ進む向き
     let floorZ = null;
-    for (let k = a.ceilZ < b.ceilZ ? i : i + 1; k >= 0 && k < columns.length; k += step) {
-      if (Math.abs((columns[k].ceilZ ?? NaN) - zLow) > GAP_EPS) break;
+    for (let k = aZ < bZ ? i : i + 1; k >= 0 && k < columns.length; k += step) {
+      // 傾いた列は天井の範囲[低い側, 高い側]に zLow を含めば「低い天井が続く」とみなす。
+      const hiK = columns[k].ceilEdge ? Math.max(columns[k].ceilEdge.zAtX0, columns[k].ceilEdge.zAtX1) : columns[k].ceilZ;
+      if (!(zLow >= (columns[k].ceilZ ?? NaN) - GAP_EPS && zLow <= hiK + GAP_EPS)) break;
       if (Number.isFinite(columns[k].upperFloorZ)) { floorZ = columns[k].upperFloorZ; break; }
     }
     if (!Number.isFinite(floorZ) || floorZ <= zLow + GAP_EPS || floorZ >= zHigh - GAP_EPS) continue;
@@ -675,7 +684,9 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         const sameWall = b => !!b && !!b.wall && !!band.wall
           && (b.wall === band.wall
             || (!!b.wall.axisCL && b.wall.axisCL === band.wall.axisCL
-              && Math.abs(b.z0 - band.z0) < GAP_EPS && Math.abs(b.z1 - band.z1) < GAP_EPS));
+              && Math.abs(b.z0 - band.z0) < GAP_EPS
+              // 天端が天井の斜線に沿う帯（ceilEdge）は列ごとに上端が違うが、斜線は壁厚の中でも続く。
+              && (Math.abs(b.z1 - band.z1) < GAP_EPS || (!!b.ceilEdge && !!band.ceilEdge))));
         // `exposedSide`（sectionEngine.jsのclipBandsToCeil）が付いた帯は、**天井の高さが変わる
         // 境界に立っていて片側からしか見えない壁**。見えるのはその側の面だけで、反対側の面は
         // 低い天井の裏に隠れている——両縁を描くと壁厚が図に出てしまう（ユーザー明示指示:
@@ -712,16 +723,24 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           .filter(b => b.kind === 'cut' && !!b.wall?.axisCL && b.wall.axisCL === band.wall?.axisCL && overlapsZ(b, band))
           .reduce((rs, b) => subtractZ(rs, b), [{ z0: band.z0, z1: band.z1 }])
           .filter(r => r.z1 - r.z0 > GAP_EPS);
+        // 天端が天井の斜線に沿う帯（ceilEdge）の側縁は、その端での斜線の高さで止める（帯の z1 は高い側の値）。
         if (hidden !== 'hi' && !sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
           for (const r of edgeRanges(prev)) {
-            prims.push(Object.assign(emitLine(cut, col.x0, r.z0, col.x0, r.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
+            const zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX0) : r.z1;
+            if (zTop - r.z0 <= GAP_EPS) continue;
+            prims.push(Object.assign(emitLine(cut, col.x0, r.z0, col.x0, zTop, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
           }
         }
         if (hidden !== 'lo' && !sameWall(matchingBand(next, band.z0, band.z1, 'cut'))) {
           for (const r of edgeRanges(next)) {
-            prims.push(Object.assign(emitLine(cut, col.x1, r.z0, col.x1, r.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
+            const zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX1) : r.z1;
+            if (zTop - r.z0 <= GAP_EPS) continue;
+            prims.push(Object.assign(emitLine(cut, col.x1, r.z0, col.x1, zTop, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
           }
         }
+        // 天端の斜線は引かない: 天井に届いた壁には天端を引かず天井線は体裁が引く（平面の cutWallTopEdges と
+        // 同じ規約）。finalizeBand の dedupe は端点の完全一致しか畳まないので、列ごとの短い斜線を出すと
+        // 体裁の1本と二重に残る。
       } else if (band.kind === 'wall') {
         // 見えがかり壁面の輪郭（上端・下端）。水平線（縮退）はemitLineの単独判定では
         // 「ちょうどbaseFloorZ/ceilZに触れるだけ」を向こう側と見なさないため、band全体が

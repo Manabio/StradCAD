@@ -382,14 +382,29 @@ export function finalizeBand(room, graph, primitives, opts = {}) {
  * 値は `buildFaceFigure` が**天井断面線を実際に引いている式**（`ceilAbs = floorDeltaMm + chMm`、
  * `chMm`未指定は帯のCH）と同一にする——「展開図では断面の中は描画しない」（ユーザー明示指示
  * 2026-08）の打ち切り高さは、その面に描かれている天井線そのものでなければならない。
- * @param {Array<{loX:number, hiX:number, floorDeltaMm?:number, chMm?:number}>|undefined} segs
+ * 傾いた天井の区間は `chHiMm`（hiX での天井高。任意）を持ち、`ceilZHi = floorDeltaMm + chHiMm`
+ * （hiX での絶対高さ）として載せる。`chHiMm` が無い区間は `ceilZHi` のキー自体を付けない（平面）。
+ * @param {Array<{loX:number, hiX:number, floorDeltaMm?:number, chMm?:number, chHiMm?:number}>|undefined} segs
  * @param {number} run - 面の走り長さ（segs未指定時のフォールバック区間の幅）
  * @param {number} CH - 帯のCH（chMm未指定区間の天井絶対高さフォールバック）
- * @returns {Array<{loX:number, hiX:number, ceilZ:number}>}
+ * @returns {Array<{loX:number, hiX:number, ceilZ:number, ceilZHi?:number}>}
  */
 export function ceilProfileFromSegments(segs, run, CH) {
   if (!segs?.length) return [{ loX: 0, hiX: run, ceilZ: CH }];
-  return segs.map(s => ({ loX: s.loX, hiX: s.hiX, ceilZ: (s.floorDeltaMm ?? 0) + (s.chMm ?? CH) }));
+  return segs.map(s => ({
+    loX: s.loX, hiX: s.hiX, ceilZ: (s.floorDeltaMm ?? 0) + (s.chMm ?? CH),
+    ...(s.chHiMm != null ? { ceilZHi: (s.floorDeltaMm ?? 0) + s.chHiMm } : {}),
+  }));
+}
+
+/**
+ * `ceilProfileFromSegments` の天井断面の最大高さ（傾いた区間は高い側 `ceilZHi` も含む）。
+ * 断面エンジンの `cut.zRange.hiZ`（この切断が見せる天井の絶対高さの上限）に使う。
+ * @param {Array<{ceilZ:number, ceilZHi?:number}>} ceilProfile
+ * @returns {number}
+ */
+export function ceilProfileMaxZ(ceilProfile) {
+  return Math.max(...ceilProfile.flatMap(s => [s.ceilZ, s.ceilZHi ?? s.ceilZ]));
 }
 
 /**
@@ -656,7 +671,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       {
         face, viewSign: faceViewSign(face), dirSign: face.dirSign,
         baseFloorZ: floorZ,
-        zRange: { loZ: floorZ, hiZ: Math.max(...ceilProfile.map(s => s.ceilZ)) },
+        zRange: { loZ: floorZ, hiZ: ceilProfileMaxZ(ceilProfile) },
         // 断面の中（天井の向こう）は描かない。区間ごとの天井断面高さで打ち切る（sectionEngine.js）。
         ceilProfile,
         // 階段下の部屋の帯に重ねる階段の3D寄与（`stairContributionOverRoom`）。他の帯の`stairCut`

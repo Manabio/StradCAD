@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
-import { buildRoomBand, layoutBandFaces, finalizeBand, faceDrawnXRange } from './elevationBand.js';
+import {
+  buildRoomBand, layoutBandFaces, finalizeBand, faceDrawnXRange, ceilProfileFromSegments, ceilProfileMaxZ,
+} from './elevationBand.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
@@ -961,4 +963,31 @@ test('【区画の天井線とエンジンの打ち切りが一致】左2400・�
   assert.equal(Math.min(...lowSide.flatMap(p => [p.y1, p.y2])), -2400, '低い側（2400）の天井線より上にエンジンの線が残らない');
   const chDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v').map(p => p.label).sort();
   assert.ok(chDims.includes(3000), '右のCH寸法は区画の高さ');
+});
+
+// ---- ceilProfileFromSegments: 傾斜天井の受け口（E3a-1）。区間の chHiMm（任意）が ceilZHi になる ----
+test('【ceilProfileFromSegments】chHiMm の無い区間は ceilProfile の形が不変（ceilZHi キーなし）', () => {
+  const profile = ceilProfileFromSegments([
+    { loX: 0, hiX: 1000, floorDeltaMm: 0, chMm: 2400 },
+    { loX: 1000, hiX: 2000, floorDeltaMm: -100 },
+  ], 2000, 2700);
+  assert.deepEqual(profile, [
+    { loX: 0, hiX: 1000, ceilZ: 2400 },
+    { loX: 1000, hiX: 2000, ceilZ: 2600 },
+  ]);
+  assert.ok(profile.every(s => !('ceilZHi' in s)), 'ceilZHi のキー自体が無い');
+  assert.deepEqual(ceilProfileFromSegments(undefined, 3000, 2700), [{ loX: 0, hiX: 3000, ceilZ: 2700 }]);
+});
+
+test('【ceilProfileFromSegments】chHiMm ありは ceilZHi（床段差込みの絶対高さ）と最大高さ(zRange.hiZ)に反映', () => {
+  const profile = ceilProfileFromSegments([
+    { loX: 0, hiX: 1000, floorDeltaMm: 100, chMm: 2400, chHiMm: 3000 },
+    { loX: 1000, hiX: 2000, floorDeltaMm: 0, chMm: 2400 },
+  ], 2000, 2700);
+  assert.deepEqual(profile, [
+    { loX: 0, hiX: 1000, ceilZ: 2500, ceilZHi: 3100 },
+    { loX: 1000, hiX: 2000, ceilZ: 2400 },
+  ]);
+  assert.equal(ceilProfileMaxZ(profile), 3100, '高い側 ceilZHi を含む最大');
+  assert.equal(ceilProfileMaxZ([{ loX: 0, hiX: 1, ceilZ: 2400 }, { loX: 1, hiX: 2, ceilZ: 3000 }]), 3000, '平面は従来どおり ceilZ の最大');
 });
