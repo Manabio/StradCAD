@@ -359,6 +359,13 @@ export function familyCeilingSegments(face, parentRoom, graph) {
   };
   const axisValue = face.axisCL.value;
   const breaks = collectRunBreaks(graph, face.isVertical, face.lo, face.hi);
+  const field = zoneCeilingFieldOf(graph);
+  if (field) { // far側の行の区画の辺でも刻む（区画なしは従来どおり）
+    const extra = zoneCeilingEdgesAlong(field, {
+      isVertical: face.isVertical, depthCoord: axisValue - face.inward * PROBE_EPS_MM, lo: face.lo, hi: face.hi,
+    }).filter(e => !breaks.some(b => Math.abs(b - e) < GAP_EPS));
+    if (extra.length) breaks.push(...extra), breaks.sort((a, b) => a - b);
+  }
   const found = []; // 世界run座標の {lo, hi, ceilAbsMm}
   for (let i = 0; i + 1 < breaks.length; i++) {
     const lo = breaks[i], hi = breaks[i + 1];
@@ -369,7 +376,7 @@ export function familyCeilingSegments(face, parentRoom, graph) {
     const cell = worldToCell(px, py, graph);
     const owner = cell ? (ownerByCell.get(cell.key) ?? null) : null;
     if (!owner) continue; // 向こう側が部屋外・部分指定関係のない部屋 → 破線の対象外
-    const ceilAbsMm = (graph.effectiveFloorLevel(owner) - parentFL) + chOf(owner);
+    const ceilAbsMm = (graph.effectiveFloorLevel(owner) - parentFL) + (zoneCeilingChAt(field, owner, px, py) ?? chOf(owner));
     const last = found[found.length - 1];
     if (last && last.ceilAbsMm === ceilAbsMm && Math.abs(last.hi - lo) < GAP_EPS) last.hi = hi;
     else found.push({ lo, hi, ceilAbsMm });

@@ -613,3 +613,30 @@ test('【失敗系】傾斜の区画の上は部屋の CH のまま（後のス�
   const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
   assert.equal(buildSpaceIndex([layer]).cellAt(layer, 1000, 1500).ceilZ, CH);
 });
+
+test('【cellsAlong は区画の far 天井】視線の先の部屋の最初のセルが区画なら ceilZ は床＋区画高（区画なしの部屋は CH）', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  const near = g.interior([[0, 0]]);
+  const far = g.interior([[0, 1]]);
+  far.setOverride('ceilingHeight', '2500');
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 3000, shape: 'flat', dims: [] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs[0].room, near);
+  assert.equal(segs[0].ceilZ, CH);
+  assert.equal(segs[1].room, far);
+  assert.equal(segs[1].ceilZ, 3000);
+});
+
+test('【失敗系】区画のある部屋の getFinishInfo が例外でも cellsAlong は落ちず、その区間は ceilZ null で積む', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1]]);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 3000, shape: 'flat', dims: [] }).zones);
+  far.getFinishInfo = () => { throw new Error('boom'); };
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[1].room, far);
+  assert.equal(segs[1].ceilZ, null);
+});

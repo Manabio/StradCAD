@@ -216,7 +216,7 @@ export function buildSpaceIndex(layers, opts = {}) {
       const last = out[out.length - 1];
       if (!last || last.room !== room) {
         // floorZFor（graph.effectiveFloorLevel等の純算術）は例外を投げない。ceilZ側
-        // （chFor→roomCeilingHeight→room.getFinishInfo()）だけが、部屋の異常データで例外に
+        // （chAt→chFor→roomCeilingHeight→room.getFinishInfo()）だけが、部屋の異常データで例外に
         // なりうる（getFinishInfo()の実装は展開帯構築時に例外を投げる想定済み——
         // buildBandsSafelyがその部屋の帯だけを落とす）。cellsAlongは視線の先の**無関係な**
         // 部屋まで辿るため、素朴に例外を伝播させると「隣・その先の部屋が壊れているだけで、
@@ -228,7 +228,7 @@ export function buildSpaceIndex(layers, opts = {}) {
         const floorZ = floorZFor(room, layer);
         let ceilZ = null;
         if (room) {
-          try { ceilZ = floorZ + chFor(room, graph); }
+          try { ceilZ = floorZ + chAt(room, graph, px, py); } // その部屋の区間の最初のセルの探査点（区画は手前のものだけ拾う）
           catch { /* この部屋の天井だけ諦める（上記コメント） */ }
         }
         // QA指摘④: componentIdは積まない（本函数のJSDoc参照）。

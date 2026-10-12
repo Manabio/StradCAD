@@ -720,3 +720,35 @@ test('【区画＋床段差の部分指定の子】床+100 の子に区画 3000:
   assert.equal('zoneCeilEdgeHi' in segs[0], false, '親と子の境界は所有者が違う＝従来どおり（半壁厚ずらし）');
   assert.equal('owner' in segs[0], false);
 });
+
+// ---- 天伏の平面区画（C2: 壁の向こうの家族の天井の破線が区画に追従） ----
+function zonedFamily(zones) {
+  const graph = makeGraph();
+  const { room, yM, botKeys } = makeTwoRowFamily(graph);
+  const child = graph.addRoom(new Set(botKeys), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400');
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  for (const [x, mm, shape] of zones) {
+    const key = worldToCell(x, 2250, graph, CEILING_CELL_GRID).key;
+    child.setCeilingZones(createZone(graph, child, [key], { heightMm: mm, shape: shape ?? 'flat', dims: shape ? [600, 0] : [] }).zones);
+  }
+  const face = { axisCL: yM, isVertical: false, inward: -1, lo: 0, hi: 4000, originWorld: 0, dirSign: 1 };
+  return familyCeilingSegments(face, room, graph);
+}
+
+test('【familyCeilingSegments は far 側の区画で ceilAbsMm が割れる】子の右半分が区画 3000 なら天井芯 x=2000 で 2300 / 2900', () => {
+  const segs = zonedFamily([[3000, 3000]]);
+  assert.deepEqual(segs, [
+    { loX: 0, hiX: 2000, ceilAbsMm: 2300 },
+    { loX: 2000, hiX: 4000, ceilAbsMm: 2900 },
+  ]);
+});
+
+test('【区画なしは不変】区画のない家族は従来どおり1区間 2300', () => {
+  assert.deepEqual(zonedFamily([]), [{ loX: 0, hiX: 4000, ceilAbsMm: 2300 }]);
+});
+
+test('【失敗系】傾斜の区画は対象外＝割れず 2300 のまま', () => {
+  assert.deepEqual(zonedFamily([[3000, 3000, 'slope']]), [{ loX: 0, hiX: 4000, ceilAbsMm: 2300 }]);
+});

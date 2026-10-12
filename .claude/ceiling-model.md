@@ -116,12 +116,12 @@ N 階の天伏は「N の天井面際から N+1 の床を裏から見た図」�
 - 階段区画の初期値（基準高＝対の部屋の CH・平均勾配）は、上側だけの区画だと勾配の位置に来ない。
 - ドームは積型放物面。非矩形の区画では頂点が区画の外に出る。
 - 天井芯は前方互換なし（旧版で開くと中心線）。天井芯の削除・結合・中心線にまたがれたとき、区画のセルは部屋の CH に戻る。
-- 仕上げ表の CH 欄は区画のレンジを出さない。展開図の自室の天井線は平面の区画に追従する（E1 済み）。傾斜・円弧・ドーム、階段帯・遠側の天井は未対応（着手中。次節）。
+- 仕上げ表の CH 欄は区画のレンジを出さない。展開図の自室の天井線は平面の区画に追従する（E1 済み）。遠側の天井（開放スパン・家族の破線・cellsAlong）も平面の区画には追従する（C2 済み）。傾斜・円弧・ドーム、階段帯は未対応（着手中。次節）。
 
 ## 天井高の点問い合わせ（E0。展開図が区画・形状に追従するための足場）
 - `ceiling/ceilingHeightField.js`。平面上の点から層 FL 基準（床段差込み）の天井面の高さを引く。**見上げの天井立体（`planSolids`）と同じ材料から引き、高さの式を二重定義しない**（一致はテストで固定）。面に無い点（天井を持たない部屋・階段所属で区画に入らないセル）は null＝呼び元が `roomCeilingHeight` に落とす約束。
 - 共有辺の上は面の順の先勝ちなので、呼び元はセル中央など内部の点で問い合わせる。STAIR_VOID の平らな面も返るが、展開図で使うかは裁定待ち。
-- 展開図側の消費: 平面（flat）の区画だけ E1 で済み（`elevation/space/zoneCeiling.js`、設計は elevation-model.md「天井高さの解決」）。傾斜・円弧・ドームと階段帯・遠側の天井は以降。基準の展開図 golden は `scripts/probe/golden-elev-ceiling/ceiling-zone-test`（`--regen`。生成は `makeCeilingZoneTestDoc.mjs`）。
+- 展開図側の消費: 平面（flat）の区画だけ E1 で済み（`elevation/space/zoneCeiling.js`、設計は elevation-model.md「天井高さの解決」）。傾斜・円弧・ドームと階段帯は以降（遠側の天井の平面区画は C2 で済み）。基準の展開図 golden は `scripts/probe/golden-elev-ceiling/ceiling-zone-test`（`--regen`。生成は `makeCeilingZoneTestDoc.mjs`）＝自室の区画。遠側（親が子の区画を見る）は `golden-elev-ceiling/ceiling-zone-far-test`（1階 売場の子・2階 収納に区画。生成は `makeCeilingZoneFarTestDoc.mjs`。C1 との差は親の帯＝売場・予備室だけ）。far-test の golden が検出するのは開放スパンの経路（売場・予備室）だけ。家族の破線・cellsAlong は単体テストが守る。
 
 ## 検証データ（S13d）
 - `scripts/probe/makeCeilingSteelStairTestDoc.mjs`（既定＝鉄骨 `ceiling-steel-stair-test.stq`、`--wood`＝木造 `ceiling-wood-stair-test.stq`。D:/tatsuya/Download）。3階建て、1F・2F に同じ足元の折返し階段（13.stq の 1F と外形・値は同じ。セルは 1 つ）、3F は STAIR_VOID。実データに無い「鉄骨で続きのある階段」の見上げの確認用。

@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { worldToCell } from '../finish/gridCells.js';
+import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
+import { createZone } from '../ceiling/ceilingZones.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import {
   extendFaceWithOpenSpans, extendFacesWithOpenSpans, dedupeOverlappingFaces, clipSpans,
@@ -498,4 +499,138 @@ test('【失敗系】extendFacesWithOpenSpans: near側に自室セルが無い�
     if (f === syn) continue;
     assert.ok(Array.isArray(f.spans), `${f.label}: 他の面は通常どおりspansを持つはず`);
   }
+});
+
+// ---- 天伏の平面区画（C2: 遠側の天井が区画の高さに追従） ----
+// makeWallThenOpenRoom の開放先（下段右＝子）に天井芯 y=1500 を足し、下半分だけを区画にする。
+function zonedOpenFace(zoneMm) {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, 0);
+  const child = graph.rooms.find(r => r.name === '部分指定');
+  if (zoneMm != null) {
+    graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+    const key = worldToCell(3000, 1750, graph, CEILING_CELL_GRID).key;
+    child.setCeilingZones(createZone(graph, child, [key], { heightMm: zoneMm, shape: 'flat', dims: [] }).zones);
+  }
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  return extendFaceWithOpenSpans(face, faces, room, graph);
+}
+
+test('【far 側の区画で farCeilAbsMm が変わる】開放先の下半分が区画 3000 なら天芯 y=1500 で open 区間が割れる', () => {
+  const ext = zonedOpenFace(3000);
+  const opens = ext.spans.filter(s => s.kind === 'open');
+  assert.deepEqual(opens.map(s => s.farCeilAbsMm), [2400, 3000], '上半分は部屋の CH・下半分は区画高');
+  assert.equal(opens[0].hiX, opens[1].loX);
+  assert.equal(opens[1].loX - opens[0].loX, 500, '1000..1500 と 1500..2000 の境は 500 の位置');
+});
+
+test('【区画なしは変更前と deepEqual】区画のない開放先は1つの open 区間・farCeilAbsMm は部屋の CH', () => {
+  const ext = zonedOpenFace(null);
+  const opens = ext.spans.filter(s => s.kind === 'open');
+  assert.equal(opens.length, 1);
+  assert.equal(opens[0].farCeilAbsMm, 2400);
+});
+
+test('【失敗系】傾斜の区画は対象外＝open 区間は割れず farCeilAbsMm は部屋の CH のまま', () => {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, 0);
+  const child = graph.rooms.find(r => r.name === '部分指定');
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const key = worldToCell(3000, 1750, graph, CEILING_CELL_GRID).key;
+  child.setCeilingZones(createZone(graph, child, [key], { heightMm: 3000, shape: 'slope', dims: [600, 0] }).zones);
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  const opens = extendFaceWithOpenSpans(face, faces, room, graph).spans.filter(s => s.kind === 'open');
+  assert.deepEqual(opens.map(s => s.farCeilAbsMm), [2400]);
+});
+
+test('【near 側のみの区画】near 側（自室）だけに区画があっても far の天井は変わらず、open 区間は不要に割れない', () => {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, 0);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const key = worldToCell(1000, 1750, graph, CEILING_CELL_GRID).key; // 下段左（near 側）の下半分
+  room.setCeilingZones(createZone(graph, room, [key], { heightMm: 3000, shape: 'flat', dims: [] }).zones);
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  const opens = extendFaceWithOpenSpans(face, faces, room, graph).spans.filter(s => s.kind === 'open');
+  assert.deepEqual(opens.map(s => s.farCeilAbsMm), [2400]);
+});
+
+// 開放区間が入口側（ローカル0側）に来る向きの最小構成。上段(y:0-1000)＝自室(左)と子(右)、
+// 下段右＝他室（実壁は下段のx=2000）。開放区間は入口側なので、informative でなく長さが全体の
+// 1/4 を超えると規則3で落ちる＝informative の真偽が「open 区間が残るか」として観測できる。
+// 天伏の天井芯 y=800 を足し、nearZone/farZone が真なら上段の下側（y:800-1000）を区画 3000 にする。
+function entrySideOpenFace({ nearZone, farZone }) {
+  const graph = makeGraph();
+  const A = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, A);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, A);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, A);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, A);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, A);
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, A);
+  const topL = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const topR = `${x1.id}:${y0.id}:${x2.id}:${y1.id}`;
+  const botL = `${x0.id}:${y1.id}:${x1.id}:${y2.id}`;
+  const botR = `${x1.id}:${y1.id}:${x2.id}:${y2.id}`;
+  const other = graph.addRoom(new Set([botR]), '他室');
+  generateRoomWallsFromOutline(graph, other);
+  const room = graph.addRoom(new Set([topL, botL, topR]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const child = graph.addRoom(new Set([topR]), '部分指定', undefined, new Set([room.id]));
+  if (nearZone || farZone) {
+    graph.addCenterLine(CenterLineType.HORIZONTAL, 800, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  }
+  const zoneOf = (r, x) => createZone(graph, r, [worldToCell(x, 900, graph, CEILING_CELL_GRID).key],
+    { heightMm: 3000, shape: 'flat', dims: [] }).zones;
+  if (nearZone) room.setCeilingZones(zoneOf(room, 1000));
+  if (farZone) child.setCeilingZones(zoneOf(child, 3000));
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  return extendFaceWithOpenSpans(face, faces, room, graph);
+}
+
+test('【near 側の区画で informative が立つ】near だけ下側が区画 3000 なら入口側の open 区間が規則3で落ちずに残る', () => {
+  const opens = entrySideOpenFace({ nearZone: true, farZone: false }).spans.filter(s => s.kind === 'open');
+  assert.equal(opens.length, 1, 'near の区画行で informative=true（結合でOR）→ 落ちない');
+  assert.equal(opens[0].farCeilAbsMm, 2400, 'far の天井は区画なし＝部屋の CH のまま');
+});
+
+test('【near 側の区画で informative が立つ】対照: 区画が無ければ同じ構成で open 区間は規則3で落ちる', () => {
+  const opens = entrySideOpenFace({ nearZone: false, farZone: false }).spans.filter(s => s.kind === 'open');
+  assert.equal(opens.length, 0);
+});
+
+test('【near と far が同じ区画高なら informative false】同じ行の区画高が同じなら入口側の open 区間は落ちる', () => {
+  const opens = entrySideOpenFace({ nearZone: true, farZone: true }).spans.filter(s => s.kind === 'open');
+  assert.equal(opens.length, 0, 'near/far とも 3000 → 情報ゼロ＝規則3で落ちる');
+});
+
+test('【near と far が同じ区画高なら informative false】出口側では open が残り、下半分の farCeilAbsMm は区画高 3000', () => {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, 0);
+  const child = graph.rooms.find(r => r.name === '部分指定');
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const zoneOf = (r, x) => createZone(graph, r, [worldToCell(x, 1750, graph, CEILING_CELL_GRID).key],
+    { heightMm: 3000, shape: 'flat', dims: [] }).zones;
+  room.setCeilingZones(zoneOf(room, 1000));
+  child.setCeilingZones(zoneOf(child, 3000));
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  const opens = extendFaceWithOpenSpans(face, faces, room, graph).spans.filter(s => s.kind === 'open');
+  assert.deepEqual(opens.map(s => s.farCeilAbsMm), [2400, 3000]);
+});
+
+test('【open span の床段差の二重加算なし】開放先が FL −100・区画 3000 なら下半分の farCeilAbsMm は 2900（zMm 経由の 2800 ではない）', () => {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, -100);
+  const child = graph.rooms.find(r => r.name === '部分指定');
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const key = worldToCell(3000, 1750, graph, CEILING_CELL_GRID).key;
+  child.setCeilingZones(createZone(graph, child, [key], { heightMm: 3000, shape: 'flat', dims: [] }).zones);
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  const opens = extendFaceWithOpenSpans(face, faces, room, graph).spans.filter(s => s.kind === 'open');
+  assert.deepEqual(opens.map(s => s.farCeilAbsMm), [2400, 2900]);
 });

@@ -22,6 +22,7 @@ import {
   roomOwnerByCell, runBoundaryCLIds, collectRunBreaks, findRunCLAt, cellNearSideOnFace,
   cellStraddlesFace,
 } from './elevationFloorProfile.js';
+import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingEdgesAlong } from './space/zoneCeiling.js';
 import { perpFaceAt, perpWallCrossesFacePlane, CORNER_TOL_MM } from './elevationFaces.js';
 import {
   MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, SIGHTLINE_DEPTH_LIMIT_MM,
@@ -60,6 +61,8 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
     if (!chByRoom.has(r.id)) chByRoom.set(r.id, roomCeilingHeight(graph, r).mm);
     return chByRoom.get(r.id);
   };
+  // 天伏の平面区画（無ければ null＝従来どおり）。near側の行・far側の行それぞれの区画の辺でも刻む。
+  const field = zoneCeilingFieldOf(graph);
   const segs = [];
   for (const key of refreshCells(room.cells, graph)) {
     const b = cellBoundsFromKey(key, graph);
@@ -75,7 +78,14 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
     const [cellRunLo, cellRunHi] = face.isVertical ? [b.y1, b.y2] : [b.x1, b.x2];
     const { loCLId: cellLoCLId, hiCLId: cellHiCLId } = runBoundaryCLIds(key, face.isVertical);
 
-    const breaks = collectRunBreaks(graph, face.isVertical, cellRunLo, cellRunHi);
+    let breaks = collectRunBreaks(graph, face.isVertical, cellRunLo, cellRunHi);
+    if (field) {
+      const extra = [-1, 1].flatMap(side => zoneCeilingEdgesAlong(field, {
+        isVertical: face.isVertical, depthCoord: axisValue + side * face.inward * PROBE_EPS_MM,
+        lo: cellRunLo, hi: cellRunHi,
+      })).filter(e => !breaks.some(b => Math.abs(b - e) < GAP_EPS));
+      if (extra.length) breaks = [...breaks, ...extra].sort((a, b) => a - b);
+    }
     for (let i = 0; i + 1 < breaks.length; i++) {
       const runLo = breaks[i], runHi = breaks[i + 1];
       if (runHi - runLo < GAP_EPS) continue;
@@ -91,15 +101,17 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
         farFloorDeltaMm = graph.effectiveFloorLevel(farOwner) - graph.effectiveFloorLevel(room);
         // 問題修正2026-08その2: 開放先の天井の絶対高さ（band部屋FL基準。far床＋far所有Roomの
         // 解決済みCH）——描画側が「開放先の天井の見えがかり線」を引くのに使う。
-        farCeilAbsMm = farFloorDeltaMm + chOf(farOwner);
+        farCeilAbsMm = farFloorDeltaMm + (zoneCeilingChAt(field, farOwner, farX, farY) ?? chOf(farOwner));
         // informative（問題修正2026-08その8）: この区間が展開図として**情報を持つ**か。
         // near側とfar側でFLも天井高も同じなら、そこに描かれるのはアキ（バツ）だけ＝情報ゼロ。
         // FL差・CH差があれば遠側床線／遠側天井線という実体のある見えがかりが現れる。
         // 「入口側の隅」を越える延長を許すかの判定に使う（extendFaceWithOpenSpans）。
         const nearOwner = ownerByCell.get(key) ?? room;
+        const nearX = face.isVertical ? axisValue + face.inward * PROBE_EPS_MM : mid;
+        const nearY = face.isVertical ? mid : axisValue + face.inward * PROBE_EPS_MM;
         const nearFloorDeltaMm = graph.effectiveFloorLevel(nearOwner) - graph.effectiveFloorLevel(room);
         informative = farFloorDeltaMm !== nearFloorDeltaMm ||
-          farCeilAbsMm !== nearFloorDeltaMm + chOf(nearOwner);
+          farCeilAbsMm !== nearFloorDeltaMm + (zoneCeilingChAt(field, nearOwner, nearX, nearY) ?? chOf(nearOwner));
       }
       const loCLId = runLo === cellRunLo ? cellLoCLId : (findRunCLAt(graph, face.isVertical, runLo)?.id ?? null);
       const hiCLId = runHi === cellRunHi ? cellHiCLId : (findRunCLAt(graph, face.isVertical, runHi)?.id ?? null);
