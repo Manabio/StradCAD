@@ -36,6 +36,8 @@ import {
   DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM, SPLIT_MERGE_EPS_MM, DEFAULT_DIM_FOOT_GAP_MM, GAP_EPS_MM,
 } from './elevationStyle.js';
 
+const BC_ABOVE_EPS_MM = 1e-6; // 家族の天井の破線が近側の天井断面より「上」と見なす最小差（浮動小数の丸めを吸収）
+
 // 項目4: 壁2段書きの省略判定用テキスト幅概算。renderText（figurePrimitivesKonva.jsx）は
 // size省略時fontSize=12を使うため、ここでも同じ12pxを使う。
 // QA G1: 全角主体ラベル向けの plan/planHoleMarks.js labelPlacement 方式（1文字=fontSize幅）を全文字一律で使うと、
@@ -535,7 +537,7 @@ function upperFloorEdgeSpanAt(end, floorProfile, upperFloorZ, overhang, xs, floo
  *   dimRowGapModelMm?:number, gridRowGapModelMm?:number,
  *   floorSegments?:Array<{loX:number,hiX:number,floorDeltaMm:number,chMm?:number,
  *     flatLineSpanX?:{lo?:number,hi?:number}}>,
- *   beyondCeilings?:Array<{loX:number,hiX:number,ceilAbsMm:number}>,
+ *   beyondCeilings?:Array<{loX:number,hiX:number,ceilAbsMm:number,ceilAbsHiMm?:number}>,
  *   ceilingProfile?:Array<[number,number]>, floorProfile?:Array<[number,number]>|null,
  *   skipBaseboard?:boolean, skipWallLabel?:boolean,
  *   floorSpanX?:{lo:number,hi:number}}} ctx
@@ -871,11 +873,19 @@ export function buildFaceFigure(face, ctx) {
     // スパンだけ——開放先のさらに奥にある、より高いファミリー天井(bc)は開放スパン上にも描く
     // （壁区間との情報量の非対称を作らない）。farCeilAbsMm未指定（旧形式spans）はfar天井線
     // 自体が描かれないため差し引かない（二重描画の回避だけが差し引きの目的）。
-    const subtractOpenRanges = (lo, hi, ceilAbsMm) => {
+    // 傾いた bc は、傾いた遠側天井線（farCeilHiAbsMm）が同じ直線の上にある開放スパンだけ差し引く（二重線の回避。
+    // 直線の判定は元の区間端 o.loX/o.hiX での高さ。bcAbsAt は [loX,hiX] の外へも同じ直線を延ばす）。
+    const sameBcLine = (o, bc) => {
+      if (bc.ceilAbsHiMm == null) return o.farCeilAbsMm === bc.ceilAbsMm && o.farCeilHiAbsMm == null; // 傾いた遠側天井線は水平な破線を代わりに描かない
+      if (o.farCeilHiAbsMm == null) return false;
+      const at = x => bc.ceilAbsMm + (bc.ceilAbsHiMm - bc.ceilAbsMm) * ((x - bc.loX) / (bc.hiX - bc.loX));
+      return Math.abs(o.farCeilAbsMm - at(o.loX)) < GAP_EPS_MM && Math.abs(o.farCeilHiAbsMm - at(o.hiX)) < GAP_EPS_MM;
+    };
+    const subtractOpenRanges = (lo, hi, bc) => {
       const pieces = [];
       let cursor = lo;
       for (const o of openRangesForCeil) {
-        if (o.farCeilAbsMm !== ceilAbsMm || o.farCeilHiAbsMm != null) continue; // 傾いた遠側天井線は水平な破線を代わりに描かない
+        if (!sameBcLine(o, bc)) continue;
         if (o.hiX <= lo || o.loX >= hi) continue;
         if (o.loX > cursor) pieces.push([cursor, Math.min(o.loX, hi)]);
         cursor = Math.max(cursor, o.hiX);
@@ -907,13 +917,24 @@ export function buildFaceFigure(face, ctx) {
     // 同じで床だけ違う隣接区間）で分割したまま積むと、座標は連続でも破線パターンの位相が中間で
     // 再スタートし「破線同士の角は必ず破線の交点」の既存配慮（belowFloorEdge参照）に反する。
     for (const bc of beyondCeilings) {
+      const bcTilted = bc.ceilAbsHiMm != null;
+      // bc の x での天井絶対高さ（傾いた bc は [loX, hiX] の直線。元の区間端の値から補間するので、
+      // 描く x が seg・run で切られた位置でも真の高さになる）
+      const bcAbsAt = x => (bcTilted
+        ? bc.ceilAbsMm + (bc.ceilAbsHiMm - bc.ceilAbsMm) * ((x - bc.loX) / (bc.hiX - bc.loX))
+        : bc.ceilAbsMm);
       const pieces = [];
       for (const seg of segs) {
-        if (bc.ceilAbsMm <= Math.max(ceilAbsOf(seg), ceilAbsHiOf(seg))) continue; // 傾いた区間は高い側より上のときだけ（天井線をまたぐ破線を引かない）
         const lo = Math.max(bc.loX, seg.loX, 0);
         const hi = Math.min(bc.hiX, seg.hiX, run); // 壁のない端部の延長は対象外
         if (hi - lo <= 0) continue;
-        pieces.push(...subtractOpenRanges(lo, hi, bc.ceilAbsMm));
+        // 近側の天井断面より上（高い）の部分だけ描く。差 d(x)=bc−近側 は区間内で線形（途中で交わるなら交点で切る）
+        const d0 = bcAbsAt(lo) - segCeilAbsAt(seg, lo), d1 = bcAbsAt(hi) - segCeilAbsAt(seg, hi);
+        if (d0 <= BC_ABOVE_EPS_MM && d1 <= BC_ABOVE_EPS_MM) continue;
+        let pLo = lo, pHi = hi;
+        if (d0 <= BC_ABOVE_EPS_MM) pLo = lo + (hi - lo) * (-d0 / (d1 - d0)); // 交点から hi まで
+        else if (d1 <= BC_ABOVE_EPS_MM) pHi = lo + (hi - lo) * (d0 / (d0 - d1)); // lo から交点まで
+        pieces.push(...subtractOpenRanges(pLo, pHi, bc));
       }
       pieces.sort((a, b) => a[0] - b[0]);
       const mergedPieces = [];
@@ -923,8 +944,9 @@ export function buildFaceFigure(face, ctx) {
         else mergedPieces.push([a, b]);
       }
       for (const [a, b] of mergedPieces) {
-        prims.push({ type: 'line', x1: a, y1: -bc.ceilAbsMm, x2: b, y2: -bc.ceilAbsMm, weight: detailWeight, dash: 'dashed' });
-        maxDrawnBcCeilAbs = Math.max(maxDrawnBcCeilAbs, bc.ceilAbsMm);
+        const ya = bcTilted ? bcAbsAt(a) : bc.ceilAbsMm, yb = bcTilted ? bcAbsAt(b) : bc.ceilAbsMm;
+        prims.push({ type: 'line', x1: a, y1: -ya, x2: b, y2: -yb, weight: detailWeight, dash: 'dashed' });
+        maxDrawnBcCeilAbs = Math.max(maxDrawnBcCeilAbs, ya, yb);
       }
     }
     for (let ri = 0; ri + 1 < ceilRuns.length; ri++) {

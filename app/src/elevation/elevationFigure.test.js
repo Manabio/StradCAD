@@ -874,6 +874,20 @@ test('【傾いた遠側の天井線は水平のファミリー破線を差し�
   assert.ok(tilted.some(p => p.x1 === 2800 && p.x2 === 4000), JSON.stringify(tilted));
 });
 
+test('【傾いた bc は同じ直線の傾いた遠側天井線の区間だけ差し引く】二重線にならず、直線が違えば破線が残る', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400 }];
+  const slanted = prims => prims.filter(p => p.type === 'line' && p.dash === 'dashed' && p.weight === 'thin' && p.y1 !== p.y2 && p.x1 !== p.x2);
+  const face = openSpansFace({ farCeilAbsMm: 2640, farCeilHiAbsMm: 2760 }); // 遠側天井線: x 2800..4000 で 2640→2760（勾配 0.1）
+  const same = { loX: 2000, hiX: 4000, ceilAbsMm: 2560, ceilAbsHiMm: 2760 }; // 同じ直線（x=2800 で 2640・x=4000 で 2760）
+  const ctxOf = bc => baseCtx({ ceilingHeight: 2400, floorSegments, beyondCeilings: [bc] });
+  const rows = ls => ls.map(l => [l.x1, l.y1, l.x2, l.y2]);
+  const withSame = rows(slanted(buildFaceFigure(face, ctxOf(same))));
+  assert.deepEqual(withSame, [[2000, -2560, 2800, -2640], [2800, -2640, 4000, -2760]], '壁区間の bc は残り、開放スパン上は遠側天井線の 1 本だけ');
+  const other = rows(slanted(buildFaceFigure(face, ctxOf({ ...same, ceilAbsMm: 2570, ceilAbsHiMm: 2770 }))));
+  assert.equal(other.length, 2, '直線が違えば bc は開放スパン上にも描く（bc 1 本＋遠側天井線 1 本）');
+  assert.deepEqual(other.find(r => r[0] === 2000), [2000, -2570, 4000, -2770], '差し引かれないので 1 本で x 2000→4000');
+});
+
 // ---- ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」 ----
 // 階段帯の往復間の壁は切断線から見て面の裏側へ伸びるため、直交壁の検出（室内側へ突出する袖壁が
 // 対象）に掛からず一点鎖線の源が無かった。呼び出し側が明示指定できるctx.extraCenterLineXsを追加。
@@ -1032,6 +1046,80 @@ test('buildFaceFigure: 天井段差のある複数runでは、beyondCeilingsの�
   // 論理境界(2000)で止める——描画済みrun範囲（段差x=2057.5）基準にすると、bcの論理境界と
   // 一致する面で半壁厚ぶんの偽スリバーが生じるため（実装コメント参照）。
   assert.equal(dashedAt2400[0].x2, 2000, '破線は論理境界(2000)まで＝右runのCUT天井(-2400)と重ならないはず');
+});
+
+// ---- 天伏の傾斜（E3b-2）: 傾いた家族の破線は斜線1本・近側の天井断面より上の部分だけ ----
+const bcDashed = prims => prims.filter(p => p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed');
+const nearAt = (ceil) => [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: ceil }];
+
+test('【傾いた家族の破線は斜線1本】近側 2300 の上に bc 2400→2800 が (0,−2400)→(4000,−2800) の破線1本', () => {
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 2400, floorSegments: nearAt(2300),
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2400, ceilAbsHiMm: 2800 }],
+  }));
+  assert.deepEqual(bcDashed(prims), [{ type: 'line', x1: 0, y1: -2400, x2: 4000, y2: -2800, weight: 'thin', dash: 'dashed' }]);
+});
+
+test('【近側より下の部分は描かない（交点で切る）】近側 2600 に対し bc 2400→2800 は x=2000 から・bc 2800→2400 は x=2000 まで', () => {
+  const up = bcDashed(buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 2600, floorSegments: nearAt(2600),
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2400, ceilAbsHiMm: 2800 }],
+  })));
+  assert.deepEqual(up.map(l => [l.x1, l.y1, l.x2, l.y2]), [[2000, -2600, 4000, -2800]]);
+  const down = bcDashed(buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 2600, floorSegments: nearAt(2600),
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2800, ceilAbsHiMm: 2400 }],
+  })));
+  assert.deepEqual(down.map(l => [l.x1, l.y1, l.x2, l.y2]), [[0, -2800, 2000, -2600]]);
+});
+
+test('【失敗系】傾いた bc が近側の天井断面より全域で下なら破線は出ない（近側 3000 に bc 2400→2800）', () => {
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 3000, floorSegments: nearAt(3000),
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2400, ceilAbsHiMm: 2800 }],
+  }));
+  assert.equal(bcDashed(prims).length, 0);
+});
+
+test('【区間境界で高さを補間】bc 2400→3400（勾配 0.25）を近側の区間境界 x=1000 で切った端は真の高さ 2650（bc の元の端の値ではない）', () => {
+  const floorSegments = [
+    { loX: 0, hiX: 1000, floorDeltaMm: 0, chMm: 3000 },    // bc は下（描かない）
+    { loX: 1000, hiX: 4000, floorDeltaMm: 0, chMm: 2000 }, // bc は上
+  ];
+  const lines = bcDashed(buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 3000, floorSegments,
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2400, ceilAbsHiMm: 3400 }],
+  })));
+  assert.deepEqual(lines.map(l => [l.x1, l.y1, l.x2, l.y2]), [[1000, -2650, 4000, -3400]]);
+});
+
+test('【傾いた bc を区間で分けても1本に結合】近側が 2 区間とも bc より下なら (0,−2400)→(4000,−2800) の1本', () => {
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0, chMm: 2000 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 0, chMm: 2100 },
+  ];
+  const lines = bcDashed(buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 2400, floorSegments,
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2400, ceilAbsHiMm: 2800 }],
+  })));
+  assert.deepEqual(lines.map(l => [l.x1, l.y1, l.x2, l.y2]), [[0, -2400, 4000, -2800]]);
+});
+
+test('【flat の破線は変更前と同形】ceilAbsHiMm の無い bc は水平な破線1本（キーも従来どおり）', () => {
+  const prims = buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 2400, floorSegments: nearAt(2300),
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2400 }],
+  }));
+  assert.deepEqual(bcDashed(prims), [{ type: 'line', x1: 0, y1: -2400, x2: 4000, y2: -2400, weight: 'thin', dash: 'dashed' }]);
+});
+
+test('【近側が傾いた区間と水平な bc】近側 2300→2900（lo→hi）に対し水平な bc 2600 は x=2000 まで (0,−2600)→(2000,−2600)', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2300, chHiMm: 2900 }];
+  const lines = bcDashed(buildFaceFigure(makeFace(), baseCtx({
+    ceilingHeight: 2900, floorSegments,
+    beyondCeilings: [{ loX: 0, hiX: 4000, ceilAbsMm: 2600 }],
+  })));
+  assert.deepEqual(lines.map(l => [l.x1, l.y1, l.x2, l.y2]), [[0, -2600, 2000, -2600]], '近側は x=2000 で 2600 に達する＝bc はそれより手前だけ上');
 });
 
 // ---- 失敗系: 自CH指定なしの部分指定（roomCeilingHeightの調整でchMm=親CH−FL差）は天井が水平1本のまま ----

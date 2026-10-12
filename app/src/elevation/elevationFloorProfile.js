@@ -23,7 +23,8 @@ import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { graphList, scopedValue } from '../graphReadScope.js';
 import { isCeilingOnlyKind } from '../core/centerLineKindPolicy.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
-import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChAlong, zoneCeilingEdgesAlong } from './space/zoneCeiling.js';
+import { outerWallFaceAt } from '../finish/wallFaces.js';
+import { zoneCeilingFieldOf, zoneCeilingChAlong, zoneCeilingEdgesAlong } from './space/zoneCeiling.js';
 
 // 傾いた片どうしを1本の斜線に結合してよいかの許容差（高さの連続 mm・勾配 mm/mm）。浮動小数の丸め誤差だけを吸収する。
 const TILT_EPS_MM = 1e-6;
@@ -356,6 +357,12 @@ export function drawnRiserX(segs, i, halfWallMm) {
   return segs[i].hiX + towardLow * halfWallMm;
 }
 
+// 傾いた2片（世界座標の lo<hi）が同じ直線の続きか（高さが連続し勾配が同じ）
+function sameTiltLine(a, b) {
+  const gradient = s => (s.ceilAbsHiMm - s.ceilAbsMm) / (s.hi - s.lo);
+  return Math.abs(a.ceilAbsHiMm - b.ceilAbsMm) < TILT_EPS_MM && Math.abs(gradient(a) - gradient(b)) < TILT_GRADIENT_EPS;
+}
+
 /**
  * 面の壁の「向こう側（far側）」にある部屋ファミリー（親＋部分指定の子＝部分指定関係のある部屋）
  * のセルを面のrun軸で刻んでプローブした「天井の絶対高さ区間」一覧（問題修正2026-08その3改）。
@@ -369,7 +376,10 @@ export function drawnRiserX(segs, i, halfWallMm) {
  * @param {object} face - buildRoomFaces/composeRoomFacesの1件
  * @param {import('@core').Room} parentRoom
  * @param {object} graph
- * @returns {Array<{loX:number, hiX:number, ceilAbsMm:number}>} ローカルx・同一天井高さの隣接区間は結合済み
+ * @returns {Array<{loX:number, hiX:number, ceilAbsMm:number, ceilAbsHiMm?:number}>} ローカルx・同一天井高さの隣接区間は結合済み。
+ *   ceilAbsHiMm … 天伏の傾斜の片だけが持つ hiX 側の天井絶対高さ（ceilAbsMm は loX 側）。
+ *   断面なので傾斜は壁の外側の仕上げ面（finish/wallFaces.js outerWallFaceAt。実壁が無ければ芯）の奥行きで評価する。
+ *   傾いた片どうしは高さ連続＋勾配一致のときだけ結合し、水平の片とは結合しない。平らな片はキー自体を持たない。
  */
 export function familyCeilingSegments(face, parentRoom, graph) {
   const ownerByCell = roomOwnerByCell(parentRoom, graph);
@@ -382,32 +392,66 @@ export function familyCeilingSegments(face, parentRoom, graph) {
   const axisValue = face.axisCL.value;
   const breaks = collectRunBreaks(graph, face.isVertical, face.lo, face.hi);
   const field = zoneCeilingFieldOf(graph);
-  if (field) { // far側の行の区画の辺でも刻む（区画なしは従来どおり）
+  const farDepth = axisValue - face.inward * PROBE_EPS_MM; // far側の行（セルの内側）
+  if (field) { // far側の行の区画・傾斜の面の辺でも刻む（区画なしは従来どおり）
     const extra = zoneCeilingEdgesAlong(field, {
-      isVertical: face.isVertical, depthCoord: axisValue - face.inward * PROBE_EPS_MM, lo: face.lo, hi: face.hi,
+      isVertical: face.isVertical, depthCoord: farDepth, lo: face.lo, hi: face.hi, includeShaped: true,
     }).filter(e => !breaks.some(b => Math.abs(b - e) < GAP_EPS));
-    if (extra.length) breaks.push(...extra), breaks.sort((a, b) => a - b);
+    // 面の軸上の壁の端でも刻む——片の中で壁の有無が変わらないようにする（隅の短い壁が少し重なるだけで
+    // 片全体が外側の面で評価され、高さが段に割れるのを防ぐ。壁の無い片は芯で評価される）。
+    const wallEnds = [];
+    if (face.axisCL?.id != null) {
+      for (const w of graphList(graph, 'walls') ?? []) {
+        if (w.axisCL?.id !== face.axisCL.id || w.isVertical !== face.isVertical) continue;
+        for (const e of [w.coord1, w.coord2]) if (Number.isFinite(e) && e > face.lo && e < face.hi) wallEnds.push(e);
+      }
+    }
+    const more = [...extra, ...wallEnds].filter((e, i, a) => a.indexOf(e) === i && !breaks.some(b => Math.abs(b - e) < GAP_EPS));
+    if (more.length) breaks.push(...more), breaks.sort((a, b) => a - b);
   }
-  const found = []; // 世界run座標の {lo, hi, ceilAbsMm}
+  const found = []; // 世界run座標の {lo, hi, ceilAbsMm, ceilAbsHiMm?}（傾いた片だけ hi 端の高さ）
   for (let i = 0; i + 1 < breaks.length; i++) {
     const lo = breaks[i], hi = breaks[i + 1];
     if (hi - lo < GAP_EPS) continue;
     const mid = (lo + hi) / 2;
-    const px = face.isVertical ? axisValue - face.inward * PROBE_EPS_MM : mid;
-    const py = face.isVertical ? mid : axisValue - face.inward * PROBE_EPS_MM;
+    const px = face.isVertical ? farDepth : mid;
+    const py = face.isVertical ? mid : farDepth;
     const cell = worldToCell(px, py, graph);
     const owner = cell ? (ownerByCell.get(cell.key) ?? null) : null;
     if (!owner) continue; // 向こう側が部屋外・部分指定関係のない部屋 → 破線の対象外
-    const ceilAbsMm = (graph.effectiveFloorLevel(owner) - parentFL) + (zoneCeilingChAt(field, owner, px, py) ?? chOf(owner));
+    const floorDelta = graph.effectiveFloorLevel(owner) - parentFL;
+    // 断面なので評価点は壁の外側の仕上げ面（実壁が無い面は芯）。面は farDepth × 片の中央で判定する。
+    let along = null;
+    if (field) {
+      const outerFace = face.axisCL?.id != null
+        ? outerWallFaceAt(graph, face.axisCL, { isVertical: face.isVertical, outward: -face.inward, spanLo: lo, spanHi: hi })
+        : null;
+      along = zoneCeilingChAlong(field, owner, {
+        isVertical: face.isVertical, depthCoord: outerFace ?? axisValue, probeDepth: farDepth, lo, hi,
+      });
+    }
+    const tilted = along != null && Math.abs(along.chHi - along.chLo) > GAP_EPS;
+    const ceilAbsMm = floorDelta + (along?.chLo ?? chOf(owner));
+    const ceilAbsHiMm = tilted ? floorDelta + along.chHi : null;
     const last = found[found.length - 1];
-    if (last && last.ceilAbsMm === ceilAbsMm && Math.abs(last.hi - lo) < GAP_EPS) last.hi = hi;
-    else found.push({ lo, hi, ceilAbsMm });
+    const adjacent = last && Math.abs(last.hi - lo) < GAP_EPS;
+    if (adjacent && !tilted && last.ceilAbsHiMm == null && last.ceilAbsMm === ceilAbsMm) last.hi = hi;
+    else if (adjacent && tilted && last.ceilAbsHiMm != null && sameTiltLine(last, { lo, hi, ceilAbsMm, ceilAbsHiMm })) {
+      last.hi = hi;
+      last.ceilAbsHiMm = ceilAbsHiMm;
+    } else found.push(tilted ? { lo, hi, ceilAbsMm, ceilAbsHiMm } : { lo, hi, ceilAbsMm });
   }
   const toLocal = w => (w - face.originWorld) * face.dirSign + 0;
   return found
     .map(s => {
       const a = toLocal(s.lo), b = toLocal(s.hi);
-      return { loX: Math.min(a, b), hiX: Math.max(a, b), ceilAbsMm: s.ceilAbsMm };
+      // 傾いた片は ceilAbsMm＝loX 側・ceilAbsHiMm＝hiX 側（dirSign<0 で世界の lo/hi と入れ替わる）
+      const swapped = a > b;
+      return {
+        loX: Math.min(a, b), hiX: Math.max(a, b),
+        ceilAbsMm: s.ceilAbsHiMm != null && swapped ? s.ceilAbsHiMm : s.ceilAbsMm,
+        ...(s.ceilAbsHiMm != null ? { ceilAbsHiMm: swapped ? s.ceilAbsMm : s.ceilAbsHiMm } : {}),
+      };
     })
     .sort((a, b) => a.loX - b.loX || a.ceilAbsMm - b.ceilAbsMm);
 }

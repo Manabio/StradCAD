@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { outerWallFaceAt } from '../finish/wallFaces.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
@@ -831,6 +832,127 @@ test('【区画なしは不変】区画のない家族は従来どおり1区間 
   assert.deepEqual(zonedFamily([]), [{ loX: 0, hiX: 4000, ceilAbsMm: 2300 }]);
 });
 
-test('【失敗系】傾斜の区画は対象外＝割れず 2300 のまま', () => {
-  assert.deepEqual(zonedFamily([[3000, 3000, 'slope']]), [{ loX: 0, hiX: 4000, ceilAbsMm: 2300 }]);
+// ---- 天伏の傾斜（E3b-2: 家族の破線の片に ceilAbsHiMm。断面なので壁の外側の仕上げ面で評価） ----
+// 子（床−100・CH2400）の右半分 x 2000..4000 に区画（底 3000・勾配 600/2000）。
+function zonedFamilyTilt({ dims, dirSign = 1, withWall = false, shape = 'slope' }) {
+  const graph = makeGraph();
+  const { room, yM, botKeys } = makeTwoRowFamily(graph);
+  const child = graph.addRoom(new Set(botKeys), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400');
+  if (withWall) generateRoomWallsFromOutline(graph, child); // 中間CL y=1500 にも壁が立つ
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const key = worldToCell(3000, 2250, graph, CEILING_CELL_GRID).key;
+  child.setCeilingZones(createZone(graph, child, [key], { heightMm: 3000, shape, dims }).zones);
+  const face = { axisCL: yM, isVertical: false, inward: -1, lo: 0, hi: 4000, originWorld: dirSign < 0 ? 4000 : 0, dirSign };
+  return { segs: familyCeilingSegments(face, room, graph), graph, yM };
+}
+
+test('【家族の破線の片に ceilAbsHiMm】走り方向 slope[600,+x]: 左は平ら 2300・右は 2900→3500（床−100 込み。区画の底 3000＋勾配 600/2000）', () => {
+  const { segs } = zonedFamilyTilt({ dims: [600, 0] });
+  assert.equal(segs.length, 2);
+  assert.deepEqual([segs[0].loX, segs[0].hiX, segs[0].ceilAbsMm], [0, 2000, 2300]);
+  assert.equal('ceilAbsHiMm' in segs[0], false, '平らな片はキー自体を持たない');
+  assert.deepEqual([segs[1].loX, segs[1].hiX], [2000, 4000]);
+  near(segs[1].ceilAbsMm, 2900, 'x=2000: −100＋3000');
+  near(segs[1].ceilAbsHiMm, 3500, 'x=4000: −100＋3600');
+});
+
+test('【dirSign<0 で ceilAbsMm/ceilAbsHiMm が入れ替わる】向かいから見ると傾斜の片はローカル 0..2000 で 3500→2900', () => {
+  const { segs } = zonedFamilyTilt({ dims: [600, 0], dirSign: -1 });
+  const tilt = segs.find(s => 'ceilAbsHiMm' in s);
+  assert.deepEqual([tilt.loX, tilt.hiX], [0, 2000]);
+  near(tilt.ceilAbsMm, 3500, 'ローカル 0＝世界 x 4000（高い側）');
+  near(tilt.ceilAbsHiMm, 2900, 'ローカル 2000＝世界 x 2000（底）');
+});
+
+test('【奥行き方向の slope は両端同値で ceilAbsHiMm なし】slope[600,+y]・壁なしの芯 y=1500 は区画の底 3000 → ceilAbsMm 2900', () => {
+  const { segs } = zonedFamilyTilt({ dims: [600, 90] });
+  const right = segs.find(s => s.loX === 2000);
+  near(right.ceilAbsMm, 2900, '芯 y=1500（区画の y 1500..3000 の手前の端）＝底');
+  assert.equal('ceilAbsHiMm' in right, false);
+});
+
+test('【評価点は壁の外側の仕上げ面】中間CL y=1500 に壁があると、奥行き方向の slope[600,+y] は芯の値 2900 ではなく壁の向こう側の面の値になる', () => {
+  const noWall = zonedFamilyTilt({ dims: [600, 90] });
+  const walled = zonedFamilyTilt({ dims: [600, 90], withWall: true });
+  const outer = outerWallFaceAt(walled.graph, walled.yM, { isVertical: false, outward: 1, spanLo: 2000, spanHi: 4000 });
+  assert.ok(outer != null && outer > 1500, `前提: 中間CL上に壁があり向こう側（+y）の面が芯より先（実際:${outer}）`);
+  const right = walled.segs.find(s => s.loX === 2000);
+  near(right.ceilAbsMm, -100 + 3000 + 600 * (outer - 1500) / 1500, '底 3000＋勾配 600/1500×(外側の面−区画の端 y=1500)');
+  assert.ok(right.ceilAbsMm > noWall.segs.find(s => s.loX === 2000).ceilAbsMm, '芯の値（2900）より高い');
+  assert.equal('ceilAbsHiMm' in right, false);
+});
+
+test('【失敗系】円弧の区画は対象外＝割れず 2300 のまま・ceilAbsHiMm なし（部屋 CH）', () => {
+  const { segs } = zonedFamilyTilt({ dims: [400, 0], shape: 'arc' });
+  assert.deepEqual(segs, [{ loX: 0, hiX: 4000, ceilAbsMm: 2300 }]);
+});
+
+test('【失敗系】ドームの区画も対象外＝部屋 CH', () => {
+  const { segs } = zonedFamilyTilt({ dims: [400], shape: 'dome' });
+  assert.deepEqual(segs, [{ loX: 0, hiX: 4000, ceilAbsMm: 2300 }]);
+});
+
+// ---- E3b-2 QA: 壁の端で刻む／CL で割れた同じ傾斜の片の結合 ----
+test('【開放スパンに隅の短い壁が少し重なるだけなら芯で評価】中間CLの壁が x 0..2072.5（傾斜の片 2000..4000 に 72.5mm だけ重なる）: 重なる 72.5mm の片だけ外側の面・残りは芯 2900 の1片', () => {
+  const graph = makeGraph();
+  const { room, yM, botKeys } = makeTwoRowFamily(graph);
+  const child = graph.addRoom(new Set(botKeys), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400');
+  generateRoomWallsFromOutline(graph, child);
+  const wall = [...graph.walls].find(w => w.axisCL?.id === yM.id);
+  assert.ok(wall && wall.coord2 > 3000, '前提: 中間CL上の壁が x 0..4000');
+  wall.endOffset -= wall.coord2 - 2072.5;
+  assert.ok(Math.abs(wall.coord2 - 2072.5) < 1e-6, `前提: 壁の端 2072.5（実際:${wall.coord2}）`);
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const key = worldToCell(3000, 2250, graph, CEILING_CELL_GRID).key;
+  child.setCeilingZones(createZone(graph, child, [key], { heightMm: 3000, shape: 'slope', dims: [600, 90] }).zones);
+  const face = { axisCL: yM, isVertical: false, inward: -1, lo: 0, hi: 4000, originWorld: 0, dirSign: 1 };
+  const right = familyCeilingSegments(face, room, graph).filter(s => s.loX >= 2000);
+  assert.equal(right.length, 2, `壁の端 2072.5 で割れる（実際:${JSON.stringify(right)}）`);
+  assert.deepEqual([right[0].loX, right[0].hiX], [2000, 2072.5]);
+  assert.ok(right[0].ceilAbsMm > 2900 + 1e-6, '壁のある 72.5mm は外側の面の値（芯 2900 より高い）');
+  assert.deepEqual([right[1].loX, right[1].hiX], [2072.5, 4000]);
+  near(right[1].ceilAbsMm, 2900, '壁の無い残りは芯の値 1 片');
+});
+
+test('【CL で割れた同じ傾斜の片は1本に結合】走り方向 slope の中に縦CL x=3000 を足しても 2000..4000 の 1 片（2900→3500）', () => {
+  const graph = makeGraph();
+  const { room, yM, botKeys } = makeTwoRowFamily(graph);
+  const child = graph.addRoom(new Set(botKeys), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400');
+  graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const keys = [2500, 3500].map(x => worldToCell(x, 2250, graph, CEILING_CELL_GRID).key); // x=3000 の CL で 2 セルに割れた 1 つの区画
+  child.setCeilingZones(createZone(graph, child, keys, { heightMm: 3000, shape: 'slope', dims: [600, 0] }).zones);
+  const face = { axisCL: yM, isVertical: false, inward: -1, lo: 0, hi: 4000, originWorld: 0, dirSign: 1 };
+  const tilt = familyCeilingSegments(face, room, graph).filter(s => s.loX >= 2000);
+  assert.equal(tilt.length, 1, JSON.stringify(tilt));
+  assert.deepEqual([tilt[0].loX, tilt[0].hiX], [2000, 4000]);
+  near(tilt[0].ceilAbsMm, 2900, 'lo');
+  near(tilt[0].ceilAbsHiMm, 3500, 'hi');
+});
+
+test('【勾配が違えば結合しない】x 2000..3000 は勾配 600/1000・3000..4000 は水平寄りの別区画 → 2 片', () => {
+  const graph = makeGraph();
+  const { room, yM, botKeys } = makeTwoRowFamily(graph);
+  const child = graph.addRoom(new Set(botKeys), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(-100);
+  child.setOverride('ceilingHeight', '2400');
+  graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.CEILING }, 'cc3');
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING }, 'cc2');
+  const kA = worldToCell(2500, 2250, graph, CEILING_CELL_GRID).key;
+  const kB = worldToCell(3500, 2250, graph, CEILING_CELL_GRID).key;
+  const zA = createZone(graph, child, [kA], { heightMm: 3000, shape: 'slope', dims: [600, 0] }).zones;
+  child.setCeilingZones(zA);
+  child.setCeilingZones(createZone(graph, child, [kB], { heightMm: 3600, shape: 'slope', dims: [300, 0] }).zones);
+  const face = { axisCL: yM, isVertical: false, inward: -1, lo: 0, hi: 4000, originWorld: 0, dirSign: 1 };
+  const tilt = familyCeilingSegments(face, room, graph).filter(s => s.loX >= 2000);
+  assert.equal(tilt.length, 2, JSON.stringify(tilt));
+  near(tilt[0].ceilAbsHiMm, 3500, 'A の hi');
+  near(tilt[1].ceilAbsMm, 3500, 'B の lo（高さは連続）');
+  near(tilt[1].ceilAbsHiMm, 3800, 'B の hi（勾配 300/1000 で違う）');
 });
