@@ -83,7 +83,7 @@ for (let i = 0; i < tabs.length; i++) {
   const rows = [];
   const run = () => {
     const gridCLs = collectGridCLs(graph);
-    let floorHeightMm = null;
+    let floorHeightMm;
     try { floorHeightMm = floorHeightAbove(project, graph.plane); } catch { floorHeightMm = null; }
     const base = { project, materialMap: new Map(), gridCLs };
 

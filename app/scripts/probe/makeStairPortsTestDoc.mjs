@@ -43,8 +43,6 @@ const srcPath = 'D:/tatsuya/Download/2026模擬試験.stq';
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
 const { LEFT, RIGHT } = StairPortSide;
 
-// 階段のセルの範囲（元の 1 セル x0..1820 × y-9100..-7280）。上り方向 up: 上り口は南端 y-7280・到達端は北端 y-9100
-const Y_ENTRY = -7280, Y_FAR = -9100;
 const X_MID = 910;
 
 // 追加する通り芯（y は上り口側から: 先頭の行の境界・次の境界。x は U 字の中央）
@@ -52,7 +50,7 @@ const VARIANTS = [
   {
     n: 1, title: '直進・木造・上り口 e=2（左）・到達口 a=1（右）',
     ys: [-7900, -8500], xs: [],
-    apply: (stair) => ({ type: StairType.STRAIGHT, structure: StructuralMaterialType.WOOD, sections: [12], entrySide: LEFT, entryTurnSteps: 2, arrivalSide: RIGHT, arrivalTurnSteps: 1 }),
+    apply: () => ({ type: StairType.STRAIGHT, structure: StructuralMaterialType.WOOD, sections: [12], entrySide: LEFT, entryTurnSteps: 2, arrivalSide: RIGHT, arrivalTurnSteps: 1 }),
     expect: (stair, graph) => { const p = straightPlanLayout(stair, graph); return p?.entryPort === 'side' && p.arrivalPort === 'side' && p.entryTurnSteps === 2 && p.arrivalTurnSteps === 1; },
   },
   {

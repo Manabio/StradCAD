@@ -164,12 +164,12 @@ for (const cand of candidates) {
     await preConverge(hWired);
     await preConverge(hUnwired);
     const backingBefore = wallBackingCenters(hWired.project.activeGraph);
-    let toastWired = null, toastUnwired = null;
+    let toastWired, toastUnwired;
     try {
       ({ toast: toastWired } = await tryApplyOn(hWired, cand.id, spec, true));
       await hWired.probeSync.whenIdle();
       ({ toast: toastUnwired } = await tryApplyOn(hUnwired, cand.id, spec, false));
-    } catch (e) {
+    } catch {
       continue; // この候補・specでは確定自体が失敗（想定外の壁構成等）。次を試す
     }
     if (toastWired !== null || toastUnwired !== null) continue;

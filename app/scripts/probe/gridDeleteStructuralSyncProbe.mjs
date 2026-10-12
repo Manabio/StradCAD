@@ -251,15 +251,12 @@ const singleEndWallsBefore = await findSingleEndWalls(h, chosenId);
 
 let boxAfterDelete = null;
 const clMain = h.project.structGraph.shapeMap.get(chosenId);
-const tDeleteStart = performance.now();
 setCenterLineStructuralListener((g, p, s, undoRecords) => {
   boxAfterDelete = undoRecords ?? boxAfterDelete;
   h.probeSync.request(g, p, { scope: s, undoRecords });
 });
 const { toast: mainToast } = await deleteCenterLineWithUndo(h.project.activeGraph, h.project, clMain, { saveFloorFn: h.storeSave });
-const tDeleteEnd = performance.now();
 await h.probeSync.whenIdle();
-const tSyncEnd = performance.now();
 ok(mainToast === null, `deleteCenterLineWithUndo(${chosenLabel})はtoast:nullで成功する（実際: ${mainToast}）`);
 
 const afterDeleteDump = await dumpAll(h);

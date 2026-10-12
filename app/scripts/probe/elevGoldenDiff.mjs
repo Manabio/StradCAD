@@ -233,7 +233,9 @@ export function decomposePolylines(prims) {
     assertPrim(p);
     if (p.type !== 'polyline' || p.closed || p.fill != null) { out.push(p); continue; }
     // type/pointsを除いた残り属性（stroke等）だけ引き継ぐ。
-    const { type: _type, points: _points, ...rest } = p;
+    const rest = { ...p };
+    delete rest.type;
+    delete rest.points;
     for (let i = 0; i < p.points.length - 1; i++) {
       const [x1, y1] = p.points[i];
       const [x2, y2] = p.points[i + 1];

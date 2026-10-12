@@ -6,7 +6,7 @@
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/woodSupportSpanProbe.mjs [入力.stq]
 import { loadDocument } from './loadDoc.mjs';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
-import { isTraditionalWoodStructure, rulesFor, effectiveStructure, WOOD_DEPTH_BEAM_ROLES } from '../../src/structural/structureRules.js';
+import { isTraditionalWoodStructure, rulesFor, effectiveStructure } from '../../src/structural/structureRules.js';
 import { selfWallSegments, peekBelowGraph, peekAboveGraph, peekRoofGraphAbove, findBeamAnchorCL, wallRunSegments, columnSeedBeamSegments } from '../../src/structural/wallBeamAxes.js';
 import { columnSplitPoints, pointsOnWallLines } from '../../src/structural/woodFraming.js';
 import { wallLineThroughRuns, autoFillWoodColumns } from '../../src/structural/woodAutoFill.js';
@@ -265,7 +265,6 @@ for (const p of project.planes) {
   const autoColumns = g.columns.filter(c => c.role !== 'foundation' && c.dimensionStatus === 'auto');
   const matchesPick = (c) => iiPicks.find(pk => Math.abs(pk.x - c.axisX) < 1 && Math.abs(pk.y - c.axisY) < 1);
   const jamb = autoColumns.filter(c => c.woodJambRef);
-  const iiMatched = autoColumns.filter(c => !c.woodJambRef && matchesPick(c));
   const offsetOther = autoColumns.filter(c => !c.woodJambRef && !matchesPick(c) && c.woodAxisOffset);
   const clPair = autoColumns.filter(c => !c.woodJambRef && !matchesPick(c) && !c.woodAxisOffset);
   const struct = iiPicks.filter(pk => pk.kind === 'struct');

@@ -55,7 +55,7 @@ if (convergedAt != null && convergedAt <= convergeLimit) {
 // 同じ形——ただし本probeは「表示中の柱集合」（伏図の1つ下の階）を解決しないため、columnsは自階の
 // ものを使う（StructuralBeam.coord1/coord2の既定＝_planGraph.columns と同じ基準。実体スパンの検証が
 // 目的であり、伏図の柱集合の図面合成までは再現しない）。
-function junctionInputFor(graph, lod = 'STANDARD') {
+function junctionInputFor(graph) {
   return graph.beams.map(b => ({
     id: b.id, role: b.role, isVertical: b.isVertical, axisValue: b.axisValue,
     end1: b.clStart.effectiveValue, end2: b.clEnd.effectiveValue,

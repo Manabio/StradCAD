@@ -11,7 +11,7 @@
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/gridConvertStructuralSyncProbe.mjs [入力.stq]
 import { performance } from 'node:perf_hooks';
 import { loadDocument } from './loadDoc.mjs';
-import { PlanGraph, centerLineKind, CenterLineType } from '../../src/core.js';
+import { PlanGraph, centerLineKind } from '../../src/core.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../../src/graphSnapshot.js';
 import { undoManager } from '../../src/undoManager.js';

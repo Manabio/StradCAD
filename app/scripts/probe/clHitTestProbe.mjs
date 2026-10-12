@@ -55,7 +55,7 @@
 import { loadDocument } from './loadDoc.mjs';
 import { centerLineKind } from '../../src/core/centerLine.js';
 import { CenterLineType, Discipline } from '../../src/core/constants.js';
-import { APP_MODES, hitTestKinds, isRenderTarget, spansEntireAxis, isOpeningBoundaryKind, kindsVisibleIn } from '../../src/core/centerLineKindPolicy.js';
+import { APP_MODES, hitTestKinds, isRenderTarget,isOpeningBoundaryKind, kindsVisibleIn } from '../../src/core/centerLineKindPolicy.js';
 import {
   findNearestCenterLine, findNearestCenterLineEndpoint, findNearbyCenterLines, overhangMm,
 } from '../../src/snapGeometry.js';

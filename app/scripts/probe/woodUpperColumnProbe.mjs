@@ -11,8 +11,7 @@ import { CL_OVERLAP_TOL_MM } from '../../src/core/constants.js';
 import { selfWallSegments, wallRunSegments, peekBelowGraph, findBeamAnchorCL } from '../../src/structural/wallBeamAxes.js';
 import { wallIntersectionPoints, wallLineThroughRuns, WALL_JUNCTION_TOL_MM } from '../../src/structural/woodAutoFill.js';
 import { pointsOnWallLines } from '../../src/structural/woodFraming.js';
-import { rulesFor, effectiveStructure, isTraditionalWoodStructure } from '../../src/structural/structureRules.js';
-import { recomputeStructuralForGraph } from '../../src/structural/structuralRecompute.js';
+import { effectiveStructure, isTraditionalWoodStructure } from '../../src/structural/structureRules.js';
 import { sweepUntilConverged } from './sweepOrder.mjs';
 
 const src = process.argv[2] ?? 'D:/tatsuya/Download/moku4.stq';

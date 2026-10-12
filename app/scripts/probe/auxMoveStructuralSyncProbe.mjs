@@ -242,7 +242,7 @@ await preConverge(hWired);
 await preConverge(hUnwired);
 const idsWired = applySynthesis(hWired);
 const idsUnwired = applySynthesis(hUnwired);
-const dumpBaselineWired = await dumpAll(hWired); // 移動前（合成セットアップ直後）。check(4)のundo基準に使う
+await dumpAll(hWired); // 移動前（合成セットアップ直後）。結果は使わない（dumpAll の副作用だけ残す）
 
 // captureBox（段階(g)）: コミット時のnotifyだけに渡る第4引数(undoRecords＝箱)を呼び出し元へ渡す。
 function moveAux(h, auxId, amount, wired, { captureBox } = {}) {

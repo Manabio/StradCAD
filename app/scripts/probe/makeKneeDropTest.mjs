@@ -57,7 +57,7 @@ const Yb = addCL(CenterLineType.HORIZONTAL, 3000); // 垂れ壁区間の終了�
 // ---- 部屋 ----
 const cellKey = (L, T, R, B) => `${L.id}:${T.id}:${R.id}:${B.id}`;
 const roomA = graph.addRoom(new Set([cellKey(X1, Y1, X2, Y2)]), 'A');
-const roomB = graph.addRoom(new Set([cellKey(X1, Y2, X2, Y3)]), 'B');
+graph.addRoom(new Set([cellKey(X1, Y2, X2, Y3)]), 'B');
 const roomC = graph.addRoom(new Set([cellKey(X2, Y1, X3, Y2)]), 'C');
 
 // 垂れ壁側（A・C）の天井高さを明示（既定2400mmではnotCutByPlaneを満たせないため3000mmへ）。

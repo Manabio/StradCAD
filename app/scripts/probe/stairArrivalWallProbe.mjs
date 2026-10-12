@@ -21,7 +21,6 @@
 // structuralSync.whenIdle・whenCenterLineOpsIdle・runBusy。変えた点: 読込み境界の refreshWallsAllFloors を1回足した／
 // 階の巡回の代わりに「階段変換→1階脱出→2階 peek→2階 swap→2階の突入→脱出」を行う／脱出中の floorSwapManager.peek を差し替えて
 // 観測する（挙動は変えず素通し）。
-import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { runInAction } from 'mobx';
 import { loadDocument } from './loadDoc.mjs';

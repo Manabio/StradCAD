@@ -10,7 +10,7 @@
 //
 // 検査する region は2種類（判定は同じ関数 inspectRegion）:
 //   主屋根＝屋根専用平面（小屋伏図）の graph ×  mainRoofFramingRegion
-//   下屋　＝屋根セルのある実体階の graph × leanToFramingRegions（C2d-2。region ごとに「下屋 [階] lean:…」と見出しを出す）
+//   下屋 ＝屋根セルのある実体階の graph × leanToFramingRegions（C2d-2。region ごとに「下屋 [階] lean:…」と見出しを出す）
 // 下屋の region を持たない実体階に auto の小屋梁（role:'roofBeam'・dimensionStatus 'auto'）が残っていたら NG
 // （region が無くなったら撤去される規則の確認）。
 //

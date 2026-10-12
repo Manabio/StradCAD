@@ -232,7 +232,7 @@ function elevationDigest(project, plane) {
   const out = [];
   const run = () => {
     const gridCLs = collectGridCLs(graph);
-    let floorHeightMm = null;
+    let floorHeightMm;
     try { floorHeightMm = floorHeightAbove(project, graph.plane); } catch { floorHeightMm = null; }
     const base = { project, materialMap: new Map(), gridCLs };
     const voidRoomsAbove = upperGraph ? selectElevationRooms(upperGraph).filter(x => x.feature === RoomFeature.VOID) : [];

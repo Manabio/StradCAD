@@ -112,7 +112,7 @@ await saveFloor(project.activePlane.id, serializeGraph(project.activeGraph));
 await reflectStructuralToOtherFloors(project);
 await refreshWallsAllFloors(project, { pushUndo: true });
 await snapshot('3 構造を脱出');
-comp = await runStructuralModeSetup(project.activeGraph, project, {});
+await runStructuralModeSetup(project.activeGraph, project, {});
 await snapshot('4 再突入');
 
 if (opts.check) {
