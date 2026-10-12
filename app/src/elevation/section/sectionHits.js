@@ -309,11 +309,18 @@ export function isCutAlongWall(wall, line) {
  * 1点クエリはcellAt（buildSpaceIndex。makeProbeContext内で公開）経由。ceilZは天伏の平面区画の高さを含む。
  * @returns {{room:import('@core').Room|null, floorZ:number, ceilZ:number|null}|null}
  */
-function ownerCellAtOffset(cut, worldMid, layer, probeCtx, offsetMm) {
+function ownerCellAtOffset(cut, worldMid, layer, probeCtx, offsetMm, span = null) {
   const { line } = cut;
   const px = line.isVertical ? line.axisValue + offsetMm : worldMid;
   const py = line.isVertical ? worldMid : line.axisValue + offsetMm;
-  return probeCtx.cellAt(layer, px, py);
+  // 傾斜の面は cellAt の既定では**面の最高点**。cut.ceilProfile を持つ切断は呼び出し側の天井断面をエンジンが ceilEdge で
+  // 打ち切るので、層スタックの上限は高い方でよい（ここを列の幅に絞ると上限が列の天井断面より低い所で天井懐の slab が出て
+  // 出力が変わる）。ceilProfile を持たない切断（階段帯）は層スタックの ceilZ がそのまま帯の上端・天井の段（slab/open の境）を
+  // 決めるので、列の幅（span。無ければ worldMid の1点）を切断線の深さで評価した**傾斜の面の最大値**を頼む
+  // （隣室が傾斜でも列の外の高い側まで天井が届くと見なさない。E3b-4。spaceModel.js cellAt の span）。
+  const colSpan = cut.ceilProfile ? null : {
+    isVertical: line.isVertical, depthCoord: line.axisValue, lo: span?.worldLo ?? worldMid, hi: span?.worldHi ?? worldMid };
+  return probeCtx.cellAt(layer, px, py, colSpan);
 }
 
 /**
@@ -620,15 +627,18 @@ function openingPassThroughRangesFor(wall, graph, worldMid, floorZ, z0, z1) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {number} worldMid
  * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
+ * @param {{worldLo:number, worldHi:number}|null} [span] - 列の世界座標の幅。省略は worldMid の1点。傾斜の天井の面は
+ *   **列の幅を切断線の深さ（仕上げ面）で評価した最大値**を ceilZ にする（自室の帯では列の高い側 highZ と一致。隣室の帯が
+ *   傾斜の部屋を覗く列でも、列の外の高い側までは届かない。E3b-4）。傾斜でない面は従来どおり。
  * @returns {Array<{layer:object, room:object|null, floorZ:number, ceilZ:number}>}
  */
-export function buildLayerStack(cut, worldMid, probeCtx) {
+export function buildLayerStack(cut, worldMid, probeCtx, span = null) {
   // **その層の平面が届いていない位置では、その層は層スタックに現れない**（withinLayerWindow）。
   // 壁の候補だけを落とすのでは足りない——床天井の分類（slab/open）も所有層の判断
   // （`layerOwningZ`・`upperFloorZAt`）もこのスタックが情報源で、面の外に自階の床天井が
   // 残っていると、面の端に実在しない天井段差（＝上階の床の断面線）が生まれる。
   return orderLayerStack((cut.layers ?? []).filter(layer => withinLayerWindow(cut, layer, worldMid)).map(layer => {
-    const cell = ownerCellAtOffset(cut, worldMid, layer, probeCtx, cut.viewSign * PROBE_EPS_MM);
+    const cell = ownerCellAtOffset(cut, worldMid, layer, probeCtx, cut.viewSign * PROBE_EPS_MM, span);
     const room = cell?.room ?? null;
     const floorZ = probeCtx.floorZOf(room, layer);
     // QA修正: room=nullでも壁候補は諦めない（fallbackCeilZ参照）。ceilZが実質nullになるのは
@@ -785,7 +795,7 @@ function addStairFaceHits(cut, worldMid, hits) {
  */
 export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
   const line = cut.line;
-  const layerStack = buildLayerStack(cut, worldMid, probeCtx);
+  const layerStack = buildLayerStack(cut, worldMid, probeCtx, span);
   const unexploredBelowZ = unexploredBelowZOf(cut, layerStack, worldMid);
 
   const hits = [];

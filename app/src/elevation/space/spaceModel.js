@@ -30,7 +30,7 @@ import { kneeDropRecordsOnAxis, kneeDropWallGeometry } from '../../finish/kneeDr
 import { graphList } from '../../graphReadScope.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 import {
-  zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChTopAt, zoneCeilingFarEdge, zoneCeilingDepthEdges, zoneCeilingRunRangeAt,
+  zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChTopAt, zoneCeilingChAlong, zoneCeilingFarEdge, zoneCeilingDepthEdges, zoneCeilingRunRangeAt,
 } from './zoneCeiling.js';
 
 // cellsAlongの無限ループ防御（格子異常時の安全弁）。実データの通常の列は
@@ -117,19 +117,35 @@ export function buildSpaceIndex(layers, opts = {}) {
     return zoneCeilingChTopAt(fieldFor(graph), room, x, y) ?? chAt(room, graph, x, y);
   }
 
+  // chTopAt の列の幅版。傾斜の面は列の幅の両端の高さ（切断線の深さで評価）の大きい方。それ以外は chTopAt と同じ。
+  function chTopWithin(room, graph, x, y, span) {
+    if (span && Number.isFinite(span.lo) && Number.isFinite(span.hi) && Number.isFinite(span.depthCoord)) {
+      const al = zoneCeilingChAlong(fieldFor(graph), room, {
+        isVertical: span.isVertical, depthCoord: span.depthCoord, probeDepth: span.isVertical ? x : y, lo: span.lo, hi: span.hi,
+      });
+      if (al) return Math.max(al.chLo, al.chHi);
+    }
+    return chTopAt(room, graph, x, y);
+  }
+
   // cellAt: (layer, worldX, worldY) → SpaceCell | null。
   // グリッドにセルが無い（layer.graphが無い・格子外）位置はnull——「セルが1つも無い」ことと
   // 「セルはあるが部屋が未割当」（room:null）は区別する（後者はfloorZ/ceilZの解決余地がある）。
   // room=nullのceilZはnull。本番の層スタック`buildLayerStack`（sectionProbe.js:532-543）は
   // cut依存の`fallbackCeilZ`（sectionProbe.js:319-323）を使うため、差し替えにはcutか既定CHを
   // 渡す引数が要る（本Phaseでは未対応）。
-  function cellAt(layer, worldX, worldY) {
+  //
+  // span（省略可）＝{isVertical, depthCoord, lo, hi}: 列の幅 [lo,hi]（走り方向の世界座標）を切断線の深さ depthCoord
+  // （壁の仕上げ面）で評価した**傾斜の面の最大値**で ceilZ を返す（E3b-4）。探査点 (worldX,worldY) の面が傾斜でなければ・
+  // 列の両端が別の面に落ちる（zoneCeilingChAlong が null）ときは従来どおり面の最高点。隣室の帯（階段帯）が傾斜の部屋を
+  // 覗く列で、列の外の高い側まで天井が届くと見なさないため。
+  function cellAt(layer, worldX, worldY, span = null) {
     if (!layer?.graph) return null;
     const cell = worldToCell(worldX, worldY, layer.graph);
     if (!cell) return null;
     const room = cellToRoomFor(layer).get(cell.key) ?? null;
     const floorZ = floorZFor(room, layer);
-    const ceilZ = room ? floorZ + chTopAt(room, layer.graph, worldX, worldY) : null;
+    const ceilZ = room ? floorZ + chTopWithin(room, layer.graph, worldX, worldY, span) : null;
     return { room, floorZ, ceilZ };
   }
 

@@ -106,7 +106,7 @@ function buildWallTopProfiles(layers, layer, floorZFor) {
  * @returns {{cellToRoomByLayer:Map, cellToRoomFor:(layer:object)=>Map,
  *   chOf:(room:object|null, graph:object)=>number|null,
  *   floorZOf:(room:object|null, layer:object)=>number,
- *   cellAt:(layer:object, worldX:number, worldY:number)=>{room:object|null, floorZ:number, ceilZ:number|null}|null,
+ *   cellAt:(layer:object, worldX:number, worldY:number, span?:{isVertical:boolean, depthCoord:number, lo:number, hi:number}|null)=>{room:object|null, floorZ:number, ceilZ:number|null}|null,
  *   cellsAlong:(layer:object, cut:object, worldMid:number, fromDepthMm:number, toDepthMm:number)=>Array<object>,
  *   componentOf:(layer:object, room:object|null)=>number|null,
  *   componentAt:(layer:object, worldX:number, worldY:number)=>number|null}}
@@ -236,10 +236,11 @@ export function collectCutBreaks(cut, probeCtx) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {number} worldMid
  * @param {ReturnType<typeof makeProbeContext>} probeCtx
+ * @param {{worldLo:number, worldHi:number}|null} [span] - 列の幅（probeColumn と同じ層スタックで判定するため）
  * @returns {number|null}
  */
-export function upperFloorZAt(cut, worldMid, probeCtx) {
-  const stack = buildLayerStack(cut, worldMid, probeCtx); // floorZMm昇順
+export function upperFloorZAt(cut, worldMid, probeCtx, span = null) {
+  const stack = buildLayerStack(cut, worldMid, probeCtx, span); // floorZMm昇順
   const base = baseLayerOf(stack);
   if (!base || !Number.isFinite(base.ceilZ)) return null;
   for (const upper of stack) {

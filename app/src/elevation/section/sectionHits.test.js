@@ -879,6 +879,66 @@ test('【失敗系】簡易probeCtx（cellAtがceilZを持たない）ではchOf
   assert.equal(buildLayerStack(cut, 1000, probeCtx)[0].ceilZ, 2300);
 });
 
+// ---- E3b-4: 傾斜の隣室を覗く列（ceilProfile 無し＝階段帯）の層スタックの ceilZ は列の幅での最大 ----
+// 部屋 x0..4000・y0..3000、傾斜 底 2400・ライズ 800（+x）＝x=0 で 2400・x=2000 で 2800・x=4000 で 3200。
+function slopeFrontCut(extra = {}) {
+  const g = makeGrid([0, 4000], [0, 3000]);
+  const room = g.interior([[0, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 2400, shape: 'slope', dims: [800, 0] }).zones);
+  const cut = frontCut(g.graph, { line: { isVertical: false, axisValue: 0, lo: 0, hi: 4000 }, zRange: { loZ: 0, hiZ: 3200 }, ...extra });
+  return { g, cut, probeCtx: makeProbeContext(cut.layers) };
+}
+
+test('【傾斜の隣室を覗く列の層スタック ceilZ は列の幅での最大】ceilProfile 無しの列 [0,2000] は 2800・[2000,4000] は 3200（最高点 3200 ではない）', () => {
+  const { cut, probeCtx } = slopeFrontCut();
+  assert.equal(probeColumnHits(cut, 1000, probeCtx, { worldLo: 0, worldHi: 2000 }).layerStack[0].ceilZ, 2800);
+  assert.equal(probeColumnHits(cut, 3000, probeCtx, { worldLo: 2000, worldHi: 4000 }).layerStack[0].ceilZ, 3200);
+  assert.equal(buildLayerStack(cut, 1000, probeCtx, { worldLo: 0, worldHi: 2000 })[0].ceilZ, 2800, 'buildLayerStack に直接 span を渡しても同じ');
+});
+
+test('【自室の帯では出力不変】cut.ceilProfile を持つ切断は span があっても従来どおり面の最高点（エンジンが ceilEdge で打ち切るため）', () => {
+  const { cut, probeCtx } = slopeFrontCut({ ceilProfile: [{ loX: 0, hiX: 4000, ceilZ: 2400, ceilZHi: 3200 }] });
+  assert.equal(probeColumnHits(cut, 1000, probeCtx, { worldLo: 0, worldHi: 2000 }).layerStack[0].ceilZ, 3200);
+});
+
+test('【ceilProfile 無しの帯で傾斜の列は実高さで slab/open が分かれる】列 [0,2000] は 2800 の上に天井懐の slab（3200 まで）・ceilProfile ありは slab なし', () => {
+  const { cut, probeCtx } = slopeFrontCut();
+  const bands = probeColumn(cut, 1000, probeCtx, { worldLo: 0, worldHi: 2000 });
+  const slab = bands.find(b => b.kind === 'slab');
+  assert.ok(slab, '2800 より上は slab');
+  assert.deepEqual([slab.z0, slab.z1], [2800, 3200]);
+  const withProf = slopeFrontCut({ ceilProfile: [{ loX: 0, hiX: 4000, ceilZ: 2400, ceilZHi: 3200 }] });
+  assert.ok(!probeColumn(withProf.cut, 1000, withProf.probeCtx, { worldLo: 0, worldHi: 2000 }).some(b => b.kind === 'slab'),
+    'ceilProfile ありは従来どおり最高点まで空気');
+});
+
+test('【flat・区画なしは不変】span を渡しても flat の区画は区画の高さ・区画なしは部屋の CH（span なしと同値）', () => {
+  const g = makeGrid([0, 2000, 5000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]], { walls: true });
+  room.setOverride('ceilingHeight', '2500');
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(1, 0)], { heightMm: 3000, shape: 'flat', dims: [] }).zones);
+  const cut = frontCut(g.graph, { line: { isVertical: false, axisValue: 0, lo: 0, hi: 5000 } });
+  const probeCtx = makeProbeContext(cut.layers);
+  for (const [mid, lo, hi] of [[3500, 2000, 5000], [1000, 0, 2000]]) {
+    assert.equal(buildLayerStack(cut, mid, probeCtx, { worldLo: lo, worldHi: hi })[0].ceilZ, buildLayerStack(cut, mid, probeCtx)[0].ceilZ);
+  }
+});
+
+test('【縦の切断（isVertical:true）で走りが y の傾斜】底 2400・ライズ 800（+y）の列 y[0,2000] は 2800・[2000,4000] は 3200（x/y の取り違えで赤）', () => {
+  const g = makeGrid([0, 3000], [0, 4000]);
+  const room = g.interior([[0, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 2400, shape: 'slope', dims: [800, 90] }).zones);
+  const cut = frontCut(g.graph, { line: { isVertical: true, axisValue: 0, lo: 0, hi: 4000 }, zRange: { loZ: 0, hiZ: 3200 } });
+  const probeCtx = makeProbeContext(cut.layers);
+  assert.equal(buildLayerStack(cut, 1000, probeCtx, { worldLo: 0, worldHi: 2000 })[0].ceilZ, 2800);
+  assert.equal(buildLayerStack(cut, 3000, probeCtx, { worldLo: 2000, worldHi: 4000 })[0].ceilZ, 3200);
+});
+
+test('【失敗系】span の世界座標が非有限でも例外を投げず面の最高点に落ちる', () => {
+  const { cut, probeCtx } = slopeFrontCut();
+  assert.equal(buildLayerStack(cut, 1000, probeCtx, { worldLo: NaN, worldHi: NaN })[0].ceilZ, 3200);
+});
+
 // ---- E3b-3: 視線の先の部屋に天井の面が複数あるとき、手前の面が近側の天井より上で隠れても奥の低い面の ceilFace が選ばれる ----
 test('【手前の区画が近側の天井より上で隠れるとき奥の低い区画の ceilFace が選ばれる】近側 A の天井 3000・視線の先の B は手前 3500（隠れる）→奥 2200: ceilFace は 2 件（3500@50・2200@2050）で open 帯の farCeilZ は 2200', () => {
   const g = makeGrid([0, 4000], [0, 4000, 6000, 8000]);

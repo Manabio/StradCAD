@@ -636,6 +636,59 @@ test('【失敗系】円弧の区画の上は最高点にならず部屋の CH �
   assert.equal(buildSpaceIndex([layer]).cellAt(layer, 1000, 1500).ceilZ, CH);
 });
 
+// ---- E3b-4: cellAt の span（列の幅を切断線の深さで評価した傾斜の最大値）----
+const SLOPE_COL = { isVertical: false, depthCoord: 1500 };
+function slopeRoomIndex(dims, heightMm = 2800) {
+  const g = makeGrid([0, 2000], [0, 3000]);
+  const room = g.interior([[0, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm, shape: 'slope', dims }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  return { index: buildSpaceIndex([layer]), layer, room, g };
+}
+
+test('【cellAt の span・走り方向の傾斜】底 2800・ライズ 600（+x）の列 [0,1000] は 2800+600×1000/2000=3100（最高点 3400 ではない）・[1000,2000] は 3400', () => {
+  const { index, layer } = slopeRoomIndex([600, 0]);
+  assert.equal(index.cellAt(layer, 500, 1505, { ...SLOPE_COL, lo: 0, hi: 1000 }).ceilZ, 3100);
+  assert.equal(index.cellAt(layer, 1500, 1505, { ...SLOPE_COL, lo: 1000, hi: 2000 }).ceilZ, 3400);
+  assert.equal(index.cellAt(layer, 500, 1505).ceilZ, 3400, 'span なしは従来どおり最高点');
+});
+
+test('【cellAt の span・奥行き方向の傾斜】底 2800・ライズ 600（+y）は切断線の深さ depthCoord の高さ: 深さ 0 で 2800・1500 で 3100・3000 で 3400', () => {
+  const { index, layer } = slopeRoomIndex([600, 90]);
+  const at = depthCoord => index.cellAt(layer, 500, 1505, { isVertical: false, depthCoord, lo: 0, hi: 1000 }).ceilZ;
+  assert.equal(at(0), 2800);
+  assert.equal(at(1500), 3100);
+  assert.equal(at(3000), 3400);
+});
+
+test('【cellAt の span・同じ部屋で 2 つの傾斜区画をまたぐ列は最高点】A＝x0..2000 slope[600,0]・B＝x2000..4000 slope[300,0] の列 [1500,2500] は span なしと同値', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 2800, shape: 'slope', dims: [600, 0] }).zones);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(1, 0)], { heightMm: 2800, shape: 'slope', dims: [300, 0] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+  const span = { ...SLOPE_COL, lo: 1500, hi: 2500 };
+  const withSpan = index.cellAt(layer, 2000 - 1, 1505, span).ceilZ;
+  assert.equal(withSpan, index.cellAt(layer, 2000 - 1, 1505).ceilZ, '両端が別の面＝span なしの最高点と同値');
+  assert.equal(withSpan, 2800 + 600);
+});
+
+test('【cellAt の span・失敗系】円弧・区画なしの平面は span を無視して部屋の CH／非有限の span は最高点／面の外へはみ出す列は最高点', () => {
+  const sl = slopeRoomIndex([400, 0]);
+  const g = makeGrid([0, 2000], [0, 3000]);
+  const room = g.interior([[0, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 2800, shape: 'arc', dims: [400, 0] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  assert.equal(buildSpaceIndex([layer]).cellAt(layer, 500, 1505, { ...SLOPE_COL, lo: 0, hi: 1000 }).ceilZ, CH, '円弧は span を無視');
+  const plain = makeGrid([0, 2000], [0, 3000]);
+  plain.interior([[0, 0]]);
+  const pl = { graph: plain.graph, floorZMm: 0, role: 'self' };
+  assert.equal(buildSpaceIndex([pl]).cellAt(pl, 500, 1505, { ...SLOPE_COL, lo: 0, hi: 1000 }).ceilZ, CH, '区画なしは部屋の CH');
+  assert.equal(sl.index.cellAt(sl.layer, 500, 1505, { ...SLOPE_COL, lo: NaN, hi: 1000 }).ceilZ, 2800 + 400, '非有限の span は最高点');
+  assert.equal(sl.index.cellAt(sl.layer, 500, 1505, { ...SLOPE_COL, lo: -500, hi: 1000 }).ceilZ, 2800 + 400, '面の外へはみ出す列は最高点');
+});
+
 // ---- E3b-1: 遠側の傾斜（cellsAlong）。切断線 y=0・視線 +y。遠側の部屋は y 2000..4000（奥の端 y=4000）----
 test('【cellsAlong・走り方向の傾斜】視線の先の部屋の区画が走り方向（x）の傾斜なら、その片は ceilZ null で floorFace だけ（体裁が斜線 1 本で描く）', () => {
   const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);

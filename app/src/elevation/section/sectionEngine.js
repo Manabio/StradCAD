@@ -447,7 +447,8 @@ export function buildColumns(cut, probeCtx) {
   // 天井より上に**上階の床が実在するか**を層スタックから直接引いておく（sectionEmit.jsの
   // ceilStepSlabSectionが「上階の床の断面」を描いてよいかの判定に使う）。
   for (const col of rawColumns) {
-    col.upperFloorZ = upperFloorZAt(cut, (col.worldLo + col.worldHi) / 2, probeCtx);
+    col.upperFloorZ = upperFloorZAt(cut, (col.worldLo + col.worldHi) / 2, probeCtx,
+      { worldLo: col.worldLo, worldHi: col.worldHi });
   }
   const clipped = rawColumns.map((_, i) => clipBandsToVisible(rawColumns, air, i));
   rawColumns.forEach((col, i) => { col.bands = clipped[i]; });
