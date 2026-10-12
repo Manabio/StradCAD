@@ -8,6 +8,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildVoidBand, buildRoomBandWithVoidAbove } from './elevationVoid.js';
 import { planeOverhangForFace } from './section/sectionContent.js';
 import { buildRoomFaces } from './elevationFaces.js';
+import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 import { DEFAULT_WALL_LESS_END_EXTEND_MM } from './elevationStyle.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）を明示指定なしの既定値として使う
@@ -70,6 +71,28 @@ test('buildVoidBand: 床〜天井の実高さはCH+dropになり、heightUnits=2
   assert.equal(floorY, floorHeightBelowMm, `floorYは+drop(${floorHeightBelowMm})そのもののはず`);
   assert.equal(band.heightUnits, 2, '下階が解決できた吹抜け帯はheightUnits=2(2層分)のはず');
   assert.equal(band.unitHeightMm, band.bounds.height / 2, 'unitHeightMm=bounds.height/heightUnitsのはず');
+});
+
+// ---- 傾斜の部屋の上の吹抜け: 下階延長の片は chMm・chHiMm の両方に dropMm を足す（天井の絶対高さは不変） ----
+test('【傾斜の部屋の上の吹抜け】下階延長の片の chHiMm が chHiMm+dropMm になり、傾斜の天井線は動かない', () => {
+  const graph = makeGraph('p1', 2900);
+  const voidRoom = makeRectRoom(graph, 0, 0, 4000, 3000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+  const child = graph.addRoom(new Set(voidRoom.cells), '傾斜の子', undefined, new Set([voidRoom.id]));
+  setRoomCeilingShape(child, { shape: 'slope', dims: [600, 0] });
+  const lowerGraph = makeGraph('p0', 0);
+  makeRectRoom(lowerGraph, 0, 0, 4000, 3000, 'LDK');
+
+  const band = buildVoidBand(voidRoom, graph, lowerGraph, { floorHeightBelowMm: 2900 });
+  const slants = band.primitives.filter(p => p.type === 'line' && p.weight === 'thick' && p.y1 !== p.y2 && p.x1 !== p.x2);
+  assert.equal(slants.length, 2, '傾斜の天井線が向かい合う2面（A と C）に1本ずつ');
+  // 面A: ローカル x=0 は世界 x=57.5。2400+600×57.5/4000 → 2400+600×3942.5/4000（面Cは逆向き）
+  const ys = slants.map(s => [s.y1, s.y2]).sort((a, b) => b[0] - a[0]); // 浅い（-2408）方から
+  const expected = [[-2408.625, -2991.375], [-2991.375, -2408.625]];
+  ys.forEach(([a, b], i) => {
+    assert.ok(Math.abs(a - expected[i][0]) < 1e-6 && Math.abs(b - expected[i][1]) < 1e-6,
+      `天井の絶対高さのまま（hi 端も dropMm を足して相殺）。実際:${a},${b}`);
+  });
 });
 
 // ---- 下階RoomのFL差がdropに反映される ----

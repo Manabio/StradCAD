@@ -17,7 +17,7 @@ import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling, flight
 import { graphList } from '../graphReadScope.js';
 import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDisplayName } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
-import { buildFaceFigure, segEndProfile } from './elevationFigure.js';
+import { buildFaceFigure, segEndProfile, hasRightChDim } from './elevationFigure.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
@@ -289,7 +289,7 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     // 同時に算出済み）。項目5の右CH寸法とは独立（併発しうる）ため加算する（安全側＝実間隔が
     // 縮む方向には効かない）。
     prevRightExtent = prevBoundaryHi
-      + ((floorSegments?.length ?? 0) > 1 ? CH_DIM_OFFSET_MM : 0)
+      + (hasRightChDim(floorSegments) ? CH_DIM_OFFSET_MM : 0)
       + rightExtendMm;
   });
 

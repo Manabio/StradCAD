@@ -8,7 +8,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
   openingsReachingCorner, formatMaterialLabel, avoidObstacleRangesX, estimateWallLabelWidthPx,
-  segEndProfile,
+  segEndProfile, hasRightChDim,
 } from './elevationFigure.js';
 import { buildRoomFaces as realBuildRoomFaces, faceBoundaryLocalX, drawnSpanRanges } from './elevationFaces.js';
 import { composeRoomFaces } from './elevationFaceList.js';
@@ -553,6 +553,96 @@ test('【問題修正2026-08】buildFaceFigure: chMmが異なる2区間（床は
   assert.equal(rightChDim.label, 2600, '値は右端区間の実際のCH(2600)のはず');
   assert.equal(rightChDim.from, -2600, '右端区間の天井から');
   assert.equal(rightChDim.to, 0, '右端区間の床まで');
+});
+
+// ---- 傾斜天井（E3a-2）: 区間の chMm（loX 側）・chHiMm（hiX 側）。天井断面線は斜線1本 ----
+test('【傾斜の天井線は1本の斜線】1区間 chMm 2400→chHiMm 3000 は (0,-2400)→(4000,-3000) の1本・段差の縦線なし・端の縦線は各端の高さ', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 3000 }];
+  const prims = buildFaceFigure(makeFace(), baseCtx({ ceilingHeight: 2400, floorSegments }));
+  const cut = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const slants = cut.filter(l => l.y1 !== l.y2 && l.x1 !== l.x2);
+  assert.deepEqual(slants.map(l => [l.x1, l.y1, l.x2, l.y2]), [[0, -2400, 4000, -3000]]);
+  const verticals = cut.filter(l => l.x1 === l.x2);
+  assert.deepEqual(verticals.map(l => [l.x1, Math.min(l.y1, l.y2), Math.max(l.y1, l.y2)]).sort((a, b) => a[0] - b[0]),
+    [[0, -2400, 0], [4000, -3000, 0]], '縦線は両端だけ（左は低い側の高さ・右は高い側の高さまで）');
+});
+
+test('【右CH寸法が hi 端の値】傾斜の1区間でも右に立ち、値は hi 端の実測（床段差 +100 なら CH は 3000−0）。平らな1区間は立たない', () => {
+  const tilted = buildFaceFigure(makeFace(), baseCtx({ floorSegments: [{ loX: 0, hiX: 4000, floorDeltaMm: 100, chMm: 2400, chHiMm: 2987.6 }] }));
+  const dims = tilted.filter(p => p.type === 'dim' && p.dir === 'v');
+  assert.equal(dims.length, 1);
+  assert.equal(dims[0].label, 2988, 'Math.round(hi 端の CH 2987.6)');
+  assert.ok(Math.abs(dims[0].from - -3087.6) < 1e-9, '上端は右端の天井（FL+100+CH）');
+  assert.equal(dims[0].to, -100, '下端は区間の床');
+  const flat = buildFaceFigure(makeFace(), baseCtx({ floorSegments: [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400 }] }));
+  assert.equal(flat.filter(p => p.type === 'dim' && p.dir === 'v').length, 0);
+});
+
+test('【傾斜→同じ高さの平面が続く境界に縦線が出ない】区画境界（zoneCeilEdgeHi）の x=2000 で斜線が 3000 に達し平らな天井線が続く', () => {
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0, chMm: 2400, chHiMm: 3000, zoneCeilEdgeHi: true },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 0, chMm: 3000 },
+  ];
+  const prims = buildFaceFigure(makeFace(), baseCtx({ floorSegments }));
+  const cut = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  assert.ok(cut.some(l => l.x1 === 0 && l.y1 === -2400 && l.x2 === 2000 && l.y2 === -3000), '斜線は境界 x=2000 で 3000');
+  assert.ok(cut.some(l => l.x1 === 2000 && l.y1 === -3000 && l.x2 === 4000 && l.y2 === -3000), '平らな天井線が同じ点から続く');
+  assert.equal(cut.filter(l => l.x1 === 2000 && l.x2 === 2000).length, 0, '境界の縦線は描かない');
+});
+
+test('【失敗系】傾斜→高さの違う平面の境界は縦線が出る（続いていないとき）', () => {
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0, chMm: 2400, chHiMm: 2700, zoneCeilEdgeHi: true },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 0, chMm: 3000 },
+  ];
+  const cut = buildFaceFigure(makeFace(), baseCtx({ floorSegments })).filter(p => p.type === 'line' && p.weight === 'thick');
+  const riser = cut.find(l => l.x1 === 2000 && l.x2 === 2000 && l.y1 !== 0 && l.y2 !== 0);
+  assert.ok(riser, '2700→3000 の段差は縦線');
+  assert.deepEqual([Math.min(riser.y1, riser.y2), Math.max(riser.y1, riser.y2)], [-3000, -2700]);
+});
+
+test('【壁の無い端の延長での傾斜】延長 [−150,0] / [4000,4150] は端の値で水平・[0,4000] は (0,-2400)→(4000,-3000) の直線上・全端点が真の天井以下', () => {
+  const trueCeil = x => 2400 + 600 * Math.min(Math.max(x / 4000, 0), 1);
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 3000 }];
+  for (const [label, faceOpts] of [['lo側', { hasWallAtLocal0: false }], ['hi側', { hasWallAtLocalRun: false }]]) {
+    const prims = buildFaceFigure(makeFace(faceOpts), baseCtx({ floorSegments }));
+    const cut = prims.filter(p => p.type === 'line' && p.weight === 'thick' && p.x1 !== p.x2);
+    const ceil = cut.filter(l => l.y1 !== 0 || l.y2 !== 0); // 床線 (y=0) 以外＝天井線
+    const main = ceil.find(l => l.x1 === 0 && l.x2 === 4000);
+    assert.deepEqual([main.y1, main.y2], [-2400, -3000], `${label}: 区間内は真の直線`);
+    const ext = ceil.filter(l => l !== main);
+    assert.equal(ext.length, 1, `${label}: 延長は別の線が1本`);
+    assert.equal(ext[0].y1, ext[0].y2, `${label}: 延長は水平`);
+    assert.equal(-ext[0].y1, label === 'lo側' ? 2400 : 3000, `${label}: 端の値`);
+    assert.deepEqual([ext[0].x1, ext[0].x2], label === 'lo側' ? [-DEFAULT_WALL_LESS_END_EXTEND_MM, 0] : [4000, 4000 + DEFAULT_WALL_LESS_END_EXTEND_MM]);
+    for (const l of ceil) for (const [x, y] of [[l.x1, l.y1], [l.x2, l.y2]]) {
+      assert.ok(-y <= trueCeil(x) + 1e-6, `${label}: 真の天井より上に線がある x=${x} y=${y}`);
+    }
+  }
+});
+
+test('【傾斜の区間の境界が半壁厚ずれたとき】斜線は区間の終端 hiX で止め、ずれた分は端の値で水平（直線を延ばさない）', () => {
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0, chMm: 2400, chHiMm: 3000 },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 0, chMm: 3200 },
+  ];
+  const cut = buildFaceFigure(makeFace(), baseCtx({ floorSegments })).filter(p => p.type === 'line' && p.weight === 'thick');
+  // 手前の hi 端 3000 < 次の lo 端 3200 → 高い側（右）へ半壁厚 57.5 → 境界 x=2057.5。斜線は区間の終端 2000 で止まり、2000..2057.5 は 3000 で水平
+  const slant = cut.find(l => l.x1 === 0 && l.y1 === -2400 && l.x2 !== 0);
+  assert.deepEqual([slant.x2, slant.y2], [2000, -3000]);
+  assert.ok(cut.some(l => l.x1 === 2000 && l.x2 === 2057.5 && l.y1 === -3000 && l.y2 === -3000), '水平の継ぎ足し');
+});
+
+test('hasRightChDim / segEndProfile: 傾いた末尾区間は hi 端の高さを返す', () => {
+  assert.equal(hasRightChDim([{ chMm: 2400, chHiMm: 3000 }]), true);
+  assert.equal(hasRightChDim([{ chMm: 2400 }, { chMm: 2500 }]), true);
+  assert.equal(hasRightChDim([{ chMm: 2400 }]), false);
+  assert.equal(hasRightChDim([{ chMm: 2400, chHiMm: 2400 }]), false, '両端同値は平ら');
+  assert.equal(hasRightChDim([]), false);
+  assert.equal(hasRightChDim(undefined), false);
+  const segs = [{ loX: 0, hiX: 4000, floorDeltaMm: 100, chMm: 2400, chHiMm: 3000 }];
+  assert.deepEqual(segEndProfile(segs, 2400, 'first'), { floorDeltaMm: 100, ceilAbsMm: 2500 });
+  assert.deepEqual(segEndProfile(segs, 2400, 'last'), { floorDeltaMm: 100, ceilAbsMm: 3100 });
 });
 
 test('【問題修正2026-08】buildFaceFigure: 床段差＋同一chMmの2区間は天井も段差になる（天井絶対高さ=FL+CHが変わるため）', () => {

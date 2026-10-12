@@ -11,6 +11,7 @@ import { PROBE_EPS_MM } from '../elevationStyle.js';
 import { worldToCell } from '../../finish/gridCells.js';
 import { makeGrid } from '../../plan/planTestFixtures.js';
 import { createZone } from '../../ceiling/ceilingZones.js';
+import { setRoomCeilingShape } from '../../ceiling/roomCeilingShape.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
 
@@ -606,12 +607,45 @@ test('【床段差の二重加算なし】床 +100 の部屋に区画 3000 → c
   assert.equal(cell.ceilZ, 3100);
 });
 
-test('【失敗系】傾斜の区画の上は部屋の CH のまま（後のステップ。平面でない面は対象外）', () => {
+test('【cellAt は傾斜区画の最高点】底 2800・ライズ 600 の傾斜は ceilZ 3400（点の位置によらない）。chAt は平面のみ＝部屋の CH のまま', () => {
   const g = makeGrid([0, 2000], [0, 3000]);
   const room = g.interior([[0, 0]]);
   room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 2800, shape: 'slope', dims: [600, 0] }).zones);
   const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+  assert.equal(index.cellAt(layer, 100, 1500).ceilZ, 3400, '低い側の点でも最高点');
+  assert.equal(index.cellAt(layer, 1900, 1500).ceilZ, 3400);
+  assert.equal(index.chAt(room, g.graph, 1900, 1500), CH, 'chAt（遠側 cellsAlong 用）は不変');
+});
+
+test('【cellAt は部屋形状の傾斜も最高点・床段差込み】床 +100・部屋の CH 2500・形状 slope[300,+x] → 2500+300+100', () => {
+  const g = makeGrid([0, 2000], [0, 3000]);
+  const room = g.interior([[0, 0]]);
+  room.setOverride('ceilingHeight', '2500');
+  room.setFloorLevel(100);
+  setRoomCeilingShape(room, { shape: 'slope', dims: [300, 0] });
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  assert.equal(buildSpaceIndex([layer]).cellAt(layer, 500, 1500).ceilZ, 2900);
+});
+
+test('【失敗系】円弧の区画の上は最高点にならず部屋の CH のまま（E4 まで対象外）', () => {
+  const g = makeGrid([0, 2000], [0, 3000]);
+  const room = g.interior([[0, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 2800, shape: 'arc', dims: [400, 0] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
   assert.equal(buildSpaceIndex([layer]).cellAt(layer, 1000, 1500).ceilZ, CH);
+});
+
+test('【cellsAlong は傾斜でも従来どおり部屋 CH】視線の先の部屋の最初のセルが傾斜区画でも ceilZ は部屋の CH（遠側は E3b）', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1]]);
+  far.setOverride('ceilingHeight', '2500');
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 3000, shape: 'slope', dims: [600, 0] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs[1].room, far);
+  assert.equal(segs[1].ceilZ, 2500);
 });
 
 test('【cellsAlong は区画の far 天井】視線の先の部屋の最初のセルが区画なら ceilZ は床＋区画高（区画なしの部屋は CH）', () => {

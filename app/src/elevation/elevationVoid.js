@@ -462,7 +462,8 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
           const hiCLId = part.hiX === seg.hiX ? seg.hiCLId : null;
           out.push(part.covered
             ? { ...seg, loX: part.loX, hiX: part.hiX, hiCLId,
-                floorDeltaMm: seg.floorDeltaMm - dropMm, chMm: (seg.chMm ?? defaults.CH) + dropMm }
+                floorDeltaMm: seg.floorDeltaMm - dropMm, chMm: (seg.chMm ?? defaults.CH) + dropMm,
+                ...(seg.chHiMm != null ? { chHiMm: seg.chHiMm + dropMm } : {}) }
             : { ...seg, loX: part.loX, hiX: part.hiX, hiCLId });
         }
       }

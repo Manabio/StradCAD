@@ -23,7 +23,11 @@ import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { graphList, scopedValue } from '../graphReadScope.js';
 import { isCeilingOnlyKind } from '../core/centerLineKindPolicy.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
-import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingEdgesAlong } from './space/zoneCeiling.js';
+import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChAlong, zoneCeilingEdgesAlong } from './space/zoneCeiling.js';
+
+// 傾いた片どうしを1本の斜線に結合してよいかの許容差（高さの連続 mm・勾配 mm/mm）。浮動小数の丸め誤差だけを吸収する。
+const TILT_EPS_MM = 1e-6;
+const TILT_GRADIENT_EPS = 1e-9;
 // PROBE_EPS_MM: 自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり
 // 分割されない）場合に、runの伸びる方向へ覗き込むプローブ距離（elevationOpenSpan.jsと共通。
 // elevationStyle.jsのR4共通定数）。
@@ -168,7 +172,8 @@ function _roomOwnerByCell(room, graph) {
  * @param {object} face - buildRoomFaces の1件
  * @param {import('@core').Room} parentRoom - この面を持つ部屋（壁を所有する側。部分指定の親）
  * @param {object} graph
- * @returns {Array<{loX:number, hiX:number, floorDeltaMm:number, chMm:number}>}
+ * @returns {Array<{loX:number, hiX:number, floorDeltaMm:number, chMm:number, chHiMm?:number}>}
+ *   chHiMm … 傾斜の天井区画・部屋形状の片だけが持つ hiX 側の天井高さ（chMm は loX 側）。壁の仕上げ面での値。平面の片はキー自体を持たない。
  *   floorDeltaMm = graph.effectiveFloorLevel(owner) - graph.effectiveFloorLevel(parentRoom)。
  *   chMm = 区間の所有Roomの解決済み天井高さ（roomCeilingHeight。問題修正2026-08:
  *   天井断面線は区間（エリア）の床断面からそのエリアのCHの距離に描くため、床と対で持つ）。
@@ -257,20 +262,25 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   // 天伏の平面区画の境界で区間を割り、片ごとに区画の高さ（無ければ所有者の部屋CH）を入れる。
   // 区画の無い図面（field null）は何もしない。探査点は片の中央（probeGapOwnersと同じ式）。
   // 先頭の片だけ元のloCLId・最後の片だけ元のhiCLId、内側の境界は天井芯の上でCLではないためnull。
+  // 傾斜（slope。区画・部屋形状の残り）の片は、両端の高さを chMm（走り方向の lo 端）・chHiMm（hi 端）で持つ。
+  // 高さは壁の仕上げ面（face.faceValue。実壁が無い面は芯）の奥行きで評価する（Q1）。chHiMm は傾いているときだけ付ける。
   const field = zoneCeilingFieldOf(graph);
+  const faceDepth = Number.isFinite(face.faceValue) ? face.faceValue : axisValue;
   const zoned = !field ? segs : segs.flatMap(seg => {
     const depthCoord = axisValue + face.inward * PROBE_EPS_MM;
-    const edges = zoneCeilingEdgesAlong(field, { isVertical: face.isVertical, depthCoord, lo: seg.runLo, hi: seg.runHi })
+    const edges = zoneCeilingEdgesAlong(field, { isVertical: face.isVertical, depthCoord, lo: seg.runLo, hi: seg.runHi, includeShaped: true })
       .filter(e => e - seg.runLo > GAP_EPS && seg.runHi - e > GAP_EPS);
     const pts = [seg.runLo, ...edges, seg.runHi];
     const pieces = [];
     for (let i = 0; i + 1 < pts.length; i++) {
-      const mid = (pts[i] + pts[i + 1]) / 2;
-      const px = face.isVertical ? axisValue + face.inward * PROBE_EPS_MM : mid;
-      const py = face.isVertical ? mid : axisValue + face.inward * PROBE_EPS_MM;
+      const along = zoneCeilingChAlong(field, seg.owner, {
+        isVertical: face.isVertical, depthCoord: faceDepth, probeDepth: depthCoord, lo: pts[i], hi: pts[i + 1],
+      });
+      const tilted = along != null && Math.abs(along.chHi - along.chLo) > GAP_EPS;
       pieces.push({
         ...seg, runLo: pts[i], runHi: pts[i + 1],
-        chMm: zoneCeilingChAt(field, seg.owner, px, py) ?? chOf(seg.owner),
+        chMm: along?.chLo ?? chOf(seg.owner),
+        ...(tilted ? { chHiMm: along.chHi } : {}),
         loCLId: i === 0 ? seg.loCLId : null,
         hiCLId: i + 2 === pts.length ? seg.hiCLId : null,
       });
@@ -280,13 +290,21 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
 
   // 隣接区間でfloorDeltaMm・chMmがともに同じなら結合する（不要な段差線を出さないため。
   // 問題修正2026-08: 床が同じ高さでも天井高さ(chMm)が異なる境界は天井断面線の段差＝縦線に
-  // なるため、chMmが異なる区間は結合しない）。
+  // なるため、chMmが異なる区間は結合しない）。傾いた片は水平の片と結合しない。傾いた片どうしは
+  // 高さが連続し勾配が同じ（同じ面がCLの分割点で割れたもの）ときだけ結合して1本の斜線にする。
+  const sameCeiling = (a, b) => {
+    if (a.chHiMm == null && b.chHiMm == null) return a.chMm === b.chMm;
+    if (a.chHiMm == null || b.chHiMm == null) return false;
+    const gradient = s => (s.chHiMm - s.chMm) / (s.runHi - s.runLo);
+    return Math.abs(a.chHiMm - b.chMm) < TILT_EPS_MM && Math.abs(gradient(a) - gradient(b)) < TILT_GRADIENT_EPS;
+  };
   const merged = [];
   for (const s of zoned) {
     const last = merged[merged.length - 1];
-    if (last && last.floorDeltaMm === s.floorDeltaMm && last.chMm === s.chMm && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
+    if (last && last.floorDeltaMm === s.floorDeltaMm && sameCeiling(last, s) && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
       last.runHi = s.runHi;
       last.hiCLId = s.hiCLId;
+      if (s.chHiMm != null) last.chHiMm = s.chHiMm;
       if (last.owner !== s.owner) last.owner = null;
     } else {
       merged.push({ ...s });
@@ -304,8 +322,12 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
     .map(s => {
       const a = toLocal(s.runLo), b = toLocal(s.runHi);
       const swapped = a > b;
+      // 傾いた片は chMm＝loX 側・chHiMm＝hiX 側の高さ（loCLId/hiCLId と同じく反転で入れ替える）
+      const tilted = s.chHiMm != null;
       return {
-        loX: Math.min(a, b), hiX: Math.max(a, b), floorDeltaMm: s.floorDeltaMm, chMm: s.chMm,
+        loX: Math.min(a, b), hiX: Math.max(a, b), floorDeltaMm: s.floorDeltaMm,
+        chMm: tilted && swapped ? s.chHiMm : s.chMm,
+        ...(tilted ? { chHiMm: swapped ? s.chMm : s.chHiMm } : {}),
         loCLId: swapped ? s.hiCLId : s.loCLId, hiCLId: swapped ? s.loCLId : s.hiCLId,
         owner: s.owner,
       };
@@ -405,8 +427,9 @@ export function familyCeilingSegments(face, parentRoom, graph) {
  */
 export function drawnCeilingRiserX(segs, i, halfWallMm, fallbackCeilAbsMm) {
   if (segs[i].zoneCeilEdgeHi) return segs[i].hiX; // 天伏の区画の境界は壁が無い＝ずらさない
-  const ceilAbs = s => (s.chMm != null ? s.floorDeltaMm + s.chMm : fallbackCeilAbsMm);
-  const towardHigh = ceilAbs(segs[i + 1]) > ceilAbs(segs[i]) ? 1 : -1;
+  // 境界に接する端の高さで比べる（傾いた区間は手前の区間の hi 端・次の区間の lo 端）
+  const ceilAbs = (s, atHi) => (s.chMm != null ? s.floorDeltaMm + (atHi ? (s.chHiMm ?? s.chMm) : s.chMm) : fallbackCeilAbsMm);
+  const towardHigh = ceilAbs(segs[i + 1], false) > ceilAbs(segs[i], true) ? 1 : -1;
   return segs[i].hiX + towardHigh * halfWallMm;
 }
 

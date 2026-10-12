@@ -33,7 +33,7 @@ import {
   OPENING_TAG_RADIUS_PX, GRID_TAG_RADIUS_PX, GRID_TAG_FONT_PX,
   FACE_LABEL_FONT_PX, GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
   DEFAULT_OPENING_TAG_ROW_MM, DEFAULT_DIM_ROW_GAP_MM, DEFAULT_GRID_ROW_GAP_MM,
-  DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM, SPLIT_MERGE_EPS_MM, DEFAULT_DIM_FOOT_GAP_MM,
+  DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM, SPLIT_MERGE_EPS_MM, DEFAULT_DIM_FOOT_GAP_MM, GAP_EPS_MM,
 } from './elevationStyle.js';
 
 // 項目4: 壁2段書きの省略判定用テキスト幅概算。renderText（figurePrimitivesKonva.jsx）は
@@ -117,7 +117,19 @@ export function segEndProfile(segs, CH, end) {
   if (!segs || segs.length === 0) return null;
   const s = end === 'first' ? segs[0] : segs[segs.length - 1];
   const floorDeltaMm = s.floorDeltaMm ?? 0;
-  return { floorDeltaMm, ceilAbsMm: s.chMm != null ? floorDeltaMm + s.chMm : CH };
+  // 傾いた区間（chHiMm）は面の端の高さ＝first は lo 端（chMm）・last は hi 端（chHiMm）
+  const ch = end === 'last' ? (s.chHiMm ?? s.chMm) : s.chMm;
+  return { floorDeltaMm, ceilAbsMm: ch != null ? floorDeltaMm + ch : CH };
+}
+
+/**
+ * 面の右側に天井高さ寸法（右CH寸法）を立てるか。区間が2つ以上、または1区間でも傾いている
+ * （chHiMm が chMm と違う＝両端の高さが違う）とき。buildFaceFigure と帯レイアウト（右への張り出し）が共有する。
+ * @param {Array<{chMm?:number, chHiMm?:number}>|undefined} segs
+ */
+export function hasRightChDim(segs) {
+  if (!segs?.length) return false;
+  return segs.length > 1 || (segs[0].chHiMm != null && segs[0].chHiMm !== segs[0].chMm);
 }
 
 /**
@@ -786,7 +798,19 @@ export function buildFaceFigure(face, ctx) {
   // （水平1本の天井線）へフォールバックする——実経路はwallAdjacentFloorSegmentsが常に
   // chMm（区間の所有Roomの解決済みCH。部分指定の自CH指定なしは親と天井が揃うよう
   // roomCeilingHeightが調整済み＝段差は明示CH指定時のみ現れる）を与える。
-  const ceilAbsOf = s => (s.chMm != null ? s.floorDeltaMm + s.chMm : CH);
+  // 傾斜の区間（chHiMm あり）は loX で chMm・hiX で chHiMm の線形。x が区間の外なら端の値で水平
+  // （エンジンの ceilProfileEdgeAt と同じ）。chHiMm 無しは一定（現行同値）。
+  const segCeilAbsAt = (s, x) => {
+    if (s.chMm == null) return CH;
+    const lo = s.floorDeltaMm + s.chMm;
+    if (s.chHiMm == null) return lo;
+    const w = s.hiX - s.loX;
+    if (!(w > 0)) return lo;
+    const t = (x - s.loX) / w;
+    return lo + (s.chHiMm - s.chMm) * Math.min(Math.max(t, 0), 1);
+  };
+  const ceilAbsOf = s => segCeilAbsAt(s, s.loX);     // 区間の lo 端の天井絶対高さ
+  const ceilAbsHiOf = s => segCeilAbsAt(s, s.hiX);   // 区間の hi 端（平面は ceilAbsOf と同値）
   const ceilYOf = s => -ceilAbsOf(s);
   // QA H1: 実際に描いたbeyondCeilings(bc)破線の最大天井高さを控え、注記一点鎖線の突き出し
   // 基準に含める（ceilingProfile有りの面ではbeyondCeilingsを描かないため-Infinityのまま）。
@@ -818,12 +842,15 @@ export function buildFaceFigure(face, ctx) {
     // 1本線なので「何の線か」が図から読み取れなくなる。
     const ceilStoreyOf = s => s.ceilFloorZMm ?? 0;
     const ceilRuns = [];
+    // 傾いた区間（chHiMm）は隣と結合しない独自の run（天井線は斜線1本）。
     for (const [i, s] of segs.entries()) {
-      const y = ceilYOf(s), storey = ceilStoreyOf(s);
+      const y = ceilYOf(s), storey = ceilStoreyOf(s), tilted = s.chHiMm != null;
       const last = ceilRuns[ceilRuns.length - 1];
-      if (last && last.y === y && last.storey === storey) last.endIdx = i;
-      else ceilRuns.push({ y, storey, startIdx: i, endIdx: i });
+      if (!tilted && last && !last.tilted && last.y === y && last.storey === storey) last.endIdx = i;
+      else ceilRuns.push({ y, storey, tilted, startIdx: i, endIdx: i });
     }
+    // run の天井線の x での y（傾いた run は区間の直線。平面は y 一定）
+    const runYAt = (r, x) => (r.tilted ? -segCeilAbsAt(segs[r.startIdx], x) : r.y);
     // 隣り合う天井線が別の階のものなら、段差の縦線を描かず、境界の描画xも半壁厚ずらさない
     // （ずらす規約は段差の縦線を「低い方からみてCLの向こう側」へ置くためのもの。縦線を描かない
     // なら区間の境界そのもの＝その位置に立つ壁の面で終わらせる）。
@@ -860,7 +887,17 @@ export function buildFaceFigure(face, ctx) {
     for (const [ri, r] of ceilRuns.entries()) {
       const x1 = ri === 0 ? ceilX0 : ceilBoundaryX(ri - 1);
       const x2 = ri === ceilRuns.length - 1 ? ceilXRun : ceilBoundaryX(ri);
-      prims.push({ type: 'line', x1, y1: r.y, x2, y2: r.y, weight: cutWeight });
+      if (!r.tilted) {
+        prims.push({ type: 'line', x1, y1: r.y, x2, y2: r.y, weight: cutWeight });
+        continue;
+      }
+      // 傾いた run: 斜線は区間 [loX, hiX] の内側だけ。区間の外（壁の無い端の延長・上階のはり出し・
+      // 境界の半壁厚ずれ）は端の値で水平な別の線（エンジンの ceilProfileEdgeAt と同じ「範囲外は端の値で水平」）。
+      const seg = segs[r.startIdx];
+      const sx1 = Math.max(x1, seg.loX), sx2 = Math.min(x2, seg.hiX);
+      if (x1 < sx1) prims.push({ type: 'line', x1, y1: runYAt(r, x1), x2: sx1, y2: runYAt(r, sx1), weight: cutWeight });
+      if (sx2 > sx1) prims.push({ type: 'line', x1: sx1, y1: runYAt(r, sx1), x2: sx2, y2: runYAt(r, sx2), weight: cutWeight });
+      if (sx2 < x2) prims.push({ type: 'line', x1: Math.max(sx2, sx1), y1: runYAt(r, sx2), x2, y2: runYAt(r, x2), weight: cutWeight });
     }
     // 別エリア天井の破線は「論理区間（segs）」基準で天井断面と比較する——描画済みrun範囲
     // （天井段差の描画x＝±半壁厚オフセット後）と比較すると、bcの境界（論理CL値）と天井段差の
@@ -872,7 +909,7 @@ export function buildFaceFigure(face, ctx) {
     for (const bc of beyondCeilings) {
       const pieces = [];
       for (const seg of segs) {
-        if (bc.ceilAbsMm <= ceilAbsOf(seg)) continue;
+        if (bc.ceilAbsMm <= Math.max(ceilAbsOf(seg), ceilAbsHiOf(seg))) continue; // 傾いた区間は高い側より上のときだけ（天井線をまたぐ破線を引かない）
         const lo = Math.max(bc.loX, seg.loX, 0);
         const hi = Math.min(bc.hiX, seg.hiX, run); // 壁のない端部の延長は対象外
         if (hi - lo <= 0) continue;
@@ -893,7 +930,9 @@ export function buildFaceFigure(face, ctx) {
     for (let ri = 0; ri + 1 < ceilRuns.length; ri++) {
       if (crossesStorey(ri)) continue; // 階の異なる天井断面線は結ばない（上記の新仕様）
       const x = ceilRiserXAt(ceilRuns[ri].endIdx);
-      prims.push({ type: 'line', x1: x, y1: ceilRuns[ri].y, x2: x, y2: ceilRuns[ri + 1].y, weight: cutWeight });
+      const yA = runYAt(ceilRuns[ri], x), yB = runYAt(ceilRuns[ri + 1], x);
+      if (Math.abs(yA - yB) <= GAP_EPS_MM) continue; // 境界で天井線が続いている（傾斜→同じ高さの平面等）なら縦線は要らない
+      prims.push({ type: 'line', x1: x, y1: yA, x2: x, y2: yB, weight: cutWeight });
     }
   }
   // 上階のはり出しの**下辺＝上階のFL断面線**（ユーザー裁定2026-09「「6」D2」。上辺は上の天井断面線、
@@ -962,11 +1001,11 @@ export function buildFaceFigure(face, ctx) {
     return -(capped ? Math.min(ceil, upperFloorZ) : ceil);
   };
   if (hasWallAtLocal0 || edgeAtLocal0) {
-    prims.push({ type: 'line', x1: 0,   y1: endCeilYOf(0, ceilAbsOf(segs[0]), capsAtUpperFloor('lo')), x2: 0,   y2: endFloorYOf(0, floorYAtStart),
+    prims.push({ type: 'line', x1: 0,   y1: endCeilYOf(0, segCeilAbsAt(segs[0], 0), capsAtUpperFloor('lo')), x2: 0,   y2: endFloorYOf(0, floorYAtStart),
       weight: hasWallAtLocal0 ? cutWeight : silhouetteWeight });
   }
   if (hasWallAtLocalRun || edgeAtLocalRun) {
-    prims.push({ type: 'line', x1: run, y1: endCeilYOf(run, ceilAbsOf(segs[segs.length - 1]), capsAtUpperFloor('hi')), x2: run, y2: endFloorYOf(run, floorYAtEnd),
+    prims.push({ type: 'line', x1: run, y1: endCeilYOf(run, segCeilAbsAt(segs[segs.length - 1], run), capsAtUpperFloor('hi')), x2: run, y2: endFloorYOf(run, floorYAtEnd),
       weight: hasWallAtLocalRun ? cutWeight : silhouetteWeight });
   }
 
@@ -980,7 +1019,7 @@ export function buildFaceFigure(face, ctx) {
   // 高さ」を求めるのに使う共通ヘルパ）。
   const nearSegAt = x => segs.find(s => x >= s.loX - 1e-6 && x <= s.hiX + 1e-6);
   const nearDeltaAt = x => nearSegAt(x)?.floorDeltaMm ?? 0;
-  const nearCeilAbsAt = x => { const seg = nearSegAt(x); return seg ? ceilAbsOf(seg) : CH; };
+  const nearCeilAbsAt = x => { const seg = nearSegAt(x); return seg ? segCeilAbsAt(seg, x) : CH; };
 
   // 新仕様「開放スパン」（elevationOpenSpan.js。face.spans）: 壁のある区間の先に続く、同室内部の
   // 壁の無い開放区間の描画。壁区間はここまでの床線・天井線・両端縦線で既に表現済みのため、
@@ -1338,7 +1377,8 @@ export function buildFaceFigure(face, ctx) {
   // 階段帯（ユーザー明示指示2026-08その12）: chDimChainsを渡す帯ではCH寸法の判断を
   // 呼び出し側（stairChDimChains）が一括で持つため、ここでの面ごとの右CH寸法は描かない
   // ——段差の有無ではなく「端の断面プロファイルが前の端から変わったか」で決まるため。
-  if (segs.length > 1 && !ctx.chDimChains) {
+  // 傾斜（1区間でも両端の高さが違う）の面も右に立てる（hasRightChDim。値は右端区間の hi 端の実測）。
+  if (hasRightChDim(segs) && !ctx.chDimChains) {
     const rightSeg = segs[segs.length - 1];
     const rightChDimX = boundary.hi + CH_DIM_OFFSET_MM;
     const rightFloorY = floorYOf(rightSeg);
@@ -1346,9 +1386,9 @@ export function buildFaceFigure(face, ctx) {
     // chMm未指定のフラット天井では従来どおり天井絶対高(CH)−右端区間FLになる。
     prims.push({
       // 足はCLに触れず手前で止める（ユーザー明示指示2026-08その13。展開図で統一）。
-      type: 'dim', dir: 'v', at: rightChDimX, from: ceilYOf(rightSeg), to: rightFloorY,
+      type: 'dim', dir: 'v', at: rightChDimX, from: -ceilAbsHiOf(rightSeg), to: rightFloorY,
       foot: boundary.hi + Math.min(ctx.dimFootGapModelMm ?? DEFAULT_DIM_FOOT_GAP_MM, CH_DIM_OFFSET_MM), dot: true,
-      label: Math.round(ceilAbsOf(rightSeg) - rightSeg.floorDeltaMm),
+      label: Math.round(ceilAbsHiOf(rightSeg) - rightSeg.floorDeltaMm),
     });
   }
 
@@ -1366,7 +1406,7 @@ export function buildFaceFigure(face, ctx) {
     boundary, floorSegments: segs, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
     detailWeight, faceLabelAvoidThresholdModelMm, extraCenterLineXs,
     skipFaceLabel, faceLabelBoundary,
-    CH: Math.max(CH, ...segs.map(ceilAbsOf), maxDrawnBcCeilAbs, ceilProfileMaxAbs),
+    CH: Math.max(CH, ...segs.flatMap(s => [ceilAbsOf(s), ceilAbsHiOf(s)]), maxDrawnBcCeilAbs, ceilProfileMaxAbs),
   });
 
   return prims;

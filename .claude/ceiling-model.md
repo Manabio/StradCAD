@@ -70,7 +70,7 @@
 - **保存**: `Room.customOverrides` の2キー。`ceilingShape`（'slope'|'arc'|'dome'。**平面のときはキーを置かない**）と `ceilingDims`（'500,90' のカンマ区切り文字列）。FBS・graphSnapshot・仕上げ undo・`makeRoomUndefined`（`customOverrides.clear()`）は汎用の keys/vals なので変更なし。`wallFreshnessKey`（壁材・壁仕上げだけ）・`codeNormalization`（材キーだけ）には影響しない。
 - **読み書き**: `ceiling/roomCeilingShape.js`（純モジュール）。`roomCeilingShapeOf(room)`（`getFinishInfo()` から読み、`normalizeCeilingShape` を通す。不正・room null・getFinishInfo なしは平面・[]）／`setRoomCeilingShape(room, {shape, dims})`（先に正規化。平面なら2キーとも消す。undo は呼び側が `withFinishUndo` で包む）。天井高を天伏から書くときは `applyRoomCeilingHeightDraft`（原文不変は触らない＝仕上げ表のレンジ表記を壊さない／空は override を消す／正の数は数値で書く／それ以外は false）。
 - **効き方**: 見上げの「残り」の面（`ceilingSurfacesOf`。区画に入らなかったセル）だけが部屋の形状を持つ。区画の面は不変。**子は親の形状を継承しない**（部屋ごとに1つ。リード既定）。階段の対の部屋の残りは従来どおり描かない。傾斜・円弧・ドームの `zAt`・ラベルは `planSolids.ceilingSolids` が面を汎用に扱うので自動で付く。グレー境界は平面どうしだけなので、形状のある残りの面との境界は通常の細線。パネルの CH 欄は、区画が無くても残りが平面でなければレンジ（基準高〜基準高＋ライズ）。削除確認（`roomsLosingCeilingZones`）は区画に加えて平面でない形状も数える。
-- 既知の限界: 展開図の天井線・壁の上端は部屋の形状にも追従しない（区画と同じ）。`stairFloorSync.js` は未編集の上階ペア部屋へ overrides を丸ごと写すので形状キーも写る（ペア部屋は天井を持たないので実害なし）。UI からの入力: 部屋の残りの欄 `RoomCeilingFields`（S12b）。dims は固定小数表記で書く（指数 `1e+21` を保存しない）。見上げの「残り」の面には階段所属のセルを混ぜない（`ceilingGroupsOf` の「階段の残り」と同じ。S12c）。
+- 既知の限界: 展開図の天井線は自室の傾斜の部屋形状には追従する（E3a-2）。円弧・ドームと遠側の天井は未対応。`stairFloorSync.js` は未編集の上階ペア部屋へ overrides を丸ごと写すので形状キーも写る（ペア部屋は天井を持たないので実害なし）。UI からの入力: 部屋の残りの欄 `RoomCeilingFields`（S12b）。dims は固定小数表記で書く（指数 `1e+21` を保存しない）。見上げの「残り」の面には階段所属のセルを混ぜない（`ceilingGroupsOf` の「階段の残り」と同じ。S12c）。
 
 ## 天井芯（S8a）
 - **何か**: 天井セルだけを割る線（中心相当。ユーザー裁定 2026-10-10）。CL の新種別 `'ceiling'`（`discipline:'ceiling'`）。S8a は種別・ポリシー・描画・天井セルの分割まで、追加・削除・移動・延長の操作配線は S8b（下の節）。FBS は不変（discipline は文字列で往復。旧版で開くと中心線に落ちる＝前方互換なしを受容）。
@@ -116,12 +116,12 @@ N 階の天伏は「N の天井面際から N+1 の床を裏から見た図」�
 - 階段区画の初期値（基準高＝対の部屋の CH・平均勾配）は、上側だけの区画だと勾配の位置に来ない。
 - ドームは積型放物面。非矩形の区画では頂点が区画の外に出る。
 - 天井芯は前方互換なし（旧版で開くと中心線）。天井芯の削除・結合・中心線にまたがれたとき、区画のセルは部屋の CH に戻る。
-- 仕上げ表の CH 欄は区画のレンジを出さない。展開図の自室の天井線は平面の区画に追従する（E1 済み）。遠側の天井（開放スパン・家族の破線・cellsAlong）も平面の区画には追従する（C2 済み）。傾斜・円弧・ドーム、階段帯は未対応（着手中。次節）。
+- 仕上げ表の CH 欄は区画のレンジを出さない。展開図の自室の天井線は平面の区画に追従する（E1 済み）。遠側の天井（開放スパン・家族の破線・cellsAlong）も平面の区画には追従する（C2 済み）。自室の傾斜（区画・部屋形状）も追従する（E3a-2 済み。体裁が斜線を引く）。遠側の傾斜（E3b）・円弧・ドーム（E4）、階段帯は未対応（着手中。次節）。
 
 ## 天井高の点問い合わせ（E0。展開図が区画・形状に追従するための足場）
 - `ceiling/ceilingHeightField.js`。平面上の点から層 FL 基準（床段差込み）の天井面の高さを引く。**見上げの天井立体（`planSolids`）と同じ材料から引き、高さの式を二重定義しない**（一致はテストで固定）。面に無い点（天井を持たない部屋・階段所属で区画に入らないセル）は null＝呼び元が `roomCeilingHeight` に落とす約束。
 - 共有辺の上は面の順の先勝ちなので、呼び元はセル中央など内部の点で問い合わせる。STAIR_VOID の平らな面も返るが、展開図で使うかは裁定待ち。
-- 展開図側の消費: 平面（flat）の区画だけ E1 で済み（`elevation/space/zoneCeiling.js`、設計は elevation-model.md「天井高さの解決」）。傾斜・円弧・ドームと階段帯は以降（遠側の天井の平面区画は C2 で済み）。基準の展開図 golden は `scripts/probe/golden-elev-ceiling/ceiling-zone-test`（`--regen`。生成は `makeCeilingZoneTestDoc.mjs`）＝自室の区画。遠側（親が子の区画を見る）は `golden-elev-ceiling/ceiling-zone-far-test`（1階 売場の子・2階 収納に区画。生成は `makeCeilingZoneFarTestDoc.mjs`。C1 との差は親の帯＝売場・予備室だけ）。far-test の golden が検出するのは開放スパンの経路（売場・予備室）だけ。家族の破線・cellsAlong は単体テストが守る。
+- 展開図側の消費: 平面（flat）の区画は E1、自室の傾斜（区画・部屋形状）は E3a-2 で済み（傾斜の golden 差分は ceiling-zone-test〔far-test も同じ 2 階の廊下・子ども1 を含む〕の 2 階の 廊下・子ども1 と、傾斜を最高点で見る階段帯）。実装は `elevation/space/zoneCeiling.js`、設計は elevation-model.md「天井高さの解決」。遠側の傾斜（E3b）・円弧・ドーム（E4）と階段帯は以降（遠側の天井の平面区画は C2 で済み）。基準の展開図 golden（ceiling-zone-test／far-test は E3a-2 の姿）は `scripts/probe/golden-elev-ceiling/ceiling-zone-test`（`--regen`。生成は `makeCeilingZoneTestDoc.mjs`）＝自室の区画。遠側（親が子の区画を見る）は `golden-elev-ceiling/ceiling-zone-far-test`（1階 売場の子・2階 収納に区画。生成は `makeCeilingZoneFarTestDoc.mjs`。C1 との差は親の帯＝売場・予備室だけ）。far-test の golden が検出するのは開放スパンの経路（売場・予備室）だけ。家族の破線・cellsAlong は単体テストが守る。
 
 ## 検証データ（S13d）
 - `scripts/probe/makeCeilingSteelStairTestDoc.mjs`（既定＝鉄骨 `ceiling-steel-stair-test.stq`、`--wood`＝木造 `ceiling-wood-stair-test.stq`。D:/tatsuya/Download）。3階建て、1F・2F に同じ足元の折返し階段（13.stq の 1F と外形・値は同じ。セルは 1 つ）、3F は STAIR_VOID。実データに無い「鉄骨で続きのある階段」の見上げの確認用。

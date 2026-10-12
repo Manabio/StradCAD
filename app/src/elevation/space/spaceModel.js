@@ -29,7 +29,7 @@ import { roomCeilingHeight } from '../../finish/roomMetrics.js';
 import { kneeDropRecordsOnAxis, kneeDropWallGeometry } from '../../finish/kneeDropWall.js';
 import { graphList } from '../../graphReadScope.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
-import { zoneCeilingFieldOf, zoneCeilingChAt } from './zoneCeiling.js';
+import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChTopAt } from './zoneCeiling.js';
 
 // cellsAlongの無限ループ防御（格子異常時の安全弁）。実データの通常の列は
 // せいぜい数十セルなので、この上限に達すること自体が異常の兆候。
@@ -109,6 +109,11 @@ export function buildSpaceIndex(layers, opts = {}) {
   function chAt(room, graph, x, y) {
     return zoneCeilingChAt(fieldFor(graph), room, x, y) ?? chFor(room, graph);
   }
+  // 層スタック用（cellAt）の天井高さ＝**面の最高点**。傾斜の面は高い側（壁の帯を高い側まで見せ、垂れ壁の下端も最高点基準。
+  // 体裁の斜線より上は断面エンジンが ceilProfile の ceilZHi で打ち切る）。傾斜でなければ chAt と同じ。cellsAlong（遠側）は chAt のまま（E3b）。
+  function chTopAt(room, graph, x, y) {
+    return zoneCeilingChTopAt(fieldFor(graph), room, x, y) ?? chAt(room, graph, x, y);
+  }
 
   // cellAt: (layer, worldX, worldY) → SpaceCell | null。
   // グリッドにセルが無い（layer.graphが無い・格子外）位置はnull——「セルが1つも無い」ことと
@@ -122,7 +127,7 @@ export function buildSpaceIndex(layers, opts = {}) {
     if (!cell) return null;
     const room = cellToRoomFor(layer).get(cell.key) ?? null;
     const floorZ = floorZFor(room, layer);
-    const ceilZ = room ? floorZ + chAt(room, layer.graph, worldX, worldY) : null;
+    const ceilZ = room ? floorZ + chTopAt(room, layer.graph, worldX, worldY) : null;
     return { room, floorZ, ceilZ };
   }
 

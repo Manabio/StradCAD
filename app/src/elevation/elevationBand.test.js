@@ -13,6 +13,7 @@ import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { createZone } from '../ceiling/ceilingZones.js';
+import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
 import { BAND_TOP_MARGIN_MM, BAND_GAP_MM, CH_DIM_OFFSET_MM } from './elevationStyle.js';
 
@@ -963,6 +964,33 @@ test('【区画の天井線とエンジンの打ち切りが一致】左2400・�
   assert.equal(Math.min(...lowSide.flatMap(p => [p.y1, p.y2])), -2400, '低い側（2400）の天井線より上にエンジンの線が残らない');
   const chDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v').map(p => p.label).sort();
   assert.ok(chDims.includes(3000), '右のCH寸法は区画の高さ');
+});
+
+// ---- 天伏の傾斜（E3a-2）: 体裁が斜線を引き、エンジンの壁の帯がその斜線に沿う ----
+test('【傾斜の天井線と壁の帯】部屋形状 slope[600,+x]（CH 2500）の面は斜線1本で、全プリミティブの端点が斜線以下・縦線は両端だけ・右CH寸法は hi 端の実測', () => {
+  const g = makeGrid([0, 5000], [0, 3000]);
+  const room = g.interior([[0, 0]], { walls: true });
+  room.setOverride('ceilingHeight', '2500');
+  g.graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  setRoomCeilingShape(room, { shape: 'slope', dims: [600, 0] });
+  const band = buildRoomBand(room, g.graph);
+  const zAt = x => 2500 + 600 * (x + 57.5) / 5000; // 面のローカル x=0 は世界 x=57.5（壁の仕上げ面）
+  const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-6, `${msg} 実際:${a} 期待:${b}`);
+  const lines = band.primitives.filter(p => p.type === 'line');
+  const inFace = lines.filter(p => p.x1 >= 0 && p.x2 <= 4885);
+  const slants = inFace.filter(p => p.weight === 'thick' && p.x1 === 0 && p.x2 === 4885 && p.y1 !== p.y2);
+  assert.equal(slants.length, 1, '天井断面線は斜線1本（CL x=2000 で刻んだ片は結合済み）');
+  near(slants[0].y1, -zAt(0), 'lo 端 2506.9'); near(slants[0].y2, -zAt(4885), 'hi 端 3093.1');
+  assert.equal(inFace.filter(p => p.weight === 'thick' && p.x1 === p.x2 && p.x1 > 0 && p.x1 < 4885).length, 0, '段差の縦線なし');
+  // 全プリミティブの端点が斜線（天井線）以下
+  for (const p of inFace) {
+    for (const [x, y] of [[p.x1, p.y1], [p.x2, p.y2]]) {
+      assert.ok(-y <= zAt(x) + 1e-6, `斜線より上に線がある: x=${x} y=${y} 斜線=${zAt(x)}`);
+    }
+  }
+  const chDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v').map(p => p.label);
+  assert.ok(chDims.includes(3093), '右CH寸法は hi 端の実測 Math.round(3093.1)');
+  assert.ok(chDims.includes(2507), '左CH寸法は lo 端の実測 Math.round(2506.9)');
 });
 
 // ---- ceilProfileFromSegments: 傾斜天井の受け口（E3a-1）。区間の chHiMm（任意）が ceilZHi になる ----

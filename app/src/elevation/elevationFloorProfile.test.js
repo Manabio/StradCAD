@@ -8,6 +8,7 @@ import { buildRoomFaces } from './elevationFaces.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
 import { createZone } from '../ceiling/ceilingZones.js';
+import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 import {
   wallAdjacentFloorSegments, drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm,
   familyCeilingSegments, floorProfileFromSegments, mergeFloorProfiles,
@@ -629,18 +630,19 @@ test('【失敗系・2026-10-08】clipContentAboveDrawnProfile: 端点だけが�
 // ---- 天伏の平面区画（区画の境界で天井断面線が割れる） ----
 // 1セルの部屋（x 0..5000 × y 0..3000）に天井芯 x=2000 を足し、天井セルを区画にする。
 // 区画の境界は仕上げの格子ではなく天伏だけの線＝壁の中心線に載らない（実機の主寝室と同じ形）。
-function zoneFace(zones, shape = 'flat') {
+function zoneFace(zones, shape = 'flat', { dims = [600, 0], faceAxis = 0 } = {}) {
   const g = makeGrid([0, 5000], [0, 3000]);
   const room = g.interior([[0, 0]], { walls: true });
   room.setOverride('ceilingHeight', '2500');
   g.graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
   for (const [x, mm] of zones) {
     const key = worldToCell(x, 1500, g.graph, CEILING_CELL_GRID).key;
-    room.setCeilingZones(createZone(g.graph, room, [key], { heightMm: mm, shape, dims: shape === 'flat' ? [] : [600, 0] }).zones);
+    room.setCeilingZones(createZone(g.graph, room, [key], { heightMm: mm, shape, dims: shape === 'flat' ? [] : dims }).zones);
   }
-  const face = buildRoomFaces(room, g.graph).find(f => !f.isVertical && f.axisCL.value === 0);
+  const face = buildRoomFaces(room, g.graph).find(f => !f.isVertical && f.axisCL.value === faceAxis);
   return { g, room, face };
 }
+const near = (actual, expected, msg) => assert.ok(Math.abs(actual - expected) < 1e-6, `${msg ?? ''} 実際:${actual} 期待:${expected}`);
 
 test('【天井芯の上の区画境界で分割】左2400・右3000 は x=2000 で割れ、境界のCL idはnull・zoneCeilEdgeHi あり', () => {
   const { g, room, face } = zoneFace([[1000, 2400], [3500, 3000]]);
@@ -680,11 +682,75 @@ test('【区画高＝部屋CHは1区間に戻り hiCLId も保つ】右区画 25
   assert.equal('zoneCeilEdgeHi' in segs[0], false);
 });
 
-test('【失敗系】平面でない区画（傾斜）は割らない＝1区間・部屋のCH', () => {
-  const { g, room, face } = zoneFace([[3500, 2400]], 'slope');
+test('【失敗系】平面でも傾斜でもない区画（円弧）は割らない＝1区間・部屋のCH・chHiMm なし', () => {
+  const { g, room, face } = zoneFace([[3500, 2400]], 'arc', { dims: [400, 0] });
   const segs = wallAdjacentFloorSegments(face, room, g.graph);
   assert.equal(segs.length, 1);
   assert.equal(segs[0].chMm, 2500);
+  assert.equal('chHiMm' in segs[0], false);
+});
+
+// ---- 天伏の傾斜（E3a-2: 片の両端の高さ chMm〔lo 端〕・chHiMm〔hi 端〕。壁の仕上げ面で評価） ----
+test('【傾斜区画の片に chHiMm】右区画 slope[600,+x]・底 2400（x 2000..5000）: 左は平面 2500・右は 2400→2988.5（面は仕上げ面 x 57.5..4942.5）', () => {
+  const { g, room, face } = zoneFace([[3500, 2400]], 'slope');
+  const segs = wallAdjacentFloorSegments(face, room, g.graph);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].chMm, 2500);
+  assert.equal('chHiMm' in segs[0], false, '平らな片はキー自体を持たない');
+  assert.equal(segs[0].zoneCeilEdgeHi, true, '同じ所有者の高さの違う境界＝壁の無い境界');
+  near(segs[1].chMm, 2400, '区画の左端 x=2000 は底');
+  near(segs[1].chHiMm, 2988.5, 'x=4942.5: 2400 + 600×(4942.5−2000)/3000');
+  assert.deepEqual([segs[1].loX, segs[1].hiX], [1942.5, 4885]);
+});
+
+test('【dirSign<0 の面では chMm/chHiMm が入れ替わる】向かいの壁（y=3000。ローカル x は世界 x と逆）', () => {
+  const { g, room, face } = zoneFace([[3500, 2400]], 'slope', { faceAxis: 3000 });
+  assert.equal(face.dirSign, -1, '前提: 向かいの面は逆向き');
+  const segs = wallAdjacentFloorSegments(face, room, g.graph);
+  assert.equal(segs.length, 2);
+  near(segs[0].chMm, 2988.5, 'ローカル 0＝世界 x 4942.5（高い側）');
+  near(segs[0].chHiMm, 2400, 'ローカル hiX＝世界 x 2000（底）');
+  assert.equal(segs[1].chMm, 2500, '左の平らな片はローカルの右に回る');
+  assert.equal(segs[1].zoneCeilEdgeHi, undefined);
+  assert.equal(segs[0].zoneCeilEdgeHi, true);
+});
+
+test('【走りに直交する向きの傾斜】slope[600,+y]（y 0..3000）を壁 y=0 の面で見ると両端同値・chHiMm なし・芯ではなく仕上げ面 y=57.5 の値 2411.5', () => {
+  const { g, room, face } = zoneFace([[1000, 2400], [3500, 2400]], 'slope', { dims: [600, 90] });
+  const segs = wallAdjacentFloorSegments(face, room, g.graph);
+  assert.equal(segs.length, 1, '両区画とも同値＝結合');
+  near(segs[0].chMm, 2400 + 600 * 57.5 / 3000, '仕上げ面（faceValue 57.5）で評価。芯 y=0 なら 2400');
+  assert.equal('chHiMm' in segs[0], false);
+  assert.equal(face.faceValue, 57.5, '前提: 評価点は face.faceValue');
+});
+
+test('【部屋形状の slope（setRoomCeilingShape）も片に効く】CL x=2000 で割れた格子も1本の斜線に結合する', () => {
+  const { g, room, face } = zoneFace([]);
+  setRoomCeilingShape(room, { shape: 'slope', dims: [300, 0] });
+  const segs = wallAdjacentFloorSegments(face, room, g.graph);
+  assert.equal(segs.length, 1, '天井芯 x=2000 で刻んだ片は連続・同勾配＝結合');
+  near(segs[0].chMm, 2500 + 300 * 57.5 / 5000, 'x=57.5 の値（底は部屋の CH 2500）');
+  near(segs[0].chHiMm, 2500 + 300 * 4942.5 / 5000, 'x=4942.5');
+  assert.equal(segs[0].hiX, 4885);
+  assert.equal('zoneCeilEdgeHi' in segs[0], false);
+});
+
+test('【区画なし・平面区画は chHiMm キーなし（出力形不変）】', () => {
+  for (const zones of [[], [[1000, 2400], [3500, 3000]]]) {
+    const { g, room, face } = zoneFace(zones);
+    for (const s of wallAdjacentFloorSegments(face, room, g.graph)) assert.equal('chHiMm' in s, false);
+  }
+});
+
+test('【drawnCeilingRiserX】傾いた区間は境界に接する端の高さで高低を決める（手前の hi 端・次の lo 端）', () => {
+  // 手前は 2400→3000 の傾斜。境界での高さは手前 3000・次 2800 → 手前が高い＝低い側（次）へ-半壁厚
+  const segs = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0, chMm: 2400, chHiMm: 3000 },
+    { loX: 2000, hiX: 5000, floorDeltaMm: 0, chMm: 2800 },
+  ];
+  assert.equal(drawnCeilingRiserX(segs, 0, 60, 2400), 1940);
+  // lo 端 2400 だけで比べると次の方が高く見えてしまう（+60）——hi 端で比べていることの対照
+  assert.notEqual(drawnCeilingRiserX(segs, 0, 60, 2400), 2060);
 });
 
 test('【drawnCeilingRiserX】区画境界（zoneCeilEdgeHi）はずらさない・無印の境界は従来どおり半壁厚ずらす', () => {
@@ -719,6 +785,22 @@ test('【区画＋床段差の部分指定の子】床+100 の子に区画 3000:
   assert.deepEqual(segs.map(s => [s.floorDeltaMm, s.chMm]), [[0, 2500], [100, 3000]]);
   assert.equal('zoneCeilEdgeHi' in segs[0], false, '親と子の境界は所有者が違う＝従来どおり（半壁厚ずらし）');
   assert.equal('owner' in segs[0], false);
+});
+
+test('【床 +100 の部分指定の子に傾斜区画】floorDeltaMm=100 は別に持ち、chMm/chHiMm に床段差 100 を足さない（3000 → 3000+600×2442.5/2500）', () => {
+  const g = makeGrid([0, 2500, 5000], [0, 3000]);
+  const parent = g.interior([[0, 0], [1, 0]], { walls: true });
+  parent.setOverride('ceilingHeight', '2500');
+  const child = g.graph.addRoom(new Set([g.cell(1, 0)]), '小上がり', undefined, new Set([parent.id]));
+  child.setFloorLevel(100);
+  child.setCeilingZones(createZone(g.graph, child, [g.cell(1, 0)], { heightMm: 3000, shape: 'slope', dims: [600, 0] }).zones);
+  const face = buildRoomFaces(parent, g.graph).find(f => !f.isVertical && f.axisCL.value === 0);
+  const segs = wallAdjacentFloorSegments(face, parent, g.graph);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[1].floorDeltaMm, 100);
+  near(segs[1].chMm, 3000, 'lo 端は区画の底（床段差を足さない）');
+  near(segs[1].chHiMm, 3000 + 600 * 2442.5 / 2500, 'hi 端 x=4942.5');
+  assert.equal('chHiMm' in segs[0], false);
 });
 
 // ---- 天伏の平面区画（C2: 壁の向こうの家族の天井の破線が区画に追従） ----
