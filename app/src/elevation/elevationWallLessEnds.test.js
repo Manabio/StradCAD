@@ -533,17 +533,19 @@ test('【QA指摘②・既定on固定】帯: knee-drop-test.stq相当は面Cに�
 });
 
 // ---- 傾斜（E3a-2）: 壁の無い端・開放スパンのある部屋を部屋形状 slope にした帯の全線が真の斜線以下 ----
-test('【傾斜の部屋の帯】壁の無い端を持つ部屋（4）を slope[600,+x] にしても、太線・中線の全端点が真の斜線の式以下（QA Major: 延長での勾配ずれ）', async () => {
+// 向きは +y（dims [600, 90]）: 壁の無い端を持つ面 B1・D1（縦の面。走りが y）の走り方向の傾斜。+x（奥行き方向）だと遠側の天井が
+// 近側と違う開放スパンが E3b-1 で「情報あり」として残り、壁の無い端が実壁の隅へ延長されて前提が成り立たなくなる。
+test('【傾斜の部屋の帯】壁の無い端を持つ部屋（4）を slope[600,+y] にしても、太線・中線の全端点が真の斜線の式以下（QA Major: 延長での勾配ずれ）', async () => {
   const { setRoomCeilingShape } = await import('../ceiling/roomCeilingShape.js');
   const { layoutBandFaces } = await import('./elevationBand.js');
   const { buildCeilingHeightField } = await import('../ceiling/ceilingHeightField.js');
   const { graph, room3p: room4 } = buildFixture(); // 3'（B1 右・D1 左が壁の無い端。FL+100・部分指定3つき）
-  setRoomCeilingShape(room4, { shape: 'slope', dims: [600, 0] });
+  setRoomCeilingShape(room4, { shape: 'slope', dims: [600, 90] });
   const faces = composeRoomFaces(room4, graph);
   assert.ok(faces.some(f => f.hasWallAtLocal0 === false || f.hasWallAtLocalRun === false), '前提: 壁の無い端を持つ面がある');
   const rects = buildCeilingHeightField(graph).surfaces.filter(s => s.roomId === room4.id).flatMap(s => s.rects);
-  const x1 = Math.min(...rects.map(r => r.x1)), x2 = Math.max(...rects.map(r => r.x2));
-  const trueZ = wx => 2400 + 600 * Math.min(Math.max((wx - x1) / (x2 - x1), 0), 1); // 部屋の CH 既定 2400・底
+  const y1 = Math.min(...rects.map(r => r.y1)), y2 = Math.max(...rects.map(r => r.y2));
+  const trueZ = wy => 2400 + 600 * Math.min(Math.max((wy - y1) / (y2 - y1), 0), 1); // 部屋の CH 既定 2400・底
   const layout = layoutBandFaces(room4, graph, faces);
   let checked = 0;
   for (const { face, xCursor } of layout.faceRuns) {
@@ -552,8 +554,8 @@ test('【傾斜の部屋の帯】壁の無い端を持つ部屋（4）を slope[
       if (p.type !== 'line' || (p.weight !== 'thick' && p.weight !== 'medium')) continue;
       if (Math.max(p.x1, p.x2) < xCursor - 160 || Math.min(p.x1, p.x2) > xCursor + face.run + 160) continue;
       for (const [x, y] of [[p.x1, p.y1], [p.x2, p.y2]]) {
-        const wx = face.isVertical ? face.faceValue : face.originWorld + (x - xCursor) * face.dirSign;
-        assert.ok(-y <= trueZ(wx) + 1e-6, `真の斜線より上: 面${face.letter} x=${x} y=${y} 真値=${trueZ(wx)}`);
+        const wy = face.isVertical ? face.originWorld + (x - xCursor) * face.dirSign : face.faceValue;
+        assert.ok(-y <= trueZ(wy) + 1e-6, `真の斜線より上: 面${face.letter} x=${x} y=${y} 真値=${trueZ(wy)}`);
         checked++;
       }
     }

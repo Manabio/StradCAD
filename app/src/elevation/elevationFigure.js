@@ -875,7 +875,7 @@ export function buildFaceFigure(face, ctx) {
       const pieces = [];
       let cursor = lo;
       for (const o of openRangesForCeil) {
-        if (o.farCeilAbsMm !== ceilAbsMm) continue;
+        if (o.farCeilAbsMm !== ceilAbsMm || o.farCeilHiAbsMm != null) continue; // 傾いた遠側天井線は水平な破線を代わりに描かない
         if (o.hiX <= lo || o.loX >= hi) continue;
         if (o.loX > cursor) pieces.push([cursor, Math.min(o.loX, hi)]);
         cursor = Math.max(cursor, o.hiX);
@@ -1083,7 +1083,39 @@ export function buildFaceFigure(face, ctx) {
     // ある（far天井が高い）場合は「向こう側の断面は細線の破線」の既存規則（ユーザー明示指示
     // 2026-08その2の未実装分）どおりDETAILの破線＋端部縦線（near天井〜far天井）を継ぎ足す
     // （床側のbelowFloorEdgeと同じく、角=far天井側を始点にして破線同士の角を交点にする）。
-    if (farCeilAbs !== spanCeilAbs) {
+    // 傾斜の先／傾斜の近側: 遠側の天井線は (loX, 遠 lo)→(hiX, 遠 hi) の 1 本。近側の天井線（同じ区間の斜線）との上下で線種を分け、
+    // 途中で交わるなら交点で 2 本にする（天井線より上に実線を出さない）。水平どうし（傾斜なし）は下の従来経路。
+    const nearSegMid = nearSegAt(spanMidX);
+    const nearTilted = nearSegMid?.chHiMm != null;
+    if (s.farCeilAbsMm != null && (s.farCeilHiAbsMm != null || nearTilted)) {
+      const inset = Math.min(1, (s.hiX - s.loX) / 4);
+      const nearAbsAt = (x, ins) => ceilAbsAtX(x, nearSegAt(x + ins) ? segCeilAbsAt(nearSegAt(x + ins), x) : CH);
+      const nLo = nearAbsAt(s.loX, inset), nHi = nearAbsAt(s.hiX, -inset);
+      // 遠側の高さは元の区間端（spans[i].loX/hiX）の値。描く位置 s.loX/hiX は内側の境界が直交壁の面へずれるので直線上で取り直す
+      const f0 = farCeilAbs, f1 = s.farCeilHiAbsMm ?? farCeilAbs;
+      const o0 = spans[i].loX, o1 = spans[i].hiX;
+      const fAt = x => (s.farCeilHiAbsMm != null && o1 > o0 ? f0 + (f1 - f0) * (x - o0) / (o1 - o0) : f0);
+      const fLo = fAt(s.loX), fHi = fAt(s.hiX);
+      const dLo = fLo - nLo, dHi = fHi - nHi;
+      if (Math.abs(dLo) > GAP_EPS_MM || Math.abs(dHi) > GAP_EPS_MM) {
+        const dashedAbove = { weight: detailWeight, dash: 'dashed' };
+        const solidBelow = { weight: silhouetteWeight };
+        const seg = (xa, ya, xb, yb, above) => prims.push({ type: 'line', x1: xa, y1: -ya, x2: xb, y2: -yb, ...(above ? dashedAbove : solidBelow) });
+        const crosses = (dLo > GAP_EPS_MM && dHi < -GAP_EPS_MM) || (dLo < -GAP_EPS_MM && dHi > GAP_EPS_MM);
+        if (crosses) {
+          const t = dLo / (dLo - dHi);
+          const xc = s.loX + t * (s.hiX - s.loX), yc = fLo + (fHi - fLo) * t;
+          seg(s.loX, fLo, xc, yc, dLo > 0);
+          seg(xc, yc, s.hiX, fHi, dHi > 0);
+        } else {
+          seg(s.loX, fLo, s.hiX, fHi, dLo + dHi > 0);
+        }
+        // 天井断面より上にある端の縦線（遠側の端〜近側の天井。床側の belowFloorEdge と同じく角＝遠側を始点にする）
+        const aboveEdge = (x, f, n) => ({ type: 'line', x1: x, y1: -f, x2: x, y2: -n, weight: detailWeight, dash: 'dashed' });
+        if (prevIsWall && dLo > GAP_EPS_MM) prims.push(aboveEdge(s.loX, fLo, nLo));
+        if (nextIsWall && dHi > GAP_EPS_MM) prims.push(aboveEdge(s.hiX, fHi, nHi));
+      }
+    } else if (farCeilAbs !== spanCeilAbs) {
       const aboveCeil = farCeilAbs > spanCeilAbs;
       // 旧QA G2は「far天井が低くアキ矩形が出る場合、矩形の上辺が同座標・同weightの線になるため
       // far天井線を積まない」という抑止だったが、アキ標記から矩形を廃止した（ユーザー明示指示

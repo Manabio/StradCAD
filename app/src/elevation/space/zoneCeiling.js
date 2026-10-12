@@ -5,7 +5,8 @@
  * 式は「区画の chMm ?? 部屋の天井高さ」の1つだけ。chMm は部屋 FL 基準で床段差を含まない
  * （floorZFor(room)+ch / floorDeltaMm+chMm にそのまま入れられる）。床段差込みの zMm は使わない。
  * 円弧・ドームは対象外（null＝呼び元が部屋の CH へ落とす）。
- * 傾斜（slope。区画・部屋形状の残りとも）は zoneCeilingChAlong（片の両端の高さ）と zoneCeilingChTopAt（最高点）が返す。
+ * 傾斜（slope。区画・部屋形状の残りとも）は zoneCeilingChAlong（片の両端の高さ）と zoneCeilingChTopAt（最高点）、
+ * 視線の先の遠側は zoneCeilingFarEdge（同じ面が続く範囲の奥の端の高さ）が返す。
  * 傾斜の高さは「区画の chMm を baseZ にした ceilingShapeSolidZ」で求める（E0 の zAt〔床段差込みの zMm 基準〕は使わない。
  * 床段差は体裁の floorDeltaMm／エンジンの floorZFor が足す）。
  * import は純モジュールだけ（react・store.js・snap.js・.jsx を引かない）。
@@ -13,10 +14,15 @@
 import { buildCeilingHeightField } from '../../ceiling/ceilingHeightField.js';
 import { ceilingShapeSolidZ } from '../../ceiling/ceilingShape.js';
 import { roomHasCeiling } from '../../ceiling/ceilingOwners.js';
-import { scopedValue } from '../../graphReadScope.js';
-import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import { CenterLineType } from '@core';
+import { scopedValue, graphList } from '../../graphReadScope.js';
+import { isCeilingOnlyKind } from '../../core/centerLineKindPolicy.js';
+import { innerWallFaceAt } from '../../finish/wallFaces.js';
+import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 
 const FIELD_KEY = { name: 'zoneCeilingField' }; // scopedValue のキー（モジュール内で固定）
+const FAR_EDGE_MAX_STEPS = 64; // zoneCeilingFarEdge が奥の端を探して進む矩形数の上限（異常な格子の安全弁）
+const WALL_SPAN_MIN_MM = 20;   // 奥の端の壁を探す走り幅の下限（innerWallFaceAt の有意な重なり 5mm を点の問い合わせでも満たす）
 
 const isUsableSurface = s => s.zoneId != null && s.shape === 'flat' && Number.isFinite(s.chMm);
 // 傾斜の面（区画つき・部屋形状の残りとも）。円弧・ドームは E4 まで対象外。
@@ -103,6 +109,70 @@ export function zoneCeilingChTopAt(field, room, x, y) {
   if (s.shape === 'flat') return s.zoneId != null ? s.chMm : null;
   if (s.shape !== 'slope') return null;
   return solidOf(s).zHi;
+}
+
+/**
+ * 視線の先（奥）の天井高さ。startCoord（視線が room の面へ入る奥行き座標。展開図は面の軸 CL の値、エンジンはセルへ入る世界座標）から
+ * dir（+1/−1。奥行き軸上の向き）へ PROBE_EPS_MM 進んだ点の面が room 自身の flat 区画・slope（区画・部屋形状）なら、
+ * **同じ面が続く範囲の奥の端**での高さを返す（部屋 FL 基準。床段差を含まない。baseZ＝chMm の規律は zoneCeilingChAlong と同じ）。
+ * 奥の端に面と平行な CL（天井芯は除く）があればその位置の壁の仕上げ面（finish/wallFaces.js innerWallFaceAt）、無ければ座標のまま。
+ * - 平面の区画: {chLo: chMm, chHi: chMm, alongRun: false}（従来と同じ値）。
+ * - 奥行き方向の傾斜: chLo＝chHi＝奥の端の高さ（alongRun false）。**走り方向に水平な線 1 本**で表せる。
+ * - 走り方向の傾斜: chLo/chHi＝奥の端での runLo/runHi の高さ（alongRun true）。体裁は斜線 1 本・エンジンは片を積まない（呼び元が決める）。
+ * 面なし・他の部屋・区画なしの平面・円弧・ドーム・端が見つからない（歩く上限 FAR_EDGE_MAX_STEPS）・runLo/runHi の両端が別の面に落ちる片は null
+ * （呼び元は部屋の CH へ落とす）。isVertical の面は走り方向が y・奥行きが x（そうでなければ逆）。
+ * @param {object|null} field
+ * @param {object|null} graph
+ * @param {object|null} room
+ * @param {{isVertical:boolean, runLo:number, runHi:number, startCoord:number, dir:number}} q
+ * @returns {{chLo:number, chHi:number, alongRun:boolean}|null}
+ */
+export function zoneCeilingFarEdge(field, graph, room, { isVertical, runLo, runHi, startCoord, dir }) {
+  if (!field || !room || !roomHasCeiling(room)) return null;
+  if (!Number.isFinite(startCoord) || !Number.isFinite(runLo) || !Number.isFinite(runHi) || !(dir === 1 || dir === -1)) return null;
+  const pt = (depth, run) => (isVertical ? [depth, run] : [run, depth]);
+  const runMid = (runLo + runHi) / 2;
+  const s = field.surfaceAt(...pt(startCoord + dir * PROBE_EPS_MM, runMid));
+  if (!s || s.roomId !== room.id || !Number.isFinite(s.chMm)) return null;
+  if (s.shape === 'flat') return s.zoneId != null ? { chLo: s.chMm, chHi: s.chMm, alongRun: false } : null;
+  if (s.shape !== 'slope') return null;
+  const e = Math.min(0.01, Math.abs(runHi - runLo) / 4); // 端は面の境界（閉区間で隣の面と共有）なので少し内側で所属を確かめる
+  const lo = Math.min(runLo, runHi), hi = Math.max(runLo, runHi);
+  if (field.surfaceAt(...pt(startCoord + dir * PROBE_EPS_MM, lo + e)) !== s || field.surfaceAt(...pt(startCoord + dir * PROBE_EPS_MM, hi - e)) !== s) return null;
+
+  // 奥の端: 点を含む矩形の奥側の辺へ進み、その先が同じ面の別の矩形に続く間だけ進む
+  let depth = startCoord + dir * PROBE_EPS_MM, farCoord = null;
+  for (let i = 0; i < FAR_EDGE_MAX_STEPS; i++) {
+    const [px, py] = pt(depth, runMid);
+    const r = s.rects.find(q => px >= q.x1 && px <= q.x2 && py >= q.y1 && py <= q.y2);
+    if (!r) return null;
+    const edge = isVertical ? (dir > 0 ? r.x2 : r.x1) : (dir > 0 ? r.y2 : r.y1);
+    const next = edge + dir * PROBE_EPS_MM;
+    if (field.surfaceAt(...pt(next, runMid)) !== s) { farCoord = edge; break; }
+    depth = next;
+  }
+  if (farCoord == null) return null;
+
+  // 評価点: 奥の端に面と平行な CL があれば壁の仕上げ面（無ければその座標）。壁の探査幅は点の問い合わせ（lo==hi）でも有意な幅にする
+  const cl = parallelCLAt(graph, isVertical, farCoord);
+  let wallLo = lo, wallHi = hi;
+  if (wallHi - wallLo < WALL_SPAN_MIN_MM) { wallLo = runMid - WALL_SPAN_MIN_MM / 2; wallHi = runMid + WALL_SPAN_MIN_MM / 2; }
+  const faceCoord = (cl ? innerWallFaceAt(graph, cl, { isVertical, inward: -dir, spanLo: wallLo, spanHi: wallHi }) : null) ?? farCoord;
+
+  const { zAt } = solidOf(s);
+  if (!zAt) return { chLo: s.chMm, chHi: s.chMm, alongRun: false };
+  const alongX = s.dims?.[1] === 0 || s.dims?.[1] === 180; // 勾配の軸が x（ceilingShape.js と同じ判定）
+  const alongRun = alongX === !isVertical;
+  const chLo = zAt(...pt(faceCoord, runLo)), chHi = zAt(...pt(faceCoord, runHi));
+  if (!Number.isFinite(chLo) || !Number.isFinite(chHi)) return null;
+  return alongRun ? { chLo, chHi, alongRun: true } : { chLo, chHi: chLo, alongRun: false };
+}
+
+// 面（isVertical）と平行な CL（天井専用の天井芯は除く。elevationFloorProfile.js findRunCLAt と同じ除外）のうち value に一致するもの。
+function parallelCLAt(graph, isVertical, value) {
+  const type = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+  return (graphList(graph, 'centerLines') ?? []).find(cl =>
+    cl.centerLineType === type && cl.value === value && !isCeilingOnlyKind(cl)) ?? null;
 }
 
 /**

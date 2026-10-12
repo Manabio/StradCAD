@@ -22,7 +22,7 @@ import {
   roomOwnerByCell, runBoundaryCLIds, collectRunBreaks, findRunCLAt, cellNearSideOnFace,
   cellStraddlesFace,
 } from './elevationFloorProfile.js';
-import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingEdgesAlong } from './space/zoneCeiling.js';
+import { zoneCeilingFieldOf, zoneCeilingChAlong, zoneCeilingFarEdge, zoneCeilingEdgesAlong } from './space/zoneCeiling.js';
 import { perpFaceAt, perpWallCrossesFacePlane, CORNER_TOL_MM } from './elevationFaces.js';
 import {
   MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, SIGHTLINE_DEPTH_LIMIT_MM,
@@ -82,7 +82,7 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
     if (field) {
       const extra = [-1, 1].flatMap(side => zoneCeilingEdgesAlong(field, {
         isVertical: face.isVertical, depthCoord: axisValue + side * face.inward * PROBE_EPS_MM,
-        lo: cellRunLo, hi: cellRunHi,
+        lo: cellRunLo, hi: cellRunHi, includeShaped: true, // 傾斜の面の辺でも刻む（片が別の面にまたがらない）
       })).filter(e => !breaks.some(b => Math.abs(b - e) < GAP_EPS));
       if (extra.length) breaks = [...breaks, ...extra].sort((a, b) => a - b);
     }
@@ -94,32 +94,77 @@ function collectNearCellSegments(face, ownerByCell, room, graph) {
       const farY = face.isVertical ? mid : axisValue - face.inward * PROBE_EPS_MM;
       const farCell = worldToCell(farX, farY, graph);
 
-      let kind = 'wall', farFloorDeltaMm, farCeilAbsMm, informative = false;
+      let kind = 'wall', farFloorDeltaMm, farCeilAbsMm, farCeilHiAbsMm, informative = false;
       if (farCell && ownerByCell.has(farCell.key) && isOpenSpanEligible({ key }, farCell, graph)) {
         const farOwner = ownerByCell.get(farCell.key);
         kind = 'open';
         farFloorDeltaMm = graph.effectiveFloorLevel(farOwner) - graph.effectiveFloorLevel(room);
         // 問題修正2026-08その2: 開放先の天井の絶対高さ（band部屋FL基準。far床＋far所有Roomの
         // 解決済みCH）——描画側が「開放先の天井の見えがかり線」を引くのに使う。
-        farCeilAbsMm = farFloorDeltaMm + (zoneCeilingChAt(field, farOwner, farX, farY) ?? chOf(farOwner));
+        // 傾斜（区画・部屋形状）の先は、同じ面が続く範囲の**奥の端**（壁があれば仕上げ面）の高さ
+        // （zoneCeilingFarEdge。奥行き方向の傾斜は水平線 1 本・走り方向の傾斜は両端の高さ farCeilAbsMm/farCeilHiAbsMm の斜線 1 本）。
+        const farEdge = zoneCeilingFarEdge(field, graph, farOwner, {
+          isVertical: face.isVertical, runLo, runHi, startCoord: axisValue, dir: -face.inward,
+        });
+        if (farEdge) {
+          farCeilAbsMm = farFloorDeltaMm + farEdge.chLo;
+          if (farEdge.alongRun && Math.abs(farEdge.chHi - farEdge.chLo) > GAP_EPS) farCeilHiAbsMm = farFloorDeltaMm + farEdge.chHi;
+        } else {
+          farCeilAbsMm = farFloorDeltaMm + chOf(farOwner);
+        }
         // informative（問題修正2026-08その8）: この区間が展開図として**情報を持つ**か。
         // near側とfar側でFLも天井高も同じなら、そこに描かれるのはアキ（バツ）だけ＝情報ゼロ。
         // FL差・CH差があれば遠側床線／遠側天井線という実体のある見えがかりが現れる。
         // 「入口側の隅」を越える延長を許すかの判定に使う（extendFaceWithOpenSpans）。
         const nearOwner = ownerByCell.get(key) ?? room;
-        const nearX = face.isVertical ? axisValue + face.inward * PROBE_EPS_MM : mid;
-        const nearY = face.isVertical ? mid : axisValue + face.inward * PROBE_EPS_MM;
         const nearFloorDeltaMm = graph.effectiveFloorLevel(nearOwner) - graph.effectiveFloorLevel(room);
+        // 天井は区間の両端で比べる（傾斜は両端が違う。同じ面の走り方向の傾斜は同じ式・同じ座標なので近側と遠側が一致して false）。
+        // 近側の高さは体裁の wallAdjacentFloorSegments と同じく壁の仕上げ面（face.faceValue）で評価する。
+        const nearAlong = zoneCeilingChAlong(field, nearOwner, {
+          isVertical: face.isVertical, depthCoord: Number.isFinite(face.faceValue) ? face.faceValue : axisValue,
+          probeDepth: axisValue + face.inward * PROBE_EPS_MM, lo: runLo, hi: runHi,
+        });
+        const nearLoAbs = nearFloorDeltaMm + (nearAlong?.chLo ?? chOf(nearOwner));
+        const nearHiAbs = nearFloorDeltaMm + (nearAlong?.chHi ?? chOf(nearOwner));
         informative = farFloorDeltaMm !== nearFloorDeltaMm ||
-          farCeilAbsMm !== nearFloorDeltaMm + (zoneCeilingChAt(field, nearOwner, nearX, nearY) ?? chOf(nearOwner));
+          Math.abs(farCeilAbsMm - nearLoAbs) > GAP_EPS ||
+          Math.abs((farCeilHiAbsMm ?? farCeilAbsMm) - nearHiAbs) > GAP_EPS;
       }
       const loCLId = runLo === cellRunLo ? cellLoCLId : (findRunCLAt(graph, face.isVertical, runLo)?.id ?? null);
       const hiCLId = runHi === cellRunHi ? cellHiCLId : (findRunCLAt(graph, face.isVertical, runHi)?.id ?? null);
-      segs.push({ runLo, runHi, kind, farFloorDeltaMm, farCeilAbsMm, informative, straddle: !touching, loCLId, hiCLId });
+      segs.push({
+        runLo, runHi, kind, farFloorDeltaMm, farCeilAbsMm,
+        ...(farCeilHiAbsMm != null ? { farCeilHiAbsMm } : {}), // 走り方向の傾斜の先だけ（runHi 側の高さ。runLo 側が farCeilAbsMm）
+        informative, straddle: !touching, loCLId, hiCLId,
+      });
     }
   }
   segs.sort((a, b) => a.runLo - b.runLo);
   return segs;
+}
+
+// 遠側の天井が結合してよいほど同じか。水平どうしは高さが同じ・傾いた（farCeilHiAbsMm あり）どうしは高さが連続し勾配が同じ
+// （同じ面が CL の分割点で割れたもの）ときだけ。水平と傾きは結合しない。
+const FAR_TILT_EPS_MM = 1e-6;
+const FAR_TILT_GRADIENT_EPS = 1e-9;
+function sameFarCeiling(a, b) {
+  const aTilted = a.farCeilHiAbsMm != null, bTilted = b.farCeilHiAbsMm != null;
+  if (!aTilted && !bTilted) return a.farCeilAbsMm === b.farCeilAbsMm;
+  if (aTilted !== bTilted) return false;
+  const gradient = s => (s.farCeilHiAbsMm - s.farCeilAbsMm) / (s.runHi - s.runLo);
+  return Math.abs(a.farCeilHiAbsMm - b.farCeilAbsMm) <= FAR_TILT_EPS_MM &&
+    Math.abs(gradient(a) - gradient(b)) <= FAR_TILT_GRADIENT_EPS;
+}
+
+// 区間 s の走りの両端を lo..hi へ付け替える。傾いた遠側の天井（farCeilAbsMm/farCeilHiAbsMm）は同じ直線の上で端の高さを取り直す。
+function setRunEnds(s, lo, hi) {
+  if (s.farCeilHiAbsMm != null && s.runHi - s.runLo > 0) {
+    const g = (s.farCeilHiAbsMm - s.farCeilAbsMm) / (s.runHi - s.runLo);
+    s.farCeilAbsMm += g * (lo - s.runLo);
+    s.farCeilHiAbsMm += g * (hi - s.runHi);
+  }
+  s.runLo = lo;
+  s.runHi = hi;
 }
 
 // 隣接する同種区間（kind・farFloorDeltaMm・farCeilAbsMm・straddleが同じ、かつrunHi===次のrunLo）を
@@ -132,9 +177,10 @@ function mergeSameKind(segs) {
   for (const s of segs) {
     const last = merged[merged.length - 1];
     if (last && last.kind === s.kind && last.farFloorDeltaMm === s.farFloorDeltaMm &&
-        last.farCeilAbsMm === s.farCeilAbsMm && !!last.straddle === !!s.straddle &&
+        sameFarCeiling(last, s) && !!last.straddle === !!s.straddle &&
         Math.abs(last.runHi - s.runLo) < GAP_EPS) {
       last.runHi = s.runHi;
+      if (s.farCeilHiAbsMm != null) last.farCeilHiAbsMm = s.farCeilHiAbsMm; // 連続する斜線は 1 本の斜線に戻る
       last.hiCLId = s.hiCLId;
       last.informative = last.informative || s.informative; // 結合キーには含めない（既存の結合を変えない）
     } else {
@@ -322,16 +368,16 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
   // spans最外側の境界を、セルの生CL値ではなく確定済みのloEnd/hiEnd.value（延長していなければ
   // 元のface.lo/hiという仕上げ面基準の値・延長していれば直交壁面のfaceValueへスナップ済みの値）
   // へ差し替える——内部境界（区間同士の境界）は生CL値のままでよい（実際にそこにCLがあるため）。
-  spans[0].runLo = loEnd.value;
-  spans[spans.length - 1].runHi = hiEnd.value;
+  setRunEnds(spans[0], loEnd.value, spans[0].runHi);
+  setRunEnds(spans[spans.length - 1], spans[spans.length - 1].runLo, hiEnd.value);
 
   // 不変条件: 幅<MIN_FACE_RUN_MMのopen区間は前後のwallへ吸収する（意味を持たない極小の
   // 開放区間を作らない。前が無ければ次の区間へ）。
   for (let i = spans.length - 1; i >= 0 && spans.length > 1; i--) {
     const s = spans[i];
     if (s.kind !== 'open' || s.runHi - s.runLo >= MIN_FACE_RUN_MM) continue;
-    if (i > 0) { spans[i - 1].runHi = s.runHi; spans[i - 1].hiCLId = s.hiCLId; }
-    else spans[i + 1].runLo = s.runLo;
+    if (i > 0) { setRunEnds(spans[i - 1], spans[i - 1].runLo, s.runHi); spans[i - 1].hiCLId = s.hiCLId; }
+    else setRunEnds(spans[i + 1], s.runLo, spans[i + 1].runHi);
     spans.splice(i, 1);
   }
   const finalSpans = mergeSameKind(spans);
@@ -347,10 +393,13 @@ export function extendFaceWithOpenSpans(face, wallFaces, room, graph) {
   const localSpans = finalSpans.map(s => {
     const a = toLocal(s.runLo), b = toLocal(s.runHi);
     const swapped = a > b;
+    const tilted = s.kind === 'open' && s.farCeilHiAbsMm != null;
     return {
       loX: Math.min(a, b), hiX: Math.max(a, b), kind: s.kind,
       farFloorDeltaMm: s.kind === 'open' ? s.farFloorDeltaMm : undefined,
-      farCeilAbsMm: s.kind === 'open' ? s.farCeilAbsMm : undefined,
+      // 傾いた遠側の天井は loX 側・hiX 側の高さ（dirSign<0 は world の lo/hi と local の lo/hi が入れ替わる）
+      farCeilAbsMm: s.kind === 'open' ? (tilted && swapped ? s.farCeilHiAbsMm : s.farCeilAbsMm) : undefined,
+      ...(tilted ? { farCeilHiAbsMm: swapped ? s.farCeilAbsMm : s.farCeilHiAbsMm } : {}),
       hiCLId: swapped ? s.loCLId : s.hiCLId,
     };
   }).sort((x, y) => x.loX - y.loX);
@@ -401,9 +450,13 @@ export function clipSpans(spans, loLocal, hiLocal) {
     const lo = Math.max(s.loX, loLocal), hi = Math.min(s.hiX, hiLocal);
     if (hi - lo < GAP_EPS) continue;
     const keepsBoundary = s.hiCLId != null && Math.abs(hi - s.hiX) < GAP_EPS;
+    // 傾いた遠側の天井はクリップ後の両端の高さへ直線上で取り直す
+    const tilted = s.farCeilHiAbsMm != null && s.hiX - s.loX > 0;
+    const g = tilted ? (s.farCeilHiAbsMm - s.farCeilAbsMm) / (s.hiX - s.loX) : 0;
     out.push({
       loX: lo - loLocal, hiX: hi - loLocal, kind: s.kind, farFloorDeltaMm: s.farFloorDeltaMm,
-      farCeilAbsMm: s.farCeilAbsMm,
+      farCeilAbsMm: tilted ? s.farCeilAbsMm + g * (lo - s.loX) : s.farCeilAbsMm,
+      ...(tilted ? { farCeilHiAbsMm: s.farCeilAbsMm + g * (hi - s.loX) } : {}),
       hiCLX: keepsBoundary ? hi - loLocal : null,
       hiCLId: keepsBoundary ? s.hiCLId : null,
     });

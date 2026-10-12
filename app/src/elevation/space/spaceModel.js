@@ -29,7 +29,7 @@ import { roomCeilingHeight } from '../../finish/roomMetrics.js';
 import { kneeDropRecordsOnAxis, kneeDropWallGeometry } from '../../finish/kneeDropWall.js';
 import { graphList } from '../../graphReadScope.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
-import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChTopAt } from './zoneCeiling.js';
+import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChTopAt, zoneCeilingFarEdge } from './zoneCeiling.js';
 
 // cellsAlongの無限ループ防御（格子異常時の安全弁）。実データの通常の列は
 // せいぜい数十セルなので、この上限に達すること自体が異常の兆候。
@@ -110,7 +110,7 @@ export function buildSpaceIndex(layers, opts = {}) {
     return zoneCeilingChAt(fieldFor(graph), room, x, y) ?? chFor(room, graph);
   }
   // 層スタック用（cellAt）の天井高さ＝**面の最高点**。傾斜の面は高い側（壁の帯を高い側まで見せ、垂れ壁の下端も最高点基準。
-  // 体裁の斜線より上は断面エンジンが ceilProfile の ceilZHi で打ち切る）。傾斜でなければ chAt と同じ。cellsAlong（遠側）は chAt のまま（E3b）。
+  // 体裁の斜線より上は断面エンジンが ceilProfile の ceilZHi で打ち切る）。傾斜でなければ chAt と同じ。cellsAlong（遠側）は zoneCeilingFarEdge（奥の端の高さ）。
   function chTopAt(room, graph, x, y) {
     return zoneCeilingChTopAt(fieldFor(graph), room, x, y) ?? chAt(room, graph, x, y);
   }
@@ -233,8 +233,16 @@ export function buildSpaceIndex(layers, opts = {}) {
         const floorZ = floorZFor(room, layer);
         let ceilZ = null;
         if (room) {
-          try { ceilZ = floorZ + chAt(room, graph, px, py); } // その部屋の区間の最初のセルの探査点（区画は手前のものだけ拾う）
-          catch { /* この部屋の天井だけ諦める（上記コメント） */ }
+          try {
+            // 傾斜（区画・部屋形状）の面は奥の端の高さ（奥行き方向）。走り方向の傾斜は列ごとの水平線にできないので天井を諦める
+            // （体裁が斜線 1 本で描く。上記の縮退と同じ「ceilFace を出さない」形）。平面の区画・区画なしは従来どおり。
+            const far = zoneCeilingFarEdge(fieldFor(graph), graph, room, {
+              isVertical: line.isVertical, runLo: worldMid, runHi: worldMid,
+              startCoord: axisValue + viewSign * depth, dir: viewSign,
+            });
+            if (far) ceilZ = far.alongRun ? null : floorZ + far.chLo;
+            else ceilZ = floorZ + chAt(room, graph, px, py); // その部屋の区間の最初のセルの探査点（区画は手前のものだけ拾う）
+          } catch { /* この部屋の天井だけ諦める（上記コメント） */ }
         }
         // QA指摘④: componentIdは積まない（本函数のJSDoc参照）。
         out.push({ room, floorZ, ceilZ, depthMm: Math.max(fromDepthMm, cellLo) });

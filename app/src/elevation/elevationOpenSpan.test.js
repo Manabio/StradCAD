@@ -7,6 +7,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
 import { createZone } from '../ceiling/ceilingZones.js';
+import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import {
   extendFaceWithOpenSpans, extendFacesWithOpenSpans, dedupeOverlappingFaces, clipSpans,
@@ -532,19 +533,6 @@ test('【区画なしは変更前と deepEqual】区画のない開放先は1つ
   assert.equal(opens[0].farCeilAbsMm, 2400);
 });
 
-test('【失敗系】傾斜の区画は対象外＝open 区間は割れず farCeilAbsMm は部屋の CH のまま', () => {
-  const graph = makeGraph();
-  const { room } = makeWallThenOpenRoom(graph, 0);
-  const child = graph.rooms.find(r => r.name === '部分指定');
-  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc');
-  const key = worldToCell(3000, 1750, graph, CEILING_CELL_GRID).key;
-  child.setCeilingZones(createZone(graph, child, [key], { heightMm: 3000, shape: 'slope', dims: [600, 0] }).zones);
-  const faces = buildRoomFaces(room, graph);
-  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
-  const opens = extendFaceWithOpenSpans(face, faces, room, graph).spans.filter(s => s.kind === 'open');
-  assert.deepEqual(opens.map(s => s.farCeilAbsMm), [2400]);
-});
-
 test('【near 側のみの区画】near 側（自室）だけに区画があっても far の天井は変わらず、open 区間は不要に割れない', () => {
   const graph = makeGraph();
   const { room } = makeWallThenOpenRoom(graph, 0);
@@ -633,4 +621,171 @@ test('【open span の床段差の二重加算なし】開放先が FL −100・
   const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
   const opens = extendFaceWithOpenSpans(face, faces, room, graph).spans.filter(s => s.kind === 'open');
   assert.deepEqual(opens.map(s => s.farCeilAbsMm), [2400, 2900]);
+});
+
+// ---- E3b-1: 遠側の傾斜（奥の端の高さ・走り方向の斜線）----
+// 失敗系の置き換え: 円弧・ドームの区画は対象外＝open 区間は割れず farCeilAbsMm は部屋の CH のまま
+// （傾斜は zoneCeilingFarEdge が奥の端の高さを返す。下の【廊下型の固定値】）。
+test('【失敗系】円弧・ドームの区画は対象外＝open 区間は割れず farCeilAbsMm は部屋の CH のまま', () => {
+  for (const [shape, dims] of [['arc', [400, 90]], ['dome', [500]]]) {
+    const graph = makeGraph();
+    const { room } = makeWallThenOpenRoom(graph, 0);
+    const child = graph.rooms.find(r => r.name === '部分指定');
+    graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+    const key = worldToCell(3000, 1750, graph, CEILING_CELL_GRID).key;
+    child.setCeilingZones(createZone(graph, child, [key], { heightMm: 3000, shape, dims }).zones);
+    const faces = buildRoomFaces(room, graph);
+    const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+    const opens = extendFaceWithOpenSpans(face, faces, room, graph).spans.filter(s => s.kind === 'open');
+    assert.deepEqual(opens.map(s => s.farCeilAbsMm), [2400], shape);
+    assert.ok(opens.every(s => !('farCeilHiAbsMm' in s)), `${shape}: 斜線の端の高さは付かない`);
+  }
+});
+
+// 開放先（下段右＝子）の下半分（y1500..2000・x2000..4000）に傾斜の区画を付けた面 x=2000 の open 区間。
+function slopedFarFace(dims, { childFL = 0 } = {}) {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, childFL);
+  const child = graph.rooms.find(r => r.name === '部分指定');
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const key = worldToCell(3000, 1750, graph, CEILING_CELL_GRID).key;
+  child.setCeilingZones(createZone(graph, child, [key], { heightMm: 3000, shape: 'slope', dims }).zones);
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  return extendFaceWithOpenSpans(face, faces, room, graph);
+}
+
+test('【廊下型の固定値】奥行き方向（+x）の傾斜 底 3000・ライズ 600 の区画は、奥の端 x=4000 の壁の仕上げ面（3942.5）の高さ 3000+600×1942.5/2000＝3582.75（芯 4000 の 3600 ではない）', () => {
+  const opens = slopedFarFace([600, 0]).spans.filter(s => s.kind === 'open');
+  assert.deepEqual(opens.map(s => s.farCeilAbsMm), [2400, 3582.75], '上半分は区画なし＝部屋の CH・下半分は区画の奥の端');
+  assert.ok(opens.every(s => !('farCeilHiAbsMm' in s)), '奥行き方向の傾斜は水平線 1 本＝端の高さは付かない');
+});
+
+test('【奥へ下がる傾斜】-x 向き（奥 x=4000 が低い側）は奥の端の仕上げ面 3000+600×(1−1942.5/2000)＝3017.25。床段差 −100 はそのまま足す（二重加算なし）', () => {
+  assert.deepEqual(slopedFarFace([600, 180]).spans.filter(s => s.kind === 'open').map(s => s.farCeilAbsMm), [2400, 3017.25]);
+  assert.deepEqual(slopedFarFace([600, 180], { childFL: -100 }).spans.filter(s => s.kind === 'open').map(s => s.farCeilAbsMm), [2400, 2917.25]); // 上半分は区画なし＝既存の二重加算なしの値 2400（-100+2500）
+});
+
+// 走り方向（y）の傾斜: 世界 y での高さの式 3000 + 600×(y−1500)/500（区画 y1500..2000）。端は付け替えられるので式で検査する。
+const zOfY = y => 3000 + 600 * (y - 1500) / 500;
+test('【走り方向の傾斜は両端の高さを持つ】+y 向きの区画は open 区間が farCeilAbsMm（loX）と farCeilHiAbsMm（hiX）を持ち、世界 y の式と両端で一致する', () => {
+  const ext = slopedFarFace([600, 90]);
+  const open = ext.spans.filter(s => s.kind === 'open' && s.farCeilHiAbsMm != null);
+  assert.equal(open.length, 1);
+  for (const [x, v] of [[open[0].loX, open[0].farCeilAbsMm], [open[0].hiX, open[0].farCeilHiAbsMm]]) {
+    const wy = ext.originWorld + ext.dirSign * x;
+    assert.ok(Math.abs(v - zOfY(wy)) < 1e-6, `x=${x} 世界 y=${wy} 高さ ${v} 式 ${zOfY(wy)}`);
+  }
+  assert.notEqual(open[0].farCeilAbsMm, open[0].farCeilHiAbsMm, '斜線');
+});
+
+test('【走り方向の傾斜・クリップ】clipSpans で断片へ切ると両端の高さが直線上で取り直される', () => {
+  const clipped = clipSpans([
+    { loX: 0, hiX: 1000, kind: 'open', farFloorDeltaMm: 0, farCeilAbsMm: 2400, farCeilHiAbsMm: 3400, hiCLX: null, hiCLId: null },
+    { loX: 1000, hiX: 2000, kind: 'wall', hiCLX: null, hiCLId: null },
+  ], 250, 750);
+  assert.equal(clipped.length, 1);
+  assert.equal(clipped[0].farCeilAbsMm, 2650);
+  assert.equal(clipped[0].farCeilHiAbsMm, 3150);
+  assert.equal(clipped[0].loX, 0);
+  assert.equal(clipped[0].hiX, 500);
+});
+
+test('【傾斜のない区間は端の高さを持たない】平面の区画・区画なしの open 区間に farCeilHiAbsMm のキーは付かない（従来の形のまま）', () => {
+  for (const zoneMm of [null, 3000]) {
+    const opens = zonedOpenFace(zoneMm).spans.filter(s => s.kind === 'open');
+    assert.ok(opens.length > 0);
+    assert.ok(opens.every(s => !('farCeilHiAbsMm' in s)), `zone ${zoneMm}`);
+  }
+});
+
+// 同じ Room の中の開放スパン（子なし）。部屋形状 slope の向きで informative が決まることを、入口側の open 区間が残るかで観測する。
+function sameRoomOpenFace(dims) {
+  const graph = makeGraph();
+  const A = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, A);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, A);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, A);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, A);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, A);
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, A);
+  const topL = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const topR = `${x1.id}:${y0.id}:${x2.id}:${y1.id}`;
+  const botL = `${x0.id}:${y1.id}:${x1.id}:${y2.id}`;
+  const botR = `${x1.id}:${y1.id}:${x2.id}:${y2.id}`;
+  const other = graph.addRoom(new Set([botR]), '他室');
+  generateRoomWallsFromOutline(graph, other);
+  const room = graph.addRoom(new Set([topL, botL, topR]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  if (dims) setRoomCeilingShape(room, { shape: 'slope', dims });
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  return extendFaceWithOpenSpans(face, faces, room, graph);
+}
+
+test('【同じ面の走り方向の傾斜は informative false】同じ Room の +y 向き傾斜（面 x=2000 の走り方向）は近側と遠側が一致＝入口側の open 区間は規則3で落ちる', () => {
+  assert.equal(sameRoomOpenFace([600, 90]).spans.filter(s => s.kind === 'open').length, 0);
+});
+
+test('【奥行き方向の傾斜は informative true】同じ Room の +x 向き傾斜（面 x=2000 の奥行き方向）は奥の端の高さが近側と違う＝open 区間が残る。対照: 傾斜なしは落ちる', () => {
+  assert.equal(sameRoomOpenFace(null).spans.filter(s => s.kind === 'open').length, 0, '対照: 傾斜なし');
+  const opens = sameRoomOpenFace([600, 0]).spans.filter(s => s.kind === 'open');
+  assert.equal(opens.length, 1);
+  // 奥の端 x=4000 の壁の仕上げ面 3942.5: 2400 + 600×3942.5/4000＝2991.375（区画なしの部屋形状。底は部屋の CH 2400）
+  assert.ok(Math.abs(opens[0].farCeilAbsMm - 2991.375) < 1e-6, `farCeilAbsMm ${opens[0].farCeilAbsMm}`);
+});
+
+test('【連続する斜線は 1 本に戻る】走り方向の傾斜の区画が天井芯 y=1750 を跨ぐ 2 セルでも open 区間は割れずに 1 つ（両端の高さは世界 y の式）', () => {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, 0);
+  const child = graph.rooms.find(r => r.name === '部分指定');
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc1');
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1750, { labeled: false, discipline: Discipline.CEILING }, 'cc2');
+  const keys = [1625, 1875].map(y => worldToCell(3000, y, graph, CEILING_CELL_GRID).key);
+  child.setCeilingZones(createZone(graph, child, keys, { heightMm: 3000, shape: 'slope', dims: [600, 90] }).zones);
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  const ext = extendFaceWithOpenSpans(face, faces, room, graph);
+  const tilted = ext.spans.filter(s => s.kind === 'open' && s.farCeilHiAbsMm != null);
+  assert.equal(tilted.length, 1, '1750 で割れた 2 片が同じ斜線として結合される');
+  for (const [x, v] of [[tilted[0].loX, tilted[0].farCeilAbsMm], [tilted[0].hiX, tilted[0].farCeilHiAbsMm]]) {
+    const wy = ext.originWorld + ext.dirSign * x;
+    assert.ok(Math.abs(v - zOfY(wy)) < 1e-6, `x=${x} 世界 y=${wy} 高さ ${v} 式 ${zOfY(wy)}`);
+  }
+});
+
+test('【dirSign −1 の面で走り方向の傾斜の open 区間】loX 側の farCeilAbsMm＝世界 hi 端の高さ・hiX 側の farCeilHiAbsMm＝世界 lo 端の高さ（入れ替わる）', () => {
+  // makeWallThenOpenRoom の左右反転: 他室＝上段左、自室＝上段右・下段左（子）・下段右。面 x=2000 は inward +1
+  const graph = makeGraph();
+  const A = { labeled: false, discipline: Discipline.ARCH };
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, A);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, A);
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, A);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, A);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, A);
+  const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, A);
+  const topL = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
+  const topR = `${x1.id}:${y0.id}:${x2.id}:${y1.id}`;
+  const botL = `${x0.id}:${y1.id}:${x1.id}:${y2.id}`;
+  const botR = `${x1.id}:${y1.id}:${x2.id}:${y2.id}`;
+  generateRoomWallsFromOutline(graph, graph.addRoom(new Set([topL]), '他室'));
+  const room = graph.addRoom(new Set([topR, botL, botR]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  const child = graph.addRoom(new Set([botL]), '部分指定', undefined, new Set([room.id]));
+  child.setFloorLevel(0);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  const key = worldToCell(1000, 1750, graph, CEILING_CELL_GRID).key;
+  child.setCeilingZones(createZone(graph, child, [key], { heightMm: 3000, shape: 'slope', dims: [600, 90] }).zones);
+  const faces = buildRoomFaces(room, graph);
+  const face = faces.find(f => f.isVertical && Math.abs(f.axisCL.value - 2000) < 1e-6);
+  const ext = extendFaceWithOpenSpans(face, faces, room, graph);
+  assert.equal(ext.dirSign, -1, '前提: 世界順とローカル順が反転する面');
+  const open = ext.spans.find(s => s.kind === 'open' && s.farCeilHiAbsMm != null);
+  assert.ok(open, JSON.stringify(ext.spans));
+  // 世界 lo 端は区画の辺 y=1500（内部境界で動かない）＝底 3000 リテラル。ローカルでは hiX 側に当たる。
+  assert.equal(open.farCeilHiAbsMm, 3000);
+  // loX 側は世界 hi 端（直交壁の面へ詰めた y）の高さ: 3000 + 1.2×(y−1500) > 3000
+  const wy = ext.originWorld + ext.dirSign * open.loX;
+  assert.ok(wy > 1500 && Math.abs(open.farCeilAbsMm - (3000 + 1.2 * (wy - 1500))) < 1e-6, `y=${wy} 高さ ${open.farCeilAbsMm}`);
+  assert.ok(open.farCeilAbsMm > 3000);
 });

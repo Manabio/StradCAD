@@ -766,6 +766,114 @@ test('【問題修正2026-08その2】buildFaceFigure: 開放先の天井が天�
     'アキのバツは図側では描かないはず');
 });
 
+// ---- E3b-1: 遠側の天井の傾斜。open 区間の farCeilAbsMm（loX 側）・farCeilHiAbsMm（hiX 側）で斜線 1 本 ----
+const farLinesOf = (prims, x0, x1) => prims.filter(p => p.type === 'line' && p.x1 >= x0 && p.x2 <= x1 && p.x1 !== p.x2
+  && (p.weight === 'medium' || (p.weight === 'thin' && p.dash === 'dashed')));
+const farEdgesOf = prims => prims.filter(p => p.type === 'line' && p.x1 === p.x2 && p.weight === 'thin' && p.dash === 'dashed');
+const openSpansFace = open => makeFace({ spans: [{ loX: 0, hiX: 2800, kind: 'wall' }, { loX: 2800, hiX: 4000, kind: 'open', farFloorDeltaMm: 0, ...open }] });
+
+test('【廊下型の固定値】近側 2510.517 の下に遠側 2408.155（奥の壁の仕上げ面）の中線実線が 1 本。芯の 2400 の線は出ない', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2510.517 }];
+  const prims = buildFaceFigure(openSpansFace({ farCeilAbsMm: 2408.155 }), baseCtx({ ceilingHeight: 2510.517, floorSegments }));
+  const lines = farLinesOf(prims, 2800, 4000);
+  assert.deepEqual(lines.map(l => [l.x1, l.y1, l.x2, l.y2, l.weight]), [[2800, -2408.155, 4000, -2408.155, 'medium']]);
+  assert.equal(prims.filter(p => p.type === 'line' && p.y1 === -2400 && p.y2 === -2400).length, 0, '2400 の線は出ない');
+});
+
+test('【奥へ上がる傾斜は破線】近側 2544.025 の上に遠側 2694.025 なら細線の破線 1 本＋両端の縦線（-2694.025→-2544.025）', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2544.025 }];
+  const prims = buildFaceFigure(openSpansFace({ farCeilAbsMm: 2694.025 }), baseCtx({ ceilingHeight: 2544.025, floorSegments }));
+  assert.deepEqual(farLinesOf(prims, 2800, 4000).map(l => [l.x1, l.y1, l.x2, l.y2, l.weight, l.dash]), [[2800, -2694.025, 4000, -2694.025, 'thin', 'dashed']]);
+  assert.deepEqual(farEdgesOf(prims).map(l => [l.x1, l.y1, l.y2]).sort((a, b) => a[0] - b[0]), [[2800, -2694.025, -2544.025], [4000, -2694.025, -2544.025]]);
+});
+
+test('【走り方向の斜線】遠側 2200→2300（farCeilAbsMm→farCeilHiAbsMm）が近側 2400 の下なら (2800,-2200)→(4000,-2300) の中線実線 1 本・縦線なし', () => {
+  const prims = buildFaceFigure(openSpansFace({ farCeilAbsMm: 2200, farCeilHiAbsMm: 2300 }), baseCtx({ ceilingHeight: 2400 }));
+  assert.deepEqual(farLinesOf(prims, 2800, 4000).map(l => [l.x1, l.y1, l.x2, l.y2, l.weight]), [[2800, -2200, 4000, -2300, 'medium']]);
+  assert.equal(farEdgesOf(prims).length, 0);
+});
+
+test('【近側と交わるとき 2 本に分かれる】遠側 2200→2600 が近側 2400 を 3400 で横切る: 下側は中線実線・上側は細線の破線で、天井線より上に実線を出さない。縦線は上側の端 x=4000 だけ', () => {
+  const prims = buildFaceFigure(openSpansFace({ farCeilAbsMm: 2200, farCeilHiAbsMm: 2600 }), baseCtx({ ceilingHeight: 2400 }));
+  const lines = farLinesOf(prims, 2800, 4000).sort((a, b) => a.x1 - b.x1);
+  assert.deepEqual(lines.map(l => [l.x1, l.y1, l.x2, l.y2, l.weight, l.dash ?? null]),
+    [[2800, -2200, 3400, -2400, 'medium', null], [3400, -2400, 4000, -2600, 'thin', 'dashed']]);
+  assert.deepEqual(farEdgesOf(prims).map(l => [l.x1, l.y1, l.y2]), [[4000, -2600, -2400]]);
+});
+
+test('【近側が傾斜・遠側が水平】近側 2400→3000 の斜線の下に遠側 2700 の水平線: 区間の両端で近側を比べ、中線実線 1 本', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 3000 }];
+  const prims = buildFaceFigure(openSpansFace({ farCeilAbsMm: 2700 }), baseCtx({ ceilingHeight: 2400, floorSegments }));
+  assert.deepEqual(farLinesOf(prims, 2800, 4000).map(l => [l.x1, l.y1, l.x2, l.y2, l.weight]), [[2800, -2700, 4000, -2700, 'medium']]);
+});
+
+test('【同じ面の走り方向の傾斜は線なし】近側 2400→3000 と遠側（loX=2800 で 2820・hiX=4000 で 3000）が一致するなら遠側の線も縦線も出ない', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 3000 }];
+  const prims = buildFaceFigure(openSpansFace({ farCeilAbsMm: 2820, farCeilHiAbsMm: 3000 }), baseCtx({ ceilingHeight: 2400, floorSegments }));
+  assert.equal(farLinesOf(prims, 2800, 4000).length, 0);
+  assert.equal(farEdgesOf(prims).length, 0);
+});
+
+// 内部境界に直交壁がある（hiCLId あり）走り方向の傾斜の open 区間。描く位置は壁の開放側の面へずれる（1000→1100・3000→2900）。
+function slopedOpenWithBoundaryWalls() {
+  const clB = { id: 'clB', centerLineType: CenterLineType.VERTICAL, effectiveValue: 1000, value: 1000 };
+  const clC = { id: 'clC', centerLineType: CenterLineType.VERTICAL, effectiveValue: 3000, value: 3000 };
+  const wallAt = (cl, axisValue) => ({
+    isVertical: true, axisCL: cl, axisValue, coord1: -500, coord2: 500,
+    materialRange: { lo: axisValue - 1, hi: axisValue + 1 },
+  });
+  const graph = {
+    openings: [], kneeDropWalls: new Map(), centerLines: [clB, clC],
+    walls: [wallAt(clB, 1100), wallAt(clC, 2900)], shapeMap: new Map([[clB.id, clB], [clC.id, clC]]),
+  };
+  // 遠側は元の区間 1000..3000 で 2000→3000（0.5mm/mm）
+  const face = makeFace({ spans: [
+    { loX: 0, hiX: 1000, kind: 'wall', hiCLId: 'clB' },
+    { loX: 1000, hiX: 3000, kind: 'open', farFloorDeltaMm: 0, farCeilAbsMm: 2000, farCeilHiAbsMm: 3000, hiCLId: 'clC' },
+    { loX: 3000, hiX: 4000, kind: 'wall', hiCLId: null },
+  ] });
+  const d1 = drawnSpanRanges(face, graph)[1];
+  assert.deepEqual([d1.loX, d1.hiX], [1100, 2900], '前提: 開放区間の描画範囲は 1100..2900');
+  return { face, graph };
+}
+
+test('【走り方向の傾斜の open 区間の内側の境界に壁がある】遠側の線の端点はずらした x での真の高さ（1100 で 2050・2900 で 2950）に一致する', () => {
+  const { face, graph } = slopedOpenWithBoundaryWalls();
+  const prims = buildFaceFigure(face, baseCtx({ graph, ceilingHeight: 2400 }));
+  const lines = farLinesOf(prims, 1100, 2900).sort((a, b) => a.x1 - b.x1);
+  assert.ok(lines.length >= 1);
+  assert.deepEqual([lines[0].x1, lines[0].y1], [1100, -2050]);
+  assert.deepEqual([lines[lines.length - 1].x2, lines[lines.length - 1].y2], [2900, -2950]);
+  // 近側 2400 と交わる x は 1800（2050→2950 の直線）
+  assert.deepEqual(lines.map(l => [l.x1, l.y1, l.x2, l.y2]), [[1100, -2050, 1800, -2400], [1800, -2400, 2900, -2950]]);
+});
+
+test('【走り方向の傾斜の open 区間の内側の境界に壁がある・同じ面】近側も同じ斜線（1500+0.5x）なら描く位置が壁の面へずれても遠側の線は出ない', () => {
+  const { face, graph } = slopedOpenWithBoundaryWalls();
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 1500, chHiMm: 3500 }];
+  const prims = buildFaceFigure(face, baseCtx({ graph, ceilingHeight: 2400, floorSegments }));
+  assert.equal(farLinesOf(prims, 1100, 2900).length, 0);
+  assert.equal(farEdgesOf(prims).length, 0);
+});
+
+test('【区画なし・flat は変更前と deepEqual】近側と同高の遠側（farCeilAbsMm 2400）は farCeilAbsMm 未指定と同じ出力・水平の遠側 2600 は従来の経路で水平の破線', () => {
+  const same = buildFaceFigure(openSpansFace({ farCeilAbsMm: 2400 }), baseCtx({ ceilingHeight: 2400 }));
+  const unspecified = buildFaceFigure(openSpansFace({}), baseCtx({ ceilingHeight: 2400 }));
+  assert.deepEqual(same, unspecified);
+  const above = buildFaceFigure(openSpansFace({ farCeilAbsMm: 2600 }), baseCtx({ ceilingHeight: 2400 }));
+  assert.deepEqual(farLinesOf(above, 2800, 4000).map(l => [l.x1, l.y1, l.x2, l.y2]), [[2800, -2600, 4000, -2600]]);
+});
+
+test('【傾いた遠側の天井線は水平のファミリー破線を差し引かない】beyondCeilings の破線は farCeilHiAbsMm を持つ open 区間の上にも描く', () => {
+  const ctx = { ceilingHeight: 2400, beyondCeilings: [{ loX: 2800, hiX: 4000, ceilAbsMm: 2600 }] };
+  const dashedAt2600 = prims => prims.filter(p => p.type === 'line' && p.y1 === -2600 && p.y2 === -2600 && p.dash === 'dashed' && p.weight === 'thin' && p.x1 !== p.x2);
+  // 水平で同高の遠側 2600 の open 区間: 遠側天井線が描くのでファミリー破線は差し引かれる（1 本のまま）
+  assert.equal(dashedAt2600(buildFaceFigure(openSpansFace({ farCeilAbsMm: 2600 }), baseCtx(ctx))).length, 1);
+  // 傾いた遠側（loX 側が 2600 と同高でも差し引かない）: ファミリー破線 2600 が区間の上にも描かれる
+  const tilted = dashedAt2600(buildFaceFigure(openSpansFace({ farCeilAbsMm: 2600, farCeilHiAbsMm: 2700 }), baseCtx(ctx)));
+  assert.ok(tilted.some(p => p.x1 === 2800 && p.x2 === 4000), JSON.stringify(tilted));
+});
+
 // ---- ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」 ----
 // 階段帯の往復間の壁は切断線から見て面の裏側へ伸びるため、直交壁の検出（室内側へ突出する袖壁が
 // 対象）に掛からず一点鎖線の源が無かった。呼び出し側が明示指定できるctx.extraCenterLineXsを追加。

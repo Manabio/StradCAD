@@ -636,7 +636,8 @@ test('【失敗系】円弧の区画の上は最高点にならず部屋の CH �
   assert.equal(buildSpaceIndex([layer]).cellAt(layer, 1000, 1500).ceilZ, CH);
 });
 
-test('【cellsAlong は傾斜でも従来どおり部屋 CH】視線の先の部屋の最初のセルが傾斜区画でも ceilZ は部屋の CH（遠側は E3b）', () => {
+// ---- E3b-1: 遠側の傾斜（cellsAlong）。切断線 y=0・視線 +y。遠側の部屋は y 2000..4000（奥の端 y=4000）----
+test('【cellsAlong・走り方向の傾斜】視線の先の部屋の区画が走り方向（x）の傾斜なら、その片は ceilZ null で floorFace だけ（体裁が斜線 1 本で描く）', () => {
   const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
   g.interior([[0, 0]]);
   const far = g.interior([[0, 1]]);
@@ -645,7 +646,82 @@ test('【cellsAlong は傾斜でも従来どおり部屋 CH】視線の先の部
   const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
   const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
   assert.equal(segs[1].room, far);
-  assert.equal(segs[1].ceilZ, 2500);
+  assert.equal(segs[1].floorZ, 0, '床は積む');
+  assert.equal(segs[1].ceilZ, null, '走り方向の傾斜は列ごとの水平線にできない');
+});
+
+test('【cellsAlong・奥行き方向の傾斜は奥の端の値】底 3000・ライズ 600・+y 向き → 奥（y=4000）の高さ 3600、-y 向き → 3000。点の位置（走り）によらない', () => {
+  for (const [dir, expected] of [[90, 3600], [270, 3000]]) {
+    const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+    g.interior([[0, 0]]);
+    const far = g.interior([[0, 1]]);
+    far.setOverride('ceilingHeight', '2500');
+    far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 3000, shape: 'slope', dims: [600, dir] }).zones);
+    const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+    const index = buildSpaceIndex([layer]);
+    for (const worldMid of [500, 3500]) {
+      const segs = index.cellsAlong(layer, faceCut(0), worldMid, 0, 10000);
+      assert.equal(segs[1].room, far);
+      assert.equal(segs[1].ceilZ, expected, `dir ${dir} 走り ${worldMid}`);
+    }
+  }
+});
+
+test('【cellsAlong・奥の端に壁】奥の端 y=4000 に壁があれば仕上げ面（4000−57.5）の高さ 3000+600×1942.5/2000＝3582.75', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1]], { walls: true });
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 3000, shape: 'slope', dims: [600, 90] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs[1].room, far);
+  assert.ok(Math.abs(segs[1].ceilZ - 3582.75) < 1e-6, `ceilZ ${segs[1].ceilZ}`);
+});
+
+test('【cellsAlong・部屋形状の傾斜】区画なしの部屋形状 slope[300,+y]（部屋の CH 2500）も奥の端の高さ 2500+300', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1]]);
+  far.setOverride('ceilingHeight', '2500');
+  setRoomCeilingShape(far, { shape: 'slope', dims: [300, 90] });
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs[1].ceilZ, 2800);
+});
+
+test('【失敗系・cellsAlong】円弧・ドームの区画は対象外＝部屋の CH のまま。傾斜の区画の getFinishInfo が例外でも落ちず ceilZ null', () => {
+  for (const [shape, dims] of [['arc', [400, 90]], ['dome', [500]]]) {
+    const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+    g.interior([[0, 0]]);
+    const far = g.interior([[0, 1]]);
+    far.setOverride('ceilingHeight', '2500');
+    far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 3000, shape, dims }).zones);
+    const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+    assert.equal(buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000)[1].ceilZ, 2500, shape);
+  }
+  const g = makeGrid([0, 4000], [0, 2000, 4000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1]]);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 3000, shape: 'slope', dims: [600, 90] }).zones);
+  far.getFinishInfo = () => { throw new Error('boom'); };
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[1].ceilZ, null);
+});
+
+test('【cellsAlong・区画なしは不変】区画も形状も無い部屋の列は従来どおり（部屋の CH 2500・2400）で deepEqual', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  const near = g.interior([[0, 0]]);
+  const far = g.interior([[0, 1]]);
+  far.setOverride('ceilingHeight', '2500');
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.deepEqual(segs, [
+    { room: near, floorZ: 0, ceilZ: 2400, depthMm: 0 },
+    { room: far, floorZ: 0, ceilZ: 2500, depthMm: 2000 },
+    { room: null, floorZ: 0, ceilZ: null, depthMm: 4000 }, // 格子の残り（部屋なし）
+  ]);
 });
 
 test('【cellsAlong は区画の far 天井】視線の先の部屋の最初のセルが区画なら ceilZ は床＋区画高（区画なしの部屋は CH）', () => {

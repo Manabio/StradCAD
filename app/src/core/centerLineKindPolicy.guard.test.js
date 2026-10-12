@@ -316,9 +316,11 @@ const G1_ALLOWLIST = {
     reason: 'applyCenterLineAbsorptionOnPromote内、復号後のsnapshot.centerLines（保存形式の中間オブジェクト。' +
       'graphインスタンスではない）から吸収する中心線のエントリを除くための走査——lineIdRemap.js' +
       'makeFreshLineIdMapと同じ「snapshot.centerLinesの列挙」であり、種別条件のない全件操作（相手選択ではない）。' },
-  // 以下4件は graphList(graph, 'centerLines')（読み取りスコープ経由の全件列挙）。RE_GRAPHLIST_CENTERLINES で数える。
+  // 以下5件は graphList(graph, 'centerLines')（読み取りスコープ経由の全件列挙）。RE_GRAPHLIST_CENTERLINES で数える。
   'elevation/elevationFloorProfile.js': { count: 1, category: 'not-partner-selection',
     reason: 'findRunCLAt。value 一致の最初を返す走査——種別条件あり（天井芯 isCeilingOnlyKind を除外済み。同座標の天井芯が先に並んでも中心線を返す回帰テストあり）。' },
+  'elevation/space/zoneCeiling.js': { count: 1, category: 'not-partner-selection',
+    reason: 'parallelCLAt（zoneCeilingFarEdge）。傾斜の面の奥の端の座標に立つ面と平行な CL を value 一致で探す走査——種別条件あり（天井芯 isCeilingOnlyKind を除外済み。findRunCLAt と同じ除外。elevationFloorProfile.js は本モジュールを import するため循環を避けて同型を持つ。回帰テストあり）。' },
   'elevation/section/cuts/switchbackCuts.js': { count: 1, category: 'not-partner-selection',
     reason: 'midCL（往復間の壁が無いときの同位置の中心線）の探索。許容差内の最初の CL——種別条件あり（天井芯 isCeilingOnlyKind を除外済み。回帰テストあり）。' },
   'elevation/elevationPrimitives.js': { count: 1, category: 'not-partner-selection',
