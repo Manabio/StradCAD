@@ -9,6 +9,9 @@ import { buildRoomBand, layoutBandFaces, finalizeBand, faceDrawnXRange } from '.
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
+import { makeGrid } from '../plan/planTestFixtures.js';
+import { createZone } from '../ceiling/ceilingZones.js';
+import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
 import { BAND_TOP_MARGIN_MM, BAND_GAP_MM, CH_DIM_OFFSET_MM } from './elevationStyle.js';
 
 function makeGraph() {
@@ -931,4 +934,31 @@ test('【実機指摘2026-09-14「13」A・鉄骨】buildRoomBand(階段下の�
     `踊り場高さ基準の旧値(${oldLo}〜${newLo}の間)は残らないはず（実際:${JSON.stringify([...new Set(tops)])}）`);
   assert.ok(tops.some(z => z >= newLo - 1e-6 && z < newLo + riser),
     `始端付近の矩形の上端は${newLo}以上${newLo + riser}未満のはず（実際:${JSON.stringify([...new Set(tops)])}）`);
+});
+
+// ---- 天伏の平面区画: 天井線とエンジンの打ち切りが一致する ----
+test('【区画の天井線とエンジンの打ち切りが一致】左2400・右3000 の面は x=1942.5 の縦線で段差し、天井線より上に線が無い', () => {
+  const g = makeGrid([0, 5000], [0, 3000]);
+  const room = g.interior([[0, 0]], { walls: true });
+  room.setOverride('ceilingHeight', '2500');
+  g.graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
+  for (const [x, mm] of [[1000, 2400], [3500, 3000]]) {
+    const key = worldToCell(x, 1500, g.graph, CEILING_CELL_GRID).key;
+    room.setCeilingZones(createZone(g.graph, room, [key], { heightMm: mm, shape: 'flat', dims: [] }).zones);
+  }
+  const band = buildRoomBand(room, g.graph);
+  const lines = band.primitives.filter(p => p.type === 'line');
+  // 先頭の面（x 0..4885。寸法の引出線 x=-57.5 / 4942.5 は範囲外）
+  const inFace = lines.filter(p => p.x1 >= 0 && p.x2 <= 4885);
+  assert.ok(inFace.some(p => p.y1 === -2400 && p.y2 === -2400 && p.x1 === 0 && p.x2 === 1942.5), '左の天井線 2400');
+  assert.ok(inFace.some(p => p.y1 === -3000 && p.y2 === -3000 && p.x1 === 1942.5 && p.x2 === 4885), '右の天井線 3000');
+  assert.ok(inFace.some(p => p.x1 === 1942.5 && p.x2 === 1942.5 && Math.min(p.y1, p.y2) === -3000 && Math.max(p.y1, p.y2) === -2400), '境界の縦線（小口は1本）');
+  assert.equal(inFace.filter(p => p.x1 === 1942.5 && p.x2 === 1942.5).length, 1, '縦線は体裁の1本だけ（エンジンが二重に出さない）');
+  assert.equal(Math.min(...inFace.flatMap(p => [p.y1, p.y2])), -3000, '天井線（3000）より上に線が無い');
+  // 低い側（x<1942.5）は 2400 で打ち切られる: 境界の縦線を除き、2400 より上に線が無い（QA 指摘: 面全体の最小 y だけでは低い側の漏れを検出できない）
+  const lowSide = inFace.filter(p => Math.max(p.x1, p.x2) < 1942.5);
+  assert.ok(lowSide.length > 0, '低い側に線がある');
+  assert.equal(Math.min(...lowSide.flatMap(p => [p.y1, p.y2])), -2400, '低い側（2400）の天井線より上にエンジンの線が残らない');
+  const chDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v').map(p => p.label).sort();
+  assert.ok(chDims.includes(3000), '右のCH寸法は区画の高さ');
 });

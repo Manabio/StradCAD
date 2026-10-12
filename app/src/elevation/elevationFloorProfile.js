@@ -23,6 +23,7 @@ import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { graphList, scopedValue } from '../graphReadScope.js';
 import { isCeilingOnlyKind } from '../core/centerLineKindPolicy.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
+import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingEdgesAlong } from './space/zoneCeiling.js';
 // PROBE_EPS_MM: 自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり
 // 分割されない）場合に、runの伸びる方向へ覗き込むプローブ距離（elevationOpenSpan.jsと共通。
 // elevationStyle.jsのR4共通定数）。
@@ -227,7 +228,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
       const floorDeltaMm = g.owner ? graph.effectiveFloorLevel(g.owner) - parentFL : 0;
       segs.push({
         runLo: g.runLo, runHi: g.runHi, floorDeltaMm, chMm: chOf(g.owner ?? parentRoom),
-        loCLId: null, hiCLId: null,
+        loCLId: null, hiCLId: null, owner: g.owner ?? parentRoom,
       });
     }
   };
@@ -238,7 +239,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
     const floorDeltaMm = graph.effectiveFloorLevel(t.owner) - parentFL;
     // 重なり（t.runLo が cursor より小さい）はcursorへスナップし、区間の逆転・二重描画を防ぐ。
     const runLo = Math.max(t.runLo, cursor);
-    if (t.runHi > runLo) segs.push({ runLo, runHi: t.runHi, floorDeltaMm, chMm: t.chMm, loCLId: t.loCLId, hiCLId: t.hiCLId });
+    if (t.runHi > runLo) segs.push({ runLo, runHi: t.runHi, floorDeltaMm, chMm: t.chMm, loCLId: t.loCLId, hiCLId: t.hiCLId, owner: t.owner });
     cursor = Math.max(cursor, t.runHi);
   }
   if (cursor < face.hi) pushGap(segs, cursor, face.hi);
@@ -253,15 +254,40 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
     segs.splice(i, 1);
   }
 
+  // 天伏の平面区画の境界で区間を割り、片ごとに区画の高さ（無ければ所有者の部屋CH）を入れる。
+  // 区画の無い図面（field null）は何もしない。探査点は片の中央（probeGapOwnersと同じ式）。
+  // 先頭の片だけ元のloCLId・最後の片だけ元のhiCLId、内側の境界は天井芯の上でCLではないためnull。
+  const field = zoneCeilingFieldOf(graph);
+  const zoned = !field ? segs : segs.flatMap(seg => {
+    const depthCoord = axisValue + face.inward * PROBE_EPS_MM;
+    const edges = zoneCeilingEdgesAlong(field, { isVertical: face.isVertical, depthCoord, lo: seg.runLo, hi: seg.runHi })
+      .filter(e => e - seg.runLo > GAP_EPS && seg.runHi - e > GAP_EPS);
+    const pts = [seg.runLo, ...edges, seg.runHi];
+    const pieces = [];
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const mid = (pts[i] + pts[i + 1]) / 2;
+      const px = face.isVertical ? axisValue + face.inward * PROBE_EPS_MM : mid;
+      const py = face.isVertical ? mid : axisValue + face.inward * PROBE_EPS_MM;
+      pieces.push({
+        ...seg, runLo: pts[i], runHi: pts[i + 1],
+        chMm: zoneCeilingChAt(field, seg.owner, px, py) ?? chOf(seg.owner),
+        loCLId: i === 0 ? seg.loCLId : null,
+        hiCLId: i + 2 === pts.length ? seg.hiCLId : null,
+      });
+    }
+    return pieces;
+  });
+
   // 隣接区間でfloorDeltaMm・chMmがともに同じなら結合する（不要な段差線を出さないため。
   // 問題修正2026-08: 床が同じ高さでも天井高さ(chMm)が異なる境界は天井断面線の段差＝縦線に
   // なるため、chMmが異なる区間は結合しない）。
   const merged = [];
-  for (const s of segs) {
+  for (const s of zoned) {
     const last = merged[merged.length - 1];
     if (last && last.floorDeltaMm === s.floorDeltaMm && last.chMm === s.chMm && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
       last.runHi = s.runHi;
       last.hiCLId = s.hiCLId;
+      if (last.owner !== s.owner) last.owner = null;
     } else {
       merged.push({ ...s });
     }
@@ -274,16 +300,23 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   // hi/loと入れ替わるため、そちらもあわせて入れ替える）でsegsへ引き継ぐ——ROW1寸法のCL分割点
   // （elevationDimSplit.jsのS1=segs[i].hiCLId）が指すのは常に「オフセット前の実際のCL」。
   const toLocal = worldCoord => (worldCoord - face.originWorld) * face.dirSign + 0;
-  return merged
+  const local = merged
     .map(s => {
       const a = toLocal(s.runLo), b = toLocal(s.runHi);
       const swapped = a > b;
       return {
         loX: Math.min(a, b), hiX: Math.max(a, b), floorDeltaMm: s.floorDeltaMm, chMm: s.chMm,
         loCLId: swapped ? s.hiCLId : s.loCLId, hiCLId: swapped ? s.loCLId : s.hiCLId,
+        owner: s.owner,
       };
     })
     .sort((a, b) => a.loX - b.loX);
+  // 同じ所有者どうしで天井高さだけ違う境界＝天伏の区画の境界（壁の無い境界。drawnCeilingRiserXはずらさない）。
+  // 該当するときだけ付ける（区画の無い図面の出力形を変えない）。
+  return local.map((s, i) => {
+    const { owner, ...rest } = s;
+    return field && owner && owner === local[i + 1]?.owner ? { ...rest, zoneCeilEdgeHi: true } : rest;
+  });
 }
 
 /**
@@ -296,6 +329,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
  * @returns {number}
  */
 export function drawnRiserX(segs, i, halfWallMm) {
+  if (segs[i].zoneCeilEdgeHi) return segs[i].hiX; // 天伏の区画の境界は床の段差ではない＝ずらさない（天井の小口と同じx）
   const towardLow = segs[i].floorDeltaMm > segs[i + 1].floorDeltaMm ? 1 : -1;
   return segs[i].hiX + towardLow * halfWallMm;
 }
@@ -363,6 +397,7 @@ export function familyCeilingSegments(face, parentRoom, graph) {
  * @returns {number}
  */
 export function drawnCeilingRiserX(segs, i, halfWallMm, fallbackCeilAbsMm) {
+  if (segs[i].zoneCeilEdgeHi) return segs[i].hiX; // 天伏の区画の境界は壁が無い＝ずらさない
   const ceilAbs = s => (s.chMm != null ? s.floorDeltaMm + s.chMm : fallbackCeilAbsMm);
   const towardHigh = ceilAbs(segs[i + 1]) > ceilAbs(segs[i]) ? 1 : -1;
   return segs[i].hiX + towardHigh * halfWallMm;

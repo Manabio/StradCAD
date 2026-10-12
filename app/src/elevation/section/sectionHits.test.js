@@ -16,7 +16,9 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, probeColumn } from './sectionProbe.js';
-import { probeColumnHits, visibleBandsOf, isHiddenWall } from './sectionHits.js';
+import { probeColumnHits, visibleBandsOf, isHiddenWall, buildLayerStack } from './sectionHits.js';
+import { makeGrid } from '../../plan/planTestFixtures.js';
+import { createZone } from '../../ceiling/ceilingZones.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
 
@@ -854,3 +856,25 @@ test('【Phase6b-1・(c)・失敗系】probeColumnHits: worldMidがNaNでも例�
 // (2) sectionStair.jsのstairFaceHitsで正面視(tread)のdepthMmを`0`から`-1`（符号を反転した値）へ
 //     変えると→上の【(a)】の`stairHit.distMm < wallHit.distMm`は通ってしまう(-1<3000)ため、
 //     `assert.equal(stairHit.distMm, 0, ...)`の等値チェックが赤くなる。
+
+// ---- 天伏の平面区画（buildLayerStackの天井は探査点の区画の高さ） ----
+test('【buildLayerStackのceilZは探査点の区画】区画の列は区画の高さ・区画外の列は部屋のCH', () => {
+  const g = makeGrid([0, 2000, 5000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]], { walls: true });
+  room.setOverride('ceilingHeight', '2500');
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(1, 0)], { heightMm: 3000, shape: 'flat', dims: [] }).zones);
+  const cut = frontCut(g.graph, { line: { isVertical: false, axisValue: 0, lo: 0, hi: 5000 } });
+  const probeCtx = makeProbeContext(cut.layers);
+  assert.equal(buildLayerStack(cut, 3500, probeCtx)[0].ceilZ, 3000, '区画の列');
+  assert.equal(buildLayerStack(cut, 1000, probeCtx)[0].ceilZ, 2500, '区画の無い列は部屋のCH');
+});
+
+test('【失敗系】簡易probeCtx（cellAtがceilZを持たない）ではchOfへ落ちる', () => {
+  const g = makeGrid([0, 2000], [0, 3000]);
+  const room = g.interior([[0, 0]], { walls: true });
+  const cut = frontCut(g.graph, { line: { isVertical: false, axisValue: 0, lo: 0, hi: 2000 } });
+  const probeCtx = {
+    cellAt: () => ({ room }), floorZOf: () => 0, chOf: () => 2300,
+  };
+  assert.equal(buildLayerStack(cut, 1000, probeCtx)[0].ceilZ, 2300);
+});

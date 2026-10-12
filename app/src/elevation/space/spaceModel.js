@@ -29,6 +29,7 @@ import { roomCeilingHeight } from '../../finish/roomMetrics.js';
 import { kneeDropRecordsOnAxis, kneeDropWallGeometry } from '../../finish/kneeDropWall.js';
 import { graphList } from '../../graphReadScope.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
+import { zoneCeilingFieldOf, zoneCeilingChAt } from './zoneCeiling.js';
 
 // cellsAlongの無限ループ防御（格子異常時の安全弁）。実データの通常の列は
 // せいぜい数十セルなので、この上限に達すること自体が異常の兆候。
@@ -56,6 +57,7 @@ const CELLS_ALONG_MAX_STEPS = 5000;
  *   cellToRoomByLayer:Map,
  *   floorZFor:(room:object|null, layer:object)=>number,
  *   chFor:(room:object|null, graph:object)=>number|null,
+ *   chAt:(room:object|null, graph:object, x:number, y:number)=>number|null,
  *   componentOf:(layer:object, room:object|null)=>number|null,
  *   componentAt:(layer:object, worldX:number, worldY:number)=>number|null,
  * }}
@@ -97,6 +99,17 @@ export function buildSpaceIndex(layers, opts = {}) {
     return cache.get(room.id);
   }
 
+  // 点 (x,y) の天井高さ（部屋FL基準）。平面の天伏区画の上ならその区画の高さ、それ以外は部屋のCH
+  // （zoneCeiling.js。床段差を含まない値なので floorZ に足してよい）。
+  const fieldByGraph = new Map(); // graph -> field|null
+  function fieldFor(graph) {
+    if (!fieldByGraph.has(graph)) fieldByGraph.set(graph, zoneCeilingFieldOf(graph));
+    return fieldByGraph.get(graph);
+  }
+  function chAt(room, graph, x, y) {
+    return zoneCeilingChAt(fieldFor(graph), room, x, y) ?? chFor(room, graph);
+  }
+
   // cellAt: (layer, worldX, worldY) → SpaceCell | null。
   // グリッドにセルが無い（layer.graphが無い・格子外）位置はnull——「セルが1つも無い」ことと
   // 「セルはあるが部屋が未割当」（room:null）は区別する（後者はfloorZ/ceilZの解決余地がある）。
@@ -109,8 +122,7 @@ export function buildSpaceIndex(layers, opts = {}) {
     if (!cell) return null;
     const room = cellToRoomFor(layer).get(cell.key) ?? null;
     const floorZ = floorZFor(room, layer);
-    const ch = chFor(room, layer.graph);
-    const ceilZ = room ? floorZ + ch : null;
+    const ceilZ = room ? floorZ + chAt(room, layer.graph, worldX, worldY) : null;
     return { room, floorZ, ceilZ };
   }
 
@@ -228,7 +240,7 @@ export function buildSpaceIndex(layers, opts = {}) {
   }
 
   return {
-    cellAt, cellToRoomFor, cellToRoomByLayer, floorZFor, chFor, componentOf, componentAt, cellsAlong,
+    cellAt, cellToRoomFor, cellToRoomByLayer, floorZFor, chFor, chAt, componentOf, componentAt, cellsAlong,
   };
 }
 

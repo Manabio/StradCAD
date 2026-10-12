@@ -123,6 +123,7 @@ export function makeProbeContext(layers, opts = {}) {
     cellToRoomByLayer: spaceIndex.cellToRoomByLayer,
     cellToRoomFor: spaceIndex.cellToRoomFor,
     chOf: spaceIndex.chFor,
+    chAt: spaceIndex.chAt,
     floorZOf: spaceIndex.floorZFor,
     cellAt: spaceIndex.cellAt,
     // Phase 3（展開図一般化）: 水平面ヒット（floorFace/ceilFace。`section/sectionHits.js`の

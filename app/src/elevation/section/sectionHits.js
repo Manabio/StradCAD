@@ -303,22 +303,17 @@ export function isCutAlongWall(wall, line) {
 }
 
 /**
- * layer.graph上で、cutの run方向 worldMid・厚み方向オフセット sign*PROBE_EPS_MM の位置の
- * 所有Roomを1点プローブする（elevationFloorProfile.jsのpushGap/familyCeilingSegmentsと同じ
- * 「isVertical面ならpx=axisValue+offset・py=runCoord、そうでなければ逆」規約）。
- * @returns {import('@core').Room|null}
+ * layer.graph上で、cutの run方向 worldMid・厚み方向オフセット offsetMm の位置のセル
+ * （所有Room・floorZ・ceilZ）を1点プローブする（elevationFloorProfile.jsのpushGap/
+ * familyCeilingSegmentsと同じ「isVertical面ならpx=axisValue+offset・py=runCoord、そうでなければ逆」規約）。
+ * 1点クエリはcellAt（buildSpaceIndex。makeProbeContext内で公開）経由。ceilZは天伏の平面区画の高さを含む。
+ * @returns {{room:import('@core').Room|null, floorZ:number, ceilZ:number|null}|null}
  */
-function probeOwnerRoom(cut, worldMid, layer, probeCtx, sign) {
-  return ownerRoomAtOffset(cut, worldMid, layer, probeCtx, sign * PROBE_EPS_MM);
-}
-
-// 切断線から視線方向へoffsetMm進んだ位置の所有Room（probeOwnerRoomの一般形）。
-// 1点クエリはcellAt（buildSpaceIndex。makeProbeContext内で公開）の一般形なので、cellAt経由にする。
-function ownerRoomAtOffset(cut, worldMid, layer, probeCtx, offsetMm) {
+function ownerCellAtOffset(cut, worldMid, layer, probeCtx, offsetMm) {
   const { line } = cut;
   const px = line.isVertical ? line.axisValue + offsetMm : worldMid;
   const py = line.isVertical ? worldMid : line.axisValue + offsetMm;
-  return probeCtx.cellAt(layer, px, py)?.room ?? null;
+  return probeCtx.cellAt(layer, px, py);
 }
 
 /**
@@ -633,11 +628,13 @@ export function buildLayerStack(cut, worldMid, probeCtx) {
   // （`layerOwningZ`・`upperFloorZAt`）もこのスタックが情報源で、面の外に自階の床天井が
   // 残っていると、面の端に実在しない天井段差（＝上階の床の断面線）が生まれる。
   return orderLayerStack((cut.layers ?? []).filter(layer => withinLayerWindow(cut, layer, worldMid)).map(layer => {
-    const room = probeOwnerRoom(cut, worldMid, layer, probeCtx, cut.viewSign);
+    const cell = ownerCellAtOffset(cut, worldMid, layer, probeCtx, cut.viewSign * PROBE_EPS_MM);
+    const room = cell?.room ?? null;
     const floorZ = probeCtx.floorZOf(room, layer);
     // QA修正: room=nullでも壁候補は諦めない（fallbackCeilZ参照）。ceilZが実質nullになるのは
     // layer.graph自体が無い等の防御的ケースのみ。
-    const ceilZ = room ? floorZ + probeCtx.chOf(room, layer.graph) : fallbackCeilZ(layer, floorZ, cut);
+    // 天井は探査点の天伏区画の高さ（cell.ceilZ）。簡易probeCtxのテスト向けにchOfへ落とす防御を残す。
+    const ceilZ = room ? (cell.ceilZ ?? floorZ + probeCtx.chOf(room, layer.graph)) : fallbackCeilZ(layer, floorZ, cut);
     return { layer, room, floorZ, ceilZ };
   }));
 }

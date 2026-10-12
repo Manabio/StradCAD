@@ -9,6 +9,8 @@ import { buildSpaceIndex } from './spaceModel.js';
 import { makeProbeContext } from '../section/sectionProbe.js';
 import { PROBE_EPS_MM } from '../elevationStyle.js';
 import { worldToCell } from '../../finish/gridCells.js';
+import { makeGrid } from '../../plan/planTestFixtures.js';
+import { createZone } from '../../ceiling/ceilingZones.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
 
@@ -577,4 +579,37 @@ test('【失敗系・Phase3】cellsAlong: worldMid・fromDepthMm・toDepthMmがN
   assert.deepEqual(index.cellsAlong(layer, faceCut(0), 2000, NaN, 1000), []);
   assert.deepEqual(index.cellsAlong(layer, faceCut(0), 2000, 0, NaN), []);
   assert.deepEqual(index.cellsAlong(layer, faceCut(0), 2000, 1000, 500), [], 'toDepthMm<=fromDepthMmも空配列');
+});
+
+// ---- 天伏の平面区画（展開図が区画の高さに追従。zoneCeiling.js） ----
+test('【区画 cellAt】区画内の ceilZ は床＋区画高・区画外（区画の無い残り）は部屋の CH', () => {
+  const g = makeGrid([0, 2000, 5000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  room.setOverride('ceilingHeight', '2500');
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(1, 0)], { heightMm: 3000, shape: 'flat', dims: [] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const index = buildSpaceIndex([layer]);
+  assert.equal(index.cellAt(layer, 3500, 1500).ceilZ, 3000, '区画の上');
+  assert.equal(index.cellAt(layer, 1000, 1500).ceilZ, 2500, '区画の無い残りは部屋の CH');
+  assert.equal(index.chFor(room, g.graph), 2500, 'chFor は不変（部屋の CH）');
+  assert.equal(index.chAt(room, g.graph, 3500, 1500), 3000);
+});
+
+test('【床段差の二重加算なし】床 +100 の部屋に区画 3000 → ceilZ は datum 基準で 3100（3200 ではない）', () => {
+  const g = makeGrid([0, 2000], [0, 3000]);
+  const room = g.interior([[0, 0]]);
+  room.setFloorLevel(100);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 3000, shape: 'flat', dims: [] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const cell = buildSpaceIndex([layer]).cellAt(layer, 1000, 1500);
+  assert.equal(cell.floorZ, 100);
+  assert.equal(cell.ceilZ, 3100);
+});
+
+test('【失敗系】傾斜の区画の上は部屋の CH のまま（後のステップ。平面でない面は対象外）', () => {
+  const g = makeGrid([0, 2000], [0, 3000]);
+  const room = g.interior([[0, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 2800, shape: 'slope', dims: [600, 0] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  assert.equal(buildSpaceIndex([layer]).cellAt(layer, 1000, 1500).ceilZ, CH);
 });
