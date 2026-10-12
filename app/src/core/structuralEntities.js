@@ -119,6 +119,16 @@ export function beamExclusionKey(role, axisCL, clA, clB) {
   return EXCLUSION_NAMESPACED_ROLES.has(role) ? `${role}:${key}` : key;
 }
 
+/**
+ * 除外集合（excludedColumnSlots／excludedBeamSlots／excludedFootingSlots）のキーが CL(clId) を参照しているか。
+ * キーは columnSlotKey／spanKey／beamExclusionKey（`sill:` 等の前置つき）のとおり `:` 区切りに素の CL id を
+ * 含む。columnAnchorKey の jamb:／off: 形式は CL id を含まない。CL の teardown（キーの掃除）と、
+ * 「除外を持つ梁芯は撤去しない」判定（structural/stairCrossingBeamAxes.js）が共有する単一の述語。
+ */
+export function exclusionKeyReferencesCL(key, clId) {
+  return key.split(':').includes(clId);
+}
+
 class StructuralEntity {
   constructor(id, materialType, sectionDefId, props = {}) {
     this.id           = id;

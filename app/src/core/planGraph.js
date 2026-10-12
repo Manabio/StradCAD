@@ -44,7 +44,7 @@ import {
   COLUMN_CLASS_BY_MATERIAL, BEAM_CLASS_BY_MATERIAL,
   WALL_CLASS_BY_MATERIAL, SLAB_CLASS_BY_MATERIAL,
   IndependentFooting, ColumnBase, RcWallOpening, PenetrationSleeve,
-  columnSlotKey, columnAnchorKey, beamExclusionKey,
+  columnSlotKey, columnAnchorKey, beamExclusionKey, exclusionKeyReferencesCL,
 } from './structuralEntities.js';
 
 // ---- module-private helpers ----
@@ -1184,7 +1184,7 @@ export class PlanGraph {
     // （structural/wallBeamAxes.js wallBeamAxisExcludeKey参照）。
     for (const set of [this.excludedColumnSlots, this.excludedBeamSlots, this.excludedFootingSlots]) {
       for (const key of [...set]) {
-        if (key.split(':').includes(id)) set.delete(key);
+        if (exclusionKeyReferencesCL(key, id)) set.delete(key);
       }
     }
   }

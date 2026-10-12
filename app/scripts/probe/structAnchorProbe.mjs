@@ -88,6 +88,8 @@ await runSweep();
 const converged = await sweepUntilConverged(project, 'desc');
 if (converged == null) {
   console.error(`警告: 構造再計算が収束しなかった（8sweep超もchangedあり）: ${src}`);
+} else {
+  console.error(`収束sweep数: ${converged}`);
 }
 
 function dumpPlane(graph) {

@@ -507,6 +507,34 @@ export function isProtectedWallBeamAxis(graph, cl, { ignoreRefsFrom = new Set() 
   return graph.referencingCenterLines(cl.id, { includeRefId: false }).some(other => !ignoreRefsFrom.has(other.id));
 }
 
+/**
+ * 撤去候補の梁芯CL群から、保護されず実際に撤去してよいものを返す（固定点反復＝マーク&スイープ）。
+ * 「候補どうしの extentLoRef/HiRef 参照は保護理由にしない」が、参照元自身が保護されて生き残ると
+ * 決まった時点からは「生存者からの参照」として数える——通し辺を短辺が参照し短辺自身が保護される場合、
+ * 通し辺もその参照で保護される（1回の判定では終わらないため反復する）。
+ * reconcileOpeningBeamAxes（開口由来の孤児回収）と stairCrossingBeamAxes.js（階段を横切る孤児の撤去）が共有する。
+ * @param {object} graph
+ * @param {import('../core.js').CenterLine[]} candidates
+ * @returns {import('../core.js').CenterLine[]} candidates のうち撤去してよいもの（入力順）
+ */
+export function unprotectedAmong(graph, candidates) {
+  const ignoreRefsFrom = new Set(candidates.map(cl => cl.id));
+  const survivedIds = new Set();
+  let stable = false;
+  while (!stable) {
+    stable = true;
+    for (const cl of candidates) {
+      if (survivedIds.has(cl.id)) continue;
+      if (isProtectedWallBeamAxis(graph, cl, { ignoreRefsFrom })) {
+        survivedIds.add(cl.id);
+        ignoreRefsFrom.delete(cl.id); // 以後、生存者からの参照として数える
+        stable = false;
+      }
+    }
+  }
+  return candidates.filter(cl => !survivedIds.has(cl.id));
+}
+
 /** coord に一致（CL_OVERLAP_TOL_MM以内）する通り芯または梁芯（柱アンカー第1候補。
  *  core/centerLineKindPolicy.js structuralAnchorAt(tier:'primary')）を返す。意匠中心線・補助線は
  *  対象にしない。梁芯の重複ガード（autoFillWallBeamAxes）と壁交点柱のアンカー解決（woodAutoFill.js）が

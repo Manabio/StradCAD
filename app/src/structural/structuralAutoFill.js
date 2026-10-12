@@ -10,6 +10,7 @@ import { peekVia } from './structuralPeek.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
 import { stairPartitionEnds, stairLandingFrontWallPoints } from './wallFreeEnds.js';
+import { removeStairCrossingOrphanBeamAxes } from './stairCrossingBeamAxes.js';
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { autoFillStairPartitionBeams, stairPartitionBeamSpans } from './stairPartitionBeams.js';
@@ -816,7 +817,13 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // （在来木造）は通り芯グリッドの大梁を持たないため小梁のhostが無く、呼んでも0本になる以外に害はないが、
   // 二重の判定軸を持たないよう明示的にスキップする（ステップ3c-2）。
   const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
+  // 階段を横切る孤児の梁芯の撤去（ユーザー指示2026-10-12。「CLは残す」規律の例外）。生成・撤去がすべて確定した
+  // 最後に呼ぶ——梁が乗った梁芯を孤児と誤認しない／現況の生成源（壁・開口）と往復しないため。
+  // 依存の柱・梁は teardown で道連れ、次の sweep で中心線へ再アンカーされる。通知は structuralOrchestration.js。
+  const removedStairCrossingAxes = !isRoof
+    ? removeStairCrossingOrphanBeamAxes(graph, project, belowGraph, [...wallSources, ...openingSources]) : [];
   return {
+    removedStairCrossingAxes,
     newColumns, removedColumns, newFootings, removedFootings, originsUpdatedColumns,
     // m-5是正・QA指摘: 開口由来梁芯の再ラベル（→WALL）・extent張り直し（reconcileOpeningBeamAxes）は
     // 「新規/撤去した梁」ではないため newBeams/removedBeams には混ぜず、別枠で返す

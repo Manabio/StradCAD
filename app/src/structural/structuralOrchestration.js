@@ -17,6 +17,7 @@ import { buildRoofColumnFilter } from './roofColumnFilter.js';
 import { collectFloorGroups, assignNumbers, applyNumbers } from './memberNumbering.js';
 import { conformToLedger } from './memberGroups.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
+import { STAIR_CROSSING_REMOVED_MESSAGE } from './stairCrossingBeamAxes.js';
 import { syncRoofPlane } from './roofPlane.js';
 import { structuralPlaneBelow } from './drawingDesignation.js';
 import { figureBindingManager } from '../figure/FigureBindingManager.js';
@@ -62,7 +63,59 @@ function reportRenumberToast(renumbered, onToast) {
   if (!renumbered.length) return;
   const [first] = renumbered;
   const extra = renumbered.length - 1;
-  onToast?.(`材寸の変更にともない部材番号を振り直しました（${first.from} → ${first.to}${extra > 0 ? ` 他${extra}件` : ''}）`);
+  const msg = `材寸の変更にともない部材番号を振り直しました（${first.from} → ${first.to}${extra > 0 ? ` 他${extra}件` : ''}）`;
+  // 通知スコープの中なら後勝ちで控え、スコープの終わりに他の通知と連結して1回で出す（下記）。
+  if (toastScope) toastScope.renumberMsg = msg;
+  else onToast?.(msg);
+}
+
+// ---- 構造再計算の通知（トースト）----
+// App のトーストは { msg, key } の単一状態＝後勝ち。同じ再計算で「部材番号の振り直し」と「階段を横切る梁の
+// 削除」が両方起きると片方が上書きされて消えるため、境界処理（突入・反映3経路・構造同期・自階再計算）ごとに
+// スコープを開き、終わりに全角空白で連結して1回だけ onToast へ渡す（順序: 突入時の警告 → 振り直し → 階段）。
+// スコープは入れ子にしない（外側が持つ）。body が例外で終わったときは通知しない。
+// onToast を受け取らない経路（仕上げ脱出・階追加・構造同期など）には、App が setStructuralToastHandler で
+// 登録した既定の通知先を使う（未登録なら通知しない）。UI は uiBusy の関門で直列化されるため、モジュール変数で足りる。
+let toastScope = null; // { onToast, viaDefault, leadMsgs, renumberMsg, stairCrossing } | null
+let defaultToastHandler = null;
+
+/** 既定の通知先（App.jsx がトーストの setter を登録する）。null で解除。 */
+export function setStructuralToastHandler(fn) {
+  defaultToastHandler = fn ?? null;
+}
+
+async function withToastScope(onToast, body) {
+  if (toastScope) {
+    // 外側が既定の通知先のままなら、内側が明示した onToast を優先する。
+    if (onToast && toastScope.viaDefault) { toastScope.onToast = onToast; toastScope.viaDefault = false; }
+    return body();
+  }
+  const scope = { onToast: onToast ?? defaultToastHandler, viaDefault: !onToast, leadMsgs: [], renumberMsg: null, stairCrossing: 0 };
+  toastScope = scope;
+  let ok = false;
+  try {
+    const result = await body();
+    ok = true;
+    return result;
+  } finally {
+    toastScope = null;
+    if (ok) {
+      const msgs = [...scope.leadMsgs, scope.renumberMsg, scope.stairCrossing > 0 ? STAIR_CROSSING_REMOVED_MESSAGE : null].filter(Boolean);
+      if (msgs.length > 0) scope.onToast?.(msgs.join('　'));
+    }
+  }
+}
+
+// スコープの先頭に積む通知（構造モード突入時の「主構造が未定」の警告）。スコープ外なら即時に onToast へ。
+function emitLeadToast(msg, onToast) {
+  if (toastScope) toastScope.leadMsgs.push(msg);
+  else onToast?.(msg);
+}
+
+// recomputeStructuralForGraph の戻り値から、階段を横切る孤児の梁芯の撤去本数をスコープへ積む。
+function noteStairCrossing(result) {
+  if (toastScope && result.removedStairCrossingAxes > 0) toastScope.stairCrossing += result.removedStairCrossingAxes;
+  return result;
 }
 
 // 下階（belowGraph）の柱集合の変更検知用シグネチャ（位置・役割のみ。順序に依存しない）。
@@ -112,7 +165,11 @@ export function columnSetSignature(columns) {
 // 下へ渡すだけで、自分では生成しない（生成は境界処理側のwithResolveContextが担う）。
 // belowFootprintCache・belowWallSourceCacheはこの下階編集経路専用のローカルキャッシュのまま
 // 据え置く（ctx由来にはしない）。
-export async function recomputeStructuralComposition(composition, subjectGraph, project, { mutate, onToast, pushUndo = true, ctx = undefined } = {}) {
+export async function recomputeStructuralComposition(composition, subjectGraph, project, opts = {}) {
+  return withToastScope(opts.onToast, () => recomputeStructuralCompositionBody(composition, subjectGraph, project, opts));
+}
+
+async function recomputeStructuralCompositionBody(composition, subjectGraph, project, { mutate, onToast, pushUndo = true, ctx = undefined } = {}) {
   const before = serializeGraph(subjectGraph);
   // 自階床下材＝subjectGraph、1つ下の階の柱＝belowGraph。基礎伏図（1つ下が無い）は belowGraph=null。
   // mutate 実行前に解決する——mutate が下階（belowGraph）自身を書き換える操作（各階柱寸法の変更等。
@@ -146,7 +203,7 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
   // 番号の確定（assignNumbers/applyNumbers）はまだ行わない——下階分の収集も済んでから1回だけ行う。
   // 自階の梁幅・梁成算定の材幅（beamColumnWidthMm）は内部で自前peekする下階graphを参照する
   // （↑のflushEditablePeekにより最新値が読める）。
-  let { changed } = await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure, undefined, { ctx });
+  let { changed } = noteStairCrossing(await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure, undefined, { ctx }));
 
   // 1つ下の階（構造伏図に映る柱の供給元）も実効主構造へ揃える。突入時は reflectStructuralToOtherFloors が
   // 事前に下階を反映・永続化済みのため、ここは peek 済みバインディングへの差分適用（通常は差分ゼロ）。
@@ -282,7 +339,7 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
     const roofReexecBlocked = subjectGraph.plane.isRoofPlane && !rulesFor(effectiveStructure(subjectGraph, project)).framing;
     if (!roofReexecBlocked && columnSetSignature(belowGraph.columns) !== belowColumnsBefore) {
       await floorSwapManager.flushEditablePeek();
-      const { changed: secondChanged } = await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure, belowGraph, { ctx });
+      const { changed: secondChanged } = noteStairCrossing(await recomputeStructuralForGraph(subjectGraph, project, belowMainStructure, belowGraph, { ctx }));
       changed = changed || secondChanged;
     }
   }
@@ -358,14 +415,18 @@ function resyncTouchedMemberGroups(subjectGraph, belowGraph, belowBelowGraph, pr
 // 追加オプション（recomputeForStructuralSyncの{save}＝syncFloorRecorder.wrapSaveで包んだsave）。
 // ctxArgが明示的に渡された（borrowed）場合はここで注入しない——呼び出し側が自分のctxに
 // 既にwrapSave済みのsaveを仕込んでいる前提（probe等）。
-async function withResolveContext(ctxArg, body, ctxOpts = undefined) {
-  const owned = ctxArg === undefined;
-  const ctx = owned ? createStructuralResolveContext(ctxOpts) : ctxArg;
-  try {
-    return await body(ctx);
-  } finally {
-    if (owned) ctx.dispose();
-  }
+// onToast（第4引数）: 通知スコープ（withToastScope）の通知先。境界処理はすべてこのヘルパを通るため、
+// ここでスコープを開く（省略時は setStructuralToastHandler の既定の通知先）。
+async function withResolveContext(ctxArg, body, ctxOpts = undefined, onToast = undefined) {
+  return withToastScope(onToast, async () => {
+    const owned = ctxArg === undefined;
+    const ctx = owned ? createStructuralResolveContext(ctxOpts) : ctxArg;
+    try {
+      return await body(ctx);
+    } finally {
+      if (owned) ctx.dispose();
+    }
+  });
 }
 
 // ---- 構造モード突入時のセットアップ（屋根平面同期・バインディング生成・再計算）----
@@ -405,7 +466,7 @@ export async function runStructuralModeSetup(targetGraph, project, { onToast, ct
   return withResolveContext(ctxArg, async (ctx) => {
     const effectiveMainStructure = targetGraph.structureOverride ?? project.structuralInfo.mainStructure;
     if (effectiveMainStructure === UNSPECIFIED_STRUCTURE) {
-      onToast?.(ERR_STRUCT_MAIN_UNSPECIFIED);
+      emitLeadToast(ERR_STRUCT_MAIN_UNSPECIFIED, onToast);
     }
 
     // 最上階の直上に屋根専用平面（小屋伏／R階伏）を同期する（undo対象外。建物形状が変わった時点でやり直し前提のインフラ）。
@@ -471,7 +532,7 @@ export async function runStructuralModeSetup(targetGraph, project, { onToast, ct
 
     // composition の state 反映は commit 後に呼出側で行う（commit は同期・render は挟まらないため従来と同値）。
     return composition;
-  });
+  }, undefined, onToast);
 }
 
 // ---- 構造モードへの外部問合せ（階追加・仕上げ退出時に、構造モードに入らず構造部材を更新する）----
@@ -487,14 +548,17 @@ export async function recomputeActiveStructural(project, pushUndo = true, ctx = 
   const g = project.activeGraph;
   const mainStructure = g.structureOverride ?? project.structuralInfo.mainStructure;
   // before/after は undo に積むときだけ要る（pushUndo=false の経路では誰も読まないので取らない）。
-  const { changed, before, after } = await recomputeStructuralForGraph(g, project, mainStructure, undefined, { captureSnapshots: pushUndo, ctx });
-  if (changed && pushUndo) {
-    undoManager.push(
-      () => restoreGraph(g, before),
-      () => restoreGraph(g, after),
-    );
-  }
-  return { changed };
+  return withToastScope(undefined, async () => {
+    const { changed, before, after } = noteStairCrossing(
+      await recomputeStructuralForGraph(g, project, mainStructure, undefined, { captureSnapshots: pushUndo, ctx }));
+    if (changed && pushUndo) {
+      undoManager.push(
+        () => restoreGraph(g, before),
+        () => restoreGraph(g, after),
+      );
+    }
+    return { changed };
+  });
 }
 
 // ---- 構造同期オーケストレータ（structural/structuralSync.js）の recompute 実装 ----
@@ -532,7 +596,7 @@ export async function recomputeActiveStructural(project, pushUndo = true, ctx = 
 // 既にwrapSave済みのsaveを仕込む経路）のときは無視される（呼び出し側の責任）。
 export async function recomputeForStructuralSync(project, scope, ctxArg = undefined, { save } = {}) {
   if (scope === 'active') {
-    await recomputeActiveStructural(project, false);
+    await recomputeActiveStructural(project, false); // 内部で通知スコープを開く
     return;
   }
   // 'activeAndAbove' は 'all' と同じ処理のまま恒久化している（上記コメント。段階(b)・R1裁定）。
@@ -579,7 +643,7 @@ async function recomputeInactiveStructural(plane, project, ctx = undefined) {
   const temp = await peekVia(ctx, plane, project.structGraph);
   const mainStructure = temp.structureOverride ?? project.structuralInfo.mainStructure;
   const isWallRuns = rulesFor(effectiveStructure(temp, project)).beamPlacement === 'wallRuns';
-  const { changed, originsChanged } = await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx });
+  const { changed, originsChanged } = noteStairCrossing(await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx }));
   // QA裁定（Major-1・2026-09-27）: 由来だけが変わった（changed=false・originsChanged=true）非アクティブ階も
   // 保存する——由来は毎パス再計算して書き戻す設計（woodAutoFill.js）のため、訪れていない階の由来だけが
   // 更新されて保存されない穴があった。戻り値のchanged自体・収束ループの継続判定（呼び出し側の
@@ -679,7 +743,7 @@ async function reflectRoofPlane(project, ctx = undefined) {
     ? (topPlane.id === project.activePlaneId ? project.activeGraph : await peekVia(ctx, topPlane, project.structGraph))
     : null;
   const mainStructure = topGraph ? (topGraph.structureOverride ?? project.structuralInfo.mainStructure) : project.structuralInfo.mainStructure;
-  const { changed, originsChanged } = await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx });
+  const { changed, originsChanged } = noteStairCrossing(await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx }));
   // QA裁定（Major-1・2026-09-27）: recomputeInactiveStructuralと同じ保存条件の拡張（由来だけの変化も保存）。
   // 屋根はautoFillStructuralGridの!isRoofガードで柱を生成しないためoriginsChangedは常にfalse——
   // 対称性のために残す（将来屋根に柱を立てるときのため。QA再差し戻し2026-09-27）。

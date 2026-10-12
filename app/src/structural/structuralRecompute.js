@@ -86,7 +86,9 @@ import { conformToLedger } from './memberGroups.js';
  *   ——本関数は受け取って下へ渡すだけで、自分では生成しない。ctxがあり、options.wallSourceCache・
  *   options.footprintCacheをどちらも省略した場合は、上記のとおりctxのキャッシュも併せて使う
  *   （ステップB-6）。
- * @returns {Promise<{changed: boolean, originsChanged: boolean, before: Uint8Array|null, after: Uint8Array|null}>}
+ * @returns {Promise<{changed: boolean, originsChanged: boolean, before: Uint8Array|null, after: Uint8Array|null, removedStairCrossingAxes: number}>}
+ *   removedStairCrossingAxes: 階段を横切る孤児の梁芯を撤去した本数（stairCrossingBeamAxes.js）。呼び出し側
+ *   （structuralOrchestration.js）が通知トーストの要否に使う。
  *   before/after はcaptureSnapshots:true時のみ非null（undo用スナップショット）。changed=false かつ
  *   captureSnapshots:trueのとき after===before（再シリアライズしない）。
  *   originsChanged（QA裁定Major-1・2026-09-27）: 既存柱の由来集合（woodColumnOrigins）・梁成の表示用の値
@@ -219,7 +221,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     ? withGraphReadScope(targetGraph, () => buildRoofColumnFilter(targetGraph)) : null;
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams, removedStairCrossingAxes } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
@@ -276,6 +278,8 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     // m-5是正・QA指摘: 開口由来梁芯の再ラベル（→WALL）・extent張り直し（reconcileOpeningBeamAxes）も
     // changedに乗せる——undoスナップショット（captureSnapshots）に反映されるべき実質的な変更のため。
     || changedOpeningBeamAxes.length > 0
+    // 階段を横切る孤児の梁芯の撤去（依存の柱・梁が道連れで消えるため実質的な変更。再アンカーは次の sweep）。
+    || removedStairCrossingAxes.length > 0
     || matFoundation.created.length > 0 || matFoundation.removed.length > 0
     || convertedColumns.length > 0 || convertedBeams.length > 0 || convertedFootings.length > 0 || conformedSections.length > 0
     || removedByClass.length > 0
@@ -292,5 +296,5 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // （表示専用で、収束・undoには使わない。非アクティブ階では保存要否だけに効く）。
   const originsChanged = originsUpdatedColumns.length > 0 || depthMarksChanged;
   const after = captureSnapshots ? (changed ? serializeGraph(targetGraph) : before) : null;
-  return { changed, originsChanged, before, after };
+  return { changed, originsChanged, before, after, removedStairCrossingAxes: removedStairCrossingAxes.length };
 }

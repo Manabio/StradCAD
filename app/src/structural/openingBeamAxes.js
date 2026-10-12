@@ -12,7 +12,7 @@ import { findSectionEntry } from './sectionCatalog.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import {
   findBeamAnchorCL, wallBeamAxisExcludeKey, wallBackingCenterCoord, wallBeamSourcesFor,
-  isProtectedWallBeamAxis,
+  unprotectedAmong,
 } from './wallBeamAxes.js';
 import { planOpeningEdgeBeams } from './openingEdgePlan.js';
 import { floorOpeningEdges } from '../finish/stair/slabOpening.js';
@@ -569,22 +569,7 @@ export function reconcileOpeningBeamAxes(graph, openingSources, wallSources) {
   // その参照元自身が（保護済みユーザーデータ等で）生き残ると決まった時点からは、その参照は
   // 「生存者からの参照」として扱う——通し辺を短辺が参照し、短辺自身が非auto小梁等で保護されて
   // 残る場合、通し辺もその参照によって保護される（1回の判定では終わらないため反復する）。
-  const ignoreRefsFrom = new Set([...undecided.map(cl => cl.id)]);
-  const survivedIds = new Set();
-  let stable = false;
-  while (!stable) {
-    stable = true;
-    for (const cl of undecided) {
-      if (survivedIds.has(cl.id)) continue;
-      if (isProtectedWallBeamAxis(graph, cl, { ignoreRefsFrom })) {
-        survivedIds.add(cl.id);
-        ignoreRefsFrom.delete(cl.id); // 以後、生存者からの参照として数える
-        stable = false;
-      }
-    }
-  }
-
-  const toRemove = undecided.filter(cl => !survivedIds.has(cl.id));
+  const toRemove = unprotectedAmong(graph, undecided);
   for (const cl of toRemove) graph.removeCenterLine(cl.id);
   return { removed: toRemove, relabeled, retargeted };
 }

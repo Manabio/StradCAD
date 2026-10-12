@@ -62,7 +62,7 @@ import { autoFillColumnAxisOffsets, autoFillBeamEccentricity, resolveLowestGraph
 import { buildExteriorSide } from './structural/wallGate.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
-import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors } from './structural/structuralOrchestration.js';
+import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, setStructuralToastHandler } from './structural/structuralOrchestration.js';
 import { structuralSync, OPENING_STRUCTURAL_SYNC } from './structural/structuralSync.js';
 import { refreshWallsAllFloors } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
@@ -884,6 +884,13 @@ const App = observer(() => {
     const t = setTimeout(() => setToast(null), 3500);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // 構造再計算の既定の通知先（onToast を受け取らない境界処理——仕上げ脱出・階追加・構造同期など——が
+  // 「階段を横切る梁を削除しました。」を出すため。structuralOrchestration.js withToastScope）。
+  useEffect(() => {
+    setStructuralToastHandler(msg => setToast({ msg, key: Date.now() }));
+    return () => setStructuralToastHandler(null);
+  }, []);
 
   useEffect(() => {
     const handler = (e) => {
