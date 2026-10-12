@@ -878,3 +878,21 @@ test('【失敗系】簡易probeCtx（cellAtがceilZを持たない）ではchOf
   };
   assert.equal(buildLayerStack(cut, 1000, probeCtx)[0].ceilZ, 2300);
 });
+
+// ---- E3b-3: 視線の先の部屋に天井の面が複数あるとき、手前の面が近側の天井より上で隠れても奥の低い面の ceilFace が選ばれる ----
+test('【手前の区画が近側の天井より上で隠れるとき奥の低い区画の ceilFace が選ばれる】近側 A の天井 3000・視線の先の B は手前 3500（隠れる）→奥 2200: ceilFace は 2 件（3500@50・2200@2050）で open 帯の farCeilZ は 2200', () => {
+  const g = makeGrid([0, 4000], [0, 4000, 6000, 8000]);
+  const roomA = g.interior([[0, 0]]); // 壁なし＝A と B の間は open
+  roomA.setOverride('ceilingHeight', '3000');
+  const roomB = g.interior([[0, 1], [0, 2]]);
+  roomB.setCeilingZones(createZone(g.graph, roomB, [g.cell(0, 1)], { heightMm: 3500, shape: 'flat', dims: [] }).zones);
+  roomB.setCeilingZones(createZone(g.graph, roomB, [g.cell(0, 2)], { heightMm: 2200, shape: 'flat', dims: [] }).zones);
+  const cut = frontCut(g.graph, { line: { isVertical: false, axisValue: 3950, lo: 0, hi: 4000 }, zRange: { loZ: 0, hiZ: 3000 }, bandRoomBounds: { x1: 0, x2: 4000, y1: 0, y2: 4000 } });
+  const probeCtx = makeProbeContext(cut.layers);
+  const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, 2000, probeCtx);
+  assert.deepEqual(hits.filter(h => h.kind === 'ceilFace' && h.room === roomB).map(h => [h.z0, h.distMm]), [[3500, 50], [2200, 2050]]);
+  const open = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ }).find(b => b.kind === 'open');
+  assert.ok(open, 'open 帯があるはず');
+  assert.equal(open.farCeilZ, 2200, '3500 は近側の天井 3000 以上＝対象外・奥の 2200 が選ばれる');
+  assert.equal(open.farCeilDepthMm, 2050);
+});

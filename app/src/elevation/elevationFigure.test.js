@@ -3196,3 +3196,17 @@ test('【失敗系】buildFaceFigure: floorProfile未指定・空配列は既存
     assert.deepEqual(withProfile, base, `floorProfile=${JSON.stringify(profile)}は現行出力と一致するはず`);
   }
 });
+
+// ---- E3b-3(e): 走り方向に傾いた遠側の斜線は、描いた両端の高さが注記の一点鎖線の突き出し基準に入る ----
+test('【注記の CH 範囲に遠側の斜線の hi 端が入る】近側 2400 の上に遠側 2900→3300 の破線なら、一点鎖線は 3300 より GRID_LINE_ABOVE_CH_MM 上まで。水平な遠側 2900 だけなら従来どおり（2400 基準）', () => {
+  const centersOf = prims => prims.filter(p => p.type === 'line' && p.dash === 'center' && p.x1 === p.x2);
+  const tilted = centersOf(buildFaceFigure(openSpansFace({ farCeilAbsMm: 2900, farCeilHiAbsMm: 3300 }), baseCtx({ ceilingHeight: 2400 })));
+  assert.ok(tilted.length > 0, '壁中心線の一点鎖線があるはず');
+  for (const l of tilted) assert.equal(l.y1, -3300 - GRID_LINE_ABOVE_CH_MM, `実際:${l.y1}`);
+  const horizontal = centersOf(buildFaceFigure(openSpansFace({ farCeilAbsMm: 2900 }), baseCtx({ ceilingHeight: 2400 })));
+  for (const l of horizontal) assert.equal(l.y1, -2400 - GRID_LINE_ABOVE_CH_MM, `水平な遠側は従来どおり。実際:${l.y1}`);
+  // 失敗系: 傾斜が近側の下に収まり線が描かれないなら（同じ面の傾斜で近側と一致）、一点鎖線は従来の基準のまま
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 3000 }];
+  const same = centersOf(buildFaceFigure(openSpansFace({ farCeilAbsMm: 2820, farCeilHiAbsMm: 3000 }), baseCtx({ ceilingHeight: 2400, floorSegments })));
+  for (const l of same) assert.equal(l.y1, -3000 - GRID_LINE_ABOVE_CH_MM, `近側の最高 3000 が基準のまま。実際:${l.y1}`);
+});

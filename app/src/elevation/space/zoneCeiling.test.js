@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { RoomFeature, StairType, Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import {
   zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChAlong, zoneCeilingChTopAt, zoneCeilingEdgesAlong, zoneCeilingFarEdge,
+  zoneCeilingDepthEdges, zoneCeilingRunRangeAt,
 } from './zoneCeiling.js';
 import { createZone } from '../../ceiling/ceilingZones.js';
 import { setRoomCeilingShape } from '../../ceiling/roomCeilingShape.js';
@@ -361,4 +362,59 @@ test('【歩く上限】奥へ続く同じ面の矩形が 64 を超える異常�
   assert.equal(zoneCeilingFarEdge(chain(65), g.graph, room, q), null);
   const r = zoneCeilingFarEdge(chain(40), g.graph, room, q);
   assert.equal(r.chLo, 3000, '40 矩形（y 0..4000）の奥 y=4000 で u=1');
+});
+
+// ---- E3b-3: 奥の端は走り範囲全体で探す／面の境界で割るための問い合わせ ----
+// L 字の面: 格子 x 0/2000/4000 × y 0/1000/2000 の 3 セル（(0,0)(1,0)(0,1)。(1,1) が欠ける）に 1 つの slope[600,+y]（底 2400・面の bbox は y0..2000）。
+function lShapedSlope() {
+  const g = makeGrid([0, 2000, 4000], [0, 1000, 2000]);
+  const room = g.interior([[0, 0], [1, 0], [0, 1]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0), g.cell(1, 0), g.cell(0, 1)], slope(2400, 600, 90)).zones);
+  return { ...g, room, field: zoneCeilingFieldOf(g.graph) };
+}
+
+test('【奥の端は走り範囲全体を覆う面だけたどる】L 字の面: 中央 1 行（x<2000）なら y=2000 まで続く 3000、範囲の端（x 3000）が面から外れる範囲 [500,3500] は y=1000 で止まる 2700', () => {
+  const { field, graph, room } = lShapedSlope();
+  const base = { isVertical: false, startCoord: 0, dir: +1 };
+  assert.deepEqual(zoneCeilingFarEdge(field, graph, room, { ...base, runLo: 500, runHi: 1500 }), { chLo: 3000, chHi: 3000, alongRun: false }, '範囲全体が x<2000＝面が y=2000 まで続く');
+  assert.deepEqual(zoneCeilingFarEdge(field, graph, room, { ...base, runLo: 500, runHi: 3500 }), { chLo: 2700, chHi: 2700, alongRun: false }, '範囲の右半分は y=1000 で面が途切れる＝中央 1 行（x=2000）が続いても止まる');
+  assert.deepEqual(zoneCeilingFarEdge(field, graph, room, { ...base, runLo: 3000, runHi: 3000 }), { chLo: 2700, chHi: 2700, alongRun: false }, '点の問い合わせ（lo==hi）は点を含む矩形だけで判断する');
+});
+
+test('【壁の探査幅は片の走り範囲全体】奥の端 y=1000 の壁が範囲 [0,6000] の右端（x4000..6000）にしか無くても仕上げ面（1000−57.5）で評価する＝2682.75。範囲の中央 ±10mm だけ見れば壁なし 2700', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1000, 2000]);
+  const room = g.interior([[0, 0], [1, 0], [2, 0], [0, 1], [1, 1]], { walls: true }); // 右 2 列は y0..1000 だけ＝y=1000 に右端の壁
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0), g.cell(1, 0), g.cell(2, 0), g.cell(0, 1), g.cell(1, 1)], slope(2400, 600, 90)).zones);
+  const field = zoneCeilingFieldOf(g.graph);
+  const r = zoneCeilingFarEdge(field, g.graph, room, { isVertical: false, runLo: 0, runHi: 6000, startCoord: 0, dir: +1 });
+  assert.ok(r && Math.abs(r.chLo - 2682.75) < 1e-9, JSON.stringify(r));
+  const narrow = zoneCeilingFarEdge(field, g.graph, room, { isVertical: false, runLo: 2990, runHi: 3010, startCoord: 0, dir: +1 });
+  assert.ok(narrow && Math.abs(narrow.chLo - 2982.75) < 1e-9, `狭い範囲（面が y=2000 まで続く）はその奥の壁 y=2000: ${JSON.stringify(narrow)}`);
+});
+
+test('【zoneCeilingDepthEdges】走り座標を含む矩形の奥行き方向の辺（形状を問わない）を昇順・重複なしで返す。範囲の外・走りが外れる矩形・field null は対象外', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  const room = g.interior([[0, 0], [0, 1], [0, 2]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], flat(3000)).zones);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 1)], { heightMm: 2800, shape: 'arc', dims: [400, 90] }).zones);
+  const field = zoneCeilingFieldOf(g.graph);
+  assert.deepEqual(zoneCeilingDepthEdges(field, { isVertical: false, runCoord: 1000, lo: 0, hi: 6000 }), [2000, 4000], '平面・円弧・残りの面の辺（端の 0/6000 は厳密な内側ではない）');
+  assert.deepEqual(zoneCeilingDepthEdges(field, { isVertical: false, runCoord: 1000, lo: 2000, hi: 4000 }), [], '範囲の端ちょうどは含めない');
+  assert.deepEqual(zoneCeilingDepthEdges(field, { isVertical: false, runCoord: 9000, lo: 0, hi: 6000 }), [], '走り座標が矩形の外');
+  assert.deepEqual(zoneCeilingDepthEdges(null, { isVertical: false, runCoord: 1000, lo: 0, hi: 6000 }), []);
+});
+
+test('【zoneCeilingRunRangeAt】深さ depthCoord で runCoord を含む面の走り範囲へ絞る（形状を問わない）。矩形の外・field null は [lo,hi] のまま', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 2000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(1, 0)], { heightMm: 2800, shape: 'dome', dims: [500] }).zones);
+  const other = g.interior([[2, 0]]); // 使える面（平面の区画）を 1 つ置く＝field が null にならない
+  other.setCeilingZones(createZone(g.graph, other, [g.cell(2, 0)], flat(3000)).zones);
+  const field = zoneCeilingFieldOf(g.graph);
+  assert.ok(field, '前提: field あり');
+  const q = { isVertical: false, depthCoord: 1000, runCoord: 3000, lo: 0, hi: 4000 };
+  assert.deepEqual(zoneCeilingRunRangeAt(field, q), { lo: 2000, hi: 4000 }, 'ドームの面 x2000..4000 に絞る（x=2000 の辺で左を切る）');
+  assert.deepEqual(zoneCeilingRunRangeAt(field, { ...q, runCoord: 1000 }), { lo: 0, hi: 2000 }, '残りの面 x0..2000');
+  assert.deepEqual(zoneCeilingRunRangeAt(field, { ...q, depthCoord: 9000 }), { lo: 0, hi: 4000 }, '深さが全矩形の外');
+  assert.deepEqual(zoneCeilingRunRangeAt(null, q), { lo: 0, hi: 4000 });
 });

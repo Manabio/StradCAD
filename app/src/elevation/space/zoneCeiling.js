@@ -22,6 +22,7 @@ import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 
 const FIELD_KEY = { name: 'zoneCeilingField' }; // scopedValue のキー（モジュール内で固定）
 const FAR_EDGE_MAX_STEPS = 64; // zoneCeilingFarEdge が奥の端を探して進む矩形数の上限（異常な格子の安全弁）
+const COVER_EPS_MM = 0.01;     // 走り範囲を矩形が覆うかの許容差
 const WALL_SPAN_MIN_MM = 20;   // 奥の端の壁を探す走り幅の下限（innerWallFaceAt の有意な重なり 5mm を点の問い合わせでも満たす）
 
 const isUsableSurface = s => s.zoneId != null && s.shape === 'flat' && Number.isFinite(s.chMm);
@@ -121,6 +122,8 @@ export function zoneCeilingChTopAt(field, room, x, y) {
  * - 走り方向の傾斜: chLo/chHi＝奥の端での runLo/runHi の高さ（alongRun true）。体裁は斜線 1 本・エンジンは片を積まない（呼び元が決める）。
  * 面なし・他の部屋・区画なしの平面・円弧・ドーム・端が見つからない（歩く上限 FAR_EDGE_MAX_STEPS）・runLo/runHi の両端が別の面に落ちる片は null
  * （呼び元は部屋の CH へ落とす）。isVertical の面は走り方向が y・奥行きが x（そうでなければ逆）。
+ * 奥の端の探索は**走り範囲 [runLo,runHi] 全体**を同じ面の矩形が覆う間だけ進む（中央の 1 行だけで進まない）。壁を探す幅も同じ走り範囲
+ * （lo==hi の点の問い合わせは最低 WALL_SPAN_MIN_MM）。
  * @param {object|null} field
  * @param {object|null} graph
  * @param {object|null} room
@@ -140,15 +143,36 @@ export function zoneCeilingFarEdge(field, graph, room, { isVertical, runLo, runH
   const lo = Math.min(runLo, runHi), hi = Math.max(runLo, runHi);
   if (field.surfaceAt(...pt(startCoord + dir * PROBE_EPS_MM, lo + e)) !== s || field.surfaceAt(...pt(startCoord + dir * PROBE_EPS_MM, hi - e)) !== s) return null;
 
-  // 奥の端: 点を含む矩形の奥側の辺へ進み、その先が同じ面の別の矩形に続く間だけ進む
+  // 奥の端: **走り範囲 [lo,hi] 全体**を同じ面の矩形が覆っている間だけ進む（L 字など、中央の 1 行は続いても範囲の端が面から外れる所で止める）。
+  // 各深さで、走り範囲に掛かる矩形の奥側の辺のうち最も手前のものまで進み、その先も範囲全体が同じ面で覆われるなら続ける。
+  const rectDepthRange = q => (isVertical ? [q.x1, q.x2] : [q.y1, q.y2]);
+  const rectRunRange = q => (isVertical ? [q.y1, q.y2] : [q.x1, q.x2]);
+  const rectsAt = depth => s.rects.filter(q => {
+    const [d1, d2] = rectDepthRange(q), [r1, r2] = rectRunRange(q);
+    if (!(depth >= d1 && depth <= d2)) return false;
+    // 走り範囲に掛かる矩形（点の問い合わせ lo==hi は点を含むもの。辺が接するだけの隣の矩形は含めない）
+    return hi - lo > COVER_EPS_MM ? Math.min(r2, hi) - Math.max(r1, lo) > COVER_EPS_MM : (r1 <= lo + COVER_EPS_MM && r2 >= hi - COVER_EPS_MM);
+  });
+  const coversRun = rects => {
+    let cursor = lo, touched = false;
+    for (const [r1, r2] of rects.map(rectRunRange).sort((a, b) => a[0] - b[0])) {
+      if (r1 > cursor + COVER_EPS_MM) break;
+      if (r2 < cursor - COVER_EPS_MM) continue;
+      touched = true;
+      cursor = Math.max(cursor, r2);
+    }
+    return touched && cursor >= hi - COVER_EPS_MM;
+  };
   let depth = startCoord + dir * PROBE_EPS_MM, farCoord = null;
   for (let i = 0; i < FAR_EDGE_MAX_STEPS; i++) {
-    const [px, py] = pt(depth, runMid);
-    const r = s.rects.find(q => px >= q.x1 && px <= q.x2 && py >= q.y1 && py <= q.y2);
-    if (!r) return null;
-    const edge = isVertical ? (dir > 0 ? r.x2 : r.x1) : (dir > 0 ? r.y2 : r.y1);
+    const rects = rectsAt(depth);
+    if (!coversRun(rects)) return null; // 入口から走り範囲を覆えない（防御。2 歩目以降は直前に確かめ済み）
+    const edge = rects.reduce((m, q) => {
+      const e = rectDepthRange(q)[dir > 0 ? 1 : 0];
+      return dir > 0 ? Math.min(m, e) : Math.max(m, e);
+    }, dir > 0 ? Infinity : -Infinity);
     const next = edge + dir * PROBE_EPS_MM;
-    if (field.surfaceAt(...pt(next, runMid)) !== s) { farCoord = edge; break; }
+    if (!coversRun(rectsAt(next))) { farCoord = edge; break; }
     depth = next;
   }
   if (farCoord == null) return null;
@@ -198,4 +222,52 @@ export function zoneCeilingEdgesAlong(field, { isVertical, depthCoord, lo, hi, i
   const out = [];
   for (const v of vals) if (!out.length || v - out[out.length - 1] > GAP_EPS) out.push(v);
   return out;
+}
+
+/**
+ * 走り方向の座標 runCoord を含む矩形（**どの形状の面でも**。部屋ごとの残りの面も）の、奥行き方向の辺の座標（昇順・重複除去）のうち (lo,hi) の厳密に内側にあるもの。
+ * 断面エンジンの cellsAlong が「同じ部屋でも天井の面が変わる所」で視線方向の区間を割るのに使う（天井芯で割れた天井セルは仕上げのセルの中にもある）。
+ * isVertical の面は走り方向が y・奥行きが x（そうでなければ逆）。区画なし（field null）は []。
+ * @param {object|null} field
+ * @param {{isVertical:boolean, runCoord:number, lo:number, hi:number}} q
+ * @returns {number[]}
+ */
+export function zoneCeilingDepthEdges(field, { isVertical, runCoord, lo, hi }) {
+  if (!field) return [];
+  const vals = [];
+  for (const s of field.surfaces) {
+    for (const r of s.rects) {
+      const [run1, run2, d1, d2] = isVertical ? [r.y1, r.y2, r.x1, r.x2] : [r.x1, r.x2, r.y1, r.y2];
+      if (!(runCoord >= run1 && runCoord <= run2)) continue;
+      for (const e of [d1, d2]) if (e > lo && e < hi) vals.push(e);
+    }
+  }
+  vals.sort((a, b) => a - b);
+  const out = [];
+  for (const v of vals) if (!out.length || v - out[out.length - 1] > GAP_EPS) out.push(v);
+  return out;
+}
+
+/**
+ * 奥行き座標 depthCoord で、走り座標 runCoord を含む「天井セルの走り範囲」を [lo,hi]（仕上げのセルの走り範囲）の中へ絞る。
+ * 継ぎ目は矩形の走り方向の辺（形状を問わない全ての面）で、体裁の刻み（collectRunBreaks＋区画の辺）と同じ継ぎ目。区画なし（field null）は [lo,hi] のまま。
+ * 断面エンジンの cellsAlong が zoneCeilingFarEdge へ渡す片の走り範囲を決める（片が別の面にまたがらないようにする）。
+ * @param {object|null} field
+ * @param {{isVertical:boolean, depthCoord:number, runCoord:number, lo:number, hi:number}} q
+ * @returns {{lo:number, hi:number}}
+ */
+export function zoneCeilingRunRangeAt(field, { isVertical, depthCoord, runCoord, lo, hi }) {
+  let outLo = lo, outHi = hi;
+  if (!field) return { lo: outLo, hi: outHi };
+  for (const s of field.surfaces) {
+    for (const r of s.rects) {
+      const [run1, run2, d1, d2] = isVertical ? [r.y1, r.y2, r.x1, r.x2] : [r.x1, r.x2, r.y1, r.y2];
+      if (!(depthCoord > d1 && depthCoord < d2)) continue;
+      for (const e of [run1, run2]) {
+        if (e <= runCoord && e > outLo) outLo = e;
+        if (e > runCoord && e < outHi) outHi = e;
+      }
+    }
+  }
+  return { lo: outLo, hi: outHi };
 }

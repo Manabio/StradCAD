@@ -8,7 +8,7 @@ import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { buildSpaceIndex } from './spaceModel.js';
 import { makeProbeContext } from '../section/sectionProbe.js';
 import { PROBE_EPS_MM } from '../elevationStyle.js';
-import { worldToCell } from '../../finish/gridCells.js';
+import { worldToCell, CEILING_CELL_GRID } from '../../finish/gridCells.js';
 import { makeGrid } from '../../plan/planTestFixtures.js';
 import { createZone } from '../../ceiling/ceilingZones.js';
 import { setRoomCeilingShape } from '../../ceiling/roomCeilingShape.js';
@@ -749,4 +749,102 @@ test('【失敗系】区画のある部屋の getFinishInfo が例外でも cell
   assert.equal(segs.length, 2);
   assert.equal(segs[1].room, far);
   assert.equal(segs[1].ceilZ, null);
+});
+
+// ---- E3b-3: cellsAlong は同じ部屋でも天井の面（区画・形状）が変わる所で割る。切断線 y=0・視線 +y ----
+const flatSpec = mm => ({ heightMm: mm, shape: 'flat', dims: [] });
+
+test('【cellsAlong は面が変わる所で割れる】視線の先の 1 部屋に区画 2 つ（手前 y2000..4000＝3000・奥 y4000..6000＝2300）→ 同じ部屋でも 2 片（depthMm 2000・4000）', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  const near = g.interior([[0, 0]]);
+  const far = g.interior([[0, 1], [0, 2]]);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], flatSpec(3000)).zones);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 2)], flatSpec(2300)).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.deepEqual(segs, [
+    { room: near, floorZ: 0, ceilZ: CH, depthMm: 0 },
+    { room: far, floorZ: 0, ceilZ: 3000, depthMm: 2000 },
+    { room: far, floorZ: 0, ceilZ: 2300, depthMm: 4000 },
+  ]);
+});
+
+test('【仕上げのセルの中の面の境界でも割れる】天井芯 y=3000 で割れた天井セル（仕上げのセルは y2000..6000 の 1 つ）の区画 3000／2300 → 片の depthMm は 2000 と 3000', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 6000]);
+  const near = g.interior([[0, 0]]);
+  const far = g.interior([[0, 1]]);
+  g.graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.CEILING });
+  const cellAt = y => worldToCell(2000, y, g.graph, CEILING_CELL_GRID).key;
+  far.setCeilingZones(createZone(g.graph, far, [cellAt(2500)], flatSpec(3000)).zones);
+  far.setCeilingZones(createZone(g.graph, far, [cellAt(4500)], flatSpec(2300)).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.deepEqual(segs.map(s => [s.room, s.ceilZ, s.depthMm]), [[near, CH, 0], [far, 3000, 2000], [far, 2300, 3000]]);
+});
+
+test('【同じ面が続くなら畳む】2 セルにまたがる 1 つの区画（同じ面）・区画の無い部屋の 2 セルは、それぞれ 1 片（面の同一性で割る＝高さが同じでも別の面なら割れる側の対）', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1], [0, 2]]);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1), g.cell(0, 2)], flatSpec(2700)).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.deepEqual(segs.map(s => [s.room === far, s.ceilZ, s.depthMm]), [[false, CH, 0], [true, 2700, 2000]], '同じ区画＝1 片');
+  // 区画の無い部屋（field は他の部屋の区画であるので非 null）の 2 セルも 1 片のまま
+  const h = makeGrid([0, 4000, 8000], [0, 2000, 4000, 6000]);
+  h.interior([[0, 0]]);
+  const plain = h.interior([[0, 1], [0, 2]]);
+  const other = h.interior([[1, 0]]);
+  other.setCeilingZones(createZone(h.graph, other, [h.cell(1, 0)], flatSpec(3000)).zones);
+  const layerH = { graph: h.graph, floorZMm: 0, role: 'self' };
+  const segsH = buildSpaceIndex([layerH]).cellsAlong(layerH, faceCut(0), 2000, 0, 10000);
+  assert.deepEqual(segsH.map(s => [s.room === plain, s.ceilZ, s.depthMm]), [[false, CH, 0], [true, CH, 2000]], '区画なしの部屋は 2 セルでも 1 片');
+});
+
+test('【走り方向の片は null・奥行き方向は奥の端】片ごと: 手前 y2000..4000 が走り方向（x）の傾斜＝ceilZ null、奥 y4000..6000 が奥行き方向（+y）の傾斜 底 2400・ライズ 600＝奥の端 y=6000 の 3000', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1], [0, 2]]);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 2400, shape: 'slope', dims: [600, 0] }).zones);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 2)], { heightMm: 2400, shape: 'slope', dims: [600, 90] }).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.deepEqual(segs.map(s => [s.ceilZ, s.depthMm]), [[CH, 0], [null, 2000], [3000, 4000]]);
+});
+
+test('【失敗系・getFinishInfo 例外】区画のある部屋の getFinishInfo が例外だと天井の面の場が作れず区画なし扱い＝面では割れず、落ちずに ceilZ null の 1 片で積む（床の線は出る）', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1], [0, 2]]);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], flatSpec(3000)).zones);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 2)], flatSpec(2300)).zones);
+  far.getFinishInfo = () => { throw new Error('boom'); };
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.deepEqual(segs.map(s => [s.room === far, s.floorZ, s.ceilZ, s.depthMm]), [[false, 0, CH, 0], [true, 0, null, 2000]]);
+});
+
+test('【失敗系・toDepthMm が面の境界より手前】上限 3000 で打ち切ると 2 つ目の片は出ない（境界より奥は探さない）', () => {
+  const g = makeGrid([0, 4000], [0, 2000, 4000, 6000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1], [0, 2]]);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], flatSpec(3000)).zones);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 2)], flatSpec(2300)).zones);
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 3000);
+  assert.deepEqual(segs.map(s => [s.ceilZ, s.depthMm]), [[CH, 0], [3000, 2000]]);
+});
+
+test('【cellsAlong は片の走り範囲で奥の壁を探す】奥の端 y=4000 の壁が隣（x4000..8000）にしか無く出隅だけ片（x0..4000）に掛かっても、列 x=2000 の ceilZ は仕上げ面の値（芯の値 3000 ではない）', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 2000, 4000, 6000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1], [0, 2]]);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 2400, shape: 'slope', dims: [600, 90] }).zones);
+  g.interior([[1, 1]], { walls: true }); // 隣の部屋: 奥の端 y=4000 の壁（仕上げ面は −y 側）は x4000..8000 にだけある
+  const endWall = g.graph.walls.find(w => !w.isVertical && w.axisCL.value === 4000);
+  endWall.startOffset = -72.5; // 出隅の 72.5mm だけ x<4000 へ入れる（片 x0..4000 には掛かるが列 x=2000 の ±10mm には掛からない）
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs[1].room, far);
+  assert.ok(Math.abs(segs[1].ceilZ - 2982.75) < 1e-6, `ceilZ ${segs[1].ceilZ}`);
 });

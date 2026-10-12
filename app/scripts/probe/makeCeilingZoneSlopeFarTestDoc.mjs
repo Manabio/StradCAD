@@ -4,6 +4,9 @@
 //       親の面 C2（y=−3640・inward −1）の開放スパンの先に子がある。**奥行き方向（y）の傾斜**で、奥（y=0 の壁）へ向かって下がる向きを選ぶ。
 //   (B) 2階 収納（予備室の子。区画 2900 の平面）→ 傾斜 [300, dirB]
 //       親（予備室）の面 C（y=−9884・inward −1）の開放スパンの先に子がある。**走り方向（x）の傾斜**（遠側の天井線が斜線 1 本になる経路）。
+//   (C) 1階 売場の西（売場上段の西 2 セル x0..3640 × y−7280..−3640 の部分指定の子）に天井芯 x=3200 と**平面の区画を視線方向に 2 つ**: 手前(x3200..3640) 3000・奥(x0..3200) 2300。
+//       親（売場。CH 2400）の面 D1（x=3640・inward 1）の開放スパンの先。手前 3000 は近側の天井より上で隠れ、奥 2300 は見える（E3b-3: cellsAlong が面で割れるか。
+//       面の境界は仕上げのセルの中・壁の仕上げ面から 382.5mm 奥＝見えがかりの奥行き上限 800mm 以内）。
 // dirA/dirB の選び方: 4 方向を総当たりし、親の面から見て「奥行き方向か走り方向か」と「奥の端が手前の端より低いか」を面の幾何から求めて表で出す。
 //   dirA＝奥行き方向（勾配の軸が面の奥行きの軸）かつ奥の端が低い向き、dirB＝走り方向（勾配の軸が面の走りの軸）の最初の向き。
 // 区画の書換えは本番と同じ ceiling/ceilingZones.js updateZoneSpec。
@@ -18,9 +21,10 @@ import { runInAction } from 'mobx';
 import { loadDocument } from './loadDoc.mjs';
 import { serializeGraph, serializeStructCLs, serializePlanes, restoreGraph, restoreStructCLs, decodePlanes } from '../../src/graphSnapshot.js';
 import { buildDocumentJson, parseDocumentEnvelope } from '../../src/storage/documentFile.js';
-import { Project, RoomFeature, planCutHeightMmOf, ceilingCutHeightMmOf } from '../../src/core.js';
-import { getAllCells, roomBounds } from '../../src/finish/gridCells.js';
-import { updateZoneSpec } from '../../src/ceiling/ceilingZones.js';
+import { Project, RoomFeature, CenterLineType, Discipline, planCutHeightMmOf, ceilingCutHeightMmOf } from '../../src/core.js';
+import { getAllCells, roomBounds, refreshCells, worldToCell, CEILING_CELL_GRID } from '../../src/finish/gridCells.js';
+import { updateZoneSpec, createZone } from '../../src/ceiling/ceilingZones.js';
+import { roomCeilingHeight } from '../../src/finish/roomMetrics.js';
 import { roomCeilingShapeOf } from '../../src/ceiling/roomCeilingShape.js';
 import { buildCeilingHeightField } from '../../src/ceiling/ceilingHeightField.js';
 import { ceilingShapeSolidZ } from '../../src/ceiling/ceilingShape.js';
@@ -159,6 +163,26 @@ function facesSeeingChild(proj, floorName, parentName, childName) {
   });
   return { found, childBounds: cb };
 }
+// 親の面のうち、開放スパンの先（farの探査点）が矩形 rect に入るもの
+function facesSeeingRect(proj, floorName, parentName, rect) {
+  const g = proj.graphMap.get(proj.planes.find(p => p.name === floorName).id);
+  const parent = g.rooms.find(r => r.name === parentName);
+  const found = [];
+  withGraphReadScope(g, () => {
+    for (const f of composeRoomFaces(parent, g)) {
+      for (const s of f.spans ?? []) {
+        if (s.kind !== 'open') continue;
+        const mid = f.originWorld + f.dirSign * (s.loX + s.hiX) / 2;
+        const far = f.axisCL.value - f.inward * PROBE_EPS_MM;
+        const [x, y] = f.isVertical ? [far, mid] : [mid, far];
+        if (x > rect.x1 && x < rect.x2 && y > rect.y1 && y < rect.y2) found.push({ face: f, span: s });
+      }
+    }
+  });
+  return found;
+}
+const flat = mm => ({ heightMm: mm, shape: 'flat', dims: [] });
+const chOf = (g, r) => roomCeilingHeight(g, r).mm;
 const DIR_VEC = { 0: [1, 0], 90: [0, 1], 180: [-1, 0], 270: [0, -1] };
 const RISE = 300, A_BASE = 2700, B_BASE = 2900;
 // 面から見た 4 方向の表（勾配の軸が奥行きか走りか・奥の端と手前の端の高さ。baseZ は区画の高さ）
@@ -216,6 +240,53 @@ setSlope(g2, shuno, B_BASE, dirB);
 console.log(`(A) 1階 売場の一部 の区画 ${A_BASE} → 傾斜 [${RISE}, ${dirA}]`);
 console.log(`(B) 2階 収納 の区画 ${B_BASE} → 傾斜 [${RISE}, ${dirB}]（親=${yobi.name}、売場=${uriba.name}）`);
 
+// (C) 1階 売場の上段（y−7280..−3640）の西の 2 セル [0,1820]・[1820,3640] を部分指定の子「売場の西」にして、視線方向（−x。親の面 D1＝x3640・inward 1）に
+//     平面の区画が 2 つ並ぶようにする: 手前（x3200..3640）3000・奥（x0..3200＝天井セル 2 つ）2300。親（売場）の CH は 2400＝手前の 3000 は近側の天井より上で隠れ、奥の 2300 は見える。
+//     面の境界は仕上げのセル（x1820..3640）の**中**（天井芯 x=3200）にある＝cellsAlong が仕上げのセルの中でも面で割れるか、同じ面が 2 セルに続くとき 1 片に畳むか、の検出力。
+//     境界は壁の仕上げ面から 382.5mm 奥（見えがかりの奥行き上限 800mm 以内＝奥の 2300 がアキの上端に効く）。
+const C_NEAR = 3000, C_FAR = 2300, C_CL_X = 3200;
+const cCellKeyOf = (x1, x2) => [...refreshCells(uriba.cells, g1)].find(k => { // 保存済みのセルは粗い分割のことがある＝現在の格子へ展開した key を使う
+  const b = roomBounds(new Set([k]), g1);
+  return b.x1 === x1 && b.x2 === x2 && b.y1 === -7280 && b.y2 === -3640;
+});
+const cLeftKey = cCellKeyOf(0, 1820), cRightKey = cCellKeyOf(1820, 3640);
+if (!cLeftKey || !cRightKey) fail('1階 売場に x0..1820・x1820..3640 × y−7280..−3640 のセルが無い');
+if (chOf(g1, uriba) !== 2400) fail(`売場の CH が 2400 でない（${chOf(g1, uriba)}）。(C) の前提（手前 3000 は隠れ・奥 2300 は見える）が崩れる`);
+const gridAt = (list, v) => {
+  const cl = list.find(c => Math.abs(c.effectiveValue - v) < 0.5);
+  if (!cl) fail(`通り芯 ${v} が見つからない`);
+  return cl;
+};
+let uribaWest = null;
+runInAction(() => {
+  uribaWest = g1.addRoom(new Set([cLeftKey, cRightKey]), '売場の西', undefined, new Set([uriba.id]));
+  uribaWest.setFloorLevel(g1.effectiveFloorLevel(uriba)); // 親と同じ床（段差なし）
+  const lo = gridAt(g1.gridYs, -7280), hi = gridAt(g1.gridYs, -3640);
+  g1.addCenterLine(CenterLineType.VERTICAL, C_CL_X, { // 天井芯（天伏だけの線。他モードに漏れない）
+    labeled: false, discipline: Discipline.CEILING,
+    extentLoRef: { clId: lo.id, offset: 0 }, extentHiRef: { clId: hi.id, offset: 0 },
+  });
+  const ceilCell = x => worldToCell(x, -5460, g1, CEILING_CELL_GRID);
+  const nearCell = ceilCell(3400), midCell = ceilCell(2500), farCell = ceilCell(910);
+  if (nearCell.x1 !== C_CL_X || nearCell.x2 !== 3640 || midCell.x1 !== 1820 || midCell.x2 !== C_CL_X || farCell.x1 !== 0 || farCell.x2 !== 1820) {
+    fail('売場の西の天井セルが期待どおりに割れていない（天井芯 x=3200 が天井セルの格子に効いていない）');
+  }
+  let zones = createZone(g1, uribaWest, [nearCell.key], flat(C_NEAR));
+  if (!zones.zoneId) fail('売場の西の手前の区画が作れない');
+  uribaWest.setCeilingZones(zones.zones);
+  zones = createZone(g1, uribaWest, [midCell.key, farCell.key], flat(C_FAR));
+  if (!zones.zoneId) fail('売場の西の奥の区画が作れない');
+  uribaWest.setCeilingZones(zones.zones);
+});
+console.log(`(C) 1階 売場の西（x0..3640 × y−7280..−3640）に天井芯 x=${C_CL_X} と平面の区画 手前(x${C_CL_X}..3640) ${C_NEAR}・奥(x0..${C_CL_X}) ${C_FAR}（親の CH ${chOf(g1, uriba)}）`);
+{
+  const seen = facesSeeingRect(faceProjectRegen, '1階', '売場', { x1: 0, y1: -7280, x2: 3640, y2: -3640 });
+  if (seen.length !== 1) fail(`(C) 親の面で売場の西を覗く開放スパンが ${seen.length} 件（1 件のはず）`);
+  const { face, span } = seen[0];
+  console.log(`  視線が面を横切る位置: 親の面 ${face.label}（axis ${face.axisCL.value}・${face.isVertical ? '縦' : '横'}・inward ${face.inward}）の開放スパン [${span.loX}, ${span.hiX}]`
+    + `。視線は軸 ${face.axisCL.value} から −x へ入り、手前の区画（深さ 0..${face.axisCL.value - C_CL_X}・${C_NEAR}）→ 奥の区画（深さ ${face.axisCL.value - C_CL_X}..${face.axisCL.value}・${C_FAR}）。壁の仕上げ面（+57.5）から測った面の境界は ${face.axisCL.value - C_CL_X - 57.5}mm`);
+}
+
 // ---- 2'. 他モードに漏れない ----
 const after = outputs(project);
 let leak = false;
@@ -257,6 +328,16 @@ for (const [label, g, room, base, dir] of [
     if (!ok) process.exitCode = 1;
   }
 }
+{ // (C) 売場の西: 手前 x1820..3640 = 3000・奥 x0..1820 = 2300（床段差なし）
+  const field = buildCeilingHeightField(g1);
+  const fl = g1.effectiveFloorLevel(uribaWest);
+  for (const [x, y, ch] of [[3400, -5460, C_NEAR], [2500, -5460, C_FAR], [910, -5460, C_FAR]]) {
+    const hit = field.zAt(x, y);
+    const ok = hit && Math.abs(hit.zMm - (ch + fl)) <= 0.01 && hit.roomId === uribaWest.id && hit.shape === 'flat';
+    console.log(`  ${ok ? 'OK' : 'NG'} 売場の西 (${x}, ${y}) zMm=${hit?.zMm} 期待 ${ch + fl}`);
+    if (!ok) process.exitCode = 1;
+  }
+}
 if (process.exitCode) fail('代表点の天井高が期待値と一致しない');
 
 // ---- 4. 編集後の往復テスト ----
@@ -266,6 +347,11 @@ for (const [pl, name, dir] of [[plane1, '売場の一部', dirA], [plane2, '収�
   const r = project2.graphMap.get(pl.id).rooms.find(x => x.name === name);
   const z = r?.ceilingZones[0];
   if (!z || z.shape !== 'slope' || z.dims.join(',') !== `${RISE},${dir}`) fail(`往復後に${name}の傾斜の区画が失われた`);
+}
+{
+  const w = project2.graphMap.get(plane1.id).rooms.find(x => x.name === '売場の西');
+  const hs = w ? w.ceilingZones.map(z => z.heightMm).sort().join(',') : null;
+  if (hs !== `${C_FAR},${C_NEAR}`) fail(`往復後に売場の西の区画が失われた（${hs}）`);
 }
 console.log('OK: 往復テスト一致（編集後）');
 

@@ -29,7 +29,9 @@ import { roomCeilingHeight } from '../../finish/roomMetrics.js';
 import { kneeDropRecordsOnAxis, kneeDropWallGeometry } from '../../finish/kneeDropWall.js';
 import { graphList } from '../../graphReadScope.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
-import { zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChTopAt, zoneCeilingFarEdge } from './zoneCeiling.js';
+import {
+  zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChTopAt, zoneCeilingFarEdge, zoneCeilingDepthEdges, zoneCeilingRunRangeAt,
+} from './zoneCeiling.js';
 
 // cellsAlongの無限ループ防御（格子異常時の安全弁）。実データの通常の列は
 // せいぜい数十セルなので、この上限に達すること自体が異常の兆候。
@@ -163,7 +165,8 @@ export function buildSpaceIndex(layers, opts = {}) {
    * `fromDepthMm`（切断面からの深さ。0＝切断面そのもの）〜`toDepthMm` の範囲を格子セル単位で
    * 進み、通過するセルを近い順に `{room, floorZ, ceilZ, depthMm, componentId}` で返す。
    *
-   * room が変わるセルの境界だけを区切りとする（同一Roomが続く限り1件に畳む）——格子の刻み自体は
+   * room が変わるセルの境界、および**同じ部屋でも天井の面（区画・形状）が変わる所**（E3b-3。仕上げのセルの中を含む）を区切りとする
+   * （同一Roomで同じ天井の面が続く限り1件に畳む）——格子の刻み自体は
    * 「別の空気ボリューム」の境界ではないため。**この畳み込み契約はテストで固定済み**
    * （`spaceModel.test.js`「視線方向に2セルまたぐ同一室」。畳み込みを外す変異で赤化することを
    * 確認済み——QA指摘①）。`viewSign` は`cut.viewSign`をそのまま使う
@@ -201,6 +204,7 @@ export function buildSpaceIndex(layers, opts = {}) {
     const graph = layer.graph;
 
     const out = [];
+    let lastSurface = null; // 直前に積んだ片の天井の面（同じ部屋・同じ面の続きは 1 件に畳む）
     let depth = fromDepthMm;
     let steps = 0;
     while (depth < toDepthMm - GAP_EPS && steps++ < CELLS_ALONG_MAX_STEPS) {
@@ -218,8 +222,30 @@ export function buildSpaceIndex(layers, opts = {}) {
       if (!(cellHi > depth + GAP_EPS)) break; // 前進しない異常値は打ち切り（防御）
 
       const room = cellToRoomFor(layer).get(cell.key) ?? null;
-      const last = out[out.length - 1];
-      if (!last || last.room !== room) {
+      const field = fieldFor(graph);
+      const cellEnd = Math.min(cellHi, toDepthMm);
+      // 片の切れ目: 部屋が変わる所に加え、**同じ部屋でも天井の面（区画・形状）が変わる所**で割る。
+      // 面の境界は仕上げのセルの中にもある（天井芯で割れた天井セル）ので、天井の面の矩形の奥行き方向の辺でも刻む。
+      const cuts = [depth];
+      if (room && field) {
+        const [wA, wB] = line.isVertical ? [cell.x1, cell.x2] : [cell.y1, cell.y2];
+        for (const w of zoneCeilingDepthEdges(field, { isVertical: line.isVertical, runCoord: worldMid, lo: Math.min(wA, wB), hi: Math.max(wA, wB) })) {
+          const d = (w - axisValue) * viewSign;
+          if (d > depth + GAP_EPS && d < cellEnd - GAP_EPS) cuts.push(d);
+        }
+        cuts.sort((a, b) => a - b);
+      }
+      cuts.push(cellEnd);
+      for (let k = 0; k + 1 < cuts.length; k++) {
+        const pieceStart = cuts[k], pieceMid = (cuts[k] + cuts[k + 1]) / 2;
+        // 面の同一性は片の中央で見る（room が無い・区画なしは null＝従来どおり部屋が変わる所だけで割れる）
+        const pieceDepthCoord = axisValue + viewSign * pieceMid;
+        const surface = room && field
+          ? (line.isVertical ? field.surfaceAt(pieceDepthCoord, worldMid) : field.surfaceAt(worldMid, pieceDepthCoord)) ?? null
+          : null;
+        const last = out[out.length - 1];
+        if (last && last.room === room && lastSurface === surface) continue;
+        lastSurface = surface;
         // floorZFor（graph.effectiveFloorLevel等の純算術）は例外を投げない。ceilZ側
         // （chAt→chFor→roomCeilingHeight→room.getFinishInfo()）だけが、部屋の異常データで例外に
         // なりうる（getFinishInfo()の実装は展開帯構築時に例外を投げる想定済み——
@@ -236,18 +262,26 @@ export function buildSpaceIndex(layers, opts = {}) {
           try {
             // 傾斜（区画・部屋形状）の面は奥の端の高さ（奥行き方向）。走り方向の傾斜は列ごとの水平線にできないので天井を諦める
             // （体裁が斜線 1 本で描く。上記の縮退と同じ「ceilFace を出さない」形）。平面の区画・区画なしは従来どおり。
-            const far = zoneCeilingFarEdge(fieldFor(graph), graph, room, {
-              isVertical: line.isVertical, runLo: worldMid, runHi: worldMid,
-              startCoord: axisValue + viewSign * depth, dir: viewSign,
+            // 走り範囲は**片＝天井セルの走り範囲（セルの走り範囲を天井の面の継ぎ目で絞ったもの）**（体裁の開放スパンの片と同じ考え方。壁の探査幅もこの範囲）。
+            const [cRunLo, cRunHi] = line.isVertical ? [cell.y1, cell.y2] : [cell.x1, cell.x2];
+            const run = zoneCeilingRunRangeAt(field, { isVertical: line.isVertical, depthCoord: pieceDepthCoord, runCoord: worldMid, lo: Math.min(cRunLo, cRunHi), hi: Math.max(cRunLo, cRunHi) });
+            const far = zoneCeilingFarEdge(field, graph, room, {
+              isVertical: line.isVertical, runLo: run.lo, runHi: run.hi,
+              startCoord: axisValue + viewSign * pieceStart, dir: viewSign,
             });
             if (far) ceilZ = far.alongRun ? null : floorZ + far.chLo;
-            else ceilZ = floorZ + chAt(room, graph, px, py); // その部屋の区間の最初のセルの探査点（区画は手前のものだけ拾う）
+            else {
+              // 片の探査点（片の手前端から PROBE_EPS_MM。片が短いときは中央）
+              const probeDepth = cuts.length > 2 ? Math.min(pieceStart + PROBE_EPS_MM, pieceMid) : pieceStart + PROBE_EPS_MM;
+              const probeOffset = viewSign * probeDepth;
+              ceilZ = floorZ + chAt(room, graph, line.isVertical ? axisValue + probeOffset : worldMid, line.isVertical ? worldMid : axisValue + probeOffset);
+            }
           } catch { /* この部屋の天井だけ諦める（上記コメント） */ }
         }
         // QA指摘④: componentIdは積まない（本函数のJSDoc参照）。
-        out.push({ room, floorZ, ceilZ, depthMm: Math.max(fromDepthMm, cellLo) });
+        out.push({ room, floorZ, ceilZ, depthMm: k === 0 ? Math.max(fromDepthMm, cellLo) : pieceStart });
       }
-      depth = Math.min(cellHi, toDepthMm);
+      depth = cellEnd;
     }
     return out;
   }

@@ -816,6 +816,7 @@ export function buildFaceFigure(face, ctx) {
   const ceilYOf = s => -ceilAbsOf(s);
   // QA H1: 実際に描いたbeyondCeilings(bc)破線の最大天井高さを控え、注記一点鎖線の突き出し
   // 基準に含める（ceilingProfile有りの面ではbeyondCeilingsを描かないため-Infinityのまま）。
+  // 走り方向に傾いた遠側の斜線（開放スパンの farCeilHiAbsMm）を描いたときの両端の高さもここへ入れる（E3b-3）。
   let maxDrawnBcCeilAbs = -Infinity;
   // WP-2: ctx.ceilingProfileが（2点以上）指定されていれば、天井の水平線群＋天井段差縦線の
   // 代わりに1本のpolyline（CUT）で描く——beyondCeilings（別エリアの天井の破線）の処理は
@@ -1120,6 +1121,8 @@ export function buildFaceFigure(face, ctx) {
       const fLo = fAt(s.loX), fHi = fAt(s.hiX);
       const dLo = fLo - nLo, dHi = fHi - nHi;
       if (Math.abs(dLo) > GAP_EPS_MM || Math.abs(dHi) > GAP_EPS_MM) {
+        // 走り方向に傾いた遠側の斜線は、描いた両端の高さを注記一点鎖線の突き出し基準へ入れる（hi 端が最上位の線になる面で線より下で止まらない）
+        if (s.farCeilHiAbsMm != null) maxDrawnBcCeilAbs = Math.max(maxDrawnBcCeilAbs, fLo, fHi);
         const dashedAbove = { weight: detailWeight, dash: 'dashed' };
         const solidBelow = { weight: silhouetteWeight };
         const seg = (xa, ya, xb, yb, above) => prims.push({ type: 'line', x1: xa, y1: -ya, x2: xb, y2: -yb, ...(above ? dashedAbove : solidBelow) });
