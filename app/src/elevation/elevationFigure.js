@@ -20,6 +20,7 @@ import { openingTagPartsOf, effectiveHeight } from '../openings/openingNumbering
 import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
 import { buildOpeningElevation, frameOnlyInnerRect } from '../openings/openingElevationFigure.js';
 import { translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
+import { ceilArcCircleOf, ceilArcZAt, ceilArcPrimitive } from './ceilArcSection.js';
 import { collectRow1SplitPoints } from './elevationDimSplit.js';
 import {
   drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm, drawnFloorProfileZAt,
@@ -802,8 +803,17 @@ export function buildFaceFigure(face, ctx) {
   // roomCeilingHeightが調整済み＝段差は明示CH指定時のみ現れる）を与える。
   // 傾斜の区間（chHiMm あり）は loX で chMm・hiX で chHiMm の線形。x が区間の外なら端の値で水平
   // （エンジンの ceilProfileEdgeAt と同じ）。chHiMm 無しは一定（現行同値）。
+  // 円弧・ドームの区間（ceilArc）は 3 点（開始・頭頂・終了）を通る円弧（ceilArcSection.js）。円が作れない（直線）ときは下の線形へ落ちる。
+  const arcCircles = new Map();
+  const arcCircleOf = s => {
+    if (!s.ceilArc) return null;
+    if (!arcCircles.has(s)) arcCircles.set(s, ceilArcCircleOf(s));
+    return arcCircles.get(s);
+  };
   const segCeilAbsAt = (s, x) => {
     if (s.chMm == null) return CH;
+    const c = arcCircleOf(s);
+    if (c) return ceilArcZAt(c, x);
     const lo = s.floorDeltaMm + s.chMm;
     if (s.chHiMm == null) return lo;
     const w = s.hiX - s.loX;
@@ -907,7 +917,13 @@ export function buildFaceFigure(face, ctx) {
       const seg = segs[r.startIdx];
       const sx1 = Math.max(x1, seg.loX), sx2 = Math.min(x2, seg.hiX);
       if (x1 < sx1) prims.push({ type: 'line', x1, y1: runYAt(r, x1), x2: sx1, y2: runYAt(r, sx1), weight: cutWeight });
-      if (sx2 > sx1) prims.push({ type: 'line', x1: sx1, y1: runYAt(r, sx1), x2: sx2, y2: runYAt(r, sx2), weight: cutWeight });
+      if (sx2 > sx1) {
+        // 円弧・ドームの区間は 3 点を通る円弧 1 本（円が作れなければ従来の斜線／水平線）
+        const arcCircle = arcCircleOf(seg);
+        prims.push(arcCircle
+          ? ceilArcPrimitive(arcCircle, sx1, sx2, { weight: cutWeight })
+          : { type: 'line', x1: sx1, y1: runYAt(r, sx1), x2: sx2, y2: runYAt(r, sx2), weight: cutWeight });
+      }
       if (sx2 < x2) prims.push({ type: 'line', x1: Math.max(sx2, sx1), y1: runYAt(r, sx2), x2, y2: runYAt(r, x2), weight: cutWeight });
     }
     // 別エリア天井の破線は「論理区間（segs）」基準で天井断面と比較する——描画済みrun範囲
@@ -930,7 +946,9 @@ export function buildFaceFigure(face, ctx) {
         const hi = Math.min(bc.hiX, seg.hiX, run); // 壁のない端部の延長は対象外
         if (hi - lo <= 0) continue;
         // 近側の天井断面より上（高い）の部分だけ描く。差 d(x)=bc−近側 は区間内で線形（途中で交わるなら交点で切る）
-        const d0 = bcAbsAt(lo) - segCeilAbsAt(seg, lo), d1 = bcAbsAt(hi) - segCeilAbsAt(seg, hi);
+        // 円弧・ドームの区間は途中が端より高い（差が線形でない）ので、区間の最高点（頭頂）より上だけを対象にする
+        const arcTop = arcCircleOf(seg)?.za;
+        const d0 = bcAbsAt(lo) - (arcTop ?? segCeilAbsAt(seg, lo)), d1 = bcAbsAt(hi) - (arcTop ?? segCeilAbsAt(seg, hi));
         if (d0 <= BC_ABOVE_EPS_MM && d1 <= BC_ABOVE_EPS_MM) continue;
         let pLo = lo, pHi = hi;
         if (d0 <= BC_ABOVE_EPS_MM) pLo = lo + (hi - lo) * (-d0 / (d1 - d0)); // 交点から hi まで
@@ -1463,7 +1481,7 @@ export function buildFaceFigure(face, ctx) {
     boundary, floorSegments: segs, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY,
     detailWeight, faceLabelAvoidThresholdModelMm, extraCenterLineXs,
     skipFaceLabel, faceLabelBoundary,
-    CH: Math.max(CH, ...segs.flatMap(s => [ceilAbsOf(s), ceilAbsHiOf(s)]), maxDrawnBcCeilAbs, ceilProfileMaxAbs),
+    CH: Math.max(CH, ...segs.flatMap(s => [ceilAbsOf(s), ceilAbsHiOf(s), arcCircleOf(s)?.za ?? -Infinity]), maxDrawnBcCeilAbs, ceilProfileMaxAbs),
   });
 
   return prims;

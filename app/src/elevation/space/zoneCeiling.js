@@ -4,7 +4,8 @@
  *
  * 式は「区画の chMm ?? 部屋の天井高さ」の1つだけ。chMm は部屋 FL 基準で床段差を含まない
  * （floorZFor(room)+ch / floorDeltaMm+chMm にそのまま入れられる）。床段差込みの zMm は使わない。
- * 円弧・ドームは対象外（null＝呼び元が部屋の CH へ落とす）。
+ * 円弧・ドームは自室の天井断面（zoneCeilingChAlong の includeCurved）と最高点（zoneCeilingChTopAt）だけが対象
+ * （遠側・家族の破線・開放スパンは null＝呼び元が部屋の CH へ落とす）。
  * 傾斜（slope。区画・部屋形状の残りとも）は zoneCeilingChAlong（片の両端の高さ）と zoneCeilingChTopAt（最高点）、
  * 視線の先の遠側は zoneCeilingFarEdge（同じ面が続く範囲の奥の端の高さ）が返す。
  * 傾斜の高さは「区画の chMm を baseZ にした ceilingShapeSolidZ」で求める（E0 の zAt〔床段差込みの zMm 基準〕は使わない。
@@ -25,9 +26,14 @@ const FAR_EDGE_MAX_STEPS = 64; // zoneCeilingFarEdge が奥の端を探して進
 const COVER_EPS_MM = 0.01;     // 走り範囲を矩形が覆うかの許容差
 const WALL_SPAN_MIN_MM = 20;   // 奥の端の壁を探す走り幅の下限（innerWallFaceAt の有意な重なり 5mm を点の問い合わせでも満たす）
 
+const APEX_MARGIN_MM = 1;      // 頭頂が片の端からこれ以上内側にあるときだけ頭頂を返す
+const APEX_RISE_EPS_MM = 0.5;  // 頭頂が両端を結ぶ弦より高い量がこれ未満なら直線とみなす（頭頂を返さない）
+
 const isUsableSurface = s => s.zoneId != null && s.shape === 'flat' && Number.isFinite(s.chMm);
-// 傾斜の面（区画つき・部屋形状の残りとも）。円弧・ドームは E4 まで対象外。
+// 傾斜の面（区画つき・部屋形状の残りとも）。
 const isSlopeSurface = s => s.shape === 'slope' && Number.isFinite(s.chMm);
+// 円弧（ヴォールト）・ドームの面（区画つき・部屋形状の残りとも）。
+const isCurvedSurface = s => (s.shape === 'arc' || s.shape === 'dome') && Number.isFinite(s.chMm);
 
 // 面ごとの高さ関数（baseZ＝chMm。部屋 FL 基準）。zAt が null の面は平面扱い。
 const solidByField = new WeakMap(); // surface -> {zAt, zHi}
@@ -43,7 +49,7 @@ function solidOf(s) {
 function buildField(graph) {
   try {
     const field = buildCeilingHeightField(graph);
-    return field.surfaces.some(s => isUsableSurface(s) || isSlopeSurface(s)) ? field : null;
+    return field.surfaces.some(s => isUsableSurface(s) || isSlopeSurface(s) || isCurvedSurface(s)) ? field : null;
   } catch {
     return null; // 異常な部屋データで展開図全体を巻き添えにしない（区画なし扱い）
   }
@@ -74,33 +80,48 @@ export function zoneCeilingChAt(field, room, x, y) {
 /**
  * 走り方向の片 (lo,hi) の両端の天井高さ（部屋 FL 基準）。room 自身の面だけ。
  * 平面の区画は {chLo, chHi} が同値、傾斜は面の高さ関数の (lo, hi) での値（奥行き座標 depthCoord で評価。
- * 展開図は壁の仕上げ面 face.faceValue を渡す）。円弧・ドーム・他の部屋・面なし・区画なしの平面は null。
+ * 展開図は壁の仕上げ面 face.faceValue を渡す）。他の部屋・面なし・区画なしの平面は null。
+ * **円弧・ドームは includeCurved:true のときだけ**（既定は null＝従来どおり呼び元が部屋の CH へ落とす。遠側の探索・家族の破線・
+ * 開放スパンは円弧に追従しない＝既知の限界）。円弧・ドームは (lo, hi) の両端の高さに加え、その壁面上の最高点
+ * apex:{along（走り方向の世界座標。面の矩形群の走り方向の中央）, ch}（片の内側にあり、両端を結ぶ弦より高いときだけ）を返す。
+ * 走り方向に高さが一定の面（円弧の軸に平行な壁）は chLo==chHi で apex なし（水平線）。
  * 面の判定は probeDepth（既定 depthCoord。セルの内側の点を渡す）×片の中央で行う。両端が別の面に落ちる片は null（防御）。
  * isVertical の面は走り方向が y・奥行きが x（そうでなければ逆）。
  * @param {object|null} field
  * @param {object|null} room
- * @param {{isVertical:boolean, depthCoord:number, probeDepth?:number, lo:number, hi:number}} q
- * @returns {{chLo:number, chHi:number}|null}
+ * @param {{isVertical:boolean, depthCoord:number, probeDepth?:number, lo:number, hi:number, includeCurved?:boolean}} q
+ * @returns {{chLo:number, chHi:number, apex?:{along:number, ch:number}}|null}
  */
-export function zoneCeilingChAlong(field, room, { isVertical, depthCoord, probeDepth = depthCoord, lo, hi }) {
+export function zoneCeilingChAlong(field, room, { isVertical, depthCoord, probeDepth = depthCoord, lo, hi, includeCurved = false }) {
   if (!field || !room || !roomHasCeiling(room)) return null;
   const pt = (depth, run) => (isVertical ? [depth, run] : [run, depth]);
   const surfaceAtRun = run => field.surfaceAt(...pt(probeDepth, run));
   const s = surfaceAtRun((lo + hi) / 2);
   if (!s || s.roomId !== room.id || !Number.isFinite(s.chMm)) return null;
   if (s.shape === 'flat') return s.zoneId != null ? { chLo: s.chMm, chHi: s.chMm } : null;
-  if (s.shape !== 'slope') return null;
+  const curved = s.shape === 'arc' || s.shape === 'dome';
+  if (s.shape !== 'slope' && !(curved && includeCurved)) return null;
   const e = Math.min(0.01, (hi - lo) / 4); // 端は面の境界（閉区間で隣の面と共有）なので少し内側で所属を確かめる
   if (surfaceAtRun(lo + e) !== s || surfaceAtRun(hi - e) !== s) return null;
   const { zAt } = solidOf(s);
   if (!zAt) return { chLo: s.chMm, chHi: s.chMm };
   const chLo = zAt(...pt(depthCoord, lo)), chHi = zAt(...pt(depthCoord, hi));
-  return Number.isFinite(chLo) && Number.isFinite(chHi) ? { chLo, chHi } : null;
+  if (!Number.isFinite(chLo) || !Number.isFinite(chHi)) return null;
+  if (!curved) return { chLo, chHi };
+  // 円弧は軸に直交する壁（走り方向が高さの変わる方向）、ドームはどの壁でも、走り方向に高さが変わる
+  const varies = s.shape === 'dome' || ((s.dims?.[1] === 0) === isVertical);
+  if (!varies) return { chLo, chHi };
+  const runs = s.rects.flatMap(r => (isVertical ? [r.y1, r.y2] : [r.x1, r.x2]));
+  const along = (Math.min(...runs) + Math.max(...runs)) / 2;
+  if (!(along > lo + APEX_MARGIN_MM && along < hi - APEX_MARGIN_MM)) return { chLo, chHi };
+  const ch = zAt(...pt(depthCoord, along));
+  const chord = chLo + (chHi - chLo) * ((along - lo) / (hi - lo));
+  return Number.isFinite(ch) && ch - chord > APEX_RISE_EPS_MM ? { chLo, chHi, apex: { along, ch } } : { chLo, chHi };
 }
 
 /**
  * 点 (x,y) の天井の最高点（部屋 FL 基準）。層スタック（壁の帯の打ち切り・垂れ壁）用。
- * 傾斜は chMm＋ライズ・区画つき平面は chMm。円弧・ドーム・他の部屋・面なし・区画なしの平面は null。
+ * 傾斜・円弧・ドームは chMm＋ライズ（面の最高点）・区画つき平面は chMm。他の部屋・面なし・区画なしの平面は null。
  * @returns {number|null}
  */
 export function zoneCeilingChTopAt(field, room, x, y) {
@@ -108,7 +129,7 @@ export function zoneCeilingChTopAt(field, room, x, y) {
   const s = field.surfaceAt(x, y);
   if (!s || s.roomId !== room.id || !Number.isFinite(s.chMm)) return null;
   if (s.shape === 'flat') return s.zoneId != null ? s.chMm : null;
-  if (s.shape !== 'slope') return null;
+  if (s.shape !== 'slope' && s.shape !== 'arc' && s.shape !== 'dome') return null;
   return solidOf(s).zHi;
 }
 
@@ -203,15 +224,16 @@ function parallelCLAt(graph, isVertical, value) {
  * 奥行き座標 depthCoord を含む区画矩形の辺のうち、(lo,hi) の厳密に内側にあるものの走り方向座標（昇順）。
  * isVertical の面は走り方向が y・奥行きが x（そうでなければ逆）。
  * includeShaped:true のときは傾斜の面（区画つき・部屋形状の残り）の辺も含める（既定は平面の区画だけ）。
+ * includeCurved:true のときは円弧・ドームの面の辺も含める（体裁の片を面ごとに1片にする用。開放スパン・家族の破線は渡さない）。
  * @param {object|null} field
- * @param {{isVertical:boolean, depthCoord:number, lo:number, hi:number, includeShaped?:boolean}} q
+ * @param {{isVertical:boolean, depthCoord:number, lo:number, hi:number, includeShaped?:boolean, includeCurved?:boolean}} q
  * @returns {number[]}
  */
-export function zoneCeilingEdgesAlong(field, { isVertical, depthCoord, lo, hi, includeShaped = false }) {
+export function zoneCeilingEdgesAlong(field, { isVertical, depthCoord, lo, hi, includeShaped = false, includeCurved = false }) {
   if (!field) return [];
   const vals = [];
   for (const s of field.surfaces) {
-    if (!isUsableSurface(s) && !(includeShaped && isSlopeSurface(s))) continue;
+    if (!isUsableSurface(s) && !(includeShaped && isSlopeSurface(s)) && !(includeCurved && isCurvedSurface(s))) continue;
     for (const r of s.rects) {
       const [d1, d2, e1, e2] = isVertical ? [r.x1, r.x2, r.y1, r.y2] : [r.y1, r.y2, r.x1, r.x2];
       if (!(depthCoord > d1 && depthCoord < d2)) continue;

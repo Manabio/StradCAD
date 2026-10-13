@@ -993,6 +993,55 @@ test('【傾斜の天井線と壁の帯】部屋形状 slope[600,+x]（CH 2500�
   assert.ok(chDims.includes(2507), '左CH寸法は lo 端の実測 Math.round(2506.9)');
 });
 
+// ---- 天伏の円弧（E4）: 体裁が円弧プリミティブを引き、エンジンの壁は弦で受ける ----
+test('【円弧の天井線と壁の帯】部屋形状 arc[400,90]（CH 2500・幅5000）の面は円弧 1 本で、全線の端点が円弧以下・縦線は両端だけ・帯の上端に頭頂が入る', () => {
+  const g = makeGrid([0, 5000], [0, 3000]);
+  const room = g.interior([[0, 0]], { walls: true });
+  room.setOverride('ceilingHeight', '2500');
+  setRoomCeilingShape(room, { shape: 'arc', dims: [400, 90] });
+  const band = buildRoomBand(room, g.graph);
+  // 面のローカル x=0 は世界 x=57.5（壁の仕上げ面）。幅 5000・ライズ 400 → R=(2500²+400²)/800=8012.5・頭頂は世界 x=2500
+  const R = 8012.5;
+  const zAt = x => 2500 + Math.sqrt(R * R - (x + 57.5 - 2500) ** 2) - (R - 400);
+  const arcs = band.primitives.filter(p => p.type === 'arc' && Math.abs(p.cx - 2442.5) < 1e-6);
+  assert.equal(arcs.length >= 1, true, '先頭の面に円弧');
+  const a = arcs[0];
+  assert.ok(Math.abs(a.r - R) < 1e-6 && Math.abs(a.cy - -(2900 - R)) < 1e-6, `r=${a.r} cy=${a.cy}`);
+  const start = [a.cx + a.r * Math.cos((a.startDeg * Math.PI) / 180), a.cy + a.r * Math.sin((a.startDeg * Math.PI) / 180)];
+  assert.ok(Math.abs(start[0] - 0) < 1e-6 && Math.abs(-start[1] - zAt(0)) < 1e-6, '始点は面の左端の壁の仕上げ面の高さ');
+  const inFace = band.primitives.filter(p => p.type === 'line' && p.x1 >= 0 && p.x2 <= 4885);
+  assert.equal(inFace.filter(p => p.weight === 'thick' && p.x1 === p.x2 && p.x1 > 0 && p.x1 < 4885).length, 0, '段差の縦線なし');
+  for (const p of inFace) {
+    for (const [x, y] of [[p.x1, p.y1], [p.x2, p.y2]]) assert.ok(-y <= zAt(x) + 1e-6, `円弧より上に線がある: x=${x} y=${y} 円弧=${zAt(x)}`);
+  }
+  assert.ok(band.bounds.minY <= -2900, `帯の上端に頭頂 2900 が入る minY=${band.bounds.minY}`);
+});
+
+test('【円弧の失敗系】軸に平行な面（弧が走り方向に変わらない）と flat は円弧プリミティブを作らない', () => {
+  const g = makeGrid([0, 5000], [0, 3000]);
+  const room = g.interior([[0, 0]], { walls: true });
+  room.setOverride('ceilingHeight', '2500');
+  setRoomCeilingShape(room, { shape: 'arc', dims: [400, 90] });
+  const faces = buildRoomBand(room, g.graph).primitives.filter(p => p.type === 'arc');
+  assert.equal(faces.length, 2, '軸に直交する 2 面（y=0・y=3000）だけに円弧。x=0・x=5000 の面は走り方向に一定＝水平線');
+  const flat = makeGrid([0, 5000], [0, 3000]);
+  const fr = flat.interior([[0, 0]], { walls: true });
+  assert.equal(buildRoomBand(fr, flat.graph).primitives.filter(p => p.type === 'arc').length, 0);
+});
+
+test('【ceilProfileFromSegments・円弧】ceilArc の区間は弦の列へ展開され、端は元の値・最大高さは頭頂', () => {
+  const profile = ceilProfileFromSegments([
+    { loX: 0, hiX: 4000, floorDeltaMm: 100, chMm: 2400, chHiMm: 2400, ceilArc: { alongX: 2000, chMm: 2800 } },
+    { loX: 4000, hiX: 5000, floorDeltaMm: 0, chMm: 2400 },
+  ], 5000, 2700);
+  assert.ok(profile.length >= 5, '円弧が複数の弦＋平面 1 区間');
+  assert.equal(profile[0].ceilZ, 2500); assert.equal(profile[0].loX, 0);
+  const last = profile.at(-1);
+  assert.deepEqual(last, { loX: 4000, hiX: 5000, ceilZ: 2400 }, '平面の区間は従来の形');
+  assert.equal(profile.at(-2).ceilZHi, 2500, '円弧の終端は元の値');
+  assert.equal(ceilProfileMaxZ(profile), 2900, '頭頂 100+2800');
+});
+
 // ---- ceilProfileFromSegments: 傾斜天井の受け口（E3a-1）。区間の chHiMm（任意）が ceilZHi になる ----
 test('【ceilProfileFromSegments】chHiMm の無い区間は ceilProfile の形が不変（ceilZHi キーなし）', () => {
   const profile = ceilProfileFromSegments([

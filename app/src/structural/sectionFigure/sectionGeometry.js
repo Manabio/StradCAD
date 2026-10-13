@@ -70,6 +70,14 @@ export function figureBounds(primitives) {
         break;
       case 'polyline':
         for (const [x, y] of p.points) ext(x, y); break;
+      case 'arc': {
+        // 展開図の天井断面（円弧）。始点・終点と、掃引の中にある 0/90/180/270° の点（外接の端）
+        const a = p.startDeg, b = p.startDeg + p.sweepDeg, lo = Math.min(a, b), hi = Math.max(a, b);
+        const at = d => ext(p.cx + p.r * Math.cos((d * Math.PI) / 180), p.cy + p.r * Math.sin((d * Math.PI) / 180));
+        at(a); at(b);
+        for (let d = Math.ceil(lo / 90) * 90; d <= hi; d += 90) at(d);
+        break;
+      }
       case 'text':
         ext(p.x, p.y); break;
       case 'axisV':

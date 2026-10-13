@@ -54,16 +54,96 @@ test('【床段差の二重加算なし】床 +100 の部屋の区画は chMm �
   assert.equal(zoneCeilingChAt(zoneCeilingFieldOf(g.graph), room, 1000, 1500), 3000);
 });
 
-test('【失敗系】円弧・ドームの区画だけの図面は field null（E4 まで対象外。部屋の CH に落とす）', () => {
+test('【円弧・ドームの区画だけの図面】field は作る（E4）。平面の点問い合わせは null・includeCurved なしの ChAlong も null（遠側などは部屋の CH）', () => {
   const g = makeGrid([0, 2000, 4000], [0, 3000]);
   const room = g.interior([[0, 0], [1, 0]]);
   room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 2400, shape: 'dome', dims: [500] }).zones);
   room.setCeilingZones(createZone(g.graph, room, [g.cell(1, 0)], { heightMm: 2400, shape: 'arc', dims: [400, 0] }).zones);
   const f = zoneCeilingFieldOf(g.graph);
-  assert.equal(f, null, '使える面が0なら field ごと null');
-  assert.equal(zoneCeilingChAt(f, room, 1000, 1500), null);
-  assert.equal(zoneCeilingChAlong(f, room, { isVertical: false, depthCoord: 1500, lo: 0, hi: 1000 }), null);
-  assert.equal(zoneCeilingChTopAt(f, room, 1000, 1500), null);
+  assert.ok(f, '円弧・ドームがあれば field を作る');
+  assert.equal(zoneCeilingChAt(f, room, 1000, 1500), null, '平面の点問い合わせは円弧・ドームに答えない');
+  assert.equal(zoneCeilingChAlong(f, room, { isVertical: false, depthCoord: 1500, lo: 0, hi: 1000 }), null, '既定は円弧・ドームを答えない');
+  assert.equal(zoneCeilingChAlong(f, room, { isVertical: false, depthCoord: 1500, lo: 3000, hi: 3500 }), null, '円弧も既定では null');
+});
+
+// ---- E4: 円弧・ドームの片（includeCurved）。壁の仕上げ面の奥行き座標で評価し、頭頂 apex を返す ----
+// 円弧 1 セル x 0..4000 × y 0..3000・底 2400・ライズ 400。軸 90（y に平行）なら幅は x 方向 4000 で R=(2000²+400²)/(2×400)=5200。
+function arcGrid(dims, heightMm = 2400) {
+  const g = makeGrid([0, 4000], [0, 3000]);
+  const room = g.interior([[0, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm, shape: 'arc', dims }).zones);
+  return { ...g, room, f: zoneCeilingFieldOf(g.graph) };
+}
+const CURVED = { isVertical: false, depthCoord: 1500, probeDepth: 1495, includeCurved: true };
+
+test('【arc（軸に直交する面）の両端と apex】軸 90・走り x の面: 全長で 両端 2400・頭頂 x=2000 で 2800', () => {
+  const { room, f } = arcGrid([400, 90]);
+  const a = zoneCeilingChAlong(f, room, { ...CURVED, lo: 0, hi: 4000 });
+  near(a.chLo, 2400, '左端'); near(a.chHi, 2400, '右端');
+  assert.equal(a.apex.along, 2000);
+  near(a.apex.ch, 2800, '中心線 = chMm + ライズ');
+});
+
+test('【arc の端の値】縁より内側の片: 走り x 500..3000 は R=5200 の円の高さ（t=−1500／+1000）', () => {
+  const { room, f } = arcGrid([400, 90]);
+  const a = zoneCeilingChAlong(f, room, { ...CURVED, lo: 500, hi: 3000 });
+  const z = t => 2400 + Math.sqrt(5200 ** 2 - t ** 2) - (5200 - 400);
+  near(a.chLo, z(-1500), '左'); near(a.chHi, z(1000), '右');
+  near(a.apex.ch, 2800, '頭頂');
+});
+
+test('【arc（軸に平行な面）は一定で apex なし】軸 0（x に平行）を走り x の面で見ると高さは depthCoord だけで決まる（中心 y=1500 で 2800）', () => {
+  const { room, f } = arcGrid([400, 0]);
+  const a = zoneCeilingChAlong(f, room, { ...CURVED, lo: 0, hi: 4000 });
+  near(a.chLo, 2800, '中心線の深さ'); near(a.chHi, 2800, '同じ');
+  assert.equal('apex' in a, false, '走り方向に一定＝水平線');
+  // 縁の深さ（壁の仕上げ面の近く）は低い
+  const edge = zoneCeilingChAlong(f, room, { ...CURVED, depthCoord: 0, lo: 0, hi: 4000 });
+  near(edge.chLo, 2400, '縁'); assert.equal('apex' in edge, false);
+});
+
+test('【arc の縦の面】軸 0 の円弧を走り y（isVertical）の面で見ると頭頂 y=1500（幅 3000・R=(1500²+400²)/800=3012.5）', () => {
+  const { room, f } = arcGrid([400, 0]);
+  const a = zoneCeilingChAlong(f, room, { isVertical: true, depthCoord: 2000, probeDepth: 1995, lo: 0, hi: 3000, includeCurved: true });
+  near(a.chLo, 2400, '縁'); near(a.chHi, 2400, '縁');
+  assert.equal(a.apex.along, 1500);
+  near(a.apex.ch, 2800, '頭頂');
+});
+
+test('【dome の壁面上の最高点】ライズ 500・x 0..4000 × y 0..3000: 走り x の面を y=1500（中央）で見ると頭頂 x=2000 で 2900・y=750 では 2400+500×(1−0.25)=2775', () => {
+  const g = makeGrid([0, 4000], [0, 3000]);
+  const room = g.interior([[0, 0]]);
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0)], { heightMm: 2400, shape: 'dome', dims: [500] }).zones);
+  const f = zoneCeilingFieldOf(g.graph);
+  const mid = zoneCeilingChAlong(f, room, { ...CURVED, depthCoord: 1500, lo: 0, hi: 4000 });
+  near(mid.chLo, 2400, '周縁'); near(mid.apex.ch, 2900, '頭頂'); assert.equal(mid.apex.along, 2000);
+  const q = zoneCeilingChAlong(f, room, { ...CURVED, depthCoord: 750, probeDepth: 755, lo: 0, hi: 4000 });
+  near(q.apex.ch, 2775, '壁面上の最高点は壁の奥行きで決まる');
+  assert.equal(zoneCeilingChTopAt(f, room, 1000, 1500), 2900, 'ChTopAt はドームの頂点');
+});
+
+test('【片の範囲に最高点が無ければ apex なし】頭頂 x=2000 が片 2500..4000 の外・縁ぎりぎり（0.5mm）の片も apex なし', () => {
+  const { room, f } = arcGrid([400, 90]);
+  const a = zoneCeilingChAlong(f, room, { ...CURVED, lo: 2500, hi: 4000 });
+  assert.equal('apex' in a, false);
+  near(a.chLo, 2400 + Math.sqrt(5200 ** 2 - 500 ** 2) - 4800, '左端は円の高さ');
+  const edge = zoneCeilingChAlong(f, room, { ...CURVED, lo: 1999.5, hi: 4000 });
+  assert.equal('apex' in edge, false, '端から 1mm 未満の頭頂は返さない');
+});
+
+test('【arc の失敗系】円弧でない軸・非有限・別の部屋は null／弦と同じ高さ（ライズ 0 相当の周縁の深さ）は apex なし', () => {
+  const { room, f } = arcGrid([400, 90]);
+  assert.equal(zoneCeilingChAlong(f, room, { ...CURVED, lo: NaN, hi: 4000 }), null);
+  assert.equal(zoneCeilingChAlong(f, room, { ...CURVED, lo: 5000, hi: 6000, probeDepth: 1495 }), null, '面の外');
+  assert.equal(zoneCeilingChAlong(f, null, { ...CURVED, lo: 0, hi: 4000 }), null);
+  const dome = (() => {
+    const g = makeGrid([0, 4000], [0, 3000]);
+    const r = g.interior([[0, 0]]);
+    r.setCeilingZones(createZone(g.graph, r, [g.cell(0, 0)], { heightMm: 2400, shape: 'dome', dims: [500] }).zones);
+    return { r, f: zoneCeilingFieldOf(g.graph) };
+  })();
+  const onEdge = zoneCeilingChAlong(dome.f, dome.r, { ...CURVED, depthCoord: 0, probeDepth: 5, lo: 0, hi: 4000 });
+  near(onEdge.chHi, 2400, '周縁の壁面は全長で底の高さ'); assert.equal('apex' in onEdge, false, '一直線＝頭頂なし');
 });
 
 // 傾斜の区画: 1セル x 0..4000 × y 0..3000・底 2400・ライズ 600・向き dir
@@ -131,7 +211,7 @@ test('【arc・dome・他の部屋・面なし・両端が別の面は null】',
   assert.equal(zoneCeilingChAlong(null, a, q(0, 2000)), null);
 });
 
-test('【ChTopAt】slope は chMm＋ライズ・flat 区画は chMm・arc/dome/面なし/他の部屋は null', () => {
+test('【ChTopAt】slope・arc は chMm＋ライズ・flat 区画は chMm・面なし/他の部屋は null（dome は別テスト）', () => {
   const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
   const a = g.interior([[0, 0]]);
   a.setCeilingZones(createZone(g.graph, a, [g.cell(0, 0)], { heightMm: 2400, shape: 'slope', dims: [600, 0] }).zones);
@@ -142,13 +222,13 @@ test('【ChTopAt】slope は chMm＋ライズ・flat 区画は chMm・arc/dome/�
   const f = zoneCeilingFieldOf(g.graph);
   assert.equal(zoneCeilingChTopAt(f, a, 100, 1500), 3000, '低い側の点でも最高点');
   assert.equal(zoneCeilingChTopAt(f, b, 3000, 1500), 2700);
-  assert.equal(zoneCeilingChTopAt(f, c, 5000, 1500), null, '円弧');
+  assert.equal(zoneCeilingChTopAt(f, c, 5000, 1500), 2800, '円弧は面の最高点（2400＋ライズ400。E4）');
   assert.equal(zoneCeilingChTopAt(f, a, 3000, 1500), null, '他の部屋の面');
   assert.equal(zoneCeilingChTopAt(f, a, 9000, 1500), null, '面なし');
   assert.equal(zoneCeilingChTopAt(null, a, 100, 1500), null);
 });
 
-test('【includeShaped】slope の辺は既定では返らず、指定すると返る（arc の辺は返らない）', () => {
+test('【includeShaped】slope の辺は既定では返らず、指定すると返る（arc の辺は includeCurved まで返らない）', () => {
   const g = makeGrid([0, 2000, 4000, 6000], [0, 3000]);
   const a = g.interior([[0, 0], [1, 0]]);
   a.setCeilingZones(createZone(g.graph, a, [g.cell(0, 0)], { heightMm: 2400, shape: 'slope', dims: [600, 0] }).zones);
@@ -157,6 +237,8 @@ test('【includeShaped】slope の辺は既定では返らず、指定すると�
   const q = { isVertical: false, depthCoord: 1500, lo: -100, hi: 7000 };
   assert.deepEqual(zoneCeilingEdgesAlong(f, q), []);
   assert.deepEqual(zoneCeilingEdgesAlong(f, { ...q, includeShaped: true }), [0, 2000], 'slope（x 0..2000）の辺だけ');
+  assert.deepEqual(zoneCeilingEdgesAlong(f, { ...q, includeCurved: true }), [2000, 4000], 'arc（x 2000..4000）の辺だけ');
+  assert.deepEqual(zoneCeilingEdgesAlong(f, { ...q, includeShaped: true, includeCurved: true }), [0, 2000, 4000]);
 });
 
 test('【失敗系】他の部屋の面・room null・STAIR の対の部屋の区画・STAIR_VOID の面は null', () => {

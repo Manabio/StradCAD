@@ -1,6 +1,7 @@
-import { Line, Rect, Circle, Text, Group } from 'react-konva';
+import { Line, Rect, Circle, Text, Group, Path } from 'react-konva';
+import { arcPathD } from './ShapesLayer.jsx';
 import { DASH_CENTER, DASH_DASHED, centerDashOffsetPx } from './dashPhase.js';
-import { weightPx, resolveJoinedLinePoints, linePointsPx } from './figureLineJoin.js';
+import { weightPx, resolveJoinedLinePoints, resolveArcTails, linePointsPx } from './figureLineJoin.js';
 import { miterTriangleVertices, verticalDimLabelBox, horizontalDimLabelBox } from '../elevation/elevationLayout.js';
 import { TRIANGLE_HEIGHT_SCREEN_MM, TRIANGLE_ANGLE_DEG } from '../elevation/elevationStyle.js';
 
@@ -125,7 +126,7 @@ function renderMiterTriangle(p, key, t, screenPxPerMm) {
   );
 }
 
-function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick, joined) {
+function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick, joined, arcTails) {
   const key = `p${i}`;
   switch (p.type) {
     case 'line': {
@@ -151,6 +152,21 @@ function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick, joined) {
           stroke={p.stroke ?? STROKE_COLOR} strokeWidth={weightPx(p, lineWeightsPx)}
           strokeScaleEnabled={false} listening={false} />
       );
+    case 'arc': {
+      // 展開図の天井断面（円弧・ドーム。elevation/ceilArcSection.js）。y は等倍の変換なので円のまま px 化できる
+      // （t.sx は x/y 共通の倍率）。中心・半径を px にして arcPathD（角度はそのまま）で描く。
+      const stroke = p.stroke ?? STROKE_COLOR, strokeWidth = weightPx(p, lineWeightsPx);
+      // 端が線とL字に取り合う角は、円弧を接線方向へ短く延ばして外角を閉じる（resolveArcTails）
+      return [
+        <Path key={key} data={arcPathD(t.tx(p.cx), t.ty(p.cy), t.sx(p.r), p.startDeg, p.sweepDeg)}
+          fill="transparent" stroke={stroke} strokeWidth={strokeWidth}
+          dash={dashArray(p.dash)} strokeScaleEnabled={false} listening={false} />,
+        ...(arcTails.get(i) ?? []).map((pts, k) => (
+          <Line key={`${key}-t${k}`} points={pts} stroke={stroke} strokeWidth={strokeWidth}
+            strokeScaleEnabled={false} listening={false} />
+        )),
+      ];
+    }
     case 'circle':
       return (
         <Circle key={key} x={t.tx(p.cx)} y={t.ty(p.cy)} radius={p.rPx ?? t.sx(p.r ?? 0)}
@@ -193,8 +209,9 @@ function renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick, joined) {
 export function renderFigurePrimitives(primitives, t, { lineWeightsPx, screenPxPerMm, onTagClick } = {}) {
   // L字の角の外角を閉じる延長（figureLineJoin.js。px座標のみを角の2点に限って動かす）。
   const joined = resolveJoinedLinePoints(primitives, t, lineWeightsPx);
+  const arcTails = resolveArcTails(primitives, t, lineWeightsPx);
   return primitives.flatMap((p, i) => {
-    const el = renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick, joined);
+    const el = renderOne(p, i, t, lineWeightsPx, screenPxPerMm, onTagClick, joined, arcTails);
     return el == null ? [] : el;
   });
 }

@@ -96,6 +96,7 @@ export function translatePrimitive(p, dx, dy) {
       return { ...p, x: p.x + dx, y: p.y + dy };
     case 'circle':
     case 'tag':
+    case 'arc': // 展開図の天井断面（円弧・ドーム。ceilArcSection.js）。中心を動かす
       return { ...p, cx: p.cx + dx, cy: p.cy + dy };
     case 'miterTriangle':
       return { ...p, x: p.x + dx, y: p.y + dy };
@@ -137,6 +138,8 @@ export function mirrorPrimitiveX(p, width) {
     case 'circle':
     case 'tag':
       return { ...p, cx: m(p.cx) };
+    case 'arc': // 角度は x 反転で 180−α。掃引が正のまま始点と終点を入れ替える
+      return { ...p, cx: m(p.cx), startDeg: 180 - (p.startDeg + p.sweepDeg) };
     case 'miterTriangle':
       return { ...p, x: m(p.x), dir: -p.dir };
     case 'polyline':

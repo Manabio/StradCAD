@@ -3,7 +3,7 @@
 // モデルmmで厳密一致する角だけを、px空間で角の外側へ延長して閉じる。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveJoinedLinePoints, weightPx, linePointsPx } from './figureLineJoin.js';
+import { resolveJoinedLinePoints, resolveArcTails, weightPx, linePointsPx } from './figureLineJoin.js';
 
 // 恒等変換（mm=px。角の外向きベクトル・延長量の検証を単純にするため）。
 const idT = { tx: x => x, ty: y => y };
@@ -257,4 +257,30 @@ test('コの字（3本thick）: 中央の水平線が両端とも延長される
   assert.equal(my1, 0);
   assert.ok(Math.abs(mx2 - 101.5) < 1e-9, `右端は+x方向へ1.5px、実際${mx2}`);
   assert.equal(my2, 0);
+});
+
+// ---- 展開図の天井断面の円弧（type:arc）の端と縦線の L 字（E4） ----
+test('円弧の端と縦線の L 字: 縦線は角の外側へ半幅、円弧は接線方向（外向き）へ半幅の短い線分を足して閉じる', () => {
+  // 中心 (0,200) 半径 100・始点 −90°（点 (0,100)）・掃引 +90°（終点 (100,200)）。始点の外向き接線は (−1,0)。縦線は (0,100) から下へ。
+  const primitives = [
+    { type: 'arc', cx: 0, cy: 200, r: 100, startDeg: -90, sweepDeg: 90, width: 4 },
+    { type: 'line', x1: 0, y1: 100, x2: 0, y2: 300, width: 4 },
+  ];
+  const joined = resolveJoinedLinePoints(primitives, idT);
+  const tails = resolveArcTails(primitives, idT);
+  assert.deepEqual(joined.get(1).map(v => Math.round(v * 1e9) / 1e9), [0, 98, 0, 300], '縦線の角側が半幅 2 だけ上へ');
+  assert.equal(tails.get(0).length, 1, '円弧の始点側にだけ尻尾');
+  assert.deepEqual(tails.get(0)[0].map(v => Math.round(v * 1e9) / 1e9), [0, 100, -2, 100], '接線の外向き(−x)へ半幅 2');
+});
+
+test('円弧の失敗系: 終点側の外向きは進行方向／破線の円弧・細線同士・端が一致しない円弧は尻尾なし', () => {
+  const arc = { type: 'arc', cx: 0, cy: 200, r: 100, startDeg: -90, sweepDeg: 90, width: 4 };
+  // 終点 (100,200) の外向き接線は (0,1)（下向き）。横線が終点から右へ。
+  const endLine = { type: 'line', x1: 100, y1: 200, x2: 300, y2: 200, width: 4 };
+  const t1 = resolveArcTails([arc, endLine], idT);
+  assert.deepEqual(t1.get(0)[0].map(v => Math.round(v * 1e9) / 1e9), [100, 200, 100, 202]);
+  assert.equal(resolveArcTails([{ ...arc, dash: 'dashed' }, endLine], idT).size, 0, '破線の円弧は対象外');
+  assert.equal(resolveArcTails([{ ...arc, width: 1 }, { ...endLine, width: 1 }], idT).size, 0, '細線同士は延長しない');
+  assert.equal(resolveArcTails([arc, { ...endLine, x1: 150 }], idT).size, 0, '端が一致しない');
+  assert.equal(resolveArcTails([{ ...arc, sweepDeg: 0 }, endLine], idT).size, 0, '掃引 0 の円弧は無視');
 });

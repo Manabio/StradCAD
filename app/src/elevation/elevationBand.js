@@ -18,6 +18,7 @@ import { graphList } from '../graphReadScope.js';
 import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDisplayName } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { buildFaceFigure, segEndProfile, hasRightChDim } from './elevationFigure.js';
+import { ceilArcCircleOf, ceilArcChords } from './ceilArcSection.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
@@ -384,17 +385,24 @@ export function finalizeBand(room, graph, primitives, opts = {}) {
  * 2026-08）の打ち切り高さは、その面に描かれている天井線そのものでなければならない。
  * 傾いた天井の区間は `chHiMm`（hiX での天井高。任意）を持ち、`ceilZHi = floorDeltaMm + chHiMm`
  * （hiX での絶対高さ）として載せる。`chHiMm` が無い区間は `ceilZHi` のキー自体を付けない（平面）。
- * @param {Array<{loX:number, hiX:number, floorDeltaMm?:number, chMm?:number, chHiMm?:number}>|undefined} segs
+ * 円弧・ドームの区間（`ceilArc`）は円弧を弦に刻んだ複数区間へ展開する（返り値の区間数は入力より増える）。
+ * @param {Array<{loX:number, hiX:number, floorDeltaMm?:number, chMm?:number, chHiMm?:number, ceilArc?:{alongX:number, chMm:number}}>|undefined} segs
  * @param {number} run - 面の走り長さ（segs未指定時のフォールバック区間の幅）
  * @param {number} CH - 帯のCH（chMm未指定区間の天井絶対高さフォールバック）
  * @returns {Array<{loX:number, hiX:number, ceilZ:number, ceilZHi?:number}>}
  */
 export function ceilProfileFromSegments(segs, run, CH) {
   if (!segs?.length) return [{ loX: 0, hiX: run, ceilZ: CH }];
-  return segs.map(s => ({
-    loX: s.loX, hiX: s.hiX, ceilZ: (s.floorDeltaMm ?? 0) + (s.chMm ?? CH),
-    ...(s.chHiMm != null ? { ceilZHi: (s.floorDeltaMm ?? 0) + s.chHiMm } : {}),
-  }));
+  return segs.flatMap(s => {
+    // 円弧・ドームの区間（ceilArc）は 3 点を通る円弧を弦に刻んだ区間の列（サジタ 1mm 以下。ceilArcSection.js）。
+    // 円が作れなければ従来の直線（chMm→chHiMm）。
+    const circle = ceilArcCircleOf(s);
+    if (circle) return ceilArcChords(circle);
+    return [{
+      loX: s.loX, hiX: s.hiX, ceilZ: (s.floorDeltaMm ?? 0) + (s.chMm ?? CH),
+      ...(s.chHiMm != null ? { ceilZHi: (s.floorDeltaMm ?? 0) + s.chHiMm } : {}),
+    }];
+  });
 }
 
 /**

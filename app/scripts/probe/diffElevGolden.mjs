@@ -76,6 +76,7 @@ function fmtLine(p) {
   if (p.type === 'rect') return `rect @${p.x},${p.y} ${p.w}x${p.h}`;
   if (p.type === 'tag') return `tag @${p.cx},${p.cy} ${p.top}/${p.bottom}`;
   if (p.type === 'circle') return `circle @${p.cx},${p.cy} r:${p.rPx}`;
+  if (p.type === 'arc') return `arc c(${p.cx},${p.cy}) r:${p.r} ${p.startDeg}°+${p.sweepDeg}° ${p.weight ?? '(既定)'}`;
   if (p.type === 'miterTriangle') return `miterTriangle @${p.x},${p.y} dir:${p.dir}`;
   return JSON.stringify(p);
 }

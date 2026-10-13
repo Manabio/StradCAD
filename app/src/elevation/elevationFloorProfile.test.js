@@ -683,12 +683,64 @@ test('【区画高＝部屋CHは1区間に戻り hiCLId も保つ】右区画 25
   assert.equal('zoneCeilEdgeHi' in segs[0], false);
 });
 
-test('【失敗系】平面でも傾斜でもない区画（円弧）は割らない＝1区間・部屋のCH・chHiMm なし', () => {
+// ---- E4: 円弧・ドーム（片の chMm〔lo 端〕・chHiMm〔hi 端〕に加え、頭頂があれば ceilArc:{alongX, chMm}） ----
+test('【arc 区画の片に ceilArc】右区画 arc[400,90]（x 2000..5000・幅3000・R=3012.5）: 左は平面 2500・右は 2400→2432.18・頭頂 alongX 3442.5 で 2800', () => {
+  const { g, room, face } = zoneFace([[3500, 2400]], 'arc', { dims: [400, 90] });
+  const segs = wallAdjacentFloorSegments(face, room, g.graph);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].chMm, 2500);
+  assert.equal('ceilArc' in segs[0], false, '平らな片は ceilArc を持たない');
+  assert.equal('chHiMm' in segs[0], false);
+  near(segs[1].chMm, 2400, '縁（x=2000）');
+  near(segs[1].chHiMm, 2400 + Math.sqrt(3012.5 ** 2 - 1442.5 ** 2) - 2612.5, '壁の仕上げ面（x=4942.5）で評価');
+  assert.equal(segs[1].ceilArc.alongX, 3442.5);
+  near(segs[1].ceilArc.chMm, 2800, '頭頂');
+});
+
+test('【dirSign<0 で alongX が反転】反対側の壁（y=3000）は lo/hi の高さが入れ替わり、頭頂のローカル x は 4942.5−3500=1442.5', () => {
+  const { g, room, face } = zoneFace([[3500, 2400]], 'arc', { dims: [400, 90], faceAxis: 3000 });
+  assert.equal(face.dirSign, -1);
+  const segs = wallAdjacentFloorSegments(face, room, g.graph);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].ceilArc.alongX, 1442.5);
+  near(segs[0].chMm, 2400 + Math.sqrt(3012.5 ** 2 - 1442.5 ** 2) - 2612.5, 'lo 側が世界の hi 端の高さ');
+  near(segs[0].chHiMm, 2400, 'hi 側が世界の lo 端（縁）の高さ');
+  assert.equal('ceilArc' in segs[1], false);
+});
+
+test('【arc は結合しない】CL で割れる円弧の片は 1 面＝1 片のまま、頭頂を持つ片は隣と結合しない', () => {
+  // 天井芯 x=2000 の左右とも同じ arc[400,90]（高さ同じ）の区画にしても、各区画の片は結合されない
+  const { g, room, face } = zoneFace([[1000, 2400], [3500, 2400]], 'arc', { dims: [400, 90] });
+  const segs = wallAdjacentFloorSegments(face, room, g.graph);
+  assert.equal(segs.length, 2, '区画ごとに 1 片');
+  assert.ok(segs.every(s => s.ceilArc), '両方の片が頭頂を持つ');
+});
+
+test('【arc（軸に平行な壁）は一定の水平な片】arc[400,0] を走り x の壁で見ると 1 片・chMm は壁の仕上げ面の深さの高さ・chHiMm/ceilArc なし', () => {
   const { g, room, face } = zoneFace([[3500, 2400]], 'arc', { dims: [400, 0] });
   const segs = wallAdjacentFloorSegments(face, room, g.graph);
-  assert.equal(segs.length, 1);
-  assert.equal(segs[0].chMm, 2500);
-  assert.equal('chHiMm' in segs[0], false);
+  assert.equal(segs.length, 2);
+  near(segs[1].chMm, 2400 + Math.sqrt(3012.5 ** 2 - 1442.5 ** 2) - 2612.5, 'y=57.5（t=1442.5）の高さ');
+  assert.equal('chHiMm' in segs[1], false);
+  assert.equal('ceilArc' in segs[1], false);
+});
+
+test('【dome の片】dome[500]（x 2000..5000 × y 0..3000）の壁 y=0 の面: 両端 2400+500×0 より仕上げ面の分だけ高く、頭頂は中央 x=3500', () => {
+  const { g, room, face } = zoneFace([[3500, 2400]], 'dome', { dims: [500] });
+  const segs = wallAdjacentFloorSegments(face, room, g.graph);
+  const dome = segs[1];
+  assert.equal(dome.ceilArc.alongX, 3442.5);
+  const qq = (1 - (1442.5 / 1500) ** 2);
+  near(dome.ceilArc.chMm, 2400 + 500 * qq, '頭頂 = 底＋ライズ×(1−q²)（q は壁の仕上げ面の正規化奥行き）');
+  assert.ok(dome.chHiMm > 2400 && dome.chHiMm < dome.ceilArc.chMm);
+});
+
+test('【flat・slope は出力形不変】ceilArc を持たない（キー自体なし）', () => {
+  for (const shape of ['flat', 'slope']) {
+    const { g, room, face } = zoneFace([[3500, 2700]], shape);
+    const segs = wallAdjacentFloorSegments(face, room, g.graph);
+    assert.ok(segs.every(s => !('ceilArc' in s)), shape);
+  }
 });
 
 // ---- 天伏の傾斜（E3a-2: 片の両端の高さ chMm〔lo 端〕・chHiMm〔hi 端〕。壁の仕上げ面で評価） ----
@@ -955,4 +1007,16 @@ test('【勾配が違えば結合しない】x 2000..3000 は勾配 600/1000・3
   near(tilt[0].ceilAbsHiMm, 3500, 'A の hi');
   near(tilt[1].ceilAbsMm, 3500, 'B の lo（高さは連続）');
   near(tilt[1].ceilAbsHiMm, 3800, 'B の hi（勾配 300/1000 で違う）');
+});
+
+test('【E4・同じ円弧の面が仕上げのセル境界で割れても 1 片】2 セルにまたがる arc[400,90] の区画は壁の面で 1 片・頭頂は面全体の中央', () => {
+  const g = makeGrid([0, 2500, 5000], [0, 3000]);
+  const room = g.interior([[0, 0], [1, 0]], { walls: true });
+  room.setOverride('ceilingHeight', '2500');
+  room.setCeilingZones(createZone(g.graph, room, [g.cell(0, 0), g.cell(1, 0)], { heightMm: 2400, shape: 'arc', dims: [400, 90] }).zones);
+  const face = buildRoomFaces(room, g.graph).find(f => !f.isVertical && f.axisCL.value === 0);
+  const segs = wallAdjacentFloorSegments(face, room, g.graph);
+  assert.equal(segs.length, 1, 'セル境界 x=2500 で割れない');
+  assert.equal(segs[0].ceilArc.alongX, 2442.5, '頭頂は面全体（x 0..5000）の中央 x=2500（ローカル 2442.5）');
+  near(segs[0].ceilArc.chMm, 2800, '頭頂 2400＋ライズ400');
 });

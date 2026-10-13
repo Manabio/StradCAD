@@ -45,6 +45,13 @@ function norm(p) {
     const v = p[k];
     out[k] = (v && typeof v === 'object') ? norm(v) : r(v);
   }
+  if (p.type === 'arc') {
+    // 円弧は始点・終点の座標も載せる（golden で端の取り合いを比べられるように。中心・半径・角度から導出）
+    const rad = d => (d * Math.PI) / 180;
+    const a1 = rad(p.startDeg), a2 = rad(p.startDeg + p.sweepDeg);
+    out.x1 = r(p.cx + p.r * Math.cos(a1)); out.y1 = r(p.cy + p.r * Math.sin(a1));
+    out.x2 = r(p.cx + p.r * Math.cos(a2)); out.y2 = r(p.cy + p.r * Math.sin(a2));
+  }
   return out;
 }
 

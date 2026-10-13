@@ -29,6 +29,13 @@ for (const p of row.prims) {
   } else if (p.type === 'polyline') {
     for (const [x, y] of p.points) note(x, y);
     parts.push(`<polyline points="${p.points.map(([x, y]) => `${x},${y}`).join(' ')}" fill="none" stroke="#111" stroke-width="${w}"/>`);
+  } else if (p.type === 'arc') {
+    // 展開図の天井断面（円弧）。始点・終点は中心＋半径×角度（renderer/ShapesLayer.jsx arcPathD と同じ式）
+    const rad = d => (d * Math.PI) / 180;
+    const sx = p.cx + p.r * Math.cos(rad(p.startDeg)), sy = p.cy + p.r * Math.sin(rad(p.startDeg));
+    const ex = p.cx + p.r * Math.cos(rad(p.startDeg + p.sweepDeg)), ey = p.cy + p.r * Math.sin(rad(p.startDeg + p.sweepDeg));
+    note(sx, sy); note(ex, ey);
+    parts.push(`<path d="M ${sx} ${sy} A ${p.r} ${p.r} 0 ${Math.abs(p.sweepDeg) > 180 ? 1 : 0} ${p.sweepDeg > 0 ? 1 : 0} ${ex} ${ey}" fill="none" stroke="#111" stroke-width="${w}"/>`);
   } else if (p.type === 'rect') {
     note(p.x, p.y); note(p.x + p.w, p.y + p.h);
     parts.push(`<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" fill="none" stroke="#111" stroke-width="0.8"/>`);

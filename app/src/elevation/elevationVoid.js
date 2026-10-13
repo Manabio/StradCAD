@@ -18,6 +18,7 @@ import { parseBaseboardHeightMm, formatMaterialLabel, estimateWallLabelWidthPx }
 import { ElevationLineRole, weightForRole, WALL_LABEL_LINE_GAP_MM, CH_DIM_OFFSET_MM,
   DEFAULT_WALL_LESS_END_EXTEND_MM } from './elevationStyle.js';
 import { findRunCLAt } from './elevationFloorProfile.js';
+import { sliceCeilSeg } from './ceilArcSection.js';
 import { layoutBandFaces, finalizeBand, appendBandCutContent,
   floorZProfileFromSegments } from './elevationBand.js';
 import { translatePrimitive } from './elevationPrimitives.js';
@@ -460,11 +461,20 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
           // hiCLIdは元の区間の右端に達する小区間だけが引き継ぐ（分割で生じた内側の境界は
           // 段差CLではないため、ROW1寸法の分割点にしてはいけない）。
           const hiCLId = part.hiX === seg.hiX ? seg.hiCLId : null;
+          // 傾斜・円弧の区間を割った小片は、両端の高さを元の形から取り直す（頭頂が小片の外なら ceilArc を外す）
+          const base = { ...seg };
+          delete base.ceilArc; delete base.chHiMm;
+          const sliced = sliceCeilSeg(seg, part.loX, part.hiX);
+          const ch = sliced.chMm ?? defaults.CH;
           out.push(part.covered
-            ? { ...seg, loX: part.loX, hiX: part.hiX, hiCLId,
-                floorDeltaMm: seg.floorDeltaMm - dropMm, chMm: (seg.chMm ?? defaults.CH) + dropMm,
-                ...(seg.chHiMm != null ? { chHiMm: seg.chHiMm + dropMm } : {}) }
-            : { ...seg, loX: part.loX, hiX: part.hiX, hiCLId });
+            ? { ...base, loX: part.loX, hiX: part.hiX, hiCLId,
+                floorDeltaMm: seg.floorDeltaMm - dropMm, chMm: ch + dropMm,
+                ...(sliced.chHiMm != null ? { chHiMm: sliced.chHiMm + dropMm } : {}),
+                ...(sliced.ceilArc ? { ceilArc: { ...sliced.ceilArc, chMm: sliced.ceilArc.chMm + dropMm } } : {}) }
+            : { ...base, loX: part.loX, hiX: part.hiX, hiCLId,
+                ...(seg.chMm != null ? { chMm: sliced.chMm } : {}),
+                ...(sliced.chHiMm != null ? { chHiMm: sliced.chHiMm } : {}),
+                ...(sliced.ceilArc ? { ceilArc: sliced.ceilArc } : {}) });
         }
       }
       // はり出し量は**この確定した`out`から**求める（gateの材料＝端の区間の床断面高さ）。
@@ -614,12 +624,21 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     const out = [];
     for (const seg of coverFullRun(base, face.run)) {
       for (const part of splitSegByCover(seg, plan.voidLocal)) {
-        if (!part.covered) { out.push({ ...seg, loX: part.loX, hiX: part.hiX }); continue; }
+        const base = { ...seg };
+        delete base.ceilArc; delete base.chHiMm;
+        const sliced = sliceCeilSeg(seg, part.loX, part.hiX);
+        if (!part.covered) {
+          out.push({ ...base, loX: part.loX, hiX: part.hiX,
+            ...(seg.chMm != null ? { chMm: sliced.chMm } : {}),
+            ...(sliced.chHiMm != null ? { chHiMm: sliced.chHiMm } : {}),
+            ...(sliced.ceilArc ? { ceilArc: sliced.ceilArc } : {}) });
+          continue;
+        }
         // 吹抜けの区間: 床はそのまま（水平断面を挟まない）、天井だけ上階の天井まで伸ばす。
         // ceilFloorZMm: この区間の**天井が属する階の床レベル**（帯の床基準）。天井断面線を
         // 「階の異なる天井どうしは結ばない」と判断するための唯一の情報源（elevationFigure.js）。
         const delta = seg.floorDeltaMm ?? 0;
-        out.push({ ...seg, loX: part.loX, hiX: part.hiX, hiCLId: null,
+        out.push({ ...base, loX: part.loX, hiX: part.hiX, hiCLId: null,
           chMm: floorHeightMm + voidCH - delta, ceilFloorZMm: floorHeightMm });
       }
     }

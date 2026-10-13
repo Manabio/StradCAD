@@ -122,8 +122,10 @@ export function buildSpaceIndex(layers, opts = {}) {
     if (span && Number.isFinite(span.lo) && Number.isFinite(span.hi) && Number.isFinite(span.depthCoord)) {
       const al = zoneCeilingChAlong(fieldFor(graph), room, {
         isVertical: span.isVertical, depthCoord: span.depthCoord, probeDepth: span.isVertical ? x : y, lo: span.lo, hi: span.hi,
+        includeCurved: true,
       });
-      if (al) return Math.max(al.chLo, al.chHi);
+      // 円弧・ドームは列の両端に加え、頭頂が列の幅の内側にあればその高さ（zAt のサンプリング）
+      if (al) return Math.max(al.chLo, al.chHi, al.apex?.ch ?? -Infinity);
     }
     return chTopAt(room, graph, x, y);
   }

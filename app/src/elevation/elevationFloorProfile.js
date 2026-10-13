@@ -267,21 +267,38 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   // 高さは壁の仕上げ面（face.faceValue。実壁が無い面は芯）の奥行きで評価する（Q1）。chHiMm は傾いているときだけ付ける。
   const field = zoneCeilingFieldOf(graph);
   const faceDepth = Number.isFinite(face.faceValue) ? face.faceValue : axisValue;
+  const probeDepth = axisValue + face.inward * PROBE_EPS_MM;
+  // 片 [lo,hi] の天井の項目（chMm・傾いていれば chHiMm・円弧/ドームで頭頂があれば ceilArc）。
+  // 円弧・ドームの片は頭頂（apex）を持つとき、両端が同じ高さでも chHiMm を付けて ceilArc（頭頂の世界 run 座標と高さ）を持つ。
+  const ceilFieldsOf = (owner, lo, hi) => {
+    const along = zoneCeilingChAlong(field, owner, {
+      isVertical: face.isVertical, depthCoord: faceDepth, probeDepth, lo, hi, includeCurved: true,
+    });
+    const tilted = along != null && Math.abs(along.chHi - along.chLo) > GAP_EPS;
+    const arc = along?.apex != null;
+    return {
+      chMm: along?.chLo ?? chOf(owner),
+      ...(tilted || arc ? { chHiMm: along.chHi } : {}),
+      ...(arc ? { ceilArc: { along: along.apex.along, chMm: along.apex.ch } } : {}),
+    };
+  };
+  // 片の中央が円弧・ドームの面に載っていれば、その面（同じ面の片をあとで 1 片に戻す鍵）
+  const curvedSurfaceAt = (lo, hi) => {
+    const mid = (lo + hi) / 2;
+    const s = field.surfaceAt(...(face.isVertical ? [probeDepth, mid] : [mid, probeDepth]));
+    return s && (s.shape === 'arc' || s.shape === 'dome') ? s : null;
+  };
   const zoned = !field ? segs : segs.flatMap(seg => {
-    const depthCoord = axisValue + face.inward * PROBE_EPS_MM;
-    const edges = zoneCeilingEdgesAlong(field, { isVertical: face.isVertical, depthCoord, lo: seg.runLo, hi: seg.runHi, includeShaped: true })
+    const edges = zoneCeilingEdgesAlong(field, { isVertical: face.isVertical, depthCoord: probeDepth, lo: seg.runLo, hi: seg.runHi, includeShaped: true, includeCurved: true })
       .filter(e => e - seg.runLo > GAP_EPS && seg.runHi - e > GAP_EPS);
     const pts = [seg.runLo, ...edges, seg.runHi];
     const pieces = [];
     for (let i = 0; i + 1 < pts.length; i++) {
-      const along = zoneCeilingChAlong(field, seg.owner, {
-        isVertical: face.isVertical, depthCoord: faceDepth, probeDepth: depthCoord, lo: pts[i], hi: pts[i + 1],
-      });
-      const tilted = along != null && Math.abs(along.chHi - along.chLo) > GAP_EPS;
+      const curvedSurf = seg.owner ? curvedSurfaceAt(pts[i], pts[i + 1]) : null;
       pieces.push({
         ...seg, runLo: pts[i], runHi: pts[i + 1],
-        chMm: along?.chLo ?? chOf(seg.owner),
-        ...(tilted ? { chHiMm: along.chHi } : {}),
+        ...ceilFieldsOf(seg.owner, pts[i], pts[i + 1]),
+        ...(curvedSurf ? { curvedSurf } : {}),
         loCLId: i === 0 ? seg.loCLId : null,
         hiCLId: i + 2 === pts.length ? seg.hiCLId : null,
       });
@@ -294,6 +311,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   // なるため、chMmが異なる区間は結合しない）。傾いた片は水平の片と結合しない。傾いた片どうしは
   // 高さが連続し勾配が同じ（同じ面がCLの分割点で割れたもの）ときだけ結合して1本の斜線にする。
   const sameCeiling = (a, b) => {
+    if (a.ceilArc || b.ceilArc) return false; // 円弧・ドームの片は 1 面＝1 片のまま（結合しない）
     if (a.chHiMm == null && b.chHiMm == null) return a.chMm === b.chMm;
     if (a.chHiMm == null || b.chHiMm == null) return false;
     const gradient = s => (s.chHiMm - s.chMm) / (s.runHi - s.runLo);
@@ -302,7 +320,14 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
   const merged = [];
   for (const s of zoned) {
     const last = merged[merged.length - 1];
-    if (last && last.floorDeltaMm === s.floorDeltaMm && sameCeiling(last, s) && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
+    if (last && s.curvedSurf && last.curvedSurf === s.curvedSurf && last.floorDeltaMm === s.floorDeltaMm && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
+      // 同じ円弧・ドームの面が仕上げのセルの境界や面の矩形の継ぎ目で割れた片は 1 片に戻し、頭頂・両端の高さを取り直す
+      // （割れたままだと頭頂の無い片が弦になる）。
+      last.runHi = s.runHi;
+      last.hiCLId = s.hiCLId;
+      delete last.chHiMm; delete last.ceilArc;
+      Object.assign(last, ceilFieldsOf(last.owner, last.runLo, last.runHi));
+    } else if (last && last.floorDeltaMm === s.floorDeltaMm && sameCeiling(last, s) && Math.abs(last.runHi - s.runLo) < GAP_EPS) {
       last.runHi = s.runHi;
       last.hiCLId = s.hiCLId;
       if (s.chHiMm != null) last.chHiMm = s.chHiMm;
@@ -329,6 +354,7 @@ export function wallAdjacentFloorSegments(face, parentRoom, graph) {
         loX: Math.min(a, b), hiX: Math.max(a, b), floorDeltaMm: s.floorDeltaMm,
         chMm: tilted && swapped ? s.chHiMm : s.chMm,
         ...(tilted ? { chHiMm: swapped ? s.chMm : s.chHiMm } : {}),
+        ...(s.ceilArc ? { ceilArc: { alongX: toLocal(s.ceilArc.along), chMm: s.ceilArc.chMm } } : {}),
         loCLId: swapped ? s.hiCLId : s.loCLId, hiCLId: swapped ? s.loCLId : s.hiCLId,
         owner: s.owner,
       };

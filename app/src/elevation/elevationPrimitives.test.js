@@ -15,6 +15,7 @@ test('translatePrimitive/mirrorPrimitiveX: type:hit は rect と同じく移動�
   assert.deepEqual(mirrorPrimitiveX(p, 900), { ...p, x: -100 });
 });
 import { DEFAULT_NAME_GAP_MM, GAP_EPS_MM } from './elevationStyle.js';
+import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 
 // ---- QA是正2026-09-13・F5: 矩形の縁をかすめて1e-4〜1e-3mmにしかならないrunは出力しない ----
 // solidRectsOf（sectionTypes.js）はGAP_EPSだけ内側へ縮めた矩形を返す。勾配の浅い線分
@@ -127,4 +128,26 @@ test('subtractRectsFromLine: poly を持つ遮蔽物は斜めの辺で線分を�
   assert.ok(Math.abs(out[0].x1 - 0) < 1e-9 && Math.abs(out[0].x2 - 50) < 1e-9, JSON.stringify(out));
   // poly が無ければ従来の矩形（外接箱）で全部切れる。
   assert.deepEqual(subtractRectsFromLine(line, [{ xLo: 0, xHi: 100, yLo: -60, yHi: 0 }]), []);
+});
+
+// ---- E4: 展開図の天井断面の円弧（type:arc。ceilArcSection.js）。translate/mirror/figureBounds が扱う ----
+test('translatePrimitive/mirrorPrimitiveX: type:arc は中心を動かし、反転は角度を 180−α にして掃引を正のまま保つ', () => {
+  const p = { type: 'arc', cx: 2000, cy: 2400, r: 5200, startDeg: -112.62, sweepDeg: 45.24, weight: 'thick' };
+  assert.deepEqual(translatePrimitive(p, 5000, 30), { ...p, cx: 7000, cy: 2430 });
+  const m = mirrorPrimitiveX(p, 4000);
+  assert.equal(m.cx, 2000); assert.equal(m.r, 5200); assert.equal(m.sweepDeg, 45.24);
+  assert.ok(Math.abs(m.startDeg - (180 - (-112.62 + 45.24))) < 1e-9, '反転後の始点は 180−元の終点の角度（元の終点 −67.38 → 247.38）');
+  // 反転の反転は元に戻る
+  const mm = mirrorPrimitiveX(m, 4000);
+  assert.ok(Math.abs(mm.startDeg - p.startDeg) < 1e-9);
+});
+
+test('figureBounds: type:arc は始点・終点と掃引内の頂点（−90°）を範囲に含める。頂点を掃引が通らなければ含めない', () => {
+  const top = { type: 'arc', cx: 2000, cy: 2400, r: 5200, startDeg: -112.62, sweepDeg: 45.24 };
+  const b = figureBounds([top]);
+  assert.ok(Math.abs(b.minY - (2400 - 5200)) < 1e-6, '頂点 y=cy−r（頭頂 −2800）が入る');
+  const right = { type: 'arc', cx: 0, cy: 0, r: 100, startDeg: -80, sweepDeg: 40 };
+  const rb = figureBounds([right]);
+  assert.ok(rb.minY > -100 + 1e-9 && Math.abs(rb.minY - 100 * Math.sin((-80 * Math.PI) / 180)) < 1e-9, '頂点（−90°）は掃引の外＝含めない');
+  assert.deepEqual(figureBounds([{ type: 'arc', cx: 0, cy: 0, r: 10, startDeg: 0, sweepDeg: 0 }]).width, 0);
 });

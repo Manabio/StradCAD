@@ -555,6 +555,101 @@ test('【問題修正2026-08】buildFaceFigure: chMmが異なる2区間（床は
   assert.equal(rightChDim.to, 0, '右端区間の床まで');
 });
 
+// ---- 円弧・ドーム（E4）: 区間の ceilArc:{alongX, chMm}（頭頂）。開始・頭頂・終了の 3 点を通る円弧プリミティブ 1 本 ----
+const arcOnly = prims => prims.filter(p => p.type === 'arc');
+const nearEq = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-6, `${msg} 実際:${a} 期待:${b}`);
+
+test('【3 点を通る円弧 1 本】幅 4000・ライズ 400（両端 2400・頭頂 2800）は R=(2000²+400²)/(2×400)=5200・中心 (2000, +2400)・天井の水平線は無い', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 2400, ceilArc: { alongX: 2000, chMm: 2800 } }];
+  const prims = buildFaceFigure(makeFace(), baseCtx({ ceilingHeight: 2400, floorSegments }));
+  const arcs = arcOnly(prims);
+  assert.equal(arcs.length, 1);
+  const a = arcs[0];
+  nearEq(a.cx, 2000, 'cx'); nearEq(a.cy, 2400, 'cy（図の y は下向き＝中心は −(2800−5200)）'); nearEq(a.r, 5200, 'r');
+  nearEq(a.startDeg, -(180 - (Math.atan(4800 / 2000) * 180) / Math.PI), '始点の角度');
+  nearEq(a.sweepDeg, 2 * (90 - (Math.atan(4800 / 2000) * 180) / Math.PI), '掃引は正（左端→右端・上側の弧）');
+  assert.equal(a.weight, 'thick');
+  assert.equal(prims.filter(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -2400 && p.x1 === 0 && p.x2 === 4000).length, 0,
+    '天井の水平線は引かない（円弧で置き換え）');
+  // 端の縦線は各端の値（円弧の端 2400）
+  const verticals = prims.filter(p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2);
+  assert.deepEqual(verticals.map(l => [l.x1, Math.min(l.y1, l.y2), Math.max(l.y1, l.y2)]).sort((x, y) => x[0] - y[0]),
+    [[0, -2400, 0], [4000, -2400, 0]], '縦線は両端だけ・上端は円弧の端の高さ');
+});
+
+test('【円弧の端点・頭頂が円周上】円弧の始点・終点・頭頂（角度から復元）が元の 3 点に一致する', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 100, chMm: 2400, chHiMm: 2500, ceilArc: { alongX: 1500, chMm: 2900 } }];
+  const [a] = arcOnly(buildFaceFigure(makeFace(), baseCtx({ floorSegments })));
+  const at = deg => [a.cx + a.r * Math.cos((deg * Math.PI) / 180), a.cy + a.r * Math.sin((deg * Math.PI) / 180)];
+  const [sx, sy] = at(a.startDeg), [ex, ey] = at(a.startDeg + a.sweepDeg);
+  nearEq(sx, 0, '始点 x'); nearEq(sy, -2500, '始点 y（床 +100 込みの 2500）');
+  nearEq(ex, 4000, '終点 x'); nearEq(ey, -2600, '終点 y（2500＋100）');
+  // 頭頂（1500, 3000）も円周上
+  nearEq(Math.hypot(1500 - a.cx, -3000 - a.cy), a.r, '頭頂は円周上');
+});
+
+test('【共線なら直線】頭頂が弦の上（0.5mm 未満）なら円弧を作らず従来の線（水平 1 本）', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 2400, ceilArc: { alongX: 2000, chMm: 2400.2 } }];
+  const prims = buildFaceFigure(makeFace(), baseCtx({ floorSegments }));
+  assert.equal(arcOnly(prims).length, 0);
+  assert.equal(prims.filter(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -2400 && p.x1 === 0 && p.x2 === 4000).length, 1);
+});
+
+test('【頭頂が片の外・非有限なら直線】ceilArc.alongX が区間の外／NaN のとき円弧を作らない（失敗系）', () => {
+  for (const alongX of [-100, 5000, NaN]) {
+    const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 2500, ceilArc: { alongX, chMm: 2900 } }];
+    const prims = buildFaceFigure(makeFace(), baseCtx({ floorSegments }));
+    assert.equal(arcOnly(prims).length, 0, `alongX=${alongX}`);
+    assert.ok(prims.some(p => p.type === 'line' && p.weight === 'thick' && p.x1 === 0 && p.x2 === 4000 && p.y1 === -2400 && p.y2 === -2500), `斜線 alongX=${alongX}`);
+  }
+});
+
+test('【CH 寸法は両端の実測】両端が違う円弧は右 CH 寸法が hi 端の値（頭頂の寸法は作らない）。両端同値なら右寸法なし', () => {
+  const uneven = buildFaceFigure(makeFace(), baseCtx({ floorSegments: [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 2450, ceilArc: { alongX: 1500, chMm: 2900 } }] }));
+  const dims = uneven.filter(p => p.type === 'dim' && p.dir === 'v');
+  assert.equal(dims.length, 1);
+  assert.equal(dims[0].label, 2450);
+  const even = buildFaceFigure(makeFace(), baseCtx({ floorSegments: [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 2400, ceilArc: { alongX: 2000, chMm: 2800 } }] }));
+  assert.equal(even.filter(p => p.type === 'dim' && p.dir === 'v').length, 0);
+});
+
+test('【区間の外は端の値で水平】円弧 [0,2000]（頭頂 1000・2600）の次が高い平面 2800: 円弧は 0..2000・2000..2057.5 は端の高さ 2400 の水平・縦線は 2057.5', () => {
+  const floorSegments = [
+    { loX: 0, hiX: 2000, floorDeltaMm: 0, chMm: 2400, chHiMm: 2400, ceilArc: { alongX: 1000, chMm: 2600 } },
+    { loX: 2000, hiX: 4000, floorDeltaMm: 0, chMm: 2800 },
+  ];
+  const prims = buildFaceFigure(makeFace(), baseCtx({ floorSegments }));
+  const [a] = arcOnly(prims);
+  const at = deg => [a.cx + a.r * Math.cos((deg * Math.PI) / 180), a.cy + a.r * Math.sin((deg * Math.PI) / 180)];
+  nearEq(at(a.startDeg + a.sweepDeg)[0], 2000, '円弧の終点は区間端 2000');
+  const thick = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  assert.ok(thick.some(l => l.y1 === -2400 && l.y2 === -2400 && l.x1 === 2000 && l.x2 === 2057.5), '区間端〜段差の縦線は端の値で水平');
+  assert.ok(thick.some(l => l.x1 === 2057.5 && l.x2 === 2057.5 && Math.min(l.y1, l.y2) === -2800 && Math.max(l.y1, l.y2) === -2400), '段差の縦線');
+});
+
+test('【円弧の面の途中の x で天井高さを引く】アキ（開放スパン）の境界の縦線の上端は x=1000／3000 での円弧の高さ 2702.94（弦の補間 2600 ではない）', () => {
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 2400, ceilArc: { alongX: 2000, chMm: 2800 } }];
+  const face = makeFace({ spans: [
+    { loX: 0, hiX: 1000, kind: 'wall' },
+    { loX: 1000, hiX: 3000, kind: 'open', farFloorDeltaMm: 0, farCeilAbsMm: 2800 },
+    { loX: 3000, hiX: 4000, kind: 'wall' },
+  ] });
+  const prims = buildFaceFigure(face, baseCtx({ floorSegments }));
+  const z = -2400 + Math.sqrt(5200 ** 2 - 1000 ** 2); // 2702.94…
+  for (const x of [1000, 3000]) {
+    const edge = prims.find(p => p.type === 'line' && p.x1 === p.x2 && Math.abs(p.x1 - x) < 1e-6 && p.weight === 'medium');
+    assert.ok(edge, `x=${x} の境界の縦線`);
+    nearEq(Math.min(edge.y1, edge.y2), -z, `x=${x} の縦線の上端は円弧の高さ`);
+  }
+});
+
+test('【注記の突き出し基準に頭頂を含む】一点鎖線（壁中心線）の上端は円弧の頭頂 2800 の上へ出る（平面 2400 の面より 400 高い）', () => {
+  const topOfCenterLines = prims => Math.min(...prims.filter(p => p.type === 'line' && p.dash === 'center').flatMap(p => [p.y1, p.y2]));
+  const flat = buildFaceFigure(makeFace(), baseCtx({ floorSegments: [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400 }] }));
+  const arc = buildFaceFigure(makeFace(), baseCtx({ floorSegments: [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 2400, ceilArc: { alongX: 2000, chMm: 2800 } }] }));
+  nearEq(topOfCenterLines(arc), topOfCenterLines(flat) - 400, '頭頂ぶん高い');
+});
+
 // ---- 傾斜天井（E3a-2）: 区間の chMm（loX 側）・chHiMm（hiX 側）。天井断面線は斜線1本 ----
 test('【傾斜の天井線は1本の斜線】1区間 chMm 2400→chHiMm 3000 は (0,-2400)→(4000,-3000) の1本・段差の縦線なし・端の縦線は各端の高さ', () => {
   const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0, chMm: 2400, chHiMm: 3000 }];

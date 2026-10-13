@@ -8,7 +8,8 @@
  * だけを角の2点に限って動かす——resolveJoinedLinePointsは延長が入ったlineだけを載せた差分Mapを
  * 返し、renderFigurePrimitivesはそれを1回だけ計算してrenderOneへ渡す。
  *
- * 対象は type==='line' かつ破線でない(p.dash無し)線分のみ。モデルmm座標で端点が厳密一致
+ * 対象は type==='line' かつ破線でない(p.dash無し)線分と、type==='arc'（展開図の天井断面の円弧）の端。
+ * 円弧は端を動かせないので、角では接線方向へ延ばす短い線分（resolveArcTails）をレンダラが足す。モデルmm座標で端点が厳密一致
  * （|Δ|≤MM_MATCH_EPS）する点に、ちょうど2本の端点だけが集まる角だけを閉じる——3本以上が集まる点・
  * 端点が相手の内部にあるT字・交差は対象外（endpoint-to-endpointの厳密一致でしか拾わないため、
  * これらは自然に候補から漏れる）。
@@ -37,16 +38,30 @@ export function weightPx(p, lineWeightsPx) {
 
 // 破線でないtype==='line'のうち、モデルmmで長さ0でないものだけを候補にする
 // （長さ0は方向が定義できずNaN/Infinityの元になるため対象外）。
+// 円弧（type==='arc'。展開図の天井断面）も候補にする。端点と「角から外向きの接線」を持つ。
 function collectCandidates(primitives) {
   const cands = [];
   for (let i = 0; i < primitives.length; i++) {
     const p = primitives[i];
-    if (p.type !== 'line' || p.dash) continue;
-    const lenMm = Math.hypot(p.x2 - p.x1, p.y2 - p.y1);
-    if (!(lenMm > MM_MATCH_EPS)) continue;
-    cands.push({ idx: i, p });
+    if (p.dash) continue;
+    if (p.type === 'line') {
+      const lenMm = Math.hypot(p.x2 - p.x1, p.y2 - p.y1);
+      if (!(lenMm > MM_MATCH_EPS)) continue;
+      cands.push({ idx: i, p, kind: 'line' });
+    } else if (p.type === 'arc' && Number.isFinite(p.sweepDeg) && Math.abs(p.sweepDeg) > 1e-9 && p.r > 0) {
+      cands.push({ idx: i, p, kind: 'arc' });
+    }
   }
   return cands;
+}
+
+// 円弧の端（'1'＝始点・'2'＝終点）の mm 座標と、角から外向きの接線の単位ベクトル。
+function arcEndInfo(p, end) {
+  const rad = d => (d * Math.PI) / 180;
+  const a = rad(end === '1' ? p.startDeg : p.startDeg + p.sweepDeg);
+  const sgn = p.sweepDeg > 0 ? 1 : -1;
+  const s = end === '1' ? -sgn : sgn; // 終点は進行方向・始点はその逆が外向き
+  return { x: p.cx + p.r * Math.cos(a), y: p.cy + p.r * Math.sin(a), ux: s * -Math.sin(a), uy: s * Math.cos(a) };
 }
 
 // mm座標をMM_MATCH_EPS単位の格子へ丸めたキー（厳密一致judgementの実装）。
@@ -55,6 +70,7 @@ function pointKey(x, y) {
 }
 
 function endpointMm(p, end) {
+  if (p.type === 'arc') { const e = arcEndInfo(p, end); return [e.x, e.y]; }
   return end === '1' ? [p.x1, p.y1] : [p.x2, p.y2];
 }
 
@@ -71,9 +87,24 @@ function otherEndMm(p, end) {
  * @returns {Map<number, [number, number, number, number]>} primitives配列のindex → [x1,y1,x2,y2](px)
  */
 export function resolveJoinedLinePoints(primitives, t, lineWeightsPx) {
+  return analyzeJoins(primitives, t, lineWeightsPx).lines;
+}
+
+/**
+ * 円弧（type==='arc'）の端が線または別の円弧とL字に取り合う角で、円弧を接線方向へ延ばす短い線分（px）。
+ * 円弧自体はパスなので端を動かせないため、レンダラは円弧の後ろにこの線分を同じ線幅で足す。
+ * @returns {Map<number, Array<[number, number, number, number]>>} primitives配列のindex → [x1,y1,x2,y2](px)の配列
+ */
+export function resolveArcTails(primitives, t, lineWeightsPx) {
+  return analyzeJoins(primitives, t, lineWeightsPx).arcs;
+}
+
+function analyzeJoins(primitives, t, lineWeightsPx) {
   const result = new Map();
+  const arcTails = new Map();
+  const out = { lines: result, arcs: arcTails };
   const cands = collectCandidates(primitives);
-  if (cands.length < 2) return result;
+  if (cands.length < 2) return out;
 
   // 端点をmm厳密一致でグルーピングする。
   const groups = new Map();
@@ -98,25 +129,22 @@ export function resolveJoinedLinePoints(primitives, t, lineWeightsPx) {
     const [eA, eB] = entries;
     if (eA.cand.idx === eB.cand.idx) continue; // 念のための防御（長さ0除外で通常発生しない）
 
-    const [oxAmm, oyAmm] = otherEndMm(eA.cand.p, eA.end);
-    const [oxBmm, oyBmm] = otherEndMm(eB.cand.p, eB.end);
     const [cxAmm, cyAmm] = endpointMm(eA.cand.p, eA.end);
     const [cxBmm, cyBmm] = endpointMm(eB.cand.p, eB.end);
-
     const cxAPx = t.tx(cxAmm), cyAPx = t.ty(cyAmm);
     const cxBPx = t.tx(cxBmm), cyBPx = t.ty(cyBmm);
-    const oxAPx = t.tx(oxAmm), oyAPx = t.ty(oyAmm);
-    const oxBPx = t.tx(oxBmm), oyBPx = t.ty(oyBmm);
 
-    // 「角から外向きの単位ベクトル」＝自分の他端→角の方向を、角の先へ延ばす向き。
-    const dxA = cxAPx - oxAPx, dyA = cyAPx - oyAPx;
-    const dxB = cxBPx - oxBPx, dyB = cyBPx - oyBPx;
-    const lenAPx = Math.hypot(dxA, dyA);
-    const lenBPx = Math.hypot(dxB, dyB);
-    if (!(lenAPx > 0) || !(lenBPx > 0)) continue; // px空間でも長さ0なら何もしない
-
-    const uAx = dxA / lenAPx, uAy = dyA / lenAPx;
-    const uBx = dxB / lenBPx, uBy = dyB / lenBPx;
+    // 「角から外向きの単位ベクトル」＝線は自分の他端→角の方向、円弧は端の接線（外向き）を、角の先へ延ばす向き。
+    const outward = (e, cxPx, cyPx) => {
+      if (e.cand.kind === 'arc') { const a = arcEndInfo(e.cand.p, e.end); return [a.ux, a.uy]; }
+      const [oxmm, oymm] = otherEndMm(e.cand.p, e.end);
+      const dx = cxPx - t.tx(oxmm), dy = cyPx - t.ty(oymm);
+      const len = Math.hypot(dx, dy);
+      return len > 0 ? [dx / len, dy / len] : null; // px空間でも長さ0なら何もしない
+    };
+    const uA = outward(eA, cxAPx, cyAPx), uB = outward(eB, cxBPx, cyBPx);
+    if (!uA || !uB) continue;
+    const [uAx, uAy] = uA, [uBx, uBy] = uB;
 
     const cos = uAx * uBx + uAy * uBy;
     const sin = Math.abs(uAx * uBy - uAy * uBx);
@@ -133,8 +161,14 @@ export function resolveJoinedLinePoints(primitives, t, lineWeightsPx) {
     dA = Math.max(0, Math.min(dA, clampMax));
     dB = Math.max(0, Math.min(dB, clampMax));
 
-    setOverride(eA.cand.idx, eA.end, cxAPx + uAx * dA, cyAPx + uAy * dA);
-    setOverride(eB.cand.idx, eB.end, cxBPx + uBx * dB, cyBPx + uBy * dB);
+    for (const [e, cx, cy, ux, uy, d] of [[eA, cxAPx, cyAPx, uAx, uAy, dA], [eB, cxBPx, cyBPx, uBx, uBy, dB]]) {
+      if (e.cand.kind === 'arc') {
+        if (!arcTails.has(e.cand.idx)) arcTails.set(e.cand.idx, []);
+        arcTails.get(e.cand.idx).push([cx, cy, cx + ux * d, cy + uy * d]);
+      } else {
+        setOverride(e.cand.idx, e.end, cx + ux * d, cy + uy * d);
+      }
+    }
   }
 
   for (const [idx, ov] of overrides) {
@@ -144,7 +178,7 @@ export function resolveJoinedLinePoints(primitives, t, lineWeightsPx) {
     result.set(idx, [p1[0], p1[1], p2[0], p2[1]]);
   }
 
-  return result;
+  return out;
 }
 
 /**
