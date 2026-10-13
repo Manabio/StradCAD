@@ -47,6 +47,7 @@ import {
 } from './section/sectionEmit.js';
 import {
   stairPrimitivesForCut, stairFaceOccluderRects, stairCutFloorProfile,
+  flightStartOuterBound, mergeOuterBounds,
 } from './section/sectionStair.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
 import { stairSectionIsClosed } from './elevationStairSection.js';
@@ -504,7 +505,12 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // （展開図一般化Phase 6b-2 設計(d)。ユーザー裁定2026-09-13）。旧`opts.slabBand`
   // （下階天井〜上階床の固定z帯を`zRef`から外部指定してカットする特例）はP3で削除済み
   // ——一般ルールが同じ問い（下ささらが床構造の中を通る区間）を`columns`の実体だけで答える。
-  const stairOpts = { outerBound: overhang.stairOverhangOuter };
+  // 1 段目の段鼻が面端の外に出るとき（入口柱の面 Q1 まで上り口辺が下がる）は、flight の始端まで広げる
+  // （上階はり出しの外端とは min/max で合成）。壁のある端の外（壁の中）へは出さない＝届く限界は壁のない端部の
+  // 体裁延長込みの探査範囲 cutDrawRange(pcut)。範囲内なら undefined＝従来と同一。
+  const stairOpts = {
+    outerBound: mergeOuterBounds(overhang.stairOverhangOuter, flightStartOuterBound(cut.stairCut ?? null, cut, cutDrawRange(pcut))),
+  };
   const stairContent = stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts);
   // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
   // clipWallFloorEdgeUnderZigzag（階段ジグザグの向こうの壁縁除去）の対象には含めない。

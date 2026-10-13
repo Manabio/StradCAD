@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { uTurnPlanLayout } from '../../finish/stair/stairGeometry.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds } from './sectionStair.js';
 import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from '../elevationStairSection.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
@@ -1934,4 +1934,75 @@ test('stairRunProfile: 区画の先導オプション（leadSteps/leadMm）は�
   assert.deepEqual(stairRunProfile(6, 160, 3000, 100, 0, 1, 0, { leadSteps: 2, leadMm: 1000 }), base, '先導オプションは効かない');
   assert.deepEqual(stairRunProfile(6, 160, 3000, 100, 0, 1, 0, { leadSteps: 0, leadMm: 1000 }), base);
   assert.ok(Math.abs(base.endX - 3100) < 1e-9, '区間の総走行長は不変');
+});
+
+// ==== 1 段目の段鼻が面端の外に出るとき（入口柱の面 Q1 まで上り口辺が下がる。flightStartOuterBound）====
+// 面ローカル x=0 が面端。flight の始端（1 段目の段鼻）が -57.5 にある構成を手組みで作る。
+function makeStartOutsideFlight(overrides = {}) {
+  return {
+    isVertical: true, acrossLo: 0, acrossHi: 1000, runLo: 1442.5, runHi: 1442.5 + 4 * 227.5, travelSign: 1,
+    baseZ: 0, riserMm: 200, steps: 5, lengthMm: 4 * 227.5, nosingMm: 20, treadThicknessMm: 30, ...overrides,
+  };
+}
+const START_CUT = {
+  seqNo: '2', line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 },
+  viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+};
+const START_COLUMNS = [{ x0: -150, x1: 3000, worldLo: 1350, worldHi: 4500, bands: [] }];
+const zigzagOfWood = prims => prims.find(p => p.type === 'polyline');
+
+test('【1段目が面端の外】flightStartOuterBound: 始端が面端の外なら外端（面ローカルx絶対値）を返す', () => {
+  const c = { flights: [makeStartOutsideFlight()], landings: [] };
+  assert.deepEqual(flightStartOuterBound(c, START_CUT), { lo: -57.5, hi: undefined });
+  // hi 側: 走行方向が逆（travelSign<0）で始端が runHi。dirSign=-1 のとき world の大きい側がローカル x の小さい側
+  const flipped = { ...START_CUT, dirSign: -1 };
+  const c2 = { flights: [makeStartOutsideFlight({ travelSign: -1, runLo: 3000, runHi: 4557.5 })], landings: [] };
+  assert.deepEqual(flightStartOuterBound(c2, flipped), { lo: -57.5, hi: undefined });
+  const c3 = { flights: [makeStartOutsideFlight({ travelSign: -1, runLo: 3000, runHi: 1442.5 + 4 * 227.5 })], landings: [] };
+  assert.equal(flightStartOuterBound(c3, START_CUT)?.hi, undefined, '始端が範囲内（world 2352.5 < 4500）なら広げない');
+});
+
+test('【1段目が面端の外】stairPrimitivesForCut: 段鼻 x＝本来値（-57.5）・踏面幅 247.5・蹴込板 -37.5（面端 0 へ潰れない）', () => {
+  const c = { flights: [makeStartOutsideFlight()], landings: [], structure: StructuralMaterialType.WOOD };
+  const outerBound = flightStartOuterBound(c, START_CUT);
+  const pts = zigzagOfWood(stairPrimitivesForCut(c, START_CUT, START_COLUMNS, { outerBound })).points;
+  // 1 段目: 蹴込板の足元 -37.5(蹴込 20 奥) → 垂直に段板の下面 → 段鼻面 → 段鼻 -57.5 → 踏面（次の蹴込板の足元 190 まで）
+  assert.deepEqual(pts.slice(0, 5), [[-37.5, -0], [-37.5, -170], [-57.5, -170], [-57.5, -200], [190, -200]]);
+  assert.equal(pts[4][0] - pts[3][0], 247.5, '踏面幅＝ピッチ 227.5 + 蹴込 20');
+  // 列が面端 0 までしか無くても（実データの階段帯の列は壁なし端の延長を含まない構成がある）届く
+  const narrow = [{ x0: 0, x1: 3000, worldLo: 1500, worldHi: 4500, bands: [] }];
+  const ptsNarrow = zigzagOfWood(stairPrimitivesForCut(c, START_CUT, narrow, { outerBound })).points;
+  assert.equal(ptsNarrow[3][0], -57.5, '列が面端どまりでも outerBound は列の外へ届く');
+  // 修正前（outerBound なし）は面端 0 へ潰れる＝垂直線 1 本・踏面幅 190
+  const before = zigzagOfWood(stairPrimitivesForCut(c, START_CUT, START_COLUMNS)).points;
+  assert.deepEqual(before.slice(0, 4).map(p => p[0]), [0, 0, 0, 190], '前提: 1 段目が面端 0 の垂直線＋踏面幅 190');
+});
+
+test('【失敗系】flightStartOuterBound: flight が範囲内なら undefined＝出力は従来と同一', () => {
+  const inside = { flights: [makeStartOutsideFlight({ runLo: 1500, runHi: 1500 + 910 })], landings: [], structure: StructuralMaterialType.WOOD };
+  assert.equal(flightStartOuterBound(inside, START_CUT), undefined);
+  assert.equal(flightStartOuterBound(null, START_CUT), undefined, '階段なし');
+  assert.equal(flightStartOuterBound({ flights: [] }, START_CUT), undefined, 'flight なし');
+  // 横断（レーンを縦断しない）flight は対象外
+  const across = { flights: [makeStartOutsideFlight({ acrossLo: 2000, acrossHi: 3000 })] };
+  assert.equal(flightStartOuterBound(across, START_CUT), undefined);
+  const a = stairPrimitivesForCut(inside, START_CUT, START_COLUMNS, { outerBound: flightStartOuterBound(inside, START_CUT) });
+  const b = stairPrimitivesForCut(inside, START_CUT, START_COLUMNS);
+  assert.deepEqual(a, b);
+});
+
+test('【失敗系】flightStartOuterBound: 壁のある端（reach が面端どまり）の外＝壁の中へは広げない／壁なし端の延長までは届く', () => {
+  const c = { flights: [makeStartOutsideFlight()], landings: [] };
+  assert.equal(flightStartOuterBound(c, START_CUT, { lo: 0, hi: 3000 }), undefined, '実壁の端: 始端が壁の中なので従来どおり面端で止める');
+  assert.deepEqual(flightStartOuterBound(c, START_CUT, { lo: -150, hi: 3000 }), { lo: -57.5, hi: undefined }, '壁なし端の延長 150 の内側');
+  assert.deepEqual(flightStartOuterBound(c, START_CUT, { lo: -30, hi: 3000 }), { lo: -30, hi: undefined }, '延長が短ければ延長の端で止める');
+});
+
+test('【合成】mergeOuterBounds: 上階はり出し（stairOverhangOuter）との合成は lo=min・hi=max（undefined は無視）', () => {
+  assert.deepEqual(mergeOuterBounds({ lo: -100, hi: 50 }, { lo: -57.5 }), { lo: -100, hi: 50 });
+  assert.deepEqual(mergeOuterBounds({ lo: -30 }, { lo: -57.5 }), { lo: -57.5, hi: undefined });
+  assert.deepEqual(mergeOuterBounds({ hi: 1800 }, { lo: -57.5, hi: 1900 }), { lo: -57.5, hi: 1900 });
+  assert.deepEqual(mergeOuterBounds(undefined, { lo: -57.5 }), { lo: -57.5, hi: undefined });
+  assert.equal(mergeOuterBounds(undefined, undefined), undefined);
+  assert.equal(mergeOuterBounds({}, undefined), undefined);
 });

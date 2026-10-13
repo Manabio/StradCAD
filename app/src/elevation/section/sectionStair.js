@@ -456,7 +456,11 @@ function columnsXRangeOverlapping(columns, cut, runLo, runHi) {
 function fullColumnsXRange(columns, cut, outerBound) {
   if (!columns || columns.length === 0) return { loX: -Infinity, hiX: Infinity };
   const xs = columns.flatMap(c => [c.x0, c.x1]);
-  return clampToDrawRange(cut, { loX: Math.min(...xs), hiX: Math.max(...xs) }, outerBound);
+  // outerBound は階段自身の幾何が届く外端——列の外でも有効（flight の始端が面端の外に出る構成は列が
+  // そこまで続かない。flightStartOuterBound）。上階はり出し由来の値は列が既に覆っているため結果は同じ。
+  return clampToDrawRange(cut, {
+    loX: Math.min(...xs, outerBound?.lo ?? Infinity), hiX: Math.max(...xs, outerBound?.hi ?? -Infinity),
+  }, outerBound);
 }
 
 // 列の範囲は**面の描画範囲を超えうる**——層ごとに面の端が違う多層帯では、上階の平面が続く側に
@@ -498,6 +502,36 @@ export function stairDrawRange(cut, outerBound) {
   const lo = outerBound?.lo != null ? Math.min(draw.lo, outerBound.lo) : draw.lo;
   const hi = outerBound?.hi != null ? Math.max(draw.hi, outerBound.hi) : draw.hi;
   return { lo, hi };
+}
+
+/**
+ * 縦断する flight の始端（1 段目の段鼻）が面の描画範囲の外に出るときの、その外端（面ローカルx絶対値）。
+ * 入口柱（隔て板）で上り口辺が柱の面（Q1）まで下がると、1 段目の段鼻・蹴込板が面端の外へ出る
+ * （範囲に収めると 1 段目が面端の垂直線 1 本に潰れ、蹴込・段鼻面・踏面幅が失われる）。
+ * 範囲内なら undefined（＝従来と同一）。flightRunProfile と同じ始端の式（localXOf(cut, worldStart)）。
+ * reach（既定: 制限なし）… 届いてよい限界の面ローカルx範囲。実在する壁の中（壁のある端の外）へは出さないため、
+ * 呼び出し側は壁のない端部の体裁延長込みの範囲（探査済みの cutDrawRange(pcut)）を渡す。始端が reach の外なら reach の端で止める。
+ * @returns {{lo?:number, hi?:number}|undefined}
+ */
+export function flightStartOuterBound(contribution, cut, reach = { lo: -Infinity, hi: Infinity }) {
+  const draw = cutDrawRange(cut);
+  let lo, hi;
+  for (const f of contribution?.flights ?? []) {
+    if (!isLengthwiseCut(f.isVertical, f.acrossLo, f.acrossHi, f.runLo, f.runHi, cut)) continue;
+    const x0 = localXOf(cut, f.travelSign > 0 ? f.runLo : f.runHi);
+    if (!Number.isFinite(x0)) continue;
+    const x = Math.min(reach.hi, Math.max(reach.lo, x0));
+    if (x < draw.lo - GAP_EPS) lo = lo == null ? x : Math.min(lo, x);
+    else if (x > draw.hi + GAP_EPS) hi = hi == null ? x : Math.max(hi, x);
+  }
+  return lo == null && hi == null ? undefined : { lo, hi };
+}
+
+/** outerBound 同士の合成（lo は小さい方・hi は大きい方。null/undefined は無視）。両方空なら undefined。 */
+export function mergeOuterBounds(a, b) {
+  const pick = (x, y, f) => (x == null ? y : y == null ? x : f(x, y));
+  const lo = pick(a?.lo, b?.lo, Math.min), hi = pick(a?.hi, b?.hi, Math.max);
+  return lo == null && hi == null ? undefined : { lo, hi };
 }
 
 // flightの段鼻ジグザグ点列を、cutのローカルx軸へ投影して求める（isLengthwiseCutのゲート無し。

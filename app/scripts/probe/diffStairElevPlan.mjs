@@ -24,6 +24,8 @@
 // 判定: OK／NG／「—（未検査）」。未検査＝横断・階段なし、または面端を除いて展開図・平面とも蹴上が 0 本の縦断。
 // 面端(未検査): 面の両端（0 と face.run）±tol の展開図の蹴上・平面の交点。端の縦線は sectionStair.js computeFlightProfile が
 //   [loX,hiX] へクランプするため真の段鼻の位置を判定できず、一致にも不一致にも数えず別欄に出す。
+//   ただし flight の始端（1 段目の段鼻）が面端の外に出る構成（入口柱の面 Q1）は別: 平面の始端を期待値に足し、展開図の
+//   1 段目の段鼻が始端まで届いていなければ「平面だけ」で NG にする（stairOpts.outerBound。flightStartOuterBound）。
 // 終了コード: 0＝検査した縦断がすべて一致／1＝不一致あり／2＝用法違反／3＝検査した縦断が 0 件（階段なし等で何も見ていない）。
 // 既知の差: 本番 buildStairBand は ctx.wallLessEndExtendModelMm（壁のない端部の延長量。図形側の倍率決定後の値）を渡すが、
 //   本 probe は渡さず既定（150）で動かす（dumpElevFigure.mjs と同条件）。壁のない端の探査窓が実アプリと違いうるので、
@@ -44,7 +46,7 @@ import { roomCeilingHeight } from '../../src/finish/roomMetrics.js';
 import { roomBounds, worldToCell } from '../../src/finish/gridCells.js';
 import { buildEnclosureCellToRoom, ADJACENT_SAMPLE_EPS } from '../../src/finish/edgeClassify.js';
 import { findOverlappingRoom } from '../../src/elevation/elevationVoid.js';
-import { withCutLandings, landingStepRisers, stairAxisIsVertical } from '../../src/elevation/section/sectionStair.js';
+import { withCutLandings, landingStepRisers, stairAxisIsVertical, isLengthwiseCut } from '../../src/elevation/section/sectionStair.js';
 import { cutOriginWorld } from '../../src/elevation/section/sectionTypes.js';
 import { ElevationLineRole, weightForRole } from '../../src/elevation/elevationStyle.js';
 import { withGraphReadScope } from '../../src/graphReadScope.js';
@@ -290,6 +292,17 @@ for (let i = 0; i < tabs.length; i++) {
             const v = typeof b === 'number' ? b : (b.isVertical !== cut.line.isVertical ? b.value : null);
             if (v == null) continue;
             for (const r of edgeRuns) if (Math.abs(r - v) <= opt.tol) planRuns.push(r);
+          }
+          // 面端の外に出る flight の始端（1 段目の段鼻。入口柱の面 Q1 まで上り口辺が下がる構成）。
+          // 切断線の範囲外なので外周との交点には現れず、面端へクランプされると展開図の蹴上が面端の縦線に潰れて
+          // 「面端(未検査)」に落ちる。平面の始端（flight の始端＝uTurnPlanLayout の startA 等）を期待値に足し、
+          // 展開図の 1 段目の段鼻が flight の始端まで届いているかを突き合わせる（届かなければ「平面だけ」で NG）。
+          const faceRun = entry.face?.run ?? NaN;
+          for (const f of contribution.flights ?? []) {
+            if (!isLengthwiseCut(f.isVertical, f.acrossLo, f.acrossHi, f.runLo, f.runHi, cut)) continue;
+            const w = f.travelSign > 0 ? f.runLo : f.runHi;
+            const x = (w - origin) * cut.dirSign;
+            if (x < -opt.tol || x > faceRun + opt.tol) planRuns.push(w);
           }
           planRuns = uniqueSorted(planRuns);
         }
