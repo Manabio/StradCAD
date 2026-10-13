@@ -323,6 +323,60 @@ test('【失敗系・項目3】ElevationModeState: 建具データと無関係�
   assert.equal(state.bands, bandsRefBefore, '建具データ以外の変更ではreactionが発火せず帯は再構築されないはず');
 });
 
+// ---- 壁・鮮度キー・構造部材の変化（突入境界の再生成・展開中の undo/redo）で帯を作り直す ----
+async function initWithBuildCounter(project) {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+  await state.init();
+  let builds = 0;
+  const orig = state._buildBands.bind(state);
+  state._buildBands = () => { builds++; return orig(); };
+  return { graph, state, builds: () => builds };
+}
+
+test('【S3・21a】ElevationModeState: init 後に壁が作り直される（鍵の更新・壁 id の入替え）と帯が再構築される', async () => {
+  const { graph, state, builds } = await initWithBuildCounter(fakeProject('p1'));
+  runInAction(() => { graph.setWallFreshnessKey('k1'); });
+  assert.equal(builds(), 1, '鍵の更新で 1 回再構築');
+  const wall = graph.walls[0];
+  runInAction(() => { graph.removeShape(wall.id); });
+  assert.equal(builds(), 2, '壁 id 列の変化で再構築');
+  state.dispose();
+});
+
+test('【S3・21d】ElevationModeState: init 後に柱が 1 本増える（構造部材の署名）と帯が再構築される', async () => {
+  const { graph, state, builds } = await initWithBuildCounter(fakeProject('p1'));
+  const x1 = graph.centerLines.find(c => c.centerLineType === CenterLineType.VERTICAL);
+  const y1 = graph.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL);
+  runInAction(() => { graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-105x105', x1, y1, {}); });
+  assert.equal(builds(), 1, '柱の追加で 1 回再構築');
+  state.dispose();
+});
+
+test('【S3・21b】ElevationModeState: 別の階がアクティブなら壁が変わっても帯を再構築しない', async () => {
+  const project = fakeProject('p1');
+  const { graph, state, builds } = await initWithBuildCounter(project);
+  project.activePlane = { id: 'p2' };
+  runInAction(() => { graph.setWallFreshnessKey('k1'); });
+  assert.equal(builds(), 0);
+  state.dispose();
+});
+
+test('【S3・21c】ElevationModeState: dispose 後は壁が変わっても帯を再構築しない', async () => {
+  const { graph, state, builds } = await initWithBuildCounter(fakeProject('p1'));
+  let sigCalls = 0;
+  const origSig = state._derivedSignature.bind(state);
+  state._derivedSignature = () => { sigCalls++; return origSig(); };
+  runInAction(() => { graph.setWallFreshnessKey('k0'); }); // 生きた reaction なら署名を再評価する
+  assert.equal(sigCalls, 1, '前提: dispose 前は署名が再評価される');
+  state.dispose();
+  sigCalls = 0;
+  runInAction(() => { graph.setWallFreshnessKey('k1'); });
+  assert.equal(builds(), 1, 'dispose 前の 1 回だけ（dispose 後は増えない）');
+  assert.equal(sigCalls, 0, 'dispose 後は reaction が破棄され署名も評価されない');
+});
+
 // ================================================================
 // 配線（ユーザー実機指摘2026-09「「5」D1に柱型が無い」の主因）: 多層帯
 // （buildRoomBandWithVoidAbove）へも2.5D加算レイヤ（ctx.solids）を渡すこと。

@@ -29,12 +29,16 @@ test('【配線】App.jsx: CeilingPanel は appMode === ceiling && mode のと�
   assert.match(appCode, /^import \{ CeilingPanel \} +from '\.\/ceiling\/CeilingPanel\.jsx';\s*$/m);
 });
 
-test('【配線】App.jsx: 天伏は仕上げ表パネルを出さず、modeBoundaries に ceiling: を持たない（graph を変えないので境界処理なし）', () => {
+test('【配線】App.jsx: 天伏は仕上げ表パネルを出さず、modeBoundaries の ceiling: は enter（壁の鮮度判定）だけで exit を持たない（天伏は壁の入力を書かない）', () => {
   const start = appCode.indexOf('const modeBoundaries = {');
   assert.ok(start >= 0, 'const modeBoundaries = { が見つからない');
   const end = appCode.indexOf('\n  };', start);
   assert.ok(end > start, 'modeBoundaries の閉じが見つからない');
-  assert.ok(!/^\s*ceiling:/m.test(appCode.slice(start, end)), 'modeBoundaries に ceiling: がある');
+  const registry = appCode.slice(start, end);
+  const cStart = registry.search(/^\s*ceiling:/m);
+  assert.ok(cStart >= 0, 'modeBoundaries に ceiling: が無い');
+  const ceilingBlock = registry.slice(cStart).split(/\r?\n/).filter(l => !l.trim().startsWith('//')).join('\n');
+  assert.ok(/enter:/.test(ceilingBlock) && !/exit:/.test(ceilingBlock), 'ceiling: は enter だけを持つはず');
   assert.ok(!/finishPanelTabIds|tabIds=/.test(appCode), 'App.jsx に仕上げ表の tabIds 絞り込みが残っている（兼用案）');
   assert.match(appCode, /^\s*\{appMode === 'finish' && mode && !mode\.namingRoomId && \(\s*$/m);
 });

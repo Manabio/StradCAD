@@ -9,6 +9,8 @@
 読み取り専用処理であり、囲まないとMobXのcomputedが観測者ゼロで毎回再計算され突入に十数秒かかる
 （実機12室で14.2秒→0.52秒。`.claude/implementation-policy.md` 方針8）。
 
+突入境界（`modeBoundaries.elevation.enter`）は帯構築より前に、自階と直上・直下の壁の鮮度判定（`refreshWallsForViewEntry`。`.claude/mode-system.md`）を行う。`ElevationModeState`は壁・鮮度キー・構造部材（柱・梁）の変化でも帯を全再構築する（階切替で境界が再生成したとき・展開中のundo/redoで壁が戻るとき。アクティブ階が自分の階のときだけ）。既知の限界: 署名はidと鍵だけを見るため、idが同じで中身だけ変わる変更（構造スナップショットのundoで柱寸だけ変わる等）は検出しない。
+
 縦横スクロールは**クランプ方式**（循環しない・画面に収まる帯もminXへクランプし中央寄せしない——全帯を左三角の位置で揃えるため）で
 **書き込み時にクランプする**（読み出し側だけだと過剰ドラッグ分がスラックとして蓄積しデッドゾーンになる）。横スクロールの既定位置は
 左三角(`band.leftAnchorX`)から`LEFT_MARGIN_SCREEN_MM`（2パス換算）ぶん手前——`clampFaceOffset`の下限だけを`minX-marginMm`へ広げて実現する

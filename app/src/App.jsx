@@ -64,7 +64,7 @@ import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
 import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, setStructuralToastHandler } from './structural/structuralOrchestration.js';
 import { structuralSync, OPENING_STRUCTURAL_SYNC } from './structural/structuralSync.js';
-import { refreshWallsAllFloors } from './wallRefresh.js';
+import { refreshWallsAllFloors, refreshWallsForViewEntry } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
@@ -1201,16 +1201,28 @@ const App = observer(() => {
       enter: (graph) => collectOpeningNumbersAllFloors(graph),
     },
     elevation: {
-      // 突入: 建具記号丸のタグ表示に使うため、建具モードと同じ採番収集を行う。graphは変更しない
+      // 突入（1）: 自階と直上・直下の階の壁の鮮度判定（平面モードの編集〔通り芯・階段・部屋〕で古くなった
+      // 壁・隔て壁・2a・柱巻きを作り直す。不一致の階だけ再生成し自階の変更は undo エントリ。無編集なら
+      // 再生成も undo も起きない）。モード切替・モード維持の階切替（floorSwitch:true）とも同じ
+      // （階切替で無編集なら鍵一致で何もしない）。履歴ナビ（switchHistoryContext）は素の切替のまま＝
+      // 境界は走らない（既知の限界: undo で展開へ戻ったとき壁が古い可能性）。
+      //
+      // 突入（2）: 建具記号丸のタグ表示に使うため、建具モードと同じ採番収集を行う。graphは変更しない
       // （表示専用モード）ため exit・undoエントリは不要（openingモードと同じ論証）。
       //
       // openingモードとは異なりdeferEnterOnModeChangeを付けない（=完了を待つ）: 建具モードの
       // タグレイヤは observer で project.openingNumberIndex を毎回読み直すため、採番が遅れて
       // 確定しても後から自動的に再描画される。展開モードは突入時に帯（プリミティブ配列）を
-      // 一度だけ構築してスナップショット化する（ElevationModeState.bandsはobservable.refで
-      // reactionを持たない）ため、採番の確定を待たずに帯を組むと建具記号丸の番号が
+      // 一度だけ構築してスナップショット化する（ElevationModeStateは採番〔openingNumberIndex〕の
+      // 変化に対する reaction を持たない）ため、採番の確定を待たずに帯を組むと建具記号丸の番号が
       // 恒久的に空欄のまま固まってしまう。
-      enter: (graph) => collectOpeningNumbersAllFloors(graph),
+      enter: (graph) => refreshWallsForViewEntry(project, { saveActiveFloorFn: saveFloor })
+        .then(() => collectOpeningNumbersAllFloors(graph)),
+    },
+    ceiling: {
+      // 突入: 同上（見上げも graph.walls を読む）。天伏モードは room.ceilingZones・天井芯しか書かず
+      // 壁の入力ではないため exit は不要。
+      enter: () => refreshWallsForViewEntry(project, { saveActiveFloorFn: saveFloor }),
     },
   };
 

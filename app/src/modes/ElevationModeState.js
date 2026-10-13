@@ -151,6 +151,18 @@ export class ElevationModeState {
         () => this._openingsSignature(),
         () => this._rebuildBands(),
       );
+      // 壁・壁の鮮度キー・構造部材（柱・梁）の変化でも帯を全再構築する。突入境界（refreshWallsForViewEntry）は
+      // init より前に完了するが、モード維持の階切替で境界が再生成したとき・展開中の undo/redo で壁が戻る
+      // ときは、init 済みの State のグラフが後から変わるため。階の照合が要る理由: swap が旧階のグラフを
+      // clearFloorData するため、階切替後の旧 State でも発火する（新階の帯を旧 State が作り直さない）。
+      this._derivedReactionDispose = reaction(
+        () => this._derivedSignature(),
+        () => {
+          if (this._disposed) return;
+          if ((this.project?.activePlane?.id ?? null) !== this._floorId) return;
+          this._rebuildBands();
+        },
+      );
       return { ok: error === null, error };
     } catch (err) {
       console.error('[elevation] モードの初期化に失敗:', err);
@@ -356,6 +368,13 @@ export class ElevationModeState {
     ].join(':')).join('|');
   }
 
+  /** 壁の再生成・構造部材の増減を検出する署名（壁の鮮度キー＋壁 id 列＋柱・梁の id 列）。 */
+  _derivedSignature() {
+    const g = this.graph;
+    const ids = list => list.map(s => s.id).join(',');
+    return `${g.wallFreshnessKey ?? ''}#${ids(g.walls)}#${ids(g.columns)}#${ids(g.beams)}`;
+  }
+
   /** 画面高さのみで固定倍率(px/mm)を決める（ズームなし）。 */
   get scale() {
     return chooseElevationScale(this.bands, this.viewSize ?? { width: 800, height: 600 });
@@ -477,6 +496,7 @@ export class ElevationModeState {
   dispose() {
     this.saveView();
     this._openingsReactionDispose?.(); // 項目3: 建具データ監視reactionの後始末
+    this._derivedReactionDispose?.();  // 壁・構造部材の変化監視reactionの後始末
     this._disposed = true;
   }
 }
