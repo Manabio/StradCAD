@@ -14,6 +14,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature } from '@core
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, probeColumn } from './sectionProbe.js';
 import { buildCutContent, withProbeExtension } from './sectionContent.js';
+import { emitColumns } from './sectionEmit.js';
 import { baseLayerOf, orderLayerStack } from './sectionLayerStack.js';
 import { GAP_EPS_MM as GAP_EPS, UPPER_PLANE_OVERHANG_LIMIT_MM,
   ElevationLineRole, weightForRole } from '../elevationStyle.js';
@@ -435,6 +436,37 @@ test('【失敗系・探査窓gate】ceilProfileを持たない帯（階段帯�
   const pcut = withProbeExtension(cut, 0, null, { upperPlaneOverhang: true });
   assert.equal(pcut.layerRunWindows.get(layers[1]).hi, cut.line.hi + 160,
     'gateの材料が無い帯では従来どおり広げる（階段帯を不変に保つ）');
+});
+
+test('【ceilClip ありでも帯の性格判定（探査窓 gate）は ceilProfile 無しの挙動のまま】端の天井が上階の床より下の ceilClip でも窓は広がる', () => {
+  const layers = twoLayersWithUpperOverhang(160);
+  const base = facingCut(layers);
+  const cut = { ...base, ceilClip: [{ loX: 0, hiX: base.face.run, ceilZ: CH }] };
+  const pcut = withProbeExtension(cut, 0, null, { upperPlaneOverhang: true });
+  assert.equal(pcut.layerRunWindows.get(layers[1]).hi, cut.line.hi + 160,
+    'ceilProfile なら CH(2400) < 上階の床(2900) で止まるが、ceilClip は gate の材料にしない');
+  const stopped = withProbeExtension({ ...base, ceilProfile: cut.ceilClip }, 0, null, { upperPlaneOverhang: true });
+  assert.equal(stopped.layerRunWindows.get(layers[1]).hi, cut.line.hi, '対照: 同じ値の ceilProfile なら窓は広がらない');
+});
+
+test('【ceilClip ありでも帯の性格判定（emitColumns の ceilProfile 分岐）は ceilProfile 無しの挙動のまま】同じ列に対し ceilClip の有無で出力が変わらず、ceilProfile だと変わる', () => {
+  // 手組みの列（階段帯と同じ＝slab が残る形。ceilClip で打ち切られた実列は slab が落ちるので性格判定の差が出ない）:
+  // 壁の帯の上にスラブ[2400,3000]・スラブに切断壁が載って向こうが空気。
+  const slab = { kind: 'slab', z0: 2400, z1: 3000, floorZ: 2400, ceilZ: 3000 };
+  const columns = [
+    { x0: 0, x1: 100, worldLo: 0, worldHi: 100, bands: [{ kind: 'open', z0: 0, z1: 6000 }] },
+    { x0: 100, x1: 600, worldLo: 100, worldHi: 600, bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 100, layerRole: 'self' }, slab] },
+    { x0: 600, x1: 700, worldLo: 600, worldHi: 700, bands: [{ ...slab }, { kind: 'cut', z0: 3000, z1: 5400, layerRole: 'above' }] },
+    { x0: 700, x1: 1000, worldLo: 700, worldHi: 1000, bands: [{ kind: 'open', z0: 0, z1: 6000 }] },
+  ];
+  const base = { line: { isVertical: true, axisValue: 0, lo: 0, hi: 1000, buttToleranceMm: 0 }, viewSign: 1, dirSign: 1,
+    layers: [], zRange: { loZ: 0, hiZ: 6000 }, baseFloorZ: 0 };
+  const ceilClip = [{ loX: 0, hiX: 1000, ceilZ: 2400 }];
+  const plain = emitColumns(columns, base, {});
+  assert.ok(plain.length > 0, '前提: 何かが描かれる');
+  assert.deepEqual(emitColumns(columns, { ...base, ceilClip }, {}), plain, 'ceilClip は emitColumns の分岐（slabEdgeCutWallJunction 側）を変えない');
+  assert.notDeepEqual(emitColumns(columns, { ...base, ceilProfile: ceilClip }, {}), plain,
+    '対照: ceilProfile なら ceilStepSlabSection 側へ分岐して出力が変わる（この構成で分岐を検出できる）');
 });
 
 // ---- gateの鏡像: 下階の層（吹抜け帯）は「帯の床断面がその層の天井より下」の端だけ ----

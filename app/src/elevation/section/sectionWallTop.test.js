@@ -416,6 +416,20 @@ test('S4-2 buildColumns（T-C）: 列の天井（ceilProfile）が斜面の途�
   assert.ok(wallOf(cols.find(c => c.x0 === 1000)).topEdge, '天井に届かない列 [1000,1600] は斜線のまま');
 });
 
+test('S4-2 buildColumns（E5-1a）: ceilClip だけの切断でも斜面の途中の天井の高さで列を割り、ceilProfile と同じ列になる（斜線の頭打ちの高さに読む）', () => {
+  const { layers, ctx } = slopeFixture();
+  const prof = [{ loX: 0, hiX: 5000, ceilZ: 2800 }];
+  const clipCut = slopeCut(layers, { ceilProfile: undefined, ceilClip: prof }); // alongCut は既定で ceilProfile を持つので外す
+  assert.ok(hasBreak(collectCutBreaks(clipCut, ctx), 2800), 'ceilClip の 2800 → y=2800 で割れる');
+  assert.deepEqual(buildColumns(clipCut, ctx), buildColumns(slopeCut(layers, { ceilProfile: prof }), ctx),
+    'ceilClip だけの列は ceilProfile と同一');
+  assert.ok(!hasBreak(collectCutBreaks(slopeCut(layers), ctx), 2800), '前提: どちらも無ければ 2800 では割れない');
+  // ceilProfile があればそちらが勝つ（ceilClip の 2800 は読まない）
+  const both = slopeCut(layers, { ceilProfile: [{ loX: 0, hiX: 5000, ceilZ: 2600 }], ceilClip: prof });
+  // 斜面は y=1000 で 2200・傾き 1/3 なので、天井 2600 → y=2200・天井 2800 → y=2800
+  assert.ok(hasBreak(collectCutBreaks(both, ctx), 2200) && !hasBreak(collectCutBreaks(both, ctx), 2800));
+});
+
 test('S4-2 列の境界: プロファイルを持つ壁の層の部屋の実効天井も斜線の頭打ちの高さとして列を割る', () => {
   const { layers, ctx } = slopeFixture();
   ctx.chOf = (room, graph) => (graph === layers[0].graph ? 2800 : 2400); // 階段室（自階）の天井だけ 2800

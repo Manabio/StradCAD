@@ -42,7 +42,14 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   face?: object,
  *   ends?: {openLo:boolean, openHi:boolean, wallLessLo:boolean, wallLessHi:boolean},
  *   openGapMarks?: boolean,
+ *   ceilClip?: Array<{loX:number, hiX:number, ceilZ:number, ceilZHi?:number}>,
  * }} SectionCut
+ *   ceilClip（任意。E5の受け口）… `ceilProfile`と同形（断面ローカルx）の**打ち切り専用**の天井断面。
+ *   列の分割（`withCeilProfileBreaks`）・列の天井（`ceilZ`/`ceilEdge`）・斜線を頭打ちにする列境界
+ *   （`collectCutBreaks`の`slopeLevels`）だけが `ceilProfile ?? ceilClip` で読む。帯の性格判定
+ *   （`slabEdgeCutWallJunction`/`ceilStepSlabSection`の分岐・`layerRunWindowsOf`のgate・`cellAt`の
+ *   span分岐）は`ceilProfile`だけを見る——ceilProfileを付けると階段帯全体の性格が変わるため、
+ *   階段帯が「天井の形だけ」を渡す口として分けた。`ceilProfile`があればそちらが勝つ。
  *   openGapMarks（任意）… false のときその切断の面にアキのバツ・「ア キ」を標記しない
  *   （`emitOpenGapMarks`が空配列を返す）。未指定・true は従来どおり標記する。折返し階段の
  *   踊り場前縁の切断（seq1/seq3。`switchbackCuts.js`）が false（ユーザー指示2026-10-07
@@ -410,6 +417,15 @@ export function localXOf(cut, worldCoord) {
  */
 export function worldOf(cut, localX) {
   return cutOriginWorld(cut) + localX * cut.dirSign;
+}
+
+/**
+ * 列の打ち切り（分割・天井の高さ・斜線の頭打ち）に使う天井断面。`ceilProfile`が優先で、無ければ
+ * `ceilClip`（E5の受け口。打ち切り専用で帯の性格判定には使わない）。どちらも無ければundefined。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ */
+export function ceilClipProfileOf(cut) {
+  return cut.ceilProfile ?? cut.ceilClip;
 }
 
 /**

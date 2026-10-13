@@ -23,7 +23,7 @@
  *     自身はfinish/stair側の詳細を知らない——第3層との結合点はこの1箇所に閉じる）。
  */
 import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
-import { localXOf, worldOf, ceilProfileEdgeAt } from './sectionTypes.js';
+import { localXOf, worldOf, ceilProfileEdgeAt, ceilClipProfileOf } from './sectionTypes.js';
 import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
 import { faceFromCut } from './sectionFace.js';
 import { emitColumns, emitOpenGapMarks, nearestSightlineDistMm } from './sectionEmit.js';
@@ -77,7 +77,7 @@ function bandsEqual(a, b) {
  * @returns {number[]}
  */
 function withCeilProfileBreaks(cut, breaks) {
-  const prof = cut.ceilProfile;
+  const prof = ceilClipProfileOf(cut); // 打ち切り系: ceilProfile ?? ceilClip（性格判定は ceilProfile だけ）
   if (!Array.isArray(prof) || prof.length === 0) return breaks;
   const lo = breaks[0], hi = breaks[breaks.length - 1];
   const values = new Set(breaks);
@@ -382,7 +382,7 @@ export function buildColumns(cut, probeCtx) {
     // 区間が傾いていれば ceilZ は低い側（打ち切りは低い側で水平）・高い側は ceilEdge（図のx0側/x1側の高さ。
     // 傾いているときだけ付ける＝平面の列の形は従来どおり）。
     const colX0 = Math.min(localA, localB), colX1 = Math.max(localA, localB);
-    const edge = ceilProfileEdgeAt(cut.ceilProfile, colX0, colX1);
+    const edge = ceilProfileEdgeAt(ceilClipProfileOf(cut), colX0, colX1);
     const ceilZ = edge ? Math.min(edge.z0, edge.z1) : null;
     const ceilEdge = edge && Math.abs(edge.z0 - edge.z1) > GAP_EPS ? { zAtX0: edge.z0, zAtX1: edge.z1 } : null;
     // 斜めの天端の線（topEdge）は probe では世界座標の lo/hi 側＝{zAtLo,zAtHi}。図のローカルx（x0側/x1側）へ

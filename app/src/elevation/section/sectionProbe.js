@@ -30,6 +30,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import { isRealRoom, baseLayerOf, orderLayerStack, layersAboveOf } from './sectionLayerStack.js';
 import { effectiveStructure } from '../../structural/structureRules.js';
+import { ceilClipProfileOf } from './sectionTypes.js';
 import {
   stairPartitionDescriptors, partitionTopZAt, partitionTopCrossings, matchStairPartitionLine,
 } from '../../finish/stair/stairPartition.js';
@@ -169,10 +170,10 @@ export function collectCutBreaks(cut, probeCtx) {
   const { lo: probeLo, hi: probeHi } = cutProbeRange(line);
   const values = new Set([probeLo, probeHi]);
   // 斜めの天端（壁の天端プロファイル）が横切ると列の中で水平線（上階FL・切断の床/上端）をまたぐ高さ。
-  // 斜線を頭打ちにする高さ（切断の天井断面 cut.ceilProfile・プロファイルを持つ壁の層の各部屋の実効天井）も含める
+  // 斜線を頭打ちにする高さ（切断の天井断面 cut.ceilProfile〔無ければ打ち切り専用の cut.ceilClip〕・プロファイルを持つ壁の層の各部屋の実効天井）も含める
   // ——列が斜線の途中で天井をまたぐと、列全体が水平へ倒れて斜線より下の空気に壁を描いてしまう。
   const slopeLevels = [...layers.map(l => l?.floorZMm), cut.baseFloorZ, cut.zRange?.loZ, cut.zRange?.hiZ,
-    ...(cut.ceilProfile ?? []).flatMap(s => [s?.ceilZ, s?.ceilZHi])].filter(Number.isFinite);
+    ...(ceilClipProfileOf(cut) ?? []).flatMap(s => [s?.ceilZ, s?.ceilZHi])].filter(Number.isFinite);
   const ceilLevelsOf = layer => (graphList(layer.graph, 'rooms') ?? [])
     .map(room => probeCtx.floorZOf(room, layer) + probeCtx.chOf(room, layer.graph)).filter(Number.isFinite);
   const addIfInside = v => { if (v > probeLo + GAP_EPS && v < probeHi - GAP_EPS) values.add(v); };

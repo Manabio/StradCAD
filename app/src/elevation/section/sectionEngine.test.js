@@ -407,3 +407,56 @@ test('【傾斜・通り芯で割れた内壁】共有CLの2室＋急勾配: 割
       `線 (${p.x1},${-p.y1})-(${p.x2},${-p.y2}) が天井の斜線より上に出ている（${p.weight}）`);
   }
 });
+
+// ================================================================
+// 打ち切り専用の天井断面 cut.ceilClip（E5-1a の受け口）: ceilProfile と同形で、列の分割・列の天井（ceilZ/ceilEdge）・
+// 壁の帯の打ち切りだけに効く（`ceilProfile ?? ceilClip`）。帯の性格判定は ceilProfile のまま（別テストで固定）。
+// ================================================================
+const CLIP_PROFILE = [
+  { loX: 0, hiX: 2000, ceilZ: 2400 },
+  { loX: 2000, hiX: 4200, ceilZ: 2400, ceilZHi: 2820 },
+];
+const withClipOnly = (fx, clip) => ({ cut: { ...fx.cut, ceilProfile: undefined, ceilClip: clip }, probeCtx: fx.probeCtx });
+
+test('【ceilClip だけの切断で列が ceilClip の境界で割れ、壁の帯が低い側で打ち切られ、傾いた区間では ceilEdge が付く】', () => {
+  const base = slopeFixture('3000', CLIP_PROFILE);
+  const clip = withClipOnly(base, CLIP_PROFILE);
+  const none = withClipOnly(base, undefined);
+  const plainCols = buildColumns(none.cut, none.probeCtx);
+  assert.ok(!plainCols.some(c => c.x1 === 2000), '前提: ceilClip が無ければ x=2000 に列の境界は無い');
+  assert.ok(plainCols.every(c => c.ceilZ === null && c.ceilEdge === undefined), '前提: 打ち切りなし');
+
+  const cols = buildColumns(clip.cut, clip.probeCtx);
+  assert.ok(cols.some(c => c.x1 === 2000) && cols.some(c => c.x0 === 2000), 'ceilClip の区間境界 x=2000 で列が割れる');
+  for (const c of cols) {
+    assert.ok(Number.isFinite(c.ceilZ), `列 ${c.x0}..${c.x1} に ceilZ`);
+    if (c.x1 <= 2000) { near(c.ceilZ, 2400); assert.equal(c.ceilEdge, undefined, `平らな区間 ${c.x0}..${c.x1} に ceilEdge なし`); }
+    if (c.x0 >= 2000) assert.ok(c.ceilEdge, `傾いた区間 ${c.x0}..${c.x1} に ceilEdge`);
+    for (const b of c.bands) {
+      if (b.kind === 'cut') continue;
+      assert.ok(b.z1 <= c.ceilZ + 1e-6, `列 ${c.x0}..${c.x1} の ${b.kind} 帯(z1=${b.z1}) が低い側の天井 ${c.ceilZ} で打ち切られる`);
+    }
+  }
+  const seen = cols.find(c => c.x0 < 2000 && c.x1 > 100 && c.bands.some(b => b.kind === 'wall'));
+  near(seen.bands.find(b => b.kind === 'wall').z1, 2400, '見えがかりの壁は天井 2400 で打ち切り（ceilClip なしは 3000）');
+  const right = cols.find(c => c.x0 >= 2000 && c.bands.some(b => b.kind === 'wall'));
+  near(right.ceilZ, Math.min(right.ceilEdge.zAtX0, right.ceilEdge.zAtX1), '傾いた列の ceilZ は低い側');
+});
+
+test('【ceilProfile と ceilClip の両方があれば ceilProfile が勝つ】', () => {
+  const only = slopeFixture('3000', [{ loX: 0, hiX: 4200, ceilZ: 2400 }]);
+  const both = { cut: { ...only.cut, ceilClip: CLIP_PROFILE }, probeCtx: only.probeCtx };
+  assert.deepEqual(buildColumns(both.cut, both.probeCtx), buildColumns(only.cut, only.probeCtx), 'ceilClip は列に影響しない');
+  assert.ok(!buildColumns(both.cut, both.probeCtx).some(c => c.x1 === 2000), 'ceilClip の境界では割れない');
+});
+
+test('【どちらも無ければ従来どおり打ち切らない】ceilClip が空配列・非有限の ceilZ でも打ち切らない（ceilProfile と同じ失敗系）', () => {
+  const base = slopeFixture('3000');
+  const baseline = withClipOnly(base, undefined);
+  const expected = buildColumns(baseline.cut, baseline.probeCtx);
+  for (const clip of [undefined, [], [{ loX: 0, hiX: 4200, ceilZ: NaN }]]) {
+    const f = withClipOnly(base, clip);
+    assert.deepEqual(buildColumns(f.cut, f.probeCtx), expected, `ceilClip=${JSON.stringify(clip)} は列を変えない`);
+  }
+  assert.ok(expected.every(c => c.ceilZ === null), '打ち切りなし＝ceilZ は null');
+});

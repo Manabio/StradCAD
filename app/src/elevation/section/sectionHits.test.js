@@ -901,6 +901,13 @@ test('【自室の帯では出力不変】cut.ceilProfile を持つ切断は spa
   assert.equal(probeColumnHits(cut, 1000, probeCtx, { worldLo: 0, worldHi: 2000 }).layerStack[0].ceilZ, 3200);
 });
 
+test('【ceilClip ありでも帯の性格判定（cellAt の span 分岐）は ceilProfile 無しの挙動のまま】ceilClip だけの切断は列の幅での最大 2800（最高点 3200 にしない）', () => {
+  const { cut, probeCtx } = slopeFrontCut({ ceilClip: [{ loX: 0, hiX: 4000, ceilZ: 2400, ceilZHi: 3200 }] });
+  assert.equal(probeColumnHits(cut, 1000, probeCtx, { worldLo: 0, worldHi: 2000 }).layerStack[0].ceilZ, 2800);
+  const slab = probeColumn(cut, 1000, probeCtx, { worldLo: 0, worldHi: 2000 }).find(b => b.kind === 'slab');
+  assert.deepEqual([slab?.z0, slab?.z1], [2800, 3200], 'slab/open の分かれも ceilProfile 無しと同じ');
+});
+
 test('【ceilProfile 無しの帯で傾斜の列は実高さで slab/open が分かれる】列 [0,2000] は 2800 の上に天井懐の slab（3200 まで）・ceilProfile ありは slab なし', () => {
   const { cut, probeCtx } = slopeFrontCut();
   const bands = probeColumn(cut, 1000, probeCtx, { worldLo: 0, worldHi: 2000 });
