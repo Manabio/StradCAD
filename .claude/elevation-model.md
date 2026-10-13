@@ -658,6 +658,8 @@ defer: 天井高さが異なる内部境界（壁の無い部屋内部）の
 直交壁（隣・次の面）の建具が切断位置（面端）にかかる場合、`openingsReachingCorner`（隣接面自身の隅=0/runに開口スパンが届くかで判定）で
 対象を選び、`openingSectionPrimitives`が[枠(CUT)][扉(SILHOUETTE)][枠(CUT)]の3rectを面の両端の帯に描く
 （`buildRoomBand`/`buildStairBand`が`faces[(i∓1+n)%n]`をprevFace/nextFaceとしてctxに渡す）。
+帯は**直交壁の材の範囲（`wallMaterialRangeForOpening`）の上に置く**（枠は材の範囲±`FRAME_OVERHANG_MM`。置き方は切断帯 sectionEmit.js と同じ。範囲は、sectionEmit が壁1枚の `band.wall.materialRange`、隅の断面は同じ軸CLの実壁の合併。
+面端から部屋の内側へ伸ばさない＝ユーザー指摘2026-10-13）。壁が引けない合成faceだけ、既定の見込で面端の**外側**に置く。
 
 ## 腰壁の天端・端部の見えがかり（`kneeCapMarksOnFace`。仕様2026-08）
 天端は壁の上端から下への帯（`.claude/data-model.md`参照）なので、面自身が腰壁のときは

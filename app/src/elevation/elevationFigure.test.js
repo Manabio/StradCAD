@@ -20,6 +20,7 @@ import {
   DEFAULT_WALL_LESS_END_EXTEND_MM,
 } from './elevationStyle.js';
 import { screenMmToModelMm, horizontalDimLabelBox } from './elevationLayout.js';
+import { openingOpenPerpDir } from '../openings/openingSection.js';
 import { clipContentAtHiddenEnds } from './elevationStairSequence.js';
 import { DEFAULT_PX_PER_MM } from '../viewport.js';
 
@@ -36,10 +37,10 @@ function makeFace(overrides = {}) {
 // （finish/kneeDropWall.js の sameAxisLine）ため、合成graphにも実体を置く必要がある。
 const AXIS_Y0 = { id: 'axisY0', centerLineType: CenterLineType.HORIZONTAL, effectiveValue: 0, value: 0 };
 
-function makeGraph({ openings = [], kneeDropWalls = new Map(), shapes = new Map() } = {}) {
+function makeGraph({ openings = [], kneeDropWalls = new Map(), shapes = new Map(), walls = null } = {}) {
   const shapeMap = new Map(shapes);
   if (!shapeMap.has(AXIS_Y0.id)) shapeMap.set(AXIS_Y0.id, AXIS_Y0);
-  return { openings, kneeDropWalls, shapeMap };
+  return walls ? { openings, kneeDropWalls, shapeMap, walls } : { openings, kneeDropWalls, shapeMap };
 }
 
 function makeRoom(finishInfo = {}, finish = null) {
@@ -1798,15 +1799,113 @@ test('【項目3】buildFaceFigure: prevFace上の開口が隅(perpFace.run)ま�
 
   // 片開き戸の断面（ユーザー明示指示2026-09。openings/openingSection.js）: 縦断面なので
   // 上枠（見付30・見込は壁厚+24）と扉（厚30・FL+10〜指定高さ-20・中線）の2本。
-  // このフィクスチャのgraphは実壁を持たないため見込はフォールバック値（115+24=139）になる。
-  const strip = prims.filter(p => p.type === 'rect' && p.x >= 0 && p.x + p.w <= 139 && p.weight != null);
-  assert.equal(strip.length, 2, '上枠1＋扉1＝2本のrectが面のx=0側の帯に出るはず');
+  // このフィクスチャのgraphは実壁を持たないため見込はフォールバック値（115+24=139）になり、
+  // 壁が引けないときは**面の外側**（x<=12。部屋の内側へは伸ばさない。2026-10-13）に置く。
+  const strip = prims.filter(p => p.type === 'rect' && p.x >= -139 && p.x + p.w <= 12 && p.weight != null);
+  assert.equal(strip.length, 2, '上枠1＋扉1＝2本のrectが面のx=0の外側の帯に出るはず');
   const head = strip.find(r => r.weight === 'thick');
-  assert.deepEqual([head.x, head.w, head.y, head.h], [0, 139, -2000, 30],
+  assert.deepEqual([head.x, head.w, head.y, head.h], [-127, 139, -2000, 30],
     '上枠は見付30・見込いっぱい・指定高さの直下のはず');
   const leaf = strip.find(r => r.weight === 'medium');
   assert.deepEqual([leaf.w, leaf.y, leaf.h], [30, -1980, 1970],
     '扉は厚30・上端=指定高さ-20(戸当たり)・下端=FL+10のはず');
+});
+
+// ---- 隅の建具断面は直交壁の材の範囲の上に置く（ユーザー指摘2026-10-13「壁厚分部屋内に出ている」） ----
+// 枠は材の範囲±12（FRAME_OVERHANG_MM）に収まり、面の内側（始端: x>12／終端: x<run-12）へ出ない。
+function cornerSectionRects(prims) {
+  return prims.filter(p => p.type === 'rect' && p.weight != null && (p.weight === 'thick' || p.weight === 'medium') && p.h !== 0
+    && (p.weight === 'thick' ? p.h === 30 : p.h === 1970));
+}
+function perpWall(mr) {
+  return { isVertical: true, axisCL: { id: 'axisX_left' }, coord1: 0, coord2: 2000, materialRange: mr };
+}
+function perpOpeningFor() {
+  return {
+    id: 'perp-mr', isVertical: true, axisCL: { id: 'axisX_left' }, wallSide: 1,
+    centerCoord: 1900, width: 800, height: 2000, sillHeight: null,
+    category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+  };
+}
+function checkWithin(prims, lo, hi, msg) {
+  const rects = cornerSectionRects(prims);
+  assert.equal(rects.length, 2, `${msg}: 上枠1＋扉1`);
+  const head = rects.find(r => r.weight === 'thick');
+  const leaf = rects.find(r => r.weight === 'medium');
+  assert.deepEqual([head.x, head.x + head.w], [lo - 12, hi + 12], `${msg}: 枠は材の範囲±12`);
+  assert.ok(leaf.x >= head.x && leaf.x + leaf.w <= head.x + head.w, `${msg}: 扉は枠の中`);
+}
+
+test('【隅の建具断面】始端: 直交壁の材の範囲[-145,0]の上に置き、面の内側(x>12)へ出ない', () => {
+  const graph = makeGraph({ openings: [perpOpeningFor()], walls: [perpWall({ lo: -145, hi: 0 })] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  checkWithin(prims, -145, 0, '始端');
+  assert.ok(cornerSectionRects(prims).every(r => r.x + r.w <= 12), '面の内側へ出ない');
+  const edge = prims.find(p => p.type === 'line' && p.x1 === p.x2 && (p.x1 === -157 || p.x1 === 12) && p.y1 === -1970);
+  assert.ok(edge, '扉のない側の枠の縦線も帯の端');
+});
+
+test('【隅の建具断面】終端: 材の範囲[4000,4145]の上に置き、面の内側(x<run-12)へ出ない', () => {
+  const opening = { ...perpOpeningFor(), axisCL: { id: 'axisX_right' }, centerCoord: 100 };
+  const nextFace = makePerpFace({ axisCL: { id: 'axisX_right' }, faceValue: 4000 });
+  const wall = { ...perpWall({ lo: 4000, hi: 4145 }), axisCL: { id: 'axisX_right' } };
+  const graph = makeGraph({ openings: [opening], walls: [wall] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: null, nextFace }));
+  checkWithin(prims, 4000, 4145, '終端');
+  assert.ok(cornerSectionRects(prims).every(r => r.x >= 4000 - 12), '面の内側へ出ない');
+});
+
+test('【隅の建具断面】dirSign<0 の面でも材の範囲の上に置く（始端 local0=world4000）', () => {
+  const graph = makeGraph({ openings: [perpOpeningFor()], walls: [perpWall({ lo: 4000, hi: 4145 })] });
+  const face = makeFace({ dirSign: -1, originWorld: 4000 });
+  const prims = buildFaceFigure(face, baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  checkWithin(prims, -145, 0, 'dirSign<0');
+});
+
+// 扉は開き勝手（openingOpenPerpDir）の側の壁面に寄る。帯の向き（worldPerDirSign）を反転すると逆の面に寄る。
+function withOpenDir(o, want) {
+  for (const swingSide of [1, -1]) {
+    const c = { ...o, hingeSide: -1, swingSide };
+    if (openingOpenPerpDir(c) === want) return c;
+  }
+  throw new Error(`openDir=${want} を作れない`);
+}
+function doorAndEdge(prims) {
+  const leaf = cornerSectionRects(prims).find(r => r.weight === 'medium');
+  const edge = prims.find(p => p.type === 'line' && p.x1 === p.x2 && p.y1 === -1970);
+  return [leaf.x, edge.x1];
+}
+const OPEN_CASES = [
+  // [名前, 面, 直交壁の材の範囲, 向き, 期待 [扉x, 縦線x]]
+  ['始端 dirSign+1 openDir+1', {}, { lo: -145, hi: 0 }, 1, [-30, -157]],
+  ['始端 dirSign+1 openDir-1', {}, { lo: -145, hi: 0 }, -1, [-145, 12]],
+  ['始端 dirSign-1 openDir+1', { dirSign: -1, originWorld: 4000 }, { lo: 4000, hi: 4145 }, 1, [-145, 12]],
+  ['始端 dirSign-1 openDir-1', { dirSign: -1, originWorld: 4000 }, { lo: 4000, hi: 4145 }, -1, [-30, -157]],
+];
+for (const [name, faceOv, mr, dir, expected] of OPEN_CASES) {
+  test(`【隅の建具断面】開き勝手で扉の寄る壁面が決まる: ${name}`, () => {
+    const graph = makeGraph({ openings: [withOpenDir(perpOpeningFor(), dir)], walls: [perpWall(mr)] });
+    const prims = buildFaceFigure(makeFace(faceOv), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+    assert.deepEqual(doorAndEdge(prims), expected);
+  });
+}
+for (const [dir, expected] of [[1, [4115, 3988]], [-1, [4000, 4157]]]) {
+  test(`【隅の建具断面】開き勝手で扉の寄る壁面が決まる: 終端 dirSign+1 openDir${dir > 0 ? '+1' : '-1'}`, () => {
+    const opening = withOpenDir({ ...perpOpeningFor(), axisCL: { id: 'axisX_right' }, centerCoord: 100 }, dir);
+    const nextFace = makePerpFace({ axisCL: { id: 'axisX_right' }, faceValue: 4000 });
+    const wall = { ...perpWall({ lo: 4000, hi: 4145 }), axisCL: { id: 'axisX_right' } };
+    const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [opening], walls: [wall] }), prevFace: null, nextFace }));
+    assert.deepEqual(doorAndEdge(prims), expected);
+  });
+}
+
+test('【失敗系・隅の建具断面】壁が引けないときは始端で面の外側(x<=12)・終端で外側(x>=run-12)に置く', () => {
+  const opening = { ...perpOpeningFor(), axisCL: { id: 'axisX_right' }, centerCoord: 100 };
+  const nextFace = makePerpFace({ axisCL: { id: 'axisX_right' }, faceValue: 4000 });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [opening] }), nextFace }));
+  const rects = cornerSectionRects(prims);
+  assert.equal(rects.length, 2);
+  assert.ok(rects.every(r => r.x >= 4000 - 12), '終端のフォールバックも部屋の内側へ伸ばさない');
 });
 
 test('【失敗系・項目3】buildFaceFigure: prevFace上の開口が隅から離れていれば断面を描かない', () => {

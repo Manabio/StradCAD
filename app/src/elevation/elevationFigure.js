@@ -15,7 +15,8 @@
  */
 import { CenterLineType, OpeningCategory } from '@core';
 import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallLessEndAt } from './elevationFaces.js';
-import { openingSectionPrimitives, wallThicknessForOpening } from '../openings/openingSection.js';
+import { openingSectionPrimitives, wallMaterialRangeForOpening } from '../openings/openingSection.js';
+import { FRAME_OVERHANG_MM } from '../openings/openingPlanSymbolGeometry.js';
 import { openingTagPartsOf, effectiveHeight } from '../openings/openingNumbering.js';
 import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
 import { buildOpeningElevation, frameOnlyInnerRect } from '../openings/openingElevationFigure.js';
@@ -1278,24 +1279,34 @@ export function buildFaceFigure(face, ctx) {
   // （QA指摘: 隅共有の前提が凹み角で崩れたのに合わせてガードを拡張）。
   // 断面も姿図と同様、その隅の実際の床（floorSegments）に乗せる（隅は両面で床を共有するため、
   // 自面の端x=0/runの床yを使えば隣接面側の実効FLと一致する）。
+  // 帯は**直交壁の材の範囲の上**に置く（ユーザー指摘2026-10-13「X3の扉断面が壁厚分部屋内に出ている」。
+  // 切断帯 sectionEmit.js と同じ置き方）。面端から部屋の内側へ伸ばすと壁厚ぶん部屋内へずれる。
+  // 壁が引けない（合成face）ときは既定の見込で**面の外側**へ置く（部屋の内側には伸ばさない）。
+  const cornerSection = (o, atEnd) => {
+    const mr = wallMaterialRangeForOpening(o, graph);
+    const sgn = face.dirSign ?? 1;
+    if (mr) {
+      // 直交壁の厚み方向座標は面の長さ方向の座標なのでそのまま面ローカルxへ写せる。
+      const a = localXOf(face, mr.lo), b = localXOf(face, mr.hi);
+      return openingSectionPrimitives(o, Math.min(a, b) - FRAME_OVERHANG_MM, 1, cutWeight, silhouetteWeight,
+        { wallThicknessMm: Math.abs(mr.hi - mr.lo), worldPerDirSign: sgn, detailWeight });
+    }
+    return atEnd
+      ? openingSectionPrimitives(o, run - FRAME_OVERHANG_MM, 1, cutWeight, silhouetteWeight,
+        { worldPerDirSign: sgn, detailWeight })
+      : openingSectionPrimitives(o, FRAME_OVERHANG_MM, -1, cutWeight, silhouetteWeight,
+        { worldPerDirSign: -sgn, detailWeight });
+  };
   if (prevFace && !face.extendedAtLocal0 && (face.hasWallAtLocal0 ?? true)) {
     const dy = floorDyAt(0);
     for (const o of openingsReachingCorner(prevFace, graph, 'end')) {
-      prims.push(...openingSectionPrimitives(o, 0, 1, cutWeight, silhouetteWeight,
-        // 帯のmmは面のローカルx（x0=0からdir=+1）。世界座標が増える向きとの対応は
-        // face.dirSign×dir（localXOf の規約）。
-        { wallThicknessMm: wallThicknessForOpening(o, graph), worldPerDirSign: (face.dirSign ?? 1) * 1,
-          detailWeight })
-        .map(p => translatePrimitive(p, 0, dy)));
+      prims.push(...cornerSection(o, false).map(p => translatePrimitive(p, 0, dy)));
     }
   }
   if (nextFace && !face.extendedAtLocalRun && (face.hasWallAtLocalRun ?? true)) {
     const dy = floorDyAt(run);
     for (const o of openingsReachingCorner(nextFace, graph, 'start')) {
-      prims.push(...openingSectionPrimitives(o, run, -1, cutWeight, silhouetteWeight,
-        { wallThicknessMm: wallThicknessForOpening(o, graph), worldPerDirSign: (face.dirSign ?? 1) * -1,
-          detailWeight })
-        .map(p => translatePrimitive(p, 0, dy)));
+      prims.push(...cornerSection(o, true).map(p => translatePrimitive(p, 0, dy)));
     }
   }
 

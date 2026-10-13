@@ -52,12 +52,6 @@ export function wallMaterialRangeForOpening(o, graph) {
   return Number.isFinite(lo) ? { lo, hi } : null;
 }
 
-/** その建具が入っている壁の層厚(mm)。`wallMaterialRangeForOpening`の幅。 */
-export function wallThicknessForOpening(o, graph) {
-  const r = wallMaterialRangeForOpening(o, graph);
-  return r ? r.hi - r.lo : null;
-}
-
 /**
  * その建具が**開く側**（±1。壁の厚み方向の世界座標が増える側なら+1）。扉はこの側の壁面で
  * 閉じる（蝶番もその面にある）ので、断面の扉はその面に寄る——平面の閉じた扉の四角
