@@ -1,6 +1,7 @@
 // 仕上げモードを開かずに主構造（CommonInfoTab.setMainStructure）・階別構造
-// （graph.structureOverride）を変えても、次の境界（仕上げ脱出／構造脱出／読込み。読込みはステップ5）
-// で全階の壁が新しい入力で作り直され、梁芯・柱が同じバッチで追従する
+// （graph.structureOverride）を変えても、次の境界（仕上げ脱出／構造脱出／読込み〔ステップ5〕／
+// 展開・天伏の突入〔refreshWallsForViewEntry。自階と直上・直下だけ〕）で
+// 全階の壁が新しい入力で作り直され、梁芯・柱が同じバッチで追従する
 // （壁の再生成をFinishModeStateから独立させる計画のステップ4）。
 // 発火条件は「保存キー（graph.wallFreshnessKey）≠現在キー」のみ。一致階は peek 以外何もしない
 // （saveFloor もしない）。
@@ -174,6 +175,14 @@ export async function refreshWallsForGraph(
  * @param {() => Promise<Map<string,object>>} [opts.loadMaterialMapFn] - 差し替え用
  *   （テストで materialMap のロード失敗を再現する）。鍵不一致の階が1つも無ければ一度も
  *   呼ばれない（遅延ロード。ステップ5: 読込み時 bootReady のクリティカルパス対策）。
+ * @param {Set<string>|null} [opts.planeIds=null] - 対象の階id。null なら全階（従来）。指定時は
+ *   対象外の階を壁の再生成の段（peek・鍵比較・保存）では扱わない。変更があれば構造反映は従来どおり全階。
+ *   展開・天伏の突入境界が自階＋直上・直下だけに絞るのに使う。
+ * @param {((planeId:string, bytes:Uint8Array) => Promise<void>)|null} [opts.saveActiveFloorFn=null] -
+ *   自階の保存関数（本番は storage/db.js saveFloor）。自階を対象にするとき、変更の有無にかかわらず
+ *   他階の処理（直上階の階段コンテキストが自階を peek する）より前に無条件で1回書く。無編集でも
+ *   serialize＋IDB 書込み1回は行う（再生成・undo は起きない）。保存失敗は伝播させる（黙って他階を古い
+ *   自階で確定させるより止める方が安全。仕上げ脱出 finishBoundary.js と同じ）。自階の壁・鍵は再生成済みのまま残る。
  * @returns {Promise<{ changedPlaneIds: string[] }>}
  */
 export async function refreshWallsAllFloors(project, {
@@ -181,6 +190,8 @@ export async function refreshWallsAllFloors(project, {
   peek = (plane, structGraph) => defaultFloorSwapManager.peek(plane, structGraph),
   saveFloorFn = defaultSaveFloor,
   loadMaterialMapFn = loadMaterialMap,
+  planeIds = null,
+  saveActiveFloorFn = null,
 } = {}) {
   const changedPlaneIds = [];
 
@@ -192,14 +203,21 @@ export async function refreshWallsAllFloors(project, {
   let materialMapPromise = null;
   const getMaterialMap = () => (materialMapPromise ??= loadMaterialMapFn());
 
-  if (!skipActive && project.activeGraph) {
+  if (!skipActive && project.activeGraph && (planeIds == null || planeIds.has(project.activePlaneId))) {
     const graph = project.activeGraph;
     const changed = await refreshWallsForGraph(graph, project, getMaterialMap, { peek, pushUndo });
     if (changed) changedPlaneIds.push(graph.plane.id);
+    // 自階の変更の有無にかかわらず他階の処理の前に無条件で1回保存する（finishBoundary.js と同じ）。
+    // 直上階の resolveStairContext・reflectStructuralToOtherFloors は自階を peek＝IDB から読み、
+    // アクティブ階の auto-save は dirty 印だけで IDB へ書かない。鍵に入らない自階の未保存編集
+    // （建具・CL偏芯）や、保存失敗後の再突入でも古い自階を読ませないため。
+    // 失敗は握らず伝播させる（黙って他階を古い自階で確定させるより止める方が安全。他階の saveFloorFn と逆）。
+    if (saveActiveFloorFn) await saveActiveFloorFn(graph.plane.id, serializeGraph(graph));
   }
 
   for (const plane of project.planes) {
     if (plane.id === project.activePlaneId) continue;
+    if (planeIds && !planeIds.has(plane.id)) continue; // 対象外の階は壁の段では peek しない
     let temp;
     try {
       temp = await peek(plane, project.structGraph);
@@ -232,4 +250,39 @@ export async function refreshWallsAllFloors(project, {
   }
 
   return { changedPlaneIds };
+}
+
+/**
+ * 展開・天伏が読む階＝自階と、project.planes での直上・直下の採用階。
+ * modes/ElevationModeState.js _peekAboveGraph/_peekBelowGraph・App.jsx の abovePlanPeek effect と同じ定義
+ * （planes は elevation 昇順。自階が planes に無い＝検討案なら自階だけ）。
+ * @param {object} project
+ * @returns {Set<string>}
+ */
+export function viewNeighborPlaneIds(project) {
+  const ids = new Set();
+  const planes = project.planes ?? [];
+  const activeId = project.activePlaneId;
+  if (activeId != null) ids.add(activeId);
+  const idx = planes.findIndex(p => p.id === activeId);
+  if (idx > 0) ids.add(planes[idx - 1].id);
+  if (idx >= 0 && idx + 1 < planes.length) ids.add(planes[idx + 1].id);
+  return ids;
+}
+
+/**
+ * 展開・天伏の突入境界（モード切替でもモード維持の階切替でも同じ）。自階＋直上・直下だけ鍵を比べ、
+ * 不一致の階だけ再生成する。自階の壁変更は undo エントリ（pushUndo:true）、他階は undo 対象外
+ * （既存 sweep と同じ割り切り）。自階は他階の処理の前に saveActiveFloorFn で IDB へ書く。
+ */
+export async function refreshWallsForViewEntry(project, {
+  saveActiveFloorFn = defaultSaveFloor, peek, saveFloorFn, loadMaterialMapFn,
+} = {}) {
+  return refreshWallsAllFloors(project, {
+    pushUndo: true, pushActiveStructuralUndo: true,
+    planeIds: viewNeighborPlaneIds(project), saveActiveFloorFn,
+    ...(peek ? { peek } : {}),
+    ...(saveFloorFn ? { saveFloorFn } : {}),
+    ...(loadMaterialMapFn ? { loadMaterialMapFn } : {}),
+  });
 }

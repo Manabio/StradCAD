@@ -17,7 +17,7 @@ import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline, StructuralMaterialType, RoomFeature, centerLineKind } from './core.js';
 import { undoManager } from './undoManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
-import { refreshWallsAllFloors, refreshWallsForGraph, hasNeverBuiltWalls } from './wallRefresh.js';
+import { refreshWallsAllFloors, refreshWallsForGraph, hasNeverBuiltWalls, viewNeighborPlaneIds, refreshWallsForViewEntry } from './wallRefresh.js';
 import { regenerateWalls, loadMaterialMap } from './finish/wallRegeneration.js';
 import { wallFreshnessKey, WALL_KEY_VERSION } from './finish/wallFreshnessKey.js';
 import { classifyStairArea } from './finish/stair/stairClassify.js';
@@ -1227,4 +1227,324 @@ test('【配線・強化】store.js: removeFloor が project.clearEquipmentIndex
   const removeFloorIdx = src.indexOf('export async function removeFloor');
   const clearIdx = src.indexOf('project.clearEquipmentIndex();');
   assert.ok(removeFloorIdx >= 0 && clearIdx > removeFloorIdx, 'removeFloor の本体の中に無い');
+});
+
+// ======== S2: 展開・天伏の突入境界（planeIds / saveActiveFloorFn / viewNeighborPlaneIds / refreshWallsForViewEntry）========
+
+/**
+ * n 階建て（p1..pn・各階に矩形1室・壁と鍵を seed 済み）。peek は本番同型（makeStorePeek＝PlanGraph→
+ * _structGraph→restoreGraph）で store（Map<planeId, bytes>）を読む——生きたグラフを返すスタブにしない
+ * （team-lessons）。singleton peek も同じ store を読む形へ差し替える（restore で戻す）。
+ * store は seed 直後の状態。階の graph を後から書き換えたら commit(...ids) で store へ反映する
+ * （自階 project.activeGraph だけは生きたグラフが読まれる）。
+ */
+async function makeSeededFloors(n, activeId, log = []) {
+  const project = new Project('proj', 'test');
+  const graphs = {};
+  for (let i = 1; i <= n; i++) {
+    const { graph } = project.addPlane((i - 1) * 3000, `${i}階`, `p${i}`);
+    addRectRoom(graph, `${i}F`);
+    graphs[`p${i}`] = graph;
+  }
+  project.activePlaneId = activeId;
+  for (const g of Object.values(graphs)) await seedInitialWalls(g, project);
+  const store = new Map(Object.entries(graphs).map(([id, g]) => [id, serializeGraph(g)]));
+  const commit = (...ids) => { for (const id of (ids.length ? ids : Object.keys(graphs))) store.set(id, serializeGraph(graphs[id])); };
+  const storePeek = makeStorePeek(project, store);
+  const peek = async (plane) => { log.push(`peek:${plane.id}`); return storePeek(plane); };
+  const saveFloorFn = makeStoreSave(store);
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => { log.push(`sp:${plane.id}`); return storePeek(plane); };
+  const restore = () => { floorSwapManager.peek = originalPeek; };
+  const stored = (id) => decodeFloor(project, project.planes.find(p => p.id === id), store.get(id));
+  return { project, graphs, store, commit, stored, peek, saveFloorFn, restore };
+}
+
+test('【S2-13】refreshWallsAllFloors: planeIds 以外の階は peek も saveFloor もされず鍵も触られない（4階建て・自階2F → 1F/3F だけ）', async () => {
+  const log = [];
+  const { project, graphs, commit, stored, peek, saveFloorFn, restore } = await makeSeededFloors(4, 'p2', log);
+  try {
+    for (const g of Object.values(graphs)) g.setWallFreshnessKey('force-mismatch');
+    commit();
+    const saved = [];
+    const result = await refreshWallsAllFloors(project, {
+      pushUndo: false, pushActiveStructuralUndo: false, peek,
+      saveFloorFn: async (id, b) => { saved.push(id); await saveFloorFn(id, b); },
+      planeIds: new Set(['p1', 'p2', 'p3']),
+    });
+    assert.ok(log.includes('peek:p1') && log.includes('peek:p3'), '対象の他階は peek される');
+    assert.ok(!log.includes('peek:p4'), '対象外の4Fは peek されない');
+    assert.ok(!saved.includes('p4'), '対象外の4Fは保存されない');
+    assert.ok(!result.changedPlaneIds.includes('p4'));
+    assert.equal(stored('p4').wallFreshnessKey, 'force-mismatch', '4Fの鍵は触られない（保存内容も不変）');
+    assert.ok(result.changedPlaneIds.includes('p2') && result.changedPlaneIds.includes('p1') && result.changedPlaneIds.includes('p3'));
+  } finally { restore(); }
+});
+
+test('【S2-13b】refreshWallsAllFloors: planeIds に自階が無ければ自階は処理しない', async () => {
+  const { project, graphs, peek, saveFloorFn, restore } = await makeSeededFloors(2, 'p1');
+  try {
+    graphs.p1.setWallFreshnessKey('force-mismatch');
+    const result = await refreshWallsAllFloors(project, { pushUndo: false, peek, saveFloorFn, planeIds: new Set(['p2']) });
+    assert.deepEqual(result.changedPlaneIds, []);
+    assert.equal(graphs.p1.wallFreshnessKey, 'force-mismatch');
+  } finally { restore(); }
+});
+
+test('【S2-14】refreshWallsAllFloors: 自階が変わると saveActiveFloorFn が他階の保存より前に1回だけ呼ばれる。無編集なら呼ばれず undo も増えず materialMap も読まれない', async () => {
+  // (a) 自階・下階・上階とも不一致
+  {
+    const log = [];
+    const { project, graphs, commit, peek, saveFloorFn, restore } = await makeSeededFloors(3, 'p2', log);
+    try {
+      for (const g of Object.values(graphs)) g.setWallFreshnessKey('force-mismatch');
+      commit();
+      log.length = 0;
+      await refreshWallsAllFloors(project, {
+        pushUndo: false, pushActiveStructuralUndo: false, peek,
+        saveFloorFn: async (id, b) => { log.push(`save:${id}`); await saveFloorFn(id, b); },
+        saveActiveFloorFn: async (id, bytes) => { assert.ok(bytes instanceof Uint8Array); log.push(`saveActive:${id}`); },
+        planeIds: new Set(['p1', 'p2', 'p3']),
+      });
+      const activeIdx = log.indexOf('saveActive:p2');
+      assert.equal(log.filter(e => e.startsWith('saveActive')).length, 1, `自階の保存は1回だけ（log=${log.join(',')}）`);
+      assert.ok(activeIdx >= 0, `自階が保存される（log=${log.join(',')}）`);
+      assert.ok(log.includes('save:p1') && log.includes('save:p3'));
+      assert.ok(activeIdx < log.indexOf('save:p1') && activeIdx < log.indexOf('save:p3'), `他階の保存より前（log=${log.join(',')}）`);
+    } finally { restore(); }
+  }
+  // (b) 無編集: 自階は無条件で1回だけ保存、他階は保存されず、再生成・undo・materialMap なし
+  {
+    const log = [];
+    const { project, peek, saveFloorFn, restore } = await makeSeededFloors(3, 'p2', log);
+    try {
+      log.length = 0;
+      const undoBefore = undoManager.peekUndo();
+      let loadCalls = 0;
+      const result = await refreshWallsAllFloors(project, {
+        pushUndo: true, peek, saveFloorFn: async (id, b) => { log.push(`save:${id}`); await saveFloorFn(id, b); },
+        saveActiveFloorFn: async (id) => { log.push(`saveActive:${id}`); },
+        loadMaterialMapFn: async () => { loadCalls++; return loadMaterialMap(); },
+        planeIds: new Set(['p1', 'p2', 'p3']),
+      });
+      assert.deepEqual(result.changedPlaneIds, []);
+      assert.deepEqual(log.filter(e => e.startsWith('save')), ['saveActive:p2'], '無編集でも自階の保存は1回だけ・他階は保存されない');
+      assert.equal(undoManager.peekUndo(), undoBefore, 'undo は増えない');
+      assert.equal(loadCalls, 0);
+    } finally { restore(); }
+  }
+});
+
+test('【S2-14b】refreshWallsAllFloors: 自階が変わったとき、直上階の peek より前に saveActiveFloorFn が呼ばれる（階段コンテキストが自階を読む順序）', async () => {
+  const log = [];
+  const { project, graphs, store, commit, stored, peek, saveFloorFn, restore } = await makeSeededFloors(2, 'p1', log);
+  try {
+    graphs.p1.setWallFreshnessKey('force-mismatch');
+    graphs.p2.setWallFreshnessKey('force-mismatch');
+    commit(); // store の p1 は古い（鍵 force-mismatch・元の壁）
+    const oldP1Key = stored('p1').wallFreshnessKey;
+    log.length = 0;
+    await refreshWallsAllFloors(project, {
+      pushUndo: false, pushActiveStructuralUndo: false, peek, saveFloorFn,
+      saveActiveFloorFn: makeStoreSave(store, log), // store へ書く（log には planeId）
+    });
+    const a = log.indexOf('p1');
+    assert.ok(a >= 0, `保存される（log=${log.join(',')}）`);
+    assert.ok(a < log.indexOf('peek:p2'), `上階 p2 の peek より前（log=${log.join(',')}）`);
+    assert.notEqual(oldP1Key, graphs.p1.wallFreshnessKey, '前提: p1 は再生成されて鍵が変わった');
+  } finally { restore(); }
+});
+
+test('【S2-14c】refreshWallsAllFloors: p2 の peek 時点で、store の p1 は再生成後の自階（鍵が live と一致）に更新済み', async () => {
+  const log = [];
+  const { project, graphs, store, commit, stored, saveFloorFn, restore } = await makeSeededFloors(2, 'p1', log);
+  try {
+    graphs.p1.setWallFreshnessKey('force-mismatch');
+    graphs.p2.setWallFreshnessKey('force-mismatch');
+    commit(); // store には古い p1
+    let storedKeyAtP2Peek = null;
+    const storePeek = makeStorePeek(project, store);
+    const peek = async (plane) => {
+      if (plane.id === 'p2') storedKeyAtP2Peek = stored('p1').wallFreshnessKey;
+      return storePeek(plane);
+    };
+    await refreshWallsAllFloors(project, {
+      pushUndo: false, pushActiveStructuralUndo: false, peek, saveFloorFn,
+      saveActiveFloorFn: makeStoreSave(store),
+    });
+    assert.notEqual(graphs.p1.wallFreshnessKey, 'force-mismatch', '前提: 自階は再生成された');
+    assert.equal(storedKeyAtP2Peek, graphs.p1.wallFreshnessKey, 'p2 の peek 時点で保存済み p1 の鍵は再生成後の鍵');
+  } finally { restore(); }
+});
+
+test('【S2-15】refreshWallsAllFloors: 他階だけが変わったとき、自階の保存が構造再計算（他階反映の peek）の前に1回だけ行われる', async () => {
+  const log = [];
+  const { project, graphs, commit, peek, saveFloorFn, restore } = await makeSeededFloors(2, 'p2', log);
+  try {
+    graphs.p1.setWallFreshnessKey('force-mismatch'); // 自階 p2 は鍵一致のまま
+    commit();
+    log.length = 0;
+    const result = await refreshWallsAllFloors(project, {
+      pushUndo: false, pushActiveStructuralUndo: false, peek,
+      saveFloorFn: async (id, b) => { log.push(`save:${id}`); await saveFloorFn(id, b); },
+      saveActiveFloorFn: async (id) => { log.push(`saveActive:${id}`); },
+    });
+    assert.deepEqual(result.changedPlaneIds, ['p1']);
+    assert.equal(log.filter(e => e === 'saveActive:p2').length, 1, `自階の保存は1回だけ（log=${log.join(',')}）`);
+    const a = log.indexOf('saveActive:p2');
+    const firstSingleton = log.findIndex(e => e.startsWith('sp:'));
+    assert.ok(firstSingleton < 0 || a < firstSingleton, `構造再計算の peek より前（log=${log.join(',')}）`);
+  } finally { restore(); }
+});
+
+test('【S2-16】viewNeighborPlaneIds: 最下階・最上階・中間階・検討案（planes に無い自階）・1階建て', () => {
+  const mk = (n, active) => {
+    const project = new Project('proj', 'test');
+    for (let i = 1; i <= n; i++) project.addPlane((i - 1) * 3000, `${i}階`, `p${i}`);
+    project.activePlaneId = active;
+    return project;
+  };
+  const ids = (p) => [...viewNeighborPlaneIds(p)].sort();
+  assert.deepEqual(ids(mk(4, 'p1')), ['p1', 'p2'], '最下階: 自階＋直上');
+  assert.deepEqual(ids(mk(4, 'p4')), ['p3', 'p4'], '最上階: 自階＋直下');
+  assert.deepEqual(ids(mk(4, 'p2')), ['p1', 'p2', 'p3'], '中間階: 自階＋直上・直下');
+  assert.deepEqual(ids(mk(4, 'study-1')), ['study-1'], '検討案（planes に無い）: 自階だけ');
+  assert.deepEqual(ids(mk(1, 'p1')), ['p1'], '1階建て: 自階だけ');
+});
+
+test('【S2-17】refreshWallsForViewEntry: 通り芯の移動で自階が再生成され undo/redo で壁 id と鍵が戻る。2回目は収束して何も起きない', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  const { x1 } = addAdjacentRooms(graph); // x1＝右外周の通り芯（x=6000）
+  await seedInitialWalls(graph, project);
+  const idsBefore = graph.walls.map(w => w.id).sort();
+  const keyBefore = graph.wallFreshnessKey;
+  const savedActive = [];
+  const opts = {
+    saveActiveFloorFn: async (id) => { savedActive.push(id); },
+    peek: async () => null, saveFloorFn: async () => {},
+  };
+
+  runInAction(() => { x1.value = 6500; });
+
+  const undoBefore = undoManager.peekUndo();
+  const r1 = await refreshWallsForViewEntry(project, opts);
+  assert.deepEqual(r1.changedPlaneIds, ['p1']);
+  const idsAfter = graph.walls.map(w => w.id).sort();
+  const keyAfter = graph.wallFreshnessKey;
+  assert.notDeepEqual(idsAfter, idsBefore, '壁 id が総入れ替え');
+  assert.notEqual(keyAfter, keyBefore);
+  assert.deepEqual(savedActive, ['p1'], '自階が保存される');
+
+  // 2回目: 収束（変更なし・undo 不変・保存なし）
+  const undoAfter = undoManager.peekUndo();
+  const r2 = await refreshWallsForViewEntry(project, opts);
+  assert.deepEqual(r2.changedPlaneIds, []);
+  assert.equal(undoManager.peekUndo(), undoAfter, '2回目は undo が増えない');
+  assert.deepEqual(savedActive, ['p1', 'p1'], '2回目も自階は無条件で1回保存される（再生成・undo は起きない）');
+
+  let guard = 0;
+  while (undoManager.peekUndo() !== undoBefore && guard < 10) { undoManager.undo(); guard++; }
+  assert.ok(guard >= 1 && guard <= 2, `undo 件数 ${guard}`);
+  assert.deepEqual(graph.walls.map(w => w.id).sort(), idsBefore, 'undo で壁 id が戻る');
+  assert.equal(graph.wallFreshnessKey, keyBefore, 'undo で鍵が戻る');
+  for (let i = 0; i < guard; i++) undoManager.redo();
+  assert.deepEqual(graph.walls.map(w => w.id).sort(), idsAfter, 'redo で壁 id が戻る');
+  assert.equal(graph.wallFreshnessKey, keyAfter, 'redo で鍵が戻る');
+});
+
+test('【S2-18a】refreshWallsForViewEntry: 直上階の peek が throw しても自階は再生成され、他階（直下）は続行する', async () => {
+  const { project, graphs, commit, store, restore } = await makeSeededFloors(3, 'p2');
+  try {
+    for (const g of Object.values(graphs)) g.setWallFreshnessKey('force-mismatch');
+    commit();
+    const storePeek = makeStorePeek(project, store);
+    const saved = [];
+    const result = await refreshWallsForViewEntry(project, {
+      saveActiveFloorFn: async () => {},
+      peek: async (plane) => { if (plane.id === 'p3') throw new Error('peek boom'); return storePeek(plane); },
+      saveFloorFn: async (id) => { saved.push(id); },
+    });
+    assert.ok(result.changedPlaneIds.includes('p2'));
+    assert.ok(result.changedPlaneIds.includes('p1'), '直下は続行');
+    assert.ok(!result.changedPlaneIds.includes('p3'));
+    assert.deepEqual(saved, ['p1']);
+  } finally { restore(); }
+});
+
+test('【S2-18b】refreshWallsForViewEntry: loadMaterialMapFn が reject したら再生成・鍵・保存・undo のいずれも起きない', async () => {
+  const { project, graph } = makeSinglePlaneProject();
+  addRectRoom(graph);
+  await seedInitialWalls(graph, project);
+  const ids = graph.walls.map(w => w.id);
+  const key = graph.wallFreshnessKey;
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const undoBefore = undoManager.peekUndo();
+  const saved = [];
+  const result = await refreshWallsForViewEntry(project, {
+    saveActiveFloorFn: async (id) => { saved.push(`active:${id}`); },
+    peek: async () => null, saveFloorFn: async (id) => { saved.push(`floor:${id}`); },
+    loadMaterialMapFn: async () => { throw new Error('boom'); },
+  });
+  assert.deepEqual(result.changedPlaneIds, []);
+  assert.deepEqual(graph.walls.map(w => w.id), ids);
+  assert.equal(graph.wallFreshnessKey, key);
+  assert.deepEqual(saved, ['active:p1'], '再生成されない・他階保存なし（自階の無条件保存 1 回だけ）');
+  assert.equal(undoManager.peekUndo(), undoBefore);
+});
+
+test('【S2-18d】refreshWallsForViewEntry: saveActiveFloorFn が throw した後に再突入すると、直上階 peek より前に saveActiveFloorFn が再度 1 回呼ばれる', async () => {
+  const log = [];
+  const { project, graphs, commit, peek, saveFloorFn, restore } = await makeSeededFloors(2, 'p1', log);
+  try {
+    graphs.p1.setWallFreshnessKey('force-mismatch');
+    graphs.p2.setWallFreshnessKey('force-mismatch');
+    commit();
+    const boom = new Error('save active boom');
+    await assert.rejects(
+      () => refreshWallsForViewEntry(project, { saveActiveFloorFn: async () => { throw boom; }, peek, saveFloorFn }),
+      e => e === boom,
+    );
+    // 自階は再生成済み（鍵一致）。再突入しても保存は行われる
+    log.length = 0;
+    await refreshWallsForViewEntry(project, { saveActiveFloorFn: async () => { log.push('saveActive'); }, peek, saveFloorFn });
+    assert.equal(log.filter(e => e === 'saveActive').length, 1, `再突入で1回（log=${log.join(',')}）`);
+    const p2Peek = log.indexOf('peek:p2');
+    assert.ok(p2Peek < 0 || log.indexOf('saveActive') < p2Peek, `直上階 peek より前（log=${log.join(',')}）`);
+  } finally { restore(); }
+});
+
+test('【S2-18c】refreshWallsForViewEntry: ERR_CATALOG_DUPLICATE は reject が伝わり、saveActiveFloorFn が throw しても reject が伝わる（自階の壁・鍵は再生成済みのまま）', async () => {
+  // (a) カタログ重複
+  {
+    const { project, graph } = makeSinglePlaneProject();
+    addRectRoom(graph);
+    await seedInitialWalls(graph, project);
+    graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    const dup = new Error('dup'); dup.code = ERR_CATALOG_DUPLICATE;
+    await assert.rejects(
+      () => refreshWallsForViewEntry(project, {
+        saveActiveFloorFn: async () => {}, peek: async () => null,
+        loadMaterialMapFn: async () => { throw dup; },
+      }),
+      e => e === dup,
+    );
+  }
+  // (b) 自階の保存失敗
+  {
+    const { project, graph } = makeSinglePlaneProject();
+    addRectRoom(graph);
+    await seedInitialWalls(graph, project);
+    const ids = graph.walls.map(w => w.id).sort();
+    const key = graph.wallFreshnessKey;
+    graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+    const boom = new Error('save active boom');
+    await assert.rejects(
+      () => refreshWallsForViewEntry(project, {
+        saveActiveFloorFn: async () => { throw boom; }, peek: async () => null, saveFloorFn: async () => {},
+      }),
+      e => e === boom,
+    );
+    assert.notEqual(graph.wallFreshnessKey, key, '自階の鍵は再生成済み');
+    assert.notDeepEqual(graph.walls.map(w => w.id).sort(), ids, '自階の壁は再生成済み');
+  }
 });
