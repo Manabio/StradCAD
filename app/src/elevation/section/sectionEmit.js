@@ -853,8 +853,14 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         const atFaceEndHi = !next && Math.abs(col.x1 - faceHiX) < GAP_EPS;
         {
           const wholeBand = [{ z0: band.z0, z1: band.z1 }];
-          const loRanges = (splitByCutWall && !endsAtGap(prev) && !atFaceEndLo) ? []
+          // 面端の隅で建具断面を描く建具の開口範囲（emitCtx.cornerOpeningZLo/Hi。面図の面端の太線と
+          // 同じ入力＝buildSectionFromLine の ends）では面端の凹み側面線を描かない（ユーザー指摘
+          // 2026-10-13「建具上から床までは不要」）。適用は面の端の列（atFaceEndLo/Hi）だけ。
+          const minusCornerOpenings = (ranges, holes) =>
+            (holes ?? []).reduce((rs, h) => subtractZ(rs, h), ranges);
+          const loBase = (splitByCutWall && !endsAtGap(prev) && !atFaceEndLo) ? []
             : prev ? uncoveredZRanges(prev, band, 'prev') : (emitCtx.openEndLo ? [] : wholeBand);
+          const loRanges = atFaceEndLo ? minusCornerOpenings(loBase, emitCtx.cornerOpeningZLo) : loBase;
           // 斜めの天端の帯は、端の縦線を**その端での天端の高さ**までにする（帯の上端 z1 は高い側の値）。
           for (const r of loRanges) {
             const x = wallEndXAt(columns, i, -1, r.z0, col.x0);
@@ -862,8 +868,9 @@ export function emitColumns(columns, cut, emitCtx = {}) {
             if (zTop - r.z0 <= GAP_EPS) continue;
             prims.push(Object.assign(emitLine(cut, x, r.z0, x, zTop, role, { ceilZ }),{__o:'recessLo'}));
           }
-          const hiRanges = (splitByCutWall && !endsAtGap(next) && !atFaceEndHi) ? []
+          const hiBase = (splitByCutWall && !endsAtGap(next) && !atFaceEndHi) ? []
             : next ? uncoveredZRanges(next, band, 'next') : (emitCtx.openEndHi ? [] : wholeBand);
+          const hiRanges = atFaceEndHi ? minusCornerOpenings(hiBase, emitCtx.cornerOpeningZHi) : hiBase;
           for (const r of hiRanges) {
             const x = wallEndXAt(columns, i, +1, r.z0, col.x1);
             const zTop = band.topEdge ? Math.min(r.z1, band.topEdge.zAtX1) : r.z1;

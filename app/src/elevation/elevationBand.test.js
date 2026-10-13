@@ -342,6 +342,46 @@ test('【項目3・結合】buildRoomBand: D面隅の建具はA面(prevFace=D)�
   assert.ok(leaf.x >= head.x && leaf.x + leaf.w <= head.x + head.w, '扉は枠の中');
 });
 
+// ---- 隅の建具の開口範囲を断面エンジン（recessLo）へ渡す配線（elevationBand.js → ends.cornerOpeningZLo） ----
+// 端の区間の床が300高い面Aで、直交壁Dの建具（高さ2000）が隅に届く。面図の太線もエンジンの凹み側面線も
+// 開口範囲（床300〜2300＝y -2300..-300）を描かない。z基準は buildFaceFigure の floorDyAt と同じ
+// 「描かれた床」（drawnFloorDeltaAt）。
+function cornerWiringBand(floorSegsOf) {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'LDK');
+  generateRoomWallsFromOutline(graph, room);
+  graph.addOpening(x0, 1, true, y0, 100, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  return buildRoomBand(room, graph, {
+    project: { openingNumberIndex: new Map() },
+    faceOverride: (face, i, defaults) => (face.label === 'A' ? { floorSegments: floorSegsOf(defaults.floorSegments[0].hiX) } : null),
+  });
+}
+const edgeVLines = band => band.primitives
+  .filter(p => p.type === 'line' && p.x1 === 0 && p.x2 === 0 && p.y1 !== p.y2 && !p.dash)
+  .map(p => [Math.min(p.y1, p.y2), Math.max(p.y1, p.y2)]);
+const insideOpening = ([a, b]) => a < -300 - 1 && b > -2300 + 1 && Math.min(b, -300) - Math.max(a, -2300) > 1;
+
+test('【配線・結合】buildRoomBand: 隅の建具の開口範囲は面端の太線にもエンジンの凹み側面線にも描かれない（端の区間の床+300）', () => {
+  const band = cornerWiringBand(run => [{ loX: 0, hiX: run, floorDeltaMm: 300 }]);
+  const lines = edgeVLines(band);
+  assert.ok(lines.length >= 1, '前提: 面端に縦線がある');
+  assert.deepEqual(lines.filter(insideOpening), [], `開口範囲(y -2300..-300)に面端の縦線が無いはず（実際:${JSON.stringify(lines)}）`);
+  assert.ok(lines.some(([a, b]) => a === -2400 && b === -2300), '太線は天井〜建具の上(-2300)だけ残る');
+});
+
+test('【失敗系・Minor-2】buildRoomBand: 端の区間が半壁厚より短く低い側にあっても、図とエンジンは同じ床（描かれた床）で開口を引く', () => {
+  // 端の区間(0..30, 床0)は半壁厚より短く、隣(床300)へ段差線が食い込む＝x=0で描かれる床は300。
+  const band = cornerWiringBand(run => [
+    { loX: 0, hiX: 30, floorDeltaMm: 0 }, { loX: 30, hiX: run, floorDeltaMm: 300 },
+  ]);
+  const lines = edgeVLines(band);
+  assert.deepEqual(lines.filter(insideOpening), [], `論理境界の床(0)で引くと500mmずれる（実際:${JSON.stringify(lines)}）`);
+});
+
 // ---- 項目4(結合): buildRoomBandがwallAdjacentFloorSegmentsを実際に配線し、部分指定の壁際に
 // 段差付きの床線が出る ----
 test('【項目4・結合】buildRoomBand: 部分指定（floorLevel+300）が右半分を占める面Aの床線は段差付きになる', () => {

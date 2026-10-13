@@ -24,6 +24,7 @@ import { graphList, scopedValue } from '../graphReadScope.js';
 import { isCeilingOnlyKind } from '../core/centerLineKindPolicy.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
 import { outerWallFaceAt } from '../finish/wallFaces.js';
+import { cornerOpeningZRanges } from './elevationFaces.js';
 import { zoneCeilingFieldOf, zoneCeilingChAlong, zoneCeilingEdgesAlong, shortWallFilter } from './space/zoneCeiling.js';
 
 // 傾いた片どうしを1本の斜線に結合してよいかの許容差（高さの連続 mm・勾配 mm/mm）。浮動小数の丸め誤差だけを吸収する。
@@ -780,4 +781,45 @@ export function clipContentAboveDrawnProfile(prims, profile) {
     }
   }
   return out;
+}
+
+/**
+ * ローカルx における**描かれた床**の高さ(floorDeltaMm)。区間の同定は論理境界（segs[i].hiX）ではなく
+ * 描画上の段差線（drawnRiserX＝床が低い側へ半壁厚ずらした位置）で行う——論理境界で判定すると、
+ * 境界から半壁厚以内にある建具・隅だけが「描かれた床」と別の区間に判定され浮く。
+ * どの論理区間にも入らない欠測x（floorSegmentsの隙間）は親扱い（0）。
+ * 面図の建具・隅の建具断面の床（buildFaceFigure の floorDyAt）と、断面エンジンへ渡す隅の建具の
+ * 開口z（elevationBand.js）が**同じ関数**を使う（単一情報源）。
+ * @param {Array<{loX:number, hiX:number, floorDeltaMm:number}>} segs
+ * @param {number} x
+ * @param {number} halfWallMm
+ * @returns {number}
+ */
+export function drawnFloorDeltaAt(segs, x, halfWallMm) {
+  const idx = segs.findIndex(s => x >= s.loX - 1e-6 && x <= s.hiX + 1e-6);
+  if (idx === -1) return 0;
+  if (idx > 0 && x < drawnRiserX(segs, idx - 1, halfWallMm)) return segs[idx - 1].floorDeltaMm;
+  if (idx < segs.length - 1 && x > drawnRiserX(segs, idx, halfWallMm)) return segs[idx + 1].floorDeltaMm;
+  return segs[idx].floorDeltaMm;
+}
+
+/**
+ * 断面エンジンへ渡す**隅の建具の開口z範囲**（`ends.cornerOpeningZLo/Hi`）を、面の端ごとに作る。
+ * 相対z（面の床=0。`cornerOpeningZRanges`）にその端で**描かれた床**の高さ（`drawnFloorDeltaAt`＝
+ * buildFaceFigure の floorDyAt と同じ関数）を足して帯のzへ。面図の面端の太線と同じ範囲になる。
+ * @param {object} face
+ * @param {object|null} prevFace
+ * @param {object|null} nextFace
+ * @param {Array<object>|undefined} floorSegments - 省略は床段差なし（buildFaceFigure の既定と同じ）
+ * @param {object} graph
+ * @returns {{cornerOpeningZLo:Array<{z0:number,z1:number}>, cornerOpeningZHi:Array<{z0:number,z1:number}>}}
+ */
+export function cornerOpeningZOfFace(face, prevFace, nextFace, floorSegments, graph) {
+  const segs = floorSegments ?? [{ loX: 0, hiX: face.run, floorDeltaMm: 0 }];
+  const halfWallMm = halfWallThicknessMm(face);
+  const at = (perp, end, x) => {
+    const d = drawnFloorDeltaAt(segs, x, halfWallMm);
+    return cornerOpeningZRanges(face, perp, end, graph).map(r => ({ z0: r.z0 + d, z1: r.z1 + d }));
+  };
+  return { cornerOpeningZLo: at(prevFace, 'lo', 0), cornerOpeningZHi: at(nextFace, 'hi', face.run) };
 }

@@ -660,6 +660,7 @@ defer: 天井高さが異なる内部境界（壁の無い部屋内部）の
 （`buildRoomBand`/`buildStairBand`が`faces[(i∓1+n)%n]`をprevFace/nextFaceとしてctxに渡す）。
 帯は**直交壁の材の範囲（`wallMaterialRangeForOpening`）の上に置く**（枠は材の範囲±`FRAME_OVERHANG_MM`。置き方は切断帯 sectionEmit.js と同じ。範囲は、sectionEmit が壁1枚の `band.wall.materialRange`、隅の断面は同じ軸CLの実壁の合併。
 面端から部屋の内側へ伸ばさない＝ユーザー指摘2026-10-13）。壁が引けない合成faceだけ、既定の見込で面端の**外側**に置く。
+面端の縦線（壁断面の縁。CUT）は、この隅の建具断面を描く建具の開口範囲では描かない（窓台〜上端を引いた残り。sectionEmit の openingPassThrough と同じ規則。ユーザー指摘2026-10-13「建具上から床までは不要」）。
 
 ## 腰壁の天端・端部の見えがかり（`kneeCapMarksOnFace`。仕様2026-08）
 天端は壁の上端から下への帯（`.claude/data-model.md`参照）なので、面自身が腰壁のときは
@@ -1860,6 +1861,7 @@ role:'mat_foundation'）は本レイヤが`graph.beams`/`graph.columns`しか読
   天端も2本の線分が突き合わさった形で出る（見た目は1本）。
 - **凹み側面線は同じ層(`layerRole`)の壁どうしでしか成立しない**。距離が変わっても層が違えば、1枚の壁面が
   凹んだのではなく**見えている壁が別の層のものへ入れ替わった**だけ（実機症状: 左CL上の`z3800..5400`に縦線）。
+- **面端の隅で建具断面を描く建具の開口範囲では、面端の凹み側面線（`recessLo/Hi`）を描かない**（面の端の列だけ。内部の列は不変）。面図の面端の太線と同じ入力（`elevationFaces.js`の`cornerOpeningZRanges`→`ends.cornerOpeningZLo/Hi`）で、z は帯の z（端の区間で**描かれた床**の高さ込み。`drawnFloorDeltaAt`＝面図の floorDyAt と同じ関数）。太線だけ止めると下に中線が残る。**階段帯は対象外（既知の限界）**: 階段 cut（`elevationStairSequence.js`）の端の縦線は断面線（floorProfile＝階段断面）から立つ別規則で、隅の建具の開口 z を床の高さの足し込みでは図と揃えられず、隣の面も歩行順の entry を組む途中で確定しない。隅に建具がある階段室では太線だけ止まり中線が残りうる。
 
 **切断壁（`cut`帯）の縦線は「同じ壁が隣接列に続くなら描かない」**（`band.wall`参照で同一性を判定。`cutAlong`の
 端部縦線と同じパターン）。列は壁とは無関係な断点（CL・開口端・他層の壁）でも分割されるため、旧実装のように
@@ -2266,6 +2268,8 @@ room2/room3のどちらか一方だけを直すと他方が壊れる対症療法
 ずれる。実装して既存テストで検出した）。**面端はずらさない**——`snapFaceEndsToCorners`が既に直交壁の
 仕上げ面へ詰め済みで二重になる。床段差の`drawnRiserX`と同じ「描画位置と寸法位置を別に持つ」規約で、
 寸法・CL一点鎖線はオフセット前の`spans[i].hiCLX`のまま。描画側とテストは`drawnSpanRanges`を共有する。
+**直交壁が無く、面沿いの壁の端が柱包み（在来木造の自由端。`applyFreeEndProtrusion`）で境界CLから開放側へ出ているときは、その壁端**
+（エンジンの凹み側面線と同じ位置。許容幅は`CORNER_PROBE_DEPTH_MM`で、出幅は決め打ちにしない。直交壁が最優先、CLより引っ込んだ端は採らない。2026-10-13「2階廊下D2: Y4の中線は不要」）。
 4. 巾木・壁2段書き障害物にopen区間を追加。`extendedAtLocal0/Run`端では隣接面由来の建具断面を描かない。
 
 **見下ろし方向は破線（QA修正・ユーザー明示指示2026-08）**: 開放先(far側)の床がnear側より低い

@@ -2045,6 +2045,44 @@ test('【Phase4・f】emitColumns: open帯からは水平線(type:line)以外の
   assert.deepEqual(nonLine, [], 'line以外のプリミティブ（建具姿図のrect/polyline等）は出ないはず');
 });
 
+// ---- 面端の隅で建具断面を描く建具の開口範囲では、面端の凹み側面線を描かない（ユーザー指摘2026-10-13） ----
+function cornerOpeningFixture() {
+  const cut = makeCut({ line: { isVertical: false, axisValue: 0, lo: 0, hi: 1000 }, zRange: { loZ: 0, hiZ: 2400 } });
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 100, layerRole: 'self' }] },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000, bands: [{ kind: 'wall', z0: 0, z1: 2400, distMm: 300, layerRole: 'self' }] },
+  ];
+  const vlines = (ctx, x) => emitColumns(columns, cut, { ceilZ: 2400, ...ctx })
+    .filter(p => p.type === 'line' && p.x1 === x && p.x2 === x)
+    .map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]);
+  return { vlines };
+}
+
+test('【隅の建具】emitColumns: 面端(lo/hi)の凹み側面線は cornerOpeningZLo/Hi の範囲を描かず、その上だけ残る', () => {
+  const { vlines } = cornerOpeningFixture();
+  assert.deepEqual(vlines({}, 0), [[0, 2400]], '前提: 範囲なしなら面端に全高の線');
+  assert.deepEqual(vlines({ cornerOpeningZLo: [{ z0: 0, z1: 2000 }] }, 0), [[2000, 2400]]);
+  assert.deepEqual(vlines({ cornerOpeningZHi: [{ z0: 900, z1: 1900 }] }, 1000), [[0, 900], [1900, 2400]], '窓: 上下に分かれる');
+  assert.deepEqual(vlines({ cornerOpeningZLo: [{ z0: 0, z1: 2000 }] }, 1000), [[0, 2400]], '反対の端は不変');
+});
+
+test('【失敗系・隅の建具】emitColumns: 内部の列境界の凹み線は不変／範囲が空配列・未指定なら従来どおり／全部覆えば線なし', () => {
+  const { vlines } = cornerOpeningFixture();
+  const holes = { cornerOpeningZLo: [{ z0: 0, z1: 2000 }], cornerOpeningZHi: [{ z0: 0, z1: 2000 }] };
+  assert.deepEqual(vlines(holes, 500), vlines({}, 500), '内部列(x=500)は範囲を引かない');
+  assert.ok(vlines({}, 500).length >= 1, '前提: 内部列の凹み線がある');
+  assert.deepEqual(vlines({ cornerOpeningZLo: [] }, 0), [[0, 2400]]);
+  assert.deepEqual(vlines({ cornerOpeningZLo: [{ z0: 0, z1: 2400 }] }, 0), []);
+});
+
+test('buildSectionFromLine ends: cornerOpeningZLo/Hi は既定[]・opts から ends へ入り emitCtxForCut が渡す', () => {
+  assert.deepEqual(emitCtxForCut({ zRange: { hiZ: 3000 } }).cornerOpeningZLo, []);
+  const z = [{ z0: 0, z1: 2000 }];
+  const ctx = emitCtxForCut({ zRange: { hiZ: 3000 }, ends: { openLo: false, openHi: false, wallLessLo: false, wallLessHi: false, cornerOpeningZLo: z } });
+  assert.deepEqual(ctx.cornerOpeningZLo, z);
+  assert.deepEqual(ctx.cornerOpeningZHi, []);
+});
+
 // ---- QA是正2026-09（§5.12 D2-1是正・第2ラウンド項目4）: emitCtxForCutもwallLessEndAtに統一 ----
 test('【QA是正・第2ラウンド】emitCtxForCut: wallFilterで除外された実壁がある端(hiddenWallAtLocal0/Run)はopenEndLo/Hiがfalse（recessLo/Hiの抑止対象にならない）', () => {
   const cut = { zRange: { hiZ: 3000 }, face: { hasWallAtLocal0: false, hiddenWallAtLocal0: true, hasWallAtLocalRun: true } };

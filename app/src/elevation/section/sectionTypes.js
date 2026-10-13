@@ -40,7 +40,8 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   chDimSplitAbsYs?: number[],
  *   anchorRoom?: object,
  *   face?: object,
- *   ends?: {openLo:boolean, openHi:boolean, wallLessLo:boolean, wallLessHi:boolean},
+ *   ends?: {openLo:boolean, openHi:boolean, wallLessLo:boolean, wallLessHi:boolean,
+ *     cornerOpeningZLo?:Array<{z0:number,z1:number}>, cornerOpeningZHi?:Array<{z0:number,z1:number}>},
  *   openGapMarks?: boolean,
  *   ceilClip?: Array<{loX:number, hiX:number, ceilZ:number, ceilZHi?:number}>,
  * }} SectionCut
@@ -64,6 +65,8 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   `face.hasWallAtLocal0/Run===false`、wallLessLo/Hi＝`wallLessEndAt(face,'0'/'Run')`と同値）。
  *   `buildSectionFromLine`（`sectionContent.js`）が唯一の生成元——`withProbeExtension`・
  *   `emitCtxForCut`はこちらを優先して読み、無い手組みcutだけ`face`から導出する。
+ *   cornerOpeningZLo/Hi（任意。既定[]）… その端の隅で建具断面を描く建具の開口z範囲（切断のz基準＝
+ *   帯のz。端の区間の床高さ込み）。端の列の凹み側面線（recessLo/Hi）はこの範囲を描かない。
  *   airRoom（任意。展開図一般化Phase 6）… その帯自身の空気ボリュームを代表するRoom
  *   （階段帯なら階段室。`section/cuts/switchbackCuts.js`が設定）。
  *   underRooms（任意。展開図一般化Phase 6）… 階段下に指定された部屋の集合（同上が設定）。

@@ -14,7 +14,7 @@
  * OpeningTagLayer.jsx と同じ構成でGroup描画する）。
  */
 import { CenterLineType, OpeningCategory } from '@core';
-import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallLessEndAt } from './elevationFaces.js';
+import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallLessEndAt, openingsReachingCorner, cornerOpeningZRanges } from './elevationFaces.js';
 import { openingSectionPrimitives, wallMaterialRangeForOpening } from '../openings/openingSection.js';
 import { FRAME_OVERHANG_MM } from '../openings/openingPlanSymbolGeometry.js';
 import { openingTagPartsOf, effectiveHeight } from '../openings/openingNumbering.js';
@@ -24,7 +24,7 @@ import { translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
 import { ceilArcCircleOf, ceilArcZAt, ceilArcPrimitive } from './ceilArcSection.js';
 import { collectRow1SplitPoints } from './elevationDimSplit.js';
 import {
-  drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm, drawnFloorProfileZAt,
+  drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm, drawnFloorProfileZAt, drawnFloorDeltaAt,
 } from './elevationFloorProfile.js';
 import { solidPrimitivesForFace } from './elevationSolids.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
@@ -312,28 +312,24 @@ function gridWorldRange(face, boundary) {
   return { lo: Math.min(face.lo, a, b), hi: Math.max(face.hi, a, b) };
 }
 
+// openingsReachingCorner は elevationFaces.js へ移した（断面エンジン側の隅の開口範囲と共有するため）。
+// 既存の import 元（本ファイル）を保つ再エクスポート。
+export { openingsReachingCorner };
+
+/** 隅の開口の相対z範囲 {z0,z1}（床=0・上向き正）→ 縦線から引く y 範囲 [上, 下]（dy は隅の床の平行移動量）。 */
+function cornerYRangeOf(r, dy) {
+  return [dy - r.z1, dy - r.z0];
+}
+
 /**
- * perpFace（面Fに隣接する直交壁）上の開口のうち、Fとの共有隅（corner='end'ならperpFace自身の
- * 終端=run、corner='start'なら始端=0）にスパンが届いている（面一、またはそれを超えて隅に
- * かかっている）ものを返す（項目3）。
- *
- * 採った解釈: buildRoomFacesの隣接面は必ず隅（世界座標）を共有する不変条件（elevationFaces.js
- * ヘッダ参照）を使い、「Fの面端の縦線」＝perpFace自身のその隅（0またはrun）と捉える。
- * 「開口スパンが交差する」を、perpFaceの仕上げ面ベースの開口スパンがこの隅（0またはrun）まで
- * 届いている（>= run 側 / <= 0 側）と定義した——壁センターライン側（faceBoundaryLocalXの
- * boundary）まで届く条件だと、開口はセンターラインより内側（仕上げ面側）にしか置けないため
- * 実質的に絶対発生しない条件になってしまい採用しなかった。
- * @param {object} perpFace - Fに隣接する直交壁面（buildRoomFacesの1件）
- * @param {object} graph
- * @param {'start'|'end'} corner - Fと共有する隅がperpFaceの始端(0)か終端(run)か
- * @returns {import('@core').Opening[]}
+ * 縦線 line（x1==x2。y1=上端・y2=下端）から y 範囲 ranges（[上, 下]）を引いた残りの線の配列。
+ * 範囲が無ければ元の線そのもの。全部覆われれば空。
  */
-export function openingsReachingCorner(perpFace, graph, corner) {
-  return openingsOnFace(perpFace, graph).filter(o => {
-    const localX = localXOf(perpFace, o.centerCoord);
-    const lo = localX - o.width / 2, hi = localX + o.width / 2;
-    return corner === 'end' ? hi >= perpFace.run : lo <= 0;
-  });
+function subtractYRanges(line, ranges) {
+  if (!ranges.length) return [line];
+  // 区間の引き算は壁2段書きの subtractRuns と共通（lo=上端y・hi=下端y として扱う）。
+  return subtractRuns({ lo: line.y1, hi: line.y2 }, ranges.map(([lo, hi]) => ({ lo, hi })))
+    .map(r => ({ ...line, y1: r.lo, y2: r.hi }));
 }
 
 /**
@@ -1042,10 +1038,17 @@ export function buildFaceFigure(face, ctx) {
     const ceil = ceilAbsAtX(x, fallbackAbsMm);
     return -(capped ? Math.min(ceil, upperFloorZ) : ceil);
   };
+  // 壁断面の縁（CUT。hasWall のとき）は、その隅に建具断面を描く建具の開口範囲では描かない
+  // （ユーザー指摘2026-10-13「X3通り右側の太線は天井から建具の上まで。建具上から床までは不要」。
+  // 断面エンジン sectionEmit.js の openingPassThrough と同じ規則）。建具の高さは下の
+  // cornerSection と同じ openingsReachingCorner で決まるため、線は仮置きして cornerSection の
+  // 後（floorDyAt が使える位置）で開口範囲を引いた残りへ差し替える（出力順は不変）。
+  const edgeLoIdx = (hasWallAtLocal0 || edgeAtLocal0) ? prims.length : -1;
   if (hasWallAtLocal0 || edgeAtLocal0) {
     prims.push({ type: 'line', x1: 0,   y1: endCeilYOf(0, segCeilAbsAt(segs[0], 0), capsAtUpperFloor('lo')), x2: 0,   y2: endFloorYOf(0, floorYAtStart),
       weight: hasWallAtLocal0 ? cutWeight : silhouetteWeight });
   }
+  const edgeHiIdx = (hasWallAtLocalRun || edgeAtLocalRun) ? prims.length : -1;
   if (hasWallAtLocalRun || edgeAtLocalRun) {
     prims.push({ type: 'line', x1: run, y1: endCeilYOf(run, segCeilAbsAt(segs[segs.length - 1], run), capsAtUpperFloor('hi')), x2: run, y2: endFloorYOf(run, floorYAtEnd),
       weight: hasWallAtLocalRun ? cutWeight : silhouetteWeight });
@@ -1212,13 +1215,7 @@ export function buildFaceFigure(face, ctx) {
   // 半壁厚ずらした位置。床線・巾木の区間端と同じ基準）で行う——論理境界で判定すると、
   // 境界から半壁厚以内に中心がある建具だけが「描かれた床」と別の区間に判定され浮く。
   // どの論理区間にも入らない欠測x（floorSegmentsの隙間）は親扱い（0）にフォールバックする。
-  const drawnDeltaAt = (x) => {
-    const idx = segs.findIndex(s => x >= s.loX - 1e-6 && x <= s.hiX + 1e-6);
-    if (idx === -1) return 0;
-    if (idx > 0 && x < riserXAt(idx - 1)) return segs[idx - 1].floorDeltaMm;
-    if (idx < segs.length - 1 && x > riserXAt(idx)) return segs[idx + 1].floorDeltaMm;
-    return segs[idx].floorDeltaMm;
-  };
+  const drawnDeltaAt = (x) => drawnFloorDeltaAt(segs, x, halfWallMm); // 単一情報源（elevationFloorProfile.js）
   const floorDyAt = x => { const d = drawnDeltaAt(x); return d ? -d : 0; };
   // 手前に別の部屋が挟まる位置の建具は、この面の建具ではないので姿図を描かない
   // （openingBelongsToFaceRoom。実機「6」C＝階段の展開に階段下の部屋の建具が出ていた）。
@@ -1297,17 +1294,28 @@ export function buildFaceFigure(face, ctx) {
       : openingSectionPrimitives(o, FRAME_OVERHANG_MM, -1, cutWeight, silhouetteWeight,
         { worldPerDirSign: -sgn, detailWeight });
   };
+  // 隅の建具の開口範囲（y。上向き負・隅の床 dy を含む）。面端の太線から引く。
+  const cornerOpeningYRanges = [[], []];
   if (prevFace && !face.extendedAtLocal0 && (face.hasWallAtLocal0 ?? true)) {
     const dy = floorDyAt(0);
     for (const o of openingsReachingCorner(prevFace, graph, 'end')) {
       prims.push(...cornerSection(o, false).map(p => translatePrimitive(p, 0, dy)));
     }
+    cornerOpeningYRanges[0] = cornerOpeningZRanges(face, prevFace, 'lo', graph).map(r => cornerYRangeOf(r, dy));
   }
   if (nextFace && !face.extendedAtLocalRun && (face.hasWallAtLocalRun ?? true)) {
     const dy = floorDyAt(run);
     for (const o of openingsReachingCorner(nextFace, graph, 'start')) {
       prims.push(...cornerSection(o, true).map(p => translatePrimitive(p, 0, dy)));
     }
+    cornerOpeningYRanges[1] = cornerOpeningZRanges(face, nextFace, 'hi', graph).map(r => cornerYRangeOf(r, dy));
+  }
+  // 面端の太線（壁断面の縁）から開口範囲を引く。run 側（添字が大きい）から差し替えて添字を保つ。
+  if (edgeHiIdx >= 0 && hasWallAtLocalRun) {
+    prims.splice(edgeHiIdx, 1, ...subtractYRanges(prims[edgeHiIdx], cornerOpeningYRanges[1]));
+  }
+  if (edgeLoIdx >= 0 && hasWallAtLocal0) {
+    prims.splice(edgeLoIdx, 1, ...subtractYRanges(prims[edgeLoIdx], cornerOpeningYRanges[0]));
   }
 
   // 巾木（h=<mm>と解釈できた場合のみ。床まで達する開口の区間は途切れさせる）。

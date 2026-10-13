@@ -268,6 +268,8 @@ export function emitCtxForCut(cut) {
     ceilZ: cut.zRange?.hiZ,
     openEndLo: cut.ends ? cut.ends.wallLessLo : (cut.face ? wallLessEndAt(cut.face, '0') : false),
     openEndHi: cut.ends ? cut.ends.wallLessHi : (cut.face ? wallLessEndAt(cut.face, 'Run') : false),
+    cornerOpeningZLo: cut.ends?.cornerOpeningZLo ?? [],
+    cornerOpeningZHi: cut.ends?.cornerOpeningZHi ?? [],
   };
 }
 
@@ -350,7 +352,8 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
  *   aboveCeilVisibleRanges?:object[], stairCut?:object|null, airRoom?:object,
  *   underRooms?:Set<object>, bandRoomBounds?:object|null, chDimSplitAbsYs?:number[],
  *   seqNo?:string, endExtendMm?:number, upperPlaneOverhang?:boolean, scale?:number,
- *   face?:object, ends?:{openLo:boolean,openHi:boolean,wallLessLo:boolean,wallLessHi:boolean}}} [opts]
+ *   face?:object, ends?:{openLo:boolean,openHi:boolean,wallLessLo:boolean,wallLessHi:boolean},
+ *   cornerOpeningZLo?:Array<{z0:number,z1:number}>, cornerOpeningZHi?:Array<{z0:number,z1:number}>}} [opts]
  *   - `opts.zRange`は必須（`opts`自体を省略した場合・`zRange`を省略した場合のいずれも、
  *   `baseFloorZ`の既定`zRange.loZ`の参照でTypeErrorになる。導出しない・フォールバックしない）。
  *   probeCtx（省略時のみ`makeProbeContext(layers)`を組む）… 帯経路は面ループの外で作った
@@ -363,7 +366,7 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
  */
 export function buildSectionFromLine(line, layers, opts = {}) {
   const face = opts.face;
-  const ends = opts.ends ?? (face
+  const baseEnds = opts.ends ?? (face
     ? {
       openLo: face.hasWallAtLocal0 === false,
       openHi: face.hasWallAtLocalRun === false,
@@ -371,6 +374,12 @@ export function buildSectionFromLine(line, layers, opts = {}) {
       wallLessHi: wallLessEndAt(face, 'Run'),
     }
     : { openLo: false, openHi: false, wallLessLo: false, wallLessHi: false });
+  // 隅の建具の開口z範囲（既定は無し）。ends の生成はここ1箇所。
+  const ends = {
+    ...baseEnds,
+    cornerOpeningZLo: opts.cornerOpeningZLo ?? baseEnds.cornerOpeningZLo ?? [],
+    cornerOpeningZHi: opts.cornerOpeningZHi ?? baseEnds.cornerOpeningZHi ?? [],
+  };
   const { viewSign, dirSign, zRange } = opts;
   const cut = {
     seqNo: opts.seqNo, line, layers, viewSign, dirSign, zRange,

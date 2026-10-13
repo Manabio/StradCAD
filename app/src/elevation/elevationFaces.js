@@ -7,7 +7,8 @@
  * 右手が指す世界方向」で、A→B→C→D は平面を時計回りに一巡し、隣り合う面は
  * 同じ隅を世界座標で共有する（buildRoomFaces の不変条件）。
  */
-import { RoomKind, RoomFeature } from '@core';
+import { RoomKind, RoomFeature, OpeningCategory } from '@core';
+import { effectiveHeight } from '../openings/openingNumbering.js';
 import { computeExternalEdgeParams, mergeSegments } from '../finish/wallGeneration.js';
 import { innerWallFaceAt } from '../finish/wallFaces.js';
 import { sameAxisLine } from '../finish/kneeDropWall.js';
@@ -17,7 +18,7 @@ import { isRealRoom } from './section/sectionLayerStack.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { graphList } from '../graphReadScope.js';
 import { DEFAULT_STAIR_ROOM_NAME } from '../finish/roomNamingOptions.js';
-import { SPLIT_MERGE_EPS_MM, PROBE_EPS_MM } from './elevationStyle.js';
+import { SPLIT_MERGE_EPS_MM, PROBE_EPS_MM, GAP_EPS_MM } from './elevationStyle.js';
 
 // struct CL は graph._structGraph.shapeMap に格納されるため両方を検索する（finish/*.js と同じ規約）。
 function getShape(graph, id) {
@@ -200,8 +201,47 @@ export function drawnSpanBoundaryX(face, graph, localX, clId, localSign) {
     inward: localSign * face.dirSign, // 開放側の世界方向
     spanLo: face.faceValue - CORNER_PROBE_DEPTH_MM, spanHi: face.faceValue + CORNER_PROBE_DEPTH_MM,
   });
-  if (faceValue == null) return localX;
-  return (faceValue - face.originWorld) * face.dirSign;
+  if (faceValue != null) return (faceValue - face.originWorld) * face.dirSign;
+  // 直交壁が無いとき: 面沿いの壁（この面の軸CL上の壁）の端が、在来木造の自由端の柱包み
+  // （wallGeneration.js applyFreeEndProtrusion）で境界CLから開放側へ出ているなら、その壁端が
+  // 実際の抜けの始まり＝断面エンジンの凹み側面線（recessLo/Hi）と同じ位置（ユーザー指摘2026-10-13
+  // 「2階廊下D2: Y4通りの中線は不要」）。
+  const endX = alongWallOpenEndWorld(face, cl.effectiveValue, localSign * face.dirSign, graph);
+  if (endX == null) return localX;
+  return (endX - face.originWorld) * face.dirSign;
+}
+
+// 壁端が境界CLからはみ出す量の上限は直交壁の探査窓と同じ尺度（CORNER_PROBE_DEPTH_MM）で見る。
+// 柱包みの出幅（下地偏芯＋仕上げ。72.5など）は構成で変わるため、その値を決め打ちにしない。
+// 壁が境界CLをまたいでいる（反対側の端がCLより wall 側へ有意に入っている）ことの下限(mm)。
+const ALONG_WALL_REACH_EPS_MM = 5;
+
+/**
+ * 面沿いの壁（face.axisCL 上・同じ向き）のうち、境界CL（世界値 clValue）をまたぎ、
+ * openDir 側の端が CL から 0 超〜CORNER_PROBE_DEPTH_MM 以内に出ているものの、最も開放側へ出た端
+ * （世界座標）。無ければ null。CL より wall 側に引っ込んだ端・探査窓を超えて出る端は採らない
+ * （境界をずらす根拠は「抜けは壁の面／端から始まる」ことで、遠い壁は別の壁）。
+ * @param {object} face
+ * @param {number} clValue - 境界CLの effectiveValue
+ * @param {1|-1} openDir - 開放側の世界方向
+ * @param {object} graph
+ * @returns {number|null}
+ */
+function alongWallOpenEndWorld(face, clValue, openDir, graph) {
+  const axisValue = face.axisCL?.effectiveValue;
+  let best = null;
+  for (const w of graphList(graph, 'walls') ?? []) {
+    if (w.isVertical !== face.isVertical || w.axisCL?.id !== face.axisCL?.id) continue;
+    // この面の側の壁だけ（軸CLの反対側＝向こうの部屋の壁は、同じCL上でも別の壁）。
+    if ((w.axisValue - axisValue) * (face.faceValue - axisValue) < 0) continue;
+    const lo = Math.min(w.coord1, w.coord2), hi = Math.max(w.coord1, w.coord2);
+    const openEnd = openDir > 0 ? hi : lo, wallEnd = openDir > 0 ? lo : hi;
+    if (openDir * (wallEnd - clValue) > -ALONG_WALL_REACH_EPS_MM) continue; // CLをまたいでいない
+    const out = openDir * (openEnd - clValue);
+    if (out <= GAP_EPS_MM || out > CORNER_PROBE_DEPTH_MM) continue;
+    if (best == null || openDir * (openEnd - best) > 0) best = openEnd;
+  }
+  return best;
 }
 
 /**
@@ -801,4 +841,52 @@ export function openingsOnFace(face, graph) {
     .filter(o => o.isVertical === face.isVertical && o.axisCL.id === face.axisCL.id)
     .filter(o => o.centerCoord >= face.lo && o.centerCoord <= face.hi)
     .sort((a, b) => a.centerCoord - b.centerCoord);
+}
+
+/**
+ * perpFace（面Fに隣接する直交壁）上の開口のうち、Fとの共有隅（corner='end'ならperpFace自身の
+ * 終端=run、corner='start'なら始端=0）にスパンが届いている（面一、またはそれを超えて隅に
+ * かかっている）ものを返す（項目3）。
+ *
+ * 採った解釈: buildRoomFacesの隣接面は必ず隅（世界座標）を共有する不変条件（本ファイルのヘッダ
+ * 参照）を使い、「Fの面端の縦線」＝perpFace自身のその隅（0またはrun）と捉える。
+ * 「開口スパンが交差する」を、perpFaceの仕上げ面ベースの開口スパンがこの隅（0またはrun）まで
+ * 届いている（>= run 側 / <= 0 側）と定義した——壁センターライン側（faceBoundaryLocalXの
+ * boundary）まで届く条件だと、開口はセンターラインより内側（仕上げ面側）にしか置けないため
+ * 実質的に絶対発生しない条件になってしまい採用しなかった。
+ * @param {object} perpFace - Fに隣接する直交壁面（buildRoomFacesの1件）
+ * @param {object} graph
+ * @param {'start'|'end'} corner - Fと共有する隅がperpFaceの始端(0)か終端(run)か
+ * @returns {import('@core').Opening[]}
+ */
+export function openingsReachingCorner(perpFace, graph, corner) {
+  return openingsOnFace(perpFace, graph).filter(o => {
+    const localX = (o.centerCoord - perpFace.originWorld) * perpFace.dirSign;
+    const lo = localX - o.width / 2, hi = localX + o.width / 2;
+    return corner === 'end' ? hi >= perpFace.run : lo <= 0;
+  });
+}
+
+/**
+ * 面Fの端（'lo'＝ローカルx=0側／'hi'＝run側）の隅で**建具断面を描く建具**（buildFaceFigure の
+ * cornerSection）の開口z範囲を、面の床を0・上向き正の相対zで返す（窓は窓台上〜窓台+高さ・建具は床〜高さ）。
+ * 面図の面端の太線と、断面エンジンの面端の凹み側面線（recessLo/Hi）は、この範囲を描かない
+ * （ユーザー指摘2026-10-13「建具上から床までは不要」）＝**単一の入力**。
+ * 隅に建具断面を描く条件は cornerSection と同じ: 隣接面があり、開放スパンで延長された端でなく、
+ * 壁のある端（hasWallAtLocal0/Run ?? true）。
+ * @param {object} face
+ * @param {object|null|undefined} perpFace - 'lo' なら prevFace・'hi' なら nextFace
+ * @param {'lo'|'hi'} end
+ * @param {object} graph
+ * @returns {Array<{z0:number, z1:number}>}
+ */
+export function cornerOpeningZRanges(face, perpFace, end, graph) {
+  if (!perpFace) return [];
+  const isLo = end === 'lo';
+  if (isLo ? face.extendedAtLocal0 : face.extendedAtLocalRun) return [];
+  if (!((isLo ? face.hasWallAtLocal0 : face.hasWallAtLocalRun) ?? true)) return [];
+  return openingsReachingCorner(perpFace, graph, isLo ? 'end' : 'start').map(o => {
+    const sill = o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0;
+    return { z0: sill, z1: sill + effectiveHeight(o) };
+  });
 }

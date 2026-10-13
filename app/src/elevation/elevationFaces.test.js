@@ -7,7 +7,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   buildRoomFaces, openingsOnFace, faceBoundaryLocalX, snapFaceEndsToCorners, faceWallLessExtents,
-  wallCoverageGapsOnFace, wallLessEndAt,
+  wallCoverageGapsOnFace, wallLessEndAt, drawnSpanBoundaryX,
 } from './elevationFaces.js';
 
 function makeGraph() {
@@ -737,4 +737,47 @@ test('wallCoverageGapsOnFace: dirSign=-1の面でも世界座標→ローカルx
     ],
   };
   assert.deepEqual(wallCoverageGapsOnFace(face, graph), [{ lo: 1000, hi: 3000 }]);
+});
+
+// ---- drawnSpanBoundaryX: 直交壁が無いとき、面沿いの壁の端（柱包み）が境界の描画位置になる（2026-10-13） ----
+// 2階廊下 D2 の形: 面は X2（縦）・dirSign=-1・origin=-6442.5。境界CL Y4=-9100（局所 2657.5）。
+function d2Fixture(walls) {
+  const cl = { id: 'Y4', effectiveValue: -9100 };
+  const face = { axisCL: { id: 'X2', effectiveValue: 1750 }, isVertical: true, dirSign: -1, originWorld: -6442.5, faceValue: 1892.5 };
+  const graph = { shapeMap: new Map([['Y4', cl]]), walls };
+  return { face, graph };
+}
+const alongWall = (c1, c2, extra = {}) => ({ isVertical: true, axisCL: { id: 'X2' }, coord1: c1, coord2: c2, axisValue: 1892.5, ...extra });
+
+test('drawnSpanBoundaryX: 直交壁が無く、面沿いの壁が境界CLから開放側へ72.5出ていれば、その壁端（局所2730）', () => {
+  const { face, graph } = d2Fixture([alongWall(-9172.5, -6442.5)]);
+  assert.equal(drawnSpanBoundaryX(face, graph, 2657.5, 'Y4', 1), 2730);
+});
+
+test('drawnSpanBoundaryX: 面沿いの壁が複数（薄壁＋オーナー壁）なら開放側へ最も出た端', () => {
+  const { face, graph } = d2Fixture([alongWall(-9140, -6442.5), alongWall(-9172.5, -8000)]);
+  assert.equal(drawnSpanBoundaryX(face, graph, 2657.5, 'Y4', 1), 2730);
+});
+
+test('drawnSpanBoundaryX: 直交壁があればそちらが優先（面沿いの壁は見ない）', () => {
+  const perp = { isVertical: false, axisCL: { id: 'Y4' }, coord1: 1700, coord2: 2100, axisValue: -9150 };
+  const { face, graph } = d2Fixture([alongWall(-9172.5, -6442.5), perp]);
+  assert.equal(drawnSpanBoundaryX(face, graph, 2657.5, 'Y4', 1), 2707.5);
+});
+
+test('【失敗系】drawnSpanBoundaryX: 面沿いの壁の端がCLより wall 側に引っ込んでいれば CL のまま', () => {
+  const { face, graph } = d2Fixture([alongWall(-9050, -6442.5)]);
+  assert.equal(drawnSpanBoundaryX(face, graph, 2657.5, 'Y4', 1), 2657.5);
+});
+
+test('【失敗系】drawnSpanBoundaryX: 壁端がCLから探査窓(100mm)を超えて出ていれば CL のまま／壁なし・別軸の壁も CL のまま', () => {
+  assert.equal(drawnSpanBoundaryX(...(([f, g]) => [f, g, 2657.5, 'Y4', 1])(Object.values(d2Fixture([alongWall(-9300, -6442.5)])))), 2657.5);
+  const { face, graph } = d2Fixture([alongWall(-9172.5, -6442.5, { axisCL: { id: 'X9' } }), alongWall(-9172.5, -6442.5, { isVertical: false })]);
+  assert.equal(drawnSpanBoundaryX(face, graph, 2657.5, 'Y4', 1), 2657.5);
+  assert.equal(drawnSpanBoundaryX(face, d2Fixture([]).graph, 2657.5, 'Y4', 1), 2657.5);
+});
+
+test('【失敗系】drawnSpanBoundaryX: 同じCL上でも反対側の部屋の壁（axisValueが軸の反対側）は境界をずらさない', () => {
+  const { face, graph } = d2Fixture([alongWall(-9172.5, -6442.5, { axisValue: 1607.5 })]);
+  assert.equal(drawnSpanBoundaryX(face, graph, 2657.5, 'Y4', 1), 2657.5);
 });

@@ -19,7 +19,7 @@ import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDi
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { buildFaceFigure, segEndProfile, hasRightChDim } from './elevationFigure.js';
 import { ceilArcCircleOf, ceilArcChords } from './ceilArcSection.js';
-import { wallAdjacentFloorSegments, familyCeilingSegments } from './elevationFloorProfile.js';
+import { wallAdjacentFloorSegments, familyCeilingSegments, cornerOpeningZOfFace } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
   CH_DIM_OFFSET_MM, DEFAULT_FACE_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
@@ -675,6 +675,8 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
   // 柱型は全層ぶんを一度だけ求めて全面で使い回す（仮想断面位置の決定に使う。層ごとに引き直すと
   // 面の数×層の数だけ全柱を走査することになる）。
   const columnSolids = structuralColumnContribution(layers);
+  const bandFaces = layout.faceRuns.map(r => r.face);
+  const faceAt = (i, dir) => neighborWallFace(bandFaces, i, dir);
   layout.faceRuns.forEach(({ face, xCursor, floorSegments }, i) => {
     // 段差見付け面（kind==='step'）は「面」ではなく段差そのものの専用描画のため対象外
     // （断面エンジンに対応概念が無い。buildFaceFigure側の責務のまま）。
@@ -726,6 +728,10 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         // floorFace/ceilFace）が唯一の情報源になった。`face.spans`のfarFloorDeltaMm/farCeilAbsMmは
         // 図側（`elevationFigure.js`）が遠側床線・遠側天井線を描くために引き続き使う。
         seqNo: String(i),
+        // 隅の建具断面を描く建具の開口z範囲（面図の面端の太線と同じ入力。cornerOpeningZRanges）。
+        // 相対z（面の床=0）に**その端の区間の床高さ**（floorDeltaMm。buildFaceFigure の floorDyAt と
+        // 同じ値）を足して帯のz（切断のz基準＝ceilProfile・探査と同じ）へ。端の列の凹み側面線が引く。
+        ...cornerOpeningZOfFace(face, faceAt(i, -1), faceAt(i, 1), floorSegments, graph),
         probeCtx, endExtendMm, bandRoomBounds, scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
         upperPlaneOverhang: opts.upperPlaneOverhang,
       },

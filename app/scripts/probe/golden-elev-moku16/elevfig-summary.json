@@ -2,7 +2,7 @@
  {
   "plane": "1階",
   "rooms": 11,
-  "prims": 985,
+  "prims": 984,
   "errors": 0
  },
  {
@@ -14,7 +14,7 @@
  {
   "plane": "3階",
   "rooms": 6,
-  "prims": 514,
+  "prims": 512,
   "errors": 0
  }
 ]

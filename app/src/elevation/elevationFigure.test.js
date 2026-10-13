@@ -1899,6 +1899,48 @@ for (const [dir, expected] of [[1, [4115, 3988]], [-1, [4000, 4157]]]) {
   });
 }
 
+// ---- 面端の太線（壁断面の縁）は隅の建具断面を描く建具の開口範囲では描かない（ユーザー指摘2026-10-13） ----
+function edgeCutLines(prims, x) {
+  return prims.filter(p => p.type === 'line' && p.x1 === x && p.x2 === x && p.y1 !== p.y2 && !p.dash)
+    .map(p => [p.y1, p.y2]);
+}
+const WINDOW_AT_CORNER = { sillHeight: 900, height: 1000, category: OpeningCategory.WINDOW, subType: 'singleSliding' };
+
+test('【面端の太線】始端: 直交壁に高さ2000の建具があれば太線は天井〜建具の上(-2000)の1本', () => {
+  const graph = makeGraph({ openings: [perpOpeningFor()], walls: [perpWall({ lo: -145, hi: 0 })] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  assert.deepEqual(edgeCutLines(prims, 0), [[-2400, -2000]]);
+});
+
+test('【面端の太線】始端: 腰高900・高さ1000の窓なら 天井〜-1900 と -900〜床 の2本に分かれる', () => {
+  const graph = makeGraph({ openings: [{ ...perpOpeningFor(), ...WINDOW_AT_CORNER }], walls: [perpWall({ lo: -145, hi: 0 })] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  assert.deepEqual(edgeCutLines(prims, 0), [[-2400, -1900], [-900, 0]]);
+});
+
+test('【面端の太線】終端: 隅の建具の開口範囲を引く', () => {
+  const opening = { ...perpOpeningFor(), axisCL: { id: 'axisX_right' }, centerCoord: 100 };
+  const nextFace = makePerpFace({ axisCL: { id: 'axisX_right' }, faceValue: 4000 });
+  const wall = { ...perpWall({ lo: 4000, hi: 4145 }), axisCL: { id: 'axisX_right' } };
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [opening], walls: [wall] }), prevFace: null, nextFace }));
+  assert.deepEqual(edgeCutLines(prims, 4000), [[-2400, -2000]]);
+});
+
+test('【失敗系・面端の太線】隅に建具が無い・届かない面端は従来どおり天井〜床の1本', () => {
+  const far = { ...perpOpeningFor(), centerCoord: 500 };
+  for (const openings of [[], [far]]) {
+    const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings }), prevFace: makePerpFace(), nextFace: null }));
+    assert.deepEqual(edgeCutLines(prims, 0), [[-2400, 0]]);
+  }
+});
+
+test('【失敗系・面端の太線】建具が天井まで全部覆えば太線を描かない', () => {
+  const tall = { ...perpOpeningFor(), height: 2400 };
+  const graph = makeGraph({ openings: [tall], walls: [perpWall({ lo: -145, hi: 0 })] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  assert.deepEqual(edgeCutLines(prims, 0), []);
+});
+
 test('【失敗系・隅の建具断面】壁が引けないときは始端で面の外側(x<=12)・終端で外側(x>=run-12)に置く', () => {
   const opening = { ...perpOpeningFor(), axisCL: { id: 'axisX_right' }, centerCoord: 100 };
   const nextFace = makePerpFace({ axisCL: { id: 'axisX_right' }, faceValue: 4000 });
