@@ -1307,6 +1307,9 @@ const App = observer(() => {
   // に対して行い、それが終わってから setActiveFloorId でモード再ロード effect を走らせる
   // （先に activeFloorId を更新すると、境界処理前のグラフでモード状態が生成されてしまう）。
   // 失敗時は例外をそのまま投げる（handleFloorSwitchと同じ規律。F1・2026-09-27）。
+  // 切替後の表示同期（setActiveFloorId・afterFloorSwitch・リセット）は enter の成否によらず finally で行う。
+  // 理由: switchFloor 後は activePlaneId が新階なので、activeFloorId が旧階のままだと旧 State が
+  // 空 graph（swap の clearFloorData 後）を表示し続け、同じ階は早期 return で復旧もできない（2026-10-13）。
   async function switchFloorKeepingMode(planeId) {
     if (planeId === project.activePlaneId) return;
     beginUiTransition();
@@ -1317,15 +1320,19 @@ const App = observer(() => {
       const graph = project.activeGraph; // 切替前階（脱出境界処理の対象）
       await boundary?.exit?.(graph, { toMode: appMode, floorSwitch: true });
       await switchFloor(planeId);
-      await boundary?.enter?.(project.activeGraph, { floorSwitch: true }); // 切替後は読み直す
-      setActiveFloorId(planeId);
-      boundary?.afterFloorSwitch?.(planeId);
-      setSnapPoint(null);
-      setNearCL(null);
-      setNearWall(null);
-      setNearOpening(null);
-      setCursorWorld(null);
-      setMenu(null);
+      try {
+        await boundary?.enter?.(project.activeGraph, { floorSwitch: true }); // 切替後は読み直す
+      } finally {
+        // afterFloorSwitch が throw すると enter の例外を隠し後続リセットも飛ぶ。同期の軽い処理のみを置くこと（2026-10-13 QA）
+        setActiveFloorId(planeId);
+        boundary?.afterFloorSwitch?.(planeId);
+        setSnapPoint(null);
+        setNearCL(null);
+        setNearWall(null);
+        setNearOpening(null);
+        setCursorWorld(null);
+        setMenu(null);
+      }
     });
   }
 

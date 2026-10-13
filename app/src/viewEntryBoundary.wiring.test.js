@@ -50,3 +50,21 @@ test('【S3・19d】elevation.enter は壁の鮮度判定が採番収集より�
   assert.ok(iRefresh >= 0 && iThen > iRefresh && iCollect > iThen, '順序が 鮮度判定 → .then → 採番収集 になっていない');
   assert.ok(!/async/.test(elevation), 'elevation.enter を async にしてはいけない（uiBusyClassification の個数固定）');
 });
+
+test('【配線】switchFloorKeepingMode: switchFloor は try の前・enter は try 内・setActiveFloorId 等は finally 内（enter 失敗でも表示同期。2026-10-13）', () => {
+  // コメント内の括弧を数えないよう、切り出す前に行頭コメント・行末コメントを除く
+  const noComments = codeOnly(appSrc).split('\n').filter(line => !line.trim().startsWith('*')).map(line => line.replace(/\s\/\/.*$/, '')).join('\n');
+  const stripped = braceBlockAfter(noComments, 'async function switchFloorKeepingMode', { skipParams: true });
+  const iSwitch = stripped.indexOf('await switchFloor(planeId)');
+  const iTry = stripped.indexOf('try {', iSwitch);
+  const iEnter = stripped.indexOf('enter?.(', iSwitch);
+  const iFinally = stripped.indexOf('finally {', iEnter);
+  assert.ok(iSwitch >= 0, 'switchFloor(planeId) が無い');
+  assert.ok(iTry > iSwitch, 'switchFloor の後に try { が無い（switchFloor は try より前）');
+  assert.ok(iEnter > iTry, 'enter?.( が try の中（try より後）に無い');
+  assert.ok(iFinally > iEnter, 'enter の後に finally { が無い');
+  const fin = braceBlockAfter(stripped.slice(iFinally), 'finally {');
+  assert.ok(fin.includes('setActiveFloorId(planeId)'), 'setActiveFloorId(planeId) が finally ブロックの中に無い');
+  assert.ok(fin.includes('afterFloorSwitch?.(planeId)'), 'afterFloorSwitch?.(planeId) が finally ブロックの中に無い');
+  assert.equal(stripped.split('setActiveFloorId(planeId)').length - 1, 1, 'setActiveFloorId(planeId) が複数ある');
+});
