@@ -235,6 +235,16 @@ function wallEndXAt(columns, i, dir, z0, fallbackX) {
   return x;
 }
 
+/** 切断壁の連なり run の天井側の上限＝run が覆う列の打ち切り値 col.ceilZ の最小（無ければ topZ）。 */
+function runLimitZ(columns, run, topZ) {
+  let limit = topZ;
+  for (const c of columns) {
+    if (c.x0 < run.x0 - GAP_EPS || c.x1 > run.x1 + GAP_EPS) continue;
+    if (Number.isFinite(c.ceilZ)) limit = Math.min(limit, c.ceilZ);
+  }
+  return limit;
+}
+
 /**
  * 切断壁（`cut`帯）の天端のCUT水平線。腰壁のように**見えている天井より下で終わる**切断壁は、
  * その上端が切断面の一部（そこで断面が閉じる）なので水平線を描く
@@ -250,7 +260,9 @@ function cutWallTopEdges(columns, cut, ceilZ, emitCtx) {
   if (topZ == null) return [];
   return cutWallRuns(columns)
     // 天端が天井の斜線に沿う壁（ceilEdge）に水平の天端線は無い（斜めの天井線は体裁が引く）。
-    .filter(r => !r.band.ceilEdge && r.band.z1 < topZ - GAP_EPS)
+    // 天井に届いた壁（その壁の連なりの列の打ち切り値 col.ceilZ 以上まで立つ）は天端が露出しない。列ごとに打ち切り値が違う
+    // （階段帯の裏面の ceilClip）ときは列の min と比べる（どれかの列で天井に届いていれば天端は引かない）。
+    .filter(r => !r.band.ceilEdge && r.band.z1 < runLimitZ(columns, r, topZ) - GAP_EPS)
     .flatMap(r => [
       emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, ElevationLineRole.CUT, { ceilZ }),
       // 笠木の帯は腰壁・垂れ壁のもの——天端プロファイルの壁（隔て壁の斜め天端）には無い。

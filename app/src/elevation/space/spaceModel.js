@@ -32,6 +32,7 @@ import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 import {
   zoneCeilingFieldOf, zoneCeilingChAt, zoneCeilingChTopAt, zoneCeilingChAlong, zoneCeilingFarEdge, zoneCeilingDepthEdges, zoneCeilingRunRangeAt,
 } from './zoneCeiling.js';
+import { stairSoffitChMaxOver, stairSoffitChAt } from './stairSoffitCeiling.js';
 
 // cellsAlongの無限ループ防御（格子異常時の安全弁）。実データの通常の列は
 // せいぜい数十セルなので、この上限に達すること自体が異常の兆候。
@@ -147,7 +148,13 @@ export function buildSpaceIndex(layers, opts = {}) {
     if (!cell) return null;
     const room = cellToRoomFor(layer).get(cell.key) ?? null;
     const floorZ = floorZFor(room, layer);
-    const ceilZ = room ? floorZ + chTopWithin(room, layer.graph, worldX, worldY, span) : null;
+    // 階段帯の自階の層（layer.stairSoffit＝{roomId, soffit}。E5）: 階段室のセルの天井は階段の裏面（列の幅の最大 / 点の高さ）。
+    // 足元の外・裏面なしは null で従来どおり。ch は部屋 FL 基準なので floorZ に足してよい。
+    const soffitCh = room && layer.stairSoffit?.roomId === room.id
+      ? (span && Number.isFinite(span.lo) && Number.isFinite(span.hi) && Number.isFinite(span.depthCoord)
+        ? stairSoffitChMaxOver(layer.stairSoffit.soffit, span) : stairSoffitChAt(layer.stairSoffit.soffit, worldX, worldY))
+      : null;
+    const ceilZ = room ? floorZ + (soffitCh ?? chTopWithin(room, layer.graph, worldX, worldY, span)) : null;
     return { room, floorZ, ceilZ };
   }
 

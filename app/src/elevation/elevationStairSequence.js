@@ -54,8 +54,9 @@ import { worldToCell, roomBounds } from '../finish/gridCells.js';
 import { labelFaces, letterOf, upperFloorEndsOf, wallLessEndAt } from './elevationFaces.js';
 import {
   collectRunBreaks, clipContentAboveDrawnProfile,
-  floorProfileFromSegments, mergeFloorProfiles, drawnFloorProfileZMax,
+  floorProfileFromSegments, mergeFloorProfiles, drawnFloorProfileZMax, drawnFloorProfileZAt,
 } from './elevationFloorProfile.js';
+import { stairSoffitChAlong } from './space/stairSoffitCeiling.js';
 import {
   GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM,
 } from './elevationStyle.js';
@@ -143,6 +144,85 @@ function stepCeilingProfile(segs) {
     points.push([hiX, ceilAbs]);
   }
   return points;
+}
+
+// ---- 階段の裏面（E5。space/stairSoffitCeiling.js）を切断の天井にする ----
+
+/** 裏面の節列（世界の走り座標・昇順）→ 断面ローカルxの区間列（昇順）。足元の途切れ（gapBefore）・垂直の段（同じ run の 2 節）の間は区間にしない。 */
+function soffitSpansLocal(nodes, cut) {
+  const spans = [];
+  for (let i = 1; i < nodes.length; i++) {
+    const p = nodes[i - 1], q = nodes[i];
+    if (q.gapBefore || q.run - p.run <= GAP_EPS) continue;
+    const xa = localXOf(cut, p.run), xb = localXOf(cut, q.run);
+    spans.push(xa <= xb ? { loX: xa, hiX: xb, z0: p.ch, z1: q.ch } : { loX: xb, hiX: xa, z0: q.ch, z1: p.ch });
+  }
+  return spans.sort((a, b) => a.loX - b.loX);
+}
+
+/**
+ * 裏面の区間列の隙間（足元の外・途切れ）を、その面の既存の天井 base（[[x, ceilAbs], ...] の区分線形）で埋めて
+ * [xMin, xMax] を隙間なく覆う区間列にする。base が空なら baseFallbackZ の水平。
+ */
+function fillSpansWithBase(spans, xMin, xMax, base, baseFallbackZ) {
+  const baseAt = x => (base?.length ? drawnFloorProfileZAt(base, x) : baseFallbackZ);
+  const baseXs = (base ?? []).map(p => p[0]);
+  const out = [];
+  const pushFill = (a, b) => {
+    const xs = [a, ...[...new Set(baseXs)].filter(x => x > a + GAP_EPS && x < b - GAP_EPS).sort((p, q) => p - q), b];
+    for (let i = 0; i + 1 < xs.length; i++) {
+      const lo = xs[i], hi = xs[i + 1];
+      const d = Math.min(1e-3, (hi - lo) / 4);
+      out.push({ loX: lo, hiX: hi, z0: baseAt(lo + d), z1: baseAt(hi - d) });
+    }
+  };
+  let x = xMin;
+  for (const s of spans) {
+    if (s.loX > x + GAP_EPS) pushFill(x, s.loX);
+    out.push(s);
+    x = Math.max(x, s.hiX);
+  }
+  if (xMax > x + GAP_EPS) pushFill(x, xMax);
+  return out;
+}
+
+/**
+ * 切断 cut に階段の裏面（soffit）を天井として載せる。切断線の深さ（cut.line.axisValue）で切った裏面を、
+ * **同じ区間列**から 体裁の ceilingProfile（返り値）とエンジンの cut.ceilClip（打ち切り専用。性格判定は ceilProfile のまま）に写す。
+ * 足元の外・途切れは base（その面の既存の天井）でつなぐ（境目で値が違えば垂直の段）。cut.zRange.hiZ は裏面の最高点まで広げる
+ * （頭打ちしない。裏面は上階天井 chUpperAbsMm を超えうる＝E5-0 の実測）。cut は呼び出し側が switchbackCuts から得た新しい
+ * オブジェクトで、ここで直接書き換える（zRange は共有オブジェクトを書き換えず差し替える）。
+ * 裏面が無い・切断線が足元の外ならば null（cut は不変）。
+ * @returns {{ceilingProfile:Array<[number,number]>, ends:{left:number|null, right:number|null}}|null}
+ */
+export function applyStairSoffitToCut(soffit, cut, base, baseFallbackZ) {
+  if (!soffit || !cut?.line) return null;
+  const { line } = cut;
+  const nodes = stairSoffitChAlong(soffit, { isVertical: line.isVertical, depthCoord: line.axisValue, lo: line.lo, hi: line.hi });
+  if (!nodes) return null;
+  const spans = soffitSpansLocal(nodes, cut);
+  if (spans.length === 0) return null;
+  const xa = localXOf(cut, line.lo), xb = localXOf(cut, line.hi);
+  const xMin = Math.min(xa, xb), xMax = Math.max(xa, xb);
+  const series = fillSpansWithBase(spans, xMin, xMax, base, baseFallbackZ).filter(s => s.hiX - s.loX > GAP_EPS);
+  cut.ceilClip = series.map(s => ({ loX: s.loX, hiX: s.hiX, ceilZ: s.z0, ceilZHi: s.z1 }));
+  const soffitTop = Math.max(...spans.flatMap(s => [s.z0, s.z1]));
+  if (cut.zRange && soffitTop > cut.zRange.hiZ) cut.zRange = { ...cut.zRange, hiZ: soffitTop };
+  const ceilingProfile = [];
+  const push = (x, z) => {
+    const last = ceilingProfile[ceilingProfile.length - 1];
+    if (last && Math.abs(last[0] - x) <= GAP_EPS && Math.abs(last[1] - z) <= GAP_EPS) return;
+    ceilingProfile.push([x, z]);
+  };
+  for (const s of series) { push(s.loX, s.z0); push(s.hiX, s.z1); }
+  const first = spans[0], last = spans[spans.length - 1];
+  return {
+    ceilingProfile,
+    ends: {
+      left: first.loX <= xMin + 1e-3 ? first.z0 : null,
+      right: last.hiX >= xMax - 1e-3 ? last.z1 : null,
+    },
+  };
 }
 
 /**
@@ -638,15 +718,28 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
 
   const entries = [];
 
+  // 階段の裏面（E5）。各 seq の切断の天井にする（体裁の ceilingProfile とエンジンの cut.ceilClip を同じ区間列から）。
+  // 足元の外はその面の既存の天井（seq2/4 は上で決めた N の CH／上階天井の階段状、seq1/3/5 は上階天井 ceilTopAbs）でつなぐ。
+  // 面の端（左右）の裏面の高さは CH 寸法の鎖が使う（soffitEnds）。裏面が無い切断は applySoffit が null で何も変えない。
+  const soffit = opts.stairSoffit ?? null;
+  const soffitEnds = {};
+  const applySoffit = (seqNo, base) => {
+    const applied = applyStairSoffitToCut(soffit, cutOf(seqNo), base, ceilTopAbs);
+    if (applied) soffitEnds[seqNo] = applied.ends;
+    return applied;
+  };
+
   // ---- 1: 踊り場前縁（見返り・全幅） ----
   const rawSegments1 = flatFloorSegments(wEntry.run, underFloorZ, ceilTopAbs - underFloorZ);
   const floorProfile1 = floorProfileFor(cutOf('1'), rawSegments1);
   const floorSegments1 = withFlatLineSpans(rawSegments1, floorProfile1);
+  const soffit1 = applySoffit('1', null);
   const fields1 = contentFields(cutOf('1'), { ceilLowAbs, floorHeight }, floorProfile1);
   entries.push({
     seqNo: '1', face: wEntry,
     floorSegments: floorSegments1,
     floorProfile: floorProfile1,
+    ...(soffit1 ? { ceilingProfile: soffit1.ceilingProfile } : {}),
     chDimSplitAbsYs: [floorHeight],
     upperOverhang: fields1.upperOverhang, upperFloorZ: fields1.upperFloorZ,
     upperFloorCutEnds: fields1.upperFloorCutEnds,
@@ -693,11 +786,12 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     const { floorSegments: rawSegments2, ceilingProfile: ceilingProfile2 } = buildLaneFloorAndCeiling(
       outFace2, floorDeltaSegs2, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, fallbackCeilingProfile2);
     const floorProfile2 = floorProfileFor(cutOf('2'), rawSegments2);
+    const soffit2 = applySoffit('2', ceilingProfile2);
     entries.push({
       seqNo: '2', face: outFace2,
       floorSegments: withFlatLineSpans(rawSegments2, floorProfile2),
       floorProfile: floorProfile2,
-      ceilingProfile: ceilingProfile2,
+      ceilingProfile: soffit2 ? soffit2.ceilingProfile : ceilingProfile2,
       ...contentFields(cutOf('2'), { ceilLowAbs, floorHeight }, floorProfile2),
       skipBaseboard: true, skipWallLabel: true,
     });
@@ -707,10 +801,12 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // 平場の踊り場: 床は常に踊り場レベル（階段下に部屋が無くても下は描かない。2026-10-08裁定）。
   const rawSegments3 = flatFloorSegments(wLanding.run, cutTable.landingAbs, ceilTopAbs - cutTable.landingAbs);
   const floorProfile3 = floorProfileFor(cutOf('3'), rawSegments3);
+  const soffit3 = applySoffit('3', null);
   entries.push({
     seqNo: '3', face: wLanding,
     floorSegments: withFlatLineSpans(rawSegments3, floorProfile3),
     floorProfile: floorProfile3,
+    ...(soffit3 ? { ceilingProfile: soffit3.ceilingProfile } : {}),
     ...contentFields(cutOf('3'), { ceilLowAbs, floorHeight }, floorProfile3),
     skipBaseboard: true, skipWallLabel: true,
   });
@@ -737,11 +833,12 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     const { floorSegments: rawSegments4, ceilingProfile: ceilingProfile4 } = buildLaneFloorAndCeiling(
       outFace4, floorDeltaSegs4, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, fallbackCeilingProfile4);
     const floorProfile4 = floorProfileFor(cutOf('4'), rawSegments4);
+    const soffit4 = applySoffit('4', ceilingProfile4);
     entries.push({
       seqNo: '4', face: outFace4,
       floorSegments: withFlatLineSpans(rawSegments4, floorProfile4),
       floorProfile: floorProfile4,
-      ceilingProfile: ceilingProfile4,
+      ceilingProfile: soffit4 ? soffit4.ceilingProfile : ceilingProfile4,
       ...contentFields(cutOf('4'), { ceilLowAbs, floorHeight }, floorProfile4),
       skipBaseboard: true, skipWallLabel: true,
     });
@@ -752,10 +849,12 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     const outFace5 = cutOf('5').face;
     const rawSegments5 = flatFloorSegments(outFace5.run, underFloorZ, ceilTopAbs - underFloorZ);
     const floorProfile5 = floorProfileFor(cutOf('5'), rawSegments5);
+    const soffit5 = applySoffit('5', null);
     entries.push({
       seqNo: '5', face: outFace5,
       floorSegments: withFlatLineSpans(rawSegments5, floorProfile5),
       floorProfile: floorProfile5,
+      ...(soffit5 ? { ceilingProfile: soffit5.ceilingProfile } : {}),
       ...contentFields(cutOf('5'), { ceilLowAbs, floorHeight }, floorProfile5),
       skipBaseboard: true, skipWallLabel: true,
     });
@@ -779,6 +878,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   }));
   const chDimChains = stairChDimChains(entries, {
     landingAbs: cutTable.landingAbs, hasRoomUnder, chLowerMm: ceilLowAbs, floorHeight, chUpperAbsMm: ceilTopAbs,
+    soffitEnds,
   });
   return entries.map((e, i) => ({
     ...e, face: relabeled[i],
@@ -809,16 +909,24 @@ const LANDING_END_BY_SEQ = { '1': 'both', '2': 'right', '3': 'both', '4': 'left'
  * 実機「6」: C左=踊り場側(記入)→C右=同じ(なし)→D1左=通常(記入)→D1右=踊り場側(記入)→
  * A左/A右/B左=同じ(なし)→B右=通常(記入)→D2左=同じ(なし)→D2右=踊り場側(記入)。
  * @param {Array<{seqNo:string}>} entries
- * @param {{landingAbs:number, hasRoomUnder:boolean, chLowerMm:number, floorHeight:number, chUpperAbsMm:number}} h
+ * @param {{landingAbs:number, hasRoomUnder:boolean, chLowerMm:number, floorHeight:number, chUpperAbsMm:number,
+ *   soffitEnds?:Object<string,{left:number|null,right:number|null}>}} h  soffitEnds … seqNo → 面の左右の端の階段の裏面の高さ（E5。無ければ従来）
  * @returns {Array<{left:Array<[number,number]>|null, right:Array<[number,number]>|null}>}
  */
 export function stairChDimChains(entries, h) {
   // 踊り場側の端の断面。階段下に部屋があるときは踊り場より下は別室のため帯の床が踊り場になり、
   // 上の断面は2FL・2F天井（ユーザー明示指示「2FL 寸法線はここで分ける」＝既存の受け入れ済み挙動）。
   // 部屋が無ければ1FLから踊り場・踊り場から2F天井（今回の指示）。
-  const landing = h.hasRoomUnder
-    ? [[h.landingAbs, h.floorHeight], [h.floorHeight, h.chUpperAbsMm]]
-    : [[0, h.landingAbs], [h.landingAbs, h.chUpperAbsMm]];
+  // 上端は上階天井。ただし階段の裏面（E5。h.soffitEnds[seqNo].left/right＝その端の裏面の高さ）が天井になる端
+  // （踊り場側の端は階段の足元の中）は、その端の裏面の実測値（四捨五入）にする（裁定 Q3）。通常の断面の端
+  // （壁の向こうの部屋）は裏面と無関係なので変えない。
+  const landingWith = upperAbs => (h.hasRoomUnder
+    ? [[h.landingAbs, h.floorHeight], [h.floorHeight, upperAbs]]
+    : [[0, h.landingAbs], [h.landingAbs, upperAbs]]);
+  const soffitUpper = (seqNo, end) => {
+    const v = h.soffitEnds?.[seqNo]?.[end];
+    return Number.isFinite(v) ? Math.round(v) : h.chUpperAbsMm;
+  };
   const normal = [[0, h.chLowerMm], [h.floorHeight, h.chUpperAbsMm]];
   const valid = chain => chain.filter(([lo, hi]) => hi - lo > GAP_EPS);
   const key = chain => JSON.stringify(chain);
@@ -827,8 +935,8 @@ export function stairChDimChains(entries, h) {
   let prevKey = null;
   for (const e of entries) {
     const side = LANDING_END_BY_SEQ[e.seqNo] ?? 'both';
-    const leftChain  = valid(side === 'left'  || side === 'both' ? landing : normal);
-    const rightChain = valid(side === 'right' || side === 'both' ? landing : normal);
+    const leftChain  = valid(side === 'left'  || side === 'both' ? landingWith(soffitUpper(e.seqNo, 'left')) : normal);
+    const rightChain = valid(side === 'right' || side === 'both' ? landingWith(soffitUpper(e.seqNo, 'right')) : normal);
     const left  = key(leftChain)  !== prevKey ? leftChain  : null;
     prevKey = key(leftChain);
     const right = key(rightChain) !== prevKey ? rightChain : null;

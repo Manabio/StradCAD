@@ -11,7 +11,9 @@ import { RoomFeature } from '@core';
 import { roomBounds, worldToCell } from '../finish/gridCells.js';
 import { buildEnclosureCellToRoom, ADJACENT_SAMPLE_EPS } from '../finish/edgeClassify.js';
 import { stairPortEdges } from '../finish/stair/stairGeometry.js';
-import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
+import { U_TURN_TYPES } from '../finish/stair/stairPorts.js';
+import { floorHeightAbove, stairRiserOf } from '../finish/stair/stairDimensions.js';
+import { stairSoffitAbove } from './space/stairSoffitCeiling.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
@@ -158,10 +160,22 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   // 到達しない（ASSUMED: 実データでの発生は未確認）。
   const layers = buildBandLayers(graph,
     upperGraph && floorHeight != null ? { above: [{ graph: upperGraph, floorHeightMm: floorHeight }] } : {});
+  // 階段の裏面（E5）: 上階に続きの木造階段（U字系）があれば、階段室の天井は階段の裏面（傾斜天井）。自階の層に
+  // layer.stairSoffit として載せ（spaceModel.js cellAt が層スタックの天井を決める）、同じ供給源を stairFaceSequence へも渡す
+  // （体裁の ceilingProfile とエンジンの cut.ceilClip を同じ節列から作る）。直進系は E5-2 で別途。
+  const stairSoffit = stair && U_TURN_TYPES.has(stair.type) && upperGraph && floorHeight != null
+    ? stairSoffitAbove({
+        stair, graph, upperGraph, floorHeightMm: floorHeight, riserOf: s => stairRiserOf(s, project, upperGraph.plane),
+      })
+    : null;
+  if (stairSoffit) {
+    const selfLayer = layers.find(l => l.role === 'self');
+    if (selfLayer) selfLayer.stairSoffit = { roomId: stair.roomId, soffit: stairSoffit };
+  }
   const sequence = (stair && composedFaces.length > 0 && chUpperAbsMm != null)
     ? stairFaceSequence(stair, composedFaces, graph, {
         floorHeight, chUpperAbsMm, chLowerMm: roomCeilingHeight(graph, stairRoom).mm,
-        upperGraph, layers,
+        upperGraph, layers, stairSoffit,
         // content側の「壁のない端部」延長量。図形側（layoutBandFaces→buildFaceFigure）へ渡すのと
         // 同じctxの値をそのまま使い、同じ端で図形とcontentの線の長さを揃える。
         wallLessEndExtendModelMm: ctx.wallLessEndExtendModelMm,

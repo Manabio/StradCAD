@@ -2112,3 +2112,25 @@ test('【2026-10-08】emitOpenGapMarks: 斜め天端の帯の上のアキは、g
   assert.equal(lowAt(lifted, 0), 1500, '左下隅は輪郭1500へ');
   assert.equal(lowAt(lifted, 1000), 2000, '右下隅は天端2000のまま（輪郭より高い）');
 });
+
+// ---- 階段帯の裏面（E5）: 列ごとの打ち切り値（col.ceilZ）に届いた切断壁は天端が露出していない ----
+
+test('【階段帯の天井まで届く切断壁に天端線と笠木の下線が出ない】帯全体の hiZ(5658)ではなく列の打ち切り値(4158.27)と比べる。届かない壁（3000）は従来どおり天端と笠木の下線を引く', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5658.27 } });
+  const col = (x0, x1, z1) => ({ x0, x1, worldLo: x0, worldHi: x1, ceilZ: 4158.27, bands: [{ kind: 'cut', z0: 0, z1 }] });
+  const horizontals = prims => prims.filter(p => p.y1 === p.y2 && p.x1 !== p.x2);
+  const reached = horizontals(emitColumns([col(0, 72.5, 4158.27), col(72.5, 500, 4158.27)], cut));
+  assert.equal(reached.filter(p => Math.abs(p.y1 + 4158.27) < 1e-6).length, 0, '天井に届いた壁の天端の太線 0');
+  assert.equal(reached.filter(p => Math.abs(p.y1 + 4108.27) < 1e-6).length, 0, '50mm 下の細線 0');
+  const low = horizontals(emitColumns([col(0, 500, 3000)], cut));
+  assert.equal(low.filter(p => p.y1 === -3000 && p.weight === 'thick').length, 1, '天井に届かない壁の天端は 1 本');
+});
+
+test('【失敗系】切断壁の連なりが複数列にまたがり一部の列の打ち切り値に届いていれば天端は引かない（列の min と比べる）', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5658.27 } });
+  const columns = [
+    { x0: 0, x1: 100, worldLo: 0, worldHi: 100, ceilZ: 4500, bands: [{ kind: 'cut', z0: 0, z1: 4000 }] },
+    { x0: 100, x1: 200, worldLo: 100, worldHi: 200, ceilZ: 4000, bands: [{ kind: 'cut', z0: 0, z1: 4000 }] },
+  ];
+  assert.equal(emitColumns(columns, cut).filter(p => p.y1 === p.y2 && p.y1 === -4000 && p.x1 !== p.x2).length, 0);
+});
