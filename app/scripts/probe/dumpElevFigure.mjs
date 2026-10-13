@@ -1,61 +1,40 @@
 // 11.stq の各階・各部屋の展開図の**描画プリミティブ**をJSONへ落とす（回帰の基準）。
 //
-// 部屋ごとの帯ビルダーの振り分けは modes/ElevationModeState.js の `buildOne` を写す
-// ——階段室は buildStairBand・吹抜けは buildVoidBand・上部吹抜けを持つ部屋は
-// buildRoomBandWithVoidAbove を通る。全部屋を buildRoomBand で作ると**実機が通らない経路**を
-// 比較してしまい、階段室（例: 11.stq 1階の「6」）の差分を取り逃がす。
+// 部屋ごとの帯ビルダーの振り分け（buildOne を写す）は elevBandDump.mjs の dumpFloorBands にある。
 //
-// 使い方: node dumpElevFigure.mjs [outDir] [src.stq] [--regen]
+// 使い方: node dumpElevFigure.mjs [outDir] [src.stq] [--regen] [--move=<CL id|label|auto>:<mm>] [--strip-struct]
 //   --regen  保存済みの壁のまま比べず、実アプリが文書を開いたときと同じく全階の壁を再生成してから描く
 //            （dumpPlanRegen.mjs と同じ手順: conformWoodBacking → resolveStairContext → regenerateWalls）。
 //            隔て板（在来木造の折返し・回り階段の隔て壁）のように、壁の生成規則が変わって保存済みの
 //            文書に壁が無いものを展開図の基準に含めたいときに使う（moku1-6 の golden-elev-moku16）。
 //            階ごとの壁数と隔て壁数を標準エラーへ出す（再生成で壁が実際に入ったことの裏取り）。
+//   --move   --regen の前に通り芯（または中心線）を mm だけ動かす（elevBandDump.mjs moveCenterLine。
+//            commitCLMoveOp 経由。構造再計算は走らない）。viewEntryProbe.mjs の帯比較の基準側に使う。
+//   --strip-struct  壁の再生成のあと、全階から柱・梁を除いてから描く（viewEntryProbe.mjs が柱・梁の差を切り分けるのに使う）。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RoomFeature } from '../../src/core.js';
 import { loadDocument } from './loadDoc.mjs';
-import { buildRoomBand } from '../../src/elevation/elevationBand.js';
-import { buildStairBand } from '../../src/elevation/elevationStair.js';
-import { buildVoidBand, buildRoomBandWithVoidAbove, findOverlappingRoom } from '../../src/elevation/elevationVoid.js';
-import { selectElevationRooms } from '../../src/elevation/elevationFaces.js';
-import { roomBounds } from '../../src/finish/gridCells.js';
-import { floorHeightAbove, floorHeightBelow } from '../../src/finish/stair/stairDimensions.js';
-import { collectGridCLs } from '../../src/elevation/elevationPrimitives.js';
-import { withGraphReadScope } from '../../src/graphReadScope.js';
+import { dumpFloorBands, moveCenterLine, stripStructuralMembers } from './elevBandDump.mjs';
 
 const allArgs = process.argv.slice(2);
-const unknownOption = allArgs.find(a => a.startsWith('-') && a !== '--regen');
+const unknownOption = allArgs.find(a => a.startsWith('-') && a !== '--regen' && a !== '--strip-struct' && !a.startsWith('--move='));
 if (unknownOption) {
   console.error(`unknown option: ${unknownOption}`);
   process.exit(1);
 }
 const regen = allArgs.includes('--regen');
+const stripStruct = allArgs.includes('--strip-struct');
+const moveSpec = allArgs.find(a => a.startsWith('--move='))?.slice('--move='.length) ?? null;
 const rawArgs = allArgs.filter(a => !a.startsWith('-'));
 const outDir = rawArgs[0] ?? path.join(import.meta.dirname, 'golden');
 const src = rawArgs[1] ?? 'D:/tatsuya/Download/11.stq';
 fs.mkdirSync(outDir, { recursive: true });
-const r = (v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v);
-
-// プリミティブを比較しやすい安定した形へ（数値は丸め、キー順を固定）。
-function norm(p) {
-  if (Array.isArray(p)) return p.map(x => (x && typeof x === 'object' ? norm(x) : r(x)));
-  const out = {};
-  for (const k of Object.keys(p).sort()) {
-    const v = p[k];
-    out[k] = (v && typeof v === 'object') ? norm(v) : r(v);
-  }
-  if (p.type === 'arc') {
-    // 円弧は始点・終点の座標も載せる（golden で端の取り合いを比べられるように。中心・半径・角度から導出）
-    const rad = d => (d * Math.PI) / 180;
-    const a1 = rad(p.startDeg), a2 = rad(p.startDeg + p.sweepDeg);
-    out.x1 = r(p.cx + p.r * Math.cos(a1)); out.y1 = r(p.cy + p.r * Math.sin(a1));
-    out.x2 = r(p.cx + p.r * Math.cos(a2)); out.y2 = r(p.cy + p.r * Math.sin(a2));
-  }
-  return out;
-}
 
 const { project } = loadDocument(src);
+if (moveSpec) {
+  const m = moveCenterLine(project, moveSpec);
+  console.error(`[move] ${m.cl.label || m.cl.id}: ${m.from} → ${m.to}`);
+}
 if (regen) {
   const { runInAction } = await import('mobx');
   const { resolveStairContext } = await import('../../src/finish/stair/stairUnderRooms.js');
@@ -79,6 +58,7 @@ if (regen) {
     console.error(`[regen] ${p.name}: 壁 ${before}→${graph.walls.length}・隔て壁 ${partitions}`);
   }
 }
+if (stripStruct) for (const g of project.graphMap.values()) stripStructuralMembers(g);
 const tabs = project.orderedTabs;
 const summary = [];
 for (let i = 0; i < tabs.length; i++) {
@@ -87,55 +67,7 @@ for (let i = 0; i < tabs.length; i++) {
   if (!graph) continue;
   const upperGraph = project.graphMap.get(tabs[i + 1]?.id) ?? null;
   const lowerGraph = project.graphMap.get(tabs[i - 1]?.id) ?? null;
-  const rows = [];
-  const run = () => {
-    const gridCLs = collectGridCLs(graph);
-    let floorHeightMm;
-    try { floorHeightMm = floorHeightAbove(project, graph.plane); } catch { floorHeightMm = null; }
-    const base = { project, materialMap: new Map(), gridCLs };
-
-    const voidRoomsAbove = upperGraph
-      ? selectElevationRooms(upperGraph).filter(x => x.feature === RoomFeature.VOID) : [];
-    const ownRooms = selectElevationRooms(graph)
-      .filter(x => x.feature !== RoomFeature.VOID || !lowerGraph);
-    const ownRoomIds = new Set(ownRooms.map(x => x.id));
-    const voidByRoomId = new Map();
-    const orphanVoids = [];
-    for (const v of voidRoomsAbove) {
-      const host = findOverlappingRoom(roomBounds(v.cells, upperGraph), graph, x => x.feature == null);
-      if (host && ownRoomIds.has(host.id)) voidByRoomId.set(host.id, v); else orphanVoids.push(v);
-    }
-    const rooms = [...ownRooms, ...orphanVoids].sort((a, b) => (a.id < b.id ? -1 : 1));
-    const stairByRoomId = new Map(graph.stairs.map(s => [s.roomId, s]));
-
-    for (const room of rooms) {
-      let kind = 'room';
-      try {
-        let band;
-        if (room.feature === RoomFeature.STAIR) {
-          kind = 'stair';
-          band = buildStairBand(room, graph, upperGraph, { ...base, stair: stairByRoomId.get(room.id) ?? null });
-        } else if (room.feature === RoomFeature.VOID) {
-          kind = 'void';
-          band = orphanVoids.includes(room)
-            ? buildVoidBand(room, upperGraph, graph, { ...base, floorHeightBelowMm: floorHeightMm })
-            : buildVoidBand(room, graph, lowerGraph,
-              { ...base, floorHeightBelowMm: floorHeightBelow(project, graph.plane) });
-        } else if (voidByRoomId.get(room.id)) {
-          kind = 'voidAbove';
-          band = buildRoomBandWithVoidAbove(room, graph, voidByRoomId.get(room.id), upperGraph,
-            { ...base, floorHeightAboveMm: floorHeightMm, solids: { upperGraph, floorHeightMm } });
-        } else {
-          band = buildRoomBand(room, graph, { ...base, solids: { upperGraph, floorHeightMm } });
-        }
-        const prims = (band?.primitives ?? band ?? []).map(norm);
-        rows.push({ room: room.id, name: room.name ?? null, kind, count: prims.length, prims });
-      } catch (e) {
-        rows.push({ room: room.id, name: room.name ?? null, kind, error: String(e.message) });
-      }
-    }
-  };
-  withGraphReadScope(graph, () => withGraphReadScope(upperGraph, () => withGraphReadScope(lowerGraph, run)));
+  const rows = dumpFloorBands(project, graph, upperGraph, lowerGraph);
 
   const name = p.name.replace(/[^\w一-龥ぁ-んァ-ヶー]/g, '_');
   fs.writeFileSync(path.join(outDir, `elevfig-${name}.json`), JSON.stringify(rows, null, 1));
