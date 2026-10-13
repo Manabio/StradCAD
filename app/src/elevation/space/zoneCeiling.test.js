@@ -344,6 +344,20 @@ test('【奥の端に壁あり】奥 y=2000 の壁の仕上げ面（2000−57.5�
   assert.equal(zoneCeilingFarEdge(plain.field, plain.graph, plain.room, q).chLo, 3000);
 });
 
+test('【短い壁は壁と見なさない】奥 y=2000 の壁が走り範囲 [2000,3000] に重なるのが 72.5mm・99.9mm なら座標 2000 の 3000、100mm なら仕上げ面の 2982.75', () => {
+  const q = { isVertical: false, runLo: 2000, runHi: 3000, startCoord: 0, dir: +1 };
+  const chLoWithOverlap = overlap => {
+    const { room, graph, field } = slopeRoom(90, { walls: true });
+    const wall = graph.walls.find(w => !w.isVertical && w.axisCL.value === 2000);
+    wall.endOffset -= wall.coord2 - (2000 + overlap);
+    assert.ok(Math.abs(wall.coord2 - (2000 + overlap)) < 1e-6, `前提: 壁の端 ${2000 + overlap}（実際:${wall.coord2}）`);
+    return zoneCeilingFarEdge(field, graph, room, q).chLo;
+  };
+  assert.equal(chLoWithOverlap(72.5), 3000);
+  assert.equal(chLoWithOverlap(99.9), 3000);
+  assert.ok(Math.abs(chLoWithOverlap(100) - 2982.75) < 1e-9);
+});
+
 test('【奥の端に壁あり・天井芯が先】同座標 y=2000 に天井芯（先頭）と中心線（後）が並んでも、中心線の壁の仕上げ面 2982.75 で評価する', () => {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.CEILING });

@@ -252,6 +252,11 @@ export const SPLIT_MERGE_EPS_MM = 1;
 export const GAP_EPS_MM   = 1e-6;
 export const PROBE_EPS_MM = 5;
 
+// 天井高の評価点を決める壁判定（家族の破線の外側の仕上げ面・遠側の奥の端の内側の仕上げ面）で、
+// 面の軸上の壁との重なりがこの値(mm)未満の区間は壁無しとみなす（芯／座標で評価）。
+// 裁定2026-10-13: 出隅の 72.5mm の重なりだけで片が割れ、数 mm 違う高さの破線が出るのを防ぐ。
+export const SHORT_WALL_IGNORE_MM = 100;
+
 // QA修正（幅0の展開図バグ）: composeRoomFacesの最終段で、run（面の実効幅）がこの値未満の面を
 // 除去する安全網（elevationFaceList.js）。段差見付け面の隅スナップ・袖壁分割の境界計算等、
 // 個別の生成経路をそれぞれ堅牢化した上でも、未知の経路から幅0・極小幅の面が漏れ出た場合に

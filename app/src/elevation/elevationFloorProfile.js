@@ -24,7 +24,7 @@ import { graphList, scopedValue } from '../graphReadScope.js';
 import { isCeilingOnlyKind } from '../core/centerLineKindPolicy.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
 import { outerWallFaceAt } from '../finish/wallFaces.js';
-import { zoneCeilingFieldOf, zoneCeilingChAlong, zoneCeilingEdgesAlong } from './space/zoneCeiling.js';
+import { zoneCeilingFieldOf, zoneCeilingChAlong, zoneCeilingEdgesAlong, shortWallFilter } from './space/zoneCeiling.js';
 
 // 傾いた片どうしを1本の斜線に結合してよいかの許容差（高さの連続 mm・勾配 mm/mm）。浮動小数の丸め誤差だけを吸収する。
 const TILT_EPS_MM = 1e-6;
@@ -425,6 +425,8 @@ export function familyCeilingSegments(face, parentRoom, graph) {
     }).filter(e => !breaks.some(b => Math.abs(b - e) < GAP_EPS));
     // 面の軸上の壁の端でも刻む——片の中で壁の有無が変わらないようにする（隅の短い壁が少し重なるだけで
     // 片全体が外側の面で評価され、高さが段に割れるのを防ぐ。壁の無い片は芯で評価される）。
+    // 壁の有無は片ごとに shortWallFilter（重なり SHORT_WALL_IGNORE_MM 未満は壁無し。裁定2026-10-13）で判定する。
+    // 短い壁の端で割れた片は壁無し＝芯で評価され、隣の片と同じ高さなら下の結合で 1 片に戻る。
     const wallEnds = [];
     if (face.axisCL?.id != null) {
       for (const w of graphList(graph, 'walls') ?? []) {
@@ -450,7 +452,7 @@ export function familyCeilingSegments(face, parentRoom, graph) {
     let along = null;
     if (field) {
       const outerFace = face.axisCL?.id != null
-        ? outerWallFaceAt(graph, face.axisCL, { isVertical: face.isVertical, outward: -face.inward, spanLo: lo, spanHi: hi })
+        ? outerWallFaceAt(graph, face.axisCL, { isVertical: face.isVertical, outward: -face.inward, spanLo: lo, spanHi: hi, wallFilter: shortWallFilter(lo, hi) })
         : null;
       along = zoneCeilingChAlong(field, owner, {
         isVertical: face.isVertical, depthCoord: outerFace ?? axisValue, probeDepth: farDepth, lo, hi,

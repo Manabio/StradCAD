@@ -19,7 +19,7 @@ import { CenterLineType } from '@core';
 import { scopedValue, graphList } from '../../graphReadScope.js';
 import { isCeilingOnlyKind } from '../../core/centerLineKindPolicy.js';
 import { innerWallFaceAt } from '../../finish/wallFaces.js';
-import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
+import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, SHORT_WALL_IGNORE_MM } from '../elevationStyle.js';
 
 const FIELD_KEY = { name: 'zoneCeilingField' }; // scopedValue のキー（モジュール内で固定）
 const FAR_EDGE_MAX_STEPS = 64; // zoneCeilingFarEdge が奥の端を探して進む矩形数の上限（異常な格子の安全弁）
@@ -202,7 +202,9 @@ export function zoneCeilingFarEdge(field, graph, room, { isVertical, runLo, runH
   const cl = parallelCLAt(graph, isVertical, farCoord);
   let wallLo = lo, wallHi = hi;
   if (wallHi - wallLo < WALL_SPAN_MIN_MM) { wallLo = runMid - WALL_SPAN_MIN_MM / 2; wallHi = runMid + WALL_SPAN_MIN_MM / 2; }
-  const faceCoord = (cl ? innerWallFaceAt(graph, cl, { isVertical, inward: -dir, spanLo: wallLo, spanHi: wallHi }) : null) ?? farCoord;
+  // 走り範囲そのものが閾値より狭い問い合わせ（エンジンの細い列・点）は、範囲いっぱいを必要な重なりとする（壁が範囲を覆えば壁あり）
+  const wallFilter = shortWallFilter(wallLo, wallHi, Math.min(SHORT_WALL_IGNORE_MM, wallHi - wallLo));
+  const faceCoord = (cl ? innerWallFaceAt(graph, cl, { isVertical, inward: -dir, spanLo: wallLo, spanHi: wallHi, wallFilter }) : null) ?? farCoord;
 
   const { zAt } = solidOf(s);
   if (!zAt) return { chLo: s.chMm, chHi: s.chMm, alongRun: false };
@@ -211,6 +213,14 @@ export function zoneCeilingFarEdge(field, graph, room, { isVertical, runLo, runH
   const chLo = zAt(...pt(faceCoord, runLo)), chHi = zAt(...pt(faceCoord, runHi));
   if (!Number.isFinite(chLo) || !Number.isFinite(chHi)) return null;
   return alongRun ? { chLo, chHi, alongRun: true } : { chLo, chHi: chLo, alongRun: false };
+}
+
+/**
+ * 壁と走り範囲 [lo,hi] の重なりが SHORT_WALL_IGNORE_MM 未満なら壁と見なさない wallFilter（裁定2026-10-13）。
+ * need は必要な重なり（既定は閾値。点の問い合わせの最低幅へ広げた範囲では呼び元が範囲幅へ下げる）。
+ */
+export function shortWallFilter(lo, hi, need = SHORT_WALL_IGNORE_MM) {
+  return w => Math.min(Math.max(w.coord1, w.coord2), hi) - Math.max(Math.min(w.coord1, w.coord2), lo) >= need - GAP_EPS;
 }
 
 // 面（isVertical）と平行な CL（天井専用の天井芯は除く。elevationFloorProfile.js findRunCLAt と同じ除外）のうち value に一致するもの。

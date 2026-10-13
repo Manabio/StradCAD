@@ -906,9 +906,23 @@ test('【cellsAlong は片の走り範囲で奥の壁を探す】奥の端 y=400
   far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 2400, shape: 'slope', dims: [600, 90] }).zones);
   g.interior([[1, 1]], { walls: true }); // 隣の部屋: 奥の端 y=4000 の壁（仕上げ面は −y 側）は x4000..8000 にだけある
   const endWall = g.graph.walls.find(w => !w.isVertical && w.axisCL.value === 4000);
-  endWall.startOffset = -72.5; // 出隅の 72.5mm だけ x<4000 へ入れる（片 x0..4000 には掛かるが列 x=2000 の ±10mm には掛からない）
+  endWall.startOffset = -150; // 出隅の 150mm（閾値 100mm 以上）だけ x<4000 へ入れる（片 x0..4000 には掛かるが列 x=2000 の ±10mm には掛からない）
   const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
   const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
   assert.equal(segs[1].room, far);
   assert.ok(Math.abs(segs[1].ceilZ - 2982.75) < 1e-6, `ceilZ ${segs[1].ceilZ}`);
+});
+
+test('【出隅 72.5mm は壁無し】同じ配置で出隅の重なりが 72.5mm（閾値 100mm 未満）だと、列 x=2000 の ceilZ は座標（芯）の値 3000', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 2000, 4000, 6000]);
+  g.interior([[0, 0]]);
+  const far = g.interior([[0, 1], [0, 2]]);
+  far.setCeilingZones(createZone(g.graph, far, [g.cell(0, 1)], { heightMm: 2400, shape: 'slope', dims: [600, 90] }).zones);
+  g.interior([[1, 1]], { walls: true });
+  const endWall = g.graph.walls.find(w => !w.isVertical && w.axisCL.value === 4000);
+  endWall.startOffset = -72.5;
+  const layer = { graph: g.graph, floorZMm: 0, role: 'self' };
+  const segs = buildSpaceIndex([layer]).cellsAlong(layer, faceCut(0), 2000, 0, 10000);
+  assert.equal(segs[1].room, far);
+  assert.ok(Math.abs(segs[1].ceilZ - 3000) < 1e-6, `ceilZ ${segs[1].ceilZ}`);
 });

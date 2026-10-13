@@ -947,7 +947,8 @@ test('【失敗系】ドームの区画も対象外＝部屋 CH', () => {
 });
 
 // ---- E3b-2 QA: 壁の端で刻む／CL で割れた同じ傾斜の片の結合 ----
-test('【開放スパンに隅の短い壁が少し重なるだけなら芯で評価】中間CLの壁が x 0..2072.5（傾斜の片 2000..4000 に 72.5mm だけ重なる）: 重なる 72.5mm の片だけ外側の面・残りは芯 2900 の1片', () => {
+// 中間CLの壁を x 0..(2000+overlap) に縮め、傾斜の片 2000..4000 への重なりを overlap(mm) にした familyCeilingSegments の x>=2000 の片
+function segsWithCornerOverlap(overlap) {
   const graph = makeGraph();
   const { room, yM, botKeys } = makeTwoRowFamily(graph);
   const child = graph.addRoom(new Set(botKeys), '小上がり', undefined, new Set([room.id]));
@@ -955,19 +956,32 @@ test('【開放スパンに隅の短い壁が少し重なるだけなら芯で�
   child.setOverride('ceilingHeight', '2400');
   generateRoomWallsFromOutline(graph, child);
   const wall = [...graph.walls].find(w => w.axisCL?.id === yM.id);
-  assert.ok(wall && wall.coord2 > 3000, '前提: 中間CL上の壁が x 0..4000');
-  wall.endOffset -= wall.coord2 - 2072.5;
-  assert.ok(Math.abs(wall.coord2 - 2072.5) < 1e-6, `前提: 壁の端 2072.5（実際:${wall.coord2}）`);
+  wall.endOffset -= wall.coord2 - (2000 + overlap);
+  assert.ok(Math.abs(wall.coord2 - (2000 + overlap)) < 1e-6, `前提: 壁の端 ${2000 + overlap}（実際:${wall.coord2}）`);
   graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.CEILING }, 'cc');
   const key = worldToCell(3000, 2250, graph, CEILING_CELL_GRID).key;
   child.setCeilingZones(createZone(graph, child, [key], { heightMm: 3000, shape: 'slope', dims: [600, 90] }).zones);
   const face = { axisCL: yM, isVertical: false, inward: -1, lo: 0, hi: 4000, originWorld: 0, dirSign: 1 };
-  const right = familyCeilingSegments(face, room, graph).filter(s => s.loX >= 2000);
-  assert.equal(right.length, 2, `壁の端 2072.5 で割れる（実際:${JSON.stringify(right)}）`);
-  assert.deepEqual([right[0].loX, right[0].hiX], [2000, 2072.5]);
-  assert.ok(right[0].ceilAbsMm > 2900 + 1e-6, '壁のある 72.5mm は外側の面の値（芯 2900 より高い）');
-  assert.deepEqual([right[1].loX, right[1].hiX], [2072.5, 4000]);
-  near(right[1].ceilAbsMm, 2900, '壁の無い残りは芯の値 1 片');
+  return familyCeilingSegments(face, room, graph).filter(s => s.loX >= 2000);
+}
+
+test('【重なり 72.5mm の出隅は壁無し＝芯で 1 片】中間CLの壁が x 0..2072.5（傾斜の片 2000..4000 に 72.5mm だけ重なる）: 割れず芯 2900 の 1 片', () => {
+  const right = segsWithCornerOverlap(72.5);
+  assert.equal(right.length, 1, JSON.stringify(right));
+  assert.deepEqual([right[0].loX, right[0].hiX], [2000, 4000]);
+  near(right[0].ceilAbsMm, 2900, '短い壁は壁と見なさず芯の値');
+});
+
+test('【重なり 100mm 以上は壁あり】境界値 99.9 は芯の 1 片・100 は壁のある 100mm の片だけ外側の面（芯 2900 より高い）で割れる', () => {
+  const short = segsWithCornerOverlap(99.9);
+  assert.equal(short.length, 1, JSON.stringify(short));
+  near(short[0].ceilAbsMm, 2900, '99.9mm は壁無し');
+  const edge = segsWithCornerOverlap(100);
+  assert.equal(edge.length, 2, JSON.stringify(edge));
+  assert.deepEqual([edge[0].loX, edge[0].hiX], [2000, 2100]);
+  assert.ok(edge[0].ceilAbsMm > 2900 + 1e-6, '100mm は壁あり＝外側の面の値');
+  assert.deepEqual([edge[1].loX, edge[1].hiX], [2100, 4000]);
+  near(edge[1].ceilAbsMm, 2900, '壁の無い残りは芯');
 });
 
 test('【CL で割れた同じ傾斜の片は1本に結合】走り方向 slope の中に縦CL x=3000 を足しても 2000..4000 の 1 片（2900→3500）', () => {

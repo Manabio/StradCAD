@@ -520,7 +520,7 @@
   "room": "23f8f3ec-4f46-4cda-9127-afb3e38584a4",
   "name": "売場",
   "kind": "room",
-  "count": 236,
+  "count": 235,
   "prims": [
    {
     "type": "line",
@@ -1948,18 +1948,9 @@
     "type": "line",
     "weight": "thin",
     "x1": 40600,
-    "x2": 44095,
+    "x2": 44167.5,
     "y1": -2650,
     "y2": -2650
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 44095,
-    "x2": 44167.5,
-    "y1": -2645.055,
-    "y2": -2645.055
    },
    {
     "type": "line",
