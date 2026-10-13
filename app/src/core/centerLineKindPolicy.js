@@ -1009,6 +1009,16 @@ export function gridCenterLines(graph) {
 }
 
 /**
+ * graph.centerLines のうち仕上げのセル分割線（isFinishCellDivider＝通り芯・中心線）だけを列挙する走査API
+ * （壁の鮮度キー finish/wallFreshnessKey.js が幾何の入力として読む。梁芯・天井芯・補助線は含まない）。
+ * @param {{centerLines: Array}} graph
+ * @returns {Array}
+ */
+export function finishCellDividers(graph) {
+  return graph.centerLines.filter(isFinishCellDivider);
+}
+
+/**
  * gridCenterLines(graph) のうち centerLineType が一致するものを value 昇順で列挙する走査API
  * （軸ごとの通り芯本数・最外郭2本を求める場面で使う。transform/centerLineConvert.js
  * outermostGridExtentRefs・isLastGridOnAxis 参照）。

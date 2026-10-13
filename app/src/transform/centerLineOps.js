@@ -448,8 +448,8 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
   const isStruct = isGridCenterLine(cl);
 
   // CL削除ステップ3: 自階の壁をこの削除に限り明示的に作り直す（新ルール1「壁再生成」）。
-  // wallFreshnessKey はCL位相（部屋の分割/併合）を入力に含まないため、削除の前後で鍵が一致した
-  // ままになりうる——refreshWallsForGraph を force:true で呼ぶ（wallRefresh.js JSDoc参照）。
+  // v8 の wallFreshnessKey はセル分割線・部屋のセルを含むため削除の前後で鍵も変わるが、
+  // 安全側で refreshWallsForGraph を force:true で呼ぶ（wallRefresh.js JSDoc参照）。
   // getMaterialMap・peek は refreshWallsAllFloors と同じ型のテスト差し替え口（opts.loadMaterialMapFn／
   // opts.peek。既定値はそれぞれ finish/wallRegeneration.js の loadMaterialMap・structuralPeek.js
   // peekVia(undefined,…)＝floorSwapManager.peek直呼び）。opts.peekBelow は既存どおり壁由来梁芯の

@@ -2216,11 +2216,12 @@ test('deleteCenterLineWithUndo（非struct分岐）: 内部間仕切りの中心
   assert.ok(wallIdsAfter.size > 0, '併合後も外壁は生成されているはず');
   assert.ok([...wallIdsBefore].every(id => !wallIdsAfter.has(id)),
     '壁は全削除→再生成されるため、削除直後の再生成後は旧壁idが1つも残らないはず');
-  // wallFreshnessKeyの入力（下地材コード・実効主構造・柱断面・部屋一覧のkind/feature/壁材/壁仕上げ）は
-  // 部屋の併合（部分指定化。部屋id自体は残る）では変わらない——forceが無ければ壁は再生成されない
-  // ことをここで裏付ける（force:trueが必要な理由の実測）。
-  assert.equal(graph.wallFreshnessKey, keyBefore,
-    '鍵の入力自体は部屋の併合前後で変わらないはず（wallFreshnessKeyはCL位相を含まないため）');
+  // v8: 鍵はセル分割線（geo）と部屋のセル（cells）を含むため、中心線の削除・部屋の併合で鍵も変わる
+  // （v7 まではCL位相を含まず鍵が一致したままで、force:true が必要だった。force は残してある）。
+  // 削除後の再生成で書かれた鍵は、削除後の状態の鍵と一致する。
+  const keyAfter = graph.wallFreshnessKey;
+  assert.notEqual(keyAfter, keyBefore, 'v8: 中心線の削除・部屋の併合で鍵が変わる');
+  assert.equal(keyAfter, wallFreshnessKey(graph, project), '再生成後に書かれた鍵は現在の入力の鍵と一致する');
 
   undoManager.undo();
   assert.equal(graph.shapeMap.has(xm.id), true, 'undoでxmが復元される');
@@ -2230,6 +2231,7 @@ test('deleteCenterLineWithUndo（非struct分岐）: 内部間仕切りの中心
   undoManager.redo();
   assert.equal(graph.shapeMap.has(xm.id), false, 'redoで再びxmが削除される');
   assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsAfter, 'redoで壁id集合が削除後に戻るはず');
+  assert.equal(graph.wallFreshnessKey, keyAfter, 'redoで鍵も削除後に戻るはず');
 });
 
 // ---- 外壁重複バグの回帰（finish/wallGeneration.js generateExteriorWalls）----
@@ -2563,6 +2565,8 @@ test('【QA-5】deleteCenterLineWithUndo: 通り芯（struct分岐）の壁再�
   const wallIdsAfter = new Set(graph.walls.map(w => w.id));
   assert.ok(wallIdsAfter.size > 0, '削除後も外壁は生成されているはず');
   assert.notDeepEqual([...wallIdsAfter].sort(), [...wallIdsBefore].sort(), '壁は全削除→再生成されるため旧壁idは残らないはず');
+  const keyAfter = graph.wallFreshnessKey;
+  assert.notEqual(keyAfter, keyBefore, 'v8: 通り芯の削除・部屋の併合で鍵が変わる（geo/cells）');
 
   undoManager.undo();
   assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsBefore, 'undoで壁id集合が削除前に戻るはず');
@@ -2570,7 +2574,7 @@ test('【QA-5】deleteCenterLineWithUndo: 通り芯（struct分岐）の壁再�
 
   undoManager.redo();
   assert.deepEqual(new Set(graph.walls.map(w => w.id)), wallIdsAfter, 'redoで壁id集合が削除後に戻るはず');
-  assert.equal(graph.wallFreshnessKey, keyBefore, '鍵の入力自体は部屋の併合前後で変わらないため、redo後もkeyBeforeと同じ値のはず');
+  assert.equal(graph.wallFreshnessKey, keyAfter, 'redoで鍵も削除後に戻るはず');
 });
 
 test('【QA-6】deleteCenterLineWithUndo（struct分岐・在来木造）: 通り芯削除で間仕切り由来の梁芯が道連れに消え、外周の梁芯は同じidで残る', async () => {

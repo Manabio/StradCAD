@@ -53,10 +53,9 @@ export function hasNeverBuiltWalls(graph) {
  *   （読込み時の起動クリティカルパス対策。ステップ5）。
  * @param {object} opts
  * @param {boolean} [opts.force=false] - true なら鍵一致でも作り直す（CL削除直後の明示再生成に使う。
- *   wallFreshnessKey は下地材コード・実効主構造・部屋の壁材/壁仕上げだけを入力にしており CL位相
- *   （部屋の分割・併合）を含まないため、CL削除で壁の形が変わっても鍵が一致したままになりうる——
  *   transform/centerLineOps.js deleteCenterLineWithUndo が削除直後の壁再生成でこれを force:true
- *   で呼ぶ。hasNeverBuiltWalls の「部屋0件・壁も鍵も無い階」ガードは force でも対象外のまま）。
+ *   で呼ぶ。v8 の鍵はセル分割線（geo）と部屋のセル（cells）を含むため、CL削除で壁の形が変われば鍵でも
+ *   検出できる——force は今は冗長だが安全側で残している。hasNeverBuiltWalls の「部屋0件・壁も鍵も無い階」ガードは force でも対象外のまま）。
  * @param {typeof regenerateWalls} [opts.regenerateWallsFn=regenerateWalls] - テスト用の差し替え
  *   （既定は finish/wallRegeneration.js の regenerateWalls。変更後の区間で例外が起きた場合の
  *   呼び出し元の巻き戻しを検証するための注入口——QA指摘H1のテスト9）。
@@ -83,7 +82,8 @@ export async function refreshWallsForGraph(
   // 鍵比較の前に置く（ステップ5: 鍵比較だけなら materialMap を要求しない）。
   const backingChanges = runInAction(() => conformWoodBacking(graph, project));
   // 木造の側面の出入口の取りつき蹴上 0（平場）を 1 へそろえる（保存済みデータの修復。stairSectionEdit.js
-  // alignPortStairsOnGraph。2026-10-09 裁定。undo には積まない）。階段の蹴上は鍵の入力ではないため、
+  // alignPortStairsOnGraph。2026-10-09 裁定。undo には積まない）。v8 では階段の項目（entryTurnSteps 等）も
+  // 鍵の入力のため書き換えは鍵でも検出できる——stairPortsAligned は今は冗長だが安全側で残し、
   // 書き換えたときは鍵一致でも壁を作り直す。通常は総蹴上数が保たれ隔て板の段鼻位置（nosingIndex＝e+s0+s1）も
   // 変わらないが、直進部が MIN 未満で総蹴上数が +1 になる場合は変わるため、安全側で再生成する。
   const stairPortsAligned = runInAction(() => alignPortStairsOnGraph(graph));
@@ -91,8 +91,7 @@ export async function refreshWallsForGraph(
   const keyBefore = graph.wallFreshnessKey;
   const keyNow = wallFreshnessKey(graph, project);
   // 鍵一致: 何もしない（saveFloorもしない・materialMapも要求しない）。force指定時は鍵一致でも
-  // 素通りさせない——CL削除直後は鍵の入力（下地材・主構造・柱断面・部屋の壁材/壁仕上げ）が
-  // 変わらないまま部屋の分割/併合だけが起きうるため。
+  // 素通りさせない——CL削除直後の明示再生成。v8 では鍵（geo/cells）でも検出できるが安全側で残す。
   if (!force && !stairPortsAligned && keyNow === keyBefore) return false;
 
   // 鍵不一致の階が実際に見つかった時点で初めて materialMap を要求する（getMaterialMap が

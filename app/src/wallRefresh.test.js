@@ -320,7 +320,7 @@ test('refreshWallsForGraph: force:trueなら鍵一致でも壁を作り直す（
 });
 
 // 木造の側面の出入口の取りつき蹴上 0（平場）は読込み時の sweep で 1 へそろう（stairSectionEdit.js alignPortStairsOnGraph。
-// 階段の蹴上は鍵の入力でないため、書き換えたときだけ鍵一致でも再生成する）。鉄骨は不変。
+// 書き換え前の階段で鍵が一致していても、書き換えたときだけ再生成する）。鉄骨は不変。
 async function stairPortRefresh(structure) {
   const { project, graph } = makeSinglePlaneProject();
   const V = (v) => graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
@@ -337,6 +337,7 @@ async function stairPortRefresh(structure) {
   sections[0] += cls.entryTurnSteps ?? 0;
   const stair = graph.addStair({ type: cls.type, cells, upDirection: cls.upDirection, flip: cls.flip, sections, structure, entryTurnSteps: 0, arrivalTurnSteps: 0 });
   const total = stair.totalSteps;
+  graph.setWallFreshnessKey(wallFreshnessKey(graph, project)); // v8: 階段は鍵の入力。追加後の状態で鍵を一致させる
   assert.equal(wallFreshnessKey(graph, project), graph.wallFreshnessKey, '前提: 鍵は一致している');
   const materialMap = await loadMaterialMap();
   const run = () => refreshWallsForGraph(graph, project, () => Promise.resolve(materialMap), { peek: async () => null, pushUndo: false });
@@ -371,6 +372,7 @@ test('refreshWallsAllFloors【他階】: 木造・側面・e=0 の階段を持�
   const sections = [...cls.sections];
   sections[0] += cls.entryTurnSteps ?? 0;
   const stair = g2.addStair({ type: cls.type, cells, upDirection: cls.upDirection, flip: cls.flip, sections, structure: StructuralMaterialType.WOOD, entryTurnSteps: 0, arrivalTurnSteps: 0 });
+  g2.setWallFreshnessKey(wallFreshnessKey(g2, project)); // v8: 階段は鍵の入力。追加後の状態で鍵を一致させる
   assert.equal(wallFreshnessKey(g2, project), g2.wallFreshnessKey, '前提: 鍵は一致している');
 
   const peekMap = { p1: g1, p2: g2 };
