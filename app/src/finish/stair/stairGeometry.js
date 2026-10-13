@@ -52,7 +52,8 @@ export function laneGapMmFor(stair, graph, { simplified = false } = {}) {
  * @param {import('@core').Stair} stair
  * @param {object|null} graph
  * @param {number} laneGapMm laneGapMmFor の結果
- * @returns {{ entryEnd:{x:number,y:number}, landingEnd:{x:number,y:number}, entryHalfMm:number, landingHalfMm:number }|null}
+ * entryOpen … 上り口の基端の辺に壁が無い（入口柱が壁の中でない）。uTurnLayout が等長レーンの基端を柱の面へ出すかの判定に使う。
+ * @returns {{ entryEnd:{x:number,y:number}, landingEnd:{x:number,y:number}, entryHalfMm:number, landingHalfMm:number, entryOpen:boolean }|null}
  */
 function partitionFrameFor(stair, graph, laneGapMm) {
   if (laneGapMm !== PARTITION_THICKNESS_MM || !graph) return null;
@@ -69,7 +70,11 @@ function partitionFrameFor(stair, graph, laneGapMm) {
   const half = (outward) => (spans.length === 0 ? col : Math.min(pb, Math.max(col, outward)));
   const entryHalfMm = half((Math.max(...spans.map(v => v * dir)) - eA * dir));
   const landingHalfMm = half((lA * dir - Math.min(...spans.map(v => v * dir))));
-  return { entryEnd: g.entryEnd, landingEnd: g.landingEnd, entryHalfMm, landingHalfMm };
+  // 上り口側の基端の辺（insetStairBounds の始端）に壁が無いか。壁があれば入口柱は壁の中（等長レーンの基端は枠の辺に留める）
+  const face = faceRect(refreshCells(stair.cells, graph), graph);
+  const baseEdge = { down: 'top', right: 'left', left: 'right' }[stair.upDirection] ?? 'bottom';
+  const entryOpen = face ? !face.hasWall[baseEdge] : false; // 壁面が求まらない（退化）なら壁の有無が不明＝従来どおり通り芯のまま
+  return { entryEnd: g.entryEnd, landingEnd: g.landingEnd, entryHalfMm, landingHalfMm, entryOpen };
 }
 
 const NUM_GAP   = 1 / 4; // 段数数字を基点側の線（踏面線／踊場・周回部の入口境界線）から離す量（区間内比率）
@@ -772,15 +777,16 @@ export function straightPlanLayout(stair, graph) {
 //（区間長指定）があれば実位置、無ければ 踏面寸×マス数＋深さ(レーン幅相当) を合成して枠に引き伸ばす。
 // 往路と復路は不等長でよい（f,b,c,d,a のような 3×2 選択）: 各レーンは自分の基端 tBase から tRun まで。
 // 長い方のレーンが t=0（設置枠の base 辺）から始まり、短い方の基端は tRun − 自レーン長。
-// 等長（従来の平行レーン）では tBaseA = tBaseB = 0 になり、従来と同じ幾何を返す。
+// 等長（従来の平行レーン）では tBaseA = tBaseB = 0 になる（隔て壁の柱が開いた基端にあるときは下記の Q1/Q3）。
 // 出入口が側面（inner/outer。resolveUTurnPorts）のレーンでは、区画 [tBase, tExit]（張り出し区間、
 // 等長レーンなら基端の行）が出入口に取りつく回転部（emitPortTurnZone）になり、直進部は tExit から始まる。
 //
 // partition（隔て壁が立つとき。partitionFrameFor）がある実測レイアウトでは、段板が端部の柱の角にそのまま取りつく
 //（逃がさない。ユーザー裁定 2026-10-09 の角の対応表。柱は PB 包みがあれば PB の外面、無ければ柱材の面）:
-//   入口柱の上り口側の面 tQ（Q1 の y）＝ 短い往路の基端（張り出す取りつき区画の出口＝2段目の段鼻）
-//   入口柱の回転部側の面 tQ3（Q3 の y）＝ 短い復路の基端（到達辺 15|16。最終段の段板は柱に当たって止まる。2026-10-09 裁定）
-//   等長レーン（柱が基端の壁の中）は動かさない
+//   入口柱の上り口側の面 tQ（Q1 の y）＝ 入口柱が基端にある往路の基端（短い往路、または等長レーン。張り出す取りつき区画の出口＝2段目の段鼻）
+//   入口柱の回転部側の面 tQ3（Q3 の y）＝ 入口柱が基端にある復路の基端（到達辺 15|16。最終段の段板は柱に当たって止まる。2026-10-09 裁定）
+//   等長レーンは両レーンとも入口柱が基端にあるので Q1/Q3（1段目の段鼻が柱巻きの前縁と面一。階段が通り芯より柱巻きぶんホール側へ出る。
+//   2026-10-13 裁定）。ただし基端の辺に壁がある・枠の base 辺が壁面まで逃げている（柱が壁の中）ときは動かさない（枠の辺）
 //   回転部側の柱の上り口側の面 tRunA（P1・P4 の y）＝ 往路側の踊場・周回部の前縁
 //   回転部側の柱の回転部側の面 tRun（P2・P3 の y）＝ 復路側の前縁
 // 柱の往路側の面の幅方向 s は column.sA（P1・P2 の s。回り段の往路側・復路側の放射線の起点の s）で返す。
@@ -799,16 +805,22 @@ function uTurnLayout(stair, f, b, runA, runB, tread, spans, partition = null) {
   let tBaseB = tRun - tAt(laneLenB);   // 復路の基端（設置階上階への到達辺）
   const ports = resolveUTurnPorts(stair, { laneLenA, laneLenB, firstRowA: spans?.firstRowA, firstRowB: spans?.firstRowB });
   let column = null;
+  let columnBases = false; // 等長レーンの基端が両方とも入口柱の面（Q1/Q3）に出たか
   let tQExit = null; // 柱に合わせたときの Q1 の面。張り出す往路の取りつき区画の出口（tBaseB は Q3 になるので分ける）
   if (ms && partition) {
     const dtE = partition.entryHalfMm / f.runLength, dtL = partition.landingHalfMm / f.runLength;
     const tQ = f.tOf(partition.entryEnd) - dtE;
     const tPA = f.tOf(partition.landingEnd) - dtL, tPB = f.tOf(partition.landingEnd) + dtL;
-    const baseA = laneLenA < laneMax - 1e-6 ? tQ : tBaseA; // 短いレーンの基端だけが入口柱の位置
     const tQ3 = f.tOf(partition.entryEnd) + dtE; // 入口柱の回転部側の面（Q3）。復路の最終段板は柱に当たって止まる
-    const baseB = laneLenB < laneMax - 1e-6 ? tQ3 : tBaseB;
+    // 等長レーンは入口柱が基端にある（entryEnd が基端 t=0）。基端が開いている（枠の base 辺が柱の通り芯のまま＝壁も逃がしも無い）
+    // ときは、1段目の段鼻を柱巻きの前縁 Q1 に・到達辺を Q3 にする。壁の中の柱（基端の辺に壁／枠が壁面まで逃げた）は枠の辺のまま
+    const equalLanes = Math.abs(laneLenA - laneLenB) < 1e-6;
+    const columnAtBase = equalLanes && partition.entryOpen !== false
+      && Math.abs(f.tOf(partition.entryEnd) - tBaseA) < 1e-6 && Math.abs(tBaseA - tBaseB) < 1e-6;
+    const baseA = laneLenA < laneMax - 1e-6 || columnAtBase ? tQ : tBaseA; // 入口柱が基端にあるレーンの基端が柱の位置
+    const baseB = laneLenB < laneMax - 1e-6 || columnAtBase ? tQ3 : tBaseB;
     if (tPA > Math.max(baseA, baseB) + 1e-9 && tPB > tPA) { // 区間が残らないほど短ければ従来の積み方
-      tRunA = tPA; tRun = tPB; tBaseA = baseA; tBaseB = baseB; tQExit = tQ;
+      tRunA = tPA; tRun = tPB; tBaseA = baseA; tBaseB = baseB; tQExit = tQ; columnBases = columnAtBase;
       column = { sA: f.sOf(partition.landingEnd) - partition.landingHalfMm / (acrossLen || 1) };
     }
   }
@@ -820,7 +832,7 @@ function uTurnLayout(stair, f, b, runA, runB, tread, spans, partition = null) {
   // 往路の張り出し（取りつき）が全幅セルなら、取りつき回転部は s 0→1 の全幅、その「内側」の辺は s=1
   const entryFull = !!(ms && spans?.entryFull) && ports.entryLonger;
   return {
-    laneLenA, laneLenB, tAt, tRun, tRunA, tBaseA, tBaseB, tQExit, ports, tExitA, tExitB, tStartA, tStartB, entryFull, column,
+    laneLenA, laneLenB, tAt, tRun, tRunA, tBaseA, tBaseB, tQExit, columnBases, ports, tExitA, tExitB, tStartA, tStartB, entryFull, column,
     pitchA: (tRunA - tStartA) * budget / runA.cells,
     pitchB: (tRun - tStartB) * budget / runB.cells,
   };
@@ -885,7 +897,7 @@ export function resolveUTurnPorts(stair, info) {
 // 往路の取りつきが全幅セル（entryFull）なら、張り出し区間は s 0→1 の全幅: 基端は全幅の辺、相手レーン側の
 // 外側の辺（s=1、tBaseA〜tBaseB）が「内側」の出入口、復路の到達辺（t=tBaseB、s 0.5→1）は取りつきと
 // 復路の間の内部線（設置階上階スラブの張り出しの縁）になる。
-function uTurnLaneOutline(c, { tRun, tRunA, tBaseA, tBaseB, tQExit, tExitA, tExitB, entryFull, column }, sA, sB, halfGap, ports) {
+function uTurnLaneOutline(c, { tRun, tRunA, tBaseA, tBaseB, tQExit, columnBases, tExitA, tExitB, entryFull, column }, sA, sB, halfGap, ports) {
   // 往路の取りつき区画の出口側の辺の終点＝Q1 の面（柱に合わせるときだけ tBaseB〔Q3〕と分かれる）
   const tEdgeE = tQExit ?? tBaseB;
   const tPart = Math.max(tBaseA, tEdgeE);
@@ -910,12 +922,13 @@ function uTurnLaneOutline(c, { tRun, tRunA, tBaseA, tBaseB, tQExit, tExitA, tExi
   // 張り出し区間の内側（通り芯 s=0.5）: 出入口が内側ならそこが出入口、でなければ階段の外周
   //（全幅の取りつきでは内部＝線なし）
   if (entryFull) { /* 取りつきが全幅: s=0.5 は内部 */ }
+  else if (columnBases) { /* 等長レーンで両基端が入口柱の面: Q1〜Q3 は柱（隔て壁の輪郭が描く） */ }
   // あき時は帯の向こう側の面 sB が上り口・到達口とも辺（1段目の段板を隔て板側の柱で支える）。あき0では 0.5。
   else if (tBaseA < tBaseB - 1e-9) head.push(portOr(seg(c(tBaseA, sB), c(tEdgeE, sB)), ports.entry === 'inner', 'entry'));    // 往路が長い
   else if (tBaseB < tBaseA - 1e-9) head.push(portOr(seg(c(tBaseB, sB), c(tBaseA, sB)), ports.arrival === 'inner', 'arrival')); // 復路が長い
   const tail = [
     seg(c(tPart, sA), c(tRunA, sA)), // 中央仕切り（往路内側。あき時は2本になる）
-    ...(halfGap > 0 ? [seg(c(tPart, sB), c(tRun, sB))] : []), // 復路内側（あき時のみ）
+    ...(halfGap > 0 ? [seg(c(columnBases ? tBaseB : tPart, sB), c(tRun, sB))] : []), // 復路内側（あき時のみ。両基端が柱の面なら復路は Q3 から）
   ];
   return { head, tail };
 }

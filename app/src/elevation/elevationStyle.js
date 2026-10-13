@@ -257,6 +257,11 @@ export const PROBE_EPS_MM = 5;
 // 裁定2026-10-13: 出隅の 72.5mm の重なりだけで片が割れ、数 mm 違う高さの破線が出るのを防ぐ。
 export const SHORT_WALL_IGNORE_MM = 100;
 
+// 階段の flight と部屋の包絡矩形の重なり（走行・幅の両方向）がこの値(mm)以下なら「階段下の部屋」にしない
+// （elevationBand.js の flightsOverRoom／stairContributionOverRoom）。1 段目が柱巻きの前縁へ出る張り出し 57.5mm は
+// 階段下の部屋ではない。裁定 2026-10-13。値は短い壁の閾値（SHORT_WALL_IGNORE_MM）と揃えた。
+export const STAIR_OVER_ROOM_MIN_OVERLAP_MM = 100;
+
 // QA修正（幅0の展開図バグ）: composeRoomFacesの最終段で、run（面の実効幅）がこの値未満の面を
 // 除去する安全網（elevationFaceList.js）。段差見付け面の隅スナップ・袖壁分割の境界計算等、
 // 個別の生成経路をそれぞれ堅牢化した上でも、未知の経路から幅0・極小幅の面が漏れ出た場合に

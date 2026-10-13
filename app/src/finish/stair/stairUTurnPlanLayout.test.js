@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { classifyStairArea, measureStairSpans } from './stairClassify.js';
 import { buildStairGeometry, uTurnPlanLayout, turnPivotS } from './stairGeometry.js';
-import { roomBounds } from '../gridCells.js';
+import { roomBounds, refreshCells } from '../gridCells.js';
+import { faceRect } from '../wallFaces.js';
 import { stairTreadFootprints } from './stairTreads.js';
 import { PARTITION_BACKING_MM, PARTITION_THICKNESS_MM } from './stairPartition.js';
 import { generateStairPartitionWalls } from './stairPartitionWalls.js';
@@ -165,6 +166,146 @@ test('等長レーン・4方向×flip×SWITCHBACK/WINDING×柱の変種: run/acr
       }
     }
   }
+});
+
+// ---------------------------------------------------------------- 入口柱が基端にあるレーンの基端（2026-10-13 裁定: 等長レーンも Q1/Q3）
+
+// equalFixture の基端の通り芯座標（走行軸）と、基端→回転部へ向かう符号
+const BASE0 = { up: 4000, down: 0, left: 4000, right: 0 };
+const TOWARD = { up: -1, down: 1, left: -1, right: 1 };
+// 基端の辺（up＝下辺・down＝上辺・left＝右辺・right＝左辺）に壁を足す（室側仕上げ面は通り芯から 72.5 内側）
+function addBaseWall(graph, stair, dir) {
+  const ks = [...stair.cells].map(k => k.split(':'));
+  const cl = (id) => graph.shapeMap.get(id);
+  const ls = [...new Set(ks.flatMap(([l, , r]) => [l, r]))].map(cl).sort((a, b) => a.value - b.value);
+  const ts = [...new Set(ks.flatMap(([, t, , b]) => [t, b]))].map(cl).sort((a, b) => a.value - b.value);
+  const [vLo, vHi] = [ls[0], ls[ls.length - 1]], [hLo, hHi] = [ts[0], ts[ts.length - 1]];
+  switch (dir) {
+    case 'up':    return graph.addWall(hHi, -72.5, false, vLo, 0, vHi, 0, { isRoomWall: true, wallFinish: 12.5 });
+    case 'down':  return graph.addWall(hLo, 72.5, false, vLo, 0, vHi, 0, { isRoomWall: true, wallFinish: 12.5 });
+    case 'left':  return graph.addWall(vHi, -72.5, true, hLo, 0, hHi, 0, { isRoomWall: true, wallFinish: 12.5 });
+    default:      return graph.addWall(vLo, 72.5, true, hLo, 0, hHi, 0, { isRoomWall: true, wallFinish: 12.5 });
+  }
+}
+// 段 number のマスの走行軸方向の範囲 [lo, hi]
+const runExtent = (fps, number, vertical) => {
+  const poly = fps.find(c => c.number === number).poly;
+  const vs = poly.filter((_, i) => (i % 2 === 1) === vertical);
+  return [Math.min(...vs), Math.max(...vs)];
+};
+
+test('【等長レーン・上り口が開いている（壁なし）】往路の基端が Q1（通り芯−半幅＝ホール側）・復路の到達辺が Q3（回転部側）。1段目の段鼻は Q1 と面一でピッチは（レーン長＋半幅）/段数', () => {
+  for (const type of [StairType.SWITCHBACK, StairType.WINDING]) {
+    for (const dir of ['up', 'down', 'left', 'right']) {
+      for (const flip of [false, true]) {
+        for (const [name, half, setup] of VARIANTS) {
+          const tag = `${type}/${dir}/flip=${flip}/${name}`;
+          const { graph, stair } = equalFixture(type, dir, flip);
+          setup(graph);
+          const p = uTurnPlanLayout(stair, graph);
+          const d = TOWARD[dir], vertical = dir === 'up' || dir === 'down';
+          assert.ok(Math.abs(p.run.baseA - (BASE0[dir] - d * half)) < EPS, `${tag}: baseA＝Q1 ${p.run.baseA}`);
+          assert.ok(Math.abs(p.run.baseB - (BASE0[dir] + d * half)) < EPS, `${tag}: baseB＝Q3 ${p.run.baseB}`);
+          assert.equal(p.run.startA, p.run.baseA, tag);
+          assert.equal(p.run.startB, p.run.baseB, tag);
+          // 平面の段: 往路 1 段目は Q1 から、ピッチ＝(frontA−baseA)/往路のマス数
+          const fps = stairTreadFootprints(stair, graph, { riser: 100, insetView: 'install' });
+          const [lo, hi] = runExtent(fps, 1, vertical);
+          const pitchA = Math.abs(p.run.frontA - p.run.baseA) / (stair.sections[0] - 1);
+          assert.ok(Math.abs((d > 0 ? lo : hi) - p.run.baseA) < 1e-6, `${tag}: 1段目の段鼻（ホール側の辺）が Q1`);
+          assert.ok(Math.abs((hi - lo) - pitchA) < 1e-6, `${tag}: ピッチ ${hi - lo} vs ${pitchA}`);
+          // 通り芯基準（従来）のピッチより Q1 の半幅ぶん（÷段数）だけ広い
+          assert.ok(Math.abs(pitchA - (Math.abs(p.run.frontA - BASE0[dir]) + half) / (stair.sections[0] - 1)) < 1e-6, `${tag}: 区間は通り芯基準＋半幅`);
+        }
+      }
+    }
+  }
+});
+
+test('【等長レーン・基端の辺に壁あり】柱が壁の中なので従来どおり枠の辺（基端は通り芯のまま・Q1/Q3 へ出ない）', () => {
+  for (const dir of ['up', 'down', 'left', 'right']) {
+    for (const [name, , setup] of VARIANTS) {
+      const tag = `${dir}/${name}`;
+      const { graph, stair } = equalFixture(StairType.SWITCHBACK, dir, false);
+      setup(graph);
+      addBaseWall(graph, stair, dir);
+      const p = uTurnPlanLayout(stair, graph);
+      assert.equal(p.hasColumn, true, tag);
+      assert.equal(p.run.baseA, BASE0[dir], `${tag}: baseA ${p.run.baseA}`);
+      assert.equal(p.run.baseB, BASE0[dir], `${tag}: baseB ${p.run.baseB}`);
+    }
+  }
+});
+
+test('【faceRect が null（壁面が退化して求まらない）は通り芯のまま】壁の有無が不明なら Q1/Q3 へ出さない', () => {
+  const { graph, stair } = equalFixture(StairType.SWITCHBACK, 'up', false);
+  const ks = [...stair.cells].map(k => k.split(':'));
+  const cl = (id) => graph.shapeMap.get(id);
+  const vs = [...new Set(ks.flatMap(([l, , r]) => [l, r]))].map(cl).sort((a, b) => a.value - b.value);
+  const hs = [...new Set(ks.flatMap(([, t, , b]) => [t, b]))].map(cl).sort((a, b) => a.value - b.value);
+  // 左右の壁の室側仕上げ面を 1100 ずつ内側へ寄せ、矩形の幅を 0 以下にする（faceRect が null を返す）
+  graph.addWall(vs[0], 1100, true, hs[0], 0, hs[hs.length - 1], 0, { isRoomWall: true, wallFinish: 12.5 });
+  graph.addWall(vs[vs.length - 1], -1100, true, hs[0], 0, hs[hs.length - 1], 0, { isRoomWall: true, wallFinish: 12.5 });
+  assert.equal(faceRect(refreshCells(stair.cells, graph), graph), null, '前提: faceRect が null');
+  const p = uTurnPlanLayout(stair, graph);
+  assert.ok(p);
+  assert.equal(p.hasColumn, true);
+  assert.equal(p.run.baseA, BASE0.up);
+  assert.equal(p.run.baseB, BASE0.up);
+});
+
+test('【columnBases の外周】復路内側の線は Q3 から始まり、Q1〜Q3 の区間（柱）に出入口の線を出さない', () => {
+  for (const [name, half, setup] of VARIANTS) {
+    const { graph, stair } = equalFixture(StairType.SWITCHBACK, 'up', false);
+    setup(graph);
+    const p = uTurnPlanLayout(stair, graph);
+    const g = installGeom(stair, graph);
+    const q1 = BASE0.up + half, q3 = BASE0.up - half;
+    assert.ok(Math.abs(p.run.baseA - q1) < EPS && Math.abs(p.run.baseB - q3) < EPS, name);
+    // 縦走行: 走行軸は y。復路内側の辺 x=sB の縦線分
+    const onSB = g.outline.filter(s => Math.abs(s.x1 - p.across.sB) < EPS && Math.abs(s.x2 - p.across.sB) < EPS);
+    assert.ok(onSB.length > 0, `${name}: sB 上の線がある`);
+    // up は奥が y 小。復路内側の線は Q3 から奥へ（Q3 より手前＝y が大きい側へ出ない）
+    assert.ok(onSB.every(s => Math.max(s.y1, s.y2) <= q3 + EPS), `${name}: sB の線は Q3 から奥へ`);
+    assert.ok(onSB.some(s => Math.abs(Math.max(s.y1, s.y2) - q3) < EPS), `${name}: sB の線の起点は Q3`);
+    // Q1〜Q3（q3 < y < q1）の区間に、出入口（thin/port）の線が sA〜sB の幅で出ない
+    const inPillar = g.outline.filter(s => (s.thin || s.port)
+      && Math.min(s.y1, s.y2) > q3 + EPS && Math.max(s.y1, s.y2) < q1 - EPS);
+    assert.equal(inPillar.length, 0, `${name}: 柱の区間に出入口の線なし`);
+    // 長さ0の線分が無い
+    assert.ok(g.outline.every(s => Math.hypot(s.x2 - s.x1, s.y2 - s.y1) > 1e-9), `${name}: 長さ0の外周線なし`);
+  }
+});
+
+test('【不等長は従来】長い方のレーンの基端は t=0（通り芯）のまま、短い方だけ柱の面（Q1/Q3）', () => {
+  for (const [name, half, setup] of VARIANTS) {
+    const { graph, stair } = overhangFixture(0);
+    setup(graph);
+    const p = uTurnPlanLayout(stair, graph);
+    // 側面の上り口なので枠の始端も壁面（通り芯 3000 から 57.5）まで逃げる。Q1/Q3 の規則とは無関係に t=0 のまま
+    assert.ok(Math.abs(p.run.baseA - (3000 - 57.5)) < EPS, `${name}: 長い往路の基端は枠の辺 ${p.run.baseA}`);
+    assert.ok(Math.abs(p.run.baseB - (2000 - half)) < EPS, `${name}: 短い復路は Q3`);
+  }
+});
+
+test('【隔て壁なし（鉄骨）は不変】基端は通り芯のまま（Q1/Q3 へ出ない）', () => {
+  for (const dir of ['up', 'down', 'left', 'right']) {
+    const { graph, stair } = equalFixture(StairType.SWITCHBACK, dir, false, { wood: false });
+    const p = uTurnPlanLayout(stair, graph);
+    assert.equal(p.hasColumn, false, dir);
+    assert.equal(p.run.baseA, BASE0[dir], dir);
+    assert.equal(p.run.baseB, BASE0[dir], dir);
+  }
+});
+
+test('【側面出入口（張り出し・取りつき回転部）は不変】等長レーンで上り口・到達口が側面なら基端は枠の辺（壁面まで逃げた位置）のまま', () => {
+  const { graph, stair } = sideBothFixture(2, 2);
+  const p = uTurnPlanLayout(stair, graph);
+  assert.equal(p.entryPort, 'outer');
+  assert.equal(p.hasColumn, true);
+  // 基端 y=4500 は install でも壁面（4500−57.5）まで逃げる＝柱は壁の中。Q1（4500+半幅）へ出ない
+  assert.ok(Math.abs(p.run.baseA - 4442.5) < EPS, `baseA ${p.run.baseA}`);
+  assert.ok(Math.abs(p.run.baseB - 4442.5) < EPS, `baseB ${p.run.baseB}`);
 });
 
 test('隔て壁が立たない（鉄骨・あき 100）: hasColumn は false、frontA と front は同じ。across のあきは 100', () => {

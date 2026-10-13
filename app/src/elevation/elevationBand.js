@@ -24,7 +24,7 @@ import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import {
   CH_DIM_OFFSET_MM, DEFAULT_FACE_GAP_MM, DEFAULT_TRIANGLE_OFFSET_MM, BAND_TOP_MARGIN_MM,
   DEFAULT_WALL_LESS_END_EXTEND_MM, DEFAULT_DIM_FOOT_GAP_MM,
-  ElevationLineRole, weightForRole, GAP_EPS_MM as BAND_GAP_EPS,
+  ElevationLineRole, weightForRole, GAP_EPS_MM as BAND_GAP_EPS, STAIR_OVER_ROOM_MIN_OVERLAP_MM,
 } from './elevationStyle.js';
 import {
   translatePrimitive, collectGridCLs, appendRoomNameFrame, dedupeCoincidentLines,
@@ -464,11 +464,11 @@ export function floorZProfileFromSegments(segs, run) {
  *     **2つは対で指定する**——探査だけ広げると面の外の列が描画範囲でクリップされて消え、
  *     描画範囲だけ広げても面の外に実データが無い。値の出どころは両方とも`planeOverhangForFace`。
  */
-// 矩形どうしが面積を持って重なるか（mm。接しているだけは重なりとみなさない）。
-const OVER_ROOM_EPS_MM = 1;
+// 矩形どうしが階段下の部屋と言える重なりを持つか（mm。両方向とも STAIR_OVER_ROOM_MIN_OVERLAP_MM を超える。接しているだけ・
+// 1 段目の張り出し程度の重なりは含めない）。本ファイル内の用途は flightsOverRoom 経由のみ。
 function rectsOverlap(a, b) {
-  return Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) > OVER_ROOM_EPS_MM
-    && Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) > OVER_ROOM_EPS_MM;
+  return Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) > STAIR_OVER_ROOM_MIN_OVERLAP_MM
+    && Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) > STAIR_OVER_ROOM_MIN_OVERLAP_MM;
 }
 
 // flightの世界矩形（走行×幅）。
@@ -484,10 +484,25 @@ function flightRect(f) {
  * @param {{flights:object[]}} contribution
  * @param {{x1:number,y1:number,x2:number,y2:number}|null} bounds - 帯の部屋の包絡矩形
  */
-function flightsOverRoom(contribution, bounds) {
+export function flightsOverRoom(contribution, bounds) {
   const flights = contribution?.flights ?? [];
   if (!bounds) return flights;
   return flights.filter(f => rectsOverlap(bounds, flightRect(f)));
+}
+
+/**
+ * 階段下の部屋の帯の 1 面（仮想断面線 line）に、階段が実質かかっているか。面を横切るレーン（面と直交する flight）が
+ * 1 本でもあれば従来どおり true。全 flight が面と平行なときは、いずれかの走行範囲が面の区間 [line.lo, line.hi] と
+ * STAIR_OVER_ROOM_MIN_OVERLAP_MM を超えて重なること。部屋の包絡矩形では重なるが、この面には 1 段目の張り出し程度
+ * （57.5mm）しかかからない面で、階段の段が面端へ潰れて並ぶのを防ぐ（裁定 2026-10-13）。区間が不明なら true（従来）。
+ * @param {{flights:object[]}} contribution
+ * @param {{isVertical:boolean, lo?:number, hi?:number}} line
+ */
+export function stairOverReachesFace(contribution, line) {
+  if (!Number.isFinite(line?.lo) || !Number.isFinite(line?.hi)) return true;
+  const flights = contribution?.flights ?? [];
+  if (flights.length === 0 || flights.some(f => f.isVertical !== line.isVertical)) return true;
+  return flights.some(f => Math.min(f.runHi, line.hi) - Math.max(f.runLo, line.lo) > STAIR_OVER_ROOM_MIN_OVERLAP_MM);
 }
 
 /**
@@ -726,6 +741,8 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
     // 階段下の部屋: 上を通る階段の断面・見えがかりを重ねる（階段帯とまったく同じ部品）。
     // 梯子（正面視の踏面）は出さない——下から見上げる面には踏面の正面は見えない。
     if (opts.stairOver) {
+      // この面の区間にかかる flight が（1 段目の張り出し程度の重なりを除いて）1 本も無ければ、階段はこの面に現れない
+      if (!stairOverReachesFace(opts.stairOver, pcut.line)) return;
       const ceilAbs = layout.CH;
       // **階段の作図は面のはり出しに乗せない**（階段は`cutDrawRange`で止める規約。
       // .claude/elevation-model.md「面の端も層ごとに違う」）——はり出しは他の層の平面が

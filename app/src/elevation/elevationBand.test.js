@@ -6,7 +6,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, StairTyp
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import {
-  buildRoomBand, layoutBandFaces, finalizeBand, faceDrawnXRange, ceilProfileFromSegments, ceilProfileMaxZ,
+  flightsOverRoom, stairOverReachesFace, buildRoomBand, layoutBandFaces, finalizeBand, faceDrawnXRange, ceilProfileFromSegments, ceilProfileMaxZ,
 } from './elevationBand.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
@@ -1067,4 +1067,29 @@ test('【ceilProfileFromSegments】chHiMm ありは ceilZHi（床段差込みの
   ]);
   assert.equal(ceilProfileMaxZ(profile), 3100, '高い側 ceilZHi を含む最大');
   assert.equal(ceilProfileMaxZ([{ loX: 0, hiX: 1, ceilZ: 2400 }, { loX: 1, hiX: 2, ceilZ: 3000 }]), 3000, '平面は従来どおり ceilZ の最大');
+});
+
+// ---- 階段下の部屋の判定（flightsOverRoom。重なり STAIR_OVER_ROOM_MIN_OVERLAP_MM 以下は階段下の部屋にしない。裁定 2026-10-13）
+test('【張り出し 57.5 の重なりは階段下の部屋にしない／100 を超えれば従来どおり】', () => {
+  const room = { x1: 0, x2: 3495, y1: -10721, y2: -9100 };
+  // 縦走行の flight（幅 x 72.5〜910）。部屋の南端 y=-9100 へ run が dy だけ張り出す
+  const flight = (dy) => ({ isVertical: true, acrossLo: 72.5, acrossHi: 910, runLo: -9100 - dy, runHi: -8190 });
+  assert.equal(flightsOverRoom({ flights: [flight(57.5)] }, room).length, 0, '57.5 の張り出し');
+  assert.equal(flightsOverRoom({ flights: [flight(100)] }, room).length, 0, '境界 100 ちょうどは含めない');
+  assert.equal(flightsOverRoom({ flights: [flight(100.5)] }, room).length, 1, '100 を超えれば階段下の部屋');
+  assert.equal(flightsOverRoom({ flights: [flight(1500)] }, room).length, 1, '深く重なる従来ケース');
+  assert.equal(flightsOverRoom({ flights: [flight(0)] }, room).length, 0, '接するだけ');
+  assert.equal(flightsOverRoom({ flights: [] }, room).length, 0, 'flight なし');
+  assert.equal(flightsOverRoom({ flights: [flight(57.5)] }, null).length, 1, 'bounds なしは全 flight（従来）');
+});
+
+test('【stairOverReachesFace】面と平行な flight の走行範囲が面の区間と 100 以下しか重ならなければ階段は面にかからない／直交する flight があれば従来どおり', () => {
+  const line = { isVertical: true, lo: -10721.5, hi: -9100 };
+  const par = (runLo, runHi) => ({ isVertical: true, acrossLo: 72.5, acrossHi: 910, runLo, runHi });
+  assert.equal(stairOverReachesFace({ flights: [par(-9157.5, -8247.5)] }, line), false, '張り出し 57.5 だけ');
+  assert.equal(stairOverReachesFace({ flights: [par(-9250, -8247.5)] }, line), true, '150 重なる');
+  assert.equal(stairOverReachesFace({ flights: [par(-9157.5, -8247.5), par(-9042.5, -8132.5)] }, line), false, '2 レーンとも届かない');
+  assert.equal(stairOverReachesFace({ flights: [{ ...par(-9157.5, -8247.5), isVertical: false }] }, line), true, '直交するレーンは従来');
+  assert.equal(stairOverReachesFace({ flights: [par(-9157.5, -8247.5)] }, { isVertical: true }), true, '区間不明は従来');
+  assert.equal(stairOverReachesFace({ flights: [] }, line), true, 'flight なしは従来');
 });
