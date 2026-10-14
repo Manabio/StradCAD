@@ -196,33 +196,41 @@ export function clipFaceToWorldRange(face, worldA, worldB) {
 }
 
 /**
+ * 仮想断面の視線の向きから図の左右（ローカル x 昇順の世界方向 dirSign）を決める面の方位規則
+ * （ユーザー裁定 2026-10-15「仮想断面から見て通り芯の配置は一意に決まる」）。展開記号の採番
+ * （elevationStairSequence.js の letterOf(isVertical, −viewSign)）と同じ規則で、全 cut に適用する。
+ * @param {boolean} isVertical 切断線が縦（x=一定）か
+ * @param {1|-1} viewSign 視線が向く世界方向の符号
+ * @returns {1|-1}
+ */
+export function viewDirSign(isVertical, viewSign) {
+  return DIR_SIGN[letterOf(isVertical, -viewSign)];
+}
+
+/**
  * face（composeRoomFacesの実面）の「ローカルx=0がどちら側の世界座標に対応するか」を、
- * 部屋の見た目上の向き（letterOf由来のコンパス基準dirSign）ではなく、呼び出し側が指定する
- * desiredDirSign（階段の歩行方向・幅方向基準）へ強制的に再正規化する（QA実機フィードバック
- * 修正: seq1の梯子左右逆・seq2/seq4の左右逆の根本原因）。
+ * 部屋の見た目上の向き（部屋の内側から見た letterOf 由来の dirSign）ではなく、呼び出し側が指定する
+ * desiredDirSign（**その切断の視線の向き**から `viewDirSign` で決めた値。裁定 2026-10-15）へ
+ * 再正規化する。切断線は面の壁芯ではなく室内側の仮想断面で、面と逆向きに見る切断（seq4 が wOut1 を
+ * 復路側から見る等）では部屋の内側からの向きと左右が逆になるため、face をその切断の向きへ倒す。
  *
- * 背景: classifyFaces（≒composeRoomFacesの実面）が持つdirSign/originWorld/hasWallAtLocal0等は
- * 部屋自体のA/B/C/D向き（letterOf・DIR_SIGN。世界座標の絶対的な向き）から決まり、階段の
- * 「上り口→踊り場」「往路→復路」という歩行方向とは無関係——たまたま一致する部屋の向きも
- * あれば、逆になる部屋の向きもある。cut.dirSign（レイキャスト用にW(t,s)から独立に導出。
- * ファイル冒頭コメント参照）だけを歩行方向基準に直しても、floorSegments/ceilingProfile
- * （elevationStairSequence.js側。face.run・face.dirSign由来のoriginWorld・
- * hasWallAtLocal0/Runを暗黙の前提にした「区間0=上り口側」のハードコード順）は
- * face自身のdirSignのままズレて残るため、content（cut.dirSign経由）とfloorSegments
- * （face.dirSign経由）が食い違う——face自体をここで再正規化し、両方が同じ歩行方向基準に
- * 揃うようにする。lo/hi/run/axisCL/faceValue/inward/isVertical/hasRealWall/kindは
+ * 背景: cut.dirSign（レイキャスト用にW(t,s)から独立に導出。ファイル冒頭コメント参照）だけを直しても、
+ * floorSegments/ceilingProfile（elevationStairSequence.js側。face.run・face.dirSign由来のoriginWorld・
+ * hasWallAtLocal0/Runを前提にした区間順）はface自身のdirSignのままズレて残るため、content
+ * （cut.dirSign経由）とfloorSegments（face.dirSign経由）が食い違う——face自体をここで再正規化し、
+ * 両方が同じ向きに揃うようにする。lo/hi/run/axisCL/faceValue/inward/isVertical/hasRealWall/kindは
  * 同じ物理壁を指す不変な性質のためそのまま維持し、「ローカルxの向き」に関する対の属性
  * （hasWallAtLocal0/Run・edgeAtLocal0/Run・startCLId/endCLId・partitionCutAtLocal0/Run）だけ
- * 入れ替える。face.dirSignが既にdesiredDirSignと一致するなら何もしない（他の部屋向きでは
- * 現行どおりの経路のまま＝無変更で緑必須のゴールデン・非階段テストに影響しない）。
+ * 入れ替える。face.dirSignが既にdesiredDirSignと一致するなら何もしない。
  *
  * **letter（展開記号）はdirSignに従って引き直す**（ユーザー実機指摘2026-08。旧実装は
  * 「同じ物理壁を指す不変な性質」としてletterを据え置いており、`DIR_SIGN[letter]===dirSign`
  * という面の不変条件が破れていた）——記号A/B/C/Dは視線の向き＝図の左→右がどちらの世界方向かで
- * 決まるため、ローカルxの向きを歩行方向へ倒した時点で記号も入れ替わる（B⇄D・A⇄C）。
- * 実機の症状は「左手に登り口・右が踊り場＝9時方向を見ている図なのに記号がB（3時）」。
+ * 決まるため、ローカルxの向きを倒した時点で記号も入れ替わる（B⇄D・A⇄C）。
  * labelは呼び出し側（elevationStairSequence.js）が歩行順で採番し直すため、ここでは
  * letterと同値へ落とす（採番前の暫定値。据え置くと旧letterの連番が残って食い違う）。
+ * 旧実装（2026-08〜2026-10-14）は desiredDirSign を歩行方向（往路が左・上り口が左）で決めており、
+ * 回転方向によって鏡像になっていた（ファイル本文の dirSign 導出のコメント参照）。
  * @param {object|null} face
  * @param {1|-1} desiredDirSign
  * @returns {object|null}
@@ -347,28 +355,37 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   if (!contribution) return null; // 平面の枠が求まらない（以降は contribution を前提にする）
   const { frontA: frameFrontA, front: frameFront, back: frameBack } = contribution.frame;
 
-  // QA実機フィードバック修正: dirSignは部屋のコンパス向き（wEntry.dirSign等・letterOf基準）
-  // ではなく、階段自身の歩行方向（幅方向=往路(s=0)→復路(s=1)、走行方向=上り口(t=0)→踊り場(t=tRun)）
-  // が「ローカルx昇順」になるよう独立に導出する（reorientFace参照。ファイル冒頭の役割コメントも
-  // 参照）。widthDirSign: seq1（幅方向の全幅線。上り口向き）用——s=0側(往路)がlocalX=0(左)になる向き。
-  // seq2DirSign: seq2（走行方向の全長線）用——t=0側(上り口)がlocalX=0(左)になる向き（往路の歩く向き）。
+  // ==== 図の左右（dirSign）は**仮想断面の視線の向き**だけで決める（ユーザー裁定 2026-10-15）====
+  // 歩行順に面を並べるのは正しいが、各面の通り芯の並びは視線の向きから一意に決まる（面の方位規則
+  // `viewDirSign`＝DIR_SIGN[letterOf(isVertical, −viewSign)]。展開記号の採番と同じ）。上り口・踊り場が
+  // 図の左右どちらに来るかは階段の回転方向（時計回り/反時計回り＝up/down×flip）次第で、
+  // 「往路が左」「上り口が左」（2026-08 の reorientFace 導入 4303222）は「6」（up+flip=true）で方位規則と
+  // たまたま一致していた決め打ちだった——逆の回転（moku3-1・opening-test・stair-ports-test4/5）では
+  // seq1/2/4/5 が鏡像、seq3 は全文書で鏡像（2026-10-14 moku4-3 1階 C）になっていた。
+  // 歩行順に依存する下流（床区間の並び・CH 寸法の鎖の踊り場側）は `landingEnd`（この表が面ごとに
+  // 宣言する踊り場側の端）から決める。
+  // widthDirSign は seq2/4/5 の視線（towardS1/towardS0）にだけ使う。
   const widthDirSign = Math.sign(acrossCoordAt(1) - acrossCoordAt(0)) || 1;
-  const seq2DirSign = contribution.flights[0].travelSign;
-  const seq4DirSign = -seq2DirSign; // seq4はseq2の鏡像（踊り場が左・上り口が右）
-  // seq3（踊り場の壁）の視線は踊り場奥向き(+t方向)＝seq1（上り口向き -t）の**逆**。前縁を奥に揃えた
-  // 浅い踊り場(front==back)でも往路の走行の向きにする（上り口側を向かない）。
-  const seq3ViewSign = Math.sign(frameBack - frameFront) || seq2DirSign;
-  // 図の左右は視線の向きで決まる（面の方位規則 DIR_SIGN[letterOf(isVertical, -viewSign)]。展開記号の
-  // 採番 elevationStairSequence.js と同じ規則）。seq3 は seq1 と逆向きを見るので、seq1 と同じ widthDirSign
-  // （往路が左）へ倒すと鏡像になる——2026-08 の reorientFace 導入（4303222）が seq3 も seq1 と同じ向きへ
-  // 倒していたため、踊り場の壁の面は全 U 字系階段で左右が反転していた（ユーザー指摘 2026-10-14
-  // moku4-3 1階 C: 6時を見ているのに X1 が左）。
-  const seq3DirSign = DIR_SIGN[letterOf(rawFaces.wLanding.isVertical, -seq3ViewSign)];
+  // seq1 の視線は上り口向き(−t)。切断位置は往路側の前縁 frontA（下の seq1Line 参照）。
+  const seq1ViewSign = Math.sign(travelCoordAt(0) - frameFrontA) || 1;
+  // seq3（踊り場の壁）の視線は踊り場奥向き(+t方向)＝seq1 の**逆**。前縁を奥に揃えた浅い踊り場
+  // (front==back)でも往路の走行の向きにする（上り口側を向かない）。
+  const seq3ViewSign = Math.sign(frameBack - frameFront) || contribution.flights[0].travelSign;
+  // seq2/5 は往路レーン・復路レーンの中から復路側(s=1)を見る、seq4 は往路外側(s=0)を見る。
+  const towardS1 = widthDirSign;   // 復路側(s=1向き)を見る（seq2・seq5）
+  const towardS0 = -widthDirSign;  // 往路外側(s=0向き)を見る（seq4）
+  const seq1DirSign = viewDirSign(rawFaces.wEntry.isVertical, seq1ViewSign);
+  const seq3DirSign = viewDirSign(rawFaces.wLanding.isVertical, seq3ViewSign);
+  const seq2DirSign = viewDirSign(rawFaces.wOut1.isVertical, towardS1);
+  const seq4DirSign = viewDirSign(rawFaces.wOut1.isVertical, towardS0); // seq4はseq2の鏡像（逆向きを見る）
 
-  const wEntry   = reorientFace(rawFaces.wEntry, widthDirSign);
+  const wEntry   = reorientFace(rawFaces.wEntry, seq1DirSign);
   const wLanding = reorientFace(rawFaces.wLanding, seq3DirSign);
   const wOut1    = reorientFace(rawFaces.wOut1, seq2DirSign);
   const wOut2    = reorientFace(rawFaces.wOut2, seq4DirSign);
+  // 走行方向の面で踊り場がローカル x のどちらの端に来るか（'left'＝x=0 側／'right'＝run 側）。
+  // 踊り場の壁 wLanding と上り口の壁 wEntry の世界座標の前後を、その面の dirSign で図の左右へ写す。
+  const landingEndOn = face => ((wLanding.faceValue - wEntry.faceValue) * face.dirSign > 0 ? 'right' : 'left');
 
   const wallGraph = opts.upperGraph ?? graph;
   // 踊り場の奥行きは平面の解決値（frame の front〜back）から取る。CL 区間長（params.landingLen）は使わない。
@@ -409,10 +426,8 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // させるため）。枠(lo/hi)は各々のfaceに合わせる（上の不変条件）。
   // seq1 が frontA ちょうどにあるのは意図: 往路 flight の端（crossesFlight は境界を含む）に立ち、
   // 復路側は復路の初段付近を切る（踊り場ではなく復路の直進部。見え方が変わる前提）。
-  const seq1Axis = frameFrontA;
-  const seq1Line = { isVertical: wEntry.isVertical, axisValue: seq1Axis, lo: wEntry.lo, hi: wEntry.hi };
-  const seq1ViewSign = Math.sign(travelCoordAt(0) - seq1Axis) || 1; // 上り口向き(-t方向)
-  // seq3 の視線 seq3ViewSign（踊り場奥向き +t）は上（seq3DirSign の導出）で決めている。
+  const seq1Line = { isVertical: wEntry.isVertical, axisValue: frameFrontA, lo: wEntry.lo, hi: wEntry.hi };
+  // 視線（seq1ViewSign＝上り口向き −t・seq3ViewSign＝踊り場奥向き +t）は上（dirSign の導出）で決めている。
   // seq3だけ踊り場側へ入れる（LANDING_CUT_INSET_MM。踊り場の奥行きが足りなければ前縁のまま）。
   // 向きは踊り場奥向き(+t)＝seq3ViewSignと同じ（視線の前方へ進める）。
   const seq3Inset = Math.abs(frameBack - frameFront) > LANDING_CUT_INSET_MM ? LANDING_CUT_INSET_MM : 0;
@@ -440,8 +455,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // が見えがかり候補——「s=1側が見える」viewSignは、line位置に関わらずwidthDirSignと同符号になる
   // （0.25→1・0.5→1・0.75→1のいずれも同じ向き。s<1の基準点なら常に成り立つ幾何）。
   // towardS0はその逆符号（s=0側=往路外側の壁が見える向き）。
-  const towardS1 = widthDirSign;   // 復路側(s=1向き)を見る（seq2・seq5）
-  const towardS0 = -widthDirSign;  // 往路外側(s=0向き)を見る（seq4）
+  // towardS1/towardS0 は上（dirSign の導出）で決めている。
 
   // 階段第3層（stairContribution）は各cutで該当するレーンのみを渡す——outboundLaneLineは
   // seq2/4が共有するため（同じ切断線をtowardS1/towardS0の逆向きから見る）、
@@ -510,6 +524,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       // 反対側を向いていた（実機「6」D1が、向こうに壁の無いはずの面で1500+2000に割れた）。
       // 中心1のCLが引けない構成では従来どおりwOut1へフォールバックする。
       seqNo: '2', face: midOutFace ?? wOut1, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
+      landingEnd: landingEndOn(wOut1),
       // レーン境界に**自階の実壁**（隔て板）があればアキを標記しない——隔て板の上・端の先は同じ階段室の
       // 空気で、面の抜けではない（ユーザー裁定2026-10-14「バツは不要」）。隔て板は階段室の自階の壁なので
       // `wall`（upperGraph 優先の探索）ではなく自階の graph で探す。上階側だけにある往復間の壁（2F の腰壁等）の
@@ -525,15 +540,16 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     // 平場の踊り場: 踊り場レベルより上だけを描く（下は描かない。下限・基準床とも踊り場。ユーザー裁定2026-10-08）。
     layers, zRange: { loZ: landingAbs, hiZ: ceilTopAbs }, baseFloorZ: landingAbs, stairCut: landingOnly,
   });
+  // QA実機フィードバック修正: seq4のstairCutは復路(inbound)ではなく往路(outbound)——
+  // seq4はwOut2を「反対側(復路レーン)から見た往路の鏡像」として見せる面であり
+  // （dirSignがseq2の逆＝踊り場側の端が seq2 と逆になる。landingEnd）、復路をここに描くと踊り場側が
+  // 低く上り口側が高くなり実機の見え方（往路の断面をwOut1側からwOut2側へ鏡映しただけ）と矛盾する。
+  // 面はseq2と同じ規則で「見ている側」——seq4はtowardS0（往路外側）を見るのでwOut1になる
+  // （旧実装はwOut2＝視線の背後の壁だった。上のseq2のコメント参照）。
+  const face4 = reorientFace(wOut1, seq4DirSign);
   cuts.push({
-    // QA実機フィードバック修正: seq4のstairCutは復路(inbound)ではなく往路(outbound)——
-    // seq4はwOut2を「反対側(復路レーン)から見た往路の鏡像」として見せる面であり
-    // （dirSignがseq2の逆＝踊り場が左・上り口が右になる)、復路をここに描くと踊り場側が
-    // 低く上り口側が高くなり「左から右へ下る」という実機の見え方と矛盾する
-    // （往路の断面をwOut1側からwOut2側へ鏡映しただけ、と捉えると整合する）。
-    // 面はseq2と同じ規則で「見ている側」——seq4はtowardS0（往路外側）を見るのでwOut1になる
-    // （旧実装はwOut2＝視線の背後の壁だった。上のseq2のコメント参照）。
-    seqNo: '4', face: reorientFace(wOut1, seq4DirSign), line: outboundLaneLine, viewSign: towardS0, dirSign: seq4DirSign,
+    seqNo: '4', face: face4, line: outboundLaneLine, viewSign: towardS0, dirSign: seq4DirSign,
+    landingEnd: landingEndOn(face4),
     layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: outboundWithLanding,
   });
   {
@@ -542,12 +558,14 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     // 旧実装は`clipFaceToWorldRange(wOut2, landingStartWorld, entryWorld)`で**レーン区間だけに
     // 切り詰めた**面を使っていた（実機で run=2442.5・両端とも壁なし）ため、踊り場ぶんが figure に
     // 入らず「Y2が3500の右」「踊場断面は図の右側・階段断面は左側」という構図にならなかった。
-    // 面は**wOut2の全長**（踊り場ぶんを含む）を使い、向きはseq2側（踊り場が右・上り口が左）に
-    // 揃える——ユーザー指定「踊場断面は図の右側、階段断面は左側に現れる」。
+    // 面は**wOut2の全長**（踊り場ぶんを含む）を使い、向きはseq2と同じ視線（towardS1）で決める
+    // ——「6」の回転ではユーザー指定「踊場断面は図の右側、階段断面は左側に現れる」になる
+    // （踊り場側の端は回転方向次第。landingEnd）。
     // stairCutも復路だけでは踊り場の断面が出ないため、踊り場を含めて渡す。
     const retFace5 = reorientFace(wOut2, seq2DirSign);
     cuts.push({
       seqNo: '5', face: retFace5, line: inboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
+      landingEnd: landingEndOn(retFace5),
       layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundWithLanding,
     });
   }

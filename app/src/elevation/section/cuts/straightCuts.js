@@ -25,7 +25,7 @@
 import { StairType } from '@core';
 import { roomBounds } from '../../../finish/gridCells.js';
 import { makeFrame } from '../../../finish/stair/stairGeometry.js';
-import { classifyFaces, buildMidWallFace, reorientFace } from './switchbackCuts.js';
+import { classifyFaces, buildMidWallFace, reorientFace, viewDirSign } from './switchbackCuts.js';
 import { straightContribution } from '../sectionStair.js';
 import { perpFaceAt } from '../../elevationFaces.js';
 import { graphList } from '../../../graphReadScope.js';
@@ -94,18 +94,21 @@ export function straightCuts(stair, faces, graph, opts = {}) {
   const acrossLo = Math.min(across.s0, across.s1);
   const acrossHi = Math.max(across.s0, across.s1);
 
-  // QA実機フィードバック修正（switchbackCuts.jsと同根の不具合）: dirSignは部屋のコンパス向き
-  // （wEntry.dirSign等・letterOf基準）ではなく、階段自身の歩行方向（幅方向=s=0→s=1、
-  // 走行方向=上り口(base)→到達端(end)）が「ローカルx昇順」になるよう独立に導出する
-  // （reorientFace。switchbackCuts.js冒頭のコメント参照）。直進階段はseq4もseq2と同じ向き
-  // （視線が折り返さないため。§6.2）——wOut2もwOut1と同じseq2DirSignへ正規化する
-  // （switchbackCutsの鏡像とは異なる点に注意）。
-  const widthDirSign = Math.sign(across.s1 - across.s0) || 1;
-  const seq2DirSign = Math.sign(frame.end - frame.base) || 1;
-  const wEntry   = reorientFace(rawFaces.wEntry, widthDirSign);
-  const wLanding = reorientFace(rawFaces.wLanding, widthDirSign);
-  const wOut1    = reorientFace(rawFaces.wOut1, seq2DirSign);
-  const wOut2    = reorientFace(rawFaces.wOut2, seq2DirSign);
+  // 図の左右（dirSign）は**仮想断面の視線の向き**だけで決める（面の方位規則 `viewDirSign`。
+  // ユーザー裁定 2026-10-15。switchbackCuts.js と同じ）。旧実装は歩行方向（幅 s=0→s=1・走行
+  // base→end）を「ローカル x 昇順」に決め打ちしていたため、回転方向によっては視線と左右が逆の
+  // 鏡像になっていた（2026模擬試験・stair-ports-test1〜3 の seq2/seq4）。
+  // 視線: seq1（上り口端）と到達端の面は奥向き(+t)、seq2 は s=0 側の壁 W_out1 を、seq4 は s=1 側の壁
+  // W_out2 を見る（§6.2 表）。旧実装は seq2 の視線の符号が逆で seq2/seq4 がともに s=1 側を向き、
+  // 同じ壁を 2 度描いていた。
+  const travelSign = Math.sign(frame.end - frame.base) || 1;
+  const seq1ViewSign = travelSign; // 奥向き(+t)
+  const seq2ViewSign = Math.sign(across.s0 - midAcross) || -1; // s=0側（W_out1）
+  const seq4ViewSign = Math.sign(across.s1 - midAcross) || 1;  // s=1側（W_out2）
+  const wEntry   = reorientFace(rawFaces.wEntry, viewDirSign(rawFaces.wEntry.isVertical, seq1ViewSign));
+  const wLanding = reorientFace(rawFaces.wLanding, viewDirSign(rawFaces.wLanding.isVertical, seq1ViewSign));
+  const wOut1    = reorientFace(rawFaces.wOut1, viewDirSign(rawFaces.wOut1.isVertical, seq2ViewSign));
+  const wOut2    = reorientFace(rawFaces.wOut2, viewDirSign(rawFaces.wOut2.isVertical, seq4ViewSign));
 
   // 切断線の両端（lo/hi）は figure 側（sectionFace.js faceFromCut）が直交壁の面へ寄せる値と同じにする（不変条件: 枠がずれると
   // content が面に対して平行移動する）。出入口が側面の直進では、その側の壁が途切れて隅に直交壁が無く、classifyFaces の面は
@@ -119,15 +122,10 @@ export function straightCuts(stair, faces, graph, opts = {}) {
   // ---- seq1/到達端（全幅。§6.2表）----
   // seq1 は上り口辺 base（側面の上り口でも base。区画は seq2/4 のレーン線で切れる）、到達端の面は end。
   const seq1Line = lineOf(wEntry, frame.base);
-  const seq1ViewSign = seq2DirSign; // 奥向き(+t)
   const arrivalLine = lineOf(wLanding, frame.end);
 
-  // ---- seq2/4（レーン全長。s=0.5。§6.2表）----
+  // ---- seq2/4（レーン全長。s=0.5。§6.2表）---- 視線 seq2ViewSign/seq4ViewSign は上で決めている。
   const laneLine = lineOf(wOut1, midAcross);
-  const seq2ViewSign = -(Math.sign(across.s0 - midAcross) || 1); // s=0側
-  const seq4ViewSign = Math.sign(across.s1 - midAcross) || 1;    // s=1側
-  // seq2DirSignは上でreorientFace用に導出済み（wOut1/wOut2は既にその向きへ再正規化されている
-  // ため、wOut1.dirSign===wOut2.dirSign===seq2DirSignが構築上常に成り立つ）。
 
   const cuts = [
     {
@@ -135,7 +133,7 @@ export function straightCuts(stair, faces, graph, opts = {}) {
       layers, zRange, baseFloorZ: 0, stairCut: contribution,
     },
     {
-      seqNo: '2', face: wOut1, line: laneLine, viewSign: seq2ViewSign, dirSign: seq2DirSign,
+      seqNo: '2', face: wOut1, line: laneLine, viewSign: seq2ViewSign, dirSign: wOut1.dirSign,
       layers, zRange, baseFloorZ: 0, stairCut: contribution,
     },
   ];
@@ -149,16 +147,17 @@ export function straightCuts(stair, faces, graph, opts = {}) {
     const wallGraph = opts.upperGraph ?? graph; // 往復間の壁と同じ探索対象層規約（switchbackCuts.js参照）
     const landingWall = findLandingWall(wallGraph, wEntry, frame.land1, acrossLo, acrossHi);
     if (landingWall) {
-      const landingFace = reorientFace(buildMidWallFace(landingWall, wEntry.inward, acrossLo, acrossHi, faces), widthDirSign);
+      const seq3ViewSign = Math.sign(frame.base - frame.land1) || -travelSign; // 見返り(−t)
+      const landingFace = reorientFace(buildMidWallFace(landingWall, wEntry.inward, acrossLo, acrossHi, faces),
+        viewDirSign(wEntry.isVertical, seq3ViewSign));
       const seq3Line = lineOf(wEntry, frame.land1);
-      const seq3ViewSign = Math.sign(frame.base - frame.land1) || 1; // 見返り(−t)
       cuts.push({
-        seqNo: '3', face: landingFace, line: seq3Line, viewSign: seq3ViewSign, dirSign: wEntry.dirSign,
+        seqNo: '3', face: landingFace, line: seq3Line, viewSign: seq3ViewSign, dirSign: landingFace.dirSign,
         layers, zRange, baseFloorZ: contribution.landings[0].z, stairCut: null,
       });
     }
     cuts.push({
-      seqNo: '4', face: wOut2, line: laneLine, viewSign: seq4ViewSign, dirSign: seq2DirSign,
+      seqNo: '4', face: wOut2, line: laneLine, viewSign: seq4ViewSign, dirSign: wOut2.dirSign,
       layers, zRange, baseFloorZ: 0, stairCut: contribution,
     });
     cuts.push({
@@ -171,7 +170,7 @@ export function straightCuts(stair, faces, graph, opts = {}) {
       layers, zRange, baseFloorZ: floorHeight, stairCut: null,
     });
     cuts.push({
-      seqNo: '4', face: wOut2, line: laneLine, viewSign: seq4ViewSign, dirSign: seq2DirSign,
+      seqNo: '4', face: wOut2, line: laneLine, viewSign: seq4ViewSign, dirSign: wOut2.dirSign,
       layers, zRange, baseFloorZ: 0, stairCut: contribution,
     });
   }

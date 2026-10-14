@@ -19,8 +19,8 @@ function makeGraph(name = 'p1') {
 // elevationStairSequence.test.jsのmakeSwitchbackFixtureと同一構成。
 function makeSwitchbackFixture(graph, {
   withMidWall = false, midWallGraph = null, withRoomUnder = true, asymmetricEnds = false,
-  type = StairType.SWITCHBACK, sections = [6, 1, 6],
-  sideEntry = null, // { entryTurnSteps, entrySide }: 往路の基端の行（y3500..4500）を切り、側面の上り口にする
+  type = StairType.SWITCHBACK, sections = [6, 1, 6], flip = true,
+  sideEntry = null, // { entryTurnSteps, entrySide }: 往路の基端の行（y3500..4500）を切り、側面の上り口にする（往路が x0..xm の flip=false 用）
 } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -80,7 +80,9 @@ function makeSwitchbackFixture(graph, {
 
   const stair = graph.addStair({
     type, cells, roomId: room.id,
-    sections, riser: null, upDirection: 'up', flip: false, ...(sideEntry ?? {}),
+    // flip=true＝実機「6」と同じ回転方向（2026-10-15 裁定: 図の左右は視線の向きで決まるため、「上り口が左」等の期待は
+    // この回転でだけ成り立つ）。
+    sections, riser: null, upDirection: 'up', flip, ...(sideEntry ?? {}),
   });
   // withRoomUnder（既定true）: 実機確認済みの表現（踊り場が基準床）は「階段下に部屋がある場合」。
   if (withRoomUnder) {
@@ -103,7 +105,7 @@ test('【WP-E5】switchbackCuts: 往復間の壁が無ければcuts=[1,2,3,4,5]'
 
 test('【2026-10-09】switchbackCuts: 側面の上り口に取りつく回転部（entryTurnSteps=1）があれば踊り場の高さは (n1+1)×蹴上（stairContributionと同じ）', () => {
   const graph = makeGraph();
-  const { room, stair } = makeSwitchbackFixture(graph, { sideEntry: { entryTurnSteps: 1, entrySide: 'left' }, withRoomUnder: false });
+  const { room, stair } = makeSwitchbackFixture(graph, { sideEntry: { entryTurnSteps: 1, entrySide: 'left' }, withRoomUnder: false, flip: false });
   const faces = composeRoomFaces(room, graph);
   const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result);
@@ -114,7 +116,7 @@ test('【2026-10-09】switchbackCuts: 側面の上り口に取りつく回転部
 
 test('【回帰・2026-10-09】switchbackCuts: 走行端の上り口（側面なし）では entryTurnSteps が入っていても踊り場の高さは n1×蹴上のまま', () => {
   const graph = makeGraph();
-  const { room, stair } = makeSwitchbackFixture(graph, { sideEntry: { entryTurnSteps: 1, entrySide: 'end' }, withRoomUnder: false });
+  const { room, stair } = makeSwitchbackFixture(graph, { sideEntry: { entryTurnSteps: 1, entrySide: 'end' }, withRoomUnder: false, flip: false });
   const faces = composeRoomFaces(room, graph);
   const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.equal(result.params.entryTurnSteps, 0);
@@ -320,7 +322,7 @@ test('【失敗系・QA指摘F5】switchbackCuts: opts.layersが配列でなけ�
 // 既存のmakeSwitchbackFixture（x:0-2000,y:0-4500）はseq2/seq4側はたまたま部屋の向きと歩行方向が
 // 一致し不具合が顕在化しないため、実機の間取り（幅1500+1500・走行部2500+踊り場1000）を模した
 // 別fixtureで検証する（実機スクリーンショットで確認された不具合の再現条件）。====
-function makeUserDimsFixture(graph, upDirection = 'up') {
+function makeUserDimsFixture(graph, upDirection = 'up', flip = true) { // 既定は実機「6」と同じ回転（up+flip=true）
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
@@ -335,55 +337,69 @@ function makeUserDimsFixture(graph, upDirection = 'up') {
   generateRoomWallsFromOutline(graph, room);
   const stair = graph.addStair({
     type: StairType.SWITCHBACK, cells, roomId: room.id,
-    sections: [10, 1, 10], riser: null, upDirection, flip: false,
+    sections: [10, 1, 10], riser: null, upDirection, flip,
   });
   return { room, stair };
 }
 
-test('【QA修正・実機フィードバック】switchbackCuts: seq2の面は上り口(entryWorld)がローカルx=0側になる（部屋のコンパス向きに関わらず）', () => {
-  const graph = makeGraph();
-  const { room, stair } = makeUserDimsFixture(graph);
-  const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
-  assert.ok(table);
-  // entryWorldがwOut1のローカルx=0側（originWorldに一致する側）にあるはず。
-  const { wOut1, entryWorld, landingStartWorld } = table;
-  const localXOfEntry = (entryWorld - wOut1.originWorld) * wOut1.dirSign;
-  const localXOfLanding = (landingStartWorld - wOut1.originWorld) * wOut1.dirSign;
-  assert.ok(Math.abs(localXOfEntry) < localXOfLanding,
-    `entryWorldがlocalX=0側(上り口=左)のはず（entry局所x=${localXOfEntry}, landing局所x=${localXOfLanding}）`);
+// ==== ユーザー裁定 2026-10-15: 図の左右は仮想断面の視線の向きだけで決まる（上り口の左右は回転方向次第）====
+// 視線の左手側の世界方向（切断線に沿う軸の符号）。y 下向き正の平面で、向き d=(dx,dy) の左手は (dy,−dx):
+// 縦線（視線 ±x）なら左手は −viewSign·y、横線（視線 ±y）なら +viewSign·x。DIR_SIGN/letterOf を使わない独立の導出。
+const leftSignOf = cut => (cut.line.isVertical ? -cut.viewSign : cut.viewSign);
+const localXOfFace = (face, world) => (world - face.originWorld) * face.dirSign;
+
+test('【裁定2026-10-15】switchbackCuts: 全 cut のローカル x=0 は視線の左手側（upDirection 4方向 × flip の8通り。seq1/2/4/5 は回転で左右が変わり、seq2 と seq4 は鏡像）', () => {
+  const entryLeftSeen = new Set();
+  for (const up of ['up', 'down', 'left', 'right']) {
+    for (const flip of [false, true]) {
+      const graph = makeGraph();
+      const { room, stair } = makeUserDimsFixture(graph, up, flip);
+      const table = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+      assert.ok(table);
+      const tag = `up=${up},flip=${flip}`;
+      for (const c of table.cuts) {
+        assert.equal(c.dirSign, -leftSignOf(c), `${tag} seq${c.seqNo}: 左手側がローカル x=0`);
+        assert.equal(c.face.dirSign, c.dirSign, `${tag} seq${c.seqNo}: face と cut の向きが一致`);
+      }
+      const { wOut1, wOut2, entryWorld, landingStartWorld } = table;
+      const seq2 = table.cuts.find(c => c.seqNo === '2'), seq4 = table.cuts.find(c => c.seqNo === '4');
+      // seq2（往路レーンから復路側を見る）: 上り口が左手側にあるときだけ localX(entry) < localX(landing)
+      const entryIsLeft2 = (entryWorld - landingStartWorld) * leftSignOf(seq2) > 0;
+      assert.equal(localXOfFace(wOut1, entryWorld) < localXOfFace(wOut1, landingStartWorld), entryIsLeft2, `${tag} seq2: 上り口の左右は視線で決まる`);
+      assert.equal(seq2.landingEnd, entryIsLeft2 ? 'right' : 'left', `${tag} seq2: landingEnd`);
+      entryLeftSeen.add(entryIsLeft2);
+      // seq4 は seq2 の鏡像（逆向きを見る）
+      assert.equal(seq4.dirSign, -seq2.dirSign, `${tag}: seq4 は seq2 の鏡像`);
+      assert.equal(wOut2.dirSign, -wOut1.dirSign, `${tag}: wOut2 は wOut1 と反対の dirSign`);
+      assert.equal(seq4.landingEnd, entryIsLeft2 ? 'left' : 'right', `${tag} seq4: landingEnd は seq2 の逆`);
+      const seq5 = table.cuts.find(c => c.seqNo === '5');
+      assert.equal(seq5.dirSign, seq2.dirSign, `${tag}: seq5 は seq2 と同じ向き`);
+      assert.equal(seq5.landingEnd, seq2.landingEnd, `${tag}: seq5 の landingEnd は seq2 と同じ`);
+    }
+  }
+  assert.deepEqual([...entryLeftSeen].sort(), [false, true], '前提: 上り口が左になる回転と右になる回転の両方を踏む（検出力）');
 });
 
-// upDirection='up'のmakeUserDimsFixtureは(seq2/seq4の走行方向の)コンパスdirSignがたまたま
-// 望む向きと一致するため、そのままではreorientFaceが無変化(no-op)になり、値そのものが
-// 修正されたことの検証にならない（widthDirSignだけがミスマッチする）。upDirection='down'
-// （同じ部屋形状で歩行方向のみ反転）はコンパスdirSignと望む向きが実際に食い違うため、
-// このfixtureでreorientFaceが値を反転させたことを直接検証できる。
-test('【QA修正・実機フィードバック】switchbackCuts: seq2のdirSignは部屋のコンパス向きが逆でも上り口が左になるよう補正される(upDirection=down)', () => {
+test('【裁定2026-10-15】switchbackCuts: 実機「6」の回転（up+flip=true）では seq2 の上り口が左・seq4 は踊り場が左（従来の「6」の見え方を保つ）', () => {
   const graph = makeGraph();
-  const { room, stair } = makeUserDimsFixture(graph, 'down');
-  const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
-  assert.ok(table);
-  const { wOut1, entryWorld, landingStartWorld } = table;
-  const localXOfEntry = (entryWorld - wOut1.originWorld) * wOut1.dirSign;
-  const localXOfLanding = (landingStartWorld - wOut1.originWorld) * wOut1.dirSign;
-  assert.ok(Math.abs(localXOfEntry) < localXOfLanding,
-    `upDirection=down（コンパスdirSignと望む向きが食い違う構成）でもentryWorldがlocalX=0側のはず` +
-    `（entry局所x=${localXOfEntry}, landing局所x=${localXOfLanding}）`);
+  const { room, stair } = makeUserDimsFixture(graph, 'up', true);
+  const table = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const { wOut1, wOut2, entryWorld, landingStartWorld } = table;
+  assert.ok(localXOfFace(wOut1, entryWorld) < localXOfFace(wOut1, landingStartWorld), 'seq2: 上り口が左');
+  assert.ok(localXOfFace(wOut2, landingStartWorld) < localXOfFace(wOut2, entryWorld), 'seq4: 踊り場が左');
+  assert.equal(table.cuts.find(c => c.seqNo === '2').landingEnd, 'right');
+  assert.equal(table.cuts.find(c => c.seqNo === '4').landingEnd, 'left');
 });
 
-test('【QA修正・実機フィードバック】switchbackCuts: seq4の面は踊り場(landingStartWorld)がローカルx=0側になる（seq2の鏡像）', () => {
+test('【失敗系・裁定2026-10-15】switchbackCuts: 逆回転（up+flip=false）では seq2 の上り口が右・seq4 は踊り場が右（旧実装の「上り口が左」の決め打ちは鏡像）', () => {
   const graph = makeGraph();
-  const { room, stair } = makeUserDimsFixture(graph);
-  const faces = composeRoomFaces(room, graph);
-  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
-  const { wOut2, entryWorld, landingStartWorld } = table;
-  const localXOfEntry = (entryWorld - wOut2.originWorld) * wOut2.dirSign;
-  const localXOfLanding = (landingStartWorld - wOut2.originWorld) * wOut2.dirSign;
-  assert.ok(Math.abs(localXOfLanding) < localXOfEntry,
-    `landingStartWorldがlocalX=0側(踊り場=左)のはず（entry局所x=${localXOfEntry}, landing局所x=${localXOfLanding}）`);
-  assert.equal(wOut2.dirSign, -table.wOut1.dirSign, 'seq4の面はseq2の面と反対のdirSign(鏡像)のはず');
+  const { room, stair } = makeUserDimsFixture(graph, 'up', false);
+  const table = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const { wOut1, wOut2, entryWorld, landingStartWorld } = table;
+  assert.ok(localXOfFace(wOut1, entryWorld) > localXOfFace(wOut1, landingStartWorld), 'seq2: 上り口が右');
+  assert.ok(localXOfFace(wOut2, landingStartWorld) > localXOfFace(wOut2, entryWorld), 'seq4: 踊り場が右');
+  assert.equal(table.cuts.find(c => c.seqNo === '2').landingEnd, 'left');
+  assert.equal(table.cuts.find(c => c.seqNo === '4').landingEnd, 'right');
 });
 
 test('【QA修正・実機フィードバック】switchbackCuts: seq4のstairCutは往路(outbound=flights[0])——復路(inbound)ではない', () => {
@@ -411,26 +427,26 @@ test('【失敗系・QA修正・実機フィードバック】switchbackCuts: se
 });
 
 // ==== ユーザー実機フィードバック2026-08-23: 切断線の位置・視線方向の再定義 ====
-test('【ユーザー実機フィードバック2026-08-23】switchbackCuts: seq2/4の切断線は往路レーン中央(acrossCoordAt(0.25)=500)を共有し、' +
-  'seq2はtowardS1(復路向き=+1)・seq4はtowardS0(往路外側向き=-1)になる', () => {
+test('【ユーザー実機フィードバック2026-08-23】switchbackCuts: seq2/4の切断線は往路レーン中央(acrossCoordAt(0.25))を共有し、' +
+  'seq2はtowardS1(復路向き)・seq4はtowardS0(往路外側向き)になる', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
   const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const bySeq = Object.fromEntries(table.cuts.map(c => [c.seqNo, c]));
 
-  // フィクスチャ: x0=0,xm=1000,x1=2000（vertical CL）・upDirection='up'・flip=false
-  // → 走行軸vertical・幅方向acrossLo=0/acrossHi=2000・往路レーン中央=0.25*2000=500。
+  // フィクスチャ: x0=0,xm=1000,x1=2000（vertical CL）・upDirection='up'・flip=true（「6」と同じ回転）
+  // → 走行軸vertical・幅方向 s=0 が x=2000 側（flip）・往路レーン中央=x 1500・復路レーン中央=x 500。
   for (const seqNo of ['2', '4']) {
-    assert.equal(bySeq[seqNo].line.axisValue, 500,
-      `${seqNo}の切断線は往路レーン中央(x=500)のはず（実際:${bySeq[seqNo].line.axisValue}）`);
+    assert.equal(bySeq[seqNo].line.axisValue, 1500,
+      `${seqNo}の切断線は往路レーン中央(x=1500)のはず（実際:${bySeq[seqNo].line.axisValue}）`);
     assert.equal(bySeq[seqNo].line.isVertical, true, `${seqNo}の切断線は縦（走行軸と同じ向き）のはず`);
   }
-  assert.equal(bySeq['2'].viewSign, 1, 'seq2は復路側(towardS1=+1)を見るはず');
-  assert.equal(bySeq['4'].viewSign, -1, 'seq4は往路外側(towardS0=-1)を見るはず');
-  // seq5は復路レーン中央(0.75*2000=1500)。
-  assert.equal(bySeq['5'].line.axisValue, 1500, 'seq5の切断線は復路レーン中央(x=1500)のはず');
-  assert.equal(bySeq['5'].viewSign, 1, 'seq5はtowardS1(+1)を見るはず（現行の向きを踏襲）');
+  assert.equal(bySeq['2'].viewSign, -1, 'seq2は復路側(towardS1=−x)を見るはず');
+  assert.equal(bySeq['4'].viewSign, 1, 'seq4は往路外側(towardS0=+x)を見るはず');
+  // seq5は復路レーン中央(x=500)。
+  assert.equal(bySeq['5'].line.axisValue, 500, 'seq5の切断線は復路レーン中央(x=500)のはず');
+  assert.equal(bySeq['5'].viewSign, -1, 'seq5はtowardS1を見るはず（現行の向きを踏襲）');
 });
 
 test('【ユーザー実機フィードバック2026-08-23・不具合1修正】switchbackCuts: seq2のstairCut.unitがcontribution.unitと同一オブジェクトで引き継がれる' +

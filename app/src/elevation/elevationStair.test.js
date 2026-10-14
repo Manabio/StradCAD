@@ -636,7 +636,9 @@ test('【明示指示】buildStairBand: 階段下に部屋が無ければ高さ�
   generateRoomWallsFromOutline(graph, room);
   const stair = graph.addStair({
     type: StairType.SWITCHBACK, cells, roomId: room.id,
-    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false,
+    // flip=true＝実機「6」と同じ回転（裁定2026-10-15: 図の左右は視線の向きで決まり、「C左・D1右・D2右」の
+    // 鎖の並びはこの回転で成り立つ。逆回転では踊り場側の端が入れ替わり記入本数も変わる）。
+    sections: [6, 1, 6], riser: null, upDirection: 'up', flip: true,
   });
   const upperGraph = makeGraph('p2');
   upperGraph.plane.elevation = 2400;

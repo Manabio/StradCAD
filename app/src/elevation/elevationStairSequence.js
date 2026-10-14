@@ -25,7 +25,8 @@
  *   3   W_landing（全幅）: 踊り場の壁。階段の重ね描きなし。
  *   4   W_out2（seq2の鏡像構成）: 復路の断面プロファイル＋往復間の壁の断面。
  *   （旧2.5/4.5＝レーン境界の面は、2/4と切断が同一のため2026-10-07に廃止）
- *   5   W_out2の残り区間: 復路の断面を反対側（踊り場が右端）から見た図。
+ *   5   W_out2の残り区間: 復路の断面を反対側から見た図（「6」の回転では踊り場が右端。踊り場側の端は
+ *       回転方向次第＝切断定義表の landingEnd。裁定 2026-10-15）。
  *
  * STRAIGHT/STRAIGHT_LANDINGのシーケンス（§6.2。straightCuts.js参照）:
  *   1 上り口端（全幅） / 2 W_out1（s=0側の断面プロファイル） /
@@ -71,7 +72,7 @@ function flatFloorSegments(run, floorDeltaMm, chMm) {
 // 階段室の上が吹抜け（上階に床が無い）区間では1F天井線・2F床線を描いてはならない
 // （天井断面は上階天井まで一気に抜ける）——旧実装はseq2/4のfloorSegments/ceilingProfileを
 // 「レーン区間=chMm:ceilLowAbs固定（1F天井）／踊り場区間=ceilTopAbs固定（上階天井）」という
-// laneLenOnFace基準の**幾何的な決め打ち**で構築しており、上階に実際にRoom（床）があるか
+// レーン境界基準の**幾何的な決め打ち**で構築しており、上階に実際にRoom（床）があるか
 // 一切確認していなかった——これが原因箇所（本ファイルの旧stairFaceSequence内、
 // seq2/4のfloorSegments/ceilingProfile直書き。elevationStair.js側のCH解決やsectionProbe.jsの
 // slab/open判定そのものは無関係——sectionProbe.js側は`content`生成にしか使われず、
@@ -82,7 +83,7 @@ function flatFloorSegments(run, floorDeltaMm, chMm) {
 // 同じ単一情報源）で1点プローブし、区間ごとに「上階に床がある(hasRoom)＝1F天井高さ(ceilLowAbs)」
 // 「無い(吹抜け)＝上階天井(ceilTopAbs)まで抜ける」を判定してfloorSegments/ceilingProfileへ
 // 反映する。aboveLayer（role!=='self'の層）が無い場合（opts.upperGraphが未指定。最上階等）は
-// 実データが無く判定できないため、既存のlaneLenOnFace基準フォールバックを維持する
+// 実データが無く判定できないため、既存のレーン境界基準フォールバック（laneSegsFor）を維持する
 // （挙動不変。既存の「upperGraph未指定」テストへの影響を避けるASSUMED判断）。
 //
 // face（wOut1等。composeRoomFacesの実面）のローカルx→world座標（elevationFigure.jsの
@@ -766,36 +767,56 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // 図の向きと面の幾何が食い違い、面由来の寸法・向こう側判定が反対側を向いていた
   // （実機「6」D1が、向こうに壁の無いはずの面で1500+2000に割れた）。
   const outFace2 = cutOf('2').face;
+  // 走行方向の面（seq2/4）の床区間と、上階の実Roomが判定できないときの天井のフォールバック。
+  // 踊り場側の端（'left'/'right'）は切断定義表の `landingEnd`（面の向き＝視線から決まる。ユーザー裁定
+  // 2026-10-15「上り口の左右は回転方向次第」）で、「seq2は踊り場が右・seq4は左」の決め打ちはしない。
+  // レーン区間(floorDeltaMm:0)の床線(z=0)は「階段設置階FLは階段断面に出会ったらそこが終点」
+  // （ユーザー明示指示）——段鼻の断面ジグザグ(stairCutのcontent)がその先の輪郭を表すため、
+  // 床の水平線をそのまま引くとジグザグの下を素通りして踊り場側の隅まで貫通する。
+  // 旧実装は`hideFlatLine`で区間を丸ごと非描画にしており、階段の**手前**（下りた先＝壁の
+  // ない端部のはり出し）まで消していた——ユーザー実機指摘2026-09「「6」D1: 1階Y2から3500、
+  // 下りた階段の先（左側）に1FL断面はり出しが正解」。
+  // 切り詰めはここでは決めない: 断面線（floorProfileFor）から`withFlatLineSpans`が導出する
+  // （旧・段鼻の出の手計算はこの区間だけの別経路になっていたため廃止した）。
+  // フォールバックの天井は常に「上り口側=1F天井 → 奥の吹抜け=上階天井」の形（最上階キャップの
+  // 分岐は廃止。buildLaneFloorAndCeiling参照）。
+  const laneSegsFor = (face, landingEnd) => {
+    const laneLen = Math.max(0, face.run - landingLen);
+    if (laneLen <= 0) {
+      return {
+        floorDeltaSegs: [{ loX: 0, hiX: face.run, floorDeltaMm: underFloorZ }],
+        fallbackCeilingProfile: [[0, ceilTopAbs], [face.run, ceilTopAbs]],
+      };
+    }
+    const landingX = face.run - laneLen; // 踊り場が右なら踊り場区間の始まり、左ならレーン区間の始まり
+    return landingEnd === 'left'
+      ? {
+          floorDeltaSegs: [
+            { loX: 0, hiX: landingX, floorDeltaMm: underFloorZ },
+            { loX: landingX, hiX: face.run, floorDeltaMm: 0 },
+          ],
+          fallbackCeilingProfile: [[0, ceilTopAbs], [landingX, ceilTopAbs], [face.run, ceilLowAbs]],
+        }
+      : {
+          floorDeltaSegs: [
+            { loX: 0, hiX: laneLen, floorDeltaMm: 0 },
+            { loX: laneLen, hiX: face.run, floorDeltaMm: underFloorZ },
+          ],
+          fallbackCeilingProfile: [[0, ceilLowAbs], [laneLen, ceilTopAbs], [face.run, ceilTopAbs]],
+        };
+  };
   {
-    const laneLenOnFace = Math.max(0, outFace2.run - landingLen);
-    // レーン区間(floorDeltaMm:0)の床線(z=0)は「階段設置階FLは階段断面に出会ったらそこが終点」
-    // （ユーザー明示指示）——段鼻の断面ジグザグ(stairCutのcontent)がその先の輪郭を表すため、
-    // 床の水平線をそのまま引くとジグザグの下を素通りして踊り場側の隅まで貫通する。
-    // 旧実装は`hideFlatLine`で区間を丸ごと非描画にしており、階段の**手前**（下りた先＝壁の
-    // ない端部のはり出し）まで消していた——ユーザー実機指摘2026-09「「6」D1: 1階Y2から3500、
-    // 下りた階段の先（左側）に1FL断面はり出しが正解」。
-    // 切り詰めはここでは決めない: 断面線（floorProfileFor）から`withFlatLineSpans`が導出する
-    // （旧・段鼻の出の手計算はこの区間だけの別経路になっていたため廃止した）。
-    const floorDeltaSegs2 = laneLenOnFace > 0
-      ? [
-          { loX: 0, hiX: laneLenOnFace, floorDeltaMm: 0 },
-          { loX: laneLenOnFace, hiX: outFace2.run, floorDeltaMm: underFloorZ },
-        ]
-      : [{ loX: 0, hiX: outFace2.run, floorDeltaMm: underFloorZ }];
+    const { floorDeltaSegs: floorDeltaSegs2, fallbackCeilingProfile: fallbackCeilingProfile2 } =
+      laneSegsFor(outFace2, cutOf('2').landingEnd);
     // 項目A: floorSegments/ceilingProfileはbuildLaneFloorAndCeiling（above層の実Room有無）で
-    // 決める——laneLenOnFace境界だけの決め打ちだった旧実装を置き換える。fallbackCeilingProfile2
-    // はaboveLayer未指定時に使う旧来のリテラル（挙動不変）。
-    // 最上階キャップの分岐は廃止（buildLaneFloorAndCeiling参照）。フォールバックも常に
-    // 「上り口側=1F天井 → 奥の吹抜け=上階天井」の形にする。
-    const fallbackCeilingProfile2 = laneLenOnFace > 0
-        ? [[0, ceilLowAbs], [laneLenOnFace, ceilTopAbs], [outFace2.run, ceilTopAbs]]
-        : [[0, ceilTopAbs], [outFace2.run, ceilTopAbs]];
+    // 決める——レーン境界だけの決め打ちだった旧実装を置き換える。fallbackCeilingProfile2
+    // はaboveLayer未指定時に使う旧来のリテラル。
     const { floorSegments: rawSegments2, ceilingProfile: ceilingProfile2 } = buildLaneFloorAndCeiling(
       outFace2, floorDeltaSegs2, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, fallbackCeilingProfile2);
     const floorProfile2 = floorProfileFor(cutOf('2'), rawSegments2);
     const soffit2 = applySoffit('2', ceilingProfile2);
     entries.push({
-      seqNo: '2', face: outFace2,
+      seqNo: '2', face: outFace2, landingEnd: cutOf('2').landingEnd,
       floorSegments: withFlatLineSpans(rawSegments2, floorProfile2),
       floorProfile: floorProfile2,
       ceilingProfile: soffit2 ? soffit2.ceilingProfile : ceilingProfile2,
@@ -822,27 +843,17 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // seq2と同じく、面は切断定義表が持つ「その切断が見ている面」を使う（上のコメント参照）。
   const outFace4 = cutOf('4').face;
   {
-    const laneLenOnFace4 = Math.max(0, outFace4.run - landingLen);
-    const landingHi4 = outFace4.run - laneLenOnFace4;
-    // seq2と同じ規則（seq4は踊り場が左・レーンが右の鏡像構成のため、レーンは第2区間で
-    // 1FLのはり出しは**右端側**に出る）。
-    const floorDeltaSegs4 = landingHi4 < outFace4.run
-      ? [
-          { loX: 0, hiX: landingHi4, floorDeltaMm: underFloorZ },
-          { loX: landingHi4, hiX: outFace4.run, floorDeltaMm: 0 },
-        ]
-      : [{ loX: 0, hiX: outFace4.run, floorDeltaMm: underFloorZ }];
+    // seq2と同じ規則（seq4はseq2の鏡像構成で踊り場側の端が逆になる。端は landingEnd から）。
+    const { floorDeltaSegs: floorDeltaSegs4, fallbackCeilingProfile: fallbackCeilingProfile4 } =
+      laneSegsFor(outFace4, cutOf('4').landingEnd);
     // 項目A: seq2と同じくbuildLaneFloorAndCeilingで決める（fallbackCeilingProfile4は
-    // aboveLayer未指定時に使う旧来のリテラル。挙動不変）。
-    const fallbackCeilingProfile4 = landingHi4 < outFace4.run
-        ? [[0, ceilTopAbs], [landingHi4, ceilTopAbs], [outFace4.run, ceilLowAbs]]
-        : [[0, ceilTopAbs], [outFace4.run, ceilTopAbs]];
+    // aboveLayer未指定時に使う旧来のリテラル）。
     const { floorSegments: rawSegments4, ceilingProfile: ceilingProfile4 } = buildLaneFloorAndCeiling(
       outFace4, floorDeltaSegs4, aboveLayer, probeCtx, ceilLowAbs, ceilTopAbs, fallbackCeilingProfile4);
     const floorProfile4 = floorProfileFor(cutOf('4'), rawSegments4);
     const soffit4 = applySoffit('4', ceilingProfile4);
     entries.push({
-      seqNo: '4', face: outFace4,
+      seqNo: '4', face: outFace4, landingEnd: cutOf('4').landingEnd,
       floorSegments: withFlatLineSpans(rawSegments4, floorProfile4),
       floorProfile: floorProfile4,
       ceilingProfile: soffit4 ? soffit4.ceilingProfile : ceilingProfile4,
@@ -851,14 +862,14 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     });
   }
 
-  // ---- 5: 復路断面を反対側から見た図（踊り場が右端） ----
+  // ---- 5: 復路断面を反対側から見た図（踊り場側の端は landingEnd。「6」では右端） ----
   {
     const outFace5 = cutOf('5').face;
     const rawSegments5 = flatFloorSegments(outFace5.run, underFloorZ, ceilTopAbs - underFloorZ);
     const floorProfile5 = floorProfileFor(cutOf('5'), rawSegments5);
     const soffit5 = applySoffit('5', null);
     entries.push({
-      seqNo: '5', face: outFace5,
+      seqNo: '5', face: outFace5, landingEnd: cutOf('5').landingEnd,
       floorSegments: withFlatLineSpans(rawSegments5, floorProfile5),
       floorProfile: floorProfile5,
       ...(soffit5 ? { ceilingProfile: soffit5.ceilingProfile } : {}),
@@ -873,10 +884,10 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // **記号は切断の「視線の向き」だけで決まる**——`cut.viewSign`は視線が向く世界方向
   // （`isSightlineShape`の契約: 見えがかり候補は line から+viewSign側にある）なので、
   // 面の規約（`letterOf(isVertical, inward)`。inwardは視線と逆向き）へは`-viewSign`を渡す。
-  // 旧実装は`reorientFace`が倒したdirSignから引いていたが、**dirSignは歩行方向で決まる作図順**
-  // であって視線ではない——実機で seq2 と seq5 は同じ towardS1（＝同じ向きを見る）なのに
-  // dirSignが違うため別記号になっていた（ユーザー指摘: どちらもD）。seq4だけが towardS0＝逆向きで
-  // B になる（前ラウンドのご指摘とも一致）。
+  // 旧実装は`reorientFace`が歩行方向で倒したdirSignから引いていたため、実機で seq2 と seq5 は同じ
+  // towardS1（＝同じ向きを見る）なのに別記号になっていた（ユーザー指摘: どちらもD）。seq4だけが
+  // towardS0＝逆向きで B になる。2026-10-15 以降は dirSign も同じ視線の規則（`viewDirSign`）で決まる
+  // ので記号と dirSign は常に `DIR_SIGN[letter]===dirSign` を満たすが、採番の入口は視線のまま。
   // labelは歩行順に採番し直す（`labelFaces`。部屋のコンパス順の連番を持ち込まない）。
   const relabeled = labelFaces(entries.map(e => {
     const cut = cutOf(e.seqNo);
@@ -898,7 +909,9 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
 
 // 面の左右の端で「踊り場スラブが切れる」のはどちら側か。
 //   - 幅方向に横断する面（seq1=上り口・seq3=踊り場の壁）は面の全長で踊り場を横切る＝両端とも踊り場側。
-//   - 走行方向の面（seq2/5は上り口が左・踊り場が右、seq4はその鏡像）は片側だけ。
+//   - 走行方向の面（seq2/4/5）は片側だけ。どちらの端かは階段の回転方向で変わる（ユーザー裁定 2026-10-15）ので、
+//     entry.landingEnd（切断定義表が面の向きから決める）を使う。この表は landingEnd を持たない呼び出し
+//     （「6」の構成＝seq2/5 は踊り場が右・seq4 は左）の既定。
 // 走行方向の面のもう一方の端（上り口側）は、壁の向こうの通常の部屋の断面（1F天井・2FL）が現れる。
 const LANDING_END_BY_SEQ = { '1': 'both', '2': 'right', '3': 'both', '4': 'left', '5': 'right' };
 
@@ -941,7 +954,7 @@ export function stairChDimChains(entries, h) {
   const out = [];
   let prevKey = null;
   for (const e of entries) {
-    const side = LANDING_END_BY_SEQ[e.seqNo] ?? 'both';
+    const side = e.landingEnd ?? LANDING_END_BY_SEQ[e.seqNo] ?? 'both';
     const leftChain  = valid(side === 'left'  || side === 'both' ? landingWith(soffitUpper(e.seqNo, 'left')) : normal);
     const rightChain = valid(side === 'right' || side === 'both' ? landingWith(soffitUpper(e.seqNo, 'right')) : normal);
     const left  = key(leftChain)  !== prevKey ? leftChain  : null;

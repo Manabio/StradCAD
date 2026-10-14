@@ -42,7 +42,7 @@ function makeGraph(name = 'p1') {
 // （flatLineSpanX.loを付けない）という規約を空スパンと区別できない。
 function makeSwitchbackFixture(graph, {
   withMidWall = false, midWallGraph = null, upperLandingOnly = false, withRoomUnder = true, entryGapMm = 0,
-  type = StairType.SWITCHBACK, sections = [6, 1, 6],
+  type = StairType.SWITCHBACK, sections = [6, 1, 6], flip = true,
 } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -102,7 +102,10 @@ function makeSwitchbackFixture(graph, {
 
   const stair = graph.addStair({
     type, cells, roomId: room.id,
-    sections, riser: null, upDirection: 'up', flip: false,
+    // flip=true＝実機「6」と同じ回転方向（up+flip=true。往路が x 大側、踊り場から上り口を見返すと往路が左）。
+    // 2026-10-15 まで flip=false（逆回転）だったが、図の左右を視線の向きで決める裁定で「上り口が左」等の
+    // 期待が逆回転では成り立たなくなったため、「6」と同じ回転に揃えた（flip オプションで逆回転も作れる）。
+    sections, riser: null, upDirection: 'up', flip,
   });
   if (withRoomUnder) {
     const beyond = cellsBeyondBreak(stair, graph, stair.riser ?? null);
@@ -1093,7 +1096,7 @@ test('【回帰】stairFaceSequence: 浅い階段室(spans=null)でもseq2/4のf
 // 実機（幅1500+1500・走行部2500+踊り場1000）で確認された不具合の再現・回帰テスト。
 // switchbackCuts.test.jsのmakeUserDimsFixtureと同一構成（往路レーンx:0-1500・復路レーンx:1500-3000、
 // upDirection='up'）。
-function makeUserDimsFixture(graph, upDirection = 'up', flip = false) {
+function makeUserDimsFixture(graph, upDirection = 'up', flip = true) { // 既定は実機「6」と同じ回転（up+flip=true）
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
@@ -1264,28 +1267,42 @@ test('stairFaceSequence: 階段の足元が面の内側にあるとき、seq2の
 // 行うs反転（ss=1-s）を反映していなかった——実機データがflip===trueだと、往路(outbound)の
 // 梯子・ジグザグが幅方向で本来と逆の半分（acrossLo側に固定）に描かれてしまう。
 // stairContributionをf.pt(0,s)（switchbackCuts.jsのacrossCoordAtと同じ導出）ベースへ修正した。
-// 「往路レーンが常に図の左」を upDirection(4方向) × flip(2値) の全8通りで固定する。
-test('【QA修正・実機フィードバックR2】stairFaceSequence: upDirection×flipの全8通りで、seq1の破線梯子(往路)は常に実線梯子(復路)より左になる', () => {
+// 往路レーンが図の左右どちらに来るかは**階段の回転方向次第**（ユーザー裁定 2026-10-15「上り口の左右は、
+// 回転方向次第」「仮想断面から見て、通り芯の配置は一意に決まる」）。upDirection(4方向) × flip(2値) の全8通りで、
+// 視線の向きから手で決めた「左手側」（y 下向き正の平面で、向き d=(dx,dy) の左手は (dy,−dx)。東を向けば北が左）に
+// 往路レーン(s=0)があるときだけ破線梯子が左に来ることを固定する。8通りのうち4通りは往路が左、4通りは右。
+test('【裁定2026-10-15】stairFaceSequence: upDirection×flipの全8通りで、seq1の破線梯子(往路)は視線の左手側に往路レーンがあるときだけ左になる（往路が左=4通り・右=4通り）', () => {
+  const sides = [];
   for (const upDirection of ['up', 'down', 'left', 'right']) {
     for (const flip of [false, true]) {
       const graph = makeGraph();
       const { room, stair } = makeUserDimsFixture(graph, upDirection, flip);
       const faces = composeRoomFaces(room, graph);
+      const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
       const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
       const seq1 = entries.find(e => e.seqNo === '1');
+      const cut1 = table.cuts.find(c => c.seqNo === '1');
+      // 視線の左手側の世界方向（切断線に沿う軸の符号）。縦線（x=一定）なら視線は ±x で左手は −viewSign·y、
+      // 横線なら視線は ±y で左手は +viewSign·x。
+      const leftSign = cut1.line.isVertical ? -cut1.viewSign : cut1.viewSign;
+      const f = table.contribution.flights;
+      const outboundMid = (f[0].acrossLo + f[0].acrossHi) / 2, inboundMid = (f[1].acrossLo + f[1].acrossHi) / 2;
+      const outboundIsLeft = (outboundMid - inboundMid) * leftSign > 0;
+      sides.push(outboundIsLeft);
       const rungs = seq1.content.filter(p =>
         p.type === 'line' && p.y1 === p.y2 && p.x1 !== p.x2 && p.weight === 'thin' &&
         !(Math.min(p.x1, p.x2) <= 1e-6 && Math.max(p.x1, p.x2) >= seq1.face.run - 1e-6));
-      const dashedXs = rungs.filter(p => p.dash === 'dashed').map(p => Math.max(p.x1, p.x2));
-      const solidXs  = rungs.filter(p => p.dash === undefined).map(p => Math.min(p.x1, p.x2));
+      const dashedXs = rungs.filter(p => p.dash === 'dashed').map(p => (p.x1 + p.x2) / 2);
+      const solidXs  = rungs.filter(p => p.dash === undefined).map(p => (p.x1 + p.x2) / 2);
       assert.ok(dashedXs.length > 0 && solidXs.length > 0,
         `upDirection=${upDirection},flip=${flip}: 破線・実線の踏面梯子が両方あるはず`);
-      const dashedMaxX = Math.max(...dashedXs), solidMinX = Math.min(...solidXs);
-      assert.ok(dashedMaxX <= solidMinX + 1e-6,
-        `upDirection=${upDirection},flip=${flip}: 破線(往路)は左側・実線(復路)は右側のはず` +
-        `（破線最大x=${dashedMaxX}, 実線最小x=${solidMinX}）`);
+      const dashedMid = Math.max(...dashedXs), solidMid = Math.min(...solidXs);
+      assert.equal(dashedMid < solidMid, outboundIsLeft,
+        `upDirection=${upDirection},flip=${flip}: 往路が視線の左手側なら破線(往路)が左のはず（左手側=${outboundIsLeft}・破線x=${dashedMid}・実線x=${solidMid}）`);
+      assert.equal(cut1.dirSign, -leftSign, `upDirection=${upDirection},flip=${flip}: 左手側がローカル x=0`);
     }
   }
+  assert.equal(sides.filter(Boolean).length, 4, '8通りのうち往路が左は4通り（回転方向で決まる。検出力）');
 });
 
 // ---- QA実機フィードバックR2: 設置階FL線が階段断面の下を貫通する不具合の追加発生源 ----
@@ -2280,22 +2297,30 @@ function seq1UpperFloorLines(graph, upperGraph, { room, stair }) {
       && p.y1 === -OPTS.floorHeight && p.y2 === -OPTS.floorHeight) };
 }
 
+// はり出しは上階の壁が立つ世界 x=2000 側（makeUpperForOverhang の隅）。seq1 の図の左右は視線で決まる
+// （裁定2026-10-15）ので、その端がローカルの lo（左）か hi（右）かは face.dirSign から決める。
+const overhangEndOf = entry => (entry.face.dirSign > 0 ? 'hi' : 'lo');
+const ovAt = (end, mm) => (end === 'hi' ? { lo: 0, hi: mm } : { lo: mm, hi: 0 });
+const outerX = (entry, end, mm) => (end === 'hi' ? entry.face.run + mm : -mm);
+const sortedX = line => [line.x1, line.x2].sort((a, b) => a - b);
+
 test('stairFaceSequence: はり出し外端に上階の切断壁が立つseq1は、壁の向こう側の面から外へ2FL線を張り出す', () => {
   const graph = makeGraph();
   const fixture = makeSwitchbackFixture(graph);
   const upperGraph = makeGraph('p2');
   makeUpperForOverhang(upperGraph);
 
-  const { entry, run, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
-  assert.deepEqual(entry.upperOverhang, { lo: 0, hi: 115 },
+  const { entry, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
+  const end = overhangEndOf(entry), outer = outerX(entry, end, 115);
+  assert.deepEqual(entry.upperOverhang, ovAt(end, 115),
     '隅の壁厚ぶん（115）だけ上階の平面が面の端より外へ続く');
-  assert.deepEqual(entry.upperFloorCutEnds, { lo: null, hi: run + 115 },
-    'はり出し外端(run+115)に切断壁が立つ＝その向こう側の面が2FL線の起点');
+  assert.deepEqual(entry.upperFloorCutEnds, end === 'hi' ? { lo: null, hi: outer } : { lo: outer, hi: null },
+    'はり出し外端(±115)に切断壁が立つ＝その向こう側の面が2FL線の起点');
   assert.equal(lines.length, 1, '2FL線は切断壁の立つ側だけ1本');
-  assert.deepEqual([lines[0].x1, lines[0].x2], [run + 115, run + 115 + 150],
+  assert.deepEqual(sortedX(lines[0]), end === 'hi' ? [outer, outer + 150] : [outer - 150, outer],
     '壁の向こう側の面から外へwallLessEndExtendModelMm(150)ぶん');
   assert.equal(lines[0].weight, weightForRole(ElevationLineRole.CUT), '床の断面線はCUT（太線）');
-  assert.ok(!lines.some(p => Math.min(p.x1, p.x2) < run + 115 - 1e-6),
+  assert.ok(!lines.some(p => (end === 'hi' ? Math.min(p.x1, p.x2) < outer - 1e-6 : Math.max(p.x1, p.x2) > outer + 1e-6)),
     '壁の下（面の端〜向こう側の面）には引かない＝切断壁の断面の中を通さない');
 });
 
@@ -2308,7 +2333,7 @@ test('【失敗系】stairFaceSequence: はり出し外端の壁が切断され�
   makeUpperForOverhang(upperGraph, { cornerFarHalf: false });
 
   const { entry, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
-  assert.deepEqual(entry.upperOverhang, { lo: 0, hi: 115 }, 'はり出し自体は同じ');
+  assert.deepEqual(entry.upperOverhang, ovAt(overhangEndOf(entry), 115), 'はり出し自体は同じ');
   assert.deepEqual(entry.upperFloorCutEnds, { lo: null, hi: null }, '外端に切断壁は立たない');
   // 切断壁が無ければ判断は従来どおり断面線（floorProfile）任せ——seq1の断面線は踊り場の高さで
   // 平らなので上階FLに届かず、1本も引かない（＝実データ「6」Cの修正前の姿）。
@@ -2340,12 +2365,13 @@ test('stairFaceSequence: はり出しの先が上階の吹抜け（床が無い�
   // CL(x=2000)の向こうはVOID＝床が無く、境界には腰壁（cornerFarHalf）だけが立つ構成。
   makeUpperForOverhang(upperGraph, { beyondFeature: RoomFeature.VOID });
 
-  const { entry, run, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
-  assert.deepEqual(entry.upperOverhang, { lo: 0, hi: 115 },
+  const { entry, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
+  const end = overhangEndOf(entry), outer = outerX(entry, end, 115);
+  assert.deepEqual(entry.upperOverhang, ovAt(end, 115),
     'はり出し自体（天井断面線・壁エッジ）は実部屋のときと同じ＝上階の壁は実在する');
-  assert.deepEqual(entry.upperFloorCutEnds, { lo: null, hi: run + 115 },
+  assert.deepEqual(entry.upperFloorCutEnds, end === 'hi' ? { lo: null, hi: outer } : { lo: outer, hi: null },
     '切断壁の判定も同じ＝落とすのはgateであって列の解釈ではない');
-  assert.equal(entry.upperFloorEnds?.hi, false, 'はり出しの向こうに上階の床が無い端');
+  assert.equal(entry.upperFloorEnds?.[end], false, 'はり出しの向こうに上階の床が無い端');
   assert.equal(lines.length, 0, '床の無い位置に2FL線を引かない');
 });
 
@@ -2355,10 +2381,11 @@ test('【失敗系】stairFaceSequence: はり出しの先が上階の実部屋�
   const upperGraph = makeGraph('p2');
   makeUpperForOverhang(upperGraph); // beyondFeature=null＝実Room（実データ「6」Cと同じ）
 
-  const { entry, run, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
-  assert.equal(entry.upperFloorEnds?.hi, true, 'はり出しの向こうに上階の実部屋がある端');
+  const { entry, lines } = seq1UpperFloorLines(graph, upperGraph, fixture);
+  const end = overhangEndOf(entry), outer = outerX(entry, end, 115);
+  assert.equal(entry.upperFloorEnds?.[end], true, 'はり出しの向こうに上階の実部屋がある端');
   assert.equal(lines.length, 1, 'gateは通り、2FL線は1本出る');
-  assert.deepEqual([lines[0].x1, lines[0].x2], [run + 115, run + 115 + 150],
+  assert.deepEqual(sortedX(lines[0]), end === 'hi' ? [outer, outer + 150] : [outer - 150, outer],
     '壁の向こう側の面から外へwallLessEndExtendModelMm(150)ぶん');
 });
 
@@ -2369,7 +2396,8 @@ test('【失敗系】stairFaceSequence: はり出しの先が上階の実部屋�
 // （lo/hi対称。直接のgolden対象「6」D2とはlo/hiが逆だが同じ機構の確認として十分）。 ----
 test('【D1-1】stairFaceSequence: 階段自身のpolyline(CUT/DETAIL)は面の真の境界＋upperOverhangを越えない', () => {
   const graph = makeGraph();
-  const fixture = makeSwitchbackFixture(graph);
+  // flip=false: 復路の外側の壁(wOut2)が makeUpperForOverhang の隅（x=2000）側に来る回転（seq5 にはり出しを持たせる）
+  const fixture = makeSwitchbackFixture(graph, { flip: false });
   fixture.stair.setField('structure', StructuralMaterialType.STEEL);
   const upperGraph = makeGraph('p2');
   // makeUpperForOverhangはMobX strict-mode外でwall.endOffsetを書き換える（既存ヘルパーの仕様。
@@ -2395,8 +2423,9 @@ test('【D1-1】stairFaceSequence: 階段自身のpolyline(CUT/DETAIL)は面の�
         `階段のpolyline点 x=${x} が面の真の境界＋overhang[${range.lo},${range.hi}]の外`);
     }
   }
-  assert.ok(polylines.some(p => p.points.some(([x]) => Math.abs(x - range.lo) < 1e-6)),
-    'はり出しの境界(local -57.5)ちょうどまで達するpolylineがあるはず（出口クリップが効いている証拠）');
+  // 図の左右は視線で決まる（裁定2026-10-15）ので、踊り場側のはり出しの境界は lo/hi のどちらかに来る。
+  assert.ok(polylines.some(p => p.points.some(([x]) => Math.abs(x - range.lo) < 1e-6 || Math.abs(x - range.hi) < 1e-6)),
+    'はり出しの境界(local −57.5 または run+57.5)ちょうどまで達するpolylineがあるはず（出口クリップが効いている証拠）');
 });
 
 // ---- QA是正2026-09-12その6: stairOverhangOuterはupperOverhangと同じ勝ち窓から返す ----
@@ -2530,4 +2559,51 @@ test('【2026-10-14】stairFaceSequence: seq3（踊り場の壁）の展開記�
     assert.equal(f.originWorld, looksPlusY ? f.hi : f.lo);
   }
   assert.deepEqual([...seen].sort(), ['A', 'C'], '前提: up/down で両向き（A と C）を踏む（検出力）');
+});
+
+// ---- 裁定2026-10-15: 逆回転（up+flip=false）では seq2 の踊り場が左・seq4 の踊り場が右。歩行順の決め打ち
+// （seq2 は踊り場が右）を持つ下流（床区間・フォールバックの天井・CH 寸法の鎖）が landingEnd に従うことを固定する ----
+function reversedRotationEntries() {
+  const graph = makeGraph();
+  const { room, stair } = makeUserDimsFixture(graph, 'up', false);
+  const faces = composeRoomFaces(room, graph);
+  const table = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }); // above 層なし＝天井はフォールバック
+  const by = Object.fromEntries(entries.map(e => [e.seqNo, e]));
+  assert.equal(by['2'].landingEnd, 'left', '前提: 逆回転では seq2 の踊り場が左');
+  assert.equal(by['4'].landingEnd, 'right', '前提: 逆回転では seq4 の踊り場が右');
+  assert.equal(by['5'].landingEnd, 'left', '前提: seq5 は seq2 と同じ');
+  return { entries, by, landingAbs: table.landingAbs };
+}
+
+test('【失敗系・裁定2026-10-15】stairFaceSequence: 逆回転では seq2 の床区間は左が踊り場・右がレーン（天井は左=上階天井・右=1F天井）、seq4 はその逆', () => {
+  const { by, landingAbs } = reversedRotationEntries();
+  const s2 = by['2'], s4 = by['4'];
+  assert.equal(s2.floorSegments.length, 2); assert.equal(s4.floorSegments.length, 2);
+  assert.ok(Math.abs(s2.floorSegments[0].floorDeltaMm - landingAbs) < 1e-9, 'seq2 左区間は踊り場（landingAbs）');
+  assert.equal(s2.floorSegments[1].floorDeltaMm, 0, 'seq2 右区間はレーン（0）');
+  assert.equal(s2.ceilingProfile[0][1], OPTS.chUpperAbsMm, 'seq2 左端（踊り場側＝吹抜け）は上階天井');
+  assert.equal(s2.ceilingProfile[s2.ceilingProfile.length - 1][1], OPTS.chLowerMm, 'seq2 右端（上り口側）は1F天井');
+  assert.equal(s4.floorSegments[0].floorDeltaMm, 0, 'seq4 左区間はレーン（0）');
+  assert.ok(Math.abs(s4.floorSegments[1].floorDeltaMm - landingAbs) < 1e-9, 'seq4 右区間は踊り場');
+  assert.equal(s4.ceilingProfile[0][1], OPTS.chLowerMm, 'seq4 左端（上り口側）は1F天井');
+  assert.equal(s4.ceilingProfile[s4.ceilingProfile.length - 1][1], OPTS.chUpperAbsMm, 'seq4 右端（踊り場側）は上階天井');
+});
+
+test('【失敗系・裁定2026-10-15】stairChDimChains: 逆回転では seq2/seq5 の踊り場の鎖が左端・seq4 は右端（反対の端は壁の向こうの通常断面）', () => {
+  const { entries, landingAbs } = reversedRotationEntries();
+  const chains = stairChDimChains(entries, {
+    landingAbs, hasRoomUnder: true, chLowerMm: OPTS.chLowerMm, floorHeight: OPTS.floorHeight, chUpperAbsMm: OPTS.chUpperAbsMm,
+  });
+  const landingChain = [[landingAbs, OPTS.floorHeight], [OPTS.floorHeight, OPTS.chUpperAbsMm]];
+  const normalChain = [[0, OPTS.chLowerMm], [OPTS.floorHeight, OPTS.chUpperAbsMm]];
+  const near = (a, b) => JSON.stringify(a.map(([x, y]) => [Math.round(x), Math.round(y)])) === JSON.stringify(b.map(([x, y]) => [Math.round(x), Math.round(y)]));
+  // 「前の端と変わったときだけ記入」の省略を避け、面ごとに左右の鎖そのものを見るため 1 面ずつ渡す
+  const chainsOf = seqNo => stairChDimChains([entries.find(e => e.seqNo === seqNo)], {
+    landingAbs, hasRoomUnder: true, chLowerMm: OPTS.chLowerMm, floorHeight: OPTS.floorHeight, chUpperAbsMm: OPTS.chUpperAbsMm,
+  })[0];
+  assert.ok(near(chainsOf('2').left, landingChain) && near(chainsOf('2').right, normalChain), 'seq2: 左=踊り場の鎖・右=通常断面');
+  assert.ok(near(chainsOf('4').left, normalChain) && near(chainsOf('4').right, landingChain), 'seq4: 左=通常断面・右=踊り場の鎖');
+  assert.ok(near(chainsOf('5').left, landingChain) && near(chainsOf('5').right, normalChain), 'seq5: 左=踊り場の鎖・右=通常断面');
+  assert.equal(chains.length, entries.length, '全面ぶん返る');
 });

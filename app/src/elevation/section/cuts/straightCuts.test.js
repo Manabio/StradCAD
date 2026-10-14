@@ -184,19 +184,38 @@ test('【失敗系・QA指摘F5】straightCuts: opts.layersが配列でなけれ
 // 歩行方向（上り口(t=0)→到達端(t=1)）から独立に導出する（reorientFace。switchbackCuts.js参照）。
 // 既存のmakeStraightFixture（upDirection='up'）はたまたま部屋の向きと歩行方向が一致し不具合が
 // 顕在化しないため、upDirection='down'（同じ部屋形状で歩行方向だけ反転）で検証する。====
-test('【QA修正・実機フィードバック】straightCuts: seq2の面は上り口(entryWorld)がローカルx=0側になる（部屋のコンパス向きに関わらず）', () => {
-  const graph = makeGraph();
-  const { room, stair } = makeStraightFixture(graph, { type: StairType.STRAIGHT });
-  stair.setField('upDirection', 'down'); // 部屋の向きは変えず歩行方向だけ反転する
-  const faces = composeRoomFaces(room, graph);
-
-  const result = straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
-  assert.ok(result);
-  const seq2 = result.cuts.find(c => c.seqNo === '2');
-  const entryWorld = 0;    // upDirection='down'はcoordAt(t)=b.y1+t*(b.y2-b.y1)なのでt=0はb.y1=0
-  const arrivalWorld = 3000;
-  const localXOfEntry = (entryWorld - seq2.face.originWorld) * seq2.face.dirSign;
-  const localXOfArrival = (arrivalWorld - seq2.face.originWorld) * seq2.face.dirSign;
-  assert.ok(localXOfEntry < localXOfArrival,
-    `上り口がローカルx=0側(左)・到達端が右側のはず（上り口局所x=${localXOfEntry}, 到達端局所x=${localXOfArrival}）`);
+// ユーザー裁定 2026-10-15: 図の左右は仮想断面の視線の向きだけで決まる（上り口の左右は向き次第）。
+// 視線の左手側の世界方向（切断線に沿う軸の符号。y 下向き正で向き d の左手は (dy,−dx)）: 縦線なら −viewSign、横線なら +viewSign。
+const leftSignOf = cut => (cut.line.isVertical ? -cut.viewSign : cut.viewSign);
+test('【裁定2026-10-15】straightCuts: 全 cut のローカル x=0 は視線の左手側。seq2 は s=0 側の壁・seq4 は s=1 側の壁を見る（逆向き・鏡像）。up/down × flip の4通り', () => {
+  const entryLeftSeen = new Set();
+  for (const up of ['up', 'down']) {
+    for (const flip of [false, true]) {
+      const graph = makeGraph();
+      const { room, stair } = makeStraightFixture(graph, { type: StairType.STRAIGHT });
+      stair.setField('upDirection', up); // 部屋の向きは変えず歩行方向だけ変える
+      stair.setField('flip', flip);
+      const faces = composeRoomFaces(room, graph);
+      const result = straightCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+      assert.ok(result);
+      const tag = `up=${up},flip=${flip}`;
+      for (const c of result.cuts) {
+        assert.equal(c.dirSign, -leftSignOf(c), `${tag} seq${c.seqNo}: 左手側がローカル x=0`);
+        assert.equal(c.face.dirSign, c.dirSign, `${tag} seq${c.seqNo}: face と cut の向きが一致`);
+      }
+      const seq2 = result.cuts.find(c => c.seqNo === '2'), seq4 = result.cuts.find(c => c.seqNo === '4');
+      assert.equal(seq2.viewSign, -seq4.viewSign, `${tag}: seq2 と seq4 は逆向きを見る（同じ壁を2度描かない）`);
+      assert.equal(seq2.dirSign, -seq4.dirSign, `${tag}: seq2 と seq4 は鏡像`);
+      // seq2 は s=0 側（wOut1）を見る: 視線の前方に wOut1 の面がある
+      assert.ok((result.wOut1.faceValue - seq2.line.axisValue) * seq2.viewSign > 0, `${tag}: seq2 の視線の前方は wOut1`);
+      assert.ok((result.wOut2.faceValue - seq4.line.axisValue) * seq4.viewSign > 0, `${tag}: seq4 の視線の前方は wOut2`);
+      // 上り口（t=0）は視線の左手側にあるときだけ左（up: t=0 は y=3000、down: y=0）
+      const entryWorld = up === 'down' ? 0 : 3000, arrivalWorld = up === 'down' ? 3000 : 0;
+      const localX = w => (w - seq2.face.originWorld) * seq2.face.dirSign;
+      const entryIsLeft = (entryWorld - arrivalWorld) * leftSignOf(seq2) > 0;
+      assert.equal(localX(entryWorld) < localX(arrivalWorld), entryIsLeft, `${tag} seq2: 上り口の左右は視線で決まる`);
+      entryLeftSeen.add(entryIsLeft);
+    }
+  }
+  assert.deepEqual([...entryLeftSeen].sort(), [false, true], '前提: 上り口が左になる向きと右になる向きの両方を踏む（検出力）');
 });

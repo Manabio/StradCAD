@@ -186,8 +186,12 @@ test('【E5】stairFaceSequence: 各 seq の天井（ceilingProfile）が、切�
     }
   }
   // 往路（seq2）は上り口 2400 付近から踊り場 ZA まで登り、踊り場は平ら。復路（seq5）は上階（N+2 側）へさらに登る
-  const seq2 = entries.find(e => e.seqNo === '2').ceilingProfile, seq5 = entries.find(e => e.seqNo === '5').ceilingProfile;
-  assert.ok(seq2[0][1] < 2500 && Math.abs(seq2[seq2.length - 1][1] - ZA) < 0.05, 'seq2: 上り口 → 踊り場');
+  const e2 = entries.find(e => e.seqNo === '2');
+  const seq2 = e2.ceilingProfile, seq5 = entries.find(e => e.seqNo === '5').ceilingProfile;
+  // 上り口が左右どちらかは回転方向次第（裁定2026-10-15。この fixture は flip=false で上り口が右）。踊り場側の端は landingEnd。
+  const [entryZ, landingZ] = e2.landingEnd === 'right'
+    ? [seq2[0][1], seq2[seq2.length - 1][1]] : [seq2[seq2.length - 1][1], seq2[0][1]];
+  assert.ok(entryZ < 2500 && Math.abs(landingZ - ZA) < 0.05, `seq2: 上り口 → 踊り場（landingEnd=${e2.landingEnd}）`);
   assert.ok(Math.max(...seq5.map(p => p[1])) > ZA + 1000, 'seq5: 復路は踊り場より高く登る');
 });
 
