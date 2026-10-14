@@ -661,6 +661,7 @@ defer: 天井高さが異なる内部境界（壁の無い部屋内部）の
 帯は**直交壁の材の範囲（`wallMaterialRangeForOpening`）の上に置く**（枠は材の範囲±`FRAME_OVERHANG_MM`。置き方は切断帯 sectionEmit.js と同じ。範囲は、sectionEmit が壁1枚の `band.wall.materialRange`、隅の断面は同じ軸CLの実壁の合併。
 面端から部屋の内側へ伸ばさない＝ユーザー指摘2026-10-13）。壁が引けない合成faceだけ、既定の見込で面端の**外側**に置く。
 面端の縦線（壁断面の縁。CUT）は、この隅の建具断面を描く建具の開口範囲では描かない（窓台〜上端を引いた残り。sectionEmit の openingPassThrough と同じ規則。ユーザー指摘2026-10-13「建具上から床までは不要」）。
+床まで達する建具（窓台のある窓を除く。巾木と同じ述語）の隅断面がある端では、**区間の床断面線を断面の外縁（`cornerSection` が返す rect の外縁）まで伸ばす**——扉の下で床が隣室へ続く（ユーザー指示2026-10-14 moku4-3 2階 廊下C の X3）。天井線・巾木・面端の縦線・`drawnX0/Run` は伸ばさない。`floorSpanX` のクランプ後に適用し、`lowerOverhang` とは遠い方を採る。
 
 ## 腰壁の天端・端部の見えがかり（`kneeCapMarksOnFace`。仕様2026-08）
 天端は壁の上端から下への帯（`.claude/data-model.md`参照）なので、面自身が腰壁のときは

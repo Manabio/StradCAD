@@ -742,8 +742,50 @@ export function buildFaceFigure(face, ctx) {
   // **区間の床断面線だけ**がこの範囲まで伸びる——天井線・巾木・段差縦線・面端の縦線は
   // その面の端で終わる。はり出し区間の上端（下階の天井）と外端（下階の壁エッジ）は断面
   // エンジンのcontentが描くので、図側が足すのは下辺＝下階の床断面線の延長だけでよい。
-  const floorX0   = drawnX0   - (lowerOverhang?.lo ?? 0);
-  const floorXRun = drawnXRun + (lowerOverhang?.hi ?? 0);
+  // 直交壁の建具が切断位置にかかる場合、その断面（枠2断面＋扉1枚）を面の両端に描く（項目3）。
+  // 新仕様「開放スパン」: extendedAtLocal0/Run=true（開放スパンで延長された端）はそもそも
+  // 実在する隅ではない（prevFace/nextFaceの隅共有という前提が成立しない）ため、断面を描かない。
+  // 壁のない端部（hasWallAtLocal0/Run=false。直交壁が切断面を横切らない凹み角等）も同様——
+  // 壁の切断面自体を描かない端に建具の断面だけ残すと「ここに切断面がある」と誤読される
+  // （QA指摘: 隅共有の前提が凹み角で崩れたのに合わせてガードを拡張）。
+  // 断面も姿図と同様、その隅の実際の床（floorSegments）に乗せる（隅は両面で床を共有するため、
+  // 自面の端x=0/runの床yを使えば隣接面側の実効FLと一致する）。
+  // 帯は**直交壁の材の範囲の上**に置く（ユーザー指摘2026-10-13「X3の扉断面が壁厚分部屋内に出ている」。
+  // 切断帯 sectionEmit.js と同じ置き方）。面端から部屋の内側へ伸ばすと壁厚ぶん部屋内へずれる。
+  // 壁が引けない（合成face）ときは既定の見込で**面の外側**へ置く（部屋の内側には伸ばさない）。
+  const cornerSection = (o, atEnd) => {
+    const mr = wallMaterialRangeForOpening(o, graph);
+    const sgn = face.dirSign ?? 1;
+    if (mr) {
+      // 直交壁の厚み方向座標は面の長さ方向の座標なのでそのまま面ローカルxへ写せる。
+      const a = localXOf(face, mr.lo), b = localXOf(face, mr.hi);
+      return openingSectionPrimitives(o, Math.min(a, b) - FRAME_OVERHANG_MM, 1, cutWeight, silhouetteWeight,
+        { wallThicknessMm: Math.abs(mr.hi - mr.lo), worldPerDirSign: sgn, detailWeight });
+    }
+    return atEnd
+      ? openingSectionPrimitives(o, run - FRAME_OVERHANG_MM, 1, cutWeight, silhouetteWeight,
+        { worldPerDirSign: sgn, detailWeight })
+      : openingSectionPrimitives(o, FRAME_OVERHANG_MM, -1, cutWeight, silhouetteWeight,
+        { worldPerDirSign: -sgn, detailWeight });
+  };
+  // 隅の建具断面（始端・終端。y は未平行移動＝隅の床 dy 前）。描く条件は従来どおり。
+  const cornerSecs = [[], []];
+  if (prevFace && !face.extendedAtLocal0 && (face.hasWallAtLocal0 ?? true)) {
+    for (const o of openingsReachingCorner(prevFace, graph, 'end')) cornerSecs[0].push({ o, prims: cornerSection(o, false) });
+  }
+  if (nextFace && !face.extendedAtLocalRun && (face.hasWallAtLocalRun ?? true)) {
+    for (const o of openingsReachingCorner(nextFace, graph, 'start')) cornerSecs[1].push({ o, prims: cornerSection(o, true) });
+  }
+  // 床まで達する建具（窓台のある窓は壁が下に残るので除く。巾木と同じ述語）の隅断面がある端では、
+  // 区間の床断面線を断面の外縁まで伸ばす——扉の下で床が隣室へ続く（ユーザー指示2026-10-14
+  // 「moku4-3 2階展開図 廊下C: X3 建具下床断面は X3 の外側まではね出し」）。外縁は cornerSection が
+  // 返す rect から取る（単一供給源）。天井線・巾木・面端の縦線・drawnX0/drawnXRun は伸ばさない。
+  const reachesFloor = o => (o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0) === 0;
+  const cornerRectsOf = list => list.filter(c => reachesFloor(c.o)).flatMap(c => c.prims.filter(p => p.type === 'rect'));
+  const cornerFloorLo = Math.min(Infinity, ...cornerRectsOf(cornerSecs[0]).map(p => p.x));
+  const cornerFloorHi = Math.max(-Infinity, ...cornerRectsOf(cornerSecs[1]).map(p => p.x + p.w));
+  const floorX0   = Math.min(drawnX0   - (lowerOverhang?.lo ?? 0), cornerFloorLo);
+  const floorXRun = Math.max(drawnXRun + (lowerOverhang?.hi ?? 0), cornerFloorHi);
 
   // 新仕様「段差位置のCLオフセット」: 内部境界（区間水平床線の端x・段差縦線x）は寸法・CL位置
   // （segs[i].hiX＝オフセット前）そのものではなく、床が低い側へ半壁厚ぶんずらした位置
@@ -1268,45 +1310,20 @@ export function buildFaceFigure(face, ctx) {
     for (let i = primStart; i < prims.length; i++) prims[i].openingId = o.id;
   }
 
-  // 直交壁の建具が切断位置にかかる場合、その断面（枠2断面＋扉1枚）を面の両端に描く（項目3）。
-  // 新仕様「開放スパン」: extendedAtLocal0/Run=true（開放スパンで延長された端）はそもそも
-  // 実在する隅ではない（prevFace/nextFaceの隅共有という前提が成立しない）ため、断面を描かない。
-  // 壁のない端部（hasWallAtLocal0/Run=false。直交壁が切断面を横切らない凹み角等）も同様——
-  // 壁の切断面自体を描かない端に建具の断面だけ残すと「ここに切断面がある」と誤読される
-  // （QA指摘: 隅共有の前提が凹み角で崩れたのに合わせてガードを拡張）。
-  // 断面も姿図と同様、その隅の実際の床（floorSegments）に乗せる（隅は両面で床を共有するため、
-  // 自面の端x=0/runの床yを使えば隣接面側の実効FLと一致する）。
-  // 帯は**直交壁の材の範囲の上**に置く（ユーザー指摘2026-10-13「X3の扉断面が壁厚分部屋内に出ている」。
-  // 切断帯 sectionEmit.js と同じ置き方）。面端から部屋の内側へ伸ばすと壁厚ぶん部屋内へずれる。
-  // 壁が引けない（合成face）ときは既定の見込で**面の外側**へ置く（部屋の内側には伸ばさない）。
-  const cornerSection = (o, atEnd) => {
-    const mr = wallMaterialRangeForOpening(o, graph);
-    const sgn = face.dirSign ?? 1;
-    if (mr) {
-      // 直交壁の厚み方向座標は面の長さ方向の座標なのでそのまま面ローカルxへ写せる。
-      const a = localXOf(face, mr.lo), b = localXOf(face, mr.hi);
-      return openingSectionPrimitives(o, Math.min(a, b) - FRAME_OVERHANG_MM, 1, cutWeight, silhouetteWeight,
-        { wallThicknessMm: Math.abs(mr.hi - mr.lo), worldPerDirSign: sgn, detailWeight });
-    }
-    return atEnd
-      ? openingSectionPrimitives(o, run - FRAME_OVERHANG_MM, 1, cutWeight, silhouetteWeight,
-        { worldPerDirSign: sgn, detailWeight })
-      : openingSectionPrimitives(o, FRAME_OVERHANG_MM, -1, cutWeight, silhouetteWeight,
-        { worldPerDirSign: -sgn, detailWeight });
-  };
+  // 隅の建具断面（cornerSection は床線の計算の前＝上で定義・計算済み。順序はここで push）。
   // 隅の建具の開口範囲（y。上向き負・隅の床 dy を含む）。面端の太線から引く。
   const cornerOpeningYRanges = [[], []];
   if (prevFace && !face.extendedAtLocal0 && (face.hasWallAtLocal0 ?? true)) {
     const dy = floorDyAt(0);
-    for (const o of openingsReachingCorner(prevFace, graph, 'end')) {
-      prims.push(...cornerSection(o, false).map(p => translatePrimitive(p, 0, dy)));
+    for (const c of cornerSecs[0]) {
+      prims.push(...c.prims.map(p => translatePrimitive(p, 0, dy)));
     }
     cornerOpeningYRanges[0] = cornerOpeningZRanges(face, prevFace, 'lo', graph).map(r => cornerYRangeOf(r, dy));
   }
   if (nextFace && !face.extendedAtLocalRun && (face.hasWallAtLocalRun ?? true)) {
     const dy = floorDyAt(run);
-    for (const o of openingsReachingCorner(nextFace, graph, 'start')) {
-      prims.push(...cornerSection(o, true).map(p => translatePrimitive(p, 0, dy)));
+    for (const c of cornerSecs[1]) {
+      prims.push(...c.prims.map(p => translatePrimitive(p, 0, dy)));
     }
     cornerOpeningYRanges[1] = cornerOpeningZRanges(face, nextFace, 'hi', graph).map(r => cornerYRangeOf(r, dy));
   }
@@ -1335,7 +1352,7 @@ export function buildFaceFigure(face, ctx) {
     // 区間」として扱う（既存floorGapsへ足すだけ）。
     const floorGaps = [
       ...openings
-        .filter(o => (o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0) === 0)
+        .filter(reachesFloor)
         .map(o => {
           const localX = localXOf(face, o.centerCoord);
           return [Math.max(0, localX - o.width / 2), Math.min(run, localX + o.width / 2)];

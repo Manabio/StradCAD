@@ -1899,6 +1899,80 @@ for (const [dir, expected] of [[1, [4115, 3988]], [-1, [4000, 4157]]]) {
   });
 }
 
+// ---- 床まで達する建具の隅断面がある端では区間床線を断面の外縁まで伸ばす（ユーザー指示2026-10-14） ----
+// 扉の下で床が隣室へ続く。天井線・巾木・面端の縦線は伸ばさない。
+const floorLineOf = prims => prims.filter(p => p.type === 'line' && p.y1 === 0 && p.y2 === 0 && p.weight === 'thick'
+  && p.x2 - p.x1 > 1000);
+const ceilLineOf = prims => prims.filter(p => p.type === 'line' && p.y1 === -2400 && p.y2 === -2400
+  && p.x2 - p.x1 > 1000);
+const endWall = () => ({ ...perpWall({ lo: 4000, hi: 4145 }), axisCL: { id: 'axisX_right' } });
+const endOpening = (ov = {}) => ({ ...perpOpeningFor(), axisCL: { id: 'axisX_right' }, centerCoord: 100, ...ov });
+const endNextFace = () => makePerpFace({ axisCL: { id: 'axisX_right' }, faceValue: 4000 });
+
+test('【隅の建具断面・床線】始端: 床まで達する扉があれば床線は枠の外縁(-157)まで。天井線・面端の縦線は0のまま', () => {
+  const graph = makeGraph({ openings: [perpOpeningFor()], walls: [perpWall({ lo: -145, hi: 0 })] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  const floor = floorLineOf(prims);
+  assert.equal(floor.length, 1);
+  assert.deepEqual([floor[0].x1, floor[0].x2], [-157, 4000]);
+  const head = cornerSectionRects(prims).find(r => r.weight === 'thick');
+  assert.equal(floor[0].x1, head.x, '床線の外縁は隅の建具断面の rect の外縁');
+  assert.deepEqual(ceilLineOf(prims).map(p => [p.x1, p.x2]), [[0, 4000]]);
+  assert.deepEqual(edgeCutLines(prims, 0), [[-2400, -2000]]);
+});
+
+test('【隅の建具断面・床線】終端: 床線は枠の外縁(4145+12)まで', () => {
+  const graph = makeGraph({ openings: [endOpening()], walls: [endWall()] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: null, nextFace: endNextFace() }));
+  const floor = floorLineOf(prims);
+  assert.equal(floor.length, 1);
+  assert.deepEqual([floor[0].x1, floor[0].x2], [0, 4157]);
+  assert.deepEqual(ceilLineOf(prims).map(p => [p.x1, p.x2]), [[0, 4000]]);
+});
+
+test('【隅の建具断面・床線】dirSign<0 の面でも断面の外縁まで', () => {
+  const graph = makeGraph({ openings: [perpOpeningFor()], walls: [perpWall({ lo: 4000, hi: 4145 })] });
+  const face = makeFace({ dirSign: -1, originWorld: 4000 });
+  const prims = buildFaceFigure(face, baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  assert.deepEqual(floorLineOf(prims).map(p => [p.x1, p.x2]), [[-157, 4000]]);
+});
+
+test('【隅の建具断面・床線】壁が引けないフォールバックでも cornerSection の外縁と一致', () => {
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [endOpening()] }), prevFace: null, nextFace: endNextFace() }));
+  const rects = cornerSectionRects(prims);
+  const outer = Math.max(...rects.map(r => r.x + r.w));
+  assert.deepEqual(floorLineOf(prims).map(p => [p.x1, p.x2]), [[0, outer]]);
+  assert.ok(outer > 4000);
+});
+
+test('【隅の建具断面・床線】lowerOverhang の方が遠ければ lowerOverhang を採る（始端・終端）', () => {
+  const g0 = makeGraph({ openings: [perpOpeningFor()], walls: [perpWall({ lo: -145, hi: 0 })] });
+  const at0 = lo => floorLineOf(buildFaceFigure(makeFace(), baseCtx({ graph: g0, prevFace: makePerpFace(), nextFace: null, lowerOverhang: { lo, hi: 0 } }))).map(p => [p.x1, p.x2]);
+  assert.deepEqual(at0(500), [[-500, 4000]]);
+  assert.deepEqual(at0(50), [[-157, 4000]]);
+  const g1 = makeGraph({ openings: [endOpening()], walls: [endWall()] });
+  const atRun = hi => floorLineOf(buildFaceFigure(makeFace(), baseCtx({ graph: g1, prevFace: null, nextFace: endNextFace(), lowerOverhang: { lo: 0, hi } }))).map(p => [p.x1, p.x2]);
+  assert.deepEqual(atRun(500), [[0, 4500]]);
+  assert.deepEqual(atRun(50), [[0, 4157]]);
+});
+
+test('【隅の建具断面・床線】floorSpanX のクランプ後に隅の延長が効く', () => {
+  // 製品で floorSpanX を渡す呼び出しは現在 0 件。床が無い区間 [0,100] の上まで -157 から伸びる仕様を固定している
+  // （floorSpanX を使い直すときは見直す）。
+  const graph = makeGraph({ openings: [perpOpeningFor()], walls: [perpWall({ lo: -145, hi: 0 })] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null, floorSpanX: { lo: 100, hi: 3900 } }));
+  assert.deepEqual(floorLineOf(prims).map(p => [p.x1, p.x2]), [[-157, 3900]]);
+});
+
+test('【失敗系・隅の建具断面・床線】窓台のある隅の窓(sillHeight>0)・隅に建具が無い面では床線を伸ばさない', () => {
+  const win = { ...perpOpeningFor(), ...WINDOW_AT_CORNER };
+  const g1 = makeGraph({ openings: [win], walls: [perpWall({ lo: -145, hi: 0 })] });
+  const p1 = buildFaceFigure(makeFace(), baseCtx({ graph: g1, prevFace: makePerpFace(), nextFace: null }));
+  assert.deepEqual(floorLineOf(p1).map(p => [p.x1, p.x2]), [[0, 4000]]);
+  const p2 = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [] }), prevFace: makePerpFace(), nextFace: null }));
+  assert.deepEqual(floorLineOf(p2).map(p => [p.x1, p.x2]), [[0, 4000]]);
+});
+
 // ---- 面端の太線（壁断面の縁）は隅の建具断面を描く建具の開口範囲では描かない（ユーザー指摘2026-10-13） ----
 function edgeCutLines(prims, x) {
   return prims.filter(p => p.type === 'line' && p.x1 === x && p.x2 === x && p.y1 !== p.y2 && !p.dash)
