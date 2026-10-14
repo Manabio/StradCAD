@@ -1115,7 +1115,7 @@ test('【ceilProfileFromSegments】chHiMm ありは ceilZHi（床段差込みの
 
 // ---- 階段下の部屋の判定（flightsOverRoom。重なり STAIR_OVER_ROOM_MIN_OVERLAP_MM 以下は階段下の部屋にしない。裁定 2026-10-13）
 test('【張り出し 57.5 の重なりは階段下の部屋にしない／100 を超えれば従来どおり】', () => {
-  const room = { x1: 0, x2: 3495, y1: -10721, y2: -9100 };
+  const room = [{ x1: 0, x2: 3495, y1: -10721, y2: -9100 }];
   // 縦走行の flight（幅 x 72.5〜910）。部屋の南端 y=-9100 へ run が dy だけ張り出す
   const flight = (dy) => ({ isVertical: true, acrossLo: 72.5, acrossHi: 910, runLo: -9100 - dy, runHi: -8190 });
   assert.equal(flightsOverRoom({ flights: [flight(57.5)] }, room).length, 0, '57.5 の張り出し');
@@ -1124,7 +1124,77 @@ test('【張り出し 57.5 の重なりは階段下の部屋にしない／100 �
   assert.equal(flightsOverRoom({ flights: [flight(1500)] }, room).length, 1, '深く重なる従来ケース');
   assert.equal(flightsOverRoom({ flights: [flight(0)] }, room).length, 0, '接するだけ');
   assert.equal(flightsOverRoom({ flights: [] }, room).length, 0, 'flight なし');
-  assert.equal(flightsOverRoom({ flights: [flight(57.5)] }, null).length, 1, 'bounds なしは全 flight（従来）');
+  assert.equal(flightsOverRoom({ flights: [flight(57.5)] }, null).length, 1, 'cellRects なしは全 flight（従来）');
+});
+
+// ---- 実セルでの判定（moku4-3 2階 廊下の実測値。L 字の切り欠きに階段室。2026-10-14）
+const LCELLS = [
+  { x1: 0, x2: 1820, y1: -10794, y2: -9884 }, { x1: 1820, x2: 3640, y1: -10794, y2: -9884 },
+  { x1: 1820, x2: 3640, y1: -11704, y2: -10794 }, { x1: 0, x2: 1820, y1: -9884, y2: -9100 },
+  { x1: 1820, x2: 3640, y1: -9884, y2: -9100 }, { x1: 2730, x2: 3640, y1: -9100, y2: -7280 },
+  { x1: 1820, x2: 2730, y1: -9100, y2: -7280 }, { x1: 1820, x2: 3640, y1: -7280, y2: -6370 },
+];
+const LENVELOPE = { x1: 0, y1: -11704, x2: 3640, y2: -6370 };
+const vflight = (acrossLo, acrossHi, runLo, runHi) => ({ isVertical: true, acrossLo, acrossHi, runLo, runHi });
+
+test('【L 字の部屋の切り欠きにある階段室は階段下の部屋にしない（包絡矩形だと誤判定）】', () => {
+  const c = { flights: [vflight(72.5, 910, -9145, -8235), vflight(910, 1747.5, -9055, -8145)] };
+  assert.equal(flightsOverRoom(c, LCELLS).length, 0, '実セル');
+  assert.equal(flightsOverRoom(c, [LENVELOPE]).length, 2, '対照: 包絡矩形なら 2 本とも重なる（旧判定）');
+});
+
+test('【切り欠きへの張り出しは 45 なら不成立・150 なら成立】', () => {
+  const at = (dy) => ({ flights: [vflight(72.5, 910, -9100 - dy, -8235)] });
+  assert.equal(flightsOverRoom(at(45), LCELLS).length, 0);
+  assert.equal(flightsOverRoom(at(150), LCELLS).length, 1);
+});
+
+test('【矩形の部屋をセル分割しても包絡矩形と同値（格子をまたぐ flight は合併して閾値判定）】', () => {
+  const env = { x1: 0, x2: 1820, y1: 0, y2: 1820 };
+  const cells = [
+    { x1: 0, x2: 910, y1: 0, y2: 910 }, { x1: 910, x2: 1820, y1: 0, y2: 910 },
+    { x1: 0, x2: 910, y1: 910, y2: 1820 }, { x1: 910, x2: 1820, y1: 910, y2: 1820 },
+  ];
+  // 4 セルの中心をまたぎ、各セルとの重なりは overlap/2 ずつ（幅・走行とも）
+  const cross = (overlap) => ({ flights: [{ isVertical: true, acrossLo: 910 - overlap / 2, acrossHi: 910 + overlap / 2, runLo: 910 - overlap / 2, runHi: 910 + overlap / 2 }] });
+  for (const [ov, n] of [[120, 1], [100, 0], [100.5, 1], [60, 0]]) {
+    assert.equal(flightsOverRoom(cross(ov), [env]).length, n, `包絡 ${ov}`);
+    assert.equal(flightsOverRoom(cross(ov), cells).length, n, `4 セル ${ov}`);
+  }
+});
+
+test('【閾値の境界は幅方向だけでも効く（片側だけ >= にする変異を見逃さない）】', () => {
+  const room = [{ x1: 0, x2: 3000, y1: 0, y2: 3000 }];
+  // 縦走行 flight: 幅方向（x）の重なりが [0, acrossHi]。走行方向は深く重なる
+  assert.equal(flightsOverRoom({ flights: [vflight(-100, 100, 500, 2500)] }, room).length, 0, '幅方向の重なり 100 ちょうど');
+  assert.equal(flightsOverRoom({ flights: [vflight(-100, 100.5, 500, 2500)] }, room).length, 1, '幅方向の重なり 100.5');
+});
+
+function permutations(arr) {
+  if (arr.length <= 1) return [arr];
+  return arr.flatMap((x, i) => permutations([...arr.slice(0, i), ...arr.slice(i + 1)]).map(p => [x, ...p]));
+}
+
+test('【セルの並び順に依存しない（風車形・L 字 3 片の全順列で同じ結果）】', () => {
+  // (a) 3×3 格子（列・行とも [0,910],[910,1000],[1000,1910]）に 850..1060 の正方形
+  const axes = [[0, 910], [910, 1000], [1000, 1910]];
+  const grid = axes.flatMap(([y1, y2]) => axes.map(([x1, x2]) => ({ x1, x2, y1, y2 })));
+  const sq = { flights: [vflight(850, 1060, 850, 1060)] };
+  assert.equal(flightsOverRoom(sq, grid).length, 1, '行優先');
+  // 風車形: A00,A01,A02,A12,A21,A22,A10,A20,A11
+  const windmill = [0, 1, 2, 5, 7, 8, 3, 6, 4].map(i => grid[i]);
+  assert.equal(flightsOverRoom(sq, windmill).length, 1, '風車形');
+  // 全順列（9! = 362880 は重いので、各セルを先頭へ回した 9 通り＋逆順）
+  for (let r = 0; r < grid.length; r++) {
+    assert.equal(flightsOverRoom(sq, [...grid.slice(r), ...grid.slice(0, r)]).length, 1, `回転 ${r}`);
+  }
+  assert.equal(flightsOverRoom(sq, [...grid].reverse()).length, 1, '逆順');
+  // (b) L 字 3 片。A+C が 150×120 を作る
+  const A = { x1: 0, x2: 150, y1: 0, y2: 60 }, B = { x1: 150, x2: 200, y1: 0, y2: 60 }, C = { x1: 0, x2: 150, y1: 60, y2: 120 };
+  const cover = { flights: [vflight(0, 200, 0, 120)] };
+  for (const p of permutations([A, B, C])) {
+    assert.equal(flightsOverRoom(cover, p).length, 1, `順列 ${p.map(r => (r === A ? 'A' : r === B ? 'B' : 'C')).join('')}`);
+  }
 });
 
 test('【stairOverReachesFace】面と平行な flight の走行範囲が面の区間と 100 以下しか重ならなければ階段は面にかからない／直交する flight があれば従来どおり', () => {

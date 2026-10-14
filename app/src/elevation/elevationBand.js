@@ -8,7 +8,7 @@
  * 逆方向のimportは無いため循環しない）。
  */
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
-import { roomBounds } from '../finish/gridCells.js';
+import { roomBounds, cellBoundsList } from '../finish/gridCells.js';
 import { makeProbeContext } from './section/sectionProbe.js';
 import { buildSectionFromLine } from './section/sectionContent.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
@@ -464,13 +464,6 @@ export function floorZProfileFromSegments(segs, run) {
  *     **2つは対で指定する**——探査だけ広げると面の外の列が描画範囲でクリップされて消え、
  *     描画範囲だけ広げても面の外に実データが無い。値の出どころは両方とも`planeOverhangForFace`。
  */
-// 矩形どうしが階段下の部屋と言える重なりを持つか（mm。両方向とも STAIR_OVER_ROOM_MIN_OVERLAP_MM を超える。接しているだけ・
-// 1 段目の張り出し程度の重なりは含めない）。本ファイル内の用途は flightsOverRoom 経由のみ。
-function rectsOverlap(a, b) {
-  return Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) > STAIR_OVER_ROOM_MIN_OVERLAP_MM
-    && Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) > STAIR_OVER_ROOM_MIN_OVERLAP_MM;
-}
-
 // flightの世界矩形（走行×幅）。
 function flightRect(f) {
   return f.isVertical
@@ -478,22 +471,77 @@ function flightRect(f) {
     : { x1: f.runLo, x2: f.runHi, y1: f.acrossLo, y2: f.acrossHi };
 }
 
+// 座標の一致・接触の許容差（gridCells.js の BOUNDARY_EPS と同じ規約）。
+const CELL_COORD_EPS = 1e-6;
+
+// 昇順の座標列から許容差内の重複を除く。
+function uniqueCoords(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const out = [];
+  for (const v of sorted) if (out.length === 0 || v - out[out.length - 1] > CELL_COORD_EPS) out.push(v);
+  return out;
+}
+
+/**
+ * flight が部屋の**実セル**の上にあると言えるか。flight の矩形と各セルの交差矩形（面積 > 0）が覆う領域の中に、
+ * 両方向とも STAIR_OVER_ROOM_MIN_OVERLAP_MM を超える矩形が丸ごと収まれば真（接しているだけ・1 段目の張り出し程度の
+ * 重なりは含めない）。交差片の端点で座標圧縮した小区画の被覆表から探すので、`room.cells` の並び順に依存しない
+ * （隣り合う片を貪欲に合併する方式は並び順で結果が変わった）。格子をまたぐ flight がセル単位に細切れになっても
+ * 閾値に届く。矩形の部屋ではセルが包絡矩形を敷き詰めるので、包絡矩形との交差で見た結果と厳密に同値。
+ * L 字の部屋の切り欠きに階段室があるとき、包絡矩形だけが階段と重なる誤判定を避ける（moku4-3 2階 廊下。2026-10-14）。
+ */
+function flightOverCells(f, cellRects) {
+  const fr = flightRect(f);
+  const pieces = [];
+  for (const c of cellRects) {
+    const p = {
+      x1: Math.max(fr.x1, c.x1), x2: Math.min(fr.x2, c.x2),
+      y1: Math.max(fr.y1, c.y1), y2: Math.min(fr.y2, c.y2),
+    };
+    if (p.x2 - p.x1 > 0 && p.y2 - p.y1 > 0) pieces.push(p);
+  }
+  if (pieces.length === 0) return false;
+  const xs = uniqueCoords(pieces.flatMap(p => [p.x1, p.x2]));
+  const ys = uniqueCoords(pieces.flatMap(p => [p.y1, p.y2]));
+  const T = STAIR_OVER_ROOM_MIN_OVERLAP_MM;
+  // covered[i][k] … 小区画 [xs[i],xs[i+1]]×[ys[k],ys[k+1]] がいずれかの片に覆われているか
+  const covered = xs.slice(0, -1).map((_, i) => ys.slice(0, -1).map((__, k) => pieces.some(p =>
+    p.x1 <= xs[i] + CELL_COORD_EPS && p.x2 >= xs[i + 1] - CELL_COORD_EPS
+    && p.y1 <= ys[k] + CELL_COORD_EPS && p.y2 >= ys[k + 1] - CELL_COORD_EPS)));
+  for (let i = 0; i < xs.length - 1; i++) {
+    for (let j = i; j < xs.length - 1; j++) {
+      if (xs[j + 1] - xs[i] <= T) continue;
+      // x 区間 [i..j] の全小区画が覆われている y の連続区間のうち、高さが T を超えるものがあるか
+      let runStart = -1;
+      for (let k = 0; k <= ys.length - 1; k++) {
+        const ok = k < ys.length - 1 && covered.slice(i, j + 1).every(col => col[k]);
+        if (ok && runStart < 0) runStart = k;
+        if (!ok && runStart >= 0) {
+          if (ys[k] - ys[runStart] > T) return true;
+          runStart = -1;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * その部屋の**上を通る**レーンだけ（折返し階段は往路・復路の2レーンを持ち、階段下の部屋の上に
  * あるのは普通どちらか一方——面の高さ・ささらの見え方はそのレーンで決まる）。
  * @param {{flights:object[]}} contribution
- * @param {{x1:number,y1:number,x2:number,y2:number}|null} bounds - 帯の部屋の包絡矩形
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>|null} cellRects - 帯の部屋の実セルの矩形（cellBoundsList の戻り）。null なら全 flight
  */
-export function flightsOverRoom(contribution, bounds) {
+export function flightsOverRoom(contribution, cellRects) {
   const flights = contribution?.flights ?? [];
-  if (!bounds) return flights;
-  return flights.filter(f => rectsOverlap(bounds, flightRect(f)));
+  if (!cellRects) return flights;
+  return flights.filter(f => flightOverCells(f, cellRects));
 }
 
 /**
  * 階段下の部屋の帯の 1 面（仮想断面線 line）に、階段が実質かかっているか。面を横切るレーン（面と直交する flight）が
  * 1 本でもあれば従来どおり true。全 flight が面と平行なときは、いずれかの走行範囲が面の区間 [line.lo, line.hi] と
- * STAIR_OVER_ROOM_MIN_OVERLAP_MM を超えて重なること。部屋の包絡矩形では重なるが、この面には 1 段目の張り出し程度
+ * STAIR_OVER_ROOM_MIN_OVERLAP_MM を超えて重なること。部屋（実セル）とは重なるが、この面には 1 段目の張り出し程度
  * （57.5mm）しかかからない面で、階段の段が面端へ潰れて並ぶのを防ぐ（裁定 2026-10-13）。区間が不明なら true（従来）。
  * @param {{flights:object[]}} contribution
  * @param {{isVertical:boolean, lo?:number, hi?:number}} line
@@ -511,8 +559,9 @@ export function stairOverReachesFace(contribution, line) {
  * 断面・見えがかりとして現れる。階段室自身（`stair.roomId === room.id`）は`buildStairBand`の
  * 担当なので除く。
  *
- * 判定はflightの世界矩形（走行×幅）が部屋の包絡矩形と面積を持って重なるか——`stair.cells`と
- * 部屋のセルは階段下の部屋では重複して登録されうるため、セルの所有ではなく幾何で見る。
+ * 判定はflightの世界矩形（走行×幅）が部屋の実セルと面積を持って重なるか（`flightsOverRoom`）——`stair.cells`と
+ * 部屋のセルは階段下の部屋では重複して登録されうるため、セルの所有ではなく幾何で見る。包絡矩形では
+ * L 字の部屋の切り欠きに階段室があると包絡矩形だけが階段と重なる（moku4-3 2階 廊下。2026-10-14）。
  * @param {import('@core').Room} room
  * @param {object} graph
  * @param {number|null|undefined} floorHeight - 設置階〜上階の階高（stairContributionの必須入力）
@@ -520,13 +569,13 @@ export function stairOverReachesFace(contribution, line) {
  */
 export function stairContributionOverRoom(room, graph, floorHeight) {
   if (floorHeight == null) return null;
-  const b = roomBounds(room.cells, graph);
-  if (!b) return null;
+  const cellRects = cellBoundsList(room.cells, graph);
+  if (cellRects.length === 0) return null;
   for (const stair of graph.stairs ?? []) {
     if (stair.roomId === room.id) continue;
     const contribution = stairContribution(stair, graph, floorHeight);
     if (!contribution) continue;
-    if (flightsOverRoom(contribution, b).length > 0) return contribution;
+    if (flightsOverRoom(contribution, cellRects).length > 0) return contribution;
   }
   return null;
 }
@@ -559,10 +608,11 @@ function faceWallMaterialRange(face, graph) {
  * @param {object} face
  * @param {object} graph
  * @param {{flights:object[]}} contribution
+ * @param {Array<{x1:number,y1:number,x2:number,y2:number}>|null} cellRects - 帯の部屋の実セルの矩形
  * @returns {boolean}
  */
-function stringerSightlineVisible(face, graph, contribution, bounds) {
-  const flight = flightsOverRoom(contribution, bounds).find(f => f.isVertical === face.isVertical);
+function stringerSightlineVisible(face, graph, contribution, cellRects) {
+  const flight = flightsOverRoom(contribution, cellRects).find(f => f.isVertical === face.isVertical);
   if (!flight) return true;
   const mr = faceWallMaterialRange(face, graph);
   if (!mr) return true;
@@ -672,6 +722,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
   // datum基準なので、その差を渡して差し引かせる（floorOffset=0の帯では出力完全不変）。
   const probeCtx = makeProbeContext(layers, { floorOffsetMm: bandFloorOffsetMm(room, graph) });
   const bandRoomBounds = roomBounds(room.cells, graph);
+  const bandRoomCells = cellBoundsList(room.cells, graph);
   // 柱型は全層ぶんを一度だけ求めて全面で使い回す（仮想断面位置の決定に使う。層ごとに引き直すと
   // 面の数×層の数だけ全柱を走査することになる）。
   const columnSolids = structuralColumnContribution(layers);
@@ -754,7 +805,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       // .claude/elevation-model.md「面の端も層ごとに違う」）——はり出しは他の層の平面が
       // 続いている量で、その先に自階の上を通る階段が続いているとは限らない。
       const stairDrawnX = faceDrawnXRange(face, endExtendMm);
-      const crossFlight = flightsOverRoom(opts.stairOver, bandRoomBounds)
+      const crossFlight = flightsOverRoom(opts.stairOver, bandRoomCells)
         .find(f => f.isVertical !== face.isVertical);
       // **面を横切るレーンでは、仮想断面の位置で階段が天井より上なら階段を一切描かない**
       // （ユーザー明示指示2026-09「「13」C: CH2400の天井平場で切断なので、階段梯子は見えない
@@ -769,7 +820,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       // 梯子（踏面の見えがかり。DETAIL＝細線）は描く（ユーザー明示指示2026-09「「13」A:
       // 階段見えがかりの梯子（細線）を描く」）。
       const raw = stairHiddenByCeil ? [] : stairPrimitivesForCut(opts.stairOver, pcut, columns, {
-        includeStringerSightline: stringerSightlineVisible(face, graph, opts.stairOver, bandRoomBounds),
+        includeStringerSightline: stringerSightlineVisible(face, graph, opts.stairOver, bandRoomCells),
         stringerSightlineLowerOnly: true,
         // 階段下の部屋では階段は上を通る見えがかり（ユーザー実機確認済みの「階段の高さ」の細線）。段板の断面は出さない。
         treadSection: false,
@@ -798,7 +849,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       // 「「13」D: 右の縦断面は、階段断面と出会ったところが終点」）。
       // **面と平行なレーン（側面視）のときだけ**。面を横切るレーン（正面視。実機「13」A）では
       // 端の縦線＝仮想断面は最も高い位置まで引く（上記）ので、ささらの断面の高さで下げない。
-      const alongFlight = flightsOverRoom(opts.stairOver, bandRoomBounds)
+      const alongFlight = flightsOverRoom(opts.stairOver, bandRoomCells)
         .find(f => f.isVertical === face.isVertical);
       const cutWeightStair = weightForRole(ElevationLineRole.CUT);
       const stairPts = alongFlight

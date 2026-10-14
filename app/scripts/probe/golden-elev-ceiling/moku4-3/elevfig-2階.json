@@ -3,7 +3,7 @@
   "room": "00099c1e-2369-4f1c-b73e-e6957ec47339",
   "name": "廊下",
   "kind": "room",
-  "count": 175,
+  "count": 172,
   "prims": [
    {
     "type": "line",
@@ -1381,22 +1381,6 @@
     "y2": 0
    },
    {
-    "type": "line",
-    "weight": "thin",
-    "x1": 0,
-    "x2": 3495,
-    "y1": -200,
-    "y2": -200
-   },
-   {
-    "type": "line",
-    "weight": "thin",
-    "x1": 5100,
-    "x2": 6775,
-    "y1": -200,
-    "y2": -200
-   },
-   {
     "__o": "recessHi",
     "type": "line",
     "weight": "medium",
@@ -1413,14 +1397,6 @@
     "x2": 12309,
     "y1": -2000,
     "y2": -2400
-   },
-   {
-    "type": "line",
-    "weight": "thin",
-    "x1": 12654,
-    "x2": 14329,
-    "y1": -1000,
-    "y2": -1000
    },
    {
     "anchor": "middle",
