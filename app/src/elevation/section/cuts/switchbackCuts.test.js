@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../../elevationFaceList.js';
+import { letterOf, DIR_SIGN } from '../../elevationFaces.js';
 import { switchbackCuts, stairBandWallFilter, classifyFaces, LANDING_CUT_INSET_MM } from './switchbackCuts.js';
 import { cellsBeyondBreak, uTurnPlanLayout } from '../../../finish/stair/stairGeometry.js';
 import { generateStairPartitionWalls } from '../../../finish/stair/stairPartitionWalls.js';
@@ -795,4 +796,49 @@ test('【§R】classifyFaces: その側に外壁側の面が無ければ、レ�
 test('【§R】classifyFaces: 実壁でない面（hasRealWall:false。階段下部屋の2a壁）は従来どおり先頭なら基準のまま', () => {
   const c = classifyFaces([vFace(1000, { hasRealWall: false }), vFace(0)], midLaneFrame());
   assert.equal(c.wOut1.faceValue, 1000, '既存の挙動を変えない');
+});
+
+// ---- 2026-10-14 ユーザー指摘（moku4-3 1階 階段 C: 6時を見ているのに X1 が左）: seq3 の左右は視線の向きで決まる ----
+// 面の方位規則: 視線 viewSign で見る面のローカル x 昇順は DIR_SIGN[letterOf(isVertical, -viewSign)]（展開記号の採番と同じ規則）。
+// seq3（踊り場の壁）は seq1（上り口向き）と逆向きを見るので、seq1 と同じ widthDirSign へ倒すと鏡像になる。
+const compassDirSign = cut => DIR_SIGN[letterOf(cut.line.isVertical, -cut.viewSign)];
+const cutsOf = (graph, room, stair) =>
+  switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+
+test('【2026-10-14】switchbackCuts: seq3（踊り場の壁）の dirSign は視線の向きの方位規則に従い、face・展開記号・originWorld と一致する（upDirection=up/down）', () => {
+  for (const up of ['up', 'down']) {
+    const graph = makeGraph();
+    const { room, stair } = makeUserDimsFixture(graph, up);
+    const table = cutsOf(graph, room, stair);
+    const s3 = table.cuts.find(c => c.seqNo === '3');
+    assert.equal(s3.dirSign, compassDirSign(s3), `${up}: cut.dirSign が方位規則と一致`);
+    assert.equal(s3.face.dirSign, s3.dirSign, `${up}: face.dirSign と cut.dirSign が一致（content と floorSegments が食い違わない）`);
+    assert.equal(DIR_SIGN[s3.face.letter], s3.face.dirSign, `${up}: 展開記号と dirSign の不変条件`);
+    assert.equal(s3.face.originWorld, s3.dirSign > 0 ? s3.face.lo : s3.face.hi, `${up}: originWorld は dirSign に従う`);
+    assert.equal(s3.line.lo, s3.face.lo); assert.equal(s3.line.hi, s3.face.hi);
+  }
+});
+
+test('【2026-10-14】switchbackCuts: 横断の seq3 で +y（6時）を見るなら x の大きい側が左（originWorld=hi）、−y（12時）なら小さい側が左（originWorld=lo）', () => {
+  const seen = new Set();
+  for (const up of ['up', 'down']) {
+    const graph = makeGraph();
+    const { room, stair } = makeUserDimsFixture(graph, up);
+    const s3 = cutsOf(graph, room, stair).cuts.find(c => c.seqNo === '3');
+    assert.equal(s3.line.isVertical, false, '前提: 走行軸が縦なので seq3 は横断（横線）');
+    seen.add(s3.viewSign);
+    assert.equal(s3.face.originWorld, s3.viewSign > 0 ? s3.face.hi : s3.face.lo, `${up}: 視線 ${s3.viewSign} の左端`);
+  }
+  assert.deepEqual([...seen].sort(), [-1, 1], '前提: up/down で seq3 の視線が両向きを踏む（検出力）');
+});
+
+// 注意: この fixture（up・flip=false）では widthDirSign と方位規則の符号がたまたま同じなので、seq3 を widthDirSign へ
+// 戻す変異は検出できない（検出力は上の up/down テストが持つ）。守るのは視線のフォールバック経路（`|| seq2DirSign`）の整合だけ。
+test('【失敗系・2026-10-14】switchbackCuts: 前縁を奥に揃えた浅い踊り場（front==back。視線のフォールバック）でも seq3 の dirSign は方位規則に従う。WINDING も', () => {
+  for (const winding of [false, true]) {
+    const { t, bySeq } = cutsWithLandingDepth(100, { wood: true, winding });
+    assert.equal(t.contribution.frame.front, t.contribution.frame.back, '前提: 前縁が奥に揃う');
+    assert.equal(bySeq['3'].dirSign, compassDirSign(bySeq['3']), `winding=${winding}`);
+    assert.equal(bySeq['3'].face.dirSign, bySeq['3'].dirSign);
+  }
 });

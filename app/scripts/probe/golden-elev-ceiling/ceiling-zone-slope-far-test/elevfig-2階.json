@@ -4946,7 +4946,7 @@
   "room": "86e378f0-8eb2-4aa8-aa5a-f1cedbc46912",
   "name": "",
   "kind": "stair",
-  "count": 136,
+  "count": 134,
   "prims": [
    {
     "type": "line",
@@ -5316,7 +5316,7 @@
     "anchor": "middle",
     "baseline": "middle",
     "size": 11,
-    "text": "X1",
+    "text": "X2",
     "type": "text",
     "x": 5117.5,
     "y": 900
@@ -5350,7 +5350,7 @@
     "anchor": "middle",
     "baseline": "middle",
     "size": 11,
-    "text": "X2",
+    "text": "X1",
     "type": "text",
     "x": 6937.5,
     "y": 900
@@ -5873,7 +5873,7 @@
     "x1": 3507.5,
     "x2": 3565,
     "y1": -2600,
-    "y2": -2600
+    "y2": -2524.176
    },
    {
     "__o": "recessHi",
@@ -5882,7 +5882,7 @@
     "x1": 3565,
     "x2": 3565,
     "y1": -1500,
-    "y2": -2600
+    "y2": -2524.176
    },
    {
     "type": "line",
@@ -5907,24 +5907,6 @@
     "x2": 2447.5,
     "y1": -3000,
     "y2": -3000
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 2670,
-    "x2": 4345,
-    "y1": -3704.396,
-    "y2": -5400
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 2670,
-    "x2": 4345,
-    "y1": -5400,
-    "y2": -1500
    },
    {
     "points": [

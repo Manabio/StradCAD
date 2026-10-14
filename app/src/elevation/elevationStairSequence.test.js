@@ -6,7 +6,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { letterOf } from './elevationFaces.js';
+import { letterOf, DIR_SIGN } from './elevationFaces.js';
 import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf } from './elevationStairSequence.js';
 import { localXOf } from './section/sectionTypes.js';
 import { switchbackCuts, buildMidWallFace } from './section/cuts/switchbackCuts.js';
@@ -2507,4 +2507,27 @@ test('【回帰・2026-10-09】stairFaceSequence: L_TURN/FLARED/OPEN_WELL は従
     const faces = composeRoomFaces(room, graph);
     assert.equal(stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }), null, type);
   }
+});
+
+// ---- 2026-10-14 ユーザー指摘（moku4-3 1階 階段 C: 6時を見ているのに X1 が左）: seq3 の面の左右は視線の向きで決まる ----
+test('【2026-10-14】stairFaceSequence: seq3（踊り場の壁）の展開記号と dirSign は方位の不変条件を満たし、通り芯の並び（startCLId/endCLId）が視線の左右に従う', () => {
+  const seen = new Set();
+  for (const up of ['up', 'down']) {
+    const graph = makeGraph();
+    const { room, stair } = makeUserDimsFixture(graph, up);
+    const faces = composeRoomFaces(room, graph);
+    const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+    const seq3 = entries.find(e => e.seqNo === '3');
+    const f = seq3.face;
+    assert.equal(DIR_SIGN[f.letter], f.dirSign, `${up}: 記号 ${f.letter} と dirSign ${f.dirSign}`);
+    // 踊り場の壁は x:0..3000 の横壁。+y（6時）を見るなら x=3000 の通り芯が左（start）、−y（12時）なら x=0 が左。
+    const valueOf = id => graph.shapeMap.get(id)?.effectiveValue;
+    const looksPlusY = f.letter === 'C';
+    assert.ok(['A', 'C'].includes(f.letter), `${up}: 横断の面は A か C`);
+    seen.add(f.letter);
+    assert.equal(valueOf(f.startCLId), looksPlusY ? 3000 : 0, `${up}: 左端の通り芯`);
+    assert.equal(valueOf(f.endCLId), looksPlusY ? 0 : 3000, `${up}: 右端の通り芯`);
+    assert.equal(f.originWorld, looksPlusY ? f.hi : f.lo);
+  }
+  assert.deepEqual([...seen].sort(), ['A', 'C'], '前提: up/down で両向き（A と C）を踏む（検出力）');
 });

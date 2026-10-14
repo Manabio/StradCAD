@@ -350,14 +350,23 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // QA実機フィードバック修正: dirSignは部屋のコンパス向き（wEntry.dirSign等・letterOf基準）
   // ではなく、階段自身の歩行方向（幅方向=往路(s=0)→復路(s=1)、走行方向=上り口(t=0)→踊り場(t=tRun)）
   // が「ローカルx昇順」になるよう独立に導出する（reorientFace参照。ファイル冒頭の役割コメントも
-  // 参照）。widthDirSign: seq1/seq3（幅方向の全幅線）用——s=0側(往路)がlocalX=0(左)になる向き。
+  // 参照）。widthDirSign: seq1（幅方向の全幅線。上り口向き）用——s=0側(往路)がlocalX=0(左)になる向き。
   // seq2DirSign: seq2（走行方向の全長線）用——t=0側(上り口)がlocalX=0(左)になる向き（往路の歩く向き）。
   const widthDirSign = Math.sign(acrossCoordAt(1) - acrossCoordAt(0)) || 1;
   const seq2DirSign = contribution.flights[0].travelSign;
   const seq4DirSign = -seq2DirSign; // seq4はseq2の鏡像（踊り場が左・上り口が右）
+  // seq3（踊り場の壁）の視線は踊り場奥向き(+t方向)＝seq1（上り口向き -t）の**逆**。前縁を奥に揃えた
+  // 浅い踊り場(front==back)でも往路の走行の向きにする（上り口側を向かない）。
+  const seq3ViewSign = Math.sign(frameBack - frameFront) || seq2DirSign;
+  // 図の左右は視線の向きで決まる（面の方位規則 DIR_SIGN[letterOf(isVertical, -viewSign)]。展開記号の
+  // 採番 elevationStairSequence.js と同じ規則）。seq3 は seq1 と逆向きを見るので、seq1 と同じ widthDirSign
+  // （往路が左）へ倒すと鏡像になる——2026-08 の reorientFace 導入（4303222）が seq3 も seq1 と同じ向きへ
+  // 倒していたため、踊り場の壁の面は全 U 字系階段で左右が反転していた（ユーザー指摘 2026-10-14
+  // moku4-3 1階 C: 6時を見ているのに X1 が左）。
+  const seq3DirSign = DIR_SIGN[letterOf(rawFaces.wLanding.isVertical, -seq3ViewSign)];
 
   const wEntry   = reorientFace(rawFaces.wEntry, widthDirSign);
-  const wLanding = reorientFace(rawFaces.wLanding, widthDirSign);
+  const wLanding = reorientFace(rawFaces.wLanding, seq3DirSign);
   const wOut1    = reorientFace(rawFaces.wOut1, seq2DirSign);
   const wOut2    = reorientFace(rawFaces.wOut2, seq4DirSign);
 
@@ -403,8 +412,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const seq1Axis = frameFrontA;
   const seq1Line = { isVertical: wEntry.isVertical, axisValue: seq1Axis, lo: wEntry.lo, hi: wEntry.hi };
   const seq1ViewSign = Math.sign(travelCoordAt(0) - seq1Axis) || 1; // 上り口向き(-t方向)
-  // 踊り場奥向き(+t方向)。前縁を奥に揃えた浅い踊り場(front==back)でも往路の走行の向きにする（上り口側を向かない）
-  const seq3ViewSign = Math.sign(frameBack - frameFront) || seq2DirSign;
+  // seq3 の視線 seq3ViewSign（踊り場奥向き +t）は上（seq3DirSign の導出）で決めている。
   // seq3だけ踊り場側へ入れる（LANDING_CUT_INSET_MM。踊り場の奥行きが足りなければ前縁のまま）。
   // 向きは踊り場奥向き(+t)＝seq3ViewSignと同じ（視線の前方へ進める）。
   const seq3Inset = Math.abs(frameBack - frameFront) > LANDING_CUT_INSET_MM ? LANDING_CUT_INSET_MM : 0;

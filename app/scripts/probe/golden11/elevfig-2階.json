@@ -2007,7 +2007,7 @@
   "room": "d79a5ddc-9faf-4a73-adfb-86fb0baa79ec",
   "name": "22",
   "kind": "room",
-  "count": 182,
+  "count": 184,
   "prims": [
    {
     "type": "line",
@@ -3404,6 +3404,22 @@
     "x2": 26185,
     "y1": -750,
     "y2": -750
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 24547.5,
+    "x2": 24547.5,
+    "y1": -800,
+    "y2": -2400
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 24650,
+    "x2": 24650,
+    "y1": -800,
+    "y2": -2400
    },
    {
     "dash": "center",

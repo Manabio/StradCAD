@@ -5112,7 +5112,7 @@
   "room": "90c5bca2-d559-47d9-9793-e4f216faebbe",
   "name": "便所",
   "kind": "room",
-  "count": 64,
+  "count": 61,
   "prims": [
    {
     "type": "line",
@@ -5580,32 +5580,6 @@
     "x2": 4865,
     "y1": 0,
     "y2": -2400
-   },
-   {
-    "anchor": "middle",
-    "baseline": "middle",
-    "text": "ア キ",
-    "type": "text",
-    "x": 4627.5,
-    "y": -1200
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 4390,
-    "x2": 4865,
-    "y1": 0,
-    "y2": -2400
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 4390,
-    "x2": 4865,
-    "y1": -2400,
-    "y2": 0
    },
    {
     "h": 400,

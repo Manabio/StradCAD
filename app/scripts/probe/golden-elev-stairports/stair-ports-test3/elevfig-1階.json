@@ -520,7 +520,7 @@
   "room": "23f8f3ec-4f46-4cda-9127-afb3e38584a4",
   "name": "売場",
   "kind": "room",
-  "count": 173,
+  "count": 170,
   "prims": [
    {
     "type": "line",
@@ -1860,32 +1860,6 @@
     "x2": 1675,
     "y1": 350,
     "y2": -2050
-   },
-   {
-    "anchor": "middle",
-    "baseline": "middle",
-    "text": "ア キ",
-    "type": "text",
-    "x": 837.5,
-    "y": -1025
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 0,
-    "x2": 1675,
-    "y1": 0,
-    "y2": -2050
-   },
-   {
-    "dash": "center",
-    "type": "line",
-    "weight": "thin",
-    "x1": 0,
-    "x2": 1675,
-    "y1": -2050,
-    "y2": 0
    },
    {
     "anchor": "middle",
