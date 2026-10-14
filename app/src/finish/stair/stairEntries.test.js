@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { anyCellBoundsOverlap, buildStairEntries, buildUpperStairPeekEntries } from './stairEntries.js';
 import { generateStairPartitionWalls } from './stairPartitionWalls.js';
+import { stairUnderReturnLines, isStairUnderReturnWall } from './stairPartition.js';
 import { LodLevel } from '../../viewport.js';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature } from '@core';
 import { classifyStairArea } from './stairClassify.js';
@@ -143,7 +144,10 @@ test('buildStairEntries【S13c】: 2a壁のある構成で、finish は stairUnd
   });
   const finish = call('finish');
   assert.ok(finish.stairUnderClips instanceof Map && finish.stairUnderClips.size > 0, '前提（空振り防止）: finish ではクリップが出る');
-  for (const id of finish.stairUnderClips.keys()) assert.ok(under.generatedWallIds.has(id), 'キーは2a壁のID');
+  const returnLines = stairUnderReturnLines(graph);
+  for (const id of finish.stairUnderClips.keys()) {
+    assert.ok(under.generatedWallIds.has(id) || isStairUnderReturnWall(graph.shapeMap.get(id), returnLines), 'キーは2a壁か復路下の壁のID');
+  }
   const ceiling = call('ceiling');
   assert.equal(ceiling.stairUnderClips, null, '天伏ではクリップを出さない');
   assert.deepEqual(ceiling.installEntries, []);

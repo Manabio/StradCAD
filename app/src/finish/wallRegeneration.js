@@ -24,7 +24,7 @@ import {
   resolveBackingOwnership, applyBackingOwnership, healDerivedGeometry, isInteriorWallTarget,
 } from './wallGeneration.js';
 import { buildCellToRoom } from './edgeClassify.js';
-import { generateStairPartitionWalls, wrapStairPartitionFreeEnds } from './stair/stairPartitionWalls.js';
+import { generateStairPartitionWalls, generateStairUnderReturnWalls, wrapStairPartitionFreeEnds } from './stair/stairPartitionWalls.js';
 import { woodBaseColumnWidthMm, woodColumnWidthMm, rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
@@ -115,12 +115,14 @@ export async function loadMaterialMap() {
  *   resolveStairUnderEntries(graph, …) の戻り相当
  * @param {Array} [opts.extraStairOpenings] - 直下階階段の到達辺（階段吹抜けの下り口）。
  *   floorSwapManager.peek の結果を呼び出し側が解決して渡す
+ * @param {object|null} [opts.belowGraph] - 直下階の graph（resolveStairContext の戻り値）。復路下の壁は、下階に同じ足元の
+ *   続き階段があるとき（その空間は下階の階段の上の頭上空間）は立てない。省略／null は下階なし扱い（立てる）。
  * @returns {Promise<{ regenerated: boolean, undoFns: Function[], redoFns: Function[] }>}
  *   regenerated=false は materialMap が無く壁を一切触らなかったことを示す
  *   （呼び出し側はこれをそのまま「壁が再生成されたか」の唯一の判定源にする——鮮度キーの
  *   書込み条件をここと二重管理しない。QA F1）。
  */
-export async function regenerateWalls(graph, { materialMap, project = null, stairUnderEntries = [], extraStairOpenings = [] } = {}) {
+export async function regenerateWalls(graph, { materialMap, project = null, stairUnderEntries = [], extraStairOpenings = [], belowGraph = null } = {}) {
   const undoFns = [];
   const redoFns = [];
 
@@ -266,7 +268,13 @@ export async function regenerateWalls(graph, { materialMap, project = null, stai
   // wrapStairPartitionFreeEnds。自由端の判定に隣室壁・外壁が要るので壁が出そろった後）の反映後に
   // スナップショットを取るため push を末尾へ遅延する（内周壁の遅延 push と同じ型。生成時のままだと
   // redo がはね出し前の壁を復元する）。
-  const partitionWalls = generateStairPartitionWalls(graph, { structure: effectiveStructure(graph, project), underEdges });
+  // 復路下の壁（隔て壁 S3。stairPartitionWalls.js generateStairUnderReturnWalls）も同じ型（隔て壁の直後に生成し、
+  // undo/redo は3.7で隔て壁とまとめて確定する。識別は stairPartition.js isStairUnderReturnWall）。
+  const partitionStructure = effectiveStructure(graph, project);
+  const partitionWalls = [
+    ...generateStairPartitionWalls(graph, { structure: partitionStructure, underEdges }),
+    ...generateStairUnderReturnWalls(graph, { structure: partitionStructure, underEdges, belowGraph }),
+  ];
 
   // ステップ2: 新規壁生成（対象: UNDEFINED・部分指定（referenceRoomIds あり。親が外周壁を
   // 担う）・2a部屋を除く全Room）。generatedWallIds ゲート（size>0でskip）は撤廃した

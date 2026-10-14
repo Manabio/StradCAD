@@ -1541,7 +1541,7 @@ test('【2026-10-07 アキ不要】stairFaceSequence: 室が階段の構造(stai
   }
 });
 
-test('【2026-10-07 アキ不要・統合】stairFaceSequence: seq1/seq3 で一般規則の open 帯が出る構成でも ×・「ア キ」が出ず、seq2 では出る', () => {
+test('【2026-10-07 アキ不要・統合】stairFaceSequence: seq1/seq3 で一般規則の open 帯が出る構成でも ×・「ア キ」が出ない（2026-10-14 から実壁の面の seq2 も）', () => {
   // moku4 2階の A と同じ形: 往復間の壁（seq1 が切断する）の左右の奥に壁が無く open になる。
   // 面（faces）は壁を消す前に作り、探査側（graph）だけ入口側(y=4500)と踊り場奥(y=0)の壁を消す。
   const graph = makeGraph();
@@ -1558,7 +1558,10 @@ test('【2026-10-07 アキ不要・統合】stairFaceSequence: seq1/seq3 で一�
     assert.equal(e.content.filter(isX).length, 0, `seq${n}にアキのバツは出ないはず`);
     assert.equal(e.content.filter(isLabel).length, 0, `seq${n}に「ア キ」は出ないはず`);
   }
-  assert.ok(entries.find(x => x.seqNo === '2').content.some(isLabel), '対照: seq2 には従来どおり「ア キ」が出る');
+  // 裁定2026-10-14「バツは不要」: レーン境界の実壁（往復間の壁）の面の seq2 もアキを標記しない。
+  const seq2 = entries.find(x => x.seqNo === '2');
+  assert.equal(seq2.content.filter(isX).length, 0, 'seq2 にもアキのバツは出ない（実壁の面）');
+  assert.equal(seq2.content.filter(isLabel).length, 0, 'seq2 にも「ア キ」は出ない（実壁の面）');
 
   // 対照: 同じ切断で openGapMarks を外すと、open 帯（左右2区間）にアキが出る＝構成が空振りでない。
   const table = switchbackCuts(stair, faces, graph, opts);

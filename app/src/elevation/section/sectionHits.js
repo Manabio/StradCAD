@@ -66,7 +66,7 @@
  * ceilFace）を付帯情報として載せる。深度上限の適用・アキの範囲を縮める処理・見えがかり線の描画は
  * 行わない（それぞれ`sectionEngine.js`・`sectionEmit.js`が担当）。
  */
-import { OpeningCategory } from '@core';
+import { OpeningCategory, RoomFeature } from '@core';
 import { worldToCell } from '../../finish/gridCells.js';
 import { kneeDropRecordsAtPointOnWall } from '../../finish/kneeDropWall.js';
 import { effectiveHeight } from '../../openings/openingNumbering.js';
@@ -359,6 +359,44 @@ function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
 }
 
 /**
+ * 面の平面の**向こう側**（壁を挟んで視線の先＝面の軸CLから`viewSign`方向へ`PROBE_EPS_MM`）のセルの部屋。
+ * 自階の層で引く。面（`cut.face.axisCL`）・自階の層・`probeCtx.cellAt`のどれかが無い・階段帯
+ * （`cut.stairCut`。切断線が階段室の中にあり`viewSign`の規約が違う）は null（引けない）。
+ * 切断線は面の軸CLから室内側へ下がっている（`faceCutLine`）ので、`line.axisValue`を基準にすると
+ * 自室を引いてしまう——必ず面の軸CLを基準にする。部屋は feature で判定する（名前は見ない）。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} worldMid
+ * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
+ * @returns {{kind:'stair'|'none'|'other', room:object|null}|null} stair＝階段室／none＝部屋が無い（壁の厚みの帯など）／other＝普通の部屋
+ */
+export function farRoomAt(cut, worldMid, probeCtx) {
+  const axis = cut.face?.axisCL?.effectiveValue;
+  const layer = (cut.layers ?? []).find(l => l?.role === 'self');
+  if (cut.stairCut || !Number.isFinite(axis) || !layer || typeof probeCtx?.cellAt !== 'function') return null;
+  const d = axis + cut.viewSign * PROBE_EPS_MM;
+  const cell = cut.line.isVertical ? probeCtx.cellAt(layer, d, worldMid) : probeCtx.cellAt(layer, worldMid, d);
+  if (!cell?.room) return { kind: 'none', room: null };
+  return { kind: cell.room.feature === RoomFeature.STAIR ? 'stair' : 'other', room: cell.room };
+}
+
+/**
+ * 階段室越しの壁か（`viaStair`。ユーザー裁定2026-10-14 S4「正面壁の見え掛かり」）の位置の条件。
+ * 面の向こう側が階段室で、壁の手前の面が面の軸CLより向こう側にある（階段室側に立つ）壁。
+ * 呼び出し側が、天端が階段の裏面との取り合い（junction＝復路下の壁）であることを併せて確かめる。
+ * 見えがかりの奥行き上限（800）と帯の部屋の包絡矩形（`withinViewRoom`）はこの壁には掛けない
+ * ——掛けるかどうかの最終判断（最初の壁だけ残す）は`sectionEngine.js`の`buildColumns`。
+ * @returns {boolean}
+ */
+function isWallViaStairRoom(cut, wall, farKindOf) {
+  const axis = cut.face?.axisCL?.effectiveValue;
+  const mr = wall.materialRange;
+  if (!Number.isFinite(axis) || !mr) return false;
+  const nearFace = cut.viewSign > 0 ? Math.min(mr.lo, mr.hi) : Math.max(mr.lo, mr.hi);
+  if ((nearFace - axis) * cut.viewSign < -PROBE_EPS_MM) return false; // 面の手前（室内側）の壁
+  return farKindOf() === 'stair';
+}
+
+/**
  * 腰壁・垂れ壁指定を反映したwallのz存在**範囲の並び**（§5.2 step2）。
  * 指定なし=[[floorZ,ceilZ]]（全高）。腰壁指定=[[floorZ,floorZ+topHeight]]、垂れ壁指定=
  * [[ceilZ-bottomHeight,ceilZ]]。
@@ -397,23 +435,13 @@ function withinViewRoom(cut, worldMid, info, probeCtx, wall) {
  * @param {{worldLo:number, worldHi:number}|null} [span] - 列の幅（wallTop があるときだけ使う）。あれば天端は
  *   **幅の両端の高い方**（max）で取る——斜面を水平の帯で近似するとき、遮る範囲を広めに倒す（隠すべきものを
  *   描かない側）。省略は pointCoord の1点。
- * @returns {Array<{z0:number, z1:number, topAt?:(along:number)=>number, upstandTopZ?:number}>} 1件 or 2件（z0昇順）。wallTopで潰れたら0件。
- *   upstandTopZ は埋込み柱の立ち上がり（wallTop.upstands）が効いた件の柱頭（このとき topAt は持たない）
+ * @returns {Array<{z0:number, z1:number, topAt?:(along:number)=>number}>} 1件 or 2件（z0昇順）。wallTopで潰れたら0件。
  */
 export function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ, wallTop = null, span = null) {
   if (wallTop) {
-    let top = span ? Math.max(wallTop.zAt(span.worldLo), wallTop.zAt(span.worldHi)) : wallTop.zAt(pointCoord);
-    // 埋込み柱の立ち上がり（upstands）: 点は閉区間・幅は正の幅で重なるときだけ（柱面で接するだけの隣の列を
-    // 「柱の中」にすると、隣の斜めの列の topEdge が柱頭の高さへ化ける）。効いたら天端は水平（topAt なし・upstandTopZ）。
-    let upstandTopZ = null;
-    for (const u of wallTop.upstands ?? []) {
-      const hit = span
-        ? Math.min(span.worldHi, u.hi) - Math.max(span.worldLo, u.lo) > GAP_EPS
-        : pointCoord >= u.lo - GAP_EPS && pointCoord <= u.hi + GAP_EPS;
-      if (hit && u.topZ > top) { top = u.topZ; upstandTopZ = u.topZ; }
-    }
+    const top = span ? Math.max(wallTop.zAt(span.worldLo), wallTop.zAt(span.worldHi)) : wallTop.zAt(pointCoord);
     const z1 = Math.min(ceilZ, top);
-    return z1 > floorZ ? [{ z0: floorZ, z1, ...(upstandTopZ != null ? { upstandTopZ } : { topAt: wallTop.zAt }) }] : [];
+    return z1 > floorZ ? [{ z0: floorZ, z1, topAt: wallTop.zAt }] : [];
   }
   let records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, POINT_QUERY_EPS_MM);
   if (records.length === 0) {
@@ -453,10 +481,6 @@ function wallTopOf(probeCtx, layer, wall) {
  * @returns {{zAtLo:number, zAtHi:number}|null}
  */
 function topEdgeOf(range, span) {
-  // 埋込み柱の立ち上がり（upstandTopZ）: 天端は柱頭の高さの水平線。上限で頭打ちされたら柱頭に届かない＝線なし。
-  if (range.upstandTopZ != null) {
-    return span && range.z1 >= range.upstandTopZ - GAP_EPS ? { zAtLo: range.z1, zAtHi: range.z1 } : null;
-  }
   if (!span || !range.topAt) return null;
   const zAtLo = range.topAt(span.worldLo), zAtHi = range.topAt(span.worldHi);
   if (Math.abs(zAtLo - zAtHi) < GAP_EPS) return null;
@@ -799,6 +823,9 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
   const unexploredBelowZ = unexploredBelowZOf(cut, layerStack, worldMid);
 
   const hits = [];
+  // 面の向こう側の部屋の種別（階段室越しの壁の判定用。必要になるまで引かない）。
+  let farKind;
+  const farKindOf = () => (farKind === undefined ? (farKind = farRoomAt(cut, worldMid, probeCtx)?.kind ?? null) : farKind);
   for (const info of layerStack) {
     const { layer } = info;
     if (info.ceilZ == null) continue; // 防御的ガード（fallbackCeilZにより通常到達しない）
@@ -842,7 +869,11 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
         const distMm = Math.abs(w.axisCL.effectiveValue - line.axisValue);
-        if (!withinViewRoom(cut, worldMid, info, probeCtx, w)) continue; // 部屋の外の壁は描かない
+        // 階段室越しの壁（viaStair）は部屋の外でも候補に残す。対象は天端が階段の裏面との取り合い（junction）の壁＝復路下の壁
+        // だけ（階段室の他の壁——階段の向こうの外壁等——は従来どおり見通さない）。最初の壁だけ残すのは buildColumns。
+        const wallTop = wallTopOf(probeCtx, layer, w);
+        const viaStair = wallTop?.junction === true && isWallViaStairRoom(cut, w, farKindOf);
+        if (!viaStair && !withinViewRoom(cut, worldMid, info, probeCtx, w)) continue; // 部屋の外の壁は描かない
         // A2の一般化: 上限（info.ceilZ）を「上が吹抜けなら上階の天井まで延ばす」規則で解決し直す
         // （sectionLayerStack.jsのresolveSightlineTopZ）。旧実装はself層の壁だけを対象に
         // 上階1段しか見ていなかったが、規則自体は層の役割にも段数にも依存しない。
@@ -850,7 +881,6 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
           layerStack, info, roomAtWallPosition(w, worldMid, cut.viewSign, probeCtx), cut.zRange?.hiZ ?? 0,
           wallContinuesOnLayer(w, worldMid),
         );
-        const wallTop = wallTopOf(probeCtx, layer, w);
         for (const range of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, capZ, wallTop, span)) {
           const { z0, z1 } = range;
           // 腰壁・垂れ壁指定で高さが制限された壁か（アキのバツのクリップ対象。sectionEmit.jsの
@@ -863,7 +893,8 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
           // 斜めの天端: 帯の上端 z1 は列の幅の高い側（遮る範囲を広めに）、天端の線は topEdge（両端の高さ）で描く。
           const topEdge = topEdgeOf(range, span);
           hits.push({ kind: 'wallFace', wall: w, layer, distMm, z0, z1, openRanges, isKneeDrop, hidden,
-            ...(wallTop ? { profiledTop: true } : {}), ...(topEdge ? { topEdge } : {}) });
+            ...(wallTop ? { profiledTop: true } : {}), ...(topEdge ? { topEdge } : {}),
+            ...(wallTop?.junction ? { junctionTop: true } : {}), ...(viaStair ? { viaStair: true } : {}) });
         }
       }
     }
@@ -1112,6 +1143,9 @@ export function visibleBandsOf(hits, cut, opts = {}) {
         distMm: wallMatch.distMm, isKneeDrop: wallMatch.isKneeDrop === true,
         ...farFaceAnnotation(hits, z0, z1, zLo),
         ...(wallMatch.profiledTop ? { profiledTop: true } : {}),
+        // 天端が階段の裏面との取り合い（平らな天端が連続する天井との接線）か／階段室越しの壁か
+        ...(wallMatch.junctionTop ? { junctionTop: true } : {}),
+        ...(wallMatch.viaStair ? { viaStair: true } : {}),
         // 斜めの天端の線は、候補の上端に届いている帯（z区間の分割で上端が切られた下の帯ではない）だけが持つ。
         ...(wallMatch.topEdge && Math.abs(z1 - wallMatch.z1) < GAP_EPS ? { topEdge: wallMatch.topEdge } : {}),
       };
@@ -1257,4 +1291,30 @@ function mergeAdjacentZBands(bands, baseFloorZ) {
 export function probeColumn(cut, worldMid, probeCtx, span = null) {
   const { hits, layerStack, unexploredBelowZ } = probeColumnHits(cut, worldMid, probeCtx, span);
   return visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+}
+
+/**
+ * 面に直交して奥へ延びる壁（視線に平行な壁）のz存在範囲（絶対z）。`sectionEmit.js`の
+ * `emitOpenSpanEdgeOnWalls`（開放スパンの中に見える隔て板等の両面の縦線）が縦線を引くz範囲の情報源。
+ * 見えがかり壁（wallFace候補）と**同じ式**——上限は`resolveSightlineTopZ`（上が吹抜けなら上階の天井まで）、
+ * 腰壁・垂れ壁・天端プロファイルは`kneeDropZRangesAt`——で求める（別式を持たない）。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {{graph:object, floorZMm:number, role:string}} layer - 壁の属する層
+ * @param {import('@core').Wall} wall - 面に直交する壁
+ * @param {number} depth - 壁の長さ方向（視線方向）の位置。面の線での値を渡す
+ * @param {number} lateral - 壁の軸CLの座標（切断線の走り方向。層スタックを引く列の位置）
+ * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
+ * @returns {Array<{z0:number, z1:number}>} 層スタックに層が無い等は空
+ */
+export function edgeOnWallZRanges(cut, layer, wall, depth, lateral, probeCtx) {
+  const stack = buildLayerStack(cut, lateral, probeCtx);
+  const info = stack.find(i => i.layer === layer);
+  if (!info || info.ceilZ == null) return [];
+  // roomAtWallPosition / wallContinuesOnLayer は壁の向き（wall.isVertical）で軸を選ぶので、直交壁には
+  // 「第2引数＝壁の長さ方向の位置」を渡す（見えがかり壁の呼び出しとは座標の役割が入れ替わるだけ）。
+  const capZ = resolveSightlineTopZ(
+    stack, info, roomAtWallPosition(wall, depth, cut.viewSign, probeCtx), cut.zRange?.hiZ ?? 0,
+    wallContinuesOnLayer(wall, depth),
+  );
+  return kneeDropZRangesAt(layer.graph, wall, depth, info.floorZ, capZ, wallTopOf(probeCtx, layer, wall));
 }

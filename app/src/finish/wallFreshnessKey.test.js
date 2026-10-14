@@ -31,7 +31,7 @@ function makeRoom(graph, name = '部屋A') {
 test('wallFreshnessKey: 書式は {version}|ext=...|int=...|shaft=...|str=...|col=...|rooms=...|fh=...|geo=...|cells=...|stairs=... で、バージョン定数と一致する', () => {
   const graph = makeGraph();
   const key = wallFreshnessKey(graph);
-  assert.equal(WALL_KEY_VERSION, 'v8');
+  assert.equal(WALL_KEY_VERSION, 'v9');
   assert.ok(key.startsWith(`${WALL_KEY_VERSION}|ext=`));
   assert.match(key, /\|ext=[^|]*\|int=[^|]*\|shaft=[^|]*\|str=[^|]*\|col=[^|]*\|rooms=[^|]*\|fh=[^|]*\|geo=[0-9a-z]+\|cells=[0-9a-z]+\|stairs=[0-9a-z]+$/);
 });

@@ -143,7 +143,7 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
   // ときstairUnderEntries/extraStairOpeningsが欠落し壁が変わって無通知になる）。
   const peekLowerGraph = async (plane, structGraph) =>
     (fmode?._lowerGraph?.plane?.id === plane.id ? fmode._lowerGraph : await floorSwapManager.peek(plane, structGraph));
-  const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, peekLowerGraph);
+  const { stairUnderEntries, extraStairOpenings, belowGraph } = await resolveStairContext(graph, project, peekLowerGraph);
 
   const wallKeyBefore = graph.wallFreshnessKey;
   // 壁再生成で下地帯の中心が動いたとき（下地材コード変更で壁厚が変わる等）、壁由来の梁芯CL
@@ -155,6 +155,7 @@ export async function runFinishExitBoundary(graph, project, fmode, { goingToStru
     project,
     stairUnderEntries,
     extraStairOpenings,
+    belowGraph,
   });
   undoFns.push(...wallUndoFns);
   redoFns.push(...wallRedoFns);

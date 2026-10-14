@@ -502,6 +502,11 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       // 反対側を向いていた（実機「6」D1が、向こうに壁の無いはずの面で1500+2000に割れた）。
       // 中心1のCLが引けない構成では従来どおりwOut1へフォールバックする。
       seqNo: '2', face: midOutFace ?? wOut1, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
+      // レーン境界に**自階の実壁**（隔て板）があればアキを標記しない——隔て板の上・端の先は同じ階段室の
+      // 空気で、面の抜けではない（ユーザー裁定2026-10-14「バツは不要」）。隔て板は階段室の自階の壁なので
+      // `wall`（upperGraph 優先の探索）ではなく自階の graph で探す。上階側だけにある往復間の壁（2F の腰壁等）の
+      // 上のアキは従来どおり標記する（「6」C の裁定2026-09を保つ）。自階に実壁が無い（鉄骨等）ときも従来どおり。
+      ...(midOutFace && findMidWall(graph, wEntry, wLanding, landingDepthMm, f) ? { openGapMarks: false } : {}),
       layers, zRange: zRangeUpper, baseFloorZ: 0, stairCut: outboundWithLandingSeq2,
     },
   ];

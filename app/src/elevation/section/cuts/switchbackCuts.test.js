@@ -182,7 +182,7 @@ test('【WP-E5】switchbackCuts: 往復間の壁が無ければseq2のfaceはhas
   assert.equal(result.cuts.find(c => c.seqNo === '2').face.hasRealWall, false);
 });
 
-test('【2026-10-07 アキ不要】switchbackCuts: seq1/seq3 は openGapMarks===false・seq2/4/5 は未指定（アキは従来どおり）', () => {
+test('【2026-10-07 アキ不要】switchbackCuts: seq1/seq3 は openGapMarks===false・seq4/5 は未指定（アキは従来どおり）。seq2 はレーン境界の実壁が無いとき未指定', () => {
   for (const withMidWall of [false, true]) {
     const graph = makeGraph();
     const { room, stair } = makeSwitchbackFixture(graph, { withMidWall });
@@ -191,8 +191,64 @@ test('【2026-10-07 アキ不要】switchbackCuts: seq1/seq3 は openGapMarks===
     const byNo = Object.fromEntries(result.cuts.map(c => [c.seqNo, c]));
     assert.equal(byNo['1'].openGapMarks, false);
     assert.equal(byNo['3'].openGapMarks, false);
-    for (const n of ['2', '4', '5']) assert.equal(byNo[n].openGapMarks, undefined, `seq${n}は標記する側のまま`);
+    for (const n of ['4', '5']) assert.equal(byNo[n].openGapMarks, undefined, `seq${n}は標記する側のまま`);
   }
+});
+
+test('【裁定2026-10-14 バツは不要】switchbackCuts: レーン境界に実壁（隔て板）があれば seq2 も openGapMarks===false', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
+  const faces = composeRoomFaces(room, graph);
+  const seq2 = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }).cuts.find(c => c.seqNo === '2');
+  assert.equal(seq2.face.hasRealWall, true, '前提: レーン境界は実壁');
+  assert.equal(seq2.openGapMarks, false);
+});
+
+test('【裁定2026-10-14】switchbackCuts: 隔て板が自階の壁で upperGraph 側に無くても（本番の木造）seq2 は openGapMarks===false。face.hasRealWall は従来どおり false', () => {
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
+  const faces = composeRoomFaces(room, graph);
+  const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] });
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, upperGraph, layers });
+  const seq2 = result.cuts.find(c => c.seqNo === '2');
+  assert.equal(result.wall, null, '前提: upperGraph には壁が無い');
+  assert.equal(seq2.face.hasRealWall, false);
+  assert.equal(seq2.openGapMarks, false);
+});
+
+test('【裁定2026-10-14】switchbackCuts: 往復間の壁が自階と上階の両方にあれば seq2 は openGapMarks===false（自階の壁が勝つ）', () => {
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
+  makeSwitchbackFixture(makeGraph('scratch'), { withMidWall: true, midWallGraph: upperGraph }); // 上階側にも同座標の壁
+  const faces = composeRoomFaces(room, graph);
+  const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] });
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, upperGraph, layers });
+  assert.ok(result.wall, '前提: upperGraph 側の壁が見つかる');
+  assert.equal(result.cuts.find(c => c.seqNo === '2').openGapMarks, false);
+});
+
+test('【失敗系・裁定2026-10-14】switchbackCuts: 往復間の壁が上階側（upperGraph）にだけある（2F の腰壁等）なら seq2 は openGapMarks 未指定——その上のアキは従来どおり標記する（「6」C の裁定2026-09）', () => {
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph });
+  const faces = composeRoomFaces(room, graph);
+  const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] });
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, upperGraph, layers });
+  const seq2 = result.cuts.find(c => c.seqNo === '2');
+  assert.ok(result.wall, '前提: upperGraph に往復間の壁がある');
+  assert.equal(seq2.face.hasRealWall, true, '前提: face は上階の壁で実壁扱い');
+  assert.equal(seq2.openGapMarks, undefined, '自階に壁が無ければ標記する側のまま');
+});
+
+test('【失敗系・裁定2026-10-14】switchbackCuts: レーン境界に実壁が無い（鉄骨等）なら seq2 は openGapMarks 未指定（アキは従来どおり）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  const seq2 = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) }).cuts.find(c => c.seqNo === '2');
+  assert.equal(seq2.face.hasRealWall, false, '前提: 実壁なし');
+  assert.equal(seq2.openGapMarks, undefined);
 });
 
 test('【WP-E5】switchbackCuts: 腰壁指定はkneeDropが解決される', () => {

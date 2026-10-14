@@ -223,14 +223,14 @@ test('【失敗系】stair が null / セルが空: 例外なく null', () => {
 });
 
 // ---- S4-1: 天端の単一情報源 ----
-test('partitionTopZAt: 両端・中点・端の外のクランプ（等長 up: entryEnd y=4000 で3200・landingEnd y=1000 で2200）', () => {
+test('partitionTopZAt: 両端・中点・端の外は同じ勾配で延長（等長 up: entryEnd y=4000 で3200・landingEnd y=1000 で2200）', () => {
   const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
   const p = resolveStairPartition(stair, graph, opts());
   assert.equal(partitionTopZAt(p, 4000), 3200);
   assert.equal(partitionTopZAt(p, 1000), 2200);
   assert.equal(partitionTopZAt(p, 2500), 2700);
-  assert.equal(partitionTopZAt(p, 5000), 3200, 'entry 側の外は端の値');
-  assert.equal(partitionTopZAt(p, 0), 2200, 'landing 側の外は端の値');
+  assert.ok(Math.abs(partitionTopZAt(p, 5000) - (3200 + 1000 / 3)) < 1e-6, 'entry 側の外は勾配 1/3 で延長');
+  assert.ok(Math.abs(partitionTopZAt(p, 0) - (2200 - 1000 / 3)) < 1e-6, 'landing 側の外は勾配 1/3 で延長');
 });
 
 test('partitionTopZAt: full（続く層）・desc なしは null', () => {
@@ -239,12 +239,13 @@ test('partitionTopZAt: full（続く層）・desc なしは null', () => {
   assert.equal(partitionTopZAt(null, 2500), null);
 });
 
-test('partitionTopCrossings: 斜線が横切る z は1交点・範囲外（端の値ちょうど含む）は0交点・full は空', () => {
+test('partitionTopCrossings: 斜線（端の外へ延長）が横切る z は1交点・設計端の外の along も返す・full は空', () => {
   const { graph, stair } = makeStair(EQUAL_UP, { upDirection: 'up' });
   const p = resolveStairPartition(stair, graph, opts());
   assert.deepEqual(partitionTopCrossings(p, [2700]), [2500]);
   assert.deepEqual(partitionTopCrossings(p, [2800, 2600]), [2200, 2800], '昇順で返す');
-  assert.deepEqual(partitionTopCrossings(p, [2200, 3200, 1000, 4000]), []);
+  assert.deepEqual(partitionTopCrossings(p, [2200, 3200, 1000, 4000]), [-2600, 1000, 4000, 6400]);
+  assert.deepEqual(partitionTopCrossings(p, [NaN, Infinity, 2700]), [2500], '非有限の z は捨てる');
   assert.deepEqual(partitionTopCrossings(resolveStairPartition(stair, graph, opts({ continuesAbove: true })), [2700]), []);
 });
 

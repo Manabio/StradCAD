@@ -19,6 +19,7 @@ import { StairType } from '@core';
 import { buildStairGeometry, cellsBeyondBreak } from './stairGeometry.js';
 import { cellBoundsList } from '../gridCells.js';
 import { stairUnderRoomsOf } from './stairUnderRooms.js';
+import { stairUnderReturnGeometry, isStairUnderReturnWall } from './stairPartition.js';
 import { wallWorldRect } from '../../openings/openingGeometry.js';
 
 // keep領域（破れ線先セルの実矩形）の拡張量(mm)。2a壁の下地厚(90)+仕上げ厚(12.5)と、外側の
@@ -148,7 +149,15 @@ export function stairUnderWallClips(graph, installEntries, opts = {}) {
     if (hasLowerStair) continue;
 
     const rooms = stairUnderRoomsOf(stair, graph, beyond);
-    if (rooms.length === 0) continue;
+    // 復路下の壁（折返し階段の踊り場前縁の壁）は階段ごとの線（1本）で照合する。
+    const returnGeom = stairUnderReturnGeometry(stair, graph);
+    const returnLine = returnGeom
+      ? [{ isVertical: returnGeom.isVertical, axisValue: returnGeom.axisValue, lo: returnGeom.lo, hi: returnGeom.hi }]
+      : [];
+    const returnWalls = returnLine.length > 0
+      ? (graph.walls ?? []).filter(w => isStairUnderReturnWall(w, returnLine))
+      : [];
+    if (rooms.length === 0 && returnWalls.length === 0) continue;
 
     // keep領域（beyondセルの実矩形をKEEP_MARGIN拡張）。半平面クリップ対象の型のみ、
     // 破れ線弦の beyond側でさらに絞り込む（求まらなければ矩形のまま＝安全側フォールバック）。
@@ -182,12 +191,9 @@ export function stairUnderWallClips(graph, installEntries, opts = {}) {
     }
     if (keepPolys.length === 0) continue; // 全滅（退化）→ 安全側でクリップしない
 
-    for (const room of rooms) {
-      const wallIds = [...room.generatedWallIds];
-      if (wallIds.length === 0) continue;
-      const walls = wallIds.map(id => graph.shapeMap.get(id)).filter(Boolean);
-      if (walls.length === 0) continue;
-
+    // walls をクリップ対象としてサブパスを作り、clips へ登録する（2a壁・復路下の壁で共通）。
+    // keep … footprint 内で描く領域。復路下の壁は空（footprint 内を全部クリップ）。
+    const addClip = (walls, keep) => {
       let wallsBBox = null;
       for (const w of walls) {
         const r = wallWorldRect(w);
@@ -201,11 +207,23 @@ export function stairUnderWallClips(graph, installEntries, opts = {}) {
       const subpaths = [
         orient(rectPolygon(outerRect), true),
         orient(rectPolygon(footprintHole), false),
-        ...keepPolys,
+        ...keep,
       ];
 
       for (const w of walls) clips.set(w.id, subpaths);
+    };
+
+    for (const room of rooms) {
+      const wallIds = [...room.generatedWallIds];
+      if (wallIds.length === 0) continue;
+      const walls = wallIds.map(id => graph.shapeMap.get(id)).filter(Boolean);
+      if (walls.length === 0) continue;
+      addClip(walls, keepPolys);
     }
+
+    // 復路下の壁は復路の踏面の下に立つので、平面では footprint 内を全部クリップする
+    // （ユーザー指示2026-10-14「復路階段には重ねない」。破れ線を越えた部分も描かない）。
+    if (returnWalls.length > 0) addClip(returnWalls, []);
   }
 
   return clips.size > 0 ? clips : null;

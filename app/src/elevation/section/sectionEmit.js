@@ -8,8 +8,9 @@
  */
 import {
   GAP_LABEL_WIDTH_PX,
-  ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, kneeCapBottomMm, kneeCapFaceMm,
+  ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, kneeCapBottomMm, kneeCapFaceMm,
 } from '../elevationStyle.js';
+import { graphList } from '../../graphReadScope.js';
 import {
   zToY, cutDrawRange, localXOf, hasCutWallStandingOn, slabRuns, cutWallRuns, slabJunctionOf,
 } from './sectionTypes.js';
@@ -183,7 +184,7 @@ function uncoveredZRanges(col, band, side = null) {
       // 続いていなければ残る（「5」B: 上階の壁が腰壁で終わっている）。
       ranges = subtractZ(ranges, { z0: band.z0, z1: cutTop });
     }
-    // 斜め・柱頭の天端の帯（topEdge）は境界での天端の高さまでしか覆わない（帯の上端 z1 は高い側の値）。
+    // 斜めの天端の帯（topEdge）は境界での天端の高さまでしか覆わない（帯の上端 z1 は高い側の値）。
     // side: 隣接列が自列の手前側（'prev'＝その x1 が境界）か向こう側（'next'＝その x0 が境界）か。
     const nbTop = side && nb.topEdge ? Math.min(nb.z1, side === 'prev' ? nb.topEdge.zAtX1 : nb.topEdge.zAtX0) : nb.z1;
     ranges = subtractZ(ranges, nbTop === nb.z1 ? nb : { z0: nb.z0, z1: nbTop });
@@ -546,7 +547,8 @@ export function nearestSightlineDistMm(columns) {
   let min = Infinity;
   for (const col of columns ?? []) {
     for (const band of col.bands) {
-      if (band.kind === 'wall' && Number.isFinite(band.distMm)) min = Math.min(min, band.distMm);
+      // 階段室越しの壁（viaStair）は数えない——面から離れた階段室の壁が「直近」になって手前の線種の階調を変えない
+      if (band.kind === 'wall' && !band.viaStair && Number.isFinite(band.distMm)) min = Math.min(min, band.distMm);
     }
   }
   return min;
@@ -771,7 +773,8 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         // 遠くの壁は同面ではないので、スラブ小口の線はそのまま出る（実機の右半分がこれ）。
         const flushOnSlab = band.isKneeDrop
           && col.bands.some(b => b.kind === 'slab' && Math.abs(b.z1 - band.z0) < GAP_EPS);
-        const role = sightRole(band.distMm);
+        // 階段室越しの壁（viaStair）は面から離れた向こう側の空間の壁なので、常に細線（直近の階調に参加しない）。
+        const role = band.viaStair ? ElevationLineRole.DETAIL : sightRole(band.distMm);
         // 見えがかりの水平線は「仮想断面からの距離が変わるところ」だけに描き、FL・CHには描かない
         // （ユーザー明示指示2026-08。visibleDepthMm / sectionLevelZs 参照）。
         // 天井断面の高さは列ごとに違う（区間ごとの天井。sectionEngine.jsのceilProfile）ため、
@@ -792,7 +795,8 @@ export function emitColumns(columns, cut, emitCtx = {}) {
         const upperBand = neighborBandAt(col, band.z1, +1);
         const atSpaceCeil = upperBand?.kind === 'slab' && Number.isFinite(upperBand.ceilZ)
           && Math.abs(upperBand.ceilZ - band.z1) < GAP_EPS;
-        const topRole = atSpaceCeil ? ElevationLineRole.SILHOUETTE : role;
+        // 階段の裏面との取り合いの天端（junctionTop）は壁の自由な縁ではなく、連続する天井との接線＝常に細線。
+        const topRole = band.junctionTop ? ElevationLineRole.DETAIL : (atSpaceCeil ? ElevationLineRole.SILHOUETTE : role);
         // 斜めの天端（band.topEdge。隔て壁）: 天端は列の両端の高さを結ぶ斜線。斜線は FL・CH の高さに
         // 端が触れても列の境界で切れているだけ（列の境界は斜面が水平線を横切る位置で割ってある）なので、
         // 水平線との重なり判定（atSectionLevel・ownedBySectionSlab）は対象外。
@@ -951,7 +955,9 @@ export function emitColumns(columns, cut, emitCtx = {}) {
       const a = col.bands[i], b = col.bands[i + 1];
       const aIsFloorEdge = (a.kind === 'slab' || a.kind === 'open');
       const bIsFloorEdge = (b.kind === 'slab' || b.kind === 'open');
-      if (aIsFloorEdge && bIsFloorEdge && a.kind !== b.kind) {
+      // 階段室の最初の壁（viaStair）は手前の空気が開いている＝床スラブの端（床の線）は壁の下でも続く。
+      const viaStairOnSlab = a.kind === 'slab' && b.kind === 'wall' && b.viaStair;
+      if ((aIsFloorEdge && bIsFloorEdge && a.kind !== b.kind) || viaStairOnSlab) {
         if (!hiddenByCutWall(col, a.z1) && !ownedBySectionSlab(sectionSlabs, col, a.z1)) {
           prims.push(emitLine(cut, col.x0, a.z1, col.x1, a.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
         }
@@ -1232,7 +1238,9 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
       // 真上の上階アキと連結して1つの塊になり、その塊の対角＝バツが姿図の上を通ってしまう
       // （旧仕様「開口が2階アキと連続する場合の1つの大きなX」＝defer D1。本指示で廃止）。
       // 上階アキ自身は開口を外しても単独の連結成分として残るので、そちらのバツは従来どおり出る。
-      if (b.kind === 'open' && !b.openingPassThrough && !overCutWall) {
+      // **抜けの先が階段室（farStair）ならアキではない**（ユーザー裁定2026-10-14「ホール C: バツはなし」）
+      // ——階段室への通路であって、向こうに何も無い抜けの標記を出す場所ではない。
+      if (b.kind === 'open' && !b.openingPassThrough && !overCutWall && !b.farStair) {
         const x0 = Math.max(col.x0, faceLoX), x1 = Math.min(col.x1, faceHiX);
         if (x1 - x0 <= GAP_EPS) continue; // 面の外（延長ぶん）だけの列
         // **アキの下端はband自身が決める**（展開図一般化Phase 6b-2 C-2。設計
@@ -1408,6 +1416,117 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
         prims.push(...subtractRectsFromLine(line, blockers));
       }
     }
+  }
+  return prims;
+}
+
+// 隅の取り合いの許容差（sectionHits.js の CORNER_OVERHANG_EPS_MM と同じ150mm）。
+const EDGE_ON_CORNER_EPS_MM = 150;
+
+// 列 columns の x（面ローカル）に接する全列で'open'の帯のz範囲（列の継ぎ目なら両側の列の共通部分）。
+// 階段室越しの壁の帯（viaStair。階段室の最初の壁）も、手前の空気は開いているので通す（隔て板の端は
+// その壁の手前に立って見える）。接する帯は1つの範囲へつなぐ。
+function openZRangesAt(columns, x) {
+  const touching = columns.filter(c => c.x0 - GAP_EPS <= x && x <= c.x1 + GAP_EPS);
+  if (touching.length === 0) return [];
+  let ranges = null;
+  for (const c of touching) {
+    const opens = c.bands
+      .filter(b => (b.kind === 'open' && !b.openingPassThrough) || (b.kind === 'wall' && b.viaStair))
+      .map(b => ({ z0: b.z0, z1: b.z1 }))
+      .sort((a, b) => a.z0 - b.z0)
+      .reduce((acc, r) => {
+        const last = acc[acc.length - 1];
+        if (last && r.z0 <= last.z1 + GAP_EPS) last.z1 = Math.max(last.z1, r.z1);
+        else acc.push({ ...r });
+        return acc;
+      }, []);
+    ranges = ranges === null ? opens : ranges.flatMap(r => opens
+      .map(o => ({ z0: Math.max(r.z0, o.z0), z1: Math.min(r.z1, o.z1) }))
+      .filter(m => m.z1 - m.z0 > GAP_EPS));
+  }
+  return ranges;
+}
+
+/**
+ * **開放スパンの中に見える、視線に平行な壁（面の線に端を接して奥へ延びる直交壁）の両面の縦線**
+ * （ユーザー裁定2026-10-14「ホール C: X2の右910には壁がフルハイトに立っているので、左右壁厚に中線が
+ * 正解」）。面の平面に壁が無い（'open'）範囲の向こうに、面の軸CLから奥へ延びる壁（階段の隔て板等）が
+ * 立っていると、それは真横から見え、壁厚ぶんの2本の縦線になる。
+ *
+ * 対象は自階の層の壁で、(1)面に直交し (2)奥へ延びる側の端が面に接している（切断線〜面の軸CLの間。
+ * `cut.face`が無ければ切断線）もの。切断壁（'cut'帯＝切断線を横切る壁）は別経路で描かれ、その位置は
+ * 'open'帯ではないので重ならない。同じ軸CLで端が揃う壁（隔て板の下地壁＋仕上げ薄壁）は1枚として
+ * 材の範囲の最小〜最大の外面2本だけ描く。面の端に材が届く壁（面自身の端壁）は`recessLo/Hi`が描くので除く。
+ * z範囲は「その位置の'open'帯」∩「壁の存在z範囲」（`wallZRangesOf`。腰壁・天端プロファイル・上階への
+ * 続きを含む。`sectionHits.js`の`edgeOnWallZRanges`）。壁の高さの外（吹抜けの上など）には引かない。
+ * 階段帯（`cut.stairCut`）では呼ばない（`sectionContent.js`。階段の面は別規則）。
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {((layer:object, wall:object, depth:number, lateral:number)=>Array<{z0:number,z1:number}>)|null} [wallZRangesOf]
+ *   省略（null）は壁の高さを制限しない（単体テスト用）。
+ * @param {number} [ceilZ]
+ * @param {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>|null} [rectsOut] - 渡すと、縦線を引いた壁ごとの
+ *   端面の矩形（面ローカルx×z）を追記する（その向こうの階段の見えがかり等を隠す遮蔽。`sectionContent.js`）。
+ * @returns {object[]}
+ */
+export function emitOpenSpanEdgeOnWalls(columns, cut, wallZRangesOf = null, ceilZ = undefined, rectsOut = null) {
+  const layer = (cut.layers ?? []).find(l => l?.role === 'self');
+  const walls = layer?.graph ? graphList(layer.graph, 'walls') : null;
+  if (!walls?.length) return [];
+  const { line, viewSign } = cut;
+  const refAxis = cut.face?.axisCL?.effectiveValue ?? line.axisValue;
+  const { loX: faceLoX, hiX: faceHiX } = faceRangeX(cut);
+  // 面の壁に接する範囲＝切断線から面の軸CLまで（切断線は仕上げ面の分だけ室内側へ下がっている）。
+  const attachMaxMm = Math.max(0, (refAxis - line.axisValue) * viewSign) + PROBE_EPS_MM;
+  const groups = new Map(); // 軸CL → {walls, lo, hi, depth}
+  const crossing = new Set();
+  for (const w of walls) {
+    if (w.isVertical === line.isVertical || !w.materialRange) continue;
+    const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
+    if (c2 - c1 <= PROBE_EPS_MM) continue;
+    const along = viewSign > 0 ? c1 : c2; // 奥（視線方向）へ延びる壁の、手前の端
+    const gapMm = (along - line.axisValue) * viewSign; // 切断線から壁の端まで（視線方向）
+    const key = w.axisCL?.id ?? w.axisCL ?? w.id;
+    // 切断線より手前（室内側）へ延びる壁は切断壁（面を横切る壁）——同じ軸CLの壁は組ごと対象外。
+    if (gapMm < -PROBE_EPS_MM) { crossing.add(key); continue; }
+    if (gapMm > attachMaxMm) continue;
+    const lo = Math.min(w.materialRange.lo, w.materialRange.hi), hi = Math.max(w.materialRange.lo, w.materialRange.hi);
+    const g = groups.get(key);
+    if (g) { g.walls.push(w); g.lo = Math.min(g.lo, lo); g.hi = Math.max(g.hi, hi); }
+    else groups.set(key, { walls: [w], lo, hi, depth: Math.min(Math.max(refAxis, c1), c2) }); // depth＝面の線での壁の位置
+  }
+  const prims = [];
+  for (const [key, g] of groups) {
+    if (crossing.has(key)) continue;
+    const xs = [localXOf(cut, g.lo), localXOf(cut, g.hi)].sort((a, b) => a - b);
+    if (xs[0] <= faceLoX + GAP_EPS || xs[1] >= faceHiX - GAP_EPS) continue; // 面自身の端壁
+    // 面の壁の途切れ目（開口の脇）に立つ直交壁も、その壁自身の端壁（隅の取り合い）であって
+    // 開放スパンの中の独立した壁ではない——両脇 EDGE_ON_CORNER_EPS_MM 以内に壁・切断壁の列があれば除く。
+    if (openZRangesAt(columns, xs[0] - EDGE_ON_CORNER_EPS_MM).length === 0
+      || openZRangesAt(columns, xs[1] + EDGE_ON_CORNER_EPS_MM).length === 0) continue;
+    // 壁の存在z範囲（組の全壁の和）。引けない（関数なし）ときは制限しない。
+    const wallZ = [];
+    for (const u of (wallZRangesOf
+      ? g.walls.flatMap(w => wallZRangesOf(layer, w, g.depth, w.axisCL?.effectiveValue))
+      : [{ z0: -Infinity, z1: Infinity }]).sort((a, b) => a.z0 - b.z0)) {
+      const last = wallZ[wallZ.length - 1];
+      if (last && u.z0 <= last.z1 + GAP_EPS) last.z1 = Math.max(last.z1, u.z1);
+      else wallZ.push({ z0: u.z0, z1: u.z1 });
+    }
+    let zLo = Infinity, zHi = -Infinity;
+    for (const x of xs) {
+      for (const r of openZRangesAt(columns, x)) {
+        for (const u of wallZ) {
+          const z0 = Math.max(r.z0, u.z0), z1 = Math.min(r.z1, u.z1);
+          if (z1 - z0 <= GAP_EPS) continue;
+          prims.push(emitLine(cut, x, z0, x, z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+          zLo = Math.min(zLo, z0); zHi = Math.max(zHi, z1);
+        }
+      }
+    }
+    // 壁の端面（両面の間）は手前を塞ぐ実体＝その向こうの見えがかりを隠す矩形（呼び出し側が遮蔽に使う）。
+    if (rectsOut && zHi > zLo) rectsOut.push({ xLo: xs[0], xHi: xs[1], zLo, zHi });
   }
   return prims;
 }

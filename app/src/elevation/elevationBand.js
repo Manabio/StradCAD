@@ -720,7 +720,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
   const includeFace = opts.includeFace ?? (() => true);
   // 帯のz原点は**この帯の部屋の実効FL**（finalizeBandの平行移動と対）。プローブの床解決は階の
   // datum基準なので、その差を渡して差し引かせる（floorOffset=0の帯では出力完全不変）。
-  const probeCtx = makeProbeContext(layers, { floorOffsetMm: bandFloorOffsetMm(room, graph) });
+  const probeCtx = makeProbeContext(layers, { floorOffsetMm: bandFloorOffsetMm(room, graph), floorHeightMm: opts.floorHeightMm });
   const bandRoomBounds = roomBounds(room.cells, graph);
   const bandRoomCells = cellBoundsList(room.cells, graph);
   // 柱型は全層ぶんを一度だけ求めて全面で使い回す（仮想断面位置の決定に使う。層ごとに引き直すと
@@ -824,6 +824,8 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         stringerSightlineLowerOnly: true,
         // 階段下の部屋では階段は上を通る見えがかり（ユーザー実機確認済みの「階段の高さ」の細線）。段板の断面は出さない。
         treadSection: false,
+        // 階段の下からは段裏が見えるだけなので、切断面の奥の段の見えがかり（細線）は出さない。
+        farSide: false,
       });
       // 天井が張られている範囲では、その上の階段は天井に隠れる（clipStairUnderCeiling）。
       const { prims: shown, crossXs } = clipStairUnderCeiling(raw, ceilAbs);
@@ -910,7 +912,7 @@ export function buildRoomBand(room, graph, ctx = {}) {
   // 探査延長・見えがかりの距離判定・アキは多層帯と同一の処理を通る。
   const layers = buildBandLayers(graph);
   appendBandCutContent(primitives, room, graph, layout, layers,
-    { endExtendMm: ctx.wallLessEndExtendModelMm,
+    { endExtendMm: ctx.wallLessEndExtendModelMm, floorHeightMm: ctx.solids?.floorHeightMm,
       stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm) });
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,

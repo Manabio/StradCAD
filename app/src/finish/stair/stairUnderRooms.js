@@ -99,7 +99,7 @@ export function resolveStairUnderEntries(graph, { lowerStairCellBounds = [], flo
  * @param {object} project
  * @param {(plane:object, structGraph:object) => Promise<object|null>} peek - 直下階のグラフを
  *   解決する関数（存在しない／解決できないときは null を返す）
- * @returns {Promise<{ stairUnderEntries: Array, extraStairOpenings: Array }>}
+ * @returns {Promise<{ stairUnderEntries: Array, extraStairOpenings: Array, belowGraph: object|null }>}
  */
 export async function resolveStairContext(graph, project, peek) {
   const planes = project.planes;
@@ -130,5 +130,6 @@ export async function resolveStairContext(graph, project, peek) {
       extraStairOpenings.push(...stairPortEdges(s, belowGraph, ['arrival']));
     }
   }
-  return { stairUnderEntries, extraStairOpenings };
+  // belowGraph … 解決した直下階（最下階は null）。復路下の壁の生成（同じ足元の続き階段が下階に無いときだけ立てる）が読む。
+  return { stairUnderEntries, extraStairOpenings, belowGraph };
 }

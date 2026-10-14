@@ -50,9 +50,9 @@ if (regen) {
     runInAction(() => conformWoodBacking(graph, project));
     const aligned = runInAction(() => alignPortStairsOnGraph(graph));
     if (aligned) console.error(`[regen] ${p.name}: 木造の側面の取りつき蹴上 0 を 1 へそろえた`);
-    const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, graphMapPeek);
+    const { stairUnderEntries, extraStairOpenings, belowGraph } = await resolveStairContext(graph, project, graphMapPeek);
     const before = graph.walls.length;
-    await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings });
+    await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings, belowGraph });
     const lines = stairPartitionLines(graph);
     const partitions = [...graph.walls].filter(w => isStairPartitionWall(w, lines)).length;
     console.error(`[regen] ${p.name}: 壁 ${before}→${graph.walls.length}・隔て壁 ${partitions}`);

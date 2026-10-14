@@ -101,8 +101,8 @@ async function regenerateAllWalls(project, { align }) {
       runInAction(() => conformWoodBacking(graph, project));
       runInAction(() => alignPortStairsOnGraph(graph));
     }
-    const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, graphMapPeek);
-    await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings });
+    const { stairUnderEntries, extraStairOpenings, belowGraph } = await resolveStairContext(graph, project, graphMapPeek);
+    await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings, belowGraph });
   }
 }
 

@@ -43,3 +43,14 @@ test('【配線】appendBandCutContent: flightsOverRoom 2 箇所と stringerSigh
   assert.equal(count(body, 'stringerSightlineVisible('), 1, 'stringerSightlineVisible の呼び出しが 1 回でない');
   assert.ok(!/stringerSightlineVisible\([^)]*bandRoomBounds/.test(body), 'stringerSightlineVisible に bandRoomBounds を渡している');
 });
+
+test('【配線】contentForCut（elevationStairSequence.js）: 壁の端の縦線は階段の実体の天端で切る（clipWallEndVerticalsByStairMass を壁プリミティブに通す）', () => {
+  const seqSrc = fs.readFileSync(path.resolve(import.meta.dirname, 'elevationStairSequence.js'), 'utf8');
+  assert.equal(seqSrc.split('dashHorizontalsBehindStair(clipWallEndVerticalsByStairMass(wallPrims, cut, columns), occluders)').length - 1, 1);
+});
+
+test('【配線】appendBandCutContent: 階段下の部屋の stairPrimitivesForCut は farSide:false を渡す（下から見ると段裏。切断面の奥の段の見えがかりは出さない）', () => {
+  const body = functionBody(noComments, 'export function appendBandCutContent(');
+  assert.equal(count(body, 'stairPrimitivesForCut('), 1, 'stairPrimitivesForCut の呼び出しが 1 回でない');
+  assert.equal(count(body, 'farSide: false'), 1, 'farSide: false が無い');
+});

@@ -25,6 +25,7 @@
 import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 import { localXOf, worldOf, ceilProfileEdgeAt, ceilClipProfileOf } from './sectionTypes.js';
 import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
+import { farRoomAt } from './sectionHits.js';
 import { faceFromCut } from './sectionFace.js';
 import { emitColumns, emitOpenGapMarks, nearestSightlineDistMm } from './sectionEmit.js';
 import { stairPrimitivesForCut } from './sectionStair.js';
@@ -57,6 +58,11 @@ function bandsEqual(a, b) {
       // Phase5: extendedFromZ（下端をfarFloorZまで伸ばした帯の、伸ばす前のz0。emitOpenGapMarksの
       // 一点鎖線/破線切替の判定材料）も同じ理由で比較する。
       && (band.extendedFromZ ?? null) === (other.extendedFromZ ?? null)
+      // 抜けの先が階段室か（farStair）も同じ理由で比較する（アキ標記の有無が列ごとに違う）。
+      && (band.farStair ?? false) === (other.farStair ?? false)
+      // 階段室越しの壁（viaStair）・取り合いの天端（junctionTop）も同じ理由で比較する（線種・遮蔽が違う）。
+      && (band.viaStair ?? false) === (other.viaStair ?? false)
+      && (band.junctionTop ?? false) === (other.junctionTop ?? false)
       // 斜めの天端の線（topEdge）が違う列は別の帯——斜線の傾き・位置は列ごとに決まるので統合しない。
       && (band.profiledTop ?? false) === (other.profiledTop ?? false)
       && (band.topEdge?.zAtX0 ?? null) === (other.topEdge?.zAtX0 ?? null)
@@ -356,6 +362,58 @@ export function splitOpenByFarFace(band, nearestMm) {
 }
 
 /**
+ * 面の平面の**向こう側**（壁を挟んで視線の先＝面の軸CLから`viewSign`方向へ`PROBE_EPS_MM`）の
+ * セルの部屋が階段室（`RoomFeature.STAIR`）か。自階の層で引く。面（`cut.face.axisCL`）・自階の層・
+ * `probeCtx.cellAt`のどれかが無ければ false（部屋名ではなく feature で判定する）。
+ * **階段帯（`cut.stairCut`）は対象外**——階段の切断線は階段室の中に置かれ、`viewSign`の向きが
+ * 部屋の面の規約と違う（向こう側の判定にならない）。階段帯のアキは別規則（`openGapMarks`）。
+ * 切断線は面の軸CLから室内側へ下がっている（`faceCutLine`）ので、`line.axisValue`を基準にすると
+ * 自室を引いてしまう——必ず面の軸CLを基準にする。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} worldMid
+ * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
+ * @returns {'stair'|'none'|'other'|null} stair＝階段室／none＝部屋が無い（壁の厚みの帯など）／
+ *   other＝普通の部屋／null＝引けない（上記の条件を満たさない）
+ */
+function farRoomKind(cut, worldMid, probeCtx) {
+  return farRoomAt(cut, worldMid, probeCtx)?.kind ?? null;
+}
+
+// 壁の帯 → 見えがかりの奥行き上限を超えたアキ（open）。`sectionHits.js`が壁の帯へ載せた床・天井の付帯情報は引き継ぐ。
+function wallBandToOpen(b) {
+  return { kind: 'open', z0: b.z0, z1: b.z1, farFloorZ: b.farFloorZ, farCeilZ: b.farCeilZ,
+    farDepthMm: b.farDepthMm, farFloorDepthMm: b.farFloorDepthMm, farCeilDepthMm: b.farCeilDepthMm };
+}
+
+// z範囲が重なるか（farStair の伝播用）。
+const zOverlap = (a, b) => a.z0 < b.z1 - GAP_EPS && a.z1 > b.z0 + GAP_EPS;
+
+/**
+ * 向こう側に部屋が無い（'none'）列の`open`帯を、隣の列の`farStair`帯と**空気がつながっている**なら
+ * 同じ`farStair`にする（階段室の壁の厚みの帯などセル格子の都合で別列になった隙間が、単独のアキの
+ * 成分としてバツ・「ア キ」を出さないように）。z範囲が重なる隣接列を辿って伝播する。
+ * 向こう側に普通の部屋（'other'）がある列は伝播させない。
+ * @param {object[]} columns - x0昇順
+ * @param {Array<'stair'|'none'|'other'|null>} kinds - 列ごとの向こう側の種別
+ */
+function propagateFarStair(columns, kinds) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    columns.forEach((col, i) => {
+      if (kinds[i] !== 'none') return;
+      col.bands = col.bands.map(b => {
+        if (b.kind !== 'open' || b.farStair) return b;
+        const next = [columns[i - 1], columns[i + 1]].some(n => n?.bands.some(nb => nb.kind === 'open' && nb.farStair && zOverlap(nb, b)));
+        if (!next) return b;
+        changed = true;
+        return { ...b, farStair: true };
+      });
+    });
+  }
+}
+
+/**
  * cut → SectionColumn[]（collectCutBreaks→probeColumn×N→mergeColumns。§4「内部フロー」の
  * 前半部分）。buildSectionFigureの内部処理を切り出したもの——face/floorSegments/ceilingProfile
  * を必要とせずcontentだけを組み立てたい呼び出し側（elevationStairSequence.js等）が
@@ -403,6 +461,14 @@ export function buildColumns(cut, probeCtx) {
   // なく**別の空間**なので、見えがかりにせずアキ（open）にする。旧実装の上限は`withinViewRoom`
   // （帯の部屋の包絡矩形）だけで、部屋の中でありさえすれば何m先の壁でも細線で描いていた
   // （実機「5」D1: 面の平面から3200奥の壁が見えがかりになり、アキが出ていなかった）。
+  // **階段室の開口は、階段室の最初の壁まで見通す**（ユーザー裁定2026-10-14 S4）: 階段室越しの壁（viaStair。
+  // 面の向こうが階段室で、階段室側に立つ壁）は上の深度上限（800）を掛けず、その列で最も手前の1枚の壁だけ
+  // 壁の帯として残す。それより奥の壁は従来どおりアキ（open）に作り替える。
+  for (const col of rawColumns) {
+    const firstMm = Math.min(...col.bands.filter(b => b.kind === 'wall' && b.viaStair && Number.isFinite(b.distMm)).map(b => b.distMm));
+    if (!Number.isFinite(firstMm)) continue;
+    col.bands = col.bands.map(b => (b.kind === 'wall' && b.viaStair && b.distMm > firstMm + GAP_EPS ? wallBandToOpen(b) : b));
+  }
   const nearestMm = nearestSightlineDistMm(rawColumns);
   if (Number.isFinite(nearestMm)) {
     for (const col of rawColumns) {
@@ -414,10 +480,9 @@ export function buildColumns(cut, probeCtx) {
       // QA是正2026-09（検算）: farFloorDepthMm/farCeilDepthMmも同じ理由で引き継ぐ——引き継がないと
       // `splitOpenByFarFace`が`farDepthMm`（床天井の深度の最小値）へフォールバックし、床・天井を
       // 独立に上限判定する意味が無くなる（実機「10」D1で旧・共有深度の値へ戻る回帰になる）。
-      col.bands = col.bands.map(b => (b.kind === 'wall' && Number.isFinite(b.distMm)
+      col.bands = col.bands.map(b => (b.kind === 'wall' && !b.viaStair && Number.isFinite(b.distMm)
         && b.distMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
-        ? { kind: 'open', z0: b.z0, z1: b.z1, farFloorZ: b.farFloorZ, farCeilZ: b.farCeilZ,
-            farDepthMm: b.farDepthMm, farFloorDepthMm: b.farFloorDepthMm, farCeilDepthMm: b.farCeilDepthMm }
+        ? wallBandToOpen(b)
         : b);
     }
   }
@@ -432,9 +497,14 @@ export function buildColumns(cut, probeCtx) {
   // 必ず`farDepthMm-(-Infinity)=+Infinity>=上限`になり「上限以上」分岐（付帯情報を落として
   // 従来どおり全域アキ）へ入る——新しい特別扱いを増やさずに済む。
   const limitBasisMm = Number.isFinite(nearestMm) ? nearestMm : -Infinity;
-  for (const col of rawColumns) {
+  const farKinds = rawColumns.map(col => {
     col.bands = col.bands.flatMap(b => splitOpenByFarFace(b, limitBasisMm));
-  }
+    // 抜けの先が階段室ならアキではなく階段室への通路（farStair。emitOpenGapMarksが標記しない）。
+    const kind = col.bands.some(b => b.kind === 'open') ? farRoomKind(cut, (col.worldLo + col.worldHi) / 2, probeCtx) : null;
+    if (kind === 'stair') col.bands = col.bands.map(b => (b.kind === 'open' ? { ...b, farStair: true } : b));
+    return kind;
+  });
+  propagateFarStair(rawColumns, farKinds);
   // 可視領域の判定・打ち切りは**全列を揃えてから**行い、判定は必ず**打ち切り前の実体**で行う
   // ——打ち切りながら進めると、既に打ち切った隣の列のz範囲が変わっていて同じ壁と認識できず、
   // 壁厚が2列に割れている壁の片側だけが処理から漏れる（実機「5」D1: 腰壁の手前半分だけ

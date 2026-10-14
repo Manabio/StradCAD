@@ -47,7 +47,7 @@ import {
 } from './section/sectionEmit.js';
 import {
   stairPrimitivesForCut, stairFaceOccluderRects, stairCutFloorProfile,
-  flightStartOuterBound, mergeOuterBounds,
+  flightStartOuterBound, mergeOuterBounds, clipWallEndVerticalsByStairMass,
 } from './section/sectionStair.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
 import { stairSectionIsClosed } from './elevationStairSection.js';
@@ -499,7 +499,8 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // ただし**階段帯に限り**、断面線（drawFloorProfile）があるときはアキのセルの下限もその輪郭へ
   // 持ち上げる（2026-10-08裁定。C-2の「二重にクランプしない」を階段帯だけ撤回——上の
   // `buildCutContent`へ`gapFloorProfile`で渡し、sectionEmit.jsのemitOpenGapMarksが適用する）。
-  const wallContent = dashHorizontalsBehindStair(wallPrims, occluders);
+  // 壁の端の縦線は、端面に突き当たる階段の実体（回転部のセル）の天端より下では引かない（clipWallEndVerticalsByStairMass）。
+  const wallContent = dashHorizontalsBehindStair(clipWallEndVerticalsByStairMass(wallPrims, cut, columns), occluders);
   // 下ささらの見えがかりのうち「断面内部（実体で囲まれた矩形の厳密内部）」に入る区間は
   // `stairPrimitivesForCut`が自身の出口（x終端クリップの前）で`columns`だけから一般判定する
   // （展開図一般化Phase 6b-2 設計(d)。ユーザー裁定2026-09-13）。旧`opts.slabBand`

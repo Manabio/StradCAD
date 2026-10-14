@@ -26,8 +26,10 @@ import { CenterLineType } from '@core';
 import { sameCoordCounterparts, isFinishCellDivider, coversAlongAxis } from '../../core/centerLineKindPolicy.js';
 import { isTraditionalWoodStructure } from '../../structural/structureRules.js';
 import { stairPartitionEnds } from '../../structural/wallFreeEnds.js';
+import { matchingStairBelow } from '../../structural/openingBeamAxes.js';
 import {
-  stairPartitionGeometry, stairHasPartition, stairPartitionLines, isStairPartitionWall, PARTITION_BACKING_MM, PARTITION_FINISH_MM,
+  stairPartitionGeometry, stairUnderReturnGeometry, stairHasPartition, stairPartitionLines, isStairPartitionWall,
+  PARTITION_BACKING_MM, PARTITION_FINISH_MM,
 } from './stairPartition.js';
 
 const TOL_MM = 0.5;
@@ -88,6 +90,54 @@ export function generateStairPartitionWalls(graph, { structure = null, underEdge
       walls.push(graph.addWall(axisCL, OWNER_OFFSET_MM, g.isVertical, startCL, 0, endCL, 0,
         { ...common, backingDepth: PARTITION_BACKING_MM, finishSide: 1 }));
       walls.push(graph.addWall(axisCL, -OWNER_OFFSET_MM, g.isVertical, startCL, 0, endCL, 0,
+        { ...common, backingDepth: 0, finishSide: -1 }));
+    }
+  }
+  return walls;
+}
+
+/**
+ * 復路下の壁を生成して返す（オーナー壁→薄壁の順に区間ごと。隔て壁 S3。ユーザー指示2026-10-14「復路階段下に壁」）。
+ * 木造階段の復路レーンの下は仕上げられた空間になる。その回転部側の境は踊り場前縁の線（stairLandingFrontLine と同位置）で、
+ * 隔て壁の軸から復路レーンの外側まで壁が立つ（stairPartition.js stairUnderReturnGeometry）。
+ * 形・定数・CL探索・2a区間の差し引き・どの Room にも入れないこと・座標照合での識別（stairUnderReturnLines）は隔て壁と同じ。
+ * 隔て壁との角: 隔て壁の踊り場側の端は柱包みで前縁より OWNER_OFFSET_MM はね出す（wrapStairPartitionFreeEnds）ので、
+ * 軸に当たる端は往路側へ OWNER_OFFSET_MM（隔て壁の外面まで）延ばして角を閉じる。この延長は生成時に確定する
+ * （隔て壁の柱包みは変えない——復路下の壁は構造の壁ソースから除外してあり、隔て壁の端は自由端のまま）。
+ * 軸に当たらない端（外壁側）は端CL上で止める（隔て壁の非自由端と同じ）。2a の差し引きで切れた端は延ばさない。
+ * @param {object} graph
+ * 立つのは「復路の下が本当に仕上げられた空間」のときだけ＝下階に同じ足元（外接矩形が一致。structural/openingBeamAxes.js
+ * matchingStairBelow）の階段が無いとき。この壁は下階に依存する（鮮度キーは下階の階段を含まない既存の限界）。
+ * @param {{ structure:string|null, underEdges?:Array<{isVertical:boolean,value:number,lo:number,hi:number}>, belowGraph?:object|null }} opts
+ *   belowGraph … 直下階の graph（無ければ下階なし扱い）。
+ * @returns {import('@core').Wall[]}
+ */
+export function generateStairUnderReturnWalls(graph, { structure = null, underEdges = [], belowGraph = null } = {}) {
+  if (!isTraditionalWoodStructure(structure)) return [];
+  const walls = [];
+  for (const stair of graph.stairs) {
+    if (!stairHasPartition(stair, graph, structure)) continue;
+    // 下階に同じ足元の続き階段があるとき、復路の下は下階の階段の頭上空間（仕上げられた空間ではない）＝壁で塞がない
+    if (belowGraph && matchingStairBelow(stair, graph, belowGraph)) continue;
+    const g = stairUnderReturnGeometry(stair, graph);
+    if (!g) continue;
+    const [axisType, endType] = g.isVertical
+      ? [CenterLineType.VERTICAL, CenterLineType.HORIZONTAL]
+      : [CenterLineType.HORIZONTAL, CenterLineType.VERTICAL];
+
+    const claimed = underEdges.filter(e => e.isVertical === g.isVertical && Math.abs(e.value - g.axisValue) < TOL_MM);
+    for (const [lo, hi] of subtractClaimed(g.lo, g.hi, claimed)) {
+      const axisCL = findDividerCL(graph, axisType, g.axisValue, [lo, hi]);
+      const startCL = findDividerCL(graph, endType, lo, [g.axisValue]);
+      const endCL = findDividerCL(graph, endType, hi, [g.axisValue]);
+      if (!axisCL || !startCL || !endCL) continue;
+      // 軸に当たる端だけ往路側（区間の外向き）へ隔て壁の外面まで延ばす（始端は −、終端は +）
+      const startOffset = g.axisEnd === 'lo' && Math.abs(lo - g.lo) < TOL_MM ? -OWNER_OFFSET_MM : 0;
+      const endOffset = g.axisEnd === 'hi' && Math.abs(hi - g.hi) < TOL_MM ? OWNER_OFFSET_MM : 0;
+      const common = { isRoomWall: true, wallFinish: PARTITION_FINISH_MM, backingOffset: 0 };
+      walls.push(graph.addWall(axisCL, OWNER_OFFSET_MM, g.isVertical, startCL, startOffset, endCL, endOffset,
+        { ...common, backingDepth: PARTITION_BACKING_MM, finishSide: 1 }));
+      walls.push(graph.addWall(axisCL, -OWNER_OFFSET_MM, g.isVertical, startCL, startOffset, endCL, endOffset,
         { ...common, backingDepth: 0, finishSide: -1 }));
     }
   }

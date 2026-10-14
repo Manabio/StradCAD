@@ -112,10 +112,10 @@ export async function refreshWallsForGraph(
     return false;
   }
 
-  const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, peek);
+  const { stairUnderEntries, extraStairOpenings, belowGraph } = await resolveStairContext(graph, project, peek);
   const backingCentersBefore = wallBackingCenters(graph);
   const { regenerated, undoFns, redoFns } = await regenerateWallsFn(graph, {
-    materialMap, project, stairUnderEntries, extraStairOpenings,
+    materialMap, project, stairUnderEntries, extraStairOpenings, belowGraph,
   });
   // 現状 materialMap はこの時点で必ず truthy（直前の getMaterialMap() が失敗していれば既に
   // return 済みのため）なので regenerated が false になることは無い到達不能な防御的分岐。

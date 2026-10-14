@@ -92,6 +92,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   floorZ?:number, ceilZ?:number, thicknessMm?:number,
  *   nearEdgeOpen?:boolean, farEdgeOpen?:boolean,
  *   openingPassThrough?:boolean,
+ *   farStair?:boolean,
  *   farFloorZ?:number|null, farCeilZ?:number|null, farDepthMm?:number,
  *   profiledTop?:boolean, topEdge?:{zAtLo:number, zAtHi:number}|{zAtX0:number, zAtX1:number},
  *   ceilEdge?:{zAtX0:number, zAtX1:number},
@@ -113,6 +114,8 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   `open`のfarFloorZ/farCeilZ/farDepthMm（Phase4）＝`sectionHits.js`の`visibleBandsOf`が
  *   付帯情報として載せる「上限内の最も近いfloorFace/ceilFaceのzと深度」（`splitOpenByFarFace`の
  *   入力）。該当が無ければ常にundefined。
+ *   `open`のfarStair（`sectionEngine.js`の`buildColumns`が付ける）＝面の向こう側（面の軸CLから視線方向）の
+ *   部屋が階段室（`RoomFeature.STAIR`）。抜けは階段室への通路なので`emitOpenGapMarks`はアキを標記しない。
  *   profiledTop（壁の天端プロファイル＝隔て壁の斜め天端を持つ壁の帯。cut/cutAlong/wall）＝天端は
  *   腰壁の笠木ではないため、天端の下の細線（kneeCap）を描かない。topEdge（wall帯だけ）＝斜めの天端の線の
  *   両端の高さ。probe直後（sectionHits.js）は世界座標の lo/hi 側＝{zAtLo, zAtHi}、列（SectionColumn）の帯は

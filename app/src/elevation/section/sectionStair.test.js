@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { uTurnPlanLayout } from '../../finish/stair/stairGeometry.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass } from './sectionStair.js';
 import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from '../elevationStairSection.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
@@ -1735,9 +1735,22 @@ test('【2026-10-09】stairPrimitivesForCut/stairCutFloorProfile(WINDING): 回�
   const cut = { ...cutAt('3', { isVertical: true, axisValue: 500, lo: 0, hi: 4500 }), dirSign: -1, zRange: { loZ: 5 * WINDING_RISER, hiZ: 3000 } };
   const columns = [{ x0: 0, x1: 4500, worldLo: 0, worldHi: 4500, bands: [] }];
   const prims = stairPrimitivesForCut(landingOnly, cut, columns, { includeLadder: false });
-  const horizontals = prims.filter(p => p.type === 'line' && p.y1 === p.y2).map(p => Math.round(-p.y1)).sort((a, b) => a - b);
+  // 断面（CUT=太線）だけを数える。切断面の奥の見えがかり（細線。farSideSilhouettePrimitives）は別
+  const thickLines = prims.filter(p => p.type === 'line' && p.weight === 'thick');
+  const horizontals = thickLines.filter(p => p.y1 === p.y2).map(p => Math.round(-p.y1)).sort((a, b) => a - b);
   assert.deepEqual(horizontals, [5, 6, 7].map(k => Math.round(k * WINDING_RISER)), '往路側のセル3枚ぶんの床線');
-  assert.equal(prims.filter(p => p.type === 'line' && p.x1 === p.x2).length, 2, '蹴上の縦線2本');
+  assert.equal(thickLines.filter(p => p.x1 === p.x2).length, 2, '蹴上の縦線2本');
+  // 細線は切断面の奥の見えがかりだけ（farSideSilhouettePrimitives）。余計な線が混ざらないよう集合を固定する
+  assertFarLines(prims.filter(p => p.type === 'line' && p.weight === 'thin'), [
+    [3000, 800, 3000, 1600],
+    [3000, 960, 3382.6, 960],
+    [3000, 1120, 3765.3, 1120],
+    [3000, 1280, 4442.5, 1280],
+    [3000, 1440, 4442.5, 1440],
+    [3000, 1600, 3721.2, 1600],
+    [3721.2, 1440, 3721.2, 1600],
+    [4442.5, 1120, 4442.5, 1440],
+  ]);
   const profile = stairCutFloorProfile(c, cut);
   const zs = profile.map(([, z]) => z);
   assert.ok(zs.includes(5 * WINDING_RISER) && zs.includes(6 * WINDING_RISER) && zs.includes(7 * WINDING_RISER), `段状: ${JSON.stringify(profile)}`);
@@ -2005,4 +2018,279 @@ test('【合成】mergeOuterBounds: 上階はり出し（stairOverhangOuter）�
   assert.deepEqual(mergeOuterBounds(undefined, { lo: -57.5 }), { lo: -57.5, hi: undefined });
   assert.equal(mergeOuterBounds(undefined, undefined), undefined);
   assert.equal(mergeOuterBounds({}, undefined), undefined);
+});
+
+// ---- 遠側の見えがかり（2026-10-14。moku4-3 2階 階段 面B1相当の数値） ----
+const FAR_CELLS = [
+  { number: 5, z: 1000, poly: [852.5, -8247.5, 72.5, -8247.5, 72.5, -7800] },
+  { number: 6, z: 1200, poly: [852.5, -8247.5, 72.5, -7800, 72.5, -7352.5] },
+  { number: 7, z: 1400, poly: [852.5, -8247.5, 72.5, -7352.5, 852.5, -7352.5, 852.5, -8132.5] },
+  { number: 8, z: 1600, poly: [852.5, -8132.5, 852.5, -7352.5, 1747.5, -7352.5] },
+  { number: 9, z: 1800, poly: [852.5, -8132.5, 1747.5, -7352.5, 1747.5, -7742.5] },
+  { number: 10, z: 2000, poly: [852.5, -8132.5, 1747.5, -7742.5, 1747.5, -8132.5] },
+];
+const FAR_RETURN_FLIGHT = {
+  isVertical: true, runLo: -9042.5, runHi: -8132.5, travelSign: -1, acrossLo: 910, acrossHi: 1747.5,
+  baseZ: 2000, riserMm: 200, steps: 5, lengthMm: 910,
+};
+const FAR_OUTBOUND = {
+  isVertical: true, runLo: -9042.5, runHi: -8247.5, travelSign: 1, acrossLo: 72.5, acrossHi: 910,
+  baseZ: 0, riserMm: 200, steps: 5, lengthMm: 795,
+};
+const farContribution = (over = {}) => ({
+  isVertical: true, flights: [FAR_OUTBOUND], landings: [], turnCells: FAR_CELLS, secondaryFlights: [FAR_RETURN_FLIGHT],
+  zoneCells: { entry: [], arrival: [] }, ...over,
+});
+// 隔て板は同じ軸CL上の2枚の壁: 本体壁（帯が持つ。世界x 865..967.5）と手前の仕上げの薄壁（852.5..865。
+// finish/stair/stairPartitionWalls.js）。階段のセルは薄壁の面 852.5 まで敷かれる。
+const FAR_AXIS_CL = { id: 'cl-partition' };
+const FAR_OWNER_WALL = { axisCL: FAR_AXIS_CL, coord1: -9027.5, coord2: -8132.5, materialRange: { lo: 865, hi: 967.5 } };
+const FAR_THIN_WALL = { axisCL: FAR_AXIS_CL, coord1: -9027.5, coord2: -8132.5, materialRange: { lo: 852.5, hi: 865 } };
+const farCut = (over = {}) => ({
+  seqNo: '2', line: { isVertical: true, axisValue: 455, lo: -9100, hi: -7352.5 },
+  viewSign: 1, dirSign: 1, zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0,
+  layers: [{ graph: { walls: new Set([FAR_OWNER_WALL, FAR_THIN_WALL]) }, floorZMm: 0, role: 'self' }], ...over,
+});
+// 隔て板（面ローカルx 72.5..967.5。世界x 865..967.5。z は斜めの天端で 3000 以上）と、その先の空き。
+const FAR_COLUMNS = [
+  { x0: 72.5, x1: 967.5, worldLo: -9027.5, worldHi: -8132.5,
+    bands: [{ kind: 'wall', z0: 0, z1: 3000, distMm: 410, wall: FAR_OWNER_WALL }] },
+  { x0: 967.5, x1: 1747.5, worldLo: -8132.5, worldHi: -7352.5, bands: [{ kind: 'open', z0: 0, z1: 5400 }] },
+];
+// プリミティブ → [x1,z1,x2,z2]（y は下向き負なので z=-y）を昇順に正規化して並べる。
+const farLines = prims => prims
+  .map(p => {
+    const a = [p.x1, -p.y1], b = [p.x2, -p.y2];
+    const [s, e] = (a[0] < b[0] || (a[0] === b[0] && a[1] <= b[1])) ? [a, b] : [b, a];
+    return [s[0], s[1], e[0], e[1]];
+  })
+  .sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2] || p[3] - q[3]);
+const assertFarLines = (actual, expected) => {
+  const got = farLines(actual);
+  assert.equal(got.length, expected.length, `本数 ${JSON.stringify(got)}`);
+  got.forEach((g, i) => g.forEach((v, k) => assert.ok(Math.abs(v - expected[i][k]) < 0.1, `${i}[${k}] ${JSON.stringify(got)}`)));
+};
+
+test('【2026-10-14】farSideSilhouettePrimitives: 復路前の回転部は、扇の段鼻と端の縦線を細線で描く（切断面で切れた端に縦線なし・隔て板の背後の復路の蹴込みは出ない）', () => {
+  const prims = farSideSilhouettePrimitives(farContribution(), farCut(), FAR_COLUMNS);
+  assertFarLines(prims, [
+    [852.5, 1000, 852.5, 1400],
+    [852.5, 1200, 1080.553, 1200],
+    [852.5, 1400, 1308.606, 1400],
+    // 967.5 の扇の中心の縦線(1400〜2000)は柱と取り合う3段分も細線で引く（ユーザー裁定）。復路の初段の蹴込みと1本に繋がる
+    [967.5, 1400, 967.5, 2200],
+    [967.5, 1600, 1747.5, 1600],
+    [967.5, 1800, 1747.5, 1800],
+    [967.5, 2000, 1357.5, 2000],
+    [1357.5, 1800, 1357.5, 2000],
+    [1747.5, 1400, 1747.5, 1800],
+  ]);
+  assert.ok(prims.every(p => p.weight === 'thin' && p.dash === undefined), '細線・実線');
+});
+
+test('【2026-10-14】farSideSilhouettePrimitives: 壁が無ければ復路の蹴込みはすべて出る（隔て板の背後で消えるのは遮蔽のため）。回転部の無い折返しは描かない', () => {
+  const fan = [
+    [852.5, 1000, 852.5, 1400],
+    [852.5, 1200, 1080.553, 1200],
+    [852.5, 1400, 1308.606, 1400],
+    [967.5, 1600, 1747.5, 1600],
+    [967.5, 1800, 1747.5, 1800],
+    [967.5, 2000, 1357.5, 2000],
+    [1357.5, 1800, 1357.5, 2000],
+    [1747.5, 1400, 1747.5, 1800],
+  ];
+  const prims = farSideSilhouettePrimitives(farContribution(), farCut(), []);
+  assertFarLines(prims, [
+    [239.5, 2800, 239.5, 3000],
+    [421.5, 2600, 421.5, 2800],
+    [603.5, 2400, 603.5, 2600],
+    [785.5, 2200, 785.5, 2400],
+    ...fan.slice(0, 3),
+    [967.5, 1400, 967.5, 2200],
+    ...fan.slice(3),
+  ]);
+  // 回転部が無い（折返し）階段の復路は従来どおり描かない
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution({ turnCells: [] }), farCut(), []), []);
+});
+
+test('【失敗系・2026-10-14】farSideSilhouettePrimitives: 横切る切断で全てが手前・段なし・不正データは空配列で例外を投げない', () => {
+  // 横切る切断（S4で対象に加わった）でも、段が全て切断面の手前（y=-7000 より奥は無い）なら何も出ない
+  const crossing = farCut({ line: { isVertical: false, axisValue: -7000, lo: 0, hi: 2000 } });
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution(), crossing, FAR_COLUMNS), []);
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution({ turnCells: [], secondaryFlights: [] }), farCut(), FAR_COLUMNS), []);
+  assert.deepEqual(farSideSilhouettePrimitives(null, farCut(), FAR_COLUMNS), []);
+  const bad = [
+    { number: 1, z: 1000, poly: [0, 0, NaN, 0, 0, 100] },
+    { number: 2, z: 1200, poly: [0, 0, 100] },
+    { number: 3, z: NaN, poly: [0, 0, 100, 0, 0, 100] },
+  ];
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution({ turnCells: bad, secondaryFlights: [{ ...FAR_RETURN_FLIGHT, steps: NaN }] }), farCut(), FAR_COLUMNS), []);
+});
+
+test('【失敗系・2026-10-14】farSideSilhouettePrimitives: 切断面の手前にだけある段・蹴上が視線の向こうを向く段は描かない', () => {
+  // 切断面 x=1365 を逆向き(viewSign=-1)に見る: 奥は x<1365。低い側のセルが視点の反対側にあり、蹴上は階段の内側を向く。
+  const away = farCut({ line: { isVertical: true, axisValue: 1365, lo: -9100, hi: -7352.5 }, viewSign: -1, dirSign: -1 });
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution({ flights: [], secondaryFlights: [] }), away, []), []);
+  // 扇8〜10だけが切断面 x=455 の手前(viewSign=-1 で奥は x<455)にある
+  const front = farCut({ viewSign: -1, dirSign: -1 });
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution({ turnCells: FAR_CELLS.slice(3), secondaryFlights: [] }), front, []), []);
+});
+
+// ---- レーンを横切る切断（S4。ホール面C＝y=-9173 を +y 向きに見る。面ローカルx = 3567.5 - 世界x） ----
+const HALL_OUTBOUND = { ...FAR_OUTBOUND, runLo: -9157.5, acrossLo: 72.5, acrossHi: 852.5, treadAcrossLo: 72.5, treadAcrossHi: 852.5, lengthMm: 910 };
+const HALL_RETURN = { ...FAR_RETURN_FLIGHT, runLo: -9042.5, runHi: -8132.5 };
+const hallContribution = (over = {}) => farContribution({ flights: [HALL_OUTBOUND, HALL_RETURN], secondaryFlights: [], ...over });
+const hallCut = (over = {}) => farCut({
+  line: { isVertical: false, axisValue: -9173, lo: 72.5, hi: 3567.5 }, viewSign: 1, dirSign: -1, zRange: { loZ: 0, hiZ: 2400 }, ...over,
+});
+const HALL_EXPECTED = [
+  // 往路の段鼻（足元0＋(番号+1)×200）を段板の幅（世界 72.5..852.5 → 面ローカル 2715..3495）で
+  [2715, 200, 3495, 200], [2715, 400, 3495, 400], [2715, 600, 3495, 600], [2715, 800, 3495, 800], [2715, 1000, 3495, 1000],
+  // 扇 5|6・6|7 の蹴上（視点側を向く）の段鼻と、7|8（視線と平行＝世界 x=852.5 の辺）の縦線1本（x・z の昇順に並べた順）
+  [2715, 1200, 3495, 1200], [2715, 1400, 2715, 1600], [2715, 1400, 3495, 1400],
+];
+
+test('【S4】farSideSilhouettePrimitives: レーンを横切る切断では、往路の段鼻（段板の幅）と視点側を向く回転部の蹴上を細線で描く。復路・扇8〜10は向きが逆で出ない', () => {
+  const prims = farSideSilhouettePrimitives(hallContribution(), hallCut(), []);
+  assertFarLines(prims, HALL_EXPECTED);
+  assert.ok(prims.every(p => p.weight === 'thin' && p.dash === undefined), '細線・実線');
+});
+
+test('【失敗系・S4】横切る切断: 視点から遠ざかって下る flight（登りが視点側）と、切断面に掛かる・手前の flight の段鼻は描かない', () => {
+  // 反対側（y=-7000）から -y 向きに見る: 往路は travelSign=+1 で視点へ向かって上る＝段鼻の蹴上は視点と反対を向く。
+  const fromSouth = hallCut({ line: { isVertical: false, axisValue: -7000, lo: 72.5, hi: 3567.5 }, viewSign: -1, dirSign: 1 });
+  const horizontalAtNosing = farSideSilhouettePrimitives(hallContribution(), fromSouth, [])
+    .map(p => -p.y1).filter(z => [200, 400, 600, 800, 1000].includes(z));
+  assert.deepEqual(horizontalAtNosing, [], '往路の段鼻は出ない');
+  // 切断線が往路の走行範囲の内側（y=-8800）: 全体が奥にはないので段鼻は出ない（扇の蹴上は奥なので残る）
+  const inside = hallCut({ line: { isVertical: false, axisValue: -8800, lo: 72.5, hi: 3567.5 } });
+  assert.deepEqual(farLines(farSideSilhouettePrimitives(hallContribution(), inside, [])).filter(l => l[1] <= 1000 && l[1] === l[3]), []);
+  // 不正な flight（数値が非有限・段数0）は例外を投げず描かない
+  const bad = { ...HALL_OUTBOUND, steps: 0 };
+  assertFarLines(farSideSilhouettePrimitives(hallContribution({ flights: [bad] }), hallCut(), []), HALL_EXPECTED.slice(5));
+});
+
+test('【S4】横切る切断: 列の手前の壁（遮蔽）が覆う範囲の線は隠れ、壁が奥にあれば隠れない', () => {
+  const wallCol = (x0, x1, distMm, z1 = 2400) => ({ x0, x1, worldLo: 3567.5 - x1, worldHi: 3567.5 - x0,
+    bands: [{ kind: 'wall', z0: 0, z1, distMm, wall: { materialRange: { lo: -9173 + distMm, hi: -9173 + distMm + 100 } } }] });
+  // 段の幅（2715..3495）を内側に含む手前の壁（奥行き 5＝最初の段鼻の奥行き 15.5 より手前・全高）: 全て隠れる
+  assert.deepEqual(farSideSilhouettePrimitives(hallContribution(), hallCut(), [wallCol(2600, 3600, 5)]), []);
+  // 壁が段より奥（奥行き 2000）なら隠さない
+  assertFarLines(farSideSilhouettePrimitives(hallContribution(), hallCut(), [wallCol(2600, 3600, 2000)]), HALL_EXPECTED);
+  // 左半分（〜3100）だけ覆う: 水平線は右の残り（3100〜）だけ描く
+  const half = farSideSilhouettePrimitives(hallContribution(), hallCut(), [wallCol(2600, 3100, 5)]);
+  const halfHorizontals = half.filter(p => p.y1 === p.y2);
+  assert.ok(halfHorizontals.length === 7 && halfHorizontals.every(p => Math.min(p.x1, p.x2) >= 3100 - 0.1 && Math.max(p.x1, p.x2) === 3495), '覆った範囲に線は残らない');
+  // 壁の高さ（z1=500）より上の段鼻は隠れない
+  const low = farLines(farSideSilhouettePrimitives(hallContribution(), hallCut(), [wallCol(2600, 3600, 5, 500)]));
+  assert.deepEqual(low.map(l => l[1]).sort((a, b) => a - b), [600, 800, 1000, 1200, 1400, 1400]);
+});
+
+test('【2026-10-14】stairPrimitivesForCut: 縦断する切断では遠側の見えがかりの細線が出力に含まれ、横切る切断では出ない', () => {
+  const c = farContribution({ structure: StructuralMaterialType.WOOD, secondaryFlights: [] });
+  // 扇9|10 の遠端の縦線（x=1357.5・z 1800〜2000）
+  const isFarEnd = p => p.type === 'line' && p.weight === 'thin'
+    && Math.abs(p.x1 - 1357.5) < 0.1 && Math.abs(p.x2 - 1357.5) < 0.1 && Math.abs(p.y1 + 1800) < 0.1 && Math.abs(p.y2 + 2000) < 0.1;
+  assert.ok(stairPrimitivesForCut(c, farCut(), FAR_COLUMNS).some(isFarEnd));
+  const crossing = farCut({ line: { isVertical: false, axisValue: -8500, lo: 0, hi: 2000 } });
+  assert.ok(!stairPrimitivesForCut(c, crossing, FAR_COLUMNS).some(isFarEnd));
+  // 階段下の部屋（elevationBand）は farSide:false で出さない。階段の帯自身（既定）は出す
+  assert.ok(!stairPrimitivesForCut(c, farCut(), FAR_COLUMNS, { farSide: false }).some(isFarEnd));
+});
+
+test('【2026-10-14】farSideSilhouettePrimitives: hidden 帯は cut 帯と同じく背後を隠し、slab 帯は通り抜ける復路の蹴込みを隠す', () => {
+  const full = kind => [{ x0: -200, x1: 2000, worldLo: -9300, worldHi: -7100, bands: [{ kind, z0: 0, z1: 5400, hiddenOf: 'cut' }] }];
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution(), farCut(), full('hidden')), []);
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution(), farCut(), full('cut')), []);
+  const slab = [{ x0: 0, x1: 1000, worldLo: -9100, worldHi: -8100, bands: [{ kind: 'slab', z0: 2400, z1: 3000 }] }];
+  const xs = farLines(farSideSilhouettePrimitives(farContribution(), farCut(), slab)).map(l => l[0]);
+  for (const hiddenX of [239.5, 421.5, 603.5]) assert.ok(!xs.includes(hiddenX), `slab 内の蹴込み ${hiddenX} は隠れる`);
+  assert.ok(xs.includes(785.5), 'slab の下端(2400)より下の蹴込みは残る');
+});
+
+test('【2026-10-14】farSideSilhouettePrimitives: 列の境界ちょうどの縦線は両隣がともに覆う高さだけ隠れる（連続した壁の中は隠れ、壁の端は残る）', () => {
+  const wall = { kind: 'wall', z0: 0, z1: 3000, distMm: 410, wall: FAR_OWNER_WALL };
+  const split = [
+    { x0: 72.5, x1: 603.5, worldLo: -9027.5, worldHi: -8496, bands: [wall] },
+    { x0: 603.5, x1: 967.5, worldLo: -8496, worldHi: -8132.5, bands: [wall] },
+    FAR_COLUMNS[1],
+  ];
+  const prims = farSideSilhouettePrimitives(farContribution(), farCut(), split);
+  assert.ok(!farLines(prims).some(l => l[0] === 603.5), '壁の中の格子線上の蹴込み(603.5)は隠れる');
+  assert.ok(farLines(prims).some(l => l[0] === 967.5 && l[1] === 1400 && l[3] === 2200), '壁の実際の端(967.5)の縦線は残る');
+  assert.deepEqual(farLines(prims), farLines(farSideSilhouettePrimitives(farContribution(), farCut(), FAR_COLUMNS)), '分けない場合と同じ');
+});
+
+test('【2026-10-14】farSideSilhouettePrimitives: 斜めの天端の壁が手前にあるとき、線は天端との交点で分かれ、天端より上だけ残る', () => {
+  const slope = [{ x0: 0, x1: 2000, worldLo: -9100, worldHi: -7100,
+    bands: [{ kind: 'wall', z0: 0, z1: 3000, distMm: 1, topEdge: { zAtX0: 1000, zAtX1: 3000 } }] }];
+  assertFarLines(farSideSilhouettePrimitives(farContribution(), farCut(), slope), [
+    [239.5, 2800, 239.5, 3000],
+    [421.5, 2600, 421.5, 2800],
+    [603.5, 2400, 603.5, 2600],
+    [785.5, 2200, 785.5, 2400],
+    [967.5, 1967.5, 967.5, 2200],
+    [967.5, 2000, 1000, 2000],
+  ]);
+});
+
+test('【失敗系・2026-10-14】farSideSilhouettePrimitives: 長さ0の flight は飛ばし、dirSign が有限でない切断は空配列', () => {
+  const zeroLen = farContribution({ secondaryFlights: [{ ...FAR_RETURN_FLIGHT, lengthMm: 0 }] });
+  assert.deepEqual(farLines(farSideSilhouettePrimitives(zeroLen, farCut(), FAR_COLUMNS)),
+    farLines(farSideSilhouettePrimitives(farContribution({ secondaryFlights: [] }), farCut(), FAR_COLUMNS)));
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution(), farCut({ dirSign: NaN }), FAR_COLUMNS), []);
+  assert.deepEqual(farSideSilhouettePrimitives(farContribution(), farCut({ dirSign: undefined }), FAR_COLUMNS), []);
+});
+
+test('【2026-10-14】farSideSilhouettePrimitives: dirSign=-1 では13本が x\'=1747.5-x に鏡像で出る', () => {
+  const base = farLines(farSideSilhouettePrimitives(farContribution(), farCut(), []));
+  assert.equal(base.length, 13);
+  const flipped = farSideSilhouettePrimitives(farContribution(), farCut({ dirSign: -1 }), []);
+  const expected = base.map(([x1, z1, x2, z2]) => [1747.5 - x1, z1, 1747.5 - x2, z2]);
+  assertFarLines(flipped, farLines(expected.map(([x1, z1, x2, z2]) => ({ x1, y1: -z1, x2, y2: -z2 }))));
+});
+
+// ---- 壁の端の縦線を階段の実体の天端で切る（clipWallEndVerticalsByStairMass。2026-10-14 隔て板の回転部側の端） ----
+// 理由: 回転部のセル10(z2000)は隔て板の端面に全長で接し、隔て板の側面は次の蹴上へ同一面で続くので、
+// 天端(2000)より下は端の両側とも実体で縁が無い。
+const recessHi = () => ({ type: 'line', x1: 967.5, x2: 967.5, y1: -1000, y2: -2949.451, weight: 'medium', __o: 'recessHi' });
+const massCut = (over = {}) => farCut({ stairCut: farContribution(), ...over });
+
+test('【2026-10-14】clipWallEndVerticalsByStairMass: 隔て板の端の縦線は回転部のセルの天端(2000)より下を落とす', () => {
+  const [p] = clipWallEndVerticalsByStairMass([recessHi()], massCut(), FAR_COLUMNS);
+  assert.equal(-p.y1, 2000);
+  assert.ok(Math.abs(-p.y2 - 2949.451) < 1e-6);
+  assert.equal(p.weight, 'medium');
+  assert.equal(p.__o, 'recessHi');
+});
+
+test('【失敗系・2026-10-14】clipWallEndVerticalsByStairMass: セル無し・横切る切断・壁がセルより奥・他の線・セルの範囲外の線は変えない', () => {
+  const orig = [recessHi()];
+  assert.deepEqual(clipWallEndVerticalsByStairMass(orig, farCut({ stairCut: farContribution({ turnCells: [] }) }), FAR_COLUMNS), orig, 'セルなし');
+  assert.deepEqual(clipWallEndVerticalsByStairMass(orig, farCut({ stairCut: null }), FAR_COLUMNS), orig, '階段なし');
+  const crossing = massCut({ line: { isVertical: false, axisValue: -8500, lo: 0, hi: 2000 } });
+  assert.deepEqual(clipWallEndVerticalsByStairMass(orig, crossing, FAR_COLUMNS), orig, '横切る切断');
+  const farWall = [{ ...FAR_COLUMNS[0], bands: [{ kind: 'wall', z0: 0, z1: 3000, wall: { materialRange: { lo: 1355, hi: 1457.5 } } }] }, FAR_COLUMNS[1]];
+  assert.deepEqual(clipWallEndVerticalsByStairMass(orig, massCut(), farWall), orig, 'セルより奥の壁（セルは壁の手前）');
+  const other = [{ ...recessHi(), __o: undefined }, { ...recessHi(), x1: -57.5, x2: -57.5, y1: 0, y2: -2400 }];
+  assert.deepEqual(clipWallEndVerticalsByStairMass(other, massCut(), FAR_COLUMNS), other, '凹み線でない線・セルの範囲外(x<852.5)の線');
+  assert.deepEqual(clipWallEndVerticalsByStairMass(orig, massCut({ dirSign: NaN }), FAR_COLUMNS), orig, 'dirSign 不正');
+});
+
+test('【2026-10-14】隔て板の壁の面: 同じ軸CLで重なる薄壁が12.5手前にあれば、その面（852.5）を壁の手前の縁として端の縦線の切り詰めに使う', () => {
+  const thinLayers = [{ graph: { walls: new Set([FAR_OWNER_WALL, FAR_THIN_WALL]) }, floorZMm: 0, role: 'self' }];
+  const ownerOnly = [{ graph: { walls: new Set([FAR_OWNER_WALL]) }, floorZMm: 0, role: 'self' }];
+  // 薄壁あり: セルは壁の面に接する → 切る
+  const [p] = clipWallEndVerticalsByStairMass([recessHi()], massCut({ layers: thinLayers }), FAR_COLUMNS);
+  assert.equal(-p.y1, 2000);
+  // 失敗系: 他に同じ軸の壁が無ければ本体壁自身の面（865）を使う → セル(852.5)は壁の手前で、切らない
+  const orig = [recessHi()];
+  assert.deepEqual(clipWallEndVerticalsByStairMass(orig, massCut({ layers: ownerOnly }), FAR_COLUMNS), orig);
+  // 別の軸CL・走行方向に重ならない薄壁は数えない
+  const otherAxis = { ...FAR_THIN_WALL, axisCL: { id: 'other' } };
+  const apart = { ...FAR_THIN_WALL, coord1: -7000, coord2: -6000 };
+  for (const w of [otherAxis, apart]) {
+    const layers = [{ graph: { walls: new Set([FAR_OWNER_WALL, w]) }, floorZMm: 0, role: 'self' }];
+    assert.deepEqual(clipWallEndVerticalsByStairMass(orig, massCut({ layers }), FAR_COLUMNS), orig);
+  }
 });

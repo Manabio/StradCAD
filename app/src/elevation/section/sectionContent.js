@@ -15,13 +15,16 @@
  * 純モジュール（store.js/snap.js/*.jsx/react-konva/appViewport.jsを静的importしない）。
  */
 import { buildColumns } from './sectionEngine.js';
-import { emitColumns, emitOpenGapMarks } from './sectionEmit.js';
+import { emitColumns, emitOpenGapMarks, emitOpenSpanEdgeOnWalls } from './sectionEmit.js';
 import { wallWorldRangesOnFacePlane, planeOverhangBeyondEnds } from './sectionCutPlane.js';
 import { hasCutWallStandingOn, slabSolidRectsOf, strictInteriorOf, rectsToFaceLocal } from './sectionTypes.js';
 import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { UPPER_PLANE_OVERHANG_LIMIT_MM, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { wallLessEndAt } from '../elevationFaces.js';
 import { makeProbeContext } from './sectionProbe.js';
+import { edgeOnWallZRanges, farRoomAt } from './sectionHits.js';
+import { stairContribution, farSideSilhouettePrimitives } from './sectionStair.js';
+import { layerDirectlyAboveSelf } from './sectionLayerStack.js';
 
 /**
  * 端区間の高さ（cutローカルx＝面ローカルxの0側／run側）を区分プロファイルから取り出す。
@@ -299,6 +302,44 @@ export function clipInsideSlabSolids(prims, columns) {
 }
 
 /**
+ * **階段室の開口越しに見える階段**（ユーザー指示2026-10-14 S4「X2の右910の右側：階段の見え掛かりを描画」）。
+ * 面の平面に壁が無く、向こうが階段室（`farStair`のアキ）の列があれば、その階段室の階段（自階の
+ * `graph.stairs`のうち`roomId`が一致するもの）を、レーンを横切る正面視の見えがかり（細線）で返す
+ * ——視点から遠ざかって上る flight の段鼻と、視点側を向く回転部の蹴上（`farSideSilhouettePrimitives`）。
+ * 蹴上の高さは自階と直上の層のFLの差。遮蔽は列の手前の壁・断面（階段室の最初の壁＝viaStairの帯を含む）。
+ * 断面の線（太線）は描かず、階段帯・階段下の帯には触れない。天井より上は描かない。
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @param {import('./sectionTypes.js').SectionCut} cut - 階段帯（stairCut）でない切断
+ * @param {ReturnType<typeof makeProbeContext>} probeCtx
+ * @returns {object[]}
+ */
+export function farStairViewPrimitives(columns, cut, probeCtx) {
+  const layer = (cut.layers ?? []).find(l => l?.role === 'self');
+  const stairs = layer?.graph?.stairs;
+  if (!stairs?.length) return [];
+  const roomIds = new Set();
+  for (const col of columns) {
+    if (!col.bands.some(b => b.kind === 'open' && b.farStair)) continue;
+    const room = farRoomAt(cut, (col.worldLo + col.worldHi) / 2, probeCtx)?.room;
+    if (room) roomIds.add(room.id);
+  }
+  if (roomIds.size === 0) return [];
+  const above = layerDirectlyAboveSelf(cut.layers);
+  const floorHeight = above ? above.floorZMm - layer.floorZMm : (probeCtx?.floorHeightMm ?? null);
+  const prims = [];
+  for (const stair of stairs) {
+    if (!roomIds.has(stair.roomId)) continue;
+    const contribution = stairContribution(stair, layer.graph, floorHeight);
+    if (contribution) prims.push(...farSideSilhouettePrimitives(contribution, cut, columns));
+  }
+  // 天井より上は描かない（図のy=-z。天井ちょうどの線も天井線と重なるので落とす）。
+  const ceil = cut.zRange?.hiZ;
+  return Number.isFinite(ceil)
+    ? subtractRectsFromPrimitives(prims, [{ xLo: -1e9, xHi: 1e9, yLo: -1e9, yHi: -ceil }])
+    : prims;
+}
+
+/**
  * 1つの切断 → 壁断面・見えがかり・アキ（タイプ非依存）。
  *
  * 呼び出し側が後段でタイプ固有の加工をできるよう、まとめた`content`だけでなく途中の部品も返す
@@ -327,7 +368,20 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   };
   // 壁content（断面・見えがかり・凹み側面線）は「断面内部は描画しない」の一般判定
   // （`clipInsideSlabSolids`）を通してから返す。
-  const wallPrims = clipInsideSlabSolids(emitColumns(columns, pcut, emitCtx), columns);
+  // 開放スパンの中に見える視線に平行な壁（隔て板等）の両面の縦線。階段帯（stairCut）は別規則なので呼ばない。
+  const edgeOnRects = [];
+  const edgeOnWalls = pcut.stairCut ? [] : emitOpenSpanEdgeOnWalls(columns, pcut,
+    (layer, wall, depth, lateral) => edgeOnWallZRanges(pcut, layer, wall, depth, lateral, probeCtx), emitCtx.ceilZ, edgeOnRects);
+  // 階段室の開口越しに見える階段（S4）と、階段室の最初の壁（viaStair）は、手前に立つ隔て板の端面（edgeOnRects）の
+  // 厳密内部では隠れる。隔て板の縦線自身は矩形の辺上なので残る。
+  const behindEdgeOn = prims => subtractRectsFromPrimitives(prims, rectsToFaceLocal(strictInteriorOf(edgeOnRects)));
+  const hasViaStairWall = columns.some(c => c.bands.some(b => b.viaStair));
+  const columnPrims = emitColumns(columns, pcut, emitCtx);
+  const wallPrims = clipInsideSlabSolids([
+    ...(hasViaStairWall ? behindEdgeOn(columnPrims) : columnPrims),
+    ...behindEdgeOn(pcut.stairCut ? [] : farStairViewPrimitives(columns, pcut, probeCtx)),
+    ...edgeOnWalls,
+  ], columns);
   const gapMarks = emitOpenGapMarks(columns, pcut, emitCtx);
   return { cut: pcut, columns, emitCtx, wallPrims, gapMarks, content: [...wallPrims, ...gapMarks] };
 }

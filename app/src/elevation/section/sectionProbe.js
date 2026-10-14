@@ -31,11 +31,15 @@ import { graphList } from '../../graphReadScope.js';
 import { isRealRoom, baseLayerOf, orderLayerStack, layersAboveOf } from './sectionLayerStack.js';
 import { effectiveStructure } from '../../structural/structureRules.js';
 import { ceilClipProfileOf } from './sectionTypes.js';
+import { RoomKind } from '@core';
 import {
   stairPartitionDescriptors, partitionTopZAt, partitionTopCrossings, matchStairPartitionLine,
+  stairUnderReturnGeometry, isStairUnderReturnWall, PARTITION_THICKNESS_MM,
 } from '../../finish/stair/stairPartition.js';
+import { stairSoffitSolids } from '../../ceiling/stairSoffit.js';
+import { riserOf } from '../../finish/stair/stairDimensions.js';
+import { defaultSections } from '../../finish/stair/stairClassify.js';
 import { stairContinuesAbove } from '../../finish/stair/stairChains.js';
-import { isColumnInsideWall, bareColumnRect } from '../../finish/columnWrap.js';
 import {
   cutProbeRange, isCutWall, isCutAlongWall, isSightlineShape,
   buildLayerStack, probeColumn,
@@ -49,13 +53,50 @@ function layerDirectlyAbove(layers, layer) {
   return layersAboveOf(stack, { layer })[0]?.layer ?? null;
 }
 
+// 復路下の壁（stairPartition.js isStairUnderReturnWall）→ 平らな天端。壁は復路レーンの裏面で止まる（その上は階段の
+// 踏面・裏面で、壁は立ち上がらない）。高さは階段の裏面の式の唯一の供給源 ceiling/stairSoffit.js stairSoffitSolids を
+// 壁の軸上・区間の中央で評価した値（壁の厚みは 115 なので平らで足りる）。式の入力は階段・graph・蹴上（階高/総段数）・
+// 階段室の床の絶対z。直上の層が無い（階高不明で蹴上が決まらない）・鉄骨階段・裏面が求まらない場合は載せない＝フルハイト。
+function addUnderReturnTops(out, graph, floorHeight, layer, floorZFor) {
+  for (const stair of graphList(graph, 'stairs') ?? []) {
+    const room = graph.roomMap?.get(stair.roomId) ?? null;
+    if (room?.kind === RoomKind.EXTERIOR) continue;
+    const g = stairUnderReturnGeometry(stair, graph);
+    if (!g) continue;
+    const line = { isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi };
+    const walls = (graphList(graph, 'walls') ?? []).filter(w => isStairUnderReturnWall(w, [line]));
+    if (walls.length === 0) continue;
+    // 区間 sections が不正な階段は裏面が組めない（stairPartition.js slopeTop と同じ検査）＝フルハイト
+    const sections = stair.sections ?? defaultSections(stair);
+    if (!Array.isArray(sections) || sections.length !== 3 || !sections.every(Number.isFinite)) continue;
+    const solid = stairSoffitSolids({
+      stair, graph, riser: riserOf(stair, floorHeight), floorZMm: floorZFor(room, layer),
+    })[0];
+    if (!solid) continue;
+    const mid = (g.lo + g.hi) / 2;
+    // 壁の厚み方向（軸 ±半厚）の最も低い点で評価する——平らな天端が、壁の厚みのどこでも階段の裏面より下に収まるように
+    // （裏面は走行方向に傾く。壁の回転部側の面が最も低い）。
+    const half = PARTITION_THICKNESS_MM / 2;
+    const z = Math.min(...[-half, 0, half].map(d => {
+      const p = g.isVertical ? [g.axisValue + d, mid] : [mid, g.axisValue + d];
+      return solid.zAt ? solid.zAt(...p) : solid.zLo;
+    }));
+    if (!Number.isFinite(z)) continue;
+    // junction … 天端は階段の裏面（傾斜天井）との取り合い。壁の自由な縁ではないので展開図では細線（sectionEmit.js）
+    for (const w of walls) out.set(w.id, { zAt: () => z, crossings: () => [], junction: true });
+  }
+}
+
 // 層の隔て壁（オーナー壁・薄壁とも）→ 天端プロファイル。直上の層が無ければ階高が決まらず
 // 斜め天端にできない（full＝プロファイルなし）。続きの階段（上階に重なる階段）があれば full。
-function buildWallTopProfiles(layers, layer, floorZFor) {
+function buildWallTopProfiles(layers, layer, floorZFor, fallbackFloorHeightMm = null) {
   const out = new Map();
   const graph = layer.graph;
   if (!graph) return out;
   const above = layerDirectlyAbove(layers, layer);
+  // 復路下の壁の天端だけは、直上の層が無い単層の帯でも呼び出し側が渡す階高（fallbackFloorHeightMm。部屋帯の
+  // solids.floorHeightMm）で付ける——ホールから階段室を見通すとき復路下の壁が最初の壁になる（S4）。
+  addUnderReturnTops(out, graph, above ? above.floorZMm - layer.floorZMm : fallbackFloorHeightMm, layer, floorZFor);
   const structGraph = graph._structGraph;
   const descs = stairPartitionDescriptors(graph, {
     structure: effectiveStructure(graph),
@@ -71,24 +112,9 @@ function buildWallTopProfiles(layers, layer, floorZFor) {
     // 絶対zの基準は階段室の床（spaceIndex.floorZFor＝実効FL・datum・floorOffset を含む。層の floorZMm 直でない）
     const baseZ = floorZFor(graph.roomMap?.get(stair.roomId) ?? null, layer);
     // crossings … 斜めの天端が各 z（絶対）を横切る along（昇順）。列の境界（collectCutBreaks）の材料。
-    // upstands … 壁が平面で隠している構造柱（壁の下地材そのもの）の区間 [lo,hi]（壁の長さ方向）。
-    //   区間では柱頭（topZ＝直上の層の FL。柱脚固定で1層分）まで立ち上がる。直上の層が無ければ descs が空でここに来ない。
-    const upstands = [];
-    for (const col of graphList(graph, 'columns') ?? []) {
-      if (col.role === 'foundation') continue; // 杭
-      const rect = bareColumnRect(col, layer.floorZMm);
-      if (!isColumnInsideWall(rect, [w])) continue;
-      const [lo, hi] = w.isVertical ? [rect.yLo, rect.yHi] : [rect.xLo, rect.xHi];
-      // 柱頭は斜めの天端と同じ基準（実効FL・floorOffsetMm 込み）の直上の層のFL
-      const topZ = floorZFor(null, above);
-      // 柱頭が両面の斜めの天端以下なら柱は壁の中に収まり何も出ない＝upstand にしない（列を無駄に割らない）
-      if (topZ <= Math.min(baseZ + partitionTopZAt(desc, lo), baseZ + partitionTopZAt(desc, hi)) + GAP_EPS) continue;
-      upstands.push({ lo, hi, topZ });
-    }
     out.set(w.id, {
       zAt: along => baseZ + partitionTopZAt(desc, along),
       crossings: zLevels => partitionTopCrossings(desc, (zLevels ?? []).map(z => z - baseZ)),
-      upstands,
     });
   }
   return out;
@@ -117,7 +143,7 @@ export function makeProbeContext(layers, opts = {}) {
   const wallTopByLayer = new Map(); // layer -> Map<wallId, {zAt, crossings}>
   function wallTopProfileFor(layer) {
     let m = wallTopByLayer.get(layer);
-    if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor); wallTopByLayer.set(layer, m); }
+    if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor, opts.floorHeightMm ?? null); wallTopByLayer.set(layer, m); }
     return m;
   }
   return {
@@ -139,6 +165,9 @@ export function makeProbeContext(layers, opts = {}) {
     // 壁の天端プロファイル（関所 kneeDropZRangesAt の wallTop 引数）。隔て壁（在来木造の折返し・回り階段（U 字系））が
     // 斜め天端のとき {zAt(along)→絶対z, crossings(zLevels)→along[]} を壁idで引く。層ごとに1回だけ作る（stairPartitionLines 等が重い）。
     wallTopProfileFor,
+    // 呼び出し側が渡した階高（設置階〜上階。部屋帯のsolids.floorHeightMm。無ければnull）。直上の層が無い単層の帯で
+    // 階段の蹴上が要る処理（復路下の壁の天端・階段室越しの階段の見えがかり）が使う。
+    floorHeightMm: opts.floorHeightMm ?? null,
   };
 }
 
@@ -210,10 +239,6 @@ export function collectCutBreaks(cut, probeCtx) {
         const prof = probeCtx?.wallTopProfileFor?.(layer)?.get(w.id);
         for (const a of prof?.crossings?.([...slopeLevels, ...ceilLevelsOf(layer)]) ?? []) {
           if (a > c1 + GAP_EPS && a < c2 - GAP_EPS) addIfInsideLayer(a);
-        }
-        // 埋込み柱の立ち上がり区間の両端（柱面）も列の境界にする（柱頭の縦線を柱面に出す）。
-        for (const u of prof?.upstands ?? []) {
-          for (const a of [u.lo, u.hi]) if (a > c1 + GAP_EPS && a < c2 - GAP_EPS) addIfInsideLayer(a);
         }
       }
     }

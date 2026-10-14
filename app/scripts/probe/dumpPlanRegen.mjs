@@ -55,9 +55,9 @@ for (const p of planes) {
   // bandShiftが発火し、実アプリの経路と食い違う）。
   runInAction(() => conformWoodBacking(graph, project));
 
-  const { stairUnderEntries, extraStairOpenings } = await resolveStairContext(graph, project, graphMapPeek);
+  const { stairUnderEntries, extraStairOpenings, belowGraph } = await resolveStairContext(graph, project, graphMapPeek);
 
-  await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings });
+  await regenerateWalls(graph, { materialMap, project, stairUnderEntries, extraStairOpenings, belowGraph });
 
   const segs = planWallSegments(graph, LodLevel.DETAIL);
   const name = p.name.replace(/[^\w一-龥ぁ-んァ-ヶー]/g, '_');

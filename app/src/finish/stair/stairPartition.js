@@ -202,6 +202,59 @@ export function stairPartitionLines(graph) {
   return out;
 }
 
+/**
+ * 復路下の壁（階段下の復路レーンの下の仕上げ空間と回転部の境）の幾何だけ。踊り場前縁の線（stairLandingFrontLine と同じ
+ * 位置）の上で、隔て壁の軸（s=0.5）から復路レーンの外側（s=1。uTurnSpans の laneB＝幅方向 s>0.5 側。flip は
+ * makeFrame.pt が解決済み）まで。PARTITION_STAIR_TYPES 以外・uTurnSpans が取れなければ null。
+ * isVertical は壁の向き（隔て壁と直交するので隔て壁の向きの逆）。axisValue は壁の軸CLの値（前縁の走行方向座標）、
+ * lo/hi は幅方向の区間。axisEnd は隔て壁の軸に当たる端が lo か hi か（往路側＝隔て壁の外面へ延ばす端）。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @returns {{isVertical:boolean, axisValue:number, lo:number, hi:number, axisEnd:'lo'|'hi'}|null}
+ */
+export function stairUnderReturnGeometry(stair, graph) {
+  const fr = uTurnFrameOf(stair, graph);
+  if (!fr) return null;
+  const { us, f } = fr;
+  const inner = f.pt(us.tRun, 0.5);
+  const outer = f.pt(us.tRun, 1);
+  const across = (p) => (f.vertical ? p.x : p.y);
+  const a0 = across(inner), a1 = across(outer);
+  return {
+    isVertical: !f.vertical,
+    axisValue: f.vertical ? inner.y : inner.x,
+    lo: Math.min(a0, a1), hi: Math.max(a0, a1),
+    axisEnd: a0 <= a1 ? 'lo' : 'hi',
+  };
+}
+
+/**
+ * 屋内の SWITCHBACK/WINDING 全部の復路下の壁の線（stairPartitionLines と同形。主構造・階段の構造材は見ない。
+ * 屋外階段は含めない）。構造の除外・腰壁の除外が「壁が復路下の壁か」を座標で照合するための材料。
+ * @param {object} graph
+ * @returns {Array<{isVertical:boolean, axisValue:number, lo:number, hi:number}>}
+ */
+export function stairUnderReturnLines(graph) {
+  const out = [];
+  for (const stair of graph?.stairs ?? []) {
+    if (graph.roomMap?.get(stair.roomId)?.kind === RoomKind.EXTERIOR) continue;
+    const g = stairUnderReturnGeometry(stair, graph);
+    if (g) out.push({ isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi });
+  }
+  return out;
+}
+
+/**
+ * wall が復路下の壁（stairPartitionWalls.js generateStairUnderReturnWalls が生成したもの）か。照合の形は隔て壁と同じ
+ * （内壁・同じ向き・軸一致・仕上げ12.5・軸±57.5・下地90/0・設計上の区間が線に収まる。matchStairPartitionLine を共有）。
+ * 向きが隔て壁と直交するので、隔て壁の線とは互いに一致しない。
+ * @param {import('@core').Wall} wall
+ * @param {Array<{isVertical:boolean, axisValue:number, lo:number, hi:number}>} lines stairUnderReturnLines の戻り
+ */
+export function isStairUnderReturnWall(wall, lines) {
+  return matchStairPartitionLine(wall, lines) != null;
+}
+
 const AXIS_TOL_MM = 0.5;
 const OFFSET_TOL_MM = 0.01;
 // 隔て壁の材の厚み方向の最大幅の片側（総厚115の半分=57.5 に取り合いの余裕 0.5）。2a のレーン壁
@@ -264,7 +317,8 @@ const alongOf = (desc, p) => (desc.isVertical ? p.y : p.x);
 /**
  * 隔て壁の天端の高さ（設置階 FL 基準の z）を長さ方向の世界座標 along で返す単一情報源。
  * top が full なら null（制限なし＝層の天井まで）。slope なら entryEnd〜landingEnd の along の間を
- * 線形補間し、端の外は端の値でクランプする。
+ * 線形補間し、端の外も同じ勾配で延長する。壁の物理端（柱包みのはね出し）まで天端が続き、端の縦線と
+ * 取り合う（ユーザー裁定2026-10-14）。
  * @param {{isVertical:boolean, entryEnd:{x:number,y:number}, landingEnd:{x:number,y:number}, top:object}} desc
  * @param {number} along
  * @returns {number|null}
@@ -274,13 +328,13 @@ export function partitionTopZAt(desc, along) {
   if (!top || top.kind !== 'slope') return null;
   const a0 = alongOf(desc, desc.entryEnd), a1 = alongOf(desc, desc.landingEnd);
   if (a0 === a1) return top.zAtLandingEnd;
-  const t = Math.min(1, Math.max(0, (along - a0) / (a1 - a0)));
+  const t = (along - a0) / (a1 - a0);
   return top.zAtEntryEnd + (top.zAtLandingEnd - top.zAtEntryEnd) * t;
 }
 
 /**
- * 斜めの天端が各 z（設置階 FL 基準）を横切る along（昇順）。slope でなければ・斜面の z の範囲の外の
- * z（端の値と一致するものを含む）は返さない。展開図の列境界（S4-2）の材料。
+ * 斜めの天端（端の外へ延長した直線）が各 z（設置階 FL 基準）を横切る along（昇順）。slope でなければ空。
+ * 設計端の外の along も返すので、呼び出し側が壁自身の範囲へ絞る。展開図の列境界（S4-2）の材料。
  * @param {object} desc
  * @param {number[]} zLevels
  * @returns {number[]}
@@ -291,10 +345,9 @@ export function partitionTopCrossings(desc, zLevels) {
   const a0 = alongOf(desc, desc.entryEnd), a1 = alongOf(desc, desc.landingEnd);
   const z0 = top.zAtEntryEnd, z1 = top.zAtLandingEnd;
   if (a0 === a1 || z0 === z1) return [];
-  const zlo = Math.min(z0, z1), zhi = Math.max(z0, z1);
   const out = [];
   for (const z of zLevels ?? []) {
-    if (!(z > zlo && z < zhi)) continue;
+    if (!Number.isFinite(z)) continue;
     out.push(a0 + (a1 - a0) * (z - z0) / (z1 - z0));
   }
   return out.sort((p, q) => p - q);

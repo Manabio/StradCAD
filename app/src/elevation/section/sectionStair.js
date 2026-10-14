@@ -75,6 +75,7 @@ import { StairType, StructuralMaterialType, DEFAULT_BASEBOARD_HEIGHT } from '@co
 import { uTurnPlanLayout, straightPlanLayout, LANE_GAP } from '../../finish/stair/stairGeometry.js';
 import { U_TURN_TYPES } from '../../finish/stair/stairPorts.js';
 import { sliceTurnCells } from './turnCellSlices.js';
+import { wallConcealRange } from '../../finish/columnWrap.js';
 import { stairTreadFootprints } from '../../finish/stair/stairTreads.js';
 import {
   resolveUTurnSectionParams, stairRunProfile, stringerPrimitives, stringerBandGeometry, WOOD_TREAD_THICKNESS_MM,
@@ -1249,6 +1250,355 @@ export function landingStepRisers(landings, stairIsVertical, cut) {
   return prims;
 }
 
+// 遠側の見えがかり: 共有辺とみなす頂点の一致許容(mm)・列ごとの遮蔽に数える帯のkind。
+const FAR_SHARED_VERTEX_TOL_MM = 0.5;
+const FAR_OCCLUDER_KINDS = new Set(['wall', 'cut', 'cutAlong', 'hidden', 'slab']);
+
+// 遮蔽帯までの奥行き（切断面から視線方向へ測る）。cut/cutAlong/slab/hiddenは0（hidden＝描かないだけで実在する壁は隠す）、
+// 壁は材の範囲の手前の縁、無ければ distMm。
+function farOccluderDepth(band, cut) {
+  if (band.kind === 'cut' || band.kind === 'cutAlong' || band.kind === 'hidden' || band.kind === 'slab') return 0;
+  const vs = cut.viewSign ?? 1;
+  const mr = band.wall?.materialRange;
+  if (mr && Number.isFinite(mr.lo) && Number.isFinite(mr.hi)) {
+    return Math.min((mr.lo - cut.line.axisValue) * vs, (mr.hi - cut.line.axisValue) * vs);
+  }
+  return Number.isFinite(band.distMm) ? band.distMm : null;
+}
+
+// 帯のxでの天端z（topEdge があれば列内で線形補間）。
+function farBandTopAt(band, col, x) {
+  const te = band.topEdge;
+  if (te && Number.isFinite(te.zAtX0) && Number.isFinite(te.zAtX1) && col.x1 - col.x0 > GAP_EPS) {
+    const t = Math.min(1, Math.max(0, (x - col.x0) / (col.x1 - col.x0)));
+    return te.zAtX0 + (te.zAtX1 - te.zAtX0) * t;
+  }
+  return band.z1;
+}
+
+// 線分 seg={x1,z1,x2,z2,d1,d2}（d＝端点の奥行き）を列の遮蔽で削った残りを返す。水平線は列境界で分割して
+// 各片の中点の奥行きで判定、縦線は x を内側に含む列だけで判定してzの被覆区間を引く。
+function occludeFarSegment(seg, columns, cut) {
+  const cols = columns ?? [];
+  const bandsOf = col => (col.bands ?? []).filter(b => FAR_OCCLUDER_KINDS.has(b.kind));
+  if (Math.abs(seg.x2 - seg.x1) <= GAP_EPS) {
+    const x = seg.x1;
+    const dep = Math.min(seg.d1, seg.d2);
+    // この列がxで覆うz区間（遮蔽帯の z0〜その x での天端）
+    const coveredBy = col => bandsOf(col).flatMap(b => {
+      const occ = farOccluderDepth(b, cut);
+      if (occ == null || occ > dep + GAP_EPS) return [];
+      const zHi = farBandTopAt(b, col, x);
+      return zHi - b.z0 > GAP_EPS ? [[b.z0, zHi]] : [];
+    });
+    const interior = cols.filter(col => x > col.x0 + GAP_EPS && x < col.x1 - GAP_EPS);
+    let covered = interior.flatMap(coveredBy);
+    if (!interior.length) {
+      // 列の境界ちょうど: 両隣の列がともに覆うz区間だけ隠す（連続した壁を格子線で分けた中の線は隠れ、壁の実際の端の線は残る）
+      const left = cols.filter(c => Math.abs(c.x1 - x) <= GAP_EPS).flatMap(coveredBy);
+      const right = cols.filter(c => Math.abs(c.x0 - x) <= GAP_EPS).flatMap(coveredBy);
+      covered = left.flatMap(([l0, l1]) => right.map(([r0, r1]) => [Math.max(l0, r0), Math.min(l1, r1)]))
+        .filter(([lo, hi]) => hi - lo > GAP_EPS);
+    }
+    return subtractFarSpans([[Math.min(seg.z1, seg.z2), Math.max(seg.z1, seg.z2)]], covered)
+      .map(([lo, hi]) => ({ x1: x, z1: lo, x2: x, z2: hi }));
+  }
+  const xLo = Math.min(seg.x1, seg.x2), xHi = Math.max(seg.x1, seg.x2);
+  const cuts = [xLo, xHi];
+  for (const col of cols) {
+    for (const bx of [col.x0, col.x1]) if (bx > xLo + GAP_EPS && bx < xHi - GAP_EPS) cuts.push(bx);
+  }
+  cuts.sort((p, q) => p - q);
+  const kept = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const a = cuts[i], b = cuts[i + 1];
+    if (b - a <= GAP_EPS) continue;
+    const mid = (a + b) / 2;
+    const dep = seg.d1 + (seg.d2 - seg.d1) * ((mid - seg.x1) / (seg.x2 - seg.x1));
+    const z = seg.z1;
+    // 片の中で帯の天端（斜めなら線形）がzを超えるx区間が隠れる
+    const hidden = [];
+    for (const col of cols) {
+      if (!(mid > col.x0 && mid < col.x1)) continue;
+      for (const bd of bandsOf(col)) {
+        const occ = farOccluderDepth(bd, cut);
+        if (occ == null || occ > dep + GAP_EPS || z < bd.z0 - GAP_EPS) continue;
+        const te = bd.topEdge;
+        const w = col.x1 - col.x0;
+        if (!(te && Number.isFinite(te.zAtX0) && Number.isFinite(te.zAtX1)) || Math.abs(te.zAtX1 - te.zAtX0) <= GAP_EPS) {
+          if (z < farBandTopAt(bd, col, mid) - GAP_EPS) hidden.push([a, b]);
+          continue;
+        }
+        const xs = col.x0 + ((z - te.zAtX0) / (te.zAtX1 - te.zAtX0)) * w; // 天端がzに等しいx
+        const [h0, h1] = te.zAtX1 > te.zAtX0 ? [Math.max(a, xs), b] : [a, Math.min(b, xs)];
+        if (h1 - h0 > GAP_EPS) hidden.push([h0, h1]);
+      }
+    }
+    for (const [lo, hi] of subtractFarSpans([[a, b]], hidden)) kept.push({ x1: lo, z1: z, x2: hi, z2: z });
+  }
+  return kept;
+}
+
+// 区間の集合 spans から cover の各区間を引いた残り（長さ GAP_EPS 以下は捨てる）。
+function subtractFarSpans(spans, cover) {
+  let out = spans;
+  for (const [c0, c1] of cover) {
+    out = out.flatMap(([lo, hi]) => {
+      if (c1 <= lo || c0 >= hi) return [[lo, hi]];
+      const r = [];
+      if (c0 > lo) r.push([lo, c0]);
+      if (c1 < hi) r.push([c1, hi]);
+      return r;
+    });
+  }
+  return out.filter(([lo, hi]) => hi - lo > GAP_EPS);
+}
+
+// 同じ水平線・同じ縦線の重なり／接する線分を1本にまとめる。
+function mergeFarSegments(segs) {
+  const groups = new Map();
+  for (const s of segs) {
+    const vertical = Math.abs(s.x2 - s.x1) <= GAP_EPS;
+    const key = vertical ? `v${Math.round(s.x1 * 100)}` : `h${Math.round(s.z1 * 100)}`;
+    const lo = vertical ? Math.min(s.z1, s.z2) : Math.min(s.x1, s.x2);
+    const hi = vertical ? Math.max(s.z1, s.z2) : Math.max(s.x1, s.x2);
+    const g = groups.get(key) ?? { vertical, at: vertical ? s.x1 : s.z1, spans: [] };
+    g.spans.push([lo, hi]);
+    groups.set(key, g);
+  }
+  const out = [];
+  for (const g of groups.values()) {
+    g.spans.sort((p, q) => p[0] - q[0]);
+    const merged = [];
+    for (const sp of g.spans) {
+      const last = merged[merged.length - 1];
+      if (last && sp[0] <= last[1] + 1e-3) last[1] = Math.max(last[1], sp[1]);
+      else merged.push([sp[0], sp[1]]);
+    }
+    for (const [lo, hi] of merged) {
+      out.push(g.vertical ? { x1: g.at, z1: lo, x2: g.at, z2: hi } : { x1: lo, z1: g.at, x2: hi, z2: g.at });
+    }
+  }
+  return out;
+}
+
+// 段の平面セル（回転部＋上り口・到達口の区画）のうち多角形・高さが有限なもの。a＝幅方向、r＝走行方向の座標。
+// swap＝a（切断面からの奥行きを測る軸）と r（切断線に沿う軸）を入れ替える（レーンを横切る切断。奥行きが走行方向になる）。
+function farValidCells(contribution, vertical, swap = false) {
+  const cells = [
+    ...(contribution?.turnCells ?? []),
+    ...(contribution?.zoneCells?.entry ?? []),
+    ...(contribution?.zoneCells?.arrival ?? []),
+  ];
+  const valid = [];
+  for (const c of cells) {
+    const poly = c?.poly;
+    if (!Array.isArray(poly) || poly.length < 6 || poly.length % 2 !== 0 || !poly.every(Number.isFinite) || !Number.isFinite(c.z)) continue;
+    const pts = [];
+    for (let i = 0; i < poly.length; i += 2) {
+      const p = vertical ? { a: poly[i], r: poly[i + 1] } : { a: poly[i + 1], r: poly[i] };
+      pts.push(swap ? { a: p.r, r: p.a } : p);
+    }
+    const cen = { a: pts.reduce((s, p) => s + p.a, 0) / pts.length, r: pts.reduce((s, p) => s + p.r, 0) / pts.length };
+    valid.push({ pts, z: c.z, cen });
+  }
+  return valid;
+}
+
+// 帯の壁の厚み方向の範囲。隔て板は同じ軸CL上の2枚の壁（下地を持つ本体壁 90+12.5 と、手前の仕上げの薄壁 12.5。
+// finish/stair/stairPartitionWalls.js）でできていて、帯が持つのは本体壁だけ。階段のセルは薄壁の面まで敷かれるので、
+// 同じ軸CLで走行方向に重なる壁（cut.layers の graph.walls）の範囲を合わせて、実際の壁の面を求める。
+function farWallRange(wall, cut) {
+  const own = wallConcealRange(wall);
+  if (!own || !Number.isFinite(own.lo) || !Number.isFinite(own.hi)) return null;
+  let lo = own.lo, hi = own.hi;
+  const runOf = w => [Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)];
+  const [r0, r1] = runOf(wall);
+  if (wall.axisCL && Number.isFinite(r0) && Number.isFinite(r1)) {
+    for (const layer of cut.layers ?? []) {
+      for (const w of layer?.graph?.walls ?? []) {
+        if (w === wall || w.axisCL !== wall.axisCL) continue;
+        const [s0, s1] = runOf(w);
+        const rg = wallConcealRange(w);
+        if (!(Math.min(r1, s1) - Math.max(r0, s0) > GAP_EPS) || !rg) continue;
+        lo = Math.min(lo, rg.lo);
+        hi = Math.max(hi, rg.hi);
+      }
+    }
+  }
+  return { lo, hi };
+}
+
+// 壁（同じ軸CL上の重なる壁を含む）の手前の縁までの奥行き。壁の範囲が取れなければ遮蔽の奥行き。
+function farWallNearDepth(band, cut) {
+  const r = band.wall ? farWallRange(band.wall, cut) : null;
+  if (r) {
+    const vs = cut.viewSign ?? 1;
+    return Math.min((r.lo - cut.line.axisValue) * vs, (r.hi - cut.line.axisValue) * vs);
+  }
+  return farOccluderDepth(band, cut);
+}
+
+/**
+ * 壁の端の縦線（recessLo/recessHi）のうち、壁の端面に突き当たる階段の実体の天端より下を落とす
+ * （ユーザー指示2026-10-14「隔て板回転部側縦線の横線とぶつかったところから下は不要」）。
+ * 理由: 回転部のセルは壁の端面に全長で接し、壁の側面は次の蹴上へ同一面で続くので、セルの天端より下は
+ * 端の両側とも実体で、そこに縁は無い。セル＝turnCells＋zoneCells。縦断する切断だけ。
+ * 線の位置を覆う（面ローカルxの範囲）セルのうち、その奥行き（頂点の最小）が壁の手前の縁以上のものの
+ * 最大の天端 H を求め、線の H より下を切る。
+ * @param {object[]} prims - 壁のプリミティブ（__o が recessLo/recessHi の縦線だけ対象）
+ * @param {import('./sectionTypes.js').SectionCut} cut - stairCut を持つ切断
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @returns {object[]}
+ */
+export function clipWallEndVerticalsByStairMass(prims, cut, columns) {
+  const sc = cut?.stairCut;
+  if (!sc || !cut.line || !Number.isFinite(cut.line.axisValue) || !Number.isFinite(cut.dirSign)) return prims;
+  const vertical = stairAxisIsVertical(sc, cut);
+  if (cut.line.isVertical !== vertical) return prims;
+  const vs = cut.viewSign ?? 1;
+  const mass = farValidCells(sc, vertical).map(c => {
+    const xs = c.pts.map(p => localXOf(cut, p.r));
+    return { xLo: Math.min(...xs), xHi: Math.max(...xs), z: c.z, depth: Math.min(...c.pts.map(p => (p.a - cut.line.axisValue) * vs)) };
+  });
+  if (!mass.length) return prims;
+  const out = [];
+  for (const p of prims) {
+    if (p.type !== 'line' || p.x1 !== p.x2 || (p.__o !== 'recessLo' && p.__o !== 'recessHi')) { out.push(p); continue; }
+    const x = p.x1;
+    let wallDepth = Infinity;
+    for (const col of columns ?? []) {
+      if (Math.abs(x - col.x0) > FAR_SHARED_VERTEX_TOL_MM && Math.abs(x - col.x1) > FAR_SHARED_VERTEX_TOL_MM) continue;
+      for (const b of col.bands ?? []) if (b.kind === 'wall') wallDepth = Math.min(wallDepth, farWallNearDepth(b, cut) ?? Infinity);
+    }
+    let h = -Infinity;
+    if (Number.isFinite(wallDepth)) {
+      for (const m of mass) {
+        if (x >= m.xLo - FAR_SHARED_VERTEX_TOL_MM && x <= m.xHi + FAR_SHARED_VERTEX_TOL_MM
+          && m.depth >= wallDepth - GAP_EPS) h = Math.max(h, m.z);
+      }
+    }
+    if (h === -Infinity) { out.push(p); continue; }
+    const zLo = Math.max(Math.min(-p.y1, -p.y2), h), zHi = Math.max(-p.y1, -p.y2);
+    if (zHi - zLo <= GAP_EPS) continue;
+    out.push(-p.y1 <= -p.y2 ? { ...p, y1: -zLo, y2: -zHi } : { ...p, y1: -zHi, y2: -zLo });
+  }
+  return out;
+}
+
+/**
+ * 縦断する切断（レーンの長手に沿った切断面）の向こう側にある、視線から遠ざかって立ち上がる段の見えがかりを
+ * 細線（DETAIL）で返す（回り階段の復路前の回転部。ユーザー指示2026-10-14）。
+ *  (1) 平面の段（turnCells＋zoneCells の上り口・到達口）のうち辺を共有する高低差のある組について、共有辺の
+ *      切断面より奥の部分を、蹴上が視点側を向いているときだけ描く＝段鼻の水平線＋両端の縦線（切断面で切れた端は
+ *      切断の蹴上が既に太線で描くので縦線を足さない）。視線と平行（正面から見て縦に重なる）辺は縦線1本。
+ *  (2) 全体が切断面の奥にある flight（secondaryFlights と、幅が全て奥側の flights）の蹴込み板位置の縦線。
+ *      回転部（turnCells）を持つ階段だけ（折返しの復路は従来どおり描かない）。
+ *  (3) 列の手前の壁・断面（wall/cut/cutAlong/hidden）に隠れる部分は落とす。
+ * **レーンを横切る切断**（正面視。階段室の開口越しに見る S4。ユーザー指示2026-10-14）にも使う: 奥行きは走行方向になり、
+ * 共有辺は同じ式で段鼻の水平線（視線と平行な辺は縦線1本）、端の縦線と復路の蹴込み板は無い。加えて全体が切断面の奥にあり
+ * 視点から遠ざかって上る flight の段鼻（足元＋(番号+1)×蹴上）を段板の幅で引く。遮蔽は縦断と同じ（列の手前の壁・断面）。
+ * 段が無い・数値が有限でないときは空配列。
+ * @param {object} contribution - withCutLandings 済みでも未済みでもよい（turnCells/zoneCells/flights を読むだけ）
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @returns {object[]}
+ */
+export function farSideSilhouettePrimitives(contribution, cut, columns) {
+  if (!contribution || !cut?.line || !Number.isFinite(cut.line.axisValue) || !Number.isFinite(cut.dirSign)) return [];
+  const vertical = stairAxisIsVertical(contribution, cut);
+  // レーンを横切る切断（正面視。階段室の開口越し＝S4）: 奥行きは走行方向・切断線に沿う軸は幅方向になるので、セルの
+  // a/r を入れ替えて以降を縦断と同じ式で扱う。縦断と違い、端の縦線（壁の端の柱と取り合う線）と復路の蹴込み板は無い。
+  const crossing = cut.line.isVertical !== vertical;
+  const vs = cut.viewSign ?? 1;
+  const depthOf = a => (a - cut.line.axisValue) * vs;
+  const segs = []; // {x1,z1,x2,z2,d1,d2}
+  const valid = farValidCells(contribution, vertical, crossing);
+  const sameVertex = (p, q) =>
+    Math.abs(p.a - q.a) <= FAR_SHARED_VERTEX_TOL_MM && Math.abs(p.r - q.r) <= FAR_SHARED_VERTEX_TOL_MM;
+  for (let i = 0; i < valid.length; i++) {
+    for (let j = i + 1; j < valid.length; j++) {
+      const lowIsI = valid[i].z < valid[j].z;
+      const lo = lowIsI ? valid[i] : valid[j], hi = lowIsI ? valid[j] : valid[i];
+      if (hi.z - lo.z <= GAP_EPS) continue;
+      const shared = [];
+      for (const p of lo.pts) {
+        if (hi.pts.some(q => sameVertex(p, q)) && !shared.some(s => sameVertex(s, p))) shared.push(p);
+      }
+      if (shared.length < 2) continue;
+      let [P, Q] = shared;
+      const dP = depthOf(P.a), dQ = depthOf(Q.a);
+      if (dP <= GAP_EPS && dQ <= GAP_EPS) continue;
+      let clipP = false, clipQ = false;
+      if (dP <= GAP_EPS || dQ <= GAP_EPS) {
+        const t = dP / (dP - dQ);
+        const X = { a: P.a + (Q.a - P.a) * t, r: P.r + (Q.r - P.r) * t };
+        if (dP <= GAP_EPS) { P = X; clipP = true; } else { Q = X; clipQ = true; }
+      }
+      const xP = localXOf(cut, P.r), xQ = localXOf(cut, Q.r);
+      const eP = { x: xP, d: Math.max(0, depthOf(P.a)), clipped: clipP, a: P.a, r: P.r };
+      const eQ = { x: xQ, d: Math.max(0, depthOf(Q.a)), clipped: clipQ, a: Q.a, r: Q.r };
+      if (Math.abs(xP - xQ) <= GAP_EPS) {
+        segs.push({ x1: xP, z1: lo.z, x2: xP, z2: hi.z, d1: eP.d, d2: eQ.d });
+        continue;
+      }
+      // 低い側のセルが視点側にあるときだけ蹴上が見える（外向きの蹴上は階段の中側）。
+      const cross = (u, v) => u.a * v.r - u.r * v.a;
+      const edge = { a: Q.a - P.a, r: Q.r - P.r };
+      const sideLow = cross(edge, { a: lo.cen.a - P.a, r: lo.cen.r - P.r });
+      const sideView = cross(edge, { a: -vs, r: 0 });
+      if (!(Math.abs(sideLow) > GAP_EPS) || !(Math.abs(sideView) > GAP_EPS) || Math.sign(sideLow) !== Math.sign(sideView)) continue;
+      const [e1, e2] = eP.x <= eQ.x ? [eP, eQ] : [eQ, eP];
+      segs.push({ x1: e1.x, z1: hi.z, x2: e2.x, z2: hi.z, d1: e1.d, d2: e2.d });
+      for (const e of [e1, e2]) {
+        // 壁の端の柱と取り合う端（隔て板の回転部側の端）の縦線も細線で引く（ユーザー裁定2026-10-14）
+        if (!e.clipped && !crossing) segs.push({ x1: e.x, z1: lo.z, x2: e.x, z2: hi.z, d1: e.d, d2: e.d });
+      }
+    }
+  }
+  if (crossing) {
+    // (2') 全体が切断面の奥にあり、視点から遠ざかって上る flight の段鼻（蹴上が視点側を向く）を、段板の幅で細線にする。
+    // z＝足元＋(段の番号＋1)×蹴上（flightLadderPrimitives と同じ段鼻の高さ）。奥行きは段鼻の走行位置（遮蔽の判定用）。
+    for (const f of new Set([...(contribution.flights ?? []), ...(contribution.secondaryFlights ?? [])])) {
+      if (!f || !Number.isFinite(f.runLo) || !Number.isFinite(f.runHi) || !Number.isFinite(f.acrossLo) || !Number.isFinite(f.acrossHi)
+        || !Number.isFinite(f.baseZ) || !Number.isFinite(f.riserMm) || !(f.lengthMm > 0) || !(f.steps > 0)) continue;
+      if (!(Math.min(depthOf(f.runLo), depthOf(f.runHi)) > GAP_EPS)) continue; // 切断面に掛かる・手前
+      const ts = f.travelSign >= 0 ? 1 : -1;
+      if (!(ts * vs > 0)) continue; // 視点へ向かって上る（遠ざかって下る）flight は蹴上が見えない
+      const [xa, xb] = [localXOf(cut, f.treadAcrossLo ?? f.acrossLo), localXOf(cut, f.treadAcrossHi ?? f.acrossHi)].sort((p, q) => p - q);
+      const start = ts > 0 ? f.runLo : f.runHi;
+      const pitch = f.steps > 1 ? f.lengthMm / (f.steps - 1) : 0;
+      for (let k = 0; k < f.steps; k++) {
+        const d = depthOf(start + ts * k * pitch);
+        const z = f.baseZ + (k + 1) * f.riserMm;
+        segs.push({ x1: xa, z1: z, x2: xb, z2: z, d1: d, d2: d });
+      }
+    }
+    return mergeFarSegments(segs.flatMap(s => occludeFarSegment(s, columns, cut)))
+      .map(s => emitLine(cut, s.x1, s.z1, s.x2, s.z2, ElevationLineRole.DETAIL));
+  }
+  // (2) 回転部（WINDING）を持つ階段だけ。折返し（回転部なし）の復路の見えがかりは従来どおり描かない。
+  const flights = new Set((contribution.turnCells ?? []).length ? (contribution.secondaryFlights ?? []) : []);
+  for (const f of (contribution.turnCells ?? []).length ? (contribution.flights ?? []) : []) {
+    if (Number.isFinite(f?.acrossLo) && Number.isFinite(f?.acrossHi)
+      && depthOf(f.acrossLo) > GAP_EPS && depthOf(f.acrossHi) > GAP_EPS) flights.add(f);
+  }
+  for (const f of flights) {
+    if (!f || !Number.isFinite(f.runLo) || !Number.isFinite(f.runHi) || !Number.isFinite(f.acrossLo) || !Number.isFinite(f.acrossHi)
+      || !Number.isFinite(f.baseZ) || !Number.isFinite(f.riserMm) || !(f.lengthMm > 0) || !(f.steps > 0)) continue;
+    const dep = Math.min(depthOf(f.acrossLo), depthOf(f.acrossHi));
+    if (!(dep > GAP_EPS)) continue;
+    const ts = f.travelSign >= 0 ? 1 : -1;
+    const start = ts > 0 ? f.runLo : f.runHi;
+    for (let k = 0; k < f.steps; k++) {
+      const x = localXOf(cut, start + ts * k * (f.lengthMm / f.steps));
+      segs.push({ x1: x, z1: f.baseZ + k * f.riserMm, x2: x, z2: f.baseZ + (k + 1) * f.riserMm, d1: dep, d2: dep });
+    }
+  }
+  const kept = segs.flatMap(s => occludeFarSegment(s, columns, cut));
+  return mergeFarSegments(kept).map(s => emitLine(cut, s.x1, s.z1, s.x2, s.z2, ElevationLineRole.DETAIL));
+}
+
 /**
  * ジグザグ点列（stairRunProfileの出力。ささらの側面視輪郭=stringerPrimitivesの入力）の端部を、
  * flightのbaseZ・baseZ+steps×riserMm（登り口FL・下り口FL）へ水平カットする（WP-A2。設計書
@@ -1655,6 +2005,11 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   }
   // 段付きの踊り場（回り階段）の蹴上。踊り場が1枚（折返し）なら0本。
   prims.push(...landingStepRisers(contribution.landings, stairIsVertical, cut));
+  // 切断面の向こう側で視線から遠ざかって立ち上がる段の見えがかり（細線）。縦断する切断だけ。
+  // 階段下の部屋の展開（elevationBand）は下から見上げるので出さない（opts.farSide:false）。
+  if (opts.farSide !== false && cut.line.isVertical === stairIsVertical) {
+    prims.push(...farSideSilhouettePrimitives(contribution, cut, columns));
+  }
   // ささら側面視（鉄骨のみ。§6「鉄骨階段のみ」）: 各レーンのジグザグ点列ごとに桁成ぶん下げた
   // 輪郭（DETAIL＝切断面の向こう側にあるこのレーン自身のささら）を追加する。ユーザー指示
   // 「見えかがりは細線」対応（stringerPrimitives参照。2026-08-23実機修正でジグザグ自体が

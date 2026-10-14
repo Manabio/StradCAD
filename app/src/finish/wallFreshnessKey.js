@@ -35,8 +35,10 @@ import { floorHeightAbove } from './stair/stairDimensions.js';
  * 平面の編集（通り芯の移動・端）・部屋のセル・階段の配置・上階との階高は壁の派生物（隔て壁・階段下部屋2a・
  * 柱巻き）の入力なのに鍵に無く、古くなった壁を検出できなかった。展開・天伏の突入境界で鍵を比較して
  * 再生成するための準備。
+ * v9 = 復路下の壁を生成（stairPartitionWalls.js generateStairUnderReturnWalls。隔て壁の隣・踊り場前縁の線上。
+ * 2026-10-14）。鍵の入力は変えていないが生成する壁が増えたため一律不一致にする。
  */
-export const WALL_KEY_VERSION = 'v8';
+export const WALL_KEY_VERSION = 'v9';
 
 /**
  * 階段の鍵に入れる項目（core/stair.js Stair のコンストラクタの全項目から id・cells を除いたもの）。
