@@ -8,7 +8,7 @@ import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js';
 import { uTurnSoffitFromLayout } from '../ceiling/stairSoffit.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains } from './elevationStairSequence.js';
+import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, partitionStripOf } from './elevationStairSequence.js';
 import { stairSoffitAbove } from './space/stairSoffitCeiling.js';
 import { buildSpaceIndex } from './space/spaceModel.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
@@ -96,6 +96,70 @@ test('【E5・失敗系】applyStairSoffitToCut: 裏面なし・切断線が足�
   assert.equal(frozen(b), bBefore);
   assert.equal(b.ceilClip, undefined);
   assert.equal(applyStairSoffitToCut(soffitOf(L0), { dirSign: 1 }, null, 5400), null, 'line なし');
+});
+
+// ---------------------------------------------------------------- 隔て板の帯をはさむ裏面（ユーザー指示 2026-10-15 moku4-3 1階 C）
+
+const SER = [{ loX: 0, hiX: 780, z0: 3600, z1: 3600 }, { loX: 780, hiX: 895, z0: 5400, z1: 5400 }, { loX: 895, hiX: 1675, z0: 4700, z1: 4700 }];
+
+test('【指示2026-10-15】extendLowerCeilingAcrossStrip: 帯をはさんで低い側の天井を向こう面まで水平に延ばし、立下りは高い側の面', () => {
+  const out = extendLowerCeilingAcrossStrip(SER, 780, 895);
+  assert.deepEqual(out, [{ loX: 0, hiX: 780, z0: 3600, z1: 3600 }, { loX: 780, hiX: 895, z0: 3600, z1: 3600 }, { loX: 895, hiX: 1675, z0: 4700, z1: 4700 }],
+    '帯は低い側（左 3600）の値。立下りは右の面 895');
+  assert.deepEqual(SER[1], { loX: 780, hiX: 895, z0: 5400, z1: 5400 }, '引数は書き換えない');
+  const mirrored = extendLowerCeilingAcrossStrip([...SER].map(s => ({ ...s })).reverse().map(s => ({ loX: 1675 - s.hiX, hiX: 1675 - s.loX, z0: s.z1, z1: s.z0 })), 780, 895);
+  assert.deepEqual(mirrored.map(s => [s.loX, s.hiX, s.z0]), [[0, 780, 4700], [780, 895, 3600], [895, 1675, 3600]], '低い側が右なら帯は右の値。立下りは左の面 780');
+});
+
+test('【指示2026-10-15】extendLowerCeilingAcrossStrip: 帯が傾いた区間の中にあれば面で割り、帯の両側の値は割った端の値そのもの', () => {
+  // 面 C: X2 側の裏面が帯の上まで傾いて続き、X1 側の面で立下る → X1 側の値で帯を平らに、立下りを X2 側の面へ
+  const ser = [{ loX: 0, hiX: 895, z0: 4583, z1: 4551 }, { loX: 895, hiX: 1082, z0: 3735, z1: 3675 }];
+  const out = extendLowerCeilingAcrossStrip(ser, 780, 895);
+  assert.equal(out.length, 3);
+  near(out[0].hiX, 780, '帯の面で割る'); near(out[0].z1, 4583 + (4551 - 4583) * 780 / 895, '割った端は補間');
+  assert.deepEqual([out[1].loX, out[1].hiX, out[1].z0, out[1].z1], [780, 895, 3735, 3735], '帯は低い側（右）の端の値そのもの');
+  assert.deepEqual(out[2], ser[1], '右の区間は不変');
+});
+
+test('【指示2026-10-15・失敗系】extendLowerCeilingAcrossStrip: 両側が同じ高さ・帯が端に掛かる・帯が退化・空の区間列は不変', () => {
+  const same = [{ loX: 0, hiX: 780, z0: 3600, z1: 3600 }, { loX: 780, hiX: 895, z0: 5400, z1: 5400 }, { loX: 895, hiX: 1675, z0: 3600, z1: 3600 }];
+  assert.deepEqual(extendLowerCeilingAcrossStrip(same, 780, 895), same, '両側が同じなら帯は base のまま（どちらの天井も続かない）');
+  assert.equal(extendLowerCeilingAcrossStrip(SER, 0, 895), SER, '帯が左端に掛かる');
+  assert.equal(extendLowerCeilingAcrossStrip(SER, 780, 1675), SER, '帯が右端に掛かる');
+  assert.equal(extendLowerCeilingAcrossStrip(SER, 800, 800), SER, '退化した帯');
+  assert.equal(extendLowerCeilingAcrossStrip([], 780, 895).length, 0, '空');
+  assert.equal(extendLowerCeilingAcrossStrip(null, 780, 895), null, 'null');
+});
+
+test('【指示2026-10-15】applyStairSoffitToCut: partitionStrip（世界の幅方向座標）があれば、あき（base）の帯が低い側の裏面になる。無効な帯は無視', () => {
+  const gapL = { ...L0, across: { ...L0.across, sA: 940, sB: 1060 }, pivotAcross: 940 };
+  const cutOf = () => ({ line: { isVertical: false, axisValue: 2000, lo: 57.5, hi: 1942.5 }, dirSign: 1, zRange: { loZ: 0, hiZ: 5400 } });
+  const plain = cutOf();
+  applyStairSoffitToCut(soffitOf(gapL), plain, [[0, 5400], [1885, 5400]], 5400);
+  const cut = cutOf();
+  const applied = applyStairSoffitToCut(soffitOf(gapL), cut, [[0, 5400], [1885, 5400]], 5400, { partitionStrip: { lo: 940, hi: 1060 } });
+  const zRA = plain.ceilClip[0].ceilZHi, zRB = plain.ceilClip[2].ceilZ;
+  assert.ok(zRA < zRB, '前提: 往路側が低い');
+  near(cut.ceilClip[1].loX, 882.5, '帯の始まり'); near(cut.ceilClip[1].hiX, 1002.5, '帯の終わり');
+  near(cut.ceilClip[1].ceilZ, zRA, '帯は低い側の値'); near(cut.ceilClip[1].ceilZHi, zRA, '平ら');
+  assert.deepEqual(applied.ceilingProfile.map(p => Math.round(p[0] * 1000) / 1000), [0, 882.5, 1002.5, 1002.5, 1885], '段は向こう面 1002.5 だけ');
+  near(applied.ceilingProfile[2][1], zRA, '折れ線も帯の向こう面まで低い側'); near(applied.ceilingProfile[3][1], zRB, '向こう面で立下り');
+  const bad = cutOf();
+  applyStairSoffitToCut(soffitOf(gapL), bad, [[0, 5400], [1885, 5400]], 5400, { partitionStrip: { lo: NaN, hi: 1060 } });
+  assert.deepEqual(bad.ceilClip, plain.ceilClip, '無効な帯は無視（従来どおり base）');
+});
+
+test('【指示2026-10-15】partitionStripOf: 同じ軸 CL 上で走りが重なる壁（オーナー壁＋薄壁）の材の範囲を合併。重ならない壁・別の CL は入れない', () => {
+  const cl = { effectiveValue: 910 };
+  const w = (range, c1, c2, axisCL = cl) => ({ materialRange: range, coord1: c1, coord2: c2, axisCL, isVertical: true });
+  const owner = w({ lo: 865, hi: 967.5 }, -9157.5, -8132.5);
+  const thin = w({ lo: 852.5, hi: 865 }, -9157.5, -8132.5);
+  const far = w({ lo: 800, hi: 865 }, -7000, -6000);
+  const other = w({ lo: 700, hi: 865 }, -9157.5, -8132.5, { effectiveValue: 910 });
+  assert.deepEqual(partitionStripOf(owner, { walls: [owner, thin, far, other] }), { lo: 852.5, hi: 967.5 });
+  assert.deepEqual(partitionStripOf(owner, { walls: [owner] }), { lo: 865, hi: 967.5 }, '1 枚だけ');
+  assert.equal(partitionStripOf(null, { walls: [] }), null, '壁なし');
+  assert.equal(partitionStripOf({ materialRange: null, coord1: 0, coord2: 1 }, { walls: [] }), null, '材の範囲なし');
 });
 
 // ---------------------------------------------------------------- stairChDimChains（CH 寸法の上端）

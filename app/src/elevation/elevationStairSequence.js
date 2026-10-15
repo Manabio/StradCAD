@@ -291,6 +291,30 @@ function flatFloorSegments(run, floorDeltaMm, chMm) {
 //
 // face（wOut1等。composeRoomFacesの実面）のローカルx→world座標（elevationFigure.jsの
 // localXOfの逆写像。face.dirSign/originWorldは同じ規約）。
+/**
+ * 隔て板（往復レーンの境界の壁）の材の範囲（世界の幅方向座標）。同じ軸 CL 上で走りが重なる壁（オーナー壁＋薄壁）の
+ * materialRange の合併。wall が無ければ null。
+ * @param {import('@core').Wall|null} wall
+ * @param {object} wallGraph wall を見つけた graph
+ * @returns {{lo:number, hi:number}|null}
+ */
+export function partitionStripOf(wall, wallGraph) {
+  const mr = wall?.materialRange;
+  if (!mr || !Number.isFinite(mr.lo) || !Number.isFinite(mr.hi)) return null;
+  let lo = Math.min(mr.lo, mr.hi), hi = Math.max(mr.lo, mr.hi);
+  const runOf = w => [Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)];
+  const [r0, r1] = runOf(wall);
+  for (const w of graphList(wallGraph, 'walls') ?? []) {
+    if (w === wall || w.axisCL !== wall.axisCL || w.isVertical !== wall.isVertical) continue;
+    const [s0, s1] = runOf(w);
+    if (!(Math.min(r1, s1) - Math.max(r0, s0) > GAP_EPS)) continue;
+    const r = w.materialRange;
+    if (!r || !Number.isFinite(r.lo) || !Number.isFinite(r.hi)) continue;
+    lo = Math.min(lo, r.lo, r.hi); hi = Math.max(hi, r.lo, r.hi);
+  }
+  return { lo, hi };
+}
+
 function worldOfFace(face, localX) {
   return face.originWorld + localX * face.dirSign;
 }
@@ -392,15 +416,74 @@ function fillSpansWithBase(spans, xMin, xMax, base, baseFallbackZ) {
 }
 
 /**
+ * 裏面の区間列（fillSpansWithBase の結果。昇順・隙間なし）を x で 2 つに割る（x が区間の内部にあるときだけ）。
+ * @param {Array<{loX:number,hiX:number,z0:number,z1:number}>} series
+ * @param {number} x
+ */
+function splitSeriesAt(series, x) {
+  const out = [];
+  for (const s of series) {
+    if (x > s.loX + GAP_EPS && x < s.hiX - GAP_EPS) {
+      const zm = s.z0 + (s.z1 - s.z0) * (x - s.loX) / (s.hiX - s.loX);
+      out.push({ ...s, hiX: x, z1: zm }, { ...s, loX: x, z0: zm });
+    } else out.push(s);
+  }
+  return out;
+}
+
+/** 区間列の x での値（区分線形。区間の外は null）。 */
+function seriesZAt(series, x) {
+  const s = series.find(q => x >= q.loX - GAP_EPS && x <= q.hiX + GAP_EPS);
+  if (!s) return null;
+  if (s.hiX - s.loX <= GAP_EPS) return s.z0;
+  return s.z0 + (s.z1 - s.z0) * (x - s.loX) / (s.hiX - s.loX);
+}
+
+/**
+ * 隔て板（往復レーンの境界の壁）の帯 [lo, hi]（断面ローカル x）をはさんで裏面の高さが違うとき、**低い側の天井を帯の向こう側の
+ * 面まで水平に延ばし、立下りを高い側の面に置く**（ユーザー指示 2026-10-15「moku4-3 1階 階段 C: 往路の天井 X2+910 の右側に
+ * ある立下り断面は X2+910 の左側が正解。上階隔て板を包むように仕上げ材は貼られるので、原則、断面は中心から部屋側に寄る」。
+ * 面 A では帯が裏面の途切れ＝base（上階天井 5400）で埋まっていた帯も同じ規則で低い側の天井になる）。
+ * 帯の両側の値が同じ・片側が無い・帯が区間列の外なら不変。返り値は新しい配列（引数は書き換えない）。
+ * @param {Array<{loX:number,hiX:number,z0:number,z1:number}>} series 昇順・隙間なしの区間列
+ * @param {number} lo 帯の低い側の x
+ * @param {number} hi 帯の高い側の x
+ */
+export function extendLowerCeilingAcrossStrip(series, lo, hi) {
+  if (!series?.length || !(hi - lo > GAP_EPS)) return series;
+  const xMin = series[0].loX, xMax = series[series.length - 1].hiX;
+  if (lo <= xMin + GAP_EPS || hi >= xMax - GAP_EPS) return series;
+  const split = splitSeriesAt(splitSeriesAt(series, lo), hi);
+  // 帯の両側の値は、帯の面で割った区間の端の値そのもの（補間で丸めない。向こう面で隣の区間と同じ z から立下る）
+  const left = split.find(s => Math.abs(s.hiX - lo) <= GAP_EPS), right = split.find(s => Math.abs(s.loX - hi) <= GAP_EPS);
+  const zL = left ? left.z1 : seriesZAt(series, lo), zR = right ? right.z0 : seriesZAt(series, hi);
+  if (zL == null || zR == null || Math.abs(zL - zR) <= GAP_EPS) return series;
+  const z = Math.min(zL, zR);
+  const out = [];
+  let inserted = false;
+  for (const s of split) {
+    if (s.loX >= lo - GAP_EPS && s.hiX <= hi + GAP_EPS) {
+      if (!inserted) { out.push({ loX: lo, hiX: hi, z0: z, z1: z }); inserted = true; }
+      continue;
+    }
+    out.push(s);
+  }
+  return out;
+}
+
+/**
  * 切断 cut に階段の裏面（soffit）を天井として載せる。切断線の深さ（cut.line.axisValue）で切った裏面を、
  * **同じ区間列**から 体裁の ceilingProfile（返り値）とエンジンの cut.ceilClip（打ち切り専用。性格判定は ceilProfile のまま）に写す。
  * 足元の外・途切れは base（その面の既存の天井）でつなぐ（境目で値が違えば垂直の段）。cut.zRange.hiZ は裏面の最高点まで広げる
  * （頭打ちしない。裏面は上階天井 chUpperAbsMm を超えうる＝E5-0 の実測）。cut は呼び出し側が switchbackCuts から得た新しい
  * オブジェクトで、ここで直接書き換える（zRange は共有オブジェクトを書き換えず差し替える）。
  * 裏面が無い・切断線が足元の外ならば null（cut は不変）。
+ * @param {{partitionStrip?:{lo:number,hi:number}|null}} [opts] partitionStrip … 切断線を横切る隔て板（往復レーンの境界の壁）の
+ *   材の範囲（世界の幅方向座標）。あれば帯をはさんで低い側の天井を向こう面まで延ばす（extendLowerCeilingAcrossStrip）。
+ *   切断線と平行な壁は渡さない（呼び出し側が向きで判定する）。
  * @returns {{ceilingProfile:Array<[number,number]>, ends:{left:number|null, right:number|null}}|null}
  */
-export function applyStairSoffitToCut(soffit, cut, base, baseFallbackZ) {
+export function applyStairSoffitToCut(soffit, cut, base, baseFallbackZ, opts = {}) {
   if (!soffit || !cut?.line) return null;
   const { line } = cut;
   const nodes = stairSoffitChAlong(soffit, { isVertical: line.isVertical, depthCoord: line.axisValue, lo: line.lo, hi: line.hi });
@@ -409,7 +492,12 @@ export function applyStairSoffitToCut(soffit, cut, base, baseFallbackZ) {
   if (spans.length === 0) return null;
   const xa = localXOf(cut, line.lo), xb = localXOf(cut, line.hi);
   const xMin = Math.min(xa, xb), xMax = Math.max(xa, xb);
-  const series = fillSpansWithBase(spans, xMin, xMax, base, baseFallbackZ).filter(s => s.hiX - s.loX > GAP_EPS);
+  let series = fillSpansWithBase(spans, xMin, xMax, base, baseFallbackZ).filter(s => s.hiX - s.loX > GAP_EPS);
+  const strip = opts.partitionStrip ?? null;
+  if (strip && Number.isFinite(strip.lo) && Number.isFinite(strip.hi)) {
+    const sa = localXOf(cut, strip.lo), sb = localXOf(cut, strip.hi);
+    series = extendLowerCeilingAcrossStrip(series, Math.min(sa, sb), Math.max(sa, sb));
+  }
   cut.ceilClip = series.map(s => ({ loX: s.loX, hiX: s.hiX, ceilZ: s.z0, ceilZHi: s.z1 }));
   const soffitTop = Math.max(...spans.flatMap(s => [s.z0, s.z1]));
   if (cut.zRange && soffitTop > cut.zRange.hiZ) cut.zRange = { ...cut.zRange, hiZ: soffitTop };
@@ -1025,8 +1113,14 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // 面の端（左右）の裏面の高さは CH 寸法の鎖が使う（soffitEnds）。裏面が無い切断は applySoffit が null で何も変えない。
   const soffit = opts.stairSoffit ?? null;
   const soffitEnds = {};
+  // 隔て板（往復レーンの境界の壁。上階の graph で見つけた wall＝「上階隔て板」）の材の範囲（同じ軸 CL の重なる壁＝オーナー壁＋
+  // 薄壁の合併）。幅方向を横切る切断（seq1/seq3）にだけ渡し、帯をはさんで低い側の天井を向こう面まで延ばす
+  // （applyStairSoffitToCut → extendLowerCeilingAcrossStrip）。
+  const partitionStrip = partitionStripOf(midWall, opts.upperGraph ?? graph);
   const applySoffit = (seqNo, base) => {
-    const applied = applyStairSoffitToCut(soffit, cutOf(seqNo), base, ceilTopAbs);
+    const cut = cutOf(seqNo);
+    const strip = partitionStrip && midWall && cut?.line && cut.line.isVertical !== midWall.isVertical ? partitionStrip : null;
+    const applied = applyStairSoffitToCut(soffit, cut, base, ceilTopAbs, { partitionStrip: strip });
     if (applied) soffitEnds[seqNo] = applied.ends;
     return applied;
   };
