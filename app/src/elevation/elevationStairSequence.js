@@ -60,7 +60,7 @@ import {
 } from './elevationFloorProfile.js';
 import { stairSoffitChAlong } from './space/stairSoffitCeiling.js';
 import {
-  GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM,
+  GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM, ElevationLineRole, weightForRole,
 } from './elevationStyle.js';
 import { graphList } from '../graphReadScope.js';
 
@@ -355,10 +355,11 @@ export function kneeWallCapContent(content, cut, kneeDrop, floorHeight) {
  * @param {Array<[number,number]>|null} profile - 断面線（下側の輪郭）
  * @returns {object[]}
  */
-function withFlatLineSpans(segs, profile) {
+export function withFlatLineSpans(segs, profile) {
   if (!profile?.length) return segs;
   const breakXs = profile.map(([x]) => x);
-  return segs.map(s => {
+  const zAt = x => drawnFloorProfileZAt(profile, x);
+  return segs.map((s, si) => {
     const z = s.floorDeltaMm ?? 0;
     const inner = [...new Set(breakXs.filter(x => x > s.loX + GAP_EPS && x < s.hiX - GAP_EPS))]
       .sort((a, b) => a - b);
@@ -373,12 +374,67 @@ function withFlatLineSpans(segs, profile) {
       run = run ? { lo: run.lo, hi: xr } : { lo: xl, hi: xr };
       if (!best || run.hi - run.lo > best.hi - best.lo) best = run;
     }
-    if (!best) return { ...s, flatLineSpanX: { lo: s.hiX, hi: s.loX } };
+    if (!best) {
+      // 区間の中に床高さの平らな部分が無くても、階段の足元（初段の立ち上がり）が**面の端より外**にあり、
+      // そこまで輪郭が床高さで続くなら、床線は面の端から足元まで残す（はね出し。ユーザー指示 2026-10-15
+      // 「設置階初段断面が描画される面：設置階FL断面はね出し」）——木造の 1 段目は隔て板の柱の前縁（通り芯
+      // −57.5）にあり面の端の外から立ち上がるため、旧実装は区間の内側だけを見て床線を丸ごと落としていた。
+      // 端の面（最初の区間の始端・最後の区間の終端）だけが対象。端に壁があれば図側の描画範囲（drawnX0/Run）
+      // が面の端で止まるので線は出ない。
+      const foot = (end) => {
+        const outside = end === 'lo'
+          ? breakXs.filter(x => x <= s.loX + GAP_EPS).sort((a, b) => b - a)
+          : breakXs.filter(x => x >= s.hiX - GAP_EPS).sort((a, b) => a - b);
+        // 端から外へ向かって最初に「外側が床高さ・内側が床より上」になる折れ点＝足元（木造の初段は
+        // 段板の厚みで斜めに立ち上がるので、面の端の折れ点では外側もまだ床より上のことがある）
+        for (const x of outside) {
+          const inside = end === 'lo' ? x + 1 : x - 1, outer = end === 'lo' ? x - 1 : x + 1;
+          if (zAt(outer) <= z + GAP_EPS && zAt(inside) > z + GAP_EPS) return x;
+        }
+        return null;
+      };
+      if (si === 0) { const x = foot('lo'); if (x != null) return { ...s, flatLineSpanX: { hi: x } }; }
+      if (si === segs.length - 1) { const x = foot('hi'); if (x != null) return { ...s, flatLineSpanX: { lo: x } }; }
+      return { ...s, flatLineSpanX: { lo: s.hiX, hi: s.loX } };
+    }
     const span = {};
     if (best.lo > s.loX + GAP_EPS) span.lo = best.lo;
     if (best.hi < s.hiX - GAP_EPS) span.hi = best.hi;
     return Object.keys(span).length > 0 ? { ...s, flatLineSpanX: span } : s;
   });
+}
+
+/**
+ * 上階FL断面線のはね出し（ユーザー指示 2026-10-15「設置階上階最終段断面が描画される面：設置階上階FL断面
+ * はね出し」）: 断面線（floorProfile）が上階FLの高さで面の端の側へ終わる＝最終段の天端がその端にある面で、
+ * その端に壁が無ければ（`wallLessEndAt`。図側の床線・天井線のはね出しと同じ関門）、上階FL（z=floorHeight）の
+ * 断面線を最終段の天端の外側の点から面の端の外（壁のない端部の延長 extendMm）まで引く。端に壁があれば
+ * 上階の床はその壁で終わるので足さない（従来どおり。上階の平面が壁の外へ続くはり出しは図側の
+ * `upperFloorEdgeSpans` の規則のまま）。
+ * @returns {object[]} 追加する線（CUT）
+ */
+export function upperFloorEndLines(entry, floorHeight, extendMm) {
+  const prof = entry.floorProfile, face = entry.face;
+  if (!prof?.length || !Number.isFinite(floorHeight) || !face) return [];
+  const atTop = ([, z]) => Math.abs(z - floorHeight) <= GAP_EPS;
+  const out = [];
+  for (const end of ['lo', 'hi']) {
+    if (!wallLessEndAt(face, end === 'lo' ? '0' : 'Run')) continue;
+    // その端から見て最初の折れ点列: 端側は床（上階FL未満）で、最初に上階FLへ上がる点が最終段の天端の外側の点。
+    const pts = end === 'lo' ? prof : [...prof].reverse();
+    const firstTop = pts.findIndex(atTop);
+    if (firstTop < 0) continue; // 上階FLに達しない
+    // 端と天端の間は帯の床（平ら。階段の断面が終わった先）でなければならない——そこに段（上りも下りも）や
+    // 上階FLより高い部分があれば、天端はこの端にあるのではない（反対側の端に向かう階段の途中）。
+    const between = pts.slice(0, firstTop);
+    if (between.some(([, z]) => Math.abs(z - between[0][1]) > GAP_EPS)) continue;
+    // firstTop===0 は最終段の天端が断面線の定義域の端（面の端）にある構成。そこから外へ引く。
+    const xTop = pts[firstTop][0];
+    const xOuter = end === 'lo' ? -extendMm : face.run + extendMm;
+    if ((end === 'lo' ? xTop - xOuter : xOuter - xTop) <= GAP_EPS) continue;
+    out.push({ type: 'line', x1: xOuter, y1: -floorHeight, x2: xTop, y2: -floorHeight, weight: weightForRole(ElevationLineRole.CUT) });
+  }
+  return out;
 }
 
 /**
@@ -877,6 +933,9 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       skipBaseboard: true, skipWallLabel: true,
     });
   }
+
+  // 上階FL断面線のはね出し（最終段の天端がある壁のない端。ユーザー指示 2026-10-15）。
+  for (const e of entries) e.content.push(...upperFloorEndLines(e, floorHeight, endExtendMm));
 
   // 展開記号（ユーザー実機指摘2026-08「階段は、のぼり方で作図順が決まるので、展開記号は
   // ケースバイケース」「「6」B2：Dが正解。先のDは往路階段で切断して…このDは、復路階段で切断して、

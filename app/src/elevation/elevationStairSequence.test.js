@@ -7,7 +7,7 @@ import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { letterOf, DIR_SIGN } from './elevationFaces.js';
-import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf } from './elevationStairSequence.js';
+import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf, withFlatLineSpans, upperFloorEndLines } from './elevationStairSequence.js';
 import { localXOf } from './section/sectionTypes.js';
 import { switchbackCuts, buildMidWallFace } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
@@ -2606,4 +2606,98 @@ test('【失敗系・裁定2026-10-15】stairChDimChains: 逆回転では seq2/s
   assert.ok(near(chainsOf('4').left, normalChain) && near(chainsOf('4').right, landingChain), 'seq4: 左=通常断面・右=踊り場の鎖');
   assert.ok(near(chainsOf('5').left, landingChain) && near(chainsOf('5').right, normalChain), 'seq5: 左=踊り場の鎖・右=通常断面');
   assert.equal(chains.length, entries.length, '全面ぶん返る');
+});
+
+// ---- ユーザー指示 2026-10-15「設置階初段断面が描画される面：設置階FL断面はね出し」----
+// 木造の初段は隔て板の柱の前縁（面の端の外）から立ち上がる。区間の中に床高さの平らな部分が無くても、
+// 床線は面の端から足元まで残す（図側は壁のない端部の延長 drawnX0/Run まで引く）。
+test('【2026-10-15】withFlatLineSpans: 階段の足元が面の端の外にあれば、端の区間の床線は足元まで（hi=足元 x）。終端側も同様', () => {
+  const segs = [{ loX: 0, hiX: 800, floorDeltaMm: 0 }, { loX: 800, hiX: 1600, floorDeltaMm: 0 }];
+  // 足元 −40（外側は床 0・内側は斜めに立ち上がる）、終端側は 1640 から外が床
+  const profile = [[-60, 0], [-40, 0], [0, 70], [200, 400], [1400, 400], [1600, 70], [1640, 0], [1660, 0]];
+  const out = withFlatLineSpans(segs, profile);
+  assert.deepEqual(out[0].flatLineSpanX, { hi: -40 }, '始端の区間: 床線は面の外の足元まで（lo は付けない＝はね出し側は切らない）');
+  assert.deepEqual(out[1].flatLineSpanX, { lo: 1640 }, '終端の区間: 床線は足元から外へ');
+});
+
+test('【失敗系・2026-10-15】withFlatLineSpans: 足元が無い（外へ出ても床高さに戻らない）端・中間の区間・床高さの平らな部分が区間内にある場合は従来どおり', () => {
+  const segs = [{ loX: 0, hiX: 800, floorDeltaMm: 0 }, { loX: 800, hiX: 1600, floorDeltaMm: 0 }, { loX: 1600, hiX: 2400, floorDeltaMm: 0 }];
+  // 始端側は面の外でも 300 のまま（床に戻らない）、終端側は区間の内側に平らな床がある
+  const profile = [[-100, 300], [0, 300], [800, 400], [1600, 400], [1700, 0], [2400, 0]];
+  const out = withFlatLineSpans(segs, profile);
+  assert.deepEqual(out[0].flatLineSpanX, { lo: 800, hi: 0 }, '足元が無ければ空（反転）のまま');
+  assert.deepEqual(out[1].flatLineSpanX, { lo: 1600, hi: 800 }, '中間の区間は端の外を見ない');
+  assert.deepEqual(out[2].flatLineSpanX, { lo: 1700 }, '区間内に平らな床があれば従来の最大連続範囲');
+  assert.equal(withFlatLineSpans(segs, null), segs, 'profile 無しは何もしない');
+});
+
+// ---- ユーザー指示 2026-10-15「設置階上階最終段断面が描画される面：設置階上階FL断面はね出し」----
+// 最終段の天端がある端に壁が無ければ、上階FL（z=floorHeight）の断面線を天端の外側の点から面の端の外
+// （壁のない端部の延長）まで引く。端に壁があれば足さない。
+function entriesWithOpenArrivalEnd(graph, { openEnd = true } = {}) {
+  const { room, stair } = makeSwitchbackFixture(graph);
+  if (openEnd) {
+    // 上り口辺（y=4500）の壁を外す＝往路の上り口・復路の到達端が壁のない端になる
+    for (const w of [...graph.walls]) {
+      if (!w.isVertical && Math.abs(w.axisCL.effectiveValue - 4500) < 1e-6) graph.removeShape(w.id);
+    }
+  }
+  const faces = composeRoomFaces(room, graph, { keepWallLessFaces: true });
+  return stairFaceSequence(stair, faces, graph, { ...OPTS, wallLessEndExtendModelMm: 150, layers: buildBandLayers(graph) });
+}
+const upperFlLines = e => e.content.filter(p => p.type === 'line' && p.y1 === -OPTS.floorHeight && p.y2 === -OPTS.floorHeight
+  && p.weight === weightForRole(ElevationLineRole.CUT));
+
+test('【2026-10-15】stairFaceSequence: 到達端に壁が無ければ、seq5 に上階FL断面線が最終段の天端から面の端の外（−150 または run+150）まで出る', () => {
+  const entries = entriesWithOpenArrivalEnd(makeGraph());
+  const seq5 = entries.find(e => e.seqNo === '5');
+  const top = seq5.floorProfile.filter(([, z]) => Math.abs(z - OPTS.floorHeight) < 1e-6).map(([x]) => x);
+  assert.ok(top.length > 0, '前提: 断面線が上階FLに達する');
+  const lines = upperFlLines(seq5);
+  const outer = lines.find(p => Math.min(p.x1, p.x2) <= -150 + 1e-6 || Math.max(p.x1, p.x2) >= seq5.face.run + 150 - 1e-6);
+  assert.ok(outer, `面の端の外まで届く上階FL断面線があるはず（実際: ${JSON.stringify(lines)}）`);
+  const atLo = Math.min(outer.x1, outer.x2) <= -150 + 1e-6;
+  const xTop = atLo ? Math.min(...top) : Math.max(...top);
+  assert.ok(Math.abs((atLo ? Math.max(outer.x1, outer.x2) : Math.min(outer.x1, outer.x2)) - xTop) < 1e-6, '内側の端は最終段の天端の外側の点');
+  assert.equal(atLo ? Math.min(outer.x1, outer.x2) : Math.max(outer.x1, outer.x2), atLo ? -150 : seq5.face.run + 150, '外側の端は壁のない端部の延長');
+});
+
+// upperFloorEndLines 単体: 面は壁のない端を持つ合成 face（wallLessEndAt は hasWallAtLocal0/Run・hiddenWall・extended を見る）
+// openEnd＝壁のない端（'lo'/'hi'。反対側は壁あり）
+const openFace = (run, openEnd) => ({
+  run, dirSign: 1, isVertical: true, hiddenWallAtLocal0: false, hiddenWallAtLocalRun: false,
+  hasWallAtLocal0: openEnd !== 'lo', hasWallAtLocalRun: openEnd !== 'hi',
+});
+test('【失敗系・2026-10-15】upperFloorEndLines: 端の側で上階FLを超えてから上階FLに達する輪郭には引かない。端に達しない輪郭・輪郭なし・両端に壁も 0 本', () => {
+  const face = openFace(800, 'lo');
+  assert.deepEqual(upperFloorEndLines({ face, floorProfile: [[0, 0], [100, 3200], [200, 3000], [800, 3000]] }, 3000, 150), [],
+    '始端側で 3200 を経てから 3000 に達する＝上階FLの平らな天端ではない');
+  assert.deepEqual(upperFloorEndLines({ face, floorProfile: [[0, 0], [400, 2000], [800, 2000]] }, 3000, 150), [], '上階FLに達しない');
+  assert.deepEqual(upperFloorEndLines({ face: openFace(800, 'hi'), floorProfile: [[0, 3000], [20, 3000], [400, 2000], [800, 0]] }, 3000, 150), [],
+    '天端が反対側の端にある（壁のない端との間が階段の下り）＝この端の天端ではない');
+  assert.deepEqual(upperFloorEndLines({ face, floorProfile: null }, 3000, 150), [], '輪郭なし');
+  assert.deepEqual(upperFloorEndLines({ face: openFace(800, null), floorProfile: [[0, 3000], [800, 0]] }, 3000, 150), [], '両端に壁');
+});
+
+test('【2026-10-15】upperFloorEndLines: 最終段の天端が輪郭の定義域の端（面の端）にあれば、そこから壁のない端部の延長まで引く。終端側は run+延長まで', () => {
+  const lo = upperFloorEndLines({ face: openFace(800, 'lo'), floorProfile: [[0, 3000], [20, 3000], [400, 2000], [800, 0]] }, 3000, 150);
+  assert.deepEqual(lo.map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2), p.y1, p.y2]), [[-150, 0, -3000, -3000]], '始端: −150..0');
+  const hi = upperFloorEndLines({ face: openFace(800, 'hi'), floorProfile: [[0, 0], [400, 2000], [760, 3000], [800, 3000]] }, 3000, 150);
+  assert.deepEqual(hi.map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]), [[800, 950]], '終端: 天端が定義域の端（800）まで続くので、そこから run+150 へ');
+  const hiInner = upperFloorEndLines({ face: openFace(800, 'hi'), floorProfile: [[0, 0], [400, 2000], [740, 3000], [760, 3000], [760, 0], [800, 0]] }, 3000, 150);
+  assert.deepEqual(hiInner.map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]), [[760, 950]], '終端: 天端が面の内側で終われば、その外側の点 760 から run+150');
+  assert.ok(hi.every(p => p.weight === weightForRole(ElevationLineRole.CUT)), '断面線（CUT）');
+  // 壁のある側（始端）は引かない
+  assert.deepEqual(upperFloorEndLines({ face: openFace(800, 'hi'), floorProfile: [[0, 3000], [20, 3000], [400, 2000], [800, 0]] }, 3000, 150), [], '壁のある始端には引かない');
+});
+
+test('【失敗系・2026-10-15】stairFaceSequence: 到達端に壁があれば上階FL断面線のはね出しは出ない。seq2/seq4（上階FLに達しない面）にも出ない', () => {
+  const closed = entriesWithOpenArrivalEnd(makeGraph(), { openEnd: false });
+  const seq5 = closed.find(e => e.seqNo === '5');
+  assert.ok(!upperFlLines(seq5).some(p => Math.min(p.x1, p.x2) < -1e-6 || Math.max(p.x1, p.x2) > seq5.face.run + 1e-6), '壁のある端の外へは引かない');
+  const open = entriesWithOpenArrivalEnd(makeGraph());
+  for (const seqNo of ['2', '4']) {
+    const e = open.find(x => x.seqNo === seqNo);
+    assert.ok(!upperFlLines(e).some(p => Math.min(p.x1, p.x2) < -1e-6 || Math.max(p.x1, p.x2) > e.face.run + 1e-6), `seq${seqNo}: 断面が上階FLに達しない面には出ない`);
+  }
 });
