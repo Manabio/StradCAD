@@ -27,6 +27,7 @@ import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
 import { floorHeightAbove, stairRiserOf } from './finish/stair/stairDimensions.js';
+import { cellBoundsList } from './finish/gridCells.js';
 import { snapshotFinishState, restoreFinishState } from './finish/finishUndo.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
 import { shouldShowPlanFigure, shouldShowEquipmentSymbols } from './renderer/planFigureVisibility.js';
@@ -832,6 +833,30 @@ const App = observer(() => {
     })().catch(console.error); // 非オーナータブでは peek → openDB が reject する（unhandled rejection防止）
     return () => { cancelled = true; };
   }, [appMode, activeFloorId, floorSyncTick, planesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 天伏モード: 階段下の群（階段の破れ線先で直下階に階段が無いセル）の判定材料を、直下階 peek から mode へ渡す。
+  // 未解決（undefined）の間は渡さない（mode の stairUnderContext は null＝分けない）。peek が別の階のもの・読めない（graph なし）ときも null（安全側）。
+  // floorHeightMm は自階の階高（floorHeightAbove）。belowPlanPeek.floorHeightMm は直下階の階高なので使わない。
+  useEffect(() => {
+    if (appMode !== 'ceiling' || !mode?.setStairUnderContext || belowPlanPeek === undefined) return;
+    const active = project.activePlane;
+    let ctx = null;
+    // 採用階に無い平面（検討案）は直下階を判定できない（peek は null になるが最下階ではない）ので割らない
+    const adopted = !!active && project.planes.some(p => p.id === active.id);
+    if (!adopted) {
+      ctx = null;
+    } else if (belowPlanPeek === null) {
+      ctx = { planeId: active.id, lowerStairCellBounds: [], floorHeightMm: floorHeightAbove(project, active) };
+    } else if (belowPlanPeek.graph && belowPlanPeek.activePlaneId === active.id) {
+      const below = belowPlanPeek.graph;
+      ctx = {
+        planeId: active.id,
+        lowerStairCellBounds: below.stairs.map(s => ({ stair: s, cellBounds: cellBoundsList(s.cells, below) })),
+        floorHeightMm: floorHeightAbove(project, active),
+      };
+    }
+    mode.setStairUnderContext(ctx);
+  }, [appMode, mode, belowPlanPeek, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 吹抜け直下の階ビュー: 直上階（elevation が1つ上の採用フロア）を peek し、その吹抜け・昇降路の穴
   // （abovePlanPeek。PlanSolidsLayer が注記の破線を自階へ投影する）とスラブ開口を求める（世界座標は全階共通のため

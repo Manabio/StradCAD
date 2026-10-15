@@ -6,6 +6,7 @@
  *                         ceilingRefreshCells で展開し先勝ちで採る（ceilingSurfaces.js の区画の面と同じ採り方）。
  *   - 部屋の残り 'room' … owner.kind==='room' && owner.id===R.id のセルから、R の区画のセルを除いたもの（親・部分指定の子とも）。
  *   - 階段の残り 'stair' … owner.kind==='stair' && owner.id===S.id のセルから、対の部屋の区画のセルを除いたもの。
+ *   - 階段下 'stairUnder' … 階段の残りのうち、破れ線先で直下階に階段が無いセル（選択専用。ceilingStairUnder.js。stairUnderKeys を渡したときだけ）。
  * 不変条件: ceilingSurfacesOf の各面のキー集合は対応する群のセルと一致（区画の面⇔zone 群、残りの面⇔room 群）。
  * ただし STAIR_VOID の面（索引外。ceilingSurfaces.js stairVoidFace）は群を持たないので除く。
  * 読み取りスコープで包まない（MobX の追跡下からも呼べるように。必要なら呼び側が withGraphReadScope で包む）。
@@ -16,19 +17,23 @@ import { ceilingRefreshCells } from './ceilingGrid.js';
 export const roomGroupId = roomId => `room:${roomId}`;
 export const zoneGroupId = (roomId, zoneId) => `zone:${roomId}#${zoneId}`;
 export const stairGroupId = stairId => `stair:${stairId}`;
+export const stairUnderGroupId = stairId => `stairUnder:${stairId}`;
 
 /**
- * @typedef {{kind: 'room'|'zone'|'stair', roomId: string|null, zoneId?: string, stairId?: string,
+ * @typedef {{kind: 'room'|'zone'|'stair'|'stairUnder', roomId: string|null, zoneId?: string, stairId?: string,
  *            owner: {kind: 'room'|'stair', id: string, rowId: string}, cells: Set<string>}} CeilingGroup
  */
 
 /**
  * 所属索引から群を作る。graph が null・owners が空なら空の結果。
+ * 階段下の群 'stairUnder'（選択専用。ceilingStairUnder.js）: 「階段の残り」のうち stairUnderKeys に入るセルを、階段本体と別の群にする。
+ * owner は階段の所属のまま（書込み先の部屋・タブの判定は階段の群と同じ）。区画の群が先に採るので、区画に入ったセルは区画の群。
  * @param {object} graph
  * @param {Map<string, {kind: 'room'|'stair', id: string, rowId: string}>} owners  ceilingCellOwnersOf／buildCeilingCellOwners の結果
+ * @param {Map<string, Set<string>>|null} [stairUnderKeys]  stairUnderCeilingKeys の結果。null は分けない（従来どおり）
  * @returns {{groupOfCell: Map<string, string>, groups: Map<string, CeilingGroup>}}
  */
-export function ceilingGroupsOf(graph, owners) {
+export function ceilingGroupsOf(graph, owners, stairUnderKeys = null) {
   const groupOfCell = new Map();
   const groups = new Map();
   if (!graph || !owners || owners.size === 0) return { groupOfCell, groups };
@@ -62,10 +67,11 @@ export function ceilingGroupsOf(graph, owners) {
       id = roomGroupId(owner.id);
       if (!groups.has(id)) groups.set(id, { kind: 'room', roomId: owner.id, owner, cells: new Set() });
     } else {
-      id = stairGroupId(owner.id);
+      const under = stairUnderKeys?.get(owner.id)?.has(key) ?? false;
+      id = under ? stairUnderGroupId(owner.id) : stairGroupId(owner.id);
       if (!groups.has(id)) {
         const stair = graph.stairMap?.get(owner.id);
-        groups.set(id, { kind: 'stair', roomId: stair?.roomId ?? null, stairId: owner.id, owner, cells: new Set() });
+        groups.set(id, { kind: under ? 'stairUnder' : 'stair', roomId: stair?.roomId ?? null, stairId: owner.id, owner, cells: new Set() });
       }
     }
     groups.get(id).cells.add(key);

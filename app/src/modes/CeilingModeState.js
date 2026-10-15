@@ -2,9 +2,10 @@ import { makeObservable, observable, action, computed, runInAction } from 'mobx'
 import { resolveMoveRange } from '../transform/followerGraph.js';
 import { runBusy } from '../uiBusy.js';
 import { prepareCenterLineMove } from './clMove.js';
-import { buildCeilingCellOwners } from '../ceiling/ceilingOwners.js';
+import { buildCeilingCellOwners, ceilingCellOwnersOf } from '../ceiling/ceilingOwners.js';
 import { beginCeilingDrag, extendCeilingDrag } from '../ceiling/ceilingSelection.js';
 import { ceilingGroupsOf, zoneGroupId } from '../ceiling/ceilingGroups.js';
+import { stairUnderCeilingKeys } from '../ceiling/ceilingStairUnder.js';
 import { createZone } from '../ceiling/ceilingZones.js';
 import { nodePathOf } from '../ceiling/ceilingPanelRows.js';
 import { roomCeilingShapeOf } from '../ceiling/roomCeilingShape.js';
@@ -40,6 +41,7 @@ export class CeilingModeState {
   selection      = null;     // null | { owner, groupId, cellKeys: Set<string> }（確定した群の選択。cellKeys は選んだ時点の写し）
   dragState      = null;     // null | { owner, visited, lastWorld, owners, intent: 'select'|'create', groupId, group, preview }（ドラッグ中）
   moveState      = null;     // null | { cl, originalValue, range }（天井芯の移動中。S8b。FloorplanModeState.moveState と同形）
+  stairUnderContext = null;  // null | { planeId, lowerStairCellBounds, floorHeightMm }（階段下の群の判定材料。App の直下階 peek が渡す。null は分けない）
   _pendingPreload = null;    // { clId, promise } | null — 長押し中の移動範囲の先読み結果（graph は持たず promise だけ）
 
   // ---- 材データ（突入時ロード。dispose では解放せず、モードのインスタンスごと捨てられる。FinishModeState と同名・同じ意味） ----
@@ -66,6 +68,8 @@ export class CeilingModeState {
       selection:      observable.ref,
       dragState:      observable.ref,
       moveState:      observable.ref,
+      stairUnderContext: observable.ref,
+      setStairUnderContext: action,
       isMoving:       computed,
       startMove:      action,
       updateMove:     action,
@@ -129,6 +133,27 @@ export class CeilingModeState {
     this.activeTab = tab;
   }
 
+  // ---- 階段下の群（選択専用。ceiling/ceilingStairUnder.js）----
+
+  /** 階段下の判定材料を置く（App.jsx の直下階 peek の effect が呼ぶ）。null は「判定できない＝分けない」。 */
+  setStairUnderContext(ctx) { this.stairUnderContext = ctx; }
+
+  /**
+   * graph の階段下の天井セル（stairId → Set）。判定材料が無い・別の階のもの（planeId 不一致。階切替直後の古い peek）は null＝分けない。
+   * 読み取りスコープで包まない（パネルの observer が graph の変更に反応できるように。アクションは呼び側が withGraphReadScope で包む）。
+   * owners を渡せば所属索引を作り直さない。
+   */
+  stairUnderKeysOf(graph, owners = null) {
+    const ctx = this.stairUnderContext;
+    if (!graph || !ctx || ctx.planeId !== graph.plane?.id) return null;
+    return stairUnderCeilingKeys(graph, owners ?? ceilingCellOwnersOf(graph), ctx);
+  }
+
+  /** 群の一覧（階段下の群込み）。アクションから呼ぶ用に読み取りスコープで包む。 */
+  _groupsOf(graph, owners) {
+    return withGraphReadScope(graph, () => ceilingGroupsOf(graph, owners, this.stairUnderKeysOf(graph, owners)));
+  }
+
   // ---- 天井セルの群選択と、選択中の残りからの区画の作成（S12b）----
 
   /**
@@ -138,7 +163,7 @@ export class CeilingModeState {
   _selectGroup(graph, group, owner, groupId, switchTab, path = null) {
     this.selection = { owner, groupId, cellKeys: new Set(group.cells) };
     if (switchTab) this.activeTab = owner.kind === 'stair' ? 'stair' : 'interior';
-    this.expandedPath = path ?? nodePathOf(graph, groupId, this.activeTab) ?? [];
+    this.expandedPath = path ?? nodePathOf(graph, groupId, this.activeTab, this.stairUnderKeysOf(graph)) ?? [];
   }
 
   /**
@@ -150,11 +175,12 @@ export class CeilingModeState {
     const owners = buildCeilingCellOwners(graph);
     const drag = beginCeilingDrag(graph, owners, wx, wy);
     if (!drag) return;
-    const { groupOfCell, groups } = withGraphReadScope(graph, () => ceilingGroupsOf(graph, owners));
+    const { groupOfCell, groups } = this._groupsOf(graph, owners);
     const groupId = groupOfCell.get(drag.visited.keys().next().value);
     const group = groups.get(groupId);
     if (!group) return;
-    if (this.selection?.groupId === groupId && group.kind !== 'zone' && group.cells.size >= 2) {
+    // 階段下の群は1セルでも・全体でも区画にできる（階段下を丸ごと1区画にする。他の群は2セル以上の真部分集合だけ）
+    if (this.selection?.groupId === groupId && group.kind !== 'zone' && group.cells.size >= (group.kind === 'stairUnder' ? 1 : 2)) {
       const visited = new Map([...drag.visited].filter(([key]) => group.cells.has(key)));
       this.dragState = { ...drag, visited, owners, intent: 'create', groupId, group, preview: NO_CELLS };
       return;
@@ -196,7 +222,8 @@ export class CeilingModeState {
     const { graph, project } = ctx;
     const group = state.group;
     const cells = new Set(state.visited.keys());
-    if (cells.size === 0 || cells.size >= group.cells.size) return; // 真部分集合のときだけ作る
+    // 真部分集合のときだけ作る（階段下の群は同一集合も可）
+    if (cells.size === 0 || (group.kind !== 'stairUnder' && cells.size >= group.cells.size)) return;
     const room = group.roomId ? graph.roomMap.get(group.roomId) : null;
     if (!room) return; // 対の部屋の無い階段
     const spec = this._newZoneSpec(graph, project, group, room, cells);
@@ -226,9 +253,9 @@ export class CeilingModeState {
    */
   selectNode(graph, groupId, path = null) {
     const owners = buildCeilingCellOwners(graph);
-    const group = withGraphReadScope(graph, () => ceilingGroupsOf(graph, owners)).groups.get(groupId);
+    const group = this._groupsOf(graph, owners).groups.get(groupId);
     if (group) { this._selectGroup(graph, group, group.owner, groupId, false, path); return; }
-    this.expandedPath = path ?? nodePathOf(graph, groupId, this.activeTab) ?? [];
+    this.expandedPath = path ?? nodePathOf(graph, groupId, this.activeTab, this.stairUnderKeysOf(graph)) ?? [];
   }
 
   /** ドラッグ中だけ消す（選択は保つ）。App.jsx の interruptCurrentAction が cancelDrag?.() で呼ぶ。 */

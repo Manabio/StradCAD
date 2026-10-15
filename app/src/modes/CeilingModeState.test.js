@@ -9,7 +9,7 @@ import { ERR_CL_MOVE_LOAD_FAILED } from '../error.js';
 import { undoManager } from '../undoManager.js';
 import { isDirty, clearDirty } from '../dirtyState.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
-import { roomGroupId, zoneGroupId, stairGroupId } from '../ceiling/ceilingGroups.js';
+import { roomGroupId, zoneGroupId, stairGroupId, stairUnderGroupId } from '../ceiling/ceilingGroups.js';
 import { selectedNodeId, nodePathOf, ceilingPanelTree, ceilingPanelLines } from '../ceiling/ceilingPanelRows.js';
 import { makeGrid, assignZoneHeight } from '../plan/planTestFixtures.js';
 import { CeilingModeState } from './CeilingModeState.js';
@@ -716,4 +716,85 @@ test('S12b: 群を選び直すと選択の cellKeys は選んだ時点の写し�
   assert.equal(roomOf(graph, a).ceilingZones.length, 0);
   assert.equal(state.selection, zoneSel, 'undo で選択は解除されない');
   assert.deepEqual([...state.selection.cellKeys], [k(1)]);
+});
+
+// ---- 階段下の群（選択専用。stairUnderContext を App の直下階 peek が渡す）----
+
+/** stairGroupSetup の階（破れ先は右 2 セル = 2,3）に、最下階の判定材料（stairUnderContext）を置いた State。 */
+function stairUnderSetup(planeId) {
+  const s = stairGroupSetup();
+  const state = new CeilingModeState();
+  state.setStairUnderContext({ planeId: planeId ?? s.graph.plane.id, lowerStairCellBounds: [], floorHeightMm: 3200 });
+  return { ...s, state };
+}
+
+test('階段下（選択）: 階段下のセルのタップは「階段下」の群（そのセルだけ）を選び、経路は [stair, stairUnder]・階段タブ。階段本体のセルは従来の階段の群', () => {
+  const { g, stair, ctx, state, k } = stairUnderSetup();
+  tapCell(state, g, 3, 0, ctx);
+  assert.equal(state.selection.groupId, stairUnderGroupId(stair.id));
+  assert.deepEqual([...state.selection.cellKeys].sort(), [k(2), k(3)].sort());
+  assert.equal(state.activeTab, 'stair');
+  assert.deepEqual(state.expandedPath, [stairGroupId(stair.id), stairUnderGroupId(stair.id)]);
+  assert.deepEqual(state.selection.owner, { kind: 'stair', id: stair.id, rowId: state.selection.owner.rowId });
+  tapCell(state, g, 0, 0, ctx);
+  assert.equal(state.selection.groupId, stairGroupId(stair.id));
+  assert.deepEqual([...state.selection.cellKeys].sort(), [k(0), k(1)].sort(), '階段本体は階段下を除く');
+});
+
+test('階段下（作成）: 選択中の階段下を再タップすると 1 セルでも区画になり、なぞって群と同じ集合にしても区画になる。undo 1 回で消える', () => {
+  const { g, graph, pair, stair, ctx, state, k } = stairUnderSetup();
+  tapCell(state, g, 2, 0, ctx); // 選択
+  const n0 = stackLen();
+  tapCell(state, g, 3, 0, ctx); // 再タップ＝1 セルの区画
+  assert.equal(pair.ceilingZones.length, 1);
+  assert.deepEqual([...pair.ceilingZones[0].cells], [k(3)]);
+  assert.equal(stackLen(), n0 + 1);
+  assert.equal(state.selection.groupId, zoneGroupId(pair.id, pair.ceilingZones[0].id));
+  assert.equal(state.activeTab, 'stair');
+  undoManager.undo();
+  assert.equal(roomOf(graph, pair).ceilingZones.length, 0, 'undo 1 回で消える');
+  // 同一集合（階段下の全体）をなぞる
+  tapCell(state, g, 2, 0, ctx);
+  stroke(state, g, [[2, 0], [3, 0]], ctx);
+  const zone = roomOf(graph, pair).ceilingZones[0];
+  assert.deepEqual([...zone.cells].sort(), [k(2), k(3)].sort(), '階段下の全セルで 1 区画');
+  assert.deepEqual(zone.shape, 'slope', '初期値は従来の階段の既定（stairCeilingSlopeDefaults）');
+  assert.deepEqual(state.expandedPath, [stairGroupId(stair.id), zoneGroupId(pair.id, zone.id)]);
+  clearDirty();
+  undoManager.undo();
+  assert.equal(roomOf(graph, pair).ceilingZones.length, 0);
+});
+
+test('階段下（従来の規則は変えない）: 階段本体の残りは同一集合（全セル）のなぞりでは区画を作らない', () => {
+  const { g, pair, ctx, state } = stairUnderSetup();
+  tapCell(state, g, 0, 0, ctx);
+  stroke(state, g, [[0, 0], [1, 0]], ctx); // 階段本体 {0,1} の全部
+  assert.equal(pair.ceilingZones.length, 0);
+});
+
+test('【失敗系】階段下: 判定材料が無い（null）・別の階のもの（planeId 不一致）なら割れない（階段は 4 セルの 1 群）。stairUnderKeysOf は null', () => {
+  for (const make of [() => { const s = stairGroupSetup(); return { ...s, state: new CeilingModeState() }; }, () => stairUnderSetup('other-plane')]) {
+    const { g, graph, stair, ctx, state } = make();
+    assert.equal(state.stairUnderKeysOf(graph), null);
+    tapCell(state, g, 3, 0, ctx);
+    assert.equal(state.selection.groupId, stairGroupId(stair.id));
+    assert.equal(state.selection.cellKeys.size, 4);
+  }
+});
+
+test('【失敗系】階段下: 区画が階段下の全部を覆うと階段下の群は無く、そのセルのタップは区画の選択', () => {
+  const { g, graph, pair, ctx, state, k } = stairUnderSetup();
+  pair.setCeilingZones(assignZoneHeight(graph, pair, [k(2), k(3)], 2500));
+  tapCell(state, g, 3, 0, ctx);
+  assert.equal(state.selection.groupId, zoneGroupId(pair.id, pair.ceilingZones[0].id));
+  assert.equal(state.stairUnderKeysOf(graph).has(state.selection.owner.id), true, '索引上は階段下のまま（群は区画が先勝ち）');
+});
+
+test('setStairUnderContext は observable（購読者が置換で再実行される）', () => {
+  const state = new CeilingModeState();
+  let runs = 0;
+  const dispose = autorun(() => { void state.stairUnderContext; runs++; });
+  state.setStairUnderContext({ planeId: 'p1', lowerStairCellBounds: [], floorHeightMm: 3200 });
+  assert.equal(runs, 2);
+  dispose();
 });

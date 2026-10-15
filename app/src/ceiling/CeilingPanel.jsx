@@ -285,9 +285,10 @@ const PanelLine = observer(({ graph, mode, line, selectedId }) => {
 });
 
 export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
-  const tree = ceilingPanelTree(graph, mode.activeTab, mode.materialMap);
+  const stairUnderKeys = mode.stairUnderKeysOf(graph); // 階段下の群（下階の判定は App の直下階 peek を stairUnderContext で受ける）
+  const tree = ceilingPanelTree(graph, mode.activeTab, mode.materialMap, stairUnderKeys);
   const lines = ceilingPanelLines(tree, mode.expandedPath);
-  const selectedId = selectedNodeId(graph, mode.selection); // 群が今は無い選択（undo 後など）は選択なし扱い
+  const selectedId = selectedNodeId(graph, mode.selection, stairUnderKeys); // 群が今は無い選択（undo 後など）は選択なし扱い
   const inner = (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
       <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', flexShrink: 0 }}>

@@ -39,6 +39,18 @@ export function stairUnderRoomsOf(stair, graph, beyondCells) {
 }
 
 /**
+ * ワールド座標 (x,y) を占有する直下階の階段（見下げ）を返す。無ければ null。
+ * 天伏の階段下の群（ceiling/ceilingStairUnder.js）と resolveStairUnderEntries が共有する判定。
+ * @param {Array<{stair, cellBounds: Array<{x1,x2,y1,y2}>}>} lowerStairCellBounds
+ */
+export function lowerStairAt(lowerStairCellBounds, x, y) {
+  for (const entry of lowerStairCellBounds) {
+    if (entry.cellBounds.some(b => x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2)) return entry.stair;
+  }
+  return null;
+}
+
+/**
  * 階段下部屋（破れ線先セルに部屋指定された領域）を検出する（仕上げモード脱出時の
  * 階段下壁生成 finish/wallRegeneration.js の入力）。FinishModeState.stairUnderRooms は
  * これへ委譲する（同じ判定を2系統持たない）。
@@ -55,12 +67,7 @@ export function stairUnderRoomsOf(stair, graph, beyondCells) {
  * @returns {Array<{stair, room, riser, beyondCells:Set<string>, splitCLIds:Set<string>}>}
  */
 export function resolveStairUnderEntries(graph, { lowerStairCellBounds = [], floorHeight = null } = {}) {
-  const lowerStairForPoint = (x, y) => {
-    for (const entry of lowerStairCellBounds) {
-      if (entry.cellBounds.some(b => x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2)) return entry.stair;
-    }
-    return null;
-  };
+  const lowerStairForPoint = (x, y) => lowerStairAt(lowerStairCellBounds, x, y);
 
   const result = [];
   for (const stair of graph.stairs) {

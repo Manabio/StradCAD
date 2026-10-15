@@ -7,7 +7,8 @@ import { setRoomCeilingShape } from './roomCeilingShape.js';
 import { interiorTabRooms, interiorRoomDisplayName } from '../finish/interiorTabRooms.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { buildCeilingCellOwners } from './ceilingOwners.js';
-import { roomGroupId, zoneGroupId, stairGroupId } from './ceilingGroups.js';
+import { roomGroupId, zoneGroupId, stairGroupId, stairUnderGroupId } from './ceilingGroups.js';
+import { stairUnderCeilingKeys } from './ceilingStairUnder.js';
 import { DEFAULT_STAIR_ROOM_NAME } from '../finish/roomNamingOptions.js';
 import {
   interiorRows, stairRows, selectionSpanMm, ceilingWriteTargetRoom, materialDisplay, stairZoneDetailRows,
@@ -547,4 +548,73 @@ test('selectedNodeId: 群が今あれば selection.groupId、無い（undo な�
   assert.equal(selectedNodeId(g.graph, sel(zoneGroupId(a.id, 'gone'))), null);
   assert.equal(selectedNodeId(g.graph, null), null);
   assert.equal(selectedNodeId(null, sel(roomGroupId(a.id))), null);
+});
+
+// ---- 階段下の群（選択専用。ceilingStairUnder.js）----
+
+/** 4 セルの STAIR ペア部屋 ＋ 直進階段（階高 3200・16 段＝蹴上 200 で破れ先は右 2 セル）。最下階の判定材料つき。 */
+function stairUnderSetup() {
+  const g = makeGrid([0, 1000, 2000, 3000, 4000], [0, 1000]);
+  const cells = [[0, 0], [1, 0], [2, 0], [3, 0]];
+  const pair = g.feature(cells, RoomFeature.STAIR);
+  const stair = g.graph.addStair({ type: StairType.STRAIGHT, upDirection: 'right', totalSteps: 16, roomId: pair.id, cells: new Set(cells.map(([i, j]) => g.cell(i, j))) });
+  const owners = buildCeilingCellOwners(g.graph);
+  const keys = stairUnderCeilingKeys(g.graph, owners, { lowerStairCellBounds: [], floorHeightMm: 3200 });
+  return { g, graph: g.graph, pair, stair, keys, k: i => g.cell(i, 0) };
+}
+
+test('木（階段下）: 階段の子の先頭に「階段下」ノード（type stairUnder・id stairUnder:<id>・階段下のセル）。区画はその後ろ。階段本体のセルは階段下を除く', () => {
+  const { graph, pair, stair, keys, k } = stairUnderSetup();
+  pair.setCeilingZones(assignZoneHeight(graph, pair, [k(0)], 2500)); // 階段本体側の区画
+  const [node] = ceilingPanelTree(graph, 'stair', null, keys);
+  assert.deepEqual(node.children.map(c => [c.type, c.id]), [
+    ['stairUnder', stairUnderGroupId(stair.id)],
+    ['zone', zoneGroupId(pair.id, pair.ceilingZones[0].id)],
+  ]);
+  const under = node.children[0];
+  assert.equal(under.name, '階段下');
+  assert.equal(under.room, pair);
+  assert.deepEqual([...under.cells].sort(), [k(2), k(3)].sort());
+  assert.deepEqual([...node.cells], [k(1)], '階段の残りは階段下と区画を除いたセル');
+});
+
+test('木（階段下）: keys が無い（null）・階段下が区画で埋まる場合は「階段下」ノードを出さない', () => {
+  const { graph, pair, stair, keys, k } = stairUnderSetup();
+  assert.deepEqual(ceilingPanelTree(graph, 'stair', null)[0].children, []);
+  assert.deepEqual(ceilingPanelTree(graph, 'stair', null, null)[0].children, []);
+  pair.setCeilingZones(assignZoneHeight(graph, pair, [k(2), k(3)], 2500));
+  const children = ceilingPanelTree(graph, 'stair', null, keys)[0].children;
+  assert.deepEqual(children.map(c => c.type), ['zone']);
+  assert.ok(!children.some(c => c.id === stairUnderGroupId(stair.id)));
+});
+
+test('nodePathOf・selectedNodeId（階段下）: 経路は [stair:S, stairUnder:S]。keys が無ければ木に無いので null / 選択なし扱い', () => {
+  const { graph, stair, keys } = stairUnderSetup();
+  const id = stairUnderGroupId(stair.id);
+  assert.deepEqual(nodePathOf(graph, id, 'stair', keys), [stairGroupId(stair.id), id]);
+  assert.equal(nodePathOf(graph, id, 'stair'), null);
+  assert.equal(nodePathOf(graph, id, 'interior', keys), null, '内部タブには出ない');
+  const sel = { owner: { kind: 'stair', id: stair.id }, groupId: id };
+  assert.equal(selectedNodeId(graph, sel, keys), id);
+  assert.equal(selectedNodeId(graph, sel), null);
+});
+
+test('ceilingPanelLines（階段下）: 階段を開くと「階段下」の行が先頭に出て、path は [stair, stairUnder]', () => {
+  const { graph, stair, keys } = stairUnderSetup();
+  const lines = ceilingPanelLines(ceilingPanelTree(graph, 'stair', null, keys), [stairGroupId(stair.id)]);
+  const under = lines.find(l => l.type === 'stairUnder');
+  assert.deepEqual(under.path, [stairGroupId(stair.id), stairUnderGroupId(stair.id)]);
+  assert.equal(lines.indexOf(under), 1, '階段の行の次');
+});
+
+test('ceilingPanelLines（階段下）: 「階段下」を開いても「区画なし」の注記を出さない（区画は兄弟として並ぶ）', () => {
+  const { graph, pair, stair, keys, k } = stairUnderSetup();
+  pair.setCeilingZones(assignZoneHeight(graph, pair, [k(0)], 2500));
+  const tree = ceilingPanelTree(graph, 'stair', null, keys);
+  const path = [stairGroupId(stair.id), stairUnderGroupId(stair.id)];
+  const lines = ceilingPanelLines(tree, path);
+  const i = lines.findIndex(l => l.type === 'stairUnder');
+  assert.equal(lines[i].expanded, true);
+  assert.notEqual(lines[i + 1].type, 'note', '階段下の直後に注記が無い');
+  assert.ok(!lines.some(l => l.type === 'note'));
 });

@@ -23,6 +23,20 @@ test('【配線】App.jsx: ceiling のローダーは CeilingModeState を new �
   assert.match(appCode, /^\s*: appMode === 'ceiling'\s*$/m);
 });
 
+test('【配線】App.jsx: 天伏の階段下の群は、直下階 peek（belowPlanPeek）から mode.setStairUnderContext へ渡す。未解決の間は渡さず、別の階の peek・graph なしは null（分けない）。階高は自階（floorHeightAbove）', () => {
+  const start = appCode.indexOf("appMode !== 'ceiling' || !mode?.setStairUnderContext || belowPlanPeek === undefined");
+  assert.ok(start >= 0, '天伏の stairUnderContext の effect が見つからない');
+  const block = appCode.slice(start, appCode.indexOf('\n  }, [', start));
+  assert.match(block, /^\s*const adopted = !!active && project\.planes\.some\(p => p\.id === active\.id\);\s*$/m, '採用階に無い平面（検討案）は判定できない');
+  assert.match(block, /^\s*if \(!adopted\) \{\s*$/m);
+  assert.match(block, /^\s*\} else if \(belowPlanPeek === null\) \{\s*$/m, '採用階で下階なし＝最下階だけ lowerStairCellBounds: []');
+  assert.match(block, /^\s*\} else if \(belowPlanPeek\.graph && belowPlanPeek\.activePlaneId === active\.id\) \{\s*$/m, '別の階の peek・graph なしは ctx null のまま');
+  assert.match(block, /^\s*lowerStairCellBounds: below\.stairs\.map\(s => \(\{ stair: s, cellBounds: cellBoundsList\(s\.cells, below\) \}\)\),\s*$/m);
+  assert.equal((block.match(/floorHeightMm: floorHeightAbove\(project, active\)/g) ?? []).length, 2, '階高は自階（belowPlanPeek.floorHeightMm は直下階の階高なので使わない）');
+  assert.ok(!/belowPlanPeek\.floorHeightMm/.test(block));
+  assert.match(block, /^\s*mode\.setStairUnderContext\(ctx\);\s*$/m);
+});
+
 test('【配線】App.jsx: CeilingPanel は appMode === ceiling && mode のときだけマウントし、graph/mode/isLandscape を渡す（階高は渡さない。階段の傾斜の初期値は commitDrag の ctx 側で引く。S12b）', () => {
   assert.match(appCode, /^\s*\{appMode === 'ceiling' && mode && \(\s*$/m);
   assert.match(appCode, /^\s*<CeilingPanel graph=\{graph\} mode=\{mode\} isLandscape=\{isLandscape\} \/>\s*$/m);
@@ -46,7 +60,8 @@ test('【配線】App.jsx: 天伏は仕上げ表パネルを出さず、modeBoun
 test('【配線】CeilingPanel.jsx: タブは mode.setActiveTab、行は ceilingPanelRows、横長は ModePanel・縦長は BottomSheet（title 天伏）', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
   assert.match(code, /^\s*onClick=\{\(\) => mode\.setActiveTab\(tab\.id\)\}\s*$/m);
-  assert.match(code, /^\s*const tree = ceilingPanelTree\(graph, mode\.activeTab, mode\.materialMap\);\s*$/m);
+  assert.match(code, /^\s*const stairUnderKeys = mode\.stairUnderKeysOf\(graph\);/m, '階段下の群の判定は mode.stairUnderKeysOf（下階の判定材料は App が渡す）');
+  assert.match(code, /^\s*const tree = ceilingPanelTree\(graph, mode\.activeTab, mode\.materialMap, stairUnderKeys\);\s*$/m);
   assert.match(code, /^\s*const lines = ceilingPanelLines\(tree, mode\.expandedPath\);\s*$/m);
   assert.match(code, /^\s*onClick=\{\(\) => mode\.selectNode\(graph, node\.id, line\.path\)\}\s*$/m, '行クリックは群を選ぶ（タブは切り替えない）。開く経路は押された行の祖先（line.path）');
   assert.match(code, /<ModePanel title="天伏" /);
@@ -273,7 +288,7 @@ test('【配線】SceneLayers: CeilingSelectionLayer は ceiling のときだけ
 
 test('【配線】CeilingPanel.jsx（S12c）: 行の強調は選択中の群 id とノード id の一致だけ（selectedNodeId。群が今は無い選択は選択なし扱い）', () => {
   const code = stripCommentLines(readSrc('ceiling/CeilingPanel.jsx'));
-  assert.match(code, /^\s*const selectedId = selectedNodeId\(graph, mode\.selection\);/m);
+  assert.match(code, /^\s*const selectedId = selectedNodeId\(graph, mode\.selection, stairUnderKeys\);/m);
   assert.match(code, /^\s*style=\{\{ cursor: 'pointer', background: node\.id === selectedId \? '#eff6ff' : '#fff' \}\}\s*$/m);
   assert.ok(!/selectedRoomId === |=== mode\.selectedRoomId|owner\.rowId === /.test(code), '行 id／所属 rowId での強調判定が残っている');
 });

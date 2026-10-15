@@ -27,7 +27,7 @@ import { ceilingSurfacesOf } from './ceilingSurfaces.js';
 import { ceilingRefreshCells } from './ceilingGrid.js';
 import { ceilingCellOwnersOf, roomHasCeiling } from './ceilingOwners.js';
 import { CEILING_SHAPE_OPTIONS, CEILING_DIM_FIELDS } from './ceilingShapeFields.js';
-import { ceilingGroupsOf, roomGroupId, zoneGroupId, stairGroupId } from './ceilingGroups.js';
+import { ceilingGroupsOf, roomGroupId, zoneGroupId, stairGroupId, stairUnderGroupId } from './ceilingGroups.js';
 import { roomCeilingShapeOf } from './roomCeilingShape.js';
 import { CeilingShape } from '../core/constants.js';
 
@@ -92,9 +92,9 @@ function roomRow(graph, room, name, materialMap, zoneLabels) {
  * MobX の追跡下から呼べるよう読み取りスコープで包まない（ceilingCellOwnersOf と同じ）。
  * @returns {{group: import('./ceilingGroups.js').CeilingGroup, room: import('../core/room.js').Room|null, zone: import('@core').CeilingZone|null} | null}
  */
-export function selectionGroupInfo(graph, selection) {
+export function selectionGroupInfo(graph, selection, stairUnderKeys = null) {
   if (!graph || !selection) return null;
-  const group = ceilingGroupsOf(graph, ceilingCellOwnersOf(graph)).groups.get(selection.groupId);
+  const group = ceilingGroupsOf(graph, ceilingCellOwnersOf(graph), stairUnderKeys).groups.get(selection.groupId);
   if (!group) return null;
   const room = group.roomId ? (graph.roomMap.get(group.roomId) ?? null) : null;
   const zone = group.kind === 'zone' && room ? (room.ceilingZones.find(z => z.id === group.zoneId) ?? null) : null;
@@ -105,8 +105,8 @@ export function selectionGroupInfo(graph, selection) {
  * パネルが「選択中」として強調するノード id（＝群 id）。selection が無い・群が今は無い（undo などで消えた。S12b 持ち越し）ときは null
  * （パネルは選択なし扱い。selection 自体は触らない）。
  */
-export function selectedNodeId(graph, selection) {
-  return selectionGroupInfo(graph, selection) ? selection.groupId : null;
+export function selectedNodeId(graph, selection, stairUnderKeys = null) {
+  return selectionGroupInfo(graph, selection, stairUnderKeys) ? selection.groupId : null;
 }
 
 /**
@@ -223,7 +223,7 @@ const NO_CELLS = new Set();
 
 /**
  * パネルのノード。
- *   id … 群 id（roomGroupId／zoneGroupId／stairGroupId）  type … 'room' | 'zone' | 'stair'
+ *   id … 群 id（roomGroupId／zoneGroupId／stairGroupId／stairUnderGroupId）  type … 'room' | 'zone' | 'stair' | 'stairUnder'（階段の子の先頭。選択専用の群）
  *   name … 部屋名／「区画n」（部屋の区画の配列順）／階段名    ceilingBoard・ceilingFinish … 天井材・仕上げの表示（zone は null）
  *   ch … 部屋・階段は行と同じ CH 欄、zone は基準高（平面以外は基準高～基準高＋ライズ。null の基準高は部屋の CH）
  *   summary … zone の「形状｜寸法｜Nセル」（colSpan で天井材・仕上げの2列に出す）
@@ -298,9 +298,15 @@ function stairTree(graph, materialMap, groups) {
     const row = rows[i];
     const room = ceilingWriteTargetRoom(graph, { owner: { kind: 'stair', id: stair.id } });
     const id = stairGroupId(stair.id);
-    const children = room
+    const zoneNodes = room
       ? stairZoneDetailRows(graph, stair).map(d => zoneNode(graph, room, room.ceilingZones.find(z => z.id === d.zoneId), d.cellCount, groups))
       : [];
+    // 階段下の群（区画に入らなかった階段下のセルが残るときだけ）。区画のノードの前に置く
+    const underId = stairUnderGroupId(stair.id);
+    const under = groups.get(underId);
+    const children = under
+      ? [{ id: underId, type: 'stairUnder', name: '階段下', ceilingBoard: row.ceilingBoard, ceilingFinish: row.ceilingFinish, ch: row.ch, room, cells: under.cells, children: [] }, ...zoneNodes]
+      : zoneNodes;
     return {
       id,
       type: 'stair',
@@ -321,10 +327,11 @@ function stairTree(graph, materialMap, groups) {
  * @param {object} graph
  * @param {'interior'|'stair'} tab
  * @param {Map<string, object>|null} materialMap
+ * @param {Map<string, Set<string>>|null} [stairUnderKeys]  階段下の天井セル（stairUnderCeilingKeys）。あれば階段の子の先頭に「階段下」ノード
  */
-export function ceilingPanelTree(graph, tab, materialMap = null) {
+export function ceilingPanelTree(graph, tab, materialMap = null, stairUnderKeys = null) {
   if (!graph) return [];
-  const { groups } = ceilingGroupsOf(graph, ceilingCellOwnersOf(graph));
+  const { groups } = ceilingGroupsOf(graph, ceilingCellOwnersOf(graph), stairUnderKeys);
   return tab === 'stair' ? stairTree(graph, materialMap, groups) : interiorTree(graph, materialMap, groups);
 }
 
@@ -354,7 +361,7 @@ export function ceilingPanelLines(tree, expandedPath = []) {
           : { ...inner, key: `${key}/note`, type: 'note', text: '天井なし' });
       } else if (node.type === 'zone') {
         lines.push({ ...inner, key: `${key}/fields`, type: 'zoneFields' });
-      } else if (node.children.length === 0) {
+      } else if (node.type !== 'stairUnder' && node.children.length === 0) { // 階段下は子を持たない（区画は兄弟）ので注記を出さない // 階段下は子を持たない（区画は兄弟）ので注記を出さない
         lines.push({ ...inner, key: `${key}/note`, type: 'note', text: node.room ? '区画なし' : '区画なし（対の部屋なし）' });
       }
       walk(node.children, depth + 1, key, path);
@@ -368,7 +375,7 @@ export function ceilingPanelLines(tree, expandedPath = []) {
  * 群 id のノードを開くための expandedPath（最上位から自身までのノード id）。そのタブの木に無ければ null。
  * 例: ['room:親', 'room:子', 'zone:子#Z']（部分指定の子の区画）、['stair:S', 'zone:R#Z']（階段タブ）。
  */
-export function nodePathOf(graph, groupId, tab) {
+export function nodePathOf(graph, groupId, tab, stairUnderKeys = null) {
   const find = (nodes, trail) => {
     for (const node of nodes) {
       const path = [...trail, node.id];
@@ -378,5 +385,5 @@ export function nodePathOf(graph, groupId, tab) {
     }
     return null;
   };
-  return find(ceilingPanelTree(graph, tab, null), []);
+  return find(ceilingPanelTree(graph, tab, null, stairUnderKeys), []);
 }
