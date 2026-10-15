@@ -40,7 +40,7 @@ import { UNSUPPORTED_FAN_LANE_TYPES, fanLaneCuts } from './section/cuts/fanCuts.
 import { makeProbeContext } from './section/sectionProbe.js';
 import { buildSectionFigure } from './section/sectionEngine.js';
 import { buildCutContent, upperFloorCutWallEndsOf } from './section/sectionContent.js';
-import { cutDrawRange, localXOf } from './section/sectionTypes.js';
+import { cutDrawRange, localXOf, worldOf } from './section/sectionTypes.js';
 import { layerDirectlyAboveSelf, isRealRoom } from './section/sectionLayerStack.js';
 import {
   splitGapMarksByStair, dashHorizontalsBehindStair,
@@ -59,10 +59,158 @@ import {
   floorProfileFromSegments, mergeFloorProfiles, drawnFloorProfileZMax, drawnFloorProfileZAt,
 } from './elevationFloorProfile.js';
 import { stairSoffitChAlong } from './space/stairSoffitCeiling.js';
+import { stairUnderReturnSoffit } from './section/sectionProbe.js';
 import {
   GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM, ElevationLineRole, weightForRole,
 } from './elevationStyle.js';
 import { graphList } from '../graphReadScope.js';
+
+// ---- 復路下の仕上げ空間（木造の復路下の壁。.claude/data-model.md「復路下の壁」）----
+
+/**
+ * 復路レーンを縦断する切断 cut で、復路の下の仕上げ空間（復路下の壁〜到達辺。木造 U 字系で復路下の壁が立つ階段だけ）の
+ * 断面ローカル x の範囲と、その天井＝復路の裏面（自階の階段。壁の天端 addUnderReturnTops と同じ供給源 stairUnderReturnSoffit）の節列を返す。
+ * 復路下の壁が無い（鉄骨・下階に続き階段がある・隔て壁なし）・切断線が壁と交差しない・裏面が組めないときは null。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @param {object} cut seq5 の切断（line・dirSign・landingEnd）
+ * @param {number} floorHeight 階高（蹴上の推定）
+ * @param {number} floorZMm 階段室の床の絶対 z（層スタックの floorZFor）
+ * @returns {{loX:number, hiX:number, wallLoX:number, wallHiX:number, onLo:boolean, soffit:Array<{x:number, z:number, gapBefore:boolean}>}|null}
+ */
+export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm) {
+  if (!cut?.line) return null;
+  const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm });
+  if (!found || found.line.isVertical === cut.line.isVertical) return null;
+  const { walls, solid } = found;
+  // 壁の幅方向の区間に切断線の深さが入る（壁は切断線と直交する）
+  const depth = cut.line.axisValue;
+  const spanLo = Math.min(...walls.map(w => Math.min(w.coord1, w.coord2)));
+  const spanHi = Math.max(...walls.map(w => Math.max(w.coord1, w.coord2)));
+  if (depth < spanLo - GAP_EPS || depth > spanHi + GAP_EPS) return null;
+  const ranges = walls.map(w => w.materialRange);
+  const xa = localXOf(cut, Math.min(...ranges.map(r => r.lo)));
+  const xb = localXOf(cut, Math.max(...ranges.map(r => r.hi)));
+  const wallLoX = Math.min(xa, xb), wallHiX = Math.max(xa, xb);
+  // 仕上げ空間は壁の踊り場と反対側（到達辺まで）。踊り場側は cut.landingEnd（面の向きから決まる）。
+  // 範囲は壁の厚みを含む（壁の断面＝両面の縦線と天端の線を、壁の向こうの段の裏の断面線で切らないため）。
+  const xMin = Math.min(localXOf(cut, cut.line.lo), localXOf(cut, cut.line.hi));
+  const xMax = Math.max(localXOf(cut, cut.line.lo), localXOf(cut, cut.line.hi));
+  const onLo = cut.landingEnd !== 'left';
+  const loX = onLo ? xMin : wallLoX, hiX = onLo ? wallHiX : xMax;
+  if (hiX - loX <= GAP_EPS) return null;
+  const wa = worldOf(cut, loX), wb = worldOf(cut, hiX);
+  const nodes = stairSoffitChAlong({ solid, floorStepMm: 0 }, {
+    isVertical: cut.line.isVertical, depthCoord: depth, lo: Math.min(wa, wb), hi: Math.max(wa, wb),
+  });
+  if (!nodes || nodes.length < 2) return null;
+  const soffit = nodes.map(n => ({ x: localXOf(cut, n.run), z: n.ch, gapBefore: n.gapBefore === true }));
+  return { loX, hiX, wallLoX, wallHiX, onLo, soffit };
+}
+
+/**
+ * 断面線 profile の [lo, hi] を床の高さ z に置き換える（復路下の仕上げ空間は床まで描く）。範囲の外は不変で、
+ * 境目で高さが違えば垂直の段になる。
+ */
+export function floorProfileWithFloorOn(profile, lo, hi, z) {
+  if (!profile?.length) return profile;
+  const out = [];
+  const push = (x, zz) => {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last[0] - x) <= GAP_EPS && Math.abs(last[1] - zz) <= GAP_EPS) return;
+    out.push([x, zz]);
+  };
+  for (const [x, zz] of profile) if (x < lo - GAP_EPS) push(x, zz);
+  if (out.length > 0) push(lo, drawnFloorProfileZAt(profile, lo - 1e-3));
+  push(lo, z); push(hi, z);
+  const after = profile.filter(([x]) => x > hi + GAP_EPS);
+  if (after.length > 0) push(hi, drawnFloorProfileZAt(profile, hi + 1e-3));
+  for (const [x, zz] of after) push(x, zz);
+  return out;
+}
+
+/**
+ * 復路下の仕上げ空間の中で、復路の本体（下面＝裏面 `space.soffit`、上面＝段板の上面＝床へ下げる前の断面線 `space.bodyTop`）の
+ * **中**にある content（壁の断面・見えがかり・アキ・建具の姿）を落とす。裏面と段板の間は断面の中で、仕上げ空間からも階段室からも
+ * 見えない（stair-ports-test5: 空間の奥の開放辺のアキ・遠側の天井線が段板の中を通っていた）。本体より上（復路の上の空間）は残す。
+ * 範囲は裏面の節列が覆う x だけ（到達辺の外・壁の先は触らない）。clipContentAboveDrawnProfile を 2 回使う: 裏面より下は z を反転
+ * して（輪郭より下を残す規約を上下逆に）、本体より上はそのまま（範囲の外は +∞ で落とし、範囲は境界の縦線を二重に残さないよう僅かに
+ * 内側へ縮める）。bodyTop が無ければ裏面より上を全部落とす。
+ * @param {object[]} prims
+ * @param {{soffit:Array<{x:number, z:number}>, bodyTop?:Array<[number, number]>|null}|null} space
+ */
+export function clipContentInsideStairBody(prims, space) {
+  if (!space?.soffit?.length || prims.length === 0) return prims;
+  const BIG = 1e9;
+  const nodes = [...space.soffit].sort((a, b) => a.x - b.x);
+  const x0 = nodes[0].x, x1 = nodes[nodes.length - 1].x;
+  if (x1 - x0 <= GAP_EPS) return prims;
+  const flip = p => {
+    if (p.type === 'line') return { ...p, y1: -p.y1 || 0, y2: -p.y2 || 0 };
+    if (p.type === 'polyline') return { ...p, points: p.points.map(([x, y]) => [x, -y || 0]) };
+    if (p.type === 'rect') return { ...p, y: -(p.y + (p.h ?? 0)) || 0 };
+    if (p.type === 'text') return { ...p, y: -p.y || 0 };
+    return p;
+  };
+  // 2 回のクリップの結果が排他になるよう、対象を分ける: line/polyline/text は交点で割れるので両方に通す。rect（建具の姿）は
+  // 範囲の内外で x 方向に割り、範囲の中の片は裏面より下だけ残す（上面より上の建具は復路の上には無い）。それ以外の型・
+  // 範囲に掛からない図形は 1 回だけ素通し。範囲の端ちょうどの縦線は「段の低い側」の規則で切らない（既知の限界）。
+  const xsOf = p => (p.type === 'polyline' ? p.points.map(q => q[0]) : p.type === 'rect' ? [p.x, p.x + (p.w ?? 0)] : [p.x1 ?? p.x, p.x2 ?? p.x]);
+  const inRange = p => { const xs = xsOf(p).filter(Number.isFinite); return xs.length > 0 && Math.max(...xs) >= x0 - GAP_EPS && Math.min(...xs) <= x1 + GAP_EPS; };
+  const soffitProfile = nodes.map(n => [n.x, n.z]);
+  const soffitMinOn = (a, b) => Math.min(drawnFloorProfileZAt(soffitProfile, a), drawnFloorProfileZAt(soffitProfile, b),
+    ...nodes.filter(n => n.x > a + GAP_EPS && n.x < b - GAP_EPS).map(n => n.z));
+  const passThrough = [], candidates = [];
+  for (const p of prims) {
+    if (!['line', 'polyline', 'rect', 'text'].includes(p.type) || !inRange(p)) { passThrough.push(p); continue; }
+    if (p.type !== 'rect') { candidates.push(p); continue; }
+    const xa = p.x, xb = p.x + (p.w ?? 0);
+    const pieces = [[xa, Math.min(xb, x0)], [Math.max(xa, x0), Math.min(xb, x1)], [Math.max(xa, x1), xb]];
+    pieces.forEach(([a, b], i) => {
+      if (b - a <= GAP_EPS) return;
+      if (i !== 1) { passThrough.push({ ...p, x: a, w: b - a }); return; }
+      // 範囲の中の片: 上端を裏面（片の x 範囲の最低）まで詰める。裏面より上だけなら落とす
+      const zTop = -p.y, zBot = -(p.y + (p.h ?? 0)), zCap = Math.min(zTop, soffitMinOn(a, b));
+      if (zCap - zBot > GAP_EPS) passThrough.push({ ...p, x: a, w: b - a, y: -zCap || 0, h: zCap - zBot });
+    });
+  }
+  // 裏面より下（範囲の外は全部残す）
+  const belowProfile = [[-BIG, -BIG], [x0, -BIG], ...nodes.map(n => [n.x, -n.z]), [x1, -BIG], [BIG, -BIG]];
+  const below = clipContentAboveDrawnProfile(candidates.map(flip), belowProfile).map(flip);
+  if (!space.bodyTop?.length) return [...passThrough, ...below];
+  // 本体より上（範囲の内側だけ。境界は GAP_EPS×3 内側へ）
+  const inner0 = x0 + 3 * GAP_EPS, inner1 = x1 - 3 * GAP_EPS;
+  if (inner1 - inner0 <= GAP_EPS) return [...passThrough, ...below];
+  const top = space.bodyTop.filter(([x]) => x > inner0 && x < inner1);
+  const aboveProfile = [[-BIG, BIG], [inner0, BIG], [inner0, drawnFloorProfileZAt(space.bodyTop, inner0)], ...top,
+    [inner1, drawnFloorProfileZAt(space.bodyTop, inner1)], [inner1, BIG], [BIG, BIG]];
+  const above = clipContentAboveDrawnProfile(candidates, aboveProfile);
+  return [...passThrough, ...below, ...above];
+}
+
+/**
+ * 復路下の仕上げ空間の天井（復路の裏面）の断面＝天井仕上げの断面線（他の天井断面線と同じ太さ）。足元の途切れでは分ける。
+ * 到達辺側の端（裏面の始まり＝最上段の段板の前縁）では、その手前の天井（階段室の CH。断面エンジンが引く水平線）から
+ * 裏面の高さまで垂直の段を足し、天井の断面線をつなぐ。
+ */
+function underReturnCeilingPrimitives(space, ceilAbsMm) {
+  const weight = weightForRole(ElevationLineRole.SILHOUETTE);
+  const out = [];
+  let run = [];
+  const flush = () => { if (run.length > 1) out.push({ type: 'polyline', points: run, weight }); run = []; };
+  for (const n of space.soffit) {
+    if (n.gapBefore) flush();
+    run.push([n.x, -n.z || 0]);
+  }
+  flush();
+  // 到達辺側の端＝仕上げ空間が lo 側なら断面ローカル x の最小の節、hi 側なら最大の節（節列は世界の走り座標の昇順なので、
+  // dirSign<0 の面では配列の先頭・末尾と逆になる）
+  const edge = space.soffit.reduce((a, n) => (space.onLo ? (n.x < a.x ? n : a) : (n.x > a.x ? n : a)), space.soffit[0]);
+  if (edge && Number.isFinite(ceilAbsMm) && Math.abs(edge.z - ceilAbsMm) > GAP_EPS) {
+    out.push({ type: 'line', x1: edge.x, y1: -ceilAbsMm || 0, x2: edge.x, y2: -edge.z || 0, weight });
+  }
+  return out;
+}
 
 function flatFloorSegments(run, floorDeltaMm, chMm) {
   return [{ loX: 0, hiX: run, floorDeltaMm, chMm }];
@@ -414,7 +562,8 @@ export function withFlatLineSpans(segs, profile) {
  * @returns {object[]} 追加する線（CUT）
  */
 export function upperFloorEndLines(entry, floorHeight, extendMm) {
-  const prof = entry.floorProfile, face = entry.face;
+  // 復路下の仕上げ空間で床へ下げた断面線（floorProfile）には最終段の天端が無いので、下げる前の断面線（stairFloorProfile）で見る
+  const prof = entry.stairFloorProfile ?? entry.floorProfile, face = entry.face;
   if (!prof?.length || !Number.isFinite(floorHeight) || !face) return [];
   const atTop = ([, z]) => Math.abs(z - floorHeight) <= GAP_EPS;
   const out = [];
@@ -503,7 +652,7 @@ function clipWallFloorEdgeUnderZigzag(wallContent, stairContent) {
  *   upperFloorEnds:{lo:boolean,hi:boolean}|undefined}}
  */
 function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null, zRef = null,
-  drawFloorProfile = null) {
+  drawFloorProfile = null, underReturnSpace = null) {
   if (!rawCut) {
     return { content: [], upperOverhang: undefined, upperFloorZ: undefined,
       upperFloorCutEnds: undefined, upperFloorEnds: undefined };
@@ -585,8 +734,10 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // アキ（gapMarks）はPhase 6b-2 C-2でこのクリップの対象から外れた——下端はband自身が決める。
   const wallOut = clipContentAtHiddenEnds(clipContentAboveDrawnProfile(
     clipWallFloorEdgeUnderZigzag(joined, stairContent), drawFloorProfile), cut.face);
+  // 復路下の仕上げ空間（seq5）: 壁の断面・見えがかり・アキは天井＝復路の裏面より上を落とす（段板の中）。階段自身・構造梁は触らない。
+  const roofed = clipContentInsideStairBody([...wallOut, ...gapMarks], underReturnSpace);
   return {
-    content: [...wallOut, ...gapMarks, ...stairContent, ...structuralContent],
+    content: [...roofed, ...stairContent, ...structuralContent],
     ...overhang,
   };
 }
@@ -777,8 +928,8 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   const aboveLayer = layerDirectlyAboveSelf(cuts[0].layers);
   // 1つの切断 → その面のentryのcontent系フィールド（content＋上階のはり出し）。
   // はり出し（upperOverhang/upperFloorZ）はcontentと同じ探査窓から出るため、同じ呼び出しで受ける。
-  const contentFields = (cut, zRef = null, drawFloorProfile = null) =>
-    contentForCut(cut, probeCtx, endExtendMm, bandRoomBounds, zRef, drawFloorProfile);
+  const contentFields = (cut, zRef = null, drawFloorProfile = null, underReturnSpace = null) =>
+    contentForCut(cut, probeCtx, endExtendMm, bandRoomBounds, zRef, drawFloorProfile, underReturnSpace);
 
   const entries = [];
 
@@ -921,15 +1072,35 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // ---- 5: 復路断面を反対側から見た図（踊り場側の端は landingEnd。「6」では右端） ----
   {
     const outFace5 = cutOf('5').face;
-    const rawSegments5 = flatFloorSegments(outFace5.run, underFloorZ, ceilTopAbs - underFloorZ);
-    const floorProfile5 = floorProfileFor(cutOf('5'), rawSegments5);
+    // 復路下の仕上げ空間（木造。復路下の壁〜到達辺）: 断面線は復路の段板の裏ではなく床まで下げ（床断面線・復路下の壁の
+    // 断面がその空間に描かれる）、天井＝復路の裏面を天井仕上げの断面線として足し、裏面より上の content は落とす。
+    // 床は階段室の床（層スタックの floorZFor。壁の天端 addUnderReturnTops と同じ基準）——階段下に部屋があって帯の床が
+    // 踊り場（underFloorZ）でも、この空間は到達辺の部屋へ開く床面なので床区間を分ける。
+    const selfLayer5 = (cutOf('5').layers ?? []).find(l => l?.role === 'self') ?? null;
+    const selfFloorZ5 = selfLayer5 ? probeCtx.floorZOf(bandRoom, selfLayer5) : 0;
+    const underReturn5 = underReturnSpaceOf(stair, graph, cutOf('5'), floorHeight, selfFloorZ5);
+    const rawSegments5 = underReturn5 && Math.abs(underFloorZ - selfFloorZ5) > GAP_EPS
+      ? [[0, underReturn5.loX, underFloorZ], [underReturn5.loX, underReturn5.hiX, selfFloorZ5], [underReturn5.hiX, outFace5.run, underFloorZ]]
+        .filter(([a, b]) => b - a > GAP_EPS)
+        .map(([loX, hiX, z]) => ({ loX, hiX, floorDeltaMm: z, chMm: ceilTopAbs - z }))
+      : flatFloorSegments(outFace5.run, underFloorZ, ceilTopAbs - underFloorZ);
+    const stairProfile5 = floorProfileFor(cutOf('5'), rawSegments5);
+    const floorProfile5 = underReturn5
+      ? floorProfileWithFloorOn(stairProfile5, underReturn5.loX, underReturn5.hiX, selfFloorZ5)
+      : stairProfile5;
     const soffit5 = applySoffit('5', null);
+    // 復路の本体（裏面〜段板の上面＝床へ下げる前の断面線）の中の content を落とすための上面
+    const fields5 = contentFields(cutOf('5'), { ceilLowAbs, floorHeight }, floorProfile5,
+      underReturn5 ? { ...underReturn5, bodyTop: stairProfile5 } : null);
     entries.push({
       seqNo: '5', face: outFace5, landingEnd: cutOf('5').landingEnd,
       floorSegments: withFlatLineSpans(rawSegments5, floorProfile5),
       floorProfile: floorProfile5,
+      // 最終段の天端（上階FL）の位置は、復路下の仕上げ空間で床へ下げる前の断面線が持つ（上階FL断面線のはね出し用）
+      ...(underReturn5 ? { stairFloorProfile: stairProfile5 } : {}),
       ...(soffit5 ? { ceilingProfile: soffit5.ceilingProfile } : {}),
-      ...contentFields(cutOf('5'), { ceilLowAbs, floorHeight }, floorProfile5),
+      ...fields5,
+      content: [...fields5.content, ...(underReturn5 ? underReturnCeilingPrimitives(underReturn5, ceilLowAbs) : [])],
       skipBaseboard: true, skipWallLabel: true,
     });
   }

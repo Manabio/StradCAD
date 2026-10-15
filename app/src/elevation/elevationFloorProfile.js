@@ -685,9 +685,16 @@ function clipSegmentAboveProfile(profile, x1, z1, x2, z2) {
     } else kept.push([a, b]);
   };
   if (Math.abs(x2 - x1) <= GAP_EPS) {
-    // 縦線: xが1点なので輪郭の値も1つ。z範囲を切り詰めるだけ。
+    // 縦線: z範囲を切り詰めるだけ。輪郭の垂直な段の上に載る縦線（復路下の壁の断面の両面＝床まで描く仕上げ空間と
+    // 踊り場・段の裏の境）は、両側のうち**低い方**の輪郭で切る——どちらか一方の側が輪郭より上（見えている空間）なら
+    // 線は見える。段の上で drawnFloorProfileZAt は左側の区間の値を返すため、左右で結果が食い違っていた。
     // 上端が輪郭ちょうど（＝残りが長さ0）も落とす——残すと長さ0の線が図に積もる。
-    const floor = drawnFloorProfileZAt(profile, x1);
+    // 段＝同じ x の隣り合う折れ点。段が無ければ従来どおりその x の値（斜めの輪郭では厳密な交点になる）。
+    const stepZs = [];
+    for (let i = 0; i + 1 < profile.length; i++) {
+      if (Math.abs(profile[i][0] - x1) <= GAP_EPS && Math.abs(profile[i + 1][0] - x1) <= GAP_EPS) stepZs.push(profile[i][1], profile[i + 1][1]);
+    }
+    const floor = Math.min(drawnFloorProfileZAt(profile, x1), ...stepZs);
     const zLo = Math.min(z1, z2), zHi = Math.max(z1, z2);
     if (zHi <= floor + GAP_EPS) return [];
     if (zLo >= floor - GAP_EPS) return [[[x1, z1], [x2, z2]]];

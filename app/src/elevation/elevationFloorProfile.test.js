@@ -486,6 +486,19 @@ test('clipContentAboveDrawnProfile: 断面線より下の縦線は輪郭で切�
   assert.deepEqual([out[1].y1, out[1].y2], [0, -2000], '床0の区間の縦線は切られないはず');
 });
 
+test('【2026-10-15】clipContentAboveDrawnProfile: 輪郭の垂直な段の上に載る縦線は、両側のうち低い方の輪郭で切る（左右どちら側の段でも同じ）', () => {
+  // 復路下の壁の断面の両面: 踊り場側（1400）と仕上げ空間（床 0）の境＝段の位置に壁の面の縦線が載る
+  const stepLeft = [[0, 1400], [470, 1400], [470, 0], [1675, 0]];   // 左が高い段（stair-ports-test5 の seq5）
+  const stepRight = [[0, 0], [967.5, 0], [967.5, 2200], [1747.5, 2200]]; // 右が高い段（moku4-3 の seq5）
+  const v = (x, zHi) => ({ type: 'line', x1: x, y1: 0, x2: x, y2: -zHi });
+  assert.deepEqual(clipContentAboveDrawnProfile([v(470, 1015)], stepLeft), [v(470, 1015)], '左が高い段の上の縦線は低い側（0）で判定して残す');
+  assert.deepEqual(clipContentAboveDrawnProfile([v(967.5, 1615)], stepRight), [v(967.5, 1615)], '右が高い段の上の縦線も同じ');
+  assert.deepEqual(clipContentAboveDrawnProfile([v(469, 1015)], stepLeft), [], '段の高い側（x=469 は 1400 の下）は従来どおり落ちる');
+  assert.deepEqual(clipContentAboveDrawnProfile([v(969, 1615)], stepRight), [], '段の高い側（x=969 は 2200 の下）も落ちる');
+  const out = clipContentAboveDrawnProfile([v(469, 2000)], stepLeft);
+  assert.deepEqual([out[0].y1, out[0].y2], [-1400, -2000], '段の高い側をまたぐ縦線はその側の輪郭で切る');
+});
+
 test('clipContentAboveDrawnProfile: 床の高さちょうどの水平線（床断面線そのもの）は残す', () => {
   const out = clipContentAboveDrawnProfile([
     { type: 'line', x1: 1200, y1: -500, x2: 2000, y2: -500 }, // 床断面線そのもの

@@ -53,6 +53,34 @@ function layerDirectlyAbove(layers, layer) {
   return layersAboveOf(stack, { layer })[0]?.layer ?? null;
 }
 
+/**
+ * 階段の復路下の壁と、その天端・復路下の仕上げ空間の天井になる復路の裏面の立体（唯一の供給源。階段帯の seq5
+ * 〔elevationStairSequence.js underReturnSpaceOf〕と壁の天端〔addUnderReturnTops〕が同じ入力・同じ検査で同じ立体を引く）。
+ * 復路下の壁が無い（鉄骨・下階に続き階段がある・隔て壁なし）・屋外・区間 sections が不正（stairPartition.js slopeTop と同じ検査）・
+ * 蹴上が決まらない（floorHeight 不明）・裏面が組めないときは null。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @param {{floorHeight:number|null, floorZMm:number}} q floorHeight … 蹴上の推定に使う階高（直上の層の FL − 自階の FL）。
+ *   floorZMm … 階段室の床の絶対 z（層スタックの floorZFor(room, layer)）。裏面の高さはこれを基準に段の天端 − 厚みで決まる
+ * @returns {{walls:import('@core').Wall[], line:{isVertical:boolean, axisValue:number, lo:number, hi:number}, solid:object}|null}
+ */
+export function stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm }) {
+  if (!stair || !graph) return null;
+  const room = graph.roomMap?.get(stair.roomId) ?? null;
+  if (room?.kind === RoomKind.EXTERIOR) return null;
+  const g = stairUnderReturnGeometry(stair, graph);
+  if (!g) return null;
+  const line = { isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi };
+  const walls = (graphList(graph, 'walls') ?? []).filter(w => isStairUnderReturnWall(w, [line]));
+  if (walls.length === 0) return null;
+  const sections = stair.sections ?? defaultSections(stair);
+  if (!Array.isArray(sections) || sections.length !== 3 || !sections.every(Number.isFinite)) return null;
+  const riser = riserOf(stair, floorHeight);
+  if (!Number.isFinite(riser) || !Number.isFinite(floorZMm)) return null;
+  const solid = stairSoffitSolids({ stair, graph, riser, floorZMm })[0];
+  return solid ? { walls, line, solid } : null;
+}
+
 // 復路下の壁（stairPartition.js isStairUnderReturnWall）→ 平らな天端。壁は復路レーンの裏面で止まる（その上は階段の
 // 踏面・裏面で、壁は立ち上がらない）。高さは階段の裏面の式の唯一の供給源 ceiling/stairSoffit.js stairSoffitSolids を
 // 壁の軸上・区間の中央で評価した値（壁の厚みは 115 なので平らで足りる）。式の入力は階段・graph・蹴上（階高/総段数）・
@@ -60,19 +88,9 @@ function layerDirectlyAbove(layers, layer) {
 function addUnderReturnTops(out, graph, floorHeight, layer, floorZFor) {
   for (const stair of graphList(graph, 'stairs') ?? []) {
     const room = graph.roomMap?.get(stair.roomId) ?? null;
-    if (room?.kind === RoomKind.EXTERIOR) continue;
-    const g = stairUnderReturnGeometry(stair, graph);
-    if (!g) continue;
-    const line = { isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi };
-    const walls = (graphList(graph, 'walls') ?? []).filter(w => isStairUnderReturnWall(w, [line]));
-    if (walls.length === 0) continue;
-    // 区間 sections が不正な階段は裏面が組めない（stairPartition.js slopeTop と同じ検査）＝フルハイト
-    const sections = stair.sections ?? defaultSections(stair);
-    if (!Array.isArray(sections) || sections.length !== 3 || !sections.every(Number.isFinite)) continue;
-    const solid = stairSoffitSolids({
-      stair, graph, riser: riserOf(stair, floorHeight), floorZMm: floorZFor(room, layer),
-    })[0];
-    if (!solid) continue;
+    const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm: floorZFor(room, layer) });
+    if (!found) continue; // 復路下の壁なし・裏面が組めない＝フルハイト
+    const { walls, line: g, solid } = found;
     const mid = (g.lo + g.hi) / 2;
     // 壁の厚み方向（軸 ±半厚）の最も低い点で評価する——平らな天端が、壁の厚みのどこでも階段の裏面より下に収まるように
     // （裏面は走行方向に傾く。壁の回転部側の面が最も低い）。
