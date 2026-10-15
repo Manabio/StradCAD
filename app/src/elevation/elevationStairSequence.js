@@ -55,7 +55,7 @@ import { stairSectionIsClosed } from './elevationStairSection.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
 import { labelFaces, letterOf, upperFloorEndsOf, wallLessEndAt, wallContinuationBeyondFaceEnd } from './elevationFaces.js';
 import {
-  collectRunBreaks, clipContentAboveDrawnProfile, clipHiddenVerticalAboveProfile,
+  collectRunBreaks, clipContentAboveDrawnProfile, clipHiddenSegmentBelowProfile,
   floorProfileFromSegments, mergeFloorProfiles, drawnFloorProfileZMax, drawnFloorProfileZAt,
 } from './elevationFloorProfile.js';
 import { stairSoffitChAlong } from './space/stairSoffitCeiling.js';
@@ -674,18 +674,14 @@ export function clipContentAtHiddenEnds(prims, face) {
   return out;
 }
 
-// 回転部の隠れ線（HIDDEN_STEP_MARK。hiddenTurnStepPrimitives）を、描かれた断面線より**上**＝断面の前の空間に残る区間だけにする。
-// 断面線より下は断面の後ろ（見返り側）で、断面の中に隠れた線は破線でも描かない（ユーザー裁定 2026-10-15
-// 「X2+910より左の破線（断面見返り側＝断面線の後ろ）は不要」）。縦線は段の上では高い側で切り（段の区間は断面の蹴上）、
-// 面の端（壁の縦線が太線で立つ x）では出さない。
-function clipHiddenStepLines(prims, profile, cut) {
-  const endXs = [localXOf(cut, cut.line.lo), localXOf(cut, cut.line.hi)];
+// 回転部の隠れ線（HIDDEN_STEP_MARK。hiddenTurnStepPrimitives）を、描かれた断面線より**下**＝断面の後ろに隠れた区間だけにする。
+// 断面線より上（断面の前の空間）にある部分は描かない（ユーザー裁定 2026-10-15「X2+910より右の破線（断面見返り側＝断面線の後ろ）
+// は不要」。X2 側の下る段の踏面・壁に取り合う蹴上の縦線は断面の床 2000 の後ろに隠れて破線、X1 側の上る段の線は断面の前なので描かない）。
+function clipHiddenStepLines(prims, profile) {
   return prims.flatMap(p => {
     if (p.__o !== HIDDEN_STEP_MARK || p.type !== 'line') return [p];
-    if (Math.abs(p.x1 - p.x2) > GAP_EPS) return clipContentAboveDrawnProfile([p], profile);
-    if (endXs.some(x => Math.abs(x - p.x1) <= GAP_EPS)) return [];
-    const r = clipHiddenVerticalAboveProfile(profile, p.x1, -p.y1, -p.y2);
-    return r ? [{ ...p, y1: -r[1] || 0, y2: -r[0] || 0 }] : [];
+    return clipHiddenSegmentBelowProfile(profile, p.x1, -p.y1, p.x2, -p.y2)
+      .map(([a, b]) => ({ ...p, x1: a[0], y1: -a[1] || 0, x2: b[0], y2: -b[1] || 0 }));
   });
 }
 
@@ -788,10 +784,10 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   const stairOpts = {
     outerBound: mergeOuterBounds(overhang.stairOverhangOuter, flightStartOuterBound(cut.stairCut ?? null, cut, cutDrawRange(pcut))),
   };
-  // 回転部の隠れ線（hiddenTurnStepPrimitives の HIDDEN_STEP_MARK）は、断面線より上＝断面の前の空間に残る区間だけ描く
-  // （断面の後ろに隠れた線は破線でも描かない。ユーザー裁定 2026-10-15「moku4-3 1階 階段 C」）。
+  // 回転部の隠れ線（hiddenTurnStepPrimitives の HIDDEN_STEP_MARK）は、断面線より下＝断面の後ろに隠れた区間だけ描く
+  // （断面の前の空間にある部分は描かない。ユーザー裁定 2026-10-15「moku4-3 1階 階段 C」）。
   const stairContent = clipHiddenStepLines(
-    stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts), drawFloorProfile, cut);
+    stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts), drawFloorProfile);
   // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
   // clipWallFloorEdgeUnderZigzag（階段ジグザグの向こうの壁縁除去）の対象には含めない。
   const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile);
