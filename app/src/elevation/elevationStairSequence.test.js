@@ -15,7 +15,7 @@ import { buildStairBand } from './elevationStair.js';
 import { resolveSwitchbackParams } from './elevationStairSection.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { drawnFloorProfileZAt, floorProfileFromSegments, mergeFloorProfiles } from './elevationFloorProfile.js';
-import { stairCutFloorProfile } from './section/sectionStair.js';
+import { stairCutFloorProfile, HIDDEN_STEP_MARK } from './section/sectionStair.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
 import { buildCutContent } from './section/sectionContent.js';
@@ -2527,6 +2527,32 @@ test('【2026-10-09】stairFaceSequence(WINDING): nullにならず seq1..5 が�
   const atTurn = fp.filter(([, z]) => z >= 5 * riser - 1e-6).map(([, z]) => z);
   assert.ok(atTurn.includes(5 * riser) && atTurn.includes(6 * riser) && atTurn.includes(7 * riser),
     `回転部の段の高さが輪郭に現れる: ${JSON.stringify(fp)}`);
+});
+
+// ---- 2026-10-15 ユーザー裁定（moku4-3 1階 階段 C）: 回転部を横断する seq3 の隠れ線（細線破線）は断面線より上＝断面の前の空間だけ ----
+test('【裁定2026-10-15】stairFaceSequence(WINDING): seq3 の隠れ線は全て断面線（floorProfile）より上にあり、面の端の x には縦線が無く、断面線は段状', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { type: StairType.WINDING, sections: [5, 6, 5] });
+  const faces = composeRoomFaces(room, graph);
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const seq3 = entries.find(e => e.seqNo === '3');
+  const riser = 2400 / 15;
+  const fp = seq3.floorProfile;
+  assert.ok(fp && fp.length >= 4, '横断の段状の断面線（crossingLandingFloorProfile）が付く');
+  const zs = fp.map(([, z]) => z);
+  assert.ok(Math.abs(Math.min(...zs) - 5 * riser) < 1e-6 && Math.max(...zs) > 5 * riser + 1e-6, '踊り場の高さから段状に上がる');
+  const hidden = seq3.content.filter(p => p.__o === HIDDEN_STEP_MARK);
+  assert.ok(hidden.length >= 1, '隠れ線が出る');
+  for (const p of hidden) {
+    assert.equal(p.dash, 'dashed');
+    const zLo = Math.min(-p.y1, -p.y2);
+    const xs = Math.abs(p.x1 - p.x2) < 1e-6 ? [p.x1] : [Math.min(p.x1, p.x2) + 1e-3, Math.max(p.x1, p.x2) - 1e-3];
+    for (const x of xs) assert.ok(zLo >= drawnFloorProfileZAt(fp, x) - 1e-6, `隠れ線 (${p.x1},${-p.y1})-(${p.x2},${-p.y2}) は断面線 ${drawnFloorProfileZAt(fp, x)} より上`);
+    if (Math.abs(p.x1 - p.x2) < 1e-6) assert.ok(p.x1 > 1e-6 && p.x1 < seq3.face.run - 1e-6, '面の端（壁の縦線の位置）には縦線を出さない');
+  }
+  // 断面線（太線）は破線にしない
+  const thick = weightForRole(ElevationLineRole.CUT);
+  assert.ok(seq3.content.filter(p => p.type === 'line' && p.weight === thick).every(p => !p.dash));
 });
 
 test('【回帰・2026-10-09】stairFaceSequence: L_TURN/FLARED/OPEN_WELL は従来どおりnull（フォールバック）', () => {

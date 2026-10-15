@@ -1936,7 +1936,7 @@ function subtractRange([lo, hi], [a, b]) {
   return out;
 }
 
-/** 呼び出し側（contentForCut）が縦線を断面線より下に切り詰めるための印（dumpElevFigure の `__o` と同じ流儀） */
+/** 呼び出し側（contentForCut）が隠れ線を断面線より上だけに切り詰めるための印（dumpElevFigure の `__o` と同じ流儀） */
 export const HIDDEN_STEP_MARK = 'hiddenStep';
 
 /**
@@ -1945,8 +1945,10 @@ export const HIDDEN_STEP_MARK = 'hiddenStep';
  * 描かれていなかった「平面でいうと断面線と壁の間にある踏面」と「壁と取り合う蹴上線」を破線で描く——蹴上材の向こう側なので隠れる。
  *   - 踏面: 各セルの切断面の向こう側（視線の側）に残る部分の幅の範囲に、そのセルの高さの水平線。断面の床線（切断面上のスライスの幅）と
  *     重なる範囲は除く。
- *   - 蹴上: 隣り合うセルの共有辺（放射線）の向こう側の端（壁・柱に取り合う端）に、低い段から高い段までの縦線。切断面の蹴上
- *     （太線）や面の端の壁の縦線と重なる区間は、呼び出し側（contentForCut）が断面線より下だけに切り詰める（HIDDEN_STEP_MARK）。
+ *   - 蹴上: 隣り合うセルの共有辺（放射線）の向こう側の端（壁・柱に取り合う端）に、低い段から高い段までの縦線。
+ *   ここでは幾何だけを出し、呼び出し側（contentForCut の clipHiddenStepLines）が HIDDEN_STEP_MARK を見て、描かれた断面線より
+ *   **上**＝断面の前の空間に残る区間だけにする（断面の後ろ＝見返り側に隠れた線は破線でも描かない。面の端の壁の縦線・
+ *   切断面の蹴上と重なる縦線も出さない）。
  * 材質によらない。縦断する切断・回転部の無い階段（折返し）・セルが切断面の手前（seq1 の前縁）にある面は空。
  * @param {{turnCells?:{poly:number[], number:number, z:number}[], landings?:Landing[]}} contribution
  * @param {import('./sectionTypes.js').SectionCut} cut
