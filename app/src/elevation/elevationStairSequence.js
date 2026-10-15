@@ -64,6 +64,7 @@ import {
   GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM, ElevationLineRole, weightForRole,
 } from './elevationStyle.js';
 import { graphList } from '../graphReadScope.js';
+import { parseBaseboardHeightMm } from './elevationFigure.js';
 
 // ---- 復路下の仕上げ空間（木造の復路下の壁。.claude/data-model.md「復路下の壁」）----
 
@@ -223,6 +224,42 @@ function underReturnCeilingPrimitives(space) {
       weight: weightForRole(ElevationLineRole.CUT) });
   }
   return out;
+}
+
+// 到達辺の外側の部屋を引く点を、到達辺から面の外へ離す量（セル境界ちょうどの不安定さを避ける）。
+const UNDER_RETURN_BEYOND_PROBE_MM = 100;
+
+/**
+ * 復路下の仕上げ空間の巾木（ユーザー指示 2026-10-15「階段下スペースは『ホール』なので巾木が見える」）。
+ * 巾木の高さの出どころは到達辺の壁の有無で決まる（RoomFinish.baseboardHeight を図側と同じ parseBaseboardHeightMm で解釈）:
+ * 到達辺側の面の端に壁が**無い**（空間がホールへ開いている）ときは**到達辺の外側の部屋**＝ホールの一部として見えるのでその巾木、
+ * 壁が**ある**ときは外側の部屋は壁の向こうなので使わず、階段室自身（stairRoom）の巾木。
+ * 範囲は「壁のある範囲だけ・面の端で止める」規則どおり、到達辺（面の端）から復路下の壁の仕上げ空間側の面（wallFaceX）まで
+ * （壁のはね出しへは伸ばさない。復路下の壁自身は断面なので巾木を引かない）。到達辺の外に部屋が無い・巾木が解釈できない・
+ * 裏面より高いときは引かない。
+ * @param {{loX:number, hiX:number, wallFaceX:number, onLo:boolean, soffit:Array<{x:number, z:number}>}} space
+ * @param {object} cut seq5 の切断（line）
+ * @param {object} probeCtx makeProbeContext の結果（cellAt）
+ * @param {{graph:object, role:string}|null} selfLayer
+ * @param {number} floorZ 仕上げ空間の床の z（階段室の床）
+ * @param {object|null} stairRoom 階段室（到達辺に壁があるときの巾木の出どころ）
+ * @returns {object[]}
+ */
+function underReturnBaseboardPrimitives(space, cut, probeCtx, selfLayer, floorZ, stairRoom) {
+  if (!selfLayer || typeof probeCtx?.cellAt !== 'function') return [];
+  const arrivalX = space.onLo ? space.loX : space.hiX;
+  const hasWallAtArrival = (space.onLo ? cut.face?.hasWallAtLocal0 : cut.face?.hasWallAtLocalRun) !== false;
+  let room = stairRoom;
+  if (!hasWallAtArrival) {
+    const run = worldOf(cut, arrivalX + (space.onLo ? -1 : 1) * UNDER_RETURN_BEYOND_PROBE_MM);
+    const [wx, wy] = cut.line.isVertical ? [cut.line.axisValue, run] : [run, cut.line.axisValue];
+    room = probeCtx.cellAt(selfLayer, wx, wy)?.room ?? null;
+  }
+  const h = parseBaseboardHeightMm(room?.finish?.baseboardHeight);
+  if (h == null) return [];
+  const z = floorZ + h;
+  if (z >= Math.min(...space.soffit.map(n => n.z)) - GAP_EPS) return [];
+  return [{ type: 'line', x1: arrivalX, y1: -z || 0, x2: space.wallFaceX, y2: -z || 0, weight: weightForRole(ElevationLineRole.DETAIL) }];
 }
 
 function flatFloorSegments(run, floorDeltaMm, chMm) {
@@ -1113,7 +1150,9 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       ...(underReturn5 ? { stairFloorProfile: stairProfile5 } : {}),
       ...(soffit5 ? { ceilingProfile: soffit5.ceilingProfile } : {}),
       ...fields5,
-      content: [...fields5.content, ...(underReturn5 ? underReturnCeilingPrimitives(underReturn5) : [])],
+      content: [...fields5.content, ...(underReturn5
+        ? [...underReturnCeilingPrimitives(underReturn5), ...underReturnBaseboardPrimitives(underReturn5, cutOf('5'), probeCtx, selfLayer5, selfFloorZ5, bandRoom)]
+        : [])],
       skipBaseboard: true, skipWallLabel: true,
     });
   }

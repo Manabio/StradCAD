@@ -2172,3 +2172,17 @@ test('【失敗系】切断壁の連なりが複数列にまたがり一部の�
   ];
   assert.equal(emitColumns(columns, cut).filter(p => p.y1 === p.y2 && p.y1 === -4000 && p.x1 !== p.x2).length, 0);
 });
+
+// ---- 階段室越しの壁（viaStair）の巾木（2026-10-15）: 足元が床の高さにある帯だけ ----
+test('【巾木】emitColumns: viaStair の壁の足元（床の高さ）には巾木の細線、床に無い帯（扉の上のまぐさ等）の下端には引かない', () => {
+  const cut = makeCut();
+  const horizAt = (prims, z) => prims.filter(p => p.type === 'line' && p.y1 === p.y2 && p.y1 === -z && p.x1 === 0 && p.x2 === 500);
+  const colsWith = z0 => [{ x0: 0, x1: 500, worldLo: 0, worldHi: 500,
+    bands: [{ kind: 'wall', z0, z1: 1600, distMm: 3000, layerRole: 'self', viaStair: true }] }];
+  const onFloor = emitColumns(colsWith(0), cut, { ceilZ: 2400, baseboardMm: 60 });
+  assert.equal(horizAt(onFloor, 60).length, 1, '床の高さの足元: 巾木 z=60');
+  assert.equal(horizAt(onFloor, 60)[0].weight, 'thin');
+  const lintel = emitColumns(colsWith(800), cut, { ceilZ: 2400, baseboardMm: 60 });
+  assert.equal(horizAt(lintel, 860).length, 0, 'まぐさ（足元が床に無い）の下端には引かない');
+  assert.equal(horizAt(emitColumns(colsWith(0), cut, { ceilZ: 2400, baseboardMm: 0 }), 60).length, 0, '巾木 0 は引かない');
+});

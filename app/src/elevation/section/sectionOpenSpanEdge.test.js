@@ -220,7 +220,7 @@ const withWallTops = (probeCtx, byWall) => ({
   wallTopProfileFor: () => ({ get: id => byWall.get(id) ?? undefined }),
 });
 
-function buildHallS4(graph, { wallTops = null, bandRoomBounds = HALL_BOUNDS } = {}) {
+function buildHallS4(graph, { wallTops = null, bandRoomBounds = HALL_BOUNDS, baseboardMm = 0 } = {}) {
   const line = { isVertical: false, axisValue: 4000 - OFFSET, lo: 0, hi: 4000 };
   const layers = buildBandLayers(graph);
   const base = makeProbeContext(layers);
@@ -228,7 +228,7 @@ function buildHallS4(graph, { wallTops = null, bandRoomBounds = HALL_BOUNDS } = 
     viewSign: 1, dirSign: 1, zRange: { loZ: 0, hiZ: CH },
     face: { axisCL: { effectiveValue: 4000 } },
     ends: { openLo: false, openHi: false, wallLessLo: false, wallLessHi: false },
-    bandRoomBounds, probeCtx: wallTops ? withWallTops(base, wallTops) : base,
+    bandRoomBounds, probeCtx: wallTops ? withWallTops(base, wallTops) : base, baseboardMm,
   });
 }
 const wallBandsOf = columns => columns.flatMap(c => c.bands).filter(b => b.kind === 'wall');
@@ -308,6 +308,55 @@ test('【S4】隔て板の端面の背後（両面の間）には階段室の壁
   }
 });
 
+// ---- 巾木（ユーザー指示 2026-10-15「階段下スペースは『ホール』なので巾木が見える」「X2+910に立つ壁小口にも巾木が見える」）----
+// 帯の部屋（ホール）の巾木高さ baseboardMm を、階段室越しの壁（viaStair）の足元と、その手前に見える隔て板の小口の足元へ細線で引く。
+const baseboardAt = (content, z) => content.filter(p => p.type === 'line' && p.y1 === p.y2 && Math.abs(p.y1 + z) < 1e-6 && p.weight === thin);
+// 水平線の x 区間の和（隙間なく覆う区間へ併合）
+const coveredRanges = lines => lines.map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]).sort((a, b) => a[0] - b[0])
+  .reduce((acc, r) => { const l = acc[acc.length - 1]; if (l && r[0] <= l[1] + 1e-6) l[1] = Math.max(l[1], r[1]); else acc.push([...r]); return acc; }, []);
+
+test('【巾木】階段室越しの壁（viaStair）: 足元から巾木の高さに細線を壁の帯の全幅に引く', () => {
+  const { graph, farWalls } = makeScene({ farFeature: STAIR, farWallYs: [5000] });
+  const { content, columns } = buildHallS4(graph, { wallTops: topsOf(farWalls), baseboardMm: 60 });
+  assert.ok(wallBandsOf(columns).some(b => b.viaStair), '前提: viaStair の壁の帯がある');
+  assert.deepEqual(coveredRanges(baseboardAt(content, 60)), [[0, 4000]]);
+});
+
+test('【失敗系・巾木】巾木が無い（0）・天端より高い・viaStair でない壁は引かない', () => {
+  const scene = makeScene({ farFeature: STAIR, farWallYs: [5000] });
+  const tops = topsOf(scene.farWalls);
+  assert.equal(baseboardAt(buildHallS4(scene.graph, { wallTops: tops, baseboardMm: 0 }).content, 60).length, 0, '巾木なし（0）');
+  assert.equal(baseboardAt(buildHallS4(scene.graph, { wallTops: tops, baseboardMm: CH }).content, CH).length, 0, '天端以上の高さ');
+  // 階段室でない向こう側の壁（普通の部屋）は viaStair にならない＝巾木も無い
+  const plain = makeScene({ farWallYs: [5000] });
+  assert.equal(baseboardAt(buildHallS4(plain.graph, { wallTops: topsOf(plain.farWalls), baseboardMm: 60 }).content, 60).length, 0);
+});
+
+test('【巾木】階段室越しの隔て板の小口: 両面の間（小口の幅）に巾木の細線を引く。背後の壁の巾木は小口の内側で切れる', () => {
+  const { graph, walls, farWalls } = makeScene({ farFeature: STAIR, partition: {}, faceWallTo: 1000, farWallYs: [5000] });
+  const lo = Math.min(...walls.map(w => w.materialRange.lo)), hi = Math.max(...walls.map(w => w.materialRange.hi));
+  const { content } = buildHallS4(graph, { wallTops: topsOf(farWalls), baseboardMm: 60 });
+  const koguchi = baseboardAt(content, 60).filter(p => Math.abs(Math.min(p.x1, p.x2) - lo) < 1e-6 && Math.abs(Math.max(p.x1, p.x2) - hi) < 1e-6);
+  assert.equal(koguchi.length, 1, `小口の巾木は 1 本（${lo}..${hi}）`);
+  // 背後の壁の巾木は小口の厳密内部には残らない（小口の巾木 1 本だけ）
+  const inside = baseboardAt(content, 60).filter(p => !koguchi.includes(p)
+    && Math.max(p.x1, p.x2) > lo + 1e-6 && Math.min(p.x1, p.x2) < hi - 1e-6);
+  assert.deepEqual(inside, []);
+});
+
+test('【失敗系・巾木】隔て板の小口: 巾木なし（0）・背後が階段室の壁でない（viaStair 無し）なら引かない', () => {
+  const noBoard = makeScene({ farFeature: STAIR, partition: {}, faceWallTo: 1000, farWallYs: [5000] });
+  const lo = Math.min(...noBoard.walls.map(w => w.materialRange.lo)), hi = Math.max(...noBoard.walls.map(w => w.materialRange.hi));
+  const spanOf = content => baseboardAt(content, 60).filter(p => Math.abs(Math.min(p.x1, p.x2) - lo) < 1e-6 && Math.abs(Math.max(p.x1, p.x2) - hi) < 1e-6);
+  assert.equal(spanOf(buildHallS4(noBoard.graph, { wallTops: topsOf(noBoard.farWalls), baseboardMm: 0 }).content).length, 0, '巾木なし');
+  // 階段室の先に壁が無い（viaStair の帯が無い）隔て板の小口: 従来どおり縦線だけ
+  const noFarWall = makeScene({ farFeature: STAIR, partition: {}, faceWallTo: 1000 });
+  const { content, columns } = buildHallS4(noFarWall.graph, { baseboardMm: 60 });
+  assert.equal(wallBandsOf(columns).some(b => b.viaStair), false, '前提: viaStair の壁が無い');
+  assert.ok(lineXs(content).includes(lo), '前提: 小口の縦線は出ている');
+  assert.equal(spanOf(content).length, 0);
+});
+
 // 実物の回り階段（WINDING・木造）。ホールは y4000..7000、階段室は y0..4000（EQUAL_UP の配置）。ホール面 y=4000 から -y 向きに見る。
 // 往路 x0..1000 は視点から遠ざかって上り、復路下の壁（y=1000・x1000..2000）が階段室の最初の壁になる。
 function makeStairScene({ feature = RoomFeature.STAIR } = {}) {
@@ -362,4 +411,14 @@ test('【失敗系・S4】抜けの先が階段室でない: 階段の見えが�
   const f = stairContribution(stair, graph, CH).flights[0];
   assert.equal(columns.flatMap(c => c.bands).some(b => b.viaStair), false);
   assert.equal(horizontalsAt(content, f.baseZ + f.riserMm).length, 0);
+});
+
+test('【失敗系・巾木】隔て板の小口: 足元が床に無い端面（垂れ壁など）には巾木を引かない。床に届く端面には引く（対照）', () => {
+  const { graph, walls, farWalls } = makeScene({ farFeature: STAIR, partition: {}, faceWallTo: 1000, farWallYs: [5000] });
+  const lo = Math.min(...walls.map(w => w.materialRange.lo)), hi = Math.max(...walls.map(w => w.materialRange.hi));
+  const { cut, columns } = buildHallS4(graph, { wallTops: topsOf(farWalls) });
+  const baseboards = ranges => emitOpenSpanEdgeOnWalls(columns, cut, () => ranges, CH, null, 60)
+    .filter(p => p.y1 === p.y2 && Math.abs(Math.min(p.x1, p.x2) - lo) < 1e-6 && Math.abs(Math.max(p.x1, p.x2) - hi) < 1e-6);
+  assert.equal(baseboards([{ z0: 0, z1: 1500 }]).length, 1, '対照: 床に届く端面');
+  assert.equal(baseboards([{ z0: 1000, z1: 1500 }]).length, 0, '足元が床に無い端面');
 });

@@ -54,3 +54,9 @@ test('【配線】appendBandCutContent: 階段下の部屋の stairPrimitivesFor
   assert.equal(count(body, 'stairPrimitivesForCut('), 1, 'stairPrimitivesForCut の呼び出しが 1 回でない');
   assert.equal(count(body, 'farSide: false'), 1, 'farSide: false が無い');
 });
+
+test('【配線】appendBandCutContent: 帯の部屋の巾木高さ（room.finish.baseboardHeight）を buildSectionFromLine へ baseboardMm で渡す（階段室越しの壁・隔て板の小口の巾木。2026-10-15）', () => {
+  const body = functionBody(noComments, 'export function appendBandCutContent(');
+  assert.equal(count(body, 'parseBaseboardHeightMm(room.finish?.baseboardHeight)'), 1, '部屋の巾木高さを解釈していない');
+  assert.equal(count(body, 'upperPlaneOverhang: opts.upperPlaneOverhang, baseboardMm,'), 1, 'baseboardMm を buildSectionFromLine へ渡していない');
+});

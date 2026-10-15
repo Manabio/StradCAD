@@ -17,7 +17,7 @@ import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling, flight
 import { graphList } from '../graphReadScope.js';
 import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDisplayName } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
-import { buildFaceFigure, segEndProfile, hasRightChDim } from './elevationFigure.js';
+import { buildFaceFigure, segEndProfile, hasRightChDim, parseBaseboardHeightMm } from './elevationFigure.js';
 import { ceilArcCircleOf, ceilArcChords } from './ceilArcSection.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments, cornerOpeningZOfFace } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
@@ -728,6 +728,9 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
   const columnSolids = structuralColumnContribution(layers);
   const bandFaces = layout.faceRuns.map(r => r.face);
   const faceAt = (i, dir) => neighborWallFace(bandFaces, i, dir);
+  // 帯の部屋の巾木高さ（図側の巾木と同じ解釈・同じ天井高の条件）。階段室越しの壁と隔て板の小口の巾木に使う。
+  const roomBaseboardH = parseBaseboardHeightMm(room.finish?.baseboardHeight);
+  const baseboardMm = roomBaseboardH != null && roomBaseboardH < layout.CH ? roomBaseboardH : 0;
   layout.faceRuns.forEach(({ face, xCursor, floorSegments }, i) => {
     // 段差見付け面（kind==='step'）は「面」ではなく段差そのものの専用描画のため対象外
     // （断面エンジンに対応概念が無い。buildFaceFigure側の責務のまま）。
@@ -784,7 +787,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         // 同じ値）を足して帯のz（切断のz基準＝ceilProfile・探査と同じ）へ。端の列の凹み側面線が引く。
         ...cornerOpeningZOfFace(face, faceAt(i, -1), faceAt(i, 1), floorSegments, graph),
         probeCtx, endExtendMm, bandRoomBounds, scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
-        upperPlaneOverhang: opts.upperPlaneOverhang,
+        upperPlaneOverhang: opts.upperPlaneOverhang, baseboardMm,
       },
     );
     // 図側がcontentの列からしか分からない値（上階FL断面線の起点＝はり出し外端に立つ切断壁の

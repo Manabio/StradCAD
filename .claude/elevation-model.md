@@ -148,6 +148,12 @@ z範囲は`open`帯∩壁の存在z（見えがかり壁と同じ式。`sectionH
 復路下の壁の天端は直上の層が無い単層の部屋帯でも付く（`probeCtx.floorHeightMm`＝`solids.floorHeightMm`）。(2) 開口越しの階段は`sectionContent.js`の`farStairViewPrimitives`が細線で描く:
 視点から遠ざかって上る flight の段鼻（足元＋(番号+1)×蹴上・段板の幅）と、視点側を向く回転部の蹴上（`farSideSilhouettePrimitives`をレーンを横切る切断へ一般化。奥行き＝走行方向、端の縦線なし）。
 (3) 遮蔽は列の手前の壁・断面と、隔て板の端面（`emitOpenSpanEdgeOnWalls`が返す矩形の厳密内部）。隔て板の両面の縦線は`viaStair`の帯の手前でも引く。階段の断面（太線）・階段帯・階段下の帯には触れない。
+(4) **巾木**（ユーザー指示 2026-10-15「階段下スペースは『ホール』なので巾木が見える」「X2+910 に立つ壁小口にも巾木」）: 階段下スペースは
+帯の部屋（ホール）の一部として見えるので、`viaStair` の壁の足元（同じ壁の帯が下に続かない帯の下端）に帯の部屋の巾木高さ（`buildSectionFromLine`
+の `baseboardMm`＝`appendBandCutContent` が部屋の `finish.baseboardHeight` から渡す）の細線を引く。壁の水平線と同じ遮蔽・降格で、隔て板の端面の
+厳密内部では切れる。隔て板の小口にも同じ高さで両面の間に引く——**背後に `viaStair` の壁がある小口だけ**（`emitOpenSpanEdgeOnWalls` の `baseboardMm`。
+他の開放スパンの壁端には引かない）。どちらも**足元が床の高さ**（`sectionLevelZs`）の帯・端面だけ（扉の上のまぐさ・垂れ壁の下端には引かない）。
+階段帯（stairCut）・吹抜けの帯の上階側（`elevationVoid.js` が直接呼ぶ `buildSectionFromLine` は `baseboardMm` を渡さない＝対象外。`appendBandCutContent` 経由の帯は部屋の巾木を渡す）・巾木なし（0・天井高以上）は引かない。
 下記・後述の「6」C のバツに関する旧裁定（2026-08/09。13.stq「6」C にバツを求めたもの）のうち、階段の
 seq1/seq3 の面に関するものは**この指示で撤回**した（一般規則としては他の面で有効）。
 
@@ -1233,7 +1239,12 @@ GAP_EPS×3 の帯では本体より上の線も落ちる〔mm 未満〕）——
 `junctionTop` はそのまま）。(6) 輪郭の垂直な段の上に載る縦線（壁の断面の面が段の位置に一致）は、両側のうち低い方の輪郭で切る
 （`clipSegmentAboveProfile`。段の上で `drawnFloorProfileZAt` は左側の値を返すため、壁の左右の面で結果が食い違っていた）。段板の裏
 （ジグザグ）は階段自身の断面として従来どおり残る（仕上げの線はその下に平行）。鉄骨・下階に続き階段がある（復路下の壁が立たない）・
-seq5 以外の面・直進系は不変。golden: moku4-3／moku1-6／ceiling-zone 3 文書／stair-ports-test5 の 1階 階段帯の seq5 だけが変わる
+seq5 以外の面・直進系は不変。(7) **巾木**（ユーザー指示 2026-10-15「階段下スペースは『ホール』なので巾木が見える」）: 階段帯は巾木を
+描かない（`skipBaseboard`）が、この空間だけは**到達辺の外側の部屋**（空間が開く先＝ホール。到達辺から面の外へ 100mm の点を
+`probeCtx.cellAt` で引く）の `RoomFinish.baseboardHeight`（図側と同じ `parseBaseboardHeightMm`）で、床＋h に細線を引く
+（`underReturnBaseboardPrimitives`）。**到達辺側の面の端に壁が無いとき**だけ外側の部屋を見る（壁があれば外側は壁の向こうなので階段室
+自身の巾木。解釈できなければ引かない）。範囲は「巾木は壁のある範囲だけ・面の端で止める」どおり面の端〜壁の仕上げ空間側の面（はね出しへ
+伸ばさない。復路下の壁自身は断面なので引かない）。外側に部屋が無い・解釈不能・裏面より高いときは引かない。golden: moku4-3／moku1-6／ceiling-zone 3 文書／stair-ports-test5 の 1階 階段帯の seq5 だけが変わる
 （stair-ports-test5 では、仕上げ空間の奥の開放辺に壁端の縦線が床から裏面まで現れ、遠側の天井線とアキのバツは裏面より下だけ残る）。
 天井の段を到達辺（Y4）ではなく裏面の始まり（最上段の前縁）に置くのはリードの既定（裏面の立体がそこから始まるため。到達辺に置くなら
 `solid.zAt` のクランプ値で平らに延ばす）。

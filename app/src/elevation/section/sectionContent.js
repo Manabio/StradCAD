@@ -348,7 +348,9 @@ export function farStairViewPrimitives(columns, cut, probeCtx) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
  * @param {{endExtendMm?:number, bandRoomBounds?:object|null, scale?:number,
- *   upperPlaneOverhang?:boolean, gapFloorProfile?:Array<[number,number]>|null}} [opts]
+ *   upperPlaneOverhang?:boolean, gapFloorProfile?:Array<[number,number]>|null, baseboardMm?:number}} [opts]
+ *   baseboardMm … 帯の部屋の巾木高さ（mm。省略・0＝引かない）。階段室越しの壁（viaStair）とその手前の隔て板の小口に
+ *   巾木の細線を足す（部屋帯だけが渡す。階段帯は渡さない）。
  *   gapFloorProfile … アキのセルの下限にする断面線（階段帯のみ。elevationStairSequence.js）。省略＝下限なし。
  * @returns {{cut:object, columns:object[], emitCtx:object,
  *   wallPrims:object[], gapMarks:object[], content:object[]}}
@@ -365,13 +367,14 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   const emitCtx = {
     ...emitCtxForCut(pcut), scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
     gapFloorProfile: opts.gapFloorProfile ?? null,
+    baseboardMm: opts.baseboardMm ?? 0,
   };
   // 壁content（断面・見えがかり・凹み側面線）は「断面内部は描画しない」の一般判定
   // （`clipInsideSlabSolids`）を通してから返す。
   // 開放スパンの中に見える視線に平行な壁（隔て板等）の両面の縦線。階段帯（stairCut）は別規則なので呼ばない。
   const edgeOnRects = [];
   const edgeOnWalls = pcut.stairCut ? [] : emitOpenSpanEdgeOnWalls(columns, pcut,
-    (layer, wall, depth, lateral) => edgeOnWallZRanges(pcut, layer, wall, depth, lateral, probeCtx), emitCtx.ceilZ, edgeOnRects);
+    (layer, wall, depth, lateral) => edgeOnWallZRanges(pcut, layer, wall, depth, lateral, probeCtx), emitCtx.ceilZ, edgeOnRects, emitCtx.baseboardMm);
   // 階段室の開口越しに見える階段（S4）と、階段室の最初の壁（viaStair）は、手前に立つ隔て板の端面（edgeOnRects）の
   // 厳密内部では隠れる。隔て板の縦線自身は矩形の辺上なので残る。
   const behindEdgeOn = prims => subtractRectsFromPrimitives(prims, rectsToFaceLocal(strictInteriorOf(edgeOnRects)));
@@ -455,5 +458,6 @@ export function buildSectionFromLine(line, layers, opts = {}) {
     scale: opts.scale,
     lineWeightsPx: opts.lineWeightsPx ?? null,
     upperPlaneOverhang: opts.upperPlaneOverhang ?? false,
+    baseboardMm: opts.baseboardMm ?? 0,
   });
 }

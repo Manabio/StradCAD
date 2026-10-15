@@ -3877,7 +3877,7 @@
   "room": "7049e6a8-ff91-4bd0-8371-2a2bf46f174b",
   "name": "",
   "kind": "stair",
-  "count": 192,
+  "count": 193,
   "prims": [
    {
     "type": "line",
@@ -5768,6 +5768,14 @@
    },
    {
     "type": "line",
+    "weight": "thin",
+    "x1": 10957.5,
+    "x2": 11810,
+    "y1": -60,
+    "y2": -60
+   },
+   {
+    "type": "line",
     "weight": "thick",
     "x1": 10807.5,
     "x2": 10995,
@@ -6359,7 +6367,7 @@
   "room": "a5f02c7c-afe8-4738-90d0-dbde94e295aa",
   "name": "ホール",
   "kind": "room",
-  "count": 141,
+  "count": 143,
   "prims": [
    {
     "type": "line",
@@ -7394,6 +7402,14 @@
     "y2": -1615.813
    },
    {
+    "type": "line",
+    "weight": "thin",
+    "x1": 8054,
+    "x2": 8834,
+    "y1": -60,
+    "y2": -60
+   },
+   {
     "__o": "recessLo",
     "type": "line",
     "weight": "thin",
@@ -7506,6 +7522,14 @@
     "x2": 8949,
     "y1": 0,
     "y2": -2400
+   },
+   {
+    "type": "line",
+    "weight": "thin",
+    "x1": 8834,
+    "x2": 8949,
+    "y1": -60,
+    "y2": -60
    },
    {
     "h": 400,

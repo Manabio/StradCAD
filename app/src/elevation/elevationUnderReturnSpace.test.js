@@ -27,7 +27,10 @@ const near = (a, b, msg, tol = 1e-6) => assert.ok(Math.abs(a - b) < tol, `${msg}
 // 折返し階段（踊り場 y0..1500 全幅・往路/復路レーン y1500..4500。flip=true＝往路が x 大側・復路が x 0..1000、flip=false はその逆）。
 // openReturnSide: 復路レーンの外側の壁（seq5 が見る壁）の到達辺側 y 3500..4500 を開口にして、その向こうに隣室を置く
 // （stair-ports-test5 の構成。仕上げ空間の奥の開放辺に隣室の天井線・壁端の縦線・アキが現れる）。
-function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel = null, openReturnSide = false, chLowerMm = OPTS.chLowerMm } = {}) {
+// hallBaseboard: 到達辺（y=4500）の外側に部屋「ホール」（y4500..6500）を置き、その RoomFinish.baseboardHeight に入れる文字列
+// （null＝部屋を置かない）。openArrival: 到達辺（y=4500）の壁を外して空間がホールへ開く（moku4-3 と同じ。既定は壁あり）。
+// stairBaseboard: 階段室自身の RoomFinish.baseboardHeight（null＝未設定）。
+function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel = null, openReturnSide = false, chLowerMm = OPTS.chLowerMm, hallBaseboard = null, openArrival = false, stairBaseboard = null } = {}) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   graph.structureOverride = structure === StructuralMaterialType.WOOD ? TRADITIONAL_WOOD_STRUCTURE : structure;
   const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
@@ -54,6 +57,11 @@ function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel
       if (lo < 3000) graph.addWall(outer, off, true, y0, 57.5, yo, 0, props); // 階段室の外壁は y 57.5..3500 だけ残す
     }
   } else generateRoomWallsFromOutline(graph, room);
+  if (hallBaseboard != null) {
+    const yh = cl(CenterLineType.HORIZONTAL, 6500);
+    const hall = graph.addRoom(new Set([`${x0.id}:${y1.id}:${x1.id}:${yh.id}`]), 'ホール');
+    hall.finish.setField('baseboardHeight', hallBaseboard);
+  }
   const stair = graph.addStair({
     type: StairType.SWITCHBACK, cells, roomId: room.id, sections: [6, 1, 6], riser: null, upDirection: 'up', flip,
   });
@@ -67,7 +75,13 @@ function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel
   // 直上の層（階高 2400）: 復路下の壁の天端（sectionProbe.js addUnderReturnTops）は直上の層の階高から蹴上を決める
   const upperGraph = new PlanGraph(new Plane('p2', OPTS.floorHeight, '2階', 2, 1));
   const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] });
-  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, chLowerMm, upperGraph, layers });
+  if (stairBaseboard != null) room.finish.setField('baseboardHeight', stairBaseboard);
+  if (openArrival) {
+    for (const w of [...graph.walls]) {
+      if (!w.isVertical && Math.abs(w.axisCL.effectiveValue - 4500) < 1e-6) graph.removeShape(w.id);
+    }
+  }
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph, { keepWallLessFaces: openArrival }), graph, { ...OPTS, chLowerMm, upperGraph, layers });
   return { graph, room, stair, underWalls, entries, chLowerMm, seq5: entries.find(e => e.seqNo === '5') };
 }
 
@@ -356,4 +370,49 @@ test('floorProfileWithFloorOn: 範囲を床の高さに置き換え、境目は�
   assert.deepEqual(floorProfileWithFloorOn([[100, 1400], [500, 1400]], 0, 300, 300), [[0, 300], [300, 300], [300, 1400], [500, 1400]]);
   assert.equal(floorProfileWithFloorOn(null, 0, 10, 0), null);
   assert.deepEqual(floorProfileWithFloorOn([], 0, 10, 0), []);
+});
+
+// ---- 復路下の仕上げ空間の巾木（ユーザー指示 2026-10-15「階段下スペースは『ホール』なので巾木が見える」）----
+const DETAIL = weightForRole(ElevationLineRole.DETAIL);
+const baseboardLines = (seq5, z) => seq5.content.filter(p => p.type === 'line' && p.weight === DETAIL
+  && Math.abs(p.y1 + z) < 1e-6 && Math.abs(p.y2 + z) < 1e-6);
+
+for (const flip of [true, false]) {
+  test(`【巾木（flip=${flip}）】到達辺の外側の部屋（ホール h=60）の巾木が、面の端から復路下の壁の仕上げ空間側の面まで床+60 に細線で引かれる`, () => {
+    const fx = makeFixture(StructuralMaterialType.WOOD, { flip, hallBaseboard: 'h=60', openArrival: true });
+    assert.equal(fx.seq5.face[flip ? 'hasWallAtLocal0' : 'hasWallAtLocalRun'], false, '前提: 到達辺に壁が無い');
+    const { spaceEnd, spaceInner } = wallLocals(fx);
+    const lines = baseboardLines(fx.seq5, 60);
+    assert.equal(lines.length, 1, `巾木は 1 本（実際 ${JSON.stringify(lines)}）`);
+    const [lo, hi] = [Math.min(lines[0].x1, lines[0].x2), Math.max(lines[0].x1, lines[0].x2)];
+    near(lo, Math.min(spaceEnd, spaceInner), '巾木の端（面の端か壁の面）');
+    near(hi, Math.max(spaceEnd, spaceInner), '巾木のもう一方の端（面の端か壁の面）');
+    // 面の端（はね出しへ伸ばさない）と、壁の仕上げ空間側の面で止まる（壁の厚みの中へは入らない）
+    assert.ok(lo >= -1e-6 && hi <= fx.seq5.face.run + 1e-6, '面の範囲 0..run の内側');
+  });
+}
+
+test('【失敗系・巾木】到達辺の外側に部屋が無い・巾木が解釈できない・空のときは引かない（同じ構成で h=60 なら引かれる対照つき）', () => {
+  const open = o => makeFixture(StructuralMaterialType.WOOD, { openArrival: true, ...o }).seq5;
+  assert.equal(baseboardLines(open({ hallBaseboard: 'h=60' }), 60).length, 1, '対照');
+  assert.equal(baseboardLines(open({}), 60).length, 0, '外側に部屋なし');
+  assert.equal(baseboardLines(open({ hallBaseboard: '既製品' }), 60).length, 0, '解釈不能');
+  assert.equal(baseboardLines(open({ hallBaseboard: '' }), 60).length, 0, '空');
+});
+
+test('【失敗系・巾木】到達辺に壁がある: 外側のホールの巾木は使わず、階段室自身の巾木だけ（無ければ引かない）', () => {
+  const closed = o => makeFixture(StructuralMaterialType.WOOD, o).seq5;
+  const withHall = closed({ hallBaseboard: 'h=60' });
+  assert.equal(withHall.face.hasWallAtLocal0 !== false && withHall.face.hasWallAtLocalRun !== false, true, '前提: 到達辺に壁がある');
+  assert.equal(baseboardLines(withHall, 60).length, 0, 'ホールの巾木 60 は使わない');
+  const own = closed({ hallBaseboard: 'h=60', stairBaseboard: 'h=80' });
+  assert.equal(baseboardLines(own, 80).length, 1, '階段室自身の巾木 80 は引く');
+  assert.equal(baseboardLines(own, 60).length, 0, 'ホールの巾木 60 は引かない');
+  assert.equal(baseboardLines(closed({ stairBaseboard: '既製品' }), 60).length, 0, '階段室の巾木が解釈不能なら引かない');
+});
+
+test('【失敗系・巾木】巾木の高さが裏面より高いときは引かない／鉄骨（復路下の壁なし）は仕上げ空間が無いので引かない', () => {
+  assert.equal(baseboardLines(makeFixture(StructuralMaterialType.WOOD, { hallBaseboard: 'h=9000', openArrival: true }).seq5, 9000).length, 0);
+  const steel = makeFixture(StructuralMaterialType.STEEL, { hallBaseboard: 'h=60', openArrival: true });
+  assert.equal(baseboardLines(steel.seq5, 60).length, 0);
 });

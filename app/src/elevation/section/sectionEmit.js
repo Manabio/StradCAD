@@ -813,6 +813,18 @@ export function emitColumns(columns, cut, emitCtx = {}) {
             prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(topRole)));
           }
         }
+        // 階段室越しの壁（viaStair）の巾木（ユーザー指示2026-10-15「階段下スペースは『ホール』なので巾木が
+        // 見える」）。帯の部屋（ホール）の巾木高さ emitCtx.baseboardMm を、壁の足元（下に同じ壁の帯が続かない
+        // 帯の下端）から立ち上げた細線。遮蔽・降格は壁の水平線と同じ（hiddenByCutWall・beyondBand）。
+        if (band.viaStair && emitCtx.baseboardMm > 0) {
+          const bbZ = band.z0 + emitCtx.baseboardMm;
+          const below = neighborBandAt(col, band.z0, -1);
+          // 足元＝床の高さ（その列・層のFL）にある帯の下端だけ。扉の上の壁（まぐさ）など床に無い帯の下端には引かない。
+          const isWallFoot = !(below?.kind === 'wall' && below.viaStair) && atSectionLevel(band.z0);
+          if (isWallFoot && bbZ < band.z1 - GAP_EPS && !hiddenByCutWall(col, bbZ)) {
+            prims.push(emitLine(cut, col.x0, bbZ, col.x1, bbZ, ElevationLineRole.DETAIL, { ceilZ, forceDash: beyondBand }));
+          }
+        }
         // 凹み: 隣接列で同一z区間のwallのdistMmが変化した境界にSILHOUETTE縦線（§5.5）。
         // 凹み側面線。**列の外側の端（prev/nextが無い＝描画範囲の端）では、その端に壁が
         // 無ければ描かない**（ユーザー実機指摘2026-08「3500左CLにエッジはない」）——
@@ -1468,9 +1480,11 @@ function openZRangesAt(columns, x) {
  * @param {number} [ceilZ]
  * @param {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>|null} [rectsOut] - 渡すと、縦線を引いた壁ごとの
  *   端面の矩形（面ローカルx×z）を追記する（その向こうの階段の見えがかり等を隠す遮蔽。`sectionContent.js`）。
+ * @param {number} [baseboardMm] - 帯の部屋の巾木高さ。正なら、階段室越しの壁（viaStair）の手前に見える小口の
+ *   足元から立ち上げた巾木の細線を足す（既定0＝引かない）。
  * @returns {object[]}
  */
-export function emitOpenSpanEdgeOnWalls(columns, cut, wallZRangesOf = null, ceilZ = undefined, rectsOut = null) {
+export function emitOpenSpanEdgeOnWalls(columns, cut, wallZRangesOf = null, ceilZ = undefined, rectsOut = null, baseboardMm = 0) {
   const layer = (cut.layers ?? []).find(l => l?.role === 'self');
   const walls = layer?.graph ? graphList(layer.graph, 'walls') : null;
   if (!walls?.length) return [];
@@ -1527,6 +1541,18 @@ export function emitOpenSpanEdgeOnWalls(columns, cut, wallZRangesOf = null, ceil
     }
     // 壁の端面（両面の間）は手前を塞ぐ実体＝その向こうの見えがかりを隠す矩形（呼び出し側が遮蔽に使う）。
     if (rectsOut && zHi > zLo) rectsOut.push({ xLo: xs[0], xHi: xs[1], zLo, zHi });
+    // 階段室越しの壁（viaStair）の手前に見える隔て板の小口にも巾木を引く（ユーザー指示2026-10-15「X2+910に立つ
+    // 壁小口にも巾木が見える」）。階段室の開口越しの小口だけが対象——それ以外の開放スパンの壁端は引かない。
+    // 高さは viaStair 壁の巾木と同じ（baseboardMm＝帯の部屋の巾木高さ）。
+    // 足元が床の高さにある端面だけ（垂れ壁など足元が床に無い端面には引かない）。
+    const footCol = baseboardMm > 0
+      ? columns.find(c => c.x1 > xs[0] + GAP_EPS && c.x0 < xs[1] - GAP_EPS
+        && c.bands.some(b => b.kind === 'wall' && b.viaStair))
+      : null;
+    if (footCol && zHi > zLo && zLo + baseboardMm < zHi - GAP_EPS
+      && sectionLevelZs(cut, footCol, ceilZ).some(f => Math.abs(zLo - f) < GAP_EPS)) {
+      prims.push(emitLine(cut, xs[0], zLo + baseboardMm, xs[1], zLo + baseboardMm, ElevationLineRole.DETAIL, { ceilZ }));
+    }
   }
   return prims;
 }
