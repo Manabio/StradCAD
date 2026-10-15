@@ -3877,7 +3877,7 @@
   "room": "7049e6a8-ff91-4bd0-8371-2a2bf46f174b",
   "name": "",
   "kind": "stair",
-  "count": 198,
+  "count": 200,
   "prims": [
    {
     "type": "line",
@@ -3934,15 +3934,6 @@
     "y2": 0
    },
    {
-    "at": 600,
-    "dir": "h",
-    "dot": true,
-    "from": -72.5,
-    "label": 1820,
-    "to": 1747.5,
-    "type": "dim"
-   },
-   {
     "dash": "center",
     "dashAnchor": 600,
     "type": "line",
@@ -3951,6 +3942,24 @@
     "x2": 837.5,
     "y1": -5550,
     "y2": 600
+   },
+   {
+    "at": 600,
+    "dir": "h",
+    "dot": true,
+    "from": -72.5,
+    "label": 910,
+    "to": 837.5,
+    "type": "dim"
+   },
+   {
+    "at": 600,
+    "dir": "h",
+    "dot": true,
+    "from": 837.5,
+    "label": 910,
+    "to": 1747.5,
+    "type": "dim"
    },
    {
     "dash": "center",
@@ -4311,15 +4320,6 @@
     "y2": -1000
    },
    {
-    "at": 600,
-    "dir": "h",
-    "dot": true,
-    "from": 5617.5,
-    "label": 1820,
-    "to": 7437.5,
-    "type": "dim"
-   },
-   {
     "dash": "center",
     "dashAnchor": 600,
     "type": "line",
@@ -4328,6 +4328,24 @@
     "x2": 6527.5,
     "y1": -5550,
     "y2": 600
+   },
+   {
+    "at": 600,
+    "dir": "h",
+    "dot": true,
+    "from": 5617.5,
+    "label": 910,
+    "to": 6527.5,
+    "type": "dim"
+   },
+   {
+    "at": 600,
+    "dir": "h",
+    "dot": true,
+    "from": 6527.5,
+    "label": 910,
+    "to": 7437.5,
+    "type": "dim"
    },
    {
     "dash": "center",

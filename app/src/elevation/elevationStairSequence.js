@@ -1219,8 +1219,8 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   });
   return entries.map((e, i) => ({
     ...e, face: relabeled[i],
-    // 往復間の壁の芯（一点鎖線のみ。寸法の鎖は分割しない）。elevationStair.jsのfaceOverride経由で
-    // buildFaceFigureのextraCenterLineXsへ渡る。
+    // 往復間の壁の芯（一点鎖線＋寸法の鎖の分割点。ユーザー指示 2026-10-15「隔て板の中心を描くなら、
+    // 寸法線を 910 づつに分ける」）。elevationStair.jsのfaceOverride経由でbuildFaceFigureのextraCenterLineXsへ渡る。
     extraCenterLineXs: midWallCLXs(relabeled[i]),
     chDimChains: chDimChains[i],
   }));

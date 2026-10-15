@@ -1563,7 +1563,12 @@ function appendAnnotationRows(prims, face, graph, opts) {
   const dimSplitXs = collectRow1SplitPoints(face, graph, {
     floorSegments, boundary, spans: face.spans, gridXs: gridPoints.map(g => g.x),
   });
-  const row1Marks = [boundary.lo, ...dimSplitXs, boundary.hi];
+  // 呼び出し側が明示指定する追加の中心線（ローカルx。階段帯の往復間の壁＝隔て板の芯）も鎖の分割点にする
+  // （ユーザー指示 2026-10-15「隔て板の中心を描くなら、寸法線を 910 づつに分ける」。2026-08「6」C の
+  // 「一点鎖線だけを描き、寸法の鎖は分割しない」を置き換えた）。面の境界の外・既存の分割点と同位置は捨てる。
+  const extraXs = (extraCenterLineXs ?? []).filter(x => x > boundary.lo + SPLIT_MERGE_EPS_MM && x < boundary.hi - SPLIT_MERGE_EPS_MM
+    && !dimSplitXs.some(m => Math.abs(m - x) <= SPLIT_MERGE_EPS_MM));
+  const row1Marks = [boundary.lo, ...[...dimSplitXs, ...extraXs].sort((a, b) => a - b), boundary.hi];
   for (const x of row1Marks) {
     const onGrid = gridPoints.some(g => Math.abs(g.x - x) <= SPLIT_MERGE_EPS_MM);
     if (onGrid) continue; // 通り芯の一点鎖線（下のループ）と重複させない
@@ -1576,12 +1581,10 @@ function appendAnnotationRows(prims, face, graph, opts) {
     });
   }
 
-  // 呼び出し側が明示指定する追加の中心線（ローカルx）。**一点鎖線だけを描き、寸法の鎖は分割しない**
-  // （ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」）。
-  // 用途: 階段帯の往復間の壁の芯——この壁は切断線から見て**面の裏側**へ伸びるため、
+  // 追加の中心線（extraCenterLineXs）のうち境界の外にあって鎖に入らなかったものは一点鎖線だけ描く
+  // （用途: 階段帯の往復間の壁の芯——この壁は切断線から見て**面の裏側**へ伸びるため、
   // `collectRow1SplitPoints`の直交壁検出（室内側へMIN_PROJECTION_MM以上突出する袖壁が対象）に
-  // 掛からず、一点鎖線の源が1つも無かった。寸法を分割しないのは、以前「1500と1000の間のCLは
-  // どこからきたのか」と指摘された寸法鎖への副作用を避けるため（線だけという明示指示に従う）。
+  // 掛からず、一点鎖線の源が1つも無かった。ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」）。
   for (const x of extraCenterLineXs ?? []) {
     const dup = gridPoints.some(g => Math.abs(g.x - x) <= SPLIT_MERGE_EPS_MM)
       || row1Marks.some(m => Math.abs(m - x) <= SPLIT_MERGE_EPS_MM);

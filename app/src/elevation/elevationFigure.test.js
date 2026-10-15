@@ -987,7 +987,7 @@ test('【傾いた bc は同じ直線の傾いた遠側天井線の区間だけ�
 // ---- ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」 ----
 // 階段帯の往復間の壁は切断線から見て面の裏側へ伸びるため、直交壁の検出（室内側へ突出する袖壁が
 // 対象）に掛からず一点鎖線の源が無かった。呼び出し側が明示指定できるctx.extraCenterLineXsを追加。
-test('【実機指摘】buildFaceFigure: extraCenterLineXsの位置に一点鎖線を描き、寸法の鎖は分割しない', () => {
+test('【実機指摘・指示2026-10-15】buildFaceFigure: extraCenterLineXsの位置に一点鎖線を描き、寸法の鎖をそこで分ける', () => {
   const face = makeFace();
   const dimsOf = prims => prims.filter(p => p.type === 'dim' && p.dir === 'h')
     .map(p => [p.from, p.to]);
@@ -999,7 +999,18 @@ test('【実機指摘】buildFaceFigure: extraCenterLineXsの位置に一点鎖�
 
   assert.ok(!centersOf(before).includes(1500), '前提: 既定では1500に一点鎖線は無い');
   assert.ok(centersOf(after).includes(1500), 'extraCenterLineXsの位置に一点鎖線が出るはず');
-  assert.deepEqual(dimsOf(after), dimsOf(before), '寸法の鎖は変わらないはず（線だけ追加する）');
+  const splitAt = (dims, x) => dims.some(([, to]) => to === x) && dims.some(([from]) => from === x);
+  assert.ok(!splitAt(dimsOf(before), 1500), '前提: 既定では1500で鎖は割れていない');
+  assert.ok(splitAt(dimsOf(after), 1500), '鎖は1500で割れるはず（隔て板の芯は寸法の分割点。2026-10-15）');
+  assert.equal(dimsOf(after).length, dimsOf(before).length + 1, '分割点が1つ増えるだけ');
+});
+
+test('【失敗系・指示2026-10-15】buildFaceFigure: 面の境界の外のextraCenterLineXsは鎖を分けない', () => {
+  const face = makeFace();
+  const dimsOf = prims => prims.filter(p => p.type === 'dim' && p.dir === 'h').map(p => [p.from, p.to]);
+  const before = buildFaceFigure(face, baseCtx({}));
+  const outside = buildFaceFigure(face, baseCtx({ extraCenterLineXs: [-5000, face.run + 5000] }));
+  assert.deepEqual(dimsOf(outside), dimsOf(before), '境界の外の点は鎖に入らない');
 });
 
 test('【失敗系・実機指摘】buildFaceFigure: 既に一点鎖線がある位置のextraCenterLineXsは重複して描かない', () => {
