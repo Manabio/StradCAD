@@ -3877,7 +3877,7 @@
   "room": "7049e6a8-ff91-4bd0-8371-2a2bf46f174b",
   "name": "",
   "kind": "stair",
-  "count": 193,
+  "count": 198,
   "prims": [
    {
     "type": "line",
@@ -4259,7 +4259,7 @@
    {
     "type": "line",
     "weight": "thick",
-    "x1": 5690,
+    "x1": 6959.749,
     "x2": 7365,
     "y1": -1000,
     "y2": -1000
@@ -4300,7 +4300,7 @@
     "x1": 5690,
     "x2": 5690,
     "y1": -4583.761,
-    "y2": -1000
+    "y2": -2000
    },
    {
     "type": "line",
@@ -4831,6 +4831,7 @@
     "y2": -3000
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -4839,6 +4840,7 @@
     "y2": -200
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -4847,6 +4849,7 @@
     "y2": -400
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -4855,6 +4858,7 @@
     "y2": -600
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -4863,6 +4867,7 @@
     "y2": -800
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5241,14 +5246,6 @@
    {
     "type": "line",
     "weight": "thick",
-    "x1": 6959.749,
-    "x2": 7365,
-    "y1": -1000,
-    "y2": -1000
-   },
-   {
-    "type": "line",
-    "weight": "thick",
     "x1": 6772.374,
     "x2": 6959.749,
     "y1": -1200,
@@ -5325,6 +5322,66 @@
     "x2": 6355.513,
     "y1": -1800,
     "y2": -2000
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 6959.749,
+    "x2": 7365,
+    "y1": -1200,
+    "y2": -1200
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 6772.374,
+    "x2": 7365,
+    "y1": -1400,
+    "y2": -1400
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5690,
+    "x2": 6470.256,
+    "y1": -1600,
+    "y2": -1600
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5690,
+    "x2": 6355.513,
+    "y1": -1800,
+    "y2": -1800
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5690,
+    "x2": 5690,
+    "y1": -1800,
+    "y2": -1600
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5690,
+    "x2": 5690,
+    "y1": -2000,
+    "y2": -1800
    },
    {
     "__o": "recessLo",

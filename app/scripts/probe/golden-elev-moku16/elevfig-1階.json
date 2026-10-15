@@ -2867,7 +2867,7 @@
   "room": "78c7c40a-de61-43ec-b09b-30266b8a6290",
   "name": "",
   "kind": "stair",
-  "count": 181,
+  "count": 186,
   "prims": [
    {
     "type": "line",
@@ -3149,7 +3149,7 @@
    {
     "type": "line",
     "weight": "thick",
-    "x1": 5190,
+    "x1": 6459.749,
     "x2": 6865,
     "y1": -1000,
     "y2": -1000
@@ -3168,7 +3168,7 @@
     "x1": 5190,
     "x2": 5190,
     "y1": -5400,
-    "y2": -1000
+    "y2": -2000
    },
    {
     "type": "line",
@@ -3649,6 +3649,7 @@
     "y2": -2350
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -3657,6 +3658,7 @@
     "y2": -200
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -3665,6 +3667,7 @@
     "y2": -400
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -3673,6 +3676,7 @@
     "y2": -600
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -3681,6 +3685,7 @@
     "y2": -800
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -4079,14 +4084,6 @@
    {
     "type": "line",
     "weight": "thick",
-    "x1": 6459.749,
-    "x2": 6865,
-    "y1": -1000,
-    "y2": -1000
-   },
-   {
-    "type": "line",
-    "weight": "thick",
     "x1": 6272.374,
     "x2": 6459.749,
     "y1": -1200,
@@ -4163,6 +4160,66 @@
     "x2": 5855.513,
     "y1": -1800,
     "y2": -2000
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 6459.749,
+    "x2": 6865,
+    "y1": -1200,
+    "y2": -1200
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 6272.374,
+    "x2": 6865,
+    "y1": -1400,
+    "y2": -1400
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5190,
+    "x2": 5970.256,
+    "y1": -1600,
+    "y2": -1600
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5190,
+    "x2": 5855.513,
+    "y1": -1800,
+    "y2": -1800
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5190,
+    "x2": 5190,
+    "y1": -1800,
+    "y2": -1600
+   },
+   {
+    "__o": "hiddenStep",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 5190,
+    "x2": 5190,
+    "y1": -2000,
+    "y2": -1800
    },
    {
     "points": [

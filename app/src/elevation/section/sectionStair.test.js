@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { uTurnPlanLayout } from '../../finish/stair/stairGeometry.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass, crossingLandingFloorProfile, hiddenTurnStepPrimitives, HIDDEN_STEP_MARK } from './sectionStair.js';
 import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from '../elevationStairSection.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
@@ -2292,5 +2292,136 @@ test('【2026-10-14】隔て板の壁の面: 同じ軸CLで重なる薄壁が12.
   for (const w of [otherAxis, apart]) {
     const layers = [{ graph: { walls: new Set([FAR_OWNER_WALL, w]) }, floorZMm: 0, role: 'self' }];
     assert.deepEqual(clipWallEndVerticalsByStairMass(orig, massCut({ layers }), FAR_COLUMNS), orig);
+  }
+});
+
+// ---- 蹴上材を裏から見る面（ユーザー裁定 2026-10-15「moku4-3 1階 階段 C」。材質によらない手順）----
+// 横断の切断が回転部のセルを切る面（seq3）: スライスの床線・蹴上（断面線）は全部 CUT のまま。切断面と壁の間の踏面と、
+// 壁に取り合う蹴上線を細線破線で足す（hiddenTurnStepPrimitives）。面の断面線は段状の天端（crossingLandingFloorProfile）。
+function windingCrossingCut(c, baseFloorZ) {
+  const axisValue = c.frame.front + c.forwardSign * 100; // seq3 と同じ: 前縁から踊り場側へ LANDING_CUT_INSET_MM
+  return {
+    seqNo: '3', line: { isVertical: !c.isVertical, axisValue, lo: 0, hi: 2000 }, viewSign: c.forwardSign, dirSign: 1,
+    layers: [], zRange: { loZ: baseFloorZ, hiZ: 3000 }, baseFloorZ,
+  };
+}
+const FULL_WIDTH_COLUMNS = [{ x0: 0, x1: 2000, worldLo: 0, worldHi: 2000, bands: [] }];
+const isHorizontalLine = p => p.type === 'line' && Math.abs(p.y1 - p.y2) < 1e-6;
+const isVerticalLine = p => p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-6;
+
+test('【裁定2026-10-15】stairPrimitivesForCut: 回転部を横断する切断のスライスの床線・蹴上は全部 CUT（破線にしない）。切断面と壁の間の踏面と壁に取り合う蹴上の縦線は細線破線で足す', () => {
+  const graph = makeGraph();
+  const { stair } = makeWindingFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const baseZ = 5 * WINDING_RISER;
+  const cut = windingCrossingCut(c, baseZ);
+  const slices = withCutLandings(c, cut).landings;
+  assert.ok(slices.length >= 2, '前提: 切断線が回転部を2段以上切る');
+  const prims = stairPrimitivesForCut({ ...c, flights: [] }, cut, FULL_WIDTH_COLUMNS);
+  const section = prims.filter(p => p.type === 'line' && p.__o !== HIDDEN_STEP_MARK);
+  assert.ok(section.length >= slices.length && section.every(p => p.weight === 'thick' && !p.dash), '断面線（スライスの床線・蹴上）は太線のまま');
+  const hidden = prims.filter(p => p.__o === HIDDEN_STEP_MARK);
+  assert.ok(hidden.length >= 2 && hidden.every(p => p.type === 'line' && p.weight === 'thin' && p.dash === 'dashed'), '隠れ線は細線破線');
+  // 踏面の隠れ線: セルの高さの水平線で、断面の床線（同じ高さのスライスの幅）と重ならない
+  const sliceAt = z => slices.filter(s => Math.abs(s.z - z) < 1e-6).map(s => [Math.min(localXOf(cut, s.acrossLo), localXOf(cut, s.acrossHi)), Math.max(localXOf(cut, s.acrossLo), localXOf(cut, s.acrossHi))]);
+  const hiddenH = hidden.filter(isHorizontalLine);
+  assert.ok(hiddenH.length >= 1);
+  for (const p of hiddenH) {
+    const z = -p.y1;
+    assert.ok(slices.some(s => Math.abs(s.z - z) < 1e-6), `高さ ${z} は回転部のセルの高さ`);
+    const lo = Math.min(p.x1, p.x2), hi = Math.max(p.x1, p.x2);
+    for (const [a, b] of sliceAt(z)) assert.ok(hi <= a + 1e-6 || lo >= b - 1e-6, '断面の床線と重ならない');
+  }
+  // 蹴上の隠れ線: 低い段から高い段までの縦線（隣り合うセルの高さの組）
+  const zs = [...new Set(slices.map(s => Math.round(s.z)))].sort((a, b) => a - b);
+  for (const p of hidden.filter(isVerticalLine)) {
+    const lo = Math.round(Math.min(-p.y1, -p.y2)), hi = Math.round(Math.max(-p.y1, -p.y2));
+    assert.ok(zs.includes(lo) && zs.includes(hi) && zs.indexOf(hi) === zs.indexOf(lo) + 1, `縦線 ${lo}→${hi} は隣り合う段`);
+  }
+});
+
+test('【失敗系・裁定2026-10-15】hiddenTurnStepPrimitives: セルが切断面の手前にある面（seq1 の前縁）・縦断・折返し・階段下の部屋の帯（farSide:false）は隠れ線を出さない', () => {
+  const graph = makeGraph();
+  const { stair } = makeWindingFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const hiddenOf = (contrib, cut, opts) => stairPrimitivesForCut(contrib, cut, FULL_WIDTH_COLUMNS, opts).filter(p => p.__o === HIDDEN_STEP_MARK);
+  const baseZ = 5 * WINDING_RISER;
+  assert.ok(hiddenOf({ ...c, flights: [] }, windingCrossingCut(c, baseZ)).length >= 2, '前提: seq3 相当では出る');
+  // 前縁ちょうどの切断で視線が上り口向き（-forwardSign）: 回転部は視線の背後
+  const seq1 = { ...windingCrossingCut(c, 0), line: { isVertical: !c.isVertical, axisValue: c.frame.front, lo: 0, hi: 2000 }, viewSign: -c.forwardSign };
+  assert.deepEqual(hiddenOf({ ...c, flights: [] }, seq1), []);
+  assert.deepEqual(hiddenOf(c, cutAt('2', { isVertical: true, axisValue: 500, lo: 0, hi: 4500 })), [], '縦断');
+  assert.deepEqual(hiddenOf({ ...c, flights: [] }, windingCrossingCut(c, baseZ), { farSide: false }), [], '階段下の部屋の帯');
+  assert.deepEqual(hiddenTurnStepPrimitives(null, windingCrossingCut(c, baseZ)), []);
+  assert.deepEqual(hiddenTurnStepPrimitives({ ...c, flights: [] }, { ...windingCrossingCut(c, baseZ), viewSign: undefined }), [], 'viewSign 無し');
+  // スライスしていない寄与を直接渡しても自分で withCutLandings を通す（踏面の破線が断面の床線と重ならない）
+  const direct = hiddenTurnStepPrimitives({ ...c, flights: [] }, windingCrossingCut(c, baseZ));
+  const viaCut = hiddenOf({ ...c, flights: [] }, windingCrossingCut(c, baseZ));
+  assert.deepEqual(direct, viaCut);
+  const g2 = makeGraph();
+  const sb = makeSwitchbackFixture(g2);
+  const c2 = stairContribution(sb.stair, g2, FLOOR_HEIGHT);
+  assert.deepEqual(hiddenOf({ ...c2, flights: [] }, windingCrossingCut(c2, c2.landings[0].z)), [], '折返しは回転部のセルが無い');
+});
+
+test('【回帰・裁定2026-10-15】landingStepRisers: 回転部を縦断する切断の蹴上（セルの走行方向の共有辺）は従来どおり全部 CUT', () => {
+  const graph = makeGraph();
+  const { stair } = makeWindingFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const cut = cutAt('2', { isVertical: true, axisValue: 500, lo: 0, hi: 4500 });
+  const risers = landingStepRisers(withCutLandings(c, cut).landings, true, cut);
+  assert.ok(risers.length >= 2 && risers.every(p => p.weight === 'thick' && !p.dash));
+});
+
+test('【裁定2026-10-15】crossingLandingFloorProfile: 回転部を横断する面の断面線は段状（踊り場の高さ〜最高段）。基準床が違う・縦断・折返しの平場・寄与なしは null', () => {
+  const graph = makeGraph();
+  const { stair } = makeWindingFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const baseZ = 5 * WINDING_RISER;
+  const prof = crossingLandingFloorProfile({ ...c, flights: [] }, windingCrossingCut(c, baseZ));
+  assert.ok(prof && prof.length >= 4, '段状の輪郭');
+  const zs = prof.map(p => p[1]);
+  assert.ok(Math.abs(Math.min(...zs) - baseZ) < 1e-6, '最も低い段＝踊り場の高さ');
+  assert.ok(Math.abs(Math.max(...zs) - 10 * WINDING_RISER) < 1e-6, '最高段＝回転部の最後のセル');
+  assert.ok(prof.every((p, i) => i === 0 || p[0] >= prof[i - 1][0] - 1e-6), 'x 昇順');
+  // 失敗系
+  assert.equal(crossingLandingFloorProfile({ ...c, flights: [] }, windingCrossingCut(c, 0)), null,
+    'seq1 のように基準床が踊り場の高さでない面は帯の床のまま（stairCutFloorProfile が横断の踊り場を含めないのと同じ）');
+  assert.equal(crossingLandingFloorProfile(c, cutAt('2', { isVertical: true, axisValue: 500, lo: 0, hi: 4500 })), null, '縦断は対象外');
+  assert.equal(crossingLandingFloorProfile(null, windingCrossingCut(c, baseZ)), null);
+  assert.equal(crossingLandingFloorProfile({ ...c, flights: [] }, { seqNo: '3' }), null, '切断線が無い');
+  const g2 = makeGraph();
+  const sb = makeSwitchbackFixture(g2);
+  const c2 = stairContribution(sb.stair, g2, FLOOR_HEIGHT);
+  assert.equal(crossingLandingFloorProfile({ ...c2, flights: [] }, windingCrossingCut(c2, c2.landings[0].z)), null, '折返しの平場（1枚）は段状でない');
+});
+
+test('【裁定2026-10-15】flightLadderPrimitives: 蹴上材を裏から見る往路（視線の向きへ下る flight）の梯子は材質・基準床によらず破線、上っていく復路は実線', () => {
+  for (const structure of [StructuralMaterialType.WOOD, StructuralMaterialType.STEEL]) {
+    const graph = makeGraph();
+    const { stair } = makeSwitchbackFixture(graph, structure);
+    const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+    const out = c.flights[0], back = c.flights[1];
+    const front = out.travelSign > 0 ? out.runHi : out.runLo; // 往路の踊り場側の端（前縁）＝seq1 の切断線
+    const cut = {
+      seqNo: '1', line: { isVertical: !c.isVertical, axisValue: front, lo: 0, hi: 2000 }, viewSign: -out.travelSign, dirSign: 1,
+      layers: [], zRange: { loZ: 0, hiZ: 3000 }, baseFloorZ: 0,
+    };
+    const within = (p, f) => {
+      const a = localXOf(cut, f.acrossLo), b = localXOf(cut, f.acrossHi);
+      return Math.min(p.x1, p.x2) >= Math.min(a, b) - 1e-6 && Math.max(p.x1, p.x2) <= Math.max(a, b) + 1e-6;
+    };
+    const rungsOf = (cutLike) => stairPrimitivesForCut({ ...c, landings: [] }, cutLike, FULL_WIDTH_COLUMNS, { includeStringerSightline: false })
+      .filter(p => isHorizontalLine(p) && p.weight === 'thin');
+    const rungs = rungsOf(cut);
+    const outRungs = rungs.filter(p => within(p, out)), backRungs = rungs.filter(p => within(p, back));
+    assert.ok(outRungs.length > 0 && outRungs.every(p => p.dash === 'dashed'), `${structure}: 往路（視線の向きへ下る）の梯子は破線`);
+    assert.ok(backRungs.length > 0 && backRungs.every(p => !p.dash), `${structure}: 復路（上っていく）の梯子は実線`);
+    assert.ok(!rungs.some(p => -p.y1 < 1e-6), '基準床と同じ高さの足元線（1FL）は床断面線があるので足さない');
+    // 失敗系: viewSign が無い／flight が視線の背後にある切断は従来どおり実線
+    const noView = rungsOf({ ...cut, viewSign: undefined }).filter(p => within(p, out));
+    assert.ok(noView.length > 0 && noView.every(p => !p.dash), `${structure}: viewSign 無し`);
+    const behind = rungsOf({ ...cut, viewSign: out.travelSign }).filter(p => within(p, out));
+    assert.ok(behind.length > 0 && behind.every(p => !p.dash), `${structure}: 背後の flight`);
   }
 });

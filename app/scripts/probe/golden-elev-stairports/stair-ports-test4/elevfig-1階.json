@@ -7193,6 +7193,7 @@
     "y2": -3000
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 960,
@@ -7201,6 +7202,7 @@
     "y2": -250
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 960,
@@ -7209,6 +7211,7 @@
     "y2": -500
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 960,
@@ -7217,6 +7220,7 @@
     "y2": -750
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 960,
@@ -7225,6 +7229,7 @@
     "y2": -1000
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 960,
@@ -7233,6 +7238,7 @@
     "y2": -1250
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 960,

@@ -719,6 +719,22 @@ export function ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, gapMm) {
   return { acrossLo, acrossHi };
 }
 
+/**
+ * 正面視（レーンを横切る切断）で、flight が視線の向き（cut.viewSign）へ下っているか＝蹴上材を裏から見ているか。
+ * 走行は runLo→runHi へ travelSign の向きに上る。切断線の手前（視線と反対側）にある flight（直進階段の seq1 は
+ * 上り口辺に立ち flight を背にする）は対象外。viewSign を持たない切断も対象外（false）。
+ * @param {Flight} flight
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {boolean}
+ */
+function flightDescendsAway(flight, cut) {
+  const vs = cut.viewSign;
+  if (vs !== 1 && vs !== -1) return false;
+  const mid = (flight.runLo + flight.runHi) / 2;
+  if ((mid - cut.line.axisValue) * vs <= 0) return false; // 視線の向こう側に無い
+  return Math.sign(flight.travelSign ?? 1) === -vs;
+}
+
 // レーンを横切る: 正面視の梯子（DETAIL。全段=steps）。flight.baseZがcut.baseFloorZより低い
 // （＝見返りの基準床より下の区間）なら破線にする（WP-E5b: seq1「踊り場より下の往路踏面は
 // 破線」の一般化。emitLineの§5.6最終フィルタと役割は重なるが、往路全体を一律破線にする
@@ -733,7 +749,12 @@ function flightLadderPrimitives(flight, cut, columns, ladderAcross, treadSection
   if (!range) return [];
   const { loX, hiX } = range;
   const frontZ0 = frontBaseZ(flight);
-  const dashed = frontZ0 < (cut.baseFloorZ ?? 0) - GAP_EPS;
+  // 基準床より下から始まる区間（見返りの基準床＝踊り場より下の往路）は破線。
+  const belowBase = frontZ0 < (cut.baseFloorZ ?? 0) - GAP_EPS;
+  // 蹴上材を裏から見る flight（視線の向きへ下る）も破線——蹴上の向こう側の踏面は蹴上材に隠れる
+  // （ユーザー裁定 2026-10-15「階段裏側から見ているので…破線。鉄骨階段で既に実装。材質によらない手順として」。
+  // 旧実装は鉄骨＋階段下の部屋（基準床＝踊り場）のときだけ belowBase で破線になっていた）。
+  const dashed = belowBase || flightDescendsAway(flight, cut);
   const steps = Math.max(0, Math.round(flight.steps)) + (flight.underSteps ?? 0) + (flight.overSteps ?? 0);
   const prims = [];
   // 切断線が flight の**内部**（端から STAIR_RUN_TOL_MM より奥）にあるとき、その位置の段板は実際に切られている
@@ -746,7 +767,7 @@ function flightLadderPrimitives(flight, cut, columns, ladderAcross, treadSection
   // （ユーザー明示指示2026-09「「6」C: 1FLも破線描画」）——踏面だけだと最下段の下に線が無く、
   // 区間の床がどこかが図に出ない。基準床から始まる区間（k=0＝帯自身の床＝踊り場）は
   // 既に床断面線（太線）が引かれているので足さない。
-  for (let k = dashed ? 0 : 1; k <= steps; k++) {
+  for (let k = belowBase ? 0 : 1; k <= steps; k++) {
     const z = frontZ0 + k * flight.riserMm;
     if (cutZ != null && Math.abs(z - cutZ) < 1e-6) continue; // 切られている段板の天端は下の CUT で描く
     prims.push(emitLine(cut, loX, z, hiX, z, ElevationLineRole.DETAIL, dashed ? { dash: 'dashed' } : {}));
@@ -1179,6 +1200,32 @@ function landingFloorSpanX(landing, flights, cut, columns, spanLo, spanHi) {
   return { loX, hiX };
 }
 
+/**
+ * 横断の切断（正面視）が切る踊り場か（切断線が踊り場の走行範囲に乗り、縦断ではない）。
+ * landingCutPrimitives の crossing・crossingSteppedSlices・crossingLandingFloorProfile が同じ判定を共有する。
+ */
+function isCrossingLanding(landing, stairIsVertical, cut) {
+  if (isLengthwiseCut(stairIsVertical, landing.acrossLo, landing.acrossHi, landing.runLo, landing.runHi, cut)) return false;
+  return cut.line.isVertical !== stairIsVertical
+    && cut.line.axisValue >= landing.runLo - STAIR_RUN_TOL_MM && cut.line.axisValue <= landing.runHi + STAIR_RUN_TOL_MM;
+}
+
+/**
+ * 横断の切断が段付き踊り場（回り階段の回転部を切断線で切ったスライス）を**2段以上**切るとき、最も低いスライスの高さを返す
+ * （無ければ null）。crossingLandingFloorProfile（その面の段状の断面線）の判定。スライスの床線・蹴上そのものは
+ * 従来どおり断面（太線）で描く（ユーザー裁定 2026-10-15「階段の断面線を破線にしてはいけない」）。
+ * @param {Landing[]|undefined} landings
+ * @param {boolean} stairIsVertical
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {{baseZ:number}|null}
+ */
+function crossingSteppedSlices(landings, stairIsVertical, cut) {
+  const zs = (landings ?? []).filter(l => isCrossingLanding(l, stairIsVertical, cut)).map(l => l.z);
+  if (zs.length < 2) return null;
+  const lo = Math.min(...zs), hi = Math.max(...zs);
+  return hi - lo > GAP_EPS ? { baseZ: lo } : null;
+}
+
 function landingCutPrimitives(landing, flights, stairIsVertical, cut, columns) {
   const lengthwise = isLengthwiseCut(
     stairIsVertical, landing.acrossLo, landing.acrossHi, landing.runLo, landing.runHi, cut);
@@ -1187,8 +1234,7 @@ function landingCutPrimitives(landing, flights, stairIsVertical, cut, columns) {
   // 描かず、正面視では踊り場桁枠のfront/back辺の**帯の上端**（DETAIL細線）が踊り場床の高さに
   // 見えているだけだった。x範囲は走行方向ではなく**across（壁から壁までの全幅）**で取る
   // （同指摘「踊場床断面と壁との取り合い…幅」）。
-  const crossing = !lengthwise && cut.line.isVertical !== stairIsVertical
-    && cut.line.axisValue >= landing.runLo - STAIR_RUN_TOL_MM && cut.line.axisValue <= landing.runHi + STAIR_RUN_TOL_MM;
+  const crossing = !lengthwise && isCrossingLanding(landing, stairIsVertical, cut);
   if (!lengthwise && !crossing) return [];
   const [spanLo, spanHi] = lengthwise
     ? [landing.runLo, landing.runHi]
@@ -1208,7 +1254,7 @@ function landingCutPrimitives(landing, flights, stairIsVertical, cut, columns) {
  *   - 切断が走行軸に直交して両方を横切る（正面視）… 幅方向の共有辺（レーン境界）の位置に縦線。
  * 折返し（踊り場1枚）・高さの同じ踊り場・縁を共有しない踊り場は引かない（0本）。
  * 縦線は面の描画範囲（stairDrawRange）の外に出さない。床の輪郭そのもの（段状）は
- * stairCutFloorProfile の max 合成が受け持つ。
+ * stairCutFloorProfile の max 合成（縦断）／crossingLandingFloorProfile（横断）が受け持つ。
  * @param {Landing[]|undefined} landings
  * @param {boolean} stairIsVertical
  * @param {import('./sectionTypes.js').SectionCut} cut
@@ -1856,6 +1902,123 @@ export function stairCutFloorProfile(contribution, cut, columns = null) {
   return parts.reduce((acc, p) => (acc ? mergeFloorProfiles(acc, p) : p), null);
 }
 
+// 多角形（[[x,y],...]）を半平面 f(x,y)>0 で切る（Sutherland–Hodgman）。
+function clipPolygonByHalfPlane(pts, f) {
+  const n = pts.length;
+  if (n < 3) return [];
+  const res = [];
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], q = pts[(i + 1) % n];
+    const fp = f(p[0], p[1]), fq = f(q[0], q[1]);
+    if (fp > 0) res.push(p);
+    if ((fp > 0) !== (fq > 0) && Math.abs(fq - fp) > 1e-12) {
+      const t = fp / (fp - fq);
+      res.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+    }
+  }
+  return res;
+}
+
+// 2つの多角形が共有する辺（頂点が2つ一致。順不同）。無ければ null。
+function sharedPolygonEdge(a, b, tol = 0.5) {
+  const same = (p, q) => Math.abs(p[0] - q[0]) <= tol && Math.abs(p[1] - q[1]) <= tol;
+  const shared = a.filter(p => b.some(q => same(p, q)));
+  return shared.length >= 2 ? [shared[0], shared[shared.length - 1]] : null;
+}
+
+const pairsOf = poly => { const out = []; for (let i = 0; i + 1 < poly.length; i += 2) out.push([poly[i], poly[i + 1]]); return out; };
+
+function subtractRange([lo, hi], [a, b]) {
+  if (b <= lo + GAP_EPS || a >= hi - GAP_EPS) return [[lo, hi]];
+  const out = [];
+  if (a > lo + GAP_EPS) out.push([lo, a]);
+  if (b < hi - GAP_EPS) out.push([b, hi]);
+  return out;
+}
+
+/** 呼び出し側（contentForCut）が縦線を断面線より下に切り詰めるための印（dumpElevFigure の `__o` と同じ流儀） */
+export const HIDDEN_STEP_MARK = 'hiddenStep';
+
+/**
+ * 蹴上材を裏から見る面（横断の切断が回転部のセルを切る面＝回り階段の seq3）の、切断面と壁の間にある段の見えがかり（細線破線）。
+ * ユーザー裁定 2026-10-15「moku4-3 1階 階段 C」: 断面線（切断面のスライスの床線・蹴上）は太線のまま。それとは別に、これまで
+ * 描かれていなかった「平面でいうと断面線と壁の間にある踏面」と「壁と取り合う蹴上線」を破線で描く——蹴上材の向こう側なので隠れる。
+ *   - 踏面: 各セルの切断面の向こう側（視線の側）に残る部分の幅の範囲に、そのセルの高さの水平線。断面の床線（切断面上のスライスの幅）と
+ *     重なる範囲は除く。
+ *   - 蹴上: 隣り合うセルの共有辺（放射線）の向こう側の端（壁・柱に取り合う端）に、低い段から高い段までの縦線。切断面の蹴上
+ *     （太線）や面の端の壁の縦線と重なる区間は、呼び出し側（contentForCut）が断面線より下だけに切り詰める（HIDDEN_STEP_MARK）。
+ * 材質によらない。縦断する切断・回転部の無い階段（折返し）・セルが切断面の手前（seq1 の前縁）にある面は空。
+ * @param {{turnCells?:{poly:number[], number:number, z:number}[], landings?:Landing[]}} contribution
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {{lo?:number,hi?:number}} [outerBound]
+ * @returns {object[]}
+ */
+export function hiddenTurnStepPrimitives(contribution, cut, outerBound) {
+  const cells = contribution?.turnCells ?? [];
+  if (!cells.length || !cut?.line) return [];
+  const vs = cut.viewSign;
+  if (vs !== 1 && vs !== -1) return []; // 視線の向きが無ければ「向こう側」が決まらない（flightDescendsAway と同じ）
+  contribution = withCutLandings(contribution, cut); // 切断面上のスライス（cutSliced 済みなら素通し）
+  const runOf = (x, y) => (cut.line.isVertical ? x : y);
+  const acrossOf = (x, y) => (cut.line.isVertical ? y : x);
+  const beyond = (x, y) => (runOf(x, y) - cut.line.axisValue) * vs;
+  const draw = stairDrawRange(cut, outerBound);
+  const slices = (contribution.landings ?? []).filter(l => l.turnStep != null);
+  const hidden = (x1, z1, x2, z2) => ({
+    ...emitLine(cut, x1, z1, x2, z2, ElevationLineRole.DETAIL, { dash: 'dashed', neverDowngrade: true }), __o: HIDDEN_STEP_MARK,
+  });
+  const sorted = [...cells].sort((a, b) => a.number - b.number).map(c => ({ ...c, pts: pairsOf(c.poly) }));
+  const prims = [];
+  for (const cell of sorted) {
+    const part = clipPolygonByHalfPlane(cell.pts, beyond);
+    if (part.length < 3) continue;
+    const xs = part.map(([x, y]) => localXOf(cut, acrossOf(x, y)));
+    let ranges = [[Math.max(draw.lo, Math.min(...xs)), Math.min(draw.hi, Math.max(...xs))]];
+    for (const s of slices) {
+      if (s.turnStep !== cell.number) continue;
+      const a = localXOf(cut, s.acrossLo), b = localXOf(cut, s.acrossHi);
+      ranges = ranges.flatMap(r => subtractRange(r, [Math.min(a, b), Math.max(a, b)]));
+    }
+    for (const [lo, hi] of ranges) if (hi - lo > GAP_EPS) prims.push(hidden(lo, cell.z, hi, cell.z));
+  }
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    const a = sorted[i], b = sorted[i + 1];
+    if (Math.abs(a.z - b.z) <= GAP_EPS) continue;
+    const edge = sharedPolygonEdge(a.pts, b.pts);
+    if (!edge) continue;
+    const far = beyond(edge[0][0], edge[0][1]) >= beyond(edge[1][0], edge[1][1]) ? edge[0] : edge[1];
+    if (beyond(far[0], far[1]) <= GAP_EPS) continue;
+    const x = localXOf(cut, acrossOf(far[0], far[1]));
+    if (x < draw.lo - GAP_EPS || x > draw.hi + GAP_EPS) continue;
+    prims.push(hidden(x, a.z, x, b.z));
+  }
+  return prims;
+}
+
+/**
+ * 横断の切断が段付き踊り場（回転部のスライス）を2段以上切る面の**断面線（幅方向の段状の天端）**を FloorProfile
+ * （[[localX, absZ]]）で返す。「断面線の外は描画しない」の輪郭と面端の縦線の下端に使う——閉じた断面図形の外に
+ * 太線の延長を残さない（ユーザー指摘 2026-10-15「moku4-3 1階 階段 C: 最高段踏面から下の太線は不要」）。
+ * スライスは実体の床なので材質によらず閉じる。最も低いスライスが切断の基準床（cut.baseFloorZ）に一致しない面
+ * （seq1 のように帯の床が別にある）は null＝帯の床のまま（stairCutFloorProfile が横断の踊り場を含めないのと同じ理由）。
+ * @param {{landings?:Landing[], turnCells?:object[]}|null} contribution
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {Array<[number,number]>|null}
+ */
+export function crossingLandingFloorProfile(contribution, cut) {
+  if (!contribution || !cut?.line) return null;
+  contribution = withCutLandings(contribution, cut);
+  const stairIsVertical = stairAxisIsVertical(contribution, cut);
+  const slices = (contribution.landings ?? []).filter(l => isCrossingLanding(l, stairIsVertical, cut));
+  const stepped = crossingSteppedSlices(contribution.landings, stairIsVertical, cut);
+  if (!stepped || Math.abs(stepped.baseZ - (cut.baseFloorZ ?? 0)) > GAP_EPS) return null;
+  const parts = slices.map(l => {
+    const a = localXOf(cut, l.acrossLo), b = localXOf(cut, l.acrossHi);
+    return [[Math.min(a, b), l.z], [Math.max(a, b), l.z]];
+  }).filter(p => p[1][0] - p[0][0] > GAP_EPS);
+  return parts.reduce((acc, p) => (acc ? mergeFloorProfiles(acc, p) : p), null);
+}
+
 /**
  * stairContribution の結果を、1つの切断（cut）・その列配列（columns。x範囲の決定にのみ使う——
  * 塞ぎ判定等は行わない）に対する断面プリミティブへ変換する。
@@ -2009,6 +2172,10 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   // 階段下の部屋の展開（elevationBand）は下から見上げるので出さない（opts.farSide:false）。
   if (opts.farSide !== false && cut.line.isVertical === stairIsVertical) {
     prims.push(...farSideSilhouettePrimitives(contribution, cut, columns));
+  }
+  // 蹴上材を裏から見る面（横断の切断が回転部を切る面）: 切断面と壁の間にある段の踏面の線と、蹴上が壁と取り合う端の縦線（細線破線）。
+  if (opts.farSide !== false && cut.line.isVertical !== stairIsVertical) {
+    prims.push(...hiddenTurnStepPrimitives(contribution, cut, outerBound));
   }
   // ささら側面視（鉄骨のみ。§6「鉄骨階段のみ」）: 各レーンのジグザグ点列ごとに桁成ぶん下げた
   // 輪郭（DETAIL＝切断面の向こう側にあるこのレーン自身のささら）を追加する。ユーザー指示

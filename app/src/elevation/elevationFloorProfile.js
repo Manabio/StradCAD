@@ -665,6 +665,27 @@ export function drawnFloorProfileZMax(profile, x0, x1) {
   return z;
 }
 
+/**
+ * 縦線 x:[zA,zB] のうち、描かれた断面線より**下**に残る区間 [lo,hi]（無ければ null）。段（同じ x の隣り合う折れ点）の上では
+ * 低い側で切る——段の縦線は断面の蹴上（太線）が描くので、その上に重ねない。clipSegmentAboveProfile の縦線の判定の裏返し。
+ * @param {FloorProfile|null|undefined} profile
+ * @param {number} x
+ * @param {number} zA
+ * @param {number} zB
+ * @returns {[number,number]|null}
+ */
+export function clipVerticalBelowProfile(profile, x, zA, zB) {
+  const lo = Math.min(zA, zB), hi = Math.max(zA, zB);
+  if (!profile?.length) return [lo, hi];
+  const stepZs = [];
+  for (let i = 0; i + 1 < profile.length; i++) {
+    if (Math.abs(profile[i][0] - x) <= GAP_EPS && Math.abs(profile[i + 1][0] - x) <= GAP_EPS) stepZs.push(profile[i][1], profile[i + 1][1]);
+  }
+  const floor = Math.min(drawnFloorProfileZAt(profile, x), ...stepZs);
+  if (lo >= floor - GAP_EPS) return null;
+  return [lo, Math.min(hi, floor)];
+}
+
 // 同区間の**最小**（矩形＝建具の姿の下端を詰める用。最も低い床で判定しないと、レーンの上へ
 // 伸びる姿まで切ってしまう）。
 function profileZMin(profile, x0, x1) {

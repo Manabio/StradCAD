@@ -5729,6 +5729,7 @@
     "y2": -2675.824
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5737,6 +5738,7 @@
     "y2": -300
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5745,6 +5747,7 @@
     "y2": -600
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5753,6 +5756,7 @@
     "y2": -900
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5761,6 +5765,7 @@
     "y2": -1200
    },
    {
+    "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 0,

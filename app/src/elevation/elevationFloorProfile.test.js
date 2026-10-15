@@ -13,7 +13,7 @@ import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 import {
   wallAdjacentFloorSegments, drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm,
   familyCeilingSegments, floorProfileFromSegments, mergeFloorProfiles,
-  drawnFloorProfileZAt, drawnFloorProfileZMax, clipContentAboveDrawnProfile, findRunCLAt,
+  drawnFloorProfileZAt, drawnFloorProfileZMax, clipContentAboveDrawnProfile, findRunCLAt, clipVerticalBelowProfile,
 } from './elevationFloorProfile.js';
 
 function makeGraph() {
@@ -1046,4 +1046,17 @@ test('【E4・同じ円弧の面が仕上げのセル境界で割れても 1 片
   assert.equal(segs.length, 1, 'セル境界 x=2500 で割れない');
   assert.equal(segs[0].ceilArc.alongX, 2442.5, '頭頂は面全体（x 0..5000）の中央 x=2500（ローカル 2442.5）');
   near(segs[0].ceilArc.chMm, 2800, '頭頂 2400＋ライズ400');
+});
+
+// ---- clipVerticalBelowProfile（蹴上が壁と取り合う端の縦線を断面線より下だけに。ユーザー裁定 2026-10-15）----
+test('【裁定2026-10-15】clipVerticalBelowProfile: 断面線より下だけ残す。段の上は低い側で切る。輪郭が無ければ切らない', () => {
+  const profile = [[0, 1000], [500, 1000], [500, 1200], [1000, 1200]];
+  assert.deepEqual(clipVerticalBelowProfile(profile, 250, 0, 3000), [0, 1000]);
+  assert.deepEqual(clipVerticalBelowProfile(profile, 250, 3000, 0), [0, 1000], '端の順序に依らない');
+  assert.equal(clipVerticalBelowProfile(profile, 500, 1000, 1200), null, '段の上（断面の蹴上の位置）は残さない');
+  assert.deepEqual(clipVerticalBelowProfile(profile, 500, 800, 1200), [800, 1000], '段の上は低い側で切る');
+  assert.equal(clipVerticalBelowProfile(profile, 750, 1200, 2000), null, '全体が断面線より上');
+  assert.deepEqual(clipVerticalBelowProfile(profile, 750, 600, 900), [600, 900], '全体が下ならそのまま');
+  assert.deepEqual(clipVerticalBelowProfile(null, 750, 600, 2000), [600, 2000], '輪郭が無ければ切らない');
+  assert.deepEqual(clipVerticalBelowProfile([], 750, 600, 2000), [600, 2000]);
 });
