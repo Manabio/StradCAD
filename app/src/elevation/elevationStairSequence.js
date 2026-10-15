@@ -59,6 +59,7 @@ import {
   floorProfileFromSegments, mergeFloorProfiles, drawnFloorProfileZMax, drawnFloorProfileZAt,
 } from './elevationFloorProfile.js';
 import { stairSoffitChAlong } from './space/stairSoffitCeiling.js';
+import { PARTITION_THICKNESS_MM } from '../finish/stair/stairPartition.js';
 import { stairUnderReturnSoffit } from './section/sectionProbe.js';
 import {
   GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM, ElevationLineRole, weightForRole,
@@ -471,6 +472,39 @@ export function extendLowerCeilingAcrossStrip(series, lo, hi) {
   return out;
 }
 
+// 壁のない端（上り口）で裏面が隣の天井より高いときに、斜めの天井断面を終える点の端からの入り（隔て板の壁厚/2＝57.5。
+// 復路下の仕上げ空間の天井線の到達辺側「Y4＋壁厚/2」〔underReturnSpaceOf〕と同じ量）。
+export const SOFFIT_OPEN_END_INSET_MM = PARTITION_THICKNESS_MM / 2;
+
+/**
+ * 壁のない端（上り口）で、裏面の端の高さがその端の既存の天井（隣の部屋へ続く天井。base）より高いとき、斜めの天井断面の終点を
+ * **端から inset 入った位置・base の高さ**に置き、そこから端までは base の高さの水平にする（ユーザー指示 2026-10-15
+ * 「moku4-3 1階 階段 B1, D: 階段から斜めに下りてくる天井断面の終わりは、（Y4 通りの壁厚分だけ階段側, FL+2400）の点」。
+ * 裁定: 壁厚分＝壁厚/2＝57.5〔復路下の仕上げ空間の天井線と同じ〕）。裏面の端が base 以下・端に壁がある・inset が区間列に
+ * 収まらないときは不変。返り値は新しい配列。
+ * @param {Array<{loX:number,hiX:number,z0:number,z1:number}>} series 昇順・隙間なし
+ * @param {'left'|'right'} end
+ * @param {number} baseZ その端の既存の天井の高さ
+ * @param {number} inset 端からの入り
+ */
+export function endSoffitAtOpenEndCeiling(series, end, baseZ, inset) {
+  if (!series?.length || !Number.isFinite(baseZ) || !(inset > GAP_EPS)) return series;
+  const xMin = series[0].loX, xMax = series[series.length - 1].hiX;
+  const edgeZ = end === 'left' ? series[0].z0 : series[series.length - 1].z1;
+  if (!(edgeZ - baseZ > GAP_EPS)) return series;
+  const xCut = end === 'left' ? xMin + inset : xMax - inset;
+  if (xCut <= xMin + GAP_EPS || xCut >= xMax - GAP_EPS) return series;
+  const split = splitSeriesAt(series, xCut);
+  if (end === 'left') {
+    const rest = split.filter(s => s.loX >= xCut - GAP_EPS);
+    if (!rest.length) return series;
+    return [{ loX: xMin, hiX: xCut, z0: baseZ, z1: baseZ }, { ...rest[0], z0: baseZ }, ...rest.slice(1)];
+  }
+  const rest = split.filter(s => s.hiX <= xCut + GAP_EPS);
+  if (!rest.length) return series;
+  return [...rest.slice(0, -1), { ...rest[rest.length - 1], z1: baseZ }, { loX: xCut, hiX: xMax, z0: baseZ, z1: baseZ }];
+}
+
 /**
  * 切断 cut に階段の裏面（soffit）を天井として載せる。切断線の深さ（cut.line.axisValue）で切った裏面を、
  * **同じ区間列**から 体裁の ceilingProfile（返り値）とエンジンの cut.ceilClip（打ち切り専用。性格判定は ceilProfile のまま）に写す。
@@ -478,9 +512,11 @@ export function extendLowerCeilingAcrossStrip(series, lo, hi) {
  * （頭打ちしない。裏面は上階天井 chUpperAbsMm を超えうる＝E5-0 の実測）。cut は呼び出し側が switchbackCuts から得た新しい
  * オブジェクトで、ここで直接書き換える（zRange は共有オブジェクトを書き換えず差し替える）。
  * 裏面が無い・切断線が足元の外ならば null（cut は不変）。
- * @param {{partitionStrip?:{lo:number,hi:number}|null}} [opts] partitionStrip … 切断線を横切る隔て板（往復レーンの境界の壁）の
- *   材の範囲（世界の幅方向座標）。あれば帯をはさんで低い側の天井を向こう面まで延ばす（extendLowerCeilingAcrossStrip）。
- *   切断線と平行な壁は渡さない（呼び出し側が向きで判定する）。
+ * @param {{partitionStrip?:{lo:number,hi:number}|null, openEnds?:{left?:boolean, right?:boolean}}} [opts]
+ *   partitionStrip … 切断線を横切る隔て板（往復レーンの境界の壁）の材の範囲（世界の幅方向座標）。あれば帯をはさんで低い側の
+ *   天井を向こう面まで延ばす（extendLowerCeilingAcrossStrip）。切断線と平行な壁は渡さない（呼び出し側が向きで判定する）。
+ *   openEnds … 壁のない端（上り口）。その端で裏面が base より高ければ斜めの天井断面を端から SOFFIT_OPEN_END_INSET_MM 入った
+ *   base の高さの点で終える（endSoffitAtOpenEndCeiling）。base が無い切断（seq1/3/5）には効かない。
  * @returns {{ceilingProfile:Array<[number,number]>, ends:{left:number|null, right:number|null}}|null}
  */
 export function applyStairSoffitToCut(soffit, cut, base, baseFallbackZ, opts = {}) {
@@ -498,6 +534,11 @@ export function applyStairSoffitToCut(soffit, cut, base, baseFallbackZ, opts = {
     const sa = localXOf(cut, strip.lo), sb = localXOf(cut, strip.hi);
     series = extendLowerCeilingAcrossStrip(series, Math.min(sa, sb), Math.max(sa, sb));
   }
+  if (base?.length && opts.openEnds) {
+    const d = 1e-3;
+    if (opts.openEnds.left) series = endSoffitAtOpenEndCeiling(series, 'left', drawnFloorProfileZAt(base, xMin + d), SOFFIT_OPEN_END_INSET_MM);
+    if (opts.openEnds.right) series = endSoffitAtOpenEndCeiling(series, 'right', drawnFloorProfileZAt(base, xMax - d), SOFFIT_OPEN_END_INSET_MM);
+  }
   cut.ceilClip = series.map(s => ({ loX: s.loX, hiX: s.hiX, ceilZ: s.z0, ceilZHi: s.z1 }));
   const soffitTop = Math.max(...spans.flatMap(s => [s.z0, s.z1]));
   if (cut.zRange && soffitTop > cut.zRange.hiZ) cut.zRange = { ...cut.zRange, hiZ: soffitTop };
@@ -511,9 +552,10 @@ export function applyStairSoffitToCut(soffit, cut, base, baseFallbackZ, opts = {
   const first = spans[0], last = spans[spans.length - 1];
   return {
     ceilingProfile,
+    // 端の値は最終の区間列から（壁のない端で base の高さに置き換えた値を反映。端が裏面で覆われていなければ従来どおり null）
     ends: {
-      left: first.loX <= xMin + 1e-3 ? first.z0 : null,
-      right: last.hiX >= xMax - 1e-3 ? last.z1 : null,
+      left: first.loX <= xMin + 1e-3 ? series[0].z0 : null,
+      right: last.hiX >= xMax - 1e-3 ? series[series.length - 1].z1 : null,
     },
   };
 }
@@ -1120,7 +1162,9 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   const applySoffit = (seqNo, base) => {
     const cut = cutOf(seqNo);
     const strip = partitionStrip && midWall && cut?.line && cut.line.isVertical !== midWall.isVertical ? partitionStrip : null;
-    const applied = applyStairSoffitToCut(soffit, cut, base, ceilTopAbs, { partitionStrip: strip });
+    // 壁のない端（face.hasWallAtLocal0/Run が false）: 上り口の先の部屋の天井（base）が裏面より低ければそこで終える。
+    const openEnds = cut?.face ? { left: cut.face.hasWallAtLocal0 === false, right: cut.face.hasWallAtLocalRun === false } : null;
+    const applied = applyStairSoffitToCut(soffit, cut, base, ceilTopAbs, { partitionStrip: strip, openEnds });
     if (applied) soffitEnds[seqNo] = applied.ends;
     return applied;
   };

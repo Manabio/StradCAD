@@ -8,7 +8,7 @@ import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js';
 import { uTurnSoffitFromLayout } from '../ceiling/stairSoffit.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, partitionStripOf } from './elevationStairSequence.js';
+import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, partitionStripOf, endSoffitAtOpenEndCeiling, SOFFIT_OPEN_END_INSET_MM } from './elevationStairSequence.js';
 import { stairSoffitAbove } from './space/stairSoffitCeiling.js';
 import { buildSpaceIndex } from './space/spaceModel.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
@@ -160,6 +160,48 @@ test('【指示2026-10-15】partitionStripOf: 同じ軸 CL 上で走りが重な
   assert.deepEqual(partitionStripOf(owner, { walls: [owner] }), { lo: 865, hi: 967.5 }, '1 枚だけ');
   assert.equal(partitionStripOf(null, { walls: [] }), null, '壁なし');
   assert.equal(partitionStripOf({ materialRange: null, coord1: 0, coord2: 1 }, { walls: [] }), null, '材の範囲なし');
+});
+
+// ---------------------------------------------------------------- 壁のない端で裏面を隣の天井で終える（ユーザー指示 2026-10-15 moku4-3 1階 B1/D）
+
+test('【指示2026-10-15】endSoffitAtOpenEndCeiling: 端の裏面が base より高ければ、端から inset 入った base の高さの点で斜線を終え、端までは水平', () => {
+  const ser = [{ loX: 0, hiX: 852.5, z0: 2476, z1: 3615 }, { loX: 852.5, hiX: 1747.5, z0: 3615, z1: 3988 }];
+  const left = endSoffitAtOpenEndCeiling(ser, 'left', 2400, 57.5);
+  assert.deepEqual(left, [{ loX: 0, hiX: 57.5, z0: 2400, z1: 2400 }, { loX: 57.5, hiX: 852.5, z0: 2400, z1: 3615 }, ser[1]], '左端: 水平 2400 → (57.5, 2400) から斜線');
+  assert.equal(ser[0].z0, 2476, '引数は書き換えない');
+  const mirrored = [{ loX: 0, hiX: 895, z0: 3988, z1: 3615 }, { loX: 895, hiX: 1747.5, z0: 3615, z1: 2476 }];
+  const right = endSoffitAtOpenEndCeiling(mirrored, 'right', 2400, 57.5);
+  assert.deepEqual(right, [mirrored[0], { loX: 895, hiX: 1690, z0: 3615, z1: 2400 }, { loX: 1690, hiX: 1747.5, z0: 2400, z1: 2400 }], '右端は鏡像');
+  assert.equal(SOFFIT_OPEN_END_INSET_MM, 57.5, '入りは隔て板の壁厚/2（復路下の仕上げ空間の天井線と同じ）');
+});
+
+test('【指示2026-10-15・失敗系】endSoffitAtOpenEndCeiling: 裏面の端が base 以下・base が非有限・inset が区間列に収まらない・空は不変', () => {
+  const ser = [{ loX: 0, hiX: 852.5, z0: 2300, z1: 3615 }];
+  assert.equal(endSoffitAtOpenEndCeiling(ser, 'left', 2400, 57.5), ser, '裏面が低い（2300 < 2400）');
+  assert.equal(endSoffitAtOpenEndCeiling(ser, 'left', NaN, 57.5), ser, 'base が無い');
+  assert.equal(endSoffitAtOpenEndCeiling([{ loX: 0, hiX: 50, z0: 2476, z1: 2600 }], 'left', 2400, 57.5).length, 1, 'inset が区間列より長い');
+  assert.equal(endSoffitAtOpenEndCeiling(ser, 'left', 2400, 0), ser, 'inset 0');
+  assert.equal(endSoffitAtOpenEndCeiling([], 'left', 2400, 57.5).length, 0, '空');
+});
+
+test('【指示2026-10-15】applyStairSoffitToCut: openEnds の端だけ、base（上り口の先の天井）で裏面を終える。base の無い切断・壁のある端は従来', () => {
+  const cutOf = () => laneCut({ dirSign: -1 }); // 上り口が x=0（左）
+  const base = [[0, 2000], [3000, 2000], [3942.5, 5400]];
+  const plain = cutOf();
+  applyStairSoffitToCut(soffitOf(L0), plain, base, 5400);
+  near(plain.ceilClip[0].ceilZ, 2400, '前提: 従来は裏面の端 2400 のまま（base 2000 より高い）');
+  const open = cutOf();
+  const applied = applyStairSoffitToCut(soffitOf(L0), open, base, 5400, { openEnds: { left: true } });
+  near(open.ceilClip[0].loX, 0, '水平の区間'); near(open.ceilClip[0].hiX, SOFFIT_OPEN_END_INSET_MM, '入り'); near(open.ceilClip[0].ceilZ, 2000, 'base の高さ');
+  near(open.ceilClip[1].loX, SOFFIT_OPEN_END_INSET_MM, '斜線の始まり'); near(open.ceilClip[1].ceilZ, 2000, '斜線は base の高さから'); near(open.ceilClip[1].ceilZHi, zTop(6), '斜線の終わり');
+  near(applied.ceilingProfile[0][1], 2000, '折れ線も base から'); near(applied.ceilingProfile[1][0], SOFFIT_OPEN_END_INSET_MM, '折れ目');
+  near(applied.ends.left, 2000, '端の値は base');
+  const walled = cutOf();
+  applyStairSoffitToCut(soffitOf(L0), walled, base, 5400, { openEnds: { left: false, right: true } });
+  assert.deepEqual(walled.ceilClip, plain.ceilClip, '壁のある端・base より低い裏面の端（右）は従来');
+  const noBase = cutOf();
+  applyStairSoffitToCut(soffitOf(L0), noBase, null, 5400, { openEnds: { left: true } });
+  near(noBase.ceilClip[0].ceilZ, 2400, 'base の無い切断は従来');
 });
 
 // ---------------------------------------------------------------- stairChDimChains（CH 寸法の上端）
