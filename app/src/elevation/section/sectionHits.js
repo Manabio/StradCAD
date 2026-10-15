@@ -848,10 +848,8 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
           // 開口なので、`emitColumns`が壁の断面ではなく開口として描く。
           const openRanges = openingPassThroughRangesFor(
             w, layer.graph, line.axisValue, info.floorZ, z0, z1);
-          // 天端が階段の裏面との取り合い（junction。復路下の壁）の切断壁は、天端の線を細線にする（sectionEmit.js cutWallTopEdges）
           hits.push({ kind: 'cut', wall: w, layer, distMm: 0, z0, z1, openRanges,
-            isKneeDrop: isKneeDropRange(z0, z1, info), hidden, ...(wallTop ? { profiledTop: true } : {}),
-            ...(wallTop?.junction ? { junctionTop: true } : {}) });
+            isKneeDrop: isKneeDropRange(z0, z1, info), hidden, ...(wallTop ? { profiledTop: true } : {}) });
         }
       } else if (isCutAlongWall(w, line)) {
         const hidden = isHiddenWall(cut, w, layer, probeCtx);
@@ -1113,8 +1111,6 @@ export function visibleBandsOf(hits, cut, opts = {}) {
         kind: frontMatch.kind, z0, z1, wall: frontMatch.wall, layerRole: frontMatch.layer.role,
         thicknessMm: Math.abs(mr.hi - mr.lo), isKneeDrop: frontMatch.isKneeDrop === true,
         ...(frontMatch.profiledTop ? { profiledTop: true } : {}),
-        // 天端が階段の裏面との取り合い（平らな天端が連続する天井との接線。復路下の壁）＝天端の線は細線
-        ...(frontMatch.junctionTop ? { junctionTop: true } : {}),
       };
       // 切断壁でも、そのz区間が建具の開口なら開口として印を付ける（見えがかり壁と同じ規約）。
       // どの建具かも持たせる——emitColumnsがその建具の断面（枠・扉）を描くため。

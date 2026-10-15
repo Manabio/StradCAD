@@ -265,9 +265,7 @@ function cutWallTopEdges(columns, cut, ceilZ, emitCtx) {
     // （階段帯の裏面の ceilClip）ときは列の min と比べる（どれかの列で天井に届いていれば天端は引かない）。
     .filter(r => !r.band.ceilEdge && r.band.z1 < runLimitZ(columns, r, topZ) - GAP_EPS)
     .flatMap(r => [
-      // 階段の裏面との取り合いの天端（junctionTop。復路下の壁）は壁の自由な縁ではなく、傾斜天井との接線＝細線
-      // （見えがかり壁の天端〔emitColumns〕と同じ規約）。
-      emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, r.band.junctionTop ? ElevationLineRole.DETAIL : ElevationLineRole.CUT, { ceilZ }),
+      emitLine(cut, r.x0, r.band.z1, r.x1, r.band.z1, ElevationLineRole.CUT, { ceilZ }),
       // 笠木の帯は腰壁・垂れ壁のもの——天端プロファイルの壁（隔て壁の斜め天端）には無い。
       ...(r.band.profiledTop ? []
         : kneeCapUnderline(cut, r.x0, r.x1, r.band.z1, r.band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT))),

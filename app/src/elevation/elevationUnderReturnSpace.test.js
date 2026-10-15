@@ -22,13 +22,12 @@ import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 const OPTS = { floorHeight: 2400, chUpperAbsMm: 4800, chLowerMm: 2400 };
 const CUT = weightForRole(ElevationLineRole.CUT);
 const SIL = weightForRole(ElevationLineRole.SILHOUETTE);
-const DETAIL = weightForRole(ElevationLineRole.DETAIL);
 const near = (a, b, msg, tol = 1e-6) => assert.ok(Math.abs(a - b) < tol, `${msg}: ${a} vs ${b}`);
 
 // 折返し階段（踊り場 y0..1500 全幅・往路/復路レーン y1500..4500。flip=true＝往路が x 大側・復路が x 0..1000、flip=false はその逆）。
 // openReturnSide: 復路レーンの外側の壁（seq5 が見る壁）の到達辺側 y 3500..4500 を開口にして、その向こうに隣室を置く
 // （stair-ports-test5 の構成。仕上げ空間の奥の開放辺に隣室の天井線・壁端の縦線・アキが現れる）。
-function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel = null, openReturnSide = false } = {}) {
+function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel = null, openReturnSide = false, chLowerMm = OPTS.chLowerMm } = {}) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   graph.structureOverride = structure === StructuralMaterialType.WOOD ? TRADITIONAL_WOOD_STRUCTURE : structure;
   const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
@@ -68,8 +67,8 @@ function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel
   // 直上の層（階高 2400）: 復路下の壁の天端（sectionProbe.js addUnderReturnTops）は直上の層の階高から蹴上を決める
   const upperGraph = new PlanGraph(new Plane('p2', OPTS.floorHeight, '2階', 2, 1));
   const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] });
-  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, upperGraph, layers });
-  return { graph, room, stair, underWalls, entries, seq5: entries.find(e => e.seqNo === '5') };
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, chLowerMm, upperGraph, layers });
+  return { graph, room, stair, underWalls, entries, chLowerMm, seq5: entries.find(e => e.seqNo === '5') };
 }
 
 const verticalsAt = (e, x, weight) => e.content.filter(p => p.type === 'line' && weight.includes(p.weight)
@@ -94,11 +93,13 @@ function wallLocals(fx) {
 }
 
 // 裏面の断面線＝床と上階 FL の間に収まる中線の折れ線（段板の裏のジグザグは上階 FL に達する）
+// （段板の裏のジグザグは垂直の片を持ち上階 FL に達する。天井仕上げの線は x が単調で床と CH の間）
 const soffitLinesOf = seq5 => seq5.content.filter(p => p.type === 'polyline' && p.weight === SIL && p.points.length >= 2
-  && p.points.every(([, y]) => -y > 0 && -y < OPTS.floorHeight));
+  && p.points.every(([, y]) => -y > 0 && -y <= OPTS.chLowerMm + 1e-6)
+  && p.points.every(([x], i) => i === 0 || Math.abs(x - p.points[i - 1][0]) > 1e-6));
 
 for (const flip of [true, false]) {
-  test(`木造（flip=${flip}）: seq5 の断面線は到達辺から復路下の壁の向こうの面まで床（0）で、壁の断面（両面の太線＋細線の天端）が描かれる`, () => {
+  test(`木造（flip=${flip}）: seq5 の断面線は到達辺から復路下の壁の仕上げ空間側の面まで床（0）で、壁の断面線はその面の縦線だけ（踊り場側の面・天端は描かない）`, () => {
     const fx = makeFixture(StructuralMaterialType.WOOD, { flip });
     const { underWalls, seq5 } = fx;
     assert.equal(underWalls.length, 2, '復路下の壁（オーナー壁＋薄壁）が立つ');
@@ -110,29 +111,36 @@ for (const flip of [true, false]) {
       const x = spaceEnd + (spaceInner - spaceEnd) * t;
       near(drawnFloorProfileZAt(seq5.floorProfile, x), 0, `仕上げ空間（x=${x}）の断面線は床`);
     }
-    near(drawnFloorProfileZAt(seq5.floorProfile, (spaceInner + spaceOuter) / 2), 0, '壁の厚みの中も床');
+    assert.ok(drawnFloorProfileZAt(seq5.floorProfile, (spaceInner + spaceOuter) / 2) > 1000, '壁の厚みの中は段の裏の断面線のまま（描かない側）');
     const landingX = seq5.landingEnd === 'left' ? 1 : seq5.face.run - 1;
     assert.ok(drawnFloorProfileZAt(seq5.floorProfile, landingX) >= 1200 - 1e-6, '踊り場側の断面線は踊り場の高さ以上');
-    // 床線は壁の踊り場側の面まで（flatLineSpanX）
+    // 床線は壁の仕上げ空間側の面まで（flatLineSpanX）
     const seg = seq5.floorSegments[0];
     const floorEnd = seq5.landingEnd === 'left' ? (seg.flatLineSpanX?.lo ?? seg.loX) : (seg.flatLineSpanX?.hi ?? seg.hiX);
-    near(floorEnd, spaceOuter, '床線は壁の踊り場側の面まで');
-    // 壁の断面: 両面の太線（床から天端まで）と、天端の細線（階段の裏面との取り合い＝自由な縁ではない）
-    const edgeLo = verticalsAt(seq5, wallLoX, [CUT]), edgeHi = verticalsAt(seq5, wallHiX, [CUT]);
-    assert.equal(edgeLo.length, 1, `壁の面 x=${wallLoX} の断面の縦線が 1 本（実際 ${JSON.stringify(edgeLo)}）`);
-    assert.equal(edgeHi.length, 1, `壁の面 x=${wallHiX} の断面の縦線が 1 本`);
-    near(Math.max(-edgeLo[0].y1, -edgeLo[0].y2), Math.max(-edgeHi[0].y1, -edgeHi[0].y2), '両面の上端は同じ高さ（平らな天端）');
-    near(Math.min(-edgeLo[0].y1, -edgeLo[0].y2), 0, '壁の断面は床から');
-    const topZ = Math.max(-edgeLo[0].y1, -edgeLo[0].y2);
-    assert.ok(topZ > 0 && topZ < 1200, `天端は床と踊り場の間（実際 ${topZ}）`);
-    const top = seq5.content.filter(p => p.type === 'line' && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - topZ) < 1e-6
+    near(floorEnd, spaceInner, '床線は壁の仕上げ空間側の面まで');
+    // 壁の断面線: 仕上げ空間側の面の縦線だけ（床から天井仕上げの断面線の端まで。断面エンジンの縦線＋天端からの延長）
+    const edgeIn = verticalsAt(seq5, spaceInner, [CUT]), edgeOut = verticalsAt(seq5, spaceOuter, [CUT]);
+    assert.ok(edgeIn.length >= 1, `壁の仕上げ空間側の面 x=${spaceInner} に断面の縦線がある（実際 ${JSON.stringify(edgeIn)}）`);
+    assert.equal(edgeOut.length, 0, `壁の踊り場側の面 x=${spaceOuter} には縦線を描かない`);
+    const zLo = Math.min(...edgeIn.map(p => Math.min(-p.y1, -p.y2))), zHi = Math.max(...edgeIn.map(p => Math.max(-p.y1, -p.y2)));
+    near(zLo, 0, '壁の断面線は床から');
+    const soffit = soffitLinesOf(seq5);
+    assert.equal(soffit.length, 1, '天井仕上げの断面線');
+    const wallPt = [...soffit[0].points].sort((a, b) => a[0] - b[0])[seq5.landingEnd === 'left' ? 0 : soffit[0].points.length - 1];
+    near(wallPt[0], spaceInner, '天井仕上げの断面線の壁側の端は仕上げ空間側の面の上');
+    near(zHi, -wallPt[1], '壁の縦線の上端＝天井仕上げの断面線の端（隙間なし）');
+    // 縦線は連続（断面エンジンの天端までの縦線と、そこから天井仕上げまでの延長が切れ目なく並ぶ）
+    const sorted = edgeIn.map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]).sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < sorted.length; i++) near(sorted[i][0], sorted[i - 1][1], '縦線に隙間がない');
+    // 天端の水平線は無い（壁の厚みは描かない側）
+    const top = seq5.content.filter(p => p.type === 'line' && Math.abs(p.y1 - p.y2) < 1e-6
       && Math.abs(Math.min(p.x1, p.x2) - wallLoX) < 1e-6 && Math.abs(Math.max(p.x1, p.x2) - wallHiX) < 1e-6);
-    assert.equal(top.length, 1, '天端の線が 1 本');
-    assert.equal(top[0].weight, DETAIL, '天端の線は細線（junctionTop）');
+    assert.equal(top.length, 0, '壁の天端の線は描かない');
   });
 
-  test(`木造（flip=${flip}）: seq5 に復路の裏面＝天井仕上げの断面線（中線）が到達辺から壁の踊り場側の面まで引かれ、手前の天井（CH）から垂直の段でつながる。本体の中に壁の content は無い`, () => {
-    const fx = makeFixture(StructuralMaterialType.WOOD, { flip });
+  test(`木造（flip=${flip}）: seq5 の天井仕上げの断面線（中線）は Y4＋壁厚/2 と FL＋CH の交点から壁の仕上げ空間側の面まで 1 本で、垂直の段は無い。本体の中に壁の content は無い`, () => {
+    // この fixture の裏面の始まりは約 1993（階高 2400・蹴上 200）なので、CH 1800 で「交点」が裏面より下になる構成
+    const fx = makeFixture(StructuralMaterialType.WOOD, { flip, chLowerMm: 1800 });
     const { seq5 } = fx;
     const face = seq5.face;
     const soffit = soffitLinesOf(seq5);
@@ -142,15 +150,17 @@ for (const flip of [true, false]) {
     const wallPt = seq5.landingEnd === 'left' ? first : last;
     const arrivalEnd = seq5.landingEnd === 'left' ? last : first;
     const wallEdge = verticalsAt(seq5, wallPt[0], [CUT]);
-    assert.equal(wallEdge.length, 1, '裏面の線の壁側の端は壁の面の上');
-    near(-wallPt[1], Math.max(-wallEdge[0].y1, -wallEdge[0].y2), '裏面の線の壁側の端＝壁の天端');
+    assert.ok(wallEdge.length >= 1, '裏面の線の壁側の端は壁の面の上');
     assert.ok(-arrivalEnd[1] > -wallPt[1], '裏面は到達辺へ向かって上がる');
-    assert.ok(-arrivalEnd[1] < OPTS.floorHeight, '到達辺側の端は上階 FL より下（裏面の厚みぶん）');
-    near(arrivalEnd[0], seq5.landingEnd === 'left' ? face.run : 0, '到達辺側の端は面の端（到達辺）');
-    // 手前の天井（階段室の CH 2400）から裏面の端までの垂直の段
+    near(-arrivalEnd[1], fx.chLowerMm, '到達辺側の端の高さは FL＋CH（階段室の CH）');
+    // 到達辺側の端の x は Y4＋壁厚/2＝裏面の始まり（最上段の段板の前縁）。この fixture の面は到達辺の壁の内面（通り芯＋57.5）を
+    // 原点にするので、面の端（0 または run）と一致する（moku4-3 のように到達辺に壁が無い面では面の端＋57.5）
+    const arrivalX = seq5.landingEnd === 'left' ? face.run : 0;
+    near(arrivalEnd[0], arrivalX, '到達辺側の端は Y4＋壁厚/2（＝この面の端）');
+    // 垂直の段（CH→裏面の実高）は無い（面端の壁の縦線 recess〔床から上階天井まで〕とは別）
     const joint = verticalsAt(seq5, arrivalEnd[0], [SIL]).filter(p =>
-      Math.abs(Math.max(-p.y1, -p.y2) - OPTS.chLowerMm) < 1e-6 && Math.abs(Math.min(-p.y1, -p.y2) - -arrivalEnd[1]) < 1e-6);
-    assert.equal(joint.length, 1, `CH(${OPTS.chLowerMm})→裏面の端の垂直の段が 1 本`);
+      Math.abs(Math.max(-p.y1, -p.y2) - fx.chLowerMm) < 1e-6 && Math.min(-p.y1, -p.y2) > 0);
+    assert.equal(joint.length, 0, `到達辺側に CH からの垂直の段は無い（実際 ${JSON.stringify(joint)}）`);
     // 復路の本体（裏面〜段板の上面）の中に壁の断面・見えがかり・アキ（階段自身の線以外の line）の点は無い
     const soffitZAt = x => -drawnFloorProfileZAt(pts, x); // 折れ線の点は図座標（y = −z）
     const bodyTopAt = x => drawnFloorProfileZAt(seq5.stairFloorProfile, x);
@@ -223,17 +233,43 @@ test('【床段差】階段室の floorLevel が 300 なら、仕上げ空間の
   const fx = makeFixture(StructuralMaterialType.WOOD, { floorLevel: 300 });
   const { seq5 } = fx;
   const { wallLoX, wallHiX, spaceEnd, spaceInner } = wallLocals(fx);
+  void wallHiX;
   const z = drawnFloorProfileZAt(seq5.floorProfile, spaceEnd + (spaceInner - spaceEnd) * 0.5);
   near(z, 300, '空間の断面線は階段室の床（段差込み）');
-  const edges = [...verticalsAt(seq5, wallLoX, [CUT]), ...verticalsAt(seq5, wallHiX, [CUT])];
-  assert.equal(edges.length, 2, '壁の両面の断面');
-  for (const e of edges) near(Math.min(-e.y1, -e.y2), 300, '壁の断面の下端は床');
+  const edges = verticalsAt(seq5, spaceInner, [CUT]);
+  assert.ok(edges.length >= 1, '壁の仕上げ空間側の面の断面');
+  near(Math.min(...edges.map(e => Math.min(-e.y1, -e.y2))), 300, '壁の断面の下端は床');
+  assert.equal(verticalsAt(seq5, wallLoX === spaceInner ? wallHiX : wallLoX, [CUT]).length, 0, '踊り場側の面は描かない');
   const soffit = soffitLinesOf(seq5);
   assert.equal(soffit.length, 1, '裏面の断面線');
   const pts = [...soffit[0].points].sort((a, b) => a[0] - b[0]);
   const wallPt = seq5.landingEnd === 'left' ? pts[0] : pts[pts.length - 1];
-  near(-wallPt[1], Math.max(-edges[0].y1, -edges[0].y2), '壁の天端＝裏面の線の壁側の端（同じ床の基準）');
-  assert.ok(-wallPt[1] > 300, '天端は床より上');
+  near(-wallPt[1], Math.max(...edges.map(e => Math.max(-e.y1, -e.y2))), '壁の縦線の上端＝裏面の線の壁側の端（同じ床の基準）');
+  assert.ok(-wallPt[1] > 300, '端は床より上');
+});
+
+test('【失敗系】CH が裏面の始まりより高い（天井仕上げが段板の中に入る）ときは、到達辺側の端は裏面の実高のまま（CH へ上げない）', () => {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xm = cl(CenterLineType.VERTICAL, 1000), x1 = cl(CenterLineType.VERTICAL, 2000);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), ym = cl(CenterLineType.HORIZONTAL, 1500), y1 = cl(CenterLineType.HORIZONTAL, 4500);
+  const cells = new Set([`${x0.id}:${y0.id}:${x1.id}:${ym.id}`, `${x0.id}:${ym.id}:${xm.id}:${y1.id}`, `${xm.id}:${ym.id}:${x1.id}:${y1.id}`]);
+  const room = graph.addRoom(new Set(cells), '階段');
+  generateRoomWallsFromOutline(graph, room);
+  const stair = graph.addStair({ type: StairType.SWITCHBACK, cells, roomId: room.id, sections: [6, 1, 6], riser: null, upDirection: 'up', flip: true });
+  stair.setField('structure', StructuralMaterialType.WOOD);
+  generateStairUnderReturnWalls(graph, { structure: TRADITIONAL_WOOD_STRUCTURE });
+  // 復路レーン（x 0..1000）を縦断する切断。局所 x＝世界 y（原点 0・dirSign +1）。踊り場は y 0..1500＝左端（landingEnd 'left'）、
+  // 到達辺は y 4500＝右端なので、仕上げ空間は壁（y 1500 付近）から右へ、到達辺側の節は x 最大
+  const cut = { line: { isVertical: true, axisValue: 500, lo: 0, hi: 4500 }, dirSign: 1, landingEnd: 'left' };
+  const low = underReturnSpaceOf(stair, graph, cut, OPTS.floorHeight, 0, 1000);
+  const high = underReturnSpaceOf(stair, graph, cut, OPTS.floorHeight, 0, 9000);
+  const none = underReturnSpaceOf(stair, graph, cut, OPTS.floorHeight, 0, null);
+  const arrival = s => s.soffit.reduce((a, n) => (n.x > a.x ? n : a), s.soffit[0]);
+  near(arrival(low).z, 1000, 'CH が裏面より低ければ CH');
+  near(arrival(high).z, arrival(none).z, 'CH が裏面より高ければ裏面の実高のまま');
+  assert.ok(arrival(none).z < 9000 && arrival(none).z > 1000, '前提: 裏面の実高は 1000 と 9000 の間');
 });
 
 test('【対照】鉄骨（復路下の壁なし）: seq5 の断面線は復路の段板の裏のままで、裏面の線・床への切替えは無い', () => {

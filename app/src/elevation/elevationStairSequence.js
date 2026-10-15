@@ -78,7 +78,7 @@ import { graphList } from '../graphReadScope.js';
  * @param {number} floorZMm 階段室の床の絶対 z（層スタックの floorZFor）
  * @returns {{loX:number, hiX:number, wallLoX:number, wallHiX:number, onLo:boolean, soffit:Array<{x:number, z:number, gapBefore:boolean}>}|null}
  */
-export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm) {
+export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm, ceilAbsMm = null) {
   if (!cut?.line) return null;
   const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm });
   if (!found || found.line.isVertical === cut.line.isVertical) return null;
@@ -93,11 +93,13 @@ export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm) {
   const xb = localXOf(cut, Math.max(...ranges.map(r => r.hi)));
   const wallLoX = Math.min(xa, xb), wallHiX = Math.max(xa, xb);
   // 仕上げ空間は壁の踊り場と反対側（到達辺まで）。踊り場側は cut.landingEnd（面の向きから決まる）。
-  // 範囲は壁の厚みを含む（壁の断面＝両面の縦線と天端の線を、壁の向こうの段の裏の断面線で切らないため）。
+  // 範囲は壁の仕上げ空間側の面まで（壁の断面線は階段下スペース側の面だけ。壁の厚みの中・踊り場側の面・天端は、壁の向こうの
+  // 段の裏の断面線の下＝描かない側。ユーザー指示 2026-10-15）。
   const xMin = Math.min(localXOf(cut, cut.line.lo), localXOf(cut, cut.line.hi));
   const xMax = Math.max(localXOf(cut, cut.line.lo), localXOf(cut, cut.line.hi));
   const onLo = cut.landingEnd !== 'left';
-  const loX = onLo ? xMin : wallLoX, hiX = onLo ? wallHiX : xMax;
+  const loX = onLo ? xMin : wallHiX, hiX = onLo ? wallLoX : xMax;
+  const wallFaceX = onLo ? wallLoX : wallHiX;
   if (hiX - loX <= GAP_EPS) return null;
   const wa = worldOf(cut, loX), wb = worldOf(cut, hiX);
   const nodes = stairSoffitChAlong({ solid, floorStepMm: 0 }, {
@@ -105,7 +107,16 @@ export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm) {
   });
   if (!nodes || nodes.length < 2) return null;
   const soffit = nodes.map(n => ({ x: localXOf(cut, n.run), z: n.ch, gapBefore: n.gapBefore === true }));
-  return { loX, hiX, wallLoX, wallHiX, onLo, soffit };
+  // 到達辺側の端の高さは Y4＋壁厚/2（裏面の始まり＝最上段の段板の前縁）と FL＋CH の交点（ユーザー指示 2026-10-15
+  // 「天井線の Y4 側は、Y4＋壁厚/2 と FL＋CH の交点から」）——天井仕上げの断面線はそこから壁へ下る 1 本の線。
+  // CH が裏面の実高より高い（天井仕上げが段板の中に入る）ときは裏面の実高のまま（仕上げは構造より上に置けない）。
+  if (Number.isFinite(ceilAbsMm)) {
+    const edge = soffit.reduce((a, n) => (onLo ? (n.x < a.x ? n : a) : (n.x > a.x ? n : a)), soffit[0]);
+    edge.z = Math.min(ceilAbsMm, edge.z);
+  }
+  // 壁の天端（sectionProbe.js stairUnderReturnSoffit＝壁の天端 addUnderReturnTops と同じ値）。断面エンジンが引く壁の面の
+  // 縦線はここまでなので、天井仕上げの断面線の端まで縦線を延ばす（underReturnCeilingPrimitives）
+  return { loX, hiX, wallLoX, wallHiX, wallFaceX, wallTopZ: found.wallTopZ, onLo, soffit };
 }
 
 /**
@@ -190,10 +201,11 @@ export function clipContentInsideStairBody(prims, space) {
 
 /**
  * 復路下の仕上げ空間の天井（復路の裏面）の断面＝天井仕上げの断面線（他の天井断面線と同じ太さ）。足元の途切れでは分ける。
- * 到達辺側の端（裏面の始まり＝最上段の段板の前縁）では、その手前の天井（階段室の CH。断面エンジンが引く水平線）から
- * 裏面の高さまで垂直の段を足し、天井の断面線をつなぐ。
+ * 到達辺側の端は Y4＋壁厚/2 と FL＋CH の交点（underReturnSpaceOf が節の高さを置き換え済み）。壁側の端では、壁の仕上げ空間側の
+ * 面の縦線を、断面エンジンが引く天端（壁の厚みの最も低い点の裏面）から天井仕上げの断面線の端まで太線で延ばす
+ * （壁の断面線は階段下スペース側の面だけ。ユーザー指示 2026-10-15）。
  */
-function underReturnCeilingPrimitives(space, ceilAbsMm) {
+function underReturnCeilingPrimitives(space) {
   const weight = weightForRole(ElevationLineRole.SILHOUETTE);
   const out = [];
   let run = [];
@@ -203,11 +215,12 @@ function underReturnCeilingPrimitives(space, ceilAbsMm) {
     run.push([n.x, -n.z || 0]);
   }
   flush();
-  // 到達辺側の端＝仕上げ空間が lo 側なら断面ローカル x の最小の節、hi 側なら最大の節（節列は世界の走り座標の昇順なので、
+  // 壁側の端＝仕上げ空間が lo 側なら断面ローカル x の最大の節、hi 側なら最小の節（節列は世界の走り座標の昇順なので、
   // dirSign<0 の面では配列の先頭・末尾と逆になる）
-  const edge = space.soffit.reduce((a, n) => (space.onLo ? (n.x < a.x ? n : a) : (n.x > a.x ? n : a)), space.soffit[0]);
-  if (edge && Number.isFinite(ceilAbsMm) && Math.abs(edge.z - ceilAbsMm) > GAP_EPS) {
-    out.push({ type: 'line', x1: edge.x, y1: -ceilAbsMm || 0, x2: edge.x, y2: -edge.z || 0, weight });
+  const wallEnd = space.soffit.reduce((a, n) => (space.onLo ? (n.x > a.x ? n : a) : (n.x < a.x ? n : a)), space.soffit[0]);
+  if (wallEnd && Number.isFinite(space.wallTopZ) && wallEnd.z - space.wallTopZ > GAP_EPS) {
+    out.push({ type: 'line', x1: wallEnd.x, y1: -space.wallTopZ || 0, x2: wallEnd.x, y2: -wallEnd.z || 0,
+      weight: weightForRole(ElevationLineRole.CUT) });
   }
   return out;
 }
@@ -1078,7 +1091,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     // 踊り場（underFloorZ）でも、この空間は到達辺の部屋へ開く床面なので床区間を分ける。
     const selfLayer5 = (cutOf('5').layers ?? []).find(l => l?.role === 'self') ?? null;
     const selfFloorZ5 = selfLayer5 ? probeCtx.floorZOf(bandRoom, selfLayer5) : 0;
-    const underReturn5 = underReturnSpaceOf(stair, graph, cutOf('5'), floorHeight, selfFloorZ5);
+    const underReturn5 = underReturnSpaceOf(stair, graph, cutOf('5'), floorHeight, selfFloorZ5, ceilLowAbs);
     const rawSegments5 = underReturn5 && Math.abs(underFloorZ - selfFloorZ5) > GAP_EPS
       ? [[0, underReturn5.loX, underFloorZ], [underReturn5.loX, underReturn5.hiX, selfFloorZ5], [underReturn5.hiX, outFace5.run, underFloorZ]]
         .filter(([a, b]) => b - a > GAP_EPS)
@@ -1100,7 +1113,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       ...(underReturn5 ? { stairFloorProfile: stairProfile5 } : {}),
       ...(soffit5 ? { ceilingProfile: soffit5.ceilingProfile } : {}),
       ...fields5,
-      content: [...fields5.content, ...(underReturn5 ? underReturnCeilingPrimitives(underReturn5, ceilLowAbs) : [])],
+      content: [...fields5.content, ...(underReturn5 ? underReturnCeilingPrimitives(underReturn5) : [])],
       skipBaseboard: true, skipWallLabel: true,
     });
   }

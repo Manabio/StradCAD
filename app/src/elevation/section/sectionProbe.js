@@ -62,7 +62,9 @@ function layerDirectlyAbove(layers, layer) {
  * @param {object} graph
  * @param {{floorHeight:number|null, floorZMm:number}} q floorHeight … 蹴上の推定に使う階高（直上の層の FL − 自階の FL）。
  *   floorZMm … 階段室の床の絶対 z（層スタックの floorZFor(room, layer)）。裏面の高さはこれを基準に段の天端 − 厚みで決まる
- * @returns {{walls:import('@core').Wall[], line:{isVertical:boolean, axisValue:number, lo:number, hi:number}, solid:object}|null}
+ * wallTopZ … 壁の天端（壁の軸上・区間の中央で、厚み方向 ±半厚と軸の 3 点の裏面の最小。平らな天端が壁の厚みのどこでも裏面より下に
+ *   収まるように。裏面は走行方向に傾き、壁の回転部側の面が最も低い）。求まらなければ null。
+ * @returns {{walls:import('@core').Wall[], line:{isVertical:boolean, axisValue:number, lo:number, hi:number}, solid:object, wallTopZ:number|null}|null}
  */
 export function stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm }) {
   if (!stair || !graph) return null;
@@ -78,7 +80,14 @@ export function stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm }) 
   const riser = riserOf(stair, floorHeight);
   if (!Number.isFinite(riser) || !Number.isFinite(floorZMm)) return null;
   const solid = stairSoffitSolids({ stair, graph, riser, floorZMm })[0];
-  return solid ? { walls, line, solid } : null;
+  if (!solid) return null;
+  const mid = (line.lo + line.hi) / 2;
+  const half = PARTITION_THICKNESS_MM / 2;
+  const z = Math.min(...[-half, 0, half].map(d => {
+    const p = line.isVertical ? [line.axisValue + d, mid] : [mid, line.axisValue + d];
+    return solid.zAt ? solid.zAt(...p) : solid.zLo;
+  }));
+  return { walls, line, solid, wallTopZ: Number.isFinite(z) ? z : null };
 }
 
 // 復路下の壁（stairPartition.js isStairUnderReturnWall）→ 平らな天端。壁は復路レーンの裏面で止まる（その上は階段の
@@ -89,18 +98,10 @@ function addUnderReturnTops(out, graph, floorHeight, layer, floorZFor) {
   for (const stair of graphList(graph, 'stairs') ?? []) {
     const room = graph.roomMap?.get(stair.roomId) ?? null;
     const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm: floorZFor(room, layer) });
-    if (!found) continue; // 復路下の壁なし・裏面が組めない＝フルハイト
-    const { walls, line: g, solid } = found;
-    const mid = (g.lo + g.hi) / 2;
-    // 壁の厚み方向（軸 ±半厚）の最も低い点で評価する——平らな天端が、壁の厚みのどこでも階段の裏面より下に収まるように
-    // （裏面は走行方向に傾く。壁の回転部側の面が最も低い）。
-    const half = PARTITION_THICKNESS_MM / 2;
-    const z = Math.min(...[-half, 0, half].map(d => {
-      const p = g.isVertical ? [g.axisValue + d, mid] : [mid, g.axisValue + d];
-      return solid.zAt ? solid.zAt(...p) : solid.zLo;
-    }));
-    if (!Number.isFinite(z)) continue;
-    // junction … 天端は階段の裏面（傾斜天井）との取り合い。壁の自由な縁ではないので展開図では細線（sectionEmit.js）
+    if (!found || found.wallTopZ == null) continue; // 復路下の壁なし・裏面が組めない＝フルハイト
+    const { walls, wallTopZ: z } = found;
+    // junction … 天端は階段の裏面（傾斜天井）との取り合い。壁の自由な縁ではないので、見えがかりの天端は細線（sectionEmit.js emitColumns）。
+    // 階段帯の seq5 は壁の仕上げ空間側の面だけを描き天端は描かない（elevationStairSequence.js underReturnSpaceOf）
     for (const w of walls) out.set(w.id, { zAt: () => z, crossings: () => [], junction: true });
   }
 }
