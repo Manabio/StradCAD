@@ -14,7 +14,7 @@
  * OpeningTagLayer.jsx と同じ構成でGroup描画する）。
  */
 import { CenterLineType, OpeningCategory } from '@core';
-import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallLessEndAt, openingsReachingCorner, cornerOpeningZRanges } from './elevationFaces.js';
+import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallContinuationBeyondFaceEnd, wallLessEndAt, openingsReachingCorner, cornerOpeningZRanges } from './elevationFaces.js';
 import { openingSectionPrimitives, wallMaterialRangeForOpening } from '../openings/openingSection.js';
 import { FRAME_OVERHANG_MM } from '../openings/openingPlanSymbolGeometry.js';
 import { openingTagPartsOf, effectiveHeight } from '../openings/openingNumbering.js';
@@ -1364,6 +1364,13 @@ export function buildFaceFigure(face, ctx) {
       // （riser）の抑止の両方が自動的に効く。
       ...wallLessRuns.map(r => [r.lo, r.hi]),
     ].sort((a, b) => a[0] - b[0]);
+    // **巾木は壁面に沿う部材**（ユーザー指示2026-10-15）: 壁のない端部（hasWallAtLocal0/Run===false）では、面の壁が
+    // 面の端の外へ実際に続く範囲だけ、はね出しへ伸ばす（上限は端部の延長量＝drawnX0/Run が面の外へ出ている量）。
+    // 壁が面の端で終わる（続かない）端は従来どおり面の端で止める（2026-09「11'」B1）。壁のある端は従来どおり。
+    const baseboardBeyond0 = face.hasWallAtLocal0 === false
+      ? wallContinuationBeyondFaceEnd(face, graph, '0', Math.max(0, -drawnX0)) : 0;
+    const baseboardBeyondRun = face.hasWallAtLocalRun === false
+      ? wallContinuationBeyondFaceEnd(face, graph, 'Run', Math.max(0, drawnXRun - run)) : 0;
     for (const [i, s] of segs.entries()) {
       const y = floorYOf(s) - baseboardH;
       // 新仕様「段差位置のCLオフセット」: 内部境界はriserXAt（床が低い側へ半壁厚ずらした位置）を使う。
@@ -1377,8 +1384,8 @@ export function buildFaceFigure(face, ctx) {
       // **CL（segs[i].loX/hiX）へ戻してはいけない**——巾木がCLで止まり、はね出した床線との間に
       // 段が付く旧不具合の再発（2026-08の指摘）。否定されたのは「はね出しへ伸ばす」部分だけ。
       // Math.max/minなのは階段帯のfloorSpanXクランプ（狭める方向）を壊さないため。
-      const segLo = i === 0 ? Math.max(drawnX0, 0) : riserXAt(i - 1);
-      const segHi = i === segs.length - 1 ? Math.min(drawnXRun, run) : riserXAt(i);
+      const segLo = i === 0 ? Math.max(drawnX0, -baseboardBeyond0 || 0) : riserXAt(i - 1);
+      const segHi = i === segs.length - 1 ? Math.min(drawnXRun, run + baseboardBeyondRun) : riserXAt(i);
       let cursor = segLo;
       for (const [gLo, gHi] of floorGaps) {
         const cgLo = Math.max(gLo, segLo), cgHi = Math.min(gHi, segHi);

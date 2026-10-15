@@ -3520,3 +3520,35 @@ test('【注記の CH 範囲に遠側の斜線の hi 端が入る】近側 2400 
   const same = centersOf(buildFaceFigure(openSpansFace({ farCeilAbsMm: 2820, farCeilHiAbsMm: 3000 }), baseCtx({ ceilingHeight: 2400, floorSegments })));
   for (const l of same) assert.equal(l.y1, -3000 - GRID_LINE_ABOVE_CH_MM, `近側の最高 3000 が基準のまま。実際:${l.y1}`);
 });
+
+// ---- 巾木は壁面に沿う部材（ユーザー指示 2026-10-15「moku4-3 階段 B2: Y4 側は左側中線まで」）----
+// 壁のない端部では、面の壁が面の端の外へ実際に続く範囲だけ巾木をはね出しへ伸ばす（上限は端部の延長量）。
+const beyondWall = (coord1, coord2) => ({ isVertical: false, axisCL: AXIS_Y0, coord1, coord2 });
+const beyondCtx = walls => baseCtx({
+  room: makeRoom({}, BB), wallLessEndExtendModelMm: 150, graph: makeGraph({ walls }),
+});
+
+test('【2026-10-15】buildFaceFigure: 壁のない端で面の壁が端の外へ 72.5 続く→巾木はその小口（-72.5, run+72.5）まで伸びる', () => {
+  const prims = buildFaceFigure(makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false }),
+    beyondCtx([beyondWall(-72.5, 4072.5)]));
+  assert.deepEqual(baseboardSpans(prims), [[-72.5, 4072.5]]);
+});
+
+test('【失敗系・2026-10-15】buildFaceFigure: 壁が面の端で終わる→0..run のまま（「11\'」B1）／壁のある端は壁が続いても伸ばさない', () => {
+  const faceWallLess = makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false });
+  assert.deepEqual(baseboardSpans(buildFaceFigure(faceWallLess, beyondCtx([beyondWall(0, 4000)]))), [[0, 4000]]);
+  const wallAtEnds = buildFaceFigure(makeFace(), beyondCtx([beyondWall(-72.5, 4072.5)]));
+  assert.deepEqual(baseboardSpans(wallAtEnds), [[0, 4000]]);
+});
+
+test('【失敗系・2026-10-15】buildFaceFigure: 壁が端の外へ延長量(150)より長く続いても、巾木は延長量までしか伸びない', () => {
+  const prims = buildFaceFigure(makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false }),
+    beyondCtx([beyondWall(-400, 4400)]));
+  assert.deepEqual(baseboardSpans(prims), [[-150, 4150]]);
+});
+
+test('【失敗系・2026-10-15】buildFaceFigure: 壁が面の端より 57.5 手前で終わる（壁のない端部の見かけの隙間）→ 巾木は 0..run のまま伸びない', () => {
+  const prims = buildFaceFigure(makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false }),
+    beyondCtx([beyondWall(57.5, 3942.5)]));
+  assert.deepEqual(baseboardSpans(prims), [[0, 4000]]);
+});

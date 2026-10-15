@@ -53,7 +53,7 @@ import {
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
 import { stairSectionIsClosed } from './elevationStairSection.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
-import { labelFaces, letterOf, upperFloorEndsOf, wallLessEndAt } from './elevationFaces.js';
+import { labelFaces, letterOf, upperFloorEndsOf, wallLessEndAt, wallContinuationBeyondFaceEnd } from './elevationFaces.js';
 import {
   collectRunBreaks, clipContentAboveDrawnProfile,
   floorProfileFromSegments, mergeFloorProfiles, drawnFloorProfileZMax, drawnFloorProfileZAt,
@@ -243,15 +243,20 @@ const UNDER_RETURN_BEYOND_PROBE_MM = 100;
  * @param {{graph:object, role:string}|null} selfLayer
  * @param {number} floorZ 仕上げ空間の床の z（階段室の床）
  * @param {object|null} stairRoom 階段室（到達辺に壁があるときの巾木の出どころ）
+ * @param {object} graph 階段室の階（面の壁が到達辺の外へ続く長さを引く）
+ * @param {number} endExtendMm 壁のない端部の延長量（巾木のはね出しの上限）
  * @returns {object[]}
  */
-function underReturnBaseboardPrimitives(space, cut, probeCtx, selfLayer, floorZ, stairRoom) {
+function underReturnBaseboardPrimitives(space, cut, probeCtx, selfLayer, floorZ, stairRoom, graph, endExtendMm) {
   if (!selfLayer || typeof probeCtx?.cellAt !== 'function') return [];
-  const arrivalX = space.onLo ? space.loX : space.hiX;
+  let arrivalX = space.onLo ? space.loX : space.hiX;
   const hasWallAtArrival = (space.onLo ? cut.face?.hasWallAtLocal0 : cut.face?.hasWallAtLocalRun) !== false;
   let room = stairRoom;
   if (!hasWallAtArrival) {
-    const run = worldOf(cut, arrivalX + (space.onLo ? -1 : 1) * UNDER_RETURN_BEYOND_PROBE_MM);
+    // 巾木は壁面に沿う部材: 面の壁が到達辺の外へ続く範囲（壁のない端部の延長量まで）は、その小口まで伸ばす（2026-10-15）
+    const beyond = cut.face ? wallContinuationBeyondFaceEnd(cut.face, graph, space.onLo ? '0' : 'Run', endExtendMm) : 0;
+    arrivalX += (space.onLo ? -1 : 1) * beyond;
+    const run = worldOf(cut, (space.onLo ? space.loX : space.hiX) + (space.onLo ? -1 : 1) * UNDER_RETURN_BEYOND_PROBE_MM);
     const [wx, wy] = cut.line.isVertical ? [cut.line.axisValue, run] : [run, cut.line.axisValue];
     room = probeCtx.cellAt(selfLayer, wx, wy)?.room ?? null;
   }
@@ -1151,7 +1156,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       ...(soffit5 ? { ceilingProfile: soffit5.ceilingProfile } : {}),
       ...fields5,
       content: [...fields5.content, ...(underReturn5
-        ? [...underReturnCeilingPrimitives(underReturn5), ...underReturnBaseboardPrimitives(underReturn5, cutOf('5'), probeCtx, selfLayer5, selfFloorZ5, bandRoom)]
+        ? [...underReturnCeilingPrimitives(underReturn5), ...underReturnBaseboardPrimitives(underReturn5, cutOf('5'), probeCtx, selfLayer5, selfFloorZ5, bandRoom, graph, endExtendMm)]
         : [])],
       skipBaseboard: true, skipWallLabel: true,
     });

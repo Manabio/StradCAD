@@ -699,6 +699,44 @@ export function wallCoverageGapsOnFace(face, graph) {
   return gaps.filter(g => g.hi > g.lo + SPLIT_MERGE_EPS_MM);
 }
 
+/**
+ * 面の壁が、面の端（局所 0 または run）の**外へ実際に続いている長さ**（mm。壁のない端部の巾木のはね出し量。
+ * ユーザー指示 2026-10-15「巾木は、壁面に沿ってある部材なので」）。`wallCoverageGapsOnFace` と同じ壁の選び方
+ * （同じ通りの壁）で局所区間を**クリップせずに**作って結合し、面の端を含む（SPLIT_MERGE_EPS_MM 以内）区間が端の外へ
+ * 出ている長さを `maxMm` で頭打ちにして返す。端を含む区間が無い・外へ出ていない・壁が皆無・graph.walls が無いときは 0。
+ * 通りの両側の壁を区別しない（sameAxisLine。2 枚方式の相手側の壁だけが続く場合も伸びる）。
+ * @param {object} face
+ * @param {object} graph
+ * @param {'0'|'Run'} end
+ * @param {number} maxMm - 上限（壁のない端部の延長量）
+ * @returns {number}
+ */
+export function wallContinuationBeyondFaceEnd(face, graph, end, maxMm) {
+  const walls = graphList(graph, 'walls');
+  if (!Array.isArray(walls) || !(maxMm > 0)) return 0;
+  const run = face.run;
+  const spans = walls
+    .filter(w => w.isVertical === face.isVertical && sameAxisLine(w.axisCL, face.axisCL))
+    .map(w => {
+      const a = (w.coord1 - face.originWorld) * face.dirSign;
+      const b = (w.coord2 - face.originWorld) * face.dirSign;
+      return { lo: Math.min(a, b), hi: Math.max(a, b) };
+    })
+    .filter(r => r.hi > r.lo)
+    .sort((a, b) => a.lo - b.lo);
+  const merged = [];
+  for (const r of spans) {
+    const last = merged[merged.length - 1];
+    if (last && r.lo <= last.hi + SPLIT_MERGE_EPS_MM) last.hi = Math.max(last.hi, r.hi);
+    else merged.push({ ...r });
+  }
+  const at = end === '0' ? 0 : run;
+  const span = merged.find(r => r.lo <= at + SPLIT_MERGE_EPS_MM && r.hi >= at - SPLIT_MERGE_EPS_MM);
+  if (!span) return 0;
+  const beyond = end === '0' ? -span.lo : span.hi - run;
+  return Math.max(0, Math.min(beyond, maxMm));
+}
+
 // perpFaceAt の隅一致判定許容差(mm)。elevationStepFace.js（見付け面の隅スナップ・挿入位置探索）・
 // elevationOpenSpan.js（開放スパンの端の直交壁面スナップ）が共有する。
 export const CORNER_TOL_MM = 200;

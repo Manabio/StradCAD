@@ -30,7 +30,8 @@ const near = (a, b, msg, tol = 1e-6) => assert.ok(Math.abs(a - b) < tol, `${msg}
 // hallBaseboard: 到達辺（y=4500）の外側に部屋「ホール」（y4500..6500）を置き、その RoomFinish.baseboardHeight に入れる文字列
 // （null＝部屋を置かない）。openArrival: 到達辺（y=4500）の壁を外して空間がホールへ開く（moku4-3 と同じ。既定は壁あり）。
 // stairBaseboard: 階段室自身の RoomFinish.baseboardHeight（null＝未設定）。
-function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel = null, openReturnSide = false, chLowerMm = OPTS.chLowerMm, hallBaseboard = null, openArrival = false, stairBaseboard = null } = {}) {
+// wallBeyondMm: 復路の外側の壁（面の壁）を到達辺（y=4500）の外へこの長さだけ延ばす（openArrival と併用。null＝延ばさない）。
+function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel = null, openReturnSide = false, chLowerMm = OPTS.chLowerMm, hallBaseboard = null, openArrival = false, stairBaseboard = null, wallBeyondMm = null } = {}) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   graph.structureOverride = structure === StructuralMaterialType.WOOD ? TRADITIONAL_WOOD_STRUCTURE : structure;
   const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
@@ -80,6 +81,12 @@ function makeFixture(structure, { flip = true, withRoomUnder = false, floorLevel
     for (const w of [...graph.walls]) {
       if (!w.isVertical && Math.abs(w.axisCL.effectiveValue - 4500) < 1e-6) graph.removeShape(w.id);
     }
+  }
+  if (wallBeyondMm != null) {
+    const outer = flip ? x0 : x1;
+    const base = graph.walls.find(w => w.isVertical && Math.abs(w.axisCL.effectiveValue - outer.effectiveValue) < 1e-6);
+    const props = { isRoomWall: base.isRoomWall, wallFinish: base.wallFinish, backingOffset: base.backingOffset, backingDepth: base.backingDepth, finishSide: base.finishSide };
+    graph.addWall(outer, base.axisValue - outer.effectiveValue, true, y1, -57.5, cl(CenterLineType.HORIZONTAL, 4500 + wallBeyondMm), 0, props);
   }
   const entries = stairFaceSequence(stair, composeRoomFaces(room, graph, { keepWallLessFaces: openArrival }), graph, { ...OPTS, chLowerMm, upperGraph, layers });
   return { graph, room, stair, underWalls, entries, chLowerMm, seq5: entries.find(e => e.seqNo === '5') };
@@ -416,3 +423,22 @@ test('【失敗系・巾木】巾木の高さが裏面より高いときは引�
   const steel = makeFixture(StructuralMaterialType.STEEL, { hallBaseboard: 'h=60', openArrival: true });
   assert.equal(baseboardLines(steel.seq5, 60).length, 0);
 });
+
+// ---- 巾木は壁面に沿う部材（ユーザー指示 2026-10-15「B2: Y4 側は左側中線まで」）----
+// 到達辺に壁が無いとき、面の壁が到達辺の外へ続く範囲だけ、巾木をその小口まで（壁のない端部の延長量 150 を上限に）伸ばす。
+for (const flip of [true, false]) {
+  test(`【巾木・壁面に沿う（flip=${flip}）】面の壁が到達辺の外へ 72.5 続くと、巾木は面の端の外 72.5（小口）から。延長量を超える壁でも 150 まで`, () => {
+    const startOf = fx => {
+      const lines = baseboardLines(fx.seq5, 60);
+      assert.equal(lines.length, 1);
+      const { spaceEnd } = wallLocals(fx);
+      const xs = [lines[0].x1, lines[0].x2];
+      // 到達辺側の端（面の端 spaceEnd から外へ何 mm 出ているか。外＝面の外側）
+      return flip ? spaceEnd - Math.min(...xs) : Math.max(...xs) - spaceEnd;
+    };
+    const mk = o => makeFixture(StructuralMaterialType.WOOD, { flip, hallBaseboard: 'h=60', openArrival: true, ...o });
+    near(startOf(mk({ wallBeyondMm: 72.5 })), 72.5, '壁が 72.5 続く→小口まで');
+    near(startOf(mk({ wallBeyondMm: 400 })), 150, '延長量 150 が上限');
+    near(startOf(mk({})), 0, '壁が続かない→面の端（0 または run）から');
+  });
+}
