@@ -708,6 +708,48 @@ export function clipHiddenSegmentBelowProfile(profile, x1, z1, x2, z2) {
   return kept;
 }
 
+/**
+ * clipHiddenSegmentBelowProfile の相方: 回転部の切断面の向こうの踏面・蹴上のうち、描かれた断面線より**上**＝断面の前の空間に
+ * あって見える区間だけを返す（ユーザー指示 2026-10-15「X2+910より右にある階段断面線から壁までの見え掛かりを細線描画して」）。
+ *   - 縦線: 段（同じ x の隣り合う折れ点）の上では高い側で切る——段の区間は断面の蹴上（太線）そのものなので重ねない。
+ *   - 水平線: 輪郭の断点で分け、片の内側で輪郭より高い片だけ残す（輪郭と同じ高さは断面の床線そのものなので残さない）。
+ * 輪郭が無ければそのまま返す。
+ * @param {FloorProfile|null|undefined} profile
+ * @param {number} x1
+ * @param {number} z1
+ * @param {number} x2
+ * @param {number} z2
+ * @returns {Array<[[number,number],[number,number]]>}
+ */
+export function clipHiddenSegmentAboveProfile(profile, x1, z1, x2, z2) {
+  if (!profile?.length) return [[[x1, z1], [x2, z2]]];
+  if (Math.abs(x2 - x1) <= GAP_EPS) {
+    const stepZs = [];
+    for (let i = 0; i + 1 < profile.length; i++) {
+      if (Math.abs(profile[i][0] - x1) <= GAP_EPS && Math.abs(profile[i + 1][0] - x1) <= GAP_EPS) stepZs.push(profile[i][1], profile[i + 1][1]);
+    }
+    const floor = Math.max(drawnFloorProfileZAt(profile, x1), ...stepZs);
+    const lo = Math.min(z1, z2), hi = Math.max(z1, z2);
+    if (hi <= floor + GAP_EPS) return [];
+    return [[[x1, Math.max(lo, floor)], [x1, hi]]];
+  }
+  if (Math.abs(z2 - z1) > GAP_EPS) return [[[x1, z1], [x2, z2]]];
+  const z = z1;
+  const lo = Math.min(x1, x2), hi = Math.max(x1, x2);
+  const xs = [lo, ...profile.map(([px]) => px).filter(px => px > lo + GAP_EPS && px < hi - GAP_EPS), hi];
+  const kept = [];
+  for (let i = 0; i + 1 < xs.length; i++) {
+    const xl = xs[i], xr = xs[i + 1];
+    if (xr - xl <= GAP_EPS) continue;
+    const q = (xr - xl) / 4;
+    if (z <= drawnFloorProfileZMax(profile, xl + q, xr - q) + GAP_EPS) continue;
+    const last = kept[kept.length - 1];
+    if (last && Math.abs(last[1][0] - xl) <= GAP_EPS) last[1] = [xr, z];
+    else kept.push([[xl, z], [xr, z]]);
+  }
+  return kept;
+}
+
 // 同区間の**最小**（矩形＝建具の姿の下端を詰める用。最も低い床で判定しないと、レーンの上へ
 // 伸びる姿まで切ってしまう）。
 function profileZMin(profile, x0, x1) {
