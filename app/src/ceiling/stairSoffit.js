@@ -19,6 +19,8 @@
  *            内側の奥 I = zA+Δ/2。Δ = zB − zA = 回転部固有の蹴上 × 蹴上（回転部のマス数−1）。踊り場（マス数 1）は Δ=0 で平ら。
  *            角度等分は「段数によらず 4 三角」から導いた既定（ユーザー裁定待ち）。
  *   復路   … 矩形 R_B（幅 sB〜s1 × 復路側の前縁 front 〜 到達辺 baseB）。front で 最後の回転部マスの天端 − dz zB → baseB で 総蹴上の天端 − dz の線形。
+ *            到達辺が入口柱の回転部側の面 Q3（layout.columnBases）なら、さらに柱巻きの前縁 Q1（＝baseA。壁の外）まで同じ高さで平らな矩形 R_E
+ *            （到達辺と壁の間に梁型は無い。2026-10-16）。
  *   直進系 … STRAIGHT は base → end の 1 矩形、STRAIGHT_LANDING は 直進部1 → 踊り場（平ら）→ 直進部2 の 3 矩形（区間ごとの線形）。
  * 既知の限界: 取りつき回転部（側面の出入口）を往路の平面に含める／L_TURN・FLARED・OPEN_WELL・蹴上が求まらない階段は裏面なし。
  */
@@ -138,6 +140,10 @@ export function uTurnSoffitFromLayout(L, { zStart, zTop }) {
 
   const rA = asm.ramp(s0, sA, run.baseA, frontA, zStart, zA);
   const rB = asm.ramp(sB, s1, front, run.baseB, zB, zEnd);
+  // 復路の基端が入口柱の回転部側の面 Q3（columnBases）のとき、裏面は最終段の高さ zEnd のまま平らに柱巻きの前縁 Q1
+  // （＝往路の基端 baseA＝Y4 の壁の外）まで続く——到達辺と壁の間に梁型は無い（ユーザー指摘 2026-10-16「moku4-3 1階 階段 B2, D2:
+  // 2階天井断面は Y4 の壁外始点が正解（＝梁型はない）」。往路 R_A は Q1 から始まるのに復路 R_B だけ Q3 で終わる非対称だった）。
+  const rEnd = L.columnBases && rB ? asm.ramp(sB, s1, run.baseB, run.baseA, zEnd, zEnd) : null;
   // 回転部 A（往路側）: P_A=(pv, frontA)・F_A=(s0, frontA)・外側の奥の角 O_A=(s0, back)・内側の奥 I=(pv, back)
   // 回転部 B（復路側）: P_B=(pv, front)・F_B=(s1, front)・O_B=(s1, back)
   const qA = turnQuad(asm, { a0: s0, a1: pv, r0: frontA, r1: back }, {
@@ -152,6 +158,7 @@ export function uTurnSoffitFromLayout(L, { zStart, zTop }) {
   // 前縁（レーンごと 1 本）。R_A/Q_A・R_B/Q_B の共有辺だけ足す（残りは矩形の輪郭として出る）
   if (rA) lines.push(asm.line(s0, frontA, nearerTo(s0, sA, pv), frontA));
   if (rB) lines.push(asm.line(nearerTo(s1, sB, pv), front, s1, front));
+  if (rEnd) lines.push(asm.line(sB, run.baseB, s1, run.baseB)); // 到達辺（斜面→平らの折れ目）
   if (delta > 0) { // 対角線（ピボット → 外側の奥の角。全長）。踊り場は平らなので描かない
     lines.push(asm.line(pv, frontA, s0, back));
     lines.push(asm.line(pv, front, s1, back));
@@ -163,7 +170,11 @@ export function uTurnSoffitFromLayout(L, { zStart, zTop }) {
     const hi = Math.min(Math.max(run.baseA, frontA), Math.max(front, run.baseB));
     if (hi - lo >= MIN_SPAN_MM) lines.push(asm.line(sA, lo, sA, hi));
   }
-  return asm.solid([rA, qA, qB, rB], lines, [zStart, zA, zB, zEnd, zA + delta / 4, zI, zA + 3 * delta / 4]);
+  const out = asm.solid([rA, qA, qB, rB, rEnd], lines, [zStart, zA, zB, zEnd, zA + delta / 4, zI, zA + 3 * delta / 4]);
+  // 到達辺の外の平らな区間（R_E）。復路下の仕上げ空間の天井線（elevationStairSequence.js underReturnSpaceOf）は到達辺 run で
+  // 終える（「Y4＋壁厚/2 と FL＋CH の交点から壁へ下る 1 本」の規則を保つ）ので、立体に区間を添える。
+  if (out && rEnd) out.arrivalFlat = { run: run.baseB, endRun: run.baseA, across: [Math.min(sB, s1), Math.max(sB, s1)], vertical };
+  return out;
 }
 
 function uTurnSolid(stair, graph, ctx) {

@@ -991,6 +991,7 @@ function resolveUTurnPlan(stair, b, { spans, laneGapMm = 0, partition = null }) 
  *   totalSteps … 総蹴上数 S+e+a（最終番号＝上階の床。段 n の天端は n×蹴上）
  *   n1/n2 … 往路・復路の直進部の蹴上数。turnCells … 回転部のマス数。firstTurnNumber … 回転部の最初の段数字
  *   hasColumn … 隔て壁の柱の面に合わせた区間か（frontA と front が分かれうる）
+ *   columnBases … 等長レーンで両基端が入口柱の面に出ているか（baseA＝柱巻きの前縁 Q1・baseB＝柱の回転部側の面 Q3）
  *   pivotAcross … 回り階段（WINDING）の扇形の放射線の起点の幅方向座標（柱があれば柱の往路側の面 column.sA、無ければ sA）。
  *     起点の走行位置は 往路側の半分＝frontA・復路側の半分＝front（buildWinding の pivotA・P2）
  * 求まらないとき（U字系でない／階段・graph なし／セルが無い／設置枠が不正）は null（stairTreadFootprints と同じ条件）。
@@ -1028,6 +1029,8 @@ export function uTurnPlanLayout(stair, graph) {
     totalSteps: totalSteps + turnStepsE + turnStepsA,
     n1: parts[0].risers, n2: parts[2].risers, turnCells: parts[1].cells, firstTurnNumber: parts[1].numberStart,
     hasColumn: !!layout.column,
+    // 等長レーンで両基端が入口柱の面に出ている（baseA＝柱巻きの前縁 Q1・baseB＝柱の回転部側の面 Q3。基端の辺の外に壁が無い構成）
+    columnBases: layout.columnBases === true,
   };
 }
 

@@ -63,7 +63,7 @@ import {
   collectRunBreaks, clipContentAboveDrawnProfile, clipHiddenSegmentBelowProfile, clipHiddenSegmentAboveProfile,
   floorProfileFromSegments, mergeFloorProfiles, drawnFloorProfileZMax, drawnFloorProfileZAt,
 } from './elevationFloorProfile.js';
-import { stairSoffitChAlong } from './space/stairSoffitCeiling.js';
+import { stairSoffitChAlong, stairSoffitChAt } from './space/stairSoffitCeiling.js';
 import { PARTITION_THICKNESS_MM } from '../finish/stair/stairPartition.js';
 import { stairUnderReturnSoffit } from './section/sectionProbe.js';
 import {
@@ -109,8 +109,17 @@ export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm, cei
   const wallFaceX = onLo ? wallLoX : wallHiX;
   if (hiX - loX <= GAP_EPS) return null;
   const wa = worldOf(cut, loX), wb = worldOf(cut, hiX);
+  let runLo = Math.min(wa, wb), runHi = Math.max(wa, wb);
+  // 到達辺の外（入口柱の面 Q3〜柱巻きの前縁 Q1）の平らな区間（solid.arrivalFlat）は天井線に含めない——天井仕上げの線は
+  // 到達辺（Y4＋壁厚/2）の FL＋CH の点から壁へ下る 1 本（ユーザー裁定 2026-10-15）。
+  const flat = solid.arrivalFlat;
+  let truncated = false;
+  if (flat && Number.isFinite(flat.run) && Number.isFinite(flat.endRun) && flat.run > runLo + GAP_EPS && flat.run < runHi - GAP_EPS) {
+    if (flat.endRun < flat.run) runLo = flat.run; else runHi = flat.run;
+    truncated = true;
+  }
   const nodes = stairSoffitChAlong({ solid, floorStepMm: 0 }, {
-    isVertical: cut.line.isVertical, depthCoord: depth, lo: Math.min(wa, wb), hi: Math.max(wa, wb),
+    isVertical: cut.line.isVertical, depthCoord: depth, lo: runLo, hi: runHi,
   });
   if (!nodes || nodes.length < 2) return null;
   const soffit = nodes.map(n => ({ x: localXOf(cut, n.run), z: n.ch, gapBefore: n.gapBefore === true }));
@@ -120,6 +129,14 @@ export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm, cei
   if (Number.isFinite(ceilAbsMm)) {
     const edge = soffit.reduce((a, n) => (onLo ? (n.x < a.x ? n : a) : (n.x > a.x ? n : a)), soffit[0]);
     edge.z = Math.min(ceilAbsMm, edge.z);
+    // 到達辺で打ち切ったときは、到達辺から面の端（Y4）まで同じ高さの水平を足す（天井仕上げは面の外の部屋の天井へ続く）
+    if (truncated) {
+      const endX = onLo ? loX : hiX;
+      if (Math.abs(endX - edge.x) > GAP_EPS) {
+        const endNode = { x: endX, z: edge.z, gapBefore: false };
+        if (soffit[0] === edge) soffit.unshift(endNode); else soffit.push(endNode);
+      }
+    }
   }
   // 壁の天端（sectionProbe.js stairUnderReturnSoffit＝壁の天端 addUnderReturnTops と同じ値）。断面エンジンが引く壁の面の
   // 縦線はここまでなので、天井仕上げの断面線の端まで縦線を延ばす（underReturnCeilingPrimitives）
@@ -963,7 +980,7 @@ export function clipWallEdgesInsideStairBodies(prims, bodies) {
 }
 
 function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null, zRef = null,
-  drawFloorProfile = null, underReturnSpace = null, bandRoom = null) {
+  drawFloorProfile = null, underReturnSpace = null, bandRoom = null, ownSoffitSolid = null) {
   if (!rawCut) {
     return { content: [], upperOverhang: undefined, upperFloorZ: undefined,
       upperFloorCutEnds: undefined, upperFloorEnds: undefined };
@@ -1057,9 +1074,23 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 「材が空中に横断しているので中線で鋼材の天地に線を描画」はそのまま）。階段室の外の点は null＝見える側。
   const selfLayer = (cut.layers ?? []).find(l => l?.role === 'self') ?? null;
   const soffitRoomId = selfLayer?.stairSoffit?.roomId ?? null;
-  const ceilZAtWorld = soffitRoomId ? (x, y) => {
-    const c = probeCtx.cellAt(selfLayer, x, y);
-    return c?.room?.id === soffitRoomId && Number.isFinite(c.ceilZ) ? c.ceilZ : null;
+  // 自階の階段の到達辺の外の平らな区間（裏面の立体の arrivalFlat。入口柱の面 Q3〜柱巻きの前縁 Q1）の上は上階 FL の床構造の中
+  // ——そこを横切る梁（2FL の横架材）は自分の裏面＝その下の仕上げ空間の天井より上なので描かない（2026-10-16: 裏面にこの区間を
+  // 足したら、面 A の 2FL の横架材が復路レーンの端で上階の裏面より下と判定され復活した。上階の裏面と自分の裏面の低い方で判定する。
+  // 区間の外〔往路の上り口など〕では自分の裏面は段の下の天井で、段の上の空気から見える梁の判定には使わない）。
+  const flat = ownSoffitSolid?.arrivalFlat ?? null;
+  const inArrivalFlat = flat ? (x, y) => {
+    const run = flat.vertical ? y : x, across = flat.vertical ? x : y;
+    return run >= Math.min(flat.run, flat.endRun) - GAP_EPS && run <= Math.max(flat.run, flat.endRun) + GAP_EPS
+      && across >= flat.across[0] - GAP_EPS && across <= flat.across[1] + GAP_EPS;
+  } : null;
+  const ownCeilAt = inArrivalFlat ? (x, y) => (inArrivalFlat(x, y) ? stairSoffitChAt({ solid: ownSoffitSolid, floorStepMm: 0 }, x, y) : null) : null;
+  const ceilZAtWorld = soffitRoomId || ownCeilAt ? (x, y) => {
+    const c = soffitRoomId ? probeCtx.cellAt(selfLayer, x, y) : null;
+    const above = c?.room?.id === soffitRoomId && Number.isFinite(c.ceilZ) ? c.ceilZ : null;
+    const own = ownCeilAt ? ownCeilAt(x, y) : null;
+    const zs = [above, own].filter(Number.isFinite);
+    return zs.length ? Math.min(...zs) : null;
   } : null;
   // 構造梁の見えがかりも、天端が切断面にある flight の後ろ（behindRects）は隠れ線（2 階の面 A で床の梁の天の線が床線と重なる）
   const structuralContent = dashLinesInsideRects(
@@ -1277,7 +1308,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // 1つの切断 → その面のentryのcontent系フィールド（content＋上階のはり出し）。
   // はり出し（upperOverhang/upperFloorZ）はcontentと同じ探査窓から出るため、同じ呼び出しで受ける。
   const contentFields = (cut, zRef = null, drawFloorProfile = null, underReturnSpace = null) =>
-    contentForCut(cut, probeCtx, endExtendMm, bandRoomBounds, zRef, drawFloorProfile, underReturnSpace, bandRoom);
+    contentForCut(cut, probeCtx, endExtendMm, bandRoomBounds, zRef, drawFloorProfile, underReturnSpace, bandRoom, ownSoffitSolid);
 
   const entries = [];
 
@@ -1303,15 +1334,17 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // ---- 1: 踊り場前縁（見返り・全幅） ----
   // 隔て板が上階へ続く切断（continuousWallAcross。木造 U 字階段の最上階以外）では、切断線が内部を横切る flight の本体
   // （裏面〜段板）の断面を描くため、自階の階段の裏面の立体（ceiling/stairSoffit.js の式が唯一の供給源）を切断に添える。
+  // 自階の階段の裏面の立体は、空中を横断する梁の見えがかりの判定（contentForCut の ceilZAtWorld。梁が自階の階段の足元の上に
+  // あれば、その位置の天井は自分の裏面＝その下の仕上げ空間の天井）にも使うので、全部の切断で 1 回だけ組む。
+  const ownSoffitSolid = (() => {
+    const selfLayer0 = (cuts[0].layers ?? []).find(l => l?.role === 'self') ?? null;
+    const riser = riserOf(stair, floorHeight);
+    const floorZ0 = selfLayer0 ? probeCtx.floorZOf(bandRoom, selfLayer0) : 0;
+    return Number.isFinite(riser) ? (stairSoffitSolids({ stair, graph, riser, floorZMm: floorZ0 })[0] ?? null) : null;
+  })();
   {
     const cut1 = cutOf('1');
-    if (cut1?.continuousWallAcross) {
-      const selfLayer1 = (cut1.layers ?? []).find(l => l?.role === 'self') ?? null;
-      const riser = riserOf(stair, floorHeight);
-      const floorZ1 = selfLayer1 ? probeCtx.floorZOf(bandRoom, selfLayer1) : 0;
-      const solid = Number.isFinite(riser) ? (stairSoffitSolids({ stair, graph, riser, floorZMm: floorZ1 })[0] ?? null) : null;
-      if (solid) cut1.bodySoffitSolid = solid;
-    }
+    if (cut1?.continuousWallAcross && ownSoffitSolid) cut1.bodySoffitSolid = ownSoffitSolid;
   }
   const rawSegments1 = flatFloorSegments(wEntry.run, underFloorZ, ceilTopAbs - underFloorZ);
   const floorProfile1 = floorProfileFor(cutOf('1'), rawSegments1);
