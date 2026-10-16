@@ -48,8 +48,9 @@ import {
 } from './section/sectionEmit.js';
 import {
   stairPrimitivesForCut, stairFaceOccluderRects, stairCutFloorProfile, crossingLandingFloorProfile, HIDDEN_STEP_MARK,
-  flightStartOuterBound, mergeOuterBounds, clipWallEndVerticalsByStairMass, crossingFlightBodySections,
+  flightStartOuterBound, mergeOuterBounds, clipWallEndVerticalsByStairMass, crossingFlightBodySections, flightHiddenRects,
 } from './section/sectionStair.js';
+import { segmentInsideRect } from './elevationPrimitives.js';
 import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
@@ -839,6 +840,99 @@ function clipWallFloorEdgeUnderZigzag(wallContent, stairContent) {
  *   upperFloorEnds:{lo:boolean,hi:boolean}|undefined}}
  */
 /**
+ * 線分（type:'line'）のうち、矩形（断面ローカル x・絶対 z）の中に入る区間を**細線破線**にする（隠れ線）。
+ * 矩形の外の区間は元のまま。line 以外・既に破線のものは不変。返り値は新しい配列。
+ * @param {object[]} prims
+ * @param {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>} rects
+ * @param {{inclusive?:boolean}} [opts] inclusive … 矩形の**下辺と左右の辺**に乗る線も中とみなす（切断面上の壁の断面の縁・床線＝
+ *   flight の足元の床と側の壁に乗る）。上辺（flight の天端＝その段板の断面線・踊り場の床線）は常に見えている＝含めない。
+ *   既定 false は矩形を GAP_EPS だけ縮めて**厳密に内側**だけ。
+ */
+const HIDDEN_PIECE_MIN_MM = 0.5; // 矩形の角に触れただけの片（描いても見えない）を捨てる長さ
+
+export function dashLinesInsideRects(prims, rects, opts = {}) {
+  if (!rects?.length) return prims;
+  const d = opts.inclusive ? 0 : GAP_EPS;
+  const boxes = rects.map(r => ({ xLo: Math.min(r.xLo, r.xHi) + d, xHi: Math.max(r.xLo, r.xHi) - d,
+    yLo: -Math.max(r.zLo, r.zHi) + GAP_EPS, yHi: -Math.min(r.zLo, r.zHi) - d })).filter(b => b.xHi > b.xLo && b.yHi > b.yLo);
+  if (boxes.length === 0) return prims;
+  const thin = weightForRole(ElevationLineRole.DETAIL);
+  const out = [];
+  for (const p of prims) {
+    if (p.type !== 'line' || p.dash === 'dashed') { out.push(p); continue; }
+    const hits = boxes.map(b => segmentInsideRect(p.x1, p.y1, p.x2, p.y2, b)).filter(Boolean).sort((a, b) => a[0] - b[0]);
+    if (hits.length === 0) { out.push(p); continue; }
+    const merged = [];
+    for (const h of hits) {
+      const last = merged[merged.length - 1];
+      if (last && h[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], h[1]); else merged.push([h[0], h[1]]);
+    }
+    const at = t => [p.x1 + (p.x2 - p.x1) * t, p.y1 + (p.y2 - p.y1) * t];
+    const push = (t0, t1, hidden) => {
+      if (t1 - t0 <= 1e-9) return;
+      const [x1, y1] = at(t0), [x2, y2] = at(t1);
+      if (Math.hypot(x2 - x1, y2 - y1) <= HIDDEN_PIECE_MIN_MM) return; // 角に触れただけの退化片
+      out.push(hidden ? { ...p, x1, y1, x2, y2, weight: thin, dash: 'dashed' } : { ...p, x1, y1, x2, y2 });
+    };
+    let cursor = 0;
+    for (const [h0, h1] of merged) { push(cursor, h0, false); push(h0, h1, true); cursor = h1; }
+    push(cursor, 1, false);
+  }
+  return out;
+}
+
+/** 壁のない部屋の辺（上り口）を見る切断か。往復レーンの境界の仮想の面（kind 'stairMid'。seq2）は部屋の辺ではないので含めない。 */
+function isOpenEntryFace(cut) {
+  return cut?.face?.hasRealWall === false && cut.face.kind !== 'stairMid';
+}
+
+/**
+ * 壁のない辺（上り口。`cut.face.hasRealWall === false`）を見る切断で、面の向こうの部屋（ホール）へ開いている区間ごとに
+ * 「向こうの部屋の天井の縁（中線）＋アキのバツ（床〜その天井）」を描く（ユーザー指示 2026-10-15「moku4-3 1階 階段 A:
+ * FL+2400 に天井エッジ（中線）横線描画、その角と FL にバツ」「四角の奥は空いているのでアキばつ」。2026-10-07 の「踊り場前縁・
+ * 回転部にアキは標記しない」は壁のある辺を見る面の話で、壁のない辺の開口には標記する）。
+ * 区間＝切断壁（隔て板）で区切られた、切断帯の無い列の連なり。天井は面の線から視線の向きへ少し入った点の部屋（自階の層の cellAt）の
+ * 天井で、帯の部屋自身・天井が取れない区間は描かない。
+ * @param {import('./section/sectionTypes.js').SectionCut} cut
+ * @param {import('./section/sectionTypes.js').SectionColumn[]} columns
+ * @param {ReturnType<typeof makeProbeContext>} probeCtx
+ * @param {object|null} bandRoom 帯の部屋（階段室）
+ * @returns {object[]}
+ */
+export function openingPanelPrimitives(cut, columns, probeCtx, bandRoom) {
+  if (!cut?.line || !isOpenEntryFace(cut) || !columns?.length) return [];
+  const selfLayer = (cut.layers ?? []).find(l => l?.role === 'self') ?? null;
+  if (!selfLayer) return [];
+  const floorZ = cut.baseFloorZ ?? 0;
+  const isCutCol = col => col.bands.some(b => b.kind === 'cut' || b.kind === 'cutAlong');
+  const runs = [];
+  for (const col of columns) {
+    if (isCutCol(col)) { runs.push(null); continue; }
+    const last = runs[runs.length - 1];
+    if (last && Math.abs(last.x1 - col.x0) <= GAP_EPS) last.x1 = col.x1; else runs.push({ x0: col.x0, x1: col.x1 });
+  }
+  const out = [];
+  const vs = cut.viewSign ?? 1;
+  // 開口は面の線（壁のない辺＝face.faceValue）にある。切断線は面より手前（階段の中）なので、面の線から視線の向きへ少し入った点で
+  // 向こうの部屋を引く
+  const faceCoord = Number.isFinite(cut.face?.faceValue) ? cut.face.faceValue : cut.face?.axisCL?.effectiveValue;
+  if (!Number.isFinite(faceCoord)) return [];
+  for (const r of runs) {
+    if (!r || r.x1 - r.x0 <= GAP_EPS) continue;
+    const across = worldOf(cut, (r.x0 + r.x1) / 2);
+    const depth = faceCoord + vs * PROBE_EPS_MM;
+    const cell = cut.line.isVertical ? probeCtx.cellAt(selfLayer, depth, across) : probeCtx.cellAt(selfLayer, across, depth);
+    if (!cell?.room || (bandRoom && cell.room.id === bandRoom.id) || !Number.isFinite(cell.ceilZ)) continue;
+    const ceil = cell.ceilZ;
+    if (!(ceil - floorZ > GAP_EPS)) continue;
+    out.push(emitLine(cut, r.x0, ceil, r.x1, ceil, ElevationLineRole.SILHOUETTE, { neverDowngrade: true }));
+    out.push(emitLine(cut, r.x0, floorZ, r.x1, ceil, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
+    out.push(emitLine(cut, r.x0, ceil, r.x1, floorZ, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
+  }
+  return out;
+}
+
+/**
  * 壁の断面の縁（cutEdgeLo/Hi）のうち、階段本体の断面（crossingFlightBodySections。本体に接する x＝本体の範囲の端）の
  * z 区間に入る部分を落とす（断面の中は描かない）。他のプリミティブは不変。
  * @param {object[]} prims
@@ -867,7 +961,7 @@ export function clipWallEdgesInsideStairBodies(prims, bodies) {
 }
 
 function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null, zRef = null,
-  drawFloorProfile = null, underReturnSpace = null) {
+  drawFloorProfile = null, underReturnSpace = null, bandRoom = null) {
   if (!rawCut) {
     return { content: [], upperOverhang: undefined, upperFloorZ: undefined,
       upperFloorCutEnds: undefined, upperFloorEnds: undefined };
@@ -924,8 +1018,16 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 切断線が内部を横切る flight の本体（裏面〜段板）に接する壁の断面の縁は、その区間を空ける（断面の中は描かない。
   // ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の右側断面線は 1FL から往路下ホールの天井まで、往路床断面から天井断面まで」）。
   const bodies = cut.bodySoffitSolid ? crossingFlightBodySections(cut.stairCut ?? null, cut, columns, cut.bodySoffitSolid) : [];
-  const wallContent = clipWallEdgesInsideStairBodies(
-    dashHorizontalsBehindStair(clipWallEndVerticalsByStairMass(wallPrims, cut, columns), occluders), bodies);
+  // 切断面の後ろを隠す flight の矩形（壁のない辺を見る seq1 だけ。flightHiddenRects）。切断面上の壁の断面の縁は、端に立つ flight
+  // （cutThrough:false＝本体が切断面の後ろ）の範囲だけ細線破線にする。向こうの部屋へ開く区間の天井の縁とアキのバツ
+  // （openingPanelPrimitives）は全部の矩形で隠す。図側（床線・面端の縦線）は entry.occludedRects で同じ矩形を使う。
+  const hiddenRects = isOpenEntryFace(cut)
+    ? flightHiddenRects(cut.stairCut ?? null, cut, columns, cut.bodySoffitSolid ?? null) : [];
+  // 切断面上の線（壁の断面の縁・床線）を隠すのは、天端が切断面にある＝視線の向きへ下る flight だけ（planeHides）。辺上も中。
+  const behindRects = hiddenRects.filter(r => r.planeHides);
+  const wallContent = dashLinesInsideRects(clipWallEdgesInsideStairBodies(
+    dashHorizontalsBehindStair(clipWallEndVerticalsByStairMass(wallPrims, cut, columns), occluders), bodies), behindRects, { inclusive: true });
+  const openingPanels = dashLinesInsideRects(openingPanelPrimitives(pcut, columns, probeCtx, bandRoom), hiddenRects);
   // 下ささらの見えがかりのうち「断面内部（実体で囲まれた矩形の厳密内部）」に入る区間は
   // `stairPrimitivesForCut`が自身の出口（x終端クリップの前）で`columns`だけから一般判定する
   // （展開図一般化Phase 6b-2 設計(d)。ユーザー裁定2026-09-13）。旧`opts.slabBand`
@@ -957,7 +1059,9 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
     const c = probeCtx.cellAt(selfLayer, x, y);
     return c?.room?.id === soffitRoomId && Number.isFinite(c.ceilZ) ? c.ceilZ : null;
   } : null;
-  const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile, { ceilZAtWorld });
+  // 構造梁の見えがかりも、天端が切断面にある flight の後ろ（behindRects）は隠れ線（2 階の面 A で床の梁の天の線が床線と重なる）
+  const structuralContent = dashLinesInsideRects(
+    structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile, { ceilZAtWorld }), behindRects, { inclusive: true });
   // 階段の断面プロファイルとの取り合い（ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
   const joined = zRef
     ? joinToStairProfile(wallContent, stairContent, pcut,
@@ -973,7 +1077,8 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 復路下の仕上げ空間（seq5）: 壁の断面・見えがかり・アキは天井＝復路の裏面より上を落とす（段板の中）。階段自身・構造梁は触らない。
   const roofed = clipContentInsideStairBody([...wallOut, ...gapMarks], underReturnSpace);
   return {
-    content: [...roofed, ...stairContent, ...structuralContent],
+    content: [...roofed, ...openingPanels, ...stairContent, ...structuralContent],
+    occludedRects: behindRects.map(r => ({ xLo: r.xLo, xHi: r.xHi, zLo: r.zLo, zHi: r.zHi })),
     ...overhang,
   };
 }
@@ -1170,7 +1275,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // 1つの切断 → その面のentryのcontent系フィールド（content＋上階のはり出し）。
   // はり出し（upperOverhang/upperFloorZ）はcontentと同じ探査窓から出るため、同じ呼び出しで受ける。
   const contentFields = (cut, zRef = null, drawFloorProfile = null, underReturnSpace = null) =>
-    contentForCut(cut, probeCtx, endExtendMm, bandRoomBounds, zRef, drawFloorProfile, underReturnSpace);
+    contentForCut(cut, probeCtx, endExtendMm, bandRoomBounds, zRef, drawFloorProfile, underReturnSpace, bandRoom);
 
   const entries = [];
 
@@ -1218,6 +1323,8 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     ...(soffit1 ? { ceilingProfile: soffit1.ceilingProfile } : {}),
     chDimSplitAbsYs: [floorHeight],
     upperOverhang: fields1.upperOverhang, upperFloorZ: fields1.upperFloorZ,
+    // 切断面の後ろを隠す flight の矩形（図側の床線・面端の縦線をその範囲だけ細線破線に。elevationStair.js）
+    occludedRects: fields1.occludedRects,
     upperFloorCutEnds: fields1.upperFloorCutEnds,
     // 上階の床が実在する端だけ2FL線を許すgate（上部吹抜けを持つ部屋帯と共通。upperOverhangOf）。
     upperFloorEnds: fields1.upperFloorEnds,

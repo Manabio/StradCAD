@@ -18,7 +18,7 @@ import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
 import { stairBandWallFilter } from './section/cuts/switchbackCuts.js';
-import { stairFaceSequence } from './elevationStairSequence.js';
+import { stairFaceSequence, dashLinesInsideRects } from './elevationStairSequence.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { translatePrimitive } from './elevationPrimitives.js';
 // R1: 面配置ループ・帯確定処理はelevationBand.jsのbuildRoomBandと全域が重複していたため、
@@ -222,7 +222,14 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
         skipBaseboard: true, skipWallLabel: true,
       }),
     });
-    for (const p of layout.primitives) primitives.push(p);
+    // 切断面の後ろを隠す flight の矩形（entry.occludedRects。seq1 の往路）に入る図側の線（床線・面端の縦線。帯の y≤0 の太線・中線）
+    // は細線破線にする（ユーザー指示 2026-10-15「X1 の壁断面線は隔て板左側の階段断面まで。そこから下は細線、破線」「1FL の太線は誤り。
+    // 細線破線が正解」）。矩形は面ローカル→帯の x へ平行移動して当てる。
+    const occluded = layout.faceRuns.flatMap(({ xCursor }, i) =>
+      (sequence[i].occludedRects ?? []).map(r => ({ ...r, xLo: r.xLo + xCursor, xHi: r.xHi + xCursor })));
+    const figurePrims = occluded.length === 0 ? layout.primitives : layout.primitives.map(p =>
+      (p.type === 'line' && !p.dash && p.weight !== 'thin' && p.y1 <= 0 && p.y2 <= 0) ? dashLinesInsideRects([p], occluded, { inclusive: true }) : [p]).flat();
+    for (const p of figurePrims) primitives.push(p);
     layout.faceRuns.forEach(({ xCursor }, i) => {
       for (const p of sequence[i].content) primitives.push(translatePrimitive(p, xCursor, 0));
     });

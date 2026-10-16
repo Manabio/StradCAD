@@ -3877,12 +3877,21 @@
   "room": "7049e6a8-ff91-4bd0-8371-2a2bf46f174b",
   "name": "",
   "kind": "stair",
-  "count": 192,
+  "count": 205,
   "prims": [
+   {
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 780,
+    "y1": 0,
+    "y2": 0
+   },
    {
     "type": "line",
     "weight": "thick",
-    "x1": 0,
+    "x1": 780,
     "x2": 1675,
     "y1": 0,
     "y2": 0
@@ -3919,6 +3928,15 @@
     "x1": 0,
     "x2": 0,
     "y1": -3615.813,
+    "y2": -1000
+   },
+   {
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 0,
+    "y1": -1000,
     "y2": 0
    },
    {
@@ -4794,11 +4812,21 @@
    },
    {
     "__o": "cutEdgeLo",
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 780,
+    "x2": 780,
+    "y1": 0,
+    "y2": -1000
+   },
+   {
+    "__o": "cutEdgeLo",
     "type": "line",
     "weight": "thick",
     "x1": 780,
     "x2": 780,
-    "y1": 0,
+    "y1": -1000,
     "y2": -3615.813
    },
    {
@@ -4818,6 +4846,95 @@
     "x2": 895,
     "y1": -2200,
     "y2": -4742.186
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 0,
+    "x2": 780,
+    "y1": -2400,
+    "y2": -2400
+   },
+   {
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 325,
+    "y1": 0,
+    "y2": -1000
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 325,
+    "x2": 780,
+    "y1": -1000,
+    "y2": -2400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 455,
+    "y1": -2400,
+    "y2": -1000
+   },
+   {
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 455,
+    "x2": 780,
+    "y1": -1000,
+    "y2": 0
+   },
+   {
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 895,
+    "x2": 1675,
+    "y1": -2400,
+    "y2": -2400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 895,
+    "x2": 1461.211,
+    "y1": 0,
+    "y2": -1742.186
+   },
+   {
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 1461.211,
+    "x2": 1675,
+    "y1": -1742.186,
+    "y2": -2400
+   },
+   {
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 895,
+    "x2": 1108.789,
+    "y1": -2400,
+    "y2": -1742.186
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 1108.789,
+    "x2": 1675,
+    "y1": -1742.186,
+    "y2": 0
    },
    {
     "dash": "dashed",

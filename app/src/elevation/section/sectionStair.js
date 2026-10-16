@@ -1061,6 +1061,43 @@ export function crossingFlightBodySections(contribution, cut, columns, soffitSol
 }
 
 /**
+ * 切断線が横切る flight が、切断面の**後ろ**を隠す矩形（断面ローカル x・絶対 z）。
+ *   - 切断線が flight の端にある（往路の終端 frontA に立つ seq1 の往路）: 本体は切断面の後ろ＝足元〜最上段の天端が隠す。
+ *     視線の向きへ下る flight（蹴上材を裏から見る。天端が切断面にある）は切断面上の壁の断面の縁・床線もその範囲で隠す
+ *     （planeHides:true＝細線破線）。視線の向きへ上る flight（初段が切断面にある）は向こうの線だけを隠す。
+ *   - 切断線が flight の内部を横切る（復路）: 裏面〜最上段の天端（cutThrough:true。切断面より後ろの線だけを隠す。切断面上の線は
+ *     本体の断面の中＝crossingFlightBodySections が空ける）。裏面が求まらなければ足元から。
+ * x は段板の幅方向の範囲（隔て板の柱があれば隔て板の面まで）。ユーザー指示 2026-10-15「moku4-3 1階 階段 A: X1 の壁断面線は隔て板左側の
+ * 階段断面まで。そこから下は細線、破線」「バツ（断面線より下は破線）」。
+ * @param {object|null} contribution stairContribution の結果
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @param {{zAt?:(x:number, y:number)=>number}|null} soffitSolid 自階の階段の裏面の立体（無ければ null）
+ * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number, cutThrough:boolean, planeHides:boolean}>}
+ */
+export function flightHiddenRects(contribution, cut, columns, soffitSolid = null) {
+  if (!contribution || !cut?.line) return [];
+  const out = [];
+  for (const flight of contribution.flights ?? []) {
+    if (!crossesFlight(flight, cut)) continue;
+    const aLo = flight.treadAcrossLo ?? flight.acrossLo, aHi = flight.treadAcrossHi ?? flight.acrossHi;
+    const range = columnsXRangeOverlapping(columns, cut, aLo, aHi);
+    if (!range) continue;
+    const interior = cut.line.axisValue > flight.runLo + STAIR_RUN_TOL_MM && cut.line.axisValue < flight.runHi - STAIR_RUN_TOL_MM;
+    const zHi = flight.baseZ + (Math.max(0, Math.round(flight.steps)) + (flight.overSteps ?? 0)) * flight.riserMm;
+    let zLo = frontBaseZ(flight);
+    if (interior && soffitSolid?.zAt) {
+      const mid = (aLo + aHi) / 2;
+      const z = cut.line.isVertical ? soffitSolid.zAt(cut.line.axisValue, mid) : soffitSolid.zAt(mid, cut.line.axisValue);
+      if (Number.isFinite(z)) zLo = z;
+    }
+    if (!(zHi - zLo > GAP_EPS)) continue;
+    out.push({ xLo: range.loX, xHi: range.hiX, zLo, zHi, cutThrough: interior, planeHides: !interior && flightDescendsAway(flight, cut) });
+  }
+  return out;
+}
+
+/**
  * flight 上の走行座標 runCoord に立つ段板（その位置を踏面とする段）の天端の絶対z。
  * 段鼻 i（始端から i×踏面ピッチ）から次の蹴上の足元までが段 i の踏面なので、段鼻の連続値 `flightStepParam` の
  * 切り捨てが段の番号になる（`flightNoseZAt` は勾配線上の連続値）。区間の外は端の段にクランプ。

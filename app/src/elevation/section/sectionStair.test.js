@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { uTurnPlanLayout } from '../../finish/stair/stairGeometry.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass, crossingLandingFloorProfile, hiddenTurnStepPrimitives, HIDDEN_STEP_MARK, crossingFlightBodySections } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass, crossingLandingFloorProfile, hiddenTurnStepPrimitives, HIDDEN_STEP_MARK, crossingFlightBodySections, flightHiddenRects } from './sectionStair.js';
 import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from '../elevationStairSection.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
@@ -2450,4 +2450,25 @@ test('【指示2026-10-15・失敗系】crossingFlightBodySections: 端ちょう
   assert.deepEqual(crossingFlightBodySections({ flights: [interior] }, cut, columns, { zAt: () => 5000 }), [], '裏面が段板より上');
   assert.deepEqual(crossingFlightBodySections({ flights: [interior] }, cut, columns, { zAt: () => NaN }), [], '裏面が非有限');
   assert.deepEqual(crossingFlightBodySections(null, cut, columns, { zAt: () => 100 }), [], '寄与なし');
+});
+
+// ---- ユーザー指示 2026-10-15「moku4-3 1階 階段 A: X1 の壁断面線は隔て板左側の階段断面まで。そこから下は細線、破線」----
+// 切断線が横切る flight が切断面の後ろを隠す矩形。端に立つ flight は足元〜天端、内部を横切る flight は裏面〜天端。
+test('【指示2026-10-15】flightHiddenRects: 天端が切断面にある（視線の向きへ下る）flight は planeHides、初段が切断面にある flight は向こうだけ、内部を横切る flight は裏面から cutThrough', () => {
+  const columns = [{ x0: 0, x1: 2000, worldLo: 0, worldHi: 2000, bands: [] }];
+  const cutAt = axisValue => ({ line: { isVertical: false, axisValue, lo: 0, hi: 2000 }, viewSign: -1, dirSign: 1, zRange: { loZ: 0, hiZ: 5400 } });
+  // 往路: y 0→1500 を上る（travelSign +1）。切断線は終端 1500。視線は −y（上り口向き）＝視線の向きへ下る
+  const outbound = { isVertical: true, runLo: 0, runHi: 1500, travelSign: 1, acrossLo: 0, acrossHi: 910, baseZ: 0, riserMm: 200, steps: 5, lengthMm: 1500, treadAcrossLo: 0, treadAcrossHi: 852.5 };
+  // 復路: y 1500→0 を上る（travelSign −1）。切断線 1500 は始端＝初段。視線の向きへ上る
+  const inbound = { isVertical: true, runLo: 0, runHi: 1500, travelSign: -1, acrossLo: 910, acrossHi: 1820, baseZ: 2000, riserMm: 200, steps: 5, lengthMm: 1500, treadAcrossLo: 967.5, treadAcrossHi: 1820 };
+  const [a, b] = flightHiddenRects({ flights: [outbound, inbound] }, cutAt(1500), columns, null);
+  assert.deepEqual(a, { xLo: 0, xHi: 852.5, zLo: 0, zHi: 1000, cutThrough: false, planeHides: true }, '往路: 足元 0〜天端 1000。切断面上の線も隠す');
+  assert.deepEqual(b, { xLo: 967.5, xHi: 1820, zLo: 2000, zHi: 3000, cutThrough: false, planeHides: false }, '復路（初段が切断面）: 足元〜天端。向こうだけ');
+  // 内部を横切る（切断線 800）: 裏面〜天端・cutThrough
+  const [c] = flightHiddenRects({ flights: [inbound] }, cutAt(800), columns, { zAt: () => 1742 });
+  assert.deepEqual(c, { xLo: 967.5, xHi: 1820, zLo: 1742, zHi: 3000, cutThrough: true, planeHides: false });
+  const [d] = flightHiddenRects({ flights: [inbound] }, cutAt(800), columns, null);
+  assert.equal(d.zLo, 2000, '裏面が無ければ足元から');
+  assert.deepEqual(flightHiddenRects(null, cutAt(800), columns, null), [], '寄与なし');
+  assert.deepEqual(flightHiddenRects({ flights: [outbound] }, cutAt(3000), columns, null), [], '横切らない');
 });

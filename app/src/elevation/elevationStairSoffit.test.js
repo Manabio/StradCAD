@@ -8,7 +8,7 @@ import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js';
 import { uTurnSoffitFromLayout } from '../ceiling/stairSoffit.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, endSoffitAtOpenEndCeiling, SOFFIT_OPEN_END_INSET_MM, clipWallEdgesInsideStairBodies } from './elevationStairSequence.js';
+import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, endSoffitAtOpenEndCeiling, SOFFIT_OPEN_END_INSET_MM, clipWallEdgesInsideStairBodies, dashLinesInsideRects, openingPanelPrimitives } from './elevationStairSequence.js';
 import { partitionStripOf } from './section/cuts/switchbackCuts.js';
 import { stairSoffitAbove } from './space/stairSoffitCeiling.js';
 import { buildSpaceIndex } from './space/spaceModel.js';
@@ -400,4 +400,69 @@ test('【指示2026-10-15・失敗系】clipWallEdgesInsideStairBodies: 本体�
   assert.deepEqual(clipWallEdgesInsideStairBodies([edge], [{ xLo: 895, xHi: 1675, zLo: 0, zHi: 1000 }]), [], '縁が丸ごと本体の中＝消える');
   const prims = [edge];
   assert.equal(clipWallEdgesInsideStairBodies(prims, null), prims, '本体なしは同じ配列');
+});
+
+// ---------------------------------------------------------------- 隠れ線（ユーザー指示 2026-10-15 moku4-3 1階 A）
+
+test('【指示2026-10-15】dashLinesInsideRects: 矩形の中の区間だけ細線破線に割る。inclusive は下辺・左右の辺に乗る線も中、上辺は常に外。既定は厳密に内側', () => {
+  const rect = [{ xLo: 0, xHi: 780, zLo: 0, zHi: 1000 }];
+  const floor = { type: 'line', weight: 'thick', x1: 0, x2: 1675, y1: 0, y2: 0 };
+  const wall = { type: 'line', weight: 'thick', x1: 0, x2: 0, y1: -3615, y2: 0 };
+  const top = { type: 'line', weight: 'thick', x1: 0, x2: 780, y1: -1000, y2: -1000 };
+  const incl = dashLinesInsideRects([floor, wall, top], rect, { inclusive: true });
+  const hidden = incl.filter(p => p.dash === 'dashed');
+  const r3 = v => Math.round(v * 1000) / 1000 + 0;
+  assert.deepEqual(hidden.map(p => [r3(p.x1), r3(p.x2), r3(p.y1), r3(p.y2), p.weight]), [[0, 780, 0, 0, 'thin'], [0, 0, -1000, 0, 'thin']], '下辺の床線・左辺の壁線は矩形の範囲だけ破線');
+  assert.ok(incl.some(p => p.x1 === 780 && p.x2 === 1675 && p.weight === 'thick' && !p.dash), '矩形の外は元のまま');
+  assert.ok(incl.some(p => p.x1 === 0 && p.x2 === 0 && p.y1 === -3615 && r3(p.y2) === -1000 && p.weight === 'thick'), '壁線の上の区間は太線のまま');
+  assert.ok(incl.includes(top), '上辺に乗る線（flight の天端）は不変');
+  const strict = dashLinesInsideRects([floor, wall], rect);
+  assert.ok(strict.includes(floor) && strict.includes(wall), '既定は辺に乗る線を含めない');
+  const diag = { type: 'line', weight: 'thin', dash: 'center', x1: 0, x2: 780, y1: 0, y2: -2400 };
+  const parts = dashLinesInsideRects([diag], rect);
+  assert.equal(parts.length, 2, '斜線は矩形の上辺で 2 つに');
+  assert.equal(parts[0].dash, 'dashed'); assert.equal(parts[1].dash, 'center');
+  near(parts[0].y2, -1000, '境は z=1000');
+  assert.ok(parts.every(p => Math.hypot(p.x2 - p.x1, p.y2 - p.y1) > 0.5), '角に触れただけの退化片は出さない');
+});
+
+test('【指示2026-10-15・失敗系】dashLinesInsideRects: 矩形なし・line 以外・既に破線・退化した矩形は不変', () => {
+  const line = { type: 'line', weight: 'thick', x1: 0, x2: 100, y1: 0, y2: 0 };
+  const poly = { type: 'polyline', points: [[0, 0], [100, 0]], weight: 'thick' };
+  const dashed = { type: 'line', weight: 'thin', dash: 'dashed', x1: 0, x2: 100, y1: -500, y2: -500 };
+  const prims = [line, poly, dashed];
+  assert.equal(dashLinesInsideRects(prims, []), prims);
+  assert.equal(dashLinesInsideRects(prims, null), prims);
+  const out = dashLinesInsideRects(prims, [{ xLo: 0, xHi: 1000, zLo: 0, zHi: 1000 }]);
+  assert.ok(out.includes(poly) && out.includes(dashed), 'line 以外・既に破線は不変');
+  assert.deepEqual(dashLinesInsideRects(prims, [{ xLo: 0, xHi: 0.0001, zLo: 0, zHi: 0.0001 }]), prims, '退化した矩形は何も変えない');
+});
+
+test('【指示2026-10-15】openingPanelPrimitives: 壁のない上り口の面で、切断壁で区切られた区間ごとに向こうの部屋の天井の縁（中線）とアキのバツ。自室・天井なし・壁のある面・stairMid は出さない', () => {
+  const hall = { id: 'hall' }, stairRoom = { id: 'stair' };
+  const layer = { role: 'self', graph: {} };
+  const probe = cellAt => ({ cellAt });
+  const cutOf = (face) => ({ line: { isVertical: false, axisValue: -8247.5, lo: 72.5, hi: 1747.5 }, viewSign: -1, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0, layers: [layer], face });
+  const columns = [
+    { x0: 0, x1: 780, worldLo: 72.5, worldHi: 852.5, bands: [{ kind: 'wall', z0: 0, z1: 3615 }] },
+    { x0: 780, x1: 895, worldLo: 852.5, worldHi: 967.5, bands: [{ kind: 'cut', z0: 0, z1: 4742 }] },
+    { x0: 895, x1: 1675, worldLo: 967.5, worldHi: 1747.5, bands: [{ kind: 'open', z0: 0, z1: 4742 }] },
+  ];
+  const seen = [];
+  const prims = openingPanelPrimitives(cutOf({ hasRealWall: false, faceValue: -9100 }), columns, probe((l, x, y) => { seen.push([x, y]); return { room: hall, floorZ: 0, ceilZ: 2400 }; }), stairRoom);
+  assert.equal(prims.length, 6, '区間 2 つ × （天井の縁 1 ＋ バツ 2）');
+  assert.ok(seen.every(([, y]) => y < -9100 && y > -9200), '向こうの部屋は面の線（faceValue）から視線の向きへ少し入った点で引く');
+  const edges = prims.filter(p => p.y1 === p.y2);
+  assert.deepEqual(edges.map(p => [p.x1, p.x2, -p.y1, p.weight]), [[0, 780, 2400, 'medium'], [895, 1675, 2400, 'medium']], '天井の縁は区間ごとに中線');
+  const crosses = prims.filter(p => p.y1 !== p.y2);
+  assert.ok(crosses.every(p => p.dash === 'center' && p.weight === 'thin'), 'バツは細線の一点鎖線');
+  assert.ok(crosses.some(p => p.x1 === 0 && p.y1 === 0 && p.x2 === 780 && p.y2 === -2400), '床〜天井の対角');
+  // 自室（階段室）が向こうにある区間・天井が取れない区間は出さない
+  assert.deepEqual(openingPanelPrimitives(cutOf({ hasRealWall: false, faceValue: -9100 }), columns, probe(() => ({ room: stairRoom, floorZ: 0, ceilZ: 2400 })), stairRoom), []);
+  assert.deepEqual(openingPanelPrimitives(cutOf({ hasRealWall: false, faceValue: -9100 }), columns, probe(() => ({ room: hall, floorZ: 0, ceilZ: null })), stairRoom), []);
+  // 壁のある面・往復レーンの境界の仮想の面（stairMid）・faceValue 不明は出さない
+  assert.deepEqual(openingPanelPrimitives(cutOf({ hasRealWall: true, faceValue: -9100 }), columns, probe(() => ({ room: hall, floorZ: 0, ceilZ: 2400 })), stairRoom), []);
+  assert.deepEqual(openingPanelPrimitives(cutOf({ hasRealWall: false, kind: 'stairMid', faceValue: -9100 }), columns, probe(() => ({ room: hall, floorZ: 0, ceilZ: 2400 })), stairRoom), []);
+  assert.deepEqual(openingPanelPrimitives(cutOf({ hasRealWall: false }), columns, probe(() => ({ room: hall, floorZ: 0, ceilZ: 2400 })), stairRoom), []);
 });
