@@ -195,6 +195,8 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
       faceOverride: (face, i) => ({
         floorSegments: sequence[i].floorSegments,
         ceilingProfile: sequence[i].ceilingProfile,
+        // 天井断面線の隙間（床〜天井まで 1 本の断面の隔て板の範囲。天井断面は壁の中へ出っ張らない。elevationFigure.js）
+        ceilingProfileGaps: sequence[i].ceilingProfileGaps,
         // その面の断面線（下側の輪郭。ユーザー明示指示2026-09「断面線の外は描画しない」）。
         // 図形側では面端の縦線の下端に使う（床線・段差縦線はflatLineSpanX経由で自動追従）。
         floorProfile: sequence[i].floorProfile,

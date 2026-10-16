@@ -536,7 +536,7 @@ function upperFloorEdgeSpanAt(end, floorProfile, upperFloorZ, overhang, xs, floo
  *   floorSegments?:Array<{loX:number,hiX:number,floorDeltaMm:number,chMm?:number,
  *     flatLineSpanX?:{lo?:number,hi?:number}}>,
  *   beyondCeilings?:Array<{loX:number,hiX:number,ceilAbsMm:number,ceilAbsHiMm?:number}>,
- *   ceilingProfile?:Array<[number,number]>, floorProfile?:Array<[number,number]>|null,
+ *   ceilingProfile?:Array<[number,number]>, ceilingProfileGaps?:Array<[number,number]>, floorProfile?:Array<[number,number]>|null,
  *   skipBaseboard?:boolean, skipWallLabel?:boolean,
  *   floorSpanX?:{lo:number,hi:number}}} ctx
  *   beyondCeilings省略時（単体テスト等）は別エリアの天井の破線を描かない
@@ -548,6 +548,9 @@ function upperFloorEdgeSpanAt(end, floorProfile, upperFloorZ, overhang, xs, floo
  *   する（例外を投げない）。指定時（2点以上）は範囲外のxを端点値へクランプして常にprofile
  *   から解決し、天井の水平線群＋段差縦線の代わりに
  *   1本のpolyline（CUT）で描き、beyondCeilingsの破線処理は対象外（スキップ）になる。
+ *   ceilingProfileGaps（[[loX,hiX],...]。省略時なし）は天井断面線を描かないローカル x の範囲（床〜天井まで 1 本の断面に
+ *   なった切断壁の帯。天井断面は壁の断面の中へ出っ張らない）。polyline をその範囲で分け、手前は範囲の手前の端の
+ *   profile の高さで終え、向こうは向こうの端の高さから始める。profile の解釈（ceilAbsAtX・打ち切り）には影響しない。
  *   skipBaseboard/skipWallLabel（WP-2。既定false）はそれぞれ巾木・壁2段書きの描画を省略する
  *   （階段帯等、これらの表現が不要な帯からの呼び出し用）。
  *   skipFaceLabel/faceLabelBoundary（規則B。既定false/未指定＝現行と完全同一）はパネル統合
@@ -599,11 +602,40 @@ function upperFloorEdgeSpanAt(end, floorProfile, upperFloorZ, overhang, xs, floo
  *   下辺だけでよい）。天井線・巾木・段差縦線・面端の縦線は延ばさない。
  * @returns {object[]}
  */
+/**
+ * 天井断面線の点列（図の座標。x 昇順）を隙間 gaps（ローカル x の [lo, hi]）で分ける。隙間の中の点は捨て、各片の端は
+ * 隙間の端の高さ yAt(x)（図の y＝−天井高さ。隙間の手前の端は手前側の値・向こうの端は向こう側の値）で閉じる。
+ * 2 点に満たない片は出さない。gaps が無ければ元の点列 1 本。
+ * @param {Array<[number,number]>} points
+ * @param {Array<[number,number]>|null|undefined} gaps
+ * @param {(x:number)=>number} yAt
+ * @returns {Array<Array<[number,number]>>}
+ */
+export function splitPolylineAtGaps(points, gaps, yAt) {
+  const valid = (gaps ?? []).filter(g => Array.isArray(g) && Number.isFinite(g[0]) && Number.isFinite(g[1]) && g[1] - g[0] > GAP_EPS_MM)
+    .map(([a, b]) => [a, b]).sort((p, q) => p[0] - q[0]);
+  if (valid.length === 0 || points.length < 2) return [points];
+  const out = [];
+  let rest = points;
+  for (const [lo, hi] of valid) {
+    const x0 = rest[0][0], x1 = rest[rest.length - 1][0];
+    if (hi <= x0 + GAP_EPS_MM || lo >= x1 - GAP_EPS_MM) continue; // 片の外
+    const before = rest.filter(([x]) => x < lo - GAP_EPS_MM);
+    if (before.length > 0) before.push([lo, yAt(lo - 1e-3)]);
+    if (before.length >= 2) out.push(before);
+    const after = rest.filter(([x]) => x > hi + GAP_EPS_MM);
+    rest = after.length > 0 ? [[hi, yAt(hi + 1e-3)], ...after] : [];
+    if (rest.length < 2) { rest = []; break; }
+  }
+  if (rest.length >= 2) out.push(rest);
+  return out;
+}
+
 export function buildFaceFigure(face, ctx) {
   const {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-    wallLessEndExtendModelMm, scale, lineWeightsPx, ceilingProfile, skipBaseboard, skipWallLabel, floorSpanX,
+    wallLessEndExtendModelMm, scale, lineWeightsPx, ceilingProfile, ceilingProfileGaps, skipBaseboard, skipWallLabel, floorSpanX,
     solids, extraCenterLineXs, skipFaceLabel, faceLabelBoundary, floorProfile,
     upperOverhang, upperFloorZ, upperFloorEnds, upperFloorCutEnds, lowerOverhang,
   } = ctx;
@@ -882,7 +914,12 @@ export function buildFaceFigure(face, ctx) {
       if (x > drawnX0 + 1e-6 && x < drawnXRun - 1e-6) points.push([x, -y]);
     }
     points.push([ceilXRun, -ceilAbsAtX(ceilXRun, CH)]);
-    prims.push({ type: 'polyline', points, weight: cutWeight });
+    // 天井断面線の隙間（ceilingProfileGaps。床〜天井まで 1 本の断面になった切断壁の範囲）: 天井断面は壁の断面の中へ
+    // 出っ張らない（ユーザー指摘 2026-10-16「moku4-3 1階 階段 A: 往路の隔て板と天井は取り合いでトリム〔天井断面は壁内に
+    // でっぱらない〕」）。隙間の手前は壁の面の高さで終え、向こうは壁の面の高さから始める（壁の縁は断面エンジンが描く）。
+    for (const piece of splitPolylineAtGaps(points, ceilingProfileGaps, x => -ceilAbsAtX(x, CH))) {
+      prims.push({ type: 'polyline', points: piece, weight: cutWeight });
+    }
   } else {
     const ceilRiserXAt = i => drawnCeilingRiserX(segs, i, halfWallMm, CH);
     // 天井の絶対高さが同じ隣接区間は1本の水平線に結合する（床だけの段差では天井線を分割しない）。

@@ -6684,7 +6684,7 @@
   "room": "e47cdc52-12f2-43a0-81bb-7fd1ec568a5d",
   "name": "",
   "kind": "stair",
-  "count": 172,
+  "count": 173,
   "prims": [
    {
     "dash": "dashed",
@@ -6712,11 +6712,13 @@
      [
       780,
       -4031.385
-     ],
-     [
-      895,
-      -4031.385
-     ],
+     ]
+    ],
+    "type": "polyline",
+    "weight": "thick"
+   },
+   {
+    "points": [
      [
       895,
       -4220.945

@@ -1351,11 +1351,21 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   const floorSegments1 = withFlatLineSpans(rawSegments1, floorProfile1);
   const soffit1 = applySoffit('1', null);
   const fields1 = contentFields(cutOf('1'), { ceilLowAbs, floorHeight }, floorProfile1);
+  // 隔て板が床〜天井の 1 本の断面（continuousWallAcross）のとき、体裁の天井断面線はその帯の範囲で途切れる——天井断面は壁の
+  // 断面の中へ出っ張らない（ユーザー指摘 2026-10-16「往路の隔て板と天井は取り合いでトリム」）。帯の両面の縁は断面エンジンが
+  // 描く（cutEdgeLo/Hi）ので、天井線は手前の面で終え向こうの面から始めるだけでよい。エンジンの ceilClip は不変。
+  const ceilingProfileGaps1 = (() => {
+    const cut1 = cutOf('1');
+    if (!cut1?.continuousWallAcross || !soffit1 || !partitionStrip || !midWall || cut1.line.isVertical === midWall.isVertical) return undefined;
+    const a = localXOf(cut1, partitionStrip.lo), b = localXOf(cut1, partitionStrip.hi);
+    return [[Math.min(a, b), Math.max(a, b)]];
+  })();
   entries.push({
     seqNo: '1', face: wEntry,
     floorSegments: floorSegments1,
     floorProfile: floorProfile1,
     ...(soffit1 ? { ceilingProfile: soffit1.ceilingProfile } : {}),
+    ...(ceilingProfileGaps1 ? { ceilingProfileGaps: ceilingProfileGaps1 } : {}),
     chDimSplitAbsYs: [floorHeight],
     upperOverhang: fields1.upperOverhang, upperFloorZ: fields1.upperFloorZ,
     // 切断面の後ろを隠す flight の矩形（図側の床線・面端の縦線をその範囲だけ細線破線に。elevationStair.js）

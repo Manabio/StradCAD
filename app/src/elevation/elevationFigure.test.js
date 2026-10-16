@@ -2,10 +2,12 @@
 // graph/room/opening は buildFaceFigure が実際に読むフィールドのみを持つ最小限のフェイクを使う
 // （純関数のロジック検証が目的で、graph実体の生成コストを避ける）。
 import { test } from 'node:test';
+import { drawnFloorProfileZAt } from './elevationFloorProfile.js';
 import assert from 'node:assert/strict';
 import { edgeKey, OpeningCategory, CenterLineType, Plane, PlanGraph, Discipline, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
+  splitPolylineAtGaps,
   buildFaceFigure, kneeDropGapsOnFace, parseBaseboardHeightMm, avoidGridCollisionX,
   openingsReachingCorner, formatMaterialLabel, avoidObstacleRangesX, estimateWallLabelWidthPx,
   segEndProfile, hasRightChDim,
@@ -3562,4 +3564,27 @@ test('【失敗系・2026-10-15】buildFaceFigure: 壁が面の端より 57.5 �
   const prims = buildFaceFigure(makeFace({ hasWallAtLocal0: false, hasWallAtLocalRun: false }),
     beyondCtx([beyondWall(57.5, 3942.5)]));
   assert.deepEqual(baseboardSpans(prims), [[0, 4000]]);
+});
+
+test('【2026-10-16】splitPolylineAtGaps: 天井断面線を隔て板の帯で分け、手前は帯の手前の面の高さで終え、向こうは向こうの面の高さから始める（面 A: 3615.8 は 780 で終わり、4742 は 895 から）', () => {
+  const profile = [[0, 3615.813], [780, 3615.813], [895, 3615.813], [895, 4742.186], [1675, 4742.186]];
+  const yAt = x => -drawnFloorProfileZAt(profile, x);
+  const points = [[-150, -3615.813], ...profile.map(([x, z]) => [x, -z]), [1825, -4742.186]];
+  assert.deepEqual(splitPolylineAtGaps(points, [[780, 895]], yAt), [
+    [[-150, -3615.813], [0, -3615.813], [780, -3615.813]],
+    [[895, -4742.186], [1675, -4742.186], [1825, -4742.186]],
+  ]);
+});
+
+test('【失敗系】splitPolylineAtGaps: 隙間なし・不正な隙間・片の外の隙間は元の 1 本。端にかかる隙間は 2 点に満たない片を出さない', () => {
+  const points = [[0, -2400], [1000, -2400], [2000, -3000]];
+  const yAt = () => -2400;
+  assert.deepEqual(splitPolylineAtGaps(points, undefined, yAt), [points]);
+  assert.deepEqual(splitPolylineAtGaps(points, [], yAt), [points]);
+  assert.deepEqual(splitPolylineAtGaps(points, [[500, 500], [NaN, 700], [900, 800]], yAt), [points], '幅 0・非数・逆順は無視');
+  assert.deepEqual(splitPolylineAtGaps(points, [[2500, 3000]], yAt), [points], '片の外');
+  // 左端にかかる隙間: 手前の片は 1 点（隙間の端）だけになるので出さず、向こうの片だけ
+  assert.deepEqual(splitPolylineAtGaps(points, [[-100, 500]], yAt), [[[500, -2400], [1000, -2400], [2000, -3000]]]);
+  // 右端にかかる隙間: 向こうの片が無い
+  assert.deepEqual(splitPolylineAtGaps(points, [[1500, 2500]], yAt), [[[0, -2400], [1000, -2400], [1500, -2400]]]);
 });
