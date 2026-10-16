@@ -4936,7 +4936,7 @@
   "room": "86e378f0-8eb2-4aa8-aa5a-f1cedbc46912",
   "name": "",
   "kind": "stair",
-  "count": 181,
+  "count": 187,
   "prims": [
    {
     "dash": "dashed",
@@ -5923,6 +5923,32 @@
    {
     "type": "line",
     "weight": "medium",
+    "x1": 0,
+    "x2": 780,
+    "y1": -5400,
+    "y2": -5400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 780,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 780,
+    "y1": -5400,
+    "y2": -3000
+   },
+   {
+    "type": "line",
+    "weight": "medium",
     "x1": 895,
     "x2": 1675,
     "y1": -3000,
@@ -5963,6 +5989,32 @@
     "x2": 1675,
     "y1": -1500,
     "y2": 0
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 895,
+    "x2": 1675,
+    "y1": -5400,
+    "y2": -5400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 895,
+    "x2": 1675,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 895,
+    "x2": 1675,
+    "y1": -5400,
+    "y2": -3000
    },
    {
     "dash": "dashed",

@@ -936,19 +936,63 @@ export function openingPanelPrimitives(cut, columns, probeCtx, bandRoom) {
   // 向こうの部屋を引く
   const faceCoord = Number.isFinite(cut.face?.faceValue) ? cut.face.faceValue : cut.face?.axisCL?.effectiveValue;
   if (!Number.isFinite(faceCoord)) return [];
+  // 上階の層（直上）と、帯の天井＝切断の打ち切り（ceilClip。無ければ帯の上限 zRange.hiZ）。上階の開口の隠れ線の判定に使う
+  const aboveLayer = layerDirectlyAboveSelf(cut.layers ?? []);
+  const clip = Array.isArray(cut.ceilClip) ? cut.ceilClip : [];
+  const bandTopZ = Number.isFinite(cut.zRange?.hiZ) ? cut.zRange.hiZ : Infinity;
+  // 区間の端の x での帯の天井。端は打ち切りの区間の境にも立つので、区間の内側（lo 端なら右・hi 端なら左）の区間で引く
+  const clipAt = (x, side) => {
+    const s = clip.find(q => (side === 'lo' ? x >= q.loX - GAP_EPS && x < q.hiX - GAP_EPS : x > q.loX + GAP_EPS && x <= q.hiX + GAP_EPS));
+    return s ? Math.min(s.ceilZ, s.ceilZHi ?? s.ceilZ) : bandTopZ;
+  };
+  const selfFloorZ = typeof probeCtx.floorZOf === 'function' ? probeCtx.floorZOf(bandRoom, selfLayer) : floorZ;
+  const soffit = selfLayer.stairSoffit && bandRoom && selfLayer.stairSoffit.roomId === bandRoom.id ? selfLayer.stairSoffit.soffit : null;
+  const hiddenPieces = [];
   for (const r of runs) {
     if (!r || r.x1 - r.x0 <= GAP_EPS) continue;
     const across = worldOf(cut, (r.x0 + r.x1) / 2);
     const depth = faceCoord + vs * PROBE_EPS_MM;
-    const cell = cut.line.isVertical ? probeCtx.cellAt(selfLayer, depth, across) : probeCtx.cellAt(selfLayer, across, depth);
+    const cellOf = (layer, d) => (cut.line.isVertical ? probeCtx.cellAt(layer, d, across) : probeCtx.cellAt(layer, across, d));
+    const cell = cellOf(selfLayer, depth);
     if (!cell?.room || (bandRoom && cell.room.id === bandRoom.id) || !Number.isFinite(cell.ceilZ)) continue;
     const ceil = cell.ceilZ;
     if (!(ceil - floorZ > GAP_EPS)) continue;
     out.push(emitLine(cut, r.x0, ceil, r.x1, ceil, ElevationLineRole.SILHOUETTE, { neverDowngrade: true }));
     out.push(emitLine(cut, r.x0, floorZ, r.x1, ceil, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
     out.push(emitLine(cut, r.x0, ceil, r.x1, floorZ, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
+
+    // 上階の開口（ユーザー指摘 2026-10-16「moku4-3 1階 階段 A: X1+910 の右側復路の 2 階天井に破線。復路の壁断面上に 2 階天井まで
+    // 破線。2FL 壁と 2F 天井壁の角でバツ〔復路天井より上は破線〕」）: 帯の天井が上階 FL より上にあり、面の線で上階の部屋へ
+    // 開いている区間（視線の上限＝帯の天井〔ceilClip〕と面の線での自階の裏面の低い方が上階 FL より上。X1 側＝往路は上階の往路の
+    // 裏面が Y4 で 2FL より低いので開口なし）に、上階の部屋の天井の縁（中線）＋アキのバツ（上階 FL〜天井）＋区間の両端の縦線
+    // （帯の天井より上の分。左右対称〔裁定 2026-10-16〕）を描く。帯の天井（打ち切り）より上は見えないので細線破線。
+    if (!aboveLayer) continue;
+    const up = cellOf(aboveLayer, depth);
+    if (!up?.room || !isRealRoom(up.room) || !Number.isFinite(up.floorZ) || !Number.isFinite(up.ceilZ)) continue;
+    const upFloor = up.floorZ, upCeil = up.ceilZ;
+    if (!(upCeil - upFloor > GAP_EPS)) continue;
+    const soffitCh = soffit
+      ? (cut.line.isVertical ? stairSoffitChAt(soffit, faceCoord, across) : stairSoffitChAt(soffit, across, faceCoord)) : null;
+    const soffitAtFace = Number.isFinite(soffitCh) ? selfFloorZ + soffitCh : Infinity;
+    const clipMin = Math.min(...clip.filter(q => q.hiX > r.x0 + GAP_EPS && q.loX < r.x1 - GAP_EPS).map(q => Math.min(q.ceilZ, q.ceilZHi ?? q.ceilZ)), bandTopZ);
+    const limit = Math.min(clipMin, soffitAtFace);
+    if (!(limit - upFloor > GAP_EPS)) continue; // 開口が見える高さが無い
+    out.push(emitLine(cut, r.x0, upCeil, r.x1, upCeil, ElevationLineRole.SILHOUETTE, { neverDowngrade: true }));
+    out.push(emitLine(cut, r.x0, upFloor, r.x1, upCeil, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
+    out.push(emitLine(cut, r.x0, upCeil, r.x1, upFloor, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
+    for (const [x, side] of [[r.x0, 'lo'], [r.x1, 'hi']]) {
+      const z0 = Math.max(upFloor, Math.min(clipAt(x, side), soffitAtFace));
+      if (upCeil - z0 > GAP_EPS) out.push(emitLine(cut, x, z0, x, upCeil, ElevationLineRole.DETAIL, { neverDowngrade: true }));
+    }
+    // 帯の天井より上（打ち切りの区間ごと・面の線での裏面より上）は隠れ線
+    for (const q of clip) {
+      const xLo = Math.max(q.loX, r.x0), xHi = Math.min(q.hiX, r.x1);
+      if (xHi - xLo > GAP_EPS) hiddenPieces.push({ xLo, xHi, zLo: Math.min(q.ceilZ, q.ceilZHi ?? q.ceilZ), zHi: 1e7 });
+    }
+    // 打ち切りの無い帯（裏面なし。帯の上限＝上階天井）は隠れるものが無い＝バツも縁も実線（裁定 2026-10-16「6」A）
+    if (Number.isFinite(soffitAtFace)) hiddenPieces.push({ xLo: r.x0, xHi: r.x1, zLo: soffitAtFace, zHi: 1e7 });
   }
-  return out;
+  return dashLinesInsideRects(out, hiddenPieces, { inclusive: true });
 }
 
 /**

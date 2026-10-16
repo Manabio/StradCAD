@@ -2,6 +2,7 @@
 // spaceModel.cellAt（層スタックの天井）・stairChDimChains（CH 寸法の上端）・stairFaceSequence（歩行順 5 面）。
 // 供給源そのもの（節・段・あき）は space/stairSoffitCeiling.test.js。
 import { test } from 'node:test';
+import { RoomFeature } from '@core';
 import assert from 'node:assert/strict';
 import { StairType, StructuralMaterialType } from '@core';
 import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js';
@@ -465,4 +466,48 @@ test('【指示2026-10-15】openingPanelPrimitives: 壁のない上り口の面�
   assert.deepEqual(openingPanelPrimitives(cutOf({ hasRealWall: true, faceValue: -9100 }), columns, probe(() => ({ room: hall, floorZ: 0, ceilZ: 2400 })), stairRoom), []);
   assert.deepEqual(openingPanelPrimitives(cutOf({ hasRealWall: false, kind: 'stairMid', faceValue: -9100 }), columns, probe(() => ({ room: hall, floorZ: 0, ceilZ: 2400 })), stairRoom), []);
   assert.deepEqual(openingPanelPrimitives(cutOf({ hasRealWall: false }), columns, probe(() => ({ room: hall, floorZ: 0, ceilZ: 2400 })), stairRoom), []);
+});
+
+test('【指示2026-10-16】openingPanelPrimitives: 上階の開口。帯の天井（ceilClip）が上階 FL より上で面の線の裏面も上階 FL より上の区間に、上階の天井の縁＋バツ（上階 FL〜天井）＋両端の縦線（帯の天井より上）。帯の天井より上は細線破線。往路側（裏面が 2FL より低い）は出ない', () => {
+  const hall = { id: 'hall' }, corridor = { id: 'corridor' }, stairRoom = { id: 'stair' };
+  const solid = { footprint: { rects: [{ x1: 72.5, y1: -9157.5, x2: 852.5, y2: -8247.5 }, { x1: 967.5, y1: -9157.5, x2: 1747.5, y2: -8132.5 }] },
+    zLo: 2400, zHi: 5615.8, zAt: (x) => (x < 900 ? 2476.8 : 5615.8) };
+  const self = { role: 'self', graph: {}, floorZMm: 0, stairSoffit: { roomId: 'stair', soffit: { solid, floorStepMm: 0 } } };
+  const above = { role: 'above', graph: {}, floorZMm: 3000 };
+  const probe = { cellAt: (l) => (l === above ? { room: corridor, floorZ: 3000, ceilZ: 5400 } : { room: hall, floorZ: 0, ceilZ: 2400 }), floorZOf: () => 0 };
+  const clip = [{ loX: 0, hiX: 780, ceilZ: 3615.8, ceilZHi: 3615.8 }, { loX: 780, hiX: 895, ceilZ: 3615.8, ceilZHi: 3615.8 }, { loX: 895, hiX: 1675, ceilZ: 4742.2, ceilZHi: 4742.2 }];
+  const cutOf = (layers, extra = {}) => ({ line: { isVertical: false, axisValue: -8247.5, lo: 72.5, hi: 1747.5 }, viewSign: -1, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0, layers, face: { hasRealWall: false, faceValue: -9100 }, ceilClip: clip, ...extra });
+  const columns = [
+    { x0: 0, x1: 780, worldLo: 72.5, worldHi: 852.5, bands: [{ kind: 'open', z0: 0, z1: 3615 }] },
+    { x0: 780, x1: 895, worldLo: 852.5, worldHi: 967.5, bands: [{ kind: 'cut', z0: 0, z1: 4742 }] },
+    { x0: 895, x1: 1675, worldLo: 967.5, worldHi: 1747.5, bands: [{ kind: 'open', z0: 0, z1: 4742 }] },
+  ];
+  const prims = openingPanelPrimitives(cutOf([self, above]), columns, probe, stairRoom);
+  const upper = prims.filter(p => -Math.min(p.y1, p.y2) >= 3000 - 1e-6 && Math.max(-p.y1, -p.y2) > 3000 + 1e-6);
+  assert.ok(upper.every(p => p.x1 >= 895 - 1e-6 && p.x2 >= 895 - 1e-6), `上階の開口は復路側（x≥895）だけ: ${JSON.stringify(upper)}`);
+  const edge = upper.filter(p => p.y1 === p.y2 && -p.y1 === 5400);
+  assert.equal(edge.length, 1, '上階の天井の縁');
+  assert.ok(edge[0].dash === 'dashed' && edge[0].weight === 'thin' && edge[0].x1 === 895 && edge[0].x2 === 1675, '帯の天井 4742 より上なので細線破線');
+  const verticals = upper.filter(p => p.x1 === p.x2).map(p => [p.x1, -Math.max(p.y1, p.y2), -Math.min(p.y1, p.y2), p.dash]).sort((a, b) => a[0] - b[0]);
+  assert.deepEqual(verticals, [[895, 4742.2, 5400, 'dashed'], [1675, 4742.2, 5400, 'dashed']], '両端の縦線は帯の天井から上階天井まで・左右対称・破線');
+  const diag = upper.filter(p => p.x1 !== p.x2 && p.y1 !== p.y2);
+  assert.ok(diag.some(p => p.dash === 'center' && Math.max(-p.y1, -p.y2) <= 4742.2 + 1e-6), 'バツの帯の天井より下は一点鎖線');
+  assert.ok(diag.some(p => p.dash === 'dashed' && Math.min(-p.y1, -p.y2) >= 4742.2 - 1e-6), 'バツの帯の天井より上は破線');
+  assert.ok(diag.every(p => Math.min(-p.y1, -p.y2) >= 3000 - 1e-6 && Math.max(-p.y1, -p.y2) <= 5400 + 1e-6), 'バツは上階 FL〜上階天井の中');
+  // 自階の開口（2400 の縁とバツ）は従来どおり両区間に出る
+  assert.deepEqual(prims.filter(p => p.y1 === p.y2 && -p.y1 === 2400).map(p => [p.x1, p.x2]), [[0, 780], [895, 1675]]);
+  // 失敗系: 上階の層が無い／上階の部屋が実床でない／帯の天井が上階 FL 以下／面の線の裏面が上階 FL 以下（往路側と同じ）では上階の開口は出ない
+  const upperOf = prims2 => prims2.filter(p => Math.max(-p.y1, -p.y2) > 3000 + 1e-6);
+  assert.deepEqual(upperOf(openingPanelPrimitives(cutOf([self]), columns, probe, stairRoom)), []);
+  const voidProbe = { ...probe, cellAt: (l) => (l === above ? { room: { id: 'v', feature: RoomFeature.STAIR_VOID }, floorZ: 3000, ceilZ: 5400 } : { room: hall, floorZ: 0, ceilZ: 2400 }) };
+  assert.deepEqual(upperOf(openingPanelPrimitives(cutOf([self, above]), columns, voidProbe, stairRoom)), []);
+  const lowClip = clip.map(q => ({ ...q, ceilZ: 2900, ceilZHi: 2900 }));
+  assert.deepEqual(upperOf(openingPanelPrimitives(cutOf([self, above], { ceilClip: lowClip }), columns, probe, stairRoom)), []);
+  const lowSoffit = { ...self, stairSoffit: { roomId: 'stair', soffit: { solid: { ...solid, zAt: () => 2476.8 }, floorStepMm: 0 } } };
+  assert.deepEqual(upperOf(openingPanelPrimitives(cutOf([lowSoffit, above]), columns, probe, stairRoom)), []);
+  // ceilClip が無い帯（裏面なし）: 帯の上限 zRange.hiZ（5400）までは全部見えるので、縦線は無く縁・バツは隠れ線にならない
+  const noClip = openingPanelPrimitives(cutOf([self, above], { ceilClip: undefined }), columns, probe, stairRoom);
+  const noClipUpper = upperOf(noClip);
+  assert.ok(noClipUpper.length > 0 && noClipUpper.every(p => p.dash !== 'dashed' && p.x1 !== p.x2), JSON.stringify(noClipUpper));
 });
