@@ -66,7 +66,7 @@ function layerDirectlyAbove(layers, layer) {
  *   収まるように。裏面は走行方向に傾き、壁の回転部側の面が最も低い）。求まらなければ null。
  * @returns {{walls:import('@core').Wall[], line:{isVertical:boolean, axisValue:number, lo:number, hi:number}, solid:object, wallTopZ:number|null}|null}
  */
-export function stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm }) {
+export function stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm, aboveGraph = null }) {
   if (!stair || !graph) return null;
   const room = graph.roomMap?.get(stair.roomId) ?? null;
   if (room?.kind === RoomKind.EXTERIOR) return null;
@@ -79,7 +79,7 @@ export function stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm }) 
   if (!Array.isArray(sections) || sections.length !== 3 || !sections.every(Number.isFinite)) return null;
   const riser = riserOf(stair, floorHeight);
   if (!Number.isFinite(riser) || !Number.isFinite(floorZMm)) return null;
-  const solid = stairSoffitSolids({ stair, graph, riser, floorZMm })[0];
+  const solid = stairSoffitSolids({ stair, graph, riser, floorZMm, aboveGraph })[0];
   if (!solid) return null;
   const mid = (line.lo + line.hi) / 2;
   const half = PARTITION_THICKNESS_MM / 2;
@@ -94,10 +94,10 @@ export function stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm }) 
 // 踏面・裏面で、壁は立ち上がらない）。高さは階段の裏面の式の唯一の供給源 ceiling/stairSoffit.js stairSoffitSolids を
 // 壁の軸上・区間の中央で評価した値（壁の厚みは 115 なので平らで足りる）。式の入力は階段・graph・蹴上（階高/総段数）・
 // 階段室の床の絶対z。直上の層が無い（階高不明で蹴上が決まらない）・鉄骨階段・裏面が求まらない場合は載せない＝フルハイト。
-function addUnderReturnTops(out, graph, floorHeight, layer, floorZFor) {
+function addUnderReturnTops(out, graph, floorHeight, layer, floorZFor, aboveGraph = null) {
   for (const stair of graphList(graph, 'stairs') ?? []) {
     const room = graph.roomMap?.get(stair.roomId) ?? null;
-    const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm: floorZFor(room, layer) });
+    const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm: floorZFor(room, layer), aboveGraph });
     if (!found || found.wallTopZ == null) continue; // 復路下の壁なし・裏面が組めない＝フルハイト
     const { walls, wallTopZ: z } = found;
     // junction … 天端は階段の裏面（傾斜天井）との取り合い。壁の自由な縁ではないので、見えがかりの天端は細線（sectionEmit.js emitColumns）。
@@ -108,14 +108,14 @@ function addUnderReturnTops(out, graph, floorHeight, layer, floorZFor) {
 
 // 層の隔て壁（オーナー壁・薄壁とも）→ 天端プロファイル。直上の層が無ければ階高が決まらず
 // 斜め天端にできない（full＝プロファイルなし）。続きの階段（上階に重なる階段）があれば full。
-function buildWallTopProfiles(layers, layer, floorZFor, fallbackFloorHeightMm = null) {
+function buildWallTopProfiles(layers, layer, floorZFor, fallbackFloorHeightMm = null, fallbackUpperGraph = null) {
   const out = new Map();
   const graph = layer.graph;
   if (!graph) return out;
   const above = layerDirectlyAbove(layers, layer);
   // 復路下の壁の天端だけは、直上の層が無い単層の帯でも呼び出し側が渡す階高（fallbackFloorHeightMm。部屋帯の
   // solids.floorHeightMm）で付ける——ホールから階段室を見通すとき復路下の壁が最初の壁になる（S4）。
-  addUnderReturnTops(out, graph, above ? above.floorZMm - layer.floorZMm : fallbackFloorHeightMm, layer, floorZFor);
+  addUnderReturnTops(out, graph, above ? above.floorZMm - layer.floorZMm : fallbackFloorHeightMm, layer, floorZFor, above?.graph ?? fallbackUpperGraph);
   const structGraph = graph._structGraph;
   const descs = stairPartitionDescriptors(graph, {
     structure: effectiveStructure(graph),
@@ -162,7 +162,7 @@ export function makeProbeContext(layers, opts = {}) {
   const wallTopByLayer = new Map(); // layer -> Map<wallId, {zAt, crossings}>
   function wallTopProfileFor(layer) {
     let m = wallTopByLayer.get(layer);
-    if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor, opts.floorHeightMm ?? null); wallTopByLayer.set(layer, m); }
+    if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor, opts.floorHeightMm ?? null, opts.upperGraph ?? null); wallTopByLayer.set(layer, m); }
     return m;
   }
   return {
@@ -187,6 +187,8 @@ export function makeProbeContext(layers, opts = {}) {
     // 呼び出し側が渡した階高（設置階〜上階。部屋帯のsolids.floorHeightMm。無ければnull）。直上の層が無い単層の帯で
     // 階段の蹴上が要る処理（復路下の壁の天端・階段室越しの階段の見えがかり）が使う。
     floorHeightMm: opts.floorHeightMm ?? null,
+    // 同じく直上階の graph（部屋帯の solids.upperGraph。復路の到達辺＝上階の床梁の面）。層スタックに直上の層が無い単層の帯用のフォールバック
+    upperGraph: opts.upperGraph ?? null,
   };
 }
 

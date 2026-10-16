@@ -184,14 +184,14 @@ function stairRiserLocalXs(content, cut, stair, edgeXs) {
 }
 
 // 平面の幾何（install 枠で全段を描いた踏面線・放射線・外周。view 'upper' は破れで打ち切らない）
-function planGeometry(stair, graph, project) {
+function planGeometry(stair, graph, project, aboveGraph = null) {
   const floorHeight = floorHeightAbove(project, graph.plane);
   const riser = stair.riser ?? (floorHeight / Math.max(1, stair.totalSteps));
   // detail:false＝段のセルの境界（stairTreadFootprints・straightPlanLayout と同じ位置）。直進系の平面は詳細 LOD（detail:true）で踏面線を
   // ±nosing ずらして描く（buildStraight の nosingMm。U 字系は無し）ので、detail:true だと直進系の蹴上が一律に蹴込ぶんずれて見える。
   // 展開図はセルの境界に揃える（ずらし分は平面側の描画規約で、本 probe の対象外）
   return buildStairGeometry(stair, roomBounds(stair.cells, graph), {
-    view: 'upper', insetView: 'install', detail: false, riser, spans: measureStairSpans(stair, graph), laneGap: true, graph,
+    view: 'upper', insetView: 'install', detail: false, riser, spans: measureStairSpans(stair, graph), laneGap: true, graph, aboveGraph,
   });
 }
 
@@ -201,7 +201,7 @@ function planGeometry(stair, graph, project) {
 //     — stairPlanAlign.test.js の planOut/planIn と同じ定義。
 //   直進系: straightPlanLayout の exitA（最後の直進部の終端＝最後の蹴上の辺）・base（走行端の上り口か取りつき段ありのとき最初の蹴上の辺）・
 //     end（到達口の区画に段があるとき、区画の外縁の上階の床との蹴上）。
-function boundaryRunValues(stair, graph) {
+function boundaryRunValues(stair, graph, aboveGraph = null) {
   if (stair.type === StairType.STRAIGHT || stair.type === StairType.STRAIGHT_LANDING) {
     const p = straightPlanLayout(stair, graph);
     if (!p) return [];
@@ -211,7 +211,7 @@ function boundaryRunValues(stair, graph) {
     return vals;
   }
   if (stair.type === StairType.SWITCHBACK || stair.type === StairType.WINDING) {
-    const p = uTurnPlanLayout(stair, graph);
+    const p = uTurnPlanLayout(stair, graph, { aboveGraph });
     if (!p) return [];
     const vals = [p.run.startB];
     if (p.entryPort === 'end' || p.entryTurnSteps >= 1) vals.push(p.run.baseA);
@@ -273,8 +273,8 @@ for (let i = 0; i < tabs.length; i++) {
       const table = (stair.type === StairType.STRAIGHT || stair.type === StairType.STRAIGHT_LANDING)
         ? straightCuts(stair, composedFaces, graph, seqOpts) : switchbackCuts(stair, composedFaces, graph, seqOpts);
       if (!sequence || !table) { notes.push(`${tag}: 歩行順の面シーケンスが組めない→対象外`); continue; }
-      const geom = planGeometry(stair, graph, project);
-      const boundary = boundaryRunValues(stair, graph);
+      const geom = planGeometry(stair, graph, project, upperGraph);
+      const boundary = boundaryRunValues(stair, graph, upperGraph);
       for (const entry of sequence) {
         const cut = table.cuts.find(c => c.seqNo === entry.seqNo);
         if (!cut) { notes.push(`${tag}: seq${entry.seqNo} の切断が表に無い`); continue; }

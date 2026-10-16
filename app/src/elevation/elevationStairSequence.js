@@ -83,11 +83,13 @@ import { parseBaseboardHeightMm } from './elevationFigure.js';
  * @param {object} cut seq5 の切断（line・dirSign・landingEnd）
  * @param {number} floorHeight 階高（蹴上の推定）
  * @param {number} floorZMm 階段室の床の絶対 z（層スタックの floorZFor）
+ * @param {number|null} [ceilAbsMm]
+ * @param {object|null} [aboveGraph] 直上階の graph（到達辺の面。省略は Q3）
  * @returns {{loX:number, hiX:number, wallLoX:number, wallHiX:number, onLo:boolean, soffit:Array<{x:number, z:number, gapBefore:boolean}>}|null}
  */
-export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm, ceilAbsMm = null) {
+export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm, ceilAbsMm = null, aboveGraph = null) {
   if (!cut?.line) return null;
-  const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm });
+  const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm, aboveGraph });
   if (!found || found.line.isVertical === cut.line.isVertical) return null;
   const { walls, solid } = found;
   // 壁の幅方向の区間に切断線の深さが入る（壁は切断線と直交する）
@@ -1384,7 +1386,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     const selfLayer0 = (cuts[0].layers ?? []).find(l => l?.role === 'self') ?? null;
     const riser = riserOf(stair, floorHeight);
     const floorZ0 = selfLayer0 ? probeCtx.floorZOf(bandRoom, selfLayer0) : 0;
-    return Number.isFinite(riser) ? (stairSoffitSolids({ stair, graph, riser, floorZMm: floorZ0 })[0] ?? null) : null;
+    return Number.isFinite(riser) ? (stairSoffitSolids({ stair, graph, riser, floorZMm: floorZ0, aboveGraph: opts.upperGraph ?? null })[0] ?? null) : null;
   })();
   {
     const cut1 = cutOf('1');
@@ -1539,7 +1541,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     const outFace = cut.face;
     const selfLayer = (cut.layers ?? []).find(l => l?.role === 'self') ?? null;
     const selfFloorZ = selfLayer ? probeCtx.floorZOf(bandRoom, selfLayer) : 0;
-    const underReturn = underReturnSpaceOf(stair, graph, cut, floorHeight, selfFloorZ, ceilLowAbs);
+    const underReturn = underReturnSpaceOf(stair, graph, cut, floorHeight, selfFloorZ, ceilLowAbs, opts.upperGraph ?? null);
     const rawSegments = underReturn && Math.abs(underFloorZ - selfFloorZ) > GAP_EPS
       ? [[0, underReturn.loX, underFloorZ], [underReturn.loX, underReturn.hiX, selfFloorZ], [underReturn.hiX, outFace.run, underFloorZ]]
         .filter(([a, b]) => b - a > GAP_EPS)

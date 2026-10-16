@@ -329,7 +329,7 @@ export function farStairViewPrimitives(columns, cut, probeCtx) {
   const prims = [];
   for (const stair of stairs) {
     if (!roomIds.has(stair.roomId)) continue;
-    const contribution = stairContribution(stair, layer.graph, floorHeight);
+    const contribution = stairContribution(stair, layer.graph, floorHeight, above?.graph ?? probeCtx?.upperGraph ?? null);
     if (contribution) prims.push(...farSideSilhouettePrimitives(contribution, cut, columns));
   }
   // 天井より上は描かない（図のy=-z。天井ちょうどの線も天井線と重なるので落とす）。

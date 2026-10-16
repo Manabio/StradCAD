@@ -138,7 +138,7 @@ export const STAIR_RUN_TOL_MM = 0.5;
  *   zoneEdge:{entry:{run:number, outerZ:number}|null, arrival:{run:number, outerZ:number}|null},
  *   forwardSign:1|-1, frame:{frontA:number, front:number, back:number}}|null}
  */
-export function stairContribution(stair, graph, floorHeight) {
+export function stairContribution(stair, graph, floorHeight, aboveGraph = null) {
   if (!stair || !U_TURN_TYPES.has(stair.type)) return null;
   const params = resolveUTurnSectionParams(stair, graph, floorHeight);
   if (!params) return null;
@@ -149,7 +149,8 @@ export function stairContribution(stair, graph, floorHeight) {
   // （params.len1 等）から再計算しない——再計算すると隔て壁の柱・壁の仕上げ面に合わせた平面の線と
   // 展開図の蹴上が一定量ずれる（ユーザー裁定 2026-10-09「展開図の階段位置を平面に揃える」）。
   // 段数（n1/n2/e/w）も平面側の値、蹴上高 riser だけ従来どおり階高から（resolveUTurnSectionParams）。
-  const layout = uTurnPlanLayout(stair, graph);
+  // aboveGraph＝直上階（N+1）の graph。復路の到達辺を上階の床梁の外面＋壁仕上げに置く（無ければ Q3）
+  const layout = uTurnPlanLayout(stair, graph, { aboveGraph });
   if (!layout) return null;
   const { vertical, run, across, entryTurnSteps, arrivalTurnSteps, entryNumbers, arrivalNumbers, turnCells } = layout;
   const { n1, n2 } = layout;
@@ -209,7 +210,7 @@ export function stairContribution(stair, graph, floorHeight) {
   landing.frame = { edges: landingFrameEdges(landing, vertical, frontIsLo) };
   // 平面の段の多角形（stairTreadFootprints の install。回転部・側面の口の取りつき区画で共有。1 回だけ呼ぶ）
   const footprints = isWinding || entryNumbers || arrivalNumbers
-    ? stairTreadFootprints(stair, graph, { riser, insetView: 'install' }) : [];
+    ? stairTreadFootprints(stair, graph, { riser, insetView: 'install', aboveGraph }) : [];
   // 取りつき区画のセル（上り口 e 個・到達口 a 個）と平場（段 0）の矩形、区画の外縁。番号の範囲は uTurnPlanLayout が供給する。
   // 区画の外縁（上り口辺 baseA・到達辺 baseB）の外側の高さは、上り口の外が床（0）、到達口の外が上階の床。
   // 既知の別件: 両口とも側面＋隔て板の柱がある構成で、平面の上り口セルと到達口セルが x 1000..1057.5 で重なる（平面側の既存挙動、T1 では直さない）。

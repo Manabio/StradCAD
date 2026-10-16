@@ -28,6 +28,7 @@ export function stairSoffitAbove({ stair, graph, upperGraph, floorHeightMm, rise
   if (!stair || !graph || !upperGraph || !Number.isFinite(floorHeightMm) || typeof riserOf !== 'function') return null;
   for (const t of upperGraph.stairs ?? []) {
     if (matchingStairBelow(t, upperGraph, graph) !== stair) continue;
+    // aboveGraph は渡さない（N+2 は層スタックに無いため到達辺は Q3 に戻る＝既知の限界）
     const [solid] = stairSoffitSolids({
       stair: t, graph: upperGraph, belowStair: stair, belowGraph: graph, riser: riserOf(t), floorZMm: floorHeightMm,
     });

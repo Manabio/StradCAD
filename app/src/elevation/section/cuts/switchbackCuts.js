@@ -377,7 +377,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
 
   // 階段の3D寄与。走行方向の位置（往路の終端 frontA・復路側の前縁 front・踊り場の奥 back）は平面の解決値
   // （stairContribution が uTurnPlanLayout から取る）で、切断線の位置と歩行方向もここから導く。
-  const contribution = stairContribution(stair, graph, floorHeight);
+  const contribution = stairContribution(stair, graph, floorHeight, opts.upperGraph ?? null);
   if (!contribution) return null; // 平面の枠が求まらない（以降は contribution を前提にする）
   const { frontA: frameFrontA, front: frameFront, back: frameBack } = contribution.frame;
 

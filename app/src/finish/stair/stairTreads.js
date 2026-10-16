@@ -15,16 +15,17 @@ import { roomBounds } from '../gridCells.js';
  * 求まらないとき（riser が null・非有限・0 以下／階段・graph なし／セルが無い・設置枠が不正）は [] （遮蔽しない＝安全側）。
  * @param {import('@core').Stair} stair
  * @param {object} graph 階段のセルを解決する graph（その階段の設置階）
- * @param {{ riser: number|null, insetView?: 'install'|'upper' }} opts
+ * @param {{ riser: number|null, insetView?: 'install'|'upper', aboveGraph?: object|null }} opts
+ *   aboveGraph … 直上階の graph（復路の到達辺を上階の床梁の外面＋壁仕上げに置く。省略・梁なしは Q3）
  * @returns {{ number: number, poly: number[], topZ: number }[]}
  */
-export function stairTreadFootprints(stair, graph, { riser, insetView = 'upper' } = {}) {
+export function stairTreadFootprints(stair, graph, { riser, insetView = 'upper', aboveGraph = null } = {}) {
   if (!stair || !graph || !(Number.isFinite(riser) && riser > 0)) return [];
   if (!stair.cells || stair.cells.size === 0) return [];
   const b = roomBounds(stair.cells, graph);
   if (![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) return [];
   const geom = buildStairGeometry(stair, b, {
-    view: 'upper', insetView, detail: false, riser, spans: measureStairSpans(stair, graph), laneGap: true, graph, collectCells: true,
+    view: 'upper', insetView, detail: false, riser, spans: measureStairSpans(stair, graph), laneGap: true, graph, aboveGraph, collectCells: true,
   });
   return (geom.cells ?? []).map(({ number, poly }) => ({ number, poly, topZ: number * riser }));
 }

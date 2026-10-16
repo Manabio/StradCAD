@@ -361,13 +361,14 @@ const polyArea2 = p => p.reduce((s, _, i) => (i % 2 ? s : s + p[i] * p[(i + 3) %
  * @param {(stair:object)=>number|null} riserFor 階段の蹴上（層ごとに決める。planSolids の riserForLayer）
  * @param {Set<object>} [drawnStairs] 段の輪郭を描く階段（見上げの鉄骨の続き階段＝踏面線を全段描く。省略は全階段が遮蔽専用）
  * @param {Set<object>} [skipStairs] 立体にしない階段（見上げの自階の続き階段。stairsContinuedAbove）
+ * @param {object|null} [aboveGraph] この層の直上の層の graph（復路の到達辺＝上階の床梁の外面＋仕上げ。無ければ Q3）
  */
-function stairTreadSolids(layer, riserFor, drawnStairs = null, skipStairs = null) {
+function stairTreadSolids(layer, riserFor, drawnStairs = null, skipStairs = null, aboveGraph = null) {
   const out = [];
   const insetView = layer.role === 'self' ? 'install' : 'upper'; // 自階は設置階の逃がし（StairLayer の beyondBuilt と同じ）、下階は見下げ
   for (const stair of layer.graph.stairs ?? []) {
     if (skipStairs?.has(stair)) continue;
-    for (const t of stairTreadFootprints(stair, layer.graph, { riser: riserFor(stair), insetView })) {
+    for (const t of stairTreadFootprints(stair, layer.graph, { riser: riserFor(stair), insetView, aboveGraph })) {
       const p = t.poly;
       if (p.length < 6 || p.length % 2 !== 0 || !p.every(Number.isFinite) || Math.abs(polyArea2(p)) < 1e-6) continue;
       const z = layer.floorZMm + t.topZ;
@@ -394,6 +395,7 @@ function stairUndersideOf(layer, riserFor, belowGraph) {
     const belowStair = matchingStairBelow(stair, layer.graph, belowGraph);
     if (!belowStair) continue;
     if (stair.structure === StructuralMaterialType.WOOD) {
+      // aboveGraph は渡さない（N+2 は層スタックに無いため到達辺は Q3 に戻る＝既知の限界。.claude/ceiling-model.md）
       soffits.push(...stairSoffitSolids({ stair, graph: layer.graph, belowStair, belowGraph, riser: riserFor(stair), floorZMm: layer.floorZMm }));
     } else drawnTreads.add(stair);
   }
@@ -498,6 +500,7 @@ export function planSolids(layers, opts = {}) {
     // 階段の蹴上は層ごとに1本: 直上の層があればその階高（直上の FL − この層の FL）から、無ければ（最上の層＝自階）opts.riserOf。
     // 明示指定（stair.riser）は riserOf が優先する。下階の層に自階の riserOf を使うと階高の違う階で段の高さがずれる
     const upperZ = floorZs.find(z => z > layer.floorZMm);
+    const upperGraph = upperZ !== undefined ? layers.find(l => l?.graph && l.floorZMm === upperZ)?.graph ?? null : null; // 直上の層の graph
     const riserForLayer = upperZ !== undefined
       ? stair => riserOf(stair, upperZ - layer.floorZMm)
       : stair => opts.riserOf?.(stair) ?? null;
@@ -505,7 +508,7 @@ export function planSolids(layers, opts = {}) {
       ? stairUndersideOf(layer, riserForLayer, opts.belowGraphOf?.(layer.graph) ?? null) : null;
     const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom), ...columnSolids(layer),
       ...beamSolids(layer), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
-        opts.lookUp === true && layer.role === 'self' ? stairsContinuedAbove(layer, layers, opts) : null),
+        opts.lookUp === true && layer.role === 'self' ? stairsContinuedAbove(layer, layers, opts) : null, upperGraph),
       ...(underside?.soffits ?? []),
       ...(opts.ceilings === true && layer.role === 'self' ? ceilingSolids(layer) : [])].filter(Boolean);
     for (const solid of solids) entries.push({ solid, layerZ: layer.floorZMm, roleRank: ROLE_RANK[layer.role] ?? 3 });

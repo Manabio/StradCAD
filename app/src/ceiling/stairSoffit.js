@@ -193,8 +193,8 @@ export function uTurnSoffitFromLayout(L, { zStart, zTop, zCap: ctxCap = null }) 
   return out;
 }
 
-function uTurnSolid(stair, graph, ctx) {
-  const L = uTurnPlanLayout(stair, graph);
+function uTurnSolid(stair, graph, ctx, aboveGraph) {
+  const L = uTurnPlanLayout(stair, graph, { aboveGraph });
   return L ? uTurnSoffitFromLayout(L, { zStart: ctx.zStart, zTop: ctx.zTop, zCap: ctx.zCap }) : null;
 }
 
@@ -226,10 +226,11 @@ export function straightSoffitFromLayout(L, { zStart, zTop }) {
  *   stair: object, graph: object,        N+1 の階段とその階の graph
  *   belowStair?: object|null, belowGraph?: object|null,  N 側の対の階段と graph（当該階天井の算出）
  *   riser: number|null, floorZMm: number  蹴上と N+1 の FL（層の絶対 z）
+ *   aboveGraph?: object|null  stair の graph の直上階の graph（復路の到達辺を上階の床梁の外面＋仕上げに置く。省略は Q3）
  * }} args
  * @returns {import('../plan/planSolids.js').Solid[]}
  */
-export function stairSoffitSolids({ stair, graph, belowStair = null, belowGraph = null, riser, floorZMm }) {
+export function stairSoffitSolids({ stair, graph, belowStair = null, belowGraph = null, riser, floorZMm, aboveGraph = null }) {
   if (!stair || !graph || !Number.isFinite(floorZMm)) return [];
   if (stair.structure !== StructuralMaterialType.WOOD) return [];
   if (!(Number.isFinite(riser) && riser > 0) || !(Number.isFinite(stair.tread) && stair.tread > 0)) return [];
@@ -241,7 +242,7 @@ export function stairSoffitSolids({ stair, graph, belowStair = null, belowGraph 
     zCap: floorZMm + stairBelowCeilingMm(stair, graph),
   };
   const t = stair.type;
-  const solid = t === StairType.SWITCHBACK || t === StairType.WINDING ? uTurnSolid(stair, graph, ctx)
+  const solid = t === StairType.SWITCHBACK || t === StairType.WINDING ? uTurnSolid(stair, graph, ctx, aboveGraph)
     : t === StairType.STRAIGHT || t === StairType.STRAIGHT_LANDING ? straightSolid(stair, graph, ctx) : null;
   if (!solid) return [];
   return [{ kind: 'ceiling', ...solid, source: { kind: 'stairSoffit', id: String(stair.id), layerFloorZ: floorZMm, part: 0 } }];

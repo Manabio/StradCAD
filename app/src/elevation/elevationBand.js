@@ -567,13 +567,13 @@ export function stairOverReachesFace(contribution, line) {
  * @param {number|null|undefined} floorHeight - 設置階〜上階の階高（stairContributionの必須入力）
  * @returns {ReturnType<typeof stairContribution>|null}
  */
-export function stairContributionOverRoom(room, graph, floorHeight) {
+export function stairContributionOverRoom(room, graph, floorHeight, aboveGraph = null) {
   if (floorHeight == null) return null;
   const cellRects = cellBoundsList(room.cells, graph);
   if (cellRects.length === 0) return null;
   for (const stair of graph.stairs ?? []) {
     if (stair.roomId === room.id) continue;
-    const contribution = stairContribution(stair, graph, floorHeight);
+    const contribution = stairContribution(stair, graph, floorHeight, aboveGraph);
     if (!contribution) continue;
     if (flightsOverRoom(contribution, cellRects).length > 0) return contribution;
   }
@@ -720,7 +720,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
   const includeFace = opts.includeFace ?? (() => true);
   // 帯のz原点は**この帯の部屋の実効FL**（finalizeBandの平行移動と対）。プローブの床解決は階の
   // datum基準なので、その差を渡して差し引かせる（floorOffset=0の帯では出力完全不変）。
-  const probeCtx = makeProbeContext(layers, { floorOffsetMm: bandFloorOffsetMm(room, graph), floorHeightMm: opts.floorHeightMm });
+  const probeCtx = makeProbeContext(layers, { floorOffsetMm: bandFloorOffsetMm(room, graph), floorHeightMm: opts.floorHeightMm, upperGraph: opts.upperGraph ?? null });
   const bandRoomBounds = roomBounds(room.cells, graph);
   const bandRoomCells = cellBoundsList(room.cells, graph);
   // 柱型は全層ぶんを一度だけ求めて全面で使い回す（仮想断面位置の決定に使う。層ごとに引き直すと
@@ -915,8 +915,8 @@ export function buildRoomBand(room, graph, ctx = {}) {
   // 探査延長・見えがかりの距離判定・アキは多層帯と同一の処理を通る。
   const layers = buildBandLayers(graph);
   appendBandCutContent(primitives, room, graph, layout, layers,
-    { endExtendMm: ctx.wallLessEndExtendModelMm, floorHeightMm: ctx.solids?.floorHeightMm,
-      stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm) });
+    { endExtendMm: ctx.wallLessEndExtendModelMm, floorHeightMm: ctx.solids?.floorHeightMm, upperGraph: ctx.solids?.upperGraph ?? null,
+      stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm, ctx.solids?.upperGraph ?? null) });
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
