@@ -968,9 +968,10 @@ function withNosingDraw(layout, f, stair, view, insetView, detail, partition) {
 // clip = 到達番号のクリップ点（辺上）、outside(mm) = 辺の外側 mm の点（到達番号の置き場）。
 // 側面の出入口は張り出し区間 [tBase, tBaseOther] の中点に置く。
 // sLaneInner = 内側の出入口辺の s。隔て板（あき）の帯の向こう側の面＝上り口も到達口も sB（1段目の段板を隔て板側の柱で支える）。あき0なら 0.5。
-function uTurnPortAnchor(f, { tBaseA, tBaseB, tExitA, tExitB, entryFull }, side, lane, cLane, acrossLen, sLaneInner = 0.5) {
+function uTurnPortAnchor(f, { tBaseA, tBaseB, tBaseBDraw = tBaseB, tExitA, tExitB, entryFull }, side, lane, cLane, acrossLen, sLaneInner = 0.5) {
   const tBase = lane === 'A' ? tBaseA : tBaseB, tExit = lane === 'A' ? tExitA : tExitB;
-  if (side === 'end') return { lead: [f.pt(tBase, cLane)], clip: null, outside: null };
+  // 復路の走行端の到達口は、描いた到達辺の線（tBaseBDraw）から矢印を始める。側面の口の区画中点 tP は従来の tBase のまま
+  if (side === 'end') return { lead: [f.pt(lane === 'B' ? tBaseBDraw : tBase, cLane)], clip: null, outside: null };
   const tP = (tBase + tExit) / 2;
   const sInner = lane === 'A' && entryFull ? 1 : sLaneInner; // 全幅の取りつきなら「内側」＝相手レーンの外側の辺
   const sEdge = side === 'inner' ? sInner : (lane === 'A' ? 0 : 1);
@@ -1141,7 +1142,10 @@ function buildSwitchback(stair, b, { view, insetView, detail, spans, laneGapMm =
   }
 
   // 外周（base 側・両レーン外側・踊り場の三方）＋ 中央仕切り。base側は往路出発／復路到達(設置階上階)で2分割する。
-  const lanes = uTurnLaneOutline(c, withNosingDraw(layout, f, stair, view, insetView, detail, partition), sA, sB, halfGap, ports);
+  // 矢印の始点・到達番号は、描いた到達辺の線（tBaseBDraw＝面＋蹴込）に揃える。線の位置が変わったら自動で追従する（ユーザー指示 2026-10-16）。
+  // 外周・矢印・番号は同じ drawLayout を使う（tBaseBDraw が無い経路＝install・梁なし・側面は従来の tBaseB）
+  const drawLayout = withNosingDraw(layout, f, stair, view, insetView, detail, partition);
+  const lanes = uTurnLaneOutline(c, drawLayout, sA, sB, halfGap, ports);
   const outline = [
     ...lanes.head,                                  // base側（往路出発・復路到達）と各レーン外側
     { ...seg(c(tRunA, 0), c(1, 0)), side: true },   // 踊り場側面A
@@ -1154,14 +1158,17 @@ function buildSwitchback(stair, b, { view, insetView, detail, spans, laneGapMm =
   // 突き当たるまで。upper(D)はいちばん大きい踏面番号側（復路基部＝かみがた）を始点に、
   // 番号の小さい方（往路基部）へ向かう。
   // 出入口が側面（張り出し区間の内側／外側）なら、矢印は辺の中点から横向きに入って（出て）レーン中心へ折れる。
-  const anchorA = uTurnPortAnchor(f, layout, ports.entry, 'A', cA, acrossLen, sB);
-  const anchorB = uTurnPortAnchor(f, layout, ports.arrival, 'B', cB, acrossLen, sB);
+  const anchorA = uTurnPortAnchor(f, drawLayout, ports.entry, 'A', cA, acrossLen, sB);
+  const anchorB = uTurnPortAnchor(f, drawLayout, ports.arrival, 'B', cB, acrossLen, sB);
   const arrows = [isInstall
     ? uTurnArrow([...anchorA.lead, f.pt(tMid, cA), f.pt(tMid, cB), breakDiag.atPoint(f.pt(tRun, cB))], 'U')
     : uTurnArrow([...anchorB.lead, f.pt(tMid, cB), f.pt(tMid, cA), ...anchorA.lead.slice().reverse()], 'D')];
 
   if (!isInstall) {
-    if (ports.arrival === 'end') emitArrival(out, totalStepsAll, f.pt(tBaseB - tAt(NUM_GAP * pitchB), 1 - NUM_OUT), f.pt(tBaseB, 1 - NUM_OUT), detail);
+    if (ports.arrival === 'end') {
+      const tB = drawLayout.tBaseBDraw ?? tBaseB; // 描いた到達辺の線（番号は線の手前・クリップは線上）
+      emitArrival(out, totalStepsAll, f.pt(tB - tAt(NUM_GAP * pitchB), 1 - NUM_OUT), f.pt(tB, 1 - NUM_OUT), detail);
+    }
     else emitArrival(out, totalStepsAll, anchorB.outside(NUM_GAP * pitchB), anchorB.clip, detail); // 側面の到達口: 辺の外側
   }
   return { ...out, outline, arrows, breakLine };
@@ -1256,7 +1263,10 @@ function buildWinding(stair, b, { view, insetView, detail, spans, laneGapMm = 0,
     if (ports.arrival !== 'end') emitPortTurn(out, f, layout, 'B', turnStepsA, totalSteps + turnStepsE, sB, 0.5, { detail }); // 取りつき回転部
   }
 
-  const lanes = uTurnLaneOutline(c, withNosingDraw(layout, f, stair, view, insetView, detail, partition), sA, sB, halfGap, ports);
+  // 矢印の始点・到達番号は、描いた到達辺の線（tBaseBDraw＝面＋蹴込）に揃える。線の位置が変わったら自動で追従する（ユーザー指示 2026-10-16）。
+  // 外周・矢印・番号は同じ drawLayout を使う（tBaseBDraw が無い経路＝install・梁なし・側面は従来の tBaseB）
+  const drawLayout = withNosingDraw(layout, f, stair, view, insetView, detail, partition);
+  const lanes = uTurnLaneOutline(c, drawLayout, sA, sB, halfGap, ports);
   const outline = [
     ...lanes.head,                                   // base側（往路出発・復路到達）と各レーン外側
     { ...seg(c(tRunA, 0), c(1, 0)), side: true },    // 回り部側面A
@@ -1268,14 +1278,17 @@ function buildWinding(stair, b, { view, insetView, detail, spans, laneGapMm = 0,
   // U字矢印: 折り返し階段と同じ（破れ線の対角に突き当たるまで延長）。
   const tMid = (tRun + 1) / 2;
   // 出入口が側面（張り出し区間の内側／外側）なら、矢印は辺の中点から横向きに入って（出て）レーン中心へ折れる。
-  const anchorA = uTurnPortAnchor(f, layout, ports.entry, 'A', cA, acrossLen, sB);
-  const anchorB = uTurnPortAnchor(f, layout, ports.arrival, 'B', cB, acrossLen, sB);
+  const anchorA = uTurnPortAnchor(f, drawLayout, ports.entry, 'A', cA, acrossLen, sB);
+  const anchorB = uTurnPortAnchor(f, drawLayout, ports.arrival, 'B', cB, acrossLen, sB);
   const arrows = [isInstall
     ? uTurnArrow([...anchorA.lead, f.pt(tMid, cA), f.pt(tMid, cB), breakDiag.atPoint(f.pt(tRun, cB))], 'U')
     : uTurnArrow([...anchorB.lead, f.pt(tMid, cB), f.pt(tMid, cA), ...anchorA.lead.slice().reverse()], 'D')];
 
   if (!isInstall) {
-    if (ports.arrival === 'end') emitArrival(out, totalStepsAll, f.pt(tBaseB - tAt(NUM_GAP * pitchB), 1 - NUM_OUT), f.pt(tBaseB, 1 - NUM_OUT), detail);
+    if (ports.arrival === 'end') {
+      const tB = drawLayout.tBaseBDraw ?? tBaseB; // 描いた到達辺の線（番号は線の手前・クリップは線上）
+      emitArrival(out, totalStepsAll, f.pt(tB - tAt(NUM_GAP * pitchB), 1 - NUM_OUT), f.pt(tB, 1 - NUM_OUT), detail);
+    }
     else emitArrival(out, totalStepsAll, anchorB.outside(NUM_GAP * pitchB), anchorB.clip, detail); // 側面の到達口: 辺の外側
   }
   return { ...out, outline, arrows, breakLine };

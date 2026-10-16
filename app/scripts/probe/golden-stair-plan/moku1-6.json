@@ -39,8 +39,8 @@
  },
  "2階": {
   "upper|5460,-7280,7280,-4550|winding|15": [
-   "{\"role\":\"arrow\",\"points\":[5922.5,-5532.5,5922.5,-6817.5,6817.5,-6817.5,6817.5,-5012.5,6312.5,-5012.5],\"width\":null,\"dash\":null,\"cls\":\"label=D@5922.5,-5382.5\"}",
-   "{\"role\":\"number\",\"points\":[5783.75,-5476.562],\"width\":null,\"dash\":null,\"cls\":\"text=15\"}",
+   "{\"role\":\"arrow\",\"points\":[5922.5,-5552.5,5922.5,-6817.5,6817.5,-6817.5,6817.5,-5012.5,6312.5,-5012.5],\"width\":null,\"dash\":null,\"cls\":\"label=D@5922.5,-5402.5\"}",
+   "{\"role\":\"number\",\"points\":[5783.75,-5496.562],\"width\":null,\"dash\":null,\"cls\":\"text=15\"}",
    "{\"role\":\"number\",\"points\":[5783.75,-5700.312],\"width\":null,\"dash\":null,\"cls\":\"text=14\"}",
    "{\"role\":\"number\",\"points\":[5783.75,-5924.062],\"width\":null,\"dash\":null,\"cls\":\"text=13\"}",
    "{\"role\":\"number\",\"points\":[5783.75,-6147.812],\"width\":null,\"dash\":null,\"cls\":\"text=12\"}",

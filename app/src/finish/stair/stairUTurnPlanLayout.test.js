@@ -667,3 +667,29 @@ test('arrivalBeamFaceMm 失敗系: カタログに無い断面の梁は照合し
   const { graph, stair } = equalFixture(StairType.SWITCHBACK, 'up', false);
   assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { sec: 'WOOD-NO-SUCH-SECTION' })), null);
 });
+
+test('見下げの D 矢印の始点・到達番号は、描いた到達辺の線（面＋蹴込）に連動する。梁なしは Q3 の線、install は矢印不変（up・left）', () => {
+  for (const dir of ['up', 'left']) {
+    const vertical = dir === 'up', d = TOWARD[dir];
+    const pos = (x, y) => (vertical ? y : x);
+    const { graph, stair } = equalFixture(StairType.SWITCHBACK, dir, false);
+    addPartitionWalls(graph);
+    const geomOf = (opts) => buildStairGeometry(stair, roomBounds(stair.cells, graph), {
+      riser: 100, spans: measureStairSpans(stair, graph), laneGap: true, graph, detail: true, ...opts,
+    });
+    const check = (g, expected, tag) => {
+      const arrival = g.outline.find(s => s.port === 'arrival');
+      assert.ok(Math.abs(pos(arrival.x1, arrival.y1) - expected) < 1e-6, `${tag}: 線 ${pos(arrival.x1, arrival.y1)}`);
+      const a = g.arrows[0].points; // D 矢印の始点（到達側）
+      assert.ok(Math.abs(pos(a[0], a[1]) - expected) < 1e-6, `${tag}: 矢印の始点 ${pos(a[0], a[1])} vs ${expected}`);
+      const num = g.stepNumbers.find(n => n.clipX != null || n.clipY != null);
+      assert.ok(num, `${tag}: 到達番号`);
+      assert.ok(Math.abs(pos(num.clipX, num.clipY) - expected) < 1e-6, `${tag}: クリップ点 ${pos(num.clipX, num.clipY)}`);
+      assert.ok(pos(num.x, num.y) * d < expected * d, `${tag}: 番号は線の手前（基端側） ${pos(num.x, num.y)}`);
+    };
+    check(geomOf({ view: 'upper', aboveGraph: aboveWithBeam(dir) }), BASE0[dir] + d * (60 + FINISH + stair.nosing), `${dir} 梁あり`);
+    check(geomOf({ view: 'upper' }), BASE0[dir] + d * 57.5, `${dir} 梁なし`);
+    // install: 矢印は従来（到達側の始点を持たない U 矢印）。aboveGraph の有無で変わらない
+    assert.deepEqual(geomOf({ view: 'install', aboveGraph: aboveWithBeam(dir) }).arrows, geomOf({ view: 'install' }).arrows, `${dir}: install の矢印は不変`);
+  }
+});
