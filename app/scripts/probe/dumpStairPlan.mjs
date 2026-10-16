@@ -2,7 +2,8 @@
 // renderer/StairLayer.jsx が実際に描く線（踏面・外周・破れ先の破線・破れ線・矢印・段数字・隔て壁の輪郭）を、
 // App.jsx の上下 peek（upperStairEntriesPeek＝直下階 peek、upperSlabOpenings＝直上階スラブ開口）まで含めて
 // 再現して文書・階ごとに golden-stair-plan/<文書>.json と比べる。
-//   エントリ構築 … buildUpperStairPeekEntries → slabOpeningRects → buildStairEntries（App.jsx 790-860・2449 と同じ手順）
+//   エントリ構築 … buildUpperStairPeekEntries → slabOpeningRects → buildStairEntries（App.jsx 790-860・2449 と同じ手順）。
+//     直上階の graph（abovePlanPeek.graph）は aboveGraph として渡す（復路の到達辺を受ける上階の床梁。floorDump の abovePlane）
 //   描画の写像 … StairLayer.jsx の 1〜3 パス目（resolveStairSideLines・破れ線クリップ・矢印クリップ・段数字の間引き・
 //     stairLineRenderProps による線幅/破線/L字結合）を同じ関数で再現する。StairLayer 側の判断を変えたらここも追随させる
 //     （追随し忘れは golden 差分として現れず、probe が古いまま通る——StairLayer.jsx を変えたら本 probe の写像も見直す）。
@@ -61,10 +62,11 @@ function entryLines(e, ctx) {
   const { stair, bounds: b, riser, spans, view, graph, wallGraph } = e;
   const { breakOverhangMm, installGeomById, coveredByDownView, laneGap } = ctx;
   const resolve = g => (graph ? resolveStairSideLines(stair, graph, g, { wallGraph }) : g);
-  const built = buildStairGeometry(stair, b, { view, detail: true, riser, spans, laneGap, breakOverhangMm, graph });
+  const aboveGraph = e.aboveGraph ?? null;
+  const built = buildStairGeometry(stair, b, { view, detail: true, riser, spans, laneGap, breakOverhangMm, graph, aboveGraph });
   const geom = resolve(built);
   const beyondGeom = view === 'install'
-    ? resolve(buildStairGeometry(stair, b, { view: 'upper', insetView: 'install', detail: true, riser, spans, laneGap, breakOverhangMm, graph }))
+    ? resolve(buildStairGeometry(stair, b, { view: 'upper', insetView: 'install', detail: true, riser, spans, laneGap, breakOverhangMm, graph, aboveGraph }))
     : null;
   const installGeom = e.installOverlap && e.clipAgainstId ? installGeomById.get(e.clipAgainstId) : null;
   const installBreakLine = trimBreakOverhang(installGeom?.breakLine, breakOverhangMm);
@@ -140,13 +142,15 @@ function floorDump(project, planes, idx, peeks) {
     upperSlabOpenings = slabOpeningRects(project.graphMap.get(abovePlane.id), { riserOf: s => stairRiserOf(s, project, abovePlane) });
   }
   const breakOverhangMm = overhangMm(viewport, false);
-  const built = buildStairEntries(graph, project, { appMode: 'floorplan', viewport, upperStairEntriesPeek, upperSlabOpenings, stairBreakOverhangMm: breakOverhangMm });
+  // 直上階 peek（App.jsx の abovePlanPeek.graph）。実アプリは peek の一時グラフ、ここは同じ文書の graphMap
+  const aboveGraph = peeks && abovePlane ? project.graphMap.get(abovePlane.id) : null;
+  const built = buildStairEntries(graph, project, { appMode: 'floorplan', viewport, upperStairEntriesPeek, upperSlabOpenings, aboveGraph, stairBreakOverhangMm: breakOverhangMm });
   const all = [...built.installEntries, ...built.upperEntries];
   // StairLayer と同じ前処理: install エントリの幾何（矢印クリップ用）と「見下げで覆われる install」の集合
   const installGeomById = new Map();
   for (const e of built.installEntries) {
     if (!e.bounds || ![e.bounds.x1, e.bounds.y1, e.bounds.x2, e.bounds.y2].every(Number.isFinite)) continue;
-    const g = buildStairGeometry(e.stair, e.bounds, { view: 'install', detail: true, riser: e.riser, spans: e.spans, laneGap: built.stairLaneGap, breakOverhangMm, graph: e.graph });
+    const g = buildStairGeometry(e.stair, e.bounds, { view: 'install', detail: true, riser: e.riser, spans: e.spans, laneGap: built.stairLaneGap, breakOverhangMm, graph: e.graph, aboveGraph: e.aboveGraph ?? null });
     installGeomById.set(e.id, e.graph ? resolveStairSideLines(e.stair, e.graph, g, { wallGraph: e.wallGraph }) : g);
   }
   const coveredByDownView = new Set(all.filter(e => e.installOverlap && e.beyondBreakBounds?.length > 0).map(e => e.clipAgainstId));

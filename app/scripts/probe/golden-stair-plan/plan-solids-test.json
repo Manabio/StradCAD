@@ -2,7 +2,7 @@
  "1階": {
   "install|0,-9100,1820,-7280|switchback|10": [
    "{\"role\":\"arrow\",\"points\":[462.5,-9157.5,462.5,-7742.5,1357.5,-7742.5,1357.5,-8390.864],\"width\":null,\"dash\":null,\"cls\":\"label=U@462.5,-9307.5\"}",
-   "{\"role\":\"beyond\",\"points\":[967.5,-9042.5,1747.5,-9042.5],\"width\":13.2292,\"dash\":[105.833,52.917],\"cls\":\"\"}",
+   "{\"role\":\"beyond\",\"points\":[967.5,-9027.5,1747.5,-9027.5],\"width\":13.2292,\"dash\":[105.833,52.917],\"cls\":\"\"}",
    "{\"role\":\"break\",\"points\":[1234.558,-8357.922,1279.558,-8435.864],\"width\":null,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"break\",\"points\":[1279.558,-8435.864,736.795,-8749.228],\"width\":null,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"break\",\"points\":[1435.442,-8345.864,1480.442,-8423.807],\"width\":null,\"dash\":null,\"cls\":\"\"}",
@@ -22,7 +22,8 @@
    "{\"role\":\"tread\",\"points\":[72.5,-8930,852.5,-8930],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"tread\",\"points\":[852.5,-8132.5,967.5,-8132.5],\"width\":26.4583,\"dash\":null,\"cls\":\"heavy\"}",
    "{\"role\":\"tread\",\"points\":[967.5,-8132.5,1747.5,-8132.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"tread\",\"points\":[967.5,-8360,1410.958,-8360],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}"
+   "{\"role\":\"tread\",\"points\":[967.5,-8356.25,1417.454,-8356.25],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
+   "{\"role\":\"tread\",\"points\":[967.5,-8580,1029.907,-8580],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}"
   ]
  },
  "2階": {
@@ -47,29 +48,30 @@
    "{\"role\":\"tread\",\"points\":[72.5,-8930,852.5,-8930],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"tread\",\"points\":[852.5,-8132.5,967.5,-8132.5],\"width\":26.4583,\"dash\":null,\"cls\":\"heavy\"}",
    "{\"role\":\"tread\",\"points\":[967.5,-8132.5,1747.5,-8132.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"tread\",\"points\":[967.5,-8360,1410.958,-8360],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}"
+   "{\"role\":\"tread\",\"points\":[967.5,-8356.25,1417.454,-8356.25],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
+   "{\"role\":\"tread\",\"points\":[967.5,-8580,1029.907,-8580],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}"
   ],
   "upper|0,-9100,1820,-7280|switchback|10": [
-   "{\"role\":\"arrow\",\"points\":[1357.5,-9042.5,1357.5,-8390.864],\"width\":null,\"dash\":null,\"cls\":\"label=D@1357.5,-9192.5\"}",
-   "{\"role\":\"number\",\"points\":[1496.25,-8416.875],\"width\":null,\"dash\":null,\"cls\":\"text=7\"}",
-   "{\"role\":\"number\",\"points\":[1496.25,-8644.375],\"width\":null,\"dash\":null,\"cls\":\"text=8\"}",
-   "{\"role\":\"number\",\"points\":[1496.25,-8871.875],\"width\":null,\"dash\":null,\"cls\":\"text=9\"}",
-   "{\"role\":\"number\",\"points\":[1496.25,-9099.375],\"width\":null,\"dash\":null,\"cls\":\"text=10\"}",
-   "{\"role\":\"outline\",\"points\":[967.5,-9042.5,1747.5,-9042.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:arrival\"}",
-   "{\"role\":\"outline\",\"points\":[967.5,-9042.5,967.5,-8616.031],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"tread\",\"points\":[1016.917,-8587.5,1747.5,-8587.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"tread\",\"points\":[1235.757,-8360,1747.5,-8360],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"tread\",\"points\":[967.5,-8815,1747.5,-8815],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}"
+   "{\"role\":\"arrow\",\"points\":[1357.5,-9027.5,1357.5,-8390.864],\"width\":null,\"dash\":null,\"cls\":\"label=D@1357.5,-9177.5\"}",
+   "{\"role\":\"number\",\"points\":[1496.25,-8412.187],\"width\":null,\"dash\":null,\"cls\":\"text=7\"}",
+   "{\"role\":\"number\",\"points\":[1496.25,-8635.937],\"width\":null,\"dash\":null,\"cls\":\"text=8\"}",
+   "{\"role\":\"number\",\"points\":[1496.25,-8859.687],\"width\":null,\"dash\":null,\"cls\":\"text=9\"}",
+   "{\"role\":\"number\",\"points\":[1496.25,-9083.437],\"width\":null,\"dash\":null,\"cls\":\"text=10\"}",
+   "{\"role\":\"outline\",\"points\":[967.5,-9007.5,1747.5,-9007.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:arrival\"}",
+   "{\"role\":\"outline\",\"points\":[967.5,-9007.5,967.5,-8616.031],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
+   "{\"role\":\"tread\",\"points\":[1029.907,-8580,1747.5,-8580],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
+   "{\"role\":\"tread\",\"points\":[1441.439,-8356.25,1747.5,-8356.25],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
+   "{\"role\":\"tread\",\"points\":[967.5,-8803.75,1747.5,-8803.75],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}"
   ]
  },
  "3階": {
   "upper|0,-9100,1820,-7280|switchback|10": [
-   "{\"role\":\"arrow\",\"points\":[1357.5,-9042.5,1357.5,-7742.5,462.5,-7742.5,462.5,-9042.5],\"width\":null,\"dash\":null,\"cls\":\"label=D@1357.5,-9192.5\"}",
-   "{\"role\":\"number\",\"points\":[1496.25,-8189.375],\"width\":null,\"dash\":null,\"cls\":\"text=6\"}",
-   "{\"role\":\"number\",\"points\":[1496.25,-8416.875],\"width\":null,\"dash\":null,\"cls\":\"text=7\"}",
-   "{\"role\":\"number\",\"points\":[1496.25,-8644.375],\"width\":null,\"dash\":null,\"cls\":\"text=8\"}",
-   "{\"role\":\"number\",\"points\":[1496.25,-8871.875],\"width\":null,\"dash\":null,\"cls\":\"text=9\"}",
-   "{\"role\":\"number\",\"points\":[1496.25,-9099.375],\"width\":null,\"dash\":null,\"cls\":\"text=10\"}",
+   "{\"role\":\"arrow\",\"points\":[1357.5,-9027.5,1357.5,-7742.5,462.5,-7742.5,462.5,-9042.5],\"width\":null,\"dash\":null,\"cls\":\"label=D@1357.5,-9177.5\"}",
+   "{\"role\":\"number\",\"points\":[1496.25,-8188.437],\"width\":null,\"dash\":null,\"cls\":\"text=6\"}",
+   "{\"role\":\"number\",\"points\":[1496.25,-8412.187],\"width\":null,\"dash\":null,\"cls\":\"text=7\"}",
+   "{\"role\":\"number\",\"points\":[1496.25,-8635.937],\"width\":null,\"dash\":null,\"cls\":\"text=8\"}",
+   "{\"role\":\"number\",\"points\":[1496.25,-8859.687],\"width\":null,\"dash\":null,\"cls\":\"text=9\"}",
+   "{\"role\":\"number\",\"points\":[1496.25,-9083.437],\"width\":null,\"dash\":null,\"cls\":\"text=10\"}",
    "{\"role\":\"number\",\"points\":[323.75,-8197.812],\"width\":null,\"dash\":null,\"cls\":\"text=5\"}",
    "{\"role\":\"number\",\"points\":[323.75,-8396.562],\"width\":null,\"dash\":null,\"cls\":\"text=4\"}",
    "{\"role\":\"number\",\"points\":[323.75,-8595.312],\"width\":null,\"dash\":null,\"cls\":\"text=3\"}",
@@ -77,8 +79,8 @@
    "{\"role\":\"number\",\"points\":[323.75,-8992.812],\"width\":null,\"dash\":null,\"cls\":\"text=1\"}",
    "{\"role\":\"outline\",\"points\":[72.5,-9042.5,910,-9042.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:entry\"}",
    "{\"role\":\"outline\",\"points\":[852.5,-9042.5,852.5,-8247.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"outline\",\"points\":[967.5,-9042.5,1747.5,-9042.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:arrival\"}",
-   "{\"role\":\"outline\",\"points\":[967.5,-9042.5,967.5,-8132.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
+   "{\"role\":\"outline\",\"points\":[967.5,-9007.5,1747.5,-9007.5],\"width\":13.2292,\"dash\":null,\"cls\":\"thin,port:arrival\"}",
+   "{\"role\":\"outline\",\"points\":[967.5,-9007.5,967.5,-8132.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"partition\",\"points\":[852.5,-8132.5,967.5,-8132.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"partition\",\"points\":[852.5,-9027.5,852.5,-8132.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"partition\",\"points\":[967.5,-9027.5,967.5,-8132.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
@@ -88,9 +90,9 @@
    "{\"role\":\"tread\",\"points\":[72.5,-8843.75,852.5,-8843.75],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
    "{\"role\":\"tread\",\"points\":[852.5,-8132.5,967.5,-8132.5],\"width\":13.2292,\"dash\":null,\"cls\":\"heavy\"}",
    "{\"role\":\"tread\",\"points\":[967.5,-8132.5,1747.5,-8132.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"tread\",\"points\":[967.5,-8360,1747.5,-8360],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"tread\",\"points\":[967.5,-8587.5,1747.5,-8587.5],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
-   "{\"role\":\"tread\",\"points\":[967.5,-8815,1747.5,-8815],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}"
+   "{\"role\":\"tread\",\"points\":[967.5,-8356.25,1747.5,-8356.25],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
+   "{\"role\":\"tread\",\"points\":[967.5,-8580,1747.5,-8580],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}",
+   "{\"role\":\"tread\",\"points\":[967.5,-8803.75,1747.5,-8803.75],\"width\":13.2292,\"dash\":null,\"cls\":\"\"}"
   ]
  }
 }

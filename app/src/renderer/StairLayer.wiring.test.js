@@ -59,3 +59,18 @@ test('【不変条件】StairLayer は e.partitionOutline を細線の実線 <Li
   assert.ok(block.includes('stroke={STAIR_STROKE}'));
   assert.ok(block.includes('listening={false}'));
 });
+
+// 復路の到達辺＝直上階の床梁の外面＋壁仕上げ（2026-10-16）。判断は stairGeometry.js partitionFrameFor、
+// 直上階の graph は App.jsx（abovePlanPeek）→ buildStairEntries（エントリの aboveGraph）→ StairLayer → buildStairGeometry と渡る。
+// コメント行・JSX コメントを除いた実コードで 1 行一致を見る（コメントだけ書いた残骸に反応させない）。
+test('【不変条件】aboveGraph の受け渡し: App → buildStairEntries → エントリ → StairLayer の 2 つの buildStairGeometry', () => {
+  const read = (p) => fs.readFileSync(path.resolve(import.meta.dirname, p), 'utf8');
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const code = strip(src);
+  assert.equal((code.match(/^\s*const aboveGraph = e\.aboveGraph \?\? null;.*$/gm) ?? []).length, 1, 'e.aboveGraph を取り出す行');
+  assert.equal((code.match(/buildStairGeometry\(stair, b, \{[^}]*\bgraph, aboveGraph \}\)/g) ?? []).length, 2, '2 つの buildStairGeometry に aboveGraph');
+  assert.equal((strip(read('../App.jsx')).match(/^\s*aboveGraph: abovePlanPeek\?\.graph \?\? null,.*$/gm) ?? []).length, 1, 'App の buildStairEntries 呼び出し');
+  const entries = strip(read('../finish/stair/stairEntries.js'));
+  assert.equal((entries.match(/^\s*aboveGraph,.*$/gm) ?? []).length, 1, 'install エントリ');
+  assert.equal((entries.match(/aboveGraph: graph/g) ?? []).length, 2, 'upper エントリ（表示中の階が N+1）の 2 箇所');
+});

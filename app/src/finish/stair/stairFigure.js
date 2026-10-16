@@ -25,8 +25,9 @@ function gapMm(scale, b) {
 // spans はセル実測の区間長（measureStairSpans。区間長指定の反映用。null なら合成）。
 // graph は指定時、insetStairBounds が実壁面（CL偏芯を反映した壁位置）へ取り合うのに使う
 // （省略時は従来どおり固定 WALL_INSET。機能1）。
-export function stairFigurePrimitives(stair, b, { riser = null, scale = null, spans = null, graph = null } = {}) {
-  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans, laneGap: true, graph });
+// aboveGraph は直上階（N+1）の graph（復路の到達辺を受ける床梁の解決。省略は従来の Q3）。
+export function stairFigurePrimitives(stair, b, { riser = null, scale = null, spans = null, graph = null, aboveGraph = null } = {}) {
+  const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans, laneGap: true, graph, aboveGraph });
   const prims = [];
 
   // 外周（実線／dashed は破線）
@@ -51,7 +52,7 @@ export function stairFigurePrimitives(stair, b, { riser = null, scale = null, sp
   }
 
   // 所定寸法の注記
-  prims.push(...stairDimPrimitives(stair, b, riser, gapMm(scale, b), spans, graph));
+  prims.push(...stairDimPrimitives(stair, b, riser, gapMm(scale, b), spans, graph, aboveGraph));
   // より長い寸法線ほど図の外側へ（同一方向・同一側の tier を長さで並べ替え。チェーンは保持）。
   const cx = (b.x1 + b.x2) / 2, cy = (b.y1 + b.y2) / 2;
   orderDimsByLength(prims, cx, cy);
@@ -63,7 +64,7 @@ export function stairFigurePrimitives(stair, b, { riser = null, scale = null, sp
 // 所定寸法のプリミティブ。g は注記の張り出し量(mm)＝スクリーン空間で px 一定。
 // 全長・幅は「描かれた図（設置セル包絡矩形 b）」の x/y スパンを寸法線で注記（昇り方向に応じ見出し付与）。
 // 踏面は走行始端に1マス分の寸法線（設計値ラベル）。蹴上・段数は設計値をテキストで併記する。
-function stairDimPrimitives(stair, b, riser, g, spans, graph = null) {
+function stairDimPrimitives(stair, b, riser, g, spans, graph = null, aboveGraph = null) {
   const w = b.x2 - b.x1, h = b.y2 - b.y1;
   const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
   const hHeader = vertical ? '幅' : '全長'; // 横スパン(h)の見出し
@@ -93,6 +94,6 @@ function stairDimPrimitives(stair, b, riser, g, spans, graph = null) {
   prims.push({ type: 'text', x: (b.x1 + b.x2) / 2, y: b.y2 + g * 2, text: notes.join('  '), anchor: 'middle', baseline: 'hanging', size: 11, fill: '#334155' });
 
   // タイプ別セグメント（踊り場・回り部・各アーム・各直進部）を、その場に踏面数／長さの寸法線で注記
-  prims.push(...stairSegmentDims(stair, bi, g, spans, graph));
+  prims.push(...stairSegmentDims(stair, bi, g, spans, graph, aboveGraph));
   return prims;
 }

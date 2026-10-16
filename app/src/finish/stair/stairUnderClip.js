@@ -163,6 +163,7 @@ export function stairUnderWallClips(graph, installEntries, opts = {}) {
     // 破れ線弦の beyond側でさらに絞り込む（求まらなければ矩形のまま＝安全側フォールバック）。
     let halfPlane = null;
     if (HALF_PLANE_TYPES.has(stair.type)) {
+      // 破れ線（tRun）しか使わない。aboveGraph（到達辺の面）は破れ線に影響しないので渡さない
       const geom = buildStairGeometry(stair, bounds, {
         view: 'install', detail, riser, spans, laneGap, breakOverhangMm, graph,
       });

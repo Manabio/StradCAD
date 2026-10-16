@@ -27,6 +27,7 @@ import { makeFrame } from './stairFrame.js';
 import { uTurnSpans, defaultSections } from './stairClassify.js';
 import { riserOf } from './stairDimensions.js';
 import { isTraditionalWoodStructure } from '../../structural/structureRules.js';
+import { findSectionEntry } from '../../structural/sectionCatalog.js';
 
 /** 端部の90角（下地厚）mm。仕様で固定した値で、既定の壁材（DEFAULT_WALL_BASE）とは連動させない */
 export const PARTITION_BACKING_MM = 90;
@@ -159,6 +160,48 @@ export function stairPartitionGeometry(stair, graph) {
     hi: Math.max(along(entryEnd), along(landingEnd)),
     entryEnd, landingEnd,
   };
+}
+
+// 到達辺の受け材から除く梁の role（plan/planSolids.js EXCLUDED_BEAM_ROLES と同値。あちらは非公開・重い依存のため複製。変えるときは両方）
+const ARRIVAL_EXCLUDED_BEAM_ROLES = new Set(['foundation', 'sill', 'roofBeam']);
+const ARRIVAL_COORD_TOL_MM = 0.5;
+
+/**
+ * 復路の到達辺（上階 N+1 への上り口）を受ける、上階の床梁の外面（階段側の面）までの、到達辺の通り芯からの距離 mm。
+ * 走行に直交し、材 [軸−半幅, 軸+半幅] が到達辺の通り芯（入口柱 entryEnd の走行方向座標）を含み、復路レーン
+ * （隔て壁の軸〜復路側の外周）の範囲と正の長さで重なる梁（foundation/sill/roofBeam は除く）の面の最大。
+ * 面は梁の軸基準（(軸−通り芯)×階段側の向き＋sectionWidth/2。偏芯した梁でも正しい）。梁が無い・幾何が取れないときは null。
+ * 到達辺の面＝この値＋PARTITION_FINISH_MM（壁仕上げ。ASSUMED: 隔て壁と同じ PB 12.5。ユーザー裁定 2026-10-16）。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph 階段の設置階の graph
+ * @param {object|null} aboveGraph 直上階（N+1）の graph
+ * @returns {number|null}
+ */
+export function arrivalBeamFaceMm(stair, graph, aboveGraph) {
+  if (!aboveGraph || !graph) return null;
+  const g = stairPartitionGeometry(stair, graph);
+  const fr = g ? uTurnFrameOf(stair, graph) : null;
+  if (!g || !fr) return null;
+  const across = (p) => (g.isVertical ? p.x : p.y);
+  const [a0, a1] = [across(fr.f.pt(0, 0.5)), across(fr.f.pt(0, 1))]; // 復路レーン側（隔て壁の軸〜外周）の幅方向範囲
+  const lo = Math.min(a0, a1), hi = Math.max(a0, a1);
+  const [target, landing] = g.isVertical ? [g.entryEnd.y, g.landingEnd.y] : [g.entryEnd.x, g.landingEnd.x];
+  const toward = Math.sign(landing - target) || 1; // 階段側（回転部側）の向き
+  let best = null;
+  for (const beam of aboveGraph.beams ?? []) {
+    if (ARRIVAL_EXCLUDED_BEAM_ROLES.has(beam.role)) continue;
+    if (beam.isVertical === g.isVertical) continue; // 走行に直交する梁だけ
+    // カタログに無い断面は照合しない（sectionWidth の getter は既定 300 に落ちるため使わない。RC の beamWidth は在来木造の階段には来ない）
+    const width = findSectionEntry(beam.sectionDefId)?.width;
+    if (!Number.isFinite(width)) continue;
+    const half = width / 2;
+    if (Math.abs(beam.axisValue - target) > half + ARRIVAL_COORD_TOL_MM) continue;
+    const c1 = beam.coord1, c2 = beam.coord2;
+    if (Math.min(Math.max(c1, c2), hi) - Math.max(Math.min(c1, c2), lo) <= 0) continue;
+    const face = (beam.axisValue - target) * toward + half;
+    if (best === null || face > best) best = face;
+  }
+  return best;
 }
 
 /**

@@ -81,16 +81,17 @@ export const StairLayer = observer(({
   // 解決する——描画ルールの宣言はそちら側に集約し、ここでは結果を写像するだけにする。
   const resolved = entries.map((e) => {
     const { stair, bounds: b, riser, spans, view, graph, wallGraph } = e;
+    const aboveGraph = e.aboveGraph ?? null; // 直上階（復路の到達辺を受ける床梁。stairEntries.js が載せる）
     if (!b || ![b.x1, b.y1, b.x2, b.y2].every(Number.isFinite) || b.x2 <= b.x1 || b.y2 <= b.y1) {
       return null;
     }
     const resolve = (g) => (graph ? resolveStairSideLines(stair, graph, g, { wallGraph }) : g);
-    const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGap, breakOverhangMm, graph });
+    const built = buildStairGeometry(stair, b, { view, detail, riser, spans, laneGap, breakOverhangMm, graph, aboveGraph });
     // install エントリは、破れ線から先（＝切断高より上に続く上り部分）を点線で描き足すため、
     // 破断のない全段ジオメトリ（upper ビュー）も併せて作る。実際に描くのは破れ先だけで、
     // 段数字・矢印は install 側が既に持つため使わない（線分プリミティブのみ流用する）。
     const beyondBuilt = view === 'install'
-      ? buildStairGeometry(stair, b, { view: 'upper', insetView: 'install', detail, riser, spans, laneGap, breakOverhangMm, graph })
+      ? buildStairGeometry(stair, b, { view: 'upper', insetView: 'install', detail, riser, spans, laneGap, breakOverhangMm, graph, aboveGraph })
       : null;
     return { e, geom: resolve(built), beyondGeom: beyondBuilt ? resolve(beyondBuilt) : null };
   });

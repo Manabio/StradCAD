@@ -84,7 +84,7 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
   const riser = stair.riser ?? (floorHeight != null ? floorHeight / Math.max(1, stair.totalSteps) : null);
   const spans = validB ? measureStairSpans(stair, graph) : null; // セル実測の区間長（区間長指定の反映）
   const figure = validB
-    ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans, graph }), STAIR_FIGURE_FRAME)
+    ? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans, graph, aboveGraph: upperGraph }), STAIR_FIGURE_FRAME)
     : null;
   // 出入口の辺（折返し・回り階段。stairGeometry.js と同じ解決）と、選べる候補（床のある部屋に面する辺だけ。
   // 上り口は自階、到達口は上階の床で確かめる。上階が読めなければ幾何だけで絞り、注記を出す）

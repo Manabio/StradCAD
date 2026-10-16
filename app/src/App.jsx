@@ -2526,6 +2526,7 @@ const App = observer(() => {
   const { isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips } =
     buildStairEntries(graph, project, {
       appMode, viewport, upperStairEntriesPeek: upperStairEntries, upperSlabOpenings,
+      aboveGraph: abovePlanPeek?.graph ?? null, // 復路の到達辺を受ける上階の床梁（stairGeometry.js partitionFrameFor）
       stairBreakOverhangMm: overhangMm(viewport, false), // stairEntries.js は snap.js に依存しないため、ここで算出して渡す
     });
 

@@ -63,3 +63,12 @@ test('【配線】出入口の解決は U字・直進系を型で分ける resol
   assert.ok(panel.has('if (hasPortSides(stair.type) && !hasPortSides(t)) applyFields(resetPortSides(stair));'), '矩折→曲がりの型切替で出入口を自動へ戻す行が見つからない');
   assert.equal(countOf(panel.src, 'U_TURN_TYPES'), 0, 'U字限定の判定は残さない');
 });
+
+test('【配線】到達辺の面: StairEditor の模式図は upperGraph を aboveGraph として stairFigurePrimitives へ渡し、模式図は寸法と幾何の両方へ渡す', () => {
+  assert.ok(panel.has('? annotatedFigure(scale => stairFigurePrimitives(stair, b, { riser, scale, spans, graph, aboveGraph: upperGraph }), STAIR_FIGURE_FRAME)'), 'StairPanel の aboveGraph');
+  const fig = fs.readFileSync(path.resolve(import.meta.dirname, 'stairFigure.js'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map(l => l.trim());
+  assert.ok(fig.includes("const geom = buildStairGeometry(stair, b, { view: 'upper', detail: true, riser, spans, laneGap: true, graph, aboveGraph });"), 'buildStairGeometry');
+  assert.ok(fig.includes('prims.push(...stairSegmentDims(stair, bi, g, spans, graph, aboveGraph));'), 'stairSegmentDims');
+  assert.ok(fig.includes('prims.push(...stairDimPrimitives(stair, b, riser, gapMm(scale, b), spans, graph, aboveGraph));'), '寸法の呼び出し');
+  assert.ok(fig.includes('function stairDimPrimitives(stair, b, riser, g, spans, graph = null, aboveGraph = null) {'), '寸法の引数');
+});

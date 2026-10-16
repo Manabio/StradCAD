@@ -75,9 +75,12 @@ export function buildUpperStairPeekEntries(belowGraph, floorHeight) {
  *   overhangMm(viewport, false)（snap.js）で算出して渡す。本モジュールはsnap.jsに依存しない）
  * @param {Array|null} [opts.upperSlabOpenings] 直上階のスラブ開口矩形（slabOpening.js）。
  *   破れ線から先を点線で描くときの可視範囲。null=上階なし／未解決（クリップしない）
+ * @param {object|null} [opts.aboveGraph] 直上階（N+1）の graph（App.jsx の abovePlanPeek.graph。未解決・最上階は null）。
+ *   install エントリへ載せ、復路の到達辺を上階の床梁の外面＋壁仕上げに置く（stairGeometry.js partitionFrameFor）。
+ *   upper エントリ（下階の階段の見下げ）は表示中の階が N+1 なので自階 graph を載せる
  * @returns {{ isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips }}
  */
-export function buildStairEntries(graph, project, { appMode, viewport, upperStairEntriesPeek, upperSlabOpenings = null, stairBreakOverhangMm }) {
+export function buildStairEntries(graph, project, { appMode, viewport, upperStairEntriesPeek, upperSlabOpenings = null, aboveGraph = null, stairBreakOverhangMm }) {
   // isStairMode: 階段は平面図一式の一部なので、壁・建具・柱と同じ述語系で出し入れする（天伏だけは除く。
   // renderer/planFigureVisibility.js shouldShowStairFigure が単一の供給源。不具合2026-09「建具モードに入ると階段
   // 関連の図が消える」の根本原因は、ここだけモードの列挙が別だったこと）。描かない伏図
@@ -100,6 +103,7 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
       id: s.id,
       stair: s,
       graph, // 側面線の壁有無判定（resolveStairSideLines）に使う
+      aboveGraph, // 直上階（復路の到達辺を受ける床梁の解決用）
       bounds: roomBounds(s.cells, graph),
       cellBounds: cellBoundsList(s.cells, graph), // 実セル占有（L字等の選択枠用）
       hitCellBounds: cellBoundsList(hitCells, graph), // クリックヒット領域（破れ線先セル除外）
@@ -140,10 +144,10 @@ export function buildStairEntries(graph, project, { appMode, viewport, upperStai
           const overlapInstall = installEntries.find(ie => anyCellBoundsOverlap(e.cellBounds, ie.cellBounds));
           return overlapInstall
             ? {
-                ...e, wallGraph: graph, installOverlap: true, clipAgainstId: overlapInstall.id,
+                ...e, wallGraph: graph, aboveGraph: graph, installOverlap: true, clipAgainstId: overlapInstall.id,
                 beyondBreakBounds: overlapInstall.beyondBreakBounds,
               }
-            : withPartitionOutline({ ...e, wallGraph: graph }, getSelfOpenings);
+            : withPartitionOutline({ ...e, wallGraph: graph, aboveGraph: graph }, getSelfOpenings);
         })
     : [];
 

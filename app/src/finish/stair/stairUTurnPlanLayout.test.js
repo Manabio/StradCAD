@@ -9,7 +9,7 @@ import { buildStairGeometry, uTurnPlanLayout, turnPivotS } from './stairGeometry
 import { roomBounds, refreshCells } from '../gridCells.js';
 import { faceRect } from '../wallFaces.js';
 import { stairTreadFootprints } from './stairTreads.js';
-import { PARTITION_BACKING_MM, PARTITION_THICKNESS_MM } from './stairPartition.js';
+import { PARTITION_BACKING_MM, PARTITION_THICKNESS_MM, arrivalBeamFaceMm } from './stairPartition.js';
 import { generateStairPartitionWalls } from './stairPartitionWalls.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
 
@@ -439,4 +439,231 @@ test('pivotAcross（回り階段の扇形の起点）: 柱ありは柱の往路�
 test('turnPivotS: 柱があれば column.sA、無ければ sA（buildWinding と uTurnPlanLayout の単一供給源）', () => {
   assert.equal(turnPivotS({ sA: 0.47 }, 0.5), 0.47);
   assert.equal(turnPivotS(null, 0.5), 0.5);
+});
+
+// ---------------------------------------------------------------- 到達辺＝上階（N+1）の床を受ける横架材の外面＋壁仕上げ（2026-10-16 裁定）
+
+const FINISH = 12.5; // 壁仕上げ（PARTITION_FINISH_MM）
+// 上階の graph。到達辺（通り芯 BASE0[dir]）に、走行に直交する木造の梁を 1 本置く。range＝梁の区間（既定は階段の幅方向の全範囲）
+function aboveWithBeam(dir, opts = {}) {
+  return addAboveBeam(new PlanGraph(new Plane('p2', 3000, '2階', 2, 1)), dir, opts);
+}
+function addAboveBeam(above, dir, { sec = 'WOOD-120x120', role, range = [0, 2000], axis = BASE0[dir], parallel = false } = {}) {
+  const vertical = dir === 'up' || dir === 'down'; // 走行が縦
+  const beamVertical = parallel ? vertical : !vertical; // 既定は走行に直交
+  const axisCL = above.addCenterLine(beamVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL, axis, { labeled: false, discipline: Discipline.STRUCT });
+  const mk = (v) => above.addCenterLine(beamVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.STRUCT });
+  above.addBeam(StructuralMaterialType.WOOD, sec, axisCL, beamVertical, mk(range[0]), mk(range[1]), role ? { role } : {});
+  return above;
+}
+
+test('arrivalBeamFaceMm: 到達辺に乗る直交梁の半幅（幅 120 → 60・幅 105 → 52.5）。複数あれば最大', () => {
+  for (const dir of ['up', 'down', 'left', 'right']) {
+    const { graph, stair } = equalFixture(StairType.SWITCHBACK, dir, false);
+    assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam(dir, { sec: 'WOOD-120x120' })), 60, dir);
+    assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam(dir, { sec: 'WOOD-105x105' })), 52.5, dir);
+  }
+  const { graph, stair } = equalFixture(StairType.SWITCHBACK, 'up', false);
+  // 照合は復路レーン側（up・flip=false では x 1000..2000）の範囲だけ。往路側だけの梁は到達辺を受けない（T2）
+  assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { sec: 'WOOD-105x105', range: [0, 1000] })), null, '往路側だけの梁は null');
+  const above = aboveWithBeam('up', { sec: 'WOOD-105x105', range: [1000, 2000] });
+  assert.equal(arrivalBeamFaceMm(stair, graph, above), 52.5, '復路側だけ');
+  addAboveBeam(above, 'up', { sec: 'WOOD-120x120', range: [1000, 2000] });
+  assert.equal(arrivalBeamFaceMm(stair, graph, above), 60, '幅の異なる梁が並ぶときは最大');
+});
+
+test('arrivalBeamFaceMm: 偏芯した梁の面は軸基準（階段側へ 10 ずれた軸なら +10・反対側なら −10）', () => {
+  const { graph, stair } = equalFixture(StairType.SWITCHBACK, 'up', false);
+  // up は階段が y の小さい側。軸 3990 は階段側へ 10 ずれる
+  assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { axis: 3990 })), 70);
+  assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { axis: 4010 })), 50);
+  assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { axis: 4061 })), null, '材が通り芯を含まない梁は無視');
+});
+
+test('arrivalBeamFaceMm 失敗系: 上階なし・梁なし・平行な梁・区間が重ならない梁・軸がずれた梁・土台/基礎/小屋梁は null', () => {
+  const { graph, stair } = equalFixture(StairType.SWITCHBACK, 'up', false);
+  assert.equal(arrivalBeamFaceMm(stair, graph, null), null, 'aboveGraph null');
+  assert.equal(arrivalBeamFaceMm(stair, null, aboveWithBeam('up')), null, 'graph null');
+  assert.equal(arrivalBeamFaceMm(stair, graph, new PlanGraph(new Plane('p2', 3000, '2階', 2, 1))), null, '上階に梁なし');
+  assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { parallel: true })), null, '走行に平行な梁');
+  assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { range: [2000, 3000] })), null, '区間が接するだけ（重ならない）');
+  assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { axis: 3000 })), null, '到達辺と軸がずれた梁');
+  for (const role of ['sill', 'foundation', 'roofBeam']) {
+    assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { role })), null, role);
+  }
+  const noCells = { ...stair, cells: new Set() };
+  assert.equal(arrivalBeamFaceMm(noCells, graph, aboveWithBeam('up')), null, 'セルなしの階段');
+});
+
+test('【到達辺＝上階の梁の外面＋仕上げ】等長レーン・4方向: baseB は通り芯±(梁の半幅＋12.5)。aboveGraph 省略・梁なし・平行な梁は従来の Q3。段数は不変', () => {
+  for (const type of [StairType.SWITCHBACK, StairType.WINDING]) {
+    for (const dir of ['up', 'down', 'left', 'right']) {
+      for (const [sec, half] of [['WOOD-120x120', 60], ['WOOD-105x105', 52.5]]) {
+        const tag = `${type}/${dir}/${sec}`;
+        const { graph, stair } = equalFixture(type, dir, false);
+        addPartitionWalls(graph);
+        const d = TOWARD[dir];
+        const base = uTurnPlanLayout(stair, graph);
+        const p = uTurnPlanLayout(stair, graph, { aboveGraph: aboveWithBeam(dir, { sec }) });
+        assert.ok(Math.abs(base.run.baseB - (BASE0[dir] + d * 57.5)) < EPS, `${tag}: 省略は従来の Q3`);
+        assert.ok(Math.abs(p.run.baseB - (BASE0[dir] + d * (half + FINISH))) < EPS, `${tag}: baseB ${p.run.baseB}`);
+        assert.equal(p.run.startB, p.run.baseB, tag);
+        assert.equal(p.run.baseA, base.run.baseA, `${tag}: 往路の基端は不変`);
+        assert.deepEqual([p.totalSteps, p.n1, p.n2], [base.totalSteps, base.n1, base.n2], `${tag}: 段数は不変`);
+        // 失敗系: 平行な梁・梁なしは従来どおり
+        const par = uTurnPlanLayout(stair, graph, { aboveGraph: aboveWithBeam(dir, { parallel: true }) });
+        assert.equal(par.run.baseB, base.run.baseB, `${tag}: 平行な梁は無視`);
+        const none = uTurnPlanLayout(stair, graph, { aboveGraph: new PlanGraph(new Plane('p3', 3000, '2階', 2, 1)) });
+        assert.equal(none.run.baseB, base.run.baseB, `${tag}: 梁なしは Q3`);
+      }
+    }
+  }
+});
+
+test('【短い復路（張り出し）でも同じ式】overhangFixture: baseB は通り芯 2000 から（梁の半幅＋12.5）。梁なしは従来の Q3', () => {
+  const { graph, stair } = overhangFixture(0);
+  addPartitionWalls(graph);
+  const above = aboveWithBeam('up', { axis: 2000 });
+  const p = uTurnPlanLayout(stair, graph, { aboveGraph: above });
+  assert.ok(Math.abs(p.run.baseB - (2000 - (60 + FINISH))) < EPS, `baseB ${p.run.baseB}`);
+  assert.ok(Math.abs(uTurnPlanLayout(stair, graph).run.baseB - (2000 - 57.5)) < EPS, '省略は Q3');
+});
+
+test('【見下げ平面の到達辺の線】detail は梁の外面＋仕上げ＋蹴込（stair.nosing）。detail:false・install・梁なしは蹴込を足さない', () => {
+  const arrivalLine = (stair, graph, opts) => {
+    const g = buildStairGeometry(stair, roomBounds(stair.cells, graph), {
+      riser: 100, spans: measureStairSpans(stair, graph), laneGap: true, graph, ...opts,
+    });
+    return g.outline.filter(s => s.port === 'arrival');
+  };
+  for (const dir of ['up', 'down', 'left', 'right']) {
+    const vertical = dir === 'up' || dir === 'down', d = TOWARD[dir];
+    const pos = (s) => (vertical ? s.y1 : s.x1);
+    const { graph, stair } = equalFixture(StairType.SWITCHBACK, dir, false);
+    addPartitionWalls(graph);
+    const aboveGraph = aboveWithBeam(dir);
+    const det = arrivalLine(stair, graph, { view: 'upper', detail: true, aboveGraph });
+    assert.equal(det.length, 1, dir);
+    assert.ok(Math.abs(pos(det[0]) - (BASE0[dir] + d * (60 + FINISH + stair.nosing))) < 1e-6, `${dir}: detail ${pos(det[0])}`);
+    const simple = arrivalLine(stair, graph, { view: 'upper', detail: false, aboveGraph });
+    assert.ok(Math.abs(pos(simple[0]) - (BASE0[dir] + d * (60 + FINISH + stair.nosing))) > 1e-6, `${dir}: detail:false は蹴込を足さない`);
+    const noBeam = arrivalLine(stair, graph, { view: 'upper', detail: true, aboveGraph: null });
+    assert.ok(Math.abs(pos(noBeam[0]) - pos(det[0])) > 1, `${dir}: 梁なしは動かない（${pos(noBeam[0])}）`);
+    const inst = arrivalLine(stair, graph, { view: 'install', detail: true, aboveGraph });
+    assert.ok(Math.abs(pos(inst[0]) - (BASE0[dir] + d * (60 + FINISH))) < 1e-6, `${dir}: install は梁の外面＋仕上げ（蹴込なし）${pos(inst[0])}`);
+  }
+});
+
+// 復路が長いレーン（2 列 b,c,d,a,e。往路 b だけ・復路 a,e）。入口柱は y=2000、復路の基端は y=3000 側（長い方は t=0＝枠の辺）
+function longerReturnFixture() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const V = (v) => graph.addCenterLine(CenterLineType.VERTICAL, v, ARCH);
+  const Hh = (v) => graph.addCenterLine(CenterLineType.HORIZONTAL, v, ARCH);
+  const x0 = V(0), x1 = V(1000), x2 = V(2000), y0 = Hh(0), y1 = Hh(1000), y2 = Hh(2000), y3 = Hh(3000);
+  const k = (l, t, r, b) => `${l.id}:${t.id}:${r.id}:${b.id}`;
+  const c = { d: k(x0, y0, x1, y1), c: k(x1, y0, x2, y1), a: k(x0, y1, x1, y2), b: k(x1, y1, x2, y2), e: k(x0, y2, x1, y3) };
+  const keys = ['b', 'c', 'd', 'a', 'e'].map(n => c[n]);
+  const cells = new Set(keys);
+  const cls = classifyStairArea(cells, graph, 2800, keys);
+  const stair = graph.addStair({ type: cls.type, cells, upDirection: cls.upDirection, flip: cls.flip, sections: cls.sections, entryTurnSteps: 0, arrivalTurnSteps: 0 });
+  stair.entrySide = 'end'; stair.arrivalSide = 'end'; // 出入口は走行端（到達辺の線 port:arrival が基端の辺に出る）
+  graph.setStructureOverride('木造（在来）');
+  stair.structure = StructuralMaterialType.WOOD;
+  return { graph, stair };
+}
+const arrivalLineOf = (stair, graph, opts) => buildStairGeometry(stair, roomBounds(stair.cells, graph), {
+  riser: 100, spans: measureStairSpans(stair, graph), laneGap: true, graph, ...opts,
+}).outline.filter(s => s.port === 'arrival');
+
+test('T1【復路が長いレーンは蹴込を足さない】baseB が面に採られない配置では、上階に梁があっても見下げの到達辺の線は動かない', () => {
+  const { graph, stair } = longerReturnFixture();
+  addPartitionWalls(graph);
+  const above = aboveWithBeam('up', { axis: 2000, range: [0, 2000] });
+  const base = arrivalLineOf(stair, graph, { view: 'upper', detail: true });
+  const withAbove = arrivalLineOf(stair, graph, { view: 'upper', detail: true, aboveGraph: above });
+  assert.equal(base.length, 1);
+  assert.notEqual(arrivalBeamFaceMm(stair, graph, above), null, '前提: 梁は照合される（見つからないだけの空振りにしない）');
+  const lay = uTurnPlanLayout(stair, graph, { aboveGraph: above });
+  assert.ok(Math.abs(lay.run.baseA - lay.run.baseB) > 1, '前提: 不等長レーン');
+  assert.deepEqual(withAbove, base, '梁があっても動かない（長いレーンの基端は枠の辺）');
+});
+
+test('T2【復路側にだけ梁がある】往路側だけの梁では到達辺は Q3 のまま、復路側の梁なら面（4 方向）', () => {
+  const { graph, stair } = equalFixture(StairType.SWITCHBACK, 'up', false);
+  addPartitionWalls(graph);
+  const q3 = uTurnPlanLayout(stair, graph).run.baseB;
+  const onA = uTurnPlanLayout(stair, graph, { aboveGraph: aboveWithBeam('up', { range: [0, 1000] }) }).run.baseB;
+  const onB = uTurnPlanLayout(stair, graph, { aboveGraph: aboveWithBeam('up', { range: [1000, 2000] }) }).run.baseB;
+  assert.equal(onA, q3, '往路側の梁は無視');
+  assert.ok(Math.abs(onB - (4000 - (60 + FINISH))) < EPS, `復路側の梁は面 ${onB}`);
+});
+
+test('見下げ（N+1）: 往路の基端は枠の辺のまま・復路の基端だけ面、復路のピッチは面から割り付く。基端の隙間は柱・梁なので内側の線を出さない', () => {
+  for (const dir of ['up', 'down', 'left', 'right']) {
+    const vertical = dir === 'up' || dir === 'down', d = TOWARD[dir];
+    const { graph, stair } = equalFixture(StairType.SWITCHBACK, dir, false);
+    addPartitionWalls(graph);
+    const aboveGraph = aboveWithBeam(dir);
+    const geomOf = (view, insetView) => buildStairGeometry(stair, roomBounds(stair.cells, graph), {
+      view, insetView, detail: true, riser: 100, spans: measureStairSpans(stair, graph), laneGap: true, graph, aboveGraph,
+    });
+    const pos = (s) => (vertical ? s.y1 : s.x1);
+    const up = geomOf('upper');
+    const arrUp = up.outline.filter(s => s.port === 'arrival');
+    assert.ok(Math.abs(pos(arrUp[0]) - (BASE0[dir] + d * (60 + FINISH + stair.nosing))) < 1e-6, `${dir}: 見下げの到達辺＝面＋蹴込`);
+    // 往路の上り口の辺は枠の辺（逃げた位置）で、通り芯−半幅の Q1 には出ない
+    const entryUp = up.outline.filter(s => s.port === 'entry');
+    assert.ok(Math.abs(pos(entryUp[0]) - (BASE0[dir])) > 1, `${dir}: 往路は枠の辺（通り芯と異なる）`);
+    // 復路内側の線（sB 上）は到達辺（蹴込つき）から始まり、取りつき区画の内側の線（枠の辺〜面）を出さない
+    const sBAt = uTurnPlanLayout(stair, graph, { aboveGraph }).across.sB;
+    const onSB = up.outline.filter(s => (vertical ? Math.abs(s.x1 - sBAt) < EPS && Math.abs(s.x2 - sBAt) < EPS : Math.abs(s.y1 - sBAt) < EPS && Math.abs(s.y2 - sBAt) < EPS));
+    assert.ok(onSB.length > 0, `${dir}: sB 上の線がある`);
+    const nearest = (s) => Math.min((vertical ? s.y1 : s.x1) * d, (vertical ? s.y2 : s.x2) * d);
+    assert.ok(onSB.every(s => nearest(s) >= pos(arrUp[0]) * d - EPS), `${dir}: 内側の線は到達辺（蹴込つき）より手前から始まらない`);
+    // 復路の踏面（sB より復路側）の間隔
+    const lay = uTurnPlanLayout(stair, graph, { aboveGraph });
+    const ret = Math.sign(lay.across.sB - lay.across.mid) || 1; // 復路レーンのある側（幅方向）
+    const gaps = (g) => {
+      const ts = g.treads.filter(s => (vertical
+        ? Math.abs(s.y1 - s.y2) < EPS && (s.x1 - sBAt) * ret > -1e-6 && (s.x2 - sBAt) * ret > -1e-6
+        : Math.abs(s.x1 - s.x2) < EPS && (s.y1 - sBAt) * ret > -1e-6 && (s.y2 - sBAt) * ret > -1e-6))
+        .map(s => (vertical ? s.y1 : s.x1) * d).sort((a, b) => a - b);
+      return ts.slice(1).map((v, i) => v - ts[i]);
+    };
+    assert.ok(gaps(up).length > 1, `${dir}: 復路の踏面がある`);
+    // 復路は面（run.baseB）から等ピッチで割り付く: 面〜最初の踏面線の距離 ＝ 踏面線どうしの間隔
+    const firstTread = Math.min(...up.treads.filter(s => (vertical
+      ? Math.abs(s.y1 - s.y2) < EPS && (s.x1 - sBAt) * ret > -1e-6 && (s.x2 - sBAt) * ret > -1e-6
+      : Math.abs(s.x1 - s.x2) < EPS && (s.y1 - sBAt) * ret > -1e-6 && (s.y2 - sBAt) * ret > -1e-6)).map(s => (vertical ? s.y1 : s.x1) * d));
+    assert.ok(Math.abs((firstTread - lay.run.baseB * d) - gaps(up)[0]) < 1e-6, `${dir}: 面から等ピッチ ${firstTread - lay.run.baseB * d} vs ${gaps(up)[0]}`);
+  }
+});
+
+test('T3【自階の破れ先の破線は蹴込を足さない】install の beyond（view upper・insetView install）の到達辺は面。install の到達辺と一致', () => {
+  for (const dir of ['up', 'down', 'left', 'right']) {
+    const vertical = dir === 'up' || dir === 'down', d = TOWARD[dir];
+    const pos = (s) => (vertical ? s.y1 : s.x1);
+    const { graph, stair } = equalFixture(StairType.SWITCHBACK, dir, false);
+    addPartitionWalls(graph);
+    const aboveGraph = aboveWithBeam(dir);
+    const beyond = arrivalLineOf(stair, graph, { view: 'upper', insetView: 'install', detail: true, aboveGraph });
+    const inst = arrivalLineOf(stair, graph, { view: 'install', detail: true, aboveGraph });
+    assert.ok(Math.abs(pos(beyond[0]) - (BASE0[dir] + d * (60 + FINISH))) < 1e-6, `${dir}: beyond＝面（蹴込なし）${pos(beyond[0])}`);
+    assert.ok(Math.abs(pos(beyond[0]) - pos(inst[0])) < 1e-6, `${dir}: install の到達辺と一致`);
+  }
+});
+
+test('到達辺の面は入口柱の面 Q3 より手前に来ない: 外へ 20 偏芯した幅 120 の梁は Q3（57.5）のまま、内向き偏芯・偏芯 0 は従来の値', () => {
+  const { graph, stair } = equalFixture(StairType.SWITCHBACK, 'up', false);
+  addPartitionWalls(graph);
+  const baseB = (axis) => uTurnPlanLayout(stair, graph, { aboveGraph: aboveWithBeam('up', { axis }) }).run.baseB;
+  // up は階段が y の小さい側。軸 4020 は階段と反対（外）へ 20 → 面 40+12.5=52.5 < 57.5
+  assert.ok(Math.abs(baseB(4020) - (4000 - 57.5)) < EPS, `外向き偏芯は Q3 ${baseB(4020)}`);
+  assert.ok(Math.abs(baseB(4000) - (4000 - 72.5)) < EPS, '偏芯 0 は 72.5');
+  assert.ok(Math.abs(baseB(3980) - (4000 - 92.5)) < EPS, '内向き偏芯は 92.5');
+});
+
+test('arrivalBeamFaceMm 失敗系: カタログに無い断面の梁は照合しない（sectionWidth の既定 300 に落とさない）', () => {
+  const { graph, stair } = equalFixture(StairType.SWITCHBACK, 'up', false);
+  assert.equal(arrivalBeamFaceMm(stair, graph, aboveWithBeam('up', { sec: 'WOOD-NO-SUCH-SECTION' })), null);
 });
