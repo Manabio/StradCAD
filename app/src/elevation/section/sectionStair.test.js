@@ -2088,6 +2088,27 @@ test('【2026-10-14】farSideSilhouettePrimitives: 復路前の回転部は、�
   assert.ok(prims.every(p => p.weight === 'thin' && p.dash === undefined), '細線・実線');
 });
 
+test('【2026-10-16】farSideSilhouettePrimitives: 列の天井（斜線）で打ち切られた隔て板の帯と天井は、斜線まで・その上は天井裏として復路の蹴込みを隠す（moku4-3 1階 B1 の x=603.5/421.5/239.5）', () => {
+  // 本番の seq2 の列（裏面の ceilClip 2400→3615.8 が列 72.5..852.5 を 2422.9→3615.8 の斜線で横切る）。
+  // 切断帯以外の帯は clipBandsToVisible が列の天井の低い側 2422.9 で水平に打ち切る＝帯の z1 は 2422.9 だが、壁の実体は斜線まで
+  // 続き、斜線より上は天井裏で見えない。
+  const capped = [
+    { x0: 72.5, x1: 852.5, worldLo: -9027.5, worldHi: -8247.5, ceilZ: 2422.94, ceilEdge: { zAtX0: 2422.94, zAtX1: 3615.813 },
+      bands: [{ kind: 'wall', z0: 0, z1: 2422.94, distMm: 410, wall: FAR_OWNER_WALL }] },
+    { x0: 852.5, x1: 967.5, worldLo: -8247.5, worldHi: -8132.5, ceilZ: 3615.813, ceilEdge: { zAtX0: 3615.813, zAtX1: 3647.936 },
+      bands: [{ kind: 'wall', z0: 0, z1: 3615.813, distMm: 410, wall: FAR_OWNER_WALL }] },
+    { x0: 967.5, x1: 1747.5, worldLo: -8132.5, worldHi: -7352.5, ceilZ: 3647.936, bands: [{ kind: 'open', z0: 0, z1: 3647.936 }] },
+  ];
+  const got = farLines(farSideSilhouettePrimitives(farContribution(), farCut(), capped));
+  assert.ok(!got.some(([x1]) => x1 < 852.5 - 0.1), `隔て板の背後（x<852.5）の復路の蹴込みは出ない: ${JSON.stringify(got)}`);
+  // 隔て板の先（扇・復路の見えがかり）は天井 3648 より下なので従来どおり
+  assert.deepEqual(got, farLines(farSideSilhouettePrimitives(farContribution(), farCut(), FAR_COLUMNS)));
+  // 対照: 列に天井の情報が無ければ、打ち切られた天端 2422.9 より上の蹴込みは見える（従来の列の形）
+  const noCeil = capped.map(c => ({ x0: c.x0, x1: c.x1, worldLo: c.worldLo, worldHi: c.worldHi, bands: c.bands }));
+  const plain = farLines(farSideSilhouettePrimitives(farContribution(), farCut(), noCeil));
+  assert.ok(plain.some(([x1, z1]) => x1 < 852.5 && z1 >= 2422.9), `天井の情報が無ければ見える: ${JSON.stringify(plain)}`);
+});
+
 test('【2026-10-14】farSideSilhouettePrimitives: 壁が無ければ復路の蹴込みはすべて出る（隔て板の背後で消えるのは遮蔽のため）。回転部の無い折返しは描かない', () => {
   const fan = [
     [852.5, 1000, 852.5, 1400],

@@ -1380,31 +1380,69 @@ function farOccluderDepth(band, cut) {
   return Number.isFinite(band.distMm) ? band.distMm : null;
 }
 
-// 帯のxでの天端z（topEdge があれば列内で線形補間）。
+/**
+ * 遮蔽に使う帯の天端の線（列の両端 x0/x1 での高さ）。無ければ null＝水平（band.z1）。
+ *   - topEdge … 隔て壁自身の斜めの天端（probe が決める）。
+ *   - ceilEdge … 天端が天井の斜線に沿う切断壁（sectionEngine clipBandsToVisible が付ける）。
+ *   - 列の天井で打ち切られた帯（z1≈col.ceilZ。切断帯以外は低い側で水平に打ち切られる）… 壁の実体は天井の斜線まで
+ *     続いているので、遮蔽は列の天井の斜線（col.ceilEdge）まで（ユーザー指摘 2026-10-16「moku4-3 1階 階段 B1: 復路の蹴上線は
+ *     隔て板の向こう側なので描画しない」——隔て板の帯が列の天井の低い側 2423 で水平に打ち切られ、斜線の下の蹴上が
+ *     「見える」になっていた。平面 probe はフルハイトを返しており、レイキャストの天端評価だけが斜線を見ていなかった）。
+ * @param {import('./sectionTypes.js').ZBand} band
+ * @param {import('./sectionTypes.js').SectionColumn} col
+ * @returns {{zAtX0:number, zAtX1:number}|null}
+ */
+function farBandTopEdgeOf(band, col) {
+  const ok = e => e && Number.isFinite(e.zAtX0) && Number.isFinite(e.zAtX1);
+  if (ok(band.topEdge)) return band.topEdge;
+  if (ok(band.ceilEdge)) return band.ceilEdge;
+  if (ok(col.ceilEdge) && Number.isFinite(col.ceilZ) && Math.abs(band.z1 - col.ceilZ) <= GAP_EPS) return col.ceilEdge;
+  return null;
+}
+
+// 帯のxでの天端z（天端の線があれば列内で線形補間）。
 function farBandTopAt(band, col, x) {
-  const te = band.topEdge;
-  if (te && Number.isFinite(te.zAtX0) && Number.isFinite(te.zAtX1) && col.x1 - col.x0 > GAP_EPS) {
+  const te = farBandTopEdgeOf(band, col);
+  if (te && col.x1 - col.x0 > GAP_EPS) {
     const t = Math.min(1, Math.max(0, (x - col.x0) / (col.x1 - col.x0)));
     return te.zAtX0 + (te.zAtX1 - te.zAtX0) * t;
   }
   return band.z1;
 }
 
+// 列の天井（打ち切り値。斜線なら ceilEdge を補間）の x での高さ。天井情報の無い列は null。
+function farColumnCeilAt(col, x) {
+  const ce = col.ceilEdge;
+  if (ce && Number.isFinite(ce.zAtX0) && Number.isFinite(ce.zAtX1) && col.x1 - col.x0 > GAP_EPS) {
+    const t = Math.min(1, Math.max(0, (x - col.x0) / (col.x1 - col.x0)));
+    return ce.zAtX0 + (ce.zAtX1 - ce.zAtX0) * t;
+  }
+  return Number.isFinite(col.ceilZ) ? col.ceilZ : null;
+}
+
 // 線分 seg={x1,z1,x2,z2,d1,d2}（d＝端点の奥行き）を列の遮蔽で削った残りを返す。水平線は列境界で分割して
 // 各片の中点の奥行きで判定、縦線は x を内側に含む列だけで判定してzの被覆区間を引く。
+// 列の天井（ceilZ/ceilEdge）より上は天井裏＝見えないので、天井も遮蔽に数える（「天井の向こうには何も描かない」。
+// 壁の帯は天井で打ち切られているので、壁の背後の蹴込みが天井より上で見えてしまうのを防ぐ）。
 function occludeFarSegment(seg, columns, cut) {
   const cols = columns ?? [];
   const bandsOf = col => (col.bands ?? []).filter(b => FAR_OCCLUDER_KINDS.has(b.kind));
   if (Math.abs(seg.x2 - seg.x1) <= GAP_EPS) {
     const x = seg.x1;
     const dep = Math.min(seg.d1, seg.d2);
-    // この列がxで覆うz区間（遮蔽帯の z0〜その x での天端）
-    const coveredBy = col => bandsOf(col).flatMap(b => {
-      const occ = farOccluderDepth(b, cut);
-      if (occ == null || occ > dep + GAP_EPS) return [];
-      const zHi = farBandTopAt(b, col, x);
-      return zHi - b.z0 > GAP_EPS ? [[b.z0, zHi]] : [];
-    });
+    // この列がxで覆うz区間（遮蔽帯の z0〜その x での天端。天井より上は全部）
+    const coveredBy = col => {
+      const ceil = farColumnCeilAt(col, x);
+      return [
+        ...bandsOf(col).flatMap(b => {
+          const occ = farOccluderDepth(b, cut);
+          if (occ == null || occ > dep + GAP_EPS) return [];
+          const zHi = farBandTopAt(b, col, x);
+          return zHi - b.z0 > GAP_EPS ? [[b.z0, zHi]] : [];
+        }),
+        ...(ceil != null ? [[ceil, Infinity]] : []),
+      ];
+    };
     const interior = cols.filter(col => x > col.x0 + GAP_EPS && x < col.x1 - GAP_EPS);
     let covered = interior.flatMap(coveredBy);
     if (!interior.length) {
@@ -1434,12 +1472,22 @@ function occludeFarSegment(seg, columns, cut) {
     const hidden = [];
     for (const col of cols) {
       if (!(mid > col.x0 && mid < col.x1)) continue;
+      // 天井より上の区間（斜線なら天井が z を下回る側）
+      const ce = col.ceilEdge;
+      if (ce && Number.isFinite(ce.zAtX0) && Number.isFinite(ce.zAtX1) && Math.abs(ce.zAtX1 - ce.zAtX0) > GAP_EPS) {
+        const xs = col.x0 + ((z - ce.zAtX0) / (ce.zAtX1 - ce.zAtX0)) * (col.x1 - col.x0); // 天井が z に等しい x
+        const [h0, h1] = ce.zAtX1 > ce.zAtX0 ? [a, Math.min(b, xs)] : [Math.max(a, xs), b];
+        if (h1 - h0 > GAP_EPS) hidden.push([h0, h1]);
+      } else {
+        const ceil = farColumnCeilAt(col, mid);
+        if (ceil != null && z > ceil + GAP_EPS) hidden.push([a, b]);
+      }
       for (const bd of bandsOf(col)) {
         const occ = farOccluderDepth(bd, cut);
         if (occ == null || occ > dep + GAP_EPS || z < bd.z0 - GAP_EPS) continue;
-        const te = bd.topEdge;
+        const te = farBandTopEdgeOf(bd, col);
         const w = col.x1 - col.x0;
-        if (!(te && Number.isFinite(te.zAtX0) && Number.isFinite(te.zAtX1)) || Math.abs(te.zAtX1 - te.zAtX0) <= GAP_EPS) {
+        if (!te || Math.abs(te.zAtX1 - te.zAtX0) <= GAP_EPS) {
           if (z < farBandTopAt(bd, col, mid) - GAP_EPS) hidden.push([a, b]);
           continue;
         }
