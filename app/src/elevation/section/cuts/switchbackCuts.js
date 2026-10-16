@@ -23,6 +23,7 @@ import { roomBounds } from '../../../finish/gridCells.js';
 import { makeFrame, cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
 import { stairUnderRoomsOf } from '../../../finish/stair/stairUnderRooms.js';
 import { U_TURN_TYPES } from '../../../finish/stair/stairPorts.js';
+import { isStairPartitionWall, stairPartitionLines } from '../../../finish/stair/stairPartition.js';
 import { letterOf, letterForDirSign, DIR_SIGN, perpFaceAt } from '../../elevationFaces.js';
 import { kneeDropRecordFor } from '../../elevationFaceList.js';
 import { localXOf as localXOfFace } from '../../elevationFigure.js';
@@ -600,6 +601,28 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       landingEnd: landingEndOn(retFace5),
       layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundWithLanding,
     });
+  }
+
+  {
+    // ==== 6: 復路レーンの中から隔て板（往復レーンの境界）を見る面（ユーザー指示 2026-10-15「moku4-3 1階 階段 B2 の次にもう 1 つ D 追加:
+    // 復路の隔て板側展開が必要」）====
+    // 自階に往復間の実壁（隔て板）があるときだけ。seq5 と同じ切断線（復路レーンの中央）を逆向き（towardS0＝往路側）に見る＝seq2 の
+    // 復路版。面は seq2 と同じ中心1の面（枠は wOut1）を seq4 の向きに直したもの。切断線の枠も面に合わせる（上の不変条件）。
+    // 復路下の仕上げ空間・裏面・CH 寸法の鎖は seq5 と同じ規則（elevationStairSequence.js）。展開記号は視線が往路側なので seq4 と同じ
+    // 文字（D）になり、labelFaces が D1/D2 に採番する。
+    // 自階の往復間の壁が**隔て板**（木造 U 字階段の stairPartition）のときだけ。階段下の部屋の壁（2a）などが往復間に立つ構成
+    // （「6」の 1 階）は従来の 5 面のまま（2026-08 の「6」の裁定を変えない）。
+    if (midOutFace && ownMidWall && isStairPartitionWall(ownMidWall, stairPartitionLines(graph))) {
+      // 面の幾何（inward・letter）は視線の逆＝往路外側の壁 wOut1 と同じ向き（seq2 の midOutFace は wOut2 の向き）
+      const face6 = reorientFace({ ...midOutFace, inward: wOut1.inward, letter: letterOf(wOut1.isVertical, wOut1.inward) }, seq4DirSign);
+      const inboundLaneLineOnMid = { isVertical: wOut1.isVertical, axisValue: inboundLaneAcross, lo: wOut1.lo, hi: wOut1.hi };
+      cuts.push({
+        seqNo: '6', face: face6, line: inboundLaneLineOnMid, viewSign: towardS0, dirSign: seq4DirSign,
+        landingEnd: landingEndOn(face6),
+        openGapMarks: false, // 隔て板の上・端の先は同じ階段室の空気（seq2 と同じ裁定 2026-10-14）
+        layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundWithLanding,
+      });
+    }
   }
 
   // 全cutが同じ階段室の空気ボリューム・同じ階段下部屋の集合を主語にする（isHiddenWall参照）。

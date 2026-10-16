@@ -27,6 +27,8 @@
  *   （旧2.5/4.5＝レーン境界の面は、2/4と切断が同一のため2026-10-07に廃止）
  *   5   W_out2の残り区間: 復路の断面を反対側から見た図（「6」の回転では踊り場が右端。踊り場側の端は
  *       回転方向次第＝切断定義表の landingEnd。裁定 2026-10-15）。
+ *   6   復路レーンの中から隔て板（往復レーンの境界＝中心1）を見る面（自階に木造の隔て板があるときだけ。seq5 と同じ切断線を
+ *       逆向きに見る seq2 の復路版。復路下の仕上げ空間・裏面も seq5 と同じ。ユーザー指示 2026-10-15「B2 の次にもう 1 つ D」）。
  *
  * STRAIGHT/STRAIGHT_LANDINGのシーケンス（§6.2。straightCuts.js参照）:
  *   1 上り口端（全幅） / 2 W_out1（s=0側の断面プロファイル） /
@@ -1438,42 +1440,48 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   }
 
   // ---- 5: 復路断面を反対側から見た図（踊り場側の端は landingEnd。「6」では右端） ----
-  {
-    const outFace5 = cutOf('5').face;
-    // 復路下の仕上げ空間（木造。復路下の壁〜到達辺）: 断面線は復路の段板の裏ではなく床まで下げ（床断面線・復路下の壁の
-    // 断面がその空間に描かれる）、天井＝復路の裏面を天井仕上げの断面線として足し、裏面より上の content は落とす。
-    // 床は階段室の床（層スタックの floorZFor。壁の天端 addUnderReturnTops と同じ基準）——階段下に部屋があって帯の床が
-    // 踊り場（underFloorZ）でも、この空間は到達辺の部屋へ開く床面なので床区間を分ける。
-    const selfLayer5 = (cutOf('5').layers ?? []).find(l => l?.role === 'self') ?? null;
-    const selfFloorZ5 = selfLayer5 ? probeCtx.floorZOf(bandRoom, selfLayer5) : 0;
-    const underReturn5 = underReturnSpaceOf(stair, graph, cutOf('5'), floorHeight, selfFloorZ5, ceilLowAbs);
-    const rawSegments5 = underReturn5 && Math.abs(underFloorZ - selfFloorZ5) > GAP_EPS
-      ? [[0, underReturn5.loX, underFloorZ], [underReturn5.loX, underReturn5.hiX, selfFloorZ5], [underReturn5.hiX, outFace5.run, underFloorZ]]
+  // ---- 6: 復路レーンの中から隔て板を見る面（自階に隔て板があるときだけ。切断定義表が cut を持つ） ----
+  // 復路レーンを縦断する切断の面の組み立て（seq5・seq6 で共通）。
+  // 復路下の仕上げ空間（木造。復路下の壁〜到達辺）: 断面線は復路の段板の裏ではなく床まで下げ（床断面線・復路下の壁の
+  // 断面がその空間に描かれる）、天井＝復路の裏面を天井仕上げの断面線として足し、裏面より上の content は落とす。
+  // 床は階段室の床（層スタックの floorZFor。壁の天端 addUnderReturnTops と同じ基準）——階段下に部屋があって帯の床が
+  // 踊り場（underFloorZ）でも、この空間は到達辺の部屋へ開く床面なので床区間を分ける。
+  const pushReturnLaneEntry = (seqNo) => {
+    const cut = cutOf(seqNo);
+    if (!cut) return;
+    const outFace = cut.face;
+    const selfLayer = (cut.layers ?? []).find(l => l?.role === 'self') ?? null;
+    const selfFloorZ = selfLayer ? probeCtx.floorZOf(bandRoom, selfLayer) : 0;
+    const underReturn = underReturnSpaceOf(stair, graph, cut, floorHeight, selfFloorZ, ceilLowAbs);
+    const rawSegments = underReturn && Math.abs(underFloorZ - selfFloorZ) > GAP_EPS
+      ? [[0, underReturn.loX, underFloorZ], [underReturn.loX, underReturn.hiX, selfFloorZ], [underReturn.hiX, outFace.run, underFloorZ]]
         .filter(([a, b]) => b - a > GAP_EPS)
         .map(([loX, hiX, z]) => ({ loX, hiX, floorDeltaMm: z, chMm: ceilTopAbs - z }))
-      : flatFloorSegments(outFace5.run, underFloorZ, ceilTopAbs - underFloorZ);
-    const stairProfile5 = floorProfileFor(cutOf('5'), rawSegments5);
-    const floorProfile5 = underReturn5
-      ? floorProfileWithFloorOn(stairProfile5, underReturn5.loX, underReturn5.hiX, selfFloorZ5)
-      : stairProfile5;
-    const soffit5 = applySoffit('5', null);
+      : flatFloorSegments(outFace.run, underFloorZ, ceilTopAbs - underFloorZ);
+    const stairProfile = floorProfileFor(cut, rawSegments);
+    const floorProfile = underReturn
+      ? floorProfileWithFloorOn(stairProfile, underReturn.loX, underReturn.hiX, selfFloorZ)
+      : stairProfile;
+    const soffit = applySoffit(seqNo, null);
     // 復路の本体（裏面〜段板の上面＝床へ下げる前の断面線）の中の content を落とすための上面
-    const fields5 = contentFields(cutOf('5'), { ceilLowAbs, floorHeight }, floorProfile5,
-      underReturn5 ? { ...underReturn5, bodyTop: stairProfile5 } : null);
+    const fields = contentFields(cut, { ceilLowAbs, floorHeight }, floorProfile,
+      underReturn ? { ...underReturn, bodyTop: stairProfile } : null);
     entries.push({
-      seqNo: '5', face: outFace5, landingEnd: cutOf('5').landingEnd,
-      floorSegments: withFlatLineSpans(rawSegments5, floorProfile5),
-      floorProfile: floorProfile5,
+      seqNo, face: outFace, landingEnd: cut.landingEnd,
+      floorSegments: withFlatLineSpans(rawSegments, floorProfile),
+      floorProfile,
       // 最終段の天端（上階FL）の位置は、復路下の仕上げ空間で床へ下げる前の断面線が持つ（上階FL断面線のはね出し用）
-      ...(underReturn5 ? { stairFloorProfile: stairProfile5 } : {}),
-      ...(soffit5 ? { ceilingProfile: soffit5.ceilingProfile } : {}),
-      ...fields5,
-      content: [...fields5.content, ...(underReturn5
-        ? [...underReturnCeilingPrimitives(underReturn5), ...underReturnBaseboardPrimitives(underReturn5, cutOf('5'), probeCtx, selfLayer5, selfFloorZ5, bandRoom, graph, endExtendMm)]
+      ...(underReturn ? { stairFloorProfile: stairProfile } : {}),
+      ...(soffit ? { ceilingProfile: soffit.ceilingProfile } : {}),
+      ...fields,
+      content: [...fields.content, ...(underReturn
+        ? [...underReturnCeilingPrimitives(underReturn), ...underReturnBaseboardPrimitives(underReturn, cut, probeCtx, selfLayer, selfFloorZ, bandRoom, graph, endExtendMm)]
         : [])],
       skipBaseboard: true, skipWallLabel: true,
     });
-  }
+  };
+  pushReturnLaneEntry('5');
+  pushReturnLaneEntry('6');
 
   // 上階FL断面線のはね出し（最終段の天端がある壁のない端。ユーザー指示 2026-10-15）。
   for (const e of entries) e.content.push(...upperFloorEndLines(e, floorHeight, endExtendMm));

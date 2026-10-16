@@ -129,7 +129,7 @@ test('stairFaceSequence: 往路・復路の間に壁が無ければ seqNo は [1
 });
 
 // ---- midWallがあっても ['1','2','3','4','5']（旧2.5/4.5は2026-10-07に廃止。seq2/4と切断が同一） ----
-test('stairFaceSequence: 往路・復路の間に実壁があっても seqNo は [1,2,3,4,5]（2.5/4.5は出ない）', () => {
+test('stairFaceSequence: 往路・復路の間に実壁があっても seqNo は [1,2,3,4,5]（2.5/4.5は出ない。隔て板でない壁では seq6 も出ない。2026-10-15）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);

@@ -10,6 +10,7 @@ import { cellsBeyondBreak, uTurnPlanLayout } from '../../../finish/stair/stairGe
 import { generateStairPartitionWalls } from '../../../finish/stair/stairPartitionWalls.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../../../structural/structureRules.js';
 import { buildBandLayers } from '../sectionBandLayers.js';
+import { stairFaceSequence } from '../../elevationStairSequence.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -123,13 +124,53 @@ test('【回帰・2026-10-09】switchbackCuts: 走行端の上り口（側面な
   assert.equal(result.landingAbs, 6 * (2400 / 13));
 });
 
-test('【WP-E5】switchbackCuts: 往復間の壁があってもcuts=[1,2,3,4,5]（旧2.5/4.5は2026-10-07に廃止）', () => {
+test('【WP-E5】switchbackCuts: 往復間の壁があってもcuts=[1,2,3,4,5]（旧2.5/4.5は2026-10-07に廃止。隔て板でない壁では seq6 も出ない）', () => {
   const graph = makeGraph();
   const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true });
   const faces = composeRoomFaces(room, graph);
   const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(result);
   assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
+});
+
+test('【2026-10-15】switchbackCuts: 自階に隔て板（木造 U 字階段の stairPartition）があれば cuts=[1,2,3,4,5,6]（6＝復路レーンの中から隔て板を見る）', () => {
+  const { t: result } = cutsWithLandingDepth(1500, { wood: true });
+  assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5', '6']);
+  const byNo = Object.fromEntries(result.cuts.map(c => [c.seqNo, c]));
+  assert.equal(byNo['6'].line.axisValue, byNo['5'].line.axisValue, 'seq6 の切断線は seq5 と同じ復路レーンの中央');
+  assert.equal(byNo['6'].viewSign, -byNo['5'].viewSign, '視線は seq5 の逆＝往路側（隔て板）');
+  assert.equal(byNo['6'].viewSign, byNo['4'].viewSign, 'seq4 と同じ視線');
+  assert.equal(byNo['6'].dirSign, byNo['4'].dirSign, '図の左右は seq4 と同じ');
+  assert.deepEqual([byNo['6'].line.lo, byNo['6'].line.hi], [byNo['6'].face.lo, byNo['6'].face.hi], '切断線の枠は面の枠（不変条件）');
+  assert.equal(byNo['6'].face.axisCL, byNo['2'].face.axisCL, '面は seq2 と同じ中心1');
+  assert.equal(letterOf(byNo['6'].face.isVertical, byNo['6'].face.inward), letterOf(byNo['6'].line.isVertical, -byNo['6'].viewSign), '面の向きは視線の逆');
+  assert.equal(byNo['6'].openGapMarks, false, '隔て板の上の先は同じ階段室の空気＝アキなし');
+  assert.equal(byNo['6'].stairCut, byNo['5'].stairCut, '階段寄与は復路＋踊り場（seq5 と同じ）');
+});
+
+test('【2026-10-15】stairFaceSequence: 隔て板のある木造 U 字階段は 6 面。seq6 は seq2 と同じ中心1の面を復路側から見る（向きは seq2 の逆・踊り場側の端は seq4 と同じ）。seq4/seq6 は同じ記号で 1・2 に割れる', () => {
+  const { stair, graph } = cutsWithLandingDepth(1500, { wood: true });
+  const room = graph.roomMap.get(stair.roomId);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5', '6']);
+  const e2 = entries.find(e => e.seqNo === '2'), e4 = entries.find(e => e.seqNo === '4'), e6 = entries.find(e => e.seqNo === '6');
+  assert.equal(e6.face.hasRealWall, true, 'seq6 の面は隔て板');
+  assert.equal(e6.face.axisCL, e2.face.axisCL, 'seq2 と同じ中心1');
+  assert.notEqual(e6.face.dirSign, e2.face.dirSign, '向きは seq2 の逆');
+  assert.equal(e6.landingEnd, e4.landingEnd, '踊り場側の端は seq4 と同じ側');
+  assert.equal(e4.face.label.replace(/\d+$/, ''), e6.face.label.replace(/\d+$/, ''), '同じ記号');
+  assert.match(e4.face.label, /1$/); assert.match(e6.face.label, /2$/);
+  assert.ok(Array.isArray(e6.floorSegments) && e6.floorSegments.length > 0 && Array.isArray(e6.content), 'seq5 と同じ組み立て');
+});
+
+test('【2026-10-15・失敗系】switchbackCuts: 往復間の壁が無い・上階にだけある構成では seq6 は出ない（「6」は従来の 5 面）', () => {
+  const none = makeGraph('n1');
+  const fx = makeSwitchbackFixture(none);
+  assert.deepEqual(switchbackCuts(fx.stair, composeRoomFaces(fx.room, none), none, { ...OPTS, layers: buildBandLayers(none) }).cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
+  const graph = makeGraph('p1'), upper = makeGraph('p2');
+  const fx2 = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upper });
+  const r2 = switchbackCuts(fx2.stair, composeRoomFaces(fx2.room, graph), graph, { ...OPTS, upperGraph: upper, layers: buildBandLayers(graph, { above: [{ graph: upper, floorHeightMm: OPTS.floorHeight }] }) });
+  assert.deepEqual(r2.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
 });
 
 test('【WP-E5】switchbackCuts: 各cutのbaseFloorZ/zRangeが§6.1表どおり', () => {
