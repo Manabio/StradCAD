@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { uTurnPlanLayout } from '../../finish/stair/stairGeometry.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass, crossingLandingFloorProfile, hiddenTurnStepPrimitives, HIDDEN_STEP_MARK } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass, crossingLandingFloorProfile, hiddenTurnStepPrimitives, HIDDEN_STEP_MARK, crossingFlightBodySections } from './sectionStair.js';
 import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from '../elevationStairSection.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
@@ -2424,4 +2424,30 @@ test('【裁定2026-10-15】flightLadderPrimitives: 蹴上材を裏から見る�
     const behind = rungsOf({ ...cut, viewSign: out.travelSign }).filter(p => within(p, out));
     assert.ok(behind.length > 0 && behind.every(p => !p.dash), `${structure}: 背後の flight`);
   }
+});
+
+// ---- ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 往路下ホールの天井から往路床断面線まで縦線はない」----
+// 切断線が内部を横切る flight の本体（裏面〜切られている段板の天端）の断面。
+test('【指示2026-10-15】crossingFlightBodySections: 内部を横切る flight だけ、段板の幅の範囲で裏面（zAt）〜段板の天端を返す', () => {
+  const flight = { isVertical: true, runLo: 0, runHi: 3000, travelSign: 1, acrossLo: 0, acrossHi: 1000, baseZ: 0, riserMm: 200, steps: 10, lengthMm: 3000, treadAcrossLo: 100, treadAcrossHi: 1000 };
+  const cut = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2000 }, dirSign: 1, zRange: { loZ: 0, hiZ: 5400 } };
+  const columns = [{ x0: 0, x1: 2000, worldLo: 0, worldHi: 2000, bands: [] }];
+  const soffit = { zAt: (x, y) => 400 + y * 0.1 }; // y=1500 → 550
+  const out = crossingFlightBodySections({ flights: [flight] }, cut, columns, soffit);
+  assert.equal(out.length, 1);
+  assert.deepEqual([out[0].xLo, out[0].xHi], [100, 1000], '段板の幅（隔て板の面まで）');
+  assert.equal(out[0].zLo, 550, '裏面は切断線の深さで評価');
+  assert.equal(out[0].zHi, 200 * (1 + Math.floor(1500 / (3000 / 9))), '切られている段板の天端（flightTreadZAt）');
+});
+
+test('【指示2026-10-15・失敗系】crossingFlightBodySections: 端ちょうどの flight・裏面が無い・裏面が段板より上・寄与なしは空', () => {
+  const flight = { isVertical: true, runLo: 1500, runHi: 4500, travelSign: 1, acrossLo: 0, acrossHi: 1000, baseZ: 0, riserMm: 200, steps: 10, lengthMm: 3000 };
+  const cut = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2000 }, dirSign: 1, zRange: { loZ: 0, hiZ: 5400 } };
+  const columns = [{ x0: 0, x1: 2000, worldLo: 0, worldHi: 2000, bands: [] }];
+  assert.deepEqual(crossingFlightBodySections({ flights: [flight] }, cut, columns, { zAt: () => 100 }), [], '端ちょうど（内部ではない）');
+  const interior = { ...flight, runLo: 0, runHi: 3000 };
+  assert.deepEqual(crossingFlightBodySections({ flights: [interior] }, cut, columns, null), [], '裏面なし');
+  assert.deepEqual(crossingFlightBodySections({ flights: [interior] }, cut, columns, { zAt: () => 5000 }), [], '裏面が段板より上');
+  assert.deepEqual(crossingFlightBodySections({ flights: [interior] }, cut, columns, { zAt: () => NaN }), [], '裏面が非有限');
+  assert.deepEqual(crossingFlightBodySections(null, cut, columns, { zAt: () => 100 }), [], '寄与なし');
 });

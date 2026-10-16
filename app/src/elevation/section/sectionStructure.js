@@ -27,7 +27,7 @@ import {
 } from '../../finish/columnWrap.js';
 import { rulesFor, effectiveStructure } from '../../structural/structureRules.js';
 import { ElevationLineRole, GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
-import { localXOf, cutDrawRange } from './sectionTypes.js';
+import { localXOf, worldOf, cutDrawRange } from './sectionTypes.js';
 import { halfWallThicknessMm, drawnFloorProfileZMax } from '../elevationFloorProfile.js';
 import { emitLine, nearestSightlineDistMm } from './sectionEmit.js';
 
@@ -467,8 +467,23 @@ function sectionOutline(cut, xLo, xHi, zTop, depthMm, entry) {
  *   天は踊り場より梁成ぶん＋α下がる）と、上階FL・踊り場に天が梁成以内で届く梁は残す。省略・null は従来どおり。
  * @returns {object[]}
  */
-export function structuralPrimitivesForCut(contribution, cut, columns, floorProfile = null) {
+export function structuralPrimitivesForCut(contribution, cut, columns, floorProfile = null, opts = {}) {
   const prims = [];
+  // 空中を横断する梁の見えがかりは、その位置の天井（opts.ceilZAtWorld(x, y)。階段帯なら自階の層の cellAt＝裏面）より梁の下端が上なら
+  // 天井裏＝描かない（ユーザー指示 2026-10-15「2FL にある横架材見え掛かりは、天井仕上げ面より上〔=天井裏〕につき描画不要」）。
+  // 区間の 3 点で見て、どこかで天井より下に出ていれば描く。天井が取れない点は「見える」側に倒す。
+  const ceilZAtWorld = typeof opts.ceilZAtWorld === 'function' ? opts.ceilZAtWorld : null;
+  const aboveCeiling = (beam, loX, hiX) => {
+    if (!ceilZAtWorld) return false;
+    const bottom = beam.topZ - beam.depthMm;
+    // 評価点は梁の芯から切断線側へ 1mm 寄せる（梁が部屋の境界の通り芯に乗るとき、境界ちょうどの点が隣室のセルに落ちないように）
+    const depth = beam.axisWorld - (cut.viewSign ?? 1);
+    return [0.1, 0.5, 0.9].every(t => {
+      const across = worldOf(cut, loX + (hiX - loX) * t);
+      const z = cut.line.isVertical ? ceilZAtWorld(depth, across) : ceilZAtWorld(across, depth);
+      return Number.isFinite(z) && bottom >= z - GAP_EPS;
+    });
+  };
   const belowProfile = (xa, xb, beam) => beam.role !== 'landing'
     && beam.topZ + beam.depthMm < drawnFloorProfileZMax(floorProfile, xa, xb) - GAP_EPS;
   // 見えがかりの奥行き判定は壁と共通（ユーザー明示指示2026-08「既存の構造材見えがかり処理経路も
@@ -517,7 +532,7 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
       const xa = localXOf(cut, beam.spanLo), xb = localXOf(cut, beam.spanHi);
       const loX = Math.max(drawLo, Math.min(xa, xb));
       const hiX = Math.min(drawHi, Math.max(xa, xb));
-      if (hiX - loX > GAP_EPS) {
+      if (hiX - loX > GAP_EPS && !aboveCeiling(beam, loX, hiX)) {
         prims.push(emitLine(cut, loX, beam.topZ, hiX, beam.topZ, ElevationLineRole.SILHOUETTE));
         prims.push(emitLine(cut, loX, beam.topZ - beam.depthMm, hiX, beam.topZ - beam.depthMm,
           ElevationLineRole.SILHOUETTE));

@@ -34,7 +34,7 @@
  *   （STRAIGHT_LANDINGのみ）4 W_out2（s=1側） / 5 到達端（全幅）。
  */
 import { StairType } from '@core';
-import { switchbackCuts } from './section/cuts/switchbackCuts.js';
+import { switchbackCuts, partitionStripOf } from './section/cuts/switchbackCuts.js';
 import { straightCuts } from './section/cuts/straightCuts.js';
 import { UNSUPPORTED_FAN_LANE_TYPES, fanLaneCuts } from './section/cuts/fanCuts.js';
 import { makeProbeContext } from './section/sectionProbe.js';
@@ -44,12 +44,14 @@ import { cutDrawRange, localXOf, worldOf } from './section/sectionTypes.js';
 import { layerDirectlyAboveSelf, isRealRoom } from './section/sectionLayerStack.js';
 import {
   splitGapMarksByStair, dashHorizontalsBehindStair,
-  joinToStairProfile,
+  joinToStairProfile, emitLine,
 } from './section/sectionEmit.js';
 import {
   stairPrimitivesForCut, stairFaceOccluderRects, stairCutFloorProfile, crossingLandingFloorProfile, HIDDEN_STEP_MARK,
-  flightStartOuterBound, mergeOuterBounds, clipWallEndVerticalsByStairMass,
+  flightStartOuterBound, mergeOuterBounds, clipWallEndVerticalsByStairMass, crossingFlightBodySections,
 } from './section/sectionStair.js';
+import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
+import { riserOf } from '../finish/stair/stairDimensions.js';
 import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
 import { stairSectionIsClosed } from './elevationStairSection.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
@@ -292,30 +294,6 @@ function flatFloorSegments(run, floorDeltaMm, chMm) {
 //
 // face（wOut1等。composeRoomFacesの実面）のローカルx→world座標（elevationFigure.jsの
 // localXOfの逆写像。face.dirSign/originWorldは同じ規約）。
-/**
- * 隔て板（往復レーンの境界の壁）の材の範囲（世界の幅方向座標）。同じ軸 CL 上で走りが重なる壁（オーナー壁＋薄壁）の
- * materialRange の合併。wall が無ければ null。
- * @param {import('@core').Wall|null} wall
- * @param {object} wallGraph wall を見つけた graph
- * @returns {{lo:number, hi:number}|null}
- */
-export function partitionStripOf(wall, wallGraph) {
-  const mr = wall?.materialRange;
-  if (!mr || !Number.isFinite(mr.lo) || !Number.isFinite(mr.hi)) return null;
-  let lo = Math.min(mr.lo, mr.hi), hi = Math.max(mr.lo, mr.hi);
-  const runOf = w => [Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)];
-  const [r0, r1] = runOf(wall);
-  for (const w of graphList(wallGraph, 'walls') ?? []) {
-    if (w === wall || w.axisCL !== wall.axisCL || w.isVertical !== wall.isVertical) continue;
-    const [s0, s1] = runOf(w);
-    if (!(Math.min(r1, s1) - Math.max(r0, s0) > GAP_EPS)) continue;
-    const r = w.materialRange;
-    if (!r || !Number.isFinite(r.lo) || !Number.isFinite(r.hi)) continue;
-    lo = Math.min(lo, r.lo, r.hi); hi = Math.max(hi, r.lo, r.hi);
-  }
-  return { lo, hi };
-}
-
 function worldOfFace(face, localX) {
   return face.originWorld + localX * face.dirSign;
 }
@@ -860,6 +838,34 @@ function clipWallFloorEdgeUnderZigzag(wallContent, stairContent) {
  *   upperFloorZ:number|undefined, upperFloorCutEnds:{lo:number|null,hi:number|null}|undefined,
  *   upperFloorEnds:{lo:boolean,hi:boolean}|undefined}}
  */
+/**
+ * 壁の断面の縁（cutEdgeLo/Hi）のうち、階段本体の断面（crossingFlightBodySections。本体に接する x＝本体の範囲の端）の
+ * z 区間に入る部分を落とす（断面の中は描かない）。他のプリミティブは不変。
+ * @param {object[]} prims
+ * @param {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>} bodies
+ */
+export function clipWallEdgesInsideStairBodies(prims, bodies) {
+  if (!bodies?.length) return prims;
+  const out = [];
+  for (const p of prims) {
+    const isEdge = p.type === 'line' && (p.__o === 'cutEdgeLo' || p.__o === 'cutEdgeHi') && Math.abs(p.x1 - p.x2) <= GAP_EPS;
+    const hit = isEdge ? bodies.filter(b => Math.abs(b.xLo - p.x1) <= GAP_EPS || Math.abs(b.xHi - p.x1) <= GAP_EPS) : [];
+    if (hit.length === 0) { out.push(p); continue; }
+    let ranges = [{ z0: Math.min(-p.y1, -p.y2), z1: Math.max(-p.y1, -p.y2) }];
+    for (const b of hit) {
+      ranges = ranges.flatMap(r => {
+        if (b.zHi <= r.z0 + GAP_EPS || b.zLo >= r.z1 - GAP_EPS) return [r];
+        const parts = [];
+        if (b.zLo - r.z0 > GAP_EPS) parts.push({ z0: r.z0, z1: b.zLo });
+        if (r.z1 - b.zHi > GAP_EPS) parts.push({ z0: b.zHi, z1: r.z1 });
+        return parts;
+      });
+    }
+    for (const r of ranges) out.push({ ...p, y1: -r.z0 || 0, y2: -r.z1 || 0 });
+  }
+  return out;
+}
+
 function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null, zRef = null,
   drawFloorProfile = null, underReturnSpace = null) {
   if (!rawCut) {
@@ -915,7 +921,11 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 持ち上げる（2026-10-08裁定。C-2の「二重にクランプしない」を階段帯だけ撤回——上の
   // `buildCutContent`へ`gapFloorProfile`で渡し、sectionEmit.jsのemitOpenGapMarksが適用する）。
   // 壁の端の縦線は、端面に突き当たる階段の実体（回転部のセル）の天端より下では引かない（clipWallEndVerticalsByStairMass）。
-  const wallContent = dashHorizontalsBehindStair(clipWallEndVerticalsByStairMass(wallPrims, cut, columns), occluders);
+  // 切断線が内部を横切る flight の本体（裏面〜段板）に接する壁の断面の縁は、その区間を空ける（断面の中は描かない。
+  // ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の右側断面線は 1FL から往路下ホールの天井まで、往路床断面から天井断面まで」）。
+  const bodies = cut.bodySoffitSolid ? crossingFlightBodySections(cut.stairCut ?? null, cut, columns, cut.bodySoffitSolid) : [];
+  const wallContent = clipWallEdgesInsideStairBodies(
+    dashHorizontalsBehindStair(clipWallEndVerticalsByStairMass(wallPrims, cut, columns), occluders), bodies);
   // 下ささらの見えがかりのうち「断面内部（実体で囲まれた矩形の厳密内部）」に入る区間は
   // `stairPrimitivesForCut`が自身の出口（x終端クリップの前）で`columns`だけから一般判定する
   // （展開図一般化Phase 6b-2 設計(d)。ユーザー裁定2026-09-13）。旧`opts.slabBand`
@@ -929,11 +939,25 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   };
   // 回転部の切断面の向こうの踏面・蹴上（hiddenTurnStepPrimitives の HIDDEN_STEP_MARK）は、断面線より下＝断面の後ろは細線破線、
   // 上＝断面の前の空間は細線実線で描く（ユーザー裁定 2026-10-15「moku4-3 1階 階段 C」）。
-  const stairContent = clipHiddenStepLines(
-    stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts), drawFloorProfile, cut);
+  // 切断線が内部を横切る flight の本体（裏面〜段板。`cut.bodySoffitSolid`＝自階の階段の裏面の立体があるときだけ）: 裏面の
+  // 切断を CUT の水平線で描く（本体に接する壁の断面の縁は上の clipWallEdgesInsideStairBodies でその区間を空けた）。
+  const stairContent = [
+    ...clipHiddenStepLines(stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts), drawFloorProfile, cut),
+    ...bodies.map(b => emitLine(pcut, b.xLo, b.zLo, b.xHi, b.zLo, ElevationLineRole.CUT, { neverDowngrade: true })),
+  ];
   // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
   // clipWallFloorEdgeUnderZigzag（階段ジグザグの向こうの壁縁除去）の対象には含めない。
-  const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile);
+  // 空中を横断する梁は、その位置の天井より上にあれば天井裏なので描かない（ユーザー指示 2026-10-15「2FL にある横架材見え掛かりは、
+  // 天井仕上げ面より上（=天井裏）につき描画不要」）。天井の供給源は**階段室の裏面**（自階の層の stairSoffit を cellAt で評価）だけ
+  // ——裏面の無い階段帯（鉄骨・上階が吹抜け）の天井は上階天井までの空で、部屋の CH は帯の天井ではない（2026-08「6」A
+  // 「材が空中に横断しているので中線で鋼材の天地に線を描画」はそのまま）。階段室の外の点は null＝見える側。
+  const selfLayer = (cut.layers ?? []).find(l => l?.role === 'self') ?? null;
+  const soffitRoomId = selfLayer?.stairSoffit?.roomId ?? null;
+  const ceilZAtWorld = soffitRoomId ? (x, y) => {
+    const c = probeCtx.cellAt(selfLayer, x, y);
+    return c?.room?.id === soffitRoomId && Number.isFinite(c.ceilZ) ? c.ceilZ : null;
+  } : null;
+  const structuralContent = structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile, { ceilZAtWorld });
   // 階段の断面プロファイルとの取り合い（ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
   const joined = zRef
     ? joinToStairProfile(wallContent, stairContent, pcut,
@@ -1170,6 +1194,18 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   };
 
   // ---- 1: 踊り場前縁（見返り・全幅） ----
+  // 隔て板が上階へ続く切断（continuousWallAcross。木造 U 字階段の最上階以外）では、切断線が内部を横切る flight の本体
+  // （裏面〜段板）の断面を描くため、自階の階段の裏面の立体（ceiling/stairSoffit.js の式が唯一の供給源）を切断に添える。
+  {
+    const cut1 = cutOf('1');
+    if (cut1?.continuousWallAcross) {
+      const selfLayer1 = (cut1.layers ?? []).find(l => l?.role === 'self') ?? null;
+      const riser = riserOf(stair, floorHeight);
+      const floorZ1 = selfLayer1 ? probeCtx.floorZOf(bandRoom, selfLayer1) : 0;
+      const solid = Number.isFinite(riser) ? (stairSoffitSolids({ stair, graph, riser, floorZMm: floorZ1 })[0] ?? null) : null;
+      if (solid) cut1.bodySoffitSolid = solid;
+    }
+  }
   const rawSegments1 = flatFloorSegments(wEntry.run, underFloorZ, ceilTopAbs - underFloorZ);
   const floorProfile1 = floorProfileFor(cutOf('1'), rawSegments1);
   const floorSegments1 = withFlatLineSpans(rawSegments1, floorProfile1);

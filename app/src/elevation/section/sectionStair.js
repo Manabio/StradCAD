@@ -1030,6 +1030,37 @@ function frontBaseZ(flight) {
 }
 
 /**
+ * 切断線が flight の**内部**を横切る（段板が切られている）flight の、切断面での階段本体の断面＝裏面（soffitSolid.zAt。階段の裏面の
+ * 式の唯一の供給源 ceiling/stairSoffit.js の立体）〜切られている段板の天端。断面ローカル x の範囲は段板の幅方向の範囲
+ * （隔て板の柱があれば隔て板の面まで。flightLadderPrimitives の段板の CUT と同じ列の範囲）。
+ * 本体の中（裏面〜段板）は断面の中なので、隣り合う壁の断面の縁はこの区間では描かない（ユーザー指示 2026-10-15「moku4-3 1階
+ * 階段 A: 往路下ホールの天井から往路床断面線まで縦線はない」）。裏面が求まらない・端ちょうどの flight は含めない。
+ * @param {object|null} contribution stairContribution の結果
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @param {{zAt?:(x:number, y:number)=>number}|null} soffitSolid 自階の階段の裏面の立体
+ * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number}>}
+ */
+export function crossingFlightBodySections(contribution, cut, columns, soffitSolid) {
+  if (!contribution || !soffitSolid?.zAt || !cut?.line) return [];
+  const out = [];
+  for (const flight of contribution.flights ?? []) {
+    if (!crossesFlight(flight, cut)) continue;
+    const interior = cut.line.axisValue > flight.runLo + STAIR_RUN_TOL_MM && cut.line.axisValue < flight.runHi - STAIR_RUN_TOL_MM;
+    if (!interior) continue;
+    const aLo = flight.treadAcrossLo ?? flight.acrossLo, aHi = flight.treadAcrossHi ?? flight.acrossHi;
+    const range = columnsXRangeOverlapping(columns, cut, aLo, aHi);
+    if (!range) continue;
+    const mid = (aLo + aHi) / 2;
+    const zLo = cut.line.isVertical ? soffitSolid.zAt(cut.line.axisValue, mid) : soffitSolid.zAt(mid, cut.line.axisValue);
+    const zHi = flightTreadZAt(flight, cut.line.axisValue);
+    if (!Number.isFinite(zLo) || !Number.isFinite(zHi) || !(zHi - zLo > GAP_EPS)) continue;
+    out.push({ xLo: range.loX, xHi: range.hiX, zLo, zHi });
+  }
+  return out;
+}
+
+/**
  * flight 上の走行座標 runCoord に立つ段板（その位置を踏面とする段）の天端の絶対z。
  * 段鼻 i（始端から i×踏面ピッチ）から次の蹴上の足元までが段 i の踏面なので、段鼻の連続値 `flightStepParam` の
  * 切り捨てが段の番号になる（`flightNoseZAt` は勾配線上の連続値）。区間の外は端の段にクランプ。

@@ -512,6 +512,10 @@ export function buildColumns(cut, probeCtx) {
   // `air` は列ごとの到達可能な空気区間（床断面〜天井断面のうち切断壁が占めない範囲の連結成分。
   // sectionVisibility.js）＝「断面の中は描画しない」の判定の一次情報。列へは持たせない
   // ——打ち切り後のbandsとは対応しない中間値で、外へ出すと「どちらが正か」が二重管理になる。
+  // 上階へ続く壁（階段帯の隔て板。`cut.continuousWallAcross`＝その壁の材の範囲〔世界の幅方向座標〕）: 自階の壁の帯（天端＝自階の
+  // CH）と上階の壁の帯（足元＝上階 FL）を 1 本の切断帯に合併し、間（天井裏〜上階の床構造＝open/slab）を落とす。壁は床から天井
+  // 断面線まで通る 1 本の断面になり、継ぎ目の天端・笠木・小口は出ない（ユーザー指示 2026-10-15「moku4-3 1階 階段 A」）。
+  mergeContinuousWallBands(rawColumns, cut);
   const air = reachableAirByColumn(rawColumns,
     { loZ: cut.zRange?.loZ ?? 0, ceilOf: c => c.ceilZ ?? cut.zRange?.hiZ ?? 0 });
   // 天井より上に**上階の床が実在するか**を層スタックから直接引いておく（sectionEmit.jsの
@@ -523,6 +527,29 @@ export function buildColumns(cut, probeCtx) {
   const clipped = rawColumns.map((_, i) => clipBandsToVisible(rawColumns, air, i));
   rawColumns.forEach((col, i) => { col.bands = clipped[i]; });
   return mergeColumns(rawColumns);
+}
+
+/**
+ * `cut.continuousWallAcross`（{lo,hi}。世界の幅方向座標）の中に収まる列で、切断帯が 2 つ以上あれば 1 本に合併する
+ * （z は最小の z0 〜最大の z1。性質は下の帯のもの。合併範囲に重なる他の帯は落とす）。無ければ何もしない。
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ */
+export function mergeContinuousWallBands(columns, cut) {
+  const range = cut.continuousWallAcross;
+  if (!range || !Number.isFinite(range.lo) || !Number.isFinite(range.hi)) return;
+  const lo = Math.min(range.lo, range.hi), hi = Math.max(range.lo, range.hi);
+  for (const col of columns) {
+    if (col.worldLo < lo - GAP_EPS || col.worldHi > hi + GAP_EPS) continue;
+    const cuts = col.bands.filter(b => isCutBand(b));
+    if (cuts.length < 2) continue;
+    const z0 = Math.min(...cuts.map(b => b.z0)), z1 = Math.max(...cuts.map(b => b.z1));
+    const base = cuts.reduce((a, b) => (b.z0 < a.z0 ? b : a), cuts[0]);
+    const merged = { ...base, z0, z1 };
+    delete merged.topEdge; delete merged.profiledTop;
+    const kept = col.bands.filter(b => !(b.z1 > z0 + GAP_EPS && b.z0 < z1 - GAP_EPS));
+    col.bands = [...kept, merged].sort((a, b) => a.z0 - b.z0);
+  }
 }
 
 export function buildSectionFigure(cut, probeCtx, opts = {}) {

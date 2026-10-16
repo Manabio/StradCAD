@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext } from './sectionProbe.js';
-import { buildSectionFigure, buildColumns, mergeColumns, splitOpenByFarFace } from './sectionEngine.js';
+import { buildSectionFigure, buildColumns, mergeColumns, splitOpenByFarFace, mergeContinuousWallBands } from './sectionEngine.js';
 import { SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 
 const CH = 2400;
@@ -459,4 +459,27 @@ test('【どちらも無ければ従来どおり打ち切らない】ceilClip �
     assert.deepEqual(buildColumns(f.cut, f.probeCtx), expected, `ceilClip=${JSON.stringify(clip)} は列を変えない`);
   }
   assert.ok(expected.every(c => c.ceilZ === null), '打ち切りなし＝ceilZ は null');
+});
+
+// ---- ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の断面線は床断面から天井断面線まで」----
+// 上階へ続く壁（階段帯の隔て板）は、自階の壁の帯（天端＝CH）と上階の壁の帯（足元＝上階 FL）を 1 本の切断帯に合併する。
+test('【指示2026-10-15】mergeContinuousWallBands: 範囲の中の列の 2 つの切断帯を 1 本に合併し、間の帯（天井裏・床構造）を落とす。範囲の外・切断帯 1 つの列は不変', () => {
+  const wall = { id: 'w' };
+  const inside = { x0: 780, x1: 895, worldLo: 852.5, worldHi: 967.5, ceilZ: 3615, bands: [
+    { kind: 'cut', z0: 0, z1: 2400, wall }, { kind: 'open', z0: 2400, z1: 3000 }, { kind: 'cut', z0: 3000, z1: 5400, wall, profiledTop: true },
+  ] };
+  const outside = { x0: 0, x1: 780, worldLo: 72.5, worldHi: 852.5, ceilZ: 3615, bands: [
+    { kind: 'cut', z0: 0, z1: 2400, wall }, { kind: 'cut', z0: 3000, z1: 5400, wall },
+  ] };
+  const single = { x0: 895, x1: 1000, worldLo: 967.5, worldHi: 1072.5, ceilZ: 4742, bands: [{ kind: 'cut', z0: 0, z1: 2400, wall }, { kind: 'open', z0: 2400, z1: 5400 }] };
+  const columns = [outside, inside, single];
+  mergeContinuousWallBands(columns, { continuousWallAcross: { lo: 852.5, hi: 967.5 } });
+  assert.deepEqual(inside.bands, [{ kind: 'cut', z0: 0, z1: 5400, wall }], '1 本の切断帯（性質は下の帯。天端プロファイルは外す）');
+  assert.equal(outside.bands.length, 2, '範囲の外は不変');
+  assert.equal(single.bands.length, 2, '切断帯が 1 つなら不変');
+  const untouched = [{ x0: 780, x1: 895, worldLo: 852.5, worldHi: 967.5, bands: [{ kind: 'cut', z0: 0, z1: 2400, wall }, { kind: 'cut', z0: 3000, z1: 5400, wall }] }];
+  mergeContinuousWallBands(untouched, {});
+  assert.equal(untouched[0].bands.length, 2, '範囲が無ければ何もしない');
+  mergeContinuousWallBands(untouched, { continuousWallAcross: { lo: NaN, hi: 967.5 } });
+  assert.equal(untouched[0].bands.length, 2, '範囲が無効なら何もしない');
 });

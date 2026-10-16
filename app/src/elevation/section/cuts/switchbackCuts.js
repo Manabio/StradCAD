@@ -32,6 +32,7 @@ import { graphList } from '../../../graphReadScope.js';
 import { isCeilingOnlyKind } from '../../../core/centerLineKindPolicy.js';
 import { makeProbeContext } from '../sectionProbe.js';
 import { isWallHiddenForBand } from '../sectionHits.js';
+import { GAP_EPS_MM } from '../../elevationStyle.js';
 
 const MID_WALL_TOL_MM = 300; // 壁厚程度の許容差（往路・復路間の壁の実在判定。既存実装と同値）
 // 走行軸に平行な面のうち、幅方向 s がこの範囲にあるものは往路・復路の間の面（外壁側ではない）。
@@ -179,6 +180,30 @@ export function findMidWall(wallGraph, wEntry, wLanding, landingLen, f) {
     return w;
   }
   return null;
+}
+
+/**
+ * 隔て板（往復レーンの境界の壁）の材の範囲（世界の幅方向座標）。同じ軸 CL 上で走りが重なる壁（オーナー壁＋薄壁）の
+ * materialRange の合併。wall が無ければ null。
+ * @param {import('@core').Wall|null} wall
+ * @param {object} wallGraph wall を見つけた graph
+ * @returns {{lo:number, hi:number}|null}
+ */
+export function partitionStripOf(wall, wallGraph) {
+  const mr = wall?.materialRange;
+  if (!mr || !Number.isFinite(mr.lo) || !Number.isFinite(mr.hi)) return null;
+  let lo = Math.min(mr.lo, mr.hi), hi = Math.max(mr.lo, mr.hi);
+  const runOf = w => [Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2)];
+  const [r0, r1] = runOf(wall);
+  for (const w of graphList(wallGraph, 'walls') ?? []) {
+    if (w === wall || w.axisCL !== wall.axisCL || w.isVertical !== wall.isVertical) continue;
+    const [s0, s1] = runOf(w);
+    if (!(Math.min(r1, s1) - Math.max(r0, s0) > GAP_EPS_MM)) continue;
+    const r = w.materialRange;
+    if (!r || !Number.isFinite(r.lo) || !Number.isFinite(r.hi)) continue;
+    lo = Math.min(lo, r.lo, r.hi); hi = Math.max(hi, r.lo, r.hi);
+  }
+  return { lo, hi };
 }
 
 export function wallThicknessMm(wall) {
@@ -506,12 +531,19 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     hasRealWall: !!wall, kind: 'stairMid',
   } : null;
 
+  // 隔て板が上階の隔て板へ続く（自階にも上階にも往復間の実壁がある＝木造の U 字階段で最上階でない）とき、seq1（幅方向に
+  // 隔て板を横切る切断）では隔て板を床から天井断面線までの 1 本の断面にする（sectionEngine.js buildColumns が
+  // 自階の壁の帯と上階の壁の帯を合併する。ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の断面線は床断面から天井断面線まで」。
+  // 裁定「木造階段の最上階は除く＝従来どおり天板〔隔て板の天端〕の見え掛かり」: 上階に隔て板が無ければ付けない）。
+  const ownMidWall = findMidWall(graph, wEntry, wLanding, landingDepthMm, f);
+  const continuousPartition = wall && ownMidWall && wallGraph !== graph ? partitionStripOf(wall, wallGraph) : null;
   const cuts = [
     {
       seqNo: '1', face: wEntry, line: seq1Line, viewSign: seq1ViewSign, dirSign: wEntry.dirSign,
       openGapMarks: false, // 踊り場前縁・回転部にアキは標記しない（ユーザー指示2026-10-07）
       layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, chDimSplitAbsYs: [floorHeight],
       stairCut: contribution, // 往路・復路とも正面梯子として重なるため両方渡す（§6.1「往路=正面梯子(下)／復路=正面梯子(上)」）
+      ...(continuousPartition ? { continuousWallAcross: continuousPartition } : {}),
     },
     {
       // ==== ユーザー明示指示2026-08その11（面と切断の食い違い）====

@@ -298,3 +298,24 @@ test('【2026-10-08】structuralPrimitivesForCut: 断面線があるとき、上
   assert.equal(structuralPrimitivesForCut(reaching, cut, [], profile).length,
     structuralPrimitivesForCut(reaching, cut, [], null).length, '輪郭に梁成以内で届く梁は従来どおり');
 });
+
+// ---- ユーザー指示 2026-10-15「2FL にある横架材見え掛かりは、天井仕上げ面より上（=天井裏）につき描画不要」----
+// 空中を横断する梁は、opts.ceilZAtWorld（その位置の天井）より梁の下端が上なら描かない。天井が取れない点は見える側。
+test('【指示2026-10-15】structuralPrimitivesForCut: 空中横断の梁は、その位置の天井より下端が上なら描かない。天井が無い・天井より低ければ従来どおり中線 2 本', () => {
+  const graph = makeGraph();
+  addHorizontalBeam(graph, 3000); // 軸 y=1000・天 3000・成 200（下端 2800）
+  const contribution = structuralContribution([{ graph, floorZMm: 0, role: 'self' }]);
+  const cut = {
+    seqNo: 'x', line: { isVertical: false, axisValue: 0, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0,
+  };
+  const airborne = prims => prims.filter(p => p.weight === 'medium' && p.y1 === p.y2);
+  assert.equal(airborne(structuralPrimitivesForCut(contribution, cut, [])).length, 2, '前提: 空中横断の中線 2 本');
+  const seen = [];
+  const hidden = structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: (x, y) => { seen.push([x, y]); return 2476; } });
+  assert.equal(airborne(hidden).length, 0, '天井 2476 より下端 2800 が上＝天井裏');
+  assert.ok(seen.length >= 3 && seen.every(([, y]) => Math.abs(y - 999) < 1e-9), '評価点は梁の芯から切断線側へ 1mm 寄せる');
+  assert.equal(airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: () => 3000 })).length, 2, '天井 3000 なら下端 2800 は見える');
+  assert.equal(airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: () => null })).length, 2, '天井が取れなければ見える側');
+  assert.equal(airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: (x) => (x < 1000 ? 2476 : 3000) })).length, 2, 'どこかで天井より下に出ていれば描く');
+});

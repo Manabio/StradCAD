@@ -8,7 +8,8 @@ import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js';
 import { uTurnSoffitFromLayout } from '../ceiling/stairSoffit.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, partitionStripOf, endSoffitAtOpenEndCeiling, SOFFIT_OPEN_END_INSET_MM } from './elevationStairSequence.js';
+import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, endSoffitAtOpenEndCeiling, SOFFIT_OPEN_END_INSET_MM, clipWallEdgesInsideStairBodies } from './elevationStairSequence.js';
+import { partitionStripOf } from './section/cuts/switchbackCuts.js';
 import { stairSoffitAbove } from './space/stairSoffitCeiling.js';
 import { buildSpaceIndex } from './space/spaceModel.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
@@ -377,4 +378,26 @@ test('【床段差 300 での ceilClip と cellAt の差（記録）】階段室
   const clipCeil = cut.ceilClip.find(s => s.loX <= cx && cx <= s.hiX);
   const z = clipCeil.ceilZ + (clipCeil.ceilZHi - clipCeil.ceilZ) * (cx - clipCeil.loX) / (clipCeil.hiX - clipCeil.loX);
   near(stackCeil - z, 300, '層スタックの天井 − ceilClip の天井 ＝ 床段差');
+});
+
+// ---------------------------------------------------------------- 階段本体の断面に接する壁の縁（ユーザー指示 2026-10-15 moku4-3 1階 A）
+
+test('【指示2026-10-15】clipWallEdgesInsideStairBodies: 本体の端の x にある切断壁の縁だけ、本体の z 区間を空ける。他は不変', () => {
+  const edgeHi = { __o: 'cutEdgeHi', type: 'line', weight: 'thick', x1: 895, x2: 895, y1: 0, y2: -4742 };
+  const edgeLo = { __o: 'cutEdgeLo', type: 'line', weight: 'thick', x1: 780, x2: 780, y1: 0, y2: -3615 };
+  const other = { type: 'line', weight: 'thick', x1: 895, x2: 1675, y1: -2200, y2: -2200 };
+  const out = clipWallEdgesInsideStairBodies([edgeHi, edgeLo, other], [{ xLo: 895, xHi: 1675, zLo: 1742, zHi: 2200 }]);
+  assert.deepEqual(out.filter(p => p.__o === 'cutEdgeHi').map(p => [p.y1, p.y2]), [[0, -1742], [-2200, -4742]], '本体の区間を空けて 2 本');
+  assert.equal(out.find(p => p.__o === 'cutEdgeLo'), edgeLo, '本体に接しない縁は不変');
+  assert.equal(out.find(p => p === other), other, '縁以外は不変');
+  const prims0 = [edgeHi];
+  assert.equal(clipWallEdgesInsideStairBodies(prims0, []), prims0, '本体なしは同じ配列');
+});
+
+test('【指示2026-10-15・失敗系】clipWallEdgesInsideStairBodies: 本体が縁の外・縁が本体の中に収まるとき', () => {
+  const edge = { __o: 'cutEdgeHi', type: 'line', weight: 'thick', x1: 895, x2: 895, y1: 0, y2: -1000 };
+  assert.deepEqual(clipWallEdgesInsideStairBodies([edge], [{ xLo: 895, xHi: 1675, zLo: 1742, zHi: 2200 }]), [edge], '本体が縁より上＝不変');
+  assert.deepEqual(clipWallEdgesInsideStairBodies([edge], [{ xLo: 895, xHi: 1675, zLo: 0, zHi: 1000 }]), [], '縁が丸ごと本体の中＝消える');
+  const prims = [edge];
+  assert.equal(clipWallEdgesInsideStairBodies(prims, null), prims, '本体なしは同じ配列');
 });

@@ -738,16 +738,23 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           .reduce((rs, b) => subtractZ(rs, b), [{ z0: band.z0, z1: band.z1 }])
           .filter(r => r.z1 - r.z0 > GAP_EPS);
         // 天端が天井の斜線に沿う帯（ceilEdge）の側縁は、その端での斜線の高さで止める（帯の z1 は高い側の値）。
-        if (hidden !== 'hi' && !sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
+        // 段違い天井の境界に立つ壁（exposedSide）の見えない側の縁も、**低い側の天井（列の打ち切り値 col.ceilZ）より下**は
+        // 描く——そこは低い天井の下の空気に面した壁の断面の縁で、隠れているのは天井より上だけ
+        // （ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の左側の断面線は床断面から上の天井断面線まで」）。
+        const lowCeil = col.ceilZ;
+        const hiddenTop = (r) => (Number.isFinite(lowCeil) ? Math.min(r.z1, lowCeil) : r.z0);
+        if (!sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
           for (const r of edgeRanges(prev)) {
-            const zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX0) : r.z1;
+            let zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX0) : r.z1;
+            if (hidden === 'hi') zTop = Math.min(zTop, hiddenTop(r));
             if (zTop - r.z0 <= GAP_EPS) continue;
             prims.push(Object.assign(emitLine(cut, col.x0, r.z0, col.x0, zTop, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
           }
         }
-        if (hidden !== 'lo' && !sameWall(matchingBand(next, band.z0, band.z1, 'cut'))) {
+        if (!sameWall(matchingBand(next, band.z0, band.z1, 'cut'))) {
           for (const r of edgeRanges(next)) {
-            const zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX1) : r.z1;
+            let zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX1) : r.z1;
+            if (hidden === 'lo') zTop = Math.min(zTop, hiddenTop(r));
             if (zTop - r.z0 <= GAP_EPS) continue;
             prims.push(Object.assign(emitLine(cut, col.x1, r.z0, col.x1, zTop, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
           }

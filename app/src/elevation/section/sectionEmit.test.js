@@ -2186,3 +2186,43 @@ test('【巾木】emitColumns: viaStair の壁の足元（床の高さ）には�
   assert.equal(horizAt(lintel, 860).length, 0, 'まぐさ（足元が床に無い）の下端には引かない');
   assert.equal(horizAt(emitColumns(colsWith(0), cut, { ceilZ: 2400, baseboardMm: 0 }), 60).length, 0, '巾木 0 は引かない');
 });
+
+// ---- ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の左側の断面線は床断面から上の天井断面線まで」----
+// 段違い天井の境界に立つ切断壁（exposedSide）の見えない側の縁も、低い側の天井（列の打ち切り値）より下は描く。
+test('【指示2026-10-15】emitColumns: exposedSide=hi の切断壁は、lo 側の縁を低い天井（col.ceilZ）まで・hi 側の縁を帯の天端まで描く', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const wall = { id: 'w', axisCL: {} };
+  const columns = [
+    { x0: 0, x1: 780, worldLo: 0, worldHi: 780, ceilZ: 3615, bands: [{ kind: 'open', z0: 0, z1: 3615 }] },
+    { x0: 780, x1: 895, worldLo: 780, worldHi: 895, ceilZ: 3615, bands: [{ kind: 'cut', z0: 0, z1: 4742, wall, exposedSide: 'hi' }] },
+    { x0: 895, x1: 1675, worldLo: 895, worldHi: 1675, ceilZ: 4742, bands: [{ kind: 'open', z0: 0, z1: 4742 }] },
+  ];
+  const prims = emitColumns(columns, cut);
+  const lo = prims.filter(p => p.__o === 'cutEdgeLo' && p.x1 === 780);
+  const hi = prims.filter(p => p.__o === 'cutEdgeHi' && p.x1 === 895);
+  const ys = ps => ps.map(p => [p.y1 + 0, p.y2 + 0]); // -0 を 0 に
+  assert.deepEqual(ys(lo), [[0, -3615]], 'lo 側の縁は低い天井 3615 まで');
+  assert.deepEqual(ys(hi), [[0, -4742]], 'hi 側の縁は帯の天端 4742 まで');
+  // 鏡像（exposedSide=lo）
+  const mirrored = [
+    { x0: 0, x1: 780, worldLo: 0, worldHi: 780, ceilZ: 4742, bands: [{ kind: 'open', z0: 0, z1: 4742 }] },
+    { x0: 780, x1: 895, worldLo: 780, worldHi: 895, ceilZ: 3615, bands: [{ kind: 'cut', z0: 0, z1: 4742, wall, exposedSide: 'lo' }] },
+    { x0: 895, x1: 1675, worldLo: 895, worldHi: 1675, ceilZ: 3615, bands: [{ kind: 'open', z0: 0, z1: 3615 }] },
+  ];
+  const m = emitColumns(mirrored, cut);
+  assert.deepEqual(ys(m.filter(p => p.__o === 'cutEdgeLo' && p.x1 === 780)), [[0, -4742]]);
+  assert.deepEqual(ys(m.filter(p => p.__o === 'cutEdgeHi' && p.x1 === 895)), [[0, -3615]]);
+});
+
+test('【指示2026-10-15・失敗系】emitColumns: exposedSide の壁でも、帯の足元が低い天井より上なら見えない側の縁は出ない', () => {
+  const cut = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const wall = { id: 'w', axisCL: {} };
+  const columns = [
+    { x0: 0, x1: 780, worldLo: 0, worldHi: 780, ceilZ: 2400, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+    { x0: 780, x1: 895, worldLo: 780, worldHi: 895, ceilZ: 2400, bands: [{ kind: 'cut', z0: 3000, z1: 4742, wall, exposedSide: 'hi' }] },
+    { x0: 895, x1: 1675, worldLo: 895, worldHi: 1675, ceilZ: 4742, bands: [{ kind: 'open', z0: 0, z1: 4742 }] },
+  ];
+  const prims = emitColumns(columns, cut);
+  assert.equal(prims.filter(p => p.__o === 'cutEdgeLo' && p.x1 === 780).length, 0, '足元 3000 が低い天井 2400 より上＝縁は全部隠れる');
+  assert.deepEqual(prims.filter(p => p.__o === 'cutEdgeHi' && p.x1 === 895).map(p => [p.y1, p.y2]), [[-3000, -4742]]);
+});

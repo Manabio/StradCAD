@@ -2736,3 +2736,29 @@ test('【失敗系・2026-10-15】stairFaceSequence: 到達端に壁があれば
     assert.ok(!upperFlLines(e).some(p => Math.min(p.x1, p.x2) < -1e-6 || Math.max(p.x1, p.x2) > e.face.run + 1e-6), `seq${seqNo}: 断面が上階FLに達しない面には出ない`);
   }
 });
+
+// ---- ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の断面線は床断面から天井断面線まで」・裁定「木造階段の最上階は除く」----
+// 自階にも上階にも往復間の実壁（隔て板）があるときだけ、seq1 に continuousWallAcross（隔て板の材の範囲）が付く。
+test('【指示2026-10-15】switchbackCuts: 自階と上階の両方に往復間の壁があれば seq1 に continuousWallAcross。上階だけ（従来の fixture）・自階だけ（最上階）は付かない', () => {
+  const both = makeGraph('p1'), bothUpper = makeGraph('p2');
+  const fx = makeSwitchbackFixture(both, { withMidWall: true, midWallGraph: bothUpper, upperLandingOnly: true });
+  const clOf = (g, type, v) => [...g.centerLines].find(c => c.centerLineType === type && Math.abs(c.effectiveValue - v) < 1e-6);
+  both.addWall(clOf(both, CenterLineType.VERTICAL, 1000), 50, true, clOf(both, CenterLineType.HORIZONTAL, 1500), 0, clOf(both, CenterLineType.HORIZONTAL, 4500), 0, {});
+  const layersOf = (g, u) => buildBandLayers(g, { above: [{ graph: u, floorHeightMm: OPTS.floorHeight }] });
+  const table = switchbackCuts(fx.stair, composeRoomFaces(fx.room, both), both, { ...OPTS, upperGraph: bothUpper, layers: layersOf(both, bothUpper) });
+  const seq1 = table.cuts.find(c => c.seqNo === '1');
+  assert.ok(seq1.continuousWallAcross, '両方にあれば付く');
+  const mr = fx.midWall.materialRange;
+  assert.ok(seq1.continuousWallAcross.lo <= Math.min(mr.lo, mr.hi) + 1e-6 && seq1.continuousWallAcross.hi >= Math.max(mr.lo, mr.hi) - 1e-6, '範囲は上階の隔て板の材の範囲を含む');
+  assert.ok(table.cuts.filter(c => c.seqNo !== '1').every(c => !c.continuousWallAcross), 'seq1 だけ');
+
+  const upperOnly = makeGraph('p3'), upperOnlyUpper = makeGraph('p4');
+  const fx2 = makeSwitchbackFixture(upperOnly, { withMidWall: true, midWallGraph: upperOnlyUpper, upperLandingOnly: true });
+  const t2 = switchbackCuts(fx2.stair, composeRoomFaces(fx2.room, upperOnly), upperOnly, { ...OPTS, upperGraph: upperOnlyUpper, layers: layersOf(upperOnly, upperOnlyUpper) });
+  assert.equal(t2.cuts.find(c => c.seqNo === '1').continuousWallAcross, undefined, '上階だけでは付かない');
+
+  const top = makeGraph('p5'), topUpper = makeGraph('p6');
+  const fx3 = makeSwitchbackFixture(top, { withMidWall: true });
+  const t3 = switchbackCuts(fx3.stair, composeRoomFaces(fx3.room, top), top, { ...OPTS, upperGraph: topUpper, layers: layersOf(top, topUpper) });
+  assert.equal(t3.cuts.find(c => c.seqNo === '1').continuousWallAcross, undefined, '自階だけ（最上階＝上階に隔て板なし）は付かない＝天端の見え掛かりは従来');
+});
