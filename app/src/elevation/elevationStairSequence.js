@@ -1550,24 +1550,6 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       ? floorProfileWithFloorOn(stairProfile, underReturn.loX, underReturn.hiX, selfFloorZ)
       : stairProfile;
     const soffit = applySoffit(seqNo, null);
-    // 到達辺（壁のない端）の外の上階の天井断面: 裏面が到達辺で上階の天井（ceilTopAbs）より高いとき、体裁の天井断面線を面の端の外へ
-    // 延ばす——裏面の高さの水平を面の壁が端の外へ続く所（Y4 の壁の外側の面）まで引き、そこで上階の天井へ立ち下がって延長の端まで
-    // 水平（ユーザー指摘 2026-10-16「moku4-3 1階 階段 B2, D2: 2階天井断面は（Y4 の壁外, 2FL＋CH の交点）始点が正解〔＝梁型はない〕」。
-    // 面の端の外の天井は体裁だけ〔図側は profile の端の値でクランプする〕なので、点列を外へ足す。エンジンの ceilClip は不変）。
-    const extendedCeilingProfile = (() => {
-      if (!soffit?.ceilingProfile) return null;
-      const arrivalLeft = cut.landingEnd !== 'left'; // 踊り場が右なら到達辺は左端
-      const open = arrivalLeft ? outFace.hasWallAtLocal0 === false : outFace.hasWallAtLocalRun === false;
-      const endZ = arrivalLeft ? soffit.ends?.left : soffit.ends?.right;
-      if (!open || !Number.isFinite(endZ) || !(endZ - ceilTopAbs > GAP_EPS) || !(endExtendMm > 0)) return soffit.ceilingProfile;
-      const cont = wallContinuationBeyondFaceEnd(outFace, graph, arrivalLeft ? '0' : 'Run', endExtendMm);
-      if (!(endExtendMm - cont > GAP_EPS)) return soffit.ceilingProfile; // 壁が延長の端まで続く＝立ち下がりが図に入らない
-      const pts = arrivalLeft
-        ? [[-endExtendMm, ceilTopAbs], [-cont, ceilTopAbs], [-cont, endZ], ...soffit.ceilingProfile]
-        : [...soffit.ceilingProfile, [outFace.run + cont, endZ], [outFace.run + cont, ceilTopAbs], [outFace.run + endExtendMm, ceilTopAbs]];
-      // 壁が端の外へ続かない（cont=0）ときは立ち下がりが面の端に重なるので、同じ点は 1 つにする
-      return pts.filter((p, i) => i === 0 || Math.abs(p[0] - pts[i - 1][0]) > GAP_EPS || Math.abs(p[1] - pts[i - 1][1]) > GAP_EPS);
-    })();
     // 復路の本体（裏面〜段板の上面＝床へ下げる前の断面線）の中の content を落とすための上面
     const fields = contentFields(cut, { ceilLowAbs, floorHeight }, floorProfile,
       underReturn ? { ...underReturn, bodyTop: stairProfile } : null);
@@ -1577,7 +1559,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
       floorProfile,
       // 最終段の天端（上階FL）の位置は、復路下の仕上げ空間で床へ下げる前の断面線が持つ（上階FL断面線のはね出し用）
       ...(underReturn ? { stairFloorProfile: stairProfile } : {}),
-      ...(extendedCeilingProfile ? { ceilingProfile: extendedCeilingProfile } : {}),
+      ...(soffit ? { ceilingProfile: soffit.ceilingProfile } : {}),
       ...fields,
       content: [...fields.content, ...(underReturn
         ? [...underReturnCeilingPrimitives(underReturn), ...underReturnBaseboardPrimitives(underReturn, cut, probeCtx, selfLayer, selfFloorZ, bandRoom, graph, endExtendMm)]
