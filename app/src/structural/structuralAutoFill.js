@@ -10,7 +10,7 @@ import { peekVia } from './structuralPeek.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
 import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure, WOOD_FL_TOP_BEAM_ROLES } from './structureRules.js';
 import { woodBeamTopLevelOffsetMm } from './woodFraming.js';
-import { stairPartitionEnds, stairLandingFrontWallPoints } from './wallFreeEnds.js';
+import { stairPartitionEnds, stairPartitionLandingEnds, stairLandingFrontWallPoints } from './wallFreeEnds.js';
 import { removeStairCrossingOrphanBeamAxes } from './stairCrossingBeamAxes.js';
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
 import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
@@ -708,6 +708,9 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 下階の隔て壁の両端の柱（頭つなぎの起点から除く。woodAutoFill.js autoFillWoodWallBeams の belowTieExcludePts）。
   // 識別は幾何（下階graphの stairPartitionEnds の点とAXIS座標が一致する柱）。由来集合は使わない。
   const belowPartitionEnds = belowGraph ? stairPartitionEnds(belowGraph, project) : []; // 隔て梁（stairPartitionBeams.js）も使う。1回だけ求める
+  // 規則1（踊り場側の隔て板柱に床梁を渡さない。woodOpeningBeams.js isLandingFrontEdge）の点源は壁ではなく下階の階段の幾何
+  // （stairPartitionLandingEnds）。下階の壁がまだ無い（古い保存文書を開いて壁の再生成より先に構造を再計算する経路）でも効かせる。
+  const belowLandingEnds = belowGraph ? stairPartitionLandingEnds(belowGraph, project) : [];
   // 規則2（階段の接合辺と側壁の取り合いの柱。stairLandingFrontWallPoints）も頭つなぎの起点から除く。隔て梁には使わないので別に持つ。
   const belowTieExcludePts = [...belowPartitionEnds, ...(belowGraph ? stairLandingFrontWallPoints(belowGraph, project) : [])]
     .map(e => ({ x: e.x, y: e.y }));
@@ -768,7 +771,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // openingComponents===undefined（在来でない・屋根専用平面・基礎伏図）は何もしない。
   const openingBeamsResult = (!isRoof && !foundation && ownSpecified)
     ? autoFillWoodOpeningBeams(graph, project, openingComponents, wallSegments,
-      openingComponents ? stairPartitionBeamSpans(graph, project, belowPartitionEnds) : [], belowPartitionEnds)
+      openingComponents ? stairPartitionBeamSpans(graph, project, belowPartitionEnds) : [], belowLandingEnds)
     : { created: [], removed: [] };
   const newBeams = [...beamsResult.created, ...openingBeamsResult.created];
   const removedBeams = [...beamsResult.removed, ...openingBeamsResult.removed];

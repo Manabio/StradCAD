@@ -14,7 +14,7 @@ import { autoFillStructuralGrid } from './structuralAutoFill.js';
 import { autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodBeamDepths } from './woodAutoFill.js';
 import { autoFillWoodOpeningBeams, isLandingFrontEdge } from './woodOpeningBeams.js';
 import { generateStairPartitionWalls } from '../finish/stair/stairPartitionWalls.js';
-import { stairPartitionEnds } from './wallFreeEnds.js';
+import { stairPartitionEnds, stairPartitionLandingEnds } from './wallFreeEnds.js';
 import { openingEdgeComponents, edgeTarget } from './openingBeamAxes.js';
 import { selfWallSegments, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
@@ -450,7 +450,8 @@ test('【S3-11】描画端部: 2段目の小梁(secondary)は1段目の小梁の
 const EQUAL_UP = [[0, 0, 2000, 1000], [0, 1000, 1000, 4000], [1000, 1000, 2000, 4000]];
 // EQUAL_UP を y 方向に鏡映（踊り場側が hi＝y=4000、上り口側が lo＝y=1000 になる）
 const EQUAL_DOWN = [[0, 3000, 2000, 4000], [0, 0, 1000, 3000], [1000, 0, 2000, 3000]];
-function makeLandingFixture({ lowerStructure = WOOD, upDirection = 'up', rects = EQUAL_UP } = {}) {
+// withWalls:false … 1階の隔て壁を生成しない（古い鮮度キーの保存文書を開いて、壁の再生成より先に構造を再計算する経路の再現）
+function makeLandingFixture({ lowerStructure = WOOD, upDirection = 'up', rects = EQUAL_UP, withWalls = true } = {}) {
   const project = new Project('proj-landing-front', 'test');
   const mkFloor = (elevation, name, id, structure) => {
     const { graph } = project.addPlane(elevation, name, id);
@@ -463,7 +464,7 @@ function makeLandingFixture({ lowerStructure = WOOD, upDirection = 'up', rects =
     return graph;
   };
   const g1 = mkFloor(0, '1階', 'p1', lowerStructure);
-  generateStairPartitionWalls(g1, { structure: lowerStructure, underEdges: [] });
+  if (withWalls) generateStairPartitionWalls(g1, { structure: lowerStructure, underEdges: [] });
   const g2 = mkFloor(3000, '2階', 'p2', WOOD);
   const parent = g2.addRoom(new Set(getAllCells(g2).map(c => c.key)), 'A');
   generateRoomWallsFromOutline(g2, parent);
@@ -548,4 +549,41 @@ test('【規則1・逆向き】踊り場側が hi（y=3000。実データ moku4 
   assert.equal(at(3000).length, 0, `踊り場前縁 y=3000 に小梁は無い（実際: ${smalls(f.g2).map(brief)}）`);
   assert.ok(isLandingFrontEdge({ isVertical: false, coord: 3000, lo: 1000, hi: 2000 }, ends));
   assert.ok(!isLandingFrontEdge({ isVertical: false, coord: 0, lo: 1000, hi: 2000 }, ends), '上り口側の端 y=0 は外さない');
+});
+
+// ---- 規則1の点源を壁から階段の幾何へ（2026-10-16。moku4-3 の 2 階で踊り場前縁 y=-8190 の小梁 B1 が復活した再発の是正）----
+// 旧: 下階の stairPartitionEnds（壁の設計上の端）。古い鮮度キーの保存文書（隔て壁が無い）を開き、壁の再生成より先に
+// 構造を再計算する経路（構造モード突入など）では端が 0 件になり規則1が効かなかった。新: stairPartitionLandingEnds（幾何）。
+
+test('【規則1・幾何】stairPartitionLandingEnds は壁の有無によらず隔て壁の踊り場側の端を返し、壁があるときは stairPartitionEnds の landing と同じ点', () => {
+  const withWalls = makeLandingFixture();
+  const geo = stairPartitionLandingEnds(withWalls.g1, withWalls.project);
+  assert.deepEqual(geo.map(e => [e.isVertical, e.coord, e.along, e.x, e.y, e.side]), [[true, 1000, 1000, 1000, 1000, 'landing']]);
+  const wallLanding = stairPartitionEnds(withWalls.g1, withWalls.project).filter(e => e.side === 'landing');
+  assert.deepEqual(wallLanding.map(e => [e.isVertical, e.coord, e.along]), geo.map(e => [e.isVertical, e.coord, e.along]), '壁の端と同じ点');
+  const noWalls = makeLandingFixture({ withWalls: false });
+  assert.deepEqual(stairPartitionEnds(noWalls.g1, noWalls.project), [], '前提: 壁が無いと壁の端は 0 件');
+  assert.deepEqual(stairPartitionLandingEnds(noWalls.g1, noWalls.project).map(e => [e.x, e.y, e.side]), [[1000, 1000, 'landing']], '幾何の端は壁が無くても返る');
+  const down = makeLandingFixture({ upDirection: 'down', rects: EQUAL_DOWN, withWalls: false });
+  assert.deepEqual(stairPartitionLandingEnds(down.g1, down.project).map(e => [e.x, e.y]), [[1000, 3000]], '踊り場側が hi でも踊り場側の端');
+});
+
+test('【規則1・幾何・失敗系】下階が鉄骨階段（隔て壁なし）・在来でない階は stairPartitionLandingEnds が空', () => {
+  const steel = makeLandingFixture({ lowerStructure: StructuralMaterialType.STEEL, withWalls: false });
+  assert.deepEqual(stairPartitionLandingEnds(steel.g1, steel.project), []);
+});
+
+test('【規則1・壁なし】下階の隔て壁がまだ生成されていなくても（壁の再生成より先に構造を再計算する経路）、踊り場前縁に小梁を架けない', async () => {
+  const f = makeLandingFixture({ withWalls: false });
+  assert.deepEqual(stairPartitionEnds(f.g1, f.project), [], '前提: 下階に隔て壁が無い（旧実装ではここで規則1が外れ、小梁が復活した）');
+  const comps = openingEdgeComponents(f.g2, { belowGraph: f.g1 });
+  assert.equal(comps.length, 1, '前提: 階段の破れ先の開口が1成分');
+  await recomputeLanding(f);
+  assert.equal(frontSmalls(f.g2).length, 0, `踊り場前縁 y=1000 の小梁は無い（実際: ${smalls(f.g2).map(brief)}）`);
+});
+
+test('【規則1・壁なし・失敗系】下階が鉄骨階段で壁も無いなら踊り場前縁の小梁は従来どおり架かる', async () => {
+  const f = makeLandingFixture({ lowerStructure: StructuralMaterialType.STEEL, withWalls: false });
+  await recomputeLanding(f);
+  assert.ok(frontSmalls(f.g2).length >= 1, `踊り場前縁 y=1000 に小梁が架かる（実際: ${smalls(f.g2).map(brief)}）`);
 });

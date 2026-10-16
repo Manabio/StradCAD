@@ -14,7 +14,7 @@ import { rulesFor, effectiveStructure } from './structureRules.js';
 import { kneeDropRecordForWallSpan } from '../finish/kneeDropWall.js';
 import {
   stairPartitionLines, matchStairPartitionLine, partitionDesignRange, PARTITION_BACKING_MM,
-  stairHasPartition, stairLandingFrontLine,
+  stairHasPartition, stairLandingFrontLine, stairPartitionGeometry,
 } from '../finish/stair/stairPartition.js';
 
 /**
@@ -125,6 +125,32 @@ export function stairPartitionEnds(graph, project, wallSourceCache = undefined, 
       const side = Math.abs(along - c.line.landingAlong) <= LINE_END_TOL_MM ? 'landing' : 'entry';
       out.push({ isVertical: c.isVertical, coord: c.coord, along, x, y, free, side });
     }
+  }
+  return out;
+}
+
+/**
+ * 隔て壁の踊り場側（回転部側）の端を、壁ではなく**階段の幾何**（stairPartitionGeometry.landingEnd）から返す
+ * （規則1「木造階段の踊り場・回転部側の隔て板柱には床梁を渡さない」＝woodOpeningBeams.js isLandingFrontEdge の点源）。
+ * stairPartitionEnds は壁の設計上の端が点源（柱・柱包みの規律）だが、規則1は「回転部を横断する横架材はない」という
+ * 階段の性質であり、下階の壁がまだ生成されていなくても（古い鮮度キーの保存文書を開いて壁の再生成より先に
+ * 構造を再計算する経路。実データ moku4-3 で 2 階の踊り場前縁に小梁 B1 が復活した）成り立たなければならない。
+ * 壁がある通常の状態では stairPartitionEnds の side:'landing' と同じ点になる（端は線の lo/hi＝landingEnd）。
+ * 在来木造（rules.framing）以外・隔て壁を持たない階段（鉄骨階段・屋外）は空。
+ * @param {object} graph
+ * @param {object} project
+ * @returns {Array<{isVertical:boolean, coord:number, along:number, x:number, y:number, side:'landing'}>}
+ */
+export function stairPartitionLandingEnds(graph, project) {
+  const structure = effectiveStructure(graph, project);
+  if (!rulesFor(structure).framing) return [];
+  const out = [];
+  for (const stair of graph.stairs ?? []) {
+    if (!stairHasPartition(stair, graph, structure)) continue;
+    const g = stairPartitionGeometry(stair, graph);
+    if (!g) continue;
+    const along = g.isVertical ? g.landingEnd.y : g.landingEnd.x;
+    out.push({ isVertical: g.isVertical, coord: g.axisValue, along, x: g.landingEnd.x, y: g.landingEnd.y, side: 'landing' });
   }
   return out;
 }

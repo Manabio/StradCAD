@@ -49,7 +49,8 @@ function woodOpeningHosts(graph, rules) {
  * ユーザー指示 2026-10-12）。真＝辺と端の向きが直交し、端の along が辺の座標に一致し、端の coord が辺の区間内にある。
  * 上り口側（side:'entry'）の端は対象外（上り口辺の小梁は残す）。
  * @param {{isVertical:boolean, coord:number, lo:number, hi:number}} edge
- * @param {Array<{isVertical:boolean, coord:number, along:number, side?:string}>} ends stairPartitionEnds の結果
+ * @param {Array<{isVertical:boolean, coord:number, along:number, side?:string}>} ends 下階の階段の幾何から求めた踊り場側の端
+ *   （wallFreeEnds.js stairPartitionLandingEnds。壁の端 stairPartitionEnds と同じ形で side:'landing' だけ）
  */
 export function isLandingFrontEdge(edge, ends) {
   return ends.some(e => e.side === 'landing'
@@ -85,9 +86,11 @@ export function isLandingFrontEdge(edge, ends) {
  *   「梁あり」として除く。計画値を使うのは、隔て梁の生成が本関数の後（同じ再計算の中）で実梁がまだ無いため。
  *   支え（直交辺の掛け先）にはしない——隔て梁の端は開口辺の梁に載る側（stairPartitionBeams.js 冒頭）。
  * @param {Array<{isVertical:boolean, coord:number, along:number, side:string}>} [belowPartitionEnds] - 下階の
- *   stairPartitionEnds。踊り場側（side:'landing'）の端が線上にある辺は架けない（isLandingFrontEdge。規則1）。
- *   辺は計画の前に外す＝「梁あり」にも「除外」にもせず、他の辺の支えにも数えない。梁が載るのは下階の柱の頭で、
- *   開口（stairBeyond）は下階に同じ階段があるときだけ生まれるので下階の端を使う。
+ *   隔て壁の踊り場側の端（wallFreeEnds.js stairPartitionLandingEnds＝下階の階段の幾何から。壁は見ない——下階の壁が
+ *   まだ生成されていない経路〔古い保存文書を開いて壁の再生成より先に構造を再計算〕でも規則1を効かせるため。
+ *   2026-10-16 に moku4-3 の 2 階で小梁 B1 が復活した原因）。踊り場側（side:'landing'）の端が線上にある辺は架けない
+ *   （isLandingFrontEdge。規則1）。辺は計画の前に外す＝「梁あり」にも「除外」にもせず、他の辺の支えにも数えない。
+ *   梁が載るのは下階の柱の頭で、開口（stairBeyond）は下階に同じ階段があるときだけ生まれるので下階の端を使う。
  * @returns {{created: object[], removed: string[]}}
  */
 export function autoFillWoodOpeningBeams(graph, project, openingComponents, wallSegments, partitionSpans = [], belowPartitionEnds = []) {
