@@ -19,7 +19,7 @@ import {
   deleteClassificationOverflow,
 } from './structuralAutoFill.js';
 import { collectFloorGroups } from './memberNumbering.js';
-import { conformWoodSections, conformWoodColumnEccentricity, autoFillWoodBeamDepths, woodBeamDepthMarkSignature } from './woodAutoFill.js';
+import { conformWoodSections, conformWoodBeamLevels, conformWoodColumnEccentricity, autoFillWoodBeamDepths, woodBeamDepthMarkSignature } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
 import { mainRoofFramingRegion, leanToFraming } from './roofFramingRegions.js';
 import { buildRoofColumnFilter } from './roofColumnFilter.js';
@@ -238,6 +238,9 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 在来木造: 既存の柱・梁の断面を主構造ルール（柱120角・梁は「梁を支える1つ下の実体階の柱寸」幅）へ
   // そろえる（手動固定も含む。ユーザー裁定2026-09-14／梁幅の下階参照は実機裁定ステップ4 C-2 QA2）。
   const conformedSections = runInAction(() => conformWoodSections(targetGraph, project));
+  // 在来木造: 横架材（大梁・小梁・床梁・土台・隔て梁）の天端を FL−100（framing.beamTopBelowFLMm）へそろえる
+  // （dimensionStatus==='auto' のみ。手動で天端を動かした梁は locked なので保つ。ユーザー指示 2026-10-16）。
+  const conformedLevels = runInAction(() => conformWoodBeamLevels(targetGraph, project));
   // 在来木造: 個別柱（柱寸≠階の柱寸）が壁の中で偏心する量（eccentricity）をconformする（B-1・
   // ユーザー裁定2026-09-17）。外周モデル（exterior）は上で構築済みのものを使い回す
   // （柱芯オフセット・梁偏芯と同じ外周モデルに揃える。二系統にしない）。
@@ -282,6 +285,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     || removedStairCrossingAxes.length > 0
     || matFoundation.created.length > 0 || matFoundation.removed.length > 0
     || convertedColumns.length > 0 || convertedBeams.length > 0 || convertedFootings.length > 0 || conformedSections.length > 0
+    || conformedLevels.length > 0
     || removedByClass.length > 0
     || updatedColumnSizes.length > 0 || updatedFootingSizes.length > 0 || updatedBeamSizes.length > 0
     || updatedRoofBeamSizes.length > 0 || updatedBeamEcc.length > 0 || updatedBeamDepths.length > 0

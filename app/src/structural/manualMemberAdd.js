@@ -26,6 +26,7 @@ import { rulesFor, woodColumnSectionId, effectiveStructure } from './structureRu
 import { DEFAULT_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { autoFillColumnSizes, autoFillColumnBaseSizes, autoFillBeamEccentricity, fixedBeamGuardHonored } from './structuralAutoFill.js';
 import { autoFillWoodBeamDepths } from './woodAutoFill.js';
+import { woodBeamTopLevelOffsetMm } from './woodFraming.js';
 import { beamAxisSpan, removeAutoBeamsOverlapping } from './fixedBeamOverlap.js';
 
 /** 柱を手動追加し、初期値算定後に locked にする。vCL・hCL は明示必須（欠落は例外）。
@@ -63,7 +64,11 @@ export function addManualBeam(graph, project, { axisCL, isVertical, clStart, clE
   if (clStart.id === clEnd.id) throw new Error('addManualBeam: clStart と clEnd は異なるCLである必要があります');
   const rules = rulesFor(effectiveStructure(graph, project));
   const materialType = rules.baseMaterial;
-  const beam = graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd, {});
+  // 在来木造の横架材は天端FL−100（framing.beamTopBelowFLMm）。手動追加は直後に locked にするため
+  // conformWoodBeamLevels（auto のみ）の対象外——生成時に書く。非在来は null＝既定（天端FL）。
+  const levelOffset = rules.framing ? woodBeamTopLevelOffsetMm(rules.framing) : null;
+  const beam = graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd,
+    levelOffset == null ? {} : { levelOffset });
   autoFillBeamEccentricity(graph, project); // 外周梁なら柱外面合わせの偏芯量を初期算出（faceGap=0＝面一）
   // belowColumns=[]固定: 手動追加は同期処理で他階peekができないため、下階柱を支持点に含めず端点2点
   // だけで評価する。下階柱を渡せないので「下階に柱のない場所」を判定できず、子梁の成の伝播

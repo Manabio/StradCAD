@@ -1013,14 +1013,16 @@ export function entranceOpeningWidthMm(doorWidthMm, clearanceMm = rulesFor(TRADI
 }
 
 /**
- * 土台（role:'sill'）の天端レベルオフセット(mm)。仕様「土台：1階の1FL-100に天端を合わせた、柱同寸の
- * 横材」——梁天端（framing.beamTopBelowFLMm。梁天端はFL−100）と同じ値を共有し、土台専用の定数は
- * 持たない（beamTopBelowFLMmの初の本番消費者）。levelOffset は StructuralBeam の一般フィールドで
- * 「天端がFLからこの符号付き値だけ下がる」規約のため、-beamTopBelowFLMm を返す。
+ * 在来木造の横架材（大梁・小梁・床梁・土台・隔て梁＝structureRules.js WOOD_FL_TOP_BEAM_ROLES）の
+ * 天端レベルオフセット(mm)。仕様「横架材の天端はFL−100」（土台も「1階の1FL-100に天端を合わせた、柱同寸の
+ * 横材」で同じ値）——framing.beamTopBelowFLMm が唯一の供給源で、役割ごとの定数は持たない。
+ * levelOffset は StructuralBeam の一般フィールドで「天端がFLからこの符号付き値だけ下がる」規約のため、
+ * -beamTopBelowFLMm を返す。生成直後の値は conformWoodBeamLevels（woodAutoFill.js）が同じ再計算パスで
+ * 揃えるので、自動生成側は土台以外ここを呼ばない（手動追加＝locked は conform の対象外なので生成時に書く）。
  * @param {{beamTopBelowFLMm:number}|null} [framing] - 非在来（framingを持たない主構造）はnull
  * @returns {number|null} framing未設定・beamTopBelowFLMmが非数なら null
  */
-export function sillTopLevelOffsetMm(framing = TRADITIONAL_WOOD_FRAMING) {
+export function woodBeamTopLevelOffsetMm(framing = TRADITIONAL_WOOD_FRAMING) {
   if (!framing || !Number.isFinite(framing.beamTopBelowFLMm)) return null;
   return -framing.beamTopBelowFLMm;
 }

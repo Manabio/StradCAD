@@ -58,7 +58,7 @@ test('正常系: 下階の隔て壁の両端があり自階に同位置の階段
   assert.equal(b.axisCL.effectiveValue, 1000);
   assert.deepEqual([b.clStart.effectiveValue, b.clEnd.effectiveValue].sort((a, c) => a - c), [1000, 4000]);
   assert.equal(b.dimensionStatus, 'auto');
-  assert.equal(b.levelOffset, 0, 'levelOffset は書かない（既定）');
+  assert.equal(b.levelOffset, 0, 'levelOffset は生成側では書かない（既定 0。FL−100 へは同じ再計算パスの conformWoodBeamLevels がそろえる）');
 });
 
 test('冪等: 2回目は生成・撤去が空で id が変わらない', () => {

@@ -68,8 +68,9 @@ export function faceSectionCut(face, opts) {
  * BeamSolid[] を帯の描画z範囲（0..CH）へクリップする。範囲外へ完全に外れる梁は落とす。
  *
  * これが「梁型（下がり天井の梁）だけが出る」という建築的に正しい挙動をそのまま与える——
- * 自階graphの床梁（levelOffset=0＝天端がFL）は帯の床より下で全消し、上階graphの梁は
- * 天端=階高のため、梁成が階高−CHを超えて天井から降りてくる分だけが残る。副次的に、
+ * 自階graphの床梁（天端がFL以下。在来木造は levelOffset=−100＝FL−100、他は 0）は帯の床より下で全消し、
+ * 上階graphの梁は天端=階高＋levelOffset のため、梁成が階高−CH（在来木造は −100 して）を超えて天井から
+ * 降りてくる分だけが残る。副次的に、
  * 床より下の細破線が注記帯（tag行・ROW1/ROW2・通り芯丸）へ被る問題も原理的に起きない。
  * @param {object[]} beams - structuralContribution の結果
  * @param {number} loZ

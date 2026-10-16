@@ -8,7 +8,7 @@ import {
   woodBeamDepthMm, woodBeamSectionKey, woodBeamSectionForDepth, isValidManualDepth, woodBeamDepthForSpans, crossingBeamLoadCoords,
   mergeWallIntervals, subtractCoveredSpan, throughBeamRuns, columnSplitPoints, propagateBeamDepths, columnSupportBeamCandidates,
   beamWallCrossPoints, studPositions, studSpec, openingJambSpec, entranceOpeningWidthMm, hipBraceAllowed,
-  wallRunFaces, faceStudPositions, sillTopLevelOffsetMm, jambAxisValue, jambColumnPositions, rectsOverlap,
+  wallRunFaces, faceStudPositions, woodBeamTopLevelOffsetMm, jambAxisValue, jambColumnPositions, rectsOverlap,
   supportSpanColumnPositions, mergePrimaryBeamRuns, wallRunFreeEnds, SUPPORT_SPAN_PRIORITY_ORDER,
   koyaBeamDepthMm, koyaBeamDepthForSpans,
 } from './woodFraming.js';
@@ -794,16 +794,16 @@ test('entranceOpeningWidthMm: 玄関建具部分の基礎・両袖取付柱の�
   assert.equal(entranceOpeningWidthMm(900, -1), null);
 });
 
-test('sillTopLevelOffsetMm: 土台天端はFL-100（梁天端beamTopBelowFLMmと同じ値を共有。既定引数は在来木造のframing）', () => {
-  assert.equal(sillTopLevelOffsetMm(), -100);
-  assert.equal(sillTopLevelOffsetMm(TRADITIONAL_WOOD_FRAMING), -TRADITIONAL_WOOD_FRAMING.beamTopBelowFLMm);
-  assert.equal(sillTopLevelOffsetMm({ beamTopBelowFLMm: 80 }), -80, '値を変えれば追従する');
+test('woodBeamTopLevelOffsetMm: 横架材（土台を含む）の天端はFL-100（beamTopBelowFLMm が唯一の供給源。既定引数は在来木造のframing）', () => {
+  assert.equal(woodBeamTopLevelOffsetMm(), -100);
+  assert.equal(woodBeamTopLevelOffsetMm(TRADITIONAL_WOOD_FRAMING), -TRADITIONAL_WOOD_FRAMING.beamTopBelowFLMm);
+  assert.equal(woodBeamTopLevelOffsetMm({ beamTopBelowFLMm: 80 }), -80, '値を変えれば追従する');
 });
 
-test('【失敗系】sillTopLevelOffsetMm: framingがnull（非在来）・beamTopBelowFLMmが非数なら null', () => {
-  assert.equal(sillTopLevelOffsetMm(null), null);
-  assert.equal(sillTopLevelOffsetMm({ beamTopBelowFLMm: NaN }), null);
-  assert.equal(sillTopLevelOffsetMm({}), null);
+test('【失敗系】woodBeamTopLevelOffsetMm: framingがnull（非在来）・beamTopBelowFLMmが非数なら null', () => {
+  assert.equal(woodBeamTopLevelOffsetMm(null), null);
+  assert.equal(woodBeamTopLevelOffsetMm({ beamTopBelowFLMm: NaN }), null);
+  assert.equal(woodBeamTopLevelOffsetMm({}), null);
 });
 
 test('hipBraceAllowed: 16㎡以下の四角は可、吹抜け(VOID)は可、階段(STAIR)・階段吹抜け(STAIR_VOID)・削除済み(UNDEFINED)・非四角・16㎡超は不可', () => {

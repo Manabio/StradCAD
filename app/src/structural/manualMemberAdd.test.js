@@ -156,3 +156,14 @@ test('【手動追加】在来木造: 追加梁へ端を乗せる既存の梁は
   assert.equal(beam.sectionDefId, 'WOOD-120x330', '3640・荷重1か所の表値');
   assert.equal(existing.sectionDefId, 'WOOD-120x120', '既存のauto梁は手動追加では書き換えない');
 });
+
+// ---- 横架材の天端 FL−100（ユーザー指示 2026-10-16）。手動追加は locked になり conformWoodBeamLevels の対象外なので生成時に書く ----
+test('【手動追加】在来木造の梁は追加直後に levelOffset=-100（天端FL−100）。S造は既定 0 のまま', () => {
+  const wood = makeGridGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const woodBeam = addManualBeam(wood.graph, GRID_PROJECT, { axisCL: wood.yCLs[0], isVertical: false, clStart: wood.xCLs[0], clEnd: wood.xCLs[1] });
+  assert.equal(woodBeam.levelOffset, -100);
+  assert.equal(woodBeam.dimensionStatus, 'locked');
+  const steel = makeGridGraph('S造');
+  const steelBeam = addManualBeam(steel.graph, GRID_PROJECT, { axisCL: steel.yCLs[0], isVertical: false, clStart: steel.xCLs[0], clEnd: steel.xCLs[1] });
+  assert.equal(steelBeam.levelOffset, 0, '非在来は framing を持たないので既定（天端FL）');
+});

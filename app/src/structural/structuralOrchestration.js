@@ -8,7 +8,7 @@ import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { ERR_STRUCT_MAIN_UNSPECIFIED } from '../error.js';
 import { autoFillColumnsForStructure, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, UNSPECIFIED_STRUCTURE } from './structuralAutoFill.js';
-import { conformWoodSections } from './woodAutoFill.js';
+import { conformWoodSections, conformWoodBeamLevels } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
 import { collectWallBeamSources, autoFillWallBeamAxes, peekBelowGraph, wallRunSegments, columnSeedBeamSegments, createWallSourceCache } from './wallBeamAxes.js';
 import { structureHasMemberKind, MEMBER_KIND } from './structuralClassification.js';
@@ -264,8 +264,9 @@ async function recomputeStructuralCompositionBody(composition, subjectGraph, pro
       // structuralRecompute.js と同じ唯一の書き込み規律（structureRules.js beamColumnWidthMmの
       // JSDoc参照。実機裁定ステップ4 C-2 QA2・QA4）。
       belowGraph.setBeamColumnWidthMm(beamColumnWidthMm(belowGraph, belowBelowGraph, project));
-      // 在来木造: 既存断面を主構造ルールへそろえる（structuralRecompute.js と同じ）。
+      // 在来木造: 既存断面・横架材の天端（FL−100）を主構造ルールへそろえる（structuralRecompute.js と同じ）。
       conformWoodSections(belowGraph, project);
+      conformWoodBeamLevels(belowGraph, project);
       autoFillWallBeamAxes(belowGraph, belowWallSources);
       // 主構造変更で柱が「×」化した場合は、下階の柱を生成せず既存の自動柱を削除する（「×は削除/○は生成」）。
       // 柱の配置源（通り芯交点／壁交点）は主構造ルールで振り分ける（autoFillColumnsForStructure）。

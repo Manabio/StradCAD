@@ -8,7 +8,8 @@ import { isFoundationPlane } from './drawingDesignation.js';
 import { computeTributaryColumnWidth, computeColumnBaseSize, computeFoundationBeamSize, computeRoofBeamSize } from './memberSizing.js';
 import { peekVia } from './structuralPeek.js';
 import { isRigidFrameStructure, structureHasMemberKind, memberKindOf, MEMBER_KIND } from './structuralClassification.js';
-import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure } from './structureRules.js';
+import { rulesFor, defaultMaterialFor, UNSPECIFIED_STRUCTURE, effectiveStructure, WOOD_FL_TOP_BEAM_ROLES } from './structureRules.js';
+import { woodBeamTopLevelOffsetMm } from './woodFraming.js';
 import { stairPartitionEnds, stairLandingFrontWallPoints } from './wallFreeEnds.js';
 import { removeStairCrossingOrphanBeamAxes } from './stairCrossingBeamAxes.js';
 import { autoFillWoodColumns, autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodSillBeams } from './woodAutoFill.js';
@@ -884,7 +885,14 @@ export function convertMembersToEffectiveMaterial(graph, project, belowMainStruc
       : beam.role === 'eaves' ? belowRules.defaultSections.beam
       : ownRules.defaultSections.beam;
     if (beam.materialType !== targetMaterial) {
-      graph.convertBeamMaterial(beam, targetMaterial, targetSection);
+      const next = graph.convertBeamMaterial(beam, targetMaterial, targetSection);
+      // 在来木造の規則「横架材の天端はFL−100」（conformWoodBeamLevels）が書いた levelOffset は、木造以外へ
+      // 変換するとき元の既定（天端FL）へ戻す——conform は木造しか見ないので、戻さないと S造・RC造の梁が
+      // FL−100 に残る（QA指摘 2026-10-16）。規則の値と一致するものだけ戻す（それ以外は利用者の値とみなして保つ）。
+      if (beam.materialType === StructuralMaterialType.WOOD && targetMaterial !== StructuralMaterialType.WOOD
+        && WOOD_FL_TOP_BEAM_ROLES.includes(beam.role) && beam.levelOffset === woodBeamTopLevelOffsetMm()) {
+        next.setField('levelOffset', 0);
+      }
       convertedBeams.push(beam.id);
     }
   }

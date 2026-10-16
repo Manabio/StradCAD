@@ -68,6 +68,12 @@ export const WOOD_BEAM_DEPTH_TABLE = Object.freeze({
 // も同じ役割集合を読む——梁成表の対象と個別採番の対象は同じ「主要構造の梁」という理由による一致で、
 // 二重管理を避けるためここを共有する。
 export const WOOD_DEPTH_BEAM_ROLES = Object.freeze(['primary', 'secondary', 'floor']);
+// 在来木造で天端が「FL−beamTopBelowFLMm」に揃う横架材の role（ユーザー指示 2026-10-16「横架材の天端はFL-100」。
+// 大梁・小梁・床梁・土台・隔て梁に加え、軒桁〔eaves〕・小屋梁〔roofBeam〕・屋根専用平面の通し梁も同面
+// 〔ユーザー裁定 2026-10-16「小屋梁・軒桁・屋根専用平面の通し梁の上端も同面」＝その平面の基準高−100〕。
+// 基礎梁〔RC・天端はGL基準〕・踊り場受け梁〔landing＝鉄骨/RC階段専用で天端は踊り場から算定〕は対象外）。
+// 消費先は woodFraming.js woodBeamTopLevelOffsetMm と woodAutoFill.js conformWoodBeamLevels。
+export const WOOD_FL_TOP_BEAM_ROLES = Object.freeze(['primary', 'secondary', 'floor', 'sill', 'partitionBeam', 'eaves', 'roofBeam']);
 // 主要構造（部材の初期値・配置条件）。
 export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
   // 柱は120角が既定値（梁の材幅は柱同寸）。階ごとに graph.woodColumnWidthMm で上書きできる
@@ -78,7 +84,7 @@ export const TRADITIONAL_WOOD_FRAMING = Object.freeze({
   ridgeSection:    'WOOD-120x120', // 棟木は120角
   purlinSection:   'WOOD-90x90',   // 母屋は90角
   hipBraceSection: 'WOOD-90x90',   // 火打ち梁は90角
-  beamTopBelowFLMm: 100,           // 梁天端はFL−100（土台天端も同じ値。woodFraming.js sillTopLevelOffsetMm）
+  beamTopBelowFLMm: 100,           // 横架材の天端はFL−100（WOOD_FL_TOP_BEAM_ROLES の梁。woodFraming.js woodBeamTopLevelOffsetMm）
   floorBeamMaxPitchMm: 1820,       // 床梁は柱間・梁間に1820を超えない位置に設ける
   hipBraceMaxAreaM2: 16,           // 火打ち梁は16㎡以下の四角の4隅（吹抜け可・昇降機/階段内は不可）
   // 梁の支持長1820ルール（ステップ3i。ユーザー指示2026-09-19）。columnSupportMaxSpanMm と
