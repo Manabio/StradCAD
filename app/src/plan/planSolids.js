@@ -35,13 +35,15 @@
  *   既定 true。屋根が使う）。
  * @typedef {{graph: object|null, floorZMm: number, role: 'self'|'above'|'below', ceilZMm?: number}} SolidLayer
  */
-import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, edgeKey } from '@core';
+import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, edgeKey } from '@core';
 import { beamDepthMm } from '../elevation/section/sectionStructure.js';
 import { kneeDropZRangesAt } from '../elevation/section/sectionHits.js';
 import { columnWrapSolids, wallConcealRange } from '../finish/columnWrap.js';
 import { kneeDropRecordsOnAxis, effectiveCeilingHeight } from '../finish/kneeDropWall.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
-import { cellBoundsList } from '../finish/gridCells.js';
+import { cellBoundsList, roomBounds } from '../finish/gridCells.js';
+import { uTurnPlanLayout } from '../finish/stair/stairGeometry.js';
+import { arrivalBeamFaceMm, stairPartitionGeometry } from '../finish/stair/stairPartition.js';
 import { floorOpeningCellRects } from '../finish/stair/slabOpening.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
@@ -259,15 +261,66 @@ export function floorSolidOf(layer, opts = {}) {
     .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1);
   if (rects.length === 0) return null;
   const below = opts.belowGraphOf?.(graph) ?? null;
-  const holes = floorOpeningCellRects(graph, {
+  let holeRects = floorOpeningCellRects(graph, {
     riserOf: opts.riserOf ?? (() => null), stairFilter: stairFilterFor(graph, below),
     stairExtent: opts.lookUp === true ? 'full' : 'beyond', // 見上げは続きの階段の足元全体が穴（階段の裏が見える。S13a）
-  })
-    .map(({ x1, y1, x2, y2 }) => ({ x1, y1, x2, y2 }));
+  });
+  if (opts.lookUp !== true && below) holeRects = narrowStairVoidHoles(holeRects, graph, below); // 見上げは足元全体のまま（S13a）
+  const holes = holeRects.map(({ x1, y1, x2, y2 }) => ({ x1, y1, x2, y2 }));
   return {
     kind: 'floor', footprint: { rects, holes }, zLo: layer.floorZMm, zHi: layer.floorZMm,
     source: baseSource(layer, 'floor', graph.plane?.id ?? `z${layer.floorZMm}`),
   };
+}
+
+/**
+ * 見下げの床の穴（階段吹抜け stairVoid・続きの階段の破れ先 stairBeyond）の基端側を、下階の木造 U 字階段の到達辺の面まで狭める（床の立体だけの話）。
+ * N+1 の床は上階の床梁の外面＋壁仕上げ（面＝uTurnPlanLayout の run.baseB）まであり、復路の上では更に段鼻（蹴込 stair.nosing）が
+ * 張り出すので、梁は床の下に隠れて見えない。往路側（across の s0〜sB。隔て壁の帯を含む）＝面、復路側（sB〜s1）＝面＋蹴込。
+ * セルが両側にまたがるときは across.sB で 2 つに割る。対象は到達辺が梁の面に採られた階段（arrivalAtFace かつ梁が見つかった）だけ。
+ * 供給源は uTurnPlanLayout（stair-model.md）。floorOpeningCellRects／floorOpeningEdges／slabOpeningRects は変えない。
+ */
+function narrowStairVoidHoles(holes, graph, below) {
+  const EPS = 1;
+  let out = holes;
+  for (const stair of below.stairs ?? []) {
+    if (stair.type !== StairType.SWITCHBACK && stair.type !== StairType.WINDING) continue;
+    if (arrivalBeamFaceMm(stair, below, graph) == null) continue;
+    const L = uTurnPlanLayout(stair, below, { aboveGraph: graph });
+    if (!L?.arrivalAtFace) continue;
+    const g = stairPartitionGeometry(stair, below);
+    const bd = roomBounds(stair.cells, below);
+    if (!g || ![bd.x1, bd.y1, bd.x2, bd.y2].every(Number.isFinite)) continue;
+    // 入口柱の通り芯（到達辺を受ける梁の通り芯）。復路の基端は必ずここにある。往路は等長レーンのときだけここに基端がある
+    const entryAlong = L.vertical ? g.entryEnd.y : g.entryEnd.x;
+    const dir = Math.sign(L.run.back - L.run.baseB) || 1; // 基端から回転部へ向かう向き
+    // 続きの階段の破れ先（stairBeyond）は、N+1 の階段が下階のこの階段と足元が一致するときだけ対象
+    const continued = (graph.stairs ?? []).some(s => matchingStairBelow(s, graph, below) === stair);
+    const nosing = stair.nosing ?? 0;
+    const { s0, sB } = L.across;
+    const aSign = Math.sign(sB - s0) || 1; // 往路側（s0 側）の幅方向の向き
+    const next = [];
+    for (const h of out) {
+      const inside = (h.source === 'stairVoid' || (h.source === 'stairBeyond' && continued))
+        && h.x1 >= bd.x1 - EPS && h.x2 <= bd.x2 + EPS && h.y1 >= bd.y1 - EPS && h.y2 <= bd.y2 + EPS;
+      const [r0, r1] = L.vertical ? [h.y1, h.y2] : [h.x1, h.x2]; // 走行方向の範囲
+      // 基端側の辺が入口柱の通り芯に乗り、矩形がその通り芯から階段側（回転部側）にあるものだけ
+      if (!inside || Math.abs((dir < 0 ? r1 : r0) - entryAlong) > EPS) { next.push(h); continue; }
+      const [a0, a1] = L.vertical ? [h.x1, h.x2] : [h.y1, h.y2]; // 幅方向の範囲
+      const aSide = aSign > 0 ? [a0, Math.min(a1, sB)] : [Math.max(a0, sB), a1];
+      const bSide = aSign > 0 ? [Math.max(a0, sB), a1] : [a0, Math.min(a1, sB)];
+      // 往路側を面に狭めるのは等長レーン（両基端が入口柱）のときだけ。張り出しでは往路は通り芯をまたいで続く（途中に床の帯を作らない）
+      const pieces = [[bSide, L.run.baseB + dir * nosing, true], [aSide, L.run.baseB, L.columnBases]];
+      for (const [[p0, p1], edge, narrow] of pieces) {
+        if (p1 - p0 <= EPS) continue;
+        const [n0, n1] = !narrow ? [r0, r1] : dir < 0 ? [r0, Math.min(r1, edge)] : [Math.max(r0, edge), r1];
+        if (n1 - n0 <= EPS) continue;
+        next.push(L.vertical ? { ...h, x1: p0, x2: p1, y1: n0, y2: n1 } : { ...h, y1: p0, y2: p1, x1: n0, x2: n1 });
+      }
+    }
+    out = next;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- 下屋

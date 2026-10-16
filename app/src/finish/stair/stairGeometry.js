@@ -302,7 +302,10 @@ function entryIsSidePort(stair, spans) {
 // 従来どおり固定 WALL_INSET へフォールバックする。view別ルールは graph の有無で変えない。
 // 戻り値の sideInsetMm は幅方向の実際の逃げ量（graph 無指定・壁無しは WALL_INSET）の
 // 最大値——resolveStairSideLines が snapToFootprintEdge の許容差を動的に決めるのに使う（F2）。
-export function insetStairBounds(stair, b, view, graph = null, spans = null) {
+// startInsetMm … 始端（上り口辺）の壁が無いときの逃げ量（省略は WALL_INSET）。N+1 の見下げ（install 以外）だけ効く——
+//   床の縁（上階の床梁の外面＋壁仕上げ。partition.arrivalFaceMm）に往路の基端も揃える。install（側面の上り口を含む）は従来の WALL_INSET。
+export function insetStairBounds(stair, b, view, graph = null, spans = null, { startInsetMm = null } = {}) {
+  const startInset = view !== 'install' && startInsetMm != null ? startInsetMm : WALL_INSET;
   const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
   const face = graph ? faceRect(refreshCells(stair.cells, graph), graph) : null;
   const faceOr = (hasWall, faceVal, fallback) => (face && hasWall) ? faceVal : fallback;
@@ -321,21 +324,21 @@ export function insetStairBounds(stair, b, view, graph = null, spans = null) {
   const insetEntry = view !== 'install' || entryIsSidePort(stair, spans);
   switch (stair.upDirection) {
     case 'down':  // 始端=y1 終端=y2
-      if (insetEntry) y1 = faceOr(face?.hasWall.top,    face?.y1, y1 + WALL_INSET);
+      if (insetEntry) y1 = faceOr(face?.hasWall.top,    face?.y1, y1 + startInset);
       y2 = faceOr(face?.hasWall.bottom, face?.y2, y2 - WALL_INSET);
       break;
     case 'right': // 始端=x1 終端=x2
-      if (insetEntry) x1 = faceOr(face?.hasWall.left,  face?.x1, x1 + WALL_INSET);
+      if (insetEntry) x1 = faceOr(face?.hasWall.left,  face?.x1, x1 + startInset);
       x2 = faceOr(face?.hasWall.right, face?.x2, x2 - WALL_INSET);
       break;
     case 'left':  // 始端=x2 終端=x1
       x1 = faceOr(face?.hasWall.left,  face?.x1, x1 + WALL_INSET);
-      if (insetEntry) x2 = faceOr(face?.hasWall.right, face?.x2, x2 - WALL_INSET);
+      if (insetEntry) x2 = faceOr(face?.hasWall.right, face?.x2, x2 - startInset);
       break;
     case 'up':
     default:      // 始端=y2 終端=y1
       y1 = faceOr(face?.hasWall.top, face?.y1, y1 + WALL_INSET);
-      if (insetEntry) y2 = faceOr(face?.hasWall.bottom, face?.y2, y2 - WALL_INSET);
+      if (insetEntry) y2 = faceOr(face?.hasWall.bottom, face?.y2, y2 - startInset);
       break;
   }
   return { x1, y1, x2, y2, sideInsetMm };
@@ -1061,6 +1064,8 @@ export function uTurnPlanLayout(stair, graph, { aboveGraph = null } = {}) {
     hasColumn: !!layout.column,
     // 等長レーンで両基端が入口柱の面に出ている（baseA＝柱巻きの前縁 Q1・baseB＝柱の回転部側の面 Q3。基端の辺の外に壁が無い構成）
     columnBases: layout.columnBases === true,
+    // baseB を到達辺の面（Q3／上階の床梁の外面＋仕上げ）に採ったか。上階の床の縁を求める側（planSolids の床の穴）が使う
+    arrivalAtFace: layout.arrivalAtFace === true,
   };
 }
 
@@ -1698,6 +1703,16 @@ function buildOpenWell(stair, b, { view, detail, riser, breakOverhangMm = 0, col
   return { ...out, outline, arrows, breakLine };
 }
 
+// 見下げの枠の始端の逃げ量＝床の縁（partition.arrivalFaceMm）。枠の基端の辺が入口柱の通り芯（到達辺の梁の通り芯）にあるときだけ
+// （等長レーン。張り出し・短い復路で基端の辺が梁の通り芯と別の線なら、面は当てはまらないので null＝従来の WALL_INSET）。
+function startInsetFor(stair, b, partition) {
+  if (partition?.arrivalFaceMm == null) return null;
+  const vertical = stair.upDirection === 'up' || stair.upDirection === 'down';
+  const baseEdge = { down: b.y1, right: b.x1, left: b.x2 }[stair.upDirection] ?? b.y2;
+  const entryAlong = vertical ? partition.entryEnd.y : partition.entryEnd.x;
+  return Math.abs(baseEdge - entryAlong) < 1 ? partition.arrivalFaceMm : null;
+}
+
 /**
  * 階段の描画プリミティブ（ワールド座標）を生成する。タイプ別にディスパッチ。
  *
@@ -1744,7 +1759,7 @@ export function buildStairGeometry(stair, b, rawOpts) {
   // insetView … 設置枠の逃がし規則だけ別ビューのものを使う（既定は view と同じ）。
   // install の破れ線から先を upper ジオメトリで描き足すとき、登り口辺の逃がしが view で
   // 食い違うと実線（install）と点線（描き足し）が同一辺上で段差になるため、そこだけ揃える。
-  const { sideInsetMm, ...bi } = insetStairBounds(stair, b, opts.insetView ?? opts.view, opts.graph ?? null, opts.spans ?? null);
+  const { sideInsetMm, ...bi } = insetStairBounds(stair, b, opts.insetView ?? opts.view, opts.graph ?? null, opts.spans ?? null, { startInsetMm: startInsetFor(stair, b, opts.partition) });
   let geom;
   if (stair.type === StairType.STRAIGHT_LANDING) geom = buildStraightLanding(stair, bi, opts);
   else if (stair.type === StairType.SWITCHBACK)  geom = buildSwitchback(stair, bi, opts);

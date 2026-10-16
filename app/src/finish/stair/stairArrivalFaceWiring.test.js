@@ -109,6 +109,8 @@ test('【配線】aboveGraph は展開図・天伏・立体の各呼び出し元
   has('../../elevation/section/sectionProbe.js', 'upperGraph: opts.upperGraph ?? null,');
   has('../../elevation/elevationBand.js', 'const probeCtx = makeProbeContext(layers, { floorOffsetMm: bandFloorOffsetMm(room, graph), floorHeightMm: opts.floorHeightMm, upperGraph: opts.upperGraph ?? null });');
   has('../../elevation/section/sectionStair.js', "? stairTreadFootprints(stair, graph, { riser, insetView: 'install', aboveGraph }) : [];");
+  has('stairGeometry.js', 'const { sideInsetMm, ...bi } = insetStairBounds(stair, b, opts.insetView ?? opts.view, opts.graph ?? null, opts.spans ?? null, { startInsetMm: startInsetFor(stair, b, opts.partition) });');
+  has('../../plan/planSolids.js', 'const L = uTurnPlanLayout(stair, below, { aboveGraph: graph });');
   has('stairTreads.js', "view: 'upper', insetView, detail: false, riser, spans: measureStairSpans(stair, graph), laneGap: true, graph, aboveGraph, collectCells: true,");
   has('../../plan/planSolids.js', 'for (const t of stairTreadFootprints(stair, layer.graph, { riser: riserFor(stair), insetView, aboveGraph })) {');
   has('../../plan/planSolids.js', 'opts.lookUp === true && layer.role === \'self\' ? stairsContinuedAbove(layer, layers, opts) : null, upperGraph),');
@@ -160,4 +162,41 @@ test('T2【立体の段】planSolids の below 層の stairTread の最終マス
   // 対照: 上階（self）に梁が無ければ Q3
   const noBeam = [{ graph: new PlanGraph(new Plane('p3', 3000, '2階', 2, 1)), role: 'self', floorZMm: 2800 }, layers[1]];
   assert.ok(Math.abs(lastEdge(noBeam) - Q3) < EPS, `Q3 ${lastEdge(noBeam)}`);
+});
+
+// ---- S3: 見下げの枠の始端（insetStairBounds の startInsetMm）を床の縁に揃える
+import { insetStairBounds, buildStairGeometry } from './stairGeometry.js';
+import { roomBounds } from '../gridCells.js';
+import { measureStairSpans } from './stairClassify.js';
+
+test('insetStairBounds: startInsetMm は見下げ（install 以外）の始端だけを動かす。install・壁ありは従来どおり', () => {
+  const { graph, stair } = fixture();
+  const b = roomBounds(stair.cells, graph);
+  const dflt = insetStairBounds(stair, b, 'upper', graph);
+  assert.ok(Math.abs(dflt.y2 - (4000 - 57.5)) < EPS, `既定 ${dflt.y2}`); // up の始端は y2
+  const moved = insetStairBounds(stair, b, 'upper', graph, null, { startInsetMm: 72.5 });
+  assert.ok(Math.abs(moved.y2 - (4000 - 72.5)) < EPS, `指定 ${moved.y2}`);
+  assert.equal(moved.y1, dflt.y1, '終端・幅方向は動かない');
+  assert.equal(moved.x1, dflt.x1);
+  const inst = insetStairBounds(stair, b, 'install', graph, null, { startInsetMm: 72.5 });
+  assert.equal(inst.y2, insetStairBounds(stair, b, 'install', graph).y2, 'install は動かない');
+  // 基端の辺に壁があれば壁面のまま（startInsetMm は壁が無いときの逃げ量）
+  const { graph: g2, stair: s2 } = fixture();
+  const ks = [...s2.cells].map(k => k.split(':'));
+  const cl = id => g2.shapeMap.get(id);
+  const ls = [...new Set(ks.flatMap(([l, , r]) => [l, r]))].map(cl).sort((x, y) => x.value - y.value);
+  const ts = [...new Set(ks.flatMap(([, t, , bb]) => [t, bb]))].map(cl).sort((x, y) => x.value - y.value);
+  g2.addWall(ts[ts.length - 1], -72.5, false, ls[0], 0, ls[ls.length - 1], 0, { isRoomWall: true, wallFinish: 12.5 });
+  const b2 = roomBounds(s2.cells, g2);
+  const withWall = insetStairBounds(s2, b2, 'upper', g2, null, { startInsetMm: 72.5 });
+  assert.equal(withWall.y2, insetStairBounds(s2, b2, 'upper', g2).y2, '壁ありは壁面のまま');
+});
+
+test('見下げ（N+1）の port:entry 線は床の縁（面）に出る。aboveGraph なし・install は従来の位置', () => {
+  const { graph, stair } = fixture();
+  const lineAt = (opts) => buildStairGeometry(stair, roomBounds(stair.cells, graph), {
+    riser: 100, spans: measureStairSpans(stair, graph), laneGap: true, graph, detail: true, ...opts,
+  }).outline.filter(s => s.port === 'entry').map(s => s.y1);
+  assert.deepEqual(lineAt({ view: 'upper', aboveGraph: aboveWithBeam() }).map(v => Math.round(v * 10) / 10), [FACE]);
+  assert.deepEqual(lineAt({ view: 'upper' }).map(v => Math.round(v * 10) / 10), [Q3]);
 });
