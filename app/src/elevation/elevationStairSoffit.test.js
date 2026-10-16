@@ -511,3 +511,37 @@ test('【指示2026-10-16】openingPanelPrimitives: 上階の開口。帯の天�
   const noClipUpper = upperOf(noClip);
   assert.ok(noClipUpper.length > 0 && noClipUpper.every(p => p.dash !== 'dashed' && p.x1 !== p.x2), JSON.stringify(noClipUpper));
 });
+
+test('【指示2026-10-16】stairFaceSequence seq5/6: 到達辺（壁のない端）で裏面が上階の天井より高いとき、体裁の天井断面線を面の端の外へ延ばす（面の壁が端の外へ続く所まで裏面の高さ→上階の天井へ立ち下がり→延長の端まで水平）。裏面が上階の天井以下・端に壁があるときは延ばさない', () => {
+  const build = (chUpperAbsMm, walls) => {
+    const n = stairFloor('p1', 1, { walls }), u = stairFloor('p2', 2, { walls: true });
+    const faces = composeRoomFaces(n.room, n.graph, { keepWallLessFaces: true });
+    const layers = buildBandLayers(n.graph, { above: [{ graph: u.graph, floorHeightMm: FLOOR_H }] });
+    const soffit = stairSoffitAbove(sofArgs(n, u));
+    layers.find(l => l.role === 'self').stairSoffit = { roomId: n.room.id, soffit };
+    const entries = stairFaceSequence(n.stair, faces, n.graph, {
+      floorHeight: FLOOR_H, chUpperAbsMm, chLowerMm: 2400, upperGraph: u.graph, layers, stairSoffit: soffit, wallLessEndExtendModelMm: 150,
+    });
+    return entries.find(e => e.seqNo === '5');
+  };
+  const zEnd = FLOOR_H + 12 * RISER - DZ; // 到達辺の裏面（総蹴上の天端 − dz）≈ 4416
+  // 壁なし（到達辺が開く）・上階天井 4000 < 裏面 4416: 到達辺（landingEnd=right なので左端）の外へ延びる。壁が続かないので立ち下がりは面の端
+  const e = build(4000, false);
+  // 到達辺は踊り場の反対側（この fixture は landingEnd=left＝到達辺は右端）。どちらでも通るよう端の側で読む
+  const arrivalLeft = e.landingEnd !== 'left';
+  assert.equal(arrivalLeft ? e.face.hasWallAtLocal0 : e.face.hasWallAtLocalRun, false, '前提: 到達辺に壁なし');
+  const run = e.face.run;
+  const p = e.ceilingProfile;
+  const outer = arrivalLeft ? p.slice(0, 3) : p.slice(-3).reverse(); // 延長の端→面の端→立ち下がりの順
+  assert.deepEqual(outer.slice(0, 2), arrivalLeft ? [[-150, 4000], [0, 4000]] : [[run + 150, 4000], [run, 4000]], '延長の端から面の端まで上階の天井');
+  near(outer[2][0], arrivalLeft ? 0 : run, '面の端で立ち下がる（壁が続かないので面の端）'); near(outer[2][1], zEnd, '裏面の高さへ', 0.05);
+  assert.ok(p.every((q, i) => i === 0 || q[0] >= p[i - 1][0] - 1e-9), 'x は昇順');
+  assert.ok(!p.some((q, i) => i > 0 && Math.abs(q[0] - p[i - 1][0]) < 1e-9 && Math.abs(q[1] - p[i - 1][1]) < 1e-9), '同じ点の重複なし');
+  near(drawnFloorProfileZAt(p, arrivalLeft ? -100 : run + 100), 4000, '面の外は上階の天井');
+  // 失敗系: 裏面が上階天井（4800）以下なら延ばさない／到達辺に壁があれば延ばさない
+  const inside = prof => prof[0][0] >= -1e-9 && prof[prof.length - 1][0] <= run + 1e-9;
+  assert.ok(inside(build(4800, false).ceilingProfile), '裏面が上階天井以下なら延長なし');
+  const walled = build(4000, true);
+  assert.equal(arrivalLeft ? walled.face.hasWallAtLocal0 : walled.face.hasWallAtLocalRun, true, '前提: 到達辺に壁');
+  assert.ok(inside(walled.ceilingProfile), '壁のある端は延ばさない');
+});
