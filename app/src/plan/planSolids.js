@@ -38,6 +38,7 @@
 import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, edgeKey } from '@core';
 import { beamDepthMm } from '../elevation/section/sectionStructure.js';
 import { kneeDropZRangesAt } from '../elevation/section/sectionHits.js';
+import { stairUnderReturnSoffit } from '../elevation/section/sectionProbe.js';
 import { columnWrapSolids, wallConcealRange } from '../finish/columnWrap.js';
 import { kneeDropRecordsOnAxis, effectiveCeilingHeight } from '../finish/kneeDropWall.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
@@ -128,9 +129,11 @@ function columnSolids(layer) {
  * 壁1本を、腰壁・垂れ壁レコードの端で区間に割り、区間ごとに高さ範囲（1件、アキなら2件）を立体にする。
  * 高さは展開図と同じ `kneeDropZRangesAt` を共有する（規則を複製しない）。同じ高さ範囲が続く隣の区間は結合する
  * （隅の取り合いで壁端がレコード端を食い込む分の細片を作らない）。
- * 壁の高さの上限は壁ごとに1つ（wallCeilZ。両側の部屋の天井高の低い方、無ければ層の天井）。隔て壁の斜めの天端（wallTop）は S7 まで扱わない。
+ * 壁の高さの上限は壁ごとに1つ（wallCeilZ。両側の部屋の天井高の低い方、無ければ層の天井。復路下の壁は裏面＝underReturnTops）。
+ * 隔て壁の斜めの天端（wallTop）は S7 まで扱わない。
+ * @param {Map<string, number>} [underReturnTops] 復路下の壁の天端（壁 id → 絶対 z。underReturnWallTops）
  */
-function wallSolids(layer, cellToRoom) {
+function wallSolids(layer, cellToRoom, underReturnTops = new Map()) {
   const graph = layer.graph;
   const hasRecords = (graph.kneeDropWalls?.size ?? 0) > 0;
   const out = [];
@@ -146,7 +149,7 @@ function wallSolids(layer, cellToRoom) {
       : [];
     const bounds = [...new Set([wLo, ...cuts, wHi])].sort((a, b) => a - b);
     const spans = []; // {lo, hi, ranges}
-    const ceilZ = wallCeilZ(layer, wall, cellToRoom);
+    const ceilZ = Math.min(wallCeilZ(layer, wall, cellToRoom), underReturnTops.get(wall.id) ?? Infinity);
     for (let i = 0; i + 1 < bounds.length; i++) {
       const lo = bounds[i], hi = bounds[i + 1];
       if (!(hi - lo > 1e-6)) continue;
@@ -173,6 +176,34 @@ function wallSolids(layer, cellToRoom) {
     }
   }
   return mergeTouchingWalls(out, meta);
+}
+
+/**
+ * 復路下の壁（stairPartitionWalls.js generateStairUnderReturnWalls）の天端＝復路レーンの裏面を、壁 id → 絶対 z で返す。
+ * 供給源は展開図（sectionProbe.js addUnderReturnTops）と同じ stairUnderReturnSoffit の wallTopZ（壁の軸上・区間の中央で
+ * 厚み方向 3 点の裏面の最小）。裏面で止めないと壁が部屋の天井まで立ち、見下げで踏面（裏面より上）より高くなって
+ * 「面材が勝つ」規則で隠れず、上階の床の穴ごしに下階レイヤの線として現れる（moku4-3 2階の踊り場前縁 y=−8247.5 の線。
+ * ユーザー裁定 2026-10-17「復路下の壁の天端を planSolids でも裏面で止める」）。
+ * 階高は直上の層との差。直上の層が無い最上の層（見下げの自階）は層の蹴上（riserFor）×総段数で戻す（riserOf の逆算。明示の
+ * stair.riser はそのまま使われる）。蹴上が決まらない・鉄骨階段・裏面が組めない壁は載せない＝従来どおり天井高。
+ * @param {SolidLayer} layer
+ * @param {(stair:object)=>number|null} riserFor 層の蹴上
+ * @param {number|undefined} upperZ 直上の層の FL（無ければ undefined）
+ * @param {object|null} aboveGraph 直上の層の graph（復路の到達辺。stairTreadSolids と同じ）
+ * @returns {Map<string, number>}
+ */
+function underReturnWallTops(layer, riserFor, upperZ, aboveGraph = null) {
+  const tops = new Map();
+  for (const stair of layer.graph.stairs ?? []) {
+    const riser = riserFor(stair);
+    const floorHeight = upperZ !== undefined ? upperZ - layer.floorZMm
+      : (Number.isFinite(riser) ? riser * Math.max(1, stair.totalSteps ?? 1) : null);
+    if (!Number.isFinite(floorHeight) || floorHeight <= 0) continue;
+    const found = stairUnderReturnSoffit(stair, layer.graph, { floorHeight, floorZMm: layer.floorZMm, aboveGraph });
+    if (!found || found.wallTopZ == null) continue;
+    for (const w of found.walls) tops.set(w.id, found.wallTopZ);
+  }
+  return tops;
 }
 
 /**
@@ -559,7 +590,7 @@ export function planSolids(layers, opts = {}) {
       : stair => opts.riserOf?.(stair) ?? null;
     const underside = opts.lookUp === true && layer.role === 'above'
       ? stairUndersideOf(layer, riserForLayer, opts.belowGraphOf?.(layer.graph) ?? null) : null;
-    const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom), ...columnSolids(layer),
+    const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom, underReturnWallTops(layer, riserForLayer, upperZ, upperGraph)), ...columnSolids(layer),
       ...beamSolids(layer), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
         opts.lookUp === true && layer.role === 'self' ? stairsContinuedAbove(layer, layers, opts) : null, upperGraph),
       ...(underside?.soffits ?? []),
