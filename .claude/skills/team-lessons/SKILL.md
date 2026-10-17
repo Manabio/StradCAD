@@ -213,6 +213,11 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   （`structAnchorProbe.mjs`・`finishTopologyProbe.mjs`）。(3) 構造再計算を伴うなら本番と同じ順序で収束まで
   回す（`sweepOrder.mjs sweepUntilConverged`。`.claude/structural-model.md`「probeは本番の反映パスと同じ順序で
   回す」節。単純な2回再計算では moku4 の3階の柱が途中の本数で止まり「差分なし」を誤報する）。
+  (4) 展開図の golden（`dumpElevFigure.mjs` の golden/golden11/golden13）も同型——保存データのまま（`--regen` でも
+  壁の再生成まで）で構造再計算を通らないため、読込み時の再計算で生まれる部材（292334f 以降の踊り場受け梁 LG）が
+  帯に入らず、構造梁レイヤの遮蔽欠落が 20 日間検出されなかった（2026-10-17 13.stq「7」C）。構造側で部材の帰属階や
+  生成条件を変えたら、その graph を読む下流（展開図の層スタック）を本番同型の基準（`--regen --struct` の
+  `golden13-struct`）で diff する。
 
 ### 委譲先が、指定した置き換えを形だけ満たして「達成」と報告する（2026-09-20 仕上げ系の種別ベース化で2件）
 
@@ -975,3 +980,15 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
 - **正しい動き**: `planSolidsLayerPrimitives` を本番同型（読込みと同じ全階の壁 sweep → 再計算）で dump して `source.kind/id`
   で線の正体を確定する。保存データのままの再計算は「壁 sweep 前」という別の経路なので、出た部材は潜在経路の証拠として
   別に報告する。描画の高さ（天端）を持つ要素は、展開図が持つ同じ供給源（`stairUnderReturnSoffit`）を平面でも使う。
+
+### 既存の層選び（`wallsBlockingCut`）を遮蔽に流用し、2 層帯で別の階の壁が梁を隠した（2026-10-17 梁の見え掛かりの遮蔽）
+
+- **症状**: 構造梁の見え掛かりを壁で隠す規則 A を足すとき、遮蔽に使う壁を既存の `wallsBlockingCut` と同じ
+  「層の床が描画 z 範囲の上限より下」だけで選んだ。階段帯は上限が上階の天井なので上階の層の壁も入り、2 階の壁が
+  1 階の踊り場梁（z 990..1190）の区間を消し、逆に 1 階の壁が 2 階の梁（天 4090）も消した。実データ・golden は
+  すべて一致していて、QA が 2 層帯の反例を実行して初めて出た。
+- **誤った直感**: 「既存の関数と同じ層の選び方なら安全」。golden 全一致＝規則が正しい。
+- **正しい動き**: その関数のコメント自身が「足元 z はプロキシ」と断っている。遮蔽（A が B を隠す）に流用するときは
+  隠す側と隠される側の z 範囲が重なるか（壁＝その層の床〜直上の層の床、梁＝天−成〜天。完全に覆うときだけ隠す）を
+  必ず判定し、2 層帯（hiZ が上階の天井）で「別の層の壁は隠さない」反例テストを先に書く。golden の一致は
+  「その構成が実データに無い」ことしか示さない。
