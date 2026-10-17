@@ -30,6 +30,7 @@ scripts/probe/*/
 !scripts/probe/golden-roof/
 !scripts/probe/golden/
 !scripts/probe/golden13/
+!scripts/probe/golden13-struct/
 !scripts/probe/golden-regen/
 !scripts/probe/golden-stair-plan/
 !scripts/probe/golden-elev-moku16/

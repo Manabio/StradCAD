@@ -10,6 +10,10 @@
 //            階ごとの壁数と隔て壁数を標準エラーへ出す（再生成で壁が実際に入ったことの裏取り）。
 //   --move   --regen の前に通り芯（または中心線）を mm だけ動かす（elevBandDump.mjs moveCenterLine。
 //            commitCLMoveOp 経由。構造再計算は走らない）。viewEntryProbe.mjs の帯比較の基準側に使う。
+//   --struct  --regen の後に、本番の反映パスと同じ全階の構造再計算（sweepOrder.mjs sweepUntilConverged 'desc'）を
+//            収束まで回してから帯を描く。保存時点に無い部材（読込み時の再計算で生まれる LG 等）を含めて基準を
+//            採るため（13.stq「7」C の踊り場受け梁 LG は保存データに無く、--struct 無しの golden では検出できなかった）。
+//            構造 golden（golden13-struct）の採取に使う。--regen と併用する。
 //   --strip-struct  壁の再生成のあと、全階から柱・梁を除いてから描く（viewEntryProbe.mjs が柱・梁の差を切り分けるのに使う）。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,13 +21,18 @@ import { loadDocument } from './loadDoc.mjs';
 import { dumpFloorBands, moveCenterLine, stripStructuralMembers } from './elevBandDump.mjs';
 
 const allArgs = process.argv.slice(2);
-const unknownOption = allArgs.find(a => a.startsWith('-') && a !== '--regen' && a !== '--strip-struct' && !a.startsWith('--move='));
+const unknownOption = allArgs.find(a => a.startsWith('-') && a !== '--regen' && a !== '--strip-struct' && a !== '--struct' && !a.startsWith('--move='));
 if (unknownOption) {
   console.error(`unknown option: ${unknownOption}`);
   process.exit(1);
 }
 const regen = allArgs.includes('--regen');
 const stripStruct = allArgs.includes('--strip-struct');
+const recomputeStruct = allArgs.includes('--struct');
+if (recomputeStruct && !allArgs.includes('--regen')) {
+  console.error('--struct は --regen と併用する（壁の再生成のあとに構造を再計算する）');
+  process.exit(1);
+}
 const moveSpec = allArgs.find(a => a.startsWith('--move='))?.slice('--move='.length) ?? null;
 const rawArgs = allArgs.filter(a => !a.startsWith('-'));
 const outDir = rawArgs[0] ?? path.join(import.meta.dirname, 'golden');
@@ -57,6 +66,14 @@ if (regen) {
     const partitions = [...graph.walls].filter(w => isStairPartitionWall(w, lines)).length;
     console.error(`[regen] ${p.name}: 壁 ${before}→${graph.walls.length}・隔て壁 ${partitions}`);
   }
+}
+if (recomputeStruct) {
+  const { floorSwapManager } = await import('../../src/storage/FloorSwapManager.js');
+  const { sweepUntilConverged } = await import('./sweepOrder.mjs');
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  const sweeps = await sweepUntilConverged(project, 'desc', 8,
+    (i, changed) => console.error(`[struct] sweep ${i}: ${changed.join(' ') || '収束'}`));
+  if (sweeps == null) console.error('[struct] 8 回で収束しなかった');
 }
 if (stripStruct) for (const g of project.graphMap.values()) stripStructuralMembers(g);
 const tabs = project.orderedTabs;
