@@ -18,6 +18,7 @@
  *   (ii) O が面材（SURFACE_KINDS＝floor・roof・stairTread）で top(O,p) >= top(S,p)-EPS（面材は同じ高さでも勝つ。梁の天端が
  *        床面・屋根面と同点＝その下。S5 で屋根を加えた）
  *   (iii) O も S も cut（同じ高さで隠し合い、和の輪郭だけが残る）
+ *   (iv) O も S も壁で同じ層、top(O,p) >= top(S,p)-EPS（取り合いの角を互いに延ばした重なりの内側の線を消す。below の壁同士も）
  *   top は cut の立体なら cutZ、below なら zHi（zAt があれば zAt(p)）。S 自身・above は遮蔽物にしない。
  *   (iii) の補足: cut 同士で S の線が O の境界の上にあるときは、面を接する（S と O の内側が線の反対側）なら共有面なので隠し、
  *   同じ側に重なる外周なら index の小さい方だけが描く（重複線を出さない）。
@@ -109,6 +110,36 @@ function mergeCollinear(segs) {
 
 const toEdge = (g, [lo, hi]) => (g.isVertical ? [g.value, lo, g.value, hi] : [lo, g.value, hi, g.value]);
 
+/**
+ * 重なる矩形を含む群を、重ならない矩形へ分解する（外形を作る前に。rectsOutlineSegments は「重なりなし」前提で共有辺を
+ * 偶数回で打ち消すので、重なった同じ側の辺が消えて本物の外形線が欠けるため）。y の境界で帯に切り、帯ごとに x の区間を結んだ和を
+ * 矩形にする。重なりが無ければそのまま返す（出力不変）。
+ */
+function disjointRects(rects) {
+  let overlap = false;
+  for (let i = 0; i < rects.length && !overlap; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i], b = rects[j];
+      if (Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) > GEO_TOL && Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) > GEO_TOL) { overlap = true; break; }
+    }
+  }
+  if (!overlap) return rects;
+  const ys = [...new Set(rects.flatMap(r => [r.y1, r.y2]))].sort((a, b) => a - b);
+  const out = [];
+  for (let k = 0; k + 1 < ys.length; k++) {
+    const y1 = ys[k], y2 = ys[k + 1];
+    const ivs = rects.filter(r => r.y1 <= y1 + GEO_TOL && r.y2 >= y2 - GEO_TOL).map(r => [r.x1, r.x2]).sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const iv of ivs) {
+      const last = merged[merged.length - 1];
+      if (last && iv[0] <= last[1] + GEO_TOL) last[1] = Math.max(last[1], iv[1]);
+      else merged.push([...iv]);
+    }
+    for (const [x1, x2] of merged) out.push({ x1, y1, x2, y2 });
+  }
+  return out;
+}
+
 /** footprint を検証して正規化し、輪郭の辺 [x1,y1,x2,y2][] を作る。不正・面積0は null。 */
 function prepareFootprint(fp) {
   if (!fp) return null;
@@ -130,7 +161,7 @@ function prepareFootprint(fp) {
   const rects = fp.rects.filter(r => r && [r.x1, r.y1, r.x2, r.y2].every(Number.isFinite)).map(normalizeRect).filter(isValidRect);
   if (rects.length === 0) return null;
   const holes = (fp.holes ?? []).filter(r => r && [r.x1, r.y1, r.x2, r.y2].every(Number.isFinite)).map(normalizeRect).filter(isValidRect);
-  const segs = [...rectsOutlineSegments(rects), ...rectsOutlineSegments(holes)];
+  const segs = [...rectsOutlineSegments(disjointRects(rects)), ...rectsOutlineSegments(disjointRects(holes))];
   const edges = mergeCollinear(segs);
   return { footprint: holes.length > 0 ? { rects, holes } : { rects }, edges };
 }
@@ -207,7 +238,7 @@ function prepareSolid(s, cutZ, eps) {
   return {
     solid: s, cls, kind: s.kind, footprint: prepared.footprint, edges: prepared.edges,
     bounds: footprintBounds(prepared.footprint), lines, marks: validMarks(s.marks), zAt,
-    slopedCut: cls === 'cut' && zAt !== null, layerZ, windowed: layerZ < 0, rank: 0,
+    slopedCut: cls === 'cut' && zAt !== null, layerZ, srcLayer: s.source?.viewLayerFloorZ ?? layerZ, windowed: layerZ < 0, rank: 0,
   };
 }
 
@@ -478,12 +509,20 @@ function closeNarrowGaps(S, merged, line, cands, ctx) {
   });
 }
 
-/** O が点 (x,y) で S（高さ tS・クラス cS）を隠す z 規則: (i) 高い方が勝つ (ii) 面材（床・屋根）は同じ高さでも勝つ (iii) cut 同士は隠し合う */
-function hidesAt(O, x, y, tS, cS, ctx) {
+/** 同じ層の壁同士か（規則 (iv) の対象）。見上げの鏡像（planSectionUp.js mirrorSolid）は layerFloorZ を 0 にして元を viewLayerFloorZ に残すので、それで層を見分ける */
+const sameLayerWalls = (O, S) => O.kind === 'wall' && S.kind === 'wall' && O.srcLayer === S.srcLayer;
+
+/**
+ * O が点 (x,y) で S（高さ tS・クラス cS）を隠す z 規則: (i) 高い方が勝つ (ii) 面材（床・屋根）は同じ高さでも勝つ (iii) cut 同士は隠し合う
+ * (iv) 同じ層の壁同士は、相手の天端が自分以上なら（同じ高さでも）相手の厳密な内部の線を隠す（取り合いの角を互いに延ばした
+ * 重なりの内側の線を消す。呼び出し側が厳密な内部だけで呼ぶので、面の上の線＝境界は残る）
+ */
+function hidesAt(O, x, y, tS, cS, ctx, S) {
   const { cutZ, eps } = ctx;
   const tO = topAt(O, cutZ, x, y);
   if (tO > tS + eps) return true; // (i)
   if (SURFACE_KINDS.includes(O.kind) && tO >= tS - eps) return true; // (ii)
+  if (sameLayerWalls(O, S) && tO >= tS - eps) return true; // (iv)
   return cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut'; // (iii)
 }
 
@@ -492,9 +531,9 @@ function hidesAt(O, x, y, tS, cS, ctx) {
  * （marks の anchor）が**同じ可視判定**を使う。(nx,ny) は線の法線（共有面の判定用。点だけのときは 0,0＝共有面の特例なし）。
  */
 function buildVisibleAt(S, cands, ctx, nx, ny) {
-  const { cutZ, inWindow } = ctx;
+  const { cutZ, inWindow, eps } = ctx;
   // O が点 (x,y)（O の厳密な内部）で S を隠すか（hidesAt）
-  const hides = (O, x, y, tS, cS) => hidesAt(O, x, y, tS, cS, ctx);
+  const hides = (O, x, y, tS, cS) => hidesAt(O, x, y, tS, cS, ctx, S);
 
   // 遮蔽物の**和の内部**: p がどの遮蔽物の厳密内部でもなくても、p の斜め4点（±NUDGE）がそれぞれ何らかの遮蔽物の
   // 厳密内部にあり、その遮蔽物が上の規則で隠すなら p は隠れる（4点すべてで成立したときだけ）。隣り合う壁の継ぎ目・
@@ -518,7 +557,7 @@ function buildVisibleAt(S, cands, ctx, nx, ny) {
     for (const O of cands) {
       if (insideRec(O, x, y)) {
         if (hides(O, x, y, tS, cS)) return false;
-      } else if (cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut' && O.edges.some(e => onSegment(e, x, y))) {
+      } else if ((sameLayerWalls(O, S) && topAt(O, cutZ, x, y) >= tS - eps || cS === 'cut' && clsAt(O, cutZ, x, y) === 'cut') && O.edges.some(e => onSegment(e, x, y))) {
         if (sharedFaceHidden(S, O, x, y, nx, ny)) return false;
       }
     }

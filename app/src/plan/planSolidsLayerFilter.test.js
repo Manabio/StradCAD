@@ -136,7 +136,11 @@ test('S6c 下階の層は全種別（壁・柱・床・梁）を細線で描く�
   const prims = planSolidsLayerPrimitives({ graph: self.graph, belowPeek: { graph: below.graph, floorHeightMm: 2800 }, cutZ: CUT });
   const lower = prims.filter(p => (p.source.layerFloorZ ?? 0) < 0);
   const kindsOf = ps => new Set(ps.map(p => p.source.kind));
-  for (const k of ['wall', 'column', 'floor', 'beam']) assert.ok(kindsOf(lower).has(k), `下階の ${k} の線が出る: ${[...kindsOf(lower)]}`);
+  // 床の外形は下階の壁の帯の下に収まる。壁が取り合いの角を閉じる（planSolids.js withJoinedCorners）ので、角の隙間から床の線が
+  // 覗くことはない（旧: 角の隙間の 57.5mm 以下の断片で floor が出ていたのは隙間の副産物）。床の線そのものは planSectionFigure.test.js が見る
+  for (const k of ['wall', 'column', 'beam']) assert.ok(kindsOf(lower).has(k), `下階の ${k} の線が出る: ${[...kindsOf(lower)]}`);
+  assert.equal(BELOW_DRAWN_KINDS, 'all', '下階の層の描画種別に floor は含まれる（出ないのは線が壁に隠れるから）');
+  assert.ok(!kindsOf(lower).has('floor'), `壁が角を閉じるので下階の床の線は壁の下に隠れる: ${[...kindsOf(lower)]}`);
   assert.ok(lower.every(p => p.cls === 'below' && p.weight === 'thin' && p.source.layerFloorZ === -2800), '下階の層は全部 below（細線）。cut は無い');
   for (const p of lower) {
     const [x1, y1, x2, y2] = p.points;
@@ -330,12 +334,13 @@ test('見上げ: 自階の天井の外形は細線で出るが、壁・床は出
   assert.ok(prims.every(p => !('viewLayerFloorZ' in p.source)));
 });
 
-test('見上げ: 壁のある部屋では天井の外形は壁（切断）が隠す。壁そのものは描かない（ShapesLayer の仕事）。残るのは壁の取り合いの隅の短い断片だけ', () => {
+test('見上げ: 壁のある部屋では天井の外形は壁（切断）が隠す。壁そのものは描かない（ShapesLayer の仕事）。壁が取り合いの角を閉じるので隅の断片も出ない', () => {
   const { self, abovePeek } = upScene();
   const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
   assert.ok(!prims.some(p => p.source.kind === 'wall' && (p.source.layerFloorZ ?? 0) === 0), '自階の壁は描かない');
+  // 旧: 壁が互いの面で止まり、隅の 57.5mm 以下の断片だけが天井の外形として覗いていた（角の隙間）。角を閉じた今は 0 本
   const ceil = prims.filter(p => p.source.kind === 'ceiling');
-  assert.ok(ceil.length > 0 && ceil.every(p => Math.hypot(p.points[2] - p.points[0], p.points[3] - p.points[1]) <= 57.5 + 1e-6), `隅の 57.5mm 以下の断片だけ: ${JSON.stringify(sortedPts(ceil))}`);
+  assert.deepEqual(sortedPts(ceil), [], `天井の外形は壁が全部隠す: ${JSON.stringify(sortedPts(ceil))}`);
 });
 
 /** 4000 角の 1 部屋に、全体の傾斜天井（低い側 2400・ライズ 2000・右へ上がる）を付けた自階。壁なし。 */

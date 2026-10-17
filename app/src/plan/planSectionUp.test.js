@@ -16,6 +16,16 @@ const upperBeam = () => solid('beam', { rects: [rect(500, 1000, 3500, 1100)] }, 
 const outline = (x1, y1, x2, y2) => [[x1, y1, x2, y1], [x1, y2, x2, y2], [x1, y1, x1, y2], [x2, y1, x2, y2]]
   .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]);
 
+test('見上げでも壁の「片側だけ描く」「内部の線を隠す」は元の層ごと: 自階と上階の壁が同じ面を重ねても上階の線は消えない。上階の壁同士は 1 本', () => {
+  const own = solid('wall', { rects: [rect(0, 0, 1000, 100)] }, 0, 2400, { id: 'own', layerFloorZ: 0 });
+  const up1 = solid('wall', { rects: [rect(0, 0, 1000, 100)] }, H, H + 2400, { id: 'up1', layerFloorZ: H });
+  const up2 = solid('wall', { rects: [rect(500, 0, 1500, 100)] }, H, H + 2400, { id: 'up2', layerFloorZ: H });
+  const lines = planSectionFigureUp([own, up1], C).filter(p => p.source.id === 'up1');
+  assert.ok(lines.length > 0, '別の層の自階の壁と重なっても上階の壁の線は残る');
+  const both = planSectionFigureUp([up1, up2], C);
+  assert.equal(both.filter(p => p.points[1] === 0 && p.points[3] === 0).reduce((n, p) => n + Math.abs(p.points[2] - p.points[0]), 0), 1500, '上階の壁同士の重なる面 y=0 は 1 本（総延長 1500）');
+});
+
 test('天井が上階の梁を隠し、天井を外すと梁が細線（below・thin）で出る。梁の外形 4 辺', () => {
   const withCeiling = planSectionFigureUp([ceilingAt(2400), upperFloor(), upperBeam()], C);
   assert.equal(linesOf(withCeiling, null, 'beam').length, 0, '天井（下端 2400 ≦ 梁の下端 2600）が梁を隠す');

@@ -111,14 +111,16 @@ function southWallOf(graph, axis = 4000) {
 const wallSolidsOf = (graph, wall) => ofKind(planSolids(self(graph)), 'wall')
   .filter(s => s.source.id === wall.id).sort((a, b) => a.source.part - b.source.part);
 
-test('壁: 全高の壁は FL〜天井。厚み方向は隠せる材の範囲（材＋下地）、長さは壁の端から端', () => {
+// 注: 壁の端は直交壁の帯（隅の取り合いで互いの面で止めた）に接していれば、その帯の向こう側の面（外面）まで立体を延ばす
+// （withJoinedCorners。出隅の角を埋める）。単独の部屋の南の壁（レコード上は 57.5..3942.5）の立体は -45..4045（西・東の壁の外面）。
+test('壁: 全高の壁は FL〜天井。厚み方向は隠せる材の範囲（材＋下地）、長さは壁の端から端（隅は直交壁の外面まで）', () => {
   const { graph } = makeRoomGraph(0, 0, 4000, 4000);
   const walls = ofKind(planSolids(self(graph)), 'wall');
   assert.equal(walls.length, 4);
   assert.ok(walls.every(s => s.zLo === 0 && s.zHi === 2400));
   const south = wallSolidsOf(graph, southWallOf(graph));
   assert.equal(south.length, 1);
-  assert.deepEqual(south[0].footprint, { rects: [rect(57.5, 3942.5, 3942.5, 4045)] });
+  assert.deepEqual(south[0].footprint, { rects: [rect(-45, 3942.5, 4045, 4045)] });
 });
 
 test('壁: 腰壁（knee）は FL〜腰高さ、垂れ壁（drop）は垂れ下端〜天井', () => {
@@ -151,8 +153,8 @@ test('壁: 腰壁レコードの端で壁を分割する（1本の壁が複数�
   const parts = wallSolidsOf(g.graph, wall);
   assert.equal(parts.length, 2, 'レコード端（x=4000）で 2 区間');
   assert.deepEqual(parts.map(s => [s.footprint.rects[0].x1, s.footprint.rects[0].x2, s.zLo, s.zHi]), [
-    [57.5, 4000, 0, 800],
-    [4000, 7942.5, 0, 2400],
+    [-45, 4000, 0, 800],
+    [4000, 8045, 0, 2400],
   ]);
 });
 
@@ -185,7 +187,7 @@ test('壁: 隅で壁端がレコード端の外へはみ出しても細片を作
   assert.equal(Math.max(wall.coord1, wall.coord2), 8057.5, '前提: 壁端がレコード端 8000 の外へ 57.5');
   const parts = wallSolidsOf(g.graph, wall);
   const spans = parts.map(s => [s.footprint.rects[0].x1, s.footprint.rects[0].x2, s.zLo, s.zHi]);
-  assert.deepEqual(spans, [[57.5, 4000, 0, 3000], [4000, 8057.5, 2000, 3000]]);
+  assert.deepEqual(spans, [[-45, 4000, 0, 3000], [4000, 8057.5, 2000, 3000]]);
   assert.ok(spans.every(([a, b]) => b - a >= 150), '長さ150未満の細片が無い');
 });
 
@@ -197,7 +199,7 @@ test('壁: 2セルとも同じ腰壁レコードを持つ1本の壁は、同じ�
   g.graph.setKneeDropWall(edgeKey(wall.axisCL.id, g.cx[1].id, g.cx[2].id), { knee: { topHeight: 800 } });
   const parts = wallSolidsOf(g.graph, wall);
   assert.equal(parts.length, 1);
-  assert.deepEqual([parts[0].footprint.rects[0].x1, parts[0].footprint.rects[0].x2, parts[0].zLo, parts[0].zHi], [57.5, 7942.5, 0, 800]);
+  assert.deepEqual([parts[0].footprint.rects[0].x1, parts[0].footprint.rects[0].x2, parts[0].zLo, parts[0].zHi], [-45, 8045, 0, 800]);
 });
 
 // ---- 同じ芯で接する帯の結合（下地の壁＋仕上げの薄壁。見下げは帯の外形だけ）
@@ -267,7 +269,8 @@ test('壁の結合: 高さ範囲が違う区間とは、区間が重なり帯が
     materialRange: { lo: 4045, hi: 4057.5 }, backingRange: null, clStart: undefined, clEnd: undefined };
   const graph = Object.create(g.graph);
   Object.defineProperty(graph, 'walls', { value: [...g.graph.walls.filter(w => w !== real), real, thin] });
-  const walls = ofKind(planSolids([fakeLayer({ graph, ceilZMm: 2400 })]), 'wall').filter(s => s.footprint.rects[0].y1 >= 3942.5);
+  const walls = ofKind(planSolids([fakeLayer({ graph, ceilZMm: 2400 })]), 'wall')
+    .filter(s => s.footprint.rects.some(r => r.y1 >= 3942.5 && r.x2 - r.x1 > 200)); // 南の壁（横長）。隅の角を足した縦の壁の細片（幅 100 程度）は対象外
   assert.deepEqual(walls.map(s => [s.zLo, s.zHi, s.footprint.rects.length]).sort((a, b) => a[1] - b[1]), [[0, 800, 2], [0, 2400, 1]]);
   assert.equal(walls.find(s => s.zHi === 2400).source.mergedIds, undefined);
 });
@@ -292,6 +295,81 @@ test('壁の結合: 連鎖（A-B-C と順に接する）は 1 件にまとまり
   assert.deepEqual([...a[0].source.mergedIds].sort(), ['mid', 'owner', 'thin']);
   assert.equal(b.length, 1);
   assert.equal(b[0].footprint.rects.length, 3);
+});
+
+// ---- 取り合いの角を立体で閉じる（下地は取り合いで互いの面で止まる。13.stq 2階の下階の壁「6」の階段下の部屋の角）
+
+// L 字の出隅: 横の壁（A＋仕上げ A2）が x=1000 で止まり、縦の壁（B＋仕上げ B2）が y=1000 で止まる。角 x1000..1115 × y1000..1115 が空
+const CORNER = [
+  { id: 'a', isVertical: false, axis: 'S', band: [1000, 1102.5], span: [-1400, 1000] },
+  { id: 'a2', isVertical: false, axis: 'S', band: [1102.5, 1115], span: [-1400, 1115] },
+  { id: 'b', isVertical: true, axis: 'E', band: [1000, 1102.5], span: [0, 1000] },
+  { id: 'b2', isVertical: true, axis: 'E', band: [1102.5, 1115], span: [0, 1115] },
+];
+const rectsOfId = (walls, id) => walls.filter(w => (w.source.mergedIds ?? [w.source.id]).includes(id)).flatMap(w => w.footprint.rects);
+const coveredBy = (walls, x, y) => walls.some(w => isInsideFootprint(w.footprint, x, y));
+const WINDOW_FLOOR = solid('floor', { rects: [rect(-2000, -500, 2000, 2000)], holes: [rect(-2000, -500, 2000, 2000)] }, 0, 0, { id: 'f0', layerFloorZ: 0 });
+
+test('壁の取り合い: 出隅の角（互いの面で止まる2枚の壁の角）が壁の立体に覆われ、見下げの線に四角が出ない（外形の6本だけ）', () => {
+  const layer = wallDoubleLayer(CORNER);
+  const walls = wallsOf(layer);
+  assert.ok(coveredBy(walls, 1050, 1050), '角の点が覆われる（延長なしでは空）');
+  // 端は隣接する帯の連なり（下地の帯 1000..1102.5 → 薄壁の帯 1102.5..1115）の向こう側の面まで
+  assert.equal(Math.max(...rectsOfId(walls, 'a').map(r => r.x2)), 1115);
+  assert.equal(Math.max(...rectsOfId(walls, 'b').map(r => r.y2)), 1115);
+  const lines = linesOf(planSectionFigure([...walls, WINDOW_FLOOR], 1000), 'below', 'wall');
+  assert.deepEqual(mergedLines(lines), [
+    [-1400, 1000, -1400, 1115], [-1400, 1000, 1000, 1000], [-1400, 1115, 1115, 1115],
+    [1000, 0, 1000, 1000], [1000, 0, 1115, 0], [1115, 0, 1115, 1115],
+  ]);
+});
+
+test('壁の取り合い: 端が直交壁の帯の中にあるときも、帯の連なりの向こう側の面まで延ばす。壁レコードの coord は変えない', () => {
+  const inside = CORNER.filter(d => d.id !== 'a2').map(d => (d.id === 'a' ? { ...d, span: [-1400, 1050] } : d)); // A 単独（A2 を除く）
+  const layer = wallDoubleLayer(inside);
+  assert.equal(Math.max(...rectsOfId(wallsOf(layer), 'a').map(r => r.x2)), 1115, '帯 1000..1102.5 の中の端 1050 → 連なりの先 1115');
+  assert.deepEqual(layer.graph.walls.find(w => w.id === 'a'), { id: 'a', isVertical: false, axisCL: { id: 'S' }, coord1: -1400, coord2: 1050, materialRange: { lo: 1000, hi: 1102.5 }, backingRange: null });
+  // 連なる薄壁 B2 が A の帯を覆わず縁で接するだけ（span [0,1000]）でも、帯の連なり（B→B2）の先 1115 まで延びる
+  const edgeOnly = wallsOf(wallDoubleLayer(CORNER.filter(d => d.id !== 'a2').map(d => (d.id === 'b2' ? { ...d, span: [0, 1000] } : d))));
+  assert.equal(Math.max(...rectsOfId(edgeOnly, 'a').map(r => r.x2)), 1115);
+  // 連なりが無ければ（仕上げの薄壁 B2・A2 が無い）下地の帯の面まで
+  const bare = wallsOf(wallDoubleLayer(CORNER.filter(d => d.id === 'a' || d.id === 'b')));
+  assert.equal(Math.max(...rectsOfId(bare, 'a').map(r => r.x2)), 1102.5);
+  assert.equal(Math.max(...rectsOfId(bare, 'b').map(r => r.y2)), 1102.5);
+});
+
+test('壁の取り合い: 端が直交壁の帯に接していない・相手の長さ方向が自分の帯に届かない・帯を貫いて先へ出る壁は延ばさない', () => {
+  const xMax = (doubles, id = 'a') => Math.max(...rectsOfId(wallsOf(wallDoubleLayer(doubles)), id).map(r => r.x2));
+  const BASE = CORNER.filter(d => d.id !== 'a2'); // A 自身の仕上げ（A2）を除く＝A の x2 が A 本体の端だけを見る
+  const withB = patch => BASE.map(d => (d.id === 'b' || d.id === 'b2' ? { ...d, ...patch(d) } : d));
+  assert.equal(xMax(withB(d => ({ band: d.band.map(v => v + 1000) }))), 1000, '帯が離れている（端が接しない）');
+  assert.equal(xMax(withB(() => ({ span: [0, 500] }))), 1000, '相手の長さ方向が A の帯に届かない');
+  const through = wallsOf(wallDoubleLayer(BASE.map(d => (d.id === 'a' ? { ...d, span: [-1400, 1200] } : d))));
+  assert.equal(xMax(BASE.map(d => (d.id === 'a' ? { ...d, span: [-1400, 1200] } : d))), 1200, '端 1200 は帯 1000..1115 の外へ出ている');
+  const aSolids = through.filter(w => w.source.id === 'a');
+  assert.deepEqual(aSolids.map(w => [w.footprint.rects.length, w.zLo, w.zHi, w.footprint.rects[0].x1, w.footprint.rects[0].x2]), [[1, -3000, -600, -1400, 1200]], '角の区間が足されない（区間数・高さ・範囲が不変）');
+  assert.equal(xMax([CORNER[0], { ...CORNER[2], isVertical: false }]), 1000, '同じ向きの壁は相手にしない');
+});
+
+test('壁の取り合い・失敗系: 帯の無い壁（隠せる材なし）・相手の壁が無い層・空の層は例外なし。帯の無い壁は相手にならない', () => {
+  const layer = wallDoubleLayer(CORNER.filter(d => d.id !== 'a2'));
+  layer.graph.walls.find(w => w.id === 'b').materialRange = null;
+  layer.graph.walls.find(w => w.id === 'b2').materialRange = null;
+  const walls = wallsOf(layer);
+  assert.equal(Math.max(...rectsOfId(walls, 'a').map(r => r.x2)), 1000, '帯の無い壁は相手にならず A は元の区間のまま');
+  assert.equal(rectsOfId(walls, 'b').length + rectsOfId(walls, 'b2').length, 0, '帯の無い壁は立体にならない');
+  assert.equal(Math.max(...rectsOfId(wallsOf(wallDoubleLayer([CORNER[0]])), 'a').map(r => r.x2)), 1000, '相手の壁が無い層');
+  assert.deepEqual(wallsOf(wallDoubleLayer([])), []);
+});
+
+test('壁の取り合い: 角を埋める相手の壁が立体にならない（高さ無し）なら、その側の角は埋めない。反対側は埋める', () => {
+  const { graph, cy } = makeRoomGraph(0, 0, 4000, 4000);
+  const east = graph.walls.find(w => w.isVertical && w.axisCL.effectiveValue === 4000);
+  assert.ok(east, '前提: 東の壁がある');
+  graph.setKneeDropWall(edgeKey(east.axisCL.id, cy[0].id, cy[1].id), { knee: { topHeight: 0 } });
+  assert.equal(wallSolidsOf(graph, east).length, 0, '前提: 東の壁は高さ 0 で立体にならない');
+  const south = wallSolidsOf(graph, southWallOf(graph));
+  assert.deepEqual([Math.min(...south.flatMap(s => s.footprint.rects.map(r => r.x1))), Math.max(...south.flatMap(s => s.footprint.rects.map(r => r.x2)))], [-45, 3942.5]);
 });
 
 // ================================================================ 床

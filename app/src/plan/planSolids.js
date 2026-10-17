@@ -140,19 +140,26 @@ function wallSolids(layer, cellToRoom, footSurfaces = [], underReturnTops = new 
   const hasRecords = (graph.kneeDropWalls?.size ?? 0) > 0;
   const out = [];
   const meta = []; // out と同じ添字: 結合判定用 {axisId, vertical, band, along}
+  const views = [];
   for (const wall of graph.walls ?? []) {
     const cr = wallConcealRange(wall);
     if (!cr || !(cr.hi - cr.lo > 0)) continue;
-    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-    if (!(wHi - wLo > SPAN_EPS_MM)) continue;
+    const wLo0 = Math.min(wall.coord1, wall.coord2), wHi0 = Math.max(wall.coord1, wall.coord2);
+    if (!(wHi0 - wLo0 > SPAN_EPS_MM)) continue;
+    views.push({ wall, cr, wLo0, wHi0, vertical: !!wall.isVertical });
+  }
+  // 1周目: 壁レコードの範囲だけで区間と高さを決める（従来どおり）
+  for (const v of views) {
+    const { wall, cr, wLo0, wHi0 } = v;
     const cuts = hasRecords
-      ? kneeDropRecordsOnAxis(graph, wall.axisCL, wLo, wHi).flatMap(r => [r.lo, r.hi])
-        .filter(c => c > wLo + SPAN_EPS_MM && c < wHi - SPAN_EPS_MM)
+      ? kneeDropRecordsOnAxis(graph, wall.axisCL, wLo0, wHi0).flatMap(r => [r.lo, r.hi])
+        .filter(c => c > wLo0 + SPAN_EPS_MM && c < wHi0 - SPAN_EPS_MM)
       : [];
-    const foot = footSurfaces.length > 0 && !underReturnTops.has(wall.id) ? wallFootIntervals(wall, cr, wLo, wHi, footSurfaces) : [];
-    const footCuts = foot.flatMap(f => [f.lo, f.hi, ...(wall.isVertical ? f.surface.stepYs : f.surface.stepXs).filter(c => c > f.lo && c < f.hi)]).filter(c => c > wLo + SPAN_EPS_MM && c < wHi - SPAN_EPS_MM);
-    const bounds = [...new Set([wLo, ...cuts, ...footCuts, wHi])].sort((a, b) => a - b);
-    const spans = []; // {lo, hi, ranges}
+    const foot = footSurfaces.length > 0 && !underReturnTops.has(wall.id) ? wallFootIntervals(wall, cr, wLo0, wHi0, footSurfaces) : [];
+    const footCuts = foot.flatMap(f => [f.lo, f.hi, ...(wall.isVertical ? f.surface.stepYs : f.surface.stepXs).filter(c => c > f.lo && c < f.hi)]).filter(c => c > wLo0 + SPAN_EPS_MM && c < wHi0 - SPAN_EPS_MM);
+    const bounds = [...new Set([wLo0, ...cuts, ...footCuts, wHi0])].sort((a, b) => a - b);
+    const spans = []; // {lo, hi, ranges, key}
+    v.spans = spans;
     // 復路下の壁（木造の生成壁）は、足元の外の端（隔て板の隙間・外周壁への食い込み）も含め壁全長を裏面で平らに止める
     // （従来どおり。この壁は足元の区間割り・区間ごとの天端の対象外＝下地の壁と薄壁が 1 立体にまとまるまま）
     const wallCeil = Math.min(wallCeilZ(layer, wall, cellToRoom), underReturnTops.get(wall.id) ?? Infinity);
@@ -169,6 +176,11 @@ function wallSolids(layer, cellToRoom, footSurfaces = [], underReturnTops = new 
       if (prev && prev.key === key) prev.hi = hi;
       else spans.push({ lo, hi, ranges, key });
     }
+  }
+  // 2周目: 端が直交壁の帯に接する壁は、角を閉じる分だけ端の区間を延ばして立体にする
+  for (const v of views) {
+    const { wall, cr } = v;
+    const spans = withJoinedCorners(v, views, footSurfaces.length > 0 && !underReturnTops.has(wall.id) ? footSurfaces : []);
     let part = 0;
     for (const span of spans) {
       for (const r of span.ranges) {
@@ -184,6 +196,83 @@ function wallSolids(layer, cellToRoom, footSurfaces = [], underReturnTops = new 
     }
   }
   return mergeTouchingWalls(out, meta);
+}
+
+const JOIN_EPS_MM = 1e-3; // 壁の端と直交壁の帯の境界を「一致」とみなす・区間の内側へ寄せる float 許容
+
+/**
+ * 壁 v の立体の区間 [lo, hi]（長さ方向）。端が直交する壁の隠せる材の帯（wallConcealRange）に接している（帯の境界に一致、
+ * または帯の中にある）とき、その帯に隣接して連なる帯の連なり（下地の壁の帯と仕上げの薄壁の帯など）の向こう側の面まで端を延ばす。
+ * 下地オーナー壁は取り合いで互いの面で止めてある（core/wallChamfer.js chamferWalls）ので、T 字・L 字の角の下地の体積が
+ * どの壁の立体にも入らず、下階の見下げで角の 4 辺が四角として見えていた（13.stq 2階「6」の復路 22 段目の右端。2026-10-17）。
+ * 展開図は同じ詰めを許容（sectionStructure.js wallSpanTolMm）で吸収する。平面の立体は延長で吸収する。
+ * 相手の壁は、長さ方向の範囲が v の帯と重なる・縁で接するもの（L 字の出隅は縁で接するだけ）。壁レコードは変えず立体の区間だけ。
+ * 角の区間の高さは端の区間の高さ範囲のまま（高い壁が角を貫く。低い壁の腰壁の角も高い方に合わせる）。ただし角が階段の足元に
+ * かかるなら足元の規則（軸が足元の中の壁だけ）で裏面以下に止め、角を埋める相手の壁が v の帯の中央に最も近い所で立体を持たない
+ * （足元の下で高さ無し等）ときは角を埋めない。
+ * @param {object} v 壁の見え（wall・cr・wLo0・wHi0・vertical・1周目の spans）
+ * @param {object[]} views 全壁の見え
+ * @param {object[]} [footSurfaces] 階段の裏面の面（この壁が足元で止める対象のとき。復路下の壁・足元の無い層は空）
+ * @returns {Array<{lo:number, hi:number, ranges:object[], key:string}>} 角を足した区間（足す角が無ければ v.spans）
+ */
+function withJoinedCorners(v, views, footSurfaces = []) {
+  const { wall, cr, wLo0, wHi0, vertical, spans } = v;
+  if (spans.length === 0) return spans;
+  const perps = views.filter(p => p.vertical !== vertical && p.wLo0 <= cr.hi + JOIN_EPS_MM && p.wHi0 >= cr.lo - JOIN_EPS_MM);
+  if (perps.length === 0) return spans;
+  const axisMid = (cr.lo + cr.hi) / 2;
+  const topOf = p => {
+    const c = Math.min(p.wHi0, Math.max(p.wLo0, axisMid));
+    let top = -Infinity;
+    for (const s of p.spans) if (c >= s.lo - JOIN_EPS_MM && c <= s.hi + JOIN_EPS_MM) for (const r of s.ranges) top = Math.max(top, r.z1);
+    return top;
+  };
+  // 端 e（向き dir）から、接して連なる直交壁の帯の向こう側の面まで。{t: 到達点, used: 角を埋める壁}
+  const reach = (e, dir) => {
+    let t = e;
+    const used = new Set();
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const p of perps) {
+        const [pNear, pFar] = dir > 0 ? [p.cr.lo, p.cr.hi] : [-p.cr.hi, -p.cr.lo];
+        // 最初の一枚は端が帯の境界に一致・帯の中、以降は今の到達点に接して連なる帯
+        if (pNear <= dir * t + JOIN_EPS_MM && pFar > dir * t + JOIN_EPS_MM) {
+          t = dir * pFar;
+          used.add(p);
+          changed = true;
+        }
+      }
+    }
+    return { t, used };
+  };
+  const cornerSpan = (end, e, dir) => {
+    const { t, used } = reach(e, dir);
+    if (used.size === 0) return null;
+    // 角が階段の足元の中にかかるなら、足元の中の区間と同じ規則（軸が足元の中の壁だけ）で裏面以下に止める
+    // （角の区間の全体を 9 点で評価する。足元の端をまたぐ角は安全側＝低い方に寄せる）
+    const [cLo, cHi] = [Math.min(e, t), Math.max(e, t)];
+    const footCaps = wallFootIntervals(wall, cr, cLo, cHi, footSurfaces)
+      .map(f => wallFootTop(wall, cr, cLo, cHi, [{ lo: cLo - 1, hi: cHi + 1, surface: f.surface }]));
+    if (![...used].some(p => topOf(p) > -Infinity)) return null; // 角を埋める相手が立体にならない（足元の下で高さ無し等）なら埋めない
+    const limit = Math.min(...footCaps);
+    const ranges = end.ranges.map(r => ({ ...r, z1: Math.min(r.z1, limit) })).filter(r => r.z1 > r.z0);
+    if (ranges.length === 0) return null;
+    const key = JSON.stringify(ranges.map(r => [Math.round(r.z0 * 1e6), Math.round(r.z1 * 1e6)]));
+    return { lo: Math.min(e, t), hi: Math.max(e, t), ranges, key };
+  };
+  const out = spans.map(s => ({ ...s }));
+  const first = out[0], last = out[out.length - 1];
+  const loCorner = cornerSpan(first, wLo0, -1);
+  if (loCorner) {
+    if (loCorner.key === first.key) first.lo = loCorner.lo;
+    else out.unshift(loCorner);
+  }
+  const hiCorner = cornerSpan(last, wHi0, 1);
+  if (hiCorner) {
+    if (hiCorner.key === last.key) last.hi = hiCorner.hi;
+    else out.push(hiCorner);
+  }
+  return out;
 }
 
 /**

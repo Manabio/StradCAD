@@ -87,6 +87,59 @@ test('遮蔽(i): 同じ高さの below は隠し合わず両方描く', () => {
   assert.equal(ofId(prims, 'b').length, 4);
 });
 
+test('遮蔽(iv): 同じ層の壁同士は同じ高さでも相手の厳密な内部の線を隠す（和の外形だけ残る）。壁以外・別の層・低い側は対象外', () => {
+  const w1 = (extra = {}) => solid('wall', sq(0, 0, 1000, 300), -3000, -600, { id: 'w1', ...extra });
+  const w2 = (extra = {}) => solid('wall', sq(500, -200, 1500, 100), -3000, -600, { id: 'w2', ...extra });
+  // 重なる 2 枚の壁: 互いの内部の線（w1 の y=0 x500..1000・x=1000 y0..100、w2 の y=100 x500..1000・x=500 y0..100）が消え、和の外形だけ
+  assert.deepEqual(mergedLines(fig([w1(), w2()])), [
+    [0, 0, 0, 300], [0, 0, 500, 0], [0, 300, 1000, 300], [500, -200, 500, 0],
+    [500, -200, 1500, -200], [1000, 100, 1000, 300], [1000, 100, 1500, 100], [1500, -200, 1500, 100],
+  ]);
+  // 壁以外（generic）は同じ高さで隠し合わない（内側の線も描く）
+  const generic = (id, r) => solid('generic', sq(...r), -3000, -600, { id });
+  assert.equal(fig([generic('g1', [0, 0, 1000, 300]), generic('g2', [500, -200, 1500, 100])]).length, 8);
+  // 別の層（下階は窓の中だけ見える）の壁は同じ層でないので、相手の内部の線を隠さない
+  const prims = fig([w1({ layerFloorZ: -3000 }), w2({ layerFloorZ: 0 }), solid('floor', { rects: [rect(-500, -500, 2000, 500)], holes: [rect(-500, -500, 2000, 500)] }, 0, 0, { id: 'f0', layerFloorZ: 0 })]);
+  assert.ok(mergedLines(ofId(prims, 'w1')).some(l => l[1] === 0 && l[3] === 0 && l[0] <= 500 && l[2] >= 1000), '別の層の w2 の内部でも w1 の y=0 の線は残る');
+  // 相手が低い壁なら（i）で自分は隠れない・低い側 w2 の線は（i）で消える
+  const lowW2 = fig([w1(), solid('wall', sq(500, -200, 1500, 100), -3000, -1000, { id: 'w2' })]);
+  assert.ok(mergedLines(ofId(lowW2, 'w1')).some(l => l[1] === 0 && l[3] === 0 && l[0] <= 500 && l[2] >= 1000), '低い w2 は w1 の線を隠さない');
+  assert.equal(ofId(lowW2, 'w2').filter(p => p.points[1] === 100 && p.points[3] === 100 && Math.min(p.points[0], p.points[2]) < 1000 && Math.max(p.points[0], p.points[2]) > 500 && Math.max(p.points[0], p.points[2]) <= 1000).length, 0, 'w2 の内部の線は消える');
+});
+
+test('重なる矩形の分解: 同じ芯の 2 枚が角の延長で重なっても外側の面の線が途切れない（外形 4 本のまま）', () => {
+  const w = solid('wall', { rects: [rect(0, 0, 1000, 100), rect(500, 0, 1500, 100)] }, -3000, -600, { id: 'w' });
+  assert.deepEqual(mergedLines(fig([w])), [[0, 0, 0, 100], [0, 0, 1500, 0], [0, 100, 1500, 100], [1500, 0, 1500, 100]]);
+  // 重ならない群（接するだけ）は従来どおり共有辺が消えて外形 4 本
+  const touch = solid('wall', { rects: [rect(0, 0, 1000, 100), rect(1000, 0, 1500, 100)] }, -3000, -600, { id: 't' });
+  assert.deepEqual(mergedLines(fig([touch])), [[0, 0, 0, 100], [0, 0, 1500, 0], [0, 100, 1500, 100], [1500, 0, 1500, 100]]);
+});
+
+test('重なる矩形の分解: 重なる矩形を持つ壁の内部にある下の線は、壁の外形で区間に切られて内側だけ隠れる', () => {
+  const wall = solid('wall', { rects: [rect(0, 0, 1000, 100), rect(500, 0, 1500, 100)] }, -3000, 0, { id: 'w' });
+  const low = solid('generic', sq(700, -200, 900, 300), -3000, -1000, { id: 'g' });
+  const vs = mergedLines(ofId(fig([wall, low]), 'g')).filter(l => l[0] === 700 && l[2] === 700);
+  assert.deepEqual(vs, [[700, -200, 700, 0], [700, 100, 700, 300]], '壁の中（y 0..100）の区間だけ消え、外は残る');
+});
+
+test('出隅・T 字: 同じ層の壁が同じ面を重ねて持つ区間は、線が 1 本だけ（先の 1 本が描く）。外形は変わらない', () => {
+  // 出隅: 横の壁（y 1000..1115）と縦の壁（x 1000..1115）が角を両方で埋める。東面 x=1115 の y 1000..1115 が両方の境界
+  const A = solid('wall', sq(-1400, 1000, 1115, 1115), -3000, -600, { id: 'a' });
+  const B = solid('wall', sq(1000, 0, 1115, 1115), -3000, -600, { id: 'b' });
+  const east = ps => ps.filter(p => p.points[0] === 1115 && p.points[2] === 1115);
+  const prims = fig([A, B]);
+  assert.equal(totalLength(east(prims)), 1115, `x=1115 の線の総延長が重ならない: ${JSON.stringify(sortedLines(east(prims)))}`);
+  assert.deepEqual(mergedLines(prims), [
+    [-1400, 1000, -1400, 1115], [-1400, 1000, 1000, 1000], [-1400, 1115, 1115, 1115],
+    [1000, 0, 1000, 1000], [1000, 0, 1115, 0], [1115, 0, 1115, 1115],
+  ]);
+  // T 字: 縦の壁が横の壁の北面に載り、同じ面 y=1000 を重ねない（東西の端で同じ面を持つ区間だけ 1 本）
+  const T1 = solid('wall', sq(0, 1000, 2000, 1100), -3000, -600, { id: 't1' });
+  const T2 = solid('wall', sq(1000, 1000, 3000, 1100), -3000, -600, { id: 't2' });
+  const top = ps => ps.filter(p => p.points[1] === 1000 && p.points[3] === 1000);
+  assert.equal(totalLength(top(fig([T1, T2]))), 3000, '重なる y=1000 の区間 1000..2000 が 2 重にならない');
+});
+
 test('遮蔽(i): 切断面で切れる cut の壁は、内側の低い below（梁）を隠す', () => {
   const prims = fig([
     solid('wall', sq(0, 0, 1000, 300), 0, 2400, { id: 'w' }),

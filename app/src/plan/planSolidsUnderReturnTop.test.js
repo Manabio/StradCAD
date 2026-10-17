@@ -136,7 +136,8 @@ test('見下げ: 鉄骨の階段下の部屋の壁のうち足元の中の区間
   assert.ok(treads.length >= 1, '前提: 踏面がある');
   const firstReturn = treads.filter(s => { const p = s.footprint.poly; const xs = p.filter((_, i) => i % 2 === 0), ys = p.filter((_, i) => i % 2 === 1); return Math.min(...xs) >= 1000 - 1 && Math.min(...ys) <= 1000 + 60; });
   const treadZ = Math.min(...firstReturn.map(s => s.zHi));
-  const north = wallsOf(solids, -FH).filter(s => s.footprint.rects.some(r => r.y1 < 1000 && r.y2 > 1000));
+  // 前縁上の北の壁（横長）。東西の壁の角の延長が前縁をまたぐ縦長の矩形（足元の外＝天井高の壁）は対象外
+  const north = wallsOf(solids, -FH).filter(s => s.footprint.rects.some(r => r.y1 < 1000 && r.y2 > 1000 && r.x2 - r.x1 > r.y2 - r.y1));
   assert.ok(north.length >= 1, '前提: 前縁上の壁がある');
   for (const s of north) assert.ok(s.zHi <= treadZ + 1e-6, `壁の天端 ${s.zHi} ≤ 踏面 ${treadZ}`);
 });
