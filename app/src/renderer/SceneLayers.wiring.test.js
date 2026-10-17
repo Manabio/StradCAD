@@ -74,3 +74,11 @@ test('【配線・強化・W4】SceneLayers は symbols の catalog引数を bui
   assert.match(src, /^\s*graph, buildingEquipmentCatalog\(project, graph\),\s*$/m,
     'graph, buildingEquipmentCatalog(project, graph), が1行まるごとの形で見つからない');
 });
+
+// 天伏（見上げ）では切断高より低い腰壁の天板輪郭を描かない: ShapesLayer へ向きを渡し、ShapesLayer が述語で判定する。
+test('【配線】SceneLayers は <ShapesLayer> へ direction={planSectionDirection(appMode)} を渡し、ShapesLayer は shouldDrawCapOutline で輪郭を判定する', () => {
+  assert.match(codeOnly, /^\s*\{showPlanFigure && <ShapesLayer [^>]*direction=\{planSectionDirection\(appMode\)\} \/>\}\s*$/m);
+  const shapes = stripComments(fs.readFileSync(path.resolve(import.meta.dirname, 'ShapesLayer.jsx'), 'utf8'));
+  assert.match(shapes, /^\s*if \(kneeDrop && !shouldDrawCapOutline\(kneeDrop, direction, ceilingCutMm\)\) return null;\s*$/m);
+  assert.match(shapes, /^\s*const ceilingCutMm = ceilingCutHeightMmOf\(graph\.plane\);\s*$/m);
+});

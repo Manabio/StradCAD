@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Rect, Circle, Path } from 'react-konva';
-import { ShapeType } from '@core';
+import { ShapeType, ceilingCutHeightMmOf } from '@core';
+import { shouldDrawCapOutline } from '../finish/kneeDropWall.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { buildWallDrawPlan } from './wallDrawPlan.js';
 import { graphComputed } from './graphDerived.js';
@@ -70,8 +71,9 @@ function stairUnderClipGroups(stairUnderClips) {
   return out;
 }
 
-export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }) => {
+export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null, direction = 'down' }) => {
   if (!graph) return null;
+  const ceilingCutMm = ceilingCutHeightMmOf(graph.plane);
   const { scaleX, scaleY, lodLevel } = viewport;
 
   // 壁をまたぐ派生値（下地の重複防止・T字取り合い・腰壁垂れ壁・柱の仕上げ包み・壁ごとの開口）は
@@ -153,7 +155,9 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null }
         // 解決済み）。輪郭も planWallRegion.js が高さクラスごとの領域の境界として解いた `lines`
         // （kind 'kd'|'kdcap'・`style` が線種）に入っているので、ここでは線種の写像だけを持つ。
         // 天板の線は壁の既定の線幅（中線）のまま。
+        // 見上げ（天伏）では切断高より低い腰壁は見えないので輪郭ごと描かない（shouldDrawCapOutline）。
         const kneeDrop = kneeDropOverlays?.get(shape.id) ?? null;
+        if (kneeDrop && !shouldDrawCapOutline(kneeDrop, direction, ceilingCutMm)) return null;
         if (kneeDrop) {
           const capSp = { stroke: sp.stroke, strokeWidth: sp.strokeWidth, listening: false };
           return lines.map((l, i) => (

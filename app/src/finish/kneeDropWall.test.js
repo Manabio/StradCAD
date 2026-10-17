@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
-import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, PLAN_CUT_HEIGHT, resolveWallSpanKey } from './kneeDropWall.js';
+import { shouldDrawCapOutline, effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, PLAN_CUT_HEIGHT, resolveWallSpanKey } from './kneeDropWall.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -389,4 +389,30 @@ test('【失敗系】resolveWallSpanKey: セルの方が壁の連続範囲より
 
   assert.equal(resolveWallSpanKey(wall, { x: wall.axisValue, y: 1000 }, graph), edgeKey(xAxis.id, y0.id, yMid.id));
   assert.equal(resolveWallSpanKey(wall, { x: wall.axisValue, y: 5000 }, graph), edgeKey(xAxis.id, yMid.id, y7000.id));
+});
+
+test('shouldDrawCapOutline: 見上げ(up)では切断高より低い腰壁の輪郭を描かず、垂れ壁・切断高以上の腰壁・見下げは描く', () => {
+  const knee = { mode: 'knee', topHeight: 800 };
+  assert.equal(shouldDrawCapOutline(knee, 'up', 1500), false, '腰壁800は見上げで見えない');
+  assert.equal(shouldDrawCapOutline({ mode: 'drop' }, 'up', 1500), true, '垂れ壁は見上げで描く');
+  assert.equal(shouldDrawCapOutline({ mode: 'knee', topHeight: 1500 }, 'up', 1500), true, '切断高以上は従来どおり');
+  assert.equal(shouldDrawCapOutline(knee, 'down', 1500), true, '見下げは全部描く');
+  assert.equal(shouldDrawCapOutline(knee, undefined, 1500), true, '向き欠落は見下げ扱い');
+});
+
+test('【失敗系】shouldDrawCapOutline: オーバーレイが無ければ描かない', () => {
+  assert.equal(shouldDrawCapOutline(null, 'up', 1500), false);
+  assert.equal(shouldDrawCapOutline(undefined, 'down', 1500), false);
+});
+
+test('【失敗系】shouldDrawCapOutline: 腰壁＋垂れ壁の同時指定は腰壁の overlay に統合され、見上げでは描かれない（現状の固定・ユーザー裁定待ち）', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 }, drop: { bottomHeight: 600 } });
+  const overlays = resolveKneeDropOverlays(graph);
+  assert.ok(overlays.size > 0, 'overlay はある');
+  for (const o of overlays.values()) {
+    assert.equal(o.mode, 'knee', '腰壁の overlay に統合される');
+    assert.equal(shouldDrawCapOutline(o, 'up', 1500), false, '現状は垂れ壁も描かれない（裁定待ち）');
+  }
 });

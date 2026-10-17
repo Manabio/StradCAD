@@ -390,6 +390,23 @@ export function resolveKneeDropOverlays(graph) {
 }
 
 /**
+ * 天板の輪郭（resolveKneeDropOverlays の結果）を、この向きの図に描くか。
+ * 見下げ（'down'）は全部描く。見上げ（'up'・天伏）では、天伏の切断高より低い腰壁は
+ * 切断面の下にあって見えない（見上げの視線に入らない）ので描かない。垂れ壁は天井から下がって
+ * 見えるので従来どおり描く。腰壁の天端が切断高以上なら切断される壁＝従来の描画に任せる。
+ * @param {{mode:'knee'|'drop', topHeight?:number}|null|undefined} overlay
+ * @param {'up'|'down'} direction
+ * @param {number} ceilingCutMm 階の天伏切断高（ceilingCutHeightMmOf）
+ * @returns {boolean}
+ */
+export function shouldDrawCapOutline(overlay, direction, ceilingCutMm) {
+  if (!overlay) return false;
+  if (direction !== 'up') return true;
+  if (overlay.mode !== 'knee') return true;
+  return !(overlay.topHeight < ceilingCutMm);
+}
+
+/**
  * 平面での壁の高さ(mm)——「壁同士の取り合いは**高い方が優先**」（ユーザー確定2026-09）を
  * 判定するための唯一の供給源。
  *
