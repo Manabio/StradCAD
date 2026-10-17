@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
-import { shouldDrawCapOutline, effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, PLAN_CUT_HEIGHT, resolveWallSpanKey } from './kneeDropWall.js';
+import { shouldDrawCapOutline, effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropUpOptions, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, PLAN_CUT_HEIGHT, resolveWallSpanKey } from './kneeDropWall.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -405,7 +405,7 @@ test('【失敗系】shouldDrawCapOutline: オーバーレイが無ければ描�
   assert.equal(shouldDrawCapOutline(undefined, 'down', 1500), false);
 });
 
-test('【失敗系】shouldDrawCapOutline: 腰壁＋垂れ壁の同時指定は腰壁の overlay に統合され、見上げでは描かれない（現状の固定・ユーザー裁定待ち）', () => {
+test('shouldDrawCapOutline: 腰壁＋垂れ壁の同時指定は、見下げ（平面。opts なし）の解決では腰壁の overlay に統合される（見上げは kneeDropUpOptions で垂れ壁。下のテスト）', () => {
   const graph = makeGraph();
   const { key } = makeSharedEdgeRooms(graph);
   graph.setKneeDropWall(key, { knee: { topHeight: 800 }, drop: { bottomHeight: 600 } });
@@ -413,6 +413,80 @@ test('【失敗系】shouldDrawCapOutline: 腰壁＋垂れ壁の同時指定は�
   assert.ok(overlays.size > 0, 'overlay はある');
   for (const o of overlays.values()) {
     assert.equal(o.mode, 'knee', '腰壁の overlay に統合される');
-    assert.equal(shouldDrawCapOutline(o, 'up', 1500), false, '現状は垂れ壁も描かれない（裁定待ち）');
+    assert.equal(shouldDrawCapOutline(o, 'up', 1500), false, '平面の解決のまま見上げに使うと垂れ壁も描かれない（見上げは kneeDropUpOptions で解く）');
   }
+});
+
+// ==== 見上げ（天伏）の腰壁・垂れ壁（裁定 2026-10-18: 切断高は平面と変える・同じ区間の腰壁＋垂れ壁は垂れ壁）====
+const constCut = mm => () => mm;
+const onlyOverlay = overlays => { assert.equal(new Set(overlays.values()).size, 1, 'overlay は 1 区間分'); return [...overlays.values()][0]; };
+
+test('見上げ: 腰壁は平面の切断高(1500)ではなく天伏の切断高で判定する（腰壁1300。天伏1100→切られる壁＝overlay なし、天伏2000→腰壁の overlay で描かない）', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 1300 } });
+  assert.equal(onlyOverlay(resolveKneeDropOverlays(graph)).mode, 'knee', '平面（1500）では腰壁の overlay');
+  assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(1100))).size, 0, '天伏 1100 では 1300 の腰壁は切断面に切られる＝通常の壁');
+  const up = onlyOverlay(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(2000))));
+  assert.equal(up.mode, 'knee');
+  assert.equal(up.cutMm, 2000, '区間の切断高を overlay に持つ');
+  assert.equal(shouldDrawCapOutline(up, 'up', 1500), false, '天端 1300 < 区間の切断高 2000 は見えない（階の値 1500 より区間の値を優先）');
+  const same = onlyOverlay(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(1300))));
+  assert.equal(shouldDrawCapOutline(same, 'up', 99999), true, '天端＝切断高は描く');
+});
+
+test('見上げ: 腰壁＋垂れ壁の同時指定は垂れ壁として扱う（破線の overlay・描く）。見下げは従来どおり腰壁に統合', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 }, drop: { bottomHeight: 600 } });
+  assert.equal(onlyOverlay(resolveKneeDropOverlays(graph)).mode, 'knee', '平面は腰壁');
+  const up = onlyOverlay(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(1500))));
+  assert.equal(up.mode, 'drop');
+  assert.equal(up.topHeight, undefined);
+  assert.equal(shouldDrawCapOutline(up, 'up', 1500), true);
+  // 垂れ壁の下端（天井高−600）が天伏の切断高以下なら、切断面が垂れ壁を貫く＝通常の壁（腰壁には戻らない）
+  assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(99999))).size, 0);
+});
+
+test('見上げ: 区間の両側の切断高の最小を使う（壁の片側が低い部屋なら低い方。腰壁1300・片側 1000/反対側 2000 → 1000 で切られる）', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph); // 壁は y=2000 の水平壁。上室は y<2000
+  graph.setKneeDropWall(key, { knee: { topHeight: 1300 } });
+  const seen = [];
+  const cutZAt = (x, y) => { seen.push([x, y]); return y < 2000 ? 1000 : 2000; };
+  assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(cutZAt)).size, 0);
+  assert.ok(seen.some(([, y]) => y < 2000) && seen.some(([, y]) => y > 2000), '壁の両側で問い合わせる');
+  assert.ok(seen.every(([x]) => x > 0 && x < 4000), '区間に沿った点');
+  const flipped = (x, y) => (y < 2000 ? 2000 : 1000);
+  assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(flipped)).size, 0, '逆でも最小');
+});
+
+test('opts なし・空 opts は従来の解決と同一（cutMm を持たない）。cutHeightOf だけ渡すと平面の腰壁・垂れ壁の優先順位は変わらない', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 }, drop: { bottomHeight: 600 } });
+  const base = resolveKneeDropOverlays(graph);
+  assert.deepEqual([...resolveKneeDropOverlays(graph, {})], [...base]);
+  assert.ok([...base.values()].every(o => !('cutMm' in o)));
+  const onlyCut = onlyOverlay(resolveKneeDropOverlays(graph, { cutHeightOf: () => 1500 }));
+  assert.equal(onlyCut.mode, 'knee', 'preferDrop なしは腰壁に統合');
+});
+
+test('【失敗系】見上げ: 切断高が数値にならない（NaN）と腰壁・垂れ壁とも overlay を作らない（通常の壁のまま）。孤児の区間は無視', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 } });
+  assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(NaN))).size, 0);
+  graph.setKneeDropWall(key, { drop: { bottomHeight: 600 } });
+  assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(NaN))).size, 0);
+  const empty = makeGraph();
+  assert.equal(resolveKneeDropOverlays(empty, kneeDropUpOptions(constCut(1500))).size, 0);
+});
+
+test('見上げ: 腰壁＋垂れ壁の同時指定で、天伏の切断高が腰壁の天端より低い（腰壁が切断される）ときは overlay を作らない（通常の壁＝切断線。垂れ壁の破線も出さない）', () => {
+  const graph = makeGraph();
+  const { key } = makeSharedEdgeRooms(graph);
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 }, drop: { bottomHeight: 600 } });
+  assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(700))).size, 0);
+  assert.equal(onlyOverlay(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(800)))).mode, 'drop', '天端＝切断高は切断されない');
 });

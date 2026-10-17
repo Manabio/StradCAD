@@ -65,7 +65,8 @@ export const PLAN_LINE_STYLE = Object.freeze({
  */
 export const PLAN_GAP_CLOSE_MM = 20;
 
-const DEFAULT_EPS_MM = 0.5;
+/** 分類・高さ比較の許容（mm。既定）。天伏の切断高の例外（ceiling/ceilingCutHeight.js）も天井面の直下をこの値で取る。 */
+export const DEFAULT_EPS_MM = 0.5;
 const DEFAULT_SLOPE_SAMPLE_MM = 100;
 const BISECT_MM = 0.5; // 勾配の切り替わり点の二分探索の収束幅
 const GEO_TOL = 1e-6;
@@ -213,13 +214,16 @@ function validMarks(marks) {
 
 /**
  * Solid を解決用の記録へ。検証に通らない・above は null。
- * 記録: {solid, cls, kind, footprint, edges, bounds, lines, marks, zAt, slopedCut, layerZ, windowed, rank}
+ * 記録: {solid, cls, kind, footprint, edges, bounds, lines, marks, zAt, slopedCut, varCut, eps, layerZ, windowed, rank}
+ * varCut＝切断高が関数のとき切断高の範囲にまたがる勾配なしの立体（点ごとに below／cut／above が替わる）。
  */
-function prepareSolid(s, cutZ, eps) {
+function prepareSolid(s, cutZ, eps, range) {
   if (!s || !Number.isFinite(s.zLo) || !Number.isFinite(s.zHi) || s.zLo > s.zHi) return null;
+  // 切断高が関数（位置で変わる）のときは [min,max] で大域分類する（全域 below／全域 above＝捨てる／それ以外は点ごと）
+  const loCut = range ? range.min : cutZ, hiCut = range ? range.max : cutZ;
   let cls;
-  if (s.zHi <= cutZ + eps) cls = 'below';
-  else if (s.zLo >= cutZ - eps) return null;
+  if (s.zHi <= loCut + eps) cls = 'below';
+  else if (s.zLo >= hiCut - eps && s.zHi > hiCut + eps) return null; // どの切断高でも below にならず cut にもならない（数値の cutZ では zHi > cutZ+eps は自明）
   else cls = 'cut';
   const prepared = prepareFootprint(s.footprint);
   if (!prepared) return null;
@@ -238,7 +242,7 @@ function prepareSolid(s, cutZ, eps) {
   return {
     solid: s, cls, kind: s.kind, footprint: prepared.footprint, edges: prepared.edges,
     bounds: footprintBounds(prepared.footprint), lines, marks: validMarks(s.marks), zAt,
-    slopedCut: cls === 'cut' && zAt !== null, layerZ, srcLayer: s.source?.viewLayerFloorZ ?? layerZ, windowed: layerZ < 0, rank: 0,
+    ranged: range != null, slopedCut: cls === 'cut' && zAt !== null, varCut: range != null && cls === 'cut' && zAt === null, eps, layerZ, srcLayer: s.source?.viewLayerFloorZ ?? layerZ, windowed: layerZ < 0, rank: 0,
   };
 }
 
@@ -256,15 +260,32 @@ function compareRecs(a, b) {
     || a.bounds.x1 - b.bounds.x1 || a.bounds.y1 - b.bounds.y1 || a.bounds.x2 - b.bounds.x2 || a.bounds.y2 - b.bounds.y2;
 }
 
+/** 点 (x,y) での切断高。cutZ は数値（全域同じ）または (x,y)→number。 */
+const cutAt = (cutZ, x, y) => (typeof cutZ === 'function' ? cutZ(x, y) : cutZ);
+
 /** 点 (x,y) での実効の上端。cut＝cutZ、below＝zHi（zAt があれば zAt）。勾配のある cut は min(cutZ, zAt)。 */
 function topAt(rec, cutZ, x, y) {
-  if (rec.cls === 'cut') return rec.zAt ? Math.min(cutZ, rec.zAt(x, y)) : cutZ;
+  // 切断高が関数のとき、勾配つきでも地点の切断高に対して全体が上にある（zLo >= 切断高 かつ below でない）所は見えない側＝遮蔽しない
+  if (rec.ranged && rec.slopedCut && clsAt(rec, cutZ, x, y) === 'above') return -Infinity;
+  if (rec.varCut) {
+    const k = clsAt(rec, cutZ, x, y);
+    return k === 'above' ? -Infinity : k === 'below' ? rec.solid.zHi : cutAt(cutZ, x, y);
+  }
+  if (rec.cls === 'cut') return rec.zAt ? Math.min(cutAt(cutZ, x, y), rec.zAt(x, y)) : cutAt(cutZ, x, y);
   return rec.zAt ? Math.min(rec.solid.zHi, rec.zAt(x, y)) : rec.solid.zHi;
 }
 
 /** 点での実効の分類。勾配のある cut は zAt < cutZ の所だけ below。 */
 function clsAt(rec, cutZ, x, y) {
-  if (rec.slopedCut) return rec.zAt(x, y) < cutZ ? 'below' : 'cut';
+  if (rec.slopedCut) {
+    const c = cutAt(cutZ, x, y);
+    if (rec.ranged && rec.solid.zHi > c + rec.eps && rec.solid.zLo >= c - rec.eps) return 'above';
+    return rec.zAt(x, y) < c ? 'below' : 'cut';
+  }
+  if (rec.varCut) {
+    const c = cutAt(cutZ, x, y);
+    return rec.solid.zHi <= c + rec.eps ? 'below' : rec.solid.zLo >= c - rec.eps ? 'above' : 'cut';
+  }
   return rec.cls;
 }
 
@@ -299,17 +320,30 @@ const round6 = v => Math.round(v * 1e6) / 1e6;
 /**
  * 立体と切断高から平面の線を解く。
  * @param {Solid[]} solids  planSolids の出力（汎用立体を含む）。順序に依らない
- * @param {number} cutZ  切断面の高さ（自階 FL=0 の絶対 mm）。有限でなければ TypeError
- * @param {{eps?: number, slopeSampleMm?: number}} [opts]  eps＝分類・高さ比較の許容（既定 0.5）／slopeSampleMm＝勾配の可視を調べる間隔（既定 100）
+ * @param {number|((x:number,y:number)=>number)} cutZ  切断面の高さ（自階 FL=0 の絶対 mm）。有限でなければ TypeError。
+ *   関数のときは位置 (x,y) ごとの切断高（天伏の切断高の例外。ceiling/ceilingCutHeight.js）。opts.cutRange（{min,max}。関数の取りうる範囲）が必須。
+ *   立体は範囲で大域分類し（zHi<=min+eps→全域 below／zLo>=max-eps→全域 above＝捨てる）、範囲にまたがる立体だけ点ごとに below／cut／above を解く。
+ *   勾配のある（zAt）立体は従来どおり zAt < 切断高 の部分だけ below（切断面との交線は出さない）。数値のときの出力は従来と同一。
+ * @param {{eps?: number, slopeSampleMm?: number, cutRange?: {min:number, max:number}}} [opts]  eps＝分類・高さ比較の許容（既定 0.5）／slopeSampleMm＝勾配の可視を調べる間隔（既定 100）／cutRange＝cutZ が関数のときの範囲
  * @returns {Primitive[]}
  */
 export function planSectionFigure(solids, cutZ, opts = {}) {
-  if (!Number.isFinite(cutZ)) throw new TypeError(`planSectionFigure: cutZ は有限の数値が必要です（${String(cutZ)}）`);
+  let range = null;
+  if (typeof cutZ === 'function') {
+    const r = opts.cutRange;
+    if (!r || !Number.isFinite(r.min) || !Number.isFinite(r.max) || r.min > r.max) {
+      throw new TypeError('planSectionFigure: cutZ が関数のときは opts.cutRange {min,max}（有限・min<=max）が必要です');
+    }
+    range = r;
+    // 範囲外の値は分類を誤らせる（大域分類は範囲で行う）ので範囲へ clamp する
+    const raw = cutZ;
+    cutZ = (x, y) => Math.min(Math.max(raw(x, y), r.min), r.max);
+  } else if (!Number.isFinite(cutZ)) throw new TypeError(`planSectionFigure: cutZ は有限の数値または関数が必要です（${String(cutZ)}）`);
   const eps = Number.isFinite(opts.eps) && opts.eps > 0 ? opts.eps : DEFAULT_EPS_MM;
   const sampleMm = Number.isFinite(opts.slopeSampleMm) && opts.slopeSampleMm > 0 ? opts.slopeSampleMm : DEFAULT_SLOPE_SAMPLE_MM;
   if (!Array.isArray(solids)) return [];
 
-  const recs = solids.map(s => prepareSolid(s, cutZ, eps)).filter(Boolean).sort(compareRecs);
+  const recs = solids.map(s => prepareSolid(s, cutZ, eps, range)).filter(Boolean).sort(compareRecs);
   recs.forEach((r, i) => { r.rank = i; });
   if (recs.length === 0) return [];
 
@@ -322,8 +356,8 @@ export function planSectionFigure(solids, cutZ, opts = {}) {
   for (const S of recs) {
     for (const line of S.lines) {
       const pieces = resolveLine(S, line.points, recs, { cutZ, eps, sampleMm, windowRects, inWindow });
-      for (const [x1, y1, x2, y2] of pieces) {
-        const cls = S.slopedCut ? 'below' : S.cls;
+      for (const [x1, y1, x2, y2, pieceCls] of pieces) {
+        const cls = pieceCls ?? (S.slopedCut ? 'below' : S.cls);
         const prim = {
           kind: 'line', key: '', points: [x1, y1, x2, y2], weight: PLAN_LINE_STYLE[cls].weight, cls, detailOnly: false,
           source: { ...S.solid.source, ...(line.role ? { role: line.role } : {}) },
@@ -412,14 +446,16 @@ function resolveLine(S, pts, recs, ctx) {
 
   const visibleAt = buildVisibleAt(S, cands, ctx, nx, ny);
 
-  const slopeRelevant = S.zAt !== null || cands.some(O => O.zAt !== null);
+  const slopeRelevant = S.zAt !== null || S.varCut || cands.some(O => O.zAt !== null || O.varCut);
+  // 点ごとの状態。varCut の線は可視のときの分類（'below'|'cut'）、それ以外は真偽。状態が替わる所で区間を切る
+  const stateAt = S.varCut ? (x, y) => (visibleAt(x, y) ? clsAt(S, ctx.cutZ, x, y) : false) : visibleAt;
   const visible = []; // [t0,t1]
   for (let i = 0; i + 1 < cuts.length; i++) {
     const t0 = cuts[i], t1 = cuts[i + 1];
     if ((t1 - t0) * len < GEO_TOL) continue;
     if (!slopeRelevant) {
       const [mx, my] = pointAt((t0 + t1) / 2);
-      if (visibleAt(mx, my)) visible.push([t0, t1]);
+      if (visibleAt(mx, my)) visible.push([t0, t1, true]);
       continue;
     }
     // サンプル点は区間の両端の内側（端から BISECT_MM）から等間隔に置く。端ちょうどは遮蔽物の境界の上なので判定に使わない。
@@ -427,7 +463,7 @@ function resolveLine(S, pts, recs, ctx) {
     const a = t0 + e, b = t1 - e;
     const n = b > a ? Math.max(1, Math.ceil(((b - a) * len) / sampleMm)) : 0;
     const sampleT = j => (n === 0 ? (t0 + t1) / 2 : a + (j * (b - a)) / n);
-    const vis = j => visibleAt(...pointAt(sampleT(j)));
+    const vis = j => stateAt(...pointAt(sampleT(j)));
     let start = t0;
     let cur = vis(0);
     for (let j = 0; j < n; j++) {
@@ -436,29 +472,37 @@ function resolveLine(S, pts, recs, ctx) {
       let lo = sampleT(j), hi = sampleT(j + 1);
       while ((hi - lo) * len > BISECT_MM) {
         const mid = (lo + hi) / 2;
-        if (visibleAt(...pointAt(mid)) === cur) lo = mid; else hi = mid;
+        if (stateAt(...pointAt(mid)) === cur) lo = mid; else hi = mid;
       }
       const c = (lo + hi) / 2;
-      if (cur) visible.push([start, c]);
+      if (cur) visible.push([start, c, cur]);
       start = c;
       cur = next;
     }
-    if (cur) visible.push([start, t1]);
+    if (cur) visible.push([start, t1, cur]);
   }
 
   // 接する区間を結び、隙間の規則（below だけ）と EPS 未満の断片の除去をかける
   const merged = [];
   for (const iv of visible) {
     const last = merged[merged.length - 1];
-    if (last && (iv[0] - last[1]) * len < GEO_TOL) last[1] = iv[1];
-    else merged.push([iv[0], iv[1]]);
+    if (last && last[2] === iv[2] && (iv[0] - last[1]) * len < GEO_TOL) last[1] = iv[1];
+    else merged.push([iv[0], iv[1], iv[2]]);
   }
   // 勾配のある cut（slopedCut）の可視部分は cls 'below' で出るので、規則の対象（出力の cls が below のもの）に含める
-  const kept = (S.cls === 'below' || S.slopedCut) && merged.length > 0 ? closeNarrowGaps(S, merged, { ax, ay, bx, by, len, pointAt }, cands, ctx) : merged;
-  return kept.filter(([t0, t1]) => (t1 - t0) * len >= eps).map(([t0, t1]) => {
+  const closeGaps = list => closeNarrowGaps(S, list, { ax, ay, bx, by, len, pointAt }, cands, ctx);
+  let kept = merged;
+  if (S.varCut) {
+    // 点ごとに分類が替わる線は、below の区間だけが隙間の規則の対象（cut の区間は対象外）
+    const belowIvs = merged.filter(iv => iv[2] === 'below');
+    const keptBelow = new Set(belowIvs.length > 0 ? closeGaps(belowIvs) : []);
+    kept = merged.filter(iv => iv[2] !== 'below' || keptBelow.has(iv));
+  } else if ((S.cls === 'below' || S.slopedCut) && merged.length > 0) kept = closeGaps(merged);
+  return kept.filter(([t0, t1]) => (t1 - t0) * len >= eps).map(([t0, t1, k]) => {
     const [x1, y1] = t0 === 0 ? [ax, ay] : pointAt(t0);
     const [x2, y2] = t1 === 1 ? [bx, by] : pointAt(t1);
-    return [round6(x1), round6(y1), round6(x2), round6(y2)];
+    const piece = [round6(x1), round6(y1), round6(x2), round6(y2)];
+    return S.varCut ? [...piece, k] : piece;
   });
 }
 
@@ -550,7 +594,8 @@ function buildVisibleAt(S, cands, ctx, nx, ny) {
   };
 
   return (x, y) => {
-    if (S.slopedCut && !(S.zAt(x, y) < cutZ)) return false;
+    if (S.slopedCut && (!(S.zAt(x, y) < cutAt(cutZ, x, y)) || clsAt(S, cutZ, x, y) === 'above')) return false;
+    if (S.varCut && clsAt(S, cutZ, x, y) === 'above') return false;
     if (S.windowed && !inWindow(x, y)) return false;
     const tS = topAt(S, cutZ, x, y);
     const cS = clsAt(S, cutZ, x, y);

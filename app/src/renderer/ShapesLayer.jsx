@@ -1,7 +1,8 @@
 import { observer } from 'mobx-react-lite';
 import { Group, Line, Rect, Circle, Path } from 'react-konva';
 import { ShapeType, ceilingCutHeightMmOf } from '@core';
-import { shouldDrawCapOutline } from '../finish/kneeDropWall.js';
+import { shouldDrawCapOutline, kneeDropUpOptions } from '../finish/kneeDropWall.js';
+import { ceilingCutResolverOf } from '../ceiling/ceilingCutHeight.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { buildWallDrawPlan } from './wallDrawPlan.js';
 import { graphComputed } from './graphDerived.js';
@@ -89,9 +90,12 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null, 
   // 識別する代わりにここから渡す。
   const clipGroups = stairUnderClipGroups(stairUnderClips);
   const clipKey = clipGroups ? [...clipGroups].map(([id, g]) => `${id}=${g}`).join(',') : '';
+  // 見上げ（天伏）は腰壁・垂れ壁を天伏の切断高（階の 1 値＋低い部屋の例外。ceilingCutResolverOf）で解き、同時指定は垂れ壁を採る
+  // （kneeDropUpOptions）。向きを鍵に含める（graphDerived.js の約束）。
+  const up = direction === 'up';
   const { kneeDropOverlays, wallLines, wallStuds } =
-    graphComputed(graph, `wallDrawPlan:${lodLevel}:${clipKey}`,
-      () => buildWallDrawPlan(graph, lodLevel, { clipGroups }));
+    graphComputed(graph, `wallDrawPlan:${lodLevel}:${clipKey}:${up ? 'up' : 'down'}`,
+      () => buildWallDrawPlan(graph, lodLevel, { clipGroups, kneeDrop: up ? kneeDropUpOptions(ceilingCutResolverOf(graph).cutZAt) : undefined }));
 
   return graph.generalShapes.map((shape) => {
     const sp = strokeProps(shape, viewport);

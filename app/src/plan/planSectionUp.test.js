@@ -160,3 +160,38 @@ test('【失敗系】切断高が有限でなければ TypeError。非有限の 
   assert.deepEqual(planSectionFigureUp(null, C), []);
   assert.deepEqual(planSectionFigureUp([], C), []);
 });
+
+// ================================================================ 切断高が位置の関数（天伏の切断高の例外）
+
+test('切断高が関数: 定数関数は数値と同一。位置で替わる切断高では低い天井の部屋だけ切断高を下げて天井の輪郭が全部出る（x>=2000 の天井 z=1000）', () => {
+  const left = ceilingAt(2400, { rects: [rect(0, 0, 2000, 4000)] }, 'ceil-l');
+  const right = ceilingAt(1000, { rects: [rect(2000, 0, 4000, 4000)] }, 'ceil-r');
+  const solids = [left, right];
+  assert.deepEqual(planSectionFigureUp(solids, C, { }), planSectionFigureUp(solids, C));
+  assert.deepEqual(planSectionFigureUp(solids, () => C, { cutRange: { min: C, max: C } }), planSectionFigureUp(solids, C));
+  const numeric = planSectionFigureUp(solids, C);
+  assert.equal(numeric.filter(p => p.source.id === 'ceil-r').length, 0, '数値の切断高 1500 では z=1000 の天井は切断面の下で出ない');
+  const varied = planSectionFigureUp(solids, x => (x >= 2000 ? 999.5 : C), { cutRange: { min: 999.5, max: C } });
+  assert.deepEqual(sortedLines(varied.filter(p => p.source.id === 'ceil-r')), outline(2000, 0, 4000, 4000), '低い天井の外形 4 辺が出る');
+  assert.deepEqual(sortedLines(varied.filter(p => p.source.id === 'ceil-l')), outline(0, 0, 2000, 4000), '基本の高さの側は従来どおり');
+  assert.ok(varied.every(p => p.cls === 'below' && p.weight === 'thin'));
+});
+
+test('【失敗系】切断高が関数: cutRange が無い・不正なら TypeError。数値が非有限でも TypeError', () => {
+  const s = [ceilingAt(2400)];
+  assert.throws(() => planSectionFigureUp(s, () => C), TypeError);
+  assert.throws(() => planSectionFigureUp(s, () => C, { cutRange: { min: 2, max: 1 } }), TypeError);
+  assert.throws(() => planSectionFigureUp(s, Infinity), TypeError);
+  assert.deepEqual(planSectionFigureUp(null, () => C, { cutRange: { min: C, max: C } }), []);
+});
+
+test('切断高が関数: 勾配つきの立体が地点の切断高に対して見えない側でも天井を隠さない（見上げ。基本 2600・例外域 x>=0 は 1000、x<0 に z[1200,2000] の傾斜立体＋天井 2700）', () => {
+  const rectOf = (x1, y1, x2, y2) => ({ rects: [rect(x1, y1, x2, y2)] });
+  const slope = solid('stairTread', rectOf(-600, 0, -100, 500), 1200, 2000, { id: 'A2', zAt: x => 1200 + (x + 600) * 1.6 });
+  const ceil = solid('ceiling', rectOf(-500, 100, -200, 400), 2700, 2720, { id: 'C' });
+  const num = planSectionFigureUp([slope, ceil], 2600);
+  assert.ok(num.some(p => p.source.id === 'C'), '数値では天井の線が出る');
+  const fn = planSectionFigureUp([slope, ceil], x => (x < 0 ? 2600 : 1000), { cutRange: { min: 1000, max: 2600 } });
+  const key = ps => ps.map(p => `${p.cls}:${p.source.id}:${p.points.join()}`);
+  assert.deepEqual(key(fn), key(num));
+});

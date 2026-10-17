@@ -734,3 +734,160 @@ test('S7b 段そのものは線を出さない（drawEdges:false）。自階で�
   // 参考: 描画を許すと（drawEdges 省略）段の輪郭は出る＝上の 0 本は drawEdges:false によるもの
   assert.equal(fig([solid('stairTread', sq(0, 0, 1000, 1000), 300, 300, { id: 's' })]).length, 4);
 });
+
+// ================================================================ 切断高が位置の関数（天伏の切断高の例外）
+
+const fnCut = (f, min, max) => [f, { cutRange: { min, max } }];
+/** 数値の cutZ と定数関数で出力が同一かを確かめるための、cut・below・above・勾配・壁の重なりを混ぜた場面 */
+const mixedScene = () => [
+  solid('wall', sq(0, 0, 3000, 120), 0, 2400, { id: 'w1', layerFloorZ: 0 }),
+  solid('wall', sq(2900, 0, 3020, 3000), 0, 2400, { id: 'w2', layerFloorZ: 0 }),
+  solid('wall', sq(0, 2000, 1500, 2120), 0, 1200, { id: 'knee', layerFloorZ: 0 }),
+  solid('beam', sq(200, 500, 2500, 650), 2200, 2400, { id: 'b-above', layerFloorZ: 0 }),
+  solid('generic', sq(300, 800, 1300, 1300), 0, 1000, { id: 'g-below' }),
+  solid('roof', { poly: [4000, 0, 6000, 0, 6000, 2000, 4000, 2000] }, 1000, 2000, { id: 'r', zAt: x => 1000 + (x - 4000) / 2 }),
+  solid('floor', { rects: [rect(0, 4000, 3000, 6000)] }, 0, 0, { id: 'fl', layerFloorZ: 0 }),
+  solid('beam', sq(500, 4300, 2500, 4400), -200, 0, { id: 'lower-beam', layerFloorZ: -2800 }),
+];
+
+test('切断高が関数: 定数関数は数値の cutZ と出力が同一（cut・below・above・勾配・壁の重なり・窓を含む場面）', () => {
+  const scene = mixedScene();
+  const numeric = fig(scene, CUT);
+  nonEmpty(numeric, 'numeric');
+  assert.equal(new Set(numeric.map(p => p.cls)).size, 2, 'cut と below の両方を含む場面');
+  assert.deepEqual(planSectionFigure(scene, ...fnCut(() => CUT, CUT, CUT)), numeric);
+  // 範囲が広くても関数が定数なら同じ（範囲は大域分類の保守側＝点ごとの分類に回るだけで結果は変わらない）
+  assert.deepEqual(planSectionFigure(scene, ...fnCut(() => CUT, CUT - 300, CUT + 300)), numeric);
+});
+
+test('切断高が関数: 位置で切断高が替わると、同じ立体の線が片側 cut・片側 below になる（腰壁 0〜1200。x<2000 は切断高 1500、x>=2000 は 1000）', () => {
+  const knee = solid('generic', sq(0, 0, 4000, 100), 0, 1200, { id: 'k' });
+  const prims = planSectionFigure([knee], ...fnCut((x) => (x < 2000 ? 1500 : 1000), 1000, 1500));
+  const longLines = nonEmpty(prims.filter(p => p.points[1] === p.points[3] && p.points[1] === 0), 'y=0 の長辺');
+  const below = longLines.filter(p => p.cls === 'below'), cut = longLines.filter(p => p.cls === 'cut');
+  assert.equal(below.length, 1);
+  assert.equal(cut.length, 1);
+  near(Math.min(...below[0].points.filter((_, i) => i % 2 === 0)), 0, 0.01, 'below の始点');
+  near(Math.max(...below[0].points.filter((_, i) => i % 2 === 0)), 2000, 1, 'below の終点＝切断高の切り替わり');
+  near(Math.min(...cut[0].points.filter((_, i) => i % 2 === 0)), 2000, 1, 'cut の始点');
+  near(Math.max(...cut[0].points.filter((_, i) => i % 2 === 0)), 4000, 0.01, 'cut の終点');
+  assert.equal(below[0].weight, 'thin');
+  assert.equal(cut[0].weight, 'thick');
+});
+
+test('切断高が関数: 範囲の最大より上の立体は全域 above で捨てる。位置によって above になる立体は、その側だけ捨てる。厚み0が最大の切断高ちょうどに乗れば、その側だけ below で出る', () => {
+  const range = fnCut((x) => (x < 2000 ? 1500 : 1000), 1000, 1500);
+  assert.deepEqual(planSectionFigure([solid('generic', sq(0, 0, 4000, 100), 1600, 2000, { id: 'high' })], ...range), []);
+  // zLo=1200: x<2000（切断高 1500）では cut、x>=2000（切断高 1000）では zLo>=切断高 で above
+  const mid = planSectionFigure([solid('generic', sq(0, 0, 4000, 100), 1200, 2000, { id: 'mid' })], ...range);
+  const long = nonEmpty(mid.filter(p => p.points[1] === p.points[3]), '長辺');
+  assert.ok(long.every(p => p.cls === 'cut'));
+  assert.ok(long.every(p => Math.max(p.points[0], p.points[2]) <= 2000 + 1), 'x>=2000 の側は出ない');
+  // 厚み0の面（z=1000）。切断高 1000 の側では below、切断高 1500 の側では zHi<=切断高 で below が先に当たる
+  const thin = planSectionFigure([solid('generic', sq(0, 0, 4000, 100), 1000, 1000, { id: 'thin' })], ...range);
+  assert.ok(nonEmpty(thin, 'thin').every(p => p.cls === 'below'));
+  // 厚み0の面（z=1400）。切断高 1500 の側では below、切断高 1000 の側では zLo>=切断高 で above（捨てる）
+  const upper = planSectionFigure([solid('generic', sq(0, 0, 4000, 100), 1400, 1400, { id: 'u' })], ...range);
+  const uLong = nonEmpty(upper.filter(p => p.points[1] === p.points[3]), 'u の長辺');
+  assert.ok(uLong.every(p => p.cls === 'below' && Math.max(p.points[0], p.points[2]) <= 2000 + 1));
+});
+
+test('切断高が関数: 位置で替わる遮蔽。切断高が低い側では cut の壁が below の梁を隠し、高い側では腰壁（below）が梁を隠さない', () => {
+  // 梁は z=1100〜1300（下端が切断高 1000 より上＝切断高 1000 の側では above で見えない）。腰壁 0〜1200
+  const beam = solid('beam', sq(0, 300, 4000, 400), 1100, 1300, { id: 'beam' });
+  const knee = solid('wall', sq(0, 0, 4000, 100), 0, 1200, { id: 'knee', layerFloorZ: 0 });
+  const prims = planSectionFigure([knee, beam], ...fnCut((x) => (x < 2000 ? 1500 : 1000), 1000, 1500));
+  const beamLines = prims.filter(p => p.source.id === 'beam' && p.points[1] === p.points[3]);
+  assert.ok(nonEmpty(beamLines, '梁の長辺').every(p => Math.max(p.points[0], p.points[2]) <= 2000 + 1), '切断高 1000 の側（x>=2000）では梁は above で出ない');
+});
+
+test('【失敗系】切断高が関数: opts.cutRange（有限・min<=max）が無い・不正なら TypeError。数値の cutZ が非有限でも TypeError のまま', () => {
+  const s = [solid('generic', sq(0, 0, 1000, 1000), 0, 2000)];
+  assert.throws(() => planSectionFigure(s, () => CUT), TypeError);
+  assert.throws(() => planSectionFigure(s, () => CUT, {}), TypeError);
+  assert.throws(() => planSectionFigure(s, () => CUT, { cutRange: { min: 2000, max: 1000 } }), TypeError);
+  assert.throws(() => planSectionFigure(s, () => CUT, { cutRange: { min: NaN, max: 1000 } }), TypeError);
+  assert.throws(() => planSectionFigure(s, NaN), TypeError);
+  assert.throws(() => planSectionFigure(s, '1500'), TypeError);
+  assert.deepEqual(planSectionFigure(null, () => CUT, { cutRange: { min: CUT, max: CUT } }), []);
+});
+
+const rangeOf = (f, min, max) => [f, { cutRange: { min, max } }];
+const sameFig = (a, b) => assert.deepEqual(a.map(p => `${p.cls}:${p.source.id}:${p.points.join()}`), b.map(p => `${p.cls}:${p.source.id}:${p.points.join()}`));
+
+test('切断高が関数: 勾配つきの立体が地点の切断高に対して全体が上にあれば遮蔽しない（x<0 の切断高 1000・x>=0 の 2000 で、x<0 の傾斜立体 z[1500,1800] は above）', () => {
+  const slope = solid('stairTread', sq(-600, 0, -100, 500), 1500, 1800, { id: 'A', zAt: x => 1500 + (x + 600) * 0.6 });
+  const beam = solid('beam', sq(-500, 100, -200, 400), 0, 500, { id: 'B' });
+  const f = x => (x < 0 ? 1000 : 2000);
+  const num = fig([slope, beam], 1000);
+  nonEmpty(num, 'num');
+  sameFig(planSectionFigure([slope, beam], ...rangeOf(f, 1000, 2000)), num);
+});
+
+test('切断高が関数: 勾配つき立体の分類は地点ごとの切断高で決まる（切断高が位置で替わっても、数値の切断高で解いた結果と同じ側の領域は一致）', () => {
+  // 傾斜立体 z[1200,2000]（x<0 の基本の切断高 2600 からは全体が下＝見えない側ではなく below）。天井 2700 は見える
+  const slope = solid('roof', { poly: [-600, 0, -100, 0, -100, 500, -600, 500] }, 1200, 2000, { id: 'A', zAt: x => 1200 + (x + 600) * 1.6 });
+  const ceil = solid('ceiling', sq(-500, 100, -200, 400), 2700, 2720, { id: 'C' });
+  const f = x => (x < 0 ? 2600 : 1000);
+  const num = planSectionFigure([slope, ceil], 2600);
+  nonEmpty(num, 'num');
+  sameFig(planSectionFigure([slope, ceil], ...rangeOf(f, 1000, 2600)), num);
+});
+
+test('切断高が関数: 戻り値が範囲外でも範囲へ clamp して分類する', () => {
+  const s = [solid('generic', sq(0, 0, 1000, 1000), 0, 2000)];
+  sameFig(planSectionFigure(s, ...rangeOf(() => 99999, CUT, CUT)), fig(s, CUT));
+  sameFig(planSectionFigure(s, ...rangeOf(() => -5, CUT, CUT)), fig(s, CUT));
+});
+
+test('切断高が関数: 分類の切り替わりがサンプル点の間に落ちる長い線で、cut と below の境目が ±0.5mm で求まる（x=2037）', () => {
+  const knee = solid('generic', sq(0, 0, 6000, 100), 0, 1200, { id: 'k' });
+  const prims = planSectionFigure([knee], ...rangeOf(x => (x < 2037 ? 1500 : 1000), 1000, 1500));
+  const long = nonEmpty(prims.filter(p => p.points[1] === 0 && p.points[3] === 0), 'y=0');
+  const below = long.find(p => p.cls === 'below'), cut = long.find(p => p.cls === 'cut');
+  near(Math.max(below.points[0], below.points[2]), 2037, 0.5, 'below の終点');
+  near(Math.min(cut.points[0], cut.points[2]), 2037, 0.5, 'cut の始点');
+});
+
+test('切断高が関数: varCut の cut の区間は 20mm 以下でも隙間の規則で消えない（below の短線だけが対象）', () => {
+  const knee = solid('generic', sq(0, 0, 4000, 100), 0, 1200, { id: 'k' });
+  // x in [1995, 2007] だけ切断高 1000（cut）、他は 1500（below）。サンプル点（約 100mm 間隔。2000 付近）が窓に入る位置
+  const prims = planSectionFigure([knee], ...rangeOf(x => (x >= 1995 && x < 2007 ? 1000 : 1500), 1000, 1500));
+  const cutLines = prims.filter(p => p.cls === 'cut' && p.points[1] === 0 && p.points[3] === 0);
+  assert.equal(cutLines.length, 1, '12mm の cut 区間が残る');
+  near(Math.abs(cutLines[0].points[2] - cutLines[0].points[0]), 12, 1, 'cut の長さ');
+});
+
+test('切断高が関数: 両側を遮蔽物に縁取られた 12mm の cut 区間も、隙間の規則（below だけが対象）で消えない', () => {
+  const knee = solid('generic', sq(0, 0, 4000, 100), 0, 1200, { id: 'k' });
+  const o1 = solid('generic', sq(1900, -50, 1995, 150), 0, 2000, { id: 'o1' });
+  const o2 = solid('generic', sq(2007, -50, 2100, 150), 0, 2000, { id: 'o2' });
+  const prims = planSectionFigure([knee, o1, o2], ...rangeOf(x => (x >= 1995 && x < 2007 ? 1000 : 1500), 1000, 1500));
+  const mine = prims.filter(p => p.source.id === 'k' && p.cls === 'cut' && p.points[1] === p.points[3]);
+  assert.ok(mine.length > 0, '縁取られた 12mm の cut 区間が残る');
+  assert.ok(mine.every(p => Math.abs(p.points[2] - p.points[0]) < 20));
+});
+
+test('切断高が関数: 勾配つき立体が地点の切断高をまたぎ、切断高が地点で違っても、各立体は自分の地点の切断高で解いた数値版と一致する（細線は zAt<切断高 の部分だけ）', () => {
+  // A は x<0 側（切断高 1000）、B は x>=0 側（切断高 2000）。どちらも勾配が切断高をまたぐ
+  const A = solid('stairTread', sq(-600, 0, -100, 500), 500, 1500, { id: 'A', zAt: x => 500 + (x + 600) * 2 });
+  const B = solid('stairTread', sq(100, 0, 600, 500), 1500, 2500, { id: 'B', zAt: x => 1500 + (x - 100) * 2 });
+  const f = x => (x < 0 ? 1000 : 2000);
+  const got = planSectionFigure([A, B], ...rangeOf(f, 1000, 2000));
+  const ids = id => got.filter(p => p.source.id === id);
+  const expA = nonEmpty(fig([A], 1000), 'A 数値');
+  const expB = nonEmpty(fig([B], 2000), 'B 数値');
+  sameFig(ids('A'), expA);
+  sameFig(ids('B'), expB);
+  assert.ok(ids('A').every(p => p.cls === 'below'), '勾配つきの可視部分は細線');
+});
+
+test('切断高が関数: varCut の below 区間は、両側を cut の遮蔽物に縁取られた 12mm なら隙間の規則で出力されない', () => {
+  const knee = solid('generic', sq(0, 0, 4000, 100), 0, 1200, { id: 'k' });
+  const o1 = solid('generic', sq(1900, -50, 1995, 150), 0, 2000, { id: 'o1' });
+  const o2 = solid('generic', sq(2007, -50, 2100, 150), 0, 2000, { id: 'o2' });
+  // 窓 x in [1995, 2007] だけ切断高 1500（腰壁は below）、他は 1000（cut）
+  const prims = planSectionFigure([knee, o1, o2], ...rangeOf(x => (x >= 1995 && x < 2007 ? 1500 : 1000), 1000, 1500));
+  assert.ok(prims.some(p => p.source.id === 'k' && p.cls === 'cut'), '前提: 腰壁の cut の線は出る');
+  assert.deepEqual(prims.filter(p => p.source.id === 'k' && p.cls === 'below' && p.points[1] === p.points[3]), [], '12mm の below 短線は出ない');
+});

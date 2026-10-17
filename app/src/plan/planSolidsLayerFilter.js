@@ -12,6 +12,7 @@
  */
 import { planCutHeightMmOf, ceilingCutHeightMmOf } from '@core';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
+import { ceilingCutResolverOf } from '../ceiling/ceilingCutHeight.js';
 import { markSameHeightCeilingBoundaries } from '../ceiling/ceilingBoundaryStyle.js';
 import { planSolids } from './planSolids.js';
 import { planSectionFigure } from './planSectionFigure.js';
@@ -120,12 +121,19 @@ export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf 
 }
 
 /**
- * 見上げの線（自階＋直上階。planSectionFigureUp）。cutZ＝切断高（自階 FL からの mm）。graph なし・cutZ が有限でなければ空配列。
+ * 見上げの線（自階＋直上階。planSectionFigureUp）。cutZ＝階の切断高（自階 FL からの mm。基本の高さ）。graph なし・cutZ が有限でなければ空配列。
+ * 基本の高さでは天井面全体を描けない部屋（階段下など）だけ切断高を下げる（ceiling/ceilingCutHeight.js。1 階＝1 天伏の例外）。
+ * 例外の部屋が無ければ従来どおり数値の cutZ で解く（出力不変）。
  * @returns {Primitive[]}
  */
 export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRiserOf = () => null, cutZ }) {
   if (!graph || !Number.isFinite(cutZ)) return [];
-  const drawn = drawnPrimitives(planSectionFigureUp(planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf }), cutZ), 'up');
+  const resolver = ceilingCutResolverOf(graph, { baseCutMm: cutZ });
+  const solids = planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf });
+  const figure = resolver.exceptions.length === 0
+    ? planSectionFigureUp(solids, cutZ)
+    : planSectionFigureUp(solids, resolver.cutZAt, { cutRange: resolver.range });
+  const drawn = drawnPrimitives(figure, 'up');
   // 同じ高さで隣り合う部屋の天井の境目は細線グレー（裁定 2026-10-10）。見下げの経路は通らない
   return markSameHeightCeilingBoundaries(drawn, ceilingSurfacesOf(graph));
 }

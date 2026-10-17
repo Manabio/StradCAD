@@ -352,17 +352,14 @@ function slopeScene() {
 }
 const markPrims = prims => prims.filter(p => p.kind === 'arrow' || p.kind === 'text');
 
-test('見上げの傾斜天井（S6a）: 切断高が傾斜の途中（z=3000 は x=1200）にあるとき、輪郭は切断高より上の部分（x>1200）だけで、等高線（x=1200 の交線）は出ない', () => {
+test('見上げの傾斜天井（S6a）: 基本の切断高（z=3000）が傾斜の最低点（2400）より上でも、その部屋だけ切断高が最低点の直下へ下がり（1 階＝1 天伏の例外）、輪郭は 4 辺そろって等高線は出ない', () => {
   const { self } = slopeScene();
   const lines = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: 3000 }).filter(p => p.kind === 'line' && p.source.kind === 'ceiling');
   assert.ok(lines.length > 0);
   assert.ok(lines.every(p => p.cls === 'below' && p.weight === 'thin'));
-  for (const p of lines) {
-    assert.ok(Math.min(p.points[0], p.points[2]) >= 1200 - 1, `切断高より下（x<1200）の線が出ている: ${JSON.stringify(p.points)}`);
-  }
+  assert.deepEqual(sortedPts(lines), outline4(0, 0, 4000, 4000), '天井面全体が描かれる（x<1200 の部分も欠けない）');
   assert.ok(!lines.some(p => Math.abs(p.points[0] - 1200) < 1 && Math.abs(p.points[2] - 1200) < 1), '等高線は出ない');
-  assert.ok(lines.some(p => p.points[0] === 4000 && p.points[2] === 4000), '高い側の端の辺は出る');
-  // 切断高が傾斜の全体より下なら、輪郭は 4 辺そろう
+  // 切断高が傾斜の全体より下なら、輪郭は 4 辺そろう（例外なしの従来経路）
   const full = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: 1500 }).filter(p => p.kind === 'line' && p.source.kind === 'ceiling');
   assert.deepEqual(sortedPts(full), outline4(0, 0, 4000, 4000));
 });
@@ -370,11 +367,11 @@ test('見上げの傾斜天井（S6a）: 切断高が傾斜の途中（z=3000 �
 test('見上げの傾斜天井: 注記（矢印・文字）は詳細 LOD だけ。基準点（面の中心）が切断高より上なら出て、下に入れば消える。平面の天井には付かない', () => {
   const { self } = slopeScene();
   const marks = cutZ => markPrims(planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ }));
-  const shown = marks(3000); // 中心 x=2000 の高さ 3400 > 3000
+  const shown = marks(3000); // 中心 x=2000 の高さ 3400 > 切断高
   assert.deepEqual(shown.map(p => p.kind).sort(), ['arrow', 'text']);
   assert.ok(shown.every(p => p.detailOnly === true && p.source.kind === 'ceiling' && p.cls === 'below'));
   assert.equal(shown.find(p => p.kind === 'text').text, '傾斜 CH2400〜4400');
-  assert.equal(marks(3600).length, 0, '中心の高さ 3400 ≦ 切断高 3600 なら基準点が見えず消える');
+  assert.equal(marks(3600).length, 2, '基本の切断高 3600 が中心の高さ 3400 より上でも、部屋の切断高は最低点の直下に下がるので基準点は見える');
   // LOD: 詳細以外では注記を除く
   const all = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: 3000 });
   assert.equal(markPrims(visiblePlanPrimitives(all, LodLevel.DETAIL)).length, 2);
@@ -513,4 +510,46 @@ test('見上げ: planSolidsLayerResolve は abovePeek を使う。同じ graph�
   assert.equal(planSolidsLayerResolve({ graph: null, abovePeek, direction: 'up', memo }), null);
   self.cx[0].pendingDelta = 5;
   assert.equal(planSolidsLayerResolve({ graph: self.graph, abovePeek, direction: 'up', prevPrims: ['prev'], memo }).length, 1, 'ドラッグ中は前回の線');
+});
+
+// ================================================================ 見上げの切断高の例外（1 階＝1 天伏。低い天井の部屋だけ切断高を下げる）
+
+/** 左 (0..2000) は天井 2400、右 (2000..4000) は天井 1200（切断高 1500 より低い＝階段下など）。壁なし。 */
+function lowRoomScene() {
+  const self = makeGrid([0, 2000, 4000], [0, 3000], { id: 'low', startFloor: 1 });
+  const normal = self.interior([[0, 0]]);
+  const low = self.interior([[1, 0]]);
+  normal.setOverride('ceilingHeight', '2400');
+  low.setOverride('ceilingHeight', '1200');
+  return { self, normal, low };
+}
+const ceilingOf = (prims, room) => prims.filter(p => p.kind === 'line' && p.source.kind === 'ceiling' && p.source.id === room.id);
+
+test('見上げ: 天井が基本の切断高（1500）より低い部屋は、その部屋だけ切断高が下がり天井の外形が全部出る。他の部屋は従来どおり', () => {
+  const { self, normal, low } = lowRoomScene();
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: CUT });
+  // 隣室との共有辺 x=2000 は 1 本だけ出る（どちらの部屋の線かは同順位の並び＝部屋 id 次第なので、部屋ごとではなく和で見る）
+  const all = prims.filter(p => p.kind === 'line' && p.source.kind === 'ceiling');
+  assert.deepEqual(sortedPts(all), [[0, 0, 0, 3000], [0, 0, 2000, 0], [0, 3000, 2000, 3000], [2000, 0, 2000, 3000], [2000, 0, 4000, 0], [2000, 3000, 4000, 3000], [4000, 0, 4000, 3000]],
+    '低い部屋の天井面全体が出る（切断面の下に隠れない）');
+  const lowPts = sortedPts(ceilingOf(prims, low));
+  for (const side of [[2000, 0, 4000, 0], [2000, 3000, 4000, 3000], [4000, 0, 4000, 3000]]) assert.ok(lowPts.some(p => p.join() === side.join()), `低い部屋の辺 ${side}`);
+  assert.ok(normal && all.every(p => p.cls === 'below' && p.weight === 'thin'));
+});
+
+test('見上げ: 例外の部屋が無ければ数値の切断高と出力が同一。基本の切断高を下げて例外を無くすと、低い部屋の外形は従来どおり（切断面の下）で出ない', () => {
+  const { self, low } = lowRoomScene();
+  const noExc = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: 1100 });
+  assert.equal(noExc.filter(p => p.kind === 'line' && p.source.kind === 'ceiling').length, 7, '基本 1100 < 1200 → 例外なし。天井 1200 は切断面の上＝外形がそろう（上の例外ありの場合と同じ 7 本）');
+  assert.ok(low && noExc.length > 0);
+  assert.deepEqual(noExc, planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: 1100 }), '決定的');
+  const g2 = makeGrid([0, 2000], [0, 3000], { id: 'hi', startFloor: 1 });
+  g2.interior([[0, 0]]).setOverride('ceilingHeight', '2400');
+  assert.equal(sortedPts(planSolidsLayerPrimitivesUp({ graph: g2.graph, cutZ: CUT }).filter(p => p.source.kind === 'ceiling')).length, 4);
+});
+
+test('【失敗系】見上げ: 切断高が非有限なら空配列のまま（例外の解決を通らない）', () => {
+  const { self } = lowRoomScene();
+  assert.deepEqual(planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: NaN }), []);
+  assert.deepEqual(planSolidsLayerPrimitivesUp({ graph: null, cutZ: CUT }), []);
 });

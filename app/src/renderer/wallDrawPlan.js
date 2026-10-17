@@ -171,6 +171,8 @@ export function planColumnWraps(graph) {
  *   で描画が切られるため、領域の境界を畳むときに単位が違う壁の線を1本にしない
  *   （planWallRegion.js の wallInput）。graph だけでは決まらない情報なので呼び出し側
  *   （ShapesLayer.jsx）が渡し、graphComputed のキーにも符号化する。省略時は畳み方に制約なし。
+ *   kneeDrop: resolveKneeDropOverlays の opts（見上げ＝天伏の切断高・垂れ壁優先。finish/kneeDropWall.js kneeDropUpOptions）。省略は平面。
+ *   呼び出し側（ShapesLayer.jsx）は向きをキーにも符号化する。柱の仕上げ包み（planColumnWraps）は向きによらず平面の腰壁・垂れ壁で解く（既知の限界）。
  * @returns {{
  *   deferredBackingIds: Set<string>,
  *   wallJunctions: Map<string, object>|null,
@@ -181,7 +183,7 @@ export function planColumnWraps(graph) {
  * }}
  *   wallStuds: 詳細LODの壁下地材（間柱断面）の長さ方向の中心位置と材厚（wallStudLayout.js）。詳細以外は空。
  */
-export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
+export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null, kneeDrop = undefined } = {}) {
   const detail = lodLevel === LodLevel.DETAIL;
   const schematic = lodLevel === LodLevel.SCHEMATIC;
   const walls = graph.walls;
@@ -199,7 +201,7 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null } = {}) {
   // 腰壁・垂れ壁の描画オーバーレイ。略図LOD（単線）では特別描画なし。
   // **壁の取り合い解決より先に**求める——平面での壁の高さ（腰壁か否か）はここが情報源で、
   // 高さが違う壁の組は取り合わない（高い方が優先。wallJunctionResolve.js のパス0）。
-  const kneeDropOverlays = schematic ? null : resolveKneeDropOverlays(graph);
+  const kneeDropOverlays = schematic ? null : resolveKneeDropOverlays(graph, kneeDrop);
 
   // 壁をまたぐ端の解決（wallJunctionResolve.js）。領域が使うのはパス0（高さが違う壁の取り合い＝
   // 低い壁の帯を覆う `endExtend`・覆われる区間 `spanCuts`・端部の回り込み `endWrap`）だけで、パス6

@@ -20,6 +20,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { regenerateWalls, loadMaterialMap } from '../finish/wallRegeneration.js';
 import { conformWoodBacking } from '../structural/woodAutoFill.js';
 import { LodLevel } from '../viewport.js';
+import { kneeDropUpOptions } from '../finish/kneeDropWall.js';
 import { buildWallDrawPlan, resolveWallLines, resolveDeferredBackingIds } from './wallDrawPlan.js';
 import { resolveWallRegionLines } from './planWallRegion.js';
 
@@ -236,6 +237,19 @@ test('buildWallDrawPlan: 標準LODでも高さが違う壁の取り合い（パ�
   assert.notEqual(plan.wallJunctions, null, '標準LODでも取り合いを解く');
   assert.deepEqual(plan.wallLines.get(knee.part.id).segments, [[1942.5, 4942.5]], '腰壁の帯の遠位面まで覆って伸びる');
   assert.deepEqual(allLines(plan).filter(l => l.kind === 'fin' || l.kind === 'ecap'), []);
+});
+
+// ---- 見上げ（天伏）: buildWallDrawPlan が opts.kneeDrop を腰壁・垂れ壁の解決へ渡す ----
+test('buildWallDrawPlan: opts.kneeDrop（見上げの切断高）が腰壁の overlay の有無・壁の取り合いに効く。省略は平面の切断高（従来どおり）', () => {
+  const knee = buildKneePartitionGraph(1300); // 平面の切断高 1500 以下＝腰壁
+  const planOverlays = buildWallDrawPlan(knee.g, LodLevel.STANDARD).kneeDropOverlays;
+  assert.ok(planOverlays.size > 0, '省略は平面の切断高 1500 → 腰壁 1300 は overlay');
+  const cutAway = buildWallDrawPlan(knee.g, LodLevel.STANDARD, { kneeDrop: kneeDropUpOptions(() => 1100) });
+  assert.equal(cutAway.kneeDropOverlays.size, 0, '天伏の切断高 1100 では 1300 の腰壁は切断面に切られる＝overlay なし');
+  assert.ok(![...cutAway.wallLines.values()].some(w => w.lines.some(l => l.kind === 'kd' || l.kind === 'kdcap')), '天板の線も出ない');
+  const tall = buildWallDrawPlan(knee.g, LodLevel.STANDARD, { kneeDrop: kneeDropUpOptions(() => 2000) });
+  assert.ok(tall.kneeDropOverlays.size > 0 && [...tall.kneeDropOverlays.values()].every(o => o.cutMm === 2000), '天伏 2000 では腰壁の overlay（区間の切断高つき）');
+  assert.equal(buildWallDrawPlan(knee.g, LodLevel.SCHEMATIC, { kneeDrop: kneeDropUpOptions(() => 2000) }).kneeDropOverlays, null, '略図LODは特別描画なし');
 });
 
 // ---- 失敗系: 自由端（相手がいない壁単体）は両端に妻線が立ち、内側線は物理端のまま ----

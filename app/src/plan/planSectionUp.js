@@ -35,13 +35,22 @@ function restoreSource(prim) {
 /**
  * 立体と切断高から、見上げの平面の線を解く。入力の配列・立体は変更しない。
  * @param {import('./planSolids.js').Solid[]} solids  planSolids の出力（ceilings:true で天井立体を含む）
- * @param {number} cutZ  切断面の高さ（自階 FL=0 の絶対 mm）。有限でなければ TypeError
- * @param {{eps?: number, slopeSampleMm?: number}} [opts]  planSectionFigure と同じ
+ * @param {number|((x:number,y:number)=>number)} cutZ  切断面の高さ（自階 FL=0 の絶対 mm）。有限でなければ TypeError。
+ *   関数のとき（天伏の切断高の例外。ceiling/ceilingCutHeight.js）は位置ごとの切断高で、opts.cutRange {min,max}（取りうる範囲。元の座標）が必須。鏡像で cut'(x,y)=-cutZ(x,y)・範囲は [-max,-min]
+ * @param {{eps?: number, slopeSampleMm?: number, cutRange?: {min:number, max:number}}} [opts]  planSectionFigure と同じ
  * @returns {import('./planSectionFigure.js').Primitive[]}  source.layerFloorZ は入力の立体の値（省略は省略のまま）
  */
 export function planSectionFigureUp(solids, cutZ, opts = {}) {
-  if (!Number.isFinite(cutZ)) throw new TypeError(`planSectionFigureUp: cutZ は有限の数値が必要です（${String(cutZ)}）`);
+  const isFn = typeof cutZ === 'function';
+  if (!isFn && !Number.isFinite(cutZ)) throw new TypeError(`planSectionFigureUp: cutZ は有限の数値または関数が必要です（${String(cutZ)}）`);
+  if (isFn && !(opts.cutRange && Number.isFinite(opts.cutRange.min) && Number.isFinite(opts.cutRange.max) && opts.cutRange.min <= opts.cutRange.max)) {
+    throw new TypeError('planSectionFigureUp: cutZ が関数のときは opts.cutRange {min,max}（有限・min<=max）が必要です');
+  }
   if (!Array.isArray(solids)) return [];
   const mirrored = solids.filter(s => s && Number.isFinite(s.zLo) && Number.isFinite(s.zHi)).map(mirrorSolid);
+  if (isFn) {
+    const { min, max } = opts.cutRange;
+    return planSectionFigure(mirrored, (x, y) => 0 - cutZ(x, y), { ...opts, cutRange: { min: 0 - max, max: 0 - min } }).map(restoreSource);
+  }
   return planSectionFigure(mirrored, 0 - cutZ, opts).map(restoreSource);
 }

@@ -346,24 +346,33 @@ export function validateKneeDropWall(kneeTop, dropBottom, ceilingHeight) {
  * 出さない（要件の明示規則）。腰壁が貫かない（<=階の切断高）ときは腰壁の天板輪郭が
  * 常に優先される（腰壁天板より低い切断面には他に描くものが無いため）。腰壁指定が無い区間
  * でのみ垂れ壁の判定（切断面が壁本体を貫くか）を行う。
+ * 見上げ（天伏）は opts で切り替える（kneeDropUpOptions）: 切断高は平面の値ではなく区間ごとの天伏の切断高（cutHeightOf。平面の切断高を使わない＝
+ * 裁定 2026-10-18「天伏の切断高は平面と変える」）、同じ区間に腰壁と垂れ壁が同居するときは天井に近い垂れ壁を採る（preferDrop）。
+ * opts 省略（平面）は従来どおりで出力不変。opts を渡したときだけ overlay に cutMm（その区間の切断高）を足す。
  * @param {object} graph
- * @returns {Map<string, {mode:'knee'|'drop', capLo:number, capHi:number, topHeight?:number}>}
+ * @param {{cutHeightOf?: ((geo: object) => number)|null, preferDrop?: boolean}} [opts]
+ *   cutHeightOf＝区間の幾何（kneeDropWallGeometry の結果）から切断高を返す。省略は平面の切断高。preferDrop＝腰壁・垂れ壁の同時指定を垂れ壁として扱う
+ * @returns {Map<string, {mode:'knee'|'drop', capLo:number, capHi:number, topHeight?:number, cutMm?:number}>}
  *   topHeight は mode==='knee' のみ（planWallHeight が読む平面での壁の高さ）。
  */
-export function resolveKneeDropOverlays(graph) {
+export function resolveKneeDropOverlays(graph, opts = {}) {
   const result = new Map();
   if (graph.kneeDropWalls.size === 0) return result;
+  const { cutHeightOf = null, preferDrop = false } = opts;
   const cellToRoom = buildCellToRoom(graph);
-  const cutHeight = planCutHeightMmOf(graph.plane); // 階の属性（Plane.planCutHeightMm）
+  const planCutHeight = planCutHeightMmOf(graph.plane); // 階の属性（Plane.planCutHeightMm）
 
   for (const [key, rec] of graph.kneeDropWalls) {
     if (!rec.knee && !rec.drop) continue;
     const geo = kneeDropWallGeometry(graph, key, cellToRoom);
     if (!geo) continue;
     const capLo = geo.faceLo - CAP_OVERHANG, capHi = geo.faceHi + CAP_OVERHANG;
+    const cutHeight = cutHeightOf ? cutHeightOf(geo) : planCutHeight;
 
     let overlay = null;
-    if (rec.knee) {
+    if (preferDrop && rec.drop && rec.knee && rec.knee.topHeight > cutHeight) {
+      // 見上げで腰壁が切断される（天端が切断高より上）ときは通常の壁（垂れ壁の破線も出さない）
+    } else if (rec.knee && !(preferDrop && rec.drop)) {
       // topHeight は「平面での壁の高さ」（planWallHeight）の情報源も兼ねる——壁同士の
       // 取り合いで高い方を優先するための比較に使う。
       if (rec.knee.topHeight <= cutHeight) {
@@ -378,6 +387,7 @@ export function resolveKneeDropOverlays(graph) {
       if (notCutByPlane) overlay = { mode: 'drop', capLo, capHi };
     }
     if (!overlay) continue;
+    if (cutHeightOf) overlay.cutMm = cutHeight;
 
     for (const w of geo.walls) {
       if (!result.has(w.id)) result.set(w.id, overlay);
@@ -403,7 +413,31 @@ export function shouldDrawCapOutline(overlay, direction, ceilingCutMm) {
   if (!overlay) return false;
   if (direction !== 'up') return true;
   if (overlay.mode !== 'knee') return true;
-  return !(overlay.topHeight < ceilingCutMm);
+  return !(overlay.topHeight < (overlay.cutMm ?? ceilingCutMm)); // 区間ごとの切断高（見上げの解決）があればそれを優先
+}
+
+// 壁の両側の点で切断高を問うときの、壁の仕上げ面からの距離(mm)（隣のセルの内側に入る程度）と、区間に沿った位置
+const SIDE_SAMPLE_MM = 10;
+const ALONG_SAMPLES = [0.25, 0.5, 0.75];
+
+/**
+ * 見上げ（天伏）で resolveKneeDropOverlays に渡す opts。区間の切断高＝区間の両側（壁の仕上げ面の外 SIDE_SAMPLE_MM）・区間に沿った
+ * 数点で cutZAt（ceiling/ceilingCutHeight.js）を引いた最小（壁に接する部屋の切断高の最小）。腰壁・垂れ壁の同時指定は垂れ壁を採る。
+ * @param {(x: number, y: number) => number} cutZAt
+ */
+export function kneeDropUpOptions(cutZAt) {
+  return {
+    preferDrop: true,
+    cutHeightOf: geo => {
+      const sides = [geo.faceLo - SIDE_SAMPLE_MM, geo.faceHi + SIDE_SAMPLE_MM];
+      let min = Infinity;
+      for (const t of ALONG_SAMPLES) {
+        const along = geo.lo + (geo.hi - geo.lo) * t;
+        for (const across of sides) min = Math.min(min, geo.isVertical ? cutZAt(across, along) : cutZAt(along, across));
+      }
+      return min;
+    },
+  };
 }
 
 /**

@@ -220,7 +220,8 @@ test('【配線】App.jsx の上階 peek の effect が abovePlanPeek を3状態
 
 test('【不変条件】planSolidsLayerFilter.js（純モジュール）は store.js・snap.js・.jsx・react-konva・graphDerived・mobx を import しない。描く種別の集合は1か所', () => {
   const imports = filter.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 7);
+  assert.equal(imports.length, 8);
+  assert.match(filter, /^import \{ ceilingCutResolverOf \} from '\.\.\/ceiling\/ceilingCutHeight\.js';$/m);
   assert.match(filter, /^import \{ planSectionFigureUp \} from '\.\/planSectionUp\.js';$/m);
   assert.match(filter, /^import \{ ceilingSurfacesOf \} from '\.\.\/ceiling\/ceilingSurfaces\.js';$/m);
   assert.match(filter, /^import \{ markSameHeightCeilingBoundaries \} from '\.\.\/ceiling\/ceilingBoundaryStyle\.js';$/m);
