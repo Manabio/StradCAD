@@ -231,12 +231,27 @@ export function straightSoffitFromLayout(L, { zStart, zTop }) {
  * @returns {import('../plan/planSolids.js').Solid[]}
  */
 export function stairSoffitSolids({ stair, graph, belowStair = null, belowGraph = null, riser, floorZMm, aboveGraph = null }) {
-  if (!stair || !graph || !Number.isFinite(floorZMm)) return [];
-  if (stair.structure !== StructuralMaterialType.WOOD) return [];
-  if (!(Number.isFinite(riser) && riser > 0) || !(Number.isFinite(stair.tread) && stair.tread > 0)) return [];
+  if (!stair || stair.structure !== StructuralMaterialType.WOOD) return [];
+  const solid = stairUndersideSurface({ stair, graph, belowStair, belowGraph, riser, floorZMm, aboveGraph });
+  if (!solid) return [];
+  return [{ kind: 'ceiling', ...solid, source: { kind: 'stairSoffit', id: String(stair.id), layerFloorZ: floorZMm, part: 0 } }];
+}
+
+/**
+ * 階段の裏面の面（footprint.rects＋zAt。構造によらない。裏面の式の唯一の供給源）。木造の天伏の立体（stairSoffitSolids）と、
+ * 階段の足元の中の壁の天端（plan/planSolids.js wallFootSurfaces・wallFootTop。構造を問わない）が同じ面を引く。dz は構造によらず同じ
+ * （STAIR_SOFFIT_THICKNESS_MM＝300。鉄骨のささら成と同値）。幾何は構造に依らない式だが入力の layout は構造で変わる
+ * （木造は隔て板の柱で到達辺・前縁が変わる）。組めない型（L_TURN 等）・蹴上や踏面が求まらないときは null。
+ * zStartMm … 往路の基端（baseA）の高さの上書き（絶対 z）。省略は「当該階天井」（belowStair/belowGraph から。N の FL 基準の値）。
+ *   階段の自階の壁には下階の天井が無いので呼び出し側が FL を渡す。
+ * @returns {{footprint:{rects:object[]}, zLo:number, zHi:number, zAt?:(x:number,y:number)=>number, innerLines?:object[]}|null}
+ */
+export function stairUndersideSurface({ stair, graph, belowStair = null, belowGraph = null, riser, floorZMm, aboveGraph = null, zStartMm = null }) {
+  if (!stair || !graph || !Number.isFinite(floorZMm)) return null;
+  if (!(Number.isFinite(riser) && riser > 0) || !(Number.isFinite(stair.tread) && stair.tread > 0)) return null;
   const dz = STAIR_SOFFIT_THICKNESS_MM * Math.sqrt(1 + (riser / stair.tread) ** 2); // 厚み / cosθ
   const ctx = {
-    zStart: stairBelowCeilingMm(belowStair, belowGraph),
+    zStart: Number.isFinite(zStartMm) ? zStartMm : stairBelowCeilingMm(belowStair, belowGraph),
     zTop: n => floorZMm + n * riser - dz,
     // 上階（N+1）の天井の絶対 z＝N+1 の FL＋対の部屋の CH＋床段差（stairBelowCeilingMm と同じ式を N+1 で）。復路の裏面はこれより上に出ない
     zCap: floorZMm + stairBelowCeilingMm(stair, graph),
@@ -244,6 +259,5 @@ export function stairSoffitSolids({ stair, graph, belowStair = null, belowGraph 
   const t = stair.type;
   const solid = t === StairType.SWITCHBACK || t === StairType.WINDING ? uTurnSolid(stair, graph, ctx, aboveGraph)
     : t === StairType.STRAIGHT || t === StairType.STRAIGHT_LANDING ? straightSolid(stair, graph, ctx) : null;
-  if (!solid) return [];
-  return [{ kind: 'ceiling', ...solid, source: { kind: 'stairSoffit', id: String(stair.id), layerFloorZ: floorZMm, part: 0 } }];
+  return solid ?? null;
 }

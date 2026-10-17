@@ -35,7 +35,7 @@
  *   既定 true。屋根が使う）。
  * @typedef {{graph: object|null, floorZMm: number, role: 'self'|'above'|'below', ceilZMm?: number}} SolidLayer
  */
-import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, edgeKey } from '@core';
+import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, RoomKind, edgeKey } from '@core';
 import { beamDepthMm } from '../elevation/section/sectionStructure.js';
 import { kneeDropZRangesAt } from '../elevation/section/sectionHits.js';
 import { stairUnderReturnSoffit } from '../elevation/section/sectionProbe.js';
@@ -57,7 +57,7 @@ import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { normalizeRect, isValidRect } from './planGeometry.js';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
-import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
+import { stairSoffitSolids, stairUndersideSurface } from '../ceiling/stairSoffit.js';
 
 /** 出力の kind 順（固定）。 */
 export const SOLID_KIND_ORDER = Object.freeze(['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'ceiling', 'generic']);
@@ -129,11 +129,13 @@ function columnSolids(layer) {
  * 壁1本を、腰壁・垂れ壁レコードの端で区間に割り、区間ごとに高さ範囲（1件、アキなら2件）を立体にする。
  * 高さは展開図と同じ `kneeDropZRangesAt` を共有する（規則を複製しない）。同じ高さ範囲が続く隣の区間は結合する
  * （隅の取り合いで壁端がレコード端を食い込む分の細片を作らない）。
- * 壁の高さの上限は壁ごとに1つ（wallCeilZ。両側の部屋の天井高の低い方、無ければ層の天井。復路下の壁は裏面＝underReturnTops）。
+ * 壁の高さの上限は壁ごとに1つ（wallCeilZ。両側の部屋の天井高の低い方、無ければ層の天井）。ただし階段の足元の中の区間だけ
+ * 階段の裏面（footSurfaces。階段の構造によらない）で頭打ちにする（wallFootSurfaces）。足元の端で区間を割る。
  * 隔て壁の斜めの天端（wallTop）は S7 まで扱わない。
- * @param {Map<string, number>} [underReturnTops] 復路下の壁の天端（壁 id → 絶対 z。underReturnWallTops）
+ * @param {object[]} [footSurfaces] 階段の裏面の面（wallFootSurfaces）
+ * @param {Map<string, number>} [underReturnTops] 復路下の壁（木造の生成壁）の壁全長の天端（壁 id → 絶対 z。underReturnWallTops）
  */
-function wallSolids(layer, cellToRoom, underReturnTops = new Map()) {
+function wallSolids(layer, cellToRoom, footSurfaces = [], underReturnTops = new Map()) {
   const graph = layer.graph;
   const hasRecords = (graph.kneeDropWalls?.size ?? 0) > 0;
   const out = [];
@@ -147,16 +149,22 @@ function wallSolids(layer, cellToRoom, underReturnTops = new Map()) {
       ? kneeDropRecordsOnAxis(graph, wall.axisCL, wLo, wHi).flatMap(r => [r.lo, r.hi])
         .filter(c => c > wLo + SPAN_EPS_MM && c < wHi - SPAN_EPS_MM)
       : [];
-    const bounds = [...new Set([wLo, ...cuts, wHi])].sort((a, b) => a - b);
+    const foot = footSurfaces.length > 0 && !underReturnTops.has(wall.id) ? wallFootIntervals(wall, cr, wLo, wHi, footSurfaces) : [];
+    const footCuts = foot.flatMap(f => [f.lo, f.hi, ...(wall.isVertical ? f.surface.stepYs : f.surface.stepXs).filter(c => c > f.lo && c < f.hi)]).filter(c => c > wLo + SPAN_EPS_MM && c < wHi - SPAN_EPS_MM);
+    const bounds = [...new Set([wLo, ...cuts, ...footCuts, wHi])].sort((a, b) => a - b);
     const spans = []; // {lo, hi, ranges}
-    const ceilZ = Math.min(wallCeilZ(layer, wall, cellToRoom), underReturnTops.get(wall.id) ?? Infinity);
+    // 復路下の壁（木造の生成壁）は、足元の外の端（隔て板の隙間・外周壁への食い込み）も含め壁全長を裏面で平らに止める
+    // （従来どおり。この壁は足元の区間割り・区間ごとの天端の対象外＝下地の壁と薄壁が 1 立体にまとまるまま）
+    const wallCeil = Math.min(wallCeilZ(layer, wall, cellToRoom), underReturnTops.get(wall.id) ?? Infinity);
     for (let i = 0; i + 1 < bounds.length; i++) {
       const lo = bounds[i], hi = bounds[i + 1];
       if (!(hi - lo > 1e-6)) continue;
       const mid = (lo + hi) / 2;
+      const ceilZ = Math.min(wallCeil, wallFootTop(wall, cr, lo, hi, foot));
       const ranges = kneeDropZRangesAt(graph, wall, mid, layer.floorZMm, ceilZ)
         .filter(r => r.z1 > r.z0);
-      const key = JSON.stringify(ranges.map(r => [r.z0, r.z1]));
+      // 裏面の天端は平面の補間で float の誤差が乗るので、1e-6 mm で丸めて同じ高さの隣の区間を結合する
+      const key = JSON.stringify(ranges.map(r => [Math.round(r.z0 * 1e6), Math.round(r.z1 * 1e6)]));
       const prev = spans[spans.length - 1];
       if (prev && prev.key === key) prev.hi = hi;
       else spans.push({ lo, hi, ranges, key });
@@ -179,17 +187,43 @@ function wallSolids(layer, cellToRoom, underReturnTops = new Map()) {
 }
 
 /**
- * 復路下の壁（stairPartitionWalls.js generateStairUnderReturnWalls）の天端＝復路レーンの裏面を、壁 id → 絶対 z で返す。
- * 供給源は展開図（sectionProbe.js addUnderReturnTops）と同じ stairUnderReturnSoffit の wallTopZ（壁の軸上・区間の中央で
- * 厚み方向 3 点の裏面の最小）。裏面で止めないと壁が部屋の天井まで立ち、見下げで踏面（裏面より上）より高くなって
- * 「面材が勝つ」規則で隠れず、上階の床の穴ごしに下階レイヤの線として現れる（moku4-3 2階の踊り場前縁 y=−8247.5 の線。
- * ユーザー裁定 2026-10-17「復路下の壁の天端を planSolids でも裏面で止める」）。
+ * 階段の足元の中の壁の天端＝階段の裏面（ceiling/stairSoffit.js stairUndersideSurface。構造・壁の種類によらない。dz は木造と同じ）。
+ * 裏面で止めないと壁が部屋の天井まで立ち、見下げで踏面（裏面より上）より高くなって「面材が勝つ」規則（planSectionFigure.js
+ * hidesAt）で隠れず、上階の床の穴ごしに下階レイヤの線として現れる（moku4-3 2階の踊り場前縁 y=−8247.5 の復路下の壁の線。
+ * 13.stq 2階「6」の階段下の部屋「13」の壁。ユーザー指示 2026-10-17「木造階段同様に Z 座標でクリップ」）。固定 mm の閾値は使わない。
  * 階高は直上の層との差。直上の層が無い最上の層（見下げの自階）は層の蹴上（riserFor）×総段数で戻す（riserOf の逆算。明示の
- * stair.riser はそのまま使われる）。蹴上が決まらない・鉄骨階段・裏面が組めない壁は載せない＝従来どおり天井高。
+ * stair.riser はそのまま使われる）。蹴上が決まらない・屋外階段・裏面が組めない型（L_TURN 等）は面を載せない＝従来どおり天井高。
+ * 往路の基端の高さは自階の FL（自階の壁に下階の天井は無い）。
  * @param {SolidLayer} layer
  * @param {(stair:object)=>number|null} riserFor 層の蹴上
  * @param {number|undefined} upperZ 直上の層の FL（無ければ undefined）
  * @param {object|null} aboveGraph 直上の層の graph（復路の到達辺。stairTreadSolids と同じ）
+ * @returns {object[]} 裏面の面（footprint.rects＋zAt）
+ */
+function wallFootSurfaces(layer, riserFor, upperZ, aboveGraph = null) {
+  const out = [];
+  for (const stair of layer.graph.stairs ?? []) {
+    if (layer.graph.roomMap?.get(stair.roomId)?.kind === RoomKind.EXTERIOR) continue; // 屋外階段の下に壁は立たない
+    const riser0 = riserFor(stair);
+    const floorHeight = upperZ !== undefined ? upperZ - layer.floorZMm
+      : (Number.isFinite(riser0) ? riser0 * Math.max(1, stair.totalSteps ?? 1) : null);
+    if (!Number.isFinite(floorHeight) || floorHeight <= 0) continue;
+    const riser = riserOf(stair, floorHeight);
+    if (!Number.isFinite(riser)) continue;
+    const surface = stairUndersideSurface({ stair, graph: layer.graph, riser, floorZMm: layer.floorZMm, aboveGraph, zStartMm: layer.floorZMm });
+    if (!surface?.footprint?.rects?.length) continue;
+    // 段の境界（各段の占有形の頂点の座標）。足元の区間をここで割り、傾斜に沿う長い壁が低い端の値へ全長下がらないようにする
+    const polys = treadFootprintsOf(layer, stair, riser, 'upper', aboveGraph).map(t => t.poly);
+    const stepCoords = i => [...new Set(polys.flatMap(p => p.filter((_, k) => k % 2 === i)))];
+    out.push({ ...surface, stepXs: stepCoords(0), stepYs: stepCoords(1) });
+  }
+  return out;
+}
+
+/**
+ * 復路下の壁（stairPartitionWalls.js generateStairUnderReturnWalls）の壁全長の天端を、壁 id → 絶対 z で返す（2026-10-17 の
+ * 先の裁定の経路。足元の外の端まで平らに止める）。供給源は展開図（sectionProbe.js addUnderReturnTops）と同じ
+ * stairUnderReturnSoffit の wallTopZ（壁の軸上・区間の中央で厚み方向 3 点の裏面の最小）。階高・蹴上は wallFootSurfaces と同じ求め方。
  * @returns {Map<string, number>}
  */
 function underReturnWallTops(layer, riserFor, upperZ, aboveGraph = null) {
@@ -204,6 +238,51 @@ function underReturnWallTops(layer, riserFor, upperZ, aboveGraph = null) {
     for (const w of found.walls) tops.set(w.id, found.wallTopZ);
   }
   return tops;
+}
+
+const FOOT_EPS_MM = 1e-6;
+
+/**
+ * 壁（長さ方向 wLo〜wHi）が階段の足元（裏面の footprint.rects）の中にある区間 {lo, hi, surface}（長さ方向の座標）。
+ * 対象は壁の軸（帯の中央）が足元の矩形の厚み方向の範囲の中にある壁だけ（軸が階段の下にある壁が階段下の壁。帯が端で
+ * 少し重なるだけの階段室の外周壁などは対象外。QA の反例を受けたリード裁定 2026-10-17・ユーザー未確認）。
+ */
+function wallFootIntervals(wall, cr, wLo, wHi, surfaces) {
+  const out = [];
+  // 壁の軸＝帯（wallConcealRange）の中央。偏芯した仕上げの薄壁は wall.axisValue が帯の端（通り芯）にあるので、
+  // 通り芯が足元の縁に乗っていても薄壁が下地の壁と別扱いにならないよう帯の中央で判定する
+  const axis = (cr.lo + cr.hi) / 2;
+  for (const surface of surfaces) {
+    for (const r of surface.footprint.rects) {
+      const [bLo, bHi, aLo, aHi] = wall.isVertical ? [r.x1, r.x2, r.y1, r.y2] : [r.y1, r.y2, r.x1, r.x2];
+      if (!(axis >= bLo - FOOT_EPS_MM && axis <= bHi + FOOT_EPS_MM)) continue; // 隣り合う足元の矩形の共有辺上の軸はどちらの矩形でも対象
+      const lo = Math.max(wLo, aLo), hi = Math.min(wHi, aHi);
+      if (hi - lo > FOOT_EPS_MM) out.push({ lo, hi, surface });
+    }
+  }
+  return out;
+}
+
+/**
+ * 区間 [lo, hi] が足元の中なら、その区間の天端（長さ方向 lo・中央・hi × 厚み方向 帯の両端と中央の 3 点の裏面 zAt の最小）。
+ * 足元の外（どの足元区間にも中点が入らない）は Infinity＝天井高のまま。区間は wallFootIntervals の端で割ってあるので、
+ * 中点が入れば区間全体が足元の中。
+ */
+function wallFootTop(wall, cr, lo, hi, foot) {
+  const mid = (lo + hi) / 2;
+  let top = Infinity;
+  for (const f of foot) {
+    if (!(mid > f.lo && mid < f.hi)) continue;
+    const { surface } = f;
+    for (const a of [lo, mid, hi]) {
+      for (const b of [cr.lo, (cr.lo + cr.hi) / 2, cr.hi]) {
+        const z = surface.zAt ? (wall.isVertical ? surface.zAt(b, a) : surface.zAt(a, b)) : surface.zLo;
+        if (Number.isFinite(z)) top = Math.min(top, z);
+      }
+    }
+  }
+  // 1e-6 mm に量子化する（補間の float 誤差で、同じ芯の下地の壁と仕上げの薄壁が別の高さになり mergeTouchingWalls で割れるのを防ぐ）
+  return Number.isFinite(top) ? Math.round(top * 1e6) / 1e6 : top;
 }
 
 /**
@@ -435,6 +514,19 @@ function roofSolids(layer) {
 
 // ---------------------------------------------------------------- 階段の段
 
+// 層の中で同じ階段・蹴上・見え方の段の占有形は1回だけ求める（stairTreadSolids と wallFootSurfaces が共有。出力不変）
+// planSolids の呼び出しごとに作り直す（graph の変更・直上の graph の違いを呼び出しをまたいで持ち越さない）
+let treadFootprintCache = new WeakMap(); // layer → Map<stair, Map<キー, 段の占有形>>
+function treadFootprintsOf(layer, stair, riser, insetView, aboveGraph) {
+  let byStair = treadFootprintCache.get(layer);
+  if (!byStair) treadFootprintCache.set(layer, byStair = new Map());
+  let byKey = byStair.get(stair);
+  if (!byKey) byStair.set(stair, byKey = new Map());
+  const key = `${insetView}|${riser}`;
+  if (!byKey.has(key)) byKey.set(key, stairTreadFootprints(stair, layer.graph, { riser, insetView, aboveGraph }));
+  return byKey.get(key);
+}
+
 const polyArea2 = p => p.reduce((s, _, i) => (i % 2 ? s : s + p[i] * p[(i + 3) % p.length] - p[(i + 2) % p.length] * p[i + 1]), 0);
 
 /**
@@ -452,7 +544,7 @@ function stairTreadSolids(layer, riserFor, drawnStairs = null, skipStairs = null
   const insetView = layer.role === 'self' ? 'install' : 'upper'; // 自階は設置階の逃がし（StairLayer の beyondBuilt と同じ）、下階は見下げ
   for (const stair of layer.graph.stairs ?? []) {
     if (skipStairs?.has(stair)) continue;
-    for (const t of stairTreadFootprints(stair, layer.graph, { riser: riserFor(stair), insetView, aboveGraph })) {
+    for (const t of treadFootprintsOf(layer, stair, riserFor(stair), insetView, aboveGraph)) {
       const p = t.poly;
       if (p.length < 6 || p.length % 2 !== 0 || !p.every(Number.isFinite) || Math.abs(polyArea2(p)) < 1e-6) continue;
       const z = layer.floorZMm + t.topZ;
@@ -575,6 +667,7 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  * @returns {Solid[]}
  */
 export function planSolids(layers, opts = {}) {
+  treadFootprintCache = new WeakMap();
   const entries = []; // {solid, layerZ, roleRank}
   const floorZs = (layers ?? []).filter(l => l?.graph && Number.isFinite(l.floorZMm)).map(l => l.floorZMm).sort((a, b) => a - b);
   for (const layer of layers ?? []) {
@@ -590,7 +683,7 @@ export function planSolids(layers, opts = {}) {
       : stair => opts.riserOf?.(stair) ?? null;
     const underside = opts.lookUp === true && layer.role === 'above'
       ? stairUndersideOf(layer, riserForLayer, opts.belowGraphOf?.(layer.graph) ?? null) : null;
-    const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom, underReturnWallTops(layer, riserForLayer, upperZ, upperGraph)), ...columnSolids(layer),
+    const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom, wallFootSurfaces(layer, riserForLayer, upperZ, upperGraph), underReturnWallTops(layer, riserForLayer, upperZ, upperGraph)), ...columnSolids(layer),
       ...beamSolids(layer), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
         opts.lookUp === true && layer.role === 'self' ? stairsContinuedAbove(layer, layers, opts) : null, upperGraph),
       ...(underside?.soffits ?? []),

@@ -90,7 +90,7 @@
 - 既知の限界: 同軸の天井芯どうしを移動で結合すると吸われた側の id が消え、その id を含むセルの区画は部屋の CH に戻る（`cl-conversion-limits.md` 14）。
 
 ## 階段上の裏面（S13a）
-復路の到達辺は N+1 の床梁の外面＋仕上げ（`stair-model.md`）。`stairSoffitSolids` は `aboveGraph` を受けて合わせる（自階の階段の裏面・復路下の壁の天端）。**既知の限界**: 見上げの N+1 の階段の裏面（`stairUndersideOf`・`stairSoffitAbove`）は N+2 が層スタックに無く Q3 のまま。
+復路の到達辺は N+1 の床梁の外面＋仕上げ（`stair-model.md`）。`stairSoffitSolids` は `aboveGraph` を受けて合わせる（自階の階段の裏面・復路下の壁の天端）。裏面の面（footprint＋zAt）の式は構造に依らない `stairUndersideSurface` に切り出してあり（唯一の供給源）、`stairSoffitSolids` は木造だけをそれで天伏の立体にする。平面の階段の足元の中の壁の天端（鉄骨・RC 含む）も同じ面を引く（`plan-section.md` の壁の上端）。**既知の限界**: 見上げの N+1 の階段の裏面（`stairUndersideOf`・`stairSoffitAbove`）は N+2 が層スタックに無く Q3 のまま。
 N 階の天伏は「N の天井面際から N+1 の床を裏から見た図」。N の階段の足元の上にある N+1 の階段（N の続き）は裏から見た姿で描く。続きの判定は下階の階段とのフットプリント（外接矩形）一致（`openingBeamAxes.js matchingStairBelow`）。
 - 上階スラブの穴は、続きの階段では破れ先でなく**足元全体**（`slabOpening.js floorOpeningCellRects` の `stairExtent:'full'`。見上げ＝`planSolids` の `opts.lookUp` だけ）。N の天井は足元の縁で終わる（裁定 Q2a）。
 - **鉄骨**: 踏面線を全段、細線の実線で（`stairTread` の輪郭を有効化。破れ線なし）。**木造**: 階段裏に天井材仕上げがあるので踏面線は描かず、傾斜天井（`ceiling/stairSoffit.js stairSoffitSolids`。kind `'ceiling'`・source.kind `'stairSoffit'`）だけを描く。

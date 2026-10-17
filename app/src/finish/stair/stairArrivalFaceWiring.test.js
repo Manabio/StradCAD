@@ -112,7 +112,8 @@ test('【配線】aboveGraph は展開図・天伏・立体の各呼び出し元
   has('stairGeometry.js', 'const { sideInsetMm, ...bi } = insetStairBounds(stair, b, opts.insetView ?? opts.view, opts.graph ?? null, opts.spans ?? null, { startInsetMm: startInsetFor(stair, b, opts.partition) });');
   has('../../plan/planSolids.js', 'const L = uTurnPlanLayout(stair, below, { aboveGraph: graph });');
   has('stairTreads.js', "view: 'upper', insetView, detail: false, riser, spans: measureStairSpans(stair, graph), laneGap: true, graph, aboveGraph, collectCells: true,");
-  has('../../plan/planSolids.js', 'for (const t of stairTreadFootprints(stair, layer.graph, { riser: riserFor(stair), insetView, aboveGraph })) {');
+  has('../../plan/planSolids.js', 'for (const t of treadFootprintsOf(layer, stair, riserFor(stair), insetView, aboveGraph)) {');
+  has('../../plan/planSolids.js', 'if (!byKey.has(key)) byKey.set(key, stairTreadFootprints(stair, layer.graph, { riser, insetView, aboveGraph }));');
   has('../../plan/planSolids.js', 'opts.lookUp === true && layer.role === \'self\' ? stairsContinuedAbove(layer, layers, opts) : null, upperGraph),');
 });
 
