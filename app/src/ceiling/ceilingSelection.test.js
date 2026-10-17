@@ -100,24 +100,31 @@ test('階段: 階段下部屋（2a）は feature=STAIR のペア部屋つき階�
   assert.deepEqual(owners.get(g.cell(0, 0)), { kind: 'stair', id: stair.id, rowId: pair.id });
 });
 
-test('所属: VOID の部屋が屋内部屋より先に並んでいても、重なるセルは屋内部屋の所属（VOID 単独のセルは載らない）', () => {
+test('所属: VOID の部屋が屋内部屋より先に並んでいても、重なるセルは屋内部屋の所属。VOID 単独のセルは壁なしで接する屋内部屋の所属（隣が無ければ載らない）', () => {
   const g = makeGrid(XS, YS);
   g.feature([[0, 0], [1, 0]], RoomFeature.VOID);
   const room = g.interior([[1, 0]]);
   const owners = buildCeilingCellOwners(g.graph);
   assert.deepEqual(owners.get(g.cell(1, 0)), { kind: 'room', id: room.id, rowId: room.id });
-  assert.equal(owners.has(g.cell(0, 0)), false);
+  assert.deepEqual(owners.get(g.cell(0, 0)), { kind: 'room', id: room.id, rowId: room.id }, '吹抜けのセルは隣の部屋へ（裁定 2026-10-17）');
+  const lone = makeGrid(XS, YS);
+  lone.feature([[0, 0]], RoomFeature.VOID);
+  assert.equal(buildCeilingCellOwners(lone.graph).has(lone.cell(0, 0)), false, '隣の部屋が無ければ載らない');
 });
 
-test('所属: 天井を持たない部分指定の子（VOID）のセルは親の所属にならず、begin は null。親の残りは親', () => {
+test('所属: 天井を持たない部分指定の子（VOID）のセルは「親の所属」としてではなく吹抜けの規則（壁なしで接する面積最大の部屋）で決まる。全高の壁で隔てられていれば載らず begin は null', () => {
   const g = makeGrid(XS, YS);
   const parent = g.interior([[0, 0], [1, 0]]);
   const child = g.graph.addRoom(new Set([g.cell(1, 0)]), '吹抜け', 'void-child', new Set([parent.id]));
   child.setFeature(RoomFeature.VOID);
   const owners = buildCeilingCellOwners(g.graph);
-  assert.equal(owners.has(g.cell(1, 0)), false);
-  assert.equal(beginCeilingDrag(g.graph, owners, ...ctr(1, 0)), null);
+  assert.equal(owners.get(g.cell(1, 0)).id, parent.id, '壁なしで接する親の残りの天井に溶け込む（裁定 2026-10-17）');
+  assert.notEqual(beginCeilingDrag(g.graph, owners, ...ctr(1, 0)), null);
   assert.equal(owners.get(g.cell(0, 0)).id, parent.id);
+  g.graph.addWall(g.cx[1], 0, true, g.cy[0], 0, g.cy[1], 0, {}); // 全高の壁で隔てる
+  const walled = buildCeilingCellOwners(g.graph);
+  assert.equal(walled.has(g.cell(1, 0)), false);
+  assert.equal(beginCeilingDrag(g.graph, walled, ...ctr(1, 0)), null);
 });
 
 test('境界: 他所属を通って戻る経路の補間は、通っていないセルを拾わない（lastWorld を進める）', () => {

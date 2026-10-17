@@ -13,7 +13,8 @@ const XS = [0, 1000, 2000, 3000, 4000, 5000, 6000];
 const YS = [0, 1000, 2000];
 
 /**
- * A（親 3 セル。(1,0) に区画）・子（A の部分指定。(2,0)）・階段の対の部屋 P（STAIR。(3,0),(4,0)。(4,0) に区画）・階段 S（P のセル）・B（(5,0)）・吹抜け（(0,1)）・
+ * A（親 3 セル。(1,0) に区画）・子（A の部分指定。(2,0)）・階段の対の部屋 P（STAIR。(3,0),(4,0)。(4,0) に区画）・階段 S（P のセル）・B（(5,0)）・
+ * 吹抜け（(0,1)。壁なしで A の (0,0) に接するので A の残りの群に入る。裁定 2026-10-17）・
  * 階段吹抜け sv（STAIR_VOID。(1,1)。索引外で群を持たない平らな面だけを持つ）。
  */
 function setup() {
@@ -23,11 +24,11 @@ function setup() {
   const pair = g.feature([[3, 0], [4, 0]], RoomFeature.STAIR);
   const stair = g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(3, 0), g.cell(4, 0)]) });
   const b = g.interior([[5, 0]]);
-  g.feature([[0, 1]], RoomFeature.VOID);
+  const vd = g.feature([[0, 1]], RoomFeature.VOID);
   const sv = g.feature([[1, 1]], RoomFeature.STAIR_VOID);
   a.setCeilingZones(assignZoneHeight(g.graph, a, [g.cell(1, 0)], 2600));
   pair.setCeilingZones(assignZoneHeight(g.graph, pair, [g.cell(4, 0)], 2500));
-  return { g, graph: g.graph, a, child, pair, stair, b, sv };
+  return { g, graph: g.graph, a, child, pair, stair, b, sv, vd };
 }
 
 const groupsOf = graph => ceilingGroupsOf(graph, buildCeilingCellOwners(graph));
@@ -51,7 +52,7 @@ test('群: 区画の群・部屋の残り・階段の残りに分かれ、どの
     roomGroupId(a.id), roomGroupId(child.id), roomGroupId(b.id),
     zoneGroupId(a.id, zoneA.id), zoneGroupId(pair.id, zonePair.id), stairGroupId(stair.id),
   ].sort());
-  assert.deepEqual(sortedCells(groups.get(roomGroupId(a.id))), [g.cell(0, 0)], '親の残り（区画と子のセルを除く）');
+  assert.deepEqual(sortedCells(groups.get(roomGroupId(a.id))), [g.cell(0, 0), g.cell(0, 1)].sort(), '親の残り（区画と子のセルを除く）＋壁なしで接する吹抜けのセル');
   assert.deepEqual(sortedCells(groups.get(roomGroupId(child.id))), [g.cell(2, 0)], '部分指定の子の残り');
   assert.deepEqual(sortedCells(groups.get(zoneGroupId(a.id, zoneA.id))), [g.cell(1, 0)]);
   assert.deepEqual(sortedCells(groups.get(stairGroupId(stair.id))), [g.cell(3, 0)], '階段の残り（区画のセルを除く）');
@@ -105,12 +106,12 @@ test('不変条件（S12c 持ち越し4）: 階段の roomId が天井を持つ�
 });
 
 test('群は部屋の並び順に依存しない（reorderRooms の全順列で同じ群）', () => {
-  const { graph, a, child, pair, b } = setup();
-  const ids = [a.id, child.id, pair.id, b.id];
+  const { graph, a, child, pair, b, vd, sv } = setup();
+  const ids = [a.id, child.id, pair.id, b.id, vd.id, sv.id]; // reorderRooms は列挙した部屋だけを残すので、吹抜けも並べ替えに含める
   const base = signature(groupsOf(graph));
   const perms = list => (list.length <= 1 ? [list] : list.flatMap((x, i) => perms([...list.slice(0, i), ...list.slice(i + 1)]).map(p => [x, ...p])));
   const all = perms(ids);
-  assert.equal(all.length, 24);
+  assert.equal(all.length, 720);
   for (const order of all) {
     graph.reorderRooms(order);
     assert.equal(signature(groupsOf(graph)), base, `順序 ${order.join(',')}`);

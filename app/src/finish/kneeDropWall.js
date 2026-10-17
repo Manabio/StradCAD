@@ -48,7 +48,7 @@ const BOTH_MARGIN = 20; // mm — 両方指定時の上限式 (腰H+垂れH <= �
 // （実機2026-08「21」2階 X2×Y2+3500: 隣室側の壁に天板線が増え、通常の壁帯が消えた）。
 // 値は隅の取り合いの許容差（core/wallChamfer.js chamferWalls・renderer/wallJunctionResolve.js
 // の CORNER_EXCLUSION・closeConvexCorners の CONTINUE_TOL）と揃えた 150mm。
-const SPAN_OVERLAP_EPS = 150; // mm
+export const SPAN_OVERLAP_EPS = 150; // mm（ceiling/ceilingOwners.js は「壁の無いすき間の上限」として共用）
 
 // 押下位置から部屋側セルを解決する際のオフセット(mm)。edgeClassify.js の ADJACENT_SAMPLE_EPS と同水準。
 const PRESS_SIDE_EPS = 10; // mm

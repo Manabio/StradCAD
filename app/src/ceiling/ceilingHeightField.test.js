@@ -89,14 +89,14 @@ test('部屋の形状（customOverrides ceilingShape）が区画なしの残り�
 
 test('面の外・天井なし部屋（VOID・STAIR・屋根）の点は null。STAIR_VOID は平らな面（既定天井高）で返る', () => {
   const g = makeGrid([0, 1000, 2000, 3000, 4000, 5000], [0, 1000]);
-  g.interior([[0, 0]]);
+  const room = g.interior([[0, 0]]);
   g.feature([[1, 0]], RoomFeature.VOID);
   const pair = g.feature([[2, 0]], RoomFeature.STAIR);
   g.graph.addStair({ type: StairType.STRAIGHT, roomId: pair.id, cells: new Set([g.cell(2, 0)]) });
   g.feature([[3, 0]], RoomFeature.STAIR_VOID);
   const f = buildCeilingHeightField(g.graph);
   assert.notEqual(f.zAt(500, 500), null);
-  assert.equal(f.zAt(1500, 500), null, 'VOID');
+  assert.equal(f.zAt(1500, 500).roomId, room.id, 'VOID は壁なしで接する隣の部屋の天井に溶け込む（裁定 2026-10-17）');
   assert.equal(f.zAt(2500, 500), null, '区画なしの階段');
   assert.equal(f.zAt(-100, 500), null, '部屋の外');
   assert.equal(f.zAt(4500, 500), null, '部屋なし');

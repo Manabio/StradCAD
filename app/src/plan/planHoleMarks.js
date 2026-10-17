@@ -147,15 +147,31 @@ const isUpperStairVoidGroup = g => g?.kind === 'stairVoid' && isFiniteRect(g.inn
  *   aboveGroups?: Array<object>|null|undefined  上階の floorOpeningGroups。null＝上階なし・undefined＝未解決（どちらも上階分なし）
  *   aboveStairVoidGroups?: Array<object>|null  上階の階段吹抜けのグループ（見上げだけ。stairVoidRect で innerRect 付き）
  * }} args
+ *   - 見上げ（lookUp: true）は「N の天井の穴＝直上階 N+1 の床の穴」: 自階の×・上階の破線は出さず、aboveGroups の void・shaft を
+ *     role 'upperHole'（dashKind 'openingCross'・outline/label なし。自階の被覆判定なし）の×にする。次の upperStairVoid と同じ見た目・同じ規則。
  *   - 見上げの下の階からの×（role 'upperStairVoid'・dashKind 'openingCross'＝自階の×と同じ一点鎖線・outline/label なし）: aboveStairVoidGroups の
  *     innerRect が解決できた階段吹抜け。上階スラブの穴の縁は解決器が実線で出すので外形・ラベルは付けない。
- * @returns {Array<{key:string, role:'cross'|'upperVoid'|'upperStairVoid', rect:{x1:number,y1:number,x2:number,y2:number},
+ * @returns {Array<{key:string, role:'cross'|'upperVoid'|'upperHole'|'upperStairVoid', rect:{x1:number,y1:number,x2:number,y2:number},
  *   cellRect:object|null, dashKind:'openingCross'|'upperVoid', outline:boolean, label:boolean,
  *   source:{kind:string, id:string, feature:string|null}}>}
  *   rect＝innerRect（壁内4頂点）。cellRect＝上階の被覆判定に使った CL 値の矩形（cross は null 可）。
  */
-export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveStairVoidGroups } = {}) {
+export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveStairVoidGroups, lookUp = false } = {}) {
   const marks = [];
+  if (lookUp) {
+    // 見上げ: 「N の天井の穴」＝直上階 N+1 の床の穴。自階の床の穴は N の天井と無関係なので自階の×・上階の破線は出さず、
+    // 上階の void・shaft に×だけ（上階の階段吹抜けの upperStairVoid と同じ見た目・同じ規則。自階の被覆判定もしない）
+    for (const g of aboveGroups ?? []) {
+      if (!isCrossGroup(g)) continue;
+      marks.push({
+        key: `upperHole:${g.id}`, role: 'upperHole', rect: { ...g.innerRect }, cellRect: g.cellRect ? { ...g.cellRect } : null,
+        dashKind: 'openingCross', outline: false, label: false,
+        source: { kind: g.kind, id: g.id, feature: g.feature ?? null },
+      });
+    }
+    pushUpperStairVoidMarks(marks, aboveStairVoidGroups);
+    return marks;
+  }
   for (const g of selfGroups ?? []) {
     if (!isCrossGroup(g)) continue;
     marks.push({
@@ -174,6 +190,11 @@ export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveSta
       source: { kind: g.kind, id: g.id, feature: g.feature ?? null },
     });
   }
+  pushUpperStairVoidMarks(marks, aboveStairVoidGroups);
+  return marks;
+}
+
+function pushUpperStairVoidMarks(marks, aboveStairVoidGroups) {
   for (const g of aboveStairVoidGroups ?? []) {
     if (!isUpperStairVoidGroup(g)) continue;
     marks.push({
@@ -182,7 +203,6 @@ export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveSta
       source: { kind: g.kind, id: g.id, feature: g.feature ?? null },
     });
   }
-  return marks;
 }
 
 /**
@@ -192,16 +212,18 @@ export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveSta
  * @param {object|null} graph
  * @param {Array<object>|null|undefined} aboveGroups 上階の floorOpeningGroups（null＝上階なし・undefined＝未解決）
  * @param {{lookUp?: boolean, aboveStairVoidGroups?: Array<object>|null}} [opts]
- *   lookUp＝天伏の見上げ（既定 false＝見下げ）。true のときだけ aboveStairVoidGroups を使う。
+ *   lookUp＝天伏の見上げ（既定 false＝見下げ）。true のときは自階の×を出さず、aboveGroups（上階の穴）と aboveStairVoidGroups を×にする。
+ *   見下げでは aboveStairVoidGroups は使わない。
  *   aboveStairVoidGroups＝上階の階段吹抜けのグループ（stairVoidRect 付き）。足元の上の続きの無い階段の×（一点鎖線）。
  */
 export function planHoleMarksOf(graph, aboveGroups, { lookUp = false, aboveStairVoidGroups = null } = {}) {
   if (!graph) return [];
+  if (lookUp) return planHoleMarks({ aboveGroups, aboveStairVoidGroups, lookUp: true });
   return planHoleMarks({
     selfGroups: floorOpeningGroups(graph, { stairFilter: () => false }),
     selfVoidCells: aboveGroups?.length ? selfVoidHoleRects(graph) : [],
     aboveGroups,
-    aboveStairVoidGroups: lookUp ? aboveStairVoidGroups : null,
+    aboveStairVoidGroups: null,
   });
 }
 

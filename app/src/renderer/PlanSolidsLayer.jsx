@@ -26,8 +26,8 @@ const CEILING_BOUNDARY_COLOR = '#9ca3af'; // 天伏: 同じ高さで隣り合う
  * 吹抜け・昇降路の注記（S6）も描く（Group "plan-hole-marks"）: 自階の×（一点鎖線）と、直下階に描く上階吹抜けの×・外形・「上部吹抜け」（破線）。
  * 注記は穴（plan/planHoleMarks.js）から導く切断面上の記号で、遮蔽の解決は通さない。自階の×はドラッグ追従のため memo の外で毎回求め、
  * 上階の穴（abovePeek。App.jsx が上階を peek して渡す。3状態は belowPeek と同じ）は peek した graph に memo する。LOD はラベルだけ落とす。
- * direction 'up'（天伏。SceneLayers が planSectionDirection(appMode) で渡す）は見上げ: 自階＋直上階（abovePeek）を解き、注記は自階の×（void・shaft だけ。階段吹抜けは平らな天井面で×なし）と、
- * 直上階の階段吹抜け＝続きの無い階段の足元の上の一点鎖線の×だけ（`.claude/plan-section.md`「見上げ（天伏）」・`.claude/ceiling-model.md` S13b）。省略・'down' は従来どおり。
+ * direction 'up'（天伏。SceneLayers が planSectionDirection(appMode) で渡す）は見上げ: 自階＋直上階（abovePeek）を解き、注記は自階の×なし（自階の床の穴は N の天井と無関係）で、
+ * 直上階の吹抜け・昇降路と階段吹抜け＝続きの無い階段の足元の上の一点鎖線の×だけ（`.claude/plan-section.md`「見上げ（天伏）」・`.claude/ceiling-model.md` S13b）。省略・'down' は従来どおり。
  */
 export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, abovePeek, direction = 'down' }) => {
   const prevRef = useRef(null); // { planeId, prims }: ドラッグ中に描き続ける前回の線（階が違えば使わない）
@@ -42,16 +42,16 @@ export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, 
   const prims = resolved ? visiblePlanPrimitives(resolved, viewport.lodLevel) : [];
   // 吹抜け・昇降路の注記（S6）。上階の穴は peek した graph（ドラッグで変わらない）に memo、自階の×は memo の外
   // （通り芯ドラッグ中も追従する。planHoleMarksOf）。自階と違う階の peek（階切替直後の1フレーム）は使わない。
-  // 見上げ（天伏）は自階の×（階段吹抜けも）と、上階の階段吹抜け（続きの無い階段の足元の上）の実線の×だけ
-  // （上階の吹抜け・昇降路の破線は出さない。上階スラブの穴の縁が実線で出るため。求めず、注記へは null を渡す）
+  // 見上げ（天伏）は「N の天井の穴＝直上階 N+1 の床の穴」: 自階の×は出さず、上階の吹抜け・昇降路と階段吹抜け（続きの無い階段の足元の上）の
+  // 一点鎖線の×だけ（破線の外形・ラベルは出さない。上階スラブの穴の縁が実線で出るため）
   const peekMatches = abovePeek?.activePlaneId === graph.plane.id;
-  const aboveGroups = direction !== 'up' && peekMatches
+  const aboveGroups = peekMatches
     ? graphComputed(abovePeek.graph, 'planHoleGroups', () => floorOpeningGroups(abovePeek.graph, { stairFilter: () => false }))
     : undefined;
   const aboveStairVoidGroups = direction === 'up' && peekMatches
     ? graphComputed(abovePeek.graph, 'planUpperStairVoidGroups', () => floorOpeningGroups(abovePeek.graph, { stairFilter: () => false, stairVoidRect: true }).filter(g => g.kind === 'stairVoid'))
     : null;
-  const holePrims = planHoleMarkPrimitives(planHoleMarksOf(graph, direction === 'up' ? null : aboveGroups, { lookUp: direction === 'up', aboveStairVoidGroups }), {
+  const holePrims = planHoleMarkPrimitives(planHoleMarksOf(graph, aboveGroups, { lookUp: direction === 'up', aboveStairVoidGroups }), {
     thickPx: viewport.lineWeightsPx.thick, thinPx: viewport.lineWeightsPx.thin, scale: viewport.scaleX, lod: viewport.lodLevel,
   });
   if (prims.length === 0 && holePrims.length === 0) return null;
