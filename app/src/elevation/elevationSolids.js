@@ -136,9 +136,11 @@ export function solidPrimitivesForFace(face, opts) {
   if (!cut) return [];
   const { loZ, hiZ } = cut.zRange;
   const beams = clipBeamsToBand(structuralContribution(cut.layers), loZ, hiZ);
+  const columnSolids = structuralColumnContribution(cut.layers);
   const prims = [
-    ...structuralPrimitivesForCut(beams, cut),
-    ...structuralColumnPrimitivesForCut(structuralColumnContribution(cut.layers), cut),
+    // 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）
+    ...structuralPrimitivesForCut(beams, cut, undefined, null, { columnSolids }),
+    ...structuralColumnPrimitivesForCut(columnSolids, cut),
   ];
   return clampPrimsToRun(prims, face.run);
 }

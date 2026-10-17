@@ -2762,3 +2762,35 @@ test('【指示2026-10-15】switchbackCuts: 自階と上階の両方に往復間
   const t3 = switchbackCuts(fx3.stair, composeRoomFaces(fx3.room, top), top, { ...OPTS, upperGraph: topUpper, layers: layersOf(top, topUpper) });
   assert.equal(t3.cuts.find(c => c.seqNo === '1').continuousWallAcross, undefined, '自階だけ（最上階＝上階に隔て板なし）は付かない＝天端の見え掛かりは従来');
 });
+
+// 構造梁の見え掛かりの遮蔽（規則B）の配線: 階段帯の contentForCut も柱の包み込み外形を渡し、梁の端が柱包みの中なら
+// 中線が包みの面で止まる（steel-stair 型）。供給源は section/sectionStructure.js（単体は sectionStructureOcclusion.test.js）。
+test('【配線】階段帯の contentForCut: 空中横断の梁の端が柱包みの中なら、中線が包みの面で止まる。柱が無ければ梁の端まで描く', () => {
+  const build = withColumn => {
+    const graph = makeGraph('p1');
+    const upperGraph = makeGraph('p2');
+    const { room, stair } = makeSwitchbackFixture(graph);
+    if (withColumn) {
+      const cx = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+      const cy = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+      graph.addColumn(StructuralMaterialType.STEEL, 'STEEL-SQ200x200x9.0', cx, cy, {});
+    }
+    const ux0 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+    const ux1 = upperGraph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+    const uy = upperGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+    upperGraph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', uy, false, ux0, ux1, { role: 'primary', levelOffset: -1810 });
+    const faces = composeRoomFaces(room, graph);
+    const opts = { floorHeight: 2600, chUpperAbsMm: 5000, chLowerMm: 2400 };
+    const entries = stairFaceSequence(stair, faces, graph, { ...opts, upperGraph,
+      layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: opts.floorHeight }] }) });
+    // 梁の天地（z 790・590）の長い水平線（柱型の見付けの短い線は除く）
+    return entries.flatMap(e => e.content).filter(p => p.type === 'line' && p.y1 === p.y2
+      && (Math.abs(p.y1 + 790) < 1e-6 || Math.abs(p.y1 + 590) < 1e-6) && Math.abs(p.x2 - p.x1) > 1000);
+  };
+  const startOf = prims => Math.min(...prims.flatMap(p => [p.x1, p.x2]));
+  const without = build(false), withCol = build(true);
+  assert.equal(without.length, 2, '前提: 柱が無ければ梁の天地 2 本');
+  assert.equal(withCol.length, 2, '柱があっても残る区間の天地 2 本');
+  assert.ok(Math.abs(startOf(without)) < 1e-9, '対照: 柱が無ければ梁の端（面の端）まで');
+  assert.ok(startOf(withCol) > 100, '柱包みの面で止まる（面の端から 170 内側）');
+});

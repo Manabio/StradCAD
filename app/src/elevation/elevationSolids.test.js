@@ -368,6 +368,50 @@ test('【追加仕様】solidPrimitivesForFace: 自階の床梁（天端=自FL�
     '床下の梁は展開図に描かれないはず（注記帯へ被らない）');
 });
 
+// 配線: 上階の梁の見え掛かりは、自階の柱包みに隠れる区間を描かない（13.stq「7」C の経路。solidPrimitivesForFace 経由）
+test('【配線】solidPrimitivesForFace: 上階の空中横断梁の端が自階の柱包みの中なら、その区間の中線を描かない', () => {
+  const build = withColumn => {
+    const { graph, room } = makeGridRoom();
+    if (withColumn) {
+      const cx = graph.addCenterLine(CenterLineType.VERTICAL, 3950, { labeled: false, discipline: Discipline.ARCH });
+      const cy = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+      graph.addColumn(StructuralMaterialType.STEEL, 'STEEL-SQ200x200x9.0', cx, cy, {});
+    }
+    const upper = new PlanGraph(new Plane('p2', 2900, '2階', 2, 1));
+    const ux0 = upper.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+    const ux1 = upper.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+    const uy = upper.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
+    upper.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', uy, false, ux0, ux1, { role: 'landing', levelOffset: -1810 });
+    const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+    const prims = solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH, upperGraph: upper, floorHeightMm: 2900 });
+    return { prims: prims.filter(p => p.weight === 'medium' && p.y1 === p.y2), run: faceA.run };
+  };
+  const control = build(false);
+  assert.equal(control.prims.length, 2, '前提: 柱が無ければ空中横断の中線 2 本');
+  assert.equal(Math.max(...control.prims.flatMap(p => [p.x1, p.x2])), control.run, '前提: 面の右端まで届く');
+  const hidden = build(true);
+  assert.equal(hidden.prims.length, 2, '残る区間の天地 2 本');
+  assert.ok(Math.max(...hidden.prims.flatMap(p => [p.x1, p.x2])) < control.run - 50, '柱包み（x 3850〜）の手前で止まる');
+});
+
+// 配線: 面に直交する上階梁の断面（crosses）は、梁が外から来て面の壁芯で終われば出ず、室内へ続けば出る
+test('【配線】solidPrimitivesForFace: 直交する上階梁は外から来て面の壁芯で終われば断面 0、室内へ続けば断面あり', () => {
+  const thickCount = (yLo, yHi) => {
+    const { graph, room } = makeGridRoom();
+    const upper = new PlanGraph(new Plane('p2', 2900, '2階', 2, 1));
+    const ux = upper.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+    const ua = upper.addCenterLine(CenterLineType.HORIZONTAL, yLo, { labeled: false, discipline: Discipline.ARCH });
+    const ub = upper.addCenterLine(CenterLineType.HORIZONTAL, yHi, { labeled: false, discipline: Discipline.ARCH });
+    upper.addBeam(StructuralMaterialType.STEEL, 'STEEL-H600x200', ux, true, ua, ub, { role: 'primary', levelOffset: 0 });
+    const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+    return solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH, upperGraph: upper, floorHeightMm: 2900 })
+      .filter(p => p.weight === 'thick').length;
+  };
+  assert.equal(thickCount(-3000, 0), 0, '外から来て面 A の壁芯（y=0）で終わる梁は壁の中で終わり断面は見えない');
+  assert.ok(thickCount(-3000, 3000) > 0, '対照: 室内へ続く梁は面 A で断面（太線）が出る');
+  assert.ok(thickCount(0, 3000) > 0, '対照: 壁芯から室内へ向かう梁も断面が出る');
+});
+
 // ---- 失敗系 ----
 test('【失敗系】faceSectionCut: 軸位置・dirSign・CHが解決できない面はnull（呼び出し側は無描画）', () => {
   const base = { axisCL: { id: 'a' }, isVertical: false, lo: 0, hi: 4000, run: 4000, dirSign: 1 };

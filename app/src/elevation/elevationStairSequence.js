@@ -55,7 +55,7 @@ import {
 import { segmentInsideRect } from './elevationPrimitives.js';
 import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
-import { structuralContribution, structuralPrimitivesForCut } from './section/sectionStructure.js';
+import { structuralContribution, structuralPrimitivesForCut, structuralColumnContribution } from './section/sectionStructure.js';
 import { stairSectionIsClosed } from './elevationStairSection.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
 import { labelFaces, letterOf, upperFloorEndsOf, wallLessEndAt, wallContinuationBeyondFaceEnd } from './elevationFaces.js';
@@ -1140,7 +1140,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   } : null;
   // 構造梁の見えがかりも、天端が切断面にある flight の後ろ（behindRects）は隠れ線（2 階の面 A で床の梁の天の線が床線と重なる）
   const structuralContent = dashLinesInsideRects(
-    structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile, { ceilZAtWorld }), behindRects, { inclusive: true });
+    structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile, { ceilZAtWorld, columnSolids: structuralColumnContribution(cut.layers) }), behindRects, { inclusive: true });
   // 階段の断面プロファイルとの取り合い（ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
   const joined = zRef
     ? joinToStairProfile(wallContent, stairContent, pcut,
