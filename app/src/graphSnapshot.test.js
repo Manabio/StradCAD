@@ -7,6 +7,7 @@ import {
   RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec, CEILING_ZONE_KEYS, restoreCeilingZones,
 } from './core.js';
 import { NON_DEFAULT_ROOF_SPEC } from './finish/roofTestFixtures.js';
+import { setExteriorCeilingEnabled, exteriorCeilingEnabled, EXTERIOR_CEILING_KEY } from './ceiling/exteriorCeiling.js';
 import { ByteBuffer } from 'flatbuffers';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
@@ -2404,6 +2405,35 @@ test('【S3】serializeGraph→restoreGraph: ceilingPanel／ceilingFinish の ov
   assert.equal(b.customOverrides.has('ceilingFinish'), false);
   assert.equal(b.getFinishInfo().ceilingPanel, '301000000001'); // 旧文書でも既定が出る
   assert.equal(b.getFinishInfo().ceilingFinish, '302000000001');
+});
+
+// 屋外 S1: 屋外部屋の天井を外した印（customOverrides.exteriorCeiling '0'）も汎用の keys/vals で往復する。
+test('【屋外 S1】exteriorCeiling \'0\' は serializeGraph→restoreGraph と decode→restoreGraph（snapshot 経路）で文字列 \'0\' のまま残り、exteriorCeilingEnabled が false。未指定の屋外部屋は ON のまま', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, { labeled: false, discipline: Discipline.ARCH });
+  const x2 = graph.addCenterLine(CenterLineType.VERTICAL,   8000, { labeled: false, discipline: Discipline.ARCH });
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  const off = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'ポーチ');
+  const on = graph.addRoom(new Set([`${x1.id}:${y0.id}:${x2.id}:${y1.id}`]), 'テラス');
+  off.setKind(RoomKind.EXTERIOR);
+  on.setKind(RoomKind.EXTERIOR);
+  setExteriorCeilingEnabled(off, false);
+
+  const check = (g, label) => {
+    const a = g.roomMap.get(off.id), b = g.roomMap.get(on.id);
+    assert.strictEqual(a.customOverrides.get(EXTERIOR_CEILING_KEY), '0', `${label}: 文字列 '0'`);
+    assert.equal(exteriorCeilingEnabled(a), false, `${label}: 外した部屋`);
+    assert.equal(b.customOverrides.has(EXTERIOR_CEILING_KEY), false, `${label}: 未指定にキーは増えない`);
+    assert.equal(exteriorCeilingEnabled(b), true, `${label}: 未指定は ON`);
+  };
+  restoreGraph(graph, serializeGraph(graph));
+  check(graph, 'serialize→restore');
+
+  const other = makeGraph();
+  restoreGraph(other, decode(serializeGraph(graph)));
+  check(other, 'decode→restore');
 });
 
 // QA指摘Minor-3（2026-09-22）: 上記の仮定確認に、構造参照（structGraph由来）のaxisCLを持つ壁と

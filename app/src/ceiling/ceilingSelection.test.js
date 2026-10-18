@@ -39,6 +39,7 @@ test('【失敗系】所属: 屋外・VOID・STAIR_VOID・UNDEFINED・屋根・�
   const g = makeGrid(XS, YS);
   const out = g.interior([[0, 0]]);
   out.setKind(RoomKind.EXTERIOR);
+  out.setOverride('exteriorCeiling', '0'); // 屋外 S1: 屋外 feature なしは既定で天井を持つ。外したものが索引に無い
   g.feature([[1, 0]], RoomFeature.VOID);
   g.feature([[2, 0]], RoomFeature.STAIR_VOID);
   g.feature([[3, 0]], RoomFeature.UNDEFINED);
@@ -52,6 +53,18 @@ test('【失敗系】所属: 屋外・VOID・STAIR_VOID・UNDEFINED・屋根・�
   }
   const [ux, uy] = ctr(0, 2); // 未割当
   assert.equal(beginCeilingDrag(g.graph, owners, ux, uy), null);
+});
+
+test('屋外 S1: 既定 ON のポーチのセルからドラッグを始めると選択になり、\'0\' を付けると null', () => {
+  const g = makeGrid(XS, YS);
+  const porch = g.interior([[0, 0]]);
+  porch.setKind(RoomKind.EXTERIOR);
+  const [x, y] = ctr(0, 0);
+  const on = beginCeilingDrag(g.graph, buildCeilingCellOwners(g.graph), x, y);
+  assert.notEqual(on, null);
+  assert.deepEqual(keysOf(on), [g.cell(0, 0)]);
+  porch.setOverride('exteriorCeiling', '0');
+  assert.equal(beginCeilingDrag(g.graph, buildCeilingCellOwners(g.graph), x, y), null);
 });
 
 test('【失敗系】begin: 格子外・NaN・Infinity は null（例外にしない）', () => {
@@ -82,6 +95,7 @@ test('階段: 階段下の屋内部屋（2a）が重なるセルは部屋が勝�
   const under = g.interior([[1, 0]]);
   const outRoom = g.interior([[3, 0]]);
   outRoom.setKind(RoomKind.EXTERIOR);
+  outRoom.setOverride('exteriorCeiling', '0'); // 屋外 S1: 屋外 feature なしは既定で天井を持つので、外した部屋で階段側の判定を確かめる
   const outStair = g.graph.addStair({ type: StairType.STRAIGHT, cells: new Set([g.cell(3, 0)]), roomId: outRoom.id });
   const owners = buildCeilingCellOwners(g.graph);
   assert.equal(owners.get(g.cell(0, 0)).kind, 'stair');

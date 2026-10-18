@@ -1,7 +1,7 @@
 // planSolidsLayerFilter.js（S4: 新レイヤへ渡す線の絞り込みと層スタックの組み立て）の単体テスト。実物の PlanGraph で組む。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomFeature, StairType, RoofShape } from '@core';
+import { RoomFeature, RoomKind, StairType, RoofShape } from '@core';
 import {
   S4_DRAWN_KINDS, BELOW_DRAWN_KINDS, drawnPrimitives, planSolidsLayerPrimitives, planSolidsLayerSolids, planSolidsLayerCacheSpec, planSolidsLayerResolve, isCenterLineDragging,
   visiblePlanPrimitives, UP_SELF_DRAWN_KINDS, UP_ABOVE_DRAWN_KINDS, planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp,
@@ -341,6 +341,18 @@ test('見上げ: 壁のある部屋では天井の外形は壁（切断）が隠
   // 旧: 壁が互いの面で止まり、隅の 57.5mm 以下の断片だけが天井の外形として覗いていた（角の隙間）。角を閉じた今は 0 本
   const ceil = prims.filter(p => p.source.kind === 'ceiling');
   assert.deepEqual(sortedPts(ceil), [], `天井の外形は壁が全部隠す: ${JSON.stringify(sortedPts(ceil))}`);
+});
+
+test('見上げ: 屋外のポーチ（feature なし）の天井の外形が kind:ceiling の線で出る。\'0\' で外すと出ない。見下げは ceiling を描かず不変', () => {
+  const { self, abovePeek } = upScene({ selfWalls: false });
+  const porch = self.graph.rooms[0];
+  porch.setKind(RoomKind.EXTERIOR);
+  const up = () => planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT }).filter(p => p.source.kind === 'ceiling');
+  assert.deepEqual(sortedPts(up()), outline4(0, 0, 4000, 4000));
+  const down = planSolidsLayerPrimitives({ graph: self.graph, cutZ: CUT });
+  assert.equal(down.filter(p => p.source.kind === 'ceiling').length, 0, '見下げは ceiling なし');
+  porch.setOverride('exteriorCeiling', '0');
+  assert.deepEqual(sortedPts(up()), []);
 });
 
 /** 4000 角の 1 部屋に、全体の傾斜天井（低い側 2400・ライズ 2000・右へ上がる）を付けた自階。壁なし。 */

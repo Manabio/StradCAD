@@ -10,7 +10,7 @@ import { normalizeRect } from '../plan/planGeometry.js';
 import { makeGrid, rect } from '../plan/planTestFixtures.js';
 import { setRoomCeilingShape } from './roomCeilingShape.js';
 
-test('roomHasCeiling: 屋内で feature なしだけが天井を持つ。屋外・吹抜け・階段・階段吹抜け・屋根・昇降路・未定義・null は持たない', () => {
+test('roomHasCeiling: 屋内で feature なし（と天井を外していない屋外 feature なし）だけが天井を持つ。吹抜け・階段・階段吹抜け・屋根・昇降路・未定義・null は持たない', () => {
   const g = makeGrid([0, 1000, 2000, 3000, 4000], [0, 1000]);
   const plain = g.interior([[0, 0]]);
   assert.equal(roomHasCeiling(plain), true);
@@ -21,7 +21,9 @@ test('roomHasCeiling: 屋内で feature なしだけが天井を持つ。屋外�
   assert.equal(roomHasCeiling(g.roof([[2, 0]])), false, '屋根');
   const outdoor = g.interior([[3, 0]]);
   outdoor.setKind(RoomKind.EXTERIOR);
-  assert.equal(roomHasCeiling(outdoor), false, '屋外');
+  assert.equal(roomHasCeiling(outdoor), true, '屋外（feature なし）は既定で天井を持つ（屋外 S1）');
+  outdoor.setOverride('exteriorCeiling', '0');
+  assert.equal(roomHasCeiling(outdoor), false, '屋外で天井を外した');
   assert.equal(roomHasCeiling(null), false);
   assert.equal(roomHasCeiling(undefined), false);
 });
@@ -89,6 +91,11 @@ test('天井を持たない部屋（吹抜け・階段・屋根・屋外・未�
   g.feature([[2, 0]], RoomFeature.STAIR);
   g.roof([[3, 0]]);
   g.feature([[4, 0]], RoomFeature.UNDEFINED);
+  const off = makeGrid([0, 1000], [0, 1000]); // 天井を外した屋外部屋（'0'）も出ない
+  const porch = off.interior([[0, 0]]);
+  porch.setKind(RoomKind.EXTERIOR);
+  porch.setOverride('exteriorCeiling', '0');
+  assert.deepEqual(ceilingSurfacesOf(off.graph), []);
   assert.deepEqual(ceilingSurfacesOf(g.graph).map(s => s.roomId), [keep.id]);
   assert.deepEqual(ceilingSurfacesOf(makeGrid([0, 1000], [0, 1000]).graph), []);
   assert.deepEqual(ceilingSurfacesOf(null), []);
@@ -409,4 +416,16 @@ test('【失敗系】階段吹抜け: 屋外の STAIR_VOID・セルが解決で�
   const out = ceilingSurfacesOf(g2.graph);
   assert.deepEqual(out.find(s => s.roomId === own.id).rects, [rect(0, 0, 1000, 1000)]);
   assert.deepEqual(out.find(s => s.roomId === sv.id).rects, [rect(1000, 0, 2000, 1000)], '索引に載るセルは STAIR_VOID の面から除く');
+});
+
+test('屋外部屋: feature なしのポーチは天井面が出る（zMm＝FL＋既定 CH 2400）。\'0\' で外すと出ない。屋根は出ない', () => {
+  const g = makeGrid([0, 1000, 2000, 3000], [0, 1000]);
+  const porch = g.interior([[0, 0]]);
+  porch.setKind(RoomKind.EXTERIOR);
+  g.roof([[2, 0]]);
+  assert.deepEqual(ceilingSurfacesOf(g.graph), [
+    { roomId: porch.id, zoneId: null, rects: [rect(0, 0, 1000, 1000)], zMm: 2400, shape: 'flat', dims: [], chMm: 2400 },
+  ]);
+  porch.setOverride('exteriorCeiling', '0');
+  assert.deepEqual(ceilingSurfacesOf(g.graph), []);
 });

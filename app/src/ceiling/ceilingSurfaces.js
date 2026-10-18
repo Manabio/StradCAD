@@ -2,7 +2,7 @@
  * 天井面の算出（純モジュール。react・store.js・snap.js・.jsx を静的に引かない）。
  * 天伏モードの見上げ（plan/planSolids.js の ceiling 立体）が使う。部屋ごとに「セル矩形の和」と「天井の高さ」を返す。
  *
- * 天井を持つ部屋＝屋内（kind === INTERIOR）かつ feature なし。吹抜け・階段・階段吹抜け・屋根・昇降路・未定義は天井を持たない。
+ * 天井を持つ部屋＝屋内（kind === INTERIOR）かつ feature なし、または天井を外していない屋外の feature なし部屋（屋外 S1。ceilingOwners.js roomHasCeiling）。吹抜け・階段・階段吹抜け・屋根・昇降路・未定義は天井を持たない。
  * ただし屋内の階段吹抜け（STAIR_VOID）すべて（最上階も中間階も。中間階では上階の床組が天井に隠れる）は「所属索引に載らない平らな天井面」を面に足す（選べない。stairVoidFace。上は天井を持つ部屋の規則とは別）。
  * セルの帰属は選択と同じ所属索引（ceilingOwners.js ceilingCellOwnersOf。親と部分指定の優先は並び順に依存しない〔部分指定どうしが同じセルを持つときだけ部屋順の先勝ち〕。S9・裁定 2026-10-10）:
  * kind 'room' のセル→その部屋の面、kind 'stair' のセル→対の部屋（stair.roomId）の区画の面だけ。索引に無いセルは面にならない。

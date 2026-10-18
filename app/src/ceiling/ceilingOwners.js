@@ -14,7 +14,7 @@
  *   - 階段: 天井を持つ部屋が無いセルだけ（stairHasCeiling）。
  * 吹抜け（VOID・屋内）は、全高の壁（腰壁だけの壁は除く）で隔てられていない隣接部屋のうち面積最大の部屋の所属になる
  * （裁定 2026-10-17: 腰壁は天井を隔てない。assignVoidCellsToNeighbor）。候補が無い吹抜けは索引に載らない。
- * 屋外・未定義・屋根・昇降路・屋外階段・下階の階段は索引に載らない（選べない・天井面にならない）。
+ * 屋外は feature なしで天井を外していない部屋だけ載る（屋外 S1）。未定義・屋根・昇降路・屋外階段・下階の階段は索引に載らない（選べない・天井面にならない）。
  * 階段吹抜け（STAIR_VOID）も索引には載らない（選べない）が、索引外の平らな天井面になる（ceilingSurfaces.js stairVoidFace）。
  */
 import { RoomKind, RoomFeature } from '@core';
@@ -22,10 +22,11 @@ import { ceilingRefreshCells } from './ceilingGrid.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { kneeDropRecordsOnAxis, SPAN_OVERLAP_EPS } from '../finish/kneeDropWall.js';
 import { withGraphReadScope } from '../graphReadScope.js';
+import { exteriorCeilingEnabled } from './exteriorCeiling.js';
 
-/** 部屋が天井を持つか（唯一の述語）。屋内（kind === INTERIOR）かつ feature なし。 */
+/** 部屋が天井を持つか（唯一の述語）。屋内（kind === INTERIOR）かつ feature なし、または天井を外していない屋外部屋（feature なし。exteriorCeiling.js）。 */
 export function roomHasCeiling(room) {
-  return room?.kind === RoomKind.INTERIOR && room.feature == null;
+  return (room?.kind === RoomKind.INTERIOR && room.feature == null) || exteriorCeilingEnabled(room);
 }
 
 /** 階段が天井を持つか（唯一の述語）。変換元の部屋があれば屋内のときだけ、無ければ true。 */

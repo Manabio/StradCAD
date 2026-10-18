@@ -2,7 +2,7 @@
 // 規則（裁定 2026-10-17）: 吹抜けのセルは、全高の壁（腰壁だけの壁は除く）で隔てられていない隣接部屋のうち面積最大の部屋の所属になる。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomFeature, edgeKey } from '@core';
+import { RoomFeature, RoomKind, edgeKey } from '@core';
 import { buildCeilingCellOwners, wallFullHeightSpans } from './ceilingOwners.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
 import { ceilingGroupsOf } from './ceilingGroups.js';
@@ -249,4 +249,43 @@ test('【失敗系】wallFullHeightSpans: 重なりなし・座標が NaN は []
   assert.deepEqual(wallFullHeightSpans(g.graph, { ...w, coord1: NaN, coord2: 1000, axisCL: w.axisCL }), []);
   const all = spanWall([[0, 3]]);
   assert.deepEqual(wallFullHeightSpans(all.g.graph, all.w), []);
+});
+
+// ---- 屋外部屋の天井（屋外 S1。裁定 2026-10-18）----
+function porchLayout() {
+  const g = makeGrid([0, 1000, 2000, 3000], [0, 1000]);
+  const inner = g.interior([[0, 0]]);
+  const porch = g.interior([[1, 0]]);
+  porch.setKind(RoomKind.EXTERIOR);
+  return { g, inner, porch };
+}
+
+test('屋外部屋: feature なしのポーチのセルは所属に載る。\'0\' で外すと載らない。屋内の隣の部屋の所属は変わらない', () => {
+  const { g, inner, porch } = porchLayout();
+  assert.deepEqual(ownerOf(g, 1), { kind: 'room', id: porch.id, rowId: porch.id });
+  assert.deepEqual(ownerOf(g, 0), { kind: 'room', id: inner.id, rowId: inner.id });
+  porch.setOverride('exteriorCeiling', '0');
+  assert.equal(ownerOf(g, 1), undefined);
+  assert.deepEqual(ownerOf(g, 0), { kind: 'room', id: inner.id, rowId: inner.id });
+});
+
+test('屋外部屋: 屋根の部屋・屋外階段（feature STAIR）の部屋は所属に載らない', () => {
+  const { g } = porchLayout();
+  g.roof([[2, 0]]);
+  assert.equal(ownerOf(g, 2), undefined);
+  const g2 = makeGrid([0, 1000], [0, 1000]);
+  const st = g2.feature([[0, 0]], RoomFeature.STAIR);
+  st.setKind(RoomKind.EXTERIOR);
+  assert.equal(buildCeilingCellOwners(g2.graph).get(g2.cell(0, 0)), undefined);
+});
+
+test('屋外部屋: 吹抜けは隣の屋外ポーチも候補に入る（面積最大。壁が無ければ隔てない）', () => {
+  const g = makeGrid([0, 1000, 2000, 5000], [0, 1000]);
+  const inner = g.interior([[0, 0]]);
+  const v = g.feature([[1, 0]], RoomFeature.VOID);
+  const porch = g.interior([[2, 0]]);
+  porch.setKind(RoomKind.EXTERIOR);
+  assert.equal(ownerOf(g, 1).id, porch.id, '面積の大きいポーチ');
+  assert.notEqual(ownerOf(g, 1).id, inner.id);
+  assert.ok(v);
 });

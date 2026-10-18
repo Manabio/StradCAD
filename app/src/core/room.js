@@ -3,7 +3,7 @@
  * RoomFinish / ExteriorFinishRow / Room）。core.js から分離。
  */
 import { makeObservable, observable, action } from 'mobx';
-import { RoomKind, RoomFeature, ExteriorLevelRef, DEFAULT_WALL_MATERIAL, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH } from './constants.js';
+import { RoomKind, RoomFeature, ExteriorLevelRef, DEFAULT_WALL_MATERIAL, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH, DEFAULT_EXTERIOR_CEILING_PANEL } from './constants.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
@@ -269,8 +269,10 @@ export class Room {
     const info = { ...master, ...Object.fromEntries(this.customOverrides) };
     if (!info.wallMaterial) info.wallMaterial = DEFAULT_WALL_MATERIAL;
     // 天井材・天井仕上げ（S3）も読み時に既定を補う（保存データへは書かない。旧文書にも既定が出る）
-    if (!info.ceilingPanel) info.ceilingPanel = DEFAULT_CEILING_PANEL;
-    if (!info.ceilingFinish) info.ceilingFinish = DEFAULT_CEILING_FINISH;
+    // 屋外部屋（屋外 S1）はけい酸カルシウム板 t=8・仕上げなし（ceilingFinish は補完せず ''/undefined のまま）
+    const exterior = this.kind === RoomKind.EXTERIOR;
+    if (!info.ceilingPanel) info.ceilingPanel = exterior ? DEFAULT_EXTERIOR_CEILING_PANEL : DEFAULT_CEILING_PANEL;
+    if (!info.ceilingFinish && !exterior) info.ceilingFinish = DEFAULT_CEILING_FINISH;
     return info;
   }
 }

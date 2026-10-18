@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Room } from './room.js';
-import { DEFAULT_WALL_MATERIAL, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH } from './constants.js';
+import { RoomKind, DEFAULT_WALL_MATERIAL, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH, DEFAULT_EXTERIOR_CEILING_PANEL } from './constants.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 
 // ---- (a) getFinishInfo()の戻り値形状は旧INTERIOR_MASTERS[key]直参照と完全に同型 ----
@@ -69,6 +69,31 @@ test('【失敗系】getFinishInfo(): override が空文字なら既定へフォ
   const room = new Room('r1', '居間', new Set(), new Set());
   room.setOverride('ceilingPanel', '');
   assert.equal(room.getFinishInfo().ceilingPanel, DEFAULT_CEILING_PANEL);
+});
+
+// ---- 屋外 S1: 屋外部屋の天井材既定 ----
+test('getFinishInfo(): 屋外部屋は天井材の既定がけい酸カルシウム板 t=8、天井仕上げは補完しない（仕上げなし）。屋内は従来どおり', () => {
+  const ext = new Room('r1', 'ポーチ', new Set(), new Set());
+  ext.setKind(RoomKind.EXTERIOR);
+  const info = ext.getFinishInfo();
+  assert.equal(info.ceilingPanel, DEFAULT_EXTERIOR_CEILING_PANEL);
+  assert.equal(info.ceilingPanel, '301000000015');
+  assert.ok(!info.ceilingFinish, `仕上げなし: ${JSON.stringify(info.ceilingFinish)}`);
+  assert.equal(ext.customOverrides.size, 0, '保存データには書かない');
+  const inner = new Room('r2', '居間', new Set(), new Set());
+  assert.equal(inner.getFinishInfo().ceilingPanel, DEFAULT_CEILING_PANEL);
+  assert.equal(inner.getFinishInfo().ceilingFinish, DEFAULT_CEILING_FINISH);
+});
+
+test('【失敗系】getFinishInfo(): 屋外部屋でも override があればその値。空文字は屋外の既定へ戻る', () => {
+  const ext = new Room('r1', 'ポーチ', new Set(), new Set());
+  ext.setKind(RoomKind.EXTERIOR);
+  ext.setOverride('ceilingPanel', '301000000002');
+  ext.setOverride('ceilingFinish', '302000000001');
+  assert.equal(ext.getFinishInfo().ceilingPanel, '301000000002');
+  assert.equal(ext.getFinishInfo().ceilingFinish, '302000000001');
+  ext.setOverride('ceilingPanel', '');
+  assert.equal(ext.getFinishInfo().ceilingPanel, DEFAULT_EXTERIOR_CEILING_PANEL);
 });
 
 // ---- (d) setOverrideのfield in master判定はkey/label除去後でも現行どおり ----
