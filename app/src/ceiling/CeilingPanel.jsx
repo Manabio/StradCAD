@@ -3,6 +3,9 @@ import { observer } from 'mobx-react-lite';
 import { ModePanel } from '../ui/ModePanel.jsx';
 import { BottomSheet } from '../ui/BottomSheet.jsx';
 import { MaterialSelect } from '../finish/FinishTable.jsx';
+import { RoofTextInput, RoofMaterialSelect } from '../finish/roof/RoofGroup.jsx';
+import { soffitOrientationOptions } from '../finish/roof/roofInput.js';
+import { ceilingExteriorRows } from './ceilingExteriorRows.js';
 import { withFinishUndo } from '../finish/finishUndo.js';
 import { markDirty } from '../dirtyState.js';
 import { ceilingPanelTree, ceilingPanelLines, selectedNodeId, selectionSpanMm } from './ceilingPanelRows.js';
@@ -28,6 +31,7 @@ import { CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, parseCei
 const TABS = [
   { id: 'interior', label: '内部' },
   { id: 'stair',    label: '階段' },
+  { id: 'exterior', label: '外部' },
 ];
 
 // 列幅・罫線・見出し行は仕上げ表（FinishTable.jsx の cellBase／headerCell）に揃える
@@ -284,7 +288,91 @@ const PanelLine = observer(({ graph, mode, line, selectedId }) => {
   return <NodeRow graph={graph} mode={mode} line={line} selectedId={selectedId} />;
 });
 
-export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
+// 外部タブ（軒裏）の平らな表: 部位｜仕上げ｜下地｜備考。行はセル群を持たない（クリック・強調・▸ なし）。
+// 下屋（直上階）の行は表示のみ（編集は上階の仕上げモード・外部タブ）。最上階の主屋根の行だけ編集でき、確定は mode.setMainRoofField。
+const EXTERIOR_COLUMNS = [
+  { key: 'part',    label: '部位',   width: 110 },
+  { key: 'finish',  label: '仕上げ', width: '30%' },
+  { key: 'backing', label: '下地',   width: undefined },
+  { key: 'note',    label: '備考',   width: '26%' },
+];
+const READONLY_TITLE = '編集は上階の仕上げモード・外部タブ';
+const subLabelStyle = { fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' };
+
+const ExteriorRow = observer(({ graph, mode, row }) => {
+  const stack = { display: 'flex', flexDirection: 'column', gap: 2 };
+  const line = { display: 'flex', alignItems: 'center', gap: 4 };
+  const orientationLabel = soffitOrientationOptions().find(o => o.value === row.orientation)?.label ?? row.orientation;
+  const set = (field, value) => mode.setMainRoofField(graph, field, value);
+  const nameOf = code => mode.getMaterial(code)?.name;
+  const panelCodes = mode.getMaterialsByCategory('panel').map(m => m.code);
+  const backingCodes = mode.getMaterialsByCategory('backing').map(m => m.code);
+  if (!row.editable) {
+    return (
+      <tr style={{ background: '#fff' }}>
+        <td style={cellStyle} title={READONLY_TITLE}>{row.name}</td>
+        <td style={cellStyle} title={READONLY_TITLE}>{row.materialLabel}</td>
+        <td style={cellStyle} title={READONLY_TITLE}>
+          <div style={stack}>
+            {row.backingShown && <div style={line}><span style={subLabelStyle}>下地</span><span>{row.backingLabel}</span></div>}
+            <div style={line}><span style={subLabelStyle}>向き</span><span>{orientationLabel}</span></div>
+          </div>
+        </td>
+        <td style={cellStyle} title={READONLY_TITLE}>{dash(row.note)}</td>
+      </tr>
+    );
+  }
+  const selectStyle = { width: '100%', minWidth: 0, fontSize: 12 };
+  return (
+    <tr style={{ background: '#fff' }}>
+      <td style={cellStyle}>{row.name}</td>
+      <td style={cellStyle}>
+        <RoofMaterialSelect codes={panelCodes} value={row.material} nameOf={nameOf} onChange={v => set('soffitMaterial', v)} style={selectStyle} />
+      </td>
+      <td style={cellStyle}>
+        <div style={stack}>
+          {row.backingShown && (
+            <div style={line}>
+              <span style={subLabelStyle}>下地</span>
+              <RoofMaterialSelect codes={backingCodes} value={row.backing} nameOf={nameOf} onChange={v => set('soffitBacking', v)} style={selectStyle} />
+            </div>
+          )}
+          <div style={line}>
+            <span style={subLabelStyle}>向き</span>
+            <select value={row.orientation} onChange={e => set('soffitOrientation', e.target.value)} style={selectStyle}>
+              {soffitOrientationOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        </div>
+      </td>
+      <td style={cellStyle}>
+        <RoofTextInput value={row.note} onCommit={v => set('soffitNote', v)} style={{ width: '100%', minWidth: 0, fontSize: 12 }} />
+      </td>
+    </tr>
+  );
+});
+
+const ExteriorTable = observer(({ rows, graph, mode }) => (
+  <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+    <colgroup>
+      {EXTERIOR_COLUMNS.map(c => <col key={c.key} style={{ width: c.width }} />)}
+    </colgroup>
+    <thead>
+      <tr>
+        {EXTERIOR_COLUMNS.map(c => <th key={c.key} style={headerStyle}>{c.label}</th>)}
+      </tr>
+    </thead>
+    <tbody>
+      {rows.map(row => <ExteriorRow key={row.id} graph={graph} mode={mode} row={row} />)}
+    </tbody>
+  </table>
+));
+
+export const CeilingPanel = observer(({ graph, mode, project, isLandscape }) => {
+  const isExterior = mode.activeTab === 'exterior';
+  const exteriorRows = isExterior
+    ? ceilingExteriorRows({ graph, aboveGraph: mode.aboveRoofGraphOf(graph), project, materialMap: mode.materialMap })
+    : [];
   const stairUnderKeys = mode.stairUnderKeysOf(graph); // 階段下の群（下階の判定は App の直下階 peek を stairUnderContext で受ける）
   const tree = ceilingPanelTree(graph, mode.activeTab, mode.materialMap, stairUnderKeys);
   const lines = ceilingPanelLines(tree, mode.expandedPath);
@@ -314,7 +402,11 @@ export const CeilingPanel = observer(({ graph, mode, isLandscape }) => {
         ))}
       </div>
       <div style={{ overflow: 'auto', flex: 1 }}>
-        {tree.length === 0 ? (
+        {isExterior ? (
+          exteriorRows.length === 0
+            ? <div style={{ padding: 16, fontSize: 13, color: '#64748b' }}>軒裏はありません。</div>
+            : <ExteriorTable rows={exteriorRows} graph={graph} mode={mode} />
+        ) : tree.length === 0 ? (
           <div style={{ padding: 16, fontSize: 13, color: '#64748b' }}>
             {mode.activeTab === 'stair' ? '階段はありません。' : '部屋はありません。'}
           </div>

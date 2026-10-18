@@ -18,7 +18,7 @@ import { equipmentHighlightKeys } from '../finish/equipment/equipmentTab.js';
 import { buildingEquipmentCatalog, equipmentSpanLabelOf } from '../finish/equipment/buildingEquipment.js';
 import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
-import { isValidRoofFieldValue } from '../finish/roof/roofInput.js';
+import { commitRoofSpecField } from '../finish/roof/roofSpecCommit.js';
 import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED, ERR_ROOM_DELETE_HAS_STAIR_CHILD, ERR_STAIR_VOID_NOT_STAIR, ERR_STAIR_VOID_PARTIAL } from '../error.js';
 import { stairVoidsTouching } from '../finish/stair/stairVoidReconcile.js';
 import { buildStairChains } from '../finish/stair/stairChains.js';
@@ -1372,11 +1372,8 @@ export class FinishModeState {
    */
   setRoofField(roomId, field, value) {
     const room = this.graph.roomMap.get(roomId);
-    if (!room || !isRoofFeature(room.feature) || !room.roofSpec) return false;
-    if (!isValidRoofFieldValue(field, value)) return false;
-    if (room.roofSpec[field] === value) return false;
-    withFinishUndo(this.graph, () => room.roofSpec.setField(field, value));
-    return true;
+    if (!room || !isRoofFeature(room.feature)) return false;
+    return commitRoofSpecField(this.graph, room.roofSpec, field, value);
   }
 
   /**
@@ -1387,12 +1384,7 @@ export class FinishModeState {
    * @returns {boolean} 変更を確定したら true
    */
   setMainRoofField(field, value) {
-    const spec = this.graph.mainRoofSpec;
-    if (!spec) return false;
-    if (!isValidRoofFieldValue(field, value)) return false;
-    if (spec[field] === value) return false;
-    withFinishUndo(this.graph, () => spec.setField(field, value));
-    return true;
+    return commitRoofSpecField(this.graph, this.graph.mainRoofSpec, field, value);
   }
 
   // ---- 階段 ----

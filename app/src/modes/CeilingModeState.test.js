@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { autorun, isObservable } from 'mobx';
-import { StairType, CenterLineType, Discipline, RoomFeature, Plane } from '@core';
+import { StairType, CenterLineType, Discipline, RoomFeature, Plane, PlanGraph } from '@core';
 import { isUiBusy } from '../uiBusy.js';
 import { ERR_CL_MOVE_LOAD_FAILED } from '../error.js';
 import { undoManager } from '../undoManager.js';
@@ -59,10 +59,12 @@ test('CeilingModeState（S12c）: toggleNode(depth, id) は、開いている id
   assert.deepEqual(state.expandedPath, []);
 });
 
-test('CeilingModeState: setActiveTab は interior / stair を切り替える', () => {
+test('CeilingModeState: setActiveTab は interior / stair / exterior を切り替える', () => {
   const state = new CeilingModeState();
   state.setActiveTab('stair');
   assert.equal(state.activeTab, 'stair');
+  state.setActiveTab('exterior');
+  assert.equal(state.activeTab, 'exterior');
   state.setActiveTab('interior');
   assert.equal(state.activeTab, 'interior');
 });
@@ -70,8 +72,42 @@ test('CeilingModeState: setActiveTab は interior / stair を切り替える', (
 test('【失敗系】CeilingModeState: 未知のタブ名は例外で、activeTab は変わらない', () => {
   const state = new CeilingModeState();
   state.setActiveTab('stair');
-  assert.throws(() => state.setActiveTab('exterior'), /未知のタブ/);
+  assert.throws(() => state.setActiveTab('roof'), /未知のタブ/);
   assert.equal(state.activeTab, 'stair');
+});
+
+test('setMainRoofField: 確定で true・自階 mainRoofSpec が変わり markDirty・undo 1エントリ。graph は引数で受ける', () => {
+  const state = new CeilingModeState();
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  clearDirty();
+  const stack = undoManager._undoStack.length;
+  assert.equal(state.setMainRoofField(graph, 'soffitNote', '目透かし貼り'), true);
+  assert.equal(graph.mainRoofSpec.soffitNote, '目透かし貼り');
+  assert.equal(isDirty(), true);
+  assert.equal(undoManager._undoStack.length, stack + 1);
+  undoManager.undo();
+  assert.equal(graph.mainRoofSpec.soffitNote, '');
+});
+
+test('【失敗系】setMainRoofField: 不正な値・無変更は false で markDirty も undo も積まない', () => {
+  const state = new CeilingModeState();
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  clearDirty();
+  const stack = undoManager._undoStack.length;
+  assert.equal(state.setMainRoofField(graph, 'soffitOrientation', 'diagonal'), false, '不正な値');
+  assert.equal(state.setMainRoofField(graph, 'soffitNote', ''), false, '無変更');
+  assert.equal(isDirty(), false);
+  assert.equal(undoManager._undoStack.length, stack);
+});
+
+test('setAboveRoofContext は observable（購読者が置換で再実行される）。既定は null', () => {
+  const state = new CeilingModeState();
+  assert.equal(state.aboveRoofContext, null);
+  let runs = 0;
+  const dispose = autorun(() => { void state.aboveRoofContext; runs++; });
+  state.setAboveRoofContext({ planeId: 'p1', aboveGraph: {} });
+  assert.equal(runs, 2);
+  dispose();
 });
 
 test('CeilingModeState: dispose で選択を解除する（タブは保つ）。dispose の二重呼びも例外にならない', () => {
@@ -797,4 +833,24 @@ test('setStairUnderContext は observable（購読者が置換で再実行され
   state.setStairUnderContext({ planeId: 'p1', lowerStairCellBounds: [], floorHeightMm: 3200 });
   assert.equal(runs, 2);
   dispose();
+});
+
+test('【失敗系】aboveRoofGraphOf: planeId が違う ctx・null の ctx・graph なしは null、一致なら aboveGraph', () => {
+  const state = new CeilingModeState();
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const above = { rooms: [] };
+  assert.equal(state.aboveRoofGraphOf(graph), null, 'ctx null');
+  state.setAboveRoofContext({ planeId: 'p2', aboveGraph: above });
+  assert.equal(state.aboveRoofGraphOf(graph), null, 'planeId 不一致（階切替直後の古い peek）');
+  state.setAboveRoofContext({ planeId: 'p1', aboveGraph: above });
+  assert.equal(state.aboveRoofGraphOf(graph), above);
+  assert.equal(state.aboveRoofGraphOf(null), null, 'graph なし');
+});
+
+test('getMaterial: 未ロードは null、ロード後はコードで引ける', async () => {
+  const state = new CeilingModeState();
+  assert.equal(state.getMaterial('301000000015'), null);
+  await state.init();
+  assert.equal(state.getMaterial('301000000015').code, '301000000015');
+  assert.equal(state.getMaterial('nope'), null);
 });

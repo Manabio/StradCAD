@@ -325,12 +325,12 @@ function stairTree(graph, materialMap, groups) {
  * パネルの木。内部タブは 仕上げ表と同じ部屋（interiorTabRooms）のうち親（referenceRoomIds なし）が最上位で、部分指定の子は親の下
  * （親がタブに無い子は最上位）。階段タブは graph.stairs の順の階段が最上位。graph が null は []。
  * @param {object} graph
- * @param {'interior'|'stair'} tab
+ * @param {'interior'|'stair'|'exterior'} tab  exterior は []（軒裏の行は ceilingExteriorRows）
  * @param {Map<string, object>|null} materialMap
  * @param {Map<string, Set<string>>|null} [stairUnderKeys]  階段下の天井セル（stairUnderCeilingKeys）。あれば階段の子の先頭に「階段下」ノード
  */
 export function ceilingPanelTree(graph, tab, materialMap = null, stairUnderKeys = null) {
-  if (!graph) return [];
+  if (!graph || tab === 'exterior') return []; // 外部タブ（軒裏）は群を持たない（行は ceilingExteriorRows.js）
   const { groups } = ceilingGroupsOf(graph, ceilingCellOwnersOf(graph), stairUnderKeys);
   return tab === 'stair' ? stairTree(graph, materialMap, groups) : interiorTree(graph, materialMap, groups);
 }

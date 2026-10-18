@@ -20,7 +20,7 @@ import {
 
 // 文字列の欄（屋根仕上げ・備考・軒裏の備考）。blur／Enter で確定する（既存の CardNameInput・ExteriorPartHeading と
 // 同じ流儀。Escape の専用処理は持たない）。
-const RoofTextInput = observer(({ value, onCommit, style }) => {
+export const RoofTextInput = observer(({ value, onCommit, style }) => {
   const [draft, setDraft] = useState(null);
   const commit = () => {
     if (draft !== null) onCommit(draft);
@@ -65,6 +65,24 @@ const RoofNumberInput = observer(({ value, parse, onCommit, style }) => {
     />
   );
 });
+
+/**
+ * 屋根・軒裏の材選択（素の select。「（未選択）」は出さず、現在値が選択肢に無ければ先頭に足す）。
+ * RoofGroup（仕上げモード外部タブ）と CeilingPanel（天伏の外部タブ・主屋根の軒裏）で共用する。
+ * @param {{ codes: string[], value: string, nameOf: (code: string) => string|null|undefined, onChange: (code: string) => void, style?: object }} props
+ */
+export const RoofMaterialSelect = observer(({ codes, value, nameOf, onChange, style }) => (
+  <select
+    value={value}
+    onChange={e => onChange(e.target.value)}
+    onClick={e => e.stopPropagation()}
+    style={style}
+  >
+    {roofMaterialOptions(codes, value, nameOf).map(o => (
+      <option key={o.value} value={o.value}>{o.label}</option>
+    ))}
+  </select>
+));
 
 const formLabelStyle = { fontSize: 12, color: '#374151', whiteSpace: 'nowrap' };
 
@@ -117,16 +135,7 @@ const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, column
   const panelCodes = mode.getMaterialsByCategory('panel').map(m => m.code);
   const backingCodes = mode.getMaterialsByCategory('backing').map(m => m.code);
   const materialSelect = (field, codes, shown = spec[field]) => (
-    <select
-      value={shown}
-      onChange={e => set(field, e.target.value)}
-      onClick={e => e.stopPropagation()}
-      style={{ ...cellInputStyle, cursor: 'pointer' }}
-    >
-      {roofMaterialOptions(codes, shown, nameOf).map(o => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
-    </select>
+    <RoofMaterialSelect codes={codes} value={shown} nameOf={nameOf} onChange={v => set(field, v)} style={{ ...cellInputStyle, cursor: 'pointer' }} />
   );
 
   return (

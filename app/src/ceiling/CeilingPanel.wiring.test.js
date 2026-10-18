@@ -79,11 +79,40 @@ test('【配線】S12c: 欄は木の行の種類で描く。部屋の欄 RoomCei
   assert.match(src, /^\s*if \(line\.type === 'note'\) return /m, '天井なし・区画なしは注記の1行');
   assert.ok(!/GroupFields|ZoneDetail|summary\.cellCount|選択中: /.test(src), '旧の選択ブロック・内訳が残っている');
   assert.ok(!/\{mode\.selection && \(/.test(src), '上段の選択ガードが残っている');
-  assert.match(src, /^export const CeilingPanel = observer\(\(\{ graph, mode, isLandscape \}\) => \{\s*$/m, '階高は受けない（階段の傾斜の初期値は CeilingModeState.commitDrag）');
+  assert.match(src, /^export const CeilingPanel = observer\(\(\{ graph, mode, project, isLandscape \}\) => \{\s*$/m, '階高は受けない（階段の傾斜の初期値は CeilingModeState.commitDrag）');
 });
 
 test('【配線】S12c: 区画の行は天井材・仕上げの2列を colSpan=2 の1セルにまとめる。部屋・階段の行だけが材の select を持つ', () => {
   assert.match(src, /^\s*\{node\.type === 'zone' \? \(\s*$/m);
   assert.match(src, /^\s*<td colSpan=\{2\} style=\{\{ \.\.\.cellStyle, overflow: 'hidden', textOverflow: 'ellipsis' \}\}>\{node\.summary\}<\/td>\s*$/m);
   assert.equal(count(/<RowMaterialSelect /g), 1);
+});
+
+test('【配線】外部タブ（軒裏）: TABS に exterior、行は ceilingExteriorRows、表示のみの行は select を持たない。編集は editable 行だけで mode.setMainRoofField(graph, …)', () => {
+  assert.match(src, /^\s*\{ id: 'exterior', label: '外部' \},\s*$/m);
+  assert.equal(count(/ceilingExteriorRows\(/g), 1);
+  assert.match(src, /^\s*if \(!row\.editable\) \{\s*$/m, '表示のみの行を先に返す');
+  const readonlyStart = src.indexOf('if (!row.editable) {');
+  const editableStart = src.indexOf('const selectStyle', readonlyStart);
+  assert.ok(readonlyStart >= 0 && editableStart > readonlyStart);
+  const readonlyBlock = src.slice(readonlyStart, editableStart);
+  assert.ok(!/<select|MaterialSelect|RoofTextInput|mode\.setMainRoofField|\bset\(/.test(readonlyBlock), '表示のみの行は入力部品も書込みも持たない');
+  assert.match(src, /^\s*const set = \(field, value\) => mode\.setMainRoofField\(graph, field, value\);\s*$/m);
+  assert.equal(count(/set\('soffit(Material|Backing|Orientation|Note)'/g), 4, '編集は軒裏の4項目だけ');
+  assert.equal(count(/mode\.setMainRoofField\(/g), 1, '書込みの入口は1か所');
+  assert.match(src, /^\s*\{row\.backingShown && \(\s*$/m, '編集行の下地は木造のときだけ');
+  assert.match(src, /軒裏はありません。/);
+  assert.match(src, /^\s*export const CeilingPanel = observer\(\(\{ graph, mode, project, isLandscape \}\) => \{\s*$/m);
+});
+
+test('【配線】外部タブの主屋根行の材 select は共通部品 RoofMaterialSelect（「（未選択）」なし）。ExteriorRow の中に MaterialSelect は無い。下屋の階は mode.aboveRoofGraphOf で引く', () => {
+  const start = src.indexOf('const ExteriorRow = observer(');
+  const end = src.indexOf('const ExteriorTable = observer(');
+  assert.ok(start >= 0 && end > start);
+  const block = src.slice(start, end);
+  assert.ok(!/\bMaterialSelect\b/.test(block.replace(/RoofMaterialSelect/g, '')), 'ExteriorRow に MaterialSelect が残っている');
+  assert.equal((block.match(/<RoofMaterialSelect /g) ?? []).length, 2, '仕上げ（panel）と下地（backing）の2か所');
+  assert.match(src, /^import \{ RoofTextInput, RoofMaterialSelect \} from '\.\.\/finish\/roof\/RoofGroup\.jsx';\s*$/m);
+  assert.equal(count(/aboveGraph: mode\.aboveRoofGraphOf\(graph\)/g), 1);
+  assert.equal(count(/aboveRoofContext/g), 0, 'パネルは ctx を直接読まない');
 });

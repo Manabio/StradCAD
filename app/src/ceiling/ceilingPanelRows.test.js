@@ -618,3 +618,12 @@ test('ceilingPanelLines（階段下）: 「階段下」を開いても「区画�
   assert.notEqual(lines[i + 1].type, 'note', '階段下の直後に注記が無い');
   assert.ok(!lines.some(l => l.type === 'note'));
 });
+
+test('ceilingPanelTree: exterior タブは群を持たず []（部屋があっても）。nodePathOf も null。graph なしも []', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const a = g.interior([[0, 0]]);
+  assert.ok(ceilingPanelTree(g.graph, 'interior').length > 0, '前提: 内部タブには部屋が出る');
+  assert.deepEqual(ceilingPanelTree(g.graph, 'exterior'), []);
+  assert.equal(nodePathOf(g.graph, roomGroupId(a.id), 'exterior'), null);
+  assert.deepEqual(ceilingPanelTree(null, 'exterior'), []);
+});

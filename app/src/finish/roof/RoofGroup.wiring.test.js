@@ -89,7 +89,8 @@ test('【不変条件】勾配・軒の出・妻側の出は検証の純関数�
 });
 
 test('【不変条件】材料 select は roofMaterialOptions（候補表＋未解決コードの先頭補完）で、野地板=ROOF_SHEATHING_CODES・防水シート=ROOF_UNDERLAYMENT_CODES', () => {
-  assert.ok(/roofMaterialOptions\(codes, shown, nameOf\)/.test(groupBody), 'roofMaterialOptions(codes, shown, nameOf) が見つからない');
+  assert.ok(/roofMaterialOptions\(codes, value, nameOf\)/.test(roofCode), 'RoofMaterialSelect の roofMaterialOptions(codes, value, nameOf) が見つからない');
+  assert.ok(/<RoofMaterialSelect codes=\{codes\} value=\{shown\} nameOf=\{nameOf\} /.test(groupBody), 'materialSelect が共通部品 RoofMaterialSelect を使っていない');
   assert.ok(roofLines.includes('const materialSelect = (field, codes, shown = spec[field]) => ('), 'materialSelect の宣言（表示値の既定は spec[field]）が見つからない');
   assert.ok(roofLines.includes("{materialSelect('underlaymentMaterial', ROOF_UNDERLAYMENT_CODES)}"), '防水シートの select が見つからない');
   assert.ok(roofLines.includes("{materialSelect('sheathingMaterial', ROOF_SHEATHING_CODES)}"), '野地板の select が見つからない');

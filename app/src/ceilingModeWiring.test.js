@@ -37,9 +37,21 @@ test('【配線】App.jsx: 天伏の階段下の群は、直下階 peek（belowP
   assert.match(block, /^\s*mode\.setStairUnderContext\(ctx\);\s*$/m);
 });
 
-test('【配線】App.jsx: CeilingPanel は appMode === ceiling && mode のときだけマウントし、graph/mode/isLandscape を渡す（階高は渡さない。階段の傾斜の初期値は commitDrag の ctx 側で引く。S12b）', () => {
+test('【配線】App.jsx: 天伏の外部タブ（軒裏）は、直上階 peek（abovePlanPeek）から mode.setAboveRoofContext へ渡す。未解決の間は渡さず、上階なし・別の階の peek・graph なしは null', () => {
+  const start = appCode.indexOf("appMode !== 'ceiling' || !mode?.setAboveRoofContext || abovePlanPeek === undefined");
+  assert.ok(start >= 0, '天伏の aboveRoofContext の effect が見つからない');
+  const end = appCode.indexOf('\n  }, [', start);
+  const block = appCode.slice(start, end);
+  assert.match(block, /^\s*const ctx = abovePlanPeek\?\.graph && abovePlanPeek\.activePlaneId === active\?\.id\s*$/m, '別の階の peek・上階なし(null)・graph なしは ctx null');
+  assert.match(block, /^\s*\? \{ planeId: active\.id, aboveGraph: abovePlanPeek\.graph \}\s*$/m);
+  assert.match(block, /^\s*: null;\s*$/m);
+  assert.match(block, /^\s*mode\.setAboveRoofContext\(ctx\);\s*$/m);
+  assert.ok(appCode.slice(end, end + 120).startsWith('\n  }, [appMode, mode, abovePlanPeek, activeFloorId]);'), 'deps');
+});
+
+test('【配線】App.jsx: CeilingPanel は appMode === ceiling && mode のときだけマウントし、graph/mode/project/isLandscape を渡す（階高は渡さない。階段の傾斜の初期値は commitDrag の ctx 側で引く。S12b。project は外部タブの最上階判定・主構造用）', () => {
   assert.match(appCode, /^\s*\{appMode === 'ceiling' && mode && \(\s*$/m);
-  assert.match(appCode, /^\s*<CeilingPanel graph=\{graph\} mode=\{mode\} isLandscape=\{isLandscape\} \/>\s*$/m);
+  assert.match(appCode, /^\s*<CeilingPanel graph=\{graph\} mode=\{mode\} project=\{project\} isLandscape=\{isLandscape\} \/>\s*$/m);
   assert.match(appCode, /^import \{ CeilingPanel \} +from '\.\/ceiling\/CeilingPanel\.jsx';\s*$/m);
 });
 

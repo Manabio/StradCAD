@@ -858,6 +858,17 @@ const App = observer(() => {
     mode.setStairUnderContext(ctx);
   }, [appMode, mode, belowPlanPeek, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 天伏モード: 外部タブの軒裏（直上階の下屋）の表示材料を、直上階 peek（abovePlanPeek）から mode へ渡す。
+  // 未解決（undefined）の間は渡さない。上階なし（null）・別の階の peek・graph なしは null（下屋の行なし）。
+  useEffect(() => {
+    if (appMode !== 'ceiling' || !mode?.setAboveRoofContext || abovePlanPeek === undefined) return;
+    const active = project.activePlane;
+    const ctx = abovePlanPeek?.graph && abovePlanPeek.activePlaneId === active?.id
+      ? { planeId: active.id, aboveGraph: abovePlanPeek.graph }
+      : null;
+    mode.setAboveRoofContext(ctx);
+  }, [appMode, mode, abovePlanPeek, activeFloorId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // 吹抜け直下の階ビュー: 直上階（elevation が1つ上の採用フロア）を peek し、その吹抜け・昇降路の穴
   // （abovePlanPeek。PlanSolidsLayer が注記の破線を自階へ投影する）とスラブ開口を求める（世界座標は全階共通のため
   // peek 結果の座標をそのまま使える。stairFloorSync.js の stairPortEdges と同じ前提）。CL偏芯の階またぎ連動
@@ -2902,7 +2913,7 @@ const App = observer(() => {
 
       {/* 天伏モード: 専用パネル（内部・階段の一覧。仕上げ表とは独立） */}
       {appMode === 'ceiling' && mode && (
-        <CeilingPanel graph={graph} mode={mode} isLandscape={isLandscape} />
+        <CeilingPanel graph={graph} mode={mode} project={project} isLandscape={isLandscape} />
       )}
 
       {/* 建具モード: 記号別採番リスト＋姿図・数値編集パネル */}

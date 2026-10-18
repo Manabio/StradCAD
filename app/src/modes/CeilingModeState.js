@@ -15,6 +15,7 @@ import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { withFinishUndo } from '../finish/finishUndo.js';
+import { commitRoofSpecField } from '../finish/roof/roofSpecCommit.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { markDirty } from '../dirtyState.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
@@ -29,19 +30,20 @@ import { composeList, composeCatalog, docDiffMap } from '../catalog/catalogRegis
 // 選択・dragState は undo に積まない。
 // 階切替・モード切替では App.jsx の effect が前のモードを dispose して破棄する（追加配線なし）。
 
-/** 専用パネルのタブ id（内部＝部屋ごとの天井欄／階段＝階段ごとの天井欄）。 */
-export const CEILING_TABS = Object.freeze(['interior', 'stair']);
+/** 専用パネルのタブ id（内部＝部屋ごとの天井欄／階段＝階段ごとの天井欄／外部＝軒裏。群を持たず選択に関与しない）。 */
+export const CEILING_TABS = Object.freeze(['interior', 'stair', 'exterior']);
 
 const NO_CELLS = Object.freeze([]);
 const NO_KEYS = new Set();
 
 export class CeilingModeState {
   expandedPath   = [];       // パネルで開いているノード id の経路（最上位から。各段1つだけ＝アコーディオン）。ノード id は群 id
-  activeTab      = 'interior'; // 'interior' | 'stair'
+  activeTab      = 'interior'; // 'interior' | 'stair' | 'exterior'
   selection      = null;     // null | { owner, groupId, cellKeys: Set<string> }（確定した群の選択。cellKeys は選んだ時点の写し）
   dragState      = null;     // null | { owner, visited, lastWorld, owners, intent: 'select'|'create', groupId, group, preview }（ドラッグ中）
   moveState      = null;     // null | { cl, originalValue, range }（天井芯の移動中。S8b。FloorplanModeState.moveState と同形）
   stairUnderContext = null;  // null | { planeId, lowerStairCellBounds, floorHeightMm }（階段下の群の判定材料。App の直下階 peek が渡す。null は分けない）
+  aboveRoofContext = null;   // null | { planeId, aboveGraph }（直上階の下屋の軒裏を表示するための直上階 peek。App の effect が渡す。null は下屋の行なし）
   _pendingPreload = null;    // { clId, promise } | null — 長押し中の移動範囲の先読み結果（graph は持たず promise だけ）
 
   // ---- 材データ（突入時ロード。dispose では解放せず、モードのインスタンスごと捨てられる。FinishModeState と同名・同じ意味） ----
@@ -70,6 +72,9 @@ export class CeilingModeState {
       moveState:      observable.ref,
       stairUnderContext: observable.ref,
       setStairUnderContext: action,
+      aboveRoofContext: observable.ref,
+      setAboveRoofContext: action,
+      setMainRoofField: action,
       isMoving:       computed,
       startMove:      action,
       updateMove:     action,
@@ -137,6 +142,32 @@ export class CeilingModeState {
 
   /** 階段下の判定材料を置く（App.jsx の直下階 peek の effect が呼ぶ）。null は「判定できない＝分けない」。 */
   setStairUnderContext(ctx) { this.stairUnderContext = ctx; }
+
+  // ---- 外部タブ（軒裏）----
+
+  /** 直上階 peek（表示専用の使い捨てグラフ）を置く（App.jsx の effect が呼ぶ）。null は「直上階なし／判定できない」。 */
+  setAboveRoofContext(ctx) { this.aboveRoofContext = ctx; }
+
+  /** graph の直上階 peek（下屋の軒裏の表示用）。ctx が無い・別の階のもの（planeId 不一致。階切替直後の古い peek）は null＝下屋の行なし。 */
+  aboveRoofGraphOf(graph) {
+    const ctx = this.aboveRoofContext;
+    if (!graph || !ctx || ctx.planeId !== graph.plane?.id) return null;
+    return ctx.aboveGraph ?? null;
+  }
+
+  /** 材コード → 材（未ロード・不明は null）。FinishModeState.getMaterial と同形（軒裏の材選択の表示名用）。 */
+  getMaterial(code) { return this.materialMap?.get(code) ?? null; }
+
+  /**
+   * 最上階の主屋根（自階 graph.mainRoofSpec）の項目を1つ確定する（外部タブの軒裏行）。検証・無変更判定・undo 1エントリは
+   * 仕上げモードの setMainRoofField と共通（commitRoofSpecField）。確定したら markDirty。graph は引数で受ける（mode は graph を持たない）。
+   * @returns {boolean} 変更を確定したら true（不正な値・無変更は false で何も変えない）
+   */
+  setMainRoofField(graph, field, value) {
+    if (!commitRoofSpecField(graph, graph.mainRoofSpec, field, value)) return false;
+    markDirty();
+    return true;
+  }
 
   /**
    * graph の階段下の天井セル（stairId → Set）。判定材料が無い・別の階のもの（planeId 不一致。階切替直後の古い peek）は null＝分けない。
