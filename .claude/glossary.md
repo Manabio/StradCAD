@@ -484,7 +484,7 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 `.claude/plan-wall-region.md`「仕上げモード背景の補助線」節。
 
 ## 天伏
-天井伏図モード（`appMode==='ceiling'`。ModeBar の「天伏」）。見上げ図＋天井欄の指定を行う。仕上げモードとは独立の State（`modes/CeilingModeState.js`）・専用パネル（`ceiling/CeilingPanel.jsx`）を持ち、仕上げ表との共有はデータ（Room の天井欄）と純モジュールだけ。
+天井伏図モード（`appMode==='ceiling'`。ModeBar の「天伏」）。見上げ図＋天井欄の指定を行う。仕上げモードとは独立の State（`modes/CeilingModeState.js`）・専用パネル（`ceiling/CeilingPanel.jsx`）を持ち、仕上げ表との共有はデータ（Room の天井欄）と純モジュールだけ。見上げ図の原則（2026-10-18）: セル境界（通り芯）は図面に現れず、穴（吹抜け・階段吹抜け）と天井面の縁は囲む壁の面（偏芯を含む）。見える穴の縁は**中線**（`lineWeightsPx.medium`。下階階段の見下げの「床の端」と同じ重み）。設計意図は `.claude/plan-section.md`「見上げ」の「穴と天井面の縁」。
 
 ## 天井区画
 天伏で選んだセル群ごとの天井の高さと形状・寸法。`Room.ceilingZones`（不変の`CeilingZone`）に持ち、部屋のCH欄には書かない。設計意図は`.claude/ceiling-model.md`「天井区画（S5）」「形状と寸法（S6a）」。

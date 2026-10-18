@@ -80,6 +80,13 @@
 - 鍵は `planSection:up:自階:切断高:上階|pending|-`（見下げの `planSection:…` と別。同じ graph を置き場にしても衝突しない）、置き場は上階 peek の graph。吹抜けの注記は見上げでは**自階の×（void・shaft だけ。STAIR_VOID は平らな天井面で×なし）と、直上階の STAIR_VOID＝続きの無い階段の足元の上の一点鎖線の×だけ**（上階の吹抜け・昇降路の破線は出さない。上階スラブの穴の縁が実線で出るため。`.claude/ceiling-model.md` S13b）。
 - 検証: `dumpPlanSolids.mjs --up`（自階＋直上階の線と件数・所要時間）。確認文書に `ceiling-steel-stair-test.stq`・`ceiling-wood-stair-test.stq`（`makeCeilingSteelStairTestDoc.mjs`。鉄骨で続きのある階段の stairTread 全段／木造の stairSoffit）。
 
+- **穴と天井面の縁は壁の面（2026-10-18。ユーザー原則「セル境界〔通り芯〕は図面に現れない。縁はそれを囲む壁の面〔偏芯を含む〕」）**。見上げ限定・見下げはバイト不変。
+  - 天井面（自階）は、セルの縁に寄って内側に収まる壁の帯（`wallBandsOf`。同じ芯の接する帯は結合、along は端点で区間に割る。腰壁だけの区間は除く）の外面で止める（`wallBandStrips`→`subtractRects`。縁との間が `SPAN_OVERLAP_EPS` 以下だけ。削る矩形から全帯の和を除く＝壁の下は削らない。角の取り合いで薄壁だけが角まで伸びる所に切欠きを作らないため）。向こう側の面はセル境界のまま（既知の限界。移し足しは隅・2 重壁で反例が尽きず不採用）。
+  - 天井面から直上階の void・shaft の穴を引く（規則 V＝「N の天井の穴＝N+1 の床の穴」の立体化。stairVoid は引かない＝階段下部屋の天井は残る）。上階の層の梁は立体にしない（描かず・遮蔽にも入れない。裁定「梁は天井より上」）。
+  - 上階スラブの穴は、縁に乗る上階の壁（腰壁含む）の張り出し（帯∩穴）で狭め（`narrowOpeningByWalls`）、張り出しの端は穴の和・自階の天井面・他の帯の縁まで `SPAN_OVERLAP_EPS` 以内で延ばす（2a 壁の外面まで届かせる）。自階の天井面は張り出しの面まで延ばす（接する面にだけ・1 段）。
+  - **見える穴（穴−自階の天井面）の和の外形線は中線**（`plan/planOpeningEdges.js markOpeningEdges`。`lineWeightsPx.medium`。cut・ceilingBoundary の線は対象外、一部だけ乗る線は分割、同一直線上の重なりは最初の線だけ）。壁の無い縁（スラブ小口）も中線。穴に突き出す壁端・隔て板の輪郭も見える穴の縁（受容）。角の欠けが残す 12.5mm 角の小穴は線にならない。
+  - 既知の限界: 延ばした天井の帯と隣の同高さ天井の境は `markSameHeightCeilingBoundaries` がセル矩形で判定するためグレーにならず細線（13.stq 1階 x=−1550 の 57.5mm。切断壁の太線の下）。
+
 ## S7b 段（階段の段を遮蔽物にする）
 - `finish/stair/stairTreads.js stairTreadFootprints` が、描画と同じエミッタ（`stairGeometry.js` の `collectCells`）のマス多角形＋天端（番号×蹴上、厚み 0）を返し、`planSolids.js` が `stairTread` 立体にする。**遮蔽専用**（`drawEdges:false`・`S4_DRAWN_KINDS` に入れない）——階段の線を描くのは `StairLayer` だけ（二重に出さない）。`SURFACE_KINDS`（面材）に入れ、同点の梁・下階の壁は段に隠れる。
 - 蹴上は**層ごとに1本**（`riserForLayer`）: 直上の層があればその階高から（`riserOf`。明示の `stair.riser` 優先）、最上の層（自階）は `opts.riserOf`。下階に自階の蹴上を使うと階高の違う階でずれる。求まらない階段は立体にしない（遮蔽しない）。view は常に `upper`（install は破れ位置で打ち切られる）、insetView は自階 `install`・下階 `upper`。切断面より上の段は解決器が捨てる。SWITCHBACK の踊り場の天端は `landingZ` と一致。

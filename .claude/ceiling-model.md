@@ -113,7 +113,12 @@ N 階の天伏は「N の天井面際から N+1 の床を裏から見た図」�
 - **N の天伏**: 足元の上の STAIR_VOID（直上階）に細線の×（role `'upperStairVoid'`・**自階の×と同じ一点鎖線**〔dashKind `'openingCross'`〕）。外形・「上部吹抜け」ラベルは付けない（上階スラブの穴の縁は解決器が実線で出すため）。
 - **×の定義＝「N の天井の穴＝直上階 N+1 の床の穴」**（裁定 2026-10-17）: 見上げでは**自階の床の穴の×（role `'cross'`）を出さない**（自階の床の穴は N の天井と無関係）。直上階の VOID・昇降路には STAIR_VOID と同じ×（role `'upperHole'`・dashKind `'openingCross'`・外形とラベルなし。自階の被覆判定もしない）。VOID・昇降路の上階の**破線の外形・ラベル（`'upperVoid'`）は従来どおり見上げでは出さない**。見下げ（平面）は自階の×＋上階の破線で不変。最上階（上階なし）の天伏に×は出ない。`planHoleMarks`／`planHoleMarksOf` の `lookUp` で分岐する。
 - 矩形は `floorOpeningGroups` の `stairVoidRect:true`（既定 false）で STAIR_VOID にも解決する。使うのは上階の STAIR_VOID の×（`PlanSolidsLayer` が `aboveStairVoidGroups` を渡す）だけ。**見下げ（平面など）は不変**: 平面は STAIR_VOID に×も「上部吹抜け」も出さず、`selfVoidHoleRects` の被覆判定も STAIR_VOID を無視する。
-- 既知の限界: 非矩形の STAIR_VOID（回り階段の 5 セル等。moku1-6）は上階の×なし（平らな天井面は出る）。中間階の STAIR_VOID も面を出すので、moku1-6 2F では 3F の梁 6 本・壁 3 本が天井に隠れる（仕様どおり）。
+- 既知の限界: 非矩形の STAIR_VOID（回り階段の 5 セル等。moku1-6）は上階の×なし（平らな天井面は出る）。中間階の STAIR_VOID も面を出すので、moku1-6 2F では 3F の壁 3 本が天井に隠れる（仕様どおり。3F の梁は 2026-10-18 から見上げでは立体にしない）。
+
+## 吹抜け・階段吹抜けの縁と×の分割（2026-10-18）
+原則「セル境界（通り芯）は図面に現れない。穴・天井面の縁は囲む壁の面（偏芯を含む）」。立体側の規則（天井面を壁の帯で止める／直上階の void・shaft の下は天井なし／穴を壁の張り出しで狭め縁を中線に／上階の梁は立体にしない）は `.claude/plan-section.md`「見上げ」の「穴と天井面の縁」。ここは×と帰結だけ。
+- **×の分割（`plan/planCrossSplit.js`）**: 直上階 STAIR_VOID の×は、自階の天井面（階段下部屋 2a のほか、自階 STAIR_VOID の平らな面・階段の天井区画も含む）のセル矩形を除いた残りを矩形群にして各々に描く。裁定「分割向きはセル群の形を優先。縦横両方に分断されるセル（L 字の根元など）はより大きいセル群に吸収」＝横の群・縦の群に組み両方に属する片は面積の大きい群へ（同面積は横）、和が矩形になる対は併合。外周の辺は faceRect（壁の面）、内側の辺（階段下部屋との境）はセル境界のまま。幅か高さが `SPAN_OVERLAP_EPS` 未満の細片は×にしない。void・shaft の×は分割しない（規則 V で直下の天井が抜けるため）。13.stq 1階は踊り場と往路の 2 枚。
+- 帰結: 吹抜けの中に上階の壁面・柱は細線で見えるが梁は見えない。階段吹抜けでは、上階の梁に隠れていた壁・柱・階段裏面の線がつながって出る。
 
 ## 自階の階段を描かない（S13c）
 天伏では自階の階段の線・外周・矢印も、下階の階段の見下げ（upper エントリ）も描かない（裁定 Q7）。階段は上から見た姿ではなく、上階の裏面（S13a）と平らな天井面（S13b）で表す。述語は `renderer/planFigureVisibility.js shouldShowStairFigure`（`shouldShowPlanFigure` から 'ceiling' を除く）で、`stairEntries.js buildStairEntries` の `isStairMode` がこれを引く＝install・upper・2a壁の描画クリップ（stairUnderClips）がまとめて止まる（2a壁は切断された壁としてそのまま見える）。壁・建具・柱は従来どおり描く。
