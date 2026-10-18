@@ -32,7 +32,7 @@ test('【失敗系】parseRoofOverhangInput: 負・文字・空は null', () => 
   }
 });
 
-test('isValidRoofFieldValue: 全12項目それぞれの正常値と不正値', () => {
+test('isValidRoofFieldValue: 全16項目それぞれの正常値と不正値', () => {
   for (const v of [true, false]) assert.ok(isValidRoofFieldValue('columnThrough', v), String(v));
   for (const v of ['true', 1, 0, null, undefined, {}]) assert.ok(!isValidRoofFieldValue('columnThrough', v), String(v));
   for (const v of ['vertical', 'horizontal', null]) assert.ok(isValidRoofFieldValue('ridgeDirection', v), String(v));
@@ -63,9 +63,25 @@ test('isValidRoofFieldValue: 全12項目それぞれの正常値と不正値', (
     assert.ok(isValidRoofFieldValue(f, '自由入力'));
     assert.ok(!isValidRoofFieldValue(f, 5));
   }
+  for (const f of ['soffitMaterial', 'soffitBacking']) {
+    assert.ok(isValidRoofFieldValue(f, '301000000015'), f);
+    assert.ok(!isValidRoofFieldValue(f, ''), `${f}: 空は不可`);
+    assert.ok(!isValidRoofFieldValue(f, null), f);
+    assert.ok(!isValidRoofFieldValue(f, 5), f);
+  }
+  for (const v of ['sloped', 'level']) assert.ok(isValidRoofFieldValue('soffitOrientation', v), v);
+  for (const v of ['diagonal', 'LEVEL', '', null, 0, undefined]) assert.ok(!isValidRoofFieldValue('soffitOrientation', v), String(v));
+  assert.ok(isValidRoofFieldValue('soffitNote', ''));
+  assert.ok(isValidRoofFieldValue('soffitNote', '目透かし貼り'));
+  assert.ok(!isValidRoofFieldValue('soffitNote', 5));
+  assert.ok(!isValidRoofFieldValue('soffitNote', null));
   assert.ok(!isValidRoofFieldValue('unknown', 'x'));
   // 全キーに判定がある（ROOF_SPEC_KEYS の取りこぼし検出）
-  const sample = { shape: 'mono', slope: 3, sheathingMaterial: 'a', underlaymentMaterial: 'b', roofFinish: '', eaveOverhangMm: 0, gableOverhangMm: 0, soffit: '', note: '', highSide: 'top', ridgeDirection: 'vertical', columnThrough: true };
+  const sample = {
+    shape: 'mono', slope: 3, sheathingMaterial: 'a', underlaymentMaterial: 'b', roofFinish: '', eaveOverhangMm: 0, gableOverhangMm: 0,
+    soffit: '', note: '', highSide: 'top', ridgeDirection: 'vertical', columnThrough: true,
+    soffitMaterial: 'c', soffitBacking: 'd', soffitOrientation: 'level', soffitNote: '',
+  };
   for (const key of ROOF_SPEC_KEYS) assert.ok(isValidRoofFieldValue(key, sample[key]), key);
 });
 

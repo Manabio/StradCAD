@@ -1,9 +1,9 @@
 // 屋根（RoomFeature.ROOF）の I0（壁・境界の同値）テスト用フィクスチャ。
 // 屋根セルを持つ配置と「同じセルを無割当にした配置」「同じセルを通常の屋外部屋にした配置」を
 // 同じ中心線（固定id）で作る。wallGeneration.test.js・edgeClassify.test.js が共有する。
-import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape, RoofHighSide, RoofRidgeDirection } from '@core';
+import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind, RoomFeature, RoofShape, RoofHighSide, RoofRidgeDirection, SoffitOrientation } from '@core';
 
-// 屋根の仕様（RoofSpec）の全12項目を既定値以外にした plain 値。往復・キー集合の突合テストが共有する
+// 屋根の仕様（RoofSpec）の全16項目を既定値以外にした plain 値。往復・キー集合の突合テストが共有する
 // （項目が増えたらここへの追加を強制する）。出幅0・勾配2.5・形状は明示（自動でない）。
 export const NON_DEFAULT_ROOF_SPEC = Object.freeze({
   shape: RoofShape.HIP,
@@ -18,6 +18,10 @@ export const NON_DEFAULT_ROOF_SPEC = Object.freeze({
   highSide: RoofHighSide.RIGHT,
   ridgeDirection: RoofRidgeDirection.VERTICAL,
   columnThrough: true,
+  soffitMaterial: '301000000012',
+  soffitBacking: '101400000009',
+  soffitOrientation: SoffitOrientation.LEVEL,
+  soffitNote: '軒天 目透かし 10mm',
 });
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };

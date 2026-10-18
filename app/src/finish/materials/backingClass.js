@@ -34,7 +34,7 @@ export function isRcWallBacking(code) {
 // ≥90mmでフィン直付け」に使う）。RC_WALL_BACKING_CODES と同じ理由（materialData.js は仕上げ
 // モードのみ動的import・sashDetailCatalog.js は静的import）でコード集合だけをここに分離する。
 // materialData.js の BACKING（category:'backing'）中、spec が杉・桧・松・栂等の木質材である
-// 17件（□-120×45 〜 □-30×30）と同じコード（配列はこちらが真実のソース）。
+// 18件（□-120×45 〜 □-30×15）と同じコード（配列はこちらが真実のソース）。
 export const WOOD_WALL_BACKING_CODES = Object.freeze([
   '101400000001', // □-120×45 杉・松等（間柱/大壁用）（在来木造 柱120角。2026-09-14追加）
   '101400000002', // □-120×30 杉・松等（間柱/薄口）（同上。柱寸×30）
@@ -53,6 +53,7 @@ export const WOOD_WALL_BACKING_CODES = Object.freeze([
   '101400000012', // □-45×36  杉等（野縁/一般天井用）
   '101400000013', // □-36×36  杉等（寸二角）
   '101400000014', // □-30×30  杉・栂等（一寸角）
+  '101400000015', // □-30×15  杉等（軒天野縁。2026-10-18追加。軒裏下地材の既定）
 ]);
 
 const WOOD_WALL_BACKING_CODE_SET = new Set(WOOD_WALL_BACKING_CODES);

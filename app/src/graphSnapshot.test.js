@@ -468,6 +468,7 @@ test('【B2・失敗系】屋根なのに roofSpec が欠けたスナップシ�
     shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
     roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野', highSide: null,
     ridgeDirection: null, columnThrough: false,
+    soffitMaterial: '301000000015', soffitBacking: '101400000015', soffitOrientation: 'sloped', soffitNote: '目透かし貼り',
   });
   // バッファ自体に RS が無い経路（RoofSpec を持たない屋根の部屋を書いて読む）でも同じ
   const noSpec = makeGraphWithRoofRoom();
@@ -586,6 +587,7 @@ test('【B3・失敗系】壊れた主屋根（未知の shape・負の出幅・
       shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
       roofFinish: '仕上', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '軒裏', note: 'メモ', highSide: null,
       ridgeDirection: null, columnThrough: false,
+      soffitMaterial: '', soffitBacking: '', soffitOrientation: null, soffitNote: '',
     }, label);
   }
 });
@@ -648,6 +650,64 @@ test('【C1b】highSide が null のときは何も書かない: 下屋で一度
   assert.equal(snap.rooms.find(r => r.id === roof.id).roofSpec.highSide, null, '読みは null');
   delete snap.rooms.find(r => r.id === roof.id).roofSpec.highSide;
   assert.deepEqual([...encodeFloorSnapshot(snap)], [...base]);
+});
+
+// ---- 軒裏4項目（RoofSpec.soffit*。FBS の RS.SOFFIT_MATERIAL=12〜SOFFIT_NOTE=15。空・null は書かない） ----
+const SOFFIT_KEYS = ['soffitMaterial', 'soffitBacking', 'soffitOrientation', 'soffitNote'];
+const SOFFIT_EMPTY = { soffitMaterial: '', soffitBacking: '', soffitOrientation: null, soffitNote: '' };
+
+test('【軒裏】4項目が FBS・plain・複製の各経路で往復する（下屋・主屋根とも）', () => {
+  const { graph, roof } = makeGraphWithRoofRoom();
+  graph.setMainRoofSpec(RoofSpec.fromData(NON_DEFAULT_ROOF_SPEC));
+  for (const [label, restoreFrom] of [
+    ['FBS', g => serializeGraph(g)],
+    ['plain', g => JSON.parse(JSON.stringify(decodeFloorSnapshot(serializeGraph(g))))],
+    ['複製', g => serializeGraphWithFreshLineIds(g)],
+  ]) {
+    const restored = makeGraph();
+    restoreGraph(restored, restoreFrom(graph));
+    for (const key of SOFFIT_KEYS) {
+      assert.equal(restored.roomMap.get(roof.id).roofSpec[key], NON_DEFAULT_ROOF_SPEC[key], `下屋 ${label} ${key}`);
+      assert.equal(restored.mainRoofSpec[key], NON_DEFAULT_ROOF_SPEC[key], `主屋根 ${label} ${key}`);
+    }
+  }
+  assert.equal(NON_DEFAULT_ROOF_SPEC.soffitOrientation, 'level', '前提: 向きは既定（傾斜）と別の値');
+});
+
+test('【軒裏】4項目が空・null のときは何も書かない: 設定して空へ戻したバイト列は設定前と一致し、4キーの無い旧 plain の encode とも一致する', () => {
+  const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, ...SOFFIT_EMPTY });
+  const base = serializeGraph(graph);
+  for (const key of SOFFIT_KEYS) {
+    roof.roofSpec.setField(key, NON_DEFAULT_ROOF_SPEC[key]);
+    assert.ok(serializeGraph(graph).length > base.length, `${key}: 値があれば長くなる`);
+    roof.roofSpec.setField(key, SOFFIT_EMPTY[key]);
+    assert.deepEqual([...serializeGraph(graph)], [...base], `${key}: 空へ戻せばバイト列は一致`);
+  }
+  const snap = decodeFloorSnapshot(base);
+  const plain = snap.rooms.find(r => r.id === roof.id).roofSpec;
+  assert.deepEqual(SOFFIT_KEYS.map(k => plain[k]), ['', '', null, ''], '読みは空・null');
+  for (const key of SOFFIT_KEYS) delete plain[key];
+  assert.deepEqual([...encodeFloorSnapshot(snap)], [...base]);
+});
+
+test('【軒裏・失敗系】旧データ（4キーが無い）は空・null。壊れた向き・非文字列は復元で正規化される（FBS・plain とも）', () => {
+  const { graph, roof } = makeGraphWithRoofRoom({ ...NON_DEFAULT_ROOF_SPEC, ...SOFFIT_EMPTY });
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  const plain = snapshot.rooms.find(r => r.id === roof.id).roofSpec;
+  for (const key of SOFFIT_KEYS) delete plain[key];
+  const old = makeGraph();
+  restoreGraph(old, snapshot);
+  const oldSpec = old.roomMap.get(roof.id).roofSpec;
+  assert.deepEqual(SOFFIT_KEYS.map(k => oldSpec[k]), ['', '', null, '']);
+  // plain は非文字列も来うる／FBS は文字列として書かれるので壊れた向きだけを確かめる
+  Object.assign(plain, { soffitMaterial: 5, soffitBacking: null, soffitOrientation: 'diagonal', soffitNote: 7 });
+  const viaPlain = makeGraph();
+  restoreGraph(viaPlain, snapshot);
+  assert.deepEqual(SOFFIT_KEYS.map(k => viaPlain.roomMap.get(roof.id).roofSpec[k]), ['', '', null, ''], 'plain');
+  Object.assign(plain, { soffitMaterial: '', soffitBacking: '', soffitNote: '' });
+  const viaFbs = makeGraph();
+  restoreGraph(viaFbs, encodeFloorSnapshot(snapshot));
+  assert.deepEqual(SOFFIT_KEYS.map(k => viaFbs.roomMap.get(roof.id).roofSpec[k]), ['', '', null, ''], 'FBS');
 });
 
 test('【C1b・失敗系】旧データ（highSide のキー・フィールドが無い）は null。壊れた highSide は null へ正規化される（FBS・plain とも）', () => {

@@ -14,6 +14,7 @@ test('RoofSpec: 既定値は 形状=自動(null)・勾配3・野地板=構造用
     sheathingMaterial: DEFAULT_ROOF_SHEATHING, underlaymentMaterial: DEFAULT_ROOF_UNDERLAYMENT,
     roofFinish: '', eaveOverhangMm: DEFAULT_ROOF_EAVE_OVERHANG_MM, gableOverhangMm: DEFAULT_ROOF_GABLE_OVERHANG_MM,
     soffit: '', note: '', highSide: null, ridgeDirection: null, columnThrough: false,
+    soffitMaterial: '', soffitBacking: '', soffitOrientation: null, soffitNote: '',
   });
   assert.equal(DEFAULT_ROOF_SLOPE, 3);
   assert.equal(DEFAULT_ROOF_EAVE_OVERHANG_MM, 455);
@@ -26,13 +27,14 @@ test('不変条件: toData() のキー集合は ROOF_SPEC_KEYS と一致し、�
   assert.deepEqual(Object.keys(new RoofSpec().toData()).sort(), [...ROOF_SPEC_KEYS].sort());
   assert.deepEqual(Object.keys(NON_DEFAULT_ROOF_SPEC).sort(), [...ROOF_SPEC_KEYS].sort(),
     'RoofSpec に項目を足したら fixture にも足す');
-  assert.equal(ROOF_SPEC_KEYS.length, 12);
-  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 1], 'columnThrough', 'columnThrough は末尾');
-  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 2], 'ridgeDirection');
-  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 3], 'highSide');
+  assert.equal(ROOF_SPEC_KEYS.length, 16);
+  assert.deepEqual(ROOF_SPEC_KEYS.slice(-4), ['soffitMaterial', 'soffitBacking', 'soffitOrientation', 'soffitNote'], '軒裏4項目は末尾');
+  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 5], 'columnThrough');
+  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 6], 'ridgeDirection');
+  assert.equal(ROOF_SPEC_KEYS[ROOF_SPEC_KEYS.length - 7], 'highSide');
 });
 
-test('不変条件: 全12項目を既定値以外にした RoofSpec は toData→fromData→toData で一致し、各項目が保たれる（出幅0・勾配2.5）', () => {
+test('不変条件: 全16項目を既定値以外にした RoofSpec は toData→fromData→toData で一致し、各項目が保たれる（出幅0・勾配2.5）', () => {
   const defaults = new RoofSpec().toData();
   for (const key of ROOF_SPEC_KEYS) {
     assert.notDeepEqual(NON_DEFAULT_ROOF_SPEC[key], defaults[key], `前提: ${key} は既定値と異なる`);
@@ -159,14 +161,42 @@ test('isDefaultRoofSpec: 既定値の RoofSpec・その toData()・null/undefine
   assert.equal(isDefaultRoofSpec(undefined), true);
 });
 
-test('isDefaultRoofSpec: 12項目のどれか1つでも既定値と違えば false（ROOF_SPEC_KEYS の全項目で確かめる）', () => {
+test('RoofSpec.fromData: 軒裏4項目の正規化（不正な向き→null・非文字列→\'\'・材コードは既定へ置き換えず \'\'）', () => {
+  const bad = RoofSpec.fromData({
+    soffitMaterial: 123, soffitBacking: null, soffitOrientation: 'diagonal', soffitNote: { a: 1 },
+  });
+  assert.equal(bad.soffitMaterial, '', '非文字列の材コードは既定（ケイカル板）へ置き換えず空');
+  assert.equal(bad.soffitBacking, '');
+  assert.equal(bad.soffitOrientation, null, '未知の向きは null');
+  assert.equal(bad.soffitNote, '');
+  const empty = RoofSpec.fromData({});
+  assert.deepEqual(
+    [empty.soffitMaterial, empty.soffitBacking, empty.soffitOrientation, empty.soffitNote], ['', '', null, ''],
+    '欠落は空');
+  assert.equal(isDefaultRoofSpec(empty), true, '軒裏が空なら既定のまま（主屋根は保存されない）');
+  assert.equal(RoofSpec.fromData({ soffitOrientation: 'level' }).soffitOrientation, 'level');
+  assert.equal(RoofSpec.fromData({ soffitOrientation: 'sloped' }).soffitOrientation, 'sloped');
+});
+
+test('RoofSpec: 軒裏4項目は toData→fromData で往復し、setField で変えられる。どれか1つでも空でなければ既定外', () => {
+  const s = new RoofSpec();
+  s.setField('soffitMaterial', '301000000015');
+  s.setField('soffitBacking', '101400000015');
+  s.setField('soffitOrientation', 'level');
+  s.setField('soffitNote', '目透かし貼り');
+  assert.deepEqual(RoofSpec.fromData(s.toData()).toData(), s.toData());
+  assert.equal(isDefaultRoofSpec(s), false);
+  assert.equal(isDefaultRoofSpec(new RoofSpec({ soffitNote: 'x' })), false);
+});
+
+test('isDefaultRoofSpec: 16項目のどれか1つでも既定値と違えば false（ROOF_SPEC_KEYS の全項目で確かめる）', () => {
   for (const key of ROOF_SPEC_KEYS) {
     const spec = new RoofSpec();
     spec.setField(key, NON_DEFAULT_ROOF_SPEC[key]);
     assert.equal(isDefaultRoofSpec(spec), false, `${key} だけ既定外でも false`);
     assert.equal(isDefaultRoofSpec(spec.toData()), false, `${key}（plain）`);
   }
-  assert.equal(ROOF_SPEC_KEYS.length, 12);
+  assert.equal(ROOF_SPEC_KEYS.length, 16);
   assert.equal(isDefaultRoofSpec(new RoofSpec({ columnThrough: true })), false, 'columnThrough だけ true でも既定外');
   assert.equal(isDefaultRoofSpec(new RoofSpec({ highSide: RoofHighSide.TOP })), false, 'highSide だけ明示しても既定外');
   assert.equal(isDefaultRoofSpec(new RoofSpec({ ridgeDirection: RoofRidgeDirection.HORIZONTAL })), false, 'ridgeDirection だけ明示しても既定外');

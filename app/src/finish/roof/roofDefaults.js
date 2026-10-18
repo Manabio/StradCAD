@@ -5,7 +5,10 @@
  * 屋根を付けた時点で createRoofSpec が既定値を確定して保存する（材料コードは保存されていないと
  * 使用コードの収集・照合に乗らないため）。
  */
-import { RoofSpec, RoofShape, RoomFeature, DEFAULT_ROOF_NOTE, ROOF_MONO_MAX_SHORT_SPAN_MM } from '@core';
+import {
+  RoofSpec, RoofShape, RoomFeature, DEFAULT_ROOF_NOTE, ROOF_MONO_MAX_SHORT_SPAN_MM,
+  DEFAULT_SOFFIT_MATERIAL, DEFAULT_SOFFIT_BACKING, DEFAULT_SOFFIT_NOTE, SoffitOrientation,
+} from '@core';
 import { cellBoundsList, refreshCells } from '../gridCells.js';
 import { roofShortSpanMm } from './roofGeometry.js';
 
@@ -18,9 +21,33 @@ export function createRoofSpec({ note = '' } = {}) {
   return new RoofSpec({ note });
 }
 
-/** 下屋（セルに付けた屋根）の既定の RoofSpec（備考＝'下野'）。付与・復元の補完が共通で使う。 */
+/**
+ * 下屋（セルに付けた屋根）の既定の RoofSpec（備考＝'下野'、軒裏＝ケイカル板・野縁 30×15・傾斜・'目透かし貼り'）。
+ * 付与・復元の補完が共通で使う。軒裏の材コードは保存されていないと使用コードの収集・照合に乗らないため、ここで書く。
+ * 主屋根（new RoofSpec()）の軒裏は空のまま（isDefaultRoofSpec の判定を変えない）。
+ */
 export function createLeanToRoofSpec() {
-  return createRoofSpec({ note: DEFAULT_ROOF_NOTE });
+  const spec = createRoofSpec({ note: DEFAULT_ROOF_NOTE });
+  spec.soffitMaterial = DEFAULT_SOFFIT_MATERIAL;
+  spec.soffitBacking = DEFAULT_SOFFIT_BACKING;
+  spec.soffitOrientation = SoffitOrientation.SLOPED;
+  spec.soffitNote = DEFAULT_SOFFIT_NOTE;
+  return spec;
+}
+
+/**
+ * 軒裏の実効値。空（材コード ''・向き null）を既定へ読み替える唯一の入口。備考は補わない（空は空）。
+ * spec が null/undefined でも既定を返す。
+ * @param {{ soffitMaterial?: string, soffitBacking?: string, soffitOrientation?: string|null, soffitNote?: string }|null|undefined} spec
+ * @returns {{ material: string, backing: string, orientation: string, note: string }}
+ */
+export function resolveSoffitSpec(spec) {
+  return {
+    material: spec?.soffitMaterial || DEFAULT_SOFFIT_MATERIAL,
+    backing: spec?.soffitBacking || DEFAULT_SOFFIT_BACKING,
+    orientation: spec?.soffitOrientation || SoffitOrientation.SLOPED,
+    note: spec?.soffitNote || '',
+  };
 }
 
 /**

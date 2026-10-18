@@ -1,15 +1,17 @@
 /**
  * 屋根の仕様（RoofSpec）。core.js から分離。core/equipment.js と並ぶ値クラス。
  *
- * 屋根（Room.feature===ROOF）の8項目＋備考＋片流れの高い側＋切妻の棟木の向き＋柱貫通の唯一の保存先。Room.roofSpec が持つ（不変条件 I1:
+ * 屋根（Room.feature===ROOF）の8項目＋備考＋片流れの高い側＋切妻の棟木の向き＋柱貫通＋軒裏4項目（仕上げ材・下地材・向き・備考）の唯一の保存先。Room.roofSpec が持つ（不変条件 I1:
  * feature===ROOF ⇔ roofSpec≠null）。項目集合の定義は ROOF_SPEC_KEYS と toData()/fromData() の
  * 1か所だけ——直列化（FBS・graphSnapshot）・仕上げモード undo・テストの突合はここを共通の入口にする。
  * 形状・片流れの高い側（highSide）・切妻の棟木の向き（ridgeDirection）だけ null（＝自動）を持てる。表示時に導く（finish/roof/roofDefaults.js
  * resolveRoofShape・roofGeometry.js resolveRoofHighSide）。
+ * 軒裏4項目（soffitMaterial・soffitBacking・soffitOrientation・soffitNote）は空（''・null）を既定に持ち、
+ * 空の読み替えは finish/roof/roofDefaults.js resolveSoffitSpec が唯一の入口（isDefaultRoofSpec を変えないため）。
  */
 import { makeObservable, observable, action } from 'mobx';
 import {
-  RoofShape, RoofHighSide, RoofRidgeDirection, DEFAULT_ROOF_SLOPE, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM,
+  RoofShape, RoofHighSide, RoofRidgeDirection, SoffitOrientation, DEFAULT_ROOF_SLOPE, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM,
   DEFAULT_ROOF_SHEATHING, DEFAULT_ROOF_UNDERLAYMENT,
 } from './constants.js';
 
@@ -18,11 +20,13 @@ export const ROOF_SPEC_KEYS = Object.freeze([
   'shape', 'slope', 'sheathingMaterial', 'underlaymentMaterial',
   'roofFinish', 'eaveOverhangMm', 'gableOverhangMm', 'soffit', 'note',
   'highSide', 'ridgeDirection', 'columnThrough',
+  'soffitMaterial', 'soffitBacking', 'soffitOrientation', 'soffitNote',
 ]);
 
 const SHAPE_VALUES = new Set(Object.values(RoofShape));
 const HIGH_SIDE_VALUES = new Set(Object.values(RoofHighSide));
 const RIDGE_DIRECTION_VALUES = new Set(Object.values(RoofRidgeDirection));
+const SOFFIT_ORIENTATION_VALUES = new Set(Object.values(SoffitOrientation));
 
 /**
  * spec（RoofSpec または toData() 形式の plain）が既定値（new RoofSpec()）と全項目同じか。
@@ -53,6 +57,10 @@ export class RoofSpec {
     highSide = null,
     ridgeDirection = null,
     columnThrough = false,
+    soffitMaterial = '',
+    soffitBacking = '',
+    soffitOrientation = null,
+    soffitNote = '',
   } = {}) {
     this.shape = shape;                       // RoofShape | null（null＝自動）
     this.slope = slope;                       // 勾配 N/10 の N（0.5 刻みを許す）
@@ -66,6 +74,10 @@ export class RoofSpec {
     this.highSide = highSide;                 // 片流れの高い側 RoofHighSide | null（null＝自動。片流れのときだけ使う）
     this.ridgeDirection = ridgeDirection;     // 切妻の棟木の向き RoofRidgeDirection | null（null＝自動＝長手。切妻のときだけ使う）
     this.columnThrough = columnThrough;       // 柱貫通（下屋の屋根セルにしか接しない位置にも柱を立てるか。既定 false。通り芯の交点に柱が立つ構造だけ使う）
+    this.soffitMaterial = soffitMaterial;     // 軒裏仕上げ材の材料コード（''＝既定 DEFAULT_SOFFIT_MATERIAL。resolveSoffitSpec が読み替える）
+    this.soffitBacking = soffitBacking;       // 軒裏下地材の材料コード（''＝既定 DEFAULT_SOFFIT_BACKING。木造の場合）
+    this.soffitOrientation = soffitOrientation; // 軒裏の向き SoffitOrientation | null（null＝傾斜）
+    this.soffitNote = soffitNote;             // 軒裏の備考（空は補わない）
     makeObservable(this, {
       shape:                observable,
       slope:                observable,
@@ -79,6 +91,10 @@ export class RoofSpec {
       highSide:             observable,
       ridgeDirection:       observable,
       columnThrough:        observable,
+      soffitMaterial:       observable,
+      soffitBacking:        observable,
+      soffitOrientation:    observable,
+      soffitNote:           observable,
       setField:             action,
     });
   }
@@ -97,13 +113,15 @@ export class RoofSpec {
       gableOverhangMm: this.gableOverhangMm, soffit: this.soffit, note: this.note,
       highSide: this.highSide, ridgeDirection: this.ridgeDirection,
       columnThrough: this.columnThrough,
+      soffitMaterial: this.soffitMaterial, soffitBacking: this.soffitBacking,
+      soffitOrientation: this.soffitOrientation, soffitNote: this.soffitNote,
     };
   }
 
   /**
    * plain object から RoofSpec を作る（直列化・undo・FBS が共通して使う）。壊れた値の正規化:
    * 未知の shape・highSide・ridgeDirection→null／columnThrough が true 以外→false／slope が非有限または0以下→既定／出幅が非有限または負→既定（0 は正当なので保つ）／
-   * 文字列の欠落→''／材料コードの欠落（空・非文字列）→既定。
+   * 文字列の欠落→''／材料コードの欠落（空・非文字列）→既定／未知の soffitOrientation→null／軒裏の材料コード・備考は非文字列→''（既定へは置き換えない）。
    */
   static fromData(d) {
     const src = d ?? {};
@@ -125,6 +143,11 @@ export class RoofSpec {
       highSide: HIGH_SIDE_VALUES.has(src.highSide) ? src.highSide : null,
       ridgeDirection: RIDGE_DIRECTION_VALUES.has(src.ridgeDirection) ? src.ridgeDirection : null,
       columnThrough: src.columnThrough === true,
+      // 軒裏: 材料コードは既定へ置き換えない（空のまま保つ。読み替えは resolveSoffitSpec）
+      soffitMaterial: str(src.soffitMaterial),
+      soffitBacking: str(src.soffitBacking),
+      soffitOrientation: SOFFIT_ORIENTATION_VALUES.has(src.soffitOrientation) ? src.soffitOrientation : null,
+      soffitNote: str(src.soffitNote),
     });
   }
 }

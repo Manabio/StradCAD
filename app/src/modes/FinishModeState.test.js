@@ -1157,6 +1157,7 @@ const ROOF_DEFAULTS = {
   shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
   roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '下野', highSide: null,
   ridgeDirection: null, columnThrough: false,
+  soffitMaterial: '301000000015', soffitBacking: '101400000015', soffitOrientation: 'sloped', soffitNote: '目透かし貼り',
 };
 
 test('【B2・I1】屋根の付与で roofSpec ができる（既定値・備考「下野」・形状は自動 null）', () => {
@@ -1212,7 +1213,7 @@ test('【B2・I1】屋根の付与→undo→redo: undo で roofSpec ごと消え
   assert.deepEqual(graph.roomMap.get(roofId).roofSpec.toData(), ROOF_DEFAULTS);
 });
 
-test('【B2】setRoofField: 12項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
+test('【B2】setRoofField: 16項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
   const graph = makeThreeCellGraph();
   const state = new FinishModeState(graph, null);
   const roof = assignRoofViaDrag(state, graph, 1000, 1500);
@@ -1220,6 +1221,7 @@ test('【B2】setRoofField: 12項目それぞれを確定でき、1回の確定�
     shape: 'hip', slope: 2.5, sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009',
     roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '本屋根', highSide: 'left',
     ridgeDirection: 'horizontal', columnThrough: true,
+    soffitMaterial: '301000000012', soffitBacking: '101400000009', soffitOrientation: 'level', soffitNote: '軒天 備考',
   };
   for (const [field, value] of Object.entries(edits)) {
     // undo/redo は Room を作り直すため、毎回 graph から引き直す
@@ -1233,7 +1235,7 @@ test('【B2】setRoofField: 12項目それぞれを確定でき、1回の確定�
     undoManager.redo();
     assert.equal(graph.roomMap.get(roof.id).roofSpec[field], value, `${field}: redo でやり直せる`);
   }
-  assert.equal(Object.keys(edits).length, 12);
+  assert.equal(Object.keys(edits).length, 16);
   assert.deepEqual(Object.keys(edits).sort(), [...ROOF_SPEC_KEYS].sort(), '全項目を確定している（空振り防止）');
 });
 
@@ -1283,11 +1285,15 @@ test('【B2・失敗系】setRoofField: 不正な値（勾配0・2.3・負の出
     ['shape', 'dome'], ['shape', null], ['sheathingMaterial', ''], ['underlaymentMaterial', null], ['unknown', 1],
     ['highSide', 'up'], ['highSide', null], ['highSide', ''],
     ['ridgeDirection', 'diagonal'], ['ridgeDirection', ''], ['ridgeDirection', 'top'],
+    // 軒裏（2026-10-18）: 向きは列挙だけ、材コードは空を不可、備考は文字列だけ
+    ['soffitOrientation', 'diagonal'], ['soffitOrientation', ''], ['soffitOrientation', null],
+    ['soffitMaterial', ''], ['soffitMaterial', 5], ['soffitBacking', ''], ['soffitBacking', null], ['soffitNote', 5],
   ];
   for (const [field, value] of bad) {
     assert.equal(state.setRoofField(roof.id, field, value), false, `${field}=${String(value)}`);
   }
   assert.deepEqual(roof.roofSpec.toData(), ROOF_DEFAULTS, '値は変わらない');
+  assert.equal(roof.roofSpec.soffitOrientation, 'sloped', '軒裏の向きは付与時のまま');
   assert.equal(undoManager._undoStack.length, stackBefore, 'undo は積まれない');
 });
 
@@ -1336,6 +1342,7 @@ const MAIN_ROOF_DEFAULTS = {
   shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
   roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '', highSide: null,
   ridgeDirection: null, columnThrough: false,
+  soffitMaterial: '', soffitBacking: '', soffitOrientation: null, soffitNote: '',
 };
 
 test('【B3】主屋根の初期値は既定値で、備考は空（下屋の「下野」ではない）', () => {
@@ -1343,13 +1350,14 @@ test('【B3】主屋根の初期値は既定値で、備考は空（下屋の「
   assert.deepEqual(graph.mainRoofSpec.toData(), MAIN_ROOF_DEFAULTS);
 });
 
-test('【B3】setMainRoofField: 12項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
+test('【B3】setMainRoofField: 16項目それぞれを確定でき、1回の確定で undo は1エントリ。undo で戻り redo でやり直せる', () => {
   const graph = makeThreeCellGraph();
   const state = new FinishModeState(graph, null);
   const edits = {
     shape: 'hip', slope: 2.5, sheathingMaterial: '301000000023', underlaymentMaterial: '302000000009',
     roofFinish: 'ガルバリウム鋼板', eaveOverhangMm: 0, gableOverhangMm: 300, soffit: '軒天ケイカル板', note: '主屋根', highSide: 'left',
     ridgeDirection: 'vertical', columnThrough: true,
+    soffitMaterial: '301000000012', soffitBacking: '101400000009', soffitOrientation: 'level', soffitNote: '軒天 備考',
   };
   for (const [field, value] of Object.entries(edits)) {
     // undo/redo は主屋根の RoofSpec を作り直すため、毎回 graph から引き直す
@@ -1363,7 +1371,7 @@ test('【B3】setMainRoofField: 12項目それぞれを確定でき、1回の確
     undoManager.redo();
     assert.equal(graph.mainRoofSpec[field], value, `${field}: redo でやり直せる`);
   }
-  assert.equal(Object.keys(edits).length, 12);
+  assert.equal(Object.keys(edits).length, 16);
 });
 
 test('【C2e-1c】setMainRoofField: ridgeDirection を同じ値へ再確定すると無変更で false（undo を積まない）。null で自動へ戻せ、undo で元の向きへ戻る', () => {
@@ -1448,6 +1456,22 @@ test('【B3】主屋根の材料コードは既定以外のときだけ参照コ
   const codes = state._collectReferencedCodes();
   assert.equal(codes.has('301000000023'), true);
   assert.equal(codes.has('302000000003'), true, '既定以外になれば防水シートも載る');
+});
+
+test('【軒裏】参照コードに軒裏の材コードが載る: 下屋は付与時の既定（ケイカル板・野縁30×15）、主屋根は軒裏を指定したとき。空は載らない', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  assert.equal(state._collectReferencedCodes().has('301000000015'), false, '前提: 屋根が無ければ載らない');
+  assignRoofViaDrag(state, graph, 1000, 1500);
+  const withRoof = state._collectReferencedCodes();
+  assert.equal(withRoof.has('301000000015'), true, '下屋の軒裏仕上げ材');
+  assert.equal(withRoof.has('101400000015'), true, '下屋の軒裏下地材');
+  assert.equal(withRoof.has(''), false, '空文字は載らない');
+  const g2 = makeThreeCellGraph();
+  const s2 = new FinishModeState(g2, null);
+  s2.setMainRoofField('soffitMaterial', '301000000012');
+  assert.equal(s2._collectReferencedCodes().has('301000000012'), true, '主屋根の軒裏（既定外）');
+  assert.equal(s2._collectReferencedCodes().has('101400000015'), false, '主屋根の空の下地材は既定へ読み替えて載せない');
 });
 
 // ---- 屋根セルの押下（B2b）: ドラッグを始めない・階段の見下げより優先 ----

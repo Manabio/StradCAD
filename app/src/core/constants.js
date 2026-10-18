@@ -139,6 +139,16 @@ export const DEFAULT_ROOF_GABLE_OVERHANG_MM = 455;    // 妻側の出幅
 export const DEFAULT_ROOF_SHEATHING = '101200000008'; // 野地板: 構造用合板 t=12（面材）
 export const DEFAULT_ROOF_UNDERLAYMENT = '302000000003'; // 防水シート: 改質アスファルトルーフィング
 export const DEFAULT_ROOF_NOTE = '下野';               // 下屋（セルに付けた屋根）の備考の付与時の既定
+// 軒裏（RoofSpec.soffit*）の既定値。RoofSpec 自体は空（''・null）を既定に持ち、読み替えは finish/roof/roofDefaults.js resolveSoffitSpec が行う。
+// 下屋を付けた時点で材コード・向き・備考を保存する（材料コードは保存されていないと使用コードの収集・照合に乗らないため）。
+export const DEFAULT_SOFFIT_MATERIAL = '301000000015'; // 軒裏仕上げ材: けい酸カルシウム板 t=8
+export const DEFAULT_SOFFIT_BACKING = '101400000015';  // 軒裏下地材: □-30×15（木造の場合。軒天野縁）
+export const DEFAULT_SOFFIT_NOTE = '目透かし貼り';      // 下屋の軒裏の備考の付与時の既定
+// 軒裏の向き（RoofSpec.soffitOrientation。null＝傾斜）。傾斜＝屋根勾配なり、水平＝地面に対して水平。
+export const SoffitOrientation = Object.freeze({
+  SLOPED: 'sloped',
+  LEVEL:  'level',
+});
 
 // 屋根の野地板・防水シートの選択肢（材料コード。名前は材データから引く。並びは表示順）。
 // 野地板: 構造用合板（t=9/12/15/24/28）→ 硬質木片 → 高圧木毛 → 硬質木毛 → 断熱・複合耐火（各 t=15/18/25/30）。

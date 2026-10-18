@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Room, RoomKind, RoomFeature, RoofSpec, RoofShape, ROOF_SPEC_KEYS, ROOF_MONO_MAX_SHORT_SPAN_MM,
-  DEFAULT_ROOF_NOTE,
+  DEFAULT_ROOF_NOTE, DEFAULT_SOFFIT_MATERIAL, DEFAULT_SOFFIT_BACKING, DEFAULT_SOFFIT_NOTE, SoffitOrientation,
 } from '@core';
-import { createRoofSpec, createLeanToRoofSpec, resolveRoofShape, restoreRoofSpecInto, roofRoomBounds } from './roofDefaults.js';
+import { createRoofSpec, createLeanToRoofSpec, resolveSoffitSpec, resolveRoofShape, restoreRoofSpecInto, roofRoomBounds } from './roofDefaults.js';
 import { buildRoofLayout, NON_DEFAULT_ROOF_SPEC } from '../roofTestFixtures.js';
 
 const rect = (x1, y1, x2, y2) => ({ x1, y1, x2, y2 });
@@ -15,6 +15,7 @@ test('createRoofSpec: 既定値一式（形状=自動・勾配3・野地板=構�
     shape: null, slope: 3, sheathingMaterial: '101200000008', underlaymentMaterial: '302000000003',
     roofFinish: '', eaveOverhangMm: 455, gableOverhangMm: 455, soffit: '', note: '', highSide: null,
     ridgeDirection: null, columnThrough: false,
+    soffitMaterial: '', soffitBacking: '', soffitOrientation: null, soffitNote: '',
   });
   assert.ok(spec instanceof RoofSpec);
 });
@@ -23,7 +24,38 @@ test('createRoofSpec({ note }): 備考だけが入る。下屋の既定（create
   assert.equal(createRoofSpec({ note: 'メモ' }).note, 'メモ');
   assert.equal(createLeanToRoofSpec().note, '下野');
   assert.equal(DEFAULT_ROOF_NOTE, '下野');
-  assert.deepEqual({ ...createLeanToRoofSpec().toData(), note: '' }, createRoofSpec().toData());
+  assert.deepEqual({
+    ...createLeanToRoofSpec().toData(), note: '',
+    soffitMaterial: '', soffitBacking: '', soffitOrientation: null, soffitNote: '',
+  }, createRoofSpec().toData());
+});
+
+test('createLeanToRoofSpec: 軒裏4項目を書く（ケイカル板 t=8・野縁 30×15・傾斜・目透かし貼り）。主屋根（new RoofSpec）は空のまま', () => {
+  const d = createLeanToRoofSpec().toData();
+  assert.equal(d.soffitMaterial, '301000000015');
+  assert.equal(d.soffitBacking, '101400000015');
+  assert.equal(d.soffitOrientation, 'sloped');
+  assert.equal(d.soffitNote, '目透かし貼り');
+  assert.equal(DEFAULT_SOFFIT_NOTE, '目透かし貼り');
+  const main = new RoofSpec().toData();
+  assert.deepEqual([main.soffitMaterial, main.soffitBacking, main.soffitOrientation, main.soffitNote], ['', '', null, '']);
+});
+
+test('resolveSoffitSpec: 空を既定へ読み替える（材コード・向き）。備考は補わない', () => {
+  assert.deepEqual(resolveSoffitSpec(new RoofSpec()), {
+    material: DEFAULT_SOFFIT_MATERIAL, backing: DEFAULT_SOFFIT_BACKING, orientation: SoffitOrientation.SLOPED, note: '',
+  });
+  assert.deepEqual(resolveSoffitSpec(NON_DEFAULT_ROOF_SPEC), {
+    material: '301000000012', backing: '101400000009', orientation: SoffitOrientation.LEVEL, note: '軒天 目透かし 10mm',
+  });
+});
+
+test('【失敗系】resolveSoffitSpec: null/undefined でも例外にならず既定を返す', () => {
+  for (const spec of [null, undefined, {}]) {
+    assert.deepEqual(resolveSoffitSpec(spec), {
+      material: '301000000015', backing: '101400000015', orientation: 'sloped', note: '',
+    }, String(spec));
+  }
 });
 
 test('resolveRoofShape: 短手が 3640 以下なら片流れ、超えれば切妻（ちょうど 3640 は片流れ）', () => {

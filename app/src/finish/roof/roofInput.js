@@ -4,6 +4,7 @@
  */
 import {
   RoofShape, ROOF_SHAPE_LABELS, RoofHighSide, ROOF_HIGH_SIDE_LABELS, RoofRidgeDirection, ROOF_RIDGE_DIRECTION_LABELS,
+  SoffitOrientation,
 } from '@core';
 
 const NUMBER_TEXT = /^\d+(\.\d+)?$/;
@@ -58,10 +59,14 @@ export function isValidRoofFieldValue(field, value) {
     case 'slope': return isValidRoofSlope(value);
     case 'eaveOverhangMm':
     case 'gableOverhangMm': return isValidRoofOverhang(value);
+    case 'soffitOrientation': return Object.values(SoffitOrientation).includes(value);
     case 'sheathingMaterial':
-    case 'underlaymentMaterial': return typeof value === 'string' && value !== '';
+    case 'underlaymentMaterial':
+    case 'soffitMaterial':
+    case 'soffitBacking': return typeof value === 'string' && value !== '';
     case 'roofFinish':
     case 'soffit':
+    case 'soffitNote':
     case 'note': return typeof value === 'string';
     default: return false;
   }

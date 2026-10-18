@@ -813,6 +813,36 @@ test('【B2・失敗系】normalizeSnapshotCodes: 廃止（null）されたコ�
   ]);
 });
 
+test('【軒裏】enumerateMaterialCodeRefs: 軒裏の仕上げ材・下地材も roofSpec の材コードとして列挙する（下屋・主屋根とも）。空は列挙しない', () => {
+  const soffit = { soffitMaterial: '301000000015', soffitBacking: '101400000015' };
+  const refs = enumerateMaterialCodeRefs(roofSnapshot({ sheathingMaterial: '', underlaymentMaterial: '', ...soffit }))
+    .filter(r => r.location === 'roofSpec');
+  assert.deepEqual(refs.map(r => [r.code, r.roomId, r.key]).sort(), [
+    ['101400000015', 'roof1', 'soffitBacking'],
+    ['301000000015', 'roof1', 'soffitMaterial'],
+  ]);
+  const main = enumerateMaterialCodeRefs({ mainRoofSpec: { sheathingMaterial: '', underlaymentMaterial: '', ...soffit } })
+    .filter(r => r.location === 'mainRoofSpec');
+  assert.deepEqual(main.map(r => [r.code, r.key]).sort(), [
+    ['101400000015', 'soffitBacking'], ['301000000015', 'soffitMaterial'],
+  ]);
+  // 実際の RoofSpec.toData()（軒裏が空）では軒裏は拾われない
+  const empty = enumerateMaterialCodeRefs({ rooms: [{ id: 'roof1', roofSpec: new RoofSpec().toData() }] });
+  assert.deepEqual(empty.map(r => r.key).sort(), ['sheathingMaterial', 'underlaymentMaterial']);
+});
+
+test('【軒裏・失敗系】normalizeSnapshotCodes: 廃止（null）された軒裏の材コードは据え置き＋unresolved。読み替え表は軒裏にも効く', () => {
+  const spec = { sheathingMaterial: '', underlaymentMaterial: '', soffitMaterial: '301000000015', soffitBacking: '101400000015' };
+  const dead = normalizeSnapshotCodes(roofSnapshot(spec), buildCodeTable({ legacy: { '301000000015': null } }));
+  assert.equal(dead.snapshot.rooms[1].roofSpec.soffitMaterial, '301000000015', '値は据え置き');
+  assert.deepEqual(dead.unresolved.filter(u => u.location === 'roofSpec'), [
+    { code: '301000000015', location: 'roofSpec', roomId: 'roof1', key: 'soffitMaterial' },
+  ]);
+  const moved = normalizeSnapshotCodes(roofSnapshot(spec), buildCodeTable({ legacy: { '101400000015': '101400000014' } }));
+  assert.equal(moved.snapshot.rooms[1].roofSpec.soffitBacking, '101400000014');
+  assert.equal(moved.snapshot.rooms[1].roofSpec.soffitMaterial, '301000000015', '対象外のコードは不変');
+});
+
 test('【B2】applyDocumentCodeNormalization: 文書の読み替え（alias）が屋根の材料コードに効き、未解決は蓄積に積まれる', () => {
   clearDocumentAliases();
   takeUnresolvedCodes();

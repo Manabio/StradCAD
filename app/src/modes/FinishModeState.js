@@ -548,9 +548,9 @@ export class FinishModeState {
       }
     }
 
-    // 屋根の仕様の材料コード（野地板・防水シート。codeNormalization の ROOF_SPEC_MATERIAL_FIELDS と同じ2項目）
+    // 屋根の仕様の材料コード（野地板・防水シート・軒裏。codeNormalization の ROOF_SPEC_MATERIAL_FIELDS と同じ4項目）
     for (const room of g?.rooms ?? []) {
-      for (const f of ['sheathingMaterial', 'underlaymentMaterial']) {
+      for (const f of ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking']) {
         const v = room.roofSpec?.[f];
         if (typeof v === 'string' && v) codes.add(v);
       }
@@ -559,7 +559,7 @@ export class FinishModeState {
     // 主屋根の仕様の材料コード。既定値のときは保存データへ書かれず（codeNormalization の列挙にも出ない）、
     // ここでも対象にしない（保存側と同じ規則）。
     if (g?.mainRoofSpec && !isDefaultRoofSpec(g.mainRoofSpec)) {
-      for (const f of ['sheathingMaterial', 'underlaymentMaterial']) {
+      for (const f of ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking']) {
         const v = g.mainRoofSpec[f];
         if (typeof v === 'string' && v) codes.add(v);
       }
