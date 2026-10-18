@@ -14,6 +14,7 @@ import { planCutHeightMmOf, ceilingCutHeightMmOf } from '@core';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingCutResolverOf } from '../ceiling/ceilingCutHeight.js';
 import { markSameHeightCeilingBoundaries } from '../ceiling/ceilingBoundaryStyle.js';
+import { markEaveOutlineLines } from '../ceiling/soffitLineStyle.js';
 import { markOpeningEdges } from './planOpeningEdges.js';
 import { subtractRects } from './planGeometry.js';
 import { planSolids } from './planSolids.js';
@@ -144,7 +145,8 @@ export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRise
   const ceilingRects = solids.filter(s => s.kind === 'ceiling' && (s.source.layerFloorZ ?? 0) === 0).flatMap(s => s.footprint.rects ?? []);
   const holes = upperFloor?.footprint?.holes ?? [];
   const visibleHoles = ceilingRects.length > 0 ? subtractRects(holes, ceilingRects) : holes;
-  return markOpeningEdges(marked, visibleHoles);
+  // 直上階の下屋の軒先・けらばの外形線は中線（ユーザー指示 2026-10-18）
+  return markEaveOutlineLines(markOpeningEdges(marked, visibleHoles));
 }
 
 /**

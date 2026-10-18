@@ -1,7 +1,7 @@
 // planSolidsLayerFilter.js（S4: 新レイヤへ渡す線の絞り込みと層スタックの組み立て）の単体テスト。実物の PlanGraph で組む。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomFeature, StairType } from '@core';
+import { RoomFeature, StairType, RoofShape } from '@core';
 import {
   S4_DRAWN_KINDS, BELOW_DRAWN_KINDS, drawnPrimitives, planSolidsLayerPrimitives, planSolidsLayerSolids, planSolidsLayerCacheSpec, planSolidsLayerResolve, isCenterLineDragging,
   visiblePlanPrimitives, UP_SELF_DRAWN_KINDS, UP_ABOVE_DRAWN_KINDS, planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp,
@@ -620,4 +620,34 @@ test('【失敗系】見上げ: 上階に穴が無い・上階が無いときは
     const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
     assert.equal(prims.filter(p => p.weight === 'medium').length, 0);
   }
+});
+
+test('見上げ: 直上階の下屋の軒先・けらばの外形線（roof/outline）は中線。見下げの経路・hip・ridge は細線のまま', () => {
+  const self = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500], { id: 'low', startFloor: 1 });
+  self.interior([[0, 0]]);
+  const above = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500], { id: 'high', startFloor: 2 });
+  above.roof([[1, 1], [2, 1], [1, 2], [2, 2]]);
+  above.graph.rooms.find(r => r.roofSpec).roofSpec.setField('shape', RoofShape.HIP); // 寄棟＝隅木・棟木の線（outline 以外）が出る形
+  const abovePeek = { graph: above.graph, floorHeightMm: 2800, activePlaneId: self.graph.plane.id };
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+  const outlines = prims.filter(p => p.kind === 'line' && p.source.kind === 'roof' && p.source.role === 'outline');
+  assert.ok(outlines.length > 0, '前提: 上階の下屋の外形線が出る');
+  assert.ok(outlines.every(p => p.weight === 'medium' && p.source.layerFloorZ > 0), JSON.stringify(outlines.map(p => [p.weight, p.source])));
+  const others = prims.filter(p => p.kind === 'line' && p.source.kind === 'roof' && p.source.role !== 'outline');
+  assert.ok(others.some(p => p.source.role === 'hip') && others.some(p => p.source.role === 'ridge'), '前提: 隅木・棟木の線が出る');
+  assert.ok(others.every(p => p.weight === 'thin'), 'outline 以外の下屋の線は細線');
+  // 見下げ（下屋を自階に持つ）では中線にしない
+  const down = planSolidsLayerPrimitives({ graph: above.graph, cutZ: CUT });
+  const downOutlines = down.filter(p => p.kind === 'line' && p.source.kind === 'roof' && p.source.role === 'outline');
+  assert.ok(downOutlines.length > 0 && downOutlines.every(p => p.weight === 'thin'));
+});
+
+test('【失敗系】見上げ: 上階に下屋が無ければ roof の線も中線の追加も出ない', () => {
+  const self = makeGrid([0, 2000, 4000], [0, 1500, 3000], { id: 'low', startFloor: 1 });
+  self.interior([[0, 0]]);
+  const above = makeGrid([0, 2000, 4000], [0, 1500, 3000], { id: 'high', startFloor: 2 });
+  above.interior([[0, 0]]);
+  const abovePeek = { graph: above.graph, floorHeightMm: 2800, activePlaneId: self.graph.plane.id };
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+  assert.equal(prims.filter(p => p.source.kind === 'roof').length, 0);
 });

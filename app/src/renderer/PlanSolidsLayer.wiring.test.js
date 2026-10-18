@@ -223,10 +223,12 @@ test('【配線】App.jsx の上階 peek の effect が abovePlanPeek を3状態
 
 test('【不変条件】planSolidsLayerFilter.js（純モジュール）は store.js・snap.js・.jsx・react-konva・graphDerived・mobx を import しない。描く種別の集合は1か所', () => {
   const imports = filter.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 10);
+  assert.equal(imports.length, 11);
   assert.match(filter, /^import \{ markOpeningEdges \} from '\.\/planOpeningEdges\.js';$/m);
-  assert.match(filter, /^\s*return markOpeningEdges\(marked, visibleHoles\);\s*$/m, '穴の縁の中線は見上げの経路だけ');
+  assert.match(filter, /^\s*return markEaveOutlineLines\(markOpeningEdges\(marked, visibleHoles\)\);\s*$/m, '穴の縁・軒先線の中線は見上げの経路だけ');
   assert.equal(count(filter, /markOpeningEdges\(/g), 1, '見下げの経路に通さない');
+  assert.match(filter, /^import \{ markEaveOutlineLines \} from '\.\.\/ceiling\/soffitLineStyle\.js';$/m);
+  assert.equal(count(filter, /markEaveOutlineLines\(/g), 1, '見下げの経路に軒先線を通さない');
   assert.match(filter, /^import \{ ceilingCutResolverOf \} from '\.\.\/ceiling\/ceilingCutHeight\.js';$/m);
   assert.match(filter, /^import \{ planSectionFigureUp \} from '\.\/planSectionUp\.js';$/m);
   assert.match(filter, /^import \{ ceilingSurfacesOf \} from '\.\.\/ceiling\/ceilingSurfaces\.js';$/m);
