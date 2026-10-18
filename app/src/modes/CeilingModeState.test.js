@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { autorun, isObservable } from 'mobx';
-import { StairType, CenterLineType, Discipline, RoomFeature, Plane, PlanGraph } from '@core';
+import { RoomKind, StairType, CenterLineType, Discipline, RoomFeature, Plane, PlanGraph } from '@core';
 import { isUiBusy } from '../uiBusy.js';
 import { ERR_CL_MOVE_LOAD_FAILED } from '../error.js';
 import { undoManager } from '../undoManager.js';
@@ -161,6 +161,35 @@ test('CeilingModeState: 階段のセルを選ぶと selectedRoomId は stair.id�
   drag(state, g, [[2, 0]]);
   assert.equal(state.selectedRoomId, stairGroupId(stair.id));
   assert.equal(state.activeTab, 'stair');
+});
+
+test('CeilingModeState（屋外 S2）: 屋外部屋（ポーチ）のセルを選ぶと外部タブへ切り替わり、expandedPath が [room:id]。屋内を選ぶと内部タブへ戻る', () => {
+  const { g, a } = setup();
+  const porch = g.interior([[0, 1]]);
+  porch.setKind(RoomKind.EXTERIOR);
+  const state = new CeilingModeState();
+  drag(state, g, [[0, 1]]);
+  assert.equal(state.activeTab, 'exterior');
+  assert.equal(state.selection.groupId, roomGroupId(porch.id));
+  assert.deepEqual(state.expandedPath, [roomGroupId(porch.id)]);
+  drag(state, g, [[0, 0]]);
+  assert.equal(state.activeTab, 'interior');
+  assert.deepEqual(state.expandedPath, [roomGroupId(a.id)]);
+});
+
+test('CeilingModeState（屋外 S2）: clearSelectionOfRoom は選択中の部屋の群だけ解除し展開は保つ。別の部屋・未選択では何もしない', () => {
+  const { g, a } = setup();
+  const porch = g.interior([[0, 1]]);
+  porch.setKind(RoomKind.EXTERIOR);
+  const state = new CeilingModeState();
+  drag(state, g, [[0, 1]]);
+  state.clearSelectionOfRoom(a.id); // 別の部屋
+  assert.equal(state.selection?.groupId, roomGroupId(porch.id), '別の部屋では解除しない');
+  state.clearSelectionOfRoom(porch.id);
+  assert.equal(state.selection, null);
+  assert.deepEqual(state.expandedPath, [roomGroupId(porch.id)], '展開は保つ');
+  state.clearSelectionOfRoom(porch.id); // 未選択でも例外にしない
+  assert.equal(state.selection, null);
 });
 
 test('CeilingModeState（S12c）: commitDrag で expandedPath が nodePathOf（部屋は [room:id]、階段は [stair:id]）になる。確定前は変わらない', () => {

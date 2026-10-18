@@ -12,6 +12,7 @@ import { ceilingPanelTree, ceilingPanelLines, selectedNodeId, selectionSpanMm } 
 import { updateZoneSpec, removeZone } from './ceilingZones.js';
 import { roomCeilingShapeOf, setRoomCeilingShape, applyRoomCeilingHeightDraft } from './roomCeilingShape.js';
 import { roomHasCeiling } from './ceilingOwners.js';
+import { isExteriorCeilingRoom, exteriorCeilingEnabled, setExteriorCeilingEnabled } from './exteriorCeiling.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { CEILING_SHAPE_OPTIONS, CEILING_BASE_LABEL, CEILING_DIM_FIELDS, parseCeilingZoneDraft } from './ceilingShapeFields.js';
 
@@ -86,7 +87,25 @@ const NodeRow = observer(({ graph, mode, line, selectedId }) => {
       onClick={() => mode.selectNode(graph, node.id, line.path)}
       style={{ cursor: 'pointer', background: node.id === selectedId ? '#eff6ff' : '#fff' }}
     >
-      <td style={{ ...cellStyle, paddingLeft: 8 + depth * INDENT_PX, overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</td>
+      <td style={{ ...cellStyle, paddingLeft: 8 + depth * INDENT_PX, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {node.type === 'room' && isExteriorCeilingRoom(node.room) && (
+          <input
+            type="checkbox"
+            aria-label="天井"
+            title="天井"
+            checked={exteriorCeilingEnabled(node.room)}
+            onClick={e => e.stopPropagation()}
+            onChange={e => {
+              const on = e.target.checked;
+              withFinishUndo(graph, () => setExteriorCeilingEnabled(node.room, on));
+              markDirty();
+              if (!on) mode.clearSelectionOfRoom(node.room.id); // 群が消えるのでキャンバスの強調も消す（パネルは選択なし扱い）
+            }}
+            style={{ marginRight: 4, verticalAlign: 'middle' }}
+          />
+        )}
+        {node.name}
+      </td>
       {node.type === 'zone' ? (
         <td colSpan={2} style={{ ...cellStyle, overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.summary}</td>
       ) : (
@@ -402,13 +421,9 @@ export const CeilingPanel = observer(({ graph, mode, project, isLandscape }) => 
         ))}
       </div>
       <div style={{ overflow: 'auto', flex: 1 }}>
-        {isExterior ? (
-          exteriorRows.length === 0
-            ? <div style={{ padding: 16, fontSize: 13, color: '#64748b' }}>軒裏はありません。</div>
-            : <ExteriorTable rows={exteriorRows} graph={graph} mode={mode} />
-        ) : tree.length === 0 ? (
+        {tree.length === 0 ? (
           <div style={{ padding: 16, fontSize: 13, color: '#64748b' }}>
-            {mode.activeTab === 'stair' ? '階段はありません。' : '部屋はありません。'}
+            {mode.activeTab === 'stair' ? '階段はありません。' : isExterior ? '屋外部屋はありません。' : '部屋はありません。'}
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
@@ -428,6 +443,11 @@ export const CeilingPanel = observer(({ graph, mode, project, isLandscape }) => 
               ))}
             </tbody>
           </table>
+        )}
+        {isExterior && (
+          exteriorRows.length === 0
+            ? <div style={{ padding: 16, fontSize: 13, color: '#64748b' }}>軒裏はありません。</div>
+            : <ExteriorTable rows={exteriorRows} graph={graph} mode={mode} />
         )}
       </div>
     </div>

@@ -12,7 +12,7 @@ import { stairUnderCeilingKeys } from './ceilingStairUnder.js';
 import { DEFAULT_STAIR_ROOM_NAME } from '../finish/roomNamingOptions.js';
 import {
   interiorRows, stairRows, selectionSpanMm, ceilingWriteTargetRoom, materialDisplay, stairZoneDetailRows,
-  ceilingPanelTree, ceilingPanelLines, nodePathOf, selectedNodeId,
+  ceilingPanelTree, ceilingPanelLines, nodePathOf, selectedNodeId, tabForOwner,
 } from './ceilingPanelRows.js';
 
 const XS = [0, 1000, 2000, 3000, 4000, 5000, 6000];
@@ -619,11 +619,66 @@ test('ceilingPanelLines（階段下）: 「階段下」を開いても「区画�
   assert.ok(!lines.some(l => l.type === 'note'));
 });
 
-test('ceilingPanelTree: exterior タブは群を持たず []（部屋があっても）。nodePathOf も null。graph なしも []', () => {
+/** 屋内 a・屋外ポーチ・屋根・屋外階段の階。 */
+function exteriorSetup() {
   const g = makeGrid(XS, [0, 1000]);
   const a = g.interior([[0, 0]]);
-  assert.ok(ceilingPanelTree(g.graph, 'interior').length > 0, '前提: 内部タブには部屋が出る');
-  assert.deepEqual(ceilingPanelTree(g.graph, 'exterior'), []);
-  assert.equal(nodePathOf(g.graph, roomGroupId(a.id), 'exterior'), null);
+  const porch = g.interior([[1, 0], [2, 0]]);
+  porch.setKind(RoomKind.EXTERIOR);
+  porch.name = 'ポーチ';
+  const roof = g.roof([[3, 0]]);
+  const outStair = g.feature([[4, 0]], RoomFeature.STAIR);
+  outStair.setKind(RoomKind.EXTERIOR);
+  return { g, a, porch, roof, outStair };
+}
+
+test('ceilingPanelTree(exterior): ポーチの room ノード（hasCeiling true・区画の子・名前）。屋内・屋根・屋外階段は出ず、内部タブにポーチは出ない', () => {
+  const { g, a, porch } = exteriorSetup();
+  porch.setCeilingZones(assignZoneHeight(g.graph, porch, [g.cell(2, 0)], 2300));
+  const tree = ceilingPanelTree(g.graph, 'exterior');
+  assert.deepEqual(tree.map(n => n.id), [roomGroupId(porch.id)]);
+  assert.equal(tree[0].name, 'ポーチ');
+  assert.equal(tree[0].hasCeiling, true);
+  assert.equal(tree[0].room, porch);
+  assert.deepEqual(tree[0].children.map(n => n.type), ['zone']);
+  assert.equal(tree[0].ceilingFinish, null, '屋外の既定は仕上げなし（「—」表示）');
+  assert.ok(ceilingPanelTree(g.graph, 'interior').every(n => n.id !== roomGroupId(porch.id)));
+  assert.ok(ceilingPanelTree(g.graph, 'interior').some(n => n.id === roomGroupId(a.id)));
+});
+
+test('ceilingPanelTree(exterior): 部分指定の子のポーチは親ポーチの下に入れ子。名前が空なら「屋外」', () => {
+  const { g, porch } = exteriorSetup();
+  porch.name = '';
+  const child = g.graph.addRoom(new Set([g.cell(2, 0)]), '子', undefined, new Set([porch.id]));
+  child.setKind(RoomKind.EXTERIOR);
+  const tree = ceilingPanelTree(g.graph, 'exterior');
+  assert.deepEqual(tree.map(n => n.id), [roomGroupId(porch.id)]);
+  assert.equal(tree[0].name, '屋外');
+  assert.deepEqual(tree[0].children.map(n => n.id), [roomGroupId(child.id)]);
+});
+
+test('【失敗系】ceilingPanelTree(exterior): 天井を外した（\'0\'）ポーチは hasCeiling false で「天井なし」の注記行。graph なしは []', () => {
+  const { g, porch } = exteriorSetup();
+  porch.setOverride('exteriorCeiling', '0');
+  const tree = ceilingPanelTree(g.graph, 'exterior');
+  assert.equal(tree[0].hasCeiling, false);
+  const lines = ceilingPanelLines(tree, [roomGroupId(porch.id)]);
+  assert.equal(lines[1].type, 'note');
+  assert.equal(lines[1].text, '天井なし');
   assert.deepEqual(ceilingPanelTree(null, 'exterior'), []);
+});
+
+test('tabForOwner: 屋外 room→exterior・屋内 room→interior・stair→stair・不明 id→interior', () => {
+  const { g, a, porch, roof } = exteriorSetup();
+  assert.equal(tabForOwner(g.graph, { kind: 'room', id: porch.id }), 'exterior');
+  assert.equal(tabForOwner(g.graph, { kind: 'room', id: a.id }), 'interior');
+  assert.equal(tabForOwner(g.graph, { kind: 'room', id: roof.id }), 'interior');
+  assert.equal(tabForOwner(g.graph, { kind: 'stair', id: 'S' }), 'stair');
+  assert.equal(tabForOwner(g.graph, { kind: 'room', id: 'nope' }), 'interior');
+});
+
+test('nodePathOf: ポーチの群は exterior タブでは経路を返し、interior タブでは null', () => {
+  const { g, porch } = exteriorSetup();
+  assert.deepEqual(nodePathOf(g.graph, roomGroupId(porch.id), 'exterior'), [roomGroupId(porch.id)]);
+  assert.equal(nodePathOf(g.graph, roomGroupId(porch.id), 'interior'), null);
 });

@@ -29,6 +29,7 @@ import { ceilingCellOwnersOf, roomHasCeiling } from './ceilingOwners.js';
 import { CEILING_SHAPE_OPTIONS, CEILING_DIM_FIELDS } from './ceilingShapeFields.js';
 import { ceilingGroupsOf, roomGroupId, zoneGroupId, stairGroupId, stairUnderGroupId } from './ceilingGroups.js';
 import { roomCeilingShapeOf } from './roomCeilingShape.js';
+import { isExteriorCeilingRoom } from './exteriorCeiling.js';
 import { CeilingShape } from '../core/constants.js';
 
 /** 材コード → 表示名（略称表示）。materialMap が無い・コードが解けない・名前が無いときはコードのまま。 */
@@ -251,9 +252,29 @@ function zoneNode(graph, room, zone, cellCount, groups) {
   };
 }
 
-function interiorTree(graph, materialMap, groups) {
-  const rooms = interiorTabRooms(graph);
-  const rows = interiorRows(graph, materialMap);
+/** 外部タブの屋外部屋（屋外・feature なし。graph.rooms の順）。 */
+export function exteriorTabRooms(graph) {
+  return graph.rooms.filter(isExteriorCeilingRoom);
+}
+
+/** 外部タブの屋外部屋の行（表示名は部屋名、空なら「屋外」）。 */
+function exteriorRows(graph, materialMap = null) {
+  const zoneLabels = zoneChLabelsByRoom(graph);
+  return exteriorTabRooms(graph).map(room => roomRow(graph, room, room.name || '屋外', materialMap, zoneLabels));
+}
+
+/**
+ * 群 id から開くタブ。所属が部屋で屋外部屋（isExteriorCeilingRoom）なら 'exterior'、階段なら 'stair'、他（屋内・解けない id）は 'interior'。
+ * owner は {kind, id}。
+ */
+export function tabForOwner(graph, owner) {
+  if (owner?.kind === 'stair') return 'stair';
+  if (owner?.kind === 'room' && isExteriorCeilingRoom(graph?.roomMap?.get(owner.id))) return 'exterior';
+  return 'interior';
+}
+
+// 部屋の列（rooms）と対応する行（rows）から部屋ノードの木を作る（内部・外部タブ共通）
+function roomsTree(graph, groups, rooms, rows) {
   const rowOf = new Map(rooms.map((r, i) => [r.id, rows[i]]));
   // 部分指定の子は、タブにいる最初の親（graph.rooms の順）の下に入れ子。親がタブに無い子は最上位
   const parentOf = new Map();
@@ -292,6 +313,14 @@ function interiorTree(graph, materialMap, groups) {
   return roots;
 }
 
+function interiorTree(graph, materialMap, groups) {
+  return roomsTree(graph, groups, interiorTabRooms(graph), interiorRows(graph, materialMap));
+}
+
+function exteriorTree(graph, materialMap, groups) {
+  return roomsTree(graph, groups, exteriorTabRooms(graph), exteriorRows(graph, materialMap));
+}
+
 function stairTree(graph, materialMap, groups) {
   const rows = stairRows(graph, materialMap);
   return graph.stairs.map((stair, i) => {
@@ -325,14 +354,15 @@ function stairTree(graph, materialMap, groups) {
  * パネルの木。内部タブは 仕上げ表と同じ部屋（interiorTabRooms）のうち親（referenceRoomIds なし）が最上位で、部分指定の子は親の下
  * （親がタブに無い子は最上位）。階段タブは graph.stairs の順の階段が最上位。graph が null は []。
  * @param {object} graph
- * @param {'interior'|'stair'|'exterior'} tab  exterior は []（軒裏の行は ceilingExteriorRows）
+ * @param {'interior'|'stair'|'exterior'} tab  exterior は屋外部屋（exteriorTabRooms）の木（軒裏の行は別に ceilingExteriorRows）
  * @param {Map<string, object>|null} materialMap
  * @param {Map<string, Set<string>>|null} [stairUnderKeys]  階段下の天井セル（stairUnderCeilingKeys）。あれば階段の子の先頭に「階段下」ノード
  */
 export function ceilingPanelTree(graph, tab, materialMap = null, stairUnderKeys = null) {
-  if (!graph || tab === 'exterior') return []; // 外部タブ（軒裏）は群を持たない（行は ceilingExteriorRows.js）
+  if (!graph) return [];
   const { groups } = ceilingGroupsOf(graph, ceilingCellOwnersOf(graph), stairUnderKeys);
-  return tab === 'stair' ? stairTree(graph, materialMap, groups) : interiorTree(graph, materialMap, groups);
+  if (tab === 'stair') return stairTree(graph, materialMap, groups);
+  return tab === 'exterior' ? exteriorTree(graph, materialMap, groups) : interiorTree(graph, materialMap, groups);
 }
 
 /**

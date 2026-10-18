@@ -18,9 +18,9 @@ test('【配線】区画の確定は withFinishUndo で room.setCeilingZones(upd
 
 test('【配線】区画の解除は withFinishUndo で room.setCeilingZones(removeZone(...)) を包み、markDirty する。区画の書込みは withFinishUndo の中だけ', () => {
   assert.match(src, /^\s*withFinishUndo\(graph, \(\) => room\.setCeilingZones\(removeZone\(graph, room, zone\.id\)\)\);\s*$/m);
-  assert.equal(count(/^\s*markDirty\(\);\s*$/gm), 3, '区画の確定・解除と部屋の確定でそれぞれ markDirty（行の材の書込みは onChange 内の1行で markDirty）');
+  assert.equal(count(/^\s*markDirty\(\);\s*$/gm), 4, '区画の確定・解除と部屋の確定と屋外の天井チェックでそれぞれ markDirty（行の材の書込みは onChange 内の1行で markDirty）');
   assert.equal(count(/room\.setCeilingZones\(/g), 2, '区画の書込みは確定と解除の2か所だけで、どちらも withFinishUndo の中');
-  assert.equal(count(/withFinishUndo\(/g), 4, '書込みは 区画の確定・解除・部屋の確定・行の材 の4か所の withFinishUndo だけ');
+  assert.equal(count(/withFinishUndo\(/g), 5, '書込みは 区画の確定・解除・部屋の確定・行の材・屋外の天井チェック の5か所の withFinishUndo だけ');
 });
 
 test('【配線】S10: 材の書込み（setOverride／clearOverride）は行の onChange の1か所だけで、withFinishUndo の中。部屋を直引きしない', () => {
@@ -103,6 +103,21 @@ test('【配線】外部タブ（軒裏）: TABS に exterior、行は ceilingEx
   assert.match(src, /^\s*\{row\.backingShown && \(\s*$/m, '編集行の下地は木造のときだけ');
   assert.match(src, /軒裏はありません。/);
   assert.match(src, /^\s*export const CeilingPanel = observer\(\(\{ graph, mode, project, isLandscape \}\) => \{\s*$/m);
+});
+
+test('【配線】屋外 S2: 外部タブは木（PanelLine の表）と軒裏の ExteriorTable の両方。天井チェックは屋外部屋の room ノードだけで withFinishUndo＋markDirty、行へ伝播させない', () => {
+  assert.match(src, /^\s*\{isExterior && \(\s*$/m, '軒裏の表は木の下段');
+  assert.equal(count(/<ExteriorTable /g), 1);
+  assert.equal(count(/<PanelLine /g), 1, '木の行は内部・階段・外部タブ共通の1か所');
+  assert.match(src, /屋外部屋はありません。/);
+  assert.match(src, /^\s*\{node\.type === 'room' && isExteriorCeilingRoom\(node\.room\) && \(\s*$/m, 'チェックは屋外部屋の room ノードだけ');
+  assert.match(src, /^\s*checked=\{exteriorCeilingEnabled\(node\.room\)\}\s*$/m);
+  assert.match(src, /^\s*withFinishUndo\(graph, \(\) => setExteriorCeilingEnabled\(node\.room, on\)\);\s*$/m);
+  assert.equal(count(/setExteriorCeilingEnabled\(/g), 1, '書込みの入口は1か所');
+  assert.match(src, /^\s*if \(!on\) mode\.clearSelectionOfRoom\(node\.room\.id\);/m, '天井を外したら選択中の群の強調も消す');
+  const at = src.indexOf('type="checkbox"');
+  assert.ok(at >= 0 && /onClick=\{e => e\.stopPropagation\(\)\}/.test(src.slice(at, at + 300)), 'チェックのクリックは行へ伝播させない');
+  assert.equal(count(/type="checkbox"/g), 1, 'チェックは天井の1種類だけ（内部・階段の行には出ない）');
 });
 
 test('【配線】外部タブの主屋根行の材 select は共通部品 RoofMaterialSelect（「（未選択）」なし）。ExteriorRow の中に MaterialSelect は無い。下屋の階は mode.aboveRoofGraphOf で引く', () => {

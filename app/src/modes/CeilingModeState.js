@@ -7,7 +7,7 @@ import { beginCeilingDrag, extendCeilingDrag } from '../ceiling/ceilingSelection
 import { ceilingGroupsOf, zoneGroupId } from '../ceiling/ceilingGroups.js';
 import { stairUnderCeilingKeys } from '../ceiling/ceilingStairUnder.js';
 import { createZone } from '../ceiling/ceilingZones.js';
-import { nodePathOf } from '../ceiling/ceilingPanelRows.js';
+import { nodePathOf, tabForOwner } from '../ceiling/ceilingPanelRows.js';
 import { roomCeilingShapeOf } from '../ceiling/roomCeilingShape.js';
 import { stairCeilingSlopeDefaults } from '../ceiling/ceilingShapeFields.js';
 import { CeilingShape } from '../core/constants.js';
@@ -86,6 +86,7 @@ export class CeilingModeState {
       updateDrag:     action,
       commitDrag:     action,
       cancelDrag:     action,
+      clearSelectionOfRoom: action,
     });
   }
 
@@ -193,7 +194,7 @@ export class CeilingModeState {
    */
   _selectGroup(graph, group, owner, groupId, switchTab, path = null) {
     this.selection = { owner, groupId, cellKeys: new Set(group.cells) };
-    if (switchTab) this.activeTab = owner.kind === 'stair' ? 'stair' : 'interior';
+    if (switchTab) this.activeTab = tabForOwner(graph, owner);
     this.expandedPath = path ?? nodePathOf(graph, groupId, this.activeTab, this.stairUnderKeysOf(graph)) ?? [];
   }
 
@@ -301,6 +302,14 @@ export class CeilingModeState {
 
   /** 確定した選択のセルキー集合。 */
   get selectedCellKeys() { return this.selection ? this.selection.cellKeys : NO_KEYS; }
+
+  /**
+   * 部屋 roomId の群を選択中なら選択を解除する（展開は保つ）。屋外部屋の「天井」を外して群が消えるとき、
+   * キャンバスの強調（selectedCellKeys）がパネルの選択なし扱いと食い違わないように、パネルの onChange が呼ぶ（屋外 S2）。
+   */
+  clearSelectionOfRoom(roomId) {
+    if (this.selection?.owner?.kind === 'room' && this.selection.owner.id === roomId) this.selection = null;
+  }
 
   // ---- 天井芯の移動（長押しメニューの「移動」。S8b）----
   // FloorplanModeState の CL 移動と同じ形・同じ文言（範囲解決は modes/clMove.js prepareCenterLineMove が共有）。
