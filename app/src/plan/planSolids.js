@@ -774,9 +774,15 @@ function wallBandStrips(rects, bands) {
  * 縁の規則（S1）: セル境界（通り芯）は図面に現れない。天井面の縁は、それを囲む壁の面（偏芯を含む）。壁の帯（同じ芯の接する帯は結合）が
  * セル矩形の縁に寄って内側に収まる（縁との間が SPAN_OVERLAP_EPS=150 以下）とき、縁と帯の面の間を面から除く。腰壁だけの区間は
  * 帯にしない。縁をまたぐ壁は従来どおり切断の壁が隠す。削るだけ: 向こう側の天井面はセル境界のまま（既知の限界。壁の面まで広げるかは裁定待ち）。
+ * 規則 V: N の天井の穴＝N+1 の床の穴（void・shaft）。直上階の吹抜け・昇降路の矩形を面から除く（帯での削りの後）。
+ * 階段吹抜け（stairVoid）・破れ先は除かない（階段下部屋の天井は残る）。直上階が無ければ従来どおり。
  * @param {SolidLayer} layer
+ * @param {object|null} [upperGraph] 直上の層の graph
  */
-function ceilingSolids(layer) {
+function ceilingSolids(layer, upperGraph = null) {
+  const holes = upperGraph
+    ? floorOpeningCellRects(upperGraph, { stairFilter: () => false, sources: ['void', 'shaft'] }).map(({ x1, y1, x2, y2 }) => ({ x1, y1, x2, y2 }))
+    : [];
   const bands = wallBandsOf(layer.graph);
   const bandRects = bands.map(b => (b.vertical ? { x1: b.lo, x2: b.hi, y1: b.a0, y2: b.a1 } : { x1: b.a0, x2: b.a1, y1: b.lo, y2: b.hi }));
   return ceilingSurfacesOf(layer.graph).map(({ roomId, zoneId, rects, zMm, shape, dims, chMm }) => {
@@ -785,7 +791,8 @@ function ceilingSolids(layer) {
     // largestRect の中心に置く（面の外へ出ない）
     // 削る帯状の矩形から壁の帯（縦横とも）の和を除く: 壁の下は壁が隠すので削らない（角の取り合いで、直交壁の帯の中に切欠きを作らない）
     const strips = bands.length > 0 ? subtractRects(wallBandStrips(rects, bands), bandRects) : [];
-    const trimmed = strips.length > 0 ? subtractRects(rects, strips) : rects;
+    const stripped = strips.length > 0 ? subtractRects(rects, strips) : rects;
+    const trimmed = holes.length > 0 ? subtractRects(stripped, holes) : stripped; // 規則 V
     if (trimmed.length === 0) return null;
     // 区画（S5）の面は `${roomId}#${zoneId}`、残り（部屋の CH）は roomId のまま（区画の無い文書の key・順序は不変）
     const id = zoneId ? `${roomId}#${zoneId}` : roomId;
@@ -839,6 +846,8 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  * @param {SolidLayer[]} layers  `elevation/section/sectionBandLayers.js buildBandLayers` の戻り値と同型
  * @param {{riserOf?: (stair:object)=>number|null, belowGraphOf?: (graph:object)=>object|null, extraSolids?: Solid[], ceilings?: boolean, lookUp?: boolean}} [opts]
  *   ceilings＝true のときだけ self の層に天井立体（kind 'ceiling'。見上げ用）を足す。省略（見下げ）の出力は不変。
+ *   規則 V: 直上階の void・shaft の穴を天井面から引く。
+ *   上階の層の梁は立体にしない（裁定 2026-10-18）。
  *   lookUp＝true は見上げ（天伏。planSolidsLayerSolidsUp だけが渡す）: 上階スラブの続きの階段の穴を足元全体にし（floorSolidOf）、
  *   上階の層の「下階に同じ足元の階段がある」階段について、木造は階段裏の傾斜天井（source.kind 'stairSoffit'）を足し、鉄骨は段の輪郭を描く（stairUndersideOf）。自階の続き階段の段は遮蔽に入れない（stairsContinuedAbove）。
  *   riserOf＝最上の層の階段の蹴上（破れ先の位置・段の高さ）。下の層の階段は直上の層との階高から求める（stairTreadSolids）。belowGraphOf＝graph の直下階の graph（無ければ null。破れ先を穴にするかの判定）。
@@ -862,10 +871,12 @@ export function planSolids(layers, opts = {}) {
     const underside = opts.lookUp === true && layer.role === 'above'
       ? stairUndersideOf(layer, riserForLayer, opts.belowGraphOf?.(layer.graph) ?? null) : null;
     const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom, wallFootSurfaces(layer, riserForLayer, upperZ, upperGraph), underReturnWallTops(layer, riserForLayer, upperZ, upperGraph)), ...columnSolids(layer),
-      ...beamSolids(layer), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
+      // 梁は天井より上にある（ユーザー裁定 2026-10-18）。上階の梁は上階 FL の下に 200 ほど垂れ、吹抜けの中では
+      // 1 階の天井より上に見えるが、天伏には描かない（描かず・遮蔽にも入れない）
+      ...(opts.lookUp === true && layer.role === 'above' ? [] : beamSolids(layer)), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
         opts.lookUp === true && layer.role === 'self' ? stairsContinuedAbove(layer, layers, opts) : null, upperGraph),
       ...(underside?.soffits ?? []),
-      ...(opts.ceilings === true && layer.role === 'self' ? ceilingSolids(layer) : [])].filter(Boolean);
+      ...(opts.ceilings === true && layer.role === 'self' ? ceilingSolids(layer, upperGraph) : [])].filter(Boolean);
     for (const solid of solids) entries.push({ solid, layerZ: layer.floorZMm, roleRank: ROLE_RANK[layer.role] ?? 3 });
   }
   const kindRank = k => SOLID_KIND_ORDER.indexOf(k);

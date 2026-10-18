@@ -2,12 +2,12 @@
 // 上階の続きの階段が下階（自階）の階段と同じ足元のとき、木造は階段裏の傾斜天井（stairSoffit）、鉄骨は踏面線（stairTread の輪郭）を出す。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { StairType, StructuralMaterialType, CenterLineType, edgeKey } from '@core';
+import { StairType, StructuralMaterialType, CenterLineType, RoomFeature, edgeKey } from '@core';
 import { planSolids } from './planSolids.js';
 import { planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp } from './planSolidsLayerFilter.js';
 import { uTurnPlanLayout } from '../finish/stair/stairGeometry.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
-import { makeGrid, fakeLayer, ARCH, assignZoneSpec } from './planTestFixtures.js';
+import { makeGrid, fakeLayer, addBeamH, ARCH, assignZoneSpec } from './planTestFixtures.js';
 
 const WOOD = StructuralMaterialType.WOOD, STEEL = StructuralMaterialType.STEEL;
 const FL = 2800;
@@ -422,4 +422,83 @@ test('天井の縁: 同じ芯・同じ帯で along が接する 2 レコード�
     { id: 'a', axis: 'A', band: [1800, 1950], span: [0, 1000] },
     { id: 'b', axis: 'A', band: [1800, 1950], span: [1000, 3000] },
   ]), [[{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]]);
+});
+
+
+// ---- 規則 V: N の天井の穴＝N+1 の床の穴（void・shaft）。梁は天伏に描かない
+
+/** 下階: xs×[0,3000] の 1 部屋（全セル）。上階: ys=[0,1500,3000] の同じ xs。upSetup(g) で上階に部屋を足す。 */
+function holeScene(upSetup, { withUpper = true, lowCells = [[0, 0], [1, 0]] } = {}) {
+  const xs = [0, 1000, 2000];
+  const low = makeGrid(xs, [0, 3000], { id: 'hl' });
+  low.interior(lowCells);
+  const layers = [fakeLayer({ graph: low.graph })];
+  let up = null;
+  if (withUpper) {
+    up = makeGrid(xs, [0, 1500, 3000], { id: 'hu' });
+    upSetup?.(up);
+    layers.push(fakeLayer({ graph: up.graph, floorZMm: FL, role: 'above' }));
+  }
+  const all = planSolids(layers, { ceilings: true, lookUp: true });
+  return { low, up, all, ceilings: all.filter(s => s.kind === 'ceiling') };
+}
+const area = rs => rs.reduce((s, r) => s + (r.x2 - r.x1) * (r.y2 - r.y1), 0);
+const FULL = [{ x1: 0, y1: 0, x2: 2000, y2: 3000 }];
+
+test('規則 V: 直上階の吹抜け（VOID）の矩形が天井面から除かれる（残りは矩形群）', () => {
+  const { ceilings } = holeScene(up => up.feature([[0, 0], [0, 1]], RoomFeature.VOID));
+  assert.equal(ceilings.length, 1);
+  assert.equal(area(ceilings[0].footprint.rects), 2000 * 3000 - 1000 * 3000);
+  assert.ok(ceilings[0].footprint.rects.every(r => r.x1 >= 1000), '穴の x 0..1000 は残らない');
+});
+
+test('規則 V: 直上階の昇降路（shaft）も同じ', () => {
+  const { ceilings } = holeScene(up => up.feature([[0, 0], [0, 1]], RoomFeature.ELEVATOR_EQUIPMENT));
+  assert.equal(area(ceilings[0].footprint.rects), 2000 * 3000 - 1000 * 3000);
+});
+
+test('規則 V: 直上階が階段吹抜け（STAIR_VOID）なら天井は除かない', () => {
+  const { ceilings } = holeScene(up => up.feature([[0, 0], [0, 1]], RoomFeature.STAIR_VOID));
+  assert.equal(area(ceilings[0].footprint.rects), 2000 * 3000);
+});
+
+test('【失敗系】規則 V: 上階の層が無い・上階に部屋が無いときは天井面は不変', () => {
+  assert.equal(area(holeScene(null, { withUpper: false }).ceilings[0].footprint.rects), area(FULL));
+  assert.equal(area(holeScene(null).ceilings[0].footprint.rects), area(FULL));
+});
+
+test('規則 V: 穴が天井面の一部だけに重なるとき、残りの矩形は重ならず面積は穴の分だけ減る', () => {
+  const { ceilings } = holeScene(up => up.feature([[0, 0]], RoomFeature.VOID)); // x 0..1000 × y 0..1500
+  const rs = ceilings[0].footprint.rects;
+  assert.equal(area(rs), 2000 * 3000 - 1000 * 1500);
+  assert.ok(rs.every((a, i) => rs.every((b, j) => i >= j
+    || a.x2 <= b.x1 || b.x2 <= a.x1 || a.y2 <= b.y1 || b.y2 <= a.y1)), '矩形が重ならない');
+  assert.ok(rs.every(r => !(r.x1 < 1000 && r.y1 < 1500)), '穴の中に残らない');
+});
+
+test('【失敗系】規則 V: 直上階の VOID が自階の天井の無い所にだけあるとき天井面は不変', () => {
+  const { ceilings } = holeScene(up => up.feature([[1, 0], [1, 1]], RoomFeature.VOID), { lowCells: [[0, 0]] });
+  assert.equal(area(ceilings[0].footprint.rects), 1000 * 3000);
+});
+
+test('規則 V: L 字の VOID（3 セル・非矩形）は全部抜ける', () => {
+  const { ceilings } = holeScene(up => up.feature([[0, 0], [0, 1], [1, 0]], RoomFeature.VOID));
+  const rs = ceilings[0].footprint.rects;
+  assert.equal(area(rs), 2000 * 3000 - 3 * 1000 * 1500);
+  const cells = [[0, 0, 1000, 1500], [0, 1500, 1000, 3000], [1000, 0, 2000, 1500]];
+  assert.ok(rs.every(r => cells.every(([x1, y1, x2, y2]) => r.x2 <= x1 || x2 <= r.x1 || r.y2 <= y1 || y2 <= r.y1)), 'どのセルの中にも残らない');
+});
+
+test('見上げ: 上階の層の梁は立体にしない。自階の梁は残る。見下げ（lookUp なし）は上階の梁も残る（従来）', () => {
+  const beams = (all, z) => all.filter(s => s.kind === 'beam' && s.source.layerFloorZ === z);
+  const mk = lookUp => {
+    const low = makeGrid([0, 2000], [0, 3000], { id: 'bl' }), up = makeGrid([0, 2000], [0, 3000], { id: 'bu' });
+    addBeamH(low.graph); addBeamH(up.graph);
+    const layers = [fakeLayer({ graph: low.graph }), fakeLayer({ graph: up.graph, floorZMm: FL, role: 'above' })];
+    return planSolids(layers, lookUp ? { lookUp: true } : {});
+  };
+  const upv = mk(true), down = mk(false);
+  assert.equal(beams(upv, FL).length, 0, '見上げの上階の梁');
+  assert.ok(beams(upv, 0).length > 0, '見上げの自階の梁');
+  assert.ok(beams(down, FL).length > 0, '見下げの上階の梁');
 });

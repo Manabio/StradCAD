@@ -381,12 +381,11 @@ test('見上げの傾斜天井: 注記（矢印・文字）は詳細 LOD だけ�
   assert.equal(markPrims(planSolidsLayerPrimitivesUp({ graph: flat.graph, cutZ: 1500 })).length, 0);
 });
 
-test('見上げ: 自階に天井が無い（吹抜け）と、上階の梁が細線（layerFloorZ=階高）で見える。上階が無い・階高が不正なら上階の線は出ない', () => {
+test('見上げ: 自階に天井が無い（吹抜け）でも、上階の梁は描かない（梁は天井より上。裁定 2026-10-18）。上階が無い・階高が不正なら上階の線は出ない', () => {
   const { self, abovePeek, beam } = upScene({ selfVoid: true });
   const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
-  const mine = prims.filter(p => p.source.id === beam.id);
-  assert.deepEqual(sortedPts(mine), outline4(500, 950, 3500, 1050));
-  assert.ok(mine.every(p => p.cls === 'below' && p.weight === 'thin' && p.source.layerFloorZ === 2800));
+  assert.equal(prims.filter(p => p.source.id === beam.id).length, 0);
+  assert.ok(prims.some(p => p.source.layerFloorZ === 2800), '有効な peek なら上階の壁・床は見える');
   for (const peek of [null, undefined, { ...abovePeek, floorHeightMm: 0 }, { ...abovePeek, floorHeightMm: NaN }, { graph: null, floorHeightMm: 2800 }]) {
     const none = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek: peek, cutZ: CUT });
     assert.equal(none.filter(p => (p.source.layerFloorZ ?? 0) > 0).length, 0);
