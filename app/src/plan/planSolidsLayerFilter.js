@@ -14,6 +14,8 @@ import { planCutHeightMmOf, ceilingCutHeightMmOf } from '@core';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingCutResolverOf } from '../ceiling/ceilingCutHeight.js';
 import { markSameHeightCeilingBoundaries } from '../ceiling/ceilingBoundaryStyle.js';
+import { markOpeningEdges } from './planOpeningEdges.js';
+import { subtractRects } from './planGeometry.js';
 import { planSolids } from './planSolids.js';
 import { planSectionFigure } from './planSectionFigure.js';
 import { planSectionFigureUp } from './planSectionUp.js';
@@ -135,7 +137,14 @@ export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRise
     : planSectionFigureUp(solids, resolver.cutZAt, { cutRange: resolver.range });
   const drawn = drawnPrimitives(figure, 'up');
   // 同じ高さで隣り合う部屋の天井の境目は細線グレー（裁定 2026-10-10）。見下げの経路は通らない
-  return markSameHeightCeilingBoundaries(drawn, ceilingSurfacesOf(graph));
+  const marked = markSameHeightCeilingBoundaries(drawn, ceilingSurfacesOf(graph));
+  // 穴の縁は中線（裁定 2026-10-18）。対象は「見える穴」＝上階の床の穴（S3 で壁の面まで狭めたもの）から自階の天井面を引いたもの
+  // （両側が天井の境は外形にならない）。上階の床の立体が無ければ何もしない
+  const upperFloor = solids.find(s => s.kind === 'floor' && (s.source.layerFloorZ ?? 0) > 0);
+  const ceilingRects = solids.filter(s => s.kind === 'ceiling' && (s.source.layerFloorZ ?? 0) === 0).flatMap(s => s.footprint.rects ?? []);
+  const holes = upperFloor?.footprint?.holes ?? [];
+  const visibleHoles = ceilingRects.length > 0 ? subtractRects(holes, ceilingRects) : holes;
+  return markOpeningEdges(marked, visibleHoles);
 }
 
 /**

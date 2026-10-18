@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { StairType, StructuralMaterialType, CenterLineType, RoomFeature, edgeKey } from '@core';
-import { planSolids } from './planSolids.js';
+import { planSolids, narrowOpeningByWalls } from './planSolids.js';
 import { planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp } from './planSolidsLayerFilter.js';
 import { uTurnPlanLayout } from '../finish/stair/stairGeometry.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
@@ -95,7 +95,8 @@ test('見上げの線: 木造は stairSoffit の線が出て踏面線（stairTre
   const prims = planSolidsLayerPrimitivesUp({ graph: low, abovePeek, aboveRiserOf: () => 200, cutZ: CUT });
   const soffit = prims.filter(p => p.source.kind === 'stairSoffit');
   assert.ok(soffit.length > 0, '裏面の輪郭');
-  assert.ok(soffit.every(p => p.kind === 'line' && p.cls === 'below' && p.weight === 'thin' && p.source.layerFloorZ === FL));
+  // 穴の縁（上階の床の穴の外形線上）に乗る線は中線（S3）、それ以外は細線
+  assert.ok(soffit.every(p => p.kind === 'line' && p.cls === 'below' && (p.weight === 'thin' || p.weight === 'medium') && p.source.layerFloorZ === FL));
   assert.ok(soffit.every(p => p.style === undefined), 'ceilingBoundary にならない');
   assert.equal(prims.filter(p => p.source.kind === 'stairTread').length, 0);
 });
@@ -141,7 +142,8 @@ test('見上げ・木造: 自階の続き階段の段が切断高より上にあ
   // 自階の階段は区画数が違う（[4,1,4]）ので、自階の段の辺と裏面の矩形の辺がぴったり重ならない（重なると偶然見えて検出力が無い）
   const { low, abovePeek } = scene({ lowSections: [4, 1, 4] });
   const prims = planSolidsLayerPrimitivesUp({ graph: low, abovePeek, aboveRiserOf: () => 200, cutZ: CUT });
-  const soffitLines = prims.filter(p => p.source.kind === 'stairSoffit');
+  // 穴の縁（見える穴の外形）に乗る裏面の線は、同じ座標の上階の床の線と 1 本に畳まれる（S3。先に出る床の線が持つ）ので床の線も数える
+  const soffitLines = prims.filter(p => p.source.layerFloorZ === FL && (p.source.kind === 'stairSoffit' || p.source.kind === 'floor'));
   const soffits = soffitsOf(planSolidsLayerSolidsUp({ graph: low, abovePeek, aboveRiserOf: () => 200 }));
   assert.equal(soffits.length, 1);
   // 矩形群の外周の辺 = 1 つの矩形の辺のうち、他の矩形の辺と共有されない部分。ここでは各辺の中点が他の矩形の内部に入らないものを外周とみなす
@@ -501,4 +503,157 @@ test('見上げ: 上階の層の梁は立体にしない。自階の梁は残る
   assert.equal(beams(upv, FL).length, 0, '見上げの上階の梁');
   assert.ok(beams(upv, 0).length > 0, '見上げの自階の梁');
   assert.ok(beams(down, FL).length > 0, '見下げの上階の梁');
+});
+
+
+// ---- S3: 上階の穴の縁＝穴に張り出す壁の面。自階の天井面は張り出しの面まで延びる
+
+/**
+ * 下階: 部屋 A（セル 0,0 = x 0..2000）と部屋 B（セル 1,0 = x 2000..4000）、y 0..3000。上階: セル (1,0) が吹抜け（穴 x 2000..4000）。
+ * 上階の壁は walls（ceilingScene と同じ代役。実 CL が要るときは (g) => 配列）で差し替える。B の天井は規則 V で全面が抜ける。
+ */
+function overhangScene(walls, { lookUp = true } = {}) {
+  const low = makeGrid([0, 2000, 4000], [0, 3000], { id: 'ol' });
+  const roomA = low.interior([[0, 0]]), roomB = low.interior([[1, 0]]);
+  const up = makeGrid([0, 2000, 4000], [0, 3000], { id: 'ou' });
+  up.feature([[1, 0]], RoomFeature.VOID);
+  const list = typeof walls === 'function' ? walls(up) : walls;
+  const graph = Object.create(up.graph);
+  Object.defineProperty(graph, 'walls', {
+    value: list.map(({ id, isVertical = true, axis = 'A', axisCL, band, span = [-100, 3100] }) => ({
+      id, isVertical, axisCL: axisCL ?? { id: axis }, coord1: span[0], coord2: span[1],
+      materialRange: band ? { lo: band[0], hi: band[1] } : null, backingRange: null,
+    })),
+  });
+  const layers = [fakeLayer({ graph: low.graph }), fakeLayer({ graph, floorZMm: FL, role: 'above' })];
+  const all = planSolids(layers, { ceilings: true, ...(lookUp ? { lookUp: true } : {}) });
+  const upFloor = all.find(s => s.kind === 'floor' && s.source.layerFloorZ === FL);
+  return { all, upFloor, holes: upFloor.footprint.holes, rectsOf: room => all.find(s => s.kind === 'ceiling' && s.source.id === room.id)?.footprint.rects, roomA, roomB };
+}
+const HOLE_B = { x1: 2000, y1: 0, x2: 4000, y2: 3000 };
+
+test('S3: 穴の縁に乗る上階の壁（帯が縁をまたぐ）で、床の穴が壁の面まで狭まる。床の rects は不変。自階の天井面が張り出しの面まで延びる', () => {
+  const s = overhangScene([{ id: 'w', band: [1942.5, 2057.5] }]);
+  assert.deepEqual(s.holes, [{ x1: 2057.5, y1: 0, x2: 4000, y2: 3000 }]);
+  const a = s.rectsOf(s.roomA);
+  assert.equal(area(a), 2000 * 3000 + 57.5 * 3000);
+  assert.ok(a.some(r => r.x1 === 2000 && r.x2 === 2057.5 && r.y1 === 0 && r.y2 === 3000), '穴の中の張り出し分が A の面へ');
+  assert.equal(s.rectsOf(s.roomB), undefined, 'B の天井は規則 V で全面が抜けたまま');
+});
+
+test('S3: 腰壁だけの帯も張り出しになる（fullHeightOnly:false。天井の縁 S1 は腰壁を帯にしない）', () => {
+  const s = overhangScene(g => {
+    const axisCL = g.graph.addCenterLine(CenterLineType.VERTICAL, 9000, ARCH, 'ax');
+    g.graph.setKneeDropWall(edgeKey(axisCL.id, g.cy[0].id, g.cy[1].id), { knee: { topHeight: 800 } });
+    return [{ id: 'w', axisCL, band: [1942.5, 2057.5], span: [0, 3000] }];
+  });
+  assert.deepEqual(s.holes, [{ x1: 2057.5, y1: 0, x2: 4000, y2: 3000 }]);
+});
+
+test('S3: 帯が穴の中に収まる壁は縁ではないので無視する（穴・天井面とも不変）', () => {
+  const s = overhangScene([{ id: 'w', band: [2500, 2600], span: [500, 2500] }]);
+  assert.deepEqual(s.holes, [HOLE_B]);
+  assert.equal(area(s.rectsOf(s.roomA)), 2000 * 3000);
+});
+
+test('【失敗系】S3: 上階の層が無い・上階に壁が無い・conceal range の無い壁は S2 までと同じ出力', () => {
+  assert.deepEqual(overhangScene([]).holes, [HOLE_B]);
+  assert.deepEqual(overhangScene([{ id: 'w', band: null }]).holes, [HOLE_B]);
+  assert.deepEqual(overhangScene([{ id: 'w', band: [1942.5, 2057.5], span: [NaN, 3100] }]).holes, [HOLE_B], '座標が NaN');
+  const { ceilings } = holeScene(null, { withUpper: false });
+  assert.equal(area(ceilings[0].footprint.rects), area(FULL));
+});
+
+test('S3: 見下げ（lookUp なし）は穴も天井面も触らない', () => {
+  const s = overhangScene([{ id: 'w', band: [1942.5, 2057.5] }], { lookUp: false });
+  assert.deepEqual(s.holes, [HOLE_B]);
+  assert.equal(area(s.rectsOf(s.roomA)), 2000 * 3000);
+});
+
+/** narrowOpeningByWalls へ直接渡す入力（穴 H = 0..1000 の正方形、床は H を含む）。walls は {axis, isVertical, band, span}。 */
+const H = { x1: 0, y1: 0, x2: 1000, y2: 1000 };
+function narrowOf(walls, ceilings = []) {
+  const upperFloor = { kind: 'floor', footprint: { rects: [{ x1: -1000, y1: -1000, x2: 2000, y2: 2000 }], holes: [H] } };
+  const graph = {
+    walls: walls.map(({ id, isVertical, band, span }) => ({
+      id, isVertical, axisCL: { id }, coord1: span[0], coord2: span[1], materialRange: { lo: band[0], hi: band[1] }, backingRange: null,
+    })),
+  };
+  return narrowOpeningByWalls(upperFloor, graph, ceilings.map(rects => ({ kind: 'ceiling', footprint: { rects } })));
+}
+const holeArea = r => area(r.floor.footprint.holes ?? []);
+const HW = (id, span, band = [-50, 50]) => ({ id, isVertical: false, band, span }); // y 帯の横壁
+const VW = (id, span, band = [-50, 50]) => ({ id, isVertical: true, band, span }); // x 帯の縦壁
+
+test('S3 すき間閉じ: 端の先が穴の和の中で、帯も天井面も無ければ穴の縁まで延ばす（150 以内）。150 超は延ばさない', () => {
+  assert.equal(holeArea(narrowOf([HW('w', [100, 900])])), 1e6 - 1000 * 50, '両端とも 100 → 穴の縁まで');
+  assert.equal(holeArea(narrowOf([HW('w', [150, 850])])), 1e6 - 1000 * 50, 'ちょうど 150 は延ばす');
+  assert.equal(holeArea(narrowOf([HW('w', [151, 849])])), 1e6 - 698 * 50, '151 は延ばさない');
+  assert.equal(holeArea(narrowOf([HW('w', [400, 600])])), 1e6 - 200 * 50, '400 は延ばさない');
+});
+
+test('S3 すき間閉じ: 途中に自階の天井面の縁があればそこで止まる。先が他の帯なら延ばさない', () => {
+  // 左の端 100 の先 60 に天井面（x 0..60）の縁: 60 まで（40 延びる）。右は穴の縁（1000）まで
+  const f = narrowOf([HW('w', [100, 900])], [[{ x1: 0, y1: -200, x2: 60, y2: 200 }]]);
+  assert.equal(holeArea(f), 1e6 - (1000 - 60) * 50);
+  // 右の端 900 に接して縦壁の帯（x 900..940）: 横壁の右は延びず（左は穴の縁 0 まで延びる）、縦壁の張り出し [900..940]×[0..1000] と重ならない
+  const g = narrowOf([HW('w', [100, 900]), VW('v', [-100, 1100], [900, 940])]);
+  assert.equal(holeArea(g), 1e6 - (900 * 50 + 40 * 1000));
+});
+
+test('S3 天井面の延長: 張り出しが接する穴の縁の外側の面へ、重なり分の帯状矩形を足す。接する面が無ければ足さない', () => {
+  const west = { x1: -1000, y1: -1000, x2: 0, y2: 1000 };
+  const r = narrowOf([VW('v', [-500, 1500])], [[west]]); // strip [0..50]×[0..1000]
+  assert.deepEqual(r.floor.footprint.holes, [{ x1: 50, y1: 0, x2: 1000, y2: 1000 }]);
+  assert.deepEqual(r.ceilings[0].footprint.rects, [west, { x1: 0, y1: 0, x2: 50, y2: 1000 }]);
+  // 縁に接しない面（x2=-100）・穴の反対側の面だけ → 足さない（穴だけ狭まる）
+  const none = narrowOf([VW('v', [-500, 1500])], [[{ x1: -1000, y1: -1000, x2: -100, y2: 1000 }]]);
+  assert.deepEqual(none.ceilings[0].footprint.rects, [{ x1: -1000, y1: -1000, x2: -100, y2: 1000 }]);
+  assert.deepEqual(none.floor.footprint.holes, [{ x1: 50, y1: 0, x2: 1000, y2: 1000 }]);
+});
+
+test('S3 天井面の延長: 面の既存の矩形と重なる分は足さない（面内に重なりを作らない）', () => {
+  const west = { x1: -1000, y1: -1000, x2: 0, y2: 1000 };
+  const already = { x1: 0, y1: 0, x2: 30, y2: 500 };
+  const r = narrowOf([VW('v', [-500, 1500])], [[west, already]]);
+  const rs = r.ceilings[0].footprint.rects;
+  assert.equal(area(rs), area([west, already]) + 50 * 1000 - 30 * 500);
+  assert.ok(disjoint(rs), '面内で重ならない');
+});
+
+test('S3 角: 直交する 2 枚の張り出しの piece は、2 つの面に足しても重ならない', () => {
+  const west = { x1: -1000, y1: -1000, x2: 0, y2: 1000 }, north = { x1: 0, y1: -1000, x2: 2000, y2: 0 };
+  const r = narrowOf([VW('v', [-500, 1500]), HW('h', [-500, 1500])], [[west], [north]]);
+  const added = r.ceilings[0].footprint.rects.slice(1).concat(r.ceilings[1].footprint.rects.slice(1));
+  assert.equal(area(added), 50 * 1000 + (1000 * 50 - 50 * 50), '縦の張り出し（西の面）＋横の張り出しから角を除いた分（北の面）');
+  assert.ok(disjoint(added), '2 つの面の piece が重ならない');
+});
+
+test('S3: 重なった穴（2 つの穴が重なる）でも、穴をまたいで外へ出る帯を「収まる」と判定しない', () => {
+  const holes = [H, { x1: 500, y1: 0, x2: 1500, y2: 1000 }];
+  const upperFloor = { kind: 'floor', footprint: { rects: [{ x1: -1000, y1: -1000, x2: 2000, y2: 2000 }], holes } };
+  const wall = { id: 'v', isVertical: true, axisCL: { id: 'v' }, coord1: -100, coord2: 1100, materialRange: { lo: 900, hi: 940 }, backingRange: null };
+  const r = narrowOpeningByWalls(upperFloor, { walls: [wall] }, []);
+  assert.notEqual(r.floor, upperFloor, '帯は穴の外（y<0・y>1000）へ出るので張り出し');
+  assert.ok(!r.floor.footprint.holes.some(h => h.x1 < 920 && h.x2 > 920 && h.y1 < 500 && h.y2 > 500), '帯の中は穴から除かれる');
+});
+
+test('S3 受容の固定: 縁から穴へ突き出す直交壁（壁端）は穴の切欠きになる（その輪郭は見える穴の縁＝中線になる）', () => {
+  const r = narrowOf([HW('w', [-500, 300], [400, 450])]); // y 400..450 の横壁が x=0 の縁から穴の中へ x=300 まで
+  assert.equal(holeArea(r), 1e6 - 300 * 50);
+  const inHole = (x, y) => r.floor.footprint.holes.some(h => x > h.x1 && x < h.x2 && y > h.y1 && y < h.y2);
+  assert.ok(!inHole(150, 425) && inHole(150, 100) && inHole(500, 425));
+});
+
+test('【失敗系】S3: 穴が無い・壁が無い床は同じオブジェクトを返す（入力を変更しない）', () => {
+  const rects = [{ x1: 0, y1: 0, x2: 10, y2: 10 }];
+  const noHole = { kind: 'floor', footprint: { rects } };
+  const c = [{ kind: 'ceiling', footprint: { rects } }];
+  const r1 = narrowOpeningByWalls(noHole, { walls: [] }, c);
+  assert.equal(r1.floor, noHole);
+  assert.equal(r1.ceilings, c);
+  const withHole = { kind: 'floor', footprint: { rects, holes: [H] } };
+  const r2 = narrowOpeningByWalls(withHole, { walls: [] }, c);
+  assert.equal(r2.floor, withHole);
+  assert.equal(narrowOpeningByWalls(null, { walls: [] }, c).floor, null);
 });

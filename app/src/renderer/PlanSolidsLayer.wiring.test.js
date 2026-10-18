@@ -220,12 +220,15 @@ test('【配線】App.jsx の上階 peek の effect が abovePlanPeek を3状態
 
 test('【不変条件】planSolidsLayerFilter.js（純モジュール）は store.js・snap.js・.jsx・react-konva・graphDerived・mobx を import しない。描く種別の集合は1か所', () => {
   const imports = filter.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 8);
+  assert.equal(imports.length, 10);
+  assert.match(filter, /^import \{ markOpeningEdges \} from '\.\/planOpeningEdges\.js';$/m);
+  assert.match(filter, /^\s*return markOpeningEdges\(marked, visibleHoles\);\s*$/m, '穴の縁の中線は見上げの経路だけ');
+  assert.equal(count(filter, /markOpeningEdges\(/g), 1, '見下げの経路に通さない');
   assert.match(filter, /^import \{ ceilingCutResolverOf \} from '\.\.\/ceiling\/ceilingCutHeight\.js';$/m);
   assert.match(filter, /^import \{ planSectionFigureUp \} from '\.\/planSectionUp\.js';$/m);
   assert.match(filter, /^import \{ ceilingSurfacesOf \} from '\.\.\/ceiling\/ceilingSurfaces\.js';$/m);
   assert.match(filter, /^import \{ markSameHeightCeilingBoundaries \} from '\.\.\/ceiling\/ceilingBoundaryStyle\.js';$/m);
-  assert.match(filter, /^\s*return markSameHeightCeilingBoundaries\(drawn, ceilingSurfacesOf\(graph\)\);\s*$/m, '同じ高さの境界の印は見上げの経路だけ');
+  assert.match(filter, /^\s*const marked = markSameHeightCeilingBoundaries\(drawn, ceilingSurfacesOf\(graph\)\);\s*$/m, '同じ高さの境界の印は見上げの経路だけ');
   assert.equal(count(filter, /markSameHeightCeilingBoundaries\(/g), 1, '見下げの経路に印を通さない');
   for (const line of imports) assert.ok(!/store\.js|snap\.js|\.jsx|react-konva|graphDerived|mobx/.test(line), `禁止の import: ${line}`);
   assert.match(filter, /^export const S4_DRAWN_KINDS = Object\.freeze\(\['beam', 'generic', 'roof'\]\);\s*$/m);

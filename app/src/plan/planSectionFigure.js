@@ -116,7 +116,7 @@ const toEdge = (g, [lo, hi]) => (g.isVertical ? [g.value, lo, g.value, hi] : [lo
  * 偶数回で打ち消すので、重なった同じ側の辺が消えて本物の外形線が欠けるため）。y の境界で帯に切り、帯ごとに x の区間を結んだ和を
  * 矩形にする。重なりが無ければそのまま返す（出力不変）。
  */
-function disjointRects(rects) {
+export function disjointRects(rects) {
   let overlap = false;
   for (let i = 0; i < rects.length && !overlap; i++) {
     for (let j = i + 1; j < rects.length; j++) {

@@ -9,7 +9,7 @@ import {
 import { LodLevel } from '../viewport.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { planSolids } from './planSolids.js';
-import { isInsideFootprint } from './planGeometry.js';
+import { isInsideFootprint, subtractRects } from './planGeometry.js';
 import { makeGrid, makeRoomGraph, addBeamH, addColumnAt, linesOf, assignZoneSpec } from './planTestFixtures.js';
 
 const CUT = 1500;
@@ -431,7 +431,20 @@ test('見上げ: 上階に破れ先のある階段があり、自階に同じ階
   const lowW = switchback('lowW', { wide: true }), highW = switchback('highW', { wide: true });
   const wideUp = planSolidsLayerPrimitivesUp({ graph: lowW, abovePeek: { graph: highW, floorHeightMm: 2800, activePlaneId: lowW.plane.id }, aboveRiserOf, cutZ: CUT });
   const edge = wideUp.filter(p => p.source.kind === 'floor' && p.source.layerFloorZ === 2800);
-  assert.ok(edge.length > 0 && edge.every(p => p.cls === 'below' && p.weight === 'thin'), `穴の縁が細線で出る: ${edge.length}`);
+  // 見える穴（穴 − 自階の天井面）の外形の縁は中線（S3）、天井面と接する縁は細線。線の中点の両側 1mm の一方だけが見える穴の内側なら外形
+  const wideSolids = planSolidsLayerSolidsUp({ graph: lowW, abovePeek: { graph: highW, floorHeightMm: 2800, activePlaneId: lowW.plane.id }, aboveRiserOf });
+  const wideHoles = wideSolids.find(s => s.kind === 'floor' && s.source.layerFloorZ === 2800).footprint.holes ?? [];
+  const wideCeil = wideSolids.filter(s => s.kind === 'ceiling' && (s.source.layerFloorZ ?? 0) === 0).flatMap(s => s.footprint.rects);
+  const visible = subtractRects(wideHoles, wideCeil);
+  const inVisible = (x, y) => visible.some(r => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2);
+  const onOutline = ([x1, y1, x2, y2]) => {
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    const [a, b] = Math.abs(x1 - x2) < 1e-3 ? [[mx - 1, my], [mx + 1, my]] : [[mx, my - 1], [mx, my + 1]];
+    return inVisible(...a) !== inVisible(...b);
+  };
+  assert.ok(edge.length > 0 && edge.every(p => p.cls === 'below'));
+  assert.ok(edge.some(p => p.weight === 'medium') && edge.some(p => p.weight === 'thin'), '検出力: 中線と細線の両方がある配置');
+  for (const p of edge) assert.equal(p.weight, onOutline(p.points) ? 'medium' : 'thin', `位置ごとの重み: ${JSON.stringify(p.points)}`);
 });
 
 test('見上げの鍵: planSection:up:… で見下げの鍵と衝突しない。置き場は上階 peek の graph（無ければ自階）、pending／- の区別、階の違う peek は使わない', () => {
@@ -551,4 +564,60 @@ test('【失敗系】見上げ: 切断高が非有限なら空配列のまま（
   const { self } = lowRoomScene();
   assert.deepEqual(planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: NaN }), []);
   assert.deepEqual(planSolidsLayerPrimitivesUp({ graph: null, cutZ: CUT }), []);
+});
+
+/** 下階: 部屋 A（x 0..2000）・部屋 B（x 2000..4000）。上階: B の上が吹抜け（withVoid=false なら B も部屋）。 */
+function openingEdgeScene({ withVoid = true } = {}) {
+  const self = makeGrid([0, 2000, 4000], [0, 4000], { id: 'low', startFloor: 1 });
+  self.interior([[0, 0]]); self.interior([[1, 0]]);
+  const above = makeGrid([0, 2000, 4000], [0, 4000], { id: 'high', startFloor: 2 });
+  above.interior([[0, 0]]);
+  if (withVoid) above.feature([[1, 0]], RoomFeature.VOID); else above.interior([[1, 0]]);
+  return { self, abovePeek: { graph: above.graph, floorHeightMm: 2800, activePlaneId: self.graph.plane.id } };
+}
+
+test('見上げ: 上階の床の穴の縁（外形線の上）の線は中線（medium）になり、同じ直線上で重ならない。見下げの経路では中線を付けない', () => {
+  const { self, abovePeek } = openingEdgeScene();
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+  const medium = prims.filter(p => p.kind === 'line' && p.weight === 'medium');
+  assert.ok(medium.length > 0, '穴の縁に中線が出る');
+  const onHoleEdge = ([x1, y1, x2, y2]) => (x1 === x2 && (x1 === 2000 || x1 === 4000) && Math.min(y1, y2) >= 0 && Math.max(y1, y2) <= 4000)
+    || (y1 === y2 && (y1 === 0 || y1 === 4000) && Math.min(x1, x2) >= 2000 && Math.max(x1, x2) <= 4000);
+  assert.ok(medium.every(p => onHoleEdge(p.points)), `中線は穴の縁の上だけ: ${JSON.stringify(medium.map(p => p.points))}`);
+  // 穴の西の縁 x=2000 は天井の縁・床の縁が重なるが 1 本（総延長 4000）だけ出る
+  const west = medium.filter(p => p.points[0] === 2000 && p.points[2] === 2000);
+  assert.equal(west.reduce((s, p) => s + Math.abs(p.points[3] - p.points[1]), 0), 4000);
+  // 見下げの経路（planSolidsLayerPrimitives）には中線を付けない
+  const down = planSolidsLayerPrimitives({ graph: self.graph, belowPeek: null, cutZ: CUT });
+  assert.equal(down.filter(p => p.weight === 'medium').length, 0);
+});
+
+test('見上げ: 両側が天井の外形線（穴は階段吹抜けで下の天井が残る配置＝13 の階段下部屋相当）は中線にしない。見える穴が無ければ中線 0', () => {
+  const self = makeGrid([0, 2000, 4000], [0, 4000], { id: 'low', startFloor: 1 });
+  self.interior([[0, 0]]); self.interior([[1, 0]]);
+  const above = makeGrid([0, 2000, 4000], [0, 4000], { id: 'high', startFloor: 2 });
+  above.interior([[0, 0]]);
+  above.feature([[1, 0]], RoomFeature.STAIR_VOID); // 穴にはなるが、自階の天井（規則 V の対象外）は残る
+  const abovePeek = { graph: above.graph, floorHeightMm: 2800, activePlaneId: self.graph.plane.id };
+  const holes = planSolidsLayerSolidsUp({ graph: self.graph, abovePeek }).find(s => s.kind === 'floor' && s.source.layerFloorZ === 2800).footprint.holes ?? [];
+  assert.ok(holes.length > 0, '前提: 上階の床に穴がある');
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+  assert.equal(prims.filter(p => p.weight === 'medium').length, 0);
+});
+
+test('見上げ: 自階に部屋が無い（天井 0）とき、上階の吹抜けの縁は中線になり落ちない', () => {
+  const self = makeGrid([0, 2000, 4000], [0, 4000], { id: 'low', startFloor: 1 }); // 部屋なし
+  const above = makeGrid([0, 2000, 4000], [0, 4000], { id: 'high', startFloor: 2 });
+  above.interior([[0, 0]]); above.feature([[1, 0]], RoomFeature.VOID);
+  const abovePeek = { graph: above.graph, floorHeightMm: 2800, activePlaneId: self.graph.plane.id };
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+  assert.ok(prims.some(p => p.kind === 'line' && p.weight === 'medium' && p.points[0] === 2000 && p.points[2] === 2000), 'x=2000 の縁が中線');
+});
+
+test('【失敗系】見上げ: 上階に穴が無い・上階が無いときは中線が出ない', () => {
+  for (const abovePeek of [openingEdgeScene({ withVoid: false }).abovePeek, null]) {
+    const { self } = openingEdgeScene();
+    const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+    assert.equal(prims.filter(p => p.weight === 'medium').length, 0);
+  }
 });

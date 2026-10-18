@@ -68,7 +68,8 @@ for (const src of sources) {
       }
       summary.push({
         doc, floor: plane.name, above: above?.name ?? null, lines: upLines.length, thin: upLines.filter(l => l.weight === 'thin').length,
-        thick: upLines.filter(l => l.weight === 'thick').length, grey: upLines.filter(l => l.style === 'ceilingBoundary').length,
+        thick: upLines.filter(l => l.weight === 'thick').length, medium: upLines.filter(l => l.weight === 'medium').length,
+        grey: upLines.filter(l => l.style === 'ceilingBoundary').length,
         counts: upCounts, ms: Math.round(upMs),
       });
       return;
@@ -109,10 +110,10 @@ for (const src of sources) {
 if (UP) {
   fs.writeFileSync(path.join(outDir, 'summary-up.json'), JSON.stringify(summary, null, 1));
   for (const s of summary) {
-    console.log(`${s.doc}\t${s.floor}\t上階=${s.above ?? '-'}\t${s.lines}本(細線${s.thin}・太線${s.thick}・うちグレー印${s.grey})\t${JSON.stringify(s.counts)}\t${s.ms}ms`);
+    console.log(`${s.doc}\t${s.floor}\t上階=${s.above ?? '-'}\t${s.lines}本(細線${s.thin}・中線${s.medium}・太線${s.thick}・うちグレー印${s.grey})\t${JSON.stringify(s.counts)}\t${s.ms}ms`);
   }
   const total = key => summary.reduce((n, s) => n + s[key], 0);
-  console.log(`見上げ 合計: ${total('lines')}本（細線${total('thin')}・太線${total('thick')}・うちグレー印${total('grey')}）`);
+  console.log(`見上げ 合計: ${total('lines')}本（細線${total('thin')}・中線${total('medium')}・太線${total('thick')}・うちグレー印${total('grey')}）`);
   process.exit(0);
 }
 fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 1));

@@ -700,9 +700,12 @@ const BAND_EDGE_GAP_MAX_MM = SPAN_OVERLAP_EPS; // 縁と帯の面のすき間の
  * （下地オーナー壁＋仕上げの薄壁が別レコードのため）。結合は along を全帯の端点で区間に割り、区間ごとに across の和を取る
  * （along が離れた帯・端で接するだけの帯は外接矩形にしない）。隣り合う区間で across が同じなら along を結合する。
  * conceal range が無い・座標が非有限の壁は無視。
+ * fullHeightOnly=false（S3 の穴の縁。腰壁こそ穴の縁の張り出し）は腰壁だけの区間も帯にする（壁の全長が 1 区間。結合の規則は同じ）。
+ * @param {object} graph
+ * @param {{fullHeightOnly?: boolean}} [opts]
  * @returns {Array<{vertical:boolean, lo:number, hi:number, a0:number, a1:number}>}
  */
-function wallBandsOf(graph) {
+function wallBandsOf(graph, { fullHeightOnly = true } = {}) {
   const groups = new Map();
   let anon = 0;
   for (const wall of graph.walls ?? []) {
@@ -711,7 +714,9 @@ function wallBandsOf(graph) {
     const vertical = !!wall.isVertical;
     const key = `${vertical}:${wall.axisCL?.id ?? `#${anon++}`}`;
     if (!groups.has(key)) groups.set(key, []);
-    for (const [a0, a1] of wallFullHeightSpans(graph, wall)) groups.get(key).push({ vertical, lo: cr.lo, hi: cr.hi, a0, a1 });
+    const whole = Math.max(wall.coord1, wall.coord2) - Math.min(wall.coord1, wall.coord2) > 1e-6
+      ? [[Math.min(wall.coord1, wall.coord2), Math.max(wall.coord1, wall.coord2)]] : [];
+    for (const [a0, a1] of fullHeightOnly ? wallFullHeightSpans(graph, wall) : whole) groups.get(key).push({ vertical, lo: cr.lo, hi: cr.hi, a0, a1 });
   }
   const out = [];
   const eps = BAND_JOIN_EPS_MM;
@@ -806,6 +811,115 @@ function ceilingSolids(layer, upperGraph = null) {
   });
 }
 
+// ---------------------------------------------------------------- 上階の穴の縁（見上げ・S3）
+
+const OVERHANG_TOUCH_MM = 0.5; // 張り出しが穴の縁・天井面の縁に「接する」とみなす許容
+const GEO_EPS = 1e-6;
+// eps が要る理由: 縁の座標は float 演算で作るため、縁に乗る点（探索の中点）を内側と誤判定しないよう、縁から eps 以内は内側に含めない
+const strictlyIn = (r, x, y) => x > r.x1 + GEO_EPS && x < r.x2 - GEO_EPS && y > r.y1 + GEO_EPS && y < r.y2 - GEO_EPS;
+const rectArea = r => (r.x2 - r.x1) * (r.y2 - r.y1);
+const bandRectOf = b => (b.vertical ? { x1: b.lo, x2: b.hi, y1: b.a0, y2: b.a1 } : { x1: b.a0, x2: b.a1, y1: b.lo, y2: b.hi });
+const intersectRects = (a, b) => ({ x1: Math.max(a.x1, b.x1), x2: Math.min(a.x2, b.x2), y1: Math.max(a.y1, b.y1), y2: Math.min(a.y2, b.y2) });
+const hasArea = r => r.x2 - r.x1 > GEO_EPS && r.y2 - r.y1 > GEO_EPS;
+
+/**
+ * 上階の床の穴の縁に乗る壁の張り出し（帯と穴の交わり）。帯が穴の和の中に収まる壁は無視（穴の中の壁は縁ではない）。
+ * 端は SPAN_OVERLAP_EPS 以内のすき間を閉じる: 端の先が「穴の和の中」かつ「自階の天井面の下でない」かつ「どの帯の中でもない」間、
+ * それが切れる所（穴・天井面・帯の縁のうち最も近いもの）まで延ばす。延ばす長さが上限を超えるなら延ばさない。解析的（縁の座標を順に調べる）。
+ * @returns {Array<{rect: object, vertical: boolean}>}
+ */
+function openingOverhangStrips(holes, bands, faceRects) {
+  const bandRects = bands.map(bandRectOf);
+  const strips = [];
+  bands.forEach((b, i) => {
+    const br = bandRects[i];
+    const pieces = holes.map(h => intersectRects(br, h)).filter(hasArea);
+    if (pieces.length === 0) return;
+    // 帯が穴の和に収まる（重なる穴でも二重に数えないよう、帯から穴を引いた残りの面積で見る）
+    if (subtractRects([br], holes).reduce((s, p) => s + rectArea(p), 0) <= 1e-3) return;
+    for (const rect of pieces) strips.push({ rect, vertical: b.vertical });
+  });
+  const all = [...holes, ...faceRects, ...bandRects];
+  const extend = (s, dir) => {
+    const { rect, vertical } = s;
+    const e = vertical ? (dir > 0 ? rect.y2 : rect.y1) : (dir > 0 ? rect.x2 : rect.x1);
+    const c = vertical ? (rect.x1 + rect.x2) / 2 : (rect.y1 + rect.y2) / 2;
+    const at = t => (vertical ? [c, t] : [t, c]);
+    const free = t => {
+      const [x, y] = at(t);
+      return holes.some(r => strictlyIn(r, x, y)) && !faceRects.some(r => strictlyIn(r, x, y)) && !bandRects.some(r => strictlyIn(r, x, y));
+    };
+    const cands = [...new Set(all.flatMap(r => {
+      const [c0, c1, a0, a1] = vertical ? [r.x1, r.x2, r.y1, r.y2] : [r.y1, r.y2, r.x1, r.x2];
+      return c > c0 + GEO_EPS && c < c1 - GEO_EPS ? [a0, a1] : [];
+    }))].filter(t => dir * (t - e) > GEO_EPS).sort((p, q) => dir * (p - q));
+    let prev = e;
+    for (const t of cands) {
+      if (!free((prev + t) / 2)) break;
+      prev = t;
+    }
+    const len = dir * (prev - e);
+    return len > GEO_EPS && len <= SPAN_OVERLAP_EPS ? prev : e;
+  };
+  return strips.map(s => {
+    const lo = extend(s, -1), hi = extend(s, 1);
+    const r = s.rect;
+    return { ...s, rect: s.vertical ? { ...r, y1: lo, y2: hi } : { ...r, x1: lo, x2: hi } };
+  });
+}
+
+/**
+ * 見上げの上階スラブの穴を壁の張り出し（openingOverhangStrips）で狭め、張り出しの面まで自階の天井面を延ばす（S3）。
+ * 原則: セル境界（通り芯）は図面に現れない。穴の縁は、それを囲む壁の面。天井面の延長は、strip が接する穴の縁の外側に
+ * 縁の座標（±0.5mm）で接し along が重なる面の矩形ごとに、重なり分の帯状矩形を足す（面内・面どうしの重なりは作らない。穴の縁の 1 段だけ）。
+ * @param {Solid} upperFloor floorSolidOf(上階の層, opts)
+ * @param {object} upperGraph
+ * @param {Solid[]} ceilings 自階の天井の立体（S1・S2 まで）
+ * @returns {{floor: Solid, ceilings: Solid[]}}
+ */
+export function narrowOpeningByWalls(upperFloor, upperGraph, ceilings) {
+  const holes = upperFloor?.footprint?.holes ?? [];
+  if (holes.length === 0) return { floor: upperFloor, ceilings };
+  const bands = wallBandsOf(upperGraph, { fullHeightOnly: false });
+  if (bands.length === 0) return { floor: upperFloor, ceilings };
+  const faceRects = ceilings.flatMap(c => c.footprint.rects);
+  const strips = openingOverhangStrips(holes, bands, faceRects);
+  if (strips.length === 0) return { floor: upperFloor, ceilings };
+  const narrowed = subtractRects(holes, strips.map(s => s.rect));
+  const floor = { ...upperFloor, footprint: narrowed.length > 0 ? { ...upperFloor.footprint, holes: narrowed } : { rects: upperFloor.footprint.rects } };
+  const added = ceilings.map(() => []);
+  const addedAll = [];
+  const near = (a, b) => Math.abs(a - b) <= OVERHANG_TOUCH_MM;
+  for (const { rect: s, vertical } of strips) {
+    for (const h of holes) {
+      if (!hasArea(intersectRects(s, h))) continue;
+      // strip が接する穴の縁（厚み方向の縁だけ）と、その外側に接する面の矩形
+      const edges = vertical
+        ? [[near(s.x1, h.x1), r => near(r.x2, h.x1)], [near(s.x2, h.x2), r => near(r.x1, h.x2)]]
+        : [[near(s.y1, h.y1), r => near(r.y2, h.y1)], [near(s.y2, h.y2), r => near(r.y1, h.y2)]];
+      for (const [touches, abuts] of edges) {
+        if (!touches) continue;
+        ceilings.forEach((ceil, fi) => {
+          for (const r of ceil.footprint.rects) {
+            if (!abuts(r)) continue;
+            const piece = vertical
+              ? { x1: s.x1, x2: s.x2, y1: Math.max(s.y1, r.y1, h.y1), y2: Math.min(s.y2, r.y2, h.y2) }
+              : { x1: Math.max(s.x1, r.x1, h.x1), x2: Math.min(s.x2, r.x2, h.x2), y1: s.y1, y2: s.y2 };
+            if (!hasArea(piece)) continue;
+            const fresh = subtractRects(subtractRects([piece], [...ceil.footprint.rects, ...added[fi]]), addedAll);
+            added[fi].push(...fresh);
+            addedAll.push(...fresh);
+          }
+        });
+      }
+    }
+  }
+  return {
+    floor,
+    ceilings: ceilings.map((c, fi) => (added[fi].length > 0 ? { ...c, footprint: { rects: [...c.footprint.rects, ...added[fi]] } } : c)),
+  };
+}
+
 // ---------------------------------------------------------------- 汎用立体
 
 /**
@@ -848,6 +962,8 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  *   ceilings＝true のときだけ self の層に天井立体（kind 'ceiling'。見上げ用）を足す。省略（見下げ）の出力は不変。
  *   規則 V: 直上階の void・shaft の穴を天井面から引く。
  *   上階の層の梁は立体にしない（裁定 2026-10-18）。
+ *   S3: 上階の床の穴は、穴の縁に乗る上階の壁の張り出し（腰壁含む）の面まで狭め（縁は壁の面）、自階の天井面はその面まで延ばす
+ *   （narrowOpeningByWalls。見下げは触らない）。
  *   lookUp＝true は見上げ（天伏。planSolidsLayerSolidsUp だけが渡す）: 上階スラブの続きの階段の穴を足元全体にし（floorSolidOf）、
  *   上階の層の「下階に同じ足元の階段がある」階段について、木造は階段裏の傾斜天井（source.kind 'stairSoffit'）を足し、鉄骨は段の輪郭を描く（stairUndersideOf）。自階の続き階段の段は遮蔽に入れない（stairsContinuedAbove）。
  *   riserOf＝最上の層の階段の蹴上（破れ先の位置・段の高さ）。下の層の階段は直上の層との階高から求める（stairTreadSolids）。belowGraphOf＝graph の直下階の graph（無ければ null。破れ先を穴にするかの判定）。
@@ -857,6 +973,22 @@ export function planSolids(layers, opts = {}) {
   treadFootprintCache = new WeakMap();
   const entries = []; // {solid, layerZ, roleRank}
   const floorZs = (layers ?? []).filter(l => l?.graph && Number.isFinite(l.floorZMm)).map(l => l.floorZMm).sort((a, b) => a - b);
+  // 見上げ（S3）: 自階の天井面と上階の床の穴は互いを要する（すき間閉じ・天井面の延長）ので、自階の層の側で先に求める
+  const ceilingsOf = new Map(), floorOverride = new Map(); // 自階の層 → 天井の立体、上階の層 → 穴を狭めた床
+  if (opts.lookUp === true) {
+    for (const layer of layers ?? []) {
+      if (!layer?.graph || !Number.isFinite(layer.floorZMm) || layer.role !== 'self') continue;
+      const upZ = floorZs.find(z => z > layer.floorZMm);
+      const upperLayer = upZ !== undefined ? layers.find(l => l?.graph && l.floorZMm === upZ) : null;
+      if (upperLayer?.role !== 'above') continue;
+      const ceilings = opts.ceilings === true ? ceilingSolids(layer, upperLayer.graph).filter(Boolean) : [];
+      const upperFloor = floorSolidOf(upperLayer, opts);
+      if (!upperFloor) continue;
+      const narrowed = narrowOpeningByWalls(upperFloor, upperLayer.graph, ceilings);
+      floorOverride.set(upperLayer, narrowed.floor);
+      if (opts.ceilings === true) ceilingsOf.set(layer, narrowed.ceilings);
+    }
+  }
   for (const layer of layers ?? []) {
     if (!layer?.graph || !Number.isFinite(layer.floorZMm)) continue;
     let cellToRoom = null;
@@ -870,13 +1002,13 @@ export function planSolids(layers, opts = {}) {
       : stair => opts.riserOf?.(stair) ?? null;
     const underside = opts.lookUp === true && layer.role === 'above'
       ? stairUndersideOf(layer, riserForLayer, opts.belowGraphOf?.(layer.graph) ?? null) : null;
-    const solids = [floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom, wallFootSurfaces(layer, riserForLayer, upperZ, upperGraph), underReturnWallTops(layer, riserForLayer, upperZ, upperGraph)), ...columnSolids(layer),
+    const solids = [floorOverride.get(layer) ?? floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom, wallFootSurfaces(layer, riserForLayer, upperZ, upperGraph), underReturnWallTops(layer, riserForLayer, upperZ, upperGraph)), ...columnSolids(layer),
       // 梁は天井より上にある（ユーザー裁定 2026-10-18）。上階の梁は上階 FL の下に 200 ほど垂れ、吹抜けの中では
       // 1 階の天井より上に見えるが、天伏には描かない（描かず・遮蔽にも入れない）
       ...(opts.lookUp === true && layer.role === 'above' ? [] : beamSolids(layer)), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
         opts.lookUp === true && layer.role === 'self' ? stairsContinuedAbove(layer, layers, opts) : null, upperGraph),
       ...(underside?.soffits ?? []),
-      ...(opts.ceilings === true && layer.role === 'self' ? ceilingSolids(layer, upperGraph) : [])].filter(Boolean);
+      ...(opts.ceilings === true && layer.role === 'self' ? ceilingsOf.get(layer) ?? ceilingSolids(layer, upperGraph) : [])].filter(Boolean);
     for (const solid of solids) entries.push({ solid, layerZ: layer.floorZMm, roleRank: ROLE_RANK[layer.role] ?? 3 });
   }
   const kindRank = k => SOLID_KIND_ORDER.indexOf(k);
