@@ -68,6 +68,46 @@ export function isInsideFootprint(footprint, x, y) {
 }
 
 /**
+ * 矩形群 − 矩形群 → 重ならない矩形群。cutter と交わらない矩形はそのまま（正規化したコピー）。交わる矩形は cutter の
+ * x/y 座標で格子に割り、覆われないマスを行（y 帯）ごとに x 方向で結合して出す。幅・高さが 1e-6 以下の結果は出さない。
+ * 非有限・退化の入力矩形／cutter は捨てる。順序は入力順→行（y 昇順）→x 昇順で決定的。
+ * @param {Rect[]} rects
+ * @param {Rect[]} cutters
+ * @returns {Rect[]}
+ */
+export function subtractRects(rects, cutters) {
+  const cs = (cutters ?? []).filter(isValidRect).map(normalizeRect);
+  const out = [];
+  for (const raw of rects ?? []) {
+    if (!isValidRect(raw)) continue;
+    const r = normalizeRect(raw);
+    const hits = cs.filter(c => Math.min(c.x2, r.x2) - Math.max(c.x1, r.x1) > EDGE_EPS && Math.min(c.y2, r.y2) - Math.max(c.y1, r.y1) > EDGE_EPS);
+    if (hits.length === 0) { out.push(r); continue; }
+    const grid = (lo, hi, vals) => [...new Set([lo, hi, ...vals.filter(v => v > lo && v < hi)])].sort((a, b) => a - b);
+    const xs = grid(r.x1, r.x2, hits.flatMap(c => [c.x1, c.x2]));
+    const ys = grid(r.y1, r.y2, hits.flatMap(c => [c.y1, c.y2]));
+    for (let j = 0; j + 1 < ys.length; j++) {
+      const y1 = ys[j], y2 = ys[j + 1];
+      if (!(y2 - y1 > EDGE_EPS)) continue;
+      const my = (y1 + y2) / 2;
+      let run = null;
+      for (let i = 0; i + 1 < xs.length; i++) {
+        const x1 = xs[i], x2 = xs[i + 1];
+        const mx = (x1 + x2) / 2;
+        if (!(x2 - x1 > EDGE_EPS)) continue; // 退化した列は飛ばす（行の結合を切らない）
+        const covered = hits.some(c => mx > c.x1 && mx < c.x2 && my > c.y1 && my < c.y2);
+        if (covered) {
+          if (run) { out.push(run); run = null; }
+        } else if (run) run.x2 = x2;
+        else run = { x1, y1, x2, y2 };
+      }
+      if (run) out.push(run);
+    }
+  }
+  return out;
+}
+
+/**
  * 矩形群（重なりなし・接する辺は同一値）の外周線分。集合内で共有される辺は打ち消される
  * （finish/gridCells.js outlineSegments と同じ。S3 が穴の縁・床の外形を引くのに使う）。
  * @param {Rect[]} rects

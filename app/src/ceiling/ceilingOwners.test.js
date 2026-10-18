@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomFeature, edgeKey } from '@core';
-import { buildCeilingCellOwners } from './ceilingOwners.js';
+import { buildCeilingCellOwners, wallFullHeightSpans } from './ceilingOwners.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
 import { ceilingGroupsOf } from './ceilingGroups.js';
 import { makeGrid, assignZoneHeight } from '../plan/planTestFixtures.js';
@@ -218,4 +218,35 @@ test('中間のすき間: 辺 2000 に全高の壁 [0,800] と [1200,2000]、間
   assert.equal(ownerOf(wide.g, 1).id, wide.a.id);
   const narrow = build(900);
   assert.equal(ownerOf(narrow.g, 1).id, narrow.b.id);
+});
+
+// ---- wallFullHeightSpans（壁 1 本の全高の区間。腰壁だけの区間を除く）
+
+/** 縦の壁（x=0, y 0..1000）。CL は y=0/400/600/1000。knee(区間) の指定を付ける。 */
+function spanWall(kneeRanges = [], extra = {}) {
+  const g = makeGrid([0, 1000], [0, 400, 600, 1000]);
+  const w = g.graph.addWall(g.cx[0], 0, true, g.cy[0], 0, g.cy[3], 0, {});
+  for (const [i, j] of kneeRanges) g.graph.setKneeDropWall(edgeKey(g.cx[0].id, g.cy[i].id, g.cy[j].id), { knee: { topHeight: 800 }, ...extra });
+  return { g, w };
+}
+
+test('wallFullHeightSpans: 腰壁なしは壁全体。lo/hi で切る', () => {
+  const { g, w } = spanWall();
+  assert.deepEqual(wallFullHeightSpans(g.graph, w), [[0, 1000]]);
+  assert.deepEqual(wallFullHeightSpans(g.graph, w, 200, 700), [[200, 700]]);
+});
+
+test('wallFullHeightSpans: 中間の腰壁で 2 区間に分かれる。垂れ壁（drop）を持つ区間は全高', () => {
+  const { g, w } = spanWall([[1, 2]]);
+  assert.deepEqual(wallFullHeightSpans(g.graph, w), [[0, 400], [600, 1000]]);
+  const withDrop = spanWall([[1, 2]], { drop: { bottomHeight: 600 } });
+  assert.deepEqual(wallFullHeightSpans(withDrop.g.graph, withDrop.w), [[0, 1000]]);
+});
+
+test('【失敗系】wallFullHeightSpans: 重なりなし・座標が NaN は []。腰壁が全区間なら []', () => {
+  const { g, w } = spanWall();
+  assert.deepEqual(wallFullHeightSpans(g.graph, w, 2000, 3000), []);
+  assert.deepEqual(wallFullHeightSpans(g.graph, { ...w, coord1: NaN, coord2: 1000, axisCL: w.axisCL }), []);
+  const all = spanWall([[0, 3]]);
+  assert.deepEqual(wallFullHeightSpans(all.g.graph, all.w), []);
 });

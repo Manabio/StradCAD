@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  normalizeRect, isValidRect, isInsideFootprint, rectsOutlineSegments, footprintBounds,
+  normalizeRect, isValidRect, isInsideFootprint, rectsOutlineSegments, footprintBounds, subtractRects,
 } from './planGeometry.js';
 
 const R = (x1, y1, x2, y2) => ({ x1, y1, x2, y2 });
@@ -55,4 +55,20 @@ test('footprintBounds: 矩形・多角形の外接矩形。空は null', () => {
   assert.deepEqual(footprintBounds({ poly: [1, 2, 9, 2, 5, 8] }), R(1, 2, 9, 8));
   assert.equal(footprintBounds({ rects: [] }), null);
   assert.equal(footprintBounds(null), null);
+});
+
+test('subtractRects: L字（角の切り欠き）・貫通（帯で二分）・端の切り欠き', () => {
+  assert.deepEqual(subtractRects([R(0, 0, 100, 100)], [R(50, 50, 150, 150)]), [R(0, 0, 100, 50), R(0, 50, 50, 100)]);
+  assert.deepEqual(subtractRects([R(0, 0, 100, 100)], [R(40, -10, 60, 110)]), [R(0, 0, 40, 100), R(60, 0, 100, 100)]);
+  assert.deepEqual(subtractRects([R(0, 0, 100, 100)], [R(90, 0, 100, 100)]), [R(0, 0, 90, 100)]);
+  assert.deepEqual(subtractRects([R(0, 0, 100, 100)], [R(0, 0, 100, 100)]), [], '全部覆えば空');
+});
+
+test('【失敗系】subtractRects: 空入力・交わらない／接するだけの cutter・退化・非有限は捨てる', () => {
+  assert.deepEqual(subtractRects([], [R(0, 0, 1, 1)]), []);
+  assert.deepEqual(subtractRects(undefined, undefined), []);
+  assert.deepEqual(subtractRects([R(0, 0, 100, 100)], []), [R(0, 0, 100, 100)]);
+  assert.deepEqual(subtractRects([R(0, 0, 100, 100)], [R(200, 0, 300, 100), R(100, 0, 150, 100)]), [R(0, 0, 100, 100)], '離れた・辺で接するだけ');
+  assert.deepEqual(subtractRects([R(0, 0, 100, 100)], [R(50, 0, 50, 100), R(0, 0, NaN, 10), null]), [R(0, 0, 100, 100)], '退化・非有限・null の cutter');
+  assert.deepEqual(subtractRects([R(0, 0, 0, 100), R(0, 0, 10, Infinity), R(0, 0, 10, 10)], [R(5, 0, 10, 10)]), [R(0, 0, 5, 10)], '退化・非有限の入力矩形は捨てる');
 });

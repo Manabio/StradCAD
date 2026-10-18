@@ -43,6 +43,29 @@ function isCeilingVoidRoom(room) {
 }
 
 /**
+ * 壁 1 本の、区間 [lo,hi]（省略＝壁の全長）と重なる範囲のうち全高の区間（腰壁だけの区間を除く）。[[s,e],…] を along 昇順で返す。
+ * 腰壁（knee あり・drop なし）の区間は天井を隔てない。垂れ壁（drop）・指定なしの区間は全高。重なりが無い・座標が非有限なら []。
+ * 共有辺の判定（edgeSeparatedByFullWall）と、平面の天井面の縁を止める壁の帯（plan/planSolids.js wallBandsOf）が共用する。
+ */
+export function wallFullHeightSpans(graph, w, lo = -Infinity, hi = Infinity) {
+  if (![w.coord1, w.coord2].every(Number.isFinite)) return [];
+  const a = Math.max(lo, Math.min(w.coord1, w.coord2)), b = Math.min(hi, Math.max(w.coord1, w.coord2));
+  if (!(b - a > 1e-6)) return [];
+  const out = [];
+  const knees = kneeDropRecordsOnAxis(graph, w.axisCL, a, b)
+    .filter(r => r.rec?.knee && !r.rec.drop)
+    .map(r => [Math.max(a, r.lo), Math.min(b, r.hi)])
+    .sort((p, q) => p[0] - q[0]);
+  let cur = a;
+  for (const [kLo, kHi] of knees) {
+    if (kLo > cur) out.push([cur, kLo]);
+    cur = Math.max(cur, kHi);
+  }
+  if (b > cur) out.push([cur, b]);
+  return out;
+}
+
+/**
  * 共有辺（軸 isVertical・位置 coord・区間 [lo,hi]）を全高の壁（腰壁だけの壁は除く）が隔てているか。
  * 辺上の壁を、辺と重なる区間ごとに腰壁・垂れ壁のレコードで解決する（kneeDropRecordsOnAxis。1 本の壁が複数区間に分かれて
  * 指定が違ってもよい）。腰壁（knee あり・drop なし）の区間は天井を隔てない。垂れ壁（drop）・指定なしの区間は全高。
@@ -54,18 +77,7 @@ function edgeSeparatedByFullWall(graph, isVertical, coord, lo, hi) {
   for (const w of graph.walls) {
     if (w.isVertical !== isVertical || !w.axisCL) continue;
     if (Math.abs(w.axisCL.effectiveValue - coord) > EDGE_EPS_MM) continue;
-    const a = Math.max(lo, Math.min(w.coord1, w.coord2)), b = Math.min(hi, Math.max(w.coord1, w.coord2));
-    if (!(b - a > 1e-6)) continue;
-    const knees = kneeDropRecordsOnAxis(graph, w.axisCL, a, b)
-      .filter(r => r.rec?.knee && !r.rec.drop)
-      .map(r => [Math.max(a, r.lo), Math.min(b, r.hi)])
-      .sort((p, q) => p[0] - q[0]);
-    let cur = a;
-    for (const [kLo, kHi] of knees) {
-      if (kLo > cur) full.push([cur, kLo]);
-      cur = Math.max(cur, kHi);
-    }
-    if (b > cur) full.push([cur, b]);
+    full.push(...wallFullHeightSpans(graph, w, lo, hi));
   }
   if (full.length === 0) return false;
   full.sort((p, q) => p[0] - q[0]);

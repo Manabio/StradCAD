@@ -2,12 +2,12 @@
 // 上階の続きの階段が下階（自階）の階段と同じ足元のとき、木造は階段裏の傾斜天井（stairSoffit）、鉄骨は踏面線（stairTread の輪郭）を出す。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { StairType, StructuralMaterialType } from '@core';
+import { StairType, StructuralMaterialType, CenterLineType, edgeKey } from '@core';
 import { planSolids } from './planSolids.js';
 import { planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp } from './planSolidsLayerFilter.js';
 import { uTurnPlanLayout } from '../finish/stair/stairGeometry.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
-import { makeGrid, fakeLayer } from './planTestFixtures.js';
+import { makeGrid, fakeLayer, ARCH, assignZoneSpec } from './planTestFixtures.js';
 
 const WOOD = StructuralMaterialType.WOOD, STEEL = StructuralMaterialType.STEEL;
 const FL = 2800;
@@ -232,4 +232,194 @@ test('見上げの線・隔て壁の柱あり（frontA≠front）: 前縁はレ�
       }
     }
   }
+});
+
+
+// ---- 天井面の縁＝囲む壁の面（セル境界の通り芯ではない）
+
+/**
+ * 格子 xs × y 0..3000 に部屋を置き、graph.walls を壁の代役（芯 CL・帯・区間）で差し替えた自階の層で見上げの天井を解く。
+ * walls は配列か (g) => 配列（実 CL が要るとき）。rooms は部屋ごとのセル [i,j] の配列（省略＝(0,0) の 1 部屋）。
+ * 戻り値: {g, rooms, solids（ceiling の立体）, rectsOf(room)}。
+ */
+function ceilingScene(walls, { xs = [0, 2000], ys = [0, 3000], rooms: roomCells = [[[0, 0]]], setup } = {}) {
+  const g = makeGrid(xs, ys);
+  const rooms = roomCells.map(cells => g.interior(cells));
+  setup?.(g, rooms);
+  const graph = Object.create(g.graph);
+  const list = typeof walls === 'function' ? walls(g) : walls;
+  Object.defineProperty(graph, 'walls', {
+    value: list.map(({ id, isVertical = true, axis = 'A', axisCL, band, span = [-100, 3100] }) => ({
+      id, isVertical, axisCL: axisCL ?? { id: axis }, coord1: span[0], coord2: span[1],
+      materialRange: band ? { lo: band[0], hi: band[1] } : null, backingRange: null,
+    })),
+  });
+  const solids = planSolids([fakeLayer({ graph })], { ceilings: true, lookUp: true }).filter(s => s.kind === 'ceiling');
+  return { g, rooms, solids, rectsOf: room => solids.find(s => s.source.id === room.id)?.footprint.rects };
+}
+const rectsOf1 = (walls, opts) => ceilingScene(walls, opts).solids.map(s => s.footprint.rects);
+const CELL = [{ x1: 0, y1: 0, x2: 2000, y2: 3000 }];
+
+test('天井の縁: セルの縁に寄った偏芯壁（帯がセル内側）では、天井面が壁の外面で止まる（縁との間の細片を除く）', () => {
+  assert.deepEqual(rectsOf1([{ id: 'w', band: [1800, 1950] }]), [[{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]]);
+  assert.deepEqual(rectsOf1([{ id: 'w', isVertical: false, band: [2800, 2950], span: [-100, 2100] }]), [[{ x1: 0, y1: 0, x2: 2000, y2: 2950 }]]);
+  assert.deepEqual(rectsOf1([{ id: 'w', band: [50, 200] }]), [[{ x1: 50, y1: 0, x2: 2000, y2: 3000 }]], '左の縁');
+});
+
+test('天井の縁: 芯振り分けの壁（帯が縁をまたぐ）・縁から 150 超離れた壁は不変', () => {
+  assert.deepEqual(rectsOf1([{ id: 'w', band: [1942.5, 2057.5] }]), [CELL]);
+  assert.deepEqual(rectsOf1([{ id: 'w', band: [1700, 1800] }]), [CELL], '縁との間 200');
+  assert.deepEqual(rectsOf1([]), [CELL], '壁なし');
+});
+
+test('天井の縁: 同じ芯の下地の壁＋仕上げの薄壁（2 レコード）は 1 本に結合し、外側の面で止まる（薄壁の面では止まらない）', () => {
+  const rects = rectsOf1([
+    { id: 'thin', band: [1850, 1862.5] }, // 内側の薄壁
+    { id: 'owner', band: [1862.5, 1950] }, // 下地オーナー壁
+  ]);
+  assert.deepEqual(rects, [[{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]]);
+  // 芯が違えば結合しない（別の壁の帯）。ただし削る帯状の矩形から壁の帯の和を除くので、接する別の壁の帯の下は削らず、結果は同じ 1950
+  const sep = rectsOf1([{ id: 'a', axis: 'A', band: [1850, 1862.5] }, { id: 'b', axis: 'B', band: [1862.5, 1950] }]);
+  assert.deepEqual(sep, [[{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]]);
+});
+
+test('天井の縁: 同じ芯でも along が離れた壁は結合しない（それぞれの along だけ止める）', () => {
+  assert.deepEqual(rectsOf1([{ id: 'a', band: [1800, 1950], span: [-100, 1000] }, { id: 'b', band: [1800, 1950], span: [2000, 3100] }]), [[
+    { x1: 0, y1: 0, x2: 1950, y2: 1000 }, { x1: 0, y1: 1000, x2: 2000, y2: 2000 }, { x1: 0, y1: 2000, x2: 1950, y2: 3000 },
+  ]]);
+  // 遠い壁と結合して along が伸びないこと（結合していれば y 全体が削れる）
+  assert.deepEqual(rectsOf1([{ id: 'a', band: [1800, 1950], span: [0, 500] }, { id: 'b', band: [1800, 1950], span: [8000, 9000] }]), [[
+    { x1: 0, y1: 0, x2: 1950, y2: 500 }, { x1: 0, y1: 500, x2: 2000, y2: 3000 },
+  ]]);
+});
+
+test('天井の縁: 壁が一部の along だけ覆うときは、その範囲の細片だけを除く', () => {
+  assert.deepEqual(rectsOf1([{ id: 'w', band: [1800, 1950], span: [1000, 2000] }]), [[
+    { x1: 0, y1: 0, x2: 2000, y2: 1000 }, { x1: 0, y1: 1000, x2: 1950, y2: 2000 }, { x1: 0, y1: 2000, x2: 2000, y2: 3000 },
+  ]]);
+});
+
+test('天井の縁: 両縁が同時に条件を満たす壁（帯が矩形の中で両側とも 150 以下）は両側とも削る', () => {
+  assert.deepEqual(rectsOf1([{ id: 'w', band: [100, 1900] }]), [[{ x1: 100, y1: 0, x2: 1900, y2: 3000 }]]);
+});
+
+test('【失敗系】天井の縁: conceal range の無い壁・帯の幅 0・座標が NaN の壁・along が矩形と重ならない壁は無視する', () => {
+  assert.deepEqual(rectsOf1([{ id: 'w', band: null }]), [CELL]);
+  assert.deepEqual(rectsOf1([{ id: 'w', band: [1900, 1900] }]), [CELL], '帯の幅 0');
+  assert.deepEqual(rectsOf1([{ id: 'w', band: [1800, 1950], span: [NaN, 3100] }]), [CELL], 'coord1=NaN');
+  assert.deepEqual(rectsOf1([{ id: 'w', band: [1800, 1950], span: [3500, 5000] }]), [CELL]);
+});
+
+test('【失敗系】天井の縁: 全部削れた面は立体を出さない', () => {
+  // 幅 100 のセルの中央に極薄の帯: 両側の細片で面が残らない
+  assert.deepEqual(ceilingScene([{ id: 'w', band: [50, 50.0000005] }], { xs: [0, 100] }).solids, []);
+});
+
+test('【失敗系】天井の縁: 腰壁だけの区間（drop なし）は天井を隔てないので帯にしない。垂れ壁（drop）を持つ区間は帯にする', () => {
+  const make = rec => rectsOf1(g => {
+    const axisCL = g.graph.addCenterLine(CenterLineType.VERTICAL, 9000, ARCH, 'ax');
+    g.graph.setKneeDropWall(edgeKey(axisCL.id, g.cy[0].id, g.cy[1].id), rec);
+    return [{ id: 'w', axisCL, band: [1800, 1950], span: [0, 3000] }];
+  });
+  assert.deepEqual(make({ knee: { topHeight: 800 } }), [CELL], '腰壁だけ');
+  assert.deepEqual(make({ drop: { bottomHeight: 600 } }), [[{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]], '垂れ壁');
+  assert.deepEqual(make({ knee: { topHeight: 800 }, drop: { bottomHeight: 600 } }), [[{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]], '同時指定は全高');
+});
+
+test('天井の縁: 傾斜天井は縁を削っても zAt の基準は元の矩形のまま（削った面の内側で z は不変）', () => {
+  const slope = (g, [room]) => room.setCeilingZones(assignZoneSpec(g.graph, room, [g.cell(0, 0)], { heightMm: 2300, shape: 'slope', dims: [1200, 0] }));
+  const plain = ceilingScene([], { setup: slope }).solids[0];
+  const trimmed = ceilingScene([{ id: 'w', band: [1800, 1950] }], { setup: slope }).solids[0];
+  assert.ok(plain.zAt && trimmed.zAt, '傾斜は zAt を持つ');
+  assert.deepEqual(trimmed.footprint.rects, [{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]);
+  for (const [x, y] of [[100, 100], [1000, 1500], [1900, 2900]]) assert.equal(trimmed.zAt(x, y), plain.zAt(x, y), `(${x},${y})`);
+  assert.equal(trimmed.zHi, plain.zHi);
+});
+
+// ---- 削るだけ（向こう側の天井面はセル境界のまま。既知の限界）
+
+/** 矩形群が互いに重ならない（面積のある重なりが無い）か。 */
+const disjoint = rs => rs.every((a, i) => rs.every((b, j) => i >= j
+  || !(Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) > 1e-6 && Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) > 1e-6)));
+
+test('天井の縁: 隣り合う 2 部屋で帯が左の部屋の縁に寄るとき、削るのは左の部屋だけ（右の部屋は不変）。全天井の矩形は重ならない', () => {
+  const sc = ceilingScene([{ id: 'w', band: [1800, 1950] }], { xs: [0, 2000, 4000], rooms: [[[0, 0]], [[1, 0]]] });
+  assert.deepEqual(sc.rectsOf(sc.rooms[0]), [{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]);
+  assert.deepEqual(sc.rectsOf(sc.rooms[1]), [{ x1: 2000, y1: 0, x2: 4000, y2: 3000 }]);
+  assert.ok(disjoint(sc.solids.flatMap(s => s.footprint.rects)));
+});
+
+test('天井の縁: 直交する偏芯壁 2 本（2×2 の 4 部屋）の隅は、削る側の部屋だけが変わり、矩形は重ならない', () => {
+  const sc = ceilingScene([
+    { id: 'v', band: [1800, 1950], span: [0, 6000] },
+    { id: 'h', isVertical: false, axis: 'H', band: [2800, 2950], span: [0, 4000] },
+  ], { xs: [0, 2000, 4000], ys: [0, 3000, 6000], rooms: [[[0, 0]], [[1, 0]], [[0, 1]], [[1, 1]]] });
+  const [a, b, c, d] = sc.rooms;
+  // 左上: 右と下の両方の縁を削るが、削る帯状の矩形から壁の帯の和を除く（壁の下は壁が隠すので削らない）ため、
+  // 横壁の帯の中（y 2800..2950）の右縁と、縦壁の帯の中（x 1800..1950）の下縁は残る
+  assert.deepEqual(sc.rectsOf(a), [
+    { x1: 0, y1: 0, x2: 1950, y2: 2800 }, { x1: 0, y1: 2800, x2: 2000, y2: 2950 }, { x1: 1800, y1: 2950, x2: 1950, y2: 3000 },
+  ], '左上');
+  assert.deepEqual(sc.rectsOf(b), [{ x1: 2000, y1: 0, x2: 4000, y2: 2950 }], '右上: 下の縁だけ');
+  assert.deepEqual(sc.rectsOf(c), [{ x1: 0, y1: 3000, x2: 1950, y2: 6000 }], '左下: 右の縁だけ');
+  assert.deepEqual(sc.rectsOf(d), [{ x1: 2000, y1: 3000, x2: 4000, y2: 6000 }], '右下: 不変');
+  assert.ok(disjoint(sc.solids.flatMap(s => s.footprint.rects)));
+});
+
+test('天井の縁: along が端で接するだけの 2 本（芯が同じで across が違う）は結合せず、それぞれの区間の面で止まる（外接矩形にしない）', () => {
+  assert.deepEqual(rectsOf1([
+    { id: 'a', band: [1800, 1950], span: [0, 1000] },
+    { id: 'b', band: [1700, 1850], span: [1000, 3000] },
+  ]), [[{ x1: 0, y1: 0, x2: 1950, y2: 1000 }, { x1: 0, y1: 1000, x2: 1850, y2: 3000 }]]);
+});
+
+test('天井の縁: 傾斜天井の marks は削った面の中に置く（zAt は元の矩形基準）', () => {
+  const slope = (g, [room]) => room.setCeilingZones(assignZoneSpec(g.graph, room, [g.cell(0, 0)], { heightMm: 2300, shape: 'slope', dims: [1200, 0] }));
+  const plain = ceilingScene([], { setup: slope }).solids[0];
+  const trimmed = ceilingScene([{ id: 'w', band: [1800, 1950] }], { setup: slope }).solids[0];
+  assert.ok(plain.marks?.length > 0 && trimmed.marks?.length > 0, '傾斜は marks を持つ');
+  const [r] = trimmed.footprint.rects;
+  for (const { anchor } of trimmed.marks) assert.ok(anchor.x > r.x1 && anchor.x < r.x2 && anchor.y > r.y1 && anchor.y < r.y2, '削った面の中');
+  assert.ok(trimmed.marks[0].anchor.x < plain.marks[0].anchor.x, '削った面の中心へ寄る');
+});
+
+test('天井の縁: 角の取り合いで、薄壁だけの区間の帯が直交壁の帯の中に入るときは削らない（壁の下は壁が隠す。切欠きを作らない）', () => {
+  // moku1-6 3階の簡略配置: セル x 7280..8190 × y −5460..−3640。縦の薄壁 帯 [7340,7352.5]（along −7207.5..−5387.5）と
+  // 同じ芯の下地 帯 [7207.5,7340]（along −7352.5..−5532.5）、横壁 帯 y [−5520,−5387.5]（x 7207.5..8117.5）が角を作る
+  const cell = [{ x1: 7280, y1: -5460, x2: 8190, y2: -3640 }];
+  assert.deepEqual(rectsOf1([
+    { id: 'thin', axis: 'V', band: [7340, 7352.5], span: [-7207.5, -5387.5] },
+    { id: 'owner', axis: 'V', band: [7207.5, 7340], span: [-7352.5, -5532.5] },
+    { id: 'h', isVertical: false, axis: 'H', band: [-5520, -5387.5], span: [7207.5, 8117.5] },
+  ], { xs: [7280, 8190], ys: [-5460, -3640] }), [cell]);
+  // 横壁が無ければ、薄壁だけの区間の帯は縁に寄っているので従来どおり削る
+  assert.deepEqual(rectsOf1([
+    { id: 'thin', axis: 'V', band: [7340, 7352.5], span: [-7207.5, -5387.5] },
+    { id: 'owner', axis: 'V', band: [7207.5, 7340], span: [-7352.5, -5532.5] },
+  ], { xs: [7280, 8190], ys: [-5460, -3640] }), [[
+    { x1: 7340, y1: -5460, x2: 8190, y2: -5387.5 }, { x1: 7280, y1: -5387.5, x2: 8190, y2: -3640 },
+  ]]);
+});
+
+test('天井の縁: 13 相当（2a 壁 帯 [−1665,−1550]。直交する帯が x>−1550 を覆わない）では従来どおり −1550 で止まる', () => {
+  assert.deepEqual(rectsOf1([
+    { id: 'wall2a', axis: 'V', band: [-1665, -1550], span: [-6012.5, -3442.5] },
+    { id: 'h', isVertical: false, axis: 'H', band: [-6012.5, -5897.5], span: [-3000, -1550] },
+  ], { xs: [-3000, -1500], ys: [-6000, -3500] }), [[{ x1: -3000, y1: -6000, x2: -1550, y2: -3500 }]]);
+});
+
+test('天井の縁: 同じ芯・同じ along で across が離れた 2 帯は結合しない（外接の帯にすると縁をまたいで削られなくなる配置）', () => {
+  // 帯 [-50,50]（セルの左縁をまたぐ＝削らない）と [1850,1950]（右縁に寄る＝1950 で止める）。across を外接で [-50,1950] にまとめると
+  // 縁をまたぐ帯になって右も削られず CELL のままになる
+  assert.deepEqual(rectsOf1([
+    { id: 'a', axis: 'A', band: [-50, 50] },
+    { id: 'b', axis: 'A', band: [1850, 1950] },
+  ]), [[{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]]);
+});
+
+test('天井の縁: 同じ芯・同じ帯で along が接する 2 レコード（[0,1000] と [1000,3000]）は 1 本に戻り、面は矩形 1 個', () => {
+  assert.deepEqual(rectsOf1([
+    { id: 'a', axis: 'A', band: [1800, 1950], span: [0, 1000] },
+    { id: 'b', axis: 'A', band: [1800, 1950], span: [1000, 3000] },
+  ]), [[{ x1: 0, y1: 0, x2: 1950, y2: 3000 }]]);
 });

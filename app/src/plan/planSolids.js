@@ -9,7 +9,8 @@
  *
  * z の取り決め: 自階 FL = 0 の絶対 mm・上が正（層の floorZMm が各階の FL）。梁は FL + levelOffset が天端、
  * 柱は FL〜天井、壁は FL〜天井（腰壁・垂れ壁・アキは展開図と同じ `kneeDropZRangesAt` を共有）、
- * 床は zLo = zHi = FL の面。
+ * 床は zLo = zHi = FL の面。天井（見上げ専用）の面の縁は、セル境界（通り芯）ではなく囲む壁の面（偏芯を含む。
+ * 同じ芯で接する帯は結合）で止める——規則は ceilingSolids の説明を参照。
  *
  * @typedef {import('./planGeometry.js').Rect} Rect
  * @typedef {import('./planGeometry.js').Footprint} Footprint
@@ -40,7 +41,8 @@ import { beamDepthMm } from '../elevation/section/sectionStructure.js';
 import { kneeDropZRangesAt } from '../elevation/section/sectionHits.js';
 import { stairUnderReturnSoffit } from '../elevation/section/sectionProbe.js';
 import { columnWrapSolids, wallConcealRange } from '../finish/columnWrap.js';
-import { kneeDropRecordsOnAxis, effectiveCeilingHeight } from '../finish/kneeDropWall.js';
+import { kneeDropRecordsOnAxis, effectiveCeilingHeight, SPAN_OVERLAP_EPS } from '../finish/kneeDropWall.js';
+import { wallFullHeightSpans } from '../ceiling/ceilingOwners.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { cellBoundsList, roomBounds } from '../finish/gridCells.js';
 import { uTurnPlanLayout } from '../finish/stair/stairGeometry.js';
@@ -54,7 +56,7 @@ import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
 import { drainArrivalTime } from '../structural/roofFramingGeometry.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
-import { normalizeRect, isValidRect } from './planGeometry.js';
+import { normalizeRect, isValidRect, subtractRects } from './planGeometry.js';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
 import { stairSoffitSolids, stairUndersideSurface } from '../ceiling/stairSoffit.js';
@@ -688,23 +690,110 @@ function stairsContinuedAbove(selfLayer, layers, opts) {
 
 // ---------------------------------------------------------------- 天井
 
+const BAND_JOIN_EPS_MM = 0.01; // 同じ芯の帯が接するとみなす許容
+const BAND_EDGE_GAP_MIN_MM = 1e-6; // 帯の面と縁のすき間がこれを超えるときだけ止める
+const BAND_EDGE_GAP_MAX_MM = SPAN_OVERLAP_EPS; // 縁と帯の面のすき間の上限（ceilingOwners.js が「壁の無いすき間の上限」として共用するのと同じ値）
+
+/**
+ * 層の壁の帯（wallConcealRange の across × 壁の along）。壁は全高の区間（腰壁だけの区間を除く。ceilingOwners.js wallFullHeightSpans。
+ * 腰壁は天井を隔てない）ごとに 1 件。同じ芯（axisCL.id）・同じ向きで across が接する／重なり、かつ along も接する／重なる帯は 1 本に結合する
+ * （下地オーナー壁＋仕上げの薄壁が別レコードのため）。結合は along を全帯の端点で区間に割り、区間ごとに across の和を取る
+ * （along が離れた帯・端で接するだけの帯は外接矩形にしない）。隣り合う区間で across が同じなら along を結合する。
+ * conceal range が無い・座標が非有限の壁は無視。
+ * @returns {Array<{vertical:boolean, lo:number, hi:number, a0:number, a1:number}>}
+ */
+function wallBandsOf(graph) {
+  const groups = new Map();
+  let anon = 0;
+  for (const wall of graph.walls ?? []) {
+    const cr = wallConcealRange(wall);
+    if (!cr || !(cr.hi - cr.lo > 0) || ![cr.lo, cr.hi, wall.coord1, wall.coord2].every(Number.isFinite)) continue;
+    const vertical = !!wall.isVertical;
+    const key = `${vertical}:${wall.axisCL?.id ?? `#${anon++}`}`;
+    if (!groups.has(key)) groups.set(key, []);
+    for (const [a0, a1] of wallFullHeightSpans(graph, wall)) groups.get(key).push({ vertical, lo: cr.lo, hi: cr.hi, a0, a1 });
+  }
+  const out = [];
+  const eps = BAND_JOIN_EPS_MM;
+  for (const list of groups.values()) {
+    // along を全帯の端点で区間に割り、区間ごとに across が接する／重なる帯の across を和にして 1 帯にする
+    // （端で接するだけの帯どうしや、along が離れた帯を、外接矩形でまとめない）
+    const cuts = [...new Set(list.flatMap(b => [b.a0, b.a1]))].sort((p, q) => p - q);
+    const made = []; // along 昇順
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      const p = cuts[k], q = cuts[k + 1];
+      if (!(q - p > BAND_EDGE_GAP_MIN_MM)) continue;
+      const covering = list.filter(b => b.a0 <= p + eps && b.a1 >= q - eps).sort((s, t) => s.lo - t.lo || s.hi - t.hi);
+      let cur = null;
+      for (const b of covering) {
+        if (cur && b.lo <= cur.hi + eps) cur.hi = Math.max(cur.hi, b.hi);
+        else { if (cur) made.push(cur); cur = { vertical: b.vertical, lo: b.lo, hi: b.hi, a0: p, a1: q }; }
+      }
+      if (cur) made.push(cur);
+    }
+    // 隣り合う区間で across が同じ帯は along を結合して 1 本に戻す
+    const joined = [];
+    for (const m of made) {
+      const prev = joined.find(o => Math.abs(o.lo - m.lo) <= eps && Math.abs(o.hi - m.hi) <= eps && Math.abs(o.a1 - m.a0) <= eps);
+      if (prev) prev.a1 = m.a1;
+      else joined.push(m);
+    }
+    out.push(...joined);
+  }
+  return out;
+}
+
+/**
+ * 矩形ごとに、壁の帯で止める帯状の矩形（縁と帯の面の間）を求める。帯が矩形の across 範囲の内側に収まり、縁に寄っている
+ * （縁との間が 0 超〜SPAN_OVERLAP_EPS 以下）ときだけ。縁をまたぐ帯（芯振り分けの壁）は対象外。両縁が同時に条件を満たす（帯が
+ * 矩形の中にあり両側とも近い）ときは両側とも対象（両側を削る）。
+ */
+function wallBandStrips(rects, bands) {
+  const strips = [];
+  for (const r of rects) {
+    for (const b of bands) {
+      const [c1, c2, a1, a2] = b.vertical ? [r.x1, r.x2, r.y1, r.y2] : [r.y1, r.y2, r.x1, r.x2];
+      const lo = Math.max(b.a0, a1), hi = Math.min(b.a1, a2);
+      if (!(hi - lo > BAND_EDGE_GAP_MIN_MM)) continue;
+      if (b.lo < c1 - BAND_JOIN_EPS_MM || b.hi > c2 + BAND_JOIN_EPS_MM) continue;
+      const mk = (u0, u1) => (b.vertical ? { x1: u0, x2: u1, y1: lo, y2: hi } : { x1: lo, x2: hi, y1: u0, y2: u1 });
+      const gapHi = c2 - b.hi, gapLo = b.lo - c1;
+      if (gapHi > BAND_EDGE_GAP_MIN_MM && gapHi <= BAND_EDGE_GAP_MAX_MM) strips.push(mk(b.hi, c2));
+      if (gapLo > BAND_EDGE_GAP_MIN_MM && gapLo <= BAND_EDGE_GAP_MAX_MM) strips.push(mk(c1, b.lo));
+    }
+  }
+  return strips;
+}
+
 /**
  * 天井の立体（見上げ＝天伏モード専用。`opts.ceilings === true` のときだけ、自階の層に足す）。
  * 部屋ごとに1件（セル矩形の和）、面材（解決器の SURFACE_KINDS）で厚み 0（zLo = zHi = 層の FL + 天井面の高さ zMm。床段差込み）。
  * 輪郭は既定どおり描く。部屋ごとに別立体のため、同じ高さで隣り合う部屋も壁の無い境界では見切り線が出る
  * （同じ立体の矩形群の共有辺だけが消える）。裁定 2026-10-10: 細線グレー（ceiling/ceilingBoundaryStyle.js の後処理）。
  * 算出は ceiling/ceilingSurfaces.js。
+ * 縁の規則（S1）: セル境界（通り芯）は図面に現れない。天井面の縁は、それを囲む壁の面（偏芯を含む）。壁の帯（同じ芯の接する帯は結合）が
+ * セル矩形の縁に寄って内側に収まる（縁との間が SPAN_OVERLAP_EPS=150 以下）とき、縁と帯の面の間を面から除く。腰壁だけの区間は
+ * 帯にしない。縁をまたぐ壁は従来どおり切断の壁が隠す。削るだけ: 向こう側の天井面はセル境界のまま（既知の限界。壁の面まで広げるかは裁定待ち）。
  * @param {SolidLayer} layer
  */
 function ceilingSolids(layer) {
+  const bands = wallBandsOf(layer.graph);
+  const bandRects = bands.map(b => (b.vertical ? { x1: b.lo, x2: b.hi, y1: b.a0, y2: b.a1 } : { x1: b.a0, x2: b.a1, y1: b.lo, y2: b.hi }));
   return ceilingSurfacesOf(layer.graph).map(({ roomId, zoneId, rects, zMm, shape, dims, chMm }) => {
+    // 天井面の縁は、セル境界（通り芯）ではなくそれを囲む壁の面。偏芯した壁で縁の外側に残るすき間を削る（削るだけ）。
+    // zAt は元の矩形基準のまま（基準を動かさなければ削った面の内側で z は連続する）。marks は削った面（trimmed）の
+    // largestRect の中心に置く（面の外へ出ない）
+    // 削る帯状の矩形から壁の帯（縦横とも）の和を除く: 壁の下は壁が隠すので削らない（角の取り合いで、直交壁の帯の中に切欠きを作らない）
+    const strips = bands.length > 0 ? subtractRects(wallBandStrips(rects, bands), bandRects) : [];
+    const trimmed = strips.length > 0 ? subtractRects(rects, strips) : rects;
+    if (trimmed.length === 0) return null;
     // 区画（S5）の面は `${roomId}#${zoneId}`、残り（部屋の CH）は roomId のまま（区画の無い文書の key・順序は不変）
     const id = zoneId ? `${roomId}#${zoneId}` : roomId;
     // 形状（S6a）: 傾斜は下屋と同じく zAt（勾配）を付ける。基準高の絶対 z＝層の FL＋床段差込みの zMm。平面は zAt なし・厚み 0 のまま
     const { zLo, zHi, zAt } = ceilingShapeSolidZ({ shape, dims, baseZ: layer.floorZMm + zMm, rects });
-    const solid = { kind: 'ceiling', footprint: { rects }, zLo, zHi, source: baseSource(layer, 'ceiling', id) };
+    const solid = { kind: 'ceiling', footprint: { rects: trimmed }, zLo, zHi, source: baseSource(layer, 'ceiling', id) };
     if (zAt) solid.zAt = zAt;
-    const marks = ceilingShapeMarks({ key: id, shape, dims, chMm, rects });
+    const marks = ceilingShapeMarks({ key: id, shape, dims, chMm, rects: trimmed });
     if (marks.length > 0) solid.marks = marks;
     return solid;
   });
