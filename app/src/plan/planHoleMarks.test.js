@@ -395,3 +395,50 @@ test('planHoleMarksOf: graph なしは空。aboveGroups が null・undefined な
   other.graph.addRoom(new Set([other.right])).setFeature(RoomFeature.VOID);
   assert.deepEqual(planHoleMarksOf(graph, floorOpeningGroups(other.graph, { stairFilter: () => false })).map(m => m.role), ['cross', 'upperVoid']);
 });
+
+// 階段吹抜けの×の分割（見上げ。自階の天井面＝階段下の部屋を除く）
+const svGrp = (id, cellRects, cellRect, innerRect) => ({ id, kind: 'stairVoid', feature: RoomFeature.STAIR_VOID, cellKeys: new Set(), cellRects, cellRect, innerRect });
+
+test('見上げの upperStairVoid: selfCeilingRects を渡すと階段下の部屋を除いて分割（key は :0, :1）。渡さなければ従来の 1 件・従来 key', () => {
+  const landing = { x1: -3000, y1: -7000, x2: 0, y2: -6000 };
+  const back = { x1: -3000, y1: -6000, x2: -1500, y2: -3500 };
+  const fore = { x1: -1500, y1: -6000, x2: 0, y2: -3500 };
+  const cellRect = { x1: -3000, y1: -7000, x2: 0, y2: -3500 };
+  const innerRect = { x1: -2942.5, y1: -6942.5, x2: -57.5, y2: -3557.5 };
+  const sv = [svGrp('s', [landing, back, fore], cellRect, innerRect)];
+  const split = planHoleMarks({ aboveStairVoidGroups: sv, selfCeilingRects: [back], lookUp: true });
+  assert.deepEqual(split.map(m => [m.key, m.role, m.rect]), [
+    ['upperStairVoid:s:0', 'upperStairVoid', { x1: -2942.5, y1: -6942.5, x2: -57.5, y2: -6000 }],
+    ['upperStairVoid:s:1', 'upperStairVoid', { x1: -1500, y1: -6000, x2: -57.5, y2: -3557.5 }],
+  ]);
+  const plain = planHoleMarks({ aboveStairVoidGroups: sv, lookUp: true });
+  assert.deepEqual(plain.map(m => [m.key, m.rect]), [['upperStairVoid:s', innerRect]]);
+  assert.deepEqual(planHoleMarks({ aboveStairVoidGroups: sv, selfCeilingRects: [cellRect], lookUp: true }), [], '全部覆われれば×なし');
+});
+
+test('upperHole（void・shaft）は selfCeilingRects があっても分割しない。見下げは selfCeilingRects を使わない', () => {
+  const cover = [R];
+  const up = [grp('u', 'void', RoomFeature.VOID, R)];
+  assert.deepEqual(planHoleMarks({ aboveGroups: up, selfCeilingRects: cover, lookUp: true }).map(m => [m.key, m.rect]), [['upperHole:u', R]]);
+  const sv = [svGrp('s', [R], R, R)];
+  assert.deepEqual(planHoleMarks({ aboveStairVoidGroups: sv, selfCeilingRects: cover }).map(m => m.key), ['upperStairVoid:s'], '見下げ（lookUp なし）は分割しない');
+});
+
+test('planHoleMarksOf: 見上げは selfCeilingRects を splitCrossRects へ中継する（渡さなければ分割なし・見下げは使わない）', () => {
+  const up = makeGrid();
+  up.graph.addRoom(new Set([up.left, up.right])).setFeature(RoomFeature.STAIR_VOID);
+  const aboveSv = floorOpeningGroups(up.graph, { stairFilter: () => false, stairVoidRect: true }).filter(g => g.kind === 'stairVoid');
+  const self = makeGrid();
+  const cover = [{ x1: 0, y1: 0, x2: 1000, y2: 1500 }]; // 左セルを覆う
+  const split = planHoleMarksOf(self.graph, null, { lookUp: true, aboveStairVoidGroups: aboveSv, selfCeilingRects: cover });
+  assert.equal(split.length, 1);
+  assert.equal(split[0].rect.x1, 1000, '覆いを除いた右セルだけ（内側の辺は CL 値）');
+  const plain = planHoleMarksOf(self.graph, null, { lookUp: true, aboveStairVoidGroups: aboveSv });
+  assert.deepEqual(plain.map(m => m.key), [`upperStairVoid:${aboveSv[0].id}`], '渡さなければ従来の 1 件・従来 key');
+  assert.deepEqual(planHoleMarksOf(self.graph, null, { aboveStairVoidGroups: aboveSv, selfCeilingRects: cover }), [], '見下げは使わない');
+});
+
+test('upperStairVoid の従来 key 判定は innerRect の向きに依らない（逆向き innerRect でも従来 key）', () => {
+  const sv = svGrp('s', [R], R, { x1: R.x2, y1: R.y2, x2: R.x1, y2: R.y1 });
+  assert.deepEqual(planHoleMarks({ aboveStairVoidGroups: [sv], lookUp: true }).map(m => m.key), ['upperStairVoid:s']);
+});

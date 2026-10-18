@@ -24,8 +24,9 @@ const count = (text, re) => (text.match(re) || []).length;
 
 test('【不変条件】PlanSolidsLayer.jsx の import は react・mobx・react-konva・@core・純モジュール・graphDerived だけ（store.js / snap.js を引かない）', () => {
   const imports = layer.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 9, `import 行: ${imports.length}`);
+  assert.equal(imports.length, 10, `import 行: ${imports.length}`);
   assert.match(layer, /^import \{ CEILING_BOUNDARY_STYLE \} from '\.\.\/ceiling\/ceilingBoundaryStyle\.js';$/m);
+  assert.match(layer, /^import \{ ceilingSurfacesOf \} from '\.\.\/ceiling\/ceilingSurfaces\.js';$/m);
   assert.match(layer, /^import \{ planHoleMarksOf, planHoleMarkPrimitives \} from '\.\.\/plan\/planHoleMarks\.js';$/m);
   assert.match(layer, /^import \{ floorOpeningGroups \} from '\.\.\/finish\/stair\/slabOpening\.js';$/m);
   assert.match(layer, /^import \{ useRef \} from 'react';$/m);
@@ -47,7 +48,7 @@ test('【配線】PlanSolidsLayer.jsx は判断を planSolidsLayerResolve に任
   assert.match(layer, /^\s*if \(resolved\) prevRef\.current = \{ planeId: graph\.plane\.id, direction, prims: resolved \};\s*$/m, 'ref には LOD で絞る前の線を持つ');
   assert.match(layer, /^\s*const prevRef = useRef\(null\);/m);
   assert.match(layer, /^\s*if \(prims\.length === 0 && holePrims\.length === 0\) return null;\s*$/m, '線も注記も無いときだけ null（ドラッグ直後で resolved が null でも注記は描く）');
-  assert.equal(count(layer, /graphComputed/g), 4, 'import・解決器の memo 引数・上階の穴の memo・上階の階段吹抜けの memo だけ（置き場・鍵はレイヤに書かない）');
+  assert.equal(count(layer, /graphComputed/g), 5, 'import・解決器の memo 引数・上階の穴の memo・上階の階段吹抜けの memo・自階の天井面の memo だけ（置き場・鍵はレイヤに書かない）');
   assert.equal(count(layer, /planSolidsLayerResolve\(/g), 1);
   assert.equal(count(layer, /graph\.plane\.id\}:/g), 0, '鍵の文字列はレイヤに無い（planSolidsLayerCacheSpec が唯一の場所）');
   // useRef は早期 return より前（フックの呼び出し順）
@@ -144,10 +145,12 @@ test('【配線】PlanSolidsLayer.jsx の吹抜けの注記: Group plan-hole-mar
   assert.equal(count(layer, /stairVoidRect: true/g), 1, 'stairVoidRect を渡すのは見上げの上階の1か所（自階の STAIR_VOID は平らな天井面で×なし。stairVoidRect を渡さない）');
   assert.match(layer, /^\s*\? graphComputed\(abovePeek\.graph, 'planHoleGroups', \(\) => floorOpeningGroups\(abovePeek\.graph, \{ stairFilter: \(\) => false \}\)\)\s*$/m);
   assert.match(layer, /^\s*: undefined;\s*$/m, '照合できない peek は未解決扱い');
-  assert.equal(count(layer, /graphComputed\(/g), 2, 'memo は上階の穴（見下げ・見上げ共通）と上階の階段吹抜け（見上げ）の2回だけ（解決器の memo は planSolidsLayerResolve の中）');
+  assert.equal(count(layer, /graphComputed\(/g), 3, 'memo は上階の穴（見下げ・見上げ共通）と上階の階段吹抜け・自階の天井面（見上げ）の3回だけ（解決器の memo は planSolidsLayerResolve の中）');
   // 自階の×: memo の外（graphComputed にも planSolidsLayerResolve にも入れない）。ドラッグ中も毎レンダーで求める
-  assert.match(layer, /^\s*const holePrims = planHoleMarkPrimitives\(planHoleMarksOf\(graph, aboveGroups, \{ lookUp: direction === 'up', aboveStairVoidGroups \}\), \{\s*$/m, '見上げの注記は上階の穴の×＋上階の階段吹抜けの×（自階の×なし。純関数側で決まる）。見下げは lookUp false');
+  assert.match(layer, /^\s*const holePrims = planHoleMarkPrimitives\(planHoleMarksOf\(graph, aboveGroups, \{ lookUp: direction === 'up', aboveStairVoidGroups, selfCeilingRects \}\), \{\s*$/m, '見上げの注記は上階の穴の×＋上階の階段吹抜けの×（自階の×なし。純関数側で決まる）。見下げは lookUp false');
   assert.match(layer, /^\s*thickPx: viewport\.lineWeightsPx\.thick, thinPx: viewport\.lineWeightsPx\.thin, scale: viewport\.scaleX, lod: viewport\.lodLevel,\s*$/m);
+  assert.match(layer, /^\s*const selfCeilingRects = direction === 'up' && aboveStairVoidGroups\?\.length\s*$/m, '自階の天井面は見上げ（階段吹抜けがあるとき）だけ。見下げは渡さず不変');
+  assert.match(layer, /^\s*\? graphComputed\(graph, 'ceilingFaceCellRects', \(\) => ceilingSurfacesOf\(graph\)\.flatMap\(f => f\.rects\)\)\s*$/m);
   assert.equal(count(layer, /planHoleMarksOf\(/g), 1);
   assert.equal(count(layer, /isCenterLineDragging/g), 0, 'レイヤはドラッグ判定をしない（解決器の中だけ）');
   const resolveAt = layer.indexOf('planSolidsLayerResolve({'), holeAt = layer.indexOf('planHoleMarksOf(');

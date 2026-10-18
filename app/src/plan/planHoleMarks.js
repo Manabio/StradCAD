@@ -13,6 +13,8 @@
  */
 import { RoomFeature } from '@core';
 import { floorOpeningCellRects, floorOpeningGroups } from '../finish/stair/slabOpening.js';
+import { splitCrossRects } from './planCrossSplit.js';
+import { normalizeRect } from './planGeometry.js';
 import { openingCrossDash } from '../renderer/dimensionStyle.js';
 import { LodLevel } from '../viewport.js';
 
@@ -156,7 +158,7 @@ const isUpperStairVoidGroup = g => g?.kind === 'stairVoid' && isFiniteRect(g.inn
  *   source:{kind:string, id:string, feature:string|null}}>}
  *   rect＝innerRect（壁内4頂点）。cellRect＝上階の被覆判定に使った CL 値の矩形（cross は null 可）。
  */
-export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveStairVoidGroups, lookUp = false } = {}) {
+export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveStairVoidGroups, selfCeilingRects, lookUp = false } = {}) {
   const marks = [];
   if (lookUp) {
     // 見上げ: 「N の天井の穴」＝直上階 N+1 の床の穴。自階の床の穴は N の天井と無関係なので自階の×・上階の破線は出さず、
@@ -169,7 +171,7 @@ export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveSta
         source: { kind: g.kind, id: g.id, feature: g.feature ?? null },
       });
     }
-    pushUpperStairVoidMarks(marks, aboveStairVoidGroups);
+    pushUpperStairVoidMarks(marks, aboveStairVoidGroups, selfCeilingRects);
     return marks;
   }
   for (const g of selfGroups ?? []) {
@@ -194,13 +196,21 @@ export function planHoleMarks({ selfGroups, selfVoidCells, aboveGroups, aboveSta
   return marks;
 }
 
-function pushUpperStairVoidMarks(marks, aboveStairVoidGroups) {
+// 階段吹抜けの×は、自階の天井面（階段下の部屋）を除いた矩形ごとに分ける（plan/planCrossSplit.js）。
+// void・shaft（upperHole）は分割しない: 規則 V で直下の天井が抜けるので、×に重なる天井面が無い。
+function pushUpperStairVoidMarks(marks, aboveStairVoidGroups, selfCeilingRects) {
   for (const g of aboveStairVoidGroups ?? []) {
     if (!isUpperStairVoidGroup(g)) continue;
-    marks.push({
-      key: `upperStairVoid:${g.id}`, role: 'upperStairVoid', rect: { ...g.innerRect }, cellRect: g.cellRect ? { ...g.cellRect } : null,
-      dashKind: 'openingCross', outline: false, label: false,
-      source: { kind: g.kind, id: g.id, feature: g.feature ?? null },
+    const rects = splitCrossRects({ cellRects: g.cellRects, coverRects: selfCeilingRects, cellRect: g.cellRect, innerRect: g.innerRect });
+    const inner = normalizeRect(g.innerRect);
+    const same = rects.length === 1 && ['x1', 'y1', 'x2', 'y2'].every(k => rects[0][k] === inner[k]);
+    rects.forEach((rect, i) => {
+      marks.push({
+        key: same ? `upperStairVoid:${g.id}` : `upperStairVoid:${g.id}:${i}`, role: 'upperStairVoid', rect: { ...rect },
+        cellRect: g.cellRect ? { ...g.cellRect } : null,
+        dashKind: 'openingCross', outline: false, label: false,
+        source: { kind: g.kind, id: g.id, feature: g.feature ?? null },
+      });
     });
   }
 }
@@ -213,12 +223,13 @@ function pushUpperStairVoidMarks(marks, aboveStairVoidGroups) {
  * @param {Array<object>|null|undefined} aboveGroups 上階の floorOpeningGroups（null＝上階なし・undefined＝未解決）
  * @param {{lookUp?: boolean, aboveStairVoidGroups?: Array<object>|null}} [opts]
  *   lookUp＝天伏の見上げ（既定 false＝見下げ）。true のときは自階の×を出さず、aboveGroups（上階の穴）と aboveStairVoidGroups を×にする。
- *   見下げでは aboveStairVoidGroups は使わない。
+ *   見下げでは aboveStairVoidGroups・selfCeilingRects は使わない。
+ *   selfCeilingRects＝自階の天井面のセル矩形（ceilingSurfacesOf の rects。見上げの階段吹抜けの×を階段下の部屋で分割する。省略＝分割なし）。
  *   aboveStairVoidGroups＝上階の階段吹抜けのグループ（stairVoidRect 付き）。足元の上の続きの無い階段の×（一点鎖線）。
  */
-export function planHoleMarksOf(graph, aboveGroups, { lookUp = false, aboveStairVoidGroups = null } = {}) {
+export function planHoleMarksOf(graph, aboveGroups, { lookUp = false, aboveStairVoidGroups = null, selfCeilingRects = [] } = {}) {
   if (!graph) return [];
-  if (lookUp) return planHoleMarks({ aboveGroups, aboveStairVoidGroups, lookUp: true });
+  if (lookUp) return planHoleMarks({ aboveGroups, aboveStairVoidGroups, selfCeilingRects, lookUp: true });
   return planHoleMarks({
     selfGroups: floorOpeningGroups(graph, { stairFilter: () => false }),
     selfVoidCells: aboveGroups?.length ? selfVoidHoleRects(graph) : [],

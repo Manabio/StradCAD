@@ -823,3 +823,21 @@ test('floorOpeningGroups: void+shaft グループのセルの和＝floorOpeningC
   assert.ok(fromRects.length > 0, '空の一致で通さない');
   assert.deepEqual(fromGroups, fromRects);
 });
+
+test('floorOpeningGroups: cellRects は stairVoidRect=true でセル数分・正規化済みで、和が cellRect に一致。非矩形・既定 false・破れ先は []', () => {
+  const { graph, left, right } = makeGrid();
+  graph.addRoom(new Set([left, right])).setFeature(RoomFeature.STAIR_VOID);
+  const g = floorOpeningGroups(graph, { stairVoidRect: true }).find(x => x.kind === 'stairVoid');
+  assert.equal(g.cellRects.length, 2);
+  for (const c of g.cellRects) assert.ok(c.x1 < c.x2 && c.y1 < c.y2, '正規化済み');
+  const area = g.cellRects.reduce((s, c) => s + (c.x2 - c.x1) * (c.y2 - c.y1), 0);
+  assert.equal(area, (g.cellRect.x2 - g.cellRect.x1) * (g.cellRect.y2 - g.cellRect.y1), '和が cellRect の面積');
+  assert.deepEqual([Math.min(...g.cellRects.map(c => c.x1)), Math.max(...g.cellRects.map(c => c.x2))], [g.cellRect.x1, g.cellRect.x2]);
+  assert.deepEqual(floorOpeningGroups(graph).find(x => x.kind === 'stairVoid').cellRects, [], '既定 false は rect なし＝[]');
+
+  const l = makeLShapeGrid();
+  l.graph.addRoom(new Set([l.topKey, l.blKey])).setFeature(RoomFeature.STAIR_VOID);
+  assert.deepEqual(floorOpeningGroups(l.graph, { stairVoidRect: true })[0].cellRects, [], '非矩形は []');
+  const { graph: gb } = makeSwitchbackBeyondFixture();
+  assert.deepEqual(floorOpeningGroups(gb, { stairVoidRect: true })[0].cellRects, [], '破れ先は []');
+});

@@ -5,6 +5,7 @@ import { planSolidsLayerResolve, visiblePlanPrimitives } from '../plan/planSolid
 import { planHoleMarksOf, planHoleMarkPrimitives } from '../plan/planHoleMarks.js';
 import { floorOpeningGroups } from '../finish/stair/slabOpening.js';
 import { stairRiserOf } from '../finish/stair/stairDimensions.js';
+import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { CEILING_BOUNDARY_STYLE } from '../ceiling/ceilingBoundaryStyle.js';
 import { graphComputed } from './graphDerived.js';
 
@@ -51,7 +52,12 @@ export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, 
   const aboveStairVoidGroups = direction === 'up' && peekMatches
     ? graphComputed(abovePeek.graph, 'planUpperStairVoidGroups', () => floorOpeningGroups(abovePeek.graph, { stairFilter: () => false, stairVoidRect: true }).filter(g => g.kind === 'stairVoid'))
     : null;
-  const holePrims = planHoleMarkPrimitives(planHoleMarksOf(graph, aboveGroups, { lookUp: direction === 'up', aboveStairVoidGroups }), {
+  // 階段吹抜けの×は自階の天井面を除いた矩形ごとに分ける（見上げだけ。見下げは渡さず不変）。
+  // 覆い＝自階の天井面すべて（階段下の部屋のほか、自階 STAIR_VOID の平らな面・階段の天井区画も含む）
+  const selfCeilingRects = direction === 'up' && aboveStairVoidGroups?.length
+    ? graphComputed(graph, 'ceilingFaceCellRects', () => ceilingSurfacesOf(graph).flatMap(f => f.rects))
+    : [];
+  const holePrims = planHoleMarkPrimitives(planHoleMarksOf(graph, aboveGroups, { lookUp: direction === 'up', aboveStairVoidGroups, selfCeilingRects }), {
     thickPx: viewport.lineWeightsPx.thick, thinPx: viewport.lineWeightsPx.thin, scale: viewport.scaleX, lod: viewport.lodLevel,
   });
   if (prims.length === 0 && holePrims.length === 0) return null;

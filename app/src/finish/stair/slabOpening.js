@@ -342,7 +342,7 @@ export function floorOpeningCellRects(graph, { riserOf = () => null, stairFilter
 // 開口グループ1件を組み立てる。cellRect＝セル境界CLの値（壁の有無・厚みに左右されない）、innerRect＝壁内4頂点（faceRect）。
 // どちらも矩形のセル集合で、4境界CLと faceRect が解決できたときだけ入る（それ以外は null）。
 function openingGroupOf(id, kind, feature, cells, graph, stairVoidRect = false) {
-  let cellRect = null, innerRect = null;
+  let cellRect = null, innerRect = null, cellRects = [];
   // 階段吹抜け・破れ先に×は無い。ただし stairVoidRect（天伏の見上げ）では階段吹抜けも吹抜けと同じに矩形を解決する
   const hasCross = kind === 'void' || kind === 'shaft' || (stairVoidRect && kind === 'stairVoid');
   if (hasCross && isRectangularCellSet(cells, graph)) {
@@ -351,9 +351,13 @@ function openingGroupOf(id, kind, feature, cells, graph, stairVoidRect = false) 
     if (b && f) {
       cellRect = { x1: b.left.effectiveValue, y1: b.top.effectiveValue, x2: b.right.effectiveValue, y2: b.bottom.effectiveValue };
       innerRect = { x1: f.x1, y1: f.y1, x2: f.x2, y2: f.y2 };
+      // 各セルの正規化矩形（cellKeys の順。階段吹抜けの×を階段下の部屋で分割する plan/planCrossSplit.js が読む）
+      cellRects = [...cells].map(key => cellBoundsFromKey(key, graph)).filter(Boolean).map(c => ({
+        x1: Math.min(c.x1, c.x2), y1: Math.min(c.y1, c.y2), x2: Math.max(c.x1, c.x2), y2: Math.max(c.y1, c.y2),
+      }));
     }
   }
-  return { id, kind, feature: feature ?? null, cellKeys: cells, cellRect, innerRect };
+  return { id, kind, feature: feature ?? null, cellKeys: cells, cellRect, innerRect, cellRects };
 }
 
 const GROUP_KIND_ORDER = ['void', 'shaft', 'stairVoid', 'stairBeyond'];
@@ -371,8 +375,9 @@ const GROUP_KIND_ORDER = ['void', 'shaft', 'stairVoid', 'stairBeyond'];
  * @param {object|null} graph
  * @param {{riserOf?: (stair:object)=>number|null, stairFilter?: (stair:object)=>boolean}} [opts] floorOpeningCellRects と同じ
  * @returns {Array<{id:string, kind:'void'|'shaft'|'stairVoid'|'stairBeyond', feature:string|null, cellKeys:Set<string>,
- *   cellRect:{x1:number,y1:number,x2:number,y2:number}|null, innerRect:{x1:number,y1:number,x2:number,y2:number}|null}>}
- *   並びは kind（void→shaft→stairVoid→stairBeyond）→ id。
+ *   cellRect:{x1:number,y1:number,x2:number,y2:number}|null, innerRect:{x1:number,y1:number,x2:number,y2:number}|null,
+ *   cellRects:Array<{x1:number,y1:number,x2:number,y2:number}>}>}
+ *   cellRects＝各セルの CL 値の矩形（cellKeys の順。cellRect が null のときは []）。並びは kind（void→shaft→stairVoid→stairBeyond）→ id。
  */
 export function floorOpeningGroups(graph, { riserOf = () => null, stairFilter = () => true, stairVoidRect = false } = {}) {
   if (!graph) return [];
