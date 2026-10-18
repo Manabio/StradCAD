@@ -7,10 +7,12 @@ import { floorOpeningGroups } from '../finish/stair/slabOpening.js';
 import { stairRiserOf } from '../finish/stair/stairDimensions.js';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { CEILING_BOUNDARY_STYLE } from '../ceiling/ceilingBoundaryStyle.js';
+import { SOFFIT_JOINT_STYLE } from '../ceiling/soffitLineStyle.js';
 import { graphComputed } from './graphDerived.js';
 
 const PLAN_SOLIDS_COLOR = '#1e293b'; // 階段・吹抜け・下屋と同じ線色
-const CEILING_BOUNDARY_COLOR = '#9ca3af'; // 天伏: 同じ高さで隣り合う天井の境目（style:'ceilingBoundary'。裁定 2026-10-10）の細線グレー
+const CEILING_BOUNDARY_COLOR = '#9ca3af'; // 天伏: 同じ高さで隣り合う天井の境目（style:'ceilingBoundary'。裁定 2026-10-10）・軒裏の910割付線（style:'eaveSoffitJoint'）の細線グレー
+const GRAY_LINE_STYLES = new Set([CEILING_BOUNDARY_STYLE, SOFFIT_JOINT_STYLE]);
 
 /**
  * 平面の「立体＋水平切断」で描く線とラベル。梁・汎用立体（S4）と下屋（S5。外形線・棟木・隅木・谷木と、詳細 LOD の傾斜ラベル＝
@@ -105,7 +107,7 @@ export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, 
           <Line
             key={p.key}
             points={p.points}
-            stroke={p.style === CEILING_BOUNDARY_STYLE ? CEILING_BOUNDARY_COLOR : PLAN_SOLIDS_COLOR}
+            stroke={GRAY_LINE_STYLES.has(p.style) ? CEILING_BOUNDARY_COLOR : PLAN_SOLIDS_COLOR}
             strokeWidth={viewport.lineWeightsPx[p.weight]}
             dash={p.dash}
             strokeScaleEnabled={false}

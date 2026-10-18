@@ -36,7 +36,7 @@
  *   既定 true。屋根が使う）。
  * @typedef {{graph: object|null, floorZMm: number, role: 'self'|'above'|'below', ceilZMm?: number}} SolidLayer
  */
-import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, RoomKind, edgeKey } from '@core';
+import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, RoomKind, SoffitOrientation, edgeKey } from '@core';
 import { beamDepthMm } from '../elevation/section/sectionStructure.js';
 import { kneeDropZRangesAt } from '../elevation/section/sectionHits.js';
 import { stairUnderReturnSoffit } from '../elevation/section/sectionProbe.js';
@@ -56,6 +56,7 @@ import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
 import { drainArrivalTime } from '../structural/roofFramingGeometry.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
+import { roofSoffitJointLines } from '../finish/roof/roofSoffitJoints.js';
 import { normalizeRect, isValidRect, subtractRects } from './planGeometry.js';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
@@ -571,8 +572,12 @@ const innerLinePoints = ({ points, closed }) => (closed ? [...points, points[0],
  * 壁立体の遮蔽が導く。傾斜ラベルは marks。複数の閉路なら閉路ごとに1件（source.part）で、線とラベルは最初の1件だけに付ける。
  * outline の無い region は矩形のときだけ矩形の閉路で代用し、矩形でなければ落とす。主屋根（最上階の屋根）は常に切断面より
  * 上なので立体化しない（拡張点: ここ）。
+ * 見上げ（opts.lookUp）の上階の層（layer.role==='above'）だけ軒裏の表現にする: 線は外形線＋（軒裏の向きが傾斜〔region.soffitOrientation
+ * ==='sloped'〕のときだけ）棟木・隅木・谷木＋910割付線（roofSoffitJointLines。詳細 LOD のみ・グレー）で、傾斜ラベル（marks）は付けない。
+ * それ以外（見下げ・見上げの自階の層）は従来のまま。
  */
-function roofSolids(layer) {
+function roofSolids(layer, opts = {}) {
+  const soffitView = opts.lookUp === true && layer.role === 'above';
   const out = [];
   for (const region of leanToPlanRegions(layer.graph)) {
     const loops = (region.outline ?? []).map(l => l.points);
@@ -582,8 +587,12 @@ function roofSolids(layer) {
     }
     const slope = roofZAtOf(layer, region);
     const figure = roofPlanRegionFigure(region);
-    const innerLines = figure.lines.map(l => ({ role: l.role, points: innerLinePoints(l) }));
-    const marks = figure.labels.map(l => ({ anchor: l.anchor, prims: l.prims })); // 解決器が weight・cls・detailOnly を付ける
+    const figureLines = soffitView
+      ? figure.lines.filter(l => l.role === 'outline' || region.soffitOrientation === SoffitOrientation.SLOPED)
+      : figure.lines;
+    const innerLines = figureLines.map(l => ({ role: l.role, points: innerLinePoints(l) }));
+    if (soffitView) for (const l of roofSoffitJointLines(region)) innerLines.push({ role: l.role, points: l.points });
+    const marks = soffitView ? [] : figure.labels.map(l => ({ anchor: l.anchor, prims: l.prims })); // 解決器が weight・cls・detailOnly を付ける
     let first = true;
     loops.forEach((poly, part) => {
       if (poly.length < 6 || !poly.every(Number.isFinite)) return;
@@ -1005,7 +1014,7 @@ export function planSolids(layers, opts = {}) {
     const solids = [floorOverride.get(layer) ?? floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom, wallFootSurfaces(layer, riserForLayer, upperZ, upperGraph), underReturnWallTops(layer, riserForLayer, upperZ, upperGraph)), ...columnSolids(layer),
       // 梁は天井より上にある（ユーザー裁定 2026-10-18）。上階の梁は上階 FL の下に 200 ほど垂れ、吹抜けの中では
       // 1 階の天井より上に見えるが、天伏には描かない（描かず・遮蔽にも入れない）
-      ...(opts.lookUp === true && layer.role === 'above' ? [] : beamSolids(layer)), ...roofSolids(layer), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
+      ...(opts.lookUp === true && layer.role === 'above' ? [] : beamSolids(layer)), ...roofSolids(layer, opts), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
         opts.lookUp === true && layer.role === 'self' ? stairsContinuedAbove(layer, layers, opts) : null, upperGraph),
       ...(underside?.soffits ?? []),
       ...(opts.ceilings === true && layer.role === 'self' ? ceilingsOf.get(layer) ?? ceilingSolids(layer, upperGraph) : [])].filter(Boolean);

@@ -651,3 +651,33 @@ test('【失敗系】見上げ: 上階に下屋が無ければ roof の線も中
   const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
   assert.equal(prims.filter(p => p.source.kind === 'roof').length, 0);
 });
+
+test('見上げ: 軒裏の910割付線は本番経路で detailOnly:true・style:eaveSoffitJoint・thin。標準 LOD で落ち詳細で残る。見下げには出ない。水平では隅木が消える', () => {
+  const build = orientation => {
+    const self = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500], { id: 'low', startFloor: 1 });
+    self.interior([[0, 0]]);
+    const above = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500], { id: 'high', startFloor: 2 });
+    above.roof([[1, 1], [2, 1], [1, 2], [2, 2]]);
+    const spec = above.graph.rooms.find(r => r.roofSpec).roofSpec;
+    spec.setField('shape', RoofShape.HIP);
+    if (orientation) spec.setField('soffitOrientation', orientation);
+    return { self, above, abovePeek: { graph: above.graph, floorHeightMm: 2800, activePlaneId: self.graph.plane.id } };
+  };
+  const { self, above, abovePeek } = build();
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, abovePeek, cutZ: CUT });
+  const joints = prims.filter(p => p.kind === 'line' && p.source.kind === 'roof' && p.source.role === 'eaveSoffitJoint');
+  assert.ok(joints.length > 0, '前提: 割付線が出る');
+  assert.ok(joints.every(p => p.detailOnly === true && p.style === 'eaveSoffitJoint' && p.weight === 'thin' && p.source.layerFloorZ > 0), JSON.stringify(joints[0]));
+  const std = visiblePlanPrimitives(prims, LodLevel.STANDARD);
+  const det = visiblePlanPrimitives(prims, LodLevel.DETAIL);
+  assert.equal(std.filter(p => p.source?.role === 'eaveSoffitJoint').length, 0, '標準 LOD では落ちる');
+  assert.equal(det.filter(p => p.source?.role === 'eaveSoffitJoint').length, joints.length, '詳細 LOD では残る');
+  assert.equal(prims.filter(p => p.kind === 'arrow' || p.kind === 'text').filter(p => p.source?.kind === 'roof').length, 0, '傾斜ラベルなし');
+  const down = planSolidsLayerPrimitives({ graph: above.graph, cutZ: CUT });
+  assert.equal(down.filter(p => p.source?.role === 'eaveSoffitJoint').length, 0, '見下げには出ない');
+  const level = build('level');
+  const lp = planSolidsLayerPrimitivesUp({ graph: level.self.graph, abovePeek: level.abovePeek, cutZ: CUT });
+  const roles = new Set(lp.filter(p => p.kind === 'line' && p.source.kind === 'roof').map(p => p.source.role));
+  assert.ok(roles.has('eaveSoffitJoint') && roles.has('outline'), '水平でも外形線・割付線は出る');
+  assert.ok(!roles.has('hip') && !roles.has('ridge'), '水平なら棟木・隅木は消える');
+});

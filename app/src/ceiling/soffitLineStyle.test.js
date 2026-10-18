@@ -2,7 +2,7 @@
 // 本番経路（planSolidsLayerPrimitivesUp）を通すテストは plan/planSolidsLayerFilter.test.js 側。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { markEaveOutlineLines } from './soffitLineStyle.js';
+import { markEaveOutlineLines, SOFFIT_JOINT_STYLE } from './soffitLineStyle.js';
 
 const roofLine = (key, role, layerFloorZ, extra = {}) => ({
   kind: 'line', key, points: [0, 0, 1000, 0], weight: 'thin', cls: 'below', detailOnly: false,
@@ -47,4 +47,17 @@ test('【失敗系】空配列・配列でない入力・source の無い／null
   const bare = { kind: 'line', key: 'x', points: [0, 0, 1, 0], weight: 'thin' };
   const out = markEaveOutlineLines([bare, null, undefined]);
   assert.deepEqual(out, [bare, null, undefined]);
+});
+
+test('割付線（role eaveSoffitJoint）だけ detailOnly:true・style:eaveSoffitJoint になる。weight は細線のまま・入力は不変', () => {
+  const j = roofLine('j', 'eaveSoffitJoint', 2800);
+  const input = [j, roofLine('o', 'outline', 2800), roofLine('h', 'hip', 2800), { ...roofLine('b', 'eaveSoffitJoint', 2800), source: { kind: 'beam', id: 'b', role: 'eaveSoffitJoint' } }, { ...j, kind: 'arrow' }];
+  const before = JSON.stringify(input);
+  const out = markEaveOutlineLines(input);
+  assert.equal(JSON.stringify(input), before, '入力は不変');
+  assert.deepEqual([out[0].detailOnly, out[0].style, out[0].weight], [true, SOFFIT_JOINT_STYLE, 'thin']);
+  assert.equal(SOFFIT_JOINT_STYLE, 'eaveSoffitJoint');
+  assert.equal(out[1].weight, 'medium');
+  assert.equal(out[1].style, undefined, 'outline に style は付かない');
+  assert.ok(out[2] === input[2] && out[3] === input[3] && out[4] === input[4], 'hip・他種別・線以外は同一オブジェクト');
 });

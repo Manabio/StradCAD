@@ -40,7 +40,7 @@ import {
 } from '../core/constants.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import { mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView } from '../finish/roof/mainRoof.js';
-import { resolveRoofShape, roofRoomBounds } from '../finish/roof/roofDefaults.js';
+import { resolveRoofShape, roofRoomBounds, resolveSoffitSpec } from '../finish/roof/roofDefaults.js';
 import { roofHighSideViewOfRoom, roofEdgeInteriorAdjacency, roofEdgeInteriorContacts, roofBoundaryInteriorContacts, roofInteriorRects } from '../finish/roof/roofOrientation.js';
 import { rectOfBounds, resolveRoofRidgeIsVertical, resolveRoofHighSide } from '../finish/roof/roofGeometry.js';
 import { refreshCells } from '../finish/gridCells.js';
@@ -231,6 +231,7 @@ export function leanToPlanRegions(graph) {
       ...r.region,
       exposedPaths: roofOutlineExposedPaths(outlineArgs(r.region, room.roofSpec, r.zeroZones, r.kindZones, r.interiorRects)),
       slope: room.roofSpec.slope,
+      soffitOrientation: resolveSoffitSpec(room.roofSpec).orientation,
       zeroZones: r.zeroZones,
       planDrains: planDrainsOf(r.region),
     });

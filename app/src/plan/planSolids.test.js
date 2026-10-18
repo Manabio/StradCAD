@@ -556,6 +556,57 @@ test('下屋・S5: 外形線だけの region（陸屋根）は棟木・隅木・
   assert.equal(roof.marks, undefined);
 });
 
+// ---- 見上げの軒裏（上階の層だけ。lookUp:true && role==='above'）
+const hipRoofGraph = orientation => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
+  const spec = g.roof([[0, 0], [1, 0], [2, 0]]).roofSpec;
+  spec.setField('shape', RoofShape.HIP);
+  if (orientation !== undefined) spec.setField('soffitOrientation', orientation);
+  return g.graph;
+};
+const roofOf = (graph, opts, role = 'above') => ofKind(planSolids([fakeLayer({ graph, floorZMm: 2800, role })], opts), 'roof')[0];
+
+test('軒裏・見上げの上階の層: innerLines は 外形線＋（傾斜なら）棟木・隅木＋910割付線。傾斜ラベル（marks）は付けない', () => {
+  const roof = roofOf(hipRoofGraph(), { lookUp: true });
+  const roles = roof.innerLines.map(l => l.role);
+  assert.ok(roles.includes('eaveSoffitJoint'), '割付線が入る');
+  assert.deepEqual([...new Set(roles)].sort(), ['eaveSoffitJoint', 'hip', 'outline', 'ridge']);
+  assert.equal(roof.marks, undefined, 'marks なし');
+  const [region] = leanToPlanRegions(hipRoofGraph());
+  assert.equal(region.soffitOrientation, 'sloped', '既定は傾斜');
+  const joints = roof.innerLines.filter(l => l.role === 'eaveSoffitJoint');
+  assert.ok(joints.every(l => l.points.length === 4 && l.points.every(Number.isFinite)));
+});
+
+test('軒裏・見上げ: 向きが水平（level）なら棟木・隅木・谷木を描かない。外形線と割付線は残る', () => {
+  const roof = roofOf(hipRoofGraph('level'), { lookUp: true });
+  assert.deepEqual([...new Set(roof.innerLines.map(l => l.role))].sort(), ['eaveSoffitJoint', 'outline']);
+});
+
+test('軒裏・見上げの自階の層／見下げは従来どおり（割付線なし・marks あり・棟木・隅木あり。向きが水平でも変わらない）', () => {
+  for (const orientation of [undefined, 'level']) {
+    const g = hipRoofGraph(orientation);
+    for (const [opts, role] of [[undefined, 'above'], [{}, 'above'], [{ lookUp: false }, 'above'], [{ lookUp: true }, 'self']]) {
+      const roof = roofOf(g, opts, role);
+      const roles = roof.innerLines.map(l => l.role);
+      assert.ok(!roles.includes('eaveSoffitJoint'), `${JSON.stringify(opts)} ${role}`);
+      assert.ok(roles.includes('hip') && roles.includes('ridge'), '棟木・隅木が残る');
+      assert.equal(roof.marks.length, 4, '傾斜ラベルが残る');
+    }
+  }
+});
+
+test('軒裏・見上げ: 複数の閉路（環状の下屋）では割付線も part 0 だけに付く', () => {
+  const g = makeGrid([0, 2000, 4000, 6000], [0, 2000, 4000, 6000]);
+  g.interior([[1, 1]]);
+  g.roof([[0, 0], [1, 0], [2, 0], [0, 1], [2, 1], [0, 2], [1, 2], [2, 2]]).roofSpec.setField('shape', RoofShape.HIP);
+  const roofs = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 2800, role: 'above' })], { lookUp: true }), 'roof');
+  assert.deepEqual(roofs.map(r => r.source.part), [0, 1]);
+  assert.ok(roofs[0].innerLines.some(l => l.role === 'eaveSoffitJoint'), 'part 0 に割付線');
+  assert.equal(roofs[0].marks, undefined);
+  assert.ok(roofs.slice(1).every(r => !r.innerLines && !r.marks), 'part 1 以降は innerLines も marks も無い');
+});
+
 test('下屋・失敗系: 外形線だけの region（陸屋根）は平ら（zAt なし・zLo=zHi=FL）。屋根が無い階は立体なし', () => {
   const g = makeGrid([0, 2000, 4000, 6000], [0, 1500, 3000, 4500]);
   g.roof([[0, 0], [1, 0], [2, 0]]).roofSpec.setField('shape', RoofShape.FLAT);

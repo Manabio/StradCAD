@@ -24,7 +24,8 @@ const count = (text, re) => (text.match(re) || []).length;
 
 test('【不変条件】PlanSolidsLayer.jsx の import は react・mobx・react-konva・@core・純モジュール・graphDerived だけ（store.js / snap.js を引かない）', () => {
   const imports = layer.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 10, `import 行: ${imports.length}`);
+  assert.equal(imports.length, 11, `import 行: ${imports.length}`);
+  assert.match(layer, /^import \{ SOFFIT_JOINT_STYLE \} from '\.\.\/ceiling\/soffitLineStyle\.js';$/m);
   assert.match(layer, /^import \{ CEILING_BOUNDARY_STYLE \} from '\.\.\/ceiling\/ceilingBoundaryStyle\.js';$/m);
   assert.match(layer, /^import \{ ceilingSurfacesOf \} from '\.\.\/ceiling\/ceilingSurfaces\.js';$/m);
   assert.match(layer, /^import \{ planHoleMarksOf, planHoleMarkPrimitives \} from '\.\.\/plan\/planHoleMarks\.js';$/m);
@@ -85,7 +86,8 @@ test('【配線】PlanSolidsLayer.jsx は <Line を3つ（線・矢印本体・�
     assert.match(el, /^\s*strokeScaleEnabled=\{false\}\s*$/m, 'Line は画面px固定');
   }
   for (const el of [lines[0], lines[1]]) assert.match(el, /^\s*stroke=\{PLAN_SOLIDS_COLOR\}\s*$/m);
-  assert.match(lines[2], /^\s*stroke=\{p\.style === CEILING_BOUNDARY_STYLE \? CEILING_BOUNDARY_COLOR : PLAN_SOLIDS_COLOR\}\s*$/m, '同じ高さの天井の境目だけ細線グレー');
+  assert.match(lines[2], /^\s*stroke=\{GRAY_LINE_STYLES\.has\(p\.style\) \? CEILING_BOUNDARY_COLOR : PLAN_SOLIDS_COLOR\}\s*$/m, '同じ高さの天井の境目・軒裏の割付線だけ細線グレー');
+  assert.match(layer, /^const GRAY_LINE_STYLES = new Set\(\[CEILING_BOUNDARY_STYLE, SOFFIT_JOINT_STYLE\]\);$/m);
   assert.match(lines[0], /^\s*points=\{p\.points\}\s*$/m, 'arrow 本体');
   assert.match(lines[1], /^\s*points=\{p\.head\}\s*$/m, '矢じり');
   assert.match(lines[1], /^\s*lineCap="round"\s*$/m);

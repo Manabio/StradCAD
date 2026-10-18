@@ -58,7 +58,7 @@ for (const src of sources) {
       const upMs = performance.now() - u0;
       const upLines = upPrims.filter(p => p.kind === 'line').map(p => ({
         key: p.key, cls: p.cls, kind: p.source.kind, id: p.source.id, layerFloorZ: p.source.layerFloorZ ?? 0,
-        weight: p.weight, points: p.points.map(r1), ...(p.style ? { style: p.style } : {}),
+        weight: p.weight, points: p.points.map(r1), ...(p.style ? { style: p.style } : {}), ...(p.detailOnly ? { detailOnly: true } : {}),
       })).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
       fs.writeFileSync(path.join(outDir, `planSolidsUp-${safe(doc)}-${safe(plane.name)}.json`), JSON.stringify(upLines, null, 1));
       const upCounts = {};
@@ -69,7 +69,8 @@ for (const src of sources) {
       summary.push({
         doc, floor: plane.name, above: above?.name ?? null, lines: upLines.length, thin: upLines.filter(l => l.weight === 'thin').length,
         thick: upLines.filter(l => l.weight === 'thick').length, medium: upLines.filter(l => l.weight === 'medium').length,
-        grey: upLines.filter(l => l.style === 'ceilingBoundary').length,
+        grey: upLines.filter(l => ['ceilingBoundary', 'eaveSoffitJoint'].includes(l.style)).length,
+        joint: upLines.filter(l => l.style === 'eaveSoffitJoint').length,
         counts: upCounts, ms: Math.round(upMs),
       });
       return;
@@ -110,10 +111,10 @@ for (const src of sources) {
 if (UP) {
   fs.writeFileSync(path.join(outDir, 'summary-up.json'), JSON.stringify(summary, null, 1));
   for (const s of summary) {
-    console.log(`${s.doc}\t${s.floor}\t上階=${s.above ?? '-'}\t${s.lines}本(細線${s.thin}・中線${s.medium}・太線${s.thick}・うちグレー印${s.grey})\t${JSON.stringify(s.counts)}\t${s.ms}ms`);
+    console.log(`${s.doc}\t${s.floor}\t上階=${s.above ?? '-'}\t${s.lines}本(細線${s.thin}・中線${s.medium}・太線${s.thick}・うちグレー印${s.grey}・うち割付線${s.joint})\t${JSON.stringify(s.counts)}\t${s.ms}ms`);
   }
   const total = key => summary.reduce((n, s) => n + s[key], 0);
-  console.log(`見上げ 合計: ${total('lines')}本（細線${total('thin')}・中線${total('medium')}・太線${total('thick')}・うちグレー印${total('grey')}）`);
+  console.log(`見上げ 合計: ${total('lines')}本（細線${total('thin')}・中線${total('medium')}・太線${total('thick')}・うちグレー印${total('grey')}・うち割付線${total('joint')}）`);
   process.exit(0);
 }
 fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 1));
