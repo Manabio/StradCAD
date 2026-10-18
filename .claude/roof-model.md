@@ -38,12 +38,13 @@
 - 保存は`RS`の`RIDGE_DIRECTION=10`。nullのときは書かないので、使っていない文書のバイト列は変わらない。
 
 ## 材料コードの照合
-- 野地板・防水シートのコードは`codeNormalization.js`の材料walker（`ROOF_SPEC_MATERIAL_FIELDS`）で列挙・読み替えされ、使用コードの収集（同梱）と未解決コードの検出に乗る。`FinishModeState._collectReferencedCodes`も同じ2項目を見る。walkerは零依存の葉モジュールのため項目名を直書きしており、`ROOF_SPEC_KEYS`との一致は`codeNormalization.test.js`が固定する。
+- 野地板・防水シート・軒裏仕上げ材・軒裏下地材のコードは`codeNormalization.js`の材料walker（`ROOF_SPEC_MATERIAL_FIELDS`）で列挙・読み替えされ、使用コードの収集（同梱）と未解決コードの検出に乗る。`FinishModeState._collectReferencedCodes`も同じ4項目を見る。軒裏の2項目は空（''）のまま保ち、復元側で既定に補わない（下の「軒裏」）。walkerは零依存の葉モジュールのため項目名を直書きしており、`ROOF_SPEC_KEYS`との一致は`codeNormalization.test.js`が固定する。
 - 選択肢は`ROOF_SHEATHING_CODES`／`ROOF_UNDERLAYMENT_CODES`（コード表）＋材データの名前。保存コードが候補に無い・解決できないときは先頭へ補って値を失わない（`shaftWallMaterialOptions`と同じ流儀）。
 
 ## 入力の確定
 - 1回の確定＝undo 1エントリ（`FinishModeState.setRoofField`が`withFinishUndo`）。入力の検証は`roofInput.js`の純関数（勾配は0.5刻みの正の数・出幅は0以上）。文字・数値欄は draft で持ち、blur/Enterで確定し、不正な数値は確定せず元の値へ戻す。
-- 屋根仕上げ・軒裏は値の保持だけ（平面・展開図には描かない）。軒の出・妻側の出は伏図と下屋の平面表示の外形線の位置に使う。片流れの向きは`highSide`、切妻の棟木の向きは`ridgeDirection`（下記）。寄棟の棟の向きの項目は持たない。
+- 屋根仕上げは値の保持だけ（平面・展開図には描かない）。軒裏は天伏の見上げで描く（下の「軒裏」）。軒の出・妻側の出は伏図と下屋の平面表示の外形線の位置に使う。
+- 確定の本体（検証・無変更判定・`withFinishUndo`）は`finish/roof/roofSpecCommit.js commitRoofSpecField`の1か所で、仕上げモード（`setRoofField`／`setMainRoofField`）と天伏の外部タブ（主屋根の軒裏）が共用する。片流れの向きは`highSide`、切妻の棟木の向きは`ridgeDirection`（下記）。寄棟の棟の向きの項目は持たない。
 
 ## 選択の導線
 - 平面で屋根セルをクリックすると、`FinishModeState.startDrag`（優先0b。`roofRoomAtCell`）がその屋根の部屋を選択するだけでドラッグは始めない（屋根は部屋ドラッグの対象外のまま。広げるときは削除→指定し直し）。選択は屋外部屋と同じ経路で外部タブへ切り替わり、選んだ屋根の群だけを青枠で強調して可視域へ寄せる（判定は`exteriorGroups.js`の`isSelectedRoofGroup`）。
@@ -98,6 +99,13 @@
 - 屋根の室名「屋根」は全 LOD で出さない（平面・仕上げ。`roomLabel.js showsRoomNameLabel`。選択・塗りは変えない）。代わりに**詳細（DETAIL）だけ**、傾斜面（＝水下1本）ごとに「屋根」・水下向きの矢印・「（傾斜N/10）」を出す（矢印は水下の外向き。縦の矢印は文字を左右から挟む＝左「屋根」・右「（傾斜N/10）」、横の矢印は上下から挟む＝上「屋根」・下「（傾斜N/10）」。文字は常に横書き。N は`roofSpec.slope`〔不正なら既定〕、0.5 刻みは「2.5」）。
   - 面の数と位置: 水下は矩形の片流れ＝高い側の反対の辺・切妻＝棟と平行な2辺・寄棟＝全辺（いずれも屋内に接する部分を除く。上の「水下は壁へ下らない」）・水下の場の region（L字ほか）＝`leanToDrains`（平面用 region の`planDrains`）。陸屋根・外形線だけの region（`outlineOnly`）はラベルなし。段違いで分かれた面も水下ごとに1つ。基準点は`roofFramingGeometry.js drainFaceAnchors`（水下の上の点から内向きに min(run, depth)/2。run＝その点から内向きに進み、場（到達時刻 T）の面の持ち主が自分の水下である間の距離、depth＝屋根範囲を出るまでの距離。作れない形は面が定まらず[]。depth で止めないと L字の奥行きの浅い面で建物の中へ出る。点は min(run, depth) が最大の候補＝水下の中点とは限らない）。図形の判断は`roofPlanFigure.js roofPlanRegionFigure`、描画は`PlanSolidsLayer.jsx`が写すだけ（ラベルは屋根立体の`marks`で、基準点が壁などに隠れたら出ない。詳細〔DETAIL〕以外は層側で落とす）。
   - **面は水下ごとに1つで、間引かない**（指示は「傾斜面1つにつき」。描いてある面にラベルが無い状態を作らない）。壁へ下る面は作らないので壁へ向かう矢印は出ない（2026-10-04 の「壁へ向かう矢印の面も出る」を置き換え）。一部だけ壁に接する辺は規則で作れない形なのでラベルを出さない（旧は壁でない部分の面が出た）。外壁面どまりは線の端だけで、ラベルの座標は動かさない。
+
+## 軒裏（2026-10-18。問題.md「天伏に外部・軒裏」）
+- 項目は`RoofSpec`の4つ: `soffitMaterial`（仕上げ材コード）・`soffitBacking`（下地材コード）・`soffitOrientation`（'sloped'＝屋根勾配なり／'level'＝地面に水平／null）・`soffitNote`（備考）。旧の自由文字列`soffit`はデータとして残し画面から外した（天伏 S3 の`ceilingMaterial`と同じ扱い）。
+- **空＝既定**: コンストラクタの既定は4項目とも空（''／null）で`isDefaultRoofSpec`（主屋根「既定なら保存しない」）を変えない。下屋を付けたとき（`createLeanToRoofSpec`）だけ既定値（けい酸カルシウム板 t=8・□-30×15・傾斜・「目透かし貼り」）を書く（材料コードは保存されていないと同梱・照合に乗らないため）。主屋根と旧文書の下屋は空のままで、**空を既定へ読み替える入口は`roofDefaults.js resolveSoffitSpec`の1つだけ**（備考は補わない）。帰結: 旧文書・主屋根の既定材は同梱の使用コードに載らない（本体マスタにあるので表示は崩れない。受容）。FBSは`RS`末尾の4フィールドで、空のときは文字列もフィールドも書かない＝既存文書のバイト列は不変。
+- 下地材は構造に依らず保存し、欄は木造（`roofInput.js soffitBackingVisible`＝`isWoodStructure`）のときだけ出す（柱貫通の「値は保存するが欄は構造で出し分ける」と同型）。「木造以外の軒裏下地」は未定義。
+- 編集口は仕上げモードの外部タブ（`RoofGroup.jsx`の軒裏行。下屋・主屋根とも）。天伏の外部タブは直上階の下屋を**表示だけ**し、主屋根（自階）だけ編集できる（`.claude/ceiling-model.md`「外部タブ」）。材の select は「（未選択）」を出さず現在値を先頭に補う`RoofMaterialSelect`を両方で共用。
+- 落とし穴: `<select>`は同じ値の選び直しで change を出さないので、既定と同じ材を「明示的に保存」する操作は無い（別の材にして戻せば保存される）。
 
 ## 既知の限界
 - L字の下屋の隅木・谷木: 向かい合う壁の翼と、片方の出幅が 0 の角は延ばさない。

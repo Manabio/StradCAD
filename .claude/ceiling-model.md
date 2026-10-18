@@ -123,6 +123,13 @@ N 階の天伏は「N の天井面際から N+1 の床を裏から見た図」�
 ## 自階の階段を描かない（S13c）
 天伏では自階の階段の線・外周・矢印も、下階の階段の見下げ（upper エントリ）も描かない（裁定 Q7）。階段は上から見た姿ではなく、上階の裏面（S13a）と平らな天井面（S13b）で表す。述語は `renderer/planFigureVisibility.js shouldShowStairFigure`（`shouldShowPlanFigure` から 'ceiling' を除く）で、`stairEntries.js buildStairEntries` の `isStairMode` がこれを引く＝install・upper・2a壁の描画クリップ（stairUnderClips）がまとめて止まる（2a壁は切断された壁としてそのまま見える）。壁・建具・柱は従来どおり描く。
 
+## 外部タブ（軒裏。2026-10-18）
+- 問題.md「天伏に外部、ポーチ、軒裏追加」。タブ `'exterior'`（「外部」）は**平らな表**（部位｜仕上げ｜下地〔上段 下地・下段 向き〕｜備考）で、行はセルの群を持たず選択・展開・強調に関与しない（`ceilingPanelTree` は exterior で []）。行の組み立ては `ceiling/ceilingExteriorRows.js`（純）。
+- **行は直上階 N+1 の下屋の軒裏**（屋根セルは屋根面がある階のセルなので、N の見上げに見える軒裏は N+1 の `Room.roofSpec`）＋**最上階（検討案含む）だけ主屋根の軒裏**。直上階の graph は App の直上階 peek を `CeilingModeState.aboveRoofContext` で受け、`aboveRoofGraphOf(graph)` が planeId を照合して階切替直後の古い peek を弾く（`stairUnderKeysOf` と同じ流儀）。
+- **直上階の行は表示だけ・主屋根の行だけ編集可**（裁定 2026-10-18）。理由: 他階へ書く前例は境界処理の一括操作（peek→`saveFloor`→階のバイト列で undo）だけで、パネルの欄からの対話的な他階編集は、undo/redo の後に `abovePlanPeek` を取り直す仕組みが無く古い値が残る。編集は N+1 の仕上げモード外部タブ（セルの title で案内）。主屋根は自階の `graph.mainRoofSpec` なので `commitRoofSpecField`（仕上げと共用）＋`markDirty`。
+- 「ポーチ」（屋外部屋の天井）は本文に項目が無く別課題（所属索引・`roomHasCeiling`・天井面を屋外へ広げる変更になる）。主屋根の軒先線・割付線は描かない（`plan-section.md`「軒裏」）。
+- 既知の限界: 検討案の平面は直上階が無いので下屋の行は出ない／N+2 以上の屋根は扱わない／仕上げ N+1 で編集した値は、天伏 N に戻ると peek の取り直しで反映されるが、解決までの間は前の値が見える。
+
 ## 受容（ユーザー裁定 2026-10-10）
 とりあえず許容した点（直さない。必要になったら別課題）。
 - 階段区画の初期値（基準高＝対の部屋の CH・平均勾配）は、上側だけの区画だと勾配の位置に来ない。
