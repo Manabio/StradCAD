@@ -94,14 +94,16 @@ function edgeSeparatedByFullWall(graph, isVertical, coord, lo, hi) {
  * 吹抜け（VOID・屋内）のセルを、全高の壁で隔てられていない隣接部屋のうち面積最大の部屋の所属にする（裁定 2026-10-17）。
  * 腰壁で囲まれた吹抜けは天井を隔てない。VOID 部屋は 1 単位（複数セルでも同じ部屋へ）。候補が無ければ索引外のまま。
  * 面積＝pass1 の所属セルの矩形面積の和。同面積は graph.rooms の順の先勝ち。owners を直接更新する。
+ * **候補は屋内の部屋だけ**（裁定 2026-10-19）: 屋外部屋（ポーチ等）が天井を持つようになっても（exteriorCeiling.js）、屋内の吹抜けの
+ * 天井が屋外へ溶け込むのは「腰壁で囲まれた吹抜けの上は隣の部屋の天井が続く」の想定外のため。
  */
 function assignVoidCellsToNeighbor(graph, owners) {
   const voidRooms = graph.rooms.filter(isCeilingVoidRoom);
   if (voidRooms.length === 0) return;
-  const owned = []; // [{owner, b}]（pass1 の部屋所属のセルだけ）
+  const owned = []; // [{owner, b}]（pass1 の屋内の部屋所属のセルだけ）
   const areaByRoom = new Map();
   for (const [key, owner] of owners) {
-    if (owner.kind !== 'room') continue;
+    if (owner.kind !== 'room' || graph.roomMap.get(owner.id)?.kind !== RoomKind.INTERIOR) continue;
     const b = cellBoundsFromKey(key, graph);
     if (!b) continue;
     const nb = { x1: Math.min(b.x1, b.x2), x2: Math.max(b.x1, b.x2), y1: Math.min(b.y1, b.y2), y2: Math.max(b.y1, b.y2) };

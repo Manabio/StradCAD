@@ -279,13 +279,20 @@ test('屋外部屋: 屋根の部屋・屋外階段（feature STAIR）の部屋�
   assert.equal(buildCeilingCellOwners(g2.graph).get(g2.cell(0, 0)), undefined);
 });
 
-test('屋外部屋: 吹抜けは隣の屋外ポーチも候補に入る（面積最大。壁が無ければ隔てない）', () => {
+test('屋外部屋: 吹抜けの所属候補は屋内の部屋だけ（裁定 2026-10-19）。面積の大きい屋外ポーチが隣にあっても屋内の部屋へ溶け込む', () => {
   const g = makeGrid([0, 1000, 2000, 5000], [0, 1000]);
   const inner = g.interior([[0, 0]]);
   const v = g.feature([[1, 0]], RoomFeature.VOID);
   const porch = g.interior([[2, 0]]);
   porch.setKind(RoomKind.EXTERIOR);
-  assert.equal(ownerOf(g, 1).id, porch.id, '面積の大きいポーチ');
-  assert.notEqual(ownerOf(g, 1).id, inner.id);
+  assert.equal(ownerOf(g, 1).id, inner.id, '面積が小さくても屋内の部屋');
   assert.ok(v);
+});
+
+test('【失敗系】屋外部屋: 吹抜けの隣が屋外ポーチだけなら候補なし（索引外のまま）', () => {
+  const g = makeGrid([0, 1000, 2000], [0, 1000]);
+  g.feature([[0, 0]], RoomFeature.VOID);
+  const porch = g.interior([[1, 0]]);
+  porch.setKind(RoomKind.EXTERIOR);
+  assert.equal(ownerOf(g, 0), undefined);
 });
