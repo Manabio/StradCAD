@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { RoofShape, ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES, ROOF_SPEC_KEYS } from '@core';
 import {
   parseRoofSlopeInput, parseRoofOverhangInput, isValidRoofFieldValue, roofShapeOptions, roofHighSideOptions, roofMaterialOptions,
-  roofRidgeDirectionOptions, roofRidgeDirectionFromSelect,
+  roofRidgeDirectionOptions, roofRidgeDirectionFromSelect, soffitBackingVisible, soffitOrientationOptions,
 } from './roofInput.js';
+import { TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE, isWoodStructure } from '../../structural/structureRules.js';
+import { STRUCTURES } from '../../structural/structuralClassification.js';
 
 test('parseRoofSlopeInput: 0.5刻みの正の数は有効（3・2.5・0.5・10）', () => {
   assert.equal(parseRoofSlopeInput('3'), 3);
@@ -120,4 +122,22 @@ test('【失敗系】roofMaterialOptions: 保存コードが候補に無い（�
   assert.equal(roofMaterialOptions(ROOF_SHEATHING_CODES, '301000000023', () => undefined).length, 21);
   // 現在値が空・null でも例外にならない
   assert.equal(roofMaterialOptions(ROOF_SHEATHING_CODES, null, () => undefined).length, 21);
+});
+
+test('soffitBackingVisible: 木造（在来・2"×4"）だけ true', () => {
+  assert.equal(soffitBackingVisible(TRADITIONAL_WOOD_STRUCTURE), true);
+  assert.equal(soffitBackingVisible('木造（2"×4"）'), true);
+});
+
+test('【失敗系】soffitBackingVisible: 鉄骨・RC・未定・未指定は false', () => {
+  for (const s of STRUCTURES.filter(x => !isWoodStructure(x))) assert.equal(soffitBackingVisible(s), false, s);
+  assert.ok(STRUCTURES.some(x => !isWoodStructure(x)), '非木造の構造が1つ以上ある');
+  for (const s of [UNSPECIFIED_STRUCTURE, undefined, null, '']) assert.equal(soffitBackingVisible(s), false, String(s));
+});
+
+test('soffitOrientationOptions: 傾斜→水平の2件', () => {
+  assert.deepEqual(soffitOrientationOptions(), [
+    { value: 'sloped', label: '傾斜' },
+    { value: 'level', label: '水平' },
+  ]);
 });

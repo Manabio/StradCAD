@@ -6,6 +6,7 @@ import {
   RoofShape, ROOF_SHAPE_LABELS, RoofHighSide, ROOF_HIGH_SIDE_LABELS, RoofRidgeDirection, ROOF_RIDGE_DIRECTION_LABELS,
   SoffitOrientation,
 } from '@core';
+import { isWoodStructure } from '../../structural/structureRules.js';
 
 const NUMBER_TEXT = /^\d+(\.\d+)?$/;
 
@@ -75,6 +76,19 @@ export function isValidRoofFieldValue(field, value) {
 /** 形状の選択肢（「自動」は出さない）。 */
 export function roofShapeOptions() {
   return Object.values(RoofShape).map(value => ({ value, label: ROOF_SHAPE_LABELS[value] }));
+}
+
+/** 軒裏下地材の欄を出すか（木造のときだけ。構造は effectiveStructure で呼び出し側が引く）。 */
+export function soffitBackingVisible(structure) {
+  return isWoodStructure(structure);
+}
+
+/** 軒裏の向きの選択肢（傾斜＝屋根勾配なり・水平＝地面に対して水平）。 */
+export function soffitOrientationOptions() {
+  return [
+    { value: SoffitOrientation.SLOPED, label: '傾斜' },
+    { value: SoffitOrientation.LEVEL, label: '水平' },
+  ];
 }
 
 /** 片流れの高い側の選択肢（上・下・左・右。「自動」は出さない）。 */

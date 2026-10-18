@@ -89,7 +89,8 @@ test('【不変条件】勾配・軒の出・妻側の出は検証の純関数�
 });
 
 test('【不変条件】材料 select は roofMaterialOptions（候補表＋未解決コードの先頭補完）で、野地板=ROOF_SHEATHING_CODES・防水シート=ROOF_UNDERLAYMENT_CODES', () => {
-  assert.ok(/roofMaterialOptions\(codes, spec\[field\], nameOf\)/.test(groupBody), 'roofMaterialOptions(codes, spec[field], nameOf) が見つからない');
+  assert.ok(/roofMaterialOptions\(codes, shown, nameOf\)/.test(groupBody), 'roofMaterialOptions(codes, shown, nameOf) が見つからない');
+  assert.ok(roofLines.includes('const materialSelect = (field, codes, shown = spec[field]) => ('), 'materialSelect の宣言（表示値の既定は spec[field]）が見つからない');
   assert.ok(roofLines.includes("{materialSelect('underlaymentMaterial', ROOF_UNDERLAYMENT_CODES)}"), '防水シートの select が見つからない');
   assert.ok(roofLines.includes("{materialSelect('sheathingMaterial', ROOF_SHEATHING_CODES)}"), '野地板の select が見つからない');
   assert.ok(roofLines.includes('const nameOf = code => mode.getMaterial(code)?.name;'), '材料名の引き当て（mode.getMaterial）が見つからない');
@@ -106,15 +107,34 @@ test('【不変条件】表は固定2行（屋根・軒裏）。行の追加・�
   assert.ok(/<td style=\{cellBase\}>屋根<\/td>/.test(tbody), '「屋根」行の部位セルが見つからない');
   assert.ok(/<td style=\{cellBase\}>軒裏<\/td>/.test(tbody), '「軒裏」行の部位セルが見つからない');
   assert.ok(roofLines.includes("<RoofTextInput value={spec.roofFinish} onCommit={v => set('roofFinish', v)} style={cellInputStyle} />"), '屋根仕上げの配線');
-  assert.ok(roofLines.includes("<RoofTextInput value={spec.soffit} onCommit={v => set('soffit', v)} style={cellInputStyle} />"), '軒裏の配線');
+  assert.ok(!/spec\.soffit\b|set\('soffit'/.test(roofCode), '旧 spec.soffit（自由文字列）の入力は外した');
   assert.ok(roofLines.includes("<RoofTextInput value={spec.note} onCommit={v => set('note', v)} style={cellInputStyle} />"), '備考の配線');
   assert.ok(!/addExteriorRow|removeExteriorRow|行を追加|削除/.test(groupBody), '行の追加・削除の口を持たない');
   assert.ok(!/<input[^>]*part/.test(groupBody), '部位を編集する入力欄を持たない');
 });
 
+test('【不変条件・軒裏】軒裏行: 表示値は resolveSoffitSpec・確定は各 set 1回・下地は soffitBackingVisible（構造は effectiveStructure）で分岐', () => {
+  assert.ok(roofLines.includes('const soffit = resolveSoffitSpec(spec);'), 'resolveSoffitSpec で実効値を引く行が見つからない');
+  for (const f of ['soffitMaterial', 'soffitBacking', 'soffitOrientation', 'soffitNote']) {
+    assert.equal((roofCode.match(new RegExp(`(?:set|materialSelect)\\('${f}'`, 'g')) ?? []).length, 1, `${f} の確定は1か所`);
+  }
+  assert.ok(roofLines.includes("{materialSelect('soffitMaterial', panelCodes, soffit.material)}"), '軒裏材の select');
+  assert.ok(roofLines.includes("{materialSelect('soffitBacking', backingCodes, soffit.backing)}"), '軒裏下地の select');
+  assert.ok(roofLines.includes("onChange={e => set('soffitOrientation', e.target.value)}"), '向きの onChange');
+  assert.ok(roofLines.includes('value={soffit.orientation}'), '向きの value');
+  assert.ok(roofLines.includes("<RoofTextInput value={spec.soffitNote} onCommit={v => set('soffitNote', v)} style={cellInputStyle} />"), '軒裏備考');
+  assert.ok(roofLines.includes('{soffitBackingShown && ('), '下地の表示分岐');
+  assert.ok(roofLines.includes("const panelCodes = mode.getMaterialsByCategory('panel').map(m => m.code);"), 'panel の候補');
+  assert.ok(roofLines.includes("const backingCodes = mode.getMaterialsByCategory('backing').map(m => m.code);"), 'backing の候補');
+  assert.equal(roofLines.filter(l => l === 'const soffitBackingShown = soffitBackingVisible(effectiveStructure(graph, mode.project));').length, 2,
+    '下屋・主屋根の2か所で構造から導く');
+  // 下地の表示分岐は向きの select より前（上段が下地・下段が向き）
+  assert.ok(groupBody.indexOf('{soffitBackingShown && (') < groupBody.indexOf('soffitOrientationOptions().map('), '下地 → 向き の順');
+});
+
 test('【不変条件】入力欄は無効化・読取専用にしない（select・input に disabled／readOnly が無い）', () => {
   assert.ok(!/disabled|readOnly/.test(roofCode), 'disabled／readOnly が見つかった（屋根の項目は常に編集できる）');
-  assert.equal((roofCode.match(/<select/g) ?? []).length, 4, 'select は形状・高い側・棟木の向き・材料（共通の materialSelect）の4か所だけ');
+  assert.equal((roofCode.match(/<select/g) ?? []).length, 5, 'select は形状・高い側・棟木の向き・材料（共通の materialSelect）・軒裏の向きの5か所だけ');
   assert.equal((roofCode.match(/<input/g) ?? []).length, 3, 'input は RoofTextInput・RoofNumberInput・柱貫通のチェックの3か所だけ');
 });
 
@@ -225,9 +245,9 @@ test('【不変条件・B3】MainRoofGroup の確定は mode.setMainRoofField(fi
 });
 
 test('【不変条件・B3】下屋と主屋根は同じ描画部品 RoofSpecFields（spec・shape・set を引数で受ける）を使い、各1回ずつ描く', () => {
-  assert.equal(roofLines.filter(l => l === 'return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} set={set} mode={mode} styles={styles} />;').length, 2,
+  assert.equal(roofLines.filter(l => l === 'return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} soffitBackingShown={soffitBackingShown} set={set} mode={mode} styles={styles} />;').length, 2,
     '下屋と主屋根の2か所で同じ RoofSpecFields を同じ引数で描く');
-  assert.ok(roofLines.includes('const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, columnThrough, set, mode, styles }) => {'), 'RoofSpecFields の宣言');
+  assert.ok(roofLines.includes('const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, columnThrough, soffitBackingShown, set, mode, styles }) => {'), 'RoofSpecFields の宣言');
   // 下屋の形状の導出（範囲は屋根セル）は RoofGroup 側のまま
   assert.ok(roofLines.includes('const shape = resolveRoofShape(spec, { boundsList: roofRoomBounds(room, graph) });'));
 });

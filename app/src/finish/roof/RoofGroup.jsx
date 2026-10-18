@@ -1,21 +1,24 @@
 // 外部タブの屋根（下屋＝RoofGroup・主屋根＝MainRoofGroup）の群の中身。フォーム1行（形状・［高い側］・［棟木の向き］・勾配・軒の出・妻側の出・［柱貫通］）＋表に固定2行
-// （「屋根」行: 仕上げ＝屋根仕上げ／下地＝防水シート・野地板の選択欄／備考、「軒裏」行: 仕上げ＝軒裏）。
+// （「屋根」行: 仕上げ＝屋根仕上げ／下地＝防水シート・野地板の選択欄／備考、「軒裏」行: 仕上げ＝軒裏材（panel）／
+// 下地＝軒裏下地材（木造のときだけ）・向き（傾斜／水平）／備考）。軒裏の表示値は resolveSoffitSpec（空は既定へ読み替え）。
+// 旧項目 spec.soffit（自由文字列）の入力は外した（データは残す）。
 // 見出し「屋根」と削除ボタンは FinishTable.jsx 側（群の枠）が持つ。判断（選択肢・実効の形状・入力の検証）は
 // roofDefaults.js／roofInput.js の純関数に置き、ここは描くだけ。確定は mode.setRoofField／setMainRoofField（1確定＝undo 1エントリ）。
 // 文字・数値の欄は draft 方式（blur／Enter で確定。不正な数値は確定せず元の値へ戻す）。
 import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
 import { ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES } from '@core';
-import { resolveRoofShape, roofRoomBounds } from './roofDefaults.js';
+import { effectiveStructure } from '../../structural/structureRules.js';
+import { resolveRoofShape, roofRoomBounds, resolveSoffitSpec } from './roofDefaults.js';
 import { resolveMainRoofShape, mainRoofHighSideView, mainRoofRidgeDirectionView } from './mainRoof.js';
 import { roofHighSideViewOfRoom, roofRidgeDirectionViewOfRoom, roofColumnThroughViewOfRoom } from './roofOrientation.js';
 import { roofColumnThroughView } from './roofGeometry.js';
 import {
   roofShapeOptions, roofHighSideOptions, roofRidgeDirectionOptions, roofRidgeDirectionFromSelect,
-  roofMaterialOptions, parseRoofSlopeInput, parseRoofOverhangInput,
+  roofMaterialOptions, parseRoofSlopeInput, parseRoofOverhangInput, soffitBackingVisible, soffitOrientationOptions,
 } from './roofInput.js';
 
-// 文字列の欄（屋根仕上げ・軒裏・備考）。blur／Enter で確定する（既存の CardNameInput・ExteriorPartHeading と
+// 文字列の欄（屋根仕上げ・備考・軒裏の備考）。blur／Enter で確定する（既存の CardNameInput・ExteriorPartHeading と
 // 同じ流儀。Escape の専用処理は持たない）。
 const RoofTextInput = observer(({ value, onCommit, style }) => {
   const [draft, setDraft] = useState(null);
@@ -78,7 +81,8 @@ export const RoofGroup = observer(({ room, graph, mode, styles }) => {
   const highSide = roofHighSideViewOfRoom(room, graph);
   const ridgeDirection = roofRidgeDirectionViewOfRoom(room, graph);
   const columnThrough = roofColumnThroughViewOfRoom(room, graph, mode.project);
-  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} set={set} mode={mode} styles={styles} />;
+  const soffitBackingShown = soffitBackingVisible(effectiveStructure(graph, mode.project));
+  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} soffitBackingShown={soffitBackingShown} set={set} mode={mode} styles={styles} />;
 });
 
 /**
@@ -93,7 +97,8 @@ export const MainRoofGroup = observer(({ graph, mode, styles }) => {
   const highSide = mainRoofHighSideView(graph, mode.project);
   const ridgeDirection = mainRoofRidgeDirectionView(graph, mode.project);
   const columnThrough = roofColumnThroughView({ isLeanTo: false, columnPlacement: null, hasColumns: false, columnThrough: false }); // 主屋根には出さない
-  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} set={set} mode={mode} styles={styles} />;
+  const soffitBackingShown = soffitBackingVisible(effectiveStructure(graph, mode.project));
+  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} soffitBackingShown={soffitBackingShown} set={set} mode={mode} styles={styles} />;
 });
 
 /**
@@ -103,18 +108,22 @@ export const MainRoofGroup = observer(({ graph, mode, styles }) => {
  * visible。value は明示値、自動は null）、columnThrough＝「柱貫通」チェックの表示判断 { visible, value }（同。下屋で、
  * 通り芯の交点に柱が立つ構造のときだけ visible）、set＝項目の確定関数 (field, value)。
  */
-const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, columnThrough, set, mode, styles }) => {
+const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, columnThrough, soffitBackingShown, set, mode, styles }) => {
   const { cellBase, headerCell, cellInputStyle } = styles;
   const boxed = { ...cellInputStyle, border: '1px solid #cbd5e1', padding: '2px 4px' };
   const nameOf = code => mode.getMaterial(code)?.name;
-  const materialSelect = (field, codes) => (
+  // 軒裏は空を既定へ読み替えた実効値（resolveSoffitSpec）を表示する。材の選択肢に「（未選択）」は出さない（空は許さない）
+  const soffit = resolveSoffitSpec(spec);
+  const panelCodes = mode.getMaterialsByCategory('panel').map(m => m.code);
+  const backingCodes = mode.getMaterialsByCategory('backing').map(m => m.code);
+  const materialSelect = (field, codes, shown = spec[field]) => (
     <select
-      value={spec[field]}
+      value={shown}
       onChange={e => set(field, e.target.value)}
       onClick={e => e.stopPropagation()}
       style={{ ...cellInputStyle, cursor: 'pointer' }}
     >
-      {roofMaterialOptions(codes, spec[field], nameOf).map(o => (
+      {roofMaterialOptions(codes, shown, nameOf).map(o => (
         <option key={o.value} value={o.value}>{o.label}</option>
       ))}
     </select>
@@ -212,10 +221,32 @@ const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, column
           <tr style={{ background: '#fff' }}>
             <td style={cellBase}>軒裏</td>
             <td style={cellBase}>
-              <RoofTextInput value={spec.soffit} onCommit={v => set('soffit', v)} style={cellInputStyle} />
+              {materialSelect('soffitMaterial', panelCodes, soffit.material)}
             </td>
-            <td style={cellBase} />
-            <td style={cellBase} />
+            <td style={cellBase}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {soffitBackingShown && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ ...formLabelStyle, color: '#64748b' }}>下地</span>
+                    {materialSelect('soffitBacking', backingCodes, soffit.backing)}
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ ...formLabelStyle, color: '#64748b' }}>向き</span>
+                  <select
+                    value={soffit.orientation}
+                    onChange={e => set('soffitOrientation', e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                    style={{ ...cellInputStyle, cursor: 'pointer' }}
+                  >
+                    {soffitOrientationOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              </div>
+            </td>
+            <td style={cellBase}>
+              <RoofTextInput value={spec.soffitNote} onCommit={v => set('soffitNote', v)} style={cellInputStyle} />
+            </td>
           </tr>
         </tbody>
       </table>
