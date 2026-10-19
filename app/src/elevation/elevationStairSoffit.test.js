@@ -512,3 +512,58 @@ test('【指示2026-10-16】openingPanelPrimitives: 上階の開口。帯の天�
   assert.ok(noClipUpper.length > 0 && noClipUpper.every(p => p.dash !== 'dashed' && p.x1 !== p.x2), JSON.stringify(noClipUpper));
 });
 
+
+test('【指摘2026-10-19】openingPanelPrimitives: 面の辺の上に立つ上階の壁（軸が面の軸と同じ距離の見えがかりの帯）の列には上階の開口を描かない。腰壁は上の残り・垂れ壁は下の残りだけ、向こうの部屋の奥の壁は閉じない、自階の開口は不変', () => {
+  const hall = { id: 'hall' }, corridor = { id: 'corridor' }, stairRoom = { id: 'stair' };
+  const self = { role: 'self', graph: {}, floorZMm: 0 };
+  const above = { role: 'above', graph: {}, floorZMm: 3000 };
+  const probe = { cellAt: (l) => (l === above ? { room: corridor, floorZ: 3000, ceilZ: 5400 } : { room: hall, floorZ: 0, ceilZ: 2400 }), floorZOf: () => 0 };
+  // roof-test1 2階 階段 A と同型: 面の軸 Y4=-9100・切断線 -8247.5 → 辺の上の壁の帯の距離は 852.5。3階の壁は X1〜X1+910（ローカル 0..910）
+  const cut = { line: { isVertical: false, axisValue: -8247.5, lo: 72.5, hi: 1747.5 }, viewSign: -1, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0, layers: [self, above], face: { hasRealWall: false, faceValue: -9100, axisCL: { effectiveValue: -9100 } } };
+  const onEdge = (z0, z1) => ({ kind: 'wall', z0, z1, distMm: 852.5 });
+  const columns = [
+    { x0: 0, x1: 780, worldLo: 72.5, worldHi: 852.5, bands: [{ kind: 'open', z0: 0, z1: 2400 }, { kind: 'slab', z0: 2400, z1: 3000 }, onEdge(3000, 5400)] },
+    { x0: 780, x1: 895, worldLo: 852.5, worldHi: 967.5, bands: [{ kind: 'cut', z0: 0, z1: 2675 }, { kind: 'slab', z0: 2675, z1: 3000 }, onEdge(3000, 5400)] },
+    { x0: 895, x1: 910, worldLo: 967.5, worldHi: 982.5, bands: [{ kind: 'open', z0: 0, z1: 2400 }, { kind: 'slab', z0: 2400, z1: 3000 }, onEdge(3000, 5400)] },
+    { x0: 910, x1: 1675, worldLo: 982.5, worldHi: 1747.5, bands: [{ kind: 'open', z0: 0, z1: 2400 }, { kind: 'slab', z0: 2400, z1: 3000 }, { kind: 'open', z0: 3000, z1: 5400 }] },
+  ];
+  const upperOf = prims => prims.filter(p => Math.max(-p.y1, -p.y2) > 3000 + 1e-6);
+  const edgesOf = prims => prims.filter(p => p.y1 === p.y2).map(p => [p.x1, p.x2, -p.y1]);
+  const prims = openingPanelPrimitives(cut, columns, probe, stairRoom);
+  const upper = upperOf(prims);
+  assert.ok(upper.length > 0 && upper.every(p => p.x1 >= 910 - 1e-6 && p.x2 >= 910 - 1e-6), `上階の開口は 3階の壁の端 910 から右だけ: ${JSON.stringify(upper)}`);
+  assert.deepEqual(edgesOf(upper), [[910, 1675, 5400]], '上階の天井の縁');
+  // 自階の開口（2400 の縁）は両区間に従来どおり（自階の辺の上に壁は無い）
+  assert.deepEqual(prims.filter(p => p.y1 === p.y2 && -p.y1 === 2400).map(p => [p.x1, p.x2]), [[0, 780], [895, 1675]]);
+  // 腰壁（3000..3800）の列は、その上（3800..5400）だけに開口（天井の縁 5400 とバツ 3800〜5400）
+  const withEdge = (z0, z1) => columns.map(c => ({ ...c, bands: c.bands.map(b => (b.distMm === 852.5 ? onEdge(z0, z1) : b)) }));
+  const knee = upperOf(openingPanelPrimitives(cut, withEdge(3000, 3800), probe, stairRoom));
+  const kneeCross = knee.filter(p => p.x1 !== p.x2 && p.y1 !== p.y2 && p.x1 <= 1e-6);
+  assert.equal(kneeCross.length, 2, JSON.stringify(knee));
+  assert.ok(kneeCross.every(p => Math.min(-p.y1, -p.y2) === 3800 && Math.max(-p.y1, -p.y2) === 5400 && p.x2 === 780), JSON.stringify(kneeCross));
+  assert.ok(knee.some(p => p.y1 === p.y2 && -p.y1 === 5400 && p.x1 === 0 && p.x2 === 780), '腰壁の上にも天井の縁');
+  // 垂れ壁（4800..5400）の列は、その下（3000..4800）だけ。天井の縁は描かない（垂れ壁の下端は壁の帯が描く）
+  const drop = upperOf(openingPanelPrimitives(cut, withEdge(4800, 5400), probe, stairRoom)).filter(p => p.x1 <= 1e-6);
+  const dropCross = drop.filter(p => p.x1 !== p.x2 && p.y1 !== p.y2);
+  assert.equal(dropCross.length, 2, JSON.stringify(drop));
+  assert.ok(dropCross.every(p => Math.min(-p.y1, -p.y2) === 3000 && Math.max(-p.y1, -p.y2) === 4800), 'バツは上階 FL〜垂れ壁の下端');
+  assert.ok(!drop.some(p => p.y1 === p.y2), '垂れ壁の下では天井の縁を描かない');
+  // 向こうの部屋の奥の壁（距離が面の軸と違う見えがかりの帯）は開口を閉じない
+  const far = upperOf(openingPanelPrimitives(cut, columns.map(c => ({ ...c, bands: c.bands.map(b => (b.distMm === 852.5 ? { ...b, distMm: 1700 } : b)) })), probe, stairRoom));
+  assert.deepEqual(edgesOf(far), [[0, 780, 5400], [895, 1675, 5400]], '奥の壁では区間の全体に上階の開口');
+  // face.axisCL が無ければ面の線（faceValue）までの距離で測る
+  const noAxis = { ...cut, face: { hasRealWall: false, faceValue: -9100 } };
+  assert.deepEqual(edgesOf(upperOf(openingPanelPrimitives(noAxis, columns, probe, stairRoom))), [[910, 1675, 5400]]);
+  // 距離の一致は mm 級の許容（上階の CL の値の浮動小数の誤差で黙って旧挙動に戻らない）
+  const jitter = columns.map(c => ({ ...c, bands: c.bands.map(b => (b.distMm === 852.5 ? { ...b, distMm: 852.5 + 1e-4 } : b)) }));
+  assert.deepEqual(edgesOf(upperOf(openingPanelPrimitives(cut, jitter, probe, stairRoom))), [[910, 1675, 5400]]);
+  // 1 列に腰壁（3000..3600）と垂れ壁（4800..5400）: バツはその間（3600〜4800）の 1 組だけ・天井の縁なし
+  const both = columns.map(c => ({ ...c, bands: c.bands.flatMap(b => (b.distMm === 852.5 ? [onEdge(3000, 3600), onEdge(4800, 5400)] : [b])) }));
+  const mid = upperOf(openingPanelPrimitives(cut, both, probe, stairRoom)).filter(p => p.x1 <= 1e-6);
+  assert.deepEqual(mid.filter(p => p.x1 !== p.x2 && p.y1 !== p.y2).map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]), [[3600, 4800], [3600, 4800]]);
+  assert.ok(!mid.some(p => p.y1 === p.y2));
+  // 自階の辺の上の壁（0..780 だけ 0..2400 の帯）: 自階の開口（縁 2400）は 895..1675 だけ
+  const selfEdge = columns.map(c => (c.x1 <= 780 ? { ...c, bands: [onEdge(0, 2400), ...c.bands.slice(1)] } : c));
+  assert.deepEqual(openingPanelPrimitives(cut, selfEdge, probe, stairRoom).filter(p => p.y1 === p.y2 && -p.y1 === 2400).map(p => [p.x1, p.x2]), [[895, 1675]]);
+});

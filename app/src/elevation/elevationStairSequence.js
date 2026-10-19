@@ -902,6 +902,9 @@ export function dashLinesInsideRects(prims, rects, opts = {}) {
   return out;
 }
 
+// 上り口の開口で「辺の上に立つ壁の帯」とみなす、帯の距離（distMm）と面の軸の距離の差の許容（mm）。
+const EDGE_WALL_DIST_TOL_MM = 0.5;
+
 /** 壁のない部屋の辺（上り口）を見る切断か。往復レーンの境界の仮想の面（kind 'stairMid'。seq2）は部屋の辺ではないので含めない。 */
 function isOpenEntryFace(cut) {
   return cut?.face?.hasRealWall === false && cut.face.kind !== 'stairMid';
@@ -914,6 +917,12 @@ function isOpenEntryFace(cut) {
  * 回転部にアキは標記しない」は壁のある辺を見る面の話で、壁のない辺の開口には標記する）。
  * 区間＝切断壁（隔て板）で区切られた、切断帯の無い列の連なり。天井は面の線から視線の向きへ少し入った点の部屋（自階の層の cellAt）の
  * 天井で、帯の部屋自身・天井が取れない区間は描かない。
+ * **面の辺の上に立つ壁の帯（見えがかり壁のうち、壁の軸が面の軸と同じ距離にあるもの）は開口ではない**ので、列ごとに
+ * 床〜天井からその帯の高さを差し引いた残り（フルハイトの壁なら無し・腰壁なら上・垂れ壁なら下）だけに描き、残りの高さが
+ * 同じ隣接列をまとめた小区間ごとに描く（自階・上階とも同じ述語）。向こうの部屋があるかだけで決めると、上階で辺の上に
+ * フルハイトの壁がある区間（roof-test1 2階 階段 A の X1〜X1+910。3階の階段吹抜けの壁）にもアキのバツが出る
+ * （ユーザー指摘 2026-10-19）。壁の軸で見るのは、向こうの部屋の奥の壁（見えがかりの深さ上限の中に入る）を開口の閉じと
+ * 取り違えないため。天井の縁（中線）は残りの上端が天井のときだけ（垂れ壁の下端は壁の帯が描く）。
  * @param {import('./section/sectionTypes.js').SectionCut} cut
  * @param {import('./section/sectionTypes.js').SectionColumn[]} columns
  * @param {ReturnType<typeof makeProbeContext>} probeCtx
@@ -949,19 +958,49 @@ export function openingPanelPrimitives(cut, columns, probeCtx, bandRoom) {
   };
   const selfFloorZ = typeof probeCtx.floorZOf === 'function' ? probeCtx.floorZOf(bandRoom, selfLayer) : floorZ;
   const soffit = selfLayer.stairSoffit && bandRoom && selfLayer.stairSoffit.roomId === bandRoom.id ? selfLayer.stairSoffit.soffit : null;
+  // 面の辺の上に立つ壁の帯: 見えがかり壁（kind 'wall'）のうち、壁の軸 CL が面の軸 CL と同じ距離（切断線から）にあるもの。
+  // 帯の距離は壁の軸 CL で測る（sectionHits.js probeColumnHits の distMm）ので、面の軸 CL（無ければ面の線）との距離と比べる。
+  const faceAxis = Number.isFinite(cut.face?.axisCL?.effectiveValue) ? cut.face.axisCL.effectiveValue : faceCoord;
+  const faceDist = Math.abs(faceAxis - cut.line.axisValue);
+  // 一致の許容は mm 級（上階の CL の値は別の CL の参照の連鎖で出るので 1e-6 の一致には頼らない。QA 指摘 2026-10-19）
+  const standsOnEdge = b => b.kind === 'wall' && Number.isFinite(b.distMm) && Math.abs(b.distMm - faceDist) <= EDGE_WALL_DIST_TOL_MM;
+  // 区間 r の列ごとに、高さ zLo..zHi から辺の上の壁の帯を差し引いた残り（開口の矩形）。残りの高さが同じ隣接列はまとめる
+  const openPieces = (r, zLo, zHi) => {
+    const pieces = [];
+    for (const col of columns) {
+      if (col.x1 <= r.x0 + GAP_EPS || col.x0 >= r.x1 - GAP_EPS) continue;
+      let rest = [{ zLo, zHi }];
+      for (const b of col.bands.filter(standsOnEdge)) {
+        rest = rest.flatMap(iv => [
+          { zLo: iv.zLo, zHi: Math.min(iv.zHi, b.z0) }, // 帯より下
+          { zLo: Math.max(iv.zLo, b.z1), zHi: iv.zHi }, // 帯より上
+        ].filter(q => q.zHi - q.zLo > GAP_EPS));
+      }
+      const x0 = Math.max(col.x0, r.x0), x1 = Math.min(col.x1, r.x1);
+      for (const iv of rest) {
+        const prev = pieces.find(q => Math.abs(q.x1 - x0) <= GAP_EPS && Math.abs(q.zLo - iv.zLo) <= GAP_EPS && Math.abs(q.zHi - iv.zHi) <= GAP_EPS);
+        if (prev) prev.x1 = x1; else pieces.push({ x0, x1, zLo: iv.zLo, zHi: iv.zHi });
+      }
+    }
+    return pieces.filter(p => p.x1 - p.x0 > GAP_EPS);
+  };
+  // 開口の矩形 p に、天井の縁（中線。上端が天井 ceilZ のときだけ）とアキのバツ
+  const drawOpening = (p, ceilZ) => {
+    if (Math.abs(p.zHi - ceilZ) <= GAP_EPS) out.push(emitLine(cut, p.x0, ceilZ, p.x1, ceilZ, ElevationLineRole.SILHOUETTE, { neverDowngrade: true }));
+    out.push(emitLine(cut, p.x0, p.zLo, p.x1, p.zHi, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
+    out.push(emitLine(cut, p.x0, p.zHi, p.x1, p.zLo, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
+  };
   const hiddenPieces = [];
-  for (const r of runs) {
-    if (!r || r.x1 - r.x0 <= GAP_EPS) continue;
-    const across = worldOf(cut, (r.x0 + r.x1) / 2);
+  for (const run of runs) {
+    if (!run || run.x1 - run.x0 <= GAP_EPS) continue;
+    const across = worldOf(cut, (run.x0 + run.x1) / 2);
     const depth = faceCoord + vs * PROBE_EPS_MM;
     const cellOf = (layer, d) => (cut.line.isVertical ? probeCtx.cellAt(layer, d, across) : probeCtx.cellAt(layer, across, d));
     const cell = cellOf(selfLayer, depth);
     if (!cell?.room || (bandRoom && cell.room.id === bandRoom.id) || !Number.isFinite(cell.ceilZ)) continue;
     const ceil = cell.ceilZ;
     if (!(ceil - floorZ > GAP_EPS)) continue;
-    out.push(emitLine(cut, r.x0, ceil, r.x1, ceil, ElevationLineRole.SILHOUETTE, { neverDowngrade: true }));
-    out.push(emitLine(cut, r.x0, floorZ, r.x1, ceil, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
-    out.push(emitLine(cut, r.x0, ceil, r.x1, floorZ, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
+    for (const p of openPieces(run, floorZ, ceil)) drawOpening(p, ceil);
 
     // 上階の開口（ユーザー指摘 2026-10-16「moku4-3 1階 階段 A: X1+910 の右側復路の 2 階天井に破線。復路の壁断面上に 2 階天井まで
     // 破線。2FL 壁と 2F 天井壁の角でバツ〔復路天井より上は破線〕」）: 帯の天井が上階 FL より上にあり、面の線で上階の部屋へ
@@ -976,23 +1015,24 @@ export function openingPanelPrimitives(cut, columns, probeCtx, bandRoom) {
     const soffitCh = soffit
       ? (cut.line.isVertical ? stairSoffitChAt(soffit, faceCoord, across) : stairSoffitChAt(soffit, across, faceCoord)) : null;
     const soffitAtFace = Number.isFinite(soffitCh) ? selfFloorZ + soffitCh : Infinity;
-    const clipMin = Math.min(...clip.filter(q => q.hiX > r.x0 + GAP_EPS && q.loX < r.x1 - GAP_EPS).map(q => Math.min(q.ceilZ, q.ceilZHi ?? q.ceilZ)), bandTopZ);
-    const limit = Math.min(clipMin, soffitAtFace);
-    if (!(limit - upFloor > GAP_EPS)) continue; // 開口が見える高さが無い
-    out.push(emitLine(cut, r.x0, upCeil, r.x1, upCeil, ElevationLineRole.SILHOUETTE, { neverDowngrade: true }));
-    out.push(emitLine(cut, r.x0, upFloor, r.x1, upCeil, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
-    out.push(emitLine(cut, r.x0, upCeil, r.x1, upFloor, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
-    for (const [x, side] of [[r.x0, 'lo'], [r.x1, 'hi']]) {
-      const z0 = Math.max(upFloor, Math.min(clipAt(x, side), soffitAtFace));
-      if (upCeil - z0 > GAP_EPS) out.push(emitLine(cut, x, z0, x, upCeil, ElevationLineRole.DETAIL, { neverDowngrade: true }));
+    // 上階の辺の上に壁が立つ列（roof-test1 2階 階段 A の X1 側＝3階の階段吹抜けの壁）は開口ではない。壁は列の見えがかりが描く
+    for (const r of openPieces(run, upFloor, upCeil)) {
+      const clipMin = Math.min(...clip.filter(q => q.hiX > r.x0 + GAP_EPS && q.loX < r.x1 - GAP_EPS).map(q => Math.min(q.ceilZ, q.ceilZHi ?? q.ceilZ)), bandTopZ);
+      const limit = Math.min(clipMin, soffitAtFace);
+      if (!(limit - r.zLo > GAP_EPS)) continue; // 開口が見える高さが無い
+      drawOpening(r, upCeil);
+      for (const [x, side] of [[r.x0, 'lo'], [r.x1, 'hi']]) {
+        const z0 = Math.max(r.zLo, Math.min(clipAt(x, side), soffitAtFace));
+        if (r.zHi - z0 > GAP_EPS) out.push(emitLine(cut, x, z0, x, r.zHi, ElevationLineRole.DETAIL, { neverDowngrade: true }));
+      }
+      // 帯の天井より上（打ち切りの区間ごと・面の線での裏面より上）は隠れ線
+      for (const q of clip) {
+        const xLo = Math.max(q.loX, r.x0), xHi = Math.min(q.hiX, r.x1);
+        if (xHi - xLo > GAP_EPS) hiddenPieces.push({ xLo, xHi, zLo: Math.min(q.ceilZ, q.ceilZHi ?? q.ceilZ), zHi: 1e7 });
+      }
+      // 打ち切りの無い帯（裏面なし。帯の上限＝上階天井）は隠れるものが無い＝バツも縁も実線（裁定 2026-10-16「6」A）
+      if (Number.isFinite(soffitAtFace)) hiddenPieces.push({ xLo: r.x0, xHi: r.x1, zLo: soffitAtFace, zHi: 1e7 });
     }
-    // 帯の天井より上（打ち切りの区間ごと・面の線での裏面より上）は隠れ線
-    for (const q of clip) {
-      const xLo = Math.max(q.loX, r.x0), xHi = Math.min(q.hiX, r.x1);
-      if (xHi - xLo > GAP_EPS) hiddenPieces.push({ xLo, xHi, zLo: Math.min(q.ceilZ, q.ceilZHi ?? q.ceilZ), zHi: 1e7 });
-    }
-    // 打ち切りの無い帯（裏面なし。帯の上限＝上階天井）は隠れるものが無い＝バツも縁も実線（裁定 2026-10-16「6」A）
-    if (Number.isFinite(soffitAtFace)) hiddenPieces.push({ xLo: r.x0, xHi: r.x1, zLo: soffitAtFace, zHi: 1e7 });
   }
   return dashLinesInsideRects(out, hiddenPieces, { inclusive: true });
 }
