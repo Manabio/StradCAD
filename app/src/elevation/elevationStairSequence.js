@@ -1002,7 +1002,10 @@ export function openingPanelPrimitives(cut, columns, probeCtx, bandRoom) {
     if (!cell?.room || (bandRoom && cell.room.id === bandRoom.id) || !Number.isFinite(cell.ceilZ)) continue;
     const ceil = cell.ceilZ;
     if (!(ceil - floorZ > GAP_EPS)) continue;
-    for (const p of openPieces(run, floorZ, ceil)) drawOpening(p, ceil);
+    // 下階の階段の吹抜けの上の列（cut.lowerStairVoidRanges）には自階の床が無く、辺の開口の敷居はこの帯の床ではない
+    // ——その開口は下階の階段帯（上階の開口として）が描く。自階の開口の piece からその区間を差し引く
+    // （ユーザー指示 2026-10-19「2FLより上、X1+910からX2まではあきバツは不要」。上階の開口は不変）。
+    for (const p of subtractRangesFromPieces(openPieces(run, floorZ, ceil), cut.lowerStairVoidRanges)) drawOpening(p, ceil);
 
     // 上階の開口（ユーザー指摘 2026-10-16「moku4-3 1階 階段 A: X1+910 の右側復路の 2 階天井に破線。復路の壁断面上に 2 階天井まで
     // 破線。2FL 壁と 2F 天井壁の角でバツ〔復路天井より上は破線〕」）: 帯の天井が上階 FL より上にあり、面の線で上階の部屋へ
@@ -1037,6 +1040,28 @@ export function openingPanelPrimitives(cut, columns, probeCtx, bandRoom) {
     }
   }
   return dashLinesInsideRects(out, hiddenPieces, { inclusive: true });
+}
+
+/**
+ * 開口の矩形（x0..x1）から x の区間を差し引く（残りが GAP_EPS 以下の片は捨てる）。ranges が無ければそのまま。
+ * `stairGeometry.js subtractIntervals`・`sectionStructure.js subtractSpans` と同じ区間の差し引きだが、piece の属性
+ * （zLo/zHi）を保ち GAP_EPS で退化を捨てる版（意図的な重複）。
+ * @param {Array<{x0:number, x1:number, zLo:number, zHi:number}>} pieces
+ * @param {Array<{lo:number, hi:number}>|null|undefined} ranges
+ */
+export function subtractRangesFromPieces(pieces, ranges) {
+  if (!ranges?.length) return pieces;
+  let out = pieces;
+  for (const r of ranges) {
+    out = out.flatMap(p => {
+      if (r.hi <= p.x0 + GAP_EPS || r.lo >= p.x1 - GAP_EPS) return [p];
+      const parts = [];
+      if (r.lo - p.x0 > GAP_EPS) parts.push({ ...p, x1: r.lo });
+      if (p.x1 - r.hi > GAP_EPS) parts.push({ ...p, x0: r.hi });
+      return parts;
+    });
+  }
+  return out;
 }
 
 /**

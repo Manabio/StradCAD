@@ -9,7 +9,7 @@ import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js';
 import { uTurnSoffitFromLayout } from '../ceiling/stairSoffit.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, endSoffitAtOpenEndCeiling, SOFFIT_OPEN_END_INSET_MM, clipWallEdgesInsideStairBodies, dashLinesInsideRects, openingPanelPrimitives } from './elevationStairSequence.js';
+import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, endSoffitAtOpenEndCeiling, SOFFIT_OPEN_END_INSET_MM, clipWallEdgesInsideStairBodies, dashLinesInsideRects, openingPanelPrimitives, subtractRangesFromPieces } from './elevationStairSequence.js';
 import { partitionStripOf } from './section/cuts/switchbackCuts.js';
 import { stairSoffitAbove } from './space/stairSoffitCeiling.js';
 import { buildSpaceIndex } from './space/spaceModel.js';
@@ -566,4 +566,42 @@ test('【指摘2026-10-19】openingPanelPrimitives: 面の辺の上に立つ上�
   // 自階の辺の上の壁（0..780 だけ 0..2400 の帯）: 自階の開口（縁 2400）は 895..1675 だけ
   const selfEdge = columns.map(c => (c.x1 <= 780 ? { ...c, bands: [onEdge(0, 2400), ...c.bands.slice(1)] } : c));
   assert.deepEqual(openingPanelPrimitives(cut, selfEdge, probe, stairRoom).filter(p => p.y1 === p.y2 && -p.y1 === 2400).map(p => [p.x1, p.x2]), [[895, 1675]]);
+});
+
+test('【指示2026-10-19】openingPanelPrimitives: 下階の階段の吹抜けの上の列（cut.lowerStairVoidRanges）には自階の開口（天井の縁・バツ）を描かない。区間に一部だけ掛かる piece は残りだけ', () => {
+  const hall = { id: 'hall' }, stairRoom = { id: 'stair' };
+  const layer = { role: 'self', graph: {} };
+  const probe = cellAt => ({ cellAt });
+  const cutOf = (voidRanges) => ({ line: { isVertical: false, axisValue: -8247.5, lo: 72.5, hi: 1747.5 }, viewSign: -1, dirSign: 1,
+    zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0, layers: [layer], face: { hasRealWall: false, faceValue: -9100 },
+    ...(voidRanges ? { lowerStairVoidRanges: voidRanges } : {}) });
+  const columns = [
+    { x0: 0, x1: 780, worldLo: 72.5, worldHi: 852.5, bands: [{ kind: 'wall', z0: 0, z1: 3615 }] },
+    { x0: 780, x1: 895, worldLo: 852.5, worldHi: 967.5, bands: [{ kind: 'cut', z0: 0, z1: 4742 }] },
+    { x0: 895, x1: 1675, worldLo: 967.5, worldHi: 1747.5, bands: [{ kind: 'open', z0: 0, z1: 4742 }] },
+  ];
+  const cell = () => ({ room: hall, floorZ: 0, ceilZ: 2400 });
+  const xsOf = prims => prims.filter(p => p.y1 === p.y2).map(p => [p.x1, p.x2]);
+  // 復路側（895..1675）が吹抜け: その区間の開口は無く、往路側だけ
+  const a = openingPanelPrimitives(cutOf([{ lo: 895, hi: 1675 }]), columns, probe(cell), stairRoom);
+  assert.equal(a.length, 3, '往路側の区間 1 つ × （縁 1 ＋ バツ 2）');
+  assert.deepEqual(xsOf(a), [[0, 780]]);
+  // 区間が piece の一部だけなら残りの幅に描く
+  const b = openingPanelPrimitives(cutOf([{ lo: 1200, hi: 1675 }]), columns, probe(cell), stairRoom);
+  assert.deepEqual(xsOf(b), [[0, 780], [895, 1200]]);
+  assert.ok(b.some(p => p.x1 === 895 && p.y1 === 0 && p.x2 === 1200 && p.y2 === -2400), 'バツは残りの幅');
+  // 吹抜けなし（undefined・[]）は従来どおり 2 区間
+  assert.deepEqual(xsOf(openingPanelPrimitives(cutOf(null), columns, probe(cell), stairRoom)), [[0, 780], [895, 1675]]);
+  assert.deepEqual(xsOf(openingPanelPrimitives(cutOf([]), columns, probe(cell), stairRoom)), [[0, 780], [895, 1675]]);
+  // 区間の境界と piece の端が接するだけ（退化）は差し引かない
+  assert.deepEqual(xsOf(openingPanelPrimitives(cutOf([{ lo: 1675, hi: 1800 }]), columns, probe(cell), stairRoom)), [[0, 780], [895, 1675]]);
+});
+
+test('【指示2026-10-19・QA】subtractRangesFromPieces: 複数の区間・左にはみ出す区間・全部を覆う区間。属性は引き継ぐ', () => {
+  const piece = { x0: 0, x1: 1000, zLo: 0, zHi: 2400 };
+  assert.deepEqual(subtractRangesFromPieces([piece], [{ lo: 100, hi: 200 }, { lo: 500, hi: 600 }]).map(p => [p.x0, p.x1, p.zHi]),
+    [[0, 100, 2400], [200, 500, 2400], [600, 1000, 2400]]);
+  assert.deepEqual(subtractRangesFromPieces([piece], [{ lo: -50, hi: 300 }]).map(p => [p.x0, p.x1]), [[300, 1000]]);
+  assert.deepEqual(subtractRangesFromPieces([piece], [{ lo: -50, hi: 1200 }]), []);
+  assert.equal(subtractRangesFromPieces([piece], null)[0], piece, '区間なしは同じ配列');
 });
