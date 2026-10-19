@@ -4959,7 +4959,7 @@
   "room": "86e378f0-8eb2-4aa8-aa5a-f1cedbc46912",
   "name": "",
   "kind": "stair",
-  "count": 175,
+  "count": 178,
   "prims": [
    {
     "dash": "dashed",
@@ -5890,6 +5890,33 @@
     "x2": 895,
     "y1": -2675.824,
     "y2": -2675.824
+   },
+   {
+    "__o": "cutTopBeyond",
+    "type": "line",
+    "weight": "thin",
+    "x1": 780,
+    "x2": 780,
+    "y1": -2675.824,
+    "y2": -3875.824
+   },
+   {
+    "__o": "cutTopBeyond",
+    "type": "line",
+    "weight": "thin",
+    "x1": 895,
+    "x2": 895,
+    "y1": -2675.824,
+    "y2": -3875.824
+   },
+   {
+    "__o": "cutTopBeyond",
+    "type": "line",
+    "weight": "thin",
+    "x1": 780,
+    "x2": 895,
+    "y1": -3875.824,
+    "y2": -3875.824
    },
    {
     "type": "line",

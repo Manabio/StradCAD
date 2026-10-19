@@ -65,6 +65,8 @@ function bandsEqual(a, b) {
       && (band.junctionTop ?? false) === (other.junctionTop ?? false)
       // 斜めの天端の線（topEdge）が違う列は別の帯——斜線の傾き・位置は列ごとに決まるので統合しない。
       && (band.profiledTop ?? false) === (other.profiledTop ?? false)
+      // 切断面より向こうで上がる天板の見え掛かり（topBeyondZ）も列ごとに決まる
+      && (band.topBeyondZ ?? null) === (other.topBeyondZ ?? null)
       && (band.topEdge?.zAtX0 ?? null) === (other.topEdge?.zAtX0 ?? null)
       && (band.topEdge?.zAtX1 ?? null) === (other.topEdge?.zAtX1 ?? null)
       // 天端が天井の斜線に沿う帯（ceilEdge。topEdgeとは別物）も同じ理由で、斜線が違う列は統合しない。
@@ -546,7 +548,7 @@ export function mergeContinuousWallBands(columns, cut) {
     const z0 = Math.min(...cuts.map(b => b.z0)), z1 = Math.max(...cuts.map(b => b.z1));
     const base = cuts.reduce((a, b) => (b.z0 < a.z0 ? b : a), cuts[0]);
     const merged = { ...base, z0, z1 };
-    delete merged.topEdge; delete merged.profiledTop;
+    delete merged.topEdge; delete merged.profiledTop; delete merged.topBeyondZ;
     const kept = col.bands.filter(b => !(b.z1 > z0 + GAP_EPS && b.z0 < z1 - GAP_EPS));
     col.bands = [...kept, merged].sort((a, b) => a.z0 - b.z0);
   }

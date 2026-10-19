@@ -489,6 +489,28 @@ function topEdgeOf(range, span) {
 }
 
 /**
+ * 切断壁（切断線を横切る壁）の斜めの天端が、切断面より視線側で達する最高の絶対 z（壁の視線側の端での天端。天端は線形なので
+ * 端で最高）。天井の打ち切り（capZ）を超えない。壁の端が切断面より手前（視線の反対側）なら null。
+ * 隔て板の天板の見え掛かり（ユーザー指示 2026-10-19 roof-test1 2階 階段 A「隔て板断面線の上、傾斜している天板の見え掛かりを
+ * 細線描画」）の供給源。
+ * @param {import('@core').Wall} wall
+ * @param {{zAt:(along:number)=>number}} wallTop
+ * @param {number} cutAlong 切断線の軸（壁の長さ方向の座標）
+ * @param {number|undefined} viewSign
+ * @param {number} capZ
+ * @returns {number|null}
+ */
+export function cutWallTopBeyondZ(wall, wallTop, cutAlong, viewSign, capZ) {
+  const vs = viewSign === -1 ? -1 : 1;
+  const c1 = Math.min(wall.coord1, wall.coord2), c2 = Math.max(wall.coord1, wall.coord2);
+  const far = vs > 0 ? c2 : c1;
+  if ((far - cutAlong) * vs <= GAP_EPS) return null;
+  const z = wallTop.zAt(far);
+  if (!Number.isFinite(z)) return null;
+  return Number.isFinite(capZ) ? Math.min(z, capZ) : z;
+}
+
+/**
  * 天端プロファイルを持つ壁の「視線の上限」（cut/cutAlong 経路。見えがかり壁の capZ と同じ規則）。
  * 階段室の吹抜けには部屋の天井（CH）が無く、隔て壁の天端（仕様 2600〜3800）が CH で止まるのは誤りのため、
  * 上が吹抜けなら上階の天井まで登る（resolveSightlineTopZ）。プロファイルの無い壁は呼ばない（従来どおり info.ceilZ）。
@@ -840,6 +862,9 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
         // アキ（腰壁＋垂れ壁）は2つの帯になる（kneeDropZRangesAt）ため、候補も範囲ごとに積む。
         const wallTop = wallTopOf(probeCtx, layer, w);
         const cutCapZ = wallTop ? profiledWallCapZ(layerStack, info, w, line.axisValue, cut, probeCtx) : info.ceilZ;
+        // 斜めの天端（隔て板の天板）が切断面より向こう（視線側）で上がる分の最高＝壁の視線側の端での天端（天端は物理端まで続く。
+        // 裁定 2026-10-14）。切断帯の天端より高ければ、その見え掛かりを帯の上に描く（sectionEmit.js cutWallTopBeyondSightlines）
+        const topBeyondZ = wallTop && !wallTop.junction ? cutWallTopBeyondZ(w, wallTop, line.axisValue, cut.viewSign, cutCapZ) : null;
         for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, line.axisValue, info.floorZ, cutCapZ, wallTop)) {
           // **仮想断面がその壁の建具を切っているか**（ユーザー明示指示2026-09「仮想断面抽出時、
           // 建具を切っているものがないか判定する処理を追加して反映させて」）。切断壁における
@@ -849,7 +874,8 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
           const openRanges = openingPassThroughRangesFor(
             w, layer.graph, line.axisValue, info.floorZ, z0, z1);
           hits.push({ kind: 'cut', wall: w, layer, distMm: 0, z0, z1, openRanges,
-            isKneeDrop: isKneeDropRange(z0, z1, info), hidden, ...(wallTop ? { profiledTop: true } : {}) });
+            isKneeDrop: isKneeDropRange(z0, z1, info), hidden, ...(wallTop ? { profiledTop: true } : {}),
+            ...(topBeyondZ != null && topBeyondZ > z1 + GAP_EPS ? { topBeyondZ } : {}) });
         }
       } else if (isCutAlongWall(w, line)) {
         const hidden = isHiddenWall(cut, w, layer, probeCtx);
@@ -1111,6 +1137,8 @@ export function visibleBandsOf(hits, cut, opts = {}) {
         kind: frontMatch.kind, z0, z1, wall: frontMatch.wall, layerRole: frontMatch.layer.role,
         thicknessMm: Math.abs(mr.hi - mr.lo), isKneeDrop: frontMatch.isKneeDrop === true,
         ...(frontMatch.profiledTop ? { profiledTop: true } : {}),
+        // 切断面より向こうで上がる天板の見え掛かり（候補の上端に届いている帯だけ。topEdge と同じ規約）
+        ...(frontMatch.topBeyondZ != null && Math.abs(z1 - frontMatch.z1) < GAP_EPS ? { topBeyondZ: frontMatch.topBeyondZ } : {}),
       };
       // 切断壁でも、そのz区間が建具の開口なら開口として印を付ける（見えがかり壁と同じ規約）。
       // どの建具かも持たせる——emitColumnsがその建具の断面（枠・扉）を描くため。
@@ -1268,6 +1296,7 @@ function mergeAdjacentZBands(bands, baseFloorZ) {
     if (last && !atBaseFloorZ && Math.abs(last.z1 - band.z0) < GAP_EPS && sameZBand(last, band)) {
       last.z1 = band.z1;
       if (band.topEdge) last.topEdge = band.topEdge; // 斜めの天端の線は上側（天端に届いている帯）のもの
+      if (band.topBeyondZ != null) last.topBeyondZ = band.topBeyondZ; // 向こうで上がる天板の見え掛かりも同じ
     } else {
       merged.push({ ...band });
     }

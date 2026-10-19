@@ -247,6 +247,34 @@ function runLimitZ(columns, run, topZ) {
 }
 
 /**
+ * 切断壁の斜めの天端（隔て板の天板）が切断面より向こうで上がる分の見え掛かり（ユーザー指示 2026-10-19 roof-test1 2階 階段 A
+ * 「隔て板断面線の上、傾斜している天板の見え掛かりを細線描画」）。壁の帯の天端 z1 から、視線側の壁の端での天端
+ * （`band.topBeyondZ`。sectionHits.js cutWallTopBeyondZ。列の打ち切り値 col.ceilZ＝runLimitZ を超えない）まで、両縁の
+ * 立ち上がりと天端の水平を細線で描く——斜めの天板を正面から見ると、切断面の天端より上に板の両縁と遠端の天端が見える。
+ * 壁ごとに 1 組（cutWallRuns。列は壁と無関係な断点でも分割される。連なりの中で値が違えば高い方）。帯の天端が天井に
+ * 届いている壁（topBeyondZ 無し）は従来どおり何も描かない。
+ * @param {import('./sectionTypes.js').SectionColumn[]} columns
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number|undefined} ceilZ
+ * @returns {object[]}
+ */
+function cutWallTopBeyondSightlines(columns, cut, ceilZ) {
+  const topZ = ceilZ ?? cut.zRange?.hiZ ?? Infinity;
+  return cutWallRuns(columns).flatMap(r => {
+    const beyond = Math.max(...columns
+      .filter(c => c.x0 >= r.x0 - GAP_EPS && c.x1 <= r.x1 + GAP_EPS)
+      .flatMap(c => c.bands.filter(b => b.kind === 'cut' && Math.abs(b.z1 - r.band.z1) < GAP_EPS && Number.isFinite(b.topBeyondZ)).map(b => b.topBeyondZ)));
+    const z0 = r.band.z1, z1 = Math.min(beyond, runLimitZ(columns, r, topZ));
+    if (!(z1 > z0 + GAP_EPS)) return [];
+    return [
+      emitLine(cut, r.x0, z0, r.x0, z1, ElevationLineRole.DETAIL, { ceilZ }),
+      emitLine(cut, r.x1, z0, r.x1, z1, ElevationLineRole.DETAIL, { ceilZ }),
+      emitLine(cut, r.x0, z1, r.x1, z1, ElevationLineRole.DETAIL, { ceilZ }),
+    ].map(p => Object.assign(p, { __o: 'cutTopBeyond' }));
+  });
+}
+
+/**
  * 切断壁（`cut`帯）の天端のCUT水平線。腰壁のように**見えている天井より下で終わる**切断壁は、
  * その上端が切断面の一部（そこで断面が閉じる）なので水平線を描く
  * （ユーザー実機指摘2026-08「6」D「腰壁断面線は、天端で曲がり、壁厚だけ左に進み」。
@@ -984,6 +1012,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
     }
   });
   prims.push(...cutWallTopEdges(columns, cut, ceilZ, emitCtx));
+  prims.push(...cutWallTopBeyondSightlines(columns, cut, ceilZ));
   // 上階の床との取り合いは、**区間ごとの天井を持つ帯（cut.ceilProfileあり＝通常の部屋帯・
   // 吹抜け帯）は ceilStepSlabSection、持たない帯（階段帯）は slabEdgeCutWallJunction** が担当する。
   // 両方走らせると同じ取り合いを別々の作図で二重に描く——前者は「天井の高さが変わる境界」を

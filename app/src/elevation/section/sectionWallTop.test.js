@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature, edgeKey } from '@core';
 import { makeProbeContext, collectCutBreaks } from './sectionProbe.js';
-import { probeColumnHits, kneeDropZRangesAt } from './sectionHits.js';
+import { probeColumnHits, kneeDropZRangesAt, cutWallTopBeyondZ, probeColumn } from './sectionHits.js';
 import { buildColumns, buildSectionFigure } from './sectionEngine.js';
 import { emitColumns } from './sectionEmit.js';
 import { generateStairPartitionWalls, wrapStairPartitionFreeEnds } from '../../finish/stair/stairPartitionWalls.js';
@@ -530,3 +530,84 @@ test('裁定2026-10-14 天端の延長: 踊り場側の物理端（y=942.5）ま
   assert.ok(top < 2200 - 1, '設計端の値 2200 や柱頭 2400 まで立ち上げない');
 });
 
+
+// ==== 指示2026-10-19: 隔て板の天板が切断面より向こうで上がる分の見え掛かり（S3）====
+
+test('【指示2026-10-19】cutWallTopBeyondZ: 視線側の壁の端での天端。天井の打ち切りを超えない。端が切断面の手前・天端が非有限なら null', () => {
+  const wall = { coord1: 1000, coord2: 4000 };
+  const top = { zAt: along => 2000 + (along - 1000) * 0.5 }; // 1000→2000・4000→3500
+  assert.equal(cutWallTopBeyondZ(wall, top, 1500, 1, 4800), 3500);
+  assert.equal(cutWallTopBeyondZ(wall, top, 1500, 1, 3000), 3000, '天井の打ち切り');
+  assert.equal(cutWallTopBeyondZ(wall, top, 1500, -1, 4800), 2000, '逆向きは踊り場側の端（低い）');
+  assert.equal(cutWallTopBeyondZ(wall, top, 4000, 1, 4800), null, '端ちょうど＝向こうに壁が無い');
+  assert.equal(cutWallTopBeyondZ(wall, top, 1500, 1, Infinity), 3500, '打ち切りなし');
+  assert.equal(cutWallTopBeyondZ(wall, { zAt: () => NaN }, 1500, 1, 4800), null);
+});
+
+test('【指示2026-10-19】cut 経路の隔て壁: 視線が上り口側（天端が上がる向き）なら topBeyondZ＝壁の端 y=4000 の天端 3200。踊り場側を見る切断・天端が天井に届く構成には付かない', () => {
+  const f1 = makeFloor('p1', 0, { stairRects: EQUAL_UP, partition: true });
+  const f2 = makeFloor('p2', 1);
+  const layers = [{ graph: f1.graph, floorZMm: 0, role: 'self' }, { graph: f2.graph, floorZMm: FH, role: 'above' }];
+  const ctx = makeProbeContext(layers);
+  const hitsAt = (y, viewSign) => probeColumnHits({ ...cutAt(layers, y), viewSign }, 1000, ctx).hits.filter(h => h.kind === 'cut');
+  const [up] = hitsAt(1500, 1);
+  near(up.z1, 2200 + 1000 * 500 / 3000);
+  near(up.topBeyondZ, 3200);
+  const [down] = hitsAt(1500, -1);
+  assert.equal(down.topBeyondZ, undefined, '踊り場側の端の天端 2200 は切断面の天端より低い');
+  // 上階に実の部屋（天井 2400 で打ち切り）: 向こうの上がりも 2400 まで
+  const f2r = makeFloor('p2', 1, { roomRects: EQUAL_UP });
+  const layersR = [{ graph: f1.graph, floorZMm: 0, role: 'self' }, { graph: f2r.graph, floorZMm: FH, role: 'above' }];
+  const [capped] = probeColumnHits({ ...cutAt(layersR, 1500), viewSign: 1 }, 1000, makeProbeContext(layersR)).hits.filter(h => h.kind === 'cut');
+  near(capped.topBeyondZ, 2400);
+  const [atCap] = probeColumnHits({ ...cutAt(layersR, 2500), viewSign: 1 }, 1000, makeProbeContext(layersR)).hits.filter(h => h.kind === 'cut');
+  assert.equal(atCap.topBeyondZ, undefined, '天端が既に天井（2400）に届いていれば無し');
+  // 帯の分割・結合（probeColumn）を経ても残る
+  const band = probeColumn({ ...cutAt(layers, 1500), viewSign: 1 }, 1000, ctx).find(b => b.kind === 'cut');
+  near(band.topBeyondZ, 3200);
+});
+
+test('【指示2026-10-19】emitColumns: topBeyondZ を持つ切断壁の帯には、天端から向こうの天端まで両縁の立ち上がりと天端の水平を細線で描く（壁ごとに 1 組）。無ければ描かない', () => {
+  const f1 = makeFloor('p1', 0, { stairRects: EQUAL_UP, partition: true });
+  const f2 = makeFloor('p2', 1);
+  const layers = [{ graph: f1.graph, floorZMm: 0, role: 'self' }, { graph: f2.graph, floorZMm: FH, role: 'above' }];
+  const ctx = makeProbeContext(layers);
+  const cut = { ...cutAt(layers, 1500), viewSign: 1, zRange: { loZ: 0, hiZ: 4800 }, ceilProfile: [{ x0: 0, x1: 2000, ceilZ: 4800 }] };
+  const columns = buildColumns(cut, ctx);
+  const prims = emitColumns(columns, cut, { ceilZ: 4800 }).filter(p => p.__o === 'cutTopBeyond');
+  assert.equal(prims.length, 3, '両縁＋天端の 3 本');
+  assert.ok(prims.every(p => p.weight === 'thin' && !p.dash), '細線実線');
+  const z1 = 2200 + 1000 * 500 / 3000;
+  const verticals = prims.filter(p => p.x1 === p.x2).sort((a, b) => a.x1 - b.x1);
+  assert.equal(verticals.length, 2);
+  const run = columns.filter(c => c.bands.some(b => b.kind === 'cut'));
+  near(verticals[0].x1, Math.min(...run.map(c => c.x0)));
+  near(verticals[1].x1, Math.max(...run.map(c => c.x1)));
+  for (const v of verticals) { near(Math.min(-v.y1, -v.y2), z1); near(Math.max(-v.y1, -v.y2), 3200); }
+  const horizontal = prims.find(p => p.y1 === p.y2);
+  near(-horizontal.y1, 3200);
+  near(horizontal.x1, verticals[0].x1); near(horizontal.x2, verticals[1].x1);
+  // 逆向き（踊り場側を見る）は無し
+  const back = emitColumns(buildColumns({ ...cut, viewSign: -1 }, ctx), { ...cut, viewSign: -1 }, { ceilZ: 4800 }).filter(p => p.__o === 'cutTopBeyond');
+  assert.deepEqual(back, []);
+});
+
+test('【指示2026-10-19・QA】切断帯が途中の高さ（基準床）で分かれても、topBeyondZ は天端に届く上の帯だけが持ち、見え掛かりは 1 組のまま', () => {
+  const f1 = makeFloor('p1', 0, { stairRects: EQUAL_UP, partition: true });
+  const f2 = makeFloor('p2', 1);
+  const layers = [{ graph: f1.graph, floorZMm: 0, role: 'self' }, { graph: f2.graph, floorZMm: FH, role: 'above' }];
+  const ctx = makeProbeContext(layers);
+  // 基準床 1000: probeColumnHits が zBreaks に割り込ませ、帯は 0..1000 と 1000..2366.7 に分かれる（基準床では結合しない）
+  const cut = { ...cutAt(layers, 1500), viewSign: 1, baseFloorZ: 1000, zRange: { loZ: 0, hiZ: 4800 }, ceilProfile: [{ x0: 0, x1: 2000, ceilZ: 4800 }] };
+  const bands = probeColumn(cut, 1000, ctx).filter(b => b.kind === 'cut');
+  assert.equal(bands.length, 2, `帯は 2 つ（${JSON.stringify(bands.map(b => [b.z0, b.z1]))}）`);
+  assert.equal(bands[0].topBeyondZ, undefined, '下の帯は持たない');
+  near(bands[1].topBeyondZ, 3200);
+  const prims = emitColumns(buildColumns(cut, ctx), cut, { ceilZ: 4800 }).filter(p => p.__o === 'cutTopBeyond');
+  assert.equal(prims.length, 3);
+  for (const p of prims) assert.ok(Math.min(-p.y1, -p.y2) >= 2200 + 1000 * 500 / 3000 - 1e-6, '上の帯の天端から');
+  // 列の天井（打ち切り）が向こうの天端より低ければそこまで
+  const clipped = emitColumns(buildColumns(cut, ctx), cut, { ceilZ: 3000 }).filter(p => p.__o === 'cutTopBeyond');
+  assert.equal(clipped.length, 3);
+  for (const p of clipped) assert.ok(Math.max(-p.y1, -p.y2) <= 3000 + 1e-6, '帯の天井 3000 を超えない');
+});
