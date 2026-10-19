@@ -616,7 +616,7 @@ const App = observer(() => {
     cursorWorld, cursorScreen, pressPos, isPanning,
     commitCLMove,
     setSnapPoint, setNearCL, setNearWall, setNearOpening, setCursorWorld,
-    resetGestureRefs, didOpeningDragEnd,
+    resetGestureRefs, didOpeningDragEnd, didPanEnd,
   } = usePointerInteraction({
     project, graph, size, appMode, columnAxisMode, modeRef,
     menu, setMenu,
@@ -2820,6 +2820,7 @@ const App = observer(() => {
             clDialog={clDialog}
             onOpeningTagClick={id => { if (!didOpeningDragEnd()) enterOpeningMode(id); }}
             onElevationOpeningClick={id => modeRef.current?.selectOpening(id)}
+            didPanEnd={didPanEnd}
             menu={menu}
             onMemberClick={openMemberCard}
             setStatusMenu={setStatusMenu}

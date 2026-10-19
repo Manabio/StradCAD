@@ -42,6 +42,7 @@ export const SceneLayers = observer(({
   snapPoint, cursorWorld, clPreview, clDialog, menu,
   onMemberClick, setStatusMenu,
   onOpeningTagClick, onElevationOpeningClick,
+  didPanEnd, // 直前の pointerUp がパンの終了だったか（usePointerInteraction）。Konva はパン後も click を出すので、図形の選択はこれを見て無視する
 }) => {
   // 展開モードは平面・通り芯・寸法を一切出さない専用画面（描画エリア＋ガター全域）。
   // 既存レイヤ群（INSETクリップ・viewport Group等）は一切通らない。
@@ -111,7 +112,7 @@ export const SceneLayers = observer(({
                 breakOverhangMm={stairBreakOverhangMm}
                 stepNumbers={shouldShowStairStepNumbers(appMode)}
                 selectedStairId={appMode === 'finish' ? mode?.selectedStairId : null}
-                onSelectStair={appMode === 'finish' ? (id => modeRef.current?.selectStair(id)) : null}
+                onSelectStair={appMode === 'finish' ? (id => { if (!didPanEnd?.()) modeRef.current?.selectStair(id); }) : null}
               />
             )}
             {appMode === 'site' && mode && (
@@ -119,7 +120,7 @@ export const SceneLayers = observer(({
                 site={project.site}
                 viewport={viewport}
                 selectedLineId={mode.selectedLineId}
-                onSelectLine={id => modeRef.current?.selectLine(id)}
+                onSelectLine={id => { if (!didPanEnd?.()) modeRef.current?.selectLine(id); }}
               />
             )}
             {appMode === 'site' && <SiteDrawPreview mode={mode} />}

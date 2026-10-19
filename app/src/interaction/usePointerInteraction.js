@@ -17,6 +17,7 @@ import {
   SNAP_THRESHOLD_PX,
 } from '../snap.js';
 import { useLongPress } from './useLongPress.js';
+import { TAP_MOVE_PX, isTapDistance, releaseGesture, ceilingHoldAction } from './holdGesture.js';
 import { findColumnAxisLabel, findGutterCL } from './gutterHitTest.js';
 import { CONTEXT, detectContext, buildMenuState } from './menuItems.js';
 import { convertMenuFlags } from './clMenuGating.js';
@@ -88,6 +89,8 @@ export function usePointerInteraction({
   const openingDownRef    = useRef(null); // 建具ドラッグ開始判定用: { clientX, clientY, opening }
   const openingDragRef    = useRef(null); // 建具ドラッグ中: { opening, wall, range, candidates, grabDelta, before }
   const openingDragEndedRef = useRef(false); // 直前の pointerUp が建具ドラッグの確定だったか（記号丸の click を無視するため）
+  const panDistRef  = useRef(0);     // 押下からのパンの移動量（px の和。panTo が積む。pointerDown で 0 に戻す）
+  const panEndedRef = useRef(false); // 直前の pointerUp がパン（TAP_MOVE_PX 以上動かした）の終了だったか（Konva の click を無視するため）
 
   // ---- ガター通り芯 長押しフック ----
   // 長押し確定（500ms後）までの待ち時間を使い、押下直後（onStart）から移動範囲の
@@ -130,11 +133,14 @@ export function usePointerInteraction({
     onStart:  (sx, sy) => setPressPos({ x: sx, y: sy }),
     onFire:   (sx, sy) => {
       setPressPos(null);
-      // 天伏: 長押しはセルのドラッグ選択ではなくメニュー（天井芯の操作）。進行中のドラッグ選択を捨てて、
-      // 離したときの確定（commitDrag）も走らせない。選択済みの内容（selection）は保つ。
-      if (appMode === 'ceiling') {
-        modeRef.current?.cancelDrag();
-        ceilingDragDownRef.current = null;
+      // 仕上げ: ロングタップ成立＝セルのなぞり（部屋の指定）の開始（interaction/holdGesture.js の規則。メニューは無い）。
+      // 押下点（sx, sy）のセルから startDrag し、以後の移動で updateDrag、離したときに commitDrag。
+      // 階段・昇降機・屋根のセルは startDrag がその場で選択して dragState を作らない（従来のタップと同じ）。
+      if (appMode === 'finish') {
+        if (!finishDragDownRef.current) return;
+        const world = viewport.screenToWorld(sx, sy);
+        modeRef.current?.startDrag(world.x, world.y);
+        return;
       }
       const snap         = snapRef.current;
       const clEndpoint   = nearCLEndpointRef.current;
@@ -144,6 +150,19 @@ export function usePointerInteraction({
       // context 判定・メニュー items 生成は menuItems.js に集約（建具モードは壁・開口以外は null）。
       // menuItems.js は import ゼロ（node:test対応）に保つため、graph 依存の判定値はここで算出して渡す。
       const menuContext = detectContext(snap, cl, opening, wall, clEndpoint);
+      // 天伏: ロングタップは、空（天井芯の線上・端点でない）で押下点のセルが選択中の群に属し区画を作れるときだけ
+      // セルのなぞりの開始（startDrag の intent 'create'。離したときに commitDrag が区画を作る）。それ以外は従来どおり
+      // メニュー（天井芯の追加・移動・削除・延長）で、なぞりは始めず（cancelDrag）離したときの確定も走らせない。
+      // 選択済みの内容（selection）は保つ。判定は interaction/holdGesture.js ceilingHoldAction。
+      if (appMode === 'ceiling') {
+        if (!ceilingDragDownRef.current) return;
+        const world = viewport.screenToWorld(sx, sy);
+        if (menuContext === CONTEXT.EMPTY) modeRef.current?.startDrag(graph, world.x, world.y);
+        const action = ceilingHoldAction({ menuContext, emptyContext: CONTEXT.EMPTY, intent: modeRef.current?.dragState?.intent });
+        if (action === 'trace') return;
+        modeRef.current?.cancelDrag();
+        ceilingDragDownRef.current = null;
+      }
       // 中心⇔通り芯の入替え可否（canToGrid/canToCenter）・軸最後の1本グレー化（isLastGridOnAxis）は
       // clMenuGating.js（centerLineConvert.jsの昇格・降格ガードと同じ主体判定isConvertSubjectを共有）
       // へ集約——ここで個別にインライン種別比較を持つと、処理側ガードと片方だけ直った場合に
@@ -187,12 +206,27 @@ export function usePointerInteraction({
     updateSnap(e.evt.clientX, e.evt.clientY);
   };
 
+  // ---- パン（drag.current を前回位置から更新して viewport を動かす。全モード共通）----
+  // 移動量を panDistRef に積み、pointerUp で「パンの終了」（didPanEnd）を決める——Konva は押した図形と離した図形が
+  // 同じなら移動量に関係なく click を出すので、パンの直後に飛ぶ click（仕上げの階段・敷地線の選択）はこれを見て無視する
+  // （SceneLayers.jsx。建具ドラッグの didOpeningDragEnd と同じ作り）。
+  function panTo(clientX, clientY) {
+    const dx = clientX - drag.current.lastX;
+    const dy = clientY - drag.current.lastY;
+    drag.current.lastX = clientX;
+    drag.current.lastY = clientY;
+    panDistRef.current += Math.hypot(dx, dy);
+    viewport.pan(dx, dy);
+  }
+
   // ---- ポインタ Down ----
   const handlePointerDown = (e) => {
     if (isUiBusy()) return; // 関門が開いている間は入力を無視する（遮断点A・入力規制ステップ3）
     const { clientX, clientY } = e.evt;
     if (e.evt.touches) return;
     if (menu) return;
+    panDistRef.current = 0;
+    panEndedRef.current = false;
 
     // ---- 展開モード ----
     if (appMode === 'elevation') {
@@ -211,7 +245,10 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 仕上げモード ----
+    // ---- 仕上げモード（ガター内はパン。描画エリアは押下を記録して長押しを始めるだけ）----
+    // 見分けは interaction/holdGesture.js の規則: 長押し成立前に 8px 超動けばパン（任意の点から）、500ms 静止で
+    // ロングタップ＝セルのなぞり開始（onFire が startDrag）、動かず離せばクリック（pointerUp が startDrag＋commitDrag({tap})）。
+    // 押下の時点では startDrag しない——階段・昇降機の選択や命名ダイアログを閉じる副作用が、パンのつもりの押下で起きないように。
     if (appMode === 'finish') {
       const inGutter = isInGutter(clientX, clientY, size.width, size.height);
       if (inGutter) {
@@ -219,15 +256,15 @@ export function usePointerInteraction({
         setIsPanning(true);
       } else {
         finishDragDownRef.current = { x: clientX, y: clientY };
-        const world = viewport.screenToWorld(clientX, clientY);
-        modeRef.current?.startDrag(world.x, world.y);
+        longPress.begin(clientX, clientY);
       }
       return;
     }
 
-    // ---- 天伏モード（ガター内はパン。描画エリアは天井セルのドラッグ選択＋天井芯の長押しメニュー。S8b）----
+    // ---- 天伏モード（ガター内はパン。描画エリアは仕上げと同じ見分け＋天井芯の長押しメニュー。S8b）----
     // ガターの通り芯長押し（gutterLongPress）には入らない（通り芯の編集は天伏では不可）。長押しは描画エリアの
-    // 汎用 longPress を共有し、成立（onFire）でセルのドラッグ選択を捨ててメニューを出す。移動中は汎用の移動へ。
+    // 汎用 longPress を共有し、成立（onFire）で「空×選択中の群のセル」ならセルのなぞり開始、それ以外はメニュー。
+    // 成立前の 8px 超の移動はパン、動かず離せばクリック（pointerUp が startDrag＋commitDrag({tap})）。移動中は汎用の移動へ。
     if (appMode === 'ceiling') {
       // 移動中は押下位置（ガター含む）に関わらず確定の再プレスとして記録する（汎用経路と同じ順序）
       if (modeRef.current?.moveState) {
@@ -240,15 +277,13 @@ export function usePointerInteraction({
         setIsPanning(true);
       } else {
         ceilingDragDownRef.current = { x: clientX, y: clientY };
-        const world = viewport.screenToWorld(clientX, clientY);
-        modeRef.current?.startDrag(graph, world.x, world.y);
         updateSnap(clientX, clientY); // 長押しメニューの対象（天井芯・端点・空）を押下点で解決する
         longPress.begin(clientX, clientY);
       }
       return;
     }
 
-    // ---- 敷地モード ----
+    // ---- 敷地モード（描画エリアはサブモードによらずドラッグでパン。三斜・その他はタップで線分の入力）----
     if (appMode === 'site') {
       const inGutter = isInGutter(clientX, clientY, size.width, size.height);
       if (inGutter) {
@@ -256,11 +291,9 @@ export function usePointerInteraction({
         setIsPanning(true);
       } else {
         const sm = modeRef.current?.subMode;
-        if (sm === 'sansha' || sm === 'other') {
-          // ドラッグかタップかを pointerUp で判定するために記録
-          siteDrawDownRef.current = { x: clientX, y: clientY };
-          drag.current = { lastX: clientX, lastY: clientY };
-        }
+        // ドラッグかタップかを pointerUp で判定するために記録（線分を入力するサブモードだけ）
+        if (sm === 'sansha' || sm === 'other') siteDrawDownRef.current = { x: clientX, y: clientY };
+        drag.current = { lastX: clientX, lastY: clientY };
       }
       return;
     }
@@ -468,51 +501,45 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 仕上げモード ----
+    // ---- 仕上げモード（パン／ロングタップ後のなぞり／長押し成立前の 8px 超の移動でパン開始）----
     if (appMode === 'finish') {
-      if (drag.current) {
-        const dx = clientX - drag.current.lastX;
-        const dy = clientY - drag.current.lastY;
-        drag.current.lastX = clientX;
-        drag.current.lastY = clientY;
-        viewport.pan(dx, dy);
-        return;
-      }
-      if (finishDragDownRef.current && modeRef.current?.dragState) {
+      if (drag.current) { panTo(clientX, clientY); return; }
+      if (!finishDragDownRef.current) return;
+      if (modeRef.current?.dragState) {
         const world = viewport.screenToWorld(clientX, clientY);
         modeRef.current?.updateDrag(world.x, world.y);
+        return;
+      }
+      // 成立後（hasFired）に dragState が無い（階段などを選択済み・選べないセル）でも、8px 超動けばパン（反応の無い押下にしない）
+      if (longPress.move(clientX, clientY)) {
+        drag.current = { lastX: clientX, lastY: clientY };
+        panDistRef.current = TAP_MOVE_PX; // 押下点から既に閾値超動いている（panTo の積算はここから）。離した直後の click を確実に無視する
+        setIsPanning(true);
       }
       return;
     }
 
-    // ---- 天伏モード（パン、または天井セルのドラッグ選択。天井芯の移動中は汎用の CL 移動へ落とす）----
+    // ---- 天伏モード（パン／ロングタップ後のなぞり／長押し成立前の 8px 超の移動でパン開始。天井芯の移動中は汎用の CL 移動へ落とす）----
     if (appMode === 'ceiling' && !modeRef.current?.moveState) {
-      if (drag.current) {
-        const dx = clientX - drag.current.lastX;
-        const dy = clientY - drag.current.lastY;
-        drag.current.lastX = clientX;
-        drag.current.lastY = clientY;
-        viewport.pan(dx, dy);
-        return;
-      }
-      // 閾値を超えて動いたら長押し（メニュー）を取り消す。パンにはしない（ドラッグ選択を続ける）
-      if (longPress.move(clientX, clientY)) longPress.abort();
-      if (ceilingDragDownRef.current && modeRef.current?.dragState) {
+      if (drag.current) { panTo(clientX, clientY); return; }
+      if (!ceilingDragDownRef.current) return;
+      if (modeRef.current?.dragState) {
         const world = viewport.screenToWorld(clientX, clientY);
         modeRef.current?.updateDrag(graph, world.x, world.y, CEILING_DRAG_SAMPLE_PX / viewport.scaleX);
+        return;
+      }
+      // 成立後はメニュー（ceilingDragDownRef が null）かなぞり（dragState）でここへ来ない。成立前の 8px 超の移動でパン
+      if (longPress.move(clientX, clientY)) {
+        drag.current = { lastX: clientX, lastY: clientY };
+        panDistRef.current = TAP_MOVE_PX;
+        setIsPanning(true);
       }
       return;
     }
 
     // ---- 敷地モード ----
     if (appMode === 'site') {
-      if (drag.current) {
-        const dx = clientX - drag.current.lastX;
-        const dy = clientY - drag.current.lastY;
-        drag.current.lastX = clientX;
-        drag.current.lastY = clientY;
-        viewport.pan(dx, dy);
-      }
+      if (drag.current) panTo(clientX, clientY);
       // 始点確定後はドラッグ中でもマウス位置でプレビューを更新する
       if (modeRef.current?.siteDrawState) {
         const world = viewport.screenToWorld(clientX, clientY);
@@ -529,11 +556,7 @@ export function usePointerInteraction({
 
     // パン中
     if (drag.current) {
-      const dx = clientX - drag.current.lastX;
-      const dy = clientY - drag.current.lastY;
-      drag.current.lastX = clientX;
-      drag.current.lastY = clientY;
-      viewport.pan(dx, dy);
+      panTo(clientX, clientY);
       setSnapPoint(null);
       setCursorWorld(null);
       return;
@@ -616,6 +639,7 @@ export function usePointerInteraction({
     const shouldPan = longPress.move(clientX, clientY);
     if (shouldPan) {
       drag.current = { lastX: clientX, lastY: clientY };
+      panDistRef.current = TAP_MOVE_PX;
       setIsPanning(true);
       return;
     }
@@ -654,6 +678,8 @@ export function usePointerInteraction({
 
   // ---- ポインタ Up ----
   const handlePointerUp = (e) => {
+    // パンの終了か（TAP_MOVE_PX 以上動かした）。この直後に飛ぶ Konva の click は didPanEnd で無視される。次の pointerDown で戻す
+    panEndedRef.current = !!drag.current && panDistRef.current >= TAP_MOVE_PX;
     // ---- 展開モード ----
     if (appMode === 'elevation') {
       if (openingDragRef.current) finishOpeningDrag();
@@ -663,29 +689,48 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 仕上げモード ----
+    // ---- 仕上げモード（離したときの見分け: ロングタップ後＝なぞりの確定／パン終了／クリック＝従来のタップ）----
     if (appMode === 'finish') {
-      if (finishDragDownRef.current && modeRef.current?.dragState) {
-        // タップ（押下点からほぼ動いていない）かは移動量で決める（吹抜けから始めた部屋ドラッグが、
-        // 吹抜けと同じ形の1連結領域でも続きの階段の指定になるように。訪れたセル数では決められない）
-        const down = finishDragDownRef.current;
-        const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
-        modeRef.current?.commitDrag({ tap: tapDist < 8 });
+      const down = finishDragDownRef.current;
+      if (down) {
+        const gesture = releaseGesture({ fired: longPress.hasFired(), panned: !!drag.current });
+        if (gesture === 'hold') {
+          // タップ（押下点からほぼ動いていない）かは移動量で決める（吹抜けから始めた部屋ドラッグが、
+          // 吹抜けと同じ形の1連結領域でも続きの階段の指定になるように。訪れたセル数では決められない）。
+          // 成立後に dragState が無い（階段などを選択済み）なら何もしない
+          const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
+          if (modeRef.current?.dragState) modeRef.current.commitDrag({ tap: isTapDistance(tapDist) });
+        } else if (gesture === 'tap') {
+          // クリック: 押下点のセルで startDrag → すぐ commitDrag({tap:true})（従来の「押してそのまま離す」と同じ処理）
+          longPress.abort();
+          const world = viewport.screenToWorld(down.x, down.y);
+          modeRef.current?.startDrag(world.x, world.y);
+          if (modeRef.current?.dragState) modeRef.current.commitDrag({ tap: true });
+        }
       }
       finishDragDownRef.current = null;
+      longPress.abort();
       drag.current = null;
       setIsPanning(false);
       return;
     }
 
-    // ---- 天伏モード（パン終了、または天井セル選択の確定。天井芯の移動中は下の汎用の CL 移動確定へ落とす）----
+    // ---- 天伏モード（離したときの見分け: ロングタップ後＝なぞりの確定（メニューなら何もしない）／パン終了／クリック。天井芯の移動中は下の汎用の CL 移動確定へ落とす）----
     if (appMode === 'ceiling' && !modeRef.current?.moveState) {
-      // 長押しが成立していれば（メニューを出した／出さなかった）セル選択は確定しない（onFire が捨てている）
-      if (ceilingDragDownRef.current && !longPress.hasFired()) {
-        // dragState が無くても呼ぶ（選べない所・空白のタップで選択を解除するため）。タップは仕上げと同じ移動量 8px 未満
-        const down = ceilingDragDownRef.current;
-        const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
-        modeRef.current?.commitDrag({ tap: tapDist < 8, ctx: { graph, project } });
+      const down = ceilingDragDownRef.current;
+      if (down) {
+        const gesture = releaseGesture({ fired: longPress.hasFired(), panned: !!drag.current });
+        if (gesture === 'hold') {
+          // 長押しでメニューを出した場合は onFire が dragState と ceilingDragDownRef を捨てていてここへ来ない。来るのはなぞり中だけ
+          const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
+          if (modeRef.current?.dragState) modeRef.current.commitDrag({ tap: isTapDistance(tapDist), ctx: { graph, project } });
+        } else if (gesture === 'tap') {
+          // クリック: 押下点のセルで startDrag → commitDrag({tap:true})。dragState が無くても呼ぶ（選べない所・空白のタップで選択を解除するため）
+          longPress.abort();
+          const world = viewport.screenToWorld(down.x, down.y);
+          modeRef.current?.startDrag(graph, world.x, world.y);
+          modeRef.current?.commitDrag({ tap: true, ctx: { graph, project } });
+        }
       }
       ceilingDragDownRef.current = null;
       longPress.abort();
@@ -836,6 +881,7 @@ export function usePointerInteraction({
     if (appMode === 'finish') {
       modeRef.current?.cancelDrag();
       finishDragDownRef.current = null;
+      longPress.abort();
       drag.current = null;
       setIsPanning(false);
       return;
@@ -974,6 +1020,9 @@ export function usePointerInteraction({
   // App.jsx の記号丸クリック（建具モードへの遷移）はこれを見て無視する（ドラッグのたびにモードが
   // 切り替わらないように）。次の pointerDown でリセットされる。
   function didOpeningDragEnd() { return openingDragEndedRef.current; }
+  // 直前の pointerUp がパンの終了だったか（panTo の積算が TAP_MOVE_PX 以上）。SceneLayers の階段・敷地線の
+  // Konva click はこれを見て無視する（パンのつもりの押下で選択が変わらないように）。次の pointerDown でリセットされる。
+  function didPanEnd() { return panEndedRef.current; }
 
   // ---- スナップ & 近傍CL/壁/開口 計算 ----
   // 候補解決は snap.js の resolvePointerTargets に一本化（App側は setState への反映のみ）。
@@ -1004,6 +1053,6 @@ export function usePointerInteraction({
     cursorWorld, cursorScreen, pressPos, isPanning,
     commitCLMove,
     setSnapPoint, setNearCL, setNearWall, setNearOpening, setCursorWorld,
-    resetGestureRefs, didOpeningDragEnd,
+    resetGestureRefs, didOpeningDragEnd, didPanEnd,
   };
 }
