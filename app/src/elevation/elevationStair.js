@@ -115,7 +115,8 @@ function resolveUpperCeilingHeight(stair, stairRoom, graph, upperGraph) {
  * @param {{stair?:object, project?:object, materialMap?:Map, gridCLs?:object[], floorHeight?:number,
  *   gapModelMm?:number, nameGapModelMm?:number, triangleOffsetModelMm?:number,
  *   faceLabelAvoidThresholdModelMm?:number, openingTagRowModelMm?:number,
- *   dimRowGapModelMm?:number, gridRowGapModelMm?:number}} [ctx]
+ *   dimRowGapModelMm?:number, gridRowGapModelMm?:number, lowerGraph?:object|null}} [ctx]
+ *   lowerGraph … 直下階のgraph（peek済み）。下階の階段の吹抜けの上の列の断面線に使う（無ければ従来どおり）。
  * @returns {{roomId:string, roomName:string, primitives:object[], bounds:object,
  *   heightMm:number, widthMm:number, faceCount:number, leftAnchorX:number|null,
  *   heightUnits:number}}
@@ -176,6 +177,9 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     ? stairFaceSequence(stair, composedFaces, graph, {
         floorHeight, chUpperAbsMm, chLowerMm: roomCeilingHeight(graph, stairRoom).mm,
         upperGraph, layers, stairSoffit,
+        // 直下階（下階の階段の吹抜けの上では自分の断面線より下を描かない。section/lowerStairVoid.js）。無ければ従来どおり
+        lowerGraph: ctx.lowerGraph ?? null,
+        lowerFloorHeightMm: ctx.lowerGraph && project ? floorHeightAbove(project, ctx.lowerGraph.plane) : null,
         // content側の「壁のない端部」延長量。図形側（layoutBandFaces→buildFaceFigure）へ渡すのと
         // 同じctxの値をそのまま使い、同じ端で図形とcontentの線の長さを揃える。
         wallLessEndExtendModelMm: ctx.wallLessEndExtendModelMm,

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { uTurnPlanLayout } from '../../finish/stair/stairGeometry.js';
-import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass, crossingLandingFloorProfile, hiddenTurnStepPrimitives, HIDDEN_STEP_MARK, crossingFlightBodySections, flightHiddenRects } from './sectionStair.js';
+import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, flightTreadZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass, crossingLandingFloorProfile, hiddenTurnStepPrimitives, HIDDEN_STEP_MARK, crossingFlightBodySections, flightHiddenRects, crossingFlightCutSurfaces } from './sectionStair.js';
 import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from '../elevationStairSection.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
@@ -2492,4 +2492,49 @@ test('【指示2026-10-15】flightHiddenRects: 天端が切断面にある（視
   assert.equal(d.zLo, 2000, '裏面が無ければ足元から');
   assert.deepEqual(flightHiddenRects(null, cutAt(800), columns, null), [], '寄与なし');
   assert.deepEqual(flightHiddenRects({ flights: [outbound] }, cutAt(3000), columns, null), [], '横切らない');
+});
+
+// ==== 指示2026-10-19: 下階の階段の吹抜けの上の列の断面線（切断面にある自分の段板の天端）====
+test('【指示2026-10-19】crossingFlightCutSurfaces: 内部を横切る切断は段板の天端（flightTreadZAt）、端ちょうどはその端の歩行面（始端＝足元・終端＝最上段）', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  const [outbound, inbound] = c.flights; // 往路 x:57.5..1000（上り口 4500 → 踊り場 1500）、復路 x:1000..1942.5（1500 → 4500）
+  const cutAt = (y) => ({ line: { isVertical: false, axisValue: y, lo: 0, hi: 2000 }, viewSign: 1, dirSign: 1 });
+  // 内部（y=3000）: 両 flight とも段板の天端
+  const mid = crossingFlightCutSurfaces(c, cutAt(3000));
+  assert.equal(mid.length, 2);
+  const byLo = mid.sort((a, b) => a.loX - b.loX);
+  assert.deepEqual([byLo[0].loX, byLo[0].hiX], [outbound.acrossLo, outbound.acrossHi]);
+  assert.equal(byLo[0].z, flightTreadZAt(outbound, 3000));
+  assert.deepEqual([byLo[1].loX, byLo[1].hiX], [inbound.acrossLo, inbound.acrossHi]);
+  assert.equal(byLo[1].z, flightTreadZAt(inbound, 3000));
+  // 踊り場の前縁 y=1500（往路の終端・復路の始端）: 往路は最上段の天端、復路は足元＝どちらも踊り場の高さ
+  const edge = crossingFlightCutSurfaces(c, cutAt(1500)).sort((a, b) => a.loX - b.loX);
+  assert.equal(edge.length, 2);
+  assert.equal(edge[0].z, outbound.baseZ + outbound.steps * outbound.riserMm);
+  assert.equal(edge[1].z, inbound.baseZ);
+  assert.equal(edge[0].z, edge[1].z, '踊り場の高さ');
+  // 上り口 y=4500（往路の始端・復路の終端）
+  const entry = crossingFlightCutSurfaces(c, cutAt(4500)).sort((a, b) => a.loX - b.loX);
+  assert.equal(entry[0].z, outbound.baseZ);
+  assert.equal(entry[1].z, inbound.baseZ + inbound.steps * inbound.riserMm);
+  // 隔て板の柱があれば幅は隔て板の面
+  const withTread = { ...c, flights: [{ ...inbound, treadAcrossLo: 1100, treadAcrossHi: 1900 }] };
+  assert.deepEqual(crossingFlightCutSurfaces(withTread, cutAt(3000)).map(s => [s.loX, s.hiX]), [[1100, 1900]]);
+  // dirSign=-1 はローカル x を反転（原点 hi=2000）
+  const flipped = crossingFlightCutSurfaces({ ...c, flights: [inbound] }, { ...cutAt(3000), dirSign: -1 });
+  assert.deepEqual([flipped[0].loX, flipped[0].hiX], [2000 - inbound.acrossHi, 2000 - inbound.acrossLo]);
+});
+
+test('【指示2026-10-19・失敗系】crossingFlightCutSurfaces: 縦断する切断・flight の外の切断・寄与なし・切断線なし・幅が退化は空', () => {
+  const graph = makeGraph();
+  const { stair } = makeSwitchbackFixture(graph);
+  const c = stairContribution(stair, graph, FLOOR_HEIGHT);
+  assert.deepEqual(crossingFlightCutSurfaces(c, { line: { isVertical: true, axisValue: 500, lo: 1500, hi: 4500 }, viewSign: 1, dirSign: 1 }), []);
+  assert.deepEqual(crossingFlightCutSurfaces(c, { line: { isVertical: false, axisValue: 1000, lo: 0, hi: 2000 }, viewSign: 1, dirSign: 1 }), []);
+  assert.deepEqual(crossingFlightCutSurfaces(null, { line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 }, dirSign: 1 }), []);
+  assert.deepEqual(crossingFlightCutSurfaces(c, { dirSign: 1 }), []);
+  const degenerate = { ...c, flights: [{ ...c.flights[1], acrossLo: 1500, acrossHi: 1500 }] };
+  assert.deepEqual(crossingFlightCutSurfaces(degenerate, { line: { isVertical: false, axisValue: 3000, lo: 0, hi: 2000 }, dirSign: 1 }), []);
 });

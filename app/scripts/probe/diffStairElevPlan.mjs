@@ -268,7 +268,11 @@ for (let i = 0; i < tabs.length; i++) {
       const wallFilter = stairBandWallFilter(stair, graph);
       const composedFaces = composeRoomFaces(room, graph, { keepWallLessFaces: true, wallFilter });
       const layers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: floorHeight }] });
-      const seqOpts = { floorHeight, chUpperAbsMm, chLowerMm: roomCeilingHeight(graph, room).mm, upperGraph, layers };
+      const seqOpts = {
+        floorHeight, chUpperAbsMm, chLowerMm: roomCeilingHeight(graph, room).mm, upperGraph, layers,
+        // 直下階（下階の階段の吹抜けの上の列の断面線。本番 buildStairBand の ctx.lowerGraph と同じ）
+        lowerGraph, lowerFloorHeightMm: lowerGraph ? floorHeightAbove(project, lowerGraph.plane) : null,
+      };
       const sequence = stairFaceSequence(stair, composedFaces, graph, seqOpts);
       const table = (stair.type === StairType.STRAIGHT || stair.type === StairType.STRAIGHT_LANDING)
         ? straightCuts(stair, composedFaces, graph, seqOpts) : switchbackCuts(stair, composedFaces, graph, seqOpts);

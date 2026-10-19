@@ -7,7 +7,7 @@ import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { letterOf, DIR_SIGN } from './elevationFaces.js';
-import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf, withFlatLineSpans, upperFloorEndLines } from './elevationStairSequence.js';
+import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf, withFlatLineSpans, upperFloorEndLines, clipContentBelowProfileInRanges } from './elevationStairSequence.js';
 import { localXOf } from './section/sectionTypes.js';
 import { switchbackCuts, buildMidWallFace } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
@@ -17,6 +17,7 @@ import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { drawnFloorProfileZAt, floorProfileFromSegments, mergeFloorProfiles } from './elevationFloorProfile.js';
 import { stairCutFloorProfile, HIDDEN_STEP_MARK } from './section/sectionStair.js';
 import { VISIBLE_STEP_MARK } from './elevationStairSequence.js';
+import { lowerStairVoidRanges } from './section/lowerStairVoid.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
 import { buildCutContent } from './section/sectionContent.js';
@@ -2793,4 +2794,141 @@ test('【配線】階段帯の contentForCut: 空中横断の梁の端が柱包�
   assert.equal(withCol.length, 2, '柱があっても残る区間の天地 2 本');
   assert.ok(Math.abs(startOf(without)) < 1e-9, '対照: 柱が無ければ梁の端（面の端）まで');
   assert.ok(startOf(withCol) > 100, '柱包みの面で止まる（面の端から 170 内側）');
+});
+
+// ==== 指示2026-10-19「設置階下階に階段がある場合、下階分は断面を書かない」（roof-test1 2階 階段 A）====
+// 直下階の階段の破れ線先セル（復路レーン）の上は自階の床が無い。その列では切断面にある自分の段板の天端が断面線で、
+// 壁の断面の縁・床線・段板の下辺・開口のバツなど全部をその下で落とす。
+test('【指示2026-10-19】clipContentBelowProfileInRanges: 区間の中だけ断面線より下を落とし、境界の縦線は区間の内側の高さで切る。区間の外・変わらない線は不変', () => {
+  const profile = [[0, 0], [1000, 0], [1000, 1200], [2000, 1200]];
+  const ranges = [{ lo: 1000, hi: 2000 }];
+  const line = (x1, z1, x2, z2, extra = {}) => ({ type: 'line', x1, y1: -z1, x2, y2: -z2, weight: 'thick', ...extra });
+  const out = clipContentBelowProfileInRanges([
+    line(1000, 0, 1000, 2400, { __o: 'cutEdgeHi' }), // 境界に立つ壁の断面の縁 → 1200 から
+    line(2000, 0, 2000, 2400),                        // 区間の hi 端の縦線 → 1200 から
+    line(1000, 1170, 2000, 1170),                     // 段板の下辺（区間の中・断面線より下）→ 消える
+    line(1000, 1200, 2000, 1200),                     // 段板の天端（断面線と同じ高さ）→ 残る
+    line(0, 500, 2000, 500),                          // 区間をまたぐ水平線 → 区間の外 0..1000 だけ残る
+    line(0, 1500, 2000, 1500),                        // 区間をまたぐが上にある → 分けずにそのまま
+    line(0, -120, 800, -120),                         // 区間の外（床より下）→ 不変
+    line(1000, 0, 2000, 2400, { dash: 'center' }),    // 対角線 → 1200 より上の片だけ
+  ], profile, ranges);
+  const zs = p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)];
+  const edge = out.find(p => p.__o === 'cutEdgeHi');
+  assert.deepEqual(zs(edge), [1200, 2400]);
+  assert.deepEqual(zs(out.find(p => p.x1 === 2000 && p.x2 === 2000)), [1200, 2400]);
+  assert.equal(out.some(p => p.y1 === -1170), false, '段板の下辺は消える');
+  assert.ok(out.some(p => p.y1 === -1200 && p.y2 === -1200 && p.x1 === 1000 && p.x2 === 2000), '天端は残る');
+  const at500 = out.filter(p => p.y1 === -500);
+  assert.deepEqual(at500.map(p => [p.x1, p.x2]), [[0, 1000]]);
+  assert.deepEqual(out.filter(p => p.y1 === -1500).map(p => [p.x1, p.x2]), [[0, 2000]], '切っても変わらない線は分けない');
+  assert.deepEqual(out.filter(p => p.y1 === 120).map(p => [p.x1, p.x2]), [[0, 800]]);
+  const diag = out.find(p => p.dash === 'center');
+  assert.ok(diag && Math.abs(diag.x1 - 1500) < 1e-6 && Math.abs(-diag.y1 - 1200) < 1e-6 && diag.x2 === 2000, `対角線は 1200 の交点から（実際 ${JSON.stringify(diag)}）`);
+});
+
+test('【指示2026-10-19】clipContentBelowProfileInRanges: 折れ線は区間に収まれば折れ線のまま切り、またげば線分にほどく。rect・text は中心で判定。輪郭・区間なしは素通し', () => {
+  const profile = [[0, 0], [1000, 0], [1000, 1200], [2000, 1200]];
+  const ranges = [{ lo: 1000, hi: 2000 }];
+  const inside = { type: 'polyline', points: [[1100, -1500], [1500, -1500], [1500, -500]], weight: 'medium' };
+  const across = { type: 'polyline', points: [[500, -500], [1500, -500], [1500, -1500]], weight: 'medium' };
+  const out = clipContentBelowProfileInRanges([inside, across], profile, ranges);
+  const polys = out.filter(p => p.type === 'polyline');
+  assert.equal(polys.length, 1, '区間に収まる折れ線は折れ線のまま');
+  assert.deepEqual(polys[0].points, [[1100, -1500], [1500, -1500], [1500, -1200]]);
+  const lines = out.filter(p => p.type === 'line');
+  assert.deepEqual(lines.map(p => [p.x1, -p.y1, p.x2, -p.y2]), [[500, 500, 1000, 500], [1500, 1200, 1500, 1500]], 'またぐ折れ線は線分ごと');
+  const rects = clipContentBelowProfileInRanges([
+    { type: 'rect', x: 1200, y: -1300, w: 100, h: 500 }, { type: 'rect', x: 1200, y: -1100, w: 100, h: 100 }, { type: 'rect', x: 100, y: -1100, w: 100, h: 100 },
+    { type: 'text', x: 1500, y: -500, text: 'a' }, { type: 'text', x: 1500, y: -1300, text: 'b' }, { type: 'dim', from: 1000, to: 2000 },
+  ], profile, ranges);
+  assert.deepEqual(rects.filter(p => p.type === 'rect').map(p => [p.x, p.h]), [[1200, 100], [100, 100]]);
+  assert.deepEqual(rects.filter(p => p.type === 'text').map(p => p.text), ['b']);
+  assert.equal(rects.filter(p => p.type === 'dim').length, 1, '注記系は素通し');
+  const prims = [inside];
+  assert.equal(clipContentBelowProfileInRanges(prims, null, ranges), prims);
+  assert.equal(clipContentBelowProfileInRanges(prims, profile, []), prims);
+});
+
+test('【指示2026-10-19】stairFaceSequence: 直下階に階段があれば seq1 の断面線は復路レーンで切断面の歩行面の高さになり、その列の 2FL の床線・壁の縁はその上から。直下階なしは従来（断面線なし）', () => {
+  const build = (withLower) => {
+    const graph = makeGraph('p1');
+    const upperGraph = makeGraph('p2');
+    const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true, withRoomUnder: false });
+    const lowerGraph = makeGraph('p0');
+    makeSwitchbackFixture(lowerGraph, { withRoomUnder: false });
+    const faces = composeRoomFaces(room, graph);
+    const seqOpts = { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) };
+    const entries = stairFaceSequence(stair, faces, graph, { ...seqOpts, lowerGraph: withLower ? lowerGraph : null });
+    const cut1 = switchbackCuts(stair, faces, graph, seqOpts).cuts.find(c => c.seqNo === '1');
+    return { seq1: entries.find(e => e.seqNo === '1'), stair, graph, voidRanges: lowerStairVoidRanges(cut1, lowerGraph, graph) };
+  };
+  const base = build(false);
+  assert.equal(base.seq1.floorProfile, null, '直下階なし・階段下部屋なし・縦断なしの seq1 は従来どおり断面線なし');
+  const { seq1, stair, voidRanges } = build(true);
+  assert.ok(seq1.floorProfile, '直下階に階段があれば断面線が付く');
+  // 復路レーン（flip=true の fixture では x:0..1000 側＝破れ線先セル）の切断面の歩行面＝踊り場の高さ（6 段×riser）
+  const riser = OPTS.floorHeight / stair.totalSteps;
+  const landingZ = 6 * riser;
+  assert.ok(voidRanges.length === 1, `吹抜けの区間は 1 つ（${JSON.stringify(voidRanges)}）`);
+  const [vr] = voidRanges;
+  const zIn = drawnFloorProfileZAt(seq1.floorProfile, (vr.lo + vr.hi) / 2);
+  assert.ok(Math.abs(zIn - landingZ) < 1e-6, `吹抜けの列の断面線は歩行面 ${landingZ}（実際 ${zIn}）`);
+  // 吹抜けの外（往路側）は帯の床のまま
+  const outside = vr.lo > 100 ? vr.lo / 2 : (vr.hi + seq1.face.run) / 2;
+  assert.ok(Math.abs(drawnFloorProfileZAt(seq1.floorProfile, outside)) < 1e-6, '吹抜けの外は帯の床 0');
+  // 床線（flatLineSpanX）は吹抜けの区間を避ける
+  const seg = seq1.floorSegments[0];
+  assert.ok(seg.flatLineSpanX, '床線の範囲が切り詰められる');
+  const span = seg.flatLineSpanX;
+  assert.ok((span.hi ?? Infinity) <= vr.lo + 1e-6 || (span.lo ?? -Infinity) >= vr.hi - 1e-6, `床線は吹抜けの区間に入らない（${JSON.stringify(span)} vs ${JSON.stringify(vr)}）`);
+  // 吹抜けの列の中に断面線より下の content は無い（壁の縁・床線・段板の下辺）
+  const below = seq1.content.filter(p => p.type === 'line'
+    && Math.min(p.x1, p.x2) >= vr.lo - 1e-6 && Math.max(p.x1, p.x2) <= vr.hi + 1e-6
+    && Math.min(-p.y1, -p.y2) < landingZ - 1e-6);
+  assert.deepEqual(below, [], '吹抜けの列には断面線より下の線が無い');
+});
+
+test('【指示2026-10-19・QA】stairFaceSequence: 直下階の吹抜けは縦断する切断（seq5）の content を変えない（階段自身のジグザグを勾配の近似で切らない）', () => {
+  const build = (withLower) => {
+    const graph = makeGraph('p1');
+    const upperGraph = makeGraph('p2');
+    const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, midWallGraph: upperGraph, upperLandingOnly: true, withRoomUnder: false });
+    const lowerGraph = makeGraph('p0');
+    makeSwitchbackFixture(lowerGraph, { withRoomUnder: false });
+    const faces = composeRoomFaces(room, graph);
+    return stairFaceSequence(stair, faces, graph, {
+      ...OPTS, upperGraph, lowerGraph: withLower ? lowerGraph : null,
+      layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }),
+    });
+  };
+  const a = build(false), b = build(true);
+  for (const seqNo of ['2', '3', '4', '5']) {
+    const ea = a.find(e => e.seqNo === seqNo), eb = b.find(e => e.seqNo === seqNo);
+    assert.deepEqual(eb.content, ea.content, `seq${seqNo} の content は不変`);
+    assert.deepEqual(eb.floorProfile, ea.floorProfile, `seq${seqNo} の断面線は不変`);
+  }
+  assert.notDeepEqual(b.find(e => e.seqNo === '1').content, a.find(e => e.seqNo === '1').content, '対照: seq1 は変わる');
+});
+
+test('【裁定2026-10-19・QA】stairFaceSequence: 吹抜けの区間の境界が自階の隔て板の材の中なら、断面線の段と床線の端は隔て板の吹抜け側の面', () => {
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  // 自階に往復間の壁（x=1000、材 1000..1050）。flip=false なので吹抜け（直下階の復路）は x:1000..2000 側＝境界 1000 が材の中
+  const { room, stair, midWall } = makeSwitchbackFixture(graph, { withMidWall: true, withRoomUnder: false, flip: false });
+  const lowerGraph = makeGraph('p0');
+  makeSwitchbackFixture(lowerGraph, { withRoomUnder: false, flip: false });
+  const faces = composeRoomFaces(room, graph);
+  const seqOpts = { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) };
+  const entries = stairFaceSequence(stair, faces, graph, { ...seqOpts, lowerGraph });
+  const cut1 = switchbackCuts(stair, faces, graph, seqOpts).cuts.find(c => c.seqNo === '1');
+  const [vr] = lowerStairVoidRanges(cut1, lowerGraph, graph);
+  const faceX = localXOf(cut1, midWall.materialRange.hi); // 隔て板の吹抜け側の面
+  assert.equal(midWall.materialRange.hi, 1050, '前提: 隔て板の材 1000..1050');
+  assert.ok(Math.abs(vr.lo - faceX) < 1e-6 || Math.abs(vr.hi - faceX) < 1e-6, `区間の端が隔て板の面 ${faceX}（${JSON.stringify(vr)}）`);
+  const seq1 = entries.find(e => e.seqNo === '1');
+  const stepXs = seq1.floorProfile.filter((p, i, arr) => i + 1 < arr.length && Math.abs(arr[i + 1][0] - p[0]) < 1e-6).map(p => p[0]);
+  assert.ok(stepXs.some(x => Math.abs(x - faceX) < 1e-6), `断面線の段は隔て板の面にある（${JSON.stringify(stepXs)}）`);
+  const span = seq1.floorSegments[0].flatLineSpanX;
+  assert.ok(span && (Math.abs((span.hi ?? NaN) - faceX) < 1e-6 || Math.abs((span.lo ?? NaN) - faceX) < 1e-6), `床線の端は隔て板の面（${JSON.stringify(span)}）`);
 });

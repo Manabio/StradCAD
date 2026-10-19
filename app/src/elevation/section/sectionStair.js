@@ -1109,6 +1109,43 @@ export function flightTreadZAt(flight, runCoord) {
   return flight.baseZ + flight.riserMm * (1 + i);
 }
 
+/**
+ * 切断線が flight の**内部**を横切る面で、切断面にある段板の天端（＝その列の自分の階段の断面線）を幅方向の範囲ごとに返す
+ * （`flightLadderPrimitives` が段板の断面を描くのと同じ条件・同じ高さ `flightTreadZAt`）。切断線が flight の端ちょうど
+ * （STAIR_RUN_TOL_MM 以内。隔て板の柱が無く frontA が踊り場の前縁そのものの構成）に立つときは、その端の歩行面の高さ
+ * （始端なら足元 baseZ・終端なら最上段の天端）。幅は隔て板の柱があれば隔て板の面（treadAcrossLo/Hi）、無ければ flight の幅。
+ * 縦断する切断は対象外＝[]。
+ * 下階の階段の吹抜けの上の列で「断面線より下を描かない」下限に使う（`lowerStairVoid.js`）。columns は要らない
+ * （x は切断線の幅方向の世界座標を面ローカルへ写すだけ）。
+ * @param {{flights?:Flight[]}|null} contribution
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @returns {Array<{loX:number, hiX:number, z:number}>}
+ */
+export function crossingFlightCutSurfaces(contribution, cut) {
+  if (!contribution || !cut?.line) return [];
+  const out = [];
+  for (const flight of contribution.flights ?? []) {
+    if (!crossesFlight(flight, cut)) continue;
+    const at = cut.line.axisValue;
+    const interior = at > flight.runLo + STAIR_RUN_TOL_MM && at < flight.runHi - STAIR_RUN_TOL_MM;
+    let z;
+    if (interior) z = flightTreadZAt(flight, at);
+    else {
+      const topZ = flight.baseZ + Math.max(1, Math.round(flight.steps)) * flight.riserMm;
+      const atStart = Math.abs(at - (flight.travelSign > 0 ? flight.runLo : flight.runHi)) <= STAIR_RUN_TOL_MM;
+      const atEnd = Math.abs(at - (flight.travelSign > 0 ? flight.runHi : flight.runLo)) <= STAIR_RUN_TOL_MM;
+      if (atStart) z = flight.baseZ;
+      else if (atEnd) z = topZ;
+      else continue; // 上り口の区画（entryRunMm）の中: 段板の天端は無い
+    }
+    const aLo = flight.treadAcrossLo ?? flight.acrossLo, aHi = flight.treadAcrossHi ?? flight.acrossHi;
+    const a = localXOf(cut, aLo), b = localXOf(cut, aHi);
+    if (Math.abs(b - a) <= GAP_EPS) continue;
+    out.push({ loX: Math.min(a, b), hiX: Math.max(a, b), z });
+  }
+  return out;
+}
+
 function flightStepParam(flight, runCoord) {
   const worldStart = flight.travelSign > 0 ? flight.runLo : flight.runHi;
   const runLengthMm = flight.lengthMm ?? Math.abs(flight.runHi - flight.runLo);

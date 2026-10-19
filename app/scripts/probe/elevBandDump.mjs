@@ -71,7 +71,7 @@ export function dumpFloorBands(project, graph, upperGraph, lowerGraph) {
         let band;
         if (room.feature === RoomFeature.STAIR) {
           kind = 'stair';
-          band = buildStairBand(room, graph, upperGraph, { ...base, stair: stairByRoomId.get(room.id) ?? null });
+          band = buildStairBand(room, graph, upperGraph, { ...base, stair: stairByRoomId.get(room.id) ?? null, lowerGraph });
         } else if (room.feature === RoomFeature.VOID) {
           kind = 'void';
           band = orphanVoids.includes(room)

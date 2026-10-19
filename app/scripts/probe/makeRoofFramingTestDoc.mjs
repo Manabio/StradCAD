@@ -225,7 +225,7 @@ function elevationDigest(project, plane) {
     const stairByRoomId = new Map(graph.stairs.map(s => [s.roomId, s]));
     for (const room of [...ownRooms, ...orphanVoids].sort((a, b) => (a.id < b.id ? -1 : 1))) {
       let band;
-      if (room.feature === RoomFeature.STAIR) band = buildStairBand(room, graph, upperGraph, { ...base, stair: stairByRoomId.get(room.id) ?? null });
+      if (room.feature === RoomFeature.STAIR) band = buildStairBand(room, graph, upperGraph, { ...base, stair: stairByRoomId.get(room.id) ?? null, lowerGraph });
       else if (room.feature === RoomFeature.VOID) {
         band = orphanVoids.includes(room)
           ? buildVoidBand(room, upperGraph, graph, { ...base, floorHeightBelowMm: floorHeightMm })

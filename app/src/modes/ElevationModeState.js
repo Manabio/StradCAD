@@ -255,7 +255,7 @@ export class ElevationModeState {
     const buildOne = (room, params) => {
       const ctx = { project: this.project, materialMap, gridCLs, ...params };
       if (room.feature === RoomFeature.STAIR) {
-        return buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null });
+        return buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null, lowerGraph });
       }
       if (room.feature === RoomFeature.VOID) {
         // WP-V1: 吹抜け帯の下げ量算出に使う「設置階下階との階高」。floorHeightAboveの呼び出し

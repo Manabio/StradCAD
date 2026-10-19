@@ -374,7 +374,7 @@ function bandsOf(proj, planeName) {
     const stairBy = new Map(graph.stairs.map(s => [s.roomId, s]));
     for (const room of own) {
       let band;
-      if (room.feature === RoomFeature.STAIR) band = buildStairBand(room, graph, upperGraph, { ...base, stair: stairBy.get(room.id) ?? null });
+      if (room.feature === RoomFeature.STAIR) band = buildStairBand(room, graph, upperGraph, { ...base, stair: stairBy.get(room.id) ?? null, lowerGraph });
       else if (room.feature === RoomFeature.VOID) band = buildVoidBand(room, graph, lowerGraph, { ...base, floorHeightBelowMm: floorHeightBelow(proj, graph.plane) });
       else if (vm.get(room.id)) band = buildRoomBandWithVoidAbove(room, graph, vm.get(room.id), upperGraph, { ...base, floorHeightAboveMm: fh, solids: { upperGraph, floorHeightMm: fh } });
       else band = buildRoomBand(room, graph, { ...base, solids: { upperGraph, floorHeightMm: fh } });

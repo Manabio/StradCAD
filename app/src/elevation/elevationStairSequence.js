@@ -51,7 +51,9 @@ import {
 import {
   stairPrimitivesForCut, stairFaceOccluderRects, stairCutFloorProfile, crossingLandingFloorProfile, HIDDEN_STEP_MARK,
   flightStartOuterBound, mergeOuterBounds, clipWallEndVerticalsByStairMass, crossingFlightBodySections, flightHiddenRects,
+  crossingFlightCutSurfaces,
 } from './section/sectionStair.js';
+import { lowerStairVoidRanges, inRanges, mergeRanges } from './section/lowerStairVoid.js';
 import { segmentInsideRect } from './elevationPrimitives.js';
 import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
@@ -1065,6 +1067,101 @@ export function clipWallEdgesInsideStairBodies(prims, bodies) {
   return out;
 }
 
+/**
+ * 下階の階段の吹抜けの上の列（`cut.lowerStairVoidRanges`）で、切断面にある自分の段板の天端（`crossingFlightCutSurfaces`）が
+ * 吹抜けの区間と重なる片（面ローカル x の区間と天端の高さ）。区間に切断面の段板が無ければ []（従来どおり帯の床。縦断する切断の
+ * 断面線は復路のジグザグが既に閉じている）。
+ * @param {import('./section/sectionTypes.js').SectionCut} cut
+ * @returns {Array<{lo:number, hi:number, z:number}>}
+ */
+function voidSurfacePieces(cut) {
+  const ranges = cut?.lowerStairVoidRanges ?? [];
+  if (ranges.length === 0) return [];
+  const out = [];
+  for (const s of crossingFlightCutSurfaces(cut.stairCut ?? null, cut)) {
+    for (const r of ranges) {
+      const lo = Math.max(s.loX, r.lo), hi = Math.min(s.hiX, r.hi);
+      if (hi - lo > GAP_EPS) out.push({ lo, hi, z: s.z });
+    }
+  }
+  return out;
+}
+
+/** 吹抜けの上の列の断面線の部品（水平の片。floorProfileFor が帯の床と max で合成する） */
+function voidSurfaceProfileParts(cut) {
+  return voidSurfacePieces(cut).map(p => [[p.lo, p.z], [p.hi, p.z]]);
+}
+
+/**
+ * プリミティブのうち x が `ranges` に入る部分だけを、断面線より下で落とす（`clipContentAboveDrawnProfile` と同じ規則。
+ * 輪郭と同じ高さの水平線は残す）。区間の外はそのまま。区間の境界をまたぐ線は境界で分け、折れ線は境界をまたぐときだけ
+ * 線分ごとの line にほどく。ranges・profile が無ければ引数をそのまま返す。
+ * 既知の限界（QA 2026-10-19。実データでは未発生）: 境界 x ちょうどに立つ縦線は区間の外の要素でも区間の内側の高さで切る／
+ * 区間に収まる折れ線の縦の辺と rect は `clipContentAboveDrawnProfile` の規則（段の低い側・幅の最小）のままで境界では切れない。
+ * @param {object[]} prims
+ * @param {Array<[number,number]>|null|undefined} profile
+ * @param {Array<{lo:number, hi:number}>|null|undefined} ranges 面ローカル x の区間（昇順・互いに離れている）
+ * @returns {object[]}
+ */
+export function clipContentBelowProfileInRanges(prims, profile, ranges) {
+  if (!profile?.length || !ranges?.length) return prims;
+  const out = [];
+  const bounds = ranges.flatMap(r => [r.lo, r.hi]);
+  const sameLine = (a, b) => ['x1', 'y1', 'x2', 'y2'].every(k => Math.abs(a[k] - b[k]) <= GAP_EPS);
+  const clipLine = (p) => {
+    const lo = Math.min(p.x1, p.x2), hi = Math.max(p.x1, p.x2);
+    if (hi - lo <= GAP_EPS) { // 縦線: その x が区間に入れば切る
+      const r = ranges.find(q => p.x1 >= q.lo - GAP_EPS && p.x1 <= q.hi + GAP_EPS);
+      if (!r) { out.push(p); return; }
+      // 区間の境界に立つ縦線（吹抜けの縁の壁の断面の縁）は、輪郭の段のどちら側でもなく**区間の内側**の高さで切る
+      // （clipContentAboveDrawnProfile の縦線は段の低い側を採る＝境界では帯の床になり切れない）
+      const xi = Math.min(Math.max(p.x1, r.lo + 2 * GAP_EPS), r.hi - 2 * GAP_EPS);
+      const floor = drawnFloorProfileZAt(profile, xi);
+      const z1 = -p.y1, z2 = -p.y2, zLo = Math.min(z1, z2), zHi = Math.max(z1, z2);
+      if (zHi <= floor + GAP_EPS) return;
+      if (zLo >= floor - GAP_EPS) { out.push(p); return; }
+      out.push(z1 < z2 ? { ...p, y1: -floor || 0 } : { ...p, y2: -floor || 0 });
+      return;
+    }
+    const xs = [p.x1, ...bounds.filter(b => b > lo + GAP_EPS && b < hi - GAP_EPS).sort((a, b) => (a - b) * Math.sign(p.x2 - p.x1)), p.x2];
+    const yAt = x => p.y1 + ((x - p.x1) / (p.x2 - p.x1)) * (p.y2 - p.y1);
+    const pieces = [];
+    let changed = false;
+    for (let i = 0; i + 1 < xs.length; i++) {
+      const piece = { ...p, x1: xs[i], y1: yAt(xs[i]), x2: xs[i + 1], y2: yAt(xs[i + 1]) };
+      const mid = (xs[i] + xs[i + 1]) / 2;
+      const kept = inRanges(ranges, mid) ? clipContentAboveDrawnProfile([piece], profile) : [piece];
+      if (kept.length !== 1 || !sameLine(kept[0], piece)) changed = true;
+      pieces.push(...kept);
+    }
+    // 切っても変わらない線は境界で分けない（同じ線が 2 本に割れて golden が変わるだけ）
+    if (changed) out.push(...pieces); else out.push(p);
+  };
+  for (const p of prims) {
+    if (p.type === 'line') { clipLine(p); continue; }
+    if (p.type === 'polyline' && Array.isArray(p.points) && p.points.length > 1) {
+      const xsAll = p.points.map(q => q[0]);
+      const pLo = Math.min(...xsAll), pHi = Math.max(...xsAll);
+      const overlapping = ranges.some(r => r.hi > pLo + GAP_EPS && r.lo < pHi - GAP_EPS);
+      if (!overlapping) { out.push(p); continue; }
+      const inside = ranges.some(r => pLo >= r.lo - GAP_EPS && pHi <= r.hi + GAP_EPS);
+      if (inside) { out.push(...clipContentAboveDrawnProfile([p], profile)); continue; }
+      const { points, ...rest } = p;
+      for (let i = 0; i + 1 < points.length; i++) {
+        clipLine({ ...rest, type: 'line', x1: points[i][0], y1: points[i][1], x2: points[i + 1][0], y2: points[i + 1][1] });
+      }
+      continue;
+    }
+    if (p.type === 'rect' || p.type === 'text') {
+      const x = p.type === 'rect' ? p.x + (p.w ?? 0) / 2 : p.x;
+      out.push(...(inRanges(ranges, x) ? clipContentAboveDrawnProfile([p], profile) : [p]));
+      continue;
+    }
+    out.push(p);
+  }
+  return out;
+}
+
 function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null, zRef = null,
   drawFloorProfile = null, underReturnSpace = null, bandRoom = null, ownSoffitSolid = null) {
   if (!rawCut) {
@@ -1195,8 +1292,14 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
     clipWallFloorEdgeUnderZigzag(joined, stairContent), drawFloorProfile), cut.face);
   // 復路下の仕上げ空間（seq5）: 壁の断面・見えがかり・アキは天井＝復路の裏面より上を落とす（段板の中）。階段自身・構造梁は触らない。
   const roofed = clipContentInsideStairBody([...wallOut, ...gapMarks], underReturnSpace);
+  // 下階の階段の吹抜けの上の列（cut.lowerStairVoidRanges）: 階段自身・構造・アキ・開口も断面線（自分の段板の天端）より下は
+  // 描かない——そこは下階の階段帯の空間（ユーザー指示 2026-10-19）。他の列では従来どおり（階段自身・構造は「描く側」）。
+  // 対象の列は吹抜けの区間のうち切断面の段板がある所（voidSurfacePieces）だけ——縦断する切断（seq5）の断面線は勾配の近似で、
+  // 階段自身のジグザグをそれで切ると段板が欠ける。
+  const content = clipContentBelowProfileInRanges(
+    [...roofed, ...openingPanels, ...stairContent, ...structuralContent], drawFloorProfile, mergeRanges(voidSurfacePieces(cut)));
   return {
-    content: [...roofed, ...openingPanels, ...stairContent, ...structuralContent],
+    content,
     occludedRects: behindRects.map(r => ({ xLo: r.xLo, xHi: r.xHi, zLo: r.zLo, zHi: r.zHi })),
     ...overhang,
   };
@@ -1309,6 +1412,7 @@ function buildStraightFaceSequence(stair, faces, graph, opts) {
  * @param {{floorHeight:number, chUpperAbsMm:number, chLowerMm:number}} opts
  *   chUpperAbsMm … 上階天井の絶対高さ（floorHeight+CH_upper。呼び出し側で計算済みの値をそのまま使う）。
  *   chLowerMm … 設置階の天井高さ（CH。絶対高さそのもの＝設置階FL=0基準）。
+ *   lowerGraph … 直下階のgraph（任意）。下階の階段の吹抜けの上の列では自分の段板の天端が断面線（section/lowerStairVoid.js）。
  * @returns {Array<{seqNo:string, face:object, floorSegments:object[], ceilingProfile?:Array<[number,number]>,
  *   floorProfile?:Array<[number,number]>|null,
  *   content:object[], skipBaseboard:true, skipWallLabel:true, floorSpanX?:object}>|null}
@@ -1364,14 +1468,20 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   // （`stairSectionIsClosed`＝現状は木造・RC）。縦断する階段寄与の無い面（seq1/seq3）は従来どおりnull。
   // (c) 横断の切断が回転部のスライスを段状に切る面（回り階段の seq3）は、段状の天端が断面線。スライスは実体の床なので
   //     材質によらず閉じる（ユーザー指摘 2026-10-15「moku4-3 1階 階段 C: 閉じた断面図形の外に太線の延長はない」）。
+  // (d) 下階の階段の吹抜けの上の列（cut.lowerStairVoidRanges。直下階の階段の破れ線先セル）では、切断面にある自分の段板の天端が
+  //     断面線（下は下階の階段帯の空間＝描かない。ユーザー指示 2026-10-19「設置階下階に階段がある場合、下階分は断面を書かない」）。
+  //     材質によらず閉じる。その区間では階段自身・構造・アキ・開口も断面線より下を落とす（contentForCut）。
+  for (const c of cuts) c.lowerStairVoidRanges = lowerStairVoidRanges(c, opts.lowerGraph ?? null, graph, opts.lowerFloorHeightMm ?? null);
   const floorProfileFor = (cut, segs) => {
     const stairPart = cut ? stairCutFloorProfile(cut.stairCut ?? null, cut, null) : null;
     const stepped = cut ? crossingLandingFloorProfile(cut.stairCut ?? null, cut) : null;
-    const closed = hasRoomUnder || (stairPart && stairSectionIsClosed(stair)) || !!stepped;
+    const voidParts = cut ? voidSurfaceProfileParts(cut) : [];
+    const closed = hasRoomUnder || (stairPart && stairSectionIsClosed(stair)) || !!stepped || voidParts.length > 0;
     if (!closed) return null;
     let profile = floorProfileFromSegments(segs);
     if (stairPart) profile = mergeFloorProfiles(profile, stairPart);
     if (stepped) profile = mergeFloorProfiles(profile, stepped);
+    for (const part of voidParts) profile = mergeFloorProfiles(profile, part);
     return profile;
   };
   const midWall = cutTable.wall ?? null;
