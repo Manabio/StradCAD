@@ -2923,12 +2923,35 @@ test('【裁定2026-10-19・QA】stairFaceSequence: 吹抜けの区間の境界�
   const entries = stairFaceSequence(stair, faces, graph, { ...seqOpts, lowerGraph });
   const cut1 = switchbackCuts(stair, faces, graph, seqOpts).cuts.find(c => c.seqNo === '1');
   const [vr] = lowerStairVoidRanges(cut1, lowerGraph, graph);
-  const faceX = localXOf(cut1, midWall.materialRange.hi); // 隔て板の吹抜け側の面
+  const faceX = localXOf(cut1, midWall.materialRange.hi); // 隔て板の吹抜け側の面（断面線より下を落とす区間の境界）
+  const nearX = localXOf(cut1, midWall.materialRange.lo); // 隔て板の手前の面（床の無い区間の境界＝床線の端。壁の下に床線は通らない）
   assert.equal(midWall.materialRange.hi, 1050, '前提: 隔て板の材 1000..1050');
   assert.ok(Math.abs(vr.lo - faceX) < 1e-6 || Math.abs(vr.hi - faceX) < 1e-6, `区間の端が隔て板の面 ${faceX}（${JSON.stringify(vr)}）`);
   const seq1 = entries.find(e => e.seqNo === '1');
   const stepXs = seq1.floorProfile.filter((p, i, arr) => i + 1 < arr.length && Math.abs(arr[i + 1][0] - p[0]) < 1e-6).map(p => p[0]);
-  assert.ok(stepXs.some(x => Math.abs(x - faceX) < 1e-6), `断面線の段は隔て板の面にある（${JSON.stringify(stepXs)}）`);
+  assert.ok(stepXs.some(x => Math.abs(x - nearX) < 1e-6), `断面線の段は隔て板の手前の面にある（${JSON.stringify(stepXs)}）`);
+  assert.ok(!stepXs.some(x => Math.abs(x - faceX) < 1e-6), '吹抜け側の面には段が無い（隔て板の下に床線を通さない）');
   const span = seq1.floorSegments[0].flatLineSpanX;
-  assert.ok(span && (Math.abs((span.hi ?? NaN) - faceX) < 1e-6 || Math.abs((span.lo ?? NaN) - faceX) < 1e-6), `床線の端は隔て板の面（${JSON.stringify(span)}）`);
+  assert.ok(span && (Math.abs((span.hi ?? NaN) - nearX) < 1e-6 || Math.abs((span.lo ?? NaN) - nearX) < 1e-6), `床線の端は隔て板の手前の面（${JSON.stringify(span)}）`);
+  assert.ok(Math.abs(vr.lo - faceX) < 1e-6 || Math.abs(vr.hi - faceX) < 1e-6, 'クリップの区間は吹抜け側の面から（隔て板の縁はそこから上）');
+});
+
+test('【指摘2026-10-19・QA】stairFaceSequence: 吹抜けの縁の隔て板の手前の面の縁（壁の断面）は床の無い区間に入っても切られず、踊り場の高さから上に残る', () => {
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  const { room, stair, midWall } = makeSwitchbackFixture(graph, { withMidWall: true, withRoomUnder: false, flip: false });
+  const lowerGraph = makeGraph('p0');
+  makeSwitchbackFixture(lowerGraph, { withRoomUnder: false, flip: false });
+  const faces = composeRoomFaces(room, graph);
+  const seqOpts = { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) };
+  const seq1 = stairFaceSequence(stair, faces, graph, { ...seqOpts, lowerGraph }).find(e => e.seqNo === '1');
+  const cut1 = switchbackCuts(stair, faces, graph, seqOpts).cuts.find(c => c.seqNo === '1');
+  const nearX = localXOf(cut1, midWall.materialRange.lo), faceX = localXOf(cut1, midWall.materialRange.hi);
+  const landingZ = 6 * (OPTS.floorHeight / stair.totalSteps);
+  const edgeAt = x => seq1.content.filter(p => p.type === 'line' && Math.abs(p.x1 - x) < 1e-6 && Math.abs(p.x2 - x) < 1e-6 && !p.dash);
+  const near = edgeAt(nearX);
+  assert.ok(near.length > 0, '隔て板の手前の面の縁がある');
+  assert.ok(near.some(p => Math.min(-p.y1, -p.y2) < landingZ - 1e-6), `手前の面の縁は踊り場より下から（往路側の床から）残る（${JSON.stringify(near.map(p => [-p.y1, -p.y2]))}）`);
+  const far = edgeAt(faceX);
+  assert.ok(far.length > 0 && far.every(p => Math.min(-p.y1, -p.y2) >= landingZ - 1e-6), `吹抜け側の面の縁は踊り場の高さから上だけ（${JSON.stringify(far.map(p => [-p.y1, -p.y2]))}）`);
 });

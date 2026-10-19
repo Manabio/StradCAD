@@ -28,6 +28,8 @@ function makeSwitchbackFixture(graph, { flip = false } = {}) {
 
 // seq1 相当: 踊り場の前縁 y=1500 に立ち、上り口（+y）を見る全幅の切断。ローカル x＝世界 x（dirSign 1・原点 lo=0）
 const seq1Cut = () => ({ line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2000 }, viewSign: 1, dirSign: 1 });
+// 区間: lo/hi＝断面線より下を落とす区間、floorLo/floorHi＝床の無い区間（寄せが無ければ同じ）
+const R = (lo, hi, floorLo = lo, floorHi = hi) => ({ lo, hi, floorLo, floorHi });
 
 test('【前提】フィクスチャの破れ線先セルは復路レーン（x:1000..2000）の 1 セル', () => {
   const lower = makeGraph('p1');
@@ -38,23 +40,23 @@ test('【前提】フィクスチャの破れ線先セルは復路レーン（x:
 test('【指示2026-10-19】lowerStairVoidRanges: 踊り場の前縁の切断は、下階の階段の破れ線先セル（復路レーン）の幅だけが吹抜けの区間', () => {
   const lower = makeGraph('p1');
   makeSwitchbackFixture(lower);
-  assert.deepEqual(lowerStairVoidRanges(seq1Cut(), lower), [{ lo: 1000, hi: 2000 }]);
+  assert.deepEqual(lowerStairVoidRanges(seq1Cut(), lower), [R(1000, 2000)]);
 });
 
 test('【指示2026-10-19】lowerStairVoidRanges: 回転が逆（flip）なら往路側のレーンが吹抜け。dirSign=-1 はローカル x を反転', () => {
   const lower = makeGraph('p1');
   makeSwitchbackFixture(lower, { flip: true });
-  assert.deepEqual(lowerStairVoidRanges(seq1Cut(), lower), [{ lo: 0, hi: 1000 }]);
+  assert.deepEqual(lowerStairVoidRanges(seq1Cut(), lower), [R(0, 1000)]);
   // 原点が hi 側（x=2000）で左右が逆: 世界 0..1000 → ローカル 1000..2000
-  assert.deepEqual(lowerStairVoidRanges({ ...seq1Cut(), dirSign: -1 }, lower), [{ lo: 1000, hi: 2000 }]);
+  assert.deepEqual(lowerStairVoidRanges({ ...seq1Cut(), dirSign: -1 }, lower), [R(1000, 2000)]);
 });
 
 test('【指示2026-10-19】lowerStairVoidRanges: 切断線の範囲（lo/hi）で切り詰める。縦断する切断（復路レーンの中）は切断線の全長', () => {
   const lower = makeGraph('p1');
   makeSwitchbackFixture(lower);
-  assert.deepEqual(lowerStairVoidRanges({ ...seq1Cut(), line: { isVertical: false, axisValue: 1500, lo: 500, hi: 1500 } }, lower), [{ lo: 500, hi: 1000 }]);
+  assert.deepEqual(lowerStairVoidRanges({ ...seq1Cut(), line: { isVertical: false, axisValue: 1500, lo: 500, hi: 1500 } }, lower), [R(500, 1000)]);
   const along = { line: { isVertical: true, axisValue: 1500, lo: 1500, hi: 4500 }, viewSign: 1, dirSign: 1 };
-  assert.deepEqual(lowerStairVoidRanges(along, lower), [{ lo: 0, hi: 3000 }]);
+  assert.deepEqual(lowerStairVoidRanges(along, lower), [R(0, 3000)]);
 });
 
 test('【裁定2026-10-19】lowerStairVoidRanges: 区間の境界が自階の切断壁（隔て板）の材の中なら、壁の吹抜け側の面へ寄せる。隣り合う壁は続けて寄せる', () => {
@@ -70,13 +72,14 @@ test('【裁定2026-10-19】lowerStairVoidRanges: 区間の境界が自階の切
   assert.deepEqual([a.materialRange, b.materialRange], [{ lo: 980, hi: 1020 }, { lo: 1020, hi: 1050 }], '前提: 壁の材の範囲');
   // 切断線の枠は本番と同じく面＝壁の仕上げ面（57.5..1942.5。ローカル x の原点は lo=57.5）。右の外壁（材 1942.5..2000）は
   // hi 端がその手前の面にあり寄せない。世界 1050..1942.5 → ローカル 992.5..1885
+  // 床の無い区間（floorLo）は寄せた壁の連なりの手前の面 980（ローカル 922.5）＝床線はそこで止まり、壁の下を通らない
   const faceCut = { ...seq1Cut(), line: { isVertical: false, axisValue: 1500, lo: 57.5, hi: 1942.5 } };
-  assert.deepEqual(lowerStairVoidRanges(faceCut, lower, self), [{ lo: 992.5, hi: 1885 }]);
-  // 枠が外壁の外側の面（CL 2000）まであれば、hi 端は外壁の材の中＝壁の吹抜け側（室内側）の面 1942.5 へ寄る
-  assert.deepEqual(lowerStairVoidRanges(seq1Cut(), lower, self), [{ lo: 1050, hi: 1942.5 }]);
+  assert.deepEqual(lowerStairVoidRanges(faceCut, lower, self), [R(992.5, 1885, 922.5, 1885)]);
+  // 枠が外壁の外側の面（CL 2000）まであれば、hi 端は外壁の材の中＝壁の吹抜け側（室内側）の面 1942.5 へ寄る（床の無い区間は 2000 まで）
+  assert.deepEqual(lowerStairVoidRanges(seq1Cut(), lower, self), [R(1050, 1942.5, 980, 2000)]);
   // 壁が区間の中に無い（境界が材の外）なら寄せない。自階を渡さなければ寄せない
-  assert.deepEqual(lowerStairVoidRanges({ ...faceCut, line: { ...faceCut.line, lo: 1200 } }, lower, self), [{ lo: 0, hi: 742.5 }]);
-  assert.deepEqual(lowerStairVoidRanges(seq1Cut(), lower, null), [{ lo: 1000, hi: 2000 }]);
+  assert.deepEqual(lowerStairVoidRanges({ ...faceCut, line: { ...faceCut.line, lo: 1200 } }, lower, self), [R(0, 742.5)]);
+  assert.deepEqual(lowerStairVoidRanges(seq1Cut(), lower, null), [R(1000, 2000)]);
 });
 
 test('【失敗系】lowerStairVoidRanges: 直下階なし・切断線なし・セルを通らない深さ・屋外の階段・破れ線先セルなしは []', () => {
@@ -99,7 +102,30 @@ test('【失敗系】lowerStairVoidRanges: 直下階なし・切断線なし・�
 test('mergeRanges / inRanges: 重なる・接する区間を結合し昇順。退化した区間は捨てる。端を含む', () => {
   assert.deepEqual(mergeRanges([{ lo: 5, hi: 10 }, { lo: 0, hi: 5 }, { lo: 20, hi: 30 }, { lo: 25, hi: 26 }, { lo: 40, hi: 40 }]),
     [{ lo: 0, hi: 10 }, { lo: 20, hi: 30 }]);
+  assert.deepEqual(mergeRanges([R(5, 10, 3, 10), R(0, 5, 0, 7)]), [R(0, 10, 0, 10)], 'floorLo/floorHi は min/max');
   assert.equal(inRanges([{ lo: 0, hi: 10 }], 10), true);
   assert.equal(inRanges([{ lo: 0, hi: 10 }], 10.5), false);
   assert.equal(inRanges(null, 1), false);
+});
+
+test('【指摘2026-10-19・QA】lowerStairVoidRanges: 寄せた壁の手前に接する薄壁があれば、床の無い区間（floorLo/floorHi）はその手前の面まで続けて広がる。flip は奥側へ', () => {
+  const lower = makeGraph('p1');
+  makeSwitchbackFixture(lower);
+  const self = makeGraph('p2');
+  const { cls } = makeSwitchbackFixture(self);
+  // 材 960..980（手前の薄壁）/ 980..1020（境界 1000 を含む）/ 1020..1050（吹抜け側の薄壁）
+  const xa = self.addCenterLine(CenterLineType.VERTICAL, 960,  { labeled: false, discipline: Discipline.ARCH });
+  const xb = self.addCenterLine(CenterLineType.VERTICAL, 980,  { labeled: false, discipline: Discipline.ARCH });
+  const xc = self.addCenterLine(CenterLineType.VERTICAL, 1020, { labeled: false, discipline: Discipline.ARCH });
+  self.addWall(xa, 20, true, cls.ym, 0, cls.y1, 0, {});
+  self.addWall(xb, 40, true, cls.ym, 0, cls.y1, 0, {});
+  self.addWall(xc, 30, true, cls.ym, 0, cls.y1, 0, {});
+  const faceCut = { ...seq1Cut(), line: { isVertical: false, axisValue: 1500, lo: 57.5, hi: 1942.5 } };
+  // lo は吹抜け側の面 1050（ローカル 992.5）、floorLo は手前の薄壁の手前の面 960（ローカル 902.5）
+  assert.deepEqual(lowerStairVoidRanges(faceCut, lower, self), [R(992.5, 1885, 902.5, 1885)]);
+  // 逆回転: 吹抜けは往路側 57.5..1000。hi 端 1000 が壁の中→ hi は壁の連なりの吹抜け側の面 960（902.5。980..1020 の手前に
+  // 接する薄壁 960..980 も続けて越える）、floorHi は奥の薄壁の奥の面 1050（992.5）
+  const lowerFlip = makeGraph('p3');
+  makeSwitchbackFixture(lowerFlip, { flip: true });
+  assert.deepEqual(lowerStairVoidRanges(faceCut, lowerFlip, self), [R(0, 902.5, 0, 992.5)]);
 });

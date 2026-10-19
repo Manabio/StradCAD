@@ -1095,9 +1095,9 @@ export function clipWallEdgesInsideStairBodies(prims, bodies) {
 /**
  * 下階の階段の吹抜けの上の列（`cut.lowerStairVoidRanges`）で、切断面にある自分の段板の天端（`crossingFlightCutSurfaces`）が
  * 吹抜けの区間と重なる片（面ローカル x の区間と天端の高さ）。区間に切断面の段板が無ければ []（従来どおり帯の床。縦断する切断の
- * 断面線は復路のジグザグが既に閉じている）。
+ * 断面線は復路のジグザグが既に閉じている）。floorLo/floorHi は床の無い区間（吹抜けの縁に立つ切断壁の手前の面まで）。
  * @param {import('./section/sectionTypes.js').SectionCut} cut
- * @returns {Array<{lo:number, hi:number, z:number}>}
+ * @returns {Array<{lo:number, hi:number, z:number, floorLo:number, floorHi:number}>}
  */
 function voidSurfacePieces(cut) {
   const ranges = cut?.lowerStairVoidRanges ?? [];
@@ -1106,15 +1106,21 @@ function voidSurfacePieces(cut) {
   for (const s of crossingFlightCutSurfaces(cut.stairCut ?? null, cut)) {
     for (const r of ranges) {
       const lo = Math.max(s.loX, r.lo), hi = Math.min(s.hiX, r.hi);
-      if (hi - lo > GAP_EPS) out.push({ lo, hi, z: s.z });
+      if (hi - lo <= GAP_EPS) continue;
+      // 床の無い区間（floorLo/floorHi。吹抜けの縁に立つ切断壁の手前の面まで）: 段板が区間の境界まで届いていれば断面線もそこまで
+      // ＝床線は壁の手前の面で止まり、壁の下を通らない（ユーザー指摘 2026-10-19「2FL に隔て板の下線が残った。不要」）
+      // 段板は壁の吹抜け側の面（区間の境界）で終わるのが通常なので、境界に届いていれば壁の帯の分（床の無い区間）を無条件に足す
+      const floorLo = s.loX <= r.lo + GAP_EPS ? Math.min(lo, r.floorLo ?? r.lo) : lo;
+      const floorHi = s.hiX >= r.hi - GAP_EPS ? Math.max(hi, r.floorHi ?? r.hi) : hi;
+      out.push({ lo, hi, z: s.z, floorLo, floorHi });
     }
   }
   return out;
 }
 
-/** 吹抜けの上の列の断面線の部品（水平の片。floorProfileFor が帯の床と max で合成する） */
+/** 吹抜けの上の列の断面線の部品（水平の片。床の無い区間いっぱい。floorProfileFor が帯の床と max で合成する） */
 function voidSurfaceProfileParts(cut) {
-  return voidSurfacePieces(cut).map(p => [[p.lo, p.z], [p.hi, p.z]]);
+  return voidSurfacePieces(cut).map(p => [[p.floorLo, p.z], [p.floorHi, p.z]]);
 }
 
 /**
@@ -1321,8 +1327,15 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 描かない——そこは下階の階段帯の空間（ユーザー指示 2026-10-19）。他の列では従来どおり（階段自身・構造は「描く側」）。
   // 対象の列は吹抜けの区間のうち切断面の段板がある所（voidSurfacePieces）だけ——縦断する切断（seq5）の断面線は勾配の近似で、
   // 階段自身のジグザグをそれで切ると段板が欠ける。
-  const content = clipContentBelowProfileInRanges(
-    [...roofed, ...openingPanels, ...stairContent, ...structuralContent], drawFloorProfile, mergeRanges(voidSurfacePieces(cut)));
+  // 壁の断面・見えがかり（roofed）は段板の区間（境界＝吹抜けの縁の壁の吹抜け側の面。壁自身の縁はそこから上）、階段自身・構造・
+  // 開口は床の無い区間（境界＝その壁の手前の面。壁の帯の下に 2FL の床梁の見えがかりなどを残さない。ユーザー指摘 2026-10-19
+  // 「2FL に隔て板の下線が残った。不要」）で切る。
+  const pieces = voidSurfacePieces(cut);
+  const content = [
+    ...clipContentBelowProfileInRanges(roofed, drawFloorProfile, mergeRanges(pieces)),
+    ...clipContentBelowProfileInRanges([...openingPanels, ...stairContent, ...structuralContent], drawFloorProfile,
+      mergeRanges(pieces.map(p => ({ lo: p.floorLo, hi: p.floorHi })))),
+  ];
   return {
     content,
     occludedRects: behindRects.map(r => ({ xLo: r.xLo, xHi: r.xHi, zLo: r.zLo, zHi: r.zHi })),

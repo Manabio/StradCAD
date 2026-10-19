@@ -46,7 +46,9 @@ function lowerStairVoidRects(lowerGraph, lowerFloorHeightMm) {
  * @param {object|null} lowerGraph 直下階の graph（無ければ null）
  * @param {object|null} [graph] 自階の graph（切断壁の材の範囲へ境界を寄せるのに使う。省略時は寄せない）
  * @param {number|null} [lowerFloorHeightMm] 直下階の階高（riser 未指定の直進系の破れ位置に使う。省略時は既定比率）
- * @returns {Array<{lo:number, hi:number}>}
+ * @returns {Array<{lo:number, hi:number, floorLo:number, floorHi:number}>} lo/hi … 断面線より下を落とす区間（境界は切断壁の
+ *   吹抜け側の面）。floorLo/floorHi … 自階の床が無い区間（境界は同じ壁の手前の面＝床線はここで止まる。壁が無ければ lo/hi と同じ）。
+ *   吹抜けの縁に立つ壁の下には床線を通さない（ユーザー指摘 2026-10-19「2FL に隔て板の下線が残った。不要」）。
  */
 export function lowerStairVoidRanges(cut, lowerGraph, graph = null, lowerFloorHeightMm = null) {
   if (!cut?.line || !lowerGraph) return [];
@@ -64,20 +66,26 @@ export function lowerStairVoidRanges(cut, lowerGraph, graph = null, lowerFloorHe
   if (world.length === 0) return [];
   const merged = mergeRanges(world);
   const snapped = graph ? merged.map(r => snapToCutWalls(r, cut, graph)).filter(Boolean) : merged;
+  const local = (lo, hi) => { const a = localXOf(cut, lo), b = localXOf(cut, hi); return [Math.min(a, b), Math.max(a, b)]; };
   return mergeRanges(snapped.map(r => {
-    const a = localXOf(cut, r.lo), b = localXOf(cut, r.hi);
-    return { lo: Math.min(a, b), hi: Math.max(a, b) };
+    const [lo, hi] = local(r.lo, r.hi), [floorLo, floorHi] = local(r.floorLo ?? r.lo, r.floorHi ?? r.hi);
+    return { lo, hi, floorLo, floorHi };
   }));
 }
 
-/** 重なる・接する区間を結合して昇順に返す */
+/** 重なる・接する区間を結合して昇順に返す（floorLo/floorHi があれば min/max で引き継ぐ） */
 export function mergeRanges(ranges) {
   const sorted = ranges.filter(r => r.hi - r.lo > GAP_EPS).sort((a, b) => a.lo - b.lo);
   const out = [];
   for (const r of sorted) {
     const last = out[out.length - 1];
-    if (last && r.lo <= last.hi + GAP_EPS) last.hi = Math.max(last.hi, r.hi);
-    else out.push({ lo: r.lo, hi: r.hi });
+    if (last && r.lo <= last.hi + GAP_EPS) {
+      last.hi = Math.max(last.hi, r.hi);
+      if ('floorLo' in last || 'floorLo' in r) {
+        last.floorLo = Math.min(last.floorLo ?? last.lo, r.floorLo ?? r.lo);
+        last.floorHi = Math.max(last.floorHi ?? last.hi, r.floorHi ?? r.hi);
+      }
+    } else out.push('floorLo' in r ? { lo: r.lo, hi: r.hi, floorLo: r.floorLo, floorHi: r.floorHi } : { lo: r.lo, hi: r.hi });
   }
   return out;
 }
@@ -88,18 +96,31 @@ export function mergeRanges(ranges) {
 // 吹抜けの外なので寄せない。寄せた結果つぶれた区間は null。
 function snapToCutWalls(range, cut, graph) {
   let { lo, hi } = range;
+  // 床が無い区間の境界＝寄せた壁の手前の面（壁の連なりの外側）。寄せが無ければ元の境界
+  let floorLo = lo, floorHi = hi;
   const walls = (graphList(graph, 'walls') ?? []).filter(w => w?.materialRange && isCutWall(w, cut.line));
   // 隔て板はオーナー壁＋薄壁の合併なので、1 枚で止まらず隣の壁へ続く限り寄せる（壁の数だけ回れば収束する）
   for (let k = 0; k <= walls.length; k++) {
     let moved = false;
     for (const w of walls) {
       const { lo: mLo, hi: mHi } = w.materialRange;
-      if (lo >= mLo - GAP_EPS && lo < mHi - GAP_EPS) { lo = mHi; moved = true; }
-      if (hi > mLo + GAP_EPS && hi <= mHi + GAP_EPS) { hi = mLo; moved = true; }
+      if (lo >= mLo - GAP_EPS && lo < mHi - GAP_EPS) { lo = mHi; floorLo = Math.min(floorLo, mLo); moved = true; }
+      if (hi > mLo + GAP_EPS && hi <= mHi + GAP_EPS) { hi = mLo; floorHi = Math.max(floorHi, mHi); moved = true; }
     }
     if (!moved) break;
   }
-  return hi - lo > GAP_EPS ? { lo, hi } : null;
+  // 寄せた側では、その壁に手前で接する壁（隔て板の仕上げの薄壁など、同じ帯の連なり）の手前の面まで床の無い区間を広げる
+  if (floorLo < lo - GAP_EPS) for (let k = 0; k <= walls.length; k++) {
+    const w = walls.find(x => floorLo > x.materialRange.lo + GAP_EPS && floorLo <= x.materialRange.hi + GAP_EPS);
+    if (!w) break;
+    floorLo = w.materialRange.lo;
+  }
+  if (floorHi > hi + GAP_EPS) for (let k = 0; k <= walls.length; k++) {
+    const w = walls.find(x => floorHi >= x.materialRange.lo - GAP_EPS && floorHi < x.materialRange.hi - GAP_EPS);
+    if (!w) break;
+    floorHi = w.materialRange.hi;
+  }
+  return hi - lo > GAP_EPS ? { lo, hi, floorLo, floorHi } : null;
 }
 
 /**
