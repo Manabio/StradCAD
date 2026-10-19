@@ -17,7 +17,7 @@ import {
   SNAP_THRESHOLD_PX,
 } from '../snap.js';
 import { useLongPress } from './useLongPress.js';
-import { TAP_MOVE_PX, isTapDistance, releaseGesture, ceilingHoldAction } from './holdGesture.js';
+import { TAP_MOVE_PX, isTapDistance, releaseGesture, CEILING_PAN_PX, CEILING_DECIDE_MS, ceilingDragStart } from './holdGesture.js';
 import { findColumnAxisLabel, findGutterCL } from './gutterHitTest.js';
 import { CONTEXT, detectContext, buildMenuState } from './menuItems.js';
 import { convertMenuFlags } from './clMenuGating.js';
@@ -91,6 +91,7 @@ export function usePointerInteraction({
   const openingDragEndedRef = useRef(false); // 直前の pointerUp が建具ドラッグの確定だったか（記号丸の click を無視するため）
   const panDistRef  = useRef(0);     // 押下からのパンの移動量（px の和。panTo が積む。pointerDown で 0 に戻す）
   const panEndedRef = useRef(false); // 直前の pointerUp がパン（TAP_MOVE_PX 以上動かした）の終了だったか（Konva の click を無視するため）
+  const ceilingDecideTimerRef = useRef(null); // 天伏: なぞり／パンの判定窓のタイマー（CEILING_DECIDE_MS。閉じたらなぞり開始）
 
   // ---- ガター通り芯 長押しフック ----
   // 長押し確定（500ms後）までの待ち時間を使い、押下直後（onStart）から移動範囲の
@@ -150,16 +151,11 @@ export function usePointerInteraction({
       // context 判定・メニュー items 生成は menuItems.js に集約（建具モードは壁・開口以外は null）。
       // menuItems.js は import ゼロ（node:test対応）に保つため、graph 依存の判定値はここで算出して渡す。
       const menuContext = detectContext(snap, cl, opening, wall, clEndpoint);
-      // 天伏: ロングタップは、空（天井芯の線上・端点でない）で押下点のセルが選択中の群に属し区画を作れるときだけ
-      // セルのなぞりの開始（startDrag の intent 'create'。離したときに commitDrag が区画を作る）。それ以外は従来どおり
-      // メニュー（天井芯の追加・移動・削除・延長）で、なぞりは始めず（cancelDrag）離したときの確定も走らせない。
-      // 選択済みの内容（selection）は保つ。判定は interaction/holdGesture.js ceilingHoldAction。
+      // 天伏: ロングタップは全部メニュー（天井芯の追加・移動・削除・延長。ユーザー裁定 2026-10-19）。なぞりはドラッグで
+      // 始める（holdGesture.js）ので、ここでは判定窓と押下の記録を捨て、離したときの確定（commitDrag）も走らせない。
+      // 選択済みの内容（selection）は保つ。
       if (appMode === 'ceiling') {
-        if (!ceilingDragDownRef.current) return;
-        const world = viewport.screenToWorld(sx, sy);
-        if (menuContext === CONTEXT.EMPTY) modeRef.current?.startDrag(graph, world.x, world.y);
-        const action = ceilingHoldAction({ menuContext, emptyContext: CONTEXT.EMPTY, intent: modeRef.current?.dragState?.intent });
-        if (action === 'trace') return;
+        clearCeilingDecide();
         modeRef.current?.cancelDrag();
         ceilingDragDownRef.current = null;
       }
@@ -219,6 +215,27 @@ export function usePointerInteraction({
     viewport.pan(dx, dy);
   }
 
+  // ---- 天伏: なぞり／パンの判定窓（interaction/holdGesture.js の規則）----
+  // 8px 超で move が開き、CEILING_DECIDE_MS 後に閉じる。閉じたら押下点のセルからなぞりを始める（startDrag。以後の move は updateDrag）。
+  // 窓の中で CEILING_PAN_PX を超えた move はパンにして窓を捨てる。pointerUp・Leave・ESC・長押し成立でも捨てる。
+  function clearCeilingDecide() {
+    if (ceilingDecideTimerRef.current) {
+      clearTimeout(ceilingDecideTimerRef.current);
+      ceilingDecideTimerRef.current = null;
+    }
+  }
+  function startCeilingTrace() {
+    const down = ceilingDragDownRef.current;
+    if (!down || drag.current) return;
+    const world = viewport.screenToWorld(down.x, down.y);
+    modeRef.current?.startDrag(graph, world.x, world.y);
+  }
+  function startPanAt(clientX, clientY) {
+    drag.current = { lastX: clientX, lastY: clientY };
+    panDistRef.current = TAP_MOVE_PX; // 押下点から既に閾値超動いている（panTo の積算はここから）。離した直後の click を確実に無視する
+    setIsPanning(true);
+  }
+
   // ---- ポインタ Down ----
   const handlePointerDown = (e) => {
     if (isUiBusy()) return; // 関門が開いている間は入力を無視する（遮断点A・入力規制ステップ3）
@@ -276,7 +293,13 @@ export function usePointerInteraction({
         drag.current = { lastX: clientX, lastY: clientY };
         setIsPanning(true);
       } else {
-        ceilingDragDownRef.current = { x: clientX, y: clientY };
+        // なぞり（区画の作成）ができる押下点か＝選択中の群のセル（startDrag の intent 'create'）。判定だけして dragState は
+        // すぐ捨てる（パンのつもりの押下でプレビューを出さない。なぞりの開始は判定窓が閉じたとき startCeilingTrace）
+        const world = viewport.screenToWorld(clientX, clientY);
+        modeRef.current?.startDrag(graph, world.x, world.y);
+        const canTrace = modeRef.current?.dragState?.intent === 'create';
+        modeRef.current?.cancelDrag();
+        ceilingDragDownRef.current = { x: clientX, y: clientY, canTrace, deciding: false };
         updateSnap(clientX, clientY); // 長押しメニューの対象（天井芯・端点・空）を押下点で解決する
         longPress.begin(clientX, clientY);
       }
@@ -511,28 +534,33 @@ export function usePointerInteraction({
         return;
       }
       // 成立後（hasFired）に dragState が無い（階段などを選択済み・選べないセル）でも、8px 超動けばパン（反応の無い押下にしない）
-      if (longPress.move(clientX, clientY)) {
-        drag.current = { lastX: clientX, lastY: clientY };
-        panDistRef.current = TAP_MOVE_PX; // 押下点から既に閾値超動いている（panTo の積算はここから）。離した直後の click を確実に無視する
-        setIsPanning(true);
-      }
+      if (longPress.move(clientX, clientY)) startPanAt(clientX, clientY);
       return;
     }
 
     // ---- 天伏モード（パン／ロングタップ後のなぞり／長押し成立前の 8px 超の移動でパン開始。天井芯の移動中は汎用の CL 移動へ落とす）----
     if (appMode === 'ceiling' && !modeRef.current?.moveState) {
       if (drag.current) { panTo(clientX, clientY); return; }
-      if (!ceilingDragDownRef.current) return;
+      const down = ceilingDragDownRef.current;
+      if (!down) return;
       if (modeRef.current?.dragState) {
         const world = viewport.screenToWorld(clientX, clientY);
         modeRef.current?.updateDrag(graph, world.x, world.y, CEILING_DRAG_SAMPLE_PX / viewport.scaleX);
         return;
       }
-      // 成立後はメニュー（ceilingDragDownRef が null）かなぞり（dragState）でここへ来ない。成立前の 8px 超の移動でパン
-      if (longPress.move(clientX, clientY)) {
-        drag.current = { lastX: clientX, lastY: clientY };
-        panDistRef.current = TAP_MOVE_PX;
-        setIsPanning(true);
+      // 成立後はメニュー（ceilingDragDownRef が null）でここへ来ない。8px 超で判定窓を開き（なぞりができない点は即パン）、
+      // 窓の中で CEILING_PAN_PX を超えればパン、超えずに窓が閉じればなぞり（タイマー → startCeilingTrace）
+      const dist = Math.hypot(clientX - down.x, clientY - down.y);
+      if (!down.deciding) {
+        if (!longPress.move(clientX, clientY)) return;
+        if (ceilingDragStart({ canTrace: down.canTrace, dist }) === 'pan') { startPanAt(clientX, clientY); return; }
+        down.deciding = true;
+        ceilingDecideTimerRef.current = setTimeout(() => { ceilingDecideTimerRef.current = null; startCeilingTrace(); }, CEILING_DECIDE_MS);
+        return;
+      }
+      if (dist > CEILING_PAN_PX) {
+        clearCeilingDecide();
+        startPanAt(clientX, clientY);
       }
       return;
     }
@@ -638,9 +666,7 @@ export function usePointerInteraction({
 
     const shouldPan = longPress.move(clientX, clientY);
     if (shouldPan) {
-      drag.current = { lastX: clientX, lastY: clientY };
-      panDistRef.current = TAP_MOVE_PX;
-      setIsPanning(true);
+      startPanAt(clientX, clientY);
       return;
     }
     updateSnap(clientX, clientY);
@@ -715,17 +741,18 @@ export function usePointerInteraction({
       return;
     }
 
-    // ---- 天伏モード（離したときの見分け: ロングタップ後＝なぞりの確定（メニューなら何もしない）／パン終了／クリック。天井芯の移動中は下の汎用の CL 移動確定へ落とす）----
+    // ---- 天伏モード（離したときの見分け: なぞりの確定／パン終了／クリック（メニューなら何もしない）。天井芯の移動中は下の汎用の CL 移動確定へ落とす）----
     if (appMode === 'ceiling' && !modeRef.current?.moveState) {
+      clearCeilingDecide();
       const down = ceilingDragDownRef.current;
       if (down) {
-        const gesture = releaseGesture({ fired: longPress.hasFired(), panned: !!drag.current });
-        if (gesture === 'hold') {
-          // 長押しでメニューを出した場合は onFire が dragState と ceilingDragDownRef を捨てていてここへ来ない。来るのはなぞり中だけ
-          const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
-          if (modeRef.current?.dragState) modeRef.current.commitDrag({ tap: isTapDistance(tapDist), ctx: { graph, project } });
-        } else if (gesture === 'tap') {
-          // クリック: 押下点のセルで startDrag → commitDrag({tap:true})。dragState が無くても呼ぶ（選べない所・空白のタップで選択を解除するため）
+        const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
+        if (modeRef.current?.dragState) {
+          // なぞり（判定窓が閉じて startCeilingTrace 済み）の確定。長押しでメニューを出した場合は onFire が捨てていてここへ来ない
+          modeRef.current.commitDrag({ tap: isTapDistance(tapDist), ctx: { graph, project } });
+        } else if (releaseGesture({ fired: longPress.hasFired(), panned: !!drag.current }) === 'tap' && isTapDistance(tapDist)) {
+          // クリック: 押下点のセルで startDrag → commitDrag({tap:true})。dragState が無くても呼ぶ（選べない所・空白のタップで選択を解除するため）。
+          // 8px 超動いて判定窓が閉じる前に離した（なぞりもパンも始まっていない）は何もしない
           longPress.abort();
           const world = viewport.screenToWorld(down.x, down.y);
           modeRef.current?.startDrag(graph, world.x, world.y);
@@ -887,6 +914,7 @@ export function usePointerInteraction({
       return;
     }
     if (appMode === 'ceiling') {
+      clearCeilingDecide();
       modeRef.current?.cancelDrag();
       ceilingDragDownRef.current = null;
       longPress.abort();
@@ -1007,6 +1035,7 @@ export function usePointerInteraction({
     axisLabelRef.current = null;
     moveDownRef.current = null;
     finishDragDownRef.current = null;
+    clearCeilingDecide();
     ceilingDragDownRef.current = null;
     siteDrawDownRef.current = null;
     elevationDragRef.current = null;

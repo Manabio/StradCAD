@@ -33,14 +33,22 @@ export function releaseGesture({ fired, panned }) {
   return 'tap';
 }
 
+// ---- 天伏: なぞり（区画の作成）とパンを、動き出しの速さで見分ける（ユーザー指示 2026-10-19）----
+// 天伏のロングタップは全部メニュー（天井芯の追加・移動・削除・延長）に使うので、なぞりはドラッグで始める。
+// 押下点から 8px（useLongPress の閾値）を超えたら判定窓（CEILING_DECIDE_MS）を開き、窓の中で CEILING_PAN_PX を
+// 超えればパン、超えずに窓が閉じればなぞり。判定は入口の 1 回だけで、パンに入った後はどんな速さでも追従する。
+// なぞりができない押下点（選択中の群の外・何も選択していない）は 8px 超で即パン（窓を開かない）。
+// 数値は暫定（実機で合わせる前提）。
+export const CEILING_PAN_PX = 16;
+export const CEILING_DECIDE_MS = 80;
+
 /**
- * 天伏のロングタップ成立時に、なぞり（区画を作る）を始めるかメニューを出すか。
- * 天井芯の線上・端点（menuContext が EMPTY 以外）は従来どおりメニュー。空（EMPTY）で、押下点のセルが
- * 選択中の群に属し区画を作れる（startDrag の intent が 'create'）ときだけなぞり。
- * 既知の限界: 選択中の群のセルの上では「天井芯を追加」のメニューが出ない（先に空白をタップして選択を解除する）。
- * @param {{menuContext: string, emptyContext: string, intent: ('select'|'create'|null|undefined)}} a
- * @returns {'trace'|'menu'}
+ * 天伏で 8px 超えた時点・判定窓の中の move で呼ぶ。
+ *   canTrace … 押下点のセルが選択中の群に属し区画を作れる（startDrag の intent が 'create'）
+ *   dist     … 押下点からの距離（px）
+ * @returns {'pan'|'wait'}  'wait' は判定窓の中（窓が閉じればなぞり。閉じる側は呼び出し側のタイマー）
  */
-export function ceilingHoldAction({ menuContext, emptyContext, intent }) {
-  return menuContext === emptyContext && intent === 'create' ? 'trace' : 'menu';
+export function ceilingDragStart({ canTrace, dist }) {
+  if (!canTrace) return 'pan';
+  return Number.isFinite(dist) && dist > CEILING_PAN_PX ? 'pan' : 'wait';
 }

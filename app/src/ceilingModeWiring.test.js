@@ -156,7 +156,7 @@ function ceilingBlock(body, header = CEILING_IF) {
   return all.slice(i, j + 1).map(l => l.trim());
 }
 
-test('【配線】usePointerInteraction: pointerDown の ceiling 分岐はガター内ならパン、moveState があれば moveDownRef を立てて汎用の移動へ、それ以外は ref を立てて updateSnap→longPress.begin（startDrag はしない。クリック・ロングタップで初めて startDrag。2026-10-19）。findGutterCL( より前で return する', () => {
+test('【配線】usePointerInteraction: pointerDown の ceiling 分岐はガター内ならパン、moveState があれば moveDownRef を立てて汎用の移動へ、それ以外は「なぞりができる点か」（startDrag の intent）だけ判定して cancelDrag し、ref を立てて updateSnap→longPress.begin（2026-10-19）。findGutterCL( より前で return する', () => {
   const body = extractArrowFunctionBody(pointerSrc, 'const handlePointerDown = (e) => {');
   const block = ceilingBlock(body);
   for (const line of [
@@ -165,15 +165,22 @@ test('【配線】usePointerInteraction: pointerDown の ceiling 分岐はガタ
     'setIsPanning(true);',
     'if (modeRef.current?.moveState) {',
     'moveDownRef.current = { x: clientX, y: clientY };',
-    'ceilingDragDownRef.current = { x: clientX, y: clientY };',
+    'modeRef.current?.startDrag(graph, world.x, world.y);',
+    "const canTrace = modeRef.current?.dragState?.intent === 'create';",
+    'modeRef.current?.cancelDrag();',
+    'ceilingDragDownRef.current = { x: clientX, y: clientY, canTrace, deciding: false };',
     'updateSnap(clientX, clientY); // 長押しメニューの対象（天井芯・端点・空）を押下点で解決する',
     'longPress.begin(clientX, clientY);',
     'return;',
   ]) assert.ok(block.includes(line), `down: ${line} が無い`);
-  assert.ok(!block.some(l => l.includes('startDrag(')), 'down: 押下の時点で startDrag している（パンのつもりの押下で選択が変わる）');
-  assert.ok(block.indexOf('ceilingDragDownRef.current = { x: clientX, y: clientY };') < block.indexOf('updateSnap(clientX, clientY); // 長押しメニューの対象（天井芯・端点・空）を押下点で解決する'));
+  // 判定だけして dragState はすぐ捨てる（パンのつもりの押下でプレビューを出さない）: startDrag → canTrace → cancelDrag → 記録 の順
+  const iStart = block.indexOf('modeRef.current?.startDrag(graph, world.x, world.y);');
+  const iCancel = block.indexOf('modeRef.current?.cancelDrag();');
+  const iRef = block.indexOf('ceilingDragDownRef.current = { x: clientX, y: clientY, canTrace, deciding: false };');
+  assert.ok(iStart < iCancel && iCancel < iRef, 'down: startDrag→cancelDrag→記録 の順でない');
+  assert.ok(iRef < block.indexOf('updateSnap(clientX, clientY); // 長押しメニューの対象（天井芯・端点・空）を押下点で解決する'));
   // moveState の分岐が 押下の記録より前（移動中は長押しを始めない）
-  assert.ok(block.indexOf('if (modeRef.current?.moveState) {') < block.indexOf('ceilingDragDownRef.current = { x: clientX, y: clientY };'));
+  assert.ok(block.indexOf('if (modeRef.current?.moveState) {') < iStart);
   // 移動中はガターの押下でもパンにせず moveDownRef を立てる（汎用経路と同じ順序）: moveState 分岐が isInGutter( より前
   assert.ok(block.findIndex(l => l.includes('modeRef.current?.moveState')) < block.findIndex(l => l.includes('isInGutter(')),
     'ceiling の down で moveState の分岐が isInGutter( より後ろにある（移動中のガター押下がパンになる）');
@@ -185,20 +192,27 @@ test('【配線】usePointerInteraction: pointerDown の ceiling 分岐はガタ
   assert.ok(i < body.indexOf('gutterLongPress.begin('), 'ceiling 分岐が gutterLongPress.begin( より後ろにある');
 });
 
-test('【配線】usePointerInteraction: pointerMove の ceiling 分岐は moveState が無いときだけ。パン維持／ロングタップ後のなぞり中は updateDrag（サンプル間隔 4px）／成立前の longPress.move の閾値超えでパン開始して return。移動中は汎用の CL 移動へ落ちる（S8b・2026-10-19）', () => {
+test('【配線】usePointerInteraction: pointerMove の ceiling 分岐は moveState が無いときだけ。パン維持／なぞり中は updateDrag（サンプル間隔 4px）／8px 超で ceilingDragStart（即パン or 判定窓）、窓の中で CEILING_PAN_PX 超ならパン、窓が閉じれば startCeilingTrace。移動中は汎用の CL 移動へ落ちる（S8b・2026-10-19）', () => {
   const body = extractArrowFunctionBody(pointerSrc, 'const handlePointerMove = (e) => {');
   const block = ceilingBlock(body, CEILING_IF_NOT_MOVING);
   for (const line of [
     'if (drag.current) { panTo(clientX, clientY); return; }',
-    'if (!ceilingDragDownRef.current) return;',
+    'const down = ceilingDragDownRef.current;',
+    'if (!down) return;',
     'if (modeRef.current?.dragState) {',
     'modeRef.current?.updateDrag(graph, world.x, world.y, CEILING_DRAG_SAMPLE_PX / viewport.scaleX);',
-    'if (longPress.move(clientX, clientY)) {',
-    'drag.current = { lastX: clientX, lastY: clientY };',
-    'setIsPanning(true);',
+    'const dist = Math.hypot(clientX - down.x, clientY - down.y);',
+    'if (!down.deciding) {',
+    'if (!longPress.move(clientX, clientY)) return;',
+    "if (ceilingDragStart({ canTrace: down.canTrace, dist }) === 'pan') { startPanAt(clientX, clientY); return; }",
+    'down.deciding = true;',
+    'ceilingDecideTimerRef.current = setTimeout(() => { ceilingDecideTimerRef.current = null; startCeilingTrace(); }, CEILING_DECIDE_MS);',
+    'if (dist > CEILING_PAN_PX) {',
+    'clearCeilingDecide();',
+    'startPanAt(clientX, clientY);',
     'return;',
   ]) assert.ok(block.includes(line), `move: ${line} が無い`);
-  assert.ok(block.indexOf('if (modeRef.current?.dragState) {') < block.indexOf('if (longPress.move(clientX, clientY)) {'), 'なぞり中の判定がパン開始より後ろにある');
+  assert.ok(block.indexOf('if (modeRef.current?.dragState) {') < block.indexOf('if (!down.deciding) {'), 'なぞり中の判定が見分けより後ろにある');
   assert.match(pointerSrc, /^const CEILING_DRAG_SAMPLE_PX = 4;\s*$/m);
   const i = body.indexOf(CEILING_IF_NOT_MOVING);
   assert.ok(i < body.indexOf('updateSnap('), 'ceiling 分岐が updateSnap( より後ろにある');
@@ -207,16 +221,18 @@ test('【配線】usePointerInteraction: pointerMove の ceiling 分岐は moveS
   assert.ok(body.includes('modeRef.current?.updateMove(newVal)'), '汎用の CL 移動（updateMove）が無い');
 });
 
-test('【配線】usePointerInteraction: pointerUp の ceiling 分岐は moveState が無いときだけ。releaseGesture で見分け、hold はなぞり中だけ commitDrag（tap は isTapDistance）、tap は押下点で startDrag→commitDrag({tap:true}) してから ref を戻し、longPress.abort してパンを解除して return（S8b・2026-10-19）', () => {
+test('【配線】usePointerInteraction: pointerUp の ceiling 分岐は moveState が無いときだけ。判定窓を捨て、dragState（なぞり）があれば commitDrag（tap は isTapDistance）、無ければ releaseGesture が tap かつ 8px 未満のときだけ押下点で startDrag→commitDrag({tap:true}) してから ref を戻し、longPress.abort してパンを解除して return（S8b・2026-10-19）', () => {
   const body = extractArrowFunctionBody(pointerSrc, 'const handlePointerUp = (e) => {');
   const block = ceilingBlock(body, CEILING_IF_NOT_MOVING);
-  const gate = block.indexOf('const gesture = releaseGesture({ fired: longPress.hasFired(), panned: !!drag.current });');
-  const commit = block.indexOf('if (modeRef.current?.dragState) modeRef.current.commitDrag({ tap: isTapDistance(tapDist), ctx: { graph, project } });');
+  const clear = block.indexOf('clearCeilingDecide();');
+  const commit = block.indexOf('modeRef.current.commitDrag({ tap: isTapDistance(tapDist), ctx: { graph, project } });');
+  const gate = block.indexOf("} else if (releaseGesture({ fired: longPress.hasFired(), panned: !!drag.current }) === 'tap' && isTapDistance(tapDist)) {");
   const tapCommit = block.indexOf('modeRef.current?.commitDrag({ tap: true, ctx: { graph, project } });');
   const reset = block.indexOf('ceilingDragDownRef.current = null;');
-  assert.ok(gate >= 0 && gate < commit, 'up: releaseGesture の見分けが commitDrag より前に無い');
-  assert.ok(commit >= 0, 'up: なぞりの確定 commitDrag({ tap: isTapDistance(tapDist), ctx: { graph, project } }) が無い（S12b: 区画の作成に ctx が要る）');
-  assert.ok(tapCommit > commit, 'up: クリックの commitDrag({ tap: true, ctx }) が無い（空白のタップで選択解除）');
+  assert.ok(clear >= 0 && clear < commit, 'up: 判定窓のタイマーを捨てるのが先頭に無い');
+  assert.ok(block.indexOf('if (modeRef.current?.dragState) {') < commit && commit >= 0, 'up: なぞりの確定 commitDrag({ tap: isTapDistance(tapDist), ctx: { graph, project } }) が無い（S12b: 区画の作成に ctx が要る）');
+  assert.ok(gate > commit, 'up: クリックの見分け（releaseGesture が tap かつ isTapDistance）が無い');
+  assert.ok(tapCommit > gate, 'up: クリックの commitDrag({ tap: true, ctx }) が無い（空白のタップで選択解除）');
   assert.ok(block.indexOf('modeRef.current?.startDrag(graph, world.x, world.y);') < tapCommit, 'up: クリックは commitDrag の前に押下点で startDrag する');
   assert.equal(pointerSrc.split('ctx: { graph, project } })').length - 1, 2, 'ctx 付きの commitDrag は天伏の2箇所だけ（なぞりの確定とクリック。仕上げは ctx なし）');
   assert.ok(reset > tapCommit, 'up: ref を戻すのが commitDrag より前にある（または無い）');
