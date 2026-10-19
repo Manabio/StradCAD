@@ -56,7 +56,10 @@ export function beamDepthMm(beam) {
 
 /**
  * @typedef {{isVertical:boolean, axisWorld:number, spanLo:number, spanHi:number,
- *   widthMm:number, topZ:number, depthMm:number, role:string}} BeamSolid
+ *   widthMm:number, topZ:number, depthMm:number, role:string,
+ *   hiddenSpans:Array<[number,number]>}} BeamSolid
+ *   hiddenSpans … スパンの一部だけを覆う壁の足元区間（世界座標・統合済み。`wallFootprintSpans`）。見え掛かり（空中横断・平行）
+ *   から引く。全スパンを 1 枚の壁が覆う梁は `isInsideWall` で寄与自体から落ちるのでここには来ない。
  */
 
 /**
@@ -87,23 +90,44 @@ export function beamDepthMm(beam) {
  * そのものにしているのは、隅の詰めが隣接壁の半厚程度に収まるため——それを大きく超えて
  * 伸びる梁（隣のスパンまで通る梁）は端が見えるので隠さない。
  * @param {object} beam - graph.beams の1件
- * @param {object[]} walls
+ * @param {Array<{wall:object}>} wallEntries - 壁（`wallFootprintSpans` と同じ形。ここでは層の z は見ない）
  * @returns {boolean}
  */
-function isInsideWall(beam, walls) {
+function isInsideWall(beam, wallEntries) {
+  const bSpanLo = Math.min(beam.coord1, beam.coord2), bSpanHi = Math.max(beam.coord1, beam.coord2);
+  return wallFootprintSpans(beam, wallEntries, { withTol: true }).some(([wLo, wHi]) =>
+    bSpanLo >= wLo - GAP_EPS && bSpanHi <= wHi + GAP_EPS);
+}
+
+/**
+ * 梁の厚み方向の帯を隠せる（`wallConcealRange` に完全に収まる）同じ向きの壁ごとの、スパン方向の足元区間。
+ * `isInsideWall` と同じ述語を区間にしたもの: 1 枚の壁がスパン全体を覆えば寄与から落とし、覆いきらなければ覆う区間だけ
+ * 見え掛かりから引く（`BeamSolid.hiddenSpans`）——梁が柱で分割されているかどうか（部材の切れ目）で描画が変わらないようにする。
+ * @param {object} beam graph.beams の 1 件
+ * @param {Array<{wall:object, storeyLo?:number, storeyHi?:number}>} wallEntries 壁と、その壁が立つ層の床〜直上の層の床（絶対 z）
+ * @param {{withTol?:boolean, topZ?:number, depthMm?:number, clipLo?:number, clipHi?:number}} [opts]
+ *   withTol … 隅の取り合い（chamferWalls）ぶんの許容を足す（全スパン判定だけ。区間の控除は壁のスパンそのまま＝自由端で
+ *   見える梁を隠しすぎない）／topZ・depthMm … 与えると、梁の天が「その壁の層の床−梁成」〜直上の床の間にある壁だけ
+ *   （壁が立つ床の下の床梁まで。在来木造の横架材は再計算で天端 FL−100 になる〔conformWoodBeamLevels〕ので床ちょうどでは
+ *   取りこぼす——QA 指摘 2026-10-19。別の層の壁の足元は梁に届かない＝2階の床下の梁を 3階の壁が隠さない）／clipLo/clipHi … 梁のスパンで切る
+ * @returns {Array<[number, number]>} 世界座標の区間（統合しない。呼び出し側が `mergeSpans` する）
+ */
+function wallFootprintSpans(beam, wallEntries, { withTol = false, topZ = null, depthMm = 0, clipLo = -Infinity, clipHi = Infinity } = {}) {
   const halfW = (beam.sectionWidth ?? 0) / 2;
   const bLo = beam.axisValue - halfW, bHi = beam.axisValue + halfW;
-  const bSpanLo = Math.min(beam.coord1, beam.coord2), bSpanHi = Math.max(beam.coord1, beam.coord2);
-  for (const wall of walls) {
-    if (wall.isVertical !== beam.isVertical) continue; // 同じ向きの壁だけが梁を丸ごと隠せる
+  const out = [];
+  for (const { wall, storeyLo = -Infinity, storeyHi = Infinity } of wallEntries) {
+    if (wall.isVertical !== beam.isVertical) continue; // 同じ向きの壁だけが梁を隠せる
+    if (topZ != null && !(topZ >= storeyLo - depthMm - GAP_EPS && topZ <= storeyHi + GAP_EPS)) continue;
     const cr = wallConcealRange(wall);
     if (!cr) continue;
     if (!(bLo >= cr.lo - GAP_EPS && bHi <= cr.hi + GAP_EPS)) continue;
-    const tol = wallSpanTolMm(wall); // 隅の取り合い（chamferWalls）ぶんの許容
-    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-    if (bSpanLo >= wLo - tol - GAP_EPS && bSpanHi <= wHi + tol + GAP_EPS) return true;
+    const tol = withTol ? wallSpanTolMm(wall) : 0; // 隅の取り合い（chamferWalls）ぶんの許容
+    const lo = Math.max(Math.min(wall.coord1, wall.coord2) - tol, clipLo);
+    const hi = Math.min(Math.max(wall.coord1, wall.coord2) + tol, clipHi);
+    if (hi - lo > GAP_EPS) out.push([lo, hi]);
   }
-  return false;
+  return out;
 }
 
 // スパン方向の許容＝materialRange の幅（隠す範囲 concealRange の幅ではない。下地帯まで広げても
@@ -206,24 +230,37 @@ export function structuralContribution(layers) {
   // ユーザー実機指摘2026-08「2階床の構造材梁断面は、壁の中なら描画しない」: 壁の材厚の中に
   // 収まる梁は壁に隠れて見えないため寄与から落とす。壁は全レイヤー（自階・上階）から集める
   // ——2階床梁は1階の壁の上に乗る（自階の壁が隠す）ことも、2階の壁の中に入ることもあるため。
-  const walls = (layers ?? []).flatMap(l => l.graph?.walls ?? []);
+  // 壁ごとに、立つ層の床〜直上の層の床（部分控除 hiddenSpans の z 判定用。全スパン判定 isInsideWall は従来どおり z を見ない）
+  const floors = (layers ?? []).map(l => l.floorZMm ?? 0);
+  const wallEntries = (layers ?? []).flatMap(l => {
+    const storeyLo = l.floorZMm ?? 0;
+    const above = floors.filter(f => f > storeyLo + GAP_EPS);
+    const storeyHi = above.length ? Math.min(...above) : Infinity;
+    return (l.graph?.walls ?? []).map(wall => ({ wall, storeyLo, storeyHi }));
+  });
   const result = [];
   for (const layer of layers ?? []) {
     for (const beam of layer.graph?.beams ?? []) {
       if (EXCLUDED_BEAM_ROLES.has(beam.role)) continue; // 追加仕様2026-08: 基礎梁／土台(role:'sill')は展開図に描かない
-      if (isInsideWall(beam, walls)) continue;
+      if (isInsideWall(beam, wallEntries)) continue;
       const entry = findSectionEntry(beam.sectionDefId);
       const depthMm = beamDepthMm(beam);
+      const spanLo = Math.min(beam.coord1, beam.coord2), spanHi = Math.max(beam.coord1, beam.coord2);
+      const topZ = layer.floorZMm + beam.levelOffset;
       result.push({
         section: entry ?? null, // 断面形状（H形鋼のフランジ・ウェブ等）を作図で使う
         isVertical: beam.isVertical,
         axisWorld: beam.axisValue,
-        spanLo: Math.min(beam.coord1, beam.coord2),
-        spanHi: Math.max(beam.coord1, beam.coord2),
+        spanLo,
+        spanHi,
         widthMm: beam.sectionWidth,
-        topZ: layer.floorZMm + beam.levelOffset,
+        topZ,
         depthMm,
         role: beam.role,
+        // スパンの一部だけを覆う壁の足元区間（見え掛かりから引く。ユーザー指摘 2026-10-19 roof-test1 2階 階段 A:
+        // 3階の到達辺の床梁が柱で分かれておらず往路側の壁〔3階の階段吹抜けの壁〕の足元を越えて 1 本で続くため、
+        // 全スパン判定〔isInsideWall〕に掛からず全長が中線で出た）。梁の天がその壁の層にある壁だけ・壁のスパンそのまま
+        hiddenSpans: mergeSpans(wallFootprintSpans(beam, wallEntries, { topZ, depthMm, clipLo: spanLo, clipHi: spanHi })),
       });
     }
   }
@@ -407,6 +444,43 @@ function subtractSpans(lo, hi, hidden) {
     cur = Math.max(cur, hHi);
   }
   if (hi > cur + GAP_EPS) out.push([cur, hi]);
+  return out;
+}
+
+// 区間を述語の値で分けるときの粗いサンプル間隔と、境界を詰める二分の回数（50mm を 2^12 で割る＝約 0.01mm）。
+// 述語（その位置の天井より梁が上か）は区間に沿って区分的に一定（セル・レーンの境で変わる）で、変わる所は数か所しか無い前提。
+const PREDICATE_SAMPLE_STEP_MM = 50;
+const PREDICATE_BISECT_ITERS = 12;
+
+/**
+ * 区間 [lo, hi] のうち述語 hidden(x) が偽の部分（見える部分）を区間列で返す。粗いサンプル（各小区間の中央）で状態を取り、
+ * 隣り合うサンプルで状態が変わる所は二分で境界を詰める。サンプル間隔より狭い変化は拾えない（受容）。
+ * @param {number} lo
+ * @param {number} hi
+ * @param {(x:number)=>boolean} hidden
+ * @returns {Array<[number, number]>}
+ */
+function splitRangeByPredicate(lo, hi, hidden) {
+  const n = Math.max(3, Math.ceil((hi - lo) / PREDICATE_SAMPLE_STEP_MM));
+  const step = (hi - lo) / n;
+  const xs = Array.from({ length: n }, (_, i) => lo + step * (i + 0.5));
+  const states = xs.map(hidden);
+  const boundary = (a, b, sa) => { // sa＝a 側の状態。a と b の間で状態が変わる位置
+    let p = a, q = b;
+    for (let i = 0; i < PREDICATE_BISECT_ITERS; i++) {
+      const m = (p + q) / 2;
+      if (hidden(m) === sa) p = m; else q = m;
+    }
+    return Math.round((p + q) / 2 * 1000) / 1000; // 二分の端数（≈0.01mm）を 1/1000mm に丸める（golden の座標を安定させる）
+  };
+  const out = [];
+  let start = states[0] ? null : lo;
+  for (let i = 1; i < n; i++) {
+    if (states[i] === states[i - 1]) continue;
+    const x = boundary(xs[i - 1], xs[i], states[i - 1]);
+    if (states[i]) { if (start != null && x - start > GAP_EPS) out.push([start, x]); start = null; } else start = x;
+  }
+  if (start != null && hi - start > GAP_EPS) out.push([start, hi]);
   return out;
 }
 
@@ -621,16 +695,20 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
   // 天井裏＝描かない（ユーザー指示 2026-10-15「2FL にある横架材見え掛かりは、天井仕上げ面より上〔=天井裏〕につき描画不要」）。
   // 区間の 3 点で見て、どこかで天井より下に出ていれば描く。天井が取れない点は「見える」側に倒す。
   const ceilZAtWorld = typeof opts.ceilZAtWorld === 'function' ? opts.ceilZAtWorld : null;
-  const aboveCeiling = (beam, loX, hiX) => {
-    if (!ceilZAtWorld) return false;
+  // 区間 [loX, hiX] のうち天井より下に出て見える部分（天井は位置ごとに違う＝階段室の裏面は復路レーンの上だけ平らな床構造の中、
+  // 往路レーンの上は段の上の空気）。区間全体の全か無かで決めると、両レーンにまたがる 1 本の梁は復路レーンの上の
+  // 床構造の中まで全長が描かれる（ユーザー指摘 2026-10-19 roof-test1 2階 階段 A）。
+  const visibleBelowCeiling = (beam, loX, hiX) => {
+    if (!ceilZAtWorld) return [[loX, hiX]];
     const bottom = beam.topZ - beam.depthMm;
     // 評価点は梁の芯から切断線側へ 1mm 寄せる（梁が部屋の境界の通り芯に乗るとき、境界ちょうどの点が隣室のセルに落ちないように）
     const depth = beam.axisWorld - (cut.viewSign ?? 1);
-    return [0.1, 0.5, 0.9].every(t => {
-      const across = worldOf(cut, loX + (hiX - loX) * t);
+    const hiddenAt = (x) => {
+      const across = worldOf(cut, x);
       const z = cut.line.isVertical ? ceilZAtWorld(depth, across) : ceilZAtWorld(across, depth);
-      return Number.isFinite(z) && bottom >= z - GAP_EPS;
-    });
+      return Number.isFinite(z) && bottom >= z - GAP_EPS; // 天井が取れない点は見える側
+    };
+    return splitRangeByPredicate(loX, hiX, hiddenAt);
   };
   const belowProfile = (xa, xb, beam) => beam.role !== 'landing'
     && beam.topZ + beam.depthMm < drawnFloorProfileZMax(floorProfile, xa, xb) - GAP_EPS;
@@ -693,14 +771,16 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
     if (airborne) {
       const { lo: drawLo, hi: drawHi } = cutDrawRange(cut);
       // 壁（規則A）・柱（規則B）に隠れるスパン区間を引き、残る区間ごとに天地を描く
-      const hidden = mergeSpans([...wallCoveredSpans(cut, beam, halfW, partitionLinesOf), ...colSpans]);
+      // 壁の足元（beam.hiddenSpans。スパンの一部だけを覆う壁）も引く——柱で分かれた梁と 1 本で続く梁で描画を変えない
+      const hidden = mergeSpans([...wallCoveredSpans(cut, beam, halfW, partitionLinesOf), ...colSpans, ...(beam.hiddenSpans ?? [])]);
       for (const [segLo, segHi] of subtractSpans(beam.spanLo, beam.spanHi, hidden)) {
         const xa = localXOf(cut, segLo), xb = localXOf(cut, segHi);
         const loX = Math.max(drawLo, Math.min(xa, xb));
         const hiX = Math.min(drawHi, Math.max(xa, xb));
-        if (hiX - loX > GAP_EPS && !aboveCeiling(beam, loX, hiX)) {
-          prims.push(emitLine(cut, loX, beam.topZ, hiX, beam.topZ, ElevationLineRole.SILHOUETTE));
-          prims.push(emitLine(cut, loX, beam.topZ - beam.depthMm, hiX, beam.topZ - beam.depthMm,
+        if (!(hiX - loX > GAP_EPS)) continue;
+        for (const [vLo, vHi] of visibleBelowCeiling(beam, loX, hiX)) {
+          prims.push(emitLine(cut, vLo, beam.topZ, vHi, beam.topZ, ElevationLineRole.SILHOUETTE));
+          prims.push(emitLine(cut, vLo, beam.topZ - beam.depthMm, vHi, beam.topZ - beam.depthMm,
             ElevationLineRole.SILHOUETTE));
         }
       }
@@ -713,8 +793,8 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
     const xLo = localXOf(cut, beam.spanLo), xHi = localXOf(cut, beam.spanHi);
     if (belowProfile(Math.min(xLo, xHi), Math.max(xLo, xHi), beam)) continue;
     const zTop = beam.topZ, zBot = beam.topZ - beam.depthMm;
-    // 柱（規則B）に中断される梁は区間ごとに天地を描く。両端の縦線は元の梁の端が残っている区間だけ
-    for (const [segLo, segHi] of subtractSpans(beam.spanLo, beam.spanHi, mergeSpans(colSpans))) {
+    // 柱（規則B）・壁の足元（beam.hiddenSpans）に中断される梁は区間ごとに天地を描く。両端の縦線は元の梁の端が残っている区間だけ
+    for (const [segLo, segHi] of subtractSpans(beam.spanLo, beam.spanHi, mergeSpans([...colSpans, ...(beam.hiddenSpans ?? [])]))) {
       const xa = localXOf(cut, segLo), xb = localXOf(cut, segHi);
       const loX = Math.min(xa, xb), hiX = Math.max(xa, xb);
       prims.push(emitLine(cut, loX, zTop, hiX, zTop, ElevationLineRole.DETAIL));

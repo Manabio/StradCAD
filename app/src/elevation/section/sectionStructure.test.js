@@ -319,3 +319,107 @@ test('【指示2026-10-15】structuralPrimitivesForCut: 空中横断の梁は、
   assert.equal(airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: () => null })).length, 2, '天井が取れなければ見える側');
   assert.equal(airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: (x) => (x < 1000 ? 2476 : 3000) })).length, 2, 'どこかで天井より下に出ていれば描く');
 });
+
+// ---- ユーザー指摘 2026-10-19「roof-test1 2階 展開 階段 A: 3FL 下に 3階床梁がらみの見え掛かり」----
+// 3階の到達辺の床梁が柱で分かれておらず（60..1760 の 1 本）、往路側の 3階の壁の足元を越えて復路レーンの上まで続く。
+// 旧判定は (1) 天井より上か を区間の 3 点全部で見る全か無か、(2) 壁の中か を 1 枚の壁がスパン全体を覆うときだけ、
+// の 2 つで、どちらにも掛からず全長が中線で出た。両方を「覆う区間だけ引く」へ一般化する。
+test('【指摘2026-10-19】structuralPrimitivesForCut: 空中横断の梁は、天井より上の部分だけ描かず、天井より下に出る区間は描く', () => {
+  const graph = makeGraph();
+  addHorizontalBeam(graph, 3000); // 軸 y=1000・天 3000・成 200（下端 2800）・x 0〜2000
+  const contribution = structuralContribution([{ graph, floorZMm: 0, role: 'self' }]);
+  const cut = {
+    seqNo: 'x', line: { isVertical: false, axisValue: 0, lo: 0, hi: 2000 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 5400 }, baseFloorZ: 0,
+  };
+  const airborne = prims => prims.filter(p => p.weight === 'medium' && p.y1 === p.y2).sort((a, b) => a.x1 - b.x1);
+  // x<1000 は天井 2476（下端 2800 が上＝天井裏）・x≥1000 は天井 3000（見える）
+  const half = airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: (x) => (x < 1000 ? 2476 : 3000) }));
+  assert.equal(half.length, 2, '見える区間 1 つ＝天地 2 本');
+  for (const p of half) {
+    assert.ok(Math.abs(p.x1 - 1000) < 0.5, `始点は天井が変わる x=1000（実測 ${p.x1}）`);
+    assert.equal(p.x2, 2000);
+  }
+  // 逆（x≥1000 が天井裏）
+  const other = airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: (x) => (x >= 1000 ? 2476 : 3000) }));
+  assert.equal(other.length, 2);
+  for (const p of other) { assert.equal(p.x1, 0); assert.ok(Math.abs(p.x2 - 1000) < 0.5, `終点 x=1000（実測 ${p.x2}）`); }
+  // 中央だけ天井裏（600..1400）→ 見える区間 2 つ＝4 本
+  const mid = airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: (x) => (x > 600 && x < 1400 ? 2476 : 3000) }));
+  assert.equal(mid.length, 4);
+  assert.ok(Math.abs(mid[0].x2 - 600) < 0.5 && Math.abs(mid[2].x1 - 1400) < 0.5, `境界 600/1400（実測 ${mid[0].x2}/${mid[2].x1}）`);
+  // 失敗系: 天井が取れない点（null）は見える側。全部 null なら従来どおり全長 2 本
+  assert.deepEqual(airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: () => null })).map(p => [p.x1, p.x2]), [[0, 2000], [0, 2000]]);
+  // 全部天井裏なら 0 本（従来どおり）
+  assert.equal(airborne(structuralPrimitivesForCut(contribution, cut, [], null, { ceilZAtWorld: () => 2476 })).length, 0);
+});
+
+test('【指摘2026-10-19】structuralContribution: スパンの一部だけを覆う壁の足元は hiddenSpans（梁のスパンで切る）。全体を覆えば従来どおり寄与しない・壁より太い梁は空', () => {
+  // exteriorWallFake: span -72.5..3712.5。区間の控除は壁のスパンそのまま（隅の許容は全スパン判定だけ）→ 0..3712.5
+  const longGirder = { ...girderOnAxis(), coord1: 0, coord2: 8000 };
+  const [solid] = structuralContribution([{ graph: { walls: [exteriorWallFake], beams: [longGirder] }, floorZMm: 0, role: 'self' }]);
+  assert.ok(solid, '壁より長い梁は寄与する');
+  assert.deepEqual(solid.hiddenSpans, [[0, 3712.5]], '壁の足元を梁のスパンで切った区間（許容なし）');
+  assert.deepEqual(structuralContribution([{ graph: { walls: [exteriorWallFake], beams: [girderOnAxis()] }, floorZMm: 0, role: 'self' }]), [],
+    '全スパンを覆う壁の中の梁は従来どおり落ちる');
+  const [fat] = structuralContribution([{ graph: { walls: [exteriorWallFake], beams: [{ ...girderOnAxis(150), coord2: 8000 }] }, floorZMm: 0, role: 'self' }]);
+  assert.deepEqual(fat.hiddenSpans, [], '壁より太い梁は室内へ出るので隠す区間なし');
+  const [noWall] = structuralContribution([{ graph: { walls: [], beams: [longGirder] }, floorZMm: 0, role: 'self' }]);
+  assert.deepEqual(noWall.hiddenSpans, [], '壁が無ければ空');
+  // 失敗系: 別の層（上階）の壁は、梁の天がその層に無ければ足元が届かない（2階の床下の梁を 3階の壁が隠さない）
+  const twoLayers = (levelOffset) => structuralContribution([
+    { graph: { walls: [], beams: [{ ...longGirder, levelOffset }] }, floorZMm: 0, role: 'self' },
+    { graph: { walls: [exteriorWallFake], beams: [] }, floorZMm: 3000, role: 'above' },
+  ]);
+  assert.deepEqual(twoLayers(0)[0].hiddenSpans, [], '天 0 の梁に 3000 から立つ壁の足元は届かない');
+  assert.deepEqual(twoLayers(3000)[0].hiddenSpans, [[0, 3712.5]], '天 3000（上階の床）の梁は上階の壁の足元に入る');
+  // QA 指摘 2026-10-19: 在来木造の横架材は再計算（conformWoodBeamLevels）で天端 FL−100 になる。壁が立つ床の下の床梁（天が床−梁成以上）も足元に入る
+  assert.deepEqual(twoLayers(2900)[0].hiddenSpans, [[0, 3712.5]], '天 FL−100（成 120 の WOOD-120x120）の床梁も上階の壁の足元に入る');
+  assert.deepEqual(twoLayers(3000 - 120 - 1)[0].hiddenSpans, [], '天が床−梁成より下なら上階の壁の足元ではない');
+  const selfWall = structuralContribution([
+    { graph: { walls: [exteriorWallFake], beams: [{ ...longGirder, levelOffset: -3000 }] }, floorZMm: 0, role: 'self' },
+    { graph: { walls: [], beams: [] }, floorZMm: 3000, role: 'above' },
+  ]);
+  assert.deepEqual(selfWall[0].hiddenSpans, [], '自階の層の床より下の天の梁は自階の壁の足元に入らない');
+});
+
+test('【指摘2026-10-19】structuralPrimitivesForCut: hiddenSpans の区間は空中横断（中線）・平行（細線）とも描かない。柱で分かれた梁と 1 本の梁で描画が変わらない', () => {
+  // 天 3000（levelOffset）: 天 0 だと下端 −120 が baseFloorZ より下で細破線に降格し中線の数が数えられない
+  const longGirder = { ...girderOnAxis(), coord1: 0, coord2: 8000, levelOffset: 3000 };
+  const walls = [exteriorWallFake];
+  const contribution = structuralContribution([{ graph: { walls, beams: [longGirder] }, floorZMm: 0, role: 'self' }]);
+  const cutAt = (axisValue, viewSign) => ({
+    seqNo: 'x', line: { isVertical: false, axisValue, lo: -1000, hi: 9000 },
+    viewSign, dirSign: 1, layers: [], zRange: { loZ: -500, hiZ: 5400 }, baseFloorZ: 0,
+  });
+  // 空中横断（切断線 y=-500 から +y を見る。梁は y=0）: 壁の足元 0..3712.5 を引いた 3712.5..8000 だけ中線 2 本
+  const air = structuralPrimitivesForCut(contribution, cutAt(-500, 1), [], null, { columnSolids: null })
+    .filter(p => p.weight === 'medium' && p.y1 === p.y2);
+  assert.equal(air.length, 2);
+  for (const p of air) assert.ok(Math.abs((p.x2 - p.x1) - (8000 - 3712.5)) < 1e-6, `長さ 4287.5（実測 ${p.x2 - p.x1}）`);
+  // 平行（切断線が梁の帯の中）: 天地 2 本＋残っている端（8000 側）の縦線 1 本＝3 本（旧: 4 本・0..8000）
+  const par = structuralPrimitivesForCut(contribution, cutAt(0, 1), [], null, { columnSolids: null }).filter(p => p.weight === 'thin');
+  assert.equal(par.length, 3, `天地 2 本＋縦線 1 本（実測 ${par.length}）`);
+  assert.equal(par.filter(p => p.x1 === p.x2).length, 1, '壁の足元で切れた側（0）には縦線を出さない');
+  // 分割された 2 本（0..3640 は壁の中〔隅の許容込み〕で寄与しない／3640..8000 は 3712.5 まで足元）と同じ結果になること
+  const split = structuralContribution([{ graph: { walls, beams: [{ ...girderOnAxis(), levelOffset: 3000 }, { ...girderOnAxis(), coord1: 3640, coord2: 8000, levelOffset: 3000 }] }, floorZMm: 0, role: 'self' }]);
+  const airSplit = structuralPrimitivesForCut(split, cutAt(-500, 1), [], null, { columnSolids: null }).filter(p => p.weight === 'medium' && p.y1 === p.y2);
+  assert.deepEqual(airSplit.map(p => [p.x1, p.x2, p.y1]), air.map(p => [p.x1, p.x2, p.y1]));
+  // 平行（細線・縦線）も分割された梁と 1 本の梁で一致する
+  const parSplit = structuralPrimitivesForCut(split, cutAt(0, 1), [], null, { columnSolids: null }).filter(p => p.weight === 'thin');
+  const key = p => [p.x1, p.y1, p.x2, p.y2].join(',');
+  assert.deepEqual(parSplit.map(key).sort(), par.map(key).sort(), '平行の天地・縦線も一致');
+  // 在来木造の再計算後（天端 FL−100）でも同じ: 上階（床 3000）の壁の足元に、天 2900 の 1 本の梁と分割された梁が同じ中線
+  const layersAt = (beams) => [
+    { graph: { walls: [], beams }, floorZMm: 0, role: 'self' },
+    { graph: { walls, beams: [] }, floorZMm: 3000, role: 'above' },
+  ];
+  const cutUp = { ...cutAt(-500, 1), layers: [], zRange: { loZ: -500, hiZ: 6000 } };
+  const airOne = structuralPrimitivesForCut(structuralContribution(layersAt([{ ...longGirder, levelOffset: 2900 }])), cutUp, [], null, { columnSolids: null })
+    .filter(p => p.weight === 'medium' && p.y1 === p.y2);
+  const airTwo = structuralPrimitivesForCut(structuralContribution(layersAt([{ ...girderOnAxis(), levelOffset: 2900 }, { ...girderOnAxis(), coord1: 3640, coord2: 8000, levelOffset: 2900 }])), cutUp, [], null, { columnSolids: null })
+    .filter(p => p.weight === 'medium' && p.y1 === p.y2);
+  assert.equal(airOne.length, 2, 'FL−100 の 1 本の梁: 壁の足元を引いた中線 2 本');
+  for (const p of airOne) assert.ok(Math.abs((p.x2 - p.x1) - (8000 - 3712.5)) < 1e-6, `FL−100 でも壁の足元 0..3712.5 を引く（実測 ${p.x2 - p.x1}）`);
+  assert.deepEqual(airTwo.map(key).sort(), airOne.map(key).sort(), 'FL−100 でも分割の有無で一致');
+});
