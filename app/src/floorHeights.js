@@ -281,27 +281,28 @@ export function maxEaveHeightMm(planes, view, leanToPlaneIds = []) {
   return max;
 }
 
-// ---- 階設定表ダイアログの簡易断面図（S7。表示専用・図面には出ない）----
+// ---- 階設定表ダイアログの図（断面図に入力欄の位置を載せたもの。S7・2026-10-20 図のみへ変更。図面には出ない）----
 
 const SAME_Z_EPS = 1e-6;
 
 /**
- * 簡易断面図のモデル（純関数）。高さは GL を 0 とした mm（上が正）。floorSettingsRows の結果 view をそのまま受ける
- * （nFlMm・eaveFromGlMm は draft の有効な編集を反映済み・不正な欄は編集前の値）ので、表と断面図は常に同じ値になる。
+ * 階設定表の図のモデル（純関数）。高さは GL を 0 とした mm（上が正）。floorSettingsRows の結果 view をそのまま受ける
+ * （nFlMm・eaveFromGlMm は draft の有効な編集を反映済み・不正な欄は編集前の値）ので、欄と図は常に同じ値になる。
  *
  * @param {Array} planes - 採用階（project.planes。elevation 昇順）
  * @param {object} view - floorSettingsRows(planes, draft, topHeightMm, gl) の結果
  * @returns {{lines:Array<{key,zMm,label,kind:'gl'|'fl'|'eave',planeIds:string[]}>,
- *   dims:Array<{key,kind:'story'|'gl'|'eave',fromMm,toMm,mm,text,planeId:string|null,col:0|1}>, minZ:number, maxZ:number}}
- *   lines＝水平線（zMm 昇順。GL と 1FL が同じ高さなら 1 本にまとめ label を「GL=1FL」とする）。
- *   dims＝寸法。story＝各階（複層は 1 層ずつ）の階高、gl＝GL〜1FL（同じ高さなら出さない）、eave＝軒高（GL〜軒桁上端。col 1）。
+ *   dims:Array<{key,kind:'story'|'gl'|'eave',fromMm,toMm,mm,text,planeId:string|null,layer:number,fromKey:string,toKey:string}>, minZ:number, maxZ:number}}
+ *   lines＝水平線（zMm 昇順）。GL は常に独立した 1 本（1FL と同じ高さでも重ねない。GL 欄の入力位置が要るため。同じ高さなら GL が下）。
+ *   dims＝寸法。story＝各階（複層は 1 層ずつ。layer＝層番号）の階高、gl＝GL〜1FL（同じ高さでも「0」で出す）、eave＝軒高（GL〜軒桁上端）。
+ *   fromKey・toKey＝その寸法が結ぶ線の key（同じ高さの線があっても取り違えない）。
  *   複層（stories が 2 以上の整数）の中間の FL（例: 2-3階 Plane の 3FL）も 1 層ごとに線と階高寸法を持つ。
  *   小数の stories（中間階）は 1 区間として扱い、ラベルは makeFloorName（例「1ML」）。
  *   地階から地上へ 0 をまたぐ複層は対象外（層番号が重複する。floorOps.js の振り直しと同じ前提）。
  */
 export function sectionDiagramModel(planes, view) {
   const nFl = new Map(view.rows.map(r => [r.id, r.nFlMm]));
-  const raw = [{ zMm: 0, label: 'GL', kind: 'gl', planeId: null }];
+  const raw = [{ rid: 'gl', zMm: 0, label: 'GL', kind: 'gl', planeId: null }];
   const dims = [];
   planes.forEach((p, i) => {
     const base = nFl.get(p.id);
@@ -316,54 +317,130 @@ export function sectionDiagramModel(planes, view) {
       const label = Number.isInteger(p.stories)
         ? `${makeFloorLevelPrefix(addSkipZero(p.startFloor, k))}FL`
         : makeFloorName(p.startFloor, p.stories);
-      raw.push({ zMm: z, label, kind: 'fl', planeId: p.id });
-      dims.push({ key: `story:${p.id}:${k}`, kind: 'story', fromMm: z, toMm: z + h, mm: h, planeId: p.id, col: 0 });
+      const rid = `fl:${p.id}:${k}`;
+      raw.push({ rid, zMm: z, label, kind: 'fl', planeId: p.id });
+      const toRid = k < layers - 1 ? `fl:${p.id}:${k + 1}` : (next ? `fl:${next.id}:0` : 'eave');
+      dims.push({ key: `story:${p.id}:${k}`, kind: 'story', fromMm: z, toMm: z + h, mm: h, planeId: p.id, layer: k, fromRid: rid, toRid });
     }
   });
   if (view.eaveFromGlMm !== null && view.eaveFromGlMm !== undefined) {
-    raw.push({ zMm: view.eaveFromGlMm, label: '軒桁上端', kind: 'eave', planeId: null });
-    dims.push({ key: 'eave', kind: 'eave', fromMm: 0, toMm: view.eaveFromGlMm, mm: view.eaveFromGlMm, planeId: null, col: 1 });
+    raw.push({ rid: 'eave', zMm: view.eaveFromGlMm, label: '軒桁上端', kind: 'eave', planeId: null });
+    dims.push({ key: 'eave', kind: 'eave', fromMm: 0, toMm: view.eaveFromGlMm, mm: view.eaveFromGlMm, planeId: null, layer: 0, fromRid: 'gl', toRid: 'eave' });
   }
   const firstFl = planes.find(p => p.startFloor === 1);
   const firstZ = firstFl ? nFl.get(firstFl.id) : undefined;
-  if (firstZ !== undefined && Math.abs(firstZ) > SAME_Z_EPS) {
-    dims.push({ key: 'gl', kind: 'gl', fromMm: 0, toMm: firstZ, mm: firstZ, planeId: null, col: 0 });
+  if (firstZ !== undefined) {
+    dims.push({ key: 'gl', kind: 'gl', fromMm: 0, toMm: firstZ, mm: firstZ, planeId: null, layer: 0, fromRid: 'gl', toRid: `fl:${firstFl.id}:0` });
   }
 
-  raw.sort((a, b) => a.zMm - b.zMm);
+  raw.sort((a, b) => a.zMm - b.zMm); // 安定ソート: 同じ高さなら GL（先頭に積んだ）が下
   const lines = [];
+  const keyOf = new Map(); // rid -> 線の key
   for (const r of raw) {
     const last = lines[lines.length - 1];
-    if (last && Math.abs(last.zMm - r.zMm) <= SAME_Z_EPS) {
+    if (last && last.kind !== 'gl' && r.kind !== 'gl' && Math.abs(last.zMm - r.zMm) <= SAME_Z_EPS) {
       last.label = `${last.label}=${r.label}`;
       if (r.kind === 'eave') last.kind = 'eave';
       if (r.planeId) last.planeIds.push(r.planeId);
+      keyOf.set(r.rid, last.key);
     } else {
-      lines.push({ key: `line${lines.length}`, zMm: r.zMm, label: r.label, kind: r.kind, planeIds: r.planeId ? [r.planeId] : [] });
+      const key = `line${lines.length}`;
+      lines.push({ key, zMm: r.zMm, label: r.label, kind: r.kind, planeIds: r.planeId ? [r.planeId] : [] });
+      keyOf.set(r.rid, key);
     }
   }
-  for (const d of dims) d.text = String(Math.round(Math.abs(d.mm)));
+  for (const d of dims) {
+    d.text = String(Math.round(Math.abs(d.mm)));
+    d.fromKey = keyOf.get(d.fromRid);
+    d.toKey = keyOf.get(d.toRid);
+    delete d.fromRid;
+    delete d.toRid;
+  }
   return { lines, dims, minZ: lines[0].zMm, maxZ: lines[lines.length - 1].zMm };
 }
 
+/** 数値入力欄1つの大きさ（px）。階高欄・GL 欄とも同じ（ダイアログの cl-dialog-input に合わせた高さ）。 */
+export const FIGURE_INPUT_W = 70;
+export const FIGURE_INPUT_H = 22;
+/** ▽ マーカーの大きさ（px）。先端（下の頂点）がレベル線に乗る。 */
+export const FIGURE_MARKER_W = 8;
+export const FIGURE_MARKER_H = 7;
+
 /**
- * 断面図のモデルを SVG 座標へ変換する（純関数）。y 下向き正なので高い方が小さい y（上階が上）。
- * 全部の線・寸法がビューポート（0..width × 0..height）に収まる。SVG 側は返り値をそのまま描く。
+ * 階設定表の図（断面図に入力欄の位置を載せたもの）を px 座標へ変換する（純関数）。y 下向き正なので上階が上。
+ * 縦は 1px = 1/pxPerMm mm の比例だが、隣り合う線の間は最小 minGapPx を保つ（入力欄が入る高さ。階高が小さくても潰れない）。
+ * SVG は 1:1 で描き（viewBox で縮めない）、入力欄は返り値の input 枠へ絶対配置で重ねる。
+ *
+ * 右の寸法鎖＝階高・GL〜1FL（入力欄つき。複層の2層目以降は表示のみ）、左の寸法＝最高軒高（自動。GL〜軒桁上端の区間に
+ * opts.maxEaveMm の値を書く。値は maxEaveHeightMm の結果をそのまま渡す＝同じ情報を2か所で計算しない）。
+ *
+ * @param {object} model - sectionDiagramModel の結果
+ * @param {{maxEaveMm?:number|null, pxPerMm?:number, minGapPx?:number}} [opts]
  */
-export function layoutSectionDiagram(model, opts = {}) {
-  const { width = 250, height = 320, padTop = 16, padBottom = 16, lineX1 = 60, lineX2 = 132, dimX0 = 148, dimStep = 48 } = opts;
-  const span = Math.max(model.maxZ - model.minZ, 1);
-  const scale = (height - padTop - padBottom) / span;
-  const yOf = (z) => padTop + (model.maxZ - z) * scale;
-  return {
-    width,
-    height,
-    scale,
-    lines: model.lines.map(l => ({ ...l, y: yOf(l.zMm), x1: lineX1, x2: lineX2 })),
-    dims: model.dims.map(d => {
-      const y1 = yOf(d.fromMm);
-      const y2 = yOf(d.toMm);
-      return { ...d, x: dimX0 + d.col * dimStep, y1, y2, yMid: (y1 + y2) / 2 };
-    }),
-  };
+export function layoutFloorSettingsFigure(model, opts = {}) {
+  const {
+    maxEaveMm = null, pxPerMm = 0.04, minGapPx = 36, padTop = 26, padBottom = 14,
+    leftDimX = 62, longX1 = 50, flX1 = 76, rightDimX = 224, inputX = 234, markerX = 150,
+  } = opts;
+  const lines = model.lines;
+  const gaps = lines.slice(1).map((l, i) => Math.max(minGapPx, (l.zMm - lines[i].zMm) * pxPerMm));
+  const height = padTop + gaps.reduce((a, b) => a + b, 0) + padBottom;
+  const ys = new Array(lines.length);
+  ys[0] = height - padBottom;
+  for (let i = 1; i < lines.length; i++) ys[i] = ys[i - 1] - gaps[i - 1];
+  const yOfKey = new Map(lines.map((l, i) => [l.key, ys[i]]));
+
+  const outLines = lines.map((l, i) => {
+    const y = ys[i];
+    const long = l.kind === 'gl' || l.kind === 'eave';
+    return {
+      ...l,
+      y,
+      long,
+      x1: long ? longX1 : flX1,
+      x2: rightDimX,
+      // ▽: 先端（下の頂点）が線の上に乗る。ラベルは▽の左・線のすぐ上
+      marker: { points: [[markerX - FIGURE_MARKER_W / 2, y - FIGURE_MARKER_H], [markerX + FIGURE_MARKER_W / 2, y - FIGURE_MARKER_H], [markerX, y]] },
+      labelX: markerX - FIGURE_MARKER_W / 2 - 3,
+      labelY: y - 2,
+    };
+  });
+
+  const rightDims = [];
+  let leftDim = null;
+  for (const d of model.dims) {
+    const y1 = yOfKey.get(d.fromKey);
+    const y2 = yOfKey.get(d.toKey);
+    if (y1 === undefined || y2 === undefined) continue;
+    const yMid = (y1 + y2) / 2;
+    if (d.kind === 'eave') {
+      leftDim = {
+        key: d.key, x: leftDimX, y1, y2, yMid,
+        textX: leftDimX - 6,
+        text: maxEaveMm === null || maxEaveMm === undefined ? '-' : String(Math.round(maxEaveMm * 10) / 10),
+      };
+      continue;
+    }
+    // 階高・GL の入力欄。複層の2層目以降は同じ階の欄を重ねないので表示のみ
+    const target = d.kind === 'gl' ? { kind: 'gl' } : d.layer === 0 ? { kind: 'height', id: d.planeId } : null;
+    rightDims.push({
+      ...d, x: rightDimX, y1, y2, yMid,
+      textX: inputX + FIGURE_INPUT_W / 2,
+      input: target ? { ...target, x: inputX, y: yMid - FIGURE_INPUT_H / 2, w: FIGURE_INPUT_W, h: FIGURE_INPUT_H } : null,
+    });
+  }
+  // 1FL が無い（地階だけの）建物: GL〜1FL の寸法が無いので、GL 線の右（階高欄の列のさらに右）に GL の欄だけ置く
+  let width = inputX + FIGURE_INPUT_W + 10;
+  const glLine = outLines.find(l => l.kind === 'gl');
+  if (glLine && outLines.some(l => l.kind === 'fl') && !rightDims.some(d => d.kind === 'gl')) {
+    const x = inputX + FIGURE_INPUT_W + 8;
+    rightDims.push({
+      key: 'gl', kind: 'gl', planeId: null, layer: 0, solo: true, text: '', x: rightDimX, y1: glLine.y, y2: glLine.y, yMid: glLine.y, textX: x,
+      input: { kind: 'gl', x, y: glLine.y - FIGURE_INPUT_H / 2, w: FIGURE_INPUT_W, h: FIGURE_INPUT_H },
+    });
+    width = x + FIGURE_INPUT_W + 10;
+  }
+  // DOM 順＝Tab 順を見た目の上から下にそろえる（上階→下階→GL。GL は常に最下）
+  rightDims.sort((a, b) => (a.kind === 'gl') - (b.kind === 'gl') || a.yMid - b.yMid);
+  return { width, height, lines: outLines, rightDims, leftDim };
 }

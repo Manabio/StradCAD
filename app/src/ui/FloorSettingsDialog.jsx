@@ -1,55 +1,60 @@
 import { useEffect, useRef, useState } from 'react';
 import './AddCLDialog.css';
-import { floorSettingsRows, sectionDiagramModel, layoutSectionDiagram, computeFloorHeightEdit, maxEaveHeightMm } from '../floorHeights.js';
+import { floorSettingsRows, sectionDiagramModel, layoutFloorSettingsFigure, computeFloorHeightEdit, maxEaveHeightMm } from '../floorHeights.js';
+import { NumPad } from './NumPad.jsx';
 import { stairRiserChangesForEdit, riserChangeLine } from '../finish/stair/stairRiserFollow.js';
-import { trapFocusIndex, shouldConfirmOnEnter } from './floorSettingsKeys.js';
+import { trapFocusIndex, shouldConfirmOnEnter, resolvePadText } from './floorSettingsKeys.js';
 
 const INVALID_STYLE = { borderColor: '#dc2626', background: '#fef2f2' };
-const CELL = { padding: '3px 6px', fontSize: 12, whiteSpace: 'nowrap' };
+const SEL = '#1e40af';
+const SCROLL_STYLE = { maxHeight: '60vh', overflowY: 'auto', overflowX: 'auto' };
 
-function formatMm(v) {
-  return String(Math.round(v * 10) / 10);
-}
-
-/** 簡易断面図（表示専用）。layoutSectionDiagram の結果を描くだけ。選択中の階の FL 線・階高寸法は青。 */
-function SectionDiagram({ layout, selectedPlaneId }) {
-  const SEL = '#1e40af';
+/**
+ * 階設定表の図（表示部）。layoutFloorSettingsFigure の結果を 1:1 px で描くだけ。選択中の階の FL 線・階高寸法は青。
+ * 入力欄（階高・GL）は呼び出し側が input 枠へ絶対配置で重ねる。
+ */
+function FigureSvg({ figure, selectedPlaneId }) {
   return (
-    <svg
-      data-section-diagram
-      viewBox={`0 0 ${layout.width} ${layout.height}`}
-      style={{ flex: '1 1 200px', minWidth: 180, maxWidth: 280, height: 'auto', alignSelf: 'flex-start' }}
-      role="img"
-      aria-label="簡易断面図"
-    >
-      {layout.lines.map(l => {
+    <svg data-floor-figure width={figure.width} height={figure.height} style={{ display: 'block' }} role="img" aria-label="階設定表の図">
+      {figure.lines.map(l => {
         const sel = selectedPlaneId != null && l.planeIds.includes(selectedPlaneId);
         const color = sel ? SEL : (l.kind === 'gl' ? '#92400e' : '#334155');
         return (
-          <g key={l.key}>
-            <line x1={l.x1} x2={l.x2} y1={l.y} y2={l.y} stroke={color} strokeWidth={l.kind === 'fl' ? 1 : 1.6} strokeDasharray={l.kind === 'gl' ? '5 3' : undefined} />
-            <text x={l.x1 - 4} y={l.y + 3.5} fontSize={10} textAnchor="end" fill={color}>{l.label}</text>
+          <g key={l.key} data-level-line={l.kind}>
+            <line x1={l.x1} x2={l.x2} y1={l.y} y2={l.y} stroke={color} strokeWidth={l.long ? 1.6 : 1} strokeDasharray={l.kind === 'gl' ? '5 3' : undefined} />
+            <text x={l.labelX} y={l.labelY} fontSize={11} textAnchor="end" fill={color}>{l.label}</text>
+            <polygon points={l.marker.points.map(p => p.join(',')).join(' ')} fill="none" stroke={color} strokeWidth={1} />
           </g>
         );
       })}
-      {layout.dims.map(d => {
+      {figure.rightDims.map(d => {
         const sel = d.planeId != null && d.planeId === selectedPlaneId;
         const color = sel ? SEL : '#475569';
         return (
           <g key={d.key}>
-            <line x1={d.x} x2={d.x} y1={d.y1} y2={d.y2} stroke={color} strokeWidth={1} />
-            <line x1={d.x - 3} x2={d.x + 3} y1={d.y1} y2={d.y1} stroke={color} strokeWidth={1} />
-            <line x1={d.x - 3} x2={d.x + 3} y1={d.y2} y2={d.y2} stroke={color} strokeWidth={1} />
-            <text x={d.x + 5} y={d.yMid + 3.5} fontSize={10} fill={color}>{d.text}</text>
+            {!d.solo && <line x1={d.x} x2={d.x} y1={d.y1} y2={d.y2} stroke={color} strokeWidth={1} />}
+            {!d.solo && <line x1={d.x - 3} x2={d.x + 3} y1={d.y1} y2={d.y1} stroke={color} strokeWidth={1} />}
+            {!d.solo && <line x1={d.x - 3} x2={d.x + 3} y1={d.y2} y2={d.y2} stroke={color} strokeWidth={1} />}
+            {!d.input && <text x={d.textX} y={d.yMid + 4} fontSize={11} textAnchor="middle" fill={color}>{d.text}</text>}
           </g>
         );
       })}
+      {figure.leftDim && (
+        <g data-max-eave>
+          <line x1={figure.leftDim.x} x2={figure.leftDim.x} y1={figure.leftDim.y1} y2={figure.leftDim.y2} stroke="#475569" strokeWidth={1} />
+          <line x1={figure.leftDim.x - 3} x2={figure.leftDim.x + 3} y1={figure.leftDim.y1} y2={figure.leftDim.y1} stroke="#475569" strokeWidth={1} />
+          <line x1={figure.leftDim.x - 3} x2={figure.leftDim.x + 3} y1={figure.leftDim.y2} y2={figure.leftDim.y2} stroke="#475569" strokeWidth={1} />
+          <text x={figure.leftDim.textX} y={figure.leftDim.yMid - 2} fontSize={11} textAnchor="end" fill="#475569">最高軒高</text>
+          <text x={figure.leftDim.textX} y={figure.leftDim.yMid + 12} fontSize={11} textAnchor="end" fill="#475569">{figure.leftDim.text}</text>
+        </g>
+      )}
     </svg>
   );
 }
 
 /**
- * 階設定表ダイアログ（階高＋GL）。上＝上階の順に 階名／階高(入力)／nFL(GL+mm・自動) を並べ、最下行に GL(1FLからの下がり)を置く。
+ * 階設定表ダイアログ（階高＋GL）。図だけで編集する: 水平のレベル線（軒桁上端・nFL・GL。▽の先端が線に乗る）、右の寸法鎖＝各階高・GL〜1FL の入力欄、
+ * 左の寸法＝最高軒高（自動・入力なし）。階が多いときは図の部分だけスクロールする。欄にフォーカスすると NumPad を出す（物理キーボードも可）。
  * 入力中の値は draft（編集した行・GL だけ）に持ち、表示と検査は floorSettingsRows（floorHeights.js・純）に任せる。
  * 確定は onConfirm(draft)（App.jsx が computeFloorHeightEdit で再検査して反映）、キャンセルは破棄。
  * モーダル: 背景の押下は何もしない（編集中の値を不意に捨てない）。ダイアログ外のキー入力（Ctrl+Z 等）は後段へ渡さない。
@@ -65,6 +70,8 @@ function SectionDiagram({ layout, selectedPlaneId }) {
  */
 export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selectedPlaneId, stairItems = [], leanToPlaneIds = [], onConfirm, onCancel: closeDialog }) {
   const [draft, setDraft] = useState({ heights: {}, glBelow1FlMm: undefined });
+  const [numpadFor, setNumpadFor] = useState(null); // NumPad を出している欄（{kind:'height',id}|{kind:'gl'}|null）
+  const padRestoreRef = useRef(false); // NumPad 操作後の focus 戻しの間は onFocus の全選択・パッド再設定を飛ばす
   const [pendingRisers, setPendingRisers] = useState(null); // 確認待ちの蹴上の変化一覧（null＝確認中でない）
   // Escape・キャンセル: 確認中は「いいえ」と同じく表に戻すだけ。確認中でなければダイアログを閉じる。
   const onCancel = () => (pendingRisers ? setPendingRisers(null) : closeDialog());
@@ -73,8 +80,8 @@ export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selecte
   useEffect(() => { cancelRef.current = onCancel; });
 
   const view = floorSettingsRows(planes, draft, topHeightMm, glBelow1FlMm);
-  const diagram = layoutSectionDiagram(sectionDiagramModel(planes, view));
   const maxEave = maxEaveHeightMm(planes, view, leanToPlaneIds);
+  const figure = layoutFloorSettingsFigure(sectionDiagramModel(planes, view), { maxEaveMm: maxEave });
 
   // ダイアログ内のフォーカス可能な要素（Tab の循環と、外から呼び戻すときの先頭）
   function focusables() {
@@ -108,6 +115,42 @@ export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selecte
     setPendingRisers(null);
     setDraft(d => ({ ...d, glBelow1FlMm: text }));
   }
+  // NumPad の対象欄の現在の文字列・ラベル（表示は view＝欄の表示と同じ値）
+  const padRow = numpadFor?.kind === 'height' ? view.rows.find(r => r.id === numpadFor.id) : null;
+  const padValue = numpadFor?.kind === 'gl' ? view.gl.text : (padRow?.heightText ?? '');
+  const padLabel = numpadFor?.kind === 'gl' ? 'GL' : (padRow?.name ?? '');
+  function setPadValue(text) {
+    if (numpadFor?.kind === 'gl') setGl(text);
+    else if (numpadFor?.kind === 'height') setHeight(numpadFor.id, text);
+  }
+  // NumPad のキーは押した時点でフォーカスを奪うので、対象の欄へ戻す（物理キーボード・Enter を続けて使える）。
+  // ポインタ押下の既定のフォーカス移動より後に戻すため setTimeout。戻す間は onFocus の全選択をしない。
+  function refocusPadField(target) {
+    setTimeout(() => {
+      const el = target.kind === 'gl'
+        ? dialogRef.current?.querySelector('[data-gl-input]')
+        : dialogRef.current?.querySelector(`[data-floor-id="${target.id}"]`);
+      if (!el) return;
+      padRestoreRef.current = true;
+      el.focus();
+      padRestoreRef.current = false;
+    }, 0);
+  }
+  function onPadChange(text) {
+    setPadValue(text);
+    refocusPadField(numpadFor);
+  }
+  // ✕: 閉じて欄へフォーカスを戻す（フォーカスが残ったままだと同じ欄の再タップで focus が来ず開けない）
+  function cancelNumpad() {
+    setNumpadFor(null);
+    refocusPadField(numpadFor);
+  }
+  // ✓: 式（3000*2 等）が整数に評価できれば値にし、パッドを閉じる。次の欄へは移らない
+  function closeNumpad() {
+    setPadValue(resolvePadText(padValue));
+    setNumpadFor(null);
+    refocusPadField(numpadFor);
+  }
   function handleConfirm() {
     if (!view.ok) return;
     const edit = computeFloorHeightEdit(planes, draft, topHeightMm, glBelow1FlMm);
@@ -128,63 +171,33 @@ export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selecte
       <div className="cl-dialog-backdrop" onPointerDown={e => e.stopPropagation()} />
       <div className="cl-dialog" ref={dialogRef} onKeyDown={handleKeyDown} style={{ minWidth: 340 }}>
         <div className="cl-dialog-title">階設定表</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start' }}>
-        <table style={{ borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ color: '#64748b' }}>
-              <th style={{ ...CELL, textAlign: 'left', fontWeight: 600 }}>階</th>
-              <th style={{ ...CELL, textAlign: 'right', fontWeight: 600 }}>階高 (mm)</th>
-              <th style={{ ...CELL, textAlign: 'right', fontWeight: 600 }}>nFL (GL+mm)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {view.rows.map(r => (
-              <tr key={r.id} data-floor-id={r.id} style={r.id === selectedPlaneId ? { background: '#eff6ff' } : undefined}>
-                <td style={{ ...CELL, color: r.id === selectedPlaneId ? '#1e40af' : '#334155', fontWeight: r.id === selectedPlaneId ? 700 : 500 }}>
-                  {r.name}
-                </td>
-                <td style={{ ...CELL, textAlign: 'right' }}>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    className="cl-dialog-input"
-                    style={r.invalid ? INVALID_STYLE : undefined}
-                    value={r.heightText}
-                    title={r.error ?? (r.isTop ? '最上階FL〜軒桁上端' : undefined)}
-                    aria-invalid={r.invalid || undefined}
-                    autoFocus={r.id === selectedPlaneId}
-                    onFocus={e => e.target.select()}
-                    onChange={e => setHeight(r.id, e.target.value)}
-                  />
-                </td>
-                <td style={{ ...CELL, textAlign: 'right', color: '#475569' }}>{formatMm(r.nFlMm)}</td>
-              </tr>
-            ))}
-            <tr data-gl-row style={{ borderTop: '1px solid #e2e8f0' }}>
-              <td style={{ ...CELL, color: '#334155', fontWeight: 600 }}>GL</td>
-              <td style={{ ...CELL, textAlign: 'right' }}>
+        <div data-figure-scroll style={SCROLL_STYLE}>
+          <div style={{ position: 'relative', width: figure.width, height: figure.height }}>
+            <FigureSvg figure={figure} selectedPlaneId={selectedPlaneId} />
+            {figure.rightDims.filter(d => d.input).map(d => {
+              const isGl = d.input.kind === 'gl';
+              const row = isGl ? null : view.rows.find(r => r.id === d.input.id);
+              const invalid = isGl ? view.gl.invalid : row?.invalid;
+              const error = isGl ? view.gl.error : row?.error;
+              return (
                 <input
+                  key={d.key}
+                  {...(isGl ? { 'data-gl-input': true } : { 'data-floor-id': d.input.id })}
                   type="text"
+                  inputMode="none"
                   className="cl-dialog-input"
-                  style={view.gl.invalid ? INVALID_STYLE : undefined}
-                  value={view.gl.text}
-                  title={view.gl.error ?? '1FLからの下がり寸法（負＝GLが1FLより上）'}
-                  aria-invalid={view.gl.invalid || undefined}
-                  onFocus={e => e.target.select()}
-                  onChange={e => setGl(e.target.value)}
+                  style={{ position: 'absolute', left: d.input.x, top: d.input.y, width: d.input.w, height: d.input.h, boxSizing: 'border-box', textAlign: 'right', ...(invalid ? INVALID_STYLE : null) }}
+                  value={isGl ? view.gl.text : (row?.heightText ?? '')}
+                  title={error ?? (isGl ? '1FLからの下がり寸法（負＝GLが1FLより上）' : (row?.isTop ? '最上階FL〜軒桁上端' : undefined))}
+                  aria-invalid={invalid || undefined}
+                  autoFocus={!isGl && d.input.id === selectedPlaneId}
+                  onFocus={e => { if (padRestoreRef.current) return; e.target.select(); setNumpadFor(isGl ? { kind: 'gl' } : { kind: 'height', id: d.input.id }); }}
+                  onPointerDown={() => { if (!numpadFor) setNumpadFor(isGl ? { kind: 'gl' } : { kind: 'height', id: d.input.id }); }}
+                  onChange={e => (isGl ? setGl(e.target.value) : setHeight(d.input.id, e.target.value))}
                 />
-              </td>
-              <td style={{ ...CELL, textAlign: 'right', color: '#94a3b8' }}>0</td>
-            </tr>
-          </tbody>
-        </table>
-        <SectionDiagram layout={diagram} selectedPlaneId={selectedPlaneId} />
-        </div>
-        <div className="cl-dialog-result">
-          軒高（GL〜軒桁上端）: {view.eaveFromGlMm === null ? '-' : `${formatMm(view.eaveFromGlMm)} mm`}
-        </div>
-        <div className="cl-dialog-result" data-max-eave>
-          最高の軒の高さ: {maxEave === null ? '-' : `${formatMm(maxEave)} mm`}
+              );
+            })}
+          </div>
         </div>
         {pendingRisers && (
           <div data-riser-confirm style={{ marginTop: 8, padding: 8, background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 4, fontSize: 12 }}>
@@ -211,6 +224,17 @@ export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selecte
           </div>
         )}
       </div>
+      {numpadFor && (
+        <NumPad
+          key={numpadFor.kind === 'gl' ? 'gl' : numpadFor.id}
+          value={padValue}
+          label={padLabel}
+          onChange={onPadChange}
+          onConfirm={closeNumpad}
+          onCancel={cancelNumpad}
+          selectOnStart
+        />
+      )}
     </>
   );
 }

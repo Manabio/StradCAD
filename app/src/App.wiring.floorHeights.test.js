@@ -189,18 +189,84 @@ test('【配線】FloorSettingsDialog: ダイアログ内のキー — IME 変�
   }
 });
 
-test('【配線】FloorSettingsDialog: 簡易断面図は表と同じ view（floorSettingsRows の結果）から作り、選択階を渡す', () => {
+test('【配線】FloorSettingsDialog: 図は欄と同じ view（floorSettingsRows の結果）から作り、最高軒高は maxEaveHeightMm の1か所から渡す', () => {
   const code = dialogCode();
   assert.match(code, /^\s*const view = floorSettingsRows\(planes, draft, topHeightMm, glBelow1FlMm\);\s*$/m, 'view の算出行が見つからない');
-  assert.match(code, /^\s*const diagram = layoutSectionDiagram\(sectionDiagramModel\(planes, view\)\);\s*$/m, 'view から断面図を作る行が見つからない');
-  assert.ok(code.indexOf('const view = floorSettingsRows(') < code.indexOf('const diagram = layoutSectionDiagram('), 'diagram が view より前にある');
-  assert.match(code, /^\s*<SectionDiagram layout=\{diagram\} selectedPlaneId=\{selectedPlaneId\} \/>\s*$/m, '<SectionDiagram> の配置行が見つからない');
+  assert.match(code, /^\s*const maxEave = maxEaveHeightMm\(planes, view, leanToPlaneIds\);\s*$/m, '最高軒高の算出行が見つからない');
+  assert.match(code, /^\s*const figure = layoutFloorSettingsFigure\(sectionDiagramModel\(planes, view\), \{ maxEaveMm: maxEave \}\);\s*$/m, 'view から図を作る行が見つからない');
+  assert.ok(code.indexOf('const view = floorSettingsRows(') < code.indexOf('const figure = layoutFloorSettingsFigure('), 'figure が view より前にある');
+  assert.match(code, /^\s*<FigureSvg figure=\{figure\} selectedPlaneId=\{selectedPlaneId\} \/>\s*$/m, '<FigureSvg> の配置行が見つからない');
+});
+
+test('【配線】FloorSettingsDialog: 表・nFL 列・結果行（軒高／最高の軒の高さ）は無い。最高軒高は図の左の寸法の1か所だけ', () => {
+  const code = dialogCode().split('\n').filter(l => !/^\s*(\*|\/\*)/.test(l)).join('\n'); // ブロックコメントの行を除く
+  assert.ok(!/<table|<tr|<td|<th/.test(code), '表が残っている');
+  assert.ok(!code.includes('nFL (GL+mm)'), 'nFL 列が残っている');
+  assert.ok(!code.includes('軒高（GL〜軒桁上端）'), '軒高の結果行が残っている');
+  assert.ok(!code.includes('最高の軒の高さ'), '最高の軒の高さの結果行が残っている');
+  assert.ok(!code.includes('cl-dialog-result'), '結果行が残っている');
+  assert.equal((code.match(/最高軒高/g) ?? []).length, 1, '最高軒高の文言は図の左の寸法の1か所だけ');
+  assert.equal((code.match(/data-max-eave/g) ?? []).length, 1);
+});
+
+test('【配線】FloorSettingsDialog: 欄は図の右の寸法鎖の枠（d.input）へ絶対配置。階高欄は data-floor-id、GL 欄は data-gl-input。数は階数+GL', () => {
+  const code = dialogCode();
+  assert.match(code, /^\s*\{figure\.rightDims\.filter\(d => d\.input\)\.map\(d => \{\s*$/m, '入力枠からの欄の生成行');
+  assert.match(code, /^\s*style=\{\{ position: 'absolute', left: d\.input\.x, top: d\.input\.y, width: d\.input\.w, height: d\.input\.h, .*\}\}\s*$/m, '枠への絶対配置');
+  assert.match(code, /'data-gl-input': true/);
+  assert.match(code, /'data-floor-id': d\.input\.id/);
+  assert.equal((code.match(/<input\b/g) ?? []).length, 1, '<input> の記述は欄の生成1か所（枠の数だけ描かれる）');
+  assert.match(code, /^\s*className="cl-dialog-input"\s*$/m);
+  assert.match(code, /^\s*autoFocus=\{!isGl && d\.input\.id === selectedPlaneId\}\s*$/m, '長押しした階の欄にフォーカス');
+});
+
+test('【配線】FloorSettingsDialog: 図の部分だけスクロール（max-height 60vh・overflow-y auto）。ボタンはスクロールの外', () => {
+  const code = dialogCode();
+  assert.match(code, /^const SCROLL_STYLE = \{ maxHeight: '60vh', overflowY: 'auto'.*\};\s*$/m);
+  assert.match(code, /^\s*<div data-figure-scroll style=\{SCROLL_STYLE\}>\s*$/m);
+  assert.ok(code.indexOf('data-figure-scroll') < code.indexOf('className="cl-dialog-actions"'), 'ボタンは図の後ろ');
+  assert.match(code, /^\s*<svg data-floor-figure width=\{figure\.width\} height=\{figure\.height\}/m, '図は viewBox で縮めず 1:1');
+  assert.ok(!/viewBox/.test(code), 'viewBox で縮めてはいけない（欄の位置とずれる）');
+});
+
+test('【配線】FloorSettingsDialog: 欄のフォーカスで NumPad（keyboard 無効＝二重入力しない）。✓ は閉じるだけ・✕ も閉じる。ダイアログを閉じれば消える', () => {
+  const code = dialogCode();
+  assert.match(code, /^import \{ NumPad \} from '\.\/NumPad\.jsx';\s*$/m);
+  assert.match(code, /onFocus=\{e => \{ if \(padRestoreRef\.current\) return; e\.target\.select\(\); setNumpadFor\(isGl \? \{ kind: 'gl' \} : \{ kind: 'height', id: d\.input\.id \}\); \}\}/, 'フォーカスで NumPad の対象欄を設定');
+  const pad = code.slice(code.indexOf('{numpadFor && ('));
+  assert.match(pad, /^\s*<NumPad\s*$/m);
+  assert.match(pad, /^\s*onChange=\{onPadChange\}\s*$/m);
+  assert.match(pad, /^\s*onConfirm=\{closeNumpad\}\s*$/m);
+  assert.match(pad, /^\s*onCancel=\{cancelNumpad\}\s*$/m);
+  const cn = code.slice(code.indexOf('function cancelNumpad('), code.indexOf('function closeNumpad('));
+  assert.match(cn, /^\s*setNumpadFor\(null\);\s*$/m, '✕ はパッドを閉じる');
+  assert.match(cn, /^\s*refocusPadField\(numpadFor\);\s*$/m, '✕ 後の focus 戻し');
+  assert.match(code, /onPointerDown=\{\(\) => \{ if \(!numpadFor\) setNumpadFor\(isGl/, 'フォーカスが残った欄の再タップで NumPad を開く');
+  assert.match(code, /overflowX: 'auto'/, '狭い画面で右端の欄が切れない');
+  assert.ok(!/keyboard/.test(pad), '物理キーボードは欄が受ける。NumPad 側の keyboard は有効にしない');
+  const close = code.slice(code.indexOf('function closeNumpad() {'), code.indexOf('function handleConfirm() {'));
+  assert.match(close, /^\s*setNumpadFor\(null\);\s*$/m, '✓ はパッドを閉じる');
+  assert.ok(!/focus\(\)/.test(close), '✓ で次の欄へ移らない');
+  // パッドの値の書込み先は欄の onChange と同じ setHeight/setGl（確認のやり直しも共通）
+  // NumPad のキーでフォーカスが外れるので、キー入力・✓ の後に対象の欄へ戻す（戻す間は onFocus の全選択をしない）
+  const pc = code.slice(code.indexOf('function onPadChange('), code.indexOf('function closeNumpad('));
+  assert.match(pc, /^\s*refocusPadField\(numpadFor\);\s*$/m, 'キー入力後の focus 戻し');
+  assert.match(close, /^\s*refocusPadField\(numpadFor\);\s*$/m, '✓ 後の focus 戻し');
+  const rf = code.slice(code.indexOf('function refocusPadField('), code.indexOf('function onPadChange('));
+  assert.match(rf, /^\s*padRestoreRef\.current = true;\s*$/m);
+  assert.match(rf, /^\s*el\.focus\(\);\s*$/m);
+  assert.match(rf, /^\s*\}, 0\);\s*$/m, 'ポインタ押下の既定のフォーカス移動より後（setTimeout 0）');
+  assert.match(code, /onFocus=\{e => \{ if \(padRestoreRef\.current\) return; e\.target\.select\(\);/, '戻し中は全選択しない');
+  assert.match(close, /resolvePadText\(padValue\)/, '✓ の式の計算は純関数 resolvePadText');
+  const set = code.slice(code.indexOf('function setPadValue('), code.indexOf('function refocusPadField('));
+  assert.match(set, /setGl\(text\)/);
+  assert.match(set, /setHeight\(numpadFor\.id, text\)/);
 });
 
 test('【配線】FloorSettingsDialog: 不正値があると OK は押せず、Enter でも確定しない', () => {
   const code = dialogCode();
   assert.match(code, /^\s*if \(!view\.ok\) return;\s*$/m, 'handleConfirm の ok ガード行が見つからない');
   assert.match(code, /^\s*disabled=\{!view\.ok\}\s*$/m, 'OK ボタンの disabled 行が見つからない');
-  assert.match(code, /^\s*style=\{r\.invalid \? INVALID_STYLE : undefined\}\s*$/m, '不正な階高の赤表示行が見つからない');
-  assert.match(code, /^\s*style=\{view\.gl\.invalid \? INVALID_STYLE : undefined\}\s*$/m, '不正な GL の赤表示行が見つからない');
+  assert.match(code, /^\s*const invalid = isGl \? view\.gl\.invalid : row\?\.invalid;\s*$/m, '不正な欄（階高・GL）の判定行が見つからない');
+  assert.match(code, /\.\.\.\(invalid \? INVALID_STYLE : null\)/, '不正な欄の赤表示が見つからない');
 });

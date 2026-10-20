@@ -54,14 +54,15 @@ test('【配線】ダイアログ: 値を変えたら確認をやり直す（set
   assert.match(g, /^\s*setPendingRisers\(null\);\s*$/m);
 });
 
-test('【配線】ダイアログ: 最高の軒の高さは表と同じ view から maxEaveHeightMm で求めて軒高の下に出す', () => {
+test('【配線】ダイアログ: 最高軒高は欄と同じ view から maxEaveHeightMm で求め、図の左の寸法の文字として渡す', () => {
   const code = dialogCode();
   lineIndexes(code, [
     /^\s*const view = floorSettingsRows\(planes, draft, topHeightMm, glBelow1FlMm\);\s*$/m,
     /^\s*const maxEave = maxEaveHeightMm\(planes, view, leanToPlaneIds\);\s*$/m,
-    /^\s*軒高（GL〜軒桁上端）: .*$/m,
-    /^\s*最高の軒の高さ: \{maxEave === null \? '-' : `\$\{formatMm\(maxEave\)\} mm`\}\s*$/m,
+    /^\s*const figure = layoutFloorSettingsFigure\(sectionDiagramModel\(planes, view\), \{ maxEaveMm: maxEave \}\);\s*$/m,
   ]);
+  // 描画部（FigureSvg。コンポーネントより前に定義）は左の寸法の text をそのまま書く
+  assert.match(code, /^\s*<text x=\{figure\.leftDim\.textX\} y=\{figure\.leftDim\.yMid \+ 12\}.*>\{figure\.leftDim\.text\}<\/text>\s*$/m);
 });
 
 test('【配線】runFloorHeights: ユーザーの回答を待たない（確認ダイアログ類を呼ばない）。階段の表示名だけ渡す', () => {
