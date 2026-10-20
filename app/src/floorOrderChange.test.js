@@ -13,7 +13,7 @@ import { stripCommentLines } from './uiBusySourceScan.js';
 test('floorOrderFollowers: name の並びが固定されている', () => {
   assert.deepEqual(floorOrderFollowers.map(f => f.name), [
     'roofPlaneHeight', 'stairsBelowRemoval', 'stairVoidReconcile', 'elevatorCopy', 'exteriorRoom',
-    'mainRoofCarry', 'switchToAddedFloor', 'structuralReflect', 'elevatorRenumber',
+    'mainRoofCarry', 'switchToAddedFloor', 'wallRefresh', 'structuralReflect', 'elevatorRenumber',
   ]);
 });
 
@@ -30,8 +30,9 @@ test('floorOrderFollowers: 各followerのappliesToが固定されている', () 
   const byName = Object.fromEntries(floorOrderFollowers.map(f => [f.name, f.appliesTo]));
   assert.deepEqual(byName.roofPlaneHeight, [
     FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
-    FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+    FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE, FLOOR_ORDER_KIND.HEIGHTS,
   ]);
+  assert.deepEqual(byName.wallRefresh, [FLOOR_ORDER_KIND.HEIGHTS]);
   assert.deepEqual(byName.stairVoidReconcile, [
     FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
     FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
@@ -43,7 +44,7 @@ test('floorOrderFollowers: 各followerのappliesToが固定されている', () 
   assert.deepEqual(byName.switchToAddedFloor, [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER]);
   assert.deepEqual(byName.structuralReflect, [
     FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
-    FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+    FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE, FLOOR_ORDER_KIND.HEIGHTS,
   ]);
 });
 

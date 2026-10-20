@@ -464,7 +464,9 @@ export function setCeilingCutHeightMm(project, planeId, mm) {
 //   changedSiblings: before/after 両方にあり bytes が変化した { planeId, before, after } の配列
 //   metasChanged: metasBefore と metasAfter が一致しない（階数・値のいずれかが違う）
 //   hasChanges: addedPlanes.length>0 || changedSiblings.length>0 || metasChanged
-export function diffFloorOpSnapshot({ before, after, metasBefore, metasAfter }) {
+//   levelsChanged: levelsBefore と levelsAfter（collectProjectLevels の戻り値。省略可）が一致しない
+//     （階設定表の GL。Plane に属さない project 単位の値なので、メタ・バイト列とは別に比べる。S4）
+export function diffFloorOpSnapshot({ before, after, metasBefore, metasAfter, levelsBefore, levelsAfter }) {
   const addedPlanes = metasAfter.filter(m => !before.has(m.id));
 
   const changedSiblings = [];
@@ -477,9 +479,26 @@ export function diffFloorOpSnapshot({ before, after, metasBefore, metasAfter }) 
   }
 
   const metasChanged = !planeMetasEqual(metasBefore, metasAfter);
-  const hasChanges = addedPlanes.length > 0 || changedSiblings.length > 0 || metasChanged;
+  const levelsChanged = !projectLevelsEqual(levelsBefore, levelsAfter);
+  const hasChanges = addedPlanes.length > 0 || changedSiblings.length > 0 || metasChanged || levelsChanged;
 
-  return { addedPlanes, changedSiblings, metasChanged, hasChanges };
+  return { addedPlanes, changedSiblings, metasChanged, levelsChanged, hasChanges };
+}
+
+// ---- project 単位の高さ設定（GL）の収集・復元（階設定表。階操作の undo/redo が Plane メタと一緒に使う）----
+// glBelow1FlMm＝GL は 1FL からの下がり量（負＝GL が 1FL より上）。Plane に属さないので collectPlaneMetas とは別。
+export function collectProjectLevels(project) {
+  return { glBelow1FlMm: project.glBelow1FlMm };
+}
+
+export function applyProjectLevels(project, levels) {
+  if (!levels) return;
+  project.setGlBelow1FlMm(levels.glBelow1FlMm);
+}
+
+function projectLevelsEqual(a, b) {
+  if (!a || !b) return !a && !b; // 片方だけ渡された＝比較不能。両方省略のときだけ「同じ」
+  return a.glBelow1FlMm === b.glBelow1FlMm;
 }
 
 function planeMetasEqual(a, b) {

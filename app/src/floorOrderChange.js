@@ -17,6 +17,7 @@ import { runInAction } from 'mobx';
 import { serializeGraph } from './graphSnapshot.js';
 import { saveFloor } from './storage/db.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
+import { refreshWallsAllFloors } from './wallRefresh.js';
 import { applyFloorInsert, applyPlaneMetas } from './floorOps.js';
 import { reflectStructuralAfterFloorAdd } from './structural/structuralOrchestration.js';
 import { followRoofPlaneToTop } from './structural/roofPlane.js';
@@ -33,6 +34,8 @@ export const FLOOR_ORDER_KIND = Object.freeze({
   DELETE: 'delete',
   REORDER: 'reorder',
   CHANGE: 'change',
+  // 階設定表の確定（階高・GL の変更。階の並びは不変で elevation と最上階の階高だけが変わる。S4）
+  HEIGHTS: 'heights',
 });
 
 // below（直下の採用階）の階段をすべて削除する。アクティブ階はライブグラフ、非アクティブ階は
@@ -78,7 +81,7 @@ export const floorOrderFollowers = [
     name: 'roofPlaneHeight',
     appliesTo: [
       FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
-      FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+      FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE, FLOOR_ORDER_KIND.HEIGHTS,
     ],
     run(ctx) {
       runInAction(() => followRoofPlaneToTop(ctx.project));
@@ -153,6 +156,39 @@ export const floorOrderFollowers = [
     },
   },
   {
+    // 階設定表の確定（HEIGHTS）だけの追従。階高が変わると壁の鮮度キー（fh＝floorHeightAbove）が変わる階
+    // （階高を変えた階）の壁を作り直す。鍵が一致する階は peek 以外何もしない（発火条件＝鍵不一致のみ）。
+    // 階の追加・削除・並べ替えには足さない（それらは階高を保ち、鍵の入力が変わらない・または変わる階は
+    // 次の境界の鮮度判定に任せる従来どおり）。undo はここでは積まない（withFloorOpUndo が全階のバイト列で
+    // 1エントリにする）。他階の処理が自階を peek するため、自階は他階の前に IDB へ書く
+    // （refreshWallsAllFloors の saveActiveFloorFn）。仕上げモード中の自階は skipActiveWalls で外す
+    // （仕上げ脱出の全再生成に任せる）。壁が変わった階があれば refreshWallsAllFloors が自階→他階の
+    // 構造再計算まで行うので、直後の structuralReflect は印（ctx.state.structuralReflected）で省く。
+    name: 'wallRefresh',
+    appliesTo: [FLOOR_ORDER_KIND.HEIGHTS],
+    async run(ctx) {
+      // 発火条件＝階高が実際に変わったこと（updates が空＝GL だけの変更・変化なしは、壁にも構造にも影響しない）。
+      // 構造反映も要らないので、印（反映済み扱い）を立てて structuralReflect も省く。
+      if (ctx.updates.length === 0) { ctx.state.structuralReflected = true; return; }
+      const io = ctx.floorIo ?? {};
+      // 仕上げモード中（自階の壁は再生成しない）でも、直上階の再生成・構造反映が自階を peek するので、
+      // 他階の処理の前に自階を IDB へ書く（仕上げ脱出 finishBoundary.js・構造脱出と同じ保存。
+      // 保存は serializeGraph→saveFloor で、未保存文書の意味（dirty）は変えない）。
+      if (ctx.skipActiveWalls && ctx.project.activeGraph) {
+        await (io.saveFloorFn ?? saveFloor)(ctx.project.activePlaneId, serializeGraph(ctx.project.activeGraph));
+      }
+      const { changedPlaneIds } = await refreshWallsAllFloors(ctx.project, {
+        skipActive: !!ctx.skipActiveWalls,
+        pushUndo: false, pushActiveStructuralUndo: false,
+        saveActiveFloorFn: io.saveFloorFn ?? saveFloor,
+        ...(io.peekFn ? { peek: (p, sg) => io.peekFn(p, sg) } : {}),
+        ...(io.saveFloorFn ? { saveFloorFn: io.saveFloorFn } : {}),
+        ...(io.loadMaterialMapFn ? { loadMaterialMapFn: io.loadMaterialMapFn } : {}),
+      });
+      ctx.state.structuralReflected = changedPlaneIds.length > 0;
+    },
+  },
+  {
     name: 'structuralReflect',
     // delete への構造反映は現状（HEAD）には無い追加挙動——指示書§4.3「階の並びが変わった後の
     // 追従処理」に全階の構造反映が含まれ、Q1の根拠「1つ下の階の壁に依存する梁芯」は削除でも
@@ -161,9 +197,11 @@ export const floorOrderFollowers = [
     // 階の壁」が変わりうる・階変更は部材番号の階表記が変わる）で追加した（ステップ4・Q1裁定）。
     appliesTo: [
       FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
-      FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+      FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE, FLOOR_ORDER_KIND.HEIGHTS,
     ],
     async run(ctx) {
+      // HEIGHTS: 直前の wallRefresh が壁を作り直した（＝構造も再計算済み）なら二重にしない。
+      if (ctx.state.structuralReflected) return;
       await reflectStructuralAfterFloorAdd(ctx.project);
     },
   },
@@ -205,13 +243,15 @@ export const floorOrderFollowers = [
  * @param {{notify:(msg:string)=>void, switchFloor:(planeId:string)=>Promise<boolean>, onFloorSyncChanged:()=>void}} opts.ui
  * @param {{peekFn?:Function, saveFloorFn?:Function}} [opts.floorIo] - 他階の peek／保存の差し替え（テスト注入用。
  *   省略時は本番の floorSwapManager.peek／saveFloor。階段の削除・吹抜けの整合の follower が使う）
+ * @param {boolean} [opts.skipActiveWalls] - HEIGHTS の壁の再生成で自階を除く（仕上げモード中。仕上げ脱出の
+ *   全再生成に任せる）。floorIo の peekFn／saveFloorFn／loadMaterialMapFn は wallRefresh follower も使う
  * @param {Array} [followers] - 既定 floorOrderFollowers（テスト用に差し替え可能）
  * @returns {Promise<{addedPlane:object|null, halted:boolean}>}
  */
 export async function applyFloorOrderChange(project, opts, followers = floorOrderFollowers) {
-  const { kind, updates, addPlane, removePlane, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo } = opts;
+  const { kind, updates, addPlane, removePlane, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo, skipActiveWalls } = opts;
   const ctx = {
-    project, kind, updates, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo,
+    project, kind, updates, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo, skipActiveWalls,
     addedPlane: null, targetPlaneId: null, state: {},
   };
 

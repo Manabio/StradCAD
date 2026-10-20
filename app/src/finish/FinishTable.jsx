@@ -21,6 +21,7 @@ import {
 import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
+import { toHalfWidthDigits } from '../halfWidth.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip } from '../catalog/catalogDiffView.js';
 
 // ---- 内部仕上げ表 ----
@@ -80,7 +81,7 @@ const CARD_SECTIONS = [
 // CH 文字列に 0 以下の数値が含まれるか（CHは0より大きい）。
 // 全角数字は半角へ正規化し、レンジ表記「2300～3500」の各数値トークンを個別に検査する。
 function chContainsZero(text) {
-  const s = String(text).replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  const s = toHalfWidthDigits(text);
   const tokens = s.match(/-?\d+(?:\.\d+)?/g) ?? [];
   return tokens.some(t => Number(t) <= 0);
 }
