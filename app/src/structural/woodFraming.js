@@ -1019,11 +1019,16 @@ export function entranceOpeningWidthMm(doorWidthMm, clearanceMm = rulesFor(TRADI
  * levelOffset は StructuralBeam の一般フィールドで「天端がFLからこの符号付き値だけ下がる」規約のため、
  * -beamTopBelowFLMm を返す。生成直後の値は conformWoodBeamLevels（woodAutoFill.js）が同じ再計算パスで
  * 揃えるので、自動生成側は土台以外ここを呼ばない（手動追加＝locked は conform の対象外なので生成時に書く）。
+ * 小屋伏図（屋根専用平面 plane.isRoofPlane）の基準高は軒桁上端そのもの（ユーザー裁定 2026-10-20 案b。
+ * 2026-10-16 の「基準高−100」を小屋伏図についてだけ変更）——その平面の梁（軒桁・小屋梁・壁線の通し梁）は天端＝基準高＝0。
+ * 通常階は従来どおり -beamTopBelowFLMm。「屋根平面なら 0」の判定はここ1箇所（conformWoodBeamLevels・addManualBeam が経由）。
  * @param {{beamTopBelowFLMm:number}|null} [framing] - 非在来（framingを持たない主構造）はnull
+ * @param {{isRoofPlane?:boolean}|null} [plane] - 梁が載る平面。省略・通常階は従来値
  * @returns {number|null} framing未設定・beamTopBelowFLMmが非数なら null
  */
-export function woodBeamTopLevelOffsetMm(framing = TRADITIONAL_WOOD_FRAMING) {
+export function woodBeamTopLevelOffsetMm(framing = TRADITIONAL_WOOD_FRAMING, plane = null) {
   if (!framing || !Number.isFinite(framing.beamTopBelowFLMm)) return null;
+  if (plane?.isRoofPlane === true) return 0;
   return -framing.beamTopBelowFLMm;
 }
 

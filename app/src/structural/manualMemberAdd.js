@@ -66,7 +66,8 @@ export function addManualBeam(graph, project, { axisCL, isVertical, clStart, clE
   const materialType = rules.baseMaterial;
   // 在来木造の横架材は天端FL−100（framing.beamTopBelowFLMm）。手動追加は直後に locked にするため
   // conformWoodBeamLevels（auto のみ）の対象外——生成時に書く。非在来は null＝既定（天端FL）。
-  const levelOffset = rules.framing ? woodBeamTopLevelOffsetMm(rules.framing) : null;
+  // 小屋伏図（屋根専用平面）は 0（基準高＝軒桁上端。裁定 2026-10-20）——graph.plane を渡して woodBeamTopLevelOffsetMm が決める。
+  const levelOffset = rules.framing ? woodBeamTopLevelOffsetMm(rules.framing, graph.plane) : null;
   const beam = graph.addBeam(materialType, rules.defaultSections.beam, axisCL, isVertical, clStart, clEnd,
     levelOffset == null ? {} : { levelOffset });
   autoFillBeamEccentricity(graph, project); // 外周梁なら柱外面合わせの偏芯量を初期算出（faceGap=0＝面一）

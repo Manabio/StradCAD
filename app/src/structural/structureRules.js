@@ -71,6 +71,7 @@ export const WOOD_DEPTH_BEAM_ROLES = Object.freeze(['primary', 'secondary', 'flo
 // 在来木造で天端が「FL−beamTopBelowFLMm」に揃う横架材の role（ユーザー指示 2026-10-16「横架材の天端はFL-100」。
 // 大梁・小梁・床梁・土台・隔て梁に加え、軒桁〔eaves〕・小屋梁〔roofBeam〕・屋根専用平面の通し梁も同面
 // 〔ユーザー裁定 2026-10-16「小屋梁・軒桁・屋根専用平面の通し梁の上端も同面」＝その平面の基準高−100〕。
+// ただし屋根専用平面（小屋伏図）は 2026-10-20 裁定（案b）で基準高＝軒桁上端とし天端＝基準高（0）。通常階だけ FL−100。
 // 基礎梁〔RC・天端はGL基準〕・踊り場受け梁〔landing＝鉄骨/RC階段専用で天端は踊り場から算定〕は対象外）。
 // 消費先は woodFraming.js woodBeamTopLevelOffsetMm と woodAutoFill.js conformWoodBeamLevels。
 export const WOOD_FL_TOP_BEAM_ROLES = Object.freeze(['primary', 'secondary', 'floor', 'sill', 'partitionBeam', 'eaves', 'roofBeam']);

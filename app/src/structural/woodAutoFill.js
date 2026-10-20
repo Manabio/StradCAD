@@ -1838,17 +1838,18 @@ export function conformWoodSections(graph, project) {
  * 生成側（autoFillWoodWallBeams・autoFillWoodFloorBeams・woodOpeningBeams・stairPartitionBeams）は
  * levelOffset を書かず既定 0（天端FL）で作り、同じ再計算パスのここで揃える——断面を
  * conformWoodSections に委ねるのと同じ形で、既存文書の梁（levelOffset 0 で保存済み）も次の再計算で直る。
- * 基礎梁（RC・GL基準）・踊り場受け梁は触らない。屋根専用平面も対象（軒桁・小屋梁・通し梁は同面。裁定 2026-10-16）。在来以外は何もしない。
+ * 基礎梁（RC・GL基準）・踊り場受け梁は触らない。屋根専用平面も対象だが目標は 0（基準高＝軒桁上端。裁定 2026-10-20 案b。
+ * 2026-10-16 の「同面＝基準高−100」を小屋伏図についてだけ変更。既存文書の屋根の auto 梁 −100 も次の再計算で 0 に揃う）。在来以外は何もしない。
  * 目標値と一致すれば書かない（冪等。changed 判定と undo のため）。更新した梁idを返す。
  * @param {object} graph
  * @param {object} project
  * @returns {string[]}
  */
 export function conformWoodBeamLevels(graph, project) {
-  // 屋根専用平面（小屋伏図）の軒桁・小屋梁・壁線の通し梁も同面（その平面の基準高−100。ユーザー裁定 2026-10-16）。
+  // 屋根専用平面（小屋伏図）は基準高＝軒桁上端なので天端＝基準高（0。ユーザー裁定 2026-10-20 案b。通常階は FL−100）。
   const rules = rulesFor(effectiveStructure(graph, project));
   if (!rules.framing) return [];
-  const levelOffset = woodBeamTopLevelOffsetMm(rules.framing);
+  const levelOffset = woodBeamTopLevelOffsetMm(rules.framing, graph.plane);
   if (levelOffset == null) return [];
   const updated = [];
   for (const beam of graph.beams) {

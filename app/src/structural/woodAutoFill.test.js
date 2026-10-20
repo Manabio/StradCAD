@@ -5677,19 +5677,74 @@ test('conformWoodBeamLevels: 自動生成した壁線上の通し梁は生成直
   for (const b of created) assert.equal(b.levelOffset, -100);
 });
 
-test('【裁定 2026-10-16】conformWoodBeamLevels: 屋根専用平面（isRoofPlane）の通し梁・軒桁・小屋梁も同面（基準高−100）に揃える', () => {
+function makeRoofGraph() {
   const graph = new PlanGraph(new Plane('roof', 6000, '屋根', 3, 1, false, null, 0, true, 'p2'));
   graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   const x2 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
   const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,  { labeled: true, discipline: Discipline.STRUCT });
   const y2 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  return { graph, x1, x2, y1, y2 };
+}
+
+test('【裁定 2026-10-20】conformWoodBeamLevels: 屋根専用平面（小屋伏図）の通し梁・軒桁・小屋梁は天端＝基準高（0）。FL−100 にしない', () => {
+  const { graph, x1, x2, y1, y2 } = makeRoofGraph();
   const primary  = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
   const eaves    = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y2, false, x1, x2, { role: 'eaves' });
   const roofBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x240', x1, true,  y1, y2, { role: 'roofBeam' });
+  assert.deepEqual(conformWoodBeamLevels(graph, PROJECT), [], '生成直後の 0 が目標と一致するので書かない');
+  for (const b of [primary, eaves, roofBeam]) assert.equal(b.levelOffset, 0);
+});
+
+test('【裁定 2026-10-20】conformWoodBeamLevels: 既存文書の屋根の auto 梁（旧規則で −100）は 0 に揃う。2 回目は空（冪等）。locked は保つ', () => {
+  const { graph, x1, x2, y1, y2 } = makeRoofGraph();
+  const primary  = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary', levelOffset: -100 });
+  const eaves    = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y2, false, x1, x2, { role: 'eaves', levelOffset: -100 });
+  const roofBeam = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x240', x1, true,  y1, y2, { role: 'roofBeam', levelOffset: -100 });
+  const locked   = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', x2, true,  y1, y2, { role: 'primary', levelOffset: -100 });
+  locked.setDimensionStatus('locked');
   const updated = conformWoodBeamLevels(graph, PROJECT);
   assert.deepEqual(updated.sort(), [primary.id, eaves.id, roofBeam.id].sort());
-  for (const b of [primary, eaves, roofBeam]) assert.equal(b.levelOffset, -100);
+  for (const b of [primary, eaves, roofBeam]) assert.equal(b.levelOffset, 0);
+  assert.equal(locked.levelOffset, -100, 'locked は触らない（locked/calculated は受容。2026-10-16 と同じ）');
+  assert.deepEqual(conformWoodBeamLevels(graph, PROJECT), [], '冪等');
+});
+
+test('【裁定 2026-10-20】通常階は従来どおり FL−100 のまま（屋根平面の 0 と同じ文書内で混ざらない）', () => {
+  const { graph, x1, x2, y1 } = makeGridGraph();
+  const eaves = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'eaves' });
+  assert.equal(graph.plane.isRoofPlane, false);
+  assert.deepEqual(conformWoodBeamLevels(graph, PROJECT), [eaves.id]);
+  assert.equal(eaves.levelOffset, -100);
+});
+
+test('【裁定 2026-10-20】屋根平面の 0 は木造→S造変換で壊れない（0 のまま・−100 の戻し分岐に入らない）', () => {
+  const { graph, x1, x2, y1, y2 } = makeRoofGraph();
+  const eaves = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y2, false, x1, x2, { role: 'eaves' });
+  const primary = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary' });
+  conformWoodBeamLevels(graph, PROJECT);
+  assert.equal(primary.levelOffset, 0, 'conform が屋根平面で 0 を書いている（変換前）');
+  assert.equal(eaves.levelOffset, 0);
+  graph.structureOverride = 'S造';
+  const { convertedBeams } = convertMembersToEffectiveMaterial(graph, PROJECT, 'S造');
+  assert.ok(convertedBeams.includes(primary.id));
+  assert.equal(graph.beamMap.get(primary.id).materialType, StructuralMaterialType.STEEL);
+  assert.equal(graph.beamMap.get(primary.id).levelOffset, 0);
+  assert.equal(graph.beamMap.get(eaves.id).levelOffset, 0);
+});
+
+test('【QA S2-F1】屋根平面の locked −100 の梁（旧規則の手動追加・利用者の値）は木造→S造変換で保つ（屋根の規則の値は 0 なので戻さない）', () => {
+  const { graph, x1, x2, y1 } = makeRoofGraph();
+  const primary = graph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x1, x2, { role: 'primary', levelOffset: -100 });
+  primary.setDimensionStatus('locked');
+  conformWoodBeamLevels(graph, PROJECT);
+  assert.equal(primary.levelOffset, -100, 'locked は conform が触らない');
+  graph.structureOverride = 'S造';
+  const { convertedBeams } = convertMembersToEffectiveMaterial(graph, PROJECT, 'S造');
+  assert.ok(convertedBeams.includes(primary.id));
+  const after = graph.beamMap.get(primary.id);
+  assert.equal(after.materialType, StructuralMaterialType.STEEL);
+  assert.equal(after.levelOffset, -100);
 });
 
 test('【QA F1】convertMembersToEffectiveMaterial: 在来木造で FL−100 にした auto の大梁を S造へ変換すると levelOffset は 0（天端FL）へ戻る。規則の値以外は保つ', () => {

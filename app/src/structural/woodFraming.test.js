@@ -800,6 +800,13 @@ test('woodBeamTopLevelOffsetMm: 横架材（土台を含む）の天端はFL-100
   assert.equal(woodBeamTopLevelOffsetMm({ beamTopBelowFLMm: 80 }), -80, '値を変えれば追従する');
 });
 
+test('woodBeamTopLevelOffsetMm: 屋根専用平面（小屋伏図）は 0（基準高＝軒桁上端。裁定 2026-10-20）。通常階・plane 省略は -100', () => {
+  assert.equal(woodBeamTopLevelOffsetMm(TRADITIONAL_WOOD_FRAMING, { isRoofPlane: true }), 0);
+  assert.equal(woodBeamTopLevelOffsetMm(TRADITIONAL_WOOD_FRAMING, { isRoofPlane: false }), -100);
+  assert.equal(woodBeamTopLevelOffsetMm(TRADITIONAL_WOOD_FRAMING, null), -100);
+  assert.equal(woodBeamTopLevelOffsetMm(null, { isRoofPlane: true }), null, '非在来は屋根平面でも null');
+});
+
 test('【失敗系】woodBeamTopLevelOffsetMm: framingがnull（非在来）・beamTopBelowFLMmが非数なら null', () => {
   assert.equal(woodBeamTopLevelOffsetMm(null), null);
   assert.equal(woodBeamTopLevelOffsetMm({ beamTopBelowFLMm: NaN }), null);

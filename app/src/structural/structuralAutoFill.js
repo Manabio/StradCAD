@@ -892,8 +892,9 @@ export function convertMembersToEffectiveMaterial(graph, project, belowMainStruc
       // 在来木造の規則「横架材の天端はFL−100」（conformWoodBeamLevels）が書いた levelOffset は、木造以外へ
       // 変換するとき元の既定（天端FL）へ戻す——conform は木造しか見ないので、戻さないと S造・RC造の梁が
       // FL−100 に残る（QA指摘 2026-10-16）。規則の値と一致するものだけ戻す（それ以外は利用者の値とみなして保つ）。
+      // 規則の値は平面ごと（小屋伏図は 0。裁定 2026-10-20）——graph.plane を渡し、屋根の −100 は利用者の値として保つ。
       if (beam.materialType === StructuralMaterialType.WOOD && targetMaterial !== StructuralMaterialType.WOOD
-        && WOOD_FL_TOP_BEAM_ROLES.includes(beam.role) && beam.levelOffset === woodBeamTopLevelOffsetMm()) {
+        && WOOD_FL_TOP_BEAM_ROLES.includes(beam.role) && beam.levelOffset === woodBeamTopLevelOffsetMm(undefined, graph.plane)) {
         next.setField('levelOffset', 0);
       }
       convertedBeams.push(beam.id);

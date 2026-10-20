@@ -167,3 +167,16 @@ test('【手動追加】在来木造の梁は追加直後に levelOffset=-100（
   const steelBeam = addManualBeam(steel.graph, GRID_PROJECT, { axisCL: steel.yCLs[0], isVertical: false, clStart: steel.xCLs[0], clEnd: steel.xCLs[1] });
   assert.equal(steelBeam.levelOffset, 0, '非在来は framing を持たないので既定（天端FL）');
 });
+
+test('【手動追加・裁定 2026-10-20】在来木造でも屋根専用平面（小屋伏図）の梁は levelOffset=0（基準高＝軒桁上端）。通常階は -100', () => {
+  const roofGraph = new PlanGraph(new Plane('roof', 6000, '屋根', 3, 1, false, null, 0, true, 'p2'));
+  roofGraph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const rx = [0, 4000].map(v => roofGraph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: true, discipline: Discipline.STRUCT }));
+  const ry = roofGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const roofBeam = addManualBeam(roofGraph, GRID_PROJECT, { axisCL: ry, isVertical: false, clStart: rx[0], clEnd: rx[1] });
+  assert.equal(roofBeam.levelOffset, 0);
+  assert.equal(roofBeam.dimensionStatus, 'locked');
+  const floor = makeGridGraph(TRADITIONAL_WOOD_STRUCTURE);
+  const floorBeam = addManualBeam(floor.graph, GRID_PROJECT, { axisCL: floor.yCLs[0], isVertical: false, clStart: floor.xCLs[0], clEnd: floor.xCLs[1] });
+  assert.equal(floorBeam.levelOffset, -100);
+});
