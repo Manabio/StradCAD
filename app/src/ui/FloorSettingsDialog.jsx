@@ -18,10 +18,10 @@ function FigureSvg({ figure, selectedPlaneId }) {
     <svg data-floor-figure width={figure.width} height={figure.height} style={{ display: 'block' }} role="img" aria-label="階設定表の図">
       {figure.lines.map(l => {
         const sel = selectedPlaneId != null && l.planeIds.includes(selectedPlaneId);
-        const color = sel ? SEL : (l.kind === 'gl' ? '#92400e' : '#334155');
+        const color = sel ? SEL : '#334155'; // GL も他のレベル線と同じ色・太さ・実線（2026-10-20 指示）
         return (
           <g key={l.key} data-level-line={l.kind}>
-            <line x1={l.x1} x2={l.x2} y1={l.y} y2={l.y} stroke={color} strokeWidth={l.long ? 1.6 : 1} strokeDasharray={l.kind === 'gl' ? '5 3' : undefined} />
+            <line x1={l.x1} x2={l.x2} y1={l.y} y2={l.y} stroke={color} strokeWidth={1} />
             <text x={l.labelX} y={l.labelY} fontSize={11} textAnchor="end" fill={color}>{l.label}</text>
             <polygon points={l.marker.points.map(p => p.join(',')).join(' ')} fill="none" stroke={color} strokeWidth={1} />
           </g>
@@ -44,8 +44,8 @@ function FigureSvg({ figure, selectedPlaneId }) {
           <line x1={figure.leftDim.x} x2={figure.leftDim.x} y1={figure.leftDim.y1} y2={figure.leftDim.y2} stroke="#475569" strokeWidth={1} />
           <line x1={figure.leftDim.x - 3} x2={figure.leftDim.x + 3} y1={figure.leftDim.y1} y2={figure.leftDim.y1} stroke="#475569" strokeWidth={1} />
           <line x1={figure.leftDim.x - 3} x2={figure.leftDim.x + 3} y1={figure.leftDim.y2} y2={figure.leftDim.y2} stroke="#475569" strokeWidth={1} />
-          <text x={figure.leftDim.textX} y={figure.leftDim.yMid - 2} fontSize={11} textAnchor="end" fill="#475569">最高軒高</text>
-          <text x={figure.leftDim.textX} y={figure.leftDim.yMid + 12} fontSize={11} textAnchor="end" fill="#475569">{figure.leftDim.text}</text>
+          <text x={figure.leftDim.textX} y={figure.leftDim.labelY} fontSize={11} textAnchor="end" fill="#475569">最高軒高</text>
+          <text x={figure.leftDim.textX} y={figure.leftDim.valueY} fontSize={11} textAnchor="end" fill="#475569">{figure.leftDim.text}</text>
         </g>
       )}
     </svg>

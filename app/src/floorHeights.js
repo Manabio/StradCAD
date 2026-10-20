@@ -380,7 +380,7 @@ export const FIGURE_MARKER_H = 7;
 export function layoutFloorSettingsFigure(model, opts = {}) {
   const {
     maxEaveMm = null, pxPerMm = 0.04, minGapPx = 36, padTop = 26, padBottom = 14,
-    leftDimX = 62, longX1 = 50, flX1 = 76, rightDimX = 224, inputX = 234, markerX = 150,
+    leftDimX = 62, longX1 = 10, flX1 = 76, lineX2 = 224, rightDimX = 200, inputX = 210, markerX = 150, glMarkerX = 34,
   } = opts;
   const lines = model.lines;
   const gaps = lines.slice(1).map((l, i) => Math.max(minGapPx, (l.zMm - lines[i].zMm) * pxPerMm));
@@ -393,15 +393,17 @@ export function layoutFloorSettingsFigure(model, opts = {}) {
   const outLines = lines.map((l, i) => {
     const y = ys[i];
     const long = l.kind === 'gl' || l.kind === 'eave';
+    const mx = l.kind === 'gl' ? glMarkerX : markerX;
     return {
       ...l,
       y,
       long,
       x1: long ? longX1 : flX1,
-      x2: rightDimX,
-      // ▽: 先端（下の頂点）が線の上に乗る。ラベルは▽の左・線のすぐ上
-      marker: { points: [[markerX - FIGURE_MARKER_W / 2, y - FIGURE_MARKER_H], [markerX + FIGURE_MARKER_W / 2, y - FIGURE_MARKER_H], [markerX, y]] },
-      labelX: markerX - FIGURE_MARKER_W / 2 - 3,
+      // 線は右の寸法線をまたいで lineX2 まで（図面の寸法補助線のように寸法線より少し先へ出る）
+      x2: lineX2,
+      // ▽: 先端（下の頂点）が線の上に乗る。ラベルは▽の左・線のすぐ上。GL の▽は最高軒高の寸法線より左（glMarkerX）
+      marker: { points: [[mx - FIGURE_MARKER_W / 2, y - FIGURE_MARKER_H], [mx + FIGURE_MARKER_W / 2, y - FIGURE_MARKER_H], [mx, y]] },
+      labelX: mx - FIGURE_MARKER_W / 2 - 3,
       labelY: y - 2,
     };
   });
@@ -414,9 +416,13 @@ export function layoutFloorSettingsFigure(model, opts = {}) {
     if (y1 === undefined || y2 === undefined) continue;
     const yMid = (y1 + y2) / 2;
     if (d.kind === 'eave') {
+      // 「最高軒高」の文字は GL▽（左の寸法線より左）と重ならないよう、値の行を GL 線の ▽・ラベルより上に保つ（小さい建物の対策）
+      const valueY = Math.min(yMid + 12, Math.max(y1, y2) - 12);
       leftDim = {
         key: d.key, x: leftDimX, y1, y2, yMid,
         textX: leftDimX - 6,
+        valueY,
+        labelY: valueY - 14,
         text: maxEaveMm === null || maxEaveMm === undefined ? '-' : String(Math.round(maxEaveMm * 10) / 10),
       };
       continue;
@@ -430,7 +436,7 @@ export function layoutFloorSettingsFigure(model, opts = {}) {
     });
   }
   // 1FL が無い（地階だけの）建物: GL〜1FL の寸法が無いので、GL 線の右（階高欄の列のさらに右）に GL の欄だけ置く
-  let width = inputX + FIGURE_INPUT_W + 10;
+  let width = Math.max(lineX2, inputX + FIGURE_INPUT_W) + 10;
   const glLine = outLines.find(l => l.kind === 'gl');
   if (glLine && outLines.some(l => l.kind === 'fl') && !rightDims.some(d => d.kind === 'gl')) {
     const x = inputX + FIGURE_INPUT_W + 8;

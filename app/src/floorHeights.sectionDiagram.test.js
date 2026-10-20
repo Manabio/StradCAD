@@ -1,6 +1,7 @@
 // 階設定表ダイアログの図（sectionDiagramModel・layoutFloorSettingsFigure。階設定表 S7・2026-10-20 図のみへ変更）。純関数を固定する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { floorSettingsRows, sectionDiagramModel, layoutFloorSettingsFigure } from './floorHeights.js';
 
 const P = (id, startFloor, elevation, stories = 1, name = `${startFloor}階`) => ({ id, name, startFloor, elevation, stories });
@@ -132,14 +133,52 @@ test('座標変換: 3階建て+GL（GL 500）の px 座標。上階ほど y が�
   assert.equal(ys[1], 26 + 116 + 140 + 120);
   assert.equal(ys[0], 26 + 116 + 140 + 120 + 36);
   assert.equal(F.height, ys[0] + 14);
-  assert.equal(F.width, 314);
+  assert.equal(F.width, 290);
 });
 
-test('座標変換: 長い線は GL・軒桁上端、FL は短い。右端は寸法線に付く', () => {
+test('座標変換: 長い線は GL・軒桁上端、FL は短い。全ての線が右の寸法線をまたぐ（FL は 76..224 のまま）', () => {
   const F = fig(three());
   assert.deepEqual(F.lines.map(l => [l.label, l.long]), [['GL', true], ['1FL', false], ['2FL', false], ['3FL', false], ['軒桁上端', true]]);
   for (const l of F.lines) assert.equal(l.x2, 224);
+  for (const l of F.lines.filter(l => l.kind === 'fl')) assert.equal(l.x1, 76);
+  assert.equal(lineBy(F, 'GL').x1, 10);
+  assert.equal(lineBy(F, '軒桁上端').x1, 10);
   assert.ok(lineBy(F, 'GL').x1 < lineBy(F, '2FL').x1);
+  for (const d of F.rightDims) assert.ok(d.x < F.lines[1].x2, `${d.key}: 寸法線は線の右端より内側（線が寸法線をまたぐ）`);
+  assert.equal(F.rightDims[0].x, 200);
+});
+
+test('GL▽: 最高軒高の寸法線より左。先端が GL 線の y に乗り、ラベルは▽の左。軒桁上端▽は中央のまま', () => {
+  const F = fig(three(), { maxEaveMm: 9900 }, {}, 2900, 500);
+  const gl = lineBy(F, 'GL');
+  const apex = gl.marker.points[2];
+  assert.ok(apex[0] < F.leftDim.x, 'GL▽は左の寸法線より左');
+  assert.equal(apex[1], gl.y);
+  assert.ok(gl.labelX < apex[0]);
+  assert.ok(gl.x1 < apex[0] - 4, '線は▽の左へ延びる');
+  assert.equal(lineBy(F, '軒桁上端').marker.points[2][0], 150);
+});
+
+test('最高軒高の文字は GL▽ と重ならない: 小さい建物（GL と軒桁が最小隙間 36px）でも値の行は GL▽・ラベルの上', () => {
+  for (const planes of [three(), [P('f1', 1, 0)]]) {
+    const F = fig(planes, { maxEaveMm: 100 }, {}, 100, 0); // 階高 100mm → 線間は最小 36px
+    const gl = lineBy(F, 'GL');
+    const labelTop = gl.labelY - 11; // 11px の文字の上端（GL ラベル・▽の最上端 = y-7 より上）
+    assert.ok(F.leftDim.valueY + 2 <= labelTop + 1, `値の行の下端 ${F.leftDim.valueY + 2} が GL ラベルの上端 ${labelTop} にかかる`);
+    assert.ok(F.leftDim.valueY + 2 <= gl.marker.points[0][1], '▽の底辺より上');
+    const top = Math.min(...F.lines.map(l => l.y));
+    assert.ok(F.leftDim.labelY - 9 >= top, '「最高軒高」が最上の線より上へはみ出さない');
+  }
+});
+
+test('描画部 FigureSvg: 全レベル線は同じ太さ・実線（GL の破線と太線を持たない）', () => {
+  const src = readFileSync(new URL('./ui/FloorSettingsDialog.jsx', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('function FigureSvg'), src.indexOf('export function FloorSettingsDialog'));
+  const levelLine = body.split('\n').find(s => s.includes('<line x1={l.x1}'));
+  assert.ok(levelLine, 'レベル線の描画行が見つからない');
+  assert.ok(!body.includes('strokeDasharray'), '図に破線を使わない');
+  assert.match(levelLine, /strokeWidth=\{1\} \/>/);
+  assert.ok(!levelLine.includes('l.long') && !levelLine.includes('l.kind'), '線の太さ・種類を線種で分けない');
 });
 
 test('▽: 先端（下の頂点）がレベル線の y に乗り、底辺はその上。ラベルは線の上', () => {
@@ -147,7 +186,7 @@ test('▽: 先端（下の頂点）がレベル線の y に乗り、底辺はそ
   for (const l of F.lines) {
     const [p0, p1, apex] = l.marker.points;
     assert.equal(apex[1], l.y, `${l.label}: ▽の先端が線に乗らない`);
-    assert.equal(apex[0], 150);
+    assert.equal(apex[0], l.kind === 'gl' ? 34 : 150);
     assert.ok(p0[1] < l.y && p1[1] === p0[1], `${l.label}: ▽の底辺が線の上にない`);
     assert.ok(l.labelY < l.y && l.labelY > p0[1] - 1, `${l.label}: ラベルが線のすぐ上にない`);
     assert.ok(l.labelX < apex[0], `${l.label}: ラベルは▽の左`);
@@ -178,8 +217,11 @@ test('右の寸法鎖: 階高（各階）と GL〜1FL が入力欄を持ち、�
   for (const d of F.rightDims) {
     assert.ok(d.input, d.key);
     assert.equal(d.input.y + d.input.h / 2, d.yMid);
-    assert.equal(d.input.x, 234);
+    assert.equal(d.input.x, 210);
+    assert.ok(d.input.x > d.x, '欄は寸法線の右');
     assert.ok(d.input.h <= MIN_GAP - 8, '欄が隣の線にかかる');
+    // 欄は線の右端付近に重なるが、寸法する 2 本の線の間に厳密に収まる（線にかからない）
+    assert.ok(d.input.y > Math.min(d.y1, d.y2) && d.input.y + d.input.h < Math.max(d.y1, d.y2), `${d.key}: 欄が線にかかる`);
     assert.ok(d.input.x + d.input.w <= F.width);
   }
   assert.deepEqual(F.rightDims.filter(d => d.input.kind === 'height').map(d => d.input.id).sort(), ['f1', 'f2', 'f3']);

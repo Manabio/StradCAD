@@ -62,7 +62,7 @@ test('【配線】ダイアログ: 最高軒高は欄と同じ view から maxEa
     /^\s*const figure = layoutFloorSettingsFigure\(sectionDiagramModel\(planes, view\), \{ maxEaveMm: maxEave \}\);\s*$/m,
   ]);
   // 描画部（FigureSvg。コンポーネントより前に定義）は左の寸法の text をそのまま書く
-  assert.match(code, /^\s*<text x=\{figure\.leftDim\.textX\} y=\{figure\.leftDim\.yMid \+ 12\}.*>\{figure\.leftDim\.text\}<\/text>\s*$/m);
+  assert.match(code, /^\s*<text x=\{figure\.leftDim\.textX\} y=\{figure\.leftDim\.valueY\}.*>\{figure\.leftDim\.text\}<\/text>\s*$/m);
 });
 
 test('【配線】runFloorHeights: ユーザーの回答を待たない（確認ダイアログ類を呼ばない）。階段の表示名だけ渡す', () => {
