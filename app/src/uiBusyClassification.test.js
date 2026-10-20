@@ -33,7 +33,7 @@ import {
 const GATED = [
   'performUndo', 'performRedo', 'handleModeChange', 'handleFloorSwitch', 'switchFloorKeepingMode',
   'handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'commitAxisEdit',
-  'handleSaveConfirm', 'runDocumentImport', 'openCatalogMaintenancePanel',
+  'handleSaveConfirm', 'runDocumentImport', 'openCatalogMaintenancePanel', 'openFloorSettings',
   {
     name: 'withFloorOpUndo', noBeginUiTransition: true,
     reason: '呼び出し元（executeAddUpper・handleAddFloorConfirmの各分岐・runReorderFloor・'
@@ -150,6 +150,23 @@ const EXEMPT = [
       + '（runFloorChangeと同じ判定基準）。恒久的に対象外（階設定表 S5）。',
   },
   {
+    name: 'stopStructuralEditablePeek',
+    reason: '呼び出し元はrunFloorHeightsがwithFloorOpUndoへ渡すprepare（関門runBusyの内側、操作前のバイト列を採る前）のみ。'
+      + '構造モードの下階の編集用peekを止めて保留保存を確定するだけの内部関数で、関門化済みの呼び出し元から呼ばれる。恒久的に対象外（階設定表 S8-F2）。',
+  },
+  {
+    name: 'rebuildFiguresAfterHeights',
+    reason: '呼び出し元はrunFloorHeightsがwithFloorOpUndoへ渡すafterApply（undo/redo・巻き戻し）とafterCommit（確定直後）のみで、'
+      + 'いずれも関門（runBusy）の中でawaitされる。React stateの更新と構造モードの合成の組み直し（rebuildStructuralAfterHeights）だけで、'
+      + '自らgraph/IDBを書かない。恒久的に対象外（階設定表 S8-F2）。',
+  },
+  {
+    name: 'rebuildStructuralAfterHeights',
+    reason: '呼び出し元はrebuildFiguresAfterHeights（関門の中でawaitされる）のみで、構造モードの図面合成をrebuildStructuralBinding'
+      + '（バインディングの組み直しと編集用peekの再開だけ。構造の再計算も undo の積み込みもしない）で作り直す。失敗はconsole.errorに留める。'
+      + '恒久的に対象外（階設定表 S8-F2）。',
+  },
+  {
     name: 'runDeleteCenterLine',
     reason: '呼び出し元はhandleDeleteCenterLine（GATED）のみ。deleteCenterLineWithUndo→toast→setFloorSyncTick'
       + 'を切り出した内部関数で、関門化済みの呼び出し元（runBusyの中）から呼ばれる（手動追加材'
@@ -212,8 +229,10 @@ const PENDING_COUNT = 0;
 // 天伏モード（S3）のローダー .then(async m => { ... await s.init() ... }) が加わったため41→42
 // （モード切替 effect のローダーで、finish／structure 等と同型の EXEMPT。入力の関門は通らない）。
 // 階設定表 S5 で runFloorHeights が withFloorOpUndo( に渡す無名 async コールバックが1件加わったため42→43。
+// 階設定表 S8 で openFloorSettings（GATED。全階の階段・下屋を peek して集める）の runBusy( コールバックが1件加わったため43→44。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 43;
+// 階設定表 S8-F2 で runFloorHeights が withFloorOpUndo へ渡す afterApply・afterCommit（関門の中で await される async アロー）が2件加わったため44→46。
+const ANON_CALLBACK_COUNT = 46;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

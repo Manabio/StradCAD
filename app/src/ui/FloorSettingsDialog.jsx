@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import './AddCLDialog.css';
-import { floorSettingsRows, sectionDiagramModel, layoutSectionDiagram } from '../floorHeights.js';
+import { floorSettingsRows, sectionDiagramModel, layoutSectionDiagram, computeFloorHeightEdit, maxEaveHeightMm } from '../floorHeights.js';
+import { stairRiserChangesForEdit, riserChangeLine } from '../finish/stair/stairRiserFollow.js';
 import { trapFocusIndex, shouldConfirmOnEnter } from './floorSettingsKeys.js';
 
 const INVALID_STYLE = { borderColor: '#dc2626', background: '#fef2f2' };
@@ -57,15 +58,23 @@ function SectionDiagram({ layout, selectedPlaneId }) {
  * topHeightMm   : 現在の最上階の階高
  * glBelow1FlMm  : 現在の GL（1FL からの下がり量）
  * selectedPlaneId : 開いたとき選択状態にする階（長押しした位置の階）
+ * stairItems    : 全採用階の階段の要約（floorSettingsFacts.js。開くときに集める）。OK を押したとき蹴上が変わる階段があれば
+ *                 確定の前にこのダイアログの中で「蹴上 ○→○」の一覧を出して確認を取る（はい→onConfirm／いいえ→表に戻る）。
+ *                 確認は関門（runBusy）の外＝onConfirm の前に済ませる（関門の中でユーザーの回答を待たない）。
+ * leanToPlaneIds: 下屋のある採用階の id（最高の軒の高さの計算用）
  */
-export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selectedPlaneId, onConfirm, onCancel }) {
+export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selectedPlaneId, stairItems = [], leanToPlaneIds = [], onConfirm, onCancel: closeDialog }) {
   const [draft, setDraft] = useState({ heights: {}, glBelow1FlMm: undefined });
+  const [pendingRisers, setPendingRisers] = useState(null); // 確認待ちの蹴上の変化一覧（null＝確認中でない）
+  // Escape・キャンセル: 確認中は「いいえ」と同じく表に戻すだけ。確認中でなければダイアログを閉じる。
+  const onCancel = () => (pendingRisers ? setPendingRisers(null) : closeDialog());
   const dialogRef = useRef(null);
   const cancelRef = useRef(onCancel);
   useEffect(() => { cancelRef.current = onCancel; });
 
   const view = floorSettingsRows(planes, draft, topHeightMm, glBelow1FlMm);
   const diagram = layoutSectionDiagram(sectionDiagramModel(planes, view));
+  const maxEave = maxEaveHeightMm(planes, view, leanToPlaneIds);
 
   // ダイアログ内のフォーカス可能な要素（Tab の循環と、外から呼び戻すときの先頭）
   function focusables() {
@@ -92,13 +101,18 @@ export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selecte
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function setHeight(id, text) {
+    setPendingRisers(null); // 値を変えたら確認はやり直し
     setDraft(d => ({ ...d, heights: { ...d.heights, [id]: text } }));
   }
   function setGl(text) {
+    setPendingRisers(null);
     setDraft(d => ({ ...d, glBelow1FlMm: text }));
   }
   function handleConfirm() {
     if (!view.ok) return;
+    const edit = computeFloorHeightEdit(planes, draft, topHeightMm, glBelow1FlMm);
+    const risers = stairRiserChangesForEdit(stairItems, planes, edit.updates);
+    if (risers.length > 0) { setPendingRisers(risers); return; }
     onConfirm(draft);
   }
   function handleKeyDown(e) {
@@ -169,16 +183,33 @@ export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selecte
         <div className="cl-dialog-result">
           軒高（GL〜軒桁上端）: {view.eaveFromGlMm === null ? '-' : `${formatMm(view.eaveFromGlMm)} mm`}
         </div>
-        {/* 「最高の軒の高さ」は S8 でここに足す */}
-        <div className="cl-dialog-actions">
-          <button className="cl-dialog-btn cl-dialog-btn--cancel" onClick={onCancel}>キャンセル</button>
-          <button
-            className="cl-dialog-btn cl-dialog-btn--ok"
-            disabled={!view.ok}
-            style={view.ok ? undefined : { opacity: 0.4, cursor: 'not-allowed' }}
-            onClick={handleConfirm}
-          >OK</button>
+        <div className="cl-dialog-result" data-max-eave>
+          最高の軒の高さ: {maxEave === null ? '-' : `${formatMm(maxEave)} mm`}
         </div>
+        {pendingRisers && (
+          <div data-riser-confirm style={{ marginTop: 8, padding: 8, background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 4, fontSize: 12 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>階高の変更で次の階段の蹴上が変わります。よろしいですか？</div>
+            {pendingRisers.map(c => (
+              <div key={c.key} data-riser-line>{riserChangeLine(c)}{c.explicit ? '（指定値を書き換え）' : ''}</div>
+            ))}
+          </div>
+        )}
+        {pendingRisers ? (
+          <div className="cl-dialog-actions">
+            <button className="cl-dialog-btn cl-dialog-btn--cancel" autoFocus onClick={() => setPendingRisers(null)}>いいえ</button>
+            <button className="cl-dialog-btn cl-dialog-btn--ok" onClick={() => onConfirm(draft)}>はい</button>
+          </div>
+        ) : (
+          <div className="cl-dialog-actions">
+            <button className="cl-dialog-btn cl-dialog-btn--cancel" onClick={onCancel}>キャンセル</button>
+            <button
+              className="cl-dialog-btn cl-dialog-btn--ok"
+              disabled={!view.ok}
+              style={view.ok ? undefined : { opacity: 0.4, cursor: 'not-allowed' }}
+              onClick={handleConfirm}
+            >OK</button>
+          </div>
+        )}
       </div>
     </>
   );

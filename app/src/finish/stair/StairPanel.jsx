@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { StructuralMaterialType, StairType, StairPortSide } from '@core';
 import { computeStairDimensions, floorHeightAbove } from './stairDimensions.js';
+import { stairRiserKey } from './stairRiserFollow.js';
 import { roomBounds } from '../gridCells.js';
 import { measureStairSpans } from './stairClassify.js';
 import { stairFigurePrimitives } from './stairFigure.js';
@@ -76,6 +77,10 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
 
   const floorHeight = floorHeightAbove(project, project?.activePlane);
   const dims = computeStairDimensions(stair, { floorHeight });
+  // 階高の変更（階設定表）で蹴上が自動更新された印。今の蹴上が更新後の値と一致する間だけ出す（編集・undo で消える）
+  const riserKey = stairRiserKey(project?.activePlane?.id, stair.id);
+  const markedRiser = project?.riserAutoUpdated.get(riserKey);
+  const riserAutoUpdated = markedRiser !== undefined && dims.riser != null && Math.abs(dims.riser - markedRiser) < 1e-6;
 
   // 選択中セルの包絡矩形を bounds に、選択セル状態に即した形状・向きで模式図を描く。
   // annotatedFigure（一般解）で形状基準の縮尺を決め、注記の隙間を px 一定にする。
@@ -121,6 +126,7 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
 
   // 数値入力はキーストローク単位でなくフォーカス〜ブラーで1 undo エントリに集約する
   const num = (field) => (e) => {
+    if (field === 'riser') project?.clearRiserAutoUpdated(riserKey); // 蹴上欄を編集したら「自動更新」の印を消す
     const v = e.target.value;
     stair.setField(field, v === '' ? (field === 'riser' ? null : 0) : Number(v));
     afterEdit();
@@ -190,11 +196,17 @@ export const StairEditor = observer(({ stair, graph, project, upperGraph = null,
         <div style={rowStyle}>
           <span style={labelStyle}>蹴上(mm)</span>
           <input
-            type="number" style={inputStyle}
+            type="number"
+            style={riserAutoUpdated ? { ...inputStyle, background: '#fffbeb', borderColor: '#f59e0b' } : inputStyle}
+            title={riserAutoUpdated ? '階高の変更で自動更新されました（編集すると表示が消えます）' : undefined}
+            data-riser-auto-updated={riserAutoUpdated || undefined}
             placeholder={dims.riser != null ? `自動 ${Math.round(dims.riser)}` : '自動'}
             value={stair.riser ?? ''} onChange={num('riser')} {...fieldUndoProps}
           />
         </div>
+        {riserAutoUpdated && (
+          <div style={{ fontSize: 11, color: '#b45309', margin: '-4px 0 8px 72px' }}>階高の変更で自動更新</div>
+        )}
         <div style={rowStyle}>
           <span style={labelStyle}>蹴込(mm)</span>
           <input type="number" style={inputStyle} value={stair.nosing} onChange={num('nosing')} {...fieldUndoProps} />

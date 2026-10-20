@@ -46,6 +46,8 @@ import {
   collectProjectLevels, applyProjectLevels, rollbackFloorOp,
 } from './floorOps.js';
 import { resolveTopStoryHeightMm, computeFloorHeightEdit } from './floorHeights.js';
+import { collectFloorSettingsFacts } from './floorSettingsFacts.js';
+import { announceRiserChanges } from './finish/stair/stairRiserFollow.js';
 import { followRoofPlaneToTop } from './structural/roofPlane.js';
 import { applyFloorOrderChange, FLOOR_ORDER_KIND } from './floorOrderChange.js';
 import { FloorSettingsDialog } from './ui/FloorSettingsDialog.jsx';
@@ -67,7 +69,7 @@ import { autoFillColumnAxisOffsets, autoFillBeamEccentricity, resolveLowestGraph
 import { buildExteriorSide } from './structural/wallGate.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane, floorSettingsPlaneIdForSlot } from './structural/structuralFigureSlots.js';
-import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, setStructuralToastHandler } from './structural/structuralOrchestration.js';
+import { recomputeStructuralComposition, runStructuralModeSetup, rebuildStructuralBinding, reflectStructuralToOtherFloors, setStructuralToastHandler } from './structural/structuralOrchestration.js';
 import { structuralSync, OPENING_STRUCTURAL_SYNC } from './structural/structuralSync.js';
 import { refreshWallsAllFloors, refreshWallsForViewEntry } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
@@ -95,7 +97,7 @@ import { collectFixedMembersByFloor, clDisplayName, formatFixedMemberConfirm } f
 import {
   ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure,
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE, ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
-  ERR_ROOF_UPPER_ROOMS, ERR_STAIR_UPPER_CHECK_FAILED, ERR_STAIR_DESIGNATE_ABORTED,
+  ERR_ROOF_UPPER_ROOMS, ERR_STAIR_UPPER_CHECK_FAILED, ERR_STAIR_DESIGNATE_ABORTED, ERR_FLOOR_SETTINGS_LOAD_FAILED,
   ERR_STAIR_DESIGNATE_FAILED, ERR_STAIR_DESIGNATE_FAILED_MESSAGE,
   ERR_STAIR_DELETE_FAILED, ERR_STAIR_DELETE_FAILED_MESSAGE,
 } from './error.js';
@@ -158,7 +160,7 @@ const App = observer(() => {
   const [floorDialog,    setFloorDialog]    = useState(null); // { isLowest }
   const [floorConfirm,   setFloorConfirm]   = useState(null); // { message, buttons, onSelect }
   const [floorChangeDlg, setFloorChangeDlg] = useState(null); // { planeId }
-  const [floorSettingsDlg, setFloorSettingsDlg] = useState(null); // { planeId } — 階設定表（階高＋GL。ドラム長押し）。planeId＝長押しした位置の階
+  const [floorSettingsDlg, setFloorSettingsDlg] = useState(null); // { planeId, stairItems, leanToPlaneIds } — 階設定表（階高＋GL。ドラム長押し）。planeId＝長押しした位置の階。stairItems・leanToPlaneIds＝開くときに全階から集めた階段の要約・下屋のある階
   const [planCutHeightDlg, setPlanCutHeightDlg] = useState(null); // { planeId }
   const [ceilingCutHeightDlg, setCeilingCutHeightDlg] = useState(null); // { planeId }（天伏の切断高）
   const [showCalibration, setShowCalibration] = useState(false);
@@ -1467,12 +1469,13 @@ const App = observer(() => {
   //   屋根専用平面だけが古い高さに残るのを防ぐ）。opts.afterApply は undo/redo（と失敗時の巻き戻し）の最後に呼ぶ
   //   図の作り直し等。opts.rollbackOnError は run が例外を投げたとき、メタ・GL・変わった階のバイト列を
   //   操作前へ戻してから例外を投げ直す安全網（HEIGHTS は途中まで書いた elevation・壁を残さない）。
-  async function withFloorOpUndo(label, run, { rollbackOnError = false, afterApply } = {}) {
+  async function withFloorOpUndo(label, run, { rollbackOnError = false, afterApply, prepare, afterCommit } = {}) {
     await runBusy(label, async () => {
       // 実行中の構造同期（建具・通り芯削除起因）がactive graphを保存・差し替えしている最中に階を追加すると、
       // collectFloorBytes（アクティブ階はメモリからserializeGraph）が再計算途中の中途半端な状態を
       // before/afterのスナップショット・新階コピー元へ焼き込んでしまう（structural/structuralSync.js参照）。
       await structuralSync.whenIdle();
+      await prepare?.(); // 操作前のバイト列を採る前に済ませる処理（階設定表: 構造モードの下階の編集用 peek を止めて保留保存を確定）
       const sourcePlaneId = project.activePlaneId;
       const before = await collectFloorBytes();
       const metasBefore = collectPlaneMetas(project);
@@ -1535,7 +1538,8 @@ const App = observer(() => {
           applyProjectLevels(project, levelsBefore);
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);
           runInAction(() => followRoofPlaneToTop(project));
-          afterApply?.();
+          // afterApply は関門の中で待つ（図の作り直しの途中に階切替・モード切替を割り込ませない）
+          await afterApply?.();
         });
       }
       async function redoFloorOp() {
@@ -1552,7 +1556,7 @@ const App = observer(() => {
           // activate() が保存済み bytes を読み込む。ドラッグ移動・階変更はアクティブ階が変わらない
           // ため、無駄な切替をしない。
           if (activeAfterId !== project.activePlaneId) await handleFloorSwitch(activeAfterId);
-          afterApply?.();
+          await afterApply?.();
         });
       }
 
@@ -1560,6 +1564,8 @@ const App = observer(() => {
         () => { undoFloorOp().catch(console.error); },
         () => { redoFloorOp().catch(console.error); },
       );
+      // 確定直後の後始末（階設定表: 通知・dirty・図の作り直し）も関門の中で待つ。変更が無いとき（上の return）は呼ばない。
+      await afterCommit?.();
     });
   }
 
@@ -1941,12 +1947,22 @@ const App = observer(() => {
   }
 
   // ---- 階設定表（階高＋GL）----
-  // 入口はドラム（FloorDrum）の長押し。ダイアログを開くだけの同期操作（graph/IDB は書かない）。入力中は
-  // ダイアログがモーダルで他の操作・キー入力を塞ぐ。開くときに描画中の操作・入力中フィールドを確定／中断する。
-  function openFloorSettings(planeId) {
+  // 入口はドラム（FloorDrum）の長押し・右クリック等。非同期: beginUiTransition() で描画中の操作・入力中フィールドを
+  // 確定／中断してから、関門（runBusy）の中で全採用階の階段の要約・下屋のある階を集めてダイアログを開く
+  // （他階は peek＝IDB 読込み。蹴上の変化の確認と最高の軒の高さに使う）。読むだけで graph/IDB は書かない。
+  // 読めない階があれば表を開かずトーストを出す。開いた後はダイアログがモーダルで他の操作・キー入力を塞ぐ。
+  async function openFloorSettings(planeId) {
     if (!project.planeMap.has(planeId)) return;
     beginUiTransition();
-    setFloorSettingsDlg({ planeId });
+    await runBusy('階設定表', async () => {
+      try {
+        const { stairItems, leanToPlaneIds } = await collectFloorSettingsFacts(project);
+        setFloorSettingsDlg({ planeId, stairItems, leanToPlaneIds });
+      } catch (e) {
+        console.error(e);
+        setToast({ msg: ERR_FLOOR_SETTINGS_LOAD_FAILED, key: Date.now() });
+      }
+    });
   }
 
   // ドラムの行 id → 階設定表の階。構造モードの行 id はスロット key（slotType:planeId）なので、基礎伏図→最下階・
@@ -1960,10 +1976,32 @@ const App = observer(() => {
   // 確定後に図を作り直す（ユーザー裁定 2026-10-20）。平面の断面（上下階の peek）は floorSyncTick、展開・天伏は
   // モード状態の作り直し（catalogReloadKey＝モードに入り直すのと同じ init）。実行時のモードを appModeRef で見る
   // （undo/redo のクロージャは積んだ時点より後に実行される）。壁の鮮度の作り直しは HEIGHTS の追従（wallRefresh）が済ませている。
-  function rebuildFiguresAfterHeights() {
+  // 呼び出し側はすべて関門（runBusy）の中で await する（構造モードの合成の作り直し中に階切替・モード切替を割り込ませない）。
+  async function rebuildFiguresAfterHeights() {
     setFloorSyncTick(t => t + 1);
     const m = appModeRef.current;
     if (m === 'elevation' || m === 'ceiling') setCatalogReloadKey(k => k + 1);
+    if (m === 'structure') await rebuildStructuralAfterHeights();
+  }
+
+  // 構造モード中の階高の確定: 図面合成の下階の編集用 peek（FigureBindingManager.commit → startEditablePeek。400ms の
+  // まとめ保存）は古い壁・古い riser のグラフのまま残り、その後の編集で HEIGHTS が IDB に書いた下階を上書きしうる。
+  // 確定の前（withFloorOpUndo の prepare。操作前のバイト列を採る前に保留保存も確定する）に止め、確定後・undo/redo 後に
+  // 構造モードの合成を作り直す（バインディングの組み直しと編集用 peek の再開だけ。構造の再計算はしない）。構造モード以外では何もしない。
+  // 既存の階操作（挿入・削除・並替・階変更）は構造モード中に同じ処理を持たない（同じ穴。HEIGHTS だけ塞いである）。
+  async function stopStructuralEditablePeek() {
+    if (appModeRef.current === 'structure') await figureBindingManager.deactivate();
+  }
+  async function rebuildStructuralAfterHeights() {
+    try {
+      await figureBindingManager.deactivate();
+      if (appModeRef.current !== 'structure' || !project.activeGraph) return;
+      // runStructuralModeSetup は変化があると undo を積む（undo 中は redo スタックを消し、確定直後は OK 1回＝undo 1エントリを崩す）。
+      // 構造は HEIGHTS の structuralReflect が反映済みなので、合成の組み直しだけを行う（undo を積まない）。
+      setStructComposition(await rebuildStructuralBinding(project.activeGraph, project));
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   // 階設定表の確定。draft（編集した行・GL だけ）を computeFloorHeightEdit で再検査し、階高の変更（updates）を
@@ -1974,18 +2012,29 @@ const App = observer(() => {
     if (!edit.ok) return;
     setFloorSettingsDlg(null);
     if (edit.updates.length === 0 && edit.glBelow1FlMm === null) return;
+    let riserChanges = [];
     beginUiTransition();
     await withFloorOpUndo('階高の変更', async () => {
       if (edit.glBelow1FlMm !== null) project.setGlBelow1FlMm(edit.glBelow1FlMm);
-      await applyFloorOrderChange(project, {
+      const applied = await applyFloorOrderChange(project, {
         kind: FLOOR_ORDER_KIND.HEIGHTS,
         updates: edit.updates,
+        stairItems: floorSettingsDlg?.stairItems, // 蹴上の変更トーストの階段の表示名（判定は追従側が graph から再導出する）
         skipActiveWalls: appMode === 'finish', // 仕上げモード中の自階は仕上げ脱出の全再生成に任せる
         ui: floorOrderUi(),
       });
-    }, { rollbackOnError: true, afterApply: () => { markDirty(); rebuildFiguresAfterHeights(); } });
-    markDirty();
-    rebuildFiguresAfterHeights();
+      riserChanges = applied.riserChanges;
+    }, {
+      rollbackOnError: true,
+      prepare: stopStructuralEditablePeek,
+      afterApply: async () => { markDirty(); await rebuildFiguresAfterHeights(); },
+      // 成功後だけ・関門の中（失敗・巻き戻しでは通知も印も出さない。runFloorHeights は関門の外に処理を残さない）
+      afterCommit: async () => {
+        announceRiserChanges(project, riserChanges, floorOrderUi().notify);
+        markDirty();
+        await rebuildFiguresAfterHeights();
+      },
+    });
   }
 
   // 平面の切断高の変更。Plane の属性だけを書く同期操作（graph/IDB は書かない）ため関門は不要で、
@@ -2834,6 +2883,8 @@ const App = observer(() => {
           topHeightMm={resolveTopStoryHeightMm(project)}
           glBelow1FlMm={project.glBelow1FlMm}
           selectedPlaneId={floorSettingsDlg.planeId}
+          stairItems={floorSettingsDlg.stairItems}
+          leanToPlaneIds={floorSettingsDlg.leanToPlaneIds}
           onConfirm={guardUi(runFloorHeights)}
           onCancel={() => setFloorSettingsDlg(null)}
         />

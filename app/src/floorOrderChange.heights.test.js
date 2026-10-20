@@ -88,9 +88,9 @@ async function confirm(project, store, heights) {
   return { edit, log, calls, reflects };
 }
 
-test('HEIGHTS に適用される追従は roofPlaneHeight → wallRefresh → structuralReflect の順だけ', () => {
+test('HEIGHTS に適用される追従は roofPlaneHeight → stairRiserFollow → wallRefresh → structuralReflect の順だけ', () => {
   const names = floorOrderFollowers.filter(f => f.appliesTo.includes(FLOOR_ORDER_KIND.HEIGHTS)).map(f => f.name);
-  assert.deepEqual(names, ['roofPlaneHeight', 'wallRefresh', 'structuralReflect']);
+  assert.deepEqual(names, ['roofPlaneHeight', 'stairRiserFollow', 'wallRefresh', 'structuralReflect']);
 });
 
 test('HEIGHTS 中間階(2階)の階高変更: 3階だけ上へずれ、2階だけ壁を再生成（1・3階は鍵一致）。自階の保存が他階より先・構造反映は1回', async () => {
@@ -102,7 +102,7 @@ test('HEIGHTS 中間階(2階)の階高変更: 3階だけ上へずれ、2階だ�
   assert.equal(project.planeMap.get('p1').elevation, 0);
   assert.equal(project.planeMap.get('p2').elevation, 3000);
   assert.equal(project.planeMap.get('p3').elevation, 6200);
-  assert.deepEqual(calls, ['roofPlaneHeight', 'wallRefresh', 'structuralReflect']);
+  assert.deepEqual(calls, ['roofPlaneHeight', 'stairRiserFollow', 'wallRefresh', 'structuralReflect']);
   // 自階(p1)は他階の処理の前に1回、壁を作り直した p2 だけが保存される（p3 は鍵一致で保存されない）
   assert.deepEqual(log.filter(id => id === 'p1'), ['p1']);
   assert.ok(log.indexOf('p1') < log.indexOf('p2'));
@@ -134,7 +134,7 @@ test('HEIGHTS 最上階(3階)の階高だけ変更: elevation 不変・topStoryH
   assert.deepEqual(edit.updates.map(u => [u.id, u.elevation, u.topStoryHeightMm]), [['p3', 6000, 2600]]);
   assert.equal(project.planeMap.get('p3').topStoryHeightMm, 2600);
   assert.deepEqual(log, ['p1'], '自階の書込みのみ。壁を作り直した階が無いので他階は保存されない');
-  assert.deepEqual(calls, ['roofPlaneHeight', 'wallRefresh', 'structuralReflect']);
+  assert.deepEqual(calls, ['roofPlaneHeight', 'stairRiserFollow', 'wallRefresh', 'structuralReflect']);
   assert.equal(reflects, 1, '壁が変わらなければ structuralReflect が構造反映を1回行う');
 });
 
@@ -144,7 +144,7 @@ test('【失敗系】HEIGHTS: 階高に変化が無い確定（updates 空。GL 
   assert.deepEqual(edit.updates, []);
   assert.deepEqual(log, []);
   assert.equal(reflects, 0);
-  assert.deepEqual(calls, ['roofPlaneHeight', 'wallRefresh', 'structuralReflect'], '追従は呼ばれるが中で発火しない');
+  assert.deepEqual(calls, ['roofPlaneHeight', 'stairRiserFollow', 'wallRefresh', 'structuralReflect'], '追従は呼ばれるが中で発火しない');
 });
 
 test('skipActiveWalls: 自階の壁は作り直さず、構造反映は structuralReflect が1回行う。自階は他階の前に1回保存される', async () => {
@@ -198,6 +198,6 @@ test('【失敗系】wallRefresh が reject（自階の保存が throw）: apply
     }, followers)),
     /保存失敗/,
   );
-  assert.deepEqual(calls, ['roofPlaneHeight', 'wallRefresh'], 'structuralReflect は呼ばれない');
+  assert.deepEqual(calls, ['roofPlaneHeight', 'stairRiserFollow', 'wallRefresh'], 'structuralReflect は呼ばれない');
   assert.equal(project.planeMap.get('p3').elevation, 6200, 'elevation は書かれた状態で止まる（呼び出し側が巻き戻す）');
 });

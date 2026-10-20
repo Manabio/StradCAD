@@ -26,7 +26,7 @@ test('【配線】withFloorOpUndo: GL を levelsBefore（run の前）・levelsA
 });
 
 test('【配線】withFloorOpUndo: opts（rollbackOnError・afterApply）を受ける', () => {
-  assert.match(readAppSrc(), /^\s*async function withFloorOpUndo\(label, run, \{ rollbackOnError = false, afterApply \} = \{\}\) \{\s*$/m,
+  assert.match(readAppSrc(), /^\s*async function withFloorOpUndo\(label, run, \{ rollbackOnError = false, afterApply, prepare, afterCommit \} = \{\}\) \{\s*$/m,
     'withFloorOpUndo の署名行が1行まるごとの形で見つからない');
 });
 
@@ -37,7 +37,7 @@ test('【配線】undoFloorOp: メタの後に GL を戻し、変わった階を
     'applyProjectLevels(project, levelsBefore);',
     'for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);',
     'runInAction(() => followRoofPlaneToTop(project));',
-    'afterApply?.();',
+    'await afterApply?.();',
   ];
   let prev = -1;
   for (const l of lines) {
@@ -56,7 +56,7 @@ test('【配線】redoFloorOp: メタの後に GL を進め、階のバイト列
     'for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.after);',
     'runInAction(() => followRoofPlaneToTop(project));',
     'if (activeAfterId !== project.activePlaneId) await handleFloorSwitch(activeAfterId);',
-    'afterApply?.();',
+    'await afterApply?.();',
   ];
   let prev = -1;
   for (const l of lines) {
@@ -107,9 +107,13 @@ test('【配線】runFloorHeights: 再検査 → ダイアログを閉じる →
     /^\s*updates: edit\.updates,\s*$/m,
     /^\s*skipActiveWalls: appMode === 'finish',.*$/m,
     /^\s*ui: floorOrderUi\(\),\s*$/m,
-    /^\s*\}, \{ rollbackOnError: true, afterApply: \(\) => \{ markDirty\(\); rebuildFiguresAfterHeights\(\); \} \}\);\s*$/m,
+    /^\s*rollbackOnError: true,\s*$/m,
+    /^\s*prepare: stopStructuralEditablePeek,\s*$/m,
+    /^\s*afterApply: async \(\) => \{ markDirty\(\); await rebuildFiguresAfterHeights\(\); \},\s*$/m,
+    /^\s*afterCommit: async \(\) => \{\s*$/m,
+    /^\s*announceRiserChanges\(project, riserChanges, floorOrderUi\(\)\.notify\);\s*$/m,
     /^\s*markDirty\(\);\s*$/m,
-    /^\s*rebuildFiguresAfterHeights\(\);\s*$/m,
+    /^\s*await rebuildFiguresAfterHeights\(\);\s*$/m,
   ];
   let prev = -1;
   for (const re of steps) {

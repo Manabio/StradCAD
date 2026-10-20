@@ -257,6 +257,30 @@ export function floorSettingsRows(planes, draft, topHeightMm, currentGlBelow1FlM
   };
 }
 
+/**
+ * 最高の軒の高さ（GL から、mm）。屋根が複数あるときは各屋根の軒高を比べた最大値（ユーザー裁定 2026-10-20）。
+ *   主屋根＝軒高（GL〜軒桁上端。view.eaveFromGlMm）。
+ *   下屋＝GL＋下屋が覆う階の FL＋覆う階の階高＝GL＋**屋根セルが付く階の FL**（屋根セルが付く階は覆う階の1つ上。
+ *   裁定 2026-10-20。構造の軒桁は読まない。最上階に屋根セルがあっても同じ式で最上階の FL）。
+ * floorSettingsRows の結果 view を受けるので、draft の有効な編集に即時追従する（表・断面図と同じ値の流れ）。
+ * 下屋が無ければ軒高と同じ。階が無ければ null。
+ * @param {Array} planes - 採用階（project.planes。elevation 昇順）
+ * @param {object} view - floorSettingsRows(planes, draft, topHeightMm, gl) の結果
+ * @param {Iterable<string>} [leanToPlaneIds] - 屋根セル（下屋）が付く採用階の id
+ */
+export function maxEaveHeightMm(planes, view, leanToPlaneIds = []) {
+  if (view.eaveFromGlMm === null || view.eaveFromGlMm === undefined) return null;
+  const ids = new Set(leanToPlaneIds);
+  const nFl = new Map(view.rows.map(r => [r.id, r.nFlMm]));
+  let max = view.eaveFromGlMm;
+  for (const p of planes) {
+    if (!ids.has(p.id)) continue;
+    const z = nFl.get(p.id);
+    if (z !== undefined && z > max) max = z;
+  }
+  return max;
+}
+
 // ---- 階設定表ダイアログの簡易断面図（S7。表示専用・図面には出ない）----
 
 const SAME_Z_EPS = 1e-6;

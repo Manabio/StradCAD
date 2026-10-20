@@ -24,6 +24,9 @@ import { followRoofPlaneToTop } from './structural/roofPlane.js';
 import { carryMainRoofToNewTop } from './finish/roof/mainRoofFloorSync.js';
 import { makeFloorName } from './floorNumber.js';
 import { ERR_ELEVATOR_COPY_SKIPPED } from './error.js';
+import {
+  stairRiserKey, stairItemsOfGraph, stairRiserChanges, floorHeightAboveIn,
+} from './finish/stair/stairRiserFollow.js';
 
 // 階操作の種類。'reorder'（ドラッグ移動）・'change'（階変更）も、挿入・削除と同じく
 // applyFloorOrderChange 経由で関門・undo・追従処理を伴う（Q1裁定・途中階の上階追加と階移動の
@@ -53,6 +56,40 @@ async function removeStairsOnPlane(project, plane, {
   const { removeStairOnFloor } = await import('./finish/stair/stairRemoval.js');
   runInAction(() => { for (const s of [...g.stairs]) removeStairOnFloor(g, s); });
   if (!isActive) await saveFloorFn(plane.id, serializeGraph(g)); // アクティブ階は auto-save に委ねる
+}
+
+// 階設定表の確定（HEIGHTS）で階高（floorHeightAbove）が変わった階の階段の蹴上を追従させる。
+// 確定前の elevation は before フックで採った ctx.state.elevationsBefore、確定後は ctx.project.planes。
+// 階高が変わった階だけを（アクティブ階はライブ、他階は 1 階 1 回 peek→全変更→1 回保存で）処理する。
+// 明示 riser を持つ階段は総段数を保ったまま新しい階高÷総段数に書き換える（裁定 2026-10-20）。明示の無い階段は
+// riserOf が自動で追従するので書かず、通知・印の対象にだけ入れる。undo はここでは積まない（withFloorOpUndo の全階バイト列）。
+async function followStairRisers(ctx) {
+  const before = ctx.state.elevationsBefore;
+  if (!before || ctx.updates.length === 0) return;
+  const { project } = ctx;
+  const after = project.planes.map(p => ({ id: p.id, elevation: p.elevation }));
+  const labels = new Map((ctx.stairItems ?? []).map(i => [stairRiserKey(i.planeId, i.stairId), i.label]));
+  const {
+    peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+    saveFloorFn = saveFloor,
+  } = ctx.floorIo ?? {};
+  const all = [];
+  for (const plane of project.planes) {
+    if (floorHeightAboveIn(before, plane.id) === floorHeightAboveIn(after, plane.id)) continue;
+    const isActive = plane.id === project.activePlaneId;
+    const g = isActive ? project.activeGraph : await peekFn(plane);
+    if (!g) continue;
+    const items = stairItemsOfGraph(plane.id, g).map(i => ({ ...i, label: labels.get(stairRiserKey(i.planeId, i.stairId)) }));
+    const changes = stairRiserChanges(items, before, after);
+    if (changes.length === 0) continue;
+    const rewrites = changes.filter(c => c.explicit);
+    runInAction(() => { for (const c of rewrites) g.stairMap.get(c.stairId).setField('riser', c.to); });
+    if (!isActive && rewrites.length > 0) await saveFloorFn(plane.id, serializeGraph(g)); // アクティブ階は auto-save に委ねる
+    all.push(...changes);
+  }
+  // 通知と印は全追従の成功後（呼び出し側が applyFloorOrderChange の戻り値 riserChanges で行う）。
+  // ここで出すと後段（wallRefresh 等）の失敗で巻き戻ってもトーストと印が残る。
+  ctx.state.riserChanges = all;
 }
 
 // 追従処理のレジストリ（登録順＝実行順）。各 follower は { name, appliesTo, before?(ctx), run(ctx) }。
@@ -156,6 +193,19 @@ export const floorOrderFollowers = [
     },
   },
   {
+    // 階設定表の確定（HEIGHTS）だけの追従。階高が変わった階の階段の蹴上を書き換える（followStairRisers）。
+    // wallRefresh より前に置く——蹴上は壁の鮮度キーの入力（fh と階段の riser）で、書き換えた後の値で壁を作り直す。
+    // 確定前の elevation は before フック（階の更新を適用する前）で採る。
+    name: 'stairRiserFollow',
+    appliesTo: [FLOOR_ORDER_KIND.HEIGHTS],
+    before(ctx) {
+      ctx.state.elevationsBefore = ctx.project.planes.map(p => ({ id: p.id, elevation: p.elevation }));
+    },
+    async run(ctx) {
+      await followStairRisers(ctx);
+    },
+  },
+  {
     // 階設定表の確定（HEIGHTS）だけの追従。階高が変わると壁の鮮度キー（fh＝floorHeightAbove）が変わる階
     // （階高を変えた階）の壁を作り直す。鍵が一致する階は peek 以外何もしない（発火条件＝鍵不一致のみ）。
     // 階の追加・削除・並べ替えには足さない（それらは階高を保ち、鍵の入力が変わらない・または変わる階は
@@ -245,13 +295,16 @@ export const floorOrderFollowers = [
  *   省略時は本番の floorSwapManager.peek／saveFloor。階段の削除・吹抜けの整合の follower が使う）
  * @param {boolean} [opts.skipActiveWalls] - HEIGHTS の壁の再生成で自階を除く（仕上げモード中。仕上げ脱出の
  *   全再生成に任せる）。floorIo の peekFn／saveFloorFn／loadMaterialMapFn は wallRefresh follower も使う
+ * @param {Array<{planeId:string, stairId:string, label:string}>} [opts.stairItems] - HEIGHTS の蹴上追従のトースト用の
+ *   階段の表示名（階設定表を開くときに集めたもの。無ければ「階段」）。書き換えの判定には使わない（graph から再導出する）
  * @param {Array} [followers] - 既定 floorOrderFollowers（テスト用に差し替え可能）
- * @returns {Promise<{addedPlane:object|null, halted:boolean}>}
+ * @returns {Promise<{addedPlane:object|null, halted:boolean, riserChanges:Array}>} riserChanges＝HEIGHTS で蹴上が変わった
+ *   階段の一覧（stairRiserChanges の形）。通知・印は呼び出し側が成功後に行う（announceRiserChanges）
  */
 export async function applyFloorOrderChange(project, opts, followers = floorOrderFollowers) {
-  const { kind, updates, addPlane, removePlane, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo, skipActiveWalls } = opts;
+  const { kind, updates, addPlane, removePlane, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo, skipActiveWalls, stairItems } = opts;
   const ctx = {
-    project, kind, updates, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo, skipActiveWalls,
+    project, kind, updates, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo, skipActiveWalls, stairItems,
     addedPlane: null, targetPlaneId: null, state: {},
   };
 
@@ -282,5 +335,5 @@ export async function applyFloorOrderChange(project, opts, followers = floorOrde
     if (result === false) { halted = true; break; }
   }
 
-  return { addedPlane: ctx.addedPlane, halted };
+  return { addedPlane: ctx.addedPlane, halted, riserChanges: ctx.state.riserChanges ?? [] };
 }

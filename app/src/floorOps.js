@@ -526,7 +526,7 @@ export async function rollbackFloorOp(project, {
       else await deleteFloorFn(planeId);
     }
   } finally {
-    afterApply?.(); // バイト列の採取・書戻しが失敗しても、戻したメタに合わせて図は作り直す
+    await afterApply?.(); // バイト列の採取・書戻しが失敗しても、戻したメタに合わせて図は作り直す
   }
 }
 

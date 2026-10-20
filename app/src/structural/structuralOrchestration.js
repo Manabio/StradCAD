@@ -536,6 +536,20 @@ export async function runStructuralModeSetup(targetGraph, project, { onToast, ct
   }, undefined, onToast);
 }
 
+/**
+ * 構造モードの図面合成だけを組み直す（バインディングの再構築と下階の編集用 peek の再開）。構造の再計算も
+ * undo の積み込みもしない。階設定表の確定（構造は HEIGHTS の structuralReflect が反映済み）と、その undo/redo の後で、
+ * 古いグラフを掴んだままの編集用 peek を差し替えるのに使う（runStructuralModeSetup は変化があると undo を積み、
+ * undo 中に呼ぶと redo スタックが消える）。呼び出し側は先に figureBindingManager.deactivate() 済みでなくてよい
+ * （activate が内部で止める）。
+ * @returns {Promise<object>} composition（呼び出し側が setStructComposition する）
+ */
+export async function rebuildStructuralBinding(targetGraph, project) {
+  const composition = await figureBindingManager.activate(getFigure(STRUCTURAL_FIGURE_ID), targetGraph.plane, targetGraph, project);
+  figureBindingManager.commit(composition);
+  return composition;
+}
+
 // ---- 構造モードへの外部問合せ（階追加・仕上げ退出時に、構造モードに入らず構造部材を更新する）----
 // mainStructure は屋根平面（軒桁）でのみ意味を持つが、ここでの対象は常に実体階なので自階の実効値でよい。
 

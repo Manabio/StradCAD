@@ -238,6 +238,10 @@ export const ERR_ELEVATOR_COPY_FAILED_MESSAGE = '昇降機の複製に失敗し�
 export const ERR_ELEVATOR_COPY_SKIPPED = (floorName, count) =>
   `${floorName}へ複製できなかった昇降機があります（${count}基）。`;
 
+// 階設定表を開くとき、全階の階段・下屋を読めなかった場合（階高の変更で蹴上が変わる階段を確かめられないまま
+// 確定させないため、表を開かない）。
+export const ERR_FLOOR_SETTINGS_LOAD_FAILED = '階の読込みに失敗したため、階設定表を開けませんでした。';
+
 // 階削除に伴う昇降機の再採番（finish/equipment/equipmentFloorSync.js
 // renumberEquipmentAfterFloorRemoval）専用のエラーコード（ステップ6）。他階の保存直前の例外で
 // 保存済みの階を before へ巻き戻した後、このコードで包み直して再スローする。

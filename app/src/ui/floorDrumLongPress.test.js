@@ -268,10 +268,15 @@ test('【配線】FloorDrum: 縦長のピル（展開・折りたたみとも）
   assert.match(code, /^\s*onPointerEnter=\{e => \{ if \(e\.pointerType !== 'touch'\) setExpanded\(true\); \}\}.*$/m, 'タッチを除く pointerenter の行が見つからない');
 });
 
-test('【配線】App.jsx: openFloorSettings は存在しない階を無視し、beginUiTransition() してからダイアログを開く', () => {
-  const body = extractFunctionBody(fs.readFileSync(appSrcPath, 'utf8'), 'function openFloorSettings');
+test('【配線】App.jsx: openFloorSettings は存在しない階を無視し、beginUiTransition() → runBusy の中で全階の事実を集めてからダイアログを開く', () => {
+  const body = extractFunctionBody(fs.readFileSync(appSrcPath, 'utf8'), 'async function openFloorSettings');
   assert.match(body, /^\s*if \(!project\.planeMap\.has\(planeId\)\) return;\s*$/m, '階の存在確認行が見つからない');
   assert.match(body, /^\s*beginUiTransition\(\);\s*$/m, 'beginUiTransition(); が見つからない');
-  assert.match(body, /^\s*setFloorSettingsDlg\(\{ planeId \}\);\s*$/m, 'setFloorSettingsDlg({ planeId }); が見つからない');
-  assert.ok(body.indexOf('beginUiTransition();') < body.indexOf('setFloorSettingsDlg({ planeId });'), 'beginUiTransition がダイアログを開くより前にない');
+  assert.match(body, /^\s*await runBusy\('階設定表', async \(\) => \{\s*$/m, 'await runBusy(階設定表 の行が見つからない');
+  assert.match(body, /^\s*const \{ stairItems, leanToPlaneIds \} = await collectFloorSettingsFacts\(project\);\s*$/m, '全階の事実を集める行が見つからない');
+  assert.match(body, /^\s*setFloorSettingsDlg\(\{ planeId, stairItems, leanToPlaneIds \}\);\s*$/m, 'setFloorSettingsDlg({ planeId, stairItems, leanToPlaneIds }); が見つからない');
+  assert.match(body, /^\s*setToast\(\{ msg: ERR_FLOOR_SETTINGS_LOAD_FAILED, key: Date\.now\(\) \}\);\s*$/m, '読込み失敗のトースト行が見つからない');
+  const order = ['beginUiTransition();', "await runBusy('階設定表'", 'await collectFloorSettingsFacts(project);', 'setFloorSettingsDlg({ planeId, stairItems, leanToPlaneIds });'];
+  const idx = order.map(s => body.indexOf(s));
+  assert.ok(idx.every((v, i) => v >= 0 && (i === 0 || v > idx[i - 1])), `順序が beginUiTransition → runBusy → 収集 → 表示 でない: ${idx}`);
 });

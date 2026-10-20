@@ -68,6 +68,10 @@ export class Project {
     // （finish/equipment/buildingEquipment.js floorEquipmentRowLists 参照）。昇降機の仕様追加
     // ステップ4・S4）。
     this.equipmentIndex = observable.map({}, { deep: false });
+    // 階高の変更（階設定表の確定）で蹴上が自動更新された階段の印（非永続の一時状態。FBS には載せない）。
+    // `${planeId}:${stairId}` → 更新後の蹴上(mm)。仕上げモードの階段の蹴上欄が「今の蹴上が更新後の値と一致する間だけ」
+    // 印を出す（欄を編集する・undo で値が戻ると出なくなる）。文書を開き直すと Project ごと作り直されて消える。
+    this.riserAutoUpdated = observable.map({}, { deep: false });
 
     // カタログのR17（重複登録禁止）合成後例外・overlay読込み失敗等のメッセージ通知
     // （2026-09-22 QA指摘B。2026-09-22 再QA指摘Major-Dで通知専用に整理）。
@@ -115,6 +119,8 @@ export class Project {
       clearOpeningNumberIndex: action,
       replaceEquipmentIndex: action,
       clearEquipmentIndex: action,
+      markRiserAutoUpdated: action,
+      clearRiserAutoUpdated: action,
       setSiteInfo:     action,
       setBuildingInfo: action,
       setCatalogError: action,
@@ -125,6 +131,10 @@ export class Project {
   }
 
   setGlBelow1FlMm(v)    { this.glBelow1FlMm = v; }
+  /** 蹴上が階高の変更で更新された階段の印を立てる。entries＝[[key, 更新後の蹴上], …]（key は stairRiserKey）。 */
+  markRiserAutoUpdated(entries) { for (const [key, riser] of entries) this.riserAutoUpdated.set(key, riser); }
+  /** 印を消す（蹴上欄の編集時）。 */
+  clearRiserAutoUpdated(key) { this.riserAutoUpdated.delete(key); }
   setSiteInfo(info)     { this.projectInfo.siteInfo = info; }
   setBuildingInfo(info) { this.projectInfo.buildingInfo = info; }
   /** 都度発火（同一文言でも再通知できるよう毎回 catalogErrorSeq を進める）。 */
