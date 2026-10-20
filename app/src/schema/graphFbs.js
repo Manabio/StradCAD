@@ -41,7 +41,7 @@ const SHAFT_SOUNDPROOF_ENC = { none: 0, insulation: 1 };
 // フィールドインデックス定数
 // ================================================================
 
-// GraphSnapshot (root): 54 フィールド
+// GraphSnapshot (root): 55 フィールド
 const GS = {
   CLS: 0, PTS: 1, WALLS: 2, DIAGS: 3, VLINES: 4, HLINES: 5, ARCS: 6, CIRCS: 7, DIMS: 8, ROOMS: 9, ROOM_ORDER: 10,
   // 11 は旧 INTERIOR_WALL_PANEL（内壁面材の per-floor 設定。部屋の壁材へ移行し廃止。slot 予約）
@@ -90,6 +90,8 @@ const GS = {
   // 主屋根の仕様（RS テーブル。最上階の外部タブ先頭の固定の群。per-floor。末尾追加）。
   // 既定値のときはフィールド自体を書かない（既存文書のバイト列を変えない。読み側は無ければ既定値）。
   MAIN_ROOF_SPEC: 53,
+  // GL は 1FL の何 mm 下か（float64。0=1FLとGLが同じ。plane一覧チャネル〔serializePlanes〕でだけ使う project 単位の値。末尾追加）
+  GL_BELOW_1FL_MM: 54,
 };
 
 // Stair: 15 フィールド
@@ -222,7 +224,7 @@ const CE = { CL_ID: 0, MODE: 1, VALUE: 2, SIDE: 3, BACKING: 4 };
 // KneeDropWall（腰壁・垂れ壁レコード）: 5 フィールド
 const KDW = { KEY: 0, HAS_KNEE: 1, KNEE_TOP: 2, HAS_DROP: 3, DROP_BOTTOM: 4 };
 
-// Plane（plane一覧のメタデータ）: 12 フィールド
+// Plane（plane一覧のメタデータ）: 13 フィールド
 const PLN = {
   ID: 0, ELEV: 1, NAME: 2, START_FLOOR: 3, STORIES: 4,
   IS_ALT: 5, REF_ID: 6, ALT_INDEX: 7, IS_ROOF: 8, ROOF_FOR: 9,
@@ -230,6 +232,8 @@ const PLN = {
   PLAN_CUT_HEIGHT: 10,
   // 末尾追加（天伏の切断高 FL+mm。無い/0 の旧データは読み側で既定 DEFAULT_CEILING_CUT_HEIGHT_MM）
   CEILING_CUT_HEIGHT: 11,
+  // 末尾追加（この階が最上階のときの1層分の階高 FL〜軒桁上端 mm。0=未設定。既定への読み替えは floorHeights.js 側）
+  TOP_STORY_HEIGHT: 12,
 };
 
 // Site（敷地図全体）: 5 フィールド
@@ -851,7 +855,7 @@ function writePlane(b, p) {
   const sRefId   = b.createString(p.referenceId ?? '');
   const sRoofFor = b.createString(p.roofForPlaneId ?? '');
 
-  b.startObject(12);
+  b.startObject(13);
   b.addFieldOffset(PLN.ID,           sId,   0);
   b.addFieldFloat64(PLN.ELEV,        p.elevation ?? 0, 0.0);
   b.addFieldOffset(PLN.NAME,         sName, 0);
@@ -864,6 +868,7 @@ function writePlane(b, p) {
   b.addFieldOffset(PLN.ROOF_FOR,     sRoofFor, 0);
   b.addFieldFloat64(PLN.PLAN_CUT_HEIGHT, p.planCutHeightMm ?? 0, 0.0); // 0=未設定（読み側で既定）
   b.addFieldFloat64(PLN.CEILING_CUT_HEIGHT, p.ceilingCutHeightMm ?? 0, 0.0); // 同上
+  b.addFieldFloat64(PLN.TOP_STORY_HEIGHT, p.topStoryHeightMm ?? 0, 0.0); // 0=未設定（読み側 floorHeights.js で既定）
   return b.endObject();
 }
 
@@ -1622,6 +1627,7 @@ function readPlane(bb, tablePos) {
     roofForPlaneId: r.str(PLN.ROOF_FOR) || null,
     planCutHeightMm: r.f64(PLN.PLAN_CUT_HEIGHT) || DEFAULT_PLAN_CUT_HEIGHT_MM,
     ceilingCutHeightMm: r.f64(PLN.CEILING_CUT_HEIGHT) || DEFAULT_CEILING_CUT_HEIGHT_MM,
+    topStoryHeightMm: r.f64(PLN.TOP_STORY_HEIGHT), // 0=未設定のまま返す（既定の読み替えは floorHeights.js）
   };
 }
 
@@ -1939,7 +1945,7 @@ export function encode(snapshot) {
   const equipmentRowsVec = writeVec(b, snapshot.equipmentRows ?? [], writeEquipmentRow);
   const mainRoofSpecOff = writeRoofSpec(b, snapshot.mainRoofSpec ?? null); // null（既定値）は何も書かない（0）
 
-  b.startObject(54);
+  b.startObject(55);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -1993,6 +1999,7 @@ export function encode(snapshot) {
   b.addFieldInt8(GS.SHAFT_SOUNDPROOF, SHAFT_SOUNDPROOF_ENC[snapshot.shaftSoundproof] ?? 0, 0);
   b.addFieldOffset(GS.EQUIPMENT_ROWS, equipmentRowsVec, 0);
   b.addFieldOffset(GS.MAIN_ROOF_SPEC, mainRoofSpecOff, 0);
+  b.addFieldFloat64(GS.GL_BELOW_1FL_MM, snapshot.glBelow1FlMm ?? 0, 0.0);
   const root = b.endObject();
 
   b.finish(root);
@@ -2076,5 +2083,6 @@ export function decode(bytes) {
     shaftSoundproof:     SHAFT_SOUNDPROOF_DEC[r.i8(GS.SHAFT_SOUNDPROOF)] ?? null,
     equipmentRows:       r.vec(GS.EQUIPMENT_ROWS, readEquipmentRow),
     mainRoofSpec:        readRoofSpec(bb, r.nested(GS.MAIN_ROOF_SPEC)),
+    glBelow1FlMm:        r.f64(GS.GL_BELOW_1FL_MM),
   };
 }

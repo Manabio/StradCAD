@@ -32,7 +32,8 @@ export class Plane {
               isAlternative = false, referenceId = null, altIndex = 0,
               isRoofPlane = false, roofForPlaneId = null,
               planCutHeightMm = DEFAULT_PLAN_CUT_HEIGHT_MM,
-              ceilingCutHeightMm = DEFAULT_CEILING_CUT_HEIGHT_MM) {
+              ceilingCutHeightMm = DEFAULT_CEILING_CUT_HEIGHT_MM,
+              topStoryHeightMm = 0) {
     this.id            = id;
     this.elevation     = elevation;
     this.name          = name;
@@ -46,7 +47,10 @@ export class Plane {
     this.roofForPlaneId = roofForPlaneId; // どの実体平面の上に乗る屋根平面か（structural/roofPlane.js 参照）
     this.planCutHeightMm = planCutHeightMm; // 平面の切断高（FL+mm）。読み取りは planCutHeightMmOf
     this.ceilingCutHeightMm = ceilingCutHeightMm; // 天伏（見上げ）の切断高（FL+mm）。読み取りは ceilingCutHeightMmOf
+    // この階が最上階のときの1層分の階高（FL〜軒桁上端 mm）。0＝未設定。最上階のときだけ読む。読み取りは floorHeights.js topStoryHeightMmOf
+    this.topStoryHeightMm = topStoryHeightMm;
     makeObservable(this, {
+      topStoryHeightMm: observable,
       planCutHeightMm: observable,
       ceilingCutHeightMm: observable,
       elevation:      observable,

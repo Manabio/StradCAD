@@ -33,6 +33,9 @@ export class Project {
 
     this.activePlaneId = null;
 
+    // GL（建物の基準地盤）＝1FL − この値(mm)。0＝1FLとGLが同じ高さ。内部の基準は常に「1FL＝0」（Plane.elevation）
+    this.glBelow1FlMm = 0;
+
     // 全階共通の通り芯専用グラフ（labeled struct CL のみ格納）
     const structPlane = new Plane('struct', 0, '__struct__');
     this.structGraph  = new PlanGraph(structPlane);
@@ -95,6 +98,8 @@ export class Project {
     makeObservable(this, {
       name:          observable,
       activePlaneId: observable,
+      glBelow1FlMm:  observable,
+      setGlBelow1FlMm: action,
       catalogError:  observable,
       catalogErrorSeq: observable,
       catalogOverlayUntrusted: observable,
@@ -119,6 +124,7 @@ export class Project {
     });
   }
 
+  setGlBelow1FlMm(v)    { this.glBelow1FlMm = v; }
   setSiteInfo(info)     { this.projectInfo.siteInfo = info; }
   setBuildingInfo(info) { this.projectInfo.buildingInfo = info; }
   /** 都度発火（同一文言でも再通知できるよう毎回 catalogErrorSeq を進める）。 */
@@ -172,9 +178,9 @@ export class Project {
   addPlane(elevation, name, id = crypto.randomUUID(), startFloor = 1, stories = 1,
            isAlternative = false, referenceId = null, altIndex = 0,
            isRoofPlane = false, roofForPlaneId = null, planCutHeightMm = undefined,
-           ceilingCutHeightMm = undefined) {
+           ceilingCutHeightMm = undefined, topStoryHeightMm = undefined) {
     const plane = new Plane(id, elevation, name, startFloor, stories, isAlternative, referenceId, altIndex,
-                             isRoofPlane, roofForPlaneId, planCutHeightMm, ceilingCutHeightMm);
+                             isRoofPlane, roofForPlaneId, planCutHeightMm, ceilingCutHeightMm, topStoryHeightMm);
     const graph = new PlanGraph(plane);
     graph._structGraph = this.structGraph; // 全階共通の通り芯を参照
     graph._structuralInfo = this.structuralInfo; // 建物全体の構造情報（主構造ルールの解決用）

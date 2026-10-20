@@ -20,6 +20,13 @@ test('【配線】store.js restorePlanesFromIDB: 天伏の切断高も同型（t
   assert.match(body, /^\s*p\.ceilingCutHeightMm = m\.ceilingCutHeightMm;\s*$/m, 'toUpdate の p.ceilingCutHeightMm = m.ceilingCutHeightMm; が無い');
 });
 
+test('【配線】store.js restorePlanesFromIDB: 階設定表（toAdd は addPlane の末尾に m.topStoryHeightMm、toUpdate は p.topStoryHeightMm、GL は project.setGlBelow1FlMm）', () => {
+  const body = extractFunctionBody(storeSrc, 'async function restorePlanesFromIDB');
+  assert.match(body, /^\s*m\.topStoryHeightMm,\s*$/m, 'addPlane の引数に m.topStoryHeightMm が行の形で無い');
+  assert.match(body, /^\s*p\.topStoryHeightMm = m\.topStoryHeightMm;\s*$/m, 'toUpdate の p.topStoryHeightMm = m.topStoryHeightMm; が無い');
+  assert.match(body, /^\s*project\.setGlBelow1FlMm\(metas\.glBelow1FlMm \?\? 0\);\s*(\/\/.*)?$/m, 'GL の復元が行の形で無い');
+});
+
 test('【配線】store.js addFloor: planCutHeightMm 引数を project.addPlane の第11引数へ素通しする', () => {
   const body = extractFunctionBody(storeSrc, 'export function addFloor');
   assert.match(body, /project\.addPlane\(elevation, name, planeId, startFloor, stories,\s*false, null, 0, false, null, planCutHeightMm, ceilingCutHeightMm\);/,

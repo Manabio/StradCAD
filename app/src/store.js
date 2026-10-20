@@ -160,6 +160,7 @@ async function restorePlanesFromIDB() {
         m.elevation, m.name, m.id, m.startFloor, m.stories,
         m.isAlternative, m.referenceId, m.altIndex, m.isRoofPlane, m.roofForPlaneId,
         m.planCutHeightMm, m.ceilingCutHeightMm,
+        m.topStoryHeightMm,
       );
       if (!hasBytes) addDefaultDimensionLines(newGraph);
     }
@@ -177,7 +178,9 @@ async function restorePlanesFromIDB() {
       p.roofForPlaneId = m.roofForPlaneId;
       p.planCutHeightMm = m.planCutHeightMm;
       p.ceilingCutHeightMm = m.ceilingCutHeightMm;
+      p.topStoryHeightMm = m.topStoryHeightMm;
     }
+    project.setGlBelow1FlMm(metas.glBelow1FlMm ?? 0); // project 単位の値（旧データ＝フィールド無しは 0）
     for (const id of result.toRemove) project.removePlane(id);
     if (result.activePlaneId) project.activePlaneId = result.activePlaneId;
   });

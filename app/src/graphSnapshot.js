@@ -435,14 +435,16 @@ export function serializePlanes(project) {
       altIndex: p.altIndex, isRoofPlane: p.isRoofPlane, roofForPlaneId: p.roofForPlaneId ?? null,
       planCutHeightMm: p.planCutHeightMm,
       ceilingCutHeightMm: p.ceilingCutHeightMm,
+      topStoryHeightMm: p.topStoryHeightMm,
     })),
     activePlaneId: project.activePlaneId ?? null,
+    glBelow1FlMm: project.glBelow1FlMm, // project 単位の値（階設定表の GL）。plane 一覧と同じチャネルで運ぶ
   });
 }
 
 export function decodePlanes(bytes) {
-  const { planes, activePlaneId } = decode(bytes);
-  return { planes, activePlaneId };
+  const { planes, activePlaneId, glBelow1FlMm } = decode(bytes);
+  return { planes, activePlaneId, glBelow1FlMm };
 }
 
 // ----------------------------------------------------------------

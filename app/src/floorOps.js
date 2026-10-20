@@ -313,6 +313,7 @@ export function collectPlaneMetas(project) {
     id: p.id, name: p.name, startFloor: p.startFloor, elevation: p.elevation, stories: p.stories,
     planCutHeightMm: p.planCutHeightMm,
     ceilingCutHeightMm: p.ceilingCutHeightMm,
+    topStoryHeightMm: p.topStoryHeightMm,
   }));
 }
 
@@ -379,7 +380,8 @@ function planeMetasEqual(a, b) {
     if (x.id !== y.id || x.name !== y.name || x.startFloor !== y.startFloor
       || x.elevation !== y.elevation || x.stories !== y.stories
       || x.planCutHeightMm !== y.planCutHeightMm
-      || x.ceilingCutHeightMm !== y.ceilingCutHeightMm) return false;
+      || x.ceilingCutHeightMm !== y.ceilingCutHeightMm
+      || x.topStoryHeightMm !== y.topStoryHeightMm) return false;
   }
   return true;
 }
@@ -401,6 +403,7 @@ export function applyPlaneMetas(project, metas) {
       if (m.stories !== undefined) plane.stories = m.stories;
       if (m.planCutHeightMm !== undefined) plane.planCutHeightMm = m.planCutHeightMm; // undefined なら触らない
       if (m.ceilingCutHeightMm !== undefined) plane.ceilingCutHeightMm = m.ceilingCutHeightMm; // 同上
+      if (m.topStoryHeightMm !== undefined) plane.topStoryHeightMm = m.topStoryHeightMm; // 同上
     }
   });
 }

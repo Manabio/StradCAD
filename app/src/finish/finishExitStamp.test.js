@@ -231,7 +231,8 @@ test('token others: 他の平面が文字列形式（正規化できない）の
 // 階のスナップショット（decode の戻り）のキーのうち、階の内容でないもの（別チャネルで保存され、graph から
 // 直列化されない）。planes・activePlaneId は plane 一覧、site は敷地、structuralInfo・tagRegistryKeys・
 // tagRegistryVals は通り芯グラフ（project の token の structBytes）が持つ。階の graph を変えても動かない。
-const NOT_FLOOR_SNAPSHOT_KEYS = ['planes', 'activePlaneId', 'site', 'structuralInfo', 'tagRegistryKeys', 'tagRegistryVals'];
+// glBelow1FlMm（GL）は plane 一覧と同じチャネル（serializePlanes＝token の planesBytes）で運ぶ project 単位の値。
+const NOT_FLOOR_SNAPSHOT_KEYS = ['planes', 'activePlaneId', 'glBelow1FlMm', 'site', 'structuralInfo', 'tagRegistryKeys', 'tagRegistryVals'];
 
 // 自階 A に追加する中身（変更行が足したり並べ替えたりできるように、各種を入れておく）。
 function enrichSelf(w) {

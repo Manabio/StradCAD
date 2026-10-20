@@ -718,6 +718,37 @@ test('setCeilingCutHeightMm: 変更すると { before, after } を返し、undo/
   assert.equal(project.planeMap.get('p1').ceilingCutHeightMm, 2100); // 他階は不変
 });
 
+// ---- 最上階の階高（topStoryHeightMm。階設定表 S1）----
+
+test('collectPlaneMetas / applyPlaneMetas: 全項目を既定値以外にした往復で topStoryHeightMm が保たれる', () => {
+  const project = makeThreeFloorsWithCeilingCutHeights();
+  project.planeMap.get('p1').topStoryHeightMm = 2501;
+  project.planeMap.get('p3').topStoryHeightMm = 2750;
+  const before = collectPlaneMetas(project);
+  assert.deepEqual(before.map(m => m.topStoryHeightMm), [2501, 0, 2750]);
+  for (const p of project.planeMap.values()) {
+    p.name = 'x'; p.startFloor += 10; p.elevation += 77; p.stories = 2;
+    p.planCutHeightMm = 1; p.ceilingCutHeightMm = 2; p.topStoryHeightMm = 3;
+  }
+  applyPlaneMetas(project, before);
+  assert.deepEqual(collectPlaneMetas(project), before);
+});
+
+test('applyPlaneMetas: topStoryHeightMm が undefined のエントリでは触らない', () => {
+  const project = makeThreeFloorsWithCeilingCutHeights();
+  project.planeMap.get('p2').topStoryHeightMm = 2600;
+  applyPlaneMetas(project, [{ id: 'p2', name: '2階', startFloor: 2, elevation: 3000 }]);
+  assert.equal(project.planeMap.get('p2').topStoryHeightMm, 2600);
+});
+
+test('diffFloorOpSnapshot: topStoryHeightMm だけの変化も metasChanged になる', () => {
+  const project = makeThreeFloorsWithCeilingCutHeights();
+  const metasBefore = collectPlaneMetas(project);
+  project.planeMap.get('p3').topStoryHeightMm = 2800;
+  const d = diffFloorOpSnapshot({ before: new Map(), after: new Map(), metasBefore, metasAfter: collectPlaneMetas(project) });
+  assert.equal(d.metasChanged, true);
+});
+
 // ---- ステップ1: renumberPlanesFrom（振り直しの純関数）----
 
 function makeFourFloors() {

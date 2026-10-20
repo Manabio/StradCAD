@@ -15,11 +15,13 @@ export function loadDocument(path) {
   const doc = parseDocumentEnvelope(JSON.parse(fs.readFileSync(path, 'utf8')));
   const project = new Project('probe', 'probe');
   if (doc.struct) restoreStructCLs(project.structGraph, project.structuralInfo, doc.struct, project.memberGroupLedger);
-  const { planes, activePlaneId } = doc.planes ? decodePlanes(doc.planes) : { planes: [], activePlaneId: null };
+  const { planes, activePlaneId, glBelow1FlMm } = doc.planes ? decodePlanes(doc.planes) : { planes: [], activePlaneId: null };
   for (const p of planes) {
     project.addPlane(p.elevation, p.name, p.id, p.startFloor, p.stories,
-      p.isAlternative, p.referenceId, p.altIndex, p.isRoofPlane, p.roofForPlaneId, p.planCutHeightMm, p.ceilingCutHeightMm);
+      p.isAlternative, p.referenceId, p.altIndex, p.isRoofPlane, p.roofForPlaneId, p.planCutHeightMm, p.ceilingCutHeightMm,
+      p.topStoryHeightMm);
   }
+  project.setGlBelow1FlMm(glBelow1FlMm ?? 0);
   for (const f of doc.floors) {
     const graph = project.graphMap.get(f.planeId);
     if (!graph) continue;

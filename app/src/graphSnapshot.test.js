@@ -1824,6 +1824,55 @@ test('decodePlanes: 天伏の切断高フィールドの無い旧データ（フ
   assert.deepEqual(planes.map(p => p.planCutHeightMm), [1100, 1200]);
 });
 
+// ---- 階設定表（Plane.topStoryHeightMm・Project.glBelow1FlMm）----
+test('serializePlanes → decodePlanes: topStoryHeightMm と glBelow1FlMm が往復する（未設定の階は 0 のまま・既定へ読み替えない）', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0,    '1階', 'p1', 1, 1);
+  project.addPlane(3000, '2階', 'p2', 2, 1);
+  project.addPlane(0, '検討A', 'alt1', 1, 1, true, 'p1', 0);
+  project.planeMap.get('p2').topStoryHeightMm = 2750.5;
+  project.planeMap.get('alt1').topStoryHeightMm = 1800;
+  project.setGlBelow1FlMm(450);
+
+  const { planes, glBelow1FlMm } = decodePlanes(serializePlanes(project));
+  const byId = Object.fromEntries(planes.map(p => [p.id, p]));
+  assert.equal(byId.p1.topStoryHeightMm, 0, '未設定は 0');
+  assert.equal(byId.p2.topStoryHeightMm, 2750.5);
+  assert.equal(byId.alt1.topStoryHeightMm, 1800);
+  assert.equal(glBelow1FlMm, 450);
+});
+
+test('【失敗系】decodePlanes: 新フィールドの無い旧バイト列は topStoryHeightMm=0・glBelow1FlMm=0 で読める', () => {
+  const bytes = encode({
+    planes: [
+      { id: 'old', elevation: 0, name: '1階', startFloor: 1, stories: 1, isAlternative: false,
+        referenceId: null, altIndex: 0, isRoofPlane: false, roofForPlaneId: null, planCutHeightMm: 1100, ceilingCutHeightMm: 1200 },
+    ],
+    activePlaneId: 'old',
+  });
+  const { planes, glBelow1FlMm } = decodePlanes(bytes);
+  assert.equal(planes[0].topStoryHeightMm, 0);
+  assert.equal(glBelow1FlMm, 0);
+  assert.equal(planes[0].planCutHeightMm, 1100);
+});
+
+test('階設定表の既定値（topStoryHeightMm=0・glBelow1FlMm=0）はバイト列に書かれない（既存文書のバイト列が変わらない）', () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0, '1階', 'p1', 1, 1);
+  const withDefaults = serializePlanes(project);
+  const oldShape = encode({
+    planes: [
+      { id: 'p1', elevation: 0, name: '1階', startFloor: 1, stories: 1, isAlternative: false,
+        referenceId: null, altIndex: 0, isRoofPlane: false, roofForPlaneId: null,
+        planCutHeightMm: project.planeMap.get('p1').planCutHeightMm, ceilingCutHeightMm: project.planeMap.get('p1').ceilingCutHeightMm },
+    ],
+    activePlaneId: 'p1',
+  });
+  assert.deepEqual(withDefaults, oldShape);
+  project.planeMap.get('p1').topStoryHeightMm = 2900;
+  assert.notDeepEqual(serializePlanes(project), oldShape);
+});
+
 // ---- 失敗パス: decodePlanesへの不正バイト列 ----
 test('decodePlanes: 不正なバイト列（他データの断片）を渡しても例外を投げず、planes:[]・activePlaneId:nullへグレースフルにフォールバックする', () => {
   // graphFbs.js の手書きreaderはフィールド不在時にデフォルト値（空vec/空str）を返す設計のため、
