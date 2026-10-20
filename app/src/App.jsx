@@ -42,8 +42,9 @@ import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
   applyFloorBytes, blocksFloorRemoval, diffFloorOpSnapshot,
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
-  computeFloorDeleteReorder, computeFloorInsert, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm, setCeilingCutHeightMm,
+  computeFloorDeleteReorder, computeFloorInsert, computeFloorAddLowerElevations, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm, setCeilingCutHeightMm,
 } from './floorOps.js';
+import { resolveTopStoryHeightMm } from './floorHeights.js';
 import { applyFloorOrderChange, FLOOR_ORDER_KIND } from './floorOrderChange.js';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { buildFloorChipModel } from './ui/floorChipModel.js';
@@ -1503,7 +1504,7 @@ const App = observer(() => {
         await runBusy(label + 'のredo', async () => {
           applyPlaneMetas(project, metasAfter);
           for (const pl of addedPlanes) {
-            addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm, pl.ceilingCutHeightMm);
+            addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm, pl.ceilingCutHeightMm, pl.topStoryHeightMm);
             const bytes = addedBytes.get(pl.id);
             if (bytes != null) await saveFloor(pl.id, bytes);
           }
@@ -1527,13 +1528,13 @@ const App = observer(() => {
   async function executeAddUpper(currentPlane) {
     beginUiTransition();
     await withFloorOpUndo('階追加', async () => {
-      const insert = computeFloorInsert(project.planes, currentPlane.id, 1);
+      const insert = computeFloorInsert(project.planes, currentPlane.id, 1, { topHeightMm: resolveTopStoryHeightMm(project) });
       if (!insert) return;
       const { newPlane, updates } = insert;
       await applyFloorOrderChange(project, {
         kind: FLOOR_ORDER_KIND.INSERT,
         updates,
-        addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm),
+        addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm, newPlane.topStoryHeightMm),
         sourceGraph: project.activeGraph,
         newStartFloor: newPlane.startFloor,
         ui: floorOrderUi(),
@@ -1556,14 +1557,15 @@ const App = observer(() => {
       beginUiTransition();
       await withFloorOpUndo('階追加', async () => {
         // 下階 n 階分+: 表示中の開始階から連鎖して n 本追加（上の階はずれないため updates は空）。
-        const lowestElevation = project.planes[0]?.elevation ?? 0;
+        // 各新階は元の最下階の階高を引き継ぐ（既存階は動かさない）。
+        const lowerElevations = computeFloorAddLowerElevations(project.planes, n, { topHeightMm: resolveTopStoryHeightMm(project) });
         let prevFloor = currentPlane.startFloor;
         const addPlane = () => {
           let lastPlane = null;
           for (let i = 1; i <= n; i++) {
             const sf   = subtractSkipZero(prevFloor, 1);
             const name = makeFloorName(sf, 1);
-            const elev = lowestElevation - 3000 * i;
+            const elev = lowerElevations[i - 1];
             const result = addFloor(elev, name, sf, 1, undefined, currentPlane.planCutHeightMm, currentPlane.ceilingCutHeightMm); // 切断高（平面・天伏）は表示中の階から複製
             lastPlane = result.plane;
             prevFloor = sf;
@@ -1584,13 +1586,13 @@ const App = observer(() => {
       beginUiTransition();
       await withFloorOpUndo('階追加', async () => {
         // 上階 n 階分の一般階（途中階なら直上へ挿入し、上の階をずらしてから新階を足す）
-        const insert = computeFloorInsert(project.planes, currentPlane.id, n);
+        const insert = computeFloorInsert(project.planes, currentPlane.id, n, { topHeightMm: resolveTopStoryHeightMm(project) });
         if (!insert) return;
         const { newPlane, updates } = insert;
         await applyFloorOrderChange(project, {
           kind: FLOOR_ORDER_KIND.INSERT,
           updates,
-          addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm),
+          addPlane: () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm, newPlane.topStoryHeightMm),
           sourceGraph: project.activeGraph,
           newStartFloor: newPlane.startFloor,
           ui: floorOrderUi(),
@@ -1605,7 +1607,7 @@ const App = observer(() => {
   // withFloorOpUndo（floorOrderChange.js／本ファイル）へ委譲する（Q1裁定・途中階の上階追加と
   // 階移動の振り直し一本化 ステップ4）。no-op（更新一覧が空）は関門に入らず同期で抜ける。
   async function runReorderFloor(fromId, toZone) {
-    const updates = computeFloorReorder(project.planes, fromId, toZone);
+    const updates = computeFloorReorder(project.planes, fromId, toZone, { topHeightMm: resolveTopStoryHeightMm(project) });
     if (!updates) return;
     beginUiTransition();
     await withFloorOpUndo('階操作', async () => {
@@ -1821,7 +1823,7 @@ const App = observer(() => {
       // 模して計算する（removeFloor の前に計算して渡す。途中階の上階追加と階移動の振り直し
       // 一本化 ステップ3・§4.3）。
       const afterRemoval = adopted.filter(p => p.id !== planeId);
-      const updates = computeFloorDeleteReorder(afterRemoval, idx); // 削除位置が末尾なら内部で空配列
+      const updates = computeFloorDeleteReorder(afterRemoval, idx, { planesBefore: adopted, topHeightMm: resolveTopStoryHeightMm(project) }); // 削除位置が末尾なら内部で空配列
       // 新階の追従処理（階段吹抜けの整合・昇降機の複製等）と同様、本体・追従処理は
       // applyFloorOrderChange（floorOrderChange.js）へ委譲する（器具idを読む・下階の階段を
       // 削除する・階段吹抜けを整合する・昇降機を再採番する・全階の構造反映は floorOrderFollowers 側で行う）。
@@ -1884,7 +1886,7 @@ const App = observer(() => {
   // 同期で抜ける。ダイアログを閉じる処理（setFloorChangeDlg(null)）は先頭で同期に行う。
   async function runFloorChange(planeId, newStartFloor) {
     setFloorChangeDlg(null);
-    const updates = computeFloorChangeReorder(project.planes, planeId, newStartFloor);
+    const updates = computeFloorChangeReorder(project.planes, planeId, newStartFloor, { topHeightMm: resolveTopStoryHeightMm(project) });
     if (!updates) return;
     beginUiTransition();
     await withFloorOpUndo('階操作', async () => {

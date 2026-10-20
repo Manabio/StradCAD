@@ -5,6 +5,7 @@ import { runInAction } from 'mobx';
 import { restoreGraph } from './graphSnapshot.js';
 import { saveFloor, deleteFloor as dbDeleteFloor } from './storage/db.js';
 import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
+import { STORY_HEIGHT_FALLBACK_MM, storyHeightsMm } from './floorHeights.js';
 
 // Uint8Array 同士の内容比較（null 同士は等しい）
 export function floorBytesEqual(a, b) {
@@ -44,20 +45,24 @@ export function blocksFloorRemoval(project, planeId) {
 // planes[0] を基準に fromIndex=1 とみなす）から順に startFloor・elevation・name を決め直す。
 // 挿入・ドラッグ移動・階変更・階削除の4経路が本関数へ寄せる。戻り値は { id, name, startFloor,
 // elevation } の更新一覧（値が変化する階のみ）。fromIndex が末尾以降・planes が空/1件なら空配列。
-export function renumberPlanesFrom(planes, fromIndex) {
+// heights は planes と添字を揃えた「1層分の階高(mm)」の配列。各階は自分の階高を保って積まれる
+// （階高×層数ぶん上へ）。省略・欠損は STORY_HEIGHT_FALLBACK_MM。
+export function renumberPlanesFrom(planes, fromIndex, heights = null) {
   if (!planes || planes.length === 0) return [];
   const start = fromIndex <= 0 ? 1 : fromIndex;
   if (start >= planes.length) return [];
   const base = planes[start - 1] ?? planes[0];
+  const heightAt = (i) => heights?.[i] ?? STORY_HEIGHT_FALLBACK_MM;
 
   const updates = [];
   let prevSF      = base.startFloor;
   let prevStories = base.stories;
   let prevElev    = base.elevation;
+  let prevHeight  = heightAt(start - 1);
   for (let i = start; i < planes.length; i++) {
     const plane   = planes[i];
     const newSF   = addSkipZero(prevSF + prevStories - 1, 1);
-    const newElev = prevElev + prevStories * 3000;
+    const newElev = prevElev + prevStories * prevHeight;
     // 一般階は makeFloorName、それ以外は renameFloor で書式を保持
     const name = plane.stories > 1
       ? makeFloorName(newSF, plane.stories)
@@ -68,6 +73,56 @@ export function renumberPlanesFrom(planes, fromIndex) {
     prevSF      = newSF;
     prevStories = plane.stories;
     prevElev    = newElev;
+    prevHeight  = heightAt(i);
+  }
+  return updates;
+}
+
+// order（階の並び）と添字を揃えた「1層分の階高」の配列。heightMap は storyHeightsMm の戻り値（操作前の並びから採る）。
+// 壊れたデータ（同じ elevation の階など）で導いた階高が有限の正数でないときは既定値に置き換える
+// （storyHeightsMm 自体は壊れた値をそのまま返す＝ダイアログで見せるため）。
+function saneHeight(h) {
+  return Number.isFinite(h) && h > 0 ? h : STORY_HEIGHT_FALLBACK_MM;
+}
+function heightsForOrder(order, heightMap) {
+  return order.map(p => saneHeight(heightMap.get(p.id)));
+}
+
+// 並べ替え・削除・階変更の最後に通す正規化（挿入・下階追加は 1階を動かさない経路なので通さない）: 振り直し後に startFloor===1 になる階の elevation が 0 になるよう、
+// 全採用階を同じ量だけずらす（内部の基準は「1FL=0」）。order は振り直し後の並び（id が null の要素は
+// まだ存在しない新階の仮置きで、更新一覧には載せない）、updates は更新一覧（変更する）。
+// startFloor===1 の階が無い・既に 0 ならずらさない。戻り値はずらし量（0 なら何もしていない）。
+export function normalizeFirstFloorZero(order, updates) {
+  const merged = order.map(p => {
+    const u = p.id != null ? updates.find(x => x.id === p.id) : undefined;
+    return { p, startFloor: u?.startFloor ?? p.startFloor, elevation: u?.elevation ?? p.elevation };
+  });
+  const first = merged.find(m => m.startFloor === 1);
+  if (!first || first.elevation === 0) return 0;
+  const shift = -first.elevation;
+  for (const m of merged) {
+    if (m.p.id == null) continue;
+    const hit = updates.find(u => u.id === m.p.id);
+    if (hit) {
+      hit.elevation = m.elevation + shift;
+    } else {
+      updates.push({ id: m.p.id, name: m.p.name, startFloor: m.startFloor, elevation: m.elevation + shift });
+    }
+  }
+  return shift;
+}
+
+// 最上階が入れ替わったとき、新しい最上階 newTop の topStoryHeightMm（最上階だけが読む階高）を更新一覧へ載せる
+// （既に一覧にあればそのエントリへ、無ければ現在値のエントリを足す）。
+function attachTopStoryHeight(updates, newTop, heightMm) {
+  const hit = updates.find(u => u.id === newTop.id);
+  if (hit) {
+    hit.topStoryHeightMm = heightMm;
+  } else {
+    updates.push({
+      id: newTop.id, name: newTop.name, startFloor: newTop.startFloor, elevation: newTop.elevation,
+      topStoryHeightMm: heightMm,
+    });
   }
   return updates;
 }
@@ -76,7 +131,10 @@ export function renumberPlanesFrom(planes, fromIndex) {
 // project.planes（elevation昇順）を fromId→toZone の並びへ並び替え、
 // 並替後の startFloor/elevation/name を再採番する。no-op（適用不可）なら null。
 // 戻り値は index>=1（最下階は固定）の更新差分のみ。
-export function computeFloorReorder(planes, fromId, toZone) {
+// 各階は操作前の自分の階高を保って移動する（アンカー＝最下階の elevation。従来どおり）。
+// opts.topHeightMm（resolveTopStoryHeightMm(project)）を渡すと、最上階が入れ替わったとき新しい最上階の
+// topStoryHeightMm（＝その階のそれまでの階高）も更新一覧へ載せる。省略時は載せない（最上階の階高が不明）。
+export function computeFloorReorder(planes, fromId, toZone, opts = {}) {
   const sorted = planes;
   const fromIndex = sorted.findIndex(p => p.id === fromId);
   if (fromIndex <= 0) return null;  // 最下階（index 0）はドラッグ不可
@@ -93,14 +151,35 @@ export function computeFloorReorder(planes, fromId, toZone) {
   rest.splice(rt, 0, moved);
 
   const newOrder = [bottom, ...rest];
-  return renumberPlanesFrom(newOrder, 1);
+  const heightMap = storyHeightsMm(sorted, opts.topHeightMm ?? STORY_HEIGHT_FALLBACK_MM);
+  const updates = renumberPlanesFrom(newOrder, 1, heightsForOrder(newOrder, heightMap));
+  const newTop = newOrder[newOrder.length - 1];
+  if (opts.topHeightMm !== undefined && newTop.id !== sorted[sorted.length - 1].id) {
+    attachTopStoryHeight(updates, newTop, saneHeight(heightMap.get(newTop.id)));
+  }
+  normalizeFirstFloorZero(newOrder, updates);
+  return updates;
 }
 
 // ---- 階削除の振り直し（計算部）----
 // 削除後の planesAfterRemoval（elevation昇順）で、removedIndex（削除前の採用階配列での
 // index）以降を renumberPlanesFrom へ委譲する。removedIndex が末尾（範囲外）なら空配列。
-export function computeFloorDeleteReorder(planesAfterRemoval, removedIndex) {
-  return renumberPlanesFrom(planesAfterRemoval, removedIndex);
+// opts.planesBefore（削除前の採用階の並び）を渡すと、各階は削除前の自分の階高を保って積み直され
+// （削除後の elevation 差には削除した階の分が入るため、階高は削除前の並びから採る）、最上階を削除した
+// ときは新しい最上階の topStoryHeightMm（＝削除した階との差）も更新一覧へ載せる（opts.topHeightMm
+// = resolveTopStoryHeightMm(project) も渡したときだけ）。planesBefore 省略時は全階を既定の階高で積む。
+export function computeFloorDeleteReorder(planesAfterRemoval, removedIndex, opts = {}) {
+  const { planesBefore, topHeightMm } = opts;
+  if (!planesBefore) return renumberPlanesFrom(planesAfterRemoval, removedIndex);
+
+  const heightMap = storyHeightsMm(planesBefore, topHeightMm ?? STORY_HEIGHT_FALLBACK_MM);
+  const updates = renumberPlanesFrom(planesAfterRemoval, removedIndex, heightsForOrder(planesAfterRemoval, heightMap));
+  const newTop = planesAfterRemoval[planesAfterRemoval.length - 1];
+  if (topHeightMm !== undefined && newTop && newTop.id !== planesBefore[planesBefore.length - 1].id) {
+    attachTopStoryHeight(updates, newTop, saneHeight(heightMap.get(newTop.id)));
+  }
+  normalizeFirstFloorZero(planesAfterRemoval, updates);
+  return updates;
 }
 
 // ---- 検討の並び替え（グループ内。計算部）----
@@ -177,14 +256,17 @@ export function reconcilePlanes(metas, existingIds, bootPlaneId) {
 // 差し替え、それ以降は renumberPlanesFrom で決め直す。対象階自身は elevation=直下階から導く
 // 現行ロジックを保つ（最下階なら自身の元 elevation へフォールバック）。
 // 適用不可（newStartFloor===0・planeId未検出）なら null。
-export function computeFloorChangeReorder(planes, planeId, newStartFloor) {
+// 各階は自分の階高を保つ（階の並びは変わらないので最上階も入れ替わらない＝topStoryHeightMm は触らない）。
+// opts.topHeightMm は最上階の階高（resolveTopStoryHeightMm(project)。省略時は既定）。
+export function computeFloorChangeReorder(planes, planeId, newStartFloor, opts = {}) {
   if (newStartFloor === 0) return null;
   const idx = planes.findIndex(p => p.id === planeId);
   if (idx < 0) return null;
 
+  const heights = heightsForOrder(planes, storyHeightsMm(planes, opts.topHeightMm ?? STORY_HEIGHT_FALLBACK_MM));
   const target = planes[idx];
   const newElev = idx > 0
-    ? planes[idx - 1].elevation + planes[idx - 1].stories * 3000
+    ? planes[idx - 1].elevation + planes[idx - 1].stories * heights[idx - 1]
     : planes[0].elevation;
   const newName = target.stories > 1
     ? makeFloorName(newStartFloor, target.stories)
@@ -193,13 +275,14 @@ export function computeFloorChangeReorder(planes, planeId, newStartFloor) {
 
   const newPlanes = [...planes];
   newPlanes[idx] = updatedTarget;
-  const rest = renumberPlanesFrom(newPlanes, idx + 1);
+  const rest = renumberPlanesFrom(newPlanes, idx + 1, heights);
 
   const updates = [];
   if (newName !== target.name || newStartFloor !== target.startFloor || newElev !== target.elevation) {
     updates.push({ id: updatedTarget.id, name: newName, startFloor: newStartFloor, elevation: newElev });
   }
   updates.push(...rest);
+  normalizeFirstFloorZero(newPlanes, updates);
   return updates;
 }
 
@@ -207,7 +290,7 @@ export function computeFloorChangeReorder(planes, planeId, newStartFloor) {
 // planes（elevation昇順の採用フロア一覧）で、表示中の階 currentPlaneId の直上へ stories 階分の
 // 新階を挿入するときの { newPlane, updates } を返す。newPlane は executeAddUpper／'general' の
 // 現行計算と同じ規則（topFloor = 表示中の階の最上段、addSkipZero(topFloor, 1)、
-// elevation = 表示中の階のelevation + 3000×表示中の階のstories）。updates は「新階を挿入位置の
+// elevation = 表示中の階のelevation + 階高×表示中の階のstories。階高は下記）。updates は「新階を挿入位置の
 // 直後に差し込んだ配列」で renumberPlanesFrom(arr, 挿入位置+2)（新階より上の既存階だけ。新階自身は
 // 含まない）。currentPlaneId が planes に無ければ null。地上階で、表示中の階が最上階なら
 // updates は空配列（従来の上階追加と同じ結果）。
@@ -215,33 +298,45 @@ export function computeFloorChangeReorder(planes, planeId, newStartFloor) {
 // 地階（current.startFloor < 0）での上階追加だけは「表示中の階とその下をずらす」（地上階の番号・
 // 高さは動かさない。ユーザー裁定2026-10-01）。新階（stories=n）は表示中の階の最上段に合わせて
 // startFloor = current.startFloor+current.stories-1 を基準に n-1 を引き（subtractSkipZero）、
-// elevation = current.elevation+(current.stories-n)×3000 を受け取る（current.stories=1・n=1なら
+// elevation = current.elevation+(current.stories-n)×階高 を受け取る（current.stories=1・n=1なら
 // 表示中の階の元の番号・高さをそのまま受け取る従来の式と一致。current.stories>1（複層の地階）でも
 // 新階が表示中の階の最上段に重ならないよう最上段基準で計算する——QA指摘・2026-10-01修正）。
-// 表示中の階とそれより下の採用階は全て n 階分（startFloor -= n・elevation -= 3000×n）下へずらす
+// 表示中の階とそれより下の採用階は全て n 階分（startFloor -= n・elevation -= 階高×n）下へずらす
 // （地下どうしの移動なので0をまたがない）。地上階（current.startFloor > 0）は本分岐を通らず、
 // 従来どおり「上をずらす」。
-export function computeFloorInsert(planes, currentPlaneId, stories) {
+//
+// 階高（階の高さ方向の寸法。2026-10-20 階設定表 S3）: 新階の 1層分の階高 H は、直下階（表示中の階）の階高を
+// 引き継ぐ。表示中の階が最上階で、さらに下階があるときは、表示中の階の階高をその直下階の階高に置き換え
+// （新階も同じ H を継ぐ）。下階が無い（1階建て）ときは表示中の階の自分の階高（最上階の階高）を保つ。
+// 上の既存階は各自の階高を保って積み直す。新階が最上階になるときは newPlane.topStoryHeightMm = H
+// （opts.topHeightMm = resolveTopStoryHeightMm(project) を渡したときだけ載せる。新階の addFloor が受ける）。
+// 地階分岐のずらし量も n×H。
+export function computeFloorInsert(planes, currentPlaneId, stories, opts = {}) {
   const idx = planes.findIndex(p => p.id === currentPlaneId);
   if (idx < 0) return null;
 
   const current = planes[idx];
+  const heightMap = storyHeightsMm(planes, opts.topHeightMm ?? STORY_HEIGHT_FALLBACK_MM);
+  const isTop = idx === planes.length - 1;
+  const hNew = saneHeight(isTop && idx > 0 ? heightMap.get(planes[idx - 1].id) : heightMap.get(current.id)); // 新階（と表示中の階）の階高
+  const topKey = isTop && opts.topHeightMm !== undefined ? { topStoryHeightMm: hNew } : {};
 
   if (current.startFloor < 0) {
     const n = stories;
     const currentTopFloor = current.startFloor + current.stories - 1;
     const newStartFloor = subtractSkipZero(currentTopFloor, n - 1);
-    const newElevation  = current.elevation + (current.stories - n) * 3000;
+    const newElevation  = current.elevation + (current.stories - n) * hNew;
     const newName       = makeFloorName(newStartFloor, n);
     const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories: n,
       planCutHeightMm: current.planCutHeightMm, // 平面の切断高は表示中の階から複製
-      ceilingCutHeightMm: current.ceilingCutHeightMm }; // 天伏の切断高も同じ
+      ceilingCutHeightMm: current.ceilingCutHeightMm, // 天伏の切断高も同じ
+      ...topKey };
 
     const updates = [];
     for (let i = 0; i <= idx; i++) {
       const plane       = planes[i];
       const shiftedSF   = subtractSkipZero(plane.startFloor, n);
-      const shiftedElev = plane.elevation - n * 3000;
+      const shiftedElev = plane.elevation - n * hNew;
       const name = plane.stories > 1
         ? makeFloorName(shiftedSF, plane.stories)
         : renameFloor(plane.name, shiftedSF);
@@ -252,19 +347,33 @@ export function computeFloorInsert(planes, currentPlaneId, stories) {
     return { newPlane, updates };
   }
 
-  const topFloor       = current.startFloor + current.stories - 1;
+  const topFloor      = current.startFloor + current.stories - 1;
   const newStartFloor  = addSkipZero(topFloor, 1);
   const newName        = makeFloorName(newStartFloor, stories);
-  const newElevation   = current.elevation + current.stories * 3000;
+  const newElevation   = current.elevation + current.stories * hNew;
   const newPlane = { name: newName, startFloor: newStartFloor, elevation: newElevation, stories,
     planCutHeightMm: current.planCutHeightMm, // 平面の切断高は表示中の階から複製
-    ceilingCutHeightMm: current.ceilingCutHeightMm }; // 天伏の切断高も同じ
+    ceilingCutHeightMm: current.ceilingCutHeightMm, // 天伏の切断高も同じ
+    ...topKey };
 
   const arr = [...planes];
   arr.splice(idx + 1, 0, { id: null, ...newPlane });
-  const updates = renumberPlanesFrom(arr, idx + 2);
+  const heights = arr.map((p, i) => (i === idx || i === idx + 1) ? hNew : saneHeight(heightMap.get(p.id)));
+  const updates = renumberPlanesFrom(arr, idx + 2, heights);
 
   return { newPlane, updates };
+}
+
+// ---- 最下階の下への階追加（下階追加）の各新階の elevation（計算部）----
+// planes（elevation昇順の採用フロア一覧）の最下階の下へ、1層の階を n 本積む。各新階は元の最下階の階高を
+// 引き継ぐ（最下階が最上階でもある1階建てなら、その最上階の階高 opts.topHeightMm）。既存階は動かさない
+// （1FL=0 を保つ）。戻り値は下へ i+1 本目の elevation の配列（要素 n 個）。
+export function computeFloorAddLowerElevations(planes, n, opts = {}) {
+  const heightMap = storyHeightsMm(planes, opts.topHeightMm ?? STORY_HEIGHT_FALLBACK_MM);
+  const lowest = planes[0];
+  const h = saneHeight(lowest ? heightMap.get(lowest.id) : null);
+  const base = lowest?.elevation ?? 0;
+  return Array.from({ length: n }, (_, i) => base - h * (i + 1));
 }
 
 // ---- 途中階の上階追加（挿入）の適用（振り直し一本化 ステップ2）----

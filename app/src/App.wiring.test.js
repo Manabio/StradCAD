@@ -259,8 +259,8 @@ test('【配線・強化】App.jsx: executeAddUpper は computeFloorInsert→app
   const appSrc = readAppSrc();
   const body = extractFunctionBody(appSrc, 'async function executeAddUpper');
 
-  assert.match(body, /computeFloorInsert\(project\.planes, currentPlane\.id, 1\)/,
-    'computeFloorInsert(project.planes, currentPlane.id, 1) の呼び出しが見つからない');
+  assert.match(body, /computeFloorInsert\(project\.planes, currentPlane\.id, 1, \{ topHeightMm: resolveTopStoryHeightMm\(project\) \}\)/,
+    'computeFloorInsert(project.planes, currentPlane.id, 1, { topHeightMm: ... }) の呼び出しが見つからない');
   assert.match(body, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.INSERT,/,
     'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.INSERT, ... }) の呼び出しが見つからない');
   // addFloor はaddPlaneへ渡すクロージャの中でだけ呼ぶ（振り直し前にいきなり新階を
@@ -278,8 +278,8 @@ test("【配線・強化】App.jsx: handleAddFloorConfirm の'general'分岐も 
   assert.ok(generalIdx >= 0, "'general'分岐が見つからない");
   const generalBlock = body.slice(generalIdx);
 
-  assert.match(generalBlock, /computeFloorInsert\(project\.planes, currentPlane\.id, n\)/,
-    'computeFloorInsert(project.planes, currentPlane.id, n) の呼び出しが見つからない');
+  assert.match(generalBlock, /computeFloorInsert\(project\.planes, currentPlane\.id, n, \{ topHeightMm: resolveTopStoryHeightMm\(project\) \}\)/,
+    'computeFloorInsert(project.planes, currentPlane.id, n, { topHeightMm: ... }) の呼び出しが見つからない');
   assert.match(generalBlock, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.INSERT,/,
     'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.INSERT, ... }) の呼び出しが見つからない');
 });
@@ -295,12 +295,22 @@ test("【配線・強化】App.jsx: handleAddFloorConfirm の'lower'分岐は ap
     'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.ADD_LOWER, ... }) の呼び出しが見つからない');
 });
 
+// 階設定表 S3: 下階追加の各新階の elevation は元の最下階の階高で積む（3000 固定のリテラルを持たない）。
+test("【配線】App.jsx: handleAddFloorConfirm の'lower'分岐は computeFloorAddLowerElevations で elevation を求め、3000 固定を持たない", () => {
+  const body = stripCommentLines(extractFunctionBody(readAppSrc(), 'async function handleAddFloorConfirm'));
+  const lowerBlock = body.slice(body.indexOf("if (action === 'lower') {"), body.indexOf("if (action === 'general') {"));
+  assert.match(lowerBlock, /^\s*const lowerElevations = computeFloorAddLowerElevations\(project\.planes, n, \{ topHeightMm: resolveTopStoryHeightMm\(project\) \}\);\s*$/m,
+    'computeFloorAddLowerElevations(project.planes, n, { topHeightMm: ... }) が1行まるごとの形で見つからない');
+  assert.match(lowerBlock, /^\s*const elev = lowerElevations\[i - 1\];\s*$/m, 'const elev = lowerElevations[i - 1]; が1行まるごとの形で見つからない');
+  assert.doesNotMatch(lowerBlock, /3000/, '下階追加に 3000 固定が残っている');
+});
+
 test('【配線・強化】App.jsx: runDeleteFloor は computeFloorDeleteReorder→applyFloorOrderChange(kind: DELETE) を使う（removeFloorはaddPlane/removePlaneクロージャの中だけ）', () => {
   const appSrc = readAppSrc();
   const body = extractFunctionBody(appSrc, 'async function runDeleteFloor');
 
-  assert.match(body, /computeFloorDeleteReorder\(afterRemoval, idx\)/,
-    'computeFloorDeleteReorder(afterRemoval, idx) の呼び出しが見つからない');
+  assert.match(body, /computeFloorDeleteReorder\(afterRemoval, idx, \{ planesBefore: adopted, topHeightMm: resolveTopStoryHeightMm\(project\) \}\)/,
+    'computeFloorDeleteReorder(afterRemoval, idx, { planesBefore: adopted, topHeightMm: ... }) の呼び出しが見つからない');
   assert.match(body, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.DELETE,/,
     'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.DELETE, ... }) の呼び出しが見つからない');
   assert.match(body, /removePlane: \(\) => removeFloor\(planeId\),/,
@@ -370,9 +380,18 @@ test('【配線・強化】App.jsx: redoFloorOp は addFloor の前に applyPlan
   const body = extractFunctionBody(appSrc, 'async function redoFloorOp');
 
   const applyIdx = body.indexOf('applyPlaneMetas(project, metasAfter);');
-  const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm, pl.ceilingCutHeightMm);');
+  const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm, pl.ceilingCutHeightMm, pl.topStoryHeightMm);');
   assert.ok(applyIdx >= 0 && addIdx >= 0, 'applyPlaneMetas(metasAfter) または addFloor( 呼び出しが見つからない');
   assert.ok(applyIdx < addIdx, 'applyPlaneMetas(project, metasAfter) が addFloor( より前にない');
+});
+
+// 階設定表 S3: redo は追加階を作り直すとき最上階の階高（pl.topStoryHeightMm）も addFloor へ渡す
+// （applyPlaneMetas(metasAfter) は追加階がまだ無く飛ばされるため、ここで渡さないと値が落ちる）。
+// コメント行を除いた上で、行頭・行末アンカー付きの1行一致で固定する。
+test('【配線】App.jsx: redoFloorOp は addFloor の第8引数に pl.topStoryHeightMm を渡す（最上階の階高が redo で落ちない）', () => {
+  const body = stripCommentLines(extractFunctionBody(readAppSrc(), 'async function redoFloorOp'));
+  assert.match(body, /^\s*addFloor\(pl\.elevation, pl\.name, pl\.startFloor, pl\.stories, pl\.id, pl\.planCutHeightMm, pl\.ceilingCutHeightMm, pl\.topStoryHeightMm\);\s*$/m,
+    'redoFloorOp の addFloor( が pl.topStoryHeightMm を渡す1行まるごとの形で見つからない');
 });
 
 // redoFloorOpは、追加階が無く（ドラッグ移動・階変更）activeAfterIdが変わっていない場合は
@@ -395,8 +414,8 @@ test('【配線・強化】App.jsx: runReorderFloor は computeFloorReorder( →
   const appSrc = readAppSrc();
   const body = extractFunctionBody(appSrc, 'async function runReorderFloor');
 
-  assert.match(body, /^\s*const updates = computeFloorReorder\(project\.planes, fromId, toZone\);\s*$/m,
-    'computeFloorReorder(project.planes, fromId, toZone) が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*const updates = computeFloorReorder\(project\.planes, fromId, toZone, \{ topHeightMm: resolveTopStoryHeightMm\(project\) \}\);\s*$/m,
+    'computeFloorReorder(project.planes, fromId, toZone, { topHeightMm: ... }) が1行まるごとの形で見つからない');
   assert.match(body, /^\s*if \(!updates\) return;\s*$/m, 'if (!updates) return; が1行まるごとの形で見つからない');
   assert.match(body, /^\s*beginUiTransition\(\);\s*$/m, 'beginUiTransition(); が1行まるごとの形で見つからない');
   assert.match(body, /await withFloorOpUndo\('階操作', async \(\) => \{/,
@@ -404,7 +423,7 @@ test('【配線・強化】App.jsx: runReorderFloor は computeFloorReorder( →
   assert.match(body, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.REORDER,/,
     'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.REORDER, ... }) の呼び出しが見つからない');
 
-  const computeIdx = body.indexOf('const updates = computeFloorReorder(project.planes, fromId, toZone);');
+  const computeIdx = body.indexOf('const updates = computeFloorReorder(project.planes, fromId, toZone, {');
   const beginIdx   = body.indexOf('beginUiTransition();');
   const withIdx    = body.indexOf("withFloorOpUndo('階操作', async () => {");
   const applyIdx   = body.indexOf('applyFloorOrderChange(project, {');
@@ -418,15 +437,15 @@ test('【配線・強化】App.jsx: runFloorChange は setFloorChangeDlg(null) �
   const body = extractFunctionBody(appSrc, 'async function runFloorChange');
 
   assert.match(body, /^\s*setFloorChangeDlg\(null\);\s*$/m, 'setFloorChangeDlg(null); が1行まるごとの形で見つからない');
-  assert.match(body, /^\s*const updates = computeFloorChangeReorder\(project\.planes, planeId, newStartFloor\);\s*$/m,
-    'computeFloorChangeReorder(project.planes, planeId, newStartFloor) が1行まるごとの形で見つからない');
+  assert.match(body, /^\s*const updates = computeFloorChangeReorder\(project\.planes, planeId, newStartFloor, \{ topHeightMm: resolveTopStoryHeightMm\(project\) \}\);\s*$/m,
+    'computeFloorChangeReorder(project.planes, planeId, newStartFloor, { topHeightMm: ... }) が1行まるごとの形で見つからない');
   assert.match(body, /^\s*if \(!updates\) return;\s*$/m, 'if (!updates) return; が1行まるごとの形で見つからない');
   assert.match(body, /^\s*beginUiTransition\(\);\s*$/m, 'beginUiTransition(); が1行まるごとの形で見つからない');
   assert.match(body, /applyFloorOrderChange\(project, \{\s*\n\s*kind: FLOOR_ORDER_KIND\.CHANGE,/,
     'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.CHANGE, ... }) の呼び出しが見つからない');
 
   const setDlgIdx  = body.indexOf('setFloorChangeDlg(null);');
-  const computeIdx = body.indexOf('const updates = computeFloorChangeReorder(project.planes, planeId, newStartFloor);');
+  const computeIdx = body.indexOf('const updates = computeFloorChangeReorder(project.planes, planeId, newStartFloor, {');
   const beginIdx   = body.indexOf('beginUiTransition();');
   const withIdx    = body.indexOf("withFloorOpUndo('階操作', async () => {");
   const applyIdx   = body.indexOf('applyFloorOrderChange(project, {');
@@ -465,12 +484,12 @@ test('【配線】App.jsx: 切断高 — cut-height メニューはダイアロ�
 
 test('【配線】App.jsx: 切断高の複製 — 上階追加・一般階追加は newPlane.planCutHeightMm、下階追加は currentPlane.planCutHeightMm、redo は pl.planCutHeightMm を addFloor の第6引数へ渡し、天伏の切断高（ceilingCutHeightMm）を第7引数へ渡す', () => {
   const code = stripCommentLines(readAppSrc());
-  const upper = code.match(/addPlane: \(\) => addFloor\(newPlane\.elevation, newPlane\.name, newPlane\.startFloor, newPlane\.stories, undefined, newPlane\.planCutHeightMm, newPlane\.ceilingCutHeightMm\),/g) ?? [];
+  const upper = code.match(/addPlane: \(\) => addFloor\(newPlane\.elevation, newPlane\.name, newPlane\.startFloor, newPlane\.stories, undefined, newPlane\.planCutHeightMm, newPlane\.ceilingCutHeightMm, newPlane\.topStoryHeightMm\),/g) ?? [];
   assert.equal(upper.length, 2, '上階追加（executeAddUpper）と一般階追加の2箇所');
   const upperBody = extractFunctionBody(readAppSrc(), 'async function executeAddUpper');
-  assert.ok(upperBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm)'), 'executeAddUpper が切断高を渡していない');
+  assert.ok(upperBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm, newPlane.topStoryHeightMm)'), 'executeAddUpper が切断高・最上階の階高を渡していない');
   const confirmBody = extractFunctionBody(readAppSrc(), 'async function handleAddFloorConfirm');
-  assert.ok(confirmBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm)'), 'handleAddFloorConfirm（general）が切断高を渡していない');
+  assert.ok(confirmBody.includes('newPlane.stories, undefined, newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm, newPlane.topStoryHeightMm)'), 'handleAddFloorConfirm（general）が切断高・最上階の階高を渡していない');
   assert.ok(confirmBody.includes('addFloor(elev, name, sf, 1, undefined, currentPlane.planCutHeightMm, currentPlane.ceilingCutHeightMm)'), '下階追加が currentPlane の切断高を渡していない');
 });
 

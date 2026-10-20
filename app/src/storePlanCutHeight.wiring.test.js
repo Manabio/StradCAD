@@ -27,11 +27,11 @@ test('【配線】store.js restorePlanesFromIDB: 階設定表（toAdd は addPla
   assert.match(body, /^\s*project\.setGlBelow1FlMm\(metas\.glBelow1FlMm \?\? 0\);\s*(\/\/.*)?$/m, 'GL の復元が行の形で無い');
 });
 
-test('【配線】store.js addFloor: planCutHeightMm 引数を project.addPlane の第11引数へ素通しする', () => {
+test('【配線】store.js addFloor: planCutHeightMm・ceilingCutHeightMm・topStoryHeightMm 引数を project.addPlane の第11〜13引数へ素通しする', () => {
   const body = extractFunctionBody(storeSrc, 'export function addFloor');
-  assert.match(body, /project\.addPlane\(elevation, name, planeId, startFloor, stories,\s*false, null, 0, false, null, planCutHeightMm, ceilingCutHeightMm\);/,
-    'addFloor が planCutHeightMm・ceilingCutHeightMm を addPlane の第11・12引数へ渡していない');
-  assert.match(storeSrc, /export function addFloor\(.*planCutHeightMm = undefined, ceilingCutHeightMm = undefined\) \{/, 'addFloor のシグネチャに planCutHeightMm・ceilingCutHeightMm が無い');
+  assert.match(body, /project\.addPlane\(elevation, name, planeId, startFloor, stories,\s*false, null, 0, false, null, planCutHeightMm, ceilingCutHeightMm, topStoryHeightMm\);/,
+    'addFloor が planCutHeightMm・ceilingCutHeightMm・topStoryHeightMm を addPlane の第11〜13引数へ渡していない');
+  assert.match(storeSrc, /export function addFloor\(.*planCutHeightMm = undefined, ceilingCutHeightMm = undefined, topStoryHeightMm = undefined\) \{/, 'addFloor のシグネチャに planCutHeightMm・ceilingCutHeightMm・topStoryHeightMm が無い');
 });
 
 test('【配線】store.js addAlternativeFloor: 切断高は複製元（sourcePlane）、省略時は親採用（refPlane）から渡す', () => {

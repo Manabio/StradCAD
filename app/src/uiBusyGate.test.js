@@ -187,8 +187,8 @@ test('【不変条件】App.jsx: runDeleteFloor は 削除可否の判定 < afte
 
   assert.match(body, /^\s*const afterRemoval = adopted\.filter\(p => p\.id !== planeId\);\s*$/m,
     'afterRemoval = adopted.filter(p => p.id !== planeId); が1行まるごとの形で見つからない');
-  assert.match(body, /^\s*const updates = computeFloorDeleteReorder\(afterRemoval, idx\);.*$/m,
-    'computeFloorDeleteReorder(afterRemoval, idx) の呼び出しが1行まるごとの形で見つからない');
+  assert.match(body, /^\s*const updates = computeFloorDeleteReorder\(afterRemoval, idx, \{ planesBefore: adopted, topHeightMm: resolveTopStoryHeightMm\(project\) \}\);.*$/m,
+    'computeFloorDeleteReorder(afterRemoval, idx, { planesBefore: adopted, topHeightMm: ... }) の呼び出しが1行まるごとの形で見つからない');
 
   const secondBlocksIdx = body.indexOf('blocksFloorRemoval(', body.indexOf('blocksFloorRemoval(') + 1);
   const afterRemovalIdx = body.indexOf('const afterRemoval = adopted.filter(p => p.id !== planeId);');

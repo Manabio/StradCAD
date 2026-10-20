@@ -542,11 +542,12 @@ bootReady.catch(console.error);
  * @param {string} [planeId]   plane.id（省略時は新規発番。階追加 undo の redo が同一 ID で再作成するために指定する）
  * @param {number} [planCutHeightMm]  平面の切断高（省略時は既定。階追加時は元の階の値を渡して複製する）
  * @param {number} [ceilingCutHeightMm]  天伏の切断高（planCutHeightMm と同じ扱い）
+ * @param {number} [topStoryHeightMm]  最上階の階高（省略時は未設定＝0。新階が最上階になるときと、階操作の redo で渡す）
  * @returns {{ plane, graph }}
  */
-export function addFloor(elevation, name, startFloor = 1, stories = 1, planeId = crypto.randomUUID(), planCutHeightMm = undefined, ceilingCutHeightMm = undefined) {
+export function addFloor(elevation, name, startFloor = 1, stories = 1, planeId = crypto.randomUUID(), planCutHeightMm = undefined, ceilingCutHeightMm = undefined, topStoryHeightMm = undefined) {
   const result = project.addPlane(elevation, name, planeId, startFloor, stories,
-    false, null, 0, false, null, planCutHeightMm, ceilingCutHeightMm);
+    false, null, 0, false, null, planCutHeightMm, ceilingCutHeightMm, topStoryHeightMm);
 
   // 新フロアにも寸法線を追加
   addDefaultDimensionLines(result.graph);

@@ -3,7 +3,7 @@
  *
  * 用語: nFL＝n階の床仕上げ高さ。n階階高＝nFL〜(n+1)FL。最上階の階高＝最上階FL〜軒桁上端。
  * 内部の基準は「1FL＝0」（Plane.elevation）。GL は Project.glBelow1FlMm（GL＝1FL−この値）。
- * 階の追加・振り直し（floorOps.js の 3000 固定）はここを通さない（S1 は読み口とデータモデルのみ。挙動は変えない）。
+ * 階の追加・振り直し（floorOps.js）は storyHeightsMm で操作前の並びから各階の階高を採り、それを保って積み直す（S3）。
  */
 import { rulesFor, effectiveStructure } from './structural/structureRules.js';
 
