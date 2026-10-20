@@ -43,9 +43,12 @@ import {
   applyFloorBytes, blocksFloorRemoval, diffFloorOpSnapshot,
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
   computeFloorDeleteReorder, computeFloorInsert, computeFloorAddLowerElevations, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm, setCeilingCutHeightMm,
+  collectProjectLevels, applyProjectLevels, rollbackFloorOp,
 } from './floorOps.js';
-import { resolveTopStoryHeightMm } from './floorHeights.js';
+import { resolveTopStoryHeightMm, computeFloorHeightEdit } from './floorHeights.js';
+import { followRoofPlaneToTop } from './structural/roofPlane.js';
 import { applyFloorOrderChange, FLOOR_ORDER_KIND } from './floorOrderChange.js';
+import { FloorSettingsDialog } from './ui/FloorSettingsDialog.jsx';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
 import { buildFloorChipModel } from './ui/floorChipModel.js';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
@@ -155,6 +158,7 @@ const App = observer(() => {
   const [floorDialog,    setFloorDialog]    = useState(null); // { isLowest }
   const [floorConfirm,   setFloorConfirm]   = useState(null); // { message, buttons, onSelect }
   const [floorChangeDlg, setFloorChangeDlg] = useState(null); // { planeId }
+  const [floorSettingsDlg, setFloorSettingsDlg] = useState(null); // { planeId } — 階設定表（階高＋GL。ドラム長押し）。planeId＝長押しした位置の階
   const [planCutHeightDlg, setPlanCutHeightDlg] = useState(null); // { planeId }
   const [ceilingCutHeightDlg, setCeilingCutHeightDlg] = useState(null); // { planeId }（天伏の切断高）
   const [showCalibration, setShowCalibration] = useState(false);
@@ -210,6 +214,9 @@ const App = observer(() => {
   // mode: MobX observer として描画に使用
   const [mode, setMode] = useState(null);
   const modeRef = useRef(null);
+  // いまのモード。階高の undo/redo（後から実行されるクロージャ）が、積んだ時点ではなく実行時のモードを見るための鏡
+  const appModeRef = useRef(appMode);
+  appModeRef.current = appMode;
   // 仕上げ脱出の省略の印の保管庫（メモリ上だけ。初回の階切替で作る。文書の読込み・新規は reload で消える）
   const finishExitStampsRef = useRef(null);
   const getFinishExitStamps = () => (finishExitStampsRef.current ??= createFinishExitStamps({ loadFloorFn: loadFloor, generationOf: floorWriteGeneration }));
@@ -1454,7 +1461,13 @@ const App = observer(() => {
   //         しない）
   // フロア切替・IDB 書き込みは非同期のため undo/redo 内では投げ放しで実行する
   // （完了前に次の undo を重ねると競合しうるが、通常の操作間隔では問題にならない）。
-  async function withFloorOpUndo(label, run) {
+  //   階設定表（階高＋GL）の確定も同じ経路: GL（project 単位）は levels として Plane メタと一緒に採り、
+  //   undo/redo で戻す。屋根専用平面（project.roofPlane）は階操作のスナップショット対象外のため、
+  //   undo/redo の最後に最上階へ追従させる（followRoofPlaneToTop。最上階の elevation が変わる操作で
+  //   屋根専用平面だけが古い高さに残るのを防ぐ）。opts.afterApply は undo/redo（と失敗時の巻き戻し）の最後に呼ぶ
+  //   図の作り直し等。opts.rollbackOnError は run が例外を投げたとき、メタ・GL・変わった階のバイト列を
+  //   操作前へ戻してから例外を投げ直す安全網（HEIGHTS は途中まで書いた elevation・壁を残さない）。
+  async function withFloorOpUndo(label, run, { rollbackOnError = false, afterApply } = {}) {
     await runBusy(label, async () => {
       // 実行中の構造同期（建具・通り芯削除起因）がactive graphを保存・差し替えしている最中に階を追加すると、
       // collectFloorBytes（アクティブ階はメモリからserializeGraph）が再計算途中の中途半端な状態を
@@ -1463,14 +1476,36 @@ const App = observer(() => {
       const sourcePlaneId = project.activePlaneId;
       const before = await collectFloorBytes();
       const metasBefore = collectPlaneMetas(project);
+      const levelsBefore = collectProjectLevels(project);
 
-      await run();
+      // rollbackOnError のとき、run と操作後のバイト列採取の失敗を巻き戻す（実体は floorOps.js rollbackFloorOp）。
+      // 巻き戻し自体の失敗は記録だけして、元の例外を投げ直す。
+      const rollbackIfRequested = () => (rollbackOnError
+        ? rollbackFloorOp(project, {
+          before, metasBefore, levelsBefore, collectBytes: collectFloorBytes, afterApply,
+          followRoof: (p) => runInAction(() => followRoofPlaneToTop(p)),
+        }).catch(console.error)
+        : Promise.resolve());
+
+      try {
+        await run();
+      } catch (err) {
+        await rollbackIfRequested();
+        throw err;
+      }
 
       const activeAfterId = project.activePlaneId;
-      const after = await collectFloorBytes();
+      let after;
+      try {
+        after = await collectFloorBytes();
+      } catch (err) {
+        await rollbackIfRequested();
+        throw err;
+      }
       const metasAfter = collectPlaneMetas(project);
+      const levelsAfter = collectProjectLevels(project);
       const { addedPlanes, changedSiblings, hasChanges } = diffFloorOpSnapshot({
-        before, after, metasBefore, metasAfter,
+        before, after, metasBefore, metasAfter, levelsBefore, levelsAfter,
       });
       if (!hasChanges) return;
 
@@ -1497,21 +1532,27 @@ const App = observer(() => {
           }
           for (const pl of addedPlanes) await removeFloor(pl.id);
           applyPlaneMetas(project, metasBefore);
+          applyProjectLevels(project, levelsBefore);
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);
+          runInAction(() => followRoofPlaneToTop(project));
+          afterApply?.();
         });
       }
       async function redoFloorOp() {
         await runBusy(label + 'のredo', async () => {
           applyPlaneMetas(project, metasAfter);
+          applyProjectLevels(project, levelsAfter);
           for (const pl of addedPlanes) {
             addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm, pl.ceilingCutHeightMm, pl.topStoryHeightMm);
             const bytes = addedBytes.get(pl.id);
             if (bytes != null) await saveFloor(pl.id, bytes);
           }
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.after);
+          runInAction(() => followRoofPlaneToTop(project));
           // activate() が保存済み bytes を読み込む。ドラッグ移動・階変更はアクティブ階が変わらない
           // ため、無駄な切替をしない。
           if (activeAfterId !== project.activePlaneId) await handleFloorSwitch(activeAfterId);
+          afterApply?.();
         });
       }
 
@@ -1897,6 +1938,46 @@ const App = observer(() => {
         ui: floorOrderUi(),
       });
     });
+  }
+
+  // ---- 階設定表（階高＋GL）----
+  // 入口はドラム（FloorDrum）の長押し。ダイアログを開くだけの同期操作（graph/IDB は書かない）。入力中は
+  // ダイアログがモーダルで他の操作・キー入力を塞ぐ。開くときに描画中の操作・入力中フィールドを確定／中断する。
+  function openFloorSettings(planeId) {
+    if (!project.planeMap.has(planeId)) return;
+    beginUiTransition();
+    setFloorSettingsDlg({ planeId });
+  }
+
+  // 確定後に図を作り直す（ユーザー裁定 2026-10-20）。平面の断面（上下階の peek）は floorSyncTick、展開・天伏は
+  // モード状態の作り直し（catalogReloadKey＝モードに入り直すのと同じ init）。実行時のモードを appModeRef で見る
+  // （undo/redo のクロージャは積んだ時点より後に実行される）。壁の鮮度の作り直しは HEIGHTS の追従（wallRefresh）が済ませている。
+  function rebuildFiguresAfterHeights() {
+    setFloorSyncTick(t => t + 1);
+    const m = appModeRef.current;
+    if (m === 'elevation' || m === 'ceiling') setCatalogReloadKey(k => k + 1);
+  }
+
+  // 階設定表の確定。draft（編集した行・GL だけ）を computeFloorHeightEdit で再検査し、階高の変更（updates）を
+  // applyFloorOrderChange(HEIGHTS)、GL を project.setGlBelow1FlMm で反映する。1回の OK が undo 1 エントリ
+  // （withFloorOpUndo。GL だけの変更でも積む）。不正な値が残っていれば何もしない（ダイアログが OK を塞ぐ）。
+  async function runFloorHeights(draft) {
+    const edit = computeFloorHeightEdit(project.planes, draft, resolveTopStoryHeightMm(project), project.glBelow1FlMm);
+    if (!edit.ok) return;
+    setFloorSettingsDlg(null);
+    if (edit.updates.length === 0 && edit.glBelow1FlMm === null) return;
+    beginUiTransition();
+    await withFloorOpUndo('階高の変更', async () => {
+      if (edit.glBelow1FlMm !== null) project.setGlBelow1FlMm(edit.glBelow1FlMm);
+      await applyFloorOrderChange(project, {
+        kind: FLOOR_ORDER_KIND.HEIGHTS,
+        updates: edit.updates,
+        skipActiveWalls: appMode === 'finish', // 仕上げモード中の自階は仕上げ脱出の全再生成に任せる
+        ui: floorOrderUi(),
+      });
+    }, { rollbackOnError: true, afterApply: () => { markDirty(); rebuildFiguresAfterHeights(); } });
+    markDirty();
+    rebuildFiguresAfterHeights();
   }
 
   // 平面の切断高の変更。Plane の属性だけを書く同期操作（graph/IDB は書かない）ため関門は不要で、
@@ -2605,6 +2686,7 @@ const App = observer(() => {
           : switchFloorKeepingMode                               // その他はモード維持の共通経路（境界レジストリ適用）
         )}
         isLandscape={isLandscape}
+        onLongPress={appMode === 'structure' ? undefined : guardUi(openFloorSettings)} // 長押しで階設定表（構造モードのスロットは対象外）
       />
 
       {/* ファイル選択 (hidden)。accept は付けない: iOS の Files は OS に未登録の拡張子（.stq）を
@@ -2735,6 +2817,17 @@ const App = observer(() => {
           currentStartFloor={project.planeMap.get(floorChangeDlg.planeId)?.startFloor ?? 1}
           onConfirm={guardUi(n => runFloorChange(floorChangeDlg.planeId, n))}
           onCancel={() => setFloorChangeDlg(null)}
+        />
+      )}
+
+      {floorSettingsDlg && (
+        <FloorSettingsDialog
+          planes={project.planes}
+          topHeightMm={resolveTopStoryHeightMm(project)}
+          glBelow1FlMm={project.glBelow1FlMm}
+          selectedPlaneId={floorSettingsDlg.planeId}
+          onConfirm={guardUi(runFloorHeights)}
+          onCancel={() => setFloorSettingsDlg(null)}
         />
       )}
 

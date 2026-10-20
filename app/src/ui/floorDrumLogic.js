@@ -36,6 +36,32 @@ export function nextIndexFromWheel(baseIndex, deltaY, length) {
 }
 
 /**
+ * 押した位置の階のインデックス。offsetFromCenterPx＝ドラム（マスク）の中心からの縦のずれ(px。下が正)。
+ * 中心スロットが displayIndex の階、下へ ITEM_H ごとに1階下（インデックス大）。端は収める。
+ * 階設定表の長押しが「長押しした位置の階」を決めるのに使う。
+ */
+export function indexAtPointer(displayIndex, offsetFromCenterPx, length) {
+  return clampIndex(displayIndex + Math.round(offsetFromCenterPx / ITEM_H), length);
+}
+
+/**
+ * 長押し（階設定表を開く）を始めてよいか。左ボタン（マウス）または接触（タッチ・ペン）のみ・開く手段（hasHandler）が
+ * 在る・切替の決着待ち（pendingId）でない・関門（uiBusy）が閉じている、のすべてを満たすとき。
+ */
+export function canStartFloorLongPress({ button, isPrimary = true, hasHandler, pendingId, busy }) {
+  if (!hasHandler) return false;
+  if (!isPrimary) return false; // 2本目以降の指（マルチタッチ）では始めない
+  if (button !== 0) return false;
+  if (pendingId != null) return false;
+  return !busy;
+}
+
+/** 長押しの成立時（タイマー発火）に開いてよいか。押し始めから状況が変わっていたら開かない。 */
+export function shouldFireFloorLongPress({ pendingId, busy }) {
+  return pendingId == null && !busy;
+}
+
+/**
  * 新しい切替を要求してよいか。pending 中は不可（連打無視。2つ目の要求は関門に無視されて
  * 即決着し、1つ目の pending まで外してしまうため）。対象が表示基準と同じなら不可。
  */

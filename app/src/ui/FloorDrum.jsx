@@ -1,8 +1,11 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { reaction } from 'mobx';
 import {
   ITEM_H, clampIndex, resolveDisplayId, nextIndexFromDrag, nextIndexFromWheel,
-  canRequestSwitch, requestFloorSwitch,
+  canRequestSwitch, requestFloorSwitch, indexAtPointer, canStartFloorLongPress, shouldFireFloorLongPress,
 } from './floorDrumLogic.js';
+import { useLongPress } from '../interaction/useLongPress.js';
+import { isUiBusy } from '../uiBusy.js';
 
 // ピルボタンのスタイル（isActive=現在階, dim=折りたたみ時の半透明）
 function pillStyle(isActive, dim) {
@@ -42,25 +45,64 @@ function wheelItemStyle(dist) {
 // ordered は上=上階の並び（呼び出し側で反転済み）。
 // displayIndex は表示基準の階（保留中の選択があればその階）。pendingId は切替の決着待ちの階
 // （null=待ちなし）、requestSwitch(id) は切替の要求（FloorDrum が pending の管理を持つ）。
-function FloorWheel({ ordered, displayIndex, pendingId, requestSwitch }) {
+// onLongPress(id): 長押し（約500ms・移動8px以内）で階設定表を開く入口（無ければ長押しは始めない）。
+// getPendingId(): 切替の決着待ちの階を同期に読む（長押しの発火時に状況が変わっていないかの再確認用）。
+function FloorWheel({ ordered, displayIndex, pendingId, requestSwitch, onLongPress, getPendingId }) {
   const [drag, setDrag] = useState(0);          // ドラッグ中の縦オフセット(px)
   const [dragging, setDragging] = useState(false);
   const startY = useRef(0);
+  const pressIdRef = useRef(null);       // 長押しした位置の階 id（押し始めに決める）
+  const pressActiveRef = useRef(false);  // このジェスチャで長押しを始めたか（前回の成立の持ち越しで切替を誤って抑止しないため）
+
+  // 長押し成立時に、押し始めから状況が変わっていたら（切替の決着待ち・関門）開かない。
+  const longPress = useLongPress({
+    onFire: () => {
+      if (!shouldFireFloorLongPress({ pendingId: getPendingId?.() ?? null, busy: isUiBusy() })) return;
+      if (pressIdRef.current != null) onLongPress?.(pressIdRef.current);
+    },
+  });
+  const longPressRef = useRef(null);
+  useEffect(() => { longPressRef.current = longPress; });
+
+  // 関門（階/モード切替・undo/redo・階操作）が開いたら、押し始めた長押しのタイマーを止める
+  // （App.jsx の関門開始時の中断 resetGestureRefs は FloorWheel の長押しを知らないため、ここで自前に止める）。
+  useEffect(() => reaction(() => isUiBusy(), busy => { if (busy) longPressRef.current.abort(); }), []);
+  // アンマウント時（ドラムが消える・縦長への切替）にも止める。
+  useEffect(() => () => longPressRef.current?.abort(), []);
+  // 自分が切替を要求した（決着待ちに入った）ときも止める。
+  useEffect(() => { if (pendingId != null) longPressRef.current.abort(); }, [pendingId]);
 
   const onPointerDown = e => {
     if (pendingId != null) return; // 切替の決着待ち中は新しい操作を始めない（連打無視）
     startY.current = e.clientY;
     setDragging(true);
     e.currentTarget.setPointerCapture?.(e.pointerId);
+    longPress.abort(); // 2本目の指などで begin を呼び直す前に、押し始めのタイマーを必ず止める
+    if (canStartFloorLongPress({ button: e.button, isPrimary: e.isPrimary, hasHandler: !!onLongPress, pendingId, busy: isUiBusy() })) {
+      // 押した位置の階＝ドラム中心からのずれで決める（ドラッグ前なので drag=0）
+      const rect = e.currentTarget.getBoundingClientRect();
+      const offset = e.clientY - (rect.top + rect.height / 2);
+      pressIdRef.current = ordered[indexAtPointer(displayIndex, offset, ordered.length)].id;
+      pressActiveRef.current = true;
+      longPress.begin(e.clientX, e.clientY);
+    }
   };
   const onPointerMove = e => {
     if (!dragging) return;
+    if (pressActiveRef.current) {
+      longPress.move(e.clientX, e.clientY); // 閾値を超えて動いたら長押しは取り消される（ドラッグ）
+      if (longPress.hasFired()) return;       // 成立後はドラッグで階を動かさない
+    }
     setDrag(e.clientY - startY.current);
   };
   const endDrag = e => {
     if (!dragging) return;
     setDragging(false);
     e.currentTarget.releasePointerCapture?.(e.pointerId);
+    const fired = pressActiveRef.current && longPress.hasFired();
+    pressActiveRef.current = false;
+    longPress.abort();
+    if (fired) { setDrag(0); return; } // 長押しが成立したら離しても階切替は起こさない
     // 下方向ドラッグ(正) → 上の階（インデックス小）が中心へ。
     // 離した位置から選んだ階の中心へ直接スナップする（pending が表示基準になる）。
     const next = nextIndexFromDrag(displayIndex, drag, ordered.length);
@@ -87,8 +129,10 @@ function FloorWheel({ ordered, displayIndex, pendingId, requestSwitch }) {
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onWheel={onWheel}
-      title="ドラッグ／ホイールで階を移動"
+      onContextMenu={e => e.preventDefault()}
+      title={onLongPress ? 'ドラッグ／ホイールで階を移動・長押しで階設定表' : 'ドラッグ／ホイールで階を移動'}
       style={{
+        userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none',
         position: 'fixed', zIndex: 206,
         left: 8, top: '15%', transform: 'translateY(-50%)',
         height: maskH, overflow: 'hidden',
@@ -131,7 +175,8 @@ function FloorWheel({ ordered, displayIndex, pendingId, requestSwitch }) {
 // activeFloorId : 現在表示中の階ID
 // onSwitch(id)  : 階切替
 // isLandscape   : 横長=左端縦並び / 縦長=下部横並び
-export function FloorDrum({ floors, activeFloorId, onSwitch, isLandscape }) {
+// onLongPress(id): 横長ドラムの長押し（階設定表を開く）。省略時は長押しを始めない（構造モードのスロット等）
+export function FloorDrum({ floors, activeFloorId, onSwitch, isLandscape, onLongPress }) {
   const [expanded, setExpanded] = useState(false);
   // 保留中の選択。階を選んだ瞬間から切替の決着まで、表示は選んだ階に留める。
   // pendingRef は同一フレーム内の再入力を state の再描画前でも弾くための鏡（state だけだと古い値を読む）。
@@ -152,7 +197,12 @@ export function FloorDrum({ floors, activeFloorId, onSwitch, isLandscape }) {
     const ordered = [...floors].reverse();
     const displayIndex = ordered.findIndex(f => f.id === displayId);
     if (displayIndex < 0) return null;
-    return <FloorWheel ordered={ordered} displayIndex={displayIndex} pendingId={pendingId} requestSwitch={requestSwitch} />;
+    return (
+      <FloorWheel
+        ordered={ordered} displayIndex={displayIndex} pendingId={pendingId} requestSwitch={requestSwitch}
+        onLongPress={onLongPress} getPendingId={() => pendingRef.current}
+      />
+    );
   }
 
   return (

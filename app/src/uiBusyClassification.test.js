@@ -143,6 +143,13 @@ const EXEMPT = [
       + '恒久的に対象外（途中階の上階追加と階移動の振り直し一本化 ステップ4）。',
   },
   {
+    name: 'runFloorHeights',
+    reason: '呼び出し元は階設定表ダイアログ（FloorSettingsDialog）のonConfirm（guardUiで包装済み）のみ。'
+      + 'computeFloorHeightEdit（純関数）・setFloorSettingsDlg（React state）・beginUiTransition()を同期で呼んだ後、'
+      + 'withFloorOpUndo（既に関門内で自走）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない'
+      + '（runFloorChangeと同じ判定基準）。恒久的に対象外（階設定表 S5）。',
+  },
+  {
     name: 'runDeleteCenterLine',
     reason: '呼び出し元はhandleDeleteCenterLine（GATED）のみ。deleteCenterLineWithUndo→toast→setFloorSyncTick'
       + 'を切り出した内部関数で、関門化済みの呼び出し元（runBusyの中）から呼ばれる（手動追加材'
@@ -204,8 +211,9 @@ const PENDING_COUNT = 0;
 // runBusy(コールバックが1件加わったため40→41。
 // 天伏モード（S3）のローダー .then(async m => { ... await s.init() ... }) が加わったため41→42
 // （モード切替 effect のローダーで、finish／structure 等と同型の EXEMPT。入力の関門は通らない）。
+// 階設定表 S5 で runFloorHeights が withFloorOpUndo( に渡す無名 async コールバックが1件加わったため42→43。
 const ANON_IIFE_COUNT = 3;
-const ANON_CALLBACK_COUNT = 42;
+const ANON_CALLBACK_COUNT = 43;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

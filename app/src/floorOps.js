@@ -496,6 +496,40 @@ export function applyProjectLevels(project, levels) {
   project.setGlBelow1FlMm(levels.glBelow1FlMm);
 }
 
+/**
+ * 階操作（rollbackOnError 指定）が途中で失敗したときの巻き戻し。操作前のメタ・GL を戻し、屋根専用平面を
+ * 最上階へ追従させ、バイト列が変わった階を操作前へ戻す。メタ・GL・屋根は同期で先に戻す（バイト列の採取が
+ * 失敗しても残さない）。バイト列: アクティブ階はメモリ（applyBytes）と IDB（saveFloorFn）の両方へ（失敗した
+ * 操作が途中で自階を IDB へ書いていることがある）、非アクティブ階は IDB へ await して書く（投げ放しで
+ * 関門を抜けない）。操作前に未保存（null）だった階は IDB のレコードを消す。最後に afterApply を1回呼ぶ。
+ * 既知の限界: 屋根専用平面のバイト列と structGraph は階操作の undo と同じく対象外。
+ * @param {object} project
+ * @param {{before:Map, metasBefore:Array, levelsBefore:object, collectBytes:()=>Promise<Map>,
+ *   followRoof:(project)=>void, afterApply?:()=>void,
+ *   applyBytes?:Function, saveFloorFn?:Function, deleteFloorFn?:Function}} args
+ */
+export async function rollbackFloorOp(project, {
+  before, metasBefore, levelsBefore, collectBytes, followRoof, afterApply,
+  applyBytes = applyFloorBytes, saveFloorFn = saveFloor, deleteFloorFn = dbDeleteFloor,
+}) {
+  applyPlaneMetas(project, metasBefore);
+  applyProjectLevels(project, levelsBefore);
+  followRoof(project);
+  try {
+    const failedAfter = await collectBytes();
+    for (const [planeId, beforeBytes] of before) {
+      if (!failedAfter.has(planeId) || floorBytesEqual(beforeBytes, failedAfter.get(planeId))) continue;
+      if (planeId === project.activePlaneId && project.activeGraph && beforeBytes != null) {
+        applyBytes(project, planeId, beforeBytes);
+      }
+      if (beforeBytes != null) await saveFloorFn(planeId, beforeBytes);
+      else await deleteFloorFn(planeId);
+    }
+  } finally {
+    afterApply?.(); // バイト列の採取・書戻しが失敗しても、戻したメタに合わせて図は作り直す
+  }
+}
+
 function projectLevelsEqual(a, b) {
   if (!a || !b) return !a && !b; // 片方だけ渡された＝比較不能。両方省略のときだけ「同じ」
   return a.glBelow1FlMm === b.glBelow1FlMm;

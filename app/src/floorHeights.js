@@ -165,3 +165,93 @@ export function eaveTopZMm(orderedPlanes, topHeightMm) {
   if (!top) return null;
   return top.elevation + topHeightMm * top.stories;
 }
+
+// ---- 階設定表ダイアログの表示モデル（S5。UI は持たない）----
+
+/** 編集値（文字列または数値）の検査。文字列は validateStoryHeightText、数値は整数かつ下限以上。 */
+function checkHeightInput(raw) {
+  if (typeof raw === 'string') return validateStoryHeightText(raw);
+  if (Number.isInteger(raw) && raw >= STORY_HEIGHT_MIN_MM) return { ok: true, value: raw, error: null };
+  return { ok: false, value: null, error: `階高は${STORY_HEIGHT_MIN_MM}mm以上の整数(mm)にしてください。` };
+}
+
+function draftHeightEntries(heights) {
+  return heights instanceof Map ? [...heights] : Object.entries(heights ?? {});
+}
+
+/**
+ * 階設定表ダイアログの行モデル（純関数）。draft の契約は computeFloorHeightEdit と同じ（編集した行・GL だけ）。
+ *   rows: 上＝上階の順。{ id, name, isTop, heightText（編集中は入力のまま・未編集は現在の階高）, edited, invalid, error,
+ *         nFlMm（その階の FL の GL からの高さ＝elevation＋GL。不正行は直前の有効値＝未編集扱いで追従）}
+ *   gl: { text, edited, invalid, error }（text＝GL の入力欄。未編集は現在の GL）
+ *   eaveFromGlMm: 軒高（GL〜軒桁上端）。階が無ければ null
+ *   ok: 不正な行・GL が無い（OK 可）。changed: ok かつ反映すべき変更がある
+ * nFL・軒高は draft の有効な編集を即時に反映する（不正な欄は編集前の値として扱う）。
+ */
+export function floorSettingsRows(planes, draft, topHeightMm, currentGlBelow1FlMm = 0) {
+  const initial = storyHeightsMm(planes, topHeightMm);
+  const edits = new Map();     // 編集した行 id → 生の値
+  const checks = new Map();    // 編集した行 id → 検査結果
+  for (const [id, raw] of draftHeightEntries(draft?.heights)) {
+    if (!initial.has(id)) continue;
+    edits.set(id, raw);
+    checks.set(id, checkHeightInput(raw));
+  }
+  const validHeights = {};
+  for (const [id, r] of checks) if (r.ok) validHeights[id] = r.value;
+
+  const glRaw = draft?.glBelow1FlMm;
+  const glEdited = glRaw !== undefined && glRaw !== null;
+  let glCheck = { ok: true, value: currentGlBelow1FlMm, error: null };
+  if (glEdited) {
+    glCheck = typeof glRaw === 'string'
+      ? validateGlText(glRaw)
+      : (Number.isInteger(glRaw) ? { ok: true, value: glRaw, error: null } : { ok: false, value: null, error: 'GLは整数(mm)で入力してください。' });
+  }
+  const glEffective = glEdited && glCheck.ok ? glCheck.value : currentGlBelow1FlMm;
+
+  // 有効な編集だけで確定した場合の各階の elevation（nFL・軒高の即時表示用）
+  const sanitized = computeFloorHeightEdit(planes, { heights: validHeights }, topHeightMm, currentGlBelow1FlMm);
+  const elevationOf = new Map(planes.map(p => [p.id, p.elevation]));
+  for (const u of sanitized.updates) elevationOf.set(u.id, u.elevation);
+
+  const n = planes.length;
+  const rows = planes.map((p, i) => {
+    const edited = edits.has(p.id);
+    const chk = checks.get(p.id);
+    return {
+      id: p.id,
+      name: p.name,
+      isTop: i === n - 1,
+      heightText: edited ? String(edits.get(p.id)) : String(initial.get(p.id)),
+      edited,
+      invalid: edited && !chk.ok,
+      error: edited && !chk.ok ? chk.error : null,
+      nFlMm: elevationOf.get(p.id) + glEffective,
+    };
+  }).reverse();
+
+  const top = planes[n - 1];
+  const effectiveTop = top && validHeights[top.id] !== undefined ? validHeights[top.id] : topHeightMm;
+  const eaveZ = eaveTopZMm(planes.map(p => ({ elevation: elevationOf.get(p.id), stories: p.stories })), effectiveTop);
+
+  const invalidRows = rows.some(r => r.invalid);
+  const ok = !invalidRows && glCheck.ok;
+  let changed = false;
+  if (ok) {
+    const full = computeFloorHeightEdit(planes, draft, topHeightMm, currentGlBelow1FlMm);
+    changed = full.updates.length > 0 || full.glBelow1FlMm !== null;
+  }
+  return {
+    rows,
+    gl: {
+      text: glEdited ? String(glRaw) : String(currentGlBelow1FlMm),
+      edited: glEdited,
+      invalid: glEdited && !glCheck.ok,
+      error: glEdited && !glCheck.ok ? glCheck.error : null,
+    },
+    eaveFromGlMm: eaveZ === null ? null : eaveZ + glEffective,
+    ok,
+    changed,
+  };
+}
