@@ -3,6 +3,7 @@ import { reaction } from 'mobx';
 import {
   ITEM_H, clampIndex, resolveDisplayId, nextIndexFromDrag, nextIndexFromWheel,
   canRequestSwitch, requestFloorSwitch, indexAtPointer, canStartFloorLongPress, shouldFireFloorLongPress,
+  isDrumGestureButton, shouldOpenOnContextMenu,
 } from './floorDrumLogic.js';
 import { useLongPress } from '../interaction/useLongPress.js';
 import { isUiBusy } from '../uiBusy.js';
@@ -24,6 +25,90 @@ function pillStyle(isActive, dim) {
 }
 
 const HALF_VISIBLE = 2;  // 中心の上下に露出する階数（計 2*2+1=5 階）
+
+// 長押し（横長ドラム・縦長ピル共通）。判断は floorDrumLogic の純関数、タイマーは useLongPress。
+// pressIdRef.current は押し始めに呼び出し側が決める（押した位置の階 id）。
+function useFloorLongPress({ pendingId, getPendingId, onLongPress, pressIdRef }) {
+  // 長押し成立時に、押し始めから状況が変わっていたら（切替の決着待ち・関門）開かない。
+  const longPress = useLongPress({
+    onFire: () => {
+      if (!shouldFireFloorLongPress({ pendingId: getPendingId?.() ?? null, busy: isUiBusy() })) return;
+      if (pressIdRef.current != null) onLongPress?.(pressIdRef.current);
+    },
+  });
+  const longPressRef = useRef(null);
+  useEffect(() => { longPressRef.current = longPress; });
+
+  // 関門（階/モード切替・undo/redo・階操作）が開いたら、押し始めた長押しのタイマーを止める
+  // （App.jsx の関門開始時の中断 resetGestureRefs はここの長押しを知らないため、自前に止める）。
+  useEffect(() => reaction(() => isUiBusy(), busy => { if (busy) longPressRef.current.abort(); }), []);
+  // アンマウント時（ドラムが消える・縦長への切替・ピルの入れ替え）にも止める。
+  useEffect(() => () => longPressRef.current?.abort(), []);
+  // 自分が切替を要求した（決着待ちに入った）ときも止める。
+  useEffect(() => { if (pendingId != null) longPressRef.current.abort(); }, [pendingId]);
+  return longPress;
+}
+
+// 縦長用ピル。クリックは従来どおり onClick、長押し（約500ms・移動8px以内）・マウスの右クリックで onLongPress(pressId)。
+// 成立した長押しの後のクリックは起こさない。ドラッグ／スクロール（pointercancel・移動・ポインタが外れる）で取り消す。
+function PillButton({ pressId, onLongPress, getPendingId, pendingId, onClick, style, children, ...rest }) {
+  const pressIdRef = useRef(pressId);
+  const pressActiveRef = useRef(false);
+  const suppressClickRef = useRef(false);
+  const pointerTypeRef = useRef(null);
+  const hasHandler = !!onLongPress && pressId != null;
+  const longPress = useFloorLongPress({ pendingId, getPendingId, onLongPress, pressIdRef });
+
+  const onPillDown = e => {
+    pointerTypeRef.current = e.pointerType;
+    longPress.abort();
+    suppressClickRef.current = false;
+    pressActiveRef.current = false;
+    if (!isDrumGestureButton(e.button)) return;
+    if (canStartFloorLongPress({ button: e.button, isPrimary: e.isPrimary, hasHandler, pendingId: getPendingId?.() ?? null, busy: isUiBusy() })) {
+      pressIdRef.current = pressId;
+      pressActiveRef.current = true;
+      longPress.begin(e.clientX, e.clientY);
+    }
+  };
+  const onPillMove = e => {
+    if (pressActiveRef.current) longPress.move(e.clientX, e.clientY);
+  };
+  const onPillUp = () => {
+    suppressClickRef.current = pressActiveRef.current && longPress.hasFired();
+    pressActiveRef.current = false;
+    longPress.abort();
+  };
+  const cancel = () => {
+    pressActiveRef.current = false;
+    longPress.abort();
+  };
+  const handleClick = e => {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; } // 長押し成立後のクリックは切替にしない
+    onClick?.(e);
+  };
+  const onPillContextMenu = e => {
+    e.preventDefault();
+    if (!shouldOpenOnContextMenu({ pointerType: pointerTypeRef.current, hasHandler, pendingId: getPendingId?.() ?? null, busy: isUiBusy() })) return;
+    longPress.abort(); // Mac の ctrl+クリック（button 0）で始まった長押しが 500ms 後に二重に開かないように
+    onLongPress(pressId);
+  };
+  return (
+    <button
+      {...rest}
+      onClick={handleClick}
+      onPointerDown={onPillDown}
+      onPointerMove={onPillMove}
+      onPointerUp={onPillUp}
+      onPointerCancel={cancel}
+      onPointerLeave={cancel}
+      onContextMenu={onPillContextMenu}
+      style={{ ...style, userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}
+    >
+      {children}
+    </button>
+  );
+}
 
 // 縦ドラム1階分のスタイル。中心からの距離で減衰させ、ドラムロールの遠近を演出する。
 function wheelItemStyle(dist) {
@@ -53,26 +138,23 @@ function FloorWheel({ ordered, displayIndex, pendingId, requestSwitch, onLongPre
   const startY = useRef(0);
   const pressIdRef = useRef(null);       // 長押しした位置の階 id（押し始めに決める）
   const pressActiveRef = useRef(false);  // このジェスチャで長押しを始めたか（前回の成立の持ち越しで切替を誤って抑止しないため）
+  const pointerTypeRef = useRef(null);   // 直前の pointerdown の種類（右クリックで開くのはマウスだけ）
 
-  // 長押し成立時に、押し始めから状況が変わっていたら（切替の決着待ち・関門）開かない。
-  const longPress = useLongPress({
-    onFire: () => {
-      if (!shouldFireFloorLongPress({ pendingId: getPendingId?.() ?? null, busy: isUiBusy() })) return;
-      if (pressIdRef.current != null) onLongPress?.(pressIdRef.current);
-    },
-  });
-  const longPressRef = useRef(null);
-  useEffect(() => { longPressRef.current = longPress; });
+  const longPress = useFloorLongPress({ pendingId, getPendingId, onLongPress, pressIdRef });
 
-  // 関門（階/モード切替・undo/redo・階操作）が開いたら、押し始めた長押しのタイマーを止める
-  // （App.jsx の関門開始時の中断 resetGestureRefs は FloorWheel の長押しを知らないため、ここで自前に止める）。
-  useEffect(() => reaction(() => isUiBusy(), busy => { if (busy) longPressRef.current.abort(); }), []);
-  // アンマウント時（ドラムが消える・縦長への切替）にも止める。
-  useEffect(() => () => longPressRef.current?.abort(), []);
-  // 自分が切替を要求した（決着待ちに入った）ときも止める。
-  useEffect(() => { if (pendingId != null) longPressRef.current.abort(); }, [pendingId]);
+  // 右クリック: 既定メニューは出さず、マウスの右クリックなら押した位置の階で階設定表を開く（長押しと同じ関門）。
+  const onContextMenu = e => {
+    e.preventDefault();
+    if (!shouldOpenOnContextMenu({ pointerType: pointerTypeRef.current, hasHandler: !!onLongPress, pendingId: getPendingId?.() ?? null, busy: isUiBusy() })) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const offset = e.clientY - (rect.top + rect.height / 2);
+    longPress.abort(); // Mac の ctrl+クリック（button 0）で始まった長押しが 500ms 後に二重に開かないように
+    onLongPress(ordered[indexAtPointer(displayIndex, offset, ordered.length)].id);
+  };
 
   const onPointerDown = e => {
+    pointerTypeRef.current = e.pointerType;
+    if (!isDrumGestureButton(e.button)) return; // 右・中ボタンはドラッグも切替も始めない
     if (pendingId != null) return; // 切替の決着待ち中は新しい操作を始めない（連打無視）
     startY.current = e.clientY;
     setDragging(true);
@@ -129,7 +211,7 @@ function FloorWheel({ ordered, displayIndex, pendingId, requestSwitch, onLongPre
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onWheel={onWheel}
-      onContextMenu={e => e.preventDefault()}
+      onContextMenu={onContextMenu}
       title={onLongPress ? 'ドラッグ／ホイールで階を移動・長押しで階設定表' : 'ドラッグ／ホイールで階を移動'}
       style={{
         userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none',
@@ -175,7 +257,7 @@ function FloorWheel({ ordered, displayIndex, pendingId, requestSwitch, onLongPre
 // activeFloorId : 現在表示中の階ID
 // onSwitch(id)  : 階切替
 // isLandscape   : 横長=左端縦並び / 縦長=下部横並び
-// onLongPress(id): 横長ドラムの長押し（階設定表を開く）。省略時は長押しを始めない（構造モードのスロット等）
+// onLongPress(id): 長押し／マウスの右クリック（横長ドラム・縦長ピルとも）で階設定表を開く。id は floors の id。省略時は始めない
 export function FloorDrum({ floors, activeFloorId, onSwitch, isLandscape, onLongPress }) {
   const [expanded, setExpanded] = useState(false);
   // 保留中の選択。階を選んだ瞬間から切替の決着まで、表示は選んだ階に留める。
@@ -213,31 +295,33 @@ export function FloorDrum({ floors, activeFloorId, onSwitch, isLandscape, onLong
         bottom: 52, left: '50%', transform: 'translateX(-50%)',
         flexDirection: 'row', alignItems: 'center',
       }}
-      onPointerEnter={() => setExpanded(true)}
+      onPointerEnter={e => { if (e.pointerType !== 'touch') setExpanded(true); }} // タッチは押した瞬間にピルが入れ替わると長押しが成り立たない。タップ（click）で広げる
       onPointerLeave={() => setExpanded(false)}
       onFocus={() => setExpanded(true)}
       onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setExpanded(false); }}
     >
       {expanded
         ? floors.map(f => (
-            <button
+            <PillButton
               key={f.id}
+              pressId={f.id} onLongPress={onLongPress} getPendingId={() => pendingRef.current} pendingId={pendingId}
               onClick={() => { requestSwitch(f.id); setExpanded(false); }}
               aria-current={f.id === displayId ? 'true' : undefined}
               title={f.name}
               style={pillStyle(f.id === displayId, false)}
             >
               {f.name}
-            </button>
+            </PillButton>
           ))
         : (
-            <button
+            <PillButton
+              pressId={display?.id} onLongPress={onLongPress} getPendingId={() => pendingRef.current} pendingId={pendingId}
               onClick={() => setExpanded(true)}
               title="階を移動"
               style={pillStyle(true, true)}
             >
               {display?.name ?? '階'}
-            </button>
+            </PillButton>
           )}
     </div>
   );

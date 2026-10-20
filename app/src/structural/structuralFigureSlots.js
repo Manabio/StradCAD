@@ -85,6 +85,26 @@ export function designationForSlot(slot, isActive = false) {
   }
 }
 
+/**
+ * 階設定表（ドラム長押し・右クリック）で選択状態にする階の id。slots は図面スロット列、key は押したスロットの key、
+ * planes は採用階（project.planes・標高昇順）。基礎伏図・地中梁図＝最下階、R階伏図・小屋伏図＝最上階
+ * （屋根専用平面の id は採用階に無いので使わない。ユーザー裁定 2026-10-20）。他は対応する採用階。見つからなければ null。
+ */
+export function floorSettingsPlaneIdForSlot(slots, key, planes) {
+  const slot = slots.find(s => s.key === key);
+  if (!slot || planes.length === 0) return null;
+  switch (slot.slotType) {
+    case SLOT_TYPE.FOUNDATION:
+    case SLOT_TYPE.UNDERGROUND_BEAM:
+      return planes[0].id;
+    case SLOT_TYPE.ROOF_SLAB:
+    case SLOT_TYPE.ROOF_FRAME:
+      return planes[planes.length - 1].id;
+    default:
+      return planes.some(p => p.id === slot.planeId) ? slot.planeId : null;
+  }
+}
+
 /** 指定平面に対応する最初のスロットの key（その平面へ移動したときの既定スロット）。無ければ null。 */
 export function firstSlotKeyForPlane(slots, planeId) {
   return slots.find(s => s.planeId === planeId)?.key ?? null;

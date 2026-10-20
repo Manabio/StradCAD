@@ -66,7 +66,7 @@ import { StructuralPanel } from './structural/StructuralPanel.jsx';
 import { autoFillColumnAxisOffsets, autoFillBeamEccentricity, resolveLowestGraph, axisExteriorSign } from './structural/structuralAutoFill.js';
 import { buildExteriorSide } from './structural/wallGate.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
-import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane } from './structural/structuralFigureSlots.js';
+import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane, floorSettingsPlaneIdForSlot } from './structural/structuralFigureSlots.js';
 import { recomputeStructuralComposition, runStructuralModeSetup, reflectStructuralToOtherFloors, setStructuralToastHandler } from './structural/structuralOrchestration.js';
 import { structuralSync, OPENING_STRUCTURAL_SYNC } from './structural/structuralSync.js';
 import { refreshWallsAllFloors, refreshWallsForViewEntry } from './wallRefresh.js';
@@ -1949,6 +1949,14 @@ const App = observer(() => {
     setFloorSettingsDlg({ planeId });
   }
 
+  // ドラムの行 id → 階設定表の階。構造モードの行 id はスロット key（slotType:planeId）なので、基礎伏図→最下階・
+  // 小屋伏図/R階伏図→最上階・他は対応する採用階へ読み替える（ユーザー裁定 2026-10-20）。
+  function openFloorSettingsFromDrum(rowId) {
+    openFloorSettings(appMode === 'structure'
+      ? floorSettingsPlaneIdForSlot(buildStructuralFigureSlots(project), rowId, project.planes)
+      : rowId);
+  }
+
   // 確定後に図を作り直す（ユーザー裁定 2026-10-20）。平面の断面（上下階の peek）は floorSyncTick、展開・天伏は
   // モード状態の作り直し（catalogReloadKey＝モードに入り直すのと同じ init）。実行時のモードを appModeRef で見る
   // （undo/redo のクロージャは積んだ時点より後に実行される）。壁の鮮度の作り直しは HEIGHTS の追従（wallRefresh）が済ませている。
@@ -2686,7 +2694,7 @@ const App = observer(() => {
           : switchFloorKeepingMode                               // その他はモード維持の共通経路（境界レジストリ適用）
         )}
         isLandscape={isLandscape}
-        onLongPress={appMode === 'structure' ? undefined : guardUi(openFloorSettings)} // 長押しで階設定表（構造モードのスロットは対象外）
+        onLongPress={guardUi(openFloorSettingsFromDrum)} // 長押し・右クリックで階設定表（構造モードはスロット→階に読み替える）
       />
 
       {/* ファイル選択 (hidden)。accept は付けない: iOS の Files は OS に未登録の拡張子（.stq）を

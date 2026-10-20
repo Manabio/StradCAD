@@ -61,6 +61,22 @@ export function shouldFireFloorLongPress({ pendingId, busy }) {
   return pendingId == null && !busy;
 }
 
+/** ドラム／ピルのジェスチャ（ドラッグ・長押し）を始めてよいボタンか。右・中ボタンはドラッグも切替も起こさない。 */
+export function isDrumGestureButton(button) {
+  return button === 0;
+}
+
+/**
+ * 右クリック（contextmenu）で階設定表を開いてよいか。直前の pointerdown がマウスのときだけ
+ * （タッチ・ペンの長押しでも Android/Windows は contextmenu が来るが、それは長押し側が開くので二重にしない）。
+ * 開く手段がある・決着待ちでない・関門が閉じている、も長押しと同じ。
+ */
+export function shouldOpenOnContextMenu({ pointerType, hasHandler, pendingId, busy }) {
+  if (!hasHandler) return false;
+  if (pointerType !== 'mouse') return false;
+  return pendingId == null && !busy;
+}
+
 /**
  * 新しい切替を要求してよいか。pending 中は不可（連打無視。2つ目の要求は関門に無視されて
  * 即決着し、1つ目の pending まで外してしまうため）。対象が表示基準と同じなら不可。
