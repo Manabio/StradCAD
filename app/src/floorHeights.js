@@ -7,6 +7,7 @@
  */
 import { rulesFor, effectiveStructure } from './structural/structureRules.js';
 import { toHalfWidthSignedNumber } from './halfWidth.js';
+import { addSkipZero, makeFloorLevelPrefix, makeFloorName } from './floorNumber.js';
 
 /** 階高の下限(mm)。 */
 export const STORY_HEIGHT_MIN_MM = 1450;
@@ -253,5 +254,92 @@ export function floorSettingsRows(planes, draft, topHeightMm, currentGlBelow1FlM
     eaveFromGlMm: eaveZ === null ? null : eaveZ + glEffective,
     ok,
     changed,
+  };
+}
+
+// ---- 階設定表ダイアログの簡易断面図（S7。表示専用・図面には出ない）----
+
+const SAME_Z_EPS = 1e-6;
+
+/**
+ * 簡易断面図のモデル（純関数）。高さは GL を 0 とした mm（上が正）。floorSettingsRows の結果 view をそのまま受ける
+ * （nFlMm・eaveFromGlMm は draft の有効な編集を反映済み・不正な欄は編集前の値）ので、表と断面図は常に同じ値になる。
+ *
+ * @param {Array} planes - 採用階（project.planes。elevation 昇順）
+ * @param {object} view - floorSettingsRows(planes, draft, topHeightMm, gl) の結果
+ * @returns {{lines:Array<{key,zMm,label,kind:'gl'|'fl'|'eave',planeIds:string[]}>,
+ *   dims:Array<{key,kind:'story'|'gl'|'eave',fromMm,toMm,mm,text,planeId:string|null,col:0|1}>, minZ:number, maxZ:number}}
+ *   lines＝水平線（zMm 昇順。GL と 1FL が同じ高さなら 1 本にまとめ label を「GL=1FL」とする）。
+ *   dims＝寸法。story＝各階（複層は 1 層ずつ）の階高、gl＝GL〜1FL（同じ高さなら出さない）、eave＝軒高（GL〜軒桁上端。col 1）。
+ *   複層（stories が 2 以上の整数）の中間の FL（例: 2-3階 Plane の 3FL）も 1 層ごとに線と階高寸法を持つ。
+ *   小数の stories（中間階）は 1 区間として扱い、ラベルは makeFloorName（例「1ML」）。
+ *   地階から地上へ 0 をまたぐ複層は対象外（層番号が重複する。floorOps.js の振り直しと同じ前提）。
+ */
+export function sectionDiagramModel(planes, view) {
+  const nFl = new Map(view.rows.map(r => [r.id, r.nFlMm]));
+  const raw = [{ zMm: 0, label: 'GL', kind: 'gl', planeId: null }];
+  const dims = [];
+  planes.forEach((p, i) => {
+    const base = nFl.get(p.id);
+    const next = planes[i + 1];
+    const upper = next ? nFl.get(next.id) : view.eaveFromGlMm;
+    if (base === undefined || upper === null || upper === undefined) return;
+    const layers = Number.isInteger(p.stories) && p.stories >= 1 ? p.stories : 1;
+    const h = (upper - base) / layers;
+    for (let k = 0; k < layers; k++) {
+      const z = base + k * h;
+      // 中間階（小数の stories）は既存の表記（stairFloorLabel と同じ makeFloorName。例「1ML」）に揃える
+      const label = Number.isInteger(p.stories)
+        ? `${makeFloorLevelPrefix(addSkipZero(p.startFloor, k))}FL`
+        : makeFloorName(p.startFloor, p.stories);
+      raw.push({ zMm: z, label, kind: 'fl', planeId: p.id });
+      dims.push({ key: `story:${p.id}:${k}`, kind: 'story', fromMm: z, toMm: z + h, mm: h, planeId: p.id, col: 0 });
+    }
+  });
+  if (view.eaveFromGlMm !== null && view.eaveFromGlMm !== undefined) {
+    raw.push({ zMm: view.eaveFromGlMm, label: '軒桁上端', kind: 'eave', planeId: null });
+    dims.push({ key: 'eave', kind: 'eave', fromMm: 0, toMm: view.eaveFromGlMm, mm: view.eaveFromGlMm, planeId: null, col: 1 });
+  }
+  const firstFl = planes.find(p => p.startFloor === 1);
+  const firstZ = firstFl ? nFl.get(firstFl.id) : undefined;
+  if (firstZ !== undefined && Math.abs(firstZ) > SAME_Z_EPS) {
+    dims.push({ key: 'gl', kind: 'gl', fromMm: 0, toMm: firstZ, mm: firstZ, planeId: null, col: 0 });
+  }
+
+  raw.sort((a, b) => a.zMm - b.zMm);
+  const lines = [];
+  for (const r of raw) {
+    const last = lines[lines.length - 1];
+    if (last && Math.abs(last.zMm - r.zMm) <= SAME_Z_EPS) {
+      last.label = `${last.label}=${r.label}`;
+      if (r.kind === 'eave') last.kind = 'eave';
+      if (r.planeId) last.planeIds.push(r.planeId);
+    } else {
+      lines.push({ key: `line${lines.length}`, zMm: r.zMm, label: r.label, kind: r.kind, planeIds: r.planeId ? [r.planeId] : [] });
+    }
+  }
+  for (const d of dims) d.text = String(Math.round(Math.abs(d.mm)));
+  return { lines, dims, minZ: lines[0].zMm, maxZ: lines[lines.length - 1].zMm };
+}
+
+/**
+ * 断面図のモデルを SVG 座標へ変換する（純関数）。y 下向き正なので高い方が小さい y（上階が上）。
+ * 全部の線・寸法がビューポート（0..width × 0..height）に収まる。SVG 側は返り値をそのまま描く。
+ */
+export function layoutSectionDiagram(model, opts = {}) {
+  const { width = 250, height = 320, padTop = 16, padBottom = 16, lineX1 = 60, lineX2 = 132, dimX0 = 148, dimStep = 48 } = opts;
+  const span = Math.max(model.maxZ - model.minZ, 1);
+  const scale = (height - padTop - padBottom) / span;
+  const yOf = (z) => padTop + (model.maxZ - z) * scale;
+  return {
+    width,
+    height,
+    scale,
+    lines: model.lines.map(l => ({ ...l, y: yOf(l.zMm), x1: lineX1, x2: lineX2 })),
+    dims: model.dims.map(d => {
+      const y1 = yOf(d.fromMm);
+      const y2 = yOf(d.toMm);
+      return { ...d, x: dimX0 + d.col * dimStep, y1, y2, yMid: (y1 + y2) / 2 };
+    }),
   };
 }

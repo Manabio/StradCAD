@@ -185,6 +185,14 @@ test('【配線】FloorSettingsDialog: ダイアログ内のキー — IME 変�
   }
 });
 
+test('【配線】FloorSettingsDialog: 簡易断面図は表と同じ view（floorSettingsRows の結果）から作り、選択階を渡す', () => {
+  const code = dialogCode();
+  assert.match(code, /^\s*const view = floorSettingsRows\(planes, draft, topHeightMm, glBelow1FlMm\);\s*$/m, 'view の算出行が見つからない');
+  assert.match(code, /^\s*const diagram = layoutSectionDiagram\(sectionDiagramModel\(planes, view\)\);\s*$/m, 'view から断面図を作る行が見つからない');
+  assert.ok(code.indexOf('const view = floorSettingsRows(') < code.indexOf('const diagram = layoutSectionDiagram('), 'diagram が view より前にある');
+  assert.match(code, /^\s*<SectionDiagram layout=\{diagram\} selectedPlaneId=\{selectedPlaneId\} \/>\s*$/m, '<SectionDiagram> の配置行が見つからない');
+});
+
 test('【配線】FloorSettingsDialog: 不正値があると OK は押せず、Enter でも確定しない', () => {
   const code = dialogCode();
   assert.match(code, /^\s*if \(!view\.ok\) return;\s*$/m, 'handleConfirm の ok ガード行が見つからない');

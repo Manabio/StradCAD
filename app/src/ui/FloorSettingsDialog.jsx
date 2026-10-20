@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import './AddCLDialog.css';
-import { floorSettingsRows } from '../floorHeights.js';
+import { floorSettingsRows, sectionDiagramModel, layoutSectionDiagram } from '../floorHeights.js';
 import { trapFocusIndex, shouldConfirmOnEnter } from './floorSettingsKeys.js';
 
 const INVALID_STYLE = { borderColor: '#dc2626', background: '#fef2f2' };
@@ -8,6 +8,43 @@ const CELL = { padding: '3px 6px', fontSize: 12, whiteSpace: 'nowrap' };
 
 function formatMm(v) {
   return String(Math.round(v * 10) / 10);
+}
+
+/** 簡易断面図（表示専用）。layoutSectionDiagram の結果を描くだけ。選択中の階の FL 線・階高寸法は青。 */
+function SectionDiagram({ layout, selectedPlaneId }) {
+  const SEL = '#1e40af';
+  return (
+    <svg
+      data-section-diagram
+      viewBox={`0 0 ${layout.width} ${layout.height}`}
+      style={{ flex: '1 1 200px', minWidth: 180, maxWidth: 280, height: 'auto', alignSelf: 'flex-start' }}
+      role="img"
+      aria-label="簡易断面図"
+    >
+      {layout.lines.map(l => {
+        const sel = selectedPlaneId != null && l.planeIds.includes(selectedPlaneId);
+        const color = sel ? SEL : (l.kind === 'gl' ? '#92400e' : '#334155');
+        return (
+          <g key={l.key}>
+            <line x1={l.x1} x2={l.x2} y1={l.y} y2={l.y} stroke={color} strokeWidth={l.kind === 'fl' ? 1 : 1.6} strokeDasharray={l.kind === 'gl' ? '5 3' : undefined} />
+            <text x={l.x1 - 4} y={l.y + 3.5} fontSize={10} textAnchor="end" fill={color}>{l.label}</text>
+          </g>
+        );
+      })}
+      {layout.dims.map(d => {
+        const sel = d.planeId != null && d.planeId === selectedPlaneId;
+        const color = sel ? SEL : '#475569';
+        return (
+          <g key={d.key}>
+            <line x1={d.x} x2={d.x} y1={d.y1} y2={d.y2} stroke={color} strokeWidth={1} />
+            <line x1={d.x - 3} x2={d.x + 3} y1={d.y1} y2={d.y1} stroke={color} strokeWidth={1} />
+            <line x1={d.x - 3} x2={d.x + 3} y1={d.y2} y2={d.y2} stroke={color} strokeWidth={1} />
+            <text x={d.x + 5} y={d.yMid + 3.5} fontSize={10} fill={color}>{d.text}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
 }
 
 /**
@@ -28,6 +65,7 @@ export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selecte
   useEffect(() => { cancelRef.current = onCancel; });
 
   const view = floorSettingsRows(planes, draft, topHeightMm, glBelow1FlMm);
+  const diagram = layoutSectionDiagram(sectionDiagramModel(planes, view));
 
   // ダイアログ内のフォーカス可能な要素（Tab の循環と、外から呼び戻すときの先頭）
   function focusables() {
@@ -76,6 +114,7 @@ export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selecte
       <div className="cl-dialog-backdrop" onPointerDown={e => e.stopPropagation()} />
       <div className="cl-dialog" ref={dialogRef} onKeyDown={handleKeyDown} style={{ minWidth: 340 }}>
         <div className="cl-dialog-title">階設定表</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start' }}>
         <table style={{ borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ color: '#64748b' }}>
@@ -125,6 +164,8 @@ export function FloorSettingsDialog({ planes, topHeightMm, glBelow1FlMm, selecte
             </tr>
           </tbody>
         </table>
+        <SectionDiagram layout={diagram} selectedPlaneId={selectedPlaneId} />
+        </div>
         <div className="cl-dialog-result">
           軒高（GL〜軒桁上端）: {view.eaveFromGlMm === null ? '-' : `${formatMm(view.eaveFromGlMm)} mm`}
         </div>
