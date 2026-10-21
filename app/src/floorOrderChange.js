@@ -108,13 +108,25 @@ export const floorOrderFollowers = [
     },
   },
   {
+    // INSERT: 新階の直下の採用階（＝当該階）から写す。ADD_LOWER（S5c-2 Q7）: 新階には直下階が無いので、当該階
+    // （ctx.sourceGraph＝階追加を実行したときの表示階）から新しい各階（ctx.addedPlanes）へ id・番号ごと写す。
     name: 'elevatorCopy',
-    appliesTo: [FLOOR_ORDER_KIND.INSERT],
+    appliesTo: [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER],
     async run(ctx) {
       const { copyElevatorsToNewFloor } = await import('./finish/equipment/equipmentFloorSync.js');
-      const copied = await copyElevatorsToNewFloor({ project: ctx.project, activeGraph: ctx.sourceGraph, newPlane: ctx.addedPlane });
-      if (copied.status === 'copied' && copied.skipped.length > 0) {
-        ctx.ui.notify(ERR_ELEVATOR_COPY_SKIPPED(ctx.addedPlane.name, copied.skipped.length));
+      const isLower = ctx.kind === FLOOR_ORDER_KIND.ADD_LOWER;
+      // INSERT は従来どおり（floorIo は渡さない＝本番の peek／保存）。ADD_LOWER は stairCopy と同じく floorIo を使う
+      const { peekFn, saveFloorFn } = isLower ? (ctx.floorIo ?? {}) : {};
+      const io = { ...(peekFn ? { peekFn } : {}), ...(saveFloorFn ? { saveFloorFn } : {}) };
+      for (const plane of isLower ? ctx.addedPlanes : [ctx.addedPlane]) {
+        const copied = await copyElevatorsToNewFloor({
+          project: ctx.project, activeGraph: ctx.sourceGraph, newPlane: plane,
+          ...(isLower ? { sourceGraph: ctx.sourceGraph } : {}),
+          ...io,
+        });
+        if (copied.status === 'copied' && copied.skipped.length > 0) {
+          ctx.ui.notify(ERR_ELEVATOR_COPY_SKIPPED(plane.name, copied.skipped.length));
+        }
       }
     },
   },
@@ -139,6 +151,35 @@ export const floorOrderFollowers = [
       for (const { plane, skipped } of copied.perPlane) {
         if (skipped.length > 0) ctx.ui.notify(ERR_STAIR_COPY_SKIPPED(plane.name, skipped.length));
       }
+    },
+  },
+  {
+    // 下階追加で新しい階が地階のとき（S5c-2 Q15）、当該階の外壁が乗る階固有の中心線を新しい地階へ写す。部屋・壁は
+    // 写さない（Q13・Q18）。新しい階が地上階（最下階が2階など）なら何もしない。stairCopy の後（階段・昇降路の
+    // 足元の中心線を先に置き、ここは外壁の分だけを足す。addMissingCLs は同座標なら足さない）・stairVoidReconcile の前。
+    name: 'basementCenterLines',
+    appliesTo: [FLOOR_ORDER_KIND.ADD_LOWER],
+    async run(ctx) {
+      if (!ctx.sourceGraph) throw new Error('basementCenterLines: sourceGraph がありません（階追加の呼び出し側が当該階のグラフを渡していません）');
+      const { copyExteriorCLsToNewFloors } = await import('./finish/basementFloorInit.js');
+      const { peekFn, saveFloorFn } = ctx.floorIo ?? {};
+      await copyExteriorCLsToNewFloors({
+        project: ctx.project, sourceGraph: ctx.sourceGraph, newPlanes: ctx.addedPlanes,
+        ...(peekFn ? { peekFn } : {}), ...(saveFloorFn ? { saveFloorFn } : {}),
+      });
+    },
+  },
+  {
+    // 下階追加で新しい階が地階のとき、建物全体の地階構造（StructuralInfo.basementStructure）を当該階の実効の構造から
+    // 毎回書く（S5c-2 Q17・Q19・Q-C。未設定のときだけ、ではない）。structuralReflect の前＝再計算が書いた値を読む。
+    // follower 名は 'basementInit'（basementStructure を読む箇所の許可リスト検査〔effectiveStructure.wiring.test.js〕に
+    // 名前だけで掛からないようにする。値の読み書きは finish/basementFloorInit.js に閉じる）。
+    name: 'basementInit',
+    appliesTo: [FLOOR_ORDER_KIND.ADD_LOWER],
+    async run(ctx) {
+      if (!ctx.sourceGraph) throw new Error('basementInit: sourceGraph がありません（階追加の呼び出し側が当該階のグラフを渡していません）');
+      const { writeBasementStructure } = await import('./finish/basementFloorInit.js');
+      writeBasementStructure(ctx.project, ctx.sourceGraph, ctx.addedPlanes);
     },
   },
   {

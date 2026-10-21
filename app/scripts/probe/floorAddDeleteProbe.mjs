@@ -48,6 +48,8 @@ import { collectNeededCLs, addMissingCLs, translateCellSet } from '../../src/fin
 import { loadMaterialMap, regenerateWalls } from '../../src/finish/wallRegeneration.js';
 import { resolveStairContext } from '../../src/finish/stair/stairUnderRooms.js';
 import { RoomFeature } from '../../src/core.js';
+import { collectExteriorWallCLs } from '../../src/finish/basementFloorInit.js';
+import { effectiveStructure } from '../../src/structural/structureRules.js';
 import { HDimensionLine, VDimensionLine } from '../../src/core.js';
 import { DimensionKind, DimensionSide } from '../../src/core/constants.js';
 
@@ -408,7 +410,10 @@ async function runScenario(docKey, scenarioName) {
   // S0 の基準（moku4 insertMid で新3階に STAIR_VOID 3c が付く等）を、ソースを変えずに同じ probe で採り直すために使う。
   // PROBE_NO_STRUCT=1: structuralReflect を除く（階追加で他の階の CL 数が増えた原因が構造反映かを切り分ける用）。
   const base = process.env.PROBE_FOLLOWERS === 'head' ? headOrderFollowers(floorOrderFollowers) : floorOrderFollowers;
-  const std = process.env.PROBE_NO_STRUCT ? base.filter(f => f.name !== 'structuralReflect') : base;
+  // PROBE_S4=1: S5c-2 より前（S4 時点）の下階追加を再現する（elevatorCopy・basementCenterLines・basementStructure を除く。
+  // INSERT のシナリオでも elevatorCopy が抜けるので、下階追加のシナリオ専用）
+  const s4 = process.env.PROBE_S4 ? base.filter(f => !['elevatorCopy', 'basementCenterLines', 'basementInit'].includes(f.name)) : base;
+  const std = process.env.PROBE_NO_STRUCT ? s4.filter(f => f.name !== 'structuralReflect') : s4;
   console.log(`\n===== ${docKey} / ${scenarioName} （採用階: ${project.planes.map(p => p.name).join(',')} / 検討案 ${[...project.planeMap.values()].filter(p => p.isAlternative).length} 件 / 初期アクティブ ${project.activePlane?.name}）`);
   if (mods.has('ev')) { if (!(await installEvOnLowest(project, env))) return; }
   // 3 階未満の文書で「途中の階の削除」を作るため、必要なときだけ自動で +up（先に最上階へ 1 階足す）にする
@@ -462,7 +467,23 @@ async function runScenario(docKey, scenarioName) {
     await withCompare(cur, () => opInsert(project, env, cur.id, 1, std));
   } else if (name === 'addLower') {
     await pre(planes[0].id);
+    const before = project.structuralInfo.basementStructure;
     await withCompare(planes[0], () => opAddLower(project, env, 1, std));
+    // S5c-2: 新しい地階の EV 行・階固有 CL・階段・部屋・壁と、地階構造（建物全体）の前後
+    const src = await readGraph(project, project.planes[1]);
+    const nb = await readGraph(project, project.planes[0]);
+    const ownCl = (g) => [...g.shapeMap.values()].filter(s => s.constructor?.name === 'CenterLine');
+    const extCl = collectExteriorWallCLs(src);
+    // 構造の内訳: 下階追加の follower（structuralReflect。収束まで繰り返す反映）の後の各階の柱・梁を role 別に
+    const roleCount = (arr) => JSON.stringify(arr.reduce((m, x) => ({ ...m, [x.role ?? '-']: (m[x.role ?? '-'] ?? 0) + 1 }), {}));
+    for (const pl of project.planes) {
+      const gg = await readGraph(project, pl);
+      console.log(`  [構造内訳] ${pl.name}: 柱 ${gg.columns.length} ${roleCount([...gg.columns])} / 梁 ${gg.beams.length} ${roleCount([...gg.beams])} / 実効の構造 ${effectiveStructure(gg, project)}`);
+    }
+    console.log(`  [S5c-2] 新しい${nb.plane.name}: EV行 ${nb.equipmentRows.length}（当該階 ${src.equipmentRows.length}・id/番号一致 ${JSON.stringify(nb.equipmentRows.map(r => r.id + '#' + r.no)) === JSON.stringify(src.equipmentRows.map(r => r.id + '#' + r.no))}）`
+      + ` / 階固有CL ${ownCl(nb).length}（当該階の外壁が使う ${extCl.size} 本のうち B1 にある ${[...extCl.values()].filter(c => ownCl(nb).some(x => x.centerLineType === c.centerLineType && x.value === c.value)).length} 本・当該階の階固有CL ${ownCl(src).length}）`
+      + ` / 階段 ${nb.stairs.length}（当該階 ${src.stairs.length}）/ 部屋 ${nb.rooms.length}（feature別 ${JSON.stringify(nb.rooms.reduce((m, r) => ({ ...m, [r.feature ?? '-']: (m[r.feature ?? '-'] ?? 0) + 1 }), {}))}）`
+      + ` / 壁 ${nb.walls.length} / 主構造 ${project.structuralInfo.mainStructure} / 当該階の実効の構造 ${effectiveStructure(src, project)} / 地階構造 ${before ?? 'null'} → ${project.structuralInfo.basementStructure ?? 'null'}`);
   } else if (name === 'deleteMid') {
     if (!mid) { console.log('  (採用階が3未満のためスキップ。+up を付ける)'); return; }
     await pre(mid.id);

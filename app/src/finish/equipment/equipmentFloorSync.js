@@ -470,25 +470,33 @@ export async function runElevatorUsageChange({
  * @param {object} params.project
  * @param {object} params.activeGraph - 表示中（元階）のグラフ
  * @param {object} params.newPlane - 追加した新しい Plane
+ * @param {object} [params.sourceGraph] - 写し元の階のグラフ（読むだけ）。省略時は従来どおり「新階の直下の採用階」
+ *   （INSERT）。下階追加（新階が最下階で直下階が無い）は当該階（旧最下階＝階追加を実行したときの表示階）を渡す
+ *   （S5c-2 Q7）。渡すと直下階は見ない。新階自身は渡せない（throw）
  * @param {(plane: object) => Promise<object>} [params.peekFn] - 既定 floorSwapManager.peek
  * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [params.saveFloorFn] - 既定 saveFloor
  * @returns {Promise<{status:'noop'} | {status:'copied', copiedIds: string[], skipped: Array<{id:string, reason:string}>}>}
  */
 export async function copyElevatorsToNewFloor({
-  project, activeGraph, newPlane,
+  project, activeGraph, newPlane, sourceGraph = null,
   peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
   saveFloorFn = saveFloor,
 }) {
-  const planes = project.planes;
-  const idx = planes.findIndex(p => p.id === newPlane.id);
-  if (idx <= 0) return { status: 'noop' }; // 新階が先頭（最下）→直下階なし
-
-  const lowerPlane = planes[idx - 1];
   let lowerGraph;
-  try {
-    lowerGraph = lowerPlane.id === activeGraph.plane.id ? activeGraph : await peekFn(lowerPlane);
-  } catch (err) {
-    throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_COPY_FAILED, message: ERR_ELEVATOR_COPY_FAILED_MESSAGE });
+  if (sourceGraph) {
+    if (sourceGraph.plane?.id === newPlane.id) throw new Error('copyElevatorsToNewFloor: 写し元が新しい階自身です');
+    lowerGraph = sourceGraph;
+  } else {
+    const planes = project.planes;
+    const idx = planes.findIndex(p => p.id === newPlane.id);
+    if (idx <= 0) return { status: 'noop' }; // 新階が先頭（最下）→直下階なし
+
+    const lowerPlane = planes[idx - 1];
+    try {
+      lowerGraph = lowerPlane.id === activeGraph.plane.id ? activeGraph : await peekFn(lowerPlane);
+    } catch (err) {
+      throw tagElevatorOpFailure(err, { code: ERR_ELEVATOR_COPY_FAILED, message: ERR_ELEVATOR_COPY_FAILED_MESSAGE });
+    }
   }
   if (lowerGraph.equipmentRows.length === 0) return { status: 'noop' };
 

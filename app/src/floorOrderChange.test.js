@@ -12,7 +12,7 @@ import { stripCommentLines } from './uiBusySourceScan.js';
 
 test('floorOrderFollowers: name の並びが固定されている', () => {
   assert.deepEqual(floorOrderFollowers.map(f => f.name), [
-    'roofPlaneHeight', 'elevatorCopy', 'stairCopy', 'exteriorRoom', 'stairVoidReconcile',
+    'roofPlaneHeight', 'elevatorCopy', 'stairCopy', 'basementCenterLines', 'basementInit', 'exteriorRoom', 'stairVoidReconcile',
     'mainRoofCarry', 'switchToAddedFloor', 'stairRiserFollow', 'wallRefresh', 'structuralReflect', 'elevatorRenumber',
   ]);
 });
@@ -22,7 +22,8 @@ test('floorOrderFollowers: name の並びが固定されている', () => {
 // 上の階の吹抜けが孤児として未定義化される。切替の後に置くと ctx.sourceGraph が切替前の古い束縛になる。
 test('floorOrderFollowers: 階追加の順序は elevatorCopy < stairCopy < exteriorRoom < stairVoidReconcile < switchToAddedFloor', () => {
   const names = floorOrderFollowers.map(f => f.name);
-  const order = ['elevatorCopy', 'stairCopy', 'exteriorRoom', 'stairVoidReconcile', 'switchToAddedFloor'].map(n => names.indexOf(n));
+  // S5c-2: 下階追加の地階の初期化（外壁 CL・地階構造）は stairCopy の後・stairVoidReconcile の前
+  const order = ['elevatorCopy', 'stairCopy', 'basementCenterLines', 'basementInit', 'exteriorRoom', 'stairVoidReconcile', 'switchToAddedFloor'].map(n => names.indexOf(n));
   assert.ok(order.every(i => i >= 0), `follower が見つからない: ${order}`);
   assert.deepEqual([...order].sort((a, b) => a - b), order, `順序が崩れている: ${order}`);
   // DELETE・REORDER・CHANGE の stairVoidReconcile は roofPlaneHeight の後・structuralReflect の前のまま
@@ -51,7 +52,9 @@ test('floorOrderFollowers: 各followerのappliesToが固定されている', () 
     FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
     FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
   ]);
-  assert.deepEqual(byName.elevatorCopy, [FLOOR_ORDER_KIND.INSERT]);
+  assert.deepEqual(byName.elevatorCopy, [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER]); // ADD_LOWER は S5c-2（Q7）
+  assert.deepEqual(byName.basementCenterLines, [FLOOR_ORDER_KIND.ADD_LOWER]);
+  assert.deepEqual(byName.basementInit, [FLOOR_ORDER_KIND.ADD_LOWER]);
   assert.deepEqual(byName.stairCopy, [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER]);
   assert.deepEqual(byName.elevatorRenumber, [FLOOR_ORDER_KIND.DELETE]);
   assert.deepEqual(byName.exteriorRoom, [FLOOR_ORDER_KIND.INSERT]);
@@ -296,7 +299,12 @@ test('floorOrderFollowers ソース: 主要呼び出し行が1行まるごとの
     "if (copied.status === 'copied' && copied.skipped.length > 0) {",
     "if (renumbered.status === 'renumbered') ctx.ui.onFloorSyncChanged();",
     'await reconcileAllStairVoids(ctx.project, ctx.floorIo);',
-    'const copied = await copyElevatorsToNewFloor({ project: ctx.project, activeGraph: ctx.sourceGraph, newPlane: ctx.addedPlane });',
+    // elevatorCopy: INSERT は従来どおり（floorIo なし・直下階から）。ADD_LOWER だけ floorIo と sourceGraph（当該階）を渡す
+    'const { peekFn, saveFloorFn } = isLower ? (ctx.floorIo ?? {}) : {};',
+    'project: ctx.project, activeGraph: ctx.sourceGraph, newPlane: plane,',
+    '...(isLower ? { sourceGraph: ctx.sourceGraph } : {}),',
+    'for (const plane of isLower ? ctx.addedPlanes : [ctx.addedPlane]) {',
+    'writeBasementStructure(ctx.project, ctx.sourceGraph, ctx.addedPlanes);',
     'await addNewFloorRoomFromSource(ctx.project, ctx.sourceGraph, ctx.addedPlane, makeFloorName(ctx.newStartFloor, 1));',
   ];
   for (const line of expectedLines) {

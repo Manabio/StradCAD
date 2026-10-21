@@ -248,6 +248,11 @@ export const ERR_STAIR_COPY_FAILED_MESSAGE = '階段の複製に失敗しまし�
 export const ERR_STAIR_COPY_SKIPPED = (floorName, count) =>
   `${floorName}へ複製できなかった階段があります（${count}件）。`;
 
+// 下階追加で新しい地階へ当該階の外壁の中心線を写す処理（finish/basementFloorInit.js copyExteriorCLsToNewFloors）の
+// 他階の読み書きが失敗した場合（KNOWN_TRANSITION_ERROR_CODES に載せ、message をそのまま見せる）。
+export const ERR_BASEMENT_CL_COPY_FAILED = 'ERR_BASEMENT_CL_COPY_FAILED';
+export const ERR_BASEMENT_CL_COPY_FAILED_MESSAGE = '地階への外壁の中心線の複製に失敗しました。';
+
 // 階設定表を開くとき、全階の階段・下屋を読めなかった場合（階高の変更で蹴上が変わる階段を確かめられないまま
 // 確定させないため、表を開かない）。
 export const ERR_FLOOR_SETTINGS_LOAD_FAILED = '階の読込みに失敗したため、階設定表を開けませんでした。';
@@ -296,7 +301,7 @@ export function tagElevatorOpFailure(err, { code = ERR_ELEVATOR_OP_FAILED, messa
 const KNOWN_TRANSITION_ERROR_CODES = [
   ERR_CATALOG_DUPLICATE, ERR_ELEVATOR_OP_FAILED, ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_USAGE_FAILED,
   ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_RENUMBER_FAILED, ERR_STAIR_DESIGNATE_FAILED,
-  ERR_STAIR_DELETE_FAILED, ERR_STAIR_COPY_FAILED,
+  ERR_STAIR_DELETE_FAILED, ERR_STAIR_COPY_FAILED, ERR_BASEMENT_CL_COPY_FAILED,
 ];
 
 // 昇降機の設置（finish/equipment/equipmentOps.js validateElevatorInstall）専用の拒否文言。

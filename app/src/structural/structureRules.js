@@ -16,7 +16,7 @@
 // 主構造キーの正式表記は structuralClassification.STRUCTURES（'未定' を除く6種）が真実で、共通タブの
 // 選択肢 MAIN_STRUCTURE_OPTIONS もここから組み立てる。
 // ================================================================
-import { STRUCTURES, STRUCTURE_PROFILES } from './structuralClassification.js';
+import { STRUCTURES, STRUCTURE_PROFILES, structureProfile } from './structuralClassification.js';
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { BackingClass } from '../finish/materials/backingClass.js';
 import { findSectionEntry, woodRectSectionKey, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
@@ -412,6 +412,19 @@ export const BASEMENT_STRUCTURE_OPTIONS = Object.freeze(
 /** 保存値・外部入力を地階構造へ正規化する（選択肢外・空文字・未知は null＝地階構造なし）。 */
 export function normalizeBasementStructure(v) {
   return typeof v === 'string' && BASEMENT_STRUCTURE_OPTIONS.includes(v) ? v : null;
+}
+
+/**
+ * 下階追加で地階が初めて生まれるときの地階構造の初期値（問題.md Q17・Q19）。引数は当該階（地上階）の実効の構造
+ * （effectiveStructure の戻り値）。ラーメン躯体（STRUCTURE_PROFILES の isRigidFrame＝RC造(ラーメン)・S造・SRC造）
+ * はラーメン（鉄骨柱を壁式の地階で受けられないため）、それ以外（RC造(壁式)・木造〔在来・2"×4"〕・未指定）は壁式。
+ * 未知の値（'未定'・空文字・null・想定外の文字列）も throw せず壁式——structureProfile の未知の既定（非ラーメン）に従う。
+ * 理由: 階追加の途中で throw すると階だけ増えて追従処理が止まる。構造が決まっていない文書でも下階追加は成立させ、
+ * 壁式は利用者が構造モードで選び直せる（S5d）初期値として最も無難。仮の graph を組んで effectiveStructure に通さず、
+ * 明示引数だけで決める（未生成の仮想オブジェクトから種別を導出すると黙って既定値に落ちるため）。
+ */
+export function initialBasementStructureFor(structure) {
+  return structureProfile(structure).isRigidFrame ? 'RC造(ラーメン)' : 'RC造(壁式)';
 }
 
 /** 地階の平面か（startFloor<0。屋根専用平面は startFloor を写すため除外）。検討案も自分の startFloor で判定。 */

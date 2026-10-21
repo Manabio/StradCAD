@@ -5,7 +5,7 @@ import { NumPad } from './NumPad.jsx';
 /**
  * 階追加ダイアログ
  *
- * isLowest=true  → ケース1: 「上階」 or 「下階 n階分+」
+ * isLowest=true  → 最下階が地上階: 「上階」 or 「下階 1階分」（1階分固定。最下階が地階のときは本ダイアログを出さず即時の上階追加）
  * isLowest=false → ケース3: 「上階」 or 「上階 n階分一般階」
  * anchor: { x, y } — 指定時はその位置（階追加ボタン直下）に表示。省略時は上部中央。
  *
@@ -18,7 +18,7 @@ export function AddFloorDialog({ isLowest, anchor, onConfirm, onCancel }) {
   const [choice, setChoice] = useState('upper'); // 'upper' | 'lower' | 'general'
   const [nStr,   setNStr]   = useState('1');
 
-  const n = Math.max(1, Math.floor(Number(nStr) || 1));
+  const n = isLowest ? 1 : Math.max(1, Math.floor(Number(nStr) || 1)); // 下階は1階分固定
 
   function handleConfirm() {
     if (choice === 'upper') { onConfirm('upper', 1); return; }
@@ -46,8 +46,8 @@ export function AddFloorDialog({ isLowest, anchor, onConfirm, onCancel }) {
 
   const altChoice = isLowest ? 'lower' : 'general';
   const altLabel  = isLowest ? '下階' : '一般階';
-  const altUnit   = isLowest ? '階分+' : '階分';
-  const showN     = choice === altChoice;
+  const altUnit   = isLowest ? '1階分' : '階分';
+  const showN     = choice === altChoice && !isLowest; // 下階は1階分固定＝テンキーを出さない
 
   return (
     <>
@@ -79,15 +79,18 @@ export function AddFloorDialog({ isLowest, anchor, onConfirm, onCancel }) {
           <span style={{ fontSize: 13, color: '#1e293b', whiteSpace: 'nowrap' }}>
             {altLabel}
           </span>
-          <input
-            type="number"
-            className="cl-dialog-input"
-            value={nStr}
-            min="1"
-            style={{ width: 60, opacity: showN ? 1 : 0.4 }}
-            onChange={e => { setChoice(altChoice); setNStr(e.target.value); }}
-            onFocus={() => setChoice(altChoice)}
-          />
+          {/* 下階は1階分に固定（Q21 案A。n 階分の入力を出さない）。一般階だけ n を入力する */}
+          {!isLowest && (
+            <input
+              type="number"
+              className="cl-dialog-input"
+              value={nStr}
+              min="1"
+              style={{ width: 60, opacity: showN ? 1 : 0.4 }}
+              onChange={e => { setChoice(altChoice); setNStr(e.target.value); }}
+              onFocus={() => setChoice(altChoice)}
+            />
+          )}
           <span className="cl-dialog-unit">{altUnit}</span>
         </label>
 

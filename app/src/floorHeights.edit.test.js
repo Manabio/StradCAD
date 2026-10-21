@@ -198,9 +198,9 @@ test('validateStoryHeightText / validateGlText', () => {
 test('collectProjectLevels / applyProjectLevels: GL を収集し、apply で戻る', () => {
   const project = new Project('proj', 'test');
   const before = collectProjectLevels(project);
-  assert.deepEqual(before, { glBelow1FlMm: 0 });
+  assert.deepEqual(before, { glBelow1FlMm: 0, basementStructure: null }); // 地階構造も採る（S5c-2。未設定＝null）
   project.setGlBelow1FlMm(-250);
-  assert.deepEqual(collectProjectLevels(project), { glBelow1FlMm: -250 });
+  assert.deepEqual(collectProjectLevels(project), { glBelow1FlMm: -250, basementStructure: null });
   applyProjectLevels(project, before);
   assert.equal(project.glBelow1FlMm, 0);
   applyProjectLevels(project, null); // levels 無し＝何もしない

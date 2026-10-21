@@ -364,6 +364,18 @@ export function computeFloorInsert(planes, currentPlaneId, stories, opts = {}) {
   return { newPlane, updates };
 }
 
+// ---- [+] ボタンの入口の判定（Q21 案A。App.jsx handleAddFloor が使う）----
+// 表示中の採用階 current と採用階一覧 planes から、[+] を押したときの動作を返す。
+//   null                          : 採用階でない（検討案）・階が無い → 何もしない
+//   { mode:'immediate' }          : 地階（startFloor<0）→ ダイアログなしで上階追加（INSERT の地階分岐。最下階の地階も同じ。
+//                                   「下階」は最下階が地上階のときだけ＝最下階の地階の下へは足さない）
+//   { mode:'dialog', isLowest }   : 地上階 → ダイアログ。isLowest（最下階が地上階）のときだけ「下階」（1階分固定）が出る
+export function resolveAddFloorEntry(planes, current) {
+  if (!current || current.isAlternative) return null;
+  if (current.startFloor < 0) return { mode: 'immediate' };
+  return { mode: 'dialog', isLowest: planes[0]?.id === current.id };
+}
+
 // ---- 最下階の下への階追加（下階追加）の各新階の elevation（計算部）----
 // planes（elevation昇順の採用フロア一覧）の最下階の下へ、1層の階を n 本積む。各新階は元の最下階の階高を
 // 引き継ぐ（最下階が最上階でもある1階建てなら、その最上階の階高 opts.topHeightMm）。既存階は動かさない
@@ -578,13 +590,21 @@ export function pickRemovalFallback(project, planeId, preferredId) {
 
 // ---- project 単位の高さ設定（GL）の収集・復元（階設定表。階操作の undo/redo が Plane メタと一緒に使う）----
 // glBelow1FlMm＝GL は 1FL からの下がり量（負＝GL が 1FL より上）。Plane に属さないので collectPlaneMetas とは別。
+// basementStructure＝建物全体の地階構造（StructuralInfo。下階追加が初期値を書くので undo/redo で戻す。S5c-2）。
+// キーが無い levels（旧形の記録）では触らない。
 export function collectProjectLevels(project) {
-  return { glBelow1FlMm: project.glBelow1FlMm };
+  return {
+    glBelow1FlMm: project.glBelow1FlMm,
+    basementStructure: project.structuralInfo?.basementStructure ?? null,
+  };
 }
 
 export function applyProjectLevels(project, levels) {
   if (!levels) return;
   project.setGlBelow1FlMm(levels.glBelow1FlMm);
+  if ('basementStructure' in levels) {
+    runInAction(() => project.structuralInfo.setBasementStructure(levels.basementStructure ?? null));
+  }
 }
 
 /**
@@ -633,7 +653,7 @@ export async function rollbackFloorOp(project, {
 
 function projectLevelsEqual(a, b) {
   if (!a || !b) return !a && !b; // 片方だけ渡された＝比較不能。両方省略のときだけ「同じ」
-  return a.glBelow1FlMm === b.glBelow1FlMm;
+  return a.glBelow1FlMm === b.glBelow1FlMm && (a.basementStructure ?? null) === (b.basementStructure ?? null);
 }
 
 function planeMetasEqual(a, b) {

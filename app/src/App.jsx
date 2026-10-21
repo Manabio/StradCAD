@@ -44,7 +44,7 @@ import {
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
   computeFloorDeleteReorder, computeFloorInsert, computeFloorAddLowerElevations, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm, setCeilingCutHeightMm,
   collectProjectLevels, applyProjectLevels, rollbackFloorOp,
-  collectRemovalRecords, restoreRemovedPlanes, removePlanesForRedo,
+  collectRemovalRecords, restoreRemovedPlanes, removePlanesForRedo, resolveAddFloorEntry,
 } from './floorOps.js';
 import { resolveTopStoryHeightMm, computeFloorHeightEdit } from './floorHeights.js';
 import { collectFloorSettingsFacts } from './floorSettingsFacts.js';
@@ -1408,18 +1408,17 @@ const App = observer(() => {
 
   function handleAddFloor(e) {
     const currentPlane = project.activePlane;
-    if (!currentPlane || currentPlane.isAlternative) return; // 採用のみ
+    const entry = resolveAddFloorEntry(project.planes, currentPlane); // 判定は floorOps.js（Q21 案A）
+    if (!entry) return; // 採用のみ
 
-    const isLowest = project.planes[0]?.id === currentPlane.id;
-
-    // ケース2: 最下階でない、かつ地下階（開始階 < 0）→ 上階を即時実行
-    if (!isLowest && currentPlane.startFloor < 0) {
+    // 地階（最下階の地階も含む）→ 上階を即時実行（INSERT の地階分岐。「下階」は最下階が地上階のときだけ）
+    if (entry.mode === 'immediate') {
       return executeAddUpper(currentPlane); // Promiseをreturnし、guardUi(handleAddFloor)が例外を拾えるようにする
     }
 
-    // ケース1（最下階）/ ケース3（その他）→ ボタン直下にダイアログを開く
+    // 地上階 → ボタン直下にダイアログを開く（最下階なら「下階」〔1階分固定〕あり）
     const rect = e.currentTarget.getBoundingClientRect();
-    setFloorDialog({ isLowest, anchor: { x: rect.left, y: rect.bottom } });
+    setFloorDialog({ isLowest: entry.isLowest, anchor: { x: rect.left, y: rect.bottom } });
   }
 
   // 階追加（'upper'/'general'/'lower'）で新階ができた後の追従処理（階段吹抜けの整合・昇降機の複製・
