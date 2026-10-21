@@ -540,9 +540,10 @@ test('roofPlaneHeight: 途中挿入（最上階idは同じ）でstructuralReflec
   assert.equal(elevationSeenByStub, 9001, 'roofPlaneHeightはstubより前に走り、屋根平面の高さを新しい最上階+1へ合わせている必要がある');
 });
 
-// QA指摘2026-10-01再裁定: 最上階idが変わる操作（最上階の上へのINSERT）では屋根平面を作り直さない
+// QA指摘2026-10-01再裁定: 最上階idが変わる操作（最上階の上へのINSERT）でも屋根平面を作り直さない
 // （undoの記録の外にある屋根平面を階操作の時点で作り直すと、undoで旧屋根平面が戻らない）。
-test('roofPlaneHeight: 最上階の上へのINSERT（idが変わる）では屋根平面を作り直さない', async () => {
+// 2026-10-21: 作り直さず新しい最上階へ付け替える（id を保つので undo の最後の follow で紐づけが戻る）。
+test('roofPlaneHeight: 最上階の上へのINSERT（idが変わる）では屋根平面を作り直さず、新しい最上階p4へ付け替えて高さも追従する', async () => {
   const project = makeProjectWithThreeFloors();
   const { syncRoofPlane } = await import('./structural/roofPlane.js');
   const roof = syncRoofPlane(project); // roofForPlaneId='p3'
@@ -558,6 +559,56 @@ test('roofPlaneHeight: 最上階の上へのINSERT（idが変わる）では屋�
   }, [floorOrderFollowers.find(f => f.name === 'roofPlaneHeight')]);
 
   assert.equal(project.roofPlane.id, roof.id, '屋根平面のidは変わらない（作り直していない）');
-  assert.equal(project.roofPlane.roofForPlaneId, 'p3', 'roofForPlaneIdは古いまま（新しい最上階p4には追従しない）');
+  assert.equal(project.roofPlane.roofForPlaneId, 'p4', 'roofForPlaneIdは新しい最上階p4へ付け替わる');
+  assert.equal(project.roofPlane.elevation, 9001, '高さも新しい最上階+1');
+  assert.equal(project.roofPlane.startFloor, 4);
   assert.equal(project.planeMap.size, planeCountBefore + 1, '増えるのは追加したp4の1つだけ（削除→新設はしていない）');
+});
+
+// 本番の floorOrderFollowers の並びのまま、structuralReflect だけ stub に差し替える（roofPlaneHeight は実物。
+// 他の follower は何もしない fake）。stub が実行される位置で、屋根平面の roofForPlaneId・elevation が
+// すでに新しい最上階を指している（roofPlaneHeight が structuralReflect より前にある）ことを固定する。
+async function roofLinkSeenByStructuralReflect(project, opts) {
+  let seen = null;
+  const followers = floorOrderFollowers.map((f) => {
+    if (f.name === 'structuralReflect') {
+      return { ...f, async run(ctx) { seen = { forId: ctx.project.roofPlane.roofForPlaneId, elevation: ctx.project.roofPlane.elevation }; } };
+    }
+    if (f.name === 'roofPlaneHeight') return f;
+    return { ...f, before: undefined, async run() {} };
+  });
+  await applyFloorOrderChange(project, { sourceGraph: {}, ui: makeUi(), ...opts }, followers);
+  return seen;
+}
+
+test('roofPlaneHeight（本番の並び）: 最上階の上へのINSERTで、structuralReflect が見る屋根平面は新しい最上階 p4', async () => {
+  const project = makeProjectWithThreeFloors();
+  const { syncRoofPlane } = await import('./structural/roofPlane.js');
+  syncRoofPlane(project);
+  const seen = await roofLinkSeenByStructuralReflect(project, {
+    kind: FLOOR_ORDER_KIND.INSERT, updates: [],
+    addPlane: () => project.addPlane(9000, '4階', 'p4', 4, 1),
+  });
+  assert.deepEqual(seen, { forId: 'p4', elevation: 9001 });
+});
+
+test('roofPlaneHeight（本番の並び）: CHANGE で最上階が p1 に入れ替わると、structuralReflect が見る屋根平面は p1', async () => {
+  const project = makeProjectWithThreeFloors();
+  const { syncRoofPlane } = await import('./structural/roofPlane.js');
+  syncRoofPlane(project);
+  const seen = await roofLinkSeenByStructuralReflect(project, {
+    kind: FLOOR_ORDER_KIND.CHANGE, updates: [{ id: 'p1', name: '1階', startFloor: 4, elevation: 9000 }],
+  });
+  assert.deepEqual(seen, { forId: 'p1', elevation: 9001 });
+});
+
+test('roofPlaneHeight（本番の並び）: 最上階 p3 の DELETE で、structuralReflect が見る屋根平面は p2', async () => {
+  const project = makeProjectWithThreeFloors();
+  const { syncRoofPlane } = await import('./structural/roofPlane.js');
+  syncRoofPlane(project);
+  const seen = await roofLinkSeenByStructuralReflect(project, {
+    kind: FLOOR_ORDER_KIND.DELETE, updates: [], removedPlane: project.planeMap.get('p3'),
+    removePlane: () => { project.removePlane('p3'); return Promise.resolve(); },
+  });
+  assert.deepEqual(seen, { forId: 'p2', elevation: 3001 });
 });

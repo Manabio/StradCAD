@@ -525,7 +525,8 @@ export function diffFloorOpSnapshot({
 // planeId→Promise<Uint8Array|null>（アクティブ階はメモリから、他は IDB から。App.jsx の readPlaneBytes）。
 // 検討案の planeId はその検討案1件（removeFloor が単独で消す）。存在しない planeId は空配列。
 // 順序は採用階→検討案（altIndex 昇順）。
-// 既知の限界: 屋根専用平面（roofForPlaneId）は階操作の undo 対象外のため採らない。
+// 屋根専用平面は階操作の undo 対象外のため採らない（紐づけは undo の最後の followRoofPlaneToTop が並びから戻す。
+// 屋根平面の中身のバイト列は戻らない既知の限界）。
 export async function collectRemovalRecords(project, planeId, getBytes) {
   const target = project.planeMap.get(planeId);
   if (!target) return [];
@@ -570,6 +571,7 @@ export function collectAlternativeMetas(project) {
 // collectAltRoleState でそれらを前後に採り、applyAltRoleState で書き戻す（runPlanCutHeight と同型の同期操作）。
 // 親が最上階で屋根専用平面（roofForPlaneId が親を指す）があれば、その紐づけと追従する高さ・階番号・階数も
 // 同じ配列に { roofPlane: true, … } で載せる（採用の付け替えと同じ前後で戻すため。階操作 undo の対象外だった屋根平面の例外）。
+// applyAltRoleState は最後に followRoofPlaneToTop も呼ぶので、記録が無くても紐づけは並びに合う。
 export function collectAltRoleState(project, parentId) {
   return [...project.planeMap.values()]
     .filter(p => p.id === parentId || (p.isAlternative && p.referenceId === parentId)
@@ -596,6 +598,8 @@ export function applyAltRoleState(project, states) {
       plane.altIndex = s.altIndex;
       plane.name = s.name;
     }
+    // 屋根専用平面の記録が無い（古い id を採用で直したケース等）場合も、並びに合う紐づけへ戻す
+    followRoofPlaneToTop(project);
   });
 }
 
@@ -634,12 +638,8 @@ export function promoteAlternative(project, planeId) {
       .filter(p => p.isAlternative && p.referenceId === planeId)
       .sort((a, b) => a.altIndex - b.altIndex);
     alts.forEach((p, i) => { p.altIndex = i; });
-    // 屋根専用平面が旧採用階（降格した平面）を指していたら新しい採用階へ付け替え、高さ等は followRoofPlaneToTop で合わせる
-    const roof = project.roofPlane;
-    if (roof && roof.roofForPlaneId === refId) {
-      roof.roofForPlaneId = planeId;
-      followRoofPlaneToTop(project);
-    }
+    // 屋根専用平面は最上階に付く規則（followRoofPlaneToTop）で付け替え・高さ合わせを行う
+    followRoofPlaneToTop(project);
   });
   // 採用後の親は planeId（降格した旧採用階とその検討案、採用された平面がすべて入る）
   return { before, after: collectAltRoleState(project, planeId), parentId: refId };

@@ -29,20 +29,24 @@ test('syncRoofPlane: 最上階idが同じまま高さ・階番号・階数が変
   assert.equal(roof2.stories, 2);
 });
 
-test('syncRoofPlane: 最上階idが変わったら屋根平面を作り直す（既存挙動の対照）', () => {
+test('syncRoofPlane: 最上階idが変わったら屋根平面を作り直さず、同じインスタンスを新しい最上階へ付け替える', () => {
   const project = new Project('proj', 'test');
   project.addPlane(0,    '1階', 'p1', 1, 1);
   project.addPlane(3000, '2階', 'p2', 2, 1);
 
   const roof1 = syncRoofPlane(project);
+  const planeCountBefore = project.planeMap.size;
 
   // 新しい最上階を追加する（p2より上）
   project.addPlane(6000, '3階', 'p3', 3, 1);
   const roof2 = syncRoofPlane(project);
 
-  assert.notEqual(roof2.id, roof1.id, '最上階idが変わったら屋根平面を作り直す必要がある');
+  assert.equal(roof2.id, roof1.id, '作り直さず id を保つ');
+  assert.ok(roof2 === roof1, '同じインスタンス');
+  assert.equal(project.planeMap.size, planeCountBefore + 1, '増えるのは追加した p3 の1つだけ');
   assert.equal(roof2.roofForPlaneId, 'p3');
   assert.equal(roof2.elevation, 6001);
+  assert.equal(roof2.startFloor, 3);
 });
 
 test('【失敗系】syncRoofPlane: 採用階が無いとき null を返す', () => {
@@ -50,7 +54,7 @@ test('【失敗系】syncRoofPlane: 採用階が無いとき null を返す', ()
   assert.equal(syncRoofPlane(project), null);
 });
 
-// ---- followRoofPlaneToTop（QA指摘2026-10-01再裁定: idが同じときの書き換えだけに限定する） ----
+// ---- followRoofPlaneToTop（最上階が入れ替わったときも作り直さず付け替える。2026-10-21） ----
 
 test('followRoofPlaneToTop: 最上階idが同じまま高さ・階番号・階数が変わったら書き換えてtrueを返す', () => {
   const project = new Project('proj', 'test');
@@ -72,7 +76,7 @@ test('followRoofPlaneToTop: 最上階idが同じまま高さ・階番号・階�
   assert.equal(project.roofPlane.stories, 2);
 });
 
-test('【失敗系】followRoofPlaneToTop: 最上階idが違うときは作り直さず何もしないでfalseを返す', () => {
+test('followRoofPlaneToTop: 最上階idが違うときは作り直さず新しい最上階へ付け替えてtrueを返す。2回目はfalse', () => {
   const project = new Project('proj', 'test');
   project.addPlane(0,    '1階', 'p1', 1, 1);
   project.addPlane(3000, '2階', 'p2', 2, 1);
@@ -84,10 +88,13 @@ test('【失敗系】followRoofPlaneToTop: 最上階idが違うときは作り�
 
   const changed = followRoofPlaneToTop(project);
 
-  assert.equal(changed, false, 'idが違えば書き換えてはいけない');
+  assert.equal(changed, true, 'idが違えば付け替える');
   assert.equal(project.planeMap.size, planeCountBefore + 1, '作り直し（削除→新設）をしてはいけない');
   assert.equal(project.roofPlane.id, roof.id, '既存の屋根平面をそのまま残す必要がある');
-  assert.equal(project.roofPlane.roofForPlaneId, 'p2', '古いroofForPlaneIdのまま変えてはいけない');
+  assert.equal(project.roofPlane.roofForPlaneId, 'p3');
+  assert.equal(project.roofPlane.elevation, 6001);
+  assert.equal(project.roofPlane.startFloor, 3);
+  assert.equal(followRoofPlaneToTop(project), false, '合っていれば2回目は書かない');
 });
 
 test('【失敗系】followRoofPlaneToTop: 屋根平面が無ければfalseを返す', () => {

@@ -565,7 +565,7 @@ test('削除前の編集の undo エントリ（graph インスタンスを掴�
   assert.equal(store.has('p3'), true);
 });
 
-test('屋根専用平面(p4 に乗る): 中間階(p3)の削除で p4 が下がると屋根も追従し、undo／redo／undo で roofForPlaneId と elevation が往復する。最上階(p4)の削除では屋根は p4 のまま（作り直しは構造モード突入時）で往復しても不変', async () => {
+test('屋根専用平面(p4 に乗る): 中間階(p3)の削除で p4 が下がると屋根も追従し、undo／redo／undo で roofForPlaneId と elevation が往復する。最上階(p4)の削除では屋根は作り直さず p3 へ付け替わり、undo で p4、redo で p3', async () => {
   const { project, app } = await setup('p3');
   project.addPlane(project.planeMap.get('p4').elevation + 1, '小屋伏', 'roof', 4, 1, false, null, 0, true, 'p4');
   const roofState = () => [project.roofPlane.roofForPlaneId, project.roofPlane.elevation];
@@ -583,13 +583,33 @@ test('屋根専用平面(p4 に乗る): 中間階(p3)の削除で p4 が下が�
   await c.undo();
   assert.deepEqual(roofState(), ['p4', top0 + 1]);
 
-  // 最上階の削除: followRoofPlaneToTop は最上階 id が変わると何もしない（屋根平面は階操作 undo の対象外）。往復で不変
+  // 最上階の削除: 屋根は作り直さず 1つ下の p3 へ付け替わり、undo で復活した p4 へ付け替え直る（紐づけは並びから決まる）
   await app.switchRaw('p4');
+  const roofId = project.roofPlane.id;
   const c2 = await app.deleteFloor('p4');
   assert.ok(c2);
-  assert.deepEqual(roofState(), ['p4', top0 + 1]);
+  const top2 = project.planeMap.get('p3').elevation;
+  assert.deepEqual(roofState(), ['p3', top2 + 1], '削除で 1つ下の最上階 p3 へ');
+  assert.equal(project.roofPlane.id, roofId, '作り直さない');
   await c2.undo();
-  assert.deepEqual(roofState(), ['p4', top0 + 1]);
+  assert.deepEqual(roofState(), ['p4', top0 + 1], 'undo で復活した p4 へ');
+  await c2.redo();
+  assert.deepEqual(roofState(), ['p3', top2 + 1], 'redo で p3');
+  await c2.undo();
+  assert.deepEqual(roofState(), ['p4', top0 + 1], 'もう1回 undo で p4');
+});
+
+test('【失敗系】最上階(p4)の削除で follower が失敗 → 巻き戻しで屋根専用平面の紐づけが復活した p4 へ戻る', async () => {
+  const { project, store } = await setup('p3');
+  project.addPlane(project.planeMap.get('p4').elevation + 1, '小屋伏', 'roof', 4, 1, false, null, 0, true, 'p4');
+  const app = makeApp(project, store);
+  await app.switchRaw('p4');
+  const top0 = project.planeMap.get('p4').elevation;
+  const boom = { name: 'boom', appliesTo: [FLOOR_ORDER_KIND.DELETE], run() { throw new Error('follower failed'); } };
+  await assert.rejects(app.deleteFloor('p4', { extraFollowers: [boom] }), /follower failed/);
+  assert.equal(project.planeMap.has('p4'), true, '削除が取り消されている');
+  assert.equal(project.roofPlane.roofForPlaneId, 'p4');
+  assert.equal(project.roofPlane.elevation, top0 + 1);
 });
 
 test('【失敗系】退避の階切替が失敗したら中断し、何も変えず undo を積まない（null）', async () => {
@@ -1200,14 +1220,20 @@ test('【失敗系】採用と屋根平面: 屋根平面が無い文書でも最
   assert.equal(p.changed.before.some(s => s.roofPlane), false);
 });
 
-test('【失敗系】採用と屋根平面: 屋根平面が別の階を指す(古い id)ときは付け替えない', async () => {
+test('採用と屋根平面: 屋根平面が古い id(\'gone\')を指していても採用で新採用階 p4a へ直り、undo で p4（並びに合う紐づけ）、redo で p4a', async () => {
   const { project, app } = await setup('p3');
   addRoofAndTopAlt(project);
   runInAction(() => { project.roofPlane.roofForPlaneId = 'gone'; });
-  const before = roofOf(project);
   const p = app.promote('p4a');
   assert.ok(p);
-  assert.deepEqual(roofOf(project), before);
+  const alt = project.planeMap.get('p4a');
+  assert.equal(project.roofPlane.roofForPlaneId, 'p4a');
+  assert.equal(project.roofPlane.elevation, alt.elevation + 1);
+  p.undo();
+  assert.equal(project.roofPlane.roofForPlaneId, 'p4', '記録に無い古い id は並びに合う p4 へ（applyAltRoleState の follow）');
+  assert.equal(project.roofPlane.elevation, project.planeMap.get('p4').elevation + 1);
+  p.redo();
+  assert.equal(project.roofPlane.roofForPlaneId, 'p4a');
 });
 
 test('【失敗系】採用: 検討案でない・親が無い平面は何も変えず null（undo を積まない）', async () => {

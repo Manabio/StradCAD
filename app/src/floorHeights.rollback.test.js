@@ -169,15 +169,16 @@ test('回帰: 屋根平面が p3 に乗った状態で途中階(1階の上)へ�
   assert.equal(project.roofPlane.elevation, 9001);
 });
 
-test('回帰: 最上階(p3)の上への挿入 → undo → redo で屋根平面は p3 に乗ったまま 6001 から動かない（誤った階へ動かない）', async () => {
+test('回帰: 最上階(p3)の上への挿入 → undo → redo で屋根平面は新しい最上階(\'new\')に付き(elevation=new+1)、undo で p3(6001)、redo で \'new\'', async () => {
   const project = makeProject();
   const c = await insertAbove(project, 'p3');
-  assert.equal(project.roofPlane.roofForPlaneId, 'p3');
-  assert.equal(project.roofPlane.elevation, 6001);
+  const newTop = project.planeMap.get('new').elevation;
+  assert.equal(project.roofPlane.roofForPlaneId, 'new');
+  assert.equal(project.roofPlane.elevation, newTop + 1);
   undoInsert(project, c);
   assert.equal(project.roofPlane.roofForPlaneId, 'p3');
   assert.equal(project.roofPlane.elevation, 6001);
   redoInsert(project, c);
-  assert.equal(project.roofPlane.roofForPlaneId, 'p3');
-  assert.equal(project.roofPlane.elevation, 6001);
+  assert.equal(project.roofPlane.roofForPlaneId, 'new');
+  assert.equal(project.roofPlane.elevation, newTop + 1);
 });

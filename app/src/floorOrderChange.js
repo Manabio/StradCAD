@@ -88,14 +88,13 @@ async function followStairRisers(ctx) {
 // 階削除で他の階の階段は消さない＝2026-10-21 S3）。
 export const floorOrderFollowers = [
   {
-    // 屋根平面の高さは最上階に従属する（最上階 id が同じでも、振り直しで高さ・階番号だけ動くことが
-    // ある。§5-8）。structuralReflect が屋根平面を読む前に高さを合わせておく必要があるため先頭に
-    // 置く。followRoofPlaneToTop は最上階idが同じときだけ書き換え、idが変わった（最上階そのものが
-    // 入れ替わった）ときは何もしない——作り直し（削除→新設）はここで行わない（syncRoofPlaneは呼ば
-    // ない）。理由: 屋根平面はPlaneメタのundo記録（collectPlaneMetas）・バイト列のundo記録
-    // （collectFloorBytes）のいずれも対象外（project.planesのみを見る）のため、階操作の時点で
-    // 作り直すとundoで旧屋根平面が戻らず、新しい屋根平面が削除済みの階を指したまま残る
-    // （QA指摘・2026-10-01再裁定）。作り直しは次の構造モード突入のsyncRoofPlaneに任せる。
+    // 屋根平面は常に最上階に付く（紐づけの付け替え＋高さ・階番号・階数の追従。§5-8）。最上階 id が
+    // 同じでも振り直しで高さ・階番号だけ動くことがあり、最上階そのものが入れ替わる操作（最上階の上への
+    // 追加・並替・階変更・最上階の削除）では followRoofPlaneToTop が新しい最上階へ付け替える。
+    // 作り直し（削除→新設）はしない（syncRoofPlaneは呼ばない）——id を保てば、屋根平面が階操作の
+    // undo 記録（collectPlaneMetas・collectFloorBytes は project.planes のみ）の外にあっても、undo の最後の
+    // followRoofPlaneToTop が並びから紐づけを戻せる（QA指摘・2026-10-01再裁定の「作り直さない」を維持）。
+    // structuralReflect が屋根平面を読む前に合わせておく必要があるため先頭に置く。
     // 屋根平面が無いプロジェクトでは（構造モードに入ったことが無い）followRoofPlaneToTopが
     // 何もせずfalseを返すので、ここでも何も起きない。
     name: 'roofPlaneHeight',

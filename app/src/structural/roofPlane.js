@@ -1,8 +1,8 @@
 import { HDimensionLine, VDimensionLine, DimensionKind, DimensionSide } from '../core.js';
 
 // 屋根専用平面（小屋伏／R階伏）の同期。構造モード突入時に呼ぶ。
-// 最上階の実体平面が変わった場合は古い屋根平面を削除し、新しい最上階の上に作り直す
-// （屋根データは建物形状が変わった時点でやり直し前提。store.js の addFloor と同じ寸法線セットを追加する）。
+// 屋根平面は常にその時点の最上階に付く。最上階が入れ替わっても作り直さず followRoofPlaneToTop が
+// 付け替える（id と中身を保つ）。無いときだけ新しい最上階の上に作る（store.js の addFloor と同じ寸法線セットを追加する）。
 
 function addRoofDimensionLines(graph) {
   graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.GRID, side: DimensionSide.TOP });
@@ -16,15 +16,14 @@ function addRoofDimensionLines(graph) {
 }
 
 /**
- * 最上階の実体平面のidが同じまま、途中挿入・並替・階変更で高さ・階番号・階数だけ動いたとき、
- * 既存の屋根平面をそれに追従させる（作り直さない＝idを保つ）。最上階が無い／屋根平面が無い／
- * 屋根平面が今の最上階を指していない（idが違う＝最上階そのものが入れ替わった）ときは何もせず
- * falseを返す——その場合の作り直しは呼び出し元の責任にしない。作り直しは次の構造モード突入の
- * syncRoofPlaneに任せる（QA指摘・2026-10-01再裁定）。理由: 階操作（追加・削除・並替）の時点で
- * 屋根平面を削除→作り直すと、屋根平面はPlaneメタのundo記録（collectPlaneMetas）・バイト列の
- * undo記録（collectFloorBytes）のいずれも対象外（project.planesのみを見る）のため、undoで旧
- * 屋根平面が戻らず、新しい屋根平面が削除済みの階を指したまま残ってしまう。
- * @returns {boolean} 書き換えたらtrue
+ * 屋根平面を「今の最上階（project.planes の末尾）」に付ける唯一の規則。紐づけ（roofForPlaneId）が
+ * 違えば付け替え、続けて高さ・階番号・階数を合わせる。屋根平面は作り直さない（id と中身を保つ）。
+ * 最上階が入れ替わる全経路（最上階の上への追加・並替・階変更・最上階の削除・検討案の採用、
+ * それぞれの undo／redo と失敗時の巻き戻し）がこの関数を通る。付け替え先は階の並びだけで決まるので、
+ * 状態を戻した後の最後にこれを呼べば紐づけは記録なしで戻る（作り直すと屋根平面が undo 記録の外に
+ * あるため旧屋根平面が戻らない——付け替えなら id が変わらないので両立する）。
+ * 最上階が無い／屋根平面が無いときは何もせず false を返す（新設は syncRoofPlane の責任）。
+ * @returns {boolean} 紐づけ・高さ・階番号・階数のどれか1つでも書き換えたらtrue
  */
 export function followRoofPlaneToTop(project) {
   const real = project.planes;
@@ -32,31 +31,30 @@ export function followRoofPlaneToTop(project) {
   if (!top) return false;
 
   const existing = project.roofPlane;
-  if (!existing || existing.roofForPlaneId !== top.id) return false;
+  if (!existing) return false;
 
-  if (existing.elevation === top.elevation + 1
-    && existing.startFloor === top.startFloor
-    && existing.stories === top.stories) return false;
-
-  existing.elevation = top.elevation + 1;
-  existing.startFloor = top.startFloor;
-  existing.stories = top.stories;
-  return true;
+  let changed = false;
+  if (existing.roofForPlaneId !== top.id) { existing.roofForPlaneId = top.id; changed = true; }
+  if (existing.elevation !== top.elevation + 1) { existing.elevation = top.elevation + 1; changed = true; }
+  if (existing.startFloor !== top.startFloor) { existing.startFloor = top.startFloor; changed = true; }
+  if (existing.stories !== top.stories) { existing.stories = top.stories; changed = true; }
+  return changed;
 }
 
-/** 最上階の実体平面の直上に屋根専用平面を同期する。変更があれば新しい屋根平面を、なければ既存のものを返す。 */
+/**
+ * 最上階の実体平面の直上に屋根専用平面を同期する。屋根平面があれば（紐づけが古くても）作り直さず
+ * followRoofPlaneToTop で付け替えて既存を返し、無いときだけ新しく作って返す。
+ */
 export function syncRoofPlane(project) {
   const real = project.planes;
   const top = real[real.length - 1];
   if (!top) return null;
 
   const existing = project.roofPlane;
-  if (existing && existing.roofForPlaneId === top.id) {
+  if (existing) {
     followRoofPlaneToTop(project);
     return existing;
   }
-
-  if (existing) project.removePlane(existing.id);
 
   const { plane, graph } = project.addPlane(
     top.elevation + 1, '', crypto.randomUUID(), top.startFloor, top.stories,
