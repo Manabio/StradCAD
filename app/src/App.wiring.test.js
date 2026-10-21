@@ -580,15 +580,16 @@ test('【配線】App.jsx: floorOrderUi 本体に switchFloor: (id) => trySwitch
 // runFloorChangeのいずれかから beginUiTransition(); を外すと赤になる。
 // ================================================================
 
-test('【不変条件・横断】App.jsx: await withFloorOpUndo( の全呼び出し箇所は、直前の非空行が beginUiTransition(); である（呼び出し件数は7件固定）', () => {
+test('【不変条件・横断】App.jsx: await withFloorOpUndo( の全呼び出し箇所は、直前の非空行が beginUiTransition(); である（呼び出し件数は10件固定）', () => {
   const lines = stripCommentLines(readAppSrc()).split(/\r?\n/);
   const callLineIdxs = [];
   lines.forEach((line, i) => { if (line.includes('await withFloorOpUndo(')) callLineIdxs.push(i); });
 
   // 5→6: 階設定表 S5 の runFloorHeights が加わった（直前の非空行は beginUiTransition(); で不変条件を満たす）
   // 6→7: 階削除の undo 化（階の追加・削除の見直し S2）で runDeleteFloor が加わった（直前は beginUiTransition();）
-  assert.equal(callLineIdxs.length, 7,
-    `await withFloorOpUndo( の呼び出し件数が7件固定と異なる（実際: ${callLineIdxs.length}）。`
+  // 7→10: 検討案の追加・コピー・削除の undo 化で runAddAlternative・runCopyAlternative・runDeleteAlternative が加わった（直前は beginUiTransition();）
+  assert.equal(callLineIdxs.length, 10,
+    `await withFloorOpUndo( の呼び出し件数が10件固定と異なる（実際: ${callLineIdxs.length}）。`
     + '呼び出し元が増減していないか見直すこと');
 
   for (const idx of callLineIdxs) {

@@ -481,10 +481,21 @@ export function setCeilingCutHeightMm(project, planeId, mm) {
 //   removedPlanes: removalBefore（collectRemovalRecords の戻り値。階削除が消す採用階＋検討案）のうち
 //     existingIdsAfter（操作後の project.planeMap の id 集合）に無いもの。removalBefore を渡すときは
 //     existingIdsAfter も必須（省略すると検討案が全て「消えた」扱いになるため throw する）
+//   altsBefore／altsAfter（collectAlternativeMetas の戻り値。省略可だが片方だけは throw）: 操作後に増えた検討案を
+//     addedPlanes へ加える（採用階の追加分の後ろ）。検討案のメタ変化は metasChanged に数えない（検討案の
+//     追加・コピーの undo。検討案の削除は removalBefore 側で拾う）
 export function diffFloorOpSnapshot({
   before, after, metasBefore, metasAfter, levelsBefore, levelsAfter, removalBefore, existingIdsAfter,
+  altsBefore, altsAfter,
 }) {
+  if (!altsBefore !== !altsAfter) {
+    throw new Error('diffFloorOpSnapshot: altsBefore と altsAfter は両方渡すか両方省略する');
+  }
   const addedPlanes = metasAfter.filter(m => !before.has(m.id));
+  if (altsAfter) {
+    const altIdsBefore = new Set(altsBefore.map(a => a.id));
+    addedPlanes.push(...altsAfter.filter(a => !altIdsBefore.has(a.id)));
+  }
   if (removalBefore?.length && !existingIdsAfter) {
     throw new Error('diffFloorOpSnapshot: removalBefore を渡すときは existingIdsAfter も必要');
   }
@@ -511,27 +522,108 @@ export function diffFloorOpSnapshot({
 // 階削除が消す平面（採用階＋その検討案）のスナップショット。collectPlaneMetas／collectFloorBytes は採用階
 // だけを採るため、検討案とメタの全項目（isAlternative・referenceId・altIndex）は別に採る。getBytes は
 // planeId→Promise<Uint8Array|null>（アクティブ階はメモリから、他は IDB から。App.jsx の readPlaneBytes）。
-// 採用階でない・存在しない planeId は空配列。順序は採用階→検討案（altIndex 昇順）。
+// 検討案の planeId はその検討案1件（removeFloor が単独で消す）。存在しない planeId は空配列。
+// 順序は採用階→検討案（altIndex 昇順）。
 // 既知の限界: 屋根専用平面（roofForPlaneId）は階操作の undo 対象外のため採らない。
 export async function collectRemovalRecords(project, planeId, getBytes) {
   const target = project.planeMap.get(planeId);
-  if (!target || target.isAlternative) return [];
+  if (!target) return [];
+  // 検討案は単独で消える（store.js removeFloor。残りの検討案の altIndex は詰め直さない）
+  if (target.isAlternative) return [await removalRecordOf(project, target, getBytes)];
   const alts = [...project.planeMap.values()]
     .filter(p => p.isAlternative && p.referenceId === planeId)
     .sort((a, b) => a.altIndex - b.altIndex);
   const records = [];
-  for (const p of [target, ...alts]) {
-    records.push({
+  for (const p of [target, ...alts]) records.push(await removalRecordOf(project, p, getBytes));
+  return records;
+}
+
+async function removalRecordOf(project, p, getBytes) {
+  return {
+    id: p.id, name: p.name, startFloor: p.startFloor, elevation: p.elevation, stories: p.stories,
+    planCutHeightMm: p.planCutHeightMm, ceilingCutHeightMm: p.ceilingCutHeightMm,
+    topStoryHeightMm: p.topStoryHeightMm,
+    isAlternative: p.isAlternative, referenceId: p.referenceId, altIndex: p.altIndex,
+    // インスタンスそのもの（undo スタックの編集エントリが graph を掴んでいるため、復活は同じ instance で行う）
+    plane: p, graph: project.graphMap.get(p.id),
+    bytes: await getBytes(p.id),
+  };
+}
+
+// 全検討案のメタ（collectPlaneMetas は採用階だけのため別に採る）。並びは referenceId→altIndex 昇順。
+// diffFloorOpSnapshot の altsBefore／altsAfter（操作で増えた検討案を addedPlanes へ入れる）に使う。
+export function collectAlternativeMetas(project) {
+  return [...project.planeMap.values()]
+    .filter(p => p.isAlternative)
+    .sort((a, b) => (a.referenceId < b.referenceId ? -1 : a.referenceId > b.referenceId ? 1 : a.altIndex - b.altIndex))
+    .map(p => ({
       id: p.id, name: p.name, startFloor: p.startFloor, elevation: p.elevation, stories: p.stories,
       planCutHeightMm: p.planCutHeightMm, ceilingCutHeightMm: p.ceilingCutHeightMm,
       topStoryHeightMm: p.topStoryHeightMm,
-      isAlternative: p.isAlternative, referenceId: p.referenceId, altIndex: p.altIndex,
-      // インスタンスそのもの（undo スタックの編集エントリが graph を掴んでいるため、復活は同じ instance で行う）
-      plane: p, graph: project.graphMap.get(p.id),
-      bytes: await getBytes(p.id),
-    });
-  }
-  return records;
+      isAlternative: true, referenceId: p.referenceId, altIndex: p.altIndex,
+    }));
+}
+
+// ---- 検討案の採用（promote）の undo ----
+// 採用で変わる Plane 属性は、親とその検討案（採用される検討案を含む）の { isAlternative, referenceId, altIndex, name }。
+// collectAltRoleState でそれらを前後に採り、applyAltRoleState で書き戻す（runPlanCutHeight と同型の同期操作）。
+export function collectAltRoleState(project, parentId) {
+  return [...project.planeMap.values()]
+    .filter(p => p.id === parentId || (p.isAlternative && p.referenceId === parentId))
+    .map(p => ({ id: p.id, isAlternative: p.isAlternative, referenceId: p.referenceId, altIndex: p.altIndex, name: p.name }));
+}
+
+export function applyAltRoleState(project, states) {
+  runInAction(() => {
+    for (const s of states) {
+      const plane = project.planeMap.get(s.id);
+      if (!plane) continue;
+      plane.isAlternative = s.isAlternative;
+      plane.referenceId = s.referenceId;
+      plane.altIndex = s.altIndex;
+      plane.name = s.name;
+    }
+  });
+}
+
+// 検討案 planeId を採用にし、親の採用階を検討案へ降格する（旧 App.jsx の 'promote' の本体）。
+// 検討案でない・親が無いときは何もせず null。変更したら { before, after, parentId }
+// （parentId＝採用前の親。before／after は collectAltRoleState の戻り値で、undo／redo は applyAltRoleState に渡す）。
+export function promoteAlternative(project, planeId) {
+  const plane = project.planeMap.get(planeId);
+  if (!plane || !plane.isAlternative) return null;
+  const refId = plane.referenceId;
+  const adopted = project.planeMap.get(refId);
+  if (!adopted) return null;
+  const before = collectAltRoleState(project, refId);
+  runInAction(() => {
+    const oldName = adopted.name;
+    // plane が新採用になる
+    plane.isAlternative = false;
+    plane.referenceId   = null;
+    plane.altIndex      = 0;
+    plane.name          = oldName;
+    // adopted が検討に降格
+    const newAltCount = [...project.planeMap.values()]
+      .filter(p => p.isAlternative && p.referenceId === planeId).length;
+    adopted.isAlternative = true;
+    adopted.referenceId   = planeId;
+    adopted.altIndex      = newAltCount;
+    adopted.name          = '旧' + oldName;
+    // 他の検討の referenceId を更新
+    for (const [, p] of project.planeMap) {
+      if (p.isAlternative && p.referenceId === refId && p.id !== planeId) {
+        p.referenceId = planeId;
+      }
+    }
+    // altIndex を詰め直す
+    const alts = [...project.planeMap.values()]
+      .filter(p => p.isAlternative && p.referenceId === planeId)
+      .sort((a, b) => a.altIndex - b.altIndex);
+    alts.forEach((p, i) => { p.altIndex = i; });
+  });
+  // 採用後の親は planeId（降格した旧採用階とその検討案、採用された平面がすべて入る）
+  return { before, after: collectAltRoleState(project, planeId), parentId: refId };
 }
 
 // 消えた平面を同じ id で作り直し、バイト列を IDB へ書く（階削除の undo／失敗時の巻き戻し）。
@@ -548,6 +640,9 @@ export async function restoreRemovedPlanes(project, records, { addFloor, addAlte
   for (const r of ordered) {
     if (project.planeMap.has(r.id)) continue;
     if (r.plane && r.graph) {
+      if (r.isAlternative && !project.planeMap.has(r.referenceId)) {
+        throw new Error(`検討案 ${r.id} の親の採用階 ${r.referenceId} が無く作り直せない`);
+      }
       project.restorePlane(r.plane, r.graph); // 同じ Plane／PlanGraph インスタンスを戻す
     } else if (!r.isAlternative) {
       addFloor(r.elevation, r.name, r.startFloor, r.stories, r.id, r.planCutHeightMm, r.ceilingCutHeightMm, r.topStoryHeightMm);
@@ -574,15 +669,17 @@ export async function removeAddedPlanesForUndo(project, addedPlanes, { getBytes,
 // 操作後のメタ（addedPlanes＝metasAfter 由来）を重ねた」もの。バイト列は操作直後に採った addedBytes を優先し、
 // 無ければ undo 時の記録のもの（操作直後は IDB に無かった追加階を後で訪れて離れた場合に、redo で空の階が戻る退行を防ぐ）。
 // 両方 null なら保存しない（その階は一度もアクティブになっておらず、インスタンスがメモリ上の中身を保つ）。
-// 続けて taken のうち検討案の記録をそのまま並べる。taken に記録が無い採用階（undo が退避で中断した等）は
+// 続けて taken のうち検討案の記録（addedPlanes に入っているものを除く＝重複させない）をそのまま並べる。taken に記録が無い採用階（undo が退避で中断した等）は
 // plane／graph の無い記録になる（その id が既にあれば restoreRemovedPlanes が触らず、無ければ addFloor で作る）。
 export function addedPlaneRedoRecords(addedPlanes, taken, addedBytes) {
   const takenById = new Map(taken.map(r => [r.id, r]));
   const adopted = addedPlanes.map(pl => {
     const rec = takenById.get(pl.id);
-    return { ...rec, ...pl, isAlternative: false, bytes: addedBytes.get(pl.id) ?? rec?.bytes ?? null };
+    // 検討案（collectAlternativeMetas 由来）は isAlternative／referenceId／altIndex を持つ。採用階のメタは持たない
+    return { ...rec, ...pl, isAlternative: pl.isAlternative ?? false, bytes: addedBytes.get(pl.id) ?? rec?.bytes ?? null };
   });
-  return [...adopted, ...taken.filter(r => r.isAlternative)];
+  const addedIds = new Set(addedPlanes.map(pl => pl.id));
+  return [...adopted, ...taken.filter(r => r.isAlternative && !addedIds.has(r.id))];
 }
 
 // 階削除の redo: removedPlanes の採用階を（検討案ごと）消す。対象（とその検討案）を表示中なら switchTo(id)
@@ -591,7 +688,10 @@ export function addedPlaneRedoRecords(addedPlanes, taken, addedBytes) {
 // 戻り値: 全て消せたら true。
 export async function removePlanesForRedo(project, removedPlanes, activeAfterId, { removeFloorFn, switchTo }) {
   for (const r of removedPlanes) {
-    if (r.isAlternative || !project.planeMap.has(r.id)) continue;
+    if (!project.planeMap.has(r.id)) continue;
+    // 検討案は、親の採用階も同じ removedPlanes に入っているときだけ飛ばす（親の removeFloor が連鎖して消す）。
+    // 検討案だけの削除（単独）は退避してから消す
+    if (r.isAlternative && removedPlanes.some(x => !x.isAlternative && x.id === r.referenceId)) continue;
     if (blocksFloorRemoval(project, r.id)) {
       const fallbackId = pickRemovalFallback(project, r.id, activeAfterId);
       if (fallbackId) await switchTo(fallbackId);
@@ -609,6 +709,9 @@ export function pickRemovalFallback(project, planeId, preferredId) {
   if (preferred && preferred.id !== planeId && !(preferred.isAlternative && preferred.referenceId === planeId)) {
     return preferred.id;
   }
+  // 対象が検討案なら親の採用階（runDeleteAlternative と同じ規則）
+  const target = project.planeMap.get(planeId);
+  if (target?.isAlternative) return project.planeMap.has(target.referenceId) ? target.referenceId : null;
   const adopted = project.planes;
   const idx = adopted.findIndex(p => p.id === planeId);
   return (adopted[idx + 1] ?? adopted[idx - 1])?.id ?? null;

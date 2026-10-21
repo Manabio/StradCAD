@@ -37,7 +37,7 @@ const GATED = [
   {
     name: 'withFloorOpUndo', noBeginUiTransition: true,
     reason: '呼び出し元（executeAddUpper・handleAddFloorConfirmの各分岐・runReorderFloor・'
-      + 'runFloorChange・runFloorHeights・runDeleteFloor）が全てbeginUiTransition()を済ませてから呼ぶため、本関数内で重ねて呼ばない'
+      + 'runFloorChange・runFloorHeights・runDeleteFloor・runAddAlternative・runCopyAlternative・runDeleteAlternative）が全てbeginUiTransition()を済ませてから呼ぶため、本関数内で重ねて呼ばない'
       + '（二重呼び出しを避け、呼び出し元の責任に統一する）。',
   },
   {
@@ -49,7 +49,6 @@ const GATED = [
     name: 'redoFloorOp', noBeginUiTransition: true,
     reason: '同上（performRedo側）。',
   },
-  'runAddAlternative', 'runDeleteAlternative', 'runCopyAlternative',
   'installElevatorFromNaming', 'deleteElevatorEquipment', 'changeElevatorUsage',
   'handleCLDialogConfirm',
   'convertStairFromNaming',
@@ -126,6 +125,13 @@ const EXEMPT = [
       + 'その内側）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない（runReorderFloorと同じ判定基準）。'
       + '恒久的に対象外（階の追加・削除の見直し S2: 階削除を undo 対象にした）。',
   },
+  ...['runAddAlternative', 'runDeleteAlternative', 'runCopyAlternative'].map(name => ({
+    name,
+    reason: '呼び出し元はhandleFloorMenuActionの確認ダイアログのonSelect（reportFloorTransitionErrorで握る）／copy-altのguardUi経由のみ。'
+      + 'beginUiTransition()（graph/IDBを書かない）を同期で呼んだ後、withFloorOpUndo（既に関門内で自走。平面の追加・切替・削除は'
+      + 'その内側）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない（runDeleteFloorと同じ判定基準）。'
+      + '恒久的に対象外（検討案の追加・削除を undo 対象にした）。',
+  })),
   {
     name: 'executeAddUpper',
     reason: '呼び出し元はhandleAddFloor（[+]ボタン。onClickがguardUiで包装済み）とhandleAddFloorConfirmのみ。'

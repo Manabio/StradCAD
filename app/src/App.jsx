@@ -45,7 +45,7 @@ import {
   computeFloorDeleteReorder, computeFloorInsert, computeFloorAddLowerElevations, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm, setCeilingCutHeightMm,
   collectProjectLevels, applyProjectLevels, rollbackFloorOp,
   collectRemovalRecords, restoreRemovedPlanes, removePlanesForRedo, resolveAddFloorEntry,
-  removeAddedPlanesForUndo, addedPlaneRedoRecords,
+  removeAddedPlanesForUndo, addedPlaneRedoRecords, collectAlternativeMetas, promoteAlternative, applyAltRoleState,
 } from './floorOps.js';
 import { resolveTopStoryHeightMm, computeFloorHeightEdit } from './floorHeights.js';
 import { collectFloorSettingsFacts } from './floorSettingsFacts.js';
@@ -1511,6 +1511,10 @@ const App = observer(() => {
   //   階削除（opts.removalTarget＝削除する採用階の planeId）: 採用階とその検討案の id・メタ・バイト列も前後で採り
   //   （diffFloorOpSnapshot の removedPlanes）、undo は同じ id で作り直して復活した階へ切り替え、redo は
   //   表示中なら退避してから消す。復活は同じ Plane／PlanGraph インスタンスを戻す（削除前の編集の undo エントリが効く）。
+  //   検討案の追加・コピー（'検討案追加'）: 全検討案のメタを前後で採り（collectAlternativeMetas）、増えた検討案を
+  //   addedPlanes に入れる。undo は表示中なら元の平面へ戻ってから消し（記録を採ってから）、redo は同じインスタンスを戻して
+  //   その検討案を表示する。検討案の削除（'検討案削除'・removalTarget＝検討案の planeId）: 検討案1件を記録して消し、
+  //   undo は復活した検討案を表示する。検討案の採用は runPromoteAlternative（同期の属性書き戻し）が別に積む。
   //   既知の限界: 屋根専用平面は対象外。
   async function withFloorOpUndo(label, run, { rollbackOnError = false, afterApply, prepare, afterCommit, removalTarget } = {}) {
     await runBusy(label, async () => {
@@ -1523,6 +1527,7 @@ const App = observer(() => {
       const before = await collectFloorBytes();
       const metasBefore = collectPlaneMetas(project);
       const levelsBefore = collectProjectLevels(project);
+      const altsBefore = collectAlternativeMetas(project); // 検討案の追加・コピーで増えた平面を差分で見つける（run の前に採る）
       const removalBefore = removalTarget ? await collectRemovalRecords(project, removalTarget, readPlaneBytes) : [];
 
       // rollbackOnError のとき、run と操作後のバイト列採取の失敗を巻き戻す（実体は floorOps.js rollbackFloorOp）。
@@ -1552,9 +1557,10 @@ const App = observer(() => {
       }
       const metasAfter = collectPlaneMetas(project);
       const levelsAfter = collectProjectLevels(project);
+      const altsAfter = collectAlternativeMetas(project);
       const { addedPlanes, removedPlanes, changedSiblings, hasChanges } = diffFloorOpSnapshot({
         before, after, metasBefore, metasAfter, levelsBefore, levelsAfter,
-        removalBefore, existingIdsAfter: new Set(project.planeMap.keys()),
+        removalBefore, existingIdsAfter: new Set(project.planeMap.keys()), altsBefore, altsAfter,
       });
       if (!hasChanges) return;
 
@@ -1595,8 +1601,8 @@ const App = observer(() => {
           applyProjectLevels(project, levelsBefore);
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);
           runInAction(() => followRoofPlaneToTop(project));
-          // 階削除の undo の後は復活した階を表示する（Q11）
-          const revivedId = removedPlanes.find(r => !r.isAlternative)?.id;
+          // 階削除の undo の後は復活した階を表示する（Q11）。検討案だけの削除なら復活した検討案を表示する
+          const revivedId = (removedPlanes.find(r => !r.isAlternative) ?? removedPlanes[0])?.id;
           if (revivedId && project.planeMap.has(revivedId)) await trySwitchFloor(() => handleFloorSwitch(revivedId));
           // afterApply は関門の中で待つ（図の作り直しの途中に階切替・モード切替を割り込ませない）
           await afterApply?.();
@@ -1840,35 +1846,7 @@ const App = observer(() => {
     }
 
     if (action === 'promote') {
-      const refId    = plane.referenceId;
-      const adopted  = project.planeMap.get(refId);
-      if (!adopted) return;
-      runInAction(() => {
-        const oldName = adopted.name;
-        // plane が新採用になる
-        plane.isAlternative = false;
-        plane.referenceId   = null;
-        plane.altIndex      = 0;
-        plane.name          = oldName;
-        // adopted が検討に降格
-        const newAltCount = [...project.planeMap.values()]
-          .filter(p => p.isAlternative && p.referenceId === planeId).length;
-        adopted.isAlternative = true;
-        adopted.referenceId   = planeId;
-        adopted.altIndex      = newAltCount;
-        adopted.name          = '旧' + oldName;
-        // 他の検討の referenceId を更新
-        for (const [, p] of project.planeMap) {
-          if (p.isAlternative && p.referenceId === refId && p.id !== planeId) {
-            p.referenceId = planeId;
-          }
-        }
-        // altIndex を詰め直す
-        const alts = [...project.planeMap.values()]
-          .filter(p => p.isAlternative && p.referenceId === planeId)
-          .sort((a, b) => a.altIndex - b.altIndex);
-        alts.forEach((p, i) => { p.altIndex = i; });
-      });
+      runPromoteAlternative(planeId);
       return;
     }
 
@@ -1886,7 +1864,7 @@ const App = observer(() => {
 
   async function runAddAlternative(v, refId, refPlane, sourcePlane) {
     beginUiTransition();
-    await runBusy('階操作', async () => {
+    await withFloorOpUndo('検討案追加', async () => {
       const altCount = [...project.planeMap.values()]
         .filter(p => p.isAlternative && p.referenceId === refId).length;
       const letter   = String.fromCharCode('a'.charCodeAt(0) + altCount);
@@ -1957,7 +1935,7 @@ const App = observer(() => {
 
   async function runDeleteAlternative(planeId, plane) {
     beginUiTransition();
-    await runBusy('階操作', async () => {
+    await withFloorOpUndo('検討案削除', async () => {
       if (project.activePlaneId === planeId) {
         const fallback = project.planeMap.get(plane.referenceId);
         if (fallback) await trySwitchFloor(() => handleFloorSwitch(fallback.id));
@@ -1965,12 +1943,12 @@ const App = observer(() => {
         if (project.activePlaneId === planeId) return;
       }
       await removeFloor(planeId);
-    });
+    }, { rollbackOnError: true, removalTarget: planeId });
   }
 
   async function runCopyAlternative(plane, planeId) {
     beginUiTransition();
-    await runBusy('階操作', async () => {
+    await withFloorOpUndo('検討案追加', async () => {
       const refId   = plane.isAlternative ? plane.referenceId : planeId;
       const newName = plane.name + "'";
       // 直列化はaddAlternativeFloorより前に採る（runAddAlternativeと同じ理由。線idの振り直しが
@@ -2105,6 +2083,20 @@ const App = observer(() => {
         await rebuildFiguresAfterHeights();
       },
     });
+  }
+
+  // 検討案の採用。親とその検討案の Plane 属性（isAlternative・referenceId・altIndex・name）だけを書く同期操作
+  // （runPlanCutHeight と同型のため関門は不要）。本体は floorOps.js promoteAlternative。undo/redo は前後の属性の書き戻し。
+  // 検討案の追加の undo は「追加した平面が検討案のまま」を前提に消すため、採用はその undo より後に積まれて先に戻る
+  // （スタック順。採用を積まないと追加の undo が採用後の平面＝元の採用階の降格先を巻き込んで消す）。
+  function runPromoteAlternative(planeId) {
+    const changed = promoteAlternative(project, planeId);
+    if (!changed) return;
+    markDirty();
+    undoManager.push(
+      () => { applyAltRoleState(project, changed.before); markDirty(); },
+      () => { applyAltRoleState(project, changed.after); markDirty(); },
+    );
   }
 
   // 平面の切断高の変更。Plane の属性だけを書く同期操作（graph/IDB は書かない）ため関門は不要で、
