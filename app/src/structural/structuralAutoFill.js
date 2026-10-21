@@ -287,6 +287,50 @@ export function autoFillBeams(graph, project, role = 'primary', wallGate = null)
   return { created, removed };
 }
 
+/** 基礎伏図でなくなった階（下に階が足された＝最下階でない）に残る自動生成の基礎梁・独立フーチングを撤去する
+ *  （階追加の S5c-1。ユーザー裁定2026-10-21 Q-A3）。残った基礎梁は spanKey（roleを含まない）で同じ辺の床梁生成を塞ぐ。
+ *  対象は dimensionStatus==='auto' のみ（locked／手動固定は保持＝手動追加材を黙って消さない）。
+ *  基礎伏図（最下階）・屋根専用平面（isFoundationPlane は false だが基礎を持たない）では呼ばない。
+ *  excludedBeamSlots／excludedFootingSlots には触れない。
+ *  @returns {{removedBeams: string[], removedFootings: string[]}} */
+export function removeStaleFoundationMembers(graph) {
+  const removedBeams = [];
+  for (const beam of [...graph.beams]) {
+    if (beam.role !== 'foundation' || beam.dimensionStatus !== 'auto') continue;
+    graph.beamMap.delete(beam.id);
+    removedBeams.push(beam.id);
+  }
+  const removedFootings = [];
+  for (const footing of [...graph.footings]) {
+    if (!(footing instanceof IndependentFooting) || footing.dimensionStatus !== 'auto') continue;
+    graph.footingMap.delete(footing.id);
+    removedFootings.push(footing.id);
+  }
+  return { removedBeams, removedFootings };
+}
+
+/** 上の逆向き（地階を削除して最下階＝基礎伏図に戻った階。Q-A4b・ユーザー裁定2026-10-21）: 基礎伏図に残る
+ *  自動生成の床梁系の梁を撤去する。残ると同spanKeyの基礎梁の生成を塞ぐ。
+ *  規則: 基礎伏図では autoFill が生成しない床梁系の role だけ撤去する（生成しうる role を撤去すると、再計算のたびに
+ *  撤去→再生成で id が変わり changed が毎回真になる）。
+ *  - primary: 基礎伏図では autoFillBeamsForStructure が role:'foundation' しか作らない（本ファイル autoFillStructuralGrid の beamKind 分岐）→ 対象。
+ *  - landing: autoFillStairLandingBeams は belowGraph が無い最下階では源が空（collectLandingSources）→ 対象。
+ *  - secondary: autoFillSecondaryBeams は基礎伏図でも呼ばれ、role:'primary' の梁（locked 等）が残れば生成しうる → 対象外。
+ *  - floor: autoFillWoodFloorBeams は基礎伏図でも呼ばれ、primary の梁が残れば生成しうる → 対象外。
+ *  partitionBeam（隔て梁）は autoFillStairPartitionBeams が自前で撤去する／eaves・roofBeam は屋根の梁／sill は基礎伏図の梁
+ *  （別課題 Q-A5）なので含めない。対象は dimensionStatus==='auto' のみ（locked／手動固定は保持）。
+ *  @returns {string[]} 撤去した梁id */
+export function removeStaleFloorBeams(graph) {
+  const removed = [];
+  for (const beam of [...graph.beams]) {
+    if (!STALE_FLOOR_BEAM_ROLES.has(beam.role) || beam.dimensionStatus !== 'auto') continue;
+    graph.beamMap.delete(beam.id);
+    removed.push(beam.id);
+  }
+  return removed;
+}
+const STALE_FLOOR_BEAM_ROLES = new Set(['primary', 'landing']);
+
 /** 梁(role:'primary')の自動生成を主構造ルールの選択子（beamPlacement）で振り分ける単一の入口。
  *  通り芯グリッド辺（既定）＝autoFillBeams、壁線上の通し梁（在来木造）＝autoFillWoodWallBeams
  *  （撤去も伴う）。role==='primary'（かつ在来木造）のときだけ壁線方式へ切り替える——基礎梁
@@ -705,6 +749,11 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null, below
 export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined, roofColumnFilter = null, openingComponents = undefined) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
+  // 基礎伏図でなくなった実体階（下に階が足された）の auto の基礎梁・独立フーチングを先に撤去する
+  // （残ると同spanKeyの床梁生成を塞ぐ。屋根専用平面は対象外）。撤去分は戻り値の removedBeams/removedFootings へ足す。
+  const staleFoundation = (!foundation && !isRoof) ? removeStaleFoundationMembers(graph) : { removedBeams: [], removedFootings: [] };
+  // 逆に基礎伏図（最下階）へ戻った階は、残った auto の床梁系の梁を撤去する（同spanKeyの基礎梁の生成を塞ぐため）。
+  if (foundation) staleFoundation.removedBeams.push(...removeStaleFloorBeams(graph));
   // 下階の隔て壁の両端の柱（頭つなぎの起点から除く。woodAutoFill.js autoFillWoodWallBeams の belowTieExcludePts）。
   // 識別は幾何（下階graphの stairPartitionEnds の点とAXIS座標が一致する柱）。由来集合は使わない。
   const belowPartitionEnds = belowGraph ? stairPartitionEnds(belowGraph, project) : []; // 隔て梁（stairPartitionBeams.js）も使う。1回だけ求める
@@ -749,7 +798,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const footingsResult = (foundation && ownSpecified && structureHasMemberKind(MEMBER_KIND.INDEPENDENT_FOOTING, structure)
     && foundationGeneratesBase(structure, foundationType)) ? autoFillFootings(graph, wallGate) : { created: [], removed: [] };
   const newFootings = footingsResult.created;
-  const removedFootings = footingsResult.removed;
+  const removedFootings = [...footingsResult.removed, ...staleFoundation.removedFootings];
   // 踊り場受け梁（role:'landing'）。到達階（踊り場の上の階）へ自動生成する（ユーザー裁定2026-09-28:
   // 設置階ではなく到達階）。同spanKeyの自動生成G（role:'primary'）との排他性はautoFillStairLandingBeams
   // 内の置換分岐（同spanKeyのauto G撤去）が保証する——ここで大梁(G)生成より前に呼ぶのは、1パス内で
@@ -834,7 +883,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     // （structuralRecompute.js の changed 判定はこの配列の長さも見る）。
     changedOpeningBeamAxes: [...relabeledOpeningBeamAxes, ...retargetedOpeningBeamAxes, ...retargetedOpeningBeamAxesAfterCreate],
     newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newOpeningBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
-    removedBeams: [...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes, ...removedLandingG, ...removedStaleLandingBeams],
+    removedBeams: [...staleFoundation.removedBeams, ...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes, ...removedLandingG, ...removedStaleLandingBeams],
     // 踊り場受け梁の既存auto LGへのlevelOffset再計算更新（QA指摘F1是正）。新規/撤去した梁ではないため
     // newBeams/removedBeamsには混ぜず、changedOpeningBeamAxesと同じ別枠にする
     // （structuralRecompute.jsのchanged判定はこの配列の長さも見る）。
