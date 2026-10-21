@@ -40,11 +40,23 @@ CL操作（`transform/centerLineOps.js`の`addCenterLineFromDialog`・`commitCLM
 仕上げモード undo（`finish/finishUndo.js`）は階段を項目ごとに列挙して写すため、`Stair` に項目を足したら `snapshotStairs`／`restoreStairs` の列挙も足す。採取側の列挙漏れは `finishUndo.test.js` のキー集合の突合テストが、復元側の渡し忘れは全項目を既定値以外にした往復テスト（fixture の項目集合も `Stair` と突合）が検出する。
 
 ## 階操作（追加・挿入・並替・階変更）は「全採用フロアのbefore/afterバイト列比較＋Planeメタ比較」で1エントリ
-plane作成・新階同期（階段吹抜けの整合・昇降機の複製）・切替・全階の構造再計算が複数階へ波及するため、逆操作ではなく前後比較で記録する（`withFloorOpUndo`。`beginUiTransition()`は呼び出し元が直前に呼ぶ）。全採用階のPlaneメタ（elevation・startFloor・name・stories。`collectPlaneMetas`）もbefore/afterで持つため、追加階が無い並替・階変更でもメタに差があれば1エントリ積む。積むかどうか・差分（`addedPlanes`・`changedSiblings`・`hasChanges`）は`floorOps.js`の純関数`diffFloorOpSnapshot`へ委譲し、`withFloorOpUndo`自身は判定しない。redoは**同一planeId**でplaneを再作成してbytesを書き戻す（IDが変わると以降のundo/redoサイクルとIDBキーが壊れる）。フロー内の構造再計算は個別pushを抑止する（二重記録防止。`recomputeActiveStructural(pushUndo=false)`）。階削除は従来どおりundo無し（下記「undo対象外」節）。GL（`Project.glBelow1FlMm`。Planeに属さない）は階設定表の確定で変わるため、メタとは別に`collectProjectLevels`／`applyProjectLevels`で前後を持ち、`diffFloorOpSnapshot`の`levelsChanged`で「変更あり」に数える（App.jsxの`withFloorOpUndo`への配線は階設定表S5）。
+plane作成・新階同期（階段吹抜けの整合・昇降機の複製）・切替・全階の構造再計算が複数階へ波及するため、逆操作ではなく前後比較で記録する（`withFloorOpUndo`。`beginUiTransition()`は呼び出し元が直前に呼ぶ）。全採用階のPlaneメタ（elevation・startFloor・name・stories。`collectPlaneMetas`）もbefore/afterで持つため、追加階が無い並替・階変更でもメタに差があれば1エントリ積む。積むかどうか・差分（`addedPlanes`・`changedSiblings`・`hasChanges`）は`floorOps.js`の純関数`diffFloorOpSnapshot`へ委譲し、`withFloorOpUndo`自身は判定しない。redoは**同一planeId**でplaneを再作成してbytesを書き戻す（IDが変わると以降のundo/redoサイクルとIDBキーが壊れる）。フロー内の構造再計算は個別pushを抑止する（二重記録防止。`recomputeActiveStructural(pushUndo=false)`）。階削除もこの方式で1エントリ（下記「階削除のundo」節）。GL（`Project.glBelow1FlMm`。Planeに属さない）は階設定表の確定で変わるため、メタとは別に`collectProjectLevels`／`applyProjectLevels`で前後を持ち、`diffFloorOpSnapshot`の`levelsChanged`で「変更あり」に数える（App.jsxの`withFloorOpUndo`への配線は階設定表S5）。
+
+## 階削除のundo（`runDeleteFloor`。2026-10-21）
+`withFloorOpUndo('階削除', …, { rollbackOnError, removalTarget })`に載せる（呼び出し元が直前に`beginUiTransition()`）。前後のスナップショットに**削除される採用階とその検討案**（メタ・バイト列・Plane／PlanGraphのインスタンス）を足し、`diffFloorOpSnapshot`が`removedPlanes`（beforeにあってafterに無いもの）を返す。通常のスナップショットは存続する採用階しか採らないので、削除された平面は別枠で持つ必要がある（`floorOps.js`の`collectRemovalRecords`）。
+- **undo**: 既存の階のメタを先に戻す→消えた平面を**同じPlane／PlanGraphインスタンスのまま**`project.restorePlane`で戻してバイト列を保存→階番号・昇降機の番号の索引（保存しないキャッシュ）を破棄→既存階のバイト列を戻す→屋根専用平面を最上階へ追従→**復活した階を表示する**。インスタンスを作り直さない理由は、削除前の編集のundoエントリがそのgraph参照を握っており、同一インスタンスで戻せば復活した階でそれらが効くため。
+- **redo**: 削除対象を表示中なら先に退避してから`removeFloor`（`removePlanesForRedo`）→メタとバイト列をafterへ。
+- **失敗時**: 退避の切替に失敗したら中断してundoを積まない。`removeFloor`のIDB途中失敗は書き戻す。follower失敗は平面を戻す（`rollbackFloorOp`）。
+- **戻る範囲**: 削除した階と検討案の中身、他の階のSTAIR_VOIDの整合・構造反映・昇降機の再採番（いずれも既存の階のバイト列の差分に入る）。
+- **既知の限界**: (1)階が削除されている間に行った編集の履歴は無い。(2)屋根専用平面のバイト列とstructGraphは階操作のundo対象外（最上階を削除した後に構造モードへ入ると屋根平面が新しい最上階のidで作り直され、undoしても旧屋根平面は戻らない。挿入と同じ既存の限界）。(3)挿入のredoも`addFloor`で平面を作り直すため、同系統の食い違いがありうる（未対応・報告のみ）。
+
+## 構造の変更（主構造・地階構造・基礎種別・柱寸）のundo（`recomputeStructuralComposition`。2026-10-21）
+構造モードの共通タブ・部材タブからの変更は、`mutate`の前後で**建物全体の構造の選択**（主構造・地階構造・基礎種別。`StructuralInfo.captureStructureChoice`/`restoreStructureChoice`）を採り、自階＋直下階の再計算と同じ1エントリで戻す。以前は建物全体値を戻さず、主構造をundoしても部材だけ戻って`mainStructure`が残った（C2で是正）。選択の復元は`restoreGraph`・部材グループの再同期より**前**に行う——再同期が`effectiveStructure`を読むため。他の階は構造モードの境界で反映するので（モード境界の反映はundo対象外）、undoで値が戻れば次の境界で揃う。
+- **失敗時の巻き戻し（C9）**: 再計算が途中で失敗したら、構造の選択と自階・直下階を`mutate`前へ戻して再throwし、undoは積まない（`onStructureChanged`は`uiBusy`の関門を通り、失敗は専用文言で出す）。
+- **既知の限界**: 地階構造を変えた後に、それ以前のCL操作をundoすると地階構造も戻る（`restoreStructCLs`が`StructuralInfo`をまるごと戻すため、主構造と同型）。undo履歴は階ごとなので、地階構造の変更は変えた階の履歴からしか戻せない。
 
 ## undo対象外（意図的な割り切り）
-- 仕上げモード突入時の階段吹抜けの整合（`reconcileOnFinishEntry`）: 冪等なデータ修復。階操作のfollower（`stairVoidReconcile`）は階操作エントリが包含するが、階削除は元からundo対象外。階段の削除は別（`runStairRemoval`が1エントリに合成し、undoで全階が戻る）
-- 階削除とそれに伴う昇降機の再採番（`renumberEquipmentAfterFloorRemoval`）: 現行の階削除の扱い（undo不可）に従う
+- 仕上げモード突入時の階段吹抜けの整合（`reconcileOnFinishEntry`）: 冪等なデータ修復。階操作のfollower（`stairVoidReconcile`）は階操作エントリが包含する。階段の削除は別（`runStairRemoval`が1エントリに合成し、undoで全階が戻る）
 - `syncRoofPlane`・構造モード突入時の自動補完: 建物形状が変われば作り直す冪等インフラ
 - 階操作の屋根平面の高さ追従（`roofPlaneHeight`follower。`followRoofPlaneToTop`）: 屋根平面はPlaneメタ・バイト列どちらのundo記録の対象外（`collectPlaneMetas`/`collectFloorBytes`は`project.planes`のみを見る）。最上階idが変わる作り直しは階操作では行わず次の構造モード突入の`syncRoofPlane`に任せる（§「階操作は～」節参照）
 - 編集可能peek（構造モードの下階柱編集）のgraphを対象にした変更: 復元先が使い捨てで履歴ナビでも復活しない

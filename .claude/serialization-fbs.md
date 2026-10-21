@@ -29,5 +29,8 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 ## 階設定表の値（`PLN.TOP_STORY_HEIGHT=12`・`GS.GL_BELOW_1FL_MM=54`）は0＝未設定で、既定への読み替えは読み側（`floorHeights.js`）が持つ
 どちらもfloat64で、0のときはバイト列に出ない（既存文書は不変）。readerは0のまま返す（`planCutHeightMm`のように復元側で既定へ化けさせない）——最上階の階高の既定は構造（在来木造2900・他3000）に依るため、読む時点で解決する。`GL_BELOW_1FL_MM`は`PLANES`と同じplane一覧チャネル（`serializePlanes`/`decodePlanes`）でだけ運ぶproject単位の値で、per-floorのblobには書かない。Planeのフィールドを足すときは`collectPlaneMetas`/`applyPlaneMetas`/`planeMetasEqual`（undoの列挙）と`store.js restorePlanesFromIDB`も同時に足す。
 
+## 地階構造（`SI.BASEMENT_STRUCTURE=14`）は値があるときだけ書く
+`StructuralInfo.basementStructure`（`'RC造(ラーメン)'｜'RC造(壁式)'｜null`）は`SI`テーブル末尾の文字列フィールド。nullのときは何も書かない（末尾のフィールドはvtableで切り詰められるため、地階構造を使わない文書のバイト列は1バイトも変わらない）。読みは`normalizeBasementStructure`を通し、フィールドが無い旧データ・未知の文字列・空文字はnull。`graphSnapshot`の採取（`buildStructSnapshot`）と復元（`restoreStructCLs`）にも足してあり、CL操作のundo・文書読込み・階操作のundoで保たれる。`StructuralInfo`に項目を足すときは、ここに加えて`FloorSwapManager`のdirty追跡（足し忘れると、その項目だけの変更で未保存の印が付かない）と階操作のundoの列挙（`collectProjectLevels`等）も同時に足す。設計意図は`.claude/structural-model.md`。
+
 ## 主屋根（`GS.MAIN_ROOF_SPEC=53`→同じ`RS`テーブル）は既定値のとき書かない
 最上階の階ごと設定（`PlanGraph.mainRoofSpec`）。`graphSnapshot.buildSnapshot`が`isDefaultRoofSpec`で既定値なら`null`にし、`encode`は`null`のとき何も書かない（フィールド自体を省く）ので、主屋根を編集していない文書のバイト列は1バイトも変わらない（読み側は無ければ`restoreGraph`の`clear()`の既定値）。`RS`の読み書きは下屋と共用（`writeRoofSpec`/`readRoofSpec`）。
