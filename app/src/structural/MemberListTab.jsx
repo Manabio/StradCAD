@@ -603,11 +603,12 @@ const WoodColumnWidthSelect = observer(({ graph, project, onStructureChanged, on
   const value = woodColumnWidthMm(graph, project);
   function handleChange(width) {
     const notice = columnWidthChangeNotice({ prevWidth: value, nextWidth: width, wallCount: graph.walls.length });
-    onStructureChanged(() => {
+    // onStructureChanged は受理したら Promise、busy で無視したら undefined を返す（App.jsx guardUi の契約）。
+    const accepted = onStructureChanged(() => {
       graph.setWoodColumnWidthMm(width);
       normalizeColumnOverridesToFloor(graph, width);
     });
-    if (notice) onColumnWidthNotice?.(notice);
+    if (accepted && notice) onColumnWidthNotice?.(notice);
   }
   return (
     <select
@@ -659,14 +660,16 @@ const ColumnWidthScopeSelect = observer(({ scope, focusedMember, graph, project,
     if (target === null) return; // 書き込み先が無い（focusedMember不在・未知のscope）→何もしない
     if (target === 'floor') {
       const notice = columnWidthChangeNotice({ prevWidth: floorWidth, nextWidth: next, wallCount: graph.walls.length });
-      onStructureChanged(() => {
+      const accepted = onStructureChanged(() => {
         graph.setWoodColumnWidthMm(next);
         normalizeColumnOverridesToFloor(graph, next);
       });
-      if (notice) onColumnWidthNotice?.(notice);
+      if (accepted && notice) onColumnWidthNotice?.(notice);
     } else if (target === 'member') {
-      onPendingFocus?.(focusedMember.id);
-      onStructureChanged(() => { focusedMember.setField('woodColumnWidthMm', next); });
+      // onPendingFocus は受理されたときだけ（busy で無視された変更のフォーカス要求だけを残さない）。
+      // mutate は関門の中で非同期に走る（guardUi の受理判定は同期）ため、従来どおり mutate より前に要求が立つ。
+      const accepted = onStructureChanged(() => { focusedMember.setField('woodColumnWidthMm', next); });
+      if (accepted) onPendingFocus?.(focusedMember.id);
     }
   }
   return (

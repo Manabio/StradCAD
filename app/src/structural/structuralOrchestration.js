@@ -6,6 +6,7 @@
 import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
+import { structureChoiceEquals } from '../core/structuralInfo.js';
 import { ERR_STRUCT_MAIN_UNSPECIFIED } from '../error.js';
 import { autoFillColumnsForStructure, autoFillColumnAxisOffsets, autoFillColumnSizes, resolveLowestGraph, convertMembersToEffectiveMaterial, deleteClassificationOverflow, UNSPECIFIED_STRUCTURE } from './structuralAutoFill.js';
 import { conformWoodSections, conformWoodBeamLevels } from './woodAutoFill.js';
@@ -153,7 +154,10 @@ export function columnSetSignature(columns) {
 // 既に activate 済みの composition を受け取り、構造伏図に映る全グラフ（自階＋1つ下の階）を再計算する。
 // mutate（主構造の変更操作）を渡すと、自階スナップショットの before 取得後・after 取得前に runInAction で
 // 実行し、主構造変更と部材の生成・材変換・採番をまとめて1つの undo エントリにする（override は graph
-// snapshot に含まれるため undo で戻る。建物全体既定値 mainStructure は project 側のため従来どおり対象外）。
+// snapshot に含まれるため undo で戻る）。建物全体の構造の選択（主構造・地階構造・基礎種別。project.structuralInfo の
+// captureStructureChoice）は graph snapshot に含まれないため、mutate の前後で採って同じ undo エントリで戻す（S5d。
+// 値が変わらなかったときは触らない）。mutate があって途中で失敗したら、構造の選択・自階・下階を mutate 前へ戻して
+// rethrow する（undo は積まない。戻し損ねた分は握りつぶさず console.error）。
 // 主構造変更時（mutate あり）は下階グラフ（伏図に映る柱の供給元）も同じ undo エントリで戻す。
 // 突入時（mutate なし）は自階 recompute の差分があるときだけ undo を積む（下階は表示用 peek＝undo 非対象。従来挙動を保持）。
 // pushUndo=false は構造モード突入の外側収束ループ用（runStructuralModeSetup が複数回呼ぶ間は個別に
@@ -169,7 +173,20 @@ export async function recomputeStructuralComposition(composition, subjectGraph, 
   return withToastScope(opts.onToast, () => recomputeStructuralCompositionBody(composition, subjectGraph, project, opts));
 }
 
-async function recomputeStructuralCompositionBody(composition, subjectGraph, project, { mutate, onToast, pushUndo = true, ctx = undefined } = {}) {
+async function recomputeStructuralCompositionBody(composition, subjectGraph, project, opts = {}) {
+  // 失敗時の巻き戻し（mutate あり）: 本体が mutate の前に rollback を差し込み、例外ならここで実行して rethrow する。
+  const guard = { rollback: null };
+  try {
+    return await recomputeStructuralCompositionRun(composition, subjectGraph, project, opts, guard);
+  } catch (err) {
+    if (opts.mutate && guard.rollback) {
+      try { guard.rollback(); } catch (rollbackErr) { console.error(rollbackErr); }
+    }
+    throw err;
+  }
+}
+
+async function recomputeStructuralCompositionRun(composition, subjectGraph, project, { mutate, onToast, pushUndo = true, ctx = undefined } = {}, guard) {
   const before = serializeGraph(subjectGraph);
   // 自階床下材＝subjectGraph、1つ下の階の柱＝belowGraph。基礎伏図（1つ下が無い）は belowGraph=null。
   // mutate 実行前に解決する——mutate が下階（belowGraph）自身を書き換える操作（各階柱寸法の変更等。
@@ -177,7 +194,19 @@ async function recomputeStructuralCompositionBody(composition, subjectGraph, pro
   // 取っておく必要がある（後方の belowBefore 参照）。
   const belowGraph = composition.graphForCategory('columnMap');
   const belowBeforeRaw = (mutate && belowGraph) ? serializeGraph(belowGraph) : null;
-  if (mutate) runInAction(mutate);
+  // 建物全体の構造の選択は mutate の前に採る（採る位置が破壊操作の後にずれると undo が変更後を「前」として戻す）。
+  const info = project.structuralInfo;
+  const choiceBefore = mutate ? info.captureStructureChoice() : null;
+  if (mutate) {
+    guard.rollback = () => runInAction(() => {
+      info.restoreStructureChoice(choiceBefore);
+      restoreGraph(subjectGraph, before);
+      if (belowBeforeRaw) restoreGraph(belowGraph, belowBeforeRaw);
+    });
+    runInAction(mutate);
+  }
+  const choiceAfter = mutate ? info.captureStructureChoice() : null;
+  const choiceChanged = mutate && !structureChoiceEquals(choiceBefore, choiceAfter);
   // mutate が下階の編集可能peek（belowGraph）を書き換えた場合、この直後の subjectGraph 自身の再計算
   // （recomputeStructuralForGraph）が内部で行う下階への「別インスタンスの」fresh peek
   // （floorSwapManager.peek は毎回IDBから読む・undo-redo.md）が、下階のデバウンス保存（最大400ms）
@@ -362,11 +391,14 @@ async function recomputeStructuralCompositionBody(composition, subjectGraph, pro
   if (pushUndo && (mutate || changed)) {
     undoManager.push(
       () => {
+        // 構造の選択を先に戻す（resyncTouchedMemberGroups が effectiveStructure を読むため）。
+        if (choiceChanged) info.restoreStructureChoice(choiceBefore);
         restoreGraph(subjectGraph, before);
         if (belowBefore) restoreGraph(belowGraph, belowBefore);
         resyncTouchedMemberGroups(subjectGraph, belowGraph, belowBelowGraph, project);
       },
       () => {
+        if (choiceChanged) info.restoreStructureChoice(choiceAfter);
         restoreGraph(subjectGraph, after);
         if (belowAfter) restoreGraph(belowGraph, belowAfter);
         resyncTouchedMemberGroups(subjectGraph, belowGraph, belowBelowGraph, project);

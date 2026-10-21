@@ -96,7 +96,7 @@ import {
 } from './transform/centerLineOps.js';
 import { collectFixedMembersByFloor, clDisplayName, formatFixedMemberConfirm } from './structural/fixedMemberRefs.js';
 import {
-  ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure,
+  ERR_SESSION_LOCKED, floorTransitionErrorMessage, tagCLOpFailure, ERR_ELEVATOR_FLOORS_CHANGED, tagElevatorOpFailure, tagStructChangeFailure,
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE, ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
   ERR_ROOF_UPPER_ROOMS, ERR_STAIR_UPPER_CHECK_FAILED, ERR_STAIR_DESIGNATE_ABORTED, ERR_FLOOR_SETTINGS_LOAD_FAILED,
   ERR_STAIR_DESIGNATE_FAILED, ERR_STAIR_DESIGNATE_FAILED_MESSAGE,
@@ -1069,6 +1069,8 @@ const App = observer(() => {
   // 内部でtry/catchせず素通しする。UIコールバックとして渡されたときの失敗表示はここで拾う
   // （performUndo/performRedo/handleModeChangeは従来どおり自前でcatchするため、ここでは
   // 二重に表示されない＝catch済みのfnはresolveするだけ）。
+  // 戻り値の契約: 受理した（関門に入った）ときはPromise、busyで無視したときはundefined。呼び出し側は
+  // 「受理されたときだけ」付随処理（注意表示・フォーカス要求等）を続けられる（MemberListTabの柱寸変更が使う）。
   function guardUi(fn) {
     return (...args) => {
       if (isUiBusy()) return;
@@ -1088,6 +1090,28 @@ const App = observer(() => {
       reportFloorTransitionError(err);
       return false;
     }
+  }
+
+  // 構造パネル（共通タブ・構造リストの柱寸/偏心）の変更の入口。mutate（主構造・地階構造・各階柱寸法等の書き換え）→
+  // 構造伏図に映る全グラフ（自階＋下階）の再計算と undo 登録は recomputeStructuralComposition がまとめて行う
+  // （柱寸変更・自階再計算・建物全体の採番・undoをこの1つの仕組みに統一する。実機裁定ステップ4 C-2 QA2）。
+  // 再計算は非同期で、途中の階切替・undo・別の変更と交わると壊れるため関門（runBusy）に入る——busy の間の入力は
+  // guardUi が黙って無視する。失敗の表示も guardUi（reportFloorTransitionError）に一本化する。
+  async function handleStructureChanged(mutate) {
+    beginUiTransition();
+    await runBusy('構造の変更', async () => {
+      await structuralSync.whenIdle();
+      // 再計算の失敗は recomputeStructuralComposition が変更前へ巻き戻して rethrow する。階切替の汎用文言に
+      // 丸められないよう、guardUi へ渡す前に code を付ける（tagStructChangeFailure）。
+      try {
+        if (!structComposition) { runInAction(mutate); return; } // 万一 composition 未確立時は変更だけ反映
+        await recomputeStructuralComposition(structComposition, project.activeGraph, project, {
+          mutate, onToast: msg => setToast({ msg, key: Date.now() }),
+        });
+      } catch (err) {
+        throw tagStructChangeFailure(err);
+      }
+    });
   }
 
   // Ctrl+Z / Ctrl+Y の実体。コンテキスト切替は非同期。多重実行は guardUi と capture keydown
@@ -3218,19 +3242,7 @@ const App = observer(() => {
           onToast={msg => setToast({ msg, key: Date.now() })}
           onSelectMembers={selectStructuralMembers}
           deselectRequest={memberDeselectRequest}
-          onStructureChanged={mutate => {
-            // 主構造変更（mutate）→ 構造伏図に映る全グラフ（自階＋下階）を再計算し、下階の柱も実効主構造へ追従させる。
-            // 構造リストタブ（MemberListTab.jsx）の「各階柱寸法」変更（mutateが自階graphの柱寸を書き換える。
-            // 裁定2026-09-16「柱寸の変更は当該階の柱□のみ」）も同じ経路に乗せる（実機裁定ステップ4 C-2 QA2。
-            // 柱寸変更・自階再計算・建物全体の採番・undoをこの1つの仕組みに統一する）。
-            if (structComposition) {
-              recomputeStructuralComposition(structComposition, project.activeGraph, project, {
-                mutate, onToast: msg => setToast({ msg, key: Date.now() }),
-              }).catch(console.error);
-            } else {
-              runInAction(mutate); // 万一 composition 未確立時は変更だけ反映
-            }
-          }}
+          onStructureChanged={guardUi(handleStructureChanged)}
         />
       )}
     </>

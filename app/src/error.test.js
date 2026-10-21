@@ -11,7 +11,21 @@ import {
   ERR_STAIR_DESIGNATE_FAILED, ERR_STAIR_DESIGNATE_FAILED_MESSAGE, ERR_STAIR_DESIGNATE_ABORTED,
   ERR_STAIR_UPPER_CHECK_FAILED, ERR_ELEVATOR_FLOORS_CHANGED,
   ERR_STAIR_DELETE_FAILED, ERR_STAIR_DELETE_FAILED_MESSAGE,
+  tagStructChangeFailure, ERR_STRUCT_CHANGE_FAILED, ERR_STRUCT_CHANGE_FAILED_MESSAGE,
 } from './error.js';
+
+test('【S5d・F1】構造の変更の失敗: tag した例外は「変更前に戻しました」文言になり、tag していない例外は階切替の汎用文言のまま。既知codeは上書きしない', () => {
+  const raw = new Error('IDB boom');
+  const tagged = tagStructChangeFailure(raw);
+  assert.equal(tagged.code, ERR_STRUCT_CHANGE_FAILED);
+  assert.equal(tagged.cause, raw);
+  assert.equal(floorTransitionErrorMessage(tagged), '構造の変更に失敗したため、変更前に戻しました。');
+  assert.equal(floorTransitionErrorMessage(tagged), ERR_STRUCT_CHANGE_FAILED_MESSAGE);
+  assert.equal(floorTransitionErrorMessage(raw), ERR_FLOOR_SWITCH_FAILED);
+  const known = Object.assign(new Error('dup'), { code: ERR_CATALOG_DUPLICATE });
+  assert.equal(tagStructChangeFailure(known), known, '既知codeは二重ラップしない');
+  assert.equal(tagStructChangeFailure('文字列').code, ERR_STRUCT_CHANGE_FAILED, '非 Error も包む');
+});
 
 test('階段の削除の失敗: tagElevatorOpFailure で包んだ例外は専用文言になり、包んでいない例外は汎用文言のまま', () => {
   const tagged = tagElevatorOpFailure(new Error('boom'), { code: ERR_STAIR_DELETE_FAILED, message: ERR_STAIR_DELETE_FAILED_MESSAGE });

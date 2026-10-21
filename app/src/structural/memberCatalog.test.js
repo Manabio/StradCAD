@@ -282,8 +282,22 @@ test('【不変条件・ステップ4】MemberListTab.jsx: ColumnWidthScopeSelec
   assert.ok(fnMatch, 'ColumnWidthScopeSelectのhandleChange関数本体が見つからない');
   const memberBranchMatch = /\} else if \(target === 'member'\) \{([\s\S]*?)\n {4}\}/.exec(fnMatch[1]);
   assert.ok(memberBranchMatch, "target==='member' の分岐が見つからない");
-  const lines = memberBranchMatch[1].trim().split('\n').map(l => l.trim());
-  assert.ok(lines[0].startsWith("onPendingFocus?.(focusedMember.id);"), 'onPendingFocusがonStructureChangedより先に呼ばれていない');
+  // S5d F2: onStructureChanged（guardUi）は受理で Promise・busy で undefined。onPendingFocus は受理判定の後（無視された変更のフォーカス要求を残さない）。
+  const body = memberBranchMatch[1].split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  const acceptedIdx = body.indexOf('const accepted = onStructureChanged(');
+  const focusIdx = body.indexOf('if (accepted) onPendingFocus?.(focusedMember.id);');
+  assert.ok(acceptedIdx >= 0 && focusIdx > acceptedIdx, 'onPendingFocusが受理判定（accepted）の後に呼ばれていない');
+});
+
+test('【S5d・F2】MemberListTab.jsx: 柱寸変更の注意（onColumnWidthNotice）は onStructureChanged が受理された（accepted）ときだけ呼ぶ（WoodColumnWidthSelect・ColumnWidthScopeSelect とも）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8')
+    .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  assert.equal((src.match(/const accepted = onStructureChanged\(/g) ?? []).length, 3, '受理判定は3箇所');
+  assert.equal((src.match(/if \(accepted && notice\) onColumnWidthNotice\?\.\(notice\);/g) ?? []).length, 2);
+  assert.ok(!/\n\s*if \(notice\) onColumnWidthNotice/.test(src), '受理判定なしの notice 呼び出しが残っている');
+  for (const m of src.matchAll(/const accepted = onStructureChanged\(/g)) {
+    assert.ok(src.indexOf('accepted', m.index + 20) > m.index, 'accepted が使われていない');
+  }
 });
 
 test('【不変条件・ステップ4】MemberListTab.jsx: ColumnWidthScopeSelectのselectはreadOnlyまたはscope=entityかつfocusedMember不在でdisabledになる', () => {
@@ -448,14 +462,14 @@ test('【不変条件・裁定2026-09-22】MemberListTab.jsx: 階の柱寸を書
   const woodBody = handleChangeOf(/const WoodColumnWidthSelect = observer\(\(\{ graph, project, onStructureChanged, onColumnWidthNotice \}\) => \{([\s\S]*?)\n\}\);/, 'WoodColumnWidthSelect');
   assert.ok(/const notice = columnWidthChangeNotice\(\{ prevWidth: value, nextWidth: width, wallCount: graph\.walls\.length \}\);/.test(woodBody),
     'WoodColumnWidthSelect: columnWidthChangeNotice({ prevWidth: value, nextWidth: width, wallCount: graph.walls.length }) の呼び出しが無い（変更前後の入れ替え・壁本数の渡し忘れで注意が出なくなる/拡大で出る回帰）');
-  assert.ok(/if \(notice\) onColumnWidthNotice\?\.\(notice\);/.test(woodBody), 'WoodColumnWidthSelect: 文言を onColumnWidthNotice で親へ渡していない（注意が表示されない回帰）');
+  assert.ok(/if \(accepted && notice\) onColumnWidthNotice\?\.\(notice\);/.test(woodBody), 'WoodColumnWidthSelect: 文言を onColumnWidthNotice で親へ渡していない（注意が表示されない回帰）');
 
   const scopeBody = handleChangeOf(/const ColumnWidthScopeSelect = observer\(\(\{ scope, focusedMember, graph, project, readOnly, allowUpsize = false, onStructureChanged, onPendingFocus, onColumnWidthNotice \}\) => \{([\s\S]*?)\n\}\);/, 'ColumnWidthScopeSelect');
   const floorBranchMatch = /if \(target === 'floor'\) \{([\s\S]*?)\n {4}\} else if/.exec(scopeBody);
   assert.ok(floorBranchMatch, "ColumnWidthScopeSelect: target==='floor' の分岐が見つからない");
   assert.ok(/const notice = columnWidthChangeNotice\(\{ prevWidth: floorWidth, nextWidth: next, wallCount: graph\.walls\.length \}\);/.test(floorBranchMatch[1]),
     "ColumnWidthScopeSelect（全体）: columnWidthChangeNotice({ prevWidth: floorWidth, nextWidth: next, wallCount: graph.walls.length }) の呼び出しが target==='floor' 分岐に無い");
-  assert.ok(/if \(notice\) onColumnWidthNotice\?\.\(notice\);/.test(floorBranchMatch[1]), 'ColumnWidthScopeSelect（全体）: 文言を onColumnWidthNotice で親へ渡していない');
+  assert.ok(/if \(accepted && notice\) onColumnWidthNotice\?\.\(notice\);/.test(floorBranchMatch[1]), 'ColumnWidthScopeSelect（全体）: 文言を onColumnWidthNotice で親へ渡していない');
 });
 
 test('【失敗系・裁定2026-09-22】MemberListTab.jsx: 個別柱の柱寸変更（target==="member"）では階の柱寸変更の注意を出さない（個別柱の偏心の第2項はその場の再計算で反映されるため）', () => {

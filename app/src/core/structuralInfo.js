@@ -8,6 +8,13 @@
 import { makeObservable, observable, action } from 'mobx';
 import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION, normalizeBasementStructure } from '../structural/structureRules.js';
 
+/** 建物全体の構造の選択（captureStructureChoice の戻り値）が同じか。undo 登録の要否判定（structuralOrchestration.js）が使う。 */
+export function structureChoiceEquals(a, b) {
+  return a.mainStructure === b.mainStructure
+    && a.basementStructure === b.basementStructure
+    && a.foundationType === b.foundationType;
+}
+
 export class StructuralInfo {
   constructor() {
     this.mainStructure    = UNSPECIFIED_STRUCTURE;
@@ -45,6 +52,7 @@ export class StructuralInfo {
       seismicZoneFactor:    observable,
       setField:             action,
       setBasementStructure: action,
+      restoreStructureChoice: action,
       toggleOtherStructure: action,
       setColumnFaceProjection: action,
     });
@@ -55,6 +63,22 @@ export class StructuralInfo {
   setBasementStructure(v) {
     if (normalizeBasementStructure(v) !== v) throw new Error(`地階構造に使えない値: ${String(v)}`);
     this.basementStructure = v;
+  }
+  // 建物全体の構造の選択（主構造・地階構造・基礎種別）。共通タブの変更（structuralOrchestration.js
+  // recomputeStructuralComposition の mutate）を undo/redo で戻すために、mutate の前後で採って戻す。
+  // 新しい「構造の選択」項目を足したらここと structureChoiceEquals に足す（テストがキー集合を固定する）。
+  captureStructureChoice() {
+    return {
+      mainStructure: this.mainStructure,
+      basementStructure: this.basementStructure,
+      foundationType: this.foundationType,
+    };
+  }
+  // 地階構造を先に書く（選択肢外なら setBasementStructure が throw し、他の項目を書き換える前に止まる）。
+  restoreStructureChoice(snap) {
+    this.setBasementStructure(snap.basementStructure);
+    this.setField('mainStructure', snap.mainStructure);
+    this.setField('foundationType', snap.foundationType);
   }
   // 出幅キー: 1構造×1通り芯。通り芯ラベル（X1/Y1…）が方向も含めて軸を一意に表す。
   faceProjectionKey(structure, cl) { return `${structure}|${cl.label}`; }

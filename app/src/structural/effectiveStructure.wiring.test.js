@@ -132,13 +132,14 @@ test('【S5b】isBasementPlane / normalizeBasementStructure / BASEMENT_STRUCTURE
 
 test('【不変条件・S5b】basementStructure を読むのは許可リストだけ（実効の構造は effectiveStructure を通る）', () => {
   // structureRules.js: 解決本体 / structuralInfo.js: 保持 / graphSnapshot.js・schema/graphFbs.js: 保存形式 /
-  // FloorSwapManager.js: dirty 追跡。S5d で UI（CommonInfoTab.jsx）が加わる。
+  // FloorSwapManager.js: dirty 追跡。S5d: structural/commonInfoTabModel.js＝共通タブの行の分岐（表示のために読む。
+  // CommonInfoTab.jsx は model 経由で読み、setBasementStructure〔大文字 B のため照合に掛からない〕で書くだけ）。
   // S5c-2: floorOps.js＝階操作の undo/redo が値を採って戻す（collectProjectLevels／applyProjectLevels）／
   // finish/basementFloorInit.js＝下階追加が初期値を書く（値は initialBasementStructureFor。読んで構造を決める箇所ではない）。
   const allowed = new Set([
     'structural/structureRules.js', 'core/structuralInfo.js', 'graphSnapshot.js',
     'schema/graphFbs.js', 'storage/FloorSwapManager.js',
-    'floorOps.js', 'finish/basementFloorInit.js',
+    'floorOps.js', 'finish/basementFloorInit.js', 'structural/commonInfoTabModel.js',
   ]);
   const offenders = [];
   for (const file of walk(srcRoot)) {

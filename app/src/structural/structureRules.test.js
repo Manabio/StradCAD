@@ -13,6 +13,7 @@ import {
   woodColumnWidthMm, woodColumnSectionId, woodBaseColumnWidthMm, beamColumnWidthMm, resolvedBeamColumnWidthMm,
   columnWidthMm, columnSectionId,
   PIN_BEAM_END_CLEARANCE_MM,
+  hasBasementFloor, foundationStructureFor, normalizeFoundationTypeFor,
 } from './structureRules.js';
 import { STRUCTURES, STRUCTURE_PROFILES } from './structuralClassification.js';
 import { DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL, DEFAULT_SECTION_BY_MATERIAL } from './memberCatalog.js';
@@ -601,4 +602,47 @@ test('【不変条件・B-1】MemberListTab.jsx: 柱寸アップcheckbox（allow
     'ColumnOffsetAxisSelectがwoodOffsetSideへ書き込んでいない');
   assert.ok(/<ColumnOffsetAxisSelect axis="x"/.test(src) && /<ColumnOffsetAxisSelect axis="y"/.test(src),
     '偏心（左右）/偏心（上下）の両軸セレクトが配線されていない');
+});
+
+// ---- S5d: 基礎種別の選択肢を決める構造（地階があれば地階構造）----
+const RAME_B = 'RC造(ラーメン)';
+const WALL_B = 'RC造(壁式)';
+
+test('【S5d】foundationStructureFor: 地階あり＝地階構造（未設定なら主構造）、地階なし＝主構造。階の上書きは見ない', () => {
+  assert.equal(foundationStructureFor({ mainStructure: TRADITIONAL_WOOD_STRUCTURE, basementStructure: RAME_B }, true), RAME_B);
+  assert.equal(foundationStructureFor({ mainStructure: TRADITIONAL_WOOD_STRUCTURE, basementStructure: null }, true), TRADITIONAL_WOOD_STRUCTURE, '地階構造 null は主構造で決める');
+  assert.equal(foundationStructureFor({ mainStructure: TRADITIONAL_WOOD_STRUCTURE, basementStructure: RAME_B }, false), TRADITIONAL_WOOD_STRUCTURE, '地階が無ければ地階構造は見ない');
+  assert.equal(foundationStructureFor({ mainStructure: 'S造', basementStructure: 'S造' }, true), 'S造', '選択肢外の地階構造は未設定扱い（主構造）');
+  assert.equal(foundationStructureFor(null, true), undefined, 'info 無しは throw せず undefined');
+});
+
+test('【S5d】normalizeFoundationTypeFor: 木造＋地階ラーメンで地階あり → RC の選択肢（なし→ベタ基礎、独立基礎は保持）', () => {
+  const structure = foundationStructureFor({ mainStructure: TRADITIONAL_WOOD_STRUCTURE, basementStructure: RAME_B }, true);
+  assert.equal(normalizeFoundationTypeFor(structure, 'なし'), MAT_FOUNDATION);
+  assert.equal(normalizeFoundationTypeFor(structure, '土間コン'), MAT_FOUNDATION);
+  assert.equal(normalizeFoundationTypeFor(structure, '独立基礎'), '独立基礎');
+  assert.equal(normalizeFoundationTypeFor(RAME_B, '布基礎'), '布基礎', 'ラーメン⇔壁式で選択肢は変わらない');
+  assert.equal(normalizeFoundationTypeFor(WALL_B, '布基礎'), '布基礎');
+});
+
+test('【S5d】normalizeFoundationTypeFor: 地階なしの木造では独立基礎→ベタ基礎、なし／土間コンは保持。地階あり・地階構造 null は主構造で決める', () => {
+  const wood = foundationStructureFor({ mainStructure: TRADITIONAL_WOOD_STRUCTURE, basementStructure: null }, false);
+  assert.equal(normalizeFoundationTypeFor(wood, '独立基礎'), MAT_FOUNDATION);
+  assert.equal(normalizeFoundationTypeFor(wood, 'なし'), 'なし');
+  assert.equal(normalizeFoundationTypeFor(wood, '土間コン'), '土間コン');
+  const woodWithBasement = foundationStructureFor({ mainStructure: TRADITIONAL_WOOD_STRUCTURE, basementStructure: null }, true);
+  assert.equal(normalizeFoundationTypeFor(woodWithBasement, 'なし'), 'なし', '地階構造 null は主構造（木造）で決める');
+  assert.equal(normalizeFoundationTypeFor('不明な構造', '独立基礎'), '独立基礎', '未知の構造は未定のルール（RC系の選択肢）');
+});
+
+test('【S5d】hasBasementFloor: 地階の平面があれば true。屋根専用・地上階だけなら false。空・null は false', () => {
+  const g0 = { startFloor: 0, stories: 1, isRoofPlane: false };
+  const g1 = { startFloor: 1, stories: 1, isRoofPlane: false };
+  const b1 = { startFloor: -1, stories: 1, isRoofPlane: false };
+  const roofBelow = { startFloor: -1, stories: 1, isRoofPlane: true };
+  assert.equal(hasBasementFloor([g0, g1]), false);
+  assert.equal(hasBasementFloor([g0, g1, roofBelow]), false, '屋根専用平面は地階扱いにしない');
+  assert.equal(hasBasementFloor([b1, g0, g1]), true);
+  assert.equal(hasBasementFloor([]), false);
+  assert.equal(hasBasementFloor(null), false);
 });

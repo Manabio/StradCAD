@@ -54,6 +54,7 @@ const GATED = [
   'handleCLDialogConfirm',
   'convertStairFromNaming',
   'deleteStairCascade', 'deleteStairRoomCascade', 'revertStairFromNaming',
+  'handleStructureChanged',
 ];
 
 function gatedName(entry) {
@@ -245,7 +246,8 @@ const PENDING_COUNT = 0;
 const ANON_IIFE_COUNT = 3;
 // 階設定表 S8-F2 で runFloorHeights が withFloorOpUndo へ渡す afterApply・afterCommit（関門の中で await される async アロー）が2件加わったため44→46。
 // 階の追加・削除 S2 で restoreRemoved（階削除 undo/redo の作り直し＋キャッシュ破棄。withFloorOpUndo の undo/rollback 内で await される内部関数）が加わったため46→47。
-const ANON_CALLBACK_COUNT = 47;
+// 階の追加・削除 S5d で handleStructureChanged（GATED。構造パネルの変更の入口）の runBusy( コールバックが1件加わったため47→48。
+const ANON_CALLBACK_COUNT = 48;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

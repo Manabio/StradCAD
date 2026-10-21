@@ -570,6 +570,26 @@ export function foundationOptionsFor(structure) {
   return rulesFor(structure).foundation.options;
 }
 
+/** 建物に地階があるか（planes は project.planes。屋根専用平面・検討案の startFloor の扱いは isBasementPlane に従う）。 */
+export function hasBasementFloor(planes) {
+  return (planes ?? []).some(isBasementPlane);
+}
+
+/**
+ * 基礎種別の選択肢を決める構造。地階があるとき基礎は地階の下に付くため地階構造（未設定なら主構造）、
+ * 無いときは主構造。階ごとの上書き（structureOverride）は見ない——foundationType は建物全体の値のため。
+ */
+export function foundationStructureFor(info, hasBasement) {
+  return hasBasement
+    ? (normalizeBasementStructure(info?.basementStructure) ?? info?.mainStructure)
+    : info?.mainStructure;
+}
+
+/** structure の基礎種別の選択肢に foundationType が無ければ既定（ベタ基礎）へ正規化した値を返す。 */
+export function normalizeFoundationTypeFor(structure, foundationType) {
+  return foundationOptionsFor(structure).includes(foundationType) ? foundationType : MAT_FOUNDATION;
+}
+
 /** 主構造の表記から既定の材種（StructuralMaterialType の値と一致する文字列リテラル）を導出する。 */
 export function defaultMaterialFor(structure) {
   return rulesFor(structure).baseMaterial;

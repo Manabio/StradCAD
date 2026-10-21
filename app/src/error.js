@@ -291,6 +291,16 @@ export function tagElevatorOpFailure(err, { code = ERR_ELEVATOR_OP_FAILED, messa
   return Object.assign(new Error(message, { cause: err }), { code });
 }
 
+// 構造パネルの変更（App.jsx handleStructureChanged → structuralOrchestration.js recomputeStructuralComposition）の
+// 再計算が失敗した場合。mutate 前へ巻き戻した後に投げ直されるため、文言で「戻した」ことを伝える
+// （階切替の汎用文言ERR_FLOOR_SWITCH_FAILEDに丸めない）。tagCLOpFailureと同じ「既に文字列codeを持つ既知エラーはそのまま返す」規約。
+export const ERR_STRUCT_CHANGE_FAILED = 'ERR_STRUCT_CHANGE_FAILED';
+export const ERR_STRUCT_CHANGE_FAILED_MESSAGE = '構造の変更に失敗したため、変更前に戻しました。';
+export function tagStructChangeFailure(err) {
+  if (err instanceof Error && typeof err.code === 'string') return err;
+  return Object.assign(new Error(ERR_STRUCT_CHANGE_FAILED_MESSAGE, { cause: err }), { code: ERR_STRUCT_CHANGE_FAILED });
+}
+
 // 階/モード切替の関門（App.jsxのrunBusy経由の5経路）が捕まえた例外を、どの文言で
 // ユーザーへ見せるか決める純関数。関門のコールバック本体はmodeBoundaries.exit/enter（仕上げ脱出の
 // 壁再生成等）を経由するため、swap自身のERR_FLOOR_SWITCH_UNSTABLE以外にも、.codeに識別用コードを
@@ -299,7 +309,7 @@ export function tagElevatorOpFailure(err, { code = ERR_ELEVATOR_OP_FAILED, messa
 // （IDBエラー等）だけをERR_FLOOR_SWITCH_FAILEDに丸め、既知のものはmessageをそのまま見せる
 // （QA指摘F3・2026-09-27）。
 const KNOWN_TRANSITION_ERROR_CODES = [
-  ERR_CATALOG_DUPLICATE, ERR_ELEVATOR_OP_FAILED, ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_USAGE_FAILED,
+  ERR_CATALOG_DUPLICATE, ERR_STRUCT_CHANGE_FAILED, ERR_ELEVATOR_OP_FAILED, ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_USAGE_FAILED,
   ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_RENUMBER_FAILED, ERR_STAIR_DESIGNATE_FAILED,
   ERR_STAIR_DELETE_FAILED, ERR_STAIR_COPY_FAILED, ERR_BASEMENT_CL_COPY_FAILED,
 ];
