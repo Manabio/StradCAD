@@ -1,5 +1,5 @@
 import { makeFloorName } from '../floorNumber.js';
-import { rulesFor } from './structureRules.js';
+import { rulesFor, effectiveStructure } from './structureRules.js';
 
 // 構造モードの図面呼称（伏図名称）の判定。伏図呼称の判定木を「1平面=1呼称」に正規化したもの。
 // 最下階判定が最優先（最下階は視点に関わらず常に基礎伏図）。
@@ -50,6 +50,6 @@ export function computeStructuralDesignation(plane, graph, project) {
   if (idx === real.length - 1) return `${floorLabel}床伏図`;
   if (plane.startFloor < 0) return `${floorLabel}伏図`; // ②地下階（最下階を除く）
 
-  const effective = graph?.structureOverride ?? project.structuralInfo.mainStructure;
+  const effective = effectiveStructure(graph, project);
   return `${floorLabel}${rulesFor(effective).designation.floorSuffix}`; // ③1階／④中間階（木造=梁伏図・他=伏図）
 }

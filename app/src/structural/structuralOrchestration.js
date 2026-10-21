@@ -187,8 +187,8 @@ async function recomputeStructuralCompositionBody(composition, subjectGraph, pro
   if (mutate && belowGraph) await floorSwapManager.flushEditablePeek();
 
   const belowMainStructure = belowGraph
-    ? belowGraph.structureOverride ?? project.structuralInfo.mainStructure
-    : subjectGraph.structureOverride ?? project.structuralInfo.mainStructure;
+    ? effectiveStructure(belowGraph, project)
+    : effectiveStructure(subjectGraph, project);
 
   // 呼び出し側（runStructuralModeSetupの外側収束ループ）が「在来木造の階が無ければ必ず1回で
   // 終わる」を保証するためのゲート——reflectStructuralToOtherFloorsのsawWallRunsと同じ規約
@@ -227,7 +227,7 @@ async function recomputeStructuralCompositionBody(composition, subjectGraph, pro
     const belowFootprintCache = createFootprintCache();
     const belowGate = await buildStructuralWallGate(belowGraph.plane, project, subjectGraph, belowFootprintCache, ctx);
     const belowLowestGraph = await resolveLowestGraph(project, belowGraph, ctx);
-    const belowStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
+    const belowStructure = effectiveStructure(belowGraph, project);
     isWallRuns = isWallRuns || rulesFor(belowStructure).beamPlacement === 'wallRuns';
     // 壁由来の梁芯生成（selfAndBelow＝在来木造のみ）と、在来木造の壁線上の通し梁（3c）が候補列挙に
     // 使う壁区間の両方で使い回す（追加peek 0回——非在来はrulesFor条件が効かずpeekしない。従来
@@ -257,7 +257,7 @@ async function recomputeStructuralCompositionBody(composition, subjectGraph, pro
     // で確定済みのため、この時点で読める）。
     const aboveBeamSegmentsForBelow = columnSeedBeamSegments(subjectGraph, rulesFor(effectiveStructure(subjectGraph, project)));
     // belowMainStructure 引数は軒桁(eaves)専用。通常階の下階に eaves は無いため自階の実効値で十分。
-    const belowBelowMainStructure = belowGraph.structureOverride ?? project.structuralInfo.mainStructure;
+    const belowBelowMainStructure = effectiveStructure(belowGraph, project);
     runInAction(() => {
       convertMembersToEffectiveMaterial(belowGraph, project, belowBelowMainStructure);
       // belowGraph自身の梁が参照する「belowGraphを支える下々階」の柱寸の派生値を書く——
@@ -465,7 +465,7 @@ export async function runStructuralModeSetup(targetGraph, project, { onToast, ct
   // 渡されたctxは所有者のまま（破棄しない）——例外時（途中のpeek/recompute失敗）もそのtry/finallyで
   // 必ず破棄される。
   return withResolveContext(ctxArg, async (ctx) => {
-    const effectiveMainStructure = targetGraph.structureOverride ?? project.structuralInfo.mainStructure;
+    const effectiveMainStructure = effectiveStructure(targetGraph, project);
     if (effectiveMainStructure === UNSPECIFIED_STRUCTURE) {
       emitLeadToast(ERR_STRUCT_MAIN_UNSPECIFIED, onToast);
     }
@@ -561,7 +561,7 @@ export async function rebuildStructuralBinding(targetGraph, project) {
 // 追加は挙動不変（2026-09-25）。
 export async function recomputeActiveStructural(project, pushUndo = true, ctx = undefined) {
   const g = project.activeGraph;
-  const mainStructure = g.structureOverride ?? project.structuralInfo.mainStructure;
+  const mainStructure = effectiveStructure(g, project);
   // before/after は undo に積むときだけ要る（pushUndo=false の経路では誰も読まないので取らない）。
   return withToastScope(undefined, async () => {
     const { changed, before, after } = noteStairCrossing(
@@ -656,7 +656,7 @@ export async function recomputeForStructuralSync(project, scope, ctxArg = undefi
 // 渡すだけで、この関数自身は生成しない。
 async function recomputeInactiveStructural(plane, project, ctx = undefined) {
   const temp = await peekVia(ctx, plane, project.structGraph);
-  const mainStructure = temp.structureOverride ?? project.structuralInfo.mainStructure;
+  const mainStructure = effectiveStructure(temp, project);
   const isWallRuns = rulesFor(effectiveStructure(temp, project)).beamPlacement === 'wallRuns';
   const { changed, originsChanged } = noteStairCrossing(await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx }));
   // QA裁定（Major-1・2026-09-27）: 由来だけが変わった（changed=false・originsChanged=true）非アクティブ階も
@@ -757,7 +757,7 @@ async function reflectRoofPlane(project, ctx = undefined) {
   const topGraph = topPlane
     ? (topPlane.id === project.activePlaneId ? project.activeGraph : await peekVia(ctx, topPlane, project.structGraph))
     : null;
-  const mainStructure = topGraph ? (topGraph.structureOverride ?? project.structuralInfo.mainStructure) : project.structuralInfo.mainStructure;
+  const mainStructure = effectiveStructure(topGraph, project);
   const { changed, originsChanged } = noteStairCrossing(await recomputeStructuralForGraph(temp, project, mainStructure, undefined, { ctx }));
   // QA裁定（Major-1・2026-09-27）: recomputeInactiveStructuralと同じ保存条件の拡張（由来だけの変化も保存）。
   // 屋根はautoFillStructuralGridの!isRoofガードで柱を生成しないためoriginsChangedは常にfalse——

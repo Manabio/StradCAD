@@ -981,7 +981,7 @@ export function axisExteriorSign(exterior, graph, cl, isVertical) {
  *   呼び出し側が確定済みの値（省略時はbuildExteriorSide(graph)がデフォルト引数として評価されるため
  *   footprintCacheより先に確定してしまい、この引数の恩恵を受けない。省略時は毎回組み直す従来どおり）。 */
 export function autoFillColumnAxisOffsets(graph, project, lowestGraph = graph, exterior = buildExteriorSide(graph), footprintCache = undefined) {
-  const effective = graph.structureOverride ?? project.structuralInfo.mainStructure;
+  const effective = effectiveStructure(graph, project);
   if (!isRigidFrameStructure(effective)) {
     graph.columnAxisOffsets.clear();
     return;
@@ -1066,7 +1066,7 @@ export function autoFillFoundationBeamSizes(graph, project) {
   const updated = [];
   const foundationBeams = graph.beams.filter(b => b.role === 'foundation' && b.dimensionStatus === 'auto');
   if (foundationBeams.length === 0) return updated;
-  const effective = graph.structureOverride ?? project.structuralInfo.mainStructure;
+  const effective = effectiveStructure(graph, project);
   const { width, depth } = computeFoundationBeamSize(graph, project, effective);
   for (const beam of foundationBeams) {
     if (beam.beamWidth === width && beam.beamDepth === depth) continue;
@@ -1115,7 +1115,7 @@ function beamSectionWidth(beam) {
  *  s は梁の軸CLの柱芯オフセットの符号（＝柱と同一の軸単位外周符号）。ラーメン系でない／
  *  当該軸が外周でない（柱芯オフセット0＝s=0）なら null（＝偏芯0）。 */
 function beamEccentricityGeom(graph, project, beam) {
-  const effective = graph.structureOverride ?? project.structuralInfo.mainStructure;
+  const effective = effectiveStructure(graph, project);
   if (!isRigidFrameStructure(effective)) return null;
   const s = Math.sign(graph.columnAxisOffsets.get(beam.axisCL.id) ?? 0);
   if (s === 0) return null;

@@ -34,7 +34,7 @@ import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
 import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
-import { foundationOptionsFor, rulesFor, woodColumnWidthMm, columnWidthMm, resolvedBeamColumnWidthMm } from './structureRules.js';
+import { foundationOptionsFor, rulesFor, effectiveStructure, woodColumnWidthMm, columnWidthMm, resolvedBeamColumnWidthMm } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
 import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth, columnWidthChangeNotice } from './columnWidthScope.js';
 
@@ -61,7 +61,7 @@ function buildFigureCtx(entity, mapName, graph, project, isRoof = false) {
   const offsets = graph?.columnAxisOffsets;
   const off = id => (id != null ? (offsets?.get(id) ?? 0) : 0);
   // 柱芯（変位量）はラーメン系のみ編集可（木造・壁式は通り芯と一致＝変位の概念なし）。
-  const rigid = isRigidFrameStructure(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
+  const rigid = isRigidFrameStructure(effectiveStructure(graph, project));
   if (mapName === 'columnMap' || mapName === 'footingMap') {
     // 外側方向の符号（内側が＋方向=+1／−方向=−1／内部=0）。柱外面（出幅）寸法を「真の外側」に描くために使う。
     // offX の符号は出幅>柱半幅で反転するため使えない——フットプリント由来の符号を権威とする。
@@ -80,7 +80,7 @@ function buildFigureCtx(entity, mapName, graph, project, isRoof = false) {
     };
   }
   if (mapName === 'beamMap') {
-    const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
+    const structure = effectiveStructure(graph, project);
     return {
       rigid, // ラーメン系のみ柱芯⇄材芯の偏芯量を編集可（木造・壁式は通り芯と一致＝偏芯の概念なし）
       axisOffset: off(entity.axisCL?.id),
@@ -316,7 +316,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
   // 丸ごと非表示になり、そこに欄を置くと最下階の柱寸を変える手段が無くなるため（QA指摘2026-09-16）。
   // R階伏図（屋根専用平面）は柱を持たず上の階も無い（欄が何にも効かない）ため出さない。
   const selfColumnGraph = composition?.graphForCategory('columnMapSelf') ?? null;
-  const selfStructure = selfColumnGraph ? (selfColumnGraph.structureOverride ?? project.structuralInfo?.mainStructure) : null;
+  const selfStructure = selfColumnGraph ? effectiveStructure(selfColumnGraph, project) : null;
   const woodColumnWidthGraph = (!isRoofFigure && selfColumnGraph && rulesFor(selfStructure).columnSizing === 'fixed') ? selfColumnGraph : null;
 
   // 個別指定直後のカード追従（QA裁定・ステップ4）: 共通カードの「この柱を個別指定」は
@@ -410,7 +410,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
     // 採用グループの代表部材から解決したnoJoinSignatureForをmergeGroupsへ渡す（QA指摘F12）——
     // 個別採番対象（在来木造の非標準梁）を統合すると、選択しなかった同署名の他の個別採番グループまで
     // 次のconformToLedgerでjoin経由で吸収されてしまう回帰の防止（splitGroupと同じ判定式）。
-    const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
+    const structure = effectiveStructure(graph, project);
     const chosenRep = groups[chosenIndex]?.members?.[0];
     const splitFromSignature = chosenRep
       ? noJoinSignatureFor(chosenRep, group.mapName, rulesFor(structure), standardBeamSectionFor(graph, project, rulesFor(structure))) : null;
@@ -462,8 +462,8 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
           // 構造種別が持たない部材分類はカテゴリごと隠す（「×はカテゴリ自体表示しない」＝structuralClassification）。
           // 構造変更で「×」化した自動部材は recomputeStructuralForGraph が削除済みのため、空グループ＝非表示で齟齬は出ない。
           // R階伏図は figureType=ROOF で取捨（壁・基礎系はカテゴリ非表示。柱・梁・スラブのみ）。
-          const effectiveStructure = g.structureOverride ?? project.structuralInfo?.mainStructure;
-          if (effectiveStructure != null && !groupMemberKinds(group.mapName, g, project).some(k => structureHasMemberKind(k, effectiveStructure, figureType))) return null;
+          const gStructure = effectiveStructure(g, project);
+          if (gStructure != null && !groupMemberKinds(group.mapName, g, project).some(k => structureHasMemberKind(k, gStructure, figureType))) return null;
           // 参照のみ（REFERENCE）レイヤの部材は閲覧可・編集不可。ただし柱一覧を自階柱□（columnMapSelf）へ
           // 切替えた在来木造は、供給階＝主題階（自階）なら編集可にする——REFERENCEは元々「1つ上の階の
           // 伏図で下階柱として編集する」ための閲覧専用指定であり、自階自身の一覧ではその制約は不要
@@ -477,7 +477,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               graph={g}
               composition={composition}
               project={project}
-              structure={effectiveStructure}
+              structure={gStructure}
               figureType={figureType}
               readOnly={readOnly}
               expandedKey={expandedKey}
@@ -495,7 +495,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               mergeAnchorMaterialType={isMergingHere ? mergeState.anchorMaterialType : null}
               onSelectMembers={onSelectMembers}
               mergeSelectedTags={isMergingHere ? mergeState.selectedTags : null}
-              onStartMerge={(tag, materialType) => setMergeState({ group, graph: g, structure: effectiveStructure, figureType, anchorTag: tag, anchorMaterialType: materialType, selectedTags: new Set([tag]) })}
+              onStartMerge={(tag, materialType) => setMergeState({ group, graph: g, structure: gStructure, figureType, anchorTag: tag, anchorMaterialType: materialType, selectedTags: new Set([tag]) })}
               onToggleMergeTag={toggleMergeTag}
             />
           );
@@ -816,7 +816,7 @@ const MemberCard = observer(({
   const representative = (group.mapName === 'beamMap'
     ? members.find(m => (graph.columnAxisOffsets.get(m.axisCL?.id) ?? 0) !== 0)
     : null) ?? members[0];
-  const structure = graph?.structureOverride ?? project?.structuralInfo?.mainStructure;
+  const structure = effectiveStructure(graph, project);
   // 伏図に表示される柱集合（構造モードは1つ下の階）。梁の接合2択のグレー化判定（柱に取りつくか）に使う——
   // 描画（StructuralLayer.jsx）と同じ composition 解決を通し、自階graphの柱で判定してズレるのを防ぐ。
   const displayedColumns = composition?.graphForCategory('columnMap')?.columns ?? graph.columns;
@@ -1636,7 +1636,7 @@ const MemberFieldInput = observer(({ members, fieldDef, graph, group, project, r
     // 梁は断面幅が変わるため、faceGap（柱外面と梁縁のギャップ）を保ったまま偏芯量を再算出する。
     function handleSectionChange(newId) {
       // 基準幅＝その階の主構造ルールの既定断面幅（柱芯オフセットの基準 defaultColumnWidth と同じ情報源）。
-      const sections = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure).defaultSections;
+      const sections = rulesFor(effectiveStructure(graph, project)).defaultSections;
       const refWidth = findSectionEntry(group.mapName === 'columnMap' ? sections.column : sections.beam)?.width ?? 0;
       const newWidth = findSectionEntry(newId)?.width ?? refWidth;
       onCommit(targets => {
@@ -1727,7 +1727,7 @@ const NewIntersectionMemberSelector = observer(({ group, graph, project, structu
   const allowColumnBase = structureHasMemberKind(MEMBER_KIND.COLUMN_BASE, structure);
 
   // 柱は自階の実効主構造を材質・既定断面に使う（柱は各階が自階graphに持つ）。基礎・柱脚は常にRC固定。
-  const rules = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
+  const rules = rulesFor(effectiveStructure(graph, project));
   // 在来木造（壁交点方式）の柱は壁由来の梁芯CL上にも立つため、選択肢に梁芯CLを含める。基礎・柱脚は通り芯のみ。
   const wallColumns = group.mapName === 'columnMap' && rules.columnPlacement === 'wallIntersections';
   const beamAxes = wallColumns ? beamAxisCenterLines(graph) : [];
@@ -1802,7 +1802,7 @@ const NewSpanMemberSelector = observer(({ group, graph, project }) => {
         // （手動追加材サイレント撤去回避 ステップ1。dev直下 260929_手動追加材サイレント撤去回避.md）。
         addManualBeam(graph, project, { axisCL, isVertical, clStart, clEnd });
       } else {
-        const rules = rulesFor(graph?.structureOverride ?? project?.structuralInfo?.mainStructure);
+        const rules = rulesFor(effectiveStructure(graph, project));
         graph.addBearingWall(rules.baseMaterial, rules.defaultSections.other, axisCL, isVertical, clStart, clEnd, {});
       }
       renumberMembers(graph, project, group.mapName);

@@ -24,6 +24,7 @@ import { convertMenuFlags } from './clMenuGating.js';
 import { usesBeamAxisMoveSnap } from '../core/centerLineKindPolicy.js';
 import { roundAbsToStep, calcStep } from '../renderer/clMoveMath.js';
 import { findHostWall } from '../openings/openingGeometry.js';
+import { effectiveStructure } from '../structural/structureRules.js';
 import { beamAtKonvaTarget, columnAtKonvaTarget, shouldFireMemberTap, isBlankTapTarget } from './beamTap.js';
 import {
   openingMoveRange, openingSnapCandidates, resolveOpeningRefOffset, snapIndicatorAlong,
@@ -122,7 +123,7 @@ export function usePointerInteraction({
       const hit = axisLabelRef.current;
       axisLabelRef.current = null;
       if (!hit) return;
-      const structure  = graph.structureOverride ?? project.structuralInfo.mainStructure;
+      const structure  = effectiveStructure(graph, project);
       const projection = project.structuralInfo.getColumnFaceProjection(structure, hit.cl);
       modeRef.current?.startAxisEdit?.({ cl: hit.cl, structure, screenX: hit.sx, screenY: hit.sy, projection });
     },
