@@ -17,7 +17,7 @@ import { autoFillWoodRoofFraming } from './woodRoofFraming.js';
 import { autoFillStairPartitionBeams, stairPartitionBeamSpans } from './stairPartitionBeams.js';
 import { buildExteriorSide, footprintCellKeys } from './wallGate.js';
 import { ROOF_COLUMN_CLASS } from './roofColumnFilter.js';
-import { autoFillWallBeamAxes } from './wallBeamAxes.js';
+import { autoFillWallBeamAxes, removeStaleWallBeamAxes } from './wallBeamAxes.js';
 import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisExtentsAfterCreate } from './openingBeamAxes.js';
 import { autoFillWoodOpeningBeams } from './woodOpeningBeams.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
@@ -772,6 +772,14 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const foundationType = project.structuralInfo.foundationType;
   // 壁由来の梁芯CL自動生成は柱より前に行う（在来木造の壁交点柱が梁芯CLをアンカーに使うため。
   // 通り芯グリッドの部材とは独立の生成源なので、他の主構造でも順序は結果に影響しない）。
+  // 屋根専用平面（在来木造の小屋伏図）は、最上階が入れ替わる階操作（上へ階追加・最上階の削除・並べ替え）で中身を
+  // 持ち越すため、旧最上階の壁から作った壁由来梁芯が孤児で残る——現況の壁源に無い auto の壁由来梁芯をここで撤去する
+  // （依存の auto の梁は teardown で道連れ。手動・locked・excludedWallBeamAxes は残す。F1=(b)・2026-10-21）。
+  // 生成（直下）の前に行う：撤去した座標は壁源に無いため、同じ再計算で作り直されない（往復しない）。
+  // 下階（最上階）graph を解決できていないときの壁源の空を「壁が無い」と誤認しないよう belowGraph 解決済みに限る。
+  // 非在来（roofBeamPlacement:'gridEaves'）・実体階は対象外。
+  const removedStaleRoofWallAxes = (isRoof && belowGraph && rulesFor(structure).roofBeamPlacement === 'wallRuns')
+    ? removeStaleWallBeamAxes(graph, wallSources) : [];
   const newWallBeamAxes = autoFillWallBeamAxes(graph, wallSources);
   // 開口由来梁芯の再計算照合（ステップ6・規則O）: 中心線の移動・削除、部屋属性の変更、壁の偏芯変化
   // いずれも専用処理を持たず、ここでの現況照合だけが孤児（開口が動いた・消えた）を追従・回収する。
@@ -876,7 +884,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   const removedStairCrossingAxes = !isRoof
     ? removeStairCrossingOrphanBeamAxes(graph, project, belowGraph, [...wallSources, ...openingSources]) : [];
   return {
-    removedStairCrossingAxes,
+    removedStairCrossingAxes, removedStaleRoofWallAxes,
     newColumns, removedColumns, newFootings, removedFootings, originsUpdatedColumns,
     // m-5是正・QA指摘: 開口由来梁芯の再ラベル（→WALL）・extent張り直し（reconcileOpeningBeamAxes）は
     // 「新規/撤去した梁」ではないため newBeams/removedBeams には混ぜず、別枠で返す

@@ -1110,13 +1110,19 @@ export function wallLineThroughRuns(wallSegments, freeEnds = []) {
 export function autoFillWoodWallBeams(graph, project, wallSegments, wallGate = null, belowColumns = [], selfGate = buildSelfFootprintGate(graph), freeEndGraph = graph, wallSourceCache = undefined, belowTieExcludePts = []) {
   void wallGate; // 未使用（互換のため残置。QA裁定2026-09-18）。ゲートは末尾のselfGateが担う——理由は上記JSDoc参照。
   const rules = rulesFor(effectiveStructure(graph, project));
-  if (!rules.framing || !(wallSegments?.length)) return { created: [], removed: [] };
   // 小屋伏図にも梁・柱ルールを適用する計画（ステップ5）: 屋根専用平面から呼ばれたときはフェーズAの
   // beamTypeを'軒桁'にする（フェーズBは従来どおり'頭つなぎ'/'受梁'——roofは自階に柱を持たないため
   // columnSupportBeamCandidatesの点源（graph.columns）が常に空になり自然に0本のまま）。既存の
   // 通り芯グリッド方式の軒桁（role:'eaves', dimensionStatus==='auto'）は道を空ける撤去対象に含める
   // （役割は違えど同じ横架材の置き換えのため）。
   const isRoof = graph.plane?.isRoofPlane === true;
+  // 壁区間が空でも、屋根専用平面で下の最上階 graph を解決できている（freeEndGraph !== graph。解決不能なら呼び出し側が
+  // graph 自身を渡す）ときは撤去だけ回す——最上階が入れ替わって壁の無い階が最上階になった（例: 空の階を最上階の上へ追加）とき、
+  // 旧最上階の壁線に作った auto の軒桁が候補0のまま居座るのを防ぐ（F1=(b)・2026-10-21）。フェーズA（壁区間からの軒桁）は
+  // 壁区間が空なので生成しない。フェーズB（頭つなぎ・受梁）は手動固定の梁を支持とする場合だけ生成しうる（通常経路と同じ規則）。
+  // 実体階は従来どおり（壁区間が空なら何もしない）。
+  const roofBelowResolved = isRoof && freeEndGraph !== graph;
+  if (!rules.framing || (!(wallSegments?.length) && !roofBelowResolved)) return { created: [], removed: [] };
   // AXIS（axisX/axisY）で分割点を取る（3bと同じ理由。個別柱の偏心で分割位置がずれないため）。
   const belowPts = (belowColumns ?? []).filter(c => c.role !== 'foundation').map(c => ({ x: c.axisX, y: c.axisY }));
   // F-2（2026-09-19裁定）: 自由端（自階の下地オーナー壁runの端。腰壁・垂れ壁の辺は除く）を

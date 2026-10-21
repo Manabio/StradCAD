@@ -6,7 +6,8 @@ import { CenterLineType, Discipline, centerLineKind } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { isWallEndAtCorner } from '../core/wall.js';
 import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
-import { structuralAnchorAt, beamAxisAt, beamAxesAt, spansEntireAxis } from '../core/centerLineKindPolicy.js';
+import { structuralAnchorAt, beamAxisAt, beamAxesAt, beamAxisCenterLines, spansEntireAxis } from '../core/centerLineKindPolicy.js';
+import { exclusionKeyReferencesCL } from '../core/structuralEntities.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
 import { stairPartitionLines, isStairPartitionWall, stairUnderReturnLines, isStairUnderReturnWall } from '../finish/stair/stairPartition.js';
@@ -457,6 +458,37 @@ export function removeOrphanedWallBeamAxesFor(graph, project, belowGraph, source
     runInAction(() => { for (const ax of orphaned) graph.removeCenterLine(ax.id); });
   }
   return orphaned;
+}
+
+/**
+ * 屋根専用平面（在来木造の小屋伏図）の再計算用: 現況の壁源（wallSources＝今の最上階の壁）に対応しない
+ * 壁由来（beamAxisOrigin===WALL）の梁芯CLを撤去する（graph.removeCenterLine。依存の auto の梁・柱は teardown で
+ * 道連れ。最上階が入れ替わった／最上階の壁が変わった後に残る旧最上階の壁の梁芯の後始末。ユーザー裁定 F1=(b)・2026-10-21）。
+ * 実体階の壁由来梁芯は対象にしない（呼び出し側が屋根専用平面のときだけ呼ぶ）。
+ * 判定は次の全て（保護の規則は isProtectedWallBeamAxis／unprotectedAmong に一本化し、ここで書き直さない）:
+ *   - 由来が WALL（roofBeam・floorBeam・opening・USER・旧データ null は対象外）
+ *   - 同方向・CL_OVERLAP_TOL_MM 以内に wallSources が無い
+ *   - 除外集合（excludedBeamSlots／excludedColumnSlots／excludedFootingSlots）のキーがこの梁芯の id を参照していない
+ *     （撤去するとキーが失効し、壁が戻ったとき消した梁が復活するため。stairCrossingBeamAxes.js (f) と同じ）
+ *   - isProtectedWallBeamAxis が偽（手動固定の梁・参照・偏芯・耐力壁・スリーブがあれば残す）
+ * excludedWallBeamAxes（ユーザーが消した梁芯の座標）は触らない。
+ * **呼び出し側の責務**: wallSources が「壁源を解決できなかったための空」でないこと（下階 graph 解決済みのときだけ呼ぶ）。
+ * @param {object} graph
+ * @param {Array<{isVertical:boolean, coord:number}>} wallSources
+ * @returns {import('../core.js').CenterLine[]} 撤去した梁芯CL
+ */
+export function removeStaleWallBeamAxes(graph, wallSources) {
+  const excludedKeys = [...graph.excludedBeamSlots, ...graph.excludedColumnSlots, ...graph.excludedFootingSlots];
+  const candidates = beamAxisCenterLines(graph).filter(cl => {
+    if (cl.beamAxisOrigin !== BeamAxisOrigin.WALL) return false;
+    if (cl.centerLineType !== CenterLineType.VERTICAL && cl.centerLineType !== CenterLineType.HORIZONTAL) return false;
+    const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
+    if (wallSources.some(s => s.isVertical === isVertical && Math.abs(s.coord - cl.effectiveValue) < CL_OVERLAP_TOL_MM)) return false;
+    return !excludedKeys.some(k => exclusionKeyReferencesCL(k, cl.id));
+  });
+  const toRemove = unprotectedAmong(graph, candidates);
+  if (toRemove.length > 0) runInAction(() => { for (const cl of toRemove) graph.removeCenterLine(cl.id); });
+  return toRemove;
 }
 
 /**
