@@ -13,10 +13,13 @@ import { findStairUpperRoofConflicts } from './stairRoofConflict.js';
 import {
   ERR_STAIR_UPPER_ROOF, tagElevatorOpFailure,
   ERR_STAIR_DELETE_FAILED, ERR_STAIR_DELETE_FAILED_MESSAGE, ERR_STAIR_FLOORS_CHANGED,
+  ERR_STAIR_COPY_FAILED, ERR_STAIR_COPY_FAILED_MESSAGE,
 } from '../../error.js';
 import { floorWriteGeneration } from '../../storage/floorWriteGeneration.js';
 import { rollbackSavedFloors, applyRecords, amendOnAppliedOnly } from '../floorUndoRecords.js';
 import { planStairRemovalCascade, applyStairRemovalToFloor } from './stairRemoval.js';
+import { copyStairsToGraph } from './stairFloorCopy.js';
+import { floorHeightAbove } from './stairDimensions.js';
 
 // setsEqual・isIndoorStair・addStairVoidRoom は純モジュール stairVoidReconcile.js へ移した（挙動は同じ）。
 // 階操作・仕上げ突入の整合は reconcileAllStairVoids・reconcileOnFinishEntry（下記）。
@@ -360,6 +363,48 @@ export async function addNewFloorRoomFromSource(
 
   temp.addRoom(freeCells, roomName);
   await saveFloorFn(newPlane.id, serializeGraph(temp));
+}
+
+/**
+ * 階追加で、当該階（sourceGraph。表示中の採用階）の階段を新しい各階（newPlanes）へ写す
+ * （純関数 copyStairsToGraph の I/O ラッパー。昇降機の copyElevatorsToNewFloor と同じ形）。
+ * 当該階に階段が無ければ noop（新しい階を peek もしない）。新しい階ごとに peek 1回 → 写す → 変更があれば保存1回。
+ * 写し先は peek したグラフ（ライブではない）で、アクティブ階なら throw する（peek→保存が auto-save に上書きされる。
+ * 階追加の follower では新しい階は switchToAddedFloor より前なので非アクティブ）。
+ * undo は積まない——withFloorOpUndo が新しい階のバイト列を丸ごと記録する。
+ * peek・保存・写しの例外は識別コード ERR_STAIR_COPY_FAILED 付きで再スローする（巻き戻しなし。写し先は
+ * 新しい階だけで、失敗した階は階追加の undo で平面ごと消える）。
+ * @param {object} params
+ * @param {object} params.project
+ * @param {object} params.sourceGraph - 当該階（階追加を実行したときの表示中の階）のグラフ。読むだけ
+ * @param {object[]} params.newPlanes - 追加した新しい Plane（ADD_LOWER は n 個）
+ * @param {(plane: object) => Promise<object>} [params.peekFn] - 既定 floorSwapManager.peek
+ * @param {(planeId: string, bytes: Uint8Array) => Promise<void>} [params.saveFloorFn] - 既定 saveFloor
+ * @returns {Promise<{status:'noop'} | {status:'copied', perPlane: Array<{plane:object, copied:Array, skipped:Array}>}>}
+ */
+export async function copyStairsToNewFloors({
+  project, sourceGraph, newPlanes,
+  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
+  saveFloorFn = saveFloor,
+}) {
+  if (!sourceGraph) throw new Error('copyStairsToNewFloors: sourceGraph がありません');
+  if (sourceGraph.stairs.length === 0) return { status: 'noop' };
+  const perPlane = [];
+  for (const plane of newPlanes) {
+    if (plane.id === project.activePlane?.id) {
+      throw new Error(`copyStairsToNewFloors: 写し先がアクティブ階です（plane=${plane.id}）`);
+    }
+    try {
+      const dst = await peekFn(plane);
+      const { changed, copied, skipped } = copyStairsToGraph(
+        dst, sourceGraph, project.structGraph, { floorHeight: floorHeightAbove(project, plane) });
+      if (changed) await saveFloorFn(plane.id, serializeGraph(dst));
+      perPlane.push({ plane, copied, skipped });
+    } catch (err) {
+      throw tagElevatorOpFailure(err, { code: ERR_STAIR_COPY_FAILED, message: ERR_STAIR_COPY_FAILED_MESSAGE });
+    }
+  }
+  return { status: 'copied', perPlane };
 }
 
 /**

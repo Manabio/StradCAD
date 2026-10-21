@@ -135,12 +135,20 @@ function makeEnv(project) {
     });
     return true;
   };
+  // C5: follower の switchToAddedFloor が呼ぶ切替の直前に、切替先の階の IDB 上の寸法線の本数を記録する
+  // （切替後の表はライブグラフ込みで読むため、IDB に入っていたかが分からない）
+  const preSwitch = [];
   const ui = {
     notify: (msg) => toasts.push(msg),
-    switchFloor,
+    switchFloor: async (nextId) => {
+      const plane = project.planeMap.get(nextId);
+      const g = await floorSwapManager.peek(plane, project.structGraph);
+      preSwitch.push({ name: plane.name, idbDims: g.dimensionLines.length, liveDims: project.graphMap.get(nextId).dimensionLines.length });
+      return switchFloor(nextId);
+    },
     onFloorSyncChanged() {},
   };
-  return { addFloor, removeFloor, switchFloor, ui, toasts };
+  return { addFloor, removeFloor, switchFloor, ui, toasts, preSwitch };
 }
 
 async function freshProject(path) {
@@ -169,12 +177,26 @@ async function readGraph(project, plane) {
   return floorSwapManager.peek(plane, project.structGraph);
 }
 
+// 階段の同一性を見る署名（id・セルキー非依存。幾何〔包絡矩形〕＋写すべき全項目）。S4: 新しい階の階段が当該階と一致するかの比較に使う
+function stairSigsOf(g) {
+  return g.stairs.map(s => {
+    const b = roomBounds(refreshCells(s.cells, g), g);
+    const pair = s.roomId ? g.roomMap.get(s.roomId) : null;
+    return [
+      s.type, s.structure, `${b.x1},${b.y1}-${b.x2},${b.y2}`, `c${refreshCells(s.cells, g).size}`, `n${s.totalSteps}`,
+      `tread${s.tread}`, `riser${s.riser ?? '-'}`, `nosing${s.nosing}`, `w${s.width}`, `up${s.upDirection}`, `flip${s.flip}`,
+      `sec${JSON.stringify(s.sections)}`, `in${s.entrySide ?? '-'}`, `out${s.arrivalSide ?? '-'}`, `turn${s.entryTurnSteps}/${s.arrivalTurnSteps}`,
+      `pair:${pair ? `${pair.feature}/${pair.kind}/${pair.name || '-'}` : '-'}`,
+    ].join('|');
+  }).sort();
+}
+
 async function tableRows(project) {
   const rows = [];
   const planes = [...project.planes];
   for (const plane of planes) {
     const g = await readGraph(project, plane);
-    const stairs = g.stairs.map(s => `${sid(s.id)}:${s.type}${s.structure ? '/' + s.structure : ''}:${refreshCells(s.cells, g).size}c:steps${s.totalSteps}:riser${s.riser ?? '-'}`);
+    const stairs = g.stairs.map(s => `${sid(s.id)}:${s.type}${s.structure ? '/' + s.structure : ''}:${refreshCells(s.cells, g).size}c:steps${s.totalSteps}:riser${s.riser ?? '-'}:up${s.upDirection}${s.flip ? 'F' : ''}:in${s.entrySide ?? '-'}/out${s.arrivalSide ?? '-'}:turn${s.entryTurnSteps}/${s.arrivalTurnSteps}`);
     const voids = g.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID).map(r => `${sid(r.id)}:${r.name || '-'}:${refreshCells(r.cells, g).size}c`);
     const ev = g.equipmentRows.map(r => `${r.no ?? '-'}#${sid(r.id)}`);
     const roomsByFeature = {};
@@ -198,6 +220,8 @@ async function tableRows(project) {
       })(),
       roomsByFeature,
       cl: g.centerLines.length,
+      dims: g.dimensionLines.length, // C5: 新しい階の既定の寸法線が IDB に残るか（本番 addFloor は 8 本をライブグラフにだけ載せる）
+      stairSigs: stairSigsOf(g),
       ownCl: [...g.shapeMap.values()].filter(s => s.constructor?.name === 'CenterLine').length,
       walls: g.walls.length,
       altCount: [...project.planeMap.values()].filter(p => p.isAlternative && p.referenceId === plane.id).length,
@@ -209,7 +233,7 @@ async function tableRows(project) {
 function printTable(label, rows) {
   console.log(`  [${label}]`);
   for (const r of rows) {
-    console.log(`   ${r.active}${r.name} (id ${r.id} sf=${r.sf} st=${r.st} elev=${r.elev}) override=${r.override} CL=${r.cl}(own ${r.ownCl}) walls=${r.walls} alt=${r.altCount}`);
+    console.log(`   ${r.active}${r.name} (id ${r.id} sf=${r.sf} st=${r.st} elev=${r.elev}) override=${r.override} CL=${r.cl}(own ${r.ownCl}) 寸法線=${r.dims} walls=${r.walls} alt=${r.altCount}`);
     console.log(`      階段: ${r.stairs.length ? r.stairs.join(' | ') : '(なし)'}`);
     console.log(`      STAIR_VOID: ${r.voids.length ? r.voids.join(' | ') : '(なし)'}`);
     console.log(`      EV行: ${r.ev.length ? r.ev.join(' ') : '(なし)'}`);
@@ -249,10 +273,10 @@ async function opAddLower(project, env, n, followers) {
       addedPlanes.push(result.plane);
       prevFloor = sf;
     }
-    return { plane: lastPlane };
+    return { plane: lastPlane, planes: addedPlanes };
   };
   const r = await applyFloorOrderChange(project, {
-    kind: FLOOR_ORDER_KIND.ADD_LOWER, updates: [], addPlane, ui: env.ui,
+    kind: FLOOR_ORDER_KIND.ADD_LOWER, updates: [], addPlane, sourceGraph: project.activeGraph, ui: env.ui,
   }, followers);
   return { ...r, addedPlanes };
 }
@@ -284,6 +308,15 @@ async function opDelete(project, env, planeId, followers) {
 }
 
 // follower 配列の加工（ソースは変えない）
+function headOrderFollowers(followers) {
+  const arr = followers.filter(f => f.name !== 'stairCopy' && f.name !== 'stairVoidReconcile');
+  const sv = followers.find(f => f.name === 'stairVoidReconcile');
+  arr.splice(arr.findIndex(f => f.name === 'roofPlaneHeight') + 1, 0, sv);
+  return arr;
+}
+
+// 注意（S4 で陳腐化）: 標準順がすでに「stairVoidReconcile が exteriorRoom の後」なので orderB は標準と移動後が同じ構成になる。
+// 既定のシナリオ一覧からは外した（名指しすれば動く）。
 function reorderStairVoidAfterExteriorRoom(followers) {
   const arr = followers.filter(f => f.name !== 'stairVoidReconcile');
   const sv = followers.find(f => f.name === 'stairVoidReconcile');
@@ -371,7 +404,11 @@ async function runScenario(docKey, scenarioName) {
   const env = makeEnv(project);
   const mods = new Set(scenarioName.split('+').slice(1));
   const name = scenarioName.split('+')[0];
-  const std = floorOrderFollowers;
+  // PROBE_FOLLOWERS=head: S4 より前（HEAD b95a0fb）の follower 構成を再現する（stairCopy なし・stairVoidReconcile が elevatorCopy の前）。
+  // S0 の基準（moku4 insertMid で新3階に STAIR_VOID 3c が付く等）を、ソースを変えずに同じ probe で採り直すために使う。
+  // PROBE_NO_STRUCT=1: structuralReflect を除く（階追加で他の階の CL 数が増えた原因が構造反映かを切り分ける用）。
+  const base = process.env.PROBE_FOLLOWERS === 'head' ? headOrderFollowers(floorOrderFollowers) : floorOrderFollowers;
+  const std = process.env.PROBE_NO_STRUCT ? base.filter(f => f.name !== 'structuralReflect') : base;
   console.log(`\n===== ${docKey} / ${scenarioName} （採用階: ${project.planes.map(p => p.name).join(',')} / 検討案 ${[...project.planeMap.values()].filter(p => p.isAlternative).length} 件 / 初期アクティブ ${project.activePlane?.name}）`);
   if (mods.has('ev')) { if (!(await installEvOnLowest(project, env))) return; }
   // 3 階未満の文書で「途中の階の削除」を作るため、必要なときだけ自動で +up（先に最上階へ 1 階足す）にする
@@ -392,6 +429,24 @@ async function runScenario(docKey, scenarioName) {
     return res;
   };
   const mid = planes.length >= 3 ? planes[1] : null;
+  // S4: 階追加の後、新しい階の階段が当該階（操作前の srcPlane）と全項目一致するかを署名（stairSigsOf）で比べる
+  const withCompare = async (srcPlane, fn) => {
+    const srcSigs = stairSigsOf(await readGraph(project, srcPlane));
+    env.preSwitch.length = 0;
+    const res = await run(fn);
+    for (const p of env.preSwitch) console.log(`  [C5] 切替直前 ${p.name}: IDB の寸法線 ${p.idbDims} 本 / ライブグラフの寸法線 ${p.liveDims} 本`);
+    const added = res.addedPlanes ?? (res.addedPlane ? [res.addedPlane] : []);
+    for (const np of added) {
+      const sigs = stairSigsOf(await readGraph(project, np));
+      const same = JSON.stringify(sigs) === JSON.stringify(srcSigs);
+      console.log(`  [階段の一致] ${np.name} ← ${srcPlane.name}: 当該階 ${srcSigs.length}件 / 新しい階 ${sigs.length}件 → ${same ? '一致' : '不一致'}`);
+      if (!same) {
+        for (const s of srcSigs) if (!sigs.includes(s)) console.log(`     当該階だけ: ${s}`);
+        for (const s of sigs) if (!srcSigs.includes(s)) console.log(`     新しい階だけ: ${s}`);
+      }
+    }
+    return res;
+  };
 
   if (name === 'switchOnly') {
     // 対照: 最上階へ切り替えるだけ（階操作なし）で CL 数などが変わるかを見る
@@ -400,14 +455,14 @@ async function runScenario(docKey, scenarioName) {
     printTable('切替後（操作なし）', await tableRows(project));
   } else if (name === 'insertTop') {
     await pre(planes[planes.length - 1].id);
-    await run(() => opInsert(project, env, planes[planes.length - 1].id, 1, std));
+    await withCompare(planes[planes.length - 1], () => opInsert(project, env, planes[planes.length - 1].id, 1, std));
   } else if (name === 'insertMid') {
     const cur = mid ?? planes[0]; // 2 階建てなら 1 階の上へ挿入（2 階が押し上がる）
     await pre(cur.id);
-    await run(() => opInsert(project, env, cur.id, 1, std));
+    await withCompare(cur, () => opInsert(project, env, cur.id, 1, std));
   } else if (name === 'addLower') {
     await pre(planes[0].id);
-    await run(() => opAddLower(project, env, 1, std));
+    await withCompare(planes[0], () => opAddLower(project, env, 1, std));
   } else if (name === 'deleteMid') {
     if (!mid) { console.log('  (採用階が3未満のためスキップ。+up を付ける)'); return; }
     await pre(mid.id);
@@ -584,7 +639,7 @@ async function runScenarioA(docKey, withEv) {
 const arg1 = process.argv[2] ?? 'all';
 const docKeys = arg1 === 'all' ? Object.keys(DOCS) : [arg1];
 const only = process.argv.slice(3);
-const SCENARIOS = ['insertTop', 'insertMid', 'addLower', 'deleteMid', 'deleteTop', 'orderBTop', 'orderBMid'];
+const SCENARIOS = ['insertTop', 'insertMid', 'addLower', 'deleteMid', 'deleteTop'];
 for (const dk of docKeys) {
   for (const sc of (only.length ? only : SCENARIOS)) {
     const [base, ...mods] = sc.split('+');

@@ -36,7 +36,7 @@ function isCarvableRoom(room) {
  * 上階の格子が粗くても、部屋の生キーが指す矩形そのものを使うので、足元の外の部屋を巻き込まない）。
  * 置けないことが確定していれば、上階の格子（中心線の区間）を延ばす意味が無い。
  */
-function footprintBlocked(graph, belowGraph, stair) {
+export function footprintBlocked(graph, belowGraph, stair) {
   const foot = [...stair.cells].map(k => cellBoundsFromKey(k, belowGraph)).filter(Boolean);
   const hits = (key) => {
     const b = cellBoundsFromKey(key, graph);
@@ -50,27 +50,16 @@ function footprintBlocked(graph, belowGraph, stair) {
 }
 
 /**
- * 直上階の階段 footprint へ階段吹抜け（STAIR_VOID）Room を自動指定する。階段の真上の床は必ず開くため、
- * 足元と重なる部屋が引き抜いてよい部屋（未定義・通常の部屋・VOID。isCarvableRoom）だけなら、それらから
- * 足元の原子セルを引き抜いてから置く（部分重なり＝一部が部屋・残りが未割当も同じ。部屋のセルが空になれば
- * 部屋ごと removeRoom。subtractCellsFromUndefinedRooms と同じ扱い）。引き抜き後に部屋のセルが非連結に
- * なっても、部屋はセル集合なので壊れない（部屋再解釈 reinterpretRoomsOnEntry は分割線の消失したセルしか
- * 動かさず、連結性は見ない）。
- * ただし上階の格子が足元の辺で割れておらず、重なる原子セルが足元の矩形からはみ出す（引き抜くと足元の外の
- * 部屋まで削る）ときは通常の部屋・VOID からは引き抜かず skipped にする（未定義だけは従来どおり引き抜く）。
- * 引き抜いてはいけない部屋（ROOF・昇降路・STAIR・STAIR_VOID＝別の階段か同じ足元の吹抜け・屋外部屋）と
- * 1セルでも重なれば何もしない（冪等・二重割当防止）。
- * 重なりは両辺を refreshCells で現行グリッドの原子セルへ展開して比べる（cells は translateCellSet の
- * 生キーで、格子が直下階より細かい階では原子セルと一致しない。生のまま比べると既存の吹抜けを見落とし、
- * 呼ぶたびに増える）。展開後が空（解決できるセルが無い）なら何もしない。
- * 作る Room のセルは渡された cells（生キー）のまま持つ（読む側が refreshCells で展開する）。
- * 注意: 突入時 reconcile・階操作 follower（undo 対象外）でも同じ規則で他階の部屋のセルを削る。
+ * 足元 cells（生キー）の下に敷かれた部屋から足元の原子セルを引き抜き、そこへ部屋を置ける状態にする
+ * （addStairVoidRoom の引き抜き部分。階段を新しい階へ写す copyStairsToGraph も同じ規則を使う）。
+ * 引き抜いてよい部屋の判定・足元からはみ出す原子セルの扱いは addStairVoidRoom の説明どおり。
+ * 置けない（引き抜けない部屋と重なる・足元が解決できない）ときは graph を一切変えず false を返す。
  * @param {object} graph
  * @param {Set<string>} cells
  * @param {Array<{roomId:string, cells:Set<string>}>} [carvedOut] 引き抜いた通常の部屋・VOID（未定義は含めない）を積む出力先
- * @returns {boolean} 追加したか
+ * @returns {boolean} 置ける状態にしたか
  */
-export function addStairVoidRoom(graph, cells, carvedOut = []) {
+export function carveFootprint(graph, cells, carvedOut = []) {
   if (cells.size === 0) return false;
   const refreshed = refreshCells(cells, graph);
   if (refreshed.size === 0) return false;
@@ -110,6 +99,32 @@ export function addStairVoidRoom(graph, cells, carvedOut = []) {
       for (const other of graph.rooms) other.referenceRoomIds.delete(room.id);
     } else room.setCells(remaining);
   }
+  return true;
+}
+
+/**
+ * 直上階の階段 footprint へ階段吹抜け（STAIR_VOID）Room を自動指定する。階段の真上の床は必ず開くため、
+ * 足元と重なる部屋が引き抜いてよい部屋（未定義・通常の部屋・VOID。isCarvableRoom）だけなら、それらから
+ * 足元の原子セルを引き抜いてから置く（部分重なり＝一部が部屋・残りが未割当も同じ。部屋のセルが空になれば
+ * 部屋ごと removeRoom。subtractCellsFromUndefinedRooms と同じ扱い）。引き抜き後に部屋のセルが非連結に
+ * なっても、部屋はセル集合なので壊れない（部屋再解釈 reinterpretRoomsOnEntry は分割線の消失したセルしか
+ * 動かさず、連結性は見ない）。
+ * ただし上階の格子が足元の辺で割れておらず、重なる原子セルが足元の矩形からはみ出す（引き抜くと足元の外の
+ * 部屋まで削る）ときは通常の部屋・VOID からは引き抜かず skipped にする（未定義だけは従来どおり引き抜く）。
+ * 引き抜いてはいけない部屋（ROOF・昇降路・STAIR・STAIR_VOID＝別の階段か同じ足元の吹抜け・屋外部屋）と
+ * 1セルでも重なれば何もしない（冪等・二重割当防止）。
+ * 重なりは両辺を refreshCells で現行グリッドの原子セルへ展開して比べる（cells は translateCellSet の
+ * 生キーで、格子が直下階より細かい階では原子セルと一致しない。生のまま比べると既存の吹抜けを見落とし、
+ * 呼ぶたびに増える）。展開後が空（解決できるセルが無い）なら何もしない。
+ * 作る Room のセルは渡された cells（生キー）のまま持つ（読む側が refreshCells で展開する）。
+ * 注意: 突入時 reconcile・階操作 follower（undo 対象外）でも同じ規則で他階の部屋のセルを削る。
+ * @param {object} graph
+ * @param {Set<string>} cells
+ * @param {Array<{roomId:string, cells:Set<string>}>} [carvedOut] 引き抜いた通常の部屋・VOID（未定義は含めない）を積む出力先
+ * @returns {boolean} 追加したか
+ */
+export function addStairVoidRoom(graph, cells, carvedOut = []) {
+  if (!carveFootprint(graph, cells, carvedOut)) return false;
   const room = graph.addRoom(new Set(cells));
   room.setFeature(RoomFeature.STAIR_VOID);
   return true;

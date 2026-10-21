@@ -295,6 +295,21 @@ test("【配線・強化】App.jsx: handleAddFloorConfirm の'lower'分岐は ap
     'applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.ADD_LOWER, ... }) の呼び出しが見つからない');
 });
 
+// S4（2026-10-21）: 下階追加も stairCopy follower が当該階の階段を新しい n 個の階すべてへ写す。
+// follower は ctx.sourceGraph（当該階）と ctx.addedPlanes（addPlane が返す planes）が要る。
+test("【配線】App.jsx: 'lower'分岐は sourceGraph: project.activeGraph を渡し、addPlane が追加した全平面を planes で返す", () => {
+  const body = stripCommentLines(extractFunctionBody(readAppSrc(), 'async function handleAddFloorConfirm'));
+  const lowerBlock = body.slice(body.indexOf("if (action === 'lower') {"), body.indexOf("if (action === 'general') {"));
+  assert.match(lowerBlock, /^\s*kind: FLOOR_ORDER_KIND\.ADD_LOWER,\s*$/m);
+  assert.match(lowerBlock, /^\s*sourceGraph: project\.activeGraph,\s*$/m,
+    'ADD_LOWER に sourceGraph: project.activeGraph が1行まるごとの形で見つからない（stairCopy が当該階を読めない）');
+  assert.match(lowerBlock, /^\s*planes\.push\(result\.plane\);\s*$/m, '追加した平面を planes に積む行が見つからない');
+  assert.match(lowerBlock, /^\s*return \{ plane: lastPlane, planes \};\s*$/m, 'addPlane が { plane, planes } を返す行が見つからない');
+  // sourceGraph は applyFloorOrderChange の呼び出しの中（ブロックの外ではない）
+  const callIdx = lowerBlock.indexOf('applyFloorOrderChange(project, {');
+  assert.ok(callIdx >= 0 && lowerBlock.indexOf('sourceGraph: project.activeGraph,') > callIdx, 'sourceGraph が呼び出しの外にある');
+});
+
 // 階設定表 S3: 下階追加の各新階の elevation は元の最下階の階高で積む（3000 固定のリテラルを持たない）。
 test("【配線】App.jsx: handleAddFloorConfirm の'lower'分岐は computeFloorAddLowerElevations で elevation を求め、3000 固定を持たない", () => {
   const body = stripCommentLines(extractFunctionBody(readAppSrc(), 'async function handleAddFloorConfirm'));

@@ -1643,20 +1643,23 @@ const App = observer(() => {
         let prevFloor = currentPlane.startFloor;
         const addPlane = () => {
           let lastPlane = null;
+          const planes = []; // 追加した全平面（stairCopy が n 個すべてへ当該階の階段を写す）
           for (let i = 1; i <= n; i++) {
             const sf   = subtractSkipZero(prevFloor, 1);
             const name = makeFloorName(sf, 1);
             const elev = lowerElevations[i - 1];
             const result = addFloor(elev, name, sf, 1, undefined, currentPlane.planCutHeightMm, currentPlane.ceilingCutHeightMm); // 切断高（平面・天伏）は表示中の階から複製
             lastPlane = result.plane;
+            planes.push(result.plane);
             prevFloor = sf;
           }
-          return { plane: lastPlane };
+          return { plane: lastPlane, planes };
         };
         await applyFloorOrderChange(project, {
           kind: FLOOR_ORDER_KIND.ADD_LOWER,
           updates: [],
           addPlane,
+          sourceGraph: project.activeGraph,
           ui: floorOrderUi(),
         });
       });

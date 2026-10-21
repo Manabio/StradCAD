@@ -12,9 +12,22 @@ import { stripCommentLines } from './uiBusySourceScan.js';
 
 test('floorOrderFollowers: name の並びが固定されている', () => {
   assert.deepEqual(floorOrderFollowers.map(f => f.name), [
-    'roofPlaneHeight', 'stairVoidReconcile', 'elevatorCopy', 'exteriorRoom',
+    'roofPlaneHeight', 'elevatorCopy', 'stairCopy', 'exteriorRoom', 'stairVoidReconcile',
     'mainRoofCarry', 'switchToAddedFloor', 'stairRiserFollow', 'wallRefresh', 'structuralReflect', 'elevatorRenumber',
   ]);
+});
+
+// S4（2026-10-21）: 階追加の順序。昇降路 → 階段の複製 → 外壁内側の部屋 → 階段吹抜けの整合 → 階の切替。
+// 階段吹抜けの整合を階段の複製より前に置くと、N の階段の足元へ先に STAIR_VOID が付いて写した階段と二重になり、
+// 上の階の吹抜けが孤児として未定義化される。切替の後に置くと ctx.sourceGraph が切替前の古い束縛になる。
+test('floorOrderFollowers: 階追加の順序は elevatorCopy < stairCopy < exteriorRoom < stairVoidReconcile < switchToAddedFloor', () => {
+  const names = floorOrderFollowers.map(f => f.name);
+  const order = ['elevatorCopy', 'stairCopy', 'exteriorRoom', 'stairVoidReconcile', 'switchToAddedFloor'].map(n => names.indexOf(n));
+  assert.ok(order.every(i => i >= 0), `follower が見つからない: ${order}`);
+  assert.deepEqual([...order].sort((a, b) => a - b), order, `順序が崩れている: ${order}`);
+  // DELETE・REORDER・CHANGE の stairVoidReconcile は roofPlaneHeight の後・structuralReflect の前のまま
+  assert.ok(names.indexOf('roofPlaneHeight') < names.indexOf('stairVoidReconcile'));
+  assert.ok(names.indexOf('stairVoidReconcile') < names.indexOf('structuralReflect'));
 });
 
 // B3: 主屋根の引き継ぎは INSERT（上に階を追加）だけ。下への追加・削除・並べ替え・階変更では写さない。
@@ -39,6 +52,7 @@ test('floorOrderFollowers: 各followerのappliesToが固定されている', () 
     FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
   ]);
   assert.deepEqual(byName.elevatorCopy, [FLOOR_ORDER_KIND.INSERT]);
+  assert.deepEqual(byName.stairCopy, [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER]);
   assert.deepEqual(byName.elevatorRenumber, [FLOOR_ORDER_KIND.DELETE]);
   assert.deepEqual(byName.exteriorRoom, [FLOOR_ORDER_KIND.INSERT]);
   // 階削除で他の階の階段は消さない（S3・2026-10-21）。撤去した follower が戻っていないこと。

@@ -23,7 +23,7 @@ import { reflectStructuralAfterFloorAdd } from './structural/structuralOrchestra
 import { followRoofPlaneToTop } from './structural/roofPlane.js';
 import { carryMainRoofToNewTop } from './finish/roof/mainRoofFloorSync.js';
 import { makeFloorName } from './floorNumber.js';
-import { ERR_ELEVATOR_COPY_SKIPPED } from './error.js';
+import { ERR_ELEVATOR_COPY_SKIPPED, ERR_STAIR_COPY_SKIPPED } from './error.js';
 import {
   stairRiserKey, stairItemsOfGraph, stairRiserChanges, floorHeightAboveIn,
 } from './finish/stair/stairRiserFollow.js';
@@ -78,8 +78,8 @@ async function followStairRisers(ctx) {
 // 追従処理のレジストリ（登録順＝実行順）。各 follower は { name, appliesTo, before?(ctx), run(ctx) }。
 // delete は旧 runDeleteFloor の順序（振り直し → 昇降機の再採番。再採番は
 // HEADどおり後始末の最後に置く——throwしても他の後始末は完了済みにする意図を保つため、delete専用の
-// elevatorRenumber を構造反映の後ろへ登録する）、insert は旧 executeAddUpper/'general' の順序
-// （階段吹抜けの整合 → 昇降機の複製 → 外壁内側の部屋）を、appliesTo の違い（roofPlaneHeightは全種別・
+// elevatorRenumber を構造反映の後ろへ登録する）、insert は 昇降機の複製 → 階段の複製 → 外壁内側の部屋 →
+// 階段吹抜けの整合（2026-10-21 S4 で階段吹抜けの整合を後ろへ移した）を、appliesTo の違い（roofPlaneHeightは全種別・
 // elevatorCopyはinsertのみ・elevatorRenumberはdeleteのみ・
 // exteriorRoomはinsertのみ・stairVoidReconcile／structuralReflectは
 // insert/addLower/delete/reorder/change）で同じ配列に両立させている（リード指示・F5裁定・
@@ -108,23 +108,6 @@ export const floorOrderFollowers = [
     },
   },
   {
-    // 階の並びが変わった後、採用階の隣り合う全ペアで階段吹抜け（STAIR_VOID）を整合する（挿入で
-    // 行き先が変わった階・並替え／階変更／削除で直下階が変わった階の吹抜けの付け替え・孤児の
-    // 未定義化）。階段そのものは触らない（行き先が変わるだけ。段数は保つ＝再計算しない）。階段は
-    // 1階段＝1層分で独立（2026-10-06 裁定）なので、階削除でも他の階の階段は消さない（旧
-    // stairsBelowRemoval は2026-10-21 に撤去）。structuralReflect の前＝壁・梁芯の再計算が整合後の
-    // 吹抜けを読む。
-    name: 'stairVoidReconcile',
-    appliesTo: [
-      FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
-      FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
-    ],
-    async run(ctx) {
-      const { reconcileAllStairVoids } = await import('./finish/stair/stairFloorSync.js');
-      await reconcileAllStairVoids(ctx.project, ctx.floorIo);
-    },
-  },
-  {
     name: 'elevatorCopy',
     appliesTo: [FLOOR_ORDER_KIND.INSERT],
     async run(ctx) {
@@ -136,12 +119,54 @@ export const floorOrderFollowers = [
     },
   },
   {
+    // 階追加で、当該階（ctx.sourceGraph＝追加を実行したときの表示中の階）の階段を新しい階（INSERT は1つ、
+    // ADD_LOWER は n 個）へ写す（2026-10-21 S4）。当該階に階段が無ければ何もしない。置けない階段は飛ばして
+    // 階ごとにトースト1回。順序: elevatorCopy の後（昇降路を先に置けば同じ足元の階段は重なりで飛ぶ）・
+    // exteriorRoom の前（部屋は割当済みのセルを除くので、写した階段の足元から自然に外れる）・
+    // stairVoidReconcile の前（後ろにしないと、先に N の階段の足元へ STAIR_VOID が付き、写した階段と二重になる／
+    // 上の階の吹抜けが孤児になる）・switchToAddedFloor の前（切替後は ctx.sourceGraph が切替前の古い束縛）。
+    name: 'stairCopy',
+    appliesTo: [FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER],
+    async run(ctx) {
+      if (!ctx.sourceGraph) throw new Error('stairCopy: sourceGraph がありません（階追加の呼び出し側が当該階のグラフを渡していません）');
+      const { copyStairsToNewFloors } = await import('./finish/stair/stairFloorSync.js');
+      const { peekFn, saveFloorFn } = ctx.floorIo ?? {};
+      const copied = await copyStairsToNewFloors({
+        project: ctx.project, sourceGraph: ctx.sourceGraph, newPlanes: ctx.addedPlanes,
+        ...(peekFn ? { peekFn } : {}), ...(saveFloorFn ? { saveFloorFn } : {}),
+      });
+      if (copied.status !== 'copied') return;
+      for (const { plane, skipped } of copied.perPlane) {
+        if (skipped.length > 0) ctx.ui.notify(ERR_STAIR_COPY_SKIPPED(plane.name, skipped.length));
+      }
+    },
+  },
+  {
     name: 'exteriorRoom',
     appliesTo: [FLOOR_ORDER_KIND.INSERT],
     async run(ctx) {
       if (!ctx.sourceGraph.walls.some(w => w.isExteriorWall)) return;
       const { addNewFloorRoomFromSource } = await import('./finish/stair/stairFloorSync.js');
       await addNewFloorRoomFromSource(ctx.project, ctx.sourceGraph, ctx.addedPlane, makeFloorName(ctx.newStartFloor, 1));
+    },
+  },
+  {
+    // 階の並びが変わった後、採用階の隣り合う全ペアで階段吹抜け（STAIR_VOID）を整合する（挿入で
+    // 行き先が変わった階・並替え／階変更／削除で直下階が変わった階の吹抜けの付け替え・孤児の
+    // 未定義化）。階段そのものは触らない（行き先が変わるだけ。段数は保つ＝再計算しない）。階段は
+    // 1階段＝1層分で独立（2026-10-06 裁定）なので、階削除でも他の階の階段は消さない（旧
+    // stairsBelowRemoval は2026-10-21 に撤去）。階追加では stairCopy・elevatorCopy・exteriorRoom の後
+    // （S4。写した階段は新しい階自身のペア部屋で、その足元に STAIR_VOID を重ねない＝covered-by-own）。
+    // structuralReflect の前＝壁・梁芯の再計算が整合後の吹抜けを読む。DELETE・REORDER・CHANGE では
+    // 他の follower との相対順は roofPlaneHeight の後・structuralReflect の前のまま。
+    name: 'stairVoidReconcile',
+    appliesTo: [
+      FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
+      FLOOR_ORDER_KIND.REORDER, FLOOR_ORDER_KIND.CHANGE,
+    ],
+    async run(ctx) {
+      const { reconcileAllStairVoids } = await import('./finish/stair/stairFloorSync.js');
+      await reconcileAllStairVoids(ctx.project, ctx.floorIo);
     },
   },
   {
@@ -259,7 +284,8 @@ export const floorOrderFollowers = [
  * @param {() => {plane:object}} [opts.addPlane] - 新階を追加する同期関数（insertはaddFloor 1回、
  *   addLowerはn回ループして最も下のplaneを返す）
  * @param {() => Promise<void>} [opts.removePlane] - 階を削除する非同期関数
- * @param {object} [opts.sourceGraph] - 複製元（表示中）のグラフ。insert系の追従処理が使う
+ * @param {object} [opts.sourceGraph] - 複製元（表示中）のグラフ。insert系の追従処理が使う（ADD_LOWER も
+ *   stairCopy が使うので必須）。addPlane が { plane, planes } を返すと planes を ctx.addedPlanes に載せる
  * @param {number} [opts.newStartFloor] - 新階のstartFloor。insert系の追従処理が使う
  * @param {object} [opts.removedPlane] - 削除対象のPlane。deleteの追従処理が使う
  * @param {{notify:(msg:string)=>void, switchFloor:(planeId:string)=>Promise<boolean>, onFloorSyncChanged:()=>void}} opts.ui
@@ -277,7 +303,7 @@ export async function applyFloorOrderChange(project, opts, followers = floorOrde
   const { kind, updates, addPlane, removePlane, sourceGraph, newStartFloor, removedPlane, ui, floorIo, skipActiveWalls, stairItems } = opts;
   const ctx = {
     project, kind, updates, sourceGraph, newStartFloor, removedPlane, ui, floorIo, skipActiveWalls, stairItems,
-    addedPlane: null, targetPlaneId: null, state: {},
+    addedPlane: null, addedPlanes: [], targetPlaneId: null, state: {},
   };
 
   const applicable = followers.filter(f => f.appliesTo.includes(kind));
@@ -287,13 +313,15 @@ export async function applyFloorOrderChange(project, opts, followers = floorOrde
   }
 
   if (addPlane) {
-    const { plane } = applyFloorInsert(project, updates, addPlane);
+    const { plane, planes } = applyFloorInsert(project, updates, addPlane);
     // addPlane()がplaneを返さなかった（'lower'のn=0等、到達しない想定のケース）場合は
     // addedPlane/targetPlaneIdをnullのままにする（switchToAddedFloor側でthrowさせない）。
     if (plane) {
       ctx.addedPlane = plane;
       ctx.targetPlaneId = plane.id;
     }
+    // 追加した全平面（ADD_LOWER は n 個。addPlane が planes で返す。INSERT は1つ）。stairCopy が全部に写す。
+    ctx.addedPlanes = planes ?? (plane ? [plane] : []);
   } else if (removePlane) {
     await removePlane();
     applyPlaneMetas(project, updates);
