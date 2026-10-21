@@ -44,6 +44,7 @@ import {
   computeFloorReorder, computeAltReorder, resolveChipReorderTarget, computeFloorChangeReorder,
   computeFloorDeleteReorder, computeFloorInsert, computeFloorAddLowerElevations, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm, setCeilingCutHeightMm,
   collectProjectLevels, applyProjectLevels, rollbackFloorOp,
+  collectRemovalRecords, restoreRemovedPlanes, removePlanesForRedo,
 } from './floorOps.js';
 import { resolveTopStoryHeightMm, computeFloorHeightEdit } from './floorHeights.js';
 import { collectFloorSettingsFacts } from './floorSettingsFacts.js';
@@ -1437,15 +1438,28 @@ const App = observer(() => {
 
   // 現在の全採用フロアの状態を planeId → bytes で収集する（アクティブ階はメモリから、
   // 非アクティブ階は IDB から。IDB 未保存の階は null）。
+  async function readPlaneBytes(planeId) {
+    return planeId === project.activePlaneId
+      ? serializeGraph(project.activeGraph)
+      : (await loadFloor(planeId)) ?? null;
+  }
   async function collectFloorBytes() {
     const map = new Map();
-    for (const p of project.planes) {
-      map.set(p.id, p.id === project.activePlaneId
-        ? serializeGraph(project.activeGraph)
-        : (await loadFloor(p.id)) ?? null);
-    }
+    for (const p of project.planes) map.set(p.id, await readPlaneBytes(p.id));
     return map;
   }
+  // 階削除 undo/redo が消えた平面を作り直す部品（floorOps.js restoreRemovedPlanes に store.js の作成関数を渡す）。
+  // 並びが変わるので removeFloor（store.js）と同じ3つのキャッシュも捨てる（planeId／rank キー）。
+  const restoreRemoved = async (proj, records) => {
+    await restoreRemovedPlanes(proj, records, { addFloor, addAlternativeFloor });
+    if (records.length > 0) {
+      runInAction(() => {
+        proj.clearMemberNumberIndex();
+        proj.clearOpeningNumberIndex();
+        proj.clearEquipmentIndex();
+      });
+    }
+  };
 
   // 階操作（追加・ドラッグ移動・階変更）フロー全体を実行し、1つの undo エントリとして記録する。
   // 「積むかどうか」・差分の計算は floorOps.js の純関数 diffFloorOpSnapshot に委譲し、追加階の
@@ -1469,7 +1483,11 @@ const App = observer(() => {
   //   屋根専用平面だけが古い高さに残るのを防ぐ）。opts.afterApply は undo/redo（と失敗時の巻き戻し）の最後に呼ぶ
   //   図の作り直し等。opts.rollbackOnError は run が例外を投げたとき、メタ・GL・変わった階のバイト列を
   //   操作前へ戻してから例外を投げ直す安全網（HEIGHTS は途中まで書いた elevation・壁を残さない）。
-  async function withFloorOpUndo(label, run, { rollbackOnError = false, afterApply, prepare, afterCommit } = {}) {
+  //   階削除（opts.removalTarget＝削除する採用階の planeId）: 採用階とその検討案の id・メタ・バイト列も前後で採り
+  //   （diffFloorOpSnapshot の removedPlanes）、undo は同じ id で作り直して復活した階へ切り替え、redo は
+  //   表示中なら退避してから消す。復活は同じ Plane／PlanGraph インスタンスを戻す（削除前の編集の undo エントリが効く）。
+  //   既知の限界: 屋根専用平面は対象外。
+  async function withFloorOpUndo(label, run, { rollbackOnError = false, afterApply, prepare, afterCommit, removalTarget } = {}) {
     await runBusy(label, async () => {
       // 実行中の構造同期（建具・通り芯削除起因）がactive graphを保存・差し替えしている最中に階を追加すると、
       // collectFloorBytes（アクティブ階はメモリからserializeGraph）が再計算途中の中途半端な状態を
@@ -1480,12 +1498,14 @@ const App = observer(() => {
       const before = await collectFloorBytes();
       const metasBefore = collectPlaneMetas(project);
       const levelsBefore = collectProjectLevels(project);
+      const removalBefore = removalTarget ? await collectRemovalRecords(project, removalTarget, readPlaneBytes) : [];
 
       // rollbackOnError のとき、run と操作後のバイト列採取の失敗を巻き戻す（実体は floorOps.js rollbackFloorOp）。
       // 巻き戻し自体の失敗は記録だけして、元の例外を投げ直す。
       const rollbackIfRequested = () => (rollbackOnError
         ? rollbackFloorOp(project, {
           before, metasBefore, levelsBefore, collectBytes: collectFloorBytes, afterApply,
+          removalBefore, restoreRemoved,
           followRoof: (p) => runInAction(() => followRoofPlaneToTop(p)),
         }).catch(console.error)
         : Promise.resolve());
@@ -1507,8 +1527,9 @@ const App = observer(() => {
       }
       const metasAfter = collectPlaneMetas(project);
       const levelsAfter = collectProjectLevels(project);
-      const { addedPlanes, changedSiblings, hasChanges } = diffFloorOpSnapshot({
+      const { addedPlanes, removedPlanes, changedSiblings, hasChanges } = diffFloorOpSnapshot({
         before, after, metasBefore, metasAfter, levelsBefore, levelsAfter,
+        removalBefore, existingIdsAfter: new Set(project.planeMap.keys()),
       });
       if (!hasChanges) return;
 
@@ -1534,16 +1555,29 @@ const App = observer(() => {
             if (addedPlanes.some(pl => pl.id === project.activePlaneId)) return;
           }
           for (const pl of addedPlanes) await removeFloor(pl.id);
+          // 階削除の undo: 先に既存の階のメタを戻し（詰められた階と復活する階が同じ elevation で並ぶ窓を作らない。
+          // redo がメタを消した後に戻すのと同じ方針）、消えた採用階・検討案を同じインスタンス・id で戻す
           applyPlaneMetas(project, metasBefore);
+          await restoreRemoved(project, removedPlanes);
           applyProjectLevels(project, levelsBefore);
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);
           runInAction(() => followRoofPlaneToTop(project));
+          // 階削除の undo の後は復活した階を表示する（Q11）
+          const revivedId = removedPlanes.find(r => !r.isAlternative)?.id;
+          if (revivedId && project.planeMap.has(revivedId)) await trySwitchFloor(() => handleFloorSwitch(revivedId));
           // afterApply は関門の中で待つ（図の作り直しの途中に階切替・モード切替を割り込ませない）
           await afterApply?.();
         });
       }
       async function redoFloorOp() {
         await runBusy(label + 'のredo', async () => {
+          // 階削除の redo: 対象の階（とその検討案）を表示中なら退避してから消す。メタを after へ戻す前に消す
+          // （消える階と振り直し後の階が一時的に同じ elevation にならないように）。
+          const removed = await removePlanesForRedo(project, removedPlanes, activeAfterId, {
+            removeFloorFn: removeFloor,
+            switchTo: (id) => trySwitchFloor(() => handleFloorSwitch(id)),
+          });
+          if (!removed) return; // 退避できない→アクティブ階を消さず中断（F1）
           applyPlaneMetas(project, metasAfter);
           applyProjectLevels(project, levelsAfter);
           for (const pl of addedPlanes) {
@@ -1859,7 +1893,7 @@ const App = observer(() => {
 
   async function runDeleteFloor(planeId) {
     beginUiTransition();
-    await runBusy('階操作', async () => {
+    await withFloorOpUndo('階削除', async () => {
       const adopted = project.planes;
       const idx     = adopted.findIndex(p => p.id === planeId);
       const fallback = adopted[idx + 1] ?? adopted[idx - 1];
@@ -1885,7 +1919,7 @@ const App = observer(() => {
         below,
         ui: floorOrderUi(),
       });
-    });
+    }, { rollbackOnError: true, removalTarget: planeId });
   }
 
   async function runDeleteAlternative(planeId, plane) {

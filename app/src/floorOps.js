@@ -466,8 +466,17 @@ export function setCeilingCutHeightMm(project, planeId, mm) {
 //   hasChanges: addedPlanes.length>0 || changedSiblings.length>0 || metasChanged
 //   levelsChanged: levelsBefore と levelsAfter（collectProjectLevels の戻り値。省略可）が一致しない
 //     （階設定表の GL。Plane に属さない project 単位の値なので、メタ・バイト列とは別に比べる。S4）
-export function diffFloorOpSnapshot({ before, after, metasBefore, metasAfter, levelsBefore, levelsAfter }) {
+//   removedPlanes: removalBefore（collectRemovalRecords の戻り値。階削除が消す採用階＋検討案）のうち
+//     existingIdsAfter（操作後の project.planeMap の id 集合）に無いもの。removalBefore を渡すときは
+//     existingIdsAfter も必須（省略すると検討案が全て「消えた」扱いになるため throw する）
+export function diffFloorOpSnapshot({
+  before, after, metasBefore, metasAfter, levelsBefore, levelsAfter, removalBefore, existingIdsAfter,
+}) {
   const addedPlanes = metasAfter.filter(m => !before.has(m.id));
+  if (removalBefore?.length && !existingIdsAfter) {
+    throw new Error('diffFloorOpSnapshot: removalBefore を渡すときは existingIdsAfter も必要');
+  }
+  const removedPlanes = (removalBefore ?? []).filter(r => !existingIdsAfter.has(r.id));
 
   const changedSiblings = [];
   for (const [planeId, beforeBytes] of before) {
@@ -480,9 +489,91 @@ export function diffFloorOpSnapshot({ before, after, metasBefore, metasAfter, le
 
   const metasChanged = !planeMetasEqual(metasBefore, metasAfter);
   const levelsChanged = !projectLevelsEqual(levelsBefore, levelsAfter);
-  const hasChanges = addedPlanes.length > 0 || changedSiblings.length > 0 || metasChanged || levelsChanged;
+  const hasChanges = addedPlanes.length > 0 || removedPlanes.length > 0 || changedSiblings.length > 0
+    || metasChanged || levelsChanged;
 
-  return { addedPlanes, changedSiblings, metasChanged, levelsChanged, hasChanges };
+  return { addedPlanes, removedPlanes, changedSiblings, metasChanged, levelsChanged, hasChanges };
+}
+
+// ---- 階削除（undo 対象）----
+// 階削除が消す平面（採用階＋その検討案）のスナップショット。collectPlaneMetas／collectFloorBytes は採用階
+// だけを採るため、検討案とメタの全項目（isAlternative・referenceId・altIndex）は別に採る。getBytes は
+// planeId→Promise<Uint8Array|null>（アクティブ階はメモリから、他は IDB から。App.jsx の readPlaneBytes）。
+// 採用階でない・存在しない planeId は空配列。順序は採用階→検討案（altIndex 昇順）。
+// 既知の限界: 屋根専用平面（roofForPlaneId）は階操作の undo 対象外のため採らない。
+export async function collectRemovalRecords(project, planeId, getBytes) {
+  const target = project.planeMap.get(planeId);
+  if (!target || target.isAlternative) return [];
+  const alts = [...project.planeMap.values()]
+    .filter(p => p.isAlternative && p.referenceId === planeId)
+    .sort((a, b) => a.altIndex - b.altIndex);
+  const records = [];
+  for (const p of [target, ...alts]) {
+    records.push({
+      id: p.id, name: p.name, startFloor: p.startFloor, elevation: p.elevation, stories: p.stories,
+      planCutHeightMm: p.planCutHeightMm, ceilingCutHeightMm: p.ceilingCutHeightMm,
+      topStoryHeightMm: p.topStoryHeightMm,
+      isAlternative: p.isAlternative, referenceId: p.referenceId, altIndex: p.altIndex,
+      // インスタンスそのもの（undo スタックの編集エントリが graph を掴んでいるため、復活は同じ instance で行う）
+      plane: p, graph: project.graphMap.get(p.id),
+      bytes: await getBytes(p.id),
+    });
+  }
+  return records;
+}
+
+// 消えた平面を同じ id で作り直し、バイト列を IDB へ書く（階削除の undo／失敗時の巻き戻し）。
+// 採用階→検討案（altIndex 昇順）の順。既に存在する id は触らない（巻き戻しで再入しても重複しない）。
+// records が Plane／PlanGraph のインスタンスを持つとき（collectRemovalRecords の戻り値）は同じインスタンスを
+// project.restorePlane で戻す——削除前の編集の undo エントリ（graph を掴む）が復活した階に効く。インスタンスが
+// 無い記録だけ addFloor／addAlternativeFloor で作り直す（store.js のもの。本モジュールは store.js を引かないため注入）。
+// 既知の限界: 削除中に編集した分の履歴は無い（削除前の履歴は戻る）。
+export async function restoreRemovedPlanes(project, records, { addFloor, addAlternativeFloor, saveFloorFn = saveFloor }) {
+  const ordered = [
+    ...records.filter(r => !r.isAlternative),
+    ...records.filter(r => r.isAlternative).sort((a, b) => a.altIndex - b.altIndex),
+  ];
+  for (const r of ordered) {
+    if (project.planeMap.has(r.id)) continue;
+    if (r.plane && r.graph) {
+      project.restorePlane(r.plane, r.graph); // 同じ Plane／PlanGraph インスタンスを戻す
+    } else if (!r.isAlternative) {
+      addFloor(r.elevation, r.name, r.startFloor, r.stories, r.id, r.planCutHeightMm, r.ceilingCutHeightMm, r.topStoryHeightMm);
+    } else if (!addAlternativeFloor(r.referenceId, r.name, undefined, r.id, r.altIndex)) {
+      throw new Error(`検討案 ${r.id} の親の採用階 ${r.referenceId} が無く作り直せない`);
+    }
+    applyPlaneMetas(project, [r]); // 検討案は親の elevation 等で作られるため、記録した値へ揃える
+    if (r.bytes != null) await saveFloorFn(r.id, r.bytes);
+  }
+}
+
+// 階削除の redo: removedPlanes の採用階を（検討案ごと）消す。対象（とその検討案）を表示中なら switchTo(id)
+// で pickRemovalFallback の階へ退避し、なお表示中なら（切替失敗）アクティブ階を消さず false を返して中断する
+// （F1・2026-09-27）。removeFloorFn は store.js removeFloor、switchTo は App.jsx の trySwitchFloor 経由の切替。
+// 戻り値: 全て消せたら true。
+export async function removePlanesForRedo(project, removedPlanes, activeAfterId, { removeFloorFn, switchTo }) {
+  for (const r of removedPlanes) {
+    if (r.isAlternative || !project.planeMap.has(r.id)) continue;
+    if (blocksFloorRemoval(project, r.id)) {
+      const fallbackId = pickRemovalFallback(project, r.id, activeAfterId);
+      if (fallbackId) await switchTo(fallbackId);
+      if (blocksFloorRemoval(project, r.id)) return false;
+    }
+    await removeFloorFn(r.id);
+  }
+  return true;
+}
+
+// 階削除の redo で、対象の階を表示中のとき退避する先。preferredId（最初の削除後に表示していた階）が
+// 今も有り、対象とその検討案でなければそれ。無ければ runDeleteFloor と同じ規則（直上の採用階、無ければ直下）。
+export function pickRemovalFallback(project, planeId, preferredId) {
+  const preferred = preferredId ? project.planeMap.get(preferredId) : null;
+  if (preferred && preferred.id !== planeId && !(preferred.isAlternative && preferred.referenceId === planeId)) {
+    return preferred.id;
+  }
+  const adopted = project.planes;
+  const idx = adopted.findIndex(p => p.id === planeId);
+  return (adopted[idx + 1] ?? adopted[idx - 1])?.id ?? null;
 }
 
 // ---- project 単位の高さ設定（GL）の収集・復元（階設定表。階操作の undo/redo が Plane メタと一緒に使う）----
@@ -504,18 +595,28 @@ export function applyProjectLevels(project, levels) {
  * 関門を抜けない）。操作前に未保存（null）だった階は IDB のレコードを消す。最後に afterApply を1回呼ぶ。
  * 既知の限界: 屋根専用平面のバイト列と structGraph は階操作の undo と同じく対象外。
  * @param {object} project
+ * 階削除（removalBefore＝collectRemovalRecords の戻り値、restoreRemoved＝App.jsx が addFloor 等を束ねた
+ * restoreRemovedPlanes）のときは、project から消えた平面を作り直し、残っている平面（removeFloor が IDB を
+ * 途中まで消して失敗した場合）の IDB バイト列も書き戻す。
  * @param {{before:Map, metasBefore:Array, levelsBefore:object, collectBytes:()=>Promise<Map>,
  *   followRoof:(project)=>void, afterApply?:()=>void,
+ *   removalBefore?:Array, restoreRemoved?:(project, records)=>Promise<void>,
  *   applyBytes?:Function, saveFloorFn?:Function, deleteFloorFn?:Function}} args
  */
 export async function rollbackFloorOp(project, {
-  before, metasBefore, levelsBefore, collectBytes, followRoof, afterApply,
+  before, metasBefore, levelsBefore, collectBytes, followRoof, afterApply, removalBefore, restoreRemoved,
   applyBytes = applyFloorBytes, saveFloorFn = saveFloor, deleteFloorFn = dbDeleteFloor,
 }) {
   applyPlaneMetas(project, metasBefore);
   applyProjectLevels(project, levelsBefore);
   followRoof(project);
   try {
+    if (removalBefore?.length) {
+      const surviving = removalBefore.filter(r => project.planeMap.has(r.id) && r.id !== project.activePlaneId);
+      await restoreRemoved(project, removalBefore);
+      followRoof(project);
+      for (const r of surviving) if (r.bytes != null) await saveFloorFn(r.id, r.bytes);
+    }
     const failedAfter = await collectBytes();
     for (const [planeId, beforeBytes] of before) {
       if (!failedAfter.has(planeId) || floorBytesEqual(beforeBytes, failedAfter.get(planeId))) continue;

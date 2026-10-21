@@ -560,19 +560,21 @@ export function addFloor(elevation, name, startFloor = 1, stories = 1, planeId =
  * @param {string} referenceId  親採用の plane.id
  * @param {string} name         検討の名称
  * @param {object} [sourcePlane] 複製元の平面（切断高の引継ぎ元。省略時は親採用）
+ * @param {string} [planeId]   plane.id（省略時は新規発番。階削除 undo が削除した検討案を同一 ID で作り直すために指定する）
+ * @param {number} [altIndex]  検討の並び順（省略時は既存の検討数。planeId と同じ用途で指定する）
  */
-export function addAlternativeFloor(referenceId, name, sourcePlane = undefined) {
+export function addAlternativeFloor(referenceId, name, sourcePlane = undefined, planeId = crypto.randomUUID(), altIndex = undefined) {
   const refPlane = project.planeMap.get(referenceId);
   if (!refPlane) return null;
 
   const altCount = [...project.planeMap.values()]
     .filter(p => p.isAlternative && p.referenceId === referenceId).length;
 
-  const newPlaneId = crypto.randomUUID();
+  const newPlaneId = planeId;
   const result = project.addPlane(
     refPlane.elevation, name, newPlaneId,
     refPlane.startFloor, refPlane.stories,
-    true, referenceId, altCount,
+    true, referenceId, altIndex ?? altCount,
     // 切断高（平面・天伏）は複製元の平面（省略時は採用階）から引き継ぐ
     false, null, (sourcePlane ?? refPlane).planCutHeightMm,
     (sourcePlane ?? refPlane).ceilingCutHeightMm,

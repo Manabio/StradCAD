@@ -28,7 +28,7 @@ import {
 // beginUiTransition()（interruptCurrentActionが今の操作を中断してしまう）はperformUndo/performRedo
 // が既に済ませているためここでは呼ばない（入力規制ステップ6）。withFloorOpUndoも同じ理由で
 // noBeginUiTransition——呼び出し元（executeAddUpper・handleAddFloorConfirmの各分岐・
-// runReorderFloor・runFloorChange）が全てbeginUiTransition()を済ませてから呼ぶため、本関数内では
+// runReorderFloor・runFloorChange・runFloorHeights・runDeleteFloor）が全てbeginUiTransition()を済ませてから呼ぶため、本関数内では
 // 重ねて呼ばない（途中階の上階追加と階移動の振り直し一本化 ステップ4）。
 const GATED = [
   'performUndo', 'performRedo', 'handleModeChange', 'handleFloorSwitch', 'switchFloorKeepingMode',
@@ -37,7 +37,7 @@ const GATED = [
   {
     name: 'withFloorOpUndo', noBeginUiTransition: true,
     reason: '呼び出し元（executeAddUpper・handleAddFloorConfirmの各分岐・runReorderFloor・'
-      + 'runFloorChange）が全てbeginUiTransition()を済ませてから呼ぶため、本関数内で重ねて呼ばない'
+      + 'runFloorChange・runFloorHeights・runDeleteFloor）が全てbeginUiTransition()を済ませてから呼ぶため、本関数内で重ねて呼ばない'
       + '（二重呼び出しを避け、呼び出し元の責任に統一する）。',
   },
   {
@@ -49,7 +49,7 @@ const GATED = [
     name: 'redoFloorOp', noBeginUiTransition: true,
     reason: '同上（performRedo側）。',
   },
-  'runAddAlternative', 'runDeleteFloor', 'runDeleteAlternative', 'runCopyAlternative',
+  'runAddAlternative', 'runDeleteAlternative', 'runCopyAlternative',
   'installElevatorFromNaming', 'deleteElevatorEquipment', 'changeElevatorUsage',
   'handleCLDialogConfirm',
   'convertStairFromNaming',
@@ -112,6 +112,18 @@ const EXEMPT = [
     name: 'collectFloorBytes',
     reason: '呼び出し元はwithFloorOpUndo（GATED）のみ。関門化済みの呼び出し元（runBusyの中）から呼ばれる'
       + '内部関数のため対象外（入力規制ステップ6）。',
+  },
+  {
+    name: 'readPlaneBytes',
+    reason: '呼び出し元はcollectFloorBytes・withFloorOpUndo（階削除の前後のスナップショット）のみ。IDB/メモリを読むだけで'
+      + '書かず、関門化済みの呼び出し元（runBusyの中）から呼ばれる内部関数のため対象外（階の追加・削除の見直し S2）。',
+  },
+  {
+    name: 'runDeleteFloor',
+    reason: '呼び出し元はhandleDeleteFloorButton（確認ダイアログのonSelect。reportFloorTransitionErrorで握る）のみ。'
+      + 'beginUiTransition()（graph/IDBを書かない）を同期で呼んだ後、withFloorOpUndo（既に関門内で自走。階の切替・削除は'
+      + 'その内側）をawaitするだけで、awaitの前後で自らgraph/IDBを書かない（runReorderFloorと同じ判定基準）。'
+      + '恒久的に対象外（階の追加・削除の見直し S2: 階削除を undo 対象にした）。',
   },
   {
     name: 'executeAddUpper',
@@ -232,7 +244,8 @@ const PENDING_COUNT = 0;
 // 階設定表 S8 で openFloorSettings（GATED。全階の階段・下屋を peek して集める）の runBusy( コールバックが1件加わったため43→44。
 const ANON_IIFE_COUNT = 3;
 // 階設定表 S8-F2 で runFloorHeights が withFloorOpUndo へ渡す afterApply・afterCommit（関門の中で await される async アロー）が2件加わったため44→46。
-const ANON_CALLBACK_COUNT = 46;
+// 階の追加・削除 S2 で restoreRemoved（階削除 undo/redo の作り直し＋キャッシュ破棄。withFloorOpUndo の undo/rollback 内で await される内部関数）が加わったため46→47。
+const ANON_CALLBACK_COUNT = 47;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

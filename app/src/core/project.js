@@ -115,6 +115,7 @@ export class Project {
       roofPlane:     computed,
       addPlane:      action,
       removePlane:   action,
+      restorePlane:  action,
       clearMemberNumberIndex: action,
       clearOpeningNumberIndex: action,
       replaceEquipmentIndex: action,
@@ -198,6 +199,18 @@ export class Project {
     this.graphMap.set(plane.id, graph);
     if (!this.activePlaneId) this.activePlaneId = plane.id;
     return { plane, graph };
+  }
+
+  /**
+   * removePlane で外した Plane／PlanGraph を同じインスタンスのまま戻す（階削除の undo）。undo スタックの編集エントリは
+   * graph インスタンスを掴んでいるため、作り直す（addPlane）と復活した階に効かなくなる。_structGraph／_structuralInfo は
+   * addPlane が付けたものが外した後も残るので付け直さない（同じ project の共有物）。中身は呼び出し側が保存済みバイト列から
+   * 階切替（swap の restoreGraph）で入れる。
+   */
+  restorePlane(plane, graph) {
+    this.planeMap.set(plane.id, plane);
+    this.graphMap.set(plane.id, graph);
+    if (!this.activePlaneId) this.activePlaneId = plane.id;
   }
 
   removePlane(planeId) {

@@ -26,7 +26,7 @@ test('【配線】withFloorOpUndo: GL を levelsBefore（run の前）・levelsA
 });
 
 test('【配線】withFloorOpUndo: opts（rollbackOnError・afterApply）を受ける', () => {
-  assert.match(readAppSrc(), /^\s*async function withFloorOpUndo\(label, run, \{ rollbackOnError = false, afterApply, prepare, afterCommit \} = \{\}\) \{\s*$/m,
+  assert.match(readAppSrc(), /^\s*async function withFloorOpUndo\(label, run, \{ rollbackOnError = false, afterApply, prepare, afterCommit, removalTarget \} = \{\}\) \{\s*$/m,
     'withFloorOpUndo の署名行が1行まるごとの形で見つからない');
 });
 

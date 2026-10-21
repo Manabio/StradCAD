@@ -40,5 +40,5 @@ test('【配線】store.js addAlternativeFloor: 切断高は複製元（sourcePl
     'addAlternativeFloor が (sourcePlane ?? refPlane).planCutHeightMm を addPlane へ渡していない');
   assert.match(body, /^\s*\(sourcePlane \?\? refPlane\)\.ceilingCutHeightMm,\s*$/m,
     'addAlternativeFloor が (sourcePlane ?? refPlane).ceilingCutHeightMm を addPlane へ渡していない');
-  assert.match(storeSrc, /export function addAlternativeFloor\(referenceId, name, sourcePlane = undefined\)/);
+  assert.match(storeSrc, /export function addAlternativeFloor\(referenceId, name, sourcePlane = undefined, planeId = crypto\.randomUUID\(\), altIndex = undefined\)/);
 });

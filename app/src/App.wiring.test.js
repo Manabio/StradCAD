@@ -346,7 +346,7 @@ test('【配線・強化】App.jsx: withFloorOpUndo は diffFloorOpSnapshot({ �
   const appSrc = readAppSrc();
   const body = extractFunctionBody(appSrc, 'async function withFloorOpUndo');
 
-  assert.match(body, /const \{ addedPlanes, changedSiblings, hasChanges \} = diffFloorOpSnapshot\(\{/,
+  assert.match(body, /const \{ addedPlanes, removedPlanes, changedSiblings, hasChanges \} = diffFloorOpSnapshot\(\{/,
     'diffFloorOpSnapshot({ ... }) の呼び出しが見つからない');
 
   const startIdx = body.indexOf('diffFloorOpSnapshot({');
@@ -557,14 +557,15 @@ test('【配線】App.jsx: floorOrderUi 本体に switchFloor: (id) => trySwitch
 // runFloorChangeのいずれかから beginUiTransition(); を外すと赤になる。
 // ================================================================
 
-test('【不変条件・横断】App.jsx: await withFloorOpUndo( の全呼び出し箇所は、直前の非空行が beginUiTransition(); である（呼び出し件数は6件固定）', () => {
+test('【不変条件・横断】App.jsx: await withFloorOpUndo( の全呼び出し箇所は、直前の非空行が beginUiTransition(); である（呼び出し件数は7件固定）', () => {
   const lines = stripCommentLines(readAppSrc()).split(/\r?\n/);
   const callLineIdxs = [];
   lines.forEach((line, i) => { if (line.includes('await withFloorOpUndo(')) callLineIdxs.push(i); });
 
   // 5→6: 階設定表 S5 の runFloorHeights が加わった（直前の非空行は beginUiTransition(); で不変条件を満たす）
-  assert.equal(callLineIdxs.length, 6,
-    `await withFloorOpUndo( の呼び出し件数が6件固定と異なる（実際: ${callLineIdxs.length}）。`
+  // 6→7: 階削除の undo 化（階の追加・削除の見直し S2）で runDeleteFloor が加わった（直前は beginUiTransition();）
+  assert.equal(callLineIdxs.length, 7,
+    `await withFloorOpUndo( の呼び出し件数が7件固定と異なる（実際: ${callLineIdxs.length}）。`
     + '呼び出し元が増減していないか見直すこと');
 
   for (const idx of callLineIdxs) {
