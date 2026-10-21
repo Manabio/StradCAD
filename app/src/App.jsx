@@ -52,7 +52,7 @@ import { followRoofPlaneToTop } from './structural/roofPlane.js';
 import { applyFloorOrderChange, FLOOR_ORDER_KIND } from './floorOrderChange.js';
 import { FloorSettingsDialog } from './ui/FloorSettingsDialog.jsx';
 import { AddFloorDialog } from './ui/AddFloorDialog.jsx';
-import { buildFloorChipModel } from './ui/floorChipModel.js';
+import { buildFloorChipModel, floorDeleteButtonState } from './ui/floorChipModel.js';
 import { ConfirmDialog } from './ui/ConfirmDialog.jsx';
 import { FloorChangeDialog } from './ui/FloorChangeDialog.jsx';
 import { PlanCutHeightDialog } from './ui/PlanCutHeightDialog.jsx';
@@ -1754,22 +1754,6 @@ const App = observer(() => {
       return;
     }
 
-    if (action === 'delete') {
-      setFloorConfirm({
-        message: 'この階を削除すると、１つ下の階にある階段も削除されます。削除は、採用・検討案共です。この階を削除してよろしいですか？',
-        buttons: [
-          { label: '削除', value: 'ok', primary: true, danger: true },
-          { label: 'キャンセル', value: 'cancel' },
-        ],
-        onSelect: async (v) => {
-          setFloorConfirm(null);
-          if (v !== 'ok') return;
-          await runDeleteFloor(planeId).catch(reportFloorTransitionError); // guardUi層と同じ握り方（未捕捉rejection化を防ぐ）
-        },
-      });
-      return;
-    }
-
     if (action === 'delete-alt') {
       setFloorConfirm({
         message: `「${plane.name}」の平面を削除してよろしいですか？`,
@@ -1851,6 +1835,25 @@ const App = observer(() => {
       // 切替に失敗したら以降（複製元の書き戻し）を進めない（F1・2026-09-27）。
       if (!(await trySwitchFloor(() => handleFloorSwitch(result.plane.id)))) return;
       if (bytes) restoreGraph(project.activeGraph, bytes);
+    });
+  }
+
+  // 階削除 [-] ボタンの押下: 確認（検討案の有無で文言が変わる）→ runDeleteFloor。
+  function handleDeleteFloorButton() {
+    const { showDelete, message } = floorDeleteButtonState(project, project.activePlane);
+    if (!showDelete) return;
+    const planeId = project.activePlaneId;
+    setFloorConfirm({
+      message,
+      buttons: [
+        { label: '削除', value: 'ok', primary: true, danger: true },
+        { label: 'キャンセル', value: 'cancel' },
+      ],
+      onSelect: async (v) => {
+        setFloorConfirm(null);
+        if (v !== 'ok') return;
+        await runDeleteFloor(planeId).catch(reportFloorTransitionError); // guardUi層と同じ握り方（未捕捉rejection化を防ぐ）
+      },
     });
   }
 
@@ -2776,24 +2779,31 @@ const App = observer(() => {
           />
         )}
 
-        {/* 階追加 [+] — 採用フロア表示中のみ有効。階切替はドラム、階管理・並替はチップへ集約済み。 */}
+        {/* 階追加 [+]・階削除 [-] — 採用フロア表示中のみ表示（[-] は最下階・唯一の階でも非表示）。
+            階切替はドラム、階管理・並替はチップへ集約済み。 */}
         {(() => {
-          const canAddFloor = !(project.activePlane?.isAlternative);
+          const { showAdd, showDelete } = floorDeleteButtonState(project, project.activePlane);
+          const btnStyle = {
+            width: 24, height: 24, borderRadius: 6,
+            border: '1px solid #e2e8f0',
+            background: '#f8fafc',
+            color: '#64748b',
+            fontSize: 15, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
+          };
           return (
-            <button
-              onClick={canAddFloor ? guardUi(handleAddFloor) : undefined}
-              title={canAddFloor ? '階を追加' : '採用フロアを表示中のときに追加できます'}
-              style={{
-                width: 24, height: 24, borderRadius: 6,
-                border: '1px solid #e2e8f0',
-                background: canAddFloor ? '#f8fafc' : '#f1f5f9',
-                color: canAddFloor ? '#64748b' : '#cbd5e1',
-                fontSize: 15, cursor: canAddFloor ? 'pointer' : 'default',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
-              }}
-            >
-              +
-            </button>
+            <>
+              {showAdd && (
+                <button onClick={guardUi(handleAddFloor)} title="階を追加" style={btnStyle}>
+                  +
+                </button>
+              )}
+              {showDelete && (
+                <button onClick={guardUi(handleDeleteFloorButton)} title="階を削除" style={btnStyle}>
+                  -
+                </button>
+              )}
+            </>
           );
         })()}
       </div>

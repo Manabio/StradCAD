@@ -30,8 +30,30 @@ export function buildFloorMenuItems(project, plane) {
   if (i >= 2)                items.push({ id: 'move-down', label: '▼ 下の階へ' });
   if (!isHighest && i >= 1)  items.push({ id: 'move-up',   label: '▲ 上の階へ' });
   if (!isLowest && !isHighest) items.push({ id: 'mezzanine', label: '中間階に' });
-  if (!isLowest) items.push({ id: 'delete', label: '削除', danger: true });
+  // 採用階の削除は [-] ボタン（floorDeleteButtonState）が担う。ここには出さない。
   return items;
+}
+
+// ---- 階追加 [+]／階削除 [-] ボタンの表示判定と確認文言 ----
+// [+]: 検討案の表示中は出さない。
+// [-]: 採用階の表示中だけ。最下階（唯一の階を含む）・屋根専用平面・検討案の表示中は出さない。
+// 最下階の基準は buildFloorMenuItems と同じ（project.planes の先頭）。
+export function floorDeleteButtonState(project, activePlane) {
+  if (activePlane?.isAlternative) {
+    return { showAdd: false, showDelete: false, message: null };
+  }
+  if (!activePlane) return { showAdd: true, showDelete: false, message: null };
+  const idx = project.planes.findIndex(p => p.id === activePlane.id);
+  const showDelete = idx >= 1;
+  let message = null;
+  if (showDelete) {
+    const hasAlt = [...project.planeMap.values()]
+      .some(p => p.isAlternative && p.referenceId === activePlane.id);
+    message = hasAlt
+      ? 'この階を削除してもよろしいですか？検討案も一緒に削除されます。'
+      : 'この階を削除してもよろしいですか？';
+  }
+  return { showAdd: true, showDelete, message };
 }
 
 // ---- 検討チップの表示派生値（現在の階の採用＋検討案）----

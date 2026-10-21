@@ -247,8 +247,17 @@ test('【不変条件・入力規制ステップ6】App.jsx: [+]ボタンのonCl
   const appSrc = fs.readFileSync(appSrcPath, 'utf8');
   const code = stripCommentLines(appSrc);
 
-  assert.match(code, /onClick=\{canAddFloor \? guardUi\(handleAddFloor\) : undefined\}/,
+  assert.match(code, /onClick=\{guardUi\(handleAddFloor\)\}/,
     '[+]ボタンのonClickがguardUi()で包まれていない');
+  assert.match(code, /onClick=\{guardUi\(handleDeleteFloorButton\)\}/,
+    '[-]ボタンのonClickがguardUi()で包まれていない');
+  // 表示条件（[+]=showAdd・[-]=showDelete）と並び順（[-] は [+] の右）
+  assert.match(code, /\{showAdd && \(\s*<button onClick=\{guardUi\(handleAddFloor\)\}/,
+    '[+]ボタンが showAdd で出し分けられていない');
+  assert.match(code, /\{showDelete && \(\s*<button onClick=\{guardUi\(handleDeleteFloorButton\)\}/,
+    '[-]ボタンが showDelete で出し分けられていない');
+  assert.ok(code.indexOf('guardUi(handleAddFloor)') < code.indexOf('guardUi(handleDeleteFloorButton)'),
+    '[-]ボタンが[+]ボタンの右（後）に無い');
 });
 
 // handleFloorMenuAction自体は非asyncのままgraph/IDBを直接書かず、GATEDなrunXxxへ委譲することを固定する
@@ -259,7 +268,11 @@ test('【不変条件・入力規制ステップ6】App.jsx: handleFloorMenuActi
     'handleFloorMenuActionはasync functionであってはいけない（関門はrunXxx側で開く）');
   const body = extractFunctionBody(appSrc, 'function handleFloorMenuAction');
 
-  assert.ok(body.includes('await runDeleteFloor(planeId)'), 'delete分岐がrunDeleteFloorへ委譲していない');
+  // 採用階の削除は [-] ボタン（handleDeleteFloorButton）へ移した。メニューの delete 分岐は無い。
+  assert.ok(!body.includes('runDeleteFloor('), 'handleFloorMenuActionに採用階削除（runDeleteFloor）が残っている');
+  const btnBody = extractFunctionBody(appSrc, 'function handleDeleteFloorButton');
+  assert.ok(btnBody.includes('await runDeleteFloor(planeId)'), '[-]ボタンがrunDeleteFloorへ委譲していない');
+  assert.ok(!btnBody.includes('removeFloor('), '[-]ボタンの本体が直接removeFloorを呼んではいけない');
   assert.ok(body.includes('await runDeleteAlternative(planeId, plane)'), 'delete-alt分岐がrunDeleteAlternativeへ委譲していない');
   assert.ok(body.includes('await runAddAlternative('), 'add-alt分岐がrunAddAlternativeへ委譲していない');
   assert.ok(body.includes('return runCopyAlternative('), 'copy-alt分岐がrunCopyAlternativeへ委譲していない');
