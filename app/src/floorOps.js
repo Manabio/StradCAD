@@ -525,8 +525,8 @@ export function diffFloorOpSnapshot({
 // planeId→Promise<Uint8Array|null>（アクティブ階はメモリから、他は IDB から。App.jsx の readPlaneBytes）。
 // 検討案の planeId はその検討案1件（removeFloor が単独で消す）。存在しない planeId は空配列。
 // 順序は採用階→検討案（altIndex 昇順）。
-// 屋根専用平面は階操作の undo 対象外のため採らない（紐づけは undo の最後の followRoofPlaneToTop が並びから戻す。
-// 屋根平面の中身のバイト列は戻らない既知の限界）。
+// 屋根専用平面はここでは採らない（消える階ではない。紐づけは undo の最後の followRoofPlaneToTop が並びから戻し、
+// 中身のバイト列は collectFloorBytes が前後で採る）。
 export async function collectRemovalRecords(project, planeId, getBytes) {
   const target = project.planeMap.get(planeId);
   if (!target) return [];
@@ -761,7 +761,7 @@ export function applyProjectLevels(project, levels) {
  * 失敗しても残さない）。バイト列: アクティブ階はメモリ（applyBytes）と IDB（saveFloorFn）の両方へ（失敗した
  * 操作が途中で自階を IDB へ書いていることがある）、非アクティブ階は IDB へ await して書く（投げ放しで
  * 関門を抜けない）。操作前に未保存（null）だった階は IDB のレコードを消す。最後に afterApply を1回呼ぶ。
- * 既知の限界: 屋根専用平面のバイト列と structGraph は階操作の undo と同じく対象外。
+ * before／collectBytes に屋根専用平面が入っていれば、そのバイト列も他の階と同じに戻る。既知の限界: structGraph は対象外。
  * @param {object} project
  * 階削除（removalBefore＝collectRemovalRecords の戻り値、restoreRemoved＝App.jsx が addFloor 等を束ねた
  * restoreRemovedPlanes）のときは、project から消えた平面を作り直し、残っている平面（removeFloor が IDB を

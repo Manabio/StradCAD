@@ -1469,7 +1469,9 @@ const App = observer(() => {
   }
   async function collectFloorBytes() {
     const map = new Map();
-    for (const p of project.planes) map.set(p.id, await readPlaneBytes(p.id));
+    // 屋根専用平面も採る（在来木造の reflectRoofPlane が階操作の中で屋根のバイト列を書き換えるため）。
+    // 追加・削除された平面の判定は採用階のメタ（collectPlaneMetas）から決まるので屋根は数えられない
+    for (const p of [...project.planes, project.roofPlane].filter(Boolean)) map.set(p.id, await readPlaneBytes(p.id));
     return map;
   }
   // 階削除 undo/redo が消えた平面を作り直す部品（floorOps.js restoreRemovedPlanes に store.js の作成関数を渡す）。
@@ -1503,8 +1505,8 @@ const App = observer(() => {
   // フロア切替・IDB 書き込みは非同期のため undo/redo 内では投げ放しで実行する
   // （完了前に次の undo を重ねると競合しうるが、通常の操作間隔では問題にならない）。
   //   階設定表（階高＋GL）の確定も同じ経路: GL（project 単位）は levels として Plane メタと一緒に採り、
-  //   undo/redo で戻す。屋根専用平面（project.roofPlane）は階操作のスナップショット対象外のため、
-  //   undo/redo の最後に最上階へ付け替え・追従させる（followRoofPlaneToTop。紐づけは並びから決まるので記録しない。
+  //   undo/redo で戻す。屋根専用平面（project.roofPlane）の中身は collectFloorBytes が採用階と同じく採るが、
+  //   紐づけ・高さは undo/redo の最後に最上階へ付け替え・追従させる（followRoofPlaneToTop。紐づけは並びから決まるので記録しない。
   //   最上階が入れ替わる操作でも屋根専用平面は同じ id のまま新しい最上階に付く）。opts.afterApply は undo/redo（と失敗時の巻き戻し）の最後に呼ぶ
   //   図の作り直し等。opts.rollbackOnError は run が例外を投げたとき、メタ・GL・変わった階のバイト列を
   //   操作前へ戻してから例外を投げ直す安全網（HEIGHTS は途中まで書いた elevation・壁を残さない）。
@@ -1515,7 +1517,7 @@ const App = observer(() => {
   //   addedPlanes に入れる。undo は表示中なら元の平面へ戻ってから消し（記録を採ってから）、redo は同じインスタンスを戻して
   //   その検討案を表示する。検討案の削除（'検討案削除'・removalTarget＝検討案の planeId）: 検討案1件を記録して消し、
   //   undo は復活した検討案を表示する。検討案の採用は runPromoteAlternative（同期の属性書き戻し）が別に積む。
-  //   既知の限界: 屋根専用平面の中身（バイト列）は undo の対象外（紐づけと高さだけ followRoofPlaneToTop が戻す）。
+  //   既知の限界: structGraph は undo の対象外。
   async function withFloorOpUndo(label, run, { rollbackOnError = false, afterApply, prepare, afterCommit, removalTarget } = {}) {
     await runBusy(label, async () => {
       // 実行中の構造同期（建具・通り芯削除起因）がactive graphを保存・差し替えしている最中に階を追加すると、

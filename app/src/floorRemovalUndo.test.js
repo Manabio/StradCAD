@@ -72,7 +72,7 @@ function makeApp(project, store, opts = {}) {
   const readBytes = async (id) => (id === project.activePlaneId ? serializeGraph(project.activeGraph) : (store.get(id) ?? null));
   const collect = async () => {
     const map = new Map();
-    for (const p of project.planes) map.set(p.id, await readBytes(p.id));
+    for (const p of [...project.planes, project.roofPlane].filter(Boolean)) map.set(p.id, await readBytes(p.id));
     return map;
   };
   // FloorSwapManager.swap と同じ順: 現階を保存 → 次階を復元 → 現階 clearFloorData → activePlaneId（1つの runInAction）
@@ -610,6 +610,58 @@ test('【失敗系】最上階(p4)の削除で follower が失敗 → 巻き戻�
   assert.equal(project.planeMap.has('p4'), true, '削除が取り消されている');
   assert.equal(project.roofPlane.roofForPlaneId, 'p4');
   assert.equal(project.roofPlane.elevation, top0 + 1);
+});
+
+// ---- 屋根専用平面のバイト列（S2。collectFloorBytes が採用階＋屋根平面を採る）----
+// 屋根平面('roof'・非アクティブ)を持つ p3 削除の run の中で屋根のバイト列を書き換える follower（structuralReflect の
+// reflectRoofPlane 相当）。before／after はストアに入る屋根のバイト列。
+async function setupRoofBytes() {
+  const { project, store } = await setup('p3');
+  const { graph } = project.addPlane(project.planeMap.get('p4').elevation + 1, '小屋伏', 'roof', 4, 1, false, null, 0, true, 'p4');
+  const beforeBytes = serializeGraph(graph);
+  graph.addCenterLine(CenterLineType.VERTICAL, 1234, { labeled: false, discipline: Discipline.ARCH });
+  const afterBytes = serializeGraph(graph);
+  graph.clearFloorData();
+  store.set('roof', beforeBytes);
+  assert.equal(floorBytesEqual(beforeBytes, afterBytes), false, '前提: 屋根の前後でバイト列が違う');
+  const rewriteRoof = { name: 'rewriteRoof', appliesTo: [FLOOR_ORDER_KIND.DELETE], run() { store.set('roof', afterBytes); } };
+  return { project, store, beforeBytes, afterBytes, rewriteRoof, app: makeApp(project, store) };
+}
+
+test('屋根専用平面のバイト列: 階削除の run が屋根を書き換えると undo で操作前、redo で操作後へ戻る。屋根は追加・削除された平面に数えない', async () => {
+  const { project, store, beforeBytes, afterBytes, rewriteRoof, app } = await setupRoofBytes();
+  const c = await app.deleteFloor('p3', { extraFollowers: [rewriteRoof] });
+  assert.ok(c);
+  assert.deepEqual(c.diff.changedSiblings.filter(r => r.planeId === 'roof').map(r => r.planeId), ['roof'], '屋根が changedSiblings に入る');
+  assert.equal(c.diff.addedPlanes.some(p => p.id === 'roof'), false, '追加された平面ではない');
+  assert.equal(c.diff.removedPlanes.some(p => p.id === 'roof'), false, '消えた平面ではない');
+  assert.equal(floorBytesEqual(store.get('roof'), afterBytes), true, '前提: run で書き換わった');
+  await c.undo();
+  assert.equal(floorBytesEqual(store.get('roof'), beforeBytes), true, 'undo で操作前');
+  await c.redo();
+  assert.equal(floorBytesEqual(store.get('roof'), afterBytes), true, 'redo で操作後');
+  assert.equal(project.roofPlane.id, 'roof');
+});
+
+test('屋根専用平面のバイト列: 屋根平面が無い文書では changedSiblings は採用階だけ（挙動不変）', async () => {
+  const { project, app } = await setup('p3');
+  assert.ok(!project.roofPlane, '前提: 屋根平面なし');
+  const c = await app.deleteFloor('p3');
+  assert.ok(c);
+  assert.ok(c.diff.changedSiblings.every(r => r.planeId !== 'roof' && project.planeMap.has(r.planeId)));
+  assert.equal(project.roofPlane ?? null, null, '屋根は作られない');
+});
+
+test('【失敗系】屋根を書き換えた後で follower が失敗 → rollbackFloorOp で屋根のバイト列も操作前へ戻る', async () => {
+  const { store, beforeBytes, rewriteRoof, app } = await setupRoofBytes();
+  const boom = { name: 'boom', appliesTo: [FLOOR_ORDER_KIND.DELETE], run() { throw new Error('follower failed'); } };
+  await assert.rejects(app.deleteFloor('p3', { extraFollowers: [rewriteRoof, boom] }), /follower failed/);
+  assert.equal(floorBytesEqual(store.get('roof'), beforeBytes), true, '屋根のバイト列が戻っている');
+});
+
+test('【配線】App.jsx: collectFloorBytes は採用階に加えて屋根専用平面も採る', () => {
+  const body = stripCommentLines(extractFunctionBody(readAppSrc(), 'async function collectFloorBytes'));
+  assert.match(body, /\[\.\.\.project\.planes, project\.roofPlane\]\.filter\(Boolean\)/);
 });
 
 test('【失敗系】退避の階切替が失敗したら中断し、何も変えず undo を積まない（null）', async () => {
