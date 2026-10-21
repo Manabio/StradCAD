@@ -6,6 +6,7 @@ import { restoreGraph } from './graphSnapshot.js';
 import { saveFloor, deleteFloor as dbDeleteFloor } from './storage/db.js';
 import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor } from './floorNumber.js';
 import { STORY_HEIGHT_FALLBACK_MM, storyHeightsMm } from './floorHeights.js';
+import { followRoofPlaneToTop } from './structural/roofPlane.js';
 
 // Uint8Array 同士の内容比較（null 同士は等しい）
 export function floorBytesEqual(a, b) {
@@ -567,10 +568,15 @@ export function collectAlternativeMetas(project) {
 // ---- 検討案の採用（promote）の undo ----
 // 採用で変わる Plane 属性は、親とその検討案（採用される検討案を含む）の { isAlternative, referenceId, altIndex, name }。
 // collectAltRoleState でそれらを前後に採り、applyAltRoleState で書き戻す（runPlanCutHeight と同型の同期操作）。
+// 親が最上階で屋根専用平面（roofForPlaneId が親を指す）があれば、その紐づけと追従する高さ・階番号・階数も
+// 同じ配列に { roofPlane: true, … } で載せる（採用の付け替えと同じ前後で戻すため。階操作 undo の対象外だった屋根平面の例外）。
 export function collectAltRoleState(project, parentId) {
   return [...project.planeMap.values()]
-    .filter(p => p.id === parentId || (p.isAlternative && p.referenceId === parentId))
-    .map(p => ({ id: p.id, isAlternative: p.isAlternative, referenceId: p.referenceId, altIndex: p.altIndex, name: p.name }));
+    .filter(p => p.id === parentId || (p.isAlternative && p.referenceId === parentId)
+      || (p.isRoofPlane && p.roofForPlaneId === parentId))
+    .map(p => (p.isRoofPlane
+      ? { id: p.id, roofPlane: true, roofForPlaneId: p.roofForPlaneId, elevation: p.elevation, startFloor: p.startFloor, stories: p.stories }
+      : { id: p.id, isAlternative: p.isAlternative, referenceId: p.referenceId, altIndex: p.altIndex, name: p.name }));
 }
 
 export function applyAltRoleState(project, states) {
@@ -578,6 +584,13 @@ export function applyAltRoleState(project, states) {
     for (const s of states) {
       const plane = project.planeMap.get(s.id);
       if (!plane) continue;
+      if (s.roofPlane) {
+        plane.roofForPlaneId = s.roofForPlaneId;
+        plane.elevation = s.elevation;
+        plane.startFloor = s.startFloor;
+        plane.stories = s.stories;
+        continue;
+      }
       plane.isAlternative = s.isAlternative;
       plane.referenceId = s.referenceId;
       plane.altIndex = s.altIndex;
@@ -621,6 +634,12 @@ export function promoteAlternative(project, planeId) {
       .filter(p => p.isAlternative && p.referenceId === planeId)
       .sort((a, b) => a.altIndex - b.altIndex);
     alts.forEach((p, i) => { p.altIndex = i; });
+    // 屋根専用平面が旧採用階（降格した平面）を指していたら新しい採用階へ付け替え、高さ等は followRoofPlaneToTop で合わせる
+    const roof = project.roofPlane;
+    if (roof && roof.roofForPlaneId === refId) {
+      roof.roofForPlaneId = planeId;
+      followRoofPlaneToTop(project);
+    }
   });
   // 採用後の親は planeId（降格した旧採用階とその検討案、採用された平面がすべて入る）
   return { before, after: collectAltRoleState(project, planeId), parentId: refId };

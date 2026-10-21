@@ -19,7 +19,7 @@ import {
   computeFloorInsert, computeFloorAddLowerElevations, removeAddedPlanesForUndo, addedPlaneRedoRecords,
   collectAlternativeMetas, promoteAlternative, applyAltRoleState, collectAltRoleState,
 } from './floorOps.js';
-import { followRoofPlaneToTop } from './structural/roofPlane.js';
+import { followRoofPlaneToTop, syncRoofPlane } from './structural/roofPlane.js';
 import { makeStorePeek, makeStoreSave, decodeFloor } from './finish/equipment/equipmentTestFixtures.js';
 import { setupProject, addPerFloorV, placeStair } from './finish/stair/stairRemovalTestFixtures.js';
 import { syncUpperFloors } from './finish/stair/stairFloorSync.js';
@@ -1118,6 +1118,96 @@ test('採用の undo: undo で isAlternative・referenceId・altIndex・name が
   assert.deepEqual((await snapshot(project, store)).planes, s1.planes, 'redo で採用後');
   p.undo();
   assert.deepEqual((await snapshot(project, store)).planes, s0.planes, '2回目の undo');
+});
+
+/** 最上階 p4 に乗る屋根専用平面と、p4 の検討案 p4a（elevation・階数が p4 と異なる）を足す。 */
+function addRoofAndTopAlt(project) {
+  const p4 = project.planeMap.get('p4');
+  project.addPlane(p4.elevation + 1, '小屋伏', 'roof', p4.startFloor, p4.stories, false, null, 0, true, 'p4');
+  project.addPlane(p4.elevation + 500, '4階#a', 'p4a', p4.startFloor, p4.stories + 1, true, 'p4', 0);
+  return p4;
+}
+const roofOf = (project) => {
+  const r = project.roofPlane;
+  return { forId: r.roofForPlaneId, elevation: r.elevation, startFloor: r.startFloor, stories: r.stories };
+};
+
+test('採用と屋根平面: 最上階の検討案の採用で roofForPlaneId が新採用階へ付け替わり elevation・階数も追従、undo で旧 id と元の値、redo で採用後', async () => {
+  const { project, app } = await setup('p3');
+  const p4 = addRoofAndTopAlt(project);
+  const roofId = project.roofPlane.id;
+  const before = roofOf(project);
+  assert.equal(before.forId, 'p4');
+  const p = app.promote('p4a');
+  assert.ok(p);
+  const alt = project.planeMap.get('p4a');
+  const after = roofOf(project);
+  assert.equal(after.forId, 'p4a', '新しい採用階の id へ付け替わる');
+  assert.equal(after.elevation, alt.elevation + 1, '新しい最上階＋1');
+  assert.equal(after.stories, alt.stories);
+  assert.notEqual(after.elevation, before.elevation, '前提: elevation が実際に動く');
+  assert.equal(project.roofPlane.id, roofId, '屋根平面は作り直さず同じ id');
+  assert.ok(p.changed.before.some(s => s.roofPlane && s.roofForPlaneId === 'p4'));
+  assert.ok(p.changed.after.some(s => s.roofPlane && s.roofForPlaneId === 'p4a'));
+
+  p.undo();
+  assert.deepEqual(roofOf(project), before, 'undo で旧 id と元の値');
+  assert.equal(project.planeMap.get('p4'), p4);
+  p.redo();
+  assert.deepEqual(roofOf(project), after, 'redo で採用後');
+  p.undo();
+  assert.deepEqual(roofOf(project), before, '2回目の undo');
+});
+
+// ユーザーの要望（紐づけが古い id のまま残り、構造モード突入時の作り直しで屋根の中身が消える）を直接守る
+test('採用と屋根平面: 採用後の syncRoofPlane（構造モード突入時）は屋根平面を作り直さない', async () => {
+  const { project, app } = await setup('p3');
+  addRoofAndTopAlt(project);
+  const roof = project.roofPlane;
+  assert.ok(app.promote('p4a'));
+  const synced = runInAction(() => syncRoofPlane(project));
+  assert.ok(synced === roof, '同じ屋根平面のインスタンスを返す（作り直さない）');
+  assert.ok(project.roofPlane === roof);
+  assert.equal(project.roofPlane.id, 'roof');
+  assert.equal(project.roofPlane.roofForPlaneId, 'p4a');
+});
+
+test('採用と屋根平面: 最上階でない検討案(p3b)の採用では屋根平面に触れない', async () => {
+  const { project, app } = await setup('p3');
+  addRoofAndTopAlt(project);
+  const before = roofOf(project);
+  const p = app.promote('p3b');
+  assert.ok(p);
+  assert.deepEqual(roofOf(project), before);
+  assert.equal(p.changed.before.some(s => s.roofPlane), false);
+  assert.equal(p.changed.after.some(s => s.roofPlane), false);
+  p.undo();
+  assert.deepEqual(roofOf(project), before);
+});
+
+test('【失敗系】採用と屋根平面: 屋根平面が無い文書でも最上階の検討案の採用・undo・redo が例外なく動き、屋根平面は生えない', async () => {
+  const { project, app } = await setup('p3');
+  const p4 = project.planeMap.get('p4');
+  project.addPlane(p4.elevation + 500, '4階#a', 'p4a', p4.startFloor, p4.stories, true, 'p4', 0);
+  assert.equal(project.roofPlane, null);
+  const p = app.promote('p4a');
+  assert.ok(p);
+  assert.equal(project.planeMap.get('p4a').isAlternative, false);
+  assert.equal(project.roofPlane, null);
+  p.undo();
+  p.redo();
+  assert.equal(project.roofPlane, null);
+  assert.equal(p.changed.before.some(s => s.roofPlane), false);
+});
+
+test('【失敗系】採用と屋根平面: 屋根平面が別の階を指す(古い id)ときは付け替えない', async () => {
+  const { project, app } = await setup('p3');
+  addRoofAndTopAlt(project);
+  runInAction(() => { project.roofPlane.roofForPlaneId = 'gone'; });
+  const before = roofOf(project);
+  const p = app.promote('p4a');
+  assert.ok(p);
+  assert.deepEqual(roofOf(project), before);
 });
 
 test('【失敗系】採用: 検討案でない・親が無い平面は何も変えず null（undo を積まない）', async () => {
