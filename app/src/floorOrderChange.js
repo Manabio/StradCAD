@@ -41,23 +41,6 @@ export const FLOOR_ORDER_KIND = Object.freeze({
   HEIGHTS: 'heights',
 });
 
-// below（直下の採用階）の階段をすべて削除する。アクティブ階はライブグラフ、非アクティブ階は
-// peekして保存する（App.jsx removeStairsOnFloor をここへ移した。runDeleteFloorからだけ呼ばれていた）。
-// 消し方は正規の削除経路 removeStairOnFloor（ペア部屋の未定義化・階段下の分割CL・外部仕上げ行まで。
-// ユーザー裁定2026-10-06 Q3）。階段の上の階の吹抜けは、続く stairVoidReconcile が孤児として未定義化する。
-// io（テスト注入用。既定は本番の peek／saveFloor）。
-async function removeStairsOnPlane(project, plane, {
-  peekFn = (p) => floorSwapManager.peek(p, project.structGraph),
-  saveFloorFn = saveFloor,
-} = {}) {
-  const isActive = plane.id === project.activePlaneId;
-  const g = isActive ? project.activeGraph : await peekFn(plane);
-  if (g.stairs.length === 0) return;
-  const { removeStairOnFloor } = await import('./finish/stair/stairRemoval.js');
-  runInAction(() => { for (const s of [...g.stairs]) removeStairOnFloor(g, s); });
-  if (!isActive) await saveFloorFn(plane.id, serializeGraph(g)); // アクティブ階は auto-save に委ねる
-}
-
 // 階設定表の確定（HEIGHTS）で階高（floorHeightAbove）が変わった階の階段の蹴上を追従させる。
 // 確定前の elevation は before フックで採った ctx.state.elevationsBefore、確定後は ctx.project.planes。
 // 階高が変わった階だけを（アクティブ階はライブ、他階は 1 階 1 回 peek→全変更→1 回保存で）処理する。
@@ -93,16 +76,16 @@ async function followStairRisers(ctx) {
 }
 
 // 追従処理のレジストリ（登録順＝実行順）。各 follower は { name, appliesTo, before?(ctx), run(ctx) }。
-// delete は旧 runDeleteFloor の順序（下階の階段削除 → 振り直し → 昇降機の再採番。再採番は
+// delete は旧 runDeleteFloor の順序（振り直し → 昇降機の再採番。再採番は
 // HEADどおり後始末の最後に置く——throwしても他の後始末は完了済みにする意図を保つため、delete専用の
 // elevatorRenumber を構造反映の後ろへ登録する）、insert は旧 executeAddUpper/'general' の順序
 // （階段吹抜けの整合 → 昇降機の複製 → 外壁内側の部屋）を、appliesTo の違い（roofPlaneHeightは全種別・
-// elevatorCopyはinsertのみ・elevatorRenumberはdeleteのみ・stairsBelowRemovalはdeleteのみ・
+// elevatorCopyはinsertのみ・elevatorRenumberはdeleteのみ・
 // exteriorRoomはinsertのみ・stairVoidReconcile／structuralReflectは
 // insert/addLower/delete/reorder/change）で同じ配列に両立させている（リード指示・F5裁定・
 // 2026-10-01。reorder/changeはステップ4でQ1裁定。階段は上階へ実体を自動設置せず、設置階の直上1階に
-// 吹抜けだけを置く方式＝2026-10-06 裁定。stairVoidReconcile は stairsBelowRemoval の後・
-// structuralReflect の前）。
+// 吹抜けだけを置く方式＝2026-10-06 裁定。stairVoidReconcile は structuralReflect の前。
+// 階削除で他の階の階段は消さない＝2026-10-21 S3）。
 export const floorOrderFollowers = [
   {
     // 屋根平面の高さは最上階に従属する（最上階 id が同じでも、振り直しで高さ・階番号だけ動くことが
@@ -125,22 +108,12 @@ export const floorOrderFollowers = [
     },
   },
   {
-    name: 'stairsBelowRemoval',
-    appliesTo: [FLOOR_ORDER_KIND.DELETE],
-    async run(ctx) {
-      if (!ctx.below) return;
-      await removeStairsOnPlane(ctx.project, ctx.below, ctx.floorIo);
-      const belowAlts = [...ctx.project.planeMap.values()]
-        .filter(p => p.isAlternative && p.referenceId === ctx.below.id);
-      for (const alt of belowAlts) await removeStairsOnPlane(ctx.project, alt, ctx.floorIo);
-    },
-  },
-  {
     // 階の並びが変わった後、採用階の隣り合う全ペアで階段吹抜け（STAIR_VOID）を整合する（挿入で
-    // 行き先が変わった階・並替え／階変更で直下階が変わった階・削除で直下階の階段が消えた階の孤児の
-    // 吹抜けの未定義化）。階段そのものは触らない（行き先が変わるだけ。段数は保つ＝再計算しない）。
-    // 削除で直下階の階段を消す stairsBelowRemoval の後に置く（消してから整合を取る）。structuralReflect
-    // の前＝壁・梁芯の再計算が整合後の吹抜けを読む。
+    // 行き先が変わった階・並替え／階変更／削除で直下階が変わった階の吹抜けの付け替え・孤児の
+    // 未定義化）。階段そのものは触らない（行き先が変わるだけ。段数は保つ＝再計算しない）。階段は
+    // 1階段＝1層分で独立（2026-10-06 裁定）なので、階削除でも他の階の階段は消さない（旧
+    // stairsBelowRemoval は2026-10-21 に撤去）。structuralReflect の前＝壁・梁芯の再計算が整合後の
+    // 吹抜けを読む。
     name: 'stairVoidReconcile',
     appliesTo: [
       FLOOR_ORDER_KIND.INSERT, FLOOR_ORDER_KIND.ADD_LOWER, FLOOR_ORDER_KIND.DELETE,
@@ -289,10 +262,9 @@ export const floorOrderFollowers = [
  * @param {object} [opts.sourceGraph] - 複製元（表示中）のグラフ。insert系の追従処理が使う
  * @param {number} [opts.newStartFloor] - 新階のstartFloor。insert系の追従処理が使う
  * @param {object} [opts.removedPlane] - 削除対象のPlane。deleteの追従処理が使う
- * @param {object|null} [opts.below] - 削除対象の直下の採用階。deleteの追従処理が使う
  * @param {{notify:(msg:string)=>void, switchFloor:(planeId:string)=>Promise<boolean>, onFloorSyncChanged:()=>void}} opts.ui
  * @param {{peekFn?:Function, saveFloorFn?:Function}} [opts.floorIo] - 他階の peek／保存の差し替え（テスト注入用。
- *   省略時は本番の floorSwapManager.peek／saveFloor。階段の削除・吹抜けの整合の follower が使う）
+ *   省略時は本番の floorSwapManager.peek／saveFloor。階段の蹴上の追従・吹抜けの整合・壁再生成の follower が使う）
  * @param {boolean} [opts.skipActiveWalls] - HEIGHTS の壁の再生成で自階を除く（仕上げモード中。仕上げ脱出の
  *   全再生成に任せる）。floorIo の peekFn／saveFloorFn／loadMaterialMapFn は wallRefresh follower も使う
  * @param {Array<{planeId:string, stairId:string, label:string}>} [opts.stairItems] - HEIGHTS の蹴上追従のトースト用の
@@ -302,9 +274,9 @@ export const floorOrderFollowers = [
  *   階段の一覧（stairRiserChanges の形）。通知・印は呼び出し側が成功後に行う（announceRiserChanges）
  */
 export async function applyFloorOrderChange(project, opts, followers = floorOrderFollowers) {
-  const { kind, updates, addPlane, removePlane, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo, skipActiveWalls, stairItems } = opts;
+  const { kind, updates, addPlane, removePlane, sourceGraph, newStartFloor, removedPlane, ui, floorIo, skipActiveWalls, stairItems } = opts;
   const ctx = {
-    project, kind, updates, sourceGraph, newStartFloor, removedPlane, below, ui, floorIo, skipActiveWalls, stairItems,
+    project, kind, updates, sourceGraph, newStartFloor, removedPlane, ui, floorIo, skipActiveWalls, stairItems,
     addedPlane: null, targetPlaneId: null, state: {},
   };
 

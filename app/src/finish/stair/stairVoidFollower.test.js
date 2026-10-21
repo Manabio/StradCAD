@@ -1,4 +1,4 @@
-// 階操作の follower（stairsBelowRemoval → stairVoidReconcile）と仕上げ突入の整合（reconcileOnFinishEntry）。
+// 階操作の follower（stairVoidReconcile。階削除で他の階の階段は消さない＝S3）と仕上げ突入の整合（reconcileOnFinishEntry）。
 // 階段の上階展開は「設置階の直上1階にだけ階段吹抜け（STAIR_VOID）を置く」方式（ユーザー裁定2026-10-06）。
 // 前提は実際の経路で作る（applyNaming で階段を指定→syncUpperFloors で直上階へ吹抜けを展開）。peek・保存は
 // 本番同型（makeStorePeek・makeStoreSave。IDB 相当の Map のバイト列）で、検証はストアのバイト列を復号した
@@ -19,8 +19,11 @@ import { syncUpperFloors, reconcileAllStairVoids, reconcileOnFinishEntry } from 
 import { clearStairVoidsWithoutBelow } from './stairVoidReconcile.js';
 import { setupProject, addPerFloorV, placeStair, keyAt, LEFT_HALF } from './stairRemovalTestFixtures.js';
 
-const followers = floorOrderFollowers.filter(f => f.name === 'stairsBelowRemoval' || f.name === 'stairVoidReconcile');
+const followers = floorOrderFollowers.filter(f => f.name === 'stairVoidReconcile');
 const ui = { notify() {}, switchFloor: async () => true, onFloorSyncChanged() {} };
+// 階削除用: DELETE に適用される実物 follower のうち構造反映・昇降機の再採番だけを除く（他階の階段を消す follower の再登録を検出するため許可リストにしない）
+const deleteFollowers = floorOrderFollowers.filter(f =>
+  f.appliesTo.includes(FLOOR_ORDER_KIND.DELETE) && !['structuralReflect', 'elevatorRenumber'].includes(f.name));
 
 // 3階建て・全階 x=500 の per-floor 中心線・1階（アクティブ）に階段→2階に吹抜け（3階は空）。
 async function setup3() {
@@ -70,9 +73,9 @@ const voids = (g) => g.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID);
 const undefs = (g) => g.rooms.filter(r => r.feature === RoomFeature.UNDEFINED);
 const meta = (id, name, startFloor, elevation) => ({ id, name, startFloor, elevation });
 
-test('follower の登録順: stairsBelowRemoval → stairVoidReconcile → structuralReflect', () => {
+test('follower の登録順: stairVoidReconcile → structuralReflect（他階の階段を消す follower は無い）', () => {
   const names = floorOrderFollowers.map(f => f.name);
-  assert.ok(names.indexOf('stairsBelowRemoval') < names.indexOf('stairVoidReconcile'));
+  assert.ok(!names.includes('stairsBelowRemoval'));
   assert.ok(names.indexOf('stairVoidReconcile') < names.indexOf('structuralReflect'));
 });
 
@@ -142,24 +145,23 @@ test('ADD_LOWER（B1 追加）: 何も変わらない', async () => {
   assert.equal(g1.stairs.length, 1);
 });
 
-test('DELETE（2階を消す。2階にユーザー階段・3階に吹抜け）: 1階の階段が正規経路で消え（ペア部屋は未定義化）、3階の吹抜けは未定義化', async () => {
+test('DELETE（2階を消す。2階にユーザー階段・3階に吹抜け）: 1階の階段とペア部屋は残り、新2階（旧3階）の吹抜けも1階の階段のものとして残る', async () => {
   const { project, g1, store, room } = await setupChain3();
-  const { saveLog, floorIo } = makeIo(project, store);
+  const { floorIo, saveLog } = makeIo(project, store);
   await applyFloorOrderChange(project, {
     kind: FLOOR_ORDER_KIND.DELETE,
     updates: [meta('p3', '2階', 2, 3000)],
     removePlane: async () => { project.removePlane('p2'); store.delete('p2'); },
     removedPlane: project.planeMap.get('p2'),
-    below: project.planeMap.get('p1'),
     floorIo, ui,
-  }, followers);
+  }, deleteFollowers);
 
-  assert.equal(g1.stairs.length, 0, '1階の階段が消えた');
-  assert.equal(g1.roomMap.get(room.id).feature, RoomFeature.UNDEFINED, 'ペア部屋は未定義化（removeStairOnFloor）');
+  assert.ok(!saveLog.includes('p1'), `直下の1階は保存し直さない（saveLog=${JSON.stringify(saveLog)}）`);
+  assert.equal(g1.stairs.length, 1, '1階の階段は残る');
+  assert.equal(g1.roomMap.get(room.id).feature, RoomFeature.STAIR, 'ペア部屋もそのまま');
   const p3 = decode(project, store, 'p3');
-  assert.equal(voids(p3).length, 0, '3階の吹抜けは孤児');
-  assert.equal(undefs(p3).length, 1);
-  assert.deepEqual(saveLog, ['p3']);
+  assert.equal(voids(p3).length, 1, '新2階（旧3階）に1階の階段の吹抜け');
+  assert.equal(undefs(p3).length, 0);
 });
 
 test('DELETE（3階を消す。2階に吹抜け）: 2階の吹抜けは残り、1階の階段も残る', async () => {
@@ -170,9 +172,8 @@ test('DELETE（3階を消す。2階に吹抜け）: 2階の吹抜けは残り、
     kind: FLOOR_ORDER_KIND.DELETE, updates: [],
     removePlane: async () => { project.removePlane('p3'); store.delete('p3'); },
     removedPlane: project.planeMap.get('p3'),
-    below: project.planeMap.get('p2'),
     floorIo, ui,
-  }, followers);
+  }, deleteFollowers);
   assert.equal(g1.stairs.length, 1);
   assert.equal(voids(decode(project, store, 'p2')).length, 1);
   assert.ok(Buffer.from(store.get('p2')).equals(p2Before));

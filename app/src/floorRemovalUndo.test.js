@@ -25,8 +25,10 @@ import { readAppSrc, stripCommentLines, extractFunctionBody } from './uiBusySour
 import fs from 'node:fs';
 import path from 'node:path';
 
+// DELETE に適用される実物 follower のうち、全階の構造反映・昇降機の再採番（このハーネスの範囲外）だけを除く。
+// 許可リストにしないのは、他階の階段を消す follower が再登録されたときにこのテスト群で検出するため（S3）。
 const followersUnderTest = floorOrderFollowers.filter(f =>
-  ['roofPlaneHeight', 'stairsBelowRemoval', 'stairVoidReconcile'].includes(f.name));
+  f.appliesTo.includes(FLOOR_ORDER_KIND.DELETE) && !['structuralReflect', 'elevatorRenumber'].includes(f.name));
 const ui = { notify() {}, switchFloor: async () => true, onFloorSyncChanged() {} };
 
 /**
@@ -128,7 +130,6 @@ function makeApp(project, store, opts = {}) {
       const adopted = project.planes;
       const idx = adopted.findIndex(p => p.id === planeId);
       const fallback = adopted[idx + 1] ?? adopted[idx - 1];
-      const below = adopted[idx - 1] ?? null;
       if (blocksFloorRemoval(project, planeId)) {
         if (fallback) await trySwitch(fallback.id);
         if (blocksFloorRemoval(project, planeId)) return;
@@ -137,7 +138,7 @@ function makeApp(project, store, opts = {}) {
       const updates = computeFloorDeleteReorder(afterRemoval, idx, { planesBefore: adopted, topHeightMm: resolveTopStoryHeightMm(project) });
       await applyFloorOrderChange(project, {
         kind: FLOOR_ORDER_KIND.DELETE, updates, removePlane: () => removeFloorFn(planeId),
-        removedPlane: project.planeMap.get(planeId), below, ui, floorIo,
+        removedPlane: project.planeMap.get(planeId), ui, floorIo,
       }, [...followersUnderTest, ...extraFollowers]);
     };
     const rollback = () => rollbackFloorOp(project, {
@@ -233,9 +234,12 @@ test('中間階(p3・表示中)の削除 → undo → redo → undo: 階数・id
   assert.equal(store.has('p3b'), false, '検討案の IDB 行も消えている');
   assert.equal(project.activePlaneId, 'p4');
   assert.equal(project.planeMap.get('p4').elevation, 6000, '上の階の振り直し');
-  // 現状は stairsBelowRemoval（S3 で撤去予定）が直下階の階段も消す。その変化も既存階のバイト列の差分として戻ること
-  assert.equal(decode(project, store, 'p2').stairs.length, 0, '前提: 直下階(p2)の階段が消えている');
-  assert.ok(c.diff.changedSiblings.some(r => r.planeId === 'p2'), 'p2 のバイト列の差分が記録されている');
+  // 階削除で他の階の階段は消さない（S3）。階段は p2 に残り、STAIR_VOID は新しい直上階 p4 へ付く（既存階 p4 のバイト列の差分として戻ること）
+  assert.equal(decode(project, store, 'p2').stairs.length, 1, '直下階(p2)の階段は残る');
+  assert.ok(!c.diff.changedSiblings.some(r => r.planeId === 'p2'), 'p2 のバイト列は変わらない');
+  assert.equal(project.activePlaneId, 'p4');
+  assert.equal(project.activeGraph.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID).length, 1, '新しい直上階 p4（表示中）に吹抜け');
+  assert.ok(c.diff.changedSiblings.some(r => r.planeId === 'p4'), 'p4 のバイト列の差分が記録されている');
 
   await c.undo();
   assertSameSnapshot(await snapshot(project, store), s0, 'undo');
@@ -243,6 +247,7 @@ test('中間階(p3・表示中)の削除 → undo → redo → undo: 階数・id
   assert.equal(decode(project, store, 'p2').stairs.length, 1, 'p2 の階段が戻る');
   assert.ok(decode(project, store, 'p2').rooms.some(r => r.feature === RoomFeature.STAIR), 'p2 のペア部屋が戻る');
   assert.ok(decode(project, store, 'p3a') && project.planeMap.get('p3a').planCutHeightMm === 1200, '検討案の切断高が戻る');
+  assert.equal(decode(project, store, 'p4').rooms.filter(r => r.feature === RoomFeature.STAIR_VOID).length, 0, 'p4 に付いた吹抜けは undo で消える');
 
   await c.redo();
   assertSameSnapshot(await snapshot(project, store), s1, 'redo');
@@ -267,7 +272,66 @@ test('redo: 別の階(p1)を表示中でも対象は消え、表示は最初の�
   assert.equal(project.activePlaneId, 'p4');
 });
 
-test('最上階(p4)の削除 → undo → redo: 最上階の階高(topStoryHeightMm)・新しい最上階のメタが往復し、undo 後は p4 を表示する', async () => {
+test('階削除で他の階の階段を消さない（S3）: 中間階(p3)→最上階(p4)と続けて削除しても p2 の階段とペア部屋は残り、STAIR_VOID は新しい直上階に付く。2回分を逆順に undo で完全に戻る', async () => {
+  const { project, store, app } = await setup('p3');
+  // fixture の p2 は初回の「表示→退避」で一度だけバイト列が正規化される（以後は冪等）。比較の基準を先に揃える
+  await app.switchRaw('p2');
+  await app.switchRaw('p3');
+  const s0 = await snapshot(project, store);
+  const stairRoomOk = (g) => g.stairs.length === 1
+    && g.roomMap.get(g.stairs[0].roomId)?.feature === RoomFeature.STAIR;
+  assert.ok(stairRoomOk(decode(project, store, 'p2')), '前提: p2 の階段にペア部屋がある');
+
+  const c1 = await app.deleteFloor('p3'); // 中間階。p4 が p2 の直上階になる
+  assert.ok(c1);
+  const s1 = await snapshot(project, store);
+  assert.ok(stairRoomOk(decode(project, store, 'p2')), '中間階の削除後も p2 の階段とペア部屋は残る');
+  assert.ok(floorBytesEqual(store.get('p2'), s0.bytes.get('p2')), 'p2 のバイト列は不変');
+  assert.equal(project.activePlaneId, 'p4');
+  assert.equal(project.activeGraph.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID).length, 1, '新しい直上階 p4 に吹抜け');
+
+  const c2 = await app.deleteFloor('p4'); // 最上階。直下階は p2 になる
+  assert.ok(c2);
+  assert.deepEqual((await snapshot(project, store)).adoptedOrder, ['p1', 'p2']);
+  assert.ok(stairRoomOk(decode(project, store, 'p2')), '最上階の削除後も直下階 p2 の階段とペア部屋は残る');
+  assert.ok(floorBytesEqual(store.get('p2'), s0.bytes.get('p2')), 'p2 のバイト列は不変');
+
+  await c2.undo();
+  assertSameSnapshot(await snapshot(project, store), s1, '最上階の undo');
+  await c2.redo();
+  assert.ok(stairRoomOk(decode(project, store, 'p2')), 'redo 後も p2 の階段は残る');
+  await c2.undo();
+  await c1.undo();
+  assertSameSnapshot(await snapshot(project, store), s0, '中間階の undo');
+  assert.ok(stairRoomOk(decode(project, store, 'p2')));
+  assert.equal(decode(project, store, 'p4').rooms.filter(r => r.feature === RoomFeature.STAIR_VOID).length, 0, 'p4 の吹抜けは元どおり無い');
+});
+
+test('階削除で直下階の検討案の階段・ペア部屋も消さない（S3。旧 stairsBelowRemoval は直下の採用階＋その検討案を消していた）', async () => {
+  const { project, store, app } = await setup('p3');
+  // 直下の階 p2 の検討案 p2a に階段＋ペア部屋を作る（アクティブ階 p3 は触らない）
+  const { graph: altGraph } = project.addPlane(3000, '2階#a', 'p2a', 2, 1, true, 'p2', 0, false, null);
+  addPerFloorV([altGraph]);
+  const placed = placeStair(project, altGraph);
+  runInAction(() => { project.activePlaneId = 'p3'; });
+  store.set('p2a', serializeGraph(altGraph));
+  altGraph.clearFloorData();
+  const altBefore = store.get('p2a');
+  const altCheck = () => {
+    const g = decode(project, store, 'p2a');
+    return g.stairs.length === 1 && g.roomMap.get(g.stairs[0].roomId)?.feature === RoomFeature.STAIR;
+  };
+  assert.ok(placed.room && altCheck(), '前提: 検討案 p2a に階段とペア部屋がある');
+
+  const c = await app.deleteFloor('p3'); // 中間階。直下の階は p2（検討案 p2a を持つ）
+  assert.ok(c);
+  assert.ok(altCheck(), '検討案の階段とペア部屋は残る');
+  assert.ok(floorBytesEqual(store.get('p2a'), altBefore), '検討案のバイト列は不変');
+  assert.ok(!c.diff.changedSiblings.some(r => r.planeId === 'p2a'), 'p2a は undo の差分にも入らない');
+  assert.equal(decode(project, store, 'p2').stairs.length, 1, '直下の採用階の階段も残る');
+});
+
+test('最上階(p4)の削除 → undo → redo:最上階の階高(topStoryHeightMm)・新しい最上階のメタが往復し、undo 後は p4 を表示する', async () => {
   const { project, store, app } = await setup('p4');
   const s0 = await snapshot(project, store);
   const c = await app.deleteFloor('p4');
@@ -381,10 +445,10 @@ test('【失敗系】removePlane の後で追従が失敗 → 消えた採用階
   const s = await snapshot(project, store);
   assert.deepEqual(s.planes, s0.planes, 'メタ（p4 の振り直しも）');
   assert.deepEqual(s.adoptedOrder, s0.adoptedOrder);
-  for (const id of ['p2', 'p3', 'p3a', 'p3b', 'p1']) {
+  for (const id of ['p2', 'p3', 'p3a', 'p3b', 'p1', 'p4']) {
     assert.ok(floorBytesEqual(store.get(id), s0.bytes.get(id)), `${id} のバイト列が戻っている`);
   }
-  assert.equal(decode(project, store, 'p2').stairs.length, 1, 'stairsBelowRemoval が消した p2 の階段も戻る');
+  assert.equal(decode(project, store, 'p2').stairs.length, 1, 'p2 の階段は残っている');
 });
 
 test('diffFloorOpSnapshot: removalBefore のうち操作後に無い id が removedPlanes。削除だけでも hasChanges。existingIdsAfter が無いと throw', () => {

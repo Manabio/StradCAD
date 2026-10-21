@@ -28,7 +28,9 @@
 //     refreshWallsForGraph を直接呼ぶ。
 //
 // 使い方（app/ で）: node --import ./scripts/testSetup.mjs scripts/probe/floorAddDeleteProbe.mjs [moku4|13|all] [シナリオ名...]
-//   シナリオ: insertTop insertMid addLower deleteMid deleteTop orderB orderBMid noBelowRemoval a
+//   シナリオ: insertTop insertMid addLower deleteMid deleteTop orderBTop orderBMid a
+//   （旧 noBelowRemoval* は stairsBelowRemoval の撤去＝問題.md S3 により deleteMid／deleteTop と同じ結果になるため削除。
+//     撤去前後の一致は S3 で moku4・13 の数で確認済み）
 import { runInAction } from 'mobx';
 import { loadDocument } from './loadDoc.mjs';
 import { serializeGraph } from '../../src/graphSnapshot.js';
@@ -289,7 +291,6 @@ function reorderStairVoidAfterExteriorRoom(followers) {
   arr.splice(i + 1, 0, sv);
   return arr;
 }
-const withoutFollower = (followers, name) => followers.filter(f => f.name !== name);
 
 // ---------------- 昇降機の設置（本番の runElevatorInstall。上階の昇降路も本番どおり自動生成される） ----------------
 // 検証データ 2 つはどちらも器具行を持たない（EV 行 0 件）ため、EV 行の追従を見るには設置が要る。
@@ -374,7 +375,7 @@ async function runScenario(docKey, scenarioName) {
   console.log(`\n===== ${docKey} / ${scenarioName} （採用階: ${project.planes.map(p => p.name).join(',')} / 検討案 ${[...project.planeMap.values()].filter(p => p.isAlternative).length} 件 / 初期アクティブ ${project.activePlane?.name}）`);
   if (mods.has('ev')) { if (!(await installEvOnLowest(project, env))) return; }
   // 3 階未満の文書で「途中の階の削除」を作るため、必要なときだけ自動で +up（先に最上階へ 1 階足す）にする
-  if (!mods.has('up') && project.planes.length < 3 && (name === 'deleteMid' || name === 'noBelowRemovalMid')) mods.add('up');
+  if (!mods.has('up') && project.planes.length < 3 && name === 'deleteMid') mods.add('up');
   if (mods.has('up')) {
     const top = project.planes[project.planes.length - 1];
     await opInsert(project, env, top.id, 1, std);
@@ -415,11 +416,6 @@ async function runScenario(docKey, scenarioName) {
     const top = planes[planes.length - 1];
     await pre(top.id);
     await run(() => opDelete(project, env, top.id, std));
-  } else if (name === 'noBelowRemovalMid' || name === 'noBelowRemovalTop') {
-    const tgt = name.endsWith('Mid') ? mid : planes[planes.length - 1];
-    if (!tgt) { console.log('  (対象階なし。+up を付ける)'); return; }
-    await pre(tgt.id);
-    await run(() => opDelete(project, env, tgt.id, withoutFollower(std, 'stairsBelowRemoval')), 'stairsBelowRemoval除外');
   } else {
     console.log(`  未知のシナリオ: ${name}`);
   }
@@ -444,8 +440,8 @@ async function runOrderCompare(docKey, which, mods = new Set()) {
     results[variant] = { rows: await tableRows(project), toasts: [...env.toasts], order: followers.map(f => f.name) };
   }
   console.log(`\n===== ${docKey} / orderB-${which}（INSERT。stairVoidReconcile を exteriorRoom の後ろへ移す）`);
-  console.log(`  標準順(INSERT分): ${results.standard.order.filter(n => ['roofPlaneHeight','stairsBelowRemoval','stairVoidReconcile','elevatorCopy','exteriorRoom','mainRoofCarry','switchToAddedFloor','structuralReflect'].includes(n)).join(' > ')}`);
-  console.log(`  移動後         : ${results.moved.order.filter(n => ['roofPlaneHeight','stairsBelowRemoval','stairVoidReconcile','elevatorCopy','exteriorRoom','mainRoofCarry','switchToAddedFloor','structuralReflect'].includes(n)).join(' > ')}`);
+  console.log(`  標準順(INSERT分): ${results.standard.order.filter(n => ['roofPlaneHeight','stairVoidReconcile','elevatorCopy','exteriorRoom','mainRoofCarry','switchToAddedFloor','structuralReflect'].includes(n)).join(' > ')}`);
+  console.log(`  移動後         : ${results.moved.order.filter(n => ['roofPlaneHeight','stairVoidReconcile','elevatorCopy','exteriorRoom','mainRoofCarry','switchToAddedFloor','structuralReflect'].includes(n)).join(' > ')}`);
   printTable('標準順 後', results.standard.rows);
   printTable('移動後 後', results.moved.rows);
   // 比較に使う正規形（幾何・セル数）の要約。差 0 件が空振りでないことを数で示す
@@ -588,7 +584,7 @@ async function runScenarioA(docKey, withEv) {
 const arg1 = process.argv[2] ?? 'all';
 const docKeys = arg1 === 'all' ? Object.keys(DOCS) : [arg1];
 const only = process.argv.slice(3);
-const SCENARIOS = ['insertTop', 'insertMid', 'addLower', 'deleteMid', 'deleteTop', 'noBelowRemovalMid', 'noBelowRemovalTop', 'orderBTop', 'orderBMid'];
+const SCENARIOS = ['insertTop', 'insertMid', 'addLower', 'deleteMid', 'deleteTop', 'orderBTop', 'orderBMid'];
 for (const dk of docKeys) {
   for (const sc of (only.length ? only : SCENARIOS)) {
     const [base, ...mods] = sc.split('+');

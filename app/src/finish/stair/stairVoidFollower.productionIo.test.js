@@ -1,8 +1,8 @@
 // 階削除で floorIo を省いた（本番の既定）ときの他階の peek・保存の経路を通す専用テストファイル。
 //
 // 本物の floorSwapManager.peek（loadFloor 経由）と saveFloor を、fake IndexedDB へ向けて通す。
-// stairsBelowRemoval が直下階の階段を removeStairOnFloor で消して保存し、stairVoidReconcile が続けて
-// 孤児の吹抜けを整合することを、IDB に保存されたバイト列を復号して確かめる。
+// 階削除で直下階の階段を消さず（S3）、stairVoidReconcile が吹抜けだけを整合することを、
+// IDB に保存されたバイト列を復号して確かめる。
 // なぜ別ファイルか: storage/db.js の openDB() は接続をモジュールスコープにキャッシュし、以後の
 // globalThis.indexedDB の差し替えを無視する（前例: finish/roof/mainRoofCarry.pipeline.test.js。
 // node:test はファイル単位で別プロセス）。fake IDB はこのファイルのモジュールレベルで1個だけ作る。
@@ -57,7 +57,9 @@ globalThis.indexedDB = {
 };
 
 const ui = { notify() {}, switchFloor: async () => true, onFloorSyncChanged() {} };
-const followers = floorOrderFollowers.filter(f => f.name === 'stairsBelowRemoval' || f.name === 'stairVoidReconcile');
+// DELETE に適用される実物 follower のうち構造反映・昇降機の再採番だけを除く（他階の階段を消す follower の再登録を検出するため許可リストにしない）
+const followers = floorOrderFollowers.filter(f =>
+  f.appliesTo.includes(FLOOR_ORDER_KIND.DELETE) && !['structuralReflect', 'elevatorRenumber'].includes(f.name));
 
 // 1階に階段・2階にユーザー指定の階段（ペア部屋あり）・3階にその吹抜け。アクティブ階は1階。全階を fake IDB へ保存済み。
 async function setupChainInIdb() {
@@ -90,7 +92,7 @@ async function loadGraph(project, id) {
   return g;
 }
 
-test('階削除（floorIo なし）: 本番の peek／saveFloor で直下階の階段が消えてペア部屋が未定義化されたまま保存される', async () => {
+test('階削除（floorIo なし）: 本番の peek／saveFloor を通しても直下階の階段とペア部屋は消えない', async () => {
   const { project, g2 } = await setupChainInIdb();
   assert.ok(g2.stairs[0].roomId, '前提: 2階の階段にペア部屋がある');
   assert.equal((await loadGraph(project, 'p2')).stairs.length, 1, '前提: IDB の2階に階段がある');
@@ -101,13 +103,11 @@ test('階削除（floorIo なし）: 本番の peek／saveFloor で直下階の�
     updates: [],
     removePlane: async () => { project.removePlane('p3'); },
     removedPlane: project.planeMap.get('p3'),
-    below: project.planeMap.get('p2'),
     ui,
   }, followers); // floorIo を渡さない
 
-  assert.ok(putLog.includes('p2'), '直下階（2階）が本番の saveFloor で保存された');
   const p2 = await loadGraph(project, 'p2');
-  assert.equal(p2.stairs.length, 0, '階段が消えている');
-  assert.equal(p2.rooms.filter(r => r.feature === RoomFeature.STAIR).length, 0, 'ペア部屋（STAIR）は残っていない');
-  assert.equal(p2.rooms.filter(r => r.feature === RoomFeature.UNDEFINED).length, 1, `ペア部屋は未定義化されている（rooms=${p2.rooms.map(r => r.feature).join(',')}）`);
+  assert.equal(p2.stairs.length, 1, '階段は残っている');
+  assert.equal(p2.rooms.filter(r => r.feature === RoomFeature.STAIR).length, 1, 'ペア部屋（STAIR）も残っている');
+  assert.equal(p2.rooms.filter(r => r.feature === RoomFeature.UNDEFINED).length, 0, `未定義化されていない（rooms=${p2.rooms.map(r => r.feature).join(',')}）`);
 });

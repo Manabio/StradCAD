@@ -1897,7 +1897,6 @@ const App = observer(() => {
       const adopted = project.planes;
       const idx     = adopted.findIndex(p => p.id === planeId);
       const fallback = adopted[idx + 1] ?? adopted[idx - 1];
-      const below    = adopted[idx - 1] ?? null; // 直下の採用階（階段が接続していた階）
       if (blocksFloorRemoval(project, planeId)) {
         if (fallback) await trySwitchFloor(() => handleFloorSwitch(fallback.id));
         // 切替できていない（失敗・fallback無し）→アクティブ階を削除してしまうため中断（F1・2026-09-27）。
@@ -1909,14 +1908,13 @@ const App = observer(() => {
       const afterRemoval = adopted.filter(p => p.id !== planeId);
       const updates = computeFloorDeleteReorder(afterRemoval, idx, { planesBefore: adopted, topHeightMm: resolveTopStoryHeightMm(project) }); // 削除位置が末尾なら内部で空配列
       // 新階の追従処理（階段吹抜けの整合・昇降機の複製等）と同様、本体・追従処理は
-      // applyFloorOrderChange（floorOrderChange.js）へ委譲する（器具idを読む・下階の階段を
-      // 削除する・階段吹抜けを整合する・昇降機を再採番する・全階の構造反映は floorOrderFollowers 側で行う）。
+      // applyFloorOrderChange（floorOrderChange.js）へ委譲する（器具idを読む・
+      // 階段吹抜けを整合する・昇降機を再採番する・全階の構造反映は floorOrderFollowers 側で行う）。
       await applyFloorOrderChange(project, {
         kind: FLOOR_ORDER_KIND.DELETE,
         updates,
         removePlane: () => removeFloor(planeId),
         removedPlane: project.planeMap.get(planeId),
-        below,
         ui: floorOrderUi(),
       });
     }, { rollbackOnError: true, removalTarget: planeId });
