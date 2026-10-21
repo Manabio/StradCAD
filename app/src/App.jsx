@@ -45,6 +45,7 @@ import {
   computeFloorDeleteReorder, computeFloorInsert, computeFloorAddLowerElevations, collectPlaneMetas, applyPlaneMetas, setPlanCutHeightMm, setCeilingCutHeightMm,
   collectProjectLevels, applyProjectLevels, rollbackFloorOp,
   collectRemovalRecords, restoreRemovedPlanes, removePlanesForRedo, resolveAddFloorEntry,
+  removeAddedPlanesForUndo, addedPlaneRedoRecords,
 } from './floorOps.js';
 import { resolveTopStoryHeightMm, computeFloorHeightEdit } from './floorHeights.js';
 import { collectFloorSettingsFacts } from './floorSettingsFacts.js';
@@ -1494,10 +1495,11 @@ const App = observer(() => {
   // 重ねて呼ばない。
   //   undo: 追加階に居れば元の階へ戻り、追加階を削除し、同期・構造反映で変わった既存階を元へ戻し、
   //         全採用階のメタを before へ戻す
-  //   redo: 全採用階のメタを after へ先に戻してから、追加階があれば同じ planeId で作り直して
+  //   redo: 全採用階のメタを after へ先に戻してから、追加階があれば undo が外した同じ Plane／PlanGraph
+  //         インスタンスを同じ planeId で戻して（検討案ごと。階削除の undo と同じ restoreRemoved）
   //         追加後状態の bytes を IDB へ書き戻し、既存階を after へ戻してから、アクティブ階が
   //         変わっていたときだけ切り替える（ドラッグ移動では階は切り替わらないため無駄な切替を
-  //         しない）
+  //         しない）。追加階での編集の undo エントリ（graph を掴む）が redo の後も効く
   // フロア切替・IDB 書き込みは非同期のため undo/redo 内では投げ放しで実行する
   // （完了前に次の undo を重ねると競合しうるが、通常の操作間隔では問題にならない）。
   //   階設定表（階高＋GL）の確定も同じ経路: GL（project 単位）は levels として Plane メタと一緒に採り、
@@ -1557,6 +1559,9 @@ const App = observer(() => {
       if (!hasChanges) return;
 
       const addedBytes = new Map(addedPlanes.map(pl => [pl.id, after.get(pl.id) ?? null]));
+      // 階追加の undo が消す直前に採る追加階（と検討案）の記録。redo が同じ Plane／PlanGraph インスタンスを戻すのに使う
+      // （undo のたびに採り直す。undo／redo のクロージャで共有）
+      const addedTaken = [];
 
       // undo/redoはfire-and-forget（undoManager.pushへ渡す関数は同期に呼ばれるだけで完了を
       // 待たない）ため、performUndo/performRedoのrunBusy(の関門を抜けた後もこの中身は走り続ける
@@ -1565,6 +1570,9 @@ const App = observer(() => {
       // 呼ばない（呼ぶとinterruptCurrentActionが今の操作を中断してしまう）。
       async function undoFloorOp() {
         await runBusy(label + 'のundo', async () => {
+          // 前回の undo の記録は捨てる（退避の失敗で中断した undo の後の redo に、その間に undo 対象外の操作で
+          // 削除した検討案の古い記録が残って復活しないように。早期 return より前に置く）
+          addedTaken.length = 0;
           // アクティブ階は削除できないため、追加階に居る場合は先に元の階へ戻る
           // （元の階が消えている防御ケースでは追加階以外の最初の採用フロアへ）
           if (addedPlanes.some(pl => pl.id === project.activePlaneId)) {
@@ -1577,7 +1585,9 @@ const App = observer(() => {
             // （F1・2026-09-27）。
             if (addedPlanes.some(pl => pl.id === project.activePlaneId)) return;
           }
-          for (const pl of addedPlanes) await removeFloor(pl.id);
+          // 追加階を（検討案ごと）消す。消す直前に記録（インスタンス＋バイト列）を採る——階切替の後（退避済みで
+          // 追加階の中身は IDB／メモリのどちらかに確定している）・removeFloor の前
+          await removeAddedPlanesForUndo(project, addedPlanes, { getBytes: readPlaneBytes, removeFloorFn: removeFloor, taken: addedTaken });
           // 階削除の undo: 先に既存の階のメタを戻し（詰められた階と復活する階が同じ elevation で並ぶ窓を作らない。
           // redo がメタを消した後に戻すのと同じ方針）、消えた採用階・検討案を同じインスタンス・id で戻す
           applyPlaneMetas(project, metasBefore);
@@ -1603,11 +1613,10 @@ const App = observer(() => {
           if (!removed) return; // 退避できない→アクティブ階を消さず中断（F1）
           applyPlaneMetas(project, metasAfter);
           applyProjectLevels(project, levelsAfter);
-          for (const pl of addedPlanes) {
-            addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm, pl.ceilingCutHeightMm, pl.topStoryHeightMm);
-            const bytes = addedBytes.get(pl.id);
-            if (bytes != null) await saveFloor(pl.id, bytes);
-          }
+          // 追加階（と検討案）は作り直さず、undo が外した同じ Plane／PlanGraph インスタンスを戻して保存済みバイト列を
+          // IDB へ書く（追加階での編集の undo エントリは graph を掴んでいる）。既にある id は触らない（undo が退避で
+          // 中断して消えていない階を重複作成しない）。記録の無い階だけ addFloor で作り直す（topStoryHeightMm も渡る）
+          await restoreRemoved(project, addedPlaneRedoRecords(addedPlanes, addedTaken, addedBytes));
           for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.after);
           runInAction(() => followRoofPlaneToTop(project));
           // activate() が保存済み bytes を読み込む。ドラッグ移動・階変更はアクティブ階が変わらない

@@ -377,36 +377,44 @@ test('【配線・強化】App.jsx: withFloorOpUndo は diffFloorOpSnapshot({ �
     + 'ガードを足す変異を防ぐため、判定はhasChangesへ一本化すること');
 });
 
-test('【配線・強化】App.jsx: undoFloorOp は removeFloor ループの後・changedSiblings書き戻しの前に applyPlaneMetas(project, metasBefore) を呼ぶ', () => {
+// 階追加の undo は removeAddedPlanesForUndo で追加階を（記録を採ってから）消す。以前は removeFloor を直接ループしていた
+// （redo が作り直すため、追加階での編集の undo エントリが空振りした。floorRemovalUndo.test.js T1〜T5）。
+test('【配線・強化】App.jsx: undoFloorOp は removeAddedPlanesForUndo（taken: addedTaken）の後・changedSiblings書き戻しの前に applyPlaneMetas(project, metasBefore) を呼ぶ。removeFloor を直接ループしない', () => {
   const appSrc = readAppSrc();
-  const body = extractFunctionBody(appSrc, 'async function undoFloorOp');
+  const body = stripCommentLines(extractFunctionBody(appSrc, 'async function undoFloorOp'));
 
-  const removeIdx = body.indexOf('for (const pl of addedPlanes) await removeFloor(pl.id);');
+  const removeIdx = body.indexOf('await removeAddedPlanesForUndo(project, addedPlanes, { getBytes: readPlaneBytes, removeFloorFn: removeFloor, taken: addedTaken });');
+  const resetIdx  = body.indexOf('addedTaken.length = 0;');
   const applyIdx  = body.indexOf('applyPlaneMetas(project, metasBefore);');
   const siblingIdx = body.indexOf('for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.before);');
-  assert.ok(removeIdx >= 0 && applyIdx >= 0 && siblingIdx >= 0,
-    'removeFloorループ・applyPlaneMetas(metasBefore)・changedSiblings書き戻しのいずれかが見つからない');
-  assert.ok(removeIdx < applyIdx && applyIdx < siblingIdx,
-    'applyPlaneMetas(project, metasBefore) が removeFloorループの後・changedSiblings書き戻しの前にない');
+  assert.ok(removeIdx >= 0 && resetIdx >= 0 && applyIdx >= 0 && siblingIdx >= 0,
+    'removeAddedPlanesForUndo・addedTaken の初期化・applyPlaneMetas(metasBefore)・changedSiblings書き戻しのいずれかが見つからない');
+  assert.ok(resetIdx < removeIdx && removeIdx < applyIdx && applyIdx < siblingIdx,
+    'addedTaken の初期化 → removeAddedPlanesForUndo → applyPlaneMetas(metasBefore) → changedSiblings書き戻し の順にない');
+  // 初期化は本体の先頭（追加階に居るかの判定・退避切替失敗の早期 return より前）。後ろだと中断した undo の後の redo に古い記録が残る
+  assert.ok(resetIdx >= 0 && resetIdx < body.indexOf('addedPlanes.some('), 'addedTaken の初期化が早期 return を含む判定より前にない');
+  assert.ok(resetIdx < body.indexOf('return'), 'addedTaken の初期化が最初の return より前にない');
+  assert.doesNotMatch(body, /await removeFloor\(/, '追加階の削除は removeAddedPlanesForUndo 経由（直接ループしない）');
 });
 
-test('【配線・強化】App.jsx: redoFloorOp は addFloor の前に applyPlaneMetas(project, metasAfter) を呼ぶ（既存階を先にずらしてから新階を足す）', () => {
+test('【配線・強化】App.jsx: redoFloorOp は applyPlaneMetas(project, metasAfter) の後・changedSiblings の前に restoreRemoved(addedPlaneRedoRecords(…)) で追加階を戻す。addFloor で作り直さない', () => {
   const appSrc = readAppSrc();
-  const body = extractFunctionBody(appSrc, 'async function redoFloorOp');
+  const body = stripCommentLines(extractFunctionBody(appSrc, 'async function redoFloorOp'));
 
-  const applyIdx = body.indexOf('applyPlaneMetas(project, metasAfter);');
-  const addIdx   = body.indexOf('addFloor(pl.elevation, pl.name, pl.startFloor, pl.stories, pl.id, pl.planCutHeightMm, pl.ceilingCutHeightMm, pl.topStoryHeightMm);');
-  assert.ok(applyIdx >= 0 && addIdx >= 0, 'applyPlaneMetas(metasAfter) または addFloor( 呼び出しが見つからない');
-  assert.ok(applyIdx < addIdx, 'applyPlaneMetas(project, metasAfter) が addFloor( より前にない');
+  const applyIdx   = body.indexOf('applyPlaneMetas(project, metasAfter);');
+  const restoreIdx = body.indexOf('await restoreRemoved(project, addedPlaneRedoRecords(addedPlanes, addedTaken, addedBytes));');
+  const siblingIdx = body.indexOf('for (const rec of changedSiblings) applyFloorBytes(project, rec.planeId, rec.after);');
+  assert.ok(applyIdx >= 0 && restoreIdx >= 0 && siblingIdx >= 0, 'applyPlaneMetas(metasAfter)・restoreRemoved(addedPlaneRedoRecords)・changedSiblings書き戻しのいずれかが見つからない');
+  assert.ok(applyIdx < restoreIdx && restoreIdx < siblingIdx, 'applyPlaneMetas(metasAfter) → restoreRemoved → changedSiblings書き戻し の順にない');
+  assert.doesNotMatch(body, /addFloor\(/, 'redoFloorOp は addFloor で作り直さない（同じインスタンスを戻す）');
 });
 
-// 階設定表 S3: redo は追加階を作り直すとき最上階の階高（pl.topStoryHeightMm）も addFloor へ渡す
-// （applyPlaneMetas(metasAfter) は追加階がまだ無く飛ばされるため、ここで渡さないと値が落ちる）。
-// コメント行を除いた上で、行頭・行末アンカー付きの1行一致で固定する。
-test('【配線】App.jsx: redoFloorOp は addFloor の第8引数に pl.topStoryHeightMm を渡す（最上階の階高が redo で落ちない）', () => {
-  const body = stripCommentLines(extractFunctionBody(readAppSrc(), 'async function redoFloorOp'));
-  assert.match(body, /^\s*addFloor\(pl\.elevation, pl\.name, pl\.startFloor, pl\.stories, pl\.id, pl\.planCutHeightMm, pl\.ceilingCutHeightMm, pl\.topStoryHeightMm\);\s*$/m,
-    'redoFloorOp の addFloor( が pl.topStoryHeightMm を渡す1行まるごとの形で見つからない');
+test('【配線】App.jsx: withFloorOpUndo は addedBytes の直後に addedTaken を持つ（undo／redo のクロージャで共有）', () => {
+  const body = stripCommentLines(extractFunctionBody(readAppSrc(), 'async function withFloorOpUndo'));
+  const bytesIdx = body.indexOf('const addedBytes = new Map(');
+  const takenIdx = body.indexOf('const addedTaken = [];');
+  assert.ok(bytesIdx >= 0 && takenIdx > bytesIdx, 'const addedTaken = []; が addedBytes の後にない');
+  assert.ok(takenIdx < body.indexOf('async function undoFloorOp'), 'undoFloorOp の定義より前');
 });
 
 // redoFloorOpは、追加階が無く（ドラッグ移動・階変更）activeAfterIdが変わっていない場合は

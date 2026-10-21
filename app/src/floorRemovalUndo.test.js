@@ -16,6 +16,7 @@ import {
   floorBytesEqual, blocksFloorRemoval, computeFloorDeleteReorder, collectPlaneMetas, applyPlaneMetas,
   collectProjectLevels, applyProjectLevels, diffFloorOpSnapshot, rollbackFloorOp,
   collectRemovalRecords, restoreRemovedPlanes, removePlanesForRedo, pickRemovalFallback,
+  computeFloorInsert, computeFloorAddLowerElevations, removeAddedPlanesForUndo, addedPlaneRedoRecords,
 } from './floorOps.js';
 import { followRoofPlaneToTop } from './structural/roofPlane.js';
 import { makeStorePeek, makeStoreSave, decodeFloor } from './finish/equipment/equipmentTestFixtures.js';
@@ -181,8 +182,86 @@ function makeApp(project, store, opts = {}) {
     return { undo, redo, diff };
   }
 
-  return { log, switchRaw, readBytes, deleteFloor, removeFloorFn, addFloor, addAlternativeFloor, restoreRemoved };
+  /**
+   * withFloorOpUndo('階追加') ＋ executeAddUpper／handleAddFloorConfirm と同じ順。kind は INSERT（表示中の階の直上へ1階）
+   * か ADD_LOWER（最下階の下へ n 階）。follower は [] を渡す（階段・EV の写しや構造反映はこのハーネスの範囲外。新階への
+   * 切替は switchToAddedFloor follower の代わりに switchRaw で行う）。{ undo, redo, added, metasAfter, diff } を返す。
+   */
+  async function addFloors(kind, { n = 1 } = {}) {
+    const sourcePlaneId = project.activePlaneId;
+    const before = await collect();
+    const metasBefore = collectPlaneMetas(project);
+    const levelsBefore = collectProjectLevels(project);
+    const current = project.activePlane;
+    const topHeightMm = resolveTopStoryHeightMm(project);
+    let updates = [];
+    let addPlane;
+    if (kind === FLOOR_ORDER_KIND.INSERT) {
+      const insert = computeFloorInsert(project.planes, current.id, 1, { topHeightMm });
+      const { newPlane } = insert;
+      updates = insert.updates;
+      addPlane = () => addFloor(newPlane.elevation, newPlane.name, newPlane.startFloor, newPlane.stories, undefined,
+        newPlane.planCutHeightMm, newPlane.ceilingCutHeightMm, newPlane.topStoryHeightMm);
+    } else {
+      const elevations = computeFloorAddLowerElevations(project.planes, n, { topHeightMm });
+      addPlane = () => {
+        const planes = [];
+        for (let i = 1; i <= n; i++) {
+          planes.push(addFloor(elevations[i - 1], `地下${i}階`, -i, 1, undefined, current.planCutHeightMm, current.ceilingCutHeightMm).plane);
+        }
+        return { plane: planes[planes.length - 1], planes };
+      };
+    }
+    const { addedPlane } = await applyFloorOrderChange(project, { kind, updates, addPlane, sourceGraph: project.activeGraph, ui }, []);
+    await switchRaw(addedPlane.id);
+
+    const activeAfterId = project.activePlaneId;
+    const after = await collect();
+    const metasAfter = collectPlaneMetas(project);
+    const levelsAfter = collectProjectLevels(project);
+    const diff = diffFloorOpSnapshot({ before, after, metasBefore, metasAfter, levelsBefore, levelsAfter });
+    const { addedPlanes, changedSiblings } = diff;
+    const addedBytes = new Map(addedPlanes.map(pl => [pl.id, after.get(pl.id) ?? null]));
+    const taken = [];
+
+    // App.jsx undoFloorOp の状態部分と同じ順
+    async function undo() {
+      taken.length = 0; // 早期 return より前（中断した undo の後の redo に前回の記録を残さない）
+      if (addedPlanes.some(pl => pl.id === project.activePlaneId)) {
+        const backId = project.planeMap.has(sourcePlaneId) ? sourcePlaneId : project.planes.find(p => !addedPlanes.some(pl => pl.id === p.id))?.id;
+        await trySwitch(backId);
+        if (addedPlanes.some(pl => pl.id === project.activePlaneId)) return;
+      }
+      await removeAddedPlanesForUndo(project, addedPlanes, { getBytes: readBytes, removeFloorFn, taken });
+      applyPlaneMetas(project, metasBefore);
+      applyProjectLevels(project, levelsBefore);
+      for (const rec of changedSiblings) applyBytes(rec.planeId, rec.before);
+      followRoof(project);
+    }
+    // App.jsx redoFloorOp の状態部分と同じ順
+    async function redo() {
+      applyPlaneMetas(project, metasAfter);
+      applyProjectLevels(project, levelsAfter);
+      await restoreRemoved(project, addedPlaneRedoRecords(addedPlanes, taken, addedBytes));
+      for (const rec of changedSiblings) applyBytes(rec.planeId, rec.after);
+      followRoof(project);
+      if (activeAfterId !== project.activePlaneId) await switchRaw(activeAfterId);
+    }
+    return { undo, redo, added: addedPlanes, metasAfter, diff };
+  }
+
+  return { log, switchRaw, readBytes, deleteFloor, addFloors, removeFloorFn, addFloor, addAlternativeFloor, restoreRemoved };
 }
+
+/** 表示中の階の graph へ中心線を1本足す編集と、それを掴む undo エントリ（App.jsx cl-extend と同じ: graph インスタンスへ restoreGraph）。 */
+function editActiveGraph(project, value = 777) {
+  const g = project.activeGraph;
+  const b = serializeGraph(g);
+  g.addCenterLine(CenterLineType.VERTICAL, value, { labeled: false, discipline: Discipline.ARCH });
+  const a = serializeGraph(g);
+  return { g, undo: () => restoreGraph(g, b), redo: () => restoreGraph(g, a) };
+}
+const hasLine = (g, value) => g.centerLines.some(c => c.value === value);
 
 /** 全平面（採用＋検討）のメタと、全平面のバイト列（アクティブはメモリ、他はストア）。アクティブ階の id は別に比べる。 */
 async function snapshot(project, store) {
@@ -506,6 +585,213 @@ test('removePlanesForRedo: 対象を表示中に退避できなければ false�
   assert.equal(pickRemovalFallback(project, 'p3', 'p3'), 'p4');
   assert.equal(pickRemovalFallback(project, 'p4', undefined), 'p3', '最上階は直下');
   assert.equal(store.has('p3'), true);
+});
+
+// ---- 階追加の undo/redo は追加した階を同じインスタンスで戻す（追加した階での編集の redo/undo が空振りしない）----
+test('T1 INSERT: 新しい階で編集 → 編集 undo → 追加 undo → 追加 redo で同じ Plane／graph が戻り、編集の redo が表示中の階に出る', async () => {
+  const { project, app } = await setup('p3');
+  const c = await app.addFloors(FLOOR_ORDER_KIND.INSERT);
+  const [added] = c.added;
+  const plane = project.planeMap.get(added.id);
+  const g = project.activeGraph;
+  assert.equal(project.activePlaneId, added.id, '追加した階を表示している');
+  assert.ok(g === project.graphMap.get(added.id));
+  const e = editActiveGraph(project);
+  assert.ok(hasLine(g, 777));
+
+  e.undo();
+  assert.ok(!hasLine(g, 777));
+  await c.undo();
+  assert.equal(project.planeMap.has(added.id), false, '追加階が消えた');
+  assert.equal(project.activePlaneId, 'p3');
+  await c.redo();
+  assert.ok(project.planeMap.get(added.id) === plane, 'Plane が同一インスタンス');
+  assert.ok(project.graphMap.get(added.id) === g, 'graph が同一インスタンス');
+  assert.ok(project.activeGraph === g && project.activePlaneId === added.id, 'redo 後は追加階を表示し activeGraph が元の graph');
+  e.redo();
+  assert.ok(hasLine(project.activeGraph, 777), '編集の redo が表示中の階に出る');
+  e.undo();
+  assert.ok(!hasLine(project.activeGraph, 777), '編集の undo も表示中の階に効く');
+});
+
+test('T2 往復2回: undo→redo→undo→redo の毎回で同じ Plane／graph。2巡目の後も編集の redo/undo が効く', async () => {
+  const { project, app } = await setup('p3');
+  const c = await app.addFloors(FLOOR_ORDER_KIND.INSERT);
+  const id = c.added[0].id;
+  const plane = project.planeMap.get(id);
+  const g = project.activeGraph;
+  const e = editActiveGraph(project);
+  for (let lap = 1; lap <= 2; lap++) {
+    e.undo();
+    await c.undo();
+    assert.equal(project.planeMap.has(id), false, `${lap}巡目の undo で消える`);
+    await c.redo();
+    assert.ok(project.planeMap.get(id) === plane, `${lap}巡目: Plane 同一`);
+    assert.ok(project.graphMap.get(id) === g, `${lap}巡目: graph 同一`);
+    assert.ok(project.activeGraph === g, `${lap}巡目: activeGraph 同一`);
+    e.redo();
+    assert.ok(hasLine(project.activeGraph, 777), `${lap}巡目: 編集の redo が出る`);
+  }
+  e.undo();
+  assert.ok(!hasLine(project.activeGraph, 777), '2巡目の後も編集の undo が効く');
+});
+
+test('T3 ADD_LOWER n=2: 2平面とも同一インスタンスで戻る。非表示で after が null の階はメモリの中身（目印の中心線）を保つ', async () => {
+  const { project, store, app } = await setup('p1');
+  const c = await app.addFloors(FLOOR_ORDER_KIND.ADD_LOWER, { n: 2 });
+  assert.equal(c.added.length, 2);
+  const [lowest, upper] = c.added; // elevation 昇順: 地下2階（表示中）、地下1階（非表示）
+  assert.equal(project.activePlaneId, lowest.id);
+  assert.equal(store.has(upper.id), false, '非表示の追加階は IDB に無い（after のバイト列は null）');
+  const planes = c.added.map(pl => project.planeMap.get(pl.id));
+  const graphs = c.added.map(pl => project.graphMap.get(pl.id));
+  graphs[1].addCenterLine(CenterLineType.VERTICAL, 888, { labeled: false, discipline: Discipline.ARCH });
+
+  await c.undo();
+  assert.deepEqual(c.added.map(pl => project.planeMap.has(pl.id)), [false, false]);
+  await c.redo();
+  c.added.forEach((pl, i) => {
+    assert.ok(project.planeMap.get(pl.id) === planes[i], `${pl.name}: Plane 同一`);
+    assert.ok(project.graphMap.get(pl.id) === graphs[i], `${pl.name}: graph 同一`);
+  });
+  assert.equal(project.activePlaneId, lowest.id);
+  assert.ok(hasLine(graphs[1], 888), '非表示の追加階は一度も保存されておらず、メモリの中身が保たれる');
+});
+
+test('T3b ADD_LOWER: 非表示の追加階を後で訪れて離れた（IDB 保存）後の undo→redo は、undo 時の記録のバイト列で中身が戻る', async () => {
+  const { project, store, app } = await setup('p1');
+  const c = await app.addFloors(FLOOR_ORDER_KIND.ADD_LOWER, { n: 2 });
+  const [lowest, upper] = c.added;
+  const upperGraph = project.graphMap.get(upper.id);
+  upperGraph.addCenterLine(CenterLineType.VERTICAL, 888, { labeled: false, discipline: Discipline.ARCH });
+  await app.switchRaw(upper.id); // 訪れる
+  await app.switchRaw(lowest.id); // 離れる（保存＋clearFloorData）
+  assert.equal(hasLine(upperGraph, 888), false, '離れたので graph は空');
+  assert.ok(store.has(upper.id), '離れたときに IDB へ保存された');
+
+  await c.undo();
+  assert.equal(store.has(upper.id), false);
+  await c.redo();
+  assert.ok(project.graphMap.get(upper.id) === upperGraph, 'graph 同一');
+  assert.ok(store.has(upper.id), 'redo で記録のバイト列が IDB へ書かれる');
+  assert.ok(decode(project, store, upper.id).centerLines.some(cl => cl.value === 888), '保存内容に目印の中心線がある');
+});
+
+test('T4 メタ: undo→redo の後、全採用階のメタが操作後（metasAfter）と一致する。追加階の最上階の階高・平面切断高を含む', async () => {
+  const { project, app } = await setup('p4');
+  project.planeMap.get('p4').planCutHeightMm = 1300; // 新階へ複製される値
+  const c = await app.addFloors(FLOOR_ORDER_KIND.INSERT);
+  const added = c.metasAfter.find(m => m.id === c.added[0].id);
+  assert.equal(typeof added.topStoryHeightMm, 'number', '最上階に足したので新階は最上階の階高を持つ');
+  assert.equal(added.planCutHeightMm, 1300);
+  await c.undo();
+  await c.redo();
+  assert.deepEqual(collectPlaneMetas(project), c.metasAfter);
+});
+
+test('T5 検討案: 追加階に後から作った検討案も undo で消え、redo で同じインスタンス・referenceId・altIndex で戻る', async () => {
+  const { project, app } = await setup('p3');
+  const c = await app.addFloors(FLOOR_ORDER_KIND.INSERT);
+  const id = c.added[0].id;
+  const alt = app.addAlternativeFloor(id, '検討案A');
+  alt.graph.addCenterLine(CenterLineType.VERTICAL, 555, { labeled: false, discipline: Discipline.ARCH });
+  await c.undo();
+  assert.equal(project.planeMap.has(alt.plane.id), false, '検討案も消える');
+  await c.redo();
+  assert.ok(project.planeMap.get(alt.plane.id) === alt.plane, '検討案 Plane 同一');
+  assert.ok(project.graphMap.get(alt.plane.id) === alt.graph, '検討案 graph 同一');
+  assert.equal(project.planeMap.get(alt.plane.id).referenceId, id);
+  assert.equal(project.planeMap.get(alt.plane.id).altIndex, 0);
+  assert.ok(hasLine(alt.graph, 555), '検討案のメモリ上の中身が保たれる');
+});
+
+test('【失敗系】F1 undo の退避切替が失敗（何も消えない）→ redo で追加階は重複作成されず、同じインスタンスのまま編集の redo が効く', async () => {
+  const { project, store } = await setup('p3');
+  const app = makeApp(project, store, { failSwitch: true });
+  const c = await app.addFloors(FLOOR_ORDER_KIND.INSERT);
+  const id = c.added[0].id;
+  const plane = project.planeMap.get(id);
+  const g = project.activeGraph;
+  const n = project.planeMap.size;
+  const e = editActiveGraph(project);
+  e.undo();
+  await c.undo();
+  assert.ok(project.planeMap.get(id) === plane, '切替失敗で何も消えていない');
+  assert.equal(project.activePlaneId, id);
+  await c.redo();
+  assert.equal(project.planeMap.size, n, '重複作成されない');
+  assert.ok(project.planeMap.get(id) === plane && project.graphMap.get(id) === g, 'Plane／graph 同一');
+  e.redo();
+  assert.ok(hasLine(project.activeGraph, 777), '編集の redo が表示中の階に出る');
+});
+
+test('【失敗系】F2 ADD_LOWER n=2 で2つ目の removeFloor の IDB 削除が失敗 → undo は例外。redo で1つ目は同一インスタンスで戻り、2つ目は触らない', async () => {
+  const { project, store } = await setup('p1');
+  const opts = {};
+  const app = makeApp(project, store, opts);
+  const c = await app.addFloors(FLOOR_ORDER_KIND.ADD_LOWER, { n: 2 });
+  const [first, second] = c.added;
+  const planes = c.added.map(pl => project.planeMap.get(pl.id));
+  const graphs = c.added.map(pl => project.graphMap.get(pl.id));
+  graphs[1].addCenterLine(CenterLineType.VERTICAL, 888, { labeled: false, discipline: Discipline.ARCH });
+  opts.removeFailsAt = second.id;
+  await assert.rejects(c.undo(), /IDB delete failed/);
+  assert.equal(project.planeMap.has(first.id), false, '1つ目は消えた');
+  assert.equal(project.planeMap.has(second.id), true, '2つ目は残っている');
+  const n = project.planeMap.size;
+  await c.redo();
+  assert.equal(project.planeMap.size, n + 1, '1つ目だけ戻り、重複作成なし');
+  assert.ok(project.planeMap.get(first.id) === planes[0] && project.graphMap.get(first.id) === graphs[0], '1つ目: 同一インスタンス');
+  assert.ok(project.planeMap.get(second.id) === planes[1] && project.graphMap.get(second.id) === graphs[1], '2つ目: 触らない');
+  assert.ok(hasLine(graphs[1], 888), '2つ目の中身も保たれる');
+});
+
+test('【失敗系】F4 退避切替の失敗で中断した undo の後の redo は、その間に（undo 対象外で）削除した検討案を復活させない', async () => {
+  const { project, store } = await setup('p3');
+  const opts = {};
+  const app = makeApp(project, store, opts);
+  const c = await app.addFloors(FLOOR_ORDER_KIND.INSERT);
+  const alt = app.addAlternativeFloor(c.added[0].id, '検討案A');
+  await c.undo(); // 記録に検討案 A が入る
+  await c.redo();
+  assert.equal(project.planeMap.has(alt.plane.id), true, '1回目の redo で A が戻る');
+  await app.removeFloorFn(alt.plane.id); // runDeleteAlternative 相当（undo に積まれない）
+  opts.failSwitch = true;
+  await c.undo(); // 退避の切替が失敗して中断
+  assert.equal(project.activePlaneId, c.added[0].id);
+  await c.redo();
+  assert.equal(project.planeMap.has(alt.plane.id), false, '削除した検討案 A が redo で戻らない');
+  assert.equal(store.has(alt.plane.id), false);
+});
+
+test('【失敗系】F3 addedPlaneRedoRecords: taken に記録が無い階は plane／graph の無い記録になり、restoreRemovedPlanes が addFloor へ topStoryHeightMm まで渡す。バイト列は addedBytes→記録→null の優先', async () => {
+  const { project, app } = await setup('p3');
+  const meta = { id: 'zz', name: '9階', startFloor: 9, elevation: 12000, stories: 1, planCutHeightMm: 1300, ceilingCutHeightMm: 1500, topStoryHeightMm: 2600 };
+  const recs = addedPlaneRedoRecords([meta], [], new Map([['zz', null]]));
+  assert.equal(recs.length, 1);
+  assert.equal(recs[0].plane, undefined);
+  assert.equal(recs[0].graph, undefined);
+  assert.equal(recs[0].bytes, null);
+  const calls = [];
+  const saved = [];
+  await restoreRemovedPlanes(project, recs, {
+    addFloor: (...args) => { calls.push(args); return app.addFloor(...args); },
+    addAlternativeFloor: app.addAlternativeFloor,
+    saveFloorFn: async (id, b) => saved.push([id, b]),
+  });
+  assert.deepEqual(calls, [[12000, '9階', 9, 1, 'zz', 1300, 1500, 2600]], 'addFloor の第8引数まで topStoryHeightMm が渡る');
+  assert.deepEqual(saved, [], 'バイト列が無ければ保存しない');
+  assert.equal(project.planeMap.get('zz').topStoryHeightMm, 2600);
+
+  const fromTaken = { id: 'zz', bytes: new Uint8Array([7]), plane: 'P', graph: 'G', isAlternative: false };
+  const alt = { id: 'zza', bytes: null, isAlternative: true, referenceId: 'zz', altIndex: 0 };
+  const opAfter = new Uint8Array([9]);
+  assert.equal(addedPlaneRedoRecords([meta], [fromTaken], new Map([['zz', opAfter]]))[0].bytes, opAfter, '操作直後のバイト列が優先');
+  const r2 = addedPlaneRedoRecords([meta], [fromTaken, alt], new Map([['zz', null]]));
+  assert.deepEqual([...r2[0].bytes], [7], '操作直後が null なら undo 時の記録のバイト列');
+  assert.equal(r2[0].plane, 'P', 'インスタンスは記録のもの');
+  assert.equal(r2[0].name, '9階', 'メタは操作後のもの');
+  assert.deepEqual(r2.map(r => r.id), ['zz', 'zza'], '採用階の後に検討案の記録が続く');
 });
 
 // ---- 配線（App.jsx／store.js はテストから import できないためソース走査。コメントの言及と区別するため行頭コメントを除く）----

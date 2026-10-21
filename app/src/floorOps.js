@@ -559,6 +559,32 @@ export async function restoreRemovedPlanes(project, records, { addFloor, addAlte
   }
 }
 
+// 階追加の undo: 追加した採用階を（検討案ごと）消す。消す直前に collectRemovalRecords で記録（Plane／PlanGraph の
+// インスタンスとバイト列）を採って taken へ積む——途中で removeFloorFn が失敗しても、消えた分は redo で同じ
+// インスタンスのまま戻せる（addedPlaneRedoRecords → restoreRemovedPlanes）。記録は階削除の undo と同じ部品。
+// getBytes は collectRemovalRecords と同じ（planeId→Promise<Uint8Array|null>）。消す順は addedPlanes の順。
+export async function removeAddedPlanesForUndo(project, addedPlanes, { getBytes, removeFloorFn, taken }) {
+  for (const pl of addedPlanes) {
+    taken.push(...await collectRemovalRecords(project, pl.id, getBytes));
+    await removeFloorFn(pl.id);
+  }
+}
+
+// 階追加の redo で restoreRemovedPlanes へ渡す記録。採用階ごとに「undo 時の記録（taken。インスタンスとバイト列）の上へ
+// 操作後のメタ（addedPlanes＝metasAfter 由来）を重ねた」もの。バイト列は操作直後に採った addedBytes を優先し、
+// 無ければ undo 時の記録のもの（操作直後は IDB に無かった追加階を後で訪れて離れた場合に、redo で空の階が戻る退行を防ぐ）。
+// 両方 null なら保存しない（その階は一度もアクティブになっておらず、インスタンスがメモリ上の中身を保つ）。
+// 続けて taken のうち検討案の記録をそのまま並べる。taken に記録が無い採用階（undo が退避で中断した等）は
+// plane／graph の無い記録になる（その id が既にあれば restoreRemovedPlanes が触らず、無ければ addFloor で作る）。
+export function addedPlaneRedoRecords(addedPlanes, taken, addedBytes) {
+  const takenById = new Map(taken.map(r => [r.id, r]));
+  const adopted = addedPlanes.map(pl => {
+    const rec = takenById.get(pl.id);
+    return { ...rec, ...pl, isAlternative: false, bytes: addedBytes.get(pl.id) ?? rec?.bytes ?? null };
+  });
+  return [...adopted, ...taken.filter(r => r.isAlternative)];
+}
+
 // 階削除の redo: removedPlanes の採用階を（検討案ごと）消す。対象（とその検討案）を表示中なら switchTo(id)
 // で pickRemovalFallback の階へ退避し、なお表示中なら（切替失敗）アクティブ階を消さず false を返して中断する
 // （F1・2026-09-27）。removeFloorFn は store.js removeFloor、switchTo は App.jsx の trySwitchFloor 経由の切替。
