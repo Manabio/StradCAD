@@ -9,6 +9,7 @@ import {
 import { NON_DEFAULT_ROOF_SPEC } from './finish/roofTestFixtures.js';
 import { setExteriorCeilingEnabled, exteriorCeilingEnabled, EXTERIOR_CEILING_KEY } from './ceiling/exteriorCeiling.js';
 import { ByteBuffer } from 'flatbuffers';
+import { runInAction } from 'mobx';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
   serializeSite, decodeSite, restoreSite, decodeFloorSnapshot, encodeFloorSnapshot,
@@ -3028,4 +3029,112 @@ test('【S5】階の複製・検討案のコピー（serializeGraphWithFreshLine
     }
   }
   assert.deepEqual(room.ceilingZones.map(z => [z.id, z.heightMm, z.shape, z.dims]), [['za', null, 'dome', [1200]], ['zb', 2750.5, 'slope', [1500.5, 270]]]);
+});
+
+// ---- S5b: StructuralInfo.basementStructure（建物全体の地階構造）の保存形式 ----
+// 往復は全項目で比べる（キー列だけの比較では項目の欠落を見逃す。team-lessons）。
+
+// StructuralInfo の全項目を plain 値へ（Map・observable 配列を展開。インスタンスの own キーから列挙するので、
+// 将来項目が増えても比較から漏れない）。
+function plainStructuralInfo(si) {
+  const out = {};
+  for (const k of Object.keys(si).sort()) {
+    const v = si[k];
+    // mobx の ObservableMap は Map のサブクラスではない（entries/get を持つかで判定）
+    const isMap = v && typeof v === 'object' && typeof v.entries === 'function' && typeof v.get === 'function';
+    out[k] = isMap ? [...v.entries()] : v && typeof v === 'object' && typeof v.length === 'number' ? [...v] : v;
+  }
+  return out;
+}
+
+// 全項目を既定値以外にした structuralInfo を持つ Project
+function makeProjectWithFullStructuralInfo(basement) {
+  const project = new Project('proj', 'test');
+  const si = project.structuralInfo;
+  si.setField('mainStructure', 'S造');
+  si.otherStructures.replace(['木造（在来）', 'RC造(壁式)']);
+  si.setField('foundationType', '独立基礎');
+  si.setField('columnFaceProjection', 25);
+  si.setColumnFaceProjection('S造', { label: 'X1' }, 40);
+  si.setField('designStrength', 'Fc30');
+  si.setField('concreteType', '軽量コンクリート');
+  si.setField('mainBar', 'SD390');
+  si.setField('hoopBar', 'SD345');
+  si.setField('snowArea', '多雪区域');
+  si.setField('basicWindSpeed', 38);
+  si.setField('surfaceRoughness', 'II');
+  si.setField('seismicZoneFactor', '0.9');
+  si.setBasementStructure(basement);
+  return project;
+}
+
+for (const basement of ['RC造(ラーメン)', 'RC造(壁式)']) {
+  test(`【S5b】basementStructure=${basement} は他の全項目と共に serializeStructCLs→restoreStructCLs で往復する`, () => {
+    const src = makeProjectWithFullStructuralInfo(basement);
+    const bytes = serializeStructCLs(src.structGraph, src.structuralInfo, src.memberGroupLedger);
+    const dst = new Project('proj2', 'test');
+    assert.equal(dst.structuralInfo.basementStructure, null, '復元先の既定は null（空振り防止）');
+    restoreStructCLs(dst.structGraph, dst.structuralInfo, bytes, dst.memberGroupLedger);
+    assert.equal(dst.structuralInfo.basementStructure, basement);
+    assert.deepEqual(plainStructuralInfo(dst.structuralInfo), plainStructuralInfo(src.structuralInfo));
+    assert.ok(Object.keys(plainStructuralInfo(src.structuralInfo)).includes('basementStructure'), '全項目の列挙に含まれる');
+  });
+}
+
+// 構造情報の SI テーブル（GS.STRUCTURAL_INFO=20）に、フィールド番号 fieldNo が書かれているか（vtable の有無）を直接読む。
+// 新しいエンコーダ同士の比較だけでは、null のときに空文字を書くような退行が両側で同じに変わって見逃されるため。
+function structuralInfoHasField(bytes, fieldNo) {
+  const bb = new ByteBuffer(bytes);
+  const root = bb.readInt32(bb.position()) + bb.position();
+  const o = bb.__offset(root, 4 + 20 * 2);
+  assert.ok(o, '前提: SI テーブルがある');
+  return bb.__offset(bb.__indirect(root + o), 4 + fieldNo * 2) !== 0;
+}
+
+test('【S5b】basementStructure=null はバイト列を変えない（キー自体が無い snapshot の encode とバイト一致）', () => {
+  const src = makeProjectWithFullStructuralInfo(null);
+  const bytes = serializeStructCLs(src.structGraph, src.structuralInfo, src.memberGroupLedger);
+  assert.equal(structuralInfoHasField(bytes, 0), true, '対照: mainStructure(0) は書かれる（読み取りヘルパーが効いている）');
+  assert.equal(structuralInfoHasField(bytes, 14), false, 'null のときは BASEMENT_STRUCTURE(14) を書かない（旧形式と同じ）');
+  const snap = decode(bytes);
+  assert.equal(snap.structuralInfo.basementStructure, null);
+  delete snap.structuralInfo.basementStructure;
+  assert.deepEqual([...encode(snap)], [...bytes], '旧形式（フィールド 14 なし）と同じバイト列');
+
+  const withB = makeProjectWithFullStructuralInfo('RC造(ラーメン)');
+  const bytesB = serializeStructCLs(withB.structGraph, withB.structuralInfo, withB.memberGroupLedger);
+  assert.ok(bytesB.length > bytes.length, '値があるときだけ文字列ぶん長くなる');
+  assert.equal(structuralInfoHasField(bytesB, 14), true, '値があるときは BASEMENT_STRUCTURE(14) を書く');
+});
+
+test('【S5b】旧データ（フィールド 14 なし・JSON のキー欠落）は null へ復元され、既存の地階構造を持ち越さない', () => {
+  const src = makeProjectWithFullStructuralInfo(null);
+  const bytes = serializeStructCLs(src.structGraph, src.structuralInfo, src.memberGroupLedger);
+  const dst = new Project('proj2', 'test');
+  dst.structuralInfo.setBasementStructure('RC造(壁式)'); // 復元前に値がある状態
+  restoreStructCLs(dst.structGraph, dst.structuralInfo, bytes, dst.memberGroupLedger);
+  assert.equal(dst.structuralInfo.basementStructure, null, 'バイト列に無ければ null（持ち越さない）');
+
+  const json = JSON.stringify(decode(bytes));
+  const noKey = JSON.parse(json);
+  delete noKey.structuralInfo.basementStructure;
+  dst.structuralInfo.setBasementStructure('RC造(壁式)');
+  restoreStructCLs(dst.structGraph, dst.structuralInfo, JSON.stringify(noKey), dst.memberGroupLedger);
+  assert.equal(dst.structuralInfo.basementStructure, null, 'plain JSON のキー欠落も null');
+});
+
+test('【S5b】【失敗系】選択肢外の文字列（S造・RC造・空文字）は書かれず、復元でも null。setBasementStructure は throw', () => {
+  for (const bad of ['S造', 'RC造', '', '木造（在来）']) {
+    const src = makeProjectWithFullStructuralInfo(null);
+    runInAction(() => { src.structuralInfo.basementStructure = bad; }); // 不正値を直接入れた（破損データ・将来削除された値の模擬）
+    const bytes = serializeStructCLs(src.structGraph, src.structuralInfo, src.memberGroupLedger);
+    assert.equal(decode(bytes).structuralInfo.basementStructure, null, `${JSON.stringify(bad)} は書かれない`);
+
+    const dst = new Project('proj2', 'test');
+    restoreStructCLs(dst.structGraph, dst.structuralInfo, { ...decode(bytes), structuralInfo: { ...decode(bytes).structuralInfo, basementStructure: bad } }, dst.memberGroupLedger);
+    assert.equal(dst.structuralInfo.basementStructure, null, `JSON 経由の ${JSON.stringify(bad)} も null`);
+
+    assert.throws(() => dst.structuralInfo.setBasementStructure(bad), /地階構造/);
+  }
+  assert.throws(() => new Project('p', 't').structuralInfo.setBasementStructure(undefined), /地階構造/);
 });

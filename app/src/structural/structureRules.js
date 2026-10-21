@@ -404,10 +404,34 @@ export function rulesFor(structure) {
   return STRUCTURE_RULES[structure] ?? UNSPECIFIED_RULES;
 }
 
-/** その階の実効主構造（階の上書き優先・なければ建物全体値）。core 非依存のためここに置き、
+/** 地階の構造として選べる値（RC 系のみ。STRUCTURE_PROFILES の baseMaterial が RC のもの）。 */
+export const BASEMENT_STRUCTURE_OPTIONS = Object.freeze(
+  STRUCTURES.filter((s) => STRUCTURE_PROFILES[s].baseMaterial === 'RC'),
+);
+
+/** 保存値・外部入力を地階構造へ正規化する（選択肢外・空文字・未知は null＝地階構造なし）。 */
+export function normalizeBasementStructure(v) {
+  return typeof v === 'string' && BASEMENT_STRUCTURE_OPTIONS.includes(v) ? v : null;
+}
+
+/** 地階の平面か（startFloor<0。屋根専用平面は startFloor を写すため除外）。検討案も自分の startFloor で判定。 */
+export function isBasementPlane(plane) {
+  return !!plane && !plane.isRoofPlane && plane.startFloor < 0;
+}
+
+// 建物全体の地階構造。effectiveStructure の主構造と同じ引き方（project → graph 後方参照 → peek の structGraph）。
+function basementStructureOf(graph, project) {
+  return project?.structuralInfo?.basementStructure
+    ?? graph?._structuralInfo?.basementStructure
+    ?? graph?._structGraph?._structuralInfo?.basementStructure;
+}
+
+/** その階の実効主構造（階の上書き優先、地階は地階構造、なければ建物全体値）。core 非依存のためここに置き、
  *  structuralAutoFill.js / wallBeamAxes.js / woodAutoFill.js がこれを共有する（重複定義を持たない）。 */
 export function effectiveStructure(graph, project = null) {
   return graph?.structureOverride
+    // 地階（startFloor<0 の屋根専用でない平面）だけ、建物全体の「地階構造」を主構造より先に引く。
+    ?? (isBasementPlane(graph?.plane) ? basementStructureOf(graph, project) : null)
     ?? project?.structuralInfo?.mainStructure
     // project が手元に無い経路（描画レイヤ・展開図）は graph の後方参照（core/planGraph.js の
     // _structuralInfo。peek の一時グラフは全階共通の structGraph 経由）から建物全体値を引く。

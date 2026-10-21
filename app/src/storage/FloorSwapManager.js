@@ -316,6 +316,7 @@ export class FloorSwapManager {
       void structuralInfo.mainStructure;
       void structuralInfo.otherStructures.length;
       void structuralInfo.foundationType;
+      void structuralInfo.basementStructure;
       void structuralInfo.designStrength;
       void structuralInfo.concreteType;
       void structuralInfo.mainBar;

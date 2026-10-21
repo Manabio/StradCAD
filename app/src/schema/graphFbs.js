@@ -11,7 +11,7 @@
 
 import { Builder, ByteBuffer } from 'flatbuffers';
 import { normalizeSubType } from '../openings/openingCatalog.js';
-import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION } from '../structural/structureRules.js';
+import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION, normalizeBasementStructure } from '../structural/structureRules.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { StairPortSide } from '../core/constants.js';
 import { DEFAULT_PLAN_CUT_HEIGHT_MM, DEFAULT_CEILING_CUT_HEIGHT_MM } from '../core/plane.js';
@@ -109,13 +109,14 @@ const ST = {
 const MATERIAL_TYPE_ENC = { WOOD: 0, STEEL: 1, RC: 2 };
 const MATERIAL_TYPE_DEC = ['WOOD', 'STEEL', 'RC'];
 
-// StructuralInfo: 12 フィールド（建物全体の構造情報の既定値）
+// StructuralInfo: 15 フィールド（建物全体の構造情報の既定値）
 const SI = {
   MAIN_STRUCTURE: 0, OTHER_STRUCTURES: 1, FOUNDATION_TYPE: 2,
   DESIGN_STRENGTH: 3, CONCRETE_TYPE: 4, MAIN_BAR: 5, HOOP_BAR: 6,
   SNOW_AREA: 7, BASIC_WIND_SPEED: 8, SURFACE_ROUGHNESS: 9, SEISMIC_ZONE_FACTOR: 10,
   COLUMN_FACE_PROJECTION: 11, // 旧・建物1値の出幅(mm)。無キー時の移行既定として保持。
   FACE_PROJ_KEYS: 12, FACE_PROJ_VALS: 13, // 出幅マップ（1構造×1通り芯）。keys/vals 並列ベクトル。
+  BASEMENT_STRUCTURE: 14, // 地階の構造（RC 系のみ。null は書かない＝末尾の欠落でバイト列不変）。
 };
 
 // Edge: 4 フィールド
@@ -421,7 +422,11 @@ function writeStructuralInfo(b, info) {
   const fpKeysVec = writeStrVec(b, info.columnFaceProjKeys ?? []);
   const fpValsVec = writeStrVec(b, info.columnFaceProjVals ?? []);
 
-  b.startObject(14);
+  // 地階構造は選択肢内の値だけ書く（null・未知は書かない。末尾 0 フィールドは vtable で切り詰められる）。
+  const basement = normalizeBasementStructure(info.basementStructure ?? null);
+  const sBasement = basement !== null ? b.createString(basement) : 0;
+
+  b.startObject(15);
   b.addFieldOffset(SI.MAIN_STRUCTURE,      sMain,    0);
   b.addFieldOffset(SI.OTHER_STRUCTURES,    otherVec, 0);
   b.addFieldOffset(SI.FOUNDATION_TYPE,     sFound,   0);
@@ -436,6 +441,7 @@ function writeStructuralInfo(b, info) {
   b.addFieldFloat64(SI.COLUMN_FACE_PROJECTION, info.columnFaceProjection ?? 0, 0.0);
   b.addFieldOffset(SI.FACE_PROJ_KEYS, fpKeysVec, 0);
   b.addFieldOffset(SI.FACE_PROJ_VALS, fpValsVec, 0);
+  if (sBasement) b.addFieldOffset(SI.BASEMENT_STRUCTURE, sBasement, 0);
   return b.endObject();
 }
 
@@ -1308,6 +1314,7 @@ function readStructuralInfo(bb, tablePos) {
     columnFaceProjection: r.f64(SI.COLUMN_FACE_PROJECTION) || 0,
     columnFaceProjKeys: r.strVec(SI.FACE_PROJ_KEYS),
     columnFaceProjVals: r.strVec(SI.FACE_PROJ_VALS),
+    basementStructure:  normalizeBasementStructure(r.str(SI.BASEMENT_STRUCTURE) || null),
   };
 }
 

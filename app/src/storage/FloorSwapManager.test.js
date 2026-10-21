@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Plane, PlanGraph, Site, SiteLineKind, CenterLineType, Discipline } from '../core.js';
+import { Plane, PlanGraph, Project, Site, SiteLineKind, CenterLineType, Discipline } from '../core.js';
 import { FloorSwapManager } from './FloorSwapManager.js';
 import { isDirty, clearDirty } from '../dirtyState.js';
 
@@ -198,4 +198,19 @@ test('【失敗系】_healDerivedGeometry: 既に閉じているデータには�
 
   assert.equal(v.coord2, 57.5);
   assert.equal(h.coord2, 57.5);
+});
+
+// ---- S5b: 地階構造（structuralInfo.basementStructure）だけの変更も未保存の印を付ける ----
+test('_startStructAutoSave: basementStructure だけの変更で markDirty する（開始直後は付けない）', () => {
+  clearDirty();
+  const mgr = new FloorSwapManager();
+  const project = new Project('proj', 'test');
+  mgr._startStructAutoSave(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  assert.equal(isDirty(), false, '前提: 開始直後は dirty でない');
+
+  runInAction(() => { project.structuralInfo.setBasementStructure('RC造(壁式)'); });
+
+  assert.equal(isDirty(), true, '地階構造の変更で dirty になる');
+  mgr._structCleanup();
+  clearDirty();
 });

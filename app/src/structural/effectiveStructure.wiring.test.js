@@ -5,7 +5,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { effectiveStructure } from './structureRules.js';
+import {
+  effectiveStructure, isBasementPlane, normalizeBasementStructure, BASEMENT_STRUCTURE_OPTIONS,
+} from './structureRules.js';
 
 const srcRoot = path.resolve(import.meta.dirname, '..');
 
@@ -70,4 +72,76 @@ test('effectiveStructure: 階の上書き優先・無ければ建物全体値・
 test('effectiveStructure: 失敗系（どこからも引けない）は undefined', () => {
   assert.equal(effectiveStructure({}, null), undefined);
   assert.equal(effectiveStructure(null, null), undefined);
+});
+
+// ---- S5b: 地階構造（建物全体の basementStructure）----
+const RAME = 'RC造(ラーメン)';
+const WALL = 'RC造(壁式)';
+const mkProject = (basementStructure = null, mainStructure = 'S造') => ({ structuralInfo: { mainStructure, basementStructure } });
+const mkGraph = (startFloor, extra = {}, planeExtra = {}) => ({
+  structureOverride: null, plane: { startFloor, stories: 1, isRoofPlane: false, ...planeExtra }, ...extra,
+});
+
+test('【S5b】地階（startFloor<0）は 上書き ?? 地階構造 ?? 主構造。上書きが最優先', () => {
+  assert.equal(effectiveStructure(mkGraph(-1), mkProject(RAME)), RAME, '地階構造が主構造に勝つ');
+  assert.equal(effectiveStructure(mkGraph(-1), mkProject(WALL)), WALL);
+  assert.equal(effectiveStructure(mkGraph(-1, { structureOverride: '木造（在来）' }), mkProject(RAME)), '木造（在来）', '階の上書きが勝つ');
+  assert.equal(effectiveStructure(mkGraph(-1), mkProject(null)), 'S造', '地階構造なしは主構造');
+});
+
+test('【S5b】地上階（startFloor>=0）は地階構造を読まない（主構造のまま）', () => {
+  assert.equal(effectiveStructure(mkGraph(0), mkProject(RAME)), 'S造');
+  assert.equal(effectiveStructure(mkGraph(1), mkProject(RAME)), 'S造');
+});
+
+test('【S5b】屋根専用平面（startFloor<0 を写す）は地階扱いにしない', () => {
+  assert.equal(effectiveStructure(mkGraph(-1, {}, { isRoofPlane: true }), mkProject(RAME)), 'S造');
+});
+
+test('【S5b】検討案（isAlternative）も自分の startFloor で判定。複層の地階（stories 2・startFloor -2）も地階扱い', () => {
+  assert.equal(effectiveStructure(mkGraph(-1, {}, { isAlternative: true }), mkProject(RAME)), RAME);
+  assert.equal(effectiveStructure(mkGraph(-1, {}, { isAlternative: true, parentPlaneId: 'x' }), mkProject(RAME)), RAME);
+  assert.equal(effectiveStructure(mkGraph(-2, {}, { stories: 2 }), mkProject(RAME)), RAME);
+  assert.equal(effectiveStructure(mkGraph(0, {}, { isAlternative: true }), mkProject(RAME)), 'S造', '地上の検討案は地上');
+});
+
+test('【S5b】project 無しでも graph の後方参照（_structuralInfo・_structGraph._structuralInfo）経由で project ありと同値', () => {
+  const si = { mainStructure: 'S造', basementStructure: RAME };
+  assert.equal(effectiveStructure({ ...mkGraph(-1), _structuralInfo: si }), RAME);
+  assert.equal(effectiveStructure({ ...mkGraph(-1), _structGraph: { _structuralInfo: si } }), RAME, 'peek の一時グラフ経路');
+  assert.equal(effectiveStructure({ ...mkGraph(0), _structuralInfo: si }), 'S造');
+  assert.equal(effectiveStructure({ ...mkGraph(-1), _structuralInfo: { ...si, basementStructure: null } }), 'S造');
+});
+
+test('【S5b】plane の無いスタブ・構造専用グラフ（startFloor=1）・graph=null は従来どおり主構造', () => {
+  assert.equal(effectiveStructure({ structureOverride: null }, mkProject(RAME)), 'S造');
+  assert.equal(effectiveStructure(mkGraph(1), mkProject(RAME)), 'S造');
+  assert.equal(effectiveStructure(null, mkProject(RAME)), 'S造');
+});
+
+test('【S5b】isBasementPlane / normalizeBasementStructure / BASEMENT_STRUCTURE_OPTIONS', () => {
+  assert.equal(isBasementPlane({ startFloor: -1 }), true);
+  assert.equal(isBasementPlane({ startFloor: 0 }), false);
+  assert.equal(isBasementPlane({ startFloor: -1, isRoofPlane: true }), false);
+  assert.equal(isBasementPlane(null), false);
+  assert.equal(isBasementPlane(undefined), false);
+  assert.deepEqual([...BASEMENT_STRUCTURE_OPTIONS], [RAME, WALL], 'RC 系のみ');
+  assert.equal(normalizeBasementStructure(RAME), RAME);
+  for (const bad of ['S造', 'RC造', '', null, undefined, 3]) assert.equal(normalizeBasementStructure(bad), null);
+});
+
+test('【不変条件・S5b】basementStructure を読むのは許可リストだけ（実効の構造は effectiveStructure を通る）', () => {
+  // structureRules.js: 解決本体 / structuralInfo.js: 保持 / graphSnapshot.js・schema/graphFbs.js: 保存形式 /
+  // FloorSwapManager.js: dirty 追跡。S5d で UI（CommonInfoTab.jsx）が加わる。
+  const allowed = new Set([
+    'structural/structureRules.js', 'core/structuralInfo.js', 'graphSnapshot.js',
+    'schema/graphFbs.js', 'storage/FloorSwapManager.js',
+  ]);
+  const offenders = [];
+  for (const file of walk(srcRoot)) {
+    const rel = path.relative(srcRoot, file).split(path.sep).join('/');
+    if (allowed.has(rel)) continue;
+    if (/basementStructure/.test(stripComments(fs.readFileSync(file, 'utf8')))) offenders.push(rel);
+  }
+  assert.deepEqual(offenders, [], `許可リスト外が basementStructure を直接読んでいる: ${offenders.join(', ')}`);
 });

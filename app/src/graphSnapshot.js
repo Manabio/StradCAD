@@ -1,6 +1,7 @@
 import { runInAction } from 'mobx';
 import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec, restoreCeilingZones } from '@core';
 import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
+import { normalizeBasementStructure } from './structural/structureRules.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 import { applyDocumentCodeNormalization } from './catalog/codeNormalization.js';
 import { restoreRoofSpecInto } from './finish/roof/roofDefaults.js';
@@ -316,6 +317,7 @@ function buildStructSnapshot(structGraph, structuralInfo, ledger) {
       mainStructure:      structuralInfo.mainStructure,
       otherStructures:    [...structuralInfo.otherStructures],
       foundationType:     structuralInfo.foundationType,
+      basementStructure:  structuralInfo.basementStructure,
       columnFaceProjection: structuralInfo.columnFaceProjection,
       columnFaceProjKeys: [...structuralInfo.columnFaceProjections.keys()],
       columnFaceProjVals: [...structuralInfo.columnFaceProjections.values()].map(String),
@@ -648,6 +650,8 @@ export function restoreStructCLs(structGraph, structuralInfo, data, ledger) {
       structuralInfo.setField('mainStructure',      si.mainStructure);
       structuralInfo.otherStructures.replace(si.otherStructures ?? []);
       structuralInfo.setField('foundationType',     si.foundationType);
+      // キー無しの旧 JSON・選択肢外の値は null（地階構造なし）。
+      structuralInfo.setBasementStructure(normalizeBasementStructure(si.basementStructure));
       structuralInfo.setField('columnFaceProjection', si.columnFaceProjection ?? 0);
       structuralInfo.columnFaceProjections.clear();
       (si.columnFaceProjKeys ?? []).forEach((k, i) =>

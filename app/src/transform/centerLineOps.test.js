@@ -650,6 +650,25 @@ test('deleteCenterLineWithUndo: 同軸に他の通り芯があれば（軸最後
   assert.ok(project.structGraph.shapeMap.has(clId), 'undoで復元される');
 });
 
+test('【S5b】deleteCenterLineWithUndo: undo/redo は採取時点の地階構造へ戻す（structuralInfo 丸ごと復元の経路で項目が初期化されない）', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  project.structuralInfo.setBasementStructure('RC造(壁式)');
+
+  const { toast } = await deleteCenterLineWithUndo(graph, project, cl);
+  assert.equal(toast, null);
+  // 削除の後に地階構造が変わった状態（既知の限界: 以前の CL 操作の undo は主構造と同様に採取時点の値へ戻す）
+  project.structuralInfo.setBasementStructure(null);
+
+  undoManager.undo();
+  assert.equal(project.structuralInfo.basementStructure, 'RC造(壁式)', 'undo で採取時点の値へ戻る');
+  undoManager.redo();
+  assert.equal(project.structuralInfo.basementStructure, 'RC造(壁式)', 'redo も削除確定時点の値（壁式）');
+});
+
 test('deleteCenterLineWithUndo異常系: 軸最後の通り芯はtoast:ERR_CL_DELETE_LAST_GRIDで拒否されグラフ無変更・undoも積まれない', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });

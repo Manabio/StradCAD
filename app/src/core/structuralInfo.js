@@ -6,7 +6,7 @@
  * 階ごとの例外は PlanGraph.structureOverride（mainStructure のみ。null=この建物全体値を継承）。
  */
 import { makeObservable, observable, action } from 'mobx';
-import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION } from '../structural/structureRules.js';
+import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION, normalizeBasementStructure } from '../structural/structureRules.js';
 
 export class StructuralInfo {
   constructor() {
@@ -19,6 +19,8 @@ export class StructuralInfo {
     // 0＝外面が通り芯と一致（既定）。columnFaceProjection は旧・建物1値の保持先で、無キー時の移行既定。
     this.columnFaceProjection  = 0;
     this.columnFaceProjections = observable.map();
+    // 地階の構造（RC 系のみ。null＝地階構造なし＝主構造に従う）。effectiveStructure が地階で引く。
+    this.basementStructure = null;
     this.designStrength   = 'Fc24';
     this.concreteType     = '普通コンクリート';
     this.mainBar          = 'SD345';
@@ -30,6 +32,7 @@ export class StructuralInfo {
     makeObservable(this, {
       mainStructure:        observable,
       foundationType:       observable,
+      basementStructure:    observable,
       columnFaceProjection: observable,
       columnFaceProjections: observable,
       designStrength:       observable,
@@ -41,11 +44,18 @@ export class StructuralInfo {
       surfaceRoughness:     observable,
       seismicZoneFactor:    observable,
       setField:             action,
+      setBasementStructure: action,
       toggleOtherStructure: action,
       setColumnFaceProjection: action,
     });
   }
   setField(field, value) { this[field] = value; }
+  // 地階構造は null か BASEMENT_STRUCTURE_OPTIONS の値だけ許す（空文字が `??` を素通りして
+  // rulesFor('') が未定扱いになるのを防ぐため、汎用 setField ではなく専用 action を通す）。
+  setBasementStructure(v) {
+    if (normalizeBasementStructure(v) !== v) throw new Error(`地階構造に使えない値: ${String(v)}`);
+    this.basementStructure = v;
+  }
   // 出幅キー: 1構造×1通り芯。通り芯ラベル（X1/Y1…）が方向も含めて軸を一意に表す。
   faceProjectionKey(structure, cl) { return `${structure}|${cl.label}`; }
   // 当該構造・通り芯の出幅。無キーは旧・建物1値（移行既定）→0 にフォールバック。
