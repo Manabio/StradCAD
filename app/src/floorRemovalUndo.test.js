@@ -17,7 +17,7 @@ import {
   collectProjectLevels, applyProjectLevels, diffFloorOpSnapshot, rollbackFloorOp,
   collectRemovalRecords, restoreRemovedPlanes, removePlanesForRedo, pickRemovalFallback,
   computeFloorInsert, computeFloorAddLowerElevations, removeAddedPlanesForUndo, addedPlaneRedoRecords,
-  collectAlternativeMetas, promoteAlternative, applyAltRoleState, collectAltRoleState,
+  collectAlternativeMetas, promoteAlternative, applyAltRoleState, collectAltRoleState, applyFloorBytes,
 } from './floorOps.js';
 import { followRoofPlaneToTop, syncRoofPlane } from './structural/roofPlane.js';
 import { makeStorePeek, makeStoreSave, decodeFloor } from './finish/equipment/equipmentTestFixtures.js';
@@ -116,6 +116,7 @@ function makeApp(project, store, opts = {}) {
   };
   const restoreRemoved = (proj, records) => restoreRemovedPlanes(proj, records, { addFloor, addAlternativeFloor, saveFloorFn });
   const applyBytes = (id, bytes) => {
+    if (opts.realApply) { applyFloorBytes(project, id, bytes); return; } // 本物の applyFloorBytes（非アクティブ階は IDB を触る）
     if (id === project.activePlaneId) { if (bytes != null) restoreGraph(project.activeGraph, bytes); return; }
     if (bytes != null) store.set(id, bytes); else store.delete(id);
   };
@@ -657,6 +658,30 @@ test('【失敗系】屋根を書き換えた後で follower が失敗 → rollb
   const boom = { name: 'boom', appliesTo: [FLOOR_ORDER_KIND.DELETE], run() { throw new Error('follower failed'); } };
   await assert.rejects(app.deleteFloor('p3', { extraFollowers: [rewriteRoof, boom] }), /follower failed/);
   assert.equal(floorBytesEqual(store.get('roof'), beforeBytes), true, '屋根のバイト列が戻っている');
+});
+
+test('屋根専用平面のバイト列: 屋根がアクティブ階のとき、run が屋根の activeGraph を書き換えても undo で live が操作前へ戻る（本物の applyFloorBytes）', async () => {
+  const { project, store } = await setup('p3');
+  const { graph } = project.addPlane(project.planeMap.get('p4').elevation + 1, '小屋伏', 'roof', 4, 1, false, null, 0, true, 'p4');
+  store.set('roof', serializeGraph(graph));
+  graph.clearFloorData();
+  const app = makeApp(project, store, { realApply: true });
+  await app.switchRaw('roof');
+  assert.equal(project.activePlaneId, 'roof');
+  const beforeLive = serializeGraph(project.activeGraph);
+  const addLine = {
+    name: 'addLineToRoof', appliesTo: [FLOOR_ORDER_KIND.DELETE],
+    run() { runInAction(() => project.activeGraph.addCenterLine(CenterLineType.VERTICAL, 4321, { labeled: false, discipline: Discipline.ARCH })); },
+  };
+  const c = await app.deleteFloor('p3', { extraFollowers: [addLine] });
+  assert.ok(c);
+  assert.ok(c.diff.changedSiblings.some(r => r.planeId === 'roof'), '屋根が changedSiblings に入る');
+  const afterLive = serializeGraph(project.activeGraph);
+  assert.equal(floorBytesEqual(afterLive, beforeLive), false, '前提: run で live が変わった');
+  await c.undo();
+  // 階削除の undo は復活した p3 へ切り替えるため、屋根の live は退避（switchRaw）でストアへ書かれる。
+  // applyFloorBytes が restoreGraph していなければ、そこへ run 後の状態が残る
+  assert.equal(floorBytesEqual(store.get('roof'), beforeLive), true, 'undo で屋根の live が操作前へ戻っている');
 });
 
 test('【配線】App.jsx: collectFloorBytes は採用階に加えて屋根専用平面も採る', () => {

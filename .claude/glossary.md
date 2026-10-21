@@ -52,7 +52,7 @@ appModeごとにCL種別が**描画対象**になるかだけを持つ表（`cor
 床の穴（開口グループ）に付く表示記号。自階の吹抜け・昇降路の×（一点鎖線）と、直下階に描く上階吹抜けの×・外形（破線・VOIDだけ「上部吹抜け」）。解決器の線ではなく、遮蔽を掛けない。`PlanSolidsLayer`が描く。`plan/planHoleMarks.js planHoleMarks`が`slabOpening.js floorOpeningGroups`（×の端点＝グループの`innerRect`＝faceRect）から導く。設計意図は`.claude/plan-section.md`「S6」。
 
 ## 屋根専用平面（isRoofPlane）
-構造モードのみに存在する合成Plane。`project.planes`/`orderedTabs`から除外、`project.roofPlane`で個別アクセス。
+構造モードのみに存在する合成Plane。`project.planes`/`orderedTabs`から除外、`project.roofPlane`で個別アクセス。常にその時の最上階に付き、最上階が変わっても作り直さず`roofForPlaneId`を付け替える（`.claude/structural-model.md`）。
 
 ## kind / feature（Roomの2軸区分）
 `kind`＝屋内/屋外（内外判定はこちらのみ参照。例外は屋根）。`feature`＝階段/吹抜け/階段吹抜け/昇降機/屋根/なし（属性）。旧enumの`void`は読込時に「屋内+吹抜け」へ移行される。設計意図は`.claude/data-model.md`。

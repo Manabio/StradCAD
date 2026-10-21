@@ -148,8 +148,12 @@ moku4_kd 2階 (1820,-9100)）——この2点源の扱いの食い違いはユ�
 - 端・軸のCLは柱と同じ解決（`resolveWoodColumnAnchorCL`）で**CLは作らない**。解決できなければ黙って生成しない。梁は3hの支持集合に数えず、柱の点源にも入れない（テストで固定）。
 - 既知の限界: 上下で線の長さ（tRun）が違う・下階の片端が2aの差し引きで切れている場合は生成しない。上り口側を上階の床梁で上下に切る短い束は**モデル化しない**（構造柱にしない）（腰壁の端部材と同じ裁定）。想定上の天端は斜めの天端に合わせる（展開図の天端より上に出る部材を作らないため。S4b の upstand は2026-10-14に撤回済み）。平面と展開図には壁に隠れるので描かない。伏図にも束は出さない（2026-10-08）。
 
-## 屋根専用平面（isRoofPlane）はデータの作り直しが前提
-最上階が変わると古い屋根平面は削除され新しい最上階の上に再生成される。頻度の低い操作という前提の割り切り。ただし最上階の検討案の採用だけは、屋根平面を作り直さず`roofForPlaneId`を新しい採用階へ付け替える（`floorOps.js promoteAlternative`。undo対応。詳細は undo-redo.md）。
+## 屋根専用平面（isRoofPlane）は常に最上階に付き、作り直さず付け替える
+屋根専用平面は常に「その時の最上階（`project.planes`の末尾）」に付く。最上階のidが変わる操作（最上階の上への追加・最上階が入れ替わる並べ替え／階変更・最上階の削除・最上階の検討案の採用、それぞれのundo/redo）では**作り直さず**`roofForPlaneId`を付け替え、高さ・階番号・階数を合わせる。規則は`structural/roofPlane.js followRoofPlaneToTop`の1か所。構造モード突入時の`syncRoofPlane`も、屋根平面があれば付け替えるだけで作り直さない（無いときだけ新設）。中身は手動・固定（locked）の部材を含めて新しい最上階へ持ち越す（ユーザー裁定2026-10-21）。
+- **理由**: 構造の解決は「位置」（`structuralPlaneBelow`・`reflectRoofPlane`は`project.planes`の末尾）と「id」（`peekRoofBelowGraph`・`peekRoofGraphAbove`・`wallGate`は`roofForPlaneId`）が混在し、idが古いまま残ると両者が食い違った。また作り直すと屋根の手動部材が消えた。2026-10-01の再裁定「階操作の時点で作り直すとundoで戻らない」とは、idを保つ付け替えなら両立する（紐づけは階の並びから決まるので記録せず、undo/redoの最後の`followRoofPlaneToTop`で戻る。`.claude/undo-redo.md`）。
+- **主屋根の値**を新しい最上階へ写すのは最上階の上への追加だけ（`mainRoofCarry`。`.claude/roof-model.md`）。削除・並べ替えでは写さない。
+- **中身の整合**: 在来木造の屋根平面の再計算は、今の壁源（新しい最上階）に対応しない**auto**のWALL由来梁芯とその上のauto梁を撤去する（`wallBeamAxes.js removeStaleWallBeamAxes`。ユーザー裁定2026-10-21）。手動・locked・USER由来の梁芯、除外集合が参照する梁芯は残す。下の最上階を解決できないときは何も消さない。
+- **既知の限界**: (1)除外集合が参照するWALL由来梁芯は孤児として残り続ける。(2)屋根の形から作る梁芯（roofBeam由来）の孤児は既存裁定どおり撤去しない。(3)屋根平面の`excludedWallBeamAxes`は持ち越す。(4)非在来（`gridEaves`）は反映パスで収集だけなので、旧最上階の範囲にしか無い自動部材が残りうる（ゲートは生成時フィルタ）。(5)`structGraph`は階操作のundo対象外。(6)旧文書の古い紐づけは読込み時ではなく、次の階操作・構造モード突入で直る。
 
 ## 小屋伏図にも梁・柱ルールを適用する（ステップ1〜7・2026-09-19〜）
 ユーザー定義（2026-09-19）：**在来木造の構造モードで言う「最上階」とは、最上階にある「小屋伏図」を差す**。「柱の追加は最上階から順に、最下階まで可能な限り同位置に」（B-3・3i節）・「反映パスは最上階から降順」（B-4節）の起点は、実体平面ではなく屋根専用平面である——屋根専用平面は`project.planes`に含まれないため、この定義を実現するには屋根を実体階と対称に扱う配線が要る（以下、在来木造限定。非在来は`roofBeamPlacement`/`wallBeamAxes`が既定のままで完全不変）。
@@ -158,7 +162,7 @@ moku4_kd 2階 (1820,-9100)）——この2点源の扱いの食い違いはユ�
 **selfGateは第4引数`wallGate`の転用ではなく末尾の新規引数にした**（`autoFillWoodWallBeams`第6引数・`autoFillWoodSillBeams`第5引数・`autoFillBeamsForStructure`第7引数・`autoFillStructuralGrid`第10引数。省略時はそれぞれが従来どおり`buildSelfFootprintGate(graph)`を自前計算する）——`wallGate`引数は「裁定1・2026-09-18」テストが「フェーズA・Bとも使わない」ことを名指しで固定しており、転用すると既存の裁定を無断で反転することになる（`wallGate`は互換のため死んだ引数のまま残る）。実体階の呼び出し（`structuralRecompute.js`）は`buildSelfFootprintGate(isRoof ? (belowGraph ?? targetGraph) : targetGraph)`を明示的に計算して渡すため、実体階は数学的に従来と同一（`selfGate`未解決時は`targetGraph`へフォールバックし`buildSelfFootprintGate(null)`のクラッシュを避ける）。
 **反映パスへの屋根の合流**（旧`collectRoofPlaneGroups`を`reflectRoofPlane`へ改名・拡張）：在来木造は屋根も`recomputeInactiveStructural`同様にpeek→再計算→保存する（`mainStructure`引数は屋根自身の実効値ではなく「1つ下の実体階＝最上階」の実効主構造。`drawingDesignation.js structuralPlaneBelow`で解決——`autoFillRoofBeams`・`convertMembersToEffectiveMaterial`が屋根専用に解決する値と同じ規約）。非在来は従来どおり「収集だけ」（`conformToLedger`+`collectFloorGroups`。自階再計算はしない・保存しない・番号も書き戻さない＝実際の番号確定はユーザーが屋根伏図を直接訪れたときの通常経路に委ねる、という既存の割り切りをそのまま維持）。`reflectStructuralToOtherFloors`は降順ループの**先頭**、`reflectStructuralAfterFinishExit`は昇順ループの**末尾**（`idx!==-1`ガードの内側。「自階より上」の一部として扱う）で呼ぶ。
 **訂正（2026-09-19）**：診断済みの4欠落区間（H y=-11704・H y=-6370・H y=-12614・V x=5460）は**いずれも解消済み**——実体階を収束させたうえで全区間を再確認し、4か所とも壁線方式の梁で覆われていることを実測済み（診断は実体階を事前収束させた状態・全件出力・壁厚を許容するtol比較で行う必要がある）。
-**構造リスト・記号面の既知の変化**：記号EG→G（`memberSymbol`は`role`だけを見るため無改造で追従）。屋根平面は最上階が変わるたびに作り直される既存の割り切り（本節冒頭）はそのまま——壁線方式の軒桁も手動固定分を含め再生成時に失われる。
+**構造リスト・記号面の既知の変化**：記号EG→G（`memberSymbol`は`role`だけを見るため無改造で追従）。屋根平面は最上階が変わっても作り直さず付け替える（「屋根専用平面（isRoofPlane）は常に最上階に付き」節）ので、壁線方式の軒桁も手動固定分は持ち越される。
 
 ### 小屋組（棟木・母屋・束）は保存せず伏図の描画時に導く（C3a・2026-10-02）
 在来木造の伏図に、棟木＝中線の一点鎖線×2本（実寸120角＝軸±60）・母屋＝一点鎖線1本・束＝黒丸（母屋同寸90の円）を描く。垂木は描かない。寄棟の隅木・谷木は一点鎖線1本で描く（保存しない・束なし）。**保存しない**——束を柱にすると柱のブラックリスト方式の絞り込み（約12箇所）に巻き込まれ、母屋を梁にすると910ごとのCLが要って梁芯CL（青の一点鎖線）と重なるため。火打ち梁の派生描画案と同じく「屋根の入力と梁から描くたびに導く」（region の導出だけは`graphComputed`で graph 単位に memo 化し、ズームのたびに再計算しない。memo は引数で受け、純モジュールは renderer を import しない）。位置の幾何は`roofFramingGeometry.js`、描く条件の判断は`framingDrawing.js roofFramingPrimitives`/`roofFramingRegions.js`、`StructuralLayer.jsx`はプリミティブを描くだけ（選択子`drawing.roofFramingLines`＝在来だけ`'dashDot'`・略図は描かない・他のモード/展開図/断面には出さない）。

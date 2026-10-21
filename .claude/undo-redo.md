@@ -48,13 +48,13 @@ plane作成・新階同期（階段吹抜けの整合・昇降機の複製）・
 - **redo**: 削除対象を表示中なら先に退避してから`removeFloor`（`removePlanesForRedo`）→メタとバイト列をafterへ。
 - **失敗時**: 退避の切替に失敗したら中断してundoを積まない。`removeFloor`のIDB途中失敗は書き戻す。follower失敗は平面を戻す（`rollbackFloorOp`）。
 - **戻る範囲**: 削除した階と検討案の中身、他の階のSTAIR_VOIDの整合・構造反映・昇降機の再採番（いずれも既存の階のバイト列の差分に入る）。
-- **既知の限界**: (1)階が削除されている間に行った編集の履歴は無い。(2)屋根専用平面のバイト列とstructGraphは階操作のundo対象外（最上階を削除した後に構造モードへ入ると屋根平面が新しい最上階のidで作り直され、undoしても旧屋根平面は戻らない。挿入と同じ既存の限界）。
+- **既知の限界**: (1)階が削除されている間に行った編集の履歴は無い。(2)structGraphは階操作のundo対象外。屋根専用平面は最上階の削除でも作り直さず新しい最上階へ付け替わり、undoで復活した最上階へ付け直す（中身のバイト列は`collectFloorBytes`で戻る）。
 
 ## 検討案の追加・コピー・削除・採用のundo（`runAddAlternative`／`runCopyAlternative`／`runDeleteAlternative`／`runPromoteAlternative`。2026-10-21）
 追加・コピー・削除は専用機構を作らず`withFloorOpUndo`（'検討案追加'／'検討案削除'。削除は`removalTarget`＝検討案のid＋`rollbackOnError`）に載せ、階追加・階削除の部品を共有する。階操作の「通常のスナップショットは採用階しか採らない」ため、検討案は別枠で持つ。
 - **追加の検出**: `collectAlternativeMetas`を前後で採り（`diffFloorOpSnapshot`の`altsBefore`／`altsAfter`。**片方だけは throw**）、増えた検討案を`addedPlanes`へ入れる。undo＝表示中なら操作前の平面へ戻ってから記録を採って消す／redo＝同じPlane／PlanGraphインスタンスを戻してその検討案を表示する。
 - **削除**: `collectRemovalRecords`は検討案のidなら**その1件だけ**（`removeFloor`は残りの検討案のaltIndexを詰め直さず名前も振り直さない）。redoの`removePlanesForRedo`は、**親の採用階も同じ`removedPlanes`にあるときだけ**検討案を飛ばす（親の`removeFloor`が連鎖して消す）。検討案だけの削除は退避してから消す。undoは復活した検討案を表示する。
-- **採用（promote）**: Plane属性だけを書く同期操作のため関門なし（`runPlanCutHeight`と同型）。親とその検討案の`{isAlternative, referenceId, altIndex, name}`を前後で採って書き戻す（`promoteAlternative`／`applyAltRoleState`）。降格する採用階が最上階で屋根専用平面がそれを指していれば、`roofForPlaneId`を新しい採用階へ付け替えて`followRoofPlaneToTop`でelevation等を合わせ、同じ前後配列に`{roofPlane:true,…}`で載せてundo／redoでも戻す（屋根平面は同じidのままなので、構造モード突入時の`syncRoofPlane`は作り直さず中身を保つ）。検討案のelevationは階高変更で追従しないため、採用した平面が最上階にならないときは高さを合わせず、構造モード突入時の作り直しに任せる（既存の限界）。**積まないと危険**——「検討案を追加→採用→undo」で追加のundoが「追加した平面は検討案のまま」を前提に消すため、採用後の平面（＝元の採用階の降格先を含む）を巻き込んで採用階を消す。採用のundoがスタックの上にあるので、先に属性が戻ってから追加のundoが走る。
+- **採用（promote）**: Plane属性だけを書く同期操作のため関門なし（`runPlanCutHeight`と同型）。親とその検討案の`{isAlternative, referenceId, altIndex, name}`を前後で採って書き戻す（`promoteAlternative`／`applyAltRoleState`）。屋根専用平面は`followRoofPlaneToTop`で最上階へ付け替え、elevation等を合わせる。採用は`withFloorOpUndo`を通らず、階操作のundo／redoが最後に呼ぶ`followRoofPlaneToTop`が働かないため、屋根の`{roofPlane:true,…}`を採用自身の前後配列に載せて戻す（`applyAltRoleState`も最後に`followRoofPlaneToTop`を呼ぶ）。屋根平面は同じidのままなので、構造モード突入時の`syncRoofPlane`は作り直さず中身を保つ。検討案のelevationは階高変更で追従しないため、採用した平面が最上階にならないとき（elevationが古い検討案）は、屋根平面は採用階ではなく実際の最上階（`project.planes`の末尾）に付く（既存の限界）。**積まないと危険**——「検討案を追加→採用→undo」で追加のundoが「追加した平面は検討案のまま」を前提に消すため、採用後の平面（＝元の採用階の降格先を含む）を巻き込んで採用階を消す。採用のundoがスタックの上にあるので、先に属性が戻ってから追加のundoが走る。
 - **既知の限界**: 並べ替え（`handleReorderAlt`）はundo対象外。削除とundoの間に並べ替えると復活した検討案のaltIndexが重なることがある。追加時のaltIndexと名前は検討案の数から振るので、途中の検討案を削除した後の追加で重なりうる（既存）。追加のundoは階切替が2回（階追加と同じ）。採用のundo／redoは前後の属性を丸ごと書き戻すので、採用の後に行った並べ替えのaltIndexを上書きする（受容）。
 
 ## 構造の変更（主構造・地階構造・基礎種別・柱寸）のundo（`recomputeStructuralComposition`。2026-10-21）
@@ -64,8 +64,8 @@ plane作成・新階同期（階段吹抜けの整合・昇降機の複製）・
 
 ## undo対象外（意図的な割り切り）
 - 仕上げモード突入時の階段吹抜けの整合（`reconcileOnFinishEntry`）: 冪等なデータ修復。階操作のfollower（`stairVoidReconcile`）は階操作エントリが包含する。階段の削除は別（`runStairRemoval`が1エントリに合成し、undoで全階が戻る）
-- `syncRoofPlane`・構造モード突入時の自動補完: 建物形状が変われば作り直す冪等インフラ
-- 階操作の屋根平面の高さ追従（`roofPlaneHeight`follower。`followRoofPlaneToTop`）: 屋根平面はPlaneメタ・バイト列どちらのundo記録の対象外（`collectPlaneMetas`/`collectFloorBytes`は`project.planes`のみを見る）。最上階idが変わる作り直しは階操作では行わず次の構造モード突入の`syncRoofPlane`に任せる（§「階操作は～」節参照）
+- `syncRoofPlane`（屋根平面が無いときだけ新設し、あれば最上階へ付け替えるだけ）・構造モード突入時の自動補完: 冪等インフラ
+- 階操作の屋根平面の紐づけ・高さ（`roofPlaneHeight`follower。`followRoofPlaneToTop`）: 記録しない。紐づけは階の並びから決まるので、undo/redoと失敗時の巻き戻しの最後に`followRoofPlaneToTop`を呼べば戻る（`collectPlaneMetas`は`project.planes`のみを見る）。一方、屋根平面の中身（バイト列）は`collectFloorBytes`が採用階と同じく前後で採り、undo/redoで戻る（在来木造の`reflectRoofPlane`が階操作の中で書き換えるため）。屋根平面は作り直さず付け替える（§「階操作は～」節・`.claude/structural-model.md`参照）
 - 編集可能peek（構造モードの下階柱編集）のgraphを対象にした変更: 復元先が使い捨てで履歴ナビでも復活しない
 - 読込み時の壁再生成（`wallRefresh.js`の`refreshWallsAllFloors`。壁の再生成をFinishModeStateから独立させる計画のステップ5）: `store.js`の`bootReady`が文書読込み直後に鍵不一致の階だけ壁を作り直す自動修復。undo対象外だが、変更があれば`markDirty()`してdirtyにする（保存すれば鍵も保存され次回は走らない。鍵一致で何も変わらなければdirtyにしない）
 - カタログの変換先指示UIの適用（`store.js`の`applyCatalogResolutions`。アクティブ階の往復のみ）: `markDirty()`のみでundoエントリは積まない

@@ -570,7 +570,8 @@ export function collectAlternativeMetas(project) {
 // 採用で変わる Plane 属性は、親とその検討案（採用される検討案を含む）の { isAlternative, referenceId, altIndex, name }。
 // collectAltRoleState でそれらを前後に採り、applyAltRoleState で書き戻す（runPlanCutHeight と同型の同期操作）。
 // 親が最上階で屋根専用平面（roofForPlaneId が親を指す）があれば、その紐づけと追従する高さ・階番号・階数も
-// 同じ配列に { roofPlane: true, … } で載せる（採用の付け替えと同じ前後で戻すため。階操作 undo の対象外だった屋根平面の例外）。
+// 同じ配列に { roofPlane: true, … } で載せる。採用（runPromoteAlternative）は withFloorOpUndo を通らず、
+// 階操作の undo／redo の最後に走る followRoofPlaneToTop の恩恵を受けないため、採用自身の前後配列で戻す。
 // applyAltRoleState は最後に followRoofPlaneToTop も呼ぶので、記録が無くても紐づけは並びに合う。
 export function collectAltRoleState(project, parentId) {
   return [...project.planeMap.values()]

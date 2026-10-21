@@ -52,7 +52,7 @@
 
 ## 主屋根（最上階の屋根）
 - 最上階（とその検討案）の外部タブ先頭に、セルを持たない固定の群「屋根」（`type:'mainRoof'`・削除ボタンなし・選択の枠なし）。範囲は最上階の建物範囲（`footprintCellKeys`）、入力項目・入力UI・初期値関数は下屋と同じ（`RoofGroup.jsx`の`RoofSpecFields`を共用）。備考の既定だけ空（下屋は「下野」）。
-- 保存先は最上階の**graphの階ごと設定** `PlanGraph.mainRoofSpec`（常に`RoofSpec`。全階が持てるが使われるのは最上階の分だけで、他の階では休眠する）。project・屋根専用平面（R階。構造モード専用で作り直される）には置かない。最上階の判定は`core/project.js`の`isTopFloorPlane`（`project.planes`の末尾。検討案は参照元で判定）。
+- 保存先は最上階の**graphの階ごと設定** `PlanGraph.mainRoofSpec`（常に`RoofSpec`。全階が持てるが使われるのは最上階の分だけで、他の階では休眠する）。project・屋根専用平面（R階。構造モード専用で、最上階が変わると新しい最上階へ付け替わる〔`.claude/structural-model.md`〕）には置かない。最上階の判定は`core/project.js`の`isTopFloorPlane`（`project.planes`の末尾。検討案は参照元で判定）。
 - **既定値のときは保存データへ何も書かない**（`GS.MAIN_ROOF_SPEC=53`を省く。`isDefaultRoofSpec`が唯一の判定）。主屋根を編集していない文書のバイト列は変わらない。材料コードの収集・照合も既定値のときは出ない。
 - 形状の既定は`rulesFor(effectiveStructure).mainRoofDefaultShape`（RC・S・SRC=陸屋根、在来・2×4=null＝短手の規則）。主構造が**未定**のときは`UNSPECIFIED_RULES`が明示でnull（継承に任せると`STEEL_RULES`経由で`flat`になるため）＝木造と同じ短手の規則。導出は`finish/roof/mainRoof.js`（`wallGate.js`が storage 系を連鎖して引くので、`graphSnapshot`が引く`roofDefaults.js`には置かない＝import循環の回避）。
 - 主屋根は壁・境界・構造・展開図に影響しない（値の保持と外部タブの表示だけ。壁の鮮度キーにも入れない）。
