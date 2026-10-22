@@ -13,6 +13,7 @@
 import { matchingStairBelow } from '../../structural/openingBeamAxes.js';
 import { stairSoffitSolids } from '../../ceiling/stairSoffit.js';
 import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import { roomFloorStepMm } from '../../finish/roomMetrics.js';
 
 const PROBE_DELTA_MM = 0.01; // 節の両側の値を取る距離（直線なので外挿して節の値を厳密に出す）
 const NODE_MERGE_MM = 1e-3;  // これ未満の節の間隔は同じ節とみなす（矩形の接合の数値誤差）
@@ -34,7 +35,7 @@ export function stairSoffitAbove({ stair, graph, upperGraph, floorHeightMm, rise
     });
     if (!solid) continue;
     const room = stair.roomId != null ? (graph.rooms ?? []).find(r => r.id === stair.roomId) : null;
-    const floorStepMm = room ? graph.effectiveFloorLevel(room) - graph.effectiveFloorLevel(null) : 0;
+    const floorStepMm = room ? roomFloorStepMm(graph, room) : 0;
     return { solid, upperStairId: String(t.id), upperRoomId: t.roomId ?? null, floorStepMm };
   }
   return null;

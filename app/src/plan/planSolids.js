@@ -36,12 +36,12 @@
  *   既定 true。屋根が使う）。
  * @typedef {{graph: object|null, floorZMm: number, role: 'self'|'above'|'below', ceilZMm?: number}} SolidLayer
  */
-import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, RoomKind, SoffitOrientation, edgeKey } from '@core';
+import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, RoomKind, SoffitOrientation } from '@core';
 import { beamDepthMm } from '../elevation/section/sectionStructure.js';
 import { kneeDropZRangesAt } from '../elevation/section/sectionHits.js';
 import { stairUnderReturnSoffit } from '../elevation/section/sectionProbe.js';
 import { columnWrapSolids, wallConcealRange } from '../finish/columnWrap.js';
-import { kneeDropRecordsOnAxis, effectiveCeilingHeight, SPAN_OVERLAP_EPS } from '../finish/kneeDropWall.js';
+import { kneeDropRecordsOnAxis, ceilingTopSectionsAlongWall, uniformCeilingTopMm, SPAN_OVERLAP_EPS } from '../finish/kneeDropWall.js';
 import { wallFullHeightSpans } from '../ceiling/ceilingOwners.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { cellBoundsList, roomBounds } from '../finish/gridCells.js';
@@ -132,7 +132,7 @@ function columnSolids(layer) {
  * 壁1本を、腰壁・垂れ壁レコードの端で区間に割り、区間ごとに高さ範囲（1件、アキなら2件）を立体にする。
  * 高さは展開図と同じ `kneeDropZRangesAt` を共有する（規則を複製しない）。同じ高さ範囲が続く隣の区間は結合する
  * （隅の取り合いで壁端がレコード端を食い込む分の細片を作らない）。
- * 壁の高さの上限は壁ごとに1つ（wallCeilZ。両側の部屋の天井高の低い方、無ければ層の天井）。ただし階段の足元の中の区間だけ
+ * 壁の高さの上限は区間ごと（wallCeilProfile。部屋の境の分割CLで割り、区間の両側の部屋の「床段差＋天井高」の低い方、無ければ層の天井）。ただし階段の足元の中の区間だけ
  * 階段の裏面（footSurfaces。階段の構造によらない）で頭打ちにする（wallFootSurfaces）。足元の端で区間を割る。
  * 隔て壁の斜めの天端（wallTop）は S7 まで扱わない。
  * @param {object[]} [footSurfaces] 階段の裏面の面（wallFootSurfaces）
@@ -151,6 +151,7 @@ function wallSolids(layer, cellToRoom, footSurfaces = [], underReturnTops = new 
     if (!(wHi0 - wLo0 > SPAN_EPS_MM)) continue;
     views.push({ wall, cr, wLo0, wHi0, vertical: !!wall.isVertical });
   }
+  const uniformTop = uniformCeilingTopMm(graph); // 全部屋の天井面の高さが同じなら壁の上端は区間に割らずその値（早道）
   // 1周目: 壁レコードの範囲だけで区間と高さを決める（従来どおり）
   for (const v of views) {
     const { wall, cr, wLo0, wHi0 } = v;
@@ -160,16 +161,19 @@ function wallSolids(layer, cellToRoom, footSurfaces = [], underReturnTops = new 
       : [];
     const foot = footSurfaces.length > 0 && !underReturnTops.has(wall.id) ? wallFootIntervals(wall, cr, wLo0, wHi0, footSurfaces) : [];
     const footCuts = foot.flatMap(f => [f.lo, f.hi, ...(wall.isVertical ? f.surface.stepYs : f.surface.stepXs).filter(c => c > f.lo && c < f.hi)]).filter(c => c > wLo0 + SPAN_EPS_MM && c < wHi0 - SPAN_EPS_MM);
-    const bounds = [...new Set([wLo0, ...cuts, ...footCuts, wHi0])].sort((a, b) => a - b);
+    const ceilProfile = wallCeilProfile(layer, wall, cellToRoom, uniformTop);
+    const ceilCuts = ceilProfile.cuts.filter(c => c > wLo0 + SPAN_EPS_MM && c < wHi0 - SPAN_EPS_MM);
+    const bounds = [...new Set([wLo0, ...cuts, ...footCuts, ...ceilCuts, wHi0])].sort((a, b) => a - b);
     const spans = []; // {lo, hi, ranges, key}
     v.spans = spans;
     // 復路下の壁（木造の生成壁）は、足元の外の端（隔て板の隙間・外周壁への食い込み）も含め壁全長を裏面で平らに止める
     // （従来どおり。この壁は足元の区間割り・区間ごとの天端の対象外＝下地の壁と薄壁が 1 立体にまとまるまま）
-    const wallCeil = Math.min(wallCeilZ(layer, wall, cellToRoom), underReturnTops.get(wall.id) ?? Infinity);
+    const underTop = underReturnTops.get(wall.id) ?? Infinity;
     for (let i = 0; i + 1 < bounds.length; i++) {
       const lo = bounds[i], hi = bounds[i + 1];
       if (!(hi - lo > 1e-6)) continue;
       const mid = (lo + hi) / 2;
+      const wallCeil = Math.min(ceilProfile.zAt(mid), underTop); // 区間ごとの上端（部屋の境で替わる。wallCeilProfile）
       const ceilZ = Math.min(wallCeil, wallFootTop(wall, cr, lo, hi, foot));
       const ranges = kneeDropZRangesAt(graph, wall, mid, layer.floorZMm, ceilZ)
         .filter(r => r.z1 > r.z0);
@@ -431,18 +435,24 @@ function mergeTouchingWalls(solids, meta) {
 }
 
 /**
- * 壁の上端（絶対 z）。**壁ごとに1つ**: 層が ceilZMm を持てばそれ、無ければ壁の両側の部屋の天井高の低い方
- * （kneeDropWall.effectiveCeilingHeight。片側だけ部屋ならその側）、どちらも解決できなければ層の天井。
- * 区間ごとには決めない——隅の取り合いで壁端がレコード端の外へはみ出した細片だけ別の天井になるのを防ぎ、
- * 展開図（全高の壁にも帯の天井を使う）と揃える。
+ * 壁の上端（絶対 z）の長さ方向の分布。層が ceilZMm を持てばそれ（区間割りなし）、無ければ壁を直交する分割CLで区間に割り、
+ * 区間ごとに両側の部屋の「床段差＋天井高」の低い方（kneeDropWall.effectiveCeilingTopFromFloor。ceilingSurfaces の zMm と
+ * 同じ式。片側だけ部屋ならその側）、どちらも解決できなければ層の天井。
+ * 複数の部屋にまたがる長い壁（外壁など）を部屋ごとの天井に合わせるため、区間ごとに決める（ユーザー裁定 2026-10-22。
+ * 旧: 壁ごとに1つ）。隅の取り合いで壁端がレコード端の外へはみ出した細片が別の天井になる問題は、wallSolids が同じ高さの
+ * 隣の区間を結合すること（key）で防ぐ（区間の境は部屋の境の分割CLだけなので、細片は部屋が替わる位置にしか出ない）。
+ * @returns {{cuts: number[], zAt: (along:number)=>number}} cuts＝区間の境（壁の座標）、zAt＝壁の座標の点の上端
  */
-function wallCeilZ(layer, wall, cellToRoom) {
-  if (Number.isFinite(layer.ceilZMm)) return layer.ceilZMm;
-  if (wall.axisCL && wall.clStart && wall.clEnd) {
-    const ch = effectiveCeilingHeight(layer.graph, edgeKey(wall.axisCL.id, wall.clStart.id, wall.clEnd.id), cellToRoom());
-    if (ch != null) return layer.floorZMm + ch;
-  }
-  return layerCeilZ(layer);
+function wallCeilProfile(layer, wall, cellToRoom, uniformTop = null) {
+  if (Number.isFinite(layer.ceilZMm)) return { cuts: [], zAt: () => layer.ceilZMm };
+  const fallback = layerCeilZ(layer);
+  const secs = ceilingTopSectionsAlongWall(layer.graph, wall, Number.isFinite(uniformTop) ? null : cellToRoom(), { uniformTop });
+  if (secs.length === 0) return { cuts: [], zAt: () => fallback };
+  const zOf = s => (s.top != null ? layer.floorZMm + s.top : fallback);
+  return {
+    cuts: secs.slice(0, -1).map(s => s.hi),
+    zAt: (along) => zOf(secs.find(s => along <= s.hi) ?? secs[secs.length - 1]),
+  };
 }
 
 // ---------------------------------------------------------------- 床

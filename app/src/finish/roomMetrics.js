@@ -10,6 +10,25 @@ import { DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
 import { graphList } from '../graphReadScope.js';
 
 /**
+ * 部屋の床段差(mm) = 階基準 floorDatum からの差（effectiveFloorLevel(room) − effectiveFloorLevel(null)）。
+ * @param {object} graph
+ * @param {import('@core').Room} room
+ */
+export function roomFloorStepMm(graph, room) {
+  return graph.effectiveFloorLevel(room) - graph.effectiveFloorLevel(null);
+}
+
+/**
+ * 部屋の天井面の高さ(mm) = 階の FL からの高さ = 床段差＋天井高（唯一の供給源。ceilingSurfaces の zMm・壁の上端
+ * planSolids.js wallCeilProfile〔kneeDropWall.effectiveCeilingTopFromFloor〕が使う）。
+ * @param {object} graph
+ * @param {import('@core').Room} room
+ */
+export function roomCeilingTopMm(graph, room) {
+  return roomFloorStepMm(graph, room) + roomCeilingHeight(graph, room).mm;
+}
+
+/**
  * @param {object} graph
  * @param {import('@core').Room} room
  * @param {number} [_depth] 内部再帰ガード（部分指定の親参照が循環していても無限再帰しない）

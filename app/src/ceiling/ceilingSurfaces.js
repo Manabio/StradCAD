@@ -6,16 +6,16 @@
  * ただし屋内の階段吹抜け（STAIR_VOID）すべて（最上階も中間階も。中間階では上階の床組が天井に隠れる）は「所属索引に載らない平らな天井面」を面に足す（選べない。stairVoidFace。上は天井を持つ部屋の規則とは別）。
  * セルの帰属は選択と同じ所属索引（ceilingOwners.js ceilingCellOwnersOf。親と部分指定の優先は並び順に依存しない〔部分指定どうしが同じセルを持つときだけ部屋順の先勝ち〕。S9・裁定 2026-10-10）:
  * kind 'room' のセル→その部屋の面、kind 'stair' のセル→対の部屋（stair.roomId）の区画の面だけ。索引に無いセルは面にならない。
- * 高さ zMm＝層の FL からの天井面の高さ＝部屋の床段差（effectiveFloorLevel(room)−effectiveFloorLevel(null)）＋roomCeilingHeight(graph, room).mm。
+ * 高さ zMm＝層の FL からの天井面の高さ＝部屋の床段差＋roomCeilingHeight(graph, room).mm（roomMetrics.roomCeilingTopMm＝唯一の供給源）。
  * 数値化できない欄は既定天井高（isFallback）の mm を使う。部分指定の子（自分の CH 欄なし）は CH が床段差で補正されるので親と同じ天井面になる。
- * 壁の上端（planSolids.js wallCeilZ）は床段差を含めない（別系統。ここでは裁定により含める）。
+ * 壁の上端（planSolids.js wallCeilProfile）も同じ式（床段差＋天井高。roomMetrics.roomCeilingTopMm が唯一の供給源）で両側の低い方を区間ごとに取る。
  */
 import { RoomFeature, RoomKind } from '@core';
 import { roomHasCeiling, ceilingCellOwnersOf } from './ceilingOwners.js';
 import { roomCeilingShapeOf } from './roomCeilingShape.js';
 import { ceilingRefreshCells } from './ceilingGrid.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
-import { roomCeilingHeight } from '../finish/roomMetrics.js';
+import { roomCeilingHeight, roomCeilingTopMm, roomFloorStepMm } from '../finish/roomMetrics.js';
 import { normalizeRect, isValidRect } from '../plan/planGeometry.js';
 
 /** 部屋が天井を持つか（唯一の述語）。 */
@@ -41,8 +41,7 @@ function stairVoidFace(graph, room, owners) {
   if (rects.length === 0) return null;
   rects.sort(byRow);
   const chMm = roomCeilingHeight(graph, room).mm;
-  const floorStep = graph.effectiveFloorLevel(room) - graph.effectiveFloorLevel(null);
-  return { roomId: room.id, zoneId: null, rects, zMm: floorStep + chMm, shape: 'flat', dims: [], chMm };
+  return { roomId: room.id, zoneId: null, rects, zMm: roomCeilingTopMm(graph, room), shape: 'flat', dims: [], chMm };
 }
 
 /**
@@ -94,9 +93,9 @@ export function ceilingSurfacesOf(graph) {
     const rectByKey = rectsByRoom.get(room);
     if (!rectByKey) continue;
     // 床段差（階基準 floorDatum からの差）＋CH。子の CH を床段差で補正する roomCeilingHeight と同じ基準
-    const floorStep = graph.effectiveFloorLevel(room) - graph.effectiveFloorLevel(null);
+    const floorStep = roomFloorStepMm(graph, room);
     const roomCh = roomCeilingHeight(graph, room).mm;
-    const roomZ = floorStep + roomCh;
+    const roomZ = roomCeilingTopMm(graph, room);
     const taken = new Set();
     const zoneFaces = [];
     for (const zone of room.ceilingZones) {

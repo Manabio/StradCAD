@@ -28,20 +28,19 @@
 import { StairType, StructuralMaterialType, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
 import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js'; // 公開 API（core.js）には出さない内部定数
 import { uTurnPlanLayout, straightPlanLayout } from '../finish/stair/stairGeometry.js';
-import { roomCeilingHeight } from '../finish/roomMetrics.js';
+import { roomCeilingTopMm } from '../finish/roomMetrics.js';
 
 const MIN_SPAN_MM = 1; // 矩形の辺の下限（これ未満は潰れた区間として作らない）
 const FOLD_ROLE = 'stairSoffitFold'; // 面の折れ目（innerLines の role）
 
 /**
  * 当該階天井（N の FL 基準の mm）: N の階段の対の部屋の CH＋床段差。対の部屋が無ければ既定の天井高。
- * 床段差＋CH の式は ceiling/ceilingSurfaces.js と同じ（共通化は別件）。
+ * 床段差＋CH の式は roomMetrics.roomCeilingTopMm（ceiling/ceilingSurfaces.js と共通の唯一の供給源）。
  */
 export function stairBelowCeilingMm(belowStair, belowGraph) {
   const room = belowStair?.roomId != null ? belowGraph?.rooms?.find(r => r.id === belowStair.roomId) : null;
   if (!room || !belowGraph) return DEFAULT_ROOM_CEILING_HEIGHT;
-  const floorStep = belowGraph.effectiveFloorLevel(room) - belowGraph.effectiveFloorLevel(null);
-  return roomCeilingHeight(belowGraph, room).mm + floorStep;
+  return roomCeilingTopMm(belowGraph, room);
 }
 
 const clamp01 = t => Math.min(Math.max(t, 0), 1);

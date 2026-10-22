@@ -10,6 +10,8 @@ import { leanToPlanRegions } from '../structural/roofFramingRegions.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { columnWrapSolids } from '../finish/columnWrap.js';
+import { ceilingTopSectionsAlongWall, uniformCeilingTopMm } from '../finish/kneeDropWall.js';
+import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { planSectionFigure } from './planSectionFigure.js';
 import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
@@ -176,6 +178,196 @@ test('壁: レコードの無い全高の壁の上端も部屋の天井高（層
   assert.ok(walls.every(s => s.zLo === 0 && s.zHi === 3000));
   const withLayerCeil = ofKind(planSolids([fakeLayer({ graph, ceilZMm: 2700 })]), 'wall');
   assert.ok(withLayerCeil.length === 4 && withLayerCeil.every(s => s.zHi === 2700));
+});
+
+// 床段差のある部屋の壁の上端＝両側の（床段差＋天井高）の低い方（ceilingSurfaces の zMm と同じ式）
+function stepRoomsGraph(steps, chs = [], floorZMm = 0) {
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  const rooms = [[[0, 0]], [[1, 0]]].map((cells, i) => {
+    const room = g.interior(cells, { walls: true });
+    if (steps[i] != null) room.setFloorLevel(steps[i]);
+    if (chs[i] != null) room.setOverride('ceilingHeight', String(chs[i]));
+    return room;
+  });
+  const topOf = (cx, along) => {
+    const ids = new Set(g.graph.walls.filter(w => w.isVertical === (along === 'v') && w.axisCL.effectiveValue === cx).map(w => w.id));
+    assert.ok(ids.size > 0, `前提: 壁 ${along}${cx} がある`);
+    const tops = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm })]), 'wall')
+      .filter(s => [s.source.id, ...(s.source.mergedIds ?? [])].some(id => ids.has(id))).map(s => s.zHi);
+    return [...new Set(tops)];
+  };
+  return { g, rooms, topOf };
+}
+
+test('壁の上端の床段差: 床段差 +100・CH 2400 の部屋の外壁は 2500。下端（FL）は変わらない', () => {
+  const { g, topOf } = stepRoomsGraph([100]);
+  assert.deepEqual(topOf(0, 'v'), [2500], '外壁（西）');
+  assert.ok(ofKind(planSolids(self(g.graph)), 'wall').every(s => s.zLo === 0), '下端は FL のまま');
+});
+
+test('壁: 段差 0 の部屋との間の壁は低い方（2400）のまま。両側とも段差がある場合は低い方の（段差＋CH）', () => {
+  const same = stepRoomsGraph([0, 100]);
+  assert.deepEqual(same.topOf(4000, 'v'), [2400], '段差 0 と +100 の間＝低い方 2400');
+  assert.deepEqual(same.topOf(8000, 'v'), [2500], '+100 の外壁＝2500');
+  const both = stepRoomsGraph([100, 300], [2400, 2200]);
+  assert.deepEqual(both.topOf(4000, 'v'), [2500], '2500 と 2500 の間は 2500');
+  const both2 = stepRoomsGraph([100, 300], [2400, 2000]);
+  assert.deepEqual(both2.topOf(4000, 'v'), [2300], '2500 と 2300 の間は 2300');
+});
+
+test('壁: 床段差が負の部屋の外壁は 段差＋CH（2400−150＝2250）', () => {
+  const { topOf } = stepRoomsGraph([-150]);
+  assert.deepEqual(topOf(0, 'v'), [2250]);
+});
+
+test('【失敗系】壁の上端: 部屋が無ければ層の天井。層の ceilZMm があれば段差に関わらずその値', () => {
+  const g = makeGrid([0, 4000], [0, 4000]);
+  const room = g.interior([[0, 0]], { walls: true });
+  room.setFloorLevel(100);
+  const withLayerCeil = ofKind(planSolids([fakeLayer({ graph: g.graph, ceilZMm: 2700 })]), 'wall');
+  assert.ok(withLayerCeil.length === 4 && withLayerCeil.every(s => s.zHi === 2700), '層の ceilZMm 優先');
+  g.graph.removeRoom(room.id); // 部屋が無い状態（壁だけ残る）
+  const noRoom = ofKind(planSolids([fakeLayer({ graph: g.graph })]), 'wall');
+  assert.ok(noRoom.length > 0 && noRoom.every(s => s.zHi === 2400), '部屋が無い壁は層の天井 2400');
+});
+
+// 1 本の長い壁（南の壁を 2 部屋にまたがらせる）。壁の上端は部屋の境（x=4000 の分割CL）で区間ごとに決まる
+function longSouthWallGraph(stepB, opts = {}) {
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  g.interior([[0, 0]], { walls: true });
+  const b = g.interior([[1, 0]], { walls: true });
+  if (stepB) b.setFloorLevel(stepB);
+  const [w0, w1] = g.graph.walls.filter(w => !w.isVertical && w.axisCL.effectiveValue === 4000);
+  g.graph.removeWall(w1.id);
+  w0.clEnd = g.cx[2];
+  w0.endOffset = -57.5;
+  assert.equal(w0.coord2, 7942.5, '前提: 壁が 2 部屋にまたがる 1 本');
+  const solids = ofKind(planSolids([fakeLayer({ graph: g.graph, ...opts })]), 'wall');
+  const south = solids.filter(s => s.footprint.rects.every(r => r.y1 > 3900));
+  return { g, w0, south, spans: south.map(s => [s.zHi, ...s.footprint.rects.map(r => [r.x1, r.x2])]) };
+}
+
+test('壁の上端の区間割り: 1 本の外壁が段差 0 の部屋と +100 の部屋にまたがると、部屋の境（x=4000）で 2400／2500 に割れる。角の区間は端の区間の高さ', () => {
+  const { south } = longSouthWallGraph(100);
+  const at = x => south.find(s => s.footprint.rects.some(r => r.x1 <= x && x <= r.x2));
+  assert.equal(at(1000).zHi, 2400, '段差 0 の部屋側');
+  assert.equal(at(6000).zHi, 2500, '段差 +100 の部屋側');
+  const xs = z => south.filter(s => s.zHi === z).flatMap(s => s.footprint.rects.flatMap(r => [r.x1, r.x2]));
+  assert.equal(Math.min(...xs(2400)), -45, '西の角の区間（端の区間の高さ 2400 のまま）');
+  assert.equal(Math.max(...xs(2400)), 4000, '2400 の区間は境 x=4000 まで');
+  assert.ok(Math.min(...xs(2500)) >= 3942.5, '2500 の区間は境 x=4000 付近から（西の壁の帯 3942.5 まで）');
+  assert.equal(Math.max(...xs(2500)), 8045, '東の角の区間（2500 のまま）');
+});
+
+test('壁の上端の区間割り（向き）: x と y の格子値が重ならなくても、壁と直交する分割CL（x=3000）で割れる。y の値（5000）では割れない', () => {
+  const g = makeGrid([0, 3000, 8000], [0, 5000]);
+  g.interior([[0, 0]], { walls: true });
+  g.interior([[1, 0]], { walls: true }).setFloorLevel(100);
+  const [w0, w1] = g.graph.walls.filter(w => !w.isVertical && w.axisCL.effectiveValue === 5000);
+  g.graph.removeWall(w1.id);
+  w0.clEnd = g.cx[2];
+  w0.endOffset = -57.5;
+  assert.equal(w0.coord2, 7942.5, '前提: 壁が 2 部屋にまたがる 1 本');
+  const south = ofKind(planSolids(self(g.graph)), 'wall').filter(s => s.footprint.rects.every(r => r.y1 > 4900));
+  const xs = z => south.filter(s => s.zHi === z).flatMap(s => s.footprint.rects.flatMap(r => [r.x1, r.x2]));
+  assert.deepEqual([...new Set(south.map(s => s.zHi))].sort(), [2400, 2500], '2 つの高さに割れる');
+  assert.equal(Math.max(...xs(2400)), 3000, '2400 の区間は x=3000 まで');
+  assert.ok(Math.min(...xs(2500)) >= 2942.5 && Math.min(...xs(2500)) <= 3000, '2500 の区間は x=3000 付近から');
+});
+
+test('【失敗系】壁の上端の区間割り: 一部の区間だけ両側とも部屋が無ければ、その区間は層の天井・他は部屋の値', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000, 8000]);
+  g.interior([[0, 0]], { walls: true }).setFloorLevel(100); // 北西の部屋（上端 2500）
+  g.interior([[0, 1]], { walls: true }); // 南西の部屋（段差 0＝上端 2400。階の部屋の上端を不一致にして早道を外す）
+  // 北の壁を東まで延ばし、東の区間（両側とも部屋なし）を作る
+  const north = g.graph.walls.find(w => !w.isVertical && w.axisCL.effectiveValue === 0);
+  north.clEnd = g.cx[2];
+  north.endOffset = -57.5;
+  const secs = ceilingTopSectionsAlongWall(g.graph, north, buildCellToRoom(g.graph));
+  assert.deepEqual(secs.map(s => [s.lo, s.hi, s.top]), [[0, 4000, 2500], [4000, 8000, null]]);
+  const solids = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 100 })]), 'wall').filter(s => s.footprint.rects.every(r => r.y2 < 100));
+  const zs = [...new Set(solids.map(s => s.zHi))].sort();
+  assert.deepEqual(zs, [100 + 2400, 100 + 2500], '部屋の無い区間＝層の天井（100+2400）、部屋のある区間＝100+2500');
+});
+
+test('【失敗系】壁の上端の区間割り: axisCL・clStart・clEnd の無い壁は区間 []（上端は層の天井）', () => {
+  const { graph } = makeRoomGraph(0, 0, 4000, 4000);
+  const wall = graph.walls[0];
+  const bare = { axisCL: null, clStart: wall.clStart, clEnd: wall.clEnd, isVertical: wall.isVertical };
+  assert.deepEqual(ceilingTopSectionsAlongWall(graph, bare, buildCellToRoom(graph)), []);
+  assert.deepEqual(ceilingTopSectionsAlongWall(graph, { ...bare, axisCL: wall.axisCL, clStart: null }, buildCellToRoom(graph)), []);
+});
+
+test('壁の上端の区間割り: 全室の CH が同じでも既定値（2400）と違えば早道を使わない＝部屋の外へ延びた壁の部屋の無い区間は層の天井（floorZ＋既定値）', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  g.interior([[0, 0]], { walls: true }).setOverride('ceilingHeight', '2700');
+  assert.equal(uniformCeilingTopMm(g.graph), null, '全室 2700（既定値 2400 と違う）＝早道なし');
+  const north = g.graph.walls.find(w => !w.isVertical && w.axisCL.effectiveValue === 0);
+  north.clEnd = g.cx[2];
+  north.endOffset = -57.5;
+  const solids = ofKind(planSolids([fakeLayer({ graph: g.graph, floorZMm: 100 })]), 'wall').filter(s => s.footprint.rects.every(r => r.y2 < 100));
+  assert.deepEqual([...new Set(solids.map(s => s.zHi))].sort(), [100 + 2400, 100 + 2700], '部屋の無い区間＝100+2400、部屋のある区間＝100+2700');
+});
+
+test('壁の上端の区間割り: 分割CLが壁の途中にあっても、上端が同じなら区間は増えない', () => {
+  const g = makeGrid([0, 2000, 4000], [0, 4000, 8000]);
+  g.interior([[0, 0], [1, 0]], { walls: true });
+  g.interior([[0, 1]], { walls: true }).setFloorLevel(100); // 階の部屋の上端を不一致にして早道（uniformCeilingTopMm）を外す
+  assert.equal(uniformCeilingTopMm(g.graph), null, '前提: 早道は使われない');
+  const wall = g.graph.walls.find(w => !w.isVertical && w.axisCL.effectiveValue === 0);
+  const secs = ceilingTopSectionsAlongWall(g.graph, wall, buildCellToRoom(g.graph));
+  assert.equal(secs.length, 1, '分割CL x=2000 があっても 1 区間');
+  const parts = ofKind(planSolids(self(g.graph)), 'wall').filter(s => s.source.id === wall.id);
+  assert.equal(parts.length, 1);
+});
+
+test('uniformCeilingTopMm: 全部屋の「床段差＋CH」が同じならその値。違う部屋があれば・部屋が無ければ null', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  const a = g.interior([[0, 0]], { walls: true });
+  const b = g.interior([[1, 0]], { walls: true });
+  assert.equal(uniformCeilingTopMm(g.graph), 2400);
+  b.setFloorLevel(100);
+  assert.equal(uniformCeilingTopMm(g.graph), null, '段差違い');
+  b.setFloorLevel(0);
+  a.setOverride('ceilingHeight', '2600');
+  assert.equal(uniformCeilingTopMm(g.graph), null, 'CH 違い');
+  assert.equal(uniformCeilingTopMm(makeGrid([0, 4000], [0, 4000]).graph), null, '部屋なし');
+});
+
+test('壁の上端の区間割り: 同じ高さの隣の区間は 1 つの立体にまとまる（段差 0 どうし＝境で割れない）。細片も作らない', () => {
+  const { south } = longSouthWallGraph(0);
+  assert.equal(south.length, 1, '1 立体');
+  assert.ok(south.every(s => s.zHi === 2400));
+  const xs = south.flatMap(s => s.footprint.rects.flatMap(r => [r.x1, r.x2]));
+  assert.deepEqual([Math.min(...xs), Math.max(...xs)], [-45, 8045]);
+});
+
+test('壁の上端の区間割り: 腰壁レコードの境と部屋の境が重なる（x=4000）。腰壁区間は 800、他の区間は部屋ごとの上端 2500', () => {
+  const g = makeGrid([0, 4000, 8000], [0, 4000]);
+  g.interior([[0, 0]], { walls: true });
+  g.interior([[1, 0]], { walls: true }).setFloorLevel(100);
+  const [w0, w1] = g.graph.walls.filter(w => !w.isVertical && w.axisCL.effectiveValue === 4000);
+  g.graph.removeWall(w1.id);
+  w0.clEnd = g.cx[2];
+  w0.endOffset = -57.5;
+  g.graph.setKneeDropWall(edgeKey(w0.axisCL.id, g.cx[0].id, g.cx[1].id), { knee: { topHeight: 800 } });
+  const south = ofKind(planSolids([fakeLayer({ graph: g.graph })]), 'wall').filter(s => s.footprint.rects.every(r => r.y1 > 3900));
+  const spans = south.map(s => [s.zLo, s.zHi, Math.min(...s.footprint.rects.map(r => r.x1)), Math.max(...s.footprint.rects.map(r => r.x2))]).sort((a, b) => a[2] - b[2]);
+  assert.equal(spans.length, 2);
+  assert.deepEqual([spans[0][0], spans[0][1], spans[0][2], spans[0][3]], [0, 800, -45, 4000], '腰壁区間は境 x=4000 まで');
+  assert.deepEqual([spans[1][0], spans[1][1], spans[1][3]], [0, 2500, 8045], '東の区間は部屋の上端 2500');
+  assert.ok(spans[1][2] >= 3942.5 && spans[1][2] <= 4000, '東の区間は境 x=4000 付近から');
+});
+
+test('【失敗系】壁の上端の区間割り: 層の ceilZMm があれば部屋の境で割らない（全体 1 立体・上端はその値）', () => {
+  const { south } = longSouthWallGraph(100, { ceilZMm: 2700 });
+  assert.equal(south.length, 1);
+  assert.equal(south[0].zHi, 2700);
+});
+
+test('壁: 床段差のある部屋の壁の上端は層のFLからの相対（floorZMm を足す）', () => {
+  const { topOf } = stepRoomsGraph([100], [], 2800);
+  assert.deepEqual(topOf(0, 'v'), [2800 + 2500]);
 });
 
 test('壁: 隅で壁端がレコード端の外へはみ出しても細片を作らない（垂れ壁 x4000..8000・壁端 8057.5・部屋CH3000）', () => {

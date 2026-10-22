@@ -12,13 +12,13 @@
  * あり、topHeight/bottomHeight を増やさない。
  */
 
-import { edgeKey, DEFAULT_PLAN_CUT_HEIGHT_MM, planCutHeightMmOf } from '@core';
-import { worldToCell } from './gridCells.js';
+import { edgeKey, CenterLineType, DEFAULT_ROOM_CEILING_HEIGHT, DEFAULT_PLAN_CUT_HEIGHT_MM, planCutHeightMmOf } from '@core';
+import { worldToCell, dividerCLsBetween } from './gridCells.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
 import { cellsBeyondBreak } from './stair/stairGeometry.js';
 import { stairUnderRoomsOf } from './stair/stairUnderRooms.js';
 import { stairPartitionLines, isStairPartitionWall, stairUnderReturnLines, isStairUnderReturnWall } from './stair/stairPartition.js';
-import { roomCeilingHeight } from './roomMetrics.js';
+import { roomCeilingHeight, roomCeilingTopMm } from './roomMetrics.js';
 
 export const CAP_THICKNESS   = 30;   // mm — 天端の帯の厚さ（仕様2026-08。壁上端から下へ）
 // mm — 天端の**壁仕上げ面**からの出幅（仕様2026-08「天端幅 = 12 + 壁の層厚 + 12」の12。
@@ -308,6 +308,74 @@ export function effectiveCeilingHeight(graph, key, cellToRoom) {
   }
   if (heights.length === 0) return null;
   return Math.min(...heights);
+}
+
+/**
+ * 区間の両側の部屋の「床段差＋天井高さ」（階の FL からの天井面の高さ。ceilingSurfaces の zMm と同じ式）のうち低い方。
+ * effectiveCeilingHeight（床段差を含まない）は変えず、壁の上端（planSolids.js wallCeilProfile）用に別に持つ。
+ * @param {object} graph
+ * @param {string} key edgeKey(axisCLId, startCLId, endCLId)
+ * @param {Map<string, import('@core').Room>} cellToRoom
+ * @returns {number|null} 区間の幾何が解決できない・両側とも部屋なしなら null
+ */
+export function effectiveCeilingTopFromFloor(graph, key, cellToRoom) {
+  const geo = edgeGeometry(key, graph, cellToRoom);
+  if (!geo) return null;
+  const tops = [];
+  for (const room of [geo.roomNeg, geo.roomPos]) {
+    if (!room) continue;
+    tops.push(roomCeilingTopMm(graph, room));
+  }
+  if (tops.length === 0) return null;
+  return Math.min(...tops);
+}
+
+/**
+ * 階の部屋の「床段差＋天井高」がすべて既定の天井高（graph.defaultCeilingHeight ?? DEFAULT_ROOM_CEILING_HEIGHT。層の天井と同じ値）
+ * に等しいときのその値（早道。壁の上端は区間に割らずこの値）。部屋が無い・値が違う部屋がある・既定値と違うときは null。
+ * 既定値と等しいときだけ使うのは、部屋の無い区間の値（層の天井）が早道の有無で変わらないようにするため。
+ * @param {object} graph
+ * @returns {number|null}
+ */
+export function uniformCeilingTopMm(graph) {
+  const dflt = graph.defaultCeilingHeight ?? DEFAULT_ROOM_CEILING_HEIGHT;
+  let any = false;
+  for (const room of graph.rooms) {
+    if (roomCeilingTopMm(graph, room) !== dflt) return null;
+    any = true;
+  }
+  return any ? dflt : null;
+}
+
+/**
+ * 壁の長さ方向を、壁と直交する分割CLで区間に割り、区間ごとの effectiveCeilingTopFromFloor を返す
+ * （planSolids.js wallCeilProfile 用。ユーザー裁定 2026-10-22「部屋ごとの天井に合わせる」）。
+ * 上端が同じ（null どうしを含む）隣の区間は結合する＝区間の境は上端が替わる所だけ。
+ * 区間はCL値で表す（端の区間は壁の端点CL clStart／clEnd まで）。壁の座標は隅の取り合いでCL値からずれるので、
+ * 呼び出し側は壁の座標の点をこの区間へ当てる（端は最初／最後の区間へ寄せる）。
+ * @param {object} graph
+ * @param {import('@core').Wall} wall axisCL・clStart・clEnd を持つ壁
+ * @param {Map<string, import('@core').Room>} cellToRoom
+ * @param {{uniformTop?: number|null}} [opts] uniformTop＝階の全部屋の天井面の高さが同じときのその値（uniformCeilingTopMm）。
+ *   数値なら分割CLも部屋も引かず、壁全長を 1 区間（top＝その値）にする
+ * @returns {Array<{lo:number, hi:number, top:number|null}>} lo 昇順。壁の端点CLが解決できなければ []
+ */
+export function ceilingTopSectionsAlongWall(graph, wall, cellToRoom, { uniformTop = null } = {}) {
+  if (!(wall.axisCL && wall.clStart && wall.clEnd)) return [];
+  const lo = Math.min(wall.clStart.value, wall.clEnd.value);
+  const hi = Math.max(wall.clStart.value, wall.clEnd.value);
+  if (Number.isFinite(uniformTop)) return [{ lo, hi, top: uniformTop }];
+  const [loCL, hiCL] = wall.clStart.value <= wall.clEnd.value ? [wall.clStart, wall.clEnd] : [wall.clEnd, wall.clStart];
+  const perp = wall.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
+  const cls = [loCL, ...dividerCLsBetween(graph, perp, lo, hi), hiCL];
+  const out = [];
+  for (let i = 0; i + 1 < cls.length; i++) {
+    const top = effectiveCeilingTopFromFloor(graph, edgeKey(wall.axisCL.id, cls[i].id, cls[i + 1].id), cellToRoom);
+    const prev = out[out.length - 1];
+    if (prev && prev.top === top) prev.hi = cls[i + 1].value;
+    else out.push({ lo: cls[i].value, hi: cls[i + 1].value, top });
+  }
+  return out;
 }
 
 /**
