@@ -41,6 +41,14 @@ export function blocksFloorRemoval(project, planeId) {
   return project.activePlaneId === planeId || isActiveAnAltOf(project, planeId);
 }
 
+// startFloor を newSF へ変えた階の名前。複層は makeFloorName、それ以外は renameFloor で書式を保持
+// （振り直し・地階の上階追加・地階の削除で共通）。
+function nameForStartFloor(plane, newSF) {
+  return plane.stories > 1
+    ? makeFloorName(newSF, plane.stories)
+    : renameFloor(plane.name, newSF);
+}
+
 // ---- 振り直しの純関数（階操作の共通規則。途中階の上階追加と階移動の振り直し一本化 ステップ1）----
 // planes（elevation昇順の採用フロア一覧）の fromIndex 以降を、planes[fromIndex-1]（無ければ
 // planes[0] を基準に fromIndex=1 とみなす）から順に startFloor・elevation・name を決め直す。
@@ -65,9 +73,7 @@ export function renumberPlanesFrom(planes, fromIndex, heights = null) {
     const newSF   = addSkipZero(prevSF + prevStories - 1, 1);
     const newElev = prevElev + prevStories * prevHeight;
     // 一般階は makeFloorName、それ以外は renameFloor で書式を保持
-    const name = plane.stories > 1
-      ? makeFloorName(newSF, plane.stories)
-      : renameFloor(plane.name, newSF);
+    const name = nameForStartFloor(plane, newSF);
     if (name !== plane.name || newSF !== plane.startFloor || newElev !== plane.elevation) {
       updates.push({ id: plane.id, name, startFloor: newSF, elevation: newElev });
     }
@@ -174,6 +180,25 @@ export function computeFloorDeleteReorder(planesAfterRemoval, removedIndex, opts
   if (!planesBefore) return renumberPlanesFrom(planesAfterRemoval, removedIndex);
 
   const heightMap = storyHeightsMm(planesBefore, topHeightMm ?? STORY_HEIGHT_FALLBACK_MM);
+
+  // 地階の削除: 削除した階 D より下の地階だけを上へ詰める（地階の上階追加の逆。地上階・D より上は動かさない）。
+  // 下の地階の天端は D の直上の階の FL にそろい、各階の階高は保たれる。1FL=0 の正規化は通さない（地上階を動かさない）。
+  const removed = planesBefore[removedIndex];
+  if (removed && removed.startFloor < 0) {
+    const shiftElev = removed.stories * saneHeight(heightMap.get(removed.id));
+    const shifted = [];
+    for (let i = 0; i < removedIndex && i < planesAfterRemoval.length; i++) {
+      const plane = planesAfterRemoval[i];
+      const sf = addSkipZero(plane.startFloor, removed.stories);
+      shifted.push({ id: plane.id, name: nameForStartFloor(plane, sf), startFloor: sf, elevation: plane.elevation + shiftElev });
+    }
+    const newTopAfter = planesAfterRemoval[planesAfterRemoval.length - 1];
+    if (topHeightMm !== undefined && newTopAfter && newTopAfter.id !== planesBefore[planesBefore.length - 1].id) {
+      attachTopStoryHeight(shifted, newTopAfter, saneHeight(heightMap.get(newTopAfter.id)));
+    }
+    return shifted;
+  }
+
   const updates = renumberPlanesFrom(planesAfterRemoval, removedIndex, heightsForOrder(planesAfterRemoval, heightMap));
   const newTop = planesAfterRemoval[planesAfterRemoval.length - 1];
   if (topHeightMm !== undefined && newTop && newTop.id !== planesBefore[planesBefore.length - 1].id) {
@@ -338,9 +363,7 @@ export function computeFloorInsert(planes, currentPlaneId, stories, opts = {}) {
       const plane       = planes[i];
       const shiftedSF   = subtractSkipZero(plane.startFloor, n);
       const shiftedElev = plane.elevation - n * hNew;
-      const name = plane.stories > 1
-        ? makeFloorName(shiftedSF, plane.stories)
-        : renameFloor(plane.name, shiftedSF);
+      const name = nameForStartFloor(plane, shiftedSF);
       if (name !== plane.name || shiftedSF !== plane.startFloor || shiftedElev !== plane.elevation) {
         updates.push({ id: plane.id, name, startFloor: shiftedSF, elevation: shiftedElev });
       }

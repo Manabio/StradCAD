@@ -441,6 +441,31 @@ test('中間階(p3・表示中)の削除 → undo → redo → undo: 階数・id
   assert.equal(project.activePlaneId, 'p3');
 });
 
+test('地階(B1=p3)の削除 → undo → redo: 下の B3・B2 だけが元の番号・elevation・名前へ戻り、redo で上へ詰まる。地上階(p4)は動かない', async () => {
+  const { project, store, app } = await setup('p4');
+  runInAction(() => {
+    const metas = [['p1', -3, -8100, '地下3階'], ['p2', -2, -5400, '地下2階'], ['p3', -1, -2700, '地下1階'], ['p4', 1, 0, '1階']];
+    for (const [id, sf, elev, name] of metas) Object.assign(project.planeMap.get(id), { startFloor: sf, elevation: elev, name });
+  });
+  const s0 = await snapshot(project, store);
+  const c = await app.deleteFloor('p3');
+  assert.ok(c);
+  const s1 = await snapshot(project, store);
+  const meta = (s, id) => s.planes.find(p => p.id === id);
+  const sfElevName = (s, id) => [meta(s, id).startFloor, meta(s, id).elevation, meta(s, id).name];
+  assert.deepEqual(s1.adoptedOrder, ['p1', 'p2', 'p4']);
+  assert.deepEqual(sfElevName(s1, 'p1'), [-2, -5400, '地下2階']);
+  assert.deepEqual(sfElevName(s1, 'p2'), [-1, -2700, '地下1階']);
+  assert.deepEqual(sfElevName(s1, 'p4'), [1, 0, '1階']);
+
+  await c.undo();
+  assertSameSnapshot(await snapshot(project, store), s0, '地階削除 undo');
+  assert.deepEqual(sfElevName(await snapshot(project, store), 'p1'), [-3, -8100, '地下3階']);
+  assert.deepEqual(sfElevName(await snapshot(project, store), 'p2'), [-2, -5400, '地下2階']);
+  await c.redo();
+  assertSameSnapshot(await snapshot(project, store), s1, '地階削除 redo');
+});
+
 test('redo: 別の階(p1)を表示中でも対象は消え、表示は最初の削除後の階へ戻る。対象を表示中なら退避してから消す', async () => {
   const { project, store, app } = await setup('p3');
   const c = await app.deleteFloor('p3');

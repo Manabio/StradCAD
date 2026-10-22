@@ -9,6 +9,7 @@ import {
   computeFloorInsert, computeFloorAddLowerElevations, applyFloorInsert, collectPlaneMetas, applyPlaneMetas,
   normalizeFirstFloorZero,
 } from './floorOps.js';
+import { makeFloorName } from './floorNumber.js';
 import { resolveTopStoryHeightMm, storyHeightsMm, eaveTopZMm } from './floorHeights.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { Project } from './core/project.js';
@@ -304,19 +305,86 @@ test('【失敗系】下階追加: n=0・階が空でも例外にしない', () 
   assert.deepEqual(computeFloorAddLowerElevations([], 1, {}), [-3000]);
 });
 
-// ---- 1FL=0 の正規化（全経路の最後。振り直し後に startFloor===1 になる階の elevation を 0 へ）----
-test('正規化: 削除 — B2/B1/F1/F2 不揃いで B1 を削除 → 新しい1階（F2）が elevation 0、各階の階高は保たれる', () => {
-  const planes = [P('B2', -2, 1, -5350), P('B1', -1, 1, -2750), P('F1', 1, 1, 0), P('F2', 2, 1, 3300, { topStoryHeightMm: 3300 })];
+// ---- 地階の削除（削除した階より下の地階だけを上へ詰める。地階の上階追加の逆）----
+// 実データどおりの階名（地下n階／n階）を持つ平面スタブ
+function PN(id, startFloor, stories, elevation, extra = {}) {
+  return P(id, startFloor, stories, elevation, { name: startFloor < 0 ? `地下${-startFloor}階` : `${startFloor}階`, ...extra });
+}
+test('地階の削除: B2/B1/F1/F2 不揃いで B1 を削除 → 下の B2 だけが上へ詰まり「地下1階」。地上階（F1・F2）は動かず更新一覧に載らない、各階の階高は保たれる', () => {
+  const planes = [PN('B2', -2, 1, -5350), PN('B1', -1, 1, -2750), PN('F1', 1, 1, 0), PN('F2', 2, 1, 3300, { topStoryHeightMm: 3300 })];
   const after = planes.filter(p => p.id !== 'B1');
   const updates = computeFloorDeleteReorder(after, 1, { planesBefore: planes, topHeightMm: 3300 });
-  assert.deepEqual(elevations(after, updates), { B2: -5900, F1: -3300, F2: 0 });
-  assert.deepEqual(startFloors(after, updates), { B2: -2, F1: -1, F2: 1 });
+  assert.deepEqual(elevations(after, updates), { B2: -2600, F1: 0, F2: 3300 });
+  assert.deepEqual(startFloors(after, updates), { B2: -1, F1: 1, F2: 2 });
+  assert.equal(updates.find(u => u.id === 'B2').name, '地下1階');
+  assert.deepEqual(updates.map(u => u.id), ['B2']);
   const moved = after.map(p => ({ ...p, elevation: elevations(after, updates)[p.id] }));
   assert.deepEqual([...storyHeightsMm(moved, 3300).values()], [2600, 3300, 3300]);
-  // 元の updates に無かった階（最下階 B2）も更新一覧に載る
-  assert.ok(updates.some(u => u.id === 'B2' && u.elevation === -5900));
 });
 
+test('地階の削除: B3/B2/B1/F1 で B1 を削除 → B3→-2・B2→-1、各 elevation は B1 の階高ぶん上がる。F1 は更新一覧に載らない', () => {
+  const planes = [PN('B3', -3, 1, -9000), PN('B2', -2, 1, -6000), PN('B1', -1, 1, -3000), PN('F1', 1, 1, 0, { topStoryHeightMm: 3000 })];
+  const after = planes.filter(p => p.id !== 'B1');
+  const updates = computeFloorDeleteReorder(after, 2, { planesBefore: planes, topHeightMm: 3000 });
+  assert.deepEqual(startFloors(after, updates), { B3: -2, B2: -1, F1: 1 });
+  assert.deepEqual(elevations(after, updates), { B3: -6000, B2: -3000, F1: 0 });
+  assert.deepEqual(updates.map(u => u.id), ['B3', 'B2']);
+  assert.deepEqual(updates.map(u => u.name), ['地下2階', '地下1階']);
+});
+
+test('地階の削除: 複層の地階（stories=2）の削除 → 下の地階は番号 +2・ずらし量は 2×階高', () => {
+  const planes = [P('B4', -4, 1, -11000), P('B23', -3, 2, -8000), P('B1', -1, 1, -2000), P('F1', 1, 1, 0, { topStoryHeightMm: 3000 })];
+  // B23（-3〜-2・階高 3000）を削除 → B4 は -2 へ、elevation は -11000+6000
+  const after = planes.filter(p => p.id !== 'B23');
+  const updates = computeFloorDeleteReorder(after, 1, { planesBefore: planes, topHeightMm: 3000 });
+  assert.deepEqual(updates.map(u => [u.id, u.startFloor, u.elevation]), [['B4', -2, -5000]]);
+});
+
+test('地階の削除: 全階が地階の並びで最上の地階を削除 → 下の地階が上へ詰まり、新しい最上階に topStoryHeightMm＝削除した階との差', () => {
+  const planes = [P('B3', -3, 1, -9000), P('B2', -2, 1, -6000), P('B1', -1, 1, -3000, { topStoryHeightMm: 3000 })];
+  const after = planes.filter(p => p.id !== 'B1');
+  const updates = computeFloorDeleteReorder(after, 2, { planesBefore: planes, topHeightMm: 3000 });
+  assert.deepEqual(startFloors(after, updates), { B3: -2, B2: -1 });
+  assert.deepEqual(elevations(after, updates), { B3: -6000, B2: -3000 });
+  assert.deepEqual(topWrites(updates), { B2: 3000 });
+});
+
+test('【失敗系】地階の削除: 最下の地階の削除は空配列（下に詰める階が無い）。単独の地階も同じ', () => {
+  const planes = [P('B2', -2, 1, -6000), P('B1', -1, 1, -3000), P('F1', 1, 1, 0, { topStoryHeightMm: 3000 })];
+  assert.deepEqual(computeFloorDeleteReorder(planes.slice(1), 0, { planesBefore: planes, topHeightMm: 3000 }), []);
+  const solo = [P('B1', -1, 1, 0, { topStoryHeightMm: 3000 })];
+  assert.deepEqual(computeFloorDeleteReorder([], 0, { planesBefore: solo, topHeightMm: 3000 }), []);
+});
+
+test('地階の削除: 下に複層の地階がある（B4(-5,2層)/B2/B1/F1 で B2 を削除）→ B4 は -4 の複層名・elevation は +B2 の階高', () => {
+  const planes = [PN('B4', -5, 2, -8000, { name: makeFloorName(-5, 2) }), PN('B2', -2, 1, -2000), PN('B1', -1, 1, -1000), PN('F1', 1, 1, 0, { topStoryHeightMm: 3000 })];
+  // B4: -8000〜-2000（2層×3000）、B2: -2000〜-1000（階高 1000）
+  const after = planes.filter(p => p.id !== 'B2');
+  const updates = computeFloorDeleteReorder(after, 1, { planesBefore: planes, topHeightMm: 3000 });
+  assert.deepEqual(updates, [{ id: 'B4', name: makeFloorName(-4, 2), startFloor: -4, elevation: -7000 }]);
+});
+
+test('地階の削除: 1FL≠0 の旧データでも地階分岐は正規化を通さない（B2/B1/F1/F2 で B1 を削除 → 更新一覧は B2 のみ）', () => {
+  const planes = [PN('B2', -2, 1, -5400), PN('B1', -1, 1, -2700), PN('F1', 1, 1, 100), PN('F2', 2, 1, 3100, { topStoryHeightMm: 3000 })];
+  const after = planes.filter(p => p.id !== 'B1');
+  const updates = computeFloorDeleteReorder(after, 1, { planesBefore: planes, topHeightMm: 3000 });
+  assert.deepEqual(updates.map(u => u.id), ['B2']);
+});
+
+test('地階の削除: topHeightMm を省くと最上階の地階を削除しても topStoryHeightMm を載せない', () => {
+  const planes = [PN('B3', -3, 1, -9000), PN('B2', -2, 1, -6000), PN('B1', -1, 1, -3000, { topStoryHeightMm: 3000 })];
+  const after = planes.filter(p => p.id !== 'B1');
+  const updates = computeFloorDeleteReorder(after, 2, { planesBefore: planes });
+  assert.deepEqual(topWrites(updates), {});
+});
+
+test('正規化: startFloor===1 の階が無い地階だけの並びを直接呼んでもずらさない（戻り値 0・updates は空のまま）', () => {
+  const updates = [];
+  assert.equal(normalizeFirstFloorZero([P('B2', -2, 1, -6000), P('B1', -1, 1, -3000)], updates), 0);
+  assert.deepEqual(updates, []);
+});
+
+// ---- 1FL=0 の正規化（全経路の最後。振り直し後に startFloor===1 になる階の elevation を 0 へ）----
 test('正規化: 並べ替え — 最上階（legacy 2900）を最下階の直上へ → 1階になった B1 が 0（HEAD は 0 だったので -100 に外さない）', () => {
   const planes = [
     P('B2', -2, 1, -6000), P('B1', -1, 1, -3000), P('F1', 1, 1, 0), P('F2', 2, 1, 3000, { topStoryHeightMm: 2900 }),
@@ -334,12 +402,13 @@ test('正規化: 階変更 — 最下の地階 B1 を「1階」へ変更 → 新
   assert.deepEqual(elevations(planes, updates), { B1: 0, F1: 3000, F2: 6000 });
 });
 
-test('正規化: 地階だけの並び（startFloor===1 の階が無い）はずらさない', () => {
+test('地階の削除: 地階だけの並びで中間 B2 を削除 → 下の B3 が上へ詰まる（上の B1 は動かず、topStoryHeightMm も載せない）', () => {
   const planes = [P('B3', -3, 1, -9000), P('B2', -2, 1, -6000), P('B1', -1, 1, -3000, { topStoryHeightMm: 3000 })];
   const after = planes.filter(p => p.id !== 'B2');
   const updates = computeFloorDeleteReorder(after, 1, { planesBefore: planes, topHeightMm: 3000 });
-  assert.deepEqual(elevations(after, updates), { B3: -9000, B1: -6000 });
-  assert.deepEqual(updates.map(u => u.id), ['B1']);
+  assert.deepEqual(elevations(after, updates), { B3: -6000, B1: -3000 });
+  assert.deepEqual(startFloors(after, updates), { B3: -2, B1: -1 });
+  assert.deepEqual(updates.map(u => u.id), ['B3']);
 });
 
 test('正規化: 地上だけの並びの中間削除はずらし量 0（更新一覧に余計な階を載せない）。直接呼んでも 0', () => {
