@@ -755,10 +755,10 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         ceilProfile,
         // 階段下の部屋の帯に重ねる階段の3D寄与（`stairContributionOverRoom`）。他の帯の`stairCut`
         // （階段室自身の帯）と同じ役割の情報源だが、この帯（`buildSectionFromLine`→`buildCutContent`経由）は
-        // `buildSectionFigure`（`sectionEngine.js:421`の`stairPrimitivesForCut(cut.stairCut…)`）を
-        // 呼ばないため、この`stairCut`から階段プリミティブが自動生成されることは無い（`stairOver`
-        // ブロックが別経路で明示的に描く）。`addStairFaceHits`自体（`sectionHits.js`）は`cut.stairCut`
-        // を見て`stairFace`ヒットを候補へ積むが、同ファイル:946の`coverableHits`フィルタが選択対象
+        // `stairPrimitivesForCut(cut.stairCut…)`を呼ばない（直進系の階段帯は`straightContentForCut`が
+        // 呼ぶが、この帯は呼ばない）ため、この`stairCut`から階段プリミティブが自動生成されることは無い
+        // （`stairOver`ブロックが別経路で明示的に描く）。`addStairFaceHits`自体（`sectionHits.js`）は`cut.stairCut`
+        // を見て`stairFace`ヒットを候補へ積むが、同ファイルの`coverableHits`フィルタが選択対象
         // から`stairFace`を除くため出力には影響しない——**`stairFace`が選択に参加するよう変える段では
         // ここを再点検すること**（展開図一般化Phase 6b-3・3a。設計`.claude/elevation-redesign.md`
         // §5.12末尾）。

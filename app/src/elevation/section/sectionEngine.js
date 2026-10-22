@@ -1,12 +1,12 @@
 /**
- * 2.5D断面エンジン: buildSectionFigure（columns→出力組み立て。WP-E4）。
- * 設計意図はarchitect承認済みの実装指示書§4参照。直進階段専用の2本目の経路——実データ13/11に
- * 直進階段が無くgoldenでゲートできないため、buildSectionFromLineへの統合はPhase 7c
- * （直進階段を含むテスト.stq）以降（ユーザー裁定2026-09-13）。buildColumns
- * （本ファイルからexport）はWP-E5bでelevationStairSequence.jsから直接呼ばれる。
+ * 2.5D断面エンジン: buildColumns（cut→列）と buildFaceShell（face/floorSegments/ceilingProfile。WP-E4）。
+ * 設計意図はarchitect承認済みの実装指示書§4参照。content（壁の断面・見えがかり・アキ）は
+ * 本ファイルでは作らない——全ての帯が共通経路 `sectionContent.js` の buildCutContent を通る
+ * （直進階段専用の旧 buildSectionFigure は 2026-10-22 に削除。直進系は buildFaceShell の殻＋buildCutContent）。
+ * buildColumns は buildCutContent・elevationStairSequence.js 等から直接呼ばれる。
  *
  * 内部フロー（§4のコメントどおり）: collectCutBreaks → probeColumn×N → mergeColumns
- * （同一分類の隣接併合）→ faceFromCut → floorSegments/ceilingProfile導出 → sectionEmit → content。
+ * （同一分類の隣接併合）→ [buildFaceShell] faceFromCut → floorSegments/ceilingProfile導出。
  *
  * ASSUMED（設計書に算出式の明記が無いためWP-E4完了条件の範囲で以下の解釈を採用。§9のとおり
  * 「手書きの小さなSectionCutリテラル→期待するプリミティブ」で直接検証する）:
@@ -27,8 +27,7 @@ import { localXOf, worldOf, ceilProfileEdgeAt, ceilClipProfileOf } from './secti
 import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
 import { farRoomAt } from './sectionHits.js';
 import { faceFromCut } from './sectionFace.js';
-import { emitColumns, emitOpenGapMarks, nearestSightlineDistMm } from './sectionEmit.js';
-import { stairPrimitivesForCut } from './sectionStair.js';
+import { nearestSightlineDistMm } from './sectionEmit.js';
 import { reachableAirByColumn } from './sectionVisibility.js';
 
 // bands配列が（kind・z0/z1・wall参照・distMm・layerRole・openingPassThrough）まで完全一致するか
@@ -417,9 +416,9 @@ function propagateFarStair(columns, kinds) {
 
 /**
  * cut → SectionColumn[]（collectCutBreaks→probeColumn×N→mergeColumns。§4「内部フロー」の
- * 前半部分）。buildSectionFigureの内部処理を切り出したもの——face/floorSegments/ceilingProfile
- * を必要とせずcontentだけを組み立てたい呼び出し側（elevationStairSequence.js等）が
- * 直接使うためexportする（WP-E5b）。
+ * 前半部分）。face/floorSegments/ceilingProfile
+ * を必要とせずcontentだけを組み立てたい呼び出し側（buildCutContent・elevationStairSequence.js等）が
+ * 直接使うためexportする（WP-E5b）。buildFaceShellもこれを使う。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
  * @returns {import('./sectionTypes.js').SectionColumn[]}
@@ -567,21 +566,4 @@ export function buildFaceShell(cut, probeCtx, opts = {}) {
   const floorSegments = floorSegmentsFromColumns(columns, face);
   const ceilingProfile = ceilingProfileFromColumns(columns, cut, face);
   return { columns, face, floorSegments, ceilingProfile };
-}
-
-export function buildSectionFigure(cut, probeCtx, opts = {}) {
-  const { columns, face, floorSegments, ceilingProfile } = buildFaceShell(cut, probeCtx, opts);
-
-  const emitCtx = { ceilZ: opts.ceilZ };
-  const content = [
-    ...emitColumns(columns, cut, emitCtx),
-    ...emitOpenGapMarks(columns, cut, emitCtx),
-    ...stairPrimitivesForCut(cut.stairCut ?? null, cut, columns),
-  ];
-
-  return {
-    seqNo: cut.seqNo, face, floorSegments, ceilingProfile,
-    chDimSplitAbsYs: cut.chDimSplitAbsYs, content, skipBaseboard: true, skipWallLabel: true,
-    floorSpanX: opts.floorSpanX,
-  };
 }

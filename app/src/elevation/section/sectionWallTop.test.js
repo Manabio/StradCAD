@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature, edgeKey } from '@core';
 import { makeProbeContext, collectCutBreaks } from './sectionProbe.js';
 import { probeColumnHits, kneeDropZRangesAt, cutWallTopBeyondZ, probeColumn } from './sectionHits.js';
-import { buildColumns, buildSectionFigure } from './sectionEngine.js';
+import { buildColumns } from './sectionEngine.js';
+import { buildCutContent } from './sectionContent.js';
 import { emitColumns } from './sectionEmit.js';
 import { generateStairPartitionWalls, wrapStairPartitionFreeEnds } from '../../finish/stair/stairPartitionWalls.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
@@ -361,12 +362,14 @@ test('S4-2 列の統合: 斜めの帯と、同じ高さの水平の帯（斜面�
 });
 
 const linesOf = prims => prims.filter(p => p.type === 'line');
+// 本番と同じ共通経路（buildCutContent）の content（壁の断面・見えがかり・アキ）
+const contentOf = (cut, ctx) => buildCutContent(cut, ctx).content;
 const sameLine = (p, x1, y1, x2, y2) => Math.abs(p.x1 - x1) < 1e-6 && Math.abs(p.y1 - y1) < 1e-6
   && Math.abs(p.x2 - x2) < 1e-6 && Math.abs(p.y2 - y2) < 1e-6;
 
 test('S4-2 emit: 天端は列をまたいで連続する一本の斜線・継ぎ目の縦線なし・端の縦線は端の天端の高さまで・水平の天端線なし（奥の壁の下端も）', () => {
   const { layers, ctx } = slopeFixture({ far: true });
-  const lines = linesOf(buildSectionFigure(slopeCut(layers), ctx).content);
+  const lines = linesOf(contentOf(slopeCut(layers), ctx));
   const slopes = lines.filter(p => p.weight === 'medium' && Math.abs(p.y1 - p.y2) > 1e-6 && Math.abs(p.x1 - p.x2) > 1e-6);
   assert.equal(slopes.length, 2, JSON.stringify(slopes));
   assert.ok(slopes.some(p => sameLine(p, 1000, -2200, 1600, -2400)), '列 [1000,1600] の斜線');
@@ -389,7 +392,7 @@ test('S4-2 emit: 天端は列をまたいで連続する一本の斜線・継ぎ
 test('S4-2 emit: dirSign<0（図の左右が逆）でも斜線・端の縦線は各端の天端の高さ（x1側＝踊り場側 2200・x0側＝上り口側 3200）', () => {
   const { layers, ctx } = slopeFixture();
   // ローカルx = 5000 - y。踊り場側 y=1000 → x=4000、上り口側 y=4000 → x=1000。
-  const lines = linesOf(buildSectionFigure(slopeCut(layers, { dirSign: -1 }), ctx).content);
+  const lines = linesOf(contentOf(slopeCut(layers, { dirSign: -1 }), ctx));
   const medium = lines.filter(p => p.weight === 'medium');
   assert.ok(medium.some(p => sameLine(p, 4000, 0, 4000, -2200)), 'x1側（踊り場側）の端の縦線は 2200 まで');
   assert.ok(medium.some(p => sameLine(p, 1000, 0, 1000, -3200)), 'x0側（上り口側）の端の縦線は 3200 まで');
@@ -445,7 +448,7 @@ test('S4-2 T-A: 上端に届かない帯（手前の垂れ壁に上を隠され�
   const parts = buildColumns(cut, ctx).flatMap(c => c.bands).filter(b => b.kind === 'wall' && f1.walls.includes(b.wall));
   assert.ok(parts.length >= 1, '隔て壁の帯が見えている');
   for (const b of parts) { near(b.z1, 1800); assert.equal(b.topEdge, undefined, '上端に届かない帯'); }
-  const slants = linesOf(buildSectionFigure(cut, ctx).content)
+  const slants = linesOf(contentOf(cut, ctx))
     .filter(p => Math.abs(p.x1 - p.x2) > 1e-6 && Math.abs(p.y1 - p.y2) > 1e-6 && !p.dash);
   assert.deepEqual(slants, [], '斜線なし（y=1800 は水平線）');
 });
@@ -473,7 +476,7 @@ test('S4-2 T-B: 斜線の端が上階スラブ端（断面として輪郭を描�
 
 test('S4-2 emit: アキの×は斜めの天端で切られた区間を壁として避ける（台形の遮蔽・断片化しない）', () => {
   const { layers, ctx } = slopeFixture();
-  const gap = linesOf(buildSectionFigure(slopeCut(layers), ctx).content).filter(p => p.dash === 'center');
+  const gap = linesOf(contentOf(slopeCut(layers), ctx)).filter(p => p.dash === 'center');
   assert.equal(gap.length, 4, '対角線2本が壁の台形で1か所ずつ切られて4断片');
   assert.ok(gap.some(p => Math.abs(p.x1 - 2153.846153846154) < 1e-6 && Math.abs(p.y1 + 2584.6153846153848) < 1e-6),
     '対角線は斜線との交点 (2153.8, 2584.6) で切れる（外接矩形の角 y=3200 では切れない）');
@@ -482,7 +485,7 @@ test('S4-2 emit: アキの×は斜めの天端で切られた区間を壁とし�
 test('S4-2 emit: 面全体が斜めの天端の壁なら、上のアキは台形の対角線2本と「ア キ」1つ（台形の重心）', () => {
   const { layers, ctx } = slopeFixture();
   const cut = slopeCut(layers, { line: { isVertical: true, axisValue: 500, lo: 1000, hi: 4000, buttToleranceMm: 0 } });
-  const { content } = buildSectionFigure(cut, ctx);
+  const content = contentOf(cut, ctx);
   const gap = linesOf(content).filter(p => p.dash === 'center');
   assert.equal(gap.length, 2, JSON.stringify(gap));
   assert.ok(gap.some(p => sameLine(p, 0, -2200, 3000, -6000)), '左下（斜線の始点）→右上');
@@ -496,7 +499,7 @@ test('S4-2 emit: 面全体が斜めの天端の壁なら、上のアキは台形
 test('S4-2 emit: cut 経路は踊り場端の断面が zAtLandingEnd（2200）で閉じ、笠木の下端の細線を描かない', () => {
   const { layers, ctx } = slopeFixture();
   const cut = { ...cutAt(layers, 1000), zRange: { loZ: 0, hiZ: 6000 }, ceilProfile: undefined };
-  const lines = linesOf(buildSectionFigure(cut, ctx).content);
+  const lines = linesOf(contentOf(cut, ctx));
   const cap = lines.filter(p => p.weight === 'thick' && Math.abs(p.y1 + 2200) < 1e-6 && Math.abs(p.y2 + 2200) < 1e-6);
   assert.ok(cap.length >= 1, '断面の上端（太線）が z=2200');
   const under = lines.filter(p => p.weight === 'thin' && !p.dash && Math.abs(p.y1 - p.y2) < 1e-6 && p.y1 < 0 && p.y1 > -2200);
@@ -522,7 +525,7 @@ test('裁定2026-10-14 天端の延長: 踊り場側の物理端（y=942.5）ま
   const e = band.topEdge;
   near(Math.min(e.zAtX0, e.zAtX1), endZ);
   assert.ok(Math.abs(e.zAtX0 - e.zAtX1) > 1, '平らでなく斜め');
-  const lines = linesOf(buildSectionFigure(cut, ctx).content).filter(p => p.weight === 'medium');
+  const lines = linesOf(contentOf(cut, ctx)).filter(p => p.weight === 'medium');
   const endVert = lines.filter(p => Math.abs(p.x1 - p.x2) < 1e-6 && Math.abs(p.x1 - 942.5) < 1e-6);
   assert.ok(endVert.length >= 1, '端の縦線がある');
   const top = Math.max(...endVert.flatMap(p => [-p.y1, -p.y2]));

@@ -1,7 +1,7 @@
 /**
  * 2.5D断面エンジン: 直進階段（STRAIGHT / STRAIGHT_LANDING）の切断定義表（WP-E6・設計書§6.2）。
  * switchbackCuts.js（WP-E5）と異なり、floorSegments/ceilingProfile/faceの算出はエンジン汎用の
- * buildSectionFigure（sectionEngine.js。faceFromCut/floorSegmentsFromColumns/
+ * buildFaceShell（sectionEngine.js。faceFromCut/floorSegmentsFromColumns/
  * ceilingProfileFromColumns）にそのまま委ねる——直進階段は往路・復路が並走しない単純な1本道
  * （SWITCHBACKのような「往復間の壁」の二重管理・sloped ceilingの特殊事情が無い）ため、WP-E4で
  * 用意済みの汎用フォールバック（面全幅1区間・floorDeltaMm:0・天井=cut.zRange.hiZの水平線）を

@@ -2,8 +2,8 @@
  * 2.5D断面エンジン: faceFromCut（SectionCut → 既存face記述子と同型のオブジェクト。WP-E2）。
  * 設計意図はarchitect承認済みの実装指示書§3.5参照。WP-E5bの階段帯統合ではswitchbackCuts.js
  * がclassifyFaces由来のface記述子をそのまま使う設計を採ったため（同ファイル冒頭コメント参照）、
- * faceFromCut自体は現時点で未使用のまま（sectionEngine.jsのbuildSectionFigureからのみ呼ばれる。
- * 通常部屋帯・吹抜け帯からは未使用）。
+ * faceFromCutは通常部屋帯・吹抜け帯・U字系からは未使用で、sectionEngine.jsのbuildFaceShell
+ * （直進系の階段帯）からのみ呼ばれる。
  *
  * buildFaceFigure（elevationFigure.js）へそのまま渡せる形（letter/dirSign/isVertical/axisCL/
  * inward/faceValue/hasRealWall/lo/hi/run/originWorld/startCLId/endCLId/

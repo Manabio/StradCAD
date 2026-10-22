@@ -775,6 +775,11 @@ test('【S2】直進系: 壁のない端部で上階の平面が面の端の外�
 
 test('【S2】直進系: 上階の平面が面の端より外へ続く面（seq1）は、はり出し系のキーと上階側の壁の縁の線を返す。続かない面は未定義', () => {
   const entries = straightEntries();
+  // 階段の下は原則描かない規約: 巾木・壁ラベルを出さない（旧 sectionEngine.test.js の buildSectionFigure 検査から移行）
+  for (const e of entries) {
+    assert.equal(e.skipBaseboard, true, `seq${e.seqNo}: skipBaseboard`);
+    assert.equal(e.skipWallLabel, true, `seq${e.seqNo}: skipWallLabel`);
+  }
   const seq1 = entries.find(e => e.seqNo === '1');
   assert.equal(seq1.face.dirSign, 1);
   assert.deepEqual(seq1.upperOverhang, { lo: 0, hi: 115 }, '右端（世界 x=2000 側）へ壁厚ぶん続く');

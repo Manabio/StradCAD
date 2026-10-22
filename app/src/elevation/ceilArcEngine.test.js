@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { makeProbeContext } from './section/sectionProbe.js';
-import { buildSectionFigure, buildColumns } from './section/sectionEngine.js';
+import { buildColumns } from './section/sectionEngine.js';
+import { buildCutContent } from './section/sectionContent.js';
 import { ceilProfileFromSegments, ceilProfileMaxZ } from './elevationBand.js';
 import { ceilArcCircleOf, ceilArcZAt } from './ceilArcSection.js';
 
@@ -72,7 +73,7 @@ test('【壁の帯が弦に沿う】切断壁の上端は列の高い側の円�
 test('【出力の全端点が円弧以下】断面エンジンの太線は円弧の高さを超えない（側縁は端の弦の高さで止まる）', () => {
   const { cut, probeCtx } = fixture(ceilProfileFromSegments([SEG], 4200, 2400));
   const c = ceilArcCircleOf(SEG);
-  const lines = buildSectionFigure(cut, probeCtx).content.filter(p => p.type === 'line' && p.weight === 'thick');
+  const lines = buildCutContent(cut, probeCtx).content.filter(p => p.type === 'line' && p.weight === 'thick');
   assert.ok(lines.some(p => p.x1 === p.x2 && -p.y1 > 2400 && -p.y1 < 2500 || p.x1 === p.x2 && -p.y2 > 2400 && -p.y2 < 2500), '側縁は 2400 超 2500 未満（円弧の高さ）で止まる');
   for (const p of lines) {
     assert.ok(-p.y1 <= ceilArcZAt(c, p.x1) + 1e-6 && -p.y2 <= ceilArcZAt(c, p.x2) + 1e-6,

@@ -1,11 +1,13 @@
-// sectionEngine.js（WP-E4: buildSectionFigure）の単体テスト。
+// sectionEngine.js（WP-E4: buildFaceShell・buildColumns 等）の単体テスト。
 // 完了条件: floorSegmentsが隙間なく面全幅・hiX>loX／ceilingProfile昇順。
+// content は本番と同じ共通経路 buildCutContent（sectionContent.js）で確かめる。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext } from './sectionProbe.js';
-import { buildSectionFigure, buildColumns, mergeColumns, splitOpenByFarFace, mergeContinuousWallBands } from './sectionEngine.js';
+import { buildFaceShell, buildColumns, mergeColumns, splitOpenByFarFace, mergeContinuousWallBands } from './sectionEngine.js';
+import { buildCutContent } from './sectionContent.js';
 import { SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 
 const CH = 2400;
@@ -34,12 +36,12 @@ function frontCut(graph, overrides = {}) {
   };
 }
 
-test('【WP-E4】buildSectionFigure: floorSegmentsは隙間なく面全幅を覆い、hiX>loX', () => {
+test('【WP-E4】buildFaceShell: floorSegmentsは隙間なく面全幅を覆い、hiX>loX', () => {
   const graph = makeGraph();
   makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
   const cut = frontCut(graph);
   const probeCtx = makeProbeContext(cut.layers);
-  const fig = buildSectionFigure(cut, probeCtx);
+  const fig = buildFaceShell(cut, probeCtx);
 
   assert.ok(Array.isArray(fig.floorSegments) && fig.floorSegments.length > 0);
   for (const seg of fig.floorSegments) assert.ok(seg.hiX > seg.loX, `hiX(${seg.hiX})>loX(${seg.loX})のはず`);
@@ -52,12 +54,12 @@ test('【WP-E4】buildSectionFigure: floorSegmentsは隙間なく面全幅を覆
   }
 });
 
-test('【WP-E4】buildSectionFigure: ceilingProfileはlocalX昇順', () => {
+test('【WP-E4】buildFaceShell: ceilingProfileはlocalX昇順', () => {
   const graph = makeGraph();
   makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
   const cut = frontCut(graph);
   const probeCtx = makeProbeContext(cut.layers);
-  const fig = buildSectionFigure(cut, probeCtx);
+  const fig = buildFaceShell(cut, probeCtx);
 
   assert.ok(Array.isArray(fig.ceilingProfile) && fig.ceilingProfile.length >= 2);
   for (let i = 0; i + 1 < fig.ceilingProfile.length; i++) {
@@ -66,16 +68,8 @@ test('【WP-E4】buildSectionFigure: ceilingProfileはlocalX昇順', () => {
   }
 });
 
-test('【WP-E4】buildSectionFigure: skipBaseboard/skipWallLabelは常にtrue（階段の下は原則描かない規約）', () => {
-  const graph = makeGraph();
-  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
-  const cut = frontCut(graph);
-  const probeCtx = makeProbeContext(cut.layers);
-  const fig = buildSectionFigure(cut, probeCtx);
-  assert.equal(fig.skipBaseboard, true);
-  assert.equal(fig.skipWallLabel, true);
-  assert.equal(fig.seqNo, '1');
-});
+// （skipBaseboard/skipWallLabel が常に true の検査は、entry を組む buildStraightFaceSequence へ移した
+//  ＝elevationStairSequence.test.js の【S2】直進系テスト）
 
 test('【WP-E4】mergeColumns: bandsが完全一致する隣接列は1列に統合される', () => {
   const columns = [
@@ -261,13 +255,13 @@ test('【QA是正A】buildColumns: 深度上限超えの壁(distMm4057.5)がopen
 });
 
 // ---- 失敗系 ----
-test('【失敗系・WP-E4】buildSectionFigure: layers=[]（候補ゼロ）でも例外を投げずfloorSegments/ceilingProfileが返る', () => {
+test('【失敗系・WP-E4】buildFaceShell: layers=[]（候補ゼロ）でも例外を投げずfloorSegments/ceilingProfileが返る', () => {
   const cut = {
     seqNo: '1', line: { isVertical: false, axisValue: 0, lo: 0, hi: 4000 },
     viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: CH }, baseFloorZ: 0,
   };
   const probeCtx = makeProbeContext([]);
-  const fig = buildSectionFigure(cut, probeCtx);
+  const fig = buildFaceShell(cut, probeCtx);
   assert.ok(fig.floorSegments.length > 0);
   assert.ok(fig.floorSegments[0].hiX > fig.floorSegments[0].loX);
   assert.ok(fig.ceilingProfile.length >= 2);
@@ -326,7 +320,7 @@ test('【傾斜の ceilProfile で壁の帯の天端が斜線になる】列にc
 
 test('【傾斜の ceilProfile】出力: 天端の線は出さず（斜線は体裁が引く）・側縁は端の斜線の高さで止まり・天井の斜線より上に線が出ない', () => {
   const { cut, probeCtx } = slopeFixture();
-  const lines = buildSectionFigure(cut, probeCtx).content.filter(p => p.type === 'line' && p.weight === 'thick');
+  const lines = buildCutContent(cut, probeCtx).content.filter(p => p.type === 'line' && p.weight === 'thick');
   const has = (x1, y1, x2, y2) => lines.some(p => Math.abs(p.x1 - x1) < 1e-6 && Math.abs(p.y1 - y1) < 1e-6
     && Math.abs(p.x2 - x2) < 1e-6 && Math.abs(p.y2 - y2) < 1e-6);
   assert.ok(lines.every(p => p.y1 === p.y2 ? p.y1 === 0 : p.x1 === p.x2),
@@ -364,13 +358,13 @@ test('【ceilEdge が違う列は結合しない】同じ ceilZ・同じ bands �
 test('【失敗系・傾斜の ceilProfile】ceilZHi が ceilZ と同値・非有限なら平面と同じ（ceilEdge なし・列と出力が従来と同一）', () => {
   const flat = slopeFixture('3000', [{ loX: 0, hiX: 4200, ceilZ: 2400 }]);
   const baseCols = buildColumns(flat.cut, flat.probeCtx);
-  const baseContent = buildSectionFigure(flat.cut, flat.probeCtx).content;
+  const baseContent = buildCutContent(flat.cut, flat.probeCtx).content;
   for (const hi of [2400, NaN, Infinity, undefined]) {
     const f = { cut: { ...flat.cut, ceilProfile: [{ loX: 0, hiX: 4200, ceilZ: 2400, ceilZHi: hi }] }, probeCtx: flat.probeCtx };
     const cols = buildColumns(f.cut, f.probeCtx);
     assert.deepEqual(cols, baseCols, `ceilZHi=${hi}: 列が平面と同一`);
     assert.ok(cols.every(c => c.ceilEdge === undefined && c.bands.every(b => b.ceilEdge === undefined)), `ceilZHi=${hi}: ceilEdge なし`);
-    assert.deepEqual(buildSectionFigure(f.cut, f.probeCtx).content, baseContent, `ceilZHi=${hi}: 出力が平面と同一`);
+    assert.deepEqual(buildCutContent(f.cut, f.probeCtx).content, baseContent, `ceilZHi=${hi}: 出力が平面と同一`);
   }
 });
 
@@ -402,7 +396,7 @@ test('【傾斜・通り芯で割れた内壁】共有CLの2室＋急勾配: 割
   const innerLo = cols.find(c => c.x0 === 1942.5), innerHi = cols.find(c => c.x0 === 2000);
   near(innerLo.bands[0].z1, 3400); near(innerHi.bands[0].z1, 3428.75, '割れた後半の列の上端は後半の高い側');
   const ceilAt = x => 2400 + x * 0.5;
-  for (const p of buildSectionFigure(cut, probeCtx).content.filter(q => q.type === 'line')) {
+  for (const p of buildCutContent(cut, probeCtx).content.filter(q => q.type === 'line')) {
     assert.ok(-p.y1 <= ceilAt(p.x1) + 1e-6 && -p.y2 <= ceilAt(p.x2) + 1e-6,
       `線 (${p.x1},${-p.y1})-(${p.x2},${-p.y2}) が天井の斜線より上に出ている（${p.weight}）`);
   }
