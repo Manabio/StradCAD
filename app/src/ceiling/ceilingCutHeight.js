@@ -107,6 +107,7 @@ function roomGroupsOf(graph) {
  *   uniform: boolean,
  *   cutZAt: (x: number, y: number) => number,
  *   wallCutAt: (isVertical: boolean, axisMm: number, alongMm: number) => number,
+ *   wallFloorAt: (isVertical: boolean, axisMm: number, alongMm: number) => number,
  *   range: {min: number, max: number},
  * }}  roomCutMm・rooms＝天井面を持つ全ての部屋（部分指定の子は親と同じ値）。range＝cutZAt の取りうる範囲（基本の高さを含む）。
  *   uniform＝cutZAt がどこでも baseCutMm（数値の切断高と同じ）
@@ -214,6 +215,16 @@ export function ceilingCutResolverOf(graph, opts = {}) {
     }
     return min === Infinity ? baseCutMm : min;
   };
+  // 壁の両側（軸 ±SIDE_SAMPLE_MM）の天井のある部屋の床面（床段差込みの絶対 z。天井面 zMm − 天井高 chMm）の低い方。両側とも無ければ 0（FL）。
+  // 建具の下端・上端（床からの高さ）を切断高と同じ絶対 z に揃えるために使う（ceilingOpeningVisibility.js）。
+  const wallFloorAt = (isVertical, axisMm, alongMm) => {
+    let min = Infinity;
+    for (const across of [axisMm - SIDE_SAMPLE_MM, axisMm + SIDE_SAMPLE_MM]) {
+      const s = isVertical ? field.surfaceAt(across, alongMm) : field.surfaceAt(alongMm, across);
+      if (s && roomCutMm.has(s.roomId)) min = Math.min(min, s.zMm - s.chMm);
+    }
+    return min === Infinity ? 0 : min;
+  };
 
   // 壁の帯の索引。cutZAt の最初の呼び出しまで組まない（wallCutAt だけを使う呼び出し側＝ShapesLayer は組まずに済む）
   let index = null;
@@ -270,5 +281,5 @@ export function ceilingCutResolverOf(graph, opts = {}) {
       return roomCutAt(x, y) ?? baseCutMm;
     };
   const range = { min: Math.min(baseCutMm, ...roomCutMm.values()), max: Math.max(baseCutMm, ...roomCutMm.values()) };
-  return { baseCutMm, roomCutMm, rooms, droppedBeams, uniform, cutZAt, wallCutAt, range };
+  return { baseCutMm, roomCutMm, rooms, droppedBeams, uniform, cutZAt, wallCutAt, wallFloorAt, range };
 }

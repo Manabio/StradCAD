@@ -84,10 +84,20 @@ test('【配線】SceneLayers は <ShapesLayer> へ direction={planSectionDirect
 });
 
 // 見上げの腰壁・垂れ壁は天伏の切断高（部屋ごと・壁は天井のある側の低い方）で解く: ShapesLayer が向きで解決の opts を切り替え、向きをキャッシュ鍵にも含める。
-test('【配線】ShapesLayer は見上げのとき kneeDropUpOptions(ceilingCutResolverOf(graph).wallCutAt) を buildWallDrawPlan へ渡し、向きを graphComputed の鍵に含める', () => {
+test('【配線】ShapesLayer は見上げのとき kneeDropUpOptions(ceilingUpDerived(graph).wallCutAt) と hiddenOpeningIds を buildWallDrawPlan へ渡し、向きを graphComputed の鍵に含める', () => {
   const shapes = stripComments(fs.readFileSync(path.resolve(import.meta.dirname, 'ShapesLayer.jsx'), 'utf8'));
   assert.match(shapes, /^\s*const up = direction === 'up';\s*$/m);
   assert.match(shapes, /graphComputed\(graph, `wallDrawPlan:\$\{lodLevel\}:\$\{clipKey\}:\$\{up \? 'up' : 'down'\}`,/);
-  assert.match(shapes, /buildWallDrawPlan\(graph, lodLevel, \{ clipGroups, kneeDrop: up \? kneeDropUpOptions\(ceilingCutResolverOf\(graph\)\.wallCutAt\) : undefined \}\)/);
+  assert.match(shapes, /^\s*const upDerived = up \? ceilingUpDerived\(graph\) : null;\s*$/m);
+  assert.match(shapes, /^\s*kneeDrop: upDerived \? kneeDropUpOptions\(upDerived\.wallCutAt\) : undefined,\s*$/m);
+  assert.match(shapes, /^\s*hiddenOpeningIds: upDerived\?\.hiddenOpeningIds,\s*$/m);
   assert.equal((shapes.match(/buildWallDrawPlan\(/g) ?? []).length, 1, '解決の入口は 1 か所');
+});
+
+// 見上げの建具は断面線がまたぐものだけ描く（ceiling/ceilingOpeningVisibility.js）。壁の欠き取り（上）と記号（OpeningsLayer）が同じ集合を使う。
+test('【配線】SceneLayers は <OpeningsLayer> へ direction={planSectionDirection(appMode)} を渡し、OpeningsLayer は見上げのときだけ ceilingUpDerived の集合で建具を除く', () => {
+  assert.match(codeOnly, /^\s*\{showPlanFigure && <OpeningsLayer [^>]*direction=\{planSectionDirection\(appMode\)\} \/>\}\s*$/m);
+  const openings = stripComments(fs.readFileSync(path.resolve(import.meta.dirname, 'OpeningsLayer.jsx'), 'utf8'));
+  assert.match(openings, /^\s*const hiddenIds = direction === 'up' \? ceilingUpDerived\(graph\)\.hiddenOpeningIds : null;\s*$/m);
+  assert.match(openings, /^\s*if \(hiddenIds\?\.has\(opening\.id\)\) return null;\s*$/m);
 });

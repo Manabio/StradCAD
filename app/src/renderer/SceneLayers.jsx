@@ -130,7 +130,7 @@ export const SceneLayers = observer(({
                 その階のもの）。finishWrap=壁と干渉する柱に仕上げ包みの外形を重ねる（追加仕様2026-08。
                 厚みは展開図の柱型と同じ finish/columnWrap.js から取る）。 */}
             {showPlanFigure && <ShapesLayer graph={graph} viewport={viewport} stairUnderClips={stairUnderClips} direction={planSectionDirection(appMode)} />}
-            {showPlanFigure && <OpeningsLayer graph={graph} viewport={viewport} />}
+            {showPlanFigure && <OpeningsLayer graph={graph} viewport={viewport} direction={planSectionDirection(appMode)} />}
             {showPlanFigure && <ColumnsLayer graph={graph} viewport={viewport} finishWrap originMarks={shouldShowColumnOriginMarks(appMode)} />}
             {appMode === 'structure' && (
               <StructuralLayer

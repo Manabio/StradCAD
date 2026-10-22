@@ -172,6 +172,7 @@ export function planColumnWraps(graph) {
  *   （planWallRegion.js の wallInput）。graph だけでは決まらない情報なので呼び出し側
  *   （ShapesLayer.jsx）が渡し、graphComputed のキーにも符号化する。省略時は畳み方に制約なし。
  *   kneeDrop: resolveKneeDropOverlays の opts（見上げ＝天伏の切断高・垂れ壁優先。finish/kneeDropWall.js kneeDropUpOptions）。省略は平面。
+ *   hiddenOpeningIds: 壁の欠き取りから外す建具の id の集合（見上げ＝天伏で断面線がまたがない建具。省略は全部欠き取る）。
  *   呼び出し側（ShapesLayer.jsx）は向きをキーにも符号化する。柱の仕上げ包み（planColumnWraps）は向きによらず平面の腰壁・垂れ壁で解く（既知の限界）。
  * @returns {{
  *   deferredBackingIds: Set<string>,
@@ -183,7 +184,7 @@ export function planColumnWraps(graph) {
  * }}
  *   wallStuds: 詳細LODの壁下地材（間柱断面）の長さ方向の中心位置と材厚（wallStudLayout.js）。詳細以外は空。
  */
-export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null, kneeDrop = undefined } = {}) {
+export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null, kneeDrop = undefined, hiddenOpeningIds = null } = {}) {
   const detail = lodLevel === LodLevel.DETAIL;
   const schematic = lodLevel === LodLevel.SCHEMATIC;
   const walls = graph.walls;
@@ -191,7 +192,8 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null, kneeDrop
   // 壁ごとの開口（開口位置で壁線にギャップを入れるための区間分割）。従来は壁1本ごとに
   // graph.openings を総当たりしていた（O(壁 × 開口)）。coord1 昇順は区間分割が前提に
   // しているためここで確定させる。
-  const openingIndex = indexByAxis(graph.openings);
+  // 見上げ（天伏）は断面線がまたがない建具を壁の欠き取りから外す＝その位置も連なった壁（ceiling/ceilingOpeningVisibility.js）。
+  const openingIndex = indexByAxis(hiddenOpeningIds ? graph.openings.filter(o => !hiddenOpeningIds.has(o.id)) : graph.openings);
   const openingsByWall = new Map();
   for (const wall of walls) {
     const found = findOpeningsOnWallIndexed(wall, openingIndex);

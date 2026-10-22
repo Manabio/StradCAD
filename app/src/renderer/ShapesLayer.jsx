@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Group, Line, Rect, Circle, Path } from 'react-konva';
 import { ShapeType, ceilingCutHeightMmOf } from '@core';
 import { shouldDrawCapOutline, kneeDropUpOptions } from '../finish/kneeDropWall.js';
-import { ceilingCutResolverOf } from '../ceiling/ceilingCutHeight.js';
+import { ceilingUpDerived } from './ceilingUpDerived.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { buildWallDrawPlan } from './wallDrawPlan.js';
 import { graphComputed } from './graphDerived.js';
@@ -95,7 +95,14 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null, 
   const up = direction === 'up';
   const { kneeDropOverlays, wallLines, wallStuds } =
     graphComputed(graph, `wallDrawPlan:${lodLevel}:${clipKey}:${up ? 'up' : 'down'}`,
-      () => buildWallDrawPlan(graph, lodLevel, { clipGroups, kneeDrop: up ? kneeDropUpOptions(ceilingCutResolverOf(graph).wallCutAt) : undefined }));
+      () => {
+        const upDerived = up ? ceilingUpDerived(graph) : null;
+        return buildWallDrawPlan(graph, lodLevel, {
+          clipGroups,
+          kneeDrop: upDerived ? kneeDropUpOptions(upDerived.wallCutAt) : undefined,
+          hiddenOpeningIds: upDerived?.hiddenOpeningIds,
+        });
+      });
 
   return graph.generalShapes.map((shape) => {
     const sp = strokeProps(shape, viewport);

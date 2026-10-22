@@ -7,6 +7,7 @@ const OPENING_HIT_PX = 8;
 import { buildHostWallByOpening, wallFaceRange } from '../openings/openingGeometry.js';
 import { openingExteriorDir } from '../openings/openingPlanSymbolGeometry.js';
 import { graphComputed } from './graphDerived.js';
+import { ceilingUpDerived } from './ceilingUpDerived.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
 import { arcPathD } from './ShapesLayer.jsx';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
@@ -21,9 +22,11 @@ import { buildOpeningPlanSymbol } from '../openings/openingPlanSymbol.js';
 // はhost壁・面線・entryを引いてctxを組み、buildOpeningPlanSymbolが返すプリミティブ列を
 // renderPlanPrimitiveでKonva要素へ機械的に変換するだけ（判断は持たない。詳細は
 // .claude/opening-model.md 参照）。
-export const OpeningsLayer = observer(({ graph, viewport }) => {
+export const OpeningsLayer = observer(({ graph, viewport, direction = 'down' }) => {
   if (!graph) return null;
   const { scaleX, scaleY, lodLevel } = viewport;
+  // 見上げ（天伏）は壁の断面線がまたがない建具を描かない（壁側の欠き取りも同じ集合で外す。ShapesLayer.jsx）。見下げは素通し。
+  const hiddenIds = direction === 'up' ? ceilingUpDerived(graph).hiddenOpeningIds : null;
 
   // 開口ごとのホスト壁は graph が変わらない限り同じ——パン・ズームの再レンダーで
   // 引き直さないよう graph 単位にキャッシュする（graphDerived.js）。
@@ -88,6 +91,7 @@ export const OpeningsLayer = observer(({ graph, viewport }) => {
   }
 
   return graph.openings.map((opening) => {
+    if (hiddenIds?.has(opening.id)) return null;
     const el = renderOpeningSymbol(opening);
     return el ? (
       <Group key={opening.id} name="opening-symbol" openingId={opening.id}
