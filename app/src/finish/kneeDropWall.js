@@ -416,25 +416,22 @@ export function shouldDrawCapOutline(overlay, direction, ceilingCutMm) {
   return !(overlay.topHeight < (overlay.cutMm ?? ceilingCutMm)); // 区間ごとの切断高（見上げの解決）があればそれを優先
 }
 
-// 壁の両側の点で切断高を問うときの、壁の仕上げ面からの距離(mm)（隣のセルの内側に入る程度）と、区間に沿った位置
-const SIDE_SAMPLE_MM = 10;
+// 区間に沿って壁の切断高を問う位置（区間の割合）
 const ALONG_SAMPLES = [0.25, 0.5, 0.75];
 
 /**
- * 見上げ（天伏）で resolveKneeDropOverlays に渡す opts。区間の切断高＝区間の両側（壁の仕上げ面の外 SIDE_SAMPLE_MM）・区間に沿った
- * 数点で cutZAt（ceiling/ceilingCutHeight.js）を引いた最小（壁に接する部屋の切断高の最小）。腰壁・垂れ壁の同時指定は垂れ壁を採る。
- * @param {(x: number, y: number) => number} cutZAt
+ * 見上げ（天伏）で resolveKneeDropOverlays に渡す opts。区間の切断高＝区間に沿った数点で wallCutAt（ceiling/ceilingCutHeight.js
+ * ceilingCutResolverOf の wallCutAt＝壁の両側の天井のある部屋の切断高の小さい方。両側とも天井が無ければ階の値）を引いた最小。
+ * 腰壁・垂れ壁の同時指定は垂れ壁を採る。
+ * @param {(isVertical: boolean, axisMm: number, alongMm: number) => number} wallCutAt
  */
-export function kneeDropUpOptions(cutZAt) {
+export function kneeDropUpOptions(wallCutAt) {
   return {
     preferDrop: true,
     cutHeightOf: geo => {
-      const sides = [geo.faceLo - SIDE_SAMPLE_MM, geo.faceHi + SIDE_SAMPLE_MM];
+      const axis = geo.axisCL.effectiveValue;
       let min = Infinity;
-      for (const t of ALONG_SAMPLES) {
-        const along = geo.lo + (geo.hi - geo.lo) * t;
-        for (const across of sides) min = Math.min(min, geo.isVertical ? cutZAt(across, along) : cutZAt(along, across));
-      }
+      for (const t of ALONG_SAMPLES) min = Math.min(min, wallCutAt(geo.isVertical, axis, geo.lo + (geo.hi - geo.lo) * t));
       return min;
     },
   };

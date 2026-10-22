@@ -36,7 +36,7 @@ function restoreSource(prim) {
  * 立体と切断高から、見上げの平面の線を解く。入力の配列・立体は変更しない。
  * @param {import('./planSolids.js').Solid[]} solids  planSolids の出力（ceilings:true で天井立体を含む）
  * @param {number|((x:number,y:number)=>number)} cutZ  切断面の高さ（自階 FL=0 の絶対 mm）。有限でなければ TypeError。
- *   関数のとき（天伏の切断高の例外。ceiling/ceilingCutHeight.js）は位置ごとの切断高で、opts.cutRange {min,max}（取りうる範囲。元の座標）が必須。鏡像で cut'(x,y)=-cutZ(x,y)・範囲は [-max,-min]
+ *   関数のとき（天伏の部屋ごとの切断高。ceiling/ceilingCutHeight.js）は位置ごとの切断高で、opts.cutRange {min,max}（取りうる範囲。元の座標）が必須。鏡像で cut'(x,y)=-cutZ(x,y)・範囲は [-max,-min]
  * @param {{eps?: number, slopeSampleMm?: number, cutRange?: {min:number, max:number}}} [opts]  planSectionFigure と同じ
  * @returns {import('./planSectionFigure.js').Primitive[]}  source.layerFloorZ は入力の立体の値（省略は省略のまま）
  */

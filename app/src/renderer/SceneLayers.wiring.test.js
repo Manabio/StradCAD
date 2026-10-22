@@ -83,11 +83,11 @@ test('【配線】SceneLayers は <ShapesLayer> へ direction={planSectionDirect
   assert.match(shapes, /^\s*const ceilingCutMm = ceilingCutHeightMmOf\(graph\.plane\);\s*$/m);
 });
 
-// 見上げの腰壁・垂れ壁は天伏の切断高（階の 1 値＋低い部屋の例外）で解く: ShapesLayer が向きで解決の opts を切り替え、向きをキャッシュ鍵にも含める。
-test('【配線】ShapesLayer は見上げのとき kneeDropUpOptions(ceilingCutResolverOf(graph).cutZAt) を buildWallDrawPlan へ渡し、向きを graphComputed の鍵に含める', () => {
+// 見上げの腰壁・垂れ壁は天伏の切断高（部屋ごと・壁は天井のある側の低い方）で解く: ShapesLayer が向きで解決の opts を切り替え、向きをキャッシュ鍵にも含める。
+test('【配線】ShapesLayer は見上げのとき kneeDropUpOptions(ceilingCutResolverOf(graph).wallCutAt) を buildWallDrawPlan へ渡し、向きを graphComputed の鍵に含める', () => {
   const shapes = stripComments(fs.readFileSync(path.resolve(import.meta.dirname, 'ShapesLayer.jsx'), 'utf8'));
   assert.match(shapes, /^\s*const up = direction === 'up';\s*$/m);
   assert.match(shapes, /graphComputed\(graph, `wallDrawPlan:\$\{lodLevel\}:\$\{clipKey\}:\$\{up \? 'up' : 'down'\}`,/);
-  assert.match(shapes, /buildWallDrawPlan\(graph, lodLevel, \{ clipGroups, kneeDrop: up \? kneeDropUpOptions\(ceilingCutResolverOf\(graph\)\.cutZAt\) : undefined \}\)/);
+  assert.match(shapes, /buildWallDrawPlan\(graph, lodLevel, \{ clipGroups, kneeDrop: up \? kneeDropUpOptions\(ceilingCutResolverOf\(graph\)\.wallCutAt\) : undefined \}\)/);
   assert.equal((shapes.match(/buildWallDrawPlan\(/g) ?? []).length, 1, '解決の入口は 1 か所');
 });

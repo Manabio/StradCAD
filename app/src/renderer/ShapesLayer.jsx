@@ -90,12 +90,12 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null, 
   // 識別する代わりにここから渡す。
   const clipGroups = stairUnderClipGroups(stairUnderClips);
   const clipKey = clipGroups ? [...clipGroups].map(([id, g]) => `${id}=${g}`).join(',') : '';
-  // 見上げ（天伏）は腰壁・垂れ壁を天伏の切断高（階の 1 値＋低い部屋の例外。ceilingCutResolverOf）で解き、同時指定は垂れ壁を採る
+  // 見上げ（天伏）は腰壁・垂れ壁を天伏の切断高（部屋ごと・壁は天井のある側の低い方。ceilingCutResolverOf の wallCutAt）で解き、同時指定は垂れ壁を採る
   // （kneeDropUpOptions）。向きを鍵に含める（graphDerived.js の約束）。
   const up = direction === 'up';
   const { kneeDropOverlays, wallLines, wallStuds } =
     graphComputed(graph, `wallDrawPlan:${lodLevel}:${clipKey}:${up ? 'up' : 'down'}`,
-      () => buildWallDrawPlan(graph, lodLevel, { clipGroups, kneeDrop: up ? kneeDropUpOptions(ceilingCutResolverOf(graph).cutZAt) : undefined }));
+      () => buildWallDrawPlan(graph, lodLevel, { clipGroups, kneeDrop: up ? kneeDropUpOptions(ceilingCutResolverOf(graph).wallCutAt) : undefined }));
 
   return graph.generalShapes.map((shape) => {
     const sp = strokeProps(shape, viewport);

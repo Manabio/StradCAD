@@ -18,7 +18,8 @@ import { ROOF_LABEL_FONT_MM, ROOF_LABEL_ARROW_MM, ROOF_LABEL_GAP_MM, ROOF_LABEL_
 
 /**
  * @param {{shape: string, dims: number[], baseZ: number, rects: Array<{x1:number,y1:number,x2:number,y2:number}>}} p
- * @returns {{zLo: number, zHi: number, zAt: ((x:number, y:number) => number)|null}}
+ * @returns {{zLo: number, zHi: number, zAt: ((x:number, y:number) => number)|null, zMaxIn?: (rect: {x1:number,y1:number,x2:number,y2:number}) => number}}
+ *   zMaxIn＝矩形の中の天井面の最高点の高さ（形状つきだけ。傾斜は上がる側の辺・円弧は中心線・ドームは中心を矩形に収めた点で正確に取る）
  */
 export function ceilingShapeSolidZ({ shape, dims, baseZ, rects }) {
   const flat = { zLo: baseZ, zHi: baseZ, zAt: null };
@@ -33,7 +34,9 @@ export function ceilingShapeSolidZ({ shape, dims, baseZ, rects }) {
       const t = Math.min(Math.max((a.alongX ? y : x) - mid, -a.w / 2), a.w / 2);
       return baseZ + Math.sqrt(Math.max(0, a.R * a.R - t * t)) - (a.R - a.rise);
     };
-    return { zLo: baseZ, zHi: baseZ + a.rise, zAt };
+    // 頂点（中心線）を矩形に収めた点が最大（中心線からの距離 t が最小）
+    const zMaxIn = r => (a.alongX ? zAt(r.x1, clamp(mid, r.y1, r.y2)) : zAt(clamp(mid, r.x1, r.x2), r.y1));
+    return { zLo: baseZ, zHi: baseZ + a.rise, zAt, zMaxIn };
   }
   if (shape === CeilingShape.DOME) {
     if (!(x2 - x1 > 0) || !(y2 - y1 > 0)) return flat;
@@ -43,7 +46,9 @@ export function ceilingShapeSolidZ({ shape, dims, baseZ, rects }) {
       const p = norm(x, cx, hx), q = norm(y, cy, hy);
       return baseZ + dims[0] * (1 - p * p) * (1 - q * q);
     };
-    return { zLo: baseZ, zHi: baseZ + dims[0], zAt };
+    // 頂点（中心）を矩形に収めた点が最大（p・q の各因子が独立に最大）
+    const zMaxIn = r => zAt(clamp(cx, r.x1, r.x2), clamp(cy, r.y1, r.y2));
+    return { zLo: baseZ, zHi: baseZ + dims[0], zAt, zMaxIn };
   }
   const [rise, dir] = dims;
   const alongX = dir === 0 || dir === 180;
@@ -55,8 +60,12 @@ export function ceilingShapeSolidZ({ shape, dims, baseZ, rects }) {
     const u = Math.min(Math.max(reverse ? 1 - t : t, 0), 1);
     return baseZ + rise * u;
   };
-  return { zLo: baseZ, zHi: baseZ + rise, zAt };
+  // 勾配は軸方向に単調: 上がる側の辺の上が最大
+  const zMaxIn = r => (alongX ? zAt(reverse ? r.x1 : r.x2, r.y1) : zAt(r.x1, reverse ? r.y1 : r.y2));
+  return { zLo: baseZ, zHi: baseZ + rise, zAt, zMaxIn };
 }
+
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
 /**
  * 円弧の諸元（外接矩形 B と dims=[ライズ, 軸]）。軸 0＝x に平行（幅 w は y 方向）・90＝y に平行（w は x 方向）。

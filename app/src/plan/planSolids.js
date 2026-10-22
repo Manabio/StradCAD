@@ -85,7 +85,7 @@ const baseSource = (layer, kind, id, extra = {}) => ({ kind, id: String(id), lay
 
 // ---------------------------------------------------------------- 梁
 
-function beamSolids(layer) {
+export function beamSolids(layer) {
   const out = [];
   for (const beam of layer.graph.beams ?? []) {
     if (EXCLUDED_BEAM_ROLES.has(beam.role)) continue;

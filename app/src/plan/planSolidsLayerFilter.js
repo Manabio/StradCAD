@@ -15,6 +15,7 @@ import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingCutResolverOf } from '../ceiling/ceilingCutHeight.js';
 import { markSameHeightCeilingBoundaries } from '../ceiling/ceilingBoundaryStyle.js';
 import { markEaveOutlineLines } from '../ceiling/soffitLineStyle.js';
+import { markDroppedBeamLines } from '../ceiling/droppedBeamStyle.js';
 import { markOpeningEdges } from './planOpeningEdges.js';
 import { subtractRects } from './planGeometry.js';
 import { planSolids } from './planSolids.js';
@@ -124,16 +125,26 @@ export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf 
 }
 
 /**
- * 見上げの線（自階＋直上階。planSectionFigureUp）。cutZ＝階の切断高（自階 FL からの mm。基本の高さ）。graph なし・cutZ が有限でなければ空配列。
- * 基本の高さでは天井面全体を描けない部屋（階段下など）だけ切断高を下げる（ceiling/ceilingCutHeight.js。1 階＝1 天伏の例外）。
- * 例外の部屋が無ければ従来どおり数値の cutZ で解く（出力不変）。
+ * 立体のうち自階の層（layerFloorZ が 0・省略）の梁だけ。下がり梁の判定（ceiling/ceilingCutHeight.js）へ渡す。
+ * 上階の層の梁は対象にしない（見上げの立体は上階の梁を含めないが、含まれても部屋の切断高を下げない）。
+ * @param {import('./planSolids.js').Solid[]} solids
+ */
+export function ownLayerBeamSolids(solids) {
+  return (solids ?? []).filter(s => s?.kind === 'beam' && (s.source?.layerFloorZ ?? 0) === 0);
+}
+
+/**
+ * 見上げの線（自階＋直上階。planSectionFigureUp）。cutZ＝階の切断高（自階 FL からの mm。天井の無い所の切断高）。graph なし・cutZ が有限でなければ空配列。
+ * 切断高は部屋ごと（部屋の天井面の最低点の直下。壁は天井のある側の低い方。ceiling/ceilingCutHeight.js。裁定 2026-10-22）。
+ * 全域が階の値と同じ（uniform）なら数値の cutZ で解く（出力不変）。
  * @returns {Primitive[]}
  */
 export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRiserOf = () => null, cutZ }) {
   if (!graph || !Number.isFinite(cutZ)) return [];
-  const resolver = ceilingCutResolverOf(graph, { baseCutMm: cutZ });
   const solids = planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf });
-  const figure = resolver.exceptions.length === 0
+  // 下がり梁の判定には、いま作った自階の梁の立体を使い回す（resolver が梁を立体化し直さない）
+  const resolver = ceilingCutResolverOf(graph, { baseCutMm: cutZ, beamSolids: ownLayerBeamSolids(solids) });
+  const figure = resolver.uniform
     ? planSectionFigureUp(solids, cutZ)
     : planSectionFigureUp(solids, resolver.cutZAt, { cutRange: resolver.range });
   const drawn = drawnPrimitives(figure, 'up');
@@ -146,7 +157,8 @@ export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRise
   const holes = upperFloor?.footprint?.holes ?? [];
   const visibleHoles = ceilingRects.length > 0 ? subtractRects(holes, ceilingRects) : holes;
   // 直上階の下屋の軒先・けらばの外形線は中線（ユーザー指示 2026-10-18）
-  return markEaveOutlineLines(markOpeningEdges(marked, visibleHoles));
+  // 天井より低い梁（下がり梁）の外形は中線（裁定 2026-10-22）
+  return markDroppedBeamLines(markEaveOutlineLines(markOpeningEdges(marked, visibleHoles)), resolver.droppedBeams.map(d => d.beamId));
 }
 
 /**

@@ -448,16 +448,17 @@ test('見上げ: 腰壁＋垂れ壁の同時指定は垂れ壁として扱う（
   assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(constCut(99999))).size, 0);
 });
 
-test('見上げ: 区間の両側の切断高の最小を使う（壁の片側が低い部屋なら低い方。腰壁1300・片側 1000/反対側 2000 → 1000 で切られる）', () => {
+test('見上げ: 区間の切断高は壁の切断高（wallCutAt。軸と区間に沿った位置で問う）の区間に沿った最小。位置で替われば最小（腰壁1300・前半 1000/後半 2000 → 1000 で切られる）', () => {
   const graph = makeGraph();
-  const { key } = makeSharedEdgeRooms(graph); // 壁は y=2000 の水平壁。上室は y<2000
+  const { key } = makeSharedEdgeRooms(graph); // 壁は y=2000 の水平壁（区間は x 0..4000）
   graph.setKneeDropWall(key, { knee: { topHeight: 1300 } });
   const seen = [];
-  const cutZAt = (x, y) => { seen.push([x, y]); return y < 2000 ? 1000 : 2000; };
-  assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(cutZAt)).size, 0);
-  assert.ok(seen.some(([, y]) => y < 2000) && seen.some(([, y]) => y > 2000), '壁の両側で問い合わせる');
-  assert.ok(seen.every(([x]) => x > 0 && x < 4000), '区間に沿った点');
-  const flipped = (x, y) => (y < 2000 ? 2000 : 1000);
+  const wallCutAt = (isVertical, axis, along) => { seen.push([isVertical, axis, along]); return along < 2000 ? 1000 : 2000; };
+  assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(wallCutAt)).size, 0);
+  assert.ok(seen.length > 0 && seen.every(([v, axis]) => v === false && axis === 2000), '水平壁の軸 y=2000 で問い合わせる');
+  assert.ok(seen.every(([, , along]) => along > 0 && along < 4000), '区間に沿った点');
+  assert.ok(seen.some(([, , a]) => a < 2000) && seen.some(([, , a]) => a > 2000), '区間の前半と後半の両方');
+  const flipped = (v, axis, along) => (along < 2000 ? 2000 : 1000);
   assert.equal(resolveKneeDropOverlays(graph, kneeDropUpOptions(flipped)).size, 0, '逆でも最小');
 });
 

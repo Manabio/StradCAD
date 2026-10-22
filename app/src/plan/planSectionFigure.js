@@ -65,7 +65,7 @@ export const PLAN_LINE_STYLE = Object.freeze({
  */
 export const PLAN_GAP_CLOSE_MM = 20;
 
-/** 分類・高さ比較の許容（mm。既定）。天伏の切断高の例外（ceiling/ceilingCutHeight.js）も天井面の直下をこの値で取る。 */
+/** 分類・高さ比較の許容（mm。既定）。天伏の部屋ごとの切断高（ceiling/ceilingCutHeight.js）は天井面の 2·eps 下（遮蔽が効く最小の差）で取る。 */
 export const DEFAULT_EPS_MM = 0.5;
 const DEFAULT_SLOPE_SAMPLE_MM = 100;
 const BISECT_MM = 0.5; // 勾配の切り替わり点の二分探索の収束幅
@@ -321,7 +321,7 @@ const round6 = v => Math.round(v * 1e6) / 1e6;
  * 立体と切断高から平面の線を解く。
  * @param {Solid[]} solids  planSolids の出力（汎用立体を含む）。順序に依らない
  * @param {number|((x:number,y:number)=>number)} cutZ  切断面の高さ（自階 FL=0 の絶対 mm）。有限でなければ TypeError。
- *   関数のときは位置 (x,y) ごとの切断高（天伏の切断高の例外。ceiling/ceilingCutHeight.js）。opts.cutRange（{min,max}。関数の取りうる範囲）が必須。
+ *   関数のときは位置 (x,y) ごとの切断高（天伏の部屋ごとの切断高。ceiling/ceilingCutHeight.js）。opts.cutRange（{min,max}。関数の取りうる範囲）が必須。
  *   立体は範囲で大域分類し（zHi<=min+eps→全域 below／zLo>=max-eps→全域 above＝捨てる）、範囲にまたがる立体だけ点ごとに below／cut／above を解く。
  *   勾配のある（zAt）立体は従来どおり zAt < 切断高 の部分だけ below（切断面との交線は出さない）。数値のときの出力は従来と同一。
  * @param {{eps?: number, slopeSampleMm?: number, cutRange?: {min:number, max:number}}} [opts]  eps＝分類・高さ比較の許容（既定 0.5）／slopeSampleMm＝勾配の可視を調べる間隔（既定 100）／cutRange＝cutZ が関数のときの範囲
