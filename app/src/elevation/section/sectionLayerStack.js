@@ -63,7 +63,7 @@ export function orderLayerStack(layerInfos) {
  * そこに居るとは限らない**——層ごとの探査窓（`SectionCut.layerRunWindows`）で自階が落ちた
  * はり出し列では、残った上階が本関数の答えになる。呼び出し側は「baseの下は自階の床構造」の
  * ような、baseが帯自身の階であることに依存する推論をそのまま当ててはいけない
- * （`sectionProbe.js`の`unexploredBelowZOf`が、その高さを未探査として帯ごと落としている）。
+ * （`sectionHits.js`の`unexploredBelowZOf`が、その高さを未探査として帯ごと落としている）。
  * @param {LayerInfo[]} stack - orderLayerStackの結果
  * @returns {LayerInfo|null}
  */

@@ -908,7 +908,7 @@ test('【実機指摘・6D(c)】emitColumns: 見えている壁が別の層へ�
 function kneeOnOverhangColumns() {
   const knee = { id: 'w-knee-2f' };
   return [
-    // はり出し列（自階の平面が無い＝slab帯を作らない。sectionProbe.jsのunexploredBelowZOf）。
+    // はり出し列（自階の平面が無い＝slab帯を作らない。sectionHits.jsのunexploredBelowZOf）。
     { x0: -115, x1: 0, worldLo: 0, worldHi: 1, bands: [
       { kind: 'cut', z0: 3000, z1: 3800, wall: knee, layerRole: 'above', isKneeDrop: true },
       { kind: 'wall', z0: 3800, z1: 5400, distMm: 2500, layerRole: 'above' }] },
