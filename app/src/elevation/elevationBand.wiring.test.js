@@ -49,6 +49,21 @@ test('【配線】contentForCut（elevationStairSequence.js）: 壁の端の縦�
   assert.equal(seqSrc.split('dashHorizontalsBehindStair(clipWallEndVerticalsByStairMass(wallPrims, cut, columns), occluders)').length - 1, 1);
 });
 
+test('【配線】buildStraightFaceSequence（直進系の階段帯）: content は共通経路 buildCutContent を通し、専用経路 buildSectionFigure を呼ばない（S2）', () => {
+  const seqSrc = fs.readFileSync(path.resolve(import.meta.dirname, 'elevationStairSequence.js'), 'utf8');
+  const code = seqSrc.split(/\r?\n/)
+    .filter(line => { const t = line.trim(); return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*'); })
+    .map(line => line.replace(/\s\/\/.*$/, '')).join('\n');
+  const seqBody = functionBody(code, 'function buildStraightFaceSequence(');
+  assert.equal(count(seqBody, 'straightContentForCut('), 1, 'straightContentForCut の呼び出しが 1 回でない');
+  assert.equal(count(seqBody, 'bandContextOf('), 1, 'bandContextOf を使っていない');
+  const body = functionBody(code, 'function straightContentForCut(');
+  assert.equal(count(body, 'buildCutContent('), 1, 'buildCutContent の呼び出しが 1 回でない');
+  assert.equal(count(body, 'upperOverhangOf(pcut, columns)'), 1, 'はり出し系のキーを upperOverhangOf から返していない');
+  assert.equal(count(body, 'stairPrimitivesForCut('), 1, 'stairPrimitivesForCut の呼び出しが 1 回でない');
+  assert.equal(count(code, 'buildSectionFigure'), 0, 'elevationStairSequence.js に buildSectionFigure が残っている');
+});
+
 test('【配線】appendBandCutContent: 階段下の部屋の stairPrimitivesForCut は farSide:false を渡す（下から見ると段裏。切断面の奥の段の見えがかりは出さない）', () => {
   const body = functionBody(noComments, 'export function appendBandCutContent(');
   assert.equal(count(body, 'stairPrimitivesForCut('), 1, 'stairPrimitivesForCut の呼び出しが 1 回でない');

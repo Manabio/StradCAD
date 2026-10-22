@@ -437,13 +437,15 @@ B/C/D 面の裁定（b49b929・6b5909f・cb89fed・998e5ed）と隔て板（e0ea
 **規則A・B（梁の見え掛かりの遮蔽）の再採取**: `golden-elev-moku16`（1階 stair 帯の梁の端 12.5 短縮＝壁の向こう）と
 `golden-elev-ceiling/ceiling-steel-stair-test`（2F 床梁の両端 127.5 短縮＝角の柱包み）を上書き。他の golden は不変。
 **golden-elev-stairports の新設**（T2-2=8e9afd7。stair-ports-test1〜5 と直進系の 2026 模擬試験。直進系を平面の install 枠に揃えた）。関門 probe は上の「平面との照合の関門」節。
+**stair-ports-test1〜3 の再採取（2026-10-22・ユーザー裁定「採用」）**: 直進系の階段帯の content を `buildSectionFigure` から U 字系と同じ `buildCutContent` へ載せ替え、上階のはね出し（`upperOverhangOf`）も図側へ渡した。1階の階段帯だけ test1/2 追加24・削除5、test3 追加35・削除9（上階の面の外の壁の縁・壁のない端の延長・帯の部屋の範囲によるアキ・上階 FL 断面線のはね出し外端までの延長）。test4/5 と他の golden は不変。
 
 `app/scripts/probe/golden11/`（`D:/tatsuya/Download/11.stq`を同じ形式でダンプした固定スナップショット。
 展開図一般化Phase 6b-1で追加）も同じ手順で追跡する——`.gitignore`に`!scripts/probe/golden11/`を追加し、
 golden13と並ぶ回帰ゲートに昇格した。採取時点はコミット8e8e1e6（Phase 6前半の直後・Phase 6b-1着手前）→
 2026-09-13 に golden13 と同時に再採取（取り込んだ差分も同じ: 「6」「5」「22」）。
 `app/scripts/probe/golden-knee/`（`makeKneeDropTest.mjs`が生成する`knee-drop-test.stq`のダンプ）は
-現時点では未追跡（ローカルにのみ存在）——3ファイルすべてを毎回`git stash`基点で突き合わせる運用は
+2026-10-22 に再採取して追跡に入れた（9/11 採取のままで、建具ドラッグの `hit`〔07ee813〕1個だけ違っていた。
+`--regen` の有無で出力は同じ）。3ファイルすべてを毎回突き合わせる運用は
 `.claude/elevation-redesign.md`§5.9(e)の手順に従う。
 
 ## A/B/C/D の向きと不変条件

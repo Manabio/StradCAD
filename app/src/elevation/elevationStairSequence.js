@@ -7,8 +7,9 @@
  * のヘッダコメント参照（面の分類・往復間の壁の検出・断面パラメータ解決の委譲先）。
  * WP-E6: タイプ別ディスパッチを追加した——SWITCHBACK→`switchbackCuts`（従来どおり手組みの
  * entries組み立て＋contentForCut）、STRAIGHT/STRAIGHT_LANDING→`straightCuts`（§6.2。
- * face/floorSegments/ceilingProfileの算出もエンジン汎用の`buildSectionFigure`にそのまま
- * 委ねる——直進階段は往路・復路の二重管理が無い単純な1本道のため）、
+ * face/floorSegments/ceilingProfileの算出はエンジン汎用の`buildFaceShell`に委ね、contentは
+ * U字系と同じ共通経路`buildCutContent`＋`stairPrimitivesForCut`で作る——直進階段は往路・復路の
+ * 二重管理が無い単純な1本道のため）、
  * WINDING/L_TURN/FLARED/OPEN_WELL（扇形レーン。`fanCuts.js`）→常にnull。
  * いずれもnullを返す場合は呼び出し側（elevationStair.jsのbuildStairBand）が従来の
  * composeRoomFaces+rotateFacesToStart のフォールバック経路を使う（フォールバック契約自体は
@@ -40,7 +41,7 @@ import { switchbackCuts, partitionStripOf } from './section/cuts/switchbackCuts.
 import { straightCuts } from './section/cuts/straightCuts.js';
 import { UNSUPPORTED_FAN_LANE_TYPES, fanLaneCuts } from './section/cuts/fanCuts.js';
 import { makeProbeContext } from './section/sectionProbe.js';
-import { buildSectionFigure } from './section/sectionEngine.js';
+import { buildFaceShell } from './section/sectionEngine.js';
 import { buildCutContent, upperFloorCutWallEndsOf } from './section/sectionContent.js';
 import { cutDrawRange, localXOf, worldOf } from './section/sectionTypes.js';
 import { layerDirectlyAboveSelf, isRealRoom } from './section/sectionLayerStack.js';
@@ -1427,9 +1428,9 @@ export function upperOverhangOf(pcut, columns) {
 
 /**
  * STRAIGHT/STRAIGHT_LANDING（§6.2・WP-E6）の歩行順面シーケンス。straightCutsが返す各cutを
- * そのままbuildSectionFigure（sectionEngine.js。face/floorSegments/ceilingProfileの算出も
- * エンジン汎用の経路に委ねる。straightCuts.jsヘッダコメント参照）へ渡すだけ——SWITCHBACKの
- * ような手組みのfloorSegments/ceilingProfile算出（往路・復路二重管理の特殊事情）が無いため。
+ * 渡す——face/floorSegments/ceilingProfileはbuildFaceShell（sectionEngine.js。エンジン汎用の
+ * 経路。straightCuts.jsヘッダコメント参照）、contentはstraightContentForCut（U字系と同じ
+ * buildCutContent）。SWITCHBACKのような手組みのfloorSegments/ceilingProfile算出（往路・復路二重管理の特殊事情）が無いため。
  * straightCutsがnullを返す条件（対象外タイプ・cells空・floorHeight未確定・面分類不能）は
  * そのままstairFaceSequenceのnull契約へ延長する。
  * @returns {ReturnType<typeof stairFaceSequence>}
@@ -1438,8 +1439,57 @@ function buildStraightFaceSequence(stair, faces, graph, opts) {
   const table = straightCuts(stair, faces, graph, opts);
   if (!table) return null;
   const probeCtx = makeProbeContext(table.cuts[0].layers);
-  return table.cuts.map(cut =>
-    buildSectionFigure(cut, probeCtx, { wallFaces: faces, ceilZ: cut.zRange?.hiZ }));
+  const { endExtendMm, bandRoomBounds } = bandContextOf(stair, graph, opts);
+  return table.cuts.map(cut => {
+    // face / floorSegments / ceilingProfile は従来どおり汎用経路（faceFromCut 等）の値。content と
+    // 上階のはり出し系のキーは U 字系と同じ共通経路（buildCutContent＋upperOverhangOf）から取る。
+    const { face, floorSegments, ceilingProfile } = buildFaceShell(cut, probeCtx, { wallFaces: faces });
+    const { content, upperOverhang, upperFloorZ, upperFloorCutEnds, upperFloorEnds } =
+      straightContentForCut(cut, probeCtx, endExtendMm, bandRoomBounds);
+    return {
+      seqNo: cut.seqNo, face, floorSegments, ceilingProfile,
+      chDimSplitAbsYs: cut.chDimSplitAbsYs,
+      upperOverhang, upperFloorZ, upperFloorCutEnds, upperFloorEnds,
+      content,
+      skipBaseboard: true, skipWallLabel: true,
+      floorSpanX: undefined,
+    };
+  });
+}
+
+/**
+ * 直進系の階段帯の content と上階のはり出し系のキー。U 字系（contentForCut）と同じ共通経路
+ * buildCutContent（探査延長・断面内部のクリップ・アキ）を通し、階段自身は stairPrimitivesForCut で足す。
+ * はり出し系（upperOverhang・upperFloorZ・upperFloorCutEnds・upperFloorEnds）は U 字系と同じ
+ * upperOverhangOf(pcut, columns) から返す（upperPlaneOverhang:true の探査窓に対応する図側のキー）。
+ * U 字系専用の後処理（構造梁・建具の姿・断面線クリップ・破線化・occludedRects）は持ち込まない。
+ * @returns {{content:object[], upperOverhang:object|undefined, upperFloorZ:number|undefined,
+ *   upperFloorCutEnds:object|undefined, upperFloorEnds:object|undefined}}
+ */
+function straightContentForCut(cut, probeCtx, endExtendMm, bandRoomBounds) {
+  const { cut: pcut, columns, content } = buildCutContent(cut, probeCtx, {
+    endExtendMm, bandRoomBounds, upperPlaneOverhang: true,
+  });
+  const { upperOverhang, upperFloorZ, upperFloorCutEnds, upperFloorEnds } = upperOverhangOf(pcut, columns);
+  return {
+    content: [...content, ...stairPrimitivesForCut(cut.stairCut ?? null, cut, columns)],
+    upperOverhang, upperFloorZ, upperFloorCutEnds, upperFloorEnds,
+  };
+}
+
+/**
+ * 帯の文脈（U 字系 stairFaceSequence と直進系 buildStraightFaceSequence で共通）。
+ * endExtendMm … 壁のない端部の延長量（content 側。図形側 elevationFigure.js の drawnX0/drawnXRun と同じ値。
+ *   倍率決定の 1 パス目は未指定＝既定の仮値）。
+ * bandRoom … 帯自身の部屋（階段室）。見えがかり壁の探索範囲をこの部屋の広がりに限る
+ *   （sectionProbe.js の withinViewRoom。ユーザー実機指摘 2026-08「6」C・裁定 A 案）。
+ * bandRoomBounds … 包絡矩形（世界座標の箱）。自階 graph で一度だけ求め、全レイヤーで使う。
+ */
+function bandContextOf(stair, graph, opts) {
+  const endExtendMm = opts.wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
+  const bandRoom = (graphList(graph, 'rooms') ?? []).find(r => r.id === stair.roomId) ?? null;
+  const bandRoomBounds = bandRoom ? roomBounds(bandRoom.cells, graph) : null;
+  return { endExtendMm, bandRoom, bandRoomBounds };
 }
 
 /**
@@ -1479,14 +1529,8 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   const { landingLen } = cutTable.params;
   const floorHeight = opts.floorHeight;
   const cutOf = seqNo => cuts.find(c => c.seqNo === seqNo);
-  // 壁のない端部の延長量（content側。図形側elevationFigure.jsのdrawnX0/drawnXRunと同じ値を使い、
-  // 同じ端で線の長さを揃える）。倍率決定の1パス目は未指定＝既定の仮値（elevationStyle.js）。
-  const endExtendMm = opts.wallLessEndExtendModelMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
-  // 帯自身の部屋（階段室）。見えがかり壁の探索範囲をこの部屋の広がりに限る
-  // （sectionProbe.jsのwithinViewRoom。ユーザー実機指摘2026-08「6」C・裁定A案）。
-  const bandRoom = (graphList(graph, 'rooms') ?? []).find(r => r.id === stair.roomId) ?? null;
-  // 包絡矩形は世界座標の箱なので**自階graphで一度だけ**求め、全レイヤーで使う。
-  const bandRoomBounds = bandRoom ? roomBounds(bandRoom.cells, graph) : null;
+  // 壁のない端部の延長量・帯自身の部屋・包絡矩形（bandContextOf。直進系と共通）。
+  const { endExtendMm, bandRoom, bandRoomBounds } = bandContextOf(stair, graph, opts);
   // 往復間の壁の芯を一点鎖線で示す（ユーザー実機指摘2026-08「6」C「1500の一点鎖線が出ていない」）。
   // この壁は切断線から見て**面の裏側**へ伸びるため、elevationFigure.jsの直交壁検出
   // （室内側へ突出する袖壁が対象）に掛からず、一点鎖線の源が1つも無かった。

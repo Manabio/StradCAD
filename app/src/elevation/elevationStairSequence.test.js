@@ -724,6 +724,94 @@ test('stairFaceSequence: STRAIGHT階段はnullを返さずseq[1,2,3,4]の配列�
   assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4']);
 });
 
+// ---- 直進系の content は U 字系と同じ共通経路 buildCutContent を通る（S2。専用経路 buildSectionFigure からの載せ替え）----
+// 直進系（STRAIGHT）を上階つきで組む。上階の平面は makeUpperForOverhang（世界 x=2000 の外へ 115 続く）。
+function straightEntries(fixtureOpts = {}, { withUpper = true } = {}) {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  stair.setField('type', StairType.STRAIGHT);
+  const faces = composeRoomFaces(room, graph);
+  if (!withUpper) {
+    return stairFaceSequence(fixtureOpts.mutate?.(stair, graph) ?? stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  }
+  const upperGraph = makeGraph('p2');
+  makeUpperForOverhang(upperGraph);
+  return stairFaceSequence(stair, faces, graph, {
+    ...OPTS, upperGraph,
+    layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }),
+  });
+}
+
+// 壁のない端部（両端の縦壁を外す）で、上階の平面（世界 x=-100〜2100）が面の端（0〜1885）の外へ 100 続く構成。
+// 共通経路（upperPlaneOverhang の探査窓）でだけ、面の外 x=-100 と x=run+100 に上階側の壁の縁が出る
+// （旧経路 buildSectionFigure は面の端 x=0／run で止まる）。実データ stair-ports-test1 の「面の外の縦線」の最小形。
+test('【S2】直進系: 壁のない端部で上階の平面が面の端の外へ続くと、面の外（x=-100・x=run+100）に上階側（高さ 2400〜4800）の壁の縁の medium 縦線が出る', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  stair.setField('type', StairType.STRAIGHT);
+  for (const w of [...graph.walls]) if (w.isVertical) graph.removeWall(w.id);
+  const upperGraph = makeGraph('p2');
+  const cl = (t, v) => upperGraph.addCenterLine(t, v, { labeled: false, discipline: Discipline.ARCH });
+  const ux0 = cl(CenterLineType.VERTICAL, -100), ux1 = cl(CenterLineType.VERTICAL, 2100);
+  const uy0 = cl(CenterLineType.HORIZONTAL, 0), uy1 = cl(CenterLineType.HORIZONTAL, 4500);
+  const roomUp = upperGraph.addRoom(new Set([`${ux0.id}:${uy0.id}:${ux1.id}:${uy1.id}`]), '2F');
+  generateRoomWallsFromOutline(upperGraph, roomUp);
+  const entries = stairFaceSequence(stair, composeRoomFaces(room, graph), graph, {
+    ...OPTS, upperGraph,
+    layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }),
+  });
+  for (const seqNo of ['1', '3']) {
+    const e = entries.find(x => x.seqNo === seqNo);
+    assert.equal(e.face.run, 1885);
+    const outer = x => e.content.filter(p => p.type === 'line' && p.x1 === x && p.x2 === x
+      && Math.min(p.y1, p.y2) === -4800 && Math.max(p.y1, p.y2) === -2400);
+    const lo = outer(-100), hi = outer(e.face.run + 100);
+    assert.equal(lo.length, 1, `seq${seqNo}: x=-100 の上階側の縁が無い（共通経路の探査窓が効いていない）`);
+    assert.equal(hi.length, 1, `seq${seqNo}: x=run+100 の上階側の縁が無い`);
+    assert.equal(lo[0].weight, 'medium');
+    assert.equal(hi[0].weight, 'medium');
+  }
+});
+
+test('【S2】直進系: 上階の平面が面の端より外へ続く面（seq1）は、はり出し系のキーと上階側の壁の縁の線を返す。続かない面は未定義', () => {
+  const entries = straightEntries();
+  const seq1 = entries.find(e => e.seqNo === '1');
+  assert.equal(seq1.face.dirSign, 1);
+  assert.deepEqual(seq1.upperOverhang, { lo: 0, hi: 115 }, '右端（世界 x=2000 側）へ壁厚ぶん続く');
+  assert.equal(seq1.upperFloorZ, OPTS.floorHeight, '上階 FL の絶対高さ');
+  assert.deepEqual(seq1.upperFloorEnds, { lo: false, hi: true }, '床が実在する端だけ 2FL 線を許す（右端のみ）');
+  assert.deepEqual(seq1.upperFloorCutEnds, { lo: null, hi: null });
+  // 面の右端（x=run）の上階側（高さ 2400〜4800）の壁の縁は medium の縦線で、共通経路の探査窓から出る
+  const up = seq1.content.find(p => p.type === 'line' && p.x1 === seq1.face.run && p.x2 === seq1.face.run
+    && Math.min(p.y1, p.y2) === -4800 && Math.max(p.y1, p.y2) === -2400);
+  assert.ok(up, '右端の上階側の縁が無い');
+  assert.equal(up.weight, 'medium');
+  for (const e of entries.filter(x => x.seqNo !== '1')) {
+    assert.equal(e.upperOverhang, undefined, `seq${e.seqNo}: はり出しは無い`);
+    assert.equal(e.upperFloorZ, undefined);
+  }
+});
+
+test('【失敗系・S2】直進系: 帯の部屋が rooms に無い（bandRoom=null→bandRoomBounds=null）でも entries は null にならず各 content は配列', () => {
+  const entries = straightEntries({ mutate: (stair) => { stair.setField('roomId', 'no-such-room'); assert.equal(stair.roomId, 'no-such-room'); return stair; } }, { withUpper: false });
+  assert.ok(entries, 'null にならない');
+  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4']);
+  for (const e of entries) assert.ok(Array.isArray(e.content), `seq${e.seqNo}: content が配列`);
+});
+
+test('【失敗系・S2】直進系: 上階 graph が無くても entries を返し、はり出し系のキーは全て未定義', () => {
+  const entries = straightEntries({}, { withUpper: false });
+  assert.ok(entries);
+  assert.equal(entries.length, 4);
+  for (const e of entries) {
+    assert.ok(Array.isArray(e.content));
+    assert.equal(e.upperOverhang, undefined);
+    assert.equal(e.upperFloorZ, undefined);
+    assert.equal(e.upperFloorCutEnds, undefined);
+    assert.equal(e.upperFloorEnds, undefined);
+  }
+});
+
 // ---- 失敗系: cells空はnull ----
 test('【失敗系】stairFaceSequence: stair.cellsが空はnullを返す', () => {
   const graph = makeGraph();

@@ -6147,7 +6147,7 @@
   "room": "a9236855-af9c-4ae0-9c6d-55732f092ef6",
   "name": "",
   "kind": "stair",
-  "count": 87,
+  "count": 112,
   "prims": [
    {
     "type": "line",
@@ -6160,7 +6160,7 @@
    {
     "points": [
      [
-      -150,
+      -295,
       -5400
      ],
      [
@@ -6172,12 +6172,20 @@
       -5400
      ],
      [
-      1825,
+      1970,
       -5400
      ]
     ],
     "type": "polyline",
     "weight": "thick"
+   },
+   {
+    "type": "line",
+    "weight": "thick",
+    "x1": 1820,
+    "x2": 1970,
+    "y1": -3000,
+    "y2": -3000
    },
    {
     "type": "line",
@@ -6192,7 +6200,7 @@
     "weight": "medium",
     "x1": 1675,
     "x2": 1675,
-    "y1": -5400,
+    "y1": -3000,
     "y2": 0
    },
    {
@@ -6652,6 +6660,119 @@
     "y": 900
    },
    {
+    "__o": "cutEdgeLo",
+    "type": "line",
+    "weight": "thick",
+    "x1": -145,
+    "x2": -145,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "__o": "cutEdgeHi",
+    "type": "line",
+    "weight": "thick",
+    "x1": -72.5,
+    "x2": -72.5,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 0,
+    "x2": 1675,
+    "y1": -2400,
+    "y2": -2400
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 0,
+    "x2": 1675,
+    "y1": -3000,
+    "y2": -3000
+   },
+   {
+    "__o": "recessLo",
+    "type": "line",
+    "weight": "medium",
+    "x1": 1675,
+    "x2": 1675,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "__o": "cutEdgeLo",
+    "type": "line",
+    "weight": "thick",
+    "x1": 1687.5,
+    "x2": 1687.5,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "__o": "cutEdgeHi",
+    "type": "line",
+    "weight": "thick",
+    "x1": 1820,
+    "x2": 1820,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "anchor": "middle",
+    "baseline": "middle",
+    "text": "ア キ",
+    "type": "text",
+    "x": 837.5,
+    "y": -1200
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 1675,
+    "y1": 0,
+    "y2": -2400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 1675,
+    "y1": -2400,
+    "y2": 0
+   },
+   {
+    "anchor": "middle",
+    "baseline": "middle",
+    "text": "ア キ",
+    "type": "text",
+    "x": 837.5,
+    "y": -4200
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 1675,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 0,
+    "x2": 1675,
+    "y1": -5400,
+    "y2": -3000
+   },
+   {
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -6708,13 +6829,22 @@
     "y2": -1400
    },
    {
-    "__o": "recessLo",
+    "__o": "cutEdgeLo",
     "type": "line",
-    "weight": "medium",
-    "x1": 2247.5,
-    "x2": 2247.5,
-    "y1": 0,
-    "y2": -3000
+    "weight": "thick",
+    "x1": 2175,
+    "x2": 2175,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "__o": "cutEdgeHi",
+    "type": "line",
+    "weight": "thick",
+    "x1": 2187.5,
+    "x2": 2187.5,
+    "y1": -3000,
+    "y2": -5400
    },
    {
     "__o": "cutEdgeLo",
@@ -6735,12 +6865,27 @@
     "y2": -5400
    },
    {
-    "__o": "recessHi",
     "type": "line",
-    "weight": "medium",
-    "x1": 4067.5,
-    "x2": 4067.5,
-    "y1": 0,
+    "weight": "thick",
+    "x1": 2097.5,
+    "x2": 2320,
+    "y1": -2050,
+    "y2": -2050
+   },
+   {
+    "type": "line",
+    "weight": "thick",
+    "x1": 2320,
+    "x2": 2320,
+    "y1": -2050,
+    "y2": -3000
+   },
+   {
+    "type": "line",
+    "weight": "thick",
+    "x1": 2247.5,
+    "x2": 2097.5,
+    "y1": -3000,
     "y2": -3000
    },
    {
@@ -6913,19 +7058,10 @@
     "__o": "recessLo",
     "type": "line",
     "weight": "medium",
-    "x1": 4567.5,
-    "x2": 4567.5,
-    "y1": 0,
+    "x1": 4495,
+    "x2": 4495,
+    "y1": -3000,
     "y2": -5400
-   },
-   {
-    "__o": "recessHi",
-    "type": "line",
-    "weight": "medium",
-    "x1": 6387.5,
-    "x2": 6387.5,
-    "y1": 0,
-    "y2": -3000
    },
    {
     "__o": "cutEdgeLo",
@@ -6944,6 +7080,57 @@
     "x2": 6387.5,
     "y1": -3000,
     "y2": -5400
+   },
+   {
+    "__o": "recessHi",
+    "type": "line",
+    "weight": "medium",
+    "x1": 6460,
+    "x2": 6460,
+    "y1": 0,
+    "y2": -2050
+   },
+   {
+    "__o": "cutEdgeLo",
+    "type": "line",
+    "weight": "thick",
+    "x1": 6447.5,
+    "x2": 6447.5,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "__o": "cutEdgeHi",
+    "type": "line",
+    "weight": "thick",
+    "x1": 6460,
+    "x2": 6460,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "type": "line",
+    "weight": "thick",
+    "x1": 6315,
+    "x2": 6537.5,
+    "y1": -2050,
+    "y2": -2050
+   },
+   {
+    "type": "line",
+    "weight": "thick",
+    "x1": 6315,
+    "x2": 6315,
+    "y1": -2050,
+    "y2": -3000
+   },
+   {
+    "type": "line",
+    "weight": "thick",
+    "x1": 6387.5,
+    "x2": 6537.5,
+    "y1": -3000,
+    "y2": -3000
    },
    {
     "points": [
@@ -7086,42 +7273,65 @@
     "y2": -1400
    },
    {
-    "__o": "recessLo",
     "dash": "dashed",
     "type": "line",
     "weight": "thin",
     "x1": 6960,
-    "x2": 6960,
-    "y1": 0,
-    "y2": -3000
-   },
-   {
-    "__o": "recessHi",
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 8635,
     "x2": 8635,
-    "y1": 0,
-    "y2": -3000
+    "y1": -2400,
+    "y2": -2400
    },
    {
-    "__o": "recessLo",
     "type": "line",
     "weight": "medium",
     "x1": 6960,
-    "x2": 6960,
+    "x2": 8635,
+    "y1": -3000,
+    "y2": -3000
+   },
+   {
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 6960,
+    "x2": 8635,
+    "y1": 0,
+    "y2": -2400
+   },
+   {
+    "dash": "dashed",
+    "type": "line",
+    "weight": "thin",
+    "x1": 6960,
+    "x2": 8635,
+    "y1": -2400,
+    "y2": 0
+   },
+   {
+    "anchor": "middle",
+    "baseline": "middle",
+    "text": "ア キ",
+    "type": "text",
+    "x": 7797.5,
+    "y": -4200
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 6960,
+    "x2": 8635,
     "y1": -3000,
     "y2": -5400
    },
    {
-    "__o": "recessHi",
+    "dash": "center",
     "type": "line",
-    "weight": "medium",
-    "x1": 8635,
+    "weight": "thin",
+    "x1": 6960,
     "x2": 8635,
-    "y1": -3000,
-    "y2": -5400
+    "y1": -5400,
+    "y2": -3000
    },
    {
     "h": 400,

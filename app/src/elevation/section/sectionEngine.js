@@ -554,15 +554,23 @@ export function mergeContinuousWallBands(columns, cut) {
   }
 }
 
-export function buildSectionFigure(cut, probeCtx, opts = {}) {
+/**
+ * 面の殻（face / floorSegments / ceilingProfile）だけを組み立てる。content は含まない
+ * （直進系の階段帯は content を共通経路 buildCutContent で作るため、殻だけをここから取る）。
+ * @returns {{columns:object[], face:object, floorSegments:object[], ceilingProfile:Array<[number,number]>}}
+ */
+export function buildFaceShell(cut, probeCtx, opts = {}) {
   const columns = buildColumns(cut, probeCtx);
-
   const wallFaces = opts.wallFaces ?? [];
   const primaryWall = opts.primaryWall !== undefined ? opts.primaryWall : findPrimaryWall(columns);
   const face = faceFromCut(cut, wallFaces, primaryWall);
-
   const floorSegments = floorSegmentsFromColumns(columns, face);
   const ceilingProfile = ceilingProfileFromColumns(columns, cut, face);
+  return { columns, face, floorSegments, ceilingProfile };
+}
+
+export function buildSectionFigure(cut, probeCtx, opts = {}) {
+  const { columns, face, floorSegments, ceilingProfile } = buildFaceShell(cut, probeCtx, opts);
 
   const emitCtx = { ceilZ: opts.ceilZ };
   const content = [
