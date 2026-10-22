@@ -61,8 +61,10 @@ async function setup(activeId = 'p3') {
     store.set(id, serializeGraph(g));
   }
   const app = makeApp(project, store);
+  // アクティブの p2 も正規化済みのバイト列から復元してから切り替える（生のグラフは常設の寸法線を持たず、
+  // switchRaw がそれを保存すると、復元のたびに寸法線が新しい id で補われて往復が恒等でなくなる）
+  restoreGraph(project.activeGraph, store.get('p2'));
   if (activeId !== 'p2') await app.switchRaw(activeId);
-  else restoreGraph(project.activeGraph, store.get('p2'));
   return { project, store, app };
 }
 
@@ -439,6 +441,29 @@ test('中間階(p3・表示中)の削除 → undo → redo → undo: 階数・id
   await c.undo();
   assertSameSnapshot(await snapshot(project, store), s0, '2回目の undo');
   assert.equal(project.activePlaneId, 'p3');
+});
+
+test('前提（setup）: 全階のバイト列が復元→直列化で恒等（生のグラフを保存すると常設の寸法線が復元のたびに新しい id で補われる）', async () => {
+  const { project, store } = await setup('p4');
+  for (const [id, bytes] of store) {
+    assert.ok(floorBytesEqual(serializeGraph(decode(project, store, id)), bytes), `${id} の往復が恒等`);
+  }
+});
+
+test('階段のある階(p2)そのものの削除 → undo → redo: p2 の階段と p3 の吹抜けを含め、全階のバイト列が戻る', async () => {
+  const { project, store, app } = await setup('p4');
+  const s0 = await snapshot(project, store);
+  const c = await app.deleteFloor('p2');
+  assert.ok(c);
+  assert.equal(project.planeMap.has('p2'), false);
+  const s1 = await snapshot(project, store);
+
+  await c.undo();
+  assertSameSnapshot(await snapshot(project, store), s0, '階段のある階の削除 undo');
+  assert.equal(project.activeGraph.stairs.length, 1, 'p2（表示中）の階段が戻る');
+  assert.equal(decode(project, store, 'p3').rooms.filter(r => r.feature === RoomFeature.STAIR_VOID).length, 1, 'p3 の吹抜けが戻る');
+  await c.redo();
+  assertSameSnapshot(await snapshot(project, store), s1, '階段のある階の削除 redo');
 });
 
 test('地階(B1=p3)の削除 → undo → redo: 下の B3・B2 だけが元の番号・elevation・名前へ戻り、redo で上へ詰まる。地上階(p4)は動かない', async () => {
