@@ -25,10 +25,14 @@
  *   直進系 … STRAIGHT は base → end の 1 矩形、STRAIGHT_LANDING は 直進部1 → 踊り場（平ら）→ 直進部2 の 3 矩形（区間ごとの線形）。
  * 既知の限界: 取りつき回転部（側面の出入口）を往路の平面に含める／L_TURN・FLARED・OPEN_WELL・蹴上が求まらない階段は裏面なし。
  */
-import { StairType, StructuralMaterialType, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
+import { StairType, StructuralMaterialType, RoomKind, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
 import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js'; // 公開 API（core.js）には出さない内部定数
 import { uTurnPlanLayout, straightPlanLayout } from '../finish/stair/stairGeometry.js';
 import { roomCeilingTopMm } from '../finish/roomMetrics.js';
+import { graphList } from '../graphReadScope.js';
+import { stairUnderReturnGeometry, isStairUnderReturnWall, PARTITION_THICKNESS_MM } from '../finish/stair/stairPartition.js';
+import { riserOf } from '../finish/stair/stairDimensions.js';
+import { defaultSections } from '../finish/stair/stairClassify.js';
 
 const MIN_SPAN_MM = 1; // 矩形の辺の下限（これ未満は潰れた区間として作らない）
 const FOLD_ROLE = 'stairSoffitFold'; // 面の折れ目（innerLines の role）
@@ -259,4 +263,44 @@ export function stairUndersideSurface({ stair, graph, belowStair = null, belowGr
   const solid = t === StairType.SWITCHBACK || t === StairType.WINDING ? uTurnSolid(stair, graph, ctx, aboveGraph)
     : t === StairType.STRAIGHT || t === StairType.STRAIGHT_LANDING ? straightSolid(stair, graph, ctx) : null;
   return solid ?? null;
+}
+
+/**
+ * 階段の復路下の壁と、その天端・復路下の仕上げ空間の天井になる復路の裏面の立体（唯一の供給源。階段帯の seq5
+ * 〔elevationStairSequence.js underReturnSpaceOf〕と壁の天端〔sectionProbe.js addUnderReturnTops〕と平面の立体モデル
+ * 〔plan/planSolids.js〕が同じ入力・同じ検査で同じ立体を引く）。
+ * 復路下の壁が無い（鉄骨・下階に続き階段がある・隔て壁なし）・屋外・区間 sections が不正（stairPartition.js slopeTop と同じ検査）・
+ * 蹴上が決まらない（floorHeight 不明）・裏面が組めないときは null。
+ * elevation/section/sectionProbe.js から移した（展開図リファクタ S1: plan 側が展開図エンジンの内部を引かないため。
+ * sectionProbe.js が再公開する）。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @param {{floorHeight:number|null, floorZMm:number}} q floorHeight … 蹴上の推定に使う階高（直上の層の FL − 自階の FL）。
+ *   floorZMm … 階段室の床の絶対 z（層スタックの floorZFor(room, layer)）。裏面の高さはこれを基準に段の天端 − 厚みで決まる
+ * wallTopZ … 壁の天端（壁の軸上・区間の中央で、厚み方向 ±半厚と軸の 3 点の裏面の最小。平らな天端が壁の厚みのどこでも裏面より下に
+ *   収まるように。裏面は走行方向に傾き、壁の回転部側の面が最も低い）。求まらなければ null。
+ * @returns {{walls:import('@core').Wall[], line:{isVertical:boolean, axisValue:number, lo:number, hi:number}, solid:object, wallTopZ:number|null}|null}
+ */
+export function stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm, aboveGraph = null }) {
+  if (!stair || !graph) return null;
+  const room = graph.roomMap?.get(stair.roomId) ?? null;
+  if (room?.kind === RoomKind.EXTERIOR) return null;
+  const g = stairUnderReturnGeometry(stair, graph);
+  if (!g) return null;
+  const line = { isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi };
+  const walls = (graphList(graph, 'walls') ?? []).filter(w => isStairUnderReturnWall(w, [line]));
+  if (walls.length === 0) return null;
+  const sections = stair.sections ?? defaultSections(stair);
+  if (!Array.isArray(sections) || sections.length !== 3 || !sections.every(Number.isFinite)) return null;
+  const riser = riserOf(stair, floorHeight);
+  if (!Number.isFinite(riser) || !Number.isFinite(floorZMm)) return null;
+  const solid = stairSoffitSolids({ stair, graph, riser, floorZMm, aboveGraph })[0];
+  if (!solid) return null;
+  const mid = (line.lo + line.hi) / 2;
+  const half = PARTITION_THICKNESS_MM / 2;
+  const z = Math.min(...[-half, 0, half].map(d => {
+    const p = line.isVertical ? [line.axisValue + d, mid] : [mid, line.axisValue + d];
+    return solid.zAt ? solid.zAt(...p) : solid.zLo;
+  }));
+  return { walls, line, solid, wallTopZ: Number.isFinite(z) ? z : null };
 }

@@ -27,7 +27,7 @@ import { roomBounds } from '../../../finish/gridCells.js';
 import { makeFrame } from '../../../finish/stair/stairGeometry.js';
 import { classifyFaces, buildMidWallFace, reorientFace, viewDirSign } from './switchbackCuts.js';
 import { straightContribution } from '../sectionStair.js';
-import { perpFaceAt } from '../../elevationFaces.js';
+import { perpFaceAt } from '../faceGeometry.js';
 import { graphList } from '../../../graphReadScope.js';
 
 // findLandingWall（本ファイル）の許容差(mm)。findMidWall（switchbackCuts.js）と同じ考え方

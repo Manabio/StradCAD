@@ -14,6 +14,7 @@
  * OpeningTagLayer.jsx と同じ構成でGroup描画する）。
  */
 import { CenterLineType, OpeningCategory } from '@core';
+import { parseBaseboardHeightMm } from '../core/room.js';
 import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallContinuationBeyondFaceEnd, wallLessEndAt, openingsReachingCorner, cornerOpeningZRanges } from './elevationFaces.js';
 import { openingSectionPrimitives, wallMaterialRangeForOpening } from '../openings/openingSection.js';
 import { FRAME_OVERHANG_MM } from '../openings/openingPlanSymbolGeometry.js';
@@ -82,20 +83,9 @@ export function estimateWallLabelWidthPx(text) {
 // 既存の import 先（elevationVoid.js・テスト）を壊さないため同名で re-export する。
 export { formatMaterialLabel };
 
-/**
- * 巾木文字列（自由入力。RoomFinish.baseboardHeight）から高さ(mm)を解釈する。
- * "h=60"/"H=60mm" 等の "h=<数値>" 表記のみを対象とする——巾木は自由入力文字列のままで構わず
- * （既存構造は変えない）、展開側は解釈できた場合だけ巾木線を足す（解釈不能なら非描画。ユーザー仕様）。
- * @param {string} str
- * @returns {number|null}
- */
-export function parseBaseboardHeightMm(str) {
-  if (typeof str !== 'string') return null;
-  const m = str.match(/h\s*=\s*(\d+(?:\.\d+)?)/i);
-  if (!m) return null;
-  const v = Number(m[1]);
-  return Number.isFinite(v) && v > 0 ? v : null;
-}
+// 巾木高さの解釈（parseBaseboardHeightMm）は core/room.js（RoomFinish.baseboardHeight の定義元）へ移した。
+// section/ からも引くため。既存の import 先（Band・Void・StairSequence・テスト）を変えず同名で再公開する。
+export { parseBaseboardHeightMm };
 
 /** face のローカルx座標（世界座標→面基準の変換。openingsOnFace等の結果に対して使う）。 */
 export function localXOf(face, worldCoord) {

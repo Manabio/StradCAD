@@ -72,6 +72,7 @@
  *     解消は別途defer）。
  */
 import { StairType, StructuralMaterialType, DEFAULT_BASEBOARD_HEIGHT } from '@core';
+import { parseBaseboardHeightMm } from '../../core/room.js';
 import { uTurnPlanLayout, straightPlanLayout, LANE_GAP } from '../../finish/stair/stairGeometry.js';
 import { U_TURN_TYPES } from '../../finish/stair/stairPorts.js';
 import { sliceTurnCells } from './turnCellSlices.js';
@@ -80,12 +81,11 @@ import { stairTreadFootprints } from '../../finish/stair/stairTreads.js';
 import {
   resolveUTurnSectionParams, stairRunProfile, stringerPrimitives, stringerBandGeometry, WOOD_TREAD_THICKNESS_MM,
   STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM, STEEL_LANDING_FRAME_DEPTH_MM,
-} from '../elevationStairSection.js';
+} from './stairSectionProfile.js';
 import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
-import { parseBaseboardHeightMm } from '../elevationFigure.js';
 import { localXOf, cutDrawRange, solidRectsOf, rectsToFaceLocal } from './sectionTypes.js';
 import { emitLine, isStringer } from './sectionEmit.js';
-import { mergeFloorProfiles } from '../elevationFloorProfile.js';
+import { mergeFloorProfiles } from './floorProfileMath.js';
 import { clipPrimitivesToXRange, subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 
 /**

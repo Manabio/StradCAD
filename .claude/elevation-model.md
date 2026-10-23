@@ -17,6 +17,11 @@
 （上限はminXのまま）。
 
 ## 2つの描画エンジンの担当境界（新しい表現をどちらへ足すか）
+**依存の向きは一方向**（`elevation/importGraph.test.js`が固定。展開図リファクタ S1）: 帯ビルダー（Band/Stair/Void/StairSequence）→面の体裁（Figure/Faces 等）→`section/`→`space/`→補助（`elevationStyle.js`・`elevationPrimitives.js`）。
+`section/`・`space/`から親（`elevation/`直下）へ引いてよいのは補助の2本だけ。`elevation/`内に循環を作らない。`plan/planSolids.js`は`section/`を引かない
+（`beamDepthMm`は`structural/sectionCatalog.js`・`kneeDropZRangesAt`は`finish/kneeDropWall.js`・`stairUnderReturnSoffit`は`ceiling/stairSoffit.js`が定義元）。
+断面エンジンが面の値を要るときは、面側の純関数を`section/faceGeometry.js`等の下位モジュールへ置くか、帯ビルダーが cut/opts で渡す。
+
 1枚の帯へ**2つのエンジンが同時にプリミティブを流し込む**。断面エンジンへの入口は
 `section/sectionContent.js`の**`buildSectionFromLine(line, layers, opts)`（面非依存の入口。展開図一般化Phase 8・
 2026-09-13）→`buildCutContent`**で、通常の部屋帯・上部吹抜けを持つ部屋帯・吹抜け帯（`appendBandCutContent`／
@@ -1228,7 +1233,7 @@ Xの形が崩れる。持ち上げ量は**セルのx範囲での輪郭の最大*
 から壁の**仕上げ空間側の面**までを仕上げ空間とみなす（`underReturnSpaceOf`。壁の厚みは含めない＝壁の断面線は階段下スペース側の面の
 縦線だけで、踊り場側の面・天端は段の裏の断面線の下＝描かない側。ユーザー指示 2026-10-15「Y4から910に壁断面線は、階段下スペース側
 〔左側〕のみで良い」）。壁・裏面の立体は壁の天端（`addUnderReturnTops`）と**同じ供給源**
-`sectionProbe.js stairUnderReturnSoffit`（階段→壁の照合→sections の検査→`stairSoffitSolids`。蹴上は階高、床は層スタックの
+`ceiling/stairSoffit.js stairUnderReturnSoffit`（階段→壁の照合→sections の検査→`stairSoffitSolids`。蹴上は階高、床は層スタックの
 `floorZFor(室, 自階の層)`＝床段差込み）から引く。(1) 断面線（`floorProfile`）はその範囲を**床（階段室の床）に置き換える**
 （`floorProfileWithFloorOn`。壁の厚みを含む。境目は垂直の段）——床線（`withFlatLineSpans`）が壁まで伸び、壁の断面（両面の太線）が
 クリップされなくなる。発生源は、この範囲でも復路の段板の裏を断面線の下限にしていたこと（「断面線の外は描画しない」が仕上げ空間を
@@ -1647,7 +1652,7 @@ INV2は「役割名にも配列順にも依存していない」ことの実行�
 入れた瞬間に落ちる——層の判断をここへ足すときは、まずこの3本を通すこと。
 
 ## 壁の天端プロファイル（関所の一般の引数。隔て壁 S4-1）
-壁のz範囲の関所`section/sectionHits.js kneeDropZRangesAt`（cut・cutAlong・wallFaceの3経路が共有）に省略可能な引数`wallTop`（`{zAt(along)→絶対z}`）を持たせた。あれば腰壁・垂れ壁より先に判定し`[床, min(天井, zAt(pointCoord))]`を返す（天端≦床なら空。各件は`topAt`も持つ）。`probeCtx.wallTopProfileFor(layer)`が層ごとに1回だけ`Map<壁id, {zAt}>`を作る（`sectionProbe.js`。構造は`effectiveStructure(layer.graph)`・階高は直上の層との差・続き判定は`stairContinuesAbove`）。供給元は在来木造の折返し階段の隔て壁の天端（`finish/stair/stairPartition.js partitionTopZAt`が単一情報源。最上層＝斜め、続く層・直上の層なし・階高/蹴上が決まらない・非在来＝プロファイルなし＝従来どおりフルハイト）。壁の種類を関所へ持ち込まず、「天端が位置の関数」という一般の引数だけを足した（特例を増やさない裁定）。
+壁のz範囲の関所`finish/kneeDropWall.js kneeDropZRangesAt`（cut・cutAlong・wallFaceの3経路が共有）に省略可能な引数`wallTop`（`{zAt(along)→絶対z}`）を持たせた。あれば腰壁・垂れ壁より先に判定し`[床, min(天井, zAt(pointCoord))]`を返す（天端≦床なら空。各件は`topAt`も持つ）。`probeCtx.wallTopProfileFor(layer)`が層ごとに1回だけ`Map<壁id, {zAt}>`を作る（`sectionProbe.js`。構造は`effectiveStructure(layer.graph)`・階高は直上の層との差・続き判定は`stairContinuesAbove`）。供給元は在来木造の折返し階段の隔て壁の天端（`finish/stair/stairPartition.js partitionTopZAt`が単一情報源。最上層＝斜め、続く層・直上の層なし・階高/蹴上が決まらない・非在来＝プロファイルなし＝従来どおりフルハイト）。壁の種類を関所へ持ち込まず、「天端が位置の関数」という一般の引数だけを足した（特例を増やさない裁定）。
 ### 天端が斜めの帯（`topEdge`。S4-2）
 斜めの天端は「帯の上端が水平」という前提を崩す一般の概念として、帯（ZBand）に`topEdge`（天端の線の両端の高さ）を持たせて扱う。壁の種類（隔て壁）を描画側へ持ち込まない。
 - **列の境界**: プロファイルが`crossings(zLevels)`で「斜線が水平線の高さを横切るalong」を返し、`collectCutBreaks`が各層のFL・切断の床/上端・斜線を頭打ちにする天井（`cut.ceilProfile`・プロファイルを持つ壁の層の各部屋の実効天井）の高さで列を割る（各列が「全部天井より下＝斜線」か「全部上＝水平」になる）（列の中で斜線が水平線をまたがない）。プロファイルの端（壁の設計上の端）は元から列境界。

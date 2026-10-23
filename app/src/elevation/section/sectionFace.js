@@ -10,7 +10,7 @@
  * hasWallAtLocal0・hasWallAtLocalRun・edgeAtLocal0・edgeAtLocalRun）にする——役割分担（§3.4）
  * どおり、床線・天井線・端縦線・注記帯等はbuildFaceFigure側の責務のまま。
  */
-import { perpFaceAt, perpWallCrossesFacePlane } from '../elevationFaces.js';
+import { perpFaceAt, perpWallCrossesFacePlane } from './faceGeometry.js';
 
 /**
  * @param {import('./sectionTypes.js').SectionCut} cut

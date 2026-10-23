@@ -20,7 +20,7 @@ import { wallWorldRangesOnFacePlane, planeOverhangBeyondEnds } from './sectionCu
 import { hasCutWallStandingOn, slabSolidRectsOf, strictInteriorOf, rectsToFaceLocal } from './sectionTypes.js';
 import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { UPPER_PLANE_OVERHANG_LIMIT_MM, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
-import { wallLessEndAt } from '../elevationFaces.js';
+import { wallLessEndAt } from './faceGeometry.js';
 import { makeProbeContext } from './sectionProbe.js';
 import { edgeOnWallZRanges, farRoomAt } from './sectionHits.js';
 import { stairContribution, farSideSilhouettePrimitives } from './sectionStair.js';

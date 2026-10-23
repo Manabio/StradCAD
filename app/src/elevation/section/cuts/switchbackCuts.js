@@ -24,10 +24,9 @@ import { makeFrame, cellsBeyondBreak } from '../../../finish/stair/stairGeometry
 import { stairUnderRoomsOf } from '../../../finish/stair/stairUnderRooms.js';
 import { U_TURN_TYPES } from '../../../finish/stair/stairPorts.js';
 import { isStairPartitionWall, stairPartitionLines } from '../../../finish/stair/stairPartition.js';
-import { letterOf, letterForDirSign, DIR_SIGN, perpFaceAt } from '../../elevationFaces.js';
-import { kneeDropRecordFor } from '../../elevationFaceList.js';
-import { localXOf as localXOfFace } from '../../elevationFigure.js';
-import { resolveUTurnSectionParams } from '../../elevationStairSection.js';
+import { letterOf, letterForDirSign, DIR_SIGN, perpFaceAt } from '../faceGeometry.js';
+import { kneeDropRecordFor } from '../../../finish/kneeDropWall.js';
+import { resolveUTurnSectionParams } from '../stairSectionProfile.js';
 import { stairContribution } from '../sectionStair.js';
 import { graphList } from '../../../graphReadScope.js';
 import { isCeilingOnlyKind } from '../../../core/centerLineKindPolicy.js';
@@ -279,6 +278,10 @@ export function reorientFace(face, desiredDirSign) {
     partitionCutAtLocalRun: face.partitionCutAtLocal0,
   };
 }
+
+// 面（originWorld・dirSign を持つ）のローカルx。elevationFigure.js の localXOf と同じ式
+// （section/ は面の体裁層を import しない。cut 版は sectionTypes.js の localXOf）。
+const localXOfFace = (face, worldCoord) => (worldCoord - face.originWorld) * face.dirSign;
 
 export function laneRangesOnEntry(wEntry, wOut1, midCoord) {
   const midLocal = localXOfFace(wEntry, midCoord);

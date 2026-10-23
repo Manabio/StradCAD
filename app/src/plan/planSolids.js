@@ -37,11 +37,9 @@
  * @typedef {{graph: object|null, floorZMm: number, role: 'self'|'above'|'below', ceilZMm?: number}} SolidLayer
  */
 import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, RoomKind, SoffitOrientation } from '@core';
-import { beamDepthMm } from '../elevation/section/sectionStructure.js';
-import { kneeDropZRangesAt } from '../elevation/section/sectionHits.js';
-import { stairUnderReturnSoffit } from '../elevation/section/sectionProbe.js';
+import { beamDepthMm } from '../structural/sectionCatalog.js';
 import { columnWrapSolids, wallConcealRange } from '../finish/columnWrap.js';
-import { kneeDropRecordsOnAxis, ceilingTopSectionsAlongWall, uniformCeilingTopMm, SPAN_OVERLAP_EPS } from '../finish/kneeDropWall.js';
+import { kneeDropRecordsOnAxis, kneeDropZRangesAt, ceilingTopSectionsAlongWall, uniformCeilingTopMm, SPAN_OVERLAP_EPS } from '../finish/kneeDropWall.js';
 import { wallFullHeightSpans } from '../ceiling/ceilingOwners.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
 import { cellBoundsList, roomBounds } from '../finish/gridCells.js';
@@ -60,7 +58,7 @@ import { roofSoffitJointLines } from '../finish/roof/roofSoffitJoints.js';
 import { normalizeRect, isValidRect, subtractRects } from './planGeometry.js';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
-import { stairSoffitSolids, stairUndersideSurface } from '../ceiling/stairSoffit.js';
+import { stairSoffitSolids, stairUndersideSurface, stairUnderReturnSoffit } from '../ceiling/stairSoffit.js';
 
 /** 出力の kind 順（固定）。 */
 export const SOLID_KIND_ORDER = Object.freeze(['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'ceiling', 'generic']);

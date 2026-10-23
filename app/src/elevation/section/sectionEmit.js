@@ -15,7 +15,7 @@ import {
   zToY, cutDrawRange, localXOf, hasCutWallStandingOn, slabRuns, cutWallRuns, slabJunctionOf,
 } from './sectionTypes.js';
 import { openingSectionPrimitives } from '../../openings/openingSection.js';
-import { drawnFloorProfileZMax } from '../elevationFloorProfile.js';
+import { drawnFloorProfileZMax } from './floorProfileMath.js';
 import { FRAME_OVERHANG_MM } from '../../openings/openingPlanSymbolGeometry.js';
 import {
   mergeIntervals, segmentInsideRect, subtractRectsFromLine, isZeroLengthLine,
@@ -1507,7 +1507,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
   return prims;
 }
 
-// 隅の取り合いの許容差（sectionHits.js の CORNER_OVERHANG_EPS_MM と同じ150mm）。
+// 隅の取り合いの許容差（finish/kneeDropWall.js の CORNER_OVERHANG_EPS_MM と同じ150mm）。
 const EDGE_ON_CORNER_EPS_MM = 150;
 
 // 列 columns の x（面ローカル）に接する全列で'open'の帯のz範囲（列の継ぎ目なら両側の列の共通部分）。

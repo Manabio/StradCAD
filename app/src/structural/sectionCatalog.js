@@ -234,6 +234,22 @@ export function findSectionEntry(sectionDefId) {
   return catalogMap().get(sectionDefId) ?? null;
 }
 
+// 梁の成(mm)のフォールバック既定値（sectionDefIdがカタログに無く・beamDepthも未設定の
+// 場合の保険。木造既定断面WOOD-105x105と同値）。
+const DEFAULT_BEAM_DEPTH_MM = 105;
+
+/**
+ * 梁の成（せい）mm。カタログ断面の height → 梁自身の beamDepth → 既定 105 の順。
+ * 展開図の寄与（structuralContribution）と平面の立体モデル（plan/planSolids.js）が共有する唯一の式。
+ * elevation/section/sectionStructure.js から移した（展開図リファクタ S1: plan 側が展開図エンジンの
+ * 内部を引かないため。sectionStructure.js が再公開する）。
+ * @param {object} beam - graph.beams の1件
+ * @returns {number}
+ */
+export function beamDepthMm(beam) {
+  return findSectionEntry(beam?.sectionDefId)?.height ?? beam?.beamDepth ?? DEFAULT_BEAM_DEPTH_MM;
+}
+
 /**
  * 一覧UI用（保守パネル断面タブ・MemberListTabの断面プルダウン等）: builtinの並びを保ち、
  * user/doc追加分（builtinに無いキー）を末尾に置く。overlayが空ならSECTION_CATALOGと

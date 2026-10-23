@@ -19,7 +19,7 @@
  * 基礎・柱脚（footingMap）・べた基礎（slab role:'mat_foundation'）は元々本モジュールの
  * 対象外（graph.beams/graph.columnsしか読まない）ため、追加の除外は要らない。
  */
-import { findSectionEntry } from '../../structural/sectionCatalog.js';
+import { findSectionEntry, beamDepthMm } from '../../structural/sectionCatalog.js';
 // 柱の仕上げ包みの幾何は平面図（renderer/StructuralLayer.jsx）と共有する単一の情報源から取る
 // ——同じ柱が図面ごとに違う太さで描かれないため（finish/columnWrap.js のヘッダ参照）。
 import {
@@ -30,17 +30,13 @@ import { isStairPartitionWall, stairPartitionLines } from '../../finish/stair/st
 import { rulesFor, effectiveStructure } from '../../structural/structureRules.js';
 import { ElevationLineRole, GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
 import { localXOf, worldOf, cutDrawRange } from './sectionTypes.js';
-import { halfWallThicknessMm, drawnFloorProfileZMax } from '../elevationFloorProfile.js';
+import { halfWallThicknessMm, drawnFloorProfileZMax } from './floorProfileMath.js';
 import { emitLine, nearestSightlineDistMm } from './sectionEmit.js';
 // 同じ軸 CL 上の複数壁の材の合併（建具の拘束と共有）
 import { boundaryMaterialRange } from '../../openings/openingMove.js';
 
 /** 丸ごと描くと決めた断面の輪郭の線に付ける印（enumerable なシンボル。JSON・golden には出ない。ほかの変形でも spread で引き継がれる）。 */
 export const WHOLE_OUTLINE = Symbol.for('strad.wholeOutline');
-
-// 断面成(depthMm)のフォールバック既定値（sectionDefIdがカタログに無く・beamDepthも未設定の
-// 場合の保険。木造既定断面WOOD-105x105と同値）。
-const DEFAULT_DEPTH_MM = 105;
 
 // 基礎（梁=基礎梁・地中梁 / 柱=杭）を表すrole。展開図では一律に描かない（追加仕様2026-08）。
 const FOUNDATION_ROLE = 'foundation';
@@ -49,15 +45,9 @@ const FOUNDATION_ROLE = 'foundation';
 // 小屋梁（role:'roofBeam'。小屋伏図の構造モード専用で展開図・断面に出さない。ユーザー裁定2026-10-02）も除く。
 const EXCLUDED_BEAM_ROLES = new Set([FOUNDATION_ROLE, 'sill', 'roofBeam', 'partitionBeam']);
 
-/**
- * 梁の成（せい）mm。カタログ断面の height → 梁自身の beamDepth → 既定 105 の順。
- * 展開図の寄与（structuralContribution）と平面の立体モデル（plan/planSolids.js）が共有する唯一の式。
- * @param {object} beam - graph.beams の1件
- * @returns {number}
- */
-export function beamDepthMm(beam) {
-  return findSectionEntry(beam?.sectionDefId)?.height ?? beam?.beamDepth ?? DEFAULT_DEPTH_MM;
-}
+// beamDepthMm（梁の成。展開図の寄与と平面の立体モデルが共有する唯一の式）は structural/sectionCatalog.js へ
+// 移した（plan 側が展開図エンジンの内部を引かないため）。既存の import 先を変えないよう再公開する。
+export { beamDepthMm };
 
 /**
  * @typedef {{isVertical:boolean, axisWorld:number, spanLo:number, spanHi:number,

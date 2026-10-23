@@ -12,23 +12,11 @@ import { graphList } from '../graphReadScope.js';
 import { insertStepFaces } from './elevationStepFace.js';
 import { extendFacesWithOpenSpans, clipSpans } from './elevationOpenSpan.js';
 import { SPLIT_MERGE_EPS_MM, MIN_FACE_RUN_MM } from './elevationStyle.js';
-import { kneeDropRecordForWallSpan } from '../finish/kneeDropWall.js';
+import { kneeDropRecordFor } from '../finish/kneeDropWall.js';
 
-/**
- * wall（袖壁・腰壁）に対応する kneeDropWalls のレコードを返す（kneeDropRecordForWallSpan。
- * finish/kneeDropWall.jsがkey解読を集約。QA修正L1）。axisCLId一致＋スパン重なりで判定し、
- * 該当が複数あっても先頭を採用する（隅の取り合いぶんだけ隣区間へ食い込んだ壁は対象外
- * ——平面の腰壁描画と同じ判定にする）。腰壁指定（knee）が無ければnull（=partitionCutAtLocal0/Runは
- * topHeight無し＝天井までのCUT枠になる）。
- * @param {import('@core').Wall} wall
- * @param {object} graph
- * @returns {{knee?:{topHeight:number}, drop?:{bottomHeight:number}}|null}
- */
-export function kneeDropRecordFor(wall, graph) {
-  const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-  const found = kneeDropRecordForWallSpan(graph, wall.axisCL, wLo, wHi);
-  return found ? found.rec : null;
-}
+// kneeDropRecordFor（wall に対応する kneeDropWalls のレコード）は finish/kneeDropWall.js へ移した
+// （section/cuts からも引くため）。既存の import 先を変えないよう再公開する。
+export { kneeDropRecordFor };
 
 // 袖壁wallの「面の走行方向に沿った」ローカル範囲 [near, far]（near<far。face自身のローカルx系）。
 // materialRangeが引ければその両端、引けなければaxisOffsetぶんの対称範囲へフォールバックする。

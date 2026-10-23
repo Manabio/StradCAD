@@ -102,7 +102,7 @@ test('【配線】aboveGraph は展開図・天伏・立体の各呼び出し元
   has('../../elevation/elevationStairSequence.js', 'return Number.isFinite(riser) ? (stairSoffitSolids({ stair, graph, riser, floorZMm: floorZ0, aboveGraph: opts.upperGraph ?? null })[0] ?? null) : null;');
   has('../../elevation/elevationStairSequence.js', 'const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm, aboveGraph });');
   has('../../elevation/elevationStairSequence.js', 'const underReturn = underReturnSpaceOf(stair, graph, cut, floorHeight, selfFloorZ, ceilLowAbs, opts.upperGraph ?? null);');
-  has('../../elevation/section/sectionProbe.js', 'const solid = stairSoffitSolids({ stair, graph, riser, floorZMm, aboveGraph })[0];');
+  has('../../ceiling/stairSoffit.js', 'const solid = stairSoffitSolids({ stair, graph, riser, floorZMm, aboveGraph })[0];'); // S1: stairUnderReturnSoffit を sectionProbe.js から移した
   has('../../elevation/section/sectionProbe.js', 'const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm: floorZFor(room, layer), aboveGraph });');
   has('../../elevation/section/sectionProbe.js', 'addUnderReturnTops(out, graph, above ? above.floorZMm - layer.floorZMm : fallbackFloorHeightMm, layer, floorZFor, above?.graph ?? fallbackUpperGraph);');
   has('../../elevation/section/sectionProbe.js', 'if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor, opts.floorHeightMm ?? null, opts.upperGraph ?? null); wallTopByLayer.set(layer, m); }');

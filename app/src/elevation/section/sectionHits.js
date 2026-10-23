@@ -68,7 +68,10 @@
  */
 import { OpeningCategory, RoomFeature } from '@core';
 import { worldToCell } from '../../finish/gridCells.js';
-import { kneeDropRecordsAtPointOnWall } from '../../finish/kneeDropWall.js';
+import { kneeDropZRangesAt } from '../../finish/kneeDropWall.js';
+
+// 既存の import 先（テスト・sectionProbe 等）を変えないよう再公開する。
+export { kneeDropZRangesAt };
 import { effectiveHeight } from '../../openings/openingNumbering.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
@@ -78,16 +81,6 @@ import {
   isRealRoom, orderLayerStack, baseLayerOf, layerOwningZ,
   compareLayerPriority, resolveSightlineTopZ,
 } from './sectionLayerStack.js';
-
-// kneeDropRecordsAtPointOnWall（区間重なり判定）への点クエリ用の微小幅(mm)。GAP_EPSより大きく
-// PROBE_EPS_MMより小さい値にして、区間境界ちょうどのレコードも安定して拾えるようにする。
-const POINT_QUERY_EPS_MM = 0.5;
-
-// POINT_QUERY_EPS_MMの点クエリが0件だったときの再クエリ幅(mm)——隅の取り合いで壁端がレコード
-// 区間の外へ食い込む量の許容差。kneeDropWall.jsのSPAN_OVERLAP_EPSと同じ規約値（同ファイルの
-// isConstituentWallが壁の全スパン基準で使う許容差そのもの。chamferWalls・wallJunctionResolveの
-// CORNER_EXCLUSION・closeConvexCornersのCONTINUE_TOLとも揃えた150mm）——kneeDropZRangesAt参照。
-const CORNER_OVERHANG_EPS_MM = 150;
 
 // 「切断線が壁の中心線と同一直線上（coincident）」とみなす許容差(mm)。壁厚/2に対する
 // 上乗せ分（WP-E5リード裁定・coincident壁＝cutAlongカテゴリ）。CL再スナップ等による
@@ -396,75 +389,9 @@ function isWallViaStairRoom(cut, wall, farKindOf) {
   return farKindOf() === 'stair';
 }
 
-/**
- * 腰壁・垂れ壁指定を反映したwallのz存在**範囲の並び**（§5.2 step2）。
- * 指定なし=[[floorZ,ceilZ]]（全高）。腰壁指定=[[floorZ,floorZ+topHeight]]、垂れ壁指定=
- * [[ceilZ-bottomHeight,ceilZ]]。
- *
- * **両方同時指定（＝アキ）は2つの範囲を返す**（腰壁の帯と垂れ壁の帯）。旧実装は「腰壁優先の
- * if/else」で垂れ壁側を捨てており、その結果アキの上を塞ぐ垂れ壁が実体として存在しないことに
- * なって、`open`帯が腰壁の天端から**天井まで**伸びていた（アキ＝四角い穴にならない）。
- * アキの表現をエンジンへ一本化するにはここが実体を正しく持っていなければならない。
- * 退化（腰壁と垂れ壁が接する／重なる）した指定は1本へ潰す——穴が無いなら壁は連続した1枚。
- * @param {object} graph
- * @param {import('@core').Wall} wall
- * 点クエリに掛かるレコードでも、**wall自身がその区間の構成壁でなければ無視する**
- * （kneeDropRecordsAtPointOnWall）。隅の取り合いで隣区間へ食い込んだ壁端が隣区間の腰壁指定を
- * 拾うと、全高の壁の端だけが腰壁の高さになる（実機2026-09「22」2階 A1×X2の「腰壁の残骸」）。
- *
- * 逆に、狭い点クエリ（±POINT_QUERY_EPS_MM）が**0件**、かつ**pointCoordがwall自身の端
- * （wLo/wHi＝wall.coord1/coord2）からCORNER_OVERHANG_EPS_MM以内**のときだけ、検索窓を
- * ±CORNER_OVERHANG_EPS_MMへ広げて再クエリする（wall自身が区間の構成壁かの判定＝
- * isConstituentWallは`kneeDropRecordsAtPointOnWall`内で従来どおりwallの全スパン基準のまま
- * 変えない）。壁自身がその区間の腰壁として指定された本人でも、隅の取り合いで壁端がレコード
- * 区間の外（例: 区間端CLから57.5mm先）へ食い込むと、その食い込み部の点だけを見る狭い点クエリは
- * レコードのhi/loの外に出てしまい0件になる（実機2026-09「6」面C x=0: knee壁-1500..57.5のうち
- * 57.5mm食い込み部手前が全高に落ちていた）。CORNER_OVERHANG_EPS_MMは隅の取り合いの許容差
- * （kneeDropWall.jsのSPAN_OVERLAP_EPSと同じ規約値。chamferWalls・wallJunctionResolveの
- * CORNER_EXCLUSION・closeConvexCornersのCONTINUE_TOLとも揃えた150mm）。
- * **「壁自身の端から150mm以内」の絞り込みが必須**（QA是正2026-09）——これが無いと、
- * mergeSegmentsで結合された長い壁（例: X1..X3の1本）の、区間境界(X2)の手前150mm
- * （壁自身の端からは遠いがレコード境界には近い点）まで隣区間の腰壁指定を拾ってしまい、
- * 全高であるべき区間が腰壁の高さへ縮む誤爆になる（区間境界の手前で切り替わる従来挙動が壊れる）。
- * @param {number} pointCoord - 点クエリ位置（wall自身の長さ方向座標）
- * @param {number} floorZ
- * @param {number} ceilZ
- * @param {{zAt:(along:number)=>number}|null} [wallTop] - 壁の天端プロファイル（絶対z。隔て壁の斜め天端）。
- *   あれば腰壁・垂れ壁より先に判定し、[floorZ, min(ceilZ, zAt(pointCoord))] の1件を返す
- *   （天端≦床なら空）。各件は topAt（along→天端z）を持つ。無ければ従来どおり。
- * @param {{worldLo:number, worldHi:number}|null} [span] - 列の幅（wallTop があるときだけ使う）。あれば天端は
- *   **幅の両端の高い方**（max）で取る——斜面を水平の帯で近似するとき、遮る範囲を広めに倒す（隠すべきものを
- *   描かない側）。省略は pointCoord の1点。
- * @returns {Array<{z0:number, z1:number, topAt?:(along:number)=>number}>} 1件 or 2件（z0昇順）。wallTopで潰れたら0件。
- */
-export function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ, wallTop = null, span = null) {
-  if (wallTop) {
-    const top = span ? Math.max(wallTop.zAt(span.worldLo), wallTop.zAt(span.worldHi)) : wallTop.zAt(pointCoord);
-    const z1 = Math.min(ceilZ, top);
-    return z1 > floorZ ? [{ z0: floorZ, z1, topAt: wallTop.zAt }] : [];
-  }
-  let records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, POINT_QUERY_EPS_MM);
-  if (records.length === 0) {
-    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-    const nearWallEnd = pointCoord < wLo + CORNER_OVERHANG_EPS_MM || pointCoord > wHi - CORNER_OVERHANG_EPS_MM;
-    if (nearWallEnd) {
-      records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, CORNER_OVERHANG_EPS_MM);
-    }
-  }
-  for (const { rec } of records) {
-    if (!rec.knee && !rec.drop) continue;
-    const kneeTop  = rec.knee ? floorZ + rec.knee.topHeight : null;
-    const dropBase = rec.drop ? ceilZ - rec.drop.bottomHeight : null;
-    if (kneeTop != null && dropBase != null) {
-      // アキ（四角い穴）: 腰壁 [floorZ, kneeTop] と垂れ壁 [dropBase, ceilZ]。
-      if (dropBase <= kneeTop + GAP_EPS) return [{ z0: floorZ, z1: ceilZ }]; // 穴が潰れる指定
-      return [{ z0: floorZ, z1: kneeTop }, { z0: dropBase, z1: ceilZ }];
-    }
-    if (kneeTop != null) return [{ z0: floorZ, z1: kneeTop }];
-    return [{ z0: dropBase, z1: ceilZ }];
-  }
-  return [{ z0: floorZ, z1: ceilZ }];
-}
+// kneeDropZRangesAt（腰壁・垂れ壁指定を反映した壁のz存在範囲の並び。アキは2帯）は
+// finish/kneeDropWall.js へ移した（平面の立体モデル plan/planSolids.js が展開図エンジンの内部を
+// 引かないため。上の import と下の export を参照）。
 
 // 層ごとの壁の天端プロファイル（probeCtx.wallTopProfileFor。隔て壁の斜め天端）から壁1本分を引く。
 // probeCtx がプロファイルを持たない（スタブ等）・該当壁なしは null＝従来どおり。

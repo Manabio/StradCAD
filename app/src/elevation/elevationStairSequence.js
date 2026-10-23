@@ -143,7 +143,7 @@ export function underReturnSpaceOf(stair, graph, cut, floorHeight, floorZMm, cei
       }
     }
   }
-  // 壁の天端（sectionProbe.js stairUnderReturnSoffit＝壁の天端 addUnderReturnTops と同じ値）。断面エンジンが引く壁の面の
+  // 壁の天端（ceiling/stairSoffit.js stairUnderReturnSoffit＝壁の天端 addUnderReturnTops と同じ値）。断面エンジンが引く壁の面の
   // 縦線はここまでなので、天井仕上げの断面線の端まで縦線を延ばす（underReturnCeilingPrimitives）
   return { loX, hiX, wallLoX, wallHiX, wallFaceX, wallTopZ: found.wallTopZ, onLo, soffit };
 }

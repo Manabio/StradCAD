@@ -22,7 +22,7 @@ import { resolveFinVisibility, finishJoinInset } from './wallFinishJoin.js';
 // 依存しないよう独立に持つ）。
 const GAP_EPS = 1e-6;
 
-// 断面がカタログに無い柱のフォールバック辺長（sectionStructure.js の梁と同じ木造既定断面）。
+// 断面がカタログに無い柱のフォールバック辺長（structural/sectionCatalog.js beamDepthMm の梁と同じ木造既定断面）。
 const DEFAULT_SECTION_MM = 105;
 
 // 基礎（杭）を表す role。仕上げで覆う対象ではない。

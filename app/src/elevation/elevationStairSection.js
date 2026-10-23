@@ -9,16 +9,24 @@
  * 無ければ totalSteps を均等2分（対称な折返しという仮定。解釈の判断）。
  *
  * ローカル座標は elevationFigure.js と同じ（x=0起点、yは上向き負・床=0）。
+ *
+ * 断面エンジン（section/）が引く部品（stairRunProfile・resolveUTurnSectionParams・ささらの帯・
+ * 鉄骨/木造の寸法定数）は section/stairSectionProfile.js へ移した（展開図リファクタ S1。
+ * section/ から親ディレクトリへ逆向きに import しないため）。既存の import 先を変えないよう
+ * 下で再公開する。帯ビルダーと断面エンジンの交差そのものの整理は S7 の範囲。
  */
 import { StructuralMaterialType } from '@core';
-import { resolveSwitchbackSpanLengths, resolveUTurnSpanLengths, measureStairSpans } from '../finish/stair/stairClassify.js';
-import { resolveStairPorts } from '../finish/stair/stairPorts.js';
-import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from './elevationStyle.js';
+import { resolveSwitchbackSpanLengths } from '../finish/stair/stairClassify.js';
+import { ElevationLineRole, weightForRole } from './elevationStyle.js';
+import {
+  WOOD_TREAD_THICKNESS_MM, stairRunProfile, resolveUTurnSectionParams, stringerBandGeometry, stringerPrimitives,
+  STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM, STEEL_LANDING_FRAME_DEPTH_MM,
+} from './section/stairSectionProfile.js';
 
-// 在来木造階段の踏面板の厚み（ユーザー指示2026-10-07「木造（在来）で階段は、踏面の厚みは30、
-// 蹴込板は垂直に」）。stairRunProfile の opts.treadThicknessMm へ渡す（sectionStair.js の
-// stairContribution が stair.structure===WOOD の flight に載せる）。
-export const WOOD_TREAD_THICKNESS_MM = 30;
+export {
+  WOOD_TREAD_THICKNESS_MM, stairRunProfile, resolveUTurnSectionParams, stringerBandGeometry, stringerPrimitives,
+  STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM, STEEL_LANDING_FRAME_DEPTH_MM,
+};
 
 /**
  * 階段の断面線（flight の下側の輪郭）が**繋がっている＝階段下の空間が蹴込板で閉じている**か
@@ -35,76 +43,6 @@ export const WOOD_TREAD_THICKNESS_MM = 30;
  */
 export function stairSectionIsClosed(stair) {
   return stair?.structure === StructuralMaterialType.WOOD || stair?.structure === StructuralMaterialType.RC;
-}
-
-/**
- * 直進区間1本ぶんの踏面プロファイル（蹴上→踏面を段数ぶん繰り返すジグザグ線）をローカル座標で作る。
- * 最終段の踏面は次区間（踊り場・上階床）の床がその役割を兼ねるため出さない
- * （.claude/stair-model.md「直進部（実段数n）: マス n-1」と同じ考え方の側面表現）。
- * @param {number} n - 段数（蹴上の実数）
- * @param {number} riserMm
- * @param {number} runLengthMm - 区間の実測ぶんの走行長（歩行方向の総水平距離）
- * @param {number} startX
- * @param {number} startY - 区間開始時点の高さ（y、上向き負）
- * @param {1|-1} dir - 歩行方向（+1=右へ、-1=左へ）
- * @param {number} [nosingMm] - 蹴込(mm。`Stair.nosing`)。0（既定）なら従来どおり蹴上＝段鼻の
- *   真下で、点列・その並び（段鼻＝奇数index）は一切変わらない。>0なら蹴上を蹴込ぶん奥へ引っ込め、
- *   段鼻の出を1本の水平セグメントとして点列へ挟む（ユーザー実機指摘2026-08「階段の蹴上、踏面に
- *   加え、蹴込を20で描画」）。
- * @param {{treadThicknessMm?:number}} [opts] - treadThicknessMm:段板（踏面板）の厚み。0（既定）
- *   なら従来の斜めの蹴上。>0 かつ蹴込>0 なら垂直の蹴込板＋出幅 k・厚み分の段鼻面を持つ輪郭
- *   （WOOD_TREAD_THICKNESS_MM）。
- * @returns {{points:Array<[number,number]>, noses:Array<[number,number]>, endX:number, endY:number}}
- *   noses は段鼻（各段の踏面の先端）。蹴込を入れると点列の刻みが1段2点→3点に変わるため、
- *   **消費側がindexの偶奇から段鼻を推測できなくなる**——ここで明示的に返す（ささらの上端線は
- *   この段鼻列から作る。stringerPrimitives参照）。
- */
-export function stairRunProfile(n, riserMm, runLengthMm, startX, startY, dir = 1, nosingMm = 0, opts = {}) {
-  const steps = Math.max(1, Math.round(n));
-  // 踏面（段鼻〜段鼻のピッチ）は **区間長 ÷ (段数−1)**（ユーザー実機検算2026-08「3500左CLの上が
-  // 1段目踏面、右へ2500いったところが踊り場高さ、かつ11段目」＝10ピッチ×250）。区間長は
-  // 「1段目の位置〜次区間（踊り場・上階床）の床の位置」であり、その間に現れる踏面はsteps−1枚
-  // ——最終段の踏面は次区間の床が兼ねる（本関数のヘッダの既存仕様）。
-  // 旧実装は `runLengthMm / steps` で割っており、踏面が1枚ぶん細く・最終段の踏面も余分に描いていた。
-  // 側面の口に取りつく区画（上り口・到達口）はこの関数の対象外（平面のセルを切断線で切った Landing。sectionStair.js）。
-  const treadMm = steps > 1 ? runLengthMm / (steps - 1) : runLengthMm;
-  // 蹴込は踏面を超えない（超えると蹴上が前段の段鼻より手前へ回り込み、輪郭が自己交差する）。
-  const k = Math.max(0, Math.min(nosingMm || 0, treadMm));
-  // 段板の厚み（opts.treadThicknessMm。既定0＝従来）。>0 なら蹴込板は**垂直**になり、踏面板は
-  // 蹴込ぶん（k）蹴込板より前へ出て、段鼻面（厚み分の縦）と k 長の下面を持つ。蹴上より薄い範囲に
-  // クランプ（riser−1。蹴上以上だと下面が前段の踏面へ食い込み自己交差する）。蹴込0（k=0）では
-  // 段鼻面と蹴込板が同一直線になり従来の垂直な蹴上と同一（点列も同じ）。
-  const t = Math.max(0, Math.min(opts.treadThicknessMm || 0, riserMm - 1));
-  const thick = t > 0 && k > 0;
-  const points = [];
-  const noses = [];
-  let x = startX, y = startY; // x は「現在の段の段鼻」の位置（蹴上の足元は x+dir*k）
-  points.push([x + dir * k, y]); // 上り口の床は蹴上の足元（段鼻から蹴込ぶん奥）で階段に接する
-  for (let i = 0; i < steps; i++) {
-    y -= riserMm;
-    if (thick) {
-      // 在来木造（ユーザー指示2026-10-07「踏面の厚みは30、蹴込板は垂直に」）。y は上向き負なので
-      // 踏面板の下面は y+t。最終段（踊り場・上階床への上り）は蹴込板を床の高さまで垂直に上げて
-      // 終える（その上の踏面は次区間の床が兼ねる）。段鼻 noses は従来と同じ位置（踏面前端の天端）。
-      const rx = x + dir * k;
-      noses.push([x, y]);
-      if (i === steps - 1) { points.push([rx, y]); break; }
-      points.push([rx, y + t], [x, y + t], [x, y]);
-      x += dir * treadMm; points.push([x + dir * k, y]);
-      continue;
-    }
-    // 蹴上は**斜めの断面**（ユーザー実機指摘2026-08「踊り場への上り、最後の蹴上面も蹴込つけて
-    // 斜め断面に」）——足元(x+dir*k)から段鼻(x)へ1本の斜線で上がる。蹴込0なら垂直になり
-    // 従来と完全に同一（点列も同じ）。**最終段（踊り場への上り）も同じループで処理する**ので
-    // 例外扱いは要らない。
-    points.push([x, y]);
-    noses.push([x, y]);
-    // 最終段の踏面は描かない（次区間の床が兼ねる）。区間の総走行長は (steps-1)*treadMm =
-    // runLengthMm のままなので endX は従来と同じ＝呼び出し側の配置は不変。
-    // 踏面は段鼻から次の蹴上の足元まで＝踏面ピッチ＋蹴込ぶんの水平線。
-    if (i < steps - 1) { x += dir * treadMm; points.push([x + dir * k, y]); }
-  }
-  return { points, noses, endX: x, endY: y };
 }
 
 /**
@@ -129,38 +67,6 @@ export function resolveSwitchbackParams(stair, graph, floorHeight) {
   if (!spanInfo) return null;
   const riser = stair.riser ?? floorHeight / spanInfo.totalSteps;
   return { ...spanInfo, riser };
-}
-
-/**
- * U字系（SWITCHBACK/WINDING）の断面計算パラメータ。resolveSwitchbackParams と同じ式
- * （riser＝stair.riser ?? 階高/総段数）で、区間長・段数の元だけ resolveUTurnSpanLengths
- * （turnCells＝回転部のマス数を含む）に替えたもの。WINDING の展開図が回転部を段付きの踊り場として
- * 折返しのエンジンに通すための入口（resolveSwitchbackParams は SWITCHBACK 専用のまま）。
- * U字系以外・floorHeight未確定はnull。
- * @param {import('@core').Stair} stair
- * @param {object} graph
- * @param {number|null} floorHeight
- * 側面の上り口に取りつく回転部（entryTurnSteps）は、平面（stairGeometry.js の buildSwitchback/buildWinding の
- * turnStepsE）と同じ述語 `ports.entry !== 'end'` のときだけ効かせる。entryTurnSteps＝有効な蹴上数（走行端なら 0）。
- * 区画そのものの位置・段は平面のセル（uTurnPlanLayout / stairTreadFootprints）から取る（sectionStair.js stairContribution）。
- * @returns {{totalSteps:number, riser:number, n1:number, n2:number, turnCells:number,
- *   len1:number, landingLen:number, len2:number, entryTurnSteps:number}|null}
- */
-export function resolveUTurnSectionParams(stair, graph, floorHeight) {
-  if (floorHeight == null) return null;
-  const spanInfo = resolveUTurnSpanLengths(stair, graph);
-  if (!spanInfo) return null;
-  const riser = stair.riser ?? floorHeight / spanInfo.totalSteps;
-  const wanted = Math.max(0, stair.entryTurnSteps ?? 0);
-  let entryTurnSteps = 0;
-  {
-    const spans = measureStairSpans(stair, graph);
-    const ports = resolveStairPorts(stair, {
-      laneLenA: spanInfo.len1, laneLenB: spanInfo.len2, firstRowA: spans?.firstRowA, firstRowB: spans?.firstRowB,
-    });
-    if (ports.entry !== 'end') entryTurnSteps = wanted;
-  }
-  return { ...spanInfo, riser, entryTurnSteps };
 }
 
 /**
@@ -197,23 +103,6 @@ export function buildSwitchbackSectionPrimitives(stair, graph, floorHeight) {
   return prims;
 }
 
-// ---- WP-S1: 歩行順面シーケンス（elevationStairSequence.js）向けの追加部品 ----
-
-// 鉄骨階段のささら（ささら桁）の板厚・せい（成）。Stairモデルに桁成フィールドが無いため、
-// 作図上の既定値としてローカル定数に持つ（将来 Stair 側にフィールド化する余地を残すコメント）。
-// 出典: http://kentiku-kouzou.jp/struc-sasara.html「最低でも12mm厚で、プレートのせいは
-// 250～300程度」——せいは上限の300mmを採用（変形・強度に余裕を持たせる側の値）。
-// STEEL_STRINGER_DEPTH_MMは旧実装（WP-S1〜WP-E5b時点）ではCUT表現時代の作図上の仮値200mmだった
-// ものを、ページ記載の実寸法へ更新した（挙動変更。ユーザー指示「ささらを展開に反映」対応）。
-export const STEEL_STRINGER_DEPTH_MM = 300;
-// ささら（プレート）の板厚。正面視（切断面がFlightに直交する見返り）で見える12mm×せいの
-// 矩形断面の横幅に使う（sectionStair.js）。側面視のstringerPrimitivesは板厚を使わない
-// （輪郭は段鼻を結ぶ線とその平行線の2本だけで表現するため）。
-export const STEEL_STRINGER_THICKNESS_MM = 12;
-// 踊り場桁枠（front/back/side桁）のせい（WP-A2。ユーザー裁定2026-08-23で250→300へ変更——
-// ささら（斜め部。STEEL_STRINGER_DEPTH_MM=300）と同値。板厚12共通）。
-export const STEEL_LANDING_FRAME_DEPTH_MM = 300;
-
 /**
  * 段鼻高さごとの水平「梯子状」細線一式（ユーザー仕様「階段直進部上を正面または踊り場から
  * 見返りで見た展開は、踏面を梯子状に細線」）。baseAbsMm（この区間の下端の絶対高さ。設置階FL=0
@@ -235,218 +124,4 @@ export function treadLadderLines({ loX, hiX, riserMm, steps, baseAbsMm, dashed =
     });
   }
   return out;
-}
-
-/**
- * 鉄骨階段のささら（ささら桁）プロファイル: profilePoints（stairRunProfile等が返す蹴上・踏面の
- * ジグザグ点列）の段鼻（凸点列＝奇数index。蹴上通過直後・踏面通過前の点。等ピッチの階段では
- * 一直線に並ぶ）を結ぶ直線から、法線方向へ depthMm ぶん下げた平行線を作り、両端を閉じた
- * 1本の polyline（DETAIL＝見えがかりの細線）として返す。
- * ユーザー指示「ささらの見えかがりは細線、断面は太線」対応: 段部はささらの横に付く（横付け）の
- * が一般的（出典ページ「段部はササラの横につく納まりが一般的」）ため、段鼻を結ぶ上縁から下は
- * 段板の木口がささらに隠れて見えない——側面視（レーンを縦断する切断）でこの輪郭を見た目どおり
- * DETAIL（細線）で描く。太線(CUT)はささらが実際に切断される正面視（レーンを横切る切断）側
- * （sectionStair.jsのflightStringerFrontPrimitives）に割り当てた。旧実装（WP-S1〜WP-E5b）は
- * このpolyline自体をCUTにしていた——側面視の見えがかりを太線扱いしていた誤りを本対応で修正する。
- * @param {Array<[number,number]>} profilePoints - stairRunProfile(...).points 等のジグザグ点列
- * @param {number} depthMm - ささらの桁成（見付幅）
- * @returns {object[]} 0または1件のpolylineプリミティブ配列
- */
-/**
- * ささらの帯（上端線・下端線）の幾何を返す。`stringerPrimitives`（描画）と
- * `sectionStair.js`（踊り場桁枠の下端をこの帯とのトリム点で切る）が**同じ交点を共有する**ための
- * 単一情報源——別々に計算すると1本の取り合いが2つの位置に分裂する。
- *
- * 上端 = 段鼻の勾配線を巾木高さぶん上げた線。下端 = 上端を法線方向へ`depthMm`（ささらのせい）
- * 平行移動した線。
- *
- * **トリム結合（ユーザー実機指摘2026-08「直進部の斜めささらと踊り場ささら（上下共）は、
- * トリム結合して取り合う」）**: `opts.mitreDepthMm`（踊り場桁枠のせい）を渡すと、その端の
- * 下端の角を「上端のその端の高さ＋mitreDepthMm」の**水平線との交点**へ移す。踊り場桁枠の
- * 下端はこの水平線そのもの（桁枠は鉛直にせいを取る）なので、斜めささらの法線オフセットとの
- * 交差角がここで解消し、2本の下端が1点で継がる。上端は元々この端で一致している（段鼻の
- * 最終点＝踊り場床）ため、上下とも取り合う。
- * @param {Array<[number,number]>} nosings - 段鼻列（昇順・2点以上）
- * @param {number} depthMm
- * @param {{baseboardMm?:number, mitreDepthMm?:number, mitreStart?:boolean, mitreEnd?:boolean}} [opts]
- * @returns {{top:[[number,number],[number,number]], bottom:[[number,number],[number,number]]}|null}
- */
-export function stringerBandGeometry(nosings, depthMm, opts = {}) {
-  if (!nosings || nosings.length < 2) return null;
-  const lift = Math.max(0, opts.baseboardMm ?? 0);
-  const p1raw = [nosings[0][0], nosings[0][1] - lift];
-  const p2raw = [nosings[nosings.length - 1][0], nosings[nosings.length - 1][1] - lift];
-  const dx = p2raw[0] - p1raw[0], dy = p2raw[1] - p1raw[1];
-  // トリム端は、上端を勾配に沿って踊り場桁枠の上端（opts.mitre*TopY）まで伸ばす
-  // ——復路は最初の段鼻が踊り場より1リザー上にあり、段鼻列だけの帯では桁枠に届かない
-  // （ユーザー明示指示2026-08その15「復路のささら上見えがかりは踊り場のささら上まで」）。
-  // 方向(dx,dy)は線上の移動なので不変。下端はこの後のミトレで「上端+せい」へ寄るため、
-  // 上端を合わせれば下端も自動的に桁枠の下端（＝踊り場の左側ささら下端）に揃う。
-  const slideTo = (p, targetY) => {
-    if (targetY == null || Math.abs(dy) < GAP_EPS) return p;
-    const t = (targetY - p[1]) / dy;
-    return [p[0] + t * dx, targetY];
-  };
-  const p1 = opts.mitreStart ? slideTo(p1raw, opts.mitreStartTopY) : p1raw;
-  const p2 = opts.mitreEnd ? slideTo(p2raw, opts.mitreEndTopY) : p2raw;
-  const len = Math.hypot(dx, dy) || 1;
-  // 法線（下方向=yが増える側を正にする。階段の下＝ささら側という前提）。
-  let nx = -dy / len, ny = dx / len;
-  if (ny < 0) { nx = -nx; ny = -ny; }
-  const ox = nx * depthMm, oy = ny * depthMm;
-  let b1 = [p1[0] + ox, p1[1] + oy];
-  let b2 = [p2[0] + ox, p2[1] + oy];
-  const mitreD = opts.mitreDepthMm;
-  // 下端線（方向(dx,dy)）と水平線 y=targetY の交点。dy===0（水平なささら＝あり得ない）は素通し。
-  const mitreTo = (b, targetY) => {
-    if (Math.abs(dy) < GAP_EPS) return b;
-    const t = (targetY - b[1]) / dy;
-    return [b[0] + t * dx, targetY];
-  };
-  if (mitreD != null && opts.mitreStart) b1 = mitreTo(b1, p1[1] + mitreD);
-  if (mitreD != null && opts.mitreEnd)   b2 = mitreTo(b2, p2[1] + mitreD);
-  return { top: [p1, p2], bottom: [b1, b2] };
-}
-
-export function stringerPrimitives(profilePoints, depthMm, zBounds, opts = {}) {
-  // 段鼻列は呼び出し側が明示的に渡す（stairRunProfile(...).noses）。未指定時のみ従来の
-  // 「奇数index＝段鼻」ヒューリスティックへフォールバックする——蹴込>0では1段の点列が
-  // 2点→3点になり偶奇では拾えないため（elevationStairSection.jsのstairRunProfile参照）。
-  const nosings = opts.noses ?? profilePoints.filter((_, i) => i % 2 === 1);
-  if (nosings.length < 2) return [];
-  // ユーザー実機指摘2026-08「鉄骨階段ささらの上端は、踏面先端で巾木同寸」: 上端線は段鼻を
-  // 結ぶ勾配線そのものではなく、そこから**巾木高さぶん上**（yは上向き負なので減算）。
-  // これにより上端が踊り場桁枠side辺の上端（`landing.z + baseboardHeightMm`。sectionStair.jsの
-  // landingFramePrimitives）と**踊り場の縁でちょうど一致**する——最後の段鼻の高さが
-  // landing.zそのものだから。「直進部の斜めささらと踊り場ささらはトリム結合して取り合う」の
-  // 上端側はこれで自動的に成立する（下端側は勾配の法線オフセットと踊り場の鉛直せいが
-  // 交差するため、別途トリムが要る。未対応=defer）。
-  const band = stringerBandGeometry(nosings, depthMm, opts);
-  if (!band) return [];
-  const { top: [[x1, y1], [x2, y2]], bottom: [b1, b2] } = band;
-  // bottomOnly: ささらの帯のうち**下端の輪郭だけ**を返す（ユーザー明示指示2026-09「「13」D:
-  // 階段断面のささら（上）は、部屋の向こう側なので描画不要」——階段下から見上げる面では、
-  // ささらの上端線は踏面の裏側にあって見えない）。上端・端部の縦線も出さないので、返るのは
-  // 開いた1本の線分だけ。
-  if (opts.bottomOnly) {
-    // **flightのz範囲ではクリップしない**（ユーザー明示指示2026-09「「13」D: ささら（下）が
-    // 途中で終わっている。延長または踊り場下なのか判定して描画」）——下端線は段鼻の勾配線から
-    // せいぶん下がるため、区間の下り口側では必ずbaseZより下へ出る。そこを切ると線が宙で終わる。
-    // 下に踊り場が来る範囲は踊り場の桁枠が別途その輪郭を描く（landingFramePrimitives）ので、
-    // ここで切る必要はない。区間の外へは伸びない（点列自体がflightの走行範囲）。
-    return [{ type: 'polyline', points: [b1, b2], weight: weightForRole(ElevationLineRole.DETAIL) }];
-  }
-  const points = [[x1, y1], [x2, y2], b2, b1, [x1, y1]];
-  // 実機フィードバック第3弾B: オフセット後の多角形は、法線オフセット(ox,oy)ぶん元のnosing線
-  // （flightの端の1つ内側のnosingを結ぶ線。flight自身の始端・終端ちょうどではない）よりFL側へ
-  // はみ出すことがある（せいdepthMmぶん下げる方向＝階段の下＝floorへ向かう方向のため）。
-  // z=baseZ・z=baseZ+steps×riser（ローカルy=zBounds.yHi/yLo。flightZBoundsと同じ規約）の
-  // 水平面でSutherland–Hodgman相当の単純な半平面クリップを行い、FLを超えた突き出しを切る
-  // （clipStringerToAnchors「ジグザグ点列の端点をFLへ強制的に揃える」対応の、オフセット後
-  // 多角形版）。zBounds未指定（既存呼び出し）は挙動不変。
-  // トリム結合する端では、z範囲のクリップを巾木ぶん緩める（ユーザー明示指示2026-08その14
-  // 「ささら上同士、ささら下同士トリム」）——上端は段鼻線を巾木高さぶん**上**へ上げた線で、
-  // 踊り場桁枠の上端（踊り場床+巾木）と同じ高さにある。flightのz範囲（baseZ〜baseZ+steps×riser）で
-  // そのまま切ると上端が踊り場の床高さで切られ、桁枠の上端まで届かず取り合いが切れる
-  // （実機「6」D1で、切られた端が「ささら上とささら下を結ぶ線」として残っていた）。
-  let zb = zBounds;
-  if (zb && (opts.mitreStart || opts.mitreEnd)) {
-    let { yLo, yHi } = zb;
-    // トリム結合する端で、ささらが占めるy区間 [上端, 上端+ミトレ深さ] を範囲へ含める。
-    // 上端＝段鼻線を巾木ぶん上げた線・下端＝ミトレで踊り場桁枠の下端の高さへ寄せた点。
-    // flightのz範囲そのままだと、往路側は上端が・復路側は下端が範囲外になって切られる。
-    const cover = top => {
-      const bot = top + (opts.mitreDepthMm ?? 0);
-      if (yLo != null) yLo = Math.min(yLo, top, bot);
-      if (yHi != null) yHi = Math.max(yHi, top, bot);
-    };
-    if (opts.mitreStart) cover(band.top[0][1]);
-    if (opts.mitreEnd) cover(band.top[1][1]);
-    zb = { yLo, yHi };
-  }
-  const clippedPoints = zb ? clipPolygonToYRange(points, zb.yLo, zb.yHi) : points;
-  if (clippedPoints.length < 3) return [];
-  // トリム結合した端では**ささらの端の縦線を描かない**（ユーザー明示指示2026-08その14
-  // 「ささら上同士、ささら下同士トリム／300の線は不要」）——上端は踊り場桁枠の上端へ、下端は
-  // 同じく下端へそれぞれ継がるため、端を閉じるとせい(depthMm=300)ぶんの線が1本余る。
-  // 端を落とすと輪郭は開いたパスになる（両端をトリムした場合は上端・下端の2本に分かれる）。
-  const dropEdges = [];
-  if (opts.mitreStart) dropEdges.push([band.top[0], band.bottom[0]]);
-  if (opts.mitreEnd)   dropEdges.push([band.top[1], band.bottom[1]]);
-  const paths = dropEdges.length === 0 ? [clippedPoints] : splitRingAtEdges(clippedPoints, dropEdges);
-  return paths.filter(pts => pts.length >= 2)
-    .map(pts => ({ type: 'polyline', points: pts, weight: weightForRole(ElevationLineRole.DETAIL) }));
-}
-
-// 閉パス（先頭==末尾）から、dropEdges（端点ペア）に一致する辺を取り除き、残りを連続する
-// 開パスの配列へまとめる。座標一致はGAP_EPSで見る（クリップで新しい頂点が挿入されても、
-// トリム端の角自体は範囲内にあるため残る——万一残らなければ辺は落とせず従来どおり閉じる）。
-function splitRingAtEdges(ring, dropEdges) {
-  const pts = ring.length > 1 &&
-    Math.abs(ring[0][0] - ring[ring.length - 1][0]) < GAP_EPS &&
-    Math.abs(ring[0][1] - ring[ring.length - 1][1]) < GAP_EPS ? ring.slice(0, -1) : ring;
-  const n = pts.length;
-  if (n < 3) return [ring];
-  const same = (a, b) => Math.abs(a[0] - b[0]) < GAP_EPS && Math.abs(a[1] - b[1]) < GAP_EPS;
-  const dropped = i => {
-    const a = pts[i], b = pts[(i + 1) % n];
-    return dropEdges.some(([p, q]) => (same(a, p) && same(b, q)) || (same(a, q) && same(b, p)));
-  };
-  const keep = [];
-  for (let i = 0; i < n; i++) keep.push(!dropped(i));
-  if (keep.every(Boolean)) return [ring];
-  const start = keep.findIndex(k => !k);
-  const paths = [];
-  let cur = null;
-  for (let k = 1; k <= n; k++) {
-    const i = (start + k) % n;
-    if (keep[i]) {
-      if (!cur) cur = [pts[i]];
-      cur.push(pts[(i + 1) % n]);
-    } else if (cur) { paths.push(cur); cur = null; }
-  }
-  if (cur) paths.push(cur);
-  return paths;
-}
-
-// [x,y]の閉多角形（points[0]===points[末尾]の重複終点あり・無し両対応）を、y<=yHi・y>=yLo
-// の2つの半平面でSutherland–Hodgman法によりクリップする（実機フィードバック第3弾B）。
-// yLo/yHiのいずれかがnullなら該当する側の半平面クリップを省略する。
-function clipPolygonToYRange(points, yLo, yHi) {
-  let poly = points;
-  if (poly.length > 1) {
-    const [fx, fy] = poly[0], [lx, ly] = poly[poly.length - 1];
-    if (Math.abs(fx - lx) < GAP_EPS && Math.abs(fy - ly) < GAP_EPS) poly = poly.slice(0, -1); // 重複終点を除去
-  }
-  if (yHi != null) poly = clipHalfPlaneY(poly, y => y <= yHi + GAP_EPS, yHi);
-  if (yLo != null) poly = clipHalfPlaneY(poly, y => y >= yLo - GAP_EPS, yLo);
-  if (poly.length === 0) return [];
-  return [...poly, poly[0]]; // 閉多角形として再度終点を閉じる（呼び出し側の既存出力形と揃える）
-}
-
-// Sutherland–Hodgman法の1半平面ぶんのクリップ（keepFn(y)がtrueの頂点を保持し、境界を跨ぐ辺には
-// 交点(x, boundaryY)を挿入する）。
-function clipHalfPlaneY(poly, keepFn, boundaryY) {
-  if (poly.length === 0) return poly;
-  const out = [];
-  const n = poly.length;
-  for (let i = 0; i < n; i++) {
-    const curr = poly[i];
-    const prev = poly[(i - 1 + n) % n];
-    const currIn = keepFn(curr[1]);
-    const prevIn = keepFn(prev[1]);
-    if (currIn) {
-      if (!prevIn) out.push(intersectAtY(prev, curr, boundaryY));
-      out.push(curr);
-    } else if (prevIn) {
-      out.push(intersectAtY(prev, curr, boundaryY));
-    }
-  }
-  return out;
-}
-
-function intersectAtY(a, b, boundaryY) {
-  const [ax, ay] = a, [bx, by] = b;
-  const t = Math.abs(by - ay) < GAP_EPS ? 0 : (boundaryY - ay) / (by - ay);
-  return [ax + t * (bx - ax), boundaryY];
 }

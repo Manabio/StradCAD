@@ -25,27 +25,23 @@
  * 同格に扱う）で個別に抑える（`sectionEmit.js`のコメント参照）。
  */
 import { buildSpaceIndex } from '../space/spaceModel.js';
-import { collectRunBreaks } from '../elevationFloorProfile.js';
+import { collectRunBreaks } from './floorProfileMath.js';
 import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import { isRealRoom, baseLayerOf, orderLayerStack, layersAboveOf } from './sectionLayerStack.js';
 import { effectiveStructure } from '../../structural/structureRules.js';
 import { ceilClipProfileOf } from './sectionTypes.js';
-import { RoomKind } from '@core';
 import {
   stairPartitionDescriptors, partitionTopZAt, partitionTopCrossings, matchStairPartitionLine,
-  stairUnderReturnGeometry, isStairUnderReturnWall, PARTITION_THICKNESS_MM,
 } from '../../finish/stair/stairPartition.js';
-import { stairSoffitSolids } from '../../ceiling/stairSoffit.js';
-import { riserOf } from '../../finish/stair/stairDimensions.js';
-import { defaultSections } from '../../finish/stair/stairClassify.js';
+import { stairUnderReturnSoffit } from '../../ceiling/stairSoffit.js';
 import { stairContinuesAbove } from '../../finish/stair/stairChains.js';
 import {
   cutProbeRange, isCutWall, isCutAlongWall, isSightlineShape,
   buildLayerStack, probeColumn,
 } from './sectionHits.js';
 
-export { probeColumn };
+export { probeColumn, stairUnderReturnSoffit };
 
 // layer の直上の層。層の比較式は sectionLayerStack.js の既存ヘルパー（orderLayerStack・layersAboveOf）に任せる。
 function layerDirectlyAbove(layers, layer) {
@@ -53,42 +49,9 @@ function layerDirectlyAbove(layers, layer) {
   return layersAboveOf(stack, { layer })[0]?.layer ?? null;
 }
 
-/**
- * 階段の復路下の壁と、その天端・復路下の仕上げ空間の天井になる復路の裏面の立体（唯一の供給源。階段帯の seq5
- * 〔elevationStairSequence.js underReturnSpaceOf〕と壁の天端〔addUnderReturnTops〕が同じ入力・同じ検査で同じ立体を引く）。
- * 復路下の壁が無い（鉄骨・下階に続き階段がある・隔て壁なし）・屋外・区間 sections が不正（stairPartition.js slopeTop と同じ検査）・
- * 蹴上が決まらない（floorHeight 不明）・裏面が組めないときは null。
- * @param {import('@core').Stair} stair
- * @param {object} graph
- * @param {{floorHeight:number|null, floorZMm:number}} q floorHeight … 蹴上の推定に使う階高（直上の層の FL − 自階の FL）。
- *   floorZMm … 階段室の床の絶対 z（層スタックの floorZFor(room, layer)）。裏面の高さはこれを基準に段の天端 − 厚みで決まる
- * wallTopZ … 壁の天端（壁の軸上・区間の中央で、厚み方向 ±半厚と軸の 3 点の裏面の最小。平らな天端が壁の厚みのどこでも裏面より下に
- *   収まるように。裏面は走行方向に傾き、壁の回転部側の面が最も低い）。求まらなければ null。
- * @returns {{walls:import('@core').Wall[], line:{isVertical:boolean, axisValue:number, lo:number, hi:number}, solid:object, wallTopZ:number|null}|null}
- */
-export function stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm, aboveGraph = null }) {
-  if (!stair || !graph) return null;
-  const room = graph.roomMap?.get(stair.roomId) ?? null;
-  if (room?.kind === RoomKind.EXTERIOR) return null;
-  const g = stairUnderReturnGeometry(stair, graph);
-  if (!g) return null;
-  const line = { isVertical: g.isVertical, axisValue: g.axisValue, lo: g.lo, hi: g.hi };
-  const walls = (graphList(graph, 'walls') ?? []).filter(w => isStairUnderReturnWall(w, [line]));
-  if (walls.length === 0) return null;
-  const sections = stair.sections ?? defaultSections(stair);
-  if (!Array.isArray(sections) || sections.length !== 3 || !sections.every(Number.isFinite)) return null;
-  const riser = riserOf(stair, floorHeight);
-  if (!Number.isFinite(riser) || !Number.isFinite(floorZMm)) return null;
-  const solid = stairSoffitSolids({ stair, graph, riser, floorZMm, aboveGraph })[0];
-  if (!solid) return null;
-  const mid = (line.lo + line.hi) / 2;
-  const half = PARTITION_THICKNESS_MM / 2;
-  const z = Math.min(...[-half, 0, half].map(d => {
-    const p = line.isVertical ? [line.axisValue + d, mid] : [mid, line.axisValue + d];
-    return solid.zAt ? solid.zAt(...p) : solid.zLo;
-  }));
-  return { walls, line, solid, wallTopZ: Number.isFinite(z) ? z : null };
-}
+// stairUnderReturnSoffit（復路下の壁・天端・復路の裏面の立体の唯一の供給源）は ceiling/stairSoffit.js へ移した
+// （平面の立体モデル plan/planSolids.js が展開図エンジンの内部を引かないため）。既存の import 先
+// （elevationStairSequence.js・テスト）を変えないよう、上の export から再公開する。
 
 // 復路下の壁（stairPartition.js isStairUnderReturnWall）→ 平らな天端。壁は復路レーンの裏面で止まる（その上は階段の
 // 踏面・裏面で、壁は立ち上がらない）。高さは階段の裏面の式の唯一の供給源 ceiling/stairSoffit.js stairSoffitSolids を
