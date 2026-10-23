@@ -16,7 +16,7 @@
  */
 import { GAP_EPS_MM as GAP_EPS } from './elevationStyle.js';
 import {
-  structuralContribution, structuralPrimitivesForCut,
+  structuralContribution, structuralPrimitivesForCut, visibleBeamPieces,
   structuralColumnContribution, structuralColumnPrimitivesForCut,
 } from './section/sectionStructure.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
@@ -136,15 +136,42 @@ function clampPrimsToRun(prims, run) {
 export function solidPrimitivesForFace(face, opts) {
   const cut = faceSectionCut(face, opts);
   if (!cut) return [];
-  const { loZ, hiZ } = cut.zRange;
-  const beams = clipBeamsToBand(structuralContribution(cut.layers), loZ, hiZ);
-  const columnSolids = structuralColumnContribution(cut.layers);
+  const { beams, columnSolids } = faceBeamsAndColumns(cut);
   const prims = [
     // 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）
     ...structuralPrimitivesForCut(beams, faceBeamCut(face, cut, columnSolids, opts), undefined, null, { columnSolids, roomFaceCut: true }),
     ...structuralColumnPrimitivesForCut(columnSolids, cut),
   ];
   return clampPrimsToRun(prims, face.run);
+}
+
+function faceBeamsAndColumns(cut) {
+  const { loZ, hiZ } = cut.zRange;
+  return {
+    beams: clipBeamsToBand(structuralContribution(cut.layers), loZ, hiZ),
+    columnSolids: structuralColumnContribution(cut.layers),
+  };
+}
+
+/**
+ * 面に加算される梁（`solidPrimitivesForFace` と同じ梁・同じ可視区間 `visibleBeamPieces`）の矩形（面ローカルx×絶対z）。
+ * アキのバツが梁で分かれるように、部屋帯がアキの手前を塞ぐものとして渡す（section/sectionEmit.js の emitOpenGapMarks の `gapBeamRects`）。
+ * split … 面の平面上（parallel）・空中（airborne）の梁＝アキのセルから抜く／false（断面）＝バツの線を切り抜くだけ。
+ * 判定は新しく行わず、可視区間を読むだけ。解決できない面・梁が無い面は空配列。
+ * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number, split:boolean}>}
+ */
+export function beamBlockerRectsForFace(face, opts) {
+  const cut = faceSectionCut(face, opts);
+  if (!cut) return [];
+  const { beams, columnSolids } = faceBeamsAndColumns(cut);
+  if (beams.length === 0) return [];
+  const rects = [];
+  for (const p of visibleBeamPieces(beams, faceBeamCut(face, cut, columnSolids, opts), undefined, null, { columnSolids, roomFaceCut: true })) {
+    const xLo = Math.max(p.xLo, 0), xHi = Math.min(p.xHi, face.run);
+    if (xHi - xLo <= GAP_EPS) continue;
+    rects.push({ xLo, xHi, zLo: p.zLo, zHi: p.zHi, split: p.kind !== 'section' });
+  }
+  return rects;
 }
 
 /**

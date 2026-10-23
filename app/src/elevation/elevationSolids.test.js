@@ -9,7 +9,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { collectGridCLs } from './elevationPrimitives.js';
-import { solidPrimitivesForFace, faceSectionCut } from './elevationSolids.js';
+import { solidPrimitivesForFace, faceSectionCut, beamBlockerRectsForFace } from './elevationSolids.js';
 import { cutPlaneOffsetMm } from './section/sectionCutPlane.js';
 import { buildRoomBandWithVoidAbove } from './elevationVoid.js';
 import {
@@ -734,4 +734,10 @@ test('【実機修正2026-09】buildRoomBandWithVoidAbove: solids指定時だけ
   const added = after.filter(k => !before.includes(k));
   assert.equal(added.length, 2, `柱型の両端縦線2本だけが増えるはず（実際:${JSON.stringify(added)}）`);
   assert.ok(added.every(k => k.includes('|medium|')), '柱型は中線（SILHOUETTE）のはず');
+});
+
+test('【失敗系・S4】beamBlockerRectsForFace: 解決できない面（軸位置なし）・梁の無い面は空配列（例外を投げない）', () => {
+  assert.deepEqual(beamBlockerRectsForFace({ axisCL: null }, { graph: new PlanGraph(), ceilingHeight: 2400 }), []);
+  const face = { axisCL: { effectiveValue: 0 }, lo: 0, hi: 3000, run: 3000, dirSign: 1, isVertical: false, inward: 1 };
+  assert.deepEqual(beamBlockerRectsForFace(face, { graph: new PlanGraph(), ceilingHeight: 2400 }), []);
 });

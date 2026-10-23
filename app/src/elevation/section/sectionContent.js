@@ -348,10 +348,11 @@ export function farStairViewPrimitives(columns, cut, probeCtx) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
  * @param {{endExtendMm?:number, bandRoomBounds?:object|null, scale?:number,
- *   upperPlaneOverhang?:boolean, gapFloorProfile?:Array<[number,number]>|null, baseboardMm?:number}} [opts]
+ *   upperPlaneOverhang?:boolean, gapFloorProfile?:Array<[number,number]>|null, gapBeamRects?:object[]|null, baseboardMm?:number}} [opts]
  *   baseboardMm … 帯の部屋の巾木高さ（mm。省略・0＝引かない）。階段室越しの壁（viaStair）とその手前の隔て板の小口に
  *   巾木の細線を足す（部屋帯だけが渡す。階段帯は渡さない）。
  *   gapFloorProfile … アキのセルの下限にする断面線（階段帯のみ。elevationStairSequence.js）。省略＝下限なし。
+ *   gapBeamRects … アキの手前に見える梁の矩形（部屋帯のみ。elevationBand.js。形は emitOpenGapMarks の emitCtx 参照）。省略＝梁なし。
  * @returns {{cut:object, columns:object[], emitCtx:object,
  *   wallPrims:object[], gapMarks:object[], content:object[]}}
  *   cut … 探査延長・包絡矩形・層ごとの探査窓を載せた後の cut（後段の階段・構造材もこれを使う。
@@ -367,6 +368,7 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   const emitCtx = {
     ...emitCtxForCut(pcut), scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
     gapFloorProfile: opts.gapFloorProfile ?? null,
+    gapBeamRects: opts.gapBeamRects ?? null,
     baseboardMm: opts.baseboardMm ?? 0,
   };
   // 壁content（断面・見えがかり・凹み側面線）は「断面内部は描画しない」の一般判定
@@ -459,5 +461,6 @@ export function buildSectionFromLine(line, layers, opts = {}) {
     lineWeightsPx: opts.lineWeightsPx ?? null,
     upperPlaneOverhang: opts.upperPlaneOverhang ?? false,
     baseboardMm: opts.baseboardMm ?? 0,
+    gapBeamRects: opts.gapBeamRects ?? null,
   });
 }

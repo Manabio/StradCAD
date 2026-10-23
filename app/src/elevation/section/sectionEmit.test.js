@@ -2226,3 +2226,48 @@ test('【指示2026-10-15・失敗系】emitColumns: exposedSide の壁でも、
   assert.equal(prims.filter(p => p.__o === 'cutEdgeLo' && p.x1 === 780).length, 0, '足元 3000 が低い天井 2400 より上＝縁は全部隠れる');
   assert.deepEqual(prims.filter(p => p.__o === 'cutEdgeHi' && p.x1 === 895).map(p => [p.y1, p.y2]), [[-3000, -4742]]);
 });
+
+// ---- emitCtx.gapBeamRects（2026-10-23 S4: 部屋帯のアキは手前の梁で上下に分かれる） ----
+const gapCols = [{ x0: 0, x1: 3000, worldLo: 0, worldHi: 3000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] }];
+const gapDiags = prims => prims.filter(p => p.type === 'line' && p.dash === 'center'
+  && p.x1 !== p.x2 && p.y1 !== p.y2);
+const zSpans = prims => [...new Set(gapDiags(prims).map(p => `${Math.min(-p.y1, -p.y2)}..${Math.max(-p.y1, -p.y2)}`))].sort();
+
+test('【S4】emitOpenGapMarks: 梁（面の平面上・空中）がアキを横切るとバツが上下2つになる（z0..900 と z1200..2400）', () => {
+  const beam = { xLo: 0, xHi: 3000, zLo: 900, zHi: 1200, split: true };
+  const prims = emitOpenGapMarks(gapCols, makeCut(), { ceilZ: 2400, gapBeamRects: [beam] });
+  assert.equal(gapDiags(prims).length, 4);
+  assert.deepEqual(zSpans(prims), ['0..900', '1200..2400']);
+  assert.equal(prims.filter(p => p.type === 'text').length, 2, '「ア キ」も各成分に1つ');
+});
+
+test('【失敗系・S4】emitOpenGapMarks: 梁が無い（未指定・空配列・null）なら従来どおりバツ1つ', () => {
+  const plain = emitOpenGapMarks(gapCols, makeCut(), { ceilZ: 2400 });
+  assert.deepEqual(zSpans(plain), ['0..2400']);
+  assert.deepEqual(emitOpenGapMarks(gapCols, makeCut(), { ceilZ: 2400, gapBeamRects: [] }), plain);
+  assert.deepEqual(emitOpenGapMarks(gapCols, makeCut(), { ceilZ: 2400, gapBeamRects: null }), plain);
+});
+
+test('【失敗系・S4】emitOpenGapMarks: 梁の天端が天井に接していれば下の1つだけ', () => {
+  const beam = { xLo: 0, xHi: 3000, zLo: 1800, zHi: 2400, split: true };
+  const prims = emitOpenGapMarks(gapCols, makeCut(), { ceilZ: 2400, gapBeamRects: [beam] });
+  assert.deepEqual(zSpans(prims), ['0..1800']);
+});
+
+test('【失敗系・S4】emitOpenGapMarks: 断面（split:false）はセルを割らず、バツの線だけ切り抜く', () => {
+  const section = { xLo: 1400, xHi: 1600, zLo: 900, zHi: 1200, split: false };
+  const plain = emitOpenGapMarks(gapCols, makeCut(), { ceilZ: 2400 });
+  const prims = emitOpenGapMarks(gapCols, makeCut(), { ceilZ: 2400, gapBeamRects: [section] });
+  assert.equal(prims.filter(p => p.type === 'text').length, 1, '成分は1つのまま（「ア キ」も1つ）');
+  assert.ok(prims.filter(p => p.type === 'line').length > plain.filter(p => p.type === 'line').length,
+    '対角が断面の矩形で切れて線分が増える');
+  const hit = prims.filter(p => p.type === 'line' && p.x1 > 1400 && p.x1 < 1600 && -p.y1 > 900 && -p.y1 < 1200);
+  assert.deepEqual(hit, [], '断面の矩形の内側に線の端点が来ない');
+});
+
+test('【S4】emitOpenGapMarks: 梁が列の一部のx範囲だけなら、梁の端でセルを分けても梁の外側で繋がり、バツは1組のまま', () => {
+  const beam = { xLo: 0, xHi: 1000, zLo: 900, zHi: 1200, split: true };
+  const prims = emitOpenGapMarks(gapCols, makeCut(), { ceilZ: 2400, gapBeamRects: [beam] });
+  assert.equal(prims.filter(p => p.type === 'text').length, 0, 'L字になるので「ア キ」は付かない');
+  assert.deepEqual(zSpans(prims).length, 1, '成分は1つ（バツ1組）');
+});

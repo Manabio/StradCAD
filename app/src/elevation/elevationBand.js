@@ -17,6 +17,7 @@ import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling, flight
 import { graphList } from '../graphReadScope.js';
 import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDisplayName } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
+import { beamBlockerRectsForFace } from './elevationSolids.js';
 import { buildFaceFigure, segEndProfile, hasRightChDim, parseBaseboardHeightMm } from './elevationFigure.js';
 import { ceilArcCircleOf, ceilArcChords } from './ceilArcSection.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments, cornerOpeningZOfFace } from './elevationFloorProfile.js';
@@ -788,6 +789,8 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         ...cornerOpeningZOfFace(face, faceAt(i, -1), faceAt(i, 1), floorSegments, graph),
         probeCtx, endExtendMm, bandRoomBounds, scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
         upperPlaneOverhang: opts.upperPlaneOverhang, baseboardMm,
+        // アキの手前を横切る梁（部屋帯だけが渡す。アキのバツを梁の上下で分ける）
+        gapBeamRects: opts.gapBeamRectsOf?.(face) ?? null,
       },
     );
     // 図側がcontentの列からしか分からない値（上階FL断面線の起点＝はり出し外端に立つ切断壁の
@@ -916,6 +919,10 @@ export function buildRoomBand(room, graph, ctx = {}) {
   const layers = buildBandLayers(graph);
   appendBandCutContent(primitives, room, graph, layout, layers,
     { endExtendMm: ctx.wallLessEndExtendModelMm, floorHeightMm: ctx.solids?.floorHeightMm, upperGraph: ctx.solids?.upperGraph ?? null,
+      // 面に加算する梁（solidPrimitivesForFace）と同じ梁の矩形を、アキを塞ぐものとして渡す（solids指定時だけ）
+      gapBeamRectsOf: ctx.solids
+        ? face => beamBlockerRectsForFace(face, { graph, ceilingHeight: layout.CH, room, ...ctx.solids })
+        : undefined,
       stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm, ctx.solids?.upperGraph ?? null) });
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,

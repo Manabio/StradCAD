@@ -10,7 +10,7 @@
 // 出力プリミティブ（このテストの期待値）は不変であるはずというのがPhase 5のゲート。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomBand } from './elevationBand.js';
 
@@ -148,4 +148,50 @@ test('【QA是正・検算・帯レベル】buildRoomBand: 全高壁の向こう
   assert.deepEqual(ys, [-2500, 0],
     '下端は遠側床(z=-100→y=0)まで伸びるが、上端は上限外の「10」を採らず帯自身の天井(z=2400→y=-2500)のまま');
   assert.equal(text.y, -1250, '中心は((0)+(-2500))/2 → y=-1250（帯自身の天井までの中心）のはず');
+});
+
+// ---- S4（2026-10-23）: 部屋帯のアキは手前の梁で上下に分かれる／断面ではセルを割らない ----
+// 開放区間（x=2000 の縦の面。y 1000..2000）へ、上階（FL2900）の梁を置く。梁の天 = 2900+levelOffset、成 600。
+function bandWithUpperBeam({ along, levelOffset }) {
+  const graph = makeGraph();
+  const { room } = makeWallThenOpenRoom(graph, 0, null);
+  const upper = new PlanGraph(new Plane('p2', 2900, '2階', 2, 1));
+  const A = (type, value) => upper.addCenterLine(type, value, { labeled: false, discipline: Discipline.ARCH });
+  if (along) { // 面（x=2000）の平面上を通る梁（parallel）
+    const ax = A(CenterLineType.VERTICAL, 2000), s = A(CenterLineType.HORIZONTAL, 1000), e = A(CenterLineType.HORIZONTAL, 2000);
+    upper.addBeam(StructuralMaterialType.STEEL, 'STEEL-H600x200', ax, true, s, e, { role: 'primary', levelOffset });
+  } else { // 面を貫く梁（断面）。y=1500 を x 0..4000 で通す
+    const ay = A(CenterLineType.HORIZONTAL, 1500), s = A(CenterLineType.VERTICAL, 0), e = A(CenterLineType.VERTICAL, 4000);
+    upper.addBeam(StructuralMaterialType.STEEL, 'STEEL-H600x200', ay, false, s, e, { role: 'primary', levelOffset });
+  }
+  return buildRoomBand(room, graph, { solids: { upperGraph: upper, floorHeightMm: 2900 } });
+}
+const gapTexts = band => band.primitives.filter(p => p.type === 'text' && p.text === 'ア キ' && p.x < 5000);
+const gapDiagonals = band => band.primitives.filter(p => p.type === 'line' && p.dash === 'center'
+  && p.x1 < 5000 && p.x1 !== p.x2 && p.y1 !== p.y2);
+
+test('【S4・帯レベル】buildRoomBand: 面の平面上の梁（z1300..1900）がアキを横切ると、バツは梁の下と上の2組・「ア キ」2つ', () => {
+  const band = bandWithUpperBeam({ along: true, levelOffset: -1000 });
+  const diag = gapDiagonals(band);
+  assert.equal(diag.length, 4, `対角4本（2組）のはず（実際 ${diag.length}）`);
+  const spans = [...new Set(diag.map(p => `${Math.min(-p.y1, -p.y2)}..${Math.max(-p.y1, -p.y2)}`))].sort();
+  assert.deepEqual(spans, ['0..1300', '1900..2400'], 'z は梁の下 0..1300 と梁の上 1900..2400');
+  assert.equal(gapTexts(band).length, 2);
+});
+
+test('【失敗系・S4・帯レベル】buildRoomBand: 梁が無ければバツ1組・「ア キ」1つ／面を貫く梁の断面ではセルを割らず「ア キ」1つで、断面の矩形の内側に対角の端点が無い', () => {
+  const none = makeGraph();
+  const { room } = makeWallThenOpenRoom(none, 0, null);
+  const plain = buildRoomBand(room, none, { solids: { upperGraph: null, floorHeightMm: 2900 } });
+  assert.equal(gapDiagonals(plain).length, 2, '対照: 梁なしはバツ1組');
+  assert.equal(gapTexts(plain).length, 1);
+
+  const band = bandWithUpperBeam({ along: false, levelOffset: -1000 });
+  assert.equal(gapTexts(band).length, 1, '断面はセルを割らない＝「ア キ」は1つのまま');
+  // 対角2本が断面の矩形（z1300..1900）に掛かる区間を抜かれて、各2片＝4本になる（セルを割れば z 範囲が梁の上下に分かれる）
+  const diag = gapDiagonals(band);
+  assert.equal(diag.length, 4, `断面の矩形で切り抜かれた対角は4片（実際 ${diag.length}）`);
+  const zs = diag.flatMap(p => [-p.y1, -p.y2]);
+  assert.equal(Math.min(...zs) + 0, 0,'バツの全高は 0..2400 のまま（梁の上下に分けない）');
+  assert.equal(Math.max(...zs), 2400);
 });

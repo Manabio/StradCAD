@@ -1242,6 +1242,28 @@ export function joinToStairProfile(wallContent, stairContent, cut, ref) {
   return out;
 }
 
+// x範囲 [x0,x1] を、梁（rects）の x の端で区間に分ける（梁が無い・端が範囲の外なら [[x0,x1]] のまま）。
+function splitXByBeams(x0, x1, rects) {
+  const cuts = rects.flatMap(r => [r.xLo, r.xHi]).filter(x => x > x0 + GAP_EPS && x < x1 - GAP_EPS)
+    .sort((a, b) => a - b);
+  const xs = [x0, ...cuts.filter((x, i) => i === 0 || x - cuts[i - 1] > GAP_EPS), x1];
+  return xs.slice(0, -1).map((x, i) => [x, xs[i + 1]]);
+}
+
+// 区間 [xa,xb] を全幅で覆う梁の z 範囲を [z0,z1] から引いた残り（z昇順）。
+function subtractBeamZ(z0, z1, xa, xb, rects) {
+  const covering = rects.filter(r => r.xLo <= xa + GAP_EPS && r.xHi >= xb - GAP_EPS)
+    .sort((a, b) => a.zLo - b.zLo);
+  const out = [];
+  let cursor = z0;
+  for (const r of covering) {
+    if (r.zLo - cursor > GAP_EPS) out.push([cursor, Math.min(r.zLo, z1)]);
+    cursor = Math.max(cursor, r.zHi);
+  }
+  if (z1 - cursor > GAP_EPS) out.push([cursor, z1]);
+  return out.filter(([a, b]) => b - a > GAP_EPS);
+}
+
 /**
  * SectionColumn[] → アキのX（対角線2本。AMBIGUITY E）のプリミティブ列。
  * kind==='open' の band（ただし openingPassThrough:true が付いたものは除く。下記）を
@@ -1256,6 +1278,8 @@ export function joinToStairProfile(wallContent, stairContent, cut, ref) {
  * @param {{ceilZ?:number, gapFloorProfile?:Array<[number,number]>|null}} [emitCtx]
  *   gapFloorProfile … 断面線。あればアキのセルの下限をこの輪郭へ持ち上げる（階段帯のみが渡す。
  *   2026-10-08裁定「断面が完結しており、その外側（階段下等）は描画しない」）。null・省略は下限なし。
+ *   gapBeamRects … 手前に見える梁の矩形（面ローカルx×絶対z。`{xLo,xHi,zLo,zHi,split}`）。split:true（面の平面上・空中の梁）は
+ *   アキのセルから抜く（梁の上下で別のアキ）、false（断面）はバツの線を切り抜くだけ。部屋帯のみが渡す。省略は梁なし。
  * @returns {object[]}
  */
 export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
@@ -1270,6 +1294,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
   // scale（px/mm）未指定（単体テスト・ゴールデン）では判定せず従来どおり全て描く。
   const minGapWidthMm = emitCtx.scale ? GAP_LABEL_WIDTH_PX / emitCtx.scale : 0;
   const { loX: faceLoX, hiX: faceHiX } = faceRangeX(cut);
+  const beamRects = emitCtx.gapBeamRects ?? [];  const splitRects = beamRects.filter(r => r.split);
   const cells = [];
   columns.forEach((col, colIndex) => {
     for (const b of col.bands) {
@@ -1311,10 +1336,20 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
         // `splitOpenByFarFace`が遠側床へ下端を伸ばした帯（`b.extendedFromZ`＝伸ばす前のz0）は、
         // 様式判定では**伸ばす前**のまま扱う——遠側（別の部屋）の低い床へ伸びただけで、
         // この帯自身が階層の下へ潜ったわけではない（実機「11'」A2）。
-        cells.push({
-          colIndex, x0, x1, z0, z1: b.z1, structZ0: b.extendedFromZ ?? z0,
-          colX0: col.x0, colX1: col.x1, lo0: Math.max(below?.topEdge.zAtX0 ?? z0, fz), lo1: Math.max(below?.topEdge.zAtX1 ?? z0, fz),
-        });
+        // **手前を梁（面の平面上・空中）が横切る区間はアキのセルから抜く**（ユーザー裁定2026-10-23。
+        // 部屋帯だけが emitCtx.gapBeamRects で渡す）——梁型の上下は別々のアキ＝バツが2つになる。
+        // 梁の天端が天井に接していれば上の残りが無く、下の1つだけ。
+        for (const [xa, xb] of splitXByBeams(x0, x1, splitRects)) {
+          for (const [za, zb] of subtractBeamZ(z0, b.z1, xa, xb, splitRects)) {
+            const raised = za > z0 + GAP_EPS;
+            cells.push({
+              colIndex, x0: xa, x1: xb, z0: za, z1: zb, structZ0: raised ? za : (b.extendedFromZ ?? z0),
+              colX0: col.x0, colX1: col.x1,
+              lo0: raised ? za : Math.max(below?.topEdge.zAtX0 ?? z0, fz),
+              lo1: raised ? za : Math.max(below?.topEdge.zAtX1 ?? z0, fz),
+            });
+          }
+        }
       }
     }
   });
@@ -1325,10 +1360,12 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
   // 線種の最終降格を区間ごとに効かせるための分割）、そこで連結成分が切れると1つの抜けが
   // 上下2組のバツになる。接しているセルは同じ列＝同じx範囲なので、繋いでも形は変わらない。
   const merged = [];
-  for (const [, group] of Map.groupBy(cells, c => c.colIndex)) {
+  // （梁で x を分けたセルは同じ列でも x 範囲が違うので、列＋x 範囲を同じ列として繋ぐ。梁が無ければ列そのもの）
+  for (const [, group] of Map.groupBy(cells, c => `${c.colIndex}|${c.x0}|${c.x1}`)) {
     for (const cell of [...group].sort((a, b) => a.z0 - b.z0)) {
       const prev = merged[merged.length - 1];
-      if (prev && prev.colIndex === cell.colIndex && cell.z0 <= prev.z1 + GAP_EPS) {
+      if (prev && prev.colIndex === cell.colIndex && prev.x0 === cell.x0 && prev.x1 === cell.x1
+        && cell.z0 <= prev.z1 + GAP_EPS) {
         prev.z1 = Math.max(prev.z1, cell.z1);
       } else {
         merged.push({ ...cell });
@@ -1410,8 +1447,10 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // 差し引くのは**実体の帯だけ**（wall/cut/cutAlong。ただし開口貫通は成分の一部なので除く）
     // ——「アキのセルの和」でクリップすると、開口と上階アキがL字に連結する構成で
     // 「1組の大きなX」（WP-E7 D1の確認済み仕様）が細切れになるため採らない。
-    const blockers = obstructionRects(columns, x0, x1,
-      Math.min(z0, L.lo, R.lo), Math.max(z1, L.hi, R.hi));
+    // 梁（断面を含む）の矩形もバツの線から切り抜く（断面はセルを割らず、線を抜くだけ）。
+    const blockers = [...obstructionRects(columns, x0, x1,
+      Math.min(z0, L.lo, R.lo), Math.max(z1, L.hi, R.hi)),
+    ...beamRects.map(r => ({ xLo: r.xLo, xHi: r.xHi, yLo: zToY(r.zHi), yHi: zToY(r.zLo) }))];
     // アキ標記の「ア キ」（旧 elevationFigure.js の appendGapMark から移設）。次の2条件を
     // すべて満たす連結成分にだけ付ける（建具の開口はそもそもセルに入らない＝上記）:
     //   - 外接矩形そのもの（全セルが同じz範囲）… L字に食い込んだ成分では外接矩形の中心が
