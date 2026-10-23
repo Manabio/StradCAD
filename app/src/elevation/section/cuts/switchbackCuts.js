@@ -31,6 +31,7 @@ import { stairContribution } from '../sectionStair.js';
 import { graphList } from '../../../graphReadScope.js';
 import { isCeilingOnlyKind } from '../../../core/centerLineKindPolicy.js';
 import { makeProbeContext } from '../sectionProbe.js';
+import { makeSectionCut } from '../sectionTypes.js';
 import { isWallHiddenForBand } from '../sectionHits.js';
 import { GAP_EPS_MM } from '../../elevationStyle.js';
 
@@ -60,13 +61,11 @@ export const LANDING_CUT_INSET_MM = 100;
  *   「階段下が開いている」と積極的に言えないため、ユーザー実機確認済みの表現（踊り場が基準床）を
  *   そのまま使う。逆に倒すと、判定できないだけの階段まで描画が変わってしまう。
  * - `underRooms` … 階段下に指定された部屋そのもの（Room[]。0件もありうる）。
- *   展開図一般化Phase 6: 階段下部屋の壁（2a壁）を階段の展開図から隠す判定（旧: 壁id列挙の
- *   `hiddenWallIds`）は、空気ボリュームの連結成分（`section/sectionHits.js`の`isHiddenWall`。
+ *   展開図一般化Phase 6: 階段下部屋の壁（2a壁）を階段の展開図から隠す判定は、空気ボリュームの連結成分（`section/sectionHits.js`の`isHiddenWall`。
  *   `cut.underRooms`＝この配列）で表す規則へ一般化した——**この配列で「特定のどの部屋が
  *   階段下か」をスコープする**ことが必須（QA実測: 単に「階段室の成分と異なる壁は全部隠す」
  *   まで一般化すると、階段室と無関係な別室（例: 「9」）が偶然隣り合うだけの階段自身の外壁まで
- *   誤って隠れる——13.stq「6」D面の実壁が広範囲に消えた反例）。2a壁のid・footprintの内外
- *   （旧`FOOTPRINT_EDGE_TOL_MM`）はこの関数が知る必要が無くなった。
+ *   誤って隠れる——13.stq「6」D面の実壁が広範囲に消えた反例）。
  * @param {import('@core').Stair} stair
  * @param {object} graph
  * @returns {{hasRoomUnder:boolean, underRooms:import('@core').Room[]}}
@@ -542,14 +541,14 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const ownMidWall = findMidWall(graph, wEntry, wLanding, landingDepthMm, f);
   const continuousPartition = wall && ownMidWall && wallGraph !== graph ? partitionStripOf(wall, wallGraph) : null;
   const cuts = [
-    {
+    makeSectionCut({
       seqNo: '1', face: wEntry, line: seq1Line, viewSign: seq1ViewSign, dirSign: wEntry.dirSign,
       openGapMarks: false, // 踊り場前縁・回転部にアキは標記しない（ユーザー指示2026-10-07）
       layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, chDimSplitAbsYs: [floorHeight],
       stairCut: contribution, // 往路・復路とも正面梯子として重なるため両方渡す（§6.1「往路=正面梯子(下)／復路=正面梯子(上)」）
       ...(continuousPartition ? { continuousWallAcross: continuousPartition } : {}),
-    },
-    {
+    }),
+    makeSectionCut({
       // ==== ユーザー明示指示2026-08その11（面と切断の食い違い）====
       // 「A,B,C,Dの抽出と、順番決めロジックがごっちゃになっている」「展開の向きは絶対。後から順番」
       // 「D1を東向きと解釈するロジックに間違いがある」。
@@ -567,15 +566,15 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       // 上のアキは従来どおり標記する（「6」C の裁定2026-09を保つ）。自階に実壁が無い（鉄骨等）ときも従来どおり。
       ...(midOutFace && findMidWall(graph, wEntry, wLanding, landingDepthMm, f) ? { openGapMarks: false } : {}),
       layers, zRange: zRangeUpper, baseFloorZ: 0, stairCut: outboundWithLandingSeq2,
-    },
+    }),
   ];
-  cuts.push({
+  cuts.push(makeSectionCut({
     seqNo: '3', face: wLanding, line: seq3Line, viewSign: seq3ViewSign, dirSign: wLanding.dirSign,
     openGapMarks: false, // 同上（踊り場の壁を見る面にもアキは標記しない）
     // §6.1表「階段寄与: なし」＝段の重ね描きなし。踊り場の断面・桁枠は描く（landingOnly参照）。
     // 平場の踊り場: 踊り場レベルより上だけを描く（下は描かない。下限・基準床とも踊り場。ユーザー裁定2026-10-08）。
     layers, zRange: { loZ: landingAbs, hiZ: ceilTopAbs }, baseFloorZ: landingAbs, stairCut: landingOnly,
-  });
+  }));
   // QA実機フィードバック修正: seq4のstairCutは復路(inbound)ではなく往路(outbound)——
   // seq4はwOut2を「反対側(復路レーン)から見た往路の鏡像」として見せる面であり
   // （dirSignがseq2の逆＝踊り場側の端が seq2 と逆になる。landingEnd）、復路をここに描くと踊り場側が
@@ -583,11 +582,11 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // 面はseq2と同じ規則で「見ている側」——seq4はtowardS0（往路外側）を見るのでwOut1になる
   // （旧実装はwOut2＝視線の背後の壁だった。上のseq2のコメント参照）。
   const face4 = reorientFace(wOut1, seq4DirSign);
-  cuts.push({
+  cuts.push(makeSectionCut({
     seqNo: '4', face: face4, line: outboundLaneLine, viewSign: towardS0, dirSign: seq4DirSign,
     landingEnd: landingEndOn(face4),
     layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: outboundWithLanding,
-  });
+  }));
   {
     // ==== ユーザー実機指摘2026-08「6」D2（面の取り違え）====
     // seq5は「復路レーンの中を切って9時方向＝復路が接している外側の壁（wOut2）を見る」面。
@@ -599,11 +598,11 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     // （踊り場側の端は回転方向次第。landingEnd）。
     // stairCutも復路だけでは踊り場の断面が出ないため、踊り場を含めて渡す。
     const retFace5 = reorientFace(wOut2, seq2DirSign);
-    cuts.push({
+    cuts.push(makeSectionCut({
       seqNo: '5', face: retFace5, line: inboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
       landingEnd: landingEndOn(retFace5),
       layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundWithLanding,
-    });
+    }));
   }
 
   {
@@ -619,12 +618,12 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       // 面の幾何（inward・letter）は視線の逆＝往路外側の壁 wOut1 と同じ向き（seq2 の midOutFace は wOut2 の向き）
       const face6 = reorientFace({ ...midOutFace, inward: wOut1.inward, letter: letterOf(wOut1.isVertical, wOut1.inward) }, seq4DirSign);
       const inboundLaneLineOnMid = { isVertical: wOut1.isVertical, axisValue: inboundLaneAcross, lo: wOut1.lo, hi: wOut1.hi };
-      cuts.push({
+      cuts.push(makeSectionCut({
         seqNo: '6', face: face6, line: inboundLaneLineOnMid, viewSign: towardS0, dirSign: seq4DirSign,
         landingEnd: landingEndOn(face6),
         openGapMarks: false, // 隔て板の上・端の先は同じ階段室の空気（seq2 と同じ裁定 2026-10-14）
         layers, zRange: zRangeUpper, baseFloorZ: underFloorZ, stairCut: inboundWithLanding,
-      });
+      }));
     }
   }
 

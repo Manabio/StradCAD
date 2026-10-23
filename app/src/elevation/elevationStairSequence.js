@@ -1268,7 +1268,7 @@ export function clipContentBelowProfileInRanges(prims, profile, ranges) {
 }
 
 function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null, zRef = null,
-  drawFloorProfile = null, underReturnSpace = null, bandRoom = null, ownSoffitSolid = null) {
+  gapFloorProfile = null, underReturnSpace = null, bandRoom = null, ownSoffitSolid = null) {
   if (!rawCut) {
     return { content: [], upperOverhang: undefined, upperFloorZ: undefined,
       upperFloorCutEnds: undefined, upperFloorEnds: undefined };
@@ -1277,9 +1277,9 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 帯の床＋縦断する階段寄与の折れ線）は**壁の断面・見えがかり・建具の姿**のクリップにだけ使う
   // （下記`clipContentAboveDrawnProfile`）。展開図一般化Phase 6b-2 C-2（設計
   // `.claude/elevation-redesign.md`§5.11）: アキのセルの下限はband自身（sectionHits.jsの
-  // visibleBandsOf）が答えを持つようになったため、`cut`へ`drawFloorProfile`を載せて
+  // visibleBandsOf）が答えを持つようになったため、`cut`へ`gapFloorProfile`を載せて
   // emitOpenGapMarks（sectionEmit.js）へ渡す経路は廃止した——`cut`は常に`rawCut`のまま
-  // （旧実装の`{...rawCut, drawFloorProfile}`のクローンは不要になった）。
+  // （旧実装の`{...rawCut, gapFloorProfile}`のクローンは不要になった）。
   // 断面線の無い面（鉄骨で階段下に部屋が無い面・seq1/seq3）では呼び出し側がnullを渡す（＝下限なし＝
   // 設置階FLまで描く）。木造は部屋が無くても断面線が繋がるので渡される（2026-10-08裁定）。
   const cut = rawCut;
@@ -1289,7 +1289,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // アキのバツまでは吹抜けの多層帯とまったく同じ処理を通る。ここから下が階段固有の後段加工。
   const { cut: pcut, columns, wallPrims, gapMarks: rawGapMarks } =
     buildCutContent(cut, probeCtx, {
-      endExtendMm, bandRoomBounds, upperPlaneOverhang: true, gapFloorProfile: drawFloorProfile,
+      endExtendMm, bandRoomBounds, upperPlaneOverhang: true, gapFloorProfile,
     });
   // 展開図一般化Phase 6b-2「一体設計」(.claude/elevation-redesign.md§5.12):
   // 階段自身の幾何（踏面CUT・ささら・桁枠）の描画範囲は`cutDrawRange`を、上階の平面が面端より
@@ -1318,7 +1318,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 展開図一般化Phase 6b-2 C-2: gapMarksは**ここに含めない**——壁プリミティブ（wallContent）
   // だけが下の`clipContentAboveDrawnProfile`（輪郭より下を落とす処理）の対象になる。
   // アキ（gapMarks）は輪郭ではなくband自身の下端を使う（最終contentへは下で別途合流させる）。
-  // ただし**階段帯に限り**、断面線（drawFloorProfile）があるときはアキのセルの下限もその輪郭へ
+  // ただし**階段帯に限り**、断面線（gapFloorProfile）があるときはアキのセルの下限もその輪郭へ
   // 持ち上げる（2026-10-08裁定。C-2の「二重にクランプしない」を階段帯だけ撤回——上の
   // `buildCutContent`へ`gapFloorProfile`で渡し、sectionEmit.jsのemitOpenGapMarksが適用する）。
   // 壁の端の縦線は、端面に突き当たる階段の実体（回転部のセル）の天端より下では引かない（clipWallEndVerticalsByStairMass）。
@@ -1351,7 +1351,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 切断線が内部を横切る flight の本体（裏面〜段板。`cut.bodySoffitSolid`＝自階の階段の裏面の立体があるときだけ）: 裏面の
   // 切断を CUT の水平線で描く（本体に接する壁の断面の縁は上の clipWallEdgesInsideStairBodies でその区間を空けた）。
   const stairContent = [
-    ...clipHiddenStepLines(stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts), drawFloorProfile, cut),
+    ...clipHiddenStepLines(stairPrimitivesForCut(cut.stairCut ?? null, cut, columns, stairOpts), gapFloorProfile, cut),
     ...bodies.map(b => emitLine(pcut, b.xLo, b.zLo, b.xHi, b.zLo, ElevationLineRole.CUT, { neverDowngrade: true })),
   ];
   // WP-C: 構造梁（踊り場受け梁等）の加算寄与。stairContentと独立の別レイヤのため、
@@ -1384,7 +1384,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 壁内の梁が壁の面から出て部屋側から見える断面の矩形（その壁の断面線をその z で分ける。下の wallOut）
   const wallLineCuts = [];
   const structuralContent = dashLinesInsideRects(
-    structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile, {
+    structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, gapFloorProfile, {
       ceilZAtWorld, columnSolids: structuralColumnContribution(cut.layers), wallLineCuts,
       // 自階の床（スラブ）が構造部材を隠す。床の無い列は下階の階段の吹抜け（section/sectionStructure.js occludeByFloor）。
       // 区間の端は切断壁の吹抜け側の面（lo/hi）——壁の帯の下に床梁の見えがかりを残さない（裁定 2026-10-19。下の 2FL の隔て板の注記と同じ）
@@ -1403,7 +1403,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 壁内の梁が壁の面から出て部屋側から見えるとき、梁の断面は壁の断面線の手前に描く＝その壁の線だけを梁の z 範囲で上下に分ける
   // （ユーザー裁定 2026-10-23「壁内の梁が部屋側から見える場合だけ」。床線などほかの線は切らない）
   const wallOut = removeLinesInsideRects(clipContentAtHiddenEnds(clipContentAboveDrawnProfile(
-    clipWallFloorEdgeUnderZigzag(joined, stairContent), drawFloorProfile), cut.face), wallLineCuts);
+    clipWallFloorEdgeUnderZigzag(joined, stairContent), gapFloorProfile), cut.face), wallLineCuts);
   // 復路下の仕上げ空間（seq5）: 壁の断面・見えがかり・アキは天井＝復路の裏面より上を落とす（段板の中）。階段自身・構造梁は触らない。
   const roofed = clipContentInsideStairBody([...wallOut, ...gapMarks], underReturnSpace);
   // 下階の階段の吹抜けの上の列（cut.lowerStairVoidRanges）: 階段自身・構造・アキ・開口も断面線（自分の段板の天端）より下は
@@ -1418,8 +1418,8 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   const structuralWhole = structuralContent.filter(p => p[WHOLE_OUTLINE]);
   const structuralRest = structuralContent.filter(p => !p[WHOLE_OUTLINE]);
   const content = [
-    ...clipContentBelowProfileInRanges(roofed, drawFloorProfile, mergeRanges(pieces)),
-    ...clipContentBelowProfileInRanges([...openingPanels, ...stairContent, ...structuralRest], drawFloorProfile,
+    ...clipContentBelowProfileInRanges(roofed, gapFloorProfile, mergeRanges(pieces)),
+    ...clipContentBelowProfileInRanges([...openingPanels, ...stairContent, ...structuralRest], gapFloorProfile,
       mergeRanges(pieces.map(p => ({ lo: p.floorLo, hi: p.floorHi })))),
     ...structuralWhole,
   ];
@@ -1673,8 +1673,8 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
   const aboveLayer = layerDirectlyAboveSelf(cuts[0].layers);
   // 1つの切断 → その面のentryのcontent系フィールド（content＋上階のはり出し）。
   // はり出し（upperOverhang/upperFloorZ）はcontentと同じ探査窓から出るため、同じ呼び出しで受ける。
-  const contentFields = (cut, zRef = null, drawFloorProfile = null, underReturnSpace = null) =>
-    contentForCut(cut, probeCtx, endExtendMm, bandRoomBounds, zRef, drawFloorProfile, underReturnSpace, bandRoom, ownSoffitSolid);
+  const contentFields = (cut, zRef = null, gapFloorProfile = null, underReturnSpace = null) =>
+    contentForCut(cut, probeCtx, endExtendMm, bandRoomBounds, zRef, gapFloorProfile, underReturnSpace, bandRoom, ownSoffitSolid);
 
   const entries = [];
 

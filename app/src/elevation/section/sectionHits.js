@@ -93,12 +93,11 @@ function clamp(z, lo, hi) { return Math.max(lo, Math.min(hi, z)); }
  * その切断が「実体ごと見ない」壁か（`cut.airRoom`／`cut.underRooms`。展開図一般化Phase 6・
  * 設計§5.4「規則へ吸収」）。
  *
- * 旧実装（`cut.hiddenWallIds`。壁idのSet）は階段下部屋の2a壁を`stairUnderInfo`が
- * footprintの内外（`FOOTPRINT_EDGE_TOL_MM`）で判定し、id単位で列挙していた——階段の帯からは
- * 「階段自身の空気ボリューム（`cut.airRoom`＝階段室）と、階段下に指定された部屋（`cut.underRooms`）
- * を隔てる壁は見えない」という規則を**id列挙という実装**でしか表せていなかった。
+ * 階段の帯からは「階段自身の空気ボリューム（`cut.airRoom`＝階段室）と、階段下に指定された部屋
+ * （`cut.underRooms`）を隔てる壁は見えない」という規則を、壁id列挙ではなく空気ボリュームの
+ * 連結成分で表す。
  *
- * 新実装: 壁の両側のセルが指すRoom（`probeCtx.cellAt`）を見る。**両側に実在の部屋があり
+ * 壁の両側のセルが指すRoom（`probeCtx.cellAt`）を見る。**両側に実在の部屋があり
  * （どちらかがcellAt().room===null＝建物の外・未区画なら対象外。階段下部屋の外周のうち階段室
  * 自身の外周と重なる辺——実機「13」の南辺。その外側は建物の外——はこれで非隠蔽のまま残る）、
  * かつ片側だけが`cut.underRooms`に含まれ（両方 or どちらでもないなら対象外）、かつその
@@ -165,7 +164,7 @@ export function isWallHiddenForBand(wall, layer, bandInfo, probeCtx) {
     return false;
   }
   // **部屋の生成壁（isRoomWall）だけを対象にする**——2a壁は`generateRoomWallsFromOutline`と
-  // 同型の経路で生成される（実測: 13.stqの旧hiddenWallIds4枚は全てisRoomWall:true）。
+  // 同型の経路で生成される（実測: 13.stqの階段下部屋の2a壁4枚は全てisRoomWall:true）。
   // 往復間の壁（findMidWallが見つける自立した間仕切り。isRoomWall:false）は、たまたま
   // 階段下部屋の境界と位置が重なっても対象外——実運用ではstairUnderWalls.jsの委譲規則
   // （既存壁と重なるエッジには2a壁を生成しない）でこの重なりは起きないが、フィクスチャ等
@@ -1216,7 +1215,6 @@ function mergeAdjacentZBands(bands, baseFloorZ) {
     // QA是正2026-09: 'wall'帯を畳むとき（sameZBandがfarFloorZ/farCeilZ/farDepthMmを比較しない
     // ため）、残る付帯情報は常に`last`（zが下側＝先に積まれた帯）のもの——`band`（上側）にだけ
     // 近い水平面があった場合はそちらが失われる（過少報告側。線が余分に出ることはない）。
-    // Phase 5でopenSpans注入をこの付帯情報へ一本化した（elevationBand.jsの`cut.openSpans`を撤去）。
     // 13.stq/11.stq/knee-drop-test.stqのゴールデン差分確認では、この片側切り捨てに起因する
     // 追加の差分は見つからなかった（この関数がマージするのは`'wall'`帯どうしの隣接のみで、
     // 過少報告側＝線が減る方向なので、万一起きても実害は「見えがかり線が1本減る」程度に留まる）。

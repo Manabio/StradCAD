@@ -401,7 +401,6 @@ Phase 5（下記「移した」節）以降、断面エンジン自身の探査�
 - `stairOver`の「描いた線を後から書き換える」機構は2つ: `lowerFaceEndVertical`と`trimCeilingLineAt`（ともに
   `elevationBand.js`）。踏面ジグザグのヒット列化（6b-1′。`coverableHits`が stairFace を外す）が未着手のため残す。
   検出力: golden13系の1階「13」帯だけが2関数を守る。木造で「階段下の部屋の天井＝階段の裏面」へ置き換える道は別課題。
-- `hiddenWallIds`/`openSpans`: 本番参照ゼロ。「なぜ置換したか」を示す説明コメントのみ残す。
 
 **別課題**
 - `sectionEmit.js`の帯種別排他分岐（`ceilProfile`の有無で`ceilStepSlabSection`／`slabEdgeCutWallJunction`を
@@ -1135,8 +1134,7 @@ floorSegmentsの床**の両方がこれを使う。この2つを同じ値にす�
 描画が変わるのを避けるため。
 
 **階段下部屋の2a壁は、階段の帯からは実体ごと見えない**（展開図一般化Phase 6・設計
-`.claude/elevation-redesign.md`§5.4「規則へ吸収」で空気ボリューム判定へ置換済み。旧実装は
-壁id列挙`cut.hiddenWallIds`だった）。`switchbackCuts`が階段室自身（`cut.airRoom`）と階段下に
+`.claude/elevation-redesign.md`§5.4「規則へ吸収」で空気ボリューム判定へ置換済み）。`switchbackCuts`が階段室自身（`cut.airRoom`）と階段下に
 指定された部屋の集合（`cut.underRooms`。`cellsBeyondBreak`×`stairUnderRoomsOf`——仕上げモードの
 階段下壁生成と同じ単一情報源）を全cutへ載せ、`section/sectionHits.js`の`isHiddenWall`が壁ごとに
 判定する: 壁の両側のセルが指すRoom（`space/spaceModel.js`の`buildSpaceIndex`・`cellAt`）を見て、

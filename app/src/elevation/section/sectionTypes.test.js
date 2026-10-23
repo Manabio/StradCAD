@@ -5,7 +5,9 @@
 // （呼び出し側=sectionStair.jsのstairPrimitivesForCutと同じ組み立て方。「D1」の縮小再現）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isSolidBand, solidRectsOf, slabJunctionOf, slabSolidRectsOf, zToY, ceilProfileEdgeAt } from './sectionTypes.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { isSolidBand, solidRectsOf, slabJunctionOf, slabSolidRectsOf, zToY, ceilProfileEdgeAt, makeSectionCut } from './sectionTypes.js';
 import { isStringer } from './sectionEmit.js';
 import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { ElevationLineRole, weightForRole } from '../elevationStyle.js';
@@ -324,4 +326,84 @@ test('【失敗系・ceilProfileEdgeAt】profileが無い・空・ceilZ非有限
   assert.deepEqual(ceilProfileEdgeAt([{ loX: 0, hiX: 1000, ceilZ: 2400, ceilZHi: Infinity }], 0, 1000), flat);
   assert.deepEqual(ceilProfileEdgeAt([{ loX: 0, hiX: 1000, ceilZ: 2400, ceilZHi: 2400 }], 0, 1000), flat);
   assert.deepEqual(ceilProfileEdgeAt([{ loX: 500, hiX: 500, ceilZ: 2400, ceilZHi: 3000 }], 500, 500), flat);
+});
+
+// ---- 契約: 関数ごとの opts 読み取りキー ----
+//   buildSectionFromLine = CutSpec ∪ ProbeInputs ∪ RenderStyle ∪ BandInjections − gapFloorProfile（転送しない）
+//   buildCutContent      = Pick の 8 キー（endExtendMm・upperPlaneOverhang・bandRoomBounds・RenderStyle 全部・gapBeamRects・gapFloorProfile）
+const stripComments = src => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/.*$/gm, '');
+
+// `export function name(` の開始行〜次の `\nexport ` 直前（なければ末尾）。withProbeExtension の opts は別物なので含めない。
+function functionBody(src, name) {
+  const start = src.indexOf(`export function ${name}(`);
+  assert.ok(start >= 0, `${name} が見つからない`);
+  const next = src.indexOf('\nexport ', start + 1);
+  return src.slice(start, next < 0 ? undefined : next);
+}
+
+// `opts.X` / `opts?.X` と、`const|let|var { a, b: c, d = 1 } = opts` の分割代入名。
+function optsKeysRead(body) {
+  const read = new Set([...body.matchAll(/\bopts\??\.(\w+)/g)].map(m => m[1]));
+  for (const m of body.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*opts\b/g)) {
+    for (const k of m[1].split(',')) { const name = k.split(/[:=]/)[0].trim(); if (name) read.add(name); }
+  }
+  return read;
+}
+
+test('契約: 関数ごとの opts 読み取りキーと 4 typedef の @property が過不足なく一致する', () => {
+  const dir = import.meta.dirname;
+  const contentSrc = stripComments(fs.readFileSync(path.join(dir, 'sectionContent.js'), 'utf8'));
+  const read = optsKeysRead(functionBody(contentSrc, 'buildSectionFromLine'));
+  const readCut = optsKeysRead(functionBody(contentSrc, 'buildCutContent'));
+  assert.ok(read.size >= 20, `空振り防止: buildSectionFromLine の opts のキーが ${read.size} 個しか読めていない`);
+  assert.ok(readCut.size >= 8, `空振り防止: buildCutContent の opts のキーが ${readCut.size} 個しか読めていない`);
+
+  const typesSrc = fs.readFileSync(path.join(dir, 'sectionTypes.js'), 'utf8');
+  const start = typesSrc.indexOf('@typedef {object} CutSpec');
+  const block = typesSrc.slice(start, typesSrc.indexOf('*/', start));
+  assert.ok(start >= 0 && block.includes('@typedef {object} BandInjections'), '4 typedef のブロックが読めない');
+  const groups = {};
+  let current = null;
+  for (const line of block.split('\n')) {
+    const t = line.match(/@typedef \{object\} (\w+)/);
+    if (t) { current = t[1]; groups[current] = new Set(); continue; }
+    const p = line.match(/@property\s+\{.*\}\s+\[?(\w+)\]?/);
+    if (p && current) groups[current].add(p[1]);
+  }
+  assert.deepEqual(Object.keys(groups), ['CutSpec', 'ProbeInputs', 'RenderStyle', 'BandInjections']);
+  const declared = new Set(Object.values(groups).flatMap(s => [...s]));
+  const total = Object.values(groups).reduce((n, s) => n + s.size, 0);
+  assert.equal(declared.size, total, '同じキーが複数の群に重複して宣言されている');
+  declared.delete('gapFloorProfile'); // buildSectionFromLine は buildCutContent へ転送しない（呼び出し側も渡さない）
+  assert.deepEqual([...read].sort(), [...declared].sort(),
+    `buildSectionFromLine 読み取り−宣言=${[...read].filter(k => !declared.has(k))} / 宣言−読み取り=${[...declared].filter(k => !read.has(k))}`);
+  const pick = ['endExtendMm', 'upperPlaneOverhang', 'bandRoomBounds', ...groups.RenderStyle, 'gapBeamRects', 'gapFloorProfile'];
+  assert.deepEqual([...readCut].sort(), pick.sort(), 'buildCutContent の読み取りが Pick の 8 キーと一致しない');
+});
+
+// ---- makeSectionCut（SectionCut の唯一の生成器）----
+const validSpec = () => ({
+  line: { isVertical: false, axisValue: 0, lo: 0, hi: 1000 }, viewSign: 1, dirSign: 1,
+  layers: [], zRange: { loZ: 0, hiZ: 2400 }, baseFloorZ: 0,
+});
+
+test('makeSectionCut: 必須キー（line/viewSign/dirSign/layers/zRange/baseFloorZ）が欠けたら投げる', () => {
+  for (const key of ['line', 'viewSign', 'dirSign', 'layers', 'zRange', 'baseFloorZ']) {
+    const spec = validSpec();
+    delete spec[key];
+    assert.throws(() => makeSectionCut(spec), new RegExp(key), `${key} 欠落`);
+    assert.throws(() => makeSectionCut({ ...spec, [key]: undefined }), new RegExp(key), `${key}: undefined`);
+  }
+  assert.throws(() => makeSectionCut(undefined), /makeSectionCut/);
+});
+
+test('makeSectionCut: 渡した spec と同じ own キー集合・値を返し、渡していないキーを足さない', () => {
+  const spec = { ...validSpec(), seqNo: '3', face: undefined, stairCut: null };
+  const cut = makeSectionCut(spec);
+  assert.deepEqual(Object.keys(cut).sort(), Object.keys(spec).sort());
+  assert.notEqual(cut, spec, '入力を変更せず別オブジェクトを返す');
+  for (const k of Object.keys(spec)) assert.strictEqual(cut[k], spec[k], k);
+  for (const k of ['ends', 'face', 'openGapMarks', 'ceilProfile', 'airRoom', 'underRooms', 'bandRoomBounds']) {
+    assert.equal(k in makeSectionCut(validSpec()), false, `${k} を既定値で足さない`);
+  }
 });

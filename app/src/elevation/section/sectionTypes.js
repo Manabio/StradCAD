@@ -24,6 +24,48 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  */
 
 /**
+ * `buildSectionFromLine`（sectionContent.js）の`opts`は、次の4群の交差型（ただし BandInjections の
+ * gapFloorProfile は`buildCutContent`専用で、`buildSectionFromLine`は転送しない）。形は平らなオブジェクトのまま
+ * （群は読み手による分類で、キーの置き場所を変えるものではない）。契約は`sectionTypes.test.js`が
+ * 関数ごと（`buildSectionFromLine`／`buildCutContent`）の`opts.*`の読み取りとこの4群の`@property`の一致で固定する。
+ * `buildCutContent`の`opts`はこのうち RenderStyle の全部と、CutSpec の endExtendMm・upperPlaneOverhang、
+ * ProbeInputs の bandRoomBounds、BandInjections の gapBeamRects・gapFloorProfile だけを読む。
+ *
+ * @typedef {object} CutSpec 切断の定義（どの線を・どの向きで・どのz範囲で切るか）
+ * @property {1|-1} viewSign
+ * @property {1|-1} dirSign
+ * @property {{loZ:number, hiZ:number}} zRange
+ * @property {string} [seqNo]
+ * @property {number} [baseFloorZ] 既定 zRange.loZ
+ * @property {object} [face] 面固有の値の供給元（`SectionCut.face`）
+ * @property {object} [ends] 端の性質（`SectionCut.ends`）
+ * @property {number} [endExtendMm] 壁のない端部の探査延長量
+ * @property {Array<{z0:number,z1:number}>} [cornerOpeningZLo]
+ * @property {Array<{z0:number,z1:number}>} [cornerOpeningZHi]
+ * @property {boolean} [upperPlaneOverhang] 層ごとの探査窓を載せる
+ * @property {object[]} [ceilProfile]
+ * @property {object[]} [floorZProfile]
+ * @property {object[]} [aboveCeilVisibleRanges]
+ *
+ * @typedef {object} ProbeInputs 層・探査（レイキャストの入力と、探査が参照する部屋の情報）
+ * @property {object} [probeCtx] 省略時のみ`makeProbeContext(layers)`を組む
+ * @property {object} [airRoom] その帯自身の空気ボリュームを代表する Room
+ * @property {Set<object>} [underRooms] 階段下に指定された部屋の集合
+ * @property {object|null} [bandRoomBounds] 帯の部屋の包絡矩形（世界座標の箱）
+ *
+ * @typedef {object} RenderStyle 体裁
+ * @property {number} [scale] px/mm
+ * @property {object|null} [lineWeightsPx]
+ * @property {number} [baseboardMm] 巾木高さ（0＝引かない）
+ *
+ * @typedef {object} BandInjections 帯固有の注入
+ * @property {object|null} [stairCut] 階段帯の階段寄与
+ * @property {number[]} [chDimSplitAbsYs] 左CH寸法を分割する絶対y
+ * @property {object[]|null} [gapBeamRects] アキの手前に見える梁の矩形（部屋帯）
+ * @property {Array<[number,number]>|null} [gapFloorProfile] アキのセルの下限にする断面線（階段帯）
+ */
+
+/**
  * @typedef {{
  *   seqNo: string,
  *   line: CutLine,
@@ -391,6 +433,24 @@ export function solidRectsOf(columns) {
     }
   }
   return strictInteriorOf([...rects, ...slabSolidRectsOf(columns)]);
+}
+
+// 全呼び出し側（部屋帯・吹抜け帯・階段cut表・面図の梁cut）が必ず渡すキー。
+const REQUIRED_CUT_KEYS = ['line', 'viewSign', 'dirSign', 'layers', 'zRange', 'baseFloorZ'];
+
+/**
+ * 新しい`SectionCut`を組む唯一の生成器（派生は`{...cut}`の展開で作る）。渡された`spec`のown キーと値をそのまま持つcutを返す——
+ * **渡されていないキーを既定値で足さない**（`'ends' in cut`・`'face' in cut`のような存在判定、
+ * `{...cut}`の展開で挙動が変わりうるため）。必須キー（REQUIRED_CUT_KEYS）が欠けたら投げる。
+ * @param {Partial<SectionCut> & {line:CutLine, viewSign:1|-1, dirSign:1|-1, layers:object[],
+ *   zRange:{loZ:number,hiZ:number}, baseFloorZ:number}} spec
+ * @returns {SectionCut}
+ */
+export function makeSectionCut(spec) {
+  for (const key of REQUIRED_CUT_KEYS) {
+    if (spec?.[key] === undefined) throw new Error(`makeSectionCut: 必須キー「${key}」がありません`);
+  }
+  return { ...spec };
 }
 
 /**

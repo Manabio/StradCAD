@@ -17,7 +17,7 @@
 import { buildColumns } from './sectionEngine.js';
 import { emitColumns, emitOpenGapMarks, emitOpenSpanEdgeOnWalls } from './sectionEmit.js';
 import { wallWorldRangesOnFacePlane, planeOverhangBeyondEnds } from './sectionCutPlane.js';
-import { hasCutWallStandingOn, slabSolidRectsOf, strictInteriorOf, rectsToFaceLocal } from './sectionTypes.js';
+import { hasCutWallStandingOn, slabSolidRectsOf, strictInteriorOf, rectsToFaceLocal, makeSectionCut } from './sectionTypes.js';
 import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { UPPER_PLANE_OVERHANG_LIMIT_MM, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { wallLessEndAt } from './faceGeometry.js';
@@ -347,8 +347,10 @@ export function farStairViewPrimitives(columns, cut, probeCtx) {
  * ささら・構造材の生成へ渡す）。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
- * @param {{endExtendMm?:number, bandRoomBounds?:object|null, scale?:number,
- *   upperPlaneOverhang?:boolean, gapFloorProfile?:Array<[number,number]>|null, gapBeamRects?:object[]|null, baseboardMm?:number}} [opts]
+ * @param {Pick<import('./sectionTypes.js').CutSpec, 'endExtendMm'|'upperPlaneOverhang'>
+ *   & Pick<import('./sectionTypes.js').ProbeInputs, 'bandRoomBounds'>
+ *   & import('./sectionTypes.js').RenderStyle
+ *   & Pick<import('./sectionTypes.js').BandInjections, 'gapBeamRects'|'gapFloorProfile'>} [opts]
  *   baseboardMm … 帯の部屋の巾木高さ（mm。省略・0＝引かない）。階段室越しの壁（viaStair）とその手前の隔て板の小口に
  *   巾木の細線を足す（部屋帯だけが渡す。階段帯は渡さない）。
  *   gapFloorProfile … アキのセルの下限にする断面線（階段帯のみ。elevationStairSequence.js）。省略＝下限なし。
@@ -406,13 +408,8 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
  * あることまでが本関数の保証で、`face`を読む他の消費側の縮退までは保証しない）。
  * @param {import('./sectionTypes.js').CutLine} line
  * @param {Array<{graph:object, floorZMm:number, role:string}>} layers - `sectionBandLayers.js`の`buildBandLayers`の返り
- * @param {{viewSign:1|-1, dirSign:1|-1, zRange:{loZ:number,hiZ:number}, probeCtx?:object,
- *   baseFloorZ?:number, ceilProfile?:object[], floorZProfile?:object[],
- *   aboveCeilVisibleRanges?:object[], stairCut?:object|null, airRoom?:object,
- *   underRooms?:Set<object>, bandRoomBounds?:object|null, chDimSplitAbsYs?:number[],
- *   seqNo?:string, endExtendMm?:number, upperPlaneOverhang?:boolean, scale?:number,
- *   face?:object, ends?:{openLo:boolean,openHi:boolean,wallLessLo:boolean,wallLessHi:boolean},
- *   cornerOpeningZLo?:Array<{z0:number,z1:number}>, cornerOpeningZHi?:Array<{z0:number,z1:number}>}} [opts]
+ * @param {import('./sectionTypes.js').CutSpec & import('./sectionTypes.js').ProbeInputs
+ *   & import('./sectionTypes.js').RenderStyle & Omit<import('./sectionTypes.js').BandInjections, 'gapFloorProfile'>} [opts]
  *   - `opts.zRange`は必須（`opts`自体を省略した場合・`zRange`を省略した場合のいずれも、
  *   `baseFloorZ`の既定`zRange.loZ`の参照でTypeErrorになる。導出しない・フォールバックしない）。
  *   probeCtx（省略時のみ`makeProbeContext(layers)`を組む）… 帯経路は面ループの外で作った
@@ -440,7 +437,7 @@ export function buildSectionFromLine(line, layers, opts = {}) {
     cornerOpeningZHi: opts.cornerOpeningZHi ?? baseEnds.cornerOpeningZHi ?? [],
   };
   const { viewSign, dirSign, zRange } = opts;
-  const cut = {
+  const cut = makeSectionCut({
     seqNo: opts.seqNo, line, layers, viewSign, dirSign, zRange,
     baseFloorZ: opts.baseFloorZ ?? zRange.loZ,
     ceilProfile: opts.ceilProfile,
@@ -452,7 +449,7 @@ export function buildSectionFromLine(line, layers, opts = {}) {
     chDimSplitAbsYs: opts.chDimSplitAbsYs,
     face,
     ends,
-  };
+  });
   const probeCtx = opts.probeCtx ?? makeProbeContext(layers);
   return buildCutContent(cut, probeCtx, {
     endExtendMm: opts.endExtendMm ?? 0,

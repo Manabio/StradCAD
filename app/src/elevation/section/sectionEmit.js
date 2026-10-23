@@ -1418,8 +1418,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // 断面エンジンの探査（`sectionEngine.js`の`splitOpenByFarFace`。値の出どころは
     // `sectionHits.js`の`farFaceAnnotation`＝視線方向のヒット列）で既にfloorFace/ceilFaceの
     // z0/z1へクランプ・延長済みなので、ここで拾う`L`/`R`（`b.z0`/`b.z1`由来）がそのまま
-    // アキの範囲になる。**二重クランプはしない**——以前は`cut.openSpans`（`face.spans`由来の
-    // 外部注入）で同じ範囲をもう一度クランプしていたが、値の単一情報源を探査（bands）へ一本化した。
+    // アキの範囲になる。**二重クランプはしない**——値の単一情報源は探査（bands）。
     // §5.6: baseFloorZより上=一点鎖線(center)、床断面より下=破線(dashed)。連結成分がbaseFloorZを
     // またぐ（D1の「開口+上階アキ」等）場合は、床断面より下へ到達している時点でdashedを選ぶ
     // （ASSUMED: 設計書はこの併合時の様式を明記していないため、より弱い表現＝dashedを安全側の
