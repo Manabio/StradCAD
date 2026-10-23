@@ -1,11 +1,13 @@
 // sectionStructure.js（WP-C: 構造梁の展開図への加算寄与）の単体テスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, edgeKey } from '@core';
 import {
   structuralContribution, structuralPrimitivesForCut, beamDepthMm, occludeByFloor, beamWallEmbedding, wallEntriesOfLayers,
 } from './sectionStructure.js';
 import { cutDrawRange } from './sectionTypes.js';
+import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
+import { wallConcealRange } from '../../finish/columnWrap.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -803,61 +805,123 @@ test('【指摘2026-10-19】structuralPrimitivesForCut: embedding.along の区�
 const embEntry = (wall, over = {}) => ({ wall, storeyLo: 0, storeyHi: 3000, graph: null, ...over });
 const embWall = (over = {}) => ({ isVertical: false, materialRange: { lo: 940, hi: 1060 }, coord1: 800, coord2: 2200, axisCL: { id: 'A' }, ...over });
 const embBeam = (over = {}) => ({ isVertical: false, axisWorld: 1000, widthMm: 100, spanLo: 0, spanHi: 2000, layerTopZ: 500, layerDepthMm: 200, ...over });
-const SINGLE = { wallBand: 'single', wallFilter: 'all' };
-const MERGED_FH = { wallBand: 'merged', wallFilter: 'fullHeight' };
 const EMPTY_EMB = { along: [], alongTol: [], fullyEmbedded: false, crossBands: [], bandsAt: [] };
+// 結果は読まれたフィールドだけ求める（getter）。全フィールドを素の値に起こして比べる
+const emb = (beam, entries, opts = {}) => {
+  const r = beamWallEmbedding(beam, entries, opts);
+  return { along: r.along, alongTol: r.alongTol, fullyEmbedded: r.fullyEmbedded, crossBands: r.crossBands, bandsAt: r.bandsAt };
+};
 
-test('【S3a】beamWallEmbedding single: 壁が一部だけ覆えば足元区間は along（許容なし）・alongTol（材厚ぶんの許容つき）。全体を覆えば fullyEmbedded', () => {
-  const part = beamWallEmbedding(embBeam(), [embEntry(embWall())], SINGLE);
+test('【S3a】beamWallEmbedding: 壁が一部だけ覆えば足元区間は along（許容なし）・alongTol（材厚ぶんの許容つき）。全体を覆えば fullyEmbedded', () => {
+  const part = beamWallEmbedding(embBeam(), [embEntry(embWall())]);
   assert.deepEqual(part.along, [[800, 2000]], '壁のスパンを梁のスパンで切る');
-  assert.deepEqual(part.alongTol, [[680, 2000]], '許容＝材厚 120');
+  assert.deepEqual(part.alongTol, [[800, 2000]], '壁の端が梁の端から許容（材厚 120）以内でなければ広げない（許容は梁のスパンの両端だけ）');
   assert.equal(part.fullyEmbedded, false);
-  const full = beamWallEmbedding(embBeam(), [embEntry(embWall({ coord1: -50, coord2: 2100 }))], SINGLE);
-  assert.equal(full.fullyEmbedded, true, '許容つきの 1 枚がスパン全体を覆う');
+  // 壁の端が梁の端から許容以内（0 − 100 = −100 ≥ −120）なら、隅の取り合いとして梁の端まで届くとみなす
+  const corner = beamWallEmbedding(embBeam(), [embEntry(embWall({ coord1: 100, coord2: 2100 }))]);
+  assert.deepEqual([corner.along, corner.alongTol, corner.fullyEmbedded], [[[100, 2000]], [[0, 2000]], true]);
+  const farCorner = beamWallEmbedding(embBeam(), [embEntry(embWall({ coord1: 130, coord2: 2100 }))]);
+  assert.deepEqual([farCorner.alongTol, farCorner.fullyEmbedded], [[[130, 2000]], false], '許容を超えて離れた端は届かない');
+  const full = beamWallEmbedding(embBeam(), [embEntry(embWall({ coord1: -50, coord2: 2100 }))]);
+  assert.equal(full.fullyEmbedded, true, '許容つきの壁がスパン全体を覆う');
   assert.deepEqual(full.along, [[0, 2000]]);
-  // 2 枚に分かれて覆うときは 1 枚で覆っていないので fullyEmbedded ではない（統合は along 側だけ）
-  const two = beamWallEmbedding(embBeam(), [embEntry(embWall({ coord1: -50, coord2: 1000 })), embEntry(embWall({ coord1: 1000, coord2: 2100 }))], SINGLE);
-  assert.equal(two.fullyEmbedded, false);
-  assert.deepEqual(two.along, [[0, 2000]], 'along は統合される');
+});
+
+test('【S3b-1・(a)】beamWallEmbedding: 同じ軸 CL の壁（下地オーナー壁＋仕上げ薄壁）は合併帯で見る。連なって覆えば fullyEmbedded・軸 CL が違えば合併しない', () => {
+  // 1 枚ずつでは帯 950..1050 が収まらない（940..1000 と 1000..1060）が、合併すると 940..1060 に収まる
+  const owner = embWall({ materialRange: { lo: 940, hi: 1000 }, coord1: -50, coord2: 2100 });
+  const thin = embWall({ materialRange: { lo: 1000, hi: 1060 }, coord1: -50, coord2: 2100 });
+  const merged = beamWallEmbedding(embBeam(), [owner, thin].map(w => embEntry(w)));
+  assert.equal(merged.fullyEmbedded, true, '合併帯が梁の幅全体を覆う');
+  assert.deepEqual(merged.along, [[0, 2000]]);
+  const apart = beamWallEmbedding(embBeam(), [owner, { ...thin, axisCL: { id: 'B' } }].map(w => embEntry(w)));
+  assert.deepEqual([apart.fullyEmbedded, apart.along], [false, []], '軸 CL が違う壁は合併しない（梁の幅は 1 枚にも収まらない）');
+  // 同じ軸の壁が隙間なく連なって覆う（1 枚では覆わない）→ スパン全体を覆う
+  const seq = beamWallEmbedding(embBeam(), [embEntry(embWall({ coord1: 0, coord2: 1000 })), embEntry(embWall({ coord1: 1000, coord2: 2000 }))]);
+  assert.equal(seq.fullyEmbedded, true, '隙間なしの連なり（0..1000 と 1000..2000）はスパン全体を覆う');
+  assert.deepEqual(seq.along, [[0, 2000]], 'along は統合される');
+  // 失敗系: 連なりに隙間があれば覆わない（along は覆う区間だけ）
+  const gap = beamWallEmbedding(embBeam(), [embEntry(embWall({ coord1: -50, coord2: 600 })), embEntry(embWall({ coord1: 1400, coord2: 2100 }))]);
+  assert.deepEqual([gap.fullyEmbedded, gap.along], [false, [[0, 600], [1400, 2000]]]);
+});
+
+test('【S3b-1・失敗系 T1】beamWallEmbedding: 同じ軸の壁の外包には収まるが、その位置の壁の材の和集合には幅が収まらない区間は埋没に数えない', () => {
+  // 厚い壁 940..1060（coord 0..1000）＋薄い壁 990..1010（coord 1000..2000）。外包は 940..1060 だが、x>1000 では薄い壁しか無い
+  const thick = embWall({ materialRange: { lo: 940, hi: 1060 }, coord1: 0, coord2: 1000 });
+  const thin = embWall({ materialRange: { lo: 990, hi: 1010 }, coord1: 1000, coord2: 2000 });
+  const r = beamWallEmbedding(embBeam(), [thick, thin].map(w => embEntry(w)));
+  assert.deepEqual(r.along, [[0, 1000]], '厚い壁の区間だけ');
+  assert.equal(r.fullyEmbedded, false);
+});
+
+test('【S3b-1・失敗系 T2】beamWallEmbedding: 壁と壁の隙間（145）は橋渡ししない。許容は梁のスパンの両端だけ', () => {
+  const r = beamWallEmbedding(embBeam(), [embEntry(embWall({ coord1: -50, coord2: 1000 })), embEntry(embWall({ coord1: 1145, coord2: 2100 }))]);
+  assert.deepEqual(r.along, [[0, 1000], [1145, 2000]]);
+  assert.deepEqual(r.alongTol, [[0, 1000], [1145, 2000]], '隙間 145 は材厚の許容 120×2 以下でも埋めない');
+  assert.equal(r.fullyEmbedded, false);
+});
+
+test('【S3b-1・失敗系 T3】beamWallEmbedding: 同じ軸で材の範囲が離れた 2 枚（940..990 と 1010..1060）の間を通る梁は埋没に数えない', () => {
+  const a = embWall({ materialRange: { lo: 940, hi: 990 }, coord1: -50, coord2: 2100 });
+  const b = embWall({ materialRange: { lo: 1010, hi: 1060 }, coord1: -50, coord2: 2100 });
+  const r = beamWallEmbedding(embBeam(), [a, b].map(w => embEntry(w)));
+  assert.deepEqual([r.along, r.fullyEmbedded], [[], false], '外包 940..1060 には収まるが、材の和集合は 2 つに分かれていて幅 100 は収まらない');
+  // 対照: 材が接していれば（990..1010 を埋める壁を足すと）収まる
+  const mid = embWall({ materialRange: { lo: 990, hi: 1010 }, coord1: -50, coord2: 2100 });
+  assert.equal(beamWallEmbedding(embBeam(), [a, mid, b].map(w => embEntry(w))).fullyEmbedded, true);
+});
+
+test('【S3b-1】beamWallEmbedding: 層（graph）が違う壁は軸 CL の id が同じでも束ねない。軸 CL の無い壁は単独', () => {
+  const owner = embWall({ materialRange: { lo: 940, hi: 1000 }, coord1: -50, coord2: 2100 });
+  const thin = embWall({ materialRange: { lo: 1000, hi: 1060 }, coord1: -50, coord2: 2100 });
+  const gA = {}, gB = {};
+  assert.equal(beamWallEmbedding(embBeam(), [embEntry(owner, { graph: gA }), embEntry(thin, { graph: gA })]).fullyEmbedded, true, '対照: 同じ graph は束ねる');
+  assert.equal(beamWallEmbedding(embBeam(), [embEntry(owner, { graph: gA }), embEntry(thin, { graph: gB })]).fullyEmbedded, false, 'graph が違えば束ねない');
+  const noAxis = [owner, thin].map(w => embEntry({ ...w, axisCL: undefined }));
+  assert.equal(beamWallEmbedding(embBeam(), noAxis).fullyEmbedded, false, '軸 CL の無い壁は束ねず単独（幅は 1 枚に収まらない）');
 });
 
 test('【S3a・失敗系】beamWallEmbedding: 壁なし・entries 未指定は全区間 free（空配列・fullyEmbedded false）', () => {
-  assert.deepEqual(beamWallEmbedding(embBeam(), [], SINGLE), EMPTY_EMB);
-  assert.deepEqual(beamWallEmbedding(embBeam(), undefined, SINGLE), EMPTY_EMB);
-  assert.deepEqual(beamWallEmbedding(embBeam(), [], { ...MERGED_FH, at: 1000 }), EMPTY_EMB);
+  assert.deepEqual(emb(embBeam(), []), EMPTY_EMB);
+  assert.deepEqual(emb(embBeam(), undefined), EMPTY_EMB);
+  assert.deepEqual(emb(embBeam(), [], { at: 1000 }), EMPTY_EMB);
 });
 
 test('【S3a・失敗系】beamWallEmbedding: 梁の天が壁の層の外ならその壁を数えない（層の述語＝床−成〜直上の床）', () => {
   const wall = embEntry(embWall({ coord1: -50, coord2: 2100 }), { storeyLo: 0, storeyHi: 3000 });
-  const embedded = (layerTopZ) => beamWallEmbedding(embBeam({ layerTopZ }), [wall], SINGLE).fullyEmbedded;
+  const embedded = (layerTopZ) => beamWallEmbedding(embBeam({ layerTopZ }), [wall]).fullyEmbedded;
   assert.equal(embedded(500), true, '前提: 層の中');
   assert.equal(embedded(3000), true, '直上の床ちょうど');
   assert.equal(embedded(3001), false, '直上の床より上');
   assert.equal(embedded(-200), true, '床−成ちょうど（床の下の床梁）');
   assert.equal(embedded(-201), false, '床−成より下');
   // 層の判定は元の天端（layerTopZ）で行い、帯へ切り詰めた topZ/depthMm は見ない
-  assert.equal(beamWallEmbedding(embBeam({ layerTopZ: 500, topZ: 9999, depthMm: 1 }), [wall], SINGLE).fullyEmbedded, true);
+  assert.equal(beamWallEmbedding(embBeam({ layerTopZ: 500, topZ: 9999, depthMm: 1 }), [wall]).fullyEmbedded, true);
   // layerTopZ が無い（素の BeamSolid）なら topZ/depthMm で判定
-  assert.equal(beamWallEmbedding({ ...embBeam(), layerTopZ: undefined, layerDepthMm: undefined, topZ: 500, depthMm: 200 }, [wall], SINGLE).fullyEmbedded, true);
+  assert.equal(beamWallEmbedding({ ...embBeam(), layerTopZ: undefined, layerDepthMm: undefined, topZ: 500, depthMm: 200 }, [wall]).fullyEmbedded, true);
 });
 
 test('【S3a】beamWallEmbedding: 厚み方向は完全に収まるときだけ。幅 0 の梁は芯の 1 点で判定する・壁より太い梁・向きの違う壁は数えない', () => {
   const wall = embEntry(embWall({ coord1: -50, coord2: 2100 }));
-  assert.equal(beamWallEmbedding(embBeam({ widthMm: 0, axisWorld: 940 }), [wall], SINGLE).fullyEmbedded, true, '幅 0・材の縁の芯は収まる');
-  assert.equal(beamWallEmbedding(embBeam({ widthMm: 0, axisWorld: 930 }), [wall], SINGLE).fullyEmbedded, false, '幅 0・材の外の芯');
-  assert.equal(beamWallEmbedding(embBeam({ widthMm: 130 }), [wall], SINGLE).fullyEmbedded, false, '壁より太い梁は室内へ出る');
-  assert.deepEqual(beamWallEmbedding(embBeam({ isVertical: true }), [wall], SINGLE), EMPTY_EMB, '向きが違う壁は梁を隠さない');
+  assert.equal(beamWallEmbedding(embBeam({ widthMm: 0, axisWorld: 940 }), [wall]).fullyEmbedded, true, '幅 0・材の縁の芯は収まる');
+  assert.equal(beamWallEmbedding(embBeam({ widthMm: 0, axisWorld: 930 }), [wall]).fullyEmbedded, false, '幅 0・材の外の芯');
+  assert.equal(beamWallEmbedding(embBeam({ widthMm: 130 }), [wall]).fullyEmbedded, false, '壁より太い梁は室内へ出る');
+  const turned = emb(embBeam({ isVertical: true }), [wall]);
+  assert.deepEqual([turned.along, turned.alongTol, turned.fullyEmbedded, turned.bandsAt], [[], [], false, []], '向きが違う壁は梁を隠さない（直交壁の帯にはなる）');
+  assert.deepEqual(turned.crossBands, [[940, 1060]]);
 });
 
 test('【S3a・失敗系】beamWallEmbedding: spanLo==spanHi は along 空・concealRange が null の壁は飛ばす・非有限は free', () => {
   const wall = embEntry(embWall());
-  const point = beamWallEmbedding(embBeam({ spanLo: 1000, spanHi: 1000 }), [wall], SINGLE);
-  assert.deepEqual([point.along, point.alongTol], [[], []], '幅 0 の区間は足元に数えない');
+  const point = beamWallEmbedding(embBeam({ spanLo: 1000, spanHi: 1000 }), [wall]);
+  assert.deepEqual([point.along, point.alongTol], [[], []], '長さ 0 のスパンは区間にならない');
+  assert.equal(point.fullyEmbedded, true, '長さ 0 のスパンは 1 点で見る（壁の中の点）');
+  assert.equal(beamWallEmbedding(embBeam({ spanLo: 3000, spanHi: 3000 }), [wall]).fullyEmbedded, false, '壁の外の点');
   const noMaterial = embEntry(embWall({ materialRange: null, coord1: -50, coord2: 2100 }));
-  assert.deepEqual(beamWallEmbedding(embBeam(), [noMaterial], SINGLE), EMPTY_EMB, 'wallConcealRange が null の壁は飛ばす');
-  assert.deepEqual(beamWallEmbedding(embBeam(), [noMaterial, embEntry(embWall())], SINGLE).along, [[800, 2000]], '飛ばすだけで他の壁は数える');
+  assert.deepEqual(emb(embBeam(), [noMaterial]), EMPTY_EMB, 'wallConcealRange が null の壁は飛ばす');
+  assert.deepEqual(beamWallEmbedding(embBeam(), [noMaterial, embEntry(embWall())]).along, [[800, 2000]], '飛ばすだけで他の壁は数える');
   for (const bad of [{ widthMm: NaN }, { axisWorld: NaN }, { layerTopZ: NaN }, { spanLo: NaN }, { axisWorld: Infinity }]) {
-    assert.deepEqual(beamWallEmbedding(embBeam(bad), [embEntry(embWall({ coord1: -50, coord2: 2100 }))], SINGLE), EMPTY_EMB, `非有限 ${JSON.stringify(bad)} は free`);
+    assert.deepEqual(emb(embBeam(bad), [embEntry(embWall({ coord1: -50, coord2: 2100 }))]), EMPTY_EMB, `非有限 ${JSON.stringify(bad)} は free`);
   }
 });
 
@@ -866,43 +930,102 @@ test('【S3a】beamWallEmbedding merged: 切断位置を含む同じ軸 CL の�
   const thin = embWall({ materialRange: { lo: 1000, hi: 1060 }, coord1: 0, coord2: 3000 });
   const other = embWall({ materialRange: { lo: 2000, hi: 2060 }, axisCL: { id: 'B' }, coord1: 0, coord2: 3000 });
   const entries = [owner, thin, other].map(w => embEntry(w));
-  const r = beamWallEmbedding(embBeam(), entries, { ...MERGED_FH, at: 1000 });
+  const r = beamWallEmbedding(embBeam(), entries, { at: 1000 });
   assert.deepEqual(r.bandsAt, [{ lo: 940, hi: 1060, faces: [940, 1000, 940, 1000, 1000, 1060, 1000, 1060] }], '2 枚の材を合併した 1 枚の帯');
-  assert.deepEqual([r.along, r.alongTol, r.fullyEmbedded], [[], [], false], 'merged は平行の埋没（along 系）を求めない');
-  assert.deepEqual(beamWallEmbedding(embBeam({ axisWorld: 1100 }), entries, { ...MERGED_FH, at: 1000 }).bandsAt, [], '梁の芯が帯の外');
-  assert.deepEqual(beamWallEmbedding(embBeam(), entries, { ...MERGED_FH, at: 3500 }).bandsAt, [], '切断位置が壁のスパンの外');
-  assert.deepEqual(beamWallEmbedding(embBeam(), entries, { ...MERGED_FH, at: NaN }).bandsAt, [], '切断位置が非有限');
-  assert.deepEqual(beamWallEmbedding(embBeam(), entries, MERGED_FH).bandsAt, [], '切断位置が無ければ求めない');
+  assert.deepEqual(beamWallEmbedding(embBeam({ axisWorld: 1100 }), entries, { at: 1000 }).bandsAt, [], '梁の芯が帯の外');
+  assert.deepEqual(beamWallEmbedding(embBeam(), entries, { at: 3500 }).bandsAt, [], '切断位置が壁のスパンの外');
+  assert.deepEqual(beamWallEmbedding(embBeam(), entries, { at: NaN }).bandsAt, [], '切断位置が非有限');
+  assert.deepEqual(beamWallEmbedding(embBeam(), entries).bandsAt, [], '切断位置が無ければ求めない');
+  // bandsAt は梁の芯で判定する（埋没 fullyEmbedded は梁の幅全体）: 幅 130 の梁は帯 940..1060 に収まらず fullyEmbedded でないが、芯は帯の中
+  const fat = beamWallEmbedding(embBeam({ widthMm: 130 }), entries, { at: 1000 });
+  assert.equal(fat.bandsAt.length, 1, '芯が帯の中');
+  assert.equal(fat.fullyEmbedded, false, '幅全体は帯に収まらない');
 });
 
-test('【S3a】beamWallEmbedding fullHeight: 腰壁・垂れ壁は平行の帯にも直交の帯にも数えない。all は数える。crossBands は fullHeight のときだけ', () => {
-  const graph = {
-    kneeDropWalls: new Map([['H:S:E', { knee: { topHeight: 900 } }], ['V:S2:E2', { drop: { bottomHeight: 2000 } }]]),
-    shapeMap: new Map([
-      ['H', { centerLineType: 'h', effectiveValue: 0 }], ['S', { value: 0 }], ['E', { value: 3000 }],
-      ['V', { centerLineType: 'v', effectiveValue: 1200 }], ['S2', { value: 0 }], ['E2', { value: 2000 }],
-    ]),
-  };
-  const kneeAxis = { centerLineType: 'h', effectiveValue: 0, id: 'H' };
-  const para = embWall({ materialRange: { lo: 940, hi: 1060 }, coord1: 0, coord2: 3000, axisCL: kneeAxis });
-  const perp = { isVertical: true, materialRange: { lo: 1140, hi: 1260 }, coord1: -100, coord2: 2100, axisCL: { centerLineType: 'v', effectiveValue: 1200, id: 'V' } };
-  const [p, q] = [embEntry(para, { graph }), embEntry(perp, { graph })];
-  // 同じ壁が全高なら数える（対照）
-  const fullH = { kneeDropWalls: new Map(), shapeMap: new Map() };
-  const ctrl = beamWallEmbedding(embBeam(), [embEntry(para, { graph: fullH }), embEntry(perp, { graph: fullH })], { ...MERGED_FH, at: 1000 });
-  assert.equal(ctrl.bandsAt.length, 1, '対照: 全高の壁は平行の帯に数える');
-  assert.deepEqual(ctrl.crossBands, [[1140, 1260]], '対照: 全高の壁は直交の帯に数える');
-  const fh = beamWallEmbedding(embBeam(), [p, q], { ...MERGED_FH, at: 1000 });
-  assert.deepEqual([fh.bandsAt, fh.crossBands], [[], []], '腰壁・垂れ壁は数えない');
-  assert.equal(beamWallEmbedding(embBeam(), [p, q], { wallBand: 'single', wallFilter: 'all' }).along.length, 1, 'all は腰壁も数える');
-  assert.deepEqual(beamWallEmbedding(embBeam(), [embEntry(para, { graph: fullH }), embEntry(perp, { graph: fullH })], SINGLE).crossBands, [], 'wallFilter が all なら直交の帯は求めない');
+// 腰壁・垂れ壁の高さの記録を持つ graph の偽物。壁（水平・軸 H・0..3000）の層は床 0〜直上の床 3000。
+const kneeDropGraph = (rec) => ({
+  kneeDropWalls: new Map([['H:S:E', rec], ['V:S2:E2', rec]]),
+  shapeMap: new Map([
+    ['H', { centerLineType: 'h', effectiveValue: 0 }], ['S', { value: 0 }], ['E', { value: 3000 }],
+    ['V', { centerLineType: 'v', effectiveValue: 1200 }], ['S2', { value: 0 }], ['E2', { value: 2000 }],
+  ]),
+});
+const kneeAxis = { centerLineType: 'h', effectiveValue: 0, id: 'H' };
+const kdPara = () => embWall({ materialRange: { lo: 940, hi: 1060 }, coord1: 0, coord2: 3000, axisCL: kneeAxis });
+const kdPerp = () => ({ isVertical: true, materialRange: { lo: 1140, hi: 1260 }, coord1: -100, coord2: 2100, axisCL: { centerLineType: 'v', effectiveValue: 1200, id: 'V' } });
+// 梁（幅 100・成 200・スパン 0..2000）が、壁 1 枚の graph で壁の中（fullyEmbedded）になるか。天 layerTopZ だけ変える
+const hiddenBy = (graph, layerTopZ) => beamWallEmbedding(embBeam({ layerTopZ }), [embEntry(kdPara(), { graph })]).fullyEmbedded;
+
+test('【S3b-1・T4・裁定2-1/2-2】beamWallEmbedding: 腰壁は床梁（天が床以下＝壁の真下）を全高の壁と同じに隠す（幅が材に収まれば）。天端より上の梁は隠さない', () => {
+  const knee = kneeDropGraph({ knee: { topHeight: 900 } });
+  assert.equal(hiddenBy(knee, 0), true, '天が床ちょうどの床梁は壁の真下＝壁の中');
+  assert.equal(hiddenBy(knee, -100), true, '天が床より下（FL−100 の床梁）も壁の真下＝壁の中');
+  assert.equal(hiddenBy(knee, 500), true, '腰壁の範囲 0..900 に収まる梁（300..500）は壁の中');
+  assert.equal(hiddenBy(knee, 1000), false, '腰壁の天端 900 をまたぐ梁（800..1000）は隠さない');
+  assert.equal(hiddenBy(knee, 2000), false, '腰壁の天端より上の梁（天井高の梁）は隠さない');
+  assert.equal(hiddenBy({ kneeDropWalls: new Map(), shapeMap: new Map() }, 2000), true, '対照: 全高の壁なら z を見ず隠す（従来どおり）');
+  // 失敗系: 幅が材に収まらない床梁は腰壁の真下でも隠さない
+  assert.equal(beamWallEmbedding(embBeam({ layerTopZ: 0, widthMm: 130 }), [embEntry(kdPara(), { graph: knee })]).fullyEmbedded, false);
+  // 直交壁の帯・平行の帯も同じ述語
+  const perpHidden = (layerTopZ) => beamWallEmbedding(embBeam({ layerTopZ }), [embEntry(kdPerp(), { graph: knee })]).crossBands;
+  assert.deepEqual(perpHidden(0), [[1140, 1260]], '床梁は腰壁の直交壁の帯に数える');
+  assert.deepEqual(perpHidden(2000), [], '天井高の梁は腰壁の直交壁の帯に数えない');
+  assert.equal(beamWallEmbedding(embBeam({ layerTopZ: 0 }), [embEntry(kdPara(), { graph: knee })], { at: 1000 }).bandsAt.length, 1);
+  assert.deepEqual(beamWallEmbedding(embBeam({ layerTopZ: 2000 }), [embEntry(kdPara(), { graph: knee })], { at: 1000 }).bandsAt, []);
+});
+
+// 実の graph（2 部屋が y=2000 を共有）の垂れ壁（下端 1000）。天井高 2400 の層（床 0〜直上の床 storeyHi）。
+function dropWallFixture(storeyHi) {
+  const graph = makeGraph();
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = cl(CenterLineType.VERTICAL, 0), x1 = cl(CenterLineType.VERTICAL, 4000);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), yMid = cl(CenterLineType.HORIZONTAL, 2000), y2 = cl(CenterLineType.HORIZONTAL, 5000);
+  const upper = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${yMid.id}`]), '上室');
+  const lower = graph.addRoom(new Set([`${x0.id}:${yMid.id}:${x1.id}:${y2.id}`]), '下室');
+  generateRoomWallsFromOutline(graph, upper);
+  generateRoomWallsFromOutline(graph, lower);
+  upper.setOverride('ceilingHeight', '2400');
+  lower.setOverride('ceilingHeight', '2400');
+  graph.setKneeDropWall(edgeKey(yMid.id, x0.id, x1.id), { drop: { bottomHeight: 1000 } });
+  const wall = [...graph.walls].find(w => !w.isVertical && w.axisCL.id === yMid.id);
+  const cr = wallConcealRange(wall);
+  const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
+  const beamAt = (top) => ({ isVertical: false, axisWorld: (cr.lo + cr.hi) / 2, widthMm: (cr.hi - cr.lo) / 2, spanLo: lo + 300, spanHi: hi - 300,
+    layerTopZ: top, layerDepthMm: 200 });
+  return { hidden: (top) => beamWallEmbedding(beamAt(top), [{ wall, storeyLo: 0, storeyHi, graph }]).fullyEmbedded };
+}
+
+test('【S3b-1・T5・裁定2-1/2-2】beamWallEmbedding: 垂れ壁の範囲は天井高基準（床＋天井高−下端〜直上の床）。床梁と下端より下の梁は隠さず、真上の天井懐の梁は隠す', () => {
+  const { hidden } = dropWallFixture(2800); // 天井高 2400・下端 1000 → 範囲 1400〜2800
+  assert.equal(hidden(1700), true, '梁 1500..1700 は範囲の中');
+  assert.equal(hidden(1500), false, '梁 1300..1500 は下端 1400 をまたぐ＝隠さない');
+  assert.equal(hidden(2700), true, '天井懐の梁 2500..2700 は壁の中（直上の床 2800 まで）');
+  assert.equal(hidden(0), false, '床梁は隠さない');
+  assert.equal(hidden(-100), false, '天が床より下の床梁も隠さない');
+  const top = dropWallFixture(Infinity); // 最上階: 直上の床が無い
+  assert.equal(top.hidden(1700), true, '最上階: 下端より上の梁は隠す');
+  assert.equal(top.hidden(5000), true, '最上階: 天井より上の梁も隠す（全高の壁が z を見ないのと同じ側）');
+  assert.equal(top.hidden(1500), false, '最上階でも下端をまたぐ梁は隠さない');
+});
+
+test('【S3b-1・T5b】beamWallEmbedding: 天井高が分からない graph では垂れ壁の下端を直上の床から測る（床 0〜3000・下端 1000 → 2000〜3000）。床梁は隠さない', () => {
+  const drop = kneeDropGraph({ drop: { bottomHeight: 1000 } });
+  assert.equal(hiddenBy(drop, 0), false, '床梁は垂れ壁の下端より下＝隠さない');
+  assert.equal(hiddenBy(drop, -100), false, '天が床より下の床梁も隠さない');
+  assert.equal(hiddenBy(drop, 1500), false, '下端 2000 より下の梁は隠さない');
+  assert.equal(hiddenBy(drop, 2100), false, '下端をまたぐ梁（1900..2100）は隠さない');
+  assert.equal(hiddenBy(drop, 2900), true, '下端より上に収まる梁（2700..2900）は壁の中');
+  const perp = beamWallEmbedding(embBeam({ layerTopZ: 0 }), [embEntry(kdPerp(), { graph: drop })]);
+  assert.deepEqual(perp.crossBands, [], '床梁は垂れ壁の直交壁の帯に数えない');
   // 失敗系: 直交壁が梁の帯を覆わない（スパンが梁の芯で終わる L 字の隅）・層の外の直交壁は数えない
-  const stops = embEntry({ ...perp, coord2: 1000 }, { graph: fullH });
-  assert.deepEqual(beamWallEmbedding(embBeam(), [stops], MERGED_FH).crossBands, [], '帯を覆わない直交壁は数えない（保守側）');
-  assert.deepEqual(beamWallEmbedding(embBeam({ layerTopZ: 4000 }), [embEntry(perp, { graph: fullH })], MERGED_FH).crossBands, [], '層の外');
+  const fullH = { kneeDropWalls: new Map(), shapeMap: new Map() };
+  const stops = embEntry({ ...kdPerp(), coord2: 1000 }, { graph: fullH });
+  assert.deepEqual(beamWallEmbedding(embBeam(), [stops]).crossBands, [], '帯を覆わない直交壁は数えない（保守側）');
+  assert.deepEqual(beamWallEmbedding(embBeam({ layerTopZ: 4000 }), [embEntry(kdPerp(), { graph: fullH })]).crossBands, [], '層の外');
+  assert.deepEqual(beamWallEmbedding(embBeam({ layerTopZ: 500 }), [embEntry(kdPerp(), { graph: fullH })]).crossBands, [[1140, 1260]], '対照: 全高の壁は数える');
 });
 
-test('【S3a・失敗系】beamWallEmbedding fullHeight: 隔て板（partitionLinesOf が返す線上の壁）は bandsAt にも crossBands にも数えない。線が無ければ数える', () => {
+test('【S3b-1・(b)・失敗系】beamWallEmbedding: 隔て板（partitionLinesOf が返す線上の壁）は bandsAt にも crossBands にも数えない。線が無ければ数える', () => {
   const partition = (over) => ({ isRoomWall: true, isExteriorWall: false, wallFinish: 12.5, backingOffset: 0, axisOffset: 57.5, backingDepth: 90, ...over });
   const para = partition({ isVertical: false, axisCL: { id: 'P', effectiveValue: 1000 }, materialRange: { lo: 945, hi: 1055 },
     coord1: 0, coord2: 3000, clStart: { effectiveValue: 0 }, clEnd: { effectiveValue: 3000 } });
@@ -910,13 +1033,13 @@ test('【S3a・失敗系】beamWallEmbedding fullHeight: 隔て板（partitionLi
     coord1: -100, coord2: 2100, clStart: { effectiveValue: 0 }, clEnd: { effectiveValue: 2000 } });
   const entries = [para, perp].map(w => embEntry(w));
   const lines = [{ isVertical: false, axisValue: 1000, lo: 0, hi: 3000 }, { isVertical: true, axisValue: 1200, lo: -100, hi: 2100 }];
-  const opts = (linesOf) => ({ ...MERGED_FH, at: 1000, partitionLinesOf: () => linesOf });
+  const opts = (linesOf) => ({ at: 1000, partitionLinesOf: () => linesOf });
   const hit = beamWallEmbedding(embBeam(), entries, opts(lines));
-  assert.deepEqual([hit.bandsAt, hit.crossBands], [[], []], '隔て板は全高とみなさず数えない');
+  assert.deepEqual([hit.bandsAt, hit.crossBands, hit.along], [[], [], []], '隔て板は全高とみなさず数えない');
   const ctrl = beamWallEmbedding(embBeam(), entries, opts([]));
   assert.equal(ctrl.bandsAt.length, 1, '対照: 線が無ければ平行の帯に数える');
   assert.deepEqual(ctrl.crossBands, [[1145, 1255]], '対照: 線が無ければ直交の帯に数える');
-  assert.equal(beamWallEmbedding(embBeam(), entries, { wallBand: 'single', wallFilter: 'all', partitionLinesOf: () => lines }).along.length, 1, 'all なら隔て板も数える');
+  assert.equal(ctrl.along.length, 1, '対照: 線が無ければ平行の足元に数える');
 });
 
 test('【S3a】wallEntriesOfLayers: 壁ごとに層の床〜直上の層の床（無ければ Infinity）と graph を付ける。層なしは空', () => {
