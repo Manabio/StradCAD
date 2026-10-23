@@ -3938,7 +3938,7 @@
   "room": "83dc80ed-2214-4e85-b117-da153e803659",
   "name": "",
   "kind": "stair",
-  "count": 245,
+  "count": 244,
   "prims": [
    {
     "dash": "dashed",
@@ -5051,15 +5051,6 @@
     "x2": 780,
     "y1": -1000,
     "y2": -1000
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 0,
-    "x2": 780,
-    "y1": 120,
-    "y2": 120
    },
    {
     "type": "line",

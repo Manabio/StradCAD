@@ -536,7 +536,7 @@
   "room": "b6239f9e-fab4-4bef-890b-ed6c3033bd58",
   "name": "",
   "kind": "stair",
-  "count": 165,
+  "count": 154,
   "prims": [
    {
     "type": "line",
@@ -1541,33 +1541,6 @@
     "y2": -3000
    },
    {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 0,
-    "x2": 2855,
-    "y1": 0,
-    "y2": 0
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 0,
-    "x2": 2855,
-    "y1": 330,
-    "y2": 330
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 0,
-    "x2": 2855,
-    "y1": 300,
-    "y2": 300
-   },
-   {
     "type": "line",
     "weight": "medium",
     "x1": 0,
@@ -1764,41 +1737,6 @@
     "x2": 7205,
     "y1": -1500,
     "y2": -1500
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 3717.5,
-    "x2": 3717.5,
-    "y1": 330,
-    "y2": 0
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 3837.5,
-    "x2": 3837.5,
-    "y1": 330,
-    "y2": 0
-   },
-   {
-    "type": "line",
-    "weight": "thick",
-    "x1": 3717.5,
-    "x2": 3837.5,
-    "y1": 0,
-    "y2": 0
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 3717.5,
-    "x2": 3837.5,
-    "y1": 330,
-    "y2": 330
    },
    {
     "type": "line",
@@ -2102,42 +2040,6 @@
     "x2": 12495.769,
     "y1": -1500,
     "y2": -1500
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 14617.5,
-    "x2": 14617.5,
-    "y1": 330,
-    "y2": 0
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 14737.5,
-    "x2": 14737.5,
-    "y1": 330,
-    "y2": 0
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 14617.5,
-    "x2": 14737.5,
-    "y1": 0,
-    "y2": 0
-   },
-   {
-    "dash": "dashed",
-    "type": "line",
-    "weight": "thin",
-    "x1": 14617.5,
-    "x2": 14737.5,
-    "y1": 330,
-    "y2": 330
    },
    {
     "type": "line",

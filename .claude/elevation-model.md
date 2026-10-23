@@ -431,6 +431,7 @@ Phase 5（下記「移した」節）以降、断面エンジン自身の探査�
 - golden-elev-stairports の新設（T2-2=8e9afd7。stair-ports-test1〜5。直進系を平面の install 枠に揃えた。2026模擬試験のディレクトリは無く、直進系は test1〜3 が担う）。関門 probe は上の「平面との照合の関門」節。
 - 2026-10-22 stair-ports-test1〜3（S2=bf22201。ユーザー裁定「採用」）: 直進系の階段帯の content を U 字系と同じ `buildCutContent` へ載せ替え、上階のはね出し（`upperOverhangOf`）も図側へ。1階の階段帯だけ test1/2 追加24・削除5、test3 追加35・削除9（上階の面の外の壁の縁・壁のない端の延長・帯の部屋の範囲によるアキ・上階 FL 断面線のはね出し外端までの延長）。test4/5 不変。
 - 2026-10-22 golden13・golden11・golden13-struct の elevfig-*（ユーザー目視OK）: 1階「6」（階段帯）が 68ad689（上り口の開口から辺の上に立つ壁の帯を差し引く）でずれていたのを確定（親 804f6b6 は一致）。2F より上のアキのバツが帯内 x=1442.5 で割れ、左半分が高さ 3800 から。
+- 2026-10-23 リファクタ S0 のゲート（`elevGoldenGate.mjs`）導入時に HEAD 6617e17 とずれていた 4 枚をユーザー裁定で再採取: `golden/`（11.stq・`--regen` なし。golden11 の 10-22 再採取が未反映だった「6」「5」）・`golden-elev-ceiling/ceiling-steel-stair-test`／`ceiling-wood-stair-test`／`moku4-3`（`--regen`。adb9455〜2da87d6 の梁の判定変更以降に未採取だった階段帯）。以後は 17 枚が HEAD と一致。
 
 `app/scripts/probe/golden11/`（`D:/tatsuya/Download/11.stq`を同じ形式でダンプした固定スナップショット。
 展開図一般化Phase 6b-1で追加）も同じ手順で追跡する——`.gitignore`に`!scripts/probe/golden11/`を追加し、
