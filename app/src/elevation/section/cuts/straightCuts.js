@@ -28,6 +28,7 @@ import { makeFrame } from '../../../finish/stair/stairGeometry.js';
 import { classifyFaces, buildMidWallFace, reorientFace, viewDirSign } from './switchbackCuts.js';
 import { straightContribution } from '../sectionStair.js';
 import { perpFaceAt } from '../faceGeometry.js';
+import { makeSectionCut } from '../sectionTypes.js';
 import { graphList } from '../../../graphReadScope.js';
 
 // findLandingWall（本ファイル）の許容差(mm)。findMidWall（switchbackCuts.js）と同じ考え方
@@ -128,14 +129,14 @@ export function straightCuts(stair, faces, graph, opts = {}) {
   const laneLine = lineOf(wOut1, midAcross);
 
   const cuts = [
-    {
+    makeSectionCut({
       seqNo: '1', face: wEntry, line: seq1Line, viewSign: seq1ViewSign, dirSign: wEntry.dirSign,
       layers, zRange, baseFloorZ: 0, stairCut: contribution,
-    },
-    {
+    }),
+    makeSectionCut({
       seqNo: '2', face: wOut1, line: laneLine, viewSign: seq2ViewSign, dirSign: wOut1.dirSign,
       layers, zRange, baseFloorZ: 0, stairCut: contribution,
-    },
+    }),
   ];
 
   if (hasLanding) {
@@ -151,28 +152,28 @@ export function straightCuts(stair, faces, graph, opts = {}) {
       const landingFace = reorientFace(buildMidWallFace(landingWall, wEntry.inward, acrossLo, acrossHi, faces),
         viewDirSign(wEntry.isVertical, seq3ViewSign));
       const seq3Line = lineOf(wEntry, frame.land1);
-      cuts.push({
+      cuts.push(makeSectionCut({
         seqNo: '3', face: landingFace, line: seq3Line, viewSign: seq3ViewSign, dirSign: landingFace.dirSign,
         layers, zRange, baseFloorZ: contribution.landings[0].z, stairCut: null,
-      });
+      }));
     }
-    cuts.push({
+    cuts.push(makeSectionCut({
       seqNo: '4', face: wOut2, line: laneLine, viewSign: seq4ViewSign, dirSign: wOut2.dirSign,
       layers, zRange, baseFloorZ: 0, stairCut: contribution,
-    });
-    cuts.push({
+    }));
+    cuts.push(makeSectionCut({
       seqNo: '5', face: wLanding, line: arrivalLine, viewSign: seq1ViewSign, dirSign: wLanding.dirSign,
       layers, zRange, baseFloorZ: floorHeight, stairCut: null,
-    });
+    }));
   } else {
-    cuts.push({
+    cuts.push(makeSectionCut({
       seqNo: '3', face: wLanding, line: arrivalLine, viewSign: seq1ViewSign, dirSign: wLanding.dirSign,
       layers, zRange, baseFloorZ: floorHeight, stairCut: null,
-    });
-    cuts.push({
+    }));
+    cuts.push(makeSectionCut({
       seqNo: '4', face: wOut2, line: laneLine, viewSign: seq4ViewSign, dirSign: wOut2.dirSign,
       layers, zRange, baseFloorZ: 0, stairCut: contribution,
-    });
+    }));
   }
 
   return { cuts, wEntry, wLanding, wOut1, wOut2, params, contribution };

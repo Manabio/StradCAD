@@ -24,6 +24,7 @@ import { layoutBandFaces, finalizeBand, appendBandCutContent,
 import { translatePrimitive } from './elevationPrimitives.js';
 import { makeProbeContext } from './section/sectionProbe.js';
 import { buildSectionFromLine, planeOverhangForFace, endZOf, upperFloorCutWallEndsOf } from './section/sectionContent.js';
+import { makeSectionCut } from './section/sectionTypes.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign,
   wallWorldRangesOnFacePlane } from './section/sectionCutPlane.js';
 import { reachableLocalRanges } from './section/sectionVisibility.js';
@@ -171,13 +172,13 @@ function upperStoreySegments(face, upperGraph, ctx) {
   const { layers, probeCtx, columnSolids, floorHeightMm, hiZ } = ctx;
   // 面の全長を1本の切断として立てる（**ceilProfileは渡さない**——空気の判定には打ち切り前の
   // 実体が要る）。断面ローカルxは面ローカルxと同値（originWorldの規約が一致する）。
-  const cut = {
+  const cut = makeSectionCut({
     seqNo: `${face.label}^?`, dirSign: face.dirSign, face,
     viewSign: faceViewSign(face),
     line: faceCutLine(face, cutPlaneOffsetMm(face, layers, { columnSolids })),
     layers, baseFloorZ: floorHeightMm,
     zRange: { loZ: floorHeightMm, hiZ },
-  };
+  });
   // cutにceilProfileを渡していない＝列の帯は打ち切られないので、そのまま空気の判定に使える。
   const reach = reachableLocalRanges(buildColumns(cut, probeCtx),
     { loZ: floorHeightMm, ceilOf: () => hiZ }, plan.voidLocal);

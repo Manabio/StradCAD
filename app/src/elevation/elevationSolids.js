@@ -21,6 +21,7 @@ import {
 } from './section/sectionStructure.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
+import { makeSectionCut } from './section/sectionTypes.js';
 import { roomBounds } from '../finish/gridCells.js';
 
 /**
@@ -50,7 +51,7 @@ export function faceSectionCut(face, opts) {
 
   const layers = buildBandLayers(opts.graph, opts.upperGraph
     ? { above: [{ graph: opts.upperGraph, floorHeightMm: opts.floorHeightMm }] } : {});
-  return {
+  return makeSectionCut({
     seqNo: 'face',
     line: { isVertical: face.isVertical, axisValue, lo: face.lo, hi: face.hi },
     // **ここのviewSignは`sectionCutPlane.js`の`faceViewSign`とは逆の意味**（室内側＝視線の
@@ -63,7 +64,7 @@ export function faceSectionCut(face, opts) {
     layers,
     zRange: { loZ: 0, hiZ: CH },
     baseFloorZ: 0,
-  };
+  });
 }
 
 /**
@@ -183,11 +184,11 @@ export function beamBlockerRectsForFace(face, opts) {
  * @returns {import('./section/sectionTypes.js').SectionCut}
  */
 function faceBeamCut(face, cut, columnSolids, opts) {
-  return {
+  return makeSectionCut({
     ...cut,
     face,
     line: faceCutLine(face, cutPlaneOffsetMm(face, cut.layers, { columnSolids })),
     viewSign: faceViewSign(face),
     bandRoomBounds: opts.room?.cells ? roomBounds(opts.room.cells, opts.graph) : null,
-  };
+  });
 }
