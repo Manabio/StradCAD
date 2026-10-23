@@ -49,7 +49,7 @@ function rangesOverlap(aLo, aHi, bLo, bHi) {
 /**
  * 壁が部材（柱・梁）を**隠せる材**の厚み方向範囲＝materialRange ∪ backingRange。
  * 「壁の中に納まる部材は描かない」判定（本ファイル isColumnInsideWall・展開図の梁
- * elevation/section/sectionStructure.js isInsideWall/embeddedSpans）が共有する唯一の供給源
+ * elevation/section/sectionStructure.js beamWallEmbedding）が共有する唯一の供給源
  * ——判定が2系統に分かれると、同じ外壁で柱は隠れるのに梁は出る、という食い違いが起きる
  * （ユーザー指示2026-10-07「隠す範囲を1箇所に集約して柱と共有」）。
  *
@@ -212,7 +212,7 @@ function columnMeetsWallView(rect, view) {
 
 /**
  * 柱の平面矩形が、いずれかの壁の材（厚み方向は wallConcealRange に完全に）に収まり、
- * かつその壁のスパンに収まっているか（＝壁に隠れて見えない柱か。梁の `isInsideWall` と同じ
+ * かつその壁のスパンに収まっているか（＝壁に隠れて見えない柱か。梁の `beamWallEmbedding`（fullyEmbedded）と同じ
  * 考え方・同じ許容量）。壁より太い柱（柱寸アップ・鋼管柱など、平面で壁仕上げに影響する柱）は
  * 収まらないので偽＝平面の柱壁（columnWrapSolids の hidden:false）と展開図の柱型が同じ判定で揃う。
  * スパン方向は壁厚ぶんの食い違いを許容する——柱・梁はCL間を張るのに対し、壁は隅で

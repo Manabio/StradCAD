@@ -35,9 +35,9 @@ test('section: 梁の位置が切断線の描画範囲の外なら出さない�
   assert.deepEqual(visibleBeamPieces([crossBeam({ axisWorld: 5000 })], cutOf(), [], null, noCol), []);
 });
 
-test('section: 切断位置で梁が壁の足元（hiddenSpans）に埋まっていれば出さない。対照: hiddenSpans が無ければ出る', () => {
+test('section: 切断位置で梁が壁の足元（embedding.along）に埋まっていれば出さない。対照: along が無ければ出る', () => {
   assert.equal(visibleBeamPieces([crossBeam()], cutOf(), [], null, noCol).length, 1, '対照');
-  assert.deepEqual(visibleBeamPieces([crossBeam({ hiddenSpans: [[-500, 1500]] })], cutOf(), [], null, noCol), []);
+  assert.deepEqual(visibleBeamPieces([crossBeam({ embedding: { along: [[-500, 1500]], alongTol: [] } })], cutOf(), [], null, noCol), []);
 });
 
 test('section: 室内側の続きが柱包みに隠れるなら出さない（柱の層・埋没の分岐）', () => {
@@ -93,8 +93,8 @@ test('parallel: 切断線の帯の中の梁は天地の x 範囲と、梁の元�
   assert.deepEqual([p.xLo, p.xHi, p.zLo, p.zHi, ...p.ends], [0, 2000, 990, 1190, 0, 2000]);
 });
 
-test('parallel: 壁の足元（hiddenSpans）で中断された梁は区間ごと。縦線は元の端が残る側だけ', () => {
-  const ps = visibleBeamPieces([parallelBeam({ hiddenSpans: [[800, 1200]] })], cutOf(), [], null, noCol);
+test('parallel: 壁の足元（embedding.along）で中断された梁は区間ごと。縦線は元の端が残る側だけ', () => {
+  const ps = visibleBeamPieces([parallelBeam({ embedding: { along: [[800, 1200]], alongTol: [] } })], cutOf(), [], null, noCol);
   assert.deepEqual(ps.map(p => [p.xLo, p.xHi, p.ends]), [[0, 800, [0]], [1200, 2000, [2000]]]);
 });
 
@@ -127,8 +127,8 @@ test('roomFaceCut: 面の軸が梁の幅の帯の外なら parallel にしない
 });
 
 test('roomFaceCut: 断面の続きは室内側（viewSign の逆）で見る。壁の中に埋まった側ではなく室内へ張り出す側の残りで出る', () => {
-  // 梁は x=1000・スパン y 20..1500（壁芯 y=0 の手前の 20 から室内へ）。壁の足元（embeddedSpans）が壁側 -500..200 を覆う
-  const beam = crossBeam({ spanLo: 20, spanHi: 1500, embeddedSpans: [[-500, 200]] });
+  // 梁は x=1000・スパン y 20..1500（壁芯 y=0 の手前の 20 から室内へ）。壁の足元（embedding.alongTol）が壁側 -500..200 を覆う
+  const beam = crossBeam({ spanLo: 20, spanHi: 1500, embedding: { along: [], alongTol: [[-500, 200]] } });
   assert.deepEqual(visibleBeamPieces([beam], faceCutOf(), [], null, roomFace).map(p => p.kind), ['section']);
   assert.deepEqual(visibleBeamPieces([beam], faceCutOf(), [], null, noCol), [], '対照: 指定が無ければ壁側 [20,100] が埋まっていて出ない');
 });

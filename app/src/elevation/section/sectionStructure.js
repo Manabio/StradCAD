@@ -52,10 +52,21 @@ export { beamDepthMm };
 /**
  * @typedef {{isVertical:boolean, axisWorld:number, spanLo:number, spanHi:number,
  *   widthMm:number, topZ:number, depthMm:number, layerTopZ:number, layerDepthMm:number, role:string,
- *   hiddenSpans:Array<[number,number]>, embeddedSpans:Array<[number,number]>}} BeamSolid
- *   embeddedSpans … hiddenSpans に隅の取り合いの許容を足した区間。断面の可視判定（`sectionVisibleInRoom`）が使う。
- *   hiddenSpans … スパンの一部だけを覆う壁の足元区間（世界座標・統合済み。`wallFootprintSpans`）。見え掛かり（空中横断・平行）
- *   から引く。全スパンを 1 枚の壁が覆う梁は `isInsideWall` で寄与自体から落ちるのでここには来ない。
+ *   embedding:{along:Array<[number,number]>, alongTol:Array<[number,number]>}}} BeamSolid
+ *   embedding … 梁と平行な壁の足元（`beamWallEmbedding` の along／alongTol。世界座標・統合済み）。
+ *   along はスパンの一部だけを覆う壁の足元区間で、見え掛かり（空中横断・平行）から引く。alongTol は along に隅の取り合いの
+ *   許容を足した区間で、断面の可視判定（`sectionVisibleInRoom`）が使う。全スパンを 1 枚の壁が覆う梁（fullyEmbedded）は
+ *   寄与自体から落ちるのでここには来ない。
+ */
+
+/**
+ * @typedef {{wall:object, storeyLo:number, storeyHi:number, graph:object|null}} WallEntry
+ *   壁と、その壁が立つ層の床〜直上の層の床（絶対 z。直上が無ければ Infinity）・壁を持つ層の graph（`wallEntriesOfLayers`）。
+ */
+
+/**
+ * @typedef {{along:Array<[number,number]>, alongTol:Array<[number,number]>, fullyEmbedded:boolean,
+ *   crossBands:Array<[number,number]>, bandsAt:Array<{lo:number, hi:number, faces:number[]}>}} BeamWallEmbedding
  */
 
 /**
@@ -69,72 +80,136 @@ export { beamDepthMm };
  *   扱い、上端zは持たない（同関数の設計判断を参照）。
  */
 
-/**
- * 梁の平面占有帯が、いずれかの壁の材厚（`Wall.materialRange`）の中に完全に収まり、かつ
- * その壁のスパンが梁のスパンを覆っているか（＝壁に隠れて見えない梁か）。
- *
- * 隠せる材の範囲は柱と同じ`wallConcealRange`（materialRange ∪ backingRange。finish/columnWrap.js
- * が唯一の供給源——外壁は対称壁のまま materialRange が軸〜外面の片側しか返さないため、
- * materialRange だけで判定すると通り芯上の胴差・桁が「壁の外」になる。ユーザー指示2026-10-07）。
- * 壁厚をハードコードしない規約は`switchbackCuts.js`の往復間の壁検出と同じ。厚み方向は
- * **完全に収まる**ことを要求する——壁より太い梁は一部が室内へ現れるため隠さない。
- *
- * スパン方向は「壁厚ぶんの食い違い」を許容する（完全被覆を要求しない）——梁はCLからCLまで
- * 張るのに対し、壁は隅で隣接壁と取り合うため`chamferWalls`がstart/endOffsetを半壁厚ほど
- * 詰める。完全被覆を要求すると、実データでは壁に埋まった梁でも常に「はみ出している」と
- * 判定され、この規則が一度も発動しない（実際にそう作り込んで検出した）。許容量を壁厚
- * そのものにしているのは、隅の詰めが隣接壁の半厚程度に収まるため——それを大きく超えて
- * 伸びる梁（隣のスパンまで通る梁）は端が見えるので隠さない。
- *
- * 壁の層の判定は `wallFootprintSpans` と同じ（opts.topZ・depthMm を渡すと、梁の天がその壁の層にある壁だけが埋没に効く
- * ——3階の壁が2階の高さの途中にある梁を隠さない。床梁〔天端＝FL〕は上下どちらの階の壁にも従来どおり埋まる）。
- * @param {object} beam - graph.beams の1件
- * @param {Array<{wall:object, storeyLo?:number, storeyHi?:number}>} wallEntries - 壁（`wallFootprintSpans` と同じ形）
- * @param {{topZ?:number, depthMm?:number}} [opts] - 梁の天の絶対z・成（省略時は層を見ない）
- * @returns {boolean}
- */
-function isInsideWall(beam, wallEntries, { topZ = null, depthMm = 0 } = {}) {
-  const bSpanLo = Math.min(beam.coord1, beam.coord2), bSpanHi = Math.max(beam.coord1, beam.coord2);
-  return wallFootprintSpans(beam, wallEntries, { withTol: true, topZ, depthMm }).some(([wLo, wHi]) =>
-    bSpanLo >= wLo - GAP_EPS && bSpanHi <= wHi + GAP_EPS);
-}
-
-/**
- * 梁の厚み方向の帯を隠せる（`wallConcealRange` に完全に収まる）同じ向きの壁ごとの、スパン方向の足元区間。
- * `isInsideWall` と同じ述語を区間にしたもの: 1 枚の壁がスパン全体を覆えば寄与から落とし、覆いきらなければ覆う区間だけ
- * 見え掛かりから引く（`BeamSolid.hiddenSpans`）——梁が柱で分割されているかどうか（部材の切れ目）で描画が変わらないようにする。
- * @param {object} beam graph.beams の 1 件
- * @param {Array<{wall:object, storeyLo?:number, storeyHi?:number}>} wallEntries 壁と、その壁が立つ層の床〜直上の層の床（絶対 z）
- * @param {{withTol?:boolean, topZ?:number, depthMm?:number, clipLo?:number, clipHi?:number}} [opts]
- *   withTol … 隅の取り合い（chamferWalls）ぶんの許容を足す（全スパン判定だけ。区間の控除は壁のスパンそのまま＝自由端で
- *   見える梁を隠しすぎない）／topZ・depthMm … 与えると、梁の天が「その壁の層の床−梁成」〜直上の床の間にある壁だけ
- *   （壁が立つ床の下の床梁まで。在来木造の横架材は再計算で天端 FL−100 になる〔conformWoodBeamLevels〕ので床ちょうどでは
- *   取りこぼす——QA 指摘 2026-10-19。別の層の壁の足元は梁に届かない＝2階の床下の梁を 3階の壁が隠さない）／clipLo/clipHi … 梁のスパンで切る
- * @returns {Array<[number, number]>} 世界座標の区間（統合しない。呼び出し側が `mergeSpans` する）
- */
-function wallFootprintSpans(beam, wallEntries, { withTol = false, topZ = null, depthMm = 0, clipLo = -Infinity, clipHi = Infinity } = {}) {
-  const halfW = (beam.sectionWidth ?? 0) / 2;
-  const bLo = beam.axisValue - halfW, bHi = beam.axisValue + halfW;
-  const out = [];
-  for (const { wall, storeyLo = -Infinity, storeyHi = Infinity } of wallEntries) {
-    if (wall.isVertical !== beam.isVertical) continue; // 同じ向きの壁だけが梁を隠せる
-    if (topZ != null && !(topZ >= storeyLo - depthMm - GAP_EPS && topZ <= storeyHi + GAP_EPS)) continue;
-    const cr = wallConcealRange(wall);
-    if (!cr) continue;
-    if (!(bLo >= cr.lo - GAP_EPS && bHi <= cr.hi + GAP_EPS)) continue;
-    const tol = withTol ? wallSpanTolMm(wall) : 0; // 隅の取り合い（chamferWalls）ぶんの許容
-    const lo = Math.max(Math.min(wall.coord1, wall.coord2) - tol, clipLo);
-    const hi = Math.min(Math.max(wall.coord1, wall.coord2) + tol, clipHi);
-    if (hi - lo > GAP_EPS) out.push([lo, hi]);
-  }
-  return out;
-}
-
 // スパン方向の許容＝materialRange の幅（隠す範囲 concealRange の幅ではない。下地帯まで広げても
 // 長さ方向の許容を広げる理由は無い——isColumnInsideWall と同じ裁定・QA所見2026-10-07）。
 function wallSpanTolMm(wall) {
   const mr = wall.materialRange;
   return mr ? Math.abs(mr.hi - mr.lo) : 0;
+}
+
+/**
+ * 層のスタック（cut.layers）→ 壁の一覧。各壁に、その壁が立つ層の床〜直上の層の床（絶対 z）を付ける
+ * （梁の天がその壁の層にあるかの判定用。`beamWallEmbedding` が使う）。順序は層の順・層内の壁の順。
+ * @param {Array<{graph:object, floorZMm:number}>|undefined} layers
+ * @returns {WallEntry[]}
+ */
+export function wallEntriesOfLayers(layers) {
+  const floors = (layers ?? []).map(l => l.floorZMm ?? 0);
+  return (layers ?? []).flatMap(l => {
+    const storeyLo = l.floorZMm ?? 0;
+    const above = floors.filter(f => f > storeyLo + GAP_EPS);
+    const storeyHi = above.length ? Math.min(...above) : Infinity;
+    return (l.graph?.walls ?? []).map(wall => ({ wall, storeyLo, storeyHi, graph: l.graph ?? null }));
+  });
+}
+
+// 梁の天が壁の層の中にあるか＝天が「その壁の層の床−梁成」〜直上の床の間（壁が立つ床の下の床梁まで。在来木造の横架材は
+// 再計算で天端 FL−100 になる〔conformWoodBeamLevels〕ので床ちょうどでは取りこぼす——QA 指摘 2026-10-19。別の層の壁は梁に届かない
+// ＝2階の床下の梁を 3階の壁が隠さない）。層の述語はここ 1 箇所。判定には元の天端・成（layerTopZ/layerDepthMm）を使う——
+// 部屋帯の clipBeamsToBand が topZ/depthMm を帯の 0..CH へ書き換えた後でも同じ層で数える。
+function beamTopInStorey(beam, { storeyLo, storeyHi }) {
+  const topZ = beam.layerTopZ ?? beam.topZ, depthMm = beam.layerDepthMm ?? beam.depthMm;
+  return topZ >= storeyLo - depthMm - GAP_EPS && topZ <= storeyHi + GAP_EPS;
+}
+
+// 全高の壁か（腰壁・垂れ壁・隔て板は全高とみなさない）。
+function isFullHeightEntry({ wall, graph }, partitionLinesOf) {
+  return !(isKneeOrDropWall(graph, wall) || isStairPartitionWall(wall, partitionLinesOf(graph)));
+}
+
+/**
+ * 「梁は壁の中か」の唯一の判定（梁の厚み方向の帯を、壁の隠せる材〔`wallConcealRange`〕に照らす）。
+ * 隠せる材の範囲は柱と同じ`wallConcealRange`（materialRange ∪ backingRange。finish/columnWrap.js
+ * が唯一の供給源——外壁は対称壁のまま materialRange が軸〜外面の片側しか返さないため、
+ * materialRange だけで判定すると通り芯上の胴差・桁が「壁の外」になる。ユーザー指示2026-10-07）。厚み方向は
+ * **完全に収まる**ことを要求する——壁より太い梁は一部が室内へ現れるため隠さない。層の述語は `beamTopInStorey`。
+ *
+ * 平行な壁（梁と同じ向き）の求め方は opts.wallBand で選ぶ（S3a は呼び出し側ごとの旧来の意味を再現するための移行用）:
+ * - 'single' … 壁 1 枚ごとに、帯が壁の `wallConcealRange` に収まるものを数える。結果は along／alongTol／fullyEmbedded。
+ *   along＝その壁の足元区間（梁のスパンで切って統合。許容なし＝自由端で見える梁を隠しすぎない。見え掛かりから引く）。
+ *   alongTol＝along に隅の取り合い（chamferWalls が壁の端を半壁厚ほど詰める）ぶんの許容〔`wallSpanTolMm`〕を足した区間
+ *   （断面の可視判定が引く）。fullyEmbedded＝許容つきの 1 枚の壁がスパン全体を覆う（梁は壁に隠れて見えない＝寄与から落とす）。
+ * - 'merged' … 切断位置 opts.at を含む同じ軸 CL の壁を `boundaryMaterialRange` で合併した 1 枚の帯（下地オーナー壁＋仕上げ薄壁）に、
+ *   梁の芯が入るものを bandsAt として返す（lo/hi＝合併した帯・faces＝その帯を作る壁の面の座標）。at が数でなければ []。
+ *   このとき along／alongTol は []・fullyEmbedded は false（平行の埋没は 'single' の呼び出しが担う）。
+ *
+ * opts.wallFilter … 'all'＝全部の壁（腰壁・垂れ壁・隔て板も）／'fullHeight'＝全高の壁だけ（要 opts.partitionLinesOf）。
+ * 梁と直交して梁の帯をスパンで覆う壁の帯 crossBands（壁と壁の取り合いで梁を隠す壁としては数えない帯。スパンが梁の芯で終わる
+ * L 字の隅は数えない＝保守側）は、wallFilter が 'fullHeight' のときだけ求める（直交壁は常に全高の壁だけ）。
+ *
+ * 失敗系（例外は投げず、描く側へ倒す）: 壁なし・層の外の梁・梁が帯に収まらない・非有限の座標・concealRange が null の壁は数えない
+ * （＝free・fullyEmbedded false・空の配列）。幅 0 の梁は芯の 1 点で判定する。
+ * @param {{isVertical:boolean, axisWorld:number, widthMm:number, spanLo:number, spanHi:number,
+ *   topZ?:number, depthMm?:number, layerTopZ?:number, layerDepthMm?:number}} beam - BeamSolid（寄与の組立て中は同じキーの素の値）
+ * @param {WallEntry[]} wallEntries - `wallEntriesOfLayers` の結果
+ * @param {{wallBand?:'single'|'merged', wallFilter?:'all'|'fullHeight', partitionLinesOf?:(graph:object)=>any, at?:number}} [opts]
+ *   at … 'merged' の切断位置（梁の長さ方向の世界座標）
+ * @returns {BeamWallEmbedding}
+ */
+export function beamWallEmbedding(beam, wallEntries, opts = {}) {
+  const { wallBand = 'single', wallFilter = 'all', at = null } = opts;
+  const fullHeightOnly = wallFilter === 'fullHeight';
+  const partitionLinesOf = opts.partitionLinesOf ?? makePartitionLinesOf();
+  const passes = (entry) => !fullHeightOnly || isFullHeightEntry(entry, partitionLinesOf);
+  const inStorey = (wallEntries ?? []).filter(e => beamTopInStorey(beam, e));
+  const parallel = inStorey.filter(({ wall }) => !!wall.isVertical === !!beam.isVertical);
+  const out = { along: [], alongTol: [], fullyEmbedded: false, crossBands: [], bandsAt: [] };
+
+  if (wallBand === 'single') {
+    const halfW = (beam.widthMm ?? 0) / 2;
+    const bLo = beam.axisWorld - halfW, bHi = beam.axisWorld + halfW;
+    const walls = parallel.filter(e => {
+      const cr = wallConcealRange(e.wall);
+      return cr && bLo >= cr.lo - GAP_EPS && bHi <= cr.hi + GAP_EPS && passes(e);
+    }).map(e => e.wall);
+    // 壁の足元区間（tol＝許容。clip＝梁のスパンで切る）。退化（幅が GAP_EPS 以下）は数えない
+    const footprint = (wall, tol, clipLo, clipHi) => {
+      const lo = Math.max(Math.min(wall.coord1, wall.coord2) - tol, clipLo);
+      const hi = Math.min(Math.max(wall.coord1, wall.coord2) + tol, clipHi);
+      return hi - lo > GAP_EPS ? [lo, hi] : null;
+    };
+    const spans = (withTol) => walls.map(w => footprint(w, withTol ? wallSpanTolMm(w) : 0, beam.spanLo, beam.spanHi)).filter(Boolean);
+    out.along = mergeSpans(spans(false));
+    out.alongTol = mergeSpans(spans(true));
+    out.fullyEmbedded = walls.some(w => {
+      const s = footprint(w, wallSpanTolMm(w), -Infinity, Infinity);
+      return s && beam.spanLo >= s[0] - GAP_EPS && beam.spanHi <= s[1] + GAP_EPS;
+    });
+  } else if (Number.isFinite(at)) {
+    const candidates = parallel.filter(e => {
+      if (!wallConcealRange(e.wall) || !passes(e)) return false;
+      const wLo = Math.min(e.wall.coord1, e.wall.coord2), wHi = Math.max(e.wall.coord1, e.wall.coord2);
+      return at >= wLo - GAP_EPS && at <= wHi + GAP_EPS;
+    }).map(e => e.wall);
+    const done = new Set();
+    for (const host of candidates) {
+      if (done.has(host)) continue;
+      const group = candidates.filter(w => w.axisCL?.id === host.axisCL?.id);
+      for (const w of group) done.add(w);
+      const band = boundaryMaterialRange(host, { centerCoord: at }, { walls: group }, wallConcealRange);
+      if (!(beam.axisWorld >= band.lo - GAP_EPS && beam.axisWorld <= band.hi + GAP_EPS)) continue;
+      const faces = group.flatMap(w => {
+        const cr = wallConcealRange(w);
+        return [w.materialRange?.lo, w.materialRange?.hi, cr?.lo, cr?.hi];
+      }).filter(Number.isFinite);
+      out.bandsAt.push({ lo: band.lo, hi: band.hi, faces });
+    }
+  }
+
+  if (fullHeightOnly) {
+    const halfW = beam.widthMm / 2; // 幅が無い（undefined）梁は帯が取れない＝数えない
+    const bLo = beam.axisWorld - halfW, bHi = beam.axisWorld + halfW;
+    for (const e of inStorey) {
+      if (!!e.wall.isVertical === !!beam.isVertical) continue; // 梁と直交する壁
+      const cr = wallConcealRange(e.wall);
+      if (!cr) continue;
+      const wLo = Math.min(e.wall.coord1, e.wall.coord2), wHi = Math.max(e.wall.coord1, e.wall.coord2);
+      if (!(bLo >= wLo - GAP_EPS && bHi <= wHi + GAP_EPS)) continue;
+      if (!isFullHeightEntry(e, partitionLinesOf)) continue;
+      out.crossBands.push([cr.lo, cr.hi]);
+    }
+  }
+  return out;
 }
 
 // 梁の芯が帯自身の部屋の広がり（cut.bandRoomBounds。世界座標の箱）の中にあるか。
@@ -151,8 +226,8 @@ function withinBandRoom(cut, axisWorld) {
  * 立ちはだかりうる壁）。上階の壁は帯の天井より上にしか無いので、下階の面から見た遮蔽物には
  * ならない。
  *
- * **これは「遮蔽」用の壁集合であって「埋没」用ではない**——梁の埋没（`isInsideWall`・`embeddedSpans`）は
- * 全層の壁を「梁の天がその壁の層にあるか」（`wallFootprintSpans` の topZ 判定。床の下の床梁まで含む）で
+ * **これは「遮蔽」用の壁集合であって「埋没」用ではない**——梁の埋没（`beamWallEmbedding`）は
+ * 全層の壁を「梁の天がその壁の層にあるか」（`beamTopInStorey`。床の下の床梁まで含む）で
  * 絞る別の判定で、この足元zの判定とは揃えない。2階の床梁は2階の壁に埋まることも1階の壁の上に乗ることもあり、
  * 足元zで層を落とすとその埋没判定が壊れる（＝壁の中の梁断面が室内に出る）。
  *
@@ -197,25 +272,22 @@ export function structuralContribution(layers) {
   // ユーザー実機指摘2026-08「2階床の構造材梁断面は、壁の中なら描画しない」: 壁の材厚の中に
   // 収まる梁は壁に隠れて見えないため寄与から落とす。壁は全レイヤー（自階・上階）から集める
   // ——2階床梁は1階の壁の上に乗る（自階の壁が隠す）ことも、2階の壁の中に入ることもあるため。
-  // 壁ごとに、立つ層の床〜直上の層の床（梁の天がその壁の層にあるかの z 判定用。全スパン判定 isInsideWall・
-  // 部分控除 hiddenSpans・断面の可視判定 embeddedSpans が共有する）
-  const floors = (layers ?? []).map(l => l.floorZMm ?? 0);
-  const wallEntries = (layers ?? []).flatMap(l => {
-    const storeyLo = l.floorZMm ?? 0;
-    const above = floors.filter(f => f > storeyLo + GAP_EPS);
-    const storeyHi = above.length ? Math.min(...above) : Infinity;
-    return (l.graph?.walls ?? []).map(wall => ({ wall, storeyLo, storeyHi }));
-  });
+  // 壁ごとに、立つ層の床〜直上の層の床（梁の天がその壁の層にあるかの z 判定用。beamWallEmbedding が使う）
+  const wallEntries = wallEntriesOfLayers(layers);
   const result = [];
   for (const layer of layers ?? []) {
     for (const beam of layer.graph?.beams ?? []) {
       if (EXCLUDED_BEAM_ROLES.has(beam.role)) continue; // 追加仕様2026-08: 基礎梁／土台(role:'sill')は展開図に描かない
       const depthMm = beamDepthMm(beam);
       const topZ = layer.floorZMm + beam.levelOffset;
-      // 梁の天がその壁の層にある壁だけで判定する（3階の壁が2階の高さの途中にある梁を隠さない）
-      if (isInsideWall(beam, wallEntries, { topZ, depthMm })) continue;
       const entry = findSectionEntry(beam.sectionDefId);
       const spanLo = Math.min(beam.coord1, beam.coord2), spanHi = Math.max(beam.coord1, beam.coord2);
+      // 梁の天がその壁の層にある壁だけで判定する（3階の壁が2階の高さの途中にある梁を隠さない）。
+      // 壁 1 枚がスパン全体を覆う梁（fullyEmbedded）は壁に隠れて見えないので寄与に入れない
+      const { along, alongTol, fullyEmbedded } = beamWallEmbedding(
+        { isVertical: beam.isVertical, axisWorld: beam.axisValue, widthMm: beam.sectionWidth, spanLo, spanHi, layerTopZ: topZ, layerDepthMm: depthMm },
+        wallEntries, { wallBand: 'single', wallFilter: 'all' });
+      if (fullyEmbedded) continue;
       result.push({
         section: entry ?? null, // 断面形状（H形鋼のフランジ・ウェブ等）を作図で使う
         isVertical: beam.isVertical,
@@ -229,13 +301,12 @@ export function structuralContribution(layers) {
         layerTopZ: topZ,
         layerDepthMm: depthMm,
         role: beam.role,
-        // スパンの一部だけを覆う壁の足元区間（見え掛かりから引く。ユーザー指摘 2026-10-19 roof-test1 2階 階段 A:
+        // 壁の足元（along＝スパンの一部だけを覆う壁の足元区間で、見え掛かりから引く。ユーザー指摘 2026-10-19 roof-test1 2階 階段 A:
         // 3階の到達辺の床梁が柱で分かれておらず往路側の壁〔3階の階段吹抜けの壁〕の足元を越えて 1 本で続くため、
-        // 全スパン判定〔isInsideWall〕に掛からず全長が中線で出た）。梁の天がその壁の層にある壁だけ・壁のスパンそのまま
-        hiddenSpans: mergeSpans(wallFootprintSpans(beam, wallEntries, { topZ, depthMm, clipLo: spanLo, clipHi: spanHi })),
-        // 同じ壁の足元区間に隅の取り合いの許容を足したもの（断面の可視判定 sectionVisibleInRoom が「室内側へ続く残り」から引く。
-        // 許容が無いと、壁に埋まった梁の端の隅の詰めぶんの切れ端が「残り」と数えられる）
-        embeddedSpans: mergeSpans(wallFootprintSpans(beam, wallEntries, { withTol: true, topZ, depthMm, clipLo: spanLo, clipHi: spanHi })),
+        // 全スパン判定〔fullyEmbedded〕に掛からず全長が中線で出た）。alongTol＝同じ区間に隅の取り合いの許容を足したもの
+        // （断面の可視判定 sectionVisibleInRoom が「室内側へ続く残り」から引く。許容が無いと、壁に埋まった梁の端の隅の詰めぶんの
+        // 切れ端が「残り」と数えられる）
+        embedding: { along, alongTol },
       });
     }
   }
@@ -484,7 +555,7 @@ function isKneeOrDropWall(graph, wall) {
  * partitionLinesOf は層の graph → stairPartitionLines の結果（切断ごとに 1 回求めて memo したもの）。
  * @returns {object[]}
  */
-function fullHeightWallsCovering(cut, beam, partitionLinesOf, { byBeamTop = false } = {}) {
+function fullHeightWallsCovering(cut, beam, partitionLinesOf) {
   const layers = cut.layers ?? [];
   const floors = layers.map(l => l.floorZMm ?? 0);
   const bottom = beam.topZ - beam.depthMm;
@@ -493,14 +564,7 @@ function fullHeightWallsCovering(cut, beam, partitionLinesOf, { byBeamTop = fals
     const lo = layer.floorZMm ?? 0;
     const above = floors.filter(fl => fl > lo + GAP_EPS);
     const hi = above.length ? Math.min(...above) : Infinity;
-    // byBeamTop: 平行壁の足元（wallFootprintSpans）と同じ層の述語＝梁の天がその層の「床−梁成」〜直上の床にある
-    // （床の下の床梁、天が床ちょうどでない在来木造の横架材まで）。既定は梁の z 範囲を完全に覆う層だけ（遮蔽用）
-    // 層の判定には元の天端・成（layerTopZ/layerDepthMm）を使う——部屋帯の clipBeamsToBand が topZ/depthMm を帯の 0..CH へ書き換えた後でも、
-    // 平行壁の足元（hiddenSpans。元の値で判定）と同じ層で数える（上階の下がり梁の直交壁を落とさない）
-    const inLayer = byBeamTop
-      ? (beam.layerTopZ ?? beam.topZ) >= lo - (beam.layerDepthMm ?? beam.depthMm) - GAP_EPS && (beam.layerTopZ ?? beam.topZ) <= hi + GAP_EPS
-      : bottom >= lo - GAP_EPS && beam.topZ <= hi + GAP_EPS;
-    if (!inLayer) continue;
+    if (!(bottom >= lo - GAP_EPS && beam.topZ <= hi + GAP_EPS)) continue;
     const walls = layer.graph?.walls ?? [];
     if (walls.length === 0) continue;
     const partitionLines = partitionLinesOf(layer.graph);
@@ -558,30 +622,26 @@ function columnCoveredSpans(columnSolids, layers, beam, halfW) {
   return spans;
 }
 
-/**
- * 梁と直交し、梁の帯をスパンで覆う壁の帯（`wallConcealRange`。梁の長さ方向の座標）。腰壁・垂れ壁・隔て板は除く。
- * 壁の層は平行壁の足元と同じ述語（梁の天がその層にある。fullHeightWallsCovering の byBeamTop）。
- * 梁の帯を覆わない直交壁（スパンが梁の芯で終わる L 字の隅など）は数えない＝帯を除かない・控除もしない（保守側に倒す）。
- * 断面の埋没判定（isBeamEmbeddedAtCut）と可視判定（sectionVisibleInRoom）が共有する。
- * @returns {Array<[number, number]>} 世界座標の帯
- */
-function perpendicularWallBands(cut, beam, halfW, partitionLinesOf) {
-  const bLo = beam.axisWorld - halfW, bHi = beam.axisWorld + halfW;
-  const bands = [];
-  for (const wall of fullHeightWallsCovering(cut, beam, partitionLinesOf, { byBeamTop: true })) {
-    if (!!wall.isVertical === !!beam.isVertical) continue; // 梁と直交する壁
-    const cr = wallConcealRange(wall);
-    if (!cr) continue;
-    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-    if (!(bLo >= wLo - GAP_EPS && bHi <= wHi + GAP_EPS)) continue;
-    bands.push([cr.lo, cr.hi]);
-  }
-  return bands;
+// 切断ごとの壁の文脈: 層の壁の一覧（beamWallEmbedding の入力）と、層の graph → 隔て板の線の memo。
+function makeWallContext(cut, partitionLinesOf) {
+  return { wallEntries: wallEntriesOfLayers(cut.layers), partitionLinesOf };
+}
+
+// 梁と直交して梁の帯を覆う全高の壁の帯（beamWallEmbedding の crossBands）。断面の埋没判定（isBeamEmbeddedAtCut）と
+// 可視判定（sectionVisibleInRoom）が共有する。
+function crossWallBands(beam, wc) {
+  return beamWallEmbedding(beam, wc.wallEntries, { wallBand: 'merged', wallFilter: 'fullHeight', partitionLinesOf: wc.partitionLinesOf }).crossBands;
+}
+
+// 切断位置で梁を内に持つ壁の合併帯（beamWallEmbedding の bandsAt）。
+function parallelWallBandsAt(cut, beam, wc) {
+  return beamWallEmbedding(beam, wc.wallEntries,
+    { wallBand: 'merged', wallFilter: 'fullHeight', partitionLinesOf: wc.partitionLinesOf, at: cut.line.axisValue }).bandsAt;
 }
 
 /**
  * 切断位置で梁が壁に埋まっているか（旧 isBeamInWallAt の一般化）。
- * 梁と平行な壁の足元（`beam.hiddenSpans`。層判定あり・tol なし）から、「梁と直交する壁」の帯（`perpendicularWallBands`。
+ * 梁と平行な壁の足元（`beam.embedding.along`。層判定あり・tol なし）から、「梁と直交する壁」の帯（`crossBands`。
  * 壁と壁の取り合いで、梁を隠す壁としては数えない。切断位置を含まない帯を引いても
  * 切断位置の内外は変わらないので、切断位置を含む帯への絞り込みはしない）を除き、残った区間の**内部**に切断位置があれば埋まっている。
  * 直交壁のスパンが梁の帯を覆わない（梁の芯で終わる L 字の隅）なら帯を除かない＝埋まっている扱い（保守側）。
@@ -590,10 +650,10 @@ function perpendicularWallBands(cut, beam, halfW, partitionLinesOf) {
  * 面の向こう側の同じ通りの壁は、切断位置の直交壁の帯の中で尽きるので数えない（A2）。
  * 平行な壁の途中で切る（階段帯）なら直交壁が無く、除かれないので埋まっている。
  */
-function isBeamEmbeddedAtCut(cut, beam, halfW, partitionLinesOf) {
+function isBeamEmbeddedAtCut(cut, beam, wc) {
   const at = cut.line.axisValue;
-  const merged = mergeSpans(perpendicularWallBands(cut, beam, halfW, partitionLinesOf));
-  for (const [lo, hi] of beam.hiddenSpans ?? []) {
+  const merged = mergeSpans(crossWallBands(beam, wc));
+  for (const [lo, hi] of beam.embedding?.along ?? []) {
     for (const [a, b] of subtractSpans(lo, hi, merged)) {
       if (at > a + GAP_EPS && at < b - GAP_EPS) return true;
     }
@@ -604,24 +664,24 @@ function isBeamEmbeddedAtCut(cut, beam, halfW, partitionLinesOf) {
 /**
  * 梁の断面が見えるか＝切断位置 at から**室内側へ梁が実際に続き、その続きが壁の材厚・柱包みに隠れずに残る**か。
  * 室内側の区間（viewSign>0 なら [at, spanHi]・<0 なら [spanLo, at]）から、(1) 梁と直交する全高の壁の材厚
- * （梁の帯を壁のスパンが覆うもの。perpendicularWallBands）と (2) 柱包みのスパン範囲を引いて、
+ * （梁の帯を壁のスパンが覆うもの。`crossBands`）と (2) 柱包みのスパン範囲を引いて、
  * 残りが無ければ断面は壁・柱の中で終わっていて見えない。切断線が壁の中に無い（階段帯の室内側オフセット済み）
  * ときは壁の控除は掛からず、柱包みだけが効く。
  *
- * (3) 梁と平行な壁の足元（`beam.embeddedSpans`。梁の帯が壁の材厚に完全に収まり、梁の天がその壁の層にある壁）も引く。
+ * (3) 梁と平行な壁の足元（`beam.embedding.alongTol`。梁の帯が壁の材厚に完全に収まり、梁の天がその壁の層にある壁）も引く。
  * 切断位置が壁のスパンの中でも、梁がその壁の先（室内側）へ続けば断面は見える（面の向こう側の同じ通りの壁が断面を消さない）。
  * 梁が壁の中に収まって室内側に残りが無ければ描かない（旧: 切断位置の1点だけで見る isBeamInWallAt。2026-10-22 に一般化して削除）。
  */
-function sectionVisibleInRoom(cut, beam, halfW, colSpans, partitionLinesOf, fromRoomSide = false) {
+function sectionVisibleInRoom(cut, beam, colSpans, wc, fromRoomSide = false) {
   const at = cut.line.axisValue;
-  const wallSpans = perpendicularWallBands(cut, beam, halfW, partitionLinesOf);
+  const wallSpans = crossWallBands(beam, wc);
   // fromRoomSide … 部屋帯の面の切断（壁を見る向き = viewSign は室内から壁へ向かう）では、室内側は viewSign の逆
   const sign = (cut.viewSign ?? 1) * (fromRoomSide ? -1 : 1);
   const [rLo, rHi] = sign > 0 ? [at, beam.spanHi] : [beam.spanLo, at];
   if (!(rHi - rLo > GAP_EPS)) return false;
   // 室内側の区間から壁の材厚と柱包みを引く（仕上げ薄壁・下地オーナー壁など隣り合う壁は統合で連なる。
   // 室内側の遠方の壁が梁の途中を隠しても、手前に残りがあれば断面は見える）
-  const hidden = mergeSpans([...wallSpans, ...colSpans, ...(beam.embeddedSpans ?? [])]);
+  const hidden = mergeSpans([...wallSpans, ...colSpans, ...(beam.embedding?.alongTol ?? [])]);
   return subtractSpans(rLo, rHi, hidden).some(([lo, hi]) => hi - lo > GAP_EPS);
 }
 
@@ -728,16 +788,16 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
   const prims = [];
   const outlines = []; // 断面の閉じた輪郭（床の遮蔽を輪郭の単位で判定する）: {prims, covered(dir)}
   // 層の graph ごとの隔て板の線（切断ごとに 1 回だけ求める。可視区間の判定にも同じものを渡す）
-  const partitionLinesOf = makePartitionLinesOf();
-  for (const piece of visibleBeamPieces(contribution, cut, columns, floorProfile, { ...opts, partitionLinesOf })) {
+  const wc = makeWallContext(cut, makePartitionLinesOf());
+  for (const piece of visibleBeamPieces(contribution, cut, columns, floorProfile, { ...opts, partitionLinesOf: wc.partitionLinesOf, wallEntries: wc.wallEntries })) {
     const { beam, kind, xLo, xHi, zHi, zLo } = piece;
     if (kind === 'section') {
       const halfW = beam.widthMm / 2, x = piece.x;
       const outline = sectionOutline(cut, xLo, xHi, zHi, beam.depthMm, beam.section);
       prims.push(...outline);
       // 断面は閉じた輪郭 1 つの単位で床の遮蔽を判定する（穴の縁で半分だけ開いた形で残さない）。階段側の壁が断面を覆うかは遅延評価
-      outlines.push({ prims: outline, covered: (dir) => stairSideWallCovers(cut, beam, halfW, x, dir, partitionLinesOf),
-        cutRect: opts.wallLineCuts ? wallLineCutRect(cut, beam, halfW, x, partitionLinesOf) : null });
+      outlines.push({ prims: outline, covered: (dir) => stairSideWallCovers(cut, beam, halfW, x, dir, wc),
+        cutRect: opts.wallLineCuts ? wallLineCutRect(cut, beam, halfW, x, wc) : null });
     } else if (kind === 'airborne') {
       prims.push(emitLine(cut, xLo, zHi, xHi, zHi, ElevationLineRole.SILHOUETTE));
       prims.push(emitLine(cut, xLo, zLo, xHi, zLo, ElevationLineRole.SILHOUETTE));
@@ -814,6 +874,7 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
   }
   // 層の graph ごとの隔て板の線（切断ごとに 1 回だけ求める）
   const partitionLinesOf = opts.partitionLinesOf ?? makePartitionLinesOf();
+  const wc = { wallEntries: opts.wallEntries ?? wallEntriesOfLayers(cut.layers), partitionLinesOf };
   for (const beam of contribution ?? []) {
     const halfW = beam.widthMm / 2;
     const colSpans = columnSolids ? columnCoveredSpans(columnSolids, cut.layers, beam, halfW) : [];
@@ -835,8 +896,8 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
       if (belowProfile(x - halfW, x + halfW, beam)) continue;
       // 切断位置から室内側へ梁が続かない／続きが壁の材厚・柱包みに隠れる断面は見えない（断面の可視性。sectionVisibleInRoom）
       // 切断位置で梁が壁に埋まっていれば（壁の断面の中に梁断面を重ねない）描かない
-      if (isBeamEmbeddedAtCut(cut, beam, halfW, partitionLinesOf)) continue;
-      if (!sectionVisibleInRoom(cut, beam, halfW, colSpans, partitionLinesOf, !!opts.roomFaceCut)) continue;
+      if (isBeamEmbeddedAtCut(cut, beam, wc)) continue;
+      if (!sectionVisibleInRoom(cut, beam, colSpans, wc, !!opts.roomFaceCut)) continue;
       pieces.push({ beam, kind: 'section', x, xLo: x - halfW, xHi: x + halfW, zLo: beam.topZ - beam.depthMm, zHi: beam.topZ });
       continue;
     }
@@ -859,8 +920,8 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
     if (airborne) {
       const { lo: drawLo, hi: drawHi } = cutDrawRange(cut);
       // 壁（規則A）・柱（規則B）に隠れるスパン区間を引き、残る区間ごとに天地を描く
-      // 壁の足元（beam.hiddenSpans。スパンの一部だけを覆う壁）も引く——柱で分かれた梁と 1 本で続く梁で描画を変えない
-      const hidden = mergeSpans([...wallCoveredSpans(cut, beam, halfW, partitionLinesOf), ...colSpans, ...(beam.hiddenSpans ?? [])]);
+      // 壁の足元（beam.embedding.along。スパンの一部だけを覆う壁）も引く——柱で分かれた梁と 1 本で続く梁で描画を変えない
+      const hidden = mergeSpans([...wallCoveredSpans(cut, beam, halfW, partitionLinesOf), ...colSpans, ...(beam.embedding?.along ?? [])]);
       for (const [segLo, segHi] of subtractSpans(beam.spanLo, beam.spanHi, hidden)) {
         const xa = localXOf(cut, segLo), xb = localXOf(cut, segHi);
         const loX = Math.max(drawLo, Math.min(xa, xb));
@@ -879,8 +940,8 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
     const xLo = localXOf(cut, beam.spanLo), xHi = localXOf(cut, beam.spanHi);
     if (belowProfile(Math.min(xLo, xHi), Math.max(xLo, xHi), beam)) continue;
     const zTop = beam.topZ, zBot = beam.topZ - beam.depthMm;
-    // 柱（規則B）・壁の足元（beam.hiddenSpans）に中断される梁は区間ごとに天地を描く。両端の縦線は元の梁の端が残っている区間だけ
-    for (const [segLo, segHi] of subtractSpans(beam.spanLo, beam.spanHi, mergeSpans([...colSpans, ...(beam.hiddenSpans ?? [])]))) {
+    // 柱（規則B）・壁の足元（beam.embedding.along）に中断される梁は区間ごとに天地を描く。両端の縦線は元の梁の端が残っている区間だけ
+    for (const [segLo, segHi] of subtractSpans(beam.spanLo, beam.spanHi, mergeSpans([...colSpans, ...(beam.embedding?.along ?? [])]))) {
       const xa = localXOf(cut, segLo), xb = localXOf(cut, segHi);
       const loX = Math.min(xa, xb), hiX = Math.max(xa, xb);
       const ends = [];
@@ -899,8 +960,8 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
  * 壁は、梁と平行で梁の芯が材の範囲（`wallConcealRange`）に入り、そのスパンが切断位置を含むもの（層は梁の天がその層にある壁）。
  * 壁が無ければ覆っていない。
  */
-function stairSideWallCovers(cut, beam, halfW, xCenter, dir, partitionLinesOf) {
-  for (const band of parallelWallBands(cut, beam, partitionLinesOf)) {
+function stairSideWallCovers(cut, beam, halfW, xCenter, dir, wc) {
+  for (const band of parallelWallBandsAt(cut, beam, wc)) {
     const la = localXOf(cut, band.lo), lb = localXOf(cut, band.hi);
     const face = dir > 0 ? Math.max(la, lb) : Math.min(la, lb); // 階段側の面（合併した帯の外側の面）
     if ((face - xCenter) * dir > halfW + GAP_EPS) return true;
@@ -909,44 +970,14 @@ function stairSideWallCovers(cut, beam, halfW, xCenter, dir, partitionLinesOf) {
 }
 
 /**
- * 切断位置で梁を内に持つ壁（梁と平行で、スパンが切断位置を含み、梁の芯が材の帯の中にある）。**同じ軸 CL 上の複数壁（下地オーナー壁＋仕上げ薄壁）は
- * 材を合併した 1 枚の帯**として扱う（建具の拘束と同じ合併。`openings/openingMove.js` の `boundaryMaterialRange` を共有。materialRange だけでは
- * 外壁の対称壁が片側しか返さないので、1 枚ごとの区間は `wallConcealRange`）。
- * @returns {Array<{lo:number, hi:number, faces:number[]}>} lo/hi … 合併した帯（世界座標）／faces … その帯を作る壁の面（材・隠せる材の両端。世界座標）
- */
-function parallelWallBands(cut, beam, partitionLinesOf) {
-  const at = cut.line.axisValue;
-  const walls = fullHeightWallsCovering(cut, beam, partitionLinesOf, { byBeamTop: true }).filter(w => {
-    if (!!w.isVertical !== !!beam.isVertical || !wallConcealRange(w)) return false; // 梁と平行な壁
-    const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
-    return at >= wLo - GAP_EPS && at <= wHi + GAP_EPS;
-  });
-  const out = [];
-  const done = new Set();
-  for (const host of walls) {
-    if (done.has(host)) continue;
-    const group = walls.filter(w => w.axisCL?.id === host.axisCL?.id);
-    for (const w of group) done.add(w);
-    const band = boundaryMaterialRange(host, { centerCoord: at }, { walls: group }, wallConcealRange);
-    if (!(beam.axisWorld >= band.lo - GAP_EPS && beam.axisWorld <= band.hi + GAP_EPS)) continue;
-    const faces = group.flatMap(w => {
-      const cr = wallConcealRange(w);
-      return [w.materialRange?.lo, w.materialRange?.hi, cr?.lo, cr?.hi];
-    }).filter(Number.isFinite);
-    out.push({ lo: band.lo, hi: band.hi, faces });
-  }
-  return out;
-}
-
-/**
  * 壁内の梁が、壁の面から断面でのぞく（部屋側から見える）ときの、壁の断面線を分ける矩形（断面ローカル x・絶対 z）。
- * 切断位置で梁を内に持つ壁（`parallelWallBands`）の面のうち、梁の断面の x 範囲の厳密な内側に入るもの（＝梁が壁の面から出ている。
+ * 切断位置で梁を内に持つ壁（`bandsAt`）の面のうち、梁の断面の x 範囲の厳密な内側に入るもの（＝梁が壁の面から出ている。
  * 壁が断面を覆う＝面が半幅より遠いなら入らない）。`xs` はその壁の面の x だけ——矩形が切るのはその面に立つ縦線だけで、床線など
  * ほかの線は切らない。無ければ null（ユーザー裁定 2026-10-23「壁内の梁が部屋側から見える場合だけ分断する」）。
  */
-function wallLineCutRect(cut, beam, halfW, x, partitionLinesOf) {
+function wallLineCutRect(cut, beam, halfW, x, wc) {
   const xs = [];
-  for (const band of parallelWallBands(cut, beam, partitionLinesOf)) {
+  for (const band of parallelWallBandsAt(cut, beam, wc)) {
     for (const f of band.faces) {
       const lx = localXOf(cut, f);
       if (lx > x - halfW + GAP_EPS && lx < x + halfW - GAP_EPS && !xs.some(v => Math.abs(v - lx) <= GAP_EPS)) xs.push(lx);
