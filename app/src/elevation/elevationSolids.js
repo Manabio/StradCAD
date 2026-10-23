@@ -140,7 +140,7 @@ export function solidPrimitivesForFace(face, opts) {
   const { beams, columnSolids } = faceBeamsAndColumns(cut);
   const prims = [
     // 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）
-    ...structuralPrimitivesForCut(beams, faceBeamCut(face, cut, columnSolids, opts), undefined, null, { columnSolids, roomFaceCut: true }),
+    ...structuralPrimitivesForCut(beams, faceBeamCut(face, cut, columnSolids, opts), undefined, null, { columnSolids, fromRoomSide: true }),
     ...structuralColumnPrimitivesForCut(columnSolids, cut),
   ];
   return clampPrimsToRun(prims, face.run);
@@ -167,7 +167,7 @@ export function beamBlockerRectsForFace(face, opts) {
   const { beams, columnSolids } = faceBeamsAndColumns(cut);
   if (beams.length === 0) return [];
   const rects = [];
-  for (const p of visibleBeamPieces(beams, faceBeamCut(face, cut, columnSolids, opts), undefined, null, { columnSolids, roomFaceCut: true })) {
+  for (const p of visibleBeamPieces(beams, faceBeamCut(face, cut, columnSolids, opts), undefined, null, { columnSolids, fromRoomSide: true })) {
     const xLo = Math.max(p.xLo, 0), xHi = Math.min(p.xHi, face.run);
     if (xHi - xLo <= GAP_EPS) continue;
     rects.push({ xLo, xHi, zLo: p.zLo, zHi: p.zHi, split: p.kind !== 'section' });

@@ -1462,8 +1462,13 @@ test('【WP-C】stairFaceSequence: 踊り場back辺に置いたrole:landing梁�
   // 期待値更新（ユーザー実機指摘2026-08「6」A「材が空中に横断しているので、『A』に中線で
   // 鋼材の天地に線を描画」）: seq3（踊り場の壁を見る面）は、切断線と平行で室内を横切る梁の
   // 天地2本をSILHOUETTE（中線）で描くようになった。
+  // 期待値更新（S3b-2 2026-10-24「面の通りの梁は階段帯でも parallel」）: この梁は seq3 の面の軸（y0）が
+  // 梁の幅の帯の中＝面の通りの梁なので、中線（空中）ではなく細線の parallel で描く。parallel は airborne と同じく
+  // 切断線の描画範囲へ切り詰める。旧実装（切り詰めなし）で parallel にすると梁の端の縦線が出て4本になったが、
+  // 梁の端（x0・x1）は描画範囲の外なので、切り詰める今は縦線が出ず天地の2本のまま。
+  // 旧期待値（2本・中線）は「階段帯では面の通りの梁を空中の中線とする」を固定していた（線種は下の z 位置の確認で足りる）。
   const seq3Grew = afterBySeq['3'].content.length - beforeLens['3'];
-  assert.equal(seq3Grew, 2, 'seq3は空中を横断する梁の天地2本ぶん増えるはず');
+  assert.equal(seq3Grew, 2, 'seq3は面の通りの梁の天地2本ぶん増えるはず（端の縦線は描画範囲の外）');
   // 線種は§5.6の最終フィルタに従う——このfixtureの梁(topZ=890)はseq3のbaseFloorZ(踊り場)より
   // 下にあるため中線ではなく細破線へ降格する。ここで固定したいのは「天地の2本が出ること」なので
   // 位置(z)で確認する（中線のまま出るのは梁がbaseFloorZより上にある実機構成。emitLineの契約）。
@@ -1473,6 +1478,25 @@ test('【WP-C】stairFaceSequence: 踊り場back辺に置いたrole:landing梁�
   for (const z of [890, 690]) { // 梁の天(topZ=levelOffset)と地(topZ-成200)
     assert.equal(horizAt(seq3Before, z), 0, `前提: 梁を置く前はz=${z}に線が無い`);
     assert.equal(horizAt(afterBySeq['3'], z), 1, `z=${z}に鋼材の天地の線が1本出るはず`);
+  }
+});
+
+test('【配線】stairFaceSequence: 面の通りの梁（踊り場の梁が baseFloorZ より上）は seq3 で細線の parallel（中線ではない）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+  const x0 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 0);
+  const x1 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+  const y0 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 0);
+  // levelOffset=1500 は seq3 の baseFloorZ（踊り場 1200）より上＝線種の降格（細破線）を受けず、梁の線種がそのまま出る
+  graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', y0, false, x0, x1, { role: 'landing', levelOffset: 1500 });
+  const after = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  const seq3 = after.find(e => e.seqNo === '3');
+  for (const z of [1500, 1300]) { // 梁の天（topZ=levelOffset）と地（topZ-成200）
+    const lines = seq3.content.filter(p => p.type === 'line' && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - z) < 1e-6);
+    assert.equal(lines.length, 1, `z=${z}に鋼材の天地の線が1本出るはず`);
+    assert.equal(lines[0].weight, 'thin', `z=${z}は面の通りの梁＝細線（中線 medium ではない）`);
+    assert.ok(!lines[0].dash, `z=${z}は baseFloorZ より上なので破線に降格しない`);
   }
 });
 

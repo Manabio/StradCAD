@@ -441,6 +441,7 @@ viewSign の二重定義（`elevationSolids.js` と `sectionCutPlane.faceViewSig
 - 2026-10-23 リファクタ S0 のゲート（`elevGoldenGate.mjs`）導入時に HEAD 6617e17 とずれていた 4 枚をユーザー裁定で再採取: `golden/`（11.stq・`--regen` なし。golden11 の 10-22 再採取が未反映だった「6」「5」）・`golden-elev-ceiling/ceiling-steel-stair-test`／`ceiling-wood-stair-test`／`moku4-3`（`--regen`。adb9455〜2da87d6 の梁の判定変更以降に未採取だった階段帯）。以後は 17 枚が HEAD と一致。
 - 2026-10-23 リファクタ S3b-1（梁の「壁の中」判定を合併帯＋全高の壁だけの 1 通りに統一。ユーザー裁定 1〜3）: `golden-elev-ceiling/ceiling-steel-stair-test` の 1階・2階の階段帯で各 −26（縦の床梁 axis 3000・幅 100 が薄壁＋オーナー壁の合併帯に収まり壁の中になった H 断面 2 箇所と天地 2 本）。golden に無い実データでは opening-test（踊り場梁の H 断面・破線）が同じ理由で消え、moku4_kd 2階の階段帯に腰壁の上の 3 階床梁が +12（腰壁・垂れ壁の真下／真上の梁は幅が材に収まれば壁の中＝裁定 2-2）。他 82 本は不変。
 - 2026-10-24 リファクタ S4（CL の無い U 字階段の seq2 を背後の外壁へ退避せず、レーン境界の仮想の面〔疑似 axisCL〕で組む。ユーザー裁定 (b)）: `golden-elev-ceiling/ceiling-wood-stair-test` 1階の階段帯 D1 で踊り場の床断面線の左端が 15mm（半壁厚 72.5→既定 57.5。2階の CL あり D1 と同位置）。ceiling-steel と他 81 本は不変。
+- 2026-10-24 リファクタ S3b-2（面の通りの梁〔R2〕を階段帯にも細線で。ユーザー裁定「細線で」）: `golden-elev-moku16` 1階 階段帯 seq1（中線→細線 2・元の端の縦線 +1）・`ceiling-steel-stair-test` 1階・2階 階段帯（中線→細線 6 ずつ）・`ceiling-wood-stair-test` 1階（2）・2階（1）。golden 外では 4 (1)・basement-test 2 本・moku1-4/5・moku4_kd・opening-test の各 1 帯。位置・長さは不変で線種だけ（天井裏・描画範囲・規則 A は airborne と共有）。部屋帯は不変。
 
 `app/scripts/probe/golden11/`（`D:/tatsuya/Download/11.stq`を同じ形式でダンプした固定スナップショット。
 展開図一般化Phase 6b-1で追加）も同じ手順で追跡する——`.gitignore`に`!scripts/probe/golden11/`を追加し、
@@ -1936,9 +1937,10 @@ ceiling-steel 2階の x=10935 は分断されない（梁の H が面の外に�
 既知の限界: 梁は探査（レイキャスト）に参加しない加算レイヤのままで、遮蔽は描く側のクリップ（探査との統合は S3・S4）。
 **部屋帯の梁は階段帯と同じ室内側へ下がった仮想断面（pcut）で解く**（2026-10-23 S3。`elevationSolids.js` の `faceBeamCut`＝`faceCutLine(face, cutPlaneOffsetMm)`・
 壁を見る向き `faceViewSign`・`bandRoomBounds`）。柱型・`clipBeamsToBand`・`clampPrimsToRun` は従来のまま（柱型の照合は壁芯基準）。部屋帯だけが渡す
-`opts.roomFaceCut` で 2 つの規則が効く: (a) 面の平面上の梁（`cut.face` の軸が梁の幅の中）は切断線が帯の外でも parallel の細線（`faceAxisInBeam`）、
-(b) 断面の続きは室内側（viewSign の逆）で見る（`sectionVisibleInRoom` の `fromRoomSide`）。階段帯は渡さず従来どおり。**既知の限界**: この 2 規則は部屋帯専用で、
-階段帯と共通の一般則への統合（壁の中の梁を描かない原則・断面の判定の向き依存の解消）は別範囲の展開図描画リファクタで行う。部屋帯で仮想断面より手前（室内側）の
+`opts.fromRoomSide`（断面の続きは室内側〔viewSign の逆〕で見る。`sectionVisibleInRoom`）で部屋帯だけが向きを変える。
+**面の通りの梁**（`opts.facePlane`、`cut.face` があれば既定 true。`cut.face` の軸が梁の幅の中＝`faceAxisInBeam`）は帯種別によらず（S3b-2・2026-10-24）切断線が帯の外でも parallel の細線。
+天井裏・描画範囲（`cutDrawRange`）・規則 A（手前の全高の壁）は airborne と共有する（`drawnRanges`・`wallCoveredSpans`）。切断線の帯の中を通る従来の parallel は掛けない。面の軸と切断線の両方が帯の中にある梁は面の通りを優先する。
+**既知の限界**: 断面の判定の向き依存（`fromRoomSide`）の解消は別範囲の展開図描画リファクタで行う。部屋帯で仮想断面より手前（室内側）の
 空中の梁は描かない（旧実装は壁の仕上げ薄壁の遮蔽に掛かって実データでは出ていなかった。比較できた 83 文書〔読込み不能の 1 件を除く〕の差分は plan-solids-test の 2 帯だけ）。
 
 **見え掛かりの梁は、壁・柱包みに隠れる区間を描かない**（ユーザー指摘2026-10「展開に関係のない、壁の向こうにある

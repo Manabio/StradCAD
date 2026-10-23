@@ -1251,7 +1251,7 @@
    },
    {
     "type": "line",
-    "weight": "medium",
+    "weight": "thin",
     "x1": 170,
     "x2": 2615,
     "y1": -3000,
@@ -1259,7 +1259,7 @@
    },
    {
     "type": "line",
-    "weight": "medium",
+    "weight": "thin",
     "x1": 170,
     "x2": 2615,
     "y1": -2800,
@@ -1898,7 +1898,7 @@
    },
    {
     "type": "line",
-    "weight": "medium",
+    "weight": "thin",
     "x1": 8320,
     "x2": 10765,
     "y1": -3000,
@@ -1906,7 +1906,7 @@
    },
    {
     "type": "line",
-    "weight": "medium",
+    "weight": "thin",
     "x1": 8320,
     "x2": 10765,
     "y1": -2800,
@@ -2859,7 +2859,7 @@
    },
    {
     "type": "line",
-    "weight": "medium",
+    "weight": "thin",
     "x1": 15920,
     "x2": 18865,
     "y1": -3000,
@@ -2867,7 +2867,7 @@
    },
    {
     "type": "line",
-    "weight": "medium",
+    "weight": "thin",
     "x1": 15920,
     "x2": 18865,
     "y1": -2800,

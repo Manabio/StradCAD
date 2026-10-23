@@ -1542,7 +1542,7 @@
    },
    {
     "type": "line",
-    "weight": "medium",
+    "weight": "thin",
     "x1": 0,
     "x2": 2855,
     "y1": -2670,

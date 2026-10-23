@@ -1004,7 +1004,7 @@
    },
    {
     "type": "line",
-    "weight": "medium",
+    "weight": "thin",
     "x1": 1427.506,
     "x2": 2855,
     "y1": -3000,
@@ -1012,7 +1012,7 @@
    },
    {
     "type": "line",
-    "weight": "medium",
+    "weight": "thin",
     "x1": 1427.506,
     "x2": 2855,
     "y1": -2670,
