@@ -58,7 +58,7 @@ import { lowerStairVoidRanges, inRanges, mergeRanges } from './section/lowerStai
 import { segmentInsideRect } from './elevationPrimitives.js';
 import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
-import { structuralContribution, structuralPrimitivesForCut, structuralColumnContribution } from './section/sectionStructure.js';
+import { structuralContribution, structuralPrimitivesForCut, structuralColumnContribution, WHOLE_OUTLINE } from './section/sectionStructure.js';
 import { stairSectionIsClosed } from './elevationStairSection.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
 import { labelFaces, letterOf, upperFloorEndsOf, wallLessEndAt, wallContinuationBeyondFaceEnd } from './elevationFaces.js';
@@ -905,6 +905,79 @@ export function dashLinesInsideRects(prims, rects, opts = {}) {
   return out;
 }
 
+/**
+ * 床の遮蔽（`occludeByFloor`）の床なし区間＝下階の階段の吹抜けの列。区間の端は切断壁の吹抜け側の面（`lo/hi`）で、壁の手前の面
+ * （`floorLo/floorHi`）ではない——壁の帯の下に床梁の見えがかりを残さない（裁定 2026-10-19「2FL に隔て板の下線が残った。不要」と同じ）。
+ * @param {import('./section/sectionTypes.js').SectionCut} cut
+ * @returns {Array<{lo:number, hi:number}>}
+ */
+export function floorlessRangesOfCut(cut) {
+  return (cut?.lowerStairVoidRanges ?? []).map(r => ({ lo: r.lo, hi: r.hi }));
+}
+
+/**
+ * 線分（type:'line'）のうち、矩形（断面ローカル x・絶対 z）の**厳密に内側**に入る区間を取り除く（切り抜き）。矩形の辺に乗る線・外の区間は
+ * そのまま。line 以外は不変。穴の縁で丸ごと描いた断面（梁の輪郭）の手前に壁の断面線が横切らないよう、壁の線を梁の z 範囲で分ける
+ * （ユーザー裁定 2026-10-23。部材の種類によらない: 渡された矩形だけで切る）。
+ * 矩形が `xs`（壁の面の x）を持つときは、その x に立つ**縦線だけ**を矩形の z 範囲で切る（その壁の断面線だけを分け、床線などほかの線は切らない）。
+ * @param {object[]} prims
+ * @param {Array<{xLo:number, xHi:number, zLo:number, zHi:number, xs?:number[]}>} rects
+ * @returns {object[]}
+ */
+export function removeLinesInsideRects(prims, rects) {
+  if (!rects?.length) return prims;
+  const targeted = rects.filter(r => Array.isArray(r.xs));
+  if (targeted.length > 0) {
+    const cutVertical = (p) => {
+      // 壁の断面・縁の線（太線・中線）だけ。通り芯（一点鎖線）・細線（寸法の補助・隠れ線）は壁の線ではないので切らない
+      if (p.type !== 'line' || Math.abs(p.x1 - p.x2) > GAP_EPS || p.weight === 'thin' || String(p.dash ?? '').startsWith('center')) return [p];
+      let pieces = [p];
+      for (const r of targeted) {
+        if (!r.xs.some(x => Math.abs(x - p.x1) <= GAP_EPS)) continue;
+        const yLo = -Math.max(r.zLo, r.zHi), yHi = -Math.min(r.zLo, r.zHi); // y = -z
+        pieces = pieces.flatMap(q => {
+          const a = Math.min(q.y1, q.y2), b = Math.max(q.y1, q.y2);
+          if (b <= yLo + GAP_EPS || a >= yHi - GAP_EPS) return [q]; // 矩形の z 範囲の外（辺に乗るだけ）
+          const keep = [];
+          const piece = (y0, y1) => { if (y1 - y0 > HIDDEN_PIECE_MIN_MM) keep.push(q.y1 <= q.y2 ? { ...q, y1: y0, y2: y1 } : { ...q, y1: y1, y2: y0 }); };
+          piece(a, Math.min(b, yLo)); // 矩形より上（y が小さい側）
+          piece(Math.max(a, yHi), b); // 矩形より下
+          return keep;
+        });
+      }
+      return pieces;
+    };
+    prims = prims.flatMap(cutVertical);
+    rects = rects.filter(r => !Array.isArray(r.xs));
+    if (rects.length === 0) return prims;
+  }
+  const boxes = rects.map(r => ({ xLo: Math.min(r.xLo, r.xHi) + GAP_EPS, xHi: Math.max(r.xLo, r.xHi) - GAP_EPS,
+    yLo: -Math.max(r.zLo, r.zHi) + GAP_EPS, yHi: -Math.min(r.zLo, r.zHi) - GAP_EPS })).filter(b => b.xHi > b.xLo && b.yHi > b.yLo);
+  if (boxes.length === 0) return prims;
+  const out = [];
+  for (const p of prims) {
+    if (p.type !== 'line') { out.push(p); continue; }
+    const hits = boxes.map(b => segmentInsideRect(p.x1, p.y1, p.x2, p.y2, b)).filter(Boolean).sort((a, b) => a[0] - b[0]);
+    if (hits.length === 0) { out.push(p); continue; }
+    const merged = [];
+    for (const h of hits) {
+      const last = merged[merged.length - 1];
+      if (last && h[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], h[1]); else merged.push([h[0], h[1]]);
+    }
+    const at = t => [p.x1 + (p.x2 - p.x1) * t, p.y1 + (p.y2 - p.y1) * t];
+    let cursor = 0;
+    const push = (t0, t1) => {
+      if (t1 - t0 <= 1e-9) return;
+      const [x1, y1] = at(t0), [x2, y2] = at(t1);
+      if (Math.hypot(x2 - x1, y2 - y1) <= HIDDEN_PIECE_MIN_MM) return;
+      out.push({ ...p, x1, y1, x2, y2 });
+    };
+    for (const [h0, h1] of merged) { push(cursor, h0); cursor = h1; }
+    push(cursor, 1);
+  }
+  return out;
+}
+
 // 上り口の開口で「辺の上に立つ壁の帯」とみなす、帯の距離（distMm）と面の軸の距離の差の許容（mm）。
 const EDGE_WALL_DIST_TOL_MM = 0.5;
 
@@ -1308,8 +1381,15 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
     return zs.length ? Math.min(...zs) : null;
   } : null;
   // 構造梁の見えがかりも、天端が切断面にある flight の後ろ（behindRects）は隠れ線（2 階の面 A で床の梁の天の線が床線と重なる）
+  // 壁内の梁が壁の面から出て部屋側から見える断面の矩形（その壁の断面線をその z で分ける。下の wallOut）
+  const wallLineCuts = [];
   const structuralContent = dashLinesInsideRects(
-    structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile, { ceilZAtWorld, columnSolids: structuralColumnContribution(cut.layers) }), behindRects, { inclusive: true });
+    structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, drawFloorProfile, {
+      ceilZAtWorld, columnSolids: structuralColumnContribution(cut.layers), wallLineCuts,
+      // 自階の床（スラブ）が構造部材を隠す。床の無い列は下階の階段の吹抜け（section/sectionStructure.js occludeByFloor）。
+      // 区間の端は切断壁の吹抜け側の面（lo/hi）——壁の帯の下に床梁の見えがかりを残さない（裁定 2026-10-19。下の 2FL の隔て板の注記と同じ）
+      floorOcclusion: { floorZ: selfLayer?.floorZMm ?? 0, floorlessRanges: floorlessRangesOfCut(cut) },
+    }), behindRects, { inclusive: true });
   // 階段の断面プロファイルとの取り合い（ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
   const joined = zRef
     ? joinToStairProfile(wallContent, stairContent, pcut,
@@ -1320,8 +1400,10 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // ささらの端面）、構造梁（踊り場受け梁も梁成ぶん下がる）は断面線そのもの／階段の一部で、
   // ユーザー裁定2026-09で「描く」側（clipContentAboveDrawnProfileのヘッダ参照）。
   // アキ（gapMarks）はPhase 6b-2 C-2でこのクリップの対象から外れた——下端はband自身が決める。
-  const wallOut = clipContentAtHiddenEnds(clipContentAboveDrawnProfile(
-    clipWallFloorEdgeUnderZigzag(joined, stairContent), drawFloorProfile), cut.face);
+  // 壁内の梁が壁の面から出て部屋側から見えるとき、梁の断面は壁の断面線の手前に描く＝その壁の線だけを梁の z 範囲で上下に分ける
+  // （ユーザー裁定 2026-10-23「壁内の梁が部屋側から見える場合だけ」。床線などほかの線は切らない）
+  const wallOut = removeLinesInsideRects(clipContentAtHiddenEnds(clipContentAboveDrawnProfile(
+    clipWallFloorEdgeUnderZigzag(joined, stairContent), drawFloorProfile), cut.face), wallLineCuts);
   // 復路下の仕上げ空間（seq5）: 壁の断面・見えがかり・アキは天井＝復路の裏面より上を落とす（段板の中）。階段自身・構造梁は触らない。
   const roofed = clipContentInsideStairBody([...wallOut, ...gapMarks], underReturnSpace);
   // 下階の階段の吹抜けの上の列（cut.lowerStairVoidRanges）: 階段自身・構造・アキ・開口も断面線（自分の段板の天端）より下は
@@ -1332,14 +1414,20 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 開口は床の無い区間（境界＝その壁の手前の面。壁の帯の下に 2FL の床梁の見えがかりなどを残さない。ユーザー指摘 2026-10-19
   // 「2FL に隔て板の下線が残った。不要」）で切る。
   const pieces = voidSurfacePieces(cut);
+  // 丸ごと描くと決めた断面の輪郭（WHOLE_OUTLINE の印）は線ごとに切り直さない——輪郭の単位を保つ
+  const structuralWhole = structuralContent.filter(p => p[WHOLE_OUTLINE]);
+  const structuralRest = structuralContent.filter(p => !p[WHOLE_OUTLINE]);
   const content = [
     ...clipContentBelowProfileInRanges(roofed, drawFloorProfile, mergeRanges(pieces)),
-    ...clipContentBelowProfileInRanges([...openingPanels, ...stairContent, ...structuralContent], drawFloorProfile,
+    ...clipContentBelowProfileInRanges([...openingPanels, ...stairContent, ...structuralRest], drawFloorProfile,
       mergeRanges(pieces.map(p => ({ lo: p.floorLo, hi: p.floorHi })))),
+    ...structuralWhole,
   ];
   return {
     content,
     occludedRects: behindRects.map(r => ({ xLo: r.xLo, xHi: r.xHi, zLo: r.zLo, zHi: r.zHi })),
+    // 壁内の梁が壁の面から出て見える断面の、壁の線を分ける矩形（面ローカル x。図側の面端の縦線にも掛ける。elevationStair.js）
+    wallLineCuts,
     ...overhang,
   };
 }
@@ -1648,6 +1736,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     upperOverhang: fields1.upperOverhang, upperFloorZ: fields1.upperFloorZ,
     // 切断面の後ろを隠す flight の矩形（図側の床線・面端の縦線をその範囲だけ細線破線に。elevationStair.js）
     occludedRects: fields1.occludedRects,
+    wallLineCuts: fields1.wallLineCuts,
     upperFloorCutEnds: fields1.upperFloorCutEnds,
     // 上階の床が実在する端だけ2FL線を許すgate（上部吹抜けを持つ部屋帯と共通。upperOverhangOf）。
     upperFloorEnds: fields1.upperFloorEnds,

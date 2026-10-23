@@ -49,7 +49,7 @@ function rangesOverlap(aLo, aHi, bLo, bHi) {
 /**
  * 壁が部材（柱・梁）を**隠せる材**の厚み方向範囲＝materialRange ∪ backingRange。
  * 「壁の中に納まる部材は描かない」判定（本ファイル isColumnInsideWall・展開図の梁
- * elevation/section/sectionStructure.js isInsideWall/isBeamInWallAt）が共有する唯一の供給源
+ * elevation/section/sectionStructure.js isInsideWall/embeddedSpans）が共有する唯一の供給源
  * ——判定が2系統に分かれると、同じ外壁で柱は隠れるのに梁は出る、という食い違いが起きる
  * （ユーザー指示2026-10-07「隠す範囲を1箇所に集約して柱と共有」）。
  *

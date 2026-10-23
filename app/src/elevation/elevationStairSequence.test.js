@@ -7,7 +7,7 @@ import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { letterOf, DIR_SIGN } from './elevationFaces.js';
-import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf, withFlatLineSpans, upperFloorEndLines, clipContentBelowProfileInRanges } from './elevationStairSequence.js';
+import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf, withFlatLineSpans, upperFloorEndLines, clipContentBelowProfileInRanges, removeLinesInsideRects, floorlessRangesOfCut } from './elevationStairSequence.js';
 import { localXOf } from './section/sectionTypes.js';
 import { switchbackCuts, buildMidWallFace } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
@@ -17,6 +17,7 @@ import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { drawnFloorProfileZAt, floorProfileFromSegments, mergeFloorProfiles } from './elevationFloorProfile.js';
 import { stairCutFloorProfile, HIDDEN_STEP_MARK } from './section/sectionStair.js';
 import { VISIBLE_STEP_MARK } from './elevationStairSequence.js';
+import { WHOLE_OUTLINE } from './section/sectionStructure.js';
 import { lowerStairVoidRanges } from './section/lowerStairVoid.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
@@ -45,6 +46,8 @@ function makeGraph(name = 'p1') {
 function makeSwitchbackFixture(graph, {
   withMidWall = false, midWallGraph = null, upperLandingOnly = false, withRoomUnder = true, entryGapMm = 0,
   type = StairType.SWITCHBACK, sections = [6, 1, 6], flip = true,
+  // 踊り場と往復の境（y=1500）を全幅で横切る壁。往復の面（seq5）の端に壁の帯が立つ＝下階の吹抜けの区間の端が壁の面（lo）と手前の面（floorLo）で分かれる
+  withCrossWall = false,
 } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
@@ -70,6 +73,7 @@ function makeSwitchbackFixture(graph, {
   }
   const room = graph.addRoom(roomCells, '階段');
   generateRoomWallsFromOutline(graph, room);
+  if (withCrossWall) graph.addWall(ym, 50, false, x0, 0, x1, 0, {});
 
   let midWall = null;
   if (withMidWall) {
@@ -3047,4 +3051,215 @@ test('【指摘2026-10-19・QA】stairFaceSequence: 吹抜けの縁の隔て板�
   assert.ok(near.some(p => Math.min(-p.y1, -p.y2) < landingZ - 1e-6), `手前の面の縁は踊り場より下から（往路側の床から）残る（${JSON.stringify(near.map(p => [-p.y1, -p.y2]))}）`);
   const far = edgeAt(faceX);
   assert.ok(far.length > 0 && far.every(p => Math.min(-p.y1, -p.y2) >= landingZ - 1e-6), `吹抜け側の面の縁は踊り場の高さから上だけ（${JSON.stringify(far.map(p => [-p.y1, -p.y2]))}）`);
+});
+
+// 階段帯への配線（contentForCut → structuralPrimitivesForCut の floorOcclusion）。自階の床がある列では FL 以下の構造の線を描かない
+// （床梁が床の断面に隠れる。2026-10-23 裁定）。面 seq1 の室内側（y=3000）に面と平行な水平梁を置く。
+function floorBeamBand({ levelOffset, withLower }) {
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall: true, withRoomUnder: false, flip: false });
+  const ax = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const bx0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const bx1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', ax, false, bx0, bx1, { role: 'secondary', levelOffset });
+  const lowerGraph = makeGraph('p0');
+  makeSwitchbackFixture(lowerGraph, { withRoomUnder: false, flip: false });
+  const faces = composeRoomFaces(room, graph);
+  const seqOpts = { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) };
+  const entries = stairFaceSequence(stair, faces, graph, { ...seqOpts, lowerGraph: withLower ? lowerGraph : null });
+  const cut1 = switchbackCuts(stair, faces, graph, seqOpts).cuts.find(c => c.seqNo === '1');
+  return { seq1: entries.find(e => e.seqNo === '1'), voidRanges: lowerStairVoidRanges(cut1, withLower ? lowerGraph : null, graph) };
+}
+test('【穴の縁・壁の線の分断】removeLinesInsideRects: 梁の断面の矩形の厳密に内側の区間だけ壁の線を取り除き、上下 2 片に分ける。覆う（矩形が無い）なら不変', () => {
+  const wall = { type: 'line', weight: 'thick', x1: 1000, y1: 500, x2: 1000, y2: -500 }; // 壁の縁 z -500..500（x=1000）
+  const rect = { xLo: 950, xHi: 1050, zLo: -300, zHi: -100 }; // 梁の断面（z -300..-100）
+  const out = removeLinesInsideRects([wall], [rect]);
+  assert.equal(out.length, 2, '壁の線は梁の上下の 2 片に分かれる');
+  const zs = out.map(p => [-p.y1, -p.y2].sort((a, b) => a - b).map(v => Math.round(v))).sort((a, b) => a[0] - b[0]);
+  assert.deepEqual(zs, [[-500, -300], [-100, 500]], '梁の z 範囲（-300..-100）には壁の線が無い');
+  const edge = { type: 'line', weight: 'thick', x1: 950, y1: 500, x2: 950, y2: -500 }; // 矩形の辺に乗る線は内側ではない
+  const far = { type: 'line', weight: 'thick', x1: 1200, y1: 500, x2: 1200, y2: -500 }; // 矩形の外
+  const text = { type: 'text', x: 1000, y: -200, text: 'a' };
+  const kept = removeLinesInsideRects([edge, far, text], [rect]);
+  assert.deepEqual(kept, [edge, far, text], '辺・外・線以外は不変');
+  const prims = [wall];
+  assert.equal(removeLinesInsideRects(prims, []), prims, '矩形が無ければ（壁が覆う・穴の縁をまたがない）そのまま');
+  // xs 付きの矩形は、その x に立つ壁の線（太線・中線）の縦線だけを切る。通り芯・細線・床線（水平）・別の x の縦線は切らない
+  const targeted = { ...rect, xs: [1000] };
+  const grid = { type: 'line', weight: 'thin', dash: 'center(600)', x1: 1000, y1: 500, x2: 1000, y2: -500 };
+  const hidden = { type: 'line', weight: 'thin', dash: 'dashed', x1: 1000, y1: 500, x2: 1000, y2: -500 };
+  const floor = { type: 'line', weight: 'thick', x1: 900, y1: 200, x2: 1100, y2: 200 }; // 梁の z 範囲（y -300..-100）を横切らない高さの水平線
+  const horiz = { type: 'line', weight: 'thick', x1: 900, y1: 200, x2: 1100, y2: 200 };
+  const otherX = { type: 'line', weight: 'thick', x1: 1020, y1: 500, x2: 1020, y2: -500 };
+  const medium = { type: 'line', weight: 'medium', x1: 1000, y1: 500, x2: 1000, y2: -500 };
+  // 通り芯の除外だけを固定する: 細線でない（中線）一点鎖線の縦線も切らない（細線の除外とは独立した条件）
+  const mediumGrid = { type: 'line', weight: 'medium', dash: 'center(600)', x1: 1000, y1: 500, x2: 1000, y2: -500 };
+  const t = removeLinesInsideRects([wall, medium, grid, hidden, floor, horiz, otherX, mediumGrid], [targeted]);
+  assert.equal(t.filter(p => p.weight !== 'thin' && !p.dash && Math.abs(p.x1 - 1000) < 1e-6 && Math.abs(p.x2 - 1000) < 1e-6).length, 4, '壁の太線・中線の縦線は上下 2 片ずつ');
+  for (const p of [grid, hidden, floor, horiz, otherX, mediumGrid]) assert.ok(t.includes(p), `切らない線: ${JSON.stringify(p)}`);
+});
+
+// 面 seq1（y=1500 の水平な切断線）に直交する縦梁（x に芯・y -500..4000）を置いた階段帯。withLower で下階の階段の吹抜けの列ができる。
+function crossBeamBand({ x, levelOffset = -100, role = 'primary', withLower = true, withMidWall = true }) {
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  const { room, stair } = makeSwitchbackFixture(graph, { withMidWall, withRoomUnder: false, flip: false });
+  const bx = graph.addCenterLine(CenterLineType.VERTICAL, x, { labeled: true, discipline: Discipline.STRUCT });
+  const by0 = graph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
+  const by1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', bx, true, by0, by1, { role, levelOffset });
+  const lowerGraph = makeGraph('p0');
+  makeSwitchbackFixture(lowerGraph, { withRoomUnder: false, flip: false });
+  const faces = composeRoomFaces(room, graph);
+  const seqOpts = { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) };
+  const entries = stairFaceSequence(stair, faces, graph, { ...seqOpts, lowerGraph: withLower ? lowerGraph : null });
+  const cut1 = switchbackCuts(stair, faces, graph, seqOpts).cuts.find(c => c.seqNo === '1');
+  return { seq1: entries.find(e => e.seqNo === '1'), voidRanges: lowerStairVoidRanges(cut1, withLower ? lowerGraph : null, graph) };
+}
+
+// FL より下（y>0）の梁の断面の線。階段・壁・床線は FL 以上にしか無いので、これが梁の断面（H 形 12 辺）
+const belowFloorLines = (content) => content.filter(p => p.type === 'line' && Math.max(p.y1, p.y2) > 1);
+
+test('【床の遮蔽・配線 M1】下階の階段の吹抜けの列、または縁をまたぐ位置の FL より下の梁の断面は 12 辺とも残る。吹抜けが無ければ（床の列）消える', () => {
+  // 面の x は dirSign=-1（world x 1050 以上が吹抜け＝面ローカル 0..892.5）。landing は断面線クリップの対象外（断面が描かれる梁）
+  const inHole = crossBeamBand({ x: 1500, role: 'landing', withLower: true });
+  assert.equal(belowFloorLines(inHole.seq1.content).length, 12, '吹抜けの列の中: 断面は 12 辺とも残る（丸ごと描く輪郭を線ごとに切り直さない）');
+  const straddle = crossBeamBand({ x: 1050, role: 'landing', withLower: true });
+  assert.equal(belowFloorLines(straddle.seq1.content).length, 12, '縁をまたぐ（吹抜けの境界が梁の芯）: 階段側の壁が覆わなければ 12 辺とも残る');
+  const noVoid = crossBeamBand({ x: 1500, role: 'landing', withLower: false });
+  assert.equal(belowFloorLines(noVoid.seq1.content).length, 0, '対照: 吹抜けが無ければ床の列＝FL より下の断面は描かない');
+  const floorCol = crossBeamBand({ x: 400, role: 'landing', withLower: true });
+  assert.equal(belowFloorLines(floorCol.seq1.content).length, 0, '吹抜けの外の床の列では描かない');
+});
+
+test('【床の遮蔽・配線 m1】床なし区間の端は切断壁の吹抜け側の面（lo/hi）。壁の手前の面（floorLo/floorHi）ではない', () => {
+  const cut = { lowerStairVoidRanges: [{ lo: 10, hi: 20, floorLo: 5, floorHi: 25 }, { lo: 100, hi: 120 }] };
+  assert.deepEqual(floorlessRangesOfCut(cut), [{ lo: 10, hi: 20 }, { lo: 100, hi: 120 }]);
+  assert.deepEqual(floorlessRangesOfCut({}), [], '吹抜けが無ければ空');
+  assert.deepEqual(floorlessRangesOfCut(null), []);
+});
+
+test('【壁の線の分断・配線 M2】壁内の梁が壁の面から出て見えるとき、その壁の縦線は梁の z 範囲で上下 2 片に分かれる。梁が無ければ 1 本のまま', () => {
+  // 往復間の壁（world x 1000..1050）に梁（world x 1050・幅 100）が掛かり、壁の面（面ローカル 892.5・942.5）から断面が出る。天端 1500・下端 1300
+  const wallEdgeAt = (content, x) => content.filter(p => p.type === 'line' && Math.abs(p.x1 - x) < 1e-6 && Math.abs(p.x2 - x) < 1e-6)
+    .map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]).sort((a, b) => a[0] - b[0]);
+  const none = crossBeamBand({ x: 1050, levelOffset: 5000, role: 'primary', withLower: true }); // 帯の外（天端 5000）: 梁の断面なし
+  const whole = wallEdgeAt(none.seq1.content, 892.5);
+  assert.ok(whole.length >= 1 && whole.some(([lo, hi]) => lo <= 1300 && hi >= 1500), `対照: 梁が無い面ローカル x=892.5 の壁の縁は 1300..1500 を貫く（${JSON.stringify(whole)}）`);
+  const beam = crossBeamBand({ x: 1050, levelOffset: 1500, role: 'primary', withLower: true });
+  const pieces = wallEdgeAt(beam.seq1.content, 892.5);
+  assert.ok(pieces.length >= 2, `壁の縁は上下 2 片以上に分かれる（${JSON.stringify(pieces)}）`);
+  assert.ok(!pieces.some(([lo, hi]) => lo < 1500 - 1 && hi > 1300 + 1), `梁の z 範囲（1300..1500）に壁の線が無い（${JSON.stringify(pieces)}）`);
+  assert.ok(pieces.some(([, hi]) => hi <= 1300 + 1) && pieces.some(([lo]) => lo >= 1500 - 1), '梁の下の片と上の片がある');
+});
+
+test('【壁の線の分断・帯】面端が壁の面に一致する配置（実データの型）: 面端の太線の縦線も梁の z 範囲で上下 2 片に分かれ、どの太さの縦線も梁の z 範囲に残らない。余分な重なりも無い', () => {
+  // 面 seq1 の端（面ローカル 0＝外壁の室内側の面）に、外壁の中から梁（world x 1960・幅 100・天端 1000・下端 800）が面から出る
+  const vlinesAtFaceEnd = (withBeam) => {
+    const graph = makeGraph('p1');
+    const upperGraph = makeGraph('p2');
+    const { room } = makeSwitchbackFixture(graph, { withMidWall: false, withRoomUnder: false, flip: false });
+    if (withBeam) {
+      const bx = graph.addCenterLine(CenterLineType.VERTICAL, 1960, { labeled: true, discipline: Discipline.STRUCT });
+      const by0 = graph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
+      const by1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+      graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', bx, true, by0, by1, { role: 'primary', levelOffset: 1000 });
+    }
+    const band = buildStairBand(room, graph, upperGraph, { floorHeight: OPTS.floorHeight, wallLessEndExtendModelMm: 150 });
+    // 帯の x=0（面 seq1 の左端）に立つ全ての縦線（どの太さでも）。z（= -y）の区間
+    return band.primitives.filter(p => p.type === 'line' && Math.abs(p.x1 - 0) < 1e-6 && Math.abs(p.x2 - 0) < 1e-6)
+      .map(p => ({ z: [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)], weight: p.weight }));
+  };
+  const plain = vlinesAtFaceEnd(false);
+  assert.ok(plain.some(v => v.weight === 'thick' && v.z[0] <= 0 && v.z[1] >= 4800 - 1), `対照: 梁が無ければ面端の太線は 1 本で貫く（${JSON.stringify(plain)}）`);
+  const withBeam = vlinesAtFaceEnd(true);
+  assert.ok(!withBeam.some(v => v.z[0] < 1000 - 1 && v.z[1] > 800 + 1), `梁の z 範囲（800..1000）に、どの太さの縦線も残らない（${JSON.stringify(withBeam)}）`);
+  const thick = withBeam.filter(v => v.weight === 'thick').sort((a, b) => a.z[0] - b.z[0]);
+  assert.equal(thick.length, 2, '太線の壁の縁は梁の上下の 2 片');
+  assert.ok(thick[0].z[1] <= 800 + 1 && thick[1].z[0] >= 1000 - 1, `下の片は梁の下端まで・上の片は梁の天端から（${JSON.stringify(thick)}）`);
+  assert.equal(withBeam.length, thick.length, '余分な（太線の下に重なる）縦線は無い');
+});
+
+test('【壁の線の分断・帯 xCursor】2 面目以降（xCursor>0）の壁の面でも、縦線は梁の z 範囲で上下 2 片に分かれる。ほかの縦線は切れない', () => {
+  // 外壁の中の梁（world x 40・幅 100・天端 1500・下端 1300）。seq1（xCursor=0）の面端 1885 と、seq3（xCursor>0）の面端 7900 の 2 か所で壁の面から出る
+  const verticals = (withBeam) => {
+    const graph = makeGraph('p1');
+    const upperGraph = makeGraph('p2');
+    const { room } = makeSwitchbackFixture(graph, { withMidWall: false, withRoomUnder: false, flip: false });
+    if (withBeam) {
+      const bx = graph.addCenterLine(CenterLineType.VERTICAL, 40, { labeled: true, discipline: Discipline.STRUCT });
+      const by0 = graph.addCenterLine(CenterLineType.HORIZONTAL, -500, { labeled: true, discipline: Discipline.STRUCT });
+      const by1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 4000, { labeled: true, discipline: Discipline.STRUCT });
+      graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', bx, true, by0, by1, { role: 'primary', levelOffset: 1500 });
+    }
+    const band = buildStairBand(room, graph, upperGraph, { floorHeight: OPTS.floorHeight, wallLessEndExtendModelMm: 150 });
+    return band.primitives.filter(p => p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-6 && p.weight !== 'thin')
+      .map(p => ({ x: p.x1, weight: p.weight, z: [Math.round(Math.min(-p.y1, -p.y2)), Math.round(Math.max(-p.y1, -p.y2))] }));
+  };
+  const at = (list, x) => list.filter(v => Math.abs(v.x - x) < 1e-6).sort((a, b) => a.z[0] - b.z[0]);
+  const plain = verticals(false), withBeam = verticals(true);
+  for (const x of [1885, 7900]) {
+    assert.ok(at(plain, x).some(v => v.z[0] <= 1300 && v.z[1] >= 1500), `対照: 梁が無ければ x=${x} の縦線は梁の z 範囲を貫く（${JSON.stringify(at(plain, x))}）`);
+    const pieces = at(withBeam, x);
+    assert.equal(pieces.length, 2, `x=${x}: 縦線は梁の上下の 2 片（${JSON.stringify(pieces)}）`);
+    assert.ok(pieces[0].z[1] <= 1300 && pieces[1].z[0] >= 1500, `x=${x}: 下の片は梁の下端まで・上の片は梁の天端から（${JSON.stringify(pieces)}）`);
+  }
+  // 切るのは壁の面（1885・7900）の縦線だけ。ほかの x の縦線は梁の z 範囲を貫いたまま（平行移動を誤ると別の位置の線が切れる／切るべき線が残る）
+  const others = plain.filter(v => ![1885, 7900].some(x => Math.abs(v.x - x) < 1e-6));
+  assert.ok(others.length > 0, '対照: 切らない縦線がある');
+  for (const v of others) assert.ok(at(withBeam, v.x).some(w => w.weight === v.weight && w.z[0] === v.z[0] && w.z[1] === v.z[1]), `x=${v.x} の縦線は不変（${JSON.stringify(v)}）`);
+});
+
+test('【床の遮蔽・配線 C】床なし区間の端は壁の面（lo）。壁の手前の面（floorLo）まで床梁の見え掛かりを伸ばさない', () => {
+  // 往復の面 seq5。踊り場との境（y=1500）に横断する壁が立ち、下階の吹抜けの区間は lo=1492.5・floorLo=1442.5（壁の帯 50 の差）。
+  // FL より下（天端 -100・下端 -300）の梁は吹抜けの列だけで破線として見え、その端は区間の端＝lo
+  const graph = makeGraph('p1');
+  const upperGraph = makeGraph('p2');
+  const { room, stair } = makeSwitchbackFixture(graph, { withCrossWall: true, withRoomUnder: false, flip: false });
+  const bx = graph.addCenterLine(CenterLineType.VERTICAL, 1800, { labeled: true, discipline: Discipline.STRUCT });
+  const by0 = graph.addCenterLine(CenterLineType.HORIZONTAL, -3000, { labeled: true, discipline: Discipline.STRUCT });
+  const by1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 8000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', bx, true, by0, by1, { role: 'primary', levelOffset: -100 });
+  const lowerGraph = makeGraph('p0');
+  makeSwitchbackFixture(lowerGraph, { withRoomUnder: false, flip: false });
+  const faces = composeRoomFaces(room, graph);
+  const seqOpts = { ...OPTS, upperGraph, layers: buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm: OPTS.floorHeight }] }) };
+  const seq5 = stairFaceSequence(stair, faces, graph, { ...seqOpts, lowerGraph }).find(e => e.seqNo === '5');
+  const cut5 = switchbackCuts(stair, faces, graph, seqOpts).cuts.find(c => c.seqNo === '5');
+  const [range] = lowerStairVoidRanges(cut5, lowerGraph, graph);
+  assert.ok(range.floorLo < range.lo - 1, `前提: 区間の端は壁の面と手前の面で分かれる（lo=${range.lo}・floorLo=${range.floorLo}）`);
+  const dashed = belowFloorLines(seq5.content).filter(p => p.dash === 'dashed' && Math.abs(p.y1 - p.y2) < 1e-6);
+  assert.equal(dashed.length, 2, `FL より下の梁の天地の破線が 2 本（${JSON.stringify(dashed)}）`);
+  for (const p of dashed) {
+    assert.ok(Math.abs(Math.min(p.x1, p.x2) - range.lo) < 1e-6, `破線の端は lo=${range.lo}（floorLo=${range.floorLo} ではない）: ${p.x1}..${p.x2}`);
+  }
+  // 対照: 吹抜けが無ければ（床の列）FL より下の線は無い
+  const noLower = stairFaceSequence(stair, faces, graph, { ...seqOpts, lowerGraph: null }).find(e => e.seqNo === '5');
+  assert.equal(belowFloorLines(noLower.content).filter(p => p.dash === 'dashed').length, 0, '対照: 吹抜けが無ければ FL より下の破線は無い');
+});
+
+test('【床の遮蔽・m5】丸ごと描く輪郭の印（WHOLE_OUTLINE）は列の断面線クリップから守られ、印の無い線だけが切られる', () => {
+  const inHole = crossBeamBand({ x: 1500, role: 'landing', withLower: true });
+  const all = belowFloorLines(inHole.seq1.content);
+  assert.equal(all.length, 12);
+  assert.ok(all.every(p => p[WHOLE_OUTLINE] === true), '階段帯の content に出た断面の線は丸ごと描く輪郭の印を持つ');
+});
+
+// 高さ z にある水平線（梁の天地。FL より上は中線、下は降格した細破線）
+const beamLinesAt = (content, z) => content.filter(p => p.type === 'line'
+  && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - z) < 1e-6);
+
+test('【床の遮蔽・配線】階段帯: 自階の床がある列では FL 以下の梁の線を描かない。FL より上の梁は描く（対照）。下階の階段の吹抜けがあっても同じ', () => {
+  for (const withLower of [false, true]) {
+    const above = floorBeamBand({ levelOffset: 500, withLower }); // 天端 500・下端 300（FL より上）
+    assert.ok(beamLinesAt(above.seq1.content, 500).length > 0 || beamLinesAt(above.seq1.content, 300).length > 0,
+      `対照: FL より上の梁の天地の線は残る（withLower=${withLower}）`);
+    const below = floorBeamBand({ levelOffset: -100, withLower }); // 天端 -100・下端 -300（FL より下）
+    assert.equal(beamLinesAt(below.seq1.content, -100).length + beamLinesAt(below.seq1.content, -300).length, 0,
+      `FL より下の梁の線は無い（withLower=${withLower}）`);
+    const flush = floorBeamBand({ levelOffset: 0, withLower }); // 天端 FL ちょうど・下端 -200
+    assert.equal(beamLinesAt(flush.seq1.content, 0).filter(p => p.dash).length + beamLinesAt(flush.seq1.content, -200).length, 0,
+      `天端が FL ちょうどの梁の線も無い（A'-1。withLower=${withLower}）`);
+  }
 });

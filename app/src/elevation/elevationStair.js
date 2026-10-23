@@ -18,7 +18,7 @@ import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
 import { stairBandWallFilter } from './section/cuts/switchbackCuts.js';
-import { stairFaceSequence, dashLinesInsideRects } from './elevationStairSequence.js';
+import { stairFaceSequence, dashLinesInsideRects, removeLinesInsideRects } from './elevationStairSequence.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { translatePrimitive } from './elevationPrimitives.js';
 // R1: 面配置ループ・帯確定処理はelevationBand.jsのbuildRoomBandと全域が重複していたため、
@@ -239,6 +239,15 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     layout.faceRuns.forEach(({ xCursor }, i) => {
       for (const p of sequence[i].content) primitives.push(translatePrimitive(p, xCursor, 0));
     });
+    // 壁内の梁が壁の面から出て見える断面の、その壁の面に立つ縦線（図側の面端の縦線を含む帯に集まった全ての線）を梁の z 範囲で分ける
+    // （ユーザー裁定 2026-10-23・QA 4 回目。finalizeBand の dedupe の前: 中線と太線が同じ端点で 1 本に畳まれる）。矩形は面ローカル→帯の x へ平行移動。
+    const wallCuts = layout.faceRuns.flatMap(({ xCursor }, i) => (sequence[i].wallLineCuts ?? []).map(r => ({
+      ...r, xLo: r.xLo + xCursor, xHi: r.xHi + xCursor, xs: r.xs.map(x => x + xCursor) })));
+    if (wallCuts.length > 0) {
+      const cut = removeLinesInsideRects(primitives, wallCuts);
+      primitives.length = 0;
+      for (const p of cut) primitives.push(p);
+    }
     chDimX = layout.chDimX; prevBoundaryHi = layout.prevBoundaryHi;
     faceCount = sequence.length;
   } else {

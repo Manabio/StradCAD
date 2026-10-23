@@ -412,6 +412,39 @@ test('【配線】solidPrimitivesForFace: 直交する上階梁は外から来�
   assert.ok(thickCount(0, 3000) > 0, '対照: 壁芯から室内へ向かう梁も断面が出る');
 });
 
+// Major-3: 部屋帯は梁の天端・成を帯 0..CH へ切り詰めてから描くが、直交壁の層は元の天端・成で判定する（上階の下がり梁と上階の壁）
+test('【配線・Major-3】solidPrimitivesForFace: 上階の下がり梁（成が階高−CH を超える）が A2 型（平行壁が直交壁の帯の中で尽きる）なら断面を描く', () => {
+  const build = (withPerp) => {
+    // 自階に壁を置かない部屋（直交壁の帯が自階の層から来て判定が効かなくならないように）
+    const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+    const addGrid = (type, value, label) => graph.addCenterLine(type, value, { labeled: true, discipline: Discipline.STRUCT, label });
+    const gx0 = addGrid(CenterLineType.VERTICAL, 0, 'X1'), gx1 = addGrid(CenterLineType.VERTICAL, 4000, 'X2');
+    const gy0 = addGrid(CenterLineType.HORIZONTAL, 0, 'Y1'), gy1 = addGrid(CenterLineType.HORIZONTAL, 3000, 'Y2');
+    const room = graph.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'いま');
+    assert.equal(graph.walls.length, 0, '前提: 自階に壁が無い');
+    const upper = new PlanGraph(new Plane('p2', 2900, '2階', 2, 1));
+    const ux = upper.addCenterLine(CenterLineType.VERTICAL, 2100, { labeled: false, discipline: Discipline.ARCH });
+    const uxw = upper.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+    const ua = upper.addCenterLine(CenterLineType.HORIZONTAL, -3000, { labeled: false, discipline: Discipline.ARCH });
+    const ub = upper.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+    upper.addBeam(StructuralMaterialType.STEEL, 'STEEL-H600x200', ux, true, ua, ub, { role: 'primary', levelOffset: 0 }); // 天端 2900・成 600（下端 2300 < CH）
+    const uy0 = upper.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: false, discipline: Discipline.ARCH });
+    const uyEnd = upper.addCenterLine(CenterLineType.HORIZONTAL, 60, { labeled: false, discipline: Discipline.ARCH });
+    // 梁（x=2100・幅200 → 帯 2000..2200）と平行な壁（x=2000 に厚さ200 → 材 2000..2200。y -3000..60）。梁の帯を完全に隠す
+    upper.addWall(uxw, 200, true, ua, 0, uyEnd, 0, {});
+    if (withPerp) {
+      const ux0 = upper.addCenterLine(CenterLineType.VERTICAL, 1800, { labeled: false, discipline: Discipline.ARCH });
+      const ux1 = upper.addCenterLine(CenterLineType.VERTICAL, 2400, { labeled: false, discipline: Discipline.ARCH });
+      upper.addWall(uy0, 120, false, ux0, 0, ux1, 0, {}); // 直交する壁（y=0・材 0..120。上階の層だけにある。平行壁はこの帯の中で尽きる）
+    }
+    const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+    return solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH, upperGraph: upper, floorHeightMm: 2900 })
+      .filter(p => p.weight === 'thick').length;
+  };
+  assert.ok(build(true) > 0, '直交壁の帯を除くので、平行壁が帯の中で尽きる A2 型の断面は描かれる');
+  assert.equal(build(false), 0, '対照: 直交壁が無ければ切断位置は平行壁の内部＝埋まっている（描かない）');
+});
+
 // ---- 失敗系 ----
 test('【失敗系】faceSectionCut: 軸位置・dirSign・CHが解決できない面はnull（呼び出し側は無描画）', () => {
   const base = { axisCL: { id: 'a' }, isVertical: false, lo: 0, hi: 4000, run: 4000, dirSign: 1 };

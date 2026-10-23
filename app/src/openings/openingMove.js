@@ -76,18 +76,22 @@ const OPENING_SNAP_APP_MODE = 'floorplan';
  * 境界（host と同じ軸CL・同じ向きで開口位置を含む全壁＝両室の壁・下地オーナー壁・仕上げ薄壁）の
  * 材の厚み方向区間の合併。1つの境界に壁は複数あるため、host 単体の materialRange では境界の
  * 全厚にならない。該当が無ければ host 自身の materialRange。
+ * `rangeOf` は壁ごとの厚み方向区間の取り方（既定 materialRange。断面の展開では外壁の対称壁も含める `wallConcealRange` を渡す——
+ * elevation/section/sectionStructure.js の mergedParallelBands が同じ合併を共有する）。
  */
-function boundaryMaterialRange(host, opening, graph) {
+export function boundaryMaterialRange(host, opening, graph, rangeOf = w => w.materialRange) {
   const c = opening.centerCoord;
   let lo = Infinity, hi = -Infinity;
   for (const w of graph.walls) {
-    if (w.isVertical !== host.isVertical || w.axisCL.id !== host.axisCL.id) continue;
+    if (w.isVertical !== host.isVertical || w.axisCL?.id !== host.axisCL?.id) continue;
     const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
     if (c < wLo || c > wHi) continue;
-    lo = Math.min(lo, w.materialRange.lo);
-    hi = Math.max(hi, w.materialRange.hi);
+    const r = rangeOf(w);
+    if (!r) continue;
+    lo = Math.min(lo, r.lo);
+    hi = Math.max(hi, r.hi);
   }
-  if (lo === Infinity) { const r = host.materialRange; return { lo: r.lo, hi: r.hi }; }
+  if (lo === Infinity) { const r = rangeOf(host) ?? host.materialRange; return { lo: r.lo, hi: r.hi }; }
   return { lo, hi };
 }
 
