@@ -1,7 +1,9 @@
 // switchbackCuts.js（WP-E5）の単体テスト。elevationStairSequence.test.jsと同じフィクスチャ方針。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, edgeKey } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, OpeningCategory, edgeKey } from '@core';
+import { buildStairBand } from '../../elevationStair.js';
+import { halfWallThicknessMm } from '../floorProfileMath.js';
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../../elevationFaceList.js';
 import { letterOf, DIR_SIGN } from '../../elevationFaces.js';
@@ -22,9 +24,10 @@ function makeSwitchbackFixture(graph, {
   withMidWall = false, midWallGraph = null, withRoomUnder = true, asymmetricEnds = false,
   type = StairType.SWITCHBACK, sections = [6, 1, 6], flip = true,
   sideEntry = null, // { entryTurnSteps, entrySide }: 往路の基端の行（y3500..4500）を切り、側面の上り口にする（往路が x0..xm の flip=false 用）
+  midCeilingOnly = false, // 往復間の中心線（xm）を天井芯にする＝壁も（階段室の）中心線も無く midCL が引けない構成（S4）
 } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
-  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: midCeilingOnly ? Discipline.CEILING : Discipline.ARCH });
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
   const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const ym = graph.addCenterLine(CenterLineType.HORIZONTAL, 1500, { labeled: false, discipline: Discipline.ARCH });
@@ -214,6 +217,71 @@ test('【S8a】switchbackCuts: 往復間の同座標に天井芯が先に並ん�
   assert.notEqual(axisCL.id, ceiling.id, '天井芯を掴まない');
   assert.equal(axisCL.discipline, Discipline.ARCH);
   assert.equal(axisCL.value, 1000);
+});
+
+test('【失敗系・S4】switchbackCuts: 往復間に壁も中心線も無い（midCL が引けない）なら seq2 はレーン境界の仮想の面（疑似 axisCL・faceValue=レーン境界・kind=stairMid）。wOut1 へ退避しない', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { midCeilingOnly: true });
+  const faces = composeRoomFaces(room, graph);
+  const result = switchbackCuts(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.ok(result);
+  assert.deepEqual(result.cuts.map(c => c.seqNo), ['1', '2', '3', '4', '5']);
+  const seq2 = result.cuts.find(c => c.seqNo === '2');
+  assert.equal(seq2.face.axisCL.id, null, '疑似 axisCL（sectionFace.js faceFromCut の主対象壁なしと同じ流儀）');
+  assert.equal(seq2.face.axisCL.effectiveValue, 1000);
+  assert.equal(seq2.face.axisCL.value, 1000);
+  assert.equal(seq2.face.faceValue, 1000, 'レーン境界の世界座標（往復の中間 x=1000）');
+  assert.equal(seq2.face.kind, 'stairMid');
+  assert.equal(seq2.face.hasRealWall, false);
+  assert.notEqual(seq2.face.faceValue, result.wOut1.faceValue, '視線の背後の壁 wOut1 の面ではない');
+  assert.equal(seq2.face.isVertical, result.wOut1.isVertical, '枠（向き・範囲）は wOut1 のまま');
+  assert.equal(seq2.face.lo, result.wOut1.lo);
+});
+
+// 帯まるごと（buildStairBand）。fixture の外壁（x=0・y=4500）に縦向き・横向きの建具を置く。
+function thickenOutboundWall(graph) {
+  const find = (type, v) => graph.centerLines.find(c => c.centerLineType === type && c.effectiveValue === v);
+  graph.removeShape([...graph.walls].find(w => w.isVertical && w.axisCL.effectiveValue === 2000).id);
+  graph.addWall(find(CenterLineType.VERTICAL, 2000), -200, true, find(CenterLineType.HORIZONTAL, 0), 0, find(CenterLineType.HORIZONTAL, 4500), 0, {});
+}
+// 上階の graph を渡す（chUpperAbsMm が決まり stairFaceSequence＝switchbackCuts の seq2 を通る。渡さないとフォールバック経路）。
+// 往路の外壁 x=2000（wOut1）は厚さ200（面の半壁厚 200 ≠ 既定 57.5）にする——wOut1 へ退避する実装と区別がつくように。
+function bandOf(opts, { withOpenings = false } = {}) {
+  const graph = makeGraph();
+  const { room } = makeSwitchbackFixture(graph, opts);
+  const find = (type, v) => graph.centerLines.find(c => c.centerLineType === type && c.effectiveValue === v);
+  thickenOutboundWall(graph);
+  const upperGraph = makeGraph('p2');
+  const cl = (t, v) => upperGraph.addCenterLine(t, v, { labeled: false, discipline: Discipline.ARCH });
+  const ux0 = cl(CenterLineType.VERTICAL, 0), ux1 = cl(CenterLineType.VERTICAL, 2000);
+  const uy0 = cl(CenterLineType.HORIZONTAL, 0), uy1 = cl(CenterLineType.HORIZONTAL, 4500);
+  const roomUp = upperGraph.addRoom(new Set([`${ux0.id}:${uy0.id}:${ux1.id}:${uy1.id}`]), '2F');
+  generateRoomWallsFromOutline(upperGraph, roomUp);
+  if (withOpenings) {
+    graph.addOpening(find(CenterLineType.VERTICAL, 0), 1, true, find(CenterLineType.HORIZONTAL, 0), 3000, 800, OpeningCategory.FITTING, 'singleSwing', {});
+    graph.addOpening(find(CenterLineType.HORIZONTAL, 4500), -1, false, find(CenterLineType.VERTICAL, 0), 500, 800, OpeningCategory.FITTING, 'singleSwing', {});
+  }
+  const band = buildStairBand(room, graph, upperGraph, { floorHeight: 2400, project: { openingNumberIndex: new Map() } });
+  assert.equal(band.faceCount, 5, '前提: 歩行順の 5 面（stairFaceSequence＝seq1〜5）を通った。フォールバック経路ではない');
+  return band;
+}
+
+test('【失敗系・S4】buildStairBand: CL の無い U 字階段（midCeilingOnly）で、同じ階に縦向き・横向きの建具があっても例外を出さず帯を返す', () => {
+  const band = bandOf({ midCeilingOnly: true, withRoomUnder: false }, { withOpenings: true });
+  assert.ok(band.primitives.length > 0);
+});
+
+test('S4: 仮想の面の seq2 の半壁厚は既定 57.5（外壁 wOut1（x=2000・厚さ200）でも、faceValue−0＝1000 の誤算でもない）——踊り場床線の左端が伸びない・ずれない', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph, { midCeilingOnly: true, withRoomUnder: false });
+  thickenOutboundWall(graph); // wOut1 の半壁厚を既定 57.5 と異なる値にする
+  const result = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.notEqual(halfWallThicknessMm(result.wOut1), 57.5, '前提: wOut1 の半壁厚は既定と異なる（退避版と区別がつく）');
+  assert.equal(halfWallThicknessMm(result.cuts.find(c => c.seqNo === '2').face), 57.5);
+});
+
+test('halfWallThicknessMm: 疑似 axisCL の面（faceValue＝effectiveValue＝1500）は既定の 57.5（faceValue−0 を半壁厚とみなさない）', () => {
+  assert.equal(halfWallThicknessMm({ faceValue: 1500, axisCL: { id: null, effectiveValue: 1500, value: 1500 } }), 57.5);
 });
 
 test('【WP-E5】switchbackCuts: 往復間の壁が無ければseq2のfaceはhasRealWall=false（cutは5本）', () => {

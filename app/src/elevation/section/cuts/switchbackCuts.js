@@ -527,12 +527,16 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // 走行方向の全長（上り口〜踊り場奥）を前提に組まれており、範囲を変えると座標がずれるため。
   // これで「図の向き（西向き＝D）」と「面の幾何」が一致し、面由来の寸法・向こう側判定が
   // 正しい側を向く。
-  const midOutFace = midCL ? {
+  // 中心1のCLが引けない構成（往復間に壁も中心線も無い）はレーン境界の位置（midAcross）に仮想の面を組む
+  // （axisCLは疑似オブジェクト{id:null,effectiveValue,value}＝sectionFace.js faceFromCutの主対象壁なしと同じ流儀。
+  // 下流が axisCL.id/.value/.effectiveValue を裸で読んでも落ちず、半壁厚|faceValue−effectiveValue|は0→既定になる。
+  // S4・2026-10-23。以前はwOut1＝視線の背後の壁へ退避していた）。
+  const midOutFace = {
     ...wOut1,
-    axisCL: midCL, faceValue: midCL.effectiveValue, inward: wOut2.inward,
+    axisCL: midCL ?? { id: null, effectiveValue: midAcross, value: midAcross }, faceValue: midCL ? midCL.effectiveValue : midAcross, inward: wOut2.inward,
     letter: letterOf(wOut1.isVertical, wOut2.inward),
     hasRealWall: !!wall, kind: 'stairMid',
-  } : null;
+  };
 
   // 隔て板が上階の隔て板へ続く（自階にも上階にも往復間の実壁がある＝木造の U 字階段で最上階でない）とき、seq1（幅方向に
   // 隔て板を横切る切断）では隔て板を床から天井断面線までの 1 本の断面にする（sectionEngine.js buildColumns が
@@ -557,14 +561,14 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       // 旧実装はここに`wOut1`（＝視線の**背後**にある往路外側の壁）を結び付けていたため、
       // 図の向き（西向き=D）と面の幾何（東向きの壁）が食い違い、面由来の寸法・向こう側判定が
       // 反対側を向いていた（実機「6」D1が、向こうに壁の無いはずの面で1500+2000に割れた）。
-      // 中心1のCLが引けない構成では従来どおりwOut1へフォールバックする。
-      seqNo: '2', face: midOutFace ?? wOut1, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
+      // 中心1のCLが引けない構成ではレーン境界の位置の仮想の面（疑似 axisCL）になる（上のmidOutFace）。
+      seqNo: '2', face: midOutFace, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
       landingEnd: landingEndOn(wOut1),
       // レーン境界に**自階の実壁**（隔て板）があればアキを標記しない——隔て板の上・端の先は同じ階段室の
       // 空気で、面の抜けではない（ユーザー裁定2026-10-14「バツは不要」）。隔て板は階段室の自階の壁なので
       // `wall`（upperGraph 優先の探索）ではなく自階の graph で探す。上階側だけにある往復間の壁（2F の腰壁等）の
       // 上のアキは従来どおり標記する（「6」C の裁定2026-09を保つ）。自階に実壁が無い（鉄骨等）ときも従来どおり。
-      ...(midOutFace && findMidWall(graph, wEntry, wLanding, landingDepthMm, f) ? { openGapMarks: false } : {}),
+      ...(findMidWall(graph, wEntry, wLanding, landingDepthMm, f) ? { openGapMarks: false } : {}),
       layers, zRange: zRangeUpper, baseFloorZ: 0, stairCut: outboundWithLandingSeq2,
     }),
   ];
@@ -614,7 +618,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     // 文字（D）になり、labelFaces が D1/D2 に採番する。
     // 自階の往復間の壁が**隔て板**（木造 U 字階段の stairPartition）のときだけ。階段下の部屋の壁（2a）などが往復間に立つ構成
     // （「6」の 1 階）は従来の 5 面のまま（2026-08 の「6」の裁定を変えない）。
-    if (midOutFace && ownMidWall && isStairPartitionWall(ownMidWall, stairPartitionLines(graph))) {
+    if (ownMidWall && isStairPartitionWall(ownMidWall, stairPartitionLines(graph))) {
       // 面の幾何（inward・letter）は視線の逆＝往路外側の壁 wOut1 と同じ向き（seq2 の midOutFace は wOut2 の向き）
       const face6 = reorientFace({ ...midOutFace, inward: wOut1.inward, letter: letterOf(wOut1.isVertical, wOut1.inward) }, seq4DirSign);
       const inboundLaneLineOnMid = { isVertical: wOut1.isVertical, axisValue: inboundLaneAcross, lo: wOut1.lo, hi: wOut1.hi };

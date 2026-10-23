@@ -410,6 +410,9 @@ Phase 5（下記「移した」節）以降、断面エンジン自身の探査�
 
 **保留（実データが無く要望待ち）**: Phase 7c(b) 3層以上つながる吹抜け・(c) 1帯に3層を積む図（入口は N 層対応済み）。
 
+**S4（2026-10-23）**: CL が無い U 字階段（`midCL` が引けない）は seq2 の面をレーン境界（`midAcross`）の仮想の面（`switchbackCuts.js` の `midOutFace`。axisCL は `sectionFace.js` と同じ疑似 `{id:null,effectiveValue,value}`）にする。`wOut1` への退避は廃止。
+viewSign の二重定義（`elevationSolids.js` と `sectionCutPlane.faceViewSign`）は U1b B6 で `elevationSolids.js` ごと消えるため統一しない。
+
 **削除済み**: `buildSectionFigure`（直進階段専用の2本目の経路）は2026-10-22に共通経路へ統合して削除（S2=bf22201・S3=14dfa81）。
 
 ### 視覚回帰ゲート
@@ -437,6 +440,7 @@ Phase 5（下記「移した」節）以降、断面エンジン自身の探査�
 - 2026-10-22 golden13・golden11・golden13-struct の elevfig-*（ユーザー目視OK）: 1階「6」（階段帯）が 68ad689（上り口の開口から辺の上に立つ壁の帯を差し引く）でずれていたのを確定（親 804f6b6 は一致）。2F より上のアキのバツが帯内 x=1442.5 で割れ、左半分が高さ 3800 から。
 - 2026-10-23 リファクタ S0 のゲート（`elevGoldenGate.mjs`）導入時に HEAD 6617e17 とずれていた 4 枚をユーザー裁定で再採取: `golden/`（11.stq・`--regen` なし。golden11 の 10-22 再採取が未反映だった「6」「5」）・`golden-elev-ceiling/ceiling-steel-stair-test`／`ceiling-wood-stair-test`／`moku4-3`（`--regen`。adb9455〜2da87d6 の梁の判定変更以降に未採取だった階段帯）。以後は 17 枚が HEAD と一致。
 - 2026-10-23 リファクタ S3b-1（梁の「壁の中」判定を合併帯＋全高の壁だけの 1 通りに統一。ユーザー裁定 1〜3）: `golden-elev-ceiling/ceiling-steel-stair-test` の 1階・2階の階段帯で各 −26（縦の床梁 axis 3000・幅 100 が薄壁＋オーナー壁の合併帯に収まり壁の中になった H 断面 2 箇所と天地 2 本）。golden に無い実データでは opening-test（踊り場梁の H 断面・破線）が同じ理由で消え、moku4_kd 2階の階段帯に腰壁の上の 3 階床梁が +12（腰壁・垂れ壁の真下／真上の梁は幅が材に収まれば壁の中＝裁定 2-2）。他 82 本は不変。
+- 2026-10-24 リファクタ S4（CL の無い U 字階段の seq2 を背後の外壁へ退避せず、レーン境界の仮想の面〔疑似 axisCL〕で組む。ユーザー裁定 (b)）: `golden-elev-ceiling/ceiling-wood-stair-test` 1階の階段帯 D1 で踊り場の床断面線の左端が 15mm（半壁厚 72.5→既定 57.5。2階の CL あり D1 と同位置）。ceiling-steel と他 81 本は不変。
 
 `app/scripts/probe/golden11/`（`D:/tatsuya/Download/11.stq`を同じ形式でダンプした固定スナップショット。
 展開図一般化Phase 6b-1で追加）も同じ手順で追跡する——`.gitignore`に`!scripts/probe/golden11/`を追加し、
