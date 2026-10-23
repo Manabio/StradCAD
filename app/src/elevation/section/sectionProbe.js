@@ -30,7 +30,8 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import { isRealRoom, baseLayerOf, orderLayerStack, layersAboveOf } from './sectionLayerStack.js';
 import { effectiveStructure } from '../../structural/structureRules.js';
-import { ceilClipProfileOf } from './sectionTypes.js';
+import { ceilClipProfileOf, worldOf } from './sectionTypes.js';
+import { zoneCeilingFieldOf } from '../space/zoneCeiling.js';
 import {
   stairPartitionDescriptors, partitionTopZAt, partitionTopCrossings, matchStairPartitionLine,
 } from '../../finish/stair/stairPartition.js';
@@ -38,7 +39,7 @@ import { stairUnderReturnSoffit } from '../../ceiling/stairSoffit.js';
 import { stairContinuesAbove } from '../../finish/stair/stairChains.js';
 import {
   cutProbeRange, isCutWall, isCutAlongWall, isSightlineShape,
-  buildLayerStack, probeColumn,
+  buildLayerStack, probeColumn, nearMembersOf,
 } from './sectionHits.js';
 
 export { probeColumn, stairUnderReturnSoffit };
@@ -138,6 +139,8 @@ export function makeProbeContext(layers, opts = {}) {
     // Phase 3（展開図一般化）: 水平面ヒット（floorFace/ceilFace。`section/sectionHits.js`の
     // `probeColumnHits`）の材料。`cellAt`（1点プローブ）の一般形。
     cellsAlong: spaceIndex.cellsAlong,
+    // 天伏の天井高さ場（graph ごとにメモ。collectCutBreaks が部材の端を足す可否の判定に使う）
+    zoneFieldFor: spaceIndex.zoneFieldFor,
     // Phase 6（展開図一般化。設計§5.4「規則へ吸収」）: 空気ボリュームの連結成分。
     // `section/sectionHits.js`の`isHiddenWall`（階段下の閉じた部屋の壁を「描かない実体」
     // ＝ZBand.kind:'hidden'として扱う判定。Phase 6b-2で「候補から消す」から変更）が消費する。
@@ -165,6 +168,7 @@ export function makeProbeContext(layers, opts = {}) {
  * S4: 視線方向の開口（isSightlineShape。Wallと同じisVertical/axisCLインターフェースで判定できる）
  *     の端点——アキの連結性判定（openingPassThrough。WP-E7スコープ）が列境界を必要とするため、
  *     このWPでも列境界自体は用意しておく（実際のopeningPassThrough付与はWP-E7で行う）。
+ * S5: 梁・柱（nearMembersOf）の run 方向の端（層の探査窓でクランプ。U1b B2）。
  * GAP_EPS未満の重複・line.lo/hiちょうどの値は素通し（Setで自然に併合される）。
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {ReturnType<typeof makeProbeContext>} [probeCtx] - 層別cellToRoomのウォームアップに使う
@@ -192,6 +196,13 @@ export function collectCutBreaks(cut, probeCtx) {
   const addIfInside = v => { if (v > probeLo + GAP_EPS && v < probeHi - GAP_EPS) values.add(v); };
   // 面の端そのものは常に列境界にする（延長した場合、面の内と外を1列に融合させない）。
   addIfInside(line.lo); addIfInside(line.hi);
+  // 列の割り方が出力へ出る区間（斜めの天井断面・視線側の斜め天端の壁・天伏の斜面）の world 区間。部材の端（下）はここに掛かる列には足さない。
+  const slopeSpans = [];
+  for (const seg of ceilClipProfileOf(cut) ?? []) {
+    if (!(Number.isFinite(seg?.ceilZHi) && Math.abs(seg.ceilZHi - seg.ceilZ) > GAP_EPS && seg.hiX - seg.loX > GAP_EPS)) continue;
+    const a = worldOf(cut, seg.loX), b = worldOf(cut, seg.hiX);
+    slopeSpans.push([Math.min(a, b), Math.max(a, b)]);
+  }
 
   for (const layer of layers) {
     probeCtx?.cellToRoomFor?.(layer); // ウォームアップ（後続のprobeColumn呼び出しのキャッシュ寄与）
@@ -221,6 +232,7 @@ export function collectCutBreaks(cut, probeCtx) {
         addIfInsideLayer(c1); addIfInsideLayer(c2);
         // 斜めの天端が水平線の高さを横切る位置も列の境界にする（列の中で斜線が水平線をまたがない）。
         const prof = probeCtx?.wallTopProfileFor?.(layer)?.get(w.id);
+        if (prof) slopeSpans.push([c1, c2]);
         for (const a of prof?.crossings?.([...slopeLevels, ...ceilLevelsOf(layer)]) ?? []) {
           if (a > c1 + GAP_EPS && a < c2 - GAP_EPS) addIfInsideLayer(a);
         }
@@ -230,6 +242,50 @@ export function collectCutBreaks(cut, probeCtx) {
       if (!isSightlineShape(o, line, cut.viewSign)) continue;
       addIfInsideLayer(o.coord1); addIfInsideLayer(o.coord2);
     }
+  }
+  // 梁・柱（U1b B2）: 梁・柱（部材）の run 方向の端。直交する梁は芯±半幅・平行な梁（切断線が帯を通るものを含む）はスパン両端・
+  // 柱は矩形の run 方向の辺。層ごとの探査窓（上の壁の端と同じ withinLayerWindow）へクランプする。
+  // 部材の一覧は候補収集（sectionHits.js addMemberHits）と同じ nearMembersOf（絞り込み・メモを共有）。
+  // 選択（visibleBandsOf）は memberCut/memberFace を帯にしない（B1 のまま）ので、部材の端で割れた隣接列は帯列が同じになり
+  // mergeColumns が併合する＝出力は不変。座標は world の run 座標（この関数が返す値と同じ）で、面ローカル x への変換は不要。
+  // **例外: 斜めの区間に掛かる列は割らない**。足す前の列（base）のうち端 v を含む列が斜めの区間と重なるなら足さない。
+  // その列は天端・天井の高さを列ごとの低い側／両端値で持ち（ceilZ・ceilEdge・topEdge）、mergeColumns が併合しない＝割り方が
+  // そのまま出力（斜線の分割・天井の高さ）に出るため。区間は次の 3 つだけ（QA アブレーションで必要と確認 2026-10-24。
+  // 他の候補〔cutAlong の天端・平面区画の継ぎ目・階段の裏面の足元〕は 83 本で発火せず／ceil と重複のため削除）:
+  // ceil＝斜めの天井断面、wtpSight＝視線側の wallTopProfile 壁のスパン、zone＝天伏の天井高さ場の斜面・円弧・ドームの run 範囲。
+  // 列の増減で描画が変わるのは B3 以降（選択へ参加させる段）で斜線の連結を直すときに合わせて扱う。
+  const near = nearMembersOf(cut);
+  if (near.beams.length > 0 || near.columns.length > 0) {
+    for (const layer of layers) {
+      const field = probeCtx?.zoneFieldFor ? probeCtx.zoneFieldFor(layer.graph) : zoneCeilingFieldOf(layer.graph);
+      for (const s of field?.surfaces ?? []) {
+        if (s.shape === 'flat') continue;
+        for (const r of s.rects) {
+          const [a, b] = line.isVertical ? [r.y1, r.y2] : [r.x1, r.x2];
+          slopeSpans.push([Math.min(a, b), Math.max(a, b)]);
+        }
+      }
+    }
+  }
+  const base = [...values].sort((a, b) => a - b);
+  const addMemberEdge = (layer, v) => {
+    const win = cut.layerRunWindows?.get(layer);
+    if (!(v > Math.max(probeLo, win?.lo ?? -Infinity) + GAP_EPS && v < Math.min(probeHi, win?.hi ?? Infinity) - GAP_EPS)) return;
+    const i = base.findIndex(b => b > v);
+    const colLo = base[i - 1] ?? -Infinity, colHi = base[i] ?? Infinity;
+    if (slopeSpans.some(([a, b]) => colHi > a + GAP_EPS && colLo < b - GAP_EPS)) return;
+    addIfInside(v);
+  };
+  for (const { layer, solid: b } of near.beams) {
+    if (!!b.isVertical !== !!line.isVertical) {
+      addMemberEdge(layer, b.axisWorld - b.widthMm / 2); addMemberEdge(layer, b.axisWorld + b.widthMm / 2);
+    } else {
+      addMemberEdge(layer, b.spanLo); addMemberEdge(layer, b.spanHi);
+    }
+  }
+  for (const { layer, solid: c } of near.columns) {
+    const [runLo, runHi] = line.isVertical ? [c.yLo, c.yHi] : [c.xLo, c.xHi];
+    addMemberEdge(layer, runLo); addMemberEdge(layer, runHi);
   }
   return [...values].sort((a, b) => a - b);
 }

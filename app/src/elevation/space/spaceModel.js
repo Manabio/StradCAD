@@ -313,6 +313,7 @@ export function buildSpaceIndex(layers, opts = {}) {
 
   return {
     cellAt, cellToRoomFor, cellToRoomByLayer, floorZFor, chFor, chAt, componentOf, componentAt, cellsAlong,
+    zoneFieldFor: fieldFor,
   };
 }
 

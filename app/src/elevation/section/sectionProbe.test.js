@@ -4,7 +4,7 @@
 // 設計意図はarchitect承認済みの実装指示書§5・WP-E1完了条件参照。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory, RoomFeature } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory, RoomFeature, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, collectCutBreaks, probeColumn } from './sectionProbe.js';
 import { emitOpenGapMarks, emitColumns } from './sectionEmit.js';
@@ -762,4 +762,134 @@ test('【失敗系】probeColumn: underRoomsが空集合なら既存の結果は
   const other = frontCut(graph, { airRoom, underRooms: new Set() });
   const after = probeColumn(other, 2000, makeProbeContext(other.layers));
   assert.deepEqual(after.map(b => [b.kind, b.z0, b.z1]), base.map(b => [b.kind, b.z0, b.z1]));
+});
+
+// ---- U1b B2: 梁・柱（部材）の run 方向の端で列を割る（選択は B1 のまま＝帯列は併合後に不変） ----
+const { VERTICAL: V_CL, HORIZONTAL: H_CL } = CenterLineType;
+const { STEEL: STEEL_MAT } = StructuralMaterialType;
+function clAt(graph, type, value) {
+  return graph.centerLines.find(cl => cl.centerLineType === type && cl.value === value)
+    ?? graph.addCenterLine(type, value, { labeled: false, discipline: Discipline.STRUCT });
+}
+// 鉛直梁（isVertical=true）: 通り芯 x に沿って y lo〜hi。STEEL-H200x100（幅100）。天＝levelOffset。
+function addBeamV(graph, x, lo, hi, levelOffset) {
+  return graph.addBeam(STEEL_MAT, 'STEEL-H200x100', clAt(graph, V_CL, x), true, clAt(graph, H_CL, lo), clAt(graph, H_CL, hi),
+    { role: 'primary', levelOffset });
+}
+// 水平梁（isVertical=false）: 通り芯 y に沿って x lo〜hi。
+function addBeamH(graph, y, lo, hi, levelOffset) {
+  return graph.addBeam(STEEL_MAT, 'STEEL-H200x100', clAt(graph, H_CL, y), false, clAt(graph, V_CL, lo), clAt(graph, V_CL, hi),
+    { role: 'primary', levelOffset });
+}
+// 切断線 y=1500（viewSign=1＝+y 側を見る）。部屋は 0..4000 × 0..3000。run 方向は x。
+const cutAtY1500 = (graph, over = {}) => frontCut(graph, { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 4000 }, ...over });
+const breaksOf = cut => collectCutBreaks(cut, makeProbeContext(cut.layers));
+
+test('【U1b B2・直交梁】collectCutBreaks: 切断位置がスパンに入る直交梁の芯±半幅（x=2000・幅100 → 1950/2050）が列の境になる', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000);
+  addBeamV(graph, 2000, 500, 2500, 2300);
+  const breaks = breaksOf(cutAtY1500(graph));
+  assert.ok(breaks.includes(1950) && breaks.includes(2050), `芯±半幅が境: ${breaks}`);
+  assert.ok(breaks.includes(2000), '芯の通り芯は従来どおり境（梁の有無によらない）');
+});
+
+test('【U1b B2・平行梁】collectCutBreaks: 視線側の平行な梁のスパン両端が列の境になる（梁専用の層＝memberLayers の通り芯は壁側の graph に無い）', () => {
+  const roomGraph = makeGraph();
+  makeRectRoom(roomGraph, 0, 0, 4000, 3000);
+  const beamGraph = makeGraph();
+  addBeamH(beamGraph, 2000, 500, 3500, 2300); // y=2000 は切断線 y=1500 の視線側
+  const cut = cutAtY1500(roomGraph, { memberLayers: [{ graph: beamGraph, floorZMm: 0, role: 'self' }] });
+  assert.deepEqual(breaksOf(cut), [0, 57.5, 500, 3500, 3942.5, 4000], '壁の端（57.5/3942.5）に梁のスパン端（500/3500）が加わる');
+});
+
+test('【U1b B2・柱】collectCutBreaks: 柱の矩形の run 方向の辺（x=3000 を挟む左右対称の 2 辺）が列の境になる', () => {
+  const withColumn = makeGraph();
+  makeRectRoom(withColumn, 0, 0, 4000, 3000);
+  withColumn.addColumn(STEEL_MAT, 'STEEL-SQ200x200x9.0', clAt(withColumn, V_CL, 3000), clAt(withColumn, H_CL, 2500), {}); // 視線側の柱
+  const without = makeGraph();
+  makeRectRoom(without, 0, 0, 4000, 3000);
+  clAt(without, V_CL, 3000); clAt(without, H_CL, 2500); // 柱の有無だけを違えにする
+  const before = breaksOf(cutAtY1500(without));
+  const added = breaksOf(cutAtY1500(withColumn)).filter(v => !before.includes(v));
+  assert.equal(added.length, 2, `柱の辺が 2 本増える: ${added}`);
+  assert.ok(added[0] < 3000 && added[1] > 3000 && added[0] + added[1] === 6000, `x=3000 を挟む対称の 2 辺: ${added}`);
+});
+
+test('【失敗系・U1b B2・探査窓】collectCutBreaks: 層の探査窓（layerRunWindows）の外の部材の端は足さない。窓が掛かれば足す', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000);
+  addBeamV(graph, 2000, 500, 2500, 2300);
+  const base = cutAtY1500(graph);
+  const win = (lo, hi) => new Map([[base.layers[0], { lo, hi }]]);
+  const outside = breaksOf({ ...base, layerRunWindows: win(0, 1000) });
+  assert.ok(!outside.includes(1950) && !outside.includes(2050), `窓の外は足さない: ${outside}`);
+  const inside = breaksOf({ ...base, layerRunWindows: win(0, 3000) });
+  assert.ok(inside.includes(1950) && inside.includes(2050), `窓の内は足す: ${inside}`);
+});
+
+test('【失敗系・U1b B2・斜めの区間】collectCutBreaks: 斜めの天井断面に掛かる列には部材の端を足さない（割り方が天井の高さに出るため）。水平の天井断面なら足す', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000);
+  addBeamV(graph, 2000, 500, 2500, 2300);
+  const base = cutAtY1500(graph);
+  const sloped = breaksOf({ ...base, ceilProfile: [{ loX: 0, hiX: 4000, ceilZ: 2400, ceilZHi: 3000 }] });
+  assert.ok(!sloped.includes(1950) && !sloped.includes(2050), `斜めの区間は足さない: ${sloped}`);
+  const flat = breaksOf({ ...base, ceilProfile: [{ loX: 0, hiX: 4000, ceilZ: 2400, ceilZHi: 2400 }] });
+  assert.ok(flat.includes(1950) && flat.includes(2050), `水平なら足す: ${flat}`);
+});
+
+test('【失敗系・B2・斜めの天端】視線側の wallTopProfile を持つ壁のスパンに掛かる列には直交梁の端を足さない（対照: プロファイル無しなら足す）', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000);
+  addBeamV(graph, 2000, 500, 2500, 2300);
+  const cut = cutAtY1500(graph);
+  const probeCtx = makeProbeContext(cut.layers);
+  const farWall = farWallOf(graph); // 視線側（y=3000）の壁
+  const withProfile = { ...probeCtx, wallTopProfileFor: () => new Map([[farWall.id, { zAt: () => 2000, crossings: () => [] }]]) };
+  const sloped = collectCutBreaks(cut, withProfile);
+  assert.ok(!sloped.includes(1950) && !sloped.includes(2050), `斜めの天端の壁の列は割らない: ${sloped}`);
+  const plain = collectCutBreaks(cut, probeCtx);
+  assert.ok(plain.includes(1950) && plain.includes(2050), `プロファイル無しなら足す: ${plain}`);
+});
+
+test('【失敗系・B2・天伏の傾斜面】天伏の天井高さ場の傾斜面の走り方向の範囲に掛かる列には端を足さない（対照: 平らな面だけなら足す）', () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000);
+  addBeamV(graph, 2000, 500, 2500, 2300);
+  const cut = cutAtY1500(graph);
+  const probeCtx = makeProbeContext(cut.layers);
+  const fieldOf = shape => ({ surfaces: [{ shape, rects: [{ x1: 0, y1: 0, x2: 4000, y2: 3000 }] }] });
+  const sloped = collectCutBreaks(cut, { ...probeCtx, zoneFieldFor: () => fieldOf('slope') });
+  assert.ok(!sloped.includes(1950) && !sloped.includes(2050), `傾斜面の列は割らない: ${sloped}`);
+  const flat = collectCutBreaks(cut, { ...probeCtx, zoneFieldFor: () => fieldOf('flat') });
+  assert.ok(flat.includes(1950) && flat.includes(2050), `平らな面だけなら足す: ${flat}`);
+});
+
+test('【失敗系・U1b B2・部材なし】collectCutBreaks: 部材が無い・切断線がスパンの外の梁だけなら境は増えない', () => {
+  const none = makeGraph();
+  makeRectRoom(none, 0, 0, 4000, 3000);
+  assert.deepEqual(breaksOf(cutAtY1500(none)), [0, 57.5, 3942.5, 4000], '壁の端だけ');
+  const farBeam = makeGraph();
+  makeRectRoom(farBeam, 0, 0, 4000, 3000);
+  addBeamV(farBeam, 2000, 2200, 2800, 2300); // スパンが切断位置 y=1500 に届かない
+  const breaks = breaksOf(cutAtY1500(farBeam));
+  assert.ok(!breaks.includes(1950) && !breaks.includes(2050), `届かない梁の端は足さない: ${breaks}`);
+});
+
+test('【U1b B2・不変】部材の端で列が増えても buildColumns（併合後）の帯列は部材なしと同じ（選択は B1 のまま＝mergeColumns が併合する）', () => {
+  // 梁なしの対照にも同じ通り芯（x=2000・y=500/2500）を足し、梁の有無だけを違えにする
+  const withBeam = makeGraph();
+  makeRectRoom(withBeam, 0, 0, 4000, 3000);
+  addBeamV(withBeam, 2000, 500, 2500, 2300);
+  const without = makeGraph();
+  makeRectRoom(without, 0, 0, 4000, 3000);
+  clAt(without, V_CL, 2000); clAt(without, H_CL, 500); clAt(without, H_CL, 2500);
+  const colsOf = graph => {
+    const cut = cutAtY1500(graph);
+    return buildColumns(cut, makeProbeContext(cut.layers))
+      .map(c => [c.x0, c.x1, c.bands.map(b => [b.kind, b.z0, b.z1, b.distMm ?? null])]);
+  };
+  assert.ok(breaksOf(cutAtY1500(withBeam)).length > breaksOf(cutAtY1500(without)).length, '前提: 梁で境が増えている');
+  assert.deepEqual(colsOf(withBeam), colsOf(without));
 });

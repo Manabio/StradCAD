@@ -764,8 +764,9 @@ const MEMBER_PROBE_OFFSET_MM = 1;
  * 梁: 直交するなら切断位置がスパンに入り芯±半幅の帯が範囲に掛かる／平行なら視線側にある（または切断線が梁の幅の帯を通る）
  * かつスパンが範囲に掛かる。
  * 柱: 走り方向の範囲が探査範囲に掛かり、切断線が通る（across が軸を含む）か視線側にある。
+ * 候補収集（`addMemberHits`）と列の分割（`collectCutBreaks`。U1b B2）が同じ一覧を共有する（メモも共有）。
  */
-function nearMembersOf(cut) {
+export function nearMembersOf(cut) {
   let near = memberNearMemo.get(cut);
   if (near) return near;
   // memberLayers が無ければ cut.layers を使う（リード裁定: 吹抜け帯・上部吹抜け帯にも梁を出す〔ユーザー裁定 2〕ため。

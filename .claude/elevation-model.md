@@ -1731,6 +1731,7 @@ room変化点で区切った区間を近い順に返す）を追加。`probeColu
 **U1b B1**（梁・柱の候補。`sectionHits.js addMemberHits`）: 梁・柱を`kind:'memberCut'`（切断線が切る梁・柱。切断線が平行な梁の幅の帯を通る梁は`along:true`）と`'memberFace'`（視線側の梁・柱）のヒットとして`probeColumnHits`へ積み、stairFaceと同じく`coverableHits`で除外する（**載せるだけ**。出力不変）。
 入力の層は`cut.memberLayers`、無ければ`cut.layers`（ユーザー裁定2「吹抜け帯・上部吹抜け帯にも梁を出す」に沿う。memberLayersは将来の上階graph注入用）。
 壁に埋まった梁は積まず、z は列の自階の床・天井で切る（床の穴は床で切らない・梁の断面は天井で切らない）。
+**U1b B2**（`sectionProbe.js collectCutBreaks`）: 部材の端で列を割る（直交梁＝芯±半幅・平行梁＝スパン両端・柱＝run 方向の辺。`nearMembersOf` を共有し層の探査窓でクランプ）。選択は未（B1 のまま）なので帯列は`mergeColumns`が併合し出力不変。ただし足す前の列が次の 3 つの斜めの区間と重なるときは足さない（その列は併合されず割り方が出力に出るため。QA アブレーションで 83 本に必要と確認 2026-10-24）: 斜めの天井断面（`ceilClip`/`ceilProfile`）・視線側の`wallTopProfile`を持つ壁のスパン・天伏の天井高さ場（`zoneFieldFor`）の斜面/円弧/ドームの run 範囲。B3 で斜線の連結と合わせて扱う。
 
 **Phase 4**（水平面ヒット由来の見えがかり線・アキ分割。**裁定済み2026-09-11**——
 knee-drop-test.stqの「A」面Cで受入基準（腰壁天端800〜天井2400がアキ、その上にBのFL+2400天井
