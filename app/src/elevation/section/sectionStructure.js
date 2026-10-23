@@ -426,6 +426,12 @@ function withinCutDrawRange(cut, x, tolMm = 0) {
  * @returns {BeamSolid[]}
  */
 export function structuralContribution(layers) {
+  return beamSolidsByLayer(layers).map(e => e.solid);
+}
+
+// structuralContribution の本体。梁の立体に、それが属する層を添えて返す（探査の候補収集 `memberSolidsOfLayers` 用。
+// 立体自体の形は変えない）。
+function beamSolidsByLayer(layers) {
   // ユーザー実機指摘2026-08「2階床の構造材梁断面は、壁の中なら描画しない」: 壁の材厚の中に
   // 収まる梁は壁に隠れて見えないため寄与から落とす。壁は全レイヤー（自階・上階）から集める
   // ——2階床梁は1階の壁の上に乗る（自階の壁が隠す）ことも、2階の壁の中に入ることもあるため。
@@ -446,7 +452,7 @@ export function structuralContribution(layers) {
         { isVertical: beam.isVertical, axisWorld: beam.axisValue, widthMm: beam.sectionWidth, spanLo, spanHi, layerTopZ: topZ, layerDepthMm: depthMm },
         wallEntries, { partitionLinesOf });
       if (emb.fullyEmbedded) continue;
-      result.push({
+      result.push({ layer, solid: {
         section: entry ?? null, // 断面形状（H形鋼のフランジ・ウェブ等）を作図で使う
         isVertical: beam.isVertical,
         axisWorld: beam.axisValue,
@@ -466,7 +472,7 @@ export function structuralContribution(layers) {
         // 切れ端が「残り」と数えられる）
         // 読まれたときに求める（図に出る梁はごく一部。alongTol は fullyEmbedded の判定で求め済み）
         embedding: { get along() { return emb.along; }, get alongTol() { return emb.alongTol; } },
-      });
+      } });
     }
   }
   return result;
@@ -487,6 +493,11 @@ export function structuralContribution(layers) {
  * @returns {ColumnSolid[]}
  */
 export function structuralColumnContribution(layers) {
+  return columnSolidsByLayer(layers).map(e => e.solid);
+}
+
+// structuralColumnContribution の本体（柱の立体に属する層を添えて返す。`beamSolidsByLayer` と対）。
+function columnSolidsByLayer(layers) {
   // 梁と同じ「壁の中なら描画しない」規則を柱にも適用する（ユーザー実機指摘2026-08。
   // 通り芯の交点には自動補完で柱が立つため、外壁の中に納まる管柱まで柱型として描くと
   // 壁面の途中に実在しない縦線2本が出る＝実機の「C2のX2上のエッジ線」の正体）。
@@ -508,7 +519,7 @@ export function structuralColumnContribution(layers) {
       if (column.role === FOUNDATION_ROLE) continue; // 杭は展開図に描かない
       const bare = bareColumnRect(column, layer.floorZMm);
       if (isColumnInsideWall(bare, ownWalls)) continue;
-      result.push(wrapColumnWithFinish(bare, walls, { noCover }));
+      result.push({ layer, solid: wrapColumnWithFinish(bare, walls, { noCover }) });
     }
   }
   return result;
@@ -818,6 +829,24 @@ function isBeamEmbeddedAtCut(cut, beam, wc) {
     }
   }
   return false;
+}
+
+/**
+ * 探査の候補収集（`sectionHits.js addMemberHits`。展開図リファクタ U1b）が使う、層の梁・柱の立体。
+ * 立体は `structuralContribution`／`structuralColumnContribution` と同じ（壁に埋まりきった梁・壁の中の柱は含まない）。
+ * 各要素に属する層（`layer`）を添える。`isEmbeddedAtCut` は「切断位置でその梁が壁に埋まっているか」
+ * （`isBeamEmbeddedAtCut`。梁と平行な壁の足元に切断位置の区間が入るか。壁の一覧は渡した layers のもの）。
+ * @param {Array<{graph:object, floorZMm:number, role:string}>} layers
+ * @returns {{beams:Array<{layer:object, solid:BeamSolid}>, columns:Array<{layer:object, solid:ColumnSolid}>,
+ *   isEmbeddedAtCut:(cut:import('./sectionTypes.js').SectionCut, beam:BeamSolid)=>boolean}}
+ */
+export function memberSolidsOfLayers(layers) {
+  const wc = { wallEntries: wallEntriesOfLayers(layers), partitionLinesOf: makePartitionLinesOf() };
+  return {
+    beams: beamSolidsByLayer(layers),
+    columns: columnSolidsByLayer(layers),
+    isEmbeddedAtCut: (cut, beam) => isBeamEmbeddedAtCut(cut, beam, wc),
+  };
 }
 
 /**

@@ -72,6 +72,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   viewSign: 1|-1,
  *   dirSign: 1|-1,
  *   layers: Array<{graph:object, floorZMm:number, role:'self'|'above'|'below'}>,
+ *   memberLayers?: Array<{graph:object, floorZMm:number, role:'self'|'above'|'below'}>,
  *   zRange: {loZ:number, hiZ:number},
  *   baseFloorZ: number,
  *   stairCut?: object,
@@ -87,6 +88,8 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   openGapMarks?: boolean,
  *   ceilClip?: Array<{loX:number, hiX:number, ceilZ:number, ceilZHi?:number}>,
  * }} SectionCut
+ *   memberLayers（任意。展開図リファクタ U1b）… 探査の候補収集（`sectionHits.js addMemberHits`）が梁・柱の立体を作る層。
+ *   無ければ`layers`を使う（B1。渡す呼び出し側は未実装）。壁の層スタック（`layers`）は変えず、梁・柱専用の層だけを別に持てる。
  *   ceilClip（任意。E5の受け口）… `ceilProfile`と同形（断面ローカルx）の**打ち切り専用**の天井断面。
  *   列の分割（`withCeilProfileBreaks`）・列の天井（`ceilZ`/`ceilEdge`）・斜線を頭打ちにする列境界
  *   （`collectCutBreaks`の`slopeLevels`）だけが `ceilProfile ?? ceilClip` で読む。帯の性格判定

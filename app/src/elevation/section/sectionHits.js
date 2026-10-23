@@ -22,6 +22,10 @@
  * null）があるときだけ積む。floorFace/ceilFace/slabFaceと同様に`visibleBandsOf`は選択対象から
  * 除外する（載せるだけ。選択への参加は6b-2）。
  *
+ * memberCut/memberFace（展開図リファクタ U1b・B1）は構造の梁・柱の候補（`addMemberHits`）。stairFaceと同様に
+ * `visibleBandsOf`は選択対象から除外する（載せるだけ。選択への参加は B3）。memberCutのdistMmは0（切断面で切られる部材）、
+ * memberFaceのdistMmは壁のwallFaceと同じ芯の距離（測定値）。入力の層は`cut.memberLayers ?? cut.layers`。
+ *
  * **`SurfaceHit.distMm`の意味はkindによって違う**（QA指摘②）: cut/cutAlongは常に`0`（切断面上の
  * 実体という定義そのもの）。wallFace/floorFace/ceilFaceは**測定値**（切断面からの実距離。
  * `compareHitDepth`のソートキー）。`slabFace`の`distMm:0`だけは**測定値ではなく番兵**
@@ -77,6 +81,7 @@ import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import { localXOf } from './sectionTypes.js';
 import { stairFaceHits } from './sectionStair.js';
+import { memberSolidsOfLayers } from './sectionStructure.js';
 import {
   isRealRoom, orderLayerStack, baseLayerOf, layerOwningZ,
   compareLayerPriority, resolveSightlineTopZ,
@@ -744,6 +749,159 @@ function addStairFaceHits(cut, worldMid, hits) {
   }
 }
 
+// ---- 梁・柱（部材）の候補（展開図リファクタ U1b・B1。選択には参加しない）----
+// 立体は切断ごとに 1 回だけ作る（layers 配列の同一性で覚える）。その切断線の近傍の部材への絞り込みも切断ごとに 1 回（cut で覚える）。
+// どちらも切断・層の寿命と同じ WeakMap なので、呼び出しの間で内容が変わらない前提（探査中に graph は変わらない）。
+const memberSolidsMemo = new WeakMap(); // 層の配列 → memberSolidsOfLayers の結果
+const memberNearMemo = new WeakMap(); // cut → 切断線の近傍の部材
+// 候補の位置の空気（天井）を引く点を、部材の芯から切断線の側へ寄せる量（visibleBeamPieces の天井判定と同じ 1mm。
+// 部材が部屋の境界の通り芯に乗るとき、境界ちょうどの点が隣室のセルに落ちないように）
+const MEMBER_PROBE_OFFSET_MM = 1;
+
+/**
+ * その切断の部材（梁・柱）のうち、探査範囲（cutDrawRange の延長込み）で切断線の近傍にあるものだけ。
+ * 入力の層は `cut.memberLayers`（梁・柱専用の層。渡されなければ `cut.layers`）。
+ * 梁: 直交するなら切断位置がスパンに入り芯±半幅の帯が範囲に掛かる／平行なら視線側にある（または切断線が梁の幅の帯を通る）
+ * かつスパンが範囲に掛かる。
+ * 柱: 走り方向の範囲が探査範囲に掛かり、切断線が通る（across が軸を含む）か視線側にある。
+ */
+function nearMembersOf(cut) {
+  let near = memberNearMemo.get(cut);
+  if (near) return near;
+  // memberLayers が無ければ cut.layers を使う（リード裁定: 吹抜け帯・上部吹抜け帯にも梁を出す〔ユーザー裁定 2〕ため。
+  // memberLayers は将来の上階 graph 注入用）
+  const layers = cut.memberLayers ?? cut.layers ?? [];
+  let all = memberSolidsMemo.get(layers);
+  if (!all) { all = memberSolidsOfLayers(layers); memberSolidsMemo.set(layers, all); }
+  const { line } = cut;
+  const sign = cut.viewSign === -1 ? -1 : 1;
+  const lo = line.lo - (line.unionExtendLoMm ?? line.probeExtendLoMm ?? 0);
+  const hi = line.hi + (line.unionExtendHiMm ?? line.probeExtendHiMm ?? 0);
+  const overlaps = (aLo, aHi) => aHi >= lo - GAP_EPS && aLo <= hi + GAP_EPS;
+  const beams = all.beams.filter(({ solid: b }) => {
+    const halfW = b.widthMm / 2;
+    if (!!b.isVertical !== !!line.isVertical) {
+      return line.axisValue >= b.spanLo - GAP_EPS && line.axisValue <= b.spanHi + GAP_EPS
+        && overlaps(b.axisWorld - halfW, b.axisWorld + halfW);
+    }
+    const diff = b.axisWorld - line.axisValue;
+    return (Math.abs(diff) <= halfW + GAP_EPS || diff * sign > GAP_EPS) && overlaps(b.spanLo, b.spanHi);
+  });
+  const columns = all.columns.filter(({ solid: c }) => {
+    const [runLo, runHi] = line.isVertical ? [c.yLo, c.yHi] : [c.xLo, c.xHi];
+    const [acrossLo, acrossHi] = line.isVertical ? [c.xLo, c.xHi] : [c.yLo, c.yHi];
+    if (!overlaps(runLo, runHi)) return false;
+    return (line.axisValue >= acrossLo - GAP_EPS && line.axisValue <= acrossHi + GAP_EPS)
+      || (sign > 0 ? acrossLo > line.axisValue + GAP_EPS : acrossHi < line.axisValue - GAP_EPS);
+  });
+  near = { beams, columns, isEmbeddedAtCut: all.isEmbeddedAtCut };
+  memberNearMemo.set(cut, near);
+  return near;
+}
+
+/**
+ * 梁・柱（部材）を候補へ積む（展開図リファクタ U1b・B1。設計 261023_…U1〜U5の検討.md §9「候補収集」）。
+ * **`visibleBandsOf` は `memberCut`／`memberFace` を選択対象から除外する**（`coverableHits`。Phase 3 の水平面ヒットと
+ * 同じ出力完全不変の仕掛け）ので、ここで積んでも帯・描画は変わらない。後続（B2 列の分割・B3 選択）の材料。
+ *
+ * - `memberCut` … 切断線が部材を切る。直交する梁（切断位置がスパンに入り、worldMid が芯±半幅に入る）・切断線が通る柱。distMm=0。
+ *   切断線が平行な梁の幅の帯を通る（|芯−line.axisValue| ≤ 半幅）梁も memberCut（壁の cutAlong に相当）で、`along:true` を付けて区別する。
+ * - `memberFace` … 視線側にある部材。平行な梁（空中の梁・面の通りの梁）・視線側の柱。distMm は壁と同じ芯の距離 |芯−line.axisValue|
+ *   （柱は柱の中心）。柱には視線側の手前の縁までの距離 depthNearMm も添える。
+ * - z … 梁は [天−成, 天]。柱は柱の足元〜その位置の天井。**その位置の空気へ切る**: 下は列の自階の床（天が床以下の部材は積まない）、
+ *   上は `probeCtx.cellAt(部材の層, 位置).ceilZ`（取れなければ梁は切らず、柱は層スタックの天井）。天井より下端が上の梁（天井裏）は積まない。
+ *   **ただし memberCut の梁は天井で切らない**（現行の断面は天井裏でも描き、天井より上は emit が細破線へ降格する。
+ *   天井裏を落とすのは空中・面の通りの見え掛かり〔visibleBelowCeiling〕だけ。along の memberCut も同じ）。
+ *   列の自階が床の穴（吹抜け・階段吹抜け・昇降路＝`isRealRoom` でない部屋）なら下は切らない（現行の床の遮蔽の floorlessRanges と同じ。
+ *   階段帯の梁はほぼこの列にあるため、穴は「床が無いから積まない」にしない）。
+ * - **積まないもの** … 列の自階に部屋が無い（建物の外・未区画）列／壁に埋まった梁
+ *   （立体の時点で全スパンが埋まる梁は落ちている。ここでは切断位置が壁の足元に入る梁〔`isEmbeddedAtCut`〕と、worldMid が平行な
+ *   壁の足元〔`embedding.along`〕に入る梁）——hidden で積むと将来 frontMatch で壁の断面より先に選ばれ壁断面が消えるため、積まない。
+ * - 付帯 … `member`（梁・柱の立体）・`memberType`（'beam'|'column'）・`section`（梁のカタログ断面。梁成 beamDepthMm の出どころ。柱は無し）・
+ *   `layer`（部材の属する層。compareLayerPriority 用）。B2 が列の分割に使う部材の端は `member`（梁: axisWorld±widthMm/2・spanLo/Hi／
+ *   柱: xLo/xHi/yLo/yHi）から取る。
+ * `probeCtx.cellAt` が無い（簡略 probeCtx）なら何もしない。
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} worldMid
+ * @param {ReturnType<typeof import('./sectionProbe.js').makeProbeContext>} probeCtx
+ * @param {Array} hits - 追記先
+ * @param {Array} layerStack - この列の層スタック（`buildLayerStack`）
+ */
+function addMemberHits(cut, worldMid, probeCtx, hits, layerStack) {
+  if (typeof probeCtx?.cellAt !== 'function') return;
+  const near = nearMembersOf(cut);
+  if (near.beams.length === 0 && near.columns.length === 0) return;
+  const base = baseLayerOf(layerStack);
+  // 列の自階に部屋が無い（建物の外・未区画）なら積まない。吹抜け・階段吹抜け・昇降路（実床の無い部屋＝床の穴）は積むが、
+  // 床で下を切らない（現行の床の遮蔽 `occludeByFloor` の floorlessRanges＝穴では床以下も切らない、と同じ）。
+  if (!base?.room) return;
+  const hasFloor = isRealRoom(base.room);
+  const floorZ = base.floorZ;
+  const { line } = cut;
+  const sign = cut.viewSign === -1 ? -1 : 1;
+  const cellAtRunDepth = (layer, run, depth) => probeCtx.cellAt(layer, line.isVertical ? depth : run, line.isVertical ? run : depth);
+  // 部材の z [z0,z1] を、その位置（run, depth）の空気＝[自階の床, 天井] へ切る。空気が残らなければ null。
+  // z1 が Infinity（柱）のときの天井は層スタックのもの（セルが天井を持たないとき）。
+  // withCeiling=false は天井で切らない（梁の断面。現行の断面は天井裏でも描き、天井より上は emit が細破線へ降格する——
+  // 天井裏を落とすのは空中・面の通りの見え掛かり〔visibleBelowCeiling〕だけ。床以下を切る床の遮蔽は断面にも掛かる）。
+  const clipToAir = (z0, z1, run, depth, withCeiling = true) => {
+    let ceil = Infinity;
+    if (withCeiling) {
+      const owner = layerOwningZ(layerStack, Number.isFinite(z1) ? (z0 + z1) / 2 : z0 + GAP_EPS);
+      const cellCeil = owner ? cellAtRunDepth(owner.layer, run, depth)?.ceilZ : null;
+      ceil = Number.isFinite(cellCeil) ? cellCeil : (Number.isFinite(z1) ? Infinity : owner?.ceilZ ?? Infinity);
+    }
+    const lo = hasFloor ? Math.max(z0, floorZ) : z0, hi = Math.min(z1, ceil);
+    return hi - lo > GAP_EPS ? { z0: lo, z1: hi } : null;
+  };
+
+  for (const { layer, solid: b } of near.beams) {
+    const halfW = b.widthMm / 2;
+    const zTop = b.topZ, zBot = b.topZ - b.depthMm;
+    if (!!b.isVertical !== !!line.isVertical) {
+      // 直交する梁: 切断位置がスパンに入り、worldMid が芯±半幅に入る（nearMembersOf がスパン側は済み）
+      if (Math.abs(worldMid - b.axisWorld) > halfW + GAP_EPS) continue;
+      if (near.isEmbeddedAtCut(cut, b)) continue;
+      const z = clipToAir(zBot, zTop, worldMid, line.axisValue, false); // 断面は天井で切らない
+      if (!z) continue;
+      hits.push({ kind: 'memberCut', layer, distMm: 0, ...z, member: b, memberType: 'beam', section: b.section });
+    } else {
+      // 平行な梁（nearMembersOf が切断線の帯の中か視線側かを済み）: worldMid がスパンに入り、壁の足元に埋まっていない
+      if (worldMid < b.spanLo - GAP_EPS || worldMid > b.spanHi + GAP_EPS) continue;
+      if ((b.embedding?.along ?? []).some(([a, c]) => worldMid > a + GAP_EPS && worldMid < c - GAP_EPS)) continue;
+      const diff = b.axisWorld - line.axisValue;
+      if (Math.abs(diff) <= halfW + GAP_EPS) {
+        // 切断線が梁の幅の帯を通る（壁の cutAlong に相当）: memberCut・distMm 0・along:true（直交の memberCut と区別する）。
+        // 現行は parallel の細線で、描画範囲・天井裏では切らない＝天井で切らない
+        const z = clipToAir(zBot, zTop, worldMid, line.axisValue, false);
+        if (!z) continue;
+        hits.push({ kind: 'memberCut', layer, distMm: 0, ...z, along: true, member: b, memberType: 'beam', section: b.section });
+        continue;
+      }
+      const z = clipToAir(zBot, zTop, worldMid, b.axisWorld - sign * MEMBER_PROBE_OFFSET_MM);
+      if (!z) continue;
+      hits.push({ kind: 'memberFace', layer, distMm: Math.abs(diff), ...z,
+        member: b, memberType: 'beam', section: b.section });
+    }
+  }
+
+  for (const { layer, solid: c } of near.columns) {
+    const [runLo, runHi] = line.isVertical ? [c.yLo, c.yHi] : [c.xLo, c.xHi];
+    if (worldMid < runLo - GAP_EPS || worldMid > runHi + GAP_EPS) continue;
+    const [acrossLo, acrossHi] = line.isVertical ? [c.xLo, c.xHi] : [c.yLo, c.yHi];
+    const acrossMid = (acrossLo + acrossHi) / 2;
+    const z = clipToAir(c.baseZ, Infinity, worldMid, acrossMid);
+    if (!z) continue;
+    if (line.axisValue >= acrossLo - GAP_EPS && line.axisValue <= acrossHi + GAP_EPS) {
+      hits.push({ kind: 'memberCut', layer, distMm: 0, ...z, member: c, memberType: 'column' });
+    } else {
+      const nearEdge = sign > 0 ? acrossLo : acrossHi;
+      hits.push({ kind: 'memberFace', layer, distMm: Math.abs(acrossMid - line.axisValue), ...z,
+        depthNearMm: (nearEdge - line.axisValue) * sign, member: c, memberType: 'column' });
+    }
+  }
+}
+
 /**
  * 1本の列（worldMid。`collectCutBreaks`が返す隣接ペアの中点を渡す想定）に見える面の候補を
  * **深度昇順**で全て返す（§5.2 step1-2の候補収集。「z区間ごとに1つ選ぶ」（旧step3-4）は行わない）。
@@ -760,8 +918,9 @@ function addStairFaceHits(cut, worldMid, hits) {
  * @param {{worldLo:number, worldHi:number}|null} [span] - 列の世界座標の幅。省略は worldMid の1点。
  *   あれば斜めの天端（wallTop）の帯の上端を幅の両端の高い方に取り、wallFace ヒットへ topEdge
  *   （{zAtLo, zAtHi}＝世界座標の lo/hi 側の天端の高さ）を載せる。天端プロファイルの無い壁は span の有無に関わらず不変。
- * @returns {{hits:Array<{kind:'cut'|'cutAlong'|'wallFace'|'floorFace'|'ceilFace'|'slabFace',
+ * @returns {{hits:Array<{kind:'cut'|'cutAlong'|'wallFace'|'floorFace'|'ceilFace'|'slabFace'|'stairFace'|'memberCut'|'memberFace',
  *   wall?:import('@core').Wall, room?:object, layer:object,
+ *   member?:object, memberType?:'beam'|'column', section?:object|null, depthNearMm?:number,
  *   distMm:number, z0:number, z1:number, openRanges?:Array, isKneeDrop?:boolean}>,
  *   layerStack:Array, unexploredBelowZ:number|null}}
  */
@@ -859,6 +1018,8 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
   // 自階基準で層に依らないため、layerStackのループの外で良い。visibleBandsOfは選択対象から
   // 除外するため、出力（ZBand[]）は不変のまま。
   addStairFaceHits(cut, worldMid, hits);
+  // U1b B1: 梁・柱（memberCut/memberFace）を積む。同じく visibleBandsOf が選択対象から除外する（出力不変）。
+  addMemberHits(cut, worldMid, probeCtx, hits, layerStack);
 
   hits.sort(compareHitDepth);
   return { hits, layerStack, unexploredBelowZ };
@@ -885,7 +1046,9 @@ function kindRank(kind) {
   switch (kind) {
     case 'cut': return 0;
     case 'cutAlong': return 1;
+    case 'memberCut': return 1.5; // 切断面で切られる梁・柱（壁の cut/cutAlong の次・見えがかりの壁の前）
     case 'wallFace': return 2;
+    case 'memberFace': return 2.2; // 同距離なら壁の見えがかりが先
     case 'stairFace': return 2.5;
     case 'floorFace': case 'ceilFace': return 3;
     case 'slabFace': return 4;
@@ -1009,8 +1172,10 @@ export function visibleBandsOf(hits, cut, opts = {}) {
   // `wallMatch`のkindホワイトリストには最初から入っていないため選択結果自体は変わらないが、
   // `mergeAdjacentZBands`に「必ず戻る」保証を持たせるより、floorFace/ceilFace/slabFaceと
   // 同じ場所で先に弾く方が出力完全不変の仕掛けとして一貫する）。
+  // U1b B1: memberCut/memberFace（梁・柱の候補。`addMemberHits`）も同じ理由で除外する——B3 で選択に入れるまでは帯・描画を変えない。
   const coverableHits = hits.filter(h =>
-    h.kind !== 'floorFace' && h.kind !== 'ceilFace' && h.kind !== 'slabFace' && h.kind !== 'stairFace');
+    h.kind !== 'floorFace' && h.kind !== 'ceilFace' && h.kind !== 'slabFace' && h.kind !== 'stairFace'
+    && h.kind !== 'memberCut' && h.kind !== 'memberFace');
 
   // zBreaks = 全ヒットのz端点 ∪ 層の床天井 ∪ zRange端 ∪ cut.baseFloorZ（§5.2 step3。WP-E5b追加:
   // baseFloorZはemitLineの§5.6最終フィルタ（両端がbaseFloorZ未満なら向こう側=DETAIL破線へ

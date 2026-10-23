@@ -1728,6 +1728,10 @@ room変化点で区切った区間を近い順に返す）を追加。`probeColu
 側面視・ささら系の経路は実データではまだ通っていない（STEEL折返し階段のテスト用.stqが必要なら
 `makeKneeDropTest.mjs`の作法で6b-2着手時に作る）。
 
+**U1b B1**（梁・柱の候補。`sectionHits.js addMemberHits`）: 梁・柱を`kind:'memberCut'`（切断線が切る梁・柱。切断線が平行な梁の幅の帯を通る梁は`along:true`）と`'memberFace'`（視線側の梁・柱）のヒットとして`probeColumnHits`へ積み、stairFaceと同じく`coverableHits`で除外する（**載せるだけ**。出力不変）。
+入力の層は`cut.memberLayers`、無ければ`cut.layers`（ユーザー裁定2「吹抜け帯・上部吹抜け帯にも梁を出す」に沿う。memberLayersは将来の上階graph注入用）。
+壁に埋まった梁は積まず、z は列の自階の床・天井で切る（床の穴は床で切らない・梁の断面は天井で切らない）。
+
 **Phase 4**（水平面ヒット由来の見えがかり線・アキ分割。**裁定済み2026-09-11**——
 knee-drop-test.stqの「A」面Cで受入基準（腰壁天端800〜天井2400がアキ、その上にBのFL+2400天井
 見えがかり線）をユーザーが実機確認し採用。当時は`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`
