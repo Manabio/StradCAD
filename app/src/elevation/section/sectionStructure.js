@@ -469,6 +469,15 @@ function splitRangeByPredicate(lo, hi, hidden) {
   return out;
 }
 
+// 層の graph → 隔て板の線（stairPartitionLines）の memo 付き関数。切断ごとに 1 つ作る。
+function makePartitionLinesOf() {
+  const memo = new Map();
+  return (graph) => {
+    if (!memo.has(graph)) memo.set(graph, stairPartitionLines(graph));
+    return memo.get(graph);
+  };
+}
+
 // 腰壁・垂れ壁（全高でない壁）か。遮蔽には使わない（保守側＝梁を描く）。
 // 供給源は断面エンジン・平面と同じ finish/kneeDropWall.js（key解読の唯一の窓口）。
 function isKneeOrDropWall(graph, wall) {
@@ -726,6 +735,46 @@ function sectionOutline(cut, xLo, xHi, zTop, depthMm, entry) {
 export function structuralPrimitivesForCut(contribution, cut, columns, floorProfile = null, opts = {}) {
   const prims = [];
   const outlines = []; // 断面の閉じた輪郭（床の遮蔽を輪郭の単位で判定する）: {prims, covered(dir)}
+  // 層の graph ごとの隔て板の線（切断ごとに 1 回だけ求める。可視区間の判定にも同じものを渡す）
+  const partitionLinesOf = makePartitionLinesOf();
+  for (const piece of visibleBeamPieces(contribution, cut, columns, floorProfile, { ...opts, partitionLinesOf })) {
+    const { beam, kind, xLo, xHi, zHi, zLo } = piece;
+    if (kind === 'section') {
+      const halfW = beam.widthMm / 2, x = piece.x;
+      const outline = sectionOutline(cut, xLo, xHi, zHi, beam.depthMm, beam.section);
+      prims.push(...outline);
+      // 断面は閉じた輪郭 1 つの単位で床の遮蔽を判定する（穴の縁で半分だけ開いた形で残さない）。階段側の壁が断面を覆うかは遅延評価
+      outlines.push({ prims: outline, covered: (dir) => stairSideWallCovers(cut, beam, halfW, x, dir, partitionLinesOf),
+        cutRect: opts.wallLineCuts ? wallLineCutRect(cut, beam, halfW, x, partitionLinesOf) : null });
+    } else if (kind === 'airborne') {
+      prims.push(emitLine(cut, xLo, zHi, xHi, zHi, ElevationLineRole.SILHOUETTE));
+      prims.push(emitLine(cut, xLo, zLo, xHi, zLo, ElevationLineRole.SILHOUETTE));
+    } else { // parallel
+      prims.push(emitLine(cut, xLo, zHi, xHi, zHi, ElevationLineRole.DETAIL));
+      prims.push(emitLine(cut, xLo, zLo, xHi, zLo, ElevationLineRole.DETAIL));
+      for (const x of piece.ends) prims.push(emitLine(cut, x, zHi, x, zLo, ElevationLineRole.DETAIL));
+    }
+  }
+  const result = opts.floorOcclusion ? occludeByFloor(prims, opts.floorOcclusion, outlines) : prims;
+  if (opts.wallLineCuts) { // 描かれた断面のうち、壁内の梁が壁の面から出ているものの、壁の線を分ける矩形（呼び出し側が壁の断面線へ適用する）
+    const drawn = new Set(result);
+    for (const g of outlines) if (g.cutRect && g.prims.some(p => drawn.has(p))) opts.wallLineCuts.push(g.cutRect);
+  }
+  return result;
+}
+
+/**
+ * 梁ごとに「どの種類（断面・空中の見えがかり・平行の見えがかり）で、どの x 範囲・z 範囲が見えるか」を決める（可視区間の唯一の判定）。
+ * 線への写像（`structuralPrimitivesForCut`）・床の遮蔽・輪郭の単位・壁の断面線の分断は含まない。座標は断面ローカル x・絶対 z。
+ * 引数は `structuralPrimitivesForCut` と同じ（`opts.partitionLinesOf` を渡すと隔て板の線の計算を呼び出し側と共有する）。
+ * @returns {Array<{beam:BeamSolid, kind:'section'|'airborne'|'parallel', xLo:number, xHi:number, zLo:number, zHi:number,
+ *   x?:number, ends?:number[]}>}
+ *   section … 断面（xLo..xHi＝梁の見付け幅・zHi＝天・zLo＝下端。x＝梁の芯のローカル x）／
+ *   airborne … 空中を横切る梁の天地の中線 1 区間（天井・壁・柱に隠れる区間を除いた残り）／
+ *   parallel … 切断線の帯の中を通る梁の天地の細線 1 区間（ends＝その区間が梁の元の端である側の縦線の x。昇順）。
+ */
+export function visibleBeamPieces(contribution, cut, columns, floorProfile = null, opts = {}) {
+  const pieces = [];
   // 空中を横断する梁の見えがかりは、その位置の天井（opts.ceilZAtWorld(x, y)。階段帯なら自階の層の cellAt＝裏面）より梁の下端が上なら
   // 天井裏＝描かない（ユーザー指示 2026-10-15「2FL にある横架材見え掛かりは、天井仕上げ面より上〔=天井裏〕につき描画不要」）。
   // 区間の 3 点で見て、どこかで天井より下に出ていれば描く。天井が取れない点は「見える」側に倒す。
@@ -759,11 +808,7 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
     columnSolids = structuralColumnContribution(cut.layers);
   }
   // 層の graph ごとの隔て板の線（切断ごとに 1 回だけ求める）
-  const partitionMemo = new Map();
-  const partitionLinesOf = (graph) => {
-    if (!partitionMemo.has(graph)) partitionMemo.set(graph, stairPartitionLines(graph));
-    return partitionMemo.get(graph);
-  };
+  const partitionLinesOf = opts.partitionLinesOf ?? makePartitionLinesOf();
   for (const beam of contribution ?? []) {
     const halfW = beam.widthMm / 2;
     const colSpans = columnSolids ? columnCoveredSpans(columnSolids, cut.layers, beam, halfW) : [];
@@ -787,11 +832,7 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
       // 切断位置で梁が壁に埋まっていれば（壁の断面の中に梁断面を重ねない）描かない
       if (isBeamEmbeddedAtCut(cut, beam, halfW, partitionLinesOf)) continue;
       if (!sectionVisibleInRoom(cut, beam, halfW, colSpans, partitionLinesOf)) continue;
-      const outline = sectionOutline(cut, x - halfW, x + halfW, beam.topZ, beam.depthMm, beam.section);
-      prims.push(...outline);
-      // 断面は閉じた輪郭 1 つの単位で床の遮蔽を判定する（穴の縁で半分だけ開いた形で残さない）。階段側の壁が断面を覆うかは遅延評価
-      outlines.push({ prims: outline, covered: (dir) => stairSideWallCovers(cut, beam, halfW, x, dir, partitionLinesOf),
-        cutRect: opts.wallLineCuts ? wallLineCutRect(cut, beam, halfW, x, partitionLinesOf) : null });
+      pieces.push({ beam, kind: 'section', x, xLo: x - halfW, xHi: x + halfW, zLo: beam.topZ - beam.depthMm, zHi: beam.topZ });
       continue;
     }
     // **室内を空中で横断する梁の見えがかり**（ユーザー実機指摘2026-08「6」A「材が空中に
@@ -818,9 +859,7 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
         const hiX = Math.min(drawHi, Math.max(xa, xb));
         if (!(hiX - loX > GAP_EPS)) continue;
         for (const [vLo, vHi] of visibleBelowCeiling(beam, loX, hiX)) {
-          prims.push(emitLine(cut, vLo, beam.topZ, vHi, beam.topZ, ElevationLineRole.SILHOUETTE));
-          prims.push(emitLine(cut, vLo, beam.topZ - beam.depthMm, vHi, beam.topZ - beam.depthMm,
-            ElevationLineRole.SILHOUETTE));
+          pieces.push({ beam, kind: 'airborne', xLo: vLo, xHi: vHi, zLo: beam.topZ - beam.depthMm, zHi: beam.topZ });
         }
       }
       continue;
@@ -836,22 +875,13 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
     for (const [segLo, segHi] of subtractSpans(beam.spanLo, beam.spanHi, mergeSpans([...colSpans, ...(beam.hiddenSpans ?? [])]))) {
       const xa = localXOf(cut, segLo), xb = localXOf(cut, segHi);
       const loX = Math.min(xa, xb), hiX = Math.max(xa, xb);
-      prims.push(emitLine(cut, loX, zTop, hiX, zTop, ElevationLineRole.DETAIL));
-      prims.push(emitLine(cut, loX, zBot, hiX, zBot, ElevationLineRole.DETAIL));
       const ends = [];
       if (Math.abs(segLo - beam.spanLo) <= GAP_EPS) ends.push(localXOf(cut, beam.spanLo));
       if (Math.abs(segHi - beam.spanHi) <= GAP_EPS) ends.push(localXOf(cut, beam.spanHi));
-      for (const x of ends.sort((p, q) => p - q)) {
-        prims.push(emitLine(cut, x, zTop, x, zBot, ElevationLineRole.DETAIL));
-      }
+      pieces.push({ beam, kind: 'parallel', xLo: loX, xHi: hiX, zLo: zBot, zHi: zTop, ends: ends.sort((p, q) => p - q) });
     }
   }
-  const result = opts.floorOcclusion ? occludeByFloor(prims, opts.floorOcclusion, outlines) : prims;
-  if (opts.wallLineCuts) { // 描かれた断面のうち、壁内の梁が壁の面から出ているものの、壁の線を分ける矩形（呼び出し側が壁の断面線へ適用する）
-    const drawn = new Set(result);
-    for (const g of outlines) if (g.cutRect && g.prims.some(p => drawn.has(p))) opts.wallLineCuts.push(g.cutRect);
-  }
-  return result;
+  return pieces;
 }
 
 /**

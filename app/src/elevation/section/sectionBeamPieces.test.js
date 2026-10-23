@@ -1,0 +1,119 @@
+// sectionStructure.js visibleBeamPieces（梁の可視区間の唯一の判定）の単体テスト。
+// 線への写像（structuralPrimitivesForCut）・床の遮蔽は含めない——種類・x 範囲・z 範囲だけを見る。
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { visibleBeamPieces, structuralPrimitivesForCut } from './sectionStructure.js';
+
+// 水平の切断線 y=0（室内側＝+y。viewSign=1・dirSign=1・local x = world x）。描画範囲 x 0..2000。
+const cutOf = (over = {}) => ({
+  seqNo: 'c', line: { isVertical: false, axisValue: 0, lo: 0, hi: 2000 },
+  viewSign: 1, dirSign: 1, layers: [{ graph: { walls: [] }, floorZMm: 0, role: 'self' }],
+  zRange: { loZ: 0, hiZ: 2400 }, baseFloorZ: 0, ...over,
+});
+// 空中の梁（y=500・x 0..2000・天 1190・成 200）
+const airborneBeam = (over = {}) => ({
+  isVertical: false, axisWorld: 500, spanLo: 0, spanHi: 2000, widthMm: 100,
+  topZ: 1190, depthMm: 200, role: 'landing', section: null, ...over,
+});
+// 切断線に直交する梁（x=1000・スパン y -500..1500 が切断位置 y=0 を含む）
+const crossBeam = (over = {}) => airborneBeam({ isVertical: true, axisWorld: 1000, spanLo: -500, spanHi: 1500, ...over });
+// 切断線の帯の中を通る平行の梁（y=0 が芯）
+const parallelBeam = (over = {}) => airborneBeam({ axisWorld: 0, ...over });
+const colSolid = (over = {}) => ({
+  xLo: 900, xHi: 1100, yLo: -60, yHi: 60, baseZ: 0, covers: {}, trimmed: {}, wallAxes: [], ...over,
+});
+const noCol = { columnSolids: null };
+
+test('section: 直交する梁は見付け幅の x 範囲・天〜下端の z 範囲の 1 片。芯の x を持つ', () => {
+  const [p, ...rest] = visibleBeamPieces([crossBeam()], cutOf(), [], null, noCol);
+  assert.equal(rest.length, 0);
+  assert.equal(p.kind, 'section');
+  assert.deepEqual([p.xLo, p.xHi, p.zLo, p.zHi, p.x], [950, 1050, 990, 1190, 1000]);
+});
+
+test('section: 梁の位置が切断線の描画範囲の外なら出さない（失敗系）', () => {
+  assert.deepEqual(visibleBeamPieces([crossBeam({ axisWorld: 5000 })], cutOf(), [], null, noCol), []);
+});
+
+test('section: 切断位置で梁が壁の足元（hiddenSpans）に埋まっていれば出さない。対照: hiddenSpans が無ければ出る', () => {
+  assert.equal(visibleBeamPieces([crossBeam()], cutOf(), [], null, noCol).length, 1, '対照');
+  assert.deepEqual(visibleBeamPieces([crossBeam({ hiddenSpans: [[-500, 1500]] })], cutOf(), [], null, noCol), []);
+});
+
+test('section: 室内側の続きが柱包みに隠れるなら出さない（柱の層・埋没の分岐）', () => {
+  // 室内側 [0,1500] を柱包み（y -60..60 では足りないので 0..1500 を覆う柱）で全部隠す
+  const col = colSolid({ yLo: -10, yHi: 1600, xLo: 900, xHi: 1100 });
+  assert.deepEqual(visibleBeamPieces([crossBeam()], cutOf(), [], null, { columnSolids: [col] }), []);
+});
+
+test('airborne: 柱包みに隠れる区間を引いた残り区間ごとに 1 片。z は天〜下端', () => {
+  const col = colSolid({ yLo: 440, yHi: 560, xLo: 900, xHi: 1100 });
+  const ps = visibleBeamPieces([airborneBeam()], cutOf(), [], null, { columnSolids: [col] });
+  assert.deepEqual(ps.map(p => [p.kind, p.xLo, p.xHi, p.zLo, p.zHi]),
+    [['airborne', 0, 900, 990, 1190], ['airborne', 1100, 2000, 990, 1190]]);
+});
+
+test('airborne: 天井より下端が上の区間は出さない（ceilZAtWorld）。天井が取れなければ見える側', () => {
+  const ceil = (z) => ({ columnSolids: null, ceilZAtWorld: () => z });
+  assert.deepEqual(visibleBeamPieces([airborneBeam()], cutOf(), [], null, ceil(990)), []);
+  assert.equal(visibleBeamPieces([airborneBeam()], cutOf(), [], null, ceil(null)).length, 1);
+});
+
+test('airborne: 切断線の背後（viewSign の逆側）の梁は出さない（失敗系）', () => {
+  assert.deepEqual(visibleBeamPieces([airborneBeam({ axisWorld: -500 })], cutOf(), [], null, noCol), []);
+});
+
+test('airborne: 描画範囲（0..2000）の外へはみ出すスパンは描画範囲に切り詰める', () => {
+  const ps = visibleBeamPieces([airborneBeam({ spanLo: -500, spanHi: 2500 })], cutOf(), [], null, noCol);
+  assert.deepEqual(ps.map(p => [p.xLo, p.xHi]), [[0, 2000]]);
+});
+
+test('airborne: 切断線と梁の間の全高の壁が覆う区間は引く。対照: 壁が無ければ 1 片', () => {
+  const wall = { isVertical: false, axisValue: 300, materialRange: { lo: 290, hi: 310 }, coord1: 800, coord2: 1200 };
+  const ps = visibleBeamPieces([airborneBeam()], cutOf({ layers: [{ graph: { walls: [wall] }, floorZMm: 0, role: 'self' }] }), [], null, noCol);
+  assert.deepEqual(ps.map(p => [p.xLo, p.xHi]), [[0, 800], [1200, 2000]]);
+  assert.equal(visibleBeamPieces([airborneBeam()], cutOf(), [], null, noCol).length, 1, '対照');
+});
+
+test('airborne: 最も手前の面から奥行きの上限（SIGHTLINE_DEPTH_LIMIT_MM）以上奥の梁は出さない。対照: 上限内は出る', () => {
+  const cols = [{ bands: [{ kind: 'wall', distMm: 0 }] }];
+  assert.deepEqual(visibleBeamPieces([airborneBeam({ axisWorld: 1000 })], cutOf(), cols, null, noCol), [], '奥行き 950 ≥ 800');
+  assert.equal(visibleBeamPieces([airborneBeam({ axisWorld: 500 })], cutOf(), cols, null, noCol).length, 1, '対照: 奥行き 450');
+});
+
+test('airborne: 部屋の帯（bandRoomBounds）の外の梁は出さない。対照: 帯の中は出る', () => {
+  const bounds = (y2) => ({ bandRoomBounds: { x1: 0, x2: 2000, y1: 0, y2 } });
+  assert.deepEqual(visibleBeamPieces([airborneBeam()], cutOf(bounds(400)), [], null, noCol), [], 'y=500 は帯 0..400 の外');
+  assert.equal(visibleBeamPieces([airborneBeam()], cutOf(bounds(600)), [], null, noCol).length, 1, '対照');
+});
+
+test('parallel: 切断線の帯の中の梁は天地の x 範囲と、梁の元の端である側の縦線の x を持つ', () => {
+  const [p] = visibleBeamPieces([parallelBeam()], cutOf(), [], null, noCol);
+  assert.equal(p.kind, 'parallel');
+  assert.deepEqual([p.xLo, p.xHi, p.zLo, p.zHi, ...p.ends], [0, 2000, 990, 1190, 0, 2000]);
+});
+
+test('parallel: 壁の足元（hiddenSpans）で中断された梁は区間ごと。縦線は元の端が残る側だけ', () => {
+  const ps = visibleBeamPieces([parallelBeam({ hiddenSpans: [[800, 1200]] })], cutOf(), [], null, noCol);
+  assert.deepEqual(ps.map(p => [p.xLo, p.xHi, p.ends]), [[0, 800, [0]], [1200, 2000, [2000]]]);
+});
+
+test('床（断面線）: 断面線の輪郭に梁成以上届かない梁は断面・平行とも落とす。踊り場受け梁は残す', () => {
+  const profile = [[0, 1200], [2000, 1200]];
+  const low = { topZ: 0, role: 'floor' };
+  assert.deepEqual(visibleBeamPieces([crossBeam(low)], cutOf(), [], profile, noCol), [], 'section');
+  assert.deepEqual(visibleBeamPieces([parallelBeam(low)], cutOf(), [], profile, noCol), [], 'parallel');
+  assert.equal(visibleBeamPieces([crossBeam({ ...low, role: 'landing' })], cutOf(), [], profile, noCol).length, 1);
+});
+
+test('contribution が空・未指定でも例外を投げず空', () => {
+  assert.deepEqual(visibleBeamPieces([], cutOf(), [], null, noCol), []);
+  assert.deepEqual(visibleBeamPieces(undefined, cutOf(), [], null, noCol), []);
+});
+
+test('structuralPrimitivesForCut は visibleBeamPieces の返り値を線へ写すだけ（片の数と線の数が対応する）', () => {
+  const lines = (beams) => structuralPrimitivesForCut(beams, cutOf(), [], null, noCol).length;
+  assert.equal(lines([crossBeam()]), 4, 'section: 矩形 4 辺');
+  assert.equal(lines([airborneBeam()]), 2, 'airborne: 天地 2 本');
+  assert.equal(lines([parallelBeam()]), 4, 'parallel: 天地 2 本＋両端の縦線 2 本');
+});
