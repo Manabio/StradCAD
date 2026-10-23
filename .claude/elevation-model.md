@@ -1914,6 +1914,12 @@ ceiling-steel 2階の x=10935 は分断されない（梁の H が面の外に�
 層の判定には元の天端・成（`layerTopZ`・`layerDepthMm`）を使う——部屋帯の `clipBeamsToBand` が `topZ`/`depthMm` を帯へ切り詰めても、
 平行壁の足元（`hiddenSpans`）と同じ層で直交壁の帯を数える。
 既知の限界: 梁は探査（レイキャスト）に参加しない加算レイヤのままで、遮蔽は描く側のクリップ（探査との統合は S3・S4）。
+**部屋帯の梁は階段帯と同じ室内側へ下がった仮想断面（pcut）で解く**（2026-10-23 S3。`elevationSolids.js` の `faceBeamCut`＝`faceCutLine(face, cutPlaneOffsetMm)`・
+壁を見る向き `faceViewSign`・`bandRoomBounds`）。柱型・`clipBeamsToBand`・`clampPrimsToRun` は従来のまま（柱型の照合は壁芯基準）。部屋帯だけが渡す
+`opts.roomFaceCut` で 2 つの規則が効く: (a) 面の平面上の梁（`cut.face` の軸が梁の幅の中）は切断線が帯の外でも parallel の細線（`faceAxisInBeam`）、
+(b) 断面の続きは室内側（viewSign の逆）で見る（`sectionVisibleInRoom` の `fromRoomSide`）。階段帯は渡さず従来どおり。**既知の限界**: この 2 規則は部屋帯専用で、
+階段帯と共通の一般則への統合（壁の中の梁を描かない原則・断面の判定の向き依存の解消）は別範囲の展開図描画リファクタで行う。部屋帯で仮想断面より手前（室内側）の
+空中の梁は描かない（旧実装は壁の仕上げ薄壁の遮蔽に掛かって実データでは出ていなかった。比較できた 83 文書〔読込み不能の 1 件を除く〕の差分は plan-solids-test の 2 帯だけ）。
 
 **見え掛かりの梁は、壁・柱包みに隠れる区間を描かない**（ユーザー指摘2026-10「展開に関係のない、壁の向こうにある
 梁を描画するのは処理上の穴」。`structuralPrimitivesForCut`）。固定mmの閾値でなく構造上の述語で決める。

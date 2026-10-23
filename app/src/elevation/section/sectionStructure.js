@@ -622,12 +622,13 @@ function isBeamEmbeddedAtCut(cut, beam, halfW, partitionLinesOf) {
  * 切断位置が壁のスパンの中でも、梁がその壁の先（室内側）へ続けば断面は見える（面の向こう側の同じ通りの壁が断面を消さない）。
  * 梁が壁の中に収まって室内側に残りが無ければ描かない（旧: 切断位置の1点だけで見る isBeamInWallAt。2026-10-22 に一般化して削除）。
  */
-function sectionVisibleInRoom(cut, beam, halfW, colSpans, partitionLinesOf) {
+function sectionVisibleInRoom(cut, beam, halfW, colSpans, partitionLinesOf, fromRoomSide = false) {
   const at = cut.line.axisValue;
-  const sign = cut.viewSign ?? 1;
+  const wallSpans = perpendicularWallBands(cut, beam, halfW, partitionLinesOf);
+  // fromRoomSide … 部屋帯の面の切断（壁を見る向き = viewSign は室内から壁へ向かう）では、室内側は viewSign の逆
+  const sign = (cut.viewSign ?? 1) * (fromRoomSide ? -1 : 1);
   const [rLo, rHi] = sign > 0 ? [at, beam.spanHi] : [beam.spanLo, at];
   if (!(rHi - rLo > GAP_EPS)) return false;
-  const wallSpans = perpendicularWallBands(cut, beam, halfW, partitionLinesOf);
   // 室内側の区間から壁の材厚と柱包みを引く（仕上げ薄壁・下地オーナー壁など隣り合う壁は統合で連なる。
   // 室内側の遠方の壁が梁の途中を隠しても、手前に残りがあれば断面は見える）
   const hidden = mergeSpans([...wallSpans, ...colSpans, ...(beam.embeddedSpans ?? [])]);
@@ -725,7 +726,8 @@ function sectionOutline(cut, xLo, xHi, zTop, depthMm, entry) {
  *   いない。階段下に浮く設置階FLの梁）の断面・平行見えがかりを丸ごと落とす。踊り場受け梁（role:'landing'。
  *   天は踊り場より梁成ぶん＋α下がる）と、上階FL・踊り場に天が梁成以内で届く梁は残す。省略・null は従来どおり。
  * @param {{ceilZAtWorld?:Function, columnSolids?:ColumnSolid[]|null, floorOcclusion?:{floorZ:number, floorlessRanges?:Array<{lo:number, hi:number}>},
- *   wallLineCuts?:Array<{xLo:number, xHi:number, zLo:number, zHi:number, xs:number[]}>}} [opts]
+ *   wallLineCuts?:Array<{xLo:number, xHi:number, zLo:number, zHi:number, xs:number[]}>, roomFaceCut?:boolean}} [opts]
+ *   roomFaceCut は部屋帯の面の切断: 面の平面上の梁を parallel とし、断面の続きは室内側（viewSign の逆）で見る。省略（階段帯）は従来どおり。
  *   columnSolids は規則B（柱の包み込み外形に隠れる区間）用。undefined は cut.layers から求め、null は規則Bを使わない（対照用）。
  *   floorOcclusion は自階の床（スラブ）の遮蔽（`occludeByFloor`。出来た全プリミティブに掛かる）。省略は遮蔽なし。
  *   wallLineCuts は出力用の配列: 描いた断面のうち、壁内の梁が壁の面から出ている（部屋側から見える）ものの、壁の断面線を分ける矩形
@@ -761,6 +763,19 @@ export function structuralPrimitivesForCut(contribution, cut, columns, floorProf
     for (const g of outlines) if (g.cutRect && g.prims.some(p => drawn.has(p))) opts.wallLineCuts.push(g.cutRect);
   }
   return result;
+}
+
+/**
+ * 面の平面上の梁か＝切断が面を持ち（cut.face）、その面の軸（壁芯 CL）が梁の幅の帯の中にある。
+ * 切断線は室内側へ下がる（section/sectionCutPlane.js）ので、壁の面に載る梁は切断線の帯の外になり、
+ * 判定を切断線だけで行うと空中を横切る梁（中線）に変わってしまう（ユーザー裁定 2026-10-23「B1 の梁は細線のまま」）。
+ * 部屋帯の面の切断（`opts.roomFaceCut`）だけの規則。階段帯の切断も cut.face を持つが、渡さない（既存の WP-C テストが
+ * 階段帯の面の平面上の梁を空中の中線とする。2026-10-23 のリード方針「cut.face の有無だけで決める」は成立しなかった）。
+ */
+function faceAxisInBeam(cut, beam, halfW) {
+  const axis = cut.face?.axisCL?.effectiveValue;
+  return Number.isFinite(axis) && !!cut.face.isVertical === !!beam.isVertical
+    && axis >= beam.axisWorld - halfW - GAP_EPS && axis <= beam.axisWorld + halfW + GAP_EPS;
 }
 
 /**
@@ -831,7 +846,7 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
       // 切断位置から室内側へ梁が続かない／続きが壁の材厚・柱包みに隠れる断面は見えない（断面の可視性。sectionVisibleInRoom）
       // 切断位置で梁が壁に埋まっていれば（壁の断面の中に梁断面を重ねない）描かない
       if (isBeamEmbeddedAtCut(cut, beam, halfW, partitionLinesOf)) continue;
-      if (!sectionVisibleInRoom(cut, beam, halfW, colSpans, partitionLinesOf)) continue;
+      if (!sectionVisibleInRoom(cut, beam, halfW, colSpans, partitionLinesOf, !!opts.roomFaceCut)) continue;
       pieces.push({ beam, kind: 'section', x, xLo: x - halfW, xHi: x + halfW, zLo: beam.topZ - beam.depthMm, zHi: beam.topZ });
       continue;
     }
@@ -841,11 +856,14 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
     // ——実機の梁はY2の通り芯から225mm室内側にあり、面Aから見ると空中を横切って見える。
     // 天地（上端・下端）の2本だけをSILHOUETTE（中線）で描く（輪郭の縦線は持たせない——
     // 梁は面の端から端まで通っており、視界の中で端部が見えるわけではない）。
+    // 面の平面上の梁（面の軸が梁の幅の帯の中。切断線が室内側へ下がっていても梁は壁の面に見える）は parallel が担当する
+    const onFacePlane = !!opts.roomFaceCut && faceAxisInBeam(cut, beam, halfW);
     const airborne = cut.line.isVertical === beam.isVertical
       && (beam.axisWorld - cut.line.axisValue) * (cut.viewSign ?? 1) > GAP_EPS
       && withinBandRoom(cut, beam.axisWorld)
       && withinSightDepth((beam.axisWorld - cut.line.axisValue) * (cut.viewSign ?? 1) - halfW)
       && rangesOverlap(cut.line.lo, cut.line.hi, beam.spanLo, beam.spanHi)
+      && !onFacePlane
       && !(cut.line.axisValue >= beam.axisWorld - halfW - GAP_EPS
         && cut.line.axisValue <= beam.axisWorld + halfW + GAP_EPS); // 芯上は下のparallelが担当
     if (airborne) {
@@ -865,7 +883,7 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
       continue;
     }
     const parallel = cut.line.isVertical === beam.isVertical &&
-      cut.line.axisValue >= beam.axisWorld - halfW - GAP_EPS && cut.line.axisValue <= beam.axisWorld + halfW + GAP_EPS &&
+      ((cut.line.axisValue >= beam.axisWorld - halfW - GAP_EPS && cut.line.axisValue <= beam.axisWorld + halfW + GAP_EPS) || onFacePlane) &&
       rangesOverlap(cut.line.lo, cut.line.hi, beam.spanLo, beam.spanHi);
     if (!parallel) continue;
     const xLo = localXOf(cut, beam.spanLo), xHi = localXOf(cut, beam.spanHi);

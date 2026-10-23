@@ -20,6 +20,8 @@ import {
   structuralColumnContribution, structuralColumnPrimitivesForCut,
 } from './section/sectionStructure.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
+import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
+import { roomBounds } from '../finish/gridCells.js';
 
 /**
  * face（buildRoomFacesの1件）→ 断面エンジンの SectionCut 相当のアダプタ。
@@ -139,8 +141,26 @@ export function solidPrimitivesForFace(face, opts) {
   const columnSolids = structuralColumnContribution(cut.layers);
   const prims = [
     // 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）
-    ...structuralPrimitivesForCut(beams, cut, undefined, null, { columnSolids }),
+    ...structuralPrimitivesForCut(beams, faceBeamCut(face, cut, columnSolids, opts), undefined, null, { columnSolids, roomFaceCut: true }),
     ...structuralColumnPrimitivesForCut(columnSolids, cut),
   ];
   return clampPrimsToRun(prims, face.run);
+}
+
+/**
+ * 梁の判定に使う切断＝階段帯と同じ**室内側へ下がった仮想断面（pcut）**と壁を見る向き（`faceViewSign`）。
+ * 面の壁芯上の切断（`faceSectionCut`）で解くと、柱の手前で止まる梁は切断位置が梁のスパンの外になって断面が出ない
+ * （plan-solids-test 2階 子ども1 の C: 梁 829d5ee8）。面の平面上の梁は `cut.face` の軸で parallel と判定される
+ * （sectionStructure.js の faceAxisInBeam。B1 の梁は細線のまま）。柱型は壁との接続（onFaceWall）の照合が壁芯基準なので従来の `cut` のまま。
+ * 帯の部屋の広がり（bandRoomBounds）は帯の切断（elevationBand.js）と同じ値——部屋の外の空中の梁を描かない。
+ * @returns {import('./section/sectionTypes.js').SectionCut}
+ */
+function faceBeamCut(face, cut, columnSolids, opts) {
+  return {
+    ...cut,
+    face,
+    line: faceCutLine(face, cutPlaneOffsetMm(face, cut.layers, { columnSolids })),
+    viewSign: faceViewSign(face),
+    bandRoomBounds: opts.room?.cells ? roomBounds(opts.room.cells, opts.graph) : null,
+  };
 }

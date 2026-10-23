@@ -106,6 +106,44 @@ test('床（断面線）: 断面線の輪郭に梁成以上届かない梁は断
   assert.equal(visibleBeamPieces([crossBeam({ ...low, role: 'landing' })], cutOf(), [], profile, noCol).length, 1);
 });
 
+// ---- 部屋帯の面の切断（opts.roomFaceCut）----
+// 面 y=0（室内側＝+y）。仮想断面は室内側へ 100 下がった y=100、壁を見る向き（viewSign=-1）。
+const faceCutOf = (over = {}) => cutOf({
+  line: { isVertical: false, axisValue: 100, lo: 0, hi: 2000 }, viewSign: -1,
+  face: { isVertical: false, axisCL: { effectiveValue: 0 } }, ...over,
+});
+const roomFace = { columnSolids: null, roomFaceCut: true };
+
+test('roomFaceCut: 面の平面上の梁（面の軸が梁の幅の帯の中）は、切断線が帯の外でも parallel（細線）。対照: 指定が無ければ空中の梁（中線）', () => {
+  const beam = parallelBeam({ widthMm: 100 }); // 帯 -50..50。切断線 y=100 は帯の外、面の軸 y=0 は帯の中
+  assert.deepEqual(visibleBeamPieces([beam], faceCutOf(), [], null, roomFace).map(p => p.kind), ['parallel']);
+  assert.deepEqual(visibleBeamPieces([beam], faceCutOf(), [], null, noCol).map(p => p.kind), ['airborne'], '対照');
+});
+
+test('roomFaceCut: 面の軸が梁の幅の帯の外なら parallel にしない・面を持たない切断も従来どおり（失敗系）', () => {
+  assert.deepEqual(visibleBeamPieces([parallelBeam({ axisWorld: 300 })], faceCutOf(), [], null, roomFace), [], '面の軸も切断線も帯の外・梁は切断線の手前側（壁を見る向きの逆）');
+  const noFace = faceCutOf({ face: undefined });
+  assert.deepEqual(visibleBeamPieces([parallelBeam()], noFace, [], null, roomFace).map(p => p.kind), ['airborne'], '面が無ければ従来どおり切断線だけで判定');
+});
+
+test('roomFaceCut: 断面の続きは室内側（viewSign の逆）で見る。壁の中に埋まった側ではなく室内へ張り出す側の残りで出る', () => {
+  // 梁は x=1000・スパン y 20..1500（壁芯 y=0 の手前の 20 から室内へ）。壁の足元（embeddedSpans）が壁側 -500..200 を覆う
+  const beam = crossBeam({ spanLo: 20, spanHi: 1500, embeddedSpans: [[-500, 200]] });
+  assert.deepEqual(visibleBeamPieces([beam], faceCutOf(), [], null, roomFace).map(p => p.kind), ['section']);
+  assert.deepEqual(visibleBeamPieces([beam], faceCutOf(), [], null, noCol), [], '対照: 指定が無ければ壁側 [20,100] が埋まっていて出ない');
+});
+
+test('roomFaceCut: 室内側の続きが柱包みに全部隠れるなら断面は出ない（失敗系）', () => {
+  const beam = crossBeam({ spanLo: 20, spanHi: 1500 });
+  const col = colSolid({ yLo: 90, yHi: 1600, xLo: 900, xHi: 1100 });
+  assert.deepEqual(visibleBeamPieces([beam], faceCutOf(), [], null, { columnSolids: [col], roomFaceCut: true }), []);
+  assert.equal(visibleBeamPieces([beam], faceCutOf(), [], null, roomFace).length, 1, '対照: 柱が無ければ出る');
+});
+
+test('roomFaceCut: 切断位置が梁のスパンの外（壁芯の手前で止まる梁が切断線にも届かない）なら断面は出ない（失敗系）', () => {
+  assert.deepEqual(visibleBeamPieces([crossBeam({ spanLo: 150, spanHi: 1500 })], faceCutOf(), [], null, roomFace), []);
+});
+
 test('contribution が空・未指定でも例外を投げず空', () => {
   assert.deepEqual(visibleBeamPieces([], cutOf(), [], null, noCol), []);
   assert.deepEqual(visibleBeamPieces(undefined, cutOf(), [], null, noCol), []);
