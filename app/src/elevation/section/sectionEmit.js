@@ -9,6 +9,7 @@
 import {
   GAP_LABEL_WIDTH_PX,
   ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, kneeCapBottomMm, kneeCapFaceMm,
+  ElevationDash, FLOAT_EPS, COORD_EPS_MM,
 } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import {
@@ -18,7 +19,7 @@ import { openingSectionPrimitives } from '../../openings/openingSection.js';
 import { drawnFloorProfileZMax, drawnFloorProfileZAt } from './floorProfileMath.js';
 import { FRAME_OVERHANG_MM } from '../../openings/openingPlanSymbolGeometry.js';
 import {
-  mergeIntervals, segmentInsideRect, subtractRectsFromLine, isZeroLengthLine,
+  mergeIntervals, segmentInsideRect, subtractRectsFromLine, isZeroLengthLine, line, text,
 } from '../elevationPrimitives.js';
 
 // アキの下辺が1本の直線か（斜めの天端の上＝台形）の判定の許容差。列ごとの斜線の端の値は同じ式から出るので
@@ -64,8 +65,9 @@ export function emitLine(cut, x1, z1, x2, z2, role, opts = {}) {
   const forced = opts.forceDash === true;
   const downgrade = !opts.neverDowngrade && (beyond || forced);
   const finalRole = downgrade ? ElevationLineRole.DETAIL : role;
-  const finalDash = downgrade ? 'dashed' : (opts.dash ?? undefined);
-  const prim = { type: 'line', x1, y1: zToY(z1), x2, y2: zToY(z2), weight: weightForRole(finalRole) };
+  const finalDash = downgrade ? ElevationDash.DASHED : (opts.dash ?? undefined);
+  // role が undefined/null でも weight（'thin'）を必ず持つ（旧挙動）。role 文字列のままだと style 省略と区別できないため明示する
+  const prim = line(x1, zToY(z1), x2, zToY(z2), { weight: weightForRole(finalRole) });
   if (finalDash) prim.dash = finalDash;
   return prim;
 }
@@ -1307,7 +1309,7 @@ export function emitMemberFaceBand(prims, faceSegs, col, band, { prev, next, cut
     }
     rest = rest.filter(r => r.z1 - r.z0 > GAP_EPS);
     if (rest.length === 0) continue;
-    const realEnd = (band.memberClass === 'facePlane' || isColumn) && endXs.some(e => Math.abs(e - x) <= 1e-3);
+    const realEnd = (band.memberClass === 'facePlane' || isColumn) && endXs.some(e => Math.abs(e - x) <= COORD_EPS_MM);
     for (const r of rest) {
       if (realEnd) {
         // 縦線は上から下へ（加算の parallel の両端の縦線と同じ向き）。柱は同じ x の縦線を帯の分かれ目をまたいで 1 本に繋ぐ（memberFaceHorizontals）
@@ -1511,7 +1513,7 @@ export function splitGapMarksByStair(prims, rects) {
   }));
   const out = [];
   for (const p of prims) {
-    const isDiagonal = p.type === 'line' && p.dash === 'center'
+    const isDiagonal = p.type === 'line' && p.dash === ElevationDash.CENTER
       && Math.abs(p.x1 - p.x2) > GAP_EPS && Math.abs(p.y1 - p.y2) > GAP_EPS;
     if (!isDiagonal) { out.push(p); continue; }
     const hidden = mergeIntervals(boxes
@@ -1520,17 +1522,17 @@ export function splitGapMarksByStair(prims, rects) {
     if (hidden.length === 0) { out.push(p); continue; }
     const at = t => ({ x: p.x1 + (p.x2 - p.x1) * t, y: p.y1 + (p.y2 - p.y1) * t });
     const push = (t0, t1, dash) => {
-      if (t1 - t0 <= 1e-9) return;
+      if (t1 - t0 <= FLOAT_EPS) return;
       const a = at(t0), b = at(t1);
       out.push({ ...p, x1: a.x, y1: a.y, x2: b.x, y2: b.y, dash });
     };
     let cursor = 0;
     for (const [h0, h1] of hidden) {
-      push(cursor, h0, 'center');   // 見えている区間
-      push(h0, h1, 'dashed');       // 階段に隠れる区間
+      push(cursor, h0, ElevationDash.CENTER);   // 見えている区間
+      push(h0, h1, ElevationDash.DASHED);       // 階段に隠れる区間
       cursor = h1;
     }
-    push(cursor, 1, 'center');
+    push(cursor, 1, ElevationDash.CENTER);
   }
   return out;
 }
@@ -1564,7 +1566,7 @@ export function dashHorizontalsBehindStair(prims, rects) {
       out.push(dash ? { ...p, x1: a, x2: b, dash } : { ...p, x1: a, x2: b });
     };
     let cursor = xLo;
-    for (const [h0, h1] of hidden) { seg(cursor, h0, null); seg(h0, h1, 'dashed'); cursor = h1; }
+    for (const [h0, h1] of hidden) { seg(cursor, h0, null); seg(h0, h1, ElevationDash.DASHED); cursor = h1; }
     seg(cursor, xHi, null);
   }
   return out;
@@ -1654,14 +1656,14 @@ function floorPiecesOf(profile, x0, x1) {
     // 区間の端は垂直の段差（蹴上）の上で値が 2 つになるので、端のわずか内側の値で平らかを見る
     const t = (b - a) * 1e-3;
     const za = drawnFloorProfileZAt(profile, a + t), zb = drawnFloorProfileZAt(profile, b - t), zc = drawnFloorProfileZAt(profile, (a + b) / 2);
-    subs.push({ xa: a, xb: b, fz: zc, flat: Math.max(za, zb, zc) - Math.min(za, zb, zc) <= 1e-3 });
+    subs.push({ xa: a, xb: b, fz: zc, flat: Math.max(za, zb, zc) - Math.min(za, zb, zc) <= COORD_EPS_MM });
   }
   if (!subs.some(s => s.flat) || subs.every(s => s.flat)) return whole;
   const out = [];
   for (const s of subs) {
     if (!s.flat) continue;
     const last = out[out.length - 1];
-    if (last && Math.abs(last.xb - s.xa) <= GAP_EPS && Math.abs(last.fz - s.fz) <= 1e-3) last.xb = s.xb;
+    if (last && Math.abs(last.xb - s.xa) <= GAP_EPS && Math.abs(last.fz - s.fz) <= COORD_EPS_MM) last.xb = s.xb;
     else out.push({ xa: s.xa, xb: s.xb, fz: s.fz });
   }
   return out;
@@ -1906,8 +1908,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     if (isRect && hasUpperCenterPiece) {
       // 中心は矩形の中心（クランプ後のz範囲＝バツと同じ範囲）で採る——線と文字が食い違わないため。
       const tLo = (L.lo + R.lo) / 2, tHi = Math.max(L.hi, R.hi); // 台形なら下辺の中点の高さ（矩形は L.lo===R.lo）
-      prims.push({ type: 'text', x: (x0 + x1) / 2, y: zToY((tLo + tHi) / 2),
-        text: 'ア キ', anchor: 'middle', baseline: 'middle' });
+      prims.push(text((x0 + x1) / 2, zToY((tLo + tHi) / 2), 'ア キ', { anchor: 'middle', baseline: 'middle' }));
     }
     // **線分ごとの線種判定**（Phase 6b-2 C-5）: `exempt`（旧`structZ0>=baseFloorZ`の一括判定）
     // なら旧どおり対角線1本のまま`neverDowngrade`でcenterを強制する（`extendedFromZ`の例外は
@@ -1920,14 +1921,14 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
     // 実際の高さに忠実になる。
     for (const [a, b] of [[[x0, L.lo], [x1, R.hi]], [[x0, L.hi], [x1, R.lo]]]) {
       if (exempt) {
-        const line = emitLine(cut, a[0], a[1], b[0], b[1], ElevationLineRole.DETAIL,
-          { dash: 'center', ceilZ, neverDowngrade: true });
-        prims.push(...subtractRectsFromLine(line, blockers));
+        const gapLine = emitLine(cut, a[0], a[1], b[0], b[1], ElevationLineRole.DETAIL,
+          { dash: ElevationDash.CENTER, ceilZ, neverDowngrade: true });
+        prims.push(...subtractRectsFromLine(gapLine, blockers));
         continue;
       }
       for (const [p, q] of splitSegmentAtZ(a, b, baseFloorZ)) {
-        const line = emitLine(cut, p[0], p[1], q[0], q[1], ElevationLineRole.DETAIL, { dash: 'center', ceilZ });
-        prims.push(...subtractRectsFromLine(line, blockers));
+        const gapLine = emitLine(cut, p[0], p[1], q[0], q[1], ElevationLineRole.DETAIL, { dash: ElevationDash.CENTER, ceilZ });
+        prims.push(...subtractRectsFromLine(gapLine, blockers));
       }
     }
   }

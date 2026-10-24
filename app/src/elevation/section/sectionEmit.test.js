@@ -447,6 +447,15 @@ test('【WP-E2・最終フィルタ】emitLine: 両端がbaseFloorZ未満ならD
   assert.equal(prim.dash, 'dashed');
 });
 
+test('【S5・失敗系】emitLine の weight は role が undefined/null/未知でも必ず thin（weight キーが消えない）', () => {
+  const cut = makeCut({ baseFloorZ: 0, zRange: { loZ: 0, hiZ: 2400 } });
+  for (const role of [undefined, null, 'no-such-role']) {
+    const prim = emitLine(cut, 0, 100, 0, 400, role);
+    assert.equal('weight' in prim, true, `role=${String(role)}`);
+    assert.equal(prim.weight, 'thin', `role=${String(role)}`);
+  }
+});
+
 test('【WP-E2・最終フィルタ】emitLine: 両端が天井断面より上ならDETAIL+dashedへ降格する', () => {
   const cut = makeCut({ baseFloorZ: 0, zRange: { loZ: 0, hiZ: 2000 } });
   const prim = emitLine(cut, 0, 2100, 0, 2400, 'wall', { ceilZ: 2000 });
