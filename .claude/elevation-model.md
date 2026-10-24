@@ -445,6 +445,7 @@ viewSign の二重定義（`elevationSolids.js` と `sectionCutPlane.faceViewSig
 - 2026-10-24 リファクタ U1b B3-1（梁の断面 memberCut を探査の選択に入れ加算の断面描画を止める。ユーザー承認）: `golden`／`golden11`／`golden13`／`golden13-struct` の「5」（上部吹抜け帯に上階の床梁の H 断面 2 本 +24）・`golden-elev-moku16`（上部吹抜け帯 +8）・`ceiling-steel-stair-test` 1階・2階 階段帯（R6＝壁の太線が梁の高さで途切れない・断面の向こうの中線が梁の幅だけ欠ける +19 −16）・`moku4-3`（+4 −7）。golden 外: ceiling-line-test 主寝室・ceiling-zone-far 売場（天井が高い区画の梁断面がその位置の天井まで出る。段をまたぐ梁は低い側で切る）、4 (1)・basement×2・opening-test の階段帯（R6・along が面の外へはみ出さない）、HEAD の重複線が畳まれる 3 帯。他は不変。
 - 2026-10-24 リファクタ U1b B3-2（梁の見え掛かり memberFace を探査の選択に入れ加算の見え掛かり描画を止める。ユーザー承認）: `golden`／`golden11`／`golden13`／`golden13-struct` の「5」（上部吹抜け帯に 2F 床梁の下端の中線）・`golden-elev-moku16`・`ceiling-steel-stair-test`・`ceiling-wood-stair-test`（手前の梁が奥の梁の線を隠す・同位置の太線の下の細線が消える）。golden 外: ceiling-zone-far 売場（天井 2700 の下の梁の下端の細線 +1）、4 (1)（手前の断面が奥の空中梁の線を途切れさせる）、moku4_kd 2階 階段帯 B2 面（踊り場の上のアキを閉図形どおり x 10905〜11705・z 1500〜2400 に＝裁定 (c)。`floorPiecesOf` でアキのセルの下端を床断面線の実値から取る）。部材のない帯は不変。
 - 2026-10-24 リファクタ U1b B3-3（柱を探査の選択に入れ加算の柱型描画を止める。ユーザー承認）: `golden`／`golden11`／`golden13`／`golden13-struct`（「22」の部屋帯で柱の幅だけアキ・腰壁の線が隠れる。「5」上部吹抜け帯で柱が上の階の床まで 1 本に伸び天の線が柱の幅で消える）・`ceiling-steel-stair-test`（部屋帯「B」の柱による遮蔽・階段帯に柱型が初めて出る・面端延長部由来の孤立した 71mm の天端線が消える＝受容）・`stair-ports-test1〜5`（2階 帯0 のアキが面の通りの柱で左右に分かれる）。golden 外: 4 (1)・basement-test 2 本の階段帯に柱型が初めて出る（HEAD の階段帯経路は柱を描いていなかった）。柱の上端は梁と同じ仕組み（部屋帯＝その位置の天井・階段帯＝裏面以外では切らない・吹抜け帯＝上の床まで）。
+- 2026-10-24 リファクタ U1b B4・B6（出力不変。golden 採取なし）: B4＝`beamBlockerRectsForFace` を dropped の部材だけに縮退・`buildFaceFigure` の無効な加算呼び出しを外す。B6＝本番から到達しない `solidPrimitivesForFace`・`memberCutsByBand`・`memberFacesByBand`・`memberCuts.only` を削除（`visibleBeamPieces` は `memberCuts` を渡せば dropped だけ）・`faceSectionCut` の viewSign を `faceViewSign` の反転に寄せた。83 本は HEAD とバイト一致。
 
 `app/scripts/probe/golden11/`（`D:/tatsuya/Download/11.stq`を同じ形式でダンプした固定スナップショット。
 展開図一般化Phase 6b-1で追加）も同じ手順で追跡する——`.gitignore`に`!scripts/probe/golden11/`を追加し、
@@ -1787,13 +1788,18 @@ baseFloorZの下へ潜ったかで判定する（遠側だけが低い区間は�
 ダンプはすべてHEADと完全一致（diff空）を確認した——旧値（2400mm相当。「11」自身の実効天井高）が
 正しい値で、「`face.spans`の簡易規則との差」という当初の説明は誤りだった。
 
-## 2.5D立体の加算レイヤ（全展開図共通。`elevationSolids.js`。追加仕様2026-08）
-「2.5D展開を階段・吹抜けだけでなく全ての展開図へ」への回答は、**`buildFaceFigure`を断面エンジン
-（`section/sectionEngine.js`）へ置き換えることではなく、階段帯で確立済みの「純粋な加算レイヤ」
-（`sectionStructure.js`。遮蔽判定に参加せずレイキャストを持たない）を通常面へ広げること**とした
+## 2.5D立体の加算レイヤ（`elevationSolids.js`。追加仕様2026-08。**U1b B6（2026-10-24）以降は dropped の部材だけ**）
+**現状（U1b B3〜B6）**: 構造梁・柱は断面エンジンの探査の帯（`memberCut`・`memberFace`。`sectionHits.js`）が描き、遮蔽も壁と同じ奥行き比較で決める。
+加算レイヤ（`droppedMemberPrimitivesForFace`・階段帯の `structuralPrimitivesForCut`・`beamBlockerRectsForFace`・`wallLineCuts`）が描くのは
+**帯が持たない部材（dropped＝`droppedMemberKeysOf`。列の端を捨てた・z 範囲に掛からない・探査の範囲の外・切断線が内側を通る柱）だけ**で、
+この経路は R7 で恒久に残す。`buildFaceFigure` は加算を積まない（B4）。`visibleBeamPieces` は `opts.memberCuts` を渡した呼び出しなら dropped だけを返す
+（本番の呼び出しは必ず渡す。省略＝全部返すのは単体テストの道具）。旧 `solidPrimitivesForFace`・`memberCutsByBand`・`memberFacesByBand`・`only` は B6 で削除（採取履歴の節）。
+以下は加算レイヤの規則（dropped の部材にも同じ規則で効く）の記録。
+
+初版の方針（2026-08）: 「2.5D展開を階段・吹抜けだけでなく全ての展開図へ」への回答は、**`buildFaceFigure`を断面エンジン
+（`section/sectionEngine.js`）へ置き換えることではなく、階段帯で確立済みの「純粋な加算レイヤ」を通常面へ広げること**とした
 ——`buildFaceFigure`は段差プロファイル・開放スパン・注記帯・巾木・建具姿図・壁2段書き等の確定仕様の
-集積であり`elevationSectionGolden.test.js`で凍結されている。目的（柱・梁型・作り付け家具の断面）は
-加算レイヤだけで満たせるため、置き換えのリスクを負う理由が無い。**吹抜け帯・階段帯はこれまでどおり
+集積であり`elevationSectionGolden.test.js`で凍結されている。**吹抜け帯・階段帯はこれまでどおり
 2.5D非対応でも2.5Dでもない専用経路**（吹抜け=自階の面を下へ延長／階段=断面エンジン）である点は不変。
 
 `faceSectionCut`が face を SectionCut へ写す（`(isVertical, axisCL.value, lo, hi)`がCutLineと同型・
@@ -1949,7 +1955,7 @@ ceiling-steel 2階の x=10935 は分断されない（梁の H が面の外に�
 通り芯（一点鎖線）は細線でなくても切らない（`removeLinesInsideRects` の除外は細線と通り芯が独立の条件）。
 層の判定には元の天端・成（`layerTopZ`・`layerDepthMm`）を使う——部屋帯の `clipBeamsToBand` が `topZ`/`depthMm` を帯へ切り詰めても、
 平行壁の足元（`embedding.along`）と同じ層で直交壁の帯を数える。
-既知の限界: 梁は探査（レイキャスト）に参加しない加算レイヤのままで、遮蔽は描く側のクリップ（探査との統合は S3・S4）。
+既知の限界: edgeDropped（列の端を捨てた＝斜めの天井・天端の列に掛かる等。{ceil, zone, wtpSight}）の部材は帯を持てず加算のままで、遮蔽は描く側のクリップ。
 **部屋帯の梁は階段帯と同じ室内側へ下がった仮想断面（pcut）で解く**（2026-10-23 S3。`elevationSolids.js` の `faceBeamCut`＝`faceCutLine(face, cutPlaneOffsetMm)`・
 壁を見る向き `faceViewSign`・`bandRoomBounds`）。柱型・`clipBeamsToBand`・`clampPrimsToRun` は従来のまま（柱型の照合は壁芯基準）。部屋帯だけが渡す
 `opts.fromRoomSide`（断面の続きは室内側〔viewSign の逆〕で見る。`sectionVisibleInRoom`）で部屋帯だけが向きを変える。
@@ -1970,8 +1976,8 @@ ceiling-steel 2階の x=10935 は分断されない（梁の H が面の外に�
 隠れずに残るときだけ描く。梁が壁芯で終わる・壁の中で終わる・壁を抜けた先の柱包みの中で終わる構成は残りが
 空で描かない（柱の有無に依らない。切断線は壁芯にあり包みは仕上げ面から始まるため、柱だけの判定では取りこぼす）。
 階段帯の切断線（室内側へオフセット済みで壁の中に無い）では壁の控除は掛からず、柱包みだけが効く。
-既知の限界: 規則Aは壁を層の床〜直上の床まで立つ全高とみなす（腰壁・垂れ壁・隔て板は除くが、天端が低い他の壁の上を
-越えて見える梁は隠れてしまう。実データに今は無い）。壁の中の柱（`isColumnInsideWall`）は包みを持たないため、その柱に
+（規則Aの全高仮定は、帯の候補では腰壁などの実高さで隠すようになった〔B3-2〕。加算で残る dropped の梁だけが従来の全高仮定。）
+既知の限界: 壁の中の柱（`isColumnInsideWall`）は包みを持たないため、その柱に
 収まる空中横断の梁の端は規則A・Bで隠れない（面の途中に直交壁がある構成だけ）。
 経緯: 292334f（2026-09）以降、読込み時の構造再計算で踊り場受け梁 LG が到達階に生まれ、13.stq「7」C に柱包みの
 中の 32.5mm の中線が出た。保存データのままの golden では LG が無く検出できなかった——構造込みの基準は

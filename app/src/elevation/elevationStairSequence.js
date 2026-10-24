@@ -1400,7 +1400,6 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
       ceilZAtWorld, columnSolids: structuralColumnContribution(cut.layers), wallLineCuts,
       memberCuts: { dropped: droppedMemberKeysOf(pcut) },
       // 梁の見え掛かり（空中・面の通り）も帯（memberFace。U1b B3-2）が描く——ここで描くのは帯が持たない部材（dropped）だけ
-      memberFacesByBand: true,
       // 自階の床（スラブ）が構造部材を隠す。床の無い列は下階の階段の吹抜け（section/sectionStructure.js occludeByFloor）。
       // 区間の端は切断壁の吹抜け側の面（lo/hi）——壁の帯の下に床梁の見えがかりを残さない（裁定 2026-10-19。下の 2FL の隔て板の注記と同じ）
       floorOcclusion: { floorZ: selfLayer?.floorZMm ?? 0, floorlessRanges: floorlessRangesOfCut(cut) },

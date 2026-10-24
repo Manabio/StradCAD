@@ -808,7 +808,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
       primitives.push(translatePrimitive(p, xCursor, 0));
     }
     // 梁の断面・along のうち、帯（memberCut）が持たない部材（列の端を捨てた部材）だけは従来どおり加算で描く
-    // （図側の加算レイヤ solidPrimitivesForFace は断面・along を描かない。部材の判定は pcut の列の分割の後に決まるのでここで足す）
+    // （加算は dropped の部材だけ＝droppedMemberPrimitivesForFace。部材の判定は pcut の列の分割の後に決まるのでここで足す）
     for (const p of opts.droppedMemberPrimsOf?.(face, pcut) ?? []) {
       primitives.push(translatePrimitive(p, xCursor, 0));
     }
@@ -932,7 +932,7 @@ export function buildRoomBand(room, graph, ctx = {}) {
   const memberEdgesX = [];
   appendBandCutContent(primitives, room, graph, layout, layers,
     { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, floorHeightMm: ctx.solids?.floorHeightMm, upperGraph: ctx.solids?.upperGraph ?? null,
-      // 面に加算する梁（solidPrimitivesForFace）と同じ梁の矩形を、アキを塞ぐものとして渡す（solids指定時だけ）。
+      // 面に加算する梁（帯が持たない部材）の矩形を、アキを塞ぐものとして渡す（solids指定時だけ）。
       // 帯が持たない部材（列の端を捨てた部材）の断面・along の矩形は切断（pcut）の列の分割の後に分かる
       gapBeamRectsOf: solidsOpts
         ? (face, pcut) => beamBlockerRectsForFace(face, solidsOpts, droppedMemberKeysOf(pcut, { inZRange: true }))

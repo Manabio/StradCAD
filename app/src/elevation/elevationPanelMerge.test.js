@@ -30,8 +30,16 @@ import { composeRoomFaces, mergeSteppedFacesIntoPanel } from './elevationFaceLis
 import { labelFaces } from './elevationFaces.js';
 import { layoutBandFaces } from './elevationBand.js';
 import { buildRoomBandWithVoidAbove } from './elevationVoid.js';
-import { solidPrimitivesForFace } from './elevationSolids.js';
-import { structuralColumnContribution } from './section/sectionStructure.js';
+import { faceSectionCut, droppedMemberPrimitivesForFace } from './elevationSolids.js';
+import { structuralContribution, structuralColumnContribution, memberKey } from './section/sectionStructure.js';
+
+// 面に加算される梁・柱の全部（全部材を dropped とみなした加算の経路。U1b B6 で本番から外した旧 solidPrimitivesForFace と同じ出力）
+function solidPrimitivesForFace(face, opts) {
+  const cut = faceSectionCut(face, opts);
+  if (!cut) return [];
+  const keys = new Set([...structuralContribution(cut.layers), ...structuralColumnContribution(cut.layers)].map(memberKey));
+  return droppedMemberPrimitivesForFace(face, opts, keys);
+}
 
 const FLOOR_HEIGHT = 3000;
 const ARCH = { labeled: false, discipline: Discipline.ARCH };

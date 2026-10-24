@@ -997,12 +997,10 @@ function rangesOverlap(aLo, aHi, bLo, bHi) {
  *   wallLineCuts?:Array<{xLo:number, xHi:number, zLo:number, zHi:number, xs:number[]}>, facePlane?:boolean, fromRoomSide?:boolean}} [opts]
  *   facePlane は面の通りの梁（面の軸 cut.face.axisCL が梁の幅の帯の中）を parallel（細線）とする。cut が face を持てば既定 true（false で無効）。
  *   fromRoomSide は断面の続きを室内側（viewSign の逆）で見る。部屋帯だけ true（既定 false。階段帯は従来どおり）。
- *   memberCuts（U1b B3-1）… `{dropped:Set<string>, only?:boolean}`。梁の断面（section）と切断線の帯の中を通る梁（along。面の通りの梁でない parallel）は
- *   探査の選択（memberCut の帯。sectionHits.js）が描く——渡した呼び出しはそれらを返さない。dropped（`memberKey` の集合）は帯が持たない部材
- *   （列の端を捨てた・z 範囲に掛からない・探査の範囲の外。`droppedMemberKeysOf`）で、これだけ従来どおり返す。only:true は dropped の部材
- *   （断面・along・見え掛かり）だけを返す。省略は従来どおり全部返す（単体テスト・帯を持たない呼び出し）。
- *   memberFacesByBand（U1b B3-2）… true なら空中の梁・面の通りの梁の見え掛かりも帯（memberFace）が描くので、dropped でない部材は返さない
- *   （dropped の部材は従来どおり返す）。gapBeamRects の矩形用（`beamBlockerRectsForFace`）は only:true で dropped だけ（U1b B4）。
+ *   memberCuts（U1b B3-1。B6 で only・memberFacesByBand を統合）… `{dropped:Set<string>}`。梁の断面（section）・切断線の帯の中を通る梁（along）・
+ *   空中の梁・面の通りの梁の見え掛かりは、探査の選択（memberCut・memberFace の帯。sectionHits.js）が描く——渡した呼び出しは
+ *   dropped（`memberKey` の集合。帯が持たない部材＝列の端を捨てた・z 範囲に掛からない・探査の範囲の外。`droppedMemberKeysOf`）だけを返す。
+ *   省略は全部返す（単体テスト。本番の呼び出しは必ず渡す）。
  *   columnSolids は規則B（柱の包み込み外形に隠れる区間）用。undefined は cut.layers から求め、null は規則Bを使わない（対照用）。
  *   floorOcclusion は自階の床（スラブ）の遮蔽（`occludeByFloor`。出来た全プリミティブに掛かる）。省略は遮蔽なし。
  *   wallLineCuts は出力用の配列: 描いた断面のうち、壁内の梁が壁の面から出ている（部屋側から見える）ものの、壁の断面線を分ける矩形
@@ -1095,10 +1093,8 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
   // 断面（直交する梁）と切断線の帯の中を通る梁（along）は、探査の選択（memberCut の帯。sectionHits.js）が担う。
   // opts.memberCuts を渡した呼び出し側は、帯が持たない部材（列の端を捨てた部材＝nearMembersOf の edgeDropped）の
   // キー集合 dropped だけを加算で描く。省略は従来どおり全部描く（単体テスト・帯を持たない呼び出し）。
-  const memberCutsByBand = !!opts.memberCuts;
+  const bandHoldsMembers = !!opts.memberCuts;
   const droppedKeys = opts.memberCuts?.dropped ?? new Set();
-  // only … 帯が持たない部材（dropped）の断面・along だけを返す（空中・面の通りの見え掛かりは返さない）
-  const onlyDropped = !!opts.memberCuts?.only;
   // 見えがかりの奥行き判定は壁と共通（ユーザー明示指示2026-08「既存の構造材見えがかり処理経路も
   // 含める」）——その切断で最も手前の壁面から上限以上奥にある材は、別の空間のものなので描かない。
   const nearestMm = nearestSightlineDistMm(columns);
@@ -1127,7 +1123,7 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
       const x = localXOf(cut, beam.axisWorld);
       // 断面は帯（memberCut）が担う。帯が持たない部材（列の端を捨てた部材＝`edgeDropped`）だけ従来どおり加算で描く
       // （帯が描く部材は可視判定を二重に計算しないよう先に外す）
-      if (memberCutsByBand && !droppedKeys.has(memberKey(beam))) continue;
+      if (bandHoldsMembers && !droppedKeys.has(memberKey(beam))) continue;
       // 断面を描くかの判定（描画範囲内・断面線より下に浮いていない・壁に埋まっていない・室内側の続きが見える）は
       // 探査の候補収集（sectionHits.js addMemberHits）と共有する `beamSectionShown`（唯一の実装）。
       if (!beamSectionShown(cut, beam, { wc, colSpans, floorProfile, fromRoomSide: !!opts.fromRoomSide })) continue;
@@ -1151,8 +1147,8 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
       && !(cut.line.axisValue >= beam.axisWorld - halfW - GAP_EPS
         && cut.line.axisValue <= beam.axisWorld + halfW + GAP_EPS); // 芯上は下のparallelが担当
     // 見え掛かり（空中・面の通り）は、帯（memberFace。U1b B3-2）が持つ部材なら帯が描く。加算で描くのは帯が持たない部材（dropped）だけ
-    // （opts.memberFacesByBand）。only は dropped の部材だけを返す呼び出し。どちらも指定が無ければ従来どおり全部（単体テスト）
-    const faceHeldByBand = (opts.memberFacesByBand === true || onlyDropped) && !droppedKeys.has(memberKey(beam));
+    // （opts.memberCuts を渡した呼び出し。省略は全部＝単体テスト）
+    const faceHeldByBand = bandHoldsMembers && !droppedKeys.has(memberKey(beam));
     if (airborne) {
       if (faceHeldByBand) continue;
       // 壁（規則A）・柱（規則B）に隠れるスパン区間を引き、残る区間ごとに天地を描く
@@ -1184,7 +1180,7 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
       if (Math.abs(segLo - beam.spanLo) <= GAP_EPS) ends.push(localXOf(cut, beam.spanLo));
       if (Math.abs(segHi - beam.spanHi) <= GAP_EPS) ends.push(localXOf(cut, beam.spanHi));
       if (!onFacePlane) { // 切断線の帯の中を通る梁は従来どおり（描画範囲・天井裏では切らない）。帯（memberCut along）が持つ部材は帯が描く
-        if (memberCutsByBand && !droppedKeys.has(memberKey(beam))) continue;
+        if (bandHoldsMembers && !droppedKeys.has(memberKey(beam))) continue;
         pieces.push({ beam, kind: 'parallel', xLo: loX, xHi: hiX, zLo: zBot, zHi: zTop, ends: ends.sort((p, q) => p - q) });
         continue;
       }

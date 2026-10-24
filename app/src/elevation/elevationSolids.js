@@ -69,12 +69,11 @@ export function faceSectionCut(face, opts) {
   return makeSectionCut({
     seqNo: 'face',
     line: { isVertical: face.isVertical, axisValue, lo: face.lo, hi: face.hi },
-    // **ここのviewSignは`sectionCutPlane.js`の`faceViewSign`とは逆の意味**（室内側＝視線の
-    // 手前側を正に採る。あちらは「壁を見る向き」＝室内から壁へ向かう世界方向で符号が反対）。
-    // 二重定義だが**統一しない**——`faceViewSign`へ差し替えると加算レイヤの`onNearSide`
-    // （柱が面のどちら側に出っ張るか）が反転し、ユーザー確認済みの「4」Bの挙動が壊れる。
-    // 統合の是非は別件（報告済み）。符号は elevationSolids.test.js の符号固定テストで留める。
-    viewSign: face.inward === -1 ? -1 : 1,
+    // **ここのviewSignは「室内側＝視線の手前側を正に採る」**＝`sectionCutPlane.js`の`faceViewSign`（壁を見る向き）の符号反転。
+    // 柱型の入口判定（`structuralColumnPrimitivesForCut`の`onNearSide`＝柱が面のどちら側に出っ張るか）がこの向きの符号を読む
+    // （その関数の規約。fake cut の単体テストも同じ規約）。向きの定義は`faceViewSign`の 1 箇所に寄せ、ここは反転だけ（B6）。
+    // 符号は elevationSolids.test.js の符号固定テストで留める。
+    viewSign: -faceViewSign(face),
     dirSign: face.dirSign,
     layers,
     zRange: { loZ: 0, hiZ: CH },
@@ -138,39 +137,10 @@ function clampPrimsToRun(prims, run) {
 }
 
 /**
- * 面1枚へ加算する2.5D立体（構造柱・構造梁）のプリミティブ。
- * - 切断線と直交する梁 → 幅×せいの断面矩形（CUT太線）
- * - 切断線と平行で幅の帯に掛かる梁 → 上端・下端・両端縦線（DETAIL細線）＝梁型の見えがかり
- * - 切断線をまたぐ柱 → 見付け幅の両端縦線（CUT太線）＝柱型
- * いずれも遮蔽判定には参加しない純粋な加算（sectionStructure.jsの方針をそのまま継承）。
- * 基礎・基礎梁・杭は描かない（追加仕様2026-08。sectionStructure.js側で除外）。
- * @param {object} face
- * @param {{graph:object, ceilingHeight:number, upperGraph?:object|null,
- *   floorHeightMm?:number|null}} opts
- * @returns {object[]} 解決できない面・対象部材が無い場合は空配列（例外は投げない）
- */
-export function solidPrimitivesForFace(face, opts) {
-  const parts = faceParts(face, opts);
-  if (!parts) return [];
-  const { cut, beams, columnSolids, beamCut } = parts;
-  const prims = [
-    // 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）。
-    // 梁の断面・切断線の帯の中を通る梁（along）は、帯を持つ呼び出し（opts.memberCutsByBand。部屋帯・上部吹抜けを持つ部屋の帯）では
-    // 断面エンジンの探査の選択（memberCut の帯。U1b B3-1）が描く——ここでは描かない（帯が持たない部材は帯の側
-    // appendBandCutContent が `droppedMemberPrimitivesForFace` で足す）。指定しない呼び出しは従来どおり全部描く。
-    // 梁の見え掛かり（空中・面の通り）も同じ（U1b B3-2。帯の memberFace が描く。memberFacesByBand）。柱は B3-3 まで加算のまま
-    ...structuralPrimitivesForCut(beams, beamCut, undefined, null,
-      { columnSolids, fromRoomSide: true, ...(opts.memberCutsByBand ? { memberCuts: { dropped: new Set() }, memberFacesByBand: true } : {}) }),
-    // 柱も同じ（U1b B3-3。帯の memberFace〔column〕が描く。帯が持たない柱は帯の側 appendBandCutContent が足す）
-    ...structuralColumnPrimitivesForCut(columnSolids, cut, opts.memberCutsByBand ? { dropped: new Set() } : {}),
-  ];
-  return clampPrimsToRun(prims, face.run);
-}
-
-/**
  * 梁の断面・along・見え掛かり（空中・面の通り）のうち、**帯（memberCut・memberFace）が持たない部材**（`droppedKeys`＝列の端を捨てた・z 範囲に
- * 掛からない部材のキー）だけを加算レイヤの規則で描く（`solidPrimitivesForFace` の同じ梁・同じ可視区間・同じ切り詰め）。柱も同じ
- * （帯が持たない柱だけ従来の入口条件で描く。U1b B3-3）。呼び出しは `droppedMemberKeysOf(pcut, { inZRange: true })`（列の分割の後）。
+ * 掛からない部材のキー）だけを加算レイヤの規則で描く。柱も同じ（帯が持たない柱だけ入口条件〔面の壁に接続 or 切断線をまたぐ〕で描く。U1b B3-3）。
+ * 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）。基礎・基礎梁・杭は描かない（sectionStructure.js 側で除外）。
+ * 遮蔽判定には参加しない純粋な加算（sectionStructure.js の方針）。呼び出しは `droppedMemberKeysOf(pcut, { inZRange: true })`（列の分割の後）。
  * @param {object} face
  * @param {{graph:object, ceilingHeight:number, upperGraph?:object|null, floorHeightMm?:number|null}} opts
  * @param {Set<string>} droppedKeys
@@ -183,13 +153,13 @@ export function droppedMemberPrimitivesForFace(face, opts, droppedKeys) {
   const { cut, beams, columnSolids, beamCut } = parts;
   return clampPrimsToRun([
     ...structuralPrimitivesForCut(beams, beamCut, undefined, null,
-      { columnSolids, fromRoomSide: true, memberCuts: { dropped: droppedKeys, only: true } }),
+      { columnSolids, fromRoomSide: true, memberCuts: { dropped: droppedKeys } }),
     ...structuralColumnPrimitivesForCut(columnSolids, cut, { dropped: droppedKeys }),
   ], face.run);
 }
 
-// 面ごとの切断・梁・柱・梁の判定用の切断（faceBeamCut）は、solidPrimitivesForFace・beamBlockerRectsForFace・droppedMemberPrimitivesForFace の
-// 3 箇所が同じ面に同じ入力で作る——面の配列の同一性と入力（graph・上階・階高・CH・層・部屋）が同じなら作り直さない。
+// 面ごとの切断・梁・柱・梁の判定用の切断（faceBeamCut）は、beamBlockerRectsForFace・droppedMemberPrimitivesForFace の
+// 2 箇所が同じ面に同じ入力で作る——面の配列の同一性と入力（graph・上階・階高・CH・層・部屋）が同じなら作り直さない。
 // 前提: 面は `composeRoomFaces` が組み立てごとに作り直す（面オブジェクトの同一性＝その組み立て）。面をキャッシュして使い回す変更を
 // 入れると、graph が変わっても同じ面で古い値を返す（入力の同一性しか見ていない）ので、その場合はこのメモを見直すこと。
 const facePartsMemo = new WeakMap();
@@ -234,7 +204,7 @@ export function beamBlockerRectsForFace(face, opts, droppedKeys = null) {
   if (beams.length === 0) return [];
   const rects = [];
   for (const p of visibleBeamPieces(beams, beamCut, undefined, null,
-    { columnSolids, fromRoomSide: true, memberCuts: { dropped: droppedKeys, only: true } })) {
+    { columnSolids, fromRoomSide: true, memberCuts: { dropped: droppedKeys } })) {
     const xLo = Math.max(p.xLo, 0), xHi = Math.min(p.xHi, face.run);
     if (xHi - xLo <= GAP_EPS) continue;
     rects.push({ xLo, xHi, zLo: p.zLo, zHi: p.zHi, split: p.kind !== 'section' });

@@ -10,7 +10,7 @@ import { buildRoomFaces } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { collectGridCLs } from './elevationPrimitives.js';
 import {
-  solidPrimitivesForFace, faceSectionCut, beamBlockerRectsForFace, droppedMemberPrimitivesForFace, memberLayersOf,
+  faceSectionCut, beamBlockerRectsForFace, droppedMemberPrimitivesForFace, memberLayersOf,
 } from './elevationSolids.js';
 import { buildRoomBand } from './elevationBand.js';
 import { cutPlaneOffsetMm } from './section/sectionCutPlane.js';
@@ -20,6 +20,15 @@ import {
 } from './section/sectionStructure.js';
 
 const CH = 2400;
+
+// 面に加算される梁・柱の全部（＝全部材を dropped とみなした加算の経路。U1b B6 で本番から外した旧 solidPrimitivesForFace と同じ出力）。
+// 加算の規則（梁の断面・見え掛かり・柱型の入口条件）をそのまま検証する道具。本番は帯が持たない部材（dropped）だけがこの経路を通る
+function solidPrimitivesForFace(face, opts) {
+  const cut = faceSectionCut(face, opts);
+  if (!cut) return [];
+  const keys = new Set([...structuralContribution(cut.layers), ...structuralColumnContribution(cut.layers)].map(memberKey));
+  return droppedMemberPrimitivesForFace(face, opts, keys);
+}
 
 // 通り芯（labeled STRUCT CL）で囲った矩形部屋。X1/X2=0/4000・Y1/Y2=0/3000。
 function makeGridRoom(name = 'いま') {
@@ -122,15 +131,15 @@ test('【追加仕様】solidPrimitivesForFace: A面の壁上に立つ柱は仕�
   }
 });
 
-test('【B3-3・加算停止】solidPrimitivesForFace: memberCutsByBand（帯を持つ呼び出し）では帯が持つ柱を描かない。dropped の柱は droppedMemberPrimitivesForFace が描く', () => {
+test('【B3-3】droppedMemberPrimitivesForFace: dropped の柱は加算で描く。別のキーの柱は描かない（帯が持つ柱は描かない）', () => {
   const { graph, room, y0 } = makeGridRoom();
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
   graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, y0, {});
   const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
   const base = { graph, ceilingHeight: CH };
   const verts = ps => ps.filter(p => p.type === 'line' && p.x1 === p.x2 && p.weight === 'medium');
-  assert.equal(verts(solidPrimitivesForFace(faceA, base)).length, 2, '省略は従来どおり柱を描く');
-  assert.equal(verts(solidPrimitivesForFace(faceA, { ...base, memberCutsByBand: true })).length, 0, '帯が持つ柱は加算で描かない');
+  assert.equal(verts(solidPrimitivesForFace(faceA, base)).length, 2, '全部材を dropped とみなせば柱を描く');
+  assert.equal(verts(droppedMemberPrimitivesForFace(faceA, base, new Set())).length, 0, '帯が持つ柱（dropped が空）は加算で描かない');
   const key = memberKey(structuralColumnContribution([{ graph, floorZMm: 0, role: 'self' }])[0]);
   assert.equal(verts(droppedMemberPrimitivesForFace(faceA, base, new Set([key]))).length, 2, 'dropped の柱は加算で描く');
   assert.equal(verts(droppedMemberPrimitivesForFace(faceA, base, new Set(['別のキー']))).length, 0, '別のキーの柱は描かない');
@@ -790,15 +799,15 @@ function makeBeamBandCase() {
 }
 const thickLines = ps => ps.filter(p => p.type === 'line' && p.weight === 'thick' && -Math.min(p.y1, p.y2) > 1800 && -Math.max(p.y1, p.y2) < 2500);
 
-test('【B3-1・配線】部屋帯: 梁の断面は帯が描き、従来の加算（solidPrimitivesForFace）と同じ輪郭になる。図側の加算（memberCutsByBand）は断面を描かない', () => {
+test('【B3-1・配線】部屋帯: 梁の断面は帯が描き、従来の加算（全部材 dropped とみなした経路）と同じ輪郭になる。dropped が空の加算は断面を描かない', () => {
   const { graph, room, faceA, solids } = makeBeamBandCase();
   const additive = solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH, room, ...solids });
   // 梁の天（CH で切られた 2400）の水平線は天井断面線（同じ太線）と重なり、帯の finalizeBand の dedupe で畳まれるので比べない
   const notCeilingLine = p => !(p.y1 === p.y2 && p.y1 === -CH);
   const old = thickLines(additive).filter(notCeilingLine);
   assert.ok(old.length >= 4, `前提: 従来の加算が断面の輪郭を描く（${old.length} 本）`);
-  assert.equal(thickLines(solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH, room, ...solids, memberCutsByBand: true })).length, 0,
-    'memberCutsByBand 指定の加算は断面を描かない（帯が描く）');
+  assert.equal(thickLines(droppedMemberPrimitivesForFace(faceA, { graph, ceilingHeight: CH, room, ...solids }, new Set())).length, 0,
+    'dropped が空の加算は断面を描かない（帯が描く）');
   const band = buildRoomBand(room, graph, { solids });
   const inBand = thickLines(band.primitives).filter(notCeilingLine);
   // 帯の線は面の xCursor ぶん平行移動している。先頭の線の差から平行移動量を決め、従来の輪郭の全部が同じ形で帯にあることを確かめる
@@ -854,7 +863,7 @@ test('【B4】beamBlockerRectsForFace: 帯が持たない部材（droppedKeys）
   assert.equal(beamBlockerRectsForFace(faceA2, o2, new Set([memberKey(beam)])).length, 1, '帯が持つ別の梁は矩形に入らない（dropped だけ）');
 });
 
-test('【B4】beamBlockerRectsForFace: 帯が持つ面に平行な梁（空中・面の通り。dropped でない）は矩形に入らない。dropped の梁 A だけ返す（only:true の検出力）', () => {
+test('【B4】beamBlockerRectsForFace: 帯が持つ面に平行な梁（空中・面の通り。dropped でない）は矩形に入らない。dropped の梁 A だけ返す（帯が持つ梁を除く判定の検出力）', () => {
   // 面の軸を y=-150（inward:-1。視線は +y 向き）に置いた合成の面と、素の梁（plain object）の層で組む。
   // 空中の梁 B: 軸 y=80・幅 100（帯 30..130）＝切断線（y=-150）の視線側で面の軸の帯の外。面の通りの梁 B: 軸 y=-150（面の軸が帯の中）。
   // dropped の梁 A: 面を貫く梁（x=2000）。部屋は makeBeamBandCase の部屋（梁は部屋の中）
@@ -870,7 +879,7 @@ test('【B4】beamBlockerRectsForFace: 帯が持つ面に平行な梁（空中�
     const dropped = beams.find(b => b.isVertical); // A
     const parallel = beams.find(b => !b.isVertical); // B
     assert.ok(dropped && parallel, `前提(${label}): 梁が 2 本`);
-    // 前提: B は加算の経路（`only` 無し）では見え掛かりとして出る＝only:true が無ければ矩形（split:true）になる
+    // 前提: B は全部材 dropped とみなした加算の経路では見え掛かりとして出る＝帯が持つ梁を除かなければ矩形（split:true）になる
     const lines = solidPrimitivesForFace(face, opts).filter(p => p.weight !== 'thick');
     assert.ok(lines.length > 0, `前提(${label}): B の見え掛かりの線が出る（${JSON.stringify(lines.length)}）`);
     const rects = beamBlockerRectsForFace(face, opts, new Set([memberKey(dropped)]));
