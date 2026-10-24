@@ -3,10 +3,10 @@
  * 設計意図はarchitect承認済みの実装指示書§4末尾参照。elevationStairSequence.js（switchbackCuts.js
  * 経由でcut.stairCutとして渡された値を消費）から呼ばれる。
  *
- * 既存部品を転用する（§5.7）: stairRunProfile・stringerPrimitives（elevationStairSection.js。
+ * 既存部品を転用する（§5.7）: stairRunProfile・stringerPrimitives（stairSectionProfile.js。
  * 挙動不変のまま呼ぶ）・resolveUTurnSectionParams（蹴上高の供給源）・uTurnPlanLayout
  * （finish/stair/stairGeometry.js。平面の枠。flip/upDirection吸収済み）。梯子（正面視の水平線）は
- * treadLadderLinesを使わずemitLine経由で組み立てる（§5.6最終フィルタ・baseFloorZ以下の
+ * emitLine経由で組み立てる（§5.6最終フィルタ・baseFloorZ以下の
  * 明示的な破線指定を両立させるため。WP-E5b）。対象はU字系（SWITCHBACK/WINDING。
  * resolveUTurnSectionParamsがU字系以外null）。
  *
@@ -39,7 +39,7 @@
  * unit（StairUnit。板厚・桁成・アンカー高さの単一情報源）とlanding.frame.edges（踊り場矩形の
  * 外周4辺。front=レーンに接する側／back=反対／side=走行軸に平行な残り2辺）を追加した。
  * ユーザー裁定2026-08-23: 踊り場桁枠のせい(landingFrameDepthMm)は250ではなく300（ささらと
- * 同値。elevationStairSection.jsのSTEEL_LANDING_FRAME_DEPTH_MM）。生成対象もSTEEL限定から
+ * 同値。stairSectionProfile.jsのSTEEL_LANDING_FRAME_DEPTH_MM）。生成対象もSTEEL限定から
  * STEEL・RC（hasLandingFrame）へ拡張——ささら本体（isSteel限定）は変更しない。
  * ASSUMED（設計書に明記が無いため以下の解釈を採用。stairLanding.test.js/sectionStair.test.jsの
  * 意味論アサーションで直接検証する）:

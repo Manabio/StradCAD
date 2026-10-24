@@ -840,7 +840,7 @@ export function measureStairSpans(stair, graph) {
 /**
  * SWITCHBACK階段の区間長（往路len1・踊り場landingLen・復路len2）と段数（n1・n2・totalSteps）を
  * 実測優先（measureStairSpans）・合成フォールバック（tread×マス数）で解決する。floorHeightに
- * 依存しない部分のみを切り出したもの——elevationStairSection.jsのresolveSwitchbackParams（本関数＋
+ * 依存しない部分のみを切り出したもの——elevation/section/stairSectionProfile.jsのresolveSwitchbackParams（本関数＋
  * floorHeightから算出するriserを合成）とfinish/stair/stairLanding.jsのlandingRect（踊り場矩形の
  * 単一情報源。floorHeight不要）が共有する（WP-A1: 挙動不変のリファクタ抽出）。
  * SWITCHBACK以外はnull。

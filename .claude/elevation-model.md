@@ -21,6 +21,9 @@
 `section/`・`space/`から親（`elevation/`直下）へ引いてよいのは補助の2本だけ。`elevation/`内に循環を作らない。`plan/planSolids.js`は`section/`を引かない
 （`beamDepthMm`は`structural/sectionCatalog.js`・`kneeDropZRangesAt`は`finish/kneeDropWall.js`・`stairUnderReturnSoffit`は`ceiling/stairSoffit.js`が定義元）。
 断面エンジンが面の値を要るときは、面側の純関数を`section/faceGeometry.js`等の下位モジュールへ置くか、帯ビルダーが cut/opts で渡す。
+階段の所在: **断面の形**（踏面のジグザグ・U字/折返しの区間長と段数と蹴上・ささらの帯・断面線が閉じるか）は`section/stairSectionProfile.js`が唯一の供給源で、
+帯ビルダー（`elevationStair.js`・`elevationStairSequence.js`）と断面エンジン（`section/sectionStair.js`・`cuts/`）の両方がそこを引く（旧`elevationStairSection.js`は S7 で解消）。
+`elevationStair.js`は帯の組み立て（面の選択・2層枠・フォールバックの折返しプリミティブ化）、`elevationStairSequence.js`は歩行順の面シーケンス（cut 表と内容の組み立て）だけを持つ。
 
 1枚の帯へ**2つのエンジンが同時にプリミティブを流し込む**。断面エンジンへの入口は
 `section/sectionContent.js`の**`buildSectionFromLine(line, layers, opts)`（面非依存の入口。展開図一般化Phase 8・
@@ -1043,7 +1046,7 @@ seq2の切断は**往路レーンの中**を通るため、視線の手前には
 [鉄骨階段のささら解説](http://kentiku-kouzou.jp/struc-sasara.html)。段板（踏み板）を両側から支える斜め梁で、
 一般的にプレート（最低12mm厚・せい250〜300mm程度）を使う。この記事のとおり寸法を展開図へ反映した:
 - **寸法**: 板厚`STEEL_STRINGER_THICKNESS_MM=12`mm・せい`STEEL_STRINGER_DEPTH_MM=300`mm（250〜300の上限を採用。
-  Stairモデルに桁成フィールドは無いため作図既定値。`elevationStairSection.js`）。
+  Stairモデルに桁成フィールドは無いため作図既定値。`section/stairSectionProfile.js`）。
 - **上端線は段鼻の勾配線＋巾木高さ**（ユーザー実機指摘2026-08「ささらの上端は、踏面先端で巾木同寸」）
   ——最後の段鼻の高さは踊り場床(`landing.z`)そのものなので、上端が踊り場桁枠side辺の上端
   （`landing.z + baseboardHeightMm`）と**踊り場の縁でちょうど一致**する＝「直進部の斜めささらと
@@ -1372,7 +1375,7 @@ hだけ上へそのまま平行移動した連続ポリラインとして描く�
   ——ただし`cut.baseFloorZ`の境界だけは併合しない（emitLineの§5.6最終フィルタが
   「band全体がbaseFloorZ以下か」で降格を決めるため、そこを併合すると「下側だけ破線」が
   再現できなくなる）。
-- **B: ささらのオフセット後多角形をFLでクリップ**。`stringerPrimitives`（elevationStairSection.js）の
+- **B: ささらのオフセット後多角形をFLでクリップ**。`stringerPrimitives`（section/stairSectionProfile.js）の
   段鼻を結ぶ直線からのオフセットは、flightがz=baseZ(登り口FL)始まりの場合、オフセット先の頂点が
   FLを超えて突き出すことがある（法線が下方向＝FL側を向くため）。`zBounds:{yLo,yHi}`（省略時は
   挙動不変）を追加し、Sutherland–Hodgman法の単純な半平面クリップ（`clipPolygonToYRange`/

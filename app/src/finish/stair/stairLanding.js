@@ -148,7 +148,7 @@ export function landingEdgeCLs(stair, graph) {
 
 /**
  * 踊り場の絶対z（設置階FL基準・mm）= n1（往路の段数）× riser（蹴上）。WP-B2（踊り場受け梁の
- * 既定天端レベル算出）向け。riser式は elevation/elevationStairSection.js の
+ * 既定天端レベル算出）向け。riser式は elevation/section/stairSectionProfile.js の
  * resolveSwitchbackParams と同じ（stair.riser優先・無ければ階高/総段数）だが、finish/stair/
  * 配下は elevation/ に依存しない方針（ファイル冒頭コメント参照）のため、stairDimensions.js の
  * riserOf（stair.riser優先・無ければ階高/総段数。唯一の供給源）を使う。elevation側の式を変える場合は riserOf も揃えること。

@@ -27,7 +27,7 @@ export function uniqueSorted(values) {
 /**
  * 蹴上のジグザグ polyline（面ローカル。stairRunProfile の points）から各段の段鼻（踏面の先端）の x を取り出す。
  * 平面の踏面線・放射線は段鼻の位置なので、蹴込 k だけ奥に引っ込む蹴込板の縦線ではなく段鼻と比べる
- * （stairPlanAlign.test.js の elevationNoses と同じ量）。点列の規則（elevationStairSection.js stairRunProfile）:
+ * （stairPlanAlign.test.js の elevationNoses と同じ量）。点列の規則（section/stairSectionProfile.js stairRunProfile）:
  *   段鼻 ＝ 「上りの線分（y が減る向き）で着いた頂点」で、次の線分が歩行方向へ進む水平線のもの。
  *   polyline の終点が上りで着いた頂点なら最終段の段鼻。ただし着いた線分が垂直（dx=0）で nosingMm>0 のときは
  *   段板厚つき（木造）の最終段で、蹴込板の縦線が段鼻より dir*k 奥にあるため段鼻 = 終点 x − dir*nosingMm。
