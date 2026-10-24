@@ -21,7 +21,9 @@ import { FRAME_OVERHANG_MM } from '../openings/openingPlanSymbolGeometry.js';
 import { openingTagPartsOf, effectiveHeight } from '../openings/openingNumbering.js';
 import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
 import { buildOpeningElevation, frameOnlyInnerRect } from '../openings/openingElevationFigure.js';
-import { translatePrimitive, mirrorPrimitiveX } from './elevationPrimitives.js';
+import {
+  translatePrimitive, mirrorPrimitiveX, line, polyline, text, dim, circle, tag, hit,
+} from './elevationPrimitives.js';
 import { ceilArcCircleOf, ceilArcZAt, ceilArcPrimitive } from './ceilArcSection.js';
 import { collectRow1SplitPoints } from './elevationDimSplit.js';
 import {
@@ -36,6 +38,7 @@ import {
   FACE_LABEL_FONT_PX, GRID_LINE_ABOVE_CH_MM, CANVAS_BG_COLOR, DEFAULT_FACE_LABEL_AVOID_THRESHOLD_MM,
   DEFAULT_OPENING_TAG_ROW_MM, DEFAULT_DIM_ROW_GAP_MM, DEFAULT_GRID_ROW_GAP_MM,
   DEFAULT_WALL_LESS_END_EXTEND_MM, CH_DIM_OFFSET_MM, SPLIT_MERGE_EPS_MM, DEFAULT_DIM_FOOT_GAP_MM, GAP_EPS_MM,
+  ElevationDash, FLOAT_EPS, SAMPLE_OFFSET_MM,
 } from './elevationStyle.js';
 
 const BC_ABOVE_EPS_MM = 1e-6; // 家族の天井の破線が近側の天井断面より「上」と見なす最小差（浮動小数の丸めを吸収）
@@ -213,9 +216,9 @@ export function avoidObstacleRangesX(defaultX, obstacles, boundary, labelWidthMm
  * @param {string} detailWeight - 対角線・一点鎖線の線種
  */
 export function appendGapMark(prims, gap, detailWeight) {
-  prims.push({ type: 'line', x1: gap.x,         y1: gap.y,         x2: gap.x + gap.w, y2: gap.y + gap.h, dash: 'center', weight: detailWeight });
-  prims.push({ type: 'line', x1: gap.x + gap.w, y1: gap.y,         x2: gap.x,         y2: gap.y + gap.h, dash: 'center', weight: detailWeight });
-  prims.push({ type: 'text', x: gap.x + gap.w / 2, y: gap.y + gap.h / 2, text: 'ア キ', anchor: 'middle', baseline: 'middle' });
+  prims.push(line(gap.x,         gap.y,         gap.x + gap.w, gap.y + gap.h, { dash: ElevationDash.CENTER, weight: detailWeight }));
+  prims.push(line(gap.x + gap.w, gap.y,         gap.x,         gap.y + gap.h, { dash: ElevationDash.CENTER, weight: detailWeight }));
+  prims.push(text(gap.x + gap.w / 2, gap.y + gap.h / 2, 'ア キ', { anchor: 'middle', baseline: 'middle' }));
 }
 
 
@@ -460,8 +463,8 @@ function upperFloorEdgeSpanAt(end, floorProfile, upperFloorZ, overhang, xs, floo
     return { lo: Math.min(cutX, far), hi: Math.max(cutX, far) };
   };
   const cutSpan = end === 'lo'
-    ? outward(cutEnds?.lo, (overhang.lo ?? 0) > 1e-6, -1)
-    : outward(cutEnds?.hi, (overhang.hi ?? 0) > 1e-6, +1);
+    ? outward(cutEnds?.lo, (overhang.lo ?? 0) > GAP_EPS_MM, -1)
+    : outward(cutEnds?.hi, (overhang.hi ?? 0) > GAP_EPS_MM, +1);
   if (cutSpan) return cutSpan;
   // 断面線を持たない帯（上部吹抜けを持つ部屋帯。`elevationVoid.js`のbuildRoomBandWithVoidAbove）
   // は、はり出し区間のうち**面端のCLより向こう側**に引く（ユーザー実機指摘2026-09「「5」A1:
@@ -479,7 +482,7 @@ function upperFloorEdgeSpanAt(end, floorProfile, upperFloorZ, overhang, xs, floo
     const cl = end === 'lo' ? xs.boundaryLo : xs.boundaryHi;
     const clampToOverhang = (v, o, i) => Math.min(Math.max(v, Math.min(o, i)), Math.max(o, i));
     const b = clampToOverhang(cl, outer, inner);
-    return Math.abs(b - outer) > 1e-6 ? { lo: Math.min(outer, b), hi: Math.max(outer, b) } : null;
+    return Math.abs(b - outer) > GAP_EPS_MM ? { lo: Math.min(outer, b), hi: Math.max(outer, b) } : null;
   }
   const domLo = floorProfile[0][0], domHi = floorProfile[floorProfile.length - 1][0];
   const zAt = x => drawnFloorProfileZAt(floorProfile, x);
@@ -493,23 +496,23 @@ function upperFloorEdgeSpanAt(end, floorProfile, upperFloorZ, overhang, xs, floo
   // boundaryLo/Hiへ迂回しており、断面線の定義域チェックがdrawnX0の誤り〈-150〉と
   // boundaryLo〈0〉のどちらを向くかで二重の基準を持っていた）。
   const xInner = end === 'lo' ? xs.drawnX0 : xs.drawnXRun;
-  if (Math.abs(xInner - xOuter) < 1e-6) return null;
+  if (Math.abs(xInner - xOuter) < GAP_EPS_MM) return null;
   const dir = Math.sign(xInner - xOuter);
   // 断面線の定義域がはり出し側（xInnerの外）へ一歩も出ていなければ、外端の高さは端点値の
   // 外挿でしかない＝この面のはり出しに上階の床の小口は描けない。
-  if (dir > 0 ? domLo >= xInner - 1e-6 : domHi <= xInner + 1e-6) return null;
-  if (zAt(xOuter) < upperFloorZ - 1e-6) return null;
+  if (dir > 0 ? domLo >= xInner - GAP_EPS_MM : domHi <= xInner + GAP_EPS_MM) return null;
+  if (zAt(xOuter) < upperFloorZ - GAP_EPS_MM) return null;
   // 断面線の折れ点で刻んで、上階FLを下回る最初の区間の中で交点を線形補間する。
   const between = floorProfile.map(p => p[0])
-    .filter(x => (x - xOuter) * dir > 1e-6 && (xInner - x) * dir > 1e-6)
+    .filter(x => (x - xOuter) * dir > GAP_EPS_MM && (xInner - x) * dir > GAP_EPS_MM)
     .sort((a, b) => (a - b) * dir);
   let prev = xOuter;
   for (const x of [...between, xInner]) {
     const zPrev = zAt(prev), z = zAt(x);
-    if (z >= upperFloorZ - 1e-6) { prev = x; continue; }
+    if (z >= upperFloorZ - GAP_EPS_MM) { prev = x; continue; }
     const t = (zPrev - upperFloorZ) / (zPrev - z);
     const cross = prev + (x - prev) * t;
-    return Math.abs(cross - xOuter) < 1e-6 // 外端で既に断面線が上階FLを離れる＝長さ0
+    return Math.abs(cross - xOuter) < GAP_EPS_MM // 外端で既に断面線が上階FLを離れる＝長さ0
       ? null : { lo: Math.min(xOuter, cross), hi: Math.max(xOuter, cross) };
   }
   return { lo: Math.min(xOuter, xInner), hi: Math.max(xOuter, xInner) };
@@ -607,10 +610,10 @@ export function splitPolylineAtGaps(points, gaps, yAt) {
     const x0 = rest[0][0], x1 = rest[rest.length - 1][0];
     if (hi <= x0 + GAP_EPS_MM || lo >= x1 - GAP_EPS_MM) continue; // 片の外
     const before = rest.filter(([x]) => x < lo - GAP_EPS_MM);
-    if (before.length > 0) before.push([lo, yAt(lo - 1e-3)]);
+    if (before.length > 0) before.push([lo, yAt(lo - SAMPLE_OFFSET_MM)]);
     if (before.length >= 2) out.push(before);
     const after = rest.filter(([x]) => x > hi + GAP_EPS_MM);
-    rest = after.length > 0 ? [[hi, yAt(hi + 1e-3)], ...after] : [];
+    rest = after.length > 0 ? [[hi, yAt(hi + SAMPLE_OFFSET_MM)], ...after] : [];
     if (rest.length < 2) { rest = []; break; }
   }
   if (rest.length >= 2) out.push(rest);
@@ -679,22 +682,20 @@ export function buildFaceFigure(face, ctx) {
     // 低い側のFL・CH次第で誤った高さになる。ceilAbsMm未指定（単体テスト等の合成face）は
     // 従来どおり帯CHへフォールバック。
     const stepCeilY = -(face.ceilAbsMm ?? CH);
-    prims.push({ type: 'line', x1: 0, y1: floorY, x2: run, y2: floorY, weight: stepCutWeight }); // 低い側床線
-    prims.push({ type: 'line', x1: 0, y1: topY,   x2: run, y2: topY,   weight: stepSilhouetteWeight }); // 高い側床線(見付け上端。中線)
+    prims.push(line(0, floorY, run, floorY, { weight: stepCutWeight })); // 低い側床線
+    prims.push(line(0, topY,   run, topY,   { weight: stepSilhouetteWeight })); // 高い側床線(見付け上端。中線)
     // QA修正（ユーザー明示指示）: 両端縦線（壁断面=CUT）はtopY（見付け上端）で止めず天井まで
     // 描画する——見付け上端はあくまで段差先の床の見えがかり線であり、壁自体は天井まで続くため。
-    prims.push({ type: 'line', x1: 0,   y1: floorY, x2: 0,   y2: stepCeilY, weight: stepCutWeight });
-    prims.push({ type: 'line', x1: run, y1: floorY, x2: run, y2: stepCeilY, weight: stepCutWeight });
-    prims.push({ type: 'line', x1: 0, y1: stepCeilY, x2: run, y2: stepCeilY, weight: stepCutWeight }); // 天井線
+    prims.push(line(0,   floorY, 0,   stepCeilY, { weight: stepCutWeight }));
+    prims.push(line(run, floorY, run, stepCeilY, { weight: stepCutWeight }));
+    prims.push(line(0, stepCeilY, run, stepCeilY, { weight: stepCutWeight })); // 天井線
     // 問題修正2026-08その6: 高い側エリア（向こう側）の天井が天井断面より上にあれば、
     // 「床断面下・天井断面上の向こう側の断面は細線の破線」の既存規則どおり細線の破線で描く
     // （「C1の天井断面上+100に3'の天井を表す破線」——見付け面は部分指定関係のエリア同士の
     // 境界そのものなので、常に「またぐ面」に該当する）。
     if (face.beyondCeilAbsMm != null && -face.beyondCeilAbsMm < stepCeilY) {
-      prims.push({
-        type: 'line', x1: 0, y1: -face.beyondCeilAbsMm, x2: run, y2: -face.beyondCeilAbsMm,
-        weight: stepDetailWeight, dash: 'dashed',
-      });
+      prims.push(line(0, -face.beyondCeilAbsMm, run, -face.beyondCeilAbsMm,
+        { weight: stepDetailWeight, dash: ElevationDash.DASHED }));
     }
     // QA修正（ユーザー明示指示）: 見付け上端(topY)から天井までは壁が無く見通せるため、
     // 常にアキ（腰壁・垂れ壁と同じappendGapMark）を描く——旧実装はkneeDropGapsOnFace（腰壁・
@@ -819,14 +820,14 @@ export function buildFaceFigure(face, ctx) {
     const s = segs[i];
     const lo = Math.max(i === 0 ? floorX0 : riserXAt(i - 1), s.flatLineSpanX?.lo ?? -Infinity);
     const hi = Math.min(i === segs.length - 1 ? floorXRun : riserXAt(i), s.flatLineSpanX?.hi ?? Infinity);
-    return hi - lo > 1e-6 ? { lo, hi } : null;
+    return hi - lo > GAP_EPS_MM ? { lo, hi } : null;
   };
 
   for (const [i, s] of segs.entries()) {
     const span = flatLineRangeAt(i);
     if (!span) continue;
     const y = floorYOf(s);
-    prims.push({ type: 'line', x1: span.lo, y1: y, x2: span.hi, y2: y, weight: cutWeight });
+    prims.push(line(span.lo, y, span.hi, y, { weight: cutWeight }));
   }
   for (let i = 0; i + 1 < segs.length; i++) {
     // 段差の縦線（明示指示により寸法線・寸法値は描かない）。床の段差そのものはCUT
@@ -840,11 +841,8 @@ export function buildFaceFigure(face, ctx) {
     // 「「6」D1: Y2から1000の…2本の縦線…は階段より下なので描画しない」。レーン区間の床は
     // 階段そのもので、踊り場との間に1FLからの立ち上がりは存在しない）。
     const a = flatLineRangeAt(i), b = flatLineRangeAt(i + 1);
-    if (!a || !b || a.hi < x - 1e-6 || b.lo > x + 1e-6) continue;
-    prims.push({
-      type: 'line', x1: x, y1: floorYOf(segs[i]), x2: x, y2: floorYOf(segs[i + 1]),
-      weight: cutWeight,
-    });
+    if (!a || !b || a.hi < x - GAP_EPS_MM || b.lo > x + GAP_EPS_MM) continue;
+    prims.push(line(x, floorYOf(segs[i]), x, floorYOf(segs[i + 1]), { weight: cutWeight }));
   }
   const floorYAtStart = floorYOf(segs[0]);
   const floorYAtEnd   = floorYOf(segs[segs.length - 1]);
@@ -897,14 +895,14 @@ export function buildFaceFigure(face, ctx) {
   if (hasCeilingProfile) {
     const points = [[ceilX0, -ceilAbsAtX(ceilX0, CH)]];
     for (const [x, y] of ceilingProfile) {
-      if (x > drawnX0 + 1e-6 && x < drawnXRun - 1e-6) points.push([x, -y]);
+      if (x > drawnX0 + GAP_EPS_MM && x < drawnXRun - GAP_EPS_MM) points.push([x, -y]);
     }
     points.push([ceilXRun, -ceilAbsAtX(ceilXRun, CH)]);
     // 天井断面線の隙間（ceilingProfileGaps。床〜天井まで 1 本の断面になった切断壁の範囲）: 天井断面は壁の断面の中へ
     // 出っ張らない（ユーザー指摘 2026-10-16「moku4-3 1階 階段 A: 往路の隔て板と天井は取り合いでトリム〔天井断面は壁内に
     // でっぱらない〕」）。隙間の手前は壁の面の高さで終え、向こうは壁の面の高さから始める（壁の縁は断面エンジンが描く）。
     for (const piece of splitPolylineAtGaps(points, ceilingProfileGaps, x => -ceilAbsAtX(x, CH))) {
-      prims.push({ type: 'polyline', points: piece, weight: cutWeight });
+      prims.push(polyline(piece, { weight: cutWeight }));
     }
   } else {
     const ceilRiserXAt = i => drawnCeilingRiserX(segs, i, halfWallMm, CH);
@@ -971,22 +969,22 @@ export function buildFaceFigure(face, ctx) {
       const x1 = ri === 0 ? ceilX0 : ceilBoundaryX(ri - 1);
       const x2 = ri === ceilRuns.length - 1 ? ceilXRun : ceilBoundaryX(ri);
       if (!r.tilted) {
-        prims.push({ type: 'line', x1, y1: r.y, x2, y2: r.y, weight: cutWeight });
+        prims.push(line(x1, r.y, x2, r.y, { weight: cutWeight }));
         continue;
       }
       // 傾いた run: 斜線は区間 [loX, hiX] の内側だけ。区間の外（壁の無い端の延長・上階のはり出し・
       // 境界の半壁厚ずれ）は端の値で水平な別の線（エンジンの ceilProfileEdgeAt と同じ「範囲外は端の値で水平」）。
       const seg = segs[r.startIdx];
       const sx1 = Math.max(x1, seg.loX), sx2 = Math.min(x2, seg.hiX);
-      if (x1 < sx1) prims.push({ type: 'line', x1, y1: runYAt(r, x1), x2: sx1, y2: runYAt(r, sx1), weight: cutWeight });
+      if (x1 < sx1) prims.push(line(x1, runYAt(r, x1), sx1, runYAt(r, sx1), { weight: cutWeight }));
       if (sx2 > sx1) {
         // 円弧・ドームの区間は 3 点を通る円弧 1 本（円が作れなければ従来の斜線／水平線）
         const arcCircle = arcCircleOf(seg);
         prims.push(arcCircle
           ? ceilArcPrimitive(arcCircle, sx1, sx2, { weight: cutWeight })
-          : { type: 'line', x1: sx1, y1: runYAt(r, sx1), x2: sx2, y2: runYAt(r, sx2), weight: cutWeight });
+          : line(sx1, runYAt(r, sx1), sx2, runYAt(r, sx2), { weight: cutWeight }));
       }
-      if (sx2 < x2) prims.push({ type: 'line', x1: Math.max(sx2, sx1), y1: runYAt(r, sx2), x2, y2: runYAt(r, x2), weight: cutWeight });
+      if (sx2 < x2) prims.push(line(Math.max(sx2, sx1), runYAt(r, sx2), x2, runYAt(r, x2), { weight: cutWeight }));
     }
     // 別エリア天井の破線は「論理区間（segs）」基準で天井断面と比較する——描画済みrun範囲
     // （天井段差の描画x＝±半壁厚オフセット後）と比較すると、bcの境界（論理CL値）と天井段差の
@@ -1021,12 +1019,12 @@ export function buildFaceFigure(face, ctx) {
       const mergedPieces = [];
       for (const [a, b] of pieces) {
         const last = mergedPieces[mergedPieces.length - 1];
-        if (last && a <= last[1] + 1e-9) last[1] = Math.max(last[1], b);
+        if (last && a <= last[1] + FLOAT_EPS) last[1] = Math.max(last[1], b);
         else mergedPieces.push([a, b]);
       }
       for (const [a, b] of mergedPieces) {
         const ya = bcTilted ? bcAbsAt(a) : bc.ceilAbsMm, yb = bcTilted ? bcAbsAt(b) : bc.ceilAbsMm;
-        prims.push({ type: 'line', x1: a, y1: -ya, x2: b, y2: -yb, weight: detailWeight, dash: 'dashed' });
+        prims.push(line(a, -ya, b, -yb, { weight: detailWeight, dash: ElevationDash.DASHED }));
         maxDrawnBcCeilAbs = Math.max(maxDrawnBcCeilAbs, ya, yb);
       }
     }
@@ -1035,7 +1033,7 @@ export function buildFaceFigure(face, ctx) {
       const x = ceilRiserXAt(ceilRuns[ri].endIdx);
       const yA = runYAt(ceilRuns[ri], x), yB = runYAt(ceilRuns[ri + 1], x);
       if (Math.abs(yA - yB) <= GAP_EPS_MM) continue; // 境界で天井線が続いている（傾斜→同じ高さの平面等）なら縦線は要らない
-      prims.push({ type: 'line', x1: x, y1: yA, x2: x, y2: yB, weight: cutWeight });
+      prims.push(line(x, yA, x, yB, { weight: cutWeight }));
     }
   }
   // 上階のはり出しの**下辺＝上階のFL断面線**（ユーザー裁定2026-09「「6」D2」。上辺は上の天井断面線、
@@ -1054,8 +1052,7 @@ export function buildFaceFigure(face, ctx) {
   };
   for (const side of upperFloorEdgeSpans(floorProfile, upperFloorZ, upperOverhang,
     edgeSpanXs, upperFloorEnds, upperFloorCutEnds)) {
-    prims.push({ type: 'line', x1: side.lo, y1: -upperFloorZ, x2: side.hi, y2: -upperFloorZ,
-      weight: cutWeight });
+    prims.push(line(side.lo, -upperFloorZ, side.hi, -upperFloorZ, { weight: cutWeight }));
   }
   // 端の縦線（中線）: 壁がある端（出隅・入隅）に加え、見えがかりエッジ（edgeAtLocal0/Run＝
   // 実壁が切断面を横切らず向こう側へ折れて続く凹み角。ユーザー明示指示2026-08）にも描く——
@@ -1110,13 +1107,13 @@ export function buildFaceFigure(face, ctx) {
   // 後（floorDyAt が使える位置）で開口範囲を引いた残りへ差し替える（出力順は不変）。
   const edgeLoIdx = (hasWallAtLocal0 || edgeAtLocal0) ? prims.length : -1;
   if (hasWallAtLocal0 || edgeAtLocal0) {
-    prims.push({ type: 'line', x1: 0,   y1: endCeilYOf(0, segCeilAbsAt(segs[0], 0), capsAtUpperFloor('lo')), x2: 0,   y2: endFloorYOf(0, floorYAtStart),
-      weight: hasWallAtLocal0 ? cutWeight : silhouetteWeight });
+    prims.push(line(0,   endCeilYOf(0, segCeilAbsAt(segs[0], 0), capsAtUpperFloor('lo')), 0,   endFloorYOf(0, floorYAtStart),
+      { weight: hasWallAtLocal0 ? cutWeight : silhouetteWeight }));
   }
   const edgeHiIdx = (hasWallAtLocalRun || edgeAtLocalRun) ? prims.length : -1;
   if (hasWallAtLocalRun || edgeAtLocalRun) {
-    prims.push({ type: 'line', x1: run, y1: endCeilYOf(run, segCeilAbsAt(segs[segs.length - 1], run), capsAtUpperFloor('hi')), x2: run, y2: endFloorYOf(run, floorYAtEnd),
-      weight: hasWallAtLocalRun ? cutWeight : silhouetteWeight });
+    prims.push(line(run, endCeilYOf(run, segCeilAbsAt(segs[segs.length - 1], run), capsAtUpperFloor('hi')), run, endFloorYOf(run, floorYAtEnd),
+      { weight: hasWallAtLocalRun ? cutWeight : silhouetteWeight }));
   }
 
   // アキ（腰壁＋垂れ壁の同時指定でできる四角い穴）の標記は**断面エンジンの責務**へ移した
@@ -1127,7 +1124,7 @@ export function buildFaceFigure(face, ctx) {
   // face.lo/hiの位置(x)を含むfloorSegments（segs）の区間のfloorDeltaMm・天井絶対高さを返す
   // （無ければ親扱い=0/帯のCH。開放スパンの遠側床線・境界エッジ・アキ描画が「近側の床・天井の
   // 高さ」を求めるのに使う共通ヘルパ）。
-  const nearSegAt = x => segs.find(s => x >= s.loX - 1e-6 && x <= s.hiX + 1e-6);
+  const nearSegAt = x => segs.find(s => x >= s.loX - GAP_EPS_MM && x <= s.hiX + GAP_EPS_MM);
   const nearDeltaAt = x => nearSegAt(x)?.floorDeltaMm ?? 0;
   const nearCeilAbsAt = x => { const seg = nearSegAt(x); return seg ? segCeilAbsAt(seg, x) : CH; };
 
@@ -1162,15 +1159,13 @@ export function buildFaceFigure(face, ctx) {
     // QA修正（ユーザー明示指示）: 開放先の床がnear側より低い（見下ろす方向）場合、遠側床線・
     // 境界縦線を破線にする（見えがかりの隠れ線表現）。従来の一律SILHOUETTE実線から変更。
     const looksDown = farDelta < nearDelta;
-    const dashOpt = looksDown ? { dash: 'dashed' } : {};
+    const dashOpt = looksDown ? { dash: ElevationDash.DASHED } : {};
     // near床のy（-0を0へ正規化。floorYOfと同じ規約——-0は等値比較・テストの落とし穴になるため）
     const nearFloorYAt = x => { const d = nearDeltaAt(x); return d ? -d : 0; };
     if (farDelta !== nearDelta) {
       // 床断面（near床）より下に見える遠側床線は細線（見上げ方向は従来どおり中線）
-      prims.push({
-        type: 'line', x1: s.loX, y1: -farDelta, x2: s.hiX, y2: -farDelta,
-        weight: looksDown ? detailWeight : silhouetteWeight, ...dashOpt,
-      });
+      prims.push(line(s.loX, -farDelta, s.hiX, -farDelta,
+        { weight: looksDown ? detailWeight : silhouetteWeight, ...dashOpt }));
     }
     // WP-2: アキ上端（近側天井）もceilAbsAtX経由——ceilingProfile未指定・範囲外は
     // nearCeilAbsAtの値のまま（現行同値）。
@@ -1210,9 +1205,9 @@ export function buildFaceFigure(face, ctx) {
       if (Math.abs(dLo) > GAP_EPS_MM || Math.abs(dHi) > GAP_EPS_MM) {
         // 走り方向に傾いた遠側の斜線は、描いた両端の高さを注記一点鎖線の突き出し基準へ入れる（hi 端が最上位の線になる面で線より下で止まらない）
         if (s.farCeilHiAbsMm != null) maxDrawnBcCeilAbs = Math.max(maxDrawnBcCeilAbs, fLo, fHi);
-        const dashedAbove = { weight: detailWeight, dash: 'dashed' };
+        const dashedAbove = { weight: detailWeight, dash: ElevationDash.DASHED };
         const solidBelow = { weight: silhouetteWeight };
-        const seg = (xa, ya, xb, yb, above) => prims.push({ type: 'line', x1: xa, y1: -ya, x2: xb, y2: -yb, ...(above ? dashedAbove : solidBelow) });
+        const seg = (xa, ya, xb, yb, above) => prims.push(line(xa, -ya, xb, -yb, above ? dashedAbove : solidBelow));
         const crosses = (dLo > GAP_EPS_MM && dHi < -GAP_EPS_MM) || (dLo < -GAP_EPS_MM && dHi > GAP_EPS_MM);
         if (crosses) {
           const t = dLo / (dLo - dHi);
@@ -1223,7 +1218,7 @@ export function buildFaceFigure(face, ctx) {
           seg(s.loX, fLo, s.hiX, fHi, dLo + dHi > 0);
         }
         // 天井断面より上にある端の縦線（遠側の端〜近側の天井。床側の belowFloorEdge と同じく角＝遠側を始点にする）
-        const aboveEdge = (x, f, n) => ({ type: 'line', x1: x, y1: -f, x2: x, y2: -n, weight: detailWeight, dash: 'dashed' });
+        const aboveEdge = (x, f, n) => line(x, -f, x, -n, { weight: detailWeight, dash: ElevationDash.DASHED });
         if (prevIsWall && dLo > GAP_EPS_MM) prims.push(aboveEdge(s.loX, fLo, nLo));
         if (nextIsWall && dHi > GAP_EPS_MM) prims.push(aboveEdge(s.hiX, fHi, nHi));
       }
@@ -1232,15 +1227,11 @@ export function buildFaceFigure(face, ctx) {
       // 旧QA G2は「far天井が低くアキ矩形が出る場合、矩形の上辺が同座標・同weightの線になるため
       // far天井線を積まない」という抑止だったが、アキ標記から矩形を廃止した（ユーザー明示指示
       // 「矩形をやめて」）ため撤回する——抑止を残すとfar天井の見えがかり線が誰にも描かれない。
-      prims.push({
-        type: 'line', x1: s.loX, y1: -farCeilAbs, x2: s.hiX, y2: -farCeilAbs,
-        weight: aboveCeil ? detailWeight : silhouetteWeight, ...(aboveCeil ? { dash: 'dashed' } : {}),
-      });
+      prims.push(line(s.loX, -farCeilAbs, s.hiX, -farCeilAbs,
+        { weight: aboveCeil ? detailWeight : silhouetteWeight, ...(aboveCeil ? { dash: ElevationDash.DASHED } : {}) }));
       if (aboveCeil) {
-        const aboveCeilEdge = x => ({
-          type: 'line', x1: x, y1: -farCeilAbs, x2: x, y2: -nearCeilAbsAt(x),
-          weight: detailWeight, dash: 'dashed',
-        });
+        const aboveCeilEdge = x => line(x, -farCeilAbs, x, -nearCeilAbsAt(x),
+          { weight: detailWeight, dash: ElevationDash.DASHED });
         if (prevIsWall) prims.push(aboveCeilEdge(s.loX));
         if (nextIsWall) prims.push(aboveCeilEdge(s.hiX));
       }
@@ -1248,16 +1239,14 @@ export function buildFaceFigure(face, ctx) {
     // 床断面より下の縦線（far床〜near床。遠側床線と同じ細線の破線）。角＝far床側を始点に
     // することで、破線の位相が角から始まり「破線同士の角は必ず破線の交点」になる
     // （破線パターンは線の始点から刻まれるため、角を始点にしないと線長次第で角がギャップに落ちる）。
-    const belowFloorEdge = (x) => ({
-      type: 'line', x1: x, y1: -farDelta, x2: x, y2: nearFloorYAt(x),
-      weight: detailWeight, dash: 'dashed',
-    });
+    const belowFloorEdge = (x) => line(x, -farDelta, x, nearFloorYAt(x),
+      { weight: detailWeight, dash: ElevationDash.DASHED });
     if (prevIsWall) {
-      prims.push({ type: 'line', x1: s.loX, y1: nearFloorYAt(s.loX), x2: s.loX, y2: -nearCeilAbsAt(s.loX), weight: silhouetteWeight, ...dashOpt });
+      prims.push(line(s.loX, nearFloorYAt(s.loX), s.loX, -nearCeilAbsAt(s.loX), { weight: silhouetteWeight, ...dashOpt }));
       if (looksDown) prims.push(belowFloorEdge(s.loX));
     }
     if (nextIsWall) {
-      prims.push({ type: 'line', x1: s.hiX, y1: nearFloorYAt(s.hiX), x2: s.hiX, y2: -nearCeilAbsAt(s.hiX), weight: silhouetteWeight, ...dashOpt });
+      prims.push(line(s.hiX, nearFloorYAt(s.hiX), s.hiX, -nearCeilAbsAt(s.hiX), { weight: silhouetteWeight, ...dashOpt }));
       if (looksDown) prims.push(belowFloorEdge(s.hiX));
     }
   }
@@ -1306,7 +1295,7 @@ export function buildFaceFigure(face, ctx) {
     {
       const h = effectiveHeight(o);
       const sill = o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0;
-      prims.push({ type: 'hit', openingId: o.id, dirSign: face.dirSign, x, y: floorDyAt(localX) - sill - h, w: o.width, h });
+      prims.push(hit(o.id, face.dirSign, x, floorDyAt(localX) - sill - h, o.width, h));
     }
     // 「扉のない建具」（三方枠等。openingCatalog.js DOORLESS_MECHANISMS）の内法は実際に抜けている
     // ＝アキなので、開放スパンと同じ標記（バツ＋「ア キ」。appendGapMark）を内法の矩形に描く
@@ -1323,10 +1312,9 @@ export function buildFaceFigure(face, ctx) {
     // QA項目3: openingIdを持たせ、クリックで建具リストパネルを開けるようにする
     // （figurePrimitivesKonva.jsxのrenderTagがopeningId有無でクリック可否を判定する）。
     const { symbol, number } = openingTagPartsOf(o, project);
-    prims.push({
-      type: 'tag', cx: localX, cy: openingTagRowY, rPx: OPENING_TAG_RADIUS_PX,
+    prims.push(tag(localX, openingTagRowY, OPENING_TAG_RADIUS_PX, {
       top: symbol, bottom: number ?? '', openingId: o.id, dirSign: face.dirSign, // dirSign: 記号丸からの建具ドラッグ用（hit と同じ）
-    });
+    }));
     // この建具に属する全プリミティブ（姿図・アキ標記・hit・tag）へ openingId を付ける——展開図の建具
     // ドラッグ中、ElevationLayer.jsx が帯を再構築せずにこの建具のプリミティブだけをずらして描く
     // （ElevationModeState.setOpeningDragPreview）ため。
@@ -1413,19 +1401,17 @@ export function buildFaceFigure(face, ctx) {
       for (const [gLo, gHi] of floorGaps) {
         const cgLo = Math.max(gLo, segLo), cgHi = Math.min(gHi, segHi);
         if (cgHi <= cgLo) continue; // この区間に重ならない開口
-        if (cgLo > cursor) prims.push({ type: 'line', x1: cursor, y1: y, x2: cgLo, y2: y, weight: detailWeight });
+        if (cgLo > cursor) prims.push(line(cursor, y, cgLo, y, { weight: detailWeight }));
         cursor = Math.max(cursor, cgHi);
       }
-      if (cursor < segHi) prims.push({ type: 'line', x1: cursor, y1: y, x2: segHi, y2: y, weight: detailWeight });
+      if (cursor < segHi) prims.push(line(cursor, y, segHi, y, { weight: detailWeight }));
     }
     for (let i = 0; i + 1 < segs.length; i++) {
       if (floorYOf(segs[i]) === floorYOf(segs[i + 1])) continue; // 天井高さ違いだけの境界に床段差は無い
       const riserX = riserXAt(i);
       if (floorGaps.some(([gLo, gHi]) => riserX > gLo && riserX < gHi)) continue; // 開口がまたぐ段差は途切れさせる
-      prims.push({
-        type: 'line', x1: riserX, y1: floorYOf(segs[i]) - baseboardH, x2: riserX, y2: floorYOf(segs[i + 1]) - baseboardH,
-        weight: detailWeight,
-      });
+      prims.push(line(riserX, floorYOf(segs[i]) - baseboardH, riserX, floorYOf(segs[i + 1]) - baseboardH,
+        { weight: detailWeight }));
     }
   }
 
@@ -1481,11 +1467,11 @@ export function buildFaceFigure(face, ctx) {
       const labelX = avoidObstacleRangesX((runRange.lo + runRange.hi) / 2, inRange, runRange, labelWidthMm);
       const totalLinesHeightMm = (wallLabelLines.length - 1) * WALL_LABEL_LINE_GAP_MM;
       let labelY = -CH / 2 - totalLinesHeightMm / 2;
-      for (const line of wallLabelLines) {
+      for (const labelLine of wallLabelLines) {
         // QA修正(項目1): レンダラ(figurePrimitivesKonva.jsxのrenderText)はanchor==='middle'かつ
         // baseline==='middle'の両方が揃って初めて字群幅を基準にした中央寄せ(Text align='center')に
         // なる——anchorだけでは中央寄せの分岐に入らず左端合わせのまま描画されていた（不具合）。
-        prims.push({ type: 'text', x: labelX, y: labelY, text: line, anchor: 'middle', baseline: 'middle' });
+        prims.push(text(labelX, labelY, labelLine, { anchor: 'middle', baseline: 'middle' }));
         labelY += WALL_LABEL_LINE_GAP_MM;
       }
     }
@@ -1520,12 +1506,11 @@ export function buildFaceFigure(face, ctx) {
     const rightFloorY = floorYOf(rightSeg);
     // 問題修正2026-08: 値・上端は「右端区間の実際の床〜天井」（天井断面線と同じ基準）。
     // chMm未指定のフラット天井では従来どおり天井絶対高(CH)−右端区間FLになる。
-    prims.push({
+    prims.push(dim('v', rightChDimX, -ceilAbsHiOf(rightSeg), rightFloorY, {
       // 足はCLに触れず手前で止める（ユーザー明示指示2026-08その13。展開図で統一）。
-      type: 'dim', dir: 'v', at: rightChDimX, from: -ceilAbsHiOf(rightSeg), to: rightFloorY,
       foot: boundary.hi + Math.min(ctx.dimFootGapModelMm ?? DEFAULT_DIM_FOOT_GAP_MM, CH_DIM_OFFSET_MM), dot: true,
       label: Math.round(ceilAbsHiOf(rightSeg) - rightSeg.floorDeltaMm),
-    });
+    }));
   }
 
   // 問題修正2026-08: 注記の縦一点鎖線（壁中心線・通り芯）の上端は「天井線より上へ突き出す」
@@ -1590,13 +1575,13 @@ function appendAnnotationRows(prims, face, graph, opts) {
   for (const x of row1Marks) {
     const onGrid = gridPoints.some(g => Math.abs(g.x - x) <= SPLIT_MERGE_EPS_MM);
     if (onGrid) continue; // 通り芯の一点鎖線（下のループ）と重複させない
-    prims.push({ type: 'line', x1: x, y1: centerLineTopY, x2: x, y2: dimRow1Y, dash: 'center', weight: detailWeight, dashAnchor: dimRow1Y });
+    prims.push(line(x, centerLineTopY, x, dimRow1Y, { dash: ElevationDash.CENTER, weight: detailWeight, dashAnchor: dimRow1Y }));
   }
   for (let i = 0; i + 1 < row1Marks.length; i++) {
-    prims.push({
-      type: 'dim', dir: 'h', at: dimRow1Y, from: row1Marks[i], to: row1Marks[i + 1], dot: true,
+    prims.push(dim('h', dimRow1Y, row1Marks[i], row1Marks[i + 1], {
+      dot: true,
       label: Math.round(row1Marks[i + 1] - row1Marks[i]),
-    });
+    }));
   }
 
   // 追加の中心線（extraCenterLineXs）のうち境界の外にあって鎖に入らなかったものは一点鎖線だけ描く
@@ -1607,7 +1592,7 @@ function appendAnnotationRows(prims, face, graph, opts) {
     const dup = gridPoints.some(g => Math.abs(g.x - x) <= SPLIT_MERGE_EPS_MM)
       || row1Marks.some(m => Math.abs(m - x) <= SPLIT_MERGE_EPS_MM);
     if (dup) continue;
-    prims.push({ type: 'line', x1: x, y1: centerLineTopY, x2: x, y2: dimRow1Y, dash: 'center', weight: detailWeight, dashAnchor: dimRow1Y });
+    prims.push(line(x, centerLineTopY, x, dimRow1Y, { dash: ElevationDash.CENTER, weight: detailWeight, dashAnchor: dimRow1Y }));
   }
 
   // 通り芯縦一点鎖線＋丸番号（寸法行のさらに下＝gridCircleRowY。QA G4: 寸法行とは別の段）。
@@ -1621,19 +1606,16 @@ function appendAnnotationRows(prims, face, graph, opts) {
     //     すき間に当たって交点が消える (b)丸の手前で破線が切れて「丸とCLが離れて見える」
     //     の2つが起きる。丸の位置（gridCircleRowY）は変えず、線分の描き方だけで解決する
     //     ——丸は背景色で塗って線の上に重なるため、実線を丸の中心まで引けば丸の縁に接する。
-    prims.push({
-      type: 'line', x1: g.x, y1: -CH - GRID_LINE_ABOVE_CH_MM, x2: g.x, y2: dimRow1Y,
-      dash: 'center', weight: detailWeight, dashAnchor: dimRow1Y,
-    });
-    prims.push({ type: 'line', x1: g.x, y1: dimRow1Y, x2: g.x, y2: gridCircleRowY, weight: detailWeight });
+    prims.push(line(g.x, -CH - GRID_LINE_ABOVE_CH_MM, g.x, dimRow1Y,
+      { dash: ElevationDash.CENTER, weight: detailWeight, dashAnchor: dimRow1Y }));
+    prims.push(line(g.x, dimRow1Y, g.x, gridCircleRowY, { weight: detailWeight }));
     // 調整項目5: 丸は背景色で塗りつぶし、通り芯線より後（=手前）に描いて線を隠す
     // （配列内で線→丸の順に積む。Konvaは配列順=手前優先で描画するため、この順序自体は
     // 従来から保たれている。丸が塗りなし=透明だったため線が透けて見えていた点を修正）。
-    prims.push({ type: 'circle', cx: g.x, cy: gridCircleRowY, rPx: GRID_TAG_RADIUS_PX, fill: CANVAS_BG_COLOR });
-    prims.push({
-      type: 'text', x: g.x, y: gridCircleRowY, text: g.label,
+    prims.push(circle(g.x, gridCircleRowY, GRID_TAG_RADIUS_PX, { fill: CANVAS_BG_COLOR }));
+    prims.push(text(g.x, gridCircleRowY, g.label, {
       anchor: 'middle', baseline: 'middle', size: GRID_TAG_FONT_PX,
-    });
+    }));
   }
 
   // 面ラベル（A/B/C/D。L字はB1等）を面の幅中心・通り芯丸と同じ段に描く（項目7・調整項目2）。
@@ -1650,9 +1632,8 @@ function appendAnnotationRows(prims, face, graph, opts) {
       (labelBoundary.lo + labelBoundary.hi) / 2, gridPoints, labelBoundary,
       faceLabelAvoidThresholdModelMm,
     );
-    prims.push({
-      type: 'text', x: faceLabelX, y: faceLabelRowY, text: face.label,
+    prims.push(text(faceLabelX, faceLabelRowY, face.label, {
       anchor: 'middle', baseline: 'middle', size: FACE_LABEL_FONT_PX,
-    });
+    }));
   }
 }
