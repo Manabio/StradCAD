@@ -15,13 +15,13 @@ import { composeRoomFaces, dropFacesSeenAsSightline, mergeSteppedFacesIntoPanel,
 import { labelFaces } from './elevationFaces.js';
 import { selectElevationRooms, faceWallLessExtents, upperFloorEndsOf } from './elevationFaces.js';
 import { parseBaseboardHeightMm, formatMaterialLabel, estimateWallLabelWidthPx } from './elevationFigure.js';
-import { ElevationLineRole, weightForRole, WALL_LABEL_LINE_GAP_MM, CH_DIM_OFFSET_MM,
+import { ElevationLineRole, WALL_LABEL_LINE_GAP_MM, CH_DIM_OFFSET_MM,
   DEFAULT_WALL_LESS_END_EXTEND_MM } from './elevationStyle.js';
 import { findRunCLAt } from './elevationFloorProfile.js';
 import { sliceCeilSeg } from './ceilArcSection.js';
 import { layoutBandFaces, finalizeBand, appendBandCutContent,
   floorZProfileFromSegments } from './elevationBand.js';
-import { translatePrimitive } from './elevationPrimitives.js';
+import { translatePrimitive, line, text, dim } from './elevationPrimitives.js';
 import { makeProbeContext } from './section/sectionProbe.js';
 import {
   buildSectionFromLine, planeOverhangForFace, endZOf, upperFloorCutWallEndsOf, droppedMemberKeysOf,
@@ -293,8 +293,6 @@ function appendUpperStoreyTrim(primitives, layout, upperGraph, upper, opts) {
   const { floorHeightMm, upperCH, materialMap, scale } = opts;
   const wallLessExtendMm = opts.wallLessEndExtendMm ?? DEFAULT_WALL_LESS_END_EXTEND_MM;
   const { hiZ, segsByFace } = upper;
-  const cutWeight = weightForRole(ElevationLineRole.CUT);
-  const detailWeight = weightForRole(ElevationLineRole.DETAIL);
   let chDimDone = false;
   for (const { face, xCursor, boundary } of layout.faceRuns) {
     const segs = segsByFace.get(face) ?? [];
@@ -309,8 +307,7 @@ function appendUpperStoreyTrim(primitives, layout, upperGraph, upper, opts) {
       const lo = seg.lo - (Math.abs(seg.lo) < MIN_SUB_SEG_MM ? leftExtendMm : 0);
       const hi = seg.hi + (Math.abs(seg.hi - face.run) < MIN_SUB_SEG_MM ? rightExtendMm : 0);
       // 上階の天井断面線（この範囲の上端。これが無いとアキ・壁の上が宙で終わる）。
-      primitives.push({ type: 'line', x1: xCursor + lo, y1: -hiZ, x2: xCursor + hi, y2: -hiZ,
-        weight: cutWeight });
+      primitives.push(line(xCursor + lo, -hiZ, xCursor + hi, -hiZ, ElevationLineRole.CUT));
     }
     // 巾木・壁2段書きは「その位置の2階の部屋」の面がある範囲だけ。壁が無い区間（アキ）には
     // そもそも巾木も壁材も存在しない。
@@ -320,8 +317,8 @@ function appendUpperStoreyTrim(primitives, layout, upperGraph, upper, opts) {
         if (b - a <= MIN_SUB_SEG_MM) continue;
         const h = parseBaseboardHeightMm(room.finish?.baseboardHeight);
         if (h != null && h < upperCH) {
-          primitives.push({ type: 'line', x1: xCursor + a, y1: -(floorHeightMm + h),
-            x2: xCursor + b, y2: -(floorHeightMm + h), weight: detailWeight });
+          primitives.push(line(xCursor + a, -(floorHeightMm + h),
+            xCursor + b, -(floorHeightMm + h), ElevationLineRole.DETAIL));
         }
         const info = room.getFinishInfo?.();
         const lines = [
@@ -333,9 +330,9 @@ function appendUpperStoreyTrim(primitives, layout, upperGraph, upper, opts) {
           const widthMm = scale ? widthPx / scale : 0;
           if (b - a >= widthMm * 2) {
             const cx = xCursor + (a + b) / 2, cy = -(floorHeightMm + upperCH / 2);
-            lines.forEach((text, k) => primitives.push({ type: 'text', x: cx,
-              y: cy + (k - (lines.length - 1) / 2) * WALL_LABEL_LINE_GAP_MM,
-              text, anchor: 'middle', baseline: 'middle' }));
+            lines.forEach((label, k) => primitives.push(text(cx,
+              cy + (k - (lines.length - 1) / 2) * WALL_LABEL_LINE_GAP_MM,
+              label, { anchor: 'middle', baseline: 'middle' })));
           }
         }
       }
@@ -350,8 +347,8 @@ function appendUpperStoreyTrim(primitives, layout, upperGraph, upper, opts) {
     if (!chDimDone && boundary && segs.some(s => Math.abs(s.lo) < MIN_SUB_SEG_MM)) {
       chDimDone = true;
       const at = xCursor + boundary.lo - CH_DIM_OFFSET_MM;
-      primitives.push({ type: 'dim', dir: 'v', at, from: -hiZ, to: -floorHeightMm,
-        foot: at + CH_DIM_OFFSET_MM, dot: true, label: Math.round(upperCH) });
+      primitives.push(dim('v', at, -hiZ, -floorHeightMm,
+        { foot: at + CH_DIM_OFFSET_MM, dot: true, label: Math.round(upperCH) }));
     }
   }
 }
