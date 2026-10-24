@@ -7,8 +7,10 @@
  * 高さは絶対 z（floorDeltaMm + ch。上が正）。円は上側の弧だけを使う（頭頂が弦より上・3 点とも円の中心以上のとき）。
  * 作れない（頭頂が片の内側に無い・弦と一直線・下側の弧になる・非有限）ときは null＝呼び元は従来の直線（chMm→chHiMm）。
  * 体裁は円弧プリミティブ 1 本、断面エンジンは弦に刻んだ区間の列（鉛直差 SAGITTA_MM 以下）で受ける。
- * 単位 mm。import なし（node:test から単体で読める）。
+ * 単位 mm。import は elevationPrimitives.js（生成ヘルパー）・elevationStyle.js（許容）だけ（node:test から単体で読める）。
  */
+import { arc } from './elevationPrimitives.js';
+import { FLOAT_EPS, GAP_EPS_MM } from './elevationStyle.js';
 
 const END_MARGIN_MM = 0.5;    // 頭頂が両端からこれ以上内側にあること
 const STRAIGHT_EPS_MM = 0.5;  // 頭頂が弦より高い量がこれ未満なら直線
@@ -38,14 +40,14 @@ export function ceilArcCircleOf(seg) {
   // 開始点を原点にした座標で外心を求める（桁落ちを避ける）
   const bx = xa - x0, bz = za - z0, cx = x1 - x0, cz = z1 - z0;
   const d = 2 * (bx * cz - bz * cx);
-  if (!(Math.abs(d) > 1e-9)) return null;
+  if (!(Math.abs(d) > FLOAT_EPS)) return null;
   const b2 = bx * bx + bz * bz, c2 = cx * cx + cz * cz;
   const ux = (cz * b2 - bz * c2) / d, uz = (bx * c2 - cx * b2) / d;
   const r = Math.hypot(ux, uz);
   const center = { cx: x0 + ux, cz: z0 + uz };
   // 3 点とも中心以上（上側の弧）でなければ上側の弧の式が成り立たない
   const lowest = Math.min(z0, za, z1);
-  if (!(lowest >= center.cz - 1e-6) || !Number.isFinite(r) || !(r > 0)) return null;
+  if (!(lowest >= center.cz - GAP_EPS_MM) || !Number.isFinite(r) || !(r > 0)) return null;
   return { ...center, r, x0, z0, xa, za, x1, z1 };
 }
 
@@ -78,7 +80,7 @@ export function ceilArcPrimitive(c, xa, xb, style) {
     return (Math.atan2(dz, x - c.cx) * 180) / Math.PI;
   };
   const start = ang(xa), end = ang(xb);
-  return { type: 'arc', cx: c.cx, cy: -c.cz, r: c.r, startDeg: start, sweepDeg: end - start, ...style };
+  return arc(c.cx, -c.cz, c.r, start, end - start, style);
 }
 
 /**
@@ -95,7 +97,7 @@ export function ceilArcChords(c) {
   // 角 p1→p2 の弦の鉛直差（途中を等間隔に標本）
   const deviation = (p1, p2) => {
     const a = pt(p1), b = pt(p2);
-    if (Math.abs(b.x - a.x) < 1e-9) return 0;
+    if (Math.abs(b.x - a.x) < FLOAT_EPS) return 0;
     let worst = 0;
     for (let k = 1; k <= 7; k++) {
       const q = pt(p1 + ((p2 - p1) * k) / 8);
