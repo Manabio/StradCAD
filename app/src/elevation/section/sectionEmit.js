@@ -845,9 +845,85 @@ export function emitColumns(columns, cut, emitCtx = {}) {
   // 梁の断面（memberCut。U1b B3-1）: 帯の縁は引かず、梁が最初に現れる列で断面の輪郭（`sectionOutline`。H形・角形鋼管を含む）を
   // 1 回だけ重ねる（建具断面と同じ方式）。描く z 範囲はその梁の帯（全列）の和——部屋帯は天井断面で切られた帯（R4）、階段帯は
   // 天井より上も含む（emitLine が細破線へ降格）。切断線の帯の中を通る梁（along）は天地を DETAIL の線にまとめて引く（下の追記）。
-  // 梁の断面の片: memberCut の帯、または slab の帯に添えた `members`（床構造・天井懐の中の梁は slab の帯を割らない。sectionHits.js）。
-  // （slab の帯に添えた梁の見え掛かりの片〔kind:'member'〕は断面ではないので除く。見え掛かりは emitMemberFaceBand が描く）
-  const memberPiecesOf = band => (band.kind === 'memberCut' ? [band] : (band.members ?? []).filter(p => p.kind !== 'member'));
+  const memberZ = memberZRangesOf(columns, cut);
+  const outlined = new Set();
+  const alongSegs = new Map();
+  // 梁の見え掛かり（member。U1b B3-2）の天地の線の区間（梁 → 列ごとの区間）。同じ梁・同じ z・同じ線種の隣り合う列は 1 本にまとめて引く
+  // （列の分割で線が割れない。加算の見え掛かりは梁 1 本の可視区間を 1 本の線で引いていた）。縦線は列の端で直接引く。
+  const faceSegs = new Map();
+  const drawRange = cutDrawRange(cut);
+  // 注: 「壁のない端部で線を図の外側へ延長する」処理はここには無い。プリミティブを後から
+  // 引き伸ばすのではなく、**探査範囲そのものを外へ広げる**（sectionProbe.jsの
+  // probeExtendLo/HiMm。ユーザー裁定2026-08 A案）——面の外の列も実データとして生成されるため、
+  // 延長ぶんの線は通常の帯の縁として自然に出る。両方やると二重に伸びるので、ここでは何もしない。
+  columns.forEach((col, i) => {
+    const prev = columns[i - 1] ?? null;
+    const next = columns[i + 1] ?? null;
+    for (const band of col.bands) {
+      if (band.kind === 'cut') {
+        if (band.openingPassThrough) {
+          emitOpeningPassThrough(prims, { cut, col, band, prev, ceilZ });
+          continue;
+        }
+        emitCutBand(prims, { cut, col, band, prev, next, ceilZ });
+      } else if (band.kind === 'wall') {
+        // 階段室越しの壁（viaStair）は面から離れた向こう側の空間の壁なので、常に細線（直近の階調に参加しない）。
+        const role = band.viaStair ? ElevationLineRole.DETAIL : sightRole(band.distMm);
+        emitWallHorizontals(prims, { cut, col, band, ceilZ, emitCtx, role, sectionSlabs });
+        emitWallRecessEdges(prims, { cut, columns, i, col, band, prev, next, ceilZ, emitCtx, role });
+      } else if (band.kind === 'cutAlong') {
+        emitCutAlongBand(prims, { cut, col, band, prev, next, ceilZ, emitCtx });
+      } else if (band.kind === 'member') {
+        emitMemberFaceBand(prims, faceSegs, col, band, { prev, next, cut, drawRange, ceilZ });
+      } else if (band.kind === 'open' && (band.farFloorZ != null || band.farCeilZ != null)) {
+        emitFarOpenBand(prims, { cut, col, band, ceilZ, sightRole });
+      }
+      emitBandMembers(prims, {
+        cut, col, band, prev, next, ceilZ, drawRange, faceSegs, alongSegs, outlined, memberZ,
+      });
+      // open/slabの帯自体はここでは描かない（AMBIGUITY F）。ただしslab→openの境界（＝above層の
+      // 床の端）はSILHOUETTE水平線として描く（WP-E5b追加。§5.6「2FLの中線= above層の床スラブ端
+      // （slabとopenの境界）→SILHOUETTE水平線」）。同一列内でz方向に隣接するslab/open帯の境界を
+      // 対象にする——列をまたぐslab⇄open（x方向の境界）は凹み側面線に相当する概念が無く
+      // （床の厚み方向の境界であってwallの見付面ではない）、本WPでは対象外（ASSUMED）。
+      // hidden帯（展開図一般化Phase 6b-2 C-1。「描かない実体」）も、上のif/elseチェーンに
+      // 該当する分岐が無いためここでは自動的に何も描かない——kind==='cut'/'wall'/'cutAlong'/
+      // 'open'のどれでもないので単に読み飛ばされる（他のkindを新設したときと同じ扱い）。
+    }
+    emitFloorEdgeLines(prims, { cut, col, sectionSlabs, ceilZ });
+  });
+  prims.push(...memberAlongPrimitives(alongSegs, cut));
+  prims.push(...memberFaceHorizontals(faceSegs, cut));
+  prims.push(...cutWallTopEdges(columns, cut, ceilZ, emitCtx));
+  prims.push(...cutWallTopBeyondSightlines(columns, cut, ceilZ));
+  // 上階の床との取り合いは、**区間ごとの天井を持つ帯（cut.ceilProfileあり＝通常の部屋帯・
+  // 吹抜け帯）は ceilStepSlabSection、持たない帯（階段帯）は slabEdgeCutWallJunction** が担当する。
+  // 両方走らせると同じ取り合いを別々の作図で二重に描く——前者は「天井の高さが変わる境界」を
+  // 起点に低い天井の側へ床の断面線を伸ばし、後者は「スラブ帯の外端」を起点に反対側へ伸ばす。
+  // 通常の部屋帯では 1F天井〜2FL が吹抜けの側でも天井懐(slab)に分類されるため、後者は床の
+  // 断面線を吹抜けの側（床が無い側）へ引いてしまう。
+  if (hasCeilProfile) {
+    prims.push(...ceilStepSlabSection(columns, cut, ceilZ));
+  } else {
+    prims.push(...slabEdgeCutWallJunction(columns, cut, ceilZ, sectionSlabs));
+  }
+  return dedupeLines(prims);
+}
+
+/**
+ * 梁の断面の片: memberCut の帯、または slab の帯に添えた `members`（床構造・天井懐の中の梁は slab の帯を割らない。sectionHits.js）。
+ * （slab の帯に添えた梁の見え掛かりの片〔kind:'member'〕は断面ではないので除く。見え掛かりは emitMemberFaceBand が描く）
+ */
+function memberPiecesOf(band) {
+  return band.kind === 'memberCut' ? [band] : (band.members ?? []).filter(p => p.kind !== 'member');
+}
+
+/**
+ * 梁（memberCut）ごとの断面の z 範囲 { z0, z1 }（along の片は除く）。梁が最初に現れる列で断面の輪郭を 1 回だけ重ねる
+ * ための範囲で、下端は候補自身の下端、上端は帯の z1 を、梁の幅に掛かる列の天井断面（col.ceilZ）の最小値で切る。
+ * @returns {Map<object, {z0:number, z1:number}>}
+ */
+function memberZRangesOf(columns, cut) {
   const memberZ = new Map();
   for (const col of columns) {
     for (const band of col.bands) {
@@ -869,372 +945,378 @@ export function emitColumns(columns, cut, emitCtx = {}) {
       if (col.x1 > lo + GAP_EPS && col.x0 < hi - GAP_EPS && Number.isFinite(col.ceilZ)) z.z1 = Math.min(z.z1, col.ceilZ);
     }
   }
-  const outlined = new Set();
-  const alongSegs = new Map();
-  // 梁の見え掛かり（member。U1b B3-2）の天地の線の区間（梁 → 列ごとの区間）。同じ梁・同じ z・同じ線種の隣り合う列は 1 本にまとめて引く
-  // （列の分割で線が割れない。加算の見え掛かりは梁 1 本の可視区間を 1 本の線で引いていた）。縦線は列の端で直接引く。
-  const faceSegs = new Map();
-  const drawRange = cutDrawRange(cut);
-  // 注: 「壁のない端部で線を図の外側へ延長する」処理はここには無い。プリミティブを後から
-  // 引き伸ばすのではなく、**探査範囲そのものを外へ広げる**（sectionProbe.jsの
-  // probeExtendLo/HiMm。ユーザー裁定2026-08 A案）——面の外の列も実データとして生成されるため、
-  // 延長ぶんの線は通常の帯の縁として自然に出る。両方やると二重に伸びるので、ここでは何もしない。
-  columns.forEach((col, i) => {
-    const prev = columns[i - 1] ?? null;
-    const next = columns[i + 1] ?? null;
-    for (const band of col.bands) {
-      if (band.kind === 'cut') {
-        // 切断壁の断面矩形の両縁: その縁が接する側がopenならCUT、塞がれていればSILHOUETTE
-        // （AMBIGUITY B）。列の外（画面端）はopen扱い。WP-E5b修正: 隣接列が「別のcut band」で
-        // なければopen扱いにしていた旧実装（`|| !matchingBand(...,'cut')`）は、隣接列が
-        // 'wall'（距離のある見えがかり壁）のときも「塞がれていない」と誤判定していた
-        // （例: seq1で切断された往復間の壁の縁が、遠くに見える別の壁（'wall'band）に接する場合。
-        // 保存意味論「seq1では切断線を横切るcutとして厚みの2縁=open側CUT/塞がれ側SILHOUETTE」
-        // を満たすには、'wall'・'cutAlong'等どの種類であれ何らかの実体があれば「塞がれている」
-        // とみなす必要がある——isOpenSideAtは`kind==='open'`（または開口貫通）だけをopenと
-        // みなすため、そのままの結果を使えばよい）。
-        // **同じ壁のcut帯が隣接列にも続いていれば、その境界は壁の内部なので線を描かない**
-        // （ユーザー実機指摘2026-08「6」D。腰壁の断面がx=-57.5..57.5の1枚なのに、列が
-        // x-57.5..0/0..45/45..57.5へ分割されていたため、内部にV x0・V x45の縦線が出ていた）。
-        // cutAlongの端部縦線と同じ「隣接列に同じ壁が続くか」のパターン。壁の同一性は
-        // band.wall参照で見る——両側にwallが載っている場合だけ抑止し、載っていない
-        // （単体テストの手書き列など）場合は従来どおり描く。
-        // **壁は片面ずつのWallオブジェクト**（cutWallRuns参照。実機の袖壁1枚が2つのWallに
-        // 分かれる）ため、参照一致だけで見ると1枚の袖壁の**内部**＝軸CL上にその境界の縦線が
-        // 出る。**同じ軸CLに載っていて同じz範囲の切断壁は、1枚の壁の表裏**とみなす
-        // ——切断線は壁を厚み方向に横切るので、同一軸CLの切断壁が隣接列で接するのは
-        // 「同じ壁の反対の面」以外にありえない（別々の壁が接するなら軸CLが違う）。
-        // 天端の水平線を1本にまとめている`cutWallRuns`と同じ「1枚の壁」の見方をそろえたもの。
-        const sameWall = b => !!b && !!b.wall && !!band.wall
-          && (b.wall === band.wall
-            || (!!b.wall.axisCL && b.wall.axisCL === band.wall.axisCL
-              && Math.abs(b.z0 - band.z0) < GAP_EPS
-              // 天端が天井の斜線に沿う帯（ceilEdge）は列ごとに上端が違うが、斜線は壁厚の中でも続く。
-              && (Math.abs(b.z1 - band.z1) < GAP_EPS || (!!b.ceilEdge && !!band.ceilEdge))));
-        // `exposedSide`（sectionEngine.jsのclipBandsToCeil）が付いた帯は、**天井の高さが変わる
-        // 境界に立っていて片側からしか見えない壁**。見えるのはその側の面だけで、反対側の面は
-        // 低い天井の裏に隠れている——両縁を描くと壁厚が図に出てしまう（ユーザー明示指示:
-        // 実機「5」A「X2の右側が断面線なら、左側は壁の中になり、描画しないが正解」）。
-        const hidden = band.exposedSide ?? null;
-        // **建具で切れている区間は壁ではない**（sectionProbe.jsが仮想断面と建具の交差で付ける
-        // `openingPassThrough`。ユーザー明示指示2026-09）——壁の断面の両縁は描かず、開口の
-        // 上下（まぐさの下端・下枠の上端）に壁の断面の切り口としてCUTの水平線を引く。
-        if (band.openingPassThrough) {
-          for (const z of [band.z0, band.z1]) {
-            prims.push(Object.assign(
-              emitLine(cut, col.x0, z, col.x1, z, ElevationLineRole.CUT, { ceilZ }),
-              { __o: 'cutOpeningEdge' }));
-          }
-          // その建具の断面（枠・扉。openings/openingSection.js）を1回だけ重ねる。
-          // 見込の基準は**この帯の壁1枚の材の範囲**——ユーザー明示指示2026-09「枠の上の壁は、
-          // 当該部屋側のみで良いので、内外壁をまとめる必要はない」。列は壁厚方向に分割される
-          // ことがあるため、その壁の最初の列（隣に同じ壁のcut帯が続かない側）でだけ描く。
-          const mr = band.wall?.materialRange;
-          if (mr && band.opening && !sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
-            const a = localXOf(cut, mr.lo), b = localXOf(cut, mr.hi);
-            prims.push(...openingSectionPrimitives(
-              band.opening, Math.min(a, b) - FRAME_OVERHANG_MM, 1,
-              weightForRole(ElevationLineRole.CUT), weightForRole(ElevationLineRole.SILHOUETTE),
-              { wallThicknessMm: Math.abs(mr.hi - mr.lo), worldPerDirSign: cut.dirSign ?? 1,
-                detailWeight: weightForRole(ElevationLineRole.DETAIL) },
-            ));
-          }
-          continue;
-        }
-        // 同じ軸CLの切断壁の表裏で高さが違う（隔て壁の埋込み柱の立ち上がり）とき、隣の断面に覆われた高さの縁は
-        // 壁の内部なので描かない（覆われていない高さだけ縦線を引く）。
-        const edgeRanges = nbCol => (nbCol?.bands ?? [])
-          .filter(b => b.kind === 'cut' && !!b.wall?.axisCL && b.wall.axisCL === band.wall?.axisCL && overlapsZ(b, band))
-          .reduce((rs, b) => subtractZ(rs, b), [{ z0: band.z0, z1: band.z1 }])
-          .filter(r => r.z1 - r.z0 > GAP_EPS);
-        // 天端が天井の斜線に沿う帯（ceilEdge）の側縁は、その端での斜線の高さで止める（帯の z1 は高い側の値）。
-        // 段違い天井の境界に立つ壁（exposedSide）の見えない側の縁も、**低い側の天井（列の打ち切り値 col.ceilZ）より下**は
-        // 描く——そこは低い天井の下の空気に面した壁の断面の縁で、隠れているのは天井より上だけ
-        // （ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の左側の断面線は床断面から上の天井断面線まで」）。
-        const lowCeil = col.ceilZ;
-        const hiddenTop = (r) => (Number.isFinite(lowCeil) ? Math.min(r.z1, lowCeil) : r.z0);
-        if (!sameWall(matchingBand(prev, band.z0, band.z1, 'cut'))) {
-          for (const r of edgeRanges(prev)) {
-            let zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX0) : r.z1;
-            if (hidden === 'hi') zTop = Math.min(zTop, hiddenTop(r));
-            if (zTop - r.z0 <= GAP_EPS) continue;
-            prims.push(Object.assign(emitLine(cut, col.x0, r.z0, col.x0, zTop, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
-          }
-        }
-        if (!sameWall(matchingBand(next, band.z0, band.z1, 'cut'))) {
-          for (const r of edgeRanges(next)) {
-            let zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX1) : r.z1;
-            if (hidden === 'lo') zTop = Math.min(zTop, hiddenTop(r));
-            if (zTop - r.z0 <= GAP_EPS) continue;
-            prims.push(Object.assign(emitLine(cut, col.x1, r.z0, col.x1, zTop, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
-          }
-        }
-        // 天端の斜線は引かない: 天井に届いた壁には天端を引かず天井線は体裁が引く（平面の cutWallTopEdges と
-        // 同じ規約）。finalizeBand の dedupe は端点の完全一致しか畳まないので、列ごとの短い斜線を出すと
-        // 体裁の1本と二重に残る。
-      } else if (band.kind === 'wall') {
-        // 見えがかり壁面の輪郭（上端・下端）。水平線（縮退）はemitLineの単独判定では
-        // 「ちょうどbaseFloorZ/ceilZに触れるだけ」を向こう側と見なさないため、band全体が
-        // baseFloorZ以下／ceilZ以上ならforceDashで明示的に降格する（WP-E5b: sectionProbe.jsが
-        // cut.baseFloorZをzBreaksに割り込ませることで生じる、内部分割されたband用の対応）。
-        const beyondBand = bandFullyBeyond(cut, band, ceilZ);
-        // **手前の切断壁でこの帯が切られただけの縁は描かない**（ユーザー実機指摘2026-08「6」D）。
-        // 同じ列で切断壁(cut)の上端/下端とちょうど一致する縁は、見えがかり壁の実際の端ではなく
-        // 「手前の腰壁に遮られてそこで見えなくなった」だけの遮蔽境界で、壁自体はその裏へ続いている
-        // （実機症状: 腰壁の内側半分x0..57.5の下に、遠い壁の天端としてH z3000が出ていた）。
-        // 腰壁の天端側はcut帯自身がCUT水平線として描くので、線が失われることはない。
-        // **腰壁が床スラブの上に直に載っている境界は描かない**（ユーザー実機指摘2026-08「6」C
-        // 「2FLの線は、左の壁断面から腰壁が終わるエッジまで不要。この腰壁の仕上げ面は、直下の
-        // 2FLから1FL天井線までの面と同面のため」）。腰壁は床の端に立つので、その仕上げ面と
-        // 直下の床スラブ小口は同一平面＝見た目に線は現れない。腰壁でない（`isKneeDrop`でない）
-        // 遠くの壁は同面ではないので、スラブ小口の線はそのまま出る（実機の右半分がこれ）。
-        const flushOnSlab = band.isKneeDrop
-          && col.bands.some(b => b.kind === 'slab' && Math.abs(b.z1 - band.z0) < GAP_EPS);
-        // 階段室越しの壁（viaStair）は面から離れた向こう側の空間の壁なので、常に細線（直近の階調に参加しない）。
-        const role = band.viaStair ? ElevationLineRole.DETAIL : sightRole(band.distMm);
-        // 見えがかりの水平線は「仮想断面からの距離が変わるところ」だけに描き、FL・CHには描かない
-        // （ユーザー明示指示2026-08。visibleDepthMm / sectionLevelZs 参照）。
-        // 天井断面の高さは列ごとに違う（区間ごとの天井。sectionEngine.jsのceilProfile）ため、
-        // その列の天井を優先して使う——帯の天井(emitCtx.ceilZ)だけを見ると、天井の低い区間で
-        // 天井断面線と見えがかりの水平線が重なる。
-        const sectionZs = sectionLevelZs(cut, col, col.ceilZ ?? ceilZ);
-        const atSectionLevel = z => sectionZs.some(f => Math.abs(z - f) < GAP_EPS);
-        if (!flushOnSlab && !hiddenByCutWall(col, band.z0) && !atSectionLevel(band.z0)
-            && ownsBoundary(band, neighborBandAt(col, band.z0, -1), cut)) {
-          prims.push(emitLine(cut, col.x0, band.z0, col.x1, band.z0, role, { ceilZ, forceDash: beyondBand }));
-        }
-        // **その空間の天井の縁は、仮想断面から最も近い面（＝主な描画対象）と同格なので中線**
-        // （ユーザー明示指示2026-08「追加した1階天井見えがかり：仮想断面から最も近い壁
-        // （=主な描画対象）と同じ面のエッジなので中線を選択する」）——天井は切断面のすぐ手前から
-        // 奥へ広がる面で、その縁までの奥行きは0であり、見えている壁までの距離（この帯のdistMm）
-        // ではない。天井懐(slab)がすぐ上に接し、その層の天井(ceilZ)がこの高さに一致することで
-        // 「この境界は空間の天井である」と判定する（slab/openの境界側と同じ見方）。
-        const upperBand = neighborBandAt(col, band.z1, +1);
-        const atSpaceCeil = upperBand?.kind === 'slab' && Number.isFinite(upperBand.ceilZ)
-          && Math.abs(upperBand.ceilZ - band.z1) < GAP_EPS;
-        // 階段の裏面との取り合いの天端（junctionTop）は壁の自由な縁ではなく、連続する天井との接線＝常に細線。
-        const topRole = band.junctionTop ? ElevationLineRole.DETAIL : (atSpaceCeil ? ElevationLineRole.SILHOUETTE : role);
-        // 斜めの天端（band.topEdge。隔て壁）: 天端は列の両端の高さを結ぶ斜線。斜線は FL・CH の高さに
-        // 端が触れても列の境界で切れているだけ（列の境界は斜面が水平線を横切る位置で割ってある）なので、
-        // 水平線との重なり判定（atSectionLevel・ownedBySectionSlab）は対象外。
-        const slope = band.topEdge ?? null;
-        if (!hiddenByCutWall(col, band.z1) && (slope || !atSectionLevel(band.z1))
-            && (slope || !ownedBySectionSlab(sectionSlabs, col, band.z1))
-            && ownsBoundary(band, neighborBandAt(col, band.z1, +1), cut)) {
-          prims.push(slope
-            ? emitLine(cut, col.x0, slope.zAtX0, col.x1, slope.zAtX1, topRole, { ceilZ, forceDash: beyondBand })
-            : emitLine(cut, col.x0, band.z1, col.x1, band.z1, topRole, { ceilZ, forceDash: beyondBand }));
-          // 腰壁の天端（仕様2026-08）: 見えがかりでも天端の帯は見えるので下端を細線で足す。
-          // 天端の水平線を実際に描いた場合だけ——遮蔽で消した縁の下に帯だけ残ると嘘になる。
-          if (band.isKneeDrop && !band.profiledTop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
-            prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(topRole)));
-          }
-        }
-        // 階段室越しの壁（viaStair）の巾木（ユーザー指示2026-10-15「階段下スペースは『ホール』なので巾木が
-        // 見える」）。帯の部屋（ホール）の巾木高さ emitCtx.baseboardMm を、壁の足元（下に同じ壁の帯が続かない
-        // 帯の下端）から立ち上げた細線。遮蔽・降格は壁の水平線と同じ（hiddenByCutWall・beyondBand）。
-        if (band.viaStair && emitCtx.baseboardMm > 0) {
-          const bbZ = band.z0 + emitCtx.baseboardMm;
-          const below = neighborBandAt(col, band.z0, -1);
-          // 足元＝床の高さ（その列・層のFL）にある帯の下端だけ。扉の上の壁（まぐさ）など床に無い帯の下端には引かない。
-          const isWallFoot = !(below?.kind === 'wall' && below.viaStair) && atSectionLevel(band.z0);
-          if (isWallFoot && bbZ < band.z1 - GAP_EPS && !hiddenByCutWall(col, bbZ)) {
-            prims.push(emitLine(cut, col.x0, bbZ, col.x1, bbZ, ElevationLineRole.DETAIL, { ceilZ, forceDash: beyondBand }));
-          }
-        }
-        // 凹み: 隣接列で同一z区間のwallのdistMmが変化した境界にSILHOUETTE縦線（§5.5）。
-        // 凹み側面線。**列の外側の端（prev/nextが無い＝描画範囲の端）では、その端に壁が
-        // 無ければ描かない**（ユーザー実機指摘2026-08「3500左CLにエッジはない」）——
-        // 隣接列が無いことは「そこで壁が終わる」ことを意味しない。範囲外は単に未探査であり、
-        // 面が「壁のない端部」だと分かっている側（emitCtx.openEndLo/openEndHi）では
-        // 壁面はその先へ続いている。旧実装は`!prevWall`だけで判定していたため、
-        // 先頭列・末尾列には常に縦線が出ていた（全パネルの端に出る症状）。
-        // **凹みは同じ層(layerRole)の壁どうしでしか成立しない**（ユーザー実機指摘2026-08「6」D。
-        // 実機症状: 左CL上のz3800..5400に縦線が出ていた——隣は上階側の遠い壁(d7250 above)、
-        // こちらは設置階の壁(d2250 self)で、距離が変わるのは「1枚の壁面が凹んだ」からではなく
-        // **見えている壁が別の層のものへ入れ替わった**だけ。連続面の折れ角ではないので描かない）。
-        // 隣接列に見えがかり壁が無い場合は従来どおり「そこで壁が終わる」＝描く。
-        // **手前の切断壁に切られてこの列だけ分割された帯の側縁は描かない**（ユーザー明示指示
-        // 2026-08その17「「6」D1・B: 腰壁上のエッジは不要」）。腰壁の天端で始まる帯は、
-        // その列で腰壁に遮られたぶんだけ下端が持ち上がった**同じ壁の続き**であり、隣接列では
-        // 1本の大きな帯（あるいは別の見え方）になる。ここで側縁を描くと、腰壁の上に壁の切れ目が
-        // 無いのに縦線が出る。
-        //
-        // 判定は「**帯の下端が、その列の切断壁の天端にちょうど一致する**」——それが「切断壁に
-        // 切られて持ち上がった」ということの定義そのもの。以前は`hiddenByCutWall(col, band.z0)`
-        // ＝「天端が帯の下端以上の切断壁がこの列にあるか」で見ていたが、これは**切断壁より下に
-        // ある帯まで巻き込む**（実機「5」A: 1階の壁の帯z0..2400が、その上に立つ2階X2壁の断面
-        // z2400..5400のせいで「切られた」と判定され、X2右側の壁エッジが丸ごと消えていた）。
-        // 切断壁はそれ自身のz範囲でしか遮らない。
-        const splitByCutWall = col.bands.some(b =>
-          b.kind === 'cut' && Math.abs(b.z1 - band.z0) < GAP_EPS);
-        // **ただし隣接列がアキ（open）なら、そこで壁面は本当に終わっている**——「切られて
-        // 持ち上がっただけ」と言えるのは、その先で壁面が何らかの形で続いているとき。アキは
-        // 「その面の平面に壁が無い」ことそのものなので、境界の縦線が要る（ユーザー実機指摘
-        // 2026-08「「5」B: 2階Y1から2000と3500のCLにエッジが描画されない」）。
-        // 隣接列がスラブ等の別の見え方になるだけの場合は従来どおり抑止する（その17「6」D1）。
-        const endsAtGap = nb => !!nb && nb.bands.some(x => isOpenLikeBand(x) && overlapsZ(x, band));
-        // **面の端でもその17は効かせない**（ユーザー実機指摘2026-09「「6」D2: 2階Y2から3500には
-        // 「21」の壁エッジが左側に見える」）——その17の前提「隣接列で同じ壁が1本の帯として続く」は
-        // 隣接列が無い＝探査範囲の外である面の端では成立しない。端に壁が有るかどうかの答えは
-        // `emitCtx.openEndLo/Hi`（face.hasWallAtLocal0/Run）が既に持っており、それが唯一の情報源。
-        // 判定に`!prev`だけを使うと不足する——探査は面の外まで延ばされることがあり（cutDrawRange
-        // のprobeExtendLo/HiMm）、最終列が面の端より内側にある合成入力では従来どおり抑止したい
-        // （その17の実機「6」D1）。**列の端が面の端に一致する**ことまで見る。
-        const { loX: faceLoX, hiX: faceHiX } = faceRangeX(cut);
-        const atFaceEndLo = !prev && Math.abs(col.x0 - faceLoX) < GAP_EPS;
-        const atFaceEndHi = !next && Math.abs(col.x1 - faceHiX) < GAP_EPS;
-        {
-          const wholeBand = [{ z0: band.z0, z1: band.z1 }];
-          const wallExtent = wallExtentAcrossMembers(col, band); // 梁の断面で上下に分かれた壁の帯をつないだ範囲（無ければ null）
-          // 面端の隅で建具断面を描く建具の開口範囲（emitCtx.cornerOpeningZLo/Hi。面図の面端の太線と
-          // 同じ入力＝buildSectionFromLine の ends）では面端の凹み側面線を描かない（ユーザー指摘
-          // 2026-10-13「建具上から床までは不要」）。適用は面の端の列（atFaceEndLo/Hi）だけ。
-          const minusCornerOpenings = (ranges, holes) =>
-            (holes ?? []).reduce((rs, h) => subtractZ(rs, h), ranges);
-          const loBase = (splitByCutWall && !endsAtGap(prev) && !atFaceEndLo) ? []
-            : prev ? uncoveredZRanges(prev, band, 'prev', wallExtent, cut) : (emitCtx.openEndLo ? [] : wholeBand);
-          const loRanges = atFaceEndLo ? minusCornerOpenings(loBase, emitCtx.cornerOpeningZLo) : loBase;
-          // 斜めの天端の帯は、端の縦線を**その端での天端の高さ**までにする（帯の上端 z1 は高い側の値）。
-          for (const r of loRanges) {
-            const x = wallEndXAt(columns, i, -1, r.z0, col.x0);
-            const zTop = band.topEdge ? Math.min(r.z1, band.topEdge.zAtX0) : r.z1;
-            if (zTop - r.z0 <= GAP_EPS) continue;
-            prims.push(Object.assign(emitLine(cut, x, r.z0, x, zTop, role, { ceilZ }),{__o:'recessLo'}));
-          }
-          const hiBase = (splitByCutWall && !endsAtGap(next) && !atFaceEndHi) ? []
-            : next ? uncoveredZRanges(next, band, 'next', wallExtent, cut) : (emitCtx.openEndHi ? [] : wholeBand);
-          const hiRanges = atFaceEndHi ? minusCornerOpenings(hiBase, emitCtx.cornerOpeningZHi) : hiBase;
-          for (const r of hiRanges) {
-            const x = wallEndXAt(columns, i, +1, r.z0, col.x1);
-            const zTop = band.topEdge ? Math.min(r.z1, band.topEdge.zAtX1) : r.z1;
-            if (zTop - r.z0 <= GAP_EPS) continue;
-            prims.push(Object.assign(emitLine(cut, x, r.z0, x, zTop, role, { ceilZ }),{__o:'recessHi'}));
-          }
-          // 腰壁の端部抑え（仕様2026-08「追加したい腰壁の仕様」）: 天端の帯は壁が終わる端でも
-          // 見えるので、その端に**帯の見付ぶん内側の細線**を足す（端の中線は上の凹み側面線が
-          // 既に描いている＝帯の外形2本のうち内側の1本だけがここの責務。天端の水平線と
-          // その下端＝kneeCapUnderline と対になる）。
-          // 描く端は「その壁がそこで実際に終わる端」だけ——隣接列が有る（＝探査範囲の内側）
-          // かつ帯の全高が覆われていない端。次の2つは対象外で、どちらも条件から自然に落ちる:
-          //   - 面の端（隣接列が無い）… そこは直交壁との取り合いで、腰壁は相手の壁表面まで
-          //     行って終わる。その位置の縦線は端部処理が描くため二重にしない。
-          //   - 同じ軸上に壁が続く端 … 連続する壁は同じ偏芯・同じ厚みで同面のため
-          //     （uncoveredZRangesが空を返す）。
-          appendKneeCapEndFaces(prims, cut, col, band, {
-            prev, next, loRanges, hiRanges, ceilZ, scale: emitCtx.scale, lineWeightsPx: emitCtx.lineWeightsPx,
-          });
-        }
-      } else if (band.kind === 'cutAlong') {
-        // cutAlong（縦断された壁。WP-E5リード裁定・§6.1）: 見付面自体は塗らず輪郭のみ描く。
-        // 上端エッジ（腰壁ならtopHeight位置。壁がz途中で終わる場合その上はrayが継続し別kindの
-        // bandになる＝band.z1が常に「この壁のこの位置での実際の上端」）はCUT水平線
-        // （band全体がbaseFloorZ以下なら降格。'wall'と同じforceDash判定）。
-        prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, ElevationLineRole.CUT,
-          { ceilZ, forceDash: bandFullyBeyond(cut, band, ceilZ) }));
-        // 腰壁の天端（仕様2026-08）: 上端が天井より下で終わる＝天端が露出している帯だけ、
-        // 帯の下端を細線で足す（垂れ壁は下端が露出するので z1 は天井に一致し、ここは通らない）。
-        if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
-          prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT)));
-        }
-        // 端部縦線: 壁のx方向の実際の端（隣接列に同じcutAlong壁が続かない側）にCUT縦線
-        // （壁の実端の断面。§5.5の凹み側面線と同じ「隣接列と比較」パターンだが、cutAlongは
-        // 塗り分けを持たないため常にCUT——壁が存在しない側=open端という区別を線種に反映する
-        // 必要が無い、壁の実端そのものを示す線のため）。
-        const prevAlong = matchingBand(prev, band.z0, band.z1, 'cutAlong');
-        if (!prevAlong) {
-          prims.push(Object.assign(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
-        }
-        const nextAlong = matchingBand(next, band.z0, band.z1, 'cutAlong');
-        if (!nextAlong) {
-          prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
-        }
-      } else if (band.kind === 'member') {
-        emitMemberFaceBand(prims, faceSegs, col, band, { prev, next, cut, drawRange, ceilZ });
-      } else if (band.kind === 'open' && (band.farFloorZ != null || band.farCeilZ != null)) {
-        // Phase4（水平面ヒットの見えがかり。裁定済み2026-09-11・既定on）: `sectionEngine.js`の
-        // `splitOpenByFarFace`が深度上限内のときだけfarFloorZ/farCeilZを付与する。
-        // 設計§5.5「その z に見えがかりの水平線を描く」「線種は既存規則に従い、同じ深度の壁面と
-        // 同じ重み」: 重みは'wall'帯と同じ`sightRole`（深度→SILHOUETTE/DETAIL）の経路をそのまま使う。
-        // **FL・CHの見えがかりは描画しない**規則（'wall'帯と同じ`sectionLevelZs`/`atSectionLevel`
-        // ガード）をそのまま流用する——奥の部屋の床・天井がこの帯自身のFL・CHと同値なら（実機
-        // knee-drop-test「B」面: 奥室の床0・天井3000がA自身のbaseFloorZ/ceilZと同値）既存の
-        // 断面線と重なるため描かない（ユーザー受入基準の「Aの床線／天井線と重なる」＝dedupe）。
-        const sectionZs = sectionLevelZs(cut, col, col.ceilZ ?? ceilZ);
-        const atSectionLevel = z => sectionZs.some(f => Math.abs(z - f) < GAP_EPS);
-        // QA是正2026-09（検算）: 床線・天井線は別々の実体（別々の深度）から出ることがあるため、
-        // 重み（sightRole）も床・天井それぞれの深度で決める——`band.farDepthMm`（両者の最小値）を
-        // 両方の線に使うと、深い側の線が浅い側の重みを借りてしまう。
-        const floorRole = sightRole(band.farFloorDepthMm ?? band.farDepthMm);
-        const ceilRole = sightRole(band.farCeilDepthMm ?? band.farDepthMm);
-        if (band.farFloorZ != null && !atSectionLevel(band.farFloorZ) && !hiddenByCutWall(col, band.farFloorZ)) {
-          prims.push(emitLine(cut, col.x0, band.farFloorZ, col.x1, band.farFloorZ, floorRole, { ceilZ }));
-        }
-        if (band.farCeilZ != null && !atSectionLevel(band.farCeilZ) && !hiddenByCutWall(col, band.farCeilZ)) {
-          prims.push(emitLine(cut, col.x0, band.farCeilZ, col.x1, band.farCeilZ, ceilRole, { ceilZ }));
-        }
-      }
-      // slab の帯に添えた梁の見え掛かり（床構造・天井懐の中の梁。U1b B3-2）
-      for (const piece of band.members ?? []) {
-        if (piece.kind === 'member') emitMemberFaceBand(prims, faceSegs, col, piece, { prev, next, cut, drawRange, ceilZ });
-      }
-      for (const piece of memberPiecesOf(band)) {
-        if (piece.along) {
-          const segs = alongSegs.get(piece.member) ?? [];
-          segs.push({ x0: col.x0, x1: col.x1, z0: piece.z0, z1: piece.z1 });
-          alongSegs.set(piece.member, segs);
-        } else if (!outlined.has(piece.member)) {
-          outlined.add(piece.member);
-          const m = piece.member, z = memberZ.get(m);
-          const xa = localXOf(cut, m.axisWorld - m.widthMm / 2), xb = localXOf(cut, m.axisWorld + m.widthMm / 2);
-          if (z.z1 - z.z0 <= GAP_EPS) continue; // 低い天井の下に梁の断面が残らない
-          for (const p of sectionOutline(cut, Math.min(xa, xb), Math.max(xa, xb), z.z1, z.z1 - z.z0, piece.section)) {
-            p[MEMBER_PRIM] = true;
-            if (piece.whole) p[WHOLE_OUTLINE] = true; // 床なし区間をまたぐ輪郭は線ごとの切り直しから守る（階段帯）
-            prims.push(p);
-          }
-        }
-      }
-      // open/slabの帯自体はここでは描かない（AMBIGUITY F）。ただしslab→openの境界（＝above層の
-      // 床の端）はSILHOUETTE水平線として描く（WP-E5b追加。§5.6「2FLの中線= above層の床スラブ端
-      // （slabとopenの境界）→SILHOUETTE水平線」）。同一列内でz方向に隣接するslab/open帯の境界を
-      // 対象にする——列をまたぐslab⇄open（x方向の境界）は凹み側面線に相当する概念が無く
-      // （床の厚み方向の境界であってwallの見付面ではない）、本WPでは対象外（ASSUMED）。
-      // hidden帯（展開図一般化Phase 6b-2 C-1。「描かない実体」）も、上のif/elseチェーンに
-      // 該当する分岐が無いためここでは自動的に何も描かない——kind==='cut'/'wall'/'cutAlong'/
-      // 'open'のどれでもないので単に読み飛ばされる（他のkindを新設したときと同じ扱い）。
-    }
-    for (let i = 0; i + 1 < col.bands.length; i++) {
-      const a = col.bands[i], b = col.bands[i + 1];
-      // 梁の断面（memberCut）は後ろの帯の種類（behind）で見る——梁は床スラブ⇄アキの境界の線を変えない
-      const effKind = x => ((x.kind === 'memberCut' || x.kind === 'member') ? (x.behind ?? x.kind) : x.kind);
-      const aIsFloorEdge = (effKind(a) === 'slab' || effKind(a) === 'open');
-      const bIsFloorEdge = (effKind(b) === 'slab' || effKind(b) === 'open');
-      // 階段室の最初の壁（viaStair）は手前の空気が開いている＝床スラブの端（床の線）は壁の下でも続く。
-      const viaStairOnSlab = a.kind === 'slab' && b.kind === 'wall' && b.viaStair;
-      if ((aIsFloorEdge && bIsFloorEdge && effKind(a) !== effKind(b)) || viaStairOnSlab) {
-        if (!hiddenByCutWall(col, a.z1) && !ownedBySectionSlab(sectionSlabs, col, a.z1)) {
-          prims.push(emitLine(cut, col.x0, a.z1, col.x1, a.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
-        }
-      }
-    }
-  });
-  prims.push(...memberAlongPrimitives(alongSegs, cut));
-  prims.push(...memberFaceHorizontals(faceSegs, cut));
-  prims.push(...cutWallTopEdges(columns, cut, ceilZ, emitCtx));
-  prims.push(...cutWallTopBeyondSightlines(columns, cut, ceilZ));
-  // 上階の床との取り合いは、**区間ごとの天井を持つ帯（cut.ceilProfileあり＝通常の部屋帯・
-  // 吹抜け帯）は ceilStepSlabSection、持たない帯（階段帯）は slabEdgeCutWallJunction** が担当する。
-  // 両方走らせると同じ取り合いを別々の作図で二重に描く——前者は「天井の高さが変わる境界」を
-  // 起点に低い天井の側へ床の断面線を伸ばし、後者は「スラブ帯の外端」を起点に反対側へ伸ばす。
-  // 通常の部屋帯では 1F天井〜2FL が吹抜けの側でも天井懐(slab)に分類されるため、後者は床の
-  // 断面線を吹抜けの側（床が無い側）へ引いてしまう。
-  if (hasCeilProfile) {
-    prims.push(...ceilStepSlabSection(columns, cut, ceilZ));
-  } else {
-    prims.push(...slabEdgeCutWallJunction(columns, cut, ceilZ, sectionSlabs));
+  return memberZ;
+}
+
+/**
+ * 切断壁の帯 band と b が同じ壁の表裏か（隣接列の cut 帯が同じ壁の続きか）。
+ * **同じ壁のcut帯が隣接列にも続いていれば、その境界は壁の内部なので線を描かない**
+ * （ユーザー実機指摘2026-08「6」D。腰壁の断面がx=-57.5..57.5の1枚なのに、列が
+ * x-57.5..0/0..45/45..57.5へ分割されていたため、内部にV x0・V x45の縦線が出ていた）。
+ * cutAlongの端部縦線と同じ「隣接列に同じ壁が続くか」のパターン。壁の同一性は
+ * band.wall参照で見る——両側にwallが載っている場合だけ抑止し、載っていない
+ * （単体テストの手書き列など）場合は従来どおり描く。
+ * **壁は片面ずつのWallオブジェクト**（cutWallRuns参照。実機の袖壁1枚が2つのWallに
+ * 分かれる）ため、参照一致だけで見ると1枚の袖壁の**内部**＝軸CL上にその境界の縦線が
+ * 出る。**同じ軸CLに載っていて同じz範囲の切断壁は、1枚の壁の表裏**とみなす
+ * ——切断線は壁を厚み方向に横切るので、同一軸CLの切断壁が隣接列で接するのは
+ * 「同じ壁の反対の面」以外にありえない（別々の壁が接するなら軸CLが違う）。
+ * 天端の水平線を1本にまとめている`cutWallRuns`と同じ「1枚の壁」の見方をそろえたもの。
+ */
+function sameWallAs(band, b) {
+  return !!b && !!b.wall && !!band.wall
+    && (b.wall === band.wall
+      || (!!b.wall.axisCL && b.wall.axisCL === band.wall.axisCL
+        && Math.abs(b.z0 - band.z0) < GAP_EPS
+        // 天端が天井の斜線に沿う帯（ceilEdge）は列ごとに上端が違うが、斜線は壁厚の中でも続く。
+        && (Math.abs(b.z1 - band.z1) < GAP_EPS || (!!b.ceilEdge && !!band.ceilEdge))));
+}
+
+/**
+ * 建具で切れている区間（openingPassThrough）の切断壁の帯: 壁の断面の両縁は描かず、開口の上下（まぐさの下端・下枠の上端）に
+ * 壁の断面の切り口としてCUTの水平線を引き、その建具の断面（枠・扉）を壁の最初の列で1回だけ重ねる。
+ */
+function emitOpeningPassThrough(prims, { cut, col, band, prev, ceilZ }) {
+  // **建具で切れている区間は壁ではない**（sectionProbe.jsが仮想断面と建具の交差で付ける
+  // `openingPassThrough`。ユーザー明示指示2026-09）——壁の断面の両縁は描かず、開口の
+  // 上下（まぐさの下端・下枠の上端）に壁の断面の切り口としてCUTの水平線を引く。
+  for (const z of [band.z0, band.z1]) {
+    prims.push(Object.assign(
+      emitLine(cut, col.x0, z, col.x1, z, ElevationLineRole.CUT, { ceilZ }),
+      { __o: 'cutOpeningEdge' }));
   }
-  return dedupeLines(prims);
+  // その建具の断面（枠・扉。openings/openingSection.js）を1回だけ重ねる。
+  // 見込の基準は**この帯の壁1枚の材の範囲**——ユーザー明示指示2026-09「枠の上の壁は、
+  // 当該部屋側のみで良いので、内外壁をまとめる必要はない」。列は壁厚方向に分割される
+  // ことがあるため、その壁の最初の列（隣に同じ壁のcut帯が続かない側）でだけ描く。
+  const mr = band.wall?.materialRange;
+  if (mr && band.opening && !sameWallAs(band, matchingBand(prev, band.z0, band.z1, 'cut'))) {
+    const a = localXOf(cut, mr.lo), b = localXOf(cut, mr.hi);
+    prims.push(...openingSectionPrimitives(
+      band.opening, Math.min(a, b) - FRAME_OVERHANG_MM, 1,
+      weightForRole(ElevationLineRole.CUT), weightForRole(ElevationLineRole.SILHOUETTE),
+      { wallThicknessMm: Math.abs(mr.hi - mr.lo), worldPerDirSign: cut.dirSign ?? 1,
+        detailWeight: weightForRole(ElevationLineRole.DETAIL) },
+    ));
+  }
+}
+
+/**
+ * 切断壁（cut）の帯の断面矩形の両縁（縦線）。その縁が接する側がopenならCUT、塞がれていればSILHOUETTE
+ * （AMBIGUITY B）。列の外（画面端）はopen扱い。WP-E5b修正: 隣接列が「別のcut band」で
+ * なければopen扱いにしていた旧実装（`|| !matchingBand(...,'cut')`）は、隣接列が
+ * 'wall'（距離のある見えがかり壁）のときも「塞がれていない」と誤判定していた
+ * （例: seq1で切断された往復間の壁の縁が、遠くに見える別の壁（'wall'band）に接する場合。
+ * 保存意味論「seq1では切断線を横切るcutとして厚みの2縁=open側CUT/塞がれ側SILHOUETTE」
+ * を満たすには、'wall'・'cutAlong'等どの種類であれ何らかの実体があれば「塞がれている」
+ * とみなす必要がある——isOpenSideAtは`kind==='open'`（または開口貫通）だけをopenと
+ * みなすため、そのままの結果を使えばよい）。
+ */
+function emitCutBand(prims, { cut, col, band, prev, next, ceilZ }) {
+  // `exposedSide`（sectionEngine.jsのclipBandsToCeil）が付いた帯は、**天井の高さが変わる
+  // 境界に立っていて片側からしか見えない壁**。見えるのはその側の面だけで、反対側の面は
+  // 低い天井の裏に隠れている——両縁を描くと壁厚が図に出てしまう（ユーザー明示指示:
+  // 実機「5」A「X2の右側が断面線なら、左側は壁の中になり、描画しないが正解」）。
+  const hidden = band.exposedSide ?? null;
+  // 同じ軸CLの切断壁の表裏で高さが違う（隔て壁の埋込み柱の立ち上がり）とき、隣の断面に覆われた高さの縁は
+  // 壁の内部なので描かない（覆われていない高さだけ縦線を引く）。
+  const edgeRanges = nbCol => (nbCol?.bands ?? [])
+    .filter(b => b.kind === 'cut' && !!b.wall?.axisCL && b.wall.axisCL === band.wall?.axisCL && overlapsZ(b, band))
+    .reduce((rs, b) => subtractZ(rs, b), [{ z0: band.z0, z1: band.z1 }])
+    .filter(r => r.z1 - r.z0 > GAP_EPS);
+  // 天端が天井の斜線に沿う帯（ceilEdge）の側縁は、その端での斜線の高さで止める（帯の z1 は高い側の値）。
+  // 段違い天井の境界に立つ壁（exposedSide）の見えない側の縁も、**低い側の天井（列の打ち切り値 col.ceilZ）より下**は
+  // 描く——そこは低い天井の下の空気に面した壁の断面の縁で、隠れているのは天井より上だけ
+  // （ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の左側の断面線は床断面から上の天井断面線まで」）。
+  const lowCeil = col.ceilZ;
+  const hiddenTop = (r) => (Number.isFinite(lowCeil) ? Math.min(r.z1, lowCeil) : r.z0);
+  if (!sameWallAs(band, matchingBand(prev, band.z0, band.z1, 'cut'))) {
+    for (const r of edgeRanges(prev)) {
+      let zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX0) : r.z1;
+      if (hidden === 'hi') zTop = Math.min(zTop, hiddenTop(r));
+      if (zTop - r.z0 <= GAP_EPS) continue;
+      prims.push(Object.assign(emitLine(cut, col.x0, r.z0, col.x0, zTop, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
+    }
+  }
+  if (!sameWallAs(band, matchingBand(next, band.z0, band.z1, 'cut'))) {
+    for (const r of edgeRanges(next)) {
+      let zTop = band.ceilEdge ? Math.min(r.z1, band.ceilEdge.zAtX1) : r.z1;
+      if (hidden === 'lo') zTop = Math.min(zTop, hiddenTop(r));
+      if (zTop - r.z0 <= GAP_EPS) continue;
+      prims.push(Object.assign(emitLine(cut, col.x1, r.z0, col.x1, zTop, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
+    }
+  }
+  // 天端の斜線は引かない: 天井に届いた壁には天端を引かず天井線は体裁が引く（平面の cutWallTopEdges と
+  // 同じ規約）。finalizeBand の dedupe は端点の完全一致しか畳まないので、列ごとの短い斜線を出すと
+  // 体裁の1本と二重に残る。
+}
+
+/**
+ * 見えがかり壁（wall）の帯の水平線（下端・天端）と、腰壁の天端の下端の細線、階段室越しの壁の巾木。
+ * 水平線は「仮想断面からの距離が変わるところ」だけに描き、FL・CHには描かない
+ * （ユーザー明示指示2026-08。visibleDepthMm / sectionLevelZs 参照）。
+ */
+function emitWallHorizontals(prims, { cut, col, band, ceilZ, emitCtx, role, sectionSlabs }) {
+  // 見えがかり壁面の輪郭（上端・下端）。水平線（縮退）はemitLineの単独判定では
+  // 「ちょうどbaseFloorZ/ceilZに触れるだけ」を向こう側と見なさないため、band全体が
+  // baseFloorZ以下／ceilZ以上ならforceDashで明示的に降格する（WP-E5b: sectionProbe.jsが
+  // cut.baseFloorZをzBreaksに割り込ませることで生じる、内部分割されたband用の対応）。
+  const beyondBand = bandFullyBeyond(cut, band, ceilZ);
+  // **手前の切断壁でこの帯が切られただけの縁は描かない**（ユーザー実機指摘2026-08「6」D）。
+  // 同じ列で切断壁(cut)の上端/下端とちょうど一致する縁は、見えがかり壁の実際の端ではなく
+  // 「手前の腰壁に遮られてそこで見えなくなった」だけの遮蔽境界で、壁自体はその裏へ続いている
+  // （実機症状: 腰壁の内側半分x0..57.5の下に、遠い壁の天端としてH z3000が出ていた）。
+  // 腰壁の天端側はcut帯自身がCUT水平線として描くので、線が失われることはない。
+  // **腰壁が床スラブの上に直に載っている境界は描かない**（ユーザー実機指摘2026-08「6」C
+  // 「2FLの線は、左の壁断面から腰壁が終わるエッジまで不要。この腰壁の仕上げ面は、直下の
+  // 2FLから1FL天井線までの面と同面のため」）。腰壁は床の端に立つので、その仕上げ面と
+  // 直下の床スラブ小口は同一平面＝見た目に線は現れない。腰壁でない（`isKneeDrop`でない）
+  // 遠くの壁は同面ではないので、スラブ小口の線はそのまま出る（実機の右半分がこれ）。
+  const flushOnSlab = band.isKneeDrop
+    && col.bands.some(b => b.kind === 'slab' && Math.abs(b.z1 - band.z0) < GAP_EPS);
+  // 見えがかりの水平線は「仮想断面からの距離が変わるところ」だけに描き、FL・CHには描かない
+  // （ユーザー明示指示2026-08。visibleDepthMm / sectionLevelZs 参照）。
+  // 天井断面の高さは列ごとに違う（区間ごとの天井。sectionEngine.jsのceilProfile）ため、
+  // その列の天井を優先して使う——帯の天井(emitCtx.ceilZ)だけを見ると、天井の低い区間で
+  // 天井断面線と見えがかりの水平線が重なる。
+  const sectionZs = sectionLevelZs(cut, col, col.ceilZ ?? ceilZ);
+  const atSectionLevel = z => sectionZs.some(f => Math.abs(z - f) < GAP_EPS);
+  if (!flushOnSlab && !hiddenByCutWall(col, band.z0) && !atSectionLevel(band.z0)
+      && ownsBoundary(band, neighborBandAt(col, band.z0, -1), cut)) {
+    prims.push(emitLine(cut, col.x0, band.z0, col.x1, band.z0, role, { ceilZ, forceDash: beyondBand }));
+  }
+  // **その空間の天井の縁は、仮想断面から最も近い面（＝主な描画対象）と同格なので中線**
+  // （ユーザー明示指示2026-08「追加した1階天井見えがかり：仮想断面から最も近い壁
+  // （=主な描画対象）と同じ面のエッジなので中線を選択する」）——天井は切断面のすぐ手前から
+  // 奥へ広がる面で、その縁までの奥行きは0であり、見えている壁までの距離（この帯のdistMm）
+  // ではない。天井懐(slab)がすぐ上に接し、その層の天井(ceilZ)がこの高さに一致することで
+  // 「この境界は空間の天井である」と判定する（slab/openの境界側と同じ見方）。
+  const upperBand = neighborBandAt(col, band.z1, +1);
+  const atSpaceCeil = upperBand?.kind === 'slab' && Number.isFinite(upperBand.ceilZ)
+    && Math.abs(upperBand.ceilZ - band.z1) < GAP_EPS;
+  // 階段の裏面との取り合いの天端（junctionTop）は壁の自由な縁ではなく、連続する天井との接線＝常に細線。
+  const topRole = band.junctionTop ? ElevationLineRole.DETAIL : (atSpaceCeil ? ElevationLineRole.SILHOUETTE : role);
+  // 斜めの天端（band.topEdge。隔て壁）: 天端は列の両端の高さを結ぶ斜線。斜線は FL・CH の高さに
+  // 端が触れても列の境界で切れているだけ（列の境界は斜面が水平線を横切る位置で割ってある）なので、
+  // 水平線との重なり判定（atSectionLevel・ownedBySectionSlab）は対象外。
+  const slope = band.topEdge ?? null;
+  if (!hiddenByCutWall(col, band.z1) && (slope || !atSectionLevel(band.z1))
+      && (slope || !ownedBySectionSlab(sectionSlabs, col, band.z1))
+      && ownsBoundary(band, neighborBandAt(col, band.z1, +1), cut)) {
+    prims.push(slope
+      ? emitLine(cut, col.x0, slope.zAtX0, col.x1, slope.zAtX1, topRole, { ceilZ, forceDash: beyondBand })
+      : emitLine(cut, col.x0, band.z1, col.x1, band.z1, topRole, { ceilZ, forceDash: beyondBand }));
+    // 腰壁の天端（仕様2026-08）: 見えがかりでも天端の帯は見えるので下端を細線で足す。
+    // 天端の水平線を実際に描いた場合だけ——遮蔽で消した縁の下に帯だけ残ると嘘になる。
+    if (band.isKneeDrop && !band.profiledTop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
+      prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(topRole)));
+    }
+  }
+  // 階段室越しの壁（viaStair）の巾木（ユーザー指示2026-10-15「階段下スペースは『ホール』なので巾木が
+  // 見える」）。帯の部屋（ホール）の巾木高さ emitCtx.baseboardMm を、壁の足元（下に同じ壁の帯が続かない
+  // 帯の下端）から立ち上げた細線。遮蔽・降格は壁の水平線と同じ（hiddenByCutWall・beyondBand）。
+  if (band.viaStair && emitCtx.baseboardMm > 0) {
+    const bbZ = band.z0 + emitCtx.baseboardMm;
+    const below = neighborBandAt(col, band.z0, -1);
+    // 足元＝床の高さ（その列・層のFL）にある帯の下端だけ。扉の上の壁（まぐさ）など床に無い帯の下端には引かない。
+    const isWallFoot = !(below?.kind === 'wall' && below.viaStair) && atSectionLevel(band.z0);
+    if (isWallFoot && bbZ < band.z1 - GAP_EPS && !hiddenByCutWall(col, bbZ)) {
+      prims.push(emitLine(cut, col.x0, bbZ, col.x1, bbZ, ElevationLineRole.DETAIL, { ceilZ, forceDash: beyondBand }));
+    }
+  }
+}
+
+/**
+ * 見えがかり壁（wall）の帯の凹み側面線（隣接列で同一z区間のwallのdistMmが変化した境界のSILHOUETTE縦線。§5.5）と、
+ * 腰壁の端部抑え（appendKneeCapEndFaces）。
+ */
+function emitWallRecessEdges(prims, { cut, columns, i, col, band, prev, next, ceilZ, emitCtx, role }) {
+  // 凹み: 隣接列で同一z区間のwallのdistMmが変化した境界にSILHOUETTE縦線（§5.5）。
+  // 凹み側面線。**列の外側の端（prev/nextが無い＝描画範囲の端）では、その端に壁が
+  // 無ければ描かない**（ユーザー実機指摘2026-08「3500左CLにエッジはない」）——
+  // 隣接列が無いことは「そこで壁が終わる」ことを意味しない。範囲外は単に未探査であり、
+  // 面が「壁のない端部」だと分かっている側（emitCtx.openEndLo/openEndHi）では
+  // 壁面はその先へ続いている。旧実装は`!prevWall`だけで判定していたため、
+  // 先頭列・末尾列には常に縦線が出ていた（全パネルの端に出る症状）。
+  // **凹みは同じ層(layerRole)の壁どうしでしか成立しない**（ユーザー実機指摘2026-08「6」D。
+  // 実機症状: 左CL上のz3800..5400に縦線が出ていた——隣は上階側の遠い壁(d7250 above)、
+  // こちらは設置階の壁(d2250 self)で、距離が変わるのは「1枚の壁面が凹んだ」からではなく
+  // **見えている壁が別の層のものへ入れ替わった**だけ。連続面の折れ角ではないので描かない）。
+  // 隣接列に見えがかり壁が無い場合は従来どおり「そこで壁が終わる」＝描く。
+  // **手前の切断壁に切られてこの列だけ分割された帯の側縁は描かない**（ユーザー明示指示
+  // 2026-08その17「「6」D1・B: 腰壁上のエッジは不要」）。腰壁の天端で始まる帯は、
+  // その列で腰壁に遮られたぶんだけ下端が持ち上がった**同じ壁の続き**であり、隣接列では
+  // 1本の大きな帯（あるいは別の見え方）になる。ここで側縁を描くと、腰壁の上に壁の切れ目が
+  // 無いのに縦線が出る。
+  //
+  // 判定は「**帯の下端が、その列の切断壁の天端にちょうど一致する**」——それが「切断壁に
+  // 切られて持ち上がった」ということの定義そのもの。以前は`hiddenByCutWall(col, band.z0)`
+  // ＝「天端が帯の下端以上の切断壁がこの列にあるか」で見ていたが、これは**切断壁より下に
+  // ある帯まで巻き込む**（実機「5」A: 1階の壁の帯z0..2400が、その上に立つ2階X2壁の断面
+  // z2400..5400のせいで「切られた」と判定され、X2右側の壁エッジが丸ごと消えていた）。
+  // 切断壁はそれ自身のz範囲でしか遮らない。
+  const splitByCutWall = col.bands.some(b =>
+    b.kind === 'cut' && Math.abs(b.z1 - band.z0) < GAP_EPS);
+  // **ただし隣接列がアキ（open）なら、そこで壁面は本当に終わっている**——「切られて
+  // 持ち上がっただけ」と言えるのは、その先で壁面が何らかの形で続いているとき。アキは
+  // 「その面の平面に壁が無い」ことそのものなので、境界の縦線が要る（ユーザー実機指摘
+  // 2026-08「「5」B: 2階Y1から2000と3500のCLにエッジが描画されない」）。
+  // 隣接列がスラブ等の別の見え方になるだけの場合は従来どおり抑止する（その17「6」D1）。
+  const endsAtGap = nb => !!nb && nb.bands.some(x => isOpenLikeBand(x) && overlapsZ(x, band));
+  // **面の端でもその17は効かせない**（ユーザー実機指摘2026-09「「6」D2: 2階Y2から3500には
+  // 「21」の壁エッジが左側に見える」）——その17の前提「隣接列で同じ壁が1本の帯として続く」は
+  // 隣接列が無い＝探査範囲の外である面の端では成立しない。端に壁が有るかどうかの答えは
+  // `emitCtx.openEndLo/Hi`（face.hasWallAtLocal0/Run）が既に持っており、それが唯一の情報源。
+  // 判定に`!prev`だけを使うと不足する——探査は面の外まで延ばされることがあり（cutDrawRange
+  // のprobeExtendLo/HiMm）、最終列が面の端より内側にある合成入力では従来どおり抑止したい
+  // （その17の実機「6」D1）。**列の端が面の端に一致する**ことまで見る。
+  const { loX: faceLoX, hiX: faceHiX } = faceRangeX(cut);
+  const atFaceEndLo = !prev && Math.abs(col.x0 - faceLoX) < GAP_EPS;
+  const atFaceEndHi = !next && Math.abs(col.x1 - faceHiX) < GAP_EPS;
+  const wholeBand = [{ z0: band.z0, z1: band.z1 }];
+  const wallExtent = wallExtentAcrossMembers(col, band); // 梁の断面で上下に分かれた壁の帯をつないだ範囲（無ければ null）
+  // 面端の隅で建具断面を描く建具の開口範囲（emitCtx.cornerOpeningZLo/Hi。面図の面端の太線と
+  // 同じ入力＝buildSectionFromLine の ends）では面端の凹み側面線を描かない（ユーザー指摘
+  // 2026-10-13「建具上から床までは不要」）。適用は面の端の列（atFaceEndLo/Hi）だけ。
+  const minusCornerOpenings = (ranges, holes) =>
+    (holes ?? []).reduce((rs, h) => subtractZ(rs, h), ranges);
+  const loBase = (splitByCutWall && !endsAtGap(prev) && !atFaceEndLo) ? []
+    : prev ? uncoveredZRanges(prev, band, 'prev', wallExtent, cut) : (emitCtx.openEndLo ? [] : wholeBand);
+  const loRanges = atFaceEndLo ? minusCornerOpenings(loBase, emitCtx.cornerOpeningZLo) : loBase;
+  // 斜めの天端の帯は、端の縦線を**その端での天端の高さ**までにする（帯の上端 z1 は高い側の値）。
+  for (const r of loRanges) {
+    const x = wallEndXAt(columns, i, -1, r.z0, col.x0);
+    const zTop = band.topEdge ? Math.min(r.z1, band.topEdge.zAtX0) : r.z1;
+    if (zTop - r.z0 <= GAP_EPS) continue;
+    prims.push(Object.assign(emitLine(cut, x, r.z0, x, zTop, role, { ceilZ }),{__o:'recessLo'}));
+  }
+  const hiBase = (splitByCutWall && !endsAtGap(next) && !atFaceEndHi) ? []
+    : next ? uncoveredZRanges(next, band, 'next', wallExtent, cut) : (emitCtx.openEndHi ? [] : wholeBand);
+  const hiRanges = atFaceEndHi ? minusCornerOpenings(hiBase, emitCtx.cornerOpeningZHi) : hiBase;
+  for (const r of hiRanges) {
+    const x = wallEndXAt(columns, i, +1, r.z0, col.x1);
+    const zTop = band.topEdge ? Math.min(r.z1, band.topEdge.zAtX1) : r.z1;
+    if (zTop - r.z0 <= GAP_EPS) continue;
+    prims.push(Object.assign(emitLine(cut, x, r.z0, x, zTop, role, { ceilZ }),{__o:'recessHi'}));
+  }
+  // 腰壁の端部抑え（仕様2026-08「追加したい腰壁の仕様」）: 天端の帯は壁が終わる端でも
+  // 見えるので、その端に**帯の見付ぶん内側の細線**を足す（端の中線は上の凹み側面線が
+  // 既に描いている＝帯の外形2本のうち内側の1本だけがここの責務。天端の水平線と
+  // その下端＝kneeCapUnderline と対になる）。
+  // 描く端は「その壁がそこで実際に終わる端」だけ——隣接列が有る（＝探査範囲の内側）
+  // かつ帯の全高が覆われていない端。次の2つは対象外で、どちらも条件から自然に落ちる:
+  //   - 面の端（隣接列が無い）… そこは直交壁との取り合いで、腰壁は相手の壁表面まで
+  //     行って終わる。その位置の縦線は端部処理が描くため二重にしない。
+  //   - 同じ軸上に壁が続く端 … 連続する壁は同じ偏芯・同じ厚みで同面のため
+  //     （uncoveredZRangesが空を返す）。
+  appendKneeCapEndFaces(prims, cut, col, band, {
+    prev, next, loRanges, hiRanges, ceilZ, scale: emitCtx.scale, lineWeightsPx: emitCtx.lineWeightsPx,
+  });
+}
+
+/**
+ * cutAlong（縦断された壁。WP-E5リード裁定・§6.1）の帯: 見付面自体は塗らず輪郭のみ描く。
+ */
+function emitCutAlongBand(prims, { cut, col, band, prev, next, ceilZ, emitCtx }) {
+  // 上端エッジ（腰壁ならtopHeight位置。壁がz途中で終わる場合その上はrayが継続し別kindの
+  // bandになる＝band.z1が常に「この壁のこの位置での実際の上端」）はCUT水平線
+  // （band全体がbaseFloorZ以下なら降格。'wall'と同じforceDash判定）。
+  prims.push(emitLine(cut, col.x0, band.z1, col.x1, band.z1, ElevationLineRole.CUT,
+    { ceilZ, forceDash: bandFullyBeyond(cut, band, ceilZ) }));
+  // 腰壁の天端（仕様2026-08）: 上端が天井より下で終わる＝天端が露出している帯だけ、
+  // 帯の下端を細線で足す（垂れ壁は下端が露出するので z1 は天井に一致し、ここは通らない）。
+  if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
+    prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT)));
+  }
+  // 端部縦線: 壁のx方向の実際の端（隣接列に同じcutAlong壁が続かない側）にCUT縦線
+  // （壁の実端の断面。§5.5の凹み側面線と同じ「隣接列と比較」パターンだが、cutAlongは
+  // 塗り分けを持たないため常にCUT——壁が存在しない側=open端という区別を線種に反映する
+  // 必要が無い、壁の実端そのものを示す線のため）。
+  const prevAlong = matchingBand(prev, band.z0, band.z1, 'cutAlong');
+  if (!prevAlong) {
+    prims.push(Object.assign(emitLine(cut, col.x0, band.z0, col.x0, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeLo'}));
+  }
+  const nextAlong = matchingBand(next, band.z0, band.z1, 'cutAlong');
+  if (!nextAlong) {
+    prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
+  }
+}
+
+/**
+ * 遠側の床・天井の見えがかり（farFloorZ/farCeilZ を持つ open の帯）の水平線。
+ */
+function emitFarOpenBand(prims, { cut, col, band, ceilZ, sightRole }) {
+  // Phase4（水平面ヒットの見えがかり。裁定済み2026-09-11・既定on）: `sectionEngine.js`の
+  // `splitOpenByFarFace`が深度上限内のときだけfarFloorZ/farCeilZを付与する。
+  // 設計§5.5「その z に見えがかりの水平線を描く」「線種は既存規則に従い、同じ深度の壁面と
+  // 同じ重み」: 重みは'wall'帯と同じ`sightRole`（深度→SILHOUETTE/DETAIL）の経路をそのまま使う。
+  // **FL・CHの見えがかりは描画しない**規則（'wall'帯と同じ`sectionLevelZs`/`atSectionLevel`
+  // ガード）をそのまま流用する——奥の部屋の床・天井がこの帯自身のFL・CHと同値なら（実機
+  // knee-drop-test「B」面: 奥室の床0・天井3000がA自身のbaseFloorZ/ceilZと同値）既存の
+  // 断面線と重なるため描かない（ユーザー受入基準の「Aの床線／天井線と重なる」＝dedupe）。
+  const sectionZs = sectionLevelZs(cut, col, col.ceilZ ?? ceilZ);
+  const atSectionLevel = z => sectionZs.some(f => Math.abs(z - f) < GAP_EPS);
+  // QA是正2026-09（検算）: 床線・天井線は別々の実体（別々の深度）から出ることがあるため、
+  // 重み（sightRole）も床・天井それぞれの深度で決める——`band.farDepthMm`（両者の最小値）を
+  // 両方の線に使うと、深い側の線が浅い側の重みを借りてしまう。
+  const floorRole = sightRole(band.farFloorDepthMm ?? band.farDepthMm);
+  const ceilRole = sightRole(band.farCeilDepthMm ?? band.farDepthMm);
+  if (band.farFloorZ != null && !atSectionLevel(band.farFloorZ) && !hiddenByCutWall(col, band.farFloorZ)) {
+    prims.push(emitLine(cut, col.x0, band.farFloorZ, col.x1, band.farFloorZ, floorRole, { ceilZ }));
+  }
+  if (band.farCeilZ != null && !atSectionLevel(band.farCeilZ) && !hiddenByCutWall(col, band.farCeilZ)) {
+    prims.push(emitLine(cut, col.x0, band.farCeilZ, col.x1, band.farCeilZ, ceilRole, { ceilZ }));
+  }
+}
+
+/**
+ * 帯に属する梁: slab の帯に添えた梁の見え掛かり（床構造・天井懐の中の梁。U1b B3-2）を emitMemberFaceBand で描き、
+ * 梁の断面（memberCut。U1b B3-1）は along を天地の線の区間へ控え、それ以外は最初に現れる列で輪郭を 1 回だけ重ねる。
+ */
+function emitBandMembers(prims, {
+  cut, col, band, prev, next, ceilZ, drawRange, faceSegs, alongSegs, outlined, memberZ,
+}) {
+  // slab の帯に添えた梁の見え掛かり（床構造・天井懐の中の梁。U1b B3-2）
+  for (const piece of band.members ?? []) {
+    if (piece.kind === 'member') emitMemberFaceBand(prims, faceSegs, col, piece, { prev, next, cut, drawRange, ceilZ });
+  }
+  for (const piece of memberPiecesOf(band)) {
+    if (piece.along) {
+      const segs = alongSegs.get(piece.member) ?? [];
+      segs.push({ x0: col.x0, x1: col.x1, z0: piece.z0, z1: piece.z1 });
+      alongSegs.set(piece.member, segs);
+    } else if (!outlined.has(piece.member)) {
+      outlined.add(piece.member);
+      const m = piece.member, z = memberZ.get(m);
+      const xa = localXOf(cut, m.axisWorld - m.widthMm / 2), xb = localXOf(cut, m.axisWorld + m.widthMm / 2);
+      if (z.z1 - z.z0 <= GAP_EPS) continue; // 低い天井の下に梁の断面が残らない
+      for (const p of sectionOutline(cut, Math.min(xa, xb), Math.max(xa, xb), z.z1, z.z1 - z.z0, piece.section)) {
+        p[MEMBER_PRIM] = true;
+        if (piece.whole) p[WHOLE_OUTLINE] = true; // 床なし区間をまたぐ輪郭は線ごとの切り直しから守る（階段帯）
+        prims.push(p);
+      }
+    }
+  }
+}
+
+/**
+ * 列内でz方向に隣接する slab/open 帯の境界（above層の床の端）の SILHOUETTE 水平線（WP-E5b追加）。
+ */
+function emitFloorEdgeLines(prims, { cut, col, sectionSlabs, ceilZ }) {
+  for (let i = 0; i + 1 < col.bands.length; i++) {
+    const a = col.bands[i], b = col.bands[i + 1];
+    // 梁の断面（memberCut）は後ろの帯の種類（behind）で見る——梁は床スラブ⇄アキの境界の線を変えない
+    const effKind = x => ((x.kind === 'memberCut' || x.kind === 'member') ? (x.behind ?? x.kind) : x.kind);
+    const aIsFloorEdge = (effKind(a) === 'slab' || effKind(a) === 'open');
+    const bIsFloorEdge = (effKind(b) === 'slab' || effKind(b) === 'open');
+    // 階段室の最初の壁（viaStair）は手前の空気が開いている＝床スラブの端（床の線）は壁の下でも続く。
+    const viaStairOnSlab = a.kind === 'slab' && b.kind === 'wall' && b.viaStair;
+    if ((aIsFloorEdge && bIsFloorEdge && effKind(a) !== effKind(b)) || viaStairOnSlab) {
+      if (!hiddenByCutWall(col, a.z1) && !ownedBySectionSlab(sectionSlabs, col, a.z1)) {
+        prims.push(emitLine(cut, col.x0, a.z1, col.x1, a.z1, ElevationLineRole.SILHOUETTE, { ceilZ }));
+      }
+    }
+  }
 }
 
 // 同じ奥行きとみなす許容差（梁の nearMm と壁の材の手前の縁。浮動小数の誤差だけ吸収する）
@@ -1722,6 +1804,18 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
   const minGapWidthMm = emitCtx.scale ? GAP_LABEL_WIDTH_PX / emitCtx.scale : 0;
   const { loX: faceLoX, hiX: faceHiX } = faceRangeX(cut);
   const beamRects = emitCtx.gapBeamRects ?? [];  const splitRects = beamRects.filter(r => r.split);
+  const cells = collectOpenGapCells(columns, { faceLoX, faceHiX, gapFloorProfile: emitCtx.gapFloorProfile, splitRects });
+  const merged = mergeGapCells(cells);
+  const groups = groupGapCells(merged);
+  return emitGapGroups(groups, { cut, columns, ceilZ, minGapWidthMm, beamRects });
+}
+
+/**
+ * アキ扱いの帯（open・開口貫通でない・切断壁の天端の上でない・階段室越しでない）を、面の範囲に収まる矩形セルへ集める。
+ * 断面線（gapFloorProfile）があれば下限を持ち上げ、手前の梁（splitRects）の上下でセルを分ける。
+ * @returns {object[]} cells
+ */
+function collectOpenGapCells(columns, { faceLoX, faceHiX, gapFloorProfile, splitRects }) {
   const cells = [];
   columns.forEach((col, colIndex) => {
     for (const b of col.bands) {
@@ -1755,7 +1849,7 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
         // 渡されない帯（部屋帯・吹抜け帯・断面線の無い面＝鉄骨で部屋なし／seq1・seq3）は従来どおりband自身の下端。
         // 床が列の中で踊り場（平ら）と階段（斜め）に分かれるときは、平らな区間だけがそれぞれの実の床の高さでセルになる（`floorPiecesOf`）。
         // 列全体の最大値で持ち上げると、踊り場の上のアキの下端が階段の段の高さへずれ、左端も踊り場の始まりでなく列境界になる。
-        for (const { xa: px0, xb: px1, fz } of floorPiecesOf(emitCtx.gapFloorProfile, x0, x1)) {
+        for (const { xa: px0, xb: px1, fz } of floorPiecesOf(gapFloorProfile, x0, x1)) {
         const z0 = Math.max(b.z0, fz);
         if (b.z1 - z0 <= GAP_EPS) continue;
         // 直下に斜めの天端の帯（topEdge）があれば、アキの下辺は斜線（帯の上端 z0 は斜面の高い側）。
@@ -1783,7 +1877,14 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
       }
     }
   });
+  return cells;
+}
 
+/**
+ * 同じ列（＋x範囲）でzが接するセルを1つへ繋ぐ。
+ * @returns {object[]} merged
+ */
+function mergeGapCells(cells) {
   // **同じ列でzが接するセルは先に1つへ繋ぐ**（ユーザー実機指摘2026-09「「6」C: 1階X3〜
   // X3から1500、バツが踊り場で上下2つに分かれているが1つが正解」）——列のz区間は
   // `cut.baseFloorZ`のような**描画都合の断点**でも割られており（sectionProbe.jsのzSet。
@@ -1802,8 +1903,14 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
       }
     }
   }
+  return merged;
+}
 
-  // 連結成分（列インデックスが隣接し、z範囲が重なるセル同士を1つにまとめる）。
+/**
+ * 連結成分（列インデックスが隣接し、z範囲が重なるセル同士）にまとめる。
+ * @returns {object[][]} groups
+ */
+function groupGapCells(merged) {
   const groups = [];
   for (const cell of merged) {
     const touching = groups.filter(g => g.some(c =>
@@ -1816,7 +1923,15 @@ export function emitOpenGapMarks(columns, cut, emitCtx = {}) {
       groups.splice(groups.indexOf(other), 1);
     }
   }
+  return groups;
+}
 
+/**
+ * 連結成分ごとに、アキのバツ（対角線2本。実体・梁と交差する区間はクリップ）と「ア キ」の文字をprimsへ積む。
+ * 標記を置けない幅（minGapWidthMm 未満）の成分は省略する。
+ * @returns {object[]}
+ */
+function emitGapGroups(groups, { cut, columns, ceilZ, minGapWidthMm, beamRects }) {
   const prims = [];
   for (const g of groups) {
     const x0 = Math.min(...g.map(c => c.x0));
