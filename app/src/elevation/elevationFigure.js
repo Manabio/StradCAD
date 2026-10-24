@@ -27,7 +27,6 @@ import { collectRow1SplitPoints } from './elevationDimSplit.js';
 import {
   drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm, drawnFloorProfileZAt, drawnFloorDeltaAt,
 } from './elevationFloorProfile.js';
-import { solidPrimitivesForFace } from './elevationSolids.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
 import { formatMaterialLabel } from '../finish/materials/materialLabel.js';
 import {
@@ -557,10 +556,7 @@ function upperFloorEdgeSpanAt(end, floorProfile, upperFloorZ, overhang, xs, floo
  *   floorSegments省略時は床線1本のフラット区間（項目4。elevationFloorProfile.jsの
  *   wallAdjacentFloorSegmentsをbuildRoomBand/buildStairBandが計算して渡す。単体テスト等
  *   buildFaceFigureを直接呼ぶ場合は明示的に渡さない限りフラットになる）。
- *   solids（追加仕様2026-08。{upperGraph?, floorHeightMm?}）指定時のみ、2.5D立体の加算レイヤ
- *   （構造柱の柱型・梁型。elevationSolids.js）を重ねる。省略時（既定・階段帯・単体テスト）は
- *   出力完全不変——階段帯は自前の断面エンジン経路（elevationStairSequence.jsのcontentForCut）で
- *   既に構造梁を描くため、ここで重ねると二重描画になる。
+ *   （構造柱の柱型・梁型は断面エンジンの帯が描く。ctx.solids は buildFaceFigure では読まない——U1b B4）
  *   floorSpanX（WP-E7・defer D2）省略時は現行のdrawnX0/drawnXRun（壁のない端部延長込み）を
  *   そのまま使う（通常部屋帯・吹抜け帯は無指定のため出力が完全一致＝WP-G0ゲートで担保）。
  *   指定時はdrawnX0/drawnXRunをMath.max/minでこの範囲へクランプする——階段の腰壁越しに
@@ -626,7 +622,7 @@ export function buildFaceFigure(face, ctx) {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
     wallLessEndExtendModelMm, scale, lineWeightsPx, ceilingProfile, ceilingProfileGaps, skipBaseboard, skipWallLabel, floorSpanX,
-    solids, extraCenterLineXs, skipFaceLabel, faceLabelBoundary, floorProfile,
+    extraCenterLineXs, skipFaceLabel, faceLabelBoundary, floorProfile,
     upperOverhang, upperFloorZ, upperFloorEnds, upperFloorCutEnds, lowerOverhang,
   } = ctx;
   const run = face.run;
@@ -1495,14 +1491,8 @@ export function buildFaceFigure(face, ctx) {
     }
   }
 
-  // 追加仕様2026-08「2.5D仕様の展開ロジックを全ての展開図に適用」: 2.5D立体の加算レイヤ
-  // （構造柱の柱型・梁型。elevationSolids.js）。ctx.solids未指定（既定＝階段帯・単体テスト・
-  // ゴールデンゲート）は空配列のため出力は完全に不変。注記帯より前に積むのは、注記帯の
-  // 一点鎖線・寸法・丸番号を構造材の線で隠さないため（Konvaは配列の後ろほど手前）。
-  if (solids) {
-    // memberCutsByBand: 梁の断面・along は帯（断面エンジンの memberCut。U1b B3-1）が描く（帯が持たない部材は帯の側が足す）
-    for (const p of solidPrimitivesForFace(face, { graph, ceilingHeight: CH, room, ...solids, memberCutsByBand: true })) prims.push(p);
-  }
+  // 構造柱の柱型・梁型は断面エンジンの帯（memberCut・memberFace）が描く（U1b B3）。帯が持たない部材だけ帯の側
+  // （elevationBand.js appendBandCutContent）が droppedMemberPrimitivesForFace で足す＝ここでは何も積まない（U1b B4）。
 
   // 壁芯間寸法（面の両端＝壁中心線。ROW1）。項目2・6: 寸法線足(dim.foot)は廃止し、代わりに
   // 壁中心線自体（一点鎖線）を寸法線の位置まで下ろし、交点に塗り丸(dim.dot)を置く。

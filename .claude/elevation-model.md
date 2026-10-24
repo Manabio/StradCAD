@@ -1554,8 +1554,9 @@ hだけ上へそのまま平行移動した連続ポリラインとして描く�
 鉄骨の踏面等）では、遮蔽チャネル側での分岐が別途要る（未対応。実機「6」はbaseFloorZ=踊り場高さと
 占有形状の下端が一致する構成のため顕在化していない）。
 
-**部屋帯では、手前の梁がアキを塞ぐ**（ユーザー裁定2026-10-23 S4）。面に加算される梁（`elevationSolids.js`の`beamBlockerRectsForFace`＝
-`solidPrimitivesForFace`と同じ`visibleBeamPieces`の可視区間を読むだけ）の矩形を、`appendBandCutContent`の`gapBeamRectsOf`→
+**部屋帯では、手前の梁がアキを塞ぐ**（ユーザー裁定2026-10-23 S4）。**帯が持つ梁（断面・along＝memberCut の obstructionRects、空中・面の通り＝memberFace の
+gapPass）は帯がアキを割る**（U1b B3）。`elevationSolids.js`の`beamBlockerRectsForFace`は**帯が持たない部材（dropped。加算で描くもの）の矩形だけ**
+（`droppedMemberPrimitivesForFace`と同じ`visibleBeamPieces`の可視区間を読むだけ。dropped が無ければ空配列。U1b B4）を、`appendBandCutContent`の`gapBeamRectsOf`→
 `emitCtx.gapBeamRects`で`emitOpenGapMarks`へ渡す。面の平面上・空中の梁（`split:true`）はアキのセルから抜く（梁の上下で別の連結成分＝バツが2つ。
 天端が天井に接すれば下の1つだけ）。断面（`split:false`）はセルを割らず、バツの線から切り抜くだけ。渡すのは`buildRoomBand`（solids指定時）だけで、
 階段帯・吹抜け帯は不変（探査・梁の判定は触らない）。

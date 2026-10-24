@@ -217,22 +217,24 @@ function faceBeamsAndColumns(cut) {
 }
 
 /**
- * 面に加算される梁（`solidPrimitivesForFace` と同じ梁・同じ可視区間 `visibleBeamPieces`）の矩形（面ローカルx×絶対z）。
+ * 面に加算される梁のうち**帯が持たない部材（droppedKeys）**（`droppedMemberPrimitivesForFace` と同じ可視区間 `visibleBeamPieces`）の矩形（面ローカルx×絶対z）。
  * アキのバツが梁で分かれるように、部屋帯がアキの手前を塞ぐものとして渡す（section/sectionEmit.js の emitOpenGapMarks の `gapBeamRects`）。
+ * droppedKeys が無い・空なら空配列（帯の部材は帯が担う）。
  * split … 面の平面上（parallel）・空中（airborne）の梁＝アキのセルから抜く／false（断面）＝バツの線を切り抜くだけ。
  * 判定は新しく行わず、可視区間を読むだけ。解決できない面・梁が無い面は空配列。
  * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number, split:boolean}>}
  */
 export function beamBlockerRectsForFace(face, opts, droppedKeys = null) {
+  // 帯が持つ梁（断面・along は memberCut の obstructionRects、空中・面の通りは memberFace の gapPass）は帯が担う（U1b B4）。
+  // ここは帯が持たない部材（droppedKeys。加算で描くもの）の矩形だけ
+  if (!droppedKeys || droppedKeys.size === 0) return [];
   const parts = faceParts(face, opts);
   if (!parts) return [];
   const { beams, columnSolids, beamCut } = parts;
   if (beams.length === 0) return [];
   const rects = [];
-  // droppedKeys 指定時: 断面・along の矩形は帯（memberCut）が obstructionRects で担う。ここは空中・面の通りの梁と、帯が持たない部材
-  // （droppedKeys）だけ。未指定は従来どおり全部
   for (const p of visibleBeamPieces(beams, beamCut, undefined, null,
-    { columnSolids, fromRoomSide: true, ...(droppedKeys ? { memberCuts: { dropped: droppedKeys } } : {}) })) {
+    { columnSolids, fromRoomSide: true, memberCuts: { dropped: droppedKeys, only: true } })) {
     const xLo = Math.max(p.xLo, 0), xHi = Math.min(p.xHi, face.run);
     if (xHi - xLo <= GAP_EPS) continue;
     rects.push({ xLo, xHi, zLo: p.zLo, zHi: p.zHi, split: p.kind !== 'section' });

@@ -833,6 +833,54 @@ test('【B3-1】droppedMemberPrimitivesForFace: dropped のキーの梁の断面
   assert.equal(droppedMemberPrimitivesForFace({ axisCL: null }, opts, new Set([memberKey(beam)])).length, 0, '解決できない面は空');
 });
 
+test('【B4】beamBlockerRectsForFace: 帯が持たない部材（droppedKeys）の矩形だけ。keys 無し・空・別キーは空配列（帯の部材は帯が担う）', () => {
+  const { graph, faceA, room, solids } = makeBeamBandCase();
+  const opts = { graph, ceilingHeight: CH, room, ...solids };
+  const cut = faceSectionCut(faceA, opts);
+  const [beam] = structuralContribution(cut.layers);
+  assert.deepEqual(beamBlockerRectsForFace(faceA, opts), [], 'keys 無しは空');
+  assert.deepEqual(beamBlockerRectsForFace(faceA, opts, new Set()), [], '空集合は空');
+  assert.deepEqual(beamBlockerRectsForFace(faceA, opts, new Set(['v|0|0|0|0|0|0'])), [], '別の梁のキーは空');
+  const rects = beamBlockerRectsForFace(faceA, opts, new Set([memberKey(beam)]));
+  assert.equal(rects.length, 1, 'dropped の梁の矩形は 1 つ');
+  assert.equal(rects[0].split, false, '断面は split しない（バツの線を切り抜くだけ）');
+  // 面を貫く別の梁（帯が持つ memberCut。dropped でない）を足しても矩形は増えない（帯の obstructionRects が担う）
+  const A = (type, value) => solids.upperGraph.addCenterLine(type, value, { labeled: false, discipline: Discipline.ARCH });
+  solids.upperGraph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H600x200', A(CenterLineType.VERTICAL, 1000), true,
+    A(CenterLineType.HORIZONTAL, 0), A(CenterLineType.HORIZONTAL, 3000), { role: 'primary', levelOffset: -400 });
+  const o2 = { graph, ceilingHeight: CH, room, ...solids, memberLayers: undefined };
+  const faceA2 = { ...faceA }; // 面の同一性で部品を覚えるので別の面にして作り直す
+  assert.equal(solidPrimitivesForFace(faceA2, o2).filter(p => p.weight === 'thick').length, 24, '前提: 別の梁の断面も面に出ている（2 本ぶん）');
+  assert.equal(beamBlockerRectsForFace(faceA2, o2, new Set([memberKey(beam)])).length, 1, '帯が持つ別の梁は矩形に入らない（dropped だけ）');
+});
+
+test('【B4】beamBlockerRectsForFace: 帯が持つ面に平行な梁（空中・面の通り。dropped でない）は矩形に入らない。dropped の梁 A だけ返す（only:true の検出力）', () => {
+  // 面の軸を y=-150（inward:-1。視線は +y 向き）に置いた合成の面と、素の梁（plain object）の層で組む。
+  // 空中の梁 B: 軸 y=80・幅 100（帯 30..130）＝切断線（y=-150）の視線側で面の軸の帯の外。面の通りの梁 B: 軸 y=-150（面の軸が帯の中）。
+  // dropped の梁 A: 面を貫く梁（x=2000）。部屋は makeBeamBandCase の部屋（梁は部屋の中）
+  const plain = (over) => ({ role: 'primary', isVertical: false, axisValue: 80, coord1: 300, coord2: 1500,
+    sectionWidth: 100, sectionDefId: 'NO-SUCH', beamDepth: 600, levelOffset: -400, ...over });
+  for (const [label, axisY] of [['空中', 80], ['面の通り', -150]]) {
+    const { graph, faceA, room } = makeBeamBandCase();
+    const face = { ...faceA, axisCL: { effectiveValue: -150 }, inward: -1 };
+    const memberLayers = [{ graph, floorZMm: 0, role: 'self' },
+      { graph: { walls: [], beams: [plain({ isVertical: true, axisValue: 2000, coord1: -500, coord2: 3000 }), plain({ axisValue: axisY })] }, floorZMm: 2900, role: 'above' }];
+    const opts = { graph, ceilingHeight: CH, room, memberLayers };
+    const beams = structuralContribution(faceSectionCut(face, opts).layers);
+    const dropped = beams.find(b => b.isVertical); // A
+    const parallel = beams.find(b => !b.isVertical); // B
+    assert.ok(dropped && parallel, `前提(${label}): 梁が 2 本`);
+    // 前提: B は加算の経路（`only` 無し）では見え掛かりとして出る＝only:true が無ければ矩形（split:true）になる
+    const lines = solidPrimitivesForFace(face, opts).filter(p => p.weight !== 'thick');
+    assert.ok(lines.length > 0, `前提(${label}): B の見え掛かりの線が出る（${JSON.stringify(lines.length)}）`);
+    const rects = beamBlockerRectsForFace(face, opts, new Set([memberKey(dropped)]));
+    assert.equal(rects.length, 1, `(${label}) dropped の梁 A の矩形だけ（B を含まない）`);
+    assert.equal(rects[0].split, false, `(${label}) A は断面＝split しない`);
+    assert.equal(beamBlockerRectsForFace(face, opts, new Set([memberKey(parallel)])).every(r => r.split === true) && beamBlockerRectsForFace(face, opts, new Set([memberKey(parallel)])).length >= 1, true,
+      `(${label}) 対照: B 自身を dropped にすれば B の矩形（split:true）が返る`);
+  }
+});
+
 test('【B3-1】memberLayersOf: 自階＋判っていれば上階（梁は立つ階の graph に帰属）。上階が無ければ自階だけ', () => {
   const { graph, upper } = makeBeamBandCase();
   assert.deepEqual(memberLayersOf(graph, { upperGraph: upper, floorHeightMm: 2900 }).map(l => [l.role, l.floorZMm]), [['self', 0], ['above', 2900]]);

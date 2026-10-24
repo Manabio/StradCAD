@@ -61,7 +61,8 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  * @typedef {object} BandInjections 帯固有の注入
  * @property {object|null} [stairCut] 階段帯の階段寄与
  * @property {number[]} [chDimSplitAbsYs] 左CH寸法を分割する絶対y
- * @property {object[]|null|((pcut:object)=>object[])} [gapBeamRects] アキの手前に見える梁の矩形（部屋帯）。関数は列の分割の後に
+ * @property {object[]|null|((pcut:object)=>object[])} [gapBeamRects] アキの手前に見える梁の矩形（部屋帯）。**帯が持たない部材（dropped）だけ**
+ *   （帯が持つ梁は memberCut の obstructionRects・memberFace の gapPass が担う。U1b B4）。関数は列の分割の後に
  *   切断（pcut）を受けて返す（帯が持たない部材の判定が列の分割の後に決まるため。U1b B3-1）
  * @property {Array<[number,number]>|null} [gapFloorProfile] アキのセルの下限にする断面線（階段帯）
  * @property {Array<{lo:number,hi:number}>} [floorlessRanges] 床の無い列（下階の階段の吹抜け。階段帯。`buildCutContent` 専用。梁の断面の輪郭を
