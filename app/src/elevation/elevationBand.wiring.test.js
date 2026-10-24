@@ -34,11 +34,17 @@ test('【配線】stairContributionOverRoom は部屋の実セル（cellBoundsLi
 });
 
 test('【配線】appendBandCutContent: flightsOverRoom 2 箇所と stringerSightlineVisible 1 箇所が bandRoomCells を渡す', () => {
-  const body = functionBody(noComments, 'export function appendBandCutContent(');
-  assert.ok(body.includes('const bandRoomCells = cellBoundsList(room.cells, graph)'), 'bandRoomCells の定義が無い');
-  assert.equal(count(body, 'flightsOverRoom(opts.stairOver, bandRoomCells)'), 2, 'flightsOverRoom(…, bandRoomCells) が 2 回でない');
-  assert.equal(count(body, 'stringerSightlineVisible(face, graph, opts.stairOver, bandRoomCells)'), 1, 'stringerSightlineVisible(…, bandRoomCells) が 1 回でない');
-  assert.equal(count(body, 'flightsOverRoom(opts.stairOver, bandRoomBounds'), 0, 'flightsOverRoom に bandRoomBounds を渡している');
+  // S6（巨大関数の分割）: 階段下の部屋の描画は appendBandCutContent から部品 appendStairOverContent へ移った。
+  // appendBandCutContent は bandRoomCells を定義して部品へ渡し、部品が flightsOverRoom／stringerSightlineVisible に渡す。
+  const outer = functionBody(noComments, 'export function appendBandCutContent(');
+  assert.ok(outer.includes('const bandRoomCells = cellBoundsList(room.cells, graph)'), 'bandRoomCells の定義が無い');
+  assert.equal(count(outer, 'appendStairOverContent('), 1, 'appendStairOverContent の呼び出しが 1 回でない');
+  assert.ok(/appendStairOverContent\([^)]*bandRoomCells/.test(outer), 'appendStairOverContent に bandRoomCells を渡していない');
+  assert.equal(count(outer, 'flightsOverRoom('), 0, 'appendBandCutContent に flightsOverRoom の呼び出しが残っている');
+  const body = functionBody(noComments, 'function appendStairOverContent(');
+  assert.equal(count(body, 'flightsOverRoom(stairOver, bandRoomCells)'), 2, 'flightsOverRoom(…, bandRoomCells) が 2 回でない');
+  assert.equal(count(body, 'stringerSightlineVisible(face, graph, stairOver, bandRoomCells)'), 1, 'stringerSightlineVisible(…, bandRoomCells) が 1 回でない');
+  assert.equal(count(body, 'flightsOverRoom(stairOver, bandRoomBounds'), 0, 'flightsOverRoom に bandRoomBounds を渡している');
   assert.equal(count(body, 'flightsOverRoom('), 2, 'flightsOverRoom の呼び出しが 2 回でない');
   assert.equal(count(body, 'stringerSightlineVisible('), 1, 'stringerSightlineVisible の呼び出しが 1 回でない');
   assert.ok(!/stringerSightlineVisible\([^)]*bandRoomBounds/.test(body), 'stringerSightlineVisible に bandRoomBounds を渡している');
@@ -65,7 +71,8 @@ test('【配線】buildStraightFaceSequence（直進系の階段帯）: content 
 });
 
 test('【配線】appendBandCutContent: 階段下の部屋の stairPrimitivesForCut は farSide:false を渡す（下から見ると段裏。切断面の奥の段の見えがかりは出さない）', () => {
-  const body = functionBody(noComments, 'export function appendBandCutContent(');
+  // S6: 階段下の部屋の描画は部品 appendStairOverContent にある
+  const body = functionBody(noComments, 'function appendStairOverContent(');
   assert.equal(count(body, 'stairPrimitivesForCut('), 1, 'stairPrimitivesForCut の呼び出しが 1 回でない');
   assert.equal(count(body, 'farSide: false'), 1, 'farSide: false が無い');
 });

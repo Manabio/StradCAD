@@ -114,28 +114,12 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
   // 延長・CH寸法オフセットを**使わず世界x整合**で置く（面のあいだに返し壁ぶんの隙間を作らない。
   // 展開図は正投影なので返し壁は見付けの線1本になり、幅を持たない）。面ラベルはパネルで1つ
   // ——先頭メンバーがパネル全幅の中心に描き、2枚目以降はskipFaceLabelで描かない。
-  const boundaries = faces.map(f => faceBoundaryLocalX(f, graph));
-  const inPanelWithPrev = faces.map((f, i) =>
-    i > 0 && f.panelId != null && faces[i - 1].panelId === f.panelId);
-  // 先頭メンバーのindex → パネル全幅の境界（先頭メンバーのローカルx系。2枚以上のときだけ）。
-  const panelLabelBoundary = new Map();
-  faces.forEach((f, i) => {
-    if (inPanelWithPrev[i]) return;
-    let hi = boundaries[i].hi, offset = 0;
-    for (let j = i + 1; j < faces.length && inPanelWithPrev[j]; j++) {
-      offset += (faces[j].originWorld - faces[j - 1].originWorld) * faces[j].dirSign;
-      hi = Math.max(hi, offset + boundaries[j].hi);
-    }
-    if (hi > boundaries[i].hi) panelLabelBoundary.set(i, { lo: boundaries[i].lo, hi });
-  });
+  const { boundaries, inPanelWithPrev, panelLabelBoundary } = panelLayoutOf(faces, graph);
+  // 寸法線の足の終点: CLからdimFootGapMmだけ寸法線側へ離した位置（CLには触れない）。
+  const footBefore = (clX, sign) => dimFootBefore(clX, sign, dimFootGapMm);
   faces.forEach((face, i) => {
     const boundary = boundaries[i];
     const prevXCursor = xCursor; // 直前の面の配置x（パネル内の世界x整合の起点）
-    // 寸法線の足の終点: CLからdimFootGapMmだけ寸法線側へ離した位置（CLには触れない）。
-    // 寸法線(at)を越えない範囲にクランプする（極端な小縮尺で足が反転しないように）。
-    const footBefore = (clX, sign) => (sign < 0
-      ? Math.max(clX - dimFootGapMm, clX - CH_DIM_OFFSET_MM)
-      : Math.min(clX + dimFootGapMm, clX + CH_DIM_OFFSET_MM));
     // QA G2: この面自身のhasWallAtLocal0（壁のない左端。項目1）が false なら、床線・天井線が
     // 図の外側（boundary.loよりさらに左）へwallLessEndExtendModelMmぶん延長される（buildFaceFigure
     // 側と同じ延長量。elevationFaces.jsのfaceWallLessExtents）。隣の面（prevRightExtent側）との
@@ -216,61 +200,15 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     const facePrims = buildFaceFigure(face, faceCtx);
     for (const p of facePrims) primitives.push(translatePrimitive(p, xCursor, 0));
     if (chDimChains) {
-      // 渡された鎖をそのまま左右へ描く（様式は既存のCH寸法と同じ: 縦書き値・足0・端部塗り丸）。
-      const emit = (chain, atX, footX) => {
-        for (const [lo, hi] of chain ?? []) {
-          primitives.push(translatePrimitive(dim('v', atX, -hi, lo ? -lo : 0, {
-            foot: footX, dot: true,
-            label: Math.round(hi - lo),
-          }), xCursor, 0));
-        }
-      };
-      // 足はその寸法自身の側のCLの手前で止める（＝反対側のCLまで伸ばさない）。
-      emit(chDimChains.left,  boundary.lo - CH_DIM_OFFSET_MM, footBefore(boundary.lo, -1));
-      emit(chDimChains.right, boundary.hi + CH_DIM_OFFSET_MM, footBefore(boundary.hi, +1));
+      appendChDimChains(primitives, chDimChains, { xCursor, boundary, footBefore });
       if (i === 0) chDimX = boundary.lo - CH_DIM_OFFSET_MM; // 部屋名枠の左アンカー起点は従来どおり
     } else if (i === 0) {
       chDimX = boundary.lo - CH_DIM_OFFSET_MM;
-      // 問題修正2026-08(QA F1): 左CH寸法も右CH寸法（buildFaceFigure側）と同じく「左端区間の
-      // 実際の床〜天井」に追従させる——帯CH固定のままだと、先頭面の左端区間に明示CHの部分指定が
-      // あるとき天井線に届かない線＋食い違う値になる。左端区間が帯自身（親と同じ床・天井）の
-      // ときは従来どおりchInfo.raw（傾斜天井のレンジ表記等の原文ラベル）を保つ。
-      const leftSeg = floorSegments?.[0];
-      const leftDelta = leftSeg?.floorDeltaMm ?? 0;
-      const leftCeilAbs = leftSeg?.chMm != null ? leftDelta + leftSeg.chMm : CH;
-      const isBandOwn = leftDelta === 0 && leftCeilAbs === CH;
-      const leftFloorY = leftDelta ? -leftDelta : 0;
-      // ユーザー明示指示（階段帯・2FLで寸法線を分ける）: faceOverrideがchDimSplitAbsYs
-      // （分割する絶対高さの配列。床基準・正=床上。例: 階段帯seq1のfloorHeight=2FL）を返せば、
-      // [床, ...分割点, 天井]の隣接ペアごとに複数本のdimへ分割する。未指定時は現行の1本のまま
-      // （既存挙動完全不変。この節はfaceOverride側が明示的に配列を返した場合にのみ発動する）。
-      const splitAbsYs = faceOverride?.chDimSplitAbsYs;
-      if (Array.isArray(splitAbsYs) && splitAbsYs.length > 0) {
-        const marks = [leftDelta, ...splitAbsYs, leftCeilAbs].sort((a, b) => a - b);
-        for (let k = 0; k + 1 < marks.length; k++) {
-          const lo = marks[k], hi = marks[k + 1];
-          if (hi - lo <= 0) continue; // 分割点が床・天井と同値等、退化した区間は描かない
-          primitives.push(dim('v', chDimX, -hi, lo ? -lo : 0, {
-            foot: footBefore(boundary.lo, -1), dot: true,
-            label: Math.round(hi - lo),
-          }));
-        }
-      } else {
-        primitives.push(dim('v', chDimX, -leftCeilAbs, leftFloorY, {
-          foot: footBefore(boundary.lo, -1), dot: true,
-          label: isBandOwn ? chInfo.raw : Math.round(leftCeilAbs - leftDelta),
-        }));
-      }
+      appendFirstFaceLeftChDim(primitives, {
+        chDimX, boundary, floorSegments, CH, chInfo, splitAbsYs: faceOverride?.chDimSplitAbsYs, footBefore,
+      });
     } else if (hasLeftChDim) {
-      // 問題修正2026-08その4改（ユーザー明示指示）: 床の起点高さが直前の面から変わった面の
-      // 左側にCH寸法（この面の左端区間の実際の床〜天井・値=実効CH）。様式は先頭面の左CH寸法・
-      // 右CH寸法と同じ（縦書き値・端部塗り丸）。
-      const leftFloorY = leftProfile.floorDeltaMm ? -leftProfile.floorDeltaMm : 0;
-      primitives.push(translatePrimitive(dim('v', boundary.lo - CH_DIM_OFFSET_MM,
-        -leftProfile.ceilAbsMm, leftFloorY, {
-          foot: footBefore(boundary.lo, -1), dot: true,
-          label: Math.round(leftProfile.ceilAbsMm - leftProfile.floorDeltaMm),
-        }), xCursor, 0));
+      appendSeamLeftChDim(primitives, { leftProfile, boundary, xCursor, footBefore });
     }
     // 断面エンジン（buildCutContent）へ渡す天井の区間情報は、**天井断面線を実際に引いている値**
     // そのもの＝ここで確定したfloorSegmentsから作る（「断面の中は描画しない」の単一情報源）。
@@ -296,6 +234,110 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
   });
 
   return { primitives, faceRuns, chDimX, prevBoundaryHi, CH, chInfo };
+}
+
+/**
+ * パネル統合（規則B）の面配置情報。
+ * boundaries … 各面の壁中心線区間（ローカルx）。inPanelWithPrev … 直前の面と同じpanelIdか。
+ * panelLabelBoundary … 先頭メンバーのindex → パネル全幅の境界（先頭メンバーのローカルx系。2枚以上のときだけ）。
+ * @returns {{boundaries:Array<{lo:number,hi:number}>, inPanelWithPrev:boolean[], panelLabelBoundary:Map<number,{lo:number,hi:number}>}}
+ */
+function panelLayoutOf(faces, graph) {
+  const boundaries = faces.map(f => faceBoundaryLocalX(f, graph));
+  const inPanelWithPrev = faces.map((f, i) =>
+    i > 0 && f.panelId != null && faces[i - 1].panelId === f.panelId);
+  // 先頭メンバーのindex → パネル全幅の境界（先頭メンバーのローカルx系。2枚以上のときだけ）。
+  const panelLabelBoundary = new Map();
+  faces.forEach((f, i) => {
+    if (inPanelWithPrev[i]) return;
+    let hi = boundaries[i].hi, offset = 0;
+    for (let j = i + 1; j < faces.length && inPanelWithPrev[j]; j++) {
+      offset += (faces[j].originWorld - faces[j - 1].originWorld) * faces[j].dirSign;
+      hi = Math.max(hi, offset + boundaries[j].hi);
+    }
+    if (hi > boundaries[i].hi) panelLabelBoundary.set(i, { lo: boundaries[i].lo, hi });
+  });
+  return { boundaries, inPanelWithPrev, panelLabelBoundary };
+}
+
+/**
+ * 寸法線の足の終点: CLからdimFootGapMmだけ寸法線側へ離した位置（CLには触れない）。
+ * 寸法線(at)を越えない範囲にクランプする（極端な小縮尺で足が反転しないように）。
+ */
+function dimFootBefore(clX, sign, dimFootGapMm) {
+  return sign < 0
+    ? Math.max(clX - dimFootGapMm, clX - CH_DIM_OFFSET_MM)
+    : Math.min(clX + dimFootGapMm, clX + CH_DIM_OFFSET_MM);
+}
+
+/**
+ * faceOverride が渡したCH寸法の鎖（chDimChains）をそのまま左右へ描く（様式は既存のCH寸法と同じ: 縦書き値・足0・端部塗り丸）。
+ */
+function appendChDimChains(primitives, chDimChains, { xCursor, boundary, footBefore }) {
+  const emit = (chain, atX, footX) => {
+    for (const [lo, hi] of chain ?? []) {
+      primitives.push(translatePrimitive(dim('v', atX, -hi, lo ? -lo : 0, {
+        foot: footX, dot: true,
+        label: Math.round(hi - lo),
+      }), xCursor, 0));
+    }
+  };
+  // 足はその寸法自身の側のCLの手前で止める（＝反対側のCLまで伸ばさない）。
+  emit(chDimChains.left,  boundary.lo - CH_DIM_OFFSET_MM, footBefore(boundary.lo, -1));
+  emit(chDimChains.right, boundary.hi + CH_DIM_OFFSET_MM, footBefore(boundary.hi, +1));
+}
+
+/**
+ * 帯の先頭面の左CH寸法（chDimX の位置。splitAbsYs 指定時は [床, ...分割点, 天井] の隣接ペアごとに複数本）。
+ */
+function appendFirstFaceLeftChDim(primitives, {
+  chDimX, boundary, floorSegments, CH, chInfo, splitAbsYs, footBefore,
+}) {
+  // 問題修正2026-08(QA F1): 左CH寸法も右CH寸法（buildFaceFigure側）と同じく「左端区間の
+  // 実際の床〜天井」に追従させる——帯CH固定のままだと、先頭面の左端区間に明示CHの部分指定が
+  // あるとき天井線に届かない線＋食い違う値になる。左端区間が帯自身（親と同じ床・天井）の
+  // ときは従来どおりchInfo.raw（傾斜天井のレンジ表記等の原文ラベル）を保つ。
+  const leftSeg = floorSegments?.[0];
+  const leftDelta = leftSeg?.floorDeltaMm ?? 0;
+  const leftCeilAbs = leftSeg?.chMm != null ? leftDelta + leftSeg.chMm : CH;
+  const isBandOwn = leftDelta === 0 && leftCeilAbs === CH;
+  const leftFloorY = leftDelta ? -leftDelta : 0;
+  // ユーザー明示指示（階段帯・2FLで寸法線を分ける）: faceOverrideがchDimSplitAbsYs
+  // （分割する絶対高さの配列。床基準・正=床上。例: 階段帯seq1のfloorHeight=2FL）を返せば、
+  // [床, ...分割点, 天井]の隣接ペアごとに複数本のdimへ分割する。未指定時は現行の1本のまま
+  // （既存挙動完全不変。この節はfaceOverride側が明示的に配列を返した場合にのみ発動する）。
+  if (Array.isArray(splitAbsYs) && splitAbsYs.length > 0) {
+    const marks = [leftDelta, ...splitAbsYs, leftCeilAbs].sort((a, b) => a - b);
+    for (let k = 0; k + 1 < marks.length; k++) {
+      const lo = marks[k], hi = marks[k + 1];
+      if (hi - lo <= 0) continue; // 分割点が床・天井と同値等、退化した区間は描かない
+      primitives.push(dim('v', chDimX, -hi, lo ? -lo : 0, {
+        foot: footBefore(boundary.lo, -1), dot: true,
+        label: Math.round(hi - lo),
+      }));
+    }
+  } else {
+    primitives.push(dim('v', chDimX, -leftCeilAbs, leftFloorY, {
+      foot: footBefore(boundary.lo, -1), dot: true,
+      label: isBandOwn ? chInfo.raw : Math.round(leftCeilAbs - leftDelta),
+    }));
+  }
+}
+
+/**
+ * 床の起点高さが直前の面から変わった面の左側のCH寸法（この面の左端区間の実際の床〜天井・値=実効CH）。
+ * 様式は先頭面の左CH寸法・右CH寸法と同じ（縦書き値・端部塗り丸）。
+ */
+function appendSeamLeftChDim(primitives, { leftProfile, boundary, xCursor, footBefore }) {
+  // 問題修正2026-08その4改（ユーザー明示指示）: 床の起点高さが直前の面から変わった面の
+  // 左側にCH寸法（この面の左端区間の実際の床〜天井・値=実効CH）。様式は先頭面の左CH寸法・
+  // 右CH寸法と同じ（縦書き値・端部塗り丸）。
+  const leftFloorY = leftProfile.floorDeltaMm ? -leftProfile.floorDeltaMm : 0;
+  primitives.push(translatePrimitive(dim('v', boundary.lo - CH_DIM_OFFSET_MM,
+    -leftProfile.ceilAbsMm, leftFloorY, {
+      foot: footBefore(boundary.lo, -1), dot: true,
+      label: Math.round(leftProfile.ceilAbsMm - leftProfile.floorDeltaMm),
+    }), xCursor, 0));
 }
 
 /**
@@ -815,92 +857,103 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
     // 階段下の部屋: 上を通る階段の断面・見えがかりを重ねる（階段帯とまったく同じ部品）。
     // 梯子（正面視の踏面）は出さない——下から見上げる面には踏面の正面は見えない。
     if (opts.stairOver) {
-      // この面の区間にかかる flight が（1 段目の張り出し程度の重なりを除いて）1 本も無ければ、階段はこの面に現れない
-      if (!stairOverReachesFace(opts.stairOver, pcut.line)) return;
-      const ceilAbs = layout.CH;
-      // **階段の作図は面のはり出しに乗せない**（階段は`cutDrawRange`で止める規約。
-      // .claude/elevation-model.md「面の端も層ごとに違う」）——はり出しは他の層の平面が
-      // 続いている量で、その先に自階の上を通る階段が続いているとは限らない。
-      const stairDrawnX = faceDrawnXRange(face, endExtendMm);
-      const crossFlight = flightsOverRoom(opts.stairOver, bandRoomCells)
-        .find(f => f.isVertical !== face.isVertical);
-      // **面を横切るレーンでは、仮想断面の位置で階段が天井より上なら階段を一切描かない**
-      // （ユーザー明示指示2026-09「「13」C: CH2400の天井平場で切断なので、階段梯子は見えない
-      // はず」）——梯子（flightLadderPrimitives）はレーンの**全段を絶対高さで**描く規約で、
-      // 切断線の位置に依らない。天井より上を落とすクリップ（clipStairUnderCeiling）は
-      // プリミティブ単位のz比較なので、踏面が天井より低ければ残ってしまい、実機「13」Cでは
-      // 仮想断面の位置の階段（段鼻2938・ささら下端2698）が天井2400の上にあるのに、
-      // 踏面（1636〜2318）が見えていた。判定は**仮想断面の位置の段鼻**で行う——天井を止める
-      // 基準（「CHの線が階段断面とぶつかるところ」）と同じ「階段断面＝段鼻」基準に揃える。
-      const stairHiddenByCeil = crossFlight
-        && stairZAtRun(crossFlight, pcut.line.axisValue) >= ceilAbs - BAND_GAP_EPS;
-      // 梯子（踏面の見えがかり。DETAIL＝細線）は描く（ユーザー明示指示2026-09「「13」A:
-      // 階段見えがかりの梯子（細線）を描く」）。
-      const raw = stairHiddenByCeil ? [] : stairPrimitivesForCut(opts.stairOver, pcut, columns, {
-        includeStringerSightline: stringerSightlineVisible(face, graph, opts.stairOver, bandRoomCells),
-        stringerSightlineLowerOnly: true,
-        // 階段下の部屋では階段は上を通る見えがかり（ユーザー実機確認済みの「階段の高さ」の細線）。段板の断面は出さない。
-        treadSection: false,
-        // 階段の下からは段裏が見えるだけなので、切断面の奥の段の見えがかり（細線）は出さない。
-        farSide: false,
+      appendStairOverContent(primitives, {
+        stairOver: opts.stairOver, pcut, columns, face, xCursor, graph, endExtendMm, bandRoomCells, ceilAbs: layout.CH,
       });
-      // 天井が張られている範囲では、その上の階段は天井に隠れる（clipStairUnderCeiling）。
-      const { prims: shown, crossXs } = clipStairUnderCeiling(raw, ceilAbs);
-      for (const p of clipContentToFace(shown, stairDrawnX)) {
-        primitives.push(translatePrimitive(p, xCursor, 0));
-      }
-      if (crossFlight && !stairHiddenByCeil) {
-        // **天井高さは動かさない**（ユーザー明示指示2026-09「「13」A: 仮想断面の位置を確認して
-        // 天井高さをプローブ／2400が正解」）——仮想断面の位置でプローブした天井は部屋のCHで、
-        // 上を通る階段はその下に現わしで見えるだけ。**端の縦線（仮想断面）も最も高い位置まで**
-        // （同指示「天井に高低差が生じ、低い方を見る場合は、最も高い位置まで仮想断面を引く」）。
-        // 階段の高さ（踊り場の高さ）は**見えがかりなので細線**（同指示）。
-        const z = stairZAtRun(crossFlight, face.axisCL.effectiveValue);
-        if (z < ceilAbs - BAND_GAP_EPS) {
-          primitives.push(translatePrimitive(
-            line(stairDrawnX.lo, -z, stairDrawnX.hi, -z, ElevationLineRole.DETAIL), xCursor, 0));
-        }
-      }
-      // 面と**平行**なレーン（側面視）では、階段断面が面の端まで届いていれば、その端の縦線は
-      // 階段断面と出会ったところで終わる（同指示「「13」B: 左の壁断面：階段断面との取り合いまで」
-      // 「「13」D: 右の縦断面は、階段断面と出会ったところが終点」）。
-      // **面と平行なレーン（側面視）のときだけ**。面を横切るレーン（正面視。実機「13」A）では
-      // 端の縦線＝仮想断面は最も高い位置まで引く（上記）ので、ささらの断面の高さで下げない。
-      const alongFlight = flightsOverRoom(opts.stairOver, bandRoomCells)
-        .find(f => f.isVertical === face.isVertical);
-      const cutWeightStair = weightForRole(ElevationLineRole.CUT);
-      const stairPts = alongFlight
-        ? shown.filter(q => q.weight === cutWeightStair)
-          .flatMap(q => (q.type === 'polyline' ? q.points : [[q.x1, q.y1], [q.x2, q.y2]]))
-        : [];
-      for (const localX of [0, face.run]) {
-        const ys = stairPts.filter(([px]) => Math.abs(px - localX) < BAND_GAP_EPS).map(([, py]) => py);
-        if (ys.length > 0) lowerFaceEndVertical(primitives, xCursor, localX, ceilAbs, Math.max(...ys));
-      }
-      // 階段断面が天井とぶつかったなら、そこで天井断面線を止める（残すのは階段が無い側）。
-      // **階段がどちら側に残るかは重心で決める**——交点の直前・直後の点だけで見ると、段鼻の
-      // 出っ張り（数十mm）で向きが反転して判定を誤る。
-      // #8の重心判定を交点区間ごとの占有判定へ替える試みは、クリップ後のCUT点群が交点の両側に
-      // またがるため誤判定（13.stq 面B cross=1409.5/xs 0〜1427.5、面D cross=885.5/xs 867.5〜2295）。
-      // 区間ごとに`stairZAtRun`で判定し直す再設計が要る（`.claude/elevation-redesign.md`§5.12
-      // 6b-3）。
-      if (crossXs.length > 0) {
-        const cutWeight = weightForRole(ElevationLineRole.CUT);
-        const xs = shown.filter(q => q.weight === cutWeight)
-          .flatMap(q => (q.type === 'polyline' ? q.points : [[q.x1, q.y1], [q.x2, q.y2]]))
-          .filter(([, py]) => py > -ceilAbs + BAND_GAP_EPS) // 天井より下＝現わしの側
-          .map(([px]) => px);
-        if (xs.length > 0) {
-          const centroid = xs.reduce((a, b) => a + b, 0) / xs.length;
-          const stairOnLoSide = centroid < Math.min(...crossXs);
-          const boundary = xCursor + (stairOnLoSide ? Math.max(...crossXs) : Math.min(...crossXs));
-          trimCeilingLineAt(primitives, xCursor, face, ceilAbs, stairOnLoSide
-            ? { lo: boundary, hi: Infinity }
-            : { lo: -Infinity, hi: boundary });
-        }
-      }
     }
   });
+}
+
+/**
+ * 階段下の部屋の面: 上を通る階段の断面・見えがかり（階段帯とまったく同じ部品）を重ね、天井断面線を階段断面との
+ * 交点で止める。この面の区間にかかる flight が無ければ何も積まない。
+ */
+function appendStairOverContent(primitives, {
+  stairOver, pcut, columns, face, xCursor, graph, endExtendMm, bandRoomCells, ceilAbs,
+}) {
+  // この面の区間にかかる flight が（1 段目の張り出し程度の重なりを除いて）1 本も無ければ、階段はこの面に現れない
+  if (!stairOverReachesFace(stairOver, pcut.line)) return;
+  // **階段の作図は面のはり出しに乗せない**（階段は`cutDrawRange`で止める規約。
+  // .claude/elevation-model.md「面の端も層ごとに違う」）——はり出しは他の層の平面が
+  // 続いている量で、その先に自階の上を通る階段が続いているとは限らない。
+  const stairDrawnX = faceDrawnXRange(face, endExtendMm);
+  const crossFlight = flightsOverRoom(stairOver, bandRoomCells)
+    .find(f => f.isVertical !== face.isVertical);
+  // **面を横切るレーンでは、仮想断面の位置で階段が天井より上なら階段を一切描かない**
+  // （ユーザー明示指示2026-09「「13」C: CH2400の天井平場で切断なので、階段梯子は見えない
+  // はず」）——梯子（flightLadderPrimitives）はレーンの**全段を絶対高さで**描く規約で、
+  // 切断線の位置に依らない。天井より上を落とすクリップ（clipStairUnderCeiling）は
+  // プリミティブ単位のz比較なので、踏面が天井より低ければ残ってしまい、実機「13」Cでは
+  // 仮想断面の位置の階段（段鼻2938・ささら下端2698）が天井2400の上にあるのに、
+  // 踏面（1636〜2318）が見えていた。判定は**仮想断面の位置の段鼻**で行う——天井を止める
+  // 基準（「CHの線が階段断面とぶつかるところ」）と同じ「階段断面＝段鼻」基準に揃える。
+  const stairHiddenByCeil = crossFlight
+    && stairZAtRun(crossFlight, pcut.line.axisValue) >= ceilAbs - BAND_GAP_EPS;
+  // 梯子（踏面の見えがかり。DETAIL＝細線）は描く（ユーザー明示指示2026-09「「13」A:
+  // 階段見えがかりの梯子（細線）を描く」）。
+  const raw = stairHiddenByCeil ? [] : stairPrimitivesForCut(stairOver, pcut, columns, {
+    includeStringerSightline: stringerSightlineVisible(face, graph, stairOver, bandRoomCells),
+    stringerSightlineLowerOnly: true,
+    // 階段下の部屋では階段は上を通る見えがかり（ユーザー実機確認済みの「階段の高さ」の細線）。段板の断面は出さない。
+    treadSection: false,
+    // 階段の下からは段裏が見えるだけなので、切断面の奥の段の見えがかり（細線）は出さない。
+    farSide: false,
+  });
+  // 天井が張られている範囲では、その上の階段は天井に隠れる（clipStairUnderCeiling）。
+  const { prims: shown, crossXs } = clipStairUnderCeiling(raw, ceilAbs);
+  for (const p of clipContentToFace(shown, stairDrawnX)) {
+    primitives.push(translatePrimitive(p, xCursor, 0));
+  }
+  if (crossFlight && !stairHiddenByCeil) {
+    // **天井高さは動かさない**（ユーザー明示指示2026-09「「13」A: 仮想断面の位置を確認して
+    // 天井高さをプローブ／2400が正解」）——仮想断面の位置でプローブした天井は部屋のCHで、
+    // 上を通る階段はその下に現わしで見えるだけ。**端の縦線（仮想断面）も最も高い位置まで**
+    // （同指示「天井に高低差が生じ、低い方を見る場合は、最も高い位置まで仮想断面を引く」）。
+    // 階段の高さ（踊り場の高さ）は**見えがかりなので細線**（同指示）。
+    const z = stairZAtRun(crossFlight, face.axisCL.effectiveValue);
+    if (z < ceilAbs - BAND_GAP_EPS) {
+      primitives.push(translatePrimitive(
+        line(stairDrawnX.lo, -z, stairDrawnX.hi, -z, ElevationLineRole.DETAIL), xCursor, 0));
+    }
+  }
+  // 面と**平行**なレーン（側面視）では、階段断面が面の端まで届いていれば、その端の縦線は
+  // 階段断面と出会ったところで終わる（同指示「「13」B: 左の壁断面：階段断面との取り合いまで」
+  // 「「13」D: 右の縦断面は、階段断面と出会ったところが終点」）。
+  // **面と平行なレーン（側面視）のときだけ**。面を横切るレーン（正面視。実機「13」A）では
+  // 端の縦線＝仮想断面は最も高い位置まで引く（上記）ので、ささらの断面の高さで下げない。
+  const alongFlight = flightsOverRoom(stairOver, bandRoomCells)
+    .find(f => f.isVertical === face.isVertical);
+  const cutWeightStair = weightForRole(ElevationLineRole.CUT);
+  const stairPts = alongFlight
+    ? shown.filter(q => q.weight === cutWeightStair)
+      .flatMap(q => (q.type === 'polyline' ? q.points : [[q.x1, q.y1], [q.x2, q.y2]]))
+    : [];
+  for (const localX of [0, face.run]) {
+    const ys = stairPts.filter(([px]) => Math.abs(px - localX) < BAND_GAP_EPS).map(([, py]) => py);
+    if (ys.length > 0) lowerFaceEndVertical(primitives, xCursor, localX, ceilAbs, Math.max(...ys));
+  }
+  // 階段断面が天井とぶつかったなら、そこで天井断面線を止める（残すのは階段が無い側）。
+  // **階段がどちら側に残るかは重心で決める**——交点の直前・直後の点だけで見ると、段鼻の
+  // 出っ張り（数十mm）で向きが反転して判定を誤る。
+  // #8の重心判定を交点区間ごとの占有判定へ替える試みは、クリップ後のCUT点群が交点の両側に
+  // またがるため誤判定（13.stq 面B cross=1409.5/xs 0〜1427.5、面D cross=885.5/xs 867.5〜2295）。
+  // 区間ごとに`stairZAtRun`で判定し直す再設計が要る（`.claude/elevation-redesign.md`§5.12
+  // 6b-3）。
+  if (crossXs.length > 0) {
+    const cutWeight = weightForRole(ElevationLineRole.CUT);
+    const xs = shown.filter(q => q.weight === cutWeight)
+      .flatMap(q => (q.type === 'polyline' ? q.points : [[q.x1, q.y1], [q.x2, q.y2]]))
+      .filter(([, py]) => py > -ceilAbs + BAND_GAP_EPS) // 天井より下＝現わしの側
+      .map(([px]) => px);
+    if (xs.length > 0) {
+      const centroid = xs.reduce((a, b) => a + b, 0) / xs.length;
+      const stairOnLoSide = centroid < Math.min(...crossXs);
+      const boundary = xCursor + (stairOnLoSide ? Math.max(...crossXs) : Math.min(...crossXs));
+      trimCeilingLineAt(primitives, xCursor, face, ceilAbs, stairOnLoSide
+        ? { lo: boundary, hi: Infinity }
+        : { lo: -Infinity, hi: boundary });
+    }
+  }
 }
 
 /**
