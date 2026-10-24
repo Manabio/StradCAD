@@ -59,7 +59,7 @@ import { segmentInsideRect, line, polyline } from './elevationPrimitives.js';
 import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
 import { structuralContribution, structuralPrimitivesForCut, structuralColumnContribution, WHOLE_OUTLINE } from './section/sectionStructure.js';
-import { stairSectionIsClosed } from './elevationStairSection.js';
+import { stairSectionIsClosed } from './section/stairSectionProfile.js';
 import { worldToCell, roomBounds } from '../finish/gridCells.js';
 import { labelFaces, letterOf, upperFloorEndsOf, wallLessEndAt, wallContinuationBeyondFaceEnd } from './elevationFaces.js';
 import {

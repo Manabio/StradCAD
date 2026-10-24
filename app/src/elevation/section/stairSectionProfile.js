@@ -1,14 +1,14 @@
 /**
  * 階段の断面プロファイル部品（踏面のジグザグ点列・U字系の断面パラメータ・ささらの帯）。
  *
- * 断面エンジン（sectionStair.js・cuts/switchbackCuts.js）が引く部分を、帯ビルダー側の
- * elevationStairSection.js から切り出したもの（展開図リファクタ S1: section/ から親ディレクトリへ
- * 逆向きに import しないため）。elevationStairSection.js は本ファイルから re-export するので、
- * 既存の呼び出し側（elevationStairSequence.js・テスト）は変わらない。
+ * 断面エンジン（sectionStair.js・cuts/switchbackCuts.js）と帯ビルダー（elevationStair.js・
+ * elevationStairSequence.js）が共有する階段の断面の形の単一供給源（旧 elevationStairSection.js。
+ * S1 で section/ から親ディレクトリへ逆向きに import しないよう切り出し、S7 で残りも集約して
+ * elevationStairSection.js を無くした）。帯の組み立て（プリミティブ化）は持たない。
  * ローカル座標は elevationFigure.js と同じ（x=0起点、yは上向き負・床=0）。
- * 帯ビルダーと断面エンジンの交差そのものの整理は S7 の範囲。
  */
-import { resolveUTurnSpanLengths, measureStairSpans } from '../../finish/stair/stairClassify.js';
+import { StructuralMaterialType } from '@core';
+import { resolveUTurnSpanLengths, resolveSwitchbackSpanLengths, measureStairSpans } from '../../finish/stair/stairClassify.js';
 import { resolveStairPorts } from '../../finish/stair/stairPorts.js';
 import { ElevationLineRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { polyline } from '../elevationPrimitives.js';
@@ -117,6 +117,46 @@ export function resolveUTurnSectionParams(stair, graph, floorHeight) {
     if (ports.entry !== 'end') entryTurnSteps = wanted;
   }
   return { ...spanInfo, riser, entryTurnSteps };
+}
+
+/**
+ * 階段の断面線（flight の下側の輪郭）が**繋がっている＝階段下の空間が蹴込板で閉じている**か
+ * （ユーザー裁定2026-10-08「主要構造が木造の階段…は、断面線が繋がっているか/いないか。蹴込板がなく、
+ * 踏面だけで構成された階段は、（階段）下を描く」）。展開図の階段帯は、階段下部屋が無くても
+ * これが true なら断面線より下（階段下）を描かない。鉄骨（ささら＋踏面で下が空く）は false＝
+ * 従来どおり「階段下部屋の有無」だけで決まる。
+ * 現状は WOOD ⇔ 蹴込板あり（WOOD_TREAD_THICKNESS_MM の輪郭は垂直の蹴込板を持つ）。RC も true
+ * （ユーザー裁定2026-10-08: RC 階段は斜スラブで下面まで断面線が繋がる）。false は鉄骨（ささら＋踏面で下が空く）だけ。将来 Stair に
+ * 「蹴込板なし」属性が入ったら、木造でもそれが立つ階段は false を返す（踏面だけの階段は下を描く）。
+ * 属性は今は追加しない。
+ * @param {{structure?:*}|null|undefined} stair
+ * @returns {boolean}
+ */
+export function stairSectionIsClosed(stair) {
+  return stair?.structure === StructuralMaterialType.WOOD || stair?.structure === StructuralMaterialType.RC;
+}
+
+/**
+ * 折返し階段（SWITCHBACK）の断面計算パラメータ（区間長・段数・蹴上）を単一ソース化する（WP-S1）。
+ * buildSwitchbackSectionPrimitives（elevationStair.js）と elevationStairSequence.js（歩行順面シーケンス）が
+ * 共有する——両者とも「往路n1・復路n2の段数」「実測優先・合成フォールバックの区間長」という
+ * 同じ計算を必要とするため、単一ソースにした。
+ * SWITCHBACK以外・floorHeight未確定の場合はnull。
+ * WP-A1: floorHeightに依存しない区間長・段数の算出自体は finish/stair/stairClassify.js の
+ * resolveSwitchbackSpanLengths（本関数とfinish/stair/stairLanding.jsのlandingRectが共有する
+ * 単一情報源）へ抽出した。本関数はそこへfloorHeight由来のriserを合成するだけ（挙動不変）。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @param {number|null} floorHeight - 設置階〜上階の階高(mm)
+ * @returns {{totalSteps:number, riser:number, n1:number, n2:number,
+ *   len1:number, landingLen:number, len2:number}|null}
+ */
+export function resolveSwitchbackParams(stair, graph, floorHeight) {
+  if (floorHeight == null) return null;
+  const spanInfo = resolveSwitchbackSpanLengths(stair, graph);
+  if (!spanInfo) return null;
+  const riser = stair.riser ?? floorHeight / spanInfo.totalSteps;
+  return { ...spanInfo, riser };
 }
 
 // 鉄骨階段のささら（ささら桁）の板厚・せい（成）。Stairモデルに桁成フィールドが無いため、

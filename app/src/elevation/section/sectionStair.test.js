@@ -7,7 +7,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMate
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { uTurnPlanLayout } from '../../finish/stair/stairGeometry.js';
 import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, flightTreadZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass, crossingLandingFloorProfile, hiddenTurnStepPrimitives, HIDDEN_STEP_MARK, crossingFlightBodySections, flightHiddenRects, crossingFlightCutSurfaces } from './sectionStair.js';
-import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from '../elevationStairSection.js';
+import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from './stairSectionProfile.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
 
 function makeGraph(name = 'p1') {

@@ -14,7 +14,7 @@ import { roomBounds } from '../../finish/gridCells.js';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../elevationFaceList.js';
 import { buildBandLayers } from './sectionBandLayers.js';
-import { stairRunProfile } from '../elevationStairSection.js';
+import { stairRunProfile } from './stairSectionProfile.js';
 import { straightContribution, withCutLandings, landingStepRisers, stairPrimitivesForCut, crossesFlight } from './sectionStair.js';
 import { straightCuts } from './cuts/straightCuts.js';
 import { localXOf } from './sectionTypes.js';

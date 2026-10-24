@@ -13,7 +13,7 @@ import { roomBounds } from '../../finish/gridCells.js';
 import { PARTITION_THICKNESS_MM } from '../../finish/stair/stairPartition.js';
 import { generateStairPartitionWalls } from '../../finish/stair/stairPartitionWalls.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
-import { stairRunProfile } from '../elevationStairSection.js';
+import { stairRunProfile } from './stairSectionProfile.js';
 import { stairContribution, stairAxisIsVertical, ladderAcrossRange, landingStepRisers, stairPrimitivesForCut, withCutLandings, stairOccluderRects, stairFaceHits } from './sectionStair.js';
 import { localXOf } from './sectionTypes.js';
 

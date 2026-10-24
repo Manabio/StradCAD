@@ -16,11 +16,11 @@ import { floorHeightAbove, stairRiserOf } from '../finish/stair/stairDimensions.
 import { stairSoffitAbove } from './space/stairSoffitCeiling.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
+import { stairRunProfile, resolveSwitchbackParams } from './section/stairSectionProfile.js';
 import { stairBandWallFilter } from './section/cuts/switchbackCuts.js';
 import { stairFaceSequence, dashLinesInsideRects, removeLinesInsideRects } from './elevationStairSequence.js';
 import { ElevationLineRole } from './elevationStyle.js';
-import { translatePrimitive, line } from './elevationPrimitives.js';
+import { translatePrimitive, line, polyline } from './elevationPrimitives.js';
 // R1: 面配置ループ・帯確定処理はelevationBand.jsのbuildRoomBandと全域が重複していたため、
 // layoutBandFaces（面配置）・finalizeBand（部屋名枠・bounds・floorOffset）へ共通化した
 // （elevationBand→elevationStairの逆importは無いため循環しない）。
@@ -31,6 +31,40 @@ import { findOverlappingRoom } from './elevationVoid.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
 
 const CORNER_EPS = 1; // mm — stairPortEdges(世界座標)とfaceのaxisCL一致判定の許容差
+
+/**
+ * 折返し階段（SWITCHBACK）の断面プロファイル一式（往路・踊り場・復路）をローカル座標で返す（項目12。
+ * フォールバック経路の帯の組み立て用。区間長・段数・蹴上は section/stairSectionProfile.js の
+ * resolveSwitchbackParams、踏面のジグザグは stairRunProfile）。
+ * SWITCHBACK以外・floorHeight未確定の場合は空配列（非対応タイプは項目12のスコープ外。
+ * WINDING等の回り階段は扇形の段になり同じ直進プロファイルが使えないため今回は対応しない）。
+ * 線種: 踏面のジグザグ(見え掛かりの段)=SILHOUETTE、踊り場の床線(区間を画す面)=CUT
+ * （ユーザー仕様「切断面=太、見え掛かりの段は中を基本に」の解釈。踊り場は上階側へ抜ける
+ * 床の切断とみなしCUT扱いにした）。
+ * @param {import('@core').Stair} stair
+ * @param {object} graph
+ * @param {number|null} floorHeight - 設置階〜上階の階高(mm)
+ * @returns {object[]} プリミティブ配列（x=0起点。呼び出し側でxCursor分translateする）
+ */
+export function buildSwitchbackSectionPrimitives(stair, graph, floorHeight) {
+  const params = resolveSwitchbackParams(stair, graph, floorHeight);
+  if (!params) return [];
+  const { n1, n2, riser, len1, landingLen, len2 } = params;
+
+  const prims = [];
+
+  const run1 = stairRunProfile(n1, riser, len1, 0, 0, 1);
+  prims.push(polyline(run1.points, ElevationLineRole.SILHOUETTE));
+
+  const landingY = run1.endY;
+  const landingX2 = run1.endX + landingLen;
+  prims.push(line(run1.endX, landingY, landingX2, landingY, ElevationLineRole.CUT));
+
+  const run2 = stairRunProfile(n2, riser, len2, landingX2, landingY, 1);
+  prims.push(polyline(run2.points, ElevationLineRole.SILHOUETTE));
+
+  return prims;
+}
 
 /**
  * faces（buildRoomFaces の結果。時計回りの1周）を startLabel の面が先頭に来るよう回転する。

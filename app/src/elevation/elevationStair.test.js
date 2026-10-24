@@ -5,10 +5,12 @@ import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomFeature } 
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
-import { rotateFacesToStart, stairStartFaceLabel, buildStairBand } from './elevationStair.js';
+import { rotateFacesToStart, stairStartFaceLabel, buildStairBand, buildSwitchbackSectionPrimitives } from './elevationStair.js';
 import { layoutBands, bandContentOriginMm } from './elevationLayout.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
-import { BAND_GAP_MM, BAND_TOP_MARGIN_MM, GRID_LINE_ABOVE_CH_MM, CH_DIM_OFFSET_MM } from './elevationStyle.js';
+import {
+  BAND_GAP_MM, BAND_TOP_MARGIN_MM, GRID_LINE_ABOVE_CH_MM, CH_DIM_OFFSET_MM, ElevationLineRole, weightForRole,
+} from './elevationStyle.js';
 
 function makeGraph(name = 'p1') {
   const plane = new Plane(name, 0, `${name}階`, 1, 1);
@@ -745,4 +747,99 @@ test('【QA是正・第2ラウンド項目3(1)】buildStairBand: 除外壁のあ
   const len = Math.abs(edgeLines[0].x2 - edgeLines[0].x1);
   assert.equal(len, 57.5,
     `長さは上階壁の半壁厚(57.5mm)のはず（体裁の延長150mmを含めた207.5等であってはならない。実際:${len}）`);
+});
+
+// ---- buildSwitchbackSectionPrimitives（折返し階段の断面プロファイル。項目12。旧 elevationStairSection.test.js） ----
+function switchbackCtx(overrides = {}) {
+  return {
+    type: StairType.SWITCHBACK, totalSteps: 14, tread: 250, riser: null, sections: null,
+    cells: new Set(), // 空 → measureStairSpansはnull（合成フォールバック経路）
+    ...overrides,
+  };
+}
+function emptyGraph() { return {}; } // measureStairSpansはcells.size===0で即nullを返すため未使用
+
+// ---- 折返し階段: sections指定時はその段数どおりに往路・復路のriserを積む ----
+test('buildSwitchbackSectionPrimitives: sections=[n1,landing,n2]の往路n1・復路n2ぶんriserを積む', () => {
+  const stair = switchbackCtx({ sections: [6, 1, 6], totalSteps: 12, riser: 200 });
+  const floorHeight = 2400; // 12段×200
+  const prims = buildSwitchbackSectionPrimitives(stair, emptyGraph(), floorHeight);
+
+  const polylines = prims.filter(p => p.type === 'polyline');
+  assert.equal(polylines.length, 2, '往路・復路の2本のジグザグ線が出るはず');
+  const run1EndY = polylines[0].points[polylines[0].points.length - 1][1];
+  assert.equal(run1EndY, -6 * 200, '往路の終点yは-n1*riserのはず');
+  const run2EndY = polylines[1].points[polylines[1].points.length - 1][1];
+  assert.equal(run2EndY, -12 * 200, '復路の終点yは-(n1+n2)*riser（=floorHeight）のはず');
+  assert.ok(Math.abs(run2EndY - (-floorHeight)) < 1e-6, '往路+復路の合計riserがfloorHeightに一致するはず');
+});
+
+// ---- 踊り場の床線（区間を画す面）はCUT、段のジグザグはSILHOUETTE ----
+test('buildSwitchbackSectionPrimitives: 踊り場の床線はCUT、段のジグザグはSILHOUETTE', () => {
+  const stair = switchbackCtx({ sections: [4, 1, 4], totalSteps: 8, riser: 200 });
+  const prims = buildSwitchbackSectionPrimitives(stair, emptyGraph(), 1600);
+
+  const cutWeight = weightForRole(ElevationLineRole.CUT);
+  const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
+  const landingLine = prims.find(p => p.type === 'line');
+  assert.ok(landingLine, '踊り場の床線(line)が出るはず');
+  assert.equal(landingLine.weight, cutWeight);
+  for (const p of prims.filter(x => x.type === 'polyline')) {
+    assert.equal(p.weight, silhouetteWeight, '段のジグザグはSILHOUETTEのはず');
+  }
+});
+
+// ---- sections未指定時は totalSteps を均等2分する（対称な折返しという仮定） ----
+test('buildSwitchbackSectionPrimitives: sections未指定はtotalStepsを均等2分して往復に割り振る', () => {
+  const stair = switchbackCtx({ sections: null, totalSteps: 12, riser: 200 });
+  const prims = buildSwitchbackSectionPrimitives(stair, emptyGraph(), 2400);
+  const polylines = prims.filter(p => p.type === 'polyline');
+  const run1EndY = polylines[0].points[polylines[0].points.length - 1][1];
+  const run2EndY = polylines[1].points[polylines[1].points.length - 1][1];
+  assert.equal(run1EndY, -6 * 200, 'sections未指定はtotalSteps(12)を6/6に均等2分するはず');
+  assert.equal(run2EndY, -12 * 200);
+});
+
+// ---- 失敗系: SWITCHBACK以外のタイプは空配列（対応スコープ外） ----
+test('【失敗系】buildSwitchbackSectionPrimitives: SWITCHBACK以外のタイプは空配列を返す', () => {
+  const stair = switchbackCtx({ type: StairType.STRAIGHT });
+  assert.deepEqual(buildSwitchbackSectionPrimitives(stair, emptyGraph(), 2400), []);
+});
+
+// ---- 失敗系: floorHeightがnull（上階未確定）なら空配列 ----
+test('【失敗系】buildSwitchbackSectionPrimitives: floorHeightがnullなら空配列', () => {
+  const stair = switchbackCtx();
+  assert.deepEqual(buildSwitchbackSectionPrimitives(stair, emptyGraph(), null), []);
+});
+
+// ---- 失敗系: stairが無い(null)なら空配列 ----
+test('【失敗系】buildSwitchbackSectionPrimitives: stairがnullなら空配列', () => {
+  assert.deepEqual(buildSwitchbackSectionPrimitives(null, emptyGraph(), 2400), []);
+});
+
+// ---- QA F2: stair.riser未指定時のriser正規フォールバック（floorHeight/totalSteps。
+// stair-model.md:19の正典式）が実際に使われる ----
+test('【QA F2】buildSwitchbackSectionPrimitives: stair.riser未指定はriser=floorHeight/totalStepsで各段を積む', () => {
+  const stair = switchbackCtx({ sections: [6, 1, 6], totalSteps: 12, riser: null });
+  const floorHeight = 2800;
+  const expectedRiser = floorHeight / 12; // 233.333...
+  const prims = buildSwitchbackSectionPrimitives(stair, emptyGraph(), floorHeight);
+
+  const polylines = prims.filter(p => p.type === 'polyline');
+  assert.equal(polylines.length, 2);
+  const run2Points = polylines[1].points;
+  const run2EndY = run2Points[run2Points.length - 1][1];
+  assert.ok(Math.abs(run2EndY - (-floorHeight)) < 1e-9,
+    `復路の終点yは-floorHeight(${-floorHeight})に一致するはず（実際:${run2EndY}）`);
+
+  // 各段の蹴上(y方向の変化量)がfloorHeight/totalSteps(=233.33...)ちょうどであることを、
+  // 往路・復路それぞれの点列(蹴上→踏面を繰り返す)の垂直区間から確認する。
+  for (const pl of polylines) {
+    for (let i = 0; i + 1 < pl.points.length; i += 2) {
+      const [, y1] = pl.points[i];
+      const [, y2] = pl.points[i + 1];
+      assert.ok(Math.abs((y1 - y2) - expectedRiser) < 1e-9,
+        `各段の蹴上はfloorHeight/totalSteps(${expectedRiser})ちょうどのはず（実際:${y1 - y2}）`);
+    }
+  }
 });

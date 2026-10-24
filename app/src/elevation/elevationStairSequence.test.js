@@ -12,7 +12,7 @@ import { localXOf, MEMBER_PRIM } from './section/sectionTypes.js';
 import { switchbackCuts, buildMidWallFace } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { buildStairBand } from './elevationStair.js';
-import { resolveSwitchbackParams } from './elevationStairSection.js';
+import { resolveSwitchbackParams } from './section/stairSectionProfile.js';
 import { ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { drawnFloorProfileZAt, floorProfileFromSegments, mergeFloorProfiles } from './elevationFloorProfile.js';
 import { stairCutFloorProfile, HIDDEN_STEP_MARK } from './section/sectionStair.js';
