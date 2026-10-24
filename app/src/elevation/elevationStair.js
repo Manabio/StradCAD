@@ -19,8 +19,8 @@ import { composeRoomFaces } from './elevationFaceList.js';
 import { buildSwitchbackSectionPrimitives } from './elevationStairSection.js';
 import { stairBandWallFilter } from './section/cuts/switchbackCuts.js';
 import { stairFaceSequence, dashLinesInsideRects, removeLinesInsideRects } from './elevationStairSequence.js';
-import { ElevationLineRole, weightForRole } from './elevationStyle.js';
-import { translatePrimitive } from './elevationPrimitives.js';
+import { ElevationLineRole } from './elevationStyle.js';
+import { translatePrimitive, line } from './elevationPrimitives.js';
 // R1: 面配置ループ・帯確定処理はelevationBand.jsのbuildRoomBandと全域が重複していたため、
 // layoutBandFaces（面配置）・finalizeBand（部屋名枠・bounds・floorOffset）へ共通化した
 // （elevationBand→elevationStairの逆importは無いため循環しない）。
@@ -271,20 +271,19 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
       const upperRoom = findOverlappingVoidRoom(stairRoom, graph, upperGraph);
       if (upperRoom) {
         const upperFaces = composeRoomFaces(upperRoom, upperGraph);
-        const cutWeight = weightForRole(ElevationLineRole.CUT);
         for (const { face, xCursor: x0 } of layout.faceRuns) {
           const upperFace = upperFaces.find(f =>
             f.isVertical === face.isVertical && Math.abs(f.axisCL.effectiveValue - face.axisCL.effectiveValue) < CORNER_EPS);
           if (!upperFace) continue;
           primitives.push(translatePrimitive(
-            { type: 'line', x1: 0, y1: -floorHeight, x2: face.run, y2: -floorHeight, weight: cutWeight },
+            line(0, -floorHeight, face.run, -floorHeight, ElevationLineRole.CUT),
             x0, 0,
           ));
           primitives.push(translatePrimitive(
-            { type: 'line', x1: 0, y1: -layout.CH, x2: 0, y2: -chUpperAbsMm, weight: cutWeight }, x0, 0,
+            line(0, -layout.CH, 0, -chUpperAbsMm, ElevationLineRole.CUT), x0, 0,
           ));
           primitives.push(translatePrimitive(
-            { type: 'line', x1: face.run, y1: -layout.CH, x2: face.run, y2: -chUpperAbsMm, weight: cutWeight }, x0, 0,
+            line(face.run, -layout.CH, face.run, -chUpperAbsMm, ElevationLineRole.CUT), x0, 0,
           ));
         }
       }
