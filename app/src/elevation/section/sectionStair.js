@@ -2245,6 +2245,29 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   const acrossExtents = [...(contribution.flights ?? []), ...(contribution.landings ?? [])];
   const trueAcrossLo = acrossExtents.length ? Math.min(...acrossExtents.map(e => e.acrossLo)) : 0;
   const trueAcrossHi = acrossExtents.length ? Math.max(...acrossExtents.map(e => e.acrossHi)) : 0;
+  const zigzagEntries = appendFlightPrimitives(prims, {
+    contribution, cut, columns, outerBound, isSteel, trueAcrossLo, trueAcrossHi,
+    includeLadder: opts.includeLadder, treadSection: opts.treadSection,
+  });
+  if (isSteel) appendSecondaryFlightSightlines(prims, { contribution, cut, columns, outerBound });
+  appendLandingPrimitives(prims, {
+    contribution, cut, columns, stairIsVertical, isSteel, hasFrame, trueAcrossLo, trueAcrossHi,
+  });
+  appendFarSideAndSightline(prims, {
+    contribution, cut, columns, outerBound, stairIsVertical, isSteel, zigzagEntries,
+    farSide: opts.farSide, includeStringerSightline: opts.includeStringerSightline,
+    stringerSightlineLowerOnly: opts.stringerSightlineLowerOnly,
+  });
+  return clipStairPrimitives(prims, { cut, columns, outerBound });
+}
+
+/**
+ * 各レーン（flight）の断面・梯子・ささら正面視・端面などを prims へ積む。
+ * @returns {Array<{points:Array<[number,number]>, flight:object}>} 鉄骨のジグザグ点列（ささらの見えがかりの入力）
+ */
+function appendFlightPrimitives(prims, {
+  contribution, cut, columns, outerBound, isSteel, trueAcrossLo, trueAcrossHi, includeLadder, treadSection,
+}) {
   const zigzagEntries = []; // {points, flight}（実機フィードバック第3弾B: stringerPrimitives
   // のz方向クリップにflightのbaseZ/steps/riserMmが要るため、点列だけでなくflightも持ち回る）
   for (const flight of contribution.flights ?? []) {
@@ -2266,8 +2289,8 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
       }
     }
     const ladderAcross = isSteel ? ladderAcrossRange(flight, trueAcrossLo, trueAcrossHi, LANE_GAP) : flight;
-    if (opts.includeLadder !== false) {
-      prims.push(...flightLadderPrimitives(flight, cut, columns, ladderAcross, opts.treadSection !== false));
+    if (includeLadder !== false) {
+      prims.push(...flightLadderPrimitives(flight, cut, columns, ladderAcross, treadSection !== false));
     }
     // ささら正面視（レーンを横切る切断のみ該当。§6「鉄骨階段のみ」）: 12mm厚×せいSTEEL_STRINGER_
     // DEPTH_MMの断面矩形をCUT（太線）で描く。ユーザー指示「断面は太線」対応。
@@ -2282,39 +2305,53 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
       prims.push(...innerStringerSilhouette(flight, cut, ladderAcross, trueAcrossLo, trueAcrossHi));
     }
   }
-  // WP-2026-08-23実機フィードバック「「1」Bでは、往路と復路の間に壁はないので、復路直進部の
-  // ささらが見える」対応: contribution.secondaryFlights（switchbackCuts.jsがseq2にのみ設定。
-  // 往路レーン中央から見て視線前方にある復路レーン）は、そのレーン自身がcut.lineの縦断対象
-  // ではない（isLengthwiseCutで検出されない）ため通常のflights処理では一切現れないが、
-  // 途中に見えがかり壁（cutAlong/wall。往復間の壁）が無ければ、そのレーンの近い側の
-  // ささらだけが見えがかり細線として視界に入る。STEEL限定（ささら自体がSTEEL限定のため）。
-  if (isSteel) {
-    // 手前（この切断が縦断するレーン）のささらの上端線＝遮蔽の外形。secondaryはこれより奥にある。
-    const nearTopSeg = (() => {
-      for (const flight of contribution.flights ?? []) {
-        if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) continue;
-        const band = stringerBandGeometry(
-          computeFlightProfile(flight, cut, columns, outerBound).noses, STEEL_STRINGER_DEPTH_MM, {
-            baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
-            ...landingMitreOpts(flight, contribution.landings, contribution.unit),
-          });
-        if (band) return band.top;
-      }
-      return null;
-    })();
-    for (const secondary of contribution.secondaryFlights ?? []) {
-      if (isBlockedByWall(columns, cut, secondary)) continue;
-      const prof = computeFlightProfile(secondary, cut, columns, outerBound);
-      const points = clipStringerToAnchors(prof.points, contribution.unit, secondary);
-      for (const prim of stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(secondary),
-        { noses: prof.noses, baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
-          ...landingMitreOpts(secondary, contribution.landings, contribution.unit) })) {
-        for (const seg of clipPolylineAboveOccluder(prim.points, nearTopSeg)) {
-          prims.push({ ...prim, points: seg });
-        }
+  return zigzagEntries;
+}
+
+/**
+ * 鉄骨階段: 往路レーンの切断（seq2）で視線前方にある復路レーン（contribution.secondaryFlights）の近い側のささらの
+ * 見えがかり細線を prims へ積む。
+ * WP-2026-08-23実機フィードバック「「1」Bでは、往路と復路の間に壁はないので、復路直進部の
+ * ささらが見える」対応: contribution.secondaryFlights（switchbackCuts.jsがseq2にのみ設定。
+ * 往路レーン中央から見て視線前方にある復路レーン）は、そのレーン自身がcut.lineの縦断対象
+ * ではない（isLengthwiseCutで検出されない）ため通常のflights処理では一切現れないが、
+ * 途中に見えがかり壁（cutAlong/wall。往復間の壁）が無ければ、そのレーンの近い側の
+ * ささらだけが見えがかり細線として視界に入る。STEEL限定（ささら自体がSTEEL限定のため）。
+ */
+function appendSecondaryFlightSightlines(prims, { contribution, cut, columns, outerBound }) {
+  // 手前（この切断が縦断するレーン）のささらの上端線＝遮蔽の外形。secondaryはこれより奥にある。
+  const nearTopSeg = (() => {
+    for (const flight of contribution.flights ?? []) {
+      if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) continue;
+      const band = stringerBandGeometry(
+        computeFlightProfile(flight, cut, columns, outerBound).noses, STEEL_STRINGER_DEPTH_MM, {
+          baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
+          ...landingMitreOpts(flight, contribution.landings, contribution.unit),
+        });
+      if (band) return band.top;
+    }
+    return null;
+  })();
+  for (const secondary of contribution.secondaryFlights ?? []) {
+    if (isBlockedByWall(columns, cut, secondary)) continue;
+    const prof = computeFlightProfile(secondary, cut, columns, outerBound);
+    const points = clipStringerToAnchors(prof.points, contribution.unit, secondary);
+    for (const prim of stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(secondary),
+      { noses: prof.noses, baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
+        ...landingMitreOpts(secondary, contribution.landings, contribution.unit) })) {
+      for (const seg of clipPolylineAboveOccluder(prim.points, nearTopSeg)) {
+        prims.push({ ...prim, points: seg });
       }
     }
   }
+}
+
+/**
+ * 踊り場の断面（桁枠・STEEL/RC）と、段付きの踊り場（回り階段）の蹴上を prims へ積む。
+ */
+function appendLandingPrimitives(prims, {
+  contribution, cut, columns, stairIsVertical, isSteel, hasFrame, trueAcrossLo, trueAcrossHi,
+}) {
   for (const landing of contribution.landings ?? []) {
     prims.push(...landingCutPrimitives(landing, contribution.flights, stairIsVertical, cut, columns));
     // WP-A2: 踊り場の桁枠（front/back/side桁。STEEL・RCが対象。ユーザー裁定2026-08-23）。
@@ -2326,28 +2363,45 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
   }
   // 段付きの踊り場（回り階段）の蹴上。踊り場が1枚（折返し）なら0本。
   prims.push(...landingStepRisers(contribution.landings, stairIsVertical, cut));
+}
+
+/**
+ * 切断面の向こう側の段の見えがかり（farSide）、蹴上材を裏から見る面の踏面・蹴上の細線、
+ * 鉄骨ささらの側面視の輪郭（見えがかり細線）を prims へ積む。
+ */
+function appendFarSideAndSightline(prims, {
+  contribution, cut, columns, outerBound, stairIsVertical, isSteel, zigzagEntries,
+  farSide, includeStringerSightline, stringerSightlineLowerOnly,
+}) {
   // 切断面の向こう側で視線から遠ざかって立ち上がる段の見えがかり（細線）。縦断する切断だけ。
   // 階段下の部屋の展開（elevationBand）は下から見上げるので出さない（opts.farSide:false）。
-  if (opts.farSide !== false && cut.line.isVertical === stairIsVertical) {
+  if (farSide !== false && cut.line.isVertical === stairIsVertical) {
     prims.push(...farSideSilhouettePrimitives(contribution, cut, columns));
   }
   // 蹴上材を裏から見る面（横断の切断が回転部を切る面）: 切断面と壁の間にある段の踏面の線と、蹴上が壁と取り合う端の縦線（細線破線）。
-  if (opts.farSide !== false && cut.line.isVertical !== stairIsVertical) {
+  if (farSide !== false && cut.line.isVertical !== stairIsVertical) {
     prims.push(...hiddenTurnStepPrimitives(contribution, cut, outerBound));
   }
   // ささら側面視（鉄骨のみ。§6「鉄骨階段のみ」）: 各レーンのジグザグ点列ごとに桁成ぶん下げた
   // 輪郭（DETAIL＝切断面の向こう側にあるこのレーン自身のささら）を追加する。ユーザー指示
   // 「見えかがりは細線」対応（stringerPrimitives参照。2026-08-23実機修正でジグザグ自体が
   // CUTとして見えるようになったため、これは踏面のCUTに重ねて描く追加の輪郭になる）。
-  if (isSteel && opts.includeStringerSightline !== false) {
+  if (isSteel && includeStringerSightline !== false) {
     for (const { points, flight } of zigzagEntries) {
       prims.push(...stringerPrimitives(points, STEEL_STRINGER_DEPTH_MM, flightZBounds(flight),
         { noses: computeFlightProfile(flight, cut, columns, outerBound).noses,
           baseboardMm: contribution.unit?.baseboardHeightMm ?? 0,
-          bottomOnly: opts.stringerSightlineLowerOnly === true,
+          bottomOnly: stringerSightlineLowerOnly === true,
           ...landingMitreOpts(flight, contribution.landings, contribution.unit) }));
     }
   }
+}
+
+/**
+ * 階段自身の幾何の終端クリップ: 「断面内部は描かない」の一般判定（ささらの見えがかりのうち実体の矩形の厳密内部）→
+ * x終端クリップ（stairDrawRange）。
+ */
+function clipStairPrimitives(prims, { cut, columns, outerBound }) {
   // 階段自身の幾何の終端クリップ（展開図一般化Phase 6b-2「一体設計」。
   // .claude/elevation-redesign.md§5.12）。順序＝ミトレ（landingMitreOpts等）→辺落とし
   // （clipPolylineAboveOccluder等）→zクリップ（flightZBounds/clipStringerToAnchors）→
