@@ -10,7 +10,8 @@
  */
 import { resolveUTurnSpanLengths, measureStairSpans } from '../../finish/stair/stairClassify.js';
 import { resolveStairPorts } from '../../finish/stair/stairPorts.js';
-import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import { ElevationLineRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import { polyline } from '../elevationPrimitives.js';
 
 // 在来木造階段の踏面板の厚み（ユーザー指示2026-10-07「木造（在来）で階段は、踏面の厚みは30、
 // 蹴込板は垂直に」）。stairRunProfile の opts.treadThicknessMm へ渡す（sectionStair.js の
@@ -230,7 +231,7 @@ export function stringerPrimitives(profilePoints, depthMm, zBounds, opts = {}) {
     // せいぶん下がるため、区間の下り口側では必ずbaseZより下へ出る。そこを切ると線が宙で終わる。
     // 下に踊り場が来る範囲は踊り場の桁枠が別途その輪郭を描く（landingFramePrimitives）ので、
     // ここで切る必要はない。区間の外へは伸びない（点列自体がflightの走行範囲）。
-    return [{ type: 'polyline', points: [b1, b2], weight: weightForRole(ElevationLineRole.DETAIL) }];
+    return [polyline([b1, b2], ElevationLineRole.DETAIL)];
   }
   const points = [[x1, y1], [x2, y2], b2, b1, [x1, y1]];
   // 実機フィードバック第3弾B: オフセット後の多角形は、法線オフセット(ox,oy)ぶん元のnosing線
@@ -271,7 +272,7 @@ export function stringerPrimitives(profilePoints, depthMm, zBounds, opts = {}) {
   if (opts.mitreEnd)   dropEdges.push([band.top[1], band.bottom[1]]);
   const paths = dropEdges.length === 0 ? [clippedPoints] : splitRingAtEdges(clippedPoints, dropEdges);
   return paths.filter(pts => pts.length >= 2)
-    .map(pts => ({ type: 'polyline', points: pts, weight: weightForRole(ElevationLineRole.DETAIL) }));
+    .map(pts => polyline(pts, ElevationLineRole.DETAIL));
 }
 
 // 閉パス（先頭==末尾）から、dropEdges（端点ペア）に一致する辺を取り除き、残りを連続する
