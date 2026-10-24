@@ -99,9 +99,29 @@ test('【配線】aboveGraph は展開図・天伏・立体の各呼び出し元
   has('../../elevation/section/sectionContent.js', 'const contribution = stairContribution(stair, layer.graph, floorHeight, above?.graph ?? probeCtx?.upperGraph ?? null);');
   has('../../ceiling/stairSoffit.js', 'const L = uTurnPlanLayout(stair, graph, { aboveGraph });');
   has('../../ceiling/stairSoffit.js', 'export function stairSoffitSolids({ stair, graph, belowStair = null, belowGraph = null, riser, floorZMm, aboveGraph = null }) {');
-  has('../../elevation/elevationStairSequence.js', 'return Number.isFinite(riser) ? (stairSoffitSolids({ stair, graph, riser, floorZMm: floorZ0, aboveGraph: opts.upperGraph ?? null })[0] ?? null) : null;');
+  // S6（巨大関数の分割）: stairFaceSequence の部品化で、opts.upperGraph は呼び出し側（stairFaceSequence）から部品の引数 upperGraph へ渡る。
+  // 部品の本体の中に限って検査する（upperGraph が引数から落ちたら赤になる）。
+  const seqCode = codeLines('../../elevation/elevationStairSequence.js').join('\n');
+  const bodyOf = (marker) => {
+    const s = seqCode.indexOf(marker);
+    assert.ok(s >= 0, `${marker} が見つからない`);
+    const open = seqCode.indexOf('{', seqCode.indexOf(') {', s));
+    let depth = 0, i = open;
+    for (; i < seqCode.length; i++) {
+      if (seqCode[i] === '{') depth++;
+      else if (seqCode[i] === '}') { depth--; if (depth === 0) break; }
+    }
+    return { head: seqCode.slice(s, open), body: seqCode.slice(open, i + 1) };
+  };
+  const own = bodyOf('function ownSoffitSolidOf(');
+  assert.ok(/\bupperGraph\b/.test(own.head), 'ownSoffitSolidOf の引数に upperGraph が無い');
+  assert.ok(own.body.includes('aboveGraph: upperGraph'), 'ownSoffitSolidOf が stairSoffitSolids へ aboveGraph: upperGraph を渡していない');
+  const ret = bodyOf('function returnLaneEntryOf(');
+  assert.ok(/\bupperGraph\b/.test(ret.head), 'returnLaneEntryOf の引数に upperGraph が無い');
+  assert.ok(/underReturnSpaceOf\([^)]*ceilLowAbs, upperGraph\)/.test(ret.body), 'returnLaneEntryOf が underReturnSpaceOf へ upperGraph を渡していない');
+  has('../../elevation/elevationStairSequence.js', 'cuts, probeCtx, bandRoom, stair, floorHeight, graph, upperGraph: opts.upperGraph ?? null,');
+  has('../../elevation/elevationStairSequence.js', 'upperGraph: opts.upperGraph ?? null, endExtendMm,');
   has('../../elevation/elevationStairSequence.js', 'const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm, aboveGraph });');
-  has('../../elevation/elevationStairSequence.js', 'const underReturn = underReturnSpaceOf(stair, graph, cut, floorHeight, selfFloorZ, ceilLowAbs, opts.upperGraph ?? null);');
   has('../../ceiling/stairSoffit.js', 'const solid = stairSoffitSolids({ stair, graph, riser, floorZMm, aboveGraph })[0];'); // S1: stairUnderReturnSoffit を sectionProbe.js から移した
   has('../../elevation/section/sectionProbe.js', 'const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm: floorZFor(room, layer), aboveGraph });');
   has('../../elevation/section/sectionProbe.js', 'addUnderReturnTops(out, graph, above ? above.floorZMm - layer.floorZMm : fallbackFloorHeightMm, layer, floorZFor, above?.graph ?? fallbackUpperGraph);');

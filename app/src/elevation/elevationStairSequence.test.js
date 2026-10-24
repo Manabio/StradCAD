@@ -145,6 +145,19 @@ test('stairFaceSequence: 往路・復路の間に実壁があっても seqNo は
   assert.equal(entries.find(e => e.seqNo === '2').face.hasRealWall, true);
 });
 
+// S6: returnLaneEntryOf は cut が無ければ null を返し、呼び出し側は entry を積まない（null 契約を挙動で固定）
+test('【失敗系】returnLaneEntryOf: 切断定義表に seq6 の cut が無い（隔て板の無い U 字階段）と seq6 の entry を積まない', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeSwitchbackFixture(graph);
+  const faces = composeRoomFaces(room, graph);
+
+  const entries = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
+  assert.ok(entries);
+  assert.deepEqual(entries.map(e => e.seqNo), ['1', '2', '3', '4', '5']);
+  assert.equal(entries.some(e => e.seqNo === '6'), false);
+  assert.ok(entries.every(e => e != null && typeof e === 'object'), 'null の entry が混ざらない');
+});
+
 // ---- 失敗系: 壁が無ければseq2のfaceはhasRealWall=false（5面のまま） ----
 test('【失敗系】stairFaceSequence: 往復間の壁が無ければ seq2 の face.hasRealWall は false で5面', () => {
   const graph = makeGraph();
