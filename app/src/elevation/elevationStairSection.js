@@ -17,7 +17,8 @@
  */
 import { StructuralMaterialType } from '@core';
 import { resolveSwitchbackSpanLengths } from '../finish/stair/stairClassify.js';
-import { ElevationLineRole, weightForRole } from './elevationStyle.js';
+import { ElevationLineRole, ElevationDash, weightForRole } from './elevationStyle.js';
+import { line, polyline } from './elevationPrimitives.js';
 import {
   WOOD_TREAD_THICKNESS_MM, stairRunProfile, resolveUTurnSectionParams, stringerBandGeometry, stringerPrimitives,
   STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM, STEEL_LANDING_FRAME_DEPTH_MM,
@@ -86,19 +87,17 @@ export function buildSwitchbackSectionPrimitives(stair, graph, floorHeight) {
   if (!params) return [];
   const { n1, n2, riser, len1, landingLen, len2 } = params;
 
-  const cutWeight = weightForRole(ElevationLineRole.CUT);
-  const silhouetteWeight = weightForRole(ElevationLineRole.SILHOUETTE);
   const prims = [];
 
   const run1 = stairRunProfile(n1, riser, len1, 0, 0, 1);
-  prims.push({ type: 'polyline', points: run1.points, weight: silhouetteWeight });
+  prims.push(polyline(run1.points, ElevationLineRole.SILHOUETTE));
 
   const landingY = run1.endY;
   const landingX2 = run1.endX + landingLen;
-  prims.push({ type: 'line', x1: run1.endX, y1: landingY, x2: landingX2, y2: landingY, weight: cutWeight });
+  prims.push(line(run1.endX, landingY, landingX2, landingY, ElevationLineRole.CUT));
 
   const run2 = stairRunProfile(n2, riser, len2, landingX2, landingY, 1);
-  prims.push({ type: 'polyline', points: run2.points, weight: silhouetteWeight });
+  prims.push(polyline(run2.points, ElevationLineRole.SILHOUETTE));
 
   return prims;
 }
@@ -118,10 +117,7 @@ export function treadLadderLines({ loX, hiX, riserMm, steps, baseAbsMm, dashed =
   const out = [];
   for (let k = 1; k <= n; k++) {
     const y = -(baseAbsMm + k * riserMm);
-    out.push({
-      type: 'line', x1: loX, y1: y, x2: hiX, y2: y, weight,
-      ...(dashed ? { dash: 'dashed' } : {}),
-    });
+    out.push(line(loX, y, hiX, y, { weight, ...(dashed ? { dash: ElevationDash.DASHED } : {}) }));
   }
   return out;
 }
