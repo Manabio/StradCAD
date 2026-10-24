@@ -477,3 +477,20 @@ test('【指示2026-10-15】mergeContinuousWallBands: 範囲の中の列の 2 �
   mergeContinuousWallBands(untouched, { continuousWallAcross: { lo: NaN, hi: 967.5 } });
   assert.equal(untouched[0].bands.length, 2, '範囲が無効なら何もしない');
 });
+
+// ---- 梁の見え掛かりの open 帯（spanZ0/spanZ1。U1b B3-2）----
+test('【B3-2】splitOpenByFarFace: 梁が無かったときの帯の範囲（spanZ0/Z1）で割ってから梁の高さに掛かる部分だけ返す（遠側の天井が梁の高さの外にあっても farVoid になる）', () => {
+  const far = { farFloorZ: null, farCeilZ: 2200, farDepthMm: 500, farCeilDepthMm: 500 };
+  // 梁の高さ 2600..2700 だけでは遠側の天井 2200 が範囲の外で付帯情報が効かずアキのまま
+  assert.deepEqual(splitOpenByFarFace({ kind: 'open', z0: 2600, z1: 2700, ...far }, 0).map(b => b.kind), ['open']);
+  // 範囲（0..2700）で割れば 2200 より上は farVoid
+  const parts = splitOpenByFarFace({ kind: 'open', z0: 2600, z1: 2700, spanZ0: 0, spanZ1: 2700, ...far }, 0);
+  assert.deepEqual(parts.map(b => [b.kind, b.z0, b.z1]), [['farVoid', 2600, 2700]]);
+  // 梁の高さが遠側の天井の下なら open のまま（範囲で割った open の部分のうち梁の高さに掛かる所）
+  const low = splitOpenByFarFace({ kind: 'open', z0: 1000, z1: 1300, spanZ0: 0, spanZ1: 2700, ...far }, 0);
+  assert.deepEqual(low.map(b => [b.kind, b.z0, b.z1]), [['open', 1000, 1300]]);
+  assert.ok(!('spanZ0' in low[0]), '返す帯に span の印は残さない');
+  // 遠側の天井が深度上限以上奥なら（付帯情報を使わず）全域アキ
+  assert.deepEqual(splitOpenByFarFace({ kind: 'open', z0: 2600, z1: 2700, spanZ0: 0, spanZ1: 2700, ...far, farDepthMm: 5000, farCeilDepthMm: 5000 }, 0)
+    .map(b => [b.kind, b.z0, b.z1]), [['open', 2600, 2700]]);
+});

@@ -2611,7 +2611,7 @@
   "room": "58359256-572c-45d4-b04e-04d2f47824ce",
   "name": "6",
   "kind": "stair",
-  "count": 249,
+  "count": 253,
   "prims": [
    {
     "type": "line",
@@ -4298,6 +4298,42 @@
     "y2": -3000
    },
    {
+    "__o": "recessLo",
+    "type": "line",
+    "weight": "medium",
+    "x1": 8050,
+    "x2": 8050,
+    "y1": -1500,
+    "y2": -2800
+   },
+   {
+    "__o": "recessHi",
+    "type": "line",
+    "weight": "medium",
+    "x1": 10935,
+    "x2": 10935,
+    "y1": -1500,
+    "y2": -2800
+   },
+   {
+    "__o": "recessLo",
+    "type": "line",
+    "weight": "medium",
+    "x1": 8050,
+    "x2": 8050,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
+    "__o": "recessHi",
+    "type": "line",
+    "weight": "medium",
+    "x1": 10935,
+    "x2": 10935,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
     "type": "line",
     "weight": "thin",
     "x1": 8050,
@@ -4382,16 +4418,16 @@
     "weight": "medium",
     "x1": 8050,
     "x2": 10935,
-    "y1": -3000,
-    "y2": -3000
+    "y1": -2800,
+    "y2": -2800
    },
    {
     "type": "line",
     "weight": "medium",
     "x1": 8050,
     "x2": 10935,
-    "y1": -2800,
-    "y2": -2800
+    "y1": -3000,
+    "y2": -3000
    },
    {
     "__o": "cutEdgeLo",
@@ -8777,7 +8813,7 @@
   "room": "a23a3a5b-e8d1-4160-8c27-35c558129031",
   "name": "5",
   "kind": "voidAbove",
-  "count": 234,
+  "count": 239,
   "prims": [
    {
     "type": "line",
@@ -10280,6 +10316,14 @@
     "y2": -3000
    },
    {
+    "type": "line",
+    "weight": "medium",
+    "x1": 7345,
+    "x2": 8785,
+    "y1": -2800,
+    "y2": -2800
+   },
+   {
     "__o": "recessHi",
     "type": "line",
     "weight": "medium",
@@ -10542,6 +10586,24 @@
     "y2": -3000
    },
    {
+    "__o": "recessLo",
+    "type": "line",
+    "weight": "medium",
+    "x1": 18650,
+    "x2": 18650,
+    "y1": 0,
+    "y2": -2800
+   },
+   {
+    "__o": "recessLo",
+    "type": "line",
+    "weight": "medium",
+    "x1": 18650,
+    "x2": 18650,
+    "y1": -3000,
+    "y2": -5400
+   },
+   {
     "__o": "cutEdgeLo",
     "type": "line",
     "weight": "thick",
@@ -10556,6 +10618,22 @@
     "x1": 21535,
     "x2": 21535,
     "y1": -2400,
+    "y2": -3000
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 18650,
+    "x2": 21535,
+    "y1": -2800,
+    "y2": -2800
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 18650,
+    "x2": 21535,
+    "y1": -3000,
     "y2": -3000
    },
    {

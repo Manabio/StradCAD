@@ -157,18 +157,19 @@ export function solidPrimitivesForFace(face, opts) {
     // 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）。
     // 梁の断面・切断線の帯の中を通る梁（along）は、帯を持つ呼び出し（opts.memberCutsByBand。部屋帯・上部吹抜けを持つ部屋の帯）では
     // 断面エンジンの探査の選択（memberCut の帯。U1b B3-1）が描く——ここでは描かない（帯が持たない部材は帯の側
-    // appendBandCutContent が `droppedMemberPrimitivesForFace` で足す）。指定しない呼び出しは従来どおり全部描く
+    // appendBandCutContent が `droppedMemberPrimitivesForFace` で足す）。指定しない呼び出しは従来どおり全部描く。
+    // 梁の見え掛かり（空中・面の通り）も同じ（U1b B3-2。帯の memberFace が描く。memberFacesByBand）。柱は B3-3 まで加算のまま
     ...structuralPrimitivesForCut(beams, beamCut, undefined, null,
-      { columnSolids, fromRoomSide: true, ...(opts.memberCutsByBand ? { memberCuts: { dropped: new Set() } } : {}) }),
+      { columnSolids, fromRoomSide: true, ...(opts.memberCutsByBand ? { memberCuts: { dropped: new Set() }, memberFacesByBand: true } : {}) }),
     ...structuralColumnPrimitivesForCut(columnSolids, cut),
   ];
   return clampPrimsToRun(prims, face.run);
 }
 
 /**
- * 梁の断面・切断線の帯の中を通る梁（along）のうち、**帯（memberCut）が持たない部材**（`droppedKeys`＝列の端を捨てた部材のキー）だけを
- * 加算レイヤの規則で描く（`solidPrimitivesForFace` の同じ梁・同じ可視区間・同じ切り詰め）。空中を横断する梁・面の通りの梁・柱は描かない
- * （それらは `solidPrimitivesForFace` が従来どおり描く）。呼び出しは `droppedMemberKeysOf(pcut)`（列の分割の後）。
+ * 梁の断面・along・見え掛かり（空中・面の通り）のうち、**帯（memberCut・memberFace）が持たない部材**（`droppedKeys`＝列の端を捨てた・z 範囲に
+ * 掛からない部材のキー）だけを加算レイヤの規則で描く（`solidPrimitivesForFace` の同じ梁・同じ可視区間・同じ切り詰め）。柱は描かない
+ * （`solidPrimitivesForFace` が従来どおり描く。B3-3 まで）。呼び出しは `droppedMemberKeysOf(pcut, { inZRange: true })`（列の分割の後）。
  * @param {object} face
  * @param {{graph:object, ceilingHeight:number, upperGraph?:object|null, floorHeightMm?:number|null}} opts
  * @param {Set<string>} droppedKeys

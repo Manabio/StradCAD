@@ -17,6 +17,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory,
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, probeColumn } from './sectionProbe.js';
 import { buildColumns } from './sectionEngine.js';
+import { buildCutContent } from './sectionContent.js';
 import { emitOpenGapMarks } from './sectionEmit.js';
 import { probeColumnHits, visibleBandsOf, isHiddenWall, buildLayerStack, nearMembersOf } from './sectionHits.js';
 import { makeGrid } from '../../plan/planTestFixtures.js';
@@ -1086,7 +1087,7 @@ test('【失敗系・埋没した梁（直交）】切断位置が壁の足元�
   assert.equal(run(2000).length, 1, '対照: y=2000 は壁の足元の外');
 });
 
-test('【失敗系・z のクランプ】天井裏の梁・床以下の梁は積まない。天井をまたぐ梁は天井で、床をまたぐ梁は床で切る', () => {
+test('【失敗系・z のクランプ】天井裏の梁・床以下の梁は積まない。天井をまたぐ梁は天井では切らず（部屋帯は帯の天井断面で切る）、床をまたぐ梁は床で切る', () => {
   const zOf = (levelOffset) => {
     const graph = makeGraph();
     makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
@@ -1094,8 +1095,8 @@ test('【失敗系・z のクランプ】天井裏の梁・床以下の梁は積
     return memberHitsOf(probeMembers(cutAtY(graph, 1500), 2000).hits, 'memberFace').map(h => [h.z0, h.z1]);
   };
   assert.deepEqual(zOf(2300), [[2100, 2300]], '前提: 天井（2400）の下にある梁は切らない');
-  assert.deepEqual(zOf(2800), [], '下端 2600 ≥ 天井 2400（天井裏）');
-  assert.deepEqual(zOf(2500), [[2300, 2400]], '天井 2400 をまたぐ梁は天井で切る');
+  assert.deepEqual(zOf(2800), [], '下端 2600 ≥ 天井 2400（天井裏）。切断の描画範囲（0..2400）に掛からないので帯にできず edgeDropped（加算で描く）');
+  assert.deepEqual(zOf(2500), [[2300, 2500]], '天井 2400 をまたぐ梁は天井では切らない（B3-2。階段帯の天井裏は memberCeilZAt、部屋帯は帯の天井断面 clipBandsToVisible が切る）');
   assert.deepEqual(zOf(100), [[0, 100]], '床（0）をまたぐ梁（-100..100）は床で切る');
   assert.deepEqual(zOf(0), [], '天が床ちょうど（床の下の梁）は積まない');
   assert.deepEqual(zOf(-300), [], '床より下の梁');
@@ -1168,21 +1169,26 @@ test('【失敗系・床の無い列】自階に部屋の無い列（部屋の�
   assert.equal(memberHitsOf(probeMembers(cut, 5000).hits, 'memberFace').length, 0, '部屋の外の列（実床なし）');
 });
 
-test('【選択・B3-1】矩形室: 直交する梁の memberCut は帯になる（後ろの壁の種類 behind）。平行な梁の memberFace は帯にならない', () => {
+test('【選択・B3-1/B3-2】矩形室: 直交する梁の memberCut も、壁より手前の平行な梁の memberFace も帯になる（後ろの壁の種類 behind）', () => {
   const graph = makeGraph();
   makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
   addBeamV(graph, 2000, 500, 2500, 2300); // 直交（memberCut）z 2100..2300
-  addBeamH(graph, 2000, 0, 4000, 1500); // 平行（memberFace）
+  addBeamH(graph, 2000, 0, 4000, 1500); // 平行（memberFace・空中）z 1300..1500・切断線から 500（奥の壁は 3000）
   const cut = cutAtY(graph, 1500);
   const { hits, layerStack, unexploredBelowZ, bands } = probeMembers(cut, 2000);
   assert.equal(memberHitsOf(hits, 'memberCut').length + memberHitsOf(hits, 'memberFace').length, 2, '前提: 2 件積まれている');
-  assert.deepEqual(bands.map(b => [b.kind, b.z0, b.z1]), [['wall', 0, 2100], ['memberCut', 2100, 2300], ['wall', 2300, 2400]],
-    '梁の高さだけ奥の壁に代わる（memberFace は帯にならない）');
-  const mc = bands[1];
+  assert.deepEqual(bands.map(b => [b.kind, b.z0, b.z1]),
+    [['wall', 0, 1300], ['member', 1300, 1500], ['wall', 1500, 2100], ['memberCut', 2100, 2300], ['wall', 2300, 2400]],
+    '梁の高さだけ奥の壁に代わる');
+  const mc = bands[3];
   assert.equal(mc.memberType, 'beam');
   assert.equal(mc.behind, 'wall', '梁が無かったら選ばれていた帯＝奥の壁');
   assert.ok(!mc.along);
-  // memberCut を外した候補で選べば奥の壁 1 枚（検出力: 帯が割れているのは memberCut の効果）
+  const mf = bands[1];
+  assert.equal(mf.memberClass, 'airborne', '切断線から離れた梁＝空中');
+  assert.equal(mf.behind, 'wall');
+  assert.equal(mf.distMm, 450, '距離は手前の面までの奥行き nearMm（芯 500−半幅 50）');
+  // 梁を外した候補で選べば奥の壁 1 枚（検出力: 帯が割れているのは memberCut・memberFace の効果）
   const without = hits.filter(h => h.kind !== 'memberCut' && h.kind !== 'memberFace');
   assert.deepEqual(visibleBandsOf(without, cut, { layerStack, unexploredBelowZ }).map(b => b.kind), ['wall']);
 });
@@ -1306,7 +1312,7 @@ test('【選択・B3-1】梁の無い切断・memberLayers が空の切断は従
 });
 
 // 帯の z の境が増えると open 帯の far 付帯（区間の内部にある最も近い ceilFace）が区間ごとに変わり、併合されず帯が割れる。
-// member の z が帯の境にならない（coverableHits の除外）ことを、その割れで検出する（部屋 B・C は壁なしで続き、C の天井だけ 2200）。
+// 柱の見え掛かり（memberFace。B3-3 まで選択に入らない）の z が帯の境にならないことを、その割れで検出する（部屋 B・C は壁なしで続き、C の天井だけ 2200）。
 function openWithFarCeilFixture() {
   const g = makeGrid([0, 4000], [0, 4000, 8000, 12000]);
   g.interior([[0, 0]]);
@@ -1316,21 +1322,26 @@ function openWithFarCeilFixture() {
   return g.graph;
 }
 // memberCut は B3-1 から帯になる（z の境が増える）ので、ここは選択に入らない memberFace だけを検証する。
-for (const [label, build, axis] of [
-  ['memberFace（平行な梁 y=5000・天 2150）', (graph) => addBeamH(graph, 5000, 0, 4000, 2150), 3950],
-]) {
-  test(`【不変の仕掛け・帯が割れない】${label}: member ヒットを足しても open 帯は同じ（z 2150 が帯の境にならない）`, () => {
-    const graph = openWithFarCeilFixture();
-    build(graph);
-    const cut = frontCut(graph, { line: { isVertical: false, axisValue: axis, lo: 0, hi: 4000 }, bandRoomBounds: { x1: 0, x2: 4000, y1: 0, y2: 12000 } });
-    const { hits, layerStack, unexploredBelowZ } = probeMembers(cut, 2000);
-    assert.equal(memberHitsOf(hits, 'memberCut').length + memberHitsOf(hits, 'memberFace').length, 1, '前提: member が 1 件積まれている');
-    const without = hits.filter(h => h.kind !== 'memberCut' && h.kind !== 'memberFace');
-    const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
-    assert.ok(bands.some(b => b.kind === 'open' && b.farCeilZ === 2200), '前提: open 帯に遠側の天井 2200 が付く（z の境が増えれば割れる構成）');
-    assert.deepEqual(bands, visibleBandsOf(without, cut, { layerStack, unexploredBelowZ }));
-  });
-}
+test('【B3-2・遠側の天井】open の中の空中の梁（memberFace）の帯は、梁が無かったときの open 帯の範囲と遠側の天井（behindFar）を持つ。梁の外の高さの open 帯は梁が無いときと同じ', () => {
+  const graph = openWithFarCeilFixture();
+  addBeamH(graph, 5000, 0, 4000, 2350); // 梁 z 2150..2350（遠側の天井 2200 をまたぐ）
+  const cut = frontCut(graph, { line: { isVertical: false, axisValue: 3950, lo: 0, hi: 4000 }, bandRoomBounds: { x1: 0, x2: 4000, y1: 0, y2: 12000 } });
+  const { hits, layerStack, unexploredBelowZ } = probeMembers(cut, 2000);
+  assert.equal(memberHitsOf(hits, 'memberFace').length, 1, '前提: 空中の梁が 1 件積まれている');
+  const without = hits.filter(h => h.kind !== 'memberCut' && h.kind !== 'memberFace');
+  const plain = visibleBandsOf(without, cut, { layerStack, unexploredBelowZ });
+  const bands = visibleBandsOf(hits, cut, { layerStack, unexploredBelowZ });
+  const mf = bands.find(b => b.kind === 'member');
+  assert.ok(mf, '梁の帯がある');
+  assert.equal(mf.behind, 'open');
+  const under = plain.find(b => b.kind === 'open' && mf.z0 >= b.z0 - 1e-6 && mf.z1 <= b.z1 + 1e-6);
+  assert.ok(under?.farCeilZ === 2200, '前提: 梁が無いときの open 帯に遠側の天井 2200 が付く');
+  assert.deepEqual([mf.behindFar.spanZ0, mf.behindFar.spanZ1, mf.behindFar.farCeilZ], [under.z0, under.z1, 2200],
+    '梁が無いときの open 帯の範囲と遠側の天井を持つ（梁の高さだけで求めると範囲の外の遠側の天井を拾えない）');
+  assert.deepEqual(bands.filter(b => b.kind !== 'member').map(b => [b.kind, b.z0, b.z1]), [['open', 0, mf.z0], ['open', mf.z1, 2400]],
+    '梁の外の高さは梁が無いときの open 帯（0..2400）の残り');
+  assert.deepEqual(plain.map(b => [b.kind, b.z0, b.z1]), [['open', 0, 2400]], '前提: 梁が無ければ open 1 枚');
+});
 
 test('【memberLayers】cut.memberLayers があればそれを、無ければ cut.layers から立体を作る。空配列でも memberLayers が優先する', () => {
   const roomGraph = makeGraph();
@@ -1346,4 +1357,169 @@ test('【memberLayers】cut.memberLayers があればそれを、無ければ cu
   makeRectRoom(withBeam, 0, 0, 4000, 3000, 'LDK');
   addBeamV(withBeam, 2000, 500, 2500, 2300);
   assert.equal(memberHitsOf(probeMembers(cutAtY(withBeam, 1500), 2000).hits, 'memberCut').length, 1, 'cut.layers フォールバック');
+});
+
+// ---- 梁の見え掛かり（memberFace。U1b B3-2）----
+// 矩形室 0..4000×0..3000・切断線 y=1500（奥の壁 y=3000）に、平行な梁 y=2000（H200x100＝幅 100・成 200）。
+const faceRoom = (levelOffset = 1500, over = {}) => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  addBeamH(graph, 2000, 0, 4000, levelOffset);
+  return { graph, cut: cutAtY(graph, 1500, over) };
+};
+const faceHitsOf = (cut) => memberHitsOf(probeMembers(cut, 2000).hits, 'memberFace');
+
+test('【B3-2・選択】梁の見え掛かりは手前の面までの奥行き nearMm で壁と競う。梁が手前なら帯・同じ奥行きは壁が勝つ・梁が奥なら壁', () => {
+  const { cut } = faceRoom();
+  const { hits, layerStack, unexploredBelowZ } = probeMembers(cut, 2000);
+  const wall = hits.find(h => h.kind === 'wallFace');
+  const member = hits.find(h => h.kind === 'memberFace');
+  assert.ok(Number.isFinite(wall.nearMm) && member.nearMm === 450, '前提: 壁は材の手前の縁・梁は 500−50 の nearMm を持つ');
+  const kindsWith = (nearMm) => visibleBandsOf(hits.map(h => (h === member ? { ...h, nearMm } : h)), cut, { layerStack, unexploredBelowZ })
+    .filter(b => b.z0 < 1400 && b.z1 > 1400).map(b => b.kind);
+  assert.deepEqual(kindsWith(wall.nearMm - 10), ['member'], '梁のほうが手前＝梁の帯');
+  assert.deepEqual(kindsWith(wall.nearMm), ['wall'], '同じ奥行きは壁が先');
+  assert.deepEqual(kindsWith(wall.nearMm + 10), ['wall'], '梁のほうが奥＝壁');
+});
+
+test('【B3-2・選択】壁どうしの比較は従来どおり芯の距離 distMm（nearMm で逆転しない）。nearMm が非有限の比較は distMm→壁が先へ戻る', () => {
+  const { cut } = faceRoom();
+  const { hits, layerStack, unexploredBelowZ } = probeMembers(cut, 2000);
+  const wall = hits.find(h => h.kind === 'wallFace');
+  // 芯は遠いが材の手前の縁は近い壁を足しても、壁どうしは distMm の小さいほうが勝つ（出力を変えない）
+  const farBySpine = { ...wall, wall: { ...wall.wall }, distMm: wall.distMm + 100, nearMm: wall.nearMm - 500 };
+  const only = visibleBandsOf([wall, farBySpine], cut, { layerStack, unexploredBelowZ }).find(b => b.kind === 'wall');
+  assert.equal(only.distMm, wall.distMm, '壁どうしは distMm（芯の距離）で選ぶ');
+  // nearMm 非有限（梁・壁のどちらか）は nearMm で比べられない＝distMm→種類（壁が先）で決める
+  const member = hits.find(h => h.kind === 'memberFace');
+  const bandsAt = (m) => visibleBandsOf([wall, m], cut, { layerStack, unexploredBelowZ }).filter(b => b.z0 < 1400 && b.z1 > 1400).map(b => b.kind);
+  assert.deepEqual(bandsAt({ ...member, nearMm: NaN, distMm: wall.distMm - 1 }), ['member'], 'nearMm 非有限は distMm（梁が手前）で決める');
+  assert.deepEqual(bandsAt({ ...member, nearMm: NaN, distMm: wall.distMm }), ['wall'], '同点は壁が先');
+});
+
+test('【B3-2・memberClass】面の軸が梁の幅の帯の中なら facePlane・それ以外の視線側の平行な梁は airborne。切断線が幅の帯を通る梁は along（memberCut）', () => {
+  const classOf = (over) => faceHitsOf(faceRoom(1500, over).cut).map(h => h.memberClass);
+  assert.deepEqual(classOf({}), ['airborne'], '面なし＝空中');
+  assert.deepEqual(classOf({ face: { axisCL: { effectiveValue: 2000 }, isVertical: false } }), ['facePlane'], '面の軸が梁の芯の上＝面の通り');
+  assert.deepEqual(classOf({ face: { axisCL: { effectiveValue: 2400 }, isVertical: false } }), ['airborne'], '面の軸が梁の幅の外');
+  // 切断線が梁の幅の帯を通る（y=2000 を切る）→ memberCut の along。memberFace にはならない
+  const { graph } = faceRoom();
+  const along = probeMembers(cutAtY(graph, 2000), 2000).hits;
+  assert.equal(memberHitsOf(along, 'memberFace').length, 0);
+  assert.ok(memberHitsOf(along, 'memberCut').some(h => h.along === true), 'along の memberCut');
+  // 面の軸が梁の幅の帯の中なら、切断線が帯を通っても facePlane（along ではない）
+  const both = probeMembers(cutAtY(graph, 2000, { face: { axisCL: { effectiveValue: 2000 }, isVertical: false } }), 2000).hits;
+  assert.deepEqual(memberHitsOf(both, 'memberFace').map(h => h.memberClass), ['facePlane']);
+});
+
+test('【B3-2・フィルタ】候補段階の入口条件: 帯の部屋の外の空中の梁・天井裏（memberCeilZAt）・断面線より下に浮く面の通りの梁・面の範囲の外の梁は積まない', () => {
+  // 帯の部屋の外（bandRoomBounds の y 範囲に芯 2000 が入らない）の空中の梁は積まない。面の通りの梁には掛けない
+  assert.equal(faceHitsOf(faceRoom(1500, { bandRoomBounds: { x1: 0, x2: 4000, y1: 0, y2: 1800 } }).cut).length, 0, 'withinBandRoom（空中のみ）');
+  assert.equal(faceHitsOf(faceRoom(1500, { bandRoomBounds: { x1: 0, x2: 4000, y1: 0, y2: 1800 },
+    face: { axisCL: { effectiveValue: 2000 }, isVertical: false } }).cut).length, 1, '面の通りの梁には掛けない');
+  // 階段帯: その位置の天井（階段室の裏面）より梁の下端が上＝天井裏
+  assert.equal(faceHitsOf(faceRoom(1500, { memberCeilZAt: () => 1000 }).cut).length, 0, '下端 1300 ≥ 天井 1000');
+  assert.equal(faceHitsOf(faceRoom(1500, { memberCeilZAt: () => 1400 }).cut).length, 1, '下端 1300 < 天井 1400 は積む');
+  assert.equal(faceHitsOf(faceRoom(1500, { memberCeilZAt: () => null }).cut).length, 1, '天井が取れない点は見える側');
+  // 面の通りの梁が断面線（階段帯）より梁成以上下に浮いている
+  const floated = { face: { axisCL: { effectiveValue: 2000 }, isVertical: false }, memberFloorProfile: [[0, 3000], [4000, 3000]] };
+  assert.equal(faceHitsOf(faceRoom(1500, floated).cut).length, 0, 'belowProfile（面の通りの梁）');
+  assert.equal(faceHitsOf(faceRoom(1500, { memberFloorProfile: [[0, 3000], [4000, 3000]] }).cut).length, 1, '空中の梁には掛けない');
+  // 梁のスパンが面（line.lo/hi。探査の延長 probeExtend を含まない）に掛からない: 延長の中にだけある梁は積まない
+  assert.equal(faceHitsOf(faceRoom(1500, { line: { isVertical: false, axisValue: 1500, lo: 4100, hi: 5000 } }).cut).length, 0);
+  const outside = makeGraph();
+  makeRectRoom(outside, 0, 0, 4000, 3000, 'LDK');
+  addBeamH(outside, 2000, 2000, 4000, 1500); // スパン 2000..4000
+  const ext = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 1000, probeExtendHiMm: 3000 } }; // 面は 0..1000・延長で 4000 まで探査
+  assert.equal(memberHitsOf(probeMembers(frontCut(outside, ext), 2500).hits, 'memberFace').length, 0, '面の外（延長の中）だけの梁は積まない');
+  const onFace = { line: { isVertical: false, axisValue: 1500, lo: 0, hi: 2500, probeExtendHiMm: 1500 } };
+  assert.equal(memberHitsOf(probeMembers(frontCut(outside, onFace), 2500).hits, 'memberFace').length, 1, '面に掛かる梁は積む');
+});
+
+test('【B3-2・配線】buildCutContent 経由の gapPass: 階段帯（memberSplitsGaps:false）は梁の見え掛かりの帯に gapPass が付きアキのセルを割らない（1 つ）。部屋帯は割る（2 つ）', () => {
+  const run = (opts) => {
+    const graph = openWithFarCeilFixture();
+    addBeamH(graph, 5000, 0, 4000, 1400); // 梁 z 1200..1400（遠側の天井 2200 より下＝後ろは open）
+    const cut = frontCut(graph, { line: { isVertical: false, axisValue: 3950, lo: 0, hi: 4000 }, bandRoomBounds: { x1: 0, x2: 4000, y1: 0, y2: 12000 } });
+    const r = buildCutContent(cut, makeProbeContext(cut.layers), opts);
+    const members = r.columns.flatMap(c => c.bands).filter(b => b.kind === 'member');
+    return { members, texts: r.gapMarks.filter(p => p.type === 'text').length };
+  };
+  const room = run({});
+  assert.ok(room.members.length > 0 && room.members.every(b => b.behind === 'open' && b.gapPass === undefined), '前提: 後ろが open の梁の帯・gapPass なし');
+  assert.equal(room.texts, 2, '部屋帯: 梁がアキのセルを割る');
+  const stair = run({ memberSplitsGaps: false });
+  assert.ok(stair.members.length > 0 && stair.members.every(b => b.gapPass === true), '階段帯: gapPass が付く');
+  assert.equal(stair.texts, 1, '階段帯: アキのセルを割らない（R5）');
+});
+
+test('【B3-2・規則 A】切断線と梁の間に立つ全高の壁が覆う区間は member の候補にならない（壁が探査の候補に無くても効く）。壁の外の列・腰壁なら隠さない（失敗系）', () => {
+  const build = (knee) => {
+    const { graph, cut } = faceRoom(1500); // 梁 y=2000（切断線 y=1500 から 500・nearMm 450）
+    const a = clAt(graph, H_CL, 1800), s = clAt(graph, V_CL, 0), e = clAt(graph, V_CL, 1000);
+    graph.addWall(a, 0, false, s, 0, e, 0, {}); // 切断線と梁の間 y=1800・x 0..1000
+    if (knee) graph.kneeDropWalls.set(`${a.id}:${s.id}:${e.id}`, { knee: { topHeight: 900 } });
+    return cut;
+  };
+  const countAt = (cut, x) => memberHitsOf(probeMembers(cut, x).hits, 'memberFace').length;
+  const full = build(false);
+  assert.equal(countAt(full, 500), 0, '壁（x 0..1000）が覆う列には積まない');
+  assert.equal(countAt(full, 2000), 1, '壁の外の列には積む');
+  assert.equal(countAt(build(true), 500), 1, '腰壁は全高とみなさず隠さない');
+});
+
+test('【B3-2・フィルタ】床の無い区間（階段の穴。cut.memberFloorlessRanges）では床で梁を切らない。その外は床（0）で切る', () => {
+  const zOf = (over) => faceHitsOf(faceRoom(100, over).cut).map(h => [h.z0, h.z1]); // 梁 z -100..100（床 0 をまたぐ）
+  assert.deepEqual(zOf({}), [[0, 100]], '既定は床で切る');
+  assert.deepEqual(zOf({ memberFloorlessRanges: [{ lo: 1500, hi: 2500 }] }), [[-100, 100]], '床なし区間（列 x=2000 を含む）は切らない');
+  assert.deepEqual(zOf({ memberFloorlessRanges: [{ lo: 2500, hi: 3500 }] }), [[0, 100]], '床なし区間の外の列は床で切る');
+});
+
+test('【B3-2・加算で描く部材】切断の描画 z 範囲に掛からない空中の梁は帯にできず edgeDropped（droppedMemberKeysOf が拾う）。範囲内の梁は拾わない', () => {
+  const dropped = (levelOffset) => {
+    const { cut } = faceRoom(levelOffset);
+    const near = nearMembersOf(cut);
+    probeMembers(cut, 2000);
+    return near.edgeDropped.size;
+  };
+  assert.equal(dropped(1500), 0, '範囲内の梁は帯が持つ');
+  assert.equal(dropped(2800), 1, '天井（描画範囲の上）より上の梁は加算で描く');
+  assert.equal(dropped(-300), 1, '床より下の梁は加算で描く');
+});
+
+test('【B3-2・slab】床構造・天井懐（slab）の中の梁の見え掛かりは slab の帯を割らず members の片（kind:member）になる。連続する片は 1 つに畳まれる', () => {
+  const tall = { zRange: { loZ: 0, hiZ: 5400 } };
+  const { cut } = faceRoom(2700, tall); // 梁 z 2500..2700（天井 2400 の上＝懐）
+  const { bands } = probeMembers(cut, 2000);
+  assert.ok(!bands.some(b => b.kind === 'member'), '帯としては割らない');
+  const slab = bands.find(b => b.kind === 'slab' && (b.members ?? []).some(m => m.kind === 'member'));
+  assert.ok(slab, 'slab の帯に片が添う');
+  assert.equal(slab.members.filter(m => m.kind === 'member').length, 1, '同じ梁の片は z で続くなら 1 つ');
+  assert.deepEqual([slab.members[0].z0, slab.members[0].z1], [2500, 2700]);
+  assert.equal(slab.members[0].memberClass, 'airborne');
+});
+
+test('【B3-2・深度上限】梁の見え掛かりも壁と同じ上限: 手前の壁から上限以上奥の梁は帯にならずアキへ戻る（slab の中の片は落とす）', () => {
+  // 部屋 B・C が壁なしで続く構成。切断線 y=7500 の手前の壁（y=7800・x 0..1000）が最も手前の面の基準。梁は C の奥 y=9000（nearMm 1450）
+  const build = (levelOffset, over = {}) => {
+    const graph = openWithFarCeilFixture();
+    graph.addWall(clAt(graph, H_CL, 7800), 100, false, clAt(graph, V_CL, 0), 0, clAt(graph, V_CL, 1000), 0, {});
+    addBeamH(graph, 9000, 0, 4000, levelOffset);
+    const cut = frontCut(graph, { line: { isVertical: false, axisValue: 7500, lo: 0, hi: 4000 }, bandRoomBounds: { x1: 0, x2: 4000, y1: 0, y2: 12000 }, ...over });
+    return buildColumns(cut, makeProbeContext(cut.layers)).flatMap(c => c.bands);
+  };
+  const far = build(1500);
+  assert.ok(!far.some(b => b.kind === 'member'), '上限以上奥の梁は帯にならない');
+  assert.ok(far.some(b => b.kind === 'open' && b.z0 <= 1300 && b.z1 >= 1500), '梁の高さはアキ（梁が無いときの帯）へ戻る');
+  const slabFar = build(2500, { zRange: { loZ: 0, hiZ: 5400 } });
+  assert.ok(!slabFar.some(b => (b.members ?? []).some(m => m.kind === 'member')), 'slab の中の片も落とす');
+  // 対照: 手前（y=7800 のすぐ奥 7900）の梁は帯になる
+  const near = (() => {
+    const graph = openWithFarCeilFixture();
+    graph.addWall(clAt(graph, H_CL, 7800), 100, false, clAt(graph, V_CL, 0), 0, clAt(graph, V_CL, 1000), 0, {});
+    addBeamH(graph, 7900, 0, 4000, 1500);
+    const cut = frontCut(graph, { line: { isVertical: false, axisValue: 7500, lo: 0, hi: 4000 }, bandRoomBounds: { x1: 0, x2: 4000, y1: 0, y2: 12000 } });
+    return buildColumns(cut, makeProbeContext(cut.layers)).flatMap(c => c.bands);
+  })();
+  assert.ok(near.some(b => b.kind === 'member'), '対照: 上限内の梁は帯になる');
 });

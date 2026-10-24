@@ -1289,9 +1289,35 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // アキのバツまでは吹抜けの多層帯とまったく同じ処理を通る。ここから下が階段固有の後段加工。
   // floorlessRanges … 床の無い列（下階の階段の吹抜け）。梁の断面の輪郭を床の遮蔽が丸ごと描く／描かないの単位で判定するための入力
   // （探査の候補収集が使う。section/sectionStructure.js memberOutlineFloorState）。構造材の床の遮蔽（下の floorOcclusion）と同じ値。
+  // 空中を横断する梁の見えがかりは、その位置の天井より上にあれば天井裏なので描かない（ユーザー指示 2026-10-15「2FL にある横架材見え掛かりは、
+  // 天井仕上げ面より上〔=天井裏〕につき描画不要」）。天井の供給源は**階段室の裏面**（自階の層の stairSoffit を cellAt で評価）だけ
+  // ——裏面の無い階段帯（鉄骨・上階が吹抜け）の天井は上階天井までの空で、部屋の CH は帯の天井ではない（2026-08「6」A
+  // 「材が空中に横断しているので中線で鋼材の天地に線を描画」はそのまま）。階段室の外の点は null＝見える側。
+  const selfLayer = (cut.layers ?? []).find(l => l?.role === 'self') ?? null;
+  const soffitRoomId = selfLayer?.stairSoffit?.roomId ?? null;
+  // 自階の階段の到達辺の外の平らな区間（裏面の立体の arrivalFlat。入口柱の面 Q3〜柱巻きの前縁 Q1）の上は上階 FL の床構造の中
+  // ——そこを横切る梁（2FL の横架材）は自分の裏面＝その下の仕上げ空間の天井より上なので描かない（2026-10-16: 裏面にこの区間を
+  // 足したら、面 A の 2FL の横架材が復路レーンの端で上階の裏面より下と判定され復活した。上階の裏面と自分の裏面の低い方で判定する。
+  // 区間の外〔往路の上り口など〕では自分の裏面は段の下の天井で、段の上の空気から見える梁の判定には使わない）。
+  const flat = ownSoffitSolid?.arrivalFlat ?? null;
+  const inArrivalFlat = flat ? (x, y) => {
+    const run = flat.vertical ? y : x, across = flat.vertical ? x : y;
+    return run >= Math.min(flat.run, flat.endRun) - GAP_EPS && run <= Math.max(flat.run, flat.endRun) + GAP_EPS
+      && across >= flat.across[0] - GAP_EPS && across <= flat.across[1] + GAP_EPS;
+  } : null;
+  const ownCeilAt = inArrivalFlat ? (x, y) => (inArrivalFlat(x, y) ? stairSoffitChAt({ solid: ownSoffitSolid, floorStepMm: 0 }, x, y) : null) : null;
+  const ceilZAtWorld = soffitRoomId || ownCeilAt ? (x, y) => {
+    const c = soffitRoomId ? probeCtx.cellAt(selfLayer, x, y) : null;
+    const above = c?.room?.id === soffitRoomId && Number.isFinite(c.ceilZ) ? c.ceilZ : null;
+    const own = ownCeilAt ? ownCeilAt(x, y) : null;
+    const zs = [above, own].filter(Number.isFinite);
+    return zs.length ? Math.min(...zs) : null;
+  } : null;
   const { cut: pcut, columns, wallPrims, gapMarks: rawGapMarks, memberPrims, memberEdgesX } =
     buildCutContent(cut, probeCtx, {
       endExtendMm, bandRoomBounds, upperPlaneOverhang: true, gapFloorProfile, floorlessRanges: floorlessRangesOfCut(cut),
+      // 梁の見え掛かり（memberFace。U1b B3-2）の入力: 天井裏の判定と、アキを割らない（階段帯 R5）
+      memberCeilZAt: ceilZAtWorld ?? undefined, memberSplitsGaps: false,
     });
   // 展開図一般化Phase 6b-2「一体設計」(.claude/elevation-redesign.md§5.12):
   // 階段自身の幾何（踏面CUT・ささら・桁枠）の描画範囲は`cutDrawRange`を、上階の平面が面端より
@@ -1362,26 +1388,7 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 天井仕上げ面より上（=天井裏）につき描画不要」）。天井の供給源は**階段室の裏面**（自階の層の stairSoffit を cellAt で評価）だけ
   // ——裏面の無い階段帯（鉄骨・上階が吹抜け）の天井は上階天井までの空で、部屋の CH は帯の天井ではない（2026-08「6」A
   // 「材が空中に横断しているので中線で鋼材の天地に線を描画」はそのまま）。階段室の外の点は null＝見える側。
-  const selfLayer = (cut.layers ?? []).find(l => l?.role === 'self') ?? null;
-  const soffitRoomId = selfLayer?.stairSoffit?.roomId ?? null;
-  // 自階の階段の到達辺の外の平らな区間（裏面の立体の arrivalFlat。入口柱の面 Q3〜柱巻きの前縁 Q1）の上は上階 FL の床構造の中
-  // ——そこを横切る梁（2FL の横架材）は自分の裏面＝その下の仕上げ空間の天井より上なので描かない（2026-10-16: 裏面にこの区間を
-  // 足したら、面 A の 2FL の横架材が復路レーンの端で上階の裏面より下と判定され復活した。上階の裏面と自分の裏面の低い方で判定する。
-  // 区間の外〔往路の上り口など〕では自分の裏面は段の下の天井で、段の上の空気から見える梁の判定には使わない）。
-  const flat = ownSoffitSolid?.arrivalFlat ?? null;
-  const inArrivalFlat = flat ? (x, y) => {
-    const run = flat.vertical ? y : x, across = flat.vertical ? x : y;
-    return run >= Math.min(flat.run, flat.endRun) - GAP_EPS && run <= Math.max(flat.run, flat.endRun) + GAP_EPS
-      && across >= flat.across[0] - GAP_EPS && across <= flat.across[1] + GAP_EPS;
-  } : null;
-  const ownCeilAt = inArrivalFlat ? (x, y) => (inArrivalFlat(x, y) ? stairSoffitChAt({ solid: ownSoffitSolid, floorStepMm: 0 }, x, y) : null) : null;
-  const ceilZAtWorld = soffitRoomId || ownCeilAt ? (x, y) => {
-    const c = soffitRoomId ? probeCtx.cellAt(selfLayer, x, y) : null;
-    const above = c?.room?.id === soffitRoomId && Number.isFinite(c.ceilZ) ? c.ceilZ : null;
-    const own = ownCeilAt ? ownCeilAt(x, y) : null;
-    const zs = [above, own].filter(Number.isFinite);
-    return zs.length ? Math.min(...zs) : null;
-  } : null;
+  // （selfLayer・ceilZAtWorld は buildCutContent の前で作る。梁の見え掛かりの候補収集 memberCeilZAt と加算の見え掛かりが同じ天井を使う）
   // 構造梁の見えがかりも、天端が切断面にある flight の後ろ（behindRects）は隠れ線（2 階の面 A で床の梁の天の線が床線と重なる）
   // 壁内の梁が壁の面から出て部屋側から見える断面の矩形（その壁の断面線をその z で分ける。下の wallOut）
   const wallLineCuts = [];
@@ -1392,6 +1399,8 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
     ...structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, gapFloorProfile, {
       ceilZAtWorld, columnSolids: structuralColumnContribution(cut.layers), wallLineCuts,
       memberCuts: { dropped: droppedMemberKeysOf(pcut) },
+      // 梁の見え掛かり（空中・面の通り）も帯（memberFace。U1b B3-2）が描く——ここで描くのは帯が持たない部材（dropped）だけ
+      memberFacesByBand: true,
       // 自階の床（スラブ）が構造部材を隠す。床の無い列は下階の階段の吹抜け（section/sectionStructure.js occludeByFloor）。
       // 区間の端は切断壁の吹抜け側の面（lo/hi）——壁の帯の下に床梁の見えがかりを残さない（裁定 2026-10-19。下の 2FL の隔て板の注記と同じ）
       floorOcclusion: { floorZ: selfLayer?.floorZMm ?? 0, floorlessRanges: floorlessRangesOfCut(cut) },

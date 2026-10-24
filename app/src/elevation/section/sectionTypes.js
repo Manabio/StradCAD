@@ -25,11 +25,11 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 
 /**
  * `buildSectionFromLine`（sectionContent.js）の`opts`は、次の4群の交差型（ただし BandInjections の
- * gapFloorProfile・floorlessRanges は`buildCutContent`専用で、`buildSectionFromLine`は転送しない）。形は平らなオブジェクトのまま
+ * gapFloorProfile・floorlessRanges・memberCeilZAt・memberSplitsGaps は`buildCutContent`専用で、`buildSectionFromLine`は転送しない）。形は平らなオブジェクトのまま
  * （群は読み手による分類で、キーの置き場所を変えるものではない）。契約は`sectionTypes.test.js`が
  * 関数ごと（`buildSectionFromLine`／`buildCutContent`）の`opts.*`の読み取りとこの4群の`@property`の一致で固定する。
  * `buildCutContent`の`opts`はこのうち RenderStyle の全部と、CutSpec の endExtendMm・upperPlaneOverhang、
- * ProbeInputs の bandRoomBounds、BandInjections の gapBeamRects・gapFloorProfile・floorlessRanges だけを読む。
+ * ProbeInputs の bandRoomBounds、BandInjections の gapBeamRects・gapFloorProfile・floorlessRanges・memberCeilZAt・memberSplitsGaps だけを読む。
  *
  * @typedef {object} CutSpec 切断の定義（どの線を・どの向きで・どのz範囲で切るか）
  * @property {1|-1} viewSign
@@ -66,6 +66,9 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  * @property {Array<[number,number]>|null} [gapFloorProfile] アキのセルの下限にする断面線（階段帯）
  * @property {Array<{lo:number,hi:number}>} [floorlessRanges] 床の無い列（下階の階段の吹抜け。階段帯。`buildCutContent` 専用。梁の断面の輪郭を
  *   床の遮蔽が丸ごと描く／描かないの単位で判定する入力。U1b B3-1）
+ * @property {((x:number, y:number)=>number|null)|null} [memberCeilZAt] その位置（world の x, y）の天井 z（階段室の裏面など。階段帯。
+ *   `buildCutContent` 専用）。梁の見え掛かり（memberFace）は下端がこれ以上の位置では積まない＝天井裏（U1b B3-2）
+ * @property {boolean} [memberSplitsGaps] false で梁の見え掛かりがアキのセルを割らない（階段帯 R5。`buildCutContent` 専用。省略・true は割る。U1b B3-2）
  * @property {Array<{graph:object, floorZMm:number, role:string}>} [memberLayers] 梁の断面（memberCut）の候補を作る層（部屋帯は上階つき。
  *   省略は `layers`。`SectionCut.memberLayers`）
  * @property {boolean} [memberFromRoomSide] 梁の断面の続きを室内側で見る（面を見る帯。`SectionCut.memberFromRoomSide`）
@@ -318,7 +321,8 @@ export function farXOfCutOnSlab(slabRun, cutRun) {
 function isAirBand(band) {
   // 梁の断面（memberCut）は梁が無かったら選ばれていた帯（behind）で見る（梁は手前の空気を塞ぐ実体ではなく、従来は帯に出なかった）
   if (band.kind === 'memberCut') return band.behind === 'open' || band.behind === 'wall' || band.behind === 'farVoid';
-  if (band.kind === 'open' || band.kind === 'farVoid' || band.kind === 'wall') return true;
+  // 梁の見え掛かり（member。U1b B3-2）は切断面の後ろにある実体＝切断線の位置は空気（壁の見えがかりと同じ）
+  if (band.kind === 'open' || band.kind === 'farVoid' || band.kind === 'wall' || band.kind === 'member') return true;
   return band.kind === 'hidden' && (band.hiddenOf ?? 'wall') === 'wall';
 }
 
@@ -581,7 +585,10 @@ export const WHOLE_OUTLINE = Symbol.for('strad.wholeOutline');
  * @returns {boolean}
  */
 export function isOpenLikeBand(band) {
-  return band.kind === 'open' || (band.kind === 'memberCut' && band.behind === 'open' && band.along !== true);
+  // 梁の見え掛かり（member。U1b B3-2）は、アキを割らない切断（階段帯。R5。`gapPass`）のときだけ、梁が無ければ open だった帯をアキとして扱う。
+  // 割る切断（部屋帯）では梁がアキのセルを割る（加算の gapBeamRects split:true 相当）ので含めない。
+  return band.kind === 'open' || (band.kind === 'memberCut' && band.behind === 'open' && band.along !== true)
+    || (band.kind === 'member' && band.gapPass === true && band.behind === 'open');
 }
 
 /**

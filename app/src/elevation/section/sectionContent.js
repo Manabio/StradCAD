@@ -351,7 +351,8 @@ export function farStairViewPrimitives(columns, cut, probeCtx) {
  */
 export function droppedMemberKeysOf(pcut, { inZRange = false } = {}) {
   const near = nearMembersOf(pcut);
-  for (const { solid } of near.beams) near.cutStateOf(solid); // 梁ごとの判定（z 範囲に掛からない梁を edgeDropped に足す）を全部済ませる
+  // 梁ごとの判定（z 範囲に掛からない梁を edgeDropped に足す。断面・along の cutStateOf と見え掛かりの faceStateOf）を全部済ませる
+  for (const { solid } of near.beams) { near.cutStateOf(solid); near.faceStateOf(solid); }
   // inZRange … z 範囲に掛からない梁を除く（部屋帯は範囲外の部材を描かない。階段帯は床の遮蔽で描くので除かない）
   return new Set([...near.edgeDropped].filter(s => !(inZRange && near.zOutside?.has(s))).map(memberKey));
 }
@@ -385,8 +386,15 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   // 梁の断面（memberCut。U1b B3-1）を探査の候補にしてよいかの判定（`sectionHits.js` の nearMembersOf）が読む、階段帯の入力:
   // 断面線（gapFloorProfile。これより下に浮く梁は出さない）と床なし区間（階段の穴・下階の階段の吹抜け。床の遮蔽の輪郭の単位判定）。
   // 探査の入力は cut だけなので cut に載せる（呼び出し側が opts で渡したときだけ。部屋帯・吹抜け帯は渡さない）。
-  const pcut = (opts.gapFloorProfile || opts.floorlessRanges)
-    ? { ...extended, memberFloorProfile: opts.gapFloorProfile ?? null, memberFloorlessRanges: opts.floorlessRanges ?? [] }
+  // 梁の見え掛かり（memberFace。U1b B3-2）の入力も同じ流儀で cut に載せる（階段帯だけが渡す）:
+  //  memberCeilZAt … (x, y)→その位置の天井 z（階段室の裏面など）。梁の下端がこれ以上なら天井裏＝見え掛かりを積まない（加算の ceilZAtWorld）。
+  //  memberSplitsGaps … false で梁の見え掛かりがアキのセルを割らない（階段帯 R5。部屋帯・吹抜け帯は割る）。
+  const pcut = (opts.gapFloorProfile || opts.floorlessRanges || opts.memberCeilZAt || opts.memberSplitsGaps === false)
+    ? {
+      ...extended, memberFloorProfile: opts.gapFloorProfile ?? null, memberFloorlessRanges: opts.floorlessRanges ?? [],
+      ...(opts.memberCeilZAt ? { memberCeilZAt: opts.memberCeilZAt } : {}),
+      ...(opts.memberSplitsGaps === false ? { memberSplitsGaps: false } : {}),
+    }
     : extended;
   const columns = buildColumns(pcut, probeCtx);
   // scale（px/mm）はアキ標記の省略判定に使う（sectionEmit.jsのemitOpenGapMarks）。

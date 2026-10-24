@@ -329,8 +329,8 @@ test('【失敗系・ceilProfileEdgeAt】profileが無い・空・ceilZ非有限
 });
 
 // ---- 契約: 関数ごとの opts 読み取りキー ----
-//   buildSectionFromLine = CutSpec ∪ ProbeInputs ∪ RenderStyle ∪ BandInjections − gapFloorProfile・floorlessRanges（転送しない）
-//   buildCutContent      = Pick の 9 キー（endExtendMm・upperPlaneOverhang・bandRoomBounds・RenderStyle 全部・gapBeamRects・gapFloorProfile・floorlessRanges）
+//   buildSectionFromLine = CutSpec ∪ ProbeInputs ∪ RenderStyle ∪ BandInjections − gapFloorProfile・floorlessRanges・memberCeilZAt・memberSplitsGaps（転送しない）
+//   buildCutContent      = Pick の 11 キー（endExtendMm・upperPlaneOverhang・bandRoomBounds・RenderStyle 全部・gapBeamRects・gapFloorProfile・floorlessRanges・memberCeilZAt・memberSplitsGaps）
 const stripComments = src => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/.*$/gm, '');
 
 // `export function name(` の開始行〜次の `\nexport ` 直前（なければ末尾）。withProbeExtension の opts は別物なので含めない。
@@ -376,10 +376,13 @@ test('契約: 関数ごとの opts 読み取りキーと 4 typedef の @property
   assert.equal(declared.size, total, '同じキーが複数の群に重複して宣言されている');
   declared.delete('gapFloorProfile'); // buildSectionFromLine は buildCutContent へ転送しない（呼び出し側も渡さない）
   declared.delete('floorlessRanges'); // 同上（階段帯が buildCutContent へ直接渡す。U1b B3-1）
+  declared.delete('memberCeilZAt'); // 同上（階段帯の天井裏の判定。U1b B3-2）
+  declared.delete('memberSplitsGaps'); // 同上（階段帯はアキを割らない。U1b B3-2）
   assert.deepEqual([...read].sort(), [...declared].sort(),
     `buildSectionFromLine 読み取り−宣言=${[...read].filter(k => !declared.has(k))} / 宣言−読み取り=${[...declared].filter(k => !read.has(k))}`);
-  const pick = ['endExtendMm', 'upperPlaneOverhang', 'bandRoomBounds', ...groups.RenderStyle, 'gapBeamRects', 'gapFloorProfile', 'floorlessRanges'];
-  assert.deepEqual([...readCut].sort(), pick.sort(), 'buildCutContent の読み取りが Pick の 9 キーと一致しない');
+  const pick = ['endExtendMm', 'upperPlaneOverhang', 'bandRoomBounds', ...groups.RenderStyle, 'gapBeamRects', 'gapFloorProfile', 'floorlessRanges',
+    'memberCeilZAt', 'memberSplitsGaps'];
+  assert.deepEqual([...readCut].sort(), pick.sort(), 'buildCutContent の読み取りが Pick の 11 キーと一致しない');
 });
 
 // ---- makeSectionCut（SectionCut の唯一の生成器）----

@@ -385,7 +385,7 @@ export function beamWallEmbedding(beam, wallEntries, opts = {}) {
 
 // 梁の芯が帯自身の部屋の広がり（cut.bandRoomBounds。世界座標の箱）の中にあるか。
 // 未設定（部屋が特定できない呼び出し）は制限しない。
-function withinBandRoom(cut, axisWorld) {
+export function withinBandRoom(cut, axisWorld) {
   const b = cut.bandRoomBounds;
   if (!b || !Number.isFinite(b.x1) || !Number.isFinite(b.x2)) return true;
   const [lo, hi] = cut.line.isVertical ? [b.x1, b.x2] : [b.y1, b.y2];
@@ -766,7 +766,7 @@ function fullHeightWallsCovering(cut, beam, partitionLinesOf) {
  * 梁の手前の縁の間に完全にあるものだけ。面自身の壁（芯が切断線上）は梁の手前ではないので数えない。
  * @returns {Array<[number, number]>} 世界座標のスパン区間
  */
-function wallCoveredSpans(cut, beam, halfW, partitionLinesOf) {
+export function wallCoveredSpans(cut, beam, halfW, partitionLinesOf) {
   const sign = cut.viewSign ?? 1;
   const axis = cut.line.axisValue;
   const dNear = (beam.axisWorld - axis) * sign - halfW;
@@ -995,8 +995,10 @@ function rangesOverlap(aLo, aHi, bLo, bHi) {
  *   fromRoomSide は断面の続きを室内側（viewSign の逆）で見る。部屋帯だけ true（既定 false。階段帯は従来どおり）。
  *   memberCuts（U1b B3-1）… `{dropped:Set<string>, only?:boolean}`。梁の断面（section）と切断線の帯の中を通る梁（along。面の通りの梁でない parallel）は
  *   探査の選択（memberCut の帯。sectionHits.js）が描く——渡した呼び出しはそれらを返さない。dropped（`memberKey` の集合）は帯が持たない部材
- *   （列の端を捨てた・z 範囲に掛からない・探査の範囲の外。`droppedMemberKeysOf`）で、これだけ従来どおり返す。only:true は dropped の断面・along
- *   だけを返し、空中・面の通りの見え掛かりは返さない。省略は従来どおり全部返す（単体テスト・帯を持たない呼び出し）。
+ *   （列の端を捨てた・z 範囲に掛からない・探査の範囲の外。`droppedMemberKeysOf`）で、これだけ従来どおり返す。only:true は dropped の部材
+ *   （断面・along・見え掛かり）だけを返す。省略は従来どおり全部返す（単体テスト・帯を持たない呼び出し）。
+ *   memberFacesByBand（U1b B3-2）… true なら空中の梁・面の通りの梁の見え掛かりも帯（memberFace）が描くので、dropped でない部材は返さない
+ *   （dropped の部材は従来どおり返す）。gapBeamRects の矩形用（`beamBlockerRectsForFace`）はこれを渡さず全部返す（B4 で撤去）。
  *   columnSolids は規則B（柱の包み込み外形に隠れる区間）用。undefined は cut.layers から求め、null は規則Bを使わない（対照用）。
  *   floorOcclusion は自階の床（スラブ）の遮蔽（`occludeByFloor`。出来た全プリミティブに掛かる）。省略は遮蔽なし。
  *   wallLineCuts は出力用の配列: 描いた断面のうち、壁内の梁が壁の面から出ている（部屋側から見える）ものの、壁の断面線を分ける矩形
@@ -1144,8 +1146,11 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
       && !onFacePlane
       && !(cut.line.axisValue >= beam.axisWorld - halfW - GAP_EPS
         && cut.line.axisValue <= beam.axisWorld + halfW + GAP_EPS); // 芯上は下のparallelが担当
+    // 見え掛かり（空中・面の通り）は、帯（memberFace。U1b B3-2）が持つ部材なら帯が描く。加算で描くのは帯が持たない部材（dropped）だけ
+    // （opts.memberFacesByBand）。only は dropped の部材だけを返す呼び出し。どちらも指定が無ければ従来どおり全部（gapBeamRects の矩形用・単体テスト）
+    const faceHeldByBand = (opts.memberFacesByBand === true || onlyDropped) && !droppedKeys.has(memberKey(beam));
     if (airborne) {
-      if (onlyDropped) continue; // 帯が持たない部材の断面・along だけを求める呼び出し（opts.memberCuts.only）は見え掛かりを返さない
+      if (faceHeldByBand) continue;
       // 壁（規則A）・柱（規則B）に隠れるスパン区間を引き、残る区間ごとに天地を描く
       // 壁の足元（beam.embedding.along。スパンの一部だけを覆う壁）も引く——柱で分かれた梁と 1 本で続く梁で描画を変えない
       const hidden = mergeSpans([...wallCoveredSpans(cut, beam, halfW, partitionLinesOf), ...colSpans, ...(beam.embedding?.along ?? [])]);
@@ -1161,7 +1166,7 @@ export function visibleBeamPieces(contribution, cut, columns, floorProfile = nul
       ((cut.line.axisValue >= beam.axisWorld - halfW - GAP_EPS && cut.line.axisValue <= beam.axisWorld + halfW + GAP_EPS) || onFacePlane) &&
       rangesOverlap(cut.line.lo, cut.line.hi, beam.spanLo, beam.spanHi);
     if (!parallel) continue;
-    if (onlyDropped && onFacePlane) continue; // 面の通りの梁は帯の along ではない（見え掛かり）
+    if (onFacePlane && faceHeldByBand) continue; // 面の通りの梁（見え掛かり）も帯（memberFace）が持つ部材は帯が描く
     const xLo = localXOf(cut, beam.spanLo), xHi = localXOf(cut, beam.spanHi);
     if (belowProfile(Math.min(xLo, xHi), Math.max(xLo, xHi), beam)) continue;
     const zTop = beam.topZ, zBot = beam.topZ - beam.depthMm;

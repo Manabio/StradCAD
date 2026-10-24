@@ -1488,11 +1488,13 @@ test('【配線】stairFaceSequence: 面の通りの梁（踊り場の梁が bas
   const x0 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 0);
   const x1 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
   const y0 = graph.centerLines.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 0);
-  // levelOffset=1500 は seq3 の baseFloorZ（踊り場 1200）より上＝線種の降格（細破線）を受けず、梁の線種がそのまま出る
-  graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', y0, false, x0, x1, { role: 'landing', levelOffset: 1500 });
+  // levelOffset=2200・成 400（z 1800..2200）は seq3 の baseFloorZ（踊り場 1200）より上＝線種の降格（細破線）を受けず、梁の線種がそのまま出る。
+  // 梁の幅 200 は壁より厚く壁の面より手前に出る（U1b B3-2: 見え掛かりの梁は壁と手前の面までの奥行き nearMm で競い、同じ奥行きは壁が勝つ。
+  // 壁に収まる幅の梁は壁の向こう＝帯にならない）
+  graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H400x200', y0, false, x0, x1, { role: 'landing', levelOffset: 2200 });
   const after = stairFaceSequence(stair, faces, graph, { ...OPTS, layers: buildBandLayers(graph) });
   const seq3 = after.find(e => e.seqNo === '3');
-  for (const z of [1500, 1300]) { // 梁の天（topZ=levelOffset）と地（topZ-成200）
+  for (const z of [2200, 1800]) { // 梁の天（topZ=levelOffset）と地（topZ-成200）
     const lines = seq3.content.filter(p => p.type === 'line' && Math.abs(p.y1 - p.y2) < 1e-6 && Math.abs(-p.y1 - z) < 1e-6);
     assert.equal(lines.length, 1, `z=${z}に鋼材の天地の線が1本出るはず`);
     assert.equal(lines[0].weight, 'thin', `z=${z}は面の通りの梁＝細線（中線 medium ではない）`);

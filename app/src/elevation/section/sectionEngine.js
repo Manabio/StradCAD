@@ -54,6 +54,7 @@ function bandsEqual(a, b) {
       // slab の帯に添えた梁の断面の片（members）も同じ梁・同じ z の列だけ統合する
       && (band.members ?? []).length === (other.members ?? []).length
       && (band.members ?? []).every((m, j) => m.member === other.members[j].member && !!m.along === !!other.members[j].along
+        && m.kind === other.members[j].kind && (m.distMm ?? null) === (other.members[j].distMm ?? null)
         && Math.abs(m.z0 - other.members[j].z0) < GAP_EPS && Math.abs(m.z1 - other.members[j].z1) < GAP_EPS)
       // Phase4（水平面ヒット。裁定済み2026-09-11・既定on。far値が付かない列は両側undefined
       // ＝比較は常にtrueで従来どおり）:
@@ -345,6 +346,14 @@ function ceilingProfileFromColumns(columns, cut, face) {
  * @returns {import('./sectionTypes.js').ZBand[]}
  */
 export function splitOpenByFarFace(band, nearestMm) {
+  // 梁（memberFace）が無かったときの open 帯を梁の高さの部分だけに切った帯（spanZ0/spanZ1＝梁が無いときの帯の範囲。memberFaceToOpen）は、
+  // その範囲で割ってから梁の高さに掛かる部分を返す（梁の高さだけで割ると、範囲の外にある遠側の床・天井が効かずアキになってしまう）
+  if (band.kind === 'open' && band.spanZ0 !== undefined) {
+    const { spanZ0, spanZ1, z0: bz0, z1: bz1, ...rest } = band;
+    return splitOpenByFarFace({ ...rest, z0: spanZ0, z1: spanZ1 }, nearestMm)
+      .map(p => ({ ...p, z0: Math.max(p.z0, bz0), z1: Math.min(p.z1, bz1) }))
+      .filter(p => p.z1 - p.z0 > GAP_EPS);
+  }
   if (band.kind !== 'open' || !Number.isFinite(band.farDepthMm)) return [band];
   const { z0, z1, farFloorZ, farCeilZ, farDepthMm, farFloorDepthMm, farCeilDepthMm } = band;
   const floorDepthMm = farFloorDepthMm ?? farDepthMm;
@@ -402,7 +411,7 @@ function farRoomKind(cut, worldMid, probeCtx) {
  * @param {number} nearestMm
  */
 function demoteMemberBehindOpen(b, nearestMm) {
-  if (b.kind !== 'memberCut' || b.behind !== 'open' || !b.behindFar) return b;
+  if ((b.kind !== 'memberCut' && b.kind !== 'member') || b.behind !== 'open' || !b.behindFar) return b;
   const { spanZ0, spanZ1, ...far } = b.behindFar;
   const parts = splitOpenByFarFace({ kind: 'open', z0: spanZ0 ?? b.z0, z1: spanZ1 ?? b.z1, ...far }, nearestMm);
   const zm = (b.z0 + b.z1) / 2;
@@ -414,6 +423,21 @@ function demoteMemberBehindOpen(b, nearestMm) {
 function wallBandToOpen(b) {
   return { kind: 'open', z0: b.z0, z1: b.z1, farFloorZ: b.farFloorZ, farCeilZ: b.farCeilZ,
     farDepthMm: b.farDepthMm, farFloorDepthMm: b.farFloorDepthMm, farCeilDepthMm: b.farCeilDepthMm };
+}
+
+// 深度上限以上奥の梁の見え掛かりの帯（member）は描かない＝梁が無かったときの帯へ戻す。後ろがアキ・壁（上限以上奥なのでアキ）なら、
+// 梁が無いときのアキと同じ付帯情報（behindFar。梁が無いときの帯の範囲 spanZ0/spanZ1 つき）を載せる。後ろが無い（未探査）なら帯なし（null）。
+function memberFaceToOpen(b) {
+  if (b.behind !== 'open' && b.behind !== 'wall') return null;
+  return { kind: 'open', z0: b.z0, z1: b.z1, ...(b.behindFar ?? {}) };
+}
+
+// slab の帯に添えた梁の見え掛かりの片（kind:'member'）のうち、深度上限以上奥のものを除く（断面の片 memberCut は残す）。空になれば members を外す。
+function withoutFarFaceMembers(slab, nearestMm) {
+  const kept = slab.members.filter(m => !(m.kind === 'member' && Number.isFinite(m.distMm) && m.distMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM));
+  const out = { ...slab, members: kept };
+  if (kept.length === 0) delete out.members;
+  return out;
 }
 
 // z範囲が重なるか（farStair の伝播用）。
@@ -514,11 +538,18 @@ export function buildColumns(cut, probeCtx) {
       col.bands = col.bands.map(b => (b.kind === 'wall' && !b.viaStair && Number.isFinite(b.distMm)
         && b.distMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
         ? wallBandToOpen(b)
-        // 梁の断面（memberCut）の後ろの壁が上限以上奥なら、後ろはアキ（梁の断面がアキのセルを割らない・遠側の判定の対象になる）
-        : (b.kind === 'memberCut' && b.behind === 'wall' && !b.behindViaStair && Number.isFinite(b.behindDistMm)
-          && b.behindDistMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
-          ? { ...b, behind: 'open' }
-          : b);
+        // 梁の見え掛かり（member。U1b B3-2）も壁と同じ深度上限: 手前の面（nearMm＝distMm）が上限以上奥ならアキへ作り替える
+        // （付帯情報 far* は帯が持つ。加算の見え掛かりの withinSightDepth と同じ基準）
+        : (b.kind === 'member' && Number.isFinite(b.distMm) && b.distMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
+          ? memberFaceToOpen(b)
+          // slab の帯に添えた梁の見え掛かりの片（member）も同じ上限（上限以上奥の梁は描かない。slab の帯はそのまま）
+          : (b.kind === 'slab' && b.members?.some(m => m.kind === 'member' && Number.isFinite(m.distMm) && m.distMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM))
+            ? withoutFarFaceMembers(b, nearestMm)
+          // 梁の断面（memberCut）・見え掛かり（member）の後ろの壁が上限以上奥なら、後ろはアキ（梁がアキのセルを割らない階段帯・遠側の判定の対象になる）
+          : ((b.kind === 'memberCut' || b.kind === 'member') && b.behind === 'wall' && !b.behindViaStair && Number.isFinite(b.behindDistMm)
+            && b.behindDistMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
+            ? { ...b, behind: 'open' }
+            : b).filter(Boolean); // memberFaceToOpen が null（後ろが無い）の帯は除く
     }
   }
   // Phase4（水平面ヒットの深度上限適用。`.claude/elevation-redesign.md`§5.5・ユーザー裁定

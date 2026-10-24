@@ -213,13 +213,21 @@ test('memberCuts: 帯が持つ梁の断面・along は出さず、空中・面�
   const cross = crossBeam(), par = parallelBeam();
   assert.deepEqual(visibleBeamPieces([cross], cutOf(), [], null, dropped(cross)).map(p => p.kind), ['section']);
   assert.deepEqual(visibleBeamPieces([par], cutOf(), [], null, dropped(par)).map(p => p.kind), ['parallel']);
-  // only: dropped の断面・along だけ（空中・面の通りは返さない）
+  // only: dropped の部材だけ（断面・along・見え掛かり。帯が持つ部材は返さない）
   const only = (b) => ({ columnSolids: null, memberCuts: { dropped: new Set([memberKey(b)]), only: true } });
   const air = airborneBeam();
   assert.deepEqual(visibleBeamPieces([air, cross], cutOf(), [], null, { columnSolids: null, memberCuts: { dropped: new Set([memberKey(cross)]), only: true } }).map(p => p.kind),
-    ['section'], 'only は空中の見え掛かりを返さない');
-  assert.deepEqual(visibleBeamPieces([parallelBeam({ widthMm: 100 })], faceCutOf(), [], null, { ...only(parallelBeam({ widthMm: 100 })), fromRoomSide: true }), [],
-    'only: 面の通りの梁は along ではない');
+    ['section'], 'only は帯が持つ（dropped でない）空中の見え掛かりを返さない');
+  assert.deepEqual(visibleBeamPieces([air], cutOf(), [], null, only(air)).map(p => p.kind), ['airborne'], 'only: dropped の空中の梁は見え掛かりを返す（B3-2）');
+  assert.deepEqual(visibleBeamPieces([parallelBeam({ widthMm: 100 })], faceCutOf(), [], null, { columnSolids: null, memberCuts: { dropped: new Set(), only: true }, fromRoomSide: true }), [],
+    'only: 帯が持つ（dropped でない）面の通りの梁は返さない');
+  assert.deepEqual(visibleBeamPieces([parallelBeam({ widthMm: 100 })], faceCutOf(), [], null, { ...only(parallelBeam({ widthMm: 100 })), fromRoomSide: true }).map(p => p.kind),
+    ['parallel'], 'only: dropped の面の通りの梁は返す（B3-2）');
+  // memberFacesByBand（U1b B3-2）: 見え掛かり（空中・面の通り）は帯の memberFace が描く。dropped の部材だけ加算で描く
+  const byBand = (dropped = new Set()) => ({ columnSolids: null, memberCuts: { dropped }, memberFacesByBand: true });
+  assert.deepEqual(visibleBeamPieces([air], cutOf(), [], null, byBand()), [], 'memberFacesByBand: 帯が持つ空中の梁は加算で描かない');
+  assert.deepEqual(visibleBeamPieces([parallelBeam({ widthMm: 100 })], faceCutOf(), [], null, { ...byBand(), fromRoomSide: true }), [], 'memberFacesByBand: 帯が持つ面の通りの梁は加算で描かない');
+  assert.deepEqual(visibleBeamPieces([air], cutOf(), [], null, byBand(new Set([memberKey(air)]))).map(p => p.kind), ['airborne'], 'memberFacesByBand: dropped の空中の梁は加算で描く');
   // 省略（memberCuts なし）は全部描く（既定は従来どおり）
   assert.deepEqual(visibleBeamPieces([cross, par], cutOf(), [], null, noCol).map(p => p.kind), ['section', 'parallel']);
 });
