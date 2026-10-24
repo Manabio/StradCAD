@@ -12,7 +12,7 @@
  */
 import { matchingStairBelow } from '../../structural/openingBeamAxes.js';
 import { stairSoffitSolids } from '../../ceiling/stairSoffit.js';
-import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import { GAP_EPS_MM as GAP_EPS, FLOAT_EPS } from '../elevationStyle.js';
 import { roomFloorStepMm } from '../../finish/roomMetrics.js';
 
 const PROBE_DELTA_MM = 0.01; // 節の両側の値を取る距離（直線なので外挿して節の値を厳密に出す）
@@ -86,7 +86,7 @@ function foldCrossings(solid, isVertical, depthCoord) {
     const [d1, r1, d2, r2] = isVertical ? [x1, y1, x2, y2] : [y1, x1, y2, x2];
     if (Math.abs(d2 - d1) < NODE_MERGE_MM) continue; // 切断線に平行
     const t = (depthCoord - d1) / (d2 - d1);
-    if (t < -1e-9 || t > 1 + 1e-9) continue;
+    if (t < -FLOAT_EPS || t > 1 + FLOAT_EPS) continue;
     out.push(r1 + t * (r2 - r1));
   }
   return out;

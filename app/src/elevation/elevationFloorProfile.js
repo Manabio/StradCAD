@@ -734,7 +734,7 @@ export function clipContentAboveDrawnProfile(prims, profile) {
  * @returns {number}
  */
 export function drawnFloorDeltaAt(segs, x, halfWallMm) {
-  const idx = segs.findIndex(s => x >= s.loX - 1e-6 && x <= s.hiX + 1e-6);
+  const idx = segs.findIndex(s => x >= s.loX - GAP_EPS && x <= s.hiX + GAP_EPS);
   if (idx === -1) return 0;
   if (idx > 0 && x < drawnRiserX(segs, idx - 1, halfWallMm)) return segs[idx - 1].floorDeltaMm;
   if (idx < segs.length - 1 && x > drawnRiserX(segs, idx, halfWallMm)) return segs[idx + 1].floorDeltaMm;
