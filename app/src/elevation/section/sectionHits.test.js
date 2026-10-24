@@ -1031,12 +1031,22 @@ test('【梁・柱の候補・視線側】平行な梁は memberFace（distMm＝
   assert.ok(colFace, '視線側の柱は memberFace');
   const c = colFace.member;
   assert.equal(colFace.distMm, Math.abs((c.yLo + c.yHi) / 2 - 1500), '柱の distMm は柱の中心の距離');
-  assert.deepEqual([colFace.z0, colFace.z1], [0, CH], '柱は床〜天井');
+  // B3-3 QA Major-1: 柱の上端は部屋の天井（CH）で切らない（梁と同じ。部屋帯は帯の天井断面が切る）。上の床も天井裏の判定も無ければ帯の上端まで
+  assert.deepEqual([colFace.z0, colFace.z1], [0, Infinity], '柱は床〜帯の上端（CH で切らない）');
   assert.ok(colFace.depthNearMm > 0 && colFace.depthNearMm < colFace.distMm, '手前の縁までの距離を添える');
   assert.equal(memberHitsOf(hits, 'memberCut').length, 0);
   // 切断線が柱の中を通る（y=2500）と memberCut（distMm 0）
   const cutCol = memberHitsOf(probeMembers(cutAtY(graph, 2500), 3000).hits, 'memberCut');
-  assert.deepEqual(cutCol.map(h => [h.memberType, h.distMm, h.z0, h.z1]), [['column', 0, 0, CH]]);
+  assert.deepEqual(cutCol.map(h => [h.memberType, h.distMm, h.z0, h.z1]), [['column', 0, 0, Infinity]]);
+  // Major-1: 階段室の裏面（memberCeilZAt）があればそこで止める。裏面が柱の足元以下なら積まない
+  const capped = memberHitsOf(probeMembers(cutAtY(graph, 1500, { memberCeilZAt: () => 2700 }), 3000).hits, 'memberFace').find(h => h.memberType === 'column');
+  assert.deepEqual([capped.z0, capped.z1], [0, 2700], '階段帯: 裏面で止める');
+  assert.equal(memberHitsOf(probeMembers(cutAtY(graph, 1500, { memberCeilZAt: () => 0 }), 3000).hits, 'memberFace').filter(h => h.memberType === 'column').length, 0, '裏面が足元以下なら積まない');
+  // Major-3: 切断線が柱の縁にちょうど接する（y=2400 は柱 2400..2600 の縁）なら memberCut ではなく見え掛かり（nearMm 0）
+  const touch = probeMembers(cutAtY(graph, c.yLo), 3000).hits.filter(h => h.memberType === 'column');
+  assert.deepEqual(touch.map(h => [h.kind, h.nearMm]), [['memberFace', 0]], `接する柱（縁 ${c.yLo}）は memberFace・nearMm 0`);
+  const inside = probeMembers(cutAtY(graph, c.yLo + 1), 3000).hits.filter(h => h.memberType === 'column');
+  assert.deepEqual(inside.map(h => h.kind), ['memberCut'], '縁より 1mm 内側は memberCut');
   // 梁の下の列でない（柱の走り方向の外）なら柱は積まれない
   assert.equal(memberHitsOf(probeMembers(cut, 1000).hits, 'memberFace').filter(h => h.memberType === 'column').length, 0);
 });
@@ -1451,6 +1461,68 @@ test('【B3-2・配線】buildCutContent 経由の gapPass: 階段帯（memberSp
   const stair = run({ memberSplitsGaps: false });
   assert.ok(stair.members.length > 0 && stair.members.every(b => b.gapPass === true), '階段帯: gapPass が付く');
   assert.equal(stair.texts, 1, '階段帯: アキのセルを割らない（R5）');
+});
+
+// ---- 柱の見え掛かり（memberFace の column。U1b B3-3）----
+// 矩形室 0..4000×0..3000・切断線 y=1500。独立柱（壁に接しない）を (3000, 2200) に立てる。
+const columnRoom = (over = {}) => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  graph.addColumn(STEEL_MAT, 'STEEL-SQ200x200x9.0', clAt(graph, V_CL, 3000), clAt(graph, H_CL, 2200), {});
+  return { graph, cut: cutAtY(graph, 1500, over) };
+};
+
+test('【B3-3・R3】独立柱（面の壁に接続せず切断線もまたがない）も柱の帯（member・memberClass:column）になる。距離は手前の縁までの奥行き', () => {
+  const { cut } = columnRoom();
+  const { bands, hits } = probeMembers(cut, 3000);
+  const col = hits.find(h => h.kind === 'memberFace' && h.memberType === 'column');
+  assert.ok(col && Number.isFinite(col.nearMm) && col.nearMm === col.depthNearMm && col.memberClass === 'column', '柱の候補は nearMm（＝depthNearMm）と memberClass を持つ');
+  const mb = bands.find(b => b.kind === 'member');
+  assert.ok(mb, '独立柱が帯になる（現行の入口条件 onFaceWall||straddles は落とした）');
+  assert.deepEqual([mb.memberType, mb.memberClass, mb.distMm, mb.z0, mb.z1], ['column', 'column', col.nearMm, 0, CH]);
+  assert.equal(mb.behind, 'wall', '柱が無ければ奥の壁');
+  // 柱の走り方向の外の列には積まない
+  assert.equal(memberHitsOf(probeMembers(cut, 1000).hits, 'memberFace').filter(h => h.memberType === 'column').length, 0);
+});
+
+test('【B3-3・選択】柱は梁と同じ nearMm の比較: 手前なら柱の帯・同じ奥行きは壁が先・柱が奥なら壁。nearMm 非有限は distMm→壁が先へ戻る（失敗系）', () => {
+  const { cut } = columnRoom();
+  const { hits, layerStack, unexploredBelowZ } = probeMembers(cut, 3000);
+  const wall = hits.find(h => h.kind === 'wallFace');
+  const col = hits.find(h => h.kind === 'memberFace' && h.memberType === 'column');
+  const kindsWith = (c) => visibleBandsOf(hits.map(h => (h === col ? c : h)), cut, { layerStack, unexploredBelowZ })
+    .filter(b => b.z0 < 1000 && b.z1 > 1000).map(b => b.kind);
+  assert.deepEqual(kindsWith({ ...col, nearMm: wall.nearMm - 10 }), ['member'], '柱が手前');
+  assert.deepEqual(kindsWith({ ...col, nearMm: wall.nearMm }), ['wall'], '同じ奥行き（壁の面と同じ面の柱）は壁が先');
+  assert.deepEqual(kindsWith({ ...col, nearMm: wall.nearMm + 10 }), ['wall'], '柱が奥');
+  assert.deepEqual(kindsWith({ ...col, nearMm: NaN, distMm: wall.distMm - 1 }), ['member'], 'nearMm 非有限は distMm');
+  assert.deepEqual(kindsWith({ ...col, nearMm: NaN, distMm: wall.distMm }), ['wall'], '同点は壁が先');
+});
+
+test('【失敗系・B3-3】柱の矩形が退化（幅 0）・列の端を捨てた柱・面に掛からない柱は積まない。切断線が通る柱は memberCut＋edgeDropped（加算で描く）', () => {
+  const colHits = (cut, x = 3000) => memberHitsOf(probeMembers(cut, x).hits, 'memberFace').filter(h => h.memberType === 'column');
+  assert.equal(colHits(columnRoom().cut).length, 1, '前提: 柱が積まれる');
+  // 幅 0（run 方向）
+  const flat = columnRoom().cut;
+  const solid = nearMembersOf(flat).columns[0].solid;
+  solid.xHi = solid.xLo;
+  assert.equal(colHits(flat, solid.xLo).length, 0, '退化した矩形は積まない');
+  // 柱の run 方向が面（line.lo/hi）に掛からない
+  // （探る点は柱の中 x=3000。柱 x≈2900..3100 が面 lo..hi の外なので、面の範囲の判定で落ちる。対照＝面が柱を含めば積まれる）
+  assert.equal(colHits(columnRoom({ line: { isVertical: false, axisValue: 1500, lo: 3500, hi: 4000 } }).cut, 3000).length, 0);
+  assert.equal(colHits(columnRoom({ line: { isVertical: false, axisValue: 1500, lo: 2500, hi: 4000 } }).cut, 3000).length, 1, '対照: 面が柱を含む');
+  // 列の端を捨てた柱（edgeDropped＝帯にできない）は memberFace を積まない
+  const dropCut = columnRoom().cut;
+  const dropNear = nearMembersOf(dropCut);
+  dropNear.edgeDropped.add(dropNear.columns[0].solid);
+  assert.equal(colHits(dropCut).length, 0, '列の端を捨てた柱は積まない');
+  // 切断線が柱を通る（y=2200）: memberCut（選択に入れない）・柱は加算で描く＝edgeDropped
+  const { graph } = columnRoom();
+  const through = cutAtY(graph, 2200);
+  const near = nearMembersOf(through);
+  const hits = probeMembers(through, 3000).hits;
+  assert.ok(memberHitsOf(hits, 'memberCut').some(h => h.memberType === 'column'));
+  assert.ok(near.columns.every(({ solid }) => near.edgeDropped.has(solid)), '帯が持たない柱（加算で描く）');
 });
 
 test('【B3-2・規則 A】切断線と梁の間に立つ全高の壁が覆う区間は member の候補にならない（壁が探査の候補に無くても効く）。壁の外の列・腰壁なら隠さない（失敗系）', () => {

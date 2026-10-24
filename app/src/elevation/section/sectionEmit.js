@@ -735,6 +735,16 @@ function neighborBandAt(col, z, dir) {
     : Math.abs(b.z0 - z) < GAP_EPS));
 }
 
+// slab の帯に添えた片（slab.members）の z 方向の隣: 同じ slab の中で z が接する兄弟の片（memberCut・別の member）。
+// 片自身が slab.members に無い（独立の member 帯）か、兄弟がいなければ undefined（呼び元が neighborBandAt に戻す）
+function siblingPieceAt(col, piece, z, dir) {
+  const slab = col.bands.find(b => b.kind === 'slab' && (b.members ?? []).includes(piece));
+  if (!slab) return undefined;
+  return slab.members.find(p => p !== piece && p.member !== piece.member && (dir < 0
+    ? Math.abs(p.z1 - z) < GAP_EPS
+    : Math.abs(p.z0 - z) < GAP_EPS));
+}
+
 /**
  * その帯が、隣（z方向）との境界の見えがかり線を**描く側か**。
  * 距離が変わらなければ線は無い（1枚の連続面）。変わるときは**手前の面**がその輪郭を持つ
@@ -1138,7 +1148,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
           prims.push(Object.assign(emitLine(cut, col.x1, band.z0, col.x1, band.z1, ElevationLineRole.CUT, { ceilZ }),{__o:'cutEdgeHi'}));
         }
       } else if (band.kind === 'member') {
-        emitMemberFaceBand(prims, faceSegs, col, band, { prev, next, cut, drawRange });
+        emitMemberFaceBand(prims, faceSegs, col, band, { prev, next, cut, drawRange, ceilZ });
       } else if (band.kind === 'open' && (band.farFloorZ != null || band.farCeilZ != null)) {
         // Phase4（水平面ヒットの見えがかり。裁定済み2026-09-11・既定on）: `sectionEngine.js`の
         // `splitOpenByFarFace`が深度上限内のときだけfarFloorZ/farCeilZを付与する。
@@ -1164,7 +1174,7 @@ export function emitColumns(columns, cut, emitCtx = {}) {
       }
       // slab の帯に添えた梁の見え掛かり（床構造・天井懐の中の梁。U1b B3-2）
       for (const piece of band.members ?? []) {
-        if (piece.kind === 'member') emitMemberFaceBand(prims, faceSegs, col, piece, { prev, next, cut, drawRange });
+        if (piece.kind === 'member') emitMemberFaceBand(prims, faceSegs, col, piece, { prev, next, cut, drawRange, ceilZ });
       }
       for (const piece of memberPiecesOf(band)) {
         if (piece.along) {
@@ -1266,20 +1276,27 @@ function memberEdgeRole(cut, band, neighbor, baseRole) {
  *    縦線を持たない。梁の端でなくても、隣の列の壁の帯と同じ奥行きで接する高さには DETAIL の縦線（規則 1）。
  * 線には出所の印（MEMBER_PRIM）を付ける。
  */
-function emitMemberFaceBand(prims, faceSegs, col, band, { prev, next, cut, drawRange }) {
-  const baseRole = band.memberClass === 'airborne' ? ElevationLineRole.SILHOUETTE
+export function emitMemberFaceBand(prims, faceSegs, col, band, { prev, next, cut, drawRange, ceilZ }) {
+  // 柱（column。U1b B3-3）は梁の facePlane と同じ仕組みで、線種は中線（R1。柱型は切断面ではなく室内に出た仕上げ面の見えがかり）
+  const baseRole = band.memberClass === 'airborne' || band.memberClass === 'column' ? ElevationLineRole.SILHOUETTE
     : (band.memberClass === 'facePlane' ? ElevationLineRole.DETAIL : null);
   if (!baseRole) return; // memberClass 不明は描かない
+  const isColumn = band.memberClass === 'column';
   const xa = Math.max(col.x0, drawRange.lo), xb = Math.min(col.x1, drawRange.hi);
   if (xb - xa <= GAP_EPS) return;
   const segs = faceSegs.get(band.member) ?? [];
   faceSegs.set(band.member, segs);
+  // 柱の天地は床・天井の断面線（FL・CH）の高さには引かない（その位置に断面線が既にある。壁の見えがかりの水平線と同じ規約）
+  const levelZs = isColumn ? sectionLevelZs(cut, col, col.ceilZ ?? ceilZ) : [];
   for (const [z, dir] of [[band.z0, -1], [band.z1, 1]]) {
-    const role = memberEdgeRole(cut, band, neighborBandAt(col, z, dir), baseRole);
+    if (levelZs.some(f => Math.abs(z - f) < GAP_EPS)) continue;
+    const role = memberEdgeRole(cut, band, siblingPieceAt(col, band, z, dir) ?? neighborBandAt(col, z, dir), baseRole);
     if (role) segs.push({ z, role, x0: xa, x1: xb });
   }
   const m = band.member;
-  const endXs = [localXOf(cut, m.spanLo), localXOf(cut, m.spanHi)];
+  const endXs = isColumn
+    ? (cut.line.isVertical ? [m.yLo, m.yHi] : [m.xLo, m.xHi]).map(v => localXOf(cut, v))
+    : [localXOf(cut, m.spanLo), localXOf(cut, m.spanHi)];
   for (const [nbCol, x] of [[prev, col.x0], [next, col.x1]]) {
     if (x < drawRange.lo - GAP_EPS || x > drawRange.hi + GAP_EPS) continue;
     // 同じ梁の帯が隣の列に続く高さは縦線なし
@@ -1290,11 +1307,12 @@ function emitMemberFaceBand(prims, faceSegs, col, band, { prev, next, cut, drawR
     }
     rest = rest.filter(r => r.z1 - r.z0 > GAP_EPS);
     if (rest.length === 0) continue;
-    const realEnd = band.memberClass === 'facePlane' && endXs.some(e => Math.abs(e - x) <= 1e-3);
+    const realEnd = (band.memberClass === 'facePlane' || isColumn) && endXs.some(e => Math.abs(e - x) <= 1e-3);
     for (const r of rest) {
       if (realEnd) {
-        // 縦線は上から下へ（加算の parallel の両端の縦線と同じ向き）
-        prims.push(Object.assign(emitLine(cut, x, r.z1, x, r.z0, baseRole), { [MEMBER_PRIM]: true }));
+        // 縦線は上から下へ（加算の parallel の両端の縦線と同じ向き）。柱は同じ x の縦線を帯の分かれ目をまたいで 1 本に繋ぐ（memberFaceHorizontals）
+        if (isColumn) segs.push({ v: true, x, za: r.z0, zb: r.z1, role: baseRole });
+        else prims.push(Object.assign(emitLine(cut, x, r.z1, x, r.z0, baseRole), { [MEMBER_PRIM]: true }));
         continue;
       }
       // 梁の端でない境（壁が手前に立ち始める・別の帯へ替わる）: 同じ奥行きの壁の帯と接する高さだけ DETAIL（規則 1）
@@ -1318,7 +1336,27 @@ function emitMemberFaceBand(prims, faceSegs, col, band, { prev, next, cut, drawR
 function memberFaceHorizontals(faceSegs, cut) {
   const out = [];
   const r3 = v => Math.round(v * 1000) / 1000;
-  for (const segs of faceSegs.values()) {
+  for (const allSegs of faceSegs.values()) {
+    // 柱の縦線（v:true）: 同じ x の縦線は z の区間をつないで上から下へ 1 本
+    const vByX = new Map();
+    for (const s of allSegs.filter(q => q.v)) {
+      const key = `${r3(s.x)}|${s.role}`;
+      if (!vByX.has(key)) vByX.set(key, []);
+      vByX.get(key).push(s);
+    }
+    for (const list of vByX.values()) {
+      list.sort((a, b) => a.za - b.za);
+      let cur = { ...list[0] };
+      // 下から上へ（加算の柱型 structuralColumnPrimitivesForCut の縦線と同じ向き）
+      const flushV = () => out.push(Object.assign(emitLine(cut, cur.x, cur.za, cur.x, cur.zb, cur.role), { [MEMBER_PRIM]: true }));
+      for (const s of list.slice(1)) {
+        if (s.za <= cur.zb + GAP_EPS) { cur.zb = Math.max(cur.zb, s.zb); continue; }
+        flushV();
+        cur = { ...s };
+      }
+      flushV();
+    }
+    const segs = allSegs.filter(q => !q.v);
     const byKey = new Map();
     for (const s of segs) {
       const key = `${r3(s.z)}|${s.role}`;

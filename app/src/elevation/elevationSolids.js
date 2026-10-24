@@ -161,15 +161,16 @@ export function solidPrimitivesForFace(face, opts) {
     // 梁の見え掛かり（空中・面の通り）も同じ（U1b B3-2。帯の memberFace が描く。memberFacesByBand）。柱は B3-3 まで加算のまま
     ...structuralPrimitivesForCut(beams, beamCut, undefined, null,
       { columnSolids, fromRoomSide: true, ...(opts.memberCutsByBand ? { memberCuts: { dropped: new Set() }, memberFacesByBand: true } : {}) }),
-    ...structuralColumnPrimitivesForCut(columnSolids, cut),
+    // 柱も同じ（U1b B3-3。帯の memberFace〔column〕が描く。帯が持たない柱は帯の側 appendBandCutContent が足す）
+    ...structuralColumnPrimitivesForCut(columnSolids, cut, opts.memberCutsByBand ? { dropped: new Set() } : {}),
   ];
   return clampPrimsToRun(prims, face.run);
 }
 
 /**
  * 梁の断面・along・見え掛かり（空中・面の通り）のうち、**帯（memberCut・memberFace）が持たない部材**（`droppedKeys`＝列の端を捨てた・z 範囲に
- * 掛からない部材のキー）だけを加算レイヤの規則で描く（`solidPrimitivesForFace` の同じ梁・同じ可視区間・同じ切り詰め）。柱は描かない
- * （`solidPrimitivesForFace` が従来どおり描く。B3-3 まで）。呼び出しは `droppedMemberKeysOf(pcut, { inZRange: true })`（列の分割の後）。
+ * 掛からない部材のキー）だけを加算レイヤの規則で描く（`solidPrimitivesForFace` の同じ梁・同じ可視区間・同じ切り詰め）。柱も同じ
+ * （帯が持たない柱だけ従来の入口条件で描く。U1b B3-3）。呼び出しは `droppedMemberKeysOf(pcut, { inZRange: true })`（列の分割の後）。
  * @param {object} face
  * @param {{graph:object, ceilingHeight:number, upperGraph?:object|null, floorHeightMm?:number|null}} opts
  * @param {Set<string>} droppedKeys
@@ -179,9 +180,12 @@ export function droppedMemberPrimitivesForFace(face, opts, droppedKeys) {
   if (!droppedKeys || droppedKeys.size === 0) return [];
   const parts = faceParts(face, opts);
   if (!parts) return [];
-  const { beams, columnSolids, beamCut } = parts;
-  return clampPrimsToRun(structuralPrimitivesForCut(beams, beamCut, undefined, null,
-    { columnSolids, fromRoomSide: true, memberCuts: { dropped: droppedKeys, only: true } }), face.run);
+  const { cut, beams, columnSolids, beamCut } = parts;
+  return clampPrimsToRun([
+    ...structuralPrimitivesForCut(beams, beamCut, undefined, null,
+      { columnSolids, fromRoomSide: true, memberCuts: { dropped: droppedKeys, only: true } }),
+    ...structuralColumnPrimitivesForCut(columnSolids, cut, { dropped: droppedKeys }),
+  ], face.run);
 }
 
 // 面ごとの切断・梁・柱・梁の判定用の切断（faceBeamCut）は、solidPrimitivesForFace・beamBlockerRectsForFace・droppedMemberPrimitivesForFace の

@@ -3,7 +3,7 @@
   "room": "03e91047-54c7-40e8-a42b-0ba88243be2a",
   "name": "2階",
   "kind": "room",
-  "count": 240,
+  "count": 243,
   "prims": [
    {
     "type": "line",
@@ -58,22 +58,6 @@
     "weight": "medium",
     "x1": 3640,
     "x2": 3640,
-    "y1": 0,
-    "y2": -2400
-   },
-   {
-    "type": "line",
-    "weight": "medium",
-    "x1": 7147.5,
-    "x2": 7147.5,
-    "y1": 0,
-    "y2": -2400
-   },
-   {
-    "type": "line",
-    "weight": "medium",
-    "x1": 7267.5,
-    "x2": 7267.5,
     "y1": 0,
     "y2": -2400
    },
@@ -1943,7 +1927,7 @@
     "baseline": "middle",
     "text": "ア キ",
     "type": "text",
-    "x": 6297.5,
+    "x": 5393.75,
     "y": -1200
    },
    {
@@ -1951,7 +1935,7 @@
     "type": "line",
     "weight": "thin",
     "x1": 3640,
-    "x2": 8955,
+    "x2": 7147.5,
     "y1": 0,
     "y2": -2400
    },
@@ -1960,9 +1944,51 @@
     "type": "line",
     "weight": "thin",
     "x1": 3640,
+    "x2": 7147.5,
+    "y1": -2400,
+    "y2": 0
+   },
+   {
+    "anchor": "middle",
+    "baseline": "middle",
+    "text": "ア キ",
+    "type": "text",
+    "x": 8111.25,
+    "y": -1200
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 7267.5,
+    "x2": 8955,
+    "y1": 0,
+    "y2": -2400
+   },
+   {
+    "dash": "center",
+    "type": "line",
+    "weight": "thin",
+    "x1": 7267.5,
     "x2": 8955,
     "y1": -2400,
     "y2": 0
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 7147.5,
+    "x2": 7147.5,
+    "y1": 0,
+    "y2": -2400
+   },
+   {
+    "type": "line",
+    "weight": "medium",
+    "x1": 7267.5,
+    "x2": 7267.5,
+    "y1": 0,
+    "y2": -2400
    },
    {
     "anchor": "middle",

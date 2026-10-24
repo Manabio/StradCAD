@@ -1029,14 +1029,44 @@ function addMemberHits(cut, worldMid, probeCtx, hits, layerStack) {
     if (worldMid < runLo - GAP_EPS || worldMid > runHi + GAP_EPS) continue;
     const [acrossLo, acrossHi] = line.isVertical ? [c.xLo, c.xHi] : [c.yLo, c.yHi];
     const acrossMid = (acrossLo + acrossHi) / 2;
-    const z = clipToAir(c.baseZ, Infinity, worldMid, acrossMid);
+    // 柱の上端は梁と同じ天井の取り方（B3-3 リード裁定）: その位置の部屋の天井では切らず（部屋帯は帯の天井断面〔clipBandsToVisible〕が切る）、
+    // 柱の階の上の床（無ければ帯の上端）まで。階段帯だけ、階段室の裏面（cut.memberCeilZAt）があればそこで止める（裏面が柱の足元以下なら積まない）。
+    // 2026-10-15「部屋の CH は階段帯の天井ではない」
+    // 上の床は、その位置に実の部屋のある階だけ数える（上が吹抜け・部屋なしなら床は無い＝帯の上端まで続く。emptyBandAt の slab の判定と同じ isRealRoom）
+    const storeyFloors = (cut.memberLayers ?? cut.layers ?? [])
+      .filter(l => Number.isFinite(l?.floorZMm) && l.floorZMm > c.baseZ + GAP_EPS
+        && isRealRoom(cellAtRunDepth(l, worldMid, acrossMid)?.room))
+      .map(l => l.floorZMm);
+    let colTop = storeyFloors.length ? Math.min(...storeyFloors) : Infinity;
+    if (typeof cut.memberCeilZAt === 'function') {
+      const depth = acrossMid - sign * MEMBER_PROBE_OFFSET_MM;
+      const cz = line.isVertical ? cut.memberCeilZAt(depth, worldMid) : cut.memberCeilZAt(worldMid, depth);
+      if (Number.isFinite(cz)) colTop = Math.min(colTop, cz);
+    }
+    const z = clipToAir(c.baseZ, colTop, worldMid, acrossMid, false);
     if (!z) continue;
-    if (line.axisValue >= acrossLo - GAP_EPS && line.axisValue <= acrossHi + GAP_EPS) {
+    // 切断線が柱の幅の内側を**厳密に**通るときだけ memberCut（柱を切る）。柱の手前の縁がちょうど接するだけなら見え掛かり（nearMm 0）
+    // ——cutPlaneOffsetMm が柱の出を mm に切り上げるので、出が整数の柱は縁が切断線に接する。memberCut にすると加算へ回り遮蔽が効かない
+    const strictlyInside = line.axisValue > acrossLo && line.axisValue < acrossHi;
+    const onViewSide = sign > 0 ? acrossHi > line.axisValue + GAP_EPS : acrossLo < line.axisValue - GAP_EPS;
+    if (!strictlyInside && !onViewSide) continue; // 視線の反対側の柱
+    if (strictlyInside) {
       hits.push({ kind: 'memberCut', layer, distMm: 0, ...z, member: c, memberType: 'column' });
+      // 切断線が柱を通る（面の壁芯に柱が立つ。切断線が室内側へ下がらない面）: 柱の断面は選択に入れない（memberCut の柱は除外のまま）ので、
+      // 柱型は従来の加算（切断線をまたぐ入口条件）で描く＝帯が持たない部材（edgeDropped）にする（U1b B3-3）
+      near.edgeDropped.add(c);
     } else {
+      // 柱の見え掛かり（memberFace・memberClass:'column'。U1b B3-3）。梁と同じく手前の面までの奥行き nearMm（＝depthNearMm）で壁と競う。
+      // 加算の入口条件（面の壁に接続 or 切断線をまたぐ）は R3 で落とした＝独立柱・壁越しの柱も候補になる（壁が手前なら壁が勝つ）。
+      // 退化した矩形（幅 0）・帯にできない柱（列の端を捨てた）・面（延長を含まない line.lo/hi）に掛からない柱・描画範囲の外は積まない。
+      if (runHi - runLo <= GAP_EPS || near.edgeDropped.has(c)) continue;
+      if (!(line.lo < runHi - GAP_EPS && line.hi > runLo + GAP_EPS)) continue;
+      const lx = localXOf(cut, worldMid), drawn = cutDrawRange(cut);
+      if (lx < drawn.lo - GAP_EPS || lx > drawn.hi + GAP_EPS) continue;
       const nearEdge = sign > 0 ? acrossLo : acrossHi;
-      hits.push({ kind: 'memberFace', layer, distMm: Math.abs(acrossMid - line.axisValue), ...z,
-        depthNearMm: (nearEdge - line.axisValue) * sign, member: c, memberType: 'column' });
+      const depthNearMm = Math.max(0, (nearEdge - line.axisValue) * sign); // 接する柱（縁が切断線の僅か手前）は 0
+      hits.push({ kind: 'memberFace', layer, distMm: Math.abs(acrossMid - line.axisValue), nearMm: depthNearMm, memberClass: 'column', ...z,
+        depthNearMm, member: c, memberType: 'column' });
     }
   }
 }
@@ -1321,7 +1351,7 @@ export function visibleBandsOf(hits, cut, opts = {}) {
   // U1b B3-2: 梁の memberFace（空中・面の通りの見え掛かり）も選択に入れる（柱は B3-3 まで除外のまま）。
   const coverableHits = hits.filter(h =>
     h.kind !== 'floorFace' && h.kind !== 'ceilFace' && h.kind !== 'slabFace' && h.kind !== 'stairFace'
-    && !(h.kind === 'memberFace' && h.memberType !== 'beam') && !(h.kind === 'memberCut' && h.memberType !== 'beam'));
+    && !(h.kind === 'memberCut' && h.memberType !== 'beam'));
 
   // zBreaks = 全ヒットのz端点 ∪ 層の床天井 ∪ zRange端 ∪ cut.baseFloorZ（§5.2 step3。WP-E5b追加:
   // baseFloorZはemitLineの§5.6最終フィルタ（両端がbaseFloorZ未満なら向こう側=DETAIL破線へ

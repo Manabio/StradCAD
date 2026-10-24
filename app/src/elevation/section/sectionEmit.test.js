@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   emitLine, emitColumns, emitOpenGapMarks, splitGapMarksByStair, dashHorizontalsBehindStair,
-  joinToStairProfile,
+  joinToStairProfile, emitMemberFaceBand,
 } from './sectionEmit.js';
 import { KNEE_CAP_FACE_MM } from '../elevationStyle.js';
 import { MEMBER_PRIM } from './sectionTypes.js';
@@ -2507,6 +2507,77 @@ test('【B3-2・アキの下端】emitOpenGapMarks: 踊り場（平ら）と階�
   assert.deepEqual(xz(emitOpenGapMarks([open(700, 2000)], makeCut(), ctx)), [[700, 1500, 2000, 2400], [700, 2400, 2000, 1500]]);
   // 全部斜めの列も従来どおり（最大値で列全体）
   assert.deepEqual(xz(emitOpenGapMarks([open(560, 590)], makeCut(), ctx)), [[560, 2100, 590, 2400], [560, 2400, 590, 2100]], '斜めだけの列は列全体 1 セル・下端は列内の最大値（2100）');
+});
+
+// ---- 柱の見え掛かり（member・memberClass:column。U1b B3-3）----
+// 切断線 y=0・視線側 +y。柱は x 1000..1200（見付け 200）・奥行き 500..700・足元 0。
+const faceColumn = (over = {}) => ({ xLo: 1000, xHi: 1200, yLo: 500, yHi: 700, baseZ: 0, ...over });
+const columnBand = (member, over = {}) => ({ kind: 'member', z0: 0, z1: 2400, member, memberType: 'column', memberClass: 'column',
+  section: null, layerRole: 'self', distMm: 500, behind: 'wall', ...over });
+const columnCols = (member, bandOver = {}) => [
+  { x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [faceWall(0, 2400)] },
+  { x0: 1000, x1: 1200, worldLo: 1000, worldHi: 1200, bands: [columnBand(member, bandOver)] },
+  { x0: 1200, x1: 3000, worldLo: 1200, worldHi: 3000, bands: [faceWall(0, 2400)] },
+];
+
+test('【B3-3】emitColumns: 柱は見付けの両端に中線（SILHOUETTE）の縦線を床〜その位置の天井まで下から上へ 1 本ずつ。MEMBER_PRIM の印。断面線の高さ（FL・CH）の天地の線は引かない', () => {
+  const prims = emitColumns(columnCols(faceColumn()), makeCut(), { ceilZ: 2400 });
+  const marked = prims.filter(p => p[MEMBER_PRIM]);
+  assert.equal(marked.length, 2, '縦線 2 本だけ（天地は FL・CH の高さなので引かない）');
+  const xs = marked.map(p => [p.x1, p.x2, p.y1 || 0, p.y2, p.weight]).sort((a, b) => a[0] - b[0]); // y1 は -0 を 0 に
+  assert.deepEqual(xs, [[1000, 1000, 0, -2400, 'medium'], [1200, 1200, 0, -2400, 'medium']]);
+  // 帯が分かれても（柱が無ければ open だった帯と壁だった帯）同じ x の縦線は 1 本に繋ぐ
+  const same = faceColumn(); // 同じ柱（同じ参照）
+  const split = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [faceWall(0, 2400)] },
+    { x0: 1000, x1: 1200, worldLo: 1000, worldHi: 1200, bands: [columnBand(same, { z0: 0, z1: 1000 }), columnBand(same, { z0: 1000, z1: 2400, behind: 'open' })] }];
+  const v = emitColumns(split, makeCut(), { ceilZ: 2400 }).filter(p => p[MEMBER_PRIM] && p.x1 === 1000 && p.x2 === 1000);
+  assert.equal(v.length, 1, '分かれ目をまたいで 1 本');
+  assert.deepEqual([v[0].y1 || 0, v[0].y2], [0, -2400]);
+});
+
+test('【B3-3】emitColumns: 柱の上端が断面線の高さでない（その位置の天井が帯の天井より低い）と天の線（中線）が付く。柱の上に梁が来る境は手前の部材が輪郭を持つ', () => {
+  const prims = emitColumns(columnCols(faceColumn(), { z1: 2000 }), makeCut(), { ceilZ: 2400 });
+  const top = prims.filter(p => p[MEMBER_PRIM] && p.y1 === -2000 && p.y2 === -2000);
+  assert.deepEqual(top.map(p => [p.x1, p.x2, p.weight]), [[1000, 1200, 'medium']], '天の線は柱の見付け幅で中線');
+  // 柱の上（z 2000..）に手前の梁の帯が接する: 梁のほうが手前（distMm 小）なら柱は境を引かない
+  const withBeam = columnCols(faceColumn(), { z1: 2000 }).map(c => (c.x0 === 1000
+    ? { ...c, bands: [...c.bands, faceBand(faceBeam(), { z0: 2000, z1: 2400, distMm: 300, memberClass: 'airborne' })] } : c));
+  const t2 = emitColumns(withBeam, makeCut(), { ceilZ: 2400 }).filter(p => p[MEMBER_PRIM] && p.y1 === -2000 && p.y2 === -2000 && p.x1 === 1000);
+  assert.equal(t2.length, 1, '境の線は手前の梁の下端 1 本だけ（柱の天の線と重ならない）');
+});
+
+test('【失敗系・B3-3】emitColumns: 柱の帯の memberClass が未知なら描かない。柱の端が帯の列境界でない（隣の列に同じ柱が続く）所には縦線を引かない', () => {
+  assert.equal(emitColumns(columnCols(faceColumn(), { memberClass: undefined }), makeCut(), { ceilZ: 2400 }).filter(p => p[MEMBER_PRIM]).length, 0);
+  // 柱が 2 列にまたがる（x 1000..1100・1100..1200 の 2 列で同じ柱）: 内側の境 x=1100 に縦線は無い
+  const m = faceColumn();
+  const two = [
+    { x0: 1000, x1: 1100, worldLo: 1000, worldHi: 1100, bands: [columnBand(m)] },
+    { x0: 1100, x1: 1200, worldLo: 1100, worldHi: 1200, bands: [columnBand(m)] },
+  ];
+  const xs = emitColumns(two, makeCut(), { ceilZ: 2400 }).filter(p => p[MEMBER_PRIM] && p.x1 === p.x2).map(p => p.x1).sort((a, b) => a - b);
+  assert.deepEqual(xs, [1000, 1200]);
+});
+
+test('【B3-3・slab】emitColumns: slab の中の柱の片の上に手前の梁の片・memberCut の片が接するとき、柱の天の線を引かない。兄弟がいなければ引く（対照）', () => {
+  const colPiece = columnBand(faceColumn(), { z0: 2400, z1: 2700, behind: 'slab' });
+  const slabCols = (pieces) => [{ x0: 1000, x1: 1200, worldLo: 1000, worldHi: 1200,
+    bands: [{ kind: 'open', z0: 0, z1: 2400 }, { kind: 'slab', z0: 2400, z1: 3000, ownerRoom: null, floorZ: 0, ceilZ: 2400, members: pieces }] }];
+  // 柱の片を描くときに貯める天地の線の区間（faceSegs。梁ごとの結合・dedupe の前）のうち z=2700 の本数を直接見る
+  const colAdds = (siblings) => {
+    const cols = slabCols([colPiece, ...siblings]);
+    const faceSegs = new Map();
+    emitMemberFaceBand([], faceSegs, cols[0], colPiece, { prev: null, next: null, cut: makeCut(), drawRange: { lo: -1e6, hi: 1e6 }, ceilZ: 3000 });
+    return (faceSegs.get(colPiece.member) ?? []).filter(s => s.z === 2700).length;
+  };
+  const lineCount = (pieces) => horizontalsOf(emitColumns(slabCols(pieces), makeCut(), { ceilZ: 3000 }), -2700).length;
+  assert.equal(colAdds([]), 1, '対照: 兄弟なしなら柱の天の線を引く');
+  const nearBeam = faceBand(faceBeam(), { z0: 2700, z1: 3000, distMm: 300, behind: 'slab' });
+  assert.equal(colAdds([nearBeam]), 0, '手前（distMm 小）の梁の片が接する: 柱は引かない');
+  const farBeam = faceBand(faceBeam(), { z0: 2700, z1: 3000, distMm: 800, behind: 'slab' });
+  assert.equal(colAdds([farBeam]), 1, '奥の梁の片が接する: 手前の柱が引く');
+  assert.equal(lineCount([colPiece, farBeam]), 1, '奥の梁の片が接する: 手前の柱が境の線を 1 本引く（奥の梁は引かない）');
+  const cutPiece = { kind: 'memberCut', z0: 2700, z1: 3000, member: faceBeam({ along: true }), memberType: 'beam', section: null, layerRole: 'self', distMm: 0, along: true };
+  assert.equal(colAdds([cutPiece]), 0, 'memberCut の片が接する: 柱は引かない');
 });
 
 test('【B3-2・slab】emitColumns: slab の帯に添えた梁の見え掛かりの片も同じ線を引き、隣の z に同じ梁が続く境の線は引かない', () => {

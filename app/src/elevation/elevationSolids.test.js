@@ -122,6 +122,20 @@ test('【追加仕様】solidPrimitivesForFace: A面の壁上に立つ柱は仕�
   }
 });
 
+test('【B3-3・加算停止】solidPrimitivesForFace: memberCutsByBand（帯を持つ呼び出し）では帯が持つ柱を描かない。dropped の柱は droppedMemberPrimitivesForFace が描く', () => {
+  const { graph, room, y0 } = makeGridRoom();
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addColumn(StructuralMaterialType.RC, 'RC-300x300', xm, y0, {});
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  const base = { graph, ceilingHeight: CH };
+  const verts = ps => ps.filter(p => p.type === 'line' && p.x1 === p.x2 && p.weight === 'medium');
+  assert.equal(verts(solidPrimitivesForFace(faceA, base)).length, 2, '省略は従来どおり柱を描く');
+  assert.equal(verts(solidPrimitivesForFace(faceA, { ...base, memberCutsByBand: true })).length, 0, '帯が持つ柱は加算で描かない');
+  const key = memberKey(structuralColumnContribution([{ graph, floorZMm: 0, role: 'self' }])[0]);
+  assert.equal(verts(droppedMemberPrimitivesForFace(faceA, base, new Set([key]))).length, 2, 'dropped の柱は加算で描く');
+  assert.equal(verts(droppedMemberPrimitivesForFace(faceA, base, new Set(['別のキー']))).length, 0, '別のキーの柱は描かない');
+});
+
 test('【追加仕様】structuralColumnContribution: 鉄骨角形鋼管柱はダイヤフラム出も含めて覆われる', () => {
   const { graph, y0 } = makeGridRoom();
   const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.ARCH });
@@ -208,6 +222,23 @@ test('【実機修正】structuralColumnPrimitivesForCut: 材厚が壁芯から�
   // この構成では見付け方向（x）に向き合う壁がフェイクに存在しないため包みは付かない
   // ——包み厚は「その面に向き合う壁の層構成」から来る（columnWrap.js の規約1）。
   assert.equal(Math.round(xs[1] - xs[0]), 250, '見付けは断面200＋ダイヤフラム出25×2');
+});
+
+test('【B3-3】structuralColumnPrimitivesForCut: opts.dropped を渡すと帯が持たない柱（dropped のキー）だけを従来の規則で描く。省略は全部', () => {
+  const wall = {
+    isVertical: false, materialRange: { lo: -6955, hi: -6942.5 }, coord1: -7942, coord2: -3057,
+    backingRange: null, wallFinish: 12.5, axisCL: { effectiveValue: -7000 },
+  };
+  const column = { role: 'primary', sectionDefId: 'STEEL-SQ200x200x9.0', x: -7850, y: -6850, rotation: 0 };
+  const solids = structuralColumnContribution([{ graph: { walls: [wall], columns: [column] }, floorZMm: 0, role: 'self' }]);
+  const cut = {
+    seqNo: 'a', line: { isVertical: false, axisValue: -7000, lo: -7942, hi: -3057 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 2400 }, baseFloorZ: 0,
+  };
+  assert.equal(structuralColumnPrimitivesForCut(solids, cut).length, 2, '省略は従来どおり全部');
+  assert.equal(structuralColumnPrimitivesForCut(solids, cut, { dropped: new Set() }).length, 0, '帯が持つ柱（dropped でない）は加算で描かない');
+  assert.equal(structuralColumnPrimitivesForCut(solids, cut, { dropped: new Set([memberKey(solids[0])]) }).length, 2, 'dropped の柱は従来の規則で描く');
+  assert.notEqual(memberKey(solids[0]), memberKey({ ...solids[0], xLo: solids[0].xLo + 1 }), '柱のキーは矩形・足元で区別する');
 });
 
 // 実機ログ（2階・柱が壁から42.5mm離れて立つ構成）の再現: 柱が壁と重なっていなくても、
@@ -735,6 +766,7 @@ test('【実機修正2026-09】buildRoomBandWithVoidAbove: solids指定時だけ
   assert.deepEqual(before.filter(k => !after.includes(k)), [],
     'solidsを渡しても既存のプリミティブは1本も消えない・変わらないはず');
   const added = after.filter(k => !before.includes(k));
+  // U1b B3-3: 柱型は帯（memberFace の column）が描く。柱の上端は梁と同じ天井の取り方（部屋の CH では切らない）で、帯の上端に接するので天の線は付かない
   assert.equal(added.length, 2, `柱型の両端縦線2本だけが増えるはず（実際:${JSON.stringify(added)}）`);
   assert.ok(added.every(k => k.includes('|medium|')), '柱型は中線（SILHOUETTE）のはず');
 });

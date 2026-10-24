@@ -50,6 +50,7 @@ export { MEMBER_PRIM };
  * @returns {string}
  */
 export function memberKey(b) {
+  if (b.xLo !== undefined) return ['c', b.xLo, b.xHi, b.yLo, b.yHi, b.baseZ].join('|'); // 柱（ColumnSolid。U1b B3-3）
   return [b.isVertical ? 'v' : 'h', b.axisWorld, b.spanLo, b.spanHi, b.widthMm, b.layerTopZ ?? b.topZ, b.layerDepthMm ?? b.depthMm].join('|');
 }
 
@@ -610,11 +611,14 @@ function visibleAcrossWallGap(cut, col, axis, viewSign, acrossLo, acrossHi) {
     && rangesOverlap(Math.min(w.coord1, w.coord2), Math.max(w.coord1, w.coord2), runLo, runHi));
 }
 
-export function structuralColumnPrimitivesForCut(contribution, cut) {
+export function structuralColumnPrimitivesForCut(contribution, cut, opts = {}) {
   const prims = [];
   const loZ = cut.zRange?.loZ ?? 0;
   const hiZ = cut.zRange?.hiZ ?? 0;
   for (const col of contribution ?? []) {
+    // opts.dropped（U1b B3-3）… 渡したときは、帯（memberFace の column）が持たない柱（列の端を捨てた。`droppedMemberKeysOf`）だけを従来の規則で描く
+    // （帯が持つ柱は帯が描く）。省略は従来どおり全部（単体テスト・帯を持たない呼び出し）
+    if (opts.dropped && !opts.dropped.has(memberKey(col))) continue;
     const z0 = Math.max(col.baseZ, loZ);
     if (z0 >= hiZ - GAP_EPS) continue; // 上階の柱等、この帯の描画範囲に掛からない
     // ①この面の壁と接続しているか（軸CLの照合。上記参照）②または断面が実際に切断線をまたぐか。

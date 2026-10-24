@@ -365,15 +365,29 @@ test('【2026-09】帯では柱型の片縁が接合部の端の縦線と畳ま�
       && Math.abs(Math.min(p.y1, p.y2) + 2400) < 1e-6 && Math.abs(Math.max(p.y1, p.y2)) < 1e-6)
     .map(p => p.x1);
   const before = mediumVerticalXs(without), after = mediumVerticalXs(with_);
+  // B3-3（Major-1）: 柱は部屋の天井（2400）で切らず上の床（吹抜けの上端 FLOOR_HEIGHT）まで続く。他の面の柱型の縁は天井高 2400 の線ではなく
+  // 床〜FLOOR_HEIGHT の 1 本の縦線（C1 の内側の縁以外で増える中線の縦線）
+  const tallOf = band => band.primitives.filter(p => p.type === 'line' && p.weight === 'medium' && Math.abs(p.x1 - p.x2) < 1e-6
+    && Math.abs(Math.min(p.y1, p.y2) + FLOOR_HEIGHT) < 1e-6 && Math.abs(Math.max(p.y1, p.y2)) < 1e-6);
+  const tallBefore = tallOf(without).map(p => p.x1);
+  const tall = tallOf(with_).filter(p => !tallBefore.includes(p.x1));
+  // 位置は実測（フィクスチャ固定）: 別の面の柱の両縁 6900・7197.5（B3-3 QA Minor 3）
+  assert.deepEqual(tall.map(p => p.x1).sort((a, b) => a - b), [6900, 7197.5], '上の床まで届く柱の縦線');
   const added = after.filter(x => !before.includes(x));
-  assert.equal(added.length, 1, `帯に増える縦線は1本だけのはず（実際:${JSON.stringify(added)}）`);
-  // 増えた1本は柱型の内側の縁（C1ローカル3000）。もう片方は接合部（ローカル3285）にあり、
+  // 天井高 2400 の縦線で増えるのは C1 の柱型の内側の縁 1 本だけ（本数は固定して検出力を持たせる）
+  assert.equal(added.length, 1, `天井高の縦線で増えるのは1本のはず（実際:${JSON.stringify(added)}）`);
+  // C1 の柱型の内側の縁（C1ローカル3000）。もう片方は接合部（ローカル3285）にあり、
   // solids無しの帯にも既に同じ線がある＝畳まれた相手。
   const c1 = faceAt(composeRoomFaces(room, g1), 0, false, -1);
   const col = structuralColumnContribution([
     { graph: g1, floorZMm: 0, role: 'self' },
     { graph: g2, floorZMm: FLOOR_HEIGHT, role: 'above' }])[0];
-  const jointX = added[0] + (toLocalX(c1, col.xLo) - toLocalX(c1, col.xHi));
+  const delta = toLocalX(c1, col.xLo) - toLocalX(c1, col.xHi);
+  const thickAt = (band, x) => band.primitives.some(p => p.type === 'line' && p.weight === 'thick' && Math.abs(p.x1 - p.x2) < 1e-6 && Math.abs(p.x1 - x) < 1e-6);
+  const innerEdge = added.find(x => thickAt(without, x + delta)); // 接合部（既存の壁断面の太線）の隣にある増えた縁＝C1 の内側の縁
+  assert.ok(innerEdge !== undefined, 'C1 の内側の縁（接合部の太線から柱の見付け幅だけ離れた縦線）が増えているはず');
+  const jointX = innerEdge + delta;
+  assert.ok(tall.every(p => Math.abs(p.x1 - innerEdge) > 1e-6), '上の床まで届く縦線は C1 の内側の縁とは別の位置（別の面の柱の縁）');
   // 接合部の端の縦線は**壁断面（CUT＝太線）**（ユーザー明示指示2026-09。仮想断面を横切る壁が
   // ある端の縦線はCUT）。柱型の片縁は同じ位置の中線なので、dedupeCoincidentLinesが
   // 「同位置は太い方を残す」で畳む——結果、接合部xの縦線は太線1本のままになる。
