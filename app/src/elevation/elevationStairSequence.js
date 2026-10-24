@@ -55,7 +55,7 @@ import {
   crossingFlightCutSurfaces,
 } from './section/sectionStair.js';
 import { lowerStairVoidRanges, inRanges, mergeRanges } from './section/lowerStairVoid.js';
-import { segmentInsideRect } from './elevationPrimitives.js';
+import { segmentInsideRect, line, polyline } from './elevationPrimitives.js';
 import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
 import { structuralContribution, structuralPrimitivesForCut, structuralColumnContribution, WHOLE_OUTLINE } from './section/sectionStructure.js';
@@ -71,6 +71,7 @@ import { PARTITION_THICKNESS_MM } from '../finish/stair/stairPartition.js';
 import { stairUnderReturnSoffit } from './section/sectionProbe.js';
 import {
   GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM, DEFAULT_WALL_LESS_END_EXTEND_MM, ElevationLineRole, weightForRole,
+  ElevationDash, FLOAT_EPS, SAMPLE_OFFSET_MM, COORD_EPS_MM,
 } from './elevationStyle.js';
 import { graphList } from '../graphReadScope.js';
 import { parseBaseboardHeightMm } from './elevationFigure.js';
@@ -161,10 +162,10 @@ export function floorProfileWithFloorOn(profile, lo, hi, z) {
     out.push([x, zz]);
   };
   for (const [x, zz] of profile) if (x < lo - GAP_EPS) push(x, zz);
-  if (out.length > 0) push(lo, drawnFloorProfileZAt(profile, lo - 1e-3));
+  if (out.length > 0) push(lo, drawnFloorProfileZAt(profile, lo - SAMPLE_OFFSET_MM));
   push(lo, z); push(hi, z);
   const after = profile.filter(([x]) => x > hi + GAP_EPS);
-  if (after.length > 0) push(hi, drawnFloorProfileZAt(profile, hi + 1e-3));
+  if (after.length > 0) push(hi, drawnFloorProfileZAt(profile, hi + SAMPLE_OFFSET_MM));
   for (const [x, zz] of after) push(x, zz);
   return out;
 }
@@ -235,10 +236,9 @@ export function clipContentInsideStairBody(prims, space) {
  * （壁の断面線は階段下スペース側の面だけ。ユーザー指示 2026-10-15）。
  */
 function underReturnCeilingPrimitives(space) {
-  const weight = weightForRole(ElevationLineRole.SILHOUETTE);
   const out = [];
   let run = [];
-  const flush = () => { if (run.length > 1) out.push({ type: 'polyline', points: run, weight }); run = []; };
+  const flush = () => { if (run.length > 1) out.push(polyline(run, ElevationLineRole.SILHOUETTE)); run = []; };
   for (const n of space.soffit) {
     if (n.gapBefore) flush();
     run.push([n.x, -n.z || 0]);
@@ -248,8 +248,7 @@ function underReturnCeilingPrimitives(space) {
   // dirSign<0 の面では配列の先頭・末尾と逆になる）
   const wallEnd = space.soffit.reduce((a, n) => (space.onLo ? (n.x > a.x ? n : a) : (n.x < a.x ? n : a)), space.soffit[0]);
   if (wallEnd && Number.isFinite(space.wallTopZ) && wallEnd.z - space.wallTopZ > GAP_EPS) {
-    out.push({ type: 'line', x1: wallEnd.x, y1: -space.wallTopZ || 0, x2: wallEnd.x, y2: -wallEnd.z || 0,
-      weight: weightForRole(ElevationLineRole.CUT) });
+    out.push(line(wallEnd.x, -space.wallTopZ || 0, wallEnd.x, -wallEnd.z || 0, ElevationLineRole.CUT));
   }
   return out;
 }
@@ -292,7 +291,7 @@ function underReturnBaseboardPrimitives(space, cut, probeCtx, selfLayer, floorZ,
   if (h == null) return [];
   const z = floorZ + h;
   if (z >= Math.min(...space.soffit.map(n => n.z)) - GAP_EPS) return [];
-  return [{ type: 'line', x1: arrivalX, y1: -z || 0, x2: space.wallFaceX, y2: -z || 0, weight: weightForRole(ElevationLineRole.DETAIL) }];
+  return [line(arrivalX, -z || 0, space.wallFaceX, -z || 0, ElevationLineRole.DETAIL)];
 }
 
 function flatFloorSegments(run, floorDeltaMm, chMm) {
@@ -405,7 +404,7 @@ function fillSpansWithBase(spans, xMin, xMax, base, baseFallbackZ) {
     const xs = [a, ...[...new Set(baseXs)].filter(x => x > a + GAP_EPS && x < b - GAP_EPS).sort((p, q) => p - q), b];
     for (let i = 0; i + 1 < xs.length; i++) {
       const lo = xs[i], hi = xs[i + 1];
-      const d = Math.min(1e-3, (hi - lo) / 4);
+      const d = Math.min(SAMPLE_OFFSET_MM, (hi - lo) / 4);
       out.push({ loX: lo, hiX: hi, z0: baseAt(lo + d), z1: baseAt(hi - d) });
     }
   };
@@ -538,7 +537,7 @@ export function applyStairSoffitToCut(soffit, cut, base, baseFallbackZ, opts = {
     series = extendLowerCeilingAcrossStrip(series, Math.min(sa, sb), Math.max(sa, sb));
   }
   if (base?.length && opts.openEnds) {
-    const d = 1e-3;
+    const d = SAMPLE_OFFSET_MM;
     if (opts.openEnds.left) series = endSoffitAtOpenEndCeiling(series, 'left', drawnFloorProfileZAt(base, xMin + d), SOFFIT_OPEN_END_INSET_MM);
     if (opts.openEnds.right) series = endSoffitAtOpenEndCeiling(series, 'right', drawnFloorProfileZAt(base, xMax - d), SOFFIT_OPEN_END_INSET_MM);
   }
@@ -557,8 +556,8 @@ export function applyStairSoffitToCut(soffit, cut, base, baseFallbackZ, opts = {
     ceilingProfile,
     // 端の値は最終の区間列から（壁のない端で base の高さに置き換えた値を反映。端が裏面で覆われていなければ従来どおり null）
     ends: {
-      left: first.loX <= xMin + 1e-3 ? series[0].z0 : null,
-      right: last.hiX >= xMax - 1e-3 ? series[series.length - 1].z1 : null,
+      left: first.loX <= xMin + COORD_EPS_MM ? series[0].z0 : null,
+      right: last.hiX >= xMax - COORD_EPS_MM ? series[series.length - 1].z1 : null,
     },
   };
 }
@@ -769,7 +768,7 @@ export function upperFloorEndLines(entry, floorHeight, extendMm) {
     const xTop = pts[firstTop][0];
     const xOuter = end === 'lo' ? -extendMm : face.run + extendMm;
     if ((end === 'lo' ? xTop - xOuter : xOuter - xTop) <= GAP_EPS) continue;
-    out.push({ type: 'line', x1: xOuter, y1: -floorHeight, x2: xTop, y2: -floorHeight, weight: weightForRole(ElevationLineRole.CUT) });
+    out.push(line(xOuter, -floorHeight, xTop, -floorHeight, ElevationLineRole.CUT));
   }
   return out;
 }
@@ -883,20 +882,20 @@ export function dashLinesInsideRects(prims, rects, opts = {}) {
   const thin = weightForRole(ElevationLineRole.DETAIL);
   const out = [];
   for (const p of prims) {
-    if (p.type !== 'line' || p.dash === 'dashed') { out.push(p); continue; }
+    if (p.type !== 'line' || p.dash === ElevationDash.DASHED) { out.push(p); continue; }
     const hits = boxes.map(b => segmentInsideRect(p.x1, p.y1, p.x2, p.y2, b)).filter(Boolean).sort((a, b) => a[0] - b[0]);
     if (hits.length === 0) { out.push(p); continue; }
     const merged = [];
     for (const h of hits) {
       const last = merged[merged.length - 1];
-      if (last && h[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], h[1]); else merged.push([h[0], h[1]]);
+      if (last && h[0] <= last[1] + FLOAT_EPS) last[1] = Math.max(last[1], h[1]); else merged.push([h[0], h[1]]);
     }
     const at = t => [p.x1 + (p.x2 - p.x1) * t, p.y1 + (p.y2 - p.y1) * t];
     const push = (t0, t1, hidden) => {
-      if (t1 - t0 <= 1e-9) return;
+      if (t1 - t0 <= FLOAT_EPS) return;
       const [x1, y1] = at(t0), [x2, y2] = at(t1);
       if (Math.hypot(x2 - x1, y2 - y1) <= HIDDEN_PIECE_MIN_MM) return; // 角に触れただけの退化片
-      out.push(hidden ? { ...p, x1, y1, x2, y2, weight: thin, dash: 'dashed' } : { ...p, x1, y1, x2, y2 });
+      out.push(hidden ? { ...p, x1, y1, x2, y2, weight: thin, dash: ElevationDash.DASHED } : { ...p, x1, y1, x2, y2 });
     };
     let cursor = 0;
     for (const [h0, h1] of merged) { push(cursor, h0, false); push(h0, h1, true); cursor = h1; }
@@ -930,7 +929,7 @@ export function removeLinesInsideRects(prims, rects) {
   if (targeted.length > 0) {
     const cutVertical = (p) => {
       // 壁の断面・縁の線（太線・中線）だけ。通り芯（一点鎖線）・細線（寸法の補助・隠れ線）は壁の線ではないので切らない
-      if (p.type !== 'line' || Math.abs(p.x1 - p.x2) > GAP_EPS || p.weight === 'thin' || String(p.dash ?? '').startsWith('center')) return [p];
+      if (p.type !== 'line' || Math.abs(p.x1 - p.x2) > GAP_EPS || p.weight === 'thin' || String(p.dash ?? '').startsWith(ElevationDash.CENTER)) return [p];
       let pieces = [p];
       for (const r of targeted) {
         if (!r.xs.some(x => Math.abs(x - p.x1) <= GAP_EPS)) continue;
@@ -962,12 +961,12 @@ export function removeLinesInsideRects(prims, rects) {
     const merged = [];
     for (const h of hits) {
       const last = merged[merged.length - 1];
-      if (last && h[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], h[1]); else merged.push([h[0], h[1]]);
+      if (last && h[0] <= last[1] + FLOAT_EPS) last[1] = Math.max(last[1], h[1]); else merged.push([h[0], h[1]]);
     }
     const at = t => [p.x1 + (p.x2 - p.x1) * t, p.y1 + (p.y2 - p.y1) * t];
     let cursor = 0;
     const push = (t0, t1) => {
-      if (t1 - t0 <= 1e-9) return;
+      if (t1 - t0 <= FLOAT_EPS) return;
       const [x1, y1] = at(t0), [x2, y2] = at(t1);
       if (Math.hypot(x2 - x1, y2 - y1) <= HIDDEN_PIECE_MIN_MM) return;
       out.push({ ...p, x1, y1, x2, y2 });
@@ -1063,8 +1062,8 @@ export function openingPanelPrimitives(cut, columns, probeCtx, bandRoom) {
   // 開口の矩形 p に、天井の縁（中線。上端が天井 ceilZ のときだけ）とアキのバツ
   const drawOpening = (p, ceilZ) => {
     if (Math.abs(p.zHi - ceilZ) <= GAP_EPS) out.push(emitLine(cut, p.x0, ceilZ, p.x1, ceilZ, ElevationLineRole.SILHOUETTE, { neverDowngrade: true }));
-    out.push(emitLine(cut, p.x0, p.zLo, p.x1, p.zHi, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
-    out.push(emitLine(cut, p.x0, p.zHi, p.x1, p.zLo, ElevationLineRole.DETAIL, { dash: 'center', neverDowngrade: true }));
+    out.push(emitLine(cut, p.x0, p.zLo, p.x1, p.zHi, ElevationLineRole.DETAIL, { dash: ElevationDash.CENTER, neverDowngrade: true }));
+    out.push(emitLine(cut, p.x0, p.zHi, p.x1, p.zLo, ElevationLineRole.DETAIL, { dash: ElevationDash.CENTER, neverDowngrade: true }));
   };
   const hiddenPieces = [];
   for (const run of runs) {
@@ -1253,7 +1252,8 @@ export function clipContentBelowProfileInRanges(prims, profile, ranges) {
       if (inside) { out.push(...clipContentAboveDrawnProfile([p], profile)); continue; }
       const { points, ...rest } = p;
       for (let i = 0; i + 1 < points.length; i++) {
-        clipLine({ ...rest, type: 'line', x1: points[i][0], y1: points[i][1], x2: points[i + 1][0], y2: points[i + 1][1] });
+        // rest が type（'polyline'）を持つので、line の type で同じ位置のまま上書きされる（キー順は従来どおり）
+        clipLine({ ...rest, ...line(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1]) });
       }
       continue;
     }
@@ -1485,7 +1485,7 @@ export function upperOverhangOf(pcut, columns) {
     return { upperOverhang: undefined, upperFloorZ: undefined, upperFloorCutEnds: undefined,
       upperFloorEnds: undefined, stairOverhangOuter: undefined };
   }
-  const line = pcut.line;
+  const cutLine = pcut.line;
   let best = null;
   // 比較の基準は**自階の窓**（＝壁のない端部の体裁のはり出しを含む従来の探査範囲）——
   // その延長ぶんは図側が既にdrawnX0/drawnXRunで描いており、ここで二重に足さない。
@@ -1502,8 +1502,8 @@ export function upperOverhangOf(pcut, columns) {
     ? (pcut.dirSign > 0 ? wallLessEndAt(pcut.face, '0') : wallLessEndAt(pcut.face, 'Run')) : true;
   const worldHiIsWallLess = pcut.face
     ? (pcut.dirSign > 0 ? wallLessEndAt(pcut.face, 'Run') : wallLessEndAt(pcut.face, '0')) : true;
-  const baseLo = worldLoIsWallLess ? line.lo - (line.probeExtendLoMm ?? 0) : line.lo;
-  const baseHi = worldHiIsWallLess ? line.hi + (line.probeExtendHiMm ?? 0) : line.hi;
+  const baseLo = worldLoIsWallLess ? cutLine.lo - (cutLine.probeExtendLoMm ?? 0) : cutLine.lo;
+  const baseHi = worldHiIsWallLess ? cutLine.hi + (cutLine.probeExtendHiMm ?? 0) : cutLine.hi;
   for (const [layer, w] of windows) {
     if (layer?.role === 'self') continue;
     // world側のはみ出し → 面ローカルの端（dirSign>0ならworldのlo側がローカルx=0側）。
