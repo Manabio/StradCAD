@@ -252,6 +252,18 @@ export const SPLIT_MERGE_EPS_MM = 1;
 export const GAP_EPS_MM   = 1e-6;
 export const PROBE_EPS_MM = 5;
 
+// ---- 線種名・許容（S5: 生成コードに散っていたリテラルの単一情報源。値は従来のまま）----
+// 線の dash の種別名。値は renderer/figurePrimitivesKonva.jsx が px のパターン（DASH_DASHED／DASH_CENTER）へ引く鍵。
+//   DASHED … 破線（細線。見えがかり・隠れ線・天井断面より上下の向こう側）
+//   CENTER … 一点鎖線（通り芯・壁中心線・アキのバツ）
+export const ElevationDash = Object.freeze({ DASHED: 'dashed', CENTER: 'center' });
+// 浮動小数の丸め誤差だけを吸収する極小許容（媒介変数 t・区間の接触・長さ 0 の判定）。mm の許容（GAP_EPS_MM）とは別物。
+export const FLOAT_EPS = 1e-9;
+// 区間の境界の外側／内側の値を評価するための微小オフセット（mm。垂直の段差の上で値が 2 つになる点を避ける）。
+export const SAMPLE_OFFSET_MM = 1e-3;
+// 座標・高さを「同じ」と見なす許容（mm。μm 級。GAP_EPS_MM より 3 桁粗い＝部材の端の突き合わせ・高さの同値判定用）。
+export const COORD_EPS_MM = 1e-3;
+
 // 天井高の評価点を決める壁判定（家族の破線の外側の仕上げ面・遠側の奥の端の内側の仕上げ面）で、
 // 面の軸上の壁との重なりがこの値(mm)未満の区間は壁無しとみなす（芯／座標で評価）。
 // 裁定2026-10-13: 出隅の 72.5mm の重なりだけで片が割れ、数 mm 違う高さの破線が出るのを防ぐ。

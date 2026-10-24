@@ -10,7 +10,7 @@
 import { CenterLineType, isGridCenterLine } from '@core';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import {
-  ElevationLineRole, weightForRole, DEFAULT_NAME_GAP_MM, GAP_EPS_MM as PRIM_GAP_EPS,
+  ElevationLineRole, weightForRole, DEFAULT_NAME_GAP_MM, GAP_EPS_MM as PRIM_GAP_EPS, FLOAT_EPS,
 } from './elevationStyle.js';
 import { graphList } from '../graphReadScope.js';
 
@@ -214,6 +214,59 @@ export function collectGridCLs(graph) {
     isGridCenterLine(cl) && cl.centerLineType !== CenterLineType.RADIAL);
 }
 
+// ---- プリミティブの生成ヘルパー（展開図の `{ type: '...' }` リテラルの唯一の生成元）----
+// **渡されたキーだけを持つ**（既定値でキーを足さない。キーの有無を見るテスト・JSON のキー集合を不変に保つため）。キーの並びは
+// 「type → 位置引数 → style」の順（JSON 出力・視覚回帰ゲートがキー順まで比べる）。
+// style は ElevationLineRole の値（文字列）なら `{ weight: weightForRole(role) }`、オブジェクトならそのまま展開する。
+// 未知の role は weightForRole の既定（'thin'）。translatePrimitive／mirrorPrimitiveX が扱う型集合と
+// renderer/figurePrimitivesKonva.jsx の type 分岐に合わせる（新しい型を足すときは両方へも足す）。
+const styleOf = style => (typeof style === 'string' ? { weight: weightForRole(style) } : style);
+
+/** 線分。style=role 文字列 | { weight, dash, dashAnchor, ... } */
+export function line(x1, y1, x2, y2, style) {
+  return { type: 'line', x1, y1, x2, y2, ...styleOf(style) };
+}
+
+/** 折れ線。points=[[x,y],...]。style は line と同じ */
+export function polyline(points, style) {
+  return { type: 'polyline', points, ...styleOf(style) };
+}
+
+/** 文字。style={ anchor, baseline, size, ... } */
+export function text(x, y, str, style) {
+  return { type: 'text', x, y, text: str, ...style };
+}
+
+/** 寸法線。dir='h'|'v'。extra={ foot, dot, label, ... }（渡したキーだけ載る） */
+export function dim(dir, at, from, to, extra) {
+  return { type: 'dim', dir, at, from, to, ...extra };
+}
+
+/** 矩形。extra={ fill, ... } */
+export function rect(x, y, w, h, extra) {
+  return { type: 'rect', x, y, w, h, ...extra };
+}
+
+/** 円。rPx=スクリーン固定の半径(px)。extra={ fill, ... } */
+export function circle(cx, cy, rPx, extra) {
+  return { type: 'circle', cx, cy, rPx, ...extra };
+}
+
+/** 円弧（図の座標＝y下向き・度）。style は line と同じ */
+export function arc(cx, cy, r, startDeg, sweepDeg, style) {
+  return { type: 'arc', cx, cy, r, startDeg, sweepDeg, ...styleOf(style) };
+}
+
+/** 建具記号丸。rest={ top, bottom, openingId, dirSign, ... } */
+export function tag(cx, cy, rPx, rest) {
+  return { type: 'tag', cx, cy, rPx, ...rest };
+}
+
+/** 建具ドラッグ起点の透明矩形（rect と同形）。キー順は openingId, dirSign, x, y, w, h */
+export function hit(openingId, dirSign, x, y, w, h) {
+  return { type: 'hit', openingId, dirSign, x, y, w, h };
+}
+
 /**
  * 引出線の留め三角（直角三角形。外側の辺が垂直、底辺が引出線上、斜辺が内側へ下る）。
  * 高さ・底辺幅はスクリーン固定サイズ（TRIANGLE_HEIGHT_SCREEN_MM・TRIANGLE_ANGLE_DEG。
@@ -224,7 +277,7 @@ export function collectGridCLs(graph) {
  * @param {number} py - アンカーy（引出線のy＝三角の底辺の位置）
  * @param {1|-1} dir - 底辺が内側(部屋名枠側)へ伸びる向き（+1=右へ、-1=左へ）
  */
-function miterTriangle(px, py, dir) {
+export function miterTriangle(px, py, dir) {
   return { type: 'miterTriangle', x: px, y: py, dir };
 }
 
@@ -251,16 +304,15 @@ export function appendRoomNameFrame(primitives, roomName, opts = {}) {
   const boxW = Math.max(NAME_BOX_MIN_W_MM, (roomName?.length ?? 1) * NAME_BOX_CHAR_W_MM);
   const labelTop = preBounds.maxY + nameGapModelMm;
   const labelCY  = labelTop + NAME_BOX_H_MM / 2;
-  primitives.push({ type: 'rect', x: cx - boxW / 2, y: labelTop, w: boxW, h: NAME_BOX_H_MM });
-  primitives.push({ type: 'text', x: cx, y: labelCY, text: roomName, anchor: 'middle', baseline: 'middle' });
+  primitives.push(rect(cx - boxW / 2, labelTop, boxW, NAME_BOX_H_MM));
+  primitives.push(text(cx, labelCY, roomName, { anchor: 'middle', baseline: 'middle' }));
 
-  const leaderWeight = weightForRole(ElevationLineRole.DETAIL);
   if (leftX < cx - boxW / 2) {
-    primitives.push({ type: 'line', x1: leftX, y1: labelCY, x2: cx - boxW / 2, y2: labelCY, weight: leaderWeight });
+    primitives.push(line(leftX, labelCY, cx - boxW / 2, labelCY, ElevationLineRole.DETAIL));
     primitives.push(miterTriangle(leftX, labelCY, 1));
   }
   if (rightX > cx + boxW / 2) {
-    primitives.push({ type: 'line', x1: cx + boxW / 2, y1: labelCY, x2: rightX, y2: labelCY, weight: leaderWeight });
+    primitives.push(line(cx + boxW / 2, labelCY, rightX, labelCY, ElevationLineRole.DETAIL));
     primitives.push(miterTriangle(rightX, labelCY, -1));
   }
 }
@@ -292,7 +344,7 @@ export function clipPrimitivesToXRange(prims, range) {
       const tOf = x => (x - q.x1) / (q.x2 - q.x1);
       const t0 = Math.min(Math.max(tOf(range.lo), 0), 1), t1 = Math.min(Math.max(tOf(range.hi), 0), 1);
       const [ta, tb] = t0 <= t1 ? [t0, t1] : [t1, t0];
-      if (tb - ta < 1e-9) continue;
+      if (tb - ta < FLOAT_EPS) continue;
       const [x1, y1] = at(ta), [x2, y2] = at(tb);
       out.push({ ...q, x1, y1, x2, y2 });
     } else if (q.type === 'polyline' && Array.isArray(q.points)) {
@@ -317,12 +369,12 @@ export function segmentInsideRect(x1, y1, x2, y2, r) {
   let t0 = 0, t1 = 1;
   for (let i = 0; i < 4; i++) {
     const p = ps[i], q = qs[i];
-    if (Math.abs(p) < 1e-9) { if (q < 0) return null; continue; }
+    if (Math.abs(p) < FLOAT_EPS) { if (q < 0) return null; continue; }
     const t = q / p;
     if (p < 0) { if (t > t1) return null; if (t > t0) t0 = t; }
     else { if (t < t0) return null; if (t < t1) t1 = t; }
   }
-  return t1 - t0 > 1e-9 ? [t0, t1] : null;
+  return t1 - t0 > FLOAT_EPS ? [t0, t1] : null;
 }
 
 // 線分が**凸多角形**（頂点列 [[x,y],...]。向きは不問）の内側にある媒介変数区間[t0,t1]（Cyrus-Beck。
@@ -343,12 +395,12 @@ export function segmentInsideConvex(x1, y1, x2, y2, poly) {
     // 内側 ⇔ sgn*cross(e, p-a) >= 0。p=p1+t*d で c(t)=c0+cd*t。
     const c0 = sgn * (ex * (y1 - ay) - ey * (x1 - ax));
     const cd = sgn * (ex * dy - ey * dx);
-    if (Math.abs(cd) < 1e-9) { if (c0 < 0) return null; continue; }
+    if (Math.abs(cd) < FLOAT_EPS) { if (c0 < 0) return null; continue; }
     const t = -c0 / cd;
     if (cd > 0) { if (t > t0) t0 = t; } else if (t < t1) t1 = t;
     if (t0 > t1) return null;
   }
-  return t1 - t0 > 1e-9 ? [t0, t1] : null;
+  return t1 - t0 > FLOAT_EPS ? [t0, t1] : null;
 }
 
 // 媒介変数区間の集合を昇順・非重複へ統合する。
@@ -357,7 +409,7 @@ export function mergeIntervals(list) {
   const out = [];
   for (const iv of sorted) {
     const last = out[out.length - 1];
-    if (last && iv[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], iv[1]);
+    if (last && iv[0] <= last[1] + FLOAT_EPS) last[1] = Math.max(last[1], iv[1]);
     else out.push([...iv]);
   }
   return out;
@@ -391,7 +443,7 @@ function farEnough(a, b) {
 // クリップの出口）でまとめて捨てる。GAP_EPSではなく極小固定値（浮動小数の丸め誤差ぶんだけを
 // 許容）を使う——GAP_EPSは面のmm単位の許容差で、ここでは「本当に同一点か」だけを見たいため。
 export function isZeroLengthLine(p) {
-  return p.type === 'line' && Math.abs(p.x1 - p.x2) < 1e-9 && Math.abs(p.y1 - p.y2) < 1e-9;
+  return p.type === 'line' && Math.abs(p.x1 - p.x2) < FLOAT_EPS && Math.abs(p.y1 - p.y2) < FLOAT_EPS;
 }
 
 // 線分から矩形の和に入る区間を取り除き、残った区間だけの線分列にする。
@@ -488,23 +540,23 @@ function clipPolylineToXRange(points, lo, hi) {
   let run = [];
   const push = pt => {
     const last = run[run.length - 1];
-    if (!last || Math.abs(last[0] - pt[0]) > 1e-9 || Math.abs(last[1] - pt[1]) > 1e-9) run.push(pt);
+    if (!last || Math.abs(last[0] - pt[0]) > FLOAT_EPS || Math.abs(last[1] - pt[1]) > FLOAT_EPS) run.push(pt);
   };
   const flush = () => { if (run.length > 1) out.push(run); run = []; };
   for (let i = 0; i + 1 < points.length; i++) {
     const [x1, y1] = points[i], [x2, y2] = points[i + 1];
     const at = t => [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t];
     let ta = 0, tb = 1;
-    if (Math.abs(x2 - x1) < 1e-9) {
+    if (Math.abs(x2 - x1) < FLOAT_EPS) {
       if (x1 < lo - PRIM_GAP_EPS || x1 > hi + PRIM_GAP_EPS) { flush(); continue; }
     } else {
       const t0 = (lo - x1) / (x2 - x1), t1 = (hi - x1) / (x2 - x1);
       ta = Math.max(0, Math.min(t0, t1));
       tb = Math.min(1, Math.max(t0, t1));
-      if (tb - ta < 1e-9) { flush(); continue; }
+      if (tb - ta < FLOAT_EPS) { flush(); continue; }
     }
     push(at(ta)); push(at(tb));
-    if (tb < 1 - 1e-9) flush(); // 線分の途中で範囲外へ出た＝ここで途切れる
+    if (tb < 1 - FLOAT_EPS) flush(); // 線分の途中で範囲外へ出た＝ここで途切れる
   }
   flush();
   return out;

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   appendRoomNameFrame, subtractRectsFromPrimitives, translatePrimitive, mirrorPrimitiveX,
   segmentInsideConvex, subtractRectsFromLine, joinLinesAtMemberEdges,
+  line, polyline, text, dim, rect, circle, arc, tag, hit, miterTriangle,
 } from './elevationPrimitives.js';
 
 // translatePrimitive / mirrorPrimitiveX は同じプリミティブ型集合を扱う（片方にだけ型を追加すると、その型だけ
@@ -14,7 +15,7 @@ test('translatePrimitive/mirrorPrimitiveX: type:hit は rect と同じく移動�
   assert.deepEqual(translatePrimitive(p, 5000, 30), { ...p, x: 5100, y: -1970 });
   assert.deepEqual(mirrorPrimitiveX(p, 900), { ...p, x: -100 });
 });
-import { DEFAULT_NAME_GAP_MM, GAP_EPS_MM } from './elevationStyle.js';
+import { DEFAULT_NAME_GAP_MM, GAP_EPS_MM, ElevationLineRole, ElevationDash, weightForRole } from './elevationStyle.js';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 
 // ---- QA是正2026-09-13・F5: 矩形の縁をかすめて1e-4〜1e-3mmにしかならないrunは出力しない ----
@@ -174,4 +175,61 @@ test('包含の重複は部材の端が絡むときだけ畳む', () => {
   const lines = [hLine(0, 2000), hLine(500, 1200)];
   assert.equal(joinLinesAtMemberEdges(lines, [500]).length, 1, '端点が部材の端なら畳む');
   assert.equal(joinLinesAtMemberEdges(lines, [900]).length, 2, '部材の端が絡まなければ畳まない');
+});
+
+// ---- 生成ヘルパー（S5）: 渡されたキーだけを持つ・キーの並びは type→位置引数→style ----
+test('生成ヘルパー: line は渡したキーだけを持ち、role 文字列は weightForRole を引く', () => {
+  const p = line(0, 1, 2, 3, ElevationLineRole.CUT);
+  assert.deepEqual(p, { type: 'line', x1: 0, y1: 1, x2: 2, y2: 3, weight: weightForRole(ElevationLineRole.CUT) });
+  assert.deepEqual(Object.keys(p), ['type', 'x1', 'y1', 'x2', 'y2', 'weight']);
+  assert.equal('dash' in p, false, '既定値で dash を足さない');
+  assert.equal(line(0, 0, 1, 1, ElevationLineRole.SILHOUETTE).weight, 'medium');
+  assert.equal(line(0, 0, 1, 1, ElevationLineRole.DETAIL).weight, 'thin');
+});
+
+test('生成ヘルパー: style オブジェクトはキーの順のまま展開し、省略時は幾何のキーだけ', () => {
+  const p = line(0, 1, 2, 3, { dash: ElevationDash.CENTER, weight: 'thin', dashAnchor: 7 });
+  assert.deepEqual(Object.keys(p), ['type', 'x1', 'y1', 'x2', 'y2', 'dash', 'weight', 'dashAnchor']);
+  assert.deepEqual(Object.keys(line(0, 1, 2, 3)), ['type', 'x1', 'y1', 'x2', 'y2']);
+  assert.deepEqual(polyline([[0, 0], [1, 1]], ElevationLineRole.DETAIL),
+    { type: 'polyline', points: [[0, 0], [1, 1]], weight: 'thin' });
+  assert.deepEqual(Object.keys(polyline([[0, 0]])), ['type', 'points']);
+});
+
+test('【失敗系】生成ヘルパー: 未知の role は weightForRole の既定（thin）になり、throw しない', () => {
+  assert.equal(line(0, 0, 1, 1, 'no-such-role').weight, 'thin');
+  assert.equal(arc(0, 0, 1, 0, 90, 'no-such-role').weight, 'thin');
+});
+
+test('生成ヘルパー: text/dim/rect/circle/arc/tag/hit/miterTriangle のキー集合', () => {
+  assert.deepEqual(text(1, 2, 'ア キ', { anchor: 'middle', baseline: 'middle' }),
+    { type: 'text', x: 1, y: 2, text: 'ア キ', anchor: 'middle', baseline: 'middle' });
+  assert.deepEqual(Object.keys(text(1, 2, 'x')), ['type', 'x', 'y', 'text']);
+  assert.deepEqual(Object.keys(dim('v', 5, -10, 0, { foot: 3, dot: true, label: 10 })),
+    ['type', 'dir', 'at', 'from', 'to', 'foot', 'dot', 'label']);
+  assert.deepEqual(Object.keys(dim('h', 5, 0, 10)), ['type', 'dir', 'at', 'from', 'to']);
+  assert.deepEqual(rect(1, 2, 3, 4), { type: 'rect', x: 1, y: 2, w: 3, h: 4 });
+  assert.deepEqual(circle(1, 2, 11, { fill: '#fff' }), { type: 'circle', cx: 1, cy: 2, rPx: 11, fill: '#fff' });
+  assert.deepEqual(arc(1, 2, 3, -180, 90, { weight: 'thick' }),
+    { type: 'arc', cx: 1, cy: 2, r: 3, startDeg: -180, sweepDeg: 90, weight: 'thick' });
+  assert.deepEqual(tag(1, 2, 16, { top: 'W', bottom: '1', openingId: 'o', dirSign: 1 }),
+    { type: 'tag', cx: 1, cy: 2, rPx: 16, top: 'W', bottom: '1', openingId: 'o', dirSign: 1 });
+  assert.deepEqual(Object.keys(hit('o', -1, 1, 2, 3, 4)), ['type', 'openingId', 'dirSign', 'x', 'y', 'w', 'h']);
+  assert.deepEqual(miterTriangle(1, 2, -1), { type: 'miterTriangle', x: 1, y: 2, dir: -1 });
+});
+
+test('生成ヘルパーの型は translatePrimitive／mirrorPrimitiveX が扱う型集合に入っている（置き去りにならない）', () => {
+  const made = [
+    line(0, 0, 10, 0, ElevationLineRole.CUT), polyline([[0, 0], [10, 5]], ElevationLineRole.DETAIL),
+    text(0, 0, 't', { anchor: 'start' }), dim('v', 5, 0, 10, { foot: 1 }), rect(0, 0, 4, 4), circle(0, 0, 3),
+    arc(0, 0, 5, -180, 90), tag(0, 0, 3, { top: 'a' }), hit('o', 1, 0, 0, 4, 4), miterTriangle(0, 0, 1),
+  ];
+  for (const p of made) {
+    assert.notDeepEqual(translatePrimitive(p, 7, 9), p, `${p.type} は translatePrimitive で動く`);
+    assert.notDeepEqual(mirrorPrimitiveX(p, 100), p, `${p.type} は mirrorPrimitiveX で反転する`);
+  }
+});
+
+test('ElevationDash は renderer が引く 2 つの鍵（dashed／center）', () => {
+  assert.deepEqual({ ...ElevationDash }, { DASHED: 'dashed', CENTER: 'center' });
 });

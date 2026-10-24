@@ -392,7 +392,7 @@ Phase 5（下記「移した」節）以降、断面エンジン自身の探査�
 - **(f) 深度・座標系を疑う**: 出力不変が期待される置換で差分が出たら「モデル差」と言う前に、帯ローカル／
   絶対・floorOffset・深度の基準点（切断線か最も手前の壁面か）・全高壁の向こうでないかを実データで
   裏取りする。
-- **(g) 定数は1箇所**: 深度上限・許容誤差は`elevationStyle.js`から取り、経路ごとに別の値を持たない。
+- **(g) 定数は1箇所**: 深度上限・許容誤差は`elevationStyle.js`から取り、経路ごとに別の値を持たない。許容は意味ごとに別名（`GAP_EPS_MM`＝mm の幾何、`FLOAT_EPS`＝浮動小数の丸め、`SAMPLE_OFFSET_MM`＝境界の外側を評価する微小量、`COORD_EPS_MM`＝座標・高さの同一視）。線種名は`ElevationDash`。プリミティブの生成は`elevationPrimitives.js`のヘルパー（`line`・`polyline`・`text`・`dim`・`rect`・`circle`・`arc`・`tag`・`hit`・`miterTriangle`。`{ type: '...' }`リテラルは書かない。渡したキーだけを持ち既定値でキーを足さない）。新しい型を足すときは`translatePrimitive`・`mirrorPrimitiveX`・レンダラの分岐へも足す。
 
 ### クリーンアップで残したもの（2026-09-13 作成・2026-10-22 棚卸しで書き直し）
 **恒久的に残す**

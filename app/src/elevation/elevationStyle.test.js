@@ -7,6 +7,7 @@ import {
   TRIANGLE_ANGLE_DEG, TRIANGLE_HEIGHT_SCREEN_MM, FACE_GAP_SCREEN_MM,
   MIN_FACE_PX, drawLimitMm, visibleFaceMm, kneeCapFaceMm, kneeCapBottomMm, KNEE_CAP_FACE_MM,
   faceGapLimitMm, strokePxOf,
+  GAP_EPS_MM, FLOAT_EPS, SAMPLE_OFFSET_MM, COORD_EPS_MM, ElevationDash,
 } from './elevationStyle.js';
 
 // ---- 見付1px保証（ユーザー指示2026-09）: 表示倍率から描画限界を1つ定め、それ未満の見付は限界まで広げる ----
@@ -82,4 +83,15 @@ test('【QA G3】TRIANGLE_ANGLE_DEG/TRIANGLE_HEIGHT_SCREEN_MM/FACE_GAP_SCREEN_MM
   assert.equal(TRIANGLE_ANGLE_DEG, 60, '留め三角: 底辺と斜辺のなす角は60度（ユーザー仕様）');
   assert.equal(TRIANGLE_HEIGHT_SCREEN_MM, 10, '留め三角の高さは実画面10mm（ユーザー仕様）');
   assert.equal(FACE_GAP_SCREEN_MM, 30, '隣接展開図の壁芯間隔は実画面30mm（ユーザー仕様）');
+});
+
+// S5: 生成コードに散っていたリテラルを集約した許容・線種名。値は集約前のリテラルのまま（出力不変の根拠）。
+test('S5 許容・線種名: 集約前のリテラルの値のまま。意味の違う許容は別名・別の値の桁を保つ', () => {
+  assert.equal(GAP_EPS_MM, 1e-6);
+  assert.equal(FLOAT_EPS, 1e-9);
+  assert.equal(SAMPLE_OFFSET_MM, 1e-3);
+  assert.equal(COORD_EPS_MM, 1e-3);
+  assert.ok(FLOAT_EPS < GAP_EPS_MM && GAP_EPS_MM < COORD_EPS_MM, '浮動小数 < mm の許容 < 座標の同一視');
+  assert.deepEqual({ ...ElevationDash }, { DASHED: 'dashed', CENTER: 'center' });
+  assert.ok(Object.isFrozen(ElevationDash));
 });
