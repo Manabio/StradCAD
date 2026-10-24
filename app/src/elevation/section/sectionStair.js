@@ -82,11 +82,13 @@ import {
   resolveUTurnSectionParams, stairRunProfile, stringerPrimitives, stringerBandGeometry, WOOD_TREAD_THICKNESS_MM,
   STEEL_STRINGER_DEPTH_MM, STEEL_STRINGER_THICKNESS_MM, STEEL_LANDING_FRAME_DEPTH_MM,
 } from './stairSectionProfile.js';
-import { ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
+import {
+  ElevationLineRole, weightForRole, GAP_EPS_MM as GAP_EPS, ElevationDash, FLOAT_EPS, COORD_EPS_MM,
+} from '../elevationStyle.js';
 import { localXOf, cutDrawRange, solidRectsOf, rectsToFaceLocal } from './sectionTypes.js';
 import { emitLine, isStringer } from './sectionEmit.js';
 import { mergeFloorProfiles } from './floorProfileMath.js';
-import { clipPrimitivesToXRange, subtractRectsFromPrimitives } from '../elevationPrimitives.js';
+import { clipPrimitivesToXRange, subtractRectsFromPrimitives, polyline } from '../elevationPrimitives.js';
 
 /**
  * 切断線(axisValue)が flight・踊り場の走行範囲の端にあるとき「境界上は両側を含む」ための走行方向の許容幅(mm)。
@@ -703,7 +705,7 @@ function flightZigzagPrimitives(flight, cut, columns, outerBound) {
   if (!isLengthwiseCut(flight.isVertical, flight.acrossLo, flight.acrossHi, flight.runLo, flight.runHi, cut)) return [];
   const clamped = computeFlightZigzagPoints(flight, cut, columns, outerBound);
   if (clamped.length < 2) return []; // 面の描画範囲と交わらない（clampToDrawRangeが空）＝描かない
-  return [{ type: 'polyline', points: clamped, weight: weightForRole(ElevationLineRole.SILHOUETTE) }];
+  return [polyline(clamped, ElevationLineRole.SILHOUETTE)];
 }
 
 // 鉄骨ささら階段の往路・復路間の空き（QA実機フィードバック: 平面同様、往路と復路の間は
@@ -770,8 +772,8 @@ function flightLadderPrimitives(flight, cut, columns, ladderAcross, treadSection
   // 既に床断面線（太線）が引かれているので足さない。
   for (let k = belowBase ? 0 : 1; k <= steps; k++) {
     const z = frontZ0 + k * flight.riserMm;
-    if (cutZ != null && Math.abs(z - cutZ) < 1e-6) continue; // 切られている段板の天端は下の CUT で描く
-    prims.push(emitLine(cut, loX, z, hiX, z, ElevationLineRole.DETAIL, dashed ? { dash: 'dashed' } : {}));
+    if (cutZ != null && Math.abs(z - cutZ) < GAP_EPS) continue; // 切られている段板の天端は下の CUT で描く
+    prims.push(emitLine(cut, loX, z, hiX, z, ElevationLineRole.DETAIL, dashed ? { dash: ElevationDash.DASHED } : {}));
   }
   if (cutZ != null) {
     // 段板の幅方向の範囲: 隔て板の柱があるときは隔て板の面(flight.treadAcrossLo/Hi。往路 sA・復路 sB)で止める
@@ -1105,7 +1107,7 @@ export function flightHiddenRects(contribution, cut, columns, soffitSolid = null
  */
 export function flightTreadZAt(flight, runCoord) {
   const steps = Math.max(1, Math.round(flight.steps));
-  const i = Math.min(Math.floor(flightStepParam(flight, runCoord) + 1e-9), steps - 1);
+  const i = Math.min(Math.floor(flightStepParam(flight, runCoord) + FLOAT_EPS), steps - 1);
   return flight.baseZ + flight.riserMm * (1 + i);
 }
 
@@ -1572,7 +1574,7 @@ function mergeFarSegments(segs) {
     const merged = [];
     for (const sp of g.spans) {
       const last = merged[merged.length - 1];
-      if (last && sp[0] <= last[1] + 1e-3) last[1] = Math.max(last[1], sp[1]);
+      if (last && sp[0] <= last[1] + COORD_EPS_MM) last[1] = Math.max(last[1], sp[1]);
       else merged.push([sp[0], sp[1]]);
     }
     for (const [lo, hi] of merged) {
@@ -2121,7 +2123,7 @@ export function hiddenTurnStepPrimitives(contribution, cut, outerBound) {
   const draw = stairDrawRange(cut, outerBound);
   const slices = (contribution.landings ?? []).filter(l => l.turnStep != null);
   const hidden = (x1, z1, x2, z2) => ({
-    ...emitLine(cut, x1, z1, x2, z2, ElevationLineRole.DETAIL, { dash: 'dashed', neverDowngrade: true }), __o: HIDDEN_STEP_MARK,
+    ...emitLine(cut, x1, z1, x2, z2, ElevationLineRole.DETAIL, { dash: ElevationDash.DASHED, neverDowngrade: true }), __o: HIDDEN_STEP_MARK,
   });
   const sorted = [...cells].sort((a, b) => a.number - b.number).map(c => ({ ...c, pts: pairsOf(c.poly) }));
   const prims = [];
@@ -2257,7 +2259,7 @@ export function stairPrimitivesForCut(contribution, cut, columns, opts = {}) {
         // CUT（太線）として描いたうえで、切断面の向こう側にある「このレーン自身」のささら
         // （手前側は切り取られるため描かない）をstringerPrimitives（DETAIL）で重ねて描く。
         const clipped = clipStringerToAnchors(zig[0].points, contribution.unit, flight);
-        prims.push({ type: 'polyline', points: clipped, weight: weightForRole(ElevationLineRole.CUT) });
+        prims.push(polyline(clipped, ElevationLineRole.CUT));
         zigzagEntries.push({ points: clipped, flight });
       } else {
         prims.push(...zig);
