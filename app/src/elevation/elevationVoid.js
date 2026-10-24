@@ -23,7 +23,10 @@ import { layoutBandFaces, finalizeBand, appendBandCutContent,
   floorZProfileFromSegments } from './elevationBand.js';
 import { translatePrimitive } from './elevationPrimitives.js';
 import { makeProbeContext } from './section/sectionProbe.js';
-import { buildSectionFromLine, planeOverhangForFace, endZOf, upperFloorCutWallEndsOf } from './section/sectionContent.js';
+import {
+  buildSectionFromLine, planeOverhangForFace, endZOf, upperFloorCutWallEndsOf, droppedMemberKeysOf,
+} from './section/sectionContent.js';
+import { droppedMemberPrimitivesForFace } from './elevationSolids.js';
 import { makeSectionCut } from './section/sectionTypes.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign,
   wallWorldRangesOnFacePlane } from './section/sectionCutPlane.js';
@@ -497,8 +500,9 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
   // 層スタックは設置階＋直下階——面を下へ延長する方式（このファイル冒頭）でも、下階の壁は
   // 下階のgraphからしか読めないため、下階を層として積まないと1FL付近の断面・見えがかりが
   // 一切出ない（面の引き伸ばしは床線・天井線の話で、壁の実体の話ではない）。
+  const memberEdgesX = [];
   appendBandCutContent(primitives, voidRoom, graph, layout, layers,
-    { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
+    { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
       // 下階の平面が面の端より外へ続くぶん（gate付き）。探査（層ごとの窓）と描画範囲へ同じ値。
       ...(overhangByFace
         ? { upperPlaneOverhang: true, faceOverhangOf: face => overhangByFace.get(face) } : {}) });
@@ -508,8 +512,18 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
     // heightUnits（Phase 7b-1）: layers.lengthへ統一——dropMmが0にクランプされた（下階FL差で
     // 相殺された）場合はbuildBandLayers内部でbelow層自体が積まれず、layers.length=1になる
     // （旧`hasLower && dropMm > 0 ? 2 : 1`と同値。QA修正の意図はlayers側の打ち切り規則が担う）。
-    heightUnits: layers.length,
+    heightUnits: layers.length, memberEdgesX,
   });
+}
+
+/**
+ * 加算レイヤ（solids）で描く部材のうち、帯（memberCut）が持たない部材の断面・along（列の端を捨てた部材）を足す関数
+ * （`appendBandCutContent` の `droppedMemberPrimsOf`）。solids が無い帯は undefined（梁なし）。U1b B3-1。
+ */
+function droppedMemberPrimsOfSolids(solids, graph, room, layout) {
+  if (!solids) return undefined;
+  const opts = { graph, ceilingHeight: layout.CH, room, ...solids };
+  return (face, pcut) => droppedMemberPrimitivesForFace(face, opts, droppedMemberKeysOf(pcut, { inZRange: true }));
 }
 
 /**
@@ -542,11 +556,16 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     // 階高が解決できない図面だけ壁断面・見えがかり・アキが丸ごと欠ける（例外もログも出ない）。
     const layout = layoutBandFaces(room, graph, baseFaces, ctx);
     const prims = [...layout.primitives];
+    const memberEdgesX = [];
     appendBandCutContent(prims, room, graph, layout, buildBandLayers(graph),
-      { endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null });
+      { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
+        // 梁の断面（memberCut。U1b B3-1）: 加算レイヤ（solids）の有無に合わせる（solids 無しは梁なし＝従来どおり）
+        // （solids の共有の層があればそれ〔ElevationModeState が全部屋で共有〕、無ければ cut.layers）
+        memberLayers: ctx.solids ? ctx.solids.memberLayers : [],
+        droppedMemberPrimsOf: droppedMemberPrimsOfSolids(ctx.solids, graph, room, layout) });
     return finalizeBand(room, graph, prims, {
       faceCount: baseFaces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
-      triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
+      triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm, memberEdgesX,
     });
   }
   const voidCH = roomCeilingHeight(upperGraph, voidRoom).mm;
@@ -684,8 +703,12 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   // heightUnits（Phase 7b-1）はこのlayersのlengthをそのまま使う（下のfinalizeBand）——
   // このメイン経路は上のガード（floorHeightMm!=null && upperGraph）を通過済みなので常に2。
   const mainLayers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm }] });
+  const memberEdgesX = [];
   appendBandCutContent(cutContent, room, graph, layout, mainLayers, {
-    endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
+    memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
+    // 梁の断面（memberCut。U1b B3-1）: 主帯の層（自階＋上階）の梁。加算レイヤ（solids）の有無に合わせる（solids 無しは梁なし）
+    memberLayers: ctx.solids ? ctx.solids.memberLayers : [],
+    droppedMemberPrimsOf: droppedMemberPrimsOfSolids(ctx.solids, graph, room, layout),
     aboveCeilVisibleRangesOf: face => upper.segsByFace.get(face),
     // 面の端より外へ続く上階の平面（gate付き。上記overhangByFace）——探査（層ごとの窓）と
     // 描画範囲の両方へ同じ値を渡す。図側の天井断面線もfaceOverrideのupperOverhangで同じ値。
@@ -716,7 +739,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
-    heightUnits: mainLayers.length,
+    heightUnits: mainLayers.length, memberEdgesX,
   });
 }
 

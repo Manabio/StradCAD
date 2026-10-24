@@ -3,12 +3,13 @@
 // フィクスチャの作法は`sectionCutPlaneExtraction.test.js`の`makeGraph`/`makeRectRoom`に倣う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '@core';
+import { MEMBER_PRIM } from './sectionTypes.js';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { roomBounds } from '../../finish/gridCells.js';
 import { composeRoomFaces } from '../elevationFaceList.js';
 import { buildBandLayers } from './sectionBandLayers.js';
-import { buildSectionFromLine, buildCutContent, clipInsideSlabSolids } from './sectionContent.js';
+import { buildSectionFromLine, buildCutContent, clipInsideSlabSolids, droppedMemberKeysOf } from './sectionContent.js';
 import { makeProbeContext } from './sectionProbe.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './sectionCutPlane.js';
 import { wallLessEndAt } from '../elevationFaces.js';
@@ -230,4 +231,61 @@ test('【失敗系】clipInsideSlabSolids: 列が空・bandsが空なら素通�
   const p = lineZ(0, 0, 100, 0);
   assert.deepEqual(clipInsideSlabSolids([p], []), [p]);
   assert.deepEqual(clipInsideSlabSolids([p], [{ x0: 0, x1: 100, bands: [] }]), [p]);
+});
+
+// ---- 梁の断面（memberCut。U1b B3-1）: buildCutContent が memberPrims を壁の線と分けて返す ----
+function roomWithBeam(levelOffset) {
+  const g = makeGraph();
+  makeRectRoom(g, 0, 0, 4000, 3000, 'LDK');
+  const cl = (t, v) => g.centerLines.find(c => c.centerLineType === t && c.value === v)
+    ?? g.addCenterLine(t, v, { labeled: false, discipline: Discipline.ARCH });
+  g.addBeam(StructuralMaterialType.STEEL, 'STEEL-H200x100', cl(CenterLineType.VERTICAL, 2000), true,
+    cl(CenterLineType.HORIZONTAL, 500), cl(CenterLineType.HORIZONTAL, 2500), { role: 'primary', levelOffset });
+  return g;
+}
+const memberCutOf = (g, extra = {}) => buildSectionFromLine({ isVertical: false, axisValue: 1500, lo: 0, hi: 4000 }, buildBandLayers(g),
+  { viewSign: 1, dirSign: 1, zRange: { loZ: 0, hiZ: CH }, ...extra });
+
+test('【B3-1】buildCutContent: 梁の断面の線は memberPrims（MEMBER_PRIM の印）として壁の線と分けて返り、content にも入る。壁の線に印は付かない', () => {
+  const r = memberCutOf(roomWithBeam(2300));
+  assert.equal(r.memberPrims.length, 12, 'H 形の断面は 12 辺');
+  assert.ok(r.memberPrims.every(p => p[MEMBER_PRIM]));
+  assert.ok(!r.wallPrims.some(p => p[MEMBER_PRIM]), 'wallPrims（壁の線）に梁の線は混ざらない');
+  assert.ok(r.content.filter(p => p[MEMBER_PRIM]).length === 12, 'content には梁の線も入る');
+  // 梁なし: memberPrims は空・content は壁の線とアキだけ
+  const none = memberCutOf(roomWithBeam(2300), { memberLayers: [] });
+  assert.deepEqual(none.memberPrims, []);
+});
+
+test('【B3-1】droppedMemberKeysOf: 帯の z 範囲に掛からない梁（床より下・天井より上）は帯にならず加算へ回る。掛かる梁は回らない', () => {
+  const keysOf = (levelOffset) => {
+    const r = memberCutOf(roomWithBeam(levelOffset));
+    return droppedMemberKeysOf(r.cut);
+  };
+  assert.equal(keysOf(2300).size, 0, '帯の中の梁は帯が描く');
+  assert.equal(keysOf(2800).size, 1, '天井（zRange の上）より上の梁は加算');
+  assert.equal(keysOf(-300).size, 1, '床より下の梁は加算');
+});
+
+test('【B3-1】droppedMemberKeysOf: inZRange は z 範囲外の梁を除く（部屋帯は描かない）。範囲内で端を捨てた梁は残す', () => {
+  const r = memberCutOf(roomWithBeam(2800));
+  assert.equal(droppedMemberKeysOf(r.cut).size, 1, '既定は範囲外の梁も含む（階段帯）');
+  assert.equal(droppedMemberKeysOf(r.cut, { inZRange: true }).size, 0, '部屋帯は範囲外の梁を除く');
+  const r2 = memberCutOf(roomWithBeam(-300));
+  assert.equal(droppedMemberKeysOf(r2.cut, { inZRange: true }).size, 0, '床より下も除く');
+});
+
+test('【失敗系・B3-1】buildCutContent: gapBeamRects は関数でも渡せ（列の分割の後に pcut を受ける）、配列・null と同じく使える', () => {
+  const g = makeGraph();
+  makeRectRoom(g, 0, 0, 4000, 3000, 'LDK');
+  let seen = null;
+  const r = buildCutContent({
+    seqNo: 'x', line: { isVertical: false, axisValue: 1500, lo: 0, hi: 4000 }, viewSign: 1, dirSign: 1,
+    layers: buildBandLayers(g), zRange: { loZ: 0, hiZ: CH }, baseFloorZ: 0,
+  }, makeProbeContext(buildBandLayers(g)), { gapBeamRects: (pcut) => { seen = pcut; return []; } });
+  assert.ok(seen && seen === r.cut, '関数は列を作った後の切断（pcut）を受ける');
+  assert.deepEqual(buildCutContent({
+    seqNo: 'x', line: { isVertical: false, axisValue: 1500, lo: 0, hi: 4000 }, viewSign: 1, dirSign: 1,
+    layers: buildBandLayers(g), zRange: { loZ: 0, hiZ: CH }, baseFloorZ: 0,
+  }, makeProbeContext(buildBandLayers(g)), { gapBeamRects: null }).memberPrims, [], 'null でも例外にならない');
 });

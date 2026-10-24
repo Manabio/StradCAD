@@ -8,7 +8,7 @@ import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { letterOf, DIR_SIGN } from './elevationFaces.js';
 import { stairFaceSequence, kneeWallCapContent, stairChDimChains, upperOverhangOf, withFlatLineSpans, upperFloorEndLines, clipContentBelowProfileInRanges, removeLinesInsideRects, floorlessRangesOfCut } from './elevationStairSequence.js';
-import { localXOf } from './section/sectionTypes.js';
+import { localXOf, MEMBER_PRIM } from './section/sectionTypes.js';
 import { switchbackCuts, buildMidWallFace } from './section/cuts/switchbackCuts.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { buildStairBand } from './elevationStair.js';
@@ -3164,21 +3164,22 @@ test('【床の遮蔽・配線 m1】床なし区間の端は切断壁の吹抜�
   assert.deepEqual(floorlessRangesOfCut(null), []);
 });
 
-test('【壁の線の分断・配線 M2】壁内の梁が壁の面から出て見えるとき、その壁の縦線は梁の z 範囲で上下 2 片に分かれる。梁が無ければ 1 本のまま', () => {
-  // 往復間の壁（world x 1000..1050）に梁（world x 1050・幅 100）が掛かり、壁の面（面ローカル 892.5・942.5）から断面が出る。天端 1500・下端 1300
+test('【壁の線・配線 M2・R6】壁内の梁が壁の面から出て見えても、帯が描く梁の断面（memberCut）の高さで壁の縦線は分けない（ユーザー裁定 2026-10-24 R6）', () => {
+  // 往復間の壁（world x 1000..1050）に梁（world x 1050・幅 100）が掛かり、壁の面（面ローカル 892.5・942.5）から断面が出る。天端 1500・下端 1300。
+  // 2026-10-23 の「壁内の梁が壁の面から出て見える場合だけ分断する」（wallLineCuts）は、梁の断面を帯が描くようになった（U1b B3-1）ので
+  // 帯の断面では掛けない（裁定 R6: 壁の断面の縁が梁の断面に接する高さでも縁を描く）。wallLineCuts が掛かるのは帯が持たない部材（列の端を捨てた部材）だけ。
   const wallEdgeAt = (content, x) => content.filter(p => p.type === 'line' && Math.abs(p.x1 - x) < 1e-6 && Math.abs(p.x2 - x) < 1e-6)
     .map(p => [Math.min(-p.y1, -p.y2), Math.max(-p.y1, -p.y2)]).sort((a, b) => a[0] - b[0]);
   const none = crossBeamBand({ x: 1050, levelOffset: 5000, role: 'primary', withLower: true }); // 帯の外（天端 5000）: 梁の断面なし
   const whole = wallEdgeAt(none.seq1.content, 892.5);
   assert.ok(whole.length >= 1 && whole.some(([lo, hi]) => lo <= 1300 && hi >= 1500), `対照: 梁が無い面ローカル x=892.5 の壁の縁は 1300..1500 を貫く（${JSON.stringify(whole)}）`);
   const beam = crossBeamBand({ x: 1050, levelOffset: 1500, role: 'primary', withLower: true });
+  assert.ok(beam.seq1.content.some(p => p[MEMBER_PRIM]), '前提: 梁の断面は帯の線（MEMBER_PRIM の印）で描かれている');
   const pieces = wallEdgeAt(beam.seq1.content, 892.5);
-  assert.ok(pieces.length >= 2, `壁の縁は上下 2 片以上に分かれる（${JSON.stringify(pieces)}）`);
-  assert.ok(!pieces.some(([lo, hi]) => lo < 1500 - 1 && hi > 1300 + 1), `梁の z 範囲（1300..1500）に壁の線が無い（${JSON.stringify(pieces)}）`);
-  assert.ok(pieces.some(([, hi]) => hi <= 1300 + 1) && pieces.some(([lo]) => lo >= 1500 - 1), '梁の下の片と上の片がある');
+  assert.ok(pieces.some(([lo, hi]) => lo <= 1300 && hi >= 1500), `梁の z 範囲（1300..1500）でも壁の縁は途切れない（R6。${JSON.stringify(pieces)}）`);
 });
 
-test('【壁の線の分断・帯】面端が壁の面に一致する配置（実データの型）: 面端の太線の縦線も梁の z 範囲で上下 2 片に分かれ、どの太さの縦線も梁の z 範囲に残らない。余分な重なりも無い', () => {
+test('【壁の線・帯・R6】面端が壁の面に一致する配置（実データの型）: 帯が描く梁の断面の高さでも面端の太線の縦線は 1 本で貫く（分けない）。ほかの太さの縦線は太線の範囲を超えない', () => {
   // 面 seq1 の端（面ローカル 0＝外壁の室内側の面）に、外壁の中から梁（world x 1960・幅 100・天端 1000・下端 800）が面から出る
   const vlinesAtFaceEnd = (withBeam) => {
     const graph = makeGraph('p1');
@@ -3198,14 +3199,14 @@ test('【壁の線の分断・帯】面端が壁の面に一致する配置（�
   const plain = vlinesAtFaceEnd(false);
   assert.ok(plain.some(v => v.weight === 'thick' && v.z[0] <= 0 && v.z[1] >= 4800 - 1), `対照: 梁が無ければ面端の太線は 1 本で貫く（${JSON.stringify(plain)}）`);
   const withBeam = vlinesAtFaceEnd(true);
-  assert.ok(!withBeam.some(v => v.z[0] < 1000 - 1 && v.z[1] > 800 + 1), `梁の z 範囲（800..1000）に、どの太さの縦線も残らない（${JSON.stringify(withBeam)}）`);
   const thick = withBeam.filter(v => v.weight === 'thick').sort((a, b) => a.z[0] - b.z[0]);
-  assert.equal(thick.length, 2, '太線の壁の縁は梁の上下の 2 片');
-  assert.ok(thick[0].z[1] <= 800 + 1 && thick[1].z[0] >= 1000 - 1, `下の片は梁の下端まで・上の片は梁の天端から（${JSON.stringify(thick)}）`);
-  assert.equal(withBeam.length, thick.length, '余分な（太線の下に重なる）縦線は無い');
+  assert.equal(thick.length, 1, '太線の壁の縁は梁の高さ（800..1000）でも分けない（R6）');
+  assert.ok(thick[0].z[0] <= 0 && thick[0].z[1] >= 4800 - 1, `面端の太線は 1 本で貫く（${JSON.stringify(thick)}）`);
+  // 太線の下に重なる中線の縦線（壁の帯の凹み側面線。梁の断面の高さでは帯が梁に代わるので分かれる）が太線の外へ出ない
+  for (const v of withBeam.filter(w => w.weight !== 'thick')) assert.ok(v.z[0] >= thick[0].z[0] - 1 && v.z[1] <= thick[0].z[1] + 1, `太線の範囲の中（${JSON.stringify(v)}）`);
 });
 
-test('【壁の線の分断・帯 xCursor】2 面目以降（xCursor>0）の壁の面でも、縦線は梁の z 範囲で上下 2 片に分かれる。ほかの縦線は切れない', () => {
+test('【壁の線・帯 xCursor・R6】2 面目以降（xCursor>0）の壁の面でも、壁の縦線は梁（帯が描く断面）の z 範囲で分けない。ほかの縦線も不変', () => {
   // 外壁の中の梁（world x 40・幅 100・天端 1500・下端 1300）。seq1（xCursor=0）の面端 1885 と、seq3（xCursor>0）の面端 7900 の 2 か所で壁の面から出る
   const verticals = (withBeam) => {
     const graph = makeGraph('p1');
@@ -3226,8 +3227,7 @@ test('【壁の線の分断・帯 xCursor】2 面目以降（xCursor>0）の壁�
   for (const x of [1885, 7900]) {
     assert.ok(at(plain, x).some(v => v.z[0] <= 1300 && v.z[1] >= 1500), `対照: 梁が無ければ x=${x} の縦線は梁の z 範囲を貫く（${JSON.stringify(at(plain, x))}）`);
     const pieces = at(withBeam, x);
-    assert.equal(pieces.length, 2, `x=${x}: 縦線は梁の上下の 2 片（${JSON.stringify(pieces)}）`);
-    assert.ok(pieces[0].z[1] <= 1300 && pieces[1].z[0] >= 1500, `x=${x}: 下の片は梁の下端まで・上の片は梁の天端から（${JSON.stringify(pieces)}）`);
+    assert.ok(pieces.some(v => v.weight === 'thick' && v.z[0] <= 1300 && v.z[1] >= 1500), `x=${x}: 壁の太線は梁の z 範囲を貫く（R6。${JSON.stringify(pieces)}）`);
   }
   // 切るのは壁の面（1885・7900）の縦線だけ。ほかの x の縦線は梁の z 範囲を貫いたまま（平行移動を誤ると別の位置の線が切れる／切るべき線が残る）
   const others = plain.filter(v => ![1885, 7900].some(x => Math.abs(v.x - x) < 1e-6));

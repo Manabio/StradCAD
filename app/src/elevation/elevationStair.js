@@ -187,6 +187,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
     : null;
 
   const primitives = [];
+  const memberEdgesX = []; // 梁・柱の端で割れた共線の線を finalizeBand が戻す印（面の列の分割。帯の x）
   let chDimX, prevBoundaryHi, faceCount;
 
   if (sequence) {
@@ -248,6 +249,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
       primitives.length = 0;
       for (const p of cut) primitives.push(p);
     }
+    memberEdgesX.push(...layout.faceRuns.flatMap(({ xCursor }, i) => (sequence[i].memberEdgesX ?? []).map(x => x + xCursor)));
     chDimX = layout.chDimX; prevBoundaryHi = layout.prevBoundaryHi;
     faceCount = sequence.length;
   } else {
@@ -302,6 +304,6 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   return finalizeBand(stairRoom, graph, primitives, {
     faceCount, chDimX, prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
-    heightUnits,
+    heightUnits, memberEdgesX,
   });
 }

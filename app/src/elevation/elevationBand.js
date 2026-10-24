@@ -10,14 +10,14 @@
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import { roomBounds, cellBoundsList } from '../finish/gridCells.js';
 import { makeProbeContext } from './section/sectionProbe.js';
-import { buildSectionFromLine } from './section/sectionContent.js';
+import { buildSectionFromLine, droppedMemberKeysOf } from './section/sectionContent.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
 import { structuralColumnContribution } from './section/sectionStructure.js';
 import { stairContribution, stairPrimitivesForCut, clipStairUnderCeiling, flightNoseZAt } from './section/sectionStair.js';
 import { graphList } from '../graphReadScope.js';
 import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDisplayName } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
-import { beamBlockerRectsForFace } from './elevationSolids.js';
+import { beamBlockerRectsForFace, droppedMemberPrimitivesForFace, memberLayersOf } from './elevationSolids.js';
 import { buildFaceFigure, segEndProfile, hasRightChDim, parseBaseboardHeightMm } from './elevationFigure.js';
 import { ceilArcCircleOf, ceilArcChords } from './ceilArcSection.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments, cornerOpeningZOfFace } from './elevationFloorProfile.js';
@@ -28,7 +28,7 @@ import {
   ElevationLineRole, weightForRole, GAP_EPS_MM as BAND_GAP_EPS, STAIR_OVER_ROOM_MIN_OVERLAP_MM,
 } from './elevationStyle.js';
 import {
-  translatePrimitive, collectGridCLs, appendRoomNameFrame, dedupeCoincidentLines,
+  translatePrimitive, collectGridCLs, appendRoomNameFrame, dedupeCoincidentLines, joinLinesAtMemberEdges,
   clipPrimitivesToXRange,
 } from './elevationPrimitives.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
@@ -333,7 +333,8 @@ export function finalizeBand(room, graph, primitives, opts = {}) {
   // 1枚の帯へは buildFaceFigure と断面エンジンの2経路が流れ込むため、同じ実体の縁を別の理由で
   // 描いた**完全同一の線**が重なりうる（面端の縦線＝体裁としての端の縦線かつ壁断面の縁など）。
   // 帯が確定するこの1箇所で畳む（dedupeCoincidentLines。見た目は不変・視覚回帰の差分だけが減る）。
-  const prims = dedupeCoincidentLines(primitives);
+  // 梁・柱の端で割れた共線の線は 1 本へ戻す（部材の端が絡むものだけ。opts.memberEdgesX）。
+  const prims = joinLinesAtMemberEdges(dedupeCoincidentLines(primitives), opts.memberEdgesX);
   const displayName = elevationRoomDisplayName(room);
   appendRoomNameFrame(prims, displayName, { nameGapModelMm, leftX: leftAnchorX, rightX: rightAnchorX });
 
@@ -744,7 +745,7 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
     const floorZ = Math.min(0, ...(floorSegments ?? []).map(s => s.floorDeltaMm ?? 0));
     // 展開図一般化Phase 8: 面非依存の入口`buildSectionFromLine`（section/sectionContent.js）を
     // 経由する（出力不変。cutリテラルの組み立てはあちらへ移った）。面固有の値は下記optsで渡す。
-    const { cut: pcut, columns, content } = buildSectionFromLine(
+    const { cut: pcut, columns, content, memberEdgesX } = buildSectionFromLine(
       // 仮想断面線は面の壁芯ではなく**室内側へ下がった位置**（section/sectionCutPlane.js）。
       // 壁芯ちょうどに置くと切断面が壁の中を通り、見えがかり候補も所有Roomも取れない。
       faceCutLine(face, cutPlaneOffsetMm(face, layers, { columnSolids })), layers,
@@ -789,16 +790,26 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         ...cornerOpeningZOfFace(face, faceAt(i, -1), faceAt(i, 1), floorSegments, graph),
         probeCtx, endExtendMm, bandRoomBounds, scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
         upperPlaneOverhang: opts.upperPlaneOverhang, baseboardMm,
-        // アキの手前を横切る梁（部屋帯だけが渡す。アキのバツを梁の上下で分ける）
-        gapBeamRects: opts.gapBeamRectsOf?.(face) ?? null,
+        // アキの手前を横切る梁（部屋帯だけが渡す。アキのバツを梁の上下で分ける）。加算で描く梁（帯が持たない部材）の判定は列の分割の後に
+        // 分かるので、切断（pcut）を受ける関数で渡す（`buildCutContent` が列を作った後に呼ぶ）
+        gapBeamRects: opts.gapBeamRectsOf ? (pc) => opts.gapBeamRectsOf(face, pc) : null,
+        // 梁の断面（memberCut。U1b B3-1）: 上階の梁（梁型）を候補に入れる層（solids 指定の帯だけ渡す。未指定は空＝従来どおり梁なし）。
+        // 面を見る帯は断面の続きを室内側で見る（memberFromRoomSide）
+        memberLayers: opts.memberLayers, memberFromRoomSide: true,
       },
     );
     // 図側がcontentの列からしか分からない値（上階FL断面線の起点＝はり出し外端に立つ切断壁の
     // 向こう側の面）を取り出すためのフック。列そのものを渡し、意味づけは呼び出し側の1つの関数
     // （`section/sectionContent.js`の`upperFloorCutWallEndsOf`）に任せる。
     opts.onFaceColumns?.(face, columns);
+    if (opts.memberEdgesX && memberEdgesX) for (const x of memberEdgesX) opts.memberEdgesX.push(xCursor + x);
     const drawnX = faceDrawnXRange(face, endExtendMm, opts.faceOverhangOf?.(face));
     for (const p of clipContentToFace(content, drawnX)) {
+      primitives.push(translatePrimitive(p, xCursor, 0));
+    }
+    // 梁の断面・along のうち、帯（memberCut）が持たない部材（列の端を捨てた部材）だけは従来どおり加算で描く
+    // （図側の加算レイヤ solidPrimitivesForFace は断面・along を描かない。部材の判定は pcut の列の分割の後に決まるのでここで足す）
+    for (const p of opts.droppedMemberPrimsOf?.(face, pcut) ?? []) {
       primitives.push(translatePrimitive(p, xCursor, 0));
     }
     // 階段下の部屋: 上を通る階段の断面・見えがかりを重ねる（階段帯とまったく同じ部品）。
@@ -917,11 +928,20 @@ export function buildRoomBand(room, graph, ctx = {}) {
   // へ任せる。通常の部屋帯の層スタックは自階1層だけ——上階・下階が無いだけで、切断線の位置・
   // 探査延長・見えがかりの距離判定・アキは多層帯と同一の処理を通る。
   const layers = buildBandLayers(graph);
+  const solidsOpts = ctx.solids ? { graph, ceilingHeight: layout.CH, room, ...ctx.solids } : null;
+  const memberEdgesX = [];
   appendBandCutContent(primitives, room, graph, layout, layers,
-    { endExtendMm: ctx.wallLessEndExtendModelMm, floorHeightMm: ctx.solids?.floorHeightMm, upperGraph: ctx.solids?.upperGraph ?? null,
-      // 面に加算する梁（solidPrimitivesForFace）と同じ梁の矩形を、アキを塞ぐものとして渡す（solids指定時だけ）
-      gapBeamRectsOf: ctx.solids
-        ? face => beamBlockerRectsForFace(face, { graph, ceilingHeight: layout.CH, room, ...ctx.solids })
+    { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, floorHeightMm: ctx.solids?.floorHeightMm, upperGraph: ctx.solids?.upperGraph ?? null,
+      // 面に加算する梁（solidPrimitivesForFace）と同じ梁の矩形を、アキを塞ぐものとして渡す（solids指定時だけ）。
+      // 帯が持たない部材（列の端を捨てた部材）の断面・along の矩形は切断（pcut）の列の分割の後に分かる
+      gapBeamRectsOf: solidsOpts
+        ? (face, pcut) => beamBlockerRectsForFace(face, solidsOpts, droppedMemberKeysOf(pcut, { inZRange: true }))
+        : undefined,
+      // 梁の断面（memberCut。U1b B3-1）: solids 指定の帯は上階の梁（梁型）も候補にする（加算レイヤ faceSectionCut と同じ層）。
+      // 未指定は梁なし（従来どおり）
+      memberLayers: solidsOpts ? memberLayersOf(graph, ctx.solids) : [],
+      droppedMemberPrimsOf: solidsOpts
+        ? (face, pcut) => droppedMemberPrimitivesForFace(face, solidsOpts, droppedMemberKeysOf(pcut, { inZRange: true }))
         : undefined,
       stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm, ctx.solids?.upperGraph ?? null) });
   return finalizeBand(room, graph, primitives, {
@@ -929,6 +949,6 @@ export function buildRoomBand(room, graph, ctx = {}) {
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
     // heightUnits（Phase 7b-1）: layers.lengthへ統一——通常帯は自階1層だけなので常に1
     // （旧実装はheightUnits省略＝finalizeBandの既定値1と同値。他3種の帯と同じ式で揃える）。
-    heightUnits: layers.length,
+    heightUnits: layers.length, memberEdgesX,
   });
 }

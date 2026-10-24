@@ -25,6 +25,22 @@ import { makeSectionCut } from './section/sectionTypes.js';
 import { roomBounds } from '../finish/gridCells.js';
 
 /**
+ * 梁・柱（部材）の層: 自階（floorZMm=0）と、判っていれば上階（floorZMm=floorHeightMm）。梁は「その梁が実際に立つ階のgraph」に
+ * 帰属する（sectionStructure.jsヘッダ）ので、1階の天井に現れる梁型は上階 graph の梁。加算レイヤ（faceSectionCut）と、部屋帯の
+ * 断面エンジンの探査の候補収集（`cut.memberLayers`。U1b B3-1）が同じ層を使う唯一の式。
+ * `solids.memberLayers` があればそれをそのまま使う（呼び出し側が 1 回の組み立ての間、全部屋・全面で同じ配列を共有する。
+ * 探査の候補収集は層の配列の同一性で梁・柱の立体を覚える〔sectionHits.js memberSolidsMemo〕ので、部屋ごとに配列を作ると
+ * 同じ立体・壁の合併帯を部屋の数だけ作り直す＝ElevationModeState が共有する）。
+ * @param {object} graph
+ * @param {{upperGraph?:object|null, floorHeightMm?:number|null, memberLayers?:object[]}} [solids]
+ */
+export function memberLayersOf(graph, solids) {
+  if (solids?.memberLayers) return solids.memberLayers;
+  return buildBandLayers(graph, solids?.upperGraph
+    ? { above: [{ graph: solids.upperGraph, floorHeightMm: solids.floorHeightMm }] } : {});
+}
+
+/**
  * face（buildRoomFacesの1件）→ 断面エンジンの SectionCut 相当のアダプタ。
  * CutLineは「(isVertical, axisCL.value, lo, hi)」がfaceと同型（sectionTypes.js）のためそのまま
  * 移せる。cutOriginWorld(cut)=dirSign>0?line.lo:line.hi は face.originWorld の定義と一致するため、
@@ -49,8 +65,7 @@ export function faceSectionCut(face, opts) {
   const CH = opts.ceilingHeight;
   if (!Number.isFinite(CH) || CH <= 0) return null;
 
-  const layers = buildBandLayers(opts.graph, opts.upperGraph
-    ? { above: [{ graph: opts.upperGraph, floorHeightMm: opts.floorHeightMm }] } : {});
+  const layers = memberLayersOf(opts.graph, opts);
   return makeSectionCut({
     seqNo: 'face',
     line: { isVertical: face.isVertical, axisValue, lo: face.lo, hi: face.hi },
@@ -135,15 +150,57 @@ function clampPrimsToRun(prims, run) {
  * @returns {object[]} 解決できない面・対象部材が無い場合は空配列（例外は投げない）
  */
 export function solidPrimitivesForFace(face, opts) {
-  const cut = faceSectionCut(face, opts);
-  if (!cut) return [];
-  const { beams, columnSolids } = faceBeamsAndColumns(cut);
+  const parts = faceParts(face, opts);
+  if (!parts) return [];
+  const { cut, beams, columnSolids, beamCut } = parts;
   const prims = [
-    // 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）
-    ...structuralPrimitivesForCut(beams, faceBeamCut(face, cut, columnSolids, opts), undefined, null, { columnSolids, fromRoomSide: true }),
+    // 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）。
+    // 梁の断面・切断線の帯の中を通る梁（along）は、帯を持つ呼び出し（opts.memberCutsByBand。部屋帯・上部吹抜けを持つ部屋の帯）では
+    // 断面エンジンの探査の選択（memberCut の帯。U1b B3-1）が描く——ここでは描かない（帯が持たない部材は帯の側
+    // appendBandCutContent が `droppedMemberPrimitivesForFace` で足す）。指定しない呼び出しは従来どおり全部描く
+    ...structuralPrimitivesForCut(beams, beamCut, undefined, null,
+      { columnSolids, fromRoomSide: true, ...(opts.memberCutsByBand ? { memberCuts: { dropped: new Set() } } : {}) }),
     ...structuralColumnPrimitivesForCut(columnSolids, cut),
   ];
   return clampPrimsToRun(prims, face.run);
+}
+
+/**
+ * 梁の断面・切断線の帯の中を通る梁（along）のうち、**帯（memberCut）が持たない部材**（`droppedKeys`＝列の端を捨てた部材のキー）だけを
+ * 加算レイヤの規則で描く（`solidPrimitivesForFace` の同じ梁・同じ可視区間・同じ切り詰め）。空中を横断する梁・面の通りの梁・柱は描かない
+ * （それらは `solidPrimitivesForFace` が従来どおり描く）。呼び出しは `droppedMemberKeysOf(pcut)`（列の分割の後）。
+ * @param {object} face
+ * @param {{graph:object, ceilingHeight:number, upperGraph?:object|null, floorHeightMm?:number|null}} opts
+ * @param {Set<string>} droppedKeys
+ * @returns {object[]}
+ */
+export function droppedMemberPrimitivesForFace(face, opts, droppedKeys) {
+  if (!droppedKeys || droppedKeys.size === 0) return [];
+  const parts = faceParts(face, opts);
+  if (!parts) return [];
+  const { beams, columnSolids, beamCut } = parts;
+  return clampPrimsToRun(structuralPrimitivesForCut(beams, beamCut, undefined, null,
+    { columnSolids, fromRoomSide: true, memberCuts: { dropped: droppedKeys, only: true } }), face.run);
+}
+
+// 面ごとの切断・梁・柱・梁の判定用の切断（faceBeamCut）は、solidPrimitivesForFace・beamBlockerRectsForFace・droppedMemberPrimitivesForFace の
+// 3 箇所が同じ面に同じ入力で作る——面の配列の同一性と入力（graph・上階・階高・CH・層・部屋）が同じなら作り直さない。
+// 前提: 面は `composeRoomFaces` が組み立てごとに作り直す（面オブジェクトの同一性＝その組み立て）。面をキャッシュして使い回す変更を
+// 入れると、graph が変わっても同じ面で古い値を返す（入力の同一性しか見ていない）ので、その場合はこのメモを見直すこと。
+const facePartsMemo = new WeakMap();
+function faceParts(face, opts) {
+  const key = { graph: opts.graph, upperGraph: opts.upperGraph ?? null, floorHeightMm: opts.floorHeightMm ?? null,
+    ceilingHeight: opts.ceilingHeight, memberLayers: opts.memberLayers ?? null, room: opts.room ?? null };
+  const hit = face && typeof face === 'object' ? facePartsMemo.get(face) : null;
+  if (hit && Object.keys(key).every(k => hit.key[k] === key[k])) return hit.parts;
+  const cut = faceSectionCut(face, opts);
+  let parts = null;
+  if (cut) {
+    const { beams, columnSolids } = faceBeamsAndColumns(cut);
+    parts = { cut, beams, columnSolids, beamCut: faceBeamCut(face, cut, columnSolids, opts) };
+  }
+  if (face && typeof face === 'object') facePartsMemo.set(face, { key, parts });
+  return parts;
 }
 
 function faceBeamsAndColumns(cut) {
@@ -161,13 +218,16 @@ function faceBeamsAndColumns(cut) {
  * 判定は新しく行わず、可視区間を読むだけ。解決できない面・梁が無い面は空配列。
  * @returns {Array<{xLo:number, xHi:number, zLo:number, zHi:number, split:boolean}>}
  */
-export function beamBlockerRectsForFace(face, opts) {
-  const cut = faceSectionCut(face, opts);
-  if (!cut) return [];
-  const { beams, columnSolids } = faceBeamsAndColumns(cut);
+export function beamBlockerRectsForFace(face, opts, droppedKeys = null) {
+  const parts = faceParts(face, opts);
+  if (!parts) return [];
+  const { beams, columnSolids, beamCut } = parts;
   if (beams.length === 0) return [];
   const rects = [];
-  for (const p of visibleBeamPieces(beams, faceBeamCut(face, cut, columnSolids, opts), undefined, null, { columnSolids, fromRoomSide: true })) {
+  // droppedKeys 指定時: 断面・along の矩形は帯（memberCut）が obstructionRects で担う。ここは空中・面の通りの梁と、帯が持たない部材
+  // （droppedKeys）だけ。未指定は従来どおり全部
+  for (const p of visibleBeamPieces(beams, beamCut, undefined, null,
+    { columnSolids, fromRoomSide: true, ...(droppedKeys ? { memberCuts: { dropped: droppedKeys } } : {}) })) {
     const xLo = Math.max(p.xLo, 0), xHi = Math.min(p.xHi, face.run);
     if (xHi - xLo <= GAP_EPS) continue;
     rects.push({ xLo, xHi, zLo: p.zLo, zHi: p.zHi, split: p.kind !== 'section' });

@@ -17,12 +17,15 @@
 import { buildColumns } from './sectionEngine.js';
 import { emitColumns, emitOpenGapMarks, emitOpenSpanEdgeOnWalls } from './sectionEmit.js';
 import { wallWorldRangesOnFacePlane, planeOverhangBeyondEnds } from './sectionCutPlane.js';
-import { hasCutWallStandingOn, slabSolidRectsOf, strictInteriorOf, rectsToFaceLocal, makeSectionCut } from './sectionTypes.js';
+import {
+  hasCutWallStandingOn, slabSolidRectsOf, strictInteriorOf, rectsToFaceLocal, makeSectionCut, MEMBER_PRIM, isOpenLikeBand, localXOf,
+} from './sectionTypes.js';
 import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { UPPER_PLANE_OVERHANG_LIMIT_MM, GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { wallLessEndAt } from './faceGeometry.js';
 import { makeProbeContext } from './sectionProbe.js';
-import { edgeOnWallZRanges, farRoomAt } from './sectionHits.js';
+import { edgeOnWallZRanges, farRoomAt, nearMembersOf } from './sectionHits.js';
+import { memberKey } from './sectionStructure.js';
 import { stairContribution, farSideSilhouettePrimitives } from './sectionStair.js';
 import { layerDirectlyAboveSelf } from './sectionLayerStack.js';
 
@@ -319,7 +322,7 @@ export function farStairViewPrimitives(columns, cut, probeCtx) {
   if (!stairs?.length) return [];
   const roomIds = new Set();
   for (const col of columns) {
-    if (!col.bands.some(b => b.kind === 'open' && b.farStair)) continue;
+    if (!col.bands.some(b => isOpenLikeBand(b) && b.farStair)) continue;
     const room = farRoomAt(cut, (col.worldLo + col.worldHi) / 2, probeCtx)?.room;
     if (room) roomIds.add(room.id);
   }
@@ -337,6 +340,20 @@ export function farStairViewPrimitives(columns, cut, probeCtx) {
   return Number.isFinite(ceil)
     ? subtractRectsFromPrimitives(prims, [{ xLo: -1e9, xHi: 1e9, yLo: -1e9, yHi: -ceil }])
     : prims;
+}
+
+/**
+ * 梁の断面・along を**帯（memberCut）にせず加算レイヤで描く**部材のキー集合（`memberKey`）＝列の分割が端を足せなかった（斜めの区間に掛かる
+ * 列で捨てた）部材。`buildCutContent`（`buildColumns`）が先に走った cut を渡すこと（列の分割が捨てた端を記録するため）。
+ * 加算レイヤ（`visibleBeamPieces` の `opts.memberCuts.dropped`）が使う唯一の窓口。
+ * @param {import('./sectionTypes.js').SectionCut} pcut - `buildCutContent` が返した cut
+ * @returns {Set<string>}
+ */
+export function droppedMemberKeysOf(pcut, { inZRange = false } = {}) {
+  const near = nearMembersOf(pcut);
+  for (const { solid } of near.beams) near.cutStateOf(solid); // 梁ごとの判定（z 範囲に掛からない梁を edgeDropped に足す）を全部済ませる
+  // inZRange … z 範囲に掛からない梁を除く（部屋帯は範囲外の部材を描かない。階段帯は床の遮蔽で描くので除かない）
+  return new Set([...near.edgeDropped].filter(s => !(inZRange && near.zOutside?.has(s))).map(memberKey));
 }
 
 /**
@@ -361,16 +378,24 @@ export function farStairViewPrimitives(columns, cut, probeCtx) {
  *   図側のはり出し量`upperOverhang`もこの`layerRunWindows`から写す＝二重計算しない）。
  */
 export function buildCutContent(cut, probeCtx, opts = {}) {
-  const pcut = withProbeExtension(
+  const extended = withProbeExtension(
     cut, opts.endExtendMm ?? 0, opts.bandRoomBounds ?? cut.bandRoomBounds ?? null,
     { upperPlaneOverhang: opts.upperPlaneOverhang },
   );
+  // 梁の断面（memberCut。U1b B3-1）を探査の候補にしてよいかの判定（`sectionHits.js` の nearMembersOf）が読む、階段帯の入力:
+  // 断面線（gapFloorProfile。これより下に浮く梁は出さない）と床なし区間（階段の穴・下階の階段の吹抜け。床の遮蔽の輪郭の単位判定）。
+  // 探査の入力は cut だけなので cut に載せる（呼び出し側が opts で渡したときだけ。部屋帯・吹抜け帯は渡さない）。
+  const pcut = (opts.gapFloorProfile || opts.floorlessRanges)
+    ? { ...extended, memberFloorProfile: opts.gapFloorProfile ?? null, memberFloorlessRanges: opts.floorlessRanges ?? [] }
+    : extended;
   const columns = buildColumns(pcut, probeCtx);
   // scale（px/mm）はアキ標記の省略判定に使う（sectionEmit.jsのemitOpenGapMarks）。
+  // gapBeamRects は関数も受ける（pcut を受けて返す）: 加算で描く梁の矩形は、帯が持たない部材（列の端を捨てた部材）の判定が
+  // 列の分割（buildColumns）の後でないと分からないため、列を作った後で呼ぶ。
   const emitCtx = {
     ...emitCtxForCut(pcut), scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
     gapFloorProfile: opts.gapFloorProfile ?? null,
-    gapBeamRects: opts.gapBeamRects ?? null,
+    gapBeamRects: typeof opts.gapBeamRects === 'function' ? opts.gapBeamRects(pcut) : (opts.gapBeamRects ?? null),
     baseboardMm: opts.baseboardMm ?? 0,
   };
   // 壁content（断面・見えがかり・凹み側面線）は「断面内部は描画しない」の一般判定
@@ -383,14 +408,21 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   // 厳密内部では隠れる。隔て板の縦線自身は矩形の辺上なので残る。
   const behindEdgeOn = prims => subtractRectsFromPrimitives(prims, rectsToFaceLocal(strictInteriorOf(edgeOnRects)));
   const hasViaStairWall = columns.some(c => c.bands.some(b => b.viaStair));
-  const columnPrims = emitColumns(columns, pcut, emitCtx);
+  // 梁の断面（memberCut）の線（emitColumns が MEMBER_PRIM の印を付けたもの）は壁の線ではない: 壁の線への後加工
+  // （スラブ内部のクリップ・隔て板端面の裏の除去、階段帯ではさらに断面線クリップ・破線化）に流さず、`memberPrims` として別に返す
+  // （従来は加算の構造材レイヤの線で、これらを通らなかった）。content には壁・アキの後ろへ足す。
+  const allColumnPrims = emitColumns(columns, pcut, emitCtx);
+  const memberPrims = allColumnPrims.filter(p => p[MEMBER_PRIM]);
+  const columnPrims = memberPrims.length ? allColumnPrims.filter(p => !p[MEMBER_PRIM]) : allColumnPrims;
   const wallPrims = clipInsideSlabSolids([
     ...(hasViaStairWall ? behindEdgeOn(columnPrims) : columnPrims),
     ...behindEdgeOn(pcut.stairCut ? [] : farStairViewPrimitives(columns, pcut, probeCtx)),
     ...edgeOnWalls,
   ], columns);
   const gapMarks = emitOpenGapMarks(columns, pcut, emitCtx);
-  return { cut: pcut, columns, emitCtx, wallPrims, gapMarks, content: [...wallPrims, ...gapMarks] };
+  // memberEdgesX … 梁・柱の端が新しく足した列境界の面ローカル x（部材の端で割れた共線の線を finalizeBand が 1 本へ戻す印）
+  const memberEdgesX = [...nearMembersOf(pcut).addedEdges].map(v => localXOf(pcut, v));
+  return { cut: pcut, columns, emitCtx, wallPrims, gapMarks, memberPrims, memberEdgesX, content: [...wallPrims, ...gapMarks, ...memberPrims] };
 }
 
 /**
@@ -449,6 +481,10 @@ export function buildSectionFromLine(line, layers, opts = {}) {
     chDimSplitAbsYs: opts.chDimSplitAbsYs,
     face,
     ends,
+    // 梁の断面（memberCut。U1b B3-1）の入力。部屋帯は上階の梁（梁型）が候補に要るので上階つきの層を渡す（`memberLayers`）。
+    // 面を見る向き（部屋帯・吹抜け帯）は断面の続きを室内側（viewSign の逆）で見る（`memberFromRoomSide`）。
+    memberLayers: opts.memberLayers,
+    memberFromRoomSide: opts.memberFromRoomSide,
   });
   const probeCtx = opts.probeCtx ?? makeProbeContext(layers);
   return buildCutContent(cut, probeCtx, {

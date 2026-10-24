@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   appendRoomNameFrame, subtractRectsFromPrimitives, translatePrimitive, mirrorPrimitiveX,
-  segmentInsideConvex, subtractRectsFromLine,
+  segmentInsideConvex, subtractRectsFromLine, joinLinesAtMemberEdges,
 } from './elevationPrimitives.js';
 
 // translatePrimitive / mirrorPrimitiveX は同じプリミティブ型集合を扱う（片方にだけ型を追加すると、その型だけ
@@ -150,4 +150,28 @@ test('figureBounds: type:arc は始点・終点と掃引内の頂点（−90°�
   const rb = figureBounds([right]);
   assert.ok(rb.minY > -100 + 1e-9 && Math.abs(rb.minY - 100 * Math.sin((-80 * Math.PI) / 180)) < 1e-9, '頂点（−90°）は掃引の外＝含めない');
   assert.deepEqual(figureBounds([{ type: 'arc', cx: 0, cy: 0, r: 10, startDeg: 0, sweepDeg: 0 }]).width, 0);
+});
+
+// ---- U1b B3-1: 部材の端で割れた共線の線を帯の確定で 1 本へ戻す ----
+const hLine = (x1, x2, extra = {}) => ({ type: 'line', x1, y1: -2400, x2, y2: -2400, weight: 'cut', ...extra });
+
+test('部材の端で割れた共線の線が 1 本に戻る', () => {
+  const out = joinLinesAtMemberEdges([hLine(0, 500), hLine(500, 1200), hLine(1200, 2000)], [500, 1200]);
+  assert.equal(out.length, 1);
+  assert.deepEqual([out[0].x1, out[0].x2], [0, 2000]);
+});
+
+test('部材の端と無関係な共線の線は繋がない（既存の分割は維持）', () => {
+  const lines = [hLine(0, 500), hLine(500, 1200)];
+  assert.equal(joinLinesAtMemberEdges(lines, [900]).length, 2, '端が 500 でないので繋がない');
+  assert.equal(joinLinesAtMemberEdges(lines, []).length, 2, '部材の端が無ければ素通し');
+  assert.equal(joinLinesAtMemberEdges(lines, null), lines);
+  assert.equal(joinLinesAtMemberEdges([hLine(0, 500), hLine(500, 1200, { weight: 'thin' })], [500]).length, 2, '太さが違えば繋がない');
+  assert.equal(joinLinesAtMemberEdges([hLine(0, 500, { dash: 'dash' }), hLine(500, 1200)], [500]).length, 2, '線種が違えば繋がない');
+});
+
+test('包含の重複は部材の端が絡むときだけ畳む', () => {
+  const lines = [hLine(0, 2000), hLine(500, 1200)];
+  assert.equal(joinLinesAtMemberEdges(lines, [500]).length, 1, '端点が部材の端なら畳む');
+  assert.equal(joinLinesAtMemberEdges(lines, [900]).length, 2, '部材の端が絡まなければ畳まない');
 });

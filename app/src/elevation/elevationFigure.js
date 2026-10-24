@@ -1500,7 +1500,8 @@ export function buildFaceFigure(face, ctx) {
   // ゴールデンゲート）は空配列のため出力は完全に不変。注記帯より前に積むのは、注記帯の
   // 一点鎖線・寸法・丸番号を構造材の線で隠さないため（Konvaは配列の後ろほど手前）。
   if (solids) {
-    for (const p of solidPrimitivesForFace(face, { graph, ceilingHeight: CH, room, ...solids })) prims.push(p);
+    // memberCutsByBand: 梁の断面・along は帯（断面エンジンの memberCut。U1b B3-1）が描く（帯が持たない部材は帯の側が足す）
+    for (const p of solidPrimitivesForFace(face, { graph, ceilingHeight: CH, room, ...solids, memberCutsByBand: true })) prims.push(p);
   }
 
   // 壁芯間寸法（面の両端＝壁中心線。ROW1）。項目2・6: 寸法線足(dim.foot)は廃止し、代わりに

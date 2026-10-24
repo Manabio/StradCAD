@@ -442,6 +442,7 @@ viewSign の二重定義（`elevationSolids.js` と `sectionCutPlane.faceViewSig
 - 2026-10-23 リファクタ S3b-1（梁の「壁の中」判定を合併帯＋全高の壁だけの 1 通りに統一。ユーザー裁定 1〜3）: `golden-elev-ceiling/ceiling-steel-stair-test` の 1階・2階の階段帯で各 −26（縦の床梁 axis 3000・幅 100 が薄壁＋オーナー壁の合併帯に収まり壁の中になった H 断面 2 箇所と天地 2 本）。golden に無い実データでは opening-test（踊り場梁の H 断面・破線）が同じ理由で消え、moku4_kd 2階の階段帯に腰壁の上の 3 階床梁が +12（腰壁・垂れ壁の真下／真上の梁は幅が材に収まれば壁の中＝裁定 2-2）。他 82 本は不変。
 - 2026-10-24 リファクタ S4（CL の無い U 字階段の seq2 を背後の外壁へ退避せず、レーン境界の仮想の面〔疑似 axisCL〕で組む。ユーザー裁定 (b)）: `golden-elev-ceiling/ceiling-wood-stair-test` 1階の階段帯 D1 で踊り場の床断面線の左端が 15mm（半壁厚 72.5→既定 57.5。2階の CL あり D1 と同位置）。ceiling-steel と他 81 本は不変。
 - 2026-10-24 リファクタ S3b-2（面の通りの梁〔R2〕を階段帯にも細線で。ユーザー裁定「細線で」）: `golden-elev-moku16` 1階 階段帯 seq1（中線→細線 2・元の端の縦線 +1）・`ceiling-steel-stair-test` 1階・2階 階段帯（中線→細線 6 ずつ）・`ceiling-wood-stair-test` 1階（2）・2階（1）。golden 外では 4 (1)・basement-test 2 本・moku1-4/5・moku4_kd・opening-test の各 1 帯。位置・長さは不変で線種だけ（天井裏・描画範囲・規則 A は airborne と共有）。部屋帯は不変。
+- 2026-10-24 リファクタ U1b B3-1（梁の断面 memberCut を探査の選択に入れ加算の断面描画を止める。ユーザー承認）: `golden`／`golden11`／`golden13`／`golden13-struct` の「5」（上部吹抜け帯に上階の床梁の H 断面 2 本 +24）・`golden-elev-moku16`（上部吹抜け帯 +8）・`ceiling-steel-stair-test` 1階・2階 階段帯（R6＝壁の太線が梁の高さで途切れない・断面の向こうの中線が梁の幅だけ欠ける +19 −16）・`moku4-3`（+4 −7）。golden 外: ceiling-line-test 主寝室・ceiling-zone-far 売場（天井が高い区画の梁断面がその位置の天井まで出る。段をまたぐ梁は低い側で切る）、4 (1)・basement×2・opening-test の階段帯（R6・along が面の外へはみ出さない）、HEAD の重複線が畳まれる 3 帯。他は不変。
 
 `app/scripts/probe/golden11/`（`D:/tatsuya/Download/11.stq`を同じ形式でダンプした固定スナップショット。
 展開図一般化Phase 6b-1で追加）も同じ手順で追跡する——`.gitignore`に`!scripts/probe/golden11/`を追加し、
@@ -1732,6 +1733,9 @@ room変化点で区切った区間を近い順に返す）を追加。`probeColu
 入力の層は`cut.memberLayers`、無ければ`cut.layers`（ユーザー裁定2「吹抜け帯・上部吹抜け帯にも梁を出す」に沿う。memberLayersは将来の上階graph注入用）。
 壁に埋まった梁は積まず、z は列の自階の床・天井で切る（床の穴は床で切らない・梁の断面は天井で切らない）。
 **U1b B2**（`sectionProbe.js collectCutBreaks`）: 部材の端で列を割る（直交梁＝芯±半幅・平行梁＝スパン両端・柱＝run 方向の辺。`nearMembersOf` を共有し層の探査窓でクランプ）。選択は未（B1 のまま）なので帯列は`mergeColumns`が併合し出力不変。ただし足す前の列が次の 3 つの斜めの区間と重なるときは足さない（その列は併合されず割り方が出力に出るため。QA アブレーションで 83 本に必要と確認 2026-10-24）: 斜めの天井断面（`ceilClip`/`ceilProfile`）・視線側の`wallTopProfile`を持つ壁のスパン・天伏の天井高さ場（`zoneFieldFor`）の斜面/円弧/ドームの run 範囲。B3 で斜線の連結と合わせて扱う。
+**U1b B3-1**（梁の断面）: 直交する梁の断面と切断線の帯の中を通る梁（along）だけを探査の選択に入れ（`visibleBandsOf`。順位 cut→cutAlong→memberCut・帯 `memberCut`）、`emitColumns` が輪郭を 1 回描く（出所の印 `MEMBER_PRIM`）。加算の断面・along は止め、帯にできない部材（列の端を捨てた・z 範囲に掛からない・探査の範囲の外＝`edgeDropped`）だけ従来どおり加算で描く。床構造（slab）の中の梁は slab の帯を割らず `members` に添える。可視判定は加算と共有（`beamSectionShown` 等）。
+裁定 R4: 部屋帯の断面は天井断面で切られる（梁の幅に掛かる列の天井の最小値で輪郭の上端を切り、梁の下端以下なら輪郭なし。天井の段の継ぎ目の梁は低い側の天井線より上へ出ない。slab 帯の `members` も天井で切る）／R5: 階段帯のアキは梁で割らない（`isOpenLikeBand`）／R6: 壁の断面の縁は梁の高さでも途切れない（帯の断面には `wallLineCuts` を掛けない）。
+B3-1 の補足: 梁の後ろがアキ（open）で、その open が遠側の面の向こう（farVoid）へ割られる高さなら後ろを farVoid へ降格し、梁の中に「ア キ」を出さない（付帯情報は梁が無かったときの帯の範囲で求める＝`behindFar`）。部屋帯の下端は自階の層の FL（隣室 FL−50 の列でも FL より下を描かない。階段帯は列の床）。部材の端が新しく足した列境界の x（`memberEdgesX`）は `finalizeBand` が受け、部材の端で割れた共線の水平線を 1 本へ戻し、部材の端が絡む包含の重複を畳む（`joinLinesAtMemberEdges`。部材の端と無関係な既存の共線の分割には触れない）。`joinLinesAtMemberEdges` は部材の端が端点にある包含の重複も畳む（HEAD にあった重複線 3 帯が消える。見た目は不変）。
 
 **Phase 4**（水平面ヒット由来の見えがかり線・アキ分割。**裁定済み2026-09-11**——
 knee-drop-test.stqの「A」面Cで受入基準（腰壁天端800〜天井2400がアキ、その上にBのFL+2400天井

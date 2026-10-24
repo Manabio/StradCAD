@@ -25,11 +25,11 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 
 /**
  * `buildSectionFromLine`（sectionContent.js）の`opts`は、次の4群の交差型（ただし BandInjections の
- * gapFloorProfile は`buildCutContent`専用で、`buildSectionFromLine`は転送しない）。形は平らなオブジェクトのまま
+ * gapFloorProfile・floorlessRanges は`buildCutContent`専用で、`buildSectionFromLine`は転送しない）。形は平らなオブジェクトのまま
  * （群は読み手による分類で、キーの置き場所を変えるものではない）。契約は`sectionTypes.test.js`が
  * 関数ごと（`buildSectionFromLine`／`buildCutContent`）の`opts.*`の読み取りとこの4群の`@property`の一致で固定する。
  * `buildCutContent`の`opts`はこのうち RenderStyle の全部と、CutSpec の endExtendMm・upperPlaneOverhang、
- * ProbeInputs の bandRoomBounds、BandInjections の gapBeamRects・gapFloorProfile だけを読む。
+ * ProbeInputs の bandRoomBounds、BandInjections の gapBeamRects・gapFloorProfile・floorlessRanges だけを読む。
  *
  * @typedef {object} CutSpec 切断の定義（どの線を・どの向きで・どのz範囲で切るか）
  * @property {1|-1} viewSign
@@ -61,8 +61,14 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  * @typedef {object} BandInjections 帯固有の注入
  * @property {object|null} [stairCut] 階段帯の階段寄与
  * @property {number[]} [chDimSplitAbsYs] 左CH寸法を分割する絶対y
- * @property {object[]|null} [gapBeamRects] アキの手前に見える梁の矩形（部屋帯）
+ * @property {object[]|null|((pcut:object)=>object[])} [gapBeamRects] アキの手前に見える梁の矩形（部屋帯）。関数は列の分割の後に
+ *   切断（pcut）を受けて返す（帯が持たない部材の判定が列の分割の後に決まるため。U1b B3-1）
  * @property {Array<[number,number]>|null} [gapFloorProfile] アキのセルの下限にする断面線（階段帯）
+ * @property {Array<{lo:number,hi:number}>} [floorlessRanges] 床の無い列（下階の階段の吹抜け。階段帯。`buildCutContent` 専用。梁の断面の輪郭を
+ *   床の遮蔽が丸ごと描く／描かないの単位で判定する入力。U1b B3-1）
+ * @property {Array<{graph:object, floorZMm:number, role:string}>} [memberLayers] 梁の断面（memberCut）の候補を作る層（部屋帯は上階つき。
+ *   省略は `layers`。`SectionCut.memberLayers`）
+ * @property {boolean} [memberFromRoomSide] 梁の断面の続きを室内側で見る（面を見る帯。`SectionCut.memberFromRoomSide`）
  */
 
 /**
@@ -310,6 +316,8 @@ export function farXOfCutOnSlab(slabRun, cutRun) {
 // 出自を持たないhidden（手書き列・旧データ）は見えがかり由来とみなす（実データの4件はすべて
 // wall由来。2026-09-13実測）。
 function isAirBand(band) {
+  // 梁の断面（memberCut）は梁が無かったら選ばれていた帯（behind）で見る（梁は手前の空気を塞ぐ実体ではなく、従来は帯に出なかった）
+  if (band.kind === 'memberCut') return band.behind === 'open' || band.behind === 'wall' || band.behind === 'farVoid';
   if (band.kind === 'open' || band.kind === 'farVoid' || band.kind === 'wall') return true;
   return band.kind === 'hidden' && (band.hiddenOf ?? 'wall') === 'wall';
 }
@@ -552,6 +560,28 @@ export function cutDrawRange(cut) {
   const a = localXOf(cut, line.lo - (line.probeExtendLoMm ?? 0));
   const b = localXOf(cut, line.hi + (line.probeExtendHiMm ?? 0));
   return { lo: Math.min(a, b), hi: Math.max(a, b) };
+}
+
+/**
+ * 断面エンジン（`sectionEmit.js emitColumns`）が部材（梁。memberCut の帯）から作ったプリミティブに付ける出所の印
+ * （`WHOLE_OUTLINE`〔sectionStructure.js〕と同じ流儀の enumerable なシンボル。JSON・golden には出ない）。
+ * 階段帯 `contentForCut` は、印の付いた線を壁の線の後加工（断面線クリップ・破線化など）へ流さず、
+ * 従来の構造材の経路（`dashLinesInsideRects(behindRects)`→`clipContentBelowProfileInRanges`）へ流す。
+ */
+export const MEMBER_PRIM = Symbol.for('strad.memberPrim');
+
+/** 丸ごと描くと決めた断面の輪郭の線に付ける印（`sectionStructure.js occludeByFloor`・`sectionEmit.js` の memberCut の輪郭が付ける。階段帯は線ごとの切り直しから守る）。 */
+export const WHOLE_OUTLINE = Symbol.for('strad.wholeOutline');
+
+/**
+ * 「アキ（open）として扱う」帯か。open の帯と、梁の断面（memberCut）で**梁が無ければ open だった**帯（`behind:'open'`。
+ * 梁の断面はアキのセル・遠側の部屋の判定を割らない＝バツの線を梁の矩形で切り抜くだけ。階段帯のアキを割らない裁定 R5 と同じ扱い）。
+ * 切断線の帯の中を通る梁（along）は従来どおりアキのセルを割る（加算の parallel は split:true だった）ので含めない。
+ * @param {ZBand} band
+ * @returns {boolean}
+ */
+export function isOpenLikeBand(band) {
+  return band.kind === 'open' || (band.kind === 'memberCut' && band.behind === 'open' && band.along !== true);
 }
 
 /**

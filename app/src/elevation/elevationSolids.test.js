@@ -9,11 +9,14 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import { buildFaceFigure } from './elevationFigure.js';
 import { collectGridCLs } from './elevationPrimitives.js';
-import { solidPrimitivesForFace, faceSectionCut, beamBlockerRectsForFace } from './elevationSolids.js';
+import {
+  solidPrimitivesForFace, faceSectionCut, beamBlockerRectsForFace, droppedMemberPrimitivesForFace, memberLayersOf,
+} from './elevationSolids.js';
+import { buildRoomBand } from './elevationBand.js';
 import { cutPlaneOffsetMm } from './section/sectionCutPlane.js';
 import { buildRoomBandWithVoidAbove } from './elevationVoid.js';
 import {
-  structuralContribution, structuralColumnContribution, structuralColumnPrimitivesForCut,
+  structuralContribution, structuralColumnContribution, structuralColumnPrimitivesForCut, memberKey,
 } from './section/sectionStructure.js';
 
 const CH = 2400;
@@ -740,4 +743,67 @@ test('【失敗系・S4】beamBlockerRectsForFace: 解決できない面（軸�
   assert.deepEqual(beamBlockerRectsForFace({ axisCL: null }, { graph: new PlanGraph(), ceilingHeight: 2400 }), []);
   const face = { axisCL: { effectiveValue: 0 }, lo: 0, hi: 3000, run: 3000, dirSign: 1, isVertical: false, inward: 1 };
   assert.deepEqual(beamBlockerRectsForFace(face, { graph: new PlanGraph(), ceilingHeight: 2400 }), []);
+});
+
+// ---- U1b B3-1: 梁の断面は帯（断面エンジンの memberCut）が描く ----
+// A 面（y=0）を貫く上階の梁（x=2000・y 0..3000・天 2500・成 600 → z 1900..2500。CH2400 で切られて 1900..2400）。
+function makeBeamBandCase() {
+  const { graph, room } = makeGridRoom();
+  const upper = new PlanGraph(new Plane('p2', 2900, '2階', 2, 1));
+  const A = (type, value) => upper.addCenterLine(type, value, { labeled: false, discipline: Discipline.ARCH });
+  upper.addBeam(StructuralMaterialType.STEEL, 'STEEL-H600x200', A(CenterLineType.VERTICAL, 2000), true,
+    A(CenterLineType.HORIZONTAL, 0), A(CenterLineType.HORIZONTAL, 3000), { role: 'primary', levelOffset: -400 });
+  const faceA = buildRoomFaces(room, graph).find(f => f.label === 'A');
+  return { graph, room, upper, faceA, solids: { upperGraph: upper, floorHeightMm: 2900 } };
+}
+const thickLines = ps => ps.filter(p => p.type === 'line' && p.weight === 'thick' && -Math.min(p.y1, p.y2) > 1800 && -Math.max(p.y1, p.y2) < 2500);
+
+test('【B3-1・配線】部屋帯: 梁の断面は帯が描き、従来の加算（solidPrimitivesForFace）と同じ輪郭になる。図側の加算（memberCutsByBand）は断面を描かない', () => {
+  const { graph, room, faceA, solids } = makeBeamBandCase();
+  const additive = solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH, room, ...solids });
+  // 梁の天（CH で切られた 2400）の水平線は天井断面線（同じ太線）と重なり、帯の finalizeBand の dedupe で畳まれるので比べない
+  const notCeilingLine = p => !(p.y1 === p.y2 && p.y1 === -CH);
+  const old = thickLines(additive).filter(notCeilingLine);
+  assert.ok(old.length >= 4, `前提: 従来の加算が断面の輪郭を描く（${old.length} 本）`);
+  assert.equal(thickLines(solidPrimitivesForFace(faceA, { graph, ceilingHeight: CH, room, ...solids, memberCutsByBand: true })).length, 0,
+    'memberCutsByBand 指定の加算は断面を描かない（帯が描く）');
+  const band = buildRoomBand(room, graph, { solids });
+  const inBand = thickLines(band.primitives).filter(notCeilingLine);
+  // 帯の線は面の xCursor ぶん平行移動している。先頭の線の差から平行移動量を決め、従来の輪郭の全部が同じ形で帯にあることを確かめる
+  const dx = inBand.find(p => p.y1 === old[0].y1 && p.y2 === old[0].y2)?.x1 - old[0].x1;
+  assert.ok(Number.isFinite(dx), '前提: 帯に同じ高さの線がある');
+  const key = (p, d = 0) => [p.x1 + d, p.y1, p.x2 + d, p.y2, p.weight, p.dash ?? ''].join('|');
+  const inBandKeys = inBand.map(p => key(p));
+  for (const p of old) assert.equal(inBandKeys.filter(k => k === key(p, dx)).length, 1, `従来の輪郭の線が帯に 1 本だけある（二重に描かない）: ${key(p)}`);
+});
+
+test('【失敗系・B3-1】部屋帯: solids を渡さない帯は梁を描かない（memberLayers 空＝従来どおり）。自階の梁でも出ない', () => {
+  const { graph, room } = makeGridRoom();
+  const A = (type, value) => graph.addCenterLine(type, value, { labeled: false, discipline: Discipline.ARCH });
+  graph.addBeam(StructuralMaterialType.STEEL, 'STEEL-H600x200', A(CenterLineType.VERTICAL, 2000), true,
+    A(CenterLineType.HORIZONTAL, 0), A(CenterLineType.HORIZONTAL, 3000), { role: 'primary', levelOffset: 2300 }); // 自階の梁 z 1700..2300
+  const withBeam = buildRoomBand(room, graph);
+  const plain = makeGridRoom();
+  const without = buildRoomBand(plain.room, plain.graph);
+  assert.deepEqual(withBeam.primitives.map(primKey), without.primitives.map(primKey), 'solids 無しの帯は梁の有無で変わらない');
+});
+
+test('【B3-1】droppedMemberPrimitivesForFace: dropped のキーの梁の断面だけを従来の規則で描く。空・別キーなら空配列', () => {
+  const { graph, faceA, room, solids } = makeBeamBandCase();
+  const opts = { graph, ceilingHeight: CH, room, ...solids };
+  const cut = faceSectionCut(faceA, opts);
+  const [beam] = structuralContribution(cut.layers);
+  assert.equal(droppedMemberPrimitivesForFace(faceA, opts, new Set()).length, 0, '空集合は何も描かない');
+  assert.equal(droppedMemberPrimitivesForFace(faceA, opts, new Set(['v|0|0|0|0|0|0'])).length, 0, '別の梁のキーは描かない');
+  const prims = droppedMemberPrimitivesForFace(faceA, opts, new Set([memberKey(beam)]));
+  assert.deepEqual(prims.map(primKey).sort(), thickLines(solidPrimitivesForFace(faceA, opts)).map(primKey).sort(),
+    'dropped の梁の断面は従来の加算の断面と同じ');
+  assert.equal(droppedMemberPrimitivesForFace({ axisCL: null }, opts, new Set([memberKey(beam)])).length, 0, '解決できない面は空');
+});
+
+test('【B3-1】memberLayersOf: 自階＋判っていれば上階（梁は立つ階の graph に帰属）。上階が無ければ自階だけ', () => {
+  const { graph, upper } = makeBeamBandCase();
+  assert.deepEqual(memberLayersOf(graph, { upperGraph: upper, floorHeightMm: 2900 }).map(l => [l.role, l.floorZMm]), [['self', 0], ['above', 2900]]);
+  assert.deepEqual(memberLayersOf(graph, { upperGraph: null }).map(l => l.role), ['self']);
+  assert.deepEqual(memberLayersOf(graph, undefined).map(l => l.role), ['self']);
 });

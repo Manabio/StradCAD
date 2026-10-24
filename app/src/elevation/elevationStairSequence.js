@@ -42,7 +42,7 @@ import { straightCuts } from './section/cuts/straightCuts.js';
 import { UNSUPPORTED_FAN_LANE_TYPES, fanLaneCuts } from './section/cuts/fanCuts.js';
 import { makeProbeContext } from './section/sectionProbe.js';
 import { buildFaceShell } from './section/sectionEngine.js';
-import { buildCutContent, upperFloorCutWallEndsOf } from './section/sectionContent.js';
+import { buildCutContent, upperFloorCutWallEndsOf, droppedMemberKeysOf } from './section/sectionContent.js';
 import { cutDrawRange, localXOf, worldOf } from './section/sectionTypes.js';
 import { layerDirectlyAboveSelf, isRealRoom } from './section/sectionLayerStack.js';
 import {
@@ -1287,9 +1287,11 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // ——「室内を空中で横断する梁の見えがかり」がbandRoomBoundsを見るため（sectionStructure.js）。
   // 共通経路（section/sectionContent.js）: 探査延長・端の凹み側面線の抑制・壁断面／見えがかり・
   // アキのバツまでは吹抜けの多層帯とまったく同じ処理を通る。ここから下が階段固有の後段加工。
-  const { cut: pcut, columns, wallPrims, gapMarks: rawGapMarks } =
+  // floorlessRanges … 床の無い列（下階の階段の吹抜け）。梁の断面の輪郭を床の遮蔽が丸ごと描く／描かないの単位で判定するための入力
+  // （探査の候補収集が使う。section/sectionStructure.js memberOutlineFloorState）。構造材の床の遮蔽（下の floorOcclusion）と同じ値。
+  const { cut: pcut, columns, wallPrims, gapMarks: rawGapMarks, memberPrims, memberEdgesX } =
     buildCutContent(cut, probeCtx, {
-      endExtendMm, bandRoomBounds, upperPlaneOverhang: true, gapFloorProfile,
+      endExtendMm, bandRoomBounds, upperPlaneOverhang: true, gapFloorProfile, floorlessRanges: floorlessRangesOfCut(cut),
     });
   // 展開図一般化Phase 6b-2「一体設計」(.claude/elevation-redesign.md§5.12):
   // 階段自身の幾何（踏面CUT・ささら・桁枠）の描画範囲は`cutDrawRange`を、上階の平面が面端より
@@ -1383,13 +1385,19 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
   // 構造梁の見えがかりも、天端が切断面にある flight の後ろ（behindRects）は隠れ線（2 階の面 A で床の梁の天の線が床線と重なる）
   // 壁内の梁が壁の面から出て部屋側から見える断面の矩形（その壁の断面線をその z で分ける。下の wallOut）
   const wallLineCuts = [];
-  const structuralContent = dashLinesInsideRects(
-    structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, gapFloorProfile, {
+  // 梁の断面（直交する梁）と切断線の帯の中を通る梁（along）は探査の選択（memberCut の帯）が描く（`memberPrims`。emitColumns が MEMBER_PRIM の
+  // 印を付けた線）。加算で描くのは、それ以外（空中を横断する梁・面の通りの梁）と、帯が持たない部材（列の端を捨てた部材）の断面・along だけ
+  // （`memberCuts.dropped`）。どちらも同じ隠れ線の処理（behindRects）→下の構造材の経路（印付きの線は壁の線の後加工へ流さない）へ流す。
+  const structuralContent = dashLinesInsideRects([
+    ...structuralPrimitivesForCut(structuralContribution(cut.layers), pcut, columns, gapFloorProfile, {
       ceilZAtWorld, columnSolids: structuralColumnContribution(cut.layers), wallLineCuts,
+      memberCuts: { dropped: droppedMemberKeysOf(pcut) },
       // 自階の床（スラブ）が構造部材を隠す。床の無い列は下階の階段の吹抜け（section/sectionStructure.js occludeByFloor）。
       // 区間の端は切断壁の吹抜け側の面（lo/hi）——壁の帯の下に床梁の見えがかりを残さない（裁定 2026-10-19。下の 2FL の隔て板の注記と同じ）
       floorOcclusion: { floorZ: selfLayer?.floorZMm ?? 0, floorlessRanges: floorlessRangesOfCut(cut) },
-    }), behindRects, { inclusive: true });
+    }),
+    ...(memberPrims ?? []),
+  ], behindRects, { inclusive: true });
   // 階段の断面プロファイルとの取り合い（ユーザー実機指摘2026-08「6」D2。sectionEmit.js参照）。
   const joined = zRef
     ? joinToStairProfile(wallContent, stairContent, pcut,
@@ -1428,6 +1436,8 @@ function contentForCut(rawCut, probeCtx, endExtendMm = 0, bandRoomBounds = null,
     occludedRects: behindRects.map(r => ({ xLo: r.xLo, xHi: r.xHi, zLo: r.zLo, zHi: r.zHi })),
     // 壁内の梁が壁の面から出て見える断面の、壁の線を分ける矩形（面ローカル x。図側の面端の縦線にも掛ける。elevationStair.js）
     wallLineCuts,
+    // 梁・柱の端が新しく足した列境界の面ローカル x（部材の端で割れた共線の線を finalizeBand が 1 本へ戻す。elevationStair.js）
+    memberEdgesX,
     ...overhang,
   };
 }
@@ -1555,7 +1565,8 @@ function buildStraightFaceSequence(stair, faces, graph, opts) {
  *   upperFloorCutEnds:object|undefined, upperFloorEnds:object|undefined}}
  */
 function straightContentForCut(cut, probeCtx, endExtendMm, bandRoomBounds) {
-  const { cut: pcut, columns, content } = buildCutContent(cut, probeCtx, {
+  // 直進系は従来も構造梁を描かない（上記）。梁の断面（memberCut。U1b B3-1）を帯に入れないよう、梁の層を空にして渡す。
+  const { cut: pcut, columns, content } = buildCutContent({ ...cut, memberLayers: [] }, probeCtx, {
     endExtendMm, bandRoomBounds, upperPlaneOverhang: true,
   });
   const { upperOverhang, upperFloorZ, upperFloorCutEnds, upperFloorEnds } = upperOverhangOf(pcut, columns);
@@ -1737,6 +1748,7 @@ export function stairFaceSequence(stair, faces, graph, opts = {}) {
     // 切断面の後ろを隠す flight の矩形（図側の床線・面端の縦線をその範囲だけ細線破線に。elevationStair.js）
     occludedRects: fields1.occludedRects,
     wallLineCuts: fields1.wallLineCuts,
+    memberEdgesX: fields1.memberEdgesX,
     upperFloorCutEnds: fields1.upperFloorCutEnds,
     // 上階の床が実在する端だけ2FL線を許すgate（上部吹抜けを持つ部屋帯と共通。upperOverhangOf）。
     upperFloorEnds: fields1.upperFloorEnds,

@@ -23,7 +23,7 @@
  *     自身はfinish/stair側の詳細を知らない——第3層との結合点はこの1箇所に閉じる）。
  */
 import { GAP_EPS_MM as GAP_EPS, SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
-import { localXOf, worldOf, ceilProfileEdgeAt, ceilClipProfileOf } from './sectionTypes.js';
+import { localXOf, worldOf, ceilProfileEdgeAt, ceilClipProfileOf, isOpenLikeBand } from './sectionTypes.js';
 import { collectCutBreaks, probeColumn, upperFloorZAt } from './sectionProbe.js';
 import { farRoomAt } from './sectionHits.js';
 import { faceFromCut } from './sectionFace.js';
@@ -46,6 +46,15 @@ function bandsEqual(a, b) {
       && (band.layerRole ?? null) === (other.layerRole ?? null)
       && (band.openingPassThrough ?? false) === (other.openingPassThrough ?? false)
       && (band.hiddenOf ?? null) === (other.hiddenOf ?? null)
+      // 梁の断面（memberCut。U1b B3-1）: 同じ部材・同じ種類・同じ後ろ（アキか）の列だけ 1 列へ統合する
+      && (band.member ?? null) === (other.member ?? null)
+      && (band.along ?? false) === (other.along ?? false)
+      && (band.behind ?? null) === (other.behind ?? null)
+      && Math.abs((band.hz0 ?? 0) - (other.hz0 ?? 0)) < GAP_EPS
+      // slab の帯に添えた梁の断面の片（members）も同じ梁・同じ z の列だけ統合する
+      && (band.members ?? []).length === (other.members ?? []).length
+      && (band.members ?? []).every((m, j) => m.member === other.members[j].member && !!m.along === !!other.members[j].along
+        && Math.abs(m.z0 - other.members[j].z0) < GAP_EPS && Math.abs(m.z1 - other.members[j].z1) < GAP_EPS)
       // Phase4（水平面ヒット。裁定済み2026-09-11・既定on。far値が付かない列は両側undefined
       // ＝比較は常にtrueで従来どおり）:
       // 比較しないと「片方の列だけ深度上限内の奥の床・天井が見える」隣接列が誤って1列へ統合され、
@@ -217,6 +226,11 @@ function clipBandsToVisible(columns, air, i) {
       // 天井で打ち切ると斜めの天端の線（topEdge）は帯の上端を超えてしまう——水平の上端に戻す。
       const clipped = { ...band, z1: ceilZ };
       delete clipped.topEdge;
+      // slab の帯に添えた梁の断面の片（members）も天井で切る（天井より上は描かない。R4）
+      if (clipped.members) {
+        clipped.members = clipped.members.filter(m => m.z0 < ceilZ - GAP_EPS).map(m => (m.z1 > ceilZ ? { ...m, z1: ceilZ } : m));
+        if (clipped.members.length === 0) delete clipped.members;
+      }
       out.push(clipped);
     } else {
       out.push(band);
@@ -380,6 +394,22 @@ function farRoomKind(cut, worldMid, probeCtx) {
   return farRoomAt(cut, worldMid, probeCtx)?.kind ?? null;
 }
 
+/**
+ * 梁の断面（memberCut）の後ろがアキ（open）のとき、その open が `splitOpenByFarFace` で遠側の面の向こう（farVoid）へ割られる高さなら
+ * 後ろを farVoid へ降格する（アキではないので、アキのバツのセルにならない）。同じ判定＝open 帯の付帯情報（behindFar）を渡して
+ * `splitOpenByFarFace` を呼び、梁の帯の中点がどの部分に入るかで決める。
+ * @param {import('./sectionTypes.js').ZBand} b
+ * @param {number} nearestMm
+ */
+function demoteMemberBehindOpen(b, nearestMm) {
+  if (b.kind !== 'memberCut' || b.behind !== 'open' || !b.behindFar) return b;
+  const { spanZ0, spanZ1, ...far } = b.behindFar;
+  const parts = splitOpenByFarFace({ kind: 'open', z0: spanZ0 ?? b.z0, z1: spanZ1 ?? b.z1, ...far }, nearestMm);
+  const zm = (b.z0 + b.z1) / 2;
+  const hit = parts.find(p => zm >= p.z0 && zm <= p.z1);
+  return hit?.kind === 'farVoid' ? { ...b, behind: 'farVoid' } : b;
+}
+
 // 壁の帯 → 見えがかりの奥行き上限を超えたアキ（open）。`sectionHits.js`が壁の帯へ載せた床・天井の付帯情報は引き継ぐ。
 function wallBandToOpen(b) {
   return { kind: 'open', z0: b.z0, z1: b.z1, farFloorZ: b.farFloorZ, farCeilZ: b.farCeilZ,
@@ -404,8 +434,8 @@ function propagateFarStair(columns, kinds) {
     columns.forEach((col, i) => {
       if (kinds[i] !== 'none') return;
       col.bands = col.bands.map(b => {
-        if (b.kind !== 'open' || b.farStair) return b;
-        const next = [columns[i - 1], columns[i + 1]].some(n => n?.bands.some(nb => nb.kind === 'open' && nb.farStair && zOverlap(nb, b)));
+        if (!isOpenLikeBand(b) || b.farStair) return b;
+        const next = [columns[i - 1], columns[i + 1]].some(n => n?.bands.some(nb => isOpenLikeBand(nb) && nb.farStair && zOverlap(nb, b)));
         if (!next) return b;
         changed = true;
         return { ...b, farStair: true };
@@ -484,7 +514,11 @@ export function buildColumns(cut, probeCtx) {
       col.bands = col.bands.map(b => (b.kind === 'wall' && !b.viaStair && Number.isFinite(b.distMm)
         && b.distMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
         ? wallBandToOpen(b)
-        : b);
+        // 梁の断面（memberCut）の後ろの壁が上限以上奥なら、後ろはアキ（梁の断面がアキのセルを割らない・遠側の判定の対象になる）
+        : (b.kind === 'memberCut' && b.behind === 'wall' && !b.behindViaStair && Number.isFinite(b.behindDistMm)
+          && b.behindDistMm - nearestMm >= SIGHTLINE_DEPTH_LIMIT_MM)
+          ? { ...b, behind: 'open' }
+          : b);
     }
   }
   // Phase4（水平面ヒットの深度上限適用。`.claude/elevation-redesign.md`§5.5・ユーザー裁定
@@ -499,10 +533,10 @@ export function buildColumns(cut, probeCtx) {
   // 従来どおり全域アキ）へ入る——新しい特別扱いを増やさずに済む。
   const limitBasisMm = Number.isFinite(nearestMm) ? nearestMm : -Infinity;
   const farKinds = rawColumns.map(col => {
-    col.bands = col.bands.flatMap(b => splitOpenByFarFace(b, limitBasisMm));
+    col.bands = col.bands.map(b => demoteMemberBehindOpen(b, limitBasisMm)).flatMap(b => splitOpenByFarFace(b, limitBasisMm));
     // 抜けの先が階段室ならアキではなく階段室への通路（farStair。emitOpenGapMarksが標記しない）。
-    const kind = col.bands.some(b => b.kind === 'open') ? farRoomKind(cut, (col.worldLo + col.worldHi) / 2, probeCtx) : null;
-    if (kind === 'stair') col.bands = col.bands.map(b => (b.kind === 'open' ? { ...b, farStair: true } : b));
+    const kind = col.bands.some(isOpenLikeBand) ? farRoomKind(cut, (col.worldLo + col.worldHi) / 2, probeCtx) : null;
+    if (kind === 'stair') col.bands = col.bands.map(b => (isOpenLikeBand(b) ? { ...b, farStair: true } : b));
     return kind;
   });
   propagateFarStair(rawColumns, farKinds);

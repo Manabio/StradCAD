@@ -268,24 +268,30 @@ export function collectCutBreaks(cut, probeCtx) {
     }
   }
   const base = [...values].sort((a, b) => a - b);
-  const addMemberEdge = (layer, v) => {
+  // 端を足せなかった（斜めの区間に掛かる列で捨てた）部材は near.edgeDropped に記録する——その部材は帯の形が部材と一致しないので、
+  // 選択（memberCut の帯）には入れず従来どおり加算レイヤで描く（sectionHits.js addMemberHits・visibleBeamPieces の opts.memberCuts。B3 R7）。
+  const addMemberEdge = (layer, v, solid) => {
     const win = cut.layerRunWindows?.get(layer);
     if (!(v > Math.max(probeLo, win?.lo ?? -Infinity) + GAP_EPS && v < Math.min(probeHi, win?.hi ?? Infinity) - GAP_EPS)) return;
     const i = base.findIndex(b => b > v);
     const colLo = base[i - 1] ?? -Infinity, colHi = base[i] ?? Infinity;
-    if (slopeSpans.some(([a, b]) => colHi > a + GAP_EPS && colLo < b - GAP_EPS)) return;
+    if (slopeSpans.some(([a, b]) => colHi > a + GAP_EPS && colLo < b - GAP_EPS)) { near.edgeDropped.add(solid); return; }
+    // 部材の端が**新しく**足した列境界（既存の境界と GAP_EPS 以内で重なるものは数えない）の world 座標を near.addedEdges に控える。
+    // 部材の端で割れた共線の線を帯の確定（finalizeBand）で 1 本へ戻すための印（buildCutContent の memberEdgesX）。
+    const existed = base.some(x => Math.abs(x - v) < GAP_EPS);
     addIfInside(v);
+    if (!existed && values.has(v)) near.addedEdges.add(v);
   };
   for (const { layer, solid: b } of near.beams) {
     if (!!b.isVertical !== !!line.isVertical) {
-      addMemberEdge(layer, b.axisWorld - b.widthMm / 2); addMemberEdge(layer, b.axisWorld + b.widthMm / 2);
+      addMemberEdge(layer, b.axisWorld - b.widthMm / 2, b); addMemberEdge(layer, b.axisWorld + b.widthMm / 2, b);
     } else {
-      addMemberEdge(layer, b.spanLo); addMemberEdge(layer, b.spanHi);
+      addMemberEdge(layer, b.spanLo, b); addMemberEdge(layer, b.spanHi, b);
     }
   }
   for (const { layer, solid: c } of near.columns) {
     const [runLo, runHi] = line.isVertical ? [c.yLo, c.yHi] : [c.xLo, c.xHi];
-    addMemberEdge(layer, runLo); addMemberEdge(layer, runHi);
+    addMemberEdge(layer, runLo, c); addMemberEdge(layer, runHi, c);
   }
   return [...values].sort((a, b) => a - b);
 }

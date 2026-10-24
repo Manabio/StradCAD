@@ -8,6 +8,8 @@ import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory,
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, collectCutBreaks, probeColumn } from './sectionProbe.js';
 import { emitOpenGapMarks, emitColumns } from './sectionEmit.js';
+import { nearMembersOf, probeColumnHits } from './sectionHits.js';
+const memberHitsFor = (cut, probeCtx) => probeColumnHits(cut, 2000, probeCtx).hits.filter(h => h.kind === 'memberCut');
 import { buildColumns } from './sectionEngine.js';
 import { ElevationLineRole, weightForRole } from '../elevationStyle.js';
 
@@ -853,6 +855,40 @@ test('【失敗系・B2・斜めの天端】視線側の wallTopProfile を持�
   assert.ok(plain.includes(1950) && plain.includes(2050), `プロファイル無しなら足す: ${plain}`);
 });
 
+test('【B3-1】斜めの天端・天井の列に掛かる梁の端は捨てられ near.edgeDropped に入り、memberCut にならない（collectCutBreaks → edgeDropped の配線）', () => {
+  const build = () => {
+    const graph = makeGraph();
+    makeRectRoom(graph, 0, 0, 4000, 3000);
+    addBeamV(graph, 2000, 500, 2500, 2300);
+    const cut = cutAtY1500(graph);
+    return { graph, cut, probeCtx: makeProbeContext(cut.layers) };
+  };
+  const { graph, cut, probeCtx } = build();
+  const farWall = farWallOf(graph);
+  const sloped = { ...probeCtx, wallTopProfileFor: () => new Map([[farWall.id, { zAt: () => 2000, crossings: () => [] }]]) };
+  collectCutBreaks(cut, sloped);
+  const near = nearMembersOf(cut);
+  assert.equal(near.edgeDropped.size, 1, '斜めの天端の列に掛かる梁は端を捨てた＝edgeDropped');
+  assert.equal(memberHitsFor(cut, sloped).length, 0, 'edgeDropped の梁は memberCut を積まない');
+  // 対照: プロファイルが無ければ端を足せる＝edgeDropped に入らず memberCut を積む
+  const c2 = build();
+  collectCutBreaks(c2.cut, c2.probeCtx);
+  assert.equal(nearMembersOf(c2.cut).edgeDropped.size, 0);
+  assert.equal(memberHitsFor(c2.cut, c2.probeCtx).length, 1);
+});
+
+test('【B3-1】天井で切られた slab 帯の members は天井より上を描かない（列の天井 2600 が層の天井 2400 より高い列）', () => {
+  const slabMembers = (levelOffset) => {
+    const graph = makeGraph();
+    makeRectRoom(graph, 0, 0, 4000, 3000);
+    addBeamV(graph, 2000, 500, 2500, levelOffset);
+    const cut = { ...cutAtY1500(graph), zRange: { loZ: 0, hiZ: 5400 }, ceilProfile: [{ loX: 0, hiX: 4000, ceilZ: 2600 }] };
+    return buildColumns(cut, makeProbeContext(cut.layers)).flatMap(c => c.bands).filter(b => b.kind === 'slab').flatMap(b => b.members ?? []);
+  };
+  assert.deepEqual(slabMembers(2700).map(m => [m.z0, m.z1]), [[2500, 2600]], '天井 2600 をまたぐ梁（2500..2700）は 2600 で切る');
+  assert.deepEqual(slabMembers(3000), [], '天井より上の梁（2800..3000）は members から落ちる');
+});
+
 test('【失敗系・B2・天伏の傾斜面】天伏の天井高さ場の傾斜面の走り方向の範囲に掛かる列には端を足さない（対照: 平らな面だけなら足す）', () => {
   const graph = makeGraph();
   makeRectRoom(graph, 0, 0, 4000, 3000);
@@ -877,7 +913,7 @@ test('【失敗系・U1b B2・部材なし】collectCutBreaks: 部材が無い�
   assert.ok(!breaks.includes(1950) && !breaks.includes(2050), `届かない梁の端は足さない: ${breaks}`);
 });
 
-test('【U1b B2・不変】部材の端で列が増えても buildColumns（併合後）の帯列は部材なしと同じ（選択は B1 のまま＝mergeColumns が併合する）', () => {
+test('【U1b B3-1】部材の端で列が割れ、梁の幅の列だけ帯が memberCut に代わる（梁の幅の外の列は梁なしと同じ）', () => {
   // 梁なしの対照にも同じ通り芯（x=2000・y=500/2500）を足し、梁の有無だけを違えにする
   const withBeam = makeGraph();
   makeRectRoom(withBeam, 0, 0, 4000, 3000);
@@ -891,5 +927,12 @@ test('【U1b B2・不変】部材の端で列が増えても buildColumns（併�
       .map(c => [c.x0, c.x1, c.bands.map(b => [b.kind, b.z0, b.z1, b.distMm ?? null])]);
   };
   assert.ok(breaksOf(cutAtY1500(withBeam)).length > breaksOf(cutAtY1500(without)).length, '前提: 梁で境が増えている');
-  assert.deepEqual(colsOf(withBeam), colsOf(without));
+  const a = colsOf(withBeam), b = colsOf(without);
+  const inBeam = c => c[0] >= 1950 - 1e-6 && c[1] <= 2050 + 1e-6; // 梁（x=2000・幅 100）の幅の列
+  for (const col of a.filter(c => !inBeam(c))) {
+    const mid = (col[0] + col[1]) / 2;
+    const same = b.find(c => mid >= c[0] && mid <= c[1]);
+    assert.deepEqual(col[2], same[2], `梁の幅の外の列（x ${col[0]}..${col[1]}）は梁なしと同じ帯`);
+  }
+  assert.deepEqual(a.filter(inBeam).map(c => c[2].map(x => x[0])), [['wall', 'memberCut', 'wall']], '梁の幅の列は壁・断面・壁');
 });

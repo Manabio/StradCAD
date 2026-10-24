@@ -80,6 +80,52 @@ export function dedupeCoincidentLines(primitives) {
 }
 
 /**
+ * 梁・柱の端で割れた共線の水平線を 1 本へ戻す（U1b B3-1）。梁・柱の端は列境界を新しく足すため、その x で線が割れる（HEAD は 1 本）。
+ * **部材の端の x（xs。`buildCutContent` の memberEdgesX）が絡むものだけ**を戻す——それ以外の共線の分割（HEAD に既に在る）は触らない:
+ *  - 同じ太さ・線種・色・y の水平線が、端点を部材の端の x で接している → 1 本に繋ぐ
+ *  - 既存の同じ様式の線に完全に含まれる線で、端点の片方が部材の端の x → 落とす（包含の重複）
+ * 破線は向き（x1<x2 の同じ向き）と dashAnchor まで一致するものだけ。入力は破壊しない。
+ * @param {object[]} primitives
+ * @param {number[]} xs - 部材の端の x（帯ローカル。xCursor 込み）
+ * @returns {object[]}
+ */
+export function joinLinesAtMemberEdges(primitives, xs) {
+  if (!xs || xs.length === 0) return primitives;
+  const EPS = 1e-4;
+  const atEdge = x => xs.some(e => Math.abs(e - x) < EPS);
+  const groups = new Map();
+  primitives.forEach((p, i) => {
+    if (p.type !== 'line' || Math.abs(p.y1 - p.y2) > EPS) return;
+    if (p.dash && !(p.x1 < p.x2)) return; // 破線は向きが一致する左→右だけ
+    const key = JSON.stringify({ ...p, x1: 0, x2: 0, y1: Math.round(p.y1 / EPS), y2: 0 });
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ i, lo: Math.min(p.x1, p.x2), hi: Math.max(p.x1, p.x2) });
+  });
+  const drop = new Set();
+  const replace = new Map();
+  for (const segs of groups.values()) {
+    if (segs.length < 2) continue;
+    segs.sort((a, b) => a.lo - b.lo || a.hi - b.hi);
+    const kept = [{ ...segs[0] }]; // 残す線（hi は繋いだ結果で伸びる）
+    for (let k = 1; k < segs.length; k++) {
+      const s = segs[k];
+      const last = kept[kept.length - 1];
+      if (s.hi <= last.hi + EPS && (atEdge(s.lo) || atEdge(s.hi))) { drop.add(s.i); continue; } // 包含の重複
+      if (Math.abs(s.lo - last.hi) < EPS && atEdge(last.hi)) { last.hi = s.hi; drop.add(s.i); continue; } // 部材の端で割れた線
+      kept.push({ ...s });
+    }
+    for (const s of kept) {
+      const p = primitives[s.i];
+      if (Math.abs(s.hi - Math.max(p.x1, p.x2)) < EPS) continue;
+      const [a, b] = p.x1 <= p.x2 ? ['x1', 'x2'] : ['x2', 'x1'];
+      replace.set(s.i, { ...p, [a]: s.lo, [b]: s.hi });
+    }
+  }
+  if (drop.size === 0 && replace.size === 0) return primitives;
+  return primitives.flatMap((p, i) => (drop.has(i) ? [] : [replace.get(i) ?? p]));
+}
+
+/**
  * 帯内の全プリミティブ種を一律 (dx,dy) だけ平行移動する（xCursor配置・floorOffset適用の共通処理）。
  * mirrorPrimitiveX と対を成す幾何変換——両関数は同じプリミティブ型集合を扱うこと
  * （片方にだけ型を追加すると、その型だけ移動/反転されない無言バグになる）。

@@ -3,6 +3,7 @@ import { RoomFeature } from '@core';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { selectElevationRooms, elevationRoomDisplayName } from '../elevation/elevationFaces.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
+import { memberLayersOf } from '../elevation/elevationSolids.js';
 import { buildStairBand } from '../elevation/elevationStair.js';
 import { buildVoidBand, buildRoomBandWithVoidAbove, findOverlappingRoom } from '../elevation/elevationVoid.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -249,6 +250,9 @@ export class ElevationModeState {
     // 落とす（buildVoidBandがlowerGraph欠落時に1層フォールバックするのと同じ規約）。
     const floorHeightMm = Array.isArray(this.project?.planes)
       ? floorHeightAbove(this.project, this.graph.plane) : null;
+    // 2.5D立体の加算レイヤ・断面エンジンの梁の断面（memberCut）が使う層（自階＋上階）は、この組み立て（2 パス・全部屋）の間 graph が
+    // 変わらないので 1 つの配列を共有する。部屋ごとに作ると、層の配列の同一性で覚える梁・柱の立体と壁の合併帯を部屋の数だけ作り直す。
+    const solids = { upperGraph, floorHeightMm, memberLayers: memberLayersOf(this.graph, { upperGraph, floorHeightMm }) };
 
     // paramsは全て2パス機構で換算する実画面mm値（+scale。オブジェクトにまとめて渡す
     // ——buildRoomBand/buildStairBand/buildVoidBandへそのまま展開できる形にしておく）。
@@ -280,9 +284,9 @@ export class ElevationModeState {
         // ここでの渡し漏れ。多層帯だけ柱型・梁型が一切出ていなかった）。zRangeは帯の自階CHのまま
         // ＝吹抜け範囲の上階の柱・梁は対象外（defer。上階ぶんはappendUpperStoreyOutlineの管轄）。
         return buildRoomBandWithVoidAbove(room, this.graph, voidAbove, upperGraph,
-          { ...ctx, floorHeightAboveMm: floorHeightMm, solids: { upperGraph, floorHeightMm } });
+          { ...ctx, floorHeightAboveMm: floorHeightMm, solids });
       }
-      return buildRoomBand(room, this.graph, { ...ctx, solids: { upperGraph, floorHeightMm } });
+      return buildRoomBand(room, this.graph, { ...ctx, solids });
     };
 
     // パス1: 倍率決定用（ギャップ・名前枠余白・三角オフセット・面ラベル退避閾値・建具タグ行/

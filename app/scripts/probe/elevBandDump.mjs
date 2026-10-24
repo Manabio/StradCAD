@@ -8,6 +8,7 @@
 // 比較してしまい、階段室（例: 11.stq 1階の「6」）の差分を取り逃がす。
 import { RoomFeature, CenterLine, centerLineKind } from '../../src/core.js';
 import { buildRoomBand } from '../../src/elevation/elevationBand.js';
+import { memberLayersOf } from '../../src/elevation/elevationSolids.js';
 import { buildStairBand } from '../../src/elevation/elevationStair.js';
 import { buildVoidBand, buildRoomBandWithVoidAbove, findOverlappingRoom } from '../../src/elevation/elevationVoid.js';
 import { selectElevationRooms } from '../../src/elevation/elevationFaces.js';
@@ -50,6 +51,8 @@ export function dumpFloorBands(project, graph, upperGraph, lowerGraph) {
     let floorHeightMm;
     try { floorHeightMm = floorHeightAbove(project, graph.plane); } catch { floorHeightMm = null; }
     const base = { project, materialMap: new Map(), gridCLs };
+    // ElevationModeState と同じ: 梁・柱の候補の層（memberLayers）は全部屋で 1 つの配列を共有する（部屋ごとに作ると立体を作り直す）
+    const solids = { upperGraph, floorHeightMm, memberLayers: memberLayersOf(graph, { upperGraph, floorHeightMm }) };
 
     const voidRoomsAbove = upperGraph
       ? selectElevationRooms(upperGraph).filter(x => x.feature === RoomFeature.VOID) : [];
@@ -81,9 +84,9 @@ export function dumpFloorBands(project, graph, upperGraph, lowerGraph) {
         } else if (voidByRoomId.get(room.id)) {
           kind = 'voidAbove';
           band = buildRoomBandWithVoidAbove(room, graph, voidByRoomId.get(room.id), upperGraph,
-            { ...base, floorHeightAboveMm: floorHeightMm, solids: { upperGraph, floorHeightMm } });
+            { ...base, floorHeightAboveMm: floorHeightMm, solids });
         } else {
-          band = buildRoomBand(room, graph, { ...base, solids: { upperGraph, floorHeightMm } });
+          band = buildRoomBand(room, graph, { ...base, solids });
         }
         const prims = (band?.primitives ?? band ?? []).map(norm);
         rows.push({ room: room.id, name: room.name ?? null, kind, count: prims.length, prims });

@@ -2,7 +2,10 @@
 // 線への写像（structuralPrimitivesForCut）・床の遮蔽は含めない——種類・x 範囲・z 範囲だけを見る。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleBeamPieces, structuralPrimitivesForCut } from './sectionStructure.js';
+import {
+  visibleBeamPieces, structuralPrimitivesForCut, memberKey, beamSectionShown, beamAlongShown, memberOutlineFloorState,
+  wallEntriesOfLayers,
+} from './sectionStructure.js';
 
 // 水平の切断線 y=0（室内側＝+y。viewSign=1・dirSign=1・local x = world x）。描画範囲 x 0..2000。
 const cutOf = (over = {}) => ({
@@ -195,6 +198,71 @@ test('fromRoomSide: 切断位置が梁のスパンの外（壁芯の手前で止
 test('contribution が空・未指定でも例外を投げず空', () => {
   assert.deepEqual(visibleBeamPieces([], cutOf(), [], null, noCol), []);
   assert.deepEqual(visibleBeamPieces(undefined, cutOf(), [], null, noCol), []);
+});
+
+// ---- 梁の断面・along は帯（memberCut）が担う（opts.memberCuts。U1b B3-1）----
+test('memberCuts: 帯が持つ梁の断面・along は出さず、空中・面の通りの見え掛かりだけ残す。dropped の梁（memberKey）だけ従来どおり出す', () => {
+  const none = { columnSolids: null, memberCuts: { dropped: new Set() } };
+  assert.deepEqual(visibleBeamPieces([crossBeam()], cutOf(), [], null, none), [], 'section は帯が描く');
+  assert.deepEqual(visibleBeamPieces([parallelBeam()], cutOf(), [], null, none), [], 'along（切断線の帯の中）は帯が描く');
+  assert.deepEqual(visibleBeamPieces([airborneBeam()], cutOf(), [], null, none).map(p => p.kind), ['airborne'], '空中の見え掛かりは従来どおり');
+  assert.deepEqual(visibleBeamPieces([parallelBeam({ widthMm: 100 })], faceCutOf(), [], null, { ...none, fromRoomSide: true }).map(p => p.kind),
+    ['parallel'], '面の通りの梁（facePlane）は従来どおり');
+  // dropped
+  const dropped = (b) => ({ columnSolids: null, memberCuts: { dropped: new Set([memberKey(b)]) } });
+  const cross = crossBeam(), par = parallelBeam();
+  assert.deepEqual(visibleBeamPieces([cross], cutOf(), [], null, dropped(cross)).map(p => p.kind), ['section']);
+  assert.deepEqual(visibleBeamPieces([par], cutOf(), [], null, dropped(par)).map(p => p.kind), ['parallel']);
+  // only: dropped の断面・along だけ（空中・面の通りは返さない）
+  const only = (b) => ({ columnSolids: null, memberCuts: { dropped: new Set([memberKey(b)]), only: true } });
+  const air = airborneBeam();
+  assert.deepEqual(visibleBeamPieces([air, cross], cutOf(), [], null, { columnSolids: null, memberCuts: { dropped: new Set([memberKey(cross)]), only: true } }).map(p => p.kind),
+    ['section'], 'only は空中の見え掛かりを返さない');
+  assert.deepEqual(visibleBeamPieces([parallelBeam({ widthMm: 100 })], faceCutOf(), [], null, { ...only(parallelBeam({ widthMm: 100 })), fromRoomSide: true }), [],
+    'only: 面の通りの梁は along ではない');
+  // 省略（memberCuts なし）は全部描く（既定は従来どおり）
+  assert.deepEqual(visibleBeamPieces([cross, par], cutOf(), [], null, noCol).map(p => p.kind), ['section', 'parallel']);
+});
+
+test('memberKey: 作り直した梁の立体（clipBeamsToBand のコピー等）でも同じキー。別の梁は別のキー', () => {
+  const b = crossBeam({ layerTopZ: 1190, layerDepthMm: 200 });
+  assert.equal(memberKey({ ...b, topZ: 1000, depthMm: 100 }), memberKey(b), '帯への切り詰めで topZ/depthMm が変わっても層の元の天端・成で同一');
+  assert.notEqual(memberKey(crossBeam({ axisWorld: 1100 })), memberKey(crossBeam()));
+  assert.notEqual(memberKey(parallelBeam()), memberKey(crossBeam()));
+});
+
+test('共有する可視判定: beamSectionShown は visibleBeamPieces の section と同じ答え（描画範囲外・壁の足元・柱包み・断面線）', () => {
+  const profile = [[0, 1200], [2000, 1200]];
+  const cases = [
+    ['基本', crossBeam(), cutOf(), null, noCol, true],
+    ['描画範囲の外', crossBeam({ axisWorld: 5000 }), cutOf(), null, noCol, false],
+    ['壁の足元に埋まる', crossBeam({ embedding: { along: [[-500, 1500]], alongTol: [] } }), cutOf(), null, noCol, false],
+    ['断面線より下に浮く', crossBeam({ topZ: 0, role: 'floor' }), cutOf(), profile, noCol, false],
+    ['踊り場受け梁は残す', crossBeam({ topZ: 0, role: 'landing' }), cutOf(), profile, noCol, true],
+    ['柱包みに隠れる', crossBeam(), cutOf(), null, { columnSolids: [colSolid({ yLo: -10, yHi: 1600, xLo: 900, xHi: 1100 })] }, false],
+  ];
+  for (const [label, beam, cut, floorProfile, opts, expected] of cases) {
+    const viaPieces = visibleBeamPieces([beam], cut, [], floorProfile, opts).some(p => p.kind === 'section');
+    const wc = { wallEntries: wallEntriesOfLayers(cut.layers), partitionLinesOf: () => [] };
+    const viaShared = beamSectionShown(cut, beam, { wc, columnSolids: opts.columnSolids, layers: cut.layers, floorProfile, fromRoomSide: !!opts.fromRoomSide });
+    assert.equal(viaPieces, expected, `${label}（加算）`);
+    assert.equal(viaShared, viaPieces, `${label}（共有関数が加算と同じ答え）`);
+  }
+});
+
+test('共有する可視判定: beamAlongShown は parallel の入口と同じ（スパンが切断線の範囲に掛かる・断面線より下に浮かない）', () => {
+  assert.equal(beamAlongShown(cutOf(), parallelBeam()), true);
+  assert.equal(beamAlongShown(cutOf(), parallelBeam({ spanLo: 5000, spanHi: 6000 })), false, '範囲の外');
+  assert.equal(beamAlongShown(cutOf(), parallelBeam({ topZ: 0, role: 'floor' }), [[0, 1200], [2000, 1200]]), false, '断面線より下');
+});
+
+test('memberOutlineFloorState: 床なし区間と重ならなければ clip／区間の中は whole／境界をまたいで階段側の壁が覆うなら drop', () => {
+  const wc = { wallEntries: [], partitionLinesOf: () => [] };
+  const beam = crossBeam(); // x 950..1050
+  assert.equal(memberOutlineFloorState(cutOf(), beam, [], wc), 'clip');
+  assert.equal(memberOutlineFloorState(cutOf(), beam, [{ lo: 0, hi: 500 }], wc), 'clip', '重ならない');
+  assert.equal(memberOutlineFloorState(cutOf(), beam, [{ lo: 900, hi: 1100 }], wc), 'whole', '区間の中');
+  assert.equal(memberOutlineFloorState(cutOf(), beam, [{ lo: 1000, hi: 2000 }], wc), 'whole', '境界をまたぐが壁が無い＝覆わない');
 });
 
 test('structuralPrimitivesForCut は visibleBeamPieces の返り値を線へ写すだけ（片の数と線の数が対応する）', () => {
