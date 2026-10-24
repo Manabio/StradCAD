@@ -29,7 +29,7 @@ import {
 } from './elevationStyle.js';
 import {
   translatePrimitive, collectGridCLs, appendRoomNameFrame, dedupeCoincidentLines, joinLinesAtMemberEdges,
-  clipPrimitivesToXRange,
+  clipPrimitivesToXRange, line, dim,
 } from './elevationPrimitives.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
 
@@ -219,10 +219,10 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
       // 渡された鎖をそのまま左右へ描く（様式は既存のCH寸法と同じ: 縦書き値・足0・端部塗り丸）。
       const emit = (chain, atX, footX) => {
         for (const [lo, hi] of chain ?? []) {
-          primitives.push(translatePrimitive({
-            type: 'dim', dir: 'v', at: atX, from: -hi, to: lo ? -lo : 0, foot: footX, dot: true,
+          primitives.push(translatePrimitive(dim('v', atX, -hi, lo ? -lo : 0, {
+            foot: footX, dot: true,
             label: Math.round(hi - lo),
-          }, xCursor, 0));
+          }), xCursor, 0));
         }
       };
       // 足はその寸法自身の側のCLの手前で止める（＝反対側のCLまで伸ばさない）。
@@ -250,27 +250,27 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
         for (let k = 0; k + 1 < marks.length; k++) {
           const lo = marks[k], hi = marks[k + 1];
           if (hi - lo <= 0) continue; // 分割点が床・天井と同値等、退化した区間は描かない
-          primitives.push({
-            type: 'dim', dir: 'v', at: chDimX, from: -hi, to: lo ? -lo : 0, foot: footBefore(boundary.lo, -1), dot: true,
+          primitives.push(dim('v', chDimX, -hi, lo ? -lo : 0, {
+            foot: footBefore(boundary.lo, -1), dot: true,
             label: Math.round(hi - lo),
-          });
+          }));
         }
       } else {
-        primitives.push({
-          type: 'dim', dir: 'v', at: chDimX, from: -leftCeilAbs, to: leftFloorY, foot: footBefore(boundary.lo, -1), dot: true,
+        primitives.push(dim('v', chDimX, -leftCeilAbs, leftFloorY, {
+          foot: footBefore(boundary.lo, -1), dot: true,
           label: isBandOwn ? chInfo.raw : Math.round(leftCeilAbs - leftDelta),
-        });
+        }));
       }
     } else if (hasLeftChDim) {
       // 問題修正2026-08その4改（ユーザー明示指示）: 床の起点高さが直前の面から変わった面の
       // 左側にCH寸法（この面の左端区間の実際の床〜天井・値=実効CH）。様式は先頭面の左CH寸法・
       // 右CH寸法と同じ（縦書き値・端部塗り丸）。
       const leftFloorY = leftProfile.floorDeltaMm ? -leftProfile.floorDeltaMm : 0;
-      primitives.push(translatePrimitive({
-        type: 'dim', dir: 'v', at: boundary.lo - CH_DIM_OFFSET_MM,
-        from: -leftProfile.ceilAbsMm, to: leftFloorY, foot: footBefore(boundary.lo, -1), dot: true,
-        label: Math.round(leftProfile.ceilAbsMm - leftProfile.floorDeltaMm),
-      }, xCursor, 0));
+      primitives.push(translatePrimitive(dim('v', boundary.lo - CH_DIM_OFFSET_MM,
+        -leftProfile.ceilAbsMm, leftFloorY, {
+          foot: footBefore(boundary.lo, -1), dot: true,
+          label: Math.round(leftProfile.ceilAbsMm - leftProfile.floorDeltaMm),
+        }), xCursor, 0));
     }
     // 断面エンジン（buildCutContent）へ渡す天井の区間情報は、**天井断面線を実際に引いている値**
     // そのもの＝ここで確定したfloorSegmentsから作る（「断面の中は描画しない」の単一情報源）。
@@ -857,10 +857,8 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         // 階段の高さ（踊り場の高さ）は**見えがかりなので細線**（同指示）。
         const z = stairZAtRun(crossFlight, face.axisCL.effectiveValue);
         if (z < ceilAbs - BAND_GAP_EPS) {
-          primitives.push(translatePrimitive({
-            type: 'line', x1: stairDrawnX.lo, y1: -z, x2: stairDrawnX.hi, y2: -z,
-            weight: weightForRole(ElevationLineRole.DETAIL),
-          }, xCursor, 0));
+          primitives.push(translatePrimitive(
+            line(stairDrawnX.lo, -z, stairDrawnX.hi, -z, ElevationLineRole.DETAIL), xCursor, 0));
         }
       }
       // 面と**平行**なレーン（側面視）では、階段断面が面の端まで届いていれば、その端の縦線は
