@@ -207,12 +207,18 @@ test('【配線】App.jsx の上階 peek の effect が abovePlanPeek を3状態
   const end = app.indexOf('}, [appMode, activeFloorId, floorSyncTick, planesKey]);', start);
   assert.ok(end > start, 'effect の deps 行が見つかる');
   const effect = app.slice(start, end);
-  assert.equal(count(effect, /floorSwapManager\.peek\(/g), 1, 'effect の peek は1回のまま（新しい peek を増やさない）');
+  // peek は N+1 と（見上げだけ）N+2 の 2 か所。N+2 は planSectionDirection(appMode) === 'up' かつ idx+2 があるときだけ
+  assert.equal(count(effect, /floorSwapManager\.peek\(/g), 2, 'effect の peek は N+1 と N+2 の 2 回だけ');
+  assert.match(effect, /^\s*const aboveAbove = planSectionDirection\(appMode\) === 'up' && idx \+ 2 < planes\.length \? planes\[idx \+ 2\] : null;\s*$/m, 'N+2 は見上げ（up）だけ・N+2 の階があるときだけ');
+  assert.match(effect, /floorSwapManager\.peek\(aboveAbove, project\.structGraph\)\.catch\(/, 'N+2 の peek 失敗は握りつぶして null（見上げを落とさない）');
+  assert.equal(count(effect, /floorSwapManager\.peek\(aboveAbove/g), 1);
+  assert.match(effect, /await Promise\.all\(\[floorSwapManager\.peek\(above, project\.structGraph\), peekAboveAbove\]\)/, 'N+1 と N+2 は並行に peek');
+  assert.equal(count(effect, /setAbovePlanPeek\(\{/g), 1, 'set は 1 回（分けると memo が二重に計算される）');
   const noAboveGuardAt = effect.indexOf('if (!above || !active || !shouldShowPlanFigure(appMode)) {');
   const nullAt = effect.search(/^\s*setAbovePlanPeek\(null\);/m);
-  const peekAt = effect.indexOf('await floorSwapManager.peek(above, project.structGraph)');
+  const peekAt = effect.indexOf('await Promise.all([floorSwapManager.peek(above, project.structGraph)');
   const cancelAt = effect.indexOf('if (cancelled) return;', peekAt);
-  const setAt = effect.search(/^\s*setAbovePlanPeek\(\{ graph: temp, floorHeightMm: above\.elevation - active\.elevation, activePlaneId: active\.id \}\);\s*$/m);
+  const setAt = effect.search(/^\s*setAbovePlanPeek\(\{ graph: temp, floorHeightMm: above\.elevation - active\.elevation, activePlaneId: active\.id, aboveAboveGraph \}\);\s*$/m);
   assert.ok(noAboveGuardAt >= 0 && nullAt > noAboveGuardAt && nullAt < peekAt, '上階なしの分岐で null');
   assert.equal(count(effect, /setAbovePlanPeek\(null\)/g), 1, 'null にするのは上階なしの1箇所だけ（冒頭は undefined）');
   assert.ok(peekAt > 0 && cancelAt > peekAt && setAt > cancelAt, `順序 peek(${peekAt}) < cancelled ガード(${cancelAt}) < set(${setAt})`);
@@ -220,7 +226,10 @@ test('【配線】App.jsx の上階 peek の effect が abovePlanPeek を3状態
   assert.match(app, /^\s*abovePlanPeek=\{abovePlanPeek\}\s*$/m);
   assert.equal(count(app, /abovePlanPeek=\{abovePlanPeek\}/g), 1);
   assert.equal(count(app, /upperVoidCrosses|UpperVoidCrosses/g), 0);
-  assert.match(effect, /^\s*setAbovePlanPeek\(\{ graph: temp, floorHeightMm: above\.elevation - active\.elevation, activePlaneId: active\.id \}\);\s*$/m, '見上げの上階の層の高さ＝階高（belowPlanPeek の floorHeight と同じ式）');
+  assert.match(effect, /^\s*setAbovePlanPeek\(\{ graph: temp, floorHeightMm: above\.elevation - active\.elevation, activePlaneId: active\.id, aboveAboveGraph \}\);\s*$/m, '見上げの上階の層の高さ＝階高（belowPlanPeek の floorHeight と同じ式）。N+2 は同じ set で');
+  // 平面モード（見下げ）の下階 peek の effect は N+2 を peek しない（belowPlanPeek に aboveAboveGraph を足さない）
+  assert.equal(count(app, /aboveAboveGraph/g), 2, 'App.jsx の aboveAboveGraph は見上げの上階 peek の effect だけ（Promise.all の分割代入・set）');
+  assert.ok(!/setBelowPlanPeek\([^)]*aboveAbove/.test(app), '見下げの peek に N+2 は入らない');
   assert.match(effect, /^\s*setUpperSlabOpenings\(openings\);\s*$/m, 'スラブ開口（階段の破れ先のクリップ用）は残す');
 });
 

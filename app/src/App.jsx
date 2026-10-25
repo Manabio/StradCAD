@@ -30,7 +30,7 @@ import { floorHeightAbove, stairRiserOf } from './finish/stair/stairDimensions.j
 import { cellBoundsList } from './finish/gridCells.js';
 import { snapshotFinishState, restoreFinishState } from './finish/finishUndo.js';
 import { buildStairEntries, buildUpperStairPeekEntries } from './finish/stair/stairEntries.js';
-import { shouldShowPlanFigure, shouldShowEquipmentSymbols } from './renderer/planFigureVisibility.js';
+import { shouldShowPlanFigure, shouldShowEquipmentSymbols, planSectionDirection } from './renderer/planFigureVisibility.js';
 import { slabOpeningRects } from './finish/stair/slabOpening.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBoundary.js';
 import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
@@ -898,9 +898,15 @@ const App = observer(() => {
         setUpperSlabOpenings(null); // 上階なし＝スラブ開口は判定不能（クリップしない）
         return;
       }
-      const temp = await floorSwapManager.peek(above, project.structGraph);
+      // 見上げ（天伏）だけ N+2 も並行に peek する（N+1 の階段の裏面・足元の壁の天端・段の到達辺が N+2 の床梁の外面に合う。
+      // 展開図 S2 と同じ立体）。set は 1 回（分けると同じ memo が二重に計算される）。失敗しても見上げは落とさない（N+2 なし）。
+      const aboveAbove = planSectionDirection(appMode) === 'up' && idx + 2 < planes.length ? planes[idx + 2] : null;
+      const peekAboveAbove = aboveAbove
+        ? floorSwapManager.peek(aboveAbove, project.structGraph).catch(e => { console.warn('N+2 の peek に失敗（見上げは N+2 なしで描く）', e); return null; })
+        : Promise.resolve(null);
+      const [temp, aboveAboveGraph] = await Promise.all([floorSwapManager.peek(above, project.structGraph), peekAboveAbove]);
       if (cancelled) return;
-      setAbovePlanPeek({ graph: temp, floorHeightMm: above.elevation - active.elevation, activePlaneId: active.id });
+      setAbovePlanPeek({ graph: temp, floorHeightMm: above.elevation - active.elevation, activePlaneId: active.id, aboveAboveGraph });
       // 上階スラブの開口（吹抜け・階段吹抜けRoom＋上階階段の破れ先セル）。上階階段の破れ位置は
       // その階の蹴上で決まるため、上階のさらに上との階高から riser を解決して渡す。
       const riserOf = (s) => stairRiserOf(s, project, above);

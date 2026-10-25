@@ -8,7 +8,9 @@ import { generateStairPartitionWalls } from '../finish/stair/stairPartitionWalls
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { stairSoffitSolids } from '../ceiling/stairSoffit.js';
 import { stairSoffitAbove } from '../elevation/space/stairSoffitCeiling.js';
-import { planSolidsLayerSolids, planSolidsLayerSolidsUp, planSolidsLayerCacheSpec } from './planSolidsLayerFilter.js';
+import { autorun } from 'mobx';
+import { graphComputed } from '../renderer/graphDerived.js';
+import { planSolidsLayerSolids, planSolidsLayerSolidsUp, planSolidsLayerCacheSpec, planSolidsLayerResolve } from './planSolidsLayerFilter.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
 const STRUCT = { labeled: false, discipline: Discipline.STRUCT };
@@ -105,6 +107,35 @@ test('【S1・失敗系】N+2 が null・梁なし・走行に平行な梁・pee
   // 上階（N+1）が無い peek では N+2 があっても何も起きない
   assert.deepEqual(plain(planSolidsLayerSolidsUp({ graph: n.graph, abovePeek: { graph: null, floorHeightMm: FH, aboveAboveGraph: aboveWithBeam() } })),
     plain(planSolidsLayerSolidsUp({ graph: n.graph, abovePeek: null })));
+});
+
+// S3（QA 所見 A-2）: 鍵は N+2 の plane id だけだが、graphComputed の computed は compute が読んだ N+2 の observable（梁）を追跡する。
+// 観測中（レイヤの observer 相当）に N+2 の梁だけが変わると、同じ home・同じ鍵でも見上げが作り直される。
+test('【S3・A-2】見上げの memo（graphComputed）: N+2 の梁だけが変わっても（同じ home・同じ鍵）見上げの線が作り直される', () => {
+  const { n, u } = scene();
+  const above = aboveEmpty();
+  const abovePeek = { graph: u.graph, floorHeightMm: FH, activePlaneId: n.graph.plane.id, aboveAboveGraph: above };
+  const seen = [];
+  const stop = autorun(() => {
+    seen.push(planSolidsLayerResolve({ graph: n.graph, belowPeek: null, abovePeek, direction: 'up', memo: graphComputed, aboveRiserOf: () => RISER }));
+  });
+  try {
+    assert.equal(seen.length, 1);
+    const keyBefore = planSolidsLayerCacheSpec(n.graph, abovePeek, 'up').key;
+    const axis = above.addCenterLine(CenterLineType.HORIZONTAL, 4000, STRUCT);
+    const mk = v => above.addCenterLine(CenterLineType.VERTICAL, v, STRUCT);
+    above.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', axis, false, mk(0), mk(2000), {});
+    assert.equal(planSolidsLayerCacheSpec(n.graph, abovePeek, 'up').key, keyBefore, '前提: 鍵は変わらない（plane id のまま）');
+    assert.ok(seen.length >= 2, 'N+2 の梁の追加で autorun が再実行される');
+    assert.notDeepEqual(plain(seen.at(-1)), plain(seen[0]), '到達辺が梁の面になり、見上げの線が変わる');
+  } finally { stop(); }
+});
+
+test('【S3・失敗系】N+2 の peek が失敗（null）でも見上げは N+2 なしと同じ線（落ちない）', () => {
+  const { n, u } = scene();
+  const peek = aboveAboveGraph => ({ graph: u.graph, floorHeightMm: FH, activePlaneId: n.graph.plane.id, aboveAboveGraph });
+  const run = p => plain(planSolidsLayerResolve({ graph: n.graph, belowPeek: null, abovePeek: p, direction: 'up', memo: (_h, _k, c) => c(), aboveRiserOf: () => RISER }));
+  assert.deepEqual(run(peek(null)), run({ graph: u.graph, floorHeightMm: FH, activePlaneId: n.graph.plane.id }));
 });
 
 test('【S1】見下げ（planSolidsLayerSolids）は N+2 を受けず不変。見上げの鍵だけ N+2 の plane で変わる', () => {

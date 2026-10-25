@@ -50,7 +50,10 @@ for (const src of sources) {
     if (UP) {
       const above = idx + 1 < planes.length ? planes[idx + 1] : null;
       const aboveGraph = above ? project.graphMap.get(above.id) : null;
-      const abovePeek = aboveGraph ? { graph: aboveGraph, floorHeightMm: above.elevation - plane.elevation } : null;
+      // N+2（App.jsx の見上げの peek と同じ。階段の裏面・足元の壁の天端・段の到達辺が N+2 の床梁の外面に合う）
+      const abovePeek = aboveGraph
+        ? { graph: aboveGraph, floorHeightMm: above.elevation - plane.elevation, aboveAboveGraph: project.graphMap.get(planes[idx + 2]?.id) ?? null }
+        : null;
       const u0 = performance.now();
       // 上階の層の階段の蹴上は上階の plane で解く（PlanSolidsLayer.jsx と同じ。旧版は selfRiserOf を渡して上階の階段の段・裏面が出なかった）
       const aboveRiserOf = above ? s => stairRiserOf(s, project, above) : undefined;
