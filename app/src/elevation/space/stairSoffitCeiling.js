@@ -164,3 +164,118 @@ export function stairSoffitChAt(soffit, x, y) {
   if (!inside) return null;
   return zAtOf(solid)(x, y) - (soffit.floorStepMm ?? 0);
 }
+
+// ---------------------------------------------------------------- 自階の階段の裏面で部屋帯の天井線を頭打ちにする（S8-4）
+
+const CEIL_EPS_MM = 1e-6; // 天井の高さの比較の許容（裏面が「下」とみなす差・同値の判定）
+
+/** 区間 s の局所 x での元の天井高（chMm→chHiMm の直線。chMm 未指定は defaultCh）。 */
+function segChAt(s, x, defaultCh) {
+  const c0 = s.chMm ?? s.chHiMm ?? defaultCh; // chHiMm だけの区間は水平（c0 を c1 に寄せる）
+  const c1 = s.chHiMm ?? c0;
+  const w = s.hiX - s.loX;
+  if (c1 === c0 || !(w > 0)) return c0; // Infinity 同士で NaN を作らない
+  return c0 + (c1 - c0) * (x - s.loX) / w;
+}
+
+/** 区間 seg（局所 x [loX, hiX]）に裏面 soffit を掛けた区間の列。裏面が天井を下回る所が無い・掛からない・不正なら null。 */
+function splitSegBySoffit(seg, face, soffit, { floorZFor, ownerRoomIdOf, defaultCh }) {
+  if (seg.ceilArc || !(seg.hiX > seg.loX) || !soffit?.surface) return null;
+  const sign = face.dirSign === -1 ? -1 : 1;
+  const w0 = face.originWorld + seg.loX * sign, w1 = face.originWorld + seg.hiX * sign;
+  const wLo = Math.min(w0, w1), wHi = Math.max(w0, w1);
+  const mid = (wLo + wHi) / 2;
+  if (ownerRoomIdOf && soffit.stairRoomId != null && ownerRoomIdOf(seg, mid) === soffit.stairRoomId) return null; // 階段の対の部屋は対象外
+  const flz = floorZFor(seg, mid);
+  if (!Number.isFinite(flz)) return null;
+  const nodes = stairSoffitChAlong({ solid: soffit.surface, floorStepMm: 0 },
+    { isVertical: !!face.isVertical, depthCoord: face.faceValue, lo: wLo, hi: wHi });
+  if (!nodes || nodes.length < 2 || !nodes.every(n => Number.isFinite(n.run) && Number.isFinite(n.ch))) return null;
+  const toX = r => (r - face.originWorld) * sign;
+  // 裏面が掛かる直線の区間（局所 x の昇順）
+  const covered = [];
+  for (let j = 0; j + 1 < nodes.length; j++) {
+    const a = nodes[j], b = nodes[j + 1];
+    if (b.gapBefore || !(b.run - a.run > NODE_MERGE_MM)) continue;
+    let [xa, ca, xb, cb] = [toX(a.run), a.ch - flz, toX(b.run), b.ch - flz];
+    if (xa > xb) [xa, ca, xb, cb] = [xb, cb, xa, ca];
+    covered.push({ xa, ca, xb, cb });
+  }
+  covered.sort((p, q) => p.xa - q.xa);
+  // 元の天井との min で割った部品（soff＝裏面が下の部品）。裏面の外は soff:false の部品
+  const parts = [];
+  const pushOrig = (x0, x1) => { if (x1 - x0 > 1e-9) parts.push({ x0, x1, c0: segChAt(seg, x0, defaultCh), c1: segChAt(seg, x1, defaultCh), soff: false }); };
+  let cursor = seg.loX;
+  for (const cv of covered) {
+    const xa = Math.max(cv.xa, seg.loX), xb = Math.min(cv.xb, seg.hiX);
+    if (!(xb - xa > 1e-9)) continue;
+    pushOrig(cursor, xa);
+    const lerp = x => cv.ca + (cv.cb - cv.ca) * (x - cv.xa) / (cv.xb - cv.xa);
+    const f0 = segChAt(seg, xa, defaultCh), f1 = segChAt(seg, xb, defaultCh);
+    const g0 = lerp(xa), g1 = lerp(xb);
+    const d0 = f0 - g0, d1 = f1 - g1; // 正＝裏面が下
+    const fAt = x => segChAt(seg, x, defaultCh);
+    const emit = (x0, x1, soff) => parts.push({ x0, x1, c0: (soff ? lerp : fAt)(x0), c1: (soff ? lerp : fAt)(x1), soff });
+    if ((d0 > CEIL_EPS_MM && d1 < -CEIL_EPS_MM) || (d0 < -CEIL_EPS_MM && d1 > CEIL_EPS_MM)) {
+      const xc = xa + (xb - xa) * d0 / (d0 - d1);
+      emit(xa, xc, d0 > 0);
+      emit(xc, xb, d1 > 0);
+    } else {
+      emit(xa, xb, d0 > CEIL_EPS_MM || d1 > CEIL_EPS_MM);
+    }
+    cursor = xb;
+  }
+  pushOrig(cursor, seg.hiX);
+  if (!parts.some(p => p.soff)) return null; // 裏面が天井より上（または掛からない）＝不変
+  // 隣り合う元のまま部品は 1 つへ戻す
+  const merged = [];
+  for (const p of parts) {
+    const last = merged[merged.length - 1];
+    if (last && !last.soff && !p.soff) { last.x1 = p.x1; last.c1 = p.c1; } else merged.push({ ...p });
+  }
+  return merged.map((p, i) => {
+    const first = i === 0, lastP = i === merged.length - 1;
+    const out = { ...seg, loX: p.x0, hiX: p.x1 };
+    if (!first && 'loCLId' in seg) out.loCLId = null; // 内側の割れ目は段差 CL ではない（寸法の分割点にしない）
+    if (!lastP && 'hiCLId' in seg) out.hiCLId = null;
+    if (p.soff || seg.chMm != null) {
+      out.chMm = p.c0;
+      if (Math.abs(p.c1 - p.c0) > CEIL_EPS_MM) out.chHiMm = p.c1; else delete out.chHiMm;
+    } else delete out.chHiMm;
+    return out;
+  });
+}
+
+/**
+ * 部屋帯の区間列 segs の天井線を、自階の階段の裏面（stairFootSurfaces の面）で頭打ちにした区間列にする。
+ * 規則: 階段の足元の中にあり、所有部屋が階段の対の部屋（stairRoomId）ではない区間の天井＝min(元の天井, 裏面)。
+ * 傾斜は 1 区間 1 線分（chMm＝loX 側・chHiMm＝hiX 側。ceilProfileFromSegments が読む形）。区間は裏面の節（矩形の辺・
+ * innerLines との交点・足元の端）と、元の天井と裏面の交点で割る。割れ目では loCLId/hiCLId を null にする（段差 CL ではない）。
+ * 評価の奥行きは面の位置 face.faceValue（stairSoffitChAlong の切断線の深さ）。
+ * soffits が空・面が足元に掛からない・裏面が天井より上・不正（NaN 等）なら元の区間（または元の配列そのもの）を返す。例外は投げない。
+ * @param {Array<object>} segs 部屋帯の区間列（loX・hiX は面ローカル x。他の項目は保つ）
+ * @param {{faceValue:number, isVertical:boolean, dirSign:1|-1, originWorld:number}} face 面（局所 x＝(世界の走り座標−originWorld)×dirSign）
+ * @param {Array<{stairId:string, stairRoomId:?string, surface:object}>} soffits stairFootSurfaces の面
+ * @param {{
+ *   floorZFor:(seg:object, runWorld:number)=>number,
+ *   ownerRoomIdOf?:(seg:object, runWorld:number)=>?string,
+ *   defaultCh?:number,
+ * }} opts floorZFor＝区間の所有者の部屋の FL（絶対 z。裏面の ch＝zAbs−これ）／ownerRoomIdOf＝所有部屋の id（対の部屋の除外判定）／
+ *   defaultCh＝chMm 未指定の区間の天井高（既定 Infinity＝裏面が勝つ。帯の CH を渡すと ceilProfileFromSegments と同じ）
+ * @returns {Array<object>}
+ */
+export function minCeilingSegmentsWithSoffits(segs, face, soffits, { floorZFor, ownerRoomIdOf, defaultCh = Infinity } = {}) {
+  if (!Array.isArray(segs) || segs.length === 0 || !Array.isArray(soffits) || soffits.length === 0 || typeof floorZFor !== 'function') return segs;
+  if (!face || !Number.isFinite(face.faceValue) || !Number.isFinite(face.originWorld)) return segs;
+  let cur = segs, changed = false;
+  for (const soffit of soffits) {
+    const next = [];
+    let any = false;
+    for (const seg of cur) {
+      const split = splitSegBySoffit(seg, face, soffit, { floorZFor, ownerRoomIdOf, defaultCh });
+      if (split) { next.push(...split); any = true; } else next.push(seg);
+    }
+    if (any) { cur = next; changed = true; }
+  }
+  return changed ? cur : segs;
+}

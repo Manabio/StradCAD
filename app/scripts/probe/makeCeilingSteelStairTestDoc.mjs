@@ -16,7 +16,13 @@
 //     2F＝上階の階段吹抜けの×（一点鎖線）1 件、3F＝STAIR_VOID の平らな天井面の線
 // 壁は本番の仕上げ脱出境界（runFinishExitBoundary。makeClDeleteTest.mjs と同じ手順）で生成する。
 //
-// 使い方: node --import ./scripts/testSetup.mjs scripts/probe/makeCeilingSteelStairTestDoc.mjs [--wood] [出力先.stq]
+//   --under-room: 1F の階段の足元を 3 セルに割り（踊り場＋往路＋復路。stairUnderRooms.test.js の makeStairUnderFixture と同じ構成の
+//         無ラベル ARCH の footprint 構造線。extent は階段の外形に限る）、破れ線先セル（cellsBeyondBreak）に「階段下」の部屋（2a。
+//         feature なしの通常の部屋）を置く。階段の対の部屋（STAIR）は残りのセル。壁は仕上げ脱出境界が resolveStairContext で階段下の壁を作る
+//         → ceiling-steel-stair-under-test.stq（--wood は ceiling-wood-stair-under-test.stq）。2F・3F は従来どおり。
+//         S8-4（階段下の部屋の帯の天井＝自階の階段の裏面）の足場。
+//
+// 使い方: node --import ./scripts/testSetup.mjs scripts/probe/makeCeilingSteelStairTestDoc.mjs [--wood] [--under-room] [出力先.stq]
 // 既存ファイルは上書きしない。
 import fs from 'node:fs';
 import { Project, CenterLineType, Discipline, RoomFeature, StairType, StructuralMaterialType, ceilingCutHeightMmOf } from '../../src/core.js';
@@ -28,6 +34,8 @@ import { loadMaterialMap } from '../../src/finish/wallRegeneration.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { reconcileStairVoids } from '../../src/finish/stair/stairVoidReconcile.js';
 import { findContinuation } from '../../src/finish/stair/stairChains.js';
+import { cellsBeyondBreak } from '../../src/finish/stair/stairGeometry.js';
+import { resolveStairUnderEntries, stairUnderRoomsOf } from '../../src/finish/stair/stairUnderRooms.js';
 import { matchingStairBelow } from '../../src/structural/openingBeamAxes.js';
 import { floorOpeningGroups } from '../../src/finish/stair/slabOpening.js';
 import { stairRiserOf } from '../../src/finish/stair/stairDimensions.js';
@@ -38,8 +46,9 @@ import { ceilingSurfacesOf } from '../../src/ceiling/ceilingSurfaces.js';
 import { loadDocument } from './loadDoc.mjs';
 
 const WOOD = process.argv.includes('--wood');
+const UNDER = process.argv.includes('--under-room');
 const argPath = process.argv.slice(2).find(a => !a.startsWith('--'));
-const outPath = argPath ?? `D:/tatsuya/Download/${WOOD ? 'ceiling-wood-stair-test' : 'ceiling-steel-stair-test'}.stq`;
+const outPath = argPath ?? `D:/tatsuya/Download/${WOOD ? 'ceiling-wood-stair' : 'ceiling-steel-stair'}${UNDER ? '-under' : ''}-test.stq`;
 if (fs.existsSync(outPath)) {
   console.error(`既存ファイルを上書きしません: ${outPath}`);
   process.exit(1);
@@ -120,7 +129,31 @@ for (const g of [g1, g2, g3]) {
   g.addRoom(new Set([cellKey(X1, Y0, X2, Y1)]), 'A');
   g.addRoom(new Set([cellKey(X0, Y1, X2, Y2)]), 'B');
 }
-addStairFloor(g1);
+// --under-room: 1F の階段の足元を踊り場・往路・復路の 3 セルに割り、破れ線先セルを「階段下」の部屋にする
+// （構成は stairUnderRooms.test.js の makeStairUnderFixture と同じ。分割線は階段の外形に extent を限る＝周りの部屋 A/B を割らない）
+function addStairFloorWithUnderRoom(g) {
+  const splitCL = (type, value, lo, hi) => g.addCenterLine(type, value, {
+    labeled: false, discipline: Discipline.ARCH, trim: false, extentLo: lo, extentHi: hi,
+  });
+  const XM = splitCL(CenterLineType.VERTICAL, 1500, 0, 3500);     // 往路・復路の境（階段の幅の中央）
+  const YM = splitCL(CenterLineType.HORIZONTAL, 1050, 0, 3000);   // 踊り場の前縁（奥行 3500 の 0.3）
+  const landing = cellKey(X0, Y0, X1, YM);
+  const lane0 = `${X0.id}:${YM.id}:${XM.id}:${Y1.id}`;
+  const lane1 = `${XM.id}:${YM.id}:${X1.id}:${Y1.id}`;
+  const stairCells = new Set([landing, lane0, lane1]);
+  const pair = g.addRoom(new Set(stairCells), '');
+  pair.setFeature(RoomFeature.STAIR);
+  const stair = g.addStair({
+    type: StairType.SWITCHBACK, structure: STAIR_STRUCTURE, cells: stairCells,
+    sections: [11, 1, 11], upDirection: 'up', flip: true, roomId: pair.id,
+  });
+  const beyond = cellsBeyondBreak(stair, g, stair.riser ?? null);
+  if (beyond.size === 0 || beyond.size === stairCells.size) throw new Error(`破れ線先セルが決まらない: ${beyond.size}/${stairCells.size}`);
+  for (const key of beyond) pair.removeCell(key);
+  g.addRoom(new Set(beyond), '階段下');
+  console.log(`--under-room: 階段 3 セル／破れ線先 ${[...beyond].length} セル（${[...beyond].map(k => (k === landing ? '踊り場' : k === lane0 ? '往路側' : '復路側')).join('・')}）を階段下の部屋に`);
+}
+if (UNDER) addStairFloorWithUnderRoom(g1); else addStairFloor(g1);
 addStairFloor(g2);
 // 3F の足元は本番と同じ規則（reconcileStairVoids）で STAIR_VOID を置く（2F の階段は対の部屋があるので 2F には何も置かれない）
 const rec2 = reconcileStairVoids(g2, g1, sg);
@@ -184,11 +217,21 @@ const [f1, f2, f3] = P.planes;
 check(P.planes.length === 3 && [f1, f2, f3].every((p, i) => p.elevation === i * 3000), `階 3（elevation ${P.planes.map(p => p.elevation)}）`);
 const G = [f1, f2, f3].map(p => P.graphMap.get(p.id));
 const stairsOk = G.map(g => g.stairs.length).join(',') === '1,1,0'
-  && [G[0], G[1]].every(g => g.stairs[0].structure === STAIR_STRUCTURE && g.stairs[0].type === StairType.SWITCHBACK && g.stairs[0].cells.size === 1);
-check(stairsOk, `階段数 1F/2F/3F = ${G.map(g => g.stairs.length)}・structure ${STAIR_STRUCTURE}・SWITCHBACK・cells 1`);
+  && [G[0], G[1]].every((g, i) => g.stairs[0].structure === STAIR_STRUCTURE && g.stairs[0].type === StairType.SWITCHBACK
+    && g.stairs[0].cells.size === (UNDER && i === 0 ? 3 : 1));
+check(stairsOk, `階段数 1F/2F/3F = ${G.map(g => g.stairs.length)}・structure ${STAIR_STRUCTURE}・SWITCHBACK・cells ${G.map(g => g.stairs[0]?.cells.size)}`);
 const voids = G.map(g => g.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID).length);
 const normals = G.map(g => g.rooms.filter(r => r.feature == null).length);
-check(voids.join(',') === '0,0,1' && normals.join(',') === '2,2,2', `STAIR_VOID 1F/2F/3F = ${voids}・通常の部屋 = ${normals}`);
+check(voids.join(',') === '0,0,1' && normals.join(',') === (UNDER ? '3,2,2' : '2,2,2'), `STAIR_VOID 1F/2F/3F = ${voids}・通常の部屋 = ${normals}`);
+if (UNDER) {
+  const beyond = cellsBeyondBreak(G[0].stairs[0], G[0], G[0].stairs[0].riser ?? null);
+  const underRooms = stairUnderRoomsOf(G[0].stairs[0], G[0], beyond);
+  check(underRooms.length === 1 && underRooms[0].name === '階段下', `1F の階段下の部屋が 1 件（stairUnderRoomsOf: ${underRooms.map(r => r.name)}）`);
+  const entries = resolveStairUnderEntries(G[0], { floorHeight: 3000 });
+  check(entries.length === 1 && entries[0].room.name === '階段下', `resolveStairUnderEntries が 1 件（${entries.length}）`);
+  const underWalls = G[0].walls.length;
+  console.log(`1F 壁 ${underWalls} 本`);
+}
 const sgP = P.structGraph;
 check(findContinuation(G[0].stairs[0], G[0], G[1], sgP)?.id === G[1].stairs[0].id, '1F→2F の続きが取れる（findContinuation）');
 check(findContinuation(G[1].stairs[0], G[1], G[2], sgP) == null, '2F→3F の続きは取れない（3F は STAIR_VOID）');

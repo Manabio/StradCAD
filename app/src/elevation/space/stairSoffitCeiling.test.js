@@ -9,7 +9,7 @@ import { uTurnSoffitFromLayout, straightSoffitFromLayout } from '../../ceiling/s
 import { planSolidsLayerSolidsUp } from '../../plan/planSolidsLayerFilter.js';
 import { makeGrid } from '../../plan/planTestFixtures.js';
 import {
-  stairSoffitAbove, stairSoffitChAlong, stairSoffitChMaxOver, stairSoffitChAt,
+  stairSoffitAbove, stairSoffitChAlong, stairSoffitChMaxOver, stairSoffitChAt, minCeilingSegmentsWithSoffits,
 } from './stairSoffitCeiling.js';
 
 const FL = 2800;   // N+1 の FL
@@ -201,4 +201,104 @@ test('【E5・失敗系】stairSoffitAbove: 鉄骨・L_TURN・蹴上が決まら
   { const { n, u } = pair(); assert.equal(stairSoffitAbove(ARGS(n, u, { riserOf: undefined })), null, 'riserOf 欠落'); }
   { const { n, u } = pair({ shift: 500 }); assert.equal(stairSoffitAbove(ARGS(n, u)), null, '足元が違う階段は続きではない'); }
   { const { n, u } = pair(); assert.equal(stairSoffitAbove(ARGS(n, u, { stair: null })), null, 'stair なし'); }
+});
+
+// ---------------------------------------------------------------- minCeilingSegmentsWithSoffits（S8-4）
+
+// SWITCHBACK_L を x=500 で縦に切る: y=1000..57.5 は平ら zTop(6)、y=1000→4000 は zTop(6)→2400 の直線
+const surfaceOf = (zAtOverride) => {
+  const solid = uTurnSoffitFromLayout(SWITCHBACK_L, { zStart: 2400, zTop });
+  return zAtOverride ? { ...solid, zAt: zAtOverride } : solid;
+};
+const FACE = { faceValue: 500, isVertical: true, dirSign: 1, originWorld: 0 };
+const soffitsOf = (surface, stairRoomId = 'stairRoom') => [{ stairId: 's1', stairRoomId, surface }];
+const OPTS = { floorZFor: () => 0 };
+const SEG = { loX: 57.5, hiX: 4000, floorDeltaMm: 0, chMm: 3000, loCLId: 'a', hiCLId: 'b' };
+const yAt = ch => 4000 - 3000 * (ch - 2400) / (zTop(6) - 2400); // 裏面の斜線が ch になる y
+
+test('【S8-4】平らな天井(3000)と傾いた裏面の交点で区間が割れ、裏面側は chMm→chHiMm＝裏面の値（min）になる。項目は保たれ、内側の割れ目の CL id は null', () => {
+  const out = minCeilingSegmentsWithSoffits([SEG], FACE, soffitsOf(surfaceOf()), OPTS);
+  const yc = yAt(3000);
+  assert.equal(out.length, 2, '平ら（元のまま）＋傾斜（裏面）');
+  near(out[0].loX, 57.5, '先頭の loX'); near(out[0].hiX, yc, '交点');
+  assert.equal(out[0].chMm, 3000); assert.equal(out[0].chHiMm, undefined, '元のまま平ら');
+  near(out[1].loX, yc, '交点'); near(out[1].hiX, 4000, '末尾');
+  near(out[1].chMm, 3000, '交点の天井高'); near(out[1].chHiMm, 2400, '上り口は裏面 2400');
+  assert.equal(out[0].loCLId, 'a'); assert.equal(out[0].hiCLId, null, '内側の割れ目');
+  assert.equal(out[1].loCLId, null, '内側の割れ目'); assert.equal(out[1].hiCLId, 'b');
+  assert.ok(out.every(s => s.floorDeltaMm === 0), '他の項目を落とさない');
+});
+
+test('【S8-4】元の天井 3500（前縁の平ら部 ≈3950 より低い）でも、斜線との交点で割れて上り口側だけ裏面になる', () => {
+  const out = minCeilingSegmentsWithSoffits([{ ...SEG, chMm: 3500 }], FACE, soffitsOf(surfaceOf()), OPTS);
+  // 3500 は前縁 zTop(6)(≈3950) より低く、y=yAt(3500) で裏面と交わる
+  assert.equal(out.length, 2);
+  near(out[0].hiX, yAt(3500), '交点で割れる');
+  near(out[1].chHiMm, 2400, '上り口');
+});
+
+test('【S8-4】floorZFor の FL を引いた値（所有部屋の FL 基準）。傾いた元の天井（chHiMm）とも min', () => {
+  const out = minCeilingSegmentsWithSoffits([{ ...SEG, chMm: 3000, chHiMm: 2500 }], FACE, soffitsOf(surfaceOf()), { floorZFor: () => 100 });
+  // 裏面（FL 基準）= 絶対 − 100。上り口 2400−100=2300 は元の chHiMm=2500 より低い
+  const last = out[out.length - 1];
+  near(last.hiX, 4000, '末尾'); near(last.chHiMm, 2300, '上り口の裏面（FL 基準）');
+  assert.ok(out.every(s => s.chMm <= 3000 + 1e-6));
+});
+
+test('【S8-4】裏面が天井より上の区間・足元の外は不変（同じ配列を返す）', () => {
+  const low = [{ ...SEG, chMm: 2000, chHiMm: undefined }];
+  assert.equal(minCeilingSegmentsWithSoffits(low, FACE, soffitsOf(surfaceOf()), OPTS), low, '裏面は常に 2400 以上＝天井 2000 より上');
+  const far = [SEG];
+  assert.equal(minCeilingSegmentsWithSoffits(far, { ...FACE, faceValue: 9000 }, soffitsOf(surfaceOf()), OPTS), far, '面が足元の外');
+});
+
+test('【S8-4】階段の対の部屋（stairRoomId）が所有する区間は対象外', () => {
+  const segs = [SEG];
+  const opts = { ...OPTS, ownerRoomIdOf: () => 'stairRoom' };
+  assert.equal(minCeilingSegmentsWithSoffits(segs, FACE, soffitsOf(surfaceOf(), 'stairRoom'), opts), segs);
+  const other = minCeilingSegmentsWithSoffits(segs, FACE, soffitsOf(surfaceOf(), 'stairRoom'), { ...OPTS, ownerRoomIdOf: () => 'underRoom' });
+  assert.equal(other.length, 2, '別の部屋（階段下の部屋）は対象');
+});
+
+test('【S8-4】dirSign=-1（面ローカル x が世界と逆向き）でも同じ世界位置で割れ、区間は局所 x の昇順', () => {
+  const face = { faceValue: 500, isVertical: true, dirSign: -1, originWorld: 4000 };
+  const seg = { ...SEG, loX: 0, hiX: 3942.5 }; // 世界 y = 4000−x
+  const out = minCeilingSegmentsWithSoffits([seg], face, soffitsOf(surfaceOf()), OPTS);
+  assert.equal(out.length, 2);
+  near(out[0].hiX, 4000 - yAt(3000), '交点（局所）');
+  near(out[0].chMm, 2400, '局所 0＝世界 y=4000＝上り口の裏面'); near(out[0].chHiMm, 3000, '交点で元の天井に接する');
+  assert.equal(out[1].chMm, 3000); assert.equal(out[1].chHiMm, undefined);
+});
+
+test('【S8-4・B-1】chMm 未指定の区間: defaultCh 省略（Infinity）なら裏面が勝ち chMm/chHiMm＝裏面の値・掛からない部分は chMm を付けない。defaultCh:3000 は chMm:3000 と同じ割れ方', () => {
+  const noCh = { loX: 57.5, hiX: 5000, floorDeltaMm: 0 }; // 足元は y≈4000 まで＝4000 以降は裏面が掛からない
+  const out = minCeilingSegmentsWithSoffits([noCh], FACE, soffitsOf(surfaceOf()), OPTS);
+  assert.ok(out.length >= 2, `割れる: ${out.length}`);
+  const covered = out.filter(s => s.hiX <= 4000 + 1e-6), rest = out.filter(s => s.loX >= 4000 - 1e-6);
+  assert.ok(covered.length > 0 && rest.length === 1, '裏面に掛かる部分と掛からない部分');
+  assert.ok(covered.every(s => Number.isFinite(s.chMm)), '裏面の値（NaN・Infinity にならない）');
+  near(covered[0].chMm, zTop(6), '前縁の平ら部＝裏面の値');
+  near(covered[covered.length - 1].chHiMm, 2400, '上り口は裏面 2400');
+  assert.ok(!('chMm' in rest[0]) && !('chHiMm' in rest[0]), '掛からない部分は chMm を付けない');
+  const d3 = minCeilingSegmentsWithSoffits([{ ...noCh, hiX: 4000 }], FACE, soffitsOf(surfaceOf()), { ...OPTS, defaultCh: 3000 });
+  const c3 = minCeilingSegmentsWithSoffits([{ ...SEG, loCLId: undefined, hiCLId: undefined }], FACE, soffitsOf(surfaceOf()), OPTS);
+  // 元のまま平らな部品は chMm の有無だけが違う（未指定は未指定のまま・指定は指定のまま＝既存の規約）ので、傾斜の無い部品の chMm は比べない
+  const strip = a => a.map(s => { const r = { ...s }; delete r.loCLId; delete r.hiCLId; if (r.chHiMm === undefined) delete r.chMm; return r; });
+  assert.deepEqual(strip(d3), strip(c3), 'defaultCh:3000 は chMm:3000 と同じ');
+  const hiOnly = minCeilingSegmentsWithSoffits([{ ...noCh, hiX: 4000, chHiMm: 3000 }], FACE, soffitsOf(surfaceOf()), OPTS);
+  assert.deepEqual(strip(hiOnly), strip(c3), 'chHiMm だけの区間は水平（chMm 未指定でも NaN にならない）');
+});
+
+test('【S8-4・失敗系】soffits 空・引数欠落・zAt が NaN の裏面・face が不正は元の配列をそのまま返し、例外を投げない', () => {
+  const segs = [SEG];
+  const orig = JSON.parse(JSON.stringify(segs));
+  assert.equal(minCeilingSegmentsWithSoffits(segs, FACE, [], OPTS), segs, 'soffits 空');
+  assert.equal(minCeilingSegmentsWithSoffits(segs, FACE, undefined, OPTS), segs, 'soffits なし');
+  assert.equal(minCeilingSegmentsWithSoffits(segs, FACE, soffitsOf(surfaceOf(() => NaN)), OPTS), segs, 'zAt が NaN');
+  assert.equal(minCeilingSegmentsWithSoffits(segs, { ...FACE, faceValue: NaN }, soffitsOf(surfaceOf()), OPTS), segs, 'face が NaN');
+  assert.equal(minCeilingSegmentsWithSoffits(segs, FACE, soffitsOf(surfaceOf()), {}), segs, 'floorZFor 欠落');
+  assert.equal(minCeilingSegmentsWithSoffits(segs, FACE, soffitsOf(surfaceOf()), { floorZFor: () => NaN }), segs, 'FL が NaN');
+  assert.equal(minCeilingSegmentsWithSoffits(segs, FACE, [{ stairId: 's', stairRoomId: null, surface: null }], OPTS), segs, 'surface なし');
+  assert.deepEqual(segs, orig, '入力を破壊しない');
+  assert.deepEqual(minCeilingSegmentsWithSoffits([], FACE, soffitsOf(surfaceOf()), OPTS), []);
 });
