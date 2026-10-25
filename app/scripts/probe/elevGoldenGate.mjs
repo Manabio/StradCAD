@@ -45,7 +45,7 @@ export const TARGETS = [
   { dir: 'golden-elev-moku16', stq: 'moku1-6', flags: REGEN },
   ...['ceiling-steel-stair-test', 'ceiling-wood-stair-test', 'ceiling-zone-far-test',
     'ceiling-zone-slope-far-test', 'ceiling-zone-test', 'moku4-3'].map(ceiling),
-  ...[1, 2, 3, 4, 5].map(ports),
+  ...[1, 2, 3, 4, 5, 6, 7].map(ports),
 ];
 
 /** 出力・基準ディレクトリ内の、対象ごとのサブディレクトリ名。 */

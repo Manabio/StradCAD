@@ -1,0 +1,20 @@
+[
+ {
+  "plane": "1階",
+  "rooms": 12,
+  "prims": 958,
+  "errors": 0
+ },
+ {
+  "plane": "2階",
+  "rooms": 2,
+  "prims": 314,
+  "errors": 0
+ },
+ {
+  "plane": "3階",
+  "rooms": 0,
+  "prims": 0,
+  "errors": 0
+ }
+]

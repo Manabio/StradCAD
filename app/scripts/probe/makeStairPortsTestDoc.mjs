@@ -11,20 +11,26 @@
 //   stair-ports-test4.stq … 折返し・鉄骨: 上り口・到達口とも側面で e=0・a=0（平場。T1 の Q2/Q3 の目視用）
 //   stair-ports-test5.stq … 折返し・木造: 上り口 e=1・到達口 a=2（T1 の到達口 a≥1 の目視用）
 // 木造の側面の口は取りつき最低 1 段（alignPortStairsOnGraph）なので、平場（0）は鉄骨で作る。
+//   stair-ports-test6.stq … 直進・木造・走行端の口・sections [15]・2階にも続きの直進階段（E5-2 の足場。upper）
+//   stair-ports-test7.stq … 踊場付直進・木造・[7,1,8]（test3 と同じ ys）・2階にも続きの階段（upper）
+// upper の variant は、2階の足元の STAIR_VOID を外して 1階の階段を 2階へ写し（copyStairsToGraph）、3階に STAIR_VOID を作る
+// （reconcileStairVoids）。2階の階段が 1階の「続き」（matchingStairBelow）で裏面が引けること・両階の切断線が足元の辺に乗ること
+// （straightPlanLayout の run.base の差）を expect で確かめる。
 // 作ったあとの確認と golden の採取（app/ から。golden は文書ごとのサブディレクトリ）:
 //   node --import ./scripts/testSetup.mjs scripts/probe/diffStairElevPlan.mjs D:/tatsuya/Download/stair-ports-test1.stq   … 不一致 0（exit 0）
 //   node --import ./scripts/testSetup.mjs scripts/probe/dumpElevFigure.mjs scripts/probe/golden-elev-stairports/stair-ports-test1 D:/tatsuya/Download/stair-ports-test1.stq --regen
 //   node scripts/probe/diffElevGolden.mjs scripts/probe/golden-elev-stairports/stair-ports-test1 <新しい出力dir>   … 一致で exit 0
-// （test2〜5 も同じ。採取は stair-ports-test1〜5 の 5 文書）。
+// （test2〜7 も同じ。採取は stair-ports-test1〜7 の 7 文書）。
 //
-// 使い方: node --import ./scripts/testSetup.mjs scripts/probe/makeStairPortsTestDoc.mjs [出力先の接頭辞（既定 D:/tatsuya/Download/stair-ports-test）]
-// 既存ファイルは上書きしない（出力先 <接頭辞>N.stq が 1 つでも在れば何も作らず終了）。
+// 使い方: node --import ./scripts/testSetup.mjs scripts/probe/makeStairPortsTestDoc.mjs [出力先の接頭辞（既定 D:/tatsuya/Download/stair-ports-test）] [--variants 6,7]
+// 既存ファイルは上書きしない（選んだ variant の出力先 <接頭辞>N.stq が 1 つでも在れば何も作らず終了）。
+// --variants 省略時は全 variant が対象、指定時は選んだ番号だけが作成・既存検査の対象（test1〜5 が在っても 6・7 だけ作れる）。
 import fs from 'node:fs';
 import { runInAction } from 'mobx';
 import { loadDocument } from './loadDoc.mjs';
 import { serializeGraph, serializeStructCLs, serializePlanes, restoreGraph, restoreStructCLs, decodePlanes } from '../../src/graphSnapshot.js';
 import { buildDocumentJson, parseDocumentEnvelope } from '../../src/storage/documentFile.js';
-import { Project, CenterLineType, Discipline, StairType, StairPortSide, StructuralMaterialType } from '../../src/core.js';
+import { Project, CenterLineType, Discipline, StairType, StairPortSide, StructuralMaterialType, RoomFeature } from '../../src/core.js';
 import { refreshCells } from '../../src/finish/gridCells.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { loadMaterialMap, regenerateWalls } from '../../src/finish/wallRegeneration.js';
@@ -37,8 +43,21 @@ import { alignPortStairsOnGraph } from '../../src/finish/stair/stairSectionEdit.
 import { straightPlanLayout, uTurnPlanLayout } from '../../src/finish/stair/stairGeometry.js';
 import { measureStairSpans } from '../../src/finish/stair/stairClassify.js';
 import { sweepUntilConverged } from './sweepOrder.mjs';
+import { copyStairsToGraph } from '../../src/finish/stair/stairFloorCopy.js';
+import { reconcileStairVoids } from '../../src/finish/stair/stairVoidReconcile.js';
+import { floorHeightAbove, stairRiserOf } from '../../src/finish/stair/stairDimensions.js';
+import { matchingStairBelow } from '../../src/structural/openingBeamAxes.js';
+import { stairSoffitAbove } from '../../src/elevation/space/stairSoffitCeiling.js';
 
-const prefix = process.argv[2] ?? 'D:/tatsuya/Download/stair-ports-test';
+const args = process.argv.slice(2);
+const vIdx = args.indexOf('--variants');
+const variantArg = vIdx >= 0 ? args[vIdx + 1] : null;
+if (vIdx >= 0 && (variantArg == null || variantArg.startsWith('--'))) {
+  console.error('用法: --variants には番号の並び（例: 6,7）を指定してください');
+  process.exit(2);
+}
+if (vIdx >= 0) args.splice(vIdx, 2);
+const prefix = args[0] ?? 'D:/tatsuya/Download/stair-ports-test';
 const srcPath = 'D:/tatsuya/Download/2026模擬試験.stq';
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
 const { LEFT, RIGHT } = StairPortSide;
@@ -86,11 +105,34 @@ const VARIANTS = [
     sides: true,
     expect: (stair, graph) => { const p = uTurnPlanLayout(stair, graph); return p?.entryPort !== 'end' && p?.arrivalPort !== 'end' && p.entryTurnSteps === 1 && p.arrivalTurnSteps === 2; },
   },
+  {
+    n: 6, title: '直進・木造・走行端の口・sections [15]・2階にも続きの階段',
+    ys: [], xs: [], upper: true,
+    apply: () => ({ type: StairType.STRAIGHT, structure: StructuralMaterialType.WOOD, sections: [15], entrySide: null, entryTurnSteps: 0, arrivalSide: null, arrivalTurnSteps: 0 }),
+    expect: (stair, graph) => { const p = straightPlanLayout(stair, graph); return p?.entryPort === 'end' && p.arrivalPort === 'end' && p.totalSteps === 15; },
+  },
+  {
+    n: 7, title: '踊場付直進・木造・[7,1,8]・2階にも続きの階段',
+    ys: [-8190, -8490], xs: [], upper: true,
+    apply: () => ({ type: StairType.STRAIGHT_LANDING, structure: StructuralMaterialType.WOOD, sections: [7, 1, 8], entrySide: null, entryTurnSteps: 0, arrivalSide: null, arrivalTurnSteps: 0 }),
+    expect: (stair, graph) => {
+      const p = straightPlanLayout(stair, graph);
+      const lens = measureStairSpans(stair, graph)?.lengths;
+      return p?.hasLanding === true && p.entryPort === 'end' && p.arrivalPort === 'end' && Array.isArray(lens) && lens.length === 3;
+    },
+  },
 ];
 
+// 選んだ variant（--variants N,N。省略は全部）。不正な指定は用法違反として終了する
+const selected = variantArg == null ? VARIANTS : VARIANTS.filter(v => variantArg.split(',').map(Number).includes(v.n));
+if (variantArg != null && (selected.length === 0 || variantArg.split(',').some(s => !VARIANTS.some(v => v.n === Number(s))))) {
+  console.error(`不正な --variants: ${variantArg}（有効: ${VARIANTS.map(v => v.n).join(',')}）`);
+  process.exit(2);
+}
+
 const outOf = (n) => `${prefix}${n}.stq`;
-if (VARIANTS.some(v => fs.existsSync(outOf(v.n)))) {
-  console.error(`既存ファイルを上書きしません: ${VARIANTS.map(v => outOf(v.n)).filter(fs.existsSync).join(', ')}`);
+if (selected.some(v => fs.existsSync(outOf(v.n)))) {
+  console.error(`既存ファイルを上書きしません: ${selected.map(v => outOf(v.n)).filter(fs.existsSync).join(', ')}`);
   process.exit(1);
 }
 
@@ -131,7 +173,7 @@ function digestProject(proj) {
 }
 
 let failed = false;
-for (const v of VARIANTS) {
+for (const v of selected) {
   console.log(`\n=== stair-ports-test${v.n}: ${v.title} ===`);
   const { project } = loadDocument(srcPath);
   floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
@@ -164,6 +206,29 @@ for (const v of VARIANTS) {
   }
   console.log(`  階段: ${stair.type} ${stair.structure} sections=${JSON.stringify(stair.sections)} 総蹴上数=${stair.totalSteps} セル ${stair.cells.size} 個 e=${stair.entryTurnSteps}(${stair.entrySide}) a=${stair.arrivalTurnSteps}(${stair.arrivalSide})`);
 
+  // (2b) upper: 2階へ続きの階段を写し、3階に STAIR_VOID を作る（STAIR_VOID は isCarvableRoom でないので先に外す）
+  let g2 = null;
+  let g3 = null;
+  if (v.upper) {
+    const plane2 = project.planes.find(p => p.name === '2階');
+    const plane3 = project.planes.find(p => p.name === '3階');
+    g2 = project.graphMap.get(plane2.id);
+    g3 = project.graphMap.get(plane3.id);
+    if (g2.stairs.length !== 0) throw new Error('2階に階段が無い前提（2026模擬試験.stq の構成が変わった？）');
+    // 外す STAIR_VOID は 1階の唯一の階段の吹抜け 1 つだけのはず（複数あれば別の階段の吹抜けまで消すので止める）
+    const voids2 = g2.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID);
+    if (voids2.length !== 1) throw new Error(`test${v.n}: 2階の STAIR_VOID が ${voids2.length} 個（1 個の前提）`);
+    runInAction(() => {
+      for (const room of voids2) g2.removeRoom(room.id);
+      const res = copyStairsToGraph(g2, g1, project.structGraph, { floorHeight: floorHeightAbove(project, plane2) });
+      if (res.copied.length !== 1) throw new Error(`test${v.n}: 2階へ階段を写せません: ${JSON.stringify(res.skipped)}`);
+      reconcileStairVoids(g3, g2, project.structGraph);
+    });
+    console.log(`  2階の階段: ${g2.stairs.length} 個・3階の STAIR_VOID: ${g3.rooms.filter(r => r.feature === RoomFeature.STAIR_VOID).length} 個`);
+    g2.setWallFreshnessKey(null);
+    g3.setWallFreshnessKey(null);
+  }
+
   // (3) 本番と同じ壁の再生成 → 構造再計算
   g1.setWallFreshnessKey(null);
   console.log('  壁再生成対象階:', await runSweep(project));
@@ -176,6 +241,22 @@ for (const v of VARIANTS) {
   const changedByAlign = runInAction(() => alignPortStairsOnGraph(g1));
   if (changedByAlign) { console.error(`NG: test${v.n}: alignPortStairsOnGraph が値を書き換えた（木造の平場 0 など）`); failed = true; continue; }
   console.log('  OK: 出入口・取りつき段数は意図どおり（alignPortStairsOnGraph は書き換えなし）');
+
+  // (4b) upper: 2階の階段が 1階の続きと判定され、裏面が引け、切断線の基点が一致すること
+  if (v.upper) {
+    const plane1p = g1.plane;
+    const plane2p = g2.plane;
+    const t = g2.stairs[0];
+    const floorHeightMm = floorHeightAbove(project, plane1p);
+    const riserOf2 = s => stairRiserOf(s, project, plane2p);
+    const below = t ? matchingStairBelow(t, g2, g1) : null;
+    const soffit = stair ? stairSoffitAbove({ stair, graph: g1, upperGraph: g2, floorHeightMm, riserOf: riserOf2 }) : null;
+    const p1 = straightPlanLayout(stair, g1);
+    const p2 = t ? straightPlanLayout(t, g2) : null;
+    const dBase = p1 && p2 ? Math.abs(p1.run.base - p2.run.base) : NaN;
+    console.log(`  expect(upper): matchingStairBelow=${below === stair ? '1階の階段' : below} / stairSoffitAbove=${soffit ? 'あり' : 'null'} / run.base の差=${dBase} mm`);
+    if (below !== stair || !soffit || !(dBase <= 0.5)) { console.error(`NG: test${v.n}: 2階の続きの階段の条件を満たしません`); failed = true; continue; }
+  }
 
   // (5) 往復テスト
   const floors = [...project.planes].map(p => ({ planeId: p.id, bytes: serializeGraph(project.graphMap.get(p.id)) }));
