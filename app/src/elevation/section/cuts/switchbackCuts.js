@@ -23,7 +23,8 @@ import { roomBounds } from '../../../finish/gridCells.js';
 import { makeFrame, cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
 import { stairUnderRoomsOf } from '../../../finish/stair/stairUnderRooms.js';
 import { U_TURN_TYPES } from '../../../finish/stair/stairPorts.js';
-import { isStairPartitionWall, stairPartitionLines } from '../../../finish/stair/stairPartition.js';
+import { stairHasPartition, isStairPartitionWall, stairPartitionLines } from '../../../finish/stair/stairPartition.js';
+import { effectiveStructure } from '../../../structural/structureRules.js';
 import { letterOf, letterForDirSign, DIR_SIGN, perpFaceAt } from '../faceGeometry.js';
 import { kneeDropRecordFor } from '../../../finish/kneeDropWall.js';
 import { resolveUTurnSectionParams } from '../stairSectionProfile.js';
@@ -116,29 +117,60 @@ function facePoint(face) {
   return face.isVertical ? { x: face.faceValue, y: mid } : { x: mid, y: face.faceValue };
 }
 
-function mergeFaces(list) {
+/**
+ * 同じ役割の面の組を 1 枚へ合併する。lo/hi は組の合併、面の同定（faceValue・axisCL 等）は
+ * `distOf`（理想の位置からの距離）が最小の面＝基準面（同点は並び順の先）。distOf 省略時は先頭。
+ */
+function mergeFaces(list, distOf = null) {
   if (list.length === 0) return null;
   if (list.length === 1) return list[0];
   const lo = Math.min(...list.map(f => f.lo));
   const hi = Math.max(...list.map(f => f.hi));
-  const base = list[0];
+  let base = list[0];
+  if (distOf) {
+    let best = distOf(base);
+    for (const face of list) {
+      const d = distOf(face);
+      if (d < best) { best = d; base = face; }
+    }
+  }
   return { ...base, lo, hi, run: hi - lo, originWorld: base.dirSign > 0 ? lo : hi };
 }
 
 /**
  * faces（composeRoomFacesの結果）を、makeFrameのtOf/sOfで物理的な役割へ分類する
- * （elevationStairSequence.jsから移設。挙動不変）。
+ * `planFrame`（stairContribution の frame＝平面の解決値の前縁 front・奥 back）を渡すと（U字系）、
+ * 走行軸に直交する面の振り分けを平面の値で行い（前縁 front を越えて奥側なら踊り場・それ以外は上り口。
+ * t の近さは L 字の階段室で崩れる）、上り口・踊り場の同定面を理想の位置（t=0・t=1）に最も近い面にする
+ * （組の先頭ではなく）。out1/out2 は従来どおり組の先頭。省略時（直進系）は従来どおり t の近さ・組の先頭。
+ * @param {object[]} faces
+ * @param {object} f makeFrame の結果
+ * @param {{frontA?:number, front:number, back:number}|null} [planFrame]
  * @returns {{wEntry:object|null, wLanding:object|null, wOut1:object|null, wOut2:object|null}}
  */
-export function classifyFaces(faces, f) {
+export function classifyFaces(faces, f, planFrame = null) {
   const buckets = { entry: [], landing: [], out1: [], out2: [] };
   const midFaces = new Set();
+  // 走行の向き（上り口→奥）の世界座標の符号。planFrame があるときだけ使う。
+  let fwd = 1;
+  if (planFrame) {
+    const p0 = f.pt(0, 0.5), p1 = f.pt(1, 0.5);
+    fwd = Math.sign(f.vertical ? p1.y - p0.y : p1.x - p0.x) || 1;
+  }
   for (const face of faces) {
     if (face.kind === 'step') continue;
     const pt = facePoint(face);
     if (face.isVertical !== f.vertical) {
-      const t = f.tOf(pt);
-      (Math.abs(t) <= Math.abs(t - 1) ? buckets.entry : buckets.landing).push(face);
+      let beyondFront;
+      if (planFrame) {
+        // 境界は往路側の前縁 frontA（隔て板の柱があると front より上り口側にある）。前縁の線上の面
+        // （踊り場の張り出しの縁。柱の半幅だけ front の手前に出る）は踊り場側へ。
+        beyondFront = (face.faceValue - (planFrame.frontA ?? planFrame.front)) * fwd > -GAP_EPS_MM;
+      } else {
+        const t = f.tOf(pt);
+        beyondFront = Math.abs(t) > Math.abs(t - 1);
+      }
+      (beyondFront ? buckets.landing : buckets.entry).push(face);
     } else {
       const s = f.sOf(pt);
       (Math.abs(s) <= Math.abs(s - 1) ? buckets.out1 : buckets.out2).push(face);
@@ -154,31 +186,51 @@ export function classifyFaces(faces, f) {
     const outer = buckets[key].filter(face => !midFaces.has(face));
     if (outer.length > 0) buckets[key] = outer;
   }
+  // 同定面の基準は上り口（t=0）・踊り場（t=1）だけ理想の位置に最も近い面にする。out1/out2 は従来どおり先頭:
+  // 階段下部屋の除外壁（hasRealWall:false）の面が先頭に来る既存の構成（elevationStair.test.js 第2ラウンド項目3(1)）が
+  // 基準面の差で変わってしまうため（S2 で扱うか裁定が要る）。
+  const distToT = target => (planFrame ? face => Math.abs(f.tOf(facePoint(face)) - target) : null);
   return {
-    wEntry: mergeFaces(buckets.entry), wLanding: mergeFaces(buckets.landing),
+    wEntry: mergeFaces(buckets.entry, distToT(0)), wLanding: mergeFaces(buckets.landing, distToT(1)),
     wOut1: mergeFaces(buckets.out1), wOut2: mergeFaces(buckets.out2),
   };
 }
 
 /**
- * 往路・復路の間の壁（実在すれば）を返す（elevationStairSequence.jsから移設。挙動不変）。
+ * 往路・復路の間の壁（実在すれば）を返す。レーン境界の幅方向座標 `midAcross`（平面の解決値のあき／
+ * 隔て板の位置＝acrossCoordAt(0.5)）を渡すとそこを探す。省略時は wEntry の幅方向の中点（面の範囲が
+ * 矩形の形のときだけ境界と一致する。L 字の階段室では外れる）。
+ * @param {number} [midAcross]
  * @returns {import('@core').Wall|null}
  */
-export function findMidWall(wallGraph, wEntry, wLanding, landingLen, f) {
+export function findMidWall(wallGraph, wEntry, wLanding, landingLen, f, midAcross = null) {
   if (!wEntry || !wLanding || !wallGraph) return null;
-  const midCoord = (wEntry.lo + wEntry.hi) / 2;
+  const midCoord = midAcross ?? (wEntry.lo + wEntry.hi) / 2;
   const travelSign = Math.sign(wLanding.faceValue - wEntry.faceValue) || 1;
   const landingStartWorld = wLanding.faceValue - travelSign * landingLen;
   const lo = Math.min(wEntry.faceValue, landingStartWorld);
   const hi = Math.max(wEntry.faceValue, landingStartWorld);
+  // 候補が複数あれば、踊り場の前縁（landingStartWorld）まで届く壁を先に採る（往路・復路のレーンが出会う所まで
+  // 続くのが往復レーンの境界）。L 字の階段室では切り欠きの短い縦壁が同じ軸 CL にあり、先着では取り違える。
+  // 並びは壁リストの順に依らず決定的にする: 前縁に届く壁 → 外壁でない壁 → 軸が境界に近い壁 → リスト順（同値のみ）。
+  // 隔て板の形の壁（座標照合）は、外壁・階段下の壁より先に採る。
+  const partitionLines = stairPartitionLines(wallGraph);
+  let found = null, foundKey = null, idx = 0;
   for (const w of graphList(wallGraph, 'walls') ?? []) {
+    idx++;
     if (w.isVertical !== f.vertical) continue;
-    if (Math.abs(w.axisCL.effectiveValue - midCoord) > MID_WALL_TOL_MM) continue;
+    const axisDist = Math.abs(w.axisCL.effectiveValue - midCoord);
+    if (axisDist > MID_WALL_TOL_MM) continue;
     const wLo = Math.min(w.coord1, w.coord2), wHi = Math.max(w.coord1, w.coord2);
     if (wHi <= lo || wLo >= hi) continue;
-    return w;
+    // 隔て板は踊り場の手前（前縁の柱の面）で終わるので、前縁との差は壁厚程度まで許す
+    const reaches = wLo - MID_WALL_TOL_MM <= landingStartWorld && landingStartWorld <= wHi + MID_WALL_TOL_MM;
+    const key = [reaches ? 0 : 1, isStairPartitionWall(w, partitionLines) ? 0 : 1, w.isExteriorWall ? 1 : 0, axisDist, idx];
+    if (!foundKey || key.some((v, i) => v !== foundKey[i] && (v < foundKey[i]) && key.slice(0, i).every((u, j) => u === foundKey[j]))) {
+      found = w; foundKey = key;
+    }
   }
-  return null;
+  return found;
 }
 
 /**
@@ -365,7 +417,12 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
 
   const b = roomBounds(stair.cells, graph);
   const f = makeFrame(stair, b);
-  const rawFaces = classifyFaces(faces, f);
+  // 階段の3D寄与。走行方向の位置（往路の終端 frontA・復路側の前縁 front・踊り場の奥 back）は平面の解決値
+  // （stairContribution が uTurnPlanLayout から取る）で、切断線の位置と歩行方向もここから導く。
+  // faces に依存しないので面の分類より先に求め、面の振り分け・同定にも平面の値（frame）を使う（L 字の階段室対応）。
+  const contribution = stairContribution(stair, graph, floorHeight, opts.upperGraph ?? null);
+  if (!contribution) return null; // 平面の枠が求まらない（以降は contribution を前提にする）
+  const rawFaces = classifyFaces(faces, f, contribution.frame);
   if (!rawFaces.wEntry || !rawFaces.wLanding || !rawFaces.wOut1 || !rawFaces.wOut2) return null;
 
   // WP-E5b: cut.line/viewSign/dirSignをW(t,s)座標系から独立に再導出する（switchbackCuts.js冒頭の
@@ -377,10 +434,6 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // travelCoordAt: 走行方向(t)の世界座標（幅方向にも依存しないためs=0.5固定で良い）。
   const travelCoordAt = t => { const p = f.pt(t, 0.5); return f.vertical ? p.y : p.x; };
 
-  // 階段の3D寄与。走行方向の位置（往路の終端 frontA・復路側の前縁 front・踊り場の奥 back）は平面の解決値
-  // （stairContribution が uTurnPlanLayout から取る）で、切断線の位置と歩行方向もここから導く。
-  const contribution = stairContribution(stair, graph, floorHeight, opts.upperGraph ?? null);
-  if (!contribution) return null; // 平面の枠が求まらない（以降は contribution を前提にする）
   const { frontA: frameFrontA, front: frameFront, back: frameBack } = contribution.frame;
 
   // ==== 図の左右（dirSign）は**仮想断面の視線の向き**だけで決める（ユーザー裁定 2026-10-15）====
@@ -418,10 +471,11 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const wallGraph = opts.upperGraph ?? graph;
   // 踊り場の奥行きは平面の解決値（frame の front〜back）から取る。CL 区間長（params.landingLen）は使わない。
   const landingDepthMm = Math.abs(frameBack - frameFront);
-  const wall = findMidWall(wallGraph, wEntry, wLanding, landingDepthMm, f);
-  // 往復レーンの境界（実機の「中心1」）。実壁があればその壁のCL、無ければ同位置の中心線を軸にする
-  // ——seq2はこの面を見る（下の`face`の割り当てコメント参照）ため、壁の有無に関わらず面が要る。
+  // 往復レーンの境界（実機の「中心1」）の幅方向座標。隔て板の検出もここを探す（wEntry の中点は L 字で外れる）。
   const midAcross = acrossCoordAt(0.5);
+  const wall = findMidWall(wallGraph, wEntry, wLanding, landingDepthMm, f, midAcross);
+  // 実壁があればその壁のCL、無ければ同位置の中心線を軸にする
+  // ——seq2はこの面を見る（下の`face`の割り当てコメント参照）ため、壁の有無に関わらず面が要る。
   const midCLType = wOut1.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
   const midCL = wall?.axisCL ?? (graphList(graph, 'centerLines') ?? []).find(cl =>
     cl.centerLineType === midCLType && !isCeilingOnlyKind(cl) && Math.abs(cl.effectiveValue - midAcross) <= MID_WALL_TOL_MM) ?? null;
@@ -542,7 +596,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // 隔て板を横切る切断）では隔て板を床から天井断面線までの 1 本の断面にする（sectionEngine.js buildColumns が
   // 自階の壁の帯と上階の壁の帯を合併する。ユーザー指示 2026-10-15「moku4-3 1階 階段 A: 隔て板の断面線は床断面から天井断面線まで」。
   // 裁定「木造階段の最上階は除く＝従来どおり天板〔隔て板の天端〕の見え掛かり」: 上階に隔て板が無ければ付けない）。
-  const ownMidWall = findMidWall(graph, wEntry, wLanding, landingDepthMm, f);
+  const ownMidWall = findMidWall(graph, wEntry, wLanding, landingDepthMm, f, midAcross);
   const continuousPartition = wall && ownMidWall && wallGraph !== graph ? partitionStripOf(wall, wallGraph) : null;
   const cuts = [
     makeSectionCut({
@@ -568,7 +622,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       // 空気で、面の抜けではない（ユーザー裁定2026-10-14「バツは不要」）。隔て板は階段室の自階の壁なので
       // `wall`（upperGraph 優先の探索）ではなく自階の graph で探す。上階側だけにある往復間の壁（2F の腰壁等）の
       // 上のアキは従来どおり標記する（「6」C の裁定2026-09を保つ）。自階に実壁が無い（鉄骨等）ときも従来どおり。
-      ...(findMidWall(graph, wEntry, wLanding, landingDepthMm, f) ? { openGapMarks: false } : {}),
+      ...(ownMidWall ? { openGapMarks: false } : {}),
       layers, zRange: zRangeUpper, baseFloorZ: 0, stairCut: outboundWithLandingSeq2,
     }),
   ];
@@ -618,7 +672,11 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
     // 文字（D）になり、labelFaces が D1/D2 に採番する。
     // 自階の往復間の壁が**隔て板**（木造 U 字階段の stairPartition）のときだけ。階段下の部屋の壁（2a）などが往復間に立つ構成
     // （「6」の 1 階）は従来の 5 面のまま（2026-08 の「6」の裁定を変えない）。
-    if (ownMidWall && isStairPartitionWall(ownMidWall, stairPartitionLines(graph))) {
+    // 隔て板の有無は規則（木造＝あり／鉄骨＝なし。stairHasPartition）で決め、往復間の壁が実際に隔て板であること
+    // （階段下の部屋の壁・外壁が往復間に立つ構成は従来の 5 面）を座標照合で重ねる。壁の選択は findMidWall が
+    // 並び順に依らず決める（隔て板の形の壁を先に）ので、seq6 の有無は並び順で変わらない。
+    if (ownMidWall && stairHasPartition(stair, graph, effectiveStructure(graph))
+      &&isStairPartitionWall(ownMidWall, stairPartitionLines(graph))) {
       // 面の幾何（inward・letter）は視線の逆＝往路外側の壁 wOut1 と同じ向き（seq2 の midOutFace は wOut2 の向き）
       const face6 = reorientFace({ ...midOutFace, inward: wOut1.inward, letter: letterOf(wOut1.isVertical, wOut1.inward) }, seq4DirSign);
       const inboundLaneLineOnMid = { isVertical: wOut1.isVertical, axisValue: inboundLaneAcross, lo: wOut1.lo, hi: wOut1.hi };

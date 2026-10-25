@@ -7,8 +7,9 @@ import { halfWallThicknessMm } from '../floorProfileMath.js';
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../../elevationFaceList.js';
 import { letterOf, DIR_SIGN } from '../../elevationFaces.js';
-import { switchbackCuts, stairBandWallFilter, classifyFaces, LANDING_CUT_INSET_MM } from './switchbackCuts.js';
-import { cellsBeyondBreak, uTurnPlanLayout } from '../../../finish/stair/stairGeometry.js';
+import { switchbackCuts, stairBandWallFilter, classifyFaces, findMidWall, LANDING_CUT_INSET_MM } from './switchbackCuts.js';
+import { roomBounds } from '../../../finish/gridCells.js';
+import { cellsBeyondBreak, uTurnPlanLayout, makeFrame } from '../../../finish/stair/stairGeometry.js';
 import { generateStairPartitionWalls } from '../../../finish/stair/stairPartitionWalls.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../../../structural/structureRules.js';
 import { buildBandLayers } from '../sectionBandLayers.js';
@@ -1015,58 +1016,100 @@ function lShapeCase(opts) {
   const { room, stair } = makeLShapeFixture(graph, opts);
   const t = switchbackCuts(stair, composeRoomFaces(room, graph), graph, { ...OPTS, layers: buildBandLayers(graph) });
   assert.ok(t, '前提: L 字の階段室でも切断表は組める（null ではない）');
-  return { graph, stair, t, plan: uTurnPlanLayout(stair, graph), cut: no => t.cuts.find(c => c.seqNo === no) };
+  const reversed = switchbackCuts(stair, composeRoomFaces(room, graph).reverse(), graph, { ...OPTS, layers: buildBandLayers(graph) });
+  return { graph, stair, room, t, reversed, plan: uTurnPlanLayout(stair, graph), cut: no => t.cuts.find(c => c.seqNo === no) };
 }
 const L_CASES = [ // [長い方のレーン, flip, 切り欠きの壁]。flip=false は往路 x0..1000・復路 x1000..2000
   ['outbound', false, true], ['outbound', false, false], ['outbound', true, true], ['outbound', true, false],
   ['return', false, true], ['return', false, false], ['return', true, true], ['return', true, false],
 ];
 
-// 【現状の出力】上り口の面（wEntry）の同定: classifyFaces が直交する面を t の近さで振り分け、mergeFaces が list[0] で faceValue を決める。
-// 上り口の辺が切り欠きで 2 本（基端の壁・切り欠きの辺）に割れると、どちらを拾うかは面の並び（flip・壁の有無）次第になり、
-// 往路の基端（平面 run.baseA）でない辺を上り口の面にすることがある（A'。architect の読解の A「wOut1 が通り芯になる」とは別の症状）。
-// 世界座標: 上り口側の基端の壁の仕上げ面＝y=4442.5・切り欠きの辺の仕上げ面＝y=3442.5（4500・3500 の 57.5 手前）。
-// 期待（正しい値）は entryWorld≒plan.run.baseA の仕上げ面。下の ok が false の行が外れている行（現状）。
-test('【S10-7 特性・現状】switchbackCuts: 切り欠き深さ 1000（y3500..4500）の L 字では、上り口の面 wEntry が往路の基端でない辺になる行がある（A\'再現: 8 通り中 4 通り）', () => {
-  const pinned = { // 'longLane/flip/notchWall' → [entryWorld, 平面の往路の基端 baseA, 一致するか]
-    'outbound/false/true': [3442.5, 4500, false], 'outbound/false/false': [4442.5, 4500, true],
-    'outbound/true/true': [4442.5, 4500, true], 'outbound/true/false': [4442.5, 4500, true],
-    'return/false/true': [4442.5, 3500, false], 'return/false/false': [4442.5, 3500, false],
-    'return/true/true': [3442.5, 3500, true], 'return/true/false': [4442.5, 3500, false],
+// 【S1 是正後】上り口の面（wEntry）の同定: classifyFaces が直交する面を平面の前縁 front で振り分け（越えて奥側＝踊り場）、
+// mergeFaces が理想の位置（上り口は t=0＝包絡矩形の辺＝長いレーンの基端。裁定 R1 既定）に最も近い面を基準にする。
+// 旧は list[0]（面の並び・flip・壁の有無次第で、切り欠きの辺を上り口の面にする行が 8 通り中 4＝A'）。
+// 是正後は 8 通りとも包絡の基端の壁（y=4442.5）で、面の並びにも依存しない。往路が長い行は往路の基端 baseA と一致する。
+// 復路が長い行は往路の基端（baseA=3500）でなく復路の基端の壁（R1: 包絡の辺。往路の基端を上り口にするかは S2 以降の裁定）。
+// 世界座標: 基端の壁の仕上げ面＝基端の座標−57.5。
+test('【S10-7 S1 是正後】switchbackCuts: 切り欠き深さ 1000（y3500..4500）の L 字では、上り口の面 wEntry は面の並びによらず包絡の基端の壁になる（A\'。往路が長い行は baseA と一致）', () => {
+  const pinned = { // 'longLane/flip/notchWall' → 平面の往路の基端 baseA
+    'outbound/false/true': 4500, 'outbound/false/false': 4500, 'outbound/true/true': 4500, 'outbound/true/false': 4500,
+    'return/false/true': 3500, 'return/false/false': 3500, 'return/true/true': 3500, 'return/true/false': 3500,
   };
-  let wrong = 0;
   for (const [longLane, flip, notchWall] of L_CASES) {
     const key = `${longLane}/${flip}/${notchWall}`;
-    const { t, plan, cut } = lShapeCase({ longLane, flip, notchWall });
-    const [entryWorld, baseA, ok] = pinned[key];
-    assert.equal(t.entryWorld, entryWorld, `${key}: entryWorld（現状）`);
-    assert.equal(plan.run.baseA, baseA, `${key}: 平面の往路の基端`);
-    assert.equal(Math.abs(t.entryWorld - plan.run.baseA) <= 100, ok, `${key}: 上り口の面が往路の基端と一致するか（現状）`);
+    const { t, reversed, plan, cut } = lShapeCase({ longLane, flip, notchWall });
+    assert.equal(t.entryWorld, 4442.5, `${key}: 上り口の面は包絡の基端の壁`);
+    assert.equal(reversed.entryWorld, 4442.5, `${key}: 面の並びを逆にしても同じ（基準面は先頭でなく理想の位置で決まる）`);
+    assert.equal(plan.run.baseA, pinned[key], `${key}: 平面の往路の基端`);
+    if (longLane === 'outbound') assert.ok(Math.abs(t.entryWorld - plan.run.baseA) <= 100, `${key}: 往路が長い行は往路の基端と一致`);
     assert.equal(cut('1').face.faceValue, t.entryWorld, `${key}: seq1 の面は entryWorld の辺`);
     assert.equal(cut('1').line.axisValue, 1500, `${key}: seq1 の切断位置は平面の frontA（面の同定とは独立）`);
-    if (!ok) wrong++;
   }
-  assert.equal(wrong, 4, '外れる行の数（現状）。S1 の是正後は 0 になるはず');
 });
 
-// 【現状の出力】切り欠きの辺（上り口側の基端でない短いレーンの基端）が t>0.5（深さ 2500）になると、classifyFaces は
-// それを踊り場の組（landing）へ入れる（B 再現）。踊り場の組の list[0] は奥壁なので wLanding の出力は変わらない（潜在）が、
-// 上り口の組から切り欠きの辺が消えるため、往路が長い行の wEntry は（偶然）基端の壁に戻る。復路が長い行（往路の基端が
-// 切り欠きの辺）は逆に、往路の基端の辺が上り口の組から消え、復路側の基端の壁を上り口の面にし続ける（平面の baseA は 2000）。
-test('【S10-7 特性・現状】switchbackCuts: 切り欠き深さ 2500（y2000..4500・短いレーンの基端が t>0.5）では切り欠きの辺が踊り場の組へ入り、上り口の面は往路が長い行で基端の壁に戻る・復路が長い行では外れたまま（B再現）', () => {
+// 【S1 是正後】切り欠きの辺（短いレーンの基端）が t>0.5（深さ 2500）でも、平面の前縁 front（y=1500 側）を越えていない
+// 辺は上り口の組に残る（旧: t の近さで踊り場の組へ入っていた＝B）。深さ 1000 と 2500 で上り口の面は同じ（t のしきい値の偶然に依存しない）。
+const notchFaces = () => [
+  { isVertical: false, faceValue: 4442.5, lo: 1000, hi: 2000, kind: 'wall', hasRealWall: true, dirSign: 1 }, // 長いレーンの基端
+  { isVertical: false, faceValue: 1942.5, lo: 0, hi: 1000, kind: 'wall', hasRealWall: true, dirSign: 1 }, // 深さ 2500 の切り欠きの辺（t=0.567）
+  { isVertical: false, faceValue: 57.5, lo: 0, hi: 2000, kind: 'wall', hasRealWall: true, dirSign: 1 },
+];
+// 縦の走行軸（y）。走行 y:4500→0（t=(4500−y)/4500）。幅 x:0..2000。
+const notchFrame = () => ({
+  vertical: true, sOf: p => p.x / 2000, tOf: p => (4500 - p.y) / 4500,
+  pt: (t, s) => ({ x: s * 2000, y: 4500 - t * 4500 }),
+});
+test('【S10-7 S1 是正後】classifyFaces: 前縁 front を越えない辺は t>0.5 でも上り口の組に残り、基準面は理想の位置（t=0）に最も近い面（B）', () => {
+  const withPlan = classifyFaces(notchFaces(), notchFrame(), { front: 1500, back: 0 });
+  assert.equal(withPlan.wEntry.faceValue, 4442.5);
+  assert.equal(withPlan.wEntry.lo, 0, '切り欠きの辺（0..1000）が上り口の組に入り、範囲は両レーン分');
+  assert.equal(withPlan.wEntry.hi, 2000);
+  assert.equal(withPlan.wLanding.faceValue, 57.5);
+  assert.equal(withPlan.wLanding.hi, 2000);
+  // 逆順でも同じ（先頭が基準ではない）
+  const reversed = classifyFaces(notchFaces().reverse(), notchFrame(), { front: 1500, back: 0 });
+  assert.equal(reversed.wEntry.faceValue, 4442.5);
+  assert.equal(reversed.wLanding.faceValue, 57.5);
+  // 対照（planFrame 省略＝直進系の従来経路）: t の近さで切り欠きの辺は踊り場の組、基準面は先頭
+  const legacy = classifyFaces(notchFaces().reverse(), notchFrame());
+  assert.equal(legacy.wLanding.faceValue, 57.5, '従来経路は組の先頭（逆順なら奥壁）');
+  assert.equal(legacy.wEntry.faceValue, 4442.5);
+  assert.equal(legacy.wEntry.lo, 1000, '従来経路は切り欠きの辺が踊り場の組へ入り、上り口の範囲は長いレーンだけ');
+});
+
+test('【S10-7 S1 是正後】classifyFaces: 往路側の前縁 frontA（柱で front より上り口側）の線上の面は踊り場の組（13.stq 系の L 字: 張り出しの縁）', () => {
+  const faces = [...notchFaces(), { isVertical: false, faceValue: 1550, lo: 0, hi: 1500, kind: 'wall', hasRealWall: true, dirSign: 1 }];
+  const withColumn = classifyFaces(faces, notchFrame(), { frontA: 1590, front: 1500, back: 0 });
+  assert.equal(withColumn.wEntry.hi, 2000);
+  assert.equal(withColumn.wLanding.faceValue, 57.5);
+  // 1550 の面が踊り場の組に入る＝踊り場の組の合併範囲に載る（hi は 2000 のまま）が、上り口の組には入らない:
+  // 上り口の組が 1550 の面を含むと lo が 0 のまま変わらないので、範囲の違いで見分ける別の面を使う
+  const narrow = classifyFaces([
+    { isVertical: false, faceValue: 4442.5, lo: 1000, hi: 2000, kind: 'wall', hasRealWall: true, dirSign: 1 },
+    { isVertical: false, faceValue: 1550, lo: 0, hi: 1000, kind: 'wall', hasRealWall: true, dirSign: 1 },
+  ], notchFrame(), { frontA: 1590, front: 1500, back: 0 });
+  assert.equal(narrow.wEntry.lo, 1000, 'frontA の線上の面は上り口の組に入らない（範囲を広げない）');
+  assert.equal(narrow.wLanding.faceValue, 1550);
+});
+
+test('【S10-7 S1 是正後】classifyFaces: 前縁を越えた辺は踊り場の組へ・組が空なら null（失敗系）', () => {
+  const c = classifyFaces([{ isVertical: false, faceValue: 4442.5, lo: 0, hi: 2000, kind: 'wall', hasRealWall: true, dirSign: 1 }], notchFrame(), { front: 1500, back: 0 });
+  assert.ok(c.wEntry); assert.equal(c.wLanding, null, '踊り場側の面が無ければ null');
+  assert.equal(c.wOut1, null); assert.equal(c.wOut2, null);
+});
+
+test('【S10-7 S1 是正後】switchbackCuts: 切り欠き深さ 2500（y2000..4500）でも上り口の面は 8 通りとも基端の壁（y=4442.5）、wLanding は奥壁（B）', () => {
   for (const [longLane, flip, notchWall] of L_CASES) {
     const key = `${longLane}/${flip}/${notchWall}`;
     const { t, plan } = lShapeCase({ longLane, flip, notchWall, notchTop: 2000 });
-    assert.equal(t.entryWorld, 4442.5, `${key}: 上り口の面は常に y=4442.5 の壁（現状）`);
+    assert.equal(t.entryWorld, 4442.5, `${key}: 上り口の面は y=4442.5 の壁`);
     assert.equal(plan.run.baseA, longLane === 'outbound' ? 4500 : 2000, `${key}: 平面の往路の基端`);
-    assert.equal(Math.abs(t.entryWorld - plan.run.baseA) <= 100, longLane === 'outbound', `${key}: 往路が長いときだけ一致（現状）`);
-    assert.equal(t.wLanding.faceValue, 57.5, `${key}: 踊り場の組に切り欠きの辺が入っても wLanding は奥壁のまま`);
+    assert.equal(t.wLanding.faceValue, 57.5, `${key}: wLanding は奥壁`);
     assert.equal(t.wLanding.lo, 57.5); assert.equal(t.wLanding.hi, 1942.5);
   }
-  // 同じ L 字で切り欠きの深さだけを変えると、上り口の面が変わる（t のしきい値の偶然に依存する）
   const shallow = lShapeCase({ longLane: 'outbound', flip: false, notchWall: true, notchTop: 3500 }).t;
   const deep = lShapeCase({ longLane: 'outbound', flip: false, notchWall: true, notchTop: 2000 }).t;
-  assert.notEqual(shallow.entryWorld, deep.entryWorld, '往路が長い・flip=false・壁あり: 深さ 1000 では切り欠きの辺・深さ 2500 では基端の壁');
+  assert.equal(shallow.entryWorld, deep.entryWorld, '切り欠きの深さで上り口の面は変わらない');
 });
 
 // 【現状の出力】seq2/seq6 の切断線の枠（lo/hi）と面は wOut1（往路側の外壁）の範囲に固定される（:534-539・:623-624）。
@@ -1091,11 +1134,10 @@ test('【S10-7 特性・現状】switchbackCuts: 復路が長い L 字では seq
   }
 });
 
-// 【現状の出力・木造】seq6（復路レーンから隔て板を見る面）も枠が wOut1 の範囲（C）。さらに往復間の壁（隔て板）の検出
-// （findMidWall）は wEntry の幅方向の中点を使うため、wEntry の範囲が隔て板の位置（x=1000）を中点に持つ矩形の形でないと隔て板を
-// 見失う（D: seq6 が出ない・seq2 の面が実壁にならない）。切り欠きの壁を外す／深さ 2500 にすると wEntry の範囲が片レーン分に
-// 狭まって見失う。壁ありでも seq6 が出る行は 2 行だけで、面の並びと x=1000 の壁（切り欠きの縦壁・隔て板）のどちらを拾うかに依存する。
-test('【S10-7 特性・現状】switchbackCuts: 木造 L 字では往復間の隔て板の検出が wEntry の中点に依存し、切り欠きの壁なしでは seq6 が消える（D再現）。seq6 が出る行も枠は wOut1 で復路 flight が枠外へはみ出す（C再現）', () => {
+// 【S1 是正後・木造】往復間の壁（隔て板）の検出（findMidWall）は、レーン境界の座標（平面の解決値 acrossCoordAt(0.5)）を探し、
+// 同じ軸 CL 上の候補（切り欠きの縦壁・隔て板）は踊り場の前縁まで届く壁を採る。8 通りすべてで seq6 が出る（旧 D: wEntry の中点に依存して
+// 6 行で見失い、壁ありでも面の並び次第）。seq6 の枠は wOut1 の範囲のまま＝復路が長いと復路 flight が枠外へはみ出す（C。S2 で扱う・現状固定）。
+test('【S10-7 S1 是正後】switchbackCuts: 木造 L 字では往復間の隔て板をレーン境界の座標で検出し、8 通りすべてで seq6 が出る（D）。枠は wOut1 のまま復路 flight が枠外へはみ出す（C・現状）', () => {
   const found = {};
   for (const [longLane, flip, notchWall] of L_CASES) {
     const key = `${longLane}/${flip}/${notchWall}`;
@@ -1105,11 +1147,11 @@ test('【S10-7 特性・現状】switchbackCuts: 木造 L 字では往復間の�
     found[key] = t.cuts.map(c => c.seqNo).join('');
   }
   assert.deepEqual(found, {
-    'outbound/false/true': '123456', 'outbound/false/false': '12345',
-    'outbound/true/true': '12345', 'outbound/true/false': '12345',
-    'return/false/true': '12345', 'return/false/false': '12345',
-    'return/true/true': '123456', 'return/true/false': '12345',
-  }, '現状: seq6 が出るのは 2 行だけ（隔て板があるのに 6 面にならない行が 6 行）');
+    'outbound/false/true': '123456', 'outbound/false/false': '123456',
+    'outbound/true/true': '123456', 'outbound/true/false': '123456',
+    'return/false/true': '123456', 'return/false/false': '123456',
+    'return/true/true': '123456', 'return/true/false': '123456',
+  }, 'S1 是正後: 隔て板があれば 8 通りすべてで seq6 が出る（旧は 2 行だけ）');
   // seq6 が出る行（復路が長い・flip=true・壁あり）: 枠は wOut1 の範囲（〜3442.5）、復路の flight は 4500 まで
   const { t, cut } = lShapeCase({ longLane: 'return', flip: true, notchWall: true, wood: true });
   const seq6 = cut('6');
@@ -1117,8 +1159,51 @@ test('【S10-7 特性・現状】switchbackCuts: 木造 L 字では往復間の�
   const inbound = seq6.stairCut.flights[0];
   assert.equal(Math.max(inbound.runLo, inbound.runHi), 4500, '復路 flight は y=4500 まで');
   assert.ok(seq6.line.hi < 4500, `seq6 の枠の終端 ${seq6.line.hi} より復路 flight が長い（現状）`);
-  // 深さ 2500 の木造は壁ありでも seq6 が出ない（wEntry が片レーン分の範囲になる）
+  // 深さ 2500 の木造でも seq6 が出る（隔て板の検出は wEntry の範囲でなくレーン境界の座標で探す）
   for (const [longLane, flip] of [['outbound', false], ['outbound', true], ['return', false], ['return', true]]) {
-    assert.equal(lShapeCase({ longLane, flip, notchWall: true, notchTop: 2000, wood: true }).t.cuts.length, 5, `${longLane}/${flip}: 深さ 2500 では 5 面`);
+    assert.equal(lShapeCase({ longLane, flip, notchWall: true, notchTop: 2000, wood: true }).t.cuts.map(c => c.seqNo).join(''), '123456', `${longLane}/${flip}: 深さ 2500 でも 6 面`);
+  }
+});
+
+test('【S10-7 S1 是正後】findMidWall: レーン境界の座標を渡すと wEntry の範囲に依らず隔て板を拾う・境界から遠い壁は拾わない（失敗系）', () => {
+  const graph = makeGraph();
+  const { room, stair } = makeLShapeFixture(graph, { longLane: 'outbound', flip: false, wood: true });
+  const f = makeFrame(stair, roomBounds(stair.cells, graph));
+  // wEntry の範囲が片レーン分（x0..1000）しかない面。中点 500 では x=1000 の隔て板に届かない（旧: 見失う）
+  const narrowEntry = { faceValue: 4442.5, lo: 0, hi: 1000 };
+  const landing = { faceValue: 57.5, lo: 0, hi: 2000 };
+  assert.equal(findMidWall(graph, narrowEntry, landing, 1500, f), null, '従来の中点（500）では見失う');
+  const w = findMidWall(graph, narrowEntry, landing, 1500, f, 1000);
+  assert.ok(w && w.axisCL.effectiveValue === 1000, '境界座標 1000 なら隔て板を拾う');
+  assert.equal(findMidWall(graph, narrowEntry, landing, 1500, f, 1600), null, '境界から遠い（許容 300 超）なら null');
+  assert.ok(room);
+});
+
+// 壁リストの並びを逆にした graph（walls だけ差し替える薄いラッパ）
+const withReversedWalls = graph => Object.create(graph, { walls: { get: () => [...graph.walls].reverse() } });
+
+test('【S10-7 S1 B-1】switchbackCuts: seq6 の有無は壁リストの並び順に依らず、木造＝あり／鉄骨＝なしの規則で決まる。findMidWall の選択も並びに依らない', () => {
+  // 'steelOverWood' は隔て板の形の壁が座標上ある鉄骨（木造で生成した後に構造を鉄骨へ戻す）。座標照合だけなら seq6 が出てしまう構成
+  for (const kind of ['steel', 'wood', 'steelOverWood']) {
+    const wood = kind === 'wood';
+    for (const [longLane, flip, notchWall] of L_CASES) {
+      const key = `${kind} ${longLane}/${flip}/${notchWall}`;
+      const graph = makeGraph();
+      const { room, stair } = makeLShapeFixture(graph, { longLane, flip, notchWall, wood: kind !== 'steel' });
+      if (kind === 'steelOverWood') {
+        graph.setStructureOverride(null);
+        stair.structure = StructuralMaterialType.STEEL;
+        assert.ok([...graph.walls].some(w => w.isVertical && w.axisCL.effectiveValue === 1000), `${key}: 前提: 隔て板の形の壁が残っている`);
+      }
+      const run = g => switchbackCuts(stair, composeRoomFaces(room, g), g, { ...OPTS, layers: buildBandLayers(g) });
+      const fwd = run(graph), rev = run(withReversedWalls(graph));
+      assert.ok(fwd && rev, `${key}: 切断表は組める`);
+      const seqs = t => t.cuts.map(c => c.seqNo).join('');
+      assert.equal(seqs(rev), seqs(fwd), `${key}: 並びを逆にしても seqNo 集合が同じ`);
+      assert.equal(seqs(fwd).includes('6'), wood, `${key}: seq6 は木造のときだけ（隔て板の規則）`);
+      // 同じ軸のオーナー壁と薄壁（同値の候補）はリスト順で決まってよいので、軸と外壁か否かで比べる
+      const sig = t => t.wall && [t.wall.axisCL.effectiveValue, !!t.wall.isExteriorWall].join('/');
+      assert.equal(sig(rev), sig(fwd), `${key}: 往復間の壁の軸・外壁性が並びに依らない`);
+    }
   }
 });
