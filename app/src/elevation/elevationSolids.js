@@ -171,7 +171,8 @@ function clampPrimsToRun(prims, run) {
  * 梁の見え掛かりは柱の包み込み外形に隠れる区間を描かない（同じ柱を渡す）。基礎・基礎梁・杭は描かない（sectionStructure.js 側で除外）。
  * 遮蔽判定には参加しない純粋な加算（sectionStructure.js の方針）。呼び出しは `droppedMemberKeysOf(pcut, { inZRange: true })`（列の分割の後）。
  * @param {object} face
- * @param {{graph:object, ceilingHeight:number, upperGraph?:object|null, floorHeightMm?:number|null}} opts
+ * @param {{graph:object, ceilingHeight:number, upperGraph?:object|null, floorHeightMm?:number|null,
+ *   columnTopZAt?:(face:object, runWorld:number)=>number}} opts
  * @param {Set<string>} droppedKeys
  * @returns {object[]}
  */
@@ -183,7 +184,9 @@ export function droppedMemberPrimitivesForFace(face, opts, droppedKeys) {
   return clampPrimsToRun([
     ...structuralPrimitivesForCut(beams, beamCut, undefined, null,
       { columnSolids, fromRoomSide: true, memberCuts: { dropped: droppedKeys } }),
-    ...structuralColumnPrimitivesForCut(columnSolids, cut, { dropped: droppedKeys }),
+    // columnTopZAt（階段下の部屋の帯だけが渡す。buildRoomBand）… 柱の縁の縦線を天井線（階段の裏面）で止める。無ければ帯の上端まで（従来どおり）
+    ...structuralColumnPrimitivesForCut(columnSolids, cut, {
+      dropped: droppedKeys, topZAt: opts.columnTopZAt ? run => opts.columnTopZAt(face, run) : undefined }),
   ], face.run);
 }
 

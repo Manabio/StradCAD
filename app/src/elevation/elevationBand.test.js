@@ -7,7 +7,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import {
   flightsOverRoom, stairOverReachesFace, buildRoomBand, layoutBandFaces, finalizeBand, faceDrawnXRange, ceilProfileFromSegments, ceilProfileMaxZ,
-  underStairSoffitsOverRoom, stairContributionOverRoom,
+  underStairSoffitsOverRoom, stairContributionOverRoom, roomBandLayers,
 } from './elevationBand.js';
 import { underStairSoffitsOf } from './elevationSolids.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
@@ -1383,4 +1383,90 @@ test('【S8-4-2】足元に 57.5mm だけ掛かる隣室は対象外（underStai
   const makeBand = withSoffits => buildRoomBand(edge, graph, { solids: soffitSolids(graph, withSoffits) });
   assert.deepEqual(makeBand(true).primitives, makeBand(false).primitives);
   assert.equal(underStairSoffitsOverRoom(under, graph, soffits).length, 1, '前提: 階段下の部屋は対象');
+});
+
+// ---- S10-8-4-5 階段下の部屋の帯の柱型の縦線・壁の天端を、天井（階段の裏面）で止める
+// 階段下の部屋（x1000〜2000・y1500〜4500）の壁芯上（B 面 x=2000・D 面 x=1000）に y=3000 の柱を立てる。柱の縁の縦線は
+// 傾いた天井（B・D 面）の列では加算レイヤが描く（斜めの区間に掛かる列は帯にしない）ので、上端は帯の CH（2400）まで届いていた。
+function addUnderColumns(graph, sectionDefId, materialType) {
+  const cl = (t, v) => graph.centerLines.find(c => c.centerLineType === t && c.value === v);
+  const yc = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  return [2000, 1000].map(xv => graph.addColumn(materialType, sectionDefId, cl('X', xv), yc, {}));
+}
+const woodColumnFixture = () => {
+  const f = makeStairUnderRoomFixture(StructuralMaterialType.WOOD);
+  addUnderColumns(f.graph, 'WOOD-120x120', StructuralMaterialType.WOOD);
+  return f;
+};
+// 柱の縁の縦線＝帯の面の端（thick の縦線）ではない medium の縦線。[x, 上端 z]
+const columnEdges = band => {
+  const thickXs = new Set(thickLines(band).filter(p => Math.abs(p.x1 - p.x2) < 1e-6).map(p => p.x1));
+  return band.primitives.filter(p => p.type === 'line' && p.weight === 'medium' && Math.abs(p.x1 - p.x2) < 1e-6 && !thickXs.has(p.x1))
+    .map(p => [p.x1, Math.max(-p.y1, -p.y2)]).sort((a, b) => a[0] - b[0]);
+};
+// 天井線（傾斜の太線）の x での高さ。傾斜線の x 範囲にある点だけ（無ければ null）
+const slopeCeilAt = (band, x) => {
+  for (const s of slopedThick(band)) {
+    const [x0, x1] = [Math.min(s.x1, s.x2), Math.max(s.x1, s.x2)];
+    if (x < x0 - 1e-6 || x > x1 + 1e-6) continue;
+    const t = (x - s.x1) / (s.x2 - s.x1);
+    return -(s.y1 + (s.y2 - s.y1) * t);
+  }
+  return null;
+};
+
+test('【S8-4-5】木造（仕上げ）の階段下の部屋の帯: 傾いた天井の列の柱型の縦線は上端が天井線の高さで止まる（2400 まで突き出ない）。注入が無ければ従来の 2400', () => {
+  const { graph, under } = woodColumnFixture();
+  const base = columnEdges(buildRoomBand(under, graph, { solids: soffitSolids(graph, false) }));
+  assert.equal(base.length, 4, '前提: 2 本の柱 × 2 縁の縦線');
+  assert.ok(base.every(([, z]) => Math.abs(z - SOFFIT_FH) < 1e-6), `前提: 従来は 2400 まで（${JSON.stringify(base)}）`);
+  const band = buildRoomBand(under, graph, { solids: soffitSolids(graph) });
+  const edges = columnEdges(band);
+  assert.equal(edges.length, 4, '縦線の数は同じ');
+  for (const [x, z] of edges) {
+    const ceil = slopeCeilAt(band, x);
+    assert.ok(ceil != null, `x=${x} は傾斜の天井線の上`);
+    assert.ok(z <= ceil + 1e-6, `x=${x}: 縦線の上端 ${z} が天井線 ${ceil} より上へ出ない`);
+    assert.ok(Math.abs(z - ceil) < 1e-3, `x=${x}: 縦線は天井線に届く（${z} ≒ ${ceil}）`);
+    assert.ok(z < SOFFIT_FH - 1, `x=${x}: 2400 より低い`);
+  }
+  // 縁ごとに天井の高さが違う（傾斜）＝縁ごとに止める（柱の幅の中で上端が揃わない）
+  const byPillar = [edges.slice(0, 2), edges.slice(2)];
+  assert.ok(byPillar.every(([a, b]) => Math.abs(a[1] - b[1]) > 1), `柱の 2 つの縁の上端は傾斜の分だけ違う（${JSON.stringify(edges)}）`);
+});
+
+test('【S8-4-5】鉄骨（あらわし）の階段の下は従来どおり: 柱型の縦線も含めて帯が solids に注入なし／空配列を渡したときと deepEqual', () => {
+  const f = makeStairUnderRoomFixture(StructuralMaterialType.STEEL);
+  addUnderColumns(f.graph, 'STEEL-BOX-200x200x9', StructuralMaterialType.STEEL);
+  const base = buildRoomBand(f.under, f.graph, { solids: soffitSolids(f.graph, false) });
+  assert.deepEqual(buildRoomBand(f.under, f.graph, { solids: soffitSolids(f.graph) }).primitives, base.primitives);
+  assert.deepEqual(buildRoomBand(f.under, f.graph, { solids: { ...soffitSolids(f.graph, false), underStairSoffits: [] } }).primitives, base.primitives);
+});
+
+test('【S8-4-5】roomBandLayers: 階段下の部屋の帯は自階の層だけに裏面と部屋の実セルの矩形を載せる。注入が無い帯（空）は従来の層スタックそのまま', () => {
+  const { graph, under, stairRoom } = makeStairUnderRoomFixture(StructuralMaterialType.WOOD);
+  const soffits = underStairSoffitsOverRoom(under, graph, underStairSoffitsOf(graph, { upperGraph: null, floorHeightMm: SOFFIT_FH }));
+  assert.equal(soffits.length, 1, '前提: 階段下の部屋に裏面が掛かる');
+  const layers = roomBandLayers(under, graph, soffits);
+  assert.equal(layers.length, 1);
+  assert.equal(layers[0].role, 'self');
+  assert.equal(layers[0].underStairSoffits, soffits);
+  assert.deepEqual(layers[0].underStairRoomRects, [{ x1: 1000, x2: 2000, y1: 1500, y2: 4500 }]);
+  // 注入が無い帯: 層は注入の項目を持たない（キー自体が無い）
+  for (const empty of [[], underStairSoffitsOverRoom(stairRoom, graph, underStairSoffitsOf(graph, { upperGraph: null, floorHeightMm: SOFFIT_FH }))]) {
+    const plain = roomBandLayers(under, graph, empty);
+    assert.deepEqual(plain, [{ graph, floorZMm: 0, role: 'self' }]);
+    assert.ok(!('underStairSoffits' in plain[0]) && !('underStairRoomRects' in plain[0]));
+  }
+});
+
+test('【S8-4-5・失敗系】足元に掛からない部屋（柱あり）・階段室自身の帯は、注入があっても不変（縁が足元の外の柱は止めない）', () => {
+  const { graph, stairRoom } = woodColumnFixture();
+  const far = makeRectRoom(graph, 5000, 0, 7000, 2000, '離れた部屋');
+  const cl = (t, v) => graph.centerLines.find(c => c.centerLineType === t && c.value === v);
+  graph.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', cl('X', 7000), cl('Y', 0), {});
+  for (const room of [far, stairRoom]) {
+    assert.deepEqual(buildRoomBand(room, graph, { solids: soffitSolids(graph) }).primitives,
+      buildRoomBand(room, graph, { solids: soffitSolids(graph, false) }).primitives, `${room.name}は注入があっても不変`);
+  }
 });

@@ -83,7 +83,7 @@ export { kneeDropZRangesAt };
 import { effectiveHeight } from '../../openings/openingNumbering.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
-import { localXOf, cutDrawRange } from './sectionTypes.js';
+import { localXOf, worldOf, cutDrawRange, ceilProfileEdgeAt, ceilClipProfileOf } from './sectionTypes.js';
 import { stairFaceHits } from './sectionStair.js';
 import {
   memberSolidsOfLayers, beamSectionShown, beamAlongShown, memberOutlineFloorState, faceAxisInBeam, columnCoveredSpans,
@@ -409,6 +409,68 @@ function isWallViaStairRoom(cut, wall, farKindOf) {
 // probeCtx がプロファイルを持たない（スタブ等）・該当壁なしは null＝従来どおり。
 function wallTopOf(probeCtx, layer, wall) {
   return probeCtx?.wallTopProfileFor?.(layer)?.get(wall.id) ?? null;
+}
+
+// 足元の天端（footCap）は、長さ方向が切断の走り方向の壁（見えがかり壁・縦断された壁）にだけ使う。長さ方向が奥行きの壁（切断壁・
+// 面に直交して奥へ延びる壁）の天端は、長さ方向の 1 点の値の水平線で、傾いた天井断面の下では厚みの中で天井と食い違う。
+function withoutFootCap(wallTop) {
+  return wallTop?.footCap ? null : wallTop;
+}
+
+// footCap（階段の足元の天端。足元の外は zAt が Infinity）のプロファイルは、評価点 at が足元の中のときだけ有効。
+// 外は null＝従来の腰壁・垂れ壁・全高の扱い（足元の外の壁を profiledTop・junction 扱いにしない）。footCap でないものはそのまま。
+function activeWallTop(wallTop, at) {
+  if (wallTop?.footCap && !Number.isFinite(wallTop.zAt(at))) return null;
+  return wallTop;
+}
+
+// 帯の天井断面（cut.ceilProfile）の、世界の走り座標 a での高さ。区間の境（天井の段）では低い側。天井断面を持たない切断は視線の上限（zRange.hiZ）。
+function bandCeilAtWorld(cut, a) {
+  const x = localXOf(cut, a);
+  const prof = ceilClipProfileOf(cut);
+  let z = Infinity;
+  for (const s of prof ?? []) {
+    if (!(x >= s.loX - GAP_EPS && x <= s.hiX + GAP_EPS)) continue;
+    const e = ceilProfileEdgeAt([s], x, x);
+    if (e) z = Math.min(z, e.z0);
+  }
+  if (Number.isFinite(z)) return z;
+  const edge = ceilProfileEdgeAt(prof, x, x); // どの区間にも入らない（範囲外）は端の区間の端点の値（ceilProfileEdgeAt の規約）
+  return edge ? Math.min(edge.z0, edge.z1) : (cut.zRange?.hiZ ?? Infinity);
+}
+
+const FOOT_REACH_EPS_MM = 1e-3; // 足元の天端が天井に「届いている」とみなす差（節の 1e-6 量子化・外挿の誤差より十分大きい）
+
+// footCap の天端が評価点すべてで視線の上限（capZ）以上＝壁を止めていない（裏面が壁の上限より高い）なら、プロファイル扱いにしない
+// （通常の壁と同じ。profiledTop・junctionTop・天端の線を付けない）。部分的に低い点があれば残す（列は crossings で z の交点に割ってある）。
+// 評価点での帯の天井断面（cut）も上限に数える——階段下の部屋の帯の天井は裏面そのもの
+// （minCeilingSegmentsWithSoffits）なので、天井断面に届いている壁は天井が止める（足元の天端は冗長。付けると列が節で割れ、
+// 同じ高さの縁の縦線が天井の下に並ぶ）。評価点 ats は壁の長さ方向（＝切断の走り方向）の世界座標。
+function dropReachedFootCap(wallTop, capZ, ats, cut) {
+  if (!wallTop?.footCap) return wallTop;
+  const reached = ats.every(a => wallTop.zAt(a) >= Math.min(capZ, bandCeilAtWorld(cut, a)) - FOOT_REACH_EPS_MM);
+  return reached ? null : wallTop;
+}
+
+/**
+ * footCap の天端が、帯の天井断面より低くなる所があるか（走り方向の区間 [lo, hi] の中）。列の分割（collectCutBreaks）が、天井に届いている
+ * 壁の足元の天端を無かったことにするための判定（dropReachedFootCap と同じ規則）。節・天井断面の折れ目で比べる（どちらも区間内は直線）。
+ * @param {{zAt:(a:number)=>number, crossings:(zs:number[])=>number[]}} wallTop footCap のプロファイル
+ * @param {import('./sectionTypes.js').SectionCut} cut
+ * @param {number} lo
+ * @param {number} hi
+ * @returns {boolean}
+ */
+export function footCapLowersCeiling(wallTop, cut, lo, hi) {
+  const at = new Set(wallTop.crossings([]).filter(a => a >= lo && a <= hi));
+  at.add(lo); at.add(hi);
+  for (const seg of ceilClipProfileOf(cut) ?? []) {
+    for (const x of [seg.loX, seg.hiX]) {
+      const a = worldOf(cut, x);
+      if (a >= lo && a <= hi) at.add(a);
+    }
+  }
+  return [...at].some(a => wallTop.zAt(a) < Math.min(cut.zRange?.hiZ ?? Infinity, bandCeilAtWorld(cut, a)) - FOOT_REACH_EPS_MM);
 }
 
 /**
@@ -1114,7 +1176,8 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
         const mr = w.materialRange;
         if (worldMid < mr.lo - GAP_EPS || worldMid > mr.hi + GAP_EPS) continue;
         // アキ（腰壁＋垂れ壁）は2つの帯になる（kneeDropZRangesAt）ため、候補も範囲ごとに積む。
-        const wallTop = wallTopOf(probeCtx, layer, w);
+        // 切断壁には足元の天端（footCap）を使わない（切断壁の天端は帯の天井断面の斜線に沿う＝sectionEngine.js clipBandsToVisible の followsSlope）
+        const wallTop = withoutFootCap(wallTopOf(probeCtx, layer, w));
         const cutCapZ = wallTop ? profiledWallCapZ(layerStack, info, w, line.axisValue, cut, probeCtx) : info.ceilZ;
         // 斜めの天端（隔て板の天板）が切断面より向こう（視線側）で上がる分の最高＝壁の視線側の端での天端（天端は物理端まで続く。
         // 裁定 2026-10-14）。切断帯の天端より高ければ、その見え掛かりを帯の上に描く（sectionEmit.js cutWallTopBeyondSightlines）
@@ -1138,8 +1201,9 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
         // （pointCoord=worldMid。壁自身の長さ方向＝cutのrun方向と一致するためwallと同じ規約）。
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
-        const wallTop = wallTopOf(probeCtx, layer, w);
+        let wallTop = activeWallTop(wallTopOf(probeCtx, layer, w), worldMid);
         const alongCapZ = wallTop ? profiledWallCapZ(layerStack, info, w, worldMid, cut, probeCtx) : info.ceilZ;
+        wallTop = dropReachedFootCap(wallTop, alongCapZ, [worldMid], cut);
         for (const { z0, z1 } of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, alongCapZ, wallTop)) {
           hits.push({ kind: 'cutAlong', wall: w, layer, distMm: 0, z0, z1,
             isKneeDrop: isKneeDropRange(z0, z1, info), hidden, ...(wallTop ? { profiledTop: true } : {}) });
@@ -1151,8 +1215,9 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
         const distMm = Math.abs(w.axisCL.effectiveValue - line.axisValue);
         // 階段室越しの壁（viaStair）は部屋の外でも候補に残す。対象は天端が階段の裏面との取り合い（junction）の壁＝復路下の壁
         // だけ（階段室の他の壁——階段の向こうの外壁等——は従来どおり見通さない）。最初の壁だけ残すのは buildColumns。
-        const wallTop = wallTopOf(probeCtx, layer, w);
-        const viaStair = wallTop?.junction === true && isWallViaStairRoom(cut, w, farKindOf);
+        let wallTop = activeWallTop(wallTopOf(probeCtx, layer, w), worldMid);
+        // 足元の天端（footCap）の壁へは viaStair を広げない（復路下の壁だけが階段室越しに見通される）
+        const viaStair = wallTop?.junction === true && !wallTop.footCap && isWallViaStairRoom(cut, w, farKindOf);
         if (!viaStair && !withinViewRoom(cut, worldMid, info, probeCtx, w)) continue; // 部屋の外の壁は描かない
         // A2の一般化: 上限（info.ceilZ）を「上が吹抜けなら上階の天井まで延ばす」規則で解決し直す
         // （sectionLayerStack.jsのresolveSightlineTopZ）。旧実装はself層の壁だけを対象に
@@ -1161,6 +1226,7 @@ export function probeColumnHits(cut, worldMid, probeCtx, span = null) {
           layerStack, info, roomAtWallPosition(w, worldMid, cut.viewSign, probeCtx), cut.zRange?.hiZ ?? 0,
           wallContinuesOnLayer(w, worldMid),
         );
+        wallTop = dropReachedFootCap(wallTop, capZ, span ? [span.worldLo, span.worldHi] : [worldMid], cut);
         for (const range of kneeDropZRangesAt(layer.graph, w, worldMid, info.floorZ, capZ, wallTop, span)) {
           const { z0, z1 } = range;
           // 腰壁・垂れ壁指定で高さが制限された壁か（アキのバツのクリップ対象。sectionEmit.jsの
@@ -1735,5 +1801,5 @@ export function edgeOnWallZRanges(cut, layer, wall, depth, lateral, probeCtx) {
     stack, info, roomAtWallPosition(wall, depth, cut.viewSign, probeCtx), cut.zRange?.hiZ ?? 0,
     wallContinuesOnLayer(wall, depth),
   );
-  return kneeDropZRangesAt(layer.graph, wall, depth, info.floorZ, capZ, wallTopOf(probeCtx, layer, wall));
+  return kneeDropZRangesAt(layer.graph, wall, depth, info.floorZ, capZ, withoutFootCap(wallTopOf(probeCtx, layer, wall)));
 }

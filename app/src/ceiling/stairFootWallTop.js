@@ -4,6 +4,7 @@
  * （S10-8 ステップ1）。供給源は階段の裏面（stairSoffit.js stairUndersideSurface）。
  */
 import { RoomKind } from '@core';
+import { wallConcealRange } from '../finish/columnWrap.js';
 import { stairUndersideSurface } from './stairSoffit.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { riserOf } from '../finish/stair/stairDimensions.js';
@@ -81,14 +82,131 @@ export function wallFootTop(wall, cr, lo, hi, foot) {
   let top = Infinity;
   for (const f of foot) {
     if (!(mid > f.lo && mid < f.hi)) continue;
-    const { surface } = f;
-    for (const a of [lo, mid, hi]) {
-      for (const b of [cr.lo, (cr.lo + cr.hi) / 2, cr.hi]) {
-        const z = surface.zAt ? (wall.isVertical ? surface.zAt(b, a) : surface.zAt(a, b)) : surface.zLo;
-        if (Number.isFinite(z)) top = Math.min(top, z);
+    for (const a of [lo, mid, hi]) top = Math.min(top, thicknessMinZ(wall, cr, f.surface, a));
+  }
+  return quantizeTop(top);
+}
+
+// 長さ方向 a での、厚み方向の評価点 bs（既定は帯の両端と中央の 3 点）の裏面 zAt の最小（量子化前）。足元の天端の評価式の唯一の置き場
+function thicknessMinZ(wall, cr, surface, a, bs = [cr.lo, (cr.lo + cr.hi) / 2, cr.hi]) {
+  let top = Infinity;
+  for (const b of bs) {
+    const z = surface.zAt ? (wall.isVertical ? surface.zAt(b, a) : surface.zAt(a, b)) : surface.zLo;
+    if (Number.isFinite(z)) top = Math.min(top, z);
+  }
+  return top;
+}
+
+// 1e-6 mm に量子化する（補間の float 誤差で、同じ芯の下地の壁と仕上げの薄壁が別の高さになり mergeTouchingWalls で割れるのを防ぐ）
+function quantizeTop(top) {
+  return Number.isFinite(top) ? Math.round(top * 1e6) / 1e6 : top;
+}
+
+const KNOT_MERGE_MM = 1e-3; // これ未満の節の間隔は同じ節とみなす
+
+/**
+ * 足元の区間のうち、壁の帯 [cr.lo, cr.hi] が、その長さ方向の位置で足元の矩形の厚み方向の和に**完全に覆われる**区間だけ残す。
+ * wallFootIntervals は帯の中央（軸）が矩形の中にあれば対象にするため、階段の起点・到達点の端（矩形は階段室の外周側を内側へ
+ * 縮めない）に立つ外周壁も軸が矩形の端の内側 6mm 程に入って対象になり、起点では裏面が床面（z≈0）なので壁が消える。
+ * そのような壁は帯が矩形の外へはみ出す（覆われない）ので除く。帯が 2 つの矩形にまたがる（踊り場と往路の境の復路下の壁など）
+ * 場合は和で覆われるので残る。展開図の探査専用（平面の立体 planSolids.js は wallFootIntervals のまま）。
+ */
+function coveredFootIntervals(wall, cr, foot) {
+  const out = [];
+  for (const f of foot) {
+    const rects = f.surface.footprint.rects.map(r => (wall.isVertical
+      ? { b0: r.x1, b1: r.x2, a0: r.y1, a1: r.y2 } : { b0: r.y1, b1: r.y2, a0: r.x1, a1: r.x2 }));
+    const cuts = [f.lo, f.hi, ...rects.flatMap(r => [r.a0, r.a1]).filter(a => a > f.lo && a < f.hi)].sort((p, q) => p - q);
+    for (let i = 0; i + 1 < cuts.length; i++) {
+      const lo = cuts[i], hi = cuts[i + 1];
+      if (!(hi - lo > FOOT_EPS_MM)) continue;
+      const mid = (lo + hi) / 2;
+      const ivs = rects.filter(r => mid > r.a0 && mid < r.a1).map(r => [r.b0, r.b1]).sort((p, q) => p[0] - q[0]);
+      let cover = null;
+      for (const [b0, b1] of ivs) {
+        if (cover && b0 <= cover[1] + 1e-3) cover[1] = Math.max(cover[1], b1);
+        else if (!cover || (b0 <= cr.lo + 1e-3 && b1 > cover[1])) cover = [b0, b1];
       }
+      if (!cover || !(cover[0] <= cr.lo + 1e-3 && cover[1] >= cr.hi - 1e-3)) continue;
+      const prev = out[out.length - 1];
+      if (prev && prev.surface === f.surface && Math.abs(prev.hi - lo) < FOOT_EPS_MM) prev.hi = hi;
+      else out.push({ lo, hi, surface: f.surface });
     }
   }
-  // 1e-6 mm に量子化する（補間の float 誤差で、同じ芯の下地の壁と仕上げの薄壁が別の高さになり mergeTouchingWalls で割れるのを防ぐ）
-  return Number.isFinite(top) ? Math.round(top * 1e6) / 1e6 : top;
+  return out;
+}
+
+/**
+ * 壁の天端プロファイル（展開図の探査用。sectionProbe.js addStairFootTops）。足元の区間ごとに、節の間を直線でつないだ
+ * 裏面に沿う折れ線の天端。節＝区間の端・段の境界・足元の矩形の辺・厚み方向の評価線と裏面の折れ目（innerLines）の交点。
+ * 節の値は wallFootTop と同じ評価（厚み方向 3 点の最小・1e-6 量子化）。足元の外は +Infinity（天井高のまま）。
+ * 足元の区間が無い・帯が無効なら null。
+ * @param {object} wall
+ * @param {object[]} surfaces stairFootSurfaces の面
+ * @param {{acrossMm?:number|null, zOffsetMm?:number}} [opts]
+ *   acrossMm … 厚み方向の評価点（世界座標）。省略は帯の 3 点の最小（平面と同じ）。部屋帯の天井線（stairSoffitCeiling.js）は壁の
+ *   室内側の面で裏面を評価するので、壁の天端もその面の位置で評価して天井線と食い違いを作らない（3 点の最小は傾斜の分だけ低くなりアキが残る）。
+ *   zOffsetMm … 節の値から引く量（裏面は階の datum 基準・探査の z は帯の部屋の実効 FL 基準。makeProbeContext の floorOffsetMm と同じ）
+ * @returns {{zAt:(along:number)=>number, crossings:(zLevels:number[])=>number[], spans:number[][], junction:true, footCap:true}|null}
+ */
+export function wallFootTopProfile(wall, surfaces, { acrossMm = null, zOffsetMm = 0 } = {}) {
+  const cr = wallConcealRange(wall);
+  if (!cr || !(cr.hi - cr.lo > 0) || !(surfaces?.length > 0)) return null;
+  const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
+  if (!Number.isFinite(wLo) || !Number.isFinite(wHi)) return null;
+  const foot = coveredFootIntervals(wall, cr, wallFootIntervals(wall, cr, wLo, wHi, surfaces));
+  if (foot.length === 0) return null;
+  const bands = Number.isFinite(acrossMm) ? [acrossMm] : [cr.lo, (cr.lo + cr.hi) / 2, cr.hi];
+  const valueAt = (surface, a) => quantizeTop(thicknessMinZ(wall, cr, surface, a, bands) - zOffsetMm);
+  const pieces = foot.map(({ lo, hi, surface }) => {
+    const cand = [lo, hi, ...(wall.isVertical ? surface.stepYs : surface.stepXs) ?? []];
+    for (const r of surface.footprint.rects) cand.push(...(wall.isVertical ? [r.y1, r.y2] : [r.x1, r.x2]));
+    for (const ln of surface.innerLines ?? []) {
+      const [x1, y1, x2, y2] = ln.points;
+      const [d1, r1, d2, r2] = wall.isVertical ? [x1, y1, x2, y2] : [y1, x1, y2, x2];
+      if (Math.abs(d2 - d1) < KNOT_MERGE_MM) continue; // 厚み方向線に平行
+      for (const b of bands) {
+        const t = (b - d1) / (d2 - d1);
+        if (t >= 0 && t <= 1) cand.push(r1 + t * (r2 - r1));
+      }
+    }
+    const sorted = cand.filter(c => Number.isFinite(c) && c >= lo && c <= hi).sort((p, q) => p - q);
+    const knots = [];
+    for (const c of sorted) {
+      if (knots.length > 0 && c - knots[knots.length - 1].a < KNOT_MERGE_MM) continue;
+      knots.push({ a: c, z: valueAt(surface, c) });
+    }
+    return { lo, hi, knots };
+  }).filter(p => p.knots.length > 0 && p.knots.every(k => Number.isFinite(k.z)));
+  if (pieces.length === 0) return null;
+  const evalPiece = (p, along) => {
+    const ks = p.knots;
+    if (ks.length === 1) return ks[0].z;
+    for (let i = 0; i + 1 < ks.length; i++) {
+      const k0 = ks[i], k1 = ks[i + 1];
+      if (along <= k1.a) return k0.z + (k1.z - k0.z) * Math.min(1, Math.max(0, (along - k0.a) / (k1.a - k0.a)));
+    }
+    return ks[ks.length - 1].z;
+  };
+  // 足元の区間の中（閉区間）は節の間の線形補間。区間が接する点は低い方
+  const zAt = along => {
+    let z = Infinity;
+    for (const p of pieces) if (along >= p.lo - FOOT_EPS_MM && along <= p.hi + FOOT_EPS_MM) z = Math.min(z, evalPiece(p, along));
+    return z;
+  };
+  const crossings = zLevels => {
+    const out = new Set();
+    for (const p of pieces) {
+      p.knots.forEach(k => out.add(k.a));
+      for (let i = 0; i + 1 < p.knots.length; i++) {
+        const k0 = p.knots[i], k1 = p.knots[i + 1];
+        for (const lv of zLevels ?? []) {
+          if (!Number.isFinite(lv) || (lv - k0.z) * (lv - k1.z) >= 0) continue; // 端が z に乗る場合は節で足済み
+          out.add(k0.a + (k1.a - k0.a) * (lv - k0.z) / (k1.z - k0.z));
+        }
+      }
+    }
+    return [...out].sort((p, q) => p - q);
+  };
+  return { zAt, crossings, spans: pieces.map(p => [p.lo, p.hi]), junction: true, footCap: true };
 }

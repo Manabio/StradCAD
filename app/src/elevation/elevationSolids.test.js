@@ -250,6 +250,30 @@ test('【B3-3】structuralColumnPrimitivesForCut: opts.dropped を渡すと帯�
   assert.notEqual(memberKey(solids[0]), memberKey({ ...solids[0], xLo: solids[0].xLo + 1 }), '柱のキーは矩形・足元で区別する');
 });
 
+test('【S8-4-5】structuralColumnPrimitivesForCut: opts.topZAt（run の世界座標→上端 z）で柱の縁の縦線の上端を縁ごとに止める。省略・非有限・hiZ 以上は hiZ のまま。上端が足元以下の縁の線は出さない', () => {
+  const wall = {
+    isVertical: false, materialRange: { lo: -6955, hi: -6942.5 }, coord1: -7942, coord2: -3057,
+    backingRange: null, wallFinish: 12.5, axisCL: { effectiveValue: -7000 },
+  };
+  const column = { role: 'primary', sectionDefId: 'STEEL-SQ200x200x9.0', x: -7850, y: -6850, rotation: 0 };
+  const solids = structuralColumnContribution([{ graph: { walls: [wall], columns: [column] }, floorZMm: 0, role: 'self' }]);
+  const cut = {
+    seqNo: 'a', line: { isVertical: false, axisValue: -7000, lo: -7942, hi: -3057 },
+    viewSign: 1, dirSign: 1, layers: [], zRange: { loZ: 0, hiZ: 2400 }, baseFloorZ: 0,
+  };
+  const [runLo, runHi] = [solids[0].xLo, solids[0].xHi];
+  const tops = prims => prims.map(p => [p.x1, Math.max(-p.y1, -p.y2)]).sort((a, b) => a[0] - b[0]).map(([, z]) => z);
+  assert.deepEqual(tops(structuralColumnPrimitivesForCut(solids, cut)), [2400, 2400], '省略は帯の上端まで（従来どおり）');
+  const seen = [];
+  const capped = structuralColumnPrimitivesForCut(solids, cut, { topZAt: run => { seen.push(run); return run === runLo ? 1500 : 1800; } });
+  assert.deepEqual(tops(capped), [1500, 1800], '縁ごとの上端で止まる（run の世界座標を渡す）');
+  assert.deepEqual([...seen].sort((a, b) => a - b), [runLo, runHi].sort((a, b) => a - b));
+  assert.deepEqual(tops(structuralColumnPrimitivesForCut(solids, cut, { topZAt: () => Infinity })), [2400, 2400], 'Infinity（足元の外）は止めない');
+  assert.deepEqual(tops(structuralColumnPrimitivesForCut(solids, cut, { topZAt: () => NaN })), [2400, 2400], '非有限は止めない');
+  assert.deepEqual(tops(structuralColumnPrimitivesForCut(solids, cut, { topZAt: () => 5000 })), [2400, 2400], 'hiZ を超えては伸ばさない');
+  assert.deepEqual(tops(structuralColumnPrimitivesForCut(solids, cut, { topZAt: run => (run === runLo ? 0 : 900) })), [900], '上端が足元以下の縁の線は出さない');
+});
+
 // 実機ログ（2階・柱が壁から42.5mm離れて立つ構成）の再現: 柱が壁と重なっていなくても、
 // 隙間が150mm以下なら壁の仕上げ面までトリムして接続し、その面に柱型が出る。
 test('【実機修正】structuralColumnPrimitivesForCut: 壁から42.5mm離れた柱もトリムで接続し面に出る', () => {

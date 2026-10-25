@@ -9,7 +9,7 @@ import { uTurnSoffitFromLayout, straightSoffitFromLayout } from '../../ceiling/s
 import { planSolidsLayerSolidsUp } from '../../plan/planSolidsLayerFilter.js';
 import { makeGrid } from '../../plan/planTestFixtures.js';
 import {
-  stairSoffitAbove, stairSoffitChAlong, stairSoffitChMaxOver, stairSoffitChAt, minCeilingSegmentsWithSoffits,
+  stairSoffitAbove, stairSoffitChAlong, stairSoffitChMaxOver, stairSoffitChAt, minCeilingSegmentsWithSoffits, underStairSoffitTopAt,
 } from './stairSoffitCeiling.js';
 
 const FL = 2800;   // N+1 の FL
@@ -310,4 +310,32 @@ test('【S8-4・失敗系】soffits 空・引数欠落・zAt が NaN の裏面�
   assert.equal(minCeilingSegmentsWithSoffits(segs, FACE, [{ stairId: 's', stairRoomId: null, surface: null }], OPTS), segs, 'surface なし');
   assert.deepEqual(segs, orig, '入力を破壊しない');
   assert.deepEqual(minCeilingSegmentsWithSoffits([], FACE, soffitsOf(surfaceOf()), OPTS), []);
+});
+
+test('【S8-4-5】underStairSoffitTopAt: 帯の天井線（minCeilingSegmentsWithSoffits の傾斜）と同じ点・同じ式。面の位置 faceValue・FL（floorOffsetMm）を引く。複数の裏面は最小', () => {
+  const soffits = soffitsOf(surfaceOf());
+  const solid = surfaceOf();
+  const out = minCeilingSegmentsWithSoffits([SEG], FACE, soffits, OPTS);
+  const slope = out[1];
+  for (const run of [1500, 2500, 3500]) {
+    const ceil = slope.chMm + (slope.chHiMm - slope.chMm) * (run - slope.loX) / (slope.hiX - slope.loX); // 天井線の run での高さ
+    near(underStairSoffitTopAt(soffits, FACE, run, 0), ceil, `run=${run} は天井線と同じ`);
+    near(underStairSoffitTopAt(soffits, FACE, run, 0), solid.zAt(500, run), `run=${run} は面の zAt`);
+  }
+  near(underStairSoffitTopAt(soffits, FACE, 2500, 100), solid.zAt(500, 2500) - 100, 'FL 基準');
+  const higher = soffitsOf({ ...surfaceOf(), zAt: (x, y) => solid.zAt(x, y) + 500 });
+  near(underStairSoffitTopAt([...soffits, ...higher], FACE, 2500, 0), solid.zAt(500, 2500), '複数は最小');
+});
+
+test('【S8-4-5・失敗系】underStairSoffitTopAt: 足元の外・soffits が空/不正・NaN の run/FL・面なしは Infinity（天井を下げない）。例外なし', () => {
+  const soffits = soffitsOf(surfaceOf());
+  assert.equal(underStairSoffitTopAt(soffits, { ...FACE, faceValue: 9000 }, 2500, 0), Infinity, '面の位置が足元の外');
+  assert.equal(underStairSoffitTopAt(soffits, FACE, 9000, 0), Infinity, 'run が足元の外');
+  assert.equal(underStairSoffitTopAt([], FACE, 2500, 0), Infinity);
+  assert.equal(underStairSoffitTopAt(undefined, FACE, 2500, 0), Infinity);
+  assert.equal(underStairSoffitTopAt(soffits, FACE, NaN, 0), Infinity);
+  assert.equal(underStairSoffitTopAt(soffits, FACE, 2500, NaN), Infinity);
+  assert.equal(underStairSoffitTopAt(soffits, null, 2500, 0), Infinity);
+  assert.equal(underStairSoffitTopAt(soffits, { ...FACE, faceValue: NaN }, 2500, 0), Infinity);
+  assert.equal(underStairSoffitTopAt([{ stairId: 's', stairRoomId: null, surface: null }], FACE, 2500, 0), Infinity, 'surface なし');
 });

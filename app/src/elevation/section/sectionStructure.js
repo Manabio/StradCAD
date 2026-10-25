@@ -643,8 +643,11 @@ export function structuralColumnPrimitivesForCut(contribution, cut, opts = {}) {
     const xA = localXOf(cut, runLo), xB = localXOf(cut, runHi);
     // 線種は中線（SILHOUETTE。ユーザー指示2026-08「展開図の柱型は中線」）——柱型は切断面では
     // なく「室内に出っ張った仕上げ面の見えがかり」であり、床線・天井線と同じ太線では強すぎる。
-    prims.push(emitLine(cut, xA, z0, xA, hiZ, ElevationLineRole.SILHOUETTE));
-    prims.push(emitLine(cut, xB, z0, xB, hiZ, ElevationLineRole.SILHOUETTE));
+    // opts.topZAt（run の世界座標→縦線の上端 z）… 柱の縁の縦線の上端を天井の傾斜（階段下の部屋の帯の裏面）で止める。省略・非有限は hiZ のまま
+    const topAt = run => { const c = opts.topZAt?.(run); return Number.isFinite(c) ? Math.min(hiZ, c) : hiZ; };
+    const [topA, topB] = [topAt(runLo), topAt(runHi)];
+    if (topA > z0 + GAP_EPS) prims.push(emitLine(cut, xA, z0, xA, topA, ElevationLineRole.SILHOUETTE));
+    if (topB > z0 + GAP_EPS) prims.push(emitLine(cut, xB, z0, xB, topB, ElevationLineRole.SILHOUETTE));
   }
   return prims;
 }

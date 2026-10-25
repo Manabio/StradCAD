@@ -37,9 +37,11 @@ import {
 } from '../../finish/stair/stairPartition.js';
 import { stairUnderReturnSoffit } from '../../ceiling/stairSoffit.js';
 import { stairContinuesAbove } from '../../finish/stair/stairChains.js';
+import { wallFootTopProfile } from '../../ceiling/stairFootWallTop.js';
+import { wallConcealRange } from '../../finish/columnWrap.js';
 import {
   cutProbeRange, isCutWall, isCutAlongWall, isSightlineShape,
-  buildLayerStack, probeColumn, nearMembersOf,
+  buildLayerStack, probeColumn, nearMembersOf, footCapLowersCeiling,
 } from './sectionHits.js';
 
 export { probeColumn, stairUnderReturnSoffit };
@@ -72,7 +74,7 @@ function addUnderReturnTops(out, graph, floorHeight, layer, floorZFor, aboveGrap
 
 // 層の隔て壁（オーナー壁・薄壁とも）→ 天端プロファイル。直上の層が無ければ階高が決まらず
 // 斜め天端にできない（full＝プロファイルなし）。続きの階段（上階に重なる階段）があれば full。
-function buildWallTopProfiles(layers, layer, floorZFor, fallbackFloorHeightMm = null, fallbackUpperGraph = null) {
+function buildWallTopProfiles(layers, layer, floorZFor, fallbackFloorHeightMm = null, fallbackUpperGraph = null, floorOffsetMm = 0) {
   const out = new Map();
   const graph = layer.graph;
   if (!graph) return out;
@@ -86,9 +88,8 @@ function buildWallTopProfiles(layers, layer, floorZFor, fallbackFloorHeightMm = 
     floorHeight: above ? above.floorZMm - layer.floorZMm : null,
     continuesAbove: stair => stairContinuesAbove(stair, graph, above?.graph ?? null, structGraph),
   }).filter(d => d.desc.top.kind === 'slope');
-  if (descs.length === 0) return out;
   const lines = descs.map(d => d.line);
-  for (const w of graphList(graph, 'walls') ?? []) {
+  for (const w of descs.length === 0 ? [] : graphList(graph, 'walls') ?? []) {
     const line = matchStairPartitionLine(w, lines);
     if (!line) continue;
     const { desc, stair } = descs[lines.indexOf(line)];
@@ -100,7 +101,47 @@ function buildWallTopProfiles(layers, layer, floorZFor, fallbackFloorHeightMm = 
       crossings: zLevels => partitionTopCrossings(desc, (zLevels ?? []).map(z => z - baseZ)),
     });
   }
+  // 階段下の部屋の帯（buildRoomBand）が層へ注入した「仕上げ」の階段の裏面の足元の中のその他の壁。復路下の壁・斜めの隔て板が既にある壁は飛ばす
+  addStairFootTops(out, graph, layer.underStairSoffits, layer.underStairRoomRects, floorOffsetMm);
   return out;
+}
+
+const ROOM_SIDE_PROBE_MM = 1; // 壁の帯の縁から部屋の内外を見る距離
+
+// 注入された裏面（layer.underStairSoffits。elevationSolids.js underStairSoffitsOf が階ごとに 1 回作り、buildRoomBand が帯の部屋に掛かるものだけを
+// 自階の層へ載せる。供給源はここで引き直さない）の足元の中の壁 → 裏面に沿う折れ線の天端（平面の立体 plan/planSolids.js と同じ供給源
+// ceiling/stairFootWallTop.js）。注入が無い層（階段帯・吹抜け帯・あらわしの階段の下・他の部屋・上階の層）では何もしない。
+// 節の値は帯の部屋の実効 FL 基準（floorOffsetMm を引く）。
+function addStairFootTops(out, graph, soffits, roomRects, floorOffsetMm) {
+  const surfaces = (Array.isArray(soffits) ? soffits : []).map(s => s?.surface).filter(s => s?.footprint?.rects?.length > 0);
+  if (surfaces.length === 0) return;
+  for (const w of graphList(graph, 'walls') ?? []) {
+    if (out.has(w.id)) continue;
+    const prof = wallFootTopProfile(w, surfaces, { zOffsetMm: floorOffsetMm, acrossMm: roomSideAcross(w, roomRects) });
+    if (prof) out.set(w.id, prof);
+  }
+}
+
+// 壁の帯（wallConcealRange）の両縁のうち、帯の部屋（roomRects＝実セルの矩形）に面する縁の厚み方向の座標。部屋帯の天井線は壁の室内側の面で
+// 裏面を評価する（stairSoffitCeiling.js）ので、壁の天端も同じ面で評価して天井線と食い違いを作らない。
+// どちらの縁も部屋の外・両方が部屋の中（部屋の中の壁）・帯や長さが不正なら null（帯の 3 点の最小＝平面と同じ）。
+function roomSideAcross(wall, roomRects) {
+  const cr = wallConcealRange(wall);
+  if (!cr || !(roomRects?.length > 0)) return null;
+  const [wLo, wHi] = [Math.min(wall.coord1, wall.coord2), Math.max(wall.coord1, wall.coord2)];
+  const alongOf = r => (wall.isVertical ? [r.y1, r.y2] : [r.x1, r.x2]);
+  const inRoom = (b, a) => roomRects.some(r => (wall.isVertical
+    ? b > r.x1 && b < r.x2 && a > r.y1 && a < r.y2 : b > r.y1 && b < r.y2 && a > r.x1 && a < r.x2));
+  // 壁と部屋の矩形が長さ方向に重なる所（その矩形ごとの中点）で、帯の外側すぐの点が部屋の中にある縁を探す。最初に決まったものを使う
+  for (const r of roomRects) {
+    const [r0, r1] = alongOf(r);
+    const [lo, hi] = [Math.max(wLo, r0), Math.min(wHi, r1)];
+    if (!(hi - lo > ROOM_SIDE_PROBE_MM)) continue;
+    const a = (lo + hi) / 2;
+    const [inLo, inHi] = [inRoom(cr.lo - ROOM_SIDE_PROBE_MM, a), inRoom(cr.hi + ROOM_SIDE_PROBE_MM, a)];
+    if (inLo !== inHi) return inLo ? cr.lo : cr.hi;
+  }
+  return null;
 }
 
 /**
@@ -126,7 +167,7 @@ export function makeProbeContext(layers, opts = {}) {
   const wallTopByLayer = new Map(); // layer -> Map<wallId, {zAt, crossings}>
   function wallTopProfileFor(layer) {
     let m = wallTopByLayer.get(layer);
-    if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor, opts.floorHeightMm ?? null, opts.upperGraph ?? null); wallTopByLayer.set(layer, m); }
+    if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor, opts.floorHeightMm ?? null, opts.upperGraph ?? null, opts.floorOffsetMm ?? 0); wallTopByLayer.set(layer, m); }
     return m;
   }
   return {
@@ -227,12 +268,22 @@ export function collectCutBreaks(cut, probeCtx) {
       } else if (isCutAlongWall(w, line)) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         addIfInsideLayer(c1); addIfInsideLayer(c2);
+        // 足元の天端（footCap）の節（足元の端・段の境界・折れ目・各 z との交点）も列の境界にする。隔て板（footCap でない）には足さない
+        const prof = probeCtx?.wallTopProfileFor?.(layer)?.get(w.id);
+        if (prof?.footCap && footCapLowersCeiling(prof, cut, c1, c2)) {
+          for (const a of prof.crossings([...slopeLevels, ...ceilLevelsOf(layer)])) {
+            if (a > c1 + GAP_EPS && a < c2 - GAP_EPS) addIfInsideLayer(a);
+          }
+        }
       } else if (isSightlineShape(w, line, cut.viewSign)) {
         const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
         addIfInsideLayer(c1); addIfInsideLayer(c2);
         // 斜めの天端が水平線の高さを横切る位置も列の境界にする（列の中で斜線が水平線をまたがない）。
-        const prof = probeCtx?.wallTopProfileFor?.(layer)?.get(w.id);
-        if (prof) slopeSpans.push([c1, c2]);
+        const profAll = probeCtx?.wallTopProfileFor?.(layer)?.get(w.id);
+        // 天井断面に届いている足元の天端（footCap）は無いものとして扱う（sectionHits.js dropReachedFootCap と同じ規則。天井が止める）
+        const prof = profAll?.footCap && !footCapLowersCeiling(profAll, cut, c1, c2) ? null : profAll;
+        // 足元の天端（footCap）は足元の区間の中だけが斜め。外の全高の区間まで edgeDropped を広げない
+        if (prof) slopeSpans.push(...(prof.spans ?? [[c1, c2]]));
         for (const a of prof?.crossings?.([...slopeLevels, ...ceilLevelsOf(layer)]) ?? []) {
           if (a > c1 + GAP_EPS && a < c2 - GAP_EPS) addIfInsideLayer(a);
         }

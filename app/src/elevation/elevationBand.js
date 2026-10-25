@@ -32,7 +32,7 @@ import {
   clipPrimitivesToXRange, line, dim,
 } from './elevationPrimitives.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
-import { minCeilingSegmentsWithSoffits } from './space/stairSoffitCeiling.js';
+import { minCeilingSegmentsWithSoffits, underStairSoffitTopAt } from './space/stairSoffitCeiling.js';
 
 /**
  * 帯のローカルy/z原点と階のdatumのズレ（mm）。**帯のローカル z=0 ≡ その帯の部屋の実効FL**という
@@ -631,6 +631,20 @@ export function stairContributionOverRoom(room, graph, floorHeight, aboveGraph =
 }
 
 /**
+ * 部屋帯の層スタック（自階 1 層）。階段下の部屋の帯（soffits が空でない）は、天井が裏面になる階段の裏面（underStairSoffits）と帯の部屋の
+ * 実セルの矩形（underStairRoomRects。壁のどちらの縁が室内側か）を自階の層へ載せる——探査の壁の天端（sectionProbe.js addStairFootTops）が読む。
+ * 値が無い帯（階段下でない部屋・あらわしの階段の下）は載せない＝従来どおり（帯種別の判定ではなく注入値の有無で決まる）。
+ * @param {import('@core').Room} room
+ * @param {object} graph
+ * @param {Array<{stairId:string, stairRoomId:?string, surface:object}>} soffits underStairSoffitsOverRoom の結果
+ */
+export function roomBandLayers(room, graph, soffits) {
+  const layers = buildBandLayers(graph);
+  if (soffits.length > 0) Object.assign(layers[0], { underStairSoffits: soffits, underStairRoomRects: cellBoundsList(room.cells, graph) });
+  return layers;
+}
+
+/**
  * 帯の天井を頭打ちにする、自階の「仕上げ」の階段の裏面（solids.underStairSoffits。elevationSolids.js underStairSoffitsOf）のうち、
  * 帯の部屋の実セルが足元（footprint.rects）に stairOver と同じ重なりの閾値で掛かるもの。階段室自身（stairRoomId）の帯は
  * buildStairBand の担当なので除く。供給が無い・空なら []。
@@ -1019,8 +1033,12 @@ export function buildRoomBand(room, graph, ctx = {}) {
   // 壁の輪郭は**他の3種の帯とまったく同じ共通経路**（appendBandCutContent→buildSectionFromLine→buildCutContent）
   // へ任せる。通常の部屋帯の層スタックは自階1層だけ——上階・下階が無いだけで、切断線の位置・
   // 探査延長・見えがかりの距離判定・アキは多層帯と同一の処理を通る。
-  const layers = buildBandLayers(graph);
-  const solidsOpts = ctx.solids ? { graph, ceilingHeight: layout.CH, room, ...ctx.solids } : null;
+  const layers = roomBandLayers(room, graph, soffits);
+  // 柱型の縦線の上端（elevationSolids.js）へも同じ裏面を渡す（値が無い帯は渡さない＝従来どおり）
+  const solidsOpts = ctx.solids ? {
+    graph, ceilingHeight: layout.CH, room, ...ctx.solids,
+    ...(soffits.length > 0 ? { columnTopZAt: (face, run) => underStairSoffitTopAt(soffits, face, run, bandFloorOffsetMm(room, graph)) } : {}),
+  } : null;
   const memberEdgesX = [];
   appendBandCutContent(primitives, room, graph, layout, layers,
     { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, floorHeightMm: ctx.solids?.floorHeightMm, upperGraph: ctx.solids?.upperGraph ?? null,

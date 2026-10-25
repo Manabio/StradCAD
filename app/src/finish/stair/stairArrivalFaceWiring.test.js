@@ -125,7 +125,7 @@ test('【配線】aboveGraph は展開図・天伏・立体の各呼び出し元
   has('../../ceiling/stairSoffit.js', 'const solid = stairSoffitSolids({ stair, graph, riser, floorZMm, aboveGraph })[0];'); // S1: stairUnderReturnSoffit を sectionProbe.js から移した
   has('../../elevation/section/sectionProbe.js', 'const found = stairUnderReturnSoffit(stair, graph, { floorHeight, floorZMm: floorZFor(room, layer), aboveGraph });');
   has('../../elevation/section/sectionProbe.js', 'addUnderReturnTops(out, graph, above ? above.floorZMm - layer.floorZMm : fallbackFloorHeightMm, layer, floorZFor, above?.graph ?? fallbackUpperGraph);');
-  has('../../elevation/section/sectionProbe.js', 'if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor, opts.floorHeightMm ?? null, opts.upperGraph ?? null); wallTopByLayer.set(layer, m); }');
+  has('../../elevation/section/sectionProbe.js', 'if (!m) { m = buildWallTopProfiles(layers, layer, spaceIndex.floorZFor, opts.floorHeightMm ?? null, opts.upperGraph ?? null, opts.floorOffsetMm ?? 0); wallTopByLayer.set(layer, m); }');
   has('../../elevation/section/sectionProbe.js', 'upperGraph: opts.upperGraph ?? null,');
   has('../../elevation/elevationBand.js', 'const probeCtx = makeProbeContext(layers, { floorOffsetMm: bandFloorOffsetMm(room, graph), floorHeightMm: opts.floorHeightMm, upperGraph: opts.upperGraph ?? null });');
   has('../../elevation/section/sectionStair.js', "? stairTreadFootprints(stair, graph, { riser, insetView: 'install', aboveGraph }) : [];");

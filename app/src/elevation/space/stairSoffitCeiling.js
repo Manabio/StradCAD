@@ -282,3 +282,24 @@ export function minCeilingSegmentsWithSoffits(segs, face, soffits, { floorZFor, 
   }
   return changed ? cur : segs;
 }
+
+/**
+ * 帯の天井線（minCeilingSegmentsWithSoffits）が、面の位置 face.faceValue・走りの世界座標 runWorld で取る裏面の高さ（帯の z 基準。
+ * 裏面の絶対 z−floorOffsetMm）。足元の外・soffits が空・値が非有限なら Infinity（天井を下げない）。複数の裏面があれば最小。
+ * 柱型の縦線（天井断面線より上へ出ない）の上端に使う——天井線と同じ点・同じ式で評価するので、縦線は天井線の上で終わる。
+ * @param {Array<{stairId:string, stairRoomId:?string, surface:object}>} soffits
+ * @param {{faceValue:number, isVertical:boolean}} face
+ * @param {number} runWorld
+ * @param {number} floorOffsetMm 帯の部屋の実効 FL（datum 基準。bandFloorOffsetMm）
+ * @returns {number}
+ */
+export function underStairSoffitTopAt(soffits, face, runWorld, floorOffsetMm) {
+  if (!Array.isArray(soffits) || soffits.length === 0 || !Number.isFinite(face?.faceValue) || !Number.isFinite(runWorld)) return Infinity;
+  const [x, y] = worldPt(!!face.isVertical, face.faceValue, runWorld);
+  let top = Infinity;
+  for (const s of soffits) {
+    const z = stairSoffitChAt({ solid: s.surface, floorStepMm: 0 }, x, y);
+    if (Number.isFinite(z) && Number.isFinite(floorOffsetMm)) top = Math.min(top, z - floorOffsetMm);
+  }
+  return top;
+}
