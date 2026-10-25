@@ -233,6 +233,8 @@ R1 柱型の線種は中線のまま／R2 airborne（部屋の真ん中の梁）
 ## プリミティブ語彙とスクリーン固定サイズ要素
 既存の「図」語彙に`weight`を追加しただけ。建具記号丸（`tag`）・留め三角（`miterTriangle`。輪郭線のみ）はスクリーン固定サイズが必要なため、mm座標に焼き込まずアンカー点だけを持つ専用プリミティブにし、pxはレンダラ側で校正値（`screenPxPerMm`）を掛けて算出する（焼き込むとscale変化で見た目サイズが狂う）。破線が要る線は必ず`line`プリミティブで出す（レンダラのpolylineはdash非対応。レンダラは改修しない）。
 
+**生成元は語彙ごとに別**：展開図（Konva）のプリミティブは`elevationPrimitives.js`、SVG（建具モード姿図・構造断面図）のそれは`structural/sectionFigure/svgFigurePrimitives.js`。両者の`dim`は引数順（と生成キー順）が違う別物なので、同じ呼び出し側で混ぜない（キー順の違いはそのまま出力差になる）。
+
 ### L字の角の外角を閉じる（`renderer/figureLineJoin.js`）
 canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のpx座標だけを角の2点に限って動かしてすき間を閉じる。**モデルmm座標・ゴールデンテストには一切触らない**。対象はモデルmmの端点が厳密一致する「ちょうど2本」の角のみ（3本以上・T字・破線・同一直線上・細線同士は対象外）。角度・延長量の計算はpx変換後の座標で行う（変換にy反転や不等倍がありうる）。
 - 共通の判断を1つの純関数に寄せ、レンダラ（`.jsx`）は返り値を描くだけにする（判断をレンダラに残すと変異テストで守れない）。適用先: 展開図（`renderer/figurePrimitivesKonva.jsx`）・敷地モードの境界線（`site/siteLineJoinPrimitives.js`）・階段レイヤ（`finish/stair/stairLineJoinPrimitives.js`）・構造レイヤの柱の仕上げ包み（`structural/columnWrapLineJoin.js`。柱単位で解決し他の柱の包み辺とはマージしない。壁と取り合う辺は壁側に任せる）・平面の段差断面レイヤ（`finish/stepSectionLineJoin.js`）・SVGレンダラ（`structural/sectionFigure/svgFigureLineJoin.js`。効果は階段模式図に限られる）。

@@ -5,6 +5,9 @@
 ## 柱・梁・耐力壁・スラブ・基礎・貫通孔はshapeMap外で管理する
 Wall/Openingと同じ「CL+オフセット」系アンカーで座標を導出するが、専用のobservable.map群（columnMap等）で管理しngraphに参加しない。CL削除時の連鎖削除（`_teardownCenterLine`）はshapeMap用ロジックを使えないため各map向けに個別の参照チェックを持つ——新しいmapを追加する際はteardown処理の追加も忘れないこと。
 
+## 構造リストの断面図のプリミティブは`svgFigurePrimitives.js`が唯一の生成元
+断面図（`sectionFigure/memberFigures.js`）と建具モードの姿図の矢印・FL線は、`{type:…}`を直書きせず`structural/sectionFigure/svgFigurePrimitives.js`のヘルパーで作る（型名は`SvgFigurePrimitiveType`）。ヘルパーは渡したキーを渡した順に並べるだけで既定値を足さず`undefined`の値も落とさない——描画側はキー名でしか読まないが、出力の比較（JSON・deepStrictEqual のテスト）はキー順と`undefined`キーの有無に敏感で、ヘルパー化で出力を1バイトも変えないため。展開図（Konva）の語彙とは別物で混ぜない（`elevation-model.md`）。
+
 ## タグ（部材番号）は材寸グループから2パスで導出する
 番号は「グループの材寸（断面積・配筋量等の`sizeKey`）を記号ごとに建物全体で降順比較した順位」から決まる（`tag = 階プレフィックス + 記号 + 順位`）。グループの既定＝**材寸署名**（`memberSignature`。材料・断面・配筋等の生値から毎回導出）が一致する部材の集合——実体化はせず、必要になるたびに導出する（finishモードの INTERIOR_MASTERS+customOverrides と同型のイディオム）。分割・統合・手動採番というユーザーの明示操作だけが、部材側の`numberGroupId`（"C#1"のような gid）と**部材グループ台帳**（`project.memberGroupLedger`、建物全体で共有・永続）へ書き込まれる：`grp.spec`=採用材寸、`grp.join`=加入署名（他階の未グループ部材をこの gid へ吸収する条件）、`grp.no`=手動タグ、`grp.mergedInto`=統合で吸収された旧 gid → 統合先 gid（他階に残る旧 gid 部材を次のモード境界で転送するための片方向ポインタ。多段統合はチェーンを解決する）。台帳は明示操作を受けたグループの分しか持たない。
 
