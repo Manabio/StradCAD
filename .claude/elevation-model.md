@@ -1,2588 +1,596 @@
 # 展開モード（室内展開図）設計意図
 
 `appMode==='elevation'`。アクティブ階の各部屋を「1段＝1帯」の固定倍率図として全画面に描く専用モード。平面・通り芯・寸法は出さず、
-`viewport.scaleX/offsetX`（ズーム）には触れない——独自の固定倍率（`chooseElevationScale`）とスクロール量（`ElevationModeState`）だけで完結し、
-平面へ戻ると元のビューが保たれる不変条件。純モジュールは`app/src/elevation/`に置き、`store.js`/`snap.js`/`*.jsx`/`react-konva`/`appViewport.js`
-（DOM依存）を静的importしない（node:test単体実行のため。校正値は`viewport.js`から取るか呼び出し側=`App.jsx`が渡す）。
+`viewport.scaleX/offsetX`（ズーム）には触れない——独自の固定倍率（`chooseElevationScale`）とスクロール量（`ElevationModeState`）だけで完結し、平面へ戻ると元のビューが保たれる（不変条件）。
+純モジュールは`app/src/elevation/`に置き、`store.js`/`snap.js`/`*.jsx`/`react-konva`/`appViewport.js`を静的importしない（node:test単体実行のため。校正値は`viewport.js`から取るか呼び出し側=`App.jsx`が渡す）。
 
-突入時の帯の一括構築（`_buildBands`。自階＋直上階／直下階のgraph）は`withGraphReadScope`で囲む——graphを一切変更しない
-読み取り専用処理であり、囲まないとMobXのcomputedが観測者ゼロで毎回再計算され突入に十数秒かかる
-（実機12室で14.2秒→0.52秒。`.claude/implementation-policy.md` 方針8）。
-
-突入境界（`modeBoundaries.elevation.enter`）は帯構築より前に、自階と直上・直下の壁の鮮度判定（`refreshWallsForViewEntry`。`.claude/mode-system.md`）を行う。`ElevationModeState`は壁・鮮度キー・構造部材（柱・梁）の変化でも帯を全再構築する（階切替で境界が再生成したとき・展開中のundo/redoで壁が戻るとき。アクティブ階が自分の階のときだけ）。既知の限界: 署名はidと鍵だけを見るため、idが同じで中身だけ変わる変更（構造スナップショットのundoで柱寸だけ変わる等）は検出しない。
-
-縦横スクロールは**クランプ方式**（循環しない・画面に収まる帯もminXへクランプし中央寄せしない——全帯を左三角の位置で揃えるため）で
-**書き込み時にクランプする**（読み出し側だけだと過剰ドラッグ分がスラックとして蓄積しデッドゾーンになる）。横スクロールの既定位置は
-左三角(`band.leftAnchorX`)から`LEFT_MARGIN_SCREEN_MM`（2パス換算）ぶん手前——`clampFaceOffset`の下限だけを`minX-marginMm`へ広げて実現する
-（上限はminXのまま）。
+- 突入時の帯の一括構築（`_buildBands`。自階＋直上階／直下階のgraph）は`withGraphReadScope`で囲む。graphを変更しない読み取り専用処理で、囲まないとMobXのcomputedが観測者ゼロで毎回再計算され突入が十数秒かかる（実機12室で14.2秒→0.52秒。`.claude/implementation-policy.md` 方針8）。**この囲みは外さない**。
+- 突入境界（`modeBoundaries.elevation.enter`）は帯構築より前に、自階と直上・直下の壁の鮮度判定（`refreshWallsForViewEntry`。`.claude/mode-system.md`）を行う。`ElevationModeState`は壁・鮮度キー・構造部材の変化でも帯を全再構築する（階切替で境界が再生成したとき・展開中のundo/redoで壁が戻るとき。アクティブ階が自分の階のときだけ）。
+- 縦横スクロールは**クランプ方式**（循環しない。画面に収まる帯もminXへクランプし中央寄せしない＝全帯を左三角の位置で揃えるため）で、**書き込み時にクランプする**（読み出し側だけだと過剰ドラッグ分がスラックとして蓄積しデッドゾーンになる）。横スクロールの既定位置は左三角(`band.leftAnchorX`)から`LEFT_MARGIN_SCREEN_MM`（2パス換算）ぶん手前（`clampFaceOffset`の下限だけを`minX-marginMm`へ広げる）。
+- 階別のビュー位置記憶・建具パネル連携は末尾の「ビュー位置の階別記憶・建具パネル連携」。
 
 ## 2つの描画エンジンの担当境界（新しい表現をどちらへ足すか）
-**依存の向きは一方向**（`elevation/importGraph.test.js`が固定。展開図リファクタ S1）: 帯ビルダー（Band/Stair/Void/StairSequence）→面の体裁（Figure/Faces 等）→`section/`→`space/`→補助（`elevationStyle.js`・`elevationPrimitives.js`）。
-`section/`・`space/`から親（`elevation/`直下）へ引いてよいのは補助の2本だけ。`elevation/`内に循環を作らない。`plan/planSolids.js`は`section/`を引かない
-（`beamDepthMm`は`structural/sectionCatalog.js`・`kneeDropZRangesAt`は`finish/kneeDropWall.js`・`stairUnderReturnSoffit`は`ceiling/stairSoffit.js`が定義元）。
-断面エンジンが面の値を要るときは、面側の純関数を`section/faceGeometry.js`等の下位モジュールへ置くか、帯ビルダーが cut/opts で渡す。
-階段の所在: **断面の形**（踏面のジグザグ・U字/折返しの区間長と段数と蹴上・ささらの帯・断面線が閉じるか）は`section/stairSectionProfile.js`が唯一の供給源で、
-帯ビルダー（`elevationStair.js`・`elevationStairSequence.js`）と断面エンジン（`section/sectionStair.js`・`cuts/`）の両方がそこを引く（旧`elevationStairSection.js`は S7 で解消）。
-`elevationStair.js`は帯の組み立て（面の選択・2層枠・フォールバックの折返しプリミティブ化）、`elevationStairSequence.js`は歩行順の面シーケンス（cut 表と内容の組み立て）だけを持つ。
-
-1枚の帯へ**2つのエンジンが同時にプリミティブを流し込む**。断面エンジンへの入口は
-`section/sectionContent.js`の**`buildSectionFromLine(line, layers, opts)`（面非依存の入口。展開図一般化Phase 8・
-2026-09-13）→`buildCutContent`**で、通常の部屋帯・上部吹抜けを持つ部屋帯・吹抜け帯（`appendBandCutContent`／
-`appendUpperStoreyOutline`）がこれを共有する。階段帯だけは`switchbackCuts`/`straightCuts`が組んだcutを
-`buildCutContent`へ直接渡す（`ends`を持たない手組みcut＝face由来のフォールバック経路。統合は見送り——13/11に
-直進階段が無くgoldenでゲート不能のため、Phase 7cでテスト.stqに直進階段を含めてから。裁定2026-09-13）。帯ごとに違うのは**層スタックだけ**——通常の部屋帯は自階1層、
-上部吹抜けは自階＋上階、吹抜け帯は自階＋直下階。**層スタックを組む入口は`section/sectionBandLayers.js`の
-`buildBandLayers(selfGraph, {above, below, selfFloorZMm})`の1関数だけ**（展開図一般化Phase 7・2026-09-13。
-帯ビルダー・階段のcut表・加算レイヤはこれを呼ぶか受け取るだけで、層のリテラルを書かない。above/belowは
-呼び出し側が持つ階リストを宣言的に渡し、階高が解決できない層で打ち切る。空気連結`componentOf`で層を
-列挙する案は不成立＝連結は可視判定側の役目）。切断線の位置・探査延長・見えがかりの距離判定・
-アキはすべて共通経路が決める。
-
-帯⇄エンジン間の専用チャネルは、Phase 5で`openSpans`（遠側床・天井の外部注入）、Phase 6b-2で
-`drawFloorProfile`（断面線によるアキ下限のクランプ）が撤去され、現在6本（`ceilProfile`／
-`floorZProfile`／`aboveCeilVisibleRanges`／`upperFloorCutEnds`／`upperOverhang`系＋Phase 6b-3の`stairCut`）。
+1枚の帯へ**2つのエンジンが同時にプリミティブを流し込む**。
 
 | | `buildFaceFigure`（`elevationFigure.js`） | 断面エンジン（`section/`） |
 |---|---|---|
 | 入力 | **1つの面**（1階分のグラフの、1部屋の境界1辺） | 世界座標の切断線＋**層スタック**（複数階） |
 | 座標 | 面ローカル | 世界座標→列×z帯 |
 | 見えるもの | `ctx.graph`＝**その階だけ** | 全層。遮蔽・奥行き・断面/見えがかりの判定を持つ |
-| 仕事 | **図面の体裁**（床線・天井線・端の縦線・開口・巾木・壁材2段書き・寸法・通り芯丸・面ラベル・段差見付け面） | **壁の実体の輪郭**（壁断面・見えがかり・腰壁の天端と端部・袖壁の断面・アキの標記） |
+| 仕事 | **図面の体裁**（床線・天井線・端の縦線・開口・巾木・壁材2段書き・寸法・通り芯丸・面ラベル・段差見付け面） | **壁の実体の輪郭**（壁断面・見えがかり・腰壁の天端と端部・袖壁の断面・アキの標記）と**構造材（梁・柱）の断面・見えがかり** |
 
-**新しい表現を足すときの判断**——**壁の実体に属する表現は断面エンジンだけに書く**（腰壁の天端・
-端部、袖壁の断面枠、アキの標記はすべて`section/`が唯一の情報源）。自階で閉じる図面の体裁は
-`buildFaceFigure`。かつては「壁の実体に属する表現は両方に要る」という3列目があり、片方を忘れると
-**例外もログも出ない欠落**になっていた（実機2026-08の腰壁天端。1階の帯に多層書きされた2階の腰壁に
-天端が出なかった）。この列は`buildRoomBand`も共通経路を通すようにして解消した。
+**新しい表現を足すときの判断**: **壁・構造材の実体に属する表現は断面エンジンだけに書く**（腰壁の天端・端部、袖壁の断面枠、アキの標記、梁型・柱型はすべて`section/`が唯一の情報源）。自階で閉じる図面の体裁は`buildFaceFigure`。
+かつて「実体に属する表現は両方に要る」という3列目があり、片方を忘れると**例外もログも出ない欠落**になった（腰壁天端が多層書きの上階分に出なかった）。`buildRoomBand`も共通経路を通すようにして解消した。
+同じ実体の縁を両者が別の理由で描くのは正常（面端の縦線は体裁の「端の縦線」であり壁断面の縁でもある）。完全に同じ位置・同じ線種の線は帯を確定する1箇所（`finalizeBand`の`dedupeCoincidentLines`）で畳む。ただし**偶然の重複除去に頼らず「描かない理由」の側で決める**（線種を分けた瞬間に表面化した前例がある）。
 
-同じ実体の縁を両者が別の理由で描くこと自体は正常（面端の縦線は体裁としての「端の縦線」であり、
-同時に壁断面の縁でもある）。完全に同じ位置・同じ線種の線は帯を確定する1箇所
-（`finalizeBand`の`dedupeCoincidentLines`）で畳む——見た目は変わらず、視覚回帰スナップショットに
-「経路が増えただけ」の差分が乗らなくなる。
+### 依存の向きと所在（展開図リファクタ S1〜S7 後）
+- **依存は一方向**（`elevation/importGraph.test.js`が固定）: 帯ビルダー（`elevationBand.js`・`elevationStair.js`・`elevationVoid.js`・`elevationStairSequence.js`）→面の体裁（`elevationFigure.js`・`elevationFaces.js`等）→`section/`→`space/`→補助（`elevationStyle.js`・`elevationPrimitives.js`）。`section/`・`space/`から親（`elevation/`直下）へ引いてよいのは補助の2本だけ（定数・変換の語彙で、帯や面の概念を持たない）。`elevation/`内に循環を作らない。`plan/planSolids.js`は`section/`を引かない。
+- 断面エンジンが面の値を要るときは、面側の純関数を下位モジュールへ置くか、帯ビルダーが cut/opts で渡す。置き場: 面の幾何（`letterOf`・`DIR_SIGN`・`wallLessEndAt`・`perpFaceAt`・`perpWallCrossesFacePlane`）は`section/faceGeometry.js`、断面線プロファイルの合成・描画位置（`mergeFloorProfiles`・`drawnFloorProfileZAt`・`halfWallThicknessMm`・`collectRunBreaks`）は`section/floorProfileMath.js`。
+- 他ドメインの純関数の定義元: `parseBaseboardHeightMm`は`core/room.js`、`beamDepthMm`は`structural/sectionCatalog.js`、`kneeDropZRangesAt`は`finish/kneeDropWall.js`、`stairUnderReturnSoffit`は`ceiling/stairSoffit.js`（平面の立体と展開図が共有する単一の供給源。展開図側へ置くと`plan/`が`section/`を引く）。
+- `localXOf`は2つある: 面版は`elevationFigure.js`、切断版（`localXOf(cut, …)`）は`section/sectionTypes.js`。
+- **階段の断面の形**（踏面のジグザグ`stairRunProfile`・U字/折返しの区間長と段数と蹴上`resolveSwitchbackParams`・ささら`stringerPrimitives`/`stringerBandGeometry`・断面線が閉じるか`stairSectionIsClosed`）は`section/stairSectionProfile.js`が**唯一の供給源**で、帯ビルダー（`elevationStair.js`・`elevationStairSequence.js`）と断面エンジン（`section/sectionStair.js`・`cuts/`）の両方がそこを引く（階段の断面の形だけを持つ旧ファイルは S7 で解消し、親→子→親の交差を無くした）。`elevationStair.js`は帯の組み立て（面の選択・2層枠・フォールバックの折返しプリミティブ化）、`elevationStairSequence.js`は歩行順の面シーケンス（cut表と内容の組み立て）だけを持つ。
 
-### 2層帯は「1階と2階の展開を上下に並べた図」（ユーザー確定の方針C）
-上部吹抜けの多層書きは、**吹抜けを通して上を覗いた図**ではなく、**1階の展開と2階の展開を
-上下に並べた図**として組む。上階ぶんは`elevationVoid.js`の
-`appendUpperStoreyOutline`（輪郭。断面エンジンを上階だけの1層としてもう1本）と
-`appendUpperStoreyTrim`（体裁。天井断面線・巾木・壁2段書き・天井高寸法）が担当する。
+### 契約（S2）と入口
+- 断面エンジンの入口は`section/sectionContent.js`の**`buildSectionFromLine(line, layers, opts)`**（面非依存）→`buildCutContent`。通常の部屋帯・上部吹抜けを持つ部屋帯・吹抜け帯（`appendBandCutContent`／`appendUpperStoreyOutline`）が共有する。階段帯だけは`switchbackCuts`/`straightCuts`が組んだcutを`buildCutContent`へ直接渡す（`ends`を持たない手組みcut＝face由来のフォールバック経路）。
+- cutは**`makeSectionCut(spec)`（`section/sectionTypes.js`）が唯一の生成器**。必須キー（`line`・`viewSign`・`dirSign`・`layers`・`zRange`・`baseFloorZ`）が欠けたら投げ、**渡されていないキーを既定値で足さない**（`'ends' in cut`のような存在判定と`{...cut}`の展開で挙動が変わりうるため）。
+- `opts`は読み手による4群の typedef で契約化されている: **CutSpec**（切断の定義）／**ProbeInputs**（層・探査）／**RenderStyle**（scale・lineWeightsPx・baseboardMm）／**BandInjections**（stairCut・gapBeamRects・gapFloorProfile・floorlessRanges・memberLayers・memberCeilZAt・memberSplitsGaps・memberFromRoomSide…）。形は平らなまま（群はキーの置き場ではない）。`sectionTypes.test.js`が関数ごとの`opts.*`の読み取りと typedef の一致を固定する。`SectionCut`の残骸キーは撤去済み（S2。経緯は履歴）。
+- 帯ごとに違うのは**層スタックだけ**（通常の部屋帯＝自階1層、上部吹抜け＝自階＋上階、吹抜け帯＝自階＋直下階）。**層スタックを組む入口は`section/sectionBandLayers.js`の`buildBandLayers(selfGraph, {above, below, selfFloorZMm})`の1関数だけ**。帯ビルダー・階段のcut表・加算レイヤはこれを呼ぶか受け取るだけで、層のリテラルを書かない（階高が解決できない層で打ち切る）。例外は2箇所（`switchbackCuts.js`の self 1層の probeCtx と`elevationFaces.js`の面抽出の仮想断面オフセット用 self 層リテラル）で、増やさない。**層に問う入口は`section/sectionLayerStack.js`の4規則**（後述「層スタックの一般規則」）だけ。切断線の位置・探査延長・見えがかりの距離判定・アキはすべて共通経路が決める。
+- 帯⇄エンジン間の専用チャネルは6本（`ceilProfile`／`floorZProfile`／`aboveCeilVisibleRanges`／`upperFloorCutEnds`／`upperOverhang`系／`stairCut`）。増やさず、列にしか無い情報が図に要るときはエンジンの答え（ZBandの付帯・ヒット列・`cut.ends`）を読む。
 
-範囲は次の2条件の**積**（`upperStoreySegments`）。吹抜けの範囲は下の断面が既に上階天井まで
-描いているので引く。
-1. **その面の平面が上階に存在する範囲**（`upperPlaneLocal`。同じ通りに上階の壁が1枚でもあれば
-   最初の壁から最後の壁まで——あいだの隙間は「その面のアキ」で、平面としては連続している）
-2. **その上階の空気が、吹抜けを通して下階の空間とつながっている範囲**（下記「断面の中の判定」）
-
-(2)が無かったのが実機「5」A・C1の不具合の根本——(1)は「上階にその通りの壁が在るか」という
-**平面の存在確認**であって可視判定ではない。その範囲は定義上つねに1階天井に蓋をされた側
-（＝断面の中）なので、方針Cの上階パスは可視判定を持たないかぎり**断面の中だけを描く**という
-構造になっていた。方針Cは「1階と2階を上下に並べる」ままで、範囲だけが可視領域へ縮む。
-
-上階を**それ自身が自階である1層の断面**として組むのが要点——そうすることで上階の壁・アキ・
-エッジがすべて通常の1層帯とまったく同じ処理で出る（「上に実在の部屋がある高さは非描画の床構造」
-という分類に手を入れずに済む）。断面ローカルxはcutごとに`line.lo/hi`から決まるため、面ローカルxへ
-戻す平行移動を掛ける。
-
-**体裁の値の出どころはすべて2階の部屋**——1階の巾木高さ・壁材を2階へ転用しない。巾木・壁2段書きは
-「その位置の2階の部屋の面がある範囲」だけに出る（壁が無い区間＝アキには、そもそも巾木も壁材も
-存在しない）。**横方向の寸法（壁芯間・通り芯丸・面ラベル）は増やさない**——上下階で同じ通り芯・
-同じ位置なので、重ねても完全に同じ場所へ重なるだけ。増やすのは縦の天井高寸法（上階ぶん1本）。
-
-この結果、**天井の高さが変わる境界に立つ壁は、上階を描く範囲では壁厚（両縁）で出る**——下の断面は
-「見える側の面だけ」だが、上階をそれ自身の階として描く範囲では同じ壁が上階の切断壁として普通に
-扱われるため。逆に**上階を描かない範囲では見える側の1縁だけ**になる（壁の向こう＝断面の中を向いた面は
-描かない。実機「5」A面左3200・C1面右400）。
-
-### 「断面の中」の判定は空気セルの連結成分で決める（ユーザー明示指示2026-08）
-断面の中＝**連続した断面線で切り取られた向こう側全て**（壁の中も、隣の部屋も、天井裏も）。
-多層帯では断面線が図を左右に分割するので、分割されたどちら側が中かを決める必要がある。
-判定は`section/sectionVisibility.js`に一本化する: 列（`buildColumns`のx区間）×z区間を
-「実体が占めない＝空気」で切り出し、隣接列の空気はz区間が重なれば連結、帯の持ち主の空間を種に
-フラッドフィルして、到達できた空気だけが断面の外。遮蔽実体は`cut`/`cutAlong`（切断線を横切る／
-縦断する壁）だけで、`wall`（見えがかり）は切断面の**向こう**にあるので横の連結を遮らない。
-
-**「線の左右どちらが中か」を一次情報にしてはいけない**——側判定はその断面線が図を床断面から
-天井断面まで**完全に分断するとき**しか定義できない。腰壁は天端の上で、アキは穴で、段違い天井の
-壁は低い側の天井より下で、それぞれ左右がつながる。側は線の属性ではなく**連結性の結果**である。
-分断する線に限れば「左右の一方だけが到達可能」が成り立つので、その性質は独立検算として
-単体テストに置く（`sectionVisibility.test.js`）。この判定は「壁があるか」ではなく「つながって
-いるか」なので、腰壁越し・アキ越しに見える上階は自動的に描かれる。
-
-**エンジン側の適用**: `buildColumns`が全ての帯について列ごとの到達可能な空気を求め、
-`clipBandsToVisible`がそれで帯を切る。**天井断面より上を描く例外は1つだけ**——「隣の列の
-到達可能な空気に面している切断壁」。段違い天井の境界に立つ壁も、吹抜けに面した腰壁の天端も
-これ1つから出る（かつては「段違い天井の壁」「腰壁・垂れ壁」の2つの例外に分かれていて、後者は
-隣に空気があるかを見ずに無条件で残していた＝吹抜けに面していない腰壁まで天井の裏に描いていた）。
-`sectionEmit.js`の`hiddenByCutWall`（背景の水平線が手前の切断壁に隠されるか）も同じ見方
-——旧`trimmedByCutWall`は「切断壁の天端以下ならすべて」で、床に立たない垂れ壁の**下**まで
-巻き込んで隠していた。
-
-**見えがかり壁の面が終わるxは、突き当たる切断壁の向こう側**（`sectionEmit.js`の`wallEndXAt`。
-ユーザー実機指摘2026-08「「5」D1: 2階Y1から2000のCL左側の腰壁の上から2階天井までの線は、同じCL
-右側が正解」）——側縁は列の境界に立てるのが原則だが、その区間が**隣接列の切断壁の天端から始まる**
-ときだけ切断壁の向こう側の面へ送る。理由は平面にある: 腰壁が突き当たる隅では壁の実体は連続して
-おり、壁面が無くなる（アキになる）のはその切断壁の向こう側から。手前の面に立てると線が断面の
-手前の縁から生えて見え、断面の厚みの中が壁なのかアキなのか読み取れなくなる。
-なお同じ位置の**天井断面の段差・上階床の小口**は`drawnCeilingRiserX`の既存規約（天井が高い側へ
-半壁厚）で手前の面のままである——両者は別の規則で、揃えてはいけない。
-
-**上階の床の断面線は、境界に立つ切断壁の断面の中を通さない**（`sectionEmit.js`の
-`ceilStepSlabSection`。ユーザー明示指示2026-08「「5」D1: CL右側の腰壁天端から2FLまでの断面線と
-2FL断面が取り合うのが正解」）——上階の床と、その上に載る腰壁・袖壁は**1つの連続した切断面**で、
-その内部に床の断面線を引くのは「断面の中は描画しない」に反する。壁の列を越えた位置＝壁の
-向こう側の面から描き始め、壁の向こう側の縁がそこで床の断面線へ折れる1本の輪郭になる。
-小口（低い側の天井→上階の床）は**境界のまま**動かさないこと——小口と壁の手前の縁が1本に
-つながるのが、スラブと壁が一体の切断面であることの表現である（小口を壁の向こう側へ送る案を
-一度入れたが、実機で誤りと判明して撤回した）。
-
-**壁のない端部のはね出しは、上階ぶんの天井断面線にも掛ける**（`elevationVoid.js`の
-`appendUpperStoreyTrim`。ユーザー実機指摘2026-08「「5」D1: 2階天井線は、Y1から3500CLの右側
-はね出しが正解」「「5」B: …左側はね出しが正解」）——`faceWallLessExtents`の規則は
-`buildFaceFigure`（自階の床線・天井線）と断面エンジンの探査延長には掛かっていたが、上階ぶんの
-体裁だけが漏れており、1階の天井線は延びるのに2階の天井線がCLで止まっていた。延ばすのは
-**面の端に一致する側だけ**で、区間の内側の境界（吹抜けとの境目）は動かさない。
-
-**踊り場前縁の切断（折返し階段の seq1・seq3）はアキを標記しない**（ユーザー指示2026-10-07「踊場、回転部に『アキ』は不要」。
-`switchbackCuts.js`が seq1/seq3 に `openGapMarks: false` を付け、`emitOpenGapMarks`が空配列を返す。
-`SectionCut.openGapMarks`は任意で、未指定・true は従来どおり標記する。階段の他の面〔seq4/5〕と通常の面は不変）。
-レーン境界の実壁（隔て板）の面（seq2）もアキを標記しない（裁定2026-10-14「バツは不要」。隔て板の上・端の先は同じ階段室の空気）。実壁が無い（鉄骨等）ときは従来どおり。
-**抜けの先が階段室（`Room.feature===STAIR`）なら、その抜けはアキではない**（裁定2026-10-14「ホール C: バツはなし」。階段室への通路）。
-`sectionEngine.js`の`buildColumns`が、面の軸CLから視線方向の向こう側のセルを引いて`open`帯に`farStair`を付け、
-`emitOpenGapMarks`が標記しない。部屋名は見ない。階段帯（`cut.stairCut`）は対象外（切断線の置き方が違う）。
-**開放スパンの中に見える直交壁（隔て板）の両面は中線の縦線で描く**（同裁定「左右壁厚に中線」。`sectionEmit.js`の
-`emitOpenSpanEdgeOnWalls`）。面に端を接して奥へ延びる自階の壁を、同じ軸CLで1組（下地壁＋仕上げ薄壁）にして外面2本。
-z範囲は`open`帯∩壁の存在z（見えがかり壁と同じ式。`sectionHits.js`の`edgeOnWallZRanges`）。面を横切る壁・面の端壁・階段帯は対象外。
-**階段室の開口越しに階段を見る（S4。ユーザー指示2026-10-14「X2の右910の右側：階段の見え掛かり／左側：正面壁の見え掛かりとして傾斜天井の取り合い線（細線）」）**:
-(1) 面の向こうが階段室で天端が階段の裏面との取り合い（`junction`。復路下の壁）の壁は、部屋の包絡矩形・奥行き上限（800）を掛けず壁の帯（`viaStair`）で見通す（最初の1枚だけ。他の壁は従来どおりアキ）。天端の線は細線（`junctionTop`）、線種の階調（直近）には数えない。
-復路下の壁の天端は直上の層が無い単層の部屋帯でも付く（`probeCtx.floorHeightMm`＝`solids.floorHeightMm`）。(2) 開口越しの階段は`sectionContent.js`の`farStairViewPrimitives`が細線で描く:
-視点から遠ざかって上る flight の段鼻（足元＋(番号+1)×蹴上・段板の幅）と、視点側を向く回転部の蹴上（`farSideSilhouettePrimitives`をレーンを横切る切断へ一般化。奥行き＝走行方向、端の縦線なし）。
-(3) 遮蔽は列の手前の壁・断面と、隔て板の端面（`emitOpenSpanEdgeOnWalls`が返す矩形の厳密内部）。隔て板の両面の縦線は`viaStair`の帯の手前でも引く。階段の断面（太線）・階段帯・階段下の帯には触れない。
-(4) **巾木**（ユーザー指示 2026-10-15「階段下スペースは『ホール』なので巾木が見える」「X2+910 に立つ壁小口にも巾木」）: 階段下スペースは
-帯の部屋（ホール）の一部として見えるので、`viaStair` の壁の足元（同じ壁の帯が下に続かない帯の下端）に帯の部屋の巾木高さ（`buildSectionFromLine`
-の `baseboardMm`＝`appendBandCutContent` が部屋の `finish.baseboardHeight` から渡す）の細線を引く。壁の水平線と同じ遮蔽・降格で、隔て板の端面の
-厳密内部では切れる。隔て板の小口にも同じ高さで両面の間に引く——**背後に `viaStair` の壁がある小口だけ**（`emitOpenSpanEdgeOnWalls` の `baseboardMm`。
-他の開放スパンの壁端には引かない）。どちらも**足元が床の高さ**（`sectionLevelZs`）の帯・端面だけ（扉の上のまぐさ・垂れ壁の下端には引かない）。
-階段帯（stairCut）・吹抜けの帯の上階側（`elevationVoid.js` が直接呼ぶ `buildSectionFromLine` は `baseboardMm` を渡さない＝対象外。`appendBandCutContent` 経由の帯は部屋の巾木を渡す）・巾木なし（0・天井高以上）は引かない。
-下記・後述の「6」C のバツに関する旧裁定（2026-08/09。13.stq「6」C にバツを求めたもの）のうち、階段の
-seq1/seq3 の面に関するものは**この指示で撤回**した（一般規則としては他の面で有効）。
-
-**アキ（バツ・「ア キ」）は、面を横切る切断壁の天端の上の空気を含めない**（`sectionEmit.js`の
-`emitOpenGapMarks`。ユーザー実機指摘2026-08「「5」D1: 2階のバツが、Y1から2000CL側、開口端部を
-正しく拾っていない」）——アキは**その面の平面に壁が無い範囲**の標記で、直交する壁を越えた先の
-空間はこの面の穴ではない。混ぜると連結成分が壁の断面の厚みの中へL字に食い込み、バツの端点が
-「壁の手前の縁×天端」に落ちるうえ、外接矩形でなくなるため「ア キ」の文字も出なくなる。
-**面の平面にある腰壁の天端の上（＝本当のアキ）は下が`wall`帯なので影響しない**——「6」Cの
-「バツ左下点は左側壁断面と腰壁上端の交点へ」はそちらの構成で、従来どおり。
-
-**「壁が途切れたか」の2つの抑止規則は、隣にアキ（`open`）があるなら効かせない**
-（`sectionEmit.js`。ユーザー実機指摘2026-08「「5」B: 2階Y1から2000と3500のCLにエッジが
-描画されない」）——どちらも「その先で壁面が何らかの形で続いている」ことが前提の規則で、
-アキは「その面の平面に壁が無い」ことそのものだから、境界の縦線が要る。
-- `uncoveredZRanges`の「同じ壁面がキャップの違いだけで高さを変える境界＝セル境界には縦線を
-  出さない」（その18）は、**境界に切断壁が立っていれば天端までしか効かせない**。天端より上は
-  隣の壁面自身の被覆で決める（隣で同じ壁面が続けば消え、アキなら残る）。「必ずCLに重なる」
-  というその18の根拠は、境界に実体が無い場合の話である。
-- `splitByCutWall`の「切断壁に切られて持ち上がった帯の側縁は描かない」（その17）は、
-  **隣接列がアキのときだけ**外す。スラブ等の別の見え方に変わるだけなら従来どおり抑止する。
-
-**「その面のどこに壁があるか」は1つの述語**（`elevationFigure.js`の`wallLessRunsOnFace`＝壁の実体が
-無い区間＝開放スパン(描画基準)＋多層合成で延長された範囲＋**実壁（graph.walls）の被覆の隙間**
-（`elevationFaces.js`の`wallCoverageGapsOnFace`。第3の源。ユーザー実機指摘2026-09「22」2階A1×
-階段の下り口: `face.spans`の'wall'区間は開放スパン解析＝部屋の連続性由来で、その内側に「壁が
-生成されていない区間」があっても'wall'のままのため、実壁の被覆というこの源が要る。**面の端
-(0/run)に接する側は`hasWallAtLocal0/Run`が真（壁のある端＝出隅）の側では常に報告し、偽（壁のない
-端部）側は幅`END_ARTIFACT_TOL_MM`(=150mm)以下なら報告しない**——壁のない端部では面の境界が
-壁中心線(CL)のまま残り、実壁の仕上げ面はそこから半壁厚ぶん内側から始まるため、幅わずか
-（概ね57.5mm）の見かけの隙間が必ず生じる。これは巾木を面の端(0/run)でクランプする既存規則
-（`Math.max(drawnX0,0)`/`Math.min(drawnXRun,run)`）と二重になるだけなので報告しない。ただし
-階段口・大開口のように幅がその上限を超える隙間は、壁のない端部に接していても実在する欠落
-なので報告する）から出す。巾木（壁のないところに巾木は
-ない）と壁2段書き（壁仕上げは壁の中央に書く）が同じ述語を読む——二重管理を作らない。
-面の端に接する区間は外側へ開いたまま返し、呼び出し側が自分の基準でクリップする（巾木は面の範囲、
-壁2段書きは壁中心線区間）。
-
-**壁2段書き（壁仕上げラベル）は「壁の実体がある区間ごとに1つ・その区間の中央」**（ユーザー実機指摘
-2026-09「壁が2つに分かれていたら、それぞれの壁の中央に書く」）。**基準は壁中心線区間(boundary)の
-まま**で壁の無い区間を差し引く——全面が壁の面ではクリップが効かずラベル座標が1mmも変わらない
-（面の範囲run基準へ変えると全面のラベルが半壁厚動き、壁芯間寸法との中心合わせの根拠も失う）。
-**開口・床の段差は区間を割らない**（開口は壁に開いた穴。従来どおり「避ける障害物」のまま）。
-退避（`avoidObstacleRangesX`）も省略判定も**区間ごと**に行い、障害物から開放スパンは外す
-（区間の境界そのもののため）。上階ぶん（`elevationVoid.js`の`appendUpperStoreyTrim`）は元から
-「その位置の2階の部屋の面がある範囲ごと」に置いており同じ規則——こちらは変更していない。
-
-**巾木は壁のある範囲だけに引く（壁面に沿う部材。2026-10-15 に改訂）**: 壁のある端は面の端（ローカル0/run）で止める。
-**壁のない端部（`hasWallAtLocal0/Run===false`）では、面の壁が面の端の外へ実際に続く範囲だけ、はね出しへ伸ばす**
-（`wallContinuationBeyondFaceEnd`。同じ通りの壁を結合し、面の端を含む区間が端の外へ出ている長さ。上限は端部の延長量）
-——壁が続かない端は従来どおり面の端で止まる（ユーザー指摘2026-10-15「B2: Y4側は左側中線まで。巾木は壁面に沿ってある部材なので」）。
-旧規則（以下）が否定したのは「壁が続かないのに伸ばす」ことだけ:
-（ユーザー実機指摘2026-09「「11'」B1: 1000CL右の壁エッジ外に巾木の線が出ている。巾木は壁のある
-所にしかない」）。ただし**止めるのは面の端であって壁中心線（CL）ではない**——CLで止めると、
-はね出した床線との間に段が付く旧不具合（2026-08の指摘「巾木がCLで終わる」）の再発になる。
-区間端は描画基準（`drawnX0`/`drawnXRun`）のまま面の範囲へクランプする（`Math.max`/`Math.min`。
-狭める方向のクランプ＝階段帯の`floorSpanX`を壊さないため）。**床線・天井線のはね出しは従来どおり**
-（ユーザー明示指示2026-08「天井と床の延長はこのままで良い」）——今回否定されたのは巾木だけ。
-多層合成で延長された範囲に引かないこと（2026-09の前段。`voidAbove.selfLocal`）と合わせ、
-**「巾木は自階の壁が実在する範囲だけ」という1原理**に統一する。
-
-**多層帯で合成により延長された範囲には、自階の巾木を描かない**（ユーザー実機指摘2026-09
-「壁のないところに巾木はない」）。吹抜け合成（`elevationVoid.js`）は`lo=min/hi=max`で走り範囲を
-伸ばすが、伸びた先に自階の壁があるとは限らない（実機「5」のA面・D1面）。`withVoidRanges`が
-「自階の面が実在する範囲」を`face.voidAbove.selfLocal`として載せ、巾木ブロックはその**補集合**を
-既存の`floorGaps`へ足すだけにする——この経路に足すことで区間水平線のクリップと段差縦線の抑止が
-同時に効く（別機構を作らない）。判別子は「**吹抜けの下か**」ではなく「**自階の壁があるか**」である点が要
-——`voidLocal`をギャップにすると、吹抜けの下でも自階の壁が全幅にある面（実機「5」のB・C）の
-正しい巾木が消える。`selfLocal`は**合成後の座標系**で作ること（`withVoidRanges`は`originWorld`を
-貼り替えるため、旧座標のままだとlo側が延長された面で範囲が丸ごとずれる）。上階だけの面は
-空配列＝自階の巾木0本（上階ぶんは`appendUpperStoreyTrim`の管轄）。ギャップの内側の端は自階の面の
-端ちょうどで、**内部境界でははね出させない**（はね出しは図の外へ続く表現のため外端だけ）。
-壁2段書き（`avoidObstacleRangesX`）にも同種の過剰があるが、今回のユーザー指示は巾木のみのため
-手を付けていない（同じ`selfLocal`を障害物区間へ足せば直る見込み）。
-
-**上階の天井高寸法は「その端に上階の断面がある面」の左に立てる**（`elevationVoid.js`の
-`appendUpperStoreyTrim`。ユーザー実機指摘2026-08「「5」A: 2階左側の天井高さ2400は、図中、
-該当する断面がないので描画不要」）——帯に1本だけ足す寸法を`layout.chDimX`（先頭面の左）へ
-固定していたが、先頭面の左が「断面の中」（1階天井で閉じていて上階を描かない）の場合、
-図中に該当する断面が無い寸法になる。1階の左CH寸法が「左端**区間**の実際の床〜天井」を測るのと
-同じ規約を上階にも適用し、上階の区間が面の左端に来ている最初の面を選ぶ。左端が吹抜けの面は
-自身の左CH寸法が1FL〜2階天井を測っているので、この規約なら寸法どうしが重ならない。
-
-## 見えがかりの奥行き判定（ユーザー明示指示2026-08）
-**見えがかりとして描くのは「その切断で最も手前の壁面（＝主な描画対象）から測った奥行きが
-`SIGHTLINE_DEPTH_LIMIT_MM`(=800)未満」のものだけ**。それ以上奥にある壁面は同じ壁面の凹み
-（ニッチ・袖壁の脇）ではなく**別の空間**なので、見えがかりにせずアキにする
-（`sectionEngine.js`の`buildColumns`で`wall`帯を`open`帯へ置き換える。基準の距離は線種の階調と
-同じ`nearestSightlineDistMm`）。旧実装の上限は`withinViewRoom`（帯の部屋の包絡矩形）だけで、
-部屋の中でありさえすれば何m先の壁でも細線で描いていた（実機「5」D1: 面の平面から3200奥の壁が
-見えがかりになり、アキが出ていなかった）。**構造材の見えがかり（空中を横断する梁）も同じ判定を
-通す**（`sectionStructure.js`）。
-
-**見えがかりは「見えるもの」だけ——上階に実床があれば自階の天井で終わる**
-（`sectionLayerStack.js`の`resolveSightlineTopZ`。ユーザー実機指摘2026-08「「5」D1: 1F天井
-見えがかり（細線）が…1FL天井断面に衝突するまで」）。天井裏（自階の天井〜上階FL）にも壁の実体は
-あるが天井に隠れて見えないので、そこは`probeColumn`が天井懐（`slab`・非描画）に分類する。
-**旧・点4「天井から上階FLまでの間にある面も『壁』扱い」はこの指摘で更新した**——上が吹抜けで
-壁が実際に見え続ける場合に上階天井まで続く、という部分だけが残る。
-**その空間の天井の縁は中線**（ユーザー明示指示2026-08「最も近い壁（=主な描画対象）と同じ面の
-エッジなので中線」）——天井は切断面のすぐ手前から奥へ広がる面で、その縁までの奥行きは0であり、
-見えている壁までの距離ではない。`sectionEmit.js`では2経路が同じ高さの線を出しうるので両方で
-中線を選ぶ: 見えがかり壁の上端（すぐ上に天井懐(`slab`)が接し、その層の`ceilZ`がその高さに
-一致する場合）と、slab/openの境界。これで、壁の無い区間の向こうにある1階天井が中線で出て、
-1階天井の断面（太線）に突き当たって終わる。
-
-**寸法の鎖は「見えがかりの奥行きが変わる位置」でも割る**（`elevationDimSplit.js`のS6。
-ユーザー明示指示2026-08「「5」D1: Y1から2000の寸法線を見えがかりに合わせて(1000と1000に)
-分ける」）——面の平面に壁が無い区間では、その先の壁が見えがかりとして描かれ、壁の端に
-見えがかりの縦線が立つ。図に線がある位置なので寸法もそこで割る（「分割を担うのは実体」という
-既存の方針そのもの）。対象は面と**平行**で視線方向にあり、見えがかりとして描かれる奥行き
-（`SIGHTLINE_DEPTH_LIMIT_MM`未満）の壁。**割る位置は壁の実体の端ではなくその端の中心線**
-（寸法の分割点は常にCL、という既存の規約）。面自身の平面に壁がある位置は自壁に隠れて
-見えがかりが無いので対象外——判定は`face.spans`ではなく面の軸上の壁を直接引く
-（`spans`は合成前の面のもので、吹抜けと合成して伸ばした区間を持たない）。
-
-**壁のない端部のはね出し（探査延長）にはアキを描かない**（`sectionEmit.js`の
-`emitOpenGapMarks`。ユーザー明示指示2026-08「床断面延長端に『アキ・バツ』は描画不要」）——
-延長は「線を図の外へ延ばす」ために探査範囲を広げたぶんで、そこは**面の外**。面の外に
-「その面に壁が無い」という標記を出す意味がない。面自身の範囲は`cut.line.lo/hi`
-（`probeExtendLo/HiMm`を含まない値）で決まり、アキのセルはその範囲へクリップする
-（延長にまたがるセルは面の内側だけが残る）。条件は床側だけでよい——天井側も同じ延長量で
-伸びるが、判定を2つ持つ必要はない。
-
-**他の面の見えがかりとして描かれる面は、独立したパネルにしない**
-（`elevationFaceList.js`の`dropFacesSeenAsSightline`。ユーザー明示指示2026-08「見えがかりに
-取り込まれた面は常に落とす」「「5」D1に描画済なのでD2パネルを削除」）——同じ壁面を2枚の
-パネルに描かないため。条件は4つ: 同じ向きを見ている平行な面／奥行きが見えがかりの上限
-（`SIGHTLINE_DEPTH_LIMIT_MM`）未満／手前の面の走り範囲が奥の面の全長を覆う／手前の面の平面に
-その範囲と重なる壁が無い（あれば自壁に隠れて見えない）。奥行きは符号付きなので相互に
-取り込み合うことはない。
-**適用は面リストの確定後＝`composeRoomFaces`の`labelFaces`の直前**（落とした結果で
-letter内の採番をやり直すため）。**上部吹抜けの2層帯だけは合成の後にもう一度掛ける**
-（`elevationVoid.js`）——取り込む側の面は吹抜けと合成して走り範囲が伸びた後でなければ奥の面を
-覆えない（実機「5」のD1は合成前だと1557.5しかなくD2の範囲に届かない）。
-
-**実画面で「ア キ」を置けない幅の区間は、アキ標記（バツ＋文字）ごと省略する**
-（`sectionEmit.js`の`emitOpenGapMarks`。ユーザー実機指摘2026-08「「5」C2: 1階400の
-『アキ・バツ』が省略されない」）——壁2段書きの省略判定と同じ考え方で、letterできない幅に
-標記を置いても図が汚れるだけ。判定は`GAP_LABEL_WIDTH_PX`(=30。「ア キ」の概算幅)を
-`scale`(px/mm)で実寸へ戻した値。**`scale`未指定（単体テスト・ゴールデン）では判定しない**
-——実画面幅が決まらないため。`scale`は帯の2パス目でのみ確定するので、
-`appendBandCutContent`→`buildSectionFromLine`→`buildCutContent`→`emitCtx`と渡す。
-
-**この判定に畳めないもの（別の問い）**:
-`withinViewRoom`（`sectionProbe.js`）は**視線方向（奥行き）**の可視性で、切断面内(x,z)の連結性
-では表現できない——畳むには奥行きを含む3Dのセル分割が要る。`uncoveredZRanges`・
-`splitByCutWall`（`sectionEmit.js`）は「壁がそこで終わるか＝実体の連続性」の問いで、
-可視領域とは別物。**上階の床の断面線**（`ceilStepSlabSection`）だけは、その高さが主cutの
-天井断面より上にあり判定材料が主cutに無いため、`cut.aboveCeilVisibleRanges`として
-呼び出し側（`elevationVoid.js`）から受け取る——主cutの`ceilProfile`自体を可視領域から
-決めるようにすれば不要になるが、それは`floorSegments`＝面図側の床線・天井線・CH寸法まで
-巻き込む変更になる。
-
-### 移した: 開放スパンのアキの遠側床・遠側天井（展開図一般化Phase 5・2026-09）
-アキ（バツ・「ア キ」）の遠側床・遠側天井は、断面エンジンの探査（`section/sectionHits.js`の
-`farFaceAnnotation`。視線方向のヒット列から拾うfloorFace/ceilFace）が唯一の情報源になった。
-`elevationBand.js`から`cut.openSpans`として外部注入していたチャネル（§1.1旧チャネル4）は撤去済み
-——`sectionEngine.js`の`splitOpenByFarFace`が`col.bands`の`'open'`帯自体のz0/z1を遠側床・遠側天井
-まで縮める/伸ばす（下記「アキのz範囲」）ので、`section/sectionEmit.js`の`emitOpenGapMarks`は帯の
-z0/z1をそのまま読むだけになった。**図側に残る遠側床線・遠側天井線（`buildFaceFigure`）はそのまま**
-——アキとは別の表現で、値の出どころ（`face.spans`の`farFloorDeltaMm`/`farCeilAbsMm`）も担当（図側
-だけの責務）も変わっていない。両者が異なる情報源を参照する構成は残るが、アキ側はもう外部注入を
-経由しない。**図側（`face.spans`）と探査側（ヒット列）の2系統が残る以上、両者の値が食い違う余地は
-まだある——食い違ったらどちらが正か決める規則はまだ無く、未一本化（クリーンアップPhase棚卸しC3。
-削ると遠側床線・天井線が消えるため要裁定の別フェーズ）。**
-
-### 不変条件: 帯のローカル z=0 ≡ その帯の部屋の実効FL
-`finalizeBand`は部屋の実効FLぶん帯全体を平行移動する（`bandFloorOffsetMm`）。断面エンジンの床解決
-（`section/sectionProbe.js`の`floorZOf`）だけが**階のdatum基準**のままだったため、実効FL≠0の部屋
-（実機「11'」FL=100）の帯では床zがfloorOffsetぶん過大になり、床断面線と重ならない中線・アキの
-誤った下端（最終y=−200）として現れていた。**式は1箇所（`bandFloorOffsetMm`）に置き、
-finalizeBandとプローブの両方がそこを読む**——2箇所に分かれると再び食い違う。
-`layer.floorZMm`（階のdatum差）には触らない: 壁・断面のzまで動く。above層にも同じ差し引きが効く
-（帯の部屋が100上がっていれば、上階の床は帯から見て100低い）。
-
-### アキのz範囲は「下端＝遠側床・上端＝低い方の天井」（ユーザー裁定2026-09「高低差」）
-開放スパンのアキ（バツ・「ア キ」）は**断面エンジンだけが描く**。かつては`buildFaceFigure`側でも
-同じ範囲へ描いており、二重（かつ床に高低差があると位置がずれて）出ていた（実機「10」D1・「11'」A2）。
-図側は**無条件で描かない**——どちらが描くかを面ごとに切り替える条件付き抑止は、同期し続けるべき
-第2の機構を増やすだけで、2経路は構造的に同じ範囲を描いている。
-高低差への追従（上端は近側/遠側の天井の低い方で止まる。下端は**遠側床が区間内部にあれば
-そこまで持ち上げ、区間の外（この列自身の探査下限より下）にあれば伸ばす**）に要る遠側のFL/CHは
-Phase 5（下記「移した」節）以降、断面エンジン自身の探査（`sectionHits.js`のfarFaceAnnotation）
-から得る——`cut.openSpans`のような外部注入は撤去済み。
-**値の単一情報源は断面エンジンの探査**（`sectionEngine.js`の`splitOpenByFarFace`が帯自体のz0/z1を
-書き換える）なので、図側に残る遠側床線（値の出どころは別途`face.spans`。図側だけの責務）と
-アキの下端は別の値から出るが、両者とも実際の建物形状を辿った結果という点で食い違わない
-（両方とも同じ実体を別の道で読んでいる）。
-**下端＝区間の内部に遠側床があれば常にそこで止める**（ユーザー裁定2026-09-11。旧裁定「バツは
-破線=1FLまで」時点の規約「遠側床が帯の床と**異なる**ときだけ着ける」は、13.stq/11.stq「10」D1面
-（far=帯の床と同値の0）で探査値（z=−50）のまま残る差分がPhase 4（`sectionEngine.js`の
-`splitOpenByFarFace`。区間内部なら同値でも常に縮める）と食い違っていたため、Phase 4側へ統一した）:
-| 実機 | far | 探査が見つけた床 | 正しい下端 |
-|---|---|---|---|
-| 「11'」A2左（1FLの破線が引かれている） | −100 | z=0 | z=−100（＝その破線の高さ） |
-| 「10」D1（遠側床線は無い・近側の床が部分指定で下がる） | 0 | z=−50 | z=0（2026-09-11裁定で−50から変更） |
-| 遠側床が帯の床より高い構成 | +300 | z=0 | z=+300（下は遠側スラブで塞がれる） |
-（この3点は**上の基準是正が入った後**の値。是正前は探査値がfloorOffsetぶんズレており、
-別の規則で辻褄が合っているように見えていた。）
-その位置の実際の床は**探査が既に見つけている**——引けない値を「帯の床(0)」で埋めたり、引けた0や
-一段下のfar値で上書きしたりすると、下端だけが床から浮く（かつ「ア キ」の位置と食い違う）。
-**「ア キ」の中心もクランプ後の範囲で採る**。Phase 5以降、連結成分をまたいで列（column）ごとに
-遠側床・遠側天井が違っても、各列は自分自身が探査で見つけた値（`splitOpenByFarFace`が既に反映
-済みのz0/z1）をそのまま使う——`cut.openSpans`時代の「重なりが最大のスパンを1つ選ぶ」補間は
-不要になった（列ごとに既に正しい値を持つため、選ぶ対象が無い）。
-
-**部屋自身が回り込んでいる区間のアキは出さなくてよい**（ユーザー裁定2026-09「展開図があるので、
-バツ不要」）——回り込んだ先の壁は同じ帯の別パネルとして描かれている。断面エンジンの探査がその区間を
-「壁」と分類してアキを出さないのは**現状の正**（`face.spans`はセル基準で open と分類するが、
-アキの唯一の情報源はエンジンなので出ない）。段差見付け面（`kind==='step'`）と腰壁＋垂れ壁のアキは
-`appendGapMark`経路のまま（断面エンジンは`kind==='step'`の面を対象にしないため二重にならない）。
+### 帯種別の分岐を足さない
+共通経路（`buildCutContent`以降）に、通常／上部吹抜け／吹抜け／階段のどれかにしか効かない`if`を入れない。タイプ固有の処理（階段のささら・遮蔽）は返り値の部品に対して呼び出し側が後段で行う。層スタックとヒット列で表現できないなら設計を見直す。ここへ足した修正は階段にも吹抜けにも同時に効く、を不変条件とする。帯の違いは呼び出し側が opts（BandInjections）で注入する値として表す。既存の`cut.stairCut`判定（切断線が階段室の中にあり`viewSign`の規約が違うため。`sectionContent.js`の2箇所・`sectionHits.js`・`sectionEngine.js buildColumns`の farStair）は既知の例外で、増やさない。
 
 ## 修正手順（一般化を担保する）
-展開図関連の修正はすべてこの手順に従う（設計 `.claude/elevation-redesign.md`§5.9(2)）。
-- **(a) 再現をデータで固定する**: 実データ（`D:/tatsuya/Download/*.stq`）に構成があればそれを、無ければ
-  `makeKneeDropTest.mjs`の作法でテスト用.stqを作り、`dumpElevFigure.mjs`で帯のプリミティブをダンプして
-  「何が違うか」を図の座標で言う。
-- **(b) 判断の置き場所を決める**: 壁の実体・可視・奥行き・アキは断面エンジン（`section/`）だけ、図面の
-  体裁は`buildFaceFigure`。「面ローカルで自階だけ見て決める」判断を新設しない。列にしか無い情報が図に
-  要るなら、チャネル（図⇄エンジンの専用受け渡し）を増やさず、エンジンの答え（ZBandの付帯・ヒット列）を読む。
-- **(c) 帯種別の分岐を足さない**: 通常／上部吹抜け／吹抜け／階段のどれかにしか効かない`if`を
-  `buildCutContent`以降に入れない。層スタック（`sectionLayerStack.js`）とヒット列で表現できないなら
-  設計を見直す。
-- **(d) 「未知」を「アキ」にしない**: 探査が答えられない区間をopenに落として後段の除外条件で引く、を
-  繰り返さない。答えられない理由（層の窓・深度上限・成分違い）をbandに残す。
-- **(e) ゲートで守る**: 修正前に`golden13`/`golden11`/`golden-knee`とのdiffを取り、修正後の差分を1本ずつ
-  説明できるものだけ採用（`diffElevGolden.mjs --merge`）。意図的な差分はユーザー裁定→ゴールデン再採取→
-  採取コミットをdocに記録。合成fixtureの単体テストは変異テストで赤化を確認してから提出。INV1-3
-  （`sectionProbeMultiLayer.test.js`）は必ず緑。
-- **(f) 深度・座標系を疑う**: 出力不変が期待される置換で差分が出たら「モデル差」と言う前に、帯ローカル／
-  絶対・floorOffset・深度の基準点（切断線か最も手前の壁面か）・全高壁の向こうでないかを実データで
-  裏取りする。
-- **(g) 定数は1箇所**: 深度上限・許容誤差は`elevationStyle.js`から取り、経路ごとに別の値を持たない。許容は意味ごとに別名（`GAP_EPS_MM`＝mm の幾何、`FLOAT_EPS`＝浮動小数の丸め、`SAMPLE_OFFSET_MM`＝境界の外側を評価する微小量、`COORD_EPS_MM`＝座標・高さの同一視）。線種名は`ElevationDash`。プリミティブの生成は`elevationPrimitives.js`のヘルパー（`line`・`polyline`・`text`・`dim`・`rect`・`circle`・`arc`・`tag`・`hit`・`miterTriangle`。`{ type: '...' }`リテラルは書かない。渡したキーだけを持ち既定値でキーを足さない）。新しい型を足すときは`translatePrimitive`・`mirrorPrimitiveX`・レンダラの分岐へも足す。
+展開図関連の修正はすべてこの手順に従う。
+- **(a) 再現をデータで固定する**: 実データ（`D:/tatsuya/Download/*.stq`）に構成があればそれを、無ければ`makeKneeDropTest.mjs`の作法でテスト用.stqを作り、`dumpElevFigure.mjs`で帯のプリミティブをダンプして「何が違うか」を図の座標で言う。
+- **(b) 判断の置き場所を決める**: 壁・構造材の実体・可視・奥行き・アキは断面エンジン（`section/`）だけ、図面の体裁は`buildFaceFigure`。「面ローカルで自階だけ見て決める」判断を新設しない。列にしか無い情報が図に要るなら、チャネルを増やさずエンジンの答えを読む。
+- **(c) 帯種別の分岐を足さない**（上節。既存の`cut.stairCut`判定は既知の例外で、増やさない）。
+- **(d) 「未知」を「アキ」にしない**: 探査が答えられない区間をopenに落として後段の除外条件で引く、を繰り返さない。答えられない理由（層の窓・深度上限・成分違い）をbandに残す。
+- **(e) ゲートで守る**: 修正前に全golden（`elevGoldenGate.mjs`。後述）と突き合わせ、修正後の差分を1本ずつ説明できるものだけ採用する。意図的な差分はユーザー裁定→ゴールデン再採取→採取コミットを「採取履歴」へ記録。合成fixtureの単体テストは変異テストで赤化を確認してから提出。INV1〜3（`sectionProbeMultiLayer.test.js`）は必ず緑。
+- **(f) 深度・座標系を疑う**: 出力不変が期待される置換で差分が出たら「モデル差」と言う前に、帯ローカル／絶対・floorOffset・深度の基準点（切断線か最も手前の壁面か）・全高壁の向こうでないかを実データで裏取りする。
+- **(g) 定数は1箇所**: 深度上限・許容誤差は`elevationStyle.js`から取り、経路ごとに別の値を持たない。許容は意味ごとに別名（`GAP_EPS_MM`＝mmの幾何、`FLOAT_EPS`＝浮動小数の丸め、`SAMPLE_OFFSET_MM`＝境界の外側を評価する微小量、`COORD_EPS_MM`＝座標・高さの同一視）。線種名は`ElevationDash`。プリミティブの生成は`elevationPrimitives.js`のヘルパー（`line`・`polyline`・`text`・`dim`・`rect`・`circle`・`arc`・`tag`・`hit`・`miterTriangle`）で、`{ type: '...' }`リテラルを書かない。ヘルパーは渡したキーだけを持ち、既定値でキーを足さない（`dash: undefined`を足す変異はJSON.stringifyで消えるので、ゴールデンでは検出できず契約テストだけが止める）。新しい型を足すときは`translatePrimitive`・`mirrorPrimitiveX`・レンダラの分岐へも足す。
+- 抽出・移動だけのリファクタの忠実さは、HEADと作業ツリーの trim 済み行の多重集合の差（関数ヘッダ・呼び出し・JSDoc・変数名だけが残れば移動のみ）とモジュール直下名のシャドウイング検査で確認した（S6）。
 
-### クリーンアップで残したもの（2026-09-13 作成・2026-10-22 棚卸しで書き直し）
+### クリーンアップで残したもの
 **恒久的に残す**
-- `unexploredBelowZOf`（`section/sectionHits.js`）: 残骸ではなく「層ごとの探査窓（`cut.layerRunWindows`）の外は
-  未探査＝何も描かない」一般規則（上の(d)の実装）。削るとはり出し列のslabが地面まで伸びる回帰。
-- `stairOver`の「描いた線を後から書き換える」機構は2つ: `lowerFaceEndVertical`と`trimCeilingLineAt`（ともに
-  `elevationBand.js`）。踏面ジグザグのヒット列化（6b-1′。`coverableHits`が stairFace を外す）が未着手のため残す。
-  検出力: golden13系の1階「13」帯だけが2関数を守る。木造で「階段下の部屋の天井＝階段の裏面」へ置き換える道は別課題。
+- `unexploredBelowZOf`（`section/sectionHits.js`）: 残骸ではなく「層ごとの探査窓（`cut.layerRunWindows`）の外は未探査＝何も描かない」一般規則（(d)の実装）。削るとはり出し列のslabが地面まで伸びる。
+- `stairOver`（階段下の部屋の帯）の「描いた線を後から書き換える」機構: `lowerFaceEndVertical`・`trimCeilingLineAt`・`appendStairOverContent`・`clipStairUnderCeiling`（`elevationBand.js`ほか）。踏面ジグザグのヒット列化（6b-1′）を採らないため残る。検出力は golden13系の1階「13」帯だけ。
+- 階段由来の clip・隠れ線の作図慣行（`clipWallFloorEdgeUnderZigzag`・`clipWallEdgesInsideStairBodies`・`clipWallEndVerticalsByStairMass`・`clipContentInsideStairBody`・`clipContentBelowProfileInRanges`・`splitGapMarksByStair`・`dashHorizontalsBehindStair`・`dashLinesInsideRects`・`clipHiddenStepLines`・`joinToStairProfile`）は**現状維持**。U3（探査の選択に階段を入れて clip を置換する案）は、行数が差し引きで増え clip も消えきらないため見送った（2026-10-25裁定）。
+- `removeLinesInsideRects`・`wallLineCuts`は dropped 部材（後述）のためだけに残る。dropped が無くなれば消える。
+- `dedupeCoincidentLines`（共線の重複除去）と`joinLinesAtMemberEdges`（部材の端で割れた共線の連結）は帯を確定する`finalizeBand`の整理として残す。`withFlatLineSpans`・`clipContentAtHiddenEnds`は体裁／面の端の話。
+- `stairOccluderRects`はテスト専用の参照実装（本番は`stairFaceOccluderRects`）。
 
-**別課題**
-- `sectionEmit.js`の帯種別排他分岐（`ceilProfile`の有無で`ceilStepSlabSection`／`slabEdgeCutWallJunction`を
-  排他選択）: `cut.ceilClip`は打ち切り専用で帯の性格の判定には使わない。E5-2（直進系）／E5-3（遠側）が済み全階段cutが
-  `ceilClip`を持ってから再評価する。
-- Phase 7c(a) N+2層の階段裏（`stairSoffitCeiling.js`・`plan/planSolids.js`。受け口`stairSoffitSolids({aboveGraph})`はあり配線が無い）。
-
-**保留（実データが無く要望待ち）**: Phase 7c(b) 3層以上つながる吹抜け・(c) 1帯に3層を積む図（入口は N 層対応済み）。
-
-**S4（2026-10-23）**: CL が無い U 字階段（`midCL` が引けない）は seq2 の面をレーン境界（`midAcross`）の仮想の面（`switchbackCuts.js` の `midOutFace`。axisCL は `sectionFace.js` と同じ疑似 `{id:null,effectiveValue,value}`）にする。`wOut1` への退避は廃止。
-viewSign の二重定義（`elevationSolids.js` と `sectionCutPlane.faceViewSign`）は U1b B6 で `elevationSolids.js` ごと消えるため統一しない。
-
-**削除済み**: `buildSectionFigure`（直進階段専用の2本目の経路）は2026-10-22に共通経路へ統合して削除（S2=bf22201・S3=14dfa81）。
+**別課題**: `sectionEmit.js`の帯種別排他分岐（`ceilProfile`の有無で`ceilStepSlabSection`／`slabEdgeCutWallJunction`を排他選択。`cut.ceilClip`は打ち切り専用で帯の性格の判定には使わない。E5-2／E5-3が済み全階段cutが`ceilClip`を持ってから再評価）／N+2層の階段裏（`space/stairSoffitCeiling.js`。受け口`stairSoffitSolids({aboveGraph})`はあり配線が無い）／共通経路に残る階段帯専用の`cut.stairCut`判定（`sectionContent.js`2箇所・`sectionHits.js`・`buildColumns`の farStair。帯の違いを opts の注入値へ寄せる再設計は未着手。増やさない）。
+**保留（実データが無く要望待ち）**: 3層以上つながる吹抜け・1帯に3層を積む図（入口は N 層対応済み）。
 
 ### 視覚回帰ゲート
-`elevationSectionGolden.test.js`が`buildRoomBand`/`buildVoidBand`の出力プリミティブ全体を
-正規化JSONで固定する。矩形・段差に加えて**腰壁・腰壁袖壁・アキ・開放スパン**の4ケースを持つ
-——ここを通らないゴールデンは移行の差分を検知できない。差分が出たら「増減した線を1本ずつ説明
-できること」を更新の条件にする（同じ位置・同じ線種なら`dedupeCoincidentLines`が畳むので不変になる）。
-
-実データ規模での回帰確認は`app/scripts/probe/golden13/`（13.stqを`dumpElevFigure.mjs`で
-ダンプした固定スナップショット）を基準にする。新設計側を同じ形式で別ディレクトリへダンプし、
-`node scripts/probe/diffElevGolden.mjs <golden13> <newDir> [--merge]`で突き合わせる
-——追加/削除/（同一位置での線種違いの）変更を数え、「層境界での分割・合併」は見た目が
-変わらない別カテゴリとして扱う（`--merge`指定時。上記ゴールデンテストの更新履歴と同じ切り分け）。
-比較ロジックは`elevGoldenDiff.mjs`（純モジュール）に分離してあり、単体テストで担保する。
-採取元は`D:/tatsuya/Download/13.stq`。スナップショットは**ユーザー裁定済みの意図的差分を取り込むときだけ**
-再採取し、採取時点のコミットと取り込んだ差分をここに記録する（それ以外では動かさない——動かないゴールデン
-でなければ「新設計との差分」を測る基準にならない）。採取履歴（各回の差分の裁定は`.claude/elevation-redesign.md` §5.12）:
-- Phase 4裁定前（水平面ヒット由来の見えがかり線・アキ分割が既定off。当時のフラグは削除済み）＝5943d89／裁定後（既定on）＝Phase 4コミット。
-- 2026-09-13（9b36c33直後・裁定「6点指摘の残りはキャンセル」）: 「6」（2a壁非表示の是正・アキ矩形・面端の壁判定・最終段の蹴込・ささら）、「5」と2F「22」（5d2ef84＝腰壁・垂れ壁の隅の食い込み）。
-- 2026-10-09（golden/・golden11/・golden13/ を `--regen` なしで）: 面端の縦線 medium→thick・アキの二重描画解消・折返し階段「6」の B/C/D 面（b49b929・6b5909f・cb89fed・998e5ed）・隔て板（e0ea531 ほか）・建具の hit/tag（07ee813・fa1c8f4・5d32b2a）。732207c・f80f8ac は 11/13 不変。9/13の「6」B/C/D1の未採取差分もここで取り込み済み。
-- golden-elev-moku16（`--regen`）: S2a=eaa6046（直進部・踊り場・seq1/seq3を install 枠に揃え復路初段の段板CUT追加。11/13は端面の縦線1本のみ）／S2b=498cd91（回転部を扇形セルの切断線スライスに。11/13不変）／T1=0ab36cb（取りつき区画を平面のセルで。1階の階段室だけ）。
-- golden13-struct の新設（`dumpElevFigure.mjs 13.stq --regen --struct`。壁再生成のあと全階の構造再計算〔`sweepOrder.mjs sweepUntilConverged 'desc'`〕を収束まで回して採る＝読込み時の再計算で生まれる部材〔LG 等〕を含む本番同型。梁の見え掛かりの遮蔽の採取時点）。規則A・Bの再採取＝moku16（梁の端12.5短縮）・ceiling-steel-stair-test（床梁の両端127.5短縮）、他の golden は不変。
-- golden-elev-stairports の新設（T2-2=8e9afd7。stair-ports-test1〜5。直進系を平面の install 枠に揃えた。2026模擬試験のディレクトリは無く、直進系は test1〜3 が担う）。関門 probe は上の「平面との照合の関門」節。
-- 2026-10-22 stair-ports-test1〜3（S2=bf22201。ユーザー裁定「採用」）: 直進系の階段帯の content を U 字系と同じ `buildCutContent` へ載せ替え、上階のはね出し（`upperOverhangOf`）も図側へ。1階の階段帯だけ test1/2 追加24・削除5、test3 追加35・削除9（上階の面の外の壁の縁・壁のない端の延長・帯の部屋の範囲によるアキ・上階 FL 断面線のはね出し外端までの延長）。test4/5 不変。
-- 2026-10-22 golden13・golden11・golden13-struct の elevfig-*（ユーザー目視OK）: 1階「6」（階段帯）が 68ad689（上り口の開口から辺の上に立つ壁の帯を差し引く）でずれていたのを確定（親 804f6b6 は一致）。2F より上のアキのバツが帯内 x=1442.5 で割れ、左半分が高さ 3800 から。
-- 2026-10-23 リファクタ S0 のゲート（`elevGoldenGate.mjs`）導入時に HEAD 6617e17 とずれていた 4 枚をユーザー裁定で再採取: `golden/`（11.stq・`--regen` なし。golden11 の 10-22 再採取が未反映だった「6」「5」）・`golden-elev-ceiling/ceiling-steel-stair-test`／`ceiling-wood-stair-test`／`moku4-3`（`--regen`。adb9455〜2da87d6 の梁の判定変更以降に未採取だった階段帯）。以後は 17 枚が HEAD と一致。
-- 2026-10-23 リファクタ S3b-1（梁の「壁の中」判定を合併帯＋全高の壁だけの 1 通りに統一。ユーザー裁定 1〜3）: `golden-elev-ceiling/ceiling-steel-stair-test` の 1階・2階の階段帯で各 −26（縦の床梁 axis 3000・幅 100 が薄壁＋オーナー壁の合併帯に収まり壁の中になった H 断面 2 箇所と天地 2 本）。golden に無い実データでは opening-test（踊り場梁の H 断面・破線）が同じ理由で消え、moku4_kd 2階の階段帯に腰壁の上の 3 階床梁が +12（腰壁・垂れ壁の真下／真上の梁は幅が材に収まれば壁の中＝裁定 2-2）。他 82 本は不変。
-- 2026-10-24 リファクタ S4（CL の無い U 字階段の seq2 を背後の外壁へ退避せず、レーン境界の仮想の面〔疑似 axisCL〕で組む。ユーザー裁定 (b)）: `golden-elev-ceiling/ceiling-wood-stair-test` 1階の階段帯 D1 で踊り場の床断面線の左端が 15mm（半壁厚 72.5→既定 57.5。2階の CL あり D1 と同位置）。ceiling-steel と他 81 本は不変。
-- 2026-10-24 リファクタ S3b-2（面の通りの梁〔R2〕を階段帯にも細線で。ユーザー裁定「細線で」）: `golden-elev-moku16` 1階 階段帯 seq1（中線→細線 2・元の端の縦線 +1）・`ceiling-steel-stair-test` 1階・2階 階段帯（中線→細線 6 ずつ）・`ceiling-wood-stair-test` 1階（2）・2階（1）。golden 外では 4 (1)・basement-test 2 本・moku1-4/5・moku4_kd・opening-test の各 1 帯。位置・長さは不変で線種だけ（天井裏・描画範囲・規則 A は airborne と共有）。部屋帯は不変。
-- 2026-10-24 リファクタ U1b B3-1（梁の断面 memberCut を探査の選択に入れ加算の断面描画を止める。ユーザー承認）: `golden`／`golden11`／`golden13`／`golden13-struct` の「5」（上部吹抜け帯に上階の床梁の H 断面 2 本 +24）・`golden-elev-moku16`（上部吹抜け帯 +8）・`ceiling-steel-stair-test` 1階・2階 階段帯（R6＝壁の太線が梁の高さで途切れない・断面の向こうの中線が梁の幅だけ欠ける +19 −16）・`moku4-3`（+4 −7）。golden 外: ceiling-line-test 主寝室・ceiling-zone-far 売場（天井が高い区画の梁断面がその位置の天井まで出る。段をまたぐ梁は低い側で切る）、4 (1)・basement×2・opening-test の階段帯（R6・along が面の外へはみ出さない）、HEAD の重複線が畳まれる 3 帯。他は不変。
-- 2026-10-24 リファクタ U1b B3-2（梁の見え掛かり memberFace を探査の選択に入れ加算の見え掛かり描画を止める。ユーザー承認）: `golden`／`golden11`／`golden13`／`golden13-struct` の「5」（上部吹抜け帯に 2F 床梁の下端の中線）・`golden-elev-moku16`・`ceiling-steel-stair-test`・`ceiling-wood-stair-test`（手前の梁が奥の梁の線を隠す・同位置の太線の下の細線が消える）。golden 外: ceiling-zone-far 売場（天井 2700 の下の梁の下端の細線 +1）、4 (1)（手前の断面が奥の空中梁の線を途切れさせる）、moku4_kd 2階 階段帯 B2 面（踊り場の上のアキを閉図形どおり x 10905〜11705・z 1500〜2400 に＝裁定 (c)。`floorPiecesOf` でアキのセルの下端を床断面線の実値から取る）。部材のない帯は不変。
-- 2026-10-24 リファクタ U1b B3-3（柱を探査の選択に入れ加算の柱型描画を止める。ユーザー承認）: `golden`／`golden11`／`golden13`／`golden13-struct`（「22」の部屋帯で柱の幅だけアキ・腰壁の線が隠れる。「5」上部吹抜け帯で柱が上の階の床まで 1 本に伸び天の線が柱の幅で消える）・`ceiling-steel-stair-test`（部屋帯「B」の柱による遮蔽・階段帯に柱型が初めて出る・面端延長部由来の孤立した 71mm の天端線が消える＝受容）・`stair-ports-test1〜5`（2階 帯0 のアキが面の通りの柱で左右に分かれる）。golden 外: 4 (1)・basement-test 2 本の階段帯に柱型が初めて出る（HEAD の階段帯経路は柱を描いていなかった）。柱の上端は梁と同じ仕組み（部屋帯＝その位置の天井・階段帯＝裏面以外では切らない・吹抜け帯＝上の床まで）。
-- 2026-10-24 リファクタ U1b B4・B6（出力不変。golden 採取なし）: B4＝`beamBlockerRectsForFace` を dropped の部材だけに縮退・`buildFaceFigure` の無効な加算呼び出しを外す。B6＝本番から到達しない `solidPrimitivesForFace`・`memberCutsByBand`・`memberFacesByBand`・`memberCuts.only` を削除（`visibleBeamPieces` は `memberCuts` を渡せば dropped だけ）・`faceSectionCut` の viewSign を `faceViewSign` の反転に寄せた。83 本は HEAD とバイト一致。
-
-`app/scripts/probe/golden11/`（`D:/tatsuya/Download/11.stq`を同じ形式でダンプした固定スナップショット。
-展開図一般化Phase 6b-1で追加）も同じ手順で追跡する——`.gitignore`に`!scripts/probe/golden11/`を追加し、
-golden13と並ぶ回帰ゲートに昇格した。採取時点はコミット8e8e1e6（Phase 6前半の直後・Phase 6b-1着手前）→
-2026-09-13 に golden13 と同時に再採取（取り込んだ差分も同じ: 「6」「5」「22」）。
-`app/scripts/probe/golden-knee/`（`makeKneeDropTest.mjs`が生成する`knee-drop-test.stq`のダンプ）は
-2026-10-22 に再採取して追跡に入れた（9/11 採取のままで、建具ドラッグの `hit`〔07ee813〕1個だけ違っていた。
-`--regen` の有無で出力は同じ）。3ファイルすべてを毎回突き合わせる運用は
-`.claude/elevation-redesign.md`§5.9(e)の手順に従う。
-
-全展開図golden（対象表はスクリプトの TARGETS）は`node scripts/probe/elevGoldenGate.mjs [--only <名>] [--test]`（cwd=app）で1コマンドで突き合わせる。
-出力不変のステップは、着手前に`--out`で採ったダンプへ`--base <dir>`で前後比較する（既存のずれがあるgoldenでも「前後で一致」を言える）。
+- `elevationSectionGolden.test.js`が`buildRoomBand`/`buildVoidBand`の出力プリミティブ全体を正規化JSONで固定する（矩形・段差・腰壁・腰壁袖壁・アキ・開放スパンの各ケース。ここを通らないゴールデンは移行の差分を検知できない）。差分が出たら「増減した線を1本ずつ説明できること」を更新の条件にする。
+- 実データ規模の基準は`app/scripts/probe/`の固定スナップショット（`golden`・`golden11`・`golden13`・`golden13-struct`・`golden-knee`・`golden-elev-ceiling`・`golden-elev-moku16`・`golden-elev-stairports`）。**全展開図golden（対象表はスクリプトの TARGETS）は`node scripts/probe/elevGoldenGate.mjs [--only <名>] [--test]`（cwd=app）で1コマンドで突き合わせる**。出力不変のステップは、着手前に`--out`で採ったダンプへ`--base <dir>`で前後比較する（既存のずれがあるgoldenでも「前後で一致」を言える）。個別比較は`diffElevGolden.mjs <基準> <新> [--merge]`（追加/削除/線種変更を数え、層境界での分割・合併は見た目不変の別カテゴリ。比較ロジックは純モジュール`elevGoldenDiff.mjs`）。
+- スナップショットは**ユーザー裁定済みの意図的差分を取り込むときだけ**再採取し、採取時点のコミットと取り込んだ差分を「採取履歴」へ記録する（動かないゴールデンでなければ基準にならない）。採取元は`D:/tatsuya/Download/13.stq`・`11.stq`ほか。`golden13-struct`は`dumpElevFigure.mjs 13.stq --regen --struct`（壁再生成のあと全階の構造再計算を収束まで回す＝読込み時の再計算で生まれる部材〔踊り場受け梁 LG 等〕を含む本番同型）。構造部材を絡む変更は保存データのままの golden では LG が無く検出できないため、これで見る。
+- **ゲート不変は仕掛けの有効性の証拠にならない**（梁の除外を外しても17/17のままだった前例）。部材・探査の変更は83文書全数の比較が要る。
 
 ## A/B/C/D の向きと不変条件
-**展開記号は「その断面が見ている面」の幾何で決まる（ユーザー明示指示2026-08その11）**: 展開図の作成は
-「手順1: 必要な展開断面を抽出／手順2: 抽出した断面を階段の上り方向に応じて並べかえる」の2段階で、
-**向きは絶対・順番は後**。したがって各cutの`face`は必ず**その切断が視線の先に見ている平面**でなければ
-ならない——`switchbackCuts`のseq2は往路レーンの中を切って`towardS1`（往復レーンの境界＝実機の「中心1」）を
-見るので面も中心1、seq4は`towardS0`（往路外側）を見るので面は`wOut1`になる。旧実装はseq2に`wOut1`
-（＝視線の**背後**の壁）を、seq4に`wOut2`を結び付けており、図の向き（D＝西向き）と面の幾何（東向きの壁）が
-食い違っていた。その結果、面由来の寸法・向こう側判定が反対側を向き、実機「6」D1が「向こうに壁の無い
-はずの面」で1500+2000に割れていた。**面の選択はcuts表（`switchbackCuts.js`）が唯一の情報源**とし、
-`elevationStairSequence.js`は`cutOf(seqNo).face`をそのまま使う（独自に`wOut1`/`wOut2`を選び直さない
-——ここが「抽出と順番決めがごっちゃになっていた」箇所）。中心1の面は実壁が無くても作る（同位置の
-中心線を軸に、`hasRealWall:false`で）。不変条件: 全cutで`letterOf(isVertical, face.inward)`が
-`letterOf(line.isVertical, -cut.viewSign)`と一致する。
+**展開記号は「その断面が見ている面」の幾何で決まる**: 手順1で必要な展開断面を抽出（向きは絶対）、手順2で階段の上り方向に並べかえる（順番は後）。各cutの`face`は必ず**その切断が視線の先に見ている平面**でなければならない。**面の選択はcuts表（`switchbackCuts.js`）が唯一の情報源**で、`elevationStairSequence.js`は`cutOf(seqNo).face`をそのまま使う（独自に`wOut1`/`wOut2`を選び直さない）。中心1の面は実壁が無くても作る（同位置の中心線を軸に`hasRealWall:false`で。CLが無いU字階段は仮想の面。後述）。不変条件: 全cutで`letterOf(isVertical, face.inward)`が`letterOf(line.isVertical, -cut.viewSign)`と一致する。
 
-A＝平面の上側（北）を室内から見た面、B=右、C=下、D=左。時計回りA→B→C→D。隣接する面同士は同じ隅を世界座標で共有する（`buildRoomFaces`の
-最重要不変条件——letterでグループ化してから連結すると、L字部屋の隅で世界座標が一致しなくなる。外周を実際に1周する順で組み立てラベルは
-出現順に振る）。外周エッジは`computeExternalEdgeParams`の結果を**axisCLIdごとに分けてから**`mergeSegments`する
-（一括だと別letterの面同士が誤ってマージされる）。
+A＝平面の上側（北）を室内から見た面、B=右、C=下、D=左。時計回りA→B→C→D。隣接する面同士は同じ隅を世界座標で共有する（`buildRoomFaces`の最重要不変条件。letterでグループ化してから連結するとL字部屋の隅で世界座標が一致しなくなる。外周を実際に1周する順で組み立て、ラベルは出現順に振る）。外周エッジは`computeExternalEdgeParams`の結果を**axisCLIdごとに分けてから**`mergeSegments`する（一括だと別letterの面同士が誤ってマージされる）。
+
+## 展開図では断面の中は描画しない
+描けるのは**床断面線と天井断面線に挟まれた範囲**だけで、天井の向こう（天井裏・上階の躯体）には何も描かない。**特例（スラブ帯クリップ等）は、この一般判定で置換できるなら削除する**（ルールの多重化は一般化を阻害する）。
+
+### 「断面の中」の判定は空気セルの連結成分で決める
+断面の中＝**連続した断面線で切り取られた向こう側全て**（壁の中も、隣の部屋も、天井裏も）。判定は`section/sectionVisibility.js`に一本化: 列（`buildColumns`のx区間）×z区間を「実体が占めない＝空気」で切り出し、隣接列の空気はz区間が重なれば連結、帯の持ち主の空間を種にフラッドフィルして、到達できた空気だけが断面の外。遮蔽実体は`cut`/`cutAlong`（切断線を横切る／縦断する壁）だけで、`wall`（見えがかり）は切断面の**向こう**にあるので横の連結を遮らない。
+- **「線の左右どちらが中か」を一次情報にしてはいけない**。側判定は断面線が図を床断面から天井断面まで完全に分断するときしか定義できない（腰壁は天端の上で、アキは穴で、段違い天井の壁は低い側の天井より下で、それぞれ左右がつながる）。側は線の属性ではなく連結性の結果。分断する線に限れば「左右の一方だけが到達可能」が成り立つので、独立検算として単体テストに置く（`sectionVisibility.test.js`）。腰壁越し・アキ越しに見える上階は自動的に描かれる。
+- エンジン側の適用: `buildColumns`が全帯について列ごとの到達可能な空気を求め、`clipBandsToVisible`がそれで帯を切る。**天井断面より上を描く例外は1つだけ**＝「隣の列の到達可能な空気に面している切断壁」（段違い天井の境界に立つ壁も吹抜けに面した腰壁の天端もこれ1つから出る）。`sectionEmit.js`の`hiddenByCutWall`（背景の水平線が手前の切断壁に隠れるか）も同じ見方。
+- 見えがかり壁の面が終わるxは、突き当たる切断壁の**向こう側**（`wallEndXAt`）。側縁は列の境界に立てるのが原則だが、その区間が隣接列の切断壁の天端から始まるときだけ切断壁の向こう側の面へ送る（隅では壁の実体が連続し、壁面が無くなる＝アキになるのは切断壁の向こう側から。手前に立てると線が断面の手前の縁から生えて見える）。天井断面の段差・上階床の小口は`drawnCeilingRiserX`の規約（天井が高い側へ半壁厚）で手前の面のまま＝別の規則で、揃えてはいけない。
+- 上階の床の断面線は境界に立つ切断壁の断面の中を通さない（次の「輪郭」節）。壁のない端部のはね出しは上階ぶんの天井断面線にも掛ける（`appendUpperStoreyTrim`。面の端に一致する側だけ）。
+- この判定に畳めない別の問い: `withinViewRoom`（視線方向＝奥行きの可視性で、3Dのセル分割が要る）、`uncoveredZRanges`・`splitByCutWall`（「壁がそこで終わるか」＝実体の連続性）。上階の床の断面線だけは判定材料が主cutに無いので`cut.aboveCeilVisibleRanges`として呼び出し側（`elevationVoid.js`）から受け取る。
+
+### 打ち切りと2つの例外
+- 描けるのは列ごとの天井断面（`cut.ceilProfile`）より下まで。**天井の有無をエンジン側で推測してはいけない**（層の実Room有無から導くと階段帯の見え方が変わる）。**天井断面線を実際に引いている値そのもの**を`cut.ceilProfile`（区間ごとの`{loX,hiX,ceilZ}`）として呼び出し側から受け取り、`buildColumns`が列を打ち切る。区間の境界は必ず列の境界にする（またぐ列は中点で1つの天井しか持てず片側が誤って切られる）。profile範囲外（壁のない端部の探査延長）は端の区間の値へクランプする（図側が天井線を端の値で延長している以上、打ち切りも同じ値）。`ceilProfile`未指定（階段帯）は打ち切らない。`emitColumns`のFL/CH判定も`col.ceilZ`を優先する。**床側には打ち切り自体が無い**（入れると「床断面下の細破線＝またぐ面」の確定仕様と衝突するため、指示があるまで入れない）。
+- **例外1: 天端または下端が露出した切断壁（腰壁・垂れ壁。`isKneeDrop`）は打ち切らない**。露出した縁は吹抜け側の空間に面して実際に見えるため（判定は`sectionHits.js`の`isKneeDropRange`＝その壁のz範囲が層の床天井いっぱいでないか）。**見えがかり（'wall'）には適用しない**（天井の向こうの腰壁は見えない）。
+- **例外2: 天井断面の高さが変わる境界に立つ切断壁**。天井の高さが変わる境界は必ず壁が受けており、その壁の断面は天井が終わっている面そのもので高い側から実際に見える。`sectionEngine.js`の`exposedAboveCeil`が、その壁が占める列の連なりを左右へたどって**連なりの外側の列**の到達可能な空気の上端（天井の高い方）を返し、`clipBandsToVisible`が低い側の天井から高い側の天井までを1つの断面として残す（壁は片面ずつのWallのため厚みが2列に割れうる。隣接1列だけを見ると片側しか残らない）。左右とも同じ高さなら従来どおり落とす。**描くのは見える側の面だけ**（`exposedSide`で片側の縁だけ。反対側は低い天井の裏に隠れる。ただし腰壁・垂れ壁は境界でも両縁＝壁厚を描く。天端の水平線が宙で終わるため）。**例外2は例外1より先に評価する**が、**帯のz範囲は壁の実体のまま**にする（1階天井〜上階FLは上階の床構造で、壁の帯として引き伸ばすと壁の向こう側の面まで下りて「断面の中」に線が入る）。
+- 露出の判定は**全列ぶん先に済ませてから**打ち切る（`buildColumns`）。打ち切りながら進めると隣の列のz範囲が変わって同じ壁と認識できず、壁厚が2列に割れた壁の片側だけ処理から漏れる。
+- **スラブ（床構造・天井懐）の厳密内部にある壁contentは描かない**（`section/sectionContent.js`の`clipInsideSlabSolids`）。ささらの見えがかりに掛けている一般判定（`sectionTypes.js`の`solidRectsOf`）と同じ矩形・同じ減算を`emitColumns`の出力にも掛ける。`cut`/`cutAlong`の矩形は対象外（腰壁天端の帯の下端`kneeCapUnderline`や建具断面は壁厚の中に意図して描く線）。矩形の辺上の線は厳密内部ではないので残る。
+- 「切断壁に切られた帯」は**帯の下端が切断壁の天端に一致するもの**（`splitByCutWall`）。「天端が帯の下端以上の切断壁がこの列にあるか」で判定すると切断壁より下の別の帯まで巻き込む。
+
+### 断面の中とその輪郭（`ceilStepSlabSection`）
+1階天井と上階の床に挟まれた区間は**断面の中**＝躯体で、中には何も描かない。描くのは輪郭だけ（小口＝低い側の天井→上階の床／上階の床の断面線＝低い天井の側へ面の描画端まで／低い側の天井の断面線）。この輪郭が無いと1階天井の線と2階天井の線が繋がらず宙で終わる。上階の床とその上に載る腰壁・袖壁は1つの連続した切断面なので、**床の断面線は壁の向こう側の面から描き始め**（内部に引かない）、壁の向こう側の縁がそこで床の断面線へ折れる1本の輪郭になる。**小口は境界のまま動かさない**（小口と壁の手前の縁が1本につながるのがスラブと壁が一体の切断面であることの表現。壁の向こうへ送る案は実機で誤りと判明し撤回）。**右が開いた形でも「中」と判定できる**のが要点（低い天井と上階の床という2本の水平断面で決まる）。
+- 上階の床が実在するかは層スタックの所有Roomで判定する（`sectionProbe.js`の`upperFloorZAt`）。**上に部屋が無い（吹抜けが続く）位置に床の断面線を描いてはいけない**（帯の形から推測すると上階の壁の断面が同じFLで始まるだけの位置まで拾う）。この規則が効くのは面の内側まで。面の外のはり出し区間では`upperFloorZAt`が答えられない（自階が層スタックから落ちる）ため、実在の判定は「面の端も層ごとに違う」節（上階graphの所有Roomを面端のCLの外側で直接引く）へ委ねる。規則そのものは共通で**床が無い位置に床の断面線を描かない**。
+- 上階床断面線の**起点**は面の内側でもはり出しでも同じ「切断壁の**向こう側の面**」。違うのはそこから先の向き（面の内側は内へ、はり出しは外へ`wallLessEndExtendModelMm`ぶん張り出して終わる）。述語（列に上階FLから立ち上がる`cut`帯があるか）は共有。天井段差の位置（壁の手前の面）と上階の床が始まる位置（壁の向こうの面）は半壁厚ずれるため、低い天井が続くあいだ外側へ走査して最初に見つかった床レベルを使う。
+- 上階の床との取り合いは、**区間ごとの天井を持つ帯（`cut.ceilProfile`あり＝部屋帯・吹抜け帯）は`ceilStepSlabSection`、持たない帯（階段帯）は`slabEdgeCutWallJunction`**が担当する。両方走らせると同じ取り合いを二重に描く。
+
+### 壁のない端部の2層取り合い
+上階の床スラブが吹抜けの開口縁（CL）で終わり、そこに上階の腰壁・袖壁が載る構成（左CL上に腰壁、上階の床がそのCLで終わる）は、「1F天井→腰壁の立上り→天端→壁厚ぶん外→2FL床→外へ延長」というZ字プロファイルになる。3規則:
+- **上階床スラブの端に切断壁が載っている取り合い**は`slabEdgeCutWallJunction`が組む。下階天井(`slab.z0`)→袖壁の向こう側（階段側）の面→**上へ立ち上げて**上階床(`slab.z1`)へつなぎ、袖壁の断面線と交点で取り合わせる。**立上りが要**（無いと天井線が壁の面で宙に終わる）。
+- **小口が立つのは、壁の向こう側に探査済みの空気があるスラブだけ**（`sectionTypes.js`の`slabJunctionOf`のgate）。壁のある端では自階の壁＋床構造が自階の窓の外＝未探査のまま、上階の腰壁だけがはり出し列に立つ。そこへ「スラブが腰壁の向こう側まで延びる」と仮定して描くと壁断面の内部に線が入る。判定は「farXの先の列で、スラブのz範囲**全体**が空気の帯（`isAirBand`＝open/farVoid/wall/見えがかり由来のhidden）で覆われているか」。列が無い（未知）は空気ともスラブとも言わない（(d)）。一部だけ空気なら小口ではない。`hidden`は出自`hiddenOf`（'cut'＝断面の中／'wall'＝見えがかり由来＝手前は空気）で区別し、出自の無いhiddenは見えがかり由来とみなす。`solidRectsOf`のスラブ延長も同じ関数で決める。
+- **取り合いの3本（下階天井・立上り・上階床）はすべて断面＝CUT（太線）**。スラブは仮想断面が実際に切っている躯体で、輪郭は壁の断面縁と同格。下階天井の線はスラブの走り全体を1本で描き、走りの中で見えがかり側が出す同じ高さの中線は抑止する（`ownedBySectionSlab`。同じ線を2種類の線種で重ねない）。小口の無いスラブの縁は中線のまま。
+- **背景側の水平線は手前の切断壁の断面線でトリムする**（`hiddenByCutWall`）。その列に`cut`帯があり水平線が壁の天端以下なら列ごとの縁は描かない（取り合い線が代わりに1本で通す）。天端より上は対象外。却下した案: 「向こう側の面まで伸ばすだけ」（立上りなしで宙で終わる）／「手前の面で止める」（CLの外で止まる）。正解は向こう側の面まで進めてそこに立上りを描いて接合する。
+- **切断壁の天端は`cut`帯からCUT水平線を壁ごとに1本**描く（`cutWallTopEdges`。列は壁と無関係な断点でも割れるので列ごとに描くと複数本になる）。見えている天井より下で終わる壁（腰壁・袖壁）が対象。壁は片面ずつのWallの2枚なので天端も2本の線分が突き合わさる（見た目は1本）。
+- 凹み側面線は同じ層(`layerRole`)の壁どうしでしか成立しない（層が違えば凹みではなく見えている壁が別の層のものへ入れ替わっただけ）。切断壁（`cut`帯）の縦線は「同じ壁が隣接列に続くなら描かない」（`band.wall`参照で判定。列境界ごとに両縁を描くと1枚の壁の断面の内部に分割線が出る）。
+
+## 見えがかりの奥行き判定
+- **見えがかりとして描くのは「その切断で最も手前の壁面（＝主な描画対象）から測った奥行きが`SIGHTLINE_DEPTH_LIMIT_MM`(=800)未満」のものだけ**。それ以上奥の壁面は凹み（ニッチ・袖壁の脇）ではなく**別の空間**なので見えがかりにせずアキにする（`sectionEngine.js`の`buildColumns`で`wall`帯を`open`帯へ置き換える。基準距離は線種の階調と同じ`nearestSightlineDistMm`）。構造材の見えがかりも同じ判定を通す（梁・柱は`nearMm`で壁と競う）。
+- **見えがかりは「見えるもの」だけ**。上階に実床があれば自階の天井で終わる（`sectionLayerStack.js`の`resolveSightlineTopZ`）。天井裏（自階の天井〜上階FL）にも壁の実体はあるが天井に隠れて見えないので、`probeColumn`が天井懐（`slab`・非描画）に分類する。上が吹抜けで壁が見え続ける場合は上階天井まで続く。
+- **その空間の天井の縁は中線**（天井は切断面のすぐ手前から奥へ広がる面で、縁までの奥行きは0）。`sectionEmit.js`では2経路が同じ高さの線を出しうるので両方で中線を選ぶ: 見えがかり壁の上端（すぐ上に天井懐が接し、その層の`ceilZ`がその高さに一致する場合）と、slab/openの境界。
+- **寸法の鎖は「見えがかりの奥行きが変わる位置」でも割る**（`elevationDimSplit.js`のS6）。面の平面に壁が無い区間では先の壁が見えがかりとして描かれ、壁の端に縦線が立つ。図に線がある位置なので寸法もそこで割る（分割を担うのは実体）。対象は面と平行で視線方向にあり、見えがかりとして描かれる奥行き（800未満）の壁。**割る位置は壁の端の中心線**（寸法の分割点は常にCL）。判定は`face.spans`ではなく面の軸上の壁を直接引く（`spans`は合成前の面のもので吹抜けと合成して伸ばした区間を持たない）。
+- **壁のない端部のはね出し（探査延長）にはアキを描かない**（`emitOpenGapMarks`）。延長は線を図の外へ延ばすために探査範囲を広げたぶんで、そこは面の外。面自身の範囲は`cut.line.lo/hi`（延長を含まない）で決まり、アキのセルはその範囲へクリップする。条件は床側だけでよい。
+- **他の面の見えがかりとして描かれる面は、独立したパネルにしない**（`elevationFaceList.js`の`dropFacesSeenAsSightline`。同じ壁面を2枚に描かないため）。条件は4つ: 同じ向きを見る平行な面／奥行きが上限未満／手前の面の走り範囲が奥の面の全長を覆う／手前の面の平面にその範囲と重なる壁が無い。奥行きは符号付きなので相互に取り込み合わない。**適用は面リスト確定後＝`composeRoomFaces`の`labelFaces`の直前**（落とした結果で採番をやり直すため）。上部吹抜けの2層帯だけは合成の後にもう一度掛ける（取り込む側の面は吹抜けと合成して走り範囲が伸びた後でなければ奥の面を覆えない）。
+- **実画面で「ア キ」を置けない幅の区間は、アキ標記（バツ＋文字）ごと省略する**（`emitOpenGapMarks`）。判定は`GAP_LABEL_WIDTH_PX`(=30)を`scale`で実寸へ戻した値。**`scale`未指定（単体テスト・ゴールデン）では判定しない**。`scale`は帯の2パス目でのみ確定するので`appendBandCutContent`→`buildSectionFromLine`→`buildCutContent`→`emitCtx`と渡す。
+
+## 線種は「断面か／どの奥行きか」だけで決まる
+- **切断壁の縁は常に太線（CUT）。降格しない**。断面は隣に何が見えていようと断面であり、線種が隣接列の状態で変わってはいけない。
+- **その他の見えがかりは奥行きで2段**: その切断で最も手前＝直近が中線（SILHOUETTE）、それより奥は細線（DETAIL）。「直近」は列ごとではなく**その切断（1枚の図）全体**で決める（`nearestSightlineDistMm`。列ごとに最小を取ると奥まった凹みもその列では最前面なので中線になり奥行きの表現が失われる）。
+- **「断面より下・向こう側は細破線」への最終降格は`emitLine`1箇所だけ**で適用する（`.claude/elevation-redesign.md`§5.6の最終フィルタ。各所に個別の破線判定を持たせない）。`neverDowngrade`を渡した線（ささら12×300矩形・踊り場床CUT線・踊り場桁の見返り矩形・踊り場桁枠の見えがかり帯）は降格しない。降格が残るのは踏面梯子（正面視で`flight.baseZ<cut.baseFloorZ`のとき明示dash）と壁断面の見えがかり（'wall'/'cut'/'cutAlong'）だけ。
+- **見えがかり線が存在するのは「仮想断面からの距離が変わるところ」だけ**。同じ距離が続く境界は1枚の連続面で線は無い。距離が変わる境界は**手前の面がその輪郭を持つ**（`ownsBoundary`。両方が描くと同じ位置に線種の違う線が2本出る）。相手がアキ・床スラブ・範囲外ならこちらが描く。
+- 天井裏の面も「壁」扱いする（`resolveSightlineTopZ`が上限を上階のFLにする）。これで「CHの上が天井裏なら同じ壁が同じ距離で続く」ため、一般規則だけで**CHに見えがかり線が立たない**。逆に「CH下がアキ・上が壁」は距離が変わるので線が出る。**FLと帯自身のCHには見えがかりの水平線を描かない**（床・天井はその位置に断面線を持つ。FLは層の属性なので「帯自身・各層・床スラブ」のFLを集めるが、CHは帯自身が描く天井`emitCtx.ceilZ`だけ。帯の上端より上はモデルに無いのでここだけ明示的に落とす）。
+- **切断壁の手前にある境界へ見えがかりの凹み側面線を重ねない**（壁は切断壁の裏へ続いており凹んでいない）。同様に、手前の腰壁（`cut`帯）に遮られて**その列だけ下端が持ち上がった**見えがかり壁の帯の側縁の縦線は描かない（水平線側は`hiddenByCutWall`、縦線側は`uncoveredZRanges`が隣接列の`cut`帯を「覆う」側に数える。同じ「手前の切断壁に切られただけ」の判定を水平/垂直の両方に適用する。片方だけだと再発した）。
+- 縦線の抑止規則2つは**隣にアキ（`open`）があるなら効かせない**（アキは「その面の平面に壁が無い」ことそのもので、境界の縦線が要る）: `uncoveredZRanges`の「同じ壁面がキャップの違いだけで高さを変える境界には縦線を出さない」は境界に切断壁が立っていれば天端までしか効かせない／`splitByCutWall`の「切断壁に切られて持ち上がった帯の側縁は描かない」は隣接列がアキのときだけ外す。
+- **同じ壁面がキャップ（天井高・上階セルの有無）の違いだけで高さを変える境界には縦線を描かない**（セル境界は描画対象ではない）。壁の同一性は参照一致でなく軸CL＋材の面位置で判定する。腰壁・垂れ壁は本物の高さ差なので対象外。**切断壁に切られた帯の側縁は面の端では効かせない**（前提の「隣接列で同じ壁が1本の帯として続く」が面の端には無い。端に壁が有るかの唯一の情報源は`openEndLo/Hi`＝`face.hasWallAtLocal0/Run`）。**`cut.line`の枠(lo/hi)は必ず`cut.face`の枠と一致させる**（ずれるとcontent全体が面に対して平行移動する）。階段の見えがかりは「蹴上材を裏から見ているか」でも決まる（階段帯の節）。
+
+## アキ（バツ・「ア キ」）の標記
+- **輪郭の矩形は描かない**: バツ（一点鎖線の対角2本）＋「ア キ」テキストだけ。輪郭は定義上つねに周囲の実体（壁の断面・床/天井の断面線・腰壁の天端・面端の縦線）と一致するので、矩形を描くと必ず二重になり、中線の矩形が断面＝太線という線種情報を上書きしてしまう。「ア キ」を置くのは、建具の開口を含まず・外接矩形どおりの形（L字に食い込まない）で・床断面より上にある連結成分だけ。断面エンジン側は`emitOpenGapMarks`、面図側（段差見付け面・開放スパン）は`appendGapMark`で同じ規則を持つ。
+- **4点は空き面の実際の隅**（連結成分がL字なら、左右それぞれの端にあるセルのz範囲からその端での実際の上下を取る。矩形なら外接矩形と一致）。**腰壁と交差する区間はクリップ**（`obstructionRects`＋`subtractRectsFromLine`）。**手前に実体がある区間は破線**（`splitGapMarksByStair`。破線範囲は基準線の左右では決まらず「想定したバツに対して描画面＋所定距離までレイキャストして隠れた部分」。矩形との重なりを取るだけ）。
+- **面を横切る切断壁の天端の上の空気を含めない**（アキはその面の平面に壁が無い範囲の標記で、直交する壁を越えた先の空間はこの面の穴ではない。混ぜると連結成分が壁の断面の中へL字に食い込む）。面の平面にある腰壁の天端の上（本当のアキ）は下が`wall`帯なので影響しない。
+- **建具の姿の前にバツは出さない**: `openingPassThrough`の帯はアキ扱いにしない（姿図が描く場所。アキのセルに入れると真上の上階アキと連結して対角のバツが姿図の上を通る）。
+- **アキを出さない場合**: 踊り場前縁の切断（折返し階段 seq1・seq3。`openGapMarks:false`）／レーン境界の実壁（隔て板）の面 seq2（隔て板の上・端の先は同じ階段室の空気。実壁が無い鉄骨等は従来どおり）／**抜けの先が階段室（`Room.feature===STAIR`）の抜け**（階段室への通路。`buildColumns`が向こう側のセルを引いて`open`帯に`farStair`を付け、部屋名は見ない。階段帯`cut.stairCut`は対象外）／壁のない端部のはね出し／実画面で置けない幅／部屋自身が回り込んでいる区間（回り込んだ先の壁は同じ帯の別パネルとして描かれる）。壁のない辺（階段の上り口）の開口には標記する。
+- **開放スパンの中に見える直交壁（隔て板）の両面は中線の縦線**で描く（`emitOpenSpanEdgeOnWalls`。面に端を接して奥へ延びる自階の壁を同じ軸CLで1組にして外面2本。z範囲は`open`帯∩壁の存在z〔`sectionHits.js`の`edgeOnWallZRanges`〕。面を横切る壁・面の端壁・階段帯は対象外）。
+### アキのz範囲は「下端＝遠側床・上端＝低い方の天井」
+（高低差の裁定）アキは**断面エンジンだけが描く**。図側（`buildFaceFigure`）は**無条件で描かない**（面ごとに切り替える条件付き抑止は同期し続けるべき第2の機構を増やすだけ）。値の単一情報源は断面エンジンの探査（`sectionHits.js`の`farFaceAnnotation`→`sectionEngine.js`の`splitOpenByFarFace`が`open`帯自身のz0/z1を書き換える）。`emitOpenGapMarks`は帯のz0/z1をそのまま読むだけ。上端は近側/遠側の天井の低い方で止まる。**下端＝区間の内部に遠側床があれば常にそこで止める**（同値でも縮める）。区間の外（この列自身の探査下限`cut.zRange.loZ`より下）にあれば伸ばす（`extendedFromZ`を残す。腰壁のように区間の下に別の実体がある列は対象外）。その位置の実際の床は探査が既に見つけているので、引けない値を「帯の床(0)」で埋めたり引けた0や一段下のfar値で上書きしたりすると下端が床から浮く。「ア キ」の中心もクランプ後の範囲で採る。列ごとに遠側が違っても各列は自分の探査値を使う（補間は不要）。
+
+  | 実機 | far | 探査が見つけた床 | 正しい下端 |
+  |---|---|---|---|
+  | 「11'」A2左（1FLの破線あり） | −100 | z=0 | z=−100（その破線の高さ） |
+  | 「10」D1（遠側床線なし・近側の床が部分指定で下がる） | 0 | z=−50 | z=0 |
+  | 遠側床が帯の床より高い構成 | +300 | z=0 | z=+300（下は遠側スラブで塞がれる） |
+- **アキの下端は`open`帯自身が決める**（輪郭クランプは撤去済み）。**階段帯だけ例外**: 断面線があれば`gapFloorProfile`でセルの下限を持ち上げる（Xの形が崩れるので線を後から切らずセルの段階で持ち上げる。量はセルのx範囲での輪郭の最大。部屋帯・吹抜け帯は渡さない）。実体（`hidden`）・遮蔽（`stairFace`）・体裁は別チャネルで、実体の解決はband自身（探査）に一本化する。
+- **バツの線種は対角ごと・線分ごと**: `baseFloorZ`で対角を分割し両片を一点鎖線で渡すと、下片は`emitLine`の最終フィルタが破線へ降格する（成分全体を1値で塗る旧実装より実高さに忠実）。「下片が破線」は`baseFloorZ`分割＋降格が決めており遮蔽由来ではない（階段の占有形状が`baseFloorZ`と一致しない構成は遮蔽チャネル側の分岐が別途要る＝未対応）。
+- **部屋帯では手前の梁がアキを塞ぐ**: 帯が持つ梁（memberCutは`obstructionRects`で、memberFaceの帯は既定でアキを割る。階段帯だけ`gapPass`で素通し）は帯がアキを割る。帯が持たない部材（dropped）の矩形だけは`elevationSolids.js`の`beamBlockerRectsForFace`→`appendBandCutContent`の`gapBeamRectsOf`→`emitCtx.gapBeamRects`で`emitOpenGapMarks`へ渡す（面の平面上・空中の梁`split:true`はセルから抜く＝梁の上下で別の連結成分。断面`split:false`はセルを割らずバツの線から切り抜くだけ）。渡すのは`buildRoomBand`・`buildRoomBandWithVoidAbove`（solids指定時）だけ。階段帯は梁でアキを割らない（R5。`memberSplitsGaps:false`）。
+- **階段室の開口越しに階段を見る**: (1) 面の向こうが階段室で天端が階段の裏面との取り合い（`junction`＝復路下の壁）の壁は、部屋の包絡矩形・奥行き上限(800)を掛けず壁の帯（`viaStair`。最初の1枚だけ）で見通す。天端の線は細線（`junctionTop`）で線種の階調（直近）に数えない。復路下の壁の天端は直上の層が無い単層の部屋帯でも付く（`probeCtx.floorHeightMm`）。(2) 開口越しの階段は`sectionContent.js`の`farStairViewPrimitives`が細線で描く（視点から遠ざかって上るflightの段鼻と、視点側を向く回転部の蹴上。`farSideSilhouettePrimitives`をレーンを横切る切断へ一般化）。(3) 遮蔽は列の手前の壁・断面と隔て板の端面（`emitOpenSpanEdgeOnWalls`が返す矩形の厳密内部）。階段の断面・階段帯・階段下の帯には触れない。(4) **巾木**: 階段下スペースは帯の部屋（ホール）の一部なので、`viaStair`の壁の足元と隔て板の小口（背後に`viaStair`の壁がある小口だけ）に帯の部屋の巾木高さの細線を引く（足元が床の高さの帯・端面だけ。階段帯・吹抜けの上階側・巾木なしは引かない）。
+
+## 仮想断面線をどこへ置くか（`section/sectionCutPlane.js`）
+**規則: 描画対象の面の壁の中心線から、室内側（`face.inward`方向）へ下がる。** 下がる量は「面の壁の中心線→壁仕上げ面」「その面に現れる柱型の室内側への出」「面の前の造作家具の出（ドメインモデル未実装。フックのみ）」の最大値を1mm単位で切り上げ。**多層帯は全ての層について同じ評価を行い最大を採る**（層ごとに面の走り範囲も壁厚も違うため、自階だけ見ると上階の柱型に切断面が食い込む）。
+- 切断面が壁の中を通ると (a)見えがかり候補が全て室外の壁になり`withinViewRoom`に落ち (b)所有Roomの1点プローブが室の外へ落ちて`room=null`になり床スラブ・天井懐の分類ごと消える＝面が丸ごと`open`になる。`sectionCutPlaneExtraction.test.js`が offset=0 と正規のオフセットを並べてこの症状を凍結する。
+- `faceCutLine`は`lo/hi/dirSign`を動かさない（断面ローカルxと面ローカルxが同値である`sectionTypes.js`の不変条件）。面の軸との照合は`cut.face?.axisCL?.effectiveValue ?? cut.line.axisValue`。視線の符号は`faceViewSign`（=-inward）が唯一の定義（過去に経路ごとに符号が食い違った）。`faceSectionCut`（部屋帯の梁の cut）の viewSign は`-faceViewSign(face)`で、柱型判定の「室内側を正」規約との反転は意図的に残している（完全統一は柱型の挙動「4」Bが変わるので見送り）。
+
+## 切断1本→contentの共通経路（`section/sectionContent.js`）
+階段帯と吹抜けの多層帯は「切断を1本立てて断面エンジンへ渡す」同じ処理なので、`buildCutContent`を唯一の共通経路にし、**ここへ足した修正は階段にも吹抜けにも同時に効く**を不変条件とする（かつて階段帯にあるものが吹抜け帯に無い差が静かに溜まった）。
+- `buildSectionFromLine`は切断線と層スタックを主語にcutを組む薄い層。`face`は必須ではなく**opts の「面由来の値の供給元」**。面固有の値（`viewSign`/`dirSign`/`zRange`（必須。エンジンで導出しない＝導出すると帯種別の分岐が生える）/`baseFloorZ`/`ceilProfile`/`stairCut`/`bandRoomBounds`/`probeCtx`…）は呼び出し側が渡す。
+- **面述語の導出は`SectionCut.ends`（`{openLo,openHi,wallLessLo,wallLessHi}`）1箇所**（`withProbeExtension`と`emitCtxForCut`が読む。`ends`の無い手組みcut＝階段cut表だけ従来のface導出へフォールバック）。**face-lessの縮退規則**: 層ごとの探査窓（`layerRunWindowsOf`。壁の中心線の平面が要る）は作らない／`bandRoomBounds`は渡さず深度上限800だけで絞る（`withinViewRoom`は帯＝1部屋前提の特例で多室横断では成立しない）。`cut.face`を直読みする箇所（`layerRunWindowsOf`・`sectionStructure.js`・`elevationStairSequence.js`）はface-lessで窓なし／許容0／`line.axisValue`へ縮退する。範囲外: 斜めの切断線・多室横断での`baseFloorZ`・`ceilProfile`の意味づけ。
+- **`cut.bandRoomBounds`（帯のRoomの包絡矩形）は自階graphで一度だけ求めて全レイヤーで使う**（層ごとに引くと上階レイヤーでは自階Roomのセルキーが解決できず制限なしになる）。見えがかり壁の探索は帯自身の部屋の広がりまで（`withinViewRoom`）。帯のRoomは列によらず一定でなければならない。
+- 面の描画範囲の外には断面を出さない（`cutDrawRange`が単一情報源。`cut.line.lo..hi`＋探査延長`probeExtendLo/HiMm`）。構造梁と階段のCUT断面矩形の両方に効かせる。
+
+## 層スタックの一般規則（`section/sectionLayerStack.js`）
+`SectionCut.layers`は「どの階のgraphを絶対zのどこへ置くか」の並びでしかないのに、かつてはrole名（'self'/'above'/'below'）と配列順で引いており、2層固定なら偶然正しく3層以上で静かに壊れた。**層に関する問いは4つの一般規則（所有層`layerOwningZ`／帯自身の階`baseLayerOf`／上位層`layersAboveOf`／優先順位`compareLayerPriority`）だけで答え、role文字列は`ZBand.layerRole`（隣接列の同一性判定の識別子）としてのみ残す**。意味を持つのは並び（floorZMm）であって名前ではない。
+- 層を**組む**のは`sectionBandLayers.js`の`buildBandLayers`、層に**問う**のは本モジュール。生の`cut.layers`から自階の直上の層を引く`layerDirectlyAboveSelf`は`baseLayerOf`＋`layersAboveOf`の薄いアダプタ。
+- 帯自身の階を「z原点に最も近い層」と定義できるのは`sectionTypes.js`の契約「高さは絶対z・設置階FL=0基準」があるため（崩すとbaseLayerOfの定義も崩れる）。見えがかり壁のz上限も「実Roomに出会うまで上へ登り、その手前の層の天井を上限にする」（`resolveSightlineTopZ`）へ一般化済み。
+- **「修正が他の図面にも効くか」は不変条件で担保する**（`sectionProbeMultiLayer.test.js`）: **INV1** bandsはzRangeを隙間・重なりなく覆う／**INV2** `cut.layers`の並び順を変えても結果が完全に一致する（役割名にも配列順にも依存しない実行可能な証明）／**INV3** 同じ入力の再プローブは同じ結果。層まわりの新しい分岐を足すときはまずこの3本を通す。
+
+## 空間セル索引とヒット列（`space/spaceModel.js`・`section/sectionHits.js`）
+床天井の式は`space/spaceModel.js`の`buildSpaceIndex`に集約（唯一の置き場所）。`sectionProbe.js`の`makeProbeContext`はこの索引を内包する薄いラッパ。
+
+### 不変条件: 帯のローカル z=0 ≡ その帯の部屋の実効FL
+`finalizeBand`は部屋の実効FLぶん帯全体を平行移動する（`bandFloorOffsetMm`）。断面エンジンの床解決（`makeProbeContext`の`floorZOf`＝`spaceModel.js`の`floorZFor`）が階のdatum基準のままだと、実効FL≠0の部屋の帯で床zがfloorOffsetぶん過大になり、床断面線と重ならない中線・アキの誤った下端として現れる。**式は1箇所（`bandFloorOffsetMm`）に置き、finalizeBandとプローブの両方がそこを読む**（2箇所に分かれると再び食い違う）。`layer.floorZMm`（階のdatum差）には触れない（壁・断面のzまで動く）。above層にも同じ差し引きが効く。
+
+### 探査の流れとヒット列の確定規約
+- 探査は列ごとに**候補（ヒット列）を深度昇順で積み**（`probeColumnHits`）、**選択して帯にする**（`visibleBandsOf`）。`probeColumn`はヒット列を従来と同値に畳み込む薄い合成。候補の種類: `cut`/`cutAlong`（切断壁）・`wallFace`（見えがかり壁）・`floorFace`/`ceilFace`（視線の先の別室の床天井）・`slabFace`（自室の床構造・天井懐）・`stairFace`（階段の占有形状）・`memberCut`/`memberFace`（梁・柱。後述）。
+- 深度は切断線から視線方向へ測った正値で、壁の`distMm`と同一基準。同深度のタイは垂直面（cut/cutAlong/wallFace）が水平面（floorFace/ceilFace）より先（`kindRank`）。floorFace/ceilFaceは単一zの縮退面で、厚みを持つのは`slabFace`だけ。視線の先の天井高が解決できないときは`ceilZ:null`（床線は出るが天井線は出ない）。深度の0は3種（cut/cutAlongの定義値・slabFaceの番兵・stairFaceの切断平面への接触）を区別する。
+- 水平面ヒット（floorFace/ceilFace）は`open`帯へ、**区間の内部にある最も近いもの**を`farFloorZ`/`farCeilZ`/`farDepthMm`として付帯し、`splitOpenByFarFace`が壁と同じ基準（最も手前の壁面からの距離・800）で上限を適用する。上限内なら区間を`[farVoid?, open(floorZ..ceilZ), farVoid?]`へ分割（`farVoid`＝床天井より向こうの天井懐・床構造は非描画）。**床と天井は別々に深度判定する**（`farFloorDepthMm`/`farCeilDepthMm`。近い部屋の床の深度が遠い部屋の天井の上限判定に貸されて誤採用された前例がある）。奥の壁の建具姿図は描かない。
+- `stairFace`（`stairFaceHits`）は`coverableHits`で除外され**選択に参加しない**（遮蔽は`stairFaceOccluderRects`・clip群が担う。U3見送りで現状維持）。
+- **空気ボリュームの連結**（`componentOf`/`componentAt`）: 同一層は全高の壁で仕切られない限り連結（腰壁・垂れ壁は連結を切らない）。階またぎは、VOIDは**重なる吹抜けの最下階の親部屋1室**（直下に重なるVOIDがある限り連鎖し、最下階で親部屋と連結）、STAIR_VOIDは直下の**階段室1室**（feature===STAIR）とだけ連結する単一マッチ（bboxが重なるだけの他の部屋、階段下の閉じた部屋は連結しない）。本番の消費者は`isHiddenWall`。`cellsAlong`は`cellAt`の一般形で、視線方向へ格子セル単位に進みroom変化点（と天井の面が変わる所）で区切った区間を近い順に返す。
+
+### 壁の天端プロファイル（関所の一般の引数。隔て壁 S4-1）
+壁のz範囲の関所`finish/kneeDropWall.js kneeDropZRangesAt`（cut・cutAlong・wallFaceの3経路が共有）に省略可能な引数`wallTop`（`{zAt(along)→絶対z}`）を持たせた。あれば腰壁・垂れ壁より先に判定し`[床, min(天井, zAt(pointCoord))]`を返す（天端≦床なら空）。`probeCtx.wallTopProfileFor(layer)`が層ごとに1回だけ`Map<壁id, {zAt}>`を作る。供給元は在来木造の折返し階段の隔て壁の天端（`finish/stair/stairPartition.js partitionTopZAt`が単一情報源。最上層＝斜め、続く層・直上の層なし・階高/蹴上が決まらない・非在来＝プロファイルなし＝フルハイト）。**壁の種類を関所へ持ち込まず「天端が位置の関数」という一般の引数だけを足した**（特例を増やさない裁定）。
+### 天端が斜めの帯（`topEdge`。S4-2）
+斜めの天端は「帯の上端が水平」という前提を崩す一般の概念として、ZBandに`topEdge`（天端の線の両端の高さ）を持たせて扱う（壁の種類を描画側へ持ち込まない）。
+- **列の境界**: プロファイルが`crossings(zLevels)`で斜線が水平線の高さを横切るalongを返し、`collectCutBreaks`が各層のFL・切断の床/上端・斜線を頭打ちにする天井の高さで列を割る（列の中で斜線が水平線をまたがない）。
+- **帯の上端は高い側に倒す**: `probeColumnHits(…, span)`は列の幅の両端の高い方を上端にする（遮る範囲を広めに＝隠すべきものを描かない側。逆だと斜線の下に奥の線が漏れる）。上限（上階の床等）で頭打ちなら`topEdge`を付けない。`topEdge`は上端に届いている帯だけが持つ。probe直後は世界のlo/hi側、列の帯は図のx0/x1側。
+- **描画**: 天端は列の両端の高さを結ぶ斜線。壁の端の縦線は**その端の天端の高さまで**。斜線では水平線との重なり判定を行わない。隣の列との継ぎ目の縦線・奥の壁の下端の水平線は、端の縦線の天端トリムと`ownsBoundary`で出ない（専用の抑止規則は足していない）。
+- **アキ**: 斜線の上の連結成分は、全セルの上辺が水平で下辺が1本の直線なら台形として扱う（×は台形の対角・「ア キ」は台形の中心）。下辺が1本の直線でない成分は従来どおり外接の隅へ×を引き文字なし。遮蔽は台形（`subtractRectsFromLine`の`poly`）。**笠木なし**: 天端プロファイルの壁（`profiledTop`）は腰壁の天端の帯を描かない。
+- **cut/cutAlong経路のクランプ**: プロファイルを持つ壁は部屋のCHではなく視線の上限（`resolveSightlineTopZ`）で切る（階段室の吹抜けにはCHの天井が無く、天端〔仕様2600〜3800〕がCH2400で止まるのは誤り）。この上限クランプは**リードの既定で裁定待ち**（旧仕様は部屋のCH）。プロファイルの無い壁は従来どおりCH。
+### 隔て板の天端は物理端まで続く（旧 S4b「埋込み柱の立ち上がり」の撤回）
+天端プロファイルは`zAt`/`crossings`だけを持ち、柱は斜めの天端より上へ出ない（裁定: 隔て板回転部側柱型の出っ張りは誤り。斜めの天板と回転部側縦線が取り合うのが正解）。斜めの天端は設計上の端（`entryEnd`/`landingEnd`）の外へも同じ勾配で延長し（`partitionTopZAt`・`partitionTopCrossings`）、壁の物理端（柱包みのはね出し）まで続いて端の縦線と取り合う。
+- **縦線**: `uncoveredZRanges(col, band, side)`は、隣接列の帯が`topEdge`を持つとき境界での天端の高さまでしか覆わない（`side`＝'prev'/'next'）。**cut経路**: 同じ軸CLの切断壁が隣接列で高さだけ違うとき、隣の断面に覆われた高さの縦線は壁の内部なので引かない。
+- **cut経路の天板の見え掛かり**: 幅方向に隔て板を横切る切断（seq1）で斜めの天端が切断面より視線側で上がるとき（最上階の隔て板。視線が上り口側）、切断帯の天端から視線側の壁の端での天端（天井の打ち切りまで）まで、両縁の立ち上がりと遠端の天端の水平を細線で描く（`cut`ヒットの`topBeyondZ`。壁ごとに1組）。天端が天井に届く壁・踊り場側を見る切断・続きの階段がある階（フルハイト）には出ない。
+- N+1 の部屋帯からは下階の隔て壁は見えない（隔て壁は下階Nの階段帯の上の層に描かれている。N+1 から見せない。上り口側の短い束も壁に隠れるので描かない）。
+
+## 2.5D立体の加算レイヤ（`elevationSolids.js`）と構造材（梁・柱）の描き方
+**現状（U1b B6 以降）**: 構造梁・柱は断面エンジンの探査の帯（`memberCut`・`memberFace`。`sectionHits.js`）が描き、遮蔽も壁と同じ奥行き比較で決める。加算レイヤ（`droppedMemberPrimitivesForFace`・階段帯の`structuralPrimitivesForCut`・`beamBlockerRectsForFace`・`wallLineCuts`）が描くのは**帯が持たない部材（dropped＝`droppedMemberKeysOf`）だけ**。`buildFaceFigure`は加算を積まない。`visibleBeamPieces`は`opts.memberCuts`を渡した呼び出しなら dropped だけを返す（本番は必ず渡す。省略＝全部返すのは単体テストの道具）。
+**dropped の定義と、加算経路が恒久に残る理由（R7）**: 列の端を捨てた列（`{ceil, zone, wtpSight}`の3条件）の部材・z範囲に掛からない部材・探査の範囲の外・切断線が内側を厳密に通る柱。部材の端で列を割ると、斜めの天井断面・斜めの天端・天伏の天井高さ場の列は`mergeColumns`/`bandsEqual`が併合せず共線の線が割れ、天井高が列の中点1点で決まるため割れた列の天井が変わる。端を足す位置をこの3条件で限定して出力を保つ（QAアブレーションで必要十分）代わりに、その列の部材は帯に乗らず加算のまま残る。**ユーザー裁定R7: 粗さ維持**（継ぎ目は列の境にしない）。
+
+### 探査の帯としての部材
+- **候補収集**（`addMemberHits`）: `memberCut`（切断線が切る梁・柱。切断線が平行な梁の幅の帯を通る梁は`along:true`）と`memberFace`（視線側の平行な梁・空中の梁・柱）。入力の層は`cut.memberLayers`、無ければ`cut.layers`。**部屋帯は自階1層なので上階の梁（梁型）が候補に無い**ため、帯ビルダーが`memberLayersOf`（`elevationSolids.js`）で作って opts で渡す（`makeSectionCut`は足さない）。配列は`ElevationModeState`が1回の組み立ての中で全部屋で共有する（共有しないと`memberSolidsMemo`〔層の配列の同一性で立体を覚える〕が部屋の数だけ立体を作り直す＝落とし穴）。上部吹抜け帯にも梁が出る（ユーザー裁定「吹抜け帯にも梁を出す」）。`memberLayers`が無い帯は`cut.layers`で解く。壁に埋まった梁（`beamWallEmbedding`の fullyEmbedded、切断位置が`embedding.along`の中）は積まない＝**「壁の中か」は候補段階だけが答え、選択は奥行き比較だけ**（`hidden`で積むと壁の断面より先に選ばれて消える危険）。zは列の自階の床・天井で切る（床の穴は床で切らない・memberCutは天井で切らない・層スタック外の層も積む。部屋帯は自階FLで下を切る）。
+- **選択**: `coverableHits`から部材を外す。`frontMatch`の順位は cut→cutAlong→memberCut（alongも同格）、`wallMatch`は wallFace＋memberFace。**部材が絡む列は全候補を手前の面までの奥行き`nearMm`で比べる**（壁＝materialRangeの手前の縁、梁＝|芯距離|−半幅、柱＝`depthNearMm`。面の通りの梁・壁芯上の柱は芯の距離が壁と同点になり壁が勝って消えるため）。同点は`kindRank`（memberCut 1.5・memberFace 2.2。同距離は wallFace が先）→層。壁だけの列は従来どおり distMm→層。深度上限（800）は部材の帯にも適用する（`splitOpenByFarFace`・`wallBandToOpen`・`memberFaceToOpen`）。上限を超えた梁・梁の後ろがアキの梁は、**梁が無かったときの帯**（`memberlessBands`。部材の候補をすべて除いた選択）へ戻し、付帯情報はそこから取る（梁の中に「ア キ」を出さない）。slabの中の梁はslab帯を割らず`members`に片で添える。
+- **候補段階のフィルタ**（`faceStateOf`ほか）: 帯の部屋の中・断面線より下に浮かない・柱包み・規則A（手前の全高の壁が覆う区間。`wallCoveredSpans`。壁が探査の候補にならなくても遮蔽は効く。腰壁・垂れ壁越しは実高さで隠す）・面に掛かる・描画範囲（`drawnRanges`）・階段帯は天井裏（`memberCeilZAt`）。階段帯の側壁が覆う断面は部材ごとに1回判定する。
+- **線種は候補が付ける`memberClass`で決める**（`sightRole`＝直近が中線では「面の通りは細線」の裁定と食い違うため）: memberFace側の値は`facePlane`→DETAIL／`airborne`→SILHOUETTE／`column`→SILHOUETTE（memberCutの`along`〔切断線が平行な梁の幅の帯を通る梁〕は別の印で、DETAIL）。**規則1: 同じ奥行きで実体の違う member 帯と wall 帯の境は DETAIL で引く**（無いと壁面と同じ面の梁型の細線が消える）。
+- **列の分割**（`collectCutBreaks`）: 部材の端（直交梁＝芯±半幅・平行梁＝スパン両端・柱＝run方向の辺）を層の探査窓でクランプして足す（`nearMembersOf`・`addMemberEdge`）。足さない列は上記 dropped の3条件。**記録: 継ぎ目で天伏の面・階段裏面の足元の縁を列の境にする案（精度向上）は出力が変わるため裁定でR7に含めて見送り**。
+- **描画**（`sectionEmit.js`）: memberCutは帯の縁を引かず、部材の最初の列で`sectionOutline`（H形鋼＝フランジ・ウェブの実形状12辺／鋼管＝外形＋肉厚の内側輪郭／矩形＝外形4辺。RC丸柱は外接矩形のまま）を1回描く（出所の印`MEMBER_PRIM`。階段帯の壁線の後加工から外し、構造材の経路〔`dashLinesInsideRects(behindRects)`→`clipContentBelowProfileInRanges`〕へ流す）。部材の端で割れた共線の水平線は`finalizeBand`が`joinLinesAtMemberEdges`で1本に戻す（部材の端が絡む包含の重複も畳む。部材の端と無関係な既存の分割には触れない。一般の連結は見た目不変でもバイトが変わるので採らない）。アキ: memberFaceの帯は既定でセルを割り（階段帯だけ`gapPass`で素通し）、memberCutは割らない（`obstructionRects`）。階段帯は`memberSplitsGaps:false`で割らせない。
+- **柱**: memberFace（`column`・nearMm＝`depthNearMm`）。切断線が柱の幅の内側を**厳密に**通る柱だけmemberCut扱い（edgeDropped＝加算。縁が接するだけなら`cutPlaneOffsetMm`が出をmmに切り上げるのでmemberFace nearMm 0で遮蔽が効く）。縦線は見付けの両端を床〜柱の上端まで、天地の線は断面線の高さでないときだけ。柱の上端は梁と同じ天井の取り方（その位置の部屋の天井〔CH〕では切らず部屋帯は帯の天井断面が切る。柱の階の上の床〔その位置に実の部屋のある階だけ〕か帯の上端まで。階段帯だけ裏面`cut.memberCeilZAt`で止める）。slab内の片は`siblingPieceAt`で兄弟を隣に添える。
+
+### 裁定 R1〜R7（現行規則）
+R1 柱型の線種は中線のまま／R2 airborne（部屋の真ん中の梁）は中線で描く（「面の通りの梁＋切断面を横切る梁」を物差しにしつつ、空中に横断する材は天地を中線で描く2026-08の裁定を維持）／R3 独立柱・壁越しの柱が出るのを受け入れる（入口条件`onFaceWall||straddles`を落とす。壁が手前・同じ奥行きなら壁が勝つ）／**R4 部屋帯の断面は天井で切り詰める**（梁の幅に掛かる列の天井の最小値で輪郭の上端を切り、梁の下端以下なら輪郭なし。天井の段の継ぎ目の梁は低い側の天井線より上へ出ない）／R5 階段帯のアキは梁で割らない／**R6 壁の断面の縁は梁の断面に接する高さでも描く**（途切れない。`wallLineCuts`の図側の用途は別物として残る）／R7 粗さ維持（上記）。
+
+### 梁の「壁の中」判定は`beamWallEmbedding`1関数（`sectionStructure.js`。S3）
+旧3判定（1枚の壁／合併帯／同一CL）の食い違いが前セッションで判定の不一致を生んだため1関数に統合した。**全規則が同じ壁集合・同じ帯・同じ層の述語を見る**ことが価値。
+- 規則: 同じ (graph, 軸CL) で**隙間なく連なる**壁の材（`wallConcealRange`＝`materialRange∪backingRange`。`boundaryMaterialRange`で合併）の**和集合**に梁の幅全体が収まる区間が「壁の中」。**壁と壁の隙間（開口）は橋渡ししない**。材厚の許容（`wallSpanTolMm`）は梁スパンの両端だけ（隅の端は柱包みの規則Bが担う）。壁は**全高の壁だけ**（隔て板は除く）。**腰壁は真下の床梁、垂れ壁は真上の天井懐の梁**（範囲＝床＋天井高−下端寸法〜直上の床。最上階は下端より上すべて。高さは`kneeDropZRangesAt`）に対して全高の壁と同じ（腰壁の天端より上の梁は隠さない。垂れ壁は床梁を隠さない）。
+- **層の述語**（`beamTopInStorey`は1箇所）: 梁の天が「その壁の層の床−梁成」〜直上の床にある壁だけ（壁が立つ床の下の床梁まで。在来木造の横架材は再計算で天端FL−100になる`conformWoodBeamLevels`ので床ちょうどでは取りこぼす）。2階の床梁は2階の壁にも1階の壁にも関係する。z を見ないと3階の壁が2階の高さの途中の梁を隠した前例がある。
+- 出力: `along`（梁の長さ方向の区間ごとの embedded／exposed／free）・`alongTol`（隅の許容を足した版）・`crossBands`（直交して覆う壁の帯）・`fullyEmbedded`。`structuralContribution`は fullyEmbedded で立体を落とし、`embedding`1フィールドを持つ。平行は along、直交の断面は切断位置が along の内部に無く（端ちょうどは内部でない）、室内側へ続く残り（直交壁の帯・柱包み・`alongTol`を引く）があるときだけ描く。壁の線の分断（`wallLineCutRect`）の`bandsAt`は芯で判定（`boundaryMaterialRange`の合併帯）。
+- 梁が柱で分割されているか（部材の切れ目）で描画が変わらないようにする（スパンの一部だけ壁が覆う梁は壁の足元の区間だけ見え掛かりから引く）。層の判定には元の天端・成（`layerTopZ`・`layerDepthMm`）を使う（`clipBeamsToBand`が`topZ`/`depthMm`を帯へ切り詰めても同じ層で数える）。失敗系は例外を投げず描く側に倒す（壁なし→全区間free／梁が層外→その壁を数えない／幅0→芯の1点／非有限→free）。
+- **面の通りの梁**（`opts.facePlane`。`cut.face`があれば既定true、帯種別によらない）: 切断線が帯の外でも細線のparallel。天井裏・描画範囲・規則Aは airborne と共有（`drawnRanges`・`wallCoveredSpans`）。面の軸と切断線の両方が梁の帯の中なら面の通りを優先。**`fromRoomSide`**（部屋帯だけ。断面の続きを室内側で見る`sectionVisibleInRoom`）は部屋帯だけが向きを変える既存の差で、解消は別課題。部屋帯の梁は階段帯と同じ室内側へ下がった仮想断面（pcut。`elevationSolids.js`の`faceBeamCut`）で解く（柱型・`clipBeamsToBand`・`clampPrimsToRun`は従来どおり。柱型の照合は壁芯基準）。
+
+### 加算レイヤの規則（dropped の部材にも効く）
+- `faceSectionCut`が face を SectionCut へ写す（断面ローカルxと面ローカルxが同値）。高さ基準は帯そのもの（baseFloorZ=0・zRange=0..CH）で、layersは自階（floorZMm=0）＋上階（`buildBandLayers`）。**帯のz範囲へクリップすることが「梁型だけが出る」建築的に正しい挙動を与える**（自階の床梁は床より下で全消し、上階の梁は梁成が「階高−CH」を超えて天井から降りる分だけ残る）。x方向は`[0, run]`へクランプ。
+- **壁の材厚に埋まる梁・柱は描かない**。通り芯の交点には自動補完で柱が立つので、外壁に納まる管柱まで柱型にすると壁面の途中に実在しない縦線2本が出る。壁より太い柱・梁は室内へ出るので描く。**隠す材は`wallConcealRange`（`finish/columnWrap.js`）が柱・梁・断面の埋没判定の唯一の供給源**（外壁は`backingDepth`未指定の対称壁で軸〜外面の片側しか返さず、通り芯中心の柱が収まらず出隅・入隅で柱型が出ていた。構造種別によらず外壁生成は共通なので種別分岐にしない）。**柱の判定はその柱が立つ階の壁だけ**（平面`columnWrapSolids`のhiddenと同じ入力。全層で判定すると1階に壁の無い大部屋の独立柱が真上の2階間仕切りに収まって消える）。包みの接続索引`wallAxes`だけは全層で解く。厚み方向は完全に収まることを要求し、スパン方向は壁厚ぶんの食い違いを許容する（梁はCL間を張り壁は隅で`chamferWalls`が半壁厚詰める）。
+- **見え掛かりの梁は壁・柱包みに隠れる区間を描かない**（固定mm閾値でなく構造上の述語）: (A) 空中横断は切断線と梁の間に立つ梁と同じ向きの全高の壁がスパンを覆う区間（壁のz範囲が梁のz範囲を**完全に覆う**壁だけ。腰壁・垂れ壁・隔て板・面自身の壁は使わない）。(B) 梁の厚み方向の帯が柱の包み込み外形（素の外形ではない）に完全に収まり、zが柱の層の直上の床までに重なるとき、柱のスパン範囲を描かない。断面（直交）は切断位置から室内側へ梁が実際に続き、その続きが壁の材厚と柱包みに隠れずに残るときだけ。**空中を横断する梁は天地2本をSILHOUETTE（中線）**、輪郭の縦線は持たせない。
+- **自階の床（スラブ）は構造部材の見え方を隠す一般の遮蔽物**（`occludeByFloor`）: 床がある列では自階のFL**以下**（天端がFLちょうどの鉄骨梁も含む）を、部材の種類・描き方を問わず`structuralPrimitivesForCut`の全プリミティブの線のzとxだけで切る（部材名指しの特例にしない）。床の無い列（下階の階段の吹抜け。`floorlessRangesOfCut`）は切らない。階段帯の構造寄与だけが`floorOcclusion`を渡す（部屋帯は`clipBeamsToBand`が同等で、形が違うので統一していない）。**断面（閉じた輪郭）は輪郭1つの単位で判定**（開いた半分を残さない）: 床なし区間に収まれば丸ごと描く／重ならなければ線ごとに切る／**穴の縁をまたぐ**ときは階段側の壁が断面を覆っていなければ丸ごと描く（鉄骨梁を見せる設計。覆う＝梁の芯から階段側の壁の面までの距離＞梁の芯から断面の端までの距離。等号は覆わない。同じ軸CLの複数壁は`boundaryMaterialRange`で合併した1枚の帯）。丸ごと描く輪郭には`WHOLE_OUTLINE`の印を付け、階段帯の列の断面線クリップで切り直さない。
+- **壁の断面線の分断**（`wallLineCuts`。dropped の部材の分）: 切断位置で梁を内に持つ壁の面のうち、描いた断面のx範囲の厳密な内側に入るもの（梁が壁の面から出ている）について、その面に立つ縦線だけを梁のz範囲で上下2片に分ける（梁の断面が壁の線の手前に描かれる。通り芯は切らない）。階段帯ではその矩形を帯に集まる全ての縦線に掛ける（`elevationStair.js`が面ローカル→帯のxへ平行移動して`finalizeBand`の dedupe の前に適用。図側の面端の太線も分けないと太線が断面を横切る）。切断位置に平行な壁が無い梁は分けない。
+- **柱は仕上げ材で覆った外形で描く**（幾何は`finish/columnWrap.js`＝展開図の柱型と平面図の柱が共有する単一の情報源。構造と仕上げの境界の値なのでどちらかの層に埋めない。構造モードの伏図には渡さない）。外形は①カタログ断面 ②鋼管柱のダイヤフラム出（`diaphragmProjection`。調整口は`DIAPHRAGM_PROJECTION_MM`1箇所）③仕上げの包み。包みは**4面それぞれ独立**。3規約: (1) **柱は原則、仕上げ材で覆う**。厚みはその面に向き合う壁の「下地材＋壁仕上げ材」で、**壁自身の`backingRange`/`wallFinish`から取り、部屋の内装マスターを引き直さない**（二系統の情報源になる）。仕上げのみの薄壁（`backingRange===null`）は同じ軸CL上でスパンが重なるオーナー壁から下地厚を採る（`wallBackingMm`。柱に面するのは薄壁側で、薄壁だけ見ると包みが仕上げ12.5mmへ潰れる）。(2) **覆った柱の表面と内壁仕上げの隙間が`TRIM_GAP_MM`(150)以下ならトリム**（包みを壁の仕上げ面まで伸ばして壁と接続したものとして扱い、展開図はその壁の面に柱型を出す。150超は接続しない）。(3) **壁内は下地材・仕上げ材ともになし**（柱の面が壁の材厚の中なら覆わない）。壁埋まり判定は包む前の外形で行う。
+- **平面図の柱と壁の取り合い**: **トリムで壁に接続した辺は外形・境界線とも柱側で描かない**（壁側は`columnWallCuts`が返す区間を壁の描画計画`renderer/wallDrawPlan.js`が既存のT字取り合いの切り欠きと同じ区間の差し引きへ合流させて落とす＝切り欠きの仕組みを二系統にしない）。区間は層ごとに違う（仕上げ面線＝外形幅、境界線と下地＝外形−仕上げ厚×2）。下地の削除は「その下地に乗る仕上げ材が他に残っていないこと」が条件（`canRemoveBacking`。オーナー壁の下地は両側の部屋の仕上げが乗る共有の下地。判定は壁単位）。
+- **柱がどの面に現れるかは「接続した壁の軸CL（`wallAxes`）と面の軸CLの照合」で決める**。柱の断面が切断線をまたぐかで判定してはいけない（実データの壁は材厚が壁芯から室内側にあり、柱芯オフセットで壁からわずかに離れるため、壁のすぐ内側の柱が全部落ちた）。接続＝トリム150以下または壁への食い込み。壁を持たない位置の柱は断面が切断線をまたぐかで拾う。`wallAxes`は覆い厚0の壁（手動壁）でも積む。**線種は中線**（柱型は仕上げ面の見えがかり）。柱型は見付け幅の両端縦線2本のみで上下端の水平線は持たない（`topLevel`の信頼できる情報源が無く、柱は床から天井まで通しが常態）。
+- **柱型の`onNearSide`（壁の向こう側の柱は描かない）の例外**: その面の通りに柱のrun範囲と重なる壁が1枚も無い区間では柱は素通しで見える。遮蔽判定は持ち込まず、切断面からの絶対奥行き＜800と「一部でも壁が重なれば描かない」で保守的に絞る。遮蔽を数える壁は帯と同じ高さに立つ層（自階）のもの（柱の接続`wallAxes`を作っているのはまさに上階の壁なので全層で数えると柱型が出ない）。
+- **基礎・基礎梁・杭は描かない**（`structuralContribution`/`structuralColumnContribution`が`role==='foundation'`を除外する唯一の情報源。1平面に基礎伏図＋1階伏図が乗るので1階のgraph.beamsに基礎梁が同居しており、除外しないと床下に基礎梁が細破線で出る）。
+- **有効化は`ctx.solids`の明示指定のみ**（`ElevationModeState`→`buildRoomBand`・`buildRoomBandWithVoidAbove`だけが渡す。既定=未指定で出力完全不変）。階段帯は`contentForCut`経由で同じ`sectionStructure.js`から構造材を描く。未実装: 作り付け家具（ドメインモデル未実装）・独立柱／面より手前の立体の遮蔽・斜め回転柱の見付け幅。
 
 ## プリミティブ語彙とスクリーン固定サイズ要素
-既存の「図」語彙に`weight`を追加しただけ。建具記号丸（`tag`）・留め三角（`miterTriangle`。輪郭線のみ）はスクリーン固定サイズが必要なため、
-mm座標に焼き込まずアンカー点だけを持つ専用プリミティブにし、pxはレンダラ側で校正値（`screenPxPerMm`）を掛けて算出する
-（焼き込むとscale変化で見た目サイズが狂う）。
+既存の「図」語彙に`weight`を追加しただけ。建具記号丸（`tag`）・留め三角（`miterTriangle`。輪郭線のみ）はスクリーン固定サイズが必要なため、mm座標に焼き込まずアンカー点だけを持つ専用プリミティブにし、pxはレンダラ側で校正値（`screenPxPerMm`）を掛けて算出する（焼き込むとscale変化で見た目サイズが狂う）。破線が要る線は必ず`line`プリミティブで出す（レンダラのpolylineはdash非対応。レンダラは改修しない）。
 
-### L字の角の外角を閉じる（`renderer/figureLineJoin.js`。案2・第1弾）
-canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のpx座標だけを角の2点に限って動かして
-すき間を閉じる——モデルmm座標・ゴールデンテスト（`elevationSectionGolden.test.js`）は一切触らない。
-対象はモデルmmの端点が厳密一致する「ちょうど2本」の角のみ（3本以上・T字・破線・同一直線上・
-細線同士は対象外）。角度・延長量の計算はpx変換後の座標で行う（変換にy反転や不等倍がありうるため、
-mm座標の符号をそのまま使うと向きを誤る）。
-
-第2弾で敷地モードの境界線（`renderer/SiteLinesLayer.jsx`）にも同じモジュールを再利用。
-このレイヤはKonvaの親GroupのscaleX/scaleY/offsetXYへ世界→スクリーン変換を委ねる方式
-（展開図のような手動t.tx/ty変換ではない）ため、join計算は実スクリーンpx空間で行う必要がある
-（THIN_PXしきい値・延長量の算式が実スクリーンpx前提のため、mm換算した幅を渡すとズーム倍率次第で
-しきい値判定が狂う）。往復（worldToScreen→join→screenToWorld）と幅の決定は
-`site/siteLineJoinPrimitives.js`の`resolveSiteLinePointsMm`に一本化し、レイヤは返り値のmm座標と
-幅を`<Line>`へ渡すだけにする——判断をレンダラに残すと変異テストで守れない（QA指摘で2度是正）。
-
-第3弾で往復（worldToScreen→join→screenToWorld）部分を敷地非依存の`renderer/planLineJoin.js`
-（`resolvePlanLinePointsMm`）へ切り出し、`resolveSiteLinePointsMm`もこれを呼ぶ形にした。
-階段レイヤ（`renderer/StairLayer.jsx`）の外周線・踏面線にも同じ仕組みを適用する
-（`finish/stair/stairLineJoinPrimitives.js`）。ただしStairLayerの`<Line>`は`strokeScaleEnabled`
-未指定（既定true）でKonvaの親GroupのscaleX/scaleYを継承するため、strokeWidth値は実pxではなく
-世界mm相当——join計算に必要な実pxとの間をviewport.scaleXで往復換算し、最終的な
-strokeWidth（既存の見た目）は変えない。
-
-第4弾で構造レイヤの柱の仕上げ包み（柱壁。`renderer/StructuralLayer.jsx`の`ColumnsLayer`）にも
-同じ仕組みを適用する（`structural/columnWrapLineJoin.js`）。柱単位で個別に解決し、他の柱の包み辺
-とはマージしない（階段のエントリ単位解決と同じ考え方）。strokeWidthは階段と同じくviewport
-親Groupのscale継承（世界mm相当）のためscaleXで往復換算する。壁と取り合う辺（`trimmed`）は壁側の
-線に任せて対象外にする。線の太さ自体は壁のLOD仕様（`resolveStrokeWidth(shape.lineWeight, scale)`）
-と同じ関数・同じ引数系で決まり、既定の校正値では scale<=4（scaleDenominator>=1＝1/100〜1/1）で
-実スクリーン1.0pxに floor されるため、「細線同士は延長しない」規則により柱壁のL字延長は既定ズームでは
-発火しない。`viewport.js`の`zoomAt`はscaleXを20まで許すので、1/1より拡大した scale>4 ではpx幅が
-1を超えて延長が発火する（延長量は相手半幅＝0.125mm固定）。ユーザー決定2026-09: この挙動のまま受け入れる。
-
-第5弾でSVGレンダラ`structural/sectionFigure/AutoScaledFigure.jsx`（構造断面図・建具姿図・階段模式図等
-共通）にも適用する。SVG側はweight語彙を解釈せず常に`p.width??1`を幅にする（`sectionGeometry.js`ヘッダ
-規約）ため、`svgFigureLineJoin.js`の`resolveSvgFigureLinePoints(primitives, t)`が
-`resolveJoinedLinePoints`をlineWeightsPx無しで呼び、primitivesと1:1対応する配列（line以外はnull）を
-返す——`.jsx`はどの配列を渡すか・indexをどう引くかを判断せず`linePts[i]`で読むだけにする。実機で
-width1.5px以上の線は`finish/stair/stairFigure.js`の外形と`memberFigures.js`のブレース×線の2箇所。
-後者は交差する2本の4端点が互いに相異なり「ちょうど2本が集まる角」にならないため対象外——
-効果は階段模式図に限られる。
-
-第6弾で平面図モードの段差断面レイヤ（`renderer/StepSectionLayer.jsx`）の断面線3本（上段床→蹴上げ→
-下段床のZ字）の2つの角にも適用する（`finish/stepSectionLineJoin.js`）。段差線・ハッチ・寸法・引出線は
-対象外。角は常に直角・両側とも同じ太さ（thick）のため、既定の校正値（thick=3px）では各角が実1.5px
-（相手半幅）ずつ外側へ閉じる（ズーム非依存）。往復（strokeScaleEnabled未指定＝Group拡縮継承レイヤの
-世界mm相当strokeWidthを実px化してjoin解決し、世界mm相当へ戻す）は3例目にして姉妹関数
-`renderer/planLineJoin.js`の`resolvePlanLinePointsMmScaledStroke`として切り出した（呼び分け:
-strokeScaleEnabled未指定のレイヤはこちら、実px直指定`strokeScaleEnabled={false}`のレイヤは
-`resolvePlanLinePointsMm`）。既存2例（階段・柱包み）の自前往復も2026-09に姉妹関数へ移行済み。
-階段側は写像関数`buildStairJoinPrimitives`が返すprimitivesのwidth契約を「実px」から「世界mm相当
-（姉妹関数に×÷scaleXを委ねる）」へ変更した。最終描画props（points/strokeWidth）はビット一致で不変。
+### L字の角の外角を閉じる（`renderer/figureLineJoin.js`）
+canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のpx座標だけを角の2点に限って動かしてすき間を閉じる。**モデルmm座標・ゴールデンテストには一切触らない**。対象はモデルmmの端点が厳密一致する「ちょうど2本」の角のみ（3本以上・T字・破線・同一直線上・細線同士は対象外）。角度・延長量の計算はpx変換後の座標で行う（変換にy反転や不等倍がありうる）。
+- 共通の判断を1つの純関数に寄せ、レンダラ（`.jsx`）は返り値を描くだけにする（判断をレンダラに残すと変異テストで守れない）。適用先: 展開図（`renderer/figurePrimitivesKonva.jsx`）・敷地モードの境界線（`site/siteLineJoinPrimitives.js`）・階段レイヤ（`finish/stair/stairLineJoinPrimitives.js`）・構造レイヤの柱の仕上げ包み（`structural/columnWrapLineJoin.js`。柱単位で解決し他の柱の包み辺とはマージしない。壁と取り合う辺は壁側に任せる）・平面の段差断面レイヤ（`finish/stepSectionLineJoin.js`）・SVGレンダラ（`structural/sectionFigure/svgFigureLineJoin.js`。効果は階段模式図に限られる）。
+- 敷地・階段・柱包みのようにKonvaの親Groupのscale/offsetへ変換を委ねるレイヤは、join計算を実スクリーンpx空間で行う（しきい値・延長量がpx前提）。往復（worldToScreen→join→screenToWorld）は`renderer/planLineJoin.js`に切り出し済み: strokeScaleEnabled未指定（Group拡縮継承）のレイヤは`resolvePlanLinePointsMmScaledStroke`（strokeWidthは世界mm相当なのでviewport.scaleXで往復換算し、最終的な見た目は変えない）、実px直指定のレイヤは`resolvePlanLinePointsMm`と呼び分ける。
+- 柱壁は細線が既定で実1.0pxにfloorされ「細線同士は延長しない」規則により既定ズーム（scale<=4）ではL字延長が発火しない。1/1より拡大（scale>4）で発火する（延長量は相手半幅固定）。**この挙動のまま受け入れる**（ユーザー決定）。
 
 ## 面の配置・注記帯
-面配置・壁芯間寸法は`face.lo/hi`（仕上げ面）ではなく`faceBoundaryLocalX`（壁中心線）基準（壁面線=CUTのみ仕上げ面基準）。
-`buildRoomBand`/`buildStairBand`の面配置ループ・帯確定処理は`elevationBand.js`の`layoutBandFaces`/`finalizeBand`へ一本化済み（2026-08リファクタ）
-——共有先を`elevationPrimitives.js`にしないのは、同ファイルが`elevationFigure.js`からimportされており`buildFaceFigure`を使う帯レイヤを置くと循環importになるため。
-**実画面mm指定の量（面間ギャップ・部屋名枠余白・留め三角アンカー・注記帯の各段位置・左スクロール余白）は倍率換算に2パス構築を要する**
-（1パス目=仮値で帯の高さ→倍率を確定、2パス目=`screenMmToModelMm`で実値換算。倍率決定が先でないと循環参照）。
-
-水平寸法は寸法線足を出さず、壁中心線・通り芯自体の一点鎖線を寸法線位置まで下ろし交点に塗り丸(`dim.dot`)を置く（CH寸法の足のみ残す）。
-**CH寸法の足はCLに触れず、CLから実画面3mm（`DIM_FOOT_GAP_SCREEN_MM`。他の実画面mm量と同じ2パス換算）
-手前で止める**（ユーザー明示指示2026-08その13。展開図で統一）——足の終点は必ず**その寸法自身の側**の
-CLの手前になるため、「階段展開図で反対側のCLまで伸ばさない」も同じ1規則で満たされる。旧実装は左CH寸法が
-`foot:0`（＝面のローカル原点。面を横断して反対側のCL位置まで伸びる）だった。足の長さは
-`CH_DIM_OFFSET_MM − 隙間`で図全体に統一される。
-寸法値は寸法線の**上側**。床線から下へ①tag②寸法の鎖③通り芯丸+面ラベル(同じ段)の順。
-**寸法は1行だけ**（ユーザー明示指示2026-08「展開図に寸法2段書きは不要」）——旧ROW2（通り芯間寸法の
-独立行）は廃止し、通り芯を鎖の分割点（S5）として統合した。「壁幅が通り芯をまたぐ場合は通り芯から」も、
-両端＝壁中心線・内部の分割点＝通り芯というこの鎖1本で満たす。丸の段は1行ぶん繰り上がる
-（`gridCircleRowY = dimRow1Y + gridRowGapMm`。行間の定数自体は変えない）。通り芯・壁中心線は天井線より上へも
-`GRID_LINE_ABOVE_CH_MM`突き出す。通り芯丸は背景色(`CANVAS_BG_COLOR`。定義は`renderer/canvasStyle.js`——展開モード以外からも参照する
-汎用値のためrenderer/配下に置き、`elevationStyle.js`はre-export。index.cssの`#root`と2箇所手動同期)で塗り一点鎖線の上に描く
-（`tag`は背景透明のまま対象外）。CH寸法値だけ寸法線の左側で反時計回り90°回転する。
-
-**面に乗る通り芯の判定範囲は`face.lo/hi`ではなく面の両端の壁中心線（boundary）**（不良修正2026-08
-「通り芯の丸ナンバーが描画されない場合がある」）——`face.lo/hi`は直交壁の**室内側仕上げ面**へ詰めた端
-（`snapFaceEndsToCorners`）のため、面端の通り芯（必ず壁中心線に乗る）は半壁厚＋仕上げ厚ぶん外側にあり
-常に除外されていた。実グラフの単純な矩形部屋で全4面とも丸0個・ROW2寸法0本になることを検証済み。
-ROW1側に既にある「通り芯と同位置の一点鎖線は重複させない」判定（marksに`boundary.lo/hi`を含む）が、
-元々この範囲を意図していた証拠。範囲は`face.lo/hi`とboundaryの和集合**ちょうど**（開放スパンでfaceが
-外へ延びるケースを落とさないための和集合。それ以上は広げない——「面端の壁の半厚ぶん外も拾う」拡張を
-一度入れたが、根拠にした実機報告が指示ミスで実際は正しく描けていたため撤去した）。
-
-**中心線は寸法の鎖を割らない**（ユーザー実機指摘2026-08。旧S3を撤去）——階段室「6」Bで、あるべき
-「2500」が中心線1本で「1500+1000」へ割れた。中心線は壁を伴わない作図補助であり、分割を担うのは
-実体（段差CL・面へ到達する直交壁・開放スパン境界）と通り芯だけ。**旧S3は本番で一度も発火していなかった**
-（下記の述語不整合のため）ので、これは「死んでいた分岐を生かしたら実機で不要と判明したので畳んだ」経緯。
-
-**「通り芯か」の判定は`isGridCenterLine`（`core/centerLine.js`）に一本化する**（不良修正2026-08）——
-`cl.labeled`だけで判定してはいけない。**`labeled:true`（`CenterLine`コンストラクタの既定値）のまま残った
-中心線**がありうる（旧データ。現行の`transform/centerLineOps.js`の`addCenterLineFromDialog`は中心線を
-`labeled:false`と明示して作るので新規には発生しない）ため、`labeled`単独では中心線まで通り芯扱いになる。実際この誤りでROW1のS3（面に届く非通り芯中心線での分割）は
-`if (cl.labeled) continue`が中心線ごと弾き、**本番で一度も発火しない死んだ分岐**だった（既存テストと
-Round Fフィクスチャが中心線を明示的に`labeled:false`で作っていたため長く検出されなかった）。
-`core/clQuery.js`の**系統A（`_labeledCLs`＝discipline不問。`gridXs`/`gridYs`＝交点を張るグリッド軸）と
-系統B（`_isLabeledStructCL`＝通り芯）は別物**という既存の区別が、この一本化の根拠。
-
-**注記帯の全ての段位置はスクリーンmm基準の独立定数**（tag行/ROW1/ROW1〜ROW2〜丸行の3つ。tag・通り芯丸のスクリーン固定半径ぶん、
-モデルmm固定だと縮尺次第で床線・寸法行・寸法値テキストに重なるため）。3つは互いに独立に調整する——一方をもう一方の倍数として式で導出すると
-値が機械的に動き、承認済みの見た目を踏み外す。面ラベルと通り芯丸が同じ段で近いと重なるため、`avoidGridCollisionX`が「通り芯＋面境界の並びで
-最も広い区間の中点」へ面ラベルを退避させる（1回の走査で決定的。旧・一段固定シフト方式は密な通り芯で別の丸に重なり直す不具合があった）。
-
-帯の描画範囲の上端には`BAND_TOP_MARGIN_MM`の余白を確保する。`layoutBands`の`placement.topMm`は`band.bounds.minY`（帯の実描画範囲の上端）に
-対応する（`bandContentOriginMm`。取り違えると天井線がはみ出す）。
+- 面配置・壁芯間寸法は`face.lo/hi`（仕上げ面）ではなく`faceBoundaryLocalX`（壁中心線）基準（壁面線=CUTのみ仕上げ面基準）。`buildRoomBand`/`buildStairBand`の面配置ループ・帯確定処理は`elevationBand.js`の`layoutBandFaces`/`finalizeBand`へ一本化済み（共有先を`elevationPrimitives.js`にしないのは、同ファイルが`elevationFigure.js`からimportされており`buildFaceFigure`を使う帯レイヤを置くと循環importになるため）。
+- **実画面mm指定の量（面間ギャップ・部屋名枠余白・留め三角アンカー・注記帯の各段位置・左スクロール余白）は倍率換算に2パス構築を要する**（1パス目=仮値で帯の高さ→倍率を確定、2パス目=`screenMmToModelMm`で実値換算。倍率決定が先でないと循環参照）。
+- 水平寸法は寸法線足を出さず、壁中心線・通り芯自体の一点鎖線を寸法線位置まで下ろし交点に塗り丸(`dim.dot`)を置く（CH寸法の足のみ残す）。**CH寸法の足はCLに触れず、CLから実画面3mm（`DIM_FOOT_GAP_SCREEN_MM`）手前で止める**（足の終点は必ずその寸法自身の側のCLの手前になり、階段展開図で反対側のCLまで伸ばさないも同じ1規則で満たす）。寸法値は寸法線の**上側**。床線から下へ①tag②寸法の鎖③通り芯丸+面ラベル(同じ段)の順。
+- **寸法は1行だけ**（ROW2の独立行は廃止し、通り芯を鎖の分割点として統合。「壁幅が通り芯をまたぐ場合は通り芯から」も、両端＝壁中心線・内部の分割点＝通り芯というこの鎖1本で満たす）。通り芯丸は背景色(`CANVAS_BG_COLOR`。`renderer/canvasStyle.js`。index.cssの`#root`と手動同期)で塗り一点鎖線の上に描く。
+- **通り芯の縦線は寸法行で2本に分ける**: 上は一点鎖線・下（寸法行〜丸番号）は**実線**（1本の一点鎖線で丸まで通すと寸法行が破線のすき間に当たって交点が消え、丸の手前で破線が切れて丸とCLが離れて見える）。**一点鎖線の位相**: canvasの破線は始点から位相が始まり端や交点がすき間に当たるため、プリミティブに`dashAnchor`（寸法行のy）を持たせ、レンダラがその点を長い破線の中央へ合わせる（`renderer/dashPhase.js`。react-konva非依存の純関数）。
+- **面に乗る通り芯の判定範囲は`face.lo/hi`ではなく面の両端の壁中心線（boundary）**（`face.lo/hi`は直交壁の室内側仕上げ面へ詰めた端なので面端の通り芯が常に除外されていた）。範囲は`face.lo/hi`とboundaryの和集合**ちょうど**（それ以上は広げない）。
+- **中心線は寸法の鎖を割らない**（中心線は壁を伴わない作図補助。分割を担うのは実体と通り芯だけ）。**「通り芯か」の判定は`isGridCenterLine`（`core/centerLine.js`）に一本化**（`cl.labeled`単独は不可。`labeled:true`のまま残った中心線がありうる。`core/clQuery.js`の系統A〔discipline不問のグリッド軸〕と系統B〔通り芯〕は別物）。
+- **注記帯の全ての段位置はスクリーンmm基準の独立定数**（tag行/ROW1/ROW1〜丸行の3つ。モデルmm固定だと縮尺次第で重なる）。3つは互いに独立に調整する（一方を他方の倍数として式で導出すると承認済みの見た目が機械的に動く）。面ラベルと通り芯丸が近いと`avoidGridCollisionX`が最も広い区間の中点へ面ラベルを退避させる。`layoutBands`の`placement.topMm`は`band.bounds.minY`に対応する（`bandContentOriginMm`。取り違えると天井線がはみ出す）。
 
 ## FL高さ（floorOffset）: bounds は floorOffset=0 のときの描画範囲
-`Room.floorLevel`由来の`floorOffset`は帯内の全プリミティブをy方向へ平行移動するが、**bounds は floorOffset 適用前の描画範囲を表す**
-（シフト後の座標から計算すると、帯スロットの上端を帯自身のbounds.minYへ再アンカーする仕組み=`bandContentOriginMm`が一様シフトを
-打ち消してしまい見た目に一切効かなくなる、という過去の不具合があったため）。
-
-そのぶん隣接帯との実すき間はfloorOffset差だけ縮む。boundsは動かせないため、積み上げ専用の`heightMm`/`topMarginMm`（`layoutBands`消費）で
-対処する——両者は排他（floorOffsetの符号で片方にしかせり出さない）なので`heightMm`に`Math.max(0,-floorOffset)`、`topMarginMm`に
-`Math.max(0,floorOffset)`を加える（両方に一律`Math.abs`を加えると使わない側が過剰予約になる）。段差高さ自体の寸法線は描かない
-（この`floorOffset`は部屋帯全体の階基準ズレで、次節の壁際の段差とは別物）。
+`Room.floorLevel`由来の`floorOffset`は帯内の全プリミティブをy方向へ平行移動するが、**bounds は floorOffset 適用前の描画範囲を表す**（シフト後の座標で計算すると、帯スロットの上端を帯自身のbounds.minYへ再アンカーする`bandContentOriginMm`が一様シフトを打ち消し、見た目に一切効かなくなる）。隣接帯との実すき間はfloorOffset差だけ縮むため、積み上げ専用の`heightMm`/`topMarginMm`（`layoutBands`消費）で対処する。両者は排他（floorOffsetの符号で片方にしかせり出さない）なので`heightMm`に`Math.max(0,-floorOffset)`、`topMarginMm`に`Math.max(0,floorOffset)`を加える（一律`Math.abs`だと使わない側が過剰予約）。段差高さ自体の寸法線は描かない（`floorOffset`は部屋帯全体の階基準ズレで、壁際の段差とは別物）。
 
 ## 展開図の対象部屋（selectElevationRooms）
-**無名でも階段室（feature=STAIR）は展開図の対象**（ユーザー裁定2026-10-07。旧仕様は無名を一律除外し、名前を付けない階段室の展開図が出なかった）。
-通常部屋・吹抜け（VOID）は従来どおり有名のみ、STAIR_VOID・屋外・部分指定は対象外のまま。見出し・失敗通知・ログの表示名は
-`elevationRoomDisplayName(room)`（`elevationFaces.js`）が唯一の供給源で、無名の階段室は既定名「階段」（仕上げ表の階段室の表示名と同じ）。
-`room.name` を直接読まない（`elevationRoomName.wiring.test.js`で固定）。既定名の定数は`finish/roomNamingOptions.js`の`DEFAULT_STAIR_ROOM_NAME`（仕上げ表・階段のfeature選択肢のlabelと同じ出どころ）。
-吹抜け帯の上階の部屋の拾い（`elevationVoid.js` `upperFaceRooms`）にも無名の階段室が入る（名前付きは従来から）。
-
-**`selectElevationRooms`は部分指定（`referenceRoomIds`非空）を対象から除外する**（QA修正）——部分指定は独自の展開図帯を持たず、
-親の帯の中で下記の段差プロファイルとして表現されるため。除外しないと親・部分指定の両方に同じ壁面が重複して展開されてしまう。
+- **無名でも階段室（feature=STAIR）は展開図の対象**（旧仕様は無名を一律除外し、名前を付けない階段室の展開図が出なかった）。通常部屋・吹抜け（VOID）は有名のみ、STAIR_VOID・屋外・部分指定は対象外。見出し・失敗通知・ログの表示名は`elevationRoomDisplayName(room)`（`elevationFaces.js`）が唯一の供給源（無名の階段室は既定名「階段」＝`finish/roomNamingOptions.js`の`DEFAULT_STAIR_ROOM_NAME`）。`room.name`を直接読まない（`elevationRoomName.wiring.test.js`で固定）。吹抜け帯の上階の部屋の拾い（`elevationVoid.js`の`upperFaceRooms`）にも無名の階段室が入る。
+- **部分指定（`referenceRoomIds`非空）は対象から除外する**（独自の帯を持たず親の帯の中で段差プロファイルとして表現される。除外しないと同じ壁面が重複して展開される）。
 
 ## 床の段差プロファイル（部分指定）
-部分指定Room（`referenceRoomIds`で親を参照。`.claude/glossary.md`）が親の壁際セルの一部を占め`floorLevel`が異なる場合、床線は段差付きの
-階段状polylineになる。`elevationFloorProfile.js`の`wallAdjacentFloorSegments(face, parentRoom, graph)`が、面に接する親自身のセル
-（`finish/gridCells.js`の`refreshCells`/`cellBoundsFromKey`を再利用）を壁沿いに拾い、部分指定のセル集合に含まれていればその
-`effectiveFloorLevel`差分、含まれなければ0を割り当てて区間配列にする（同値の隣接区間は結合）。**極小(<`GAP_EPS`=1e-6mm)幅の区間は
-floorDeltaMmが前後と異なっていても前（無ければ次）の区間へ強制的に吸収してから、通常のdelta一致マージへ進む**（QA修正）——CLの昇格/降格・
-再スナップ等で「同じ位置のはずの別CL」を参照するようになると、隣接セルの境界に極小の誤差が生じ、それが独立区間として残ってしまい
-「子→親(極小)→子」という見た目上の1往復（段差の抽出不良）になる。gap-fill（隙間埋め）・末尾判定の側にも同様のepsilonを持たせる案が
-あったが、そこで生成される極小区間は結局この吸収処理で必ず除去されるため冗長と判明し撤去した——epsilonはこの吸収処理1箇所に一本化した。
-`buildRoomBand`/`buildStairBand`が`ctx.floorSegments`として渡し（未指定時はフラット1区間）、床線は区間ごとの
-水平線＋段差の縦線（すべてCUT。寸法は描かない）になる。両端の出隅縦線（次節）もこの区間配列の先頭/末尾(`segs[0]`/`segs[末尾]`)から実際の
-床・天井高さを読むため、抽出が正しいことが出隅縦線の高さの正しさに直結する。段差がある面(`segs.length>1`)
-は図の右側にも左のCH寸法と同じ様式（縦書き値・端部塗り丸）でCH寸法を追加する（値=右端区間の実際の床〜天井距離=そのエリアの解決済みCH）。
-**直前の面の右端区間と次の面の左端区間で床・天井の起点が変わる継ぎ目では、次の面の左側にもCH寸法を描く**
-（ユーザー明示指示2026-08その4改「B1右=+100→C1左=+0、床の起点高さが変わるのでC1の左側に天井高さの寸法線が必要。次のA2も同様」。
-`segEndProfile`＋`layoutBandFaces`の持ち回り比較。段差見付け面は持ち回りを更新しない＝実質隣接で比較）。
-**端区間は素の（描かれるまま）の先頭/末尾区間を読む**（問題修正2026-08その6: 入隅に挟まる半壁厚程度のgap-fill区間も
-実際に床として描かれる——実機の「B1の右側の床は1FL+100」はまさにその区間で、次の面の左端との不一致こそが継ぎ目。
-一時導入した幅閾値の読み飛ばし方式は実機挙動と逆で撤回）。**段差見付け面も継ぎ目判定に参加する**（床=`baseFloorDeltaMm`・
-天井=`ceilAbsMm`。実機の「C1」は見付け面であり、これを除外していたのがC1の左CH寸法が出なかった根本原因）。
-壁面同士の継ぎ目は隅のセルを共有し床が連続するため通常発火せず、発火する典型は見付け面の前後。これにより右へ
-`CH_DIM_OFFSET_MM`ぶん描画範囲が伸びるため、隣接面の間隔(`gapModelMm`)は壁中心線間ではなく「前の面の右CH寸法込みの右端」〜「次の面自身の
-boundary.lo」で確保する（`buildRoomBand`/`buildStairBand`の`prevRightExtent`。左側は帯先頭面にしか左CH寸法が付かないため対象外）。
+部分指定Room（`referenceRoomIds`で親を参照）が親の壁際セルの一部を占め`floorLevel`が異なる場合、床線は段差付きの階段状polylineになる。`elevationFloorProfile.js`の`wallAdjacentFloorSegments(face, parentRoom, graph)`が、面に接する親自身のセル（`finish/gridCells.js`の`refreshCells`/`cellBoundsFromKey`を再利用）を壁沿いに拾い、部分指定のセル集合に含まれていればその`effectiveFloorLevel`差分、含まれなければ0を割り当てて区間配列にする（同値の隣接区間は結合）。
+- **極小(<`GAP_EPS`)幅の区間はfloorDeltaMmが前後と異なっていても前（無ければ次）の区間へ強制的に吸収してから通常のdelta一致マージへ進む**。CLの昇格/降格・再スナップで「同じ位置のはずの別CL」を参照すると隣接セル境界に極小の誤差が生じ、「子→親(極小)→子」という見た目上の1往復になる。epsilonはこの吸収処理1箇所に一本化（gap-fill・末尾判定側には持たせない。生成される極小区間は結局ここで除去されるため）。
+- **欠測区間**（自室セルの境界がface側で粗く、touching配列に隙間ができる）は無条件に親扱い(floorDeltaMm:0)へフォールバックしない。`probeGapOwners`（`collectRunBreaks`/`findRunCLAt`と共に`elevationFloorProfile.js`へ統合）が欠測区間をrunの伸びる方向のCLで刻んで個別に`worldToCell`プローブし実際の所有Roomを求める（所有者が見つからない区間だけ従来通り親扱い）。
+- `buildRoomBand`/`buildStairBand`が`ctx.floorSegments`として渡し（未指定時はフラット1区間）、床線は区間ごとの水平線＋段差の縦線（すべてCUT。寸法は描かない）になる。両端の出隅縦線もこの区間配列の先頭/末尾から実際の床・天井高さを読む。段差がある面(`segs.length>1`)は図の右側にも左と同じ様式でCH寸法を追加する（値=右端区間の実際の床〜天井距離）。
+- **直前の面の右端区間と次の面の左端区間で床・天井の起点が変わる継ぎ目では、次の面の左側にもCH寸法を描く**（`segEndProfile`＋`layoutBandFaces`の持ち回り比較）。**端区間は素の（描かれるまま）先頭/末尾区間を読む**（入隅に挟まる半壁厚程度のgap-fill区間も実際に床として描かれる。幅閾値の読み飛ばしは実機と逆で撤回）。**段差見付け面も継ぎ目判定に参加する**（床=`baseFloorDeltaMm`・天井=`ceilAbsMm`。除外するとC1の左CH寸法が出ない）。右へ`CH_DIM_OFFSET_MM`ぶん描画範囲が伸びるため、隣接面の間隔(`gapModelMm`)は壁中心線間ではなく「前の面の右CH寸法込みの右端」〜「次の面自身のboundary.lo」で確保する（`prevRightExtent`。左側は帯先頭面にしか左CH寸法が付かないため対象外）。面自身の壁のない端の延長ぶん（`faceWallLessExtents`。`buildRoomBand`/`buildStairBand`共有の純関数）も加味する。
+- **段差位置の描画x**: 段差の描画位置（区間水平床線の端x・段差縦線x・巾木・壁2段書きの障害物区間の4箇所）は寸法・CL一点鎖線が使う`segs[i].hiX`（オフセット前）そのものではなく、`drawnRiserX(segs,i,halfWallMm)`＝「床が低い側へ半壁厚ずらした位置」を使う（寸法線・CL一点鎖線と別の値として持つ設計。重なって見づらくなるのを避ける）。段差見付け面のROW1境界は両端の直交壁面（`perpFaceAt`で求めたloFace/hiFace）自身のaxisCL.idを`startCLId`/`endCLId`に使う（段差自身のaxisCL.idを両端に詰めると`faceBoundaryLocalX`が幅0の退化した境界を返す）。
 
 ## 天井高さの解決（フォールバック・部分指定の段差調整）と区間別天井断面線
-`finish/roomMetrics.js`の`roomCeilingHeight(graph, room)`が仕上げ表・展開図共通の唯一の情報源。数値化できない自由入力
-（傾斜天井のレンジ表記）は`graph.defaultCeilingHeight`で作図しラベルは原文。部分指定が自身のCH指定
-（レンジ表記のような非数値の明示指定も含む）を持たない場合、天井の絶対高さを親と揃えるようCHを段差ぶん増減する
-（部分指定CH = 親CH − (部分FL − 親FL)。**FLが親と同一でも親CHへ揃える**——問題修正2026-08: 旧実装はFL差がある場合しか調整せず、
-FL同一の部分指定（床材違いエリア等）がdefaultCeilingHeightへ落ちて親と異なるCHになり偽の天井段差の原因になった。
-親を再帰的に解決、循環ガードあり。自身の明示指定は常に優先＝既存のcustomOverrides/master優先の
-慣習をそのまま適用）。**計算結果が0以下（子FLが親CH以上）なら物理的に不可能な値としてgraph.defaultCeilingHeightへフォールバックする**
-（isFallback:true）。
+`finish/roomMetrics.js`の`roomCeilingHeight(graph, room)`が仕上げ表・展開図共通の唯一の情報源。数値化できない自由入力（傾斜天井のレンジ表記）は`graph.defaultCeilingHeight`で作図しラベルは原文。部分指定が自身のCH指定（非数値の明示指定も含む）を持たない場合、天井の絶対高さを親と揃えるようCHを段差ぶん増減する（部分指定CH = 親CH − (部分FL − 親FL)。**FLが親と同一でも親CHへ揃える**＝そうしないとFL同一の部分指定が既定CHへ落ちて偽の天井段差になる。親を再帰的に解決・循環ガードあり。自身の明示指定は常に優先）。**計算結果が0以下なら物理的に不可能としてgraph.defaultCeilingHeightへフォールバック**（isFallback:true）。
 
-**天井断面線は区間（エリア）ごとに「その区間の床断面からその区間のCHの距離」に描く（問題修正2026-08）**。
-`wallAdjacentFloorSegments`のsegsが床(`floorDeltaMm`)と対で`chMm`（区間所有Roomの解決済みCH）を持ち、区間結合もfloorDelta+chMmの
-両方一致が条件。CLをまたいで天井の絶対高さ(FL+CH)が異なる境界は縦線（CUT）になり、描画xは「低い方からみてCLの向こう側」＝
-天井が高い側へ半壁厚ずらした位置（`drawnCeilingRiserX`。床の`drawnRiserX`=低い側へ、と対になる規約）。自CH指定なしの部分指定は
-上記の調整で天井絶対高さが親と揃うため水平1本のまま＝天井段差は明示CH指定時のみ現れる。端の縦線・開放スパンのアキ上端／境界縦線・
-右CH寸法・左CH寸法（帯先頭面。左端区間が帯自身のときのみレンジ表記等の原文ラベルを保つ）・袖壁断面の高さ・注記一点鎖線の
-突き出し上端（面内最高天井基準）も同じ区間別天井に追従する。`chMm`未指定のsegs（単体テスト等）は帯CHの水平天井へフォールバック。
-開放スパンのアキ上端は開口のfloorDyAtと同じ「span中点の区間」の天井を採る。
-**ただし高低差のある、階の異なる天井断面線どうしは結ばない（ユーザー明示指示）**——区間が持つ
-`ceilFloorZMm`（その区間の天井が属する階の床レベル。既定0＝自階。上部吹抜けの多層書きだけが
-上階の値を入れる。`elevationVoid.js`）が違えば、段差の縦線を描かず、境界の描画xも半壁厚ずらさない
-（ずらす規約は縦線を「低い方からみてCLの向こう側」へ置くためのもの）。別の階の天井どうしを1本の
-輪郭で結ぶと、実際にはその境界に立っている壁の断面（断面エンジンが壁厚の両縁として描く）と二重の
-縦線になり、しかも結び線は壁厚を持たないため図から「何の線か」が読み取れない。
-**床断面下・天井断面上の破線（向こう側の断面）は「壁の向こう側に部分指定関係のある部屋がある展開図（またぐ面）のみ」**
-（ユーザー明示指示2026-08その5。「C1の天井断面上+100に3'の天井を表す破線。A1/B1/D2には不要——壁の向こう側に部分指定関係の
-ある部屋はない」）——`familyCeilingSegments`は**面のaxisCLのfar側を区間ごとにworldToCellプローブ**し、部屋ファミリー
-（親＋部分指定の子）が所有するセルがある区間だけを返す（`ctx.beyondCeilings`）。**旧・全セルrun軸投影方式は撤回**（同その5:
-部屋内の別エリアがrun座標上で重なるだけで、向こう側にファミリーが無い外周面A1/B1/D2にも破線が出た。さらに前の「帯CHと
-区間CHの比較だけで面全域に中線実線」も同様に撤回済み）。描画は論理区間（segs）の天井断面と比較し、断面より上のみ細線の破線
-——比較を描画済みrun範囲（±半壁厚オフセット後）にすると論理境界一致面で半壁厚の偽スリバーが生じる。開放スパン区間は
-**同じ高さの**far天井線の管轄のため差し引く（QA H3）。bcごとの断片は接する区間をマージして1本で積む（QA H2: 破線位相の
-分割防止）。断面と同高・断面より下のエリアは描かない（類似規則への拡張は明示指示がある場合のみの既存方針）。
-far天井線・far床線自体の端xは論理span境界のまま（天井段差の±半壁厚オフセットとは半壁厚ぶんずれる。床側と同一の既知挙動）。
-**天伏の平面（flat）の区画は自室の天井高さを区画の高さにする**（`elevation/space/zoneCeiling.js` が点問い合わせの唯一の入口）。式は「区画の`chMm` ?? 部屋のCH」の1つだけ——床段差込みの`zMm`は使わない（エンジンの`floorZFor+ch`・体裁の`floorDeltaMm+chMm`が床段差を足すので二重加算になる）。エンジン（`spaceModel.js`の`cellAt.ceilZ`・`buildLayerStack`）と体裁（`wallAdjacentFloorSegments`）は同じ点（切断線＋視線方向の探査点／区間の中央）で引く。区画の境界は天井芯の上なので壁が無く、区間を境界で割り、その小口（`zoneCeilEdgeHi`）は`drawnCeilingRiserX`/`drawnRiserX`ともずらさない。他の部屋の面は部屋のCHに落とす（傾斜・円弧・ドームは次の段落以降）。遠側の天井（cellsAlong・開放スパンの farCeilAbsMm・家族の破線）も同じ式で平面の区画に追従する（刻みに near/far の行の区画の辺を足す）。
-**傾斜（slope。区画・部屋形状の残りとも）は自室の天井だけ追従する（E3a-2）**。体裁の区間が両端の高さ`chMm`（loX側）・`chHiMm`（hiX側。傾いた区間だけ持つ）を持ち、`ceilProfileFromSegments`が`ceilZHi`に写してエンジンの壁の帯が斜線に沿う。**天井の斜線は体裁が引く**（傾いた区間は隣と結合しない独自の run。斜線は区間の [loX, hiX] の内側だけに引き、区間の外〔壁の無い端の延長・上階のはり出し・境界の半壁厚ずれ〕は端の値で水平な別の線にする＝エンジンの`ceilProfileEdgeAt`の「範囲外は端の値で水平」と同じ。延長の端から反対の端まで1本で結ぶと勾配がずれて真の天井より上に出る。隣の天井線と境界で同じ高さなら縦線は描かない）。高さは`ceilingShapeSolidZ`を**区画の`chMm`を baseZ にして**直接呼ぶ（E0 の`zAt`は床段差込みなので使わない）。**評価する奥行きは壁の仕上げ面（`face.faceValue`。実壁が無い面は芯）**で、芯ではない（走りに直交する傾斜は面の奥行き位置の値になる。2400+600×57.5/3000=2411.5 のように）。右CH寸法は区間が1つでも両端の高さが違えば立ち（`hasRightChDim`）、値は右端区間の hi 端の実測。左CH寸法は従来どおり lo 端。dirSign<0 の面は`loCLId/hiCLId`と同じく`chMm/chHiMm`も入れ替える。層スタック（`cellAt.ceilZ`）は既定では**面の最高点**（`zoneCeilingChTopAt`）で、打ち切りの正確な高さは体裁の`ceilProfile`が担う（遠側の`cellsAlong`は次の段落〔E3b-1〕）。傾斜区画内の垂れ壁の下端は最高点基準（受容）。**例外（E3b-4）: `cut.ceilProfile`を持たない切断（階段帯）の層スタックは、列の幅を切断線の深さ（`line.axisValue`）で評価した傾斜の最大値**（`cellAt`の`span`＝`zoneCeilingChAlong`の max。`buildLayerStack`/`upperFloorZAt`が列の幅を渡す）。階段帯では層スタックの`ceilZ`がそのまま帯の上端と天井の段（slab/open の境）を決める——最高点だと傾斜の部屋（廊下）を壁越しに見る列の段が実高さより上に出て、段の太線が消え最高点の中線だけになった。`ceilProfile`を持つ切断は`span`を渡さない（エンジンが`ceilEdge`で打ち切るので上限は最高点でよく、列の幅に絞ると天井断面より低い所に天井懐の slab が出て自室の出力が変わる）。列の両端が別の面に落ちる・非有限の`span`は最高点へ落ちる（円弧・ドームは列の両端と頭頂の最大。E4）。段の高さは列ごとの離散値（階段状。斜線にはならない）。段違い天井の例外（`exposedAboveCeil`）は`ceilProfile`が無い切断では動かない（列の`ceilZ`が null で打ち切りに入らない）ので、階段帯の段は層スタックだけで決まる。**既知の限界（Q-b・裁定待ち）: 階段帯に傾斜の天井の斜線を引く者がいない**（エンジンは天井の斜線を引かない規約・階段帯の体裁の`ceilingProfile`フックは平面の天井しか持たない。階段帯の列に`ceilZ`/`ceilEdge`を付けると`clipBandsToVisible`が階段帯全体で動き出すため見送り）。円弧・ドームは E4（下の段落）。家族の破線は次の段落（E3b-2）。
-**円弧・ドーム（E4）は自室の天井断面だけ追従し、開始点・頭頂点・終了点の3点を通る円弧で描く**。供給源は`zoneCeilingChAlong`の`includeCurved:true`（既定は null のまま＝遠側〔開放スパン・cellsAlong・家族の破線〕は従来どおり部屋のCH＝限界）。片の両端の高さ（壁の仕上げ面の奥行きで評価）に加え、その壁面上の最高点 apex（面の矩形群の走り方向の中央。片の内側で弦より0.5mm以上高いときだけ）を返す。円弧の軸に平行な壁は走り方向に一定なので apex なし＝水平線。体裁の区間は`chMm`/`chHiMm`に加え頭頂`ceilArc:{alongX, chMm}`を持ち、1面＝1片（`sameCeiling`で結合せず、仕上げのセル境界や矩形の継ぎ目で割れた同じ面の片は頭頂を取り直して1片に戻す）。円は`elevation/ceilArcSection.js`が3点から求め、体裁は円弧プリミティブ`{type:'arc', cx, cy, r, startDeg, sweepDeg}`を1本引く（y下向き。`openings/openingPlanSymbol.js`の arc と同形。translate/mirror/`figureBounds`/レンダラが扱う）。区間の外は端の値で水平（傾斜と同じ）。ドームの壁面断面は放物線だが3点円で近似する（中央〜端の差は数mm〜10mm級・受容）。**エンジンは円弧を弦で受ける**: `ceilProfileFromSegments`が頭頂を節とする弦の列（同じxでの円弧との鉛直差1mm以下で、傾きの急な端付近ほど細かく刻む・4〜64本。上限64に当たる半円に近い巨大な円弧は等角に刻み鉛直差が1mmを超える＝限界）へ展開し、E3a-1の`ceilEdge`機構がそのまま動く（列ごとのサンプリングは採らない。弦は円弧の内側なので壁の帯は円弧を超えない）。CH寸法は両端の実測（頭頂の寸法は作らない）、注記の突き出し・帯の bounds・`zRange.hiZ`は頭頂込み。層スタックは`zoneCeilingChTopAt`が面の最高点、`cellAt`の`span`は列の両端と頭頂の最大。既知の限界: 遠側の天井は部屋のCH／頭頂を含まない片（面の端寄りの片）は弦＝直線／別の階の下階延長で covered が分割されると端の高さが傾斜と同じくずれる／`beyondCeilings`の破線は円弧の片では頭頂より上だけ／階段帯は未対応。
-**遠側の傾斜（E3b-1。開放スパンの`farCeilAbsMm`・エンジンの`cellsAlong`）**: 視線の先の傾斜（区画・部屋形状とも）は**同じ面が続く範囲の奥の端**の高さで描く（`zoneCeilingFarEdge`が唯一の入口）。奥の端に面と平行な中心線（天井芯は除く）があればその壁の**仕上げ面**、無ければ座標のまま——芯で評価すると奥の壁際の天井が実際より高く出る（廊下 面Aの突き当たり: 芯 2400 でなく仕上げ面 2408.155）。**向きで分担する**: 勾配が奥行き方向なら遠側の天井は走りによらず奥の端の高さの水平線 1 本（エンジン・体裁とも値だけ変わる）、勾配が走り方向なら体裁だけが斜線 1 本（open 区間の`farCeilAbsMm`〔loX側〕と`farCeilHiAbsMm`〔hiX側。走り方向の傾斜だけが持つ〕。連続し勾配が同じ片は`mergeSameKind`で 1 本に戻る）で、**エンジンの`cellsAlong`はその片の`ceilZ`を null にする**（列ごとの水平線で階段状にしない。床線は積む）。同じ`Room`の開放スパンはエンジンが通らない（`addHorizontalFaceHits`が自室を飛ばす）ので体裁だけで足りるが、部分指定の子を覗く場合は両方が通るため**同じ値**であることが二重線を防ぐ条件。`informative`は近側・遠側の天井を区間の**両端**で比べる（同じ面の走り方向の傾斜は同じ式・同じ座標で一致して false。奥行き方向の傾斜は奥の端と近側が違うので true＝開放スパンが残り面が延長されうる）。体裁は遠側の線を近側の天井線との上下で線種分けし、途中で交わるなら交点で 2 本に分ける（下側は中線実線・上側は細線の破線と端の縦線。天井線より上に実線を出さない）。傾いた遠側の区間は水平なファミリー破線の差し引き対象にしない。既知の限界: アキ越しの別室の走り方向の傾斜は遠側の天井線が出ず、アキの上端は近側の天井（エンジンがその片を積まない）／奥の端の探索は 64 矩形で打ち切って null（部屋の CH に落とす）。奥の端の探索規約は次の E3b-3 の段落。
-**cellsAlong は天井の面が変わる所で割る／奥の端は走り範囲全体で探す（E3b-3）**: エンジンの`cellsAlong`は部屋が変わる所に加え、**同じ部屋でも天井の面（区画・形状。残りの面も別の面）が変わる所**で視線方向の片を割る。面の境界は仕上げのセルの中にもある（天井芯で割れた天井セル）ので、セルの中も天井の面の矩形の奥行き方向の辺（`zoneCeilingDepthEdges`）で刻む。面の同一性は片の中央の`surfaceAt`で見るので、同じ区画が複数セルに続くときや区画の無い部屋は従来どおり 1 片（高さが同じでも別の面なら割れる）。片ごとの`ceilZ`は E3b-1 の規約のまま（平面は`chMm`・奥行き方向の傾斜はその面の奥の端・走り方向は null）で、`addHorizontalFaceHits`は片ごとの`ceilFace`を積み、`nearestFaceInRange`が範囲内で最も手前を選ぶ——手前の区画が近側の天井より上で隠れるときは奥の低い区画が選ばれる（見えがかりの奥行き上限 800mm 以内のものだけが効く）。**奥の端の探索（`zoneCeilingFarEdge`）は走り範囲 [runLo,runHi] 全体で行う**: 各深さで走り範囲に掛かる面の矩形の奥側の辺のうち最も手前まで進み、その先も範囲全体が同じ面で覆われる間だけ続ける（L 字で中央の 1 行は続いても範囲の端が面から外れる所で止まる）。**壁を探す幅もその片の走り範囲**で、体裁は開放スパンの区間、エンジンは cellsAlong の片＝天井セルの走り範囲（セルの走り範囲を天井の面の継ぎ目で絞ったもの。体裁の刻みと同じ継ぎ目。`zoneCeilingRunRangeAt`）。走りの中央の点（±10mm）で壁を探すと範囲の端にしか無い壁を取りこぼす。注記の一点鎖線は走り方向に傾いた遠側の斜線を描いたとき、その両端の高さも突き出し基準に入れる（水平な遠側は従来どおり）。**体裁の開放スパンは最初の片だけ**（`farCeilAbsMm`は開放スパンの入口の面の値。奥の別の区画は出ない＝既知の限界）。部分指定の子を覗く場合は体裁（最初の片）とエンジン（片ごと）が別の高さの線を描くが、二重線にはならない（高さが違う）。**奥の端の壁も、片の走り範囲との重なりが`SHORT_WALL_IGNORE_MM`（100mm）未満なら壁無し（座標で評価）**（裁定2026-10-13。走り範囲そのものが 100mm より狭い問い合わせは範囲いっぱいを必要な重なりとする）。
-**家族の天井の破線も傾斜に追従する（E3b-2）**: `familyCeilingSegments`の片が傾斜（区画・部屋形状）なら両端の高さ`ceilAbsMm`（loX側）・`ceilAbsHiMm`（hiX側。傾いた片だけ。dirSign<0で入れ替え）を持つ。破線は壁の向こうの天井の**断面**なので、評価点は見えがかりの仕上げ面ではなく**壁の外側の仕上げ面**（`outerWallFaceAt`、`outward=-face.inward`。実壁が無い区間は芯）で、`zoneCeilingChAlong`の`depthCoord`に渡す（面の所属は far 側の行で判定）。壁の有無が区間で変わると奥行き方向の傾斜の破線は高さの違う水平線に割れる（芯と外側の面の差）。結合は水平どうしは同値・傾斜どうしは高さ連続＋勾配一致のときだけ。描画（`elevationFigure.js`）は傾いた片を斜線1本とし、**近側の天井断面との差が正になる部分だけ**を描く（途中で交わるなら交点で切る。水平の bc も傾いた近側に対して同じ規則）。描く x は論理区間（segs・bc の端）で、高さは bc の元の端 loX/hiX の直線から取り直す（区間・run で切った端でも真の高さ）。傾いた bc は、**同じ直線**の傾いた遠側天井線（`farCeilHiAbsMm`）を持つ開放スパンの区間を差し引く（二重線の回避。水平 bc の規則は従来どおり）。片は面の軸上の壁の端でも刻むので、片の中で壁の有無は変わらない（隅の短い壁が少し重なるだけの片は芯で評価）。**壁との重なりが`SHORT_WALL_IGNORE_MM`（100mm。`elevationStyle.js`）未満の片は壁無しとみなす**（裁定2026-10-13。出隅の 72.5mm だけで片が割れ数 mm 違う高さの破線が出るのを防ぐ。短い壁の端で割れた片は芯の値になり、隣の片と同じ高さなら結合で 1 片に戻る）。
-**傾斜天井の受け口（断面エンジン）**: `cut.ceilProfile`の区間は任意の`ceilZHi`（hiXでの天井高）を持てる。傾斜は厳密に直線なので**1区間1線分**（円弧・ドームは同じ表現を折れ線へ刻んで渡すだけ。列ごとの天井サンプリングは採らない）。傾いた列は`ceilZ`＝低い側に加えて`ceilEdge`（図のx0側/x1側の高さ）を持つ。`ceilEdge`は隔て壁自身の斜めの天端`topEdge`とは別の意味（遮蔽多角形・kneeCap・結合判定が`topEdge`固有）なので流用せず別フィールドにしている。**打ち切りは低い側で水平が原則で、例外は「低い側より下から高い側まで届く切断壁」だけ**——その壁の帯は上端が高い側・`ceilEdge`付きで、天端と側縁が天井の斜線に沿う（open・slab・見えがかりの壁・斜線の途中で終わる壁は低い側で水平のまま）。天端の斜線はエンジンが引かない（天井に届いた壁には天端を引かず天井線は体裁が引く、という平面の規約と同じ）。段違い天井の例外（隣の空気に面した壁は空気の上端まで描く）は、傾いた列では隣の空気の上端が**壁の連なり（通り芯で割れた壁は全列）の露出側の端での斜線の高さ**以下なら斜線の続きとして適用しない。既知の限界: 部屋の天井高が斜線の途中にある壁（斜線の高い側に届かない壁）は低い側で水平に打ち切るため、その端の見えがかりの側縁（中線）が斜線より数mm上に出ることがある。
-**打ち切り専用の受け口 `cut.ceilClip`（E5-1a。階段帯の裏面〔E5〕のための口）**: `ceilProfile`と同形（`[{loX,hiX,ceilZ,ceilZHi?}]`・断面ローカルx）で、**打ち切りだけ**に効く。読むのは3か所のみ（`sectionTypes.js`の`ceilClipProfileOf`＝`ceilProfile ?? ceilClip`経由）: 列の分割（`withCeilProfileBreaks`）・列の天井（`buildColumns`の`ceilZ`/`ceilEdge`）・斜線を頭打ちにする列境界（`collectCutBreaks`の`slopeLevels`）。**帯の性格判定は`ceilProfile`のまま**（`emitColumns`の`slabEdgeCutWallJunction`/`ceilStepSlabSection`の分岐・`layerRunWindowsOf`の探査窓 gate・`cellAt`の`span`分岐）——`ceilProfile`を付けると階段帯全体の性格が変わる（E3b-4 で見送った理由）ので口を分けた。`ceilProfile`があればそちらが勝つ。注意: ceilClip で列に`ceilZ`が付くと`clipBandsToVisible`が天井より上の slab/open の帯を落とすため、階段帯の slab の輪郭（`sectionSlabRunsOf`）は打ち切り後の列には残らない。
-**階段帯の天井は階段の裏面（E5。U字系〔SWITCHBACK/WINDING〕の木造で、直上階に同じ足元の続き階段があるときだけ）**: 供給源は`space/stairSoffitCeiling.js`（式は`ceiling/stairSoffit.js stairSoffitSolids`が唯一。見上げと同じ述語`matchingStairBelow`・同じ引数なので天伏の見上げと同じ立体）。`buildStairBand`が自階の層に`layer.stairSoffit`を載せ、**評価する奥行きは切断線`cut.line.axisValue`**（階段帯の面は階段の中を切る）。**体裁の`ceilingProfile`とエンジンの`cut.ceilClip`は同じ区間列から作る**（`applyStairSoffitToCut`。節＝切断線の深さを含む矩形の辺・折れ目〔前縁・対角線・x=pv〕との交点・足元の途切れ。節の間は厳密に直線）。足元の外・途切れは各 seq の既存の天井（seq2/4=N の CH／上階天井の階段状、seq1/3/5=上階天井）でつなぎ、境目で値が違えば垂直の段。値は部屋 FL 基準の ch（`cellAt`だけが`floorZFor`〔床段差込み〕に足す＝供給源で床段差を足すと二重。`ceilClip`・`ceilingProfile`は ch のまま渡す）。`cellAt`は階段室のセルだけ層スタックの天井を裏面にする（列の幅の最大）。切断壁の天端と笠木の下線（`sectionEmit.js cutWallTopEdges`）は、壁の連なりが覆う列の打ち切り値`col.ceilZ`の最小と比べて決める（帯全体の`hiZ`と比べると、列で裏面に打ち切られた＝天井に届いた壁に天端が二重に出る）。**隔て板（往復レーンの境界の壁。上階の graph で見つけた「上階隔て板」の材の範囲＝同じ軸 CL の重なる壁の合併 `partitionStripOf`）の帯をはさんで裏面の高さが違う幅方向の切断（seq1/seq3）では、低い側の天井を帯の向こう面まで水平に延ばし、立下りを高い側の面に置く**（`extendLowerCeilingAcrossStrip`。ユーザー指示 2026-10-15「上階隔て板を包むように仕上げ材は貼られるので、原則、断面は中心から部屋側に寄る」。裏面の途切れを base で埋めた帯〔上階天井 5400〕も同じ規則で低い側の天井になる。切断線と平行な壁には掛けない）。**壁のない端（上り口。`face.hasWallAtLocal0/Run`=false）で裏面の端がその端の既存の天井（上り口の先の部屋へ続く天井＝base。seq2/4 だけが持つ）より高いときは、斜めの天井断面を端から隔て板の壁厚/2（57.5）入った base の高さの点で終え、端までは base の水平**（`endSoffitAtOpenEndCeiling`。ユーザー指示 2026-10-15「B1, D: 階段から斜めに下りてくる天井断面の終わりは（Y4 通りの壁厚分だけ階段側, FL+2400）の点」。入りは復路下の仕上げ空間の天井線の「Y4＋壁厚/2」と同じ量。幾何の交点ではなく置き換え＝斜線の勾配はわずかに変わる）。**隔て板が上階へ続く切断（seq1。自階にも上階にも往復間の実壁がある＝木造 U 字階段の最上階以外。`cut.continuousWallAcross`＝上階の隔て板の材の範囲）では隔て板は床から天井断面線までの 1 本の断面**（`sectionEngine.js mergeContinuousWallBands` が自階の壁の帯〔天端＝CH〕と上階の壁の帯〔足元＝上階 FL〕を合併し、継ぎ目の天端・笠木・天井裏の帯を落とす。段違い天井の境界に立つ壁〔`exposedSide`〕の見えない側の縁も**低い側の天井〔列の打ち切り値〕より下は描く**〔`sectionEmit.js emitColumns`。隠れているのは天井より上だけ〕。切断線が内部を横切る flight の本体〔裏面〜切られている段板の天端。`sectionStair.js crossingFlightBodySections`。裏面は自階の階段の `stairSoffitSolids`〕は裏面の切断を太線で描き、本体に接する壁の縁はその区間を空ける〔`clipWallEdgesInsideStairBodies`。断面の中は描かない〕。ユーザー指示 2026-10-15「moku4-3 1階 階段 A」・裁定「木造階段の最上階は除く＝従来どおり天板〔隔て板の天端〕の見え掛かり」）。**空中を横断する梁の見えがかりは、その位置の天井より梁の下端が上なら描かない**（`sectionStructure.js structuralPrimitivesForCut` の `opts.ceilZAtWorld`。供給源は階段室の裏面〔自階の層の `stairSoffit` を `cellAt` で評価〕だけ——裏面の無い階段帯〔鉄骨・上階が吹抜け〕の天井は上階天井までの空なので部屋の CH では判定しない。2026-08「6」A の鋼材の見えがかりは不変。評価点は梁の芯から切断線側へ 1mm 寄せる。**判定は区間の全か無かではなく、天井の状態が変わる所で区間を割り、天井より上の部分だけ描かない**〔粗いサンプル＋二分で境界を詰める `splitRangeByPredicate`〕——裏面の天井は復路レーンの上〔`arrivalFlat`＝床構造の中〕だけで、両レーンにまたがる 1 本の梁を 3 点の全てで見ると往路側の点が「見える」になり復路の上まで全長が出た。ユーザー指摘 2026-10-19 roof-test1 2階 階段 A）。**seq6（復路レーンの中から隔て板を見る面。ユーザー指示 2026-10-15「B2 の次にもう 1 つ D 追加: 復路の隔て板側展開」）**: 自階の往復間の壁が木造の隔て板（`isStairPartitionWall`）のときだけ切断定義表に足す（seq5 と同じ切断線を逆向き towardS0 に見る seq2 の復路版。面は seq2 と同じ中心1の面を seq4 の向きに直したもので、幾何〔inward・letter〕は wOut1 の向き。枠は wOut1）。組み立て（復路下の仕上げ空間・裏面・床区間）は seq5 と共通の `pushReturnLaneEntry`。展開記号は視線が seq4 と同じなので同じ文字＝D1/D2。階段下の部屋の壁などが往復間に立つだけの構成（「6」の 1 階）は従来の 5 面。**壁のない上り口の辺を見る seq1（`face.hasRealWall===false`。往復レーンの境界の仮想の面 stairMid は含めない）の隠れ線と開口**（ユーザー指示 2026-10-15「moku4-3 1階 階段 A」）: 切断線が横切る flight の矩形（`sectionStair.js flightHiddenRects`。端に立つ flight＝足元〜天端、内部を横切る flight＝裏面〜天端）のうち、**天端が切断面にある＝視線の向きへ下る flight（蹴上材を裏から見る）だけが切断面上の線も隠す**（`planeHides`。壁の断面の縁・構造梁の見えがかり〔content〕と床線・面端の縦線〔図側。`elevationStair.js` が `entry.occludedRects` で同じ矩形を当てる〕を、矩形の下辺・左右の辺に乗る線も含めて細線破線に。上辺＝その段板の断面線・踊り場の床線は見えている）。初段が切断面にある flight と内部を横切る flight は向こうの線だけを隠す。面の向こうの部屋（ホール）へ開く区間（切断壁で区切られた、切断帯の無い列の連なり）には、向こうの部屋の天井の縁（中線。自階の層の `cellAt` を面の線から視線の向きへ少し入った点で引く）と床〜その天井のアキのバツ（`openingPanelPrimitives`）を描き、flight の矩形に隠れる区間は細線破線（`dashLinesInsideRects`。厳密に内側だけ）。**辺の上に立つ壁の帯（見えがかりの帯のうち壁の軸 CL が面の軸 CL と同じ＝切断線からの距離が一致するもの。上階の層も同じ述語）は、列ごとに床〜天井から差し引いた残りだけが開口**（フルハイトなら無し・腰壁なら上・垂れ壁なら下。残りの高さが同じ隣接列をまとめて縁とバツを描く。天井の縁は残りの上端が天井のときだけ）。向こうの部屋があるかだけで決めると、上階の辺にフルハイトの壁がある区間（roof-test1 2階 階段 A の X1〜X1+910＝3階の階段吹抜けの壁）にもアキのバツが出た（ユーザー指摘 2026-10-19）。壁の軸で見るのは、向こうの部屋の奥の壁（見えがかりの深さ上限の中に入る壁の帯）を開口の閉じと取り違えないため。限界: 帯の天井（`ceilClip`）より上の帯は列から捨てられるので、打ち切りより上にある上階の辺の壁は見えず、そこは従来どおり隠れ線の開口になる（受容）。2026-10-07 の「踊り場前縁・回転部にアキは標記しない」（`openGapMarks:false`）は壁のある辺を見る面の話で、壁のない辺の開口には標記する（「6」A・ceiling-wood/steel-stair-test の A にも出る）。`cut.zRange.hiZ`は裏面の最高点まで広げる（**頭打ちしない**。復路の到達側は上階天井〔chUpperAbsMm〕を超える。裁定 Q2）。CH寸法は踊り場側の端の上端だけその端の裏面の実測値（四捨五入。裁定 Q3）。限界: 直進系は E5-2・遠側（隣室から見える裏面）は E5-3・奥の壁との交線は描かない・鉄骨は対象外（踏面線を描く側）・階段下の部屋（2a）と2FL線の isRealRoom は触らない（足元の中の slab は裏面で落ちる）・あき（レーン間）では天井線が上階天井まで切り欠く・階段室の床段差≠0 では階段帯の`makeProbeContext`に floorOffset が渡らない既存の差のため、`ceilClip`が層スタックの天井より床段差ぶん低い（テストで記録）・復路の到達側の拡張域（面の外）には上階天井 5400 の線と裏面 5658 の天井線の 2 本が出る・端の壁厚の中でも裏面を評価するため約 58mm の縦線が出る（いずれも規約の帰結として受容）。
-既知の限界: 上部吹抜けの上階ぶん（voidCH 1値）・梁型・段差見付け面・垂れ壁のアキ・壁2段書きは帯CH基準／壁から約60mm以内で平行な天井芯／体裁の開放スパンは遠側の最初の面だけ（エンジンの cellsAlong は面ごと）／区画の境界で床線・巾木も区間ごとに割れる（同一直線上の実線2本。見た目は不変・golden では差分に数える。受容）。
-defer: 天井高さが異なる内部境界（壁の無い部屋内部）の
-見付け面（段差見付け面は床のみ。**その上部アキの上端も帯CH基準のまま**＝両側の実天井へのクランプは未対応）・
-垂れ壁アキ(`kneeDropGapsOnFace`)・壁2段書きの縦中心(-CH/2)・階段帯の上階クリップ縦線は帯CH基準のまま。
+**天井断面線は区間（エリア）ごとに「その区間の床断面からその区間のCHの距離」に描く**。segsが床(`floorDeltaMm`)と対で`chMm`（区間所有Roomの解決済みCH）を持ち、区間結合もfloorDelta+chMmの両方一致が条件。CLをまたいで天井の絶対高さ(FL+CH)が異なる境界は縦線（CUT）になり、描画xは「低い方からみてCLの向こう側」＝天井が高い側へ半壁厚ずらした位置（`drawnCeilingRiserX`。床の`drawnRiserX`と対の規約）。自CH指定なしの部分指定は天井絶対高さが親と揃うので水平1本＝天井段差は明示CH指定時のみ現れる。端の縦線・開放スパンのアキ上端／境界縦線・右CH寸法・左CH寸法（帯先頭面。左端区間が帯自身のときのみ原文ラベル）・袖壁断面の高さ・注記一点鎖線の突き出し上端（面内最高天井基準）も区間別天井に追従する。`chMm`未指定のsegs（単体テスト等）は帯CHの水平天井へフォールバック。
+- **高低差のある、階の異なる天井断面線どうしは結ばない**: 区間が持つ`ceilFloorZMm`（その区間の天井が属する階の床レベル。既定0。上部吹抜けの多層書きだけが上階の値を入れる）が違えば、段差の縦線を描かず境界の描画xも半壁厚ずらさない。別の階の天井どうしを1本の輪郭で結ぶと、境界に立つ壁の断面（エンジンが壁厚の両縁として描く）と二重の縦線になり、結び線は壁厚を持たないため「何の線か」読み取れない。
+- **床断面下・天井断面上の破線（向こう側の断面）は「壁の向こう側に部分指定関係のある部屋がある面（またぐ面）のみ」**: `familyCeilingSegments`は面のaxisCLのfar側を区間ごとにworldToCellプローブし、部屋ファミリー（親＋部分指定の子）が所有するセルがある区間だけ返す（`ctx.beyondCeilings`。全セルのrun軸投影方式は、同じ室内の別エリアがrun座標上で重なるだけで外周面にも破線が出たため撤回）。描画は論理区間（segs）の天井断面と比較し、断面より上のみ細線の破線（描画済みrun範囲との比較だと論理境界一致面で半壁厚の偽スリバーが出る）。開放スパン区間は同じ高さのfar天井線の管轄のため差し引く。bcごとの断片は接する区間をマージして1本で積む（破線位相の分割防止）。断面と同高・断面より下のエリアは描かない（類似規則への拡張は明示指示がある場合のみ）。far天井線・far床線の端xは論理span境界のまま（天井段差の±半壁厚オフセットとは半壁厚ずれる。床側と同一の既知挙動）。
+
+**天伏の平面（flat）の区画**（`elevation/space/zoneCeiling.js`が点問い合わせの唯一の入口）: 式は「区画の`chMm` ?? 部屋のCH」の1つだけ（床段差込みの`zMm`は使わない。エンジンの`floorZFor+ch`・体裁の`floorDeltaMm+chMm`が床段差を足すので二重加算になる）。エンジン（`spaceModel.js`の`cellAt.ceilZ`・`buildLayerStack`）と体裁（`wallAdjacentFloorSegments`）は同じ点（切断線＋視線方向の探査点／区間の中央）で引く。区画の境界は天井芯の上で壁が無いので区間を境界で割り、その小口（`zoneCeilEdgeHi`）は`drawnCeilingRiserX`/`drawnRiserX`ともずらさない。他の部屋の面は部屋のCHに落とす。遠側の天井（cellsAlong・開放スパンの`farCeilAbsMm`・家族の破線）も同じ式で区画に追従する。
+**傾斜・円弧・ドーム（E3a/E3b/E4）は自室の天井だけ追従する**。
+- 傾斜: 体裁の区間が両端の高さ`chMm`（loX側）・`chHiMm`（hiX側。傾いた区間だけ）を持ち、`ceilProfileFromSegments`が`ceilZHi`に写してエンジンの壁の帯が斜線に沿う。**天井の斜線は体裁が引く**（傾いた区間は隣と結合しない独自のrun。区間の外〔壁の無い端の延長・上階のはり出し・境界の半壁厚ずれ〕は端の値で水平な別の線＝延長の端から反対の端まで1本で結ぶと勾配がずれる）。**評価する奥行きは壁の仕上げ面（`face.faceValue`。実壁が無い面は芯）**（芯で評価すると奥の壁際の天井が実際より高く出る）。層スタック（`cellAt.ceilZ`）は既定では面の最高点（`zoneCeilingChTopAt`）で、打ち切りの正確な高さは体裁の`ceilProfile`が担う。**例外: `cut.ceilProfile`を持たない切断（階段帯）の層スタックは、列の幅を切断線の深さで評価した傾斜の最大値**（階段帯では層スタックの`ceilZ`が帯の上端と天井の段を決めるため、最高点だと傾斜の部屋を壁越しに見る列の段が実高さより上に出る）。`ceilProfile`を持つ切断は`span`を渡さない。
+- 円弧・ドーム: 開始点・頭頂点・終了点の3点を通る円弧で描く（供給源は`zoneCeilingChAlong`の`includeCurved:true`。既定nullのまま遠側は部屋のCH）。体裁の区間は頭頂`ceilArc:{alongX, chMm}`を持ち1面＝1片。円は`ceilArcSection.js`が求め円弧プリミティブ1本を引く。**エンジンは円弧を弦で受ける**（`ceilProfileFromSegments`が頭頂を節とする弦の列〔鉛直差1mm以下・4〜64本〕へ展開し、`ceilEdge`機構がそのまま動く）。
+- 遠側（開放スパンの`farCeilAbsMm`・エンジンの`cellsAlong`）: 視線の先の傾斜は**同じ面が続く範囲の奥の端**の高さで描く（`zoneCeilingFarEdge`が唯一の入口。奥の端に面と平行な中心線〔天井芯は除く〕があればその壁の仕上げ面、無ければ座標）。**向きで分担する**: 勾配が奥行き方向なら遠側は奥の端の高さの水平線1本、走り方向なら体裁だけが斜線1本（`farCeilAbsMm`〔loX側〕と`farCeilHiAbsMm`〔hiX側〕）で**エンジンの`cellsAlong`はその片の`ceilZ`をnullにする**（階段状にしない）。部分指定の子を覗く場合は体裁とエンジンが両方通るため**同じ値**であることが二重線を防ぐ条件。`cellsAlong`は同じ部屋でも天井の面が変わる所で割り（`zoneCeilingDepthEdges`）、`nearestFaceInRange`が範囲内で最も手前の`ceilFace`を選ぶ。**奥の端の探索と壁を探す幅は片の走り範囲全体**（中央の点だけで探すと範囲の端にしか無い壁を取りこぼす）。**壁との重なりが`SHORT_WALL_IGNORE_MM`（100mm）未満なら壁無し**（出隅の72.5mmだけで片が割れ数mm違う高さの破線が出るのを防ぐ。走り範囲そのものが100mmより狭い問い合わせは範囲いっぱいを必要な重なりとする）。
+- 家族の破線の傾斜追従: 破線は壁の向こうの天井の**断面**なので、評価点は見えがかりの仕上げ面ではなく**壁の外側の仕上げ面**（`outerWallFaceAt`。実壁が無い区間は芯）。傾いた片は斜線1本とし、近側の天井断面との差が正になる部分だけを描く。傾いた`bc`は同じ直線の遠側天井線を持つ開放スパンの区間を差し引く。右CH寸法は区間が1つでも両端の高さが違えば立つ（`hasRightChDim`）。
+- **傾斜天井の受け口（断面エンジン）**: `cut.ceilProfile`の区間は任意の`ceilZHi`を持てる（**1区間1線分**。円弧は折れ線へ刻んで渡す。列ごとの天井サンプリングは採らない）。傾いた列は`ceilZ`＝低い側に加えて`ceilEdge`（隔て壁の`topEdge`とは別の意味なので流用しない）を持つ。**打ち切りは低い側で水平が原則で、例外は「低い側より下から高い側まで届く切断壁」だけ**（その壁の帯は上端が高い側・`ceilEdge`付きで天端と側縁が斜線に沿う。天端の斜線はエンジンが引かない）。段違い天井の例外は、傾いた列では隣の空気の上端が壁の連なりの露出側の端での斜線の高さ以下なら適用しない。
+- **打ち切り専用の受け口`cut.ceilClip`**（階段帯の裏面のための口）: `ceilProfile`と同形で**打ち切りだけ**に効く（`ceilClipProfileOf`＝`ceilProfile ?? ceilClip`経由で、列の分割・列の天井・斜線を頭打ちにする列境界の3か所だけが読む）。**帯の性格判定は`ceilProfile`のまま**（`slabEdgeCutWallJunction`/`ceilStepSlabSection`の分岐・探査窓gate・`cellAt`の`span`分岐）。`ceilProfile`を付けると階段帯全体の性格が変わるので口を分けた。ceilClipで列に`ceilZ`が付くと`clipBandsToVisible`が天井より上のslab/openの帯を落とすため、階段帯のslabの輪郭は打ち切り後の列には残らない。
 
 ## 開口（建具）の展開図表現
-開口は`openings/openingElevationFigure.js`の`buildOpeningElevation`（建具モード編集用姿図と同一の純関数）を
-`includeDims:false, includeMotionArrows:false, includeLevelLine:false`で再利用し、枠・吊元表示・機構表現・レバーハンドルだけ残す
-（両モジュールともFL=y0・上方向負で座標系が一致するため配置は`(x,0)`平行移動のみ）。建具記号丸は開口の中心ではなく姿が見える図の下（tag行）へ。
-**`openingsOnFace`は`wallSide`で絞らない**——開口は物理的にその場所の壁すべてを貫通するため、共有壁の建具は両側の部屋の面に出る
-（旧仕様「配置時にクリックした側の面にのみ表示」は、反対側の部屋の展開図に建具が一切出ない実機不具合の原因だったため撤回。
-`findOpeningsOnWall`と同じ考え方）。**姿図の正準向きは「世界座標昇順＝図のx昇順」**（吊元`hingeSide<0`＝`coord1`側＝図のx=0。
-平面記号`openings/openingPlanSymbol.js swingPrimitives`の`hingeAlong`と同じ世界アンカー）のため、世界順とローカル順が反転する面
-（`dirSign<0`。裏側から見る面もここに含まれる）では`mirrorPrimitiveX`（`elevationPrimitives.js`）で左右反転してから置く——
-反転しないと吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる。
-**床に高低差がある面（部分指定の段差＝`floorSegments`）では、建具・直交壁の建具断面ともその位置の実際の床に乗せる**——
-姿図はFL=y0（帯の親FL）基準のため、開口中心位置（断面は隅x=0/run）の区間の床yへ平行移動する（`floorDyAt`）。
-親FL基準のまま置くと段差区間の建具が床から浮く／めり込む。段差をまたぐ開口は開口中心位置の区間の床を採る。
-窓の`sillHeight`もこのシフトにより「その区間の床からの高さ」になる。
-直交壁（隣・次の面）の建具が切断位置（面端）にかかる場合、`openingsReachingCorner`（隣接面自身の隅=0/runに開口スパンが届くかで判定）で
-対象を選び、`openingSectionPrimitives`が[枠(CUT)][扉(SILHOUETTE)][枠(CUT)]の3rectを面の両端の帯に描く
-（`buildRoomBand`/`buildStairBand`が`faces[(i∓1+n)%n]`をprevFace/nextFaceとしてctxに渡す）。
-帯は**直交壁の材の範囲（`wallMaterialRangeForOpening`）の上に置く**（枠は材の範囲±`FRAME_OVERHANG_MM`。置き方は切断帯 sectionEmit.js と同じ。範囲は、sectionEmit が壁1枚の `band.wall.materialRange`、隅の断面は同じ軸CLの実壁の合併。
-面端から部屋の内側へ伸ばさない＝ユーザー指摘2026-10-13）。壁が引けない合成faceだけ、既定の見込で面端の**外側**に置く。
-面端の縦線（壁断面の縁。CUT）は、この隅の建具断面を描く建具の開口範囲では描かない（窓台〜上端を引いた残り。sectionEmit の openingPassThrough と同じ規則。ユーザー指摘2026-10-13「建具上から床までは不要」）。
-床まで達する建具（窓台のある窓を除く。巾木と同じ述語）の隅断面がある端では、**区間の床断面線を断面の外縁（`cornerSection` が返す rect の外縁）まで伸ばす**——扉の下で床が隣室へ続く（ユーザー指示2026-10-14 moku4-3 2階 廊下C の X3）。天井線・巾木・面端の縦線・`drawnX0/Run` は伸ばさない。`floorSpanX` のクランプ後に適用し、`lowerOverhang` とは遠い方を採る。
+- 開口は`openings/openingElevationFigure.js`の`buildOpeningElevation`（建具モード編集用姿図と同一の純関数）を`includeDims:false, includeMotionArrows:false, includeLevelLine:false`で再利用し、枠・吊元表示・機構表現・レバーハンドルだけ残す（両モジュールともFL=y0・上方向負で座標系が一致するため配置は`(x,0)`平行移動のみ）。建具記号丸は開口の中心ではなく姿が見える図の下（tag行）へ。
+- **`openingsOnFace`は`wallSide`で絞らない**: 開口は物理的にその場所の壁すべてを貫通するため、共有壁の建具は両側の部屋の面に出る（`findOpeningsOnWall`と同じ考え方。クリックした側にだけ出す旧仕様は反対側に建具が出ない実機不具合の原因）。**姿図の正準向きは「世界座標昇順＝図のx昇順」**（吊元`hingeSide<0`＝`coord1`側＝図のx=0。平面記号の`hingeAlong`と同じ世界アンカー）なので、世界順とローカル順が反転する面（`dirSign<0`。裏側から見る面を含む）では`mirrorPrimitiveX`で左右反転してから置く（しないと吊元・親子扉の子・レバーハンドル等の非対称要素が逆端に描かれる）。
+- **床に高低差がある面（`floorSegments`）では、建具・直交壁の建具断面ともその位置の実際の床に乗せる**（開口中心位置の区間の床yへ平行移動`floorDyAt`。窓の`sillHeight`も「その区間の床からの高さ」になる。段差をまたぐ開口は開口中心の区間を採る）。
+- 直交壁（隣・次の面）の建具が切断位置（面端）にかかる場合、`openingsReachingCorner`（隣接面自身の隅=0/runに開口スパンが届くか）で対象を選び、`openingSectionPrimitives`が[枠(CUT)][扉(SILHOUETTE)][枠(CUT)]の3rectを面の両端の帯に描く（`buildRoomBand`/`buildStairBand`が`faces[(i∓1+n)%n]`をprevFace/nextFaceとして渡す）。帯は**直交壁の材の範囲（`wallMaterialRangeForOpening`）の上に置く**（枠は材の範囲±`FRAME_OVERHANG_MM`。面端から部屋の内側へ伸ばさない。壁が引けない合成faceだけ既定の見込で面端の外側）。面端の縦線は、この隅の建具断面を描く建具の開口範囲では描かない（窓台〜上端を引いた残り。sectionEmitのopeningPassThroughと同じ規則）。床まで達する建具（窓台のある窓を除く。巾木と同じ述語）の隅断面がある端では、**区間の床断面線を断面の外縁まで伸ばす**（扉の下で床が隣室へ続く。天井線・巾木・面端の縦線・`drawnX0/Run`は伸ばさない。`floorSpanX`のクランプ後に適用し`lowerOverhang`とは遠い方を採る）。
 
-## 腰壁の天端・端部の見えがかり（`kneeCapMarksOnFace`。仕様2026-08）
-天端は壁の上端から下への帯（`.claude/data-model.md`参照）なので、面自身が腰壁のときは
-**上端＝天端を中線・下端を細線**の水平2本で描く。ただし**見付は実厚（`CAP_THICKNESS`=30）
-ではなく`KNEE_CAP_FACE_MM`（=50。`elevationStyle.js`）**——実厚のままだと2本線が縮尺で
-潰れて読めないため作図上だけ広げる（ユーザー明示指示）。モデルの寸法は実厚のまま。
-端部（端部抑え）も同じ帯の見え方なので端に縦の中線＋内側`KNEE_CAP_FACE_MM`の縦細線を
-描く。天端の出（`CAP_OVERHANG`）は厚み方向だけで長さ方向には出ないため、端部の中線は
-壁端そのものに立つ。**次の2つの端には描かない**——
-面端でクランプされた端（直交壁との取り合い。腰壁は相手の壁表面まで行って終わり、その位置の
-縦線は既存の`hasWallAtLocal0/Run`が描く）と、同じ軸上に壁が続く端（連続する壁は同じ偏芯・
-同じ厚みで同面のため。上の「腰壁の上に縦線を出さない」と同じ判断）。直交する腰壁が断面枠
-（`partitionCutAtLocal0/Run`）として出る側では、枠の上辺が天端そのものなので**帯の下端の
-細線だけ**を足す。天井まで届く袖壁（`topHeightMm=null`）には天端が無いので足さない。
+## 腰壁の天端・端部の見えがかり
+- 天端は壁の上端から下への帯（`.claude/data-model.md`参照）なので、面自身が腰壁のときは**上端＝天端を中線・下端を細線**の水平2本で描く。**見付は実厚(`CAP_THICKNESS`=30)ではなく`KNEE_CAP_FACE_MM`(=50)**（実厚のままだと2本線が縮尺で潰れるため作図上だけ広げる。モデルの寸法は実厚のまま）。端部（端部抑え）も端に縦の中線＋内側`KNEE_CAP_FACE_MM`の縦細線（天端の出`CAP_OVERHANG`は厚み方向だけなので端部の中線は壁端に立つ）。**描かない端**: 面端でクランプされた端（縦線は`hasWallAtLocal0/Run`が描く）／同じ軸上に壁が続く端（連続する壁は同面）。直交する腰壁が断面枠（`partitionCutAtLocal0/Run`）として出る側は枠の上辺が天端なので帯の下端の細線だけ足す。天井まで届く袖壁（`topHeightMm=null`）には天端が無い。
+- **断面エンジン側にも同じ天端が要る**（`sectionEmit.js`の`kneeCapUnderline`。下階の帯へ多層書きされた上階の腰壁は`buildFaceFigure`のグラフに無い）。天端の水平線を描く3経路（`cut`の`cutWallTopEdges`／`cutAlong`の上端／`wall`の上端）それぞれに帯の下端の細線を足す。条件は「その上端を実際に描いたとき」かつ「上端が天井より下＝天端が露出」（垂れ壁は下端側が露出するので自然に外れる）。
+- **腰壁レコードは「その壁が区間の構成壁」であるときだけ効かせる**（`kneeDropRecordsAtPointOnWall`）。壁端は隅の取り合いで隣区間へ半壁厚(57.5)食い込むため、列の点クエリだけだと全高の壁の端57.5mmだけが隣区間の腰壁の高さになる（腰壁の残骸とCL上のエッジの2症状）。平面（`resolveKneeDropOverlays`）が同じ隅を同じ閾値（`SPAN_OVERLAP_EPS`=150）で除外済みなので、同じ判定を片方の消費者にだけ入れない。区間に丸ごと収まる150未満の短い壁は構成壁として扱う。**逆に壁自身が区間の構成壁のときは、隅の食い込み部でも腰壁指定を効かせる**（点クエリが0件かつpointCoordが壁自身の端から`CORNER_OVERHANG_EPS_MM`(=150)以内のときだけ検索窓を広げて再クエリ。**壁自身の端から150mm以内に限る**。区間境界どうしの間隔で絞ると結合された長い壁の区間境界手前を拾う誤爆になる）。
+- 「腰壁の上に縦線を出さない」は上の「線種」節（`hiddenByCutWall`と`uncoveredZRanges`を水平/垂直の両方に適用）。
 
-**断面エンジン側にも同じ天端が要る**（`sectionEmit.js`の`kneeCapUnderline`）。`buildFaceFigure`
-は帯の持ち主の階のグラフしか見ないため、下階の帯へ多層書きされた**上階の腰壁**は
-`kneeCapMarksOnFace`に掛からない（実機2026-08: 1階「5」A・「6」Cの真上にある2階の腰壁。
-診断で`レコード計0`＝その面に渡るグラフに腰壁レコードが無い、と確定）。断面エンジンは世界座標で
-上階の壁を拾い`isKneeDrop`で天端の露出を既に判定しているので、**天端の水平線を描く3経路
-（`cut`の`cutWallTopEdges`／`cutAlong`の上端／`wall`の上端）それぞれに帯の下端の細線を足す**。
-条件は「その上端を実際に描いたとき」かつ「上端が天井より下＝天端が露出」——垂れ壁は下端側が
-露出するので上端は天井に一致し、この条件で自然に外れる。
-
-**腰壁レコードは「その壁が区間の構成壁」であるときだけ効かせる**（`kneeDropRecordsAtPointOnWall`。
-実機2026-09「22」2階 A1×X2）。壁端は隅の取り合いで隣区間へ半壁厚（57.5）食い込むため、列の点クエリ
-だけで引くと全高の壁の**端57.5mmだけ**が隣区間の腰壁の高さになり、「腰壁の残骸」と「CL上に立つ
-エッジ（正解は壁端＝CL右側）」の2症状になる。平面（`resolveKneeDropOverlays`）が同じ隅を同じ閾値
-（`SPAN_OVERLAP_EPS`=150）で除外済みだったのに断面エンジンだけ点クエリのままだった——同じ判定を
-片方の消費者にだけ入れない。区間に丸ごと収まる150未満の短い壁は構成壁として扱う。
-
-**逆に、壁自身が区間の構成壁**のときは、その壁の隅の食い込み部（区間端CLの外へ57.5mm等はみ出す
-部分）でも腰壁指定を効かせる（実機2026-09「6」面C x=0・「5」の同種の隅）。狭い点クエリ（±0.5mm）だけだと
-レコードのhi/loが食い込み部の外に出て0件になり全高へ落ちる——点クエリが0件、かつ**pointCoordが
-wall自身の端（wLo/wHi）からCORNER_OVERHANG_EPS_MM以内**のときだけ検索窓を`CORNER_OVERHANG_EPS_MM`
-（=150。上記`SPAN_OVERLAP_EPS`と同じ隅の許容差）へ広げて再クエリする（`kneeDropZRangesAt`の
-wLo/wHi基準の構成壁判定自体は変えない）。**フォールバックは壁自身の端から150mm以内に限る**——
-区間境界どうしの間隔で絞ろうとすると、mergeSegmentsで結合された長い壁（例: X1..X3の1本）の
-区間境界(X2)の手前150mm（壁自身の端からは遠いがレコード境界には近い点）まで隣区間の腰壁指定を
-拾ってしまい、全高であるべき区間が腰壁の高さへ縮む誤爆になる（QA是正2026-09）。
-
-## 腰壁の上に縦線を出さない（ユーザー明示指示2026-08その17。再発の根本対策）
-「「6」D1・B: 腰壁上のエッジは不要」。手前の腰壁（`cut`帯）に遮られて**その列だけ下端が持ち上がった**
-見えがかり壁の帯は、隣接列では1本の大きな帯（あるいは別の見え方）になる——同じ壁の続きであって
-「そこで壁が終わった」わけではないので、側縁の縦線を描いてはいけない。`emitColumns`の凹み側面線・
-端の縦線は`trimmedByCutWall(col, band.z0)`が真なら描かない。
-
-**なぜ再発したか**: 同じ症状（左CL上のz3800..5400の縦線）に対し過去は`isRecessAgainst`へ
-`layerRole`の一致判定を足して塞いだが、それは「隣接列に壁帯はあるが層が入れ替わっただけ」という
-別ケースの対策だった。実機では隣接列に壁帯そのものが無く（`slab`等に化ける）、`matchingBand`が
-nullを返して「壁が終わる」と判定されるため素通りしていた。水平線側は同じ理由で既に
-`trimmedByCutWall`で抑止済みで、**縦線だけが取り残されていた**のが根本。線種（水平/垂直）で
-別々に判定していたことが原因なので、同じ述語を両方に適用する形に揃えた。
-
-## 壁の無い辺は展開図の面にしない（ユーザー実機指摘2026-08「「5」A2：ここに壁はない」）
-面は部屋の輪郭の辺から作られるため、**壁が1本も生成されていない辺**（階段の上り口・下り口のように
-`generateRoomWallsFromOutline`が`stairOpenings`でスキップした辺）にも面ができる。判定自体は既に
-できていて、`buildRoomFaces`の`innerWallFaceAt`がnullを返した面は`hasRealWall=false`（`faceValue`は
-CL芯へフォールバック）になる——足りなかったのは**それを面リストから落とすこと**だけだった。
-`composeRoomFaces`の最後（隅のスナップ・開放スパンの延長・袖壁分割をすべて済ませた後。残る面の端の
-情報を変えないため）で落とす。
-
-例外は階段帯のみ（`keepWallLessFaces:true`）: 上り口の面はレーン範囲の算出（`switchbackCuts`のwEntry）に
-使うため、落とすと切断表が組めなくなる——描画のためではなく幾何の入力として要る面である。**幾何の入力と
-描画の面リストは分ける**こと（`buildStairBand`の`composedFaces`／`drawableFaces`）。フォールバック経路で
-`composedFaces`をそのまま描くと、同じ「壁の無い辺を描く」不具合が階段帯側で再発する。
+## 壁の無い辺は展開図の面にしない
+面は部屋の輪郭の辺から作られるため、壁が1本も生成されていない辺（階段の上り口・下り口。`generateRoomWallsFromOutline`が`stairOpenings`でスキップした辺）にも面ができる。`innerWallFaceAt`がnullを返した面は`hasRealWall=false`（`faceValue`はCL芯へフォールバック）になる。**それを面リストから落とす**のは`composeRoomFaces`の最後（隅のスナップ・開放スパンの延長・袖壁分割をすべて済ませた後。残る面の端の情報を変えないため）。**例外は階段帯のみ**（`keepWallLessFaces:true`）: 上り口の面はレーン範囲の算出（`switchbackCuts`のwEntry）に使うので落とすと切断表が組めない。**幾何の入力と描画の面リストは分ける**（`buildStairBand`の`composedFaces`／`drawableFaces`。フォールバック経路で`composedFaces`をそのまま描くと同じ不具合が階段帯側で再発する）。
 
 ### 不変条件: 部屋の展開図の面は必ず平面の実壁に対応する
-「ここに壁面がある」と主張する面の生成箇所は次の4つだけで、部屋帯（通常・吹抜け・多層書き）へ流れるのは
-上2つ。新しい生成経路を足すときはこの表に追記し、平面照合の根拠を明示すること。
+「ここに壁面がある」と主張する面の生成箇所は次の4つだけで、部屋帯へ流れるのは上2つ。新しい生成経路を足すときはこの表に追記し、平面照合の根拠を明示する。
 
 | 生成箇所 | 照合根拠 | 部屋帯へ流れるか |
 |---|---|---|
 | `buildRoomFaces`（部屋の輪郭の辺） | `innerWallFaceAt`が実壁を見つけたか＝`hasRealWall` | ○（falseは落とす） |
-| `insertStepFaces`（段差見付け面） | 部分指定Room間の床レベル差（壁ではなく床の段差そのもの） | ○（`kind:'step'`として別扱い） |
-| `buildMidWallFace`（階段の往復間） | `hasRealWall:!!wall`。壁が無ければ**レーン境界の切断面**であって壁面ではない | ×（階段帯のみ） |
-| `faceFromCut`（断面エンジン） | 主対象壁が無ければ`hasRealWall:false`＝見返り・到達端の切断面。設計上、壁でない面を切る | ×（階段帯のみ） |
+| `insertStepFaces`（段差見付け面） | 部分指定Room間の床レベル差（床の段差そのもの） | ○（`kind:'step'`として別扱い） |
+| `buildMidWallFace`（階段の往復間） | `hasRealWall:!!wall`。壁が無ければレーン境界の切断面で壁面ではない | ×（階段帯のみ） |
+| `faceFromCut`（断面エンジン） | 主対象壁が無ければ`hasRealWall:false`＝見返り・到達端の切断面 | ×（階段帯のみ） |
 
-下2つは「壁ではない切断面を意図的に切る」階段固有の概念で、部屋帯には流れない。部屋帯の面が実壁と
-対応しない状態になったら、それは不具合である。
+下2つは「壁ではない切断面を意図的に切る」階段固有の概念。部屋帯の面が実壁と対応しない状態になったら不具合。
 
-## 2層帯は「下階にも同じ壁がある」と暗黙に仮定してはいけない（ユーザー実機指摘2026-08その17）
-階段帯・吹抜け帯は2層（設置階＋上下いずれか）にまたがる。どちらも「上の層の見え方をそのまま
-下へ延ばす」実装に寄りやすく、**下階／上階に同じ壁が無い区間**で実在しない輪郭を描く同型の不具合を
-起こしていた。2層帯を触るときは常に「その層に実際にその壁があるか」を層ごとに引き直すこと。
-
-- 階段帯（section層）: 隣接列との連続判定を`matchingBand`（重なる帯が1つでもあれば連続）で
-  band全体に一括適用していたため、隣接列の壁が途中までしか無い場合に側縁が丸ごと消えていた
-  （「6」D2: 上が吹抜けで壁が全高続く列の隣が1F天井までしか壁が無く、その差分が壁面の実際の
-  終端なのに縦線が出ない）。z区間ごとの被覆（`uncoveredZRanges`）で判定する。被覆とみなすのは
-  「同層・同距離＝そのまま続く壁」と「別層＝見えている壁が入れ替わっただけ」の2通りで、
-  残る「同層・別距離」だけが凹みの側面として縦線になる。
-  さらに**同じ壁面がキャップ（天井高さ・上階セルの有無）の違いだけで高さを変える境界には
-  縦線を描かない**（ユーザー明示指示2026-08「セル境界は描画対象としない」）——キャップは
-  セルの切り替わりで決まるため、この線は必ずCL（一点鎖線）に重なる。壁オブジェクトはCL位置で
-  分割されるので「同じ壁面」は参照一致ではなく軸CL＋材の面位置で判定する。腰壁・垂れ壁で
-  実体の高さが制限された帯（isKneeDrop）は本物の高さ差なので対象外。
-  **その17（切断壁に切られて持ち上がった帯の側縁は描かない）は面の端では効かせない**
-  （ユーザー実機指摘2026-09「「6」D2: 2階Y2から3500には「21」の壁エッジが左側に見える」）。
-  その17の前提は「隣接列で同じ壁が1本の帯として続く」だが、隣接列が無い＝探査範囲の外である
-  面の端ではその前提が無い。**端に壁が有るかどうかの唯一の情報源は`openEndLo/Hi`**
-  （`face.hasWallAtLocal0/Run`）。判定に「隣接列が無い」だけを使うと不足する——探査は面の外へ
-  延びることがあり、列の端が面の端に一致することまで見ないと合成入力で誤爆する。
-  なお**`cut.line`の枠(lo/hi)は必ずその`cut.face`の枠と一致させる**（ローカルxの原点を
-  `cutOriginWorld`と`originWorld`が別々に決めるため。ずれるとcontent全体が面に対して平行移動し、
-  面の端の判定も壁の仕上げ面の位置も同時に狂う。実機「6」D2で102.5mmずれていた）。
-### 面の端も層ごとに違う（ユーザー裁定2026-09「「6」D2」）
-自階の面は自階の壁で終わるが、**同じ通りの上階の壁はその先へ続きうる**。探査範囲は層ごとに決め
-（`sectionContent.js`の探査窓）、面の外は平面が続いている層だけを描く——平面が届いていない層は
-壁候補だけでなく**床天井の分類からも外す**（残すと面の外に所有Room不明の空間＝アキが生まれる）。
-対象は**壁のある端だけ**（壁のない端の外は体裁のはり出しで、平面照合の話ではない）。はり出しは
-上＝上階の天井断面線・下＝上階のFL断面線・外端＝壁エッジで閉じ、自階の床線・面端の縦線は
-面の端のまま。はり出してよい量の上限は`UPPER_PLANE_OVERHANG_LIMIT_MM`で、超えたら**全か無か**で
-描かない（途中で切ると壁が終わっていない位置に端部の縦線が出る）。列の範囲が面の描画範囲
-（`cutDrawRange`）を超えうるようになったため、階段の作図が列からx範囲を得る箇所はそちらで
-クランプする。
-
-吹抜けの帯にも同じ規則を適用する（上限も同じ）。ただし**その層の空間がその端で見えている端だけ**
-——gateが無いと、その層へ開いていない端で層の平面だけが外へ伸び、閉じる線の無い突起になる。
-判定は上下対称で、上部吹抜けを持つ部屋帯は「その端の帯の**天井**断面が上階の**床**より上（＝吹抜けが
-面の端に達している）」、下階を積む吹抜け帯はその鏡像で「その端の帯の**床**断面が下階の**天井**より下
-（＝下階のFLまで下りている）」。gateの材料（区分プロファイル・層の天井z）を渡さない帯（階段帯）は
-素通り＝従来どおり。下階のはり出しは上＝下階の天井断面線・外端＝壁エッジ（どちらも断面エンジンの
-content）と、下＝下階のFL断面線（図側で床線だけを外へ延ばす）で閉じる——下階の天井から自階の床
-までは床構造＝断面の中なので、そこに線は引かない。**下階はり出しの上辺は「下階の天井」で確定**
-（自階の床ではない。ユーザー裁定2026-09）。
-
-上のはり出しの「上＝上階の天井断面線／下＝上階のFL断面線」は**上部吹抜けを持つ部屋帯にも同じく
-当てはまる**（ユーザー裁定2026-09）。上階FLの線の**起点は端の姿で決まる**（ユーザー裁定2026-09
-「「6」C・「5」A1: 2FL断面まで下りて外側に向かって張り出して終了、が正解」。旧「「5」A1はX3の
-右側＝CL起点」はこれで撤回）:
-
-- はり出しの外端に**切断壁**（上階の腰壁）が立つ端 … 壁の**向こう側の面**から、さらに**外へ**
-  `wallLessEndExtendModelMm`（壁のない端部と同じ「続きがある」記法）ぶん張り出して終わる。
-  壁の下（CL〜向こう側の面）には引かない——「上階の床の断面線は境界に立つ切断壁の断面の中を
-  通さない」（「断面の中とその輪郭」節）と**同じ1つの見方**。天井断面線は従来どおり壁の外側の面で
-  終わる（張り出すのは床の線だけ）。
-- 立たない端（実データ「6」D2＝全高の見えがかり壁） … 階段帯は断面線（`floorProfile`）が上階FLを
-  下回る位置で止め、断面線を持たない帯は**面端のCLより向こう側**だけに引く。CLはどの面にもあるため
-  後者は**はり出し区間の外へ絶対に出ないようクランプする**（破るとはり出し0の面＝通常の部屋帯の
-  ほぼ全面に、CLまでの偽の水平線が生える）。
-
-「切断壁か見えがかり壁か」は**contentの列にしか無い**情報なので、図側で壁を引き直さず探査の結果を
-そのまま渡す（導出は`sectionContent.js`の`upperFloorCutWallEndsOf`ただ1つ）。上部吹抜けを持つ部屋帯
-だけは図がcontentより先に走るため、レイアウトを組んでcontentを**1度だけ**走らせ、収穫した起点を
-載せて**図を組み直す**（contentを2度走らせない。2回のレイアウトはこの起点しか違わない）。
-
-上階FL断面線を引く端は、**上の2つの分岐のどちらでも**さらに「はり出しの向こうに上階の床が実在する端」へ
-絞る——CLの外側（CLから半壁厚）の世界座標で上階graphの所有Roomを引き、実Room（VOID/STAIR_VOIDでない）の
-端だけ許す。はり出し量は上階の**壁**の伸びしか見ないので、2階でも吹抜けが続き境界に腰壁だけが立つ構成では
-床の無い位置に線が出る（「断面の中とその輪郭」の規則と同じ話。あちらの`upperFloorZAt`は面の外では
-答えられない）。落とすのは床の断面線だけで、天井断面線・壁エッジのはり出しは残す——上階の壁は実在するため。
-
-このgateは**上部吹抜けを持つ部屋帯と階段帯で同じ1つの関数**（`elevationFaces.js`の`upperFloorEndsOf`）
-から供給する。上のはり出しを持つ帯を増やすときも、はり出し量の算出（帯ごとに別）とgate（共通）を分けて
-考えること——階段帯は`floorProfile`ベースの分岐を持つため一度gateを配線し忘れており、切断壁の分岐が
-入って`floorProfile`を迂回するようになった時点で偽の2FL線が出る構成が生まれていた。
-
-- 吹抜け帯（面の引き伸ばし方式）: 下階に同じ軸CL・同じ向きの壁が実在する区間だけを下へ延ばす。
-  壁の無い区間は設置階の床のまま残し、境界は既存の段差床線の仕組みで縦の折れとして出る
-  （＝「下階はこの面では壁が無い」の表現）。CLは階ごとに別オブジェクトのため、idではなく
-  世界座標で突き合わせる（section層の視線判定と同じ規約）。
-
-## 見えがかりのレイキャスト: 手前のささらによる遮蔽（ユーザー明示指示2026-08その16）
-「「6」D1: 復路ささら下、踊り場側は、往路ささら上まで／復路ささらは、往路ささらより奥にある」。
-seq2の切断は**往路レーンの中**を通るため、視線の手前には往路レーンのささら（レーン境界側）がある。
-その**上端より下**は、ささら本体（せい300の帯）と、その先に続く踊り場桁枠に隠れて、奥の復路のささらは
-見えない。遮蔽の外形は「往路ささらの上端線」1本で表せる——その端から先（踊り場側）は端点の高さで
-水平に延長すればよく、往路ささらの上端はミトレで踊り場桁枠の上端へ揃えてあるので、その水平延長が
-そのまま桁枠の上端の外形になる。`secondaryFlights`のささら輪郭を`clipPolylineAboveOccluder`で
-この外形の上側だけへ切る。
-
-旧実装は`isBlockedByWall`（往復間の壁の有無）**しか**見ておらず、手前のささら自身による遮蔽を
-判定していなかったため、復路のささら下端が往路ささらを突き抜けて踊り場まで描かれていた。
-
-## 直進部ささらと踊り場ささらの取り合い（ユーザー明示指示2026-08その14）
-「ささら上同士、ささら下同士トリム／300の線は不要」——**トリム結合する端では、ささらの上端と下端を
-結ぶ端の線（せい=300）を描かない**。上端は踊り場桁枠の上端（踊り場床+巾木）へ、下端は
-`mitreTo`で桁枠の下端の高さへ寄せてあり、両方が桁枠側へ継がるため、端を閉じると線が1本余る。
-`stringerPrimitives`はクリップ後の閉リングからその辺だけを落とし、開いたパスとして描く
-（両端をトリムした場合は上端・下端の2本に分かれる）。
-
-**取り合い部に踊り場桁枠の断面は描かない（ユーザー明示指示2026-08その15。「6」D1・Bで確認）**:
-`landingFramePrimitives`のend-on（見返り）分岐で`kind==='front'`の辺（＝踊り場が直進部と取り合う辺）は
-断面矩形（12mm厚×せい300のCUT）を描かない——折返し階段の内側の踊り場ささらは往路・復路の間（100）
-だけにあり、直進部のささらが来るこの位置には踊り場側のささらが存在しない。取り合いは直進部のささら
-自身の輪郭が表す。back辺（壁側）の断面は従来どおり描く。
-
-**トリム端の上端は踊り場桁枠の上端まで伸ばす**: `landingMitreOpts`が`mitreStartTopY`/`mitreEndTopY`
-（＝-(踊り場z+巾木)）を渡し、`stringerBandGeometry`が上端を勾配に沿ってそこまで移動する。復路は
-最初の段鼻が踊り場より1リザー上にあるため、段鼻列だけで帯を作ると桁枠に届かない（実機「6」D1の
-復路見えがかりで確認）。**下端はミトレで「上端+せい」へ寄る**ので、上端を合わせれば下端も自動的に
-踊り場ささらの下端へ揃う。
-
-**z範囲のクリップはトリム端で緩める**: 側面視のささらはflightのz範囲（`baseZ`〜`baseZ+steps×riser`）で
-クリップされるが、トリム端ではささらが占めるy区間 `[上端, 上端+ミトレ深さ]` がその範囲の外へ出る
-（往路側は上端が巾木ぶん上・復路側は下端がミトレぶん下）。緩めないと端が切られ、切り口が
-「ささら上下を結ぶ線」として残る（実機「6」D1で確認）。**FL側のクリップは従来どおり厳格**に残す
-——法線オフセットぶんの突き出し（実機フィードバック第3弾B）はFL側で起きるため。回帰テストの
-許容差も踊り場側の端にだけ与える。復路の見えがかり（`secondaryFlights`）も同じ経路を通る。
-
-## 回り階段（WINDING）の展開（ユーザー裁定2026-10-09 案A「回転部を段付きの踊り場で描く」）
-- 回転部（回り段 w マス）は、平面の段の多角形（`stairTreadFootprints` の install の扇形セル。`stairContribution` が `turnCells` に持つ）を**切断線ごとに切った** Landing（`turnCellSlices.js` の `sliceTurnCells`。公開の入口で `withCutLandings` が足す）で描く。高さ＝往路の段数×蹴上＋(段番号−最初の回転段)×蹴上。レーン線は走行方向の区間に、seq1/seq3 は幅方向の区間になる。
-- 線が辺（放射線・前縁）に乗るときは回転部の奥（+t）側のセルを採る。辺（頂点）から0.5mm以内は乗っているものとして扱い、寄せ先は**全セルの全頂点から1回だけ**決めて全セルで共有する（セルごとに決めると、一部のセルにしかない頂点の近くで隣り合うセルの縁が食い違い、蹴上が落ちる）。
-- 隣り合うセルは放射線を共有するので、蹴上は`landingStepRisers`がCUTの縦線で足し（平面の放射線とレーン線の交点に一致）、床の輪郭は`stairCutFloorProfile`のmax合成で段状になる。復路の足元は回転部の最後の段（折返しは踊り場1枚で従来どおり）。`switchbackCuts`に通すので`LANDING_CUT_INSET_MM`（C面の切断を前縁+100）も効く。
-- seq1（frontA）の取り合い: 往路側は frontA が回転部の最初のセルの前縁に乗るので、そのセル（奥側）の床を引く。復路側は踊り場でなく復路の初段の段板を切るので、段板の断面（CUT）になる。
-- 区間長・段数は`resolveUTurnSpanLengths`（`stairClassify.js`。折返し＋回りの唯一の供給源）。**構造側（`resolveSwitchbackSpanLengths`・`landingRect`・`landingZ`）は折返し専用のまま閉じる**——開くと`structuralAutoFill`が回り階段にも踊り場受け梁を作る。展開図は型判定なしの`uTurnTurnRect`で矩形だけ借りる。`fanCuts`は L_TURN/FLARED/OPEN_WELL だけ。
-- U 字系（折返し・回り）の展開図は平面の install 枠を共有する（`uTurnPlanLayout`。ユーザー裁定2026-10-09「展開図の階段位置を平面に揃える」）。走行方向の位置（往路・復路の端、踊り場の前縁・奥）は CL 区間長から再計算せず、`stairContribution` が平面の解決値だけから取る。外縁は壁の面、内縁はレーン中央（鉄骨のあき100は従来どおり `ladderAcrossRange` が引く）。柱のある木造は往路側の前縁（frontA）と復路側の前縁（front）が分かれ、踊り場は本体＋往路側の延長矩形（同じ高さ）の2枚、`seq1` は frontA（復路側は踊り場でなく復路の初段を物理的に切る。横断の切断線が flight の内部にあるときは、その位置の段板の天端に CUT を出す＝木造は厚30の矩形。裁定(a)）、`seq3` は front から奥へ。切断線が flight・踊り場の端から `STAIR_RUN_TOL_MM`(0.5mm)以内なら両側を含む（frontA は往路の端・延長矩形の始まり・柱の面に同時に乗るため）。踊り場が浅く前縁が奥を越えるときは前縁を奥に揃える。直進部の蹴上は平面の踏面線と一致する。段板の断面の幅は、隔て板があるとき内縁を隔て板の面（往路 sA・復路 sB）で止める（梯子の内縁はレーン中央のまま）。
-- 階段下の部屋の帯（`elevationBand`）は、切断線が flight の内部にあっても段板の断面を出さない（実機確認済みの「階段の高さ」細線を保つため・`treadSection:false`）。
-- 「階段下の部屋」の判定（`flightsOverRoom`）は部屋の**実セル**で行う（flight と実セルの交差が覆う領域に、`STAIR_OVER_ROOM_MIN_OVERLAP_MM` を両方向で超える矩形が収まるか。座標圧縮した被覆判定で、セルの並び順に依存しない）。包絡矩形で見ると、L 字の部屋の切り欠きに階段室があるとき包絡矩形だけが階段と重なり、面の全幅に「階段の高さ」の細線が出る（moku4-3 2階 廊下、2026-10-14。1d0ce63 の閾値だけでは直らず再発した）。矩形の部屋ではセルが包絡矩形を敷き詰めるので旧判定と同値。なお `cut.bandRoomBounds`（断面エンジンの箱）は従来どおり包絡矩形。
-- 隔て板がある階段室の面は6枚になり、レーン境界（s≈0.5）の実壁の面が外壁側の面と同じ側に入る。`classifyFaces`は同じ側に外壁側の面があればそれを除く（`mergeFaces`が先頭基準のため。実壁でない2a壁の面は従来どおり）。
-- 回転部の向こう側の段の見えがかり（`farSideSilhouettePrimitives`。ユーザー指示2026-10-14）: 縦断する切断で、切断面の奥にあり視線から遠ざかって立ち上がる段（低い側のセルが視点側にある共有辺）を細線で描く。段鼻の水平線と両端の縦線（切断面で切れた端は切断の蹴上が太線で描くので足さない）、視線と平行な辺は縦線1本、全体が奥にある復路の蹴込みは縦線。手前の壁・断面（列のwall/cut/cutAlong/hidden/slab。hiddenとslabは切断面の位置の実体として隠す）に隠れる部分は描かない（斜めの天端は交点で分ける。列の境界上の縦線は両隣がともに覆う高さだけ隠す）。階段下の部屋の展開（`stairOver`）には出さない。壁の端の柱と取り合う端（隔て板の回転部側の端）に蹴上が集まる縦線も細線で引く（ユーザー裁定2026-10-14）。壁の端の縦線（recess）は端面に突き当たる回転部のセルの天端より下を落とす（`clipWallEndVerticalsByStairMass`。セルは壁の端面に全長で接し、壁の側面は次の蹴上へ同一面で続くので、天端より下は端の両側とも実体で縁が無い。ユーザー指示2026-10-14）。折返し（回転部なし）の復路は従来どおり描かない。
-- 蹴上材を裏から見る面（ユーザー裁定 2026-10-15「moku4-3 1階 階段 C」。**材質によらない手順**）: 横断の切断が回転部のセルを切る面（seq3）は、切断面の向こうで段が視線から遠ざかって下る＝蹴上材を裏から見ており、蹴上の向こう側の踏面と壁に取り合う蹴上線は蹴上材に隠れる。**断面線（切断面上のスライスの床線・蹴上）は太線のまま変えない**（「階段の断面線を破線にしてはいけない」）。それとは別に、これまで描かれていなかった「平面でいうと断面線と壁の間にある踏面」（各セルの切断面の向こう側の幅の範囲に、そのセルの高さの水平線。断面の床線と重なる範囲は除く）と「壁と取り合う蹴上線」（隣り合うセルの共有辺の向こう側の端に、低い段から高い段までの縦線）を細線破線で足す（`hiddenTurnStepPrimitives`）。これらの線は描かれた断面線で上下に分ける（`clipHiddenStepLines`／`clipHiddenSegmentBelowProfile`・`clipHiddenSegmentAboveProfile`）: **断面線より下＝断面の後ろに隠れた区間は細線破線**（ユーザー裁定 2026-10-15「X2+910より右の破線（断面見返り側＝断面線の後ろ）は不要」——視線の向きへ下る側（X2）の踏面・壁に取り合う蹴上の縦線は断面の床の後ろ）、**上＝断面の前の空間で見える区間は細線実線**（同「X2+910より右にある階段断面線から壁までの見え掛かりを細線描画して」——上る側（X1）の踏面の線が断面の段から壁まで）。縦線は段の上（断面の蹴上）と面の端（壁の縦線）には出さない。面の断面線は段状の天端（`crossingLandingFloorProfile`。「断面線の外は描画しない」の輪郭と面端の縦線の下端に効く）——閉じた断面図形の外に太線（最高段より下の壁の縦線・基準床の床線の延長）を残さない。基準のスライスが切断の基準床と違う面（seq1）は帯の床のまま。同じ理由で、正面視の梯子（`flightLadderPrimitives`）は視線の向きへ下る flight（seq1 の往路）を材質・階段下の部屋によらず破線にする（旧: 鉄骨＋階段下の部屋がある「踊り場より下」だけが破線で、木造や階段下に部屋の無い鉄骨は実線だった）。切断線の手前にある flight（直進の seq1 は上り口辺に立ち flight を背にする）は対象外。
-- **図の左右（dirSign）は仮想断面の視線の向きだけで決める**（ユーザー裁定 2026-10-15「歩行順に描画する方法は正しいが、仮想断面から見て通り芯の配置は一意に決まる。上り口の左右は回転方向次第」）。全 cut（U 字系 seq1〜5・直進 seq1〜5）とも `viewDirSign`＝`DIR_SIGN[letterOf(isVertical, −viewSign)]`（展開記号の採番と同じ方位規則。y 下向き正の平面で、視線 d の左手は (dy,−dx)）で face を `reorientFace` する。2026-08 の `reorientFace` 導入（4303222）は「往路が左」「上り口が左」を歩行方向で決め打ちしており、「6」（up+flip=true）で方位規則とたまたま一致していただけ——逆回転（up+flip=false／down+flip=true。moku3-1・opening-test・stair-ports-test4/5）では seq1/2/4/5 が鏡像、seq3 は全文書で鏡像（2026-10-14 moku4-3 1階 階段 C）、直進は seq2/4 が鏡像だった。歩行順に依存する下流（seq2/4 の床区間の並び・CH 寸法の鎖の踊り場側の端）は切断定義表が面ごとに宣言する `landingEnd` から決め、「seq2 は踊り場が右」の決め打ちを持たない。直進の seq2 は s=0 側の壁（W_out1）、seq4 は s=1 側（W_out2）を見る（旧実装は seq2 の視線の符号が逆で同じ壁を 2 度描いていた）。合成 fixture は「6」と同じ回転（flip=true）を既定にし、逆回転は upDirection×flip の全8通り（seq1 の梯子・U 字系の全 cut）と逆回転の下流（床区間・CH 寸法の鎖）の失敗系テストで固定する。
-- 限界: (Lc) CH寸法の鎖は踊り場の高さ（往路の終端）のまま (Ld) 取りつき区画は下の節のとおり平面に揃えた（限界ではない） (Le) 桁枠は回転部のセルに付けない（鉄骨の回り階段でトリム結合もしない）。回り階段の下の部屋の展開図にも階段が出る（`stairContributionOverRoom`の既存規則の帰結。受容）。
-
-## 取りつき区画（側面の上り口 e 段・到達口 a 段）の展開（ユーザー指示2026-10-09「展開図の階段を平面に揃える（続き）」T1）
-- 区画の位置・番号・高さは平面の解決値（`uTurnPlanLayout`＋`stairTreadFootprints(…,'install')`のセル多角形）だけから取る。回り段と同じく`sliceTurnCells`で切断線ごとに切り、`withCutLandings`が回転部・上り口区画・到達口区画を別領域として寄せる。かつての等分近似（区画を平行な踏面で等ピッチに割る`Flight.leadSteps/leadMm`）は、扇形のセルと食い違うので廃止した。
-- 番号の唯一の供給源は layout の`entryNumbers`（1..e）／`arrivalNumbers`（S+e..S+e+a−1。最後＝totalSteps−1、到達辺の先が上階床）。展開図で数え直さない。
-- 平場（e=0／a=0 で側面の口）は矩形 Landing（上り口 z=0、到達口 z=上階床）。外縁の段差は`edgeRiser`の縦線（上り口辺の床→最初の段、到達辺の最後の段→上階床）で足す。レーンを縦断する切断で外縁に接するセルだけに付け、横断・平場には付けない。
-- 往路 flight は`underSteps`(=e)、最後の flight は`overSteps`(=a)で、正面視（seq1）の梯子の段数と足元の高さを区画ぶん補う（無いと梯子が上階床や z=0 に届かない）。
-- 走行端の口は区画を持たず、従来どおり flight が口まで続く。
-
-## 直進系（STRAIGHT／STRAIGHT_LANDING）の展開
-- U 字系と同じく走行方向の位置は平面の解決値`straightPlanLayout`（設置階の install 枠）だけから取り、通り芯の枠・CL 区間長からは再計算しない（旧実装は平面の踏面線とピッチが食い違った）。通り芯の枠は面の分類にだけ使う。側面の口の区画は上の節と同じ仕組み。
-- seq1（上り口の壁）は上り口辺＝install 枠の基端（壁仕上げ面）に立ち、側面の上り口でも基端のまま（区画は seq2/4 のレーン線で切れる。flight は区画ぶん手前まで正面視する）。到達端の面（seq3/seq5）は install 枠の終端。踊り場壁の探索中心は踊り場の手前の縁 land1。
-- 切断線の lo/hi は`faceFromCut`と同じく直交壁の面へ寄せる。
-- 直進系にささら・桁枠・蹴込・段板厚は付けない（U 字系との差。付けるかは裁定待ち）。
-
-## 平面との照合の関門と既知の制約（階段）
-- 到達辺（2026-10-16）: 木造 U 字系の復路の到達辺は N+1 の床梁の外面＋壁仕上げ（`stair-model.md`）。展開図は層スタックの直上の層の graph（`opts.upperGraph`・`above.graph`・`solids.upperGraph`）を `stairContribution`／自階の裏面／復路下の壁の天端へ渡して平面と同じ面を使う。**既知の限界**: 上階グラフが層に無い経路（N+1 の階段を見上げる `stairSoffitAbove`・見上げの上階の層の裏面）は Q3 に戻る。
-- 暫定・裁定待ち: (1) 到達口の平場の高さと到達辺の縦線——実データに側面の到達口が無く合成テストだけで決めた（上階スラブの小口と重なる見込み）。 (2) 詳細 LOD の平面の踏面線は ±nosing 20 だが、展開図はセル境界のまま。寄せるかは未裁定。 (3) 直進系に蹴込・桁枠・段板厚を付けるか。
-- 別件: 両口とも側面で隔て板の柱がある構成では、平面側の上り口セルと到達口セルが幅方向に重なる（平面の既存挙動。展開図はそのまま写す）。
-- 関門 probe `scripts/probe/diffStairElevPlan.mjs`: 展開図の階段のジグザグの段鼻・回り段/区画の縦線を世界座標へ戻し、平面の踏面線との交点に両方向で照合する。**縦断の段鼻だけ**を見る。横断（seq1/seq3）と面の両端（クランプで真の位置が隠れる）は未検査。テスト用 .stq は`makeStairPortsTestDoc.mjs`（stair-ports-test1〜5）。
-
-## 階段の高さ寸法（CH寸法）の記入ルール（ユーザー明示指示2026-08その12）
-規則は2つだけ: **(1)寸法は「床断面・踊り場断面・天井断面のいずれかから、いずれかまで」を1本とする**
-**(2)帯の左から端を順に見て、前の端と高さが変わったときだけ記入する**（先頭の端は必ず記入）。
-面の左右の端ごとに断面プロファイルが決まる——**踊り場スラブが切れる端**は`[1FL→踊り場][踊り場→上階天井]`
-（階段下に部屋があるときは踊り場より下が別室で帯の床が踊り場になるため`[踊り場→2FL][2FL→2F天井]`）、
-**切れない端**は壁の向こうの通常断面`[1FL→1F天井][2FL→2F天井]`。踊り場側がどちらの端かは
-面の向きで決まる（幅方向に横断するseq1/seq3は両端とも踊り場側、走行方向のseq2/4/5は片端＝切断定義表の
-`landingEnd`。「6」の回転ではseq2/5が右端・seq4が左端。裁定2026-10-15「上り口の左右は回転方向次第」）。
-実機「6」ではC左・D1左・D1右・B右・D2右の5箇所×2本＝10本になる。
-
-判断は`elevationStairSequence.js`の`stairChDimChains`が**一括で持つ**（面の床・天井の継ぎ目だけでは
-決まらない——踊り場スラブ・壁の向こうの部屋の断面が要るため、帯レイアウト側では判定できない）。
-`layoutBandFaces`は`faceOverride.chDimChains`（{left,right}）を受け取ったら**それだけを描き**、
-既定の「先頭面の左CH寸法」「継ぎ目のhasLeftChDim」は使わない。`buildFaceFigure`も`ctx.chDimChains`が
-あれば面ごとの右CH寸法（段差の有無で決まる従来のもの）を描かない——二重に出る。
-階段の裏面（E5。「天井高さの解決」の節）があるとき、踊り場側の端の鎖の上端（上階天井）はその端の裏面の実測値（四捨五入）になる（`h.soffitEnds`）。壁の向こうの通常断面の端は変えない。
-
-## 階をまたぐ2層帯（階段・吹抜け。問題修正2026-08その7）
-**共通基盤**: 多層帯は`finalizeBand`の`heightUnits`（既定1）で宣言し、`normalizeBandHeightUnits`（`elevationLayout.js`）が
-帯スロット高さを「全帯中の最大unitHeightMm×整数」へ切り上げる——**1層帯（heightUnits<2）は一切動かさない**（リード裁定:
-天井高の異なる階で1層帯まで最大帯高へ引き上がる副作用を実害と判定）。`chooseElevationScale`の予算基準は`unitHeightMm ?? heightMm`
-（2層帯が混ざっても縮尺は1層基準のまま）。boundsには触れない（QA A2の打ち消し問題再発防止）。
-`layoutBandFaces`の`ctx.faceOverride(face,i,defaults)`はfaceCtxへの差し込みフックで、**`hasLeftChDim`の継ぎ目判定より前に
-適用する**（後だと階段帯の面ごとCH寸法が出ない）。`buildFaceFigure`の`ctx.ceilingProfile`（区分線形`[[localX,ceilAbsMm],..]`）は
-天井解決を`ceilAbsAtX`に集約して勾配天井をCUTのpolyline1本で描く（天井追従4箇所=端縦線上端・袖壁断面・アキ上端・注記突き出しも
-追従）。範囲外のxは端点値へクランプし、カバレッジ条件は持たない（QA修正: 旧「描画範囲を覆わなければフォールバック」契約は、
-壁のない端部の延長で描画範囲が広がるだけで勾配天井が本番設定で常にフラット化するバグの原因だった）。**レンダラのpolyline分岐はdash非対応のため、破線が要る線は必ずlineプリミティブで出す**（レンダラは改修しない）。
-
-**吹抜け帯**（`elevationVoid.js`の`buildVoidBand`。`selectElevationRooms`がfeature=VOIDを採用）: 「設置階下階のFLから設置階の
-天井高さまで」を、**自階の面を下へ延長する**方式で描く（下階の面リストを積まない——吹抜けの壁は下階FL〜設置階天井まで連続し
-設置階FL位置に床断面は現れないため）。faceOverrideでsegsを`floorDeltaMm-=drop, chMm+=drop`（drop=`floorHeightBelow`＋下階
-対応RoomのFL差）と変換すると`ceilAbs=floorDelta+chMm`不変で床だけ下がり、端縦線・左CH寸法・建具床合わせが既存機構のまま
-自動追従する。世界座標は全階共通のためCLは自動的に揃う。`lowerGraph`/`floorHeightBelow`（`stairDimensions.js`。
-`_peekBelowGraph`は`_peekAboveGraph`の鏡像）が無ければ1層フォールバック（例外を投げない）。
-
-**どの階の展開図に載せるか**（ユーザー明示指示2026-08「吹抜けの展開は、床断面のある階の展開に描画する」「上部吹抜けが落ちて
-いる部屋の展開と一緒に多層書き」）: 吹抜けRoomは床の無い上階に置かれるが、帯の下端のCUT床線＝床断面は**直下階のFL**にある。
-そこで独立した帯にはせず、**直下階の「吹抜けが落ちている部屋」の帯へ多層書きする**（`buildRoomBandWithVoidAbove`）。
-落ちる先が見つからない／その部屋が帯として出ない場合だけ、従来どおり独立した2層帯（`buildVoidBand`）へ回す。
-
-**多層書きの組み立て**: 面の対応は「軸CLの世界座標＋見る向き」で取る——走り方向の範囲が下階の面と食い違っていても同一面なら
-1枚に統合する（ユーザー明示指示: 吹抜けA面の下に1階壁は無いがX2の左に同一面が続くので一緒に描画。D面も同様）。統合で走り範囲を
-広げたら**端のCLも引き直す**こと: `faceBoundaryLocalX`は`startCLId`/`endCLId`から帯のパネル幅を決めるため、上階のCL idのままだと
-下階graphで引けずフォールバックし、パネルが隣と重なる。start/endのどちらがlo側かは元の面によってまちまちなので値の近さで選ぶ。
-区間ごとの高さは`faceOverride`の`floorSegments`で表す。ここで効くのが**吹抜けには天井断面まで水平断面が無い**（ユーザー明示指示
-2026-08。見えがかりは存在する）という解釈: 吹抜けの範囲でも床断面は下階のFLのまま1本で通り、上階の床位置に断面線は立たない。
-よって区間は「吹抜けの範囲外＝下階の床〜天井」「吹抜けの範囲＝下階の床〜上階の天井」の2通りだけで、**下階にその面の壁があるか
-どうかは断面の有無を左右しない**（吹抜け側だけ床を2FLへ上げると1F床断面が面の端まで届かず、端の壁断面と取り合わなくなる）。
-
-**壁断面・見えがかりは階段展開と同じ2.5D断面エンジンを共有する**（ユーザー明示指示2026-08「処理共有のこと」）: 吹抜けを持つ面
-ごとにSectionCutを1本立て、階段帯と同じ`buildColumns`→`emitColumns`を通す（層は self=下階・above=上階、zRangeは下階FL〜上階天井、
-視線は`viewSign = -face.inward`）。これで1階天井の見えがかり・上階の壁（腰壁・垂れ壁）の断面が階段帯と同じ規則で出る。床線・
-天井線・端の縦線・幅木・建具は従来どおり`buildFaceFigure`の責務（役割分担も階段帯と同じ）。
-落とし穴: **直交壁は面の壁に突き当たって室内側の面で終わる**ためCL上の切断線には届かず、素の`isCutWall`では腰壁等の断面が丸ごと
-落ちる。`line.buttToleranceMm`（面の壁の半厚）で「その厚みの中で終わる壁は切断線を横切る」とみなす。階段帯は未指定＝0のため
-従来と完全同値。
-
-**階段帯（2.5D断面エンジン方式）**: 階段帯の面コンテンツは「切断定義（薄い表）＋タイプ非依存の断面エンジン」の3層構成
-（`app/src/elevation/section/`）で組み立てる。`elevationStair.js`/`elevationBand.js`はエンジン導入で変わらない
-（`elevationStair.js`の`faceOverride`が各entryを`layoutBandFaces`へ差し込むだけ。後述のfloorSpanXフックのみ例外）。
-描画範囲は設置階FL(y=0)〜上階天井`-(floorHeight+CH_upper)`。CH_upperの解決優先順=
-(a)`stairPortEdges(['arrival'])`辺中点のfar側`worldToCell`所有Roomの`roomCeilingHeight` (b)重なるVOID/STAIR_VOID Room
-(c)`upperGraph.defaultCeilingHeight`。
-
-1. **第1層 切断定義（`section/cuts/`）**: タイプ別に「どこを・どちらを向いて・どう切るか」の表だけを持つ。
-   `switchbackCuts.js`（SWITCHBACK/WINDING＝U字系。往路・復路の2レーン＋踊り場。WINDINGは回転部を段付きの
-   踊り場に近似して同じ表に通す。後述「回り階段の展開」）・`straightCuts.js`（STRAIGHT/STRAIGHT_LANDING。
-   単一レーン＋任意の踊り場）・`fanCuts.js`（L_TURN/FLARED/OPEN_WELL。扇形レーン・矩折コーナーは
-   第3層Flightの区分線形モデルで表現できないため常にnull）。返り値は`SectionCut[]`（切断線・視線方向・図のx昇順
-   対応・高さ範囲・第3層Flight/Landingへの参照）。往復間の壁・踊り場壁のような「区間を横断する実壁」は
-   `graph.walls`をレーン間/踊り場位置のCL座標で直読みして検出し、実在しなければ該当seqを挿入しない（合成面
-   `kind:'stairMid'`。壁厚は`wall.materialRange`から求め、ハードコードしない）。往復間の壁は2F（`opts.upperGraph`。
-   純モジュール不変条件維持のためoptsで素通しする。未指定時は設置階`graph`へフォールバック）の壁を見る。
-   `SWITCHBACK以外・stair.cellsが空・floorHeight未確定・面分類不能`はnullを返し、呼び出し側
-   （`elevationStair.js`の`buildStairBand`）は従来の`composeRoomFaces`+`rotateFacesToStart`面順＋2層枠へ
-   フォールバックする（フォールバック契約自体は不変。対象外タイプが増えただけ）。
-2. **第2層 断面エンジン（`sectionProbe.js`/`sectionEmit.js`/`sectionEngine.js`）**: SectionCutを受けて、run方向に
-   レイキャスト列（`collectCutBreaks`→`probeColumn`）を作り、各列のz区間を「切断壁(cut)／同一直線上に縦断された
-   壁(cutAlong)／見えがかり壁面(wall)／アキ(open)／床スラブ(slab・非描画)」へオクルージョン優先順位
-   （cut/cutAlong＝最前面 > wallは距離最小 > 無ければ視線先の床天井位置でslab/openを判定）で分類する。
-   `isRoomWall`（部屋の外周壁）はcutAlong判定から除外する——cutAlongは「往復間の壁」のような自立した内部間仕切りが
-   対象で、面自身の壁までcutAlong扱いにすると`isSightlineShape`の意図的な自壁除外（面の向こうに空間が無いと
-   誤判定される）が壊れるため。線種は`sectionEmit.js`の表が唯一の情報源（切断壁の縁=open側CUT/塞がれ側
-   SILHOUETTE、cutAlongは天井際CUT水平線＋両端CUT縦線の3線＝塗り無しの輪郭のみ、アキのXはbaseFloorZより
-   上=一点鎖線・床断面より下=破線）。**「断面より下・向こう側は細破線」への最終降格は`emitLine`1箇所だけで適用する**
-   （各所に個別の破線判定を持たせない）。開口は描画を貫通させず、そのz範囲に`ZBand.openingPassThrough`が付く。
-   **openingPassThroughの帯はアキ扱いにしない**（ユーザー明示指示2026-09「建具の姿の前に『バツ』不要」）
-   ——そこは建具の姿図が描く場所で、アキのセルに入れると真上の上階アキと連結して1つの塊になり、
-   その塊の対角＝バツが姿図の上を通ってしまう（旧仕様「開口が上階アキと連続する場合の1つの大きなX」＝
-   defer D1。本指示で廃止）。上階アキ自身は単独の連結成分として残るため、そちらのバツは従来どおり出る
-   （範囲が上階アキだけに縮む。同時に「ア キ」の抑止条件からも外れるので文字が付く）。
-**踏面ピッチは「区間長 ÷ (段数−1)」**（`stairRunProfile`。ユーザー実機検算2026-08「3500左CLの上が
-1段目踏面、右へ2500いったところが踊り場高さ、かつ11段目」＝10ピッチ×250）——区間長は「1段目の位置〜
-次区間（踊り場・上階床）の床の位置」で、その間に現れる踏面は**steps−1枚**（最終段の踏面は次区間の床が
-兼ねる、という本関数の元々の仕様）。旧実装は`runLengthMm / steps`で割り、踏面が1枚ぶん細いうえ最終段の
-踏面まで描いていた。`endX = startX + dir*区間長`は不変なので呼び出し側の配置には影響しない。
-
-3. **第3層 階段幾何（`sectionStair.js`）**: 階段の3D的な寄与を、タイプ非依存の区分線形モデル
-   （Flight[]＝直進区間・Landing[]＝踊り場。h(t)を関数で持たず区間ごとの直線で表す）で表す。第1層がどの区間を
-   渡すかを決め、第2層は「切断線がレーンを縦断＝段鼻のジグザグ」「レーンを横切る＝正面視の梯子」「踊り場を縦断＝
-   床のCUT水平線」を切断線とFlight/Landingの幾何関係だけから導出する（タイプに一切依存しない）。
-
-**鉄骨階段のささら（ささら桁。`structure===STEEL`限定）**: 出典
-[鉄骨階段のささら解説](http://kentiku-kouzou.jp/struc-sasara.html)。段板（踏み板）を両側から支える斜め梁で、
-一般的にプレート（最低12mm厚・せい250〜300mm程度）を使う。この記事のとおり寸法を展開図へ反映した:
-- **寸法**: 板厚`STEEL_STRINGER_THICKNESS_MM=12`mm・せい`STEEL_STRINGER_DEPTH_MM=300`mm（250〜300の上限を採用。
-  Stairモデルに桁成フィールドは無いため作図既定値。`section/stairSectionProfile.js`）。
-- **上端線は段鼻の勾配線＋巾木高さ**（ユーザー実機指摘2026-08「ささらの上端は、踏面先端で巾木同寸」）
-  ——最後の段鼻の高さは踊り場床(`landing.z`)そのものなので、上端が踊り場桁枠side辺の上端
-  （`landing.z + baseboardHeightMm`）と**踊り場の縁でちょうど一致**する＝「直進部の斜めささらと
-  踊り場ささらが取り合う」の上端側が幾何的に自動成立する。
-- **下端側はミトレでトリム結合する**（同指摘「（上下共）トリム結合して取り合う」）——斜めささらの
-  下端は勾配の法線オフセット・踊り場桁枠の下端は鉛直せいのため交差角が付く。`stringerBandGeometry`が
-  踊り場に接する端の下端の角を「上端のその端＋桁成」の水平線との交点へ移し（`mitreStart/mitreEnd`。
-  どちらの端が踊り場かは`flight.baseZ`／`baseZ+steps*riser`と`landing.z`の一致で決める）、
-  **桁枠側の下端もその交点から描き始める**（`landingSideMitreX`。手前は斜めささらの下端が外形なので、
-  そこへ桁枠の下端も引くと帯の内側に線が1本余る）。交点は`stringerBandGeometry`という**同じ関数**から
-  両者が取る——別々に計算すると1本の取り合いが2つの位置に分裂する。
-- **蹴込**（`Stair.nosing`。`core/stair.js`の既定20mm。ユーザー指示2026-08で30→20）:
-  **蹴上は蹴込ぶん傾いた「斜めの断面」1本**——足元(段鼻+蹴込)から段鼻へ斜線で上がる
-  （ユーザー実機指摘2026-08「蹴上、踏面に加え、蹴込を20で描画」「踊り場への上り、最後の蹴上面も
-  蹴込つけて斜め断面に」）。**最終段（踊り場への上り）も同じループで処理する**ので例外扱いは無い。
-  踏面は段鼻から次の蹴上の足元まで＝踏面ピッチ＋蹴込。蹴込は踏面でクランプする（超えると蹴上の
-  足元が前段の段鼻より手前へ回り込み輪郭が自己交差する）。**蹴上を斜線1本にしたことで点列の刻みは
-  蹴込の有無に依らず一定**（段鼻＝奇数index）になり、`stringerPrimitives`の段鼻抽出も従来のまま
-  成立する——`stairRunProfile`は`noses`も明示的に返す（推測に頼らないための単一情報源。
-  一度「垂直な蹴上＋水平な蹴込」で実装して刻みが1段2点→3点に変わり、この抽出を壊した経緯）。
-  **階段の描画範囲は flight の始端まで広げる**（1 段目の段鼻が面端の外に出るとき。入口柱の面 Q1 まで上り口辺が下がる構成で、`flightStartOuterBound`が`stairOverhangOuter`と min/max で合成して`outerBound`に渡す。範囲に収めると 1 段目が面端の垂直線に潰れ蹴込・段鼻面・踏面幅が失われた。範囲内なら従来と同一）。
-- **在来木造の段板30・蹴込板垂直**（ユーザー指示2026-10-07「木造（在来）で階段は、踏面の厚みは30、
-  蹴込板は垂直に」）: `stairRunProfile(..., nosing, {treadThicknessMm})`の一般概念「段板の厚み」
-  （既定0＝上記の斜めの蹴上のまま。鉄骨・RCと全goldenは不変）。>0かつ蹴込k>0なら1段の輪郭は
-  蹴込板の足元→(垂直)踏面板の下面→(水平・k)段鼻面の下端→(垂直・厚み)段鼻→踏面、の4点刻み。
-  **段鼻`noses`は従来と同じ位置**（踏面前端の天端）。最終段（踊り場・上階床への上り）は蹴込板を
-  床の高さまで垂直に上げて終える（踏面は次区間の床が兼ねる。段鼻面は描かない）。厚みは蹴上−1に
-  クランプ（自己交差防止）。k=0は段鼻面と蹴込板が一直線＝従来の垂直な蹴上と同一（重複点を作らない）。
-  適用は`stairContribution`が`stair.structure===WOOD`のflightに`treadThicknessMm=30`
-  （`WOOD_TREAD_THICKNESS_MM`）を載せる（判定は`stair.structure`＝階段自体の材種。建物の構造〔在来/2×4・S造の中の木造階段〕では区別しない。裁定待ち）。
-  **床の輪郭`stairCutFloorProfile`は歩行面のまま**（`computeFlightProfile`の`surfaceOnly`。
-  下面の切欠きを床線・遮蔽に混ぜない）。梯子（正面視）・ささら（鉄骨）は不変。
-- **踊り場の床の端＝登り出すflightの蹴込板の足元**（2026-10-08）: 踊り場から登り出すflight
-  （`flight.baseZ==landing.z`＝折返しの復路）を縦断する面では、踊り場の床線
-  （`landingFloorSpanX`。`landingCutPrimitives`と`stairCutFloorProfile`が共有。足元は列の範囲で挟む）を、段鼻位置
-  （踊り場前縁）ではなく`flightRunProfile`の先頭点＝足元（段鼻＋蹴込k）まで延ばす。従来は
-  蹴込ぶん（20mm）の隙間が空いていた。蹴込0は足元＝段鼻で不変。往路の最終段側（蹴込板が踊り場の
-  床と蹴込ぶん重なるT字）は変えない。床の輪郭は flight の先頭点で元から連続しており、統一のため同じ範囲を使う。
-
-**切断線の位置（ユーザー実機フィードバック2026-08-23で全面訂正）**: SWITCHBACKのseq2/4の
-切断線は「往復間のレーン境界（100mmあきの中）」ではなく**往路レーンの中央**（`acrossCoordAt(0.25)`）、
-seq5は**復路レーンの中央**（`acrossCoordAt(0.75)`）——実機で「往路と復路の間に壁が無ければ復路直進部の
-ささらが見える」ため、切断線はレーンの中を通り視線はもう一方のレーン側へ向く、という指摘に基づく
-（`switchbackCuts.js`の`outboundLaneLine`/`inboundLaneLine`・`towardS1`/`towardS0`）。seq2は
-視線が復路側（`towardS1`）、seq4は視線が往路の外側（`towardS0`）——2つとも同じ`outboundLaneLine`を
-共有し向きだけが逆になる。**B/Dは各1本**（ユーザー指示2026-10-07「B1とB2：切断面の違いは？差異がなければ、一本で」。
-旧seq2.5/4.5＝往路だけ／復路だけを描く面は、seq2/4と切断線・視線・向き・層・z範囲がすべて同一で
-同じ切断の重複だったため廃止。往復間の壁は`seq2.face.hasRealWall`・`axisCL`で表す）。この結果、往復間の壁（実在すれば）は「切断線と同一直線上＝cutAlong」では
-なく通常の見えがかり壁（`wall`。距離のある側面。SILHOUETTE=中線）として検出されるようになった
-（旧仕様はcutAlongの3線輪郭＝CUT太線だった。腰壁のz範囲キャップ自体はcutAlong/wall共通のため維持）。
-
-**seq3 は踊り場前縁から `LANDING_CUT_INSET_MM`（100mm）だけ踊り場側で切り、踊り場レベルより上だけ描く**（ユーザー裁定2026-10-08
-「踊り場から上のみ描画。踊り場に隔て板はない」「平場の踊り場なので、端で接するよりちょっと前（踊り場側）で切る」）。
-seq1 は前縁のまま（隔て壁は階段側にある）。seq3 を前縁で切ると、前縁の CL で終わる隔て壁・階段下壁が柱包み（物理範囲 ±57.5mm）で
-踊り場側へ回り込み、切断面にかかって断面（帯）になっていた（moku4 1F）。入れる量は柱包みの回り込み(57.5)・柱の半幅(45)より大きい値で、
-踊り場の奥行き以下なら入れず前縁のまま。前提は木造・薄壁（RCの厚壁や150角超の柱では再び切断面にかかりうる）。
-あわせて seq3 は階段下の部屋の有無によらず踊り場レベルより下を描かない（平場の踊り場）。直進階段の踊り場壁（seq3）は
-実在する踊り場壁そのものを切る別構造のため対象外。これにより下記の「seq1/seq3 は同一の前縁切断線を共有」は撤回（seq3 のみ踊り場側へ100）。
-
-- **側面視（切断面が実際にFlightの中を縦断する）**: 段部の踏面はその切断線で文字通り切られているため、
-  段鼻のジグザグ自体をCUT（太線）で描く（DWD立面図でも踏板は断面として描かれている）。手前側
-  （切断面と視線の間）のささらは切り取られるため描かず、**切断面の向こう側にある自レーン自身の
-  ささら**の輪郭（段鼻を結ぶ勾配線から`STEEL_STRINGER_DEPTH_MM`ぶん下げた`stringerPrimitives`）を
-  DETAIL（細線）で重ねて描く（ユーザー指示「ささらの見えかがりは細線、断面は太線」は維持）。
-  さらに視線前方にもう一方のレーン（他レーン）があり、往復間に見えがかり壁（cutAlong/wall）が
-  無ければ、その**他レーンの近い側（こちら向き）のささら**も同じDETAILの輪郭で重ねて描く
-  （`contribution.secondaryFlights`。seq2のみ設定——seq4は視線が外壁側で他レーンを見ないため
-  不要）。壁があれば`isBlockedByWall`（`columns`のband種別と切断線からの距離で判定）が遮り描かない。
-- **正面視（切断面がFlightに直交＝レーンを横切る）**: ささら自体が切断されるため、両側（acrossLo側・
-  acrossHi側。LANE_GAPが往路・復路間にあれば内側のみ半分ぶん詰める＝梯子と同じ幅を使う）に
-  `STEEL_STRINGER_THICKNESS_MM`×`STEEL_STRINGER_DEPTH_MM`の断面矩形（`flightStringerFrontPrimitives`）を
-  CUT（太線）で描く（ユーザー指示「断面は太線」）。z位置はcut位置での勾配線上の高さ
-  （`flightElevationAt`。継続的な直線補間）で、`baseFloorZ`より下に出る部分は`emitLine`の§5.6最終フィルタで
-  自動的にDETAIL＋破線へ降格する（他の要素と同じ機構）。
-- 木造（`structure!==STEEL`）は変化なし（ささら無し・段部のジグザグをそのまま描く）。
-
-**踊り場回りのささらの連続表現（ユーザー実機フィードバック2026-08-23）**: 踊り場桁枠のうちside辺
-（走行軸に平行＝直進部のささらと同じ位置関係で連続する辺）は、`landing.z`基準の帯ではなく
-「踊り場床断面線+巾木高さ」を上端、そこから`landingFrameDepthMm`(300)下げた線を下端とする帯で描く
-（`RoomFinish.baseboardHeight`を`parseBaseboardHeightMm`で解釈。未設定・解釈不能ならASSUMED既定値
-`DEFAULT_BASEBOARD_HEIGHT`='h=60'＝60mmへフォールバック）。flight（直進部）側の端には縦の閉じ線を
-描かない——直進部のささら自身がその位置に輪郭を持つため、続けて描くことで見た目上連続した1本の帯に
-見える。踊り場床断面線（CUT。`landingCutPrimitives`）自体は変更しない（上下に細線の水平線が加わる形）。
-front/back辺（走行軸に直交）の帯は`landing.z`基準のまま変更しない。
-
-**1層＝1溶接ユニット（StairUnit）**: 鉄骨階段は「両側ささら＋踊り場周囲の桁枠＋上下FLでの躯体取り合い」を1つの溶接ユニットとして扱う（実機の納まり）。`stairContribution`が返す`unit`（板厚12mm・ささら成300mm・踊り場桁枠成300mm＝ささらと同値・`anchorZs`＝躯体と取り合う高さ`[0, floorHeight]+踊り場z`の単一情報源）を`landingFramePrimitives`/`clipStringerToAnchors`が共有する。ささらの点列（段鼻ジグザグ由来）は`clipStringerToAnchors`で始端・終端のyを`anchorZs`（登り口FL・下り口FL）ちょうどへ強制する——ジグザグ生成側の実装詳細に依存せず「ささらは必ずFLで水平に終わる」契約を独立に守る。**踊り場桁枠**（`landing.frame.edges`。front=レーンに接する側／back=反対／side=走行軸に平行な残り2辺）は鉄骨・RC造階段（`hasLandingFrame`）が対象——RC階段はプレート状のささらは持たないが受け梁のコンクリート桁枠は持つため、桁枠だけささらと独立にSTEEL/RC両方が対象になる。側面視・正面視のどちら向きで見るか（broadside=帯輪郭／end-on=断面矩形）は「cut.lineの向きが辺の向きと一致=lengthwise、不一致=crosses」という第2層の一般規則をそのまま踊り場全体に適用して決める（§3.2表）。
-
-**階段下に部屋があるか・ないかで踊り場下の表現が変わる**（ユーザー実機指摘2026-08「階段・踊り場下の
-描画方法は、下に部屋がある・なしで異なる。現時点の描画は下に部屋がある場合」）: `switchbackCuts`が
-`underFloorZ`（＝部屋あり:`landingAbs` / 部屋なし:0）を1箇所で決め、**cutの`baseFloorZ`と帯の
-floorSegmentsの床**の両方がこれを使う。この2つを同じ値にするだけで、実機指示の
-「1FL断面線を描画」（z=0が基準床になり§5.6の破線降格が起きなくなる）と「左右の壁断面線を1FLまで
-延長」（`buildFaceFigure`の面端縦線は区間の床から立つ）が自動的に満たされる——専用の描画分岐は持たない。
-踊り場自体の線は階段寄与（`landingCutPrimitives`等）が描くため床を下げても失われない。
-（ただし木造・RCで部屋なしは断面線で止まる——下の「断面線の外は描画しない」の節。この段落は鉄骨・部屋なしの話。）
-判定は`cellsBeyondBreak`×`stairUnderRoomsOf`（仕上げモードの階段下壁生成と同じ単一情報源）へ委譲し、
-**判定不能なら「部屋あり」へ倒す**——U字構造として認識できない構成等で、判定できないだけの階段まで
-描画が変わるのを避けるため。
-
-**階段下部屋の2a壁は、階段の帯からは実体ごと見えない**（展開図一般化Phase 6・設計
-`.claude/elevation-redesign.md`§5.4「規則へ吸収」で空気ボリューム判定へ置換済み）。`switchbackCuts`が階段室自身（`cut.airRoom`）と階段下に
-指定された部屋の集合（`cut.underRooms`。`cellsBeyondBreak`×`stairUnderRoomsOf`——仕上げモードの
-階段下壁生成と同じ単一情報源）を全cutへ載せ、`section/sectionHits.js`の`isHiddenWall`が壁ごとに
-判定する: 壁の両側のセルが指すRoom（`space/spaceModel.js`の`buildSpaceIndex`・`cellAt`）を見て、
-**片側だけが`underRooms`に含まれ**（両方 or どちらでもないなら対象外）、かつ**その反対側が
-`airRoom`の連結成分（`componentOf`。全高の壁で仕切られた空気ボリューム）と一致し**、かつ
-**壁自身が部屋の生成壁（`isRoomWall`）**である壁だけを非可視にする。isRoomWall条件は
-findMidWallが見つける往復間の壁のような自立した間仕切りを誤って対象にしないための保険
-（実測: 13.stqの2a壁は全てisRoomWall:true）。
-非隠蔽のまま残るのは反対側が階段室と非連結の部屋（例13⇔1）か片側が建物の外の壁。ユーザー実機
-指摘2026-09「「6」D1: 「13」の壁関連（2本の縦線とアキばつ）は、階段より下なので描画しない」——
-階段下の空間の壁で、その展開は階段下部屋自身の帯（「13」A〜D）が描く。
-平面図が破れ線より階段踏面側で2a壁を描かないのと同じ規約（`finish/stair/stairUnderClip.js`）。
-
-**Phase 6b-2 C-1（設計`.claude/elevation-redesign.md`§5.11）で候補収集の扱いが「候補から消す」から
-「描かない実体（`ZBand.kind:'hidden'`）」へ変わった**——`isHiddenWall`該当の壁は`sectionHits.js`の
-`probeColumnHits`から消えず`hidden:true`を付けて候補に残り、選ばれれば`wall`/`distMm`等の
-付帯情報を一切持たない`hidden`帯になる。旧方式（候補ごと消す）は「その先の列が奥行き上限を超えて
-`open`になりアキのバツが誤って出る」副作用があった（実機「6」C: footprint外接矩形の辺に載る部屋13の
-2a壁を隠しそこねる旧バグと合わせ、アキが帯内x 0〜1492.5のはずが0〜2885まで広がっていた）。`hidden`
-帯は`overCutWall`判定にも当たらない独立kindで、アキ・見えがかり線のどちらの対象にもならない。
-
-**列の分割（`sectionProbe.js`の`collectCutBreaks`）は`isHiddenWall`を判定しない**（＝非可視かどうかに
-関わらず他の壁と同じ規則で常に割る。§5.11の原案どおり）——QA是正2026-09で一度「非可視の壁は
-割らない」（isHiddenWallを列分割にも効かせる）を試したが、面C自身の右端はこの壁自身の
-materialRange境界に依存しているため、割らないと隣接CLの位置（1442.5）へずれて壊れることが
-実測で判明し不可だった。**その代わり、hiddenと隣接する
-ことによる副作用は`sectionEmit.js`側の2箇所で個別に抑える**——`cut.airRoom`/`cut.underRooms`が
-帯の全cutで共有される（`switchbackCuts.js`）ため、同じ2a壁がこの壁自身とは無関係な別の面
-（D1・A・D2等）でも非可視候補になり、その壁の列境界に隣接する**別の**実体の縁線が誤って生える
-回帰が出ていた（裁定9130007「13の壁関連の2本の縦線は描画しない」に反する）:
-1. `uncoveredZRanges`（x方向・隣接列比較）: 隣接列が`hidden`帯なら`cut`帯と同じく「覆う」側に
-   数え、凹みの縦線を描かない（hiddenの裏にも実体があり視界は途切れていないため）。
-2. `ownsBoundary`（z方向・同一列内の上下比較）: z方向で隣接する帯が`hidden`なら、その境界の
-   天端/下端線を描かない（`visibleDepthMm`が`null`＝「何も見えていない」を返す既存規則のままだと、
-   hiddenの手前・上下に無関係な壁の縁線を誤って生やしてしまうため）。
-
-**断面線の外は描画しない**（ユーザー明示指示2026-09「展開図では、断面線の外は描画しない」
-「階段下に部屋がある場合、断面下は描画しない」「階段下に部屋がない場合、階段は設置された部屋の
-一部なので、階段下の設置階の床断面または（連続する階段なら）階段の一部まで描画」）。
-**断面線は1本の折れ線（FloorProfile。`elevationFloorProfile.js`）で表す**——帯の床（floorSegmentsのステップ
-関数）と、**その切断が縦断する**階段寄与（`stairCutFloorProfile`）のmax。実機「6」D2のように
-2FL断面→復路の階段断面→踊り場断面→壁断面と続く**閉じた輪郭**は、ステップ関数では表せない
-（ジグザグの下＝踊り場と2FLの間を切れない）。規約は天井側の`ceilingProfile`の双子に揃えてある。
-**分岐は2条件の論理和**（ユーザー裁定2026-10-08「階段断面、踊り場、壁、設置階上階天井で展開断面が
-完結しており、その外側（階段下等）は描画しない」「『階段下部屋の有無』は鉄骨階段の判定としては
-正しい。主要構造が木造の階段（鉄骨階段もあり得る）の場合は、断面線が繋がっているか/いないか。
-蹴込板がなく、踏面だけで構成された階段は、（階段）下を描く」）: (a) 階段下部屋がある（`hasRoomUnder`。
-鉄骨はこれだけ）、または (b) その切断が縦断する階段寄与があり**断面線が繋がっている**
-（`stairSectionIsClosed(stair)`。蹴込板で階段下が閉じる＝現状は木造・RC。RCは斜スラブで下面まで繋がる〔裁定2026-10-08〕）。どちらでもなければ輪郭を渡さない
-（＝下限なし＝設置階FLまで。部屋が無ければ帯の床は0なので、そもそも下に何も無い）。縦断する階段寄与の
-無い面（seq1/seq3）は従来どおり渡さない。将来 Stair に「蹴込板なし」属性が入ったら、木造でも
-それが立つ階段は (b) が false になり下を描く（属性は未追加）。旧記述「1FL断面線を描画」「左右の壁断面線を
-1FLまで延長」（上のunderFloorZの段落）は**鉄骨・部屋なしだけ**の話に絞られた（木造・部屋なしは断面線で止まる）。
-**(c) 直下階に階段があり、その破れ線先セル（`cellsBeyondBreak`。U 字では踊り場より上側のレーンだけ）の上は自階の床が無い——その列では切断面にある自分の段板の天端（端ちょうどに立つ切断はその端の歩行面）が断面線**（`section/lowerStairVoid.js`。ユーザー指示 2026-10-19 roof-test1 2階 階段 A「設置階下階に階段がある場合、下階分は断面を書かない」）。その下は下階の階段が上がってくる吹抜け＝下階の階段帯の空間で、2FL の床線・隔て板や壁の断面の縁・段板の下辺・開口のバツはこの帯の内容ではない。判定は材質・階段タイプによらずセルと切断線の幾何だけ。この列に限り**階段自身・構造・アキ・開口も断面線より下を落とす**（対象は吹抜けの区間のうち切断面の段板がある所だけ——縦断する切断〔seq5/6〕の断面線は勾配の近似なので階段自身のジグザグは切らない。区間の境界に立つ縦線〔吹抜けの縁の壁の断面の縁〕は輪郭の段の低い側ではなく区間の内側の高さで切る）。区間の境界が自階の切断壁（隔て板）の材の中に落ちるときは、**壁の断面の縁は壁の吹抜け側の面から上、床線と階段自身・構造・開口は壁の手前の面で止める**（`lo/hi` と `floorLo/floorHi` の 2 つの境界。ユーザー裁定 2026-10-19「穴の縁は隔て板の面」＋指摘「2FL に隔て板の下線が残った。不要」＝吹抜けの縁に立つ壁の下に床線や 2FL の床梁の見えがかりを通さない。面の端の外壁は端がその手前の面なので寄らない）。直下階は `buildStairBand` の `ctx.lowerGraph`（展開モードの直下階 peek。probe も同じ）。**自階の上り口の開口（天井の縁＋アキのバツ）もこの区間には描かない**——敷居がこの帯の床ではなく、その開口は下階の階段帯が上階の開口として描く（ユーザー指示 2026-10-19「2FLより上、X1+910からX2まではあきバツは不要」。上階の開口は不変）。帰結（roof-test1・moku4-3 の 2階 A）: 復路側の 2FL 線は隔て板の面で止まり、X2 の縦線と隔て板の縁は復路初段の天端から、段板の断面は天端の線 1 本、復路側の自階の開口は無し。往路側（自階の床がある）・1階・seq5/6 は不変。既知の限界: seq5 の到達辺の外（面の端〜到達辺）は切断面の段板が無く帯の床 0 のままで、2F ホールの壁・天井線（0〜2400）が残る（別件）／直進系の帯は共通経路を通るが、U 字系専用の後処理（この下階の階段の吹抜けなど）は持ち込んでいない（裁定 2026-10-22）。
-**縦断していない寄与は輪郭に入れない**——横切る（正面視）レーンは切っていない＝断面線ではなく、
-`secondaryFlights`（隣レーンのささら）は見えがかり。また**短い寄与の端点値を面の全長へ延ばさない**
-（合成は各寄与の自分のx範囲の中だけ。踊り場の1点が面全体を覆うと階段の勾配を飲み込む）。
-**対象は壁の断面・見えがかり・アキ・建具の姿だけ**（`clipContentAboveDrawnProfile`。
-`contentForCut`が`stairContent`/`structuralContent`を通さない）——階段自身の断面（踊り場桁枠・
-ささら断面は踊り場から桁成ぶん下がる）と階段の見えがかり（正面視の破線梯子・1FL足元線・
-ささらの端面）、構造梁（踊り場受け梁も梁成ぶん下がる）は**断面線そのもの／階段の一部**で（ただし**天が輪郭より梁成以上離れた梁は落とす**〔2026-10-08裁定。階段下に浮く設置階FLの梁断面。`structuralPrimitivesForCut`の`floorProfile`。踊り場受け梁（role:'landing'）と、天が梁成以内で輪郭に届く梁は残す〕）、
-ユーザー裁定2026-09で「描く」側（実機「6」C: 左2本＝往路ささらの端面は残す）。
-**水平線は輪郭より下のときだけ落とす**（非対称）——床断面線そのものを巻き添えにしないため。
-**アキのバツは線を後から切らずセルの段階で輪郭まで持ち上げる**（`emitOpenGapMarks`。階段帯が
-`gapFloorProfile`として断面線を渡したときだけ。展開図一般化Phase 6b-2 C-2の「二重にクランプしない」は
-2026-10-08に**階段帯についてだけ撤回**——部屋帯・吹抜け帯は渡さず従来どおりband自身の下端）——線を切ると
-Xの形が崩れる。持ち上げ量は**セルのx範囲での輪郭の最大**（斜めの輪郭では中点だと下に残る）。
-旧実装は「基準床より下＝向こう側＝細破線へ降格」（§5.6）だけを持っており、seq2は`baseFloorZ:0`で
-その降格すら掛からず、D1の面端の縦線が踊り場の下＝階段下部屋の中まで1FLから伸びていた。
-**面端の縦線（壁のある端のCUT縦線）の下端も輪郭**（`buildFaceFigure`の`ctx.floorProfile`。未指定の
-通常部屋帯・吹抜け帯は現行と完全同一）——床線・段差縦線・天井は触らない（下記で自動追従する）。
-
-**区間の床線は「輪郭＝その区間の床高さ」の範囲だけ**（`floorSegments[].flatLineSpanX`。区間の床線を
-描く範囲を狭める既存フック。既定=未指定=区間いっぱい＝従来どおり）——**輪郭から導出する**
-（`withFlatLineSpans`）ので、断面線とレーン・踊り場の床線が食い違いようがない。階段下に部屋がある
-とき、レーンの1FL線は**上り口の外側（壁のない端部のはり出し）にだけ**残り、踊り場の床線は
-**ジグザグの最下点（踊り場側の段鼻）が終点**になる。旧実装は「上り口端±段鼻の出」の手計算で、
-これは「階段の足元がちょうど面の端にある」ことを暗に仮定した式だった（実機ではそうなるが、
-足元が壁芯側＝面の外から始まる構成では成り立たない）。さらに旧`hideFlatLine`は区間を丸ごと
-非描画にしており、はり出しごと消えていた（ユーザー実機指摘2026-09「「6」D1: 1階Y2から3500、
-下りた階段の先（左側）に1FL断面はり出しが正解」）。
-
-**設置階FL・上階FLの断面線のはね出し**（ユーザー指示2026-10-15「設置階初段断面が描画される面：設置階FL断面はね出し／
-設置階上階最終段断面が描画される面：設置階上階FL断面はね出し」）: 初段の足元が面の端の外にあっても（木造の1段目は隔て板の
-柱の前縁＝通り芯−57.5から立ち上がる）、端の区間の1FL線は壁のない端部の延長から足元まで残す（それまでは区間の内側だけを
-見て床線ごと落ちていた）。最終段の天端がある端に壁が無ければ、上階FLの断面線（CUT）を天端の外側の点から壁のない端部の延長
-まで引く（`upperFloorEndLines`）。端に壁があれば足さない（上階の平面が壁の外へ続くはり出しは下記の2FL線の規則のまま）。
-直進階段（`buildStraightFaceSequence`）はこの経路を通らない＝到達端に壁が無い直進階段の上階FLはね出しは未対応（実データなし）。
-
-**復路下の仕上げ空間**（ユーザー指摘2026-10-15「moku4-3.stq 1階展開図 階段 B2: 復路下天井仕上げ断面・Y4から910に壁断面・
-床断面が正解。1階天井と1階床の断面線が途中で切れて完結していない」。前提は data-model.md「復路下の壁」＝木造階段の復路の下は
-仕上げられた空間で、天伏ではその天井は復路の裏面〔傾斜天井〕）: 復路レーンを縦断する seq5 で、その階段に復路下の壁（`stairUnderReturnLines`
-/`isStairUnderReturnWall` の座標照合）が立ち、切断線がその壁と交差するなら、壁の踊り場と反対側（`cut.landingEnd` の反対＝到達辺側）
-から壁の**仕上げ空間側の面**までを仕上げ空間とみなす（`underReturnSpaceOf`。壁の厚みは含めない＝壁の断面線は階段下スペース側の面の
-縦線だけで、踊り場側の面・天端は段の裏の断面線の下＝描かない側。ユーザー指示 2026-10-15「Y4から910に壁断面線は、階段下スペース側
-〔左側〕のみで良い」）。壁・裏面の立体は壁の天端（`addUnderReturnTops`）と**同じ供給源**
-`ceiling/stairSoffit.js stairUnderReturnSoffit`（階段→壁の照合→sections の検査→`stairSoffitSolids`。蹴上は階高、床は層スタックの
-`floorZFor(室, 自階の層)`＝床段差込み）から引く。(1) 断面線（`floorProfile`）はその範囲を**床（階段室の床）に置き換える**
-（`floorProfileWithFloorOn`。壁の厚みを含む。境目は垂直の段）——床線（`withFlatLineSpans`）が壁まで伸び、壁の断面（両面の太線）が
-クリップされなくなる。発生源は、この範囲でも復路の段板の裏を断面線の下限にしていたこと（「断面線の外は描画しない」が仕上げ空間を
-丸ごと落としていた）。階段下に部屋があって帯の床が踊り場（`underFloorZ`）でも、この空間の床区間は階段室の床（`floorSegments` を
-3 区間に分ける）。(2) 天井＝復路の裏面を切断線の深さで評価した折れ線を**天井仕上げの断面線（中線）**として足し
-（`underReturnCeilingPrimitives`）。到達辺側の端は **Y4＋壁厚/2（裏面の始まり＝最上段の段板の前縁）と FL＋CH の交点**（ユーザー指示
-2026-10-15「天井線の Y4 側は、Y4＋壁厚/2 と FL＋CH の交点から」。裏面の実高ではなく CH から壁へ下る 1 本の線。垂直の段は無い）。
-壁側の端は裏面が壁の仕上げ空間側の面に出会う点で、壁の面の縦線（断面エンジンは天端＝壁の厚みの最も低い点の裏面まで）を
-そこまで太線で延ばす。本体の中の判定〔下記 (3)〕もこの線を下面にする。(3) 復路の**本体の中**
-（裏面〜段板の上面＝床へ下げる前の断面線）にある壁の断面・見えがかり・アキは落とす（`clipContentInsideStairBody`。
-`clipContentAboveDrawnProfile` を z 反転で裏面より下、そのままで本体より上に 2 回掛ける。範囲は裏面の節列が覆う x だけ。本体の上
-〔復路の上の空間〕は残す。rect〔建具の姿〕は範囲で x 方向に割って中の片は裏面より下だけ、line/polyline/rect/text 以外と範囲外は
-1 回だけ素通し＝二重に出さない。既知の限界: 範囲の中の rect は復路の本体より上の部分も落ちる〔復路の上に建具の姿は無い前提〕／範囲の端ちょうどの縦線は「段の低い側」の規則で切らない／範囲の端から
-GAP_EPS×3 の帯では本体より上の線も落ちる〔mm 未満〕）——stair-ports-test5 では仕上げ空間の奥の開放辺のアキ・遠側の天井線が段板の
-中を通っていた。既知の限界: 階段室の floorLevel≠0 では踊り場側の帯の床（`underFloorZ`。`switchbackCuts` が床段差を見ない＝変更前
-から）は 0 のまま、仕上げ空間の床区間だけが床段差込みになる。(4) 上階 FL の
-はね出し（`upperFloorEndLines`）は床へ下げる前の断面線（`entry.stairFloorProfile`）で最終段の天端を探す（下げた断面線には天端が無い）。
-(5)〔廃止〕切断壁の天端を細線にする配線（`cut` ヒットの `junctionTop`）は、壁の天端を描かなくなったので外した（見えがかり壁の
-`junctionTop` はそのまま）。(6) 輪郭の垂直な段の上に載る縦線（壁の断面の面が段の位置に一致）は、両側のうち低い方の輪郭で切る
-（`clipSegmentAboveProfile`。段の上で `drawnFloorProfileZAt` は左側の値を返すため、壁の左右の面で結果が食い違っていた）。段板の裏
-（ジグザグ）は階段自身の断面として従来どおり残る（仕上げの線はその下に平行）。鉄骨・下階に続き階段がある（復路下の壁が立たない）・
-seq5 以外の面・直進系は不変。(7) **巾木**（ユーザー指示 2026-10-15「階段下スペースは『ホール』なので巾木が見える」）: 階段帯は巾木を
-描かない（`skipBaseboard`）が、この空間だけは**到達辺の外側の部屋**（空間が開く先＝ホール。到達辺から面の外へ 100mm の点を
-`probeCtx.cellAt` で引く）の `RoomFinish.baseboardHeight`（図側と同じ `parseBaseboardHeightMm`）で、床＋h に細線を引く
-（`underReturnBaseboardPrimitives`）。**到達辺側の面の端に壁が無いとき**だけ外側の部屋を見る（壁があれば外側は壁の向こうなので階段室
-自身の巾木。解釈できなければ引かない）。範囲は到達辺側の面の端〜壁の仕上げ空間側の面。到達辺に壁が無く面の壁が到達辺の外へ続くなら、その小口まで伸ばす（`wallContinuationBeyondFaceEnd`。壁のない端部の延長量が上限。2026-10-15）。続かないなら面の端から（はね出しへ
-伸ばさない。復路下の壁自身は断面なので引かない）。外側に部屋が無い・解釈不能・裏面より高いときは引かない。golden: moku4-3／moku1-6／ceiling-zone 3 文書／stair-ports-test5 の 1階 階段帯の seq5 だけが変わる
-（stair-ports-test5 では、仕上げ空間の奥の開放辺に壁端の縦線が床から裏面まで現れ、遠側の天井線とアキのバツは裏面より下だけ残る）。
-天井の段を到達辺（Y4）ではなく裏面の始まり（最上段の前縁）に置くのはリードの既定（裏面の立体がそこから始まるため。到達辺に置くなら
-`solid.zAt` のクランプ値で平らに延ばす）。
-
-**床線が境界まで来ていない区間には段差の縦線も引かない**（`buildFaceFigure`）——レーンと踊り場の
-境界に「1FLから踊り場までの立ち上がり」は存在せず、そこに縦線を出すと階段の下（＝階段下部屋＝
-断面の中）に線が生える。
-
-**構造梁の加算レイヤ（`section/sectionStructure.js`。WP-C）**: 踊り場受け梁（`structural-model.md`「踊り場受け梁」節）を含む構造梁を、第3層（階段幾何）と並ぶ別の寄与源として展開図へ足す。`cut.layers`（自階・上階のgraph参照＋floorZMm）の各`graph.beams`をそのまま拾い、`topZ=floorZMm+beam.levelOffset`で高さを決める——構造梁は「その梁が実際に立つ階のgraph」に帰属するため、伏図と同じ帰属をそのまま展開図の高さへ投影するだけで正しい階の梁が正しい高さに出る。切断線と直交＝断面矩形（CUT太線）、平行かつ幅の帯内＝上端・下端・両端縦線（DETAIL細線）——階段のささら・踊り場桁枠と同じ「cut.lineとの向き関係」の一般規則。**レイキャストの塞ぎ判定には参加しない**加算レイヤだが、見え掛かりの梁は**壁と柱包みに隠れる区間を描かない**（下の「壁の材厚に埋まる梁・柱は描かない」節の末尾）。baseFloorZより下・天井より上は`emitLine`の既存フィルタで自動的に細破線へ降格する（新規の破線判定は持たない）。`elevationStairSequence.js`の`contentForCut`から`stairPrimitivesForCut`と並べて1回呼ぶだけで配線される——直進系の帯も共通経路を通るが、構造梁などU字系専用の後処理は持ち込んでいない（裁定2026-10-22）。
-
-**ゴールデンゲート**: 通常部屋帯（`buildRoomBand`）・吹抜け帯（`buildVoidBand`）はエンジン導入の影響を一切受けない
-（`elevationSectionGolden.test.js`が出力プリミティブの正規化JSON完全一致で固定・常に緑必須）。階段帯は一般規則を
-優先し、手書き出力との一致度は問わない——ただしユーザーが実機で確認した意味論（歩行順1〜5・見返りの梯子破線・
-往復間の壁の断面・アキXの配置・B/D面の鏡像関係・2FLの中線・CH寸法の2FL分割・踊り場床CUT線など）は
-`elevationStairSequence.test.js`の意味論アサーション（座標の逐一一致ではなく「〜な線が存在する」「順序関係」）が
-保存する——落ちたときにユーザーが実機で見て困る変化かどうかが仕分けの基準。
-
-**帯の縦CH寸法線を2FLで分割**: `layoutBandFaces`（`elevationBand.js`）のi===0（帯先頭面）ブロックに`faceOverride`
-経由の`chDimSplitAbsYs?:number[]`（分割する絶対高さの配列。床基準・正=床上）フックがある。未指定時（既定）は
-現行どおり1本のまま。SWITCHBACKのseq1（歩行順シーケンスの先頭=帯先頭面）は`chDimSplitAbsYs:[floorHeight]`
-（=2FL）を設定し、結果として左CH寸法が「踊り場床→2FL」「2FL→2F天井」の2本になる。
-
-**腰壁越しに向こう側の床・天井断面線を壁位置で打ち切るフック（defer解決・§7 D2）**: `buildFaceFigure`に
-`ctx.floorSpanX?:{lo,hi}`（既定=現行の`drawnX0`/`drawnXRun`。未指定時は出力不変＝ゴールデンゲートで担保）を
-追加した。往復間の壁・踊り場壁が腰壁のときseq2/4系へ値を供給する配線は実機確認前提のため今回は未接続
-（フック自体は`elevationStair.js`の`faceOverride`が透過する準備済み）。
-
-**dirSignは部屋のコンパス向きではなく階段自身の歩行方向から導出する（`reorientFace`。QA実機フィードバック修正）**:
-`classifyFaces`が返す`wEntry`/`wLanding`/`wOut1`/`wOut2`（延いては`cut.dirSign`）は素のままだと`composeRoomFaces`の
-A/B/C/D向き（部屋の絶対的な世界座標の向き）で決まり、「上り口→踊り場が図の左→右」という階段の歩行方向とは
-無関係——部屋の向き次第で一致も不一致もありうる（テスト用の矩形室では偶然一致し不具合が長らく検出されなかった）。
-`switchbackCuts.js`/`straightCuts.js`は`reorientFace(face, desiredDirSign)`で全ての面をこの歩行方向基準へ
-明示的に再正規化してから使う——`desiredDirSign`はwEntry/wLanding=幅方向(s=0→s=1)、wOut1(seq2)=走行方向
-(上り口t=0→踊り場t=tRun)、wOut2(seq4)=SWITCHBACKはseq2の鏡像・STRAIGHTはseq2と同一、から独立に導出する。
-floorSegments/ceilingProfile（face基準）とcontent（cut.dirSign基準）の両方が同じ基準になるよう、必ず両方に
-同じ`desiredDirSign`を使うこと（片方だけ直すと左右が食い違う）。
-**階段帯の展開記号は`cut.viewSign`（視線の向き）だけで決まる**（`letterOf(cut.line.isVertical, -cut.viewSign)`。
-`viewSign`は視線が向く世界方向＝`isSightlineShape`の契約「見えがかり候補はlineから+viewSign側」なので、
-面の規約`letterOf(isVertical, inward)`へは符号を反転して渡す）。ユーザー実機指摘2026-08:
-「「6」B2：Dが正解。先のDは往路階段で切断して…このDは、復路階段で切断して、「5」D1と同面の壁を見ている」。
-**dirSignから引いてはいけない**——dirSignは歩行方向で決まる**作図順**であって視線ではなく、
-seq2とseq5は同じ`towardS1`（同じ向きを見る）なのにdirSignが違うため別記号になっていた
-（seq4だけが`towardS0`＝逆向きでB）。一度dirSign基準（`letterForDirSign`）で実装して実機で否定された経緯。
-**階段の展開記号が階段ごとに変わるのはこの逆引きの結果であり、例外規則ではない**（「のぼり方で作図順が
-決まる」）。labelは`stairFaceSequence`の末尾で`labelFaces`により**歩行順**に採番し直す——部屋のコンパス順で
-採番済みのlabel（B1/B2…）を持ち込むとreorient後のletterと食い違う。合成面（`buildMidWallFace`）にも
-letter/labelを持たせる（旧実装はundefinedで、その帯だけ展開記号が出なかった）。SWITCHBACKのseq4は往路(outbound)の鏡像
-（`stairCut`は`flights[0]`）であり復路(inbound)ではない——踊り場側が低く上り口側が高くなる復路をそのまま
-描くと「左から右へ下る」という実機の見え方と矛盾するため。
-
-**stairContributionのacrossLo/acrossHiもflipを反映する（QA実機フィードバック修正R2）**: `sectionStair.js`の
-`stairContribution`は往路(outbound)・復路(inbound)のacrossLo/acrossHiを`stair.flip`を無視して
-`roomBounds`から直接求めていたため（`makeFrame`の`acrossAt(s)`はflip===trueでs反転(ss=1-s)するが、旧実装は
-それを反映しない別経路だった）、flip===trueの実機データでは往路の梯子・ジグザグが幅方向で逆側に描かれた。
-`f.pt(0,s)`（switchbackCuts.jsの`acrossCoordAt`と同じ導出）でs=0/s=1の世界座標を直接求めてから
-outbound/inboundのacrossLo/acrossHiを組み立てる——`reorientFace`と同種の「向きに関する値は必ずmakeFrame
-経由で導出し、部屋のbounds等から直接計算しない」という不変条件を明文化する。
-
-**階段の断面ジグザグの向こうに見える壁の輪郭線は後処理で除去する（QA実機フィードバック修正R2）**:
-レイキャスト（`probeColumn`/`emitColumns`）は壁・開口の位置しか知らず、階段自体（段板・ささら）の占有形状を
-知らないため、壁が無い（またはレーンの延長上に部屋自身の壁がある）実機構成では、seq2/seq4のレーン区間で
-「階段の向こうに見える壁」のz=0(設置階FL)の輪郭線が、断面ジグザグと無関係に全幅で描かれてしまう。
-`elevationStairSequence.js`の`contentForCut`が`clipWallFloorEdgeUnderZigzag`で、断面ジグザグ
-（`stairPrimitivesForCut`が返すpolylineのx範囲）と重なるz=0の壁縁線を後処理として取り除く——
-レイキャスト自体を階段形状で塞ぐ一般化（本質的な解決）ではなく、既知の症状（z=0の水平線）に限定した
-対症療法である点に注意（蹴上に面材がある場合の遮蔽全般はモデル拡張が必要・別途defer）。
-
-**意図的差分（設計判断として保持）**: 往復間の壁・踊り場壁の断面表現は塗り矩形(rect)から3線（天井際CUT水平線＋
-両端CUT縦線の輪郭のみ）へ変更した。SWITCHBACKのseq1/seq3は同一の踊り場前縁切断線W(tRun,0→1)を共有する（**2026-10-08撤回**: seq3は踊り場側へ100mm入れて切る。上の「切断線の位置」参照）
-（wLandingを「距離のある見えがかり候補」として一般規則から自然に検出させるため）。seq1の壁2縁の線種（旧手書き仕様「wallZone側=太・
-ladderZone側=中」という位置基準）は一般規則（§5.6: 縁が接する側がopenならCUT・塞がれていればSILHOUETTE）に
-置換した——実機構成（往路・復路レーン上に2F床が無く、往復間の壁の向こう側が2F吹抜け＝open）では一般規則から
-同じ見た目（開いた側の縁=CUT）が自動再現される。対称に両側とも塞がれた構成（2F側に床がある）では両縁とも
-SILHOUETTEになる。
-
-**修正済み**: `buildMidWallFace`（合成面）の`lo/hi`は`loWorld/hiWorld`の大小関係に関わらず（呼び出し側は歩行方向の
-都合で渡すため`travelSign<0`だと`loWorld>hiWorld`になりうる）、`elevationFaceList.js`の断片化レシピと同じ
-`Math.min/max`で正規化する（対応するCLId=`startCLId/endCLId`も入れ替える）。旧実装は未ソートのまま代入しており
-`run`が負値になるバグがあった。
-
-巾木初期値（`木製出幅木`/`h=60`）は**ユーザーがRoomを新規作成する経路でのみ**適用する（`applyDefaultBaseboard`）。
-`RoomFinish`コンストラクタでは設定しない——復元経路は「新しいRoomを作ってから空でないフィールドだけ上書きする」実装のため、
-既定値を非空にするとクリア済み`''`が復元のたびに巻き戻る。展開側は`parseBaseboardHeightMm`が`"h=<数値>"`表記だけ解釈し、
-解釈不能なら非描画。床まで達する開口の区間は巾木線を途切れさせる。**巾木は床の段差にも追従する**——床断面線（区間水平線＋段差縦線）を
-hだけ上へそのまま平行移動した連続ポリラインとして描く（水平方向にはオフセットしない。段差縦線を開口がまたぐ場合は床側同様に途切れさせる）。
-
-**実機フィードバック第3弾（鉄骨階段）の一連の修正**: いずれも`.claude/elevation-model.md`本節の
-2.5D断面エンジン（`app/src/elevation/section/`）を対象とする。根本原因はA2（他は全てA2の周辺・派生）。
-
-- **A2（根本原因）: 見えがかり壁のz上限は「上階に実Roomがあるか」で決める**。`sectionProbe.js`の
-  `probeColumn`が`kind:'wall'`候補のz上限を、常に自層（self）の視線方向所有RoomのCHで無条件に
-  切っていたため、上が吹抜け（上階に実Room=VOID/STAIR_VOID以外が無い）でも1F天井高さの水平
-  キャップ線が誤って出ていた。`resolveWallCapZ`が、selfレイヤーの壁候補についてのみ、壁の実位置
-  （axisCL.effectiveValue×worldMid。probeOwnerRoomと同じ`-viewSign*PROBE_EPS_MM`オフセットで
-  境界セルの不安定性を回避）でabove層を1点プローブし、実Room（`isRealRoom`。VOID/STAIR_VOID以外）
-  があれば従来どおり自層CHでキャップ、無ければabove層の天井（無ければ`cut.zRange.hiZ`）まで
-  拡張する。above/belowレイヤー自身の壁候補・cutAlong/cut（切断壁）は対象外（壁自身のkneeDrop/
-  実存在範囲のまま）。この拡張により同一の壁がabove層のfloorZ/ceilZ由来の余分なzBreaksで
-  内部分割されることがあるため、`mergeAdjacentZBands`（z方向の隣接band併合。x方向の
-  `mergeColumns`と対）で実体（kind/wall参照/distMm/layerRole等）が同じ隣接band同士を1本へ戻す
-  ——ただし`cut.baseFloorZ`の境界だけは併合しない（emitLineの§5.6最終フィルタが
-  「band全体がbaseFloorZ以下か」で降格を決めるため、そこを併合すると「下側だけ破線」が
-  再現できなくなる）。
-- **B: ささらのオフセット後多角形をFLでクリップ**。`stringerPrimitives`（section/stairSectionProfile.js）の
-  段鼻を結ぶ直線からのオフセットは、flightがz=baseZ(登り口FL)始まりの場合、オフセット先の頂点が
-  FLを超えて突き出すことがある（法線が下方向＝FL側を向くため）。`zBounds:{yLo,yHi}`（省略時は
-  挙動不変）を追加し、Sutherland–Hodgman法の単純な半平面クリップ（`clipPolygonToYRange`/
-  `clipHalfPlaneY`）でz=baseZ・z=baseZ+steps×riserの水平面を超えないよう切る。呼び出し側
-  （`sectionStair.js`）は`flightZBounds(flight)`（`clipStringerToAnchors`と共有する単一情報源）を
-  各stringerPrimitives呼び出しへ渡す。
-- **C: emitLineにneverDowngradeオプションを追加（リード裁定で契約変更を承認）**。
-  `emitLine(cut,x1,z1,x2,z2,role,{neverDowngrade})`——既定false（既存呼び出しは無変更）。trueは
-  §5.6最終フィルタ（baseFloorZ以下/天井断面より上→DETAIL+dashedへ強制降格）を丸ごと無効化し、
-  渡されたrole・dashをそのまま使う。**CUT断面**（ささら12×300矩形=`stringerRectLines`・踊り場床
-  CUT線=`landingCutPrimitives`・踊り場桁の見返り矩形=`landingFramePrimitives`のend-on分岐）は
-  neverDowngrade:trueでbaseFloorZより下でも太線実線のまま。**ささらの見えがかり帯**
-  （`landingFramePrimitives`のbroadside分岐＝踊り場桁枠のside/front/back帯）も同様に
-  neverDowngrade:trueで細線実線のまま（`stringerPrimitives`自体は元々rawなpolylineでemitLineを
-  経由しないため元から降格対象外）。**降格が残るのは踏面梯子（正面視。`flightLadderPrimitives`が
-  `flight.baseZ<cut.baseFloorZ`のとき明示的にdash指定）と壁断面の見えがかり（一般規則の
-  'wall'/'cut'/'cutAlong'。sectionEmit.js）だけ**、という裁定。
-- **D: ささらの外側(壁側)〜壁の空きにアキX（2026-10-07 撤回。seq1 に出さない。`elevationStairSequence.js`の`wallGapXMarks`は削除。
-  `stairWallGapZones`・`WALL_GAP_MIN_MM`も削除済み）**。（以下は撤回前の記録。関数は現存しない）`stairWallGapZones`（sectionStair.js。新規export）が、
-  crossesFlightする各flightについて、ladderAcross（LANE_GAP調整済み。isSteel=falseはflight自身の
-  境界をそのまま使う）の「室の真の外縁trueAcrossLo/Hiに一致する側」だけをcut.line.lo/hi（壁）と
-  比較し、`WALL_GAP_MIN_MM`（=150。ASSUMED既定値）を明確に上回る差があれば空き区間を返す
-  ——`stairContribution`のroomBounds由来acrossLo/Hi（生のCL境界）とcut.line.lo/hi（壁仕上げ面へ
-  スナップ済み）は階段が室の全幅を占める通常構成でも半壁厚ぶんズレるため（既存の
-  `computeFlightZigzagPoints`コメント参照）、閾値未満は無視する。`elevationStairSequence.js`の
-  `wallGapXMarks`が、seq1エントリでこのゾーンへ`cut.baseFloorZ`で上下分割したアキX
-  （上=一点鎖線dash:'center'・下=破線。emitOpenGapMarksと同じ様式）を明示的に合成する
-  （ceilLowAbs=1F天井はsectionStair.js側では未知の値のためelevationStairSequence.js側で受け取る）。
-- **E: 踊り場より下まで達するレーンにささらの端面（縦の細破線）**。`sectionStair.js`の
-  `stringerEndCapPrimitives`は、`crossesFlight`かつ`flight.baseZ<cut.baseFloorZ`（このレーンが
-  見返りの基準床=踊り場より下まで達する）の場合、そのレーンのacrossLo/acrossHi
-  （LANE_GAP調整済みladderAcross）にz=flight.baseZ〜min(cut.baseFloorZ, flight.baseZ+steps×riser)の
-  縦線を追加する——emitLineの通常の§5.6最終フィルタで両端ともbaseFloorZ以下になるため自動的に
-  DETAIL+dashedになる（neverDowngrade指定は不要）。STEEL限定。seq1では往路(outbound.baseZ=0)は
-  該当・復路(inbound.baseZ=landingAbs=cut.baseFloorZ)は非該当になり、「往路梯子限定」という
-  実機指示をこの条件だけで自然に満たす。
-- **F: 2F腰壁（往復間の壁がkneeDrop.knee指定）はseq1で上端水平線のみ・両端縦線なし（L字アキXの合成は2026-10-07 撤回。縦線の除去だけが残る）**。（以下の L字アキ合成の説明は撤回前の記録）
-  一般規則（'cut'kind＝両端の縦線2本のみ描く。水平の上端線は無し）を、seq1に限り
-  `kneeWallCapContent`（elevationStairSequence.js。post-hocでcontentを書き換える）が専用表現へ
-  差し替える: z=floorHeight〜floorHeight+topHeightちょうどの縦線2本（'cut'kindの両端縁）を検出・
-  除去し、その上端(topZ)にCUT水平線を1本足す。腰壁の上（topZ〜2F天井）と横（腰壁の無い側）の
-  L字アキは、既存のアキX（dash:'center'の対角線ペア）のうちz範囲がtopZ〜ceilTopAbsと重なり
-  x範囲が壁のどちらかの辺に隣接するものを探して1組の大きなXへ合成する（無ければ壁自身の
-  x範囲だけで1組描く。ASSUMED: raw columns情報はcontentForCutの外へ出てこないため、生のbands
-  同士の厳密な連結成分計算ではなく、生成済みプリミティブ同士のpost-hoc吸収で実装した）。
-- **G: 2FL水平線（above層の床端=slab/open境界）は上階に実Roomが無ければ描かない**。
-  `sectionProbe.js`の`probeColumn`は「self天井より上でabove層に所有Roomがあるか」を
-  `above.room`の有無だけで判定していたため、above.roomがVOID/STAIR_VOID（実床の無いRoom）でも
-  'slab'（非描画の実床構造）とみなし、emitColumnsの「slab⇄openの境界=2FL水平線
-  （SILHOUETTE）」規則が誤って発火していた。A2の`resolveWallCapZ`と同じ判定基準を
-  `isRealRoom(room)`（VOID/STAIR_VOID以外）として共有ヘルパ化し、`above.room`の判定にも適用する
-  ——above.roomがVOID/STAIR_VOIDなら'open'（アキX判定の対象）として扱う。
-
-## 展開図では断面の中は描画しない（ユーザー明示指示2026-08）
-**特例（スラブ帯クリップ等）は、この一般判定で置換できるなら削除する**（ユーザー裁定2026-09-13）——
-ルールの多重化は一般化を阻害する。確認事項には必ず根拠（その条件がいつ何のために決まったか）を併記する。
-
-描けるのは**床断面線と天井断面線に挟まれた範囲**だけで、天井の向こう（天井裏・上階の躯体）には
-何も描かない。
-
-**スラブ（床構造・天井懐）の厳密内部にある壁contentは描かない**（`section/sectionContent.js`の
-`clipInsideSlabSolids`。ユーザー裁定2026-09-13「6」B「Y2から3500のCL上、1階天井から2FLまでにある
-線分は断面内部なので描画しない」）——ささらの見えがかりに掛けていた一般判定（`sectionTypes.js`の
-`solidRectsOf`。下記「ささらの見えがかり」）と**同じ矩形・同じ減算**を、`emitColumns`の出力
-（壁の断面・見えがかり・凹み側面線）にも掛ける。消えていたのは見えがかり壁の側縁（`recessHi`）で、
-列の境界＝CLに立っていた: 列は「スラブがその縁に立つ切断壁の向こう側の面まで延びる」ことを知らない
-ため`uncoveredZRanges`が縁を出すが、そこはスラブ＋腰壁で1つの断面の中。`cut`/`cutAlong`の矩形は
-対象にしない——腰壁の天端の帯の下端（`kneeCapUnderline`）や建具の断面は壁の厚みの中に意図して描く線。
-矩形の辺上の線（小口の縦線・下階天井の断面線）は厳密内部ではないので残る。
-
-実機「5」A面の左3200エリア（1階天井断面・2階X2壁断面・2階天井断面で区切られる外）に
-2階の壁断面や天井裏の見えがかりが出ていた根本原因は、**断面エンジンが`ceilZ`を帯に1つ（帯の天井）
-しか持たず、列ごとに打ち切っていなかったこと**——天井断面の高さは区間ごとに違う（吹抜けの区間だけ
-上階天井まで上がる）。
-
-**唯一の例外: 天端または下端が露出した切断壁（腰壁・垂れ壁。`isKneeDrop`）は打ち切らない**
-（ユーザー承認2026-08・案A）——露出した縁は吹抜け側の空間に面していて実際に見えるため、天井の
-向こうにあっても断面を描く（実機「5」D1の「2階Y1から2000＝2FL+800の腰壁断面」が消えていた）。
-判定は`sectionProbe.js`の`isKneeDropRange`（その壁のz範囲が層の床天井いっぱいでないか）で、
-腰壁（天端が露出）と垂れ壁（下端が露出）を1つの規則で覆う。**見えがかり（'wall'）には例外を
-適用しない**——腰壁でも天井の向こうにあれば見えない。**床側には打ち切り自体が無い**ため同じ問題は
-起きない（区間の床＝`floorDeltaMm`より下を落とす仕組みは未実装。入れると「床断面下の細破線＝
-またぐ面」の確定仕様と衝突するため、指示があるまで入れない）。
-
-**例外2: 天井断面の高さが変わる境界に立つ切断壁**（ユーザー明示指示: 実機「5」A「2階X2通りの壁が
-断面抽出から漏れた原因を特定して根本的に修正」）。天井の高さが変わる境界は必ず壁が受けており、その壁の
-断面は「天井の向こう」ではなく**天井が終わっている面そのもの**で、高い側から実際に見える——列自身の
-天井で打ち切ると壁ごと消える（実機で1列も残らず、代わりに天井段差の縦線が壁の位置を1本で代用していた）。
-`sectionEngine.js`の`exposedCeilZAt`が、その壁が占める列の連なりを左右へたどって**連なりの外側の列**の
-天井のうち高い方を返し、`clipBandsToCeil`が**低い側の天井から高い側の天井まで**を1つの断面として残す
-（「X2通り、1F天井から2FLまでも、同断面が続く」——その間は上階の床構造で、切断面では壁と一体の連続した
-断面になる。壁の実体のz範囲＝2FLからで始めると1F天井線とのあいだに説明のつかない隙間が空く）。
-連なりの外側だけを見るのが要点——壁は片面ずつのWallオブジェクトのため厚みが2列に割れることがあり、
-隣接1列だけを見ると片側しか残らない。左右とも同じ高さの天井なら従来どおり落とす（隣室との仕切りで
-天井に隠れる壁。実機「5」A面左3200の2階壁）。
-**描くのは見える側の面だけ**（ユーザー明示指示: 「X2の右側が断面線なら、左側は壁の中になり、描画しない
-が正解」）。反対側の面は低い天井の裏に隠れたままなので、両縁を描くと図に壁厚が出てしまう。
-`clipBandsToCeil`が残した帯へ`exposedSide`（'lo'|'hi'）を付け、`sectionEmit.js`の`emitColumns`が
-その側の縁だけを描く。天井の高さが変わらない位置に立つ壁（吹抜けの中の間仕切り等）は両側とも
-見えるので従来どおり両縁＝壁厚を描く。
-**ただし腰壁・垂れ壁（`isKneeDrop`）は境界でも両縁を描く**——天端／下端が露出していて、その縁が
-壁厚ぶんの見付として実際に見えるため（ユーザー確定「腰壁断面線は、天端で曲がり、壁厚だけ左に
-進み」）。片面だけにすると天端の水平線が宙で終わる。
-
-**例外2は例外1（`isKneeDrop`）より先に評価する**（腰壁も境界なら残す）。ただし**帯のz範囲は壁の
-実体のまま**にする——1階天井〜上階FLは壁ではなく**上階の床構造**であり、そこを壁の帯として下へ
-引き伸ばすと壁の**向こう側の面**まで下りて「断面の中」に線が入る（実機「5」D1: Y1から2000の右側で、
-腰壁天端から下りた断面線が1階天井まで下りていた）。
-
-### 断面の中とその輪郭（`ceilStepSlabSection`）
-1階天井と上階の床に挟まれた区間は**断面の中**＝躯体で、中には何も描かない。描くのは輪郭だけ:
-```
-   ...吹抜け側...   |          ← 小口（低い側の天井 → 上階の床）
-                    +--------  ← 上階の床の断面線（低い天井の側へ、面の描画端まで）
-                       a       ← 断面の中（何も描かない）
-   -----------------+--------  ← 低い側の天井の断面線（既に描かれている）
-```
-この輪郭が無いと1階天井の線と2階天井の線が繋がらず宙で終わる。境界に壁（腰壁・袖壁）が立つ場合は
-その断面がこの床の上に載るだけで、輪郭の規則は変わらない。**右が開いた形でも「中」と判定できる**
-のが要点——閉じているかではなく、低い天井と上階の床という2本の水平断面で決まる。
-上階の床が実在するかは層スタックの所有Roomで判定する（`sectionProbe.js`の`upperFloorZAt`）。
-上に部屋が無い（吹抜けが続く）位置に床の断面線を描いてはいけない（「吹抜けには天井断面まで
-水平断面が無い」）。帯の形から推測すると、上階の壁の断面が同じFLで始まるだけの位置まで拾う。
-この規則が効くのは**自階を持つ面の内側**まで——面の外のはり出し区間では`upperFloorZAt`が答えられない
-（`withinLayerWindow`で自階が層スタックから落ち、基準の層が無くなる）ため、実在の判定は「面の端も
-層ごとに違う」節（上階graphの所有Roomを面端のCLの外側で直接引く）へ委ねる。規則そのものは共通で、
-**床が無い位置に床の断面線を描かない**。上階床断面線の**起点**は面の内側でもはり出しでも同じ
-「切断壁の**向こう側の面**」（ユーザー裁定2026-09。旧「はり出しはCLから」は撤回）——違うのは
-そこから先の向きだけで、面の内側は内へ（面の描画端まで）、はり出しは外へ（`wallLessEndExtendModelMm`
-ぶん張り出して終わる）。述語（列に上階FLから立ち上がる`cut`帯があるか）は両者で共有する。
-天井段差の位置（壁の手前の面）と上階の床が始まる位置（壁の向こうの面）は半壁厚ずれるため、
-低い天井が続くあいだ外側へ走査して最初に見つかった床レベルを使う。
-
-上階の床との取り合いは、**区間ごとの天井を持つ帯（`cut.ceilProfile`あり＝通常の部屋帯・吹抜け帯）は
-`ceilStepSlabSection`、持たない帯（階段帯）は`slabEdgeCutWallJunction`**が担当する。両方走らせると
-同じ取り合いを別々の作図で二重に描く——通常の部屋帯では1F天井〜2FLが吹抜けの側でも天井懐(slab)に
-分類されるため、後者は床の断面線を**床が無い側**へ引いてしまう。
-**露出の判定は全列ぶん先に済ませてから打ち切る**（`buildColumns`）——`exposedCeilZAt`は「同じ壁が
-続く列」をz範囲の一致で追うので、打ち切りながら進めると既に打ち切った隣の列のz範囲が変わっていて
-同じ壁と認識できず、**壁厚が2列に割れている壁の片側だけが処理から漏れる**（実機「5」D1で腰壁の
-手前半分だけ1F天井まで下り、断面の内部に縦線が出た）。
-
-**天井の有無をエンジン側で推測してはいけない**（層の実Room有無から導くと階段帯の見え方まで変わる）。
-**天井断面線を実際に引いている値そのもの**を`cut.ceilProfile`（区間ごとの`{loX,hiX,ceilZ}`）として
-呼び出し側から受け取り、`buildColumns`が列を打ち切る。区間の境界は必ず列の境界にする
-（またぐ列は中点で1つの天井しか持てず片側が誤って切られる）。**profileの範囲外（壁のない端部の
-探査延長で作られる面の外の列）は端の区間の値へクランプする**——面図側が天井線を延長込みの範囲まで
-端の区間の高さで引き延ばしている（`elevationFigure.js`の`ceilAbsAtX`）以上、打ち切りも同じ値で
-なければ「その列だけ打ち切りが効かず、天井線より上の帯の側縁が面の端に出る」。
-`ceilProfile`未指定の呼び出し側（階段帯）は従来どおり打ち切らない。
-`emitColumns`のFL/CH判定も`col.ceilZ`を優先する。
-
-**「切断壁に切られた帯」は帯の下端が切断壁の天端に一致するもの**（`emitColumns`の`splitByCutWall`）。
-腰壁に遮られて下端が持ち上がった帯は「同じ壁の続き」なので側縁の縦線を描かない（「6」D1・B
-「腰壁上のエッジは不要」）が、判定を「天端が帯の下端以上の切断壁がこの列にあるか」にすると
-**切断壁より下にある帯まで巻き込む**——切断壁はそれ自身のz範囲でしか遮らない
-（実機「5」A: 1階の壁の帯z0..2400が、その上に立つ2階X2壁の断面z2400..5400のせいで「切られた」と
-判定され、X2右側の壁エッジが丸ごと消えていた）。
-
-## アキの標記に輪郭の矩形は描かない（ユーザー明示指示）
-アキ（抜け）の標記は**バツ（一点鎖線の対角2本）＋「ア キ」テキスト**だけで、輪郭の矩形は描かない。
-アキの輪郭は定義上つねに周囲の実体（壁の断面・床/天井の断面線・腰壁の天端・面端の縦線）と一致する
-ため、矩形として独立に描くと**必ず二重になる**。しかも矩形は中線なので、後から重なって
-**断面＝太線という線種の情報を上書きしてしまう**（実機「5」A: X2通りの壁の断面（太線）の上に
-アキ矩形の左辺（中線）が乗り、断面線が中線に見えていた。実データでは8辺のうち7辺が既存の線と重複）。
-「ア キ」を置くのは、建具の開口を含まず・外接矩形どおりの形（L字に食い込んでいない）で・床断面より
-上にある連結成分だけ——L字の成分では外接矩形の中心が実体の上に落ちるため文字を置かない。
-断面エンジン側は`emitOpenGapMarks`、面図側（段差見付け面・開放スパン）は`appendGapMark`で、
-同じ規則を持つ。
-
-**アキの下端は`open`帯自身が決める**（Phase 6b-2 C-2。輪郭クランプは撤去済み。**階段帯は2026-10-08に例外**——断面線があれば`gapFloorProfile`で持ち上げる。上の「断面線の外は描画しない」の節参照）——`emitOpenGapMarks`
-はもう`cut.drawFloorProfile`（面全幅フラットの断面線輪郭）でz0を持ち上げない。実体（`hidden`）・
-遮蔽（`stairFace`。手前にあっても線種を破線に落とすだけで実体を持たない）・体裁（図面の見た目）は
-別々のチャネルで、実体の解決はband自身（探査）だけに一本化する。
-**バツの線種は対角ごと・線分ごとに決まる**（Phase 6b-2 C-5）——`baseFloorZ`で対角を分割し両片を
-一点鎖線として渡すと、下片は`emitLine`の§5.6最終フィルタが自動で破線へ降格する（成分全体を
-1つの値で塗っていた旧実装より実際の高さに忠実）。手前の階段（`stairFace`占有形状）に隠れる区間の
-破線化は`splitGapMarksByStair`が別途担う。**「下片が破線」は`baseFloorZ`分割＋§5.6降格が決めており、
-遮蔽（`stairFace`）由来ではない**——階段の占有形状が`baseFloorZ`と一致しない構成（勾配の途中・
-鉄骨の踏面等）では、遮蔽チャネル側での分岐が別途要る（未対応。実機「6」はbaseFloorZ=踊り場高さと
-占有形状の下端が一致する構成のため顕在化していない）。
-
-**部屋帯では、手前の梁がアキを塞ぐ**（ユーザー裁定2026-10-23 S4）。**帯が持つ梁（断面・along＝memberCut の obstructionRects、空中・面の通り＝memberFace の
-gapPass）は帯がアキを割る**（U1b B3）。`elevationSolids.js`の`beamBlockerRectsForFace`は**帯が持たない部材（dropped。加算で描くもの）の矩形だけ**
-（`droppedMemberPrimitivesForFace`と同じ`visibleBeamPieces`の可視区間を読むだけ。dropped が無ければ空配列。U1b B4）を、`appendBandCutContent`の`gapBeamRectsOf`→
-`emitCtx.gapBeamRects`で`emitOpenGapMarks`へ渡す。面の平面上・空中の梁（`split:true`）はアキのセルから抜く（梁の上下で別の連結成分＝バツが2つ。
-天端が天井に接すれば下の1つだけ）。断面（`split:false`）はセルを割らず、バツの線から切り抜くだけ。渡すのは`buildRoomBand`（solids指定時）だけで、
-階段帯・吹抜け帯は不変（探査・梁の判定は触らない）。
-
-## 線種は「断面か／どの奥行きか」だけで決まる（ユーザー明示指示2026-08）
-**切断壁の縁は常に太線（CUT）。降格しない。** 旧規則「縁が接する側がアキならCUT・塞がれていれば
-SILHOUETTE」（AMBIGUITY B）は撤回した——断面は隣に何が見えていようと断面であり、線種が隣接列の
-状態で変わってはいけない。**その他の見えがかりは奥行きで2段**: その切断で最も手前＝直近が中線
-（SILHOUETTE）、それより奥は細線（DETAIL）。「直近」は列ごとではなく**その切断（＝その1枚の図）
-全体**で決める（`nearestSightlineDistMm`）——列ごとに最小を取ると、奥まった凹みもその列では最前面
-なので中線になり、面の中で奥行きの表現が失われる。
-
-**見えがかり線が存在するのは「仮想断面からの距離が変わるところ」だけ**（同指摘）——同じ距離が
-続く境界は1枚の連続面で線は無い。距離が変わる境界は**手前の面がその輪郭を持つ**（`ownsBoundary`。
-両方が描くと同じ位置に線種の違う線が2本出る）。相手がアキ・床スラブ・範囲外なら、その面の輪郭として
-こちらが描く。**天井から上階FLまで（天井裏）にある面も「壁」扱いする**（同指摘の点4。
-`resolveSightlineTopZ`が見えがかり壁の上限を自層の天井ではなく**上階のFL**にする）——これで
-「CHの上が天井裏なら同じ壁が同じ距離で続く」ため、上の一般規則だけで**CHに見えがかり線が立たない**
-（＝断面線のみ）が導かれ、CH専用の例外を持たずに済む。逆に「CH下がアキ・上が壁」は距離が変わるので
-見えがかり線が出る。**FLと帯自身のCHには見えがかりの水平線を描かない**（同指摘）——床・天井はその位置に断面線
-（太線）を持っており、壁がそこに接する線を重ねると同じ場所に2本出る。FLは層の属性なので
-「帯自身のFL・各層のFL・床スラブのFL」を集めるが、**CHは帯自身が描く天井（`emitCtx.ceilZ`）だけ**
-——帯の上端より上はモデルに無いため一般規則が使えず、ここだけは明示的に落とす。区間ごとの天井は
-点4の「天井裏も壁」で自動的に処理されるので、CHを層スタックから集める必要は無い。
-
-**階段の見えがかりは「蹴上材を裏から見ているか」でも決まる**（ユーザー裁定 2026-10-15）——視線の向きへ下る段は蹴上材の向こう側が隠れるので、断面線（太線）はそのままに、切断面と壁の間の踏面と壁に取り合う蹴上線を細線破線で描く。詳細は「回り階段（WINDING）の展開」の節。
-
-落とし穴: **切断壁の手前にある境界へ見えがかりの凹み側面線を重ねない**。壁は切断壁の裏へ続いており
-凹んでいないので、境界の縦線は切断壁自身の断面縁が描く（水平線側は`trimmedByCutWall`が同じ理由で
-既に抑止していた）。従来この重複は**線種が同じゆえに`dedupeLines`で消えていた**だけで、線種を
-分けた瞬間に表面化した——偶然の重複除去に頼らず「描かない理由」の側で決めること。
-
-## 見付の1px保証（ユーザー指示2026-09「展開図：見付1px保証」）
-見付（2本線の間隔）は実画面で潰れると1本に見える。表示倍率scale(px/mm)から**描画限界**を1つ定め（`elevationStyle.js`の`drawLimitMm`/`faceGapLimitMm`/`visibleFaceMm`。`MIN_FACE_PX`が唯一の「指定px」）、それ未満の見付だけ限界まで広げる——限界以上は自然縮尺（60mmは2pxのまま）。**限界は中心間距離ではなく「2本の線の間の余白が1px」**——線には太さがあり、中心間1pxでは線幅ぶん重なって1本に見えた（ユーザー実機指摘2026-09）。よって限界px＝1＋(線A幅＋線B幅)/2で、線幅は描画側と同じ表（`viewport.lineWeightsPx`＝`resolveLineWeightsPx(校正px/mm)`）を`ElevationModeState`が2パス目に`lineWeightsPx`として`scale`と一緒に帯→面ctx／断面エンジン`emitCtx`へ渡す。scale不明（倍率決定の1パス目・単体テスト・ゴールデン）は限界0＝モデル寸法のまま、表が無ければ線幅0（余白のみ）。
-「どちらの線が寸法を守るか」は見付ごとに決める: 三方枠は**細線（外周＝指定寸法）を守り中線（内法）を内側へ**（`openingElevationFigure.js`の`minFaceMm`。アキ標記の範囲も同じ内法に追随。線幅は細線×中線）、腰壁天端は**中線（天端＝腰壁高さ）を守り細線を下へ**（`kneeCapFaceMm`/`kneeCapBottomMm`。天端側の線幅は描いた線のrole——切断壁は太線・見えがかりはその中線/細線——と下端の細線で取る。端部抑えの内側細線は中線×細線）。
-`KNEE_CAP_FACE_MM=50`（2026-08「見付30のまま2本線だと見えないので50で」の作図値）は1px保証で不要になりうる特例だが、承認済み挙動のためこの実装では据え置いた——実厚30へ戻すかは別途裁定。
-
-## 仮想断面線をどこへ置くか（`section/sectionCutPlane.js`。ユーザー明示指示2026-08）
-**規則: 描画対象の面の壁の中心線から、室内側（`face.inward`方向）へ下がる。** 下がる量は
-「その面の壁の中心線→壁仕上げ面」「その面に現れる柱型の室内側への出」「面の前の造作家具の出
-（ドメインモデル未実装＝defer。フックのみ）」の最大値を1mm単位で切り上げ。**多層帯は全ての層に
-ついて同じ評価を行い最大を採る**（「6」A: 2階のX2/X3と1階のX2左3200/X3の両方を見る）——層ごとに
-面の走り範囲も壁厚も違うため、自階だけ見ると上階の柱型に切断面が食い込む。
-
-**これが「「6」は正しく「5」は誤った出力」の根本原因だった**: 階段帯は切断線をレーン位置＝室の中に
-置く一方、吹抜けの多層帯は面自身の壁芯ちょうどに置いていた。切断面が壁の中を通ると
-(a)見えがかり候補が全て室外の壁になり`withinViewRoom`に落ち、(b)所有Roomの1点プローブが室の外へ
-落ちて`room=null`になり床スラブ・天井懐の分類ごと消える——面が丸ごと`open`（何も抽出されない）に
-なる。`sectionCutPlaneExtraction.test.js`が offset=0 と正規のオフセットを並べてこの症状を凍結する。
-
-`faceCutLine`は`lo/hi/dirSign`を動かさない（断面ローカルxと面ローカルxが同値である
-`sectionTypes.js`の不変条件を保つ）。`line.faceAxisValue`は読み手ゼロで削除済み（クリーンアップ
-Phase）——面の軸との照合（`sectionStructure.js`）は`cut.face?.axisCL?.effectiveValue ?? cut.line.axisValue`
-で行う。視線の符号は`faceViewSign`（=-inward）が唯一の定義
-（過去に経路ごとに符号が食い違った）。
-
-## 切断1本→contentの共通経路（`section/sectionContent.js`）
-階段帯と吹抜けの多層帯は「切断を1本立てて断面エンジンへ渡す」同じ処理なのに別々に手で組み立てて
-いたため、**階段帯にはあるものが吹抜け帯には無い**という差が静かに溜まっていた（探査延長・端の
-凹み側面線の抑制・アキのバツが吹抜け帯には丸ごと無かった）。`buildCutContent`を唯一の共通経路にし、
-**ここへ足した修正は階段にも吹抜けにも同時に効く**状態を不変条件とする。タイプ固有の処理
-（階段のささら・遮蔽、構造材の加算レイヤ）は返り値の部品に対して呼び出し側が後段で行う——
-共通経路にタイプ固有の分岐を持ち込まない、が境界。
-
-**面非依存の入口 `buildSectionFromLine(line, layers, opts)`**（Phase 8・2026-09-13）: 切断線と層スタックを主語に
-cutを組んで`buildCutContent`へ渡す薄い層。`face`は必須引数ではなく**opts の「面由来の値の供給元」**に降格し、
-面固有の値（`viewSign`/`dirSign`/`zRange`（必須。エンジンで導出しない＝導出すると帯種別の分岐が生える）/
-`baseFloorZ`/`ceilProfile`/`floorZProfile`/`aboveCeilVisibleRanges`/`stairCut`/`bandRoomBounds`/`probeCtx`…）は呼び出し側が
-渡す。**面述語の導出は`SectionCut.ends`（`{openLo,openHi,wallLessLo,wallLessHi}`）1箇所**——`withProbeExtension`
-（探査を広げる）と`emitCtxForCut`（端の凹み側面線を締める）は`cut.ends`を読み、`ends`の無い手組みcut（階段cut表）
-だけ従来のface導出へフォールバックする。**face-lessの縮退規則**: 層ごとの探査窓（`layerRunWindowsOf`。壁の中心線の
-平面が要る）は作らない／`bandRoomBounds`の既定は渡さない＝深度上限`SIGHTLINE_DEPTH_LIMIT_MM`だけで絞る
-（ユーザー裁定2026-09-13。`withinViewRoom`は帯＝1部屋前提の特例で、多室横断では成立しないため）。`cut.face`を
-なお直読みするのは`layerRunWindowsOf`・`sectionStructure.js`（半壁厚許容・`faceAxis`）・`elevationStairSequence.js`
-（はり出し基準）で、face-lessではそれぞれ窓なし／許容0／`line.axisValue`へ縮退する。範囲外: 斜めの切断線
-（`CutLine`は軸平行のみ）、多室横断での`baseFloorZ`・`ceilProfile`の意味づけ、材の層構成、体裁。
-
-## 層スタックの一般規則（`section/sectionLayerStack.js`。多層化2026-08）
-断面エンジンの`SectionCut.layers`は「どの階のgraphを絶対zのどこへ置くか」の並びでしかないのに、
-`sectionProbe.js`は長らくそれをrole名（'self'/'above'/'below'）と**配列順**で引いていた
-（`find(role==='above')`／`find(role!=='self' && floorZMm<=z)`／固定のROLE_ORDER表）。2層固定なら
-偶然正しく、3層以上で静かに壊れる——「多層の展開図で固定条件のままでは希望どおりに出ない・修正が
-他の図面にも効くのか判定できない」の構造的な原因。**層に関する問いは`sectionLayerStack.js`の
-4つの一般規則（所有層`layerOwningZ`／帯自身の階`baseLayerOf`／上位層`layersAboveOf`／優先順位
-`compareLayerPriority`）だけで答え、role文字列は`ZBand.layerRole`（`sectionEmit.js`が隣接列の
-同一性判定に使う識別子）としてのみ残す**——意味を持つのは並び（floorZMm）であって名前ではない。
-境界（Phase 7・2026-09-13）: 層を**組む**のは`sectionBandLayers.js`（`buildBandLayers`）、層に**問う**のは
-本モジュール。生の`cut.layers`から「自階の直上の層」を引く`layerDirectlyAboveSelf`も本モジュールの
-`baseLayerOf`＋`layersAboveOf`の薄いアダプタとして置く（`elevationStairSequence.js`が旧`find(role!=='self')`
-＝配列順先頭の決め打ちをしていた箇所の是正。同一floorZMmが2つあれば入力配列で先に現れた方）。
-
-帯自身の階を「role==='self'」ではなく**z原点に最も近い層**として定義できるのは、`sectionTypes.js`の
-契約「高さは絶対z・設置階FL=0基準」があるため（この契約を崩すとbaseLayerOfの定義も崩れる）。
-見えがかり壁のz上限（実機フィードバック第3弾A2）も、**層の役割にも段数にも依存しない規則**
-「実Roomに出会うまで上へ登り、その手前の層の天井を上限にする」（`resolveSightlineTopZ`）へ一般化した。
-
-**「修正が他の図面にも効くか」は個別の期待値ではなく不変条件で担保する**
-（`sectionProbeMultiLayer.test.js`）: (INV1)bandsはzRangeを隙間・重なりなく覆う、
-(INV2)**`cut.layers`の並び順を変えても結果が完全に一致する**、(INV3)同じ入力の再プローブは同じ結果。
-INV2は「役割名にも配列順にも依存していない」ことの実行可能な証明であり、層まわりの新しい分岐を
-入れた瞬間に落ちる——層の判断をここへ足すときは、まずこの3本を通すこと。
-
-## 壁の天端プロファイル（関所の一般の引数。隔て壁 S4-1）
-壁のz範囲の関所`finish/kneeDropWall.js kneeDropZRangesAt`（cut・cutAlong・wallFaceの3経路が共有）に省略可能な引数`wallTop`（`{zAt(along)→絶対z}`）を持たせた。あれば腰壁・垂れ壁より先に判定し`[床, min(天井, zAt(pointCoord))]`を返す（天端≦床なら空。各件は`topAt`も持つ）。`probeCtx.wallTopProfileFor(layer)`が層ごとに1回だけ`Map<壁id, {zAt}>`を作る（`sectionProbe.js`。構造は`effectiveStructure(layer.graph)`・階高は直上の層との差・続き判定は`stairContinuesAbove`）。供給元は在来木造の折返し階段の隔て壁の天端（`finish/stair/stairPartition.js partitionTopZAt`が単一情報源。最上層＝斜め、続く層・直上の層なし・階高/蹴上が決まらない・非在来＝プロファイルなし＝従来どおりフルハイト）。壁の種類を関所へ持ち込まず、「天端が位置の関数」という一般の引数だけを足した（特例を増やさない裁定）。
-### 天端が斜めの帯（`topEdge`。S4-2）
-斜めの天端は「帯の上端が水平」という前提を崩す一般の概念として、帯（ZBand）に`topEdge`（天端の線の両端の高さ）を持たせて扱う。壁の種類（隔て壁）を描画側へ持ち込まない。
-- **列の境界**: プロファイルが`crossings(zLevels)`で「斜線が水平線の高さを横切るalong」を返し、`collectCutBreaks`が各層のFL・切断の床/上端・斜線を頭打ちにする天井（`cut.ceilProfile`・プロファイルを持つ壁の層の各部屋の実効天井）の高さで列を割る（各列が「全部天井より下＝斜線」か「全部上＝水平」になる）（列の中で斜線が水平線をまたがない）。プロファイルの端（壁の設計上の端）は元から列境界。
-- **帯の上端は高い側に倒す**: 斜面を1本の帯の上端で近似するとき、`probeColumnHits(…, span)`は列の幅の両端の高い方を上端にする（遮る範囲を広めに＝隠すべきものを描かない側。逆だと斜線の下に奥の線が漏れる）。斜線の高さそのものは`topEdge`が持つ。上限（上階の床等）で頭打ちなら斜線は帯の上端を超えられないので`topEdge`を付けない。`topEdge`は上端に届いている帯だけが持つ（z区間の分割で割れた下の帯は持たず、畳むとき上の帯のものを引き継ぐ）。probe直後は世界のlo/hi側、列の帯は図のx0/x1側（`buildColumns`が`dirSign`で入れ替える）。
-- **描画**: 天端は列の両端の高さを結ぶ斜線（隣の列と端が一致し一本に見える）。壁の端の縦線は**その端の天端の高さまで**（帯の上端まで伸ばさない）。斜線では水平線との重なり判定（FL・CH・スラブ端）を行わない。隣の列との継ぎ目の縦線・奥の壁の下端の水平線は、端の縦線の天端トリムと`ownsBoundary`（手前の壁が境界を持つ）で出ない——専用の抑止規則は足していない（設計案の`uncoveredZRanges`・`splitByCutWall`の拡張は、これで足りるため入れなかった）。
-- **アキ**: 斜線の上の連結成分は、全セルの上辺が水平で下辺が1本の直線なら台形として扱う（矩形の一般化。×は台形の対角・「ア キ」は台形の中心）。下辺が1本の直線でない成分（例: 隔て壁の横に別のアキが連なるL字）は従来どおり外接の隅へ×を引き文字なし。壁として×を避ける遮蔽は台形（`subtractRectsFromLine`の`poly`）。
-- **笠木なし**: 天端プロファイルの壁（`profiledTop`）は腰壁の天端の帯（下端の細線・端面の細線）を描かない。
-- **cut/cutAlong経路のクランプ**: プロファイルを持つ壁は部屋の天井（CH）ではなく視線の上限（`resolveSightlineTopZ`。上が吹抜けなら上階の天井まで・上に実の部屋があればその床で止まる）で切る。階段室の吹抜けにはCHの天井が無く、天端（仕様2600〜3800）がCH2400で止まるのは誤りのため。**この視線の上限によるクランプはリードの既定で裁定待ち（旧仕様は部屋のCH）**。プロファイルの無い壁は従来どおりCHで切る。
-### 隔て板の天端は物理端まで続く（旧 S4b「埋込み柱の立ち上がり」の撤回）
-ユーザー裁定2026-10-14「隔て板回転部側柱型の出っ張りは誤り。斜めの天板と回転部側縦線が取り合うのが正解。」——S4b（埋込み柱が柱頭＝上階FLまで立ち上がる）は撤回して削除した。天端プロファイルは`zAt`/`crossings`だけを持ち、柱は斜めの天端より上へ出ない。斜めの天端は設計上の端（`entryEnd`/`landingEnd`）の外へも同じ勾配で延長し（`partitionTopZAt`・`partitionTopCrossings`）、壁の物理端（柱包みのはね出し）まで続いて端の縦線と取り合う。
-- **縦線**: `uncoveredZRanges(col, band, side)` は、隣接列の帯が `topEdge` を持つとき境界での天端の高さまでしか覆わない（`side`＝'prev'/'next'。帯の上端 z1 は高い側の値のため）。
-- **cut 経路**: 同じ軸CLの切断壁が隣接列で高さだけ違うとき、**隣の断面に覆われた高さの縦線は壁の内部なので引かない**（覆われていない高さだけ）。
-- **cut 経路の天板の見え掛かり**（ユーザー指示 2026-10-19 roof-test1 2階 階段 A「隔て板断面線の上、傾斜している天板の見え掛かりを細線描画」）: 幅方向に隔て板を横切る切断（seq1）で、斜めの天端が切断面より視線側で上がるとき（最上階の隔て板。視線が上り口側）、切断帯の天端から**視線側の壁の端での天端**（天井の打ち切りまで）まで、両縁の立ち上がりと遠端の天端の水平を細線で描く（`cut` ヒットの `topBeyondZ`。壁ごとに 1 組）。天端が天井に届く壁・踊り場側を見る切断・続きの階段がある階（フルハイト）には出ない。既知の限界: 向こうの段の見え掛かり（レーン中央から始まる細線）は隔て板の帯の中を通ったままで、天板の矩形で隠さない（従来から帯の中を通っていたもの。目視で判断）。
-既知の限界: 斜線と帯の上端（高い側）の間の三角の奥は隠す側に倒すため、奥の壁の端の縦線が斜線の下端から帯の上端まで欠ける（上り口側の列で最大1列ぶんの高さ差）／`profiledTop`の壁が cutAlong経路に来るのは自立壁だけ（隔て壁は`isRoomWall`で来ない）。
-
-N+1 の部屋帯からは下階の隔て壁は見えない（先送り・2026-10-08）: 隔て壁は下階Nの階段帯の上の層に既に描かれており、N+1 の部屋帯から見せることはしない。上り口側の短い束も壁に隠れるため展開図には描かない。
-
-## 空間セル索引（`space/spaceModel.js`。展開図一般化Phase 1・2・2026-09）
-床天井の式（「帯のローカルz=0 ≡ その帯の部屋の実効FL」を含む）は`space/spaceModel.js`の
-`buildSpaceIndex`へ集約し、ここを唯一の置き場所とした。`sectionProbe.js`の`makeProbeContext`は
-この索引を内包する薄いラッパで、対外契約（`floorZOf`/`chOf`等）は変えていない。
-
-**ヒット列の確定規約**（`section/sectionHits.js`。設計`.claude/elevation-redesign.md`§5.7）:
-- 深度は切断線から視線方向へ測った正値で、壁の`distMm`と同一基準。
-- 同深度のタイは垂直面（cut/cutAlong/wallFace）が水平面（floorFace/ceilFace）より先（`kindRank`）。
-- floorFace/ceilFaceは単一zの縮退面で、厚みを持つのは`slabFace`だけ。
-- 視線の先の天井高が解決できないときは`ceilZ:null`（床線は出るが天井線は出ない）。
-
-**Phase 2**: `componentOf(layer, room)`/`componentAt`（空気ボリュームの連結成分）を追加。同一層は
-全高の壁で仕切られない限り連結（腰壁・垂れ壁は連結を切らない）。階またぎは、VOIDは**重なる
-吹抜けの最下階の親部屋1室**（複数階にわたる吹抜けは、直下に重なるVOIDがある限りそれと連結して
-連鎖し、その最下階でようやく親部屋(feature==null)と連結する）、STAIR_VOIDは直下の
-**階段室1室**（feature===STAIR）とだけ連結する単一マッチで、bboxが重なるだけの他の部屋
-（階段下の閉じた部屋等）は連結しない（13.stq「13」で実証済み。QA是正・ユーザー裁定2026-09）。
-**Phase 2導入時点では本番から誰も読まなかった**（検証プローブ・単体テストのみが消費者）が、
-Phase 6で`section/sectionHits.js`の`isHiddenWall`（階段下部屋の2a壁を隠す判定）が
-`componentOf`/`cellAt`経由で本番の消費者になった（下記「階段下部屋の2a壁は…」の節参照）。
-`section/sectionHits.js`の`probeColumnHits`/`visibleBandsOf`も追加——1列の候補を
-深度昇順の全ヒットとして保持し、深度最小だけ残して従来`probeColumn`と完全同値へ畳み込む合成
-関数として`probeColumn`を薄く保つ。
-
-**Phase 3**: `buildSpaceIndex`に`cellsAlong`（`cellAt`の一般形。視線方向へ格子セル単位で進み、
-room変化点で区切った区間を近い順に返す）を追加。`probeColumnHits`がこれを使い、水平面ヒット
-`floorFace`/`ceilFace`（視線の先の別室の床天井。腰壁・垂れ壁の向こうは1点プローブでは解決
-できず、これが唯一の情報源）と`slabFace`（自室の床構造・天井懐）を候補へ積むが、
-出力の完全不変は、除外フィルタ（`visibleBandsOf`の`coverableHits`）・選択ロジックのkind
-ホワイトリスト（`frontMatch`/`wallMatch`が元々`wallFace`等しか見ない）・縮退z（`z0===z1`で
-`covering`のz区間一致判定を実質満たさない）の三重の安全策で担保している——Phase 4で深度上限
-（`SIGHTLINE_DEPTH_LIMIT_MM`）を適用し実際の厚み・深度を持たせて初めて畳み込まれ描画に使われる。
-詳細は`.claude/elevation-redesign.md`参照。
-
-**Phase 6b-1**: 階段の占有形状（段板・踊り場桁枠・内側ささらの見えがかり）を`sectionStair.js`の
-`stairFaceHits`で求め、`kind:'stairFace'`のヒットとして`probeColumnHits`へ積む（`cut.stairCut`が
-無い帯には一切影響しない）。floorFace/ceilFace/slabFaceと同じく`visibleBandsOf`の`coverableHits`で
-除外し選択には参加させない——**載せるだけ**。`stairOccluderRects`（段板・踊り場桁枠の占有矩形）とは
-**完全に同じ判定・同じ形状**（突き合わせテストで固定。`sectionStair.test.js`「stairOccluderRectsと
-一致」）。内側ささらの見えがかりは、本番の描画（`innerStringerSilhouette`）と**単一情報源
-`innerStringerGeometry`（正面視＝`crossesFlight`が条件。QA是正2026-09——初版は誤って
-`isLengthwiseCut`＝側面視を条件にしており、本番の描画条件と定義上排他だったため、本番が線を描く
-切断ではヒットが出ず描かない切断で出る、という逆転が起きていた）**から導く（既存2関数自体は
-変更しない）。深度は`depthNearMm`/`depthFarMm`/`atCutPlane`の3値（`SurfaceHit`型ドキュメント
-参照。cut/cutAlongの0＝定義値・slabFaceの0＝番兵・stairFaceの0＝`atCutPlane`時に限り切断平面への
-実測上の接触、という3種の0を区別する）: 正面視の段板・内側ささらは`depthNearMm:0`（switchbackCuts
-のseq1/3はcut.line.axisValueが常にflightのrunLo/runHi境界そのものと一致する構成のため）・
-`depthFarMm`はそのflightの走り長さ、踊り場桁枠は`depthNearMm:depthFarMm:0`（奥行きのモデルを
-持たない既存挙動のまま）。`kindRank`にも`stairFace`（wallFaceとfloorFace/ceilFaceの間）を追加したが、
-本Phaseでは選択に不参加のため出力へは効かない。選択に参加させ、階段下部屋「13」の2a壁の向こうに
-実際に見える範囲を決めるのはPhase 6b-2——13.stq/11.stqは非STEEL（ささら自体を持たない）ため、
-側面視・ささら系の経路は実データではまだ通っていない（STEEL折返し階段のテスト用.stqが必要なら
-`makeKneeDropTest.mjs`の作法で6b-2着手時に作る）。
-
-**U1b B1**（梁・柱の候補。`sectionHits.js addMemberHits`）: 梁・柱を`kind:'memberCut'`（切断線が切る梁・柱。切断線が平行な梁の幅の帯を通る梁は`along:true`）と`'memberFace'`（視線側の梁・柱）のヒットとして`probeColumnHits`へ積み、stairFaceと同じく`coverableHits`で除外する（**載せるだけ**。出力不変）。
-入力の層は`cut.memberLayers`、無ければ`cut.layers`（ユーザー裁定2「吹抜け帯・上部吹抜け帯にも梁を出す」に沿う。memberLayersは将来の上階graph注入用）。
-壁に埋まった梁は積まず、z は列の自階の床・天井で切る（床の穴は床で切らない・梁の断面は天井で切らない）。
-**U1b B2**（`sectionProbe.js collectCutBreaks`）: 部材の端で列を割る（直交梁＝芯±半幅・平行梁＝スパン両端・柱＝run 方向の辺。`nearMembersOf` を共有し層の探査窓でクランプ）。選択は未（B1 のまま）なので帯列は`mergeColumns`が併合し出力不変。ただし足す前の列が次の 3 つの斜めの区間と重なるときは足さない（その列は併合されず割り方が出力に出るため。QA アブレーションで 83 本に必要と確認 2026-10-24）: 斜めの天井断面（`ceilClip`/`ceilProfile`）・視線側の`wallTopProfile`を持つ壁のスパン・天伏の天井高さ場（`zoneFieldFor`）の斜面/円弧/ドームの run 範囲。B3 で斜線の連結と合わせて扱う。
-**U1b B3-1**（梁の断面）: 直交する梁の断面と切断線の帯の中を通る梁（along）だけを探査の選択に入れ（`visibleBandsOf`。順位 cut→cutAlong→memberCut・帯 `memberCut`）、`emitColumns` が輪郭を 1 回描く（出所の印 `MEMBER_PRIM`）。加算の断面・along は止め、帯にできない部材（列の端を捨てた・z 範囲に掛からない・探査の範囲の外＝`edgeDropped`）だけ従来どおり加算で描く。床構造（slab）の中の梁は slab の帯を割らず `members` に添える。可視判定は加算と共有（`beamSectionShown` 等）。
-裁定 R4: 部屋帯の断面は天井断面で切られる（梁の幅に掛かる列の天井の最小値で輪郭の上端を切り、梁の下端以下なら輪郭なし。天井の段の継ぎ目の梁は低い側の天井線より上へ出ない。slab 帯の `members` も天井で切る）／R5: 階段帯のアキは梁で割らない（`isOpenLikeBand`）／R6: 壁の断面の縁は梁の高さでも途切れない（帯の断面には `wallLineCuts` を掛けない）。
-B3-1 の補足: 梁の後ろがアキ（open）で、その open が遠側の面の向こう（farVoid）へ割られる高さなら後ろを farVoid へ降格し、梁の中に「ア キ」を出さない（付帯情報は梁が無かったときの帯の範囲で求める＝`behindFar`）。部屋帯の下端は自階の層の FL（隣室 FL−50 の列でも FL より下を描かない。階段帯は列の床）。部材の端が新しく足した列境界の x（`memberEdgesX`）は `finalizeBand` が受け、部材の端で割れた共線の水平線を 1 本へ戻し、部材の端が絡む包含の重複を畳む（`joinLinesAtMemberEdges`。部材の端と無関係な既存の共線の分割には触れない）。`joinLinesAtMemberEdges` は部材の端が端点にある包含の重複も畳む（HEAD にあった重複線 3 帯が消える。見た目は不変）。
-**U1b B3-2**（梁の見え掛かり）: 空中の梁・面の通りの梁を探査の選択に入れ（`memberFace`→帯 `member`。壁と手前の面までの奥行き `nearMm` で競い、壁どうしは従来の芯の距離。同じ奥行きは壁が先）、加算の見え掛かりは帯が持つ部材について止める（`memberFacesByBand`。dropped だけ加算）。線種は候補が付ける `memberClass`（facePlane→細線・airborne→中線）、同じ奥行きの梁と壁の境は細線（規則 1）、梁の帯は部屋帯ではアキのセルを割り階段帯（`memberSplitsGaps:false`）では割らない（R5）。
-入口条件は候補段階（`faceStateOf`: 帯の部屋の中・断面線より下に浮かない・柱包み・規則 A〔`wallCoveredSpans`。壁が探査の候補にならなくても遮蔽は効く〕・面に掛かる・描画範囲。階段帯は天井裏 `memberCeilZAt`）。深度上限超えの梁は梁が無いときの帯へ戻す（`memberFaceToOpen`。付帯情報は部材の候補をすべて除いた選択＝`memberlessBands` から取り `splitOpenByFarFace` が範囲で割る）。slab の中の梁は slab に片で添える。
-**U1b B3-3**（柱）: 柱の `memberFace`（memberClass `column`・nearMm＝`depthNearMm`）を梁と同じ仕組みで選択に入れ、加算の柱型（`structuralColumnPrimitivesForCut`）は帯が持つ柱について止める（`opts.dropped`。柱の `memberKey` は矩形＋足元）。R1 線種は中線のまま・R3 現行の入口条件（面の壁に接続 or 切断線をまたぐ）は落とす＝独立柱・壁越しの柱が出る（壁が手前・同じ奥行きなら壁が勝つ）。縦線は見付けの両端を床〜柱の上端まで、天地の線は断面線（FL・CH）の高さでないときだけ。柱の上端は梁と同じ天井の取り方（QA Major-1 のリード裁定）: その位置の部屋の天井（CH）では切らず（部屋帯は帯の天井断面が切る）、柱の階の上の床（その位置に実の部屋のある階だけ数える）か帯の上端まで。階段帯だけ階段室の裏面（`cut.memberCeilZAt`）で止める。切断線が柱の幅の内側を**厳密に**通る柱だけ memberCut（選択に入れず edgeDropped＝加算のまま）。縁がちょうど接するだけ（`cutPlaneOffsetMm` が出を mm に切り上げるので整数の出の柱は接する）なら memberFace（nearMm 0）で遮蔽が効く。階段帯は HEAD まで柱を描いておらず、奥の壁の隅の柱型が初めて出る。（壁が探査の候補にならない場合は加算より多く見える既知の限界。腰壁・隔て板越しは実高さで隠す）。
-
-**Phase 4**（水平面ヒット由来の見えがかり線・アキ分割。**裁定済み2026-09-11**——
-knee-drop-test.stqの「A」面Cで受入基準（腰壁天端800〜天井2400がアキ、その上にBのFL+2400天井
-見えがかり線）をユーザーが実機確認し採用。当時は`elevationStyle.js`の`HORIZONTAL_FACES_ENABLED`
-というon/offフラグでdiffを先に見せてから既定onへ確定したが、フラグ自体はクリーンアップPhaseで
-削除済み（本番参照ゼロ・golden不変）——**この表現は常に有効**で、比較用のoff経路はもう無い）:
-`visibleBandsOf`が`open`帯（`wall`帯が深度上限超えで`open`へ作り替えられたものも含む——QA是正で
-`wall`帯自身にも同じ付帯情報を持たせ、作り替え時に引き継ぐ）へ**区間の内部にある**最も近い
-floorFace/ceilFaceを`farFloorZ`/`farCeilZ`/`farDepthMm`として付帯情報化し（深度上限そのものは
-ここでは適用しない）、`sectionEngine.js`の`splitOpenByFarFace`が壁と同じ基準（その切断で最も
-手前の壁面からの距離・`SIGHTLINE_DEPTH_LIMIT_MM`=800。基準点が無い＝wall帯が1枚も無い切断では
-上限超えと同じ扱い）で上限を適用する。上限内なら区間を`[非描画(farVoid)?, open(floorZ..ceilZ),
-非描画(farVoid)?]`へ分割し、アキの範囲をfloorZ/ceilZまで縮める。`farVoid`（floorFace/ceilFaceより
-向こう側＝天井懐・床構造）は非描画——`emitColumns`/`emitOpenGapMarks`はどちらも`'open'`しか見ないため
-自動的に線もアキも出ない。見えがかり線は`sightRole`（壁と同じ深度→重みの経路）で線種を決め、自身の
-FL・CHと同値なら（`sectionLevelZs`/`atSectionLevel`）既存の断面線と重なるため描かない。奥の壁の
-建具姿図は描かない（floorFace/ceilFaceに建具情報を一切持たせていない）。
-
-**裁定済み（採用。2026-09-11）**: アキの下端の既存確定裁定（旧文言「下端は**遠側床が
-帯の床より高いときだけ**そこまで持ち上げ、それ以外は探査が見つけた床のまま」）とPhase 4の規則
-（`open`区間の**内部**にfloorFaceがあれば常に・同値でも縮める）は判定基準が違っており、
-13.stq/11.stq「10」D1面（小上がり10'（FL−50）から部屋10（FL0）を見る面）のアキ下端が
-**旧z=−50（バツが遠側床線を突き抜ける）→新z=0（床線で止まる）**へ変わる差分があった。
-ユーザーはPhase 4側（常に縮める）を採用と裁定した。
-
-**Phase 5で解消**: `splitOpenByFarFace`はfarが区間の**内部**（`z0<far<z1`）のときは縮め、
-**区間の外（`far<z0`）でも下端を伸ばす**（`farVoid`は作らない——伸ばした側は「実体が無い」から
-こそ伸ばす対象）よう拡張し、外部注入（`cut.openSpans`/`spanLoZ`）は撤去した。探査側で「far<z0」を
-拾えるのは`sectionHits.js`の`farFaceAnnotation`が floorFace だけ**その列自身の探査下限
-（`cut.zRange.loZ`）と一致する列に限って**区間の外も候補にするため——腰壁のように区間の下に
-別の実体（`wall`帯）がある列では対象外のまま（伸ばすと壁の断面を突き抜けてしまう）。伸ばした帯には
-`extendedFromZ`（伸ばす前のz0）を残し、`emitOpenGapMarks`の一点鎖線/破線切替はこの帯**自身**が
-baseFloorZの下へ潜ったかで判定する（遠側だけが低い区間はこの伸びを理由に破線化しない）。
-**Phase 5の検算で床天井の深度共有バグを検出・修正した（要裁定ではない）**: 13.stq/11.stq「11'」A2
-の実データで、遠側天井が旧値（2400mm相当）から新値（2300mm相当）へ変わる差分が出た。原因は
-`farFaceAnnotation`（`sectionHits.js`）が床・天井のヒットを**同じ深度上限判定**（`farDepthMm`＝
-両者の最小値）で扱っていたこと——視線の先は近い順に「11」（子室。床・天井とも上限内。実効CH2500）
-→全高壁を挟んだ「10」（天井のみ。距離1057.5mmで上限800超え）と続くが、近い「11」の床の深度
-（57.5mm）が遠い「10」の天井の深度（1057.5mm）を上限判定に**貸してしまい**、本来上限外で採用
-されないはずの「10」の天井が採用されていた。`farFloorDepthMm`/`farCeilDepthMm`
-（`sectionHits.js`）で床・天井を別々に深度判定するよう修正（`sectionEngine.js`の
-`splitOpenByFarFace`・`sectionEmit.js`の`sightRole`判定）し、13.stq/11.stq/knee-drop-test.stqの
-ダンプはすべてHEADと完全一致（diff空）を確認した——旧値（2400mm相当。「11」自身の実効天井高）が
-正しい値で、「`face.spans`の簡易規則との差」という当初の説明は誤りだった。
-
-## 2.5D立体の加算レイヤ（`elevationSolids.js`。追加仕様2026-08。**U1b B6（2026-10-24）以降は dropped の部材だけ**）
-**現状（U1b B3〜B6）**: 構造梁・柱は断面エンジンの探査の帯（`memberCut`・`memberFace`。`sectionHits.js`）が描き、遮蔽も壁と同じ奥行き比較で決める。
-加算レイヤ（`droppedMemberPrimitivesForFace`・階段帯の `structuralPrimitivesForCut`・`beamBlockerRectsForFace`・`wallLineCuts`）が描くのは
-**帯が持たない部材（dropped＝`droppedMemberKeysOf`。列の端を捨てた・z 範囲に掛からない・探査の範囲の外・切断線が内側を通る柱）だけ**で、
-この経路は R7 で恒久に残す。`buildFaceFigure` は加算を積まない（B4）。`visibleBeamPieces` は `opts.memberCuts` を渡した呼び出しなら dropped だけを返す
-（本番の呼び出しは必ず渡す。省略＝全部返すのは単体テストの道具）。旧 `solidPrimitivesForFace`・`memberCutsByBand`・`memberFacesByBand`・`only` は B6 で削除（採取履歴の節）。
-以下は加算レイヤの規則（dropped の部材にも同じ規則で効く）の記録。
-
-初版の方針（2026-08）: 「2.5D展開を階段・吹抜けだけでなく全ての展開図へ」への回答は、**`buildFaceFigure`を断面エンジン
-（`section/sectionEngine.js`）へ置き換えることではなく、階段帯で確立済みの「純粋な加算レイヤ」を通常面へ広げること**とした
-——`buildFaceFigure`は段差プロファイル・開放スパン・注記帯・巾木・建具姿図・壁2段書き等の確定仕様の
-集積であり`elevationSectionGolden.test.js`で凍結されている。**吹抜け帯・階段帯はこれまでどおり
-2.5D非対応でも2.5Dでもない専用経路**（吹抜け=自階の面を下へ延長／階段=断面エンジン）である点は不変。
-
-`faceSectionCut`が face を SectionCut へ写す（`(isVertical, axisCL.value, lo, hi)`がCutLineと同型・
-`cutOriginWorld`が`face.originWorld`と一致するため、断面ローカルxと面ローカルxが同値になる＝面の
-座標系のまま合成できる）。高さ基準は帯そのもの（baseFloorZ=0・zRange=0..CH）で、layersは自階
-（floorZMm=0）＋上階（floorZMm=階高。`buildBandLayers`で組む）。**帯のz範囲へクリップすることが「梁型だけが出る」という
-建築的に正しい挙動をそのまま与える**——自階graphの床梁（天端=自FL）は床より下で全消し、上階graphの
-梁は天端=階高のため梁成が「階高−CH」を超えて天井から降りる分だけ残る。副次的に、床より下の細破線が
-注記帯（tag行・ROW1/ROW2・通り芯丸）へ被る問題も原理的に起きない。x方向は`[0, run]`へクランプする
-（構造材はCL間の実スパンを持ち、面間ギャップはこの加算レイヤ分を見込んでいないため）。
-
-**多層帯（`buildRoomBandWithVoidAbove`）にも同じ加算レイヤを渡す**（ユーザー実機指摘2026-09
-「「5」D1に柱型が無い」の主因は`ElevationModeState.js`での渡し漏れで、上部吹抜けのある部屋だけ
-柱型・梁型が丸ごと欠けていた）。zRangeは帯の**自階CH**のまま＝吹抜け範囲の上階の柱・梁は対象外
-（defer。上階ぶんは`appendUpperStoreyOutline`の管轄で、新表現の是非にユーザー裁定が要る）。
-
-**柱型の`onNearSide`（壁の向こう側の柱は描かない）には例外がある**——この除外は「そこに壁が在る」
-ことを前提にした規則（「4」B）であり、**その面の通りに柱のrun範囲と重なる壁が1枚も無い区間**では
-前提が崩れ、柱は素通しで実際に見える（実機「5」D1: 通りx=-3000のy -1000..-57.5は同室のセルへ
-抜けていて壁が無い）。遮蔽判定は持ち込まず、切断面からの絶対奥行き＜`SIGHTLINE_DEPTH_LIMIT_MM`と
-「一部でも壁が重なれば描かない」（見付け幅の両端2本という表現が嘘になるため）で保守的に絞る。
-**遮蔽を数える壁は「帯と同じ高さに立つ層（自階）」のもの**とする——上階の壁は帯の天井より上に
-しか無いので下階の面から見た遮蔽物にならない。実機D1で柱の接続（`wallAxes`）を作っているのは
-まさにその2階の壁であり、全層で数えるとその壁自身がこの規則を潰して柱型が出ない（実測: 追加0本）。
-**これは遮蔽用の壁集合であって、梁が壁に埋没して見えないかの判定（`beamWallEmbedding` の fullyEmbedded・`embedding.alongTol`・
-断面の埋没判定）とは別物**——埋没判定は全層の壁を「梁の天がその壁の層にあるか」
-（層の床−梁成〜直上の床。2階の床梁は2階の壁にも1階の壁にも関係する）で絞る（2026-10-22 S1）。
-層は床レベルしか持たないため足元zは「その層の壁が帯のz範囲に立つか」のプロキシで、
-下階層をこの経路へ足すときは再検討が要る。
-
-**柱型**（`structuralColumnPrimitivesForCut`）は見付け幅の両端縦線2本（CUT）だけを描き、上下端の
-水平線は持たない——`StructuralColumn.topLevel`は既定0のまま実データでは未編集（高さの信頼できる
-情報源が無い）一方、柱は床から天井まで通しで立つのが常態のため、z範囲はcut.zRangeそのものを使う。
-線種・向きの判定は梁と同じ一般規則（切断線と直交=断面CUT／平行かつ幅の帯内=輪郭DETAIL）に従う。
-
-**柱は仕上げ材で覆った外形で描く**（追加仕様2026-08。幾何は`finish/columnWrap.js`＝**展開図の柱型と
-平面図の柱が共有する単一の情報源**。構造と仕上げの境界にある値のためどちらか片方の層に埋めない
-——別々に算出すると同じ柱が図面ごとに違う太さになる。平面は`ColumnsLayer`の`finishWrap`で包み外形を
-細線で重ねる。構造モードの伏図には渡さない＝躯体の図に仕上げは載せない）。柱の外形は
-①カタログ断面 ②鋼管柱のダイヤフラム出（`diaphragmProjection`。構造モードの平面描画・断面図・梁端の
-停止位置と**同一実装を共有**する。出寸法の調整口は`sectionCatalog.js`の`DIAPHRAGM_PROJECTION_MM`
-1箇所）③仕上げの包み、の3層。包みは**4面それぞれ独立**に決まる（柱と壁の位置関係は面ごとに違うため
-対称ではない）——ユーザー指示2026-08の3規約:
-1. **柱は原則、仕上げ材で覆う**（壁と干渉する柱に限らない）。厚みはその面に**向き合う**壁の
-   「下地材＋壁仕上げ材」。**壁自身の`backingRange`/`wallFinish`から取り、部屋の内装マスターを
-   `materialMap`から引き直さない**（実装方針6。壁はその部屋のマスターから生成された結果なので、
-   引き直すと同じ厚みに二系統の情報源ができる。寸法を持たない手動壁は0＝覆わない）。
-   **⚠仕上げのみの薄壁（`backingRange===null`）は、同じ軸CL上でスパンが重なるオーナー壁から下地厚を
-   採る**（`wallBackingMm`。実機フィードバック修正2026-08「柱周りに壁下地材がない」）——部屋境界の壁は
-   下地オーナー壁＋仕上げ薄壁のペアで下地はオーナー側だけが持ち（`wallGeneration.js`「下地オーナー
-   解決」）、柱に面するのは薄壁の側。薄壁だけを見ると下地0になり包みが仕上げ12.5mmへ潰れる。
-2. **覆った柱の表面と内壁仕上げの隙間が`TRIM_GAP_MM`(150)以下ならそこでトリム**＝包みを壁の仕上げ面
-   まで伸ばして揃える（狭い隙間は塞いで壁と一体に納める）。この面は壁と**接続した**ものとして扱い、
-   展開図はその壁の面に柱型を出す。150を超えて離れた面は接続しない＝その面には柱型を出さない。
-3. **壁内は下地材・壁仕上げ材ともになし**＝柱の面が壁の材厚の中にあるなら、その面は覆わない。
-
-壁埋まり判定（前掲）は**包む前**の外形で行う＝壁に完全に納まる柱は覆いも描画もしない。
-ASSUMED: 共有壁の両側で内装マスターが違う場合、その面に最も近い壁の層構成を採る。
-
-**平面図の柱と壁の取り合い**（ユーザー指示2026-08）: 柱断面は太線（`ColumnsLayer`の`finishWrap`が
-輪郭を`thick`にする）。柱壁は外形（仕上げ面）＋仕上げ／下地の境界線の2層で、**壁と同じ線の太さ**
-（medium）で描く（層順は柱＝フランジ含む→下地材→仕上げ材。`finishes`＝面ごとの仕上げ厚、残りが下地）。
-**トリムで壁に接続した辺は、外形・境界線とも柱側で描かない**——その位置には壁の同じ層の線が続いており、
-描くと重なるうえ境界線が柱を一周して見える（ユーザー実機指摘2026-08「壁仕上げ線2本の内、柱側の1本が
-柱を一周している」）。**壁側は`columnWallCuts`が返す区間を落とす**（`ShapesLayer`が既存のT字取り合い
-`finishCuts`と同じ`subtractIntervals`へ合流させる＝切り欠きの仕組みを二系統にしない）。
-**⚠区間は層ごとに違う**——仕上げ面線は柱壁の**外形幅**、仕上げ境界線と下地（間柱）は**内側境界の幅**
-（外形−仕上げ厚×2）。同じ区間で両方を切ると、壁のfin線の端が柱側の境界線の端と食い違う。
-この対応で「壁の面線→柱壁の外形」「壁のfin線→柱壁の内側境界」がそれぞれ1本に連続する。
-**⚠下地の削除だけは「その下地に乗る仕上げ材が他に残っていないこと」を条件にする**（`canRemoveBacking`。
-ユーザー指示2026-08）——オーナー壁の下地帯は**両側の部屋の仕上げ材**が乗る共有の下地で、柱は壁の
-片側にしか出っ張らない。柱側の仕上げだけを柱壁が置き換えても反対側の部屋の仕上げは残るため、下地を
-消すとその壁が宙に浮く。同じ軸CL上でスパンが重なる仕上げ材が1枚でも柱に接していなければ残す
-（判定は壁単位。区間単位まで細かくしない割り切り）。
-
-**⚠柱がどの面に現れるかは「接続した壁の軸CL（`wallAxes`）と面の軸CLの照合」で決める。柱の断面が
-切断線（面の壁芯CL）をまたぐかで判定してはいけない**（実機フィードバック修正2026-08「平面で柱芯を
-動かしても展開に表れない」の根本原因）——実データの壁は下地オーナー壁＋仕上げ薄壁方式のため
-**材厚が壁芯から数十mm室内側にある**（実機ログ: 面の壁芯 -7000 に対し壁の材厚[-6955,-6942.5]）。
-さらに柱芯オフセット（ラーメン系では常態）で柱は壁からわずかに離れて立つ（同ログ: 隙間42.5mm）。
-この2つが重なると、壁のすぐ内側に立つ柱＝まさに覆う対象が**一本残らず描画から落ちる**（実機8本
-すべて）。**壁と接続している柱はその壁の面に現れる**——これが柱と面を結ぶ本来の関係で、壁芯を跨ぐかは
-実データでは成り立たない代理条件だった。接続＝上記規約2のトリム（150以下）または壁への食い込み。
-壁を持たない位置の柱は従来どおり断面が切断線をまたぐかで拾う（フォールバック）。`wallAxes`は覆い厚0の
-壁（寸法の判らない手動壁）でも積む——描くかどうかは「接続しているか」で決まり、覆えるかとは独立。
-どちらも成り立たない柱は描かない（面より手前に立つ独立柱の見えがかりは defer のまま）。
-**線種は中線**（SILHOUETTE。ユーザー指示2026-08）——柱型は切断面ではなく「室内へ出っ張った仕上げ面の
-見えがかり」であり、床線・天井線と同じ太線では強すぎる。
-
-**壁の材厚に埋まる梁・柱は描かない**（ユーザー実機指摘2026-08「2階床の構造材梁断面は、壁の中なら
-描画しない」。**柱も同じ規則**——通り芯の交点には自動補完で柱が立つため、外壁に納まる管柱まで
-柱型にすると連続した壁面の途中に実在しない縦線2本が出る＝実機「C2のX2上のエッジ線」の正体。
-壁より太い柱は室内へ出るので従来どおり柱型として描く）。**隠す材は`materialRange ∪ backingRange`で、
-柱・梁とも`finish/columnWrap.js`の`wallConcealRange`が唯一の供給源**（ユーザー指示2026-10-07「1箇所に集約して
-柱と共有」。梁の`beamWallEmbedding`（fullyEmbedded）・断面の埋没判定も同じ範囲）——内壁は下地オーナー解決で`backingDepth`を明示するため
-`materialRange`が下地帯全体を含むが、外壁は`backingDepth`未指定の対称壁のままで軸〜外面の片側しか返さず、
-通り芯中心の柱が収まらず出隅・入隅で柱型が出ていた（ユーザー実機指摘2026-10-07 moku1-3。構造種別によらず
-外壁生成は共通なので種別分岐にしない。スパン方向の許容は`materialRange`幅のまま）。**判定はその柱が立つ階の壁だけ**
-（平面`columnWrapSolids`のhiddenと同じ入力＝壁より太い柱は平面の柱壁と展開図の柱型が同時に出る）。
-全層で判定すると、1階に壁の無い大部屋の独立柱が真上の2階間仕切りに「収まって」消える。包みの接続索引
-（`wallAxes`）だけは従来どおり全層で解く（実機「5」D1）。厚み方向は完全に収まることを要求し（壁より太い梁は室内へ現れるため隠さない）、
-**スパン方向は壁厚ぶんの食い違いを許容する**——梁はCL間を張るのに対し壁は隅で`chamferWalls`が
-半壁厚ほど詰めるため、完全被覆を要求するとこの規則が実データで一度も発動しない（実際そう作り込んで
-検出した）。それを大きく超えて伸びる梁は端が見えるので隠さない。**スパンの一部だけを覆う壁は、その足元の区間だけ
-見え掛かり（空中横断・平行）から引く**（`BeamSolid.embedding`。ユーザー指摘2026-10-19 roof-test1 2階 階段 A: 3階の到達辺の
-床梁が柱で分かれず往路側の壁〔3階の階段吹抜けの壁〕の足元を越えて 1 本で続き、全スパン判定に掛からず全長が中線で出た。
-moku4-3 は同じ梁が柱で 2 本に分かれていて片方が全スパン判定で落ちていた）——梁が柱で分割されているか（部材の切れ目）で
-描画が変わらないようにする。区間の控除は**壁のスパンそのまま**（along。許容なし。自由端で見える梁を隠しすぎない。
-隅の許容 alongTol は梁のスパンの両端だけで、壁と壁の隙間は橋渡ししない。隅の端は柱包みの規則 B が担う）で、**梁の天が「その壁の層の床−梁成」〜直上の床にある壁だけ**＝壁が立つ床の下の床梁まで
-（在来木造の横架材は再計算で天端 FL−100 になる〔`conformWoodBeamLevels`〕ので床ちょうどでは取りこぼす）。**全スパン判定
-（`beamWallEmbedding` の fullyEmbedded）も同じ層の述語を通す**（2026-10-22 S1。z を見ないと 3階の壁が 2階の高さの途中にある梁〔plan-solids-test の
-予備室の梁〕を隠した）。梁の「壁の中」は `beamWallEmbedding` 1 関数（層の述語 `beamTopInStorey` は 1 箇所）。壁は全高の壁だけ（腰壁・垂れ壁・隔て板を除く）・平行は同じ軸 CL（同じ graph）の壁の材の範囲の
-和集合の 1 区間に梁の幅全体が収まるかで見る（S3b-1・2026-10-23。腰壁・垂れ壁は z で分ける＝腰壁は床梁〔天が壁の層の床以下〕を全高の壁と同じに隠し天端より上の梁は隠さない・垂れ壁は天井高から測る（下端＝床＋天井高−bottomHeight・上端＝直上の床）ので床梁を隠さず、真上の天井懐の梁は壁の中・隔て板は隠さない。高さは `kneeDropZRangesAt`。壁と壁の隙間は橋渡ししない。芯が入るか〔bandsAt〕は `boundaryMaterialRange` の合併帯で従来どおり。束ねの鍵はどちらも (graph, 軸 CL)）。
-断面（直交）は 2 条件の両方で描く: (A) **切断位置で梁が壁に埋まっていない**＝平行な壁の足元（`embedding.along`。
-tol なし）から、梁の帯を覆う直交壁の帯（壁と壁の取り合い。同じ層の述語）を除いた区間の**内部**に切断位置が無い（端ちょうどは内部でない。
-直交壁が梁の帯を覆わない L 字の隅は帯を除かず保守側＝埋まっている扱い）。(B) 室内側へ続く残りがある（切断位置から室内側の区間から
-直交壁の帯・柱包み・`embedding.alongTol`〔足元＋隅の許容〕を引く）。旧実装は切断位置の1点＋tol だけ（`isBeamInWallAt`）で、面の向こう側の
-同じ通りの壁〔plan-solids-test 2階 子ども1 の A2〕を「壁の中」と誤判定して梁型断面を消していた。階段帯でも同じ経路を通る
-（平行な壁の途中で切る階段帯の型は従来どおり隠す）。
-
-**自階の床（スラブ）は、構造部材の見え方を隠す一般の遮蔽物**（`occludeByFloor`。ユーザー裁定 2026-10-23「床梁を隠す。展開面の姿も
-断面も。常に一般解として」）。床がある列（面ローカル x）では、自階の FL **以下**（天端が FL ちょうどの鉄骨梁も含む）の部分を描かない。
-部材の種類・描き方（見え掛かり・断面）を問わず、`structuralPrimitivesForCut` が作った全プリミティブの線の z と x だけで切る
-（FL をまたぐ線は FL より上だけ残る。部材名指しの特例にしない＝将来の部材も同じ）。床の無い列は `lowerStairVoidRanges` の
-**lo/hi＝切断壁の吹抜け側の面**（下階の階段の吹抜け）で、そこは切らない——床の有無を新しく導き直さない。区間の端を壁の手前の面
-（floorLo/floorHi）にしないのは、壁の帯の下に床梁の見えがかりを残さない（2026-10-19「2FL に隔て板の下線が残った。不要」）のと同じ理由
-（`floorlessRangesOfCut`。basement-test の吹抜けの縁の壁の帯 52.5mm の下の破線が消える）。階段帯の構造寄与だけが
-`floorOcclusion` を渡す。部屋帯は `clipBeamsToBand`（梁の z を 0..CH へ切り、断面形状も切った成で作り直す）が「全列に床がある」場合に
-あたるが、作り直す形が違うので統一していない（統一すると H 形鋼の輪郭が変わりうる）。階段帯に床下の梁の隠れ線が出ていた
-（床梁が 3階の壁に層違いで偶然隠れていたのが S1 の層判定で外れ、moku4 など 28 文書の 2階の階段帯に破線 2 本が出た）のが発端。
-**断面（閉じた輪郭）は輪郭 1 つの単位で判定する**（開いた半分を残さない。ユーザー裁定 2026-10-23）: 輪郭の x 範囲が床なし区間に
-収まれば丸ごと描く／重ならなければ線ごとに切る（床の列では FL 以下を描かない）／**穴の縁をまたぐ**ときは、階段側の壁が断面を覆って
-いなければ丸ごと描く（鉄骨梁を見せる設計）。覆うとは「梁の芯から階段側の壁の面までの距離 ＞ 梁の芯から断面の端（階段側）までの距離（半幅）」
-（等号は覆わない＝描く）で、壁は梁と平行・スパンが切断位置を含み・層が梁の天のある層。**同じ軸 CL 上の複数壁（下地オーナー壁＋仕上げ薄壁）は
-材を合併した 1 枚の帯**として扱い（建具の拘束と同じ `openings/openingMove.js` の `boundaryMaterialRange` を共有。1 枚ごとの区間は
-`wallConcealRange`＝外壁の対称壁も含める）、その帯に梁の芯が入るものだけを数え、階段側の面は合併した帯の外側の面。壁が無ければ
-覆っていない。覆っていれば穴の側の半分も含めて描かない。丸ごと描く輪郭の線には `WHOLE_OUTLINE` の印を付け、階段帯の列の断面線クリップ
-（`clipContentBelowProfileInRanges`）で線ごとに切り直さない。見え掛かりの線は線ごとに切ってよい（境界で分けた同じ線の片はつなぎ直す）。
-**壁の断面線の分断**（ユーザー裁定 2026-10-23「壁内の梁が部屋側から見える場合だけ」。穴の縁に限らない一般条件）: 切断位置で梁を内に持つ壁
-（上の合併した帯に梁の芯が入る）の**面**のうち、描いた断面の x 範囲の厳密な内側に入るもの（＝梁が壁の面から出ている。壁が断面を覆えば面は
-範囲の外）について、その面に立つ縦線だけを梁の z 範囲（下端〜天端）で上下 2 片に分ける（`wallLineCutRect`・`removeLinesInsideRects` の `xs`。
-梁の断面が壁の線の手前に描かれる。床線などほかの線は切らない）。**階段帯では、その矩形を帯に集まる全ての縦線に掛ける**
-（`sequence[i].wallLineCuts` → `elevationStair.js` が面ローカル→帯の x へ平行移動して `finalizeBand` の dedupe の前に適用）——content 側の壁の縁
-（中線）だけでなく、図側の面端の縦線（太線）も梁の z 範囲で分けないと、太線が断面を横切り、HEAD で端点が一致して 1 本に畳まれていた中線と
-太線が重なる。切断位置に平行な壁が無い梁は分けない（plan-solids-test seq6 x=13797.5 の壁の縁を含む 28 文書は HEAD のまま）。
-実データでこの分断が出る帯の x（階段帯の x）は、`4 (1).stq` の 1階が 0・2885・8050・10935、ceiling-steel-stair-test の 1階が 2885・8050・19135、
-同 2階が 2885・7235・8050・11250・19135（天端 3000・成 200 の鉄骨梁の断面が壁の面から出る位置。梁の z 範囲には縦線が 1 本も残らない）。
-分断前の縦線の範囲は位置で違う（例: 2885 は 0〜5400 の 1 本で、それが梁の下端・天端で上下 2 片になる。範囲を固定値で期待しない）。
-ceiling-steel 2階の x=10935 は分断されない（梁の H が面の外にあり、壁の面から出ない）。opening-test 2階 階段帯の面 B2 の H 形 2 本は、その位置に壁が無いので分断は出ない。
-**既知の限界**: `4 (1).stq` の 1階の z990〜1190 の梁 3 本は、H の端 7.5mm が壁の面（x=7235・11250・19135）に食い込むが、梁の芯が壁の帯の外にあるため
-「壁内の梁」ではなく分断の対象外。受容。
-壁の面は帯の x へ平行移動して当てる（xCursor。2 面目以降も同じ。`elevationStairSequence.test.js` の「壁の線の分断・帯 xCursor」が固定）。
-通り芯（一点鎖線）は細線でなくても切らない（`removeLinesInsideRects` の除外は細線と通り芯が独立の条件）。
-層の判定には元の天端・成（`layerTopZ`・`layerDepthMm`）を使う——部屋帯の `clipBeamsToBand` が `topZ`/`depthMm` を帯へ切り詰めても、
-平行壁の足元（`embedding.along`）と同じ層で直交壁の帯を数える。
-既知の限界: edgeDropped（列の端を捨てた＝斜めの天井・天端の列に掛かる等。{ceil, zone, wtpSight}）の部材は帯を持てず加算のままで、遮蔽は描く側のクリップ。
-**部屋帯の梁は階段帯と同じ室内側へ下がった仮想断面（pcut）で解く**（2026-10-23 S3。`elevationSolids.js` の `faceBeamCut`＝`faceCutLine(face, cutPlaneOffsetMm)`・
-壁を見る向き `faceViewSign`・`bandRoomBounds`）。柱型・`clipBeamsToBand`・`clampPrimsToRun` は従来のまま（柱型の照合は壁芯基準）。部屋帯だけが渡す
-`opts.fromRoomSide`（断面の続きは室内側〔viewSign の逆〕で見る。`sectionVisibleInRoom`）で部屋帯だけが向きを変える。
-**面の通りの梁**（`opts.facePlane`、`cut.face` があれば既定 true。`cut.face` の軸が梁の幅の中＝`faceAxisInBeam`）は帯種別によらず（S3b-2・2026-10-24）切断線が帯の外でも parallel の細線。
-天井裏・描画範囲（`cutDrawRange`）・規則 A（手前の全高の壁）は airborne と共有する（`drawnRanges`・`wallCoveredSpans`）。切断線の帯の中を通る従来の parallel は掛けない。面の軸と切断線の両方が帯の中にある梁は面の通りを優先する。
-**既知の限界**: 断面の判定の向き依存（`fromRoomSide`）の解消は別範囲の展開図描画リファクタで行う。部屋帯で仮想断面より手前（室内側）の
-空中の梁は描かない（旧実装は壁の仕上げ薄壁の遮蔽に掛かって実データでは出ていなかった。比較できた 83 文書〔読込み不能の 1 件を除く〕の差分は plan-solids-test の 2 帯だけ）。
-
-**見え掛かりの梁は、壁・柱包みに隠れる区間を描かない**（ユーザー指摘2026-10「展開に関係のない、壁の向こうにある
-梁を描画するのは処理上の穴」。`structuralPrimitivesForCut`）。固定mmの閾値でなく構造上の述語で決める。
-(A) 空中横断の見え掛かり: 切断線と梁の間（室内側。空中判定と同じ向き）に立つ**梁と同じ向きの全高の壁**が
-スパンを覆う区間は描かない。壁の z 範囲＝その層の床〜直上の層の床で、梁の z 範囲を**完全に覆う**壁だけが遮蔽する
-（2 層帯で別の層の壁は隠さない）。腰壁・垂れ壁・隔て板（天端が斜め）・面自身の壁は遮蔽に使わない。
-(B) 梁の厚み方向の帯が**柱の包み込み外形**（仕上げが端を隠す。素の外形ではない）に完全に収まり、z が柱の層の
-直上の床までに重なるとき、柱のスパン範囲を描かない（空中・平行は区間から引く）。
-**断面（直交）は「見えるか」の述語**: 切断位置から室内側（viewSign 側）へ梁が実際に続き、その続きが
-壁の材厚（梁と直交する全高の壁。仕上げ薄壁など隣り合う壁は連なる）と柱包みに
-隠れずに残るときだけ描く。梁が壁芯で終わる・壁の中で終わる・壁を抜けた先の柱包みの中で終わる構成は残りが
-空で描かない（柱の有無に依らない。切断線は壁芯にあり包みは仕上げ面から始まるため、柱だけの判定では取りこぼす）。
-階段帯の切断線（室内側へオフセット済みで壁の中に無い）では壁の控除は掛からず、柱包みだけが効く。
-（規則Aの全高仮定は、帯の候補では腰壁などの実高さで隠すようになった〔B3-2〕。加算で残る dropped の梁だけが従来の全高仮定。）
-既知の限界: 壁の中の柱（`isColumnInsideWall`）は包みを持たないため、その柱に
-収まる空中横断の梁の端は規則A・Bで隠れない（面の途中に直交壁がある構成だけ）。
-経緯: 292334f（2026-09）以降、読込み時の構造再計算で踊り場受け梁 LG が到達階に生まれ、13.stq「7」C に柱包みの
-中の 32.5mm の中線が出た。保存データのままの golden では LG が無く検出できなかった——構造込みの基準は
-`golden13-struct`（下記）。
-
-**基礎・基礎梁・杭は描かない**（追加仕様2026-08）。`structuralContribution`/
-`structuralColumnContribution`が`role==='foundation'`を除外する唯一の情報源——1平面に基礎伏図＋
-1階伏図の2スロットが乗る（`App.jsx`）ため1階のgraph.beamsには基礎梁と1階梁が同居しており、除外
-しないと室内展開図の床下に基礎梁が細破線で出る。基礎・柱脚（footingMap）・べた基礎（slab
-role:'mat_foundation'）は本レイヤが`graph.beams`/`graph.columns`しか読まないため元から対象外。
-
-**有効化は`ctx.solids`の明示指定のみ**（`ElevationModeState`→`buildRoomBand`だけが渡す。既定=未指定で
-出力完全不変＝ゴールデンゲートで担保）。**階段帯には渡さない**——階段帯は`contentForCut`経由で既に
-同じ`sectionStructure.js`から構造梁を描いており、重ねると二重描画になる。吹抜け帯も対象外（帯FLと
-断面の床が一致しない特殊な高さ基準のため）。defer: 作り付け家具（ドメインモデル自体が未実装）・
-独立柱／面より手前の立体の見えがかり・遮蔽（加算レイヤの原則どおり取らない）・斜め回転柱の見付け幅。
+**修正済み**: `buildMidWallFace`（合成面）の`lo/hi`は`loWorld/hiWorld`の大小に関わらず（`travelSign<0`だと`loWorld>hiWorld`になりうる）`Math.min/max`で正規化し、対応するCLId（`startCLId/endCLId`）も入れ替える（未ソートだと`run`が負値になる）。
 
 ## 面端の不変条件・壁2段書き
-面端の縦線（見えがかりエッジ）は`x=0`/`run`（`face.lo/hi`＝直交壁の仕上げ面。`snapFaceEndsToCorners`の隅詰め結果）に描く——
-壁中心線（`faceBoundaryLocalX`の`boundary.lo/hi`。ROW1壁芯間寸法・通り芯一点鎖線が使う別の基準）とは異なる、既に正しい基準
-（QA調査で再確認・回帰テストで固定）。面端は「壁のない端部」と「出隅」を区別する。**壁のない端部**（`snapFaceEndsToCorners`が付与する
-`hasWallAtLocal0`/`hasWallAtLocalRun`がfalse）は「続きがある」建築表現として床線・天井線を`WALL_LESS_END_EXTEND_SCREEN_MM`（2パス換算）
-ぶん図の外側へ延長し、縦線は描かない。
-**この延長は図形側（`buildFaceFigure`の`drawnX0`/`drawnXRun`）だけでなくcontent（2.5D断面のレイキャスト）側にも効く**
-（ユーザー実機指摘2026-08「6」D「2FL床断面まで下りる、再度3500左CLの外へ延長して終わる」）。
-**方式はユーザー裁定でA案＝「出来上がった線を後から引き伸ばす」のではなく「探査範囲そのものを外へ広げる」**。
-階段帯は`buildStairBand`→`stairFaceSequence`が`wallLessEndExtendModelMm`（図形側へ渡すのと同じ`ctx`の値。倍率決定の
-1パス目は`DEFAULT_WALL_LESS_END_EXTEND_MM`）を`withProbeExtension`へ流し、`hasWallAtLocal0`/`Run`がfalseの側だけ
-`cut.line.probeExtendLoMm`/`probeExtendHiMm`（**world側の**lo/hi。ローカルx=0がどちらのworld端かは`dirSign`で決まる）を立てる。
-`collectCutBreaks`はその広げた範囲で断点を集め、**面の端（`line.lo`/`line.hi`）自体も列境界として必ず残す**（面の内と外が
-1列に融合しないため）。`cut.line.lo/hi`は変えない＝`cutOriginWorld`（x=0の起点）が動かないので既存のローカルx座標はずれない。
-`emitColumns`側には延長処理を**置かない**（両方やると二重に伸びる。回帰ガードは`sectionEmit.test.js`の「【裁定A案】」）。
-線を後から引き伸ばす旧案を採らなかった理由: 面の外は探査されていないため、腰壁の**外側面の位置（＝壁厚）**が
-そもそも分からず、指摘どおりのZ字プロファイル（1F天井→立上り→天端→壁厚ぶん外→2FL床→外へ延長）を組めなかった
-（列ダンプで`cut[z3000..3800]`が`x0..57.5`＝内側半分にクリップされていることを確認済み）。A案適用後は同じ帯が
-`x-57.5..57.5`＝全幅115で出て、隣室の`slab[z2400..3000]`（＝1F天井断面線・2FL床断面線）も実データとして現れる。
+### 面端と壁のない端部
+- 面端の縦線（見えがかりエッジ）は`x=0`/`run`（`face.lo/hi`＝直交壁の仕上げ面。`snapFaceEndsToCorners`の隅詰め結果）に描く。壁中心線（`boundary.lo/hi`。ROW1壁芯間寸法・通り芯一点鎖線の別の基準）とは異なる既に正しい基準。面端は「壁のない端部」と「出隅」を区別する。**壁のない端部**（`hasWallAtLocal0/Run`がfalse）は「続きがある」建築表現として床線・天井線を`WALL_LESS_END_EXTEND_SCREEN_MM`（2パス換算）ぶん図の外側へ延長し、縦線は描かない。**出隅**（壁がある通常の面端）の縦線はSILHOUETTE（中線。切断面ではなく壁が折れて隣の面へ続くだけの見えがかりの角。床線・天井線・段差の縦線・直交壁建具断面の枠は部屋の輪郭そのものなのでCUT）。
+- **この延長は図形側（`drawnX0`/`drawnXRun`）だけでなくcontent（断面のレイキャスト）側にも効く。方式は「出来上がった線を後から引き伸ばす」のではなく「探査範囲そのものを外へ広げる」**（A案裁定。面の外は探査されておらず腰壁の外側面の位置〔壁厚〕が分からずZ字プロファイルを組めない）。階段帯は`stairFaceSequence`が`wallLessEndExtendModelMm`を`withProbeExtension`へ流し、`hasWallAtLocal0/Run`がfalseの側だけ`cut.line.probeExtendLoMm/HiMm`（world側のlo/hi）を立てる。`collectCutBreaks`は広げた範囲で断点を集め、**面の端（`line.lo/hi`）自体も列境界として必ず残す**（面の内と外が1列に融合しないため）。`cut.line.lo/hi`は変えない（`cutOriginWorld`が動かない）。`emitColumns`側には延長処理を置かない（二重に伸びる。回帰ガードは`sectionEmit.test.js`の「【裁定A案】」）。
+- **壁のない端部の判定は「隅に直交面が存在するか」ではなく「その隅に実壁があり、かつその壁がこの面の切断面を室内側へ横切っているか」**（`realWallAtCorner`＋`perpWallCrossesFacePlane`。閉じた部屋の面ループでは隅に直交面自体は必ず存在する）。**実壁の有無は「隅の局所プローブ」で見る**（`innerWallFaceAt`へ渡すスパンを面の仕上げ面を挟む±100mmの窓へ絞る。直交面の面全体のフラグを流用すると遠い側にだけ壁がある構成で何も無い隅に線が出る）。**窓は面の両側に取る**（実壁が向こう側へ折れて続く角のエッジを落とさないため）。実壁が面の向こう側だけにある端は壁のない端部として扱い、延長に加えて**見えがかりエッジ**（`edgeAtLocal0/Run`）の縦線（中線）も描く。端座標は直交面のfaceValue（壁の実端）へ詰める。開放スパンの延長端（`resolveEnd`）も同じ規則。壁生成スキップで発動する典型は階段の上り口辺・下り口辺。
+- **面端の壁は「この帯で実体として数える壁」に限る**: 階段室が自身は壁を持たない辺で階段下部屋の2a壁を隅の実壁と誤検出しないよう、階段帯は`composeRoomFaces`へ`wallFilter`（`stairBandWallFilter`。`isHiddenWall`と同じ判断）を渡し、除外された壁が実在する端は`face.hiddenWallAtLocal0/Run`として公開する。**真に壁のない端部は単一情報源`wallLessEndAt(face, end)`**（`!hasWallAt && !hiddenWallAt`）で判定し、体裁の延長に関わる全箇所がこれを呼ぶ（hidden端が体裁の延長を受けると2F床の小口が広がる）。**例外は探査窓**（`withProbeExtension`）: 探査は`hasWallAt*=false`だけで広げ続ける（締めるとその壁を手掛かりにする描画が列ごと消える）。**「探査は広げる・描画は締める」**。hidden端の延長区間にcontentが描く水平線は`clipContentAtHiddenEnds`が真の境界へクリップする。
+- **面端縦線の担当範囲はこの帯自身の実壁の高さまで**: 2層帯で、その端に実際に上階FLの断面線（`upperFloorEdgeSpans`）が1本引かれる場合に限り、天井まで伸ばさず上階FLとこの面の天井の低い方で止め、先は上階の床のはり出し・壁の縁に任せる（`capsAtUpperFloor`。gateは`upperFloorEdgeSpanAt`と同じ関数を共有する。`ctx.upperFloorEnds`の有無だけ見ると線が1本も引かれない端でも縦線の上端が宙で途切れる）。隣接面の間隔（`gapModelMm`）は右CH寸法に加え壁のない端の延長ぶん（`faceWallLessExtents`）も加味する。
+- **面端の隅で建具断面を描く建具の開口範囲では、面端の凹み側面線（`recessLo/Hi`）を描かない**（面の端の列だけ。面図の面端の太線と同じ入力`cornerOpeningZRanges`→`ends.cornerOpeningZLo/Hi`）。階段帯は対象外（限界）。
+- **`buildRoomFaces`の隅マッチングは「同じaxisCLIdを持つ複数面」を区別する**（張り出しで1本の壁面が開口を挟み複数区間に分かれると`Map<axisCLId,Face>`は後勝ちで片方が消える。`groupByAxisCLId`+`findCornerNeighbor`が隅を実際に共有する1件だけを選ぶ）。
 
-**壁のない端部の2層取り合い**（実機「6」D。左CL上に腰壁が載り、上階の床スラブがそのCLで終わる構成）は
-以下の3規則で「1F天井→腰壁の立上り→天端→壁厚ぶん外→2FL床→外へ延長」というZ字プロファイルになる:
-- **上階床スラブの端に切断壁（袖壁・腰壁）が載っている取り合い**は`slabEdgeCutWallJunction`が組む。
-  スラブは吹抜けの開口縁（CL）で終わるが、袖壁はそのCLに芯を合わせて左右へ張り出す。作図は
-  「下階天井(`slab.z0`) → **袖壁の向こう側＝階段側の面** → そこを**上へ立ち上げて**上階床(`slab.z1`)へ」
-  とつなぎ、袖壁の断面線と交点で取り合わせる。**この立上りが要**（ユーザー指摘「1FL天井から2FL床までの
-  上へ向かう線分がないことを指摘している」）——無いと天井線が壁の面で宙に終わり、「トリムされていない」
-  状態になる。
-  **小口が立つのは、壁の向こう側に探査済みの空気があるスラブだけ**（`sectionTypes.js`の
-  `slabJunctionOf`のgate。ユーザー裁定2026-09-13「6」C「X3の踊り場ささら断面、階段側壁断面、1F天井と
-  2FL床までの壁断面、腰壁断面、腰壁天端で折り返して2FL床断面、はりだしで囲まれる範囲は壁・天井内部。
-  したがって内部はクリップされて描画しない」）——壁のある端では自階の壁＋床構造が自階の窓の外＝
-  **未探査**のまま、上階の腰壁だけがはり出し列に立つ。そこへ「スラブが腰壁の向こう側まで延びる」と
-  仮定して小口と1F天井線を描くと壁断面の内部に線が入る（実機「6」C左端＝X3）。判定は「farXの先の列で、
-  スラブのz範囲**全体**が空気の帯（`isAirBand`＝open/farVoid/wall/見えがかり由来のhidden）で覆われて
-  いるか」——列が無い（未知）は空気ともスラブとも言わない（「未知をアキにしない」）。一部だけ空気
-  （残りが実体）なら小口ではない。hiddenは出自`hiddenOf`（'cut'＝切断線上に実体＝断面の中／'wall'＝
-  見えがかり由来＝手前は空気。`sectionHits.js`の`visibleBandsOf`が付ける）で区別し、出自の無いhiddenは
-  見えがかり由来とみなす（実データ13/11の該当4件はすべてwall由来。2026-09-13実測）。`slab`が続く／別の`cut`が立つ向こう側にも
-  小口は無い。`solidRectsOf`（ささらの一般判定）のスラブ延長も**同じ関数**で決める。
-  **取り合いの3本（下階天井・立上り・上階床）はすべて断面＝CUT（太線）**（ユーザー裁定2026-09-13
-  「6」B「Y2から3500にある1階天井、1階天井から2FLまでの縦線は断面を表す太線が正解」）——スラブは
-  仮想断面が実際に切っている躯体で、輪郭は壁の断面縁と同格。下階天井の線は**スラブの走り全体**
-  （外端〜壁の向こう側の面）を1本で描き、走りの中で見えがかり側が出す同じ高さの中線（見えがかり壁の
-  上端縁・slab/open境界。「その空間の天井の縁は中線」の規則）は抑止する（`ownedBySectionSlab`。
-  同じ線を2種類の線種で重ねない）。小口の無いスラブ（向こう側がスラブ・切断壁・未探査）の縁は従来
-  どおり中線のまま（実機「6」Cの東レーン上の1F天井線）。
-- **背景側の水平線は手前の切断壁の断面線でトリムする**（`trimmedByCutWall`）。その列に`cut`帯があり、
-  水平線が**その壁の天端以下**なら列ごとの縁は描かない（上の取り合い線が代わりに1本で通す）。天端より上
-  （袖壁の上を通る上階天井など）は壁に遮られないので対象外。上階床側（`slab.z1`＝2FL床）はこのトリムが
-  効いて壁の手前で止まる——指摘の「2FL床断面まで下りる、再度CLの外へ延長して終わる」どおり壁の下は通らない。
-  *試して却下した案2つ*: ①「壁の向こう側の面まで伸ばすだけ」（立上りを描かない）→ 線が宙で終わり
-  「トリムされていない」と指摘された。②「手前の面で止める」→ 今度は「CLの外で止まっている」と指摘された。
-  正解は**向こう側の面まで進めた上で、そこに立上りを描いて接合する**。
-- **切断壁の天端は`cut`帯からCUT水平線を「壁ごとに1本」描く**（`cutWallTopEdges`。見えている天井より下で
-  終わる壁＝腰壁・袖壁が対象。列は壁と無関係な断点でも割れるので列ごとに描くと複数本になる）。これに伴い
-  `kneeWallCapContent`（seq1の往復間の壁）から天端の描画を**移管**した——両方で描くと2本になる。
-  なお実機の袖壁は**Wallオブジェクト2枚**（壁は片面ずつのプレーンとして持つデータモデル）で構成されるため、
-  天端も2本の線分が突き合わさった形で出る（見た目は1本）。
-- **凹み側面線は同じ層(`layerRole`)の壁どうしでしか成立しない**。距離が変わっても層が違えば、1枚の壁面が
-  凹んだのではなく**見えている壁が別の層のものへ入れ替わった**だけ（実機症状: 左CL上の`z3800..5400`に縦線）。
-- **面端の隅で建具断面を描く建具の開口範囲では、面端の凹み側面線（`recessLo/Hi`）を描かない**（面の端の列だけ。内部の列は不変）。面図の面端の太線と同じ入力（`elevationFaces.js`の`cornerOpeningZRanges`→`ends.cornerOpeningZLo/Hi`）で、z は帯の z（端の区間で**描かれた床**の高さ込み。`drawnFloorDeltaAt`＝面図の floorDyAt と同じ関数）。太線だけ止めると下に中線が残る。**階段帯は対象外（既知の限界）**: 階段 cut（`elevationStairSequence.js`）の端の縦線は断面線（floorProfile＝階段断面）から立つ別規則で、隅の建具の開口 z を床の高さの足し込みでは図と揃えられず、隣の面も歩行順の entry を組む途中で確定しない。隅に建具がある階段室では太線だけ止まり中線が残りうる。
+### 「その面のどこに壁があるか」は1つの述語
+`elevationFigure.js`の`wallLessRunsOnFace`＝壁の実体が無い区間＝開放スパン(描画基準)＋多層合成で延長された範囲＋**実壁（graph.walls）の被覆の隙間**（`elevationFaces.js`の`wallCoverageGapsOnFace`。第3の源。`face.spans`の'wall'区間は部屋の連続性由来で、その内側に壁が生成されていない区間があっても'wall'のままなので実壁の被覆が要る）。**面の端(0/run)に接する側は、`hasWallAtLocal0/Run`が真（壁のある端＝出隅）の側では常に報告し、偽（壁のない端部）側は幅`END_ARTIFACT_TOL_MM`(=150)以下なら報告しない**（壁のない端部では面の境界がCLのまま残り実壁の仕上げ面は半壁厚ぶん内側から始まるので幅わずか〔57.5mm程度〕の見かけの隙間が必ず生じる。巾木の面端クランプと二重になるだけ。階段口・大開口のように上限を超える隙間は壁のない端部に接していても報告する）。巾木（壁のないところに巾木はない）と壁2段書き（壁仕上げは壁の中央）が同じ述語を読む。面の端に接する区間は外側へ開いたまま返し、呼び出し側が自分の基準でクリップする（巾木は面の範囲、壁2段書きは壁中心線区間）。
 
-**切断壁（`cut`帯）の縦線は「同じ壁が隣接列に続くなら描かない」**（`band.wall`参照で同一性を判定。`cutAlong`の
-端部縦線と同じパターン）。列は壁とは無関係な断点（CL・開口端・他層の壁）でも分割されるため、旧実装のように
-列境界ごとに両縁を描くと**1枚の壁の断面の内部に分割線が出る**（実機「6」Dで腰壁の`x=0`・`x=45`に縦線が出ていた）。
-両側に`wall`参照が載っている場合だけ抑止する（手書き列の単体テスト等は従来どおり）。
-**出隅**（hasWallAtLocal0/hasWallAtLocalRunがtrue＝壁がある通常の面端。部屋の凸角で、視線方向に壁が折れて向こうへ続く角）は縦線を
-SILHOUETTE（中線）で描く——切断面ではなく壁が折れて隣の面へ続くだけの見えがかりの角のため、CUT（太）は使わない（QA修正。床線・天井線・
-段差の縦線・直交壁建具断面の枠は部屋の輪郭そのもの／明示指示に基づくためCUTのまま）。
-**壁のない端部の判定基準は「隅に直交面が存在するか」ではなく「**その隅に**実壁(`graph.walls`)があり、かつその壁がこの面の切断面
-（faceValueの平面）を室内側へ横切っているか」**（`realWallAtCorner`＋`perpWallCrossesFacePlane`。QA修正——閉じた部屋の
-面ループでは隅に直交面自体は必ず存在するため、面の有無だけでは常にtrueになり発動しない）。
-**実壁の有無は「隅の局所プローブ」で見る**（ユーザー実機指摘2026-08「比較的単純なプローブに思う。判定方法をよく確認してみて」）
-——旧実装は直交面の**面全体**のフラグ（`hasRealWall`＝`innerWallFaceAt`が面のスパン全域で壁を1本でも見つけたか）を隅の判定に
-流用しており、直交面の遠い側にだけ壁がある構成で「何も無い隅」に線が描かれていた（実機症状: 連続する外壁面がC1/C2に分かれ、
-その継ぎ目に無いはずの縦線が出る）。`innerWallFaceAt`へ渡すスパンを**面の仕上げ面を挟む±100mmの窓**へ絞るだけでよい
-（壁の同定・inward判定は既存関数のまま＝判定の二重管理を増やさない）。**窓は面の両側に取る**——「実壁が向こう側へ折れて続く角」
-（見えがかりエッジ）を落とさないため。室内へ横切るか否かの区別は`perpWallCrossesFacePlane`の担当で、役割を混ぜない
-（室内側だけの片側窓にすると確認済みのRound Fの3箇所がエッジごと消える。実装して回帰テストで検出した）。
+### 壁2段書き（壁仕上げラベル）
+- **壁の実体がある区間ごとに1つ・その区間の中央**。**基準は壁中心線区間(boundary)のまま**で壁の無い区間を差し引く（面の範囲run基準へ変えると全面のラベルが半壁厚動き、壁芯間寸法との中心合わせの根拠も失う）。**開口・床の段差は区間を割らない**（開口は壁に開いた穴＝避ける障害物のまま）。退避（`avoidObstacleRangesX`。`avoidGridCollisionX`と同系の最広ギャップ方式）も省略判定も区間ごと。障害物から開放スパンは外す。上階ぶん（`appendUpperStoreyTrim`）は「その位置の2階の部屋の面がある範囲ごと」で同じ規則。壁中心線間の描画長さがラベル幅の概算×2未満なら省略する（1パス目は判定しない）。**テキスト幅概算は文字クラス別**（`estimateWallLabelWidthPx`。半角ASCII=0.5×fontSize・全角=1.0×fontSize。変換後ラベルは半角主体で、全角一律だと過剰に省略される）。壁材・壁仕上げ材は表示専用に`formatMaterialLabel`で言い換える（「せっこうボード」→「PB」、`t=<数値>`→`ア)<数値>`。材マスターは変更しない）。壁2段書きにも吹抜け合成範囲の過剰が同種にあるが未対応（同じ`selfLocal`を障害物区間へ足せば直る見込み）。
 
-**面端の壁は「この帯で実体として数える壁」に限る**（展開図一般化§5.12 D2-1是正）——`innerWallFaceAt`
-（面自身の壁検出・`realWallAtCorner`の隅探査）は所有者・可視性を見ず素通しに走査するため、階段室が
-自身は壁を持たない辺で階段下部屋の2a壁を「隅に実壁がある」と誤検出しうる（実機13.stq「6」面D2）。
-階段帯は`composeRoomFaces`へ`wallFilter`を渡し、`isHiddenWall`と同じ判断（`isWallHiddenForBand`）を
-面リスト構築にも通す（供給元`stairBandWallFilter`。他の帯は渡さず無変化）。除外された壁が実在する
-端は`face.hiddenWallAtLocal0/Run`として別途公開する。
+### 巾木
+- **巾木は壁のある範囲だけに引く**（壁面に沿う部材）。壁のある端は面の端（ローカル0/run）で止め、**止めるのは面の端であって壁中心線（CL）ではない**（CLで止めるとはね出した床線との間に段が付く）。区間端は描画基準（`drawnX0`/`drawnXRun`）のまま面の範囲へクランプする（`Math.max`/`Math.min`。狭める方向のクランプで階段帯の`floorSpanX`を壊さない）。**壁のない端部では、面の壁が面の端の外へ実際に続く範囲だけ**はね出しへ伸ばす（`wallContinuationBeyondFaceEnd`。同じ通りの壁を結合し、面の端を含む区間が端の外へ出ている長さ。上限は端部の延長量）。続かない端は面の端で止まる。**床線・天井線のはね出しは従来どおり**（巾木だけが対象）。
+- **多層帯で合成により延長された範囲には自階の巾木を描かない**: 吹抜け合成（`elevationVoid.js`）は`lo=min/hi=max`で走り範囲を伸ばすが、伸びた先に自階の壁があるとは限らない。`withVoidRanges`が「自階の面が実在する範囲」を`face.voidAbove.selfLocal`として載せ、巾木ブロックはその**補集合**を既存の`floorGaps`へ足す（区間水平線のクリップと段差縦線の抑止が同時に効く＝別機構を作らない）。判別子は「吹抜けの下か」ではなく「**自階の壁があるか**」。`selfLocal`は**合成後の座標系**で作る（`withVoidRanges`は`originWorld`を貼り替える）。上階だけの面は空配列。ギャップの内側の端は自階の面の端ちょうどで内部境界でははね出させない。以上で**「巾木は自階の壁が実在する範囲だけ」という1原理**に統一される。
+- **巾木は床の段差にも追従する**: 床断面線（区間水平線＋段差縦線）をhだけ上へ平行移動した連続ポリライン（水平方向にはオフセットしない。段差縦線を開口がまたぐ場合は床側同様に途切れさせる）。床まで達する開口の区間は巾木線を途切れさせる。**巾木の途切れ区間は描画基準（`drawnSpanRanges`）**（CL基準だとCLと壁面の間に巾木の無い隙間ができる）。
+- 巾木初期値（`木製出幅木`/`h=60`）は**ユーザーがRoomを新規作成する経路でのみ**適用する（`applyDefaultBaseboard`）。`RoomFinish`コンストラクタでは設定しない（復元経路は「新しいRoomを作ってから空でないフィールドだけ上書き」なので、既定値を非空にするとクリア済み`''`が復元のたびに巻き戻る）。展開側は`parseBaseboardHeightMm`（`core/room.js`）が`"h=<数値>"`表記だけ解釈し、解釈不能なら非描画。
 
-**「壁のない端部」（体裁の延長150mm・縦線なし）の判定は`hasWallAt*=false`だけでは決まらない**——
-`hiddenWallAtLocal0/Run`=true（実壁はあるがこの帯では除外）の端は、本当に何も無い端と違って
-体裁の延長を受けてはいけない（受けると2F床の小口が57.5mm→207.5mmへ広がる等、実機「6」D2で
-実測した不具合の根本）。単一情報源`wallLessEndAt(face, end)`（`elevationFaces.js`。
-`!hasWallAt && !hiddenWallAt`）が「真に壁のない端部」を判定し、体裁の延長に関わる**全箇所**
-（`elevationFigure.js`の`drawnX0/Run`・`upperFloorEdgeSpanAt`の内側基準、`elevationFaces.js`の
-`faceWallLessExtents`、`elevationBand.js`の`faceDrawnXRange`、`section/sectionContent.js`の
-`layerRunWindowsOf`・`planeOverhangForFace`・`emitCtxForCut`、`elevationStairSequence.js`の
-`upperOverhangOf`）がこれを呼ぶ。**例外は探査窓**
-（`section/sectionContent.js`の`withProbeExtension`）——探査は`hasWallAt*=false`だけで従来どおり
-広げ続ける（hidden端も含む）。締めると、その壁を手掛かりにする既存描画（`recessLo`等）が列ごと
-消える。**「探査は広げる・描画は締める」**——広く探って、描画時に`wallLessEndAt`で真に壁のない
-端だけへ絞る、という役割分担。content側がこの延長区間に描く水平線（上階の平面の見えがかり等）は
-`elevationStairSequence.js`の`clipContentAtHiddenEnds`がhidden端では面の真の境界へクリップする
-（探査窓自体は変えない。描画だけを絞る）。
-
-**未解決（次ステップ。最終段上端の閉じ方の一体設計で扱う）**: 最終段の鼻が面端の30mm外に出る
-（`clamp`で蹴上が垂直に潰れる。§5.12診断の根本C）／内側ささらの上端が上階壁の向こう側の面で
-止まる終端定義が未整備（上階壁の面を56mm越える）／§5.12是正で面が正しい幅になった結果、
-1F天井の見えがかり断片（`medium`・案1由来）が階段輪郭で切られて残る。いずれも今回の是正
-（§5.12 D2-1・wallLessEndAt統一）の対象外。
-
-**面端縦線の担当範囲はこの帯自身の実壁の高さまで**——2層帯で、かつ**その端に実際に上階FLの
-断面線（`upperFloorEdgeSpans`）が1本引かれる**場合に限り、天井まで伸ばさず上階FLとこの面の実際の
-天井の**低い方**（`Math.min`）で止め、その先は上階の床のはり出し・壁の縁（content）に任せる
-（`capsAtUpperFloor`）。gateは`upperFloorEdgeSpans`自身が呼ぶ`upperFloorEdgeSpanAt`と同じ関数を
-共有する単一情報源——`ctx.upperFloorEnds`の有無だけを見ると、はり出し量が0等でこの関数が実際には
-1本も線を引かない端でもcapが掛かり、縦線の上端が宙で途切れる。
-
-**横切り判定はユーザー明示指示2026-08**——実壁があっても、その壁が面の向こう側
-だけにある端（L字の凹み角・上端短縮されたCLの壁が視点側の帯に無い等）は図の端部に壁断面が現れないため壁のない端部
-（床・天井線を図の外側（実画面5mm）まで延長＝続きがある表現）として扱う。ただしこの端は**見えがかりエッジ**（`edgeAtLocal0/Run`）
-——実壁が向こう側へ折れて続く角のエッジ自体は見えるため、延長に加えて端の縦線（中線=SILHOUETTE）も描く（直交面や実壁自体が無い端＝
-階段上り口等は従来どおり縦線なし・延長のみ）。端座標は壁あり・エッジとも直交面のfaceValue（＝この面の壁の実端）へ詰める
-（ユーザー確認2026-08: エッジ縦線・延長の起点は中心線位置ではなく壁の実端。これにより「隣接面は同じ隅を共有」の不変条件は
-凹み角でも保たれる）。開放スパンの延長端（`elevationOpenSpan.js`の`resolveEnd`）も同じ規則で判定する。壁生成スキップで発動する
-典型例は階段の上り口辺・下り口辺——`generateRoomWallsFromOutline`の`stairOpenings`引数（`finishBoundary.js`が`stairPortEdges`を渡す）で
-その辺の壁生成自体がスキップされる。
-
-**`buildRoomFaces`の隅マッチングは「同じaxisCLIdを持つ複数面」を区別する**（QA修正・根本原因）。張り出し（アルコーブ等）で1本の壁面が
-開口を挟み2区間以上に分かれると、両区間とも同じaxisCLId（壁の通り位置そのもの）を持つ——単純な`Map<axisCLId,Face>`は後勝ちで片方が
-消え、その面がchainに一切現れない「抽出漏れ」になる（張り出し脇の短い返し壁で典型的に発生）。`groupByAxisCLId`+`findCornerNeighbor`
-（`elevationFaces.js`）が「同じ壁通りの複数区間」から、隅を実際に共有する1件（候補のstartCLId/endCLIdが自分自身のaxisCLIdと一致する
-もの）だけを選ぶ。
-
-壁2段書き（壁材・壁仕上げ材の2行）は表示専用に`formatMaterialLabel`で言い換える（「せっこうボード」→「PB」、`t=<数値>`→`ア)<数値>`。
-材マスター自体は変更しない）。位置は原則、面の壁中心線区間の中心・天井高の中央(`-CH/2`)。開口・アキ・段差縦線と重なる場合は
-`avoidObstacleRangesX`（`avoidGridCollisionX`と同系の最広ギャップ方式。障害物が区間を持つ点だけが違う）で最も広い空き区間へ退避する
-（巾木は面のほぼ全幅を覆うため対象外）。壁中心線間の描画長さがラベル幅の概算×2未満なら描画自体を省略する（倍率決定用の1パス目は
-scale未確定のため省略判定を行わない）。**テキスト幅概算は文字クラス別**（`estimateWallLabelWidthPx`。半角ASCII=0.5×fontSize・
-全角(CJK等)=1.0×fontSize）——変換後ラベルは半角主体になるため、全角一律の概算だと幅を過大評価し通常サイズの面でも過剰に省略される
-（QA G1）。
-
-隣接面の間隔（`gapModelMm`）は、右CH寸法（前述）に加え、面自身の壁のない端（`hasWallAtLocal0/hasWallAtLocalRun`）の延長ぶんも
-加味する（`faceWallLessExtents`。`buildRoomBand`/`buildStairBand`が共有する純関数）——延長された床線・天井線が隣の面と実間隔を
-詰めないようにするため（QA G2）。
-
-## ビュー位置の階別記憶・建具パネル連携
-`ElevationModeState`はモジュールレベルの`Map<floorId, {...}>`（セッション内のみ。IDB永続化なし）で階ごとのscrollY・faceScroll・
-表示中の部屋を記憶し、同じ階への再突入（`dispose()`→`init()`）で復元する。記憶した部屋が消滅していれば、記憶時点で1つ前だった部屋
-（`graph.rooms`順）の帯位置へフォールバックする。floorIdは構築時（`project.activePlane.id`）に一度だけキャプチャする——dispose()時点
-では`project.activePlane`が既に次の階を指している場合があるため。
-
-展開図の建具記号丸（`tag`プリミティブの`openingId`）はクリック可能——`ElevationModeState.selectedOpeningId`/`selectOpening()`は
-`OpeningModeState`と同じAPI名にしてあり、建具モードの`OpeningPanel.jsx`をそのままelevationモード中（appModeは切り替えない）でも
-再利用する。**パネル表示中も展開図のドラッグ・ホイールスクロールは自由に行える**（規制は一度入れたが撤廃した。QA修正）。
-パネルでの編集はMobX reactionで`graph.openings`の各Openingの表示に効くフィールド（committed値。CLのようなpending/committed分離を
-持たないため確定のたびに1回だけ発火）を監視し、変更があれば帯を全再構築して即時反映する。クリック対象は建具記号丸のみ
-（姿図は現状複数の生プリミティブへ分解済みで個別の建具IDを持たないため対象外。defer）。
-
-**面の描画範囲の外には断面を出さない**（`sectionTypes.js`の`cutDrawRange`が単一情報源。`cut.line.lo..hi`＋
-壁のない端部の探査延長`probeExtendLo/HiMm`）。構造梁（`structuralPrimitivesForCut`。許容は梁の半幅＋
-`halfWallThicknessMm`——梁はCLからCLまで張るのに切断線の範囲は仕上げ面基準で半壁厚内側に詰まっているため）と、
-階段のCUT断面矩形（`stringerRectLines`＝ささら正面視・踊り場桁枠。完全に範囲外のときだけ落とす）の両方に効かせる。
-実機症状: 面が`0..2885`なのに梁が`x=-6882.5`（約7m先の別スパン）、ささら・桁枠が`x=-57.5..-45.5`・
-`x=2942.5..2954.5`（半壁厚ぶん外）に出ていた。梁側は元からdocコメントが「梁の位置が切断線の範囲内」を
-契約としており、**実装だけが抜けていた**。
-
-**アキのバツ**（`emitOpenGapMarks`）:
-- **4点は空き面の実際の隅**（ユーザー実機指摘2026-08「6」C「バツの４点は、空き面の最も大きい対角を
-  頂点とする」「2Fのアキ・バツ左下点は、左側壁断面と腰壁上端の交点へ移動」）。連結成分の外接矩形の
-  隅は、成分がL字（腰壁が食い込む等）だとアキでない場所に落ちる——左右それぞれの端にあるセルの
-  z範囲から、その端での実際の上下を取る（矩形なら外接矩形と一致＝挙動不変）。
-- **腰壁と交差する区間はクリップ**（`obstructionRects`＋`subtractRectsFromLine`）。下の
-  「腰壁（`isKneeDrop`）を単一の判別軸にする」参照。
-- **手前に実体がある区間は破線**（`splitGapMarksByStair`＋`stairOccluderRects`）。**破線範囲は
-  何かの基準線の左右では決まらない**（同指摘の撤回・再指示「想定したバツに対して描画面+所定距離まで
-  レイキャストして、隠れた部分を破線にする」）——矩形は手前に実体がある範囲そのもので、対角線との
-  重なりを取るだけ。*却下した規則*: 「内側のささらより右（z全域）」を対角線ごとに割り当てる案
-  （ユーザーが撤回）。深さ方向の限定（「描画面+所定距離まで」）は、階段のflightが帯自身の部屋の
-  中にしか存在せず描画面より手前であることが構成上保証されるため追加判定を持たない（ASSUMED）。
-
-`stairOccluderRects`＝**階段の見付けシルエット**（flightの正面視bbox＋各landingの桁枠の帯）。
-アキのバツ（`splitGapMarksByStair`）と見えがかり水平線（`dashHorizontalsBehindStair`）で同じ集合を使う。
-**本番の情報源は`stairFaceOccluderRects`（`elevationStairSequence.js`。ヒット列由来）**——`stairOccluderRects`
-自体はテスト専用の参照実装（突き合わせテストで一致を保証するだけの実装）。
-
-**階段の断面プロファイルとの取り合い**（`joinToStairProfile`。ユーザー実機指摘2026-08「6」D2）:
-下階天井の断面線は**階段断面と交わるxで終える**（旧はスラブ帯が切れる列境界で止まり、階段の手前で
-宙に終わっていた）。上り切り（z=`floorHeight`）の点からは**上階床の断面線を近い側の描画端まで張り出す**。
-どちらもプロファイルの実座標から求める（面やレーンの幾何を作図側で再構成しない）。
-**ささらの見えがかり（`isStringer`）は、実体で囲まれた矩形の厳密内部を描かない**（`sectionTypes.js` の
-`isSolidBand`/`solidRectsOf`。ユーザー裁定2026-09-13）: 囲む実体＝列の `slab ∪ cut ∪ cutAlong`。`slab` の矩形は
-その上に立つ `cut` 壁の**向こう側の面まで延ばす**（`slabJunctionOf`＝`slabEdgeCutWallJunction` と同じ規則・同じ
-gate。向こう側が未探査なら延ばさない。上記「壁のない端部の2層取り合い」節）。
-`hidden`/`wall`（見えがかり）は囲まない。対象はささらだけ（踏面・桁枠の CUT と `type:'line'` は対象外）。
-旧「下階天井〜上階床の固定z帯でカット＋上下ペア判定（`clipStairDetailInSlabBand`/`isLower`）」は、この
-一般ルール「断面の中は描かない」の特例だったため削除した（経緯・実測は `.claude/elevation-redesign.md` §5.12）。
-
-**上階床スラブの断面線はスラブ自身から描く**（`slabEdgeCutWallJunction`。同指摘「6」D1「2F腰壁断面が
-2FLまで下りたあと、左を向いて2FL床断面線はりだし」）。旧は「スラブの上に立つ遠い壁の下端縁」に頼って
-おり、その壁が帯の部屋の外（d7250）で探索対象から外れた途端に線ごと消えた。
-
-**踊り場桁枠のミトレ結合の下端は「交点から見て階段と反対側」を描く**（同指摘「6」B「踊り場の下ささら
-見えがかりが描画されていない」）。旧は常に`[mitreX, hiX]`を描いており、階段がhi側にある構成では踊り場の
-ほぼ全長が消えていた——交点は階段側の端の近くに来るので、`mitreX`がどちらの端に近いかで描く側を決める。
-**踊り場桁枠の帯の基準は「踊り場面＋巾木」（`sideTop`）で統一する**（同指摘「6」A「上下にささらの
-見えがかり（横線2本）」）。front/back辺だけ`landing.z`基準で、side辺と基準が割れていた。踊り場床の
-断面線（CUT）は`landingCutPrimitives`が別に描くので重複しない。
-**桁枠side辺のend-on断面矩形は面の内側へ寄せる**（同指摘「その左右壁との取り合いにささら断面」）——
-辺は部屋の通り芯上にあり面の端より外へ出るため、そのままでは描画範囲チェックで丸ごと消えていた。
-
-**構造材の断面形状は指定構造材に合わせる**（`sectionOutline`。同指摘「6」）。H形鋼はフランジ・ウェブの
-実形状（12辺）、角形／丸形鋼管は外形＋肉厚ぶん内側の輪郭、矩形（木角材・RC）は外形4辺。RC丸柱は
-プリミティブに円弧が無いため外接矩形のまま（既知の単純化。defer）。
-**梁が「壁の中」かは切断位置で判定する**——実機の床梁は建物を貫いて走るため、
-全スパンを壁が隙間なく覆うことを要求する `beamWallEmbedding` の fullyEmbedded（旧 `isInsideWall` は 1 枚の壁を要求）が発動するのはまれ（実例: ceiling-steel-stair-test の axis 3000・opening-test の踊り場梁・ceiling-zone-test の axis 1820）。断面は切断線と交わる一点で
-描かれるのだから、判定もその位置で行う（条件 (A)(B) の詳細は上の梁の見え掛かりの節）。
-**室内を空中で横断する梁は天地2本をSILHOUETTE（中線）で描く**（同指摘「6」A「材が空中に横断している
-ので、『A』に中線で鋼材の天地に線を描画」）。切断線と平行だが芯が離れている梁は、旧`parallel`判定
-（切断線が梁の幅の帯を通ることを要求）に入らず一切描かれなかった。輪郭の縦線は持たせない。
-
-**seq3（踊り場の壁）にも踊り場の寄与を渡す**（`landingOnly`。同指摘「6」A）。§6.1表の「階段寄与: なし」は
-**段**の重ね描きの話で、踊り場の床断面線・桁枠は必要だった。あわせて`stairPrimitivesForCut`の
-`stairIsVertical`は**flightsが空でも踊り場のside辺から取る**——切断線自身の向きへフォールバックすると
-lengthwise/crossingの判定が反転し、踊り場の断面がほとんど出なくなる。
-**seq5（D2）の面はwOut2の全長**（踊り場ぶんを含む）で、向きはseq2側（踊り場が右）、寄与は復路＋踊り場。
-旧はレーン区間だけに切り詰めた面を使っており「Y2が3500の右」「踊場断面は図の右側・階段断面は左側」の
-構図にならなかった。
-
-**帯のRoomの包絡矩形は自階graphで一度だけ求めて全レイヤーで使う**（`cut.bandRoomBounds`）。層ごとの
-graphで引き直すと上階レイヤーでは自階Roomのセルキーが解決できずbounds不定＝制限なしになる。
-
-**「内側」の定義**（同指摘3）: 平面で折返し階段を見たときの内側＝**梯子状の壁断面が無い方の端**。
-判定は`innerAcrossWorld`——部屋の実外縁(`trueAcrossLo/Hi`)と一致しない側が内側で、`ladderAcrossRange`が
-LANE_GAPを片側だけ詰めるのと同じ基準（単一情報源）。**内側のささらの見えがかり**は正面視では一定xの
-縦線1本で、往路は1FL〜踊り場、復路は踊り場〜2FL（＝`baseZ`〜`baseZ+steps*riserMm`）。既存の
-`stringerEndCapPrimitives`（第3弾E）は「踊り場より下まで達するレーン」限定で両端に端面を描くもので
-踊り場より上の復路には出なかったため、その契約は変えず`innerStringerSilhouette`で対象外レーンを補う。
-
-**踊り場の床断面線は正面視でもCUT**（`landingCutPrimitives`。ユーザー実機指摘2026-08「6」C
-「踊り場断面線を太線に」）。旧実装はレーン縦断のときしか描かず、正面視では踊り場桁枠front/back辺の
-帯の上端（DETAIL細線）が踊り場床の高さに見えているだけだった。x範囲は走行方向ではなく
-**across（壁から壁までの全幅）**（同指摘「踊場床断面と壁との取り合い…幅」）。桁枠front/back辺の
-上端はこれと重複するので描かない（side辺と同じ扱い）。
-**ささら正面視の断面矩形の上端は段鼻＋巾木高さ**（同指摘「両側のささら断面上端高さは、踊り場面+巾木」）
-——側面視の裁定「ささらの上端は踏面先端で巾木同寸」と同じ基準に揃えた。
-
-**往復間の壁の芯の一点鎖線**（`ctx.extraCenterLineXs`。ユーザー実機指摘2026-08「6」C「1500の一点鎖線が
-出ていない」）。一点鎖線の源は「寸法の鎖の分割点」と「通り芯」の2つだけで、往復間の壁は切断線から見て
-**面の裏側**へ伸びるため`collectRow1SplitPoints`の直交壁検出（面の仕上げ面へ到達し**室内側**へ
-`PERP_MIN_PROJECTION_MM`以上突出する袖壁が対象）に掛からず、どちらの源にも現れなかった。
-`stairFaceSequence`が`cutTable.wall`の芯を面に直交する面だけに載せ（面と平行なB/D側には出さない）、
-`buildFaceFigure`が**一点鎖線だけを描く——寸法の鎖は分割しない**（以前「1500と1000の間のCLはどこから
-きたのか」と指摘された寸法鎖への副作用を避けるため。線だけという明示指示に従う）。
-
-**見えがかり壁の探索は帯自身の部屋の広がりまで**（`sectionProbe.js`の`withinViewRoom`。`cut.bandRoom`の
-`roomBounds`包絡矩形に壁の手前側の面が入るか）。範囲外の壁は候補から落ち、その区間は`open`帯になるので
-`emitOpenGapMarks`がアキ（一点鎖線のバツ）を描く（階段の seq1/seq3 は2026-10-07以降描かない）。実機症状「6」C: 1F部分(z0..2400)が6m先の別室の壁(d6000)を
-拾って見えがかり壁になり、ユーザー指摘の「3500の面を表す…四角にアキ・バツ」が出ていなかった。
-*却下した判定2つ*: ①壁の手前の1点プローブで所有Roomが同一か→階段室から「階段下」室を見通すのは正常なので
-全て消え、確認済みテストが落ちた。②視線方向の所有Roomの矩形→列ごとに部屋が入れ替わり狭い方で切ってしまう。
-**帯のRoomは列によらず一定でなければならない**、が要点。
-
-defer（未実装）: 傾斜天井の作図・開口の内法寸法線・巾木見切り目地・家具設備電気・屋外部屋・展開図上の編集・印刷/PDF・
-U字系以外の階段断面（L_TURN/FLARED/OPEN_WELL）・展開図の建具「姿」クリックでのパネル連携（記号丸のみ対応）・
-他階の建具の2層帯への描画（吹抜け帯の下階建具・階段帯の上階建具）。
-
-**廃止した仕様: 最上階キャップ（`upperCeilCapped`）**。「上階が最上階（`floorHeightAbove`がnull）かつ上階Roomの
-CHが非明示（`isFallback`）なら往路上の天井を1F天井高さ（`ceilLowAbs`）で水平にキャップする」という分岐を
-`elevationStair.js`／`switchbackCuts.js`／`elevationStairSequence.js`から**完全に削除した**（ユーザー実機指摘2026-08
-「6」D「2FL天井断面線は、3500左CLの外へ延長して終わる」）。成立条件が弱い推測（元から設計メモにASSUMEDと明記）で、
-実機（floorHeight=3000／chLower=2400／chUpper絶対5400）ではキャップが発動して1F天井が階段室の上まで貫通し、
-**同じ面のcontent（レイキャストが描く2F天井5400）と食い違っていた**。天井は常に`chUpperAbsMm`に揃える
-（他の描画も既に`chUpperAbsMm`基準で、そちらと一貫する）。回帰テストは`elevationStair.test.js`の
-「【最上階キャップ廃止】」——旧キャップの発動条件そのもの（3階目なしのproject＋CH未指定のVOID Room）で
-天井が`chUpperAbs`まで上がることを確認する。
-
-**レーン面の天井は「上階に実床があるか」の実測が唯一の情報源**（`buildLaneFloorAndCeiling`＋`aboveRoomSegmentsOnFace`）。
-`aboveLayer`があれば面に沿って区間ごとに上階のRoom（VOID/STAIR_VOIDは実床無しとして除外）を1点プローブし、
-**床あり＝1F天井高さ`ceilLowAbs`／床なし（吹抜け）＝上階天井`ceilTopAbs`**を割り当てて`stepCeilingProfile`で段にする。
-呼び出し側が渡す勾配天井リテラル（上り口側`ceilLowAbs`→踊り場側`ceilTopAbs`へ斜めに開く表現）は
-**`aboveLayer`が無く判定できないときだけ**のフォールバック。
-旧実装は「実Room有無がface全体で一様なら実測を捨ててフォールバックへ戻す」短絡も持っていたが
-（コード上も「挙動不変のASSUMED判断」と明記）、ユーザー実機指摘2026-08「6」D／B1で誤りと判明したため削除した——
-実機の階段室は往路面の全長にわたって上階に床が無く（列ダンプでseq2の全列が`wall`/`cut`のみ、`slab`無し）
-「一様」と判定されるため、測れているのに勾配になり、上階天井の断面線が壁のない端まで届かなかった
-（`PL[-285,2400 → 0,2400 → 2442.5,5400 → 3442.5,5400]`）。一様でも実測どおり水平に割り当てるのが正しい。
-
-## パネル統合: 段差でしか分かれていない面を1枚のパネルにする（ユーザー実機指摘2026-08「「5」のC1とC2は1枚の壁」）
-室の境界が段差を1つ挟んで一続きになっている壁（実機1階5の南側=y-1000とy0が返し壁で継がれる）は、面としては平面ごとに
-分かれるが**壁としては1枚**であり、2つのパネルに割ると同じ壁が2回・別々のラベルで現れる。
-`mergeSteppedFacesIntoPanel`（`elevationFaceList.js`）が共通の`panelId`と**接合端のフラグ2つ**
-（壁断面の有無・見えがかりエッジ）だけを書き込む。
-
-**面を1つに合成しないのが要点**——`face`は`axisCL`/`faceValue`/`inward`を各1つ持つ前提で、開口・直交壁・床/天井区間・
-ROW1分割・`elevationVoid`のsamePlane合成まで全てが`face.axisCL`を鍵にしている。書き換えるのは接合端の2フラグだけで、
-「面の端に壁断面が現れるかを面単位ではなく**パネル単位**で評価する」という1つの意味づけから、はね出しの停止・
-断面エンジンの探査延長の停止・接合部の縦線が相手の壁断面の縁と一致して1本に畳まれる、の3つが同時に正しくなる。
-
-**呼ぶ位置は`dropFacesSeenAsSightline`の後・`labelFaces`の前**（この順序固定・配線は`composeRoomFaces`と
-`buildRoomBandWithVoidAbove`の2箇所）。前者の後でなければ、あいだに残った見えがかり面のせいで「面リスト上の隣接」が
-成立しない（実機「5」は返し壁の面がD1へ取り込まれて初めてC1とC2が隣り合う）。後者の前でなければパネル単位の採番が
-できない。階段帯（`keepWallLessFaces`）では適用しない——`switchbackCuts`が面を並べ替えるため帯順に依存する規則が
-成立しない。
-
-**接合端の一致判定（条件5）は天井側だけを見る**（決定2026-09）——面オブジェクトはFLを持たないため
-（`floorDeltaMm`は`wallAdjacentFloorSegments`がgraphから作る**床区間**のフィールド）、接合端のFL差は
-面単体からは引けない。graphを引数に足す案は、モデルに該当ケースが無く検証できないうえ純関数の引数面を
-広げるため採らない。帰結として「部分指定でFLが変わる段差」も統合されるが、各メンバーは自分の
-`floorSegments`で床を描くので段差は継ぎ目に段として現れる（描き落ちにはならない）。
-天井側（上階の吹抜けに抜けているか＝`voidAbove`）は面が持つので評価する。
-**常に真の比較をこの述語に残さないこと**——「条件として書いてあるのに実際は何も弾いていない」状態は、
-将来の読み手に誤った安全感を与える。
-
-**接合の向きは「2枚目が先頭メンバーの+ローカルx側」に限る**——帯の配置式とパネル全幅の算出がこの前提で
-組まれており、逆向き（2枚目が左へ戻る）を受理すると配置とラベル幅が壊れる。
-
-**暴発の安全弁は「面リスト上で隣接する2枚だけを見る」**こと。これが無いと、室の反対側どうし（平行・同向きで端が
-偶然接する組。実機「5」のD1とD3）が1枚になる。奥行きの上限は設けない（見えがかりの話ではないため
-`SIGHTLINE_DEPTH_LIMIT_MM`は無関係）。代わりに「重ならず隙間200以下で接する」「接合端の床・天井の起点が一致する」
-「接合部にどちらか一方の壁断面がある（返し壁が実在する）」を要求する。
-
-**帯での配置**（`layoutBandFaces`）: パネル内2枚目以降はギャップ・壁のない端部の延長・CH寸法オフセットを使わず
-**世界x整合**（`originWorld`の差×`dirSign`）で置く。展開図は正投影なので段差の返し壁は見付けの線1本になり幅を
-持たない——世界x↔ローカルxのアフィン写像が通り芯丸・一点鎖線・寸法・開口・切断線の全ての前提であり、
-歩行順に返し壁ぶんの長さを挟む案はこの前提を壊すため採らない。面ラベルはパネルで1つ（先頭メンバーがパネル全幅の
-中心に描く）。
+### 見付の1px保証
+見付（2本線の間隔）は実画面で潰れると1本に見える。表示倍率scale(px/mm)から**描画限界**を1つ定め（`elevationStyle.js`の`drawLimitMm`/`faceGapLimitMm`/`visibleFaceMm`。`MIN_FACE_PX`が唯一の「指定px」）、それ未満の見付だけ限界まで広げる（限界以上は自然縮尺）。**限界は中心間距離ではなく「2本の線の間の余白が1px」**（線幅ぶん重なって1本に見えるため）。限界px＝1＋(線A幅＋線B幅)/2で、線幅は描画側と同じ表（`viewport.lineWeightsPx`＝`resolveLineWeightsPx(校正px/mm)`）を`ElevationModeState`が2パス目に`lineWeightsPx`として`scale`と一緒に帯→面ctx／断面エンジン`emitCtx`へ渡す。scale不明（1パス目・単体テスト・ゴールデン）は限界0＝モデル寸法のまま。「どちらの線が寸法を守るか」は見付ごとに決める: 三方枠は**細線（外周＝指定寸法）を守り中線（内法）を内側へ**（`openingElevationFigure.js`の`frameOnlyInnerRect`の`minFaceMm`引数。アキ標記の範囲も同じ内法に追随）、腰壁天端は**中線（天端＝腰壁高さ）を守り細線を下へ**（`kneeCapFaceMm`/`kneeCapBottomMm`）。`KNEE_CAP_FACE_MM=50`は1px保証で不要になりうる特例だが承認済みなので据え置く（実厚30へ戻すかは別途裁定）。
 
 ## 面リストの合成（composeRoomFaces）・段差見付け面・ROW1寸法のCL分割
-`buildRoomFaces`（壁面ループ・隅共有不変条件）は変更せず、その上に新レイヤ`elevationFaceList.js`の`composeRoomFaces()`を
-面リストの唯一の供給源として重ねる（`buildRoomBand`/`buildStairBand`は`buildRoomFaces`ではなくこちらを呼ぶ）。合成順は
-「袖壁・腰壁の面分割 → 段差見付け面の挿入 → `labelFaces`再採番」で固定——段差見付け面の挿入位置判定は分割済みの面配列を
-前提にする。段差見付け面（`kind:'step'`）を挟んでも実質的な隣接関係は変わらないため、`prevFace`/`nextFace`の取得は
-`neighborWallFace(faces, i, dir)`（`kind!=='step'`の最初の面を返す）を使う。
+`buildRoomFaces`（壁面ループ・隅共有不変条件）の上に`elevationFaceList.js`の`composeRoomFaces()`を**面リストの唯一の供給源**として重ねる（`buildRoomBand`/`buildStairBand`はこちらを呼ぶ）。合成順は`buildRoomFaces`→`extendFacesWithOpenSpans`→`splitFacesAtPartitionWalls`＋`clipSpans`→`insertStepFaces`→`filter(run>=MIN_FACE_RUN_MM)`→（壁の無い面を落とす。階段帯は除く）→`dropFacesSeenAsSightline`→`mergeSteppedFacesIntoPanel`（階段帯は除く）→`labelFaces`再採番で**固定**（段差見付け面の挿入位置判定は分割済みの面配列を前提にする）。段差見付け面（`kind:'step'`）を挟んでも実質的な隣接関係は変わらないので、`prevFace`/`nextFace`の取得は`neighborWallFace(faces, i, dir)`（`kind!=='step'`の最初の面）。
 
-**段差見付け面（`elevationStepFace.js`）**: 部分指定の子Roomが親の壁際に接する箇所（`wallAdjacentFloorSegments`が担当）とは別に、
-**壁の無い部屋内部**の境界でFLが異なる区間には「段差の見えがかり（見付け）」を専用の面として挿入する。`stepRiserSegments`が
-親Room自身の未指定セル＋各部分指定の子をFLごとにグループ化し（`refreshCells`→owner索引）、各グループの外形
-（`finish/gridCells.js`の`cellBoundsList`→`outlineSegments`）から「自分より低い隣に接する区間」だけを抽出する
-（相手FL>=自分のFLは重複排除で捨てる＝低い側からは生成しない）。`buildStepFaces`が通常面と同じ`letterOf`/`DIR_SIGN`規則で
-面オブジェクト化し（`lo`/`hi`は両端の直交壁面の`faceValue`へ詰める。届かなければCL値のまま）、`insertStepFaces`が
-「見付け面の始点を含む壁面Wの直後」へ挿入する（Wが無ければ末尾）。`buildFaceFigure`は`kind==='step'`を早期分岐し、
-低い側床線・両端縦線（壁断面）・天井線をCUTで、高い側床線（見付け上端。段差の向こうの床の見えがかり）を
-SILHOUETTE（中線）で描き（**問題修正2026-08その6: 天井断面は帯CHではなく低い側エリア自身の天井=`ceilAbsMm`
-（低い側FL＋低い側の解決済みCH。`stepRiserSegments`が`lowOwnerRoom`を持ち回る）**——見付け面は低い側エリアを
-見込む展開図（実機の「C1」=3の展開図）のため。高い側エリアの天井`beyondCeilAbsMm`が断面より上なら細線の破線で
-重ねる=「C1の天井断面上+100に3'の天井を表す破線」。`ceilAbsMm`未指定の合成faceは帯CHへフォールバック）（QA修正・ユーザー明示指示2026-08: 両端縦線は実際に切断される壁の断面のためCUT、
-見付け上端は見えがかりの線のため中線——旧実装は誤って全部CUTにしていた）、見付け上端〜天井には常に
-アキ（`appendGapMark`。x=0..run・y=-CH..topY。腰壁・垂れ壁の穴と共用）を乗せる（QA修正・
-ユーザー明示指示2026-08その4: 段差見付け面を新設したコミット5f8ec62の時点から、腰壁・垂れ壁の
-明示指定がある軸だけ`kneeDropGapsOnFace`経由でアキを描く実装しか無く、指定の無い通常の段差
-見付け面ではアキが一切描かれない欠落があった——本節冒頭の説明どおり「上部にアキを乗せる」が
-実装に反映されていなかった、後続のどのラウンドの変更にも起因しない当初からの欠落）。
-開口・巾木・壁2段書きはスキップし、注記帯（ROW1/ROW2/面ラベル）は
-`appendAnnotationRows`で通常面と共通合流する。両端縦線は`floorY`（低い側床）から天井(`-CH`)まで
-描く（QA修正・ユーザー明示指示2026-08その3: 旧実装は`topY`＝見付け上端で止めていたため天井まで
-届かない縦線になっていた——見付け上端はあくまで見えがかり線で、壁自体は天井まで続くため）。
+**段差見付け面（`elevationStepFace.js`）**: 部分指定の子Roomが親の壁際に接する箇所（`wallAdjacentFloorSegments`が担当）とは別に、**壁の無い部屋内部**の境界でFLが異なる区間に「段差の見えがかり」を専用の面として挿入する。`stepRiserSegments`が親Room自身の未指定セル＋各部分指定の子をFLごとにグループ化し、外形から「自分より低い隣に接する区間」だけを抽出する（相手FL>=自分のFLは重複排除で捨てる＝低い側からは生成しない）。`buildStepFaces`が通常面と同じ`letterOf`/`DIR_SIGN`規則で面オブジェクト化し（`lo/hi`は両端の直交壁面の`faceValue`へ詰める）、`insertStepFaces`が「見付け面の始点を含む壁面Wの直後」（無ければ末尾）へ挿入する。`buildFaceFigure`は`kind==='step'`を早期分岐し、低い側床線・両端縦線（実際に切断される壁の断面）・天井線をCUT、高い側床線（見付け上端。段差の向こうの床の見えがかり）をSILHOUETTE（中線）で描く。**天井断面は帯CHではなく低い側エリア自身の天井**`ceilAbsMm`（低い側FL＋低い側の解決済みCH。見付け面は低い側エリアを見込む展開図のため）。高い側エリアの天井`beyondCeilAbsMm`が断面より上なら細線の破線で重ねる。両端縦線は`floorY`（低い側床）から天井(`-CH`)まで（見付け上端で止めない。壁自体は天井まで続く）。見付け上端〜天井には常にアキ（`appendGapMark`。腰壁・垂れ壁の穴と共用）を乗せる。開口・巾木・壁2段書きはスキップし、注記帯は`appendAnnotationRows`で通常面と共通合流する。**段差見付け面との相互排除**（`subtractOpenSpanCoverage`）: 同一`(isVertical, axisCL.value, inward)`の面のopenスパンが覆う区間を差し引く（面平面上の段差はopenスパン側が表現を担う）。差し引いた残りが`MIN_FACE_RUN_MM`未満なら捨てる。差し引き前にriserをmatchingFacesの合計描画範囲へ丸める（riserは生CL値基準・面は仕上げ面基準で壁厚ぶんズレるため）。
 
-**ROW1寸法のCL分割（`elevationDimSplit.js`）**: ROW1（壁芯間寸法）は`boundary.lo`〜`hi`を1本で通すのではなく、
-`collectRow1SplitPoints`が集める3源（段差CL=`floorSegments[i].hiCLId`／面へ到達する直交壁=`perpendicularWallsOnFace(face,graph,'far')`
-のaxisCL／面に届く非通り芯中心線）で分割した「寸法の鎖」にする。通り芯（labeled）はROW2と二重になるため対象外。
-分割点は`boundary.lo/hi`ちょうど（±`SPLIT_MERGE_EPS_MM`=1）を除外し、通り芯と同位置の一点鎖線は重複させない。
+**ROW1寸法のCL分割（`elevationDimSplit.js`）**: ROW1（壁芯間寸法）は`boundary.lo`〜`hi`を1本で通さず、`collectRow1SplitPoints`が集める源で分割した「寸法の鎖」にする。源: S1段差CL（`floorSegments[i].hiCLId`）／S2面へ到達する直交壁（`perpendicularWallsOnFace(face,graph,'far')`のaxisCL）／S3面に届く非通り芯中心線／S4`spans[i].hiCLId`が非nullの内部境界（`spans[i].hiCLX`で）。通り芯はROW2と二重になるため対象外。分割点は`boundary.lo/hi`ちょうど（±`SPLIT_MERGE_EPS_MM`=1）を除外し、通り芯と同位置の一点鎖線は重複させない。**S2の`far`では`isRoomWall`を除外しない**（面の向こう側に立つ壁は定義上どこかの部屋の外周生成壁。`near`〔袖壁＝面を分割する自立壁〕では除外する。自室の壁は`reach`/`project`判定で落ちる）。段差位置のCLオフセット・巾木障害物は「床の段差プロファイル」節。
 
-**段差位置のCLオフセット（`elevationFloorProfile.js`）**: `wallAdjacentFloorSegments`のsegsは境界CLの実id
-（`loCLId`/`hiCLId`。ローカルx反転時は入れ替えて引き継ぐ）を持つ。段差の**描画位置**（区間水平床線の端x・段差縦線x・巾木・
-壁2段書きの障害物区間の4箇所）は、寸法・CL一点鎖線が使う`segs[i].hiX`（オフセット前）そのものではなく、`drawnRiserX(segs,i,halfWallMm)`
-が返す「床が低い側へ半壁厚(`halfWallThicknessMm(face)`)だけずらした位置」を使う——寸法線・CL一点鎖線と段差の実描画位置を
-意図的に別の値として持つ設計（両者が同じ線に重なって見づらくなるのを避ける）。
+**袖壁・腰壁の面分割（`splitFacesAtPartitionWalls`）**: `perpendicularWallsOnFace(face, graph, 'near')`が返す袖壁を面のローカルx（昇順・`SPLIT_MERGE_EPS_MM`以内は併合）で並べ、面を断片化する（`kind:'step'`は素通り）。各断片は元面を継承しつつ分割端だけ`startCLId/endCLId`=袖壁CLのid（隣接断片が同じCLを参照＝境界が厳密に一致）・`lo/hi`=袖壁の仕上げ面（断片は自分自身の`originWorld`を持ち直す）・`hasWallAtLocal0/Run`=false（壁のない端部処理を流用）・`partitionCutAtLocal0/Run`={thicknessMm, topHeightMm|null}（`graph.kneeDropWalls`をaxisCLId一致＋スパン重なりで直読み。指定が無ければnull=天井まで）へ差し替える。`buildFaceFigure`は`partitionCutAtLocal0/Run`があれば分割端に`thicknessMm`幅・`0..-(topHeightMm??CH)`のCUT枠rectを重ねる。
 
-**袖壁・腰壁の面分割（`elevationFaceList.js`の`splitFacesAtPartitionWalls(faces, room, graph)`）実装済み**——
-`perpendicularWallsOnFace(face, graph, 'near')`が返す袖壁を面のローカルx（昇順・`SPLIT_MERGE_EPS_MM`以内は併合）で並べ、
-面を断片化する（`kind:'step'`の見付け面は対象外のまま素通り）。各断片は元面のフィールドを継承しつつ、分割端だけ
-`startCLId/endCLId`=袖壁CLのid（隣接断片が同じCLを参照する＝`faceBoundaryLocalX`基準の境界が厳密に一致）・
-`lo/hi`=袖壁の仕上げ面（`Wall.materialRange`の該当端。断片は自分自身の`originWorld`を`dirSign>0?lo:hi`で持ち直す＝
-各断片が独立したローカル座標系(x=0起点)を持つ点に注意）・`hasWallAtLocal0/Run`=false（既存の「壁のない端部」処理＝
-床天井延長＋端の縦線なしをそのまま流用）・`partitionCutAtLocal0/Run`={thicknessMm, topHeightMm|null}
-（`kneeDropRecordFor`。`graph.kneeDropWalls`をaxisCLId一致＋スパン重なりで直読み。腰壁指定が無ければnull=天井まで）
-へ差し替える。`buildFaceFigure`は`partitionCutAtLocal0/Run`があれば分割端に`thicknessMm`幅・`0..-(topHeightMm??CH)`の
-CUT枠rectを重ねる。
+**同値・別延長のCLと隅の同定**（`finish/wallGeneration.js`の`externalSubIntervals`）: 外周エッジの端点idは、セルキー由来（端点・隣接スパン＝実際にセルを画しているCL）が**権威**であり、`dividerCLsBetween`で上書きしてはならない。値が同じで延長だけ違うCLが2本あると隅が「その位置に届いていない方」のidを指し、`buildRoomFaces`のチェーン探索（CLの**id**で隣の面へ辿る）が繋がらず面が1枚も残らない。同値の候補が複数あるときは、その辺の軸位置まで延長が届いているCL（`isActiveAcrossRange`。±1mmの窓）を優先する。
 
-Round Fフィクスチャ（`.claude`配下の設計メモ・引き継ぎ参照）は`generateRoomWallsFromOutline`由来の外周壁24本のみで
-自立壁（`isRoomWall`/`isExteriorWall`とも false の袖壁候補）を1本も含まないため、本仕様の効果は確認できていない
-（`splitFacesAtPartitionWalls`自体は専用の実壁フィクスチャ（`elevationFaceList.test.js`）で分割・境界一致・幅合計不変・
-腰壁高さ・失敗系（未到達・突出不足）を検証済み）。
+## 開放スパン（elevationOpenSpan.js）
+面の範囲を「壁のあるアウトラインエッジ」から「同一axisCL平面上でnear側に自室セルが連続する最大区間」へ拡張する仕組み（D1/B1のような「壁区間＋壁のない開放区間を1枚の連続面として描く」）。`kind:'wall'|'open'`の`spans`を持つ。
 
-## 開放スパン（elevationOpenSpan.js）— 完成・配線済み
-面の範囲を「壁のあるアウトラインエッジ」から「同一axisCL平面上でnear側に自室セルが連続する最大区間」へ拡張する仕組み
-（D1/B1のような「壁区間＋壁のない開放区間を1枚の連続面として描く」表現）。`composeRoomFaces`に配線済み
-（順序: `buildRoomFaces`→`extendFacesWithOpenSpans`→`splitFacesAtPartitionWalls`＋`clipSpans`→`insertStepFaces`→
-`filter(run>=MIN_FACE_RUN_MM)`→`labelFaces`）。
+**座標系（意図的な混在。統一しない）**: **描画**（床線・あき・エッジ縦線）は実壁の隅=仕上げ面スナップ・壁のない内部境界=生CL値、**寸法（ROW1）**はboundary（面の壁芯間）とS4分割点（`spans[i].hiCLX`=CL位置）。このため描画run（実測1285=342.5+942.5）とROW1の合計（1000+400=1400）は一致しない（既存仕様どおり）。
 
-**座標系（意図的な混在。統一しない）**: 既存の二重管理規約（描画x=仕上げ面基準、寸法x=CL基準。仕様4参照）をそのまま
-適用する——**描画**（床線・あき・エッジ縦線の位置）は実壁の隅=仕上げ面スナップ・壁のない内部境界=生CL値、
-**寸法（ROW1）**はboundary（面の壁芯間）とS4分割点（`spans[i].hiCLX`=CL位置）で構成する。このためD1の描画run
-（実測1285=342.5+942.5）とROW1の合計（1000+400=1400）は一致しない——これは既存仕様どおりの意図的な差である。
+**抽出**（`extendFacesWithOpenSpans`/`clipSpans`）: room自身の登録セル（`refreshCells`。extent解決は`worldToCell`に委譲）のうち面のnear側に接するもの全件を列挙し、各セルのfar側を1点プローブしてwall/open分類する（**微小刻みでface.lo/hiの外側へプローブする方式は、直交壁の厚み帯の内側を誤って「壁あり」と拾い続けるため採用しない**）。面自身の既知区間を含む連続クラスタだけを採用し、延長した端だけ`perpFaceAt`で隅スナップする。延長していない端は元のhasWallAtLocal0/Runを引き継ぐ。`dirSign<0`の面はworld順とlocal順が反転するため、`spans[i].hiCLId`・「末尾=hiCLId null」の判定は**ソート後のlocal順配列で行う**。**近側セルは「軸に接する」ものに加え「軸を跨ぐ」ものも拾う**（`cellStraddlesFace`。CLがその位置まで延長されていない帯では自室のセルが割れず面を跨ぐ。跨ぎ由来は`straddle`で区別し`mergeSameKind`の結合キーに含める＝正当な小区間と融合させない）。床の段差プロファイルは跨ぎ対象外。**粗いセル境界での1点プローブ誤分類の回避**（原則）: 他室区間を挟んだ延長は`runHi===次のrunLo`で実際に連続する範囲だけ延長／見付け面のriserはmatchingFacesの範囲へ丸める／自室側のセル境界がfar側の部屋境界より粗いときはrunの伸びる方向のCLで刻んで区間ごとに個別プローブ（`collectRunBreaks`/`findRunCLAt`）。いずれも区間境界の同定という同じ土台の不備で、同定ロジック自体を直す（片方だけ直す対症療法にしない）。
 
-**抽出**（`extendFaceWithOpenSpans`/`extendFacesWithOpenSpans`/`clipSpans`）: room自身の登録セル（`refreshCells`。
-extent解決は`worldToCell`に委譲し再実装しない）のうち面のnear側に接するもの全件を列挙し、各セルのfar側を1点
-プローブしてwall/open分類する（**微小刻みでface.lo/hiの外側へプローブする方式は、直交壁の厚み帯の内側を誤って
-「壁あり」と拾い続けるため採用しない**——実際にこの不具合を作り込み・発見・破棄した）。面自身の「既知区間」
-（face.lo/hi。実壁の隅で確定済み）を含む連続クラスタだけを採用し、延長した端だけ`perpFaceAt`で隅スナップする。
-延長していない端は元のhasWallAtLocal0/Runをそのまま引き継ぐ（stairOpenings等、開放スパンと無関係な理由で元々
-falseだった面を誤ってtrueへ書き換えない）。**QA修正**: `dirSign<0`の面はworld順とlocal順が反転するため、
-`spans[i].hiCLId`（内部境界のCL id）・「末尾（面端そのもの）はhiCLId=null」の判定は、ソート後のlocal順配列で
-行う必要がある（world順のまま判定すると誤った区間にhiCLIdが付き、ROW1に余計な分割点が出る不具合を実際に
-作り込み・発見・修正した）。
+**延長する端の取捨**（規則0→1→2→2.5→3。`dropEnd`。「出口側の隅だけが担う。情報を全く持たない所〔アキ・バツだけ〕が描画延長の1/4を超えたら延長しない」）: 連続する区間を貪欲に取り込んだあと**端の区間**を取捨する。落とした端は「壁断面のない端部」（床・天井線を図の外へ延長）で終わる。
+0. **wall区間**は、そこまでの全てのopen区間が「niche」（跨ぎでなく`SIGHTLINE_DEPTH_LIMIT_MM`**以下**の奥の同向き平行面が覆う凹み＝アルコーブ）のときだけ規則1〜3に進む（1つでもnicheでなければ呑まない＝別の空間への開口の先の壁は別の壁）。深さ比較は`<=`（アルコーブ奥行きちょうど800のM1確定挙動が根拠）で、エンジンの「見えがかりとして描くか」(`<`800)とは**別の問い**なので統一しない。
+1. `informative`な区間は常に残す（`collectNearCellSegments`がnear/far双方の所有Roomの実効FL・解決済みCHを比べて立てるフラグ。差があれば遠側床線・遠側天井線という実体が現れる）。
+2. 情報ゼロでも、**出口側の隅**（ローカルrun端＝chainで次の面へ渡る隅。`dirSign>0`ならworld hi）を越える延長で近側セルが軸に接しているなら残す（入隅は必ず2面で共有されるので見通しは出口側の面だけが担えば過不足がない）。
+2.5. **「その先を同室の平行・同向き・より奥の壁面が覆っているなら取り込まない」**（同じ向きの壁が別の平面で続いているだけで、その平面の面が同じ世界x区間を壁として描く。取り込むと「壁」と「アキ」で二重になる）。**規則1・2より先に置いてはいけない**（承認済みの役割分担を覆し、実機2階22のA1〔跨ぎ由来の942〕とRoundF room2の中心3面が消える）。跨ぎ由来の区間も対象外。覆い判定には「奥の面がこの面と並走していない（走り範囲が重ならない）」条件が要る（無いと部屋の反対側の壁まで覆いと見なす）。
+3. それ以外（入口側 or 跨ぎ由来）は区間長が図全体の**1/4以下**のときだけ残す。**比は「実際に描かれる長さ」で採る**（延長した端は`resolveEnd`が直交壁の仕上げ面へ詰めるため生のセル区間長と桁違いになりうる。端の確定を取捨ループの**内側**に置く）。
 
-**端の区間の取捨（規則1→2→2.5→3。`dropEnd`）**: 取り込んだ端の開放区間は「情報を持つか」で取捨する。
-2026-09追加の**規則2.5**は「その先を**同室の平行・同向き・より奥の壁面**が覆っているなら取り込まない」——
-そこに描かれるのはこの面のアキではなく、同じ向きの壁が別の平面で続いているだけで、その平面の面が同じ世界x区間を
-壁として描く（取り込むと同じ場所が「壁」と「アキ」で二重に描かれる。実機1階5/C2の400）。
-**この規則を規則1・2より先に置いてはいけない**——先に置くと「informativeな区間は残す」「見通しは出口側の面が担う」
-という承認済みの役割分担を覆し、実機2階22のA1（跨ぎ由来の942）とRoundF room2の中心3面（出口側の3342.5）という
-ユーザー確認済みの表現が消える（実測: 既存テスト6件が落ちる）。同じ理由で**跨ぎ由来（straddle＝その位置に
-境界線が1本も無い）の区間も対象外**——境界線が無い以上「別の平面へ続いている」とは言えない。
-覆い判定には「奥の面がこの面と**並走していない**（走り範囲が重ならない）」条件が要る。これが無いと部屋の
-反対側の壁（同じ向き・数千mm奥・この面の走り範囲を丸ごと含む）まで「覆っている」と見なしてしまう。
-**既知の限界（規則1・2より後ろに置いた代償）**: 規則2が先にあるため、規則Aは「入口側かつ非跨ぎ」の端にしか
-到達しない。したがって**左右反転した同型のL字**（段差が出口側に来る配置）では規則Aが掛からず、重複区間が
-残るためパネル統合の条件3（重ならない）も不成立になり、面は2枚のまま残る。実機で該当が出たら、規則2の
-「見通しは出口側の面が担う」との優先関係をユーザー裁定で決め直すこと（この場では決められない）。
-
-**QA修正（実機不具合。room2/room3が同時に成立しない不具合）**: 3件の根本原因を特定・修正した。
-1. **他室区間を挟んだ延長の誤爆**: `collectNearCellSegments`はroom自身が所有するセル区間だけを列挙するため、
-   他室が間に挟まる箇所は配列上の要素そのものが欠落する（隣接インデックスでも値としては不連続）。従来は
-   「配列上ownIdxの前後を無条件に取り込む」実装だったため、他室領域を飛び越えて延長し、spansに他室領域ぶんの
-   穴（他室区間ぶんのopen/wallどちらの分類も付かない欠落区間）が空いていた。修正: `runHi===次のrunLo`で実際に
-   連続している範囲だけを延長対象にする（不連続ならそこで止める）。
-2. **見付け面の残差**: `subtractOpenSpanCoverage`のriserはセル輪郭の生CL値基準、matchingFacesの`lo/hi`は実壁の
-   隅で仕上げ面基準にスナップされた値——両者は壁厚みぶん（数十mm）ズレることがあり、riserがmatchingFacesの
-   描画範囲を壁厚み分はみ出す残差（対応する面がそもそも描かれない位置）がopen区間の外側にごく僅かな幅の
-   見付け面として残っていた。修正: 差し引き前にriserをmatchingFacesの合計描画範囲（lo/hiの和集合）へ丸める。
-3. **粗いセル境界での1点プローブ誤分類**: `collectNearCellSegments`は自室の登録セル1件につきfar側を1点だけ
-   プローブする。自室側のセル境界がfar側の部屋境界より粗い場合（例: extentLo/Hiで範囲制限されたCLが自室側の
-   行では有効域外にあり分割されない。Round Fの中心2＝室内側の行では無効・far側の行では有効、という構成）、
-   1点プローブでは区間全体（複数の他室にまたがりうる）を1つのkindへ丸ごと誤分類してしまう。修正:
-   `elevationStepFace.js`の`collectAxisBreaks`と同じ考え方でrunの伸びる方向のCLで刻み、区間ごとに個別
-   プローブする（`collectRunBreaks`/`findRunCLAt`）。
-これら3件は独立した規則の誤りだが、いずれも「開放スパンの区間境界の同定」という同じ土台の不備に由来し、
-room2/room3のどちらか一方だけを直すと他方が壊れる対症療法にはならない（3件とも同定ロジック自体の修正のため）。
+**不変条件「spansを持つ面はspansがrunをちょうど覆う」と重複解消の包含限定**: `composeRoomFaces`出力までの面は`spans[0].loX≈0`・`spans末尾.hiX≈run`・区間が連続（許容GAP_EPS）を満たす。保証は構成的（生成点は`extendFaceWithOpenSpans`と`clipSpans`のみ・`dedupeOverlappingFaces`はspans/lo/hiを編集しない）で実行時assertは持たない（テスト側の独立検算`assertSpansCoverRun`が門番）。重なる面の片側のlo/hiだけ広げてspansを据え置く「包絡」はこの不変条件を破りROW1に負の寸法を出した。現在は**包含関係に限定**（o⊇fはスキップ・f⊇oはcontainerを丸ごと採用・部分重なりはマージしない）。`elevationVoid.js`の多層合成後はspansが延長域を持たない既知の別規約で対象外。
 
 **描画**（`buildFaceFigure`のspans処理）: 通常面の床線・天井線・両端縦線の直後にopen区間ごと処理する。
-1. 遠側床線: `nearDeltaAt(x)`（floorSegmentsからxを含む区間のfloorDeltaMmを返す共通ヘルパ）で求めた近側の
-   床yと、`farFloorDeltaMm`が異なる場合だけSILHOUETTE水平線を追加する——Phase1の`wallAdjacentFloorSegments`
-   near側修正により、多くの場合floorSegments自体が既にopen区間と同じ高さのCUT線を描いているため、この分岐は
-   「floorSegmentsが（何らかの理由で）追従できていない場合の保険」として働く（重複描画は起きない）。
-2. 上部あき: `appendGapMark`（腰壁＋垂れ壁のアキと共用）で天井から近側床（見上げ方向は遠側床）
-   までの矩形を描く。**ただし開放スパンが「壁のない端部」に接している場合は描かない**
-   （ユーザー実機指摘2026-08「5」C2）——その端は床線・天井線の延長で既に「続きがある」ことを
-   表しており、同じ場所へアキを重ねると二重表現になる。加えて`appendGapMark`は矩形（中線の輪郭）も
-   積むため、その辺が面端ちょうどに縦線として現れ、実機では「通り芯上のエッジ線」に見えていた
-   ——**エッジ線とアキ・バツは別々の不具合ではなく、この1個のアキ標記が正体だった**
-   （見えがかりエッジでも柱型でもない。全面の診断ログで`e0/eR=F`・`solid=0`かつ`rect=med[x0w400]`と
-   確定させた。以後この種の切り分けは推測ではなく`elevationDiag.js`で行うこと）。
-   反対側が壁で閉じている開放スパン（室が自分自身へ回り込む内部の抜け等）は従来どおり描く
-   ——実機の他の全ての開放スパンはこちらで、アキが壁のない端部に接するのは指摘のあった1面だけだった——見下ろし方向で遠側床まで伸ばすと、矩形外形の実線が床断面下の細破線
-   （遠側床線・床下縦線）と同座標で重なり覆ってしまうため近側床でクランプする（QA指摘）。
-   （QA修正・ユーザー差し戻し2026-08: 一度「アキ表現は開放スパンに不要」として全廃したが、
-   指示範囲外の拡大解釈だったとして復元——アキ廃止は今後、明示指示がある場合のみ行う）。
-3. 境界エッジ: open区間の両端のうち隣がwall側（区間 or 面端）ならSILHOUETTE縦線を引く。
-**内部境界の描画xは「壁厚×1/2だけ開放側」**（`drawnSpanRanges`/`drawnSpanBoundaryX`。ユーザー実機
-指摘2026-08の5例——5/C2の400CL=左・10/D1の400CL=右・10/C2の800CL=左・10/B2の1000CL=左・
-11'/A2の1600の両側=外——はすべてこの1規則で説明できた）: 境界に立つ壁は中心線に対して厚みを持つため
-**実際の抜けは壁の面から始まる**（CLで切ると開口を半壁厚ぶん広く描く）。「当該壁厚・偏芯を加味する」
-ため決め打ちの半壁厚ではなく`innerWallFaceAt`で実壁の面（`Wall.axisValue`＝偏芯込み）を引き、
-**境界に実壁が無ければオフセットしない**（決め打ちでフォールバックすると壁の無い境界まで一律に
-ずれる。実装して既存テストで検出した）。**面端はずらさない**——`snapFaceEndsToCorners`が既に直交壁の
-仕上げ面へ詰め済みで二重になる。床段差の`drawnRiserX`と同じ「描画位置と寸法位置を別に持つ」規約で、
-寸法・CL一点鎖線はオフセット前の`spans[i].hiCLX`のまま。描画側とテストは`drawnSpanRanges`を共有する。
-**直交壁が無く、面沿いの壁の端が柱包み（在来木造の自由端。`applyFreeEndProtrusion`）で境界CLから開放側へ出ているときは、その壁端**
-（エンジンの凹み側面線と同じ位置。許容幅は`CORNER_PROBE_DEPTH_MM`で、出幅は決め打ちにしない。直交壁が最優先、CLより引っ込んだ端は採らない。2026-10-13「2階廊下D2: Y4の中線は不要」）。
+1. 遠側床線: `nearDeltaAt(x)`で求めた近側の床yと`farFloorDeltaMm`が異なる場合だけSILHOUETTE水平線を追加（floorSegmentsが追従できていない場合の保険。重複描画は起きない）。
+2. 上部あき: `appendGapMark`で天井から近側床（見上げ方向は遠側床）までの矩形を描く。**ただし開放スパンが「壁のない端部」に接している場合は描かない**（床線・天井線の延長で「続きがある」を表現済み。`appendGapMark`は矩形の中線の輪郭も積むのでその辺が面端の縦線に見える。この「通り芯上のエッジ線」の正体は1個のアキ標記だった。切り分けは推測でなく全面の診断ログで行う）。反対側が壁で閉じている開放スパンは描く。見下ろし方向は近側床でクランプ（遠側床まで伸ばすと矩形外形の実線が床断面下の細破線を覆う）。アキ廃止は明示指示がある場合のみ行う。
+3. 境界エッジ: open区間の両端のうち隣がwall側ならSILHOUETTE縦線。**内部境界の描画xは「壁厚×1/2だけ開放側」**（`drawnSpanRanges`。実際の抜けは壁の面から始まる。`innerWallFaceAt`で実壁の面〔偏芯込み〕を引き、**境界に実壁が無ければオフセットしない**。面端はずらさない。寸法・CL一点鎖線はオフセット前の`spans[i].hiCLX`のまま。描画側とテストは`drawnSpanRanges`を共有）。直交壁が無く、面沿いの壁の端が柱包み（在来木造の自由端。`applyFreeEndProtrusion`）で境界CLから開放側へ出ているときは、その壁端（直交壁が最優先、CLより引っ込んだ端は採らない）。
 4. 巾木・壁2段書き障害物にopen区間を追加。`extendedAtLocal0/Run`端では隣接面由来の建具断面を描かない。
 
-**見下ろし方向は破線（QA修正・ユーザー明示指示2026-08）**: 開放先(far側)の床がnear側より低い
-（`farFloorDeltaMm < nearDelta`。見下ろす方向）場合、遠側床線・境界エッジの縦線を`dash:'dashed'`
-にする（見上げる方向・同じ高さは従来通り実線）。ユーザーが特定の面（room3 A2）で明示指示した
-形をそのまま一般規則化したもの——類似の他規則（面端の「壁のない端部」延長等）への拡張は
-明示指示が無い限り行わない。
-**床断面より下・天井断面より上の向こう側の断面は細線の破線（ユーザー明示指示2026-08その2）**:
-床断面（near床線）より下に見える遠側床線は破線かつ**細線**（DETAIL。床〜天井の間に見える
-見上げ方向の遠側床線は従来どおり中線の実線）。あわせて床断面〜far床の**端部の縦線**（境界エッジの
-床下部分）も同じ細線の破線で継ぎ足し、端点をfar床線と厳密に一致させて破線同士の角が必ず交点で
-接続するようにする（room3 A2の1200区間＝g領域の床断面下で明示指示）。天井断面より上の向こう側の
-断面も同規則の対象——spansの`farCeilAbsMm`（開放先の天井絶対高さ。問題修正2026-08その2で実装）が
-near天井断面より高ければ細線の破線＋端部縦線（near天井〜far天井。角=far天井側を始点）、低ければ
-床〜天井の間の見えがかりとしてSILHOUETTE実線（中線）。アキ矩形の上端もfar天井が低い場合はそこまで
-クランプする（床側の近側床クランプと対の規約）。
+**見下ろし方向は破線**（ユーザー明示指示の一般規則化。類似規則への拡張は明示指示がある場合のみ）: 開放先(far側)の床がnear側より低い場合、遠側床線・境界エッジの縦線を`dash:'dashed'`にする。**床断面より下・天井断面より上の向こう側の断面は細線の破線**: 床断面より下に見える遠側床線は破線かつ細線（床〜天井の間に見える見上げ方向の遠側床線は中線の実線）。床断面〜far床の端部の縦線も同じ細線の破線で継ぎ足し、端点をfar床線と厳密に一致させる。天井断面より上も同規則（`farCeilAbsMm`がnear天井断面より高ければ細線の破線＋端部縦線、低ければ床〜天井の間の見えがかりとしてSILHOUETTE実線。アキ矩形の上端もfar天井が低い場合はそこまでクランプ）。
 
-**段差床の抽出（`wallAdjacentFloorSegments`）欠測区間の誤フォールバック修正（QA修正・項目6）**:
-自室セルの境界がface側で粗い（extent制限されたCLが該当行では無効域にあり分割されない）場合、
-touching配列に欠測（cursor〜次のtouching.runLoの隙間）が生じる。従来はこの欠測区間を無条件で
-「親扱い（floorDeltaMm:0）」にフォールバックしていたが、実際には部分指定の子が所有する区間まで
-親扱いに丸めてしまい、本来存在しない極小の段差（子→親(極小)→子）が生まれていた
-（elevationOpenSpan.jsのcollectNearCellSegmentsで既に修正済みの「粗いセル境界での1点プローブ
-誤分類」と同根）。`probeGapOwners`（`collectRunBreaks`/`findRunCLAt`と共にelevationOpenSpan.jsから
-elevationFloorProfile.jsへ統合・re-export）が欠測区間をrunの伸びる方向のCLで刻んで個別に
-`worldToCell`プローブし、実際の所有Roomを求める——所有者が見つからない区間だけ従来通り親扱い。
+## パネル統合: 段差でしか分かれていない面を1枚のパネルにする
+室の境界が段差を1つ挟んで一続きになっている壁（返し壁で継がれた壁）は、面としては平面ごとに分かれるが**壁としては1枚**であり、2つのパネルに割ると同じ壁が2回・別々のラベルで現れる。`mergeSteppedFacesIntoPanel`（`elevationFaceList.js`）が共通の`panelId`と**接合端のフラグ2つ**（壁断面の有無・見えがかりエッジ）だけを書き込む。
+- **面を1つに合成しない**のが要点: `face`は`axisCL`/`faceValue`/`inward`を各1つ持つ前提で、開口・直交壁・床/天井区間・ROW1分割・`elevationVoid`のsamePlane合成まで全てが`face.axisCL`を鍵にしている。「面の端に壁断面が現れるかを面単位ではなく**パネル単位**で評価する」という1つの意味づけから、はね出しの停止・探査延長の停止・接合部の縦線が相手の壁断面の縁と一致して1本に畳まれる、の3つが同時に正しくなる。
+- **呼ぶ位置は`dropFacesSeenAsSightline`の後・`labelFaces`の前**（この順序固定。配線は`composeRoomFaces`と`buildRoomBandWithVoidAbove`の2箇所）。前者の後でなければあいだに残った見えがかり面のせいで「面リスト上の隣接」が成立せず、後者の前でなければパネル単位の採番ができない。階段帯（`keepWallLessFaces`）では適用しない（`switchbackCuts`が面を並べ替えるため帯順に依存する規則が成立しない）。
+- **接合端の一致判定（条件5）は天井側だけを見る**: 面オブジェクトはFLを持たないため接合端のFL差は面単体から引けない（graphを引数に足す案は検証できず純関数の引数面を広げるので不採用）。帰結として部分指定でFLが変わる段差も統合されるが、各メンバーは自分の`floorSegments`で床を描くので段差は継ぎ目に段として現れる。**常に真の比較をこの述語に残さない**（誤った安全感を与える）。
+- **接合の向きは「2枚目が先頭メンバーの+ローカルx側」に限る**（帯の配置式とパネル全幅の算出がこの前提）。**暴発の安全弁は「面リスト上で隣接する2枚だけを見る」**こと（室の反対側どうしが偶然接する組を1枚にしない）。奥行きの上限は設けない。代わりに「重ならず隙間200以下で接する」「接合端の床・天井の起点が一致する」「接合部にどちらか一方の壁断面がある」を要求する。
+- **帯での配置**（`layoutBandFaces`）: パネル内2枚目以降はギャップ・壁のない端部の延長・CH寸法オフセットを使わず**世界x整合**（`originWorld`の差×`dirSign`）で置く（展開図は正投影なので段差の返し壁は見付けの線1本で幅を持たない。世界x↔ローカルxのアフィン写像が通り芯丸・一点鎖線・寸法・開口・切断線の全ての前提）。面ラベルはパネルで1つ（先頭メンバーがパネル全幅の中心に描く）。
 
-**段差見付け面のROW1境界退化バグ修正（`elevationStepFace.js`のbuildStepFaces。QA修正・項目4）**:
-`startCLId`/`endCLId`へ段差自身のaxisCL.id（面に直交する軸＝両端で同じ値）を両端とも詰めていたため、
-`faceBoundaryLocalX`（startCLId/endCLIdの位置差でROW1境界を求める）が同一CLの差=0という
-退化した幅0の境界を返していた。通常面と同じ規約（startCLIdは世界座標loを・endCLIdは世界座標hiを
-決めるCLのid）に合わせ、両端の直交壁面（`perpFaceAt`で求めたloFace/hiFace）自身のaxisCL.idを使う。
+## 階をまたぐ2層帯（階段・吹抜け）
+**共通基盤**: 多層帯は`finalizeBand`の`heightUnits`（既定1）で宣言し、`normalizeBandHeightUnits`（`elevationLayout.js`）が帯スロット高さを「全帯中の最大unitHeightMm×整数」へ切り上げる。**1層帯（heightUnits<2）は一切動かさない**（天井高の異なる階で1層帯まで最大帯高へ引き上がる副作用を避ける）。`chooseElevationScale`の予算基準は`unitHeightMm ?? heightMm`（2層帯が混ざっても縮尺は1層基準）。boundsには触れない。`layoutBandFaces`の`ctx.faceOverride(face,i,defaults)`はfaceCtxへの差し込みフックで、**`hasLeftChDim`の継ぎ目判定より前に適用する**（後だと階段帯の面ごとCH寸法が出ない）。`buildFaceFigure`の`ctx.ceilingProfile`（区分線形`[[localX,ceilAbsMm],..]`）は天井解決を`ceilAbsAtX`に集約して勾配天井をCUTのpolyline1本で描く（端縦線上端・袖壁断面・アキ上端・注記突き出しも追従）。範囲外のxは端点値へクランプし、カバレッジ条件は持たない（旧「描画範囲を覆わなければフォールバック」契約は壁のない端部の延長で描画範囲が広がるだけで勾配天井が常にフラット化するバグの原因だった）。
 
-**段差見付け面との相互排除**（`elevationStepFace.js`の`subtractOpenSpanCoverage`）: `stepRiserSegments`の候補
-から、同一`(isVertical, axisCL.value, inward)`の面のopenスパンが覆う区間を差し引く。差し引いた残りが
-`MIN_FACE_RUN_MM`未満なら捨てる。D1/B1のような「面平面上の段差」はopenスパン側が表現を担い、独立した段差見付け面
-（重複表現）にはならない。面平面の外（同一軸の面が存在しない内部段差）は従来どおり独立した見付け面のまま。
+### 2層帯は「1階と2階の展開を上下に並べた図」（上部吹抜けの多層書き。方針C）
+上部吹抜けの多層書きは**吹抜けを通して上を覗いた図**ではなく、**1階の展開と2階の展開を上下に並べた図**として組む。上階ぶんは`elevationVoid.js`の`appendUpperStoreyOutline`（輪郭。断面エンジンを上階だけの1層としてもう1本）と`appendUpperStoreyTrim`（体裁。天井断面線・巾木・壁2段書き・天井高寸法）が担当する。
+- 範囲は次の2条件の**積**（`upperStoreySegments`。吹抜けの範囲は下の断面が既に上階天井まで描いているので引く）: (1) その面の平面が上階に存在する範囲（`upperPlaneLocal`。同じ通りに上階の壁が1枚でもあれば最初の壁から最後の壁まで）／(2) その上階の空気が、吹抜けを通して下階の空間とつながっている範囲（「断面の中」の判定）。(1)は平面の存在確認であって可視判定ではなく、(2)が無いと方針Cの上階パスは断面の中だけを描くことになる。
+- 上階を**それ自身が自階である1層の断面**として組むのが要点（上階の壁・アキ・エッジが通常の1層帯と同じ処理で出る）。断面ローカルxはcutごとに`line.lo/hi`から決まるため、面ローカルxへ戻す平行移動を掛ける。
+- **体裁の値の出どころはすべて2階の部屋**（1階の巾木高さ・壁材を2階へ転用しない）。巾木・壁2段書きは「その位置の2階の部屋の面がある範囲」だけに出る。**横方向の寸法（壁芯間・通り芯丸・面ラベル）は増やさない**（上下階で同じ位置なので重なるだけ）。増やすのは縦の天井高寸法（上階ぶん1本）。
+- 結果: **天井の高さが変わる境界に立つ壁は、上階を描く範囲では壁厚（両縁）で出る**（同じ壁が上階の切断壁として普通に扱われるため）。上階を描かない範囲では見える側の1縁だけ。
+- **上階の天井高寸法は「その端に上階の断面がある面」の左に立てる**（`appendUpperStoreyTrim`。先頭面の左が「断面の中」だと図中に該当する断面が無い寸法になる。1階の左CH寸法が「左端区間の実際の床〜天井」を測るのと同じ規約を上階にも適用）。
+- 多層帯（`buildRoomBandWithVoidAbove`）にも`ctx.solids`を渡す（渡し漏れで柱型・梁型が丸ごと欠けた前例）。
 
-**延長する端の取捨（問題修正2026-08その8/その9。ユーザー期待図「2階22」・明示指示「A案＝出口側の隅だけが担う。
-情報を全く持っていないところ（アキ・バツだけ）が描画延長の1/4を超えたら延長しない」）**: `extendFaceWithOpenSpans`は
-連続する区間を貪欲に取り込んだあと、**端の区間**を次の順で取捨する。落とした端は従来どおり「壁断面のない端部」
-（床・天井線を図の外へ延長して続きを示す表現）で終わる。
-0. **wall区間**は、そこまでの間にある全てのopen区間が「niche」（跨ぎでなく、`SIGHTLINE_DEPTH_LIMIT_MM`**以下**の
-   奥の同向き平行面が覆う凹み＝アルコーブ）のときだけ規則1〜3の取捨に進む。1つでもnicheでなければ呑まない
-   （問題修正2026-09）——「800以上奥は同じ壁面の凹みではなく別の空間」で、別の空間への開口の先に立つ壁は
-   **別の壁**（実機2階22: x=0の南面が規則2で開放区間の先の北壁まで呑み、同じ壁の別面と重なった）。
-   深さ比較は`<=`——「1枚のパネルとして繋げてよい凹みか」の問いで、アルコーブ奥行きちょうど800のM1確定挙動が
-   根拠。sectionEngineの「見えがかりとして描くか」（`<`800）とは**別の問い**なので`<`へ統一してはいけない。
-1. `informative`な区間は常に残す——`collectNearCellSegments`がnear/far双方の所有Roomの実効FL・解決済みCHを比べて
-   立てるフラグで、差があれば遠側床線・遠側天井線という**実体**が現れる（差が無ければ描かれるのはアキだけ）。
-   この例外が無いとRound Fの2 C2（b側+50）・3 A2（g側-100。「1200」開放区間の明示指示）まで消える。
-2. 情報ゼロでも、**出口側の隅**（ローカルrun端＝chainで次の面へ渡る隅。`dirSign>0`ならworld hi・`dirSign<0`なら
-   world lo＝`originWorld`定義の裏返し）を越える延長で、かつ近側セルが軸に**接している**なら残す。入隅は必ず2面で
-   共有されるため、見通しそのものは出口側の面だけが担えば過不足がない（実機「2階22」のD2）。
-3. それ以外（入口側 or 跨ぎ由来）は、区間長が図全体の**1/4以下**のときだけ残す。
+### 吹抜け帯・多層書きの組み立て
+- **吹抜け帯**（`elevationVoid.js`の`buildVoidBand`。`selectElevationRooms`がfeature=VOIDを採用）: 「設置階下階のFLから設置階の天井高さまで」を**自階の面を下へ延長する**方式で描く（下階の面リストを積まない。吹抜けの壁は下階FL〜設置階天井まで連続し設置階FL位置に床断面は現れない）。faceOverrideでsegsを`floorDeltaMm-=drop, chMm+=drop`と変換すると`ceilAbs=floorDelta+chMm`不変で床だけ下がり、端縦線・左CH寸法・建具床合わせが既存機構のまま追従する。世界座標は全階共通なのでCLは自動的に揃う。`lowerGraph`/`floorHeightBelow`（`stairDimensions.js`）が無ければ1層フォールバック（例外を投げない）。
+- **どの階の展開図に載せるか**: 吹抜けRoomは床の無い上階に置かれるが、帯の下端のCUT床線＝床断面は**直下階のFL**にある。独立した帯にはせず、**直下階の「吹抜けが落ちている部屋」の帯へ多層書きする**（`buildRoomBandWithVoidAbove`）。落ちる先が見つからない／その部屋が帯として出ない場合だけ独立した2層帯（`buildVoidBand`）へ回す。
+- **多層書きの組み立て**: 面の対応は「軸CLの世界座標＋見る向き」で取る。走り方向の範囲が食い違っていても同一面なら1枚に統合する。統合で走り範囲を広げたら**端のCLも引き直す**（`faceBoundaryLocalX`は`startCLId`/`endCLId`からパネル幅を決めるため、上階のCL idのままだと下階graphで引けずパネルが隣と重なる。lo側かは値の近さで選ぶ）。区間ごとの高さは`floorSegments`で表す。**吹抜けには天井断面まで水平断面が無い**（見えがかりは存在する）ので、吹抜けの範囲でも床断面は下階のFLのまま1本で通り上階の床位置に断面線は立たない。区間は「吹抜けの範囲外＝下階の床〜天井」「吹抜けの範囲＝下階の床〜上階の天井」の2通りだけで、**下階にその面の壁があるかどうかは断面の有無を左右しない**（吹抜け側だけ床を2FLへ上げると1F床断面が面の端まで届かず端の壁断面と取り合わなくなる）。
+- **壁断面・見えがかりは階段展開と同じ断面エンジンを共有する**: 吹抜けを持つ面ごとにSectionCutを1本立て階段帯と同じ`buildColumns`→`emitColumns`を通す（層は self=下階・above=上階、zRangeは下階FL〜上階天井、`viewSign = -face.inward`）。床線・天井線・端の縦線・巾木・建具は`buildFaceFigure`の責務。落とし穴: **直交壁は面の壁に突き当たって室内側の面で終わる**ため素の`isCutWall`では腰壁等の断面が丸ごと落ちる。`line.buttToleranceMm`（面の壁の半厚）で「その厚みの中で終わる壁は切断線を横切る」とみなす（階段帯は未指定=0で従来と同値）。
 
-**比は「実際に描かれる長さ」で採る**——延長した端は`resolveEnd`が直交壁の仕上げ面へ詰めるため、生のセル区間長とは
-桁違いになりうる（実機1階5/C2は生3400に対し描かれるアキは400。生で判定するとユーザー確認済みの開放スパンまで落ちる）。
-そのため端の確定を取捨ループの**内側**に置き、詰め後の値で比を採る。
+### 2層帯は「下階にも同じ壁がある」と暗黙に仮定してはいけない
+階段帯・吹抜け帯は2層にまたがり、「上の層の見え方をそのまま下へ延ばす」実装に寄りやすく、**下階／上階に同じ壁が無い区間**で実在しない輪郭を描く同型の不具合を起こしていた。2層帯を触るときは常に「その層に実際にその壁があるか」を層ごとに引き直す。
+- 階段帯（section層）: 隣接列との連続判定は**z区間ごとの被覆**（`uncoveredZRanges`）で行う（`matchingBand`で重なる帯が1つでもあれば連続としてband全体に一括適用すると、隣接列の壁が途中までしか無い場合に側縁が丸ごと消える）。被覆とみなすのは「同層・同距離＝そのまま続く壁」と「別層＝見えている壁が入れ替わっただけ」の2通りで、残る「同層・別距離」だけが凹みの側面として縦線になる。
+- 吹抜け帯（面の引き伸ばし方式）: 下階に同じ軸CL・同じ向きの壁が実在する区間だけを下へ延ばす。壁の無い区間は設置階の床のまま残し、境界は既存の段差床線で縦の折れとして出る。CLは階ごとに別オブジェクトなので、idではなく世界座標で突き合わせる。
 
-**不変条件「spansを持つ面はspansがrunをちょうど覆う」と重複解消の包含限定（問題修正2026-09。実機2階22のD1）**:
-`composeRoomFaces`出力までの面は `spans[0].loX≈0`・`spans末尾.hiX≈run`・区間が連続（許容GAP_EPS）を満たす。
-保証は**構成的**（生成点は`extendFaceWithOpenSpans`と`clipSpans`のみ・`dedupeOverlappingFaces`はspans/lo/hiを
-一切編集しない）で、実行時assertは持たない（テスト側の独立検算`assertSpansCoverRun`が門番）。旧実装の「包絡」
-（重なる面の片側のlo/hiだけを広げspansを据え置く）はこの不変条件を破り、ROW1に負の寸法（-1500）を出した。
-現在は**包含関係に限定**した重複解消——o⊇fはスキップ（アルコーブM1はこの分岐）・f⊇oはcontainerを丸ごと採用・
-部分重なりはマージしない（spansの座標変換合成なしに片側のspansを再利用する正当な方法は存在しない）。
-なお`elevationVoid.js`の多層合成後はspansが延長域を持たない既知の別規約で、この不変条件の対象外。
+### 面の端も層ごとに違う
+自階の面は自階の壁で終わるが、**同じ通りの上階の壁はその先へ続きうる**。探査範囲は層ごとに決め（`sectionContent.js`の探査窓`layerRunWindowsOf`）、面の外は平面が続いている層だけを描く。平面が届いていない層は壁候補だけでなく**床天井の分類からも外す**（残すと面の外に所有Room不明の空間＝アキが生まれる）。対象は**壁のある端だけ**（壁のない端の外は体裁のはり出しで平面照合の話ではない）。はり出しは上＝上階の天井断面線・下＝上階のFL断面線・外端＝壁エッジで閉じ、自階の床線・面端の縦線は面の端のまま。はり出してよい量の上限は`UPPER_PLANE_OVERHANG_LIMIT_MM`で、超えたら**全か無か**で描かない（途中で切ると壁が終わっていない位置に端部の縦線が出る）。列の範囲が面の描画範囲（`cutDrawRange`）を超えうるので、階段の作図が列からx範囲を得る箇所はそちらでクランプする。
+- 吹抜けの帯にも同じ規則を適用する（上限も同じ）。ただし**その層の空間がその端で見えている端だけ**（gateが無いと開いていない端で層の平面だけが外へ伸び、閉じる線の無い突起になる）。判定は上下対称: 上部吹抜けを持つ部屋帯は「その端の帯の**天井**断面が上階の**床**より上（＝吹抜けが面の端に達している）」、下階を積む吹抜け帯は鏡像で「その端の帯の**床**断面が下階の**天井**より下」。gateの材料を渡さない帯（階段帯）は素通り。下階のはり出しは上＝下階の天井断面線・外端＝壁エッジ（エンジンのcontent）と、下＝下階のFL断面線（図側で床線だけを外へ延ばす）で閉じる（下階の天井から自階の床までは床構造＝断面の中なので線を引かない）。**下階はり出しの上辺は「下階の天井」で確定**（自階の床ではない）。
+- 上のはり出しの「上＝上階の天井断面線／下＝上階のFL断面線」は上部吹抜けを持つ部屋帯にも当てはまる。**上階FLの線の起点は端の姿で決まる**: (a) はり出しの外端に**切断壁**（上階の腰壁）が立つ端は、壁の**向こう側の面**からさらに外へ`wallLessEndExtendModelMm`ぶん張り出して終わる（壁の下には引かない＝「断面の中は描かない」と同じ1つの見方。天井断面線は壁の外側の面で終わる）。(b) 立たない端（全高の見えがかり壁）は、階段帯は断面線（`floorProfile`）が上階FLを下回る位置で止め、断面線を持たない帯は面端のCLより向こう側だけに引く（**はり出し区間の外へ絶対に出ないようクランプする**。破るとはり出し0の面〔通常の部屋帯のほぼ全面〕にCLまでの偽の水平線が生える）。
+- 「切断壁か見えがかり壁か」は**contentの列にしか無い**情報なので、図側で壁を引き直さず探査の結果をそのまま渡す（導出は`sectionContent.js`の`upperFloorCutWallEndsOf`ただ1つ）。上部吹抜けを持つ部屋帯だけは図がcontentより先に走るため、レイアウトを組んでcontentを**1度だけ**走らせ、収穫した起点を載せて**図を組み直す**（contentを2度走らせない）。
+- 上階FL断面線を引く端は、さらに「はり出しの向こうに上階の床が実在する端」へ絞る（CLの外側の世界座標で上階graphの所有Roomを引き、実Room〔VOID/STAIR_VOIDでない〕の端だけ許す。はり出し量は上階の壁の伸びしか見ないので、2階でも吹抜けが続き境界に腰壁だけが立つ構成では床の無い位置に線が出る）。落とすのは床の断面線だけで天井断面線・壁エッジのはり出しは残す。**このgateは上部吹抜けを持つ部屋帯と階段帯で同じ1つの関数**（`elevationFaces.js`の`upperFloorEndsOf`）から供給する。はり出し量の算出（帯ごとに別）とgate（共通）を分けて考える（階段帯は`floorProfile`ベースの分岐を持つため一度gateを配線し忘れた）。
 
-**近側セルは「軸に接する」ものに加え「軸を跨ぐ」ものも拾う**（`cellStraddlesFace`。`cellNearSideOnFace`と対の述語）
-——面のCLがその位置まで延長されていない帯では自室のセルが割れず1枚のまま面を跨ぐ。跨ぎを拾わないとその帯の抜けが
-開放区間として描かれない（実機「2階22」A1のX3..X4）。跨ぎ由来は`straddle`で区別し、**`mergeSameKind`の結合キーに
-含める**——接する側由来の正当な小区間と融合させないため（融合すると小さな開放区間が巨大な空白と一体で取捨判定され
-丸ごと落ちる。実機1階5/C2で確認）。床の段差プロファイルは「軸に接する辺」の高さを問う処理のため跨ぎは対象外。
+### 階段帯（2.5D断面エンジン方式）
+階段帯の面コンテンツは「切断定義（薄い表）＋タイプ非依存の断面エンジン」の3層構成（`app/src/elevation/section/`）。描画範囲は設置階FL(y=0)〜上階天井`-(floorHeight+CH_upper)`。CH_upperの解決優先順＝(a)`stairPortEdges(['arrival'])`辺中点のfar側`worldToCell`所有Roomの`roomCeilingHeight` (b)重なるVOID/STAIR_VOID Room (c)`upperGraph.defaultCeilingHeight`。
+1. **第1層 切断定義（`section/cuts/`）**: タイプ別に「どこを・どちらを向いて・どう切るか」の表だけを持つ。`switchbackCuts.js`（SWITCHBACK/WINDING＝U字系）・`straightCuts.js`（STRAIGHT/STRAIGHT_LANDING）・`fanCuts.js`（L_TURN/FLARED/OPEN_WELL。区分線形モデルで表せないため常にnull）。返り値は`SectionCut[]`。往復間の壁・踊り場壁のような「区間を横断する実壁」は`graph.walls`を位置のCL座標で直読みして検出し、実在しなければ該当seqを挿入しない（合成面`kind:'stairMid'`。壁厚は`wall.materialRange`から求める）。往復間の壁は2F（`opts.upperGraph`。純モジュール不変条件のためoptsで素通し）の壁を見る。SWITCHBACK以外・stair.cellsが空・floorHeight未確定・面分類不能はnullを返し、`buildStairBand`は従来の`composeRoomFaces`＋2層枠へフォールバックする。**CLの無いU字階段（`midCL`が引けない）のseq2の面はレーン境界（`midAcross`）の仮想の面**（`midOutFace`。axisCLは`sectionFace.js`の合成面と同じ疑似`{id:null,effectiveValue,value}`。背後の外壁`wOut1`への退避は廃止。null軸CLを下流へ流すと半壁厚が面の位置になる不具合と建具ありのTypeErrorが出たので疑似CLで組む）にする。
+2. **第2層 断面エンジン**（`sectionProbe.js`/`sectionEmit.js`/`sectionEngine.js`）: 列ごとのz区間を「切断壁(cut)／縦断された壁(cutAlong)／見えがかり壁面(wall)／アキ(open)／床スラブ(slab・非描画)」へオクルージョン優先順位（cut/cutAlong＝最前面 > wallは距離最小 > 無ければ視線先の床天井位置でslab/openを判定）で分類する。`isRoomWall`（部屋の外周壁）はcutAlong判定から除外する（自壁までcutAlongにすると`isSightlineShape`の意図的な自壁除外が壊れる）。線種は`sectionEmit.js`の表が唯一の情報源（cutAlongは天井際CUT水平線＋両端CUT縦線の3線＝塗り無しの輪郭のみ）。開口は描画を貫通させず、そのz範囲に`ZBand.openingPassThrough`が付く。
+3. **第3層 階段幾何（`sectionStair.js`）**: 階段の3D的な寄与をタイプ非依存の区分線形モデル（Flight[]＝直進区間・Landing[]＝踊り場。区間ごとの直線で表す）で表す。第1層がどの区間を渡すかを決め、第2層は「切断線がレーンを縦断＝段鼻のジグザグ」「横切る＝正面視の梯子」「踊り場を縦断＝床のCUT水平線」を切断線とFlight/Landingの幾何関係だけから導出する。
+- **踏面ピッチは「区間長 ÷ (段数−1)」**（`stairRunProfile`）: 区間長は「1段目の位置〜次区間（踊り場・上階床）の床の位置」で、その間の踏面は steps−1 枚（最終段の踏面は次区間の床が兼ねる）。`endX = startX + dir*区間長`は不変。
+- **向きに関する値は必ずmakeFrame経由で導出し、部屋のbounds等から直接計算しない**（`stairContribution`のacrossLo/acrossHiも`stair.flip`を反映する。`f.pt(0,s)`でs=0/s=1の世界座標を直接求める。`reorientFace`と同種の不変条件）。
 
-**同値・別延長のCLと隅の同定（`finish/wallGeneration.js`の`externalSubIntervals`。問題修正2026-08その9）**:
-外周エッジの端点idは、セルキー由来（端点・隣接スパン＝実際にセルを画しているCL）が**権威**であり、
-「自部屋のセルには現れない区切りCL」を足す`dividerCLsBetween`で**上書きしてはならない**。値が同じで延長だけ違うCLが
-2本あると、隅が「その位置に届いていない方」のidを指し、`buildRoomFaces`のチェーン探索（`findCornerNeighbor`はCLの
-**id**で隣の面へ辿る）が繋がらず、面が1枚も残らない（実機2階の室22で展開図が「Aのみ」になった）。同値の候補が
-複数あるときは、その辺の軸位置まで延長が届いているCL（`isActiveAcrossRange`。隅は端点ちょうどで接するため±1mmの窓）を
-優先する。
+#### 切断線の位置・図の向き
+- SWITCHBACKのseq2/4の切断線は**往路レーンの中央**（`acrossCoordAt(0.25)`）、seq5は**復路レーンの中央**（`acrossCoordAt(0.75)`）。往復間に壁が無ければ復路直進部のささらが見えるので、切断線はレーンの中を通り視線はもう一方のレーン側へ向く（`outboundLaneLine`/`inboundLaneLine`・`towardS1`/`towardS0`）。seq2は視線が復路側、seq4は往路の外側で、両者は同じ`outboundLaneLine`を向きだけ逆に共有する。**B/Dは各1本**（旧seq2.5/4.5は切断線・視線・向き・層・z範囲がseq2/4と同一の重複だったので廃止。往復間の壁は`seq2.face.hasRealWall`・`axisCL`で表す）。往復間の壁は通常の見えがかり壁（SILHOUETTE）として検出される（cutAlongのCUT太線ではない）。
+- **seq3は踊り場前縁から`LANDING_CUT_INSET_MM`（100mm）だけ踊り場側で切り、踊り場レベルより上だけ描く**（踊り場は平場で隔て板が無い。前縁で切ると前縁のCLで終わる隔て壁・階段下壁が柱包み〔物理範囲±57.5mm〕で踊り場側へ回り込み切断面にかかって断面になる）。入れる量は柱包みの回り込み(57.5)・柱の半幅(45)より大きく踊り場の奥行き以下（超えれば前縁のまま）。前提は木造・薄壁（RC厚壁や150角超の柱では再びかかりうる）。seq3は階段下の部屋の有無によらず踊り場レベルより下を描かない。seq1は前縁のまま（隔て壁は階段側にある）。直進階段の踊り場壁seq3は実在する踊り場壁そのものを切る別構造で対象外。
+- **seq5（D2）の面はwOut2の全長**（踊り場ぶんを含む）で向きはseq2側（踊り場が右）、寄与は復路＋踊り場。**seq3にも踊り場の寄与を渡す**（`landingOnly`。踊り場の床断面線・桁枠は必要）。`stairPrimitivesForCut`の`stairIsVertical`はflightsが空でも踊り場のside辺から取る（切断線の向きへフォールバックするとlengthwise/crossingの判定が反転する）。
+- **seq6**（復路レーンの中から隔て板側を見る面）: 自階の往復間の壁が木造の隔て板（`isStairPartitionWall`）のときだけ切断定義表に足す（seq5と同じ切断線を逆向きtowardS0に見るseq2の復路版。面はseq2と同じ中心1の面をseq4の向きに直したもの）。組み立て（復路下の仕上げ空間・裏面・床区間）はseq5と共通の`returnLaneEntryOf`。展開記号はseq4と同じD1/D2。階段下の部屋の壁などが往復間に立つだけの構成は従来の5面。
+- **展開記号は`cut.viewSign`（視線の向き）だけで決まる**（`letterOf(cut.line.isVertical, -cut.viewSign)`）。dirSignは歩行方向で決まる**作図順**であって視線ではない（seq2とseq5は同じ`towardS1`なのにdirSignが違う。dirSign基準は実機で否定された）。階段の展開記号が階段ごとに変わるのはこの逆引きの結果であり例外規則ではない。labelは`stairFaceSequence`の末尾で`labelFaces`により**歩行順**に採番し直す（コンパス順で採番済みのlabelを持ち込むとreorient後のletterと食い違う）。合成面（`buildMidWallFace`）にもletter/labelを持たせる。SWITCHBACKのseq4は往路(outbound)の鏡像（`stairCut`は`flights[0]`）で復路ではない（復路をそのまま描くと「左から右へ下る」実機の見え方と矛盾する）。
+- **図の左右（dirSign）は仮想断面の視線の向きだけで決める**: 全cut（U字系seq1〜5・直進seq1〜5）とも`DIR_SIGN[letterOf(isVertical, −viewSign)]`（展開記号の採番と同じ方位規則）で face を`reorientFace`する（歩行方向決め打ちは「6」でたまたま一致していただけで、逆回転では鏡像になった）。`desiredDirSign`はfloorSegments/ceilingProfile（face基準）とcontent（cut.dirSign基準）の**両方に同じ値を使う**。歩行順に依存する下流（seq2/4の床区間の並び・CH寸法の鎖の踊り場側の端）は切断定義表が面ごとに宣言する`landingEnd`から決め、「seq2は踊り場が右」を持たない。直進のseq2はs=0側の壁、seq4はs=1側を見る。合成fixtureは「6」と同じ回転（flip=true）を既定にし、逆回転はupDirection×flipの全8通りのテストで固定する。
+- 階段の面の選択はcuts表が唯一の情報源（A/B/C/Dの節）。
 
-**寸法の分割源S2「面の向こう側に立つ壁」（`perpendicularWallsOnFace(face, graph, 'far')`。問題修正2026-08その9）**:
-`isRoomWall`（部屋の外周から自動生成された壁）の扱いは`side`で分ける。`near`（袖壁＝面を分割する
-自立壁）では従来どおり除外するが、**`far`では除外しない**——面の向こう側に立つ壁は定義上どこかの
-部屋の外周生成壁であり、一律に除外するとこの源が常に空になる（実データは全ての壁が`isRoomWall`で、
-S2は一度も機能していなかった。ユーザー実機指摘: 「22」Bは向こう側の壁で3500+3500・「22」C2は
-2600+2400が正）。自室の壁が混ざらないのは`reach`/`project`判定が担う——自室の壁は面の位置で終わり
-向こう側へ`PERP_MIN_PROJECTION_MM`以上突き出さないため落ちる。
+#### 側面視・正面視・ささら
+- **側面視（切断面がFlightの中を縦断する）**: 段鼻のジグザグ自体をCUT（太線）で描く（踏面は切断線で切られている）。手前側（切断面と視線の間）のささらは切り取られるため描かず、**切断面の向こう側にある自レーン自身のささら**の輪郭をDETAIL（細線）で重ねる。視線前方にもう一方のレーンがあり往復間に見えがかり壁が無ければ、**他レーンの近い側のささら**も重ねる（`secondaryFlights`。seq2のみ。壁があれば`isBlockedByWall`が遮る）。**手前のささらによる遮蔽**: seq2の切断は往路レーンの中を通るので視線の手前に往路のささらがあり、その上端より下は奥の復路のささらが見えない。遮蔽の外形は「往路ささらの上端線」1本（その端から先は端点の高さで水平延長＝踊り場桁枠の上端）で、`clipPolylineAboveOccluder`がささら輪郭をその上側だけへ切る。
+- **正面視（切断面がFlightに直交＝レーンを横切る）**: ささら自体が切断されるため、両側にささらの断面矩形（`flightStringerFrontPrimitives`）をCUT（太線）で描く。**上端は段鼻＋巾木高さ**（側面視と同じ基準）。内側のささら（梯子状の壁断面が無い方の端＝`innerAcrossWorld`。`ladderAcrossRange`がLANE_GAPを片側だけ詰めるのと同じ基準）の見えがかりは一定xの縦線1本（`innerStringerSilhouette`）。踊り場より下まで達するレーンの端面は縦の細破線（`stringerEndCapPrimitives`。STEEL限定。seq1では往路だけが該当）。**踊り場の床断面線は正面視でもCUT**（`landingCutPrimitives`。x範囲は壁から壁までの全幅）。
+- 木造（`structure!==STEEL`）はささら無し（段部のジグザグをそのまま描く）。
+- **鉄骨階段のささら**（`structure===STEEL`限定）: 板厚`STEEL_STRINGER_THICKNESS_MM=12`・せい`STEEL_STRINGER_DEPTH_MM=300`（作図既定値。`section/stairSectionProfile.js`）。**上端線は段鼻の勾配線＋巾木高さ**（最後の段鼻の高さは踊り場床そのものなので、踊り場桁枠side辺の上端と踊り場の縁で自動的に一致し、直進部の斜めささらと踊り場ささらが取り合う）。**下端側はミトレでトリム結合し、交点は`stringerBandGeometry`という同じ関数から斜めささらと桁枠側の両方が取る**（別々に計算すると1本の取り合いが2つの位置に分裂する）。トリム端の上端は踊り場桁枠の上端まで伸ばし（復路は最初の段鼻が踊り場より1リザー上にあるので段鼻列だけだと桁枠に届かない）、z範囲のクリップはトリム端でだけ緩める（FL側は厳格。法線オフセットの突き出しはFL側で起きる）。トリム結合する端では上端と下端を結ぶ端の線（せい300）を描かない。**取り合い部（`kind==='front'`の辺）に踊り場桁枠の断面は描かない**（内側の踊り場ささらは往路・復路の間だけにあり、直進部のささらが来る位置には存在しない。back辺は描く）。踊り場桁枠のside辺（走行軸に平行）は「踊り場床断面線+巾木高さ」を上端、`landingFrameDepthMm`(300)下げた線を下端とする帯で描き（巾木高さは`parseBaseboardHeightMm`、解釈不能は`DEFAULT_BASEBOARD_HEIGHT`='h=60'）、front/back辺の帯の基準も同じ「踊り場面＋巾木」で統一する。flight側の端には縦の閉じ線を描かない。`stringerPrimitives`はオフセット後の多角形を`zBounds`でFLにクリップする（`flightZBounds`が`clipStringerToAnchors`と共有の単一情報源）。
+- **蹴込**（`Stair.nosing`。既定20mm）: **蹴上は蹴込ぶん傾いた「斜めの断面」1本**（足元〔段鼻+蹴込〕から段鼻へ斜線。最終段も同じループで例外なし）。蹴込は踏面でクランプする（超えると輪郭が自己交差）。蹴上を斜線1本にしたので点列の刻みは蹴込の有無に依らず一定（段鼻＝奇数index）で、`stairRunProfile`は`noses`も明示的に返す（推測に頼らない。「垂直な蹴上＋水平な蹴込」の実装は刻みが変わって段鼻抽出を壊した）。**階段の描画範囲は flight の始端まで広げる**（1段目の段鼻が面端の外に出るとき。`flightStartOuterBound`。範囲に収めると1段目が面端の垂直線に潰れる）。
+- **在来木造の段板30・蹴込板垂直**: `stairRunProfile`の一般概念「段板の厚み」`treadThicknessMm`（既定0＝斜めの蹴上のまま。鉄骨・RCは不変）。>0かつ蹴込k>0なら1段の輪郭は蹴込板の足元→(垂直)踏面板の下面→(水平・k)段鼻面の下端→(垂直・厚み)段鼻→踏面。**段鼻`noses`は従来と同じ位置**。最終段は蹴込板を床の高さまで垂直に上げて終える。適用は`stairContribution`が`stair.structure===WOOD`のflightに30（`WOOD_TREAD_THICKNESS_MM`）を載せる（階段自体の材種で判定。建物構造では区別しない。裁定待ち）。**床の輪郭`stairCutFloorProfile`は歩行面のまま**（`surfaceOnly`。下面の切欠きを床線・遮蔽に混ぜない）。
+- **踊り場の床の端＝登り出すflightの蹴込板の足元**: 踊り場から登り出すflight（折返しの復路）を縦断する面では、踊り場の床線（`landingFloorSpanX`。`landingCutPrimitives`と`stairCutFloorProfile`が共有）を段鼻位置ではなく足元（段鼻+蹴込k）まで延ばす。
+- **1層＝1溶接ユニット（StairUnit）**: 鉄骨階段は「両側ささら＋踊り場周囲の桁枠＋上下FLでの躯体取り合い」を1つのユニットとして扱う。`stairContribution`が返す`unit`（板厚・ささら成・桁枠成・`anchorZs`＝躯体と取り合う高さの単一情報源）を`landingFramePrimitives`/`clipStringerToAnchors`が共有し、ささらは必ずFLで水平に終わる（`anchorZs`へ強制）。**踊り場桁枠**（`landing.frame.edges`＝front/back/side）は鉄骨・RC造階段（`hasLandingFrame`）が対象。見る向き（broadside＝帯輪郭／end-on＝断面矩形）は「cut.lineの向きが辺の向きと一致=lengthwise、不一致=crosses」という第2層の一般規則を踊り場全体に適用する。
 
-**巾木の途切れ区間は描画基準（`drawnSpanRanges`）**: 巾木は描画要素のため、開放区間の範囲もCL基準
-（`spans`）ではなく描画基準（境界に立つ実壁の「開放側の面」）を使う——CL基準だとCLと壁面の間
-（半壁厚）に巾木の無い隙間ができる（ユーザー実機指摘2026-08その9「A1のX3の巾木はCL右側の壁まで」
-「D2の2000の巾木は2000CL右側の壁まで」）。寸法・一点鎖線は従来どおりCL基準のまま（描画位置と
-寸法位置を別に持つ既存規約）。
+#### 階段下・2a壁・断面線の外
+- **階段下に部屋があるか・ないかで踊り場下の表現が変わる**: `switchbackCuts`が`underFloorZ`（部屋あり:`landingAbs`／なし:0）を1箇所で決め、**cutの`baseFloorZ`と帯のfloorSegmentsの床**の両方がこれを使う（同じ値にするだけで「1FL断面線を描画」「左右の壁断面線を1FLまで延長」が自動的に満たされ専用の描画分岐は持たない）。判定は`cellsBeyondBreak`×`stairUnderRoomsOf`（仕上げモードの階段下壁生成と同じ単一情報源）へ委譲し、**判定不能なら「部屋あり」へ倒す**。ただし木造・RCで部屋なしは断面線で止まる（下記）。上の段落は鉄骨・部屋なしの話。
+- **階段下部屋の2a壁は、階段の帯からは実体ごと見えない**: `switchbackCuts`が階段室自身（`cut.airRoom`）と階段下に指定された部屋の集合（`cut.underRooms`）を全cutへ載せ、`sectionHits.js`の`isHiddenWall`が壁ごとに判定する: 壁の両側のセルが指すRoomを見て、**片側だけが`underRooms`に含まれ**、かつ**その反対側が`airRoom`の連結成分（`componentOf`）と一致し**、かつ**壁自身が部屋の生成壁（`isRoomWall`）**である壁だけを非可視にする（isRoomWall条件は往復間の壁のような自立した間仕切りを誤って対象にしないための保険）。非隠蔽のまま残るのは反対側が階段室と非連結の部屋か片側が建物の外の壁。階段下の空間の壁の展開は階段下部屋自身の帯（「13」A〜D）が描く。平面図が破れ線より階段踏面側で2a壁を描かないのと同じ規約（`finish/stair/stairUnderClip.js`）。
+- `isHiddenWall`該当の壁は`probeColumnHits`から消えず`hidden:true`を付けて候補に残り、選ばれれば付帯情報を持たない**`hidden`帯**（独立kind。アキ・見えがかり線のどちらの対象にもならない）になる。旧方式（候補ごと消す）は「その先の列が奥行き上限を超えて`open`になりアキのバツが誤って出る」副作用があった。**列の分割（`collectCutBreaks`）は`isHiddenWall`を判定しない**（面C自身の右端がこの壁自身のmaterialRange境界に依存しており、割らないと隣接CLの位置へずれて壊れる）。その代わり副作用は`sectionEmit.js`側の2箇所で個別に抑える: `uncoveredZRanges`（隣接列が`hidden`帯なら`cut`帯と同じく「覆う」側）／`ownsBoundary`（z方向で隣接する帯が`hidden`ならその境界の天端/下端線を描かない）。`cut.airRoom`/`underRooms`が帯の全cutで共有されるため、同じ2a壁が無関係な別の面（D1・A・D2等）でも非可視候補になり別の実体の縁線が生える回帰を防ぐ。
+- **断面線の外は描画しない**: **断面線は1本の折れ線（FloorProfile。`elevationFloorProfile.js`）で表す**＝帯の床（floorSegmentsのステップ関数）と、**その切断が縦断する**階段寄与（`stairCutFloorProfile`）のmax（2FL断面→復路の階段断面→踊り場断面→壁断面と続く閉じた輪郭はステップ関数では表せない。規約は天井側の`ceilingProfile`の双子）。**分岐は2条件の論理和**: (a) 階段下部屋がある（`hasRoomUnder`。鉄骨はこれだけ）、または (b) その切断が縦断する階段寄与があり**断面線が繋がっている**（`stairSectionIsClosed(stair)`。蹴込板で階段下が閉じる＝現状は木造・RC。RCは斜スラブで下面まで繋がる）。どちらでもなければ輪郭を渡さない（＝下限なし＝設置階FLまで。部屋が無ければ帯の床は0なので下に何も無い）。縦断する寄与の無い面（seq1/seq3）は渡さない。将来Stairに「蹴込板なし」属性が入ったら、それが立つ階段は(b)がfalseになり下を描く（属性は未追加）。**(c) 直下階に階段があり、その破れ線先セル（`cellsBeyondBreak`。U字では踊り場より上側のレーンだけ）の上は自階の床が無い**——次節「下階に階段がある階の階段帯」。
+- **縦断していない寄与は輪郭に入れない**（横切るレーンは切っていない＝断面線ではなく、`secondaryFlights`は見えがかり）。**短い寄与の端点値を面の全長へ延ばさない**（踊り場の1点が面全体を覆うと階段の勾配を飲み込む）。**対象は壁の断面・見えがかり・アキ・建具の姿だけ**（`clipContentAboveDrawnProfile`。`contentForCut`が`stairContent`/`structuralContent`を通さない）。階段自身の断面・階段の見えがかり（正面視の破線梯子・1FL足元線・ささらの端面）・構造梁は断面線そのもの／階段の一部で「描く」側（ただし**天が輪郭より梁成以上離れた梁は落とす**。階段下に浮く設置階FLの梁断面。踊り場受け梁〔role:'landing'〕と天が梁成以内で輪郭に届く梁は残す）。**水平線は輪郭より下のときだけ落とす**（床断面線そのものを巻き添えにしないため非対称）。
+- **アキのバツは線を後から切らずセルの段階で輪郭まで持ち上げる**（`gapFloorProfile`。階段帯だけ）。**面端の縦線の下端も輪郭**（`ctx.floorProfile`。部屋帯・吹抜け帯は不変）。**区間の床線は「輪郭＝その区間の床高さ」の範囲だけ**（`floorSegments[].flatLineSpanX`。輪郭から導出する`withFlatLineSpans`ので断面線と床線が食い違いようがない。階段下に部屋があるとき、レーンの1FL線は上り口の外側〔壁のない端部のはり出し〕にだけ残り、踊り場の床線はジグザグの最下点が終点）。**床線が境界まで来ていない区間には段差の縦線も引かない**（階段の下＝断面の中に線が生える）。
+- **設置階FL・上階FLの断面線のはね出し**: 初段の足元が面の端の外にあっても（木造の1段目は隔て板の柱の前縁＝通り芯−57.5から立ち上がる）、端の区間の1FL線は壁のない端部の延長から足元まで残す。最終段の天端がある端に壁が無ければ、上階FLの断面線（CUT）を天端の外側の点から壁のない端部の延長まで引く（`upperFloorEndLines`。端に壁があれば足さない。直進階段はこの経路を通らない）。
+- **構造梁・柱**は階段帯でも同じ`sectionStructure.js`の探査の帯が描く（「2.5D立体の加算レイヤ」）。階段帯の構造寄与は`floorOcclusion`を渡す。
+- **階段の断面ジグザグの向こうの壁の縁**: レイキャストは階段自体の占有形状を知らないため、seq2/seq4のレーン区間に「階段の向こうに見える壁」のz=0の輪郭線が全幅で描かれる。`clipWallFloorEdgeUnderZigzag`が断面ジグザグと重なるz=0の壁縁線を後処理で取り除く（**レイキャストを階段形状で塞ぐ一般化ではない対症療法**）。
+- **往復間の壁の芯の一点鎖線**（`ctx.extraCenterLineXs`）: 往復間の壁は面の裏側へ伸びるため`collectRow1SplitPoints`の直交壁検出に掛からない。`cutTable.wall`の芯を面に直交する面だけに載せ、**一点鎖線だけを描く（寸法の鎖は割らない）**。
+- **階段の断面プロファイルとの取り合い**（`joinToStairProfile`）: 下階天井の断面線は階段断面と交わるxで終え、上り切りの点からは上階床の断面線を近い側の描画端まで張り出す（プロファイルの実座標から求め、面やレーンの幾何を作図側で再構成しない）。**ささらの見えがかり（`isStringer`）は、実体で囲まれた矩形の厳密内部を描かない**（`isSolidBand`/`solidRectsOf`。囲む実体＝列の`slab ∪ cut ∪ cutAlong`。slabの矩形はその上に立つcut壁の向こう側の面まで延ばす〔`slabJunctionOf`と同じ規則・同じgate〕。`hidden`/`wall`は囲まない。対象はささらだけ。旧「固定z帯でカット」の特例は一般ルールに置換して削除）。**上階床スラブの断面線はスラブ自身から描く**（`slabEdgeCutWallJunction`。遠い壁の下端縁に頼ると壁が探索対象から外れた途端に線ごと消える）。
+- **2F腰壁（往復間の壁がkneeDrop.knee指定）はseq1で上端水平線のみ・両端縦線なし**（`kneeWallCapContent`。天端はその後`cutWallTopEdges`へ移管済み）。**2FL水平線（above層の床端＝slab/open境界）は上階に実Roomが無ければ描かない**: `probeColumn`は`above.room`の有無でなく`isRealRoom(room)`（VOID/STAIR_VOID以外）で判定する（VOID/STAIR_VOIDは'open'）。**見えがかり壁のz上限は「上階に実Roomがあるか」で決める**（`resolveSightlineTopZ`＝実Roomに出会うまで上へ登り、その手前の層の天井を上限にする。常に自層CHで切ると上が吹抜けでも1F天井高さの水平キャップ線が出る。上階が吹抜けなら上階の天井まで拡張される。この拡張で同一の壁が他の層のzBreaksで内部分割されうるので`mergeAdjacentZBands`がz方向の隣接bandを併合する。ただし`cut.baseFloorZ`の境界は併合しない＝「下側だけ破線」を再現するため）。
+- **レーン面の天井は「上階に実床があるか」の実測が唯一の情報源**（`buildLaneFloorAndCeiling`＋`aboveRoomSegmentsOnFace`）: 面に沿って区間ごとに上階のRoom（VOID/STAIR_VOIDは実床無し）を1点プローブし、**床あり＝1F天井高さ`ceilLowAbs`／床なし＝上階天井`ceilTopAbs`**を割り当てて`stepCeilingProfile`で段にする。勾配天井リテラルは`aboveLayer`が無く判定できないときだけのフォールバック（「実Room有無がface全体で一様なら実測を捨てる」短絡は誤りと判明して削除）。**「上階が最上階なら往路上の天井を1F天井高さでキャップする」旧仕様は廃止**（成立条件が弱い推測で、天井は常に`chUpperAbsMm`に揃える。回帰テスト`elevationStair.test.js`の「【最上階キャップ廃止】」）。
+- ゴールデンゲート: 通常部屋帯・吹抜け帯はエンジン導入の影響を一切受けない（`elevationSectionGolden.test.js`）。階段帯は一般規則を優先し手書き出力との一致度は問わないが、ユーザーが実機で確認した意味論（歩行順1〜5・見返りの梯子破線・往復間の壁の断面・アキXの配置・B/D面の鏡像関係・2FLの中線・CH寸法の2FL分割・踊り場床CUT線など）は`elevationStairSequence.test.js`の意味論アサーションが保存する（落ちたときに実機で困る変化かどうかが仕分けの基準）。**意図的差分**: 往復間の壁・踊り場壁の断面は塗り矩形から3線（天井際CUT水平線＋両端CUT縦線の輪郭のみ）へ変更し、seq1の壁2縁の線種は一般規則（切断壁の縁は常にCUT）に置換した。
+- 帯の縦CH寸法線を2FLで分割: `layoutBandFaces`のi===0ブロックに`faceOverride`経由の`chDimSplitAbsYs`フック。SWITCHBACKのseq1は`[floorHeight]`（=2FL）を設定し左CH寸法が「踊り場床→2FL」「2FL→2F天井」の2本になる。`buildFaceFigure`の`ctx.floorSpanX?:{lo,hi}`（腰壁越しに向こう側の床・天井断面線を壁位置で打ち切るフック）は透過の準備だけで往復間の壁・踊り場壁が腰壁のときの値の供給は未接続。
 
-**通り芯の縦線は寸法行で2本に分ける（ユーザー明示指示2026-08その10）**: 上（天井上〜寸法行）は
-一点鎖線・下（寸法行〜丸番号）は**実線**。1本の一点鎖線で丸まで通すと、(a)寸法行が破線のすき間に
-当たって交点が消える (b)丸の手前で破線が切れて「構造芯ラベルの丸とCLが離れて見える」の2つが起きる。
-**丸の位置（`gridCircleRowY`）は変えず線分の描き方だけで解決する**——丸は背景色で塗って線の上に
-重なるため、実線を丸の中心まで引けば丸の縁にぴたりと接する。
+### 階段帯の天井は階段の裏面（E5）
+U字系（SWITCHBACK/WINDING）の木造で、直上階に同じ足元の続き階段があるときだけ。供給源は`space/stairSoffitCeiling.js`（式は`ceiling/stairSoffit.js`の`stairSoffitSolids`が唯一。天伏の見上げと同じ述語`matchingStairBelow`・同じ引数なので同じ立体）。`buildStairBand`が自階の層に`layer.stairSoffit`を載せ、**評価する奥行きは切断線`cut.line.axisValue`**。
+- **体裁の`ceilingProfile`とエンジンの`cut.ceilClip`は同じ区間列から作る**（`applyStairSoffitToCut`。節＝切断線の深さを含む矩形の辺・折れ目〔前縁・対角線・x=pv〕との交点・足元の途切れ。節の間は厳密に直線）。足元の外・途切れは各seqの既存の天井（seq2/4=NのCH／上階天井の階段状、seq1/3/5=上階天井）でつなぎ、境目で値が違えば垂直の段。値は部屋FL基準のch（`cellAt`だけが`floorZFor`〔床段差込み〕に足す＝供給源で足すと二重）。`cellAt`は階段室のセルだけ層スタックの天井を裏面にする（列の幅の最大）。切断壁の天端と笠木の下線（`cutWallTopEdges`）は壁の連なりが覆う列の打ち切り値`col.ceilZ`の最小と比べて決める（帯全体の`hiZ`と比べると、列で裏面に打ち切られた壁に天端が二重に出る）。
+- **隔て板（往復レーンの境界の壁。上階の隔て板の材の範囲＝`partitionStripOf`）の帯をはさんで裏面の高さが違う幅方向の切断（seq1/seq3）では、低い側の天井を帯の向こう面まで水平に延ばし、立下りを高い側の面に置く**（`extendLowerCeilingAcrossStrip`。仕上げ材は隔て板を包むので断面は中心から部屋側に寄る。切断線と平行な壁には掛けない）。**壁のない端（上り口。`face.hasWallAtLocal0/Run`=false）で裏面の端がその端の既存の天井（base。seq2/4だけが持つ）より高いときは、斜めの天井断面を端から隔て板の壁厚/2（57.5）入ったbaseの高さの点で終え、端まではbaseの水平**（`endSoffitAtOpenEndCeiling`。入りは復路下の仕上げ空間の天井線と同じ量。幾何の交点ではなく置き換え）。
+- **隔て板が上階へ続く切断（seq1。木造U字階段の最上階以外。`cut.continuousWallAcross`）では隔て板は床から天井断面線までの1本の断面**（`sectionEngine.js`の`mergeContinuousWallBands`が自階と上階の壁の帯を合併し、継ぎ目の天端・笠木・天井裏の帯を落とす。段違い天井の境界に立つ壁の見えない側の縁も低い側の天井〔列の打ち切り値〕より下は描く）。切断線が内部を横切るflightの本体（裏面〜切られている段板の天端。`crossingFlightBodySections`）は裏面の切断を太線で描き、本体に接する壁の縁はその区間を空ける（`clipWallEdgesInsideStairBodies`）。木造階段の最上階は除く（従来どおり天板〔隔て板の天端〕の見え掛かり）。
+- **空中を横断する梁の見えがかりは、その位置の天井より梁の下端が上なら描かない**（`opts.ceilZAtWorld`。供給源は階段室の裏面だけ。裏面の無い階段帯〔鉄骨・上階が吹抜け〕は部屋のCHで判定しない。評価点は梁の芯から切断線側へ1mm寄せる。**判定は区間の全か無かではなく、天井の状態が変わる所で区間を割り天井より上の部分だけ描かない**＝`splitRangeByPredicate`。裏面の天井は復路レーンの上だけで、両レーンにまたがる1本の梁を3点で見ると復路の上まで全長が出る）。
+- **壁のない上り口の辺を見るseq1（`face.hasRealWall===false`。往復レーンの境界の仮想の面は含めない）の隠れ線と開口**: 切断線が横切るflightの矩形（`flightHiddenRects`）のうち、**天端が切断面にある＝視線の向きへ下るflight（蹴上材を裏から見る）だけが切断面上の線も隠す**（`planeHides`。壁の断面の縁・構造梁の見えがかりと、図側の床線・面端の縦線〔`elevationStair.js`が`entry.occludedRects`で同じ矩形を当てる〕を細線破線に。上辺＝段板の断面線・踊り場の床線は見えている）。初段が切断面にあるflightと内部を横切るflightは向こうの線だけを隠す。面の向こうの部屋（ホール）へ開く区間には、向こうの部屋の天井の縁（中線）と床〜その天井のアキのバツ（`openingPanelPrimitives`）を描く。**辺の上に立つ壁の帯（壁の軸CLが面の軸CLと同じ。上階の層も同じ述語）は、列ごとに床〜天井から差し引いた残りだけが開口**（フルハイトなら無し・腰壁なら上・垂れ壁なら下）。向こうの部屋があるかだけで決めると上階の辺にフルハイトの壁がある区間にもバツが出る。壁の軸で見るのは、向こうの部屋の奥の壁を開口の閉じと取り違えないため。「踊り場前縁・回転部にアキは標記しない」は壁のある辺を見る面の話で、壁のない辺の開口には標記する。
+- `cut.zRange.hiZ`は裏面の最高点まで広げる（**頭打ちしない**。復路の到達側は上階天井を超える）。CH寸法は踊り場側の端の上端だけその端の裏面の実測値（四捨五入）。
 
-**一点鎖線の位相（`renderer/dashPhase.js`。ユーザー明示指示2026-08その9）**: canvas/Konvaの破線は
-線の**始点から**位相が始まるため、端や交点がすき間に当たると「寸法線と交点が取れていない」ように
-見える。プリミティブに`dashAnchor`（線の伸びる軸上の座標＝展開図では寸法行のy）を持たせ、レンダラが
-その点を**長い破線の中央**へ合わせる`dashOffset`を計算する。これで(1)基準点に必ずインクが乗り交点が
-取れる (2)同じ寸法行を共有する線同士の位相が揃う（図面内で統一）の両方を満たす。純関数は
-`dashPhase.js`（react-konva非依存）に置き単体テストする。
+### 復路下の仕上げ空間
+木造階段の復路の下は仕上げられた空間で、天伏ではその天井は復路の裏面（`.claude/data-model.md`「復路下の壁」）。復路レーンを縦断するseq5で、その階段に復路下の壁（`stairUnderReturnLines`/`isStairUnderReturnWall`）が立ち切断線がその壁と交差するなら、壁の踊り場と反対側（到達辺側）から壁の**仕上げ空間側の面**までを仕上げ空間とみなす（`underReturnSpaceOf`。壁の厚みは含めない＝壁の断面線は階段下スペース側の面の縦線だけ）。壁・裏面の立体は壁の天端（`addUnderReturnTops`）と**同じ供給源**`ceiling/stairSoffit.js stairUnderReturnSoffit`から引く。
+1. 断面線（`floorProfile`）はその範囲を**床（階段室の床）に置き換える**（`floorProfileWithFloorOn`。壁の厚みを含む。境目は垂直の段）。床線（`withFlatLineSpans`）が壁まで伸び、壁の断面がクリップされなくなる（この範囲でも復路の段板の裏を断面線の下限にすると仕上げ空間を丸ごと落とす）。階段下に部屋があって帯の床が踊り場でも、この空間の床区間は階段室の床。
+2. 天井＝復路の裏面を切断線の深さで評価した折れ線を**天井仕上げの断面線（中線）**として足す（`underReturnCeilingPrimitives`）。到達辺側の端は**Y4＋壁厚/2（裏面の始まり＝最上段の段板の前縁）とFL+CHの交点**（裏面の実高ではなくCHから壁へ下る1本の線。垂直の段は無い。天井の段を到達辺でなく裏面の始まりに置くのは裏面の立体がそこから始まるため）。壁側の端は裏面が壁の仕上げ空間側の面に出会う点で、壁の面の縦線をそこまで太線で延ばす。
+3. 復路の**本体の中**（裏面〜段板の上面＝床へ下げる前の断面線）にある壁の断面・見えがかり・アキは落とす（`clipContentInsideStairBody`。`clipContentAboveDrawnProfile`をz反転で裏面より下、そのままで本体より上に2回掛ける。範囲は裏面の節列が覆うxだけ。本体の上〔復路の上の空間〕は残す）。
+4. 上階FLのはね出し（`upperFloorEndLines`）は床へ下げる前の断面線（`entry.stairFloorProfile`）で最終段の天端を探す。
+5. 輪郭の垂直な段の上に載る縦線（壁の断面の面が段の位置に一致）は両側のうち低い方の輪郭で切る（`clipSegmentAboveProfile`）。段板の裏（ジグザグ）は階段自身の断面として残る。
+6. **巾木**: 階段帯は巾木を描かない（`skipBaseboard`）が、この空間だけは**到達辺の外側の部屋**（到達辺から面の外へ100mmの点を`probeCtx.cellAt`で引く）の`RoomFinish.baseboardHeight`（`parseBaseboardHeightMm`）で床＋hの細線を引く（`underReturnBaseboardPrimitives`）。到達辺側の面の端に壁が無いときだけ外側の部屋を見る（壁があれば外側は壁の向こう）。解釈できなければ引かない。到達辺に壁が無く面の壁が到達辺の外へ続くなら小口まで伸ばす（`wallContinuationBeyondFaceEnd`）。
+鉄骨・下階に続き階段がある（復路下の壁が立たない）・seq5以外の面・直進系は不変。
 
-**ROW1のS4**（`collectRow1SplitPoints`）: `spans[i].hiCLId`が非nullの内部境界を`spans[i].hiCLX`で分割点に追加
-する（S1と同形。既存の併合・端除外がそのまま効く）。
+### 下階に階段がある階の階段帯（`section/lowerStairVoid.js`）
+直下階に階段があり、その破れ線先セル（`cellsBeyondBreak`）の上は自階の床が無い。**その列では切断面にある自分の段板の天端（端ちょうどに立つ切断はその端の歩行面）が断面線**。その下は下階の階段が上がってくる吹抜け＝下階の階段帯の空間で、2FLの床線・隔て板や壁の断面の縁・段板の下辺・開口のバツはこの帯の内容ではない。判定は材質・階段タイプによらずセルと切断線の幾何だけ。この列に限り階段自身・構造・アキ・開口も断面線より下を落とす（対象は吹抜けの区間のうち切断面の段板がある所だけ。縦断する切断〔seq5/6〕の断面線は勾配の近似なので階段自身のジグザグは切らない。区間の境界に立つ縦線は輪郭の段の低い側ではなく区間の内側の高さで切る）。**区間の境界が自階の切断壁（隔て板）の材の中に落ちるときは、壁の断面の縁は壁の吹抜け側の面から上、床線と階段自身・構造・開口は壁の手前の面で止める**（`lo/hi`と`floorLo/floorHi`の2境界。吹抜けの縁に立つ壁の下に床線や2FLの床梁の見えがかりを通さない。面の端の外壁は端がその手前の面なので寄らない）。直下階は`buildStairBand`の`ctx.lowerGraph`（展開モードの直下階peek。probeも同じ）。**自階の上り口の開口（天井の縁＋アキのバツ）もこの区間には描かない**（敷居がこの帯の床ではなく、その開口は下階の階段帯が上階の開口として描く）。上り口の面の開口は辺の上に立つ壁の帯を差し引いた残りだけ。往路側（自階の床がある）・1階・seq5/6は不変。
 
-**Round Fフィクスチャでの検証結果**: D1（room2）は`spans=[wall(400), open(-50)]`・ROW1=400+1000（中心1..中心3..
-中心7）が完全一致。B1（room3）はspans構造・farFloorDeltaMm(+100)は一致するが、ROW1は`[400,600,3000]`の3分割に
-なる——中心7（y=3400）がextent無制限のためS3（面に届く非通り芯中心線）の「reaches」判定に無条件で該当してしまう
-**既存・別件の仕様**（本ラウンドの変更対象外。中心7はB1の軸位置とは無関係だが、S3はCLの位置的近さではなく
-extentの有無だけで判定するため）。
+## 回り階段（WINDING）の展開
+- 回転部（回り段 w マス）は、平面の段の多角形（`stairTreadFootprints`のinstallの扇形セル。`stairContribution`が`turnCells`に持つ）を**切断線ごとに切った**Landing（`turnCellSlices.js`の`sliceTurnCells`。公開の入口で`withCutLandings`が足す）で描く。高さ＝往路の段数×蹴上＋(段番号−最初の回転段)×蹴上。レーン線は走行方向の区間に、seq1/seq3は幅方向の区間になる。
+- 線が辺（放射線・前縁）に乗るときは回転部の奥（+t）側のセルを採る。辺（頂点）から0.5mm以内は乗っているものとして扱い、寄せ先は**全セルの全頂点から1回だけ**決めて全セルで共有する（セルごとに決めると隣り合うセルの縁が食い違い蹴上が落ちる）。
+- 隣り合うセルは放射線を共有するので、蹴上は`landingStepRisers`がCUTの縦線で足し（平面の放射線とレーン線の交点に一致）、床の輪郭は`stairCutFloorProfile`のmax合成で段状になる。復路の足元は回転部の最後の段（折返しは踊り場1枚）。`switchbackCuts`に通すので`LANDING_CUT_INSET_MM`も効く。seq1（frontA）は、往路側は frontA が回転部の最初のセルの前縁に乗るのでそのセル（奥側）の床を引き、復路側は踊り場でなく復路の初段の段板を切るので段板の断面（CUT）になる。
+- 区間長・段数は`resolveUTurnSpanLengths`（`stairClassify.js`。折返し＋回りの唯一の供給源）。**構造側（`resolveSwitchbackSpanLengths`・`landingRect`・`landingZ`）は折返し専用のまま閉じる**（開くと`structuralAutoFill`が回り階段にも踊り場受け梁を作る）。展開図は型判定なしの`uTurnTurnRect`で矩形だけ借りる。`fanCuts`はL_TURN/FLARED/OPEN_WELLだけ。
+- **U字系の展開図は平面のinstall枠を共有する**（`uTurnPlanLayout`）。走行方向の位置（往路・復路の端、踊り場の前縁・奥）はCL区間長から再計算せず、`stairContribution`が平面の解決値だけから取る。外縁は壁の面、内縁はレーン中央（鉄骨のあき100は`ladderAcrossRange`）。柱のある木造は往路側の前縁（frontA）と復路側の前縁（front）が分かれ、踊り場は本体＋往路側の延長矩形（同じ高さ）の2枚、seq1はfrontA（復路側は復路の初段を物理的に切る。切断線がflightの内部にあるときはその位置の段板の天端にCUT＝木造は厚30の矩形）、seq3はfrontから奥へ。切断線がflight・踊り場の端から`STAIR_RUN_TOL_MM`(0.5mm)以内なら両側を含む。踊り場が浅く前縁が奥を越えるときは前縁を奥に揃える。直進部の蹴上は平面の踏面線と一致する。段板の断面の幅は、隔て板があるとき内縁を隔て板の面で止める（梯子の内縁はレーン中央のまま）。
+- 階段下の部屋の帯（`elevationBand`）は、切断線がflightの内部にあっても段板の断面を出さない（`treadSection:false`。「階段の高さ」細線を保つ）。**「階段下の部屋」の判定（`flightsOverRoom`）は部屋の実セルで行う**（flightと実セルの交差が覆う領域に`STAIR_OVER_ROOM_MIN_OVERLAP_MM`を両方向で超える矩形が収まるか。包絡矩形で見るとL字の部屋の切り欠きの階段室で包絡矩形だけが階段と重なり面の全幅に「階段の高さ」の細線が出る。`cut.bandRoomBounds`は従来どおり包絡矩形）。
+- 隔て板がある階段室の面は6枚になり、レーン境界（s≈0.5）の実壁の面が外壁側の面と同じ側に入る。`classifyFaces`は同じ側に外壁側の面があればそれを除く（`mergeFaces`が先頭基準のため。実壁でない2a壁の面は従来どおり）。
+- **回転部の向こう側の段の見えがかり**（`farSideSilhouettePrimitives`）: 縦断する切断で、切断面の奥にあり視線から遠ざかって立ち上がる段（低い側のセルが視点側にある共有辺）を細線で描く。段鼻の水平線と両端の縦線（切断面で切れた端は切断の蹴上が太線で描く）、視線と平行な辺は縦線1本、全体が奥にある復路の蹴込みは縦線。手前の壁・断面に隠れる部分は描かない（斜めの天端は交点で分ける。列の境界上の縦線は両隣がともに覆う高さだけ隠す）。階段下の部屋の展開には出さない。壁の端の柱と取り合う端（隔て板の回転部側の端）に蹴上が集まる縦線も細線で引く。壁の端の縦線（recess）は端面に突き当たる回転部のセルの天端より下を落とす（`clipWallEndVerticalsByStairMass`）。折返し（回転部なし）の復路は描かない。
+- **蹴上材を裏から見る面（材質によらない手順）**: 横断の切断が回転部のセルを切る面（seq3）は、切断面の向こうで段が視線から遠ざかって下る＝蹴上材を裏から見ており、蹴上の向こう側の踏面と壁に取り合う蹴上線は蹴上材に隠れる。**断面線（切断面上のスライスの床線・蹴上）は太線のまま変えない**（階段の断面線を破線にしてはいけない）。それとは別に「断面線と壁の間にある踏面」（各セルの切断面の向こう側の幅の範囲に、そのセルの高さの水平線。断面の床線と重なる範囲は除く）と「壁と取り合う蹴上線」（隣り合うセルの共有辺の向こう側の端に、低い段から高い段までの縦線）を細線で足す（`hiddenTurnStepPrimitives`）。描かれた断面線で上下に分ける（`clipHiddenStepLines`/`clipHiddenSegmentBelowProfile`・`clipHiddenSegmentAboveProfile`）: **断面線より下＝断面の後ろに隠れた区間は細線破線**（視線の向きへ下る側の踏面・壁に取り合う蹴上の縦線は断面の床の後ろ）、**上＝断面の前の空間で見える区間は細線実線**（上る側の踏面の線が断面の段から壁まで）。縦線は段の上（断面の蹴上）と面の端（壁の縦線）には出さない。面の断面線は段状の天端（`crossingLandingFloorProfile`）で、閉じた断面図形の外に太線を残さない。基準のスライスが切断の基準床と違う面（seq1）は帯の床のまま。同じ理由で正面視の梯子（`flightLadderPrimitives`）は視線の向きへ下るflight（seq1の往路）を材質・階段下の部屋によらず破線にする。切断線の手前にあるflight（直進のseq1は上り口辺に立ちflightを背にする）は対象外。
+- 限界は末尾「既知の限界」。
+
+## 取りつき区画（側面の上り口 e 段・到達口 a 段）の展開
+- 区画の位置・番号・高さは平面の解決値（`uTurnPlanLayout`＋`stairTreadFootprints(…,'install')`のセル多角形）だけから取る。回り段と同じく`sliceTurnCells`で切断線ごとに切り、`withCutLandings`が回転部・上り口区画・到達口区画を別領域として寄せる（区画を平行な踏面で等ピッチに割る旧`Flight.leadSteps/leadMm`は扇形のセルと食い違うので廃止）。
+- 番号の唯一の供給源は layout の`entryNumbers`（1..e）／`arrivalNumbers`（S+e..S+e+a−1。最後＝totalSteps−1、到達辺の先が上階床）。展開図で数え直さない。
+- 平場（e=0／a=0で側面の口）は矩形Landing（上り口z=0、到達口z=上階床）。外縁の段差は`edgeRiser`の縦線（上り口辺の床→最初の段、到達辺の最後の段→上階床）で足す。レーンを縦断する切断で外縁に接するセルだけに付け、横断・平場には付けない。
+- 往路flightは`underSteps`(=e)、最後のflightは`overSteps`(=a)で、正面視（seq1）の梯子の段数と足元の高さを区画ぶん補う。走行端の口は区画を持たず従来どおりflightが口まで続く。
+
+## 直進系（STRAIGHT／STRAIGHT_LANDING）の展開
+- U字系と同じく走行方向の位置は平面の解決値`straightPlanLayout`（設置階のinstall枠）だけから取り、通り芯の枠・CL区間長からは再計算しない（通り芯の枠は面の分類にだけ使う）。側面の口の区画は上の節と同じ仕組み。
+- seq1（上り口の壁）は上り口辺＝install枠の基端（壁仕上げ面）に立ち、側面の上り口でも基端のまま（区画はseq2/4のレーン線で切れる）。到達端の面（seq3/seq5）はinstall枠の終端。踊り場壁の探索中心は踊り場の手前の縁land1。切断線のlo/hiは`faceFromCut`と同じく直交壁の面へ寄せる。直進系にささら・桁枠・蹴込・段板厚は付けない（U字系との差。付けるかは裁定待ち）。直進系の帯の content は U字系と同じ`buildCutContent`へ載せ、上階のはね出し（`upperOverhangOf`）も図側へ（`buildSectionFigure`の2本目の経路は削除済み）。
+
+## 平面との照合の関門と階段の暫定事項
+- **到達辺**: 木造U字系の復路の到達辺はN+1の床梁の外面＋壁仕上げ（`stair-model.md`）。展開図は層スタックの直上の層のgraph（`opts.upperGraph`・`above.graph`・`solids.upperGraph`）を`stairContribution`／自階の裏面／復路下の壁の天端へ渡して平面と同じ面を使う。
+- 暫定・裁定待ち: (1) 到達口の平場の高さと到達辺の縦線（実データに側面の到達口が無く合成テストだけで決めた。上階スラブの小口と重なる見込み） (2) 詳細LODの平面の踏面線は±nosing 20だが展開図はセル境界のまま（寄せるかは未裁定） (3) 直進系に蹴込・桁枠・段板厚を付けるか。別件: 両口とも側面で隔て板の柱がある構成では、平面側の上り口セルと到達口セルが幅方向に重なる（平面の既存挙動。展開図はそのまま写す）。
+- **関門probe** `scripts/probe/diffStairElevPlan.mjs`: 展開図の階段のジグザグの段鼻・回り段/区画の縦線を世界座標へ戻し、平面の踏面線との交点に両方向で照合する。**縦断の段鼻だけ**を見る（横断seq1/seq3と面の両端は未検査）。テスト用.stqは`makeStairPortsTestDoc.mjs`（stair-ports-test1〜5）。
+
+## 階段の高さ寸法（CH寸法）の記入ルール
+規則は2つだけ: **(1)寸法は「床断面・踊り場断面・天井断面のいずれかから、いずれかまで」を1本とする** **(2)帯の左から端を順に見て、前の端と高さが変わったときだけ記入する**（先頭の端は必ず記入）。面の左右の端ごとに断面プロファイルが決まる: **踊り場スラブが切れる端**は`[1FL→踊り場][踊り場→上階天井]`（階段下に部屋があるときは踊り場より下が別室で帯の床が踊り場になるため`[踊り場→2FL][2FL→2F天井]`）、**切れない端**は壁の向こうの通常断面`[1FL→1F天井][2FL→2F天井]`。踊り場側がどちらの端かは面の向きで決まる（幅方向に横断するseq1/seq3は両端とも踊り場側、走行方向のseq2/4/5は片端＝切断定義表の`landingEnd`）。
+判断は`elevationStairSequence.js`の`stairChDimChains`が**一括で持つ**（踊り場スラブ・壁の向こうの部屋の断面が要るため帯レイアウト側では判定できない）。`layoutBandFaces`は`faceOverride.chDimChains`（{left,right}）を受け取ったら**それだけを描き**、既定の「先頭面の左CH寸法」「継ぎ目のhasLeftChDim」は使わない。`buildFaceFigure`も`ctx.chDimChains`があれば面ごとの右CH寸法を描かない（二重に出る）。階段の裏面（E5）があるとき、踊り場側の端の鎖の上端（上階天井）はその端の裏面の実測値（四捨五入。`h.soffitEnds`）。壁の向こうの通常断面の端は変えない。
+
+## ビュー位置の階別記憶・建具パネル連携
+`ElevationModeState`はモジュールレベルの`Map<floorId, {...}>`（セッション内のみ。IDB永続化なし）で階ごとのscrollY・faceScroll・表示中の部屋を記憶し、同じ階への再突入（`dispose()`→`init()`）で復元する。記憶した部屋が消滅していれば、記憶時点で1つ前だった部屋（`graph.rooms`順）の帯位置へフォールバックする。floorIdは構築時（`project.activePlane.id`）に一度だけキャプチャする（dispose()時点では`project.activePlane`が既に次の階を指している場合がある）。
+
+展開図の建具記号丸（`tag`プリミティブの`openingId`）はクリック可能。`ElevationModeState.selectedOpeningId`/`selectOpening()`は`OpeningModeState`と同じAPI名にしてあり、建具モードの`OpeningPanel.jsx`をelevationモード中（appModeは切り替えない）でも再利用する。**パネル表示中も展開図のドラッグ・ホイールスクロールは自由に行える**（規制は一度入れたが撤廃した）。パネルでの編集はMobX reactionで`graph.openings`の各Openingの表示に効くフィールド（committed値。確定のたびに1回だけ発火）を監視し、変更があれば帯を全再構築して即時反映する。クリック対象は建具記号丸のみ（姿図は複数の生プリミティブへ分解済みで個別の建具IDを持たない。defer）。
+
+## 既知の限界
+**受容（直さない）**
+- 帯の再構築の署名は id と鍵だけを見る。id が同じで中身だけ変わる変更（構造スナップショットの undo で柱寸だけ変わる等）は検出しない。
+- 天井: 円弧・ドームの遠側は部屋のCH／頭頂を含まない片（面の端寄り）は弦＝直線／上限64本に当たる半円に近い巨大な円弧は等角に刻み鉛直差が1mmを超える／別の階の下階延長で covered が分割されると端の高さが傾斜と同じくずれる／`beyondCeilings`の破線は円弧の片では頭頂より上だけ／階段帯は円弧未対応／ドームの壁面断面は放物線だが3点円で近似（数〜10mm級）。アキ越しの別室の走り方向の傾斜は遠側の天井線が出ずアキの上端は近側の天井。奥の端の探索は64矩形で打ち切って null（部屋のCHに落とす）。傾斜区画内の垂れ壁の下端は最高点基準。
+- 斜めの天端・斜線: 斜線の途中にある壁（斜線の高い側に届かない壁）は低い側で水平に打ち切るため側縁（中線）が斜線より数mm上に出ることがある。斜線と帯の上端（高い側）の間の三角の奥は隠す側に倒すので、奥の壁の端の縦線が斜線の下端から帯の上端まで欠ける（上り口側の列で最大1列ぶん）。`profiledTop`の壁が cutAlong経路に来るのは自立壁だけ（隔て壁は`isRoomWall`で来ない）。
+- **体裁の開放スパンは遠側の最初の片だけ**（`farCeilAbsMm`は入口の面の値。奥の別の区画は出ない。エンジンの cellsAlong は面ごと）。統合案U4は採らないので受容。
+- 帯CH基準のまま: 上部吹抜けの上階ぶん（voidCH 1値）・段差見付け面（その上部アキの上端も。両側の実天井へのクランプは未対応）・垂れ壁のアキ・壁2段書きの縦中心(-CH/2)・階段帯の上階クリップ縦線。壁から約60mm以内で平行な天井芯。区画の境界で床線・巾木も区間ごとに割れる（同一直線上の実線2本。見た目は不変・golden では差分に数える）。
+- 左右反転した同型のL字（段差が出口側に来る配置）では開放スパンの規則2.5が掛からず重複区間が残り、パネル統合の条件3も不成立で面は2枚のまま。実機で該当が出たら規則2「見通しは出口側の面が担う」との優先関係を裁定で決め直す。
+- 階段由来の clip（`clipContentInsideStairBody`ほか）: 範囲の中の rect は復路の本体より上の部分も落ちる／範囲の端ちょうどの縦線は「段の低い側」の規則で切らない／範囲の端から GAP_EPS×3 の帯では本体より上の線も落ちる（mm未満）。U3（探査の選択に階段を入れて clip を置換）は見送りのため現状維持。
+- 階段の細部: 復路の到達側の拡張域（面の外）には上階天井の線と裏面の天井線の2本が出る／端の壁厚の中でも裏面を評価するため約58mmの縦線が出る／あき（レーン間）では天井線が上階天井まで切り欠く／回り階段の下の部屋の展開図にも階段が出る（`stairContributionOverRoom`の既存規則の帰結）。
+- `4 (1).stq`の1階の梁3本（z990〜1190）はHの端7.5mmが壁の面に食い込むが、梁の芯が壁の帯の外にあるため「壁内の梁」ではなく分断の対象外（芯が合併帯の中のまま保つ方針。重なり判定に変えると壁の線が分断される）。
+- 図側（`face.spans`の`farFloorDeltaMm`/`farCeilAbsMm`。遠側床線・遠側天井線）と探査側（ヒット列。アキの範囲）の2系統が残るため両者の値が食い違う余地がある。どちらが正かを決める規則は無い（削ると遠側床線・天井線が消えるので要裁定）。
+- 2026-09-13に全キャンセルした6点指摘の残り（下ささらのクリップ・84mm片ほか）は意図的に残した不備。階段の最終段上端の閉じ方（内側ささらの上端が上階壁の向こう側の面で止まる終端定義が未整備）・1F天井の見えがかり断片（中線）が階段輪郭で切られて残る件も同様。
+- ROW1の分割源S3（面に届く非通り芯中心線）は`extent`の有無だけで判定し、CLの位置的な近さは見ない（extent無制限の中心線が無関係な面の軸でも「届く」と判定される既存の別件仕様）。
+- 柱: RC丸柱は外接矩形のまま。柱壁のL字延長は scale>4 で発火（受け入れ済み）。独立柱／面より手前の立体の遮蔽・斜め回転柱の見付け幅・作り付け家具は未実装。
+
+**個別課題（別途直す。未着手）**
+- 階段帯: 区画・形状の傾斜天井の斜線を引く者がいない（エンジンは天井の斜線を引かない規約で、階段帯の体裁の`ceilingProfile`フックは平面の天井しか持たない。裏面だけは`ceilClip`で受ける）。直進系の裏面は E5-2・遠側（隣室から見える裏面）は E5-3 が前提で未着手／奥の壁との交線は描かない／鉄骨の裏面は対象外。
+- 階段帯: seq5の到達辺の外（面の端〜到達辺）は切断面の段板が無く帯の床0のままで、2Fホールの壁・天井線（0〜2400）が残る。直進系の帯にU字系専用の後処理（下階の階段の吹抜けなど）を持ち込んでいない。階段室の`floorLevel≠0`では階段帯の`makeProbeContext`に floorOffset が渡らず、`ceilClip`が層スタックの天井より床段差ぶん低く、`switchbackCuts`の`underFloorZ`が0のまま、仕上げ空間の床区間だけが床段差込みになる。
+- 上階graphが層に無い経路（N+1の階段を見上げる`stairSoffitAbove`・見上げの上階の層の裏面）は到達辺の面が既定の面に戻る。
+- 回転部の細線（向こうの段の見え掛かり。レーン中央から始まる）が隔て板の帯の中を通る。階段自身の線（`farSideSilhouettePrimitives`/`hiddenTurnStepPrimitives`）の層の問題で、探査の選択に階段を入れても消えない。個別に`occludeFarSegment`が列の帯を読む所で直す方針（目視で判断）。
+- 階段帯の隅の建具の開口で中線が残る（階段cutの端の縦線は断面線から立つ別規則で、隅の建具の開口zを床の高さの足し込みでは図と揃えられず太線だけ止まる。`cut.ends`が足場）。
+- 回り階段: CH寸法の鎖は踊り場の高さ（往路の終端）のまま／桁枠は回転部のセルに付けない（鉄骨の回り階段でトリム結合もしない）。
+- `stairOver`（階段下の部屋「13」帯）の機構（`lowerFaceEndVertical`・`trimCeilingLineAt`・`appendStairOverContent`）は踏面ジグザグのヒット列化が前提で現状維持。
+- 階段の暫定・裁定待ち（直進系の蹴込・桁枠・段板厚、到達口の平場の高さ、踏面線のnosing寄せ）は「平面との照合の関門と階段の暫定事項」。
+
+**部材（U1b 後の現状）**
+- **edgeDropped の列（`{ceil, zone, wtpSight}`）の部材は帯を持てず加算のまま**（R7）。遮蔽は描く側のクリップ。規則Aの全高仮定は dropped の梁だけ。`elevationSolids.js`は全部は消えない。
+- 壁の中の柱（`isColumnInsideWall`）は包みを持たず、その柱に収まる空中横断の梁の端が規則A・Bで隠れない（面の途中に直交壁がある構成だけ。帯の候補は柱の素の矩形が遮蔽するので消える見込み＝REASONED・実データ未確認。dropped 側は残りうる）。
+- 部屋帯で仮想断面より手前（室内側）の空中の梁は描かない（旧実装は壁の仕上げ薄壁の遮蔽に掛かり実データでは出ていなかった。83文書の差分は plan-solids-test の2帯だけ）。`fromRoomSide`（断面の続きを室内側で見る）の向き依存の解消は別課題。
+- 壁が探査の候補にならない場合は柱が加算より多く見える。切断線が柱の内側を通る柱（memberCut）を選択に入れる恒久策は、実データに切られる柱が出たとき。
+
+**未実装（defer）**: 開口の内法寸法線・巾木見切り目地・家具設備電気・展開図上の編集・印刷/PDF・L_TURN/FLARED/OPEN_WELLの階段断面・展開図の建具「姿」クリックでのパネル連携（記号丸のみ）・他階の建具の2層帯への描画（吹抜け帯の下階建具・階段帯の上階建具）・3層以上つながる吹抜けの描画。
+
+## 履歴
+本文は現行規則だけを書く。以下は日付・コミット・要旨の1行形式。設計提案と当初の裁定は`.claude/elevation-redesign.md`（節番号はコードが参照するため維持）。
+
+### 採取履歴（golden の再採取）
+基準は`app/scripts/probe/`の固定スナップショット。再採取は裁定済みの意図的差分を取り込むときだけ。
+- 2026-09-11（5943d89／裁定後＝5c81741）Phase 4裁定前（水平面ヒット由来の見えがかり線・アキ分割が既定off）→裁定後（既定on）。
+- 2026-09-13（9b36c33直後・裁定「6点指摘の残りはキャンセル」）: golden13/11の「6」（2a壁非表示の是正・アキ矩形・面端の壁判定・最終段の蹴込・ささら）・「5」・2F「22」（5d2ef84＝腰壁・垂れ壁の隅の食い込み）。golden11は初回＝8e8e1e6（Phase 6b-1着手前）。
+- 2026-10-09（`golden/`・`golden11/`・`golden13/`を`--regen`なし）: 面端の縦線medium→thick・アキの二重描画解消・折返し階段「6」のB/C/D面（b49b929・6b5909f・cb89fed・998e5ed）・隔て板（e0ea531ほか）・建具のhit/tag（07ee813・fa1c8f4・5d32b2a）。
+- 2026-10-09〜（`--regen`）: `golden-elev-moku16` S2a=eaa6046（直進部・踊り場・seq1/seq3をinstall枠に揃え復路初段の段板CUT追加）／S2b=498cd91（回転部を扇形セルの切断線スライスに）／T1=0ab36cb（取りつき区画）。`golden-elev-stairports`新設 T2-2=8e9afd7（stair-ports-test1〜5）。
+- 2026-10-17（2d54f94＝`--struct`追加。採取コミットは不明）`golden13-struct`新設（梁の見え掛かりの遮蔽の採取時点）: 規則A・Bの再採取＝moku16（梁の端12.5短縮）・ceiling-steel-stair-test（床梁の両端127.5短縮）。
+- 2026-10-22 stair-ports-test1〜3（S2=bf22201。ユーザー裁定「採用」）: 直進系の階段帯のcontentをU字系と同じ`buildCutContent`へ載せ替え、上階のはね出しも図側へ。1階の階段帯だけtest1/2 追加24・削除5、test3 追加35・削除9。
+- 2026-10-22 golden13・golden11・golden13-struct の elevfig-*（ユーザー目視OK）: 1階「6」（階段帯）が68ad689（上り口の開口から辺の上に立つ壁の帯を差し引く）でずれていたのを確定（親804f6b6は一致）。`golden-knee`を再採取して追跡に入れた（建具ドラッグのhit〔07ee813〕1個の差）。
+- 2026-10-23 リファクタS0（ゲート`elevGoldenGate.mjs`導入＝6617e17。後始末f5593b9）: HEAD 6617e17とずれていた4枚をユーザー裁定で再採取（`golden/`・`ceiling-steel-stair-test`・`ceiling-wood-stair-test`・`moku4-3`）。以後HEADと一致。
+- 2026-10-23 S3b-1（梁の「壁の中」判定を合併帯＋全高の壁だけに統一。ユーザー裁定1〜3。badc2f9）: ceiling-steel-stair-test 1・2階の階段帯で各−26（縦の床梁 axis 3000・幅100が薄壁＋オーナー壁の合併帯に収まり壁の中になった）。golden外: opening-test 踊り場梁が同理由で消え、moku4_kd 2階階段帯に腰壁の上の3階床梁が+12。他82本は不変。
+- 2026-10-24 S4（CLの無いU字階段のseq2を仮想の面で組む。ユーザー裁定(b)。60c1841）: ceiling-wood-stair-test 1階階段帯D1の踊り場床断面線の左端が15mm（半壁厚72.5→既定57.5）。
+- 2026-10-24 S3b-2（面の通りの梁を階段帯にも細線で。ユーザー裁定「細線で」。724f370）: moku16 1階階段帯seq1・ceiling-steel 1・2階（中線→細線）・ceiling-wood 1・2階。位置・長さは不変で線種だけ。部屋帯は不変。
+- 2026-10-24 U1b B3-1（梁の断面memberCut。8b84eae）: golden/golden11/golden13/golden13-struct の「5」（上部吹抜け帯に上階の床梁のH断面 +24）・moku16 +8・ceiling-steel 1・2階階段帯（R6）・moku4-3。golden外: 上部吹抜け帯・階段帯・天井ゾーンの梁断面（天井が高い区画は天井まで、段をまたぐ梁は低い側で切る）。
+- 2026-10-24 U1b B3-2（梁の見え掛かりmemberFace。1326299）: 「5」（上部吹抜け帯に2F床梁の下端の中線）・手前の梁が奥の梁の線を隠す・同位置の太線の下の細線が消える。moku4_kd 2階階段帯B2面の踊り場の上のアキを閉図形どおり（x 10905〜11705・z 1500〜2400。ユーザー裁定(c)）。
+- 2026-10-24 U1b B3-3（柱memberFace。691d93c）: 「22」の部屋帯で柱の幅だけアキ・腰壁の線が隠れる／「5」上部吹抜け帯で柱が上の階の床まで1本／階段帯に柱型が初めて出る／面端延長部由来の孤立した71mmの天端線が消える（受容）／stair-ports-test1〜5の2階帯0のアキが柱で左右に分かれる。
+- 2026-10-24 U1b B4・B6・2026-10-25 S5〜S7（出力不変。golden採取なし）。83文書はHEADとバイト一致。
+
+### 裁定履歴
+- 2026-08（コミット不明）断面エンジン導入（階段帯）: 壁・構造材の実体に属する表現は断面エンジンだけが書く。通常部屋帯・吹抜け帯はゴールデンで凍結。断面の中は描かない（例外は腰壁・垂れ壁と天井断面の高さが変わる境界の壁）。切断壁の縁は常に太線・見えがかりは奥行き2段。見えがかりの奥行き上限800。仮想断面線は壁芯から室内側へ下がる。
+- 2026-08〜09（コミット不明）アキ: 輪郭の矩形は描かない／床断面延長端・壁のない端部のはね出しには描かない／建具の姿の前にバツ不要（09）／下端＝遠側床・上端＝低い方の天井（09-11。同値でも縮める）。
+- 2026-08（コミット不明）階段: 蹴込20（30→20）・ささら上端は踏面先端で巾木同寸・鉄骨の踊り場桁枠・切断線は往路/復路レーン中央（08-23に全面訂正）・「断面線の外は描画しない」（09〜10-08）。
+- 2026-09-11（9c972cb・5c81741ほか）案A（和算）採用・Phase 4の水平面ヒットを実機確認の上採用・空気ボリュームの階またぎ連結（VOIDは最下階の親部屋1室・STAIR_VOIDは階段室1室）。
+- 2026-09-13（9b36c33・d6eea37ほか）特例は一般判定で置換できるなら削除／6点指摘の残りは全キャンセルして当初計画（Phase 7・8・クリーンアップ）を優先／`stairOver`は出力不変の3点のみ置換／面非依存の入口は`bandRoomBounds`を渡さず深度上限800のみ／ささらの見えがかりは実体で囲まれた矩形の厳密内部を描かない。
+- 2026-09（コミット不明）面の端も層ごとに違う（上階FLの線の起点は端の姿で決まる）／巾木は壁のある範囲だけ（10-15に改訂＝壁のない端部は壁が続く範囲だけはね出し）／壁2段書きは区間ごと／見付1px保証／天井断面線は区画ごと・高低差のある階の異なる天井断面線どうしは結ばない／無名の階段室は展開図の対象（10-07）。
+- 2026-10-07（コミット不明）踊り場前縁・回転部にアキは標記しない／B/Dは各1本／在来木造の段板30・蹴込板垂直／壁の材厚に埋まる梁・柱は`wallConcealRange`1箇所（外壁の通り芯中心の柱）。
+- 2026-10-08（コミット不明）階段の断面線の外は描画しない（階段下部屋の有無＝鉄骨／断面線が繋がっているか＝木造・RC）／seq3は踊り場前縁から100mm踊り場側で切る／隔て壁の天端プロファイルは「天端が位置の関数」という一般の引数だけを関所へ足す（特例を増やさない）。
+- 2026-10-09（eaa6046・498cd91・0ab36cb）回り階段は案A「回転部を段付きの踊り場で描く」／展開図の階段位置を平面のinstall枠に揃える／取りつき区画を平面のセルで／直進系も平面の解決値で。
+- 2026-10-13（コミット不明）`SHORT_WALL_IGNORE_MM`=100（出隅の短い壁で片を割らない）。
+- 2026-10-14（コミット不明）隔て板: 回転部側の柱型の出っ張りは誤り＝斜めの天端は物理端まで続き縦線と取り合う／隔て板の面にバツ不要／抜けの先が階段室ならアキではない／階段室の開口越しに階段を見る（旧S4。リファクタのS4とは別）／回転部の向こう側の段を細線で。
+- 2026-10-15（コミット不明）蹴上材を裏から見る面（断面線は太線のまま、踏面と取り合い蹴上線を細線）／図の左右は仮想断面の視線の向きだけで決める（dirSign）／復路下の仕上げ空間／階段帯の天井は裏面（E5）／天井の裏面の終わりの取り合い・巾木・隔て板を包む仕上げ。
+- 2026-10-16（コミット不明）U字階段の到達辺はN+1の床梁の外面＋壁仕上げ。
+- 2026-10-19（コミット不明）下階に階段がある階の階段帯は下階分の断面を書かない／穴の縁は隔て板の面／上り口の開口は辺の上に立つ壁の帯を差し引く／空中の梁の見えがかりは天井の状態が変わる所で区間を割る。
+- 2026-10-22（bf22201・14dfa81）直進系の階段帯を共通経路へ統合し`buildSectionFigure`を削除（U字系専用の後処理は持ち込まない）／アキを梁で割らない（階段帯）／棚卸しで`unexploredBelowZOf`・`stairOver`の2機構は恒久に残す（`hiddenWallIds`はPhase 6で空気ボリューム判定へ吸収済み）。
+- 2026-10-23（badc2f9ほか）自階の床（スラブ）は構造部材の見え方を隠す一般の遮蔽物（床梁を隠す。常に一般解）／穴の縁をまたぐ断面は輪郭1つの単位／壁の断面線の分断は壁内の梁が部屋側から見える場合だけ／S3b-1: 壁の中＝隙間なく連なる壁の材の和集合に梁の幅全体が収まる区間（腰壁は真下の床梁・垂れ壁は真上の天井懐の梁に対して全高の壁と同じ）／部屋帯の手前の梁がアキを塞ぐ（旧S4）。
+- 2026-10-24（60c1841・724f370・1108142〜312a423）S4（CLの無いU字階段のseq2は仮想の面。viewSignの統一は柱型判定の規約が変わるので見送り）／S3b-2（面の通りは細線）／U1b R1〜R7（柱型は中線のまま・airborneは中線・独立柱が出る・R4部屋帯の断面は天井で切る・R5階段帯のアキは割らない・R6壁の縁は梁の高さでも描く・R7粗さ維持）／moku4_kd のアキは閉図形どおり（(c)）。
+- 2026-10-25（判断のみ・コミット無し。続く実装は 9540626〜4335d85）U3（階段を探査の選択に入れる案）は見送り（行数が差し引きで増え clip も消えきらない。回転部の細線は別の層の問題）／S8の棚卸し結果は「階段由来の clip・隠れ線慣行・`stairOver`機構は現状維持、梁・柱の描く側クリップは探査側へ移って解消」。
+- 2026-10-23〜25（S3a=1f5ed12・S2=5f7a0ee・U1b B1〜B6・S5〜S7。下行のコミット）解消した既知の限界: 「梁が探査に参加しない」（U1b B1〜B3）・「規則Aの全高仮定」（帯の候補は腰壁・垂れ壁の実高さで隠す）・「roomFaceCutの2規則が部屋帯専用」（`facePlane`と`fromRoomSide`へ分割）・「`SectionCut`の残骸キー」（S2）・「viewSignの二重定義」（`faceSectionCut`の符号を`-faceViewSign`へ寄せ定義1箇所。柱型判定の規約の反転だけが意図的に残る）。
+- 展開図リファクタの実施コミット（2026-10-23〜25。出力不変は83文書のバイト一致で確認）: S0=6617e17（ゲート）・S1=a127863（逆向きimport13本と循環2本の解消）・S2=5f7a0ee（`SectionCut`の残骸キー`hiddenWallIds`・`openSpans`の撤去と opts の4群 typedef 化）・U2-lite=e888bfe・S3a=1f5ed12・S3b-1=badc2f9・S4=60c1841・S3b-2=724f370・U1b B1=1108142・B2=4ed2189・B3-1=8b84eae・B3-2=1326299・B3-3=691d93c・B4=bdc81e0・B6=312a423・S5=9540626〜80ee447・S6=cf49ca4〜17a5719・S7=4335d85。
+
+
+
+
+
+
+
+
+

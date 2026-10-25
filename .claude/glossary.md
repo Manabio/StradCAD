@@ -262,6 +262,17 @@ WINDING/L_TURN/FLARED/OPEN_WELLは対象外＝従来面順へフォールバッ�
 列の統合、`sectionStair.js`＝階段幾何）。手書きのタイプ別シーケンスを置き換えたもの。設計意図は
 `.claude/elevation-model.md`「階をまたぐ2層帯」節。
 
+## 梁・柱の探査の帯（memberCut／memberFace。展開図）
+展開図の断面エンジンが梁・柱を壁と同じ探査の候補（ヒット）として積み、選択して描く仕組み（`elevation/section/sectionHits.js`の`addMemberHits`。設計意図は`.claude/elevation-model.md`「2.5D立体の加算レイヤ」節）。
+**memberCut**＝切断線が切る梁・柱のヒット（切断線が平行な梁の幅の帯を通る梁は`along`）。帯の縁は引かず、断面形（`sectionOutline`）を部材の最初の列で1回描く。**memberFace**＝視線側の梁・柱（面の通りの梁・空中の梁・柱）のヒット。
+**nearMm**＝部材が絡む列で壁と競うときの「手前の面までの奥行き」（壁＝materialRangeの手前の縁、梁＝|芯距離|−半幅、柱＝`depthNearMm`）。壁どうしは従来の芯の距離`distMm`。
+**memberClass**＝候補が付ける部材の見え方の分類（memberFaceの値は`facePlane`＝面の通りの梁・`airborne`＝空中の梁・`column`。memberCutの`along`は別の印）。線種（細線／中線）はこれで決まる。
+**dropped／edgeDropped**＝列の端を足せない列（斜めの天井・天端・天伏の天井高さ場）の部材など、帯に乗らず加算レイヤ（`elevationSolids.js`）で描き続ける部材（`droppedMemberKeysOf`）。
+**memberlessBands**＝梁・柱の候補をすべて除いた選択（梁が無かったときの帯。梁の中に「ア キ」を出さないための付帯情報の取得元）。
+**facePlane／fromRoomSide**＝梁の判定の2つのオプション。`facePlane`は面の通りの梁（`cut.face`があれば既定。帯種別によらない）、`fromRoomSide`は断面の続きを室内側で見る部屋帯だけの向き。
+**beamWallEmbedding**＝梁が壁の中か（隙間なく連なる壁の材の和集合に梁の幅全体が収まる区間）を答える1関数（`sectionStructure.js`）。**wallConcealRange**＝梁・柱を隠す壁の材の範囲（`materialRange∪backingRange`。`finish/columnWrap.js`）。
+**makeSectionCut**＝`SectionCut`を組む唯一の生成器（`section/sectionTypes.js`）。`opts`は CutSpec／ProbeInputs／RenderStyle／BandInjections の4群で契約化される。
+
 ## ささら（ささら桁） / 踊り場受け梁
 **ささら（ささら桁）**＝鉄骨階段で段板（踏み板）を両側から支える斜め梁（プレート。板厚12mm・成300mm程度。段部はささらの横に付く「横付け」納まりが一般的で、段部の木口はささらに隠れて見えない）。展開図では側面視＝段鼻から成ぶん下げた輪郭（DETAIL細線）、正面視＝断面矩形（CUT太線）で表す（`elevation/section/stairSectionProfile.js`/`elevation/section/sectionStair.js`）。**踊り場受け梁**＝鉄骨階段・RC造階段の踊り場（せいのある帯として1層1ユニットを構成する要素の一つ）を支える下地鉄骨。構造モードで`role:'landing'`（記号`LG`）の梁として踊り場の壁側1辺（直進部レーンと反対側）に、踊り場の**到達階**（設置階ではなく踊り場の上の階。辺は常に下階の階段の形で解決し、到達階に階段が無ければSTAIR_VOIDのセルを使う）の伏図へ自動生成され、同spanKeyの自動生成床大梁（G）があれば撤去して置換する（2026-09-28裁定）。梁天端レベル（`levelOffset`。到達階FL基準）を編集できる。設計意図は`.claude/structural-model.md`「踊り場受け梁」節・`.claude/elevation-model.md`「階をまたぐ2層帯」節参照。
 
