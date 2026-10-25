@@ -6,7 +6,7 @@ import { RoomFeature } from '@core';
 import assert from 'node:assert/strict';
 import { StairType, StructuralMaterialType } from '@core';
 import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js';
-import { uTurnSoffitFromLayout } from '../ceiling/stairSoffit.js';
+import { uTurnSoffitFromLayout, straightSoffitFromLayout } from '../ceiling/stairSoffit.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { stairFaceSequence, applyStairSoffitToCut, stairChDimChains, extendLowerCeilingAcrossStrip, endSoffitAtOpenEndCeiling, SOFFIT_OPEN_END_INSET_MM, clipWallEdgesInsideStairBodies, dashLinesInsideRects, openingPanelPrimitives, subtractRangesFromPieces } from './elevationStairSequence.js';
@@ -319,6 +319,46 @@ test('【E5・失敗系】stairFaceSequence: 上階が鉄骨（裏面なし）�
     for (const e of r.entries.filter(x => ['1', '3', '5'].includes(x.seqNo))) assert.equal(e.ceilingProfile, undefined, `seq${e.seqNo}`);
     for (const e of r.entries.filter(x => ['2', '4'].includes(x.seqNo))) assert.ok(e.ceilingProfile.every(p => p[1] === 2400 || p[1] === 4800), `seq${e.seqNo}: ${JSON.stringify(e.ceilingProfile)}`);
   }
+});
+
+// ---------------------------------------------------------------- 直進系（受け口。S10-4 E5-2 S2-1。関門 elevationStair.js は未開放＝本番は stairSoffit=null）
+
+/** 直進（STRAIGHT）の歩行順面。stairSoffit は手組みの立体（階段室 x 0〜2000・y 0〜4000。縦走行・上り口 y=4000・到達 y=0）。 */
+function straightSequenceOf(soffit) {
+  const n = stairFloor('p1', 1, { walls: true }), u = stairFloor('p2', 2, { walls: true });
+  n.stair.setField('type', StairType.STRAIGHT);
+  const faces = composeRoomFaces(n.room, n.graph, { keepWallLessFaces: true });
+  const layers = buildBandLayers(n.graph, { above: [{ graph: u.graph, floorHeightMm: FLOOR_H }] });
+  const entries = stairFaceSequence(n.stair, faces, n.graph, {
+    floorHeight: FLOOR_H, chUpperAbsMm: 4800, chLowerMm: 2400, upperGraph: u.graph, layers, ...(soffit === undefined ? {} : { stairSoffit: soffit }),
+  });
+  return entries;
+}
+const straightSoffitOf = (across) => ({
+  solid: straightSoffitFromLayout({ vertical: true, hasLanding: false, totalSteps: 12, run: { base: 4000, end: 0 }, across }, { zStart: 2400, zTop }),
+  floorStepMm: 0,
+});
+
+test('【E5-2 S2-1】直進系: stairSoffit を渡すと各 cut の ceilingProfile が切断線の深さで切った裏面になり、渡さない従来と変わる（ceilClip と同じ区間列は applyStairSoffitToCut の単体テストが保証）', () => {
+  const base = straightSequenceOf(undefined);
+  assert.ok(base && base.length > 0);
+  const soffit = straightSoffitOf({ s0: 0, s1: 2000, mid: 1000 });
+  const entries = straightSequenceOf(soffit);
+  assert.deepEqual(entries.map(e => e.seqNo), base.map(e => e.seqNo));
+  const withProfile = entries.filter(e => Array.isArray(e.ceilingProfile) && e.ceilingProfile.length >= 2);
+  assert.ok(withProfile.length > 0, '裏面の天井断面が付いた面がある');
+  for (const e of withProfile) {
+    const before = base.find(b => b.seqNo === e.seqNo);
+    assert.notDeepEqual(e.ceilingProfile, before.ceilingProfile, `seq${e.seqNo}: 従来の天井から変わる`);
+  }
+});
+
+test('【E5-2 S2-1・失敗系】直進系: stairSoffit が null・足元の外（幅方向が合わない立体）なら entry は従来と deepEqual', () => {
+  const base = straightSequenceOf(undefined);
+  assert.ok(Array.isArray(base) && base.length > 0, '基準の面列が空だと deepEqual が空振りする');
+  assert.deepEqual(straightSequenceOf(null), base, 'null');
+  const outside = straightSoffitOf({ s0: 9000, s1: 9500, mid: 9250 });
+  assert.deepEqual(straightSequenceOf(outside), base, '足元の外');
 });
 
 test('【E5】帯レベル: 面の内側（端の壁の厚みを除く）で、エンジンの線は天井断面より上に出ない。傾いた線（天井の斜線）をエンジンが重ねて引くこともない', () => {

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { StairType, StructuralMaterialType } from '@core';
 import { STAIR_SOFFIT_THICKNESS_MM } from '../../core/constants.js';
-import { uTurnSoffitFromLayout } from '../../ceiling/stairSoffit.js';
+import { uTurnSoffitFromLayout, straightSoffitFromLayout } from '../../ceiling/stairSoffit.js';
 import { planSolidsLayerSolidsUp } from '../../plan/planSolidsLayerFilter.js';
 import { makeGrid } from '../../plan/planTestFixtures.js';
 import {
@@ -83,6 +83,20 @@ test('【E5】範囲 [lo, hi] で切る: 端の節は範囲の端・値は直線
   assert.deepEqual(nodes.map(n => n.run), [1500, 3000]);
   near(nodes[0].ch, 2400 + (zTop(6) - 2400) * (4000 - 1500) / 3000, 'lo 端');
   near(nodes[1].ch, 2400 + (zTop(6) - 2400) * (4000 - 3000) / 3000, 'hi 端');
+});
+
+test('【E5】直進（踊り場付き）の裏面を縦に切ると、節は end・land2・land1・base（昇順）。上り口 2400 → 踊り場 zTop(6) は平ら → 到達 zTop(12)', () => {
+  const STRAIGHT_LANDING_L = {
+    vertical: true, hasLanding: true, landingNumber: 6, totalSteps: 12,
+    run: { base: 4000, land1: 3000, land2: 2500, end: 500 },
+    across: { s0: 0, s1: 1000, mid: 500 },
+  };
+  const s = { solid: straightSoffitFromLayout(STRAIGHT_LANDING_L, { zStart: 2400, zTop }), floorStepMm: 0 };
+  const nodes = stairSoffitChAlong(s, { isVertical: true, depthCoord: 500, lo: 0, hi: 4000 });
+  assert.deepEqual(nodes.map(n => n.run), [500, 2500, 3000, 4000], '節＝到達・踊り場奥・踊り場手前・上り口');
+  near(nodes[0].ch, zTop(12), '到達'); near(nodes[1].ch, zTop(6), '踊り場奥');
+  near(nodes[2].ch, zTop(6), '踊り場手前'); near(nodes[3].ch, 2400, '上り口＝当該階天井');
+  assert.equal(stairSoffitChAlong(s, { isVertical: true, depthCoord: 5000, lo: 0, hi: 4000 }), null, '【失敗系】足元の外');
 });
 
 test('【E5・失敗系】足元の外の深さ・範囲が足元に掛からない・非有限・裏面なし・幅 0 は null', () => {

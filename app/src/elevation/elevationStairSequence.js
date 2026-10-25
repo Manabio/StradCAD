@@ -1608,7 +1608,17 @@ function buildStraightFaceSequence(stair, faces, graph, opts) {
   return table.cuts.map(cut => {
     // face / floorSegments / ceilingProfile は従来どおり汎用経路（faceFromCut 等）の値。content と
     // 上階のはり出し系のキーは U 字系と同じ共通経路（buildCutContent＋upperOverhangOf）から取る。
-    const { face, floorSegments, ceilingProfile } = buildFaceShell(cut, probeCtx, { wallFaces: faces });
+    // 階段の裏面（E5）: 上階に続く階段の裏面を天井にする（U 字系と同じ applyStairSoffitToCut。体裁の ceilingProfile と
+    // エンジンの cut.ceilClip を同じ区間列から）。直進系の既存の天井は上階天井の水平だけなので base は null・
+    // 足元の外は cut.zRange.hiZ でつなぐ。裏面が無い・足元の外なら null で cut は不変（従来どおり）。
+    // zRange は applyStairSoffitToCut が差し替える（共有オブジェクトは書き換えない）ので、shell より前に呼ぶ。
+    // openEnds は base が null の間は効かない（U 字系と同じ形で渡すだけ）。上り口の端の処理と CH 寸法の鎖（applied.ends）を
+    // 直進系で使うかは関門を開ける S2-3 で決める。
+    const openEnds = cut.face ? { left: cut.face.hasWallAtLocal0 === false, right: cut.face.hasWallAtLocalRun === false } : null;
+    const applied = applyStairSoffitToCut(opts.stairSoffit ?? null, cut, null, cut.zRange.hiZ, { openEnds });
+    const shell = buildFaceShell(cut, probeCtx, { wallFaces: faces });
+    const { face, floorSegments } = shell;
+    const ceilingProfile = applied?.ceilingProfile ?? shell.ceilingProfile;
     const { content, upperOverhang, upperFloorZ, upperFloorCutEnds, upperFloorEnds } =
       straightContentForCut(cut, probeCtx, endExtendMm, bandRoomBounds);
     return {
