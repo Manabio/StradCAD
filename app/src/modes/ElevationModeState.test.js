@@ -4,8 +4,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, RoomFeature, StructuralMaterialType } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, RoomFeature, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
+import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { placeOpeningWithDefaults } from '../openings/openingEdit.js';
 import { ElevationModeState } from './ElevationModeState.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -445,4 +446,49 @@ test('【失敗系】ElevationModeState.init: 柱の無い同構成では、柱�
     assert.equal(hasAt(withCol, x), true, `柱ありの帯には柱型の縦線が x=${x} に立つはず`);
     assert.equal(hasAt(withoutCol, x), false, `柱の無い同構成では x=${x} に縦線は立たないはず`);
   }
+});
+
+// ---- S8-4-2 本番配線: 階段下の部屋の帯の天井が、自階の「仕上げ」の階段の裏面になる（solids.underStairSoffits の供給）
+function makeStairUnderProject(structure) {
+  const lower = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const cl = (t, v) => lower.addCenterLine(t, v, { labeled: false, discipline: Discipline.ARCH });
+  const x0 = cl(CenterLineType.VERTICAL, 0), xm = cl(CenterLineType.VERTICAL, 1000), x1 = cl(CenterLineType.VERTICAL, 2000);
+  const y0 = cl(CenterLineType.HORIZONTAL, 0), ym = cl(CenterLineType.HORIZONTAL, 1500), y1 = cl(CenterLineType.HORIZONTAL, 4500);
+  const cells = new Set([`${x0.id}:${y0.id}:${x1.id}:${ym.id}`, `${x0.id}:${ym.id}:${xm.id}:${y1.id}`, `${xm.id}:${ym.id}:${x1.id}:${y1.id}`]);
+  const stairRoom = lower.addRoom(cells, '階段');
+  generateRoomWallsFromOutline(lower, stairRoom);
+  const stair = lower.addStair({ type: StairType.SWITCHBACK, cells, roomId: stairRoom.id, sections: [6, 1, 6], riser: null, upDirection: 'up', flip: false, structure });
+  const under = lower.addRoom(new Set(cellsBeyondBreak(stair, lower, stair.riser ?? null)), '階段下');
+  generateRoomWallsFromOutline(lower, under);
+  const upper = new PlanGraph(new Plane('p2', 2400, '2階', 2, 1));
+  const project = { planes: [lower.plane, upper.plane], activePlane: lower.plane, structGraph: null, openingNumberIndex: new Map() };
+  return { lower, upper, under, project };
+}
+
+async function underBandOf(structure) {
+  const { lower, upper, under, project } = makeStairUnderProject(structure);
+  const origPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async plane => (plane.id === upper.plane.id ? upper : null);
+  try {
+    const state = new ElevationModeState(lower, project, { width: 1000, height: 800 });
+    assert.equal((await state.init()).ok, true, '帯が構築できるはず');
+    return state.bands.find(b => b.roomId === under.id);
+  } finally {
+    floorSwapManager.peek = origPeek;
+  }
+}
+const slopedThickLines = band => band.primitives
+  .filter(p => p.type === 'line' && p.weight === 'thick' && Math.abs(p.y1 - p.y2) > 1 && Math.abs(p.x1 - p.x2) > 1);
+const polylinesOf = band => band.primitives.filter(p => p.type === 'polyline');
+
+test('【S8-4-2・配線】ElevationModeState.init: 木造階段の階段下の部屋の帯は天井が裏面に沿う傾斜になり、stairOver の折れ線が無い', async () => {
+  const band = await underBandOf(StructuralMaterialType.WOOD);
+  assert.equal(slopedThickLines(band).length, 2, '階段に沿う 2 面の天井が傾斜線');
+  assert.equal(polylinesOf(band).length, 0, 'stairOver の折れ線は渡らない');
+});
+
+test('【S8-4-2・配線・失敗系】ElevationModeState.init: 鉄骨（あらわし）の階段の下は従来どおり（水平な天井・stairOver の折れ線）', async () => {
+  const band = await underBandOf(StructuralMaterialType.STEEL);
+  assert.equal(slopedThickLines(band).length, 0);
+  assert.ok(polylinesOf(band).length > 0, 'stairOver の折れ線がある');
 });

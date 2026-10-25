@@ -8,7 +8,7 @@
 // 比較してしまい、階段室（例: 11.stq 1階の「6」）の差分を取り逃がす。
 import { RoomFeature, CenterLine, centerLineKind } from '../../src/core.js';
 import { buildRoomBand } from '../../src/elevation/elevationBand.js';
-import { memberLayersOf } from '../../src/elevation/elevationSolids.js';
+import { memberLayersOf, underStairSoffitsOf } from '../../src/elevation/elevationSolids.js';
 import { buildStairBand } from '../../src/elevation/elevationStair.js';
 import { buildVoidBand, buildRoomBandWithVoidAbove, findOverlappingRoom } from '../../src/elevation/elevationVoid.js';
 import { selectElevationRooms } from '../../src/elevation/elevationFaces.js';
@@ -52,7 +52,11 @@ export function dumpFloorBands(project, graph, upperGraph, lowerGraph) {
     try { floorHeightMm = floorHeightAbove(project, graph.plane); } catch { floorHeightMm = null; }
     const base = { project, materialMap: new Map(), gridCLs };
     // ElevationModeState と同じ: 梁・柱の候補の層（memberLayers）は全部屋で 1 つの配列を共有する（部屋ごとに作ると立体を作り直す）
-    const solids = { upperGraph, floorHeightMm, memberLayers: memberLayersOf(graph, { upperGraph, floorHeightMm }) };
+    // 自階の「仕上げ」の階段の裏面（階段下の部屋の帯の天井を頭打ちにする。ElevationModeState と同じ値）
+    const solids = {
+      upperGraph, floorHeightMm, memberLayers: memberLayersOf(graph, { upperGraph, floorHeightMm }),
+      underStairSoffits: underStairSoffitsOf(graph, { upperGraph, floorHeightMm }),
+    };
 
     const voidRoomsAbove = upperGraph
       ? selectElevationRooms(upperGraph).filter(x => x.feature === RoomFeature.VOID) : [];

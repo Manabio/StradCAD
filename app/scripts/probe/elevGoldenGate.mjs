@@ -44,7 +44,8 @@ export const TARGETS = [
   { dir: 'golden-knee', stq: 'knee-drop-test', flags: [] },
   { dir: 'golden-elev-moku16', stq: 'moku1-6', flags: REGEN },
   ...['ceiling-steel-stair-test', 'ceiling-wood-stair-test', 'ceiling-zone-far-test',
-    'ceiling-zone-slope-far-test', 'ceiling-zone-test', 'moku4-3'].map(ceiling),
+    'ceiling-zone-slope-far-test', 'ceiling-zone-test', 'moku4-3',
+    'ceiling-steel-stair-under-test', 'ceiling-wood-stair-under-test'].map(ceiling),
   ...[1, 2, 3, 4, 5, 6, 7].map(ports),
 ];
 

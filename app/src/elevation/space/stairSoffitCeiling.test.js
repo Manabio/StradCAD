@@ -229,6 +229,15 @@ test('【S8-4】平らな天井(3000)と傾いた裏面の交点で区間が割�
   assert.ok(out.every(s => s.floorDeltaMm === 0), '他の項目を落とさない');
 });
 
+test('【S8-4・F1】内側の割れ目の手前の部品には壁の無い境目の印 zoneCeilEdgeHi が付き、最後の部品は元の区間の値のまま（図が半壁厚ずらさない）', () => {
+  const out = minCeilingSegmentsWithSoffits([SEG], FACE, soffitsOf(surfaceOf()), OPTS);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].zoneCeilEdgeHi, true);
+  assert.ok(!('zoneCeilEdgeHi' in out[1]), '最後の部品は元の区間の hiX の印を保つ（元に無ければ付けない）');
+  const marked = minCeilingSegmentsWithSoffits([{ ...SEG, zoneCeilEdgeHi: true }], FACE, soffitsOf(surfaceOf()), OPTS);
+  assert.equal(marked[marked.length - 1].zoneCeilEdgeHi, true, '元の区間の印は最後の部品が引き継ぐ');
+});
+
 test('【S8-4】元の天井 3500（前縁の平ら部 ≈3950 より低い）でも、斜線との交点で割れて上り口側だけ裏面になる', () => {
   const out = minCeilingSegmentsWithSoffits([{ ...SEG, chMm: 3500 }], FACE, soffitsOf(surfaceOf()), OPTS);
   // 3500 は前縁 zTop(6)(≈3950) より低く、y=yAt(3500) で裏面と交わる

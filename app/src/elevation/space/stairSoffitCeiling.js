@@ -238,6 +238,9 @@ function splitSegBySoffit(seg, face, soffit, { floorZFor, ownerRoomIdOf, default
     const out = { ...seg, loX: p.x0, hiX: p.x1 };
     if (!first && 'loCLId' in seg) out.loCLId = null; // 内側の割れ目は段差 CL ではない（寸法の分割点にしない）
     if (!lastP && 'hiCLId' in seg) out.hiCLId = null;
+    // 内側の割れ目は壁の無い境目（天伏の区画の境界と同じ）＝図は段差・天井の小口として半壁厚ずらさない（drawnRiserX・drawnCeilingRiserX が読む印）。
+    // 最後の部品は元の区間の hiX の印をそのまま保つ
+    if (!lastP) out.zoneCeilEdgeHi = true;
     if (p.soff || seg.chMm != null) {
       out.chMm = p.c0;
       if (Math.abs(p.c1 - p.c0) > CEIL_EPS_MM) out.chHiMm = p.c1; else delete out.chHiMm;

@@ -23,6 +23,8 @@ import { buildBandLayers } from './section/sectionBandLayers.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
 import { makeSectionCut } from './section/sectionTypes.js';
 import { roomBounds } from '../finish/gridCells.js';
+import { stairSoffitFinished } from '../ceiling/stairSoffit.js';
+import { stairFootSurfaces } from '../ceiling/stairFootWallTop.js';
 
 /**
  * 梁・柱（部材）の層: 自階（floorZMm=0）と、判っていれば上階（floorZMm=floorHeightMm）。梁は「その梁が実際に立つ階のgraph」に
@@ -38,6 +40,33 @@ export function memberLayersOf(graph, solids) {
   if (solids?.memberLayers) return solids.memberLayers;
   return buildBandLayers(graph, solids?.upperGraph
     ? { above: [{ graph: solids.upperGraph, floorHeightMm: solids.floorHeightMm }] } : {});
+}
+
+/**
+ * 自階の階段のうち、裏面が仕上げ（stairSoffitFinished＝木造または soffitFinish 'finished'）のものの裏面の面
+ * （階段下の部屋の帯の天井を頭打ちにする供給源。階ごとに 1 回作って solids.underStairSoffits で全部屋の帯が共有する）。
+ * 面は stairFootSurfaces（壁の天端と同じ式）。高さの基準は階段室の床（実効 FL−datum。datum 基準の絶対 z）。階高が決まらない・屋外階段・裏面が組めない型は載せない＝従来の描き方。
+ * 「あらわし」の階段は載せない（その下は stairOver の機構・天井 CH のまま）。
+ * @param {object} graph 自階
+ * @param {{upperGraph?:object|null, floorHeightMm?:number|null}} [solids]
+ * @returns {Array<{stairId:string, stairRoomId:string|null, surface:object}>}
+ */
+export function underStairSoffitsOf(graph, solids) {
+  const floorHeightMm = solids?.floorHeightMm;
+  if (!Number.isFinite(floorHeightMm) || floorHeightMm <= 0) return [];
+  const out = [];
+  for (const stair of graph?.stairs ?? []) {
+    if (!stairSoffitFinished(stair)) continue;
+    const [surface] = stairFootSurfaces(graph, {
+      floorHeightOf: s => (s === stair ? floorHeightMm : null),
+      // 裏面の基準は階段室の床（実効 FL−階の datum。sectionProbe addUnderReturnTops・spaceModel floorZFor と同じ約束）。
+      // 区間の ch は帯の部屋の床（bandFloorOffsetMm＋床段差）との差で出す
+      floorZOf: s => graph.effectiveFloorLevel(graph.roomMap?.get(s.roomId) ?? null) - graph.floorDatum,
+      aboveGraph: solids.upperGraph ?? null,
+    });
+    if (surface) out.push({ stairId: String(stair.id), stairRoomId: stair.roomId ?? null, surface });
+  }
+  return out;
 }
 
 /**

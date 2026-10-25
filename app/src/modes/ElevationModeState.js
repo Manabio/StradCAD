@@ -3,7 +3,7 @@ import { RoomFeature } from '@core';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { selectElevationRooms, elevationRoomDisplayName } from '../elevation/elevationFaces.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
-import { memberLayersOf } from '../elevation/elevationSolids.js';
+import { memberLayersOf, underStairSoffitsOf } from '../elevation/elevationSolids.js';
 import { buildStairBand } from '../elevation/elevationStair.js';
 import { buildVoidBand, buildRoomBandWithVoidAbove, findOverlappingRoom } from '../elevation/elevationVoid.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -252,7 +252,11 @@ export class ElevationModeState {
       ? floorHeightAbove(this.project, this.graph.plane) : null;
     // 2.5D立体の加算レイヤ・断面エンジンの梁の断面（memberCut）が使う層（自階＋上階）は、この組み立て（2 パス・全部屋）の間 graph が
     // 変わらないので 1 つの配列を共有する。部屋ごとに作ると、層の配列の同一性で覚える梁・柱の立体と壁の合併帯を部屋の数だけ作り直す。
-    const solids = { upperGraph, floorHeightMm, memberLayers: memberLayersOf(this.graph, { upperGraph, floorHeightMm }) };
+    // underStairSoffits＝自階の「仕上げ」の階段の裏面（階段下の部屋の帯の天井を頭打ちにする。階ごとに 1 回）。
+    const solids = {
+      upperGraph, floorHeightMm, memberLayers: memberLayersOf(this.graph, { upperGraph, floorHeightMm }),
+      underStairSoffits: underStairSoffitsOf(this.graph, { upperGraph, floorHeightMm }),
+    };
 
     // paramsは全て2パス機構で換算する実画面mm値（+scale。オブジェクトにまとめて渡す
     // ——buildRoomBand/buildStairBand/buildVoidBandへそのまま展開できる形にしておく）。

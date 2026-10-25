@@ -32,6 +32,7 @@ import {
   clipPrimitivesToXRange, line, dim,
 } from './elevationPrimitives.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
+import { minCeilingSegmentsWithSoffits } from './space/stairSoffitCeiling.js';
 
 /**
  * 帯のローカルy/z原点と階のdatumのズレ（mm）。**帯のローカル z=0 ≡ その帯の部屋の実効FL**という
@@ -535,7 +536,11 @@ function uniqueCoords(values) {
  * L 字の部屋の切り欠きに階段室があるとき、包絡矩形だけが階段と重なる誤判定を避ける（moku4-3 2階 廊下。2026-10-14）。
  */
 function flightOverCells(f, cellRects) {
-  const fr = flightRect(f);
+  return rectOverCells(flightRect(f), cellRects);
+}
+
+// 世界矩形 fr（{x1,y1,x2,y2}）が実セルの上にあると言えるか（flightOverCells の本体。階段の裏面の足元〔footprint.rects〕にも使う）。
+function rectOverCells(fr, cellRects) {
   const pieces = [];
   for (const c of cellRects) {
     const p = {
@@ -611,17 +616,34 @@ export function stairOverReachesFace(contribution, line) {
  * @param {number|null|undefined} floorHeight - 設置階〜上階の階高（stairContributionの必須入力）
  * @returns {ReturnType<typeof stairContribution>|null}
  */
-export function stairContributionOverRoom(room, graph, floorHeight, aboveGraph = null) {
+export function stairContributionOverRoom(room, graph, floorHeight, aboveGraph = null, skipStairIds = null) {
   if (floorHeight == null) return null;
   const cellRects = cellBoundsList(room.cells, graph);
   if (cellRects.length === 0) return null;
   for (const stair of graph.stairs ?? []) {
     if (stair.roomId === room.id) continue;
+    if (skipStairIds?.has(String(stair.id))) continue; // 天井が裏面になる階段（underStairSoffits）は見え掛かりを渡さない
     const contribution = stairContribution(stair, graph, floorHeight, aboveGraph);
     if (!contribution) continue;
     if (flightsOverRoom(contribution, cellRects).length > 0) return contribution;
   }
   return null;
+}
+
+/**
+ * 帯の天井を頭打ちにする、自階の「仕上げ」の階段の裏面（solids.underStairSoffits。elevationSolids.js underStairSoffitsOf）のうち、
+ * 帯の部屋の実セルが足元（footprint.rects）に stairOver と同じ重なりの閾値で掛かるもの。階段室自身（stairRoomId）の帯は
+ * buildStairBand の担当なので除く。供給が無い・空なら []。
+ * @param {import('@core').Room} room
+ * @param {object} graph
+ * @param {Array<{stairId:string, stairRoomId:?string, surface:object}>|undefined} soffits
+ */
+export function underStairSoffitsOverRoom(room, graph, soffits) {
+  if (!Array.isArray(soffits) || soffits.length === 0) return [];
+  const cellRects = cellBoundsList(room.cells, graph);
+  if (cellRects.length === 0) return [];
+  return soffits.filter(s => s.stairRoomId !== room.id
+    && (s.surface?.footprint?.rects ?? []).some(r => rectOverCells(r, cellRects)));
 }
 
 /**
@@ -973,7 +995,26 @@ function appendStairOverContent(primitives, {
  */
 export function buildRoomBand(room, graph, ctx = {}) {
   const faces = composeRoomFaces(room, graph);
-  const layout = layoutBandFaces(room, graph, faces, ctx);
+  // 階段下の部屋（自階の「仕上げ」の階段の足元に掛かる部屋）: 帯の天井を階段の裏面で頭打ちにする（minCeilingSegmentsWithSoffits を
+  // 面ごとの floorSegments に掛ける。図・CH 寸法・断面エンジンの天井断面は同じ floorSegments から作られる）。階段の見え掛かり
+  // （stairOver の機構）は天井が裏面になる帯では渡さない——一般規則が特例を置き換える。あらわしの階段の下は従来どおり。
+  const soffits = underStairSoffitsOverRoom(room, graph, ctx.solids?.underStairSoffits);
+  const soffitStairIds = new Set(soffits.map(s => s.stairId)); // 天井が裏面になる階段（stairOver を渡さない。あらわしの階段の見え掛かりは残る）
+  const layoutCtx = soffits.length === 0 ? ctx : {
+    ...ctx,
+    faceOverride: (face, i, defaults) => {
+      const base = ctx.faceOverride?.(face, i, defaults) ?? null;
+      const segs = base?.floorSegments ?? defaults.floorSegments;
+      const next = minCeilingSegmentsWithSoffits(segs, face, soffits, {
+        // 区間の床の絶対 z（datum 基準。裏面の面〔underStairSoffitsOf〕と同じ基準）＝帯の部屋の実効 FL＋床段差
+        floorZFor: seg => bandFloorOffsetMm(room, graph) + (seg.floorDeltaMm ?? 0),
+        ownerRoomIdOf: () => room.id,
+        defaultCh: defaults.CH,
+      });
+      return next === segs ? base : { ...base, floorSegments: next };
+    },
+  };
+  const layout = layoutBandFaces(room, graph, faces, layoutCtx);
   const primitives = [...layout.primitives];
   // 壁の輪郭は**他の3種の帯とまったく同じ共通経路**（appendBandCutContent→buildSectionFromLine→buildCutContent）
   // へ任せる。通常の部屋帯の層スタックは自階1層だけ——上階・下階が無いだけで、切断線の位置・
@@ -994,7 +1035,7 @@ export function buildRoomBand(room, graph, ctx = {}) {
       droppedMemberPrimsOf: solidsOpts
         ? (face, pcut) => droppedMemberPrimitivesForFace(face, solidsOpts, droppedMemberKeysOf(pcut, { inZRange: true }))
         : undefined,
-      stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm, ctx.solids?.upperGraph ?? null) });
+      stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm, ctx.solids?.upperGraph ?? null, soffitStairIds) });
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,

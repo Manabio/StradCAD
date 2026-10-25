@@ -31,8 +31,8 @@ function makeDir(files) {
 const row = (prims, room = 'r1') => ({ room, name: room, kind: 'room', count: prims.length, prims });
 const line = (x2) => ({ type: 'line', x1: 0, y1: 0, x2, y2: 0, weight: 'medium' });
 
-test('対象表: 19 枚・dir が重複せず golden ディレクトリが実在・ラベルが衝突しない', () => {
-  assert.equal(TARGETS.length, 19);
+test('対象表: 21 枚・dir が重複せず golden ディレクトリが実在・ラベルが衝突しない', () => {
+  assert.equal(TARGETS.length, 21);
   assert.equal(new Set(TARGETS.map(t => t.dir)).size, TARGETS.length);
   assert.equal(new Set(TARGETS.map(labelOf)).size, TARGETS.length);
   for (const t of TARGETS) {
@@ -69,7 +69,7 @@ test('【失敗系】引数解析: 不正な --jobs・値の欠落・不明な�
 });
 
 test('対象の絞り込み: 部分文字列で絞れ、一致なしは UsageError', () => {
-  assert.equal(selectTargets(null).length, 19);
+  assert.equal(selectTargets(null).length, 21);
   assert.equal(selectTargets('stairports').length, 7);
   assert.throws(() => selectTargets('__none__'), UsageError);
 });

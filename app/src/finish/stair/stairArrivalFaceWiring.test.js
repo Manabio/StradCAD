@@ -94,7 +94,7 @@ test('【配線】aboveGraph は展開図・天伏・立体の各呼び出し元
   has('../../elevation/section/sectionStair.js', 'export function stairContribution(stair, graph, floorHeight, aboveGraph = null) {');
   has('../../elevation/section/sectionStair.js', 'const layout = uTurnPlanLayout(stair, graph, { aboveGraph });');
   has('../../elevation/elevationBand.js', 'const contribution = stairContribution(stair, graph, floorHeight, aboveGraph);');
-  has('../../elevation/elevationBand.js', 'stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm, ctx.solids?.upperGraph ?? null) });');
+  has('../../elevation/elevationBand.js', 'stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm, ctx.solids?.upperGraph ?? null, soffitStairIds) });');
   has('../../elevation/section/cuts/switchbackCuts.js', 'const contribution = stairContribution(stair, graph, floorHeight, opts.upperGraph ?? null);');
   has('../../elevation/section/sectionContent.js', 'const contribution = stairContribution(stair, layer.graph, floorHeight, above?.graph ?? probeCtx?.upperGraph ?? null);');
   has('../../ceiling/stairSoffit.js', 'const L = uTurnPlanLayout(stair, graph, { aboveGraph });');
