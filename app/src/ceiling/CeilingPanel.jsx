@@ -8,7 +8,8 @@ import { soffitOrientationOptions } from '../finish/roof/roofInput.js';
 import { ceilingExteriorRows } from './ceilingExteriorRows.js';
 import { withFinishUndo } from '../finish/finishUndo.js';
 import { markDirty } from '../dirtyState.js';
-import { ceilingPanelTree, ceilingPanelLines, selectedNodeId, selectionSpanMm } from './ceilingPanelRows.js';
+import { StairSoffitFinish } from '@core';
+import { ceilingPanelTree, ceilingPanelLines, selectedNodeId, selectionSpanMm, stairSoffitChoice, writeStairSoffitFinish } from './ceilingPanelRows.js';
 import { updateZoneSpec, removeZone } from './ceilingZones.js';
 import { roomCeilingShapeOf, setRoomCeilingShape, applyRoomCeilingHeightDraft } from './roomCeilingShape.js';
 import { roomHasCeiling } from './ceilingOwners.js';
@@ -284,10 +285,37 @@ const RoomCeilingFields = observer(({ graph, room, spanMm }) => {
   );
 });
 
+// 鉄骨の階段の裏面の仕上げ（あらわし／天井仕上げ）。書込みは階段の属性 soffitFinish（writeStairSoffitFinish＝withFinishUndo で1エントリ）＋markDirty。
+// 未設定（null）は鉄骨ではあらわし側を選択中として表示（stairSoffitChoice）。
+const SOFFIT_CHOICES = [
+  { value: StairSoffitFinish.EXPOSED,  label: '裏面あらわし' },
+  { value: StairSoffitFinish.FINISHED, label: '天井仕上げ' },
+];
+const StairSoffitFields = observer(({ graph, stair }) => {
+  const current = stairSoffitChoice(stair);
+  return (
+    <div style={fieldsBoxStyle}>
+      <label style={fieldLabelStyle}>
+        <span style={{ fontWeight: 700 }}>階段裏：</span>
+        <select
+          value={current}
+          onChange={e => { writeStairSoffitFinish(graph, stair, e.target.value); markDirty(); }}
+          style={{ fontSize: 12 }}
+        >
+          {SOFFIT_CHOICES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </label>
+    </div>
+  );
+});
+
 // 平らな行1本の描画（ceilingPanelLines の出力を種類で振り分けるだけ）。欄の外接幅 spanMm はノードの群のセルから（円弧のライズ上限）
 const PanelLine = observer(({ graph, mode, line, selectedId }) => {
   const { node } = line;
   if (line.type === 'note') return <InnerRow depth={line.depth}><div style={fieldsBoxStyle}>{line.text}</div></InnerRow>;
+  if (line.type === 'stairFields') {
+    return <InnerRow depth={line.depth}><StairSoffitFields graph={graph} stair={node.stair} /></InnerRow>;
+  }
   if (line.type === 'roomFields') {
     const info = node.room.getFinishInfo();
     const key = `${node.room.id}:${info.ceilingHeight}:${info.ceilingShape}:${info.ceilingDims}`;

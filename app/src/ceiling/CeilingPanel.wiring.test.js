@@ -18,7 +18,7 @@ test('【配線】区画の確定は withFinishUndo で room.setCeilingZones(upd
 
 test('【配線】区画の解除は withFinishUndo で room.setCeilingZones(removeZone(...)) を包み、markDirty する。区画の書込みは withFinishUndo の中だけ', () => {
   assert.match(src, /^\s*withFinishUndo\(graph, \(\) => room\.setCeilingZones\(removeZone\(graph, room, zone\.id\)\)\);\s*$/m);
-  assert.equal(count(/^\s*markDirty\(\);\s*$/gm), 4, '区画の確定・解除と部屋の確定と屋外の天井チェックでそれぞれ markDirty（行の材の書込みは onChange 内の1行で markDirty）');
+  assert.equal(count(/^\s*markDirty\(\);\s*$/gm), 4, '区画の確定・解除と部屋の確定と屋外の天井チェックでそれぞれ markDirty（行の材の書込み・階段裏の仕上げは onChange 内の1行で markDirty）');
   assert.equal(count(/room\.setCeilingZones\(/g), 2, '区画の書込みは確定と解除の2か所だけで、どちらも withFinishUndo の中');
   assert.equal(count(/withFinishUndo\(/g), 5, '書込みは 区画の確定・解除・部屋の確定・行の材・屋外の天井チェック の5か所の withFinishUndo だけ');
 });
@@ -118,6 +118,15 @@ test('【配線】屋外 S2: 外部タブは木（PanelLine の表）と軒裏�
   const at = src.indexOf('type="checkbox"');
   assert.ok(at >= 0 && /onClick=\{e => e\.stopPropagation\(\)\}/.test(src.slice(at, at + 300)), 'チェックのクリックは行へ伝播させない');
   assert.equal(count(/type="checkbox"/g), 1, 'チェックは天井の1種類だけ（内部・階段の行には出ない）');
+});
+
+test('【配線】S8-4-4: 階段裏の仕上げは stairFields の行だけで、書込みは writeStairSoffitFinish（withFinishUndo）＋markDirty の1か所。階段を直接書かない', () => {
+  assert.match(src, /^\s*if \(line\.type === 'stairFields'\) \{\s*$/m);
+  assert.equal(count(/<StairSoffitFields /g), 1);
+  assert.match(src, /^\s*onChange=\{e => \{ writeStairSoffitFinish\(graph, stair, e\.target\.value\); markDirty\(\); \}\}\s*$/m);
+  assert.equal(count(/writeStairSoffitFinish\(/g), 1, '書込みの入口は1か所');
+  assert.equal(count(/setSoffitFinish\(|setField\(/g), 0, 'パネルは階段へ直接書かない（writeStairSoffitFinish 経由）');
+  assert.match(src, /^\s*const current = stairSoffitChoice\(stair\);\s*$/m, '未設定（null）の表示は stairSoffitChoice（鉄骨はあらわし）');
 });
 
 test('【配線】外部タブの主屋根行の材 select は共通部品 RoofMaterialSelect（「（未選択）」なし）。ExteriorRow の中に MaterialSelect は無い。下屋の階は mode.aboveRoofGraphOf で引く', () => {

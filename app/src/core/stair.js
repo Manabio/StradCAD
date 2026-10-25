@@ -86,6 +86,8 @@ export class Stair {
   //（総マス数+上階床到達分1。取りつき回転部の蹴上を含む）を同期する。
   setField(field, value) {
     if (field === 'soffitFinish') { this.setSoffitFinish(value); return; } // 正規化を迂回させない
+    // 構造を変えたら裏面の仕上げは自動（null）に戻す（木造は仕上げ固定・鉄骨は既定あらわし。明示値が UI から戻せなくなるのを防ぐ）
+    if (field === 'structure' && value !== this.structure) this.setSoffitFinish(null);
     this[field] = value;
     if ((field === 'sections' || field === 'entryTurnSteps' || field === 'arrivalTurnSteps') && this.sections) {
       this.totalSteps = totalStepsFromSections(this.sections) + (this.entryTurnSteps || 0) + (this.arrivalTurnSteps || 0);

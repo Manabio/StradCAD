@@ -1,7 +1,10 @@
 // 天伏パネルの行・木の組み立て（純モジュール）。内部タブは仕上げ表の述語（interiorTabRooms）と一致する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomKind, RoomFeature, StairType, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH, CeilingZone } from '@core';
+import { RoomKind, RoomFeature, StairType, StairSoffitFinish, StructuralMaterialType, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH, CeilingZone } from '@core';
+import { undoManager } from '../undoManager.js';
+import { withFinishUndo } from '../finish/finishUndo.js';
+import { stairSoffitFinished } from './stairSoffit.js';
 import { makeGrid, assignZoneHeight, assignZoneSpec } from '../plan/planTestFixtures.js';
 import { setRoomCeilingShape } from './roomCeilingShape.js';
 import { interiorTabRooms, interiorRoomDisplayName } from '../finish/interiorTabRooms.js';
@@ -12,7 +15,7 @@ import { stairUnderCeilingKeys } from './ceilingStairUnder.js';
 import { DEFAULT_STAIR_ROOM_NAME } from '../finish/roomNamingOptions.js';
 import {
   interiorRows, stairRows, selectionSpanMm, ceilingWriteTargetRoom, materialDisplay, stairZoneDetailRows,
-  ceilingPanelTree, ceilingPanelLines, nodePathOf, selectedNodeId, tabForOwner,
+  ceilingPanelTree, ceilingPanelLines, nodePathOf, selectedNodeId, tabForOwner, stairSoffitChoice, writeStairSoffitFinish,
 } from './ceilingPanelRows.js';
 
 const XS = [0, 1000, 2000, 3000, 4000, 5000, 6000];
@@ -512,6 +515,75 @@ test('ceilingPanelLines: 階段タブは階段の区画だけ（部屋レベル�
   pair.setCeilingZones([]);
   const l3 = ceilingPanelLines(ceilingPanelTree(g.graph, 'stair'), [S1]);
   assert.deepEqual(l3.filter(l => l.type === 'note').map(l => l.text), ['区画なし']);
+});
+
+test('S8-4-4 stairFields: 鉄骨の階段を開くと先頭に裏面の仕上げの欄。木造・閉じた階段には出ない。null は「あらわし」表示', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const steel = g.graph.addStair({ type: StairType.STRAIGHT, structure: StructuralMaterialType.STEEL, cells: new Set([g.cell(0, 0)]) });
+  const wood = g.graph.addStair({ type: StairType.STRAIGHT, structure: StructuralMaterialType.WOOD, cells: new Set([g.cell(3, 0)]) });
+  const tree = ceilingPanelTree(g.graph, 'stair');
+  const S = stairGroupId(steel.id), W = stairGroupId(wood.id);
+  assert.deepEqual(types(ceilingPanelLines(tree, [])), ['stair', 'stair'], '閉じていれば欄なし');
+  assert.deepEqual(types(ceilingPanelLines(tree, [S])), ['stair', 'stairFields', 'note', 'stair'], '鉄骨: 欄が先頭（区画なしの注記の前）');
+  assert.deepEqual(types(ceilingPanelLines(tree, [W])), ['stair', 'stair', 'note'], '木造: 欄なし（仕上げ固定）');
+  const field = ceilingPanelLines(tree, [S]).find(l => l.type === 'stairFields');
+  assert.equal(field.node.stair, steel);
+  assert.equal(stairSoffitChoice(steel), StairSoffitFinish.EXPOSED, 'null（自動）の鉄骨はあらわし表示');
+});
+
+test('S8-4-4 stairFields: RC・構造なしの階段にも出て、表示は exposed（木造だけ仕上げ固定）', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const rc = g.graph.addStair({ type: StairType.STRAIGHT, structure: StructuralMaterialType.RC, cells: new Set([g.cell(0, 0)]) });
+  const none = g.graph.addStair({ type: StairType.STRAIGHT, structure: null, cells: new Set([g.cell(3, 0)]) });
+  const tree = ceilingPanelTree(g.graph, 'stair');
+  for (const st of [rc, none]) {
+    const lines = ceilingPanelLines(tree, [stairGroupId(st.id)]);
+    assert.ok(types(lines).includes('stairFields'), `structure=${st.structure}`);
+    assert.equal(stairSoffitChoice(st), StairSoffitFinish.EXPOSED);
+  }
+});
+
+test('S8-4-4 構造を変えたら soffitFinish は自動（null）に戻る（鉄骨で exposed → 木造: null・仕上げ・欄なし）。同じ構造の書込みでは保つ。undo で戻る', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const st = g.graph.addStair({ type: StairType.STRAIGHT, structure: StructuralMaterialType.STEEL, cells: new Set([g.cell(0, 0)]) });
+  const live = () => g.graph.stairs.find(s => s.id === st.id);
+  writeStairSoffitFinish(g.graph, live(), StairSoffitFinish.EXPOSED);
+  withFinishUndo(g.graph, () => live().setField('structure', StructuralMaterialType.STEEL));
+  assert.equal(live().soffitFinish, StairSoffitFinish.EXPOSED, '同じ構造の書込みでは保つ');
+  withFinishUndo(g.graph, () => live().setField('structure', StructuralMaterialType.WOOD));
+  assert.equal(live().soffitFinish, null);
+  assert.equal(stairSoffitFinished(live()), true, '木造の既定＝仕上げ');
+  const S = stairGroupId(st.id);
+  assert.ok(!types(ceilingPanelLines(ceilingPanelTree(g.graph, 'stair'), [S])).includes('stairFields'), '木造は欄なし');
+  undoManager.undo();
+  assert.equal(live().structure, StructuralMaterialType.STEEL);
+  assert.equal(live().soffitFinish, StairSoffitFinish.EXPOSED, 'undo で構造と仕上げが一緒に戻る');
+});
+
+test('S8-4-4 writeStairSoffitFinish: 仕上げ undo の1エントリで書く。undo で戻り redo でやり直す。同値は積まない', () => {
+  const g = makeGrid(XS, [0, 1000]);
+  const st = g.graph.addStair({ type: StairType.STRAIGHT, structure: StructuralMaterialType.STEEL, cells: new Set([g.cell(0, 0)]) });
+  const live = () => g.graph.stairs.find(s => s.id === st.id); // undo/redo で作り直されるため引き直す
+  const n = undoManager._undoStack.length;
+  writeStairSoffitFinish(g.graph, live(), StairSoffitFinish.FINISHED);
+  assert.equal(undoManager._undoStack.length, n + 1);
+  assert.equal(live().soffitFinish, StairSoffitFinish.FINISHED);
+  assert.equal(stairSoffitChoice(live()), StairSoffitFinish.FINISHED);
+  assert.equal(stairSoffitFinished(live()), true, '天伏の見上げ（stairSoffitSolids）の判定が追従する');
+  writeStairSoffitFinish(g.graph, live(), StairSoffitFinish.EXPOSED);
+  assert.equal(stairSoffitChoice(live()), StairSoffitFinish.EXPOSED);
+  assert.equal(undoManager._undoStack.length, n + 2, '1 回の変更＝undo 1 回');
+  undoManager.undo();
+  assert.equal(live().soffitFinish, StairSoffitFinish.FINISHED, 'undo で直前の値');
+  undoManager.undo();
+  assert.equal(live().soffitFinish, null, '2 回戻すと未設定');
+  undoManager.redo();
+  assert.equal(live().soffitFinish, StairSoffitFinish.FINISHED);
+  const m = undoManager._undoStack.length;
+  writeStairSoffitFinish(g.graph, live(), StairSoffitFinish.FINISHED);
+  assert.equal(undoManager._undoStack.length, m, '同じ値の書込みはエントリを積まない');
+  writeStairSoffitFinish(g.graph, live(), 'bogus');
+  assert.equal(live().soffitFinish, null, '不正値は null に正規化（未設定）');
 });
 
 test('nodePathOf: 部屋は1段、子は親→子、子の区画は3段、階段の区画は階段タブで 階段→区画。そのタブに無い・消えた群は null', () => {

@@ -30,7 +30,9 @@ import { CEILING_SHAPE_OPTIONS, CEILING_DIM_FIELDS } from './ceilingShapeFields.
 import { ceilingGroupsOf, roomGroupId, zoneGroupId, stairGroupId, stairUnderGroupId } from './ceilingGroups.js';
 import { roomCeilingShapeOf } from './roomCeilingShape.js';
 import { isExteriorCeilingRoom } from './exteriorCeiling.js';
-import { CeilingShape } from '../core/constants.js';
+import { CeilingShape, StructuralMaterialType, StairSoffitFinish } from '../core/constants.js';
+import { stairSoffitFinished } from './stairSoffit.js';
+import { withFinishUndo } from '../finish/finishUndo.js';
 
 /** 材コード → 表示名（略称表示）。materialMap が無い・コードが解けない・名前が無いときはコードのまま。 */
 export function materialDisplay(materialMap, code) {
@@ -344,10 +346,21 @@ function stairTree(graph, materialMap, groups) {
       ceilingFinish: row.ceilingFinish,
       ch: row.ch,
       room,
+      stair,
       cells: groups.get(id)?.cells ?? NO_CELLS,
       children,
     };
   });
+}
+
+/** 階段の裏面の仕上げの表示上の選択値（null＝自動は構造で決まる。鉄骨の既定は 'exposed'）。 */
+export function stairSoffitChoice(stair) {
+  return stairSoffitFinished(stair) ? StairSoffitFinish.FINISHED : StairSoffitFinish.EXPOSED;
+}
+
+/** 階段の裏面の仕上げを仕上げ undo の 1 エントリで書く（パネルの階段欄の唯一の書込み口。値が同じなら withFinishUndo はエントリを積まない）。 */
+export function writeStairSoffitFinish(graph, stair, value) {
+  withFinishUndo(graph, () => stair.setSoffitFinish(value));
 }
 
 /**
@@ -369,6 +382,7 @@ export function ceilingPanelTree(graph, tab, materialMap = null, stairUnderKeys 
  * 木を expandedPath（各段で開いているノード id。各段1つだけ）に従って平らな行にする。行の種類:
  *   'room' | 'zone' | 'stair' … ノードの行（node・expanded を持つ）
  *   'roomFields' … 部屋ノードを開いたときの形状・天井高の欄（天井を持つ部屋のみ。先頭）／'zoneFields' … 区画ノードを開いたときの区画の欄
+ *   'stairFields' … 鉄骨（木造以外）の階段ノードを開いたときの裏面の仕上げの欄（先頭。木造には出さない）
  *   'note' … 欄の代わりの1行（text）。天井を持たない部屋は「天井なし」、区画の無い階段は「区画なし」（対の部屋が無ければ「区画なし（対の部屋なし）」）
  * 部屋を開くと 欄 → 区画 → 子の部屋 の順（子は1段深い）。階段を開くと その階段の区画だけ（部屋レベルの欄は出さない）。
  * ノードの行は path（最上位からその行までの祖先を含むノード id の経路）を持つ。行クリックはこれをそのまま expandedPath にする。
@@ -391,8 +405,14 @@ export function ceilingPanelLines(tree, expandedPath = []) {
           : { ...inner, key: `${key}/note`, type: 'note', text: '天井なし' });
       } else if (node.type === 'zone') {
         lines.push({ ...inner, key: `${key}/fields`, type: 'zoneFields' });
-      } else if (node.type !== 'stairUnder' && node.children.length === 0) { // 階段下は子を持たない（区画は兄弟）ので注記を出さない // 階段下は子を持たない（区画は兄弟）ので注記を出さない
-        lines.push({ ...inner, key: `${key}/note`, type: 'note', text: node.room ? '区画なし' : '区画なし（対の部屋なし）' });
+      } else {
+        // 鉄骨（木造以外）の階段は先頭に裏面の仕上げの欄（木造は仕上げ固定なので出さない）
+        if (node.type === 'stair' && node.stair && node.stair.structure !== StructuralMaterialType.WOOD) {
+          lines.push({ ...inner, key: `${key}/stairFields`, type: 'stairFields' });
+        }
+        if (node.type !== 'stairUnder' && node.children.length === 0) { // 階段下は子を持たない（区画は兄弟）ので注記を出さない
+          lines.push({ ...inner, key: `${key}/note`, type: 'note', text: node.room ? '区画なし' : '区画なし（対の部屋なし）' });
+        }
       }
       walk(node.children, depth + 1, key, path);
     }
