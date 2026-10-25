@@ -13,7 +13,7 @@ import { Builder, ByteBuffer } from 'flatbuffers';
 import { normalizeSubType } from '../openings/openingCatalog.js';
 import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION, normalizeBasementStructure } from '../structural/structureRules.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
-import { StairPortSide } from '../core/constants.js';
+import { StairPortSide, StairSoffitFinish } from '../core/constants.js';
 import { DEFAULT_PLAN_CUT_HEIGHT_MM, DEFAULT_CEILING_CUT_HEIGHT_MM } from '../core/plane.js';
 
 // CenterLine.beamAxisOrigin の許容値集合（BeamAxisOriginの値のみ。未知の文字列はnullへ正規化する
@@ -94,7 +94,7 @@ const GS = {
   GL_BELOW_1FL_MM: 54,
 };
 
-// Stair: 15 フィールド
+// Stair: 20 フィールド
 const ST = {
   ID: 0, TYPE: 1, STRUCTURE: 2, CELLS: 3, TOTAL_STEPS: 4,
   TREAD: 5, HAS_RISER: 6, RISER: 7, NOSING: 8, WIDTH: 9,
@@ -103,6 +103,7 @@ const ST = {
   ROOM_ID: 14, // 変換元 Room の ID（空文字列 = null。旧データ・上階自動設置分は常に空）
   ENTRY_SIDE: 15, ARRIVAL_SIDE: 16, // 出入口の辺（StairPortSide。空文字列 = null＝自動）
   ENTRY_TURN_STEPS: 17, ARRIVAL_TURN_STEPS: 18, // 側面出入口に取りつく回転部の蹴上数（既定 0）
+  SOFFIT_FINISH: 19, // 裏面の仕上げ（StairSoffitFinish。null＝未設定のときは文字列もフィールドも書かない。読みは許可リスト外 null）
 };
 
 // StructuralMaterialType 列挙値エンコード（柱・梁・耐力壁・スラブ・基礎で共通）
@@ -979,7 +980,9 @@ function writeStair(b, st) {
   const hasSections = st.sections != null;
   const sSections = hasSections ? b.createString(st.sections.join(',')) : 0;
 
-  b.startObject(19);
+  const sSoffit = st.soffitFinish ? b.createString(st.soffitFinish) : 0; // null は書かない（既存文書のバイト列は不変）
+
+  b.startObject(20);
   b.addFieldOffset(ST.ID,        sId,   0);
   b.addFieldOffset(ST.TYPE,      sType, 0);
   b.addFieldOffset(ST.STRUCTURE, sStru, 0);
@@ -999,6 +1002,7 @@ function writeStair(b, st) {
   b.addFieldOffset(ST.ARRIVAL_SIDE, sArrival, 0);
   b.addFieldFloat64(ST.ENTRY_TURN_STEPS,   st.entryTurnSteps ?? 0, 0.0);
   b.addFieldFloat64(ST.ARRIVAL_TURN_STEPS, st.arrivalTurnSteps ?? 0, 0.0);
+  b.addFieldOffset(ST.SOFFIT_FINISH, sSoffit, 0);
   return b.endObject();
 }
 
@@ -1710,6 +1714,12 @@ function readPortSide(v) {
   return PORT_SIDES.has(v) ? v : null;
 }
 
+// 裏面の仕上げの読込み: 許可リスト外（空・未知の文字列・フィールド欠落）は null＝未設定。
+const SOFFIT_FINISHES = new Set(Object.values(StairSoffitFinish));
+function readSoffitFinish(v) {
+  return SOFFIT_FINISHES.has(v) ? v : null;
+}
+
 function readStair(bb, tablePos) {
   const r = makeReader(bb, tablePos);
   return {
@@ -1733,6 +1743,7 @@ function readStair(bb, tablePos) {
     arrivalSide: readPortSide(r.str(ST.ARRIVAL_SIDE)),
     entryTurnSteps:   r.f64(ST.ENTRY_TURN_STEPS) || 0,
     arrivalTurnSteps: r.f64(ST.ARRIVAL_TURN_STEPS) || 0,
+    soffitFinish: readSoffitFinish(r.str(ST.SOFFIT_FINISH)),
   };
 }
 

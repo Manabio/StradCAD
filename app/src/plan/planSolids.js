@@ -36,7 +36,7 @@
  *   既定 true。屋根が使う）。
  * @typedef {{graph: object|null, floorZMm: number, role: 'self'|'above'|'below', ceilZMm?: number}} SolidLayer
  */
-import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, SoffitOrientation } from '@core';
+import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StairType, SoffitOrientation } from '@core';
 import { beamDepthMm } from '../structural/sectionCatalog.js';
 import { columnWrapSolids, wallConcealRange } from '../finish/columnWrap.js';
 import { kneeDropRecordsOnAxis, kneeDropZRangesAt, ceilingTopSectionsAlongWall, uniformCeilingTopMm, SPAN_OVERLAP_EPS } from '../finish/kneeDropWall.js';
@@ -58,7 +58,7 @@ import { roofSoffitJointLines } from '../finish/roof/roofSoffitJoints.js';
 import { normalizeRect, isValidRect, subtractRects } from './planGeometry.js';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
-import { stairSoffitSolids, stairUnderReturnSoffit } from '../ceiling/stairSoffit.js';
+import { stairSoffitSolids, stairSoffitFinished, stairUnderReturnSoffit } from '../ceiling/stairSoffit.js';
 import { stairFootSurfaces, wallFootIntervals, wallFootTop } from '../ceiling/stairFootWallTop.js';
 
 /** 出力の kind 順（固定）。 */
@@ -627,7 +627,7 @@ function stairUndersideOf(layer, riserFor, belowGraph) {
   for (const stair of layer.graph.stairs ?? []) {
     const belowStair = matchingStairBelow(stair, layer.graph, belowGraph);
     if (!belowStair) continue;
-    if (stair.structure === StructuralMaterialType.WOOD) {
+    if (stairSoffitFinished(stair)) {
       // aboveGraph は渡さない（N+2 は層スタックに無いため到達辺は Q3 に戻る＝既知の限界。.claude/ceiling-model.md）
       soffits.push(...stairSoffitSolids({ stair, graph: layer.graph, belowStair, belowGraph, riser: riserFor(stair), floorZMm: layer.floorZMm }));
     } else drawnTreads.add(stair);

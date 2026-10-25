@@ -341,7 +341,9 @@ test('wallFreshnessKey【v8】: STAIR_KEY_FIELDS の各項目と cells を 1 つ
 });
 
 test('wallFreshnessKey【v8・番人】: Stair の own 項目から id を除いた集合 == STAIR_KEY_FIELDS ∪ {cells}（項目を足したら鍵へ）', () => {
-  const own = Object.keys(new Stair('probe', {})).filter(k => k !== 'id').sort();
+  // soffitFinish（裏面の仕上げ）は壁の生成に効かないので鍵に入れない（入れると既存文書の鮮度が全部切れる）
+  const NOT_IN_KEY = ['soffitFinish'];
+  const own = Object.keys(new Stair('probe', {})).filter(k => k !== 'id' && !NOT_IN_KEY.includes(k)).sort();
   assert.deepEqual(own, [...STAIR_KEY_FIELDS, 'cells'].sort());
 });
 

@@ -45,6 +45,7 @@ function snapshotStairs(graph) {
         roomId: s.roomId ?? null,
         entrySide: s.entrySide ?? null, arrivalSide: s.arrivalSide ?? null,
         entryTurnSteps: s.entryTurnSteps ?? 0, arrivalTurnSteps: s.arrivalTurnSteps ?? 0,
+        soffitFinish: s.soffitFinish ?? null,
       };
     }),
   };
@@ -61,6 +62,7 @@ function restoreStairs(graph, snap) {
       // 出入口の辺・回転部は旧スナップショット（キー欠落）だと undefined になりうるため null／0 に正規化する
       entrySide: d.entrySide ?? null, arrivalSide: d.arrivalSide ?? null,
       entryTurnSteps: d.entryTurnSteps ?? 0, arrivalTurnSteps: d.arrivalTurnSteps ?? 0,
+      soffitFinish: d.soffitFinish ?? null,
     }, d.id);
   }
   graph.stairOrder.replace(snap.stairOrder.filter(id => graph.stairMap.has(id)));

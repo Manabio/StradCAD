@@ -31,7 +31,7 @@ function addRichStair(src, key = keyAt(src, LEFT_HALF[0]), over = {}) {
     type: StairType.SWITCHBACK, structure: StructuralMaterialType.STEEL, cells: new Set([key]),
     sections: [4, 3, 5], tread: 270, riser: 185, nosing: 25, width: 1100,
     upDirection: 'down', flip: true, entrySide: 'left', arrivalSide: 'right',
-    entryTurnSteps: 2, arrivalTurnSteps: 1, ...over,
+    entryTurnSteps: 2, arrivalTurnSteps: 1, soffitFinish: 'finished', ...over,
   });
   ensureStairRooms(src);
   return s;

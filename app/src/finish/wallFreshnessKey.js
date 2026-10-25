@@ -43,6 +43,7 @@ export const WALL_KEY_VERSION = 'v9';
 /**
  * 階段の鍵に入れる項目（core/stair.js Stair のコンストラクタの全項目から id・cells を除いたもの）。
  * cells は別枠（ソートして連結）。Stair に項目を足したらここへも足す（番人テストが検出する）。
+ * 例外: soffitFinish（裏面の仕上げ）は壁の生成に効かないので入れない（番人テストの NOT_IN_KEY。入れると既存文書の鮮度が全部切れる）。
  */
 export const STAIR_KEY_FIELDS = [
   'type', 'structure', 'totalSteps', 'tread', 'riser', 'nosing', 'width', 'upDirection', 'flip',

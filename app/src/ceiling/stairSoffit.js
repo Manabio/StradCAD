@@ -25,7 +25,7 @@
  *   直進系 … STRAIGHT は base → end の 1 矩形、STRAIGHT_LANDING は 直進部1 → 踊り場（平ら）→ 直進部2 の 3 矩形（区間ごとの線形）。
  * 既知の限界: 取りつき回転部（側面の出入口）を往路の平面に含める／L_TURN・FLARED・OPEN_WELL・蹴上が求まらない階段は裏面なし。
  */
-import { StairType, StructuralMaterialType, RoomKind, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
+import { StairType, StairSoffitFinish, StructuralMaterialType, RoomKind, DEFAULT_ROOM_CEILING_HEIGHT } from '@core';
 import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js'; // 公開 API（core.js）には出さない内部定数
 import { uTurnPlanLayout, straightPlanLayout } from '../finish/stair/stairGeometry.js';
 import { roomCeilingTopMm } from '../finish/roomMetrics.js';
@@ -239,7 +239,17 @@ export function straightSoffitFromLayout(L, { zStart, zTop, zCap: ctxCap = null 
 }
 
 /**
- * N+1 の階段（木造）の裏面の立体（階段 1 本につき高々 1 つ）。対象外（鉄骨・L_TURN 等・蹴上や踏面が求まらない・レイアウトが null）は []。
+ * 階段の裏面を「天井仕上げあり」として描くか（true）「あらわし」か（false）。裏面の有無の唯一の判定。
+ * soffitFinish が 'finished'→true・'exposed'→false・null（未設定）→木造のときだけ true（構造なしは鉄骨扱い＝false）。
+ */
+export function stairSoffitFinished(stair) {
+  if (stair?.soffitFinish === StairSoffitFinish.FINISHED) return true;
+  if (stair?.soffitFinish === StairSoffitFinish.EXPOSED) return false;
+  return stair?.structure === StructuralMaterialType.WOOD;
+}
+
+/**
+ * N+1 の階段（裏面が仕上げありのもの。既定は木造）の裏面の立体（階段 1 本につき高々 1 つ）。対象外（鉄骨・L_TURN 等・蹴上や踏面が求まらない・レイアウトが null）は []。
  * @param {{
  *   stair: object, graph: object,        N+1 の階段とその階の graph
  *   belowStair?: object|null, belowGraph?: object|null,  N 側の対の階段と graph（当該階天井の算出）
@@ -249,7 +259,7 @@ export function straightSoffitFromLayout(L, { zStart, zTop, zCap: ctxCap = null 
  * @returns {import('../plan/planSolids.js').Solid[]}
  */
 export function stairSoffitSolids({ stair, graph, belowStair = null, belowGraph = null, riser, floorZMm, aboveGraph = null }) {
-  if (!stair || stair.structure !== StructuralMaterialType.WOOD) return [];
+  if (!stair || !stairSoffitFinished(stair)) return [];
   const solid = stairUndersideSurface({ stair, graph, belowStair, belowGraph, riser, floorZMm, aboveGraph });
   if (!solid) return [];
   return [{ kind: 'ceiling', ...solid, source: { kind: 'stairSoffit', id: String(stair.id), layerFloorZ: floorZMm, part: 0 } }];

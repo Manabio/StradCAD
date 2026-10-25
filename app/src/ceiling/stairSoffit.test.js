@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { StairType, StructuralMaterialType, DEFAULT_ROOM_CEILING_HEIGHT, Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { classifyStairArea } from '../finish/stair/stairClassify.js';
 import { STAIR_SOFFIT_THICKNESS_MM } from '../core/constants.js';
-import { stairSoffitSolids, stairBelowCeilingMm, uTurnSoffitFromLayout, straightSoffitFromLayout } from './stairSoffit.js';
+import { stairSoffitSolids, stairSoffitFinished, stairBelowCeilingMm, uTurnSoffitFromLayout, straightSoffitFromLayout } from './stairSoffit.js';
 import { uTurnPlanLayout, straightPlanLayout } from '../finish/stair/stairGeometry.js';
 import { stairTreadFootprints } from '../finish/stair/stairTreads.js';
 import { makeGrid } from '../plan/planTestFixtures.js';
@@ -623,6 +623,37 @@ test('柱あり・張り出し（幅方向が反転・frontA≠front の実物�
   assert.deepEqual([d2.a[0], d2.r[0]], [pv, L.run.front], '復路側の対角線の始点＝P_B');
   assert.deepEqual([d1.a[1], d1.r[1]], [L.across.s0, L.run.back]);
   assert.deepEqual([d2.a[1], d2.r[1]], [L.across.s1, L.run.back]);
+});
+
+test('stairSoffitFinished: finished→true・exposed→false・null は木造だけ true（構造なし・鉄骨・RC は false）', () => {
+  const S = (structure, soffitFinish = null) => ({ structure, soffitFinish });
+  assert.equal(stairSoffitFinished(S(StructuralMaterialType.STEEL, 'finished')), true);
+  assert.equal(stairSoffitFinished(S(StructuralMaterialType.WOOD, 'exposed')), false);
+  assert.equal(stairSoffitFinished(S(StructuralMaterialType.WOOD)), true);
+  assert.equal(stairSoffitFinished(S(StructuralMaterialType.STEEL)), false);
+  assert.equal(stairSoffitFinished(S(StructuralMaterialType.RC)), false);
+  assert.equal(stairSoffitFinished(S(undefined)), false, '構造なしは鉄骨扱い');
+  assert.equal(stairSoffitFinished({}), false, 'soffitFinish 欠落（旧オブジェクト）も構造で決まる');
+  assert.equal(stairSoffitFinished(null), false, '階段なしは false（例外にしない）');
+});
+
+test('stairSoffitSolids は判定関数に従う: finished の鉄骨は立体を返し、exposed の木造は []（構造では決まらない）', () => {
+  const steel = uTurn(StairType.SWITCHBACK, { structure: StructuralMaterialType.STEEL });
+  assert.deepEqual(solidsOf(steel.stair, steel.graph), [], '前提: 未設定の鉄骨は []');
+  steel.stair.setSoffitFinish('finished');
+  assert.equal(solidsOf(steel.stair, steel.graph).length, 1, 'finished の鉄骨は裏面あり');
+  const wood = uTurn(StairType.SWITCHBACK);
+  assert.equal(solidsOf(wood.stair, wood.graph).length, 1, '前提: 未設定の木造は 1 立体');
+  wood.stair.setSoffitFinish('exposed');
+  assert.deepEqual(solidsOf(wood.stair, wood.graph), [], 'exposed の木造は裏面なし');
+  wood.stair.setSoffitFinish('bogus');
+  assert.equal(wood.stair.soffitFinish, null, 'setter は不正値を null に正規化する');
+  assert.equal(solidsOf(wood.stair, wood.graph).length, 1, '正規化後は構造で決まる（木造＝あり）');
+  steel.stair.setField('soffitFinish', 'bogus');
+  assert.equal(steel.stair.soffitFinish, null, 'setField も正規化する（迂回しない）');
+  assert.equal(stairSoffitFinished(steel.stair), false, '正規化後は構造で決まる（鉄骨＝なし）');
+  wood.stair.setField('soffitFinish', 'exposed');
+  assert.equal(wood.stair.soffitFinish, 'exposed', 'setField でも有効値は入る');
 });
 
 test('あきのある踊り場（Δ=0・sA≠sB・柱なし）: 回転部 Q_A・Q_B は全面が平ら（zA）で、折れ目は前縁の 2 区間だけ', () => {

@@ -104,6 +104,7 @@ const EXPECTED_EXPORTS = [
   'Stair',
   'StairType',
   'StairPortSide',
+  'StairSoffitFinish',
   'SteelBeam',
   'SteelColumn',
   'StructuralBeam',

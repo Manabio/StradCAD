@@ -2,7 +2,11 @@
  * 階段（totalStepsFromSections / Stair）。core.js から分離。
  */
 import { makeObservable, observable, action } from 'mobx';
-import { StairType, StructuralMaterialType } from './constants.js';
+import { StairType, StairSoffitFinish, StructuralMaterialType } from './constants.js';
+
+const SOFFIT_FINISHES = new Set(Object.values(StairSoffitFinish));
+// 裏面の仕上げの正規化（StairSoffitFinish 以外は null＝未設定）。コンストラクタ・setSoffitFinish・setField が共有する
+const normalizeSoffitFinish = v => (SOFFIT_FINISHES.has(v) ? v : null);
 
 // sections（歩行順・区間別の実段数配列。偶数index=直進部、奇数index=踊場・周回部）から総段数を求める。
 // 各区間が図に持つマス（踏面）数は、直進部=実段数-1（最終の1段は次区間へ乗る段）、踊場・周回部=実段差ぶん
@@ -33,6 +37,7 @@ export class Stair {
     arrivalSide = null,    // 到達口（下り口）の辺（同上）
     entryTurnSteps   = 0,  // 側面の上り口に取りつく回転部（張り出し区間）の蹴上数。0=平場。出入口が走行端なら 0
     arrivalTurnSteps = 0,  // 側面の到達口に取りつく回転部の蹴上数（同上）
+    soffitFinish     = null, // 裏面の仕上げ（StairSoffitFinish。null=未設定＝構造で決まる。木造＝仕上げ・それ以外＝あらわし）
   } = {}) {
     this.id          = id;
     this.type        = type;
@@ -53,6 +58,7 @@ export class Stair {
     this.arrivalSide = arrivalSide;
     this.entryTurnSteps   = entryTurnSteps;
     this.arrivalTurnSteps = arrivalTurnSteps;
+    this.soffitFinish = normalizeSoffitFinish(soffitFinish);
     makeObservable(this, {
       type:        observable,
       structure:   observable,
@@ -70,17 +76,22 @@ export class Stair {
       arrivalSide: observable,
       entryTurnSteps:   observable,
       arrivalTurnSteps: observable,
+      soffitFinish:     observable,
       setField:    action,
+      setSoffitFinish: action,
       setCells:    action,
     });
   }
   // sections（区間別・実段数配列）または側面出入口の回転部蹴上数を設定すると、totalSteps
   //（総マス数+上階床到達分1。取りつき回転部の蹴上を含む）を同期する。
   setField(field, value) {
+    if (field === 'soffitFinish') { this.setSoffitFinish(value); return; } // 正規化を迂回させない
     this[field] = value;
     if ((field === 'sections' || field === 'entryTurnSteps' || field === 'arrivalTurnSteps') && this.sections) {
       this.totalSteps = totalStepsFromSections(this.sections) + (this.entryTurnSteps || 0) + (this.arrivalTurnSteps || 0);
     }
   }
   setCells(cells) { this.cells = cells; }
+  // 裏面の仕上げ。StairSoffitFinish 以外（未知の文字列・undefined）は null（未設定）に正規化する。
+  setSoffitFinish(v) { this.soffitFinish = normalizeSoffitFinish(v); }
 }

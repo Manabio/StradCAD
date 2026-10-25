@@ -25,6 +25,7 @@ import { riserOf } from './stairDimensions.js';
 export const COPIED_STAIR_FIELDS = [
   'type', 'structure', 'totalSteps', 'tread', 'riser', 'nosing', 'width', 'upDirection', 'flip', 'sections',
   'entrySide', 'arrivalSide', 'entryTurnSteps', 'arrivalTurnSteps',
+  'soffitFinish',
 ];
 
 // 外部タブの連動行から写す項目（roomId は新しいペア部屋へ付け替える。finishUndo.js の EXTERIOR_FIELDS と同じ）

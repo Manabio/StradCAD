@@ -68,6 +68,60 @@ test('Stair.entrySide/arrivalSide は FlatBuffers encode→decode で往復し�
   assert.equal(s2.entryTurnSteps, 0);
 });
 
+test('Stair.soffitFinish は FlatBuffers encode→decode と decodeFloorSnapshot 経由で往復し、null・未知の文字列は null になる', () => {
+  const graph = makeGraph();
+  const cells = new Set(['a:b:c:d']);
+  const exposed  = graph.addStair({ type: StairType.SWITCHBACK, cells, sections: [5, 1, 5], soffitFinish: 'exposed' });
+  const finished = graph.addStair({ type: StairType.SWITCHBACK, cells, sections: [5, 1, 5], soffitFinish: 'finished' });
+  const unset    = graph.addStair({ type: StairType.SWITCHBACK, cells, sections: [5, 1, 5] });
+
+  const check = (restored) => {
+    assert.equal(restored.stairMap.get(exposed.id).soffitFinish, 'exposed');
+    assert.equal(restored.stairMap.get(finished.id).soffitFinish, 'finished');
+    assert.equal(restored.stairMap.get(unset.id).soffitFinish, null);
+  };
+  const direct = makeGraph();
+  restoreGraph(direct, serializeGraph(graph));
+  check(direct);
+  const viaSnap = makeGraph();
+  restoreGraph(viaSnap, decodeFloorSnapshot(encodeFloorSnapshot(decodeFloorSnapshot(serializeGraph(graph)))));
+  check(viaSnap);
+});
+
+test('読み手の許可リスト: 復元前の plain データ（decodeFloorSnapshot）で、未知の文字列・空文字の soffitFinish は null', () => {
+  const graph = makeGraph();
+  graph.addStair({ type: StairType.STRAIGHT, cells: new Set(['a:b:c:d']), soffitFinish: 'finished' }, 's1');
+  graph.addStair({ type: StairType.STRAIGHT, cells: new Set(['a:b:c:d']), soffitFinish: 'finished' }, 's2');
+  graph.addStair({ type: StairType.STRAIGHT, cells: new Set(['a:b:c:d']), soffitFinish: 'finished' }, 's3');
+  const snap = decodeFloorSnapshot(serializeGraph(graph));
+  const byId = (s, id) => s.stairs.find(x => x.id === id);
+  assert.equal(byId(snap, 's1').soffitFinish, 'finished', '前提: 既知の値は読める');
+  byId(snap, 's1').soffitFinish = 'bogus';
+  byId(snap, 's2').soffitFinish = '';
+  const back = decodeFloorSnapshot(encodeFloorSnapshot(snap));
+  assert.equal(byId(back, 's1').soffitFinish, null, '未知の文字列は null（許可リスト）');
+  assert.equal(byId(back, 's2').soffitFinish, null, '空文字は null');
+  assert.equal(byId(back, 's3').soffitFinish, 'finished');
+});
+
+// i 番目の階段の FBS テーブルに、フィールド番号 fieldNo が書かれているか（vtable の有無）を直接読む。
+function stairHasField(bytes, stairIdx, fieldNo) {
+  const bb = new ByteBuffer(bytes);
+  const root = bb.readInt32(bb.position()) + bb.position();
+  const vecOff = root + bb.__offset(root, 4 + 35 * 2); // GS.STAIRS=35
+  const table = bb.__indirect(bb.__vector(vecOff) + stairIdx * 4);
+  return bb.__offset(table, 4 + fieldNo * 2) !== 0;
+}
+
+test('Stair.soffitFinish が null の階段は field 19 を書かない（既存文書のバイト列は不変）。値ありは書く', () => {
+  const g = makeGraph();
+  g.addStair({ type: StairType.STRAIGHT, cells: new Set(['a:b:c:d']) }, 'unset');
+  g.addStair({ type: StairType.STRAIGHT, cells: new Set(['a:b:c:d']), soffitFinish: 'finished' }, 'set');
+  const bytes = serializeGraph(g);
+  assert.equal(stairHasField(bytes, 0, 19), false, 'null は vtable に無い');
+  assert.equal(stairHasField(bytes, 1, 19), true, '値ありは書かれる');
+});
+
 test('Opening.fixtureType/sillHeight は FlatBuffers encode→decode で往復する', () => {
   const { graph, opening } = makeGraphWithWindow({ fixtureType: 'AW', sillHeight: 800 });
 

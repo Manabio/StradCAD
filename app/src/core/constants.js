@@ -206,6 +206,13 @@ export const StairPortSide = Object.freeze({
   RIGHT: 'right', // 進行方向の右の辺
 });
 
+// 階段の裏面の仕上げ（階段の属性 soffitFinish）。FINISHED=天井仕上げあり・EXPOSED=あらわし。
+// null=未設定＝構造で決まる（木造＝仕上げ・それ以外＝あらわし。ceiling/stairSoffit.js stairSoffitFinished）。
+export const StairSoffitFinish = Object.freeze({
+  EXPOSED:  'exposed',
+  FINISHED: 'finished',
+});
+
 // 構造材の種別（柱・梁共通）
 export const StructuralMaterialType = Object.freeze({
   WOOD:  'WOOD',

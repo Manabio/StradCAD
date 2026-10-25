@@ -207,6 +207,29 @@ test('4項目のキーが欠けたスナップショットを復元すると、�
   assert.strictEqual(s.arrivalTurnSteps, 0);
 });
 
+test('階段の裏面の仕上げ（soffitFinish）が withFinishUndo の undo/redo で戻る。キー欠落のスナップショットは null', () => {
+  const graph = freshGraph();
+  addSwitchbackStair(graph);
+  const marker = '301000000005';
+  withFinishUndo(graph, () => { graph.stairMap.get('s1').setSoffitFinish('finished'); graph.setShaftWallMaterial(marker); });
+  assert.equal(graph.stairMap.get('s1').soffitFinish, 'finished');
+  // 別操作の undo/redo でも値が初期化されない
+  withFinishUndo(graph, () => graph.setShaftWallMaterial('301000000006'));
+  undoManager.undo();
+  assert.equal(graph.stairMap.get('s1').soffitFinish, 'finished', '別操作の undo で値が初期化された');
+  undoManager.undo();
+  assert.equal(graph.stairMap.get('s1').soffitFinish, null, 'undo で未設定（null）に戻らない');
+  undoManager.redo();
+  assert.equal(graph.stairMap.get('s1').soffitFinish, 'finished', 'redo で戻らない');
+
+  const snap = snapshotFinishState(graph);
+  assert.equal(snap.stairs.stairs[0].soffitFinish, 'finished');
+  delete snap.stairs.stairs[0].soffitFinish;
+  assert.doesNotThrow(() => restoreFinishState(graph, snap));
+  assert.strictEqual(graph.stairMap.get('s1').soffitFinish, null, '旧スナップショット（キー欠落）は null');
+  undoManager.undo(); undoManager.undo();
+});
+
 test('4項目が null のスナップショットを復元すると、回転部は 0 に正規化される', () => {
   const graph = freshGraph();
   addSwitchbackStair(graph);
@@ -224,7 +247,7 @@ test('4項目が null のスナップショットを復元すると、回転部�
 });
 
 test('不変条件: 全項目を既定値以外にした階段は snapshot→restore→snapshot で一致し、各項目が復元される', () => {
-  // Stair の全17項目（id 含む）を既定値以外にした fixture。項目が増えたらここへの追加を強制する
+  // Stair の全18項目（id 含む）を既定値以外にした fixture。項目が増えたらここへの追加を強制する
   const fixture = {
     id: 's1',
     type: StairType.SWITCHBACK, structure: StructuralMaterialType.STEEL,
@@ -232,7 +255,7 @@ test('不変条件: 全項目を既定値以外にした階段は snapshot→res
     totalSteps: totalStepsFromSections([7, 2, 7]) + 5,
     tread: 260, riser: 180, nosing: 25, width: 1000, upDirection: 'up', flip: true, roomId: 'r1',
     entrySide: StairPortSide.LEFT, arrivalSide: StairPortSide.RIGHT,
-    entryTurnSteps: 2, arrivalTurnSteps: 3,
+    entryTurnSteps: 2, arrivalTurnSteps: 3, soffitFinish: 'finished',
   };
   const defaults = new Stair('d', {});
   assert.deepStrictEqual(Object.keys(fixture).sort(), Object.keys(defaults).sort(),
