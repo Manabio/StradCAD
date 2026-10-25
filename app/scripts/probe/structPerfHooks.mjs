@@ -1,6 +1,6 @@
 // 構造再計算の高速化検証（ステップ0: golden採取用ハーネス）のロードフック本体。
-// structPerfSetup.mjs から node:module の register() で登録される。製品ソースは一切書き換えず、
-// Node へ読み込む瞬間のソース文字列だけを差し替える。
+// structPerfSetup.mjs から node:module の registerHooks() で登録される（同期フック）。製品ソースは
+// 一切書き換えず、Node へ読み込む瞬間のソース文字列だけを差し替える。
 //   storage/db.js の saveFloor/loadFloor をメモリ上の Map へ（IDB 抜きで本番の反映パスをそのまま動かす）
 //   FloorSwapManager.peek・structural/structuralRecompute.js recomputeStructuralForGraph に
 //   回数・所要時間の計測を仕込む
@@ -25,8 +25,8 @@ function must(src, from, to, label) {
   return src.replace(from, to);
 }
 
-export async function load(url, context, nextLoad) {
-  const r = await nextLoad(url, context);
+export function load(url, context, nextLoad) {
+  const r = nextLoad(url, context);
   if (!url.includes('/app/src/')) return r;
   let src = r.source == null ? null : r.source.toString().split(String.fromCharCode(13)).join('');
   if (src == null) return r;

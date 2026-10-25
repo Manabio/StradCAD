@@ -1,7 +1,7 @@
 // 建具モード 平面記号（renderer/OpeningsLayer.jsx）の Konva props を node 上で直接評価するための
 // ロードフック本体。structPerfHooks.mjs と同じ位置づけ（openingPlanSymbolJsxSetup.mjs から
-// node:module の register() で登録される）。製品ソースは一切書き換えず、Node へ読み込む瞬間の
-// ソース文字列だけを差し替える。
+// node:module の registerHooks() で登録される同期フック）。製品ソースは一切書き換えず、Node へ
+// 読み込む瞬間のソース文字列だけを差し替える。
 //   .jsx（app/src/ 配下）を rolldown/experimental の transformSync で ESM へ変換（JSX automatic
 //     runtime。Vite が本番で行う変換と同じ入口を使う）
 //   'react-konva' を文字列型スタブへ（Group='Group'等。実際にKonvaへ描画はしない——
@@ -20,14 +20,14 @@ const STUB_SPECIFIERS = new Map([
   ['mobx-react-lite', `export function observer(f){ return f; }`],
 ]);
 
-export async function resolve(specifier, context, nextResolve) {
+export function resolve(specifier, context, nextResolve) {
   if (STUB_SPECIFIERS.has(specifier)) {
     return { url: `openingplansymbolstub:${specifier}`, shortCircuit: true };
   }
   return nextResolve(specifier, context);
 }
 
-export async function load(url, context, nextLoad) {
+export function load(url, context, nextLoad) {
   if (url.startsWith('openingplansymbolstub:')) {
     const name = url.slice('openingplansymbolstub:'.length);
     return { format: 'module', source: STUB_SPECIFIERS.get(name), shortCircuit: true };

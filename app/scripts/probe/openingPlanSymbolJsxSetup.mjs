@@ -5,6 +5,9 @@
 //     scripts/probe/openingPlanSymbolProbe.mjs [引数...]
 // scripts/testSetup.mjs（'@core' エイリアス解決）を先に import すること——ShapesLayer.jsx が
 // '@core' で src/core.js を参照するため、それが無いと解決エラーになる。
-import { register } from 'node:module';
+// フックは registerHooks()（同期・同スレッド）で登録する——module.register() は Node 26 で
+// 実行時非推奨（DEP0205）。testSetup.mjs と同じ方式。
+import { registerHooks } from 'node:module';
+import { resolve, load } from './openingPlanSymbolJsxHooks.mjs';
 
-register('./openingPlanSymbolJsxHooks.mjs', import.meta.url);
+registerHooks({ resolve, load });

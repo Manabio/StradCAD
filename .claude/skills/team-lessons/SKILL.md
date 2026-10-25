@@ -252,7 +252,9 @@ project, contribute it upstream to the team's playbook in the ccteams repo.
   計測のために `git stash` で変更を退避し、一時 probe を `app/scripts/probe/` に置き、製品コードへ一時カウンタを
   注入した（すべて復元されていたが、復元し損ねれば未コミットの作業を失う）。変更前の経路が要るだけなら、
   **scratchpad の ESM ローダフック**（`node --import <scratchpad>/xxSetup.mjs`。読込み時のソース文字列だけを
-  差し替える。前例: `scripts/probe/structPerfHooks.mjs`）で HEAD 相当の経路や計測・変異を作れる——作業ツリーは
+  差し替える。前例: `scripts/probe/structPerfHooks.mjs`。フックは同期関数で書き `registerHooks({ load })` で
+  登録する——`module.register()` は Node 26 で実行時非推奨 DEP0205、async のフックは
+  ERR_INVALID_RETURN_PROPERTY_VALUE で落ちる）で HEAD 相当の経路や計測・変異を作れる——作業ツリーは
   1バイトも変わらない。一時ファイルは必ず scratchpad。委譲文には禁止だけでなくこの代替手段まで書き、報告を
   受けたら `git stash list` が空・`app/` 配下に一時ファイルが無いことをリードが確かめる。
 
