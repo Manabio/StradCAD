@@ -14,6 +14,7 @@
 import { effectiveHeight } from './openingNumbering.js';
 import { OpeningCategory } from '@core';
 import { graphList } from '../graphReadScope.js';
+import { rect as rectPrim } from '../elevation/elevationPrimitives.js';
 import { findCatalogEntry } from './openingCatalog.js';
 import {
   FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM, FRAME_OVERHANG_MM,
@@ -116,11 +117,10 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
   // 腰高0のとき -0 にしない（-0 は等値比較・テストの落とし穴。elevationFigure.jsの床yと同じ規約）。
   const top = -(sill + h), sillTop = sill ? -sill : 0;
   const at = mm => x0 + dir * mm;
-  const rect = (loMm, hiMm, y1, y2, weight) => ({
-    type: 'rect',
-    x: Math.min(at(loMm), at(hiMm)), y: Math.min(y1, y2),
-    w: Math.abs(at(hiMm) - at(loMm)), h: Math.abs(y2 - y1), weight,
-  });
+  const rect = (loMm, hiMm, y1, y2, weight) => rectPrim(
+    Math.min(at(loMm), at(hiMm)), Math.min(y1, y2),
+    Math.abs(at(hiMm) - at(loMm)), Math.abs(y2 - y1), { weight },
+  );
 
   if (methodFor(o) === 'swingLeaf') {
     const leaf = DOOR_LEAF_THICKNESS_MM;

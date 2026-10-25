@@ -10,8 +10,10 @@ import { OpeningMechanism } from './openingCatalog.js';
 import { effectiveHeight, effectiveHandleHeight, effectiveFrameFaceWidth } from './openingNumbering.js';
 import { resolveSlideLayoutPanels } from './openingPlanSymbolGeometry.js';
 import { OpeningCategory } from '../core.js';
-// 線種語彙（'thin'|'medium'|'thick'）の単一情報源。elevationStyle.js は import ゼロの純モジュール。
+// 線種語彙（'thin'|'medium'|'thick'）の単一情報源。
 import { ElevationLineRole, weightForRole } from '../elevation/elevationStyle.js';
+// プリミティブ生成ヘルパー（渡したキーだけ・キー順固定）。arrow / levelLine は展開図の語彙に無いため直書きのまま。
+import { line, text, dim, rect } from '../elevation/elevationPrimitives.js';
 
 const INSET_MM = 40; // 内側見付の枠inset
 
@@ -20,8 +22,8 @@ function round(v) { return Math.round(v); }
 // 頂点(apexX,apexY)へ向かう2本のline（一点鎖線/破線/実線の「V」字表現。dashは'center'/'dashed'/undefined）。
 function vee(x1, y1, x2, y2, apexX, apexY, dash) {
   return [
-    { type: 'line', x1, y1, x2: apexX, y2: apexY, dash },
-    { type: 'line', x1: x2, y1: y2, x2: apexX, y2: apexY, dash },
+    line(x1, y1, apexX, apexY, { dash }),
+    line(x2, y2, apexX, apexY, { dash }),
   ];
 }
 
@@ -36,7 +38,7 @@ function singleLeafVee(hingeSide, width, top, sillTop, midY, dash) {
 // 両開き2枚ぶんの開き表現: 中央縦線1本＋両leaf（apex=左右の枠端中央）のV。
 function doubleLeafVees(width, top, sillTop, midY, dash) {
   return [
-    { type: 'line', x1: width / 2, y1: top, x2: width / 2, y2: sillTop },
+    line(width / 2, top, width / 2, sillTop),
     ...vee(width / 2, top, width / 2, sillTop, 0, midY, dash),
     ...vee(width / 2, top, width / 2, sillTop, width, midY, dash),
   ];
@@ -54,7 +56,7 @@ function equalInsetLines(n, top, sillTop, width) {
   const lines = [];
   for (let i = 1; i <= n; i += 1) {
     const y = innerTop + gap * i;
-    lines.push({ type: 'line', x1: innerLeft, y1: y, x2: innerRight, y2: y });
+    lines.push(line(innerLeft, y, innerRight, y));
   }
   return lines;
 }
@@ -66,7 +68,7 @@ function foldPanelPrimitives(n, width, top, sillTop, midY) {
   const prims = [];
   for (let i = 1; i < n; i += 1) {
     const x = panelWidth * i;
-    prims.push({ type: 'line', x1: x, y1: top, x2: x, y2: sillTop });
+    prims.push(line(x, top, x, sillTop));
   }
   for (let i = 0; i < n; i += 1) {
     const xLo = panelWidth * i, xHi = panelWidth * (i + 1);
@@ -88,15 +90,16 @@ function slideLayoutPrimitives(entry, width, top, sillTop, midY) {
   const prims = [];
   for (let i = 1; i < n; i += 1) {
     const x = panelWidth * i;
-    prims.push({ type: 'line', x1: x, y1: top, x2: x, y2: sillTop });
+    prims.push(line(x, top, x, sillTop));
   }
   panels.forEach((p, i) => {
     const cx = panelWidth * (i + 0.5);
     if (p.fix) {
-      prims.push({ type: 'text', x: cx, y: midY, text: 'FIX', size: 11, anchor: 'middle', baseline: 'middle' });
+      prims.push(text(cx, midY, 'FIX', { size: 11, anchor: 'middle', baseline: 'middle' }));
       return;
     }
     const len = Math.min(panelWidth * 0.5, 400);
+    // arrow は建具モードの SVG 姿図専用（展開図の語彙に無い）ため直書き
     if (p.arrow === 'both') {
       prims.push({ type: 'arrow', x1: cx, y1: armY, x2: cx - len, y2: armY });
       prims.push({ type: 'arrow', x1: cx, y1: armY, x2: cx + len, y2: armY });
@@ -121,8 +124,8 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const hingeX = opening.hingeSide < 0 ? 0 : width;
     const latchX = opening.hingeSide < 0 ? width : 0;
     return [
-      { type: 'line', x1: latchX, y1: top,    x2: hingeX, y2: midY, dash: 'center' },
-      { type: 'line', x1: latchX, y1: sillTop, x2: hingeX, y2: midY, dash: 'center' },
+      line(latchX, top,     hingeX, midY, { dash: 'center' }),
+      line(latchX, sillTop, hingeX, midY, { dash: 'center' }),
     ];
   }
   if (mechanism === OpeningMechanism.SLIDE_DOUBLE) {
@@ -131,18 +134,20 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const armY = top + (sillTop - top) * 0.45;
     const legLen = Math.min(width / 4, 400);
     return [
-      { type: 'line', x1: width / 2 - meetGap, y1: top, x2: width / 2 - meetGap, y2: sillTop },
-      { type: 'line', x1: width / 2 + meetGap, y1: top, x2: width / 2 + meetGap, y2: sillTop },
+      line(width / 2 - meetGap, top, width / 2 - meetGap, sillTop),
+      line(width / 2 + meetGap, top, width / 2 + meetGap, sillTop),
+      // arrow は展開図（figurePrimitivesKonva）の語彙に無い建具モード専用のため直書き
       { type: 'arrow', x1: width / 2 - 60, y1: armY, x2: width / 2 - 60 - legLen, y2: armY },
       { type: 'arrow', x1: width / 2 + 60, y1: armY, x2: width / 2 + 60 + legLen, y2: armY },
     ];
   }
   if (mechanism === OpeningMechanism.SLIDE_SINGLE) {
     const armY = top + (sillTop - top) * 0.3;
+    // arrow は建具モード専用の語彙のため直書き
     return [{ type: 'arrow', x1: 0, y1: armY, x2: width, y2: armY }];
   }
   if (mechanism === OpeningMechanism.FIXED) {
-    return [{ type: 'text', x: width / 2, y: midY, text: 'FIX', size: 12, anchor: 'middle', baseline: 'middle' }];
+    return [text(width / 2, midY, 'FIX', { size: 12, anchor: 'middle', baseline: 'middle' })];
   }
   if (mechanism === OpeningMechanism.SWING_DOUBLE) {
     return doubleLeafVees(width, top, sillTop, midY, 'center');
@@ -154,7 +159,7 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const hingeX = hingeSide < 0 ? 0 : width;
     const childX = hingeSide < 0 ? width : 0;
     return [
-      { type: 'line', x1: dividerX, y1: top, x2: dividerX, y2: sillTop },
+      line(dividerX, top, dividerX, sillTop),
       ...vee(dividerX, top, dividerX, sillTop, hingeX, midY, 'center'),
       ...vee(dividerX, top, dividerX, sillTop, childX, midY, 'center'),
     ];
@@ -182,7 +187,8 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const midLineY = (top + sillTop) / 2;
     const yTop = top + h * 0.25, yBot = sillTop - h * 0.25;
     return [
-      { type: 'line', x1: 0, y1: midLineY, x2: width, y2: midLineY },
+      line(0, midLineY, width, midLineY),
+      // arrow は建具モード専用の語彙のため直書き
       { type: 'arrow', x1: width / 2, y1: yBot, x2: width / 2, y2: yTop },
       { type: 'arrow', x1: width / 2, y1: yTop, x2: width / 2, y2: yBot },
     ];
@@ -191,7 +197,7 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     return singleLeafVee(hingeSide, width, top, sillTop, midY, undefined);
   }
   if (mechanism === OpeningMechanism.AWNING) {
-    return [{ type: 'line', x1: 0, y1: sillTop, x2: width, y2: top }];
+    return [line(0, sillTop, width, top)];
   }
   if (mechanism === OpeningMechanism.PROJECT_OUT) {
     return vee(0, sillTop, width, sillTop, width / 2, top, undefined);
@@ -213,7 +219,7 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     return [
       ...vee(width / 2, top, width / 2, sillTop, 0, midY, 'dashed'),
       ...vee(width / 2, top, width / 2, sillTop, width, midY, 'dashed'),
-      { type: 'line', x1: width / 2, y1: top - 100, x2: width / 2, y2: sillTop + 100, dash: 'center' },
+      line(width / 2, top - 100, width / 2, sillTop + 100, { dash: 'center' }),
     ];
   }
   if (mechanism === OpeningMechanism.PIVOT_H) {
@@ -221,7 +227,7 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     return [
       ...vee(0, midY, width, midY, width / 2, top, 'dashed'),
       ...vee(0, midY, width, midY, width / 2, sillTop, 'dashed'),
-      { type: 'line', x1: -100, y1: midY, x2: width + 100, y2: midY, dash: 'center' },
+      line(-100, midY, width + 100, midY, { dash: 'center' }),
     ];
   }
   if (mechanism === OpeningMechanism.LOUVER) {
@@ -232,8 +238,8 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const bandH = h / 3;
     const ys = [top, top + bandH, top + 2 * bandH, sillTop];
     const prims = [
-      { type: 'line', x1: 0, y1: ys[1], x2: width, y2: ys[1] },
-      { type: 'line', x1: 0, y1: ys[2], x2: width, y2: ys[2] },
+      line(0, ys[1], width, ys[1]),
+      line(0, ys[2], width, ys[2]),
     ];
     for (let i = 0; i < 3; i += 1) {
       prims.push(...vee(0, ys[i], width, ys[i], width / 2, ys[i + 1], undefined));
@@ -253,17 +259,18 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const prims = [];
     for (let i = 1; i < cols; i += 1) {
       const x = innerLeft + (innerW * i) / cols;
-      prims.push({ type: 'line', x1: x, y1: innerTop, x2: x, y2: innerBottom });
+      prims.push(line(x, innerTop, x, innerBottom));
     }
     for (let i = 1; i < rows; i += 1) {
       const y = innerTop + (innerH * i) / rows;
-      prims.push({ type: 'line', x1: innerLeft, y1: y, x2: innerRight, y2: y });
+      prims.push(line(innerLeft, y, innerRight, y));
     }
     return prims;
   }
   if (mechanism === OpeningMechanism.SHUTTER) {
     return [
       ...equalInsetLines(8, top, sillTop, width),
+      // arrow は建具モード専用の語彙のため直書き
       { type: 'arrow', x1: width / 2, y1: sillTop - h * 0.2, x2: width / 2, y2: top + h * 0.2 },
     ];
   }
@@ -272,8 +279,9 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const bandBottom = top + h / 3;
     return [
       ...equalInsetLines(3, top, bandBottom, width),
+      // arrow は建具モード専用の語彙のため直書き
       { type: 'arrow', x1: width / 2, y1: sillTop - h * 0.2, x2: width / 2, y2: top + h * 0.2 },
-      { type: 'text', x: width / 2, y: bandBottom + (sillTop - bandBottom) / 2, text: 'OHD', size: 11, anchor: 'middle', baseline: 'middle' },
+      text(width / 2, bandBottom + (sillTop - bandBottom) / 2, 'OHD', { size: 11, anchor: 'middle', baseline: 'middle' }),
     ];
   }
   if (mechanism === OpeningMechanism.EMERGENCY) {
@@ -284,9 +292,9 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const tr = { x: width / 2 + side / 2, y: midY - triH / 2 };
     const bp = { x: width / 2, y: midY + triH / 2 };
     return [
-      { type: 'line', x1: tl.x, y1: tl.y, x2: tr.x, y2: tr.y },
-      { type: 'line', x1: tr.x, y1: tr.y, x2: bp.x, y2: bp.y },
-      { type: 'line', x1: bp.x, y1: bp.y, x2: tl.x, y2: tl.y },
+      line(tl.x, tl.y, tr.x, tr.y),
+      line(tr.x, tr.y, bp.x, bp.y),
+      line(bp.x, bp.y, tl.x, tl.y),
     ];
   }
   if (mechanism === OpeningMechanism.FIRE_DOOR) {
@@ -309,7 +317,7 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     return [];
   }
   // それ以外（未実装機構）: 枠のみ＋種別ラベル（IMPLEMENTED_MECHANISMSの既存方針に合わせる）。
-  return entry ? [{ type: 'text', x: width / 2, y: midY, text: entry.label, size: 11, anchor: 'middle', baseline: 'middle' }] : [];
+  return entry ? [text(width / 2, midY, entry.label, { size: 11, anchor: 'middle', baseline: 'middle' })] : [];
 }
 
 /**
@@ -359,13 +367,11 @@ function leverHandlePrimitives(opening, width) {
     ? { at: width + 250, foot: width }
     : { at: -250, foot: 0, labelSide: 'left' };
   return [
-    {
-      type: 'rect', x: capsuleX, y: centerY - HANDLE_H / 2, w: HANDLE_W, h: HANDLE_H, rx: HANDLE_H / 2,
-    },
-    {
-      type: 'dim', dir: 'v', at: handleDim.at, from: -handleH, to: 0, foot: handleDim.foot, labelSide: handleDim.labelSide,
+    rect(capsuleX, centerY - HANDLE_H / 2, HANDLE_W, HANDLE_H, { rx: HANDLE_H / 2 }),
+    dim('v', handleDim.at, -handleH, 0, {
+      foot: handleDim.foot, labelSide: handleDim.labelSide,
       editable: true, target: 'handleHeight', label: String(round(handleH)),
-    },
+    }),
   ];
 }
 
@@ -403,10 +409,10 @@ export function buildOpeningElevation(
   // （戸先＝hingeSide<0のとき右／hingeSide>0のとき左）。描かないときは従来どおり常に右。
   const heightOnHingeLeft = drawHandle && opening.hingeSide < 0;
   const heightDim = heightOnHingeLeft
-    ? { type: 'dim', dir: 'v', at: -250, from: top, to: sillTop, foot: 0, labelSide: 'left',
-        editable: true, target: 'height', label: String(round(height)) }
-    : { type: 'dim', dir: 'v', at: width + 250, from: top, to: sillTop, foot: width,
-        editable: true, target: 'height', label: String(round(height)) };
+    ? dim('v', -250, top, sillTop, { foot: 0, labelSide: 'left',
+        editable: true, target: 'height', label: String(round(height)) })
+    : dim('v', width + 250, top, sillTop, { foot: width,
+        editable: true, target: 'height', label: String(round(height)) });
 
   // 三方枠(FRAME_ONLY)は「見付のある枠を枠見付分の三方細線」で描く（ユーザー指示2026-09）:
   //   外周＝指定寸法（幅×高さ）の三方（左竪・上・右竪。下枠なし）を細線（DETAIL）、
@@ -423,35 +429,34 @@ export function buildOpeningElevation(
         const medium = weightForRole(ElevationLineRole.SILHOUETTE);
         const innerTop = inner.y, innerBottom = inner.y + inner.h;
         return [
-          { type: 'line', x1: 0,     y1: sillTop, x2: 0,     y2: top,     weight: thin },
-          { type: 'line', x1: 0,     y1: top,     x2: width, y2: top,     weight: thin },
-          { type: 'line', x1: width, y1: top,     x2: width, y2: sillTop, weight: thin },
-          { type: 'line', x1: inner.x,           y1: innerBottom, x2: inner.x,           y2: innerTop,    weight: medium },
-          { type: 'line', x1: inner.x,           y1: innerTop,    x2: inner.x + inner.w, y2: innerTop,    weight: medium },
-          { type: 'line', x1: inner.x + inner.w, y1: innerTop,    x2: inner.x + inner.w, y2: innerBottom, weight: medium },
+          line(0,     sillTop, 0,     top,     { weight: thin }),
+          line(0,     top,     width, top,     { weight: thin }),
+          line(width, top,     width, sillTop, { weight: thin }),
+          line(inner.x,           innerBottom, inner.x,           innerTop,    { weight: medium }),
+          line(inner.x,           innerTop,    inner.x + inner.w, innerTop,    { weight: medium }),
+          line(inner.x + inner.w, innerTop,    inner.x + inner.w, innerBottom, { weight: medium }),
         ];
       })()
     : [
-        { type: 'rect', x: 0, y: top, w: width, h: height },
-        { type: 'rect', x: INSET_MM, y: top + INSET_MM, w: Math.max(width - 2 * INSET_MM, 0), h: Math.max(height - 2 * INSET_MM, 0), stroke: '#94a3b8' },
+        rect(0, top, width, height),
+        rect(INSET_MM, top + INSET_MM, Math.max(width - 2 * INSET_MM, 0), Math.max(height - 2 * INSET_MM, 0), { stroke: '#94a3b8' }),
       ];
 
   const primitives = [
     ...frameOutline,
+    // levelLine は展開図（figurePrimitivesKonva）の語彙に無い建具モード専用のため直書き（ヘルパーに足さない）
     { type: 'levelLine', y: 0, label: 'FL' },
     ...mechanismPrimitives(opening, entry, width, top, sillTop),
-    {
-      type: 'dim', dir: 'h', at: top - 250, from: 0, to: width, foot: top,
-      editable: true, target: 'width', label: String(round(width)),
-    },
+    dim('h', top - 250, 0, width, {
+      foot: top, editable: true, target: 'width', label: String(round(width)),
+    }),
     heightDim,
   ];
 
   if (opening.category === OpeningCategory.WINDOW) {
-    primitives.push({
-      type: 'dim', dir: 'v', at: width + 250, from: sillTop, to: 0, foot: width,
-      editable: true, target: 'sillHeight', label: String(round(sill)),
-    });
+    primitives.push(dim('v', width + 250, sillTop, 0, {
+      foot: width, editable: true, target: 'sillHeight', label: String(round(sill)),
+    }));
   }
 
   // レバーハンドル: 建具（fitting）×SWING機構・間口十分のときのみ（窓・引戸・狭小間口には描かない）。
@@ -459,7 +464,7 @@ export function buildOpeningElevation(
     primitives.push(...leverHandlePrimitives(opening, width));
   }
 
-  if (tag) primitives.push({ type: 'text', x: 0, y: top - 450, text: tag, size: 12, anchor: 'start' });
+  if (tag) primitives.push(text(0, top - 450, tag, { size: 12, anchor: 'start' }));
 
   // 抑制オプション（項目1）。既定値はすべてtrueのため、フィルタは常に配列を素通りし
   // 従来の建具モード姿図パネル（OpeningEditor.jsx）の挙動は変わらない。
