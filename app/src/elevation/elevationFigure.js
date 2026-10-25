@@ -16,8 +16,7 @@
 import { CenterLineType, OpeningCategory } from '@core';
 import { parseBaseboardHeightMm } from '../core/room.js';
 import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallContinuationBeyondFaceEnd, wallLessEndAt, openingsReachingCorner, cornerOpeningZRanges } from './elevationFaces.js';
-import { openingSectionPrimitives, wallMaterialRangeForOpening } from '../openings/openingSection.js';
-import { FRAME_OVERHANG_MM } from '../openings/openingPlanSymbolGeometry.js';
+import { openingSectionPrimitives, openingSectionWallRange, openingSectionOverhangMm } from '../openings/openingSection.js';
 import { openingTagPartsOf, effectiveHeight } from '../openings/openingNumbering.js';
 import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
 import { buildOpeningElevation, frameOnlyInnerRect } from '../openings/openingElevationFigure.js';
@@ -882,18 +881,19 @@ function cornerSectionsOf(face, graph, { prevFace, nextFace, run, cutWeight, sil
   // 切断帯 sectionEmit.js と同じ置き方）。面端から部屋の内側へ伸ばすと壁厚ぶん部屋内へずれる。
   // 壁が引けない（合成face）ときは既定の見込で**面の外側**へ置く（部屋の内側には伸ばさない）。
   const cornerSection = (o, atEnd) => {
-    const mr = wallMaterialRangeForOpening(o, graph);
+    const mr = openingSectionWallRange(o, graph);
     const sgn = face.dirSign ?? 1;
+    const overhang = openingSectionOverhangMm(o);
     if (mr) {
       // 直交壁の厚み方向座標は面の長さ方向の座標なのでそのまま面ローカルxへ写せる。
       const a = localXOf(face, mr.lo), b = localXOf(face, mr.hi);
-      return openingSectionPrimitives(o, Math.min(a, b) - FRAME_OVERHANG_MM, 1, cutWeight, silhouetteWeight,
+      return openingSectionPrimitives(o, Math.min(a, b) - overhang, 1, cutWeight, silhouetteWeight,
         { wallThicknessMm: Math.abs(mr.hi - mr.lo), worldPerDirSign: sgn, detailWeight });
     }
     return atEnd
-      ? openingSectionPrimitives(o, run - FRAME_OVERHANG_MM, 1, cutWeight, silhouetteWeight,
+      ? openingSectionPrimitives(o, run - overhang, 1, cutWeight, silhouetteWeight,
         { worldPerDirSign: sgn, detailWeight })
-      : openingSectionPrimitives(o, FRAME_OVERHANG_MM, -1, cutWeight, silhouetteWeight,
+      : openingSectionPrimitives(o, overhang, -1, cutWeight, silhouetteWeight,
         { worldPerDirSign: -sgn, detailWeight });
   };
   // 隅の建具断面（始端・終端。y は未平行移動＝隅の床 dy 前）。描く条件は従来どおり。
@@ -907,10 +907,15 @@ function cornerSectionsOf(face, graph, { prevFace, nextFace, run, cutWeight, sil
   // 床まで達する建具（窓台のある窓は壁が下に残るので除く。巾木と同じ述語）の隅断面がある端では、
   // 区間の床断面線を断面の外縁まで伸ばす——扉の下で床が隣室へ続く（ユーザー指示2026-10-14
   // 「moku4-3 2階展開図 廊下C: X3 建具下床断面は X3 の外側まではね出し」）。外縁は cornerSection が
-  // 返す rect から取る（単一供給源）。天井線・巾木・面端の縦線・drawnX0/drawnXRun は伸ばさない。
-  const cornerRectsOf = list => list.filter(c => reachesFloor(c.o)).flatMap(c => c.prims.filter(p => p.type === 'rect'));
-  const cornerFloorLo = Math.min(Infinity, ...cornerRectsOf(cornerSecs[0]).map(p => p.x));
-  const cornerFloorHi = Math.max(-Infinity, ...cornerRectsOf(cornerSecs[1]).map(p => p.x + p.w));
+  // 返す rect（三方枠の鋼板は開いた polyline。点の x の範囲）から取る（単一供給源）。
+  // 天井線・巾木・面端の縦線・drawnX0/drawnXRun は伸ばさない。
+  const cornerXRangesOf = list => list.filter(c => reachesFloor(c.o)).flatMap(c => c.prims.flatMap((p) => {
+    if (p.type === 'rect') return [[p.x, p.x + p.w]];
+    if (p.type === 'polyline') return [[Math.min(...p.points.map(q => q[0])), Math.max(...p.points.map(q => q[0]))]];
+    return [];
+  }));
+  const cornerFloorLo = Math.min(Infinity, ...cornerXRangesOf(cornerSecs[0]).map(r => r[0]));
+  const cornerFloorHi = Math.max(-Infinity, ...cornerXRangesOf(cornerSecs[1]).map(r => r[1]));
   return { cornerSecs, cornerFloorLo, cornerFloorHi };
 }
 

@@ -1986,6 +1986,56 @@ test('【失敗系・隅の建具断面・床線】窓台のある隅の窓(sill
   assert.deepEqual(floorLineOf(p2).map(p => [p.x1, p.x2]), [[0, 4000]]);
 });
 
+// ---- 三方枠（WF=solid／SF=bent）の隅断面と床線（S10-10）。見込＝壁の面から面＋2×出幅・床線は枠の外縁まで ----
+// 合成 graph の壁は軸CLの実効値と axisValue から面の範囲が決まる（wallFaceRange。反対側の壁が無ければ軸CL対称）。
+function frameHostWall(faceLo, faceHi, axisId) {
+  const axisCL = { id: axisId, effectiveValue: (faceLo + faceHi) / 2 };
+  return { isVertical: true, axisCL, axisOffset: 1, axisValue: faceHi, coord1: 0, coord2: 2000,
+    materialRange: { lo: faceLo, hi: faceHi } };
+}
+const frameOpening = (ov = {}) => ({ ...perpOpeningFor(), subType: 'threeSidedFrame', fixtureType: 'WF', ...ov });
+const bentPolyline = prims => prims.find(p => p.type === 'polyline' && p.points.length === 6 && p.weight === 'thick');
+
+test('【三方枠の隅断面】始端 WF: 上枠は壁の面[-145,0]の全体を包む（見込145+24・見付20）で、床線は枠の外縁(-157)まで', () => {
+  const graph = makeGraph({ openings: [frameOpening()], walls: [frameHostWall(-145, 0, 'axisX_left')] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  const head = prims.find(p => p.type === 'rect' && p.weight === 'thick' && p.h === 20);
+  assert.deepEqual([head.x, head.w, head.y], [-157, 169, -2000]);
+  assert.equal(prims.some(p => p.type === 'rect' && p.weight === 'medium' && p.h === 1970), false, '扉の矩形は無い');
+  assert.deepEqual(floorLineOf(prims).map(p => [p.x1, p.x2]), [[-157, 4000]]);
+});
+
+test('【三方枠の隅断面】始端 SF（鋼板）: 開いたコの字の外縁(-157)まで床線を伸ばす', () => {
+  const graph = makeGraph({ openings: [frameOpening({ fixtureType: 'SF' })], walls: [frameHostWall(-145, 0, 'axisX_left')] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  const poly = bentPolyline(prims);
+  assert.ok(poly, '鋼板の上枠は6点の開いた polyline');
+  assert.equal(Math.min(...poly.points.map(q => q[0])), -157);
+  assert.deepEqual(floorLineOf(prims).map(p => [p.x1, p.x2]), [[-157, 4000]]);
+});
+
+test('【三方枠の隅断面】終端 SSF: 枠の外縁(4000-12+169=4157)まで。出幅の編集値30なら始点3970・外縁4175', () => {
+  const nextFace = endNextFace();
+  const wall = frameHostWall(4000, 4145, 'axisX_right');
+  const plain = makeGraph({ openings: [frameOpening({ axisCL: { id: 'axisX_right' }, centerCoord: 100, fixtureType: 'SSF' })], walls: [wall] });
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph: plain, prevFace: null, nextFace }));
+  assert.equal(Math.max(...bentPolyline(prims).points.map(q => q[0])), 4157);
+  assert.deepEqual(floorLineOf(prims).map(p => [p.x1, p.x2]), [[0, 4157]]);
+  const edited = makeGraph({ openings: [frameOpening({ axisCL: { id: 'axisX_right' }, centerCoord: 100, frameProjection: 30 })], walls: [wall] });
+  const p2 = buildFaceFigure(makeFace(), baseCtx({ graph: edited, prevFace: null, nextFace }));
+  const head = p2.find(p => p.type === 'rect' && p.weight === 'thick' && p.h === 20);
+  assert.deepEqual([head.x, head.w], [3970, 145 + 60], '始点は面から出幅30ぶん外・見込は145+2×30');
+  assert.deepEqual(floorLineOf(p2).map(p => [p.x1, p.x2]), [[0, 3970 + 205]]);
+});
+
+test('【失敗系・三方枠の隅断面】ホスト壁が引けないときは既定の見込(115+24)で面の外側(x<=12)へ置く', () => {
+  const graph = makeGraph({ openings: [frameOpening()] }); // graph.walls なし
+  const prims = buildFaceFigure(makeFace(), baseCtx({ graph, prevFace: makePerpFace(), nextFace: null }));
+  const head = prims.find(p => p.type === 'rect' && p.weight === 'thick' && p.h === 20);
+  assert.deepEqual([head.x, head.w], [-127, 139]);
+  assert.deepEqual(floorLineOf(prims).map(p => [p.x1, p.x2]), [[-127, 4000]]);
+});
+
 // ---- 面端の太線（壁断面の縁）は隅の建具断面を描く建具の開口範囲では描かない（ユーザー指摘2026-10-13） ----
 function edgeCutLines(prims, x) {
   return prims.filter(p => p.type === 'line' && p.x1 === x && p.x2 === x && p.y1 !== p.y2 && !p.dash)

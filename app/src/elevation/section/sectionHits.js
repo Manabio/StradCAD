@@ -81,6 +81,7 @@ import { kneeDropZRangesAt } from '../../finish/kneeDropWall.js';
 // 既存の import 先（テスト・sectionProbe 等）を変えないよう再公開する。
 export { kneeDropZRangesAt };
 import { effectiveHeight } from '../../openings/openingNumbering.js';
+import { isFrameOnlySection, openingSectionWallRange } from '../../openings/openingSection.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import { localXOf, worldOf, cutDrawRange, ceilProfileEdgeAt, ceilClipProfileOf } from './sectionTypes.js';
@@ -1580,6 +1581,12 @@ export function visibleBandsOf(hits, cut, opts = {}) {
       if (hit) {
         band.openingPassThrough = true;
         if (hit.opening) band.opening = hit.opening;
+        // 三方枠の断面は壁全体（両仕上げ面）を包む。帯の壁（部屋側1枚）の材の範囲では見込みが足りないので、
+        // ホスト壁の面の範囲を持たせる（他の建具は帯の壁1枚の範囲のまま＝キーを足さない）。
+        if (hit.opening && isFrameOnlySection(hit.opening)) {
+          const range = openingSectionWallRange(hit.opening, frontMatch.layer.graph);
+          if (range) band.openingWallRange = range;
+        }
       }
       bands.push(band);
       continue;

@@ -5,7 +5,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpeningCategory } from '@core';
-import { openingSectionPrimitives, openingSectionWidthMm, openingOpenPerpDir } from './openingSection.js';
+import {
+  openingSectionPrimitives, openingSectionWidthMm, openingOpenPerpDir,
+  isFrameOnlySection, openingSectionOverhangMm, openingSectionWallRange,
+} from './openingSection.js';
 import {
   FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM, FRAME_OVERHANG_MM,
 } from './openingPlanSymbolGeometry.js';
@@ -92,4 +95,82 @@ test('openingSection: 窓（腰高あり）の片開き戸相当でも、扉の�
     .find(p => p.weight === SIL);
   assert.equal(leaf.y + leaf.h, -810, '下端は開口の下端(腰高800)の+10＝z810');
   assert.equal(leaf.y, -1780, '上端は開口上端1800の-20');
+});
+
+test('openingSection: 片開き戸の縦線もプリミティブ生成ヘルパー経由（キー順 type,x1,y1,x2,y2,weight）', () => {
+  const edge = openingSectionPrimitives(swingDoor(), 0, 1, CUT, SIL, { wallThicknessMm: 115 })
+    .find(p => p.type === 'line');
+  assert.deepEqual(Object.keys(edge), ['type', 'x1', 'y1', 'x2', 'y2', 'weight']);
+});
+
+// ---- 三方枠（機構 FRAME_ONLY。WF=solid／SF・SSF=bent）----
+const frameOnly = (over = {}) => ({
+  id: 'f1', category: OpeningCategory.FITTING, subType: 'threeSidedFrame', fixtureType: 'WF',
+  width: 800, height: 2000, sillHeight: null, frameFaceWidth: null, frameProjection: null, ...over,
+});
+
+test('openingSection: 三方枠（木製WF）は上枠だけ（見付20・見込は壁厚+24）＋竪枠の見えがかり縦線2本。扉の矩形は無い', () => {
+  assert.equal(isFrameOnlySection(frameOnly()), true);
+  const prims = openingSectionPrimitives(frameOnly(), 0, 1, CUT, SIL, { wallThicknessMm: 115, detailWeight: 'thin' });
+  assert.equal(prims.length, 3, '上枠1・竪枠の縦線2');
+  const rects = prims.filter(p => p.type === 'rect');
+  assert.equal(rects.length, 1, '扉・下枠の矩形は描かない（上枠の1枚だけ）');
+  assert.deepEqual([rects[0].x, rects[0].w, rects[0].y, rects[0].h], [0, 139, -2000, 20],
+    '上枠は見込=壁厚115+2×出幅12・見付20・上端は指定高さ');
+  assert.equal(rects[0].weight, CUT, '上枠は断面なので太線');
+  const lines = prims.filter(p => p.type === 'line');
+  assert.deepEqual(lines.map(p => [p.x1, p.x2]), [[0, 0], [139, 139]], '縦線は帯の両端（枠の外縁）');
+  assert.ok(lines.every(p => p.y1 === -1980 && p.y2 === 0 && p.weight === 'thin'),
+    '縦線は上枠の下端から床まで・見えがかりなので細線');
+});
+
+test('openingSection: 三方枠（鋼板SF/SSF）の上枠は壁面へ戻る返しを持つ開いたコの字', () => {
+  for (const fixtureType of ['SF', 'SSF']) {
+    const prims = openingSectionPrimitives(frameOnly({ fixtureType }), 0, 1, CUT, SIL, { wallThicknessMm: 115 });
+    assert.equal(prims.filter(p => p.type === 'rect').length, 0, `${fixtureType}: 閉じた矩形ではない`);
+    const poly = prims.find(p => p.type === 'polyline');
+    assert.deepEqual(poly.points,
+      [[12, -2000], [0, -2000], [0, -1980], [139, -1980], [139, -2000], [127, -2000]],
+      `${fixtureType}: 面(12)→外縁(0)→見付の下→反対の外縁(139)→面(127)。外縁の返しは出幅12`);
+    assert.equal(poly.weight, CUT);
+  }
+});
+
+test('openingSection: 三方枠の見込み・始点は出幅の編集値に追随する（見付も編集値）', () => {
+  const o = frameOnly({ frameFaceWidth: 40, frameProjection: 30 });
+  assert.equal(openingSectionWidthMm(o, { wallThicknessMm: 115 }), 175, '見込み=115+2×30');
+  assert.equal(openingSectionOverhangMm(o), 30, '帯の始点を壁面から外へ出す量は出幅');
+  const head = openingSectionPrimitives(o, 0, 1, CUT, SIL, { wallThicknessMm: 115 }).find(p => p.type === 'rect');
+  assert.deepEqual([head.x, head.w, head.h], [0, 175, 40]);
+  // 帯の向きが逆（dir=-1。x0 から左へ伸びる）でも帯は x0 の内側へ175
+  const left = openingSectionPrimitives(o, 4000, -1, CUT, SIL, { wallThicknessMm: 115 }).find(p => p.type === 'rect');
+  assert.deepEqual([left.x, left.w], [4000 - 175, 175]);
+});
+
+test('【失敗系】openingSection: 三方枠で壁厚が引けない→115、出幅が0・負・未設定→既定12、見付は開口幅の半分で頭打ち', () => {
+  assert.equal(openingSectionWidthMm(frameOnly(), {}), 115 + 24, '壁厚なしは既定115');
+  for (const frameProjection of [0, -5, null]) {
+    const o = frameOnly({ frameProjection });
+    assert.equal(openingSectionOverhangMm(o), 12, `出幅 ${frameProjection} は既定12`);
+    assert.equal(openingSectionWidthMm(o, { wallThicknessMm: 115 }), 139);
+  }
+  const narrow = frameOnly({ width: 100, frameFaceWidth: 80 });
+  const head = openingSectionPrimitives(narrow, 0, 1, CUT, SIL, { wallThicknessMm: 115 }).find(p => p.type === 'rect');
+  assert.equal(head.h, 50, '見付80は開口幅100の半分=50で頭打ち（平面の方立と同じ）');
+});
+
+test('【失敗系】openingSection: 未知の建具記号の三方枠は solid（閉じた矩形）で描く', () => {
+  const prims = openingSectionPrimitives(frameOnly({ fixtureType: 'ZZ' }), 0, 1, CUT, SIL, { wallThicknessMm: 115 });
+  assert.equal(prims.filter(p => p.type === 'rect').length, 1);
+  assert.equal(prims.filter(p => p.type === 'polyline').length, 0);
+});
+
+test('openingSection: 三方枠以外は出幅12固定・壁の範囲は材の合併のまま／壁が引けない三方枠の範囲は null', () => {
+  assert.equal(isFrameOnlySection(swingDoor()), false);
+  assert.equal(isFrameOnlySection(swingDoor({ subType: 'slidingDouble' })), false);
+  assert.equal(openingSectionOverhangMm(swingDoor()), FRAME_OVERHANG_MM);
+  assert.equal(openingSectionOverhangMm(swingDoor({ frameProjection: 30 })), FRAME_OVERHANG_MM,
+    '三方枠でなければ出幅の値は見ない');
+  assert.equal(openingSectionWallRange(frameOnly(), null), null, 'graph が無ければ null');
+  assert.equal(openingSectionWallRange(frameOnly(), { walls: [] }), null, '軸 CL の無い建具は null');
 });

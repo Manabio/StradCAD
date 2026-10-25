@@ -47,6 +47,7 @@ export const TARGETS = [
     'ceiling-zone-slope-far-test', 'ceiling-zone-test', 'moku4-3',
     'ceiling-steel-stair-under-test', 'ceiling-wood-stair-under-test'].map(ceiling),
   ...[1, 2, 3, 4, 5, 6, 7].map(ports),
+  { dir: 'golden-elev-opening/frame-only-section-test', stq: 'frame-only-section-test', flags: REGEN },
 ];
 
 /** 出力・基準ディレクトリ内の、対象ごとのサブディレクトリ名。 */

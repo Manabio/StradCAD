@@ -15,9 +15,8 @@ import { graphList } from '../../graphReadScope.js';
 import {
   zToY, cutDrawRange, localXOf, hasCutWallStandingOn, slabRuns, cutWallRuns, slabJunctionOf, MEMBER_PRIM, WHOLE_OUTLINE, isOpenLikeBand,
 } from './sectionTypes.js';
-import { openingSectionPrimitives } from '../../openings/openingSection.js';
+import { openingSectionPrimitives, openingSectionOverhangMm } from '../../openings/openingSection.js';
 import { drawnFloorProfileZMax, drawnFloorProfileZAt } from './floorProfileMath.js';
-import { FRAME_OVERHANG_MM } from '../../openings/openingPlanSymbolGeometry.js';
 import {
   mergeIntervals, segmentInsideRect, subtractRectsFromLine, isZeroLengthLine, line, text,
 } from '../elevationPrimitives.js';
@@ -988,11 +987,12 @@ function emitOpeningPassThrough(prims, { cut, col, band, prev, ceilZ }) {
   // 見込の基準は**この帯の壁1枚の材の範囲**——ユーザー明示指示2026-09「枠の上の壁は、
   // 当該部屋側のみで良いので、内外壁をまとめる必要はない」。列は壁厚方向に分割される
   // ことがあるため、その壁の最初の列（隣に同じ壁のcut帯が続かない側）でだけ描く。
-  const mr = band.wall?.materialRange;
+  // 三方枠だけは壁全体を包むため、sectionHits が持たせた壁全体の面の範囲（openingWallRange）を使う。
+  const mr = band.openingWallRange ?? band.wall?.materialRange;
   if (mr && band.opening && !sameWallAs(band, matchingBand(prev, band.z0, band.z1, 'cut'))) {
     const a = localXOf(cut, mr.lo), b = localXOf(cut, mr.hi);
     prims.push(...openingSectionPrimitives(
-      band.opening, Math.min(a, b) - FRAME_OVERHANG_MM, 1,
+      band.opening, Math.min(a, b) - openingSectionOverhangMm(band.opening), 1,
       weightForRole(ElevationLineRole.CUT), weightForRole(ElevationLineRole.SILHOUETTE),
       { wallThicknessMm: Math.abs(mr.hi - mr.lo), worldPerDirSign: cut.dirSign ?? 1,
         detailWeight: weightForRole(ElevationLineRole.DETAIL) },

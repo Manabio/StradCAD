@@ -36,6 +36,7 @@ scripts/probe/*/
 !scripts/probe/golden-elev-moku16/
 !scripts/probe/golden-elev-stairports/
 !scripts/probe/golden-elev-ceiling/
+!scripts/probe/golden-elev-opening/
 !scripts/probe/golden11/
 !scripts/probe/golden-structperf/
 !scripts/probe/golden-knee/

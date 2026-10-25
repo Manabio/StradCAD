@@ -147,12 +147,14 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   wall?:object, layerRole?:string, distMm?:number, ownerRoom?:object,
  *   floorZ?:number, ceilZ?:number, thicknessMm?:number,
  *   nearEdgeOpen?:boolean, farEdgeOpen?:boolean,
- *   openingPassThrough?:boolean,
+ *   openingPassThrough?:boolean, opening?:object, openingWallRange?:{lo:number, hi:number},
  *   farStair?:boolean,
  *   farFloorZ?:number|null, farCeilZ?:number|null, farDepthMm?:number,
  *   profiledTop?:boolean, topEdge?:{zAtLo:number, zAtHi:number}|{zAtX0:number, zAtX1:number},
  *   ceilEdge?:{zAtX0:number, zAtX1:number},
  * }} ZBand
+ *   openingWallRange（切断壁で三方枠の建具が通る帯だけ。`sectionHits.js`が付ける）＝その建具のホスト壁の
+ *   両仕上げ面の範囲（壁厚方向の世界座標）。三方枠の断面は壁全体を包むので、帯の壁1枚の材の範囲の代わりに使う。
  *   ceilEdge（切断壁の帯だけ。`sectionEngine.js`の`clipBandsToVisible`が付ける）＝その列の天井断面が
  *   傾いている（列の`ceilEdge`）とき、天端が天井の斜線に沿う帯の、列の両端（図のx0側/x1側）での高さ。
  *   `topEdge`（隔て壁自身の斜めの天端。probeが決める）とは別の意味なので流用しない。帯の z1 は斜線の高い側。

@@ -11,14 +11,16 @@
  * 座標系: 呼び出し側が「帯の起点x0」「伸びる向き dir(+1/-1)」「床のz=0」を与える。返す矩形は
  * 図のローカル座標（yは上向き負）。
  */
-import { effectiveHeight } from './openingNumbering.js';
+import { effectiveHeight, effectiveFrameProjection, fixtureSymbolOf } from './openingNumbering.js';
 import { OpeningCategory } from '@core';
 import { graphList } from '../graphReadScope.js';
-import { rect as rectPrim } from '../elevation/elevationPrimitives.js';
-import { findCatalogEntry } from './openingCatalog.js';
+import { rect as rectPrim, line as linePrim, polyline as polylinePrim } from '../elevation/elevationPrimitives.js';
+import { findCatalogEntry, frameProfileFor, OpeningMechanism } from './openingCatalog.js';
+import { findHostWall, wallFaceRange } from './openingGeometry.js';
+import { frameOnlyInnerRect } from './openingElevationFigure.js';
 import {
   FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM, FRAME_OVERHANG_MM,
-  swingOpenPerpDir,
+  swingOpenPerpDir, frameOnlyPerpRange, frameOnlyJambProfiles,
 } from './openingPlanSymbolGeometry.js';
 
 // 従来の断面帯（枠40＋扉40＋枠40）。描き方の指定が無い建具はこのまま。
@@ -73,19 +75,58 @@ export function openingOpenPerpDir(o) {
  * @returns {number}
  */
 export function openingSectionWidthMm(o, opts = {}) {
-  if (methodFor(o) !== 'swingLeaf') return LEGACY_FRAME_W * 2 + LEGACY_LEAF_TH;
-  // 枠の見込＝壁の層厚＋出しぶん（室内外へ FRAME_OVERHANG_MM ずつ）＝壁厚+24。
+  const method = methodFor(o);
+  if (method === 'legacy') return LEGACY_FRAME_W * 2 + LEGACY_LEAF_TH;
+  // 枠の見込＝壁の層厚＋出しぶん（室内外へ出幅ずつ）。片開き戸は 12 固定＝壁厚+24、三方枠は出幅の編集値
+  // （平面・建具モードの「見込み」欄と同じ式 frameOnlyPerpRange の depth）。
   const t = Number.isFinite(opts.wallThicknessMm) ? opts.wallThicknessMm : FALLBACK_WALL_THICKNESS_MM;
+  if (method === 'frameOnly') {
+    return frameOnlyPerpRange({ faceLo: 0, faceHi: t, axisValue: 0, projection: effectiveFrameProjection(o) }).depth;
+  }
   return t + FRAME_OVERHANG_MM * 2;
 }
 
 // 種別 → 断面の描き方。ここに無い種別は従来の描き方（legacyStrip）。
 // ユーザー明示指示2026-09「AW他、描画方法の指定のない片開き戸は全て適用」——建具記号（WD/AW…）
-// では分けず、**片開き戸という種別**に紐づける。
+// では分けず、**片開き戸という種別**に紐づける。三方枠（機構 FRAME_ONLY）は種別（subType）が
+// カタログで増えうるため、表ではなく機構で引く（methodFor。姿図 openingElevationFigure.js と同じ判定）。
 const SECTION_METHODS = { singleSwing: 'swingLeaf' };
 
 function methodFor(o) {
+  if (findCatalogEntry(o?.category, o?.subType)?.mechanism === OpeningMechanism.FRAME_ONLY) return 'frameOnly';
   return SECTION_METHODS[o?.subType] ?? 'legacy';
+}
+
+/** 三方枠（機構 FRAME_ONLY）の断面の描き方（frameOnly）で描く建具か。呼び出し側が壁の範囲の取り方を分けるのに使う。 */
+export function isFrameOnlySection(o) {
+  return methodFor(o) === 'frameOnly';
+}
+
+/**
+ * 枠が壁の両面から室内外へ出る量(mm)。三方枠は出幅の編集値（`effectiveFrameProjection`。未設定・0以下は既定12）、
+ * それ以外は `FRAME_OVERHANG_MM`（12 固定）。帯の始点＝壁の材の範囲の下端−この値。
+ * @param {import('@core').Opening} o
+ * @returns {number}
+ */
+export function openingSectionOverhangMm(o) {
+  return isFrameOnlySection(o) ? effectiveFrameProjection(o) : FRAME_OVERHANG_MM;
+}
+
+/**
+ * 断面の帯を置く**壁の範囲**（壁厚方向の世界座標 {lo,hi}）。三方枠は枠が壁全体を包む（見込み＝壁の面から面＋2×出幅）
+ * ので、ホスト壁の**両仕上げ面**（`wallFaceRange`）。壁が引けなければ null。それ以外は従来の
+ * `wallMaterialRangeForOpening`（同じ通りの実壁の材の合併）。
+ * @param {import('@core').Opening} o
+ * @param {object|null} graph
+ * @returns {{lo:number, hi:number}|null}
+ */
+export function openingSectionWallRange(o, graph) {
+  if (!isFrameOnlySection(o)) return wallMaterialRangeForOpening(o, graph);
+  if (!graph?.walls || !o?.axisCL) return null;
+  const host = findHostWall(o, graph);
+  if (!host) return null;
+  const [lo, hi] = wallFaceRange(host, graph);
+  return { lo, hi };
 }
 
 /** その建具の開口の下端z（窓は腰高・建具は0）。姿図・断面・探査で同じ規約。 */
@@ -104,6 +145,10 @@ function sillOf(o) {
  *            **枠の戸当たり**＝指定高さ−(見付30−かかり代10)＝指定高さ−20。SILHOUETTE（中線）。
  *            寄る側は**建具の開き勝手**（`openingOpenPerpDir`）で決まる。
  *   - 枠の縦線 … 扉のない側の枠の外縁。上枠の下端から床まで。SILHOUETTE（中線）。
+ *
+ * `frameOnly`（三方枠。機構 FRAME_ONLY）: 上枠だけを CUT で描き（扉・下枠なし）、見付は `frameOnlyInnerRect` の
+ * 見付（開口幅の半分で頭打ち）、見込は壁の面から面＋2×出幅（`openingSectionWidthMm`）。竪枠は左右の外縁の
+ * 縦線2本（細線）。
  * @param {import('@core').Opening} o
  * @param {number} x0 - 帯の起点（面ローカルx）
  * @param {1|-1} dir - 帯が伸びる向き
@@ -146,8 +191,38 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
       // 扉のない側の枠の縦線。**見えがかりなので細線**（ユーザー明示指示2026-09
       // 「「13」D: 建具建枠の見えがかりは細線」）。呼び出し側が detailWeight を渡さない場合は
       // 中線へフォールバックする（既存呼び出しの後方互換）。
-      { type: 'line', weight: opts.detailWeight ?? silhouetteWeight,
-        x1: at(freeEdgeMm), y1: top + FRAME_JAMB_WIDTH_MM, x2: at(freeEdgeMm), y2: sillTop },
+      linePrim(at(freeEdgeMm), top + FRAME_JAMB_WIDTH_MM, at(freeEdgeMm), sillTop,
+        { weight: opts.detailWeight ?? silhouetteWeight }),
+    ];
+  }
+
+  if (methodFor(o) === 'frameOnly') {
+    // 三方枠（WF/SF/SSF。扉なし）の縦断面。切断線が通る開口の真ん中に現れるのは**上枠だけ**。
+    // 断面形は平面の竪枠と同じ関数（frameOnlyJambProfiles）から取る——木製＝閉じた矩形、鋼板＝壁面へ戻る
+    // 返しを持つ開いたコの字。平面の along（壁の長さ）は断面では縦（上端から下へ見付）に当たる。
+    // 見込（壁の面から面＋2×出幅）は帯の全幅 full、左右対称なので開き勝手・worldPerDirSign は使わない。
+    const proj = effectiveFrameProjection(o);
+    const full = openingSectionWidthMm(o, opts);
+    const t = full - proj * 2;
+    const fw = frameOnlyInnerRect(o).fw;
+    const profile = o.frameProfile ?? frameProfileFor(fixtureSymbolOf(o));
+    const [head] = frameOnlyJambProfiles({
+      coord1: top, coord2: sillTop, faceLo: proj, faceHi: proj + t, axisValue: 0,
+      faceWidth: fw, projection: proj, profile,
+    });
+    const headPrim = head.closed
+      ? rect(
+        Math.min(...head.points.map(p => p.perp)), Math.max(...head.points.map(p => p.perp)),
+        Math.min(...head.points.map(p => p.along)), Math.max(...head.points.map(p => p.along)), cutWeight)
+      : polylinePrim(head.points.map(p => [at(p.perp), p.along]), { weight: cutWeight });
+    // 竪枠の見えがかり: 開口を覗くと左右の竪枠の見込面が奥まで見え、枠の外縁が縦線2本に現れる（上枠の下端から床まで）。
+    // 見えがかりなので細線（detailWeight。呼び出し側が渡さなければ中線）。
+    const jambBottom = top + fw;
+    const jambWeight = opts.detailWeight ?? silhouetteWeight;
+    return [
+      headPrim,
+      linePrim(at(0), jambBottom, at(0), sillTop, { weight: jambWeight }),
+      linePrim(at(full), jambBottom, at(full), sillTop, { weight: jambWeight }),
     ];
   }
 

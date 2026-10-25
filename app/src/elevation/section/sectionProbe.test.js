@@ -12,6 +12,10 @@ import { nearMembersOf, probeColumnHits } from './sectionHits.js';
 const memberHitsFor = (cut, probeCtx) => probeColumnHits(cut, 2000, probeCtx).hits.filter(h => h.kind === 'memberCut');
 import { buildColumns } from './sectionEngine.js';
 import { ElevationLineRole, weightForRole } from '../elevationStyle.js';
+import { localXOf } from './sectionTypes.js';
+import { findHostWall, wallFaceRange } from '../../openings/openingGeometry.js';
+import { effectiveFrameProjection } from '../../openings/openingNumbering.js';
+import { frameOnlyPerpRange } from '../../openings/openingPlanSymbolGeometry.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
 
@@ -689,6 +693,57 @@ test('【2026-09】emitColumns: 建具で切れた切断壁には、その建具
   assert.equal(-(leaf.y + leaf.h), 10, '扉の下端はFL+10');
   // このフィクスチャの壁（室内側1枚）の材の範囲は57.5なので、見込は 57.5+24=81.5。
   assert.equal(head.w, 57.5 + 24, '上枠は見込いっぱい＝その帯の壁1枚の層厚+24');
+});
+
+// 三方枠（FITTING/threeSidedFrame・WF）版。枠は壁全体（両仕上げ面）を包むので、上枠の見込は帯の壁1枚ではなく
+// ホスト壁の面から面＋2×出幅（平面・建具モードの「見込み」欄と同じ frameOnlyPerpRange）。
+function makeCutWallFrameGraph(openingCenterY, props = {}) {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const wall = [...graph.walls].find(w => w.isVertical && Math.abs(w.axisCL.effectiveValue) < 1);
+  const y0 = [...graph.centerLines].find(c =>
+    c.centerLineType === CenterLineType.HORIZONTAL && Math.abs(c.effectiveValue) < 1);
+  const opening = graph.addOpening(wall.axisCL, 1, true, y0, openingCenterY, 800,
+    OpeningCategory.FITTING, 'threeSidedFrame', { height: 2000, fixtureType: 'WF', ...props });
+  return { graph, opening };
+}
+
+test('【2026-10 S10-10】emitColumns: 建具で切れた切断壁の三方枠は、壁全体を包む上枠だけが出る（見込＝壁の面から面＋2×出幅）', () => {
+  const { graph, opening } = makeCutWallFrameGraph(1500);
+  const cut = crossingCut(graph);
+  const prims = emitColumns(buildColumns(cut, makeProbeContext(cut.layers)), cut, {});
+  const rects = prims.filter(p => p.type === 'rect');
+  assert.equal(rects.length, 1, '上枠1枚だけ（扉・下枠・竪枠の矩形は無い）');
+  const head = rects[0];
+  assert.equal(head.weight, weightForRole(ElevationLineRole.CUT));
+  assert.equal(head.h, 20, '見付は既定20');
+  assert.equal(-head.y, 2000, '上端は指定高さ2000');
+  const [faceLo, faceHi] = wallFaceRange(findHostWall(opening, graph), graph);
+  const depth = frameOnlyPerpRange({ faceLo, faceHi, axisValue: 0, projection: effectiveFrameProjection(opening) }).depth;
+  assert.equal(head.w, depth, '上枠の見込は平面・建具モードの見込み欄と同じ式');
+  assert.equal(head.w, 115 + 24, '壁全体115（このフィクスチャの帯の壁1枚は57.5）＋2×出幅12');
+  assert.equal(head.x, localXOf(cut, faceLo) - 12, '始点は壁の面の下端から出幅ぶん外');
+  const verticals = prims.filter(p => p.type === 'line' && p.weight === weightForRole(ElevationLineRole.DETAIL)
+    && Math.abs(p.x1 - p.x2) < 1e-6 && Math.abs(p.y1 + 1980) < 1e-6 && Math.abs(p.y2) < 1e-6);
+  assert.equal(verticals.length, 2, '竪枠の見えがかりの縦線2本（上枠の下端から床まで。見えがかりなので細線）');
+  assert.deepEqual(verticals.map(p => p.x1).sort((a, b) => a - b), [head.x, head.x + head.w]);
+});
+
+test('【2026-10 S10-10】emitColumns: 三方枠の出幅を編集すると見込と始点が追随する', () => {
+  const { graph } = makeCutWallFrameGraph(1500, { frameProjection: 30, frameFaceWidth: 40 });
+  const cut = crossingCut(graph);
+  const prims = emitColumns(buildColumns(cut, makeProbeContext(cut.layers)), cut, {});
+  const head = prims.find(p => p.type === 'rect');
+  assert.equal(head.w, 115 + 60, '見込は115＋2×30');
+  assert.equal(head.h, 40, '見付は編集値40');
+  assert.equal(head.x, localXOf(cut, -57.5) - 30, '始点は面から出幅30ぶん外');
+});
+
+test('【失敗系・2026-10 S10-10】emitColumns: 切断線が通らない三方枠は断面を描かない', () => {
+  const { graph } = makeCutWallFrameGraph(2500); // 建具は y:2100〜2900＝切断線(1500)に掛からない
+  const cut = crossingCut(graph);
+  const prims = emitColumns(buildColumns(cut, makeProbeContext(cut.layers)), cut, {});
+  assert.equal(prims.filter(p => p.type === 'rect' && p.h < 100).length, 0, '上枠の矩形は出ないはず');
 });
 
 test('【2026-09】emitColumns: 建具で切れた切断壁は、両縁ではなく開口の上下にCUT水平線を描く', () => {
