@@ -66,7 +66,7 @@ hostは長押しでユーザーが叩いた面の壁で、室内向き壁がhost
 記号`WF`/`SF`/`SSF`は機構スコープ付き記号（`FIXTURE_SYMBOLS`の`mechanism:FRAME_ONLY`）——`getFixtureSymbols(category, mechanism)`の第2引数がFRAME_ONLYのときだけこの3件を返し、それ以外（省略時含む）は従来のスコープ無し記号のみを返す。種別変更時の記号切替は`openingEdit.js`の`fixtureTypeAfterSubTypeChange`（現在記号が新機構のスコープに無ければ新機構の既定記号へ差し替え）に一本化する。`getFixtureSymbols`は三層込み（ユーザー追加の記号も一覧に出る）。未知の記号（同梱のみに存在等）は建具種別を変えても保持し、黙って既定記号へ差し替えない。
 見付（`frameFaceWidth`）・出幅（`frameProjection`）は`Opening`の永続フィールド（既定20mm/12mm、`frameDepth`と同じ「0以下/null=未設定」規約）——ユーザーが修正できる＝建具表バリアントが分かれる仕様のため、`openingSubSignature`（枝番判定キー）の末尾に含める。
 平面記号は`planSymbolPlan`が機構より先に`frame:'frameOnly'`を返す意図的な例外——他機構は「STANDARD=簡略/DETAIL=実寸」の2段だが、三方枠は枠自身が記号であり簡略形に相当するものが無いため、STANDARD/DETAILどちらも実寸の方立（`frameOnlyJambProfiles`）を描く。木製（`profile:'solid'`）は無垢材の閉じた矩形断面、鋼板（`profile:'bent'`）は曲げ加工の開いたコの字＋壁面への返し——この描き分けは`frameProfileFor(symbol)`が唯一の定義箇所。
-三方枠の見込みは永続化せず、壁厚（面間）＋2×出幅を`frameOnlyPerpRange`（平面の方立と同じ式）で導出して読取専用表示する——枠は壁の両面を出幅ぶん越えて包むため見込みは壁から決まり、ユーザー入力にすると平面と食い違う。見付・出幅の既定（20/12）は配置時に明示保存し（`materialGlass`と同じ規約）、採番は三方枠のみ実効値で比較する（未設定と既定明示を同一視、扉のある建具では無視）。
+三方枠の見込みは永続化せず、壁厚（面間）＋2×出幅を`frameOnlyPerpRange`（平面の方立と同じ式）で導出して読取専用表示する——枠は壁の両面を出幅ぶん越えて包むため見込みは壁から決まり、ユーザー入力にすると平面と食い違う。見付・出幅の既定（20/12）は配置時に明示保存し（`materialGlass`と同じ規約）、採番は三方枠のみ実効値で比較する（未設定と既定明示を同一視、扉のある建具では無視）。展開図の断面（S10-10・2026-10-25）は`openingSection.js`の描き方`frameOnly`＝上枠の断面（見付×見込。solid は矩形・bent は開いたコの字）＋竪枠の見え掛かり縦線2本、扉・下枠なし。見込は同じ`frameOnlyPerpRange`で壁全体の面から面＋2×出幅（設計意図は`elevation-model.md`の隅の建具断面の節）。
 姿図は「見付のある枠を枠見付分の三方細線」——外周（指定寸法）三方＝細線、内法（見付ぶん内側）三方＝中線（実際の開口＝空気と切れる線）。展開図は`isDoorlessMechanism`（`DOORLESS_MECHANISMS`が唯一の定義）が真の建具の内法（`frameOnlyInnerRect`）にアキ標記（バツ＋「ア キ」）を描く——断面エンジンの「建具の姿の前にバツ不要」は扉のある建具の規則で、扉が無ければそこは実際に抜けている。
 
 ## 建具の位置移動（ドラッグ・「位置」欄）は可動範囲へクランプ——弾かない
