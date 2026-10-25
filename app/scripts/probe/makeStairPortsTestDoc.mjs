@@ -13,6 +13,10 @@
 // 木造の側面の口は取りつき最低 1 段（alignPortStairsOnGraph）なので、平場（0）は鉄骨で作る。
 //   stair-ports-test6.stq … 直進・木造・走行端の口・sections [15]・2階にも続きの直進階段（E5-2 の足場。upper）
 //   stair-ports-test7.stq … 踊場付直進・木造・[7,1,8]（test3 と同じ ys）・2階にも続きの階段（upper）
+//   stair-ports-test8〜11 … 不等長の折返し・木造（展開図の階段帯 S10-7「復路長＝往路長の仮定」の足場。golden・ゲートには置かない）。
+//     基端側の行を廊下へ切り欠いた L 字の階段室。8＝往路が長い・9＝復路が長い（8 の鏡像）・10＝8 で entrySide=null・切り欠きの
+//     境の壁なし（壁は再生成で戻る）・11＝短いレーンの基端が t>0.5（基端側 3 行を切る）。不等長は measureStairSpans の lengths で判定
+//     （|run.baseA−baseB| は木造の柱の面 90/115 でも等長で >1 になるので使わない）
 // upper の variant は、2階の足元の STAIR_VOID を外して 1階の階段を 2階へ写し（copyStairsToGraph）、3階に STAIR_VOID を作る
 // （reconcileStairVoids）。2階の階段が 1階の「続き」（matchingStairBelow）で裏面が引けること・両階の切断線が足元の辺に乗ること
 // （straightPlanLayout の run.base の差）を expect で確かめる。
@@ -31,7 +35,7 @@ import { loadDocument } from './loadDoc.mjs';
 import { serializeGraph, serializeStructCLs, serializePlanes, restoreGraph, restoreStructCLs, decodePlanes } from '../../src/graphSnapshot.js';
 import { buildDocumentJson, parseDocumentEnvelope } from '../../src/storage/documentFile.js';
 import { Project, CenterLineType, Discipline, StairType, StairPortSide, StructuralMaterialType, RoomFeature } from '../../src/core.js';
-import { refreshCells } from '../../src/finish/gridCells.js';
+import { refreshCells, cellBoundsFromKey } from '../../src/finish/gridCells.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { loadMaterialMap, regenerateWalls } from '../../src/finish/wallRegeneration.js';
 import { wallFreshnessKey } from '../../src/finish/wallFreshnessKey.js';
@@ -63,6 +67,15 @@ const ARCH = { labeled: false, discipline: Discipline.ARCH };
 const { LEFT, RIGHT } = StairPortSide;
 
 const X_MID = 910;
+
+// 不等長の実測（セルから測る往路・復路のレーン長。lengths＝[往路, 踊り場, 復路]）と平面の解決値。|baseA−baseB| は木造の柱の面
+// （90・115）でも等長で >1 になるので、不等長の判定は lengths で行う
+function unevenOf(stair, graph) {
+  const p = uTurnPlanLayout(stair, graph);
+  const lens = measureStairSpans(stair, graph)?.lengths;
+  if (!p || !Array.isArray(lens)) return null;
+  return { p, laneA: lens[0], laneB: lens[2] };
+}
 
 // 追加する通り芯（y は上り口側から: 先頭の行の境界・次の境界。x は U 字の中央）
 const VARIANTS = [
@@ -119,6 +132,40 @@ const VARIANTS = [
       const p = straightPlanLayout(stair, graph);
       const lens = measureStairSpans(stair, graph)?.lengths;
       return p?.hasLanding === true && p.entryPort === 'end' && p.arrivalPort === 'end' && Array.isArray(lens) && lens.length === 3;
+    },
+  },
+  // ---- 8〜11: 不等長（L 字の階段室）。展開図の階段帯 S10-7（「復路長＝往路長の仮定」）の足場。
+  // notch＝基端側から rows 行ぶん（x は lane の列）のセルを階段と階段室から外す（外したセルは新しい部屋「廊下」。
+  // withRoom=false なら部屋にしない）。lane: 'return'＝x910..1820 を外す（往路が長い）・'outbound'＝x0..910 を外す（復路が長い）
+  {
+    n: 8, title: '不等長・往路が長い（復路の基端の行を廊下へ）・折返し・木造・entrySide/arrivalSide=end',
+    ys: [-7900, -8500], xs: [X_MID], notch: { lane: 'return', rows: 1, withRoom: true },
+    apply: () => ({ type: StairType.SWITCHBACK, structure: StructuralMaterialType.WOOD, sections: [6, 1, 6], entrySide: 'end', entryTurnSteps: 0, arrivalSide: 'end', arrivalTurnSteps: 0 }),
+    expect: (stair, graph) => { const u = unevenOf(stair, graph); return !!u && u.laneA - u.laneB > 1 && u.p.entryPort === 'end' && u.p.arrivalPort === 'end'; },
+  },
+  {
+    n: 9, title: '不等長・復路が長い（往路の基端の行を廊下へ。8 の鏡像）・折返し・木造・end・切り欠きに壁あり',
+    ys: [-7900, -8500], xs: [X_MID], notch: { lane: 'outbound', rows: 1, withRoom: true },
+    apply: () => ({ type: StairType.SWITCHBACK, structure: StructuralMaterialType.WOOD, sections: [6, 1, 6], entrySide: 'end', entryTurnSteps: 0, arrivalSide: 'end', arrivalTurnSteps: 0 }),
+    expect: (stair, graph) => { const u = unevenOf(stair, graph); return !!u && u.laneB - u.laneA > 1 && u.p.entryPort === 'end' && u.p.arrivalPort === 'end'; },
+  },
+  {
+    n: 10, title: '不等長・往路が長い・entrySide=null（自動）・切り欠きに壁なし（廊下を作らず壁も外す）',
+    ys: [-7900, -8500], xs: [X_MID], notch: { lane: 'return', rows: 1, withRoom: false, noWall: true },
+    apply: () => ({ type: StairType.SWITCHBACK, structure: StructuralMaterialType.WOOD, sections: [6, 1, 6], entrySide: null, entryTurnSteps: 0, arrivalSide: null, arrivalTurnSteps: 0 }),
+    expect: (stair, graph) => { const u = unevenOf(stair, graph); return !!u && u.laneA - u.laneB > 1 && u.p.entryPort === 'inner' && u.p.entryTurnSteps >= 1; },
+  },
+  {
+    // 8 は短いレーン 600（包絡 1820 の 1/3・基端 t=0.34）。11 は基端側 3 行（〜y-8300）を外して短いレーンを 200・基端を t>0.5 にする
+    // （踊り場の組の側に入る）。y-8300 を足して行を細かくする
+    n: 11, title: '不等長・短いレーンの基端が包絡矩形の t>0.5（基端側 3 行を廊下へ。y を足して基端の行を細かくする）',
+    ys: [-7900, -8500, -8300], xs: [X_MID], notch: { lane: 'return', rows: 3, withRoom: true },
+    apply: () => ({ type: StairType.SWITCHBACK, structure: StructuralMaterialType.WOOD, sections: [6, 1, 6], entrySide: 'end', entryTurnSteps: 0, arrivalSide: 'end', arrivalTurnSteps: 0 }),
+    expect: (stair, graph) => {
+      const u = unevenOf(stair, graph);
+      if (!u) return false;
+      const tBaseB = Math.abs(u.p.run.baseB - u.p.run.baseA) / Math.abs(u.p.run.back - u.p.run.baseA);
+      return u.laneA - u.laneB > 1 && tBaseB > 0.5;
     },
   },
 ];
@@ -188,6 +235,22 @@ for (const v of selected) {
     for (const y of v.ys) if (!has(CenterLineType.HORIZONTAL, y)) g1.addCenterLine(CenterLineType.HORIZONTAL, y, ARCH);
     for (const x of v.xs) if (!has(CenterLineType.VERTICAL, x)) g1.addCenterLine(CenterLineType.VERTICAL, x, ARCH);
     stair.setCells(refreshCells(stair.cells, g1));
+    // (1b) 不等長の切り欠き: 基端側 rows 行の lane 側の列のセルを階段・階段室から外す（x は 910 で左右に分ける）
+    if (v.notch) {
+      const room = g1.roomMap.get(stair.roomId);
+      const bounds = new Map([...stair.cells].map(k => [k, cellBoundsFromKey(k, g1)]));
+      const yBase = Math.max(...[...bounds.values()].map(b => b.y2)); // 基端＝y が大きい側（上り口の南端）
+      const rowTops = [...new Set([...bounds.values()].map(b => b.y1))].sort((a, b) => b - a); // 基端側の行から順
+      const cut = new Set(rowTops.slice(0, v.notch.rows));
+      const inLane = b => v.notch.lane === 'return' ? b.x1 >= X_MID - 0.5 : b.x2 <= X_MID + 0.5;
+      const moved = new Set([...stair.cells].filter(k => cut.has(bounds.get(k).y1) && inLane(bounds.get(k))));
+      if (moved.size === 0 || yBase !== -7280) throw new Error(`test${v.n}: 切り欠きのセルが見つかりません（moved=${moved.size} yBase=${yBase}）`);
+      const rest = new Set([...stair.cells].filter(k => !moved.has(k)));
+      stair.setCells(rest);
+      room.setCells(new Set(rest));
+      if (v.notch.withRoom) g1.addRoom(new Set(moved), '廊下');
+      console.log(`  切り欠き: ${moved.size} セル（${v.notch.lane}・${v.notch.rows} 行）を外した。階段 ${rest.size} セル${v.notch.withRoom ? '・廊下を追加' : ''}`);
+    }
     // (2) 型・段数・出入口・構造
     const spec = v.apply(stair);
     for (const [k, val] of Object.entries(spec)) stair.setField(k, val);
@@ -235,6 +298,17 @@ for (const v of selected) {
   const converged = await sweepUntilConverged(project, 'desc');
   if (converged == null) console.error('  警告: 構造再計算が収束しなかった');
   else console.log(`  構造再計算は ${converged} sweep で収束`);
+
+  // (3b) 切り欠きに壁なし: 階段室と切り欠き（部屋なし）の境の壁（y-7900 の横壁・x910 の縦壁のうち切り欠きの範囲）を外す。
+  // 外壁（x1820 側・y-7280 の基端側）は残す。外す壁は壁再生成の鮮度キーの入力ではない（キーは再計算されない）
+  if (v.notch?.noWall) {
+    const eps = 5;
+    const doomed = g1.walls.filter(w => w.isVertical
+      ? Math.abs(w.axisCL.effectiveValue - X_MID) < eps && w.coord1 >= -7900 - 80 && w.coord2 <= -7280 - eps
+      : Math.abs(w.axisCL.effectiveValue - (-7900)) < eps && w.coord1 >= X_MID - 80 && w.coord2 <= 1820 + 80);
+    runInAction(() => { for (const w of doomed) g1.removeShape(w.id); });
+    console.log(`  切り欠きの境の壁を ${doomed.length} 本外した`);
+  }
 
   // (4) 実測: 出入口・段数が意図どおりに解決されること、alignPortStairsOnGraph が値を書き換えないこと
   if (!v.expect(stair, g1)) { console.error(`NG: test${v.n}: 平面の解決値が意図と違います`); failed = true; continue; }
