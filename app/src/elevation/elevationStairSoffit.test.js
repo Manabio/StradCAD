@@ -15,6 +15,7 @@ import { stairSoffitAbove } from './space/stairSoffitCeiling.js';
 import { buildSpaceIndex } from './space/spaceModel.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
 import { drawnFloorProfileZAt } from './elevationFloorProfile.js';
+import { buildStairBand } from './elevationStair.js';
 
 const near = (a, b, msg, tol = 1e-6) => assert.ok(Math.abs(a - b) < tol, `${msg}: ${a} vs ${b}`);
 
@@ -321,7 +322,7 @@ test('【E5・失敗系】stairFaceSequence: 上階が鉄骨（裏面なし）�
   }
 });
 
-// ---------------------------------------------------------------- 直進系（受け口。S10-4 E5-2 S2-1。関門 elevationStair.js は未開放＝本番は stairSoffit=null）
+// ---------------------------------------------------------------- 直進系（S10-4 E5-2 S2-1 受け口・S2-3 関門 elevationStair.js の開放）
 
 /** 直進（STRAIGHT）の歩行順面。stairSoffit は手組みの立体（階段室 x 0〜2000・y 0〜4000。縦走行・上り口 y=4000・到達 y=0）。 */
 function straightSequenceOf(soffit) {
@@ -334,8 +335,8 @@ function straightSequenceOf(soffit) {
   });
   return entries;
 }
-const straightSoffitOf = (across) => ({
-  solid: straightSoffitFromLayout({ vertical: true, hasLanding: false, totalSteps: 12, run: { base: 4000, end: 0 }, across }, { zStart: 2400, zTop }),
+const straightSoffitOf = (across, zCap = null) => ({
+  solid: straightSoffitFromLayout({ vertical: true, hasLanding: false, totalSteps: 12, run: { base: 4000, end: 0 }, across }, { zStart: 2400, zTop, zCap }),
   floorStepMm: 0,
 });
 
@@ -350,6 +351,57 @@ test('【E5-2 S2-1】直進系: stairSoffit を渡すと各 cut の ceilingProfi
   for (const e of withProfile) {
     const before = base.find(b => b.seqNo === e.seqNo);
     assert.notDeepEqual(e.ceilingProfile, before.ceilingProfile, `seq${e.seqNo}: 従来の天井から変わる`);
+  }
+});
+
+test('【E5-2 S2-1・QA 所見 4】直進系: 縦の切断の天井断面は、上り口の端が階段室の CH 2400・到達側の端が zCap で頭打ちした値', () => {
+  const ZCAP = 4000; // zTop(12)≈4815.8 より低い上階天井
+  const entries = straightSequenceOf(straightSoffitOf({ s0: 0, s1: 2000, mid: 1000 }, ZCAP));
+  const ends = [];
+  for (const e of entries) {
+    const prof = e.ceilingProfile;
+    if (!Array.isArray(prof) || prof.length < 2 || !e.face.isVertical) continue;
+    const zs = prof.map(p => p[1]);
+    ends.push([prof[0][1], prof[prof.length - 1][1]]);
+    assert.ok(Math.max(...zs) <= 4800 + 0.05, `seq${e.seqNo}: 上階天井 4800 を超えない`);
+  }
+  assert.ok(ends.length > 0, '縦の切断の面がある');
+  const flat = ends.flat();
+  // 面の端は壁の芯から壁厚の半分（57.5）内側。上り口 y=4000 の裏面 2400 から斜面（勾配 (ZCAP−2400)/(4000−capRun)）で 57.5 登った値
+  const capRun = 4000 - 4000 * (ZCAP - 2400) / (zTop(12) - 2400);
+  const entryEnd = 2400 + 57.5 * (ZCAP - 2400) / (4000 - capRun);
+  assert.ok(flat.some(z => Math.abs(z - entryEnd) < 0.05), `上り口の端 ${entryEnd}（階段室の CH 2400 から）: ${flat}`);
+  assert.ok(flat.some(z => Math.abs(z - ZCAP) < 0.05), `到達側の端 zCap: ${flat}`);
+  assert.ok(flat.every(z => z <= ZCAP + 0.05 || Math.abs(z - 4800) < 0.05), `裏面は zCap を超えない: ${flat}`);
+});
+
+// 直進系の関門の開放（E5-2 S2-3）: buildStairBand が直進＋上階に続きの階段で stairSoffit を載せる（プリミティブが裏面なしと変わる）
+function straightBandOf({ upperType = StairType.STRAIGHT, upperStructure = StructuralMaterialType.WOOD, lowerType = StairType.STRAIGHT, withUpperStair = true } = {}) {
+  const n = stairFloor('p1', 1, { walls: true }), u = stairFloor('p2', 2, { structure: upperStructure, walls: true });
+  n.stair.setField('type', lowerType);
+  u.stair.setField('type', upperType);
+  u.stair.riser = RISER;
+  if (!withUpperStair) u.graph.removeStair(u.stair.id);
+  return JSON.stringify(buildStairBand(n.room, n.graph, u.graph, { stair: n.stair, floorHeight: FLOOR_H }).primitives);
+}
+
+test('【E5-2 S2-3】buildStairBand: 直進＋上階に続きの木造階段なら裏面が載る（上階の階段なしの帯と primitives が変わる）', () => {
+  const withSoffit = straightBandOf();
+  const without = straightBandOf({ withUpperStair: false });
+  assert.notEqual(withSoffit, without);
+});
+
+test('【E5-2 S2-3・失敗系】buildStairBand: 上階が鉄骨・L_TURN・上階に階段なしなら直進でも裏面は載らない（上階の階段なしの帯と同一）', () => {
+  const without = straightBandOf({ withUpperStair: false });
+  assert.equal(straightBandOf({ upperStructure: StructuralMaterialType.STEEL }), without, '鉄骨');
+  assert.equal(straightBandOf({ upperType: StairType.L_TURN }), without, '上階 L_TURN');
+});
+
+test('【E5-2 S2-3・失敗系】buildStairBand: 下階（自階の階段）が L_TURN なら、上階が木造の直進でも裏面は載らない（上階の階段なしの帯と同一）', () => {
+  // 注: この fixture では関門を外しても帯の primitives は変わらない（L_TURN/FLARED の帯は層の裏面を読まない）。不変の記録であって
+  // 関門そのものの変異検出力は無い（関門は型の述語 U_TURN_TYPES||STRAIGHT_TYPES を読んで確かめる）。
+  for (const lowerType of [StairType.L_TURN, StairType.FLARED]) for (const upperType of [StairType.STRAIGHT, StairType.SWITCHBACK]) {
+    assert.equal(straightBandOf({ lowerType, upperType }), straightBandOf({ lowerType, upperType, withUpperStair: false }), `${lowerType}×${upperType}`);
   }
 });
 

@@ -130,7 +130,7 @@ test('取りつき回転部の番号の段（entry/arrival）は回転部の高�
 // ---------------------------------------------------------------- 直進系
 
 test('STRAIGHT: 1 立体・矩形 1 枚・折れ目なし。base で 当該階天井 → end で 総蹴上の天端−dz', () => {
-  const { graph, stair } = straight(StairType.STRAIGHT, [0, 1000, 2000, 3000], [15]);
+  const { graph, stair } = straight(StairType.STRAIGHT, [0, 1000, 2000, 3000], [12]); // zTop(12)=4815.8 は上階天井 5200 より低い（頭打ちなし）
   const L = straightPlanLayout(stair, graph);
   const solids = solidsOf(stair, graph);
   assert.equal(solids.length, 1);
@@ -139,6 +139,19 @@ test('STRAIGHT: 1 立体・矩形 1 枚・折れ目なし。base で 当該階�
   const xm = (L.across.s0 + L.across.s1) / 2;
   near(zAtPt(solids[0], xm, L.run.base), DEFAULT_ROOM_CEILING_HEIGHT, 'base');
   near(zAtPt(solids[0], xm, L.run.end), zTop(L.totalSteps), 'end');
+});
+
+test('STRAIGHT（実物）: 総蹴上 15 の裏面は上階の天井（FL+既定 CH=5200）で頭打ち。斜面＋平らの 2 枚・折れ目 1 本・end は 5200', () => {
+  const { graph, stair } = straight(StairType.STRAIGHT, [0, 1000, 2000, 3000], [15]);
+  const L = straightPlanLayout(stair, graph);
+  const [sf] = solidsOf(stair, graph);
+  const zCap = FL + DEFAULT_ROOM_CEILING_HEIGHT;
+  assert.ok(zTop(L.totalSteps) > zCap, '前提: 頭打ちしない裏面は上階天井より高い');
+  assert.equal(sf.footprint.rects.length, 2);
+  assert.equal(sf.innerLines.length, 1);
+  const xm = (L.across.s0 + L.across.s1) / 2;
+  near(zAtPt(sf, xm, L.run.end), zCap, 'end は zCap');
+  near(zAtPt(sf, xm, sf.innerLines[0].points[1]), zCap, '折れ目で zCap に達する');
 });
 
 test('STRAIGHT_LANDING: 1 立体・矩形 3 枚。直進部1（base → 踊り場の高さ）／踊り場（平ら）／直進部2（踊り場の高さ → end）。折れ目は land1・land2 の 2 本', () => {
@@ -496,6 +509,49 @@ test('STRAIGHT_LANDING で区間が潰れていれば、その境の折れ目は
   // 直進部 2 が潰れる（land2 == end）: land2 の境だけ出さない
   const noRun2 = straightSoffitFromLayout({ ...L, run: { ...L.run, end: 1000 } }, ctx);
   assert.deepEqual(noRun2.innerLines.map(l => l.points[1]), [2000]);
+});
+
+// ---------------------------------------------------------------- 直進系の上階天井 zCap での頭打ち（E5-2 S2-2。U 字系 2026-10-16 規則と同じ）
+
+test('直進系 zCap: 斜面が zCap を越えるなら交点 capRun で斜面を終え、そこから end まで zCap の平ら＋折れ目 1 本', () => {
+  const L = { vertical: true, hasLanding: false, totalSteps: 12, across: { s0: 0, s1: 2000 }, run: { base: 4000, end: 0 } };
+  const zCap = 4000;
+  const s = straightSoffitFromLayout(L, { zStart: 2400, zTop, zCap });
+  const capRun = 4000 - 4000 * (zCap - 2400) / (zTop(12) - 2400);
+  assert.equal(s.footprint.rects.length, 2, '斜面＋平ら');
+  assert.equal(s.innerLines.length, 1);
+  near(s.innerLines[0].points[1], capRun, '折れ目は capRun');
+  near(s.zHi, zCap, '最高点は zCap で頭打ち');
+  near(s.zAt(1000, 4000), 2400, '上り口');
+  near(s.zAt(1000, capRun), zCap, '交点');
+  near(s.zAt(1000, 0), zCap, '到達側は zCap の平ら');
+  // zCap 省略（null）は従来どおり: 1 矩形・折れ目なし・最高点 zTop(12)
+  const plain = straightSoffitFromLayout(L, { zStart: 2400, zTop });
+  assert.equal(plain.footprint.rects.length, 1);
+  assert.equal(plain.innerLines, undefined);
+  near(plain.zHi, zTop(12), '頭打ちなし');
+  // zCap が最高点より高ければ従来と同じ
+  const high = straightSoffitFromLayout(L, { zStart: 2400, zTop, zCap: 9000 });
+  assert.deepEqual(high.footprint, plain.footprint);
+  assert.equal(high.innerLines, undefined);
+  near(high.zHi, plain.zHi, '高い zCap は頭打ちしない');
+});
+
+test('直進系 zCap（踊り場付）: 直進部 2 が zCap を越えるなら s3 の途中で頭打ち。踊り場の高さが zCap 以上なら直進部 2 は全体が平ら（防御・例外なし）', () => {
+  const L = { vertical: true, hasLanding: true, landingNumber: 6, totalSteps: 12, across: { s0: 0, s1: 2000 }, run: { base: 4000, land1: 2000, land2: 1000, end: 0 } };
+  const zCap = 4000;
+  const s = straightSoffitFromLayout(L, { zStart: 2400, zTop, zCap });
+  const capRun = 1000 - 1000 * (zCap - zTop(6)) / (zTop(12) - zTop(6));
+  assert.equal(s.footprint.rects.length, 4, '直進部 1・踊り場・直進部 2 の斜面・平ら');
+  assert.equal(s.innerLines.length, 3, 'land1・land2・capRun');
+  assert.deepEqual(s.innerLines.slice(0, 2).map(l => l.points[1]), [2000, 1000]);
+  near(s.innerLines[2].points[1], capRun, '折れ目は capRun');
+  near(s.zAt(1000, 0), zCap, '到達側は zCap');
+  near(s.zHi, zCap, '最高点は zCap');
+  const low = straightSoffitFromLayout(L, { zStart: 2400, zTop, zCap: zTop(6) - 10 });
+  assert.ok(low, '踊り場より低い zCap でも例外なく立体を返す');
+  near(low.zAt(1000, 0), zTop(6) - 10, '平ら');
+  assert.equal(low.footprint.rects.length, 3, '直進部 1・踊り場・平ら（斜面なし）');
 });
 
 // ---------------------------------------------------------------- 実物の layout（隔て壁の柱あり）× 向き × flip

@@ -11,8 +11,8 @@ import { RoomFeature } from '@core';
 import { roomBounds, worldToCell } from '../finish/gridCells.js';
 import { buildEnclosureCellToRoom, ADJACENT_SAMPLE_EPS } from '../finish/edgeClassify.js';
 import { stairPortEdges } from '../finish/stair/stairGeometry.js';
-import { U_TURN_TYPES } from '../finish/stair/stairPorts.js';
 import { floorHeightAbove, stairRiserOf } from '../finish/stair/stairDimensions.js';
+import { U_TURN_TYPES, STRAIGHT_TYPES } from '../finish/stair/stairPorts.js';
 import { stairSoffitAbove } from './space/stairSoffitCeiling.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { composeRoomFaces } from './elevationFaceList.js';
@@ -195,10 +195,13 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   // 到達しない（ASSUMED: 実データでの発生は未確認）。
   const layers = buildBandLayers(graph,
     upperGraph && floorHeight != null ? { above: [{ graph: upperGraph, floorHeightMm: floorHeight }] } : {});
-  // 階段の裏面（E5）: 上階に続きの木造階段（U字系）があれば、階段室の天井は階段の裏面（傾斜天井）。自階の層に
+  // 階段の裏面（E5）: 上階に続きの木造階段（U字系・直進系）があれば、階段室の天井は階段の裏面（傾斜天井）。自階の層に
   // layer.stairSoffit として載せ（spaceModel.js cellAt が層スタックの天井を決める）、同じ供給源を stairFaceSequence へも渡す
-  // （体裁の ceilingProfile とエンジンの cut.ceilClip を同じ節列から作る）。直進系は E5-2 で別途。
-  const stairSoffit = stair && U_TURN_TYPES.has(stair.type) && upperGraph && floorHeight != null
+  // （体裁の ceilingProfile とエンジンの cut.ceilClip を同じ節列から作る）。自階の階段（下階側）の型は U 字系・直進系だけ
+  // （L_TURN 等の帯は stairFaceSequence が歩行順面を持たない）。上階側の型の絞りは stairUndersideSurface（L_TURN 等は null）。
+  // 直進系は applyStairSoffitToCut の applied.ends（CH 寸法の鎖 stairChDimChains 用）を使わない: 直進系は鎖を通らず先頭面の左に
+  // 部屋の CH を 1 本描き、それは裏面の上り口の高さと一致する（Q3）。
+  const stairSoffit = stair && (U_TURN_TYPES.has(stair.type) || STRAIGHT_TYPES.has(stair.type)) && upperGraph && floorHeight != null
     ? stairSoffitAbove({
         stair, graph, upperGraph, floorHeightMm: floorHeight, riserOf: s => stairRiserOf(s, project, upperGraph.plane),
       })

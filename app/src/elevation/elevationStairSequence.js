@@ -1612,8 +1612,10 @@ function buildStraightFaceSequence(stair, faces, graph, opts) {
     // エンジンの cut.ceilClip を同じ区間列から）。直進系の既存の天井は上階天井の水平だけなので base は null・
     // 足元の外は cut.zRange.hiZ でつなぐ。裏面が無い・足元の外なら null で cut は不変（従来どおり）。
     // zRange は applyStairSoffitToCut が差し替える（共有オブジェクトは書き換えない）ので、shell より前に呼ぶ。
-    // openEnds は base が null の間は効かない（U 字系と同じ形で渡すだけ）。上り口の端の処理と CH 寸法の鎖（applied.ends）を
-    // 直進系で使うかは関門を開ける S2-3 で決める。
+    // openEnds は base が null の間は効かない（U 字系と同じ形で渡すだけ）。直進系は base を渡さない: 壁のない上り口の端の裏面は
+    // 階段室の CH（2400）で、base（直進系の既存の天井＝上階天井 5400）より低いので endSoffitAtOpenEndCeiling は何もしない
+    // （S2 の実測。test6/7）。CH 寸法の鎖（applied.ends）も使わない: 直進系は stairChDimChains を通らず、先頭面の左に
+    // 部屋の CH を 1 本描き、それが裏面の上り口の高さと一致する（Q3）。
     const openEnds = cut.face ? { left: cut.face.hasWallAtLocal0 === false, right: cut.face.hasWallAtLocalRun === false } : null;
     const applied = applyStairSoffitToCut(opts.stairSoffit ?? null, cut, null, cut.zRange.hiZ, { openEnds });
     const shell = buildFaceShell(cut, probeCtx, { wallFaces: faces });

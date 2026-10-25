@@ -207,20 +207,35 @@ function straightSolid(stair, graph, ctx) {
 }
 
 /** straightPlanLayout の戻り値 L から直進系の裏面の立体を作る（layout を模した入力で単体テストできるよう export）。 */
-export function straightSoffitFromLayout(L, { zStart, zTop }) {
+export function straightSoffitFromLayout(L, { zStart, zTop, zCap: ctxCap = null }) {
   const { run, across, vertical } = L;
   const asm = makeAssembler(vertical);
   const seg = (r0, r1, z0, z1) => asm.ramp(across.s0, across.s1, r0, r1, z0, z1);
+  // 上階の天井（zCap）より高い裏面は無い（U 字系 uTurnSoffitFromLayout と同じ規則）。最終の斜面 [r0→run.end] が zCap を越えるなら
+  // 交点 capRun で斜面を終え、そこから run.end まで zCap の平ら＋折れ目 1 本。斜面の開始が zCap 以上なら全体を平ら（防御）。
+  const zCap = Number.isFinite(ctxCap) ? ctxCap : Infinity;
+  const lastRamp = (r0, z0, zEnd) => {
+    if (zEnd > zCap + MIN_SPAN_MM && z0 < zCap - MIN_SPAN_MM) {
+      const capRun = r0 + (run.end - r0) * ((zCap - z0) / (zEnd - z0));
+      return { parts: [seg(r0, capRun, z0, zCap), seg(capRun, run.end, zCap, zCap)], capRun };
+    }
+    if (z0 >= zCap - MIN_SPAN_MM) return { parts: [seg(r0, run.end, zCap, zCap)], capRun: null };
+    return { parts: [seg(r0, run.end, z0, zEnd)], capRun: null };
+  };
   if (!L.hasLanding) {
     const zEnd = zTop(L.totalSteps);
-    return asm.solid([seg(run.base, run.end, zStart, zEnd)], [], [zStart, zEnd]);
+    const { parts, capRun } = lastRamp(run.base, zStart, zEnd);
+    const lines = parts[0] && parts[1] ? [asm.line(across.s0, capRun, across.s1, capRun)] : [];
+    return asm.solid(parts, lines, [zStart, Math.min(zEnd, zCap)]);
   }
   const zLand = zTop(L.landingNumber), zEnd = zTop(L.totalSteps);
-  const s1 = seg(run.base, run.land1, zStart, zLand), s2 = seg(run.land1, run.land2, zLand, zLand), s3 = seg(run.land2, run.end, zLand, zEnd);
+  const s1 = seg(run.base, run.land1, zStart, zLand), s2 = seg(run.land1, run.land2, zLand, zLand);
+  const { parts: [s3, s4], capRun } = lastRamp(run.land2, zLand, zEnd);
   const lines = []; // 隣り合う部品が両方あるときだけ境の線を出す（潰れた区間の境は出さない）
   if (s1 && s2) lines.push(asm.line(across.s0, run.land1, across.s1, run.land1));
   if (s2 && s3) lines.push(asm.line(across.s0, run.land2, across.s1, run.land2));
-  return asm.solid([s1, s2, s3], lines, [zStart, zLand, zEnd]);
+  if (s3 && s4) lines.push(asm.line(across.s0, capRun, across.s1, capRun));
+  return asm.solid([s1, s2, s3, s4 ?? null], lines, [zStart, zLand, Math.min(zEnd, zCap)]);
 }
 
 /**
