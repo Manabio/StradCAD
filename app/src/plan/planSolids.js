@@ -36,7 +36,7 @@
  *   既定 true。屋根が使う）。
  * @typedef {{graph: object|null, floorZMm: number, role: 'self'|'above'|'below', ceilZMm?: number}} SolidLayer
  */
-import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, RoomKind, SoffitOrientation } from '@core';
+import { DEFAULT_ROOM_CEILING_HEIGHT, CL_OVERLAP_TOL_MM, StructuralMaterialType, StairType, SoffitOrientation } from '@core';
 import { beamDepthMm } from '../structural/sectionCatalog.js';
 import { columnWrapSolids, wallConcealRange } from '../finish/columnWrap.js';
 import { kneeDropRecordsOnAxis, kneeDropZRangesAt, ceilingTopSectionsAlongWall, uniformCeilingTopMm, SPAN_OVERLAP_EPS } from '../finish/kneeDropWall.js';
@@ -58,7 +58,8 @@ import { roofSoffitJointLines } from '../finish/roof/roofSoffitJoints.js';
 import { normalizeRect, isValidRect, subtractRects } from './planGeometry.js';
 import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
 import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
-import { stairSoffitSolids, stairUndersideSurface, stairUnderReturnSoffit } from '../ceiling/stairSoffit.js';
+import { stairSoffitSolids, stairUnderReturnSoffit } from '../ceiling/stairSoffit.js';
+import { stairFootSurfaces, wallFootIntervals, wallFootTop } from '../ceiling/stairFootWallTop.js';
 
 /** 出力の kind 順（固定）。 */
 export const SOLID_KIND_ORDER = Object.freeze(['floor', 'wall', 'column', 'beam', 'roof', 'stairTread', 'ceiling', 'generic']);
@@ -295,23 +296,16 @@ function withJoinedCorners(v, views, footSurfaces = []) {
  * @returns {object[]} 裏面の面（footprint.rects＋zAt）
  */
 function wallFootSurfaces(layer, riserFor, upperZ, aboveGraph = null) {
-  const out = [];
-  for (const stair of layer.graph.stairs ?? []) {
-    if (layer.graph.roomMap?.get(stair.roomId)?.kind === RoomKind.EXTERIOR) continue; // 屋外階段の下に壁は立たない
-    const riser0 = riserFor(stair);
-    const floorHeight = upperZ !== undefined ? upperZ - layer.floorZMm
-      : (Number.isFinite(riser0) ? riser0 * Math.max(1, stair.totalSteps ?? 1) : null);
-    if (!Number.isFinite(floorHeight) || floorHeight <= 0) continue;
-    const riser = riserOf(stair, floorHeight);
-    if (!Number.isFinite(riser)) continue;
-    const surface = stairUndersideSurface({ stair, graph: layer.graph, riser, floorZMm: layer.floorZMm, aboveGraph, zStartMm: layer.floorZMm });
-    if (!surface?.footprint?.rects?.length) continue;
-    // 段の境界（各段の占有形の頂点の座標）。足元の区間をここで割り、傾斜に沿う長い壁が低い端の値へ全長下がらないようにする
-    const polys = treadFootprintsOf(layer, stair, riser, 'upper', aboveGraph).map(t => t.poly);
-    const stepCoords = i => [...new Set(polys.flatMap(p => p.filter((_, k) => k % 2 === i)))];
-    out.push({ ...surface, stepXs: stepCoords(0), stepYs: stepCoords(1) });
-  }
-  return out;
+  return stairFootSurfaces(layer.graph, {
+    floorHeightOf: stair => {
+      const riser0 = riserFor(stair);
+      return upperZ !== undefined ? upperZ - layer.floorZMm
+        : (Number.isFinite(riser0) ? riser0 * Math.max(1, stair.totalSteps ?? 1) : null);
+    },
+    floorZOf: () => layer.floorZMm,
+    aboveGraph,
+    treadPolysOf: (stair, riser) => treadFootprintsOf(layer, stair, riser, 'upper', aboveGraph).map(t => t.poly),
+  });
 }
 
 /**
@@ -332,51 +326,6 @@ function underReturnWallTops(layer, riserFor, upperZ, aboveGraph = null) {
     for (const w of found.walls) tops.set(w.id, found.wallTopZ);
   }
   return tops;
-}
-
-const FOOT_EPS_MM = 1e-6;
-
-/**
- * 壁（長さ方向 wLo〜wHi）が階段の足元（裏面の footprint.rects）の中にある区間 {lo, hi, surface}（長さ方向の座標）。
- * 対象は壁の軸（帯の中央）が足元の矩形の厚み方向の範囲の中にある壁だけ（軸が階段の下にある壁が階段下の壁。帯が端で
- * 少し重なるだけの階段室の外周壁などは対象外。QA の反例を受けたリード裁定 2026-10-17・ユーザー未確認）。
- */
-function wallFootIntervals(wall, cr, wLo, wHi, surfaces) {
-  const out = [];
-  // 壁の軸＝帯（wallConcealRange）の中央。偏芯した仕上げの薄壁は wall.axisValue が帯の端（通り芯）にあるので、
-  // 通り芯が足元の縁に乗っていても薄壁が下地の壁と別扱いにならないよう帯の中央で判定する
-  const axis = (cr.lo + cr.hi) / 2;
-  for (const surface of surfaces) {
-    for (const r of surface.footprint.rects) {
-      const [bLo, bHi, aLo, aHi] = wall.isVertical ? [r.x1, r.x2, r.y1, r.y2] : [r.y1, r.y2, r.x1, r.x2];
-      if (!(axis >= bLo - FOOT_EPS_MM && axis <= bHi + FOOT_EPS_MM)) continue; // 隣り合う足元の矩形の共有辺上の軸はどちらの矩形でも対象
-      const lo = Math.max(wLo, aLo), hi = Math.min(wHi, aHi);
-      if (hi - lo > FOOT_EPS_MM) out.push({ lo, hi, surface });
-    }
-  }
-  return out;
-}
-
-/**
- * 区間 [lo, hi] が足元の中なら、その区間の天端（長さ方向 lo・中央・hi × 厚み方向 帯の両端と中央の 3 点の裏面 zAt の最小）。
- * 足元の外（どの足元区間にも中点が入らない）は Infinity＝天井高のまま。区間は wallFootIntervals の端で割ってあるので、
- * 中点が入れば区間全体が足元の中。
- */
-function wallFootTop(wall, cr, lo, hi, foot) {
-  const mid = (lo + hi) / 2;
-  let top = Infinity;
-  for (const f of foot) {
-    if (!(mid > f.lo && mid < f.hi)) continue;
-    const { surface } = f;
-    for (const a of [lo, mid, hi]) {
-      for (const b of [cr.lo, (cr.lo + cr.hi) / 2, cr.hi]) {
-        const z = surface.zAt ? (wall.isVertical ? surface.zAt(b, a) : surface.zAt(a, b)) : surface.zLo;
-        if (Number.isFinite(z)) top = Math.min(top, z);
-      }
-    }
-  }
-  // 1e-6 mm に量子化する（補間の float 誤差で、同じ芯の下地の壁と仕上げの薄壁が別の高さになり mergeTouchingWalls で割れるのを防ぐ）
-  return Number.isFinite(top) ? Math.round(top * 1e6) / 1e6 : top;
 }
 
 /**
