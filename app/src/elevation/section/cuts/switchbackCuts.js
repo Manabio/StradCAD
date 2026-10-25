@@ -20,7 +20,8 @@
  */
 import { StructuralMaterialType, CenterLineType } from '@core';
 import { roomBounds } from '../../../finish/gridCells.js';
-import { makeFrame, cellsBeyondBreak } from '../../../finish/stair/stairGeometry.js';
+import { makeFrame, cellsBeyondBreak, uTurnPlanLayout } from '../../../finish/stair/stairGeometry.js';
+import { measureStairSpans } from '../../../finish/stair/stairClassify.js';
 import { stairUnderRoomsOf } from '../../../finish/stair/stairUnderRooms.js';
 import { U_TURN_TYPES } from '../../../finish/stair/stairPorts.js';
 import { stairHasPartition, isStairPartitionWall, stairPartitionLines } from '../../../finish/stair/stairPartition.js';
@@ -142,10 +143,11 @@ function mergeFaces(list, distOf = null) {
  * `planFrame`（stairContribution の frame＝平面の解決値の前縁 front・奥 back）を渡すと（U字系）、
  * 走行軸に直交する面の振り分けを平面の値で行い（前縁 front を越えて奥側なら踊り場・それ以外は上り口。
  * t の近さは L 字の階段室で崩れる）、上り口・踊り場の同定面を理想の位置（t=0・t=1）に最も近い面にする
- * （組の先頭ではなく）。out1/out2 は従来どおり組の先頭。省略時（直進系）は従来どおり t の近さ・組の先頭。
+ * （組の先頭ではなく）。上り口は平面の往路の基端 `baseA` に最も近い面（baseA が無ければ t=0）、
+ * out1/out2 は理想の幅位置（s=0・s=1）に最も近い面。省略時（直進系）は従来どおり t の近さ・組の先頭。
  * @param {object[]} faces
  * @param {object} f makeFrame の結果
- * @param {{frontA?:number, front:number, back:number}|null} [planFrame]
+ * @param {{baseA?:number, frontA?:number, front:number, back:number}|null} [planFrame]
  * @returns {{wEntry:object|null, wLanding:object|null, wOut1:object|null, wOut2:object|null}}
  */
 export function classifyFaces(faces, f, planFrame = null) {
@@ -181,18 +183,23 @@ export function classifyFaces(faces, f, planFrame = null) {
   // 同点で out1 へ入るため、同じ側に外壁側の面があるなら除く（mergeFaces が list[0] 基準なので、
   // 面の並び次第で faceValue が隔て板の面になりうる）。その側に外壁側の面が無い（部屋がレーン境界
   // までしか無い）ときは、境界の面がその側の面を務めるので残す。実壁でない面（hasRealWall:false。
-  // 階段下部屋の2a壁などの除外壁）は従来どおり（レーン境界の面を担う既存の挙動を変えない）。
+  // 階段下部屋の2a壁などの除外壁）はここでは除かない（組に残る）が、基準面は下の理想位置の選択で決まるので、
+  // 先頭に並んでいても外壁側の面があればそちらが wOut1/wOut2 になる（S10-7 S2。旧は先頭＝除外壁の面が基準になりえた）。
   for (const key of ['out1', 'out2']) {
     const outer = buckets[key].filter(face => !midFaces.has(face));
     if (outer.length > 0) buckets[key] = outer;
   }
-  // 同定面の基準は上り口（t=0）・踊り場（t=1）だけ理想の位置に最も近い面にする。out1/out2 は従来どおり先頭:
-  // 階段下部屋の除外壁（hasRealWall:false）の面が先頭に来る既存の構成（elevationStair.test.js 第2ラウンド項目3(1)）が
-  // 基準面の差で変わってしまうため（S2 で扱うか裁定が要る）。
+  // 同定面の基準は理想の位置に最も近い面にする（同点は並び順の先）。上り口は平面の往路の基端 baseA
+  // （planFrame.baseA。無ければ t=0）・踊り場は t=1・out1 は s=0（往路外側）・out2 は s=1（復路外側）。
+  // 面の faceValue は壁の仕上げ面（基端から一律の差）なので baseA との距離で比べてよい。
+  // 組に除外壁の面が先頭で並ぶ構成では等長でも wOut1 が変わる（外壁側の面になる。実データ 83 本は該当なし）。
   const distToT = target => (planFrame ? face => Math.abs(f.tOf(facePoint(face)) - target) : null);
+  const distToS = target => (planFrame ? face => Math.abs(f.sOf(facePoint(face)) - target) : null);
+  const baseA = planFrame?.baseA;
+  const distEntry = Number.isFinite(baseA) ? face => Math.abs(face.faceValue - baseA) : distToT(0);
   return {
-    wEntry: mergeFaces(buckets.entry, distToT(0)), wLanding: mergeFaces(buckets.landing, distToT(1)),
-    wOut1: mergeFaces(buckets.out1), wOut2: mergeFaces(buckets.out2),
+    wEntry: mergeFaces(buckets.entry, distEntry), wLanding: mergeFaces(buckets.landing, distToT(1)),
+    wOut1: mergeFaces(buckets.out1, distToS(0)), wOut2: mergeFaces(buckets.out2, distToS(1)),
   };
 }
 
@@ -330,6 +337,41 @@ export function reorientFace(face, desiredDirSign) {
   };
 }
 
+/**
+ * 往路側の外壁の面 wOut1 を、復路側の外壁の面 wOut2 の走行範囲との和集合へ広げた枠にする（不等長の L 字の
+ * 階段室。復路が長いと復路 flight が wOut1 の範囲からはみ出す）。面の同定（faceValue・axisCL・inward・letter・
+ * dirSign）は wOut1 のまま、lo/hi/run/originWorld を和集合にし、端の状態（hasWallAtLocal0/Run・edgeAtLocal0/Run・
+ * startCLId/endCLId・partitionCutAtLocal0/Run）は**その端に届く面**から取る（両方届くなら wOut1 を優先）。
+ * 範囲が wOut1 を超えない（wOut1 が和集合と同じ）ときは wOut1 をそのまま返す。
+ * @param {object} wOut1
+ * @param {object|null} wOut2
+ * @returns {object}
+ */
+export function unionLaneFace(wOut1, wOut2) {
+  if (!wOut1 || !wOut2) return wOut1;
+  const lo = Math.min(wOut1.lo, wOut2.lo), hi = Math.max(wOut1.hi, wOut2.hi);
+  if (lo === wOut1.lo && hi === wOut1.hi) return wOut1;
+  // 世界座標の端 'lo'/'hi' での面の状態（ローカル 0 側は dirSign>0 なら lo）
+  const stateAt = (face, end) => {
+    const atLocal0 = (end === 'lo') === (face.dirSign > 0);
+    const k = atLocal0 ? '0' : 'Run';
+    return {
+      wall: face[`hasWallAtLocal${k}`], edge: face[`edgeAtLocal${k}`], part: face[`partitionCutAtLocal${k}`],
+      cl: atLocal0 ? face.startCLId : face.endCLId,
+    };
+  };
+  const src = (end, v) => (Math.abs(wOut1[end] - v) <= GAP_EPS_MM ? wOut1 : wOut2);
+  const sLo = stateAt(src('lo', lo), 'lo'), sHi = stateAt(src('hi', hi), 'hi');
+  const [s0, sRun] = wOut1.dirSign > 0 ? [sLo, sHi] : [sHi, sLo];
+  return {
+    ...wOut1, lo, hi, run: hi - lo, originWorld: wOut1.dirSign > 0 ? lo : hi,
+    hasWallAtLocal0: s0.wall, hasWallAtLocalRun: sRun.wall,
+    edgeAtLocal0: s0.edge, edgeAtLocalRun: sRun.edge,
+    startCLId: s0.cl, endCLId: sRun.cl,
+    partitionCutAtLocal0: s0.part, partitionCutAtLocalRun: sRun.part,
+  };
+}
+
 // 面（originWorld・dirSign を持つ）のローカルx。elevationFigure.js の localXOf と同じ式
 // （section/ は面の体裁層を import しない。cut 版は sectionTypes.js の localXOf）。
 const localXOfFace = (face, worldCoord) => (worldCoord - face.originWorld) * face.dirSign;
@@ -422,7 +464,9 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // faces に依存しないので面の分類より先に求め、面の振り分け・同定にも平面の値（frame）を使う（L 字の階段室対応）。
   const contribution = stairContribution(stair, graph, floorHeight, opts.upperGraph ?? null);
   if (!contribution) return null; // 平面の枠が求まらない（以降は contribution を前提にする）
-  const rawFaces = classifyFaces(faces, f, contribution.frame);
+  // 上り口の面は平面の往路の基端 baseA に最も近い面（contribution.frame に baseA は無い。frame は deepEqual で固定されている）。
+  const planBaseA = uTurnPlanLayout(stair, graph)?.run.baseA;
+  const rawFaces = classifyFaces(faces, f, { ...contribution.frame, baseA: planBaseA });
   if (!rawFaces.wEntry || !rawFaces.wLanding || !rawFaces.wOut1 || !rawFaces.wOut2) return null;
 
   // WP-E5b: cut.line/viewSign/dirSignをW(t,s)座標系から独立に再導出する（switchbackCuts.js冒頭の
@@ -464,6 +508,11 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   const wLanding = reorientFace(rawFaces.wLanding, seq3DirSign);
   const wOut1    = reorientFace(rawFaces.wOut1, seq2DirSign);
   const wOut2    = reorientFace(rawFaces.wOut2, seq4DirSign);
+  // 不等長（往路・復路の長さが違う L 字の階段室）のときだけ、seq2/seq6 の枠（中心1の面と切断線の lo/hi）を往路・復路の
+  // 外壁の面の走行範囲の和集合にする（復路が長いと復路 flight が wOut1 の範囲を越える）。判定は実測の区間長。等長は wOut1 のまま。
+  const spans = measureStairSpans(stair, graph);
+  const unequalLanes = spans?.lengths?.length >= 3 && Math.abs(spans.lengths[0] - spans.lengths[2]) > GAP_EPS_MM;
+  const wMid = unequalLanes ? unionLaneFace(wOut1, wOut2) : wOut1;
   // 走行方向の面で踊り場がローカル x のどちらの端に来るか（'left'＝x=0 側／'right'＝run 側）。
   // 踊り場の壁 wLanding と上り口の壁 wEntry の世界座標の前後を、その面の dirSign で図の左右へ写す。
   const landingEndOn = face => ((wLanding.faceValue - wEntry.faceValue) * face.dirSign > 0 ? 'right' : 'left');
@@ -532,6 +581,8 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // （midOutFaceは`...wOut1`で枠を引き継ぐ）を見るのでwOut1、inboundLaneLineはseq5がwOut2の
   // 面を見るのでwOut2。
   const outboundLaneLine = { isVertical: wOut1.isVertical, axisValue: outboundLaneAcross, lo: wOut1.lo, hi: wOut1.hi };
+  // seq2 だけ中心1の面（枠は wMid）を見るので、枠を wMid に合わせた線（等長は outboundLaneLine と同値）
+  const seq2Line = { ...outboundLaneLine, lo: wMid.lo, hi: wMid.hi };
   const inboundLaneLine = { isVertical: wOut2.isVertical, axisValue: inboundLaneAcross, lo: wOut2.lo, hi: wOut2.hi };
   // sectionProbe.jsのisSightlineShape契約: (shape.axisCL.effectiveValue - line.axisValue) * viewSign > 0
   // が見えがかり候補——「s=1側が見える」viewSignは、line位置に関わらずwidthDirSignと同符号になる
@@ -586,7 +637,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
   // 下流が axisCL.id/.value/.effectiveValue を裸で読んでも落ちず、半壁厚|faceValue−effectiveValue|は0→既定になる。
   // S4・2026-10-23。以前はwOut1＝視線の背後の壁へ退避していた）。
   const midOutFace = {
-    ...wOut1,
+    ...wMid,
     axisCL: midCL ?? { id: null, effectiveValue: midAcross, value: midAcross }, faceValue: midCL ? midCL.effectiveValue : midAcross, inward: wOut2.inward,
     letter: letterOf(wOut1.isVertical, wOut2.inward),
     hasRealWall: !!wall, kind: 'stairMid',
@@ -616,7 +667,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       // 図の向き（西向き=D）と面の幾何（東向きの壁）が食い違い、面由来の寸法・向こう側判定が
       // 反対側を向いていた（実機「6」D1が、向こうに壁の無いはずの面で1500+2000に割れた）。
       // 中心1のCLが引けない構成ではレーン境界の位置の仮想の面（疑似 axisCL）になる（上のmidOutFace）。
-      seqNo: '2', face: midOutFace, line: outboundLaneLine, viewSign: towardS1, dirSign: seq2DirSign,
+      seqNo: '2', face: midOutFace, line: seq2Line, viewSign: towardS1, dirSign: seq2DirSign,
       landingEnd: landingEndOn(wOut1),
       // レーン境界に**自階の実壁**（隔て板）があればアキを標記しない——隔て板の上・端の先は同じ階段室の
       // 空気で、面の抜けではない（ユーザー裁定2026-10-14「バツは不要」）。隔て板は階段室の自階の壁なので
@@ -679,7 +730,7 @@ export function switchbackCuts(stair, faces, graph, opts = {}) {
       &&isStairPartitionWall(ownMidWall, stairPartitionLines(graph))) {
       // 面の幾何（inward・letter）は視線の逆＝往路外側の壁 wOut1 と同じ向き（seq2 の midOutFace は wOut2 の向き）
       const face6 = reorientFace({ ...midOutFace, inward: wOut1.inward, letter: letterOf(wOut1.isVertical, wOut1.inward) }, seq4DirSign);
-      const inboundLaneLineOnMid = { isVertical: wOut1.isVertical, axisValue: inboundLaneAcross, lo: wOut1.lo, hi: wOut1.hi };
+      const inboundLaneLineOnMid = { isVertical: wOut1.isVertical, axisValue: inboundLaneAcross, lo: wMid.lo, hi: wMid.hi };
       cuts.push(makeSectionCut({
         seqNo: '6', face: face6, line: inboundLaneLineOnMid, viewSign: towardS0, dirSign: seq4DirSign,
         landingEnd: landingEndOn(face6),

@@ -736,17 +736,22 @@ function makeHiddenWallStairFixtureWithUpper() {
   return { room, stair, under, graph, upperGraph };
 }
 
-test('【QA是正・第2ラウンド項目3(1)】buildStairBand: 除外壁のある端でも2F床の小口（上階FL断面線）がthickで1本引かれ、長さは上階壁の半壁厚（体裁の延長150mmを含まない）', () => {
+// 【S10-7 S2 で名前変更】元の規則（除外壁のある端の小口は 57.5・体裁の延長 150 を含まない）の足場は elevationFigure.test.js の
+// 『除外壁のある端の上階FLの小口線は thick で 1 本・長さ 57.5』へ移した。ここは「2a 壁の面は wOut1 にならない（外壁が wOut1）」の確認。
+test('【S10-7 S2】buildStairBand: 階段下部屋の2a壁（除外壁）の面は wOut1 にならず外壁が wOut1 になるので、中心1の面の端は壁のある端＝上階FLの小口線は出ず、体裁の延長 150 の長い線にもならない', () => {
   const { room, graph, stair, upperGraph } = makeHiddenWallStairFixtureWithUpper();
   const band = buildStairBand(room, graph, upperGraph, { stair, floorHeight: 2400 });
   const upperFloorZ = 2400; // floorHeight（upperGraph.plane.elevation）
   const edgeLines = band.primitives.filter(p =>
     p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -upperFloorZ);
-  assert.equal(edgeLines.length, 1,
-    `上階FL(z=${upperFloorZ})のthick線は1本だけのはず（実際:${edgeLines.length}本）`);
-  const len = Math.abs(edgeLines[0].x2 - edgeLines[0].x1);
-  assert.equal(len, 57.5,
-    `長さは上階壁の半壁厚(57.5mm)のはず（体裁の延長150mmを含めた207.5等であってはならない。実際:${len}）`);
+  // 旧は 1 本（長さ 57.5＝上階壁の半壁厚）。この fixture は階段下部屋の 2a 壁（x=1000・除外壁）の面が
+  // out1 の組の先頭に並び、それが wOut1（seq2/seq6 の枠・端の状態の供給元）になっていた。out1 の同定を理想位置（s=0）に
+  // 最も近い面にした結果、wOut1 は往路外側の壁（x=0。両端とも実壁）になり、中心1の面の端は「壁のある端」になる＝
+  // 上階壁のはり出し（y1000..1500）の小口は出ない。体裁の延長 150mm を含む長い thick 線が出ないことは従来どおり守る。
+  assert.equal(edgeLines.length, 0,
+    `上階FL(z=${upperFloorZ})のthick線は出ない（wOut1 が両端とも実壁の外壁になったため。実際:${edgeLines.length}本）`);
+  assert.ok(!band.primitives.some(p => p.type === 'line' && p.weight === 'thick' && p.y1 === p.y2 && p.y1 === -upperFloorZ
+    && Math.abs(p.x2 - p.x1) > 57.5), '体裁の延長150mmを含めた長い小口線にはならない');
 });
 
 // ---- buildSwitchbackSectionPrimitives（折返し階段の断面プロファイル。項目12。旧 elevationStairSection.test.js） ----

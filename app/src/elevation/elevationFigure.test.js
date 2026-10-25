@@ -3153,6 +3153,30 @@ test('【失敗系】buildFaceFigure: はり出しに立つ壁のCLが無けれ�
     '面の内側には引かない（上階の床は腰壁の断面の中）');
 });
 
+// 【QA是正2026-09 第2ラウンド項目3(1)・S10-7 S2 で足場を単体へ移した】除外壁（wallFilter で除外された実壁。階段下部屋の 2a 壁）が
+// 取り合う端（hasWallAtLocal0:false・hiddenWallAtLocal0:true）は「真に壁のない端」ではないので体裁の延長（150）を受けず、
+// 上階FLの小口線ははり出し量（上階壁の半壁厚 57.5）だけ。除外壁でない壁のない端は延長 150 を受けて位置が -207.5..-150 へずれる（長さは 57.5 のまま。対照）。
+// （buildStairBand 経由の fixture は S2 で wOut1 が外壁になり除外壁の端を持たなくなったため、面を直接渡す）
+test('buildFaceFigure: 除外壁のある端の上階FLの小口線は thick で 1 本・長さ 57.5（体裁の延長 150 を含まない）。除外壁でない壁のない端は位置だけ延長 150 ぶん外（-207.5..-150）へずれる', () => {
+  const CH = 2400;
+  const floorSegments = [{ loX: 0, hiX: 4000, floorDeltaMm: 0 }];
+  const lengthAt = face => {
+    const prims = buildFaceFigure(face, baseCtx({
+      ceilingHeight: CH, floorSegments, upperOverhang: { lo: 57.5, hi: 0 }, upperFloorZ: 3000,
+    }));
+    const fl = prims.filter(p => p.type === 'line' && p.y1 === -3000 && p.y2 === -3000);
+    return { fl, len: fl.length === 1 ? Math.abs(fl[0].x2 - fl[0].x1) : null, xs: fl.map(p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)]) };
+  };
+  const hidden = lengthAt(makeFace({ hasWallAtLocal0: false, hiddenWallAtLocal0: true }));
+  assert.equal(hidden.fl.length, 1, '小口線は 1 本');
+  assert.equal(hidden.fl[0].weight, 'thick');
+  assert.equal(hidden.len, 57.5, '除外壁の端は体裁の延長を受けず、はり出し量（半壁厚）だけ');
+  assert.deepEqual(hidden.xs, [[-57.5, 0]], '面の端（x=0）の外側 57.5');
+  // 対照: 除外壁でない壁のない端は、面の端が体裁の延長 150 ぶん外へ出るので小口線も 150 外側（-207.5..-150）にずれる
+  const open = lengthAt(makeFace({ hasWallAtLocal0: false }));
+  assert.deepEqual(open.xs, [[-207.5, -150]], '対照: 壁のない端は延長 150 を受け、小口線の位置が外へずれる');
+});
+
 // ---- ctx.upperFloorCutEnds: はり出しの外端に**切断壁（上階の腰壁）**が立つ端
 // （ユーザー裁定2026-09「「6」C 左端X3外側の2階腰壁断面は、2FL断面まで下りて外側に向かって
 // 張り出して終了、が正解」「「5」A1 X3外側の腰壁断面は…同」）。
