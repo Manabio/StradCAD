@@ -111,17 +111,22 @@ export function planSolidsLayerPrimitives({ graph, belowPeek = null, selfRiserOf
  * 下階は見ない（belowGraphOf は常に null）。
  * 最上の層は上階なので、蹴上（段の高さ・破れ先の位置）は上階の plane で解く aboveRiserOf（planSolids の「最上の層は opts.riserOf」）。
  * 自階の階段の蹴上は自階〜上階の階高から求まる。上階スラブの階段の破れ先は、下階（見上げでは自階）に同じ階段があるときだけ穴になる。
- * @param {{graph: object|null, abovePeek?: {graph: object|null, floorHeightMm: number}|null, aboveRiserOf?: (stair:object)=>number|null}} args
+ * abovePeek.aboveAboveGraph＝N+2 の graph（無ければ null）。上階の層の階段の裏面・足元の壁の天端・段の到達辺へ aboveGraphOf で渡す（無ければ Q3）。
+ * @param {{graph: object|null, abovePeek?: {graph: object|null, floorHeightMm: number, aboveAboveGraph?: object|null}|null, aboveRiserOf?: (stair:object)=>number|null}} args
  * @returns {import('./planSolids.js').Solid[]}
  */
 export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf = () => null }) {
   if (!graph) return [];
   const aboveGraph = abovePeek?.graph ?? null;
+  const aboveAboveGraph = abovePeek?.aboveAboveGraph ?? null;
   const layers = [{ graph, floorZMm: 0, role: 'self' }];
   if (aboveGraph && Number.isFinite(abovePeek.floorHeightMm) && abovePeek.floorHeightMm > 0) {
     layers.push({ graph: aboveGraph, floorZMm: abovePeek.floorHeightMm, role: 'above' });
   }
-  return planSolids(layers, { riserOf: aboveRiserOf, belowGraphOf: g => (g === aboveGraph ? graph : null), ceilings: true, lookUp: true });
+  return planSolids(layers, {
+    riserOf: aboveRiserOf, belowGraphOf: g => (g === aboveGraph ? graph : null),
+    aboveGraphOf: g => (g === aboveGraph ? aboveAboveGraph : null), ceilings: true, lookUp: true,
+  });
 }
 
 /**
@@ -185,7 +190,9 @@ export function planSolidsLayerCacheSpec(graph, belowPeek, direction = 'down') {
   const peek = belowPeek && belowPeek.activePlaneId === graph.plane.id ? belowPeek : null;
   // 見上げは天伏専用の切断高（裁定 2026-10-10）、見下げは平面の切断高
   const cutZ = direction === 'up' ? ceilingCutHeightMmOf(graph.plane) : planCutHeightMmOf(graph.plane);
-  const tail = `${graph.plane.id}:${cutZ}:${peek?.graph?.plane?.id ?? (belowPeek === undefined ? 'pending' : '-')}`;
+  // 見上げは N+2（peek.aboveAboveGraph）も入力なので鍵に入れる（見下げは N+2 を使わない＝鍵不変）
+  const aboveTail = direction === 'up' ? `:${peek?.aboveAboveGraph?.plane?.id ?? '-'}` : '';
+  const tail = `${graph.plane.id}:${cutZ}:${peek?.graph?.plane?.id ?? (belowPeek === undefined ? 'pending' : '-')}${aboveTail}`;
   return {
     home: peek?.graph ?? graph,
     key: direction === 'up' ? `planSection:up:${tail}` : `planSection:${tail}`,

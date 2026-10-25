@@ -43,8 +43,9 @@ export function norm(p) {
  * @param {object} graph 対象階
  * @param {object|null} upperGraph 直上階（無ければ null）
  * @param {object|null} lowerGraph 直下階（無ければ null）
+ * @param {object|null} [upperUpperGraph] 直上階のさらに上（N+2。階段帯の天井＝N+1 の階段の裏面の到達辺。省略は null＝Q3）
  */
-export function dumpFloorBands(project, graph, upperGraph, lowerGraph) {
+export function dumpFloorBands(project, graph, upperGraph, lowerGraph, upperUpperGraph = null) {
   const rows = [];
   const run = () => {
     const gridCLs = collectGridCLs(graph);
@@ -78,7 +79,7 @@ export function dumpFloorBands(project, graph, upperGraph, lowerGraph) {
         let band;
         if (room.feature === RoomFeature.STAIR) {
           kind = 'stair';
-          band = buildStairBand(room, graph, upperGraph, { ...base, stair: stairByRoomId.get(room.id) ?? null, lowerGraph });
+          band = buildStairBand(room, graph, upperGraph, { ...base, stair: stairByRoomId.get(room.id) ?? null, lowerGraph, upperUpperGraph });
         } else if (room.feature === RoomFeature.VOID) {
           kind = 'void';
           band = orphanVoids.includes(room)

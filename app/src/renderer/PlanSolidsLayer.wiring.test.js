@@ -60,7 +60,8 @@ test('【配線】planSolidsLayerFilter.js: 置き場・鍵・使う peek は pl
   assert.match(filter, /^\s*const peek = belowPeek && belowPeek\.activePlaneId === graph\.plane\.id \? belowPeek : null;\s*$/m);
   assert.match(filter, /^\s*const cutZ = direction === 'up' \? ceilingCutHeightMmOf\(graph\.plane\) : planCutHeightMmOf\(graph\.plane\);\s*$/m, '見上げは天伏専用の切断高、見下げは平面の切断高');
   assert.match(filter, /^\s*home: peek\?\.graph \?\? graph,\s*$/m);
-  assert.match(filter, /^\s*const tail = `\$\{graph\.plane\.id\}:\$\{cutZ\}:\$\{peek\?\.graph\?\.plane\?\.id \?\? \(belowPeek === undefined \? 'pending' : '-'\)\}`;\s*$/m);
+  assert.match(filter, /^\s*const aboveTail = direction === 'up' \? `:\$\{peek\?\.aboveAboveGraph\?\.plane\?\.id \?\? '-'\}` : '';\s*$/m, 'N+2 は見上げの鍵だけに入る');
+  assert.match(filter, /^\s*const tail = `\$\{graph\.plane\.id\}:\$\{cutZ\}:\$\{peek\?\.graph\?\.plane\?\.id \?\? \(belowPeek === undefined \? 'pending' : '-'\)\}\$\{aboveTail\}`;\s*$/m);
   assert.match(filter, /^\s*key: direction === 'up' \? `planSection:up:\$\{tail\}` : `planSection:\$\{tail\}`,\s*$/m, '見下げの鍵は planSection:…（従来のまま）、見上げは planSection:up:…');
   assert.match(filter, /^\s*if \(!graph\) return null;\s*$/m);
   assert.equal(count(filter, /belowPeek === undefined/g), 1, '未解決は鍵の pending だけで扱う（描かない分岐を持たない）');
@@ -260,7 +261,9 @@ test('【配線】planSolidsLayerFilter.js: 見下げは自階（FL=0）＋直�
   assert.equal(count(filter, /role: 'above'/g), 1, '上階の層は見上げの1か所だけ');
   assert.equal(count(filter, /layers\.push\(/g), 2);
   assert.match(filter, /^\s*return planSolids\(layers, \{ riserOf: selfRiserOf, belowGraphOf: g => \(g === graph \? belowGraph : null\) \}\);\s*$/m, '見下げは ceilings を渡さない（出力不変）');
-  assert.match(filter, /^\s*return planSolids\(layers, \{ riserOf: aboveRiserOf, belowGraphOf: g => \(g === aboveGraph \? graph : null\), ceilings: true, lookUp: true \}\);\s*$/m, '上階スラブの破れ先は自階に同じ階段があるとき穴。蹴上は上階の層（最上）。lookUp は見上げだけ（階段上の裏面。S13a）');
+  assert.match(filter, /^\s*riserOf: aboveRiserOf, belowGraphOf: g => \(g === aboveGraph \? graph : null\),\s*$/m, '上階スラブの破れ先は自階に同じ階段があるとき穴。蹴上は上階の層（最上）。lookUp は見上げだけ（階段上の裏面。S13a）');
+  assert.match(filter, /^\s*aboveGraphOf: g => \(g === aboveGraph \? aboveAboveGraph : null\), ceilings: true, lookUp: true,\s*$/m, 'N+2 は見上げの上階の層にだけ aboveGraphOf で渡す');
+  assert.equal(count(filter, /aboveGraphOf:/g), 1, 'aboveGraphOf を渡すのは見上げの1か所だけ（見下げは N+2 を使わない）');
   assert.equal(count(filter, /lookUp: true/g), 1, 'lookUp を渡すのは見上げの1か所だけ');
   assert.equal(count(filter, /ceilings: true/g), 1, '天井を足すのは見上げの1か所だけ');
 });

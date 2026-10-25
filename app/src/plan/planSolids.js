@@ -621,15 +621,15 @@ function stairTreadSolids(layer, riserFor, drawnStairs = null, skipStairs = null
  * 木造は踏面線を描かず階段裏の傾斜天井（stairSoffitSolids）を足す。鉄骨は踏面線を全段描く（stairTread の輪郭を有効にする）。
  * @returns {{soffits: Solid[], drawnTreads: Set<object>}}
  */
-function stairUndersideOf(layer, riserFor, belowGraph) {
+function stairUndersideOf(layer, riserFor, belowGraph, aboveGraph = null) {
   const soffits = [], drawnTreads = new Set();
   if (!belowGraph) return { soffits, drawnTreads };
   for (const stair of layer.graph.stairs ?? []) {
     const belowStair = matchingStairBelow(stair, layer.graph, belowGraph);
     if (!belowStair) continue;
     if (stairSoffitFinished(stair)) {
-      // aboveGraph は渡さない（N+2 は層スタックに無いため到達辺は Q3 に戻る＝既知の限界。.claude/ceiling-model.md）
-      soffits.push(...stairSoffitSolids({ stair, graph: layer.graph, belowStair, belowGraph, riser: riserFor(stair), floorZMm: layer.floorZMm }));
+      // aboveGraph＝この層の直上の graph（層スタックに無ければ opts.aboveGraphOf の N+2。無ければ到達辺は Q3）
+      soffits.push(...stairSoffitSolids({ stair, graph: layer.graph, belowStair, belowGraph, riser: riserFor(stair), floorZMm: layer.floorZMm, aboveGraph }));
     } else drawnTreads.add(stair);
   }
   return { soffits, drawnTreads };
@@ -924,7 +924,8 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  * source.id 順で続く。
  * graph が無い層は飛ばす。層が空・無ければ []。
  * @param {SolidLayer[]} layers  `elevation/section/sectionBandLayers.js buildBandLayers` の戻り値と同型
- * @param {{riserOf?: (stair:object)=>number|null, belowGraphOf?: (graph:object)=>object|null, extraSolids?: Solid[], ceilings?: boolean, lookUp?: boolean}} [opts]
+ * @param {{riserOf?: (stair:object)=>number|null, belowGraphOf?: (graph:object)=>object|null, aboveGraphOf?: (graph:object)=>object|null, extraSolids?: Solid[], ceilings?: boolean, lookUp?: boolean}} [opts]
+ *   aboveGraphOf＝層スタックに直上の層が無い層の「直上階」の graph（belowGraphOf の鏡像。見上げの最上の層＝N+1 の N+2。無ければ null＝到達辺は Q3）。直上の層があればそちらが優先。
  *   ceilings＝true のときだけ self の層に天井立体（kind 'ceiling'。見上げ用）を足す。省略（見下げ）の出力は不変。
  *   規則 V: 直上階の void・shaft の穴を天井面から引く。
  *   上階の層の梁は立体にしない（裁定 2026-10-18）。
@@ -962,12 +963,13 @@ export function planSolids(layers, opts = {}) {
     // 階段の蹴上は層ごとに1本: 直上の層があればその階高（直上の FL − この層の FL）から、無ければ（最上の層＝自階）opts.riserOf。
     // 明示指定（stair.riser）は riserOf が優先する。下階の層に自階の riserOf を使うと階高の違う階で段の高さがずれる
     const upperZ = floorZs.find(z => z > layer.floorZMm);
-    const upperGraph = upperZ !== undefined ? layers.find(l => l?.graph && l.floorZMm === upperZ)?.graph ?? null : null; // 直上の層の graph
+    // 直上の層の graph。層スタックに直上が無ければ opts.aboveGraphOf（belowGraphOf の鏡像。見上げの N+1 の層の N+2）
+    const upperGraph = upperZ !== undefined ? layers.find(l => l?.graph && l.floorZMm === upperZ)?.graph ?? null : opts.aboveGraphOf?.(layer.graph) ?? null;
     const riserForLayer = upperZ !== undefined
       ? stair => riserOf(stair, upperZ - layer.floorZMm)
       : stair => opts.riserOf?.(stair) ?? null;
     const underside = opts.lookUp === true && layer.role === 'above'
-      ? stairUndersideOf(layer, riserForLayer, opts.belowGraphOf?.(layer.graph) ?? null) : null;
+      ? stairUndersideOf(layer, riserForLayer, opts.belowGraphOf?.(layer.graph) ?? null, upperGraph) : null;
     const solids = [floorOverride.get(layer) ?? floorSolidOf(layer, opts), ...wallSolids(layer, lazyCellToRoom, wallFootSurfaces(layer, riserForLayer, upperZ, upperGraph), underReturnWallTops(layer, riserForLayer, upperZ, upperGraph)), ...columnSolids(layer),
       // 梁は天井より上にある（ユーザー裁定 2026-10-18）。上階の梁は上階 FL の下に 200 ほど垂れ、吹抜けの中では
       // 1 階の天井より上に見えるが、天伏には描かない（描かず・遮蔽にも入れない）

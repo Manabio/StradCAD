@@ -204,6 +204,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
   const stairSoffit = stair && (U_TURN_TYPES.has(stair.type) || STRAIGHT_TYPES.has(stair.type)) && upperGraph && floorHeight != null
     ? stairSoffitAbove({
         stair, graph, upperGraph, floorHeightMm: floorHeight, riserOf: s => stairRiserOf(s, project, upperGraph.plane),
+        aboveGraph: ctx.upperUpperGraph ?? null, // N+2（到達辺の上階）。呼び元が渡すまでは null＝Q3
       })
     : null;
   if (stairSoffit) {

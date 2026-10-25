@@ -21,17 +21,17 @@ const IN_RECT_EPS_MM = 1e-3; // 切断線の深さが矩形の辺にある場合
 
 /**
  * N の階段 stair の足元の上に、続きの木造階段が上階にあれば、その裏面の立体を返す。無ければ null。
- * @param {{stair:object, graph:object, upperGraph:object|null, floorHeightMm:number, riserOf:(s:object)=>number|null}} args
+ * @param {{stair:object, graph:object, upperGraph:object|null, floorHeightMm:number, riserOf:(s:object)=>number|null, aboveGraph?:object|null}} args
  *   riserOf … 上階の階段の蹴上（PlanSolidsLayer の aboveRiserOf と同じ式を呼び元が渡す）
+ *   aboveGraph … N+2（upperGraph の直上階）の graph。復路の到達辺を N+2 の床梁の外面＋仕上げに置く。省略・null は Q3
  * @returns {{solid:object, upperStairId:string, upperRoomId:string|null, floorStepMm:number}|null}
  */
-export function stairSoffitAbove({ stair, graph, upperGraph, floorHeightMm, riserOf }) {
+export function stairSoffitAbove({ stair, graph, upperGraph, floorHeightMm, riserOf, aboveGraph = null }) {
   if (!stair || !graph || !upperGraph || !Number.isFinite(floorHeightMm) || typeof riserOf !== 'function') return null;
   for (const t of upperGraph.stairs ?? []) {
     if (matchingStairBelow(t, upperGraph, graph) !== stair) continue;
-    // aboveGraph は渡さない（N+2 は層スタックに無いため到達辺は Q3 に戻る＝既知の限界）
     const [solid] = stairSoffitSolids({
-      stair: t, graph: upperGraph, belowStair: stair, belowGraph: graph, riser: riserOf(t), floorZMm: floorHeightMm,
+      stair: t, graph: upperGraph, belowStair: stair, belowGraph: graph, riser: riserOf(t), floorZMm: floorHeightMm, aboveGraph,
     });
     if (!solid) continue;
     const room = stair.roomId != null ? (graph.rooms ?? []).find(r => r.id === stair.roomId) : null;
