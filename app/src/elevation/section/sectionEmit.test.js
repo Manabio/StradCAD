@@ -1066,7 +1066,7 @@ test('【正常系・6B】emitColumns: ceilProfile を持つ切断でも、ス�
     '2FL床断面線が腰壁の手前の面からスラブ側へ張り出す');
 });
 
-test('【A-1・入力契約】emitColumns: 天井の段差の小口（ceilStepSlabSection）は ceilProfile を持つ切断だけに出る。ceilClip だけの切断への適用は S10-3-3 の裁定待ち', () => {
+test('【A-1・入力契約】emitColumns: 天井の段差の小口（ceilStepSlabSection）は ceilProfile を持つ切断にも ceilClip だけの切断にも出る（S10-3-3）', () => {
   // 2 列: a（天井 2400・低い側・上階の床 3000）| b（天井 5400）。境界 x=500 に z2400→3000 の小口が立つ。
   const columns = [
     { x0: 0, x1: 500, worldLo: 0, worldHi: 500, ceilZ: 2400, upperFloorZ: 3000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
@@ -1076,7 +1076,9 @@ test('【A-1・入力契約】emitColumns: 天井の段差の小口（ceilStepSl
   const riserOf = prims => vertAtX(prims, 500).filter(p =>
     Math.abs(Math.min(-p.y1, -p.y2) - 2400) < 1e-6 && Math.abs(Math.max(-p.y1, -p.y2) - 3000) < 1e-6);
   const clipOnly = emitColumns(columns, { ...base, ceilClip: [{ loX: 0, hiX: 1000, ceilZ: 5400 }] }, { ceilZ: 5400 });
-  assert.deepEqual(riserOf(clipOnly), [], 'ceilClip だけの切断には小口を出さない');
+  assert.equal(riserOf(clipOnly).length, 1, 'ceilClip だけの切断にも x=a.x1 に z2400→3000 の小口が1本');
+  const noCeil = emitColumns(columns.map(c => ({ ...c, ceilZ: null })), base, { ceilZ: 5400 });
+  assert.deepEqual(riserOf(noCeil), [], '失敗系: 列に天井が無い切断（ceilClip も ceilProfile も無い）には出ない');
   const profiled = emitColumns(columns, { ...base, ceilProfile: [{ loX: 0, hiX: 1000, ceilZ: 5400 }] }, { ceilZ: 5400 });
   const riser = riserOf(profiled);
   assert.equal(riser.length, 1, '対照: ceilProfile を持てば x=a.x1 に z2400→3000 の小口が1本');

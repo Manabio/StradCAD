@@ -511,8 +511,8 @@ function aboveCeilVisibleSpans(cut, xa, xb) {
 }
 
 function ceilStepSlabSection(columns, cut, ceilZ) {
-  // 入力契約: 区間ごとの天井（cut.ceilProfile）を持つ切断だけが対象（持たない切断は何も出さない）。
-  if (!(cut.ceilProfile?.length)) return [];
+  // 列の ceilZ/ceilEdge は ceilClipProfileOf(cut)（ceilProfile ?? ceilClip）由来なので、
+  // 階段帯の裏面（ceilClip）の段差にも同じ規則で走る（天井を持たない切断は列の ceilZ が null で何も出ない）。
   const prims = [];
   const range = cutDrawRange(cut);
   for (let i = 0; i + 1 < columns.length; i++) {
