@@ -1035,13 +1035,52 @@ test('【失敗系・QA指摘2026-09】emitColumns: 所有層が違う隣接slab
   assert.equal(flOut.weight, 'thick');
 });
 
-test('【失敗系・6B】emitColumns: ceilProfileを持つ帯（通常の部屋帯・吹抜け帯）ではスラブの輪郭のCUT化も中線の抑止も行わない（ceilStepSlabSectionの担当）', () => {
-  const cut = { ...faceEndCut, ceilProfile: [{ loX: -1000, hiX: 150, ceilZ: 5400 }] };
-  const prims = emitColumns(kneeAtFaceEndColumns(), cut, { ceilZ: 5400, openEndHi: true });
-  const ceil = horizAt(prims, 2400);
+// 見かけだけのスラブ（上階が吹抜けで床が無い＝upperFloorZ が null）の列／実在の床（upperFloorZ が z1）の列。
+const withUpperFloorZ = (columns, upperFloorZ) => columns.map(c => ({ ...c, upperFloorZ }));
+
+test('【失敗系・6B】emitColumns: スラブ列の upperFloorZ が null（見かけだけのスラブ）なら、ceilProfile の有無によらず床の取り合いのCUT化も中線の抑止も行わない', () => {
+  const columns = withUpperFloorZ(kneeAtFaceEndColumns(), null);
+  const withProfile = emitColumns(columns, { ...faceEndCut, ceilProfile: [{ loX: -1000, hiX: 150, ceilZ: 5400 }] },
+    { ceilZ: 5400, openEndHi: true });
+  const without = emitColumns(columns, faceEndCut, { ceilZ: 5400, openEndHi: true });
+  assert.deepEqual(withProfile, without, '規則は帯種別ではなく列のデータで決まる＝同じ結果');
+  const ceil = horizAt(withProfile, 2400);
   assert.ok(ceil.length > 0 && ceil.every(p => p.weight === 'medium'), `従来どおり中線のまま（実際:${JSON.stringify(ceil)}）`);
-  assert.deepEqual(vertAtX(prims, -57.5).filter(p => Math.max(-p.y1, -p.y2) <= 3000 + 1e-6), [],
+  assert.deepEqual(vertAtX(withProfile, -57.5).filter(p => Math.max(-p.y1, -p.y2) <= 3000 + 1e-6), [],
     'slabEdgeCutWallJunctionの立上りは出ない');
+});
+
+test('【正常系・6B】emitColumns: ceilProfile を持つ切断でも、スラブ上面が実在の床（upperFloorZ が z1）で壁の向こうが空気なら取り合いの3本が太線で出る', () => {
+  const columns = withUpperFloorZ(kneeAtFaceEndColumns(), 3000);
+  const cut = { ...faceEndCut, ceilProfile: [{ loX: -1000, hiX: 150, ceilZ: 5400 }] };
+  const prims = emitColumns(columns, cut, { ceilZ: 5400, openEndHi: true });
+  const ceil = horizAt(prims, 2400);
+  assert.equal(ceil.length, 1, `1F天井断面線は1本のはず（実際:${JSON.stringify(ceil)}）`);
+  assert.deepEqual([ceil[0].x1, ceil[0].x2].sort((a, b) => a - b), [-57.5, 150]);
+  assert.equal(ceil[0].weight, 'thick');
+  const riser = vertAtX(prims, -57.5).filter(p =>
+    Math.abs(Math.min(-p.y1, -p.y2) - 2400) < 1e-6 && Math.abs(Math.max(-p.y1, -p.y2) - 3000) < 1e-6);
+  assert.equal(riser.length, 1, '腰壁の向こう側の面に2FLへの立上りが1本');
+  assert.equal(riser[0].weight, 'thick');
+  assert.ok(horizAt(prims, 3000).some(p => p.weight === 'thick' && Math.min(p.x1, p.x2) === 57.5),
+    '2FL床断面線が腰壁の手前の面からスラブ側へ張り出す');
+});
+
+test('【A-1・入力契約】emitColumns: 天井の段差の小口（ceilStepSlabSection）は ceilProfile を持つ切断だけに出る。ceilClip だけの切断への適用は S10-3-3 の裁定待ち', () => {
+  // 2 列: a（天井 2400・低い側・上階の床 3000）| b（天井 5400）。境界 x=500 に z2400→3000 の小口が立つ。
+  const columns = [
+    { x0: 0, x1: 500, worldLo: 0, worldHi: 500, ceilZ: 2400, upperFloorZ: 3000, bands: [{ kind: 'open', z0: 0, z1: 2400 }] },
+    { x0: 500, x1: 1000, worldLo: 500, worldHi: 1000, ceilZ: 5400, upperFloorZ: null, bands: [{ kind: 'open', z0: 0, z1: 5400 }] },
+  ];
+  const base = makeCut({ zRange: { loZ: 0, hiZ: 5400 } });
+  const riserOf = prims => vertAtX(prims, 500).filter(p =>
+    Math.abs(Math.min(-p.y1, -p.y2) - 2400) < 1e-6 && Math.abs(Math.max(-p.y1, -p.y2) - 3000) < 1e-6);
+  const clipOnly = emitColumns(columns, { ...base, ceilClip: [{ loX: 0, hiX: 1000, ceilZ: 5400 }] }, { ceilZ: 5400 });
+  assert.deepEqual(riserOf(clipOnly), [], 'ceilClip だけの切断には小口を出さない');
+  const profiled = emitColumns(columns, { ...base, ceilProfile: [{ loX: 0, hiX: 1000, ceilZ: 5400 }] }, { ceilZ: 5400 });
+  const riser = riserOf(profiled);
+  assert.equal(riser.length, 1, '対照: ceilProfile を持てば x=a.x1 に z2400→3000 の小口が1本');
+  assert.equal(riser[0].weight, 'thick');
 });
 
 test('【失敗系・6B】emitColumns: 中線の抑止は走りのx範囲の外・上階床側(z1)には及ばない', () => {

@@ -449,7 +449,7 @@ test('【ceilClip ありでも帯の性格判定（探査窓 gate）は ceilProf
   assert.equal(stopped.layerRunWindows.get(layers[1]).hi, cut.line.hi, '対照: 同じ値の ceilProfile なら窓は広がらない');
 });
 
-test('【ceilClip ありでも帯の性格判定（emitColumns の ceilProfile 分岐）は ceilProfile 無しの挙動のまま】同じ列に対し ceilClip の有無で出力が変わらず、ceilProfile だと変わる', () => {
+test('【ceilClip ありでも emitColumns の出力は ceilProfile 無しのまま】同じ列に対し ceilClip の有無でも ceilProfile の有無でも出力が変わらない（帯種別の分岐は無い）', () => {
   // 手組みの列（階段帯と同じ＝slab が残る形。ceilClip で打ち切られた実列は slab が落ちるので性格判定の差が出ない）:
   // 壁の帯の上にスラブ[2400,3000]・スラブに切断壁が載って向こうが空気。
   const slab = { kind: 'slab', z0: 2400, z1: 3000, floorZ: 2400, ceilZ: 3000 };
@@ -464,9 +464,11 @@ test('【ceilClip ありでも帯の性格判定（emitColumns の ceilProfile �
   const ceilClip = [{ loX: 0, hiX: 1000, ceilZ: 2400 }];
   const plain = emitColumns(columns, base, {});
   assert.ok(plain.length > 0, '前提: 何かが描かれる');
-  assert.deepEqual(emitColumns(columns, { ...base, ceilClip }, {}), plain, 'ceilClip は emitColumns の分岐（slabEdgeCutWallJunction 側）を変えない');
-  assert.notDeepEqual(emitColumns(columns, { ...base, ceilProfile: ceilClip }, {}), plain,
-    '対照: ceilProfile なら ceilStepSlabSection 側へ分岐して出力が変わる（この構成で分岐を検出できる）');
+  assert.deepEqual(emitColumns(columns, { ...base, ceilClip }, {}), plain, 'ceilClip は emitColumns の出力（slabEdgeCutWallJunction 側）を変えない');
+  // S10-3: 帯種別の排他分岐は撤去済み（スラブ上面が実在の床かは列のデータで決まる）。この列は upperFloorZ 未定義＝素通しなので
+  // ceilProfile を持たせても同じ出力（列に天井の段差が無いので ceilStepSlabSection は何も足さない）。
+  assert.deepEqual(emitColumns(columns, { ...base, ceilProfile: ceilClip }, {}), plain,
+    'ceilProfile の有無で取り合いの担当が切り替わらない（列のデータで決まる）');
 });
 
 // ---- gateの鏡像: 下階の層（吹抜け帯）は「帯の床断面がその層の天井より下」の端だけ ----

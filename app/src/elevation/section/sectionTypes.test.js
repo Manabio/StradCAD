@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isSolidBand, solidRectsOf, slabJunctionOf, slabSolidRectsOf, zToY, ceilProfileEdgeAt, makeSectionCut } from './sectionTypes.js';
+import { isSolidBand, solidRectsOf, slabJunctionOf, slabSolidRectsOf, slabTopIsRealFloor, zToY, ceilProfileEdgeAt, makeSectionCut } from './sectionTypes.js';
 import { isStringer } from './sectionEmit.js';
 import { subtractRectsFromPrimitives } from '../elevationPrimitives.js';
 import { ElevationLineRole, weightForRole } from '../elevationStyle.js';
@@ -108,6 +108,79 @@ test('【失敗系】slabJunctionOf: スラブのz範囲の一部だけが空気
 test('【失敗系】slabJunctionOf: 壁がスラブの上に載っていなければ（z不一致）向こう側が空気でもnull', () => {
   const columns = withBeyond([{ kind: 'open', z0: 0, z1: 5400 }]);
   assert.equal(slabJunctionOf(columns, slabRunOf(), { x0: 0, x1: 60, band: { z0: 3200, z1: 3800 } }), null);
+});
+
+// ---- slabTopIsRealFloor（スラブの上面が実在する床か。slabJunctionOfの関門）----
+// スラブ側の列（x:-150..0）にだけ upperFloorZ / floorZ を載せる。向こう側は空気（open）。
+const withSlabCol = (extra, slabBand = {}) => [
+  { x0: -150, x1: 0, bands: [{ kind: 'slab', z0: 2400, z1: 3000, ...slabBand }], ...extra },
+  { x0: 0, x1: 60, bands: [{ kind: 'cut', z0: 3000, z1: 3800 }] },
+  { x0: 60, x1: 200, bands: [{ kind: 'open', z0: 0, z1: 5400 }] },
+];
+const hitOf = { nearX: 0, farX: 60, slabOnLoSide: true };
+// 関数が読むのは slabRun.band.floorZ（列の帯ではない）。列の帯と走りの帯に同じ floorZ を置く。
+const slabRunWith = slabBand => ({ x0: -150, x1: 0, band: { z0: 2400, z1: 3000, ...slabBand } });
+// 鏡像（スラブが壁の hi 側＝右）: 列 x:0..150 のスラブ・壁は x:-60..0。
+const mirrorCols = extra => [
+  { x0: -200, x1: -60, bands: [{ kind: 'open', z0: 0, z1: 5400 }] },
+  { x0: -60, x1: 0, bands: [{ kind: 'cut', z0: 3000, z1: 3800 }] },
+  { x0: 0, x1: 150, bands: [{ kind: 'slab', z0: 2400, z1: 3000 }], ...extra },
+];
+const mirrorRun = { x0: 0, x1: 150, band: { z0: 2400, z1: 3000 } };
+const mirrorHit = { nearX: 0, farX: -60, slabOnLoSide: false };
+
+test('slabTopIsRealFloor: 上階の実在の床（upperFloorZ が z1 と一致）なら立つ', () => {
+  const columns = withSlabCol({ upperFloorZ: 3000 });
+  assert.equal(slabTopIsRealFloor(columns, slabRunOf(), hitOf), true);
+  assert.deepEqual(slabJunctionOf(columns, slabRunOf(), cutRunOf()), hitOf);
+});
+
+test('slabTopIsRealFloor: 自階の床構造（slab 帯の floorZ が z1）なら upperFloorZ が null でも立つ（下階に階段がある階）', () => {
+  const columns = withSlabCol({ upperFloorZ: null }, { floorZ: 3000 });
+  const run = { x0: -150, x1: 0, band: { z0: 2400, z1: 3000, floorZ: 3000 } };
+  assert.equal(slabTopIsRealFloor(columns, run, hitOf), true);
+  assert.deepEqual(slabJunctionOf(columns, run, cutRunOf()), hitOf);
+});
+
+test('【失敗系】slabTopIsRealFloor: upperFloorZ が null の見かけだけのスラブは偽（小口は立たず、スラブも延びない）', () => {
+  const columns = withSlabCol({ upperFloorZ: null }, { floorZ: 0 });
+  const run = slabRunWith({ floorZ: 0 });
+  assert.equal(slabTopIsRealFloor(columns, run, hitOf), false);
+  assert.equal(slabJunctionOf(columns, run, cutRunOf()), null);
+  assert.equal(slabTopIsRealFloor(columns, slabRunOf(), hitOf), false, 'floorZ を持たない走りでも偽');
+  const rect = slabSolidRectsOf(columns).find(r => Math.abs(r.zLo - 2400) < 1);
+  assert.ok(Math.abs(rect.xHi - 0) < 1e-6, `延びずxHi=0のはず（実際:${rect.xHi}）`);
+});
+
+test('【失敗系】slabTopIsRealFloor: upperFloorZ が z1 と違う（3階の床）なら偽', () => {
+  const columns = withSlabCol({ upperFloorZ: 6000 }, { floorZ: 0 });
+  const run = slabRunWith({ floorZ: 0 });
+  assert.equal(slabTopIsRealFloor(columns, run, hitOf), false);
+  assert.equal(slabJunctionOf(columns, run, cutRunOf()), null);
+});
+
+test('【A-4】slabTopIsRealFloor: 条件 (3) は走りの band.floorZ で決まる（z1 と一致なら真・不一致／非有限なら偽。upperFloorZ は null）', () => {
+  const columns = withSlabCol({ upperFloorZ: null });
+  assert.equal(slabTopIsRealFloor(columns, slabRunWith({ floorZ: 3000 }), hitOf), true, '自階の床構造 floorZ≈z1');
+  assert.equal(slabTopIsRealFloor(columns, slabRunWith({ floorZ: 2400 }), hitOf), false, 'floorZ≠z1');
+  assert.equal(slabTopIsRealFloor(columns, slabRunWith({ floorZ: NaN }), hitOf), false, '非有限');
+});
+
+test('【A-T2】slabTopIsRealFloor: 鏡像（スラブが壁の hi 側＝slabOnLoSide=false）でも upperFloorZ が null なら偽・z1 なら真', () => {
+  assert.equal(slabTopIsRealFloor(mirrorCols({ upperFloorZ: null }), mirrorRun, mirrorHit), false);
+  assert.equal(slabTopIsRealFloor(mirrorCols({ upperFloorZ: 3000 }), mirrorRun, mirrorHit), true);
+  assert.equal(slabTopIsRealFloor(mirrorCols({ upperFloorZ: 6000 }), mirrorRun, mirrorHit), false, '3階の床');
+});
+
+test('【A-T3】slabTopIsRealFloor: 見る列が無い（走りの外・離れた壁）は true（従来どおり）。columns 未指定も true', () => {
+  const columns = withSlabCol({ upperFloorZ: null });
+  assert.equal(slabTopIsRealFloor(columns, slabRunOf(), { nearX: 500, farX: 560, slabOnLoSide: true }), true, '離れた壁');
+  assert.equal(slabTopIsRealFloor(columns, { x0: -1000, x1: -500, band: { z0: 2400, z1: 3000 } }, hitOf), true, '走りの外');
+  assert.equal(slabTopIsRealFloor(undefined, slabRunOf(), hitOf), true, 'columns なし');
+});
+
+test('slabTopIsRealFloor: upperFloorZ が未定義（手書きの列）は従来どおり素通し', () => {
+  assert.equal(slabTopIsRealFloor(withSlabCol({}), slabRunOf(), hitOf), true);
 });
 
 // ---- 正常系: isStringerのpolylineが farX で切られる ----

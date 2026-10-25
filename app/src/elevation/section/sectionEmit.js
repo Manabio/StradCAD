@@ -512,6 +512,8 @@ function aboveCeilVisibleSpans(cut, xa, xb) {
 }
 
 function ceilStepSlabSection(columns, cut, ceilZ) {
+  // 入力契約: 区間ごとの天井（cut.ceilProfile）を持つ切断だけが対象（持たない切断は何も出さない）。
+  if (!(cut.ceilProfile?.length)) return [];
   const prims = [];
   const range = cutDrawRange(cut);
   for (let i = 0; i + 1 < columns.length; i++) {
@@ -834,14 +836,13 @@ export function emitColumns(columns, cut, emitCtx = {}) {
   const nearestDistMm = nearestSightlineDistMm(columns);
   const sightRole = distMm => (Number.isFinite(distMm) && distMm <= nearestDistMm + GAP_EPS
     ? ElevationLineRole.SILHOUETTE : ElevationLineRole.DETAIL);
-  // 断面として輪郭を描くスラブ（`slabEdgeCutWallJunction`の対象。ceilProfileを持たない帯
-  // ＝階段帯だけ。持つ帯は`ceilStepSlabSection`が担当し、ここは従来どおり空）。
-  // ceilProfileを持つ帯（通常の部屋帯・吹抜け帯）は`ceilStepSlabSection`の担当で、ここは空
-  // （＝CUT化も中線の抑止もしない）。持たない帯（階段帯）だけ`slabEdgeCutWallJunction`が使う。
+  // 断面として輪郭を描くスラブ（`slabEdgeCutWallJunction`の対象）。帯種別では分けず、列のデータで
+  // 決まる: スラブの上面が実在の床（`slabTopIsRealFloor`）で、その上に切断壁が載り、壁の向こうが
+  // 探査済みの空気——天井の手前に見えている床構造だけが残る。天井の向こうに打ち切られて隠れている
+  // 床（天井の段差の低い側）は`ceilStepSlabSection`の担当で、スラブ帯自体が列から消えている。
   // **1回だけ計算して両方へ渡す**（条件式を2箇所に持つと「CUT線は出るのに中線を抑止しない」
   // 二重線が起きる）。
-  const hasCeilProfile = Array.isArray(cut.ceilProfile) && cut.ceilProfile.length > 0;
-  const sectionSlabs = hasCeilProfile ? [] : sectionSlabRunsOf(columns);
+  const sectionSlabs = sectionSlabRunsOf(columns);
   // 梁の断面（memberCut。U1b B3-1）: 帯の縁は引かず、梁が最初に現れる列で断面の輪郭（`sectionOutline`。H形・角形鋼管を含む）を
   // 1 回だけ重ねる（建具断面と同じ方式）。描く z 範囲はその梁の帯（全列）の和——部屋帯は天井断面で切られた帯（R4）、階段帯は
   // 天井より上も含む（emitLine が細破線へ降格）。切断線の帯の中を通る梁（along）は天地を DETAIL の線にまとめて引く（下の追記）。
@@ -896,17 +897,15 @@ export function emitColumns(columns, cut, emitCtx = {}) {
   prims.push(...memberFaceHorizontals(faceSegs, cut));
   prims.push(...cutWallTopEdges(columns, cut, ceilZ, emitCtx));
   prims.push(...cutWallTopBeyondSightlines(columns, cut, ceilZ));
-  // 上階の床との取り合いは、**区間ごとの天井を持つ帯（cut.ceilProfileあり＝通常の部屋帯・
-  // 吹抜け帯）は ceilStepSlabSection、持たない帯（階段帯）は slabEdgeCutWallJunction** が担当する。
-  // 両方走らせると同じ取り合いを別々の作図で二重に描く——前者は「天井の高さが変わる境界」を
-  // 起点に低い天井の側へ床の断面線を伸ばし、後者は「スラブ帯の外端」を起点に反対側へ伸ばす。
-  // 通常の部屋帯では 1F天井〜2FL が吹抜けの側でも天井懐(slab)に分類されるため、後者は床の
-  // 断面線を吹抜けの側（床が無い側）へ引いてしまう。
-  if (hasCeilProfile) {
-    prims.push(...ceilStepSlabSection(columns, cut, ceilZ));
-  } else {
-    prims.push(...slabEdgeCutWallJunction(columns, cut, ceilZ, sectionSlabs));
-  }
+  // 上階の床との取り合いの担当は列のデータで決まり、帯種別では分けない。スラブの帯が列の可視範囲に
+  // 残っている（天井の手前に見える床構造）なら slabEdgeCutWallJunction（スラブ帯の外端を起点に
+  // 反対側へ伸ばす）、天井の向こうに打ち切られて隠れている（隣り合う列の天井の段差・低い側に
+  // upperFloorZ）なら ceilStepSlabSection（天井の高さが変わる境界を起点に低い天井の側へ伸ばす）。
+  // 両者は列ごとに排他（天井の低い側の列はスラブ帯が消え、スラブ列は帯が z1 まで残る）。
+  // 見かけだけのスラブ（上階が吹抜けで upperFloorZ が null）には slabJunctionOf の関門
+  // （slabTopIsRealFloor）が小口を立てさせない。
+  prims.push(...ceilStepSlabSection(columns, cut, ceilZ));
+  prims.push(...slabEdgeCutWallJunction(columns, cut, ceilZ, sectionSlabs));
   return dedupeLines(prims);
 }
 

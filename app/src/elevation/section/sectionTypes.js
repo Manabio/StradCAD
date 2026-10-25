@@ -103,9 +103,10 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *   ceilClip（任意。E5の受け口）… `ceilProfile`と同形（断面ローカルx）の**打ち切り専用**の天井断面。
  *   列の分割（`withCeilProfileBreaks`）・列の天井（`ceilZ`/`ceilEdge`）・斜線を頭打ちにする列境界
  *   （`collectCutBreaks`の`slopeLevels`）だけが `ceilProfile ?? ceilClip` で読む。帯の性格判定
- *   （`slabEdgeCutWallJunction`/`ceilStepSlabSection`の分岐・`layerRunWindowsOf`のgate・`cellAt`の
- *   span分岐）は`ceilProfile`だけを見る——ceilProfileを付けると階段帯全体の性格が変わるため、
- *   階段帯が「天井の形だけ」を渡す口として分けた。`ceilProfile`があればそちらが勝つ。
+ *   （`ceilStepSlabSection`の入力契約・`layerRunWindowsOf`のgate・`cellAt`の span分岐）は`ceilProfile`
+ *   だけを見る——ceilProfileを付けると階段帯全体の性格が変わるため、階段帯が「天井の形だけ」を渡す口として
+ *   分けた。`ceilProfile`があればそちらが勝つ。上階の床との取り合いの担当は帯の種類ではなく列のデータで決まる
+ *   （`slabJunctionOf`の`slabTopIsRealFloor`。S10-3）。
  *   openGapMarks（任意）… false のときその切断の面にアキのバツ・「ア キ」を標記しない
  *   （`emitOpenGapMarks`が空配列を返す）。未指定・true は従来どおり標記する。折返し階段の
  *   踊り場前縁の切断（seq1/seq3。`switchbackCuts.js`）が false（ユーザー指示2026-10-07
@@ -328,6 +329,32 @@ function isAirBand(band) {
 }
 
 /**
+ * スラブの**上面が実在する床**か（`slabJunctionOf`の関門）。見かけだけのスラブ（上階が吹抜けで床が
+ * 無いのに、天井〜上階FLが天井懐のslab帯に分類される列。`upperFloorZ === null`）の上に壁が載っても、
+ * そこに床の小口は立たない（ユーザー確定「吹抜けには天井断面まで水平断面が無い」）。
+ * 見る列＝スラブの走りのうち`hit.nearX`にスラブ側から接する列。真になる条件（どれか）:
+ *  (1) `upperFloorZ`が未定義（手書きの列。`isAirBand`の「出自なしは見えがかり由来」と同じ慣例の素通し）
+ *  (2) `upperFloorZ`が有限で、スラブの上面z1と一致（上階の実在の床）
+ *  (3) スラブ帯の`floorZ`が有限で、z1と一致（自階の床構造。下階に階段がある階の床の取り合い）
+ * @param {SectionColumn[]} columns
+ * @param {{x0:number, x1:number, band:{z0:number,z1:number,floorZ?:number}}} slabRun
+ * @param {{nearX:number, slabOnLoSide:boolean}} hit
+ * @returns {boolean}
+ */
+export function slabTopIsRealFloor(columns, slabRun, hit) {
+  const c = (columns ?? []).find(col => (hit.slabOnLoSide
+    ? Math.abs(col.x1 - hit.nearX) < GAP_EPS
+    : Math.abs(col.x0 - hit.nearX) < GAP_EPS)
+    && col.x0 >= slabRun.x0 - GAP_EPS && col.x1 <= slabRun.x1 + GAP_EPS);
+  if (!c) return true; // 見る列が無い（手書き・走りの外）は従来どおり
+  if (c.upperFloorZ === undefined) return true;
+  const z1 = slabRun.band.z1;
+  if (Number.isFinite(c.upperFloorZ) && Math.abs(c.upperFloorZ - z1) < GAP_EPS) return true;
+  const floorZ = slabRun.band.floorZ;
+  return Number.isFinite(floorZ) && Math.abs(z1 - floorZ) < GAP_EPS;
+}
+
+/**
  * `cutRun`が`slabRun`の縁に立ち、その**向こう側に小口が見える**取り合い（`farXOfCutOnSlab`＋
  * 空気のgate）。立っていない・向こう側が空気でなければ`null`。
  *
@@ -354,6 +381,7 @@ function isAirBand(band) {
 export function slabJunctionOf(columns, slabRun, cutRun) {
   const hit = farXOfCutOnSlab(slabRun, cutRun);
   if (!hit) return null;
+  if (!slabTopIsRealFloor(columns, slabRun, hit)) return null;
   const beyond = (columns ?? []).find(c => (hit.slabOnLoSide
     ? Math.abs(c.x0 - hit.farX) < GAP_EPS
     : Math.abs(c.x1 - hit.farX) < GAP_EPS));
