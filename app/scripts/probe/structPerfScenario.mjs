@@ -90,9 +90,11 @@ async function enter() { comp = await runStructuralModeSetup(project.activeGraph
 async function switchFloorKeepingMode(name) { // App.jsx switchFloorKeepingMode と同じ順序
   await figureBindingManager.deactivate();                         // 脱出境界（floorSwitch:true＝他階反映なし）
   const cur = project.activePlane, next = planeByName(name);
-  await floorSwapManager.deactivate(cur, project.activeGraph);     // store.js switchFloor
-  runInAction(() => { project.activePlaneId = next.id; });
-  await floorSwapManager.activate(next, project.graphMap.get(next.id));
+  // store.js switchFloor と同じ: deactivate→activate は f5bb6fd（2026-09-27）で swap に統合された
+  //（次階の先読み→現階の保存＋安定確認→restore・clear・activePlaneId 切替を 1 つの runInAction で確定）。
+  await floorSwapManager.swap(cur, project.activeGraph, next, project.graphMap.get(next.id), () => {
+    project.activePlaneId = next.id;
+  });
   await enter();
 }
 async function exitToPlan() { // App.jsx runStructuralExitBoundary（壁の鍵照合refreshWallsAllFloorsは今回の論点外のため省く）

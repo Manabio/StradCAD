@@ -35,16 +35,18 @@
    "standard:6725,-6725:STEEL-SQ200x200x9.0:C1"
   ],
   "beams": [
+   "landing::H:-6725:-3000..0:STEEL-H200x100:LG1",
    "primary::H:-225:-3000..0:STEEL-H200x100:G1",
    "primary::H:-225:-8000..-3000:STEEL-H200x100:G1",
    "primary::H:-225:0..7000:STEEL-H200x100:G1",
-   "primary::H:-6775:-3000..0:STEEL-H200x100:G1",
    "primary::H:-6775:-8000..-3000:STEEL-H200x100:G1",
    "primary::H:-6775:0..7000:STEEL-H200x100:G1",
    "primary::V:-3140:-7000..0:STEEL-H200x100:G1",
    "primary::V:-7775:-7000..0:STEEL-H200x100:G1",
    "primary::V:140:-7000..0:STEEL-H200x100:G1",
-   "primary::V:6775:-7000..0:STEEL-H200x100:G1"
+   "primary::V:6775:-7000..0:STEEL-H200x100:G1",
+   "secondary::H:-2095:-3000..0:STEEL-H200x100:B1",
+   "secondary::H:-3405:-3000..0:STEEL-H200x100:B1"
   ]
  },
  "屋根": {
