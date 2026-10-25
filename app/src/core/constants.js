@@ -231,6 +231,21 @@ export const LINE_WEIGHT_MM = Object.freeze({
   thin:       0.13,
 });
 
+// SVG 図（建具モード姿図・構造断面図）のプリミティブ型。生成元は structural/sectionFigure/svgFigurePrimitives.js、
+// 消費側は AutoScaledFigure.jsx の renderPrimitive（case の並びはそれに合わせる）。展開図（Konva）の語彙とは別。
+export const SvgFigurePrimitiveType = Object.freeze({
+  RECT:       'rect',
+  CIRCLE:     'circle',
+  LINE:       'line',
+  POLYLINE:   'polyline',
+  H_SECTION:  'hSection',
+  TEXT:       'text',
+  ARROW:      'arrow',
+  AXIS_V:     'axisV',
+  LEVEL_LINE: 'levelLine',
+  DIM:        'dim',
+});
+
 // 寸法線の種別
 export const DimensionKind = Object.freeze({
   GRID:    'grid',     // 通り芯寸法
