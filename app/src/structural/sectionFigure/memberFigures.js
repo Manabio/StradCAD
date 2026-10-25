@@ -20,6 +20,9 @@ import { findSectionEntry, SectionShape, diaphragmProjection } from '../sectionC
 import { WOOD_FOUNDATION_SECTION_DEFAULTS, MAT_FOUNDATION } from '../structureRules.js';
 import { withLayoutId } from './layoutStudy.js';
 import { annotatedFigure } from './sectionGeometry.js';
+import {
+  rect, text, line, polyline, circleMm, circlePx, hSection, dim, levelLine, axisV,
+} from './svgFigurePrimitives.js';
 
 const STEEL_FILL = '#475569';
 // 偏芯量寸法線の端点マーカー（丸）の半径。縮尺に関わらずどの図でも同じ大きさに見えるようpx固定。
@@ -35,11 +38,6 @@ const GAP_BASE_PX = 22;
 function gapFor(extent) { return Math.max(extent * 0.4, 80); }
 function resolveGap(ctx, extent) { return ctx?.scale ? GAP_BASE_PX / ctx.scale : gapFor(extent); }
 
-// dim プリミティブ生成ヘルパー。
-function dim(dir, from, to, at, label, opts = {}) {
-  return { type: 'dim', dir, from, to, at, label, ...opts };
-}
-
 // 断面キー→エントリの読み出し口。ctx.resolveSection が指定されていればそれを使う（権威）。
 // 指定時は再フォールバックしない——null/undefined を返してもここで findSectionEntry へは落ちない。
 function sectionOf(ctx, sectionDefId) {
@@ -54,8 +52,8 @@ function endpointMarkers(dir, p1, p2, at) {
   const c1 = dir === 'h' ? { cx: p1, cy: at } : { cx: at, cy: p1 };
   const c2 = dir === 'h' ? { cx: p2, cy: at } : { cx: at, cy: p2 };
   return [
-    { type: 'circle', ...c1, rPx: MARKER_R_PX, fill: '#64748b' },
-    { type: 'circle', ...c2, rPx: MARKER_R_PX, fill: '#64748b' },
+    circlePx(c1.cx, c1.cy, MARKER_R_PX, { fill: '#64748b' }),
+    circlePx(c2.cx, c2.cy, MARKER_R_PX, { fill: '#64748b' }),
   ];
 }
 
@@ -92,7 +90,7 @@ function offsetDim(dir, from, to, at, opts = {}) {
 function diaphragmRect(section, cx, cy, w, h) {
   const e = diaphragmProjection(section);
   if (!e) return null;
-  return { e, rect: { type: 'rect', x: cx - w / 2 - e, y: cy - h / 2 - e, w: w + 2 * e, h: h + 2 * e, stroke: '#94a3b8' } };
+  return { e, rect: rect(cx - w / 2 - e, cy - h / 2 - e, w + 2 * e, h + 2 * e, { stroke: '#94a3b8' }) };
 }
 
 // 断面マスター（H形鋼/角形鋼管/丸/矩形）を、水平中心 cx・上端 topY に配置するプリミティブ群を返す。
@@ -100,19 +98,19 @@ function diaphragmRect(section, cx, cy, w, h) {
 function sectionShapePrims(section, cx, topY, fill = STEEL_FILL) {
   if (!section) {
     const w = 300, h = 300;
-    return { prims: [{ type: 'rect', x: cx - w / 2, y: topY, w, h, hatch: 'concrete' }], w, h };
+    return { prims: [rect(cx - w / 2, topY, w, h, { hatch: 'concrete' })], w, h };
   }
   const { shape, width: w, height: h, webThickness, flangeThickness, wallThickness } = section;
   const x = cx - w / 2;
   switch (shape) {
     case SectionShape.H_SECTION:
-      return { prims: [{ type: 'hSection', x, y: topY, w, h, web: webThickness, flange: flangeThickness, fill }], w, h };
+      return { prims: [hSection(x, topY, w, h, webThickness, flangeThickness, { fill })], w, h };
     case SectionShape.SQUARE_PIPE: {
       const t = wallThickness ?? 6;
       return {
         prims: [
-          { type: 'rect', x, y: topY, w, h, stroke: fill },
-          { type: 'rect', x: x + t, y: topY + t, w: w - 2 * t, h: h - 2 * t, stroke: fill },
+          rect(x, topY, w, h, { stroke: fill }),
+          rect(x + t, topY + t, w - 2 * t, h - 2 * t, { stroke: fill }),
         ], w, h,
       };
     }
@@ -120,16 +118,16 @@ function sectionShapePrims(section, cx, topY, fill = STEEL_FILL) {
       const t = wallThickness ?? 6;
       return {
         prims: [
-          { type: 'circle', cx, cy: topY + h / 2, r: w / 2, stroke: fill },
-          { type: 'circle', cx, cy: topY + h / 2, r: w / 2 - t, stroke: fill },
+          circleMm(cx, topY + h / 2, w / 2, { stroke: fill }),
+          circleMm(cx, topY + h / 2, w / 2 - t, { stroke: fill }),
         ], w, h,
       };
     }
     case SectionShape.ROUND:
-      return { prims: [{ type: 'circle', cx, cy: topY + h / 2, r: w / 2, fill: '#e2e8f0', stroke: '#334155' }], w, h };
+      return { prims: [circleMm(cx, topY + h / 2, w / 2, { fill: '#e2e8f0', stroke: '#334155' })], w, h };
     case SectionShape.RECT:
     default:
-      return { prims: [{ type: 'rect', x, y: topY, w, h, hatch: section.materialType === 'RC' ? 'concrete' : undefined }], w, h };
+      return { prims: [rect(x, topY, w, h, { hatch: section.materialType === 'RC' ? 'concrete' : undefined })], w, h };
   }
 }
 
@@ -139,12 +137,12 @@ function sectionShapePrims(section, cx, topY, fill = STEEL_FILL) {
 // 柱芯（通り芯⇄柱芯）は建物の出幅から派生する read-only 表示——編集は構造リスト柱の図の出幅で一本化する。
 function axisPrims(axisOffset, { dimY, labelY }) {
   const prims = [
-    { type: 'axisV', x: 0 },
-    { type: 'text', x: 0, y: labelY, text: '通り芯', anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:axisLabel' },
+    axisV(0),
+    text(0, labelY, '通り芯', { anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:axisLabel' }),
   ];
   if (axisOffset && axisOffset !== 0) {
-    prims.push({ type: 'axisV', x: axisOffset });
-    prims.push({ type: 'text', x: axisOffset, y: labelY, text: '柱芯', anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:columnAxisLabel' });
+    prims.push(axisV(axisOffset));
+    prims.push(text(axisOffset, labelY, '柱芯', { anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:columnAxisLabel' }));
     prims.push(...eccentricityDim('h', axisOffset, dimY));
   }
   return prims;
@@ -193,10 +191,10 @@ function columnFigure(col, ctx) {
   const dia = diaphragmRect(section, cx, cy, w, h);
   const prims = [...(dia ? [dia.rect] : []), ...sp];
   // 通り芯X（x=0・縦）／通り芯Y（y=0・横）
-  prims.push({ type: 'line', x1: 0, y1: axTop, x2: 0, y2: axBot, dash: 'center', stroke: '#94a3b8' });
-  prims.push({ type: 'line', x1: axLeft, y1: 0, x2: axRight, y2: 0, dash: 'center', stroke: '#94a3b8' });
-  prims.push({ type: 'text', x: 0, y: xLabelY, text: 'X', anchor: 'middle', size: 10, fill: '#94a3b8' });
-  prims.push({ type: 'text', x: yLabelX, y: 0, text: 'Y', anchor: 'end', baseline: 'middle', size: 10, fill: '#94a3b8' });
+  prims.push(line(0, axTop, 0, axBot, { dash: 'center', stroke: '#94a3b8' }));
+  prims.push(line(axLeft, 0, axRight, 0, { dash: 'center', stroke: '#94a3b8' }));
+  prims.push(text(0, xLabelY, 'X', { anchor: 'middle', size: 10, fill: '#94a3b8' }));
+  prims.push(text(yLabelX, 0, 'Y', { anchor: 'end', baseline: 'middle', size: 10, fill: '#94a3b8' }));
 
   if (ctx.rigid) {
     // 外側方向の符号は格納済みオフセットの符号から取る（出幅モデルは offset=s×(halfThis+出幅) で反転しない＝
@@ -207,12 +205,12 @@ function columnFigure(col, ctx) {
     const sY = Math.sign(offY);
     // 柱芯X／柱芯Y（オフセットが非0＝通り芯と異なるときだけ線・ラベルを出す）。
     if (offX !== 0) {
-      prims.push({ type: 'line', x1: offX, y1: axTop, x2: offX, y2: axBot, dash: 'center', stroke: '#64748b' });
-      prims.push({ type: 'text', x: offX, y: xLabelY, text: '柱芯', anchor: 'middle', size: 10, fill: '#64748b' });
+      prims.push(line(offX, axTop, offX, axBot, { dash: 'center', stroke: '#64748b' }));
+      prims.push(text(offX, xLabelY, '柱芯', { anchor: 'middle', size: 10, fill: '#64748b' }));
     }
     if (offY !== 0) {
-      prims.push({ type: 'line', x1: colAxisLeft, y1: offY, x2: axRight, y2: offY, dash: 'center', stroke: '#64748b' });
-      prims.push({ type: 'text', x: colAxisLabelX, y: offY, text: '柱芯', anchor: 'end', baseline: 'middle', size: 10, fill: '#64748b' });
+      prims.push(line(colAxisLeft, offY, axRight, offY, { dash: 'center', stroke: '#64748b' }));
+      prims.push(text(colAxisLabelX, offY, '柱芯', { anchor: 'end', baseline: 'middle', size: 10, fill: '#64748b' }));
     }
     // 偏芯量寸法（編集不可）：通り芯⇄柱芯の変位量。外側（断面から遠い側）。
     // 外面寸（出幅）寸法（編集可）：柱面⇄通り芯の距離（1構造×1通り芯。axis でX/Y＝対応CLを識別し、確定で
@@ -254,15 +252,15 @@ function beamAxisPrims(axisOffset, cx, { eccDimY, labelY }) {
   // 偏芯0（材芯＝柱芯）の内部寄り梁は断面中心の材芯1本のみ。
   if (cx === axisOffset) {
     return [
-      { type: 'axisV', x: cx, layoutId: 'axis:materialAxis' },
-      { type: 'text', x: cx, y: labelY, text: '材芯', anchor: 'middle', size: 10, fill: '#64748b', layoutId: 'text:materialAxisLabel' },
+      axisV(cx, { layoutId: 'axis:materialAxis' }),
+      text(cx, labelY, '材芯', { anchor: 'middle', size: 10, fill: '#64748b', layoutId: 'text:materialAxisLabel' }),
     ];
   }
   return [
-    { type: 'axisV', x: axisOffset, layoutId: 'axis:columnAxis' },
-    { type: 'text', x: axisOffset, y: labelY, text: '柱芯', anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:columnAxisLabel' },
-    { type: 'axisV', x: cx, layoutId: 'axis:materialAxis' },
-    { type: 'text', x: cx, y: labelY, text: '材芯', anchor: 'middle', size: 10, fill: '#64748b', layoutId: 'text:materialAxisLabel' },
+    axisV(axisOffset, { layoutId: 'axis:columnAxis' }),
+    text(axisOffset, labelY, '柱芯', { anchor: 'middle', size: 10, fill: '#94a3b8', layoutId: 'text:columnAxisLabel' }),
+    axisV(cx, { layoutId: 'axis:materialAxis' }),
+    text(cx, labelY, '材芯', { anchor: 'middle', size: 10, fill: '#64748b', layoutId: 'text:materialAxisLabel' }),
     // 柱芯⇄材芯の相互距離。編集オプションを付けない＝変更不可の静的テキスト寸法線。
     ...withLayoutId('dim:eccentricity', offsetDim('h', axisOffset, cx, eccDimY)),
   ];
@@ -279,7 +277,7 @@ function beamFigure(beam, ctx) {
     // 各要素に layoutId を付け、S造梁の配置検討モード（scope='steelBeam'）で個別に移動できるようにする。
     const prims = [
       ...beamAxisPrims(axisOffset, cx, { eccDimY: -g * 0.95, labelY: -g * 1.55 }),
-      ...withLayoutId('levelLine:FL', [{ type: 'levelLine', y: -g * 0.6, label: ctx.flLabel ?? 'FL' }]),
+      ...withLayoutId('levelLine:FL', [levelLine(-g * 0.6, { label: ctx.flLabel ?? 'FL' })]),
       ...withLayoutId('shape:section', sp),
       ...withLayoutId('dim:height', materialDim('v', 0, h, cx + w / 2, 1, section?.height ?? h, g)),
       ...withLayoutId('dim:width', materialDim('h', cx - w / 2, cx + w / 2, h, 1, section?.width ?? w, g)),
@@ -291,7 +289,7 @@ function beamFigure(beam, ctx) {
     return rcRectBeamFigure(beam, ctx, ctx.flLabel ?? 'FL');
   }
   // SRC造は次フェーズ（仕様上は空欄）
-  return { primitives: [{ type: 'text', x: 0, y: 0, text: 'SRC造 梁は次フェーズ', anchor: 'middle', size: 11 }] };
+  return { primitives: [text(0, 0, 'SRC造 梁は次フェーズ', { anchor: 'middle', size: 11 })] };
 }
 
 // RC矩形梁（梁成D・梁幅b は編集可能寸法。beamWidth/beamDepth）。
@@ -303,8 +301,8 @@ function rcRectBeamFigure(beam, ctx, levelLabel) {
   const g = resolveGap(ctx, Math.max(b, D));
   const prims = [
     ...beamAxisPrims(axisOffset, cx, { eccDimY: -g * 0.4, labelY: -g * 0.95 }),
-    { type: 'levelLine', y: 0, label: levelLabel },
-    { type: 'rect', x: cx - b / 2, y: 0, w: b, h: D, hatch: 'concrete' },
+    levelLine(0, { label: levelLabel }),
+    rect(cx - b / 2, 0, b, D, { hatch: 'concrete' }),
     // 梁成D・梁幅b は構造算定値のため read-only（手入力での大きさ変更は不可）。
     ...materialDim('v', 0, D, cx + b / 2, 1, D, g),
     ...materialDim('h', cx - b / 2, cx + b / 2, D, 1, b, g),
@@ -335,15 +333,15 @@ function foundationBeamFigure(beam, ctx) {
     const g = resolveGap(ctx, Math.max(b, D));
     const prims = [
       ...axisPrims(axisOffset, { dimY: -g * 0.35, labelY: -g * 0.95, clId: ctx.axisClId ?? ctx.axisClIdX }),
-      { type: 'levelLine', y: 0, label: ctx.glLabel ?? 'GL（FL）' },
-      { type: 'rect', x: cx - b / 2, y: 0, w: b, h: D, hatch: 'concrete' },
+      levelLine(0, { label: ctx.glLabel ?? 'GL（FL）' }),
+      rect(cx - b / 2, 0, b, D, { hatch: 'concrete' }),
       ...materialDim('v', 0, D, cx + b / 2, 1, D, g),
       ...materialDim('h', cx - b / 2, cx + b / 2, D, 1, b, g),
     ];
     if (ctx.footing) {
       const fw = ctx.footing.widthX ?? b * 1.7;
       const fh = ctx.footing.height ?? 250;
-      prims.push({ type: 'rect', x: cx - fw / 2, y: D, w: fw, h: fh, hatch: 'concrete' });
+      prims.push(rect(cx - fw / 2, D, fw, fh, { hatch: 'concrete' }));
       prims.push(...materialDim('h', cx - fw / 2, cx + fw / 2, D + fh, 1, fw, g));
     }
     return { primitives: prims };
@@ -363,9 +361,9 @@ function foundationBeamFigure(beam, ctx) {
   const prims = [
     ...axisPrims(axisOffset, { dimY: beamTopY - g * 0.4, labelY: beamTopY - g * 1.15, clId: ctx.axisClId ?? ctx.axisClIdX }),
     // GL：通り芯と同様に「線（datum）」と「ラベル」を分離し、それぞれ配置検討で独立移動できるようにする。
-    ...withLayoutId('levelLine:GL', [{ type: 'levelLine', y: glY, noLabel: true }]),
-    ...withLayoutId('text:glLabel', [{ type: 'text', x: beamLeft - g * 1.95, y: glY - 3, text: '▽ GL', anchor: 'end', size: 10, fill: '#94a3b8' }]),
-    ...withLayoutId('rect:beam', [{ type: 'rect', x: beamLeft, y: beamTopY, w: b, h: D, hatch: 'concrete' }]),
+    ...withLayoutId('levelLine:GL', [levelLine(glY, { noLabel: true })]),
+    ...withLayoutId('text:glLabel', [text(beamLeft - g * 1.95, glY - 3, '▽ GL', { anchor: 'end', size: 10, fill: '#94a3b8' })]),
+    ...withLayoutId('rect:beam', [rect(beamLeft, beamTopY, b, D, { hatch: 'concrete' })]),
     // 基礎梁幅 b（上・水平、編集可）。
     ...withLayoutId('dim:beamWidth', editMatDim('h', beamLeft, beamRight, beamTopY, -1, b, g * 0.6, null, 'beamWidth')),
     // 基礎梁成 D=立ち上がり+地中（左・外側、編集可）。
@@ -381,8 +379,8 @@ function foundationBeamFigure(beam, ctx) {
     const matTopY = glY - fs.matTopAboveGL;
     const matLen  = fs.baseWidth;
     const matRight = beamRight + matLen;
-    prims.push(...withLayoutId('rect:mat', [{ type: 'rect', x: beamRight, y: matTopY, w: matLen, h: fs.matThickness, hatch: 'concrete' }]));
-    prims.push(...withLayoutId('text:matLabel', [{ type: 'text', x: beamRight + matLen / 2, y: matTopY - g * 0.5, text: 'べた基礎', anchor: 'middle', size: 10, fill: '#94a3b8' }]));
+    prims.push(...withLayoutId('rect:mat', [rect(beamRight, matTopY, matLen, fs.matThickness, { hatch: 'concrete' })]));
+    prims.push(...withLayoutId('text:matLabel', [text(beamRight + matLen / 2, matTopY - g * 0.5, 'べた基礎', { anchor: 'middle', size: 10, fill: '#94a3b8' })]));
     // 天端（GL→マット天端、垂直・編集可）。
     prims.push(...withLayoutId('dim:matTopAboveGL', editMatDim('v', matTopY, glY, matRight, 1, fs.matTopAboveGL, g * 0.6, 'foundationSection', 'matTopAboveGL')));
     // べた基礎厚（垂直・編集可）。
@@ -392,7 +390,7 @@ function foundationBeamFigure(beam, ctx) {
     const baseLeft = beamLeft - fs.baseOverhang;
     const baseRight = baseLeft + fs.baseWidth;
     const baseY = beamBotY;
-    prims.push(...withLayoutId('rect:base', [{ type: 'rect', x: baseLeft, y: baseY, w: fs.baseWidth, h: fs.baseThickness, hatch: 'concrete' }]));
+    prims.push(...withLayoutId('rect:base', [rect(baseLeft, baseY, fs.baseWidth, fs.baseThickness, { hatch: 'concrete' })]));
     // ベース幅（下・水平、編集可）。
     prims.push(...withLayoutId('dim:baseWidth', editMatDim('h', baseLeft, baseRight, baseY + fs.baseThickness, 1, fs.baseWidth, g, 'foundationSection', 'baseWidth')));
     // ベース厚（右・垂直、編集可）。
@@ -401,8 +399,8 @@ function foundationBeamFigure(beam, ctx) {
     prims.push(...withLayoutId('dim:baseOverhang', editMatDim('h', baseLeft, beamLeft, baseY, -1, fs.baseOverhang, g * 0.5, 'foundationSection', 'baseOverhang')));
     if (ctx.foundationType === '土間コン') {
       // 土間コン：屋内側（右）にGLレベルの土間スラブ（模式・寸法なし）。
-      prims.push(...withLayoutId('rect:doma', [{ type: 'rect', x: beamRight, y: glY, w: fs.baseWidth, h: 120, hatch: 'concrete' }]));
-      prims.push(...withLayoutId('text:domaLabel', [{ type: 'text', x: beamRight + fs.baseWidth / 2, y: glY - g * 0.4, text: '土間コン', anchor: 'middle', size: 10, fill: '#94a3b8' }]));
+      prims.push(...withLayoutId('rect:doma', [rect(beamRight, glY, fs.baseWidth, 120, { hatch: 'concrete' })]));
+      prims.push(...withLayoutId('text:domaLabel', [text(beamRight + fs.baseWidth / 2, glY - g * 0.4, '土間コン', { anchor: 'middle', size: 10, fill: '#94a3b8' })]));
     }
   }
   return { primitives: prims };
@@ -419,8 +417,8 @@ function footingFigure(footing, ctx) {
   const g = resolveGap(ctx, Math.max(wx, fh));
   const prims = [
     ...axisPrims(axisOffset, { dimY: -g * 0.35, labelY: -g * 0.95, clId: ctx.axisClIdX }),
-    { type: 'levelLine', y: 0, label: ctx.glLabel ?? 'GL' },
-    { type: 'rect', x: cx - wx / 2, y: g * 0.6, w: wx, h: fh, hatch: 'concrete' },
+    levelLine(0, { label: ctx.glLabel ?? 'GL' }),
+    rect(cx - wx / 2, g * 0.6, wx, fh, { hatch: 'concrete' }),
     // 構造算定値のため read-only。
     ...materialDim('h', cx - wx / 2, cx + wx / 2, g * 0.6 + fh, 1, wx, g),
     ...materialDim('v', g * 0.6, g * 0.6 + fh, cx + wx / 2, 1, fh, g),
@@ -441,13 +439,13 @@ function columnBaseFigure(cb, ctx) {
   const planTopY = -(wy + g * 2.2);
   const prims = [
     // 構造算定値のため寸法はすべて read-only（手入力での大きさ変更は不可）。
-    { type: 'rect', x: cx - wx / 2, y: planTopY, w: wx, h: wy, hatch: 'concrete' },
+    rect(cx - wx / 2, planTopY, wx, wy, { hatch: 'concrete' }),
     ...materialDim('h', cx - wx / 2, cx + wx / 2, planTopY, -1, wx, g),
     ...materialDim('v', planTopY, planTopY + wy, cx + wx / 2, 1, wy, g),
     // 縦断面（下）: GL線＋ペデスタル箱。
     ...axisPrims(axisOffset, { dimY: -g * 0.35, labelY: -g * 0.95, clId: ctx.axisClIdX }),
-    { type: 'levelLine', y: 0, label: ctx.glLabel ?? 'GL' },
-    { type: 'rect', x: cx - wx / 2, y: 0, w: wx, h: depth, hatch: 'concrete' },
+    levelLine(0, { label: ctx.glLabel ?? 'GL' }),
+    rect(cx - wx / 2, 0, wx, depth, { hatch: 'concrete' }),
     ...materialDim('v', 0, depth, cx + wx / 2, 1, depth, g),
   ];
   return { primitives: prims };
@@ -459,13 +457,13 @@ function slabFigure(slab, ctx) {
   // 表示用の代表幅は厚みに比例（過大だと厚み寸法が相対的に小さく潰れるため）。
   const width = Math.max(t * 7, 700);
   const g = resolveGap(ctx, t * 3);
-  const prims = [{ type: 'levelLine', y: 0, label: ctx.flLabel ?? 'FL' }];
+  const prims = [levelLine(0, { label: ctx.flLabel ?? 'FL' })];
   if (slab.slabKind === 'deck') {
     prims.push(...deckProfile(-width / 2, 0, width, t));
     // 描画エリアの両矢印クリックで90度回転する「デッキ方向」。断面図では方向ラベルで示す。
-    prims.push({ type: 'text', x: 0, y: t + g * 0.95, text: `デッキ方向 ${slab.deckDirection === 'y' ? 'Y' : 'X'}`, anchor: 'middle', size: 11 });
+    prims.push(text(0, t + g * 0.95, `デッキ方向 ${slab.deckDirection === 'y' ? 'Y' : 'X'}`, { anchor: 'middle', size: 11 }));
   } else {
-    prims.push({ type: 'rect', x: -width / 2, y: 0, w: width, h: t, hatch: 'concrete' });
+    prims.push(rect(-width / 2, 0, width, t, { hatch: 'concrete' }));
   }
   prims.push(...materialDim('v', 0, t, width / 2, 1, t, g, { editable: true, fieldKey: 'thickness' }));
   return { primitives: prims };
@@ -482,7 +480,7 @@ function deckProfile(x0, topY, w, t) {
     pts.push([x, topY], [x + flat, topY + t], [x + pitch - flat, topY + t], [x + pitch, topY]);
   }
   pts.push([x0 + w, topY]);
-  return [{ type: 'polyline', points: pts, stroke: '#475569' }];
+  return [polyline(pts, { stroke: '#475569' })];
 }
 
 // --- 耐力壁（RC=厚帯／S造= なし・ブレース・鋼板壁） -------------------------------
@@ -494,28 +492,28 @@ function bearingWallFigure(wall, ctx = {}) {
   const g = resolveGap(ctx, t * 3);
   if (wt === 'none') {
     return { primitives: [
-      { type: 'axisV', x: 0, label: '壁芯' },
-      { type: 'text', x: 0, y: height / 2, text: 'なし', anchor: 'middle', size: 12 },
+      axisV(0, { label: '壁芯' }),
+      text(0, height / 2, 'なし', { anchor: 'middle', size: 12 }),
     ] };
   }
   if (wt === 'brace') {
     // ブレース（×型）はベイ立面の模式。壁芯を中心に表示用ベイ幅で描く。
     const bw = 900;
     return { primitives: [
-      { type: 'rect', x: -bw / 2, y: 0, w: bw, h: height, stroke: '#94a3b8' },
-      { type: 'line', x1: -bw / 2, y1: 0, x2: bw / 2, y2: height, stroke: '#475569', width: 1.5 },
-      { type: 'line', x1: bw / 2, y1: 0, x2: -bw / 2, y2: height, stroke: '#475569', width: 1.5 },
-      { type: 'text', x: 0, y: -g * 0.4, text: 'ブレース', anchor: 'middle', size: 11 },
+      rect(-bw / 2, 0, bw, height, { stroke: '#94a3b8' }),
+      line(-bw / 2, 0, bw / 2, height, { stroke: '#475569', width: 1.5 }),
+      line(bw / 2, 0, -bw / 2, height, { stroke: '#475569', width: 1.5 }),
+      text(0, -g * 0.4, 'ブレース', { anchor: 'middle', size: 11 }),
     ] };
   }
   // steelPlate（鋼板壁）= 鋼材塗り帯 / rc = コンクリートハッチ帯。いずれも厚指定。
   const isSteel = wt === 'steelPlate';
   return { primitives: [
-    { type: 'axisV', x: 0, label: '壁芯' },
-    { type: 'rect', x: -t / 2, y: 0, w: t, h: height, fill: isSteel ? STEEL_FILL : undefined, hatch: isSteel ? undefined : 'concrete' },
+    axisV(0, { label: '壁芯' }),
+    rect(-t / 2, 0, t, height, { fill: isSteel ? STEEL_FILL : undefined, hatch: isSteel ? undefined : 'concrete' }),
     ...materialDim('h', -t / 2, t / 2, 0, -1, t, g, { editable: true, fieldKey: 'thickness' }),
     // ラベルは寸法線の足と重ならないよう、寸法線よりさらに上に置く。
-    ...(isSteel ? [{ type: 'text', x: 0, y: -g * 1.3, text: '鋼板壁', anchor: 'middle', size: 11 }] : []),
+    ...(isSteel ? [text(0, -g * 1.3, '鋼板壁', { anchor: 'middle', size: 11 })] : []),
   ] };
 }
 
