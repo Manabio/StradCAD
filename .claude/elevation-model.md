@@ -60,7 +60,7 @@
 - `dedupeCoincidentLines`（共線の重複除去）と`joinLinesAtMemberEdges`（部材の端で割れた共線の連結）は帯を確定する`finalizeBand`の整理として残す。`withFlatLineSpans`・`clipContentAtHiddenEnds`は体裁／面の端の話。
 - `stairOccluderRects`はテスト専用の参照実装（本番は`stairFaceOccluderRects`）。
 
-**別課題**: `sectionEmit.js`の帯種別排他分岐（`ceilProfile`の有無で`ceilStepSlabSection`／`slabEdgeCutWallJunction`を排他選択。`cut.ceilClip`は打ち切り専用で帯の性格の判定には使わない。E5-2／E5-3が済み全階段cutが`ceilClip`を持ってから再評価）／N+2層の階段裏（`space/stairSoffitCeiling.js`。受け口`stairSoffitSolids({aboveGraph})`はあり配線が無い）／共通経路に残る階段帯専用の`cut.stairCut`判定（`sectionContent.js`2箇所・`sectionHits.js`・`buildColumns`の farStair。帯の違いを opts の注入値へ寄せる再設計は未着手。増やさない）。
+**別課題**: `sectionEmit.js`の帯種別排他分岐（`ceilProfile`の有無で`ceilStepSlabSection`／`slabEdgeCutWallJunction`を排他選択。`cut.ceilClip`は打ち切り専用で帯の性格の判定には使わない。前提だったE5-2は2026-10-25に済み、E5-3は`cellsAlong`側の話でcutに`ceilClip`を足さないので、再評価の前提は満たした＝S10-3で扱う）／N+2層の階段裏（`space/stairSoffitCeiling.js`。受け口`stairSoffitSolids({aboveGraph})`はあり配線が無い）／共通経路に残る階段帯専用の`cut.stairCut`判定（`sectionContent.js`2箇所・`sectionHits.js`・`buildColumns`の farStair。帯の違いを opts の注入値へ寄せる再設計は未着手。増やさない）。
 **保留（実データが無く要望待ち）**: 3層以上つながる吹抜け・1帯に3層を積む図（入口は N 層対応済み）。
 
 ### 視覚回帰ゲート
@@ -452,13 +452,14 @@ canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のp
 - 帯の縦CH寸法線を2FLで分割: `layoutBandFaces`のi===0ブロックに`faceOverride`経由の`chDimSplitAbsYs`フック。SWITCHBACKのseq1は`[floorHeight]`（=2FL）を設定し左CH寸法が「踊り場床→2FL」「2FL→2F天井」の2本になる。`buildFaceFigure`の`ctx.floorSpanX?:{lo,hi}`（腰壁越しに向こう側の床・天井断面線を壁位置で打ち切るフック）は透過の準備だけで往復間の壁・踊り場壁が腰壁のときの値の供給は未接続。
 
 ### 階段帯の天井は階段の裏面（E5）
-U字系（SWITCHBACK/WINDING）の木造で、直上階に同じ足元の続き階段があるときだけ。供給源は`space/stairSoffitCeiling.js`（式は`ceiling/stairSoffit.js`の`stairSoffitSolids`が唯一。天伏の見上げと同じ述語`matchingStairBelow`・同じ引数なので同じ立体）。`buildStairBand`が自階の層に`layer.stairSoffit`を載せ、**評価する奥行きは切断線`cut.line.axisValue`**。
+木造で、直上階に同じ足元の続き階段があるときだけ（U字系・直進系とも。E5-2＝2026-10-25。型の絞りは`buildStairBand`の関門ではなく`stairUndersideSurface`がL_TURN等でnullを返すことで足りる）。供給源は`space/stairSoffitCeiling.js`（式は`ceiling/stairSoffit.js`の`stairSoffitSolids`が唯一。天伏の見上げと同じ述語`matchingStairBelow`・同じ引数なので同じ立体）。`buildStairBand`が自階の層に`layer.stairSoffit`を載せ、**評価する奥行きは切断線`cut.line.axisValue`**。
 - **体裁の`ceilingProfile`とエンジンの`cut.ceilClip`は同じ区間列から作る**（`applyStairSoffitToCut`。節＝切断線の深さを含む矩形の辺・折れ目〔前縁・対角線・x=pv〕との交点・足元の途切れ。節の間は厳密に直線）。足元の外・途切れは各seqの既存の天井（seq2/4=NのCH／上階天井の階段状、seq1/3/5=上階天井）でつなぎ、境目で値が違えば垂直の段。値は部屋FL基準のch（`cellAt`だけが`floorZFor`〔床段差込み〕に足す＝供給源で足すと二重）。`cellAt`は階段室のセルだけ層スタックの天井を裏面にする（列の幅の最大）。切断壁の天端と笠木の下線（`cutWallTopEdges`）は壁の連なりが覆う列の打ち切り値`col.ceilZ`の最小と比べて決める（帯全体の`hiZ`と比べると、列で裏面に打ち切られた壁に天端が二重に出る）。
 - **隔て板（往復レーンの境界の壁。上階の隔て板の材の範囲＝`partitionStripOf`）の帯をはさんで裏面の高さが違う幅方向の切断（seq1/seq3）では、低い側の天井を帯の向こう面まで水平に延ばし、立下りを高い側の面に置く**（`extendLowerCeilingAcrossStrip`。仕上げ材は隔て板を包むので断面は中心から部屋側に寄る。切断線と平行な壁には掛けない）。**壁のない端（上り口。`face.hasWallAtLocal0/Run`=false）で裏面の端がその端の既存の天井（base。seq2/4だけが持つ）より高いときは、斜めの天井断面を端から隔て板の壁厚/2（57.5）入ったbaseの高さの点で終え、端まではbaseの水平**（`endSoffitAtOpenEndCeiling`。入りは復路下の仕上げ空間の天井線と同じ量。幾何の交点ではなく置き換え）。
 - **隔て板が上階へ続く切断（seq1。木造U字階段の最上階以外。`cut.continuousWallAcross`）では隔て板は床から天井断面線までの1本の断面**（`sectionEngine.js`の`mergeContinuousWallBands`が自階と上階の壁の帯を合併し、継ぎ目の天端・笠木・天井裏の帯を落とす。段違い天井の境界に立つ壁の見えない側の縁も低い側の天井〔列の打ち切り値〕より下は描く）。切断線が内部を横切るflightの本体（裏面〜切られている段板の天端。`crossingFlightBodySections`）は裏面の切断を太線で描き、本体に接する壁の縁はその区間を空ける（`clipWallEdgesInsideStairBodies`）。木造階段の最上階は除く（従来どおり天板〔隔て板の天端〕の見え掛かり）。
 - **空中を横断する梁の見えがかりは、その位置の天井より梁の下端が上なら描かない**（`opts.ceilZAtWorld`。供給源は階段室の裏面だけ。裏面の無い階段帯〔鉄骨・上階が吹抜け〕は部屋のCHで判定しない。評価点は梁の芯から切断線側へ1mm寄せる。**判定は区間の全か無かではなく、天井の状態が変わる所で区間を割り天井より上の部分だけ描かない**＝`splitRangeByPredicate`。裏面の天井は復路レーンの上だけで、両レーンにまたがる1本の梁を3点で見ると復路の上まで全長が出る）。
 - **壁のない上り口の辺を見るseq1（`face.hasRealWall===false`。往復レーンの境界の仮想の面は含めない）の隠れ線と開口**: 切断線が横切るflightの矩形（`flightHiddenRects`）のうち、**天端が切断面にある＝視線の向きへ下るflight（蹴上材を裏から見る）だけが切断面上の線も隠す**（`planeHides`。壁の断面の縁・構造梁の見えがかりと、図側の床線・面端の縦線〔`elevationStair.js`が`entry.occludedRects`で同じ矩形を当てる〕を細線破線に。上辺＝段板の断面線・踊り場の床線は見えている）。初段が切断面にあるflightと内部を横切るflightは向こうの線だけを隠す。面の向こうの部屋（ホール）へ開く区間には、向こうの部屋の天井の縁（中線）と床〜その天井のアキのバツ（`openingPanelPrimitives`）を描く。**辺の上に立つ壁の帯（壁の軸CLが面の軸CLと同じ。上階の層も同じ述語）は、列ごとに床〜天井から差し引いた残りだけが開口**（フルハイトなら無し・腰壁なら上・垂れ壁なら下）。向こうの部屋があるかだけで決めると上階の辺にフルハイトの壁がある区間にもバツが出る。壁の軸で見るのは、向こうの部屋の奥の壁を開口の閉じと取り違えないため。「踊り場前縁・回転部にアキは標記しない」は壁のある辺を見る面の話で、壁のない辺の開口には標記する。
 - `cut.zRange.hiZ`は裏面の最高点まで広げる（**頭打ちしない**。復路の到達側は上階天井を超える）。CH寸法は踊り場側の端の上端だけその端の裏面の実測値（四捨五入）。
+- **直進系**（E5-2）: `buildStraightFaceSequence`が各cutに同じ`applyStairSoffitToCut`を通す（baseはnull＝直進系の既存の天井は上階天井の水平だけ。足元の外は`cut.zRange.hiZ`でつなぐ）。裏面の最終rampはU字系と同じ規則で上階天井zCapで頭打ち（`straightSoffitFromLayout`。交点で斜面を終え折れ目1本、以降は平ら。見上げも同じ立体）。seq1（上り口の壁の面）の天井は階段室のCHまで下がり、その上はceilClipで打ち切られる（帯のはね出し150が消え端の壁は面端の縦線＝太線になる。裁定R2）。U字系専用の後処理（隔て板の帯・soffitEnds・CH寸法の鎖）は通さない＝先頭面の左のCH寸法（部屋のCH）が裏面の上り口の高さと一致する。
 
 ### 復路下の仕上げ空間
 木造階段の復路の下は仕上げられた空間で、天伏ではその天井は復路の裏面（`.claude/data-model.md`「復路下の壁」）。復路レーンを縦断するseq5で、その階段に復路下の壁（`stairUnderReturnLines`/`isStairUnderReturnWall`）が立ち切断線がその壁と交差するなら、壁の踊り場と反対側（到達辺側）から壁の**仕上げ空間側の面**までを仕上げ空間とみなす（`underReturnSpaceOf`。壁の厚みは含めない＝壁の断面線は階段下スペース側の面の縦線だけ）。壁・裏面の立体は壁の天端（`addUnderReturnTops`）と**同じ供給源**`ceiling/stairSoffit.js stairUnderReturnSoffit`から引く。
@@ -526,7 +527,9 @@ U字系（SWITCHBACK/WINDING）の木造で、直上階に同じ足元の続き�
 - 柱: RC丸柱は外接矩形のまま。柱壁のL字延長は scale>4 で発火（受け入れ済み）。独立柱／面より手前の立体の遮蔽・斜め回転柱の見付け幅・作り付け家具は未実装。
 
 **個別課題（別途直す。未着手）**
-- 階段帯: 区画・形状の傾斜天井の斜線を引く者がいない（エンジンは天井の斜線を引かない規約で、階段帯の体裁の`ceilingProfile`フックは平面の天井しか持たない。裏面だけは`ceilClip`で受ける）。直進系の裏面は E5-2・遠側（隣室から見える裏面）は E5-3 が前提で未着手／奥の壁との交線は描かない／鉄骨の裏面は対象外。
+- 階段帯: 区画・形状の傾斜天井の斜線を引く者がいない（エンジンは天井の斜線を引かない規約で、階段帯の体裁の`ceilingProfile`フックは平面の天井しか持たない。裏面だけは`ceilClip`で受ける）。遠側（隣室から見える裏面）は E5-3 が未着手（`cellsAlong`は`cellAt`を通らず自前で天井を決める・階段室は家族でないので体裁の`face.spans`には効かない＝やるなら`cellsAlong`本体）／奥の壁との交線は描かない／鉄骨の裏面は対象外。
+- 階段帯の裏面（E5-2・直進系）: 上階の階段の1段目が自階の到達辺の真上に来る逆向きの重なりは判定せず（`matchingStairBelow`は外接矩形の一致）、段板より下に天井ができる。seq1の切断線は上階のinstall枠の基端が足元の辺ちょうどに乗る前提（ずれると足元の外＝seq1だけ従来の上階天井に戻る）。実データに直進の続き階段は無く、基準は合成文書 stair-ports-test6/7 だけ。関門は下階の型（U字系・直進系）で絞るが、下階がL_TURN等のときの失敗系テストは帯が層の裏面を読まないため変異の検出力が無い（述語の読解で担保）。
+- `slabJunctionOf`（スラブの縁と切断壁の取り合いの断面線）は隣接を要求せず、スラブのz1と切断壁のz0が一致すれば面の反対端まで結ぶ。test6/7の旧goldenにあった「上り口の先の部屋の天井2050の線が階段室の空気を横切って反対端の壁まで届く太線」はこの副産物で、裏面の`ceilClip`で拡張域のスラブが2400で切られると結合が成立せず消える（E5-2で受容。隣接判定を足すかは別課題）。
 - 階段帯: seq5の到達辺の外（面の端〜到達辺）は切断面の段板が無く帯の床0のままで、2Fホールの壁・天井線（0〜2400）が残る。直進系の帯にU字系専用の後処理（下階の階段の吹抜けなど）を持ち込んでいない。階段室の`floorLevel≠0`では階段帯の`makeProbeContext`に floorOffset が渡らず、`ceilClip`が層スタックの天井より床段差ぶん低く、`switchbackCuts`の`underFloorZ`が0のまま、仕上げ空間の床区間だけが床段差込みになる。
 - 上階graphが層に無い経路（N+1の階段を見上げる`stairSoffitAbove`・見上げの上階の層の裏面）は到達辺の面が既定の面に戻る。
 - 回転部の細線（向こうの段の見え掛かり。レーン中央から始まる）が隔て板の帯の中を通る。階段自身の線（`farSideSilhouettePrimitives`/`hiddenTurnStepPrimitives`）の層の問題で、探査の選択に階段を入れても消えない。個別に`occludeFarSegment`が列の帯を読む所で直す方針（目視で判断）。
@@ -563,6 +566,7 @@ U字系（SWITCHBACK/WINDING）の木造で、直上階に同じ足元の続き�
 - 2026-10-24 U1b B3-2（梁の見え掛かりmemberFace。1326299）: 「5」（上部吹抜け帯に2F床梁の下端の中線）・手前の梁が奥の梁の線を隠す・同位置の太線の下の細線が消える。moku4_kd 2階階段帯B2面の踊り場の上のアキを閉図形どおり（x 10905〜11705・z 1500〜2400。ユーザー裁定(c)）。
 - 2026-10-24 U1b B3-3（柱memberFace。691d93c）: 「22」の部屋帯で柱の幅だけアキ・腰壁の線が隠れる／「5」上部吹抜け帯で柱が上の階の床まで1本／階段帯に柱型が初めて出る／面端延長部由来の孤立した71mmの天端線が消える（受容）／stair-ports-test1〜5の2階帯0のアキが柱で左右に分かれる。
 - 2026-10-24 U1b B4・B6・2026-10-25 S5〜S7（出力不変。golden採取なし）。83文書はHEADとバイト一致。
+- 2026-10-25 S10-4 E5-2（直進系の裏面。S2-0=4b35915で`golden-elev-stairports/stair-ports-test6/7`新設〔2階に続きの直進階段。E5-2前の姿〕→S2-3で1階の階段帯だけ採り直し: test6 +74 -77 ~1・test7 +78 -82。seq2/4（test7はseq2/3）が上り口CH 2400からzCap 5400へ上る斜線＋折れ目、seq1は天井がCH 2400に下がり端の壁が太線。他17枚・実データ83本は不変）。
 
 ### 裁定履歴
 - 2026-08（コミット不明）断面エンジン導入（階段帯）: 壁・構造材の実体に属する表現は断面エンジンだけが書く。通常部屋帯・吹抜け帯はゴールデンで凍結。断面の中は描かない（例外は腰壁・垂れ壁と天井断面の高さが変わる境界の壁）。切断壁の縁は常に太線・見えがかりは奥行き2段。見えがかりの奥行き上限800。仮想断面線は壁芯から室内側へ下がる。
