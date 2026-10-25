@@ -124,9 +124,11 @@ export class ElevationModeState {
 
       const materialMap = composeCatalog(CatalogKind.MATERIAL, matMod.MATERIALS);
       // WP-V1: 直上階（階段の吹抜けクリップ用）・直下階（吹抜けの2層帯用）を並行して解決する。
-      const [upperGraph, lowerGraph] = await Promise.all([
+      // N+2（直上階のさらに上）は階段帯の天井＝N+1 の階段の裏面の到達辺（N+2 の床梁の面）だけが使う。
+      const [upperGraph, lowerGraph, upperUpperGraph] = await Promise.all([
         this._peekAboveGraph(),
         this._peekBelowGraph(),
+        this._peekSecondAboveGraph(),
       ]);
       if (this._disposed) return { ok: true, error: null };
 
@@ -136,6 +138,7 @@ export class ElevationModeState {
       this._materialMap = materialMap;
       this._upperGraph  = upperGraph;
       this._lowerGraph  = lowerGraph;
+      this._upperUpperGraph = upperUpperGraph;
 
       const { bands, error } = this._buildBands();
       runInAction(() => {
@@ -189,6 +192,26 @@ export class ElevationModeState {
     return this._disposed ? null : temp;
   }
 
+  /** activePlaneの2つ上の採用フロア（N+2）をpeekして返す（無ければnull）。_peekAboveGraphと同形。 */
+  async _peekSecondAboveGraph() {
+    const project = this.project;
+    const planes = project?.planes ?? [];
+    const active = project?.activePlane;
+    const idx = planes.findIndex(p => p.id === active?.id);
+    const above2 = idx >= 0 && idx + 2 < planes.length ? planes[idx + 2] : null;
+    if (!above2) return null;
+    // N+2 は階段帯の天井（到達辺）だけが使う。自階に階段が無ければ読まない（性能）。
+    if (!(this.graph?.stairs?.length > 0)) return null;
+    try {
+      const temp = await floorSwapManager.peek(above2, project.structGraph);
+      return this._disposed ? null : temp;
+    } catch (err) {
+      // N+2 は任意の補助情報。失敗しても展開図全体は落とさず、到達辺は Q3 に戻る。
+      console.warn('[elevation] N+2 の読み込みに失敗（到達辺は既定位置のまま）:', err);
+      return null;
+    }
+  }
+
   /** activePlaneの直下の採用フロアをpeekして返す（無ければnull）。_peekAboveGraphの鏡像（WP-V1）。 */
   async _peekBelowGraph() {
     const project = this.project;
@@ -214,7 +237,8 @@ export class ElevationModeState {
     // 階段帯・吹抜け帯が参照する直上階/直下階のグラフも同じスコープに入れる。
     return withGraphReadScope(this.graph, () =>
       withGraphReadScope(this._upperGraph, () =>
-        withGraphReadScope(this._lowerGraph, () => this._buildBandsInner())));
+        withGraphReadScope(this._lowerGraph, () =>
+          withGraphReadScope(this._upperUpperGraph, () => this._buildBandsInner()))));
   }
 
   _buildBandsInner() {
@@ -263,7 +287,7 @@ export class ElevationModeState {
     const buildOne = (room, params) => {
       const ctx = { project: this.project, materialMap, gridCLs, ...params };
       if (room.feature === RoomFeature.STAIR) {
-        return buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null, lowerGraph });
+        return buildStairBand(room, this.graph, upperGraph, { ...ctx, stair: stairByRoomId.get(room.id) ?? null, lowerGraph, upperUpperGraph: this._upperUpperGraph });
       }
       if (room.feature === RoomFeature.VOID) {
         // WP-V1: 吹抜け帯の下げ量算出に使う「設置階下階との階高」。floorHeightAboveの呼び出し

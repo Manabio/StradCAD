@@ -200,13 +200,15 @@ async function dumpBandsOfActive(ctx, outDir, { strip = false } = {}) {
   const peekGraph = async (p) => (p ? floorSwapManager.peek(p, project.structGraph) : null);
   const upper = await peekGraph(tabs[i + 1]);
   const lower = await peekGraph(tabs[i - 1]);
+  const upperUpper = await peekGraph(tabs[i + 2]);
   if (strip) { // 柱・梁を除く（自階は生きたグラフなので呼び出し側が最後に使う）
-    stripStructuralMembers(project.activeGraph); stripStructuralMembers(upper); stripStructuralMembers(lower);
+    stripStructuralMembers(project.activeGraph); stripStructuralMembers(upper); stripStructuralMembers(lower); stripStructuralMembers(upperUpper);
   }
   const planes = project.planes;
   const j = planes.findIndex(p => p.id === plane.id);
-  const sameNeighbors = planes[j + 1]?.id === tabs[i + 1]?.id && planes[j - 1]?.id === tabs[i - 1]?.id;
-  const rows = dumpFloorBands(project, project.activeGraph, upper, lower);
+  const sameNeighbors = planes[j + 1]?.id === tabs[i + 1]?.id && planes[j - 1]?.id === tabs[i - 1]?.id
+    && planes[j + 2]?.id === tabs[i + 2]?.id;
+  const rows = dumpFloorBands(project, project.activeGraph, upper, lower, upperUpper);
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(path.join(outDir, floorFile(plane.name)), JSON.stringify(rows, null, 1));
   return { rows, sameNeighbors };

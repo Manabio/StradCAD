@@ -84,7 +84,8 @@ for (let i = 0; i < tabs.length; i++) {
   if (!graph) continue;
   const upperGraph = project.graphMap.get(tabs[i + 1]?.id) ?? null;
   const lowerGraph = project.graphMap.get(tabs[i - 1]?.id) ?? null;
-  const rows = dumpFloorBands(project, graph, upperGraph, lowerGraph);
+  const upperUpperGraph = project.graphMap.get(tabs[i + 2]?.id) ?? null;
+  const rows = dumpFloorBands(project, graph, upperGraph, lowerGraph, upperUpperGraph);
 
   const name = p.name.replace(/[^\w一-龥ぁ-んァ-ヶー]/g, '_');
   fs.writeFileSync(path.join(outDir, `elevfig-${name}.json`), JSON.stringify(rows, null, 1));
