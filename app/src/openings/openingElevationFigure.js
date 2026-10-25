@@ -12,8 +12,9 @@ import { resolveSlideLayoutPanels } from './openingPlanSymbolGeometry.js';
 import { OpeningCategory } from '../core.js';
 // 線種語彙（'thin'|'medium'|'thick'）の単一情報源。
 import { ElevationLineRole, weightForRole } from '../elevation/elevationStyle.js';
-// プリミティブ生成ヘルパー（渡したキーだけ・キー順固定）。arrow / levelLine は展開図の語彙に無いため直書きのまま。
+// プリミティブ生成ヘルパー（渡したキーだけ・キー順固定）。arrow／levelLine は SVG 語彙のため svgFigurePrimitives から。
 import { line, text, dim, rect } from '../elevation/elevationPrimitives.js';
+import { arrow, levelLine } from '../structural/sectionFigure/svgFigurePrimitives.js';
 
 const INSET_MM = 40; // 内側見付の枠inset
 
@@ -99,13 +100,12 @@ function slideLayoutPrimitives(entry, width, top, sillTop, midY) {
       return;
     }
     const len = Math.min(panelWidth * 0.5, 400);
-    // arrow は建具モードの SVG 姿図専用（展開図の語彙に無い）ため直書き
     if (p.arrow === 'both') {
-      prims.push({ type: 'arrow', x1: cx, y1: armY, x2: cx - len, y2: armY });
-      prims.push({ type: 'arrow', x1: cx, y1: armY, x2: cx + len, y2: armY });
+      prims.push(arrow(cx, armY, cx - len, armY));
+      prims.push(arrow(cx, armY, cx + len, armY));
     } else {
       const dir = p.arrow === 'neg' ? -1 : 1;
-      prims.push({ type: 'arrow', x1: cx - dir * len / 2, y1: armY, x2: cx + dir * len / 2, y2: armY });
+      prims.push(arrow(cx - dir * len / 2, armY, cx + dir * len / 2, armY));
     }
   });
   return prims;
@@ -136,15 +136,13 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     return [
       line(width / 2 - meetGap, top, width / 2 - meetGap, sillTop),
       line(width / 2 + meetGap, top, width / 2 + meetGap, sillTop),
-      // arrow は展開図（figurePrimitivesKonva）の語彙に無い建具モード専用のため直書き
-      { type: 'arrow', x1: width / 2 - 60, y1: armY, x2: width / 2 - 60 - legLen, y2: armY },
-      { type: 'arrow', x1: width / 2 + 60, y1: armY, x2: width / 2 + 60 + legLen, y2: armY },
+      arrow(width / 2 - 60, armY, width / 2 - 60 - legLen, armY),
+      arrow(width / 2 + 60, armY, width / 2 + 60 + legLen, armY),
     ];
   }
   if (mechanism === OpeningMechanism.SLIDE_SINGLE) {
     const armY = top + (sillTop - top) * 0.3;
-    // arrow は建具モード専用の語彙のため直書き
-    return [{ type: 'arrow', x1: 0, y1: armY, x2: width, y2: armY }];
+    return [arrow(0, armY, width, armY)];
   }
   if (mechanism === OpeningMechanism.FIXED) {
     return [text(width / 2, midY, 'FIX', { size: 12, anchor: 'middle', baseline: 'middle' })];
@@ -188,9 +186,8 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const yTop = top + h * 0.25, yBot = sillTop - h * 0.25;
     return [
       line(0, midLineY, width, midLineY),
-      // arrow は建具モード専用の語彙のため直書き
-      { type: 'arrow', x1: width / 2, y1: yBot, x2: width / 2, y2: yTop },
-      { type: 'arrow', x1: width / 2, y1: yTop, x2: width / 2, y2: yBot },
+      arrow(width / 2, yBot, width / 2, yTop),
+      arrow(width / 2, yTop, width / 2, yBot),
     ];
   }
   if (mechanism === OpeningMechanism.PROJECT_V) {
@@ -270,8 +267,7 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
   if (mechanism === OpeningMechanism.SHUTTER) {
     return [
       ...equalInsetLines(8, top, sillTop, width),
-      // arrow は建具モード専用の語彙のため直書き
-      { type: 'arrow', x1: width / 2, y1: sillTop - h * 0.2, x2: width / 2, y2: top + h * 0.2 },
+      arrow(width / 2, sillTop - h * 0.2, width / 2, top + h * 0.2),
     ];
   }
   if (mechanism === OpeningMechanism.OVERHEAD) {
@@ -279,8 +275,7 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const bandBottom = top + h / 3;
     return [
       ...equalInsetLines(3, top, bandBottom, width),
-      // arrow は建具モード専用の語彙のため直書き
-      { type: 'arrow', x1: width / 2, y1: sillTop - h * 0.2, x2: width / 2, y2: top + h * 0.2 },
+      arrow(width / 2, sillTop - h * 0.2, width / 2, top + h * 0.2),
       text(width / 2, bandBottom + (sillTop - bandBottom) / 2, 'OHD', { size: 11, anchor: 'middle', baseline: 'middle' }),
     ];
   }
@@ -444,8 +439,7 @@ export function buildOpeningElevation(
 
   const primitives = [
     ...frameOutline,
-    // levelLine は展開図（figurePrimitivesKonva）の語彙に無い建具モード専用のため直書き（ヘルパーに足さない）
-    { type: 'levelLine', y: 0, label: 'FL' },
+    levelLine(0, { label: 'FL' }),
     ...mechanismPrimitives(opening, entry, width, top, sillTop),
     dim('h', top - 250, 0, width, {
       foot: top, editable: true, target: 'width', label: String(round(width)),
