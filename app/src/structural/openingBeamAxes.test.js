@@ -348,6 +348,77 @@ test('【T7】openingBeamSourcesFor→autoFillOpeningBeamAxes: 既に由来wall�
   assert.equal(hTop.extentLoRef?.clId, existing.id, '後の辺のextentは（由来を書き換えていない）既存梁芯のidを参照する');
 });
 
+// ---- S3-1（規則C 案c の第1段）: 開口梁芯の重複ガード／端の参照解決のアンカー判定（findOpeningBeamAnchorCL）----
+// SLAB_BEAM（S造スラブ小梁の割付け由来＝未編集の自動梁芯）は再計算のたびに割り直される別ベイのものでもあるため
+// 流用先にしない。範囲が辺と離れた梁芯も「その辺に梁がある」根拠にならない。
+
+test('【S3-1】autoFillOpeningBeamAxes: 辺と範囲の重なる SLAB_BEAM が同座標にあっても流用せず開口梁芯を新規に作る（SLAB_BEAM は由来不変のまま残る）', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const slab = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM,
+    extentLo: 0, extentHi: 6000,
+  });
+  const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, {}));
+  assert.equal(created.length, 4, 'SLAB_BEAM は流用されず4本とも新規作成');
+  assert.equal(slab.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM, 'SLAB_BEAM に開口由来を書き戻さない');
+  assert.ok(created.some(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000 && cl !== slab));
+});
+
+test('【S3-1】autoFillOpeningBeamAxes: 別のベイ（範囲が辺と離れた）の同座標の SLAB_BEAM があっても、開口の辺に梁芯が作られる（永久に梁が入らない不良の再現）', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM,
+    extentLo: 4000, extentHi: 6000, // 辺 y:[1000,3000] と離れた別ベイ
+  });
+  const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, {}));
+  assert.equal(created.length, 4);
+});
+
+test('【S3-1・失敗系】autoFillOpeningBeamAxes: 範囲が辺と離れた USER 梁芯が同座標にあっても流用せず作る（範囲の重なり判定）', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const far = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER,
+    extentLo: 4000, extentHi: 6000,
+  });
+  const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, {}));
+  assert.equal(created.length, 4, '離れた梁芯は辺の根拠にならない');
+  assert.equal(far.beamAxisOrigin, BeamAxisOrigin.USER, '離れた梁芯の由来は書き換えない');
+});
+
+test('【S3-1・対照】autoFillOpeningBeamAxes: 範囲が辺と重なる壁由来梁芯・通り芯は従来どおり流用し、その座標に新規は作らない', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const wall = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.WALL,
+    extentLo: 500, extentHi: 3500, // 辺 y:[1000,3000] を含む
+  });
+  const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, {}));
+  assert.equal(created.length, 3, '重なる壁由来梁芯(x=2000)は流用される');
+  assert.equal(wall.beamAxisOrigin, BeamAxisOrigin.WALL);
+  assert.ok(!created.some(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000));
+});
+
+test('【S3-1】autoFillOpeningBeamAxes: 端の参照（座標フォールバック）に直交する SLAB_BEAM を選ばず静的値になる。通り芯は従来どおり選ぶ', () => {
+  const graph = makeGraph();
+  const slabY0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM,
+  });
+  const gridY = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, GRID);
+  // clId を持たない手組みの源（端の参照は座標フォールバックで解決される）
+  const src = {
+    isVertical: true, coord: 2000, lo: 1000, hi: 3000, order: 0,
+    spanRefs: { lo: { kind: 'x', coord: 0 }, hi: { kind: 'grid', coord: 6000 } },
+  };
+  const [cl] = autoFillOpeningBeamAxes(graph, [src]);
+  assert.equal(cl.extentLoRef, null, 'SLAB_BEAM は参照しない');
+  assert.equal(cl.extentLo, 0, '静的値へフォールバック');
+  assert.equal(cl.extentHiRef?.clId, gridY.id, '通り芯は従来どおり参照する');
+  assert.equal(slabY0.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM, '参照されないので SLAB_BEAM のまま（USER に正規化されない）');
+});
+
 test('【失敗系】openingBeamSourcesFor: 非矩形（L字）は空配列を返し、診断はnonRectangular', () => {
   // makeLShapeGrid相当: 上段1セル(x:0-2000,y:0-1000) + 下段左セル(x:0-1000,y:1000-2000) のL字開口。
   const graph = makeGraph();

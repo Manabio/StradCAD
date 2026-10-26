@@ -307,3 +307,51 @@ test('【ステップ6・失敗系】followWallBeamAxes: repointRefsFrom:trueで
   assert.equal(graph.shapeMap.has(throughCLId), true, '通し辺は撤去されない');
   assert.equal(otherCL.extentLoRef?.clId, throughCLId, '参照も変わらない');
 });
+
+// ---- S3-1（規則C 案c の第1段）: 行き先アンカーの判定から SLAB_BEAM を外す ----
+// SLAB_BEAM（スラブ小梁の割付け由来＝未編集の自動梁芯）は再計算のたびに割り直される。行き先にあっても
+// 「既にその座標に梁芯がある」とは数えない（吸収・参照の付け替えをしない。書き換え＝bakeで済ませる）。
+
+test('【S3-1】followWallBeamAxes: 行き先が SLAB_BEAM の座標なら吸収せず値を書き換える（SLAB_BEAM は動かさず残る）', () => {
+  const graph = makeGraph();
+  const beamCL = addFuseCL(graph, 2045);
+  const slab = graph.addCenterLine(CenterLineType.HORIZONTAL, 2060, { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM });
+
+  const { moved, skipped, absorbed } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(absorbed, [], 'SLAB_BEAM は吸収先にならない');
+  assert.deepEqual(skipped, []);
+  assert.deepEqual(moved.map(m => m.clId), [beamCL.id]);
+  assert.equal(beamCL.value, 2060, '値の書き換えで追従する');
+  assert.equal(graph.shapeMap.has(slab.id), true);
+  assert.equal(slab.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM, 'SLAB_BEAM の由来は不変');
+});
+
+test('【S3-1】followWallBeamAxes: 行き先が SLAB_BEAM でも、旧梁芯を参照する開口由来の短辺の参照は付け替えない（repointRefsFrom:true）', () => {
+  const graph = makeGraph();
+  const throughCL = addFuseCL(graph, 2045);
+  throughCL.beamAxisOrigin = BeamAxisOrigin.OPENING;
+  const slab = graph.addCenterLine(CenterLineType.HORIZONTAL, 2060, { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM });
+  const shortCL = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING,
+    extentLoRef: { clId: throughCL.id, offset: 0 },
+  });
+
+  const { moved, absorbed } = followWallBeamAxes(
+    graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }], { repointRefsFrom: true });
+  assert.deepEqual(absorbed, []);
+  assert.equal(moved.length, 1);
+  assert.equal(shortCL.extentLoRef?.clId, throughCL.id, '短辺の参照は SLAB_BEAM へ付け替わらない（SLAB_BEAM が参照を持って USER に正規化される事故を防ぐ）');
+  assert.notEqual(shortCL.extentLoRef?.clId, slab.id);
+  assert.equal(slab.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM);
+});
+
+test('【S3-1・対照】followWallBeamAxes: 行き先が SLAB_BEAM と通り芯の両方なら通り芯が吸収先になり、旧は従来どおり吸収される', () => {
+  const graph = makeGraph();
+  const beamCL = addFuseCL(graph, 2045);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2060, { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2060, { labeled: true, discipline: Discipline.STRUCT });
+
+  const { moved, absorbed } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(moved, []);
+  assert.deepEqual(absorbed.map(a => a.clId), [beamCL.id]);
+});

@@ -11,7 +11,7 @@ import { beamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { findSectionEntry } from './sectionCatalog.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import {
-  findBeamAnchorCL, wallBeamAxisExcludeKey, wallBackingCenterCoord, wallBeamSourcesFor,
+  findBeamAnchorCL, findOpeningBeamAnchorCL, wallBeamAxisExcludeKey, wallBackingCenterCoord, wallBeamSourcesFor,
   unprotectedAmong,
 } from './wallBeamAxes.js';
 import { planOpeningEdgeBeams } from './openingEdgePlan.js';
@@ -381,7 +381,7 @@ function extentTargetFor(graph, src) {
   const orthoType = src.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
   const resolve = (ref) => {
     const byId = ref.clId != null ? resolveCLById(graph.shapeMap, graph._structGraph, ref.clId, CenterLine) : null;
-    return byId ?? findBeamAnchorCL(graph, orthoType, ref.coord);
+    return byId ?? findOpeningBeamAnchorCL(graph, orthoType, ref.coord); // SLAB_BEAM は端の参照にしない（S3-1）
   };
   const loCL = resolve(src.spanRefs.lo);
   const hiCL = resolve(src.spanRefs.hi);
@@ -411,7 +411,8 @@ export function autoFillOpeningBeamAxes(graph, openingSources) {
     const excludeKey = wallBeamAxisExcludeKey(src.isVertical, src.coord);
     if (graph.excludedWallBeamAxes.has(excludeKey)) continue;
 
-    const anchor = findBeamAnchorCL(graph, centerLineType, src.coord);
+    // 辺の範囲と重なる梁芯・通り芯だけを流用する（SLAB_BEAM・離れた梁芯は根拠にしない。S3-1）
+    const anchor = findOpeningBeamAnchorCL(graph, centerLineType, src.coord, { lo: src.lo, hi: src.hi });
     if (anchor) {
       fillBeamAxisOriginIfUnknown(anchor, BeamAxisOrigin.OPENING);
       continue;

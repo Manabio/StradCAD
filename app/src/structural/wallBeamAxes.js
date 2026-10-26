@@ -6,7 +6,7 @@ import { CenterLineType, Discipline, centerLineKind } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { isWallEndAtCorner } from '../core/wall.js';
 import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
-import { structuralAnchorAt, beamAxesAt, beamAxisCenterLines, spansEntireAxis } from '../core/centerLineKindPolicy.js';
+import { structuralAnchorAt, openingBeamAnchorAt, beamAxesAt, beamAxisCenterLines, spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { exclusionKeyReferencesCL } from '../core/structuralEntities.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -579,6 +579,15 @@ export function unprotectedAmong(graph, candidates) {
  *  共有する単一の述語——片方だけ条件を変えると柱が湧く／消えるため。無ければ null。 */
 export function findBeamAnchorCL(graph, centerLineType, coord) {
   return structuralAnchorAt(graph, { centerLineType, coord, tier: 'primary' });
+}
+
+/** findBeamAnchorCL の兄弟（S3-1）: 通り芯または梁芯のうち、由来 SLAB_BEAM を除き、lo/hi を渡したときは
+ *  梁芯の extent が [lo,hi] と重なるものだけを返す（実体は core/centerLineKindPolicy.js openingBeamAnchorAt）。
+ *  開口由来梁芯の重複ガード・端の参照解決（openingBeamAxes.js）と、壁由来梁芯の追従先の判定
+ *  （wallBeamAxisFollow.js。lo/hi なし＝SLAB_BEAM を除くだけ）が使う。findBeamAnchorCL は在来木造の柱アンカーと
+ *  共有する単一の述語のため変えない（変えると柱が湧く／消える）。 */
+export function findOpeningBeamAnchorCL(graph, centerLineType, coord, { lo = null, hi = null } = {}) {
+  return openingBeamAnchorAt(graph, { centerLineType, coord, lo, hi });
 }
 
 /** 同一方向・近接座標（CL_OVERLAP_TOL_MM以内）のソースを1本にまとめ、extentは和集合（min/max）にする。

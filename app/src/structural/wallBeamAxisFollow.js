@@ -6,7 +6,7 @@ import { runInAction } from 'mobx';
 import { CenterLineType } from '../core.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { bakeCLValue } from '../transform/centerLineOps.js';
-import { findWallBeamAxisCL, findBeamAnchorCL, isProtectedWallBeamAxis, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
+import { findWallBeamAxisCL, findOpeningBeamAnchorCL, isProtectedWallBeamAxis, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 
 // 旧梁芯（cl）を撤去前にスナップショットし、undo（同idで再追加）・redo（再撤去）の関数を作る
 // （transform/centerLineMerge.js absorbCenterLineのloserSnapshotと同じ手法。refId・extentLoRef/HiRef・
@@ -100,7 +100,8 @@ export function followWallBeamAxes(graph, moves, opts = {}) {
     if (!cl) continue; // この階に壁由来の梁芯が無い（主構造が生成しない等）— 何もしない
 
     const toType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
-    const anchor = findBeamAnchorCL(graph, toType, to);
+    // 行き先の SLAB_BEAM（再計算で割り直される未編集の自動梁芯）は吸収先にしない（S3-1）
+    const anchor = findOpeningBeamAnchorCL(graph, toType, to);
     if (anchor) {
       const repointTargets = repointRefsFrom ? openingReferrersOf(graph, cl) : [];
       const ignoreRefsFrom = new Set(repointTargets.map(r => r.referrer.id));

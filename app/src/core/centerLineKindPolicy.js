@@ -1090,6 +1090,38 @@ export function structuralAnchorAt(graph, { centerLineType, coord, tier, tolMm =
 }
 
 /**
+ * 開口由来梁芯（規則O）の重複ガード・端の参照解決用のアンカー走査API（S3-1・規則C 案c の第1段）。
+ * structuralAnchorAt(tier:'primary') に次の2つの絞り込みを足したもの（findBeamAnchorCL は在来木造の柱アンカーと
+ * 共有する単一の述語のため変えず、こちらを兄弟として置く）:
+ *  1. 由来 SLAB_BEAM の梁芯は拾わない——再計算のたびにベイ単位で割り直される未編集の自動梁芯で、「その座標に梁がある」
+ *     根拠にならない（拾うと別ベイの SLAB_BEAM に阻まれて開口の辺に梁が入らない・参照された SLAB_BEAM が USER に正規化される）。
+ *  2. lo/hi を渡されたら、梁芯は extent が [lo,hi] と tol を超えて重なるものだけ（null は無限扱い）。
+ *     通り芯（種別 struct）は常に全域なので範囲を見ない。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType: string, coord: number, lo?: number|null, hi?: number|null, tolMm?: number}} opts
+ * @returns {object|null}
+ */
+export function openingBeamAnchorAt(graph, { centerLineType, coord, lo = null, hi = null, tolMm = CL_OVERLAP_TOL_MM }) {
+  if (centerLineType == null) {
+    throw new Error(`openingBeamAnchorAt: centerLineTypeは必須です（実際: ${centerLineType}）`);
+  }
+  if (typeof coord !== 'number' || Number.isNaN(coord)) {
+    throw new Error(`openingBeamAnchorAt: coordは数値である必要があります（実際: ${coord}）`);
+  }
+  const kinds = structuralAnchorKinds('primary');
+  const span = (lo != null || hi != null) ? { extentLo: lo, extentHi: hi } : null;
+  return graph.centerLines.find(cl => {
+    if (cl.centerLineType !== centerLineType) return false;
+    const kind = centerLineKind(cl);
+    if (!kinds.includes(kind)) return false;
+    if (Math.abs(cl.effectiveValue - coord) >= tolMm) return false;
+    if (kind !== 'beam') return true;
+    if (cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM) return false;
+    return span == null || extentsOverlapBeyondTol(cl, span, CL_OVERLAP_TOL_MM);
+  }) ?? null;
+}
+
+/**
  * tier の柱アンカー候補となる CenterLine を graph.centerLines から centerLineType 一致で列挙する
  * 走査API（structural/woodAutoFill.js nearestAnchorCL の候補集合。距離によるタイブレークは
  * 呼び出し側=structural/の責務——本APIは候補を絞るだけで並べ替えない）。

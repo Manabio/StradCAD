@@ -36,7 +36,7 @@ import {
   FINISH_CELL_DIVIDER_KINDS, isFinishCellDivider,
   UNDER_STAIR_SPLIT_KINDS, isUnderStairSplitKind, axisLineKindOf,
   STRUCTURAL_ANCHOR_KINDS, BEAM_AXIS_KINDS, SUPPORT_SPAN_COLUMN_KINDS,
-  structuralAnchorKinds, isStructuralAnchor, structuralAnchorAt, structuralAnchorCandidates,
+  structuralAnchorKinds, isStructuralAnchor, structuralAnchorAt, structuralAnchorCandidates, openingBeamAnchorAt,
   beamAxisAt, beamAxisCenterLines, supportSpanColumnCandidates,
   FLOOR_SHARED_KINDS, structuralSyncScopeOfKind, structuralSyncScopeOfConversion,
   structuralSyncScopeForCenterLine,
@@ -1805,6 +1805,31 @@ test('【旧データ限定・種別ベースへ統一】isStructuralAnchor: {la
   const legacy = addCLOfKindLabeled(graph, project, CenterLineType.VERTICAL, 1000, 'struct', false);
   assert.equal(centerLineKind(legacy), 'struct');
   assert.equal(isStructuralAnchor(legacy, 'primary'), true);
+});
+
+test('openingBeamAnchorAt: SLAB_BEAM を除き、lo/hi があれば梁芯は extent の重なりだけで選ぶ。通り芯は範囲を見ない・端点で接するだけは重ならない', () => {
+  const { graph, project } = makeProjectWithGraph();
+  const V = CenterLineType.VERTICAL;
+  const slab = addCLOfKind(graph, project, V, 1000, 'beam');
+  slab.beamAxisOrigin = BeamAxisOrigin.SLAB_BEAM;
+  assert.equal(openingBeamAnchorAt(graph, { centerLineType: V, coord: 1000 }), null, 'SLAB_BEAM は拾わない');
+  assert.equal(structuralAnchorAt(graph, { centerLineType: V, coord: 1000, tier: 'primary' }), slab, '対照: 既存の述語は拾う');
+
+  const far = addCLOfKind(graph, project, V, 1000, 'beam');
+  runInAction(() => { far.beamAxisOrigin = BeamAxisOrigin.USER; far._extentLo = 4000; far._extentHi = 6000; });
+  assert.equal(openingBeamAnchorAt(graph, { centerLineType: V, coord: 1000 }), far, 'lo/hi なしは範囲を見ない');
+  assert.equal(openingBeamAnchorAt(graph, { centerLineType: V, coord: 1000, lo: 1000, hi: 3000 }), null, '範囲が離れていれば拾わない');
+  assert.equal(openingBeamAnchorAt(graph, { centerLineType: V, coord: 1000, lo: 3000, hi: 4000 }), null, '端点で接するだけは重ならない');
+  assert.equal(openingBeamAnchorAt(graph, { centerLineType: V, coord: 1000, lo: 3000, hi: 5000 }), far, '重なれば拾う');
+
+  const grid = addCLOfKind(graph, project, V, 1000, 'struct');
+  assert.equal(openingBeamAnchorAt(graph, { centerLineType: V, coord: 1000, lo: 1000, hi: 3000 }), grid, '通り芯は範囲に関わらず拾う');
+});
+
+test('【失敗系】openingBeamAnchorAt: centerLineType 未指定・coord が数値でなければ throw', () => {
+  const { graph } = makeProjectWithGraph();
+  assert.throws(() => openingBeamAnchorAt(graph, { centerLineType: null, coord: 0 }), /centerLineTypeは必須/);
+  assert.throws(() => openingBeamAnchorAt(graph, { centerLineType: CenterLineType.VERTICAL, coord: NaN }), /coordは数値/);
 });
 
 test('structuralAnchorAt: tol境界（|Δ|=0.5は不一致・0.4999は一致）', () => {
