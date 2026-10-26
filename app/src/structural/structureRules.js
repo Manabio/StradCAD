@@ -20,7 +20,7 @@ import { STRUCTURES, STRUCTURE_PROFILES, structureProfile } from './structuralCl
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { BackingClass } from '../finish/materials/backingClass.js';
 import { findSectionEntry, woodRectSectionKey, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
-import { RoofShape } from '../core/constants.js';
+import { RoofShape, SlabSecondaryBeamPlacement, STEEL_SECONDARY_BEAM_MAX_PITCH_MM } from '../core/constants.js';
 
 /** 主構造未指定を表す値（MAIN_STRUCTURE_OPTIONS[0]。core/structuralInfo.js の既定・FlatBuffers復元の既定もこれ）。 */
 export const UNSPECIFIED_STRUCTURE = '未定';
@@ -241,6 +241,9 @@ const WOOD_RULES = Object.freeze({
   // （structural/openingBeamAxes.js）。2×4 は壁自体が構造体で梁を生成しないためnull。
   // 在来木造は 'slabOpeningsDirect'（梁を直接生成。TRADITIONAL_WOOD のプロファイル側で上書き）。
   openingBeamAxes: null,
+  // スラブを支える子梁（小梁）の梁芯の割付け（structural/slabSecondaryBeamAxes.js）。null＝割り付けない。
+  // S造だけ { kind, maxPitchMm }（STEEL_RULES）。
+  slabSecondaryBeams: null,
   // 外壁アルミサッシはフィン下地直付け（openings/sashDetailCatalog.js）。
   sashFinDirect: true,
   // 採番の選択子（(3)）: individualBeamRoles＝標準材（defaultSections.beam）以外の梁を材ごとに個別採番
@@ -298,6 +301,8 @@ const RC_RULES = Object.freeze({
   // （structural/openingBeamAxes.js）。STEEL_RULESはRC_RULESをspreadし上書きしないため、
   // S造・SRC造にも効く（wallBeamAxesをnullで上書きしているのとは対照的）。
   openingBeamAxes: 'slabOpenings',
+  // スラブ小梁の梁芯の割付け: RC系は割り付けない（STEEL_RULES だけ上書き）。
+  slabSecondaryBeams: null,
   // 規則Oのクリアランス(mm)。壁下地帯・梁幅を逃げた位置からさらに空ける余白（既定0）。
   openingBeamClearanceMm: 0,
   sashFinDirect: false,
@@ -313,6 +318,11 @@ const STEEL_RULES = Object.freeze({
   family: StructureFamily.STEEL,
   foundation: Object.freeze({ ...RC_RULES.foundation, beamSizing: Object.freeze({ kind: 'spanDivisor', depthDivisor: 8 }) }),
   wallBeamAxes: null,
+  // スラブを支える子梁はスパン間を最大ピッチ以下の等間隔に割り付ける（ユーザー指示2026-10-26）。
+  slabSecondaryBeams: Object.freeze({
+    kind: SlabSecondaryBeamPlacement.EQUAL_PITCH,
+    maxPitchMm: STEEL_SECONDARY_BEAM_MAX_PITCH_MM,
+  }),
 });
 
 // 主構造キー → ルールセット。isRigidFrame / baseMaterial は structuralClassification.js の
@@ -332,7 +342,8 @@ export const STRUCTURE_RULES = Object.freeze({
   'RC造(ラーメン)': withProfile('RC造(ラーメン)', RC_RULES),
   'RC造(壁式)':    withProfile('RC造(壁式)', RC_RULES),
   'S造':           withProfile('S造', STEEL_RULES),
-  'SRC造':         withProfile('SRC造', STEEL_RULES),
+  // SRC造はスラブ小梁の割付けの対象外（STEEL_RULES の継承を null で上書き）。
+  'SRC造':         withProfile('SRC造', { ...STEEL_RULES, slabSecondaryBeams: null }),
   // 在来木造: 柱120角・梁は材幅＝柱同寸（成は梁成表。既定はその最小120）。framing/backing は在来固有仕様。
   [TRADITIONAL_WOOD_STRUCTURE]: withProfile(TRADITIONAL_WOOD_STRUCTURE,
     { ...WOOD_RULES, isTraditionalWood: true, wallBeamAxes: 'selfAndBelow',
@@ -394,6 +405,8 @@ export const UNSPECIFIED_RULES = Object.freeze({
   // 動く——構造未定のまま昇降機の上階自動設置・階段吹抜けの整合で開口だけが先に生まれる階でも、開口由来梁芯が
   // 全階そろうようにする）。継承のまま'slabOpenings'を明示して意図を残す。
   openingBeamAxes: 'slabOpenings',
+  // 主構造が未定のときはスラブ小梁を割り付けない（STEEL_RULES の継承を明示的に null へ）。
+  slabSecondaryBeams: null,
   // 【裁定・2026-10-02】STEEL_RULES（RC_RULES の spread）を継承すると 'flat' になるが、主構造が未定のときは
   // 非木造と決まっていないため木造系と同じ短手の規則（null＝導出）にする。継承に任せず明示して意図を残す。
   mainRoofDefaultShape: null,

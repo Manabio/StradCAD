@@ -48,6 +48,15 @@ test('structureRules: 6種の主構造キーすべてにルールがあり、isR
   }
 });
 
+test('structureRules（スラブ小梁の割付け・2026-10-26）: slabSecondaryBeamsはS造だけ非null（等ピッチ2500）、SRC造・未定を含む他は全部null', () => {
+  for (const key of STRUCTURES) {
+    if (key === 'S造') continue;
+    assert.equal(rulesFor(key).slabSecondaryBeams, null, `${key}: slabSecondaryBeams`);
+  }
+  assert.equal(UNSPECIFIED_RULES.slabSecondaryBeams, null, '未指定はnull（STEEL_RULES継承を上書き）');
+  assert.deepEqual({ ...rulesFor('S造').slabSecondaryBeams }, { kind: 'equalPitch', maxPitchMm: 2500 });
+});
+
 test('structureRules（F-3・2026-09-19裁定）: wallFreeEndは在来木造だけcolumnWrap、他はflush', () => {
   for (const key of STRUCTURES) {
     const expected = key === TRADITIONAL_WOOD_STRUCTURE ? 'columnWrap' : 'flush';

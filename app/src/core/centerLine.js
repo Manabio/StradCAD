@@ -18,7 +18,7 @@ import { Shape } from './shapeBase.js';
 // 梁芯（centerLineKind(cl)==='beam'）の由来。既存データ・未設定は null（由来色は'none'＝黒）。
 export const BeamAxisOrigin = Object.freeze({
   WALL:       'wall',      // 壁由来の自動生成（structural/wallBeamAxes.js）
-  FLOOR_BEAM: 'floorBeam', // 床梁割付け由来の自動生成（structural/woodAutoFill.js）
+  FLOOR_BEAM: 'floorBeam', // 床梁割付け由来の自動生成（structural/woodAutoFill.js・S造のスラブ小梁は structural/slabSecondaryBeamAxes.js）
   CENTER:     'center',    // 中心線由来（S造向け。未実装・色キーのみ予約）
   USER:       'user',      // ユーザーが AddCLDialog から追加
   OPENING:    'opening',   // 床開口由来の自動生成（structural/openingBeamAxes.js）。規則O

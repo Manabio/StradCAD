@@ -294,6 +294,34 @@ export const STAIR_SOFFIT_THICKNESS_MM = 300;
 // CL（中心線）の重複判定許容誤差(mm)。追加時の重複ガード（transform/centerLineOps.js）・梁芯移動の範囲クランプ内寄せ
 // （structural/beamAxisMove.js）の両方が同じ値・同じ目的（他CLと同一座標に到達させない）で共有する。
 export const CL_OVERLAP_TOL_MM = 0.5;
+
+// 梁の役割（Beam.role）。新規コードでだけ使う（既存の文字列直書きは置換しない）。
+export const BeamRole = Object.freeze({
+  PRIMARY:        'primary',        // 大梁
+  SECONDARY:      'secondary',      // 小梁
+  FLOOR:          'floor',          // 床梁
+  FOUNDATION:     'foundation',     // 基礎梁
+  EAVES:          'eaves',          // 軒桁
+  ROOF:           'roof',           // 屋根平面の梁
+  LANDING:        'landing',        // 階段踊り場の梁
+  ROOF_BEAM:      'roofBeam',       // 小屋梁・飛び梁
+  SILL:           'sill',           // 土台
+  PARTITION_BEAM: 'partitionBeam',  // 隔て梁
+});
+
+// S造スラブを支える子梁（小梁）の最大ピッチ(mm)。スパン間をこれ以下の等間隔に割り付ける
+// （structural/slabSecondaryBeamAxes.js。ユーザー指示2026-10-26）。
+export const STEEL_SECONDARY_BEAM_MAX_PITCH_MM = 2500;
+// スラブ小梁の割付け方式（structureRules.js の slabSecondaryBeams.kind）。
+export const SlabSecondaryBeamPlacement = Object.freeze({ EQUAL_PITCH: 'equalPitch' });
+// スラブ小梁の梁芯を作らなかったベイの理由（slabSecondaryBeamAxes.js）。
+export const SlabBayFillSkip = Object.freeze({
+  SHORT_SPAN: 'shortSpan', // 短辺が最大ピッチ以下
+  OPENING:    'opening',   // 床開口と重なる
+  NO_HOST:    'noHost',    // 端に受ける大梁（通り芯上の primary）が無い
+  OCCUPIED:   'occupied',  // ベイ内に既に梁芯がある（冪等・手動の梁芯を尊重）
+});
+
 // 敷地線の種別
 export const SiteLineKind = Object.freeze({
   BOUNDARY:   'boundary',   // 境界（隣地境界線）
