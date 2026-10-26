@@ -101,6 +101,17 @@ export const DISPLAY_ONLY_KINDS_BY_MODE = Object.freeze({
   ceiling: Object.freeze(['struct', 'center', 'aux']),
 });
 
+// ---- 原始事実1c: 追加ダイアログの吸着専用の種別表（可視モード表の外） ----
+// appMode で描かず・ヒットせず・関係の導出（kindsVisibleWith）にも入れないが、CL追加ダイアログ
+// （ui/AddCLDialog.jsx）の参照候補にだけ入る種別。構造モードの梁芯の手動追加は、構造モードで非表示の
+// 中心線の位置へ吸着できる必要がある（規則C 案c・S3-3、2026-10-26）。構造モードの可視表へ中心線を足すと
+// 描画・ヒット・障害物に全部乗る（拒否された案b と同じ）ため別表にする。対象は自階の中心線だけ
+// （補助線・他階・天井芯は入れない）。吸着した梁芯は絶対座標（refId なし。中心線を後で動かしても追従しない）。
+// 読むのは isAddDialogSnapOnlyRef だけ。
+export const ADD_DIALOG_SNAP_ONLY_KINDS_BY_MODE = Object.freeze({
+  structure: Object.freeze(['center']),
+});
+
 // ---- 原始事実2: ヒット除外表 ----
 // snap.js resolvePointerTargets の clKindFilter（structureモードは梁芯のみ・それ以外は梁芯以外）を
 // 「可視種別からの除外」として表現したもの。site/elevation はこの表に現れない＝除外なしだが、可視
@@ -152,7 +163,7 @@ export const COEXISTENCE = Object.freeze({
   struct:  Object.freeze({ struct: 'forbidden', center: 'promote',   aux: 'allowed',   beam: 'absorb',    ceiling: 'allowed' }),
   center:  Object.freeze({ struct: 'forbidden', center: 'extent',    aux: 'allowed',   beam: 'allowed',   ceiling: 'allowed' }),
   aux:     Object.freeze({ struct: 'allowed',   center: 'allowed',   aux: 'extent',    beam: 'allowed',   ceiling: 'allowed' }),
-  beam:    Object.freeze({ struct: 'forbidden', center: 'allowed',   aux: 'allowed',beam: 'extent',    ceiling: 'allowed' }),
+  beam:    Object.freeze({ struct: 'forbidden', center: 'allowed',   aux: 'allowed',   beam: 'extent',    ceiling: 'allowed' }),
   ceiling: Object.freeze({ struct: 'forbidden', center: 'forbidden', aux: 'allowed',   beam: 'allowed',   ceiling: 'extent'  }),
 });
 
@@ -882,6 +893,15 @@ export function sameCoordCounterparts(graph, { centerLineType, value, tolMm = CL
 /** cl が appMode で描画対象か（可視モード表 ∪ 描くだけの種別表。kindsRenderedIn）。 */
 export function isRenderTarget(cl, appMode) {
   return kindsRenderedIn(appMode).includes(centerLineKind(cl));
+}
+
+/**
+ * cl が appMode の追加ダイアログで「吸着専用」の参照候補か（描かない・ヒットしないが、参照の選択肢にだけ入る。
+ * ADD_DIALOG_SNAP_ONLY_KINDS_BY_MODE 参照）。未知のappModeはthrow。
+ */
+export function isAddDialogSnapOnlyRef(cl, appMode) {
+  assertKnownMode(appMode);
+  return (ADD_DIALOG_SNAP_ONLY_KINDS_BY_MODE[appMode] ?? []).includes(centerLineKind(cl));
 }
 
 /** cl が appMode でポインタヒット対象か。 */

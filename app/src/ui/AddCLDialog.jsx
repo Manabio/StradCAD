@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { circleRefSymbol, circleRefKindLabel } from './circleRef.js';
 import { NumPad } from './NumPad.jsx';
 import { evalNumpadExpr } from './numpadUtils.js';
+import { initialRef, distStrForRef, foldRefForConfirm } from './addCLDialogRefs.js';
 import './AddCLDialog.css';
 
 const KINDS = [
@@ -37,19 +38,11 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
   const gridOnly   = gridCLs.filter(cl => !nearbyIds.has(cl.id));
   const allOptions = [...nearbyCLs, ...gridOnly, ...columnAxisRefs];
 
-  const nearest = allOptions.length > 0
-    ? allOptions.reduce((best, cl) =>
-        Math.abs(cl.value - worldCoord) < Math.abs(best.value - worldCoord) ? cl : best
-      )
-    : null;
-
+  // 既定の参照（最寄り）と距離の初期値。吸着専用の参照（構造モードの中心線）なら距離 '0'
+  const [initial] = useState(() => initialRef(allOptions, worldCoord, appMode, sign));
   const [kind,    setKind]    = useState(kinds[0].id);
-  const [refId,   setRefId]   = useState(nearest?.id ?? '');
-  const [distStr, setDistStr] = useState(() =>
-    nearest
-      ? String(Math.round(Math.abs(worldCoord - nearest.value)))
-      : String(Math.round(sign * worldCoord))
-  );
+  const [refId,   setRefId]   = useState(initial.refId);
+  const [distStr, setDistStr] = useState(initial.distStr);
 
   const refCL = allOptions.find(cl => cl.id === refId) ?? null;
 
@@ -88,10 +81,7 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
     const id = e.target.value;
     setRefId(id);
     const cl = allOptions.find(c => c.id === id);
-    setDistStr(cl
-      ? String(Math.round(Math.abs(worldCoord - cl.value)))
-      : String(Math.round(sign * worldCoord))
-    );
+    setDistStr(distStrForRef(cl, worldCoord, appMode, sign));
   }
 
   function handleConfirm() {
@@ -99,14 +89,9 @@ export function AddCLDialog({ type, worldCoord, gridCLs, nearbyCLs = [], appMode
       onConfirm(batchWorldValues, kind, null, null);
       return;
     }
-    if (refCL?.clId) {
-      // 柱芯参照（columnAxisRefs の合成CL）: 合成id 'colaxis:...' をそのまま渡さず、
-      // 元の通り芯clId＋静的オフセット（柱芯偏芯量＋距離）に畳んで永続化する
-      // （通り芯の移動には追従するが、出幅編集による柱芯の再計算には追従しない。割り切り）。
-      onConfirm(previewWorld, kind, refCL.clId, refCL.axisOffset + dist * dir);
-      return;
-    }
-    onConfirm(previewWorld, kind, refId, dist * dir);
+    // 参照の畳み込み（柱芯の合成CL→通り芯clId＋オフセット、吸着専用の参照→絶対座標）は addCLDialogRefs.js
+    const folded = foldRefForConfirm(refCL, appMode, { dist, dir });
+    onConfirm(previewWorld, kind, folded.refId, folded.refOffset);
   }
 
   function handleKeyDown(e) {

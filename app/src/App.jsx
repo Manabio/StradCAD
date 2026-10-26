@@ -37,7 +37,8 @@ import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP, UNNUMBERED_TAG } from './structural/memberCatalog.js';
 import { CenterLineType, OpeningCategory, isRoofFeature, planCutHeightMmOf, ceilingCutHeightMmOf } from '@core';
 import { upperAdoptedPlanes, findUpperRoomsOverCells } from './finish/roof/roofFloorCheck.js';
-import { isRenderTarget } from './core/centerLineKindPolicy.js';
+import { isRenderTarget, isAddDialogSnapOnlyRef } from './core/centerLineKindPolicy.js';
+import { AddCLOptionKind } from './core/constants.js';
 import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
   applyFloorBytes, blocksFloorRemoval, diffFloorOpSnapshot,
@@ -134,6 +135,7 @@ function buildColumnAxisRefs(graph, type) {
     if (offset === 0) continue;
     refs.push({
       id:    `colaxis:${cl.id}`,
+      optionKind: AddCLOptionKind.COLUMN_AXIS,
       clId:  cl.id,
       value: cl.value + offset,
       axisOffset: offset,
@@ -2508,12 +2510,14 @@ const App = observer(() => {
       // （core/centerLineKindPolicy.js isRenderTarget）に揃える。天伏S8bでヒット対象から替えた:
       // 天伏では中心線・補助線・天井芯が描かれ、どれも「基準からの距離」の参照に選べる
       // （refId で天井芯が中心線に追従）が、ヒット対象（天伏は天井芯だけ）で絞ると目印の中心線を選べない。
-      // 天伏以外のモードで結果が不変なのは、findNearbyCenterLines が先に通り芯（struct）を常に除くため
-      // （構造モードで描画対象とヒット対象が食い違うのは struct だけ）。
+      // 天伏以外のモードで、描画対象とヒット対象の食い違いは通り芯（struct）だけで、これは
+      // findNearbyCenterLines が先に常に除く。
+      // 加えて「吸着専用」の種別（構造モードの中心線。isAddDialogSnapOnlyRef）は描かないが参照候補に入れる
+      // ——構造モードの梁芯の手動追加が、非表示の中心線の位置へ吸着できるように（規則C 案c・S3-3）。
       const nearbyCLs = findNearbyCenterLines(
         graph, pos.x, pos.y, SNAP_THRESHOLD_PX * 2,
         viewport.scaleX, viewport.scaleY, clType
-      ).filter(cl => isRenderTarget(cl, appMode));
+      ).filter(cl => isRenderTarget(cl, appMode) || isAddDialogSnapOnlyRef(cl, appMode));
       setClDialog({
         type:       isV ? 'vertical' : 'horizontal',
         worldCoord: isV ? pos.x : pos.y,

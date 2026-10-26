@@ -326,6 +326,17 @@ export const SlabBayFillSkip = Object.freeze({
 // （structural/slabSecondaryBeamAxes.js slabBeamSlotKey）。
 export const SLAB_BEAM_SLOT_KEY_PREFIX = 'slab';
 
+// 注意色（黄）。画面の構造モードで「手動の梁芯に近すぎる自動の梁芯に乗る子梁」を示す
+// （structural/slabSecondaryBeamAxes.js nearUserSlabAxisIds）。由来色（renderer/canvasStyle.js ORIGIN_HUES）
+// ではないのでそちらには足さない。
+export const CAUTION_COLOR = 'hsl(48, 100%, 45%)';
+
+// CL追加ダイアログ（ui/AddCLDialog.jsx）の参照の選択肢のうち、実CLではない合成の選択肢の種類。
+// 実CLの選択肢はこの印（optionKind）を持たない。印の無いものだけが CL 種別の自動導出（centerLineKind）に通る。
+export const AddCLOptionKind = Object.freeze({
+  COLUMN_AXIS: 'columnAxis', // 構造モードの柱芯（通り芯 clId＋偏芯量 axisOffset の合成。App.jsx buildColumnAxisRefs）
+});
+
 // 敷地線の種別
 export const SiteLineKind = Object.freeze({
   BOUNDARY:   'boundary',   // 境界（隣地境界線）

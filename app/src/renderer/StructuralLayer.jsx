@@ -1,6 +1,8 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Rect, Circle, Group, Text } from 'react-konva';
 import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
+import { CAUTION_COLOR } from '../core/constants.js';
+import { nearUserSlabAxisIds } from '../structural/slabSecondaryBeamAxes.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
@@ -525,6 +527,14 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
         });
       });
 
+  // 手動の梁芯に近すぎる自動の梁芯（S造のスラブ小梁。規則C 案c・S3-3）に乗る子梁を注意色にする。画面の構造モード
+  // だけの表示（この StructuralLayer は SceneLayers 経由の画面描画専用で、図面合成・出力は通らない）。
+  // 梁芯の座標（effectiveValue）を読むため通り芯・梁芯のドラッグ中は毎フレーム再計算になる（早期returnで
+  // USER／SLAB_BEAM の梁芯が無い階は梁芯の走査だけ。ベイの計算はあるときのみ）。パン・ズームの再レンダーでは飛ぶ。
+  const cautionAxisIds = beam?.graph
+    ? graphComputed(beam.graph, 'nearUserSlabAxisIds', () => nearUserSlabAxisIds(beam.graph, project))
+    : null;
+
   return (
     <>
       {backColumnGroups.map(renderColumnGroup)}
@@ -567,7 +577,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
       </Group>
       <Group {...groupPropsForStyle(beam?.spec.style)}>
         {beamDrawSpans.flatMap(({ beam: b, coord1, coord2, ends }) => {
-          const color = colorOf(b.materialType);
+          const color = cautionAxisIds?.has(b.axisCL.id) ? CAUTION_COLOR : colorOf(b.materialType);
           // 詳細描画では梁を柱断面ではなくダイヤフラム端まで（鋼管柱のみ e 分だけ手前で止まる）。
           // スパン(coord1/coord2)は上でbeamDrawSpansとして解決済み——非正角材の標記（beamDepthMarks）と
           // 同じスパンを読む（二重計算・食い違いの防止）。

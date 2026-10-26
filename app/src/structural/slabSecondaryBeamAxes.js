@@ -372,6 +372,40 @@ export function slabBeamSlotKeyFor(graph, project, probe) {
   return slotKeyIn(graph, bay, probe.coord);
 }
 
+/**
+ * 手動の梁芯（由来 USER）に近すぎる自動の梁芯（由来 SLAB_BEAM）の id 集合（規則C 案c・S3-3。ユーザー裁定 Q4・R1）。
+ * 手動の梁芯を中心線へ吸着して足すと、自動の梁芯とほぼ同じ位置に2本並びうる（Q4: ずれれば両方残る）。
+ * 画面で子梁を注意色にするための判定。「近い」＝同じベイ（ownerBay）・同じ向き・梁芯の範囲（extent）が重なり、
+ * 距離がそのベイの割付けのピッチ（長辺/分割数）の半分未満。ベイの計算・所属判定は割り直し
+ * （reconcileSlabSecondaryBeamAxes）と同じ関数。S造の等ピッチ割付け対象でない構造・SLAB_BEAM や USER が
+ * 無い階は空。割付け対象外のベイ（開口・短辺が短い）の梁芯は数えない（割り直しが撤去するため）。
+ * 座標は effectiveValue（ドラッグ中の pendingDelta を含む）を読む。
+ * @param {object} graph
+ * @param {object} project
+ * @returns {Set<string>} 近すぎる SLAB_BEAM 梁芯の CL id
+ */
+export function nearUserSlabAxisIds(graph, project) {
+  const result = new Set();
+  const axes = beamAxisCenterLines(graph);
+  const slabAxes = axes.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM);
+  const userAxes = axes.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.USER);
+  if (slabAxes.length === 0 || userAxes.length === 0) return result; // ベイの計算を避ける早期return
+  const built = buildBays(graph, project);
+  if (!built) return result;
+  for (const slab of slabAxes) {
+    const bay = ownerBay(built.bays, axisProbe(slab));
+    if (!bay || bay.skip) continue;
+    const halfPitch = (bay.geom.longHi - bay.geom.longLo) / bayDivisionCount(graph, bay) / 2;
+    // beamAxesInBay が「ベイ内部で、梁芯の走る方向の extent がベイと重なる」ものだけを返す（SLAB_BEAM の extent は
+    // ベイの短辺そのもの）。向きは SLAB と同じものだけ。
+    const near = beamAxesInBay(graph, bay.cell, built.boundaryAxisIds).some(user =>
+      user.beamAxisOrigin === BeamAxisOrigin.USER && user.centerLineType === slab.centerLineType &&
+      Math.abs(user.effectiveValue - slab.effectiveValue) < halfPitch);
+    if (near) result.add(slab.id);
+  }
+  return result;
+}
+
 // 梁芯 cl の所属判定用の引数（暗黙の getter 読みを 1 か所に集める）。
 function axisProbe(cl) {
   return {

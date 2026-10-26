@@ -22,6 +22,7 @@ import {
   ORTHO_ANCHOR_OVERRIDE, WALL_ANCHOR_KINDS, EXTENT_ANCHOR_STYLE, ENDPOINT_RULE_KINDS, FULL_SPAN_KINDS,
   CONVERT_BLOCKING_KINDS, CROSS_FLOOR_COUNTERPART_KINDS, OPENING_BOUNDARY_KINDS,
   CONVERT_SUBJECT_KINDS, BEAM_AXIS_MOVE_SNAP_KINDS_BY_MODE,
+  ADD_DIALOG_SNAP_ONLY_KINDS_BY_MODE, isAddDialogSnapOnlyRef,
   kindsVisibleIn, hitTestKinds, kindsVisibleWith, orthoAnchorKinds, sameDirectionObstacleKinds,
   moveSnapTargetKinds,
   coexistenceAt, convertBlockingKinds, convertSubjectKind, mergeableKinds, allowsWallAnchor, extentAnchorStyle,
@@ -409,6 +410,32 @@ test('usesBeamAxisMoveSnap: 総当り（5種別×全appMode。structureかつ梁
 test('【失敗系】usesBeamAxisMoveSnap: 未知のappModeはthrowする', () => {
   const cl = makeDuckCL('beam', true, CenterLineType.VERTICAL);
   assert.throws(() => usesBeamAxisMoveSnap(cl, 'unknown'), /未知のappMode: unknown/);
+});
+
+// ---- ADD_DIALOG_SNAP_ONLY_KINDS_BY_MODE・isAddDialogSnapOnlyRef（追加ダイアログの吸着専用の参照。規則C 案c・S3-3） ----
+
+test('ADD_DIALOG_SNAP_ONLY_KINDS_BY_MODE: 構造モードの中心線だけ（凍結。描画・ヒット・関係の導出の表には現れない）', () => {
+  assert.deepEqual(Object.fromEntries(Object.entries(ADD_DIALOG_SNAP_ONLY_KINDS_BY_MODE).map(([k, v]) => [k, [...v]])), { structure: ['center'] });
+  assert.ok(Object.isFrozen(ADD_DIALOG_SNAP_ONLY_KINDS_BY_MODE));
+  for (const v of Object.values(ADD_DIALOG_SNAP_ONLY_KINDS_BY_MODE)) assert.ok(Object.isFrozen(v));
+  // 別表であること: 構造モードで中心線は描かれず・ヒットせず・可視表にも入らない（案b と同じにならない）。
+  assert.equal(kindsRenderedIn('structure').includes('center'), false);
+  assert.equal(hitTestKinds('structure').includes('center'), false);
+  assert.equal(kindsVisibleIn('structure').includes('center'), false);
+});
+
+test('isAddDialogSnapOnlyRef: 総当り（5種別×全appMode）。構造モードの中心線だけが吸着専用', () => {
+  for (const appMode of APP_MODES) {
+    for (const kind of CL_KINDS) {
+      const cl = makeDuckCL(kind, true, CenterLineType.VERTICAL);
+      assert.equal(isAddDialogSnapOnlyRef(cl, appMode), appMode === 'structure' && kind === 'center', `appMode=${appMode} kind=${kind}`);
+    }
+  }
+});
+
+test('【失敗系】isAddDialogSnapOnlyRef: 未知のappModeはthrowする', () => {
+  const cl = makeDuckCL('center', true, CenterLineType.VERTICAL);
+  assert.throws(() => isAddDialogSnapOnlyRef(cl, 'unknown'), /未知のappMode: unknown/);
 });
 
 test('hitTestKinds: floorplan/finish/opening=通り芯・中心線・補助線、ceiling=天井芯のみ、structure=梁芯のみ', () => {
@@ -1663,13 +1690,30 @@ test('【不変条件】isRenderTarget と isHitTestTarget は天伏以外の全
   assert.deepEqual(nearby.filter(cl => isHitTestTarget(cl, 'ceiling')).map(centerLineKind), ['ceiling'], '（旧: ヒット対象で絞ると天井芯しか選べない）');
 });
 
+test('CL追加メニューの参照候補（描画対象 ∪ 吸着専用）: 構造モードは梁芯＋中心線（補助線・天井芯は入らない）。構造モード以外は従来どおり描画対象のみ', () => {
+  const kinds = {
+    center:  { labeled: false, discipline: Discipline.ARCH },
+    aux:     { labeled: false, discipline: Discipline.ARCH, lineType: 'dashed' },
+    beam:    { labeled: false, discipline: Discipline.FUSE },
+    ceiling: { labeled: false, discipline: Discipline.CEILING },
+  };
+  const { graph } = makeProjectWithGraph();
+  Object.values(kinds).forEach((props, i) => graph.addCenterLine(CenterLineType.VERTICAL, 1000 * (i + 1), props));
+  const nearby = findNearbyCenterLines(graph, 0, 0, 1e9, 1, 1, CenterLineType.VERTICAL);
+  const candidates = (mode) => nearby.filter(cl => isRenderTarget(cl, mode) || isAddDialogSnapOnlyRef(cl, mode)).map(centerLineKind).sort();
+  assert.deepEqual(candidates('structure'), ['beam', 'center']);
+  for (const mode of APP_MODES.filter(m => m !== 'structure')) {
+    assert.deepEqual(candidates(mode), nearby.filter(cl => isRenderTarget(cl, mode)).map(centerLineKind).sort(), `${mode}: 従来と同じ`);
+  }
+});
+
 test('【不変条件】App.jsx: CL追加メニューの参照候補がポリシー（isRenderTarget / isHitTestTarget / hitTestKinds）で絞られる', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '../App.jsx'), 'utf8');
   const idx = src.indexOf('findNearbyCenterLines(');
   assert.ok(idx >= 0, 'findNearbyCenterLines( の呼び出しが見つからない');
   const code = stripLineComments(src.slice(idx, idx + 500));
   assert.ok(
-    /\.filter\(cl\s*=>\s*isRenderTarget\(cl,\s*appMode\)\)/.test(code) ||
+    /\.filter\(cl\s*=>\s*isRenderTarget\(cl,\s*appMode\)(\s*\|\|\s*isAddDialogSnapOnlyRef\(cl,\s*appMode\))?\)/.test(code) ||
     /\.filter\(cl\s*=>\s*isHitTestTarget\(cl,\s*appMode\)\)/.test(code) ||
     /\.filter\(cl\s*=>\s*hitTestKinds\(appMode\)\.includes\(centerLineKind\(cl\)\)\)/.test(code),
     'findNearbyCenterLines(...) の直後にポリシー（isHitTestTarget/hitTestKinds）由来のフィルタが見つからない'

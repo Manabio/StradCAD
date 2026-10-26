@@ -291,7 +291,9 @@ function bodyLines(src) {
 
 // 小屋組を足す前から存在し、今回の変更で1文字も変えてはならない本体の行（梁本体の色・梁の帯・非正角材の標記）。
 const UNCHANGED_BODY_LINES = [
-  'const color = colorOf(b.materialType);',
+  // 梁本体の色。S3-3（2026-10-26）で手動の梁芯に近すぎる自動の梁芯に乗る子梁の注意色（CAUTION_COLOR）を足した
+  // ——色以外の梁本体の行（下の帯・線）は無改変のまま。配線は StructuralLayer.caution.wiring.test.js。
+  'const color = cautionAxisIds?.has(b.axisCL.id) ? CAUTION_COLOR : colorOf(b.materialType);',
   'const baseSpans = (beam?.graph?.beams ?? []).map(b => {',
   '<Line key={b.id} points={[p1.x, p1.y, p2.x, p2.y]} stroke={color} strokeWidth={thin} dash={beamDash} {...pickShapeProps} />,',
   '...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash, pickShapeProps),',

@@ -11,7 +11,9 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { SlabBayFillSkip, STEEL_SECONDARY_BEAM_MAX_PITCH_MM, CL_OVERLAP_TOL_MM } from '../core/constants.js';
-import { reconcileSlabSecondaryBeamAxes, slabBeamSlotKeyFor, planSlabSecondaryBeamAxes, slabBeamSlotKey, parseSlabBeamSlotKey } from './slabSecondaryBeamAxes.js';
+import { reconcileSlabSecondaryBeamAxes, slabBeamSlotKeyFor, planSlabSecondaryBeamAxes, slabBeamSlotKey, parseSlabBeamSlotKey, nearUserSlabAxisIds } from './slabSecondaryBeamAxes.js';
+import { addCenterLineFromDialog } from '../transform/centerLineOps.js';
+import { initialRef, foldRefForConfirm } from '../ui/addCLDialogRefs.js';
 import { exclusionKeyReferencesCL } from '../core/structuralEntities.js';
 import { autoFillSecondaryBeams } from './structuralAutoFill.js';
 import { rulesFor } from './structureRules.js';
@@ -1118,4 +1120,144 @@ test('【S2d・配線・U5】横に並ぶ2ベイ: 左のベイの子梁芯の移
   });
   assert.deepEqual(beamAxisMoveRange(p.g2, a), { min: 0 + CL_OVERLAP_TOL_MM, max: b.value - CL_OVERLAP_TOL_MM },
     '下は辺の通り芯 y=0（右のベイの y=1000 は無視）、上は同じベイの隣（順番が入れ替わらない）');
+});
+
+// ---- S3-3: 手動の梁芯に近すぎる自動の梁芯（nearUserSlabAxisIds） ----
+// 5000×6000 のベイ: 横梁の梁芯が y=-4000・-2000（n=3・ピッチ2000・ピッチの半分1000）。
+const userAxis = (b, y, extra = {}) => b.graph.addCenterLine(CenterLineType.HORIZONTAL, y, {
+  labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER,
+  extentLoRef: { clId: b.x0.id, offset: 0 }, extentHiRef: { clId: b.x1.id, offset: 0 }, ...extra,
+});
+function nearBay() {
+  const b = buildBay('S造', { width: 5000, height: 6000 });
+  settle(b.graph, 1);
+  const [a, c] = slabAxesOf(b.graph);
+  assert.deepEqual([a.value, c.value], [-4000, -2000], '前提: 自動の梁芯の位置');
+  return { b, a, c };
+}
+
+test('【S3-3】nearUserSlabAxisIds: 手動の梁芯とのスパン方向の距離がピッチの半分（1000）未満の自動の梁芯だけが入る。ちょうど半分と以上は入らない', () => {
+  const { b, a, c } = nearBay();
+  const ids = () => [...nearUserSlabAxisIds(b.graph, PROJECT)];
+  const user = userAxis(b, -3001); // a(-4000) まで 999
+  assert.deepEqual(ids(), [a.id]);
+  user.value = -3000; // a・c ともちょうど 1000（境界: 入らない）
+  assert.deepEqual(ids(), []);
+  user.value = -2999; // c(-2000) まで 999
+  assert.deepEqual(ids(), [c.id]);
+  user.value = -4000 + 1001; // a まで 1001（以上: 入らない）、c まで 999
+  assert.deepEqual(ids(), [c.id]);
+  userAxis(b, -4400); // a に 400
+  assert.deepEqual(new Set(ids()), new Set([a.id, c.id]), '2本の手動の梁芯がそれぞれの自動の梁芯に近い');
+});
+
+test('【S3-3・失敗系】nearUserSlabAxisIds: 手動の梁芯が無い・自動の梁芯が無い・S造でない・別ベイ・向き違い・範囲が重ならないときは入らない', () => {
+  const { b } = nearBay();
+  assert.equal(nearUserSlabAxisIds(b.graph, PROJECT).size, 0, '手動の梁芯が無い');
+
+  // 自動の梁芯が無い（USER 同士・SLAB_BEAM の条件）: 未割付けのベイに USER を2本（近いが SLAB_BEAM ではない）。
+  const noSlab = buildBay('S造', { width: 5000, height: 6000 });
+  userAxis(noSlab, -4000); userAxis(noSlab, -3300);
+  assert.equal(nearUserSlabAxisIds(noSlab.graph, PROJECT).size, 0, '自動の梁芯が無ければ手動どうしは対象外');
+
+  // 向き違い: 縦の手動の梁芯（x=2400）は横梁の SLAB_BEAM と同じ向きでない。
+  const v = nearBay();
+  v.b.graph.addCenterLine(CenterLineType.VERTICAL, 2400, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER,
+    extentLoRef: { clId: v.b.y0.id, offset: 0 }, extentHiRef: { clId: v.b.y1.id, offset: 0 },
+  });
+  assert.equal(nearUserSlabAxisIds(v.b.graph, PROJECT).size, 0, '向き違い');
+
+  // 向き違いの距離: ベイ x∈[0,5000]・y∈[1000,7000]（横梁の梁芯 y=3000・5000、半ピッチ1000）に、縦の手動の梁芯
+  // x=3300（|3300−3000|=300 < 半ピッチ。ベイ内・extent も重なる）を置く。値だけ近くても向きが違えば入らない。
+  const g = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  g.structureOverride = 'S造';
+  const rules = rulesFor('S造');
+  const st = { labeled: true, discipline: Discipline.STRUCT };
+  const gx0 = g.addCenterLine(CenterLineType.VERTICAL, 0, st), gx1 = g.addCenterLine(CenterLineType.VERTICAL, 5000, st);
+  const gy0 = g.addCenterLine(CenterLineType.HORIZONTAL, 1000, st), gy1 = g.addCenterLine(CenterLineType.HORIZONTAL, 7000, st);
+  const addB = (cl, isV, p, q) => g.addBeam(rules.baseMaterial, rules.defaultSections.beam, cl, isV, p, q, { role: 'primary' });
+  addB(gy0, false, gx0, gx1); addB(gy1, false, gx0, gx1); addB(gx0, true, gy0, gy1); addB(gx1, true, gy0, gy1);
+  settle(g, 1);
+  assert.deepEqual(slabAxesOf(g).map(a => a.value), [3000, 5000], '前提: 自動の梁芯の位置');
+  g.addCenterLine(CenterLineType.VERTICAL, 3300, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER,
+    extentLoRef: { clId: gy0.id, offset: 0 }, extentHiRef: { clId: gy1.id, offset: 0 },
+  });
+  assert.equal(nearUserSlabAxisIds(g, PROJECT).size, 0, '値が近い縦の梁芯でも向き違いは入らない');
+  g.addCenterLine(CenterLineType.HORIZONTAL, 3300, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER,
+    extentLoRef: { clId: gx0.id, offset: 0 }, extentHiRef: { clId: gx1.id, offset: 0 },
+  });
+  assert.equal(nearUserSlabAxisIds(g, PROJECT).size, 1, '対照: 同じ値の横の梁芯なら入る');
+
+  // 範囲が重ならない: 手動の梁芯の extent がベイの右の外（x 5000〜9000）。
+  const r = nearBay();
+  userAxis(r.b, -3300, { extentLoRef: null, extentHiRef: null, extentLo: 5000, extentHi: 9000 });
+  assert.equal(nearUserSlabAxisIds(r.b.graph, PROJECT).size, 0, 'extent が重ならない');
+
+  // S造でない: 同じ梁芯のまま主構造だけ在来木造にすると空。
+  const w = nearBay();
+  userAxis(w.b, -3300);
+  assert.equal(nearUserSlabAxisIds(w.b.graph, PROJECT).size, 1, '前提: S造なら入る');
+  w.b.graph.structureOverride = '在来木造';
+  assert.equal(nearUserSlabAxisIds(w.b.graph, PROJECT).size, 0, 'S造以外は空');
+});
+
+test('【S3-3】nearUserSlabAxisIds: 別のベイの手動の梁芯は数えない（隣のベイの自動の梁芯だけが入る）', () => {
+  const b = buildBay('S造', { width: 5000, height: 6000 });
+  const rules = rulesFor('S造');
+  const x2 = b.graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const add = (cl, isV, p, q) => b.graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, cl, isV, p, q, { role: 'primary' });
+  add(b.y0, false, b.x1, x2); add(b.y1, false, b.x1, x2); add(x2, true, b.y0, b.y1);
+  settle(b.graph, 1);
+  const rightAxes = slabAxesOf(b.graph).filter(a => a.extentLoRef.clId === b.x1.id);
+  assert.equal(rightAxes.length, 2, '前提: 右のベイにも自動の梁芯が2本');
+  userAxis(b, -3300, { extentLoRef: { clId: b.x1.id, offset: 0 }, extentHiRef: { clId: x2.id, offset: 0 } });
+  const ids = [...nearUserSlabAxisIds(b.graph, PROJECT)];
+  assert.deepEqual(ids, [rightAxes[0].id], '右のベイの y=-4000 の梁芯だけ（左のベイの同じ y の梁芯は入らない）');
+});
+
+const realProject = () => { const p = new Project('proj-s33', 'test'); p.structuralInfo.mainStructure = 'S造'; return p; };
+
+test('【S3-3・配線】吸着後の値（中心線の位置・絶対座標）で addCenterLineFromDialog: 由来 USER・refId なし・子梁が生成され、ずれた自動の梁芯は残り、近い自動の梁芯が注意対象になる', async () => {
+  const { b, a, c } = nearBay();
+  const center = b.graph.addCenterLine(CenterLineType.HORIZONTAL, -3300, { labeled: false, discipline: Discipline.ARCH });
+  // ダイアログの流れ: 参照の選択肢 = 近接する中心線 + 通り芯。ポインタ y=-3290 の最寄りは中心線 → 距離 '0'
+  const worldCoord = -3290, sign = -1;
+  const options = [center, ...b.graph.gridYs];
+  const init = initialRef(options, worldCoord, 'structure', sign);
+  assert.deepEqual(init, { refId: center.id, distStr: '0' });
+  const refCL = options.find(o => o.id === init.refId);
+  const dir = worldCoord >= refCL.value ? 1 : -1;
+  const previewWorld = refCL.value + dir * 0;
+  const folded = foldRefForConfirm(refCL, 'structure', { dist: 0, dir });
+  assert.deepEqual(folded, { refId: null, refOffset: null });
+  const r = await addCenterLineFromDialog(
+    b.graph, realProject(),
+    { clDialog: { type: 'horizontal', worldCoord, perpCoord: 2500 }, value: previewWorld, kind: 'beam', refId: folded.refId, refOffset: folded.refOffset },
+    null,
+  );
+  assert.equal(r.done, true);
+  const added = b.graph.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.USER);
+  assert.equal(added.value, -3300);
+  assert.equal(added.refId ?? null, null, '絶対座標（中心線に追従しない）');
+  assert.ok(b.graph.beams.some(bm => bm.axisCL.id === added.id && bm.role === 'secondary'), '子梁が生成される');
+  // 再計算を重ねても自動の梁芯は残る（-3300 は目標 -4000・-2000 のどちらとも一致しない＝両方残る）
+  settle(b.graph, 3);
+  assert.deepEqual(slabAxesOf(b.graph).map(x => x.id), [a.id, c.id]);
+  assert.deepEqual([...nearUserSlabAxisIds(b.graph, PROJECT)], [a.id], 'a(-4000) まで 700 < 1000');
+});
+
+test('【S3-3・失敗系・配線】自動の梁芯と同位置への手動追加は同種別の重複として拒否され、自動の梁芯は二重にならない', async () => {
+  const { b, a } = nearBay();
+  const r = await addCenterLineFromDialog(
+    b.graph, realProject(),
+    { clDialog: { type: 'horizontal', worldCoord: -4000, perpCoord: 2500 }, value: -4000, kind: 'beam', refId: null, refOffset: null },
+    null,
+  );
+  assert.equal(r.done, false);
+  assert.ok(r.toast);
+  assert.equal(b.graph.centerLines.filter(cl => Math.abs(cl.value - -4000) < CL_OVERLAP_TOL_MM && cl.discipline === Discipline.FUSE).length, 1);
+  assert.equal(a.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM);
 });
