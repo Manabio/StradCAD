@@ -58,6 +58,36 @@ function intrudes(cluster, a, b, tol) {
   return cluster.intervals.some(([lo, hi]) => hi > a + tol && lo < b - tol);
 }
 
+// 区画の子梁（床梁・スラブ小梁）の材軸方向。短辺・長辺が同寸（正方形）のときは材軸＝X（横梁、isVertical:false）
+// にする（ユーザー裁定2026-09-15。方向自体は既定でユーザー未確認——反転したいときはこの1関数だけ直せばよい）。
+export function bayBeamIsVertical(w, h) {
+  return h < w; // 短辺が垂直方向(h)のときだけ縦梁。同寸・hが長いときは横梁。
+}
+
+/**
+ * 区画 cell を短辺方向に架ける子梁で等間隔に割る。長辺方向に n=ceil(長辺/maxPitchMm) 等分し、
+ * 内部の n-1 本の座標を返す。短辺 <= maxPitchMm（子梁不要）・内部位置が無いときは null。
+ * @param {{x1:number, y1:number, x2:number, y2:number}} cell
+ * @param {number} maxPitchMm
+ * @returns {{isVertical:boolean, coords:number[], shortLo:number, shortHi:number, longLo:number, longHi:number}|null}
+ */
+export function divideBayEqually(cell, maxPitchMm) {
+  const w = cell.x2 - cell.x1, h = cell.y2 - cell.y1;
+  if (Math.min(w, h) <= maxPitchMm) return null;
+  const isVertical = bayBeamIsVertical(w, h);
+  const longLen = isVertical ? w : h;
+  const longLo = isVertical ? cell.x1 : cell.y1;
+  const longHi = isVertical ? cell.x2 : cell.y2;
+  const shortLo = isVertical ? cell.y1 : cell.x1;
+  const shortHi = isVertical ? cell.y2 : cell.x2;
+  const n = Math.ceil(longLen / maxPitchMm);
+  if (n < 2) return null; // 内部位置が無い（理論上 min(w,h)>maxPitchMm 判定と矛盾しないための安全弁）
+  const pitch = longLen / n;
+  const coords = [];
+  for (let i = 1; i < n; i++) coords.push(longLo + i * pitch);
+  return { isVertical, coords, shortLo, shortHi, longLo, longHi };
+}
+
 /**
  * 梁の軸線 lines から、縦線 coord 集合 × 横線 coord 集合の**全ペア**（隣接に限らない）が作る矩形のうち、
  * 4辺すべてがその線上の梁で覆われ、かつ**内部（両端を除いた開区間）へ入り込む梁が1本も無い**ものを返す。

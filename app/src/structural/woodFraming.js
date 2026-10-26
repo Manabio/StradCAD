@@ -677,7 +677,7 @@ export function mergePrimaryBeamRuns(segments, tol = CL_OVERLAP_TOL_MM) {
  * いずれかの方向へ両端を固定した梁を延長、または生成する」）。
  * 点 P（柱のAXIS座標。偏心を含めない）ごとに、水平・垂直の両方向で「Pを通り、隣接する直交の既存梁2本
  * （segments）に支持される区間」を求め、両方向とも候補になれば総長（支持点間距離）が短い方を採用する。
- * 同長は横梁（isVertical:false）を優先する（floorBeamIsVertical・beamJunctionと同じタイブレーク）。
+ * 同長は横梁（isVertical:false）を優先する（bayBeamIsVertical・beamJunctionと同じタイブレーク）。
  *  - **no-opの判定（指摘B・2026-09-18）**: Pが既存梁区間の**内部**（両端からtol超）にあれば無条件no-op。
  *    Pが既存梁の**端**に一致する場合は、その点が「支持されている」ときだけno-op——支持＝
  *    supportPoints（下階柱のAXIS点列）にPと一致する点があるか、Pが**別の**既存梁区間の内部でもある

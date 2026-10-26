@@ -21,7 +21,7 @@ import {
 } from './structureRules.js';
 import { selfWallSegments, findBeamAnchorCL, ensureAutoBeamAxisCL, bracketAutoBeamAxisExtent, wallBackingCenterCoord } from './wallBeamAxes.js';
 import { woodStudCodeFor } from '../finish/materials/backingClass.js';
-import { beamGridCells } from './framingCells.js';
+import { beamGridCells, divideBayEqually } from './framingCells.js';
 import { rectangularSidesOf, edgeTarget } from './openingBeamAxes.js';
 import {
   woodBeamDepthForSpans, koyaBeamDepthForSpans, woodBeamSectionForDepth, isValidManualDepth, crossingBeamLoadCoords,
@@ -1546,12 +1546,6 @@ export function autoFillWoodSillBeams(graph, project, wallSegments = [], wallGat
   return { created, removed };
 }
 
-// 床梁（role:'floor'、記号FB）の材軸方向。短辺・長辺が同寸（正方形）のときは材軸＝X（横梁、isVertical:false）
-// にする（ユーザー裁定2026-09-15。方向自体は既定でユーザー未確認——反転したいときはこの1関数だけ直せばよい）。
-function floorBeamIsVertical(w, h) {
-  return h < w; // 短辺が垂直方向(h)のときだけ縦梁。同寸・hが長いときは横梁。
-}
-
 // 二重防御: 生成しようとしている床梁の軸（isVertical・coord）上に、既存の木造 primary/floor 梁が
 // 生成スパン[lo,hi]と重なっていないか。beamGridCellsのセル判定は内部に梁が入り込む矩形を候補から
 // 除外するが、findBeamAnchorCLで位置に既存の通り芯・梁芯CLを再利用した場合、その既存CLを軸に持つ
@@ -1600,7 +1594,7 @@ function lockedFullBeamOverlap(graph, materialType, isVertical, coord, lo, hi, t
  *    から作った線分（coord=axisValue、lo/hi=clStart/clEnd.effectiveValue の min/max）に beamGridCells を適用する（finish/gridCells.js は梁芯を含まないため端が host に届かず使わない）。
  *  - 必要判定: min(短辺,長辺) <= floorBeamMaxPitchMm なら床梁なし（両辺が1820超のときだけ生成）。
  *  - 方向: 短辺方向に架ける（材軸＝短辺と平行）。長辺方向に n=ceil(長辺/1820) 等分し、内部の n-1 本を
- *    等間隔で置く（floorBeamIsVertical。正方形は材軸＝X＝横梁）。
+ *    等間隔で置く（framingCells.js divideBayEqually・bayBeamIsVertical。正方形は材軸＝X＝横梁）。
  *  - アンカー: 材軸の直交CL（clStart/clEnd）はセルの両辺を作っている大梁自身の axisCL（座標一致で
  *    大梁を逆引きする——beamGridCellsは線分の集合しか返さないため）。材軸CL（axisCL）は位置に既存の
  *    通り芯・梁芯があればそれを使う（findBeamAnchorCL）。無ければ梁芯CL（discipline:'fuse'、labeled:false）
@@ -1702,29 +1696,19 @@ export function autoFillWoodFloorBeams(graph, project, roofCellKeys = undefined,
       .map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
 
   for (const cell of cells) {
-    const w = cell.x2 - cell.x1, h = cell.y2 - cell.y1;
-    if (Math.min(w, h) <= maxPitch) continue; // 短辺が1820以下なら床梁不要
     if (roofCells?.has(cell)) continue; // 対象の下屋の区画（屋根の下に床は無い）
     if (inOpening(cell)) continue; // 床開口の区画（開口の上に床は無い）
-
-    const isVertical = floorBeamIsVertical(w, h);
-    const longLen = isVertical ? w : h;
-    const longLo  = isVertical ? cell.x1 : cell.y1;
-    const shortLo = isVertical ? cell.y1 : cell.x1;
-    const shortHi = isVertical ? cell.y2 : cell.x2;
-    const n = Math.ceil(longLen / maxPitch);
-    if (n < 2) continue; // 内部位置が無い（理論上min(w,h)>maxPitch判定と矛盾しないための安全弁）
+    const division = divideBayEqually(cell, maxPitch); // 短辺が1820以下なら床梁不要（null）
+    if (!division) continue;
+    const { isVertical, coords, shortLo, shortHi, longLo, longHi } = division;
 
     // 材軸の直交CL＝セルの短辺を作っている大梁自身のaxisCL（材軸と直交する向きの大梁）。
-    const longHi = isVertical ? cell.x2 : cell.y2;
     const startEdge = findEdgeBeam(!isVertical, shortLo, longLo, longHi);
     const endEdge = findEdgeBeam(!isVertical, shortHi, longLo, longHi);
     if (!startEdge || !endEdge) continue; // 理論上beamGridCellsの被覆保証により必ず見つかるはずの安全弁
     const clStart = startEdge.axisCL, clEnd = endEdge.axisCL;
 
-    const pitch = longLen / n;
-    for (let i = 1; i < n; i++) {
-      const coord = longLo + i * pitch;
+    for (const coord of coords) {
       // 由来は「その座標が床梁の候補になった」時点の意味であり、この後の除外集合・スパン重複判定
       // （下のexcludedBeamSlots/existingFloorKeys等）より前に書き戻す。そのため実際には床梁を
       // 生成しない座標の既存梁芯にもfloorBeamが付きうる（色分けはwall由来と同じgeneratedのため実害なし）。

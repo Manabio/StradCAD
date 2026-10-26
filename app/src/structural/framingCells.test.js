@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { beamGridCells } from './framingCells.js';
+import { beamGridCells, bayBeamIsVertical, divideBayEqually } from './framingCells.js';
 
 // 縦線ヘルパ（coord=x, lo/hi=y範囲）
 const V = (coord, lo, hi) => ({ isVertical: true, coord, lo, hi });
@@ -134,4 +134,35 @@ test('入力順序をシャッフルしても同一結果になる（内部で�
   assert.notDeepEqual(shuffled, lines, '前提: 実際に順序が入れ替わっている');
   assert.equal(beamGridCells(lines).length, 4, '前提: 田の字は4セル（シャッフル結果と比較する基準そのものが正しいことを固定する）');
   assert.deepEqual(beamGridCells(shuffled), beamGridCells(lines));
+});
+
+test('bayBeamIsVertical: 高さが幅より小さいときだけ縦梁。正方形・高さが長いときは横梁', () => {
+  assert.equal(bayBeamIsVertical(7000, 5000), true);
+  assert.equal(bayBeamIsVertical(5000, 5000), false, '正方形は横梁（材軸＝X）');
+  assert.equal(bayBeamIsVertical(5000, 7000), false);
+});
+
+test('divideBayEqually: 5000×7000・最大2500 → 長辺7000を3等分、内部2本。横梁（isVertical:false）で短辺はx方向', () => {
+  const r = divideBayEqually({ x1: 0, y1: -7000, x2: 5000, y2: 0 }, 2500);
+  assert.equal(r.isVertical, false);
+  assert.deepEqual(r.coords, [-7000 + 7000 / 3, -7000 + 2 * (7000 / 3)], '式は longLo + i*(long/n)。丸めない');
+  assert.deepEqual([r.shortLo, r.shortHi, r.longLo, r.longHi], [0, 5000, -7000, 0]);
+});
+
+test('divideBayEqually: 縦長でないベイ（7000×5000）は縦梁でx方向を等分、短辺はy方向', () => {
+  const r = divideBayEqually({ x1: 0, y1: 0, x2: 7000, y2: 5000 }, 2500);
+  assert.equal(r.isVertical, true);
+  assert.equal(r.coords.length, 2);
+  assert.deepEqual([r.shortLo, r.shortHi], [0, 5000]);
+});
+
+test('【失敗系】divideBayEqually: 短辺が最大ピッチ以下なら null（ちょうど2500は割らない、2501は割る）', () => {
+  assert.equal(divideBayEqually({ x1: 0, y1: 0, x2: 2500, y2: 9000 }, 2500), null);
+  assert.equal(divideBayEqually({ x1: 0, y1: 0, x2: 9000, y2: 2500 }, 2500), null);
+  assert.equal(divideBayEqually({ x1: 0, y1: 0, x2: 2501, y2: 2501 }, 2500).coords.length, 1);
+});
+
+test('divideBayEqually: 木造の床梁と同じ式（最大1820・2730×5460 → 1820/3640）', () => {
+  const r = divideBayEqually({ x1: 0, y1: 0, x2: 2730, y2: 5460 }, 1820);
+  assert.deepEqual(r.coords, [1820, 3640]);
 });
