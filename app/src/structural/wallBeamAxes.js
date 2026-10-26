@@ -520,7 +520,7 @@ export function removeStaleWallBeamAxes(graph, wallSources) {
 export function isProtectedWallBeamAxis(graph, cl, { ignoreRefsFrom = new Set() } = {}) {
   // リード裁定（線種変更の移籍一本化 ステップ6是正・2026-09-30）: 由来がユーザー手動追加
   // （BeamAxisOrigin.USER。AddCLDialogからkind:'beam'で追加した梁芯）は無条件で保護する——
-  // wall/floorBeam/opening由来（自動生成）・null（旧データ）は従来どおり下の個別条件で判定する。
+  // wall/floorBeam/slabBeam/opening由来（自動生成）・null（旧データ）は従来どおり下の個別条件で判定する。
   if (cl.beamAxisOrigin === BeamAxisOrigin.USER) return true;
   if (cl.refId != null) return true;
   const hasProtectedUserData =

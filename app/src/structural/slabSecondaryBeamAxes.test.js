@@ -10,7 +10,8 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { SlabBayFillSkip, STEEL_SECONDARY_BEAM_MAX_PITCH_MM } from '../core/constants.js';
-import { autoFillSlabSecondaryBeamAxes, planSlabSecondaryBeamAxes } from './slabSecondaryBeamAxes.js';
+import { autoFillSlabSecondaryBeamAxes, planSlabSecondaryBeamAxes, slabBeamSlotKey, parseSlabBeamSlotKey } from './slabSecondaryBeamAxes.js';
+import { exclusionKeyReferencesCL } from '../core/structuralEntities.js';
 import { autoFillSecondaryBeams } from './structuralAutoFill.js';
 import { rulesFor } from './structureRules.js';
 import { wallBeamAxisExcludeKey } from './wallBeamAxes.js';
@@ -40,7 +41,7 @@ const axesOf = (created) => created.slice().sort((a, b) => a.value - b.value);
 // 開口セル矩形（openingCellRects の1件と同じ形）。
 const rectOpening = (x1, x2, y1, y2) => ({ x1, x2, y1, y2, source: 'void' });
 
-test('5000×7000のベイ: 短辺方向（横梁）の梁芯が y=-4666.67・-2333.33 の2本。端の通り芯を extent に参照し由来は floorBeam。座標は丸めない', () => {
+test('5000×7000のベイ: 短辺方向（横梁）の梁芯が y=-4666.67・-2333.33 の2本。端の通り芯を extent に参照し由来は slabBeam。座標は丸めない', () => {
   const { graph, x0, x1 } = buildBay('S造');
   const { created, skipped } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
   assert.deepEqual(skipped, []);
@@ -53,7 +54,7 @@ test('5000×7000のベイ: 短辺方向（横梁）の梁芯が y=-4666.67・-23
     assert.equal(a.labeled, false);
     assert.equal(a.discipline, Discipline.FUSE);
     assert.equal(centerLineKindOf(a), 'beam');
-    assert.equal(a.beamAxisOrigin, BeamAxisOrigin.FLOOR_BEAM);
+    assert.equal(a.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM);
     assert.equal(a.refId ?? null, null, 'refId は持たせない');
     assert.deepEqual([a.extentLoRef.clId, a.extentHiRef.clId], [x0.id, x1.id], 'extent は端の通り芯への参照');
     assert.deepEqual([a.extentLo, a.extentHi], [0, 5000], '解決後の extent は端の通り芯の位置');
@@ -201,12 +202,12 @@ function recomputePasses(graph, n = 3) {
 test('梁芯を1本削除（除外集合へ記録）→再計算×3パスで復活しない。残りの梁芯・子梁は保たれる', () => {
   const { graph } = buildBay('S造');
   recomputePasses(graph, 1);
-  const [first, second] = axesOf(graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.FLOOR_BEAM));
+  const [first, second] = axesOf(graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM));
   // centerLineOps.js の梁芯削除と同じ手順（除外集合へ記録→removeCenterLine。子梁は道連れ）。
   graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(false, first.effectiveValue));
   graph.removeCenterLine(first.id);
   assert.equal(recomputePasses(graph, 3).length, 0, '3パスとも何も作らない');
-  const left = graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.FLOOR_BEAM);
+  const left = graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM);
   assert.deepEqual(left.map(cl => cl.id), [second.id]);
   assert.equal(graph.beams.filter(b => b.role === 'secondary').length, 1);
 });
@@ -214,7 +215,7 @@ test('梁芯を1本削除（除外集合へ記録）→再計算×3パスで復�
 test('梁芯を両方削除しても除外集合があれば復活しない', () => {
   const { graph } = buildBay('S造');
   recomputePasses(graph, 1);
-  for (const a of graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.FLOOR_BEAM)) {
+  for (const a of graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM)) {
     graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(false, a.effectiveValue));
     graph.removeCenterLine(a.id);
   }
@@ -224,11 +225,11 @@ test('梁芯を両方削除しても除外集合があれば復活しない', ()
 test('子梁だけ削除（梁芯は残す）→再計算×3パスで梁も梁芯も復活しない', () => {
   const { graph } = buildBay('S造');
   recomputePasses(graph, 1);
-  const axisIds = graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.FLOOR_BEAM).map(cl => cl.id);
+  const axisIds = graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM).map(cl => cl.id);
   const victim = graph.beams.find(b => b.role === 'secondary');
   graph.removeBeam(victim.id);
   assert.equal(recomputePasses(graph, 3).length, 0);
-  assert.deepEqual(graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.FLOOR_BEAM).map(cl => cl.id), axisIds);
+  assert.deepEqual(graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM).map(cl => cl.id), axisIds);
   assert.equal(graph.beams.filter(b => b.role === 'secondary').length, 1);
 });
 
@@ -344,19 +345,52 @@ async function recomputeS2F(voidCellsOf) {
   } finally { floorSwapManager.peek = original; }
   return g2;
 }
-const floorBeamAxisYs = (g) => g.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.FLOOR_BEAM)
+const slabBeamAxisYs =(g) => g.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM)
   .map(cl => cl.value).sort((a, b) => a - b);
 
 test('【失敗系・配線】recomputeStructuralForGraph: S造の矩形の吹抜けと重なるベイには梁芯を作らず、隣のベイには作る', async () => {
   // 吹抜け＝上半分 x:[0,6000] y:[0,6000]（2×2セル）。下のベイ y:[6000,12000]（6000角）は y=8000,10000 の2本。
   const g2 = await recomputeS2F([[0, 0, 3000, 3000], [3000, 0, 6000, 3000], [0, 3000, 3000, 6000], [3000, 3000, 6000, 6000]]);
-  assert.deepEqual(floorBeamAxisYs(g2), [8000, 10000]);
+  assert.deepEqual(slabBeamAxisYs(g2), [8000, 10000]);
 });
 
 test('【失敗系・配線】L字（非矩形）の吹抜けと重なるベイは OPENING: 梁芯・子梁を作らず、接しない隣のベイには作る', async () => {
   // 吹抜け＝L字（上半分の4セルのうち右下を除く3セル）。吹抜けは非矩形のため開口辺の矩形成分（openingEdgeComponents）には
   // 入らないが、開口セル矩形には入る。上半分のベイ（6000角）は L字と面積で重なるので割り付けない。
   const g2 = await recomputeS2F([[0, 0, 3000, 3000], [3000, 0, 6000, 3000], [0, 3000, 3000, 6000]]);
-  assert.deepEqual(floorBeamAxisYs(g2), [8000, 10000], '上半分（L字と重なる）には無く、下のベイにだけある');
+  assert.deepEqual(slabBeamAxisYs(g2), [8000, 10000], '上半分（L字と重なる）には無く、下のベイにだけある');
   assert.equal(g2.beams.filter(b => b.role === 'secondary').length, 2, '子梁も下のベイの2本だけ');
+});
+
+// ---- S2a: スラブ小梁の枠キー（PlanGraph.excludedSlabBeamSlots の要素） ----
+const SLOT = { x1Id: 'xa', x2Id: 'xb', y1Id: 'ya', y2Id: 'yb', dir: CenterLineType.VERTICAL, n: 3, i: 2 };
+
+test('【S2a】slabBeamSlotKey は slab:<4辺>:<向き>:<n>:<i> の形で、parse で元の枠に戻る（X・Y とも）', () => {
+  assert.equal(slabBeamSlotKey(SLOT), 'slab:xa:xb:ya:yb:X:3:2');
+  assert.deepEqual(parseSlabBeamSlotKey(slabBeamSlotKey(SLOT)), SLOT);
+  const h = { ...SLOT, dir: CenterLineType.HORIZONTAL, n: 4, i: 3 };
+  assert.deepEqual(parseSlabBeamSlotKey(slabBeamSlotKey(h)), h);
+});
+
+test('【S2a・失敗系】parseSlabBeamSlotKey は壊れたキー・別名前空間・数値でない n/i・範囲外・欠け・余分な項を null にする', () => {
+  const bad = [
+    '', 'slab', 'slab:xa:xb:ya:yb:X:3',                 // 項が欠ける
+    'slab:xa:xb:ya:yb:X:3:2:9',                          // 余分な項
+    'wall:xa:xb:ya:yb:X:3:2', 'X:1000',                  // 別名前空間・座標キー
+    'slab::xb:ya:yb:X:3:2',                              // 空の id
+    'slab:xa:xb:ya:yb:R:3:2', 'slab:xa:xb:ya:yb:x:3:2',  // 向きが X/Y 以外
+    'slab:xa:xb:ya:yb:X:n:2', 'slab:xa:xb:ya:yb:X:3:i',  // 数値でない
+    'slab:xa:xb:ya:yb:X:3.5:2', 'slab:xa:xb:ya:yb:X:3:1.5',
+    'slab:xa:xb:ya:yb:X:03:2',                           // 非正規表記
+    'slab:xa:xb:ya:yb:X:1:1',                            // n<2（内部の枠が無い）
+    'slab:xa:xb:ya:yb:X:3:0', 'slab:xa:xb:ya:yb:X:3:3',  // i が 1..n-1 の外
+  ];
+  for (const k of bad) assert.equal(parseSlabBeamSlotKey(k), null, `null のはず: "${k}"`);
+  for (const k of [undefined, null, 5, {}]) assert.equal(parseSlabBeamSlotKey(k), null);
+});
+
+test('【S2a】exclusionKeyReferencesCL は枠キーの4辺いずれのCL id も拾い、無関係な id は拾わない', () => {
+  const key = slabBeamSlotKey(SLOT);
+  for (const id of ['xa', 'xb', 'ya', 'yb']) assert.equal(exclusionKeyReferencesCL(key, id), true, id);
+  assert.equal(exclusionKeyReferencesCL(key, 'xc'), false);
 });

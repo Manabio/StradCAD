@@ -322,6 +322,10 @@ export const SlabBayFillSkip = Object.freeze({
   OCCUPIED:   'occupied',  // ベイ内に既に梁芯がある（冪等・手動の梁芯を尊重）
 });
 
+// スラブ小梁の枠キー（PlanGraph.excludedSlabBeamSlots）の名前空間。他の除外集合のキーと区別する前置き
+// （structural/slabSecondaryBeamAxes.js slabBeamSlotKey）。
+export const SLAB_BEAM_SLOT_KEY_PREFIX = 'slab';
+
 // 敷地線の種別
 export const SiteLineKind = Object.freeze({
   BOUNDARY:   'boundary',   // 境界（隣地境界線）

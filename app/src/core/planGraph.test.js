@@ -8,6 +8,7 @@ import { Plane } from './plane.js';
 import { Project } from './project.js';
 import { CenterLineType, Discipline, StructuralMaterialType, OpeningCategory, DimensionKind, DimensionSide } from './constants.js';
 import { HDimensionLine } from './dimension.js';
+import { slabBeamSlotKey } from '../structural/slabSecondaryBeamAxes.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -139,6 +140,26 @@ test('removeDependentsOfCenterLine: 除外集合（excludedColumnSlots/excludedB
   assert.equal(hasCLKey(graph.excludedBeamSlots, vCL.id), false, 'vCLを含む除外キーは掃除されるはず');
   assert.equal(hasCLKey(graph.excludedFootingSlots, vCL.id), false, 'vCLを含む除外キーは掃除されるはず');
   assert.equal(hasCLKey(graph.excludedColumnSlots, vCL2.id), true, 'vCLを含まない除外キー（vCL2絡み）は残るはず');
+});
+
+// ---- S2a: スラブ小梁の枠の除外集合（excludedSlabBeamSlots）。ベイ4辺のCL idを含むキーなので、CL削除で掃除する。
+test('【S2a】removeDependentsOfCenterLine: excludedSlabBeamSlots のうち削除するCL idを4辺のどこかに含むキーだけ掃除し、無関係なキーは残す', () => {
+  const graph = makeGraph();
+  const slot = (x1Id, x2Id, y1Id, y2Id) => slabBeamSlotKey({ x1Id, x2Id, y1Id, y2Id, dir: CenterLineType.VERTICAL, n: 3, i: 1 });
+  const hit = [slot('A', 'B', 'C', 'D'), slot('E', 'A', 'F', 'G'), slot('E', 'F', 'G', 'A')]; // 削除対象 A が各辺の位置にある
+  const miss = slot('E', 'F', 'G', 'H');
+  for (const k of [...hit, miss]) graph.excludedSlabBeamSlots.add(k);
+
+  graph.removeDependentsOfCenterLine('A');
+
+  assert.deepEqual([...graph.excludedSlabBeamSlots], [miss], 'A を含むキーは消え、無関係なキーだけ残る');
+});
+
+test('【S2a】clear() は excludedSlabBeamSlots も空にする', () => {
+  const graph = makeGraph();
+  graph.excludedSlabBeamSlots.add(slabBeamSlotKey({ x1Id: 'A', x2Id: 'B', y1Id: 'C', y2Id: 'D', dir: CenterLineType.HORIZONTAL, n: 2, i: 1 }));
+  graph.clear();
+  assert.equal(graph.excludedSlabBeamSlots.size, 0);
 });
 
 // ---- 寸法線のアンカー: _shapeUsesCenterLineのswitchにDIMENSIONの

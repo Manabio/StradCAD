@@ -117,6 +117,10 @@ export class PlanGraph {
     // ではない）の手動削除・移動元を記憶する。キーは座標ベース `${'X'|'Y'}:${Math.round(coord)}`
     // （CL実体のidではない——壁を動かせば別スロットとして扱われ再生成されるのが意図どおりのため）。
     this.excludedWallBeamAxes = observable.set();
+    // S造スラブ小梁の枠（ベイの n 等分の i 番目）の除外・移動記録（structural/slabSecondaryBeamAxes.js
+    // slabBeamSlotKey。キーはベイ4辺の CL id を含む）。座標キーの excludedWallBeamAxes とは混ぜない
+    // （追従・張り替えが座標キー前提のため）。読む・書く処理は後続（S2b・S2c）。CL 削除時に掃除する。
+    this.excludedSlabBeamSlots = observable.set();
 
     // per-floor 設定（仕上げモード）— 材コード（選択された材として永続化）
     this.exteriorWallBacking = DEFAULT_EXTERIOR_WALL_BACKING; // 外壁下地: 下地材コード
@@ -1085,6 +1089,7 @@ export class PlanGraph {
     this.excludedBeamSlots.clear();
     this.excludedFootingSlots.clear();
     this.excludedWallBeamAxes.clear();
+    this.excludedSlabBeamSlots.clear();
     this.columnAxisOffsets.clear();
     this.clEccentricities.clear();
     this.kneeDropWalls.clear();
@@ -1181,8 +1186,9 @@ export class PlanGraph {
     // jamb:${openingId}:${side}・off:${axisX}:${axisY}形式はCL idを含まないため誤って掃除されない
     // （openingId・座標値がこのCLのuuidと一致することは実質無い）。excludedWallBeamAxes
     // （`${'X'|'Y'}:${coord}`）はCL idを含まない座標ベースのキーのため対象外
-    // （structural/wallBeamAxes.js wallBeamAxisExcludeKey参照）。
-    for (const set of [this.excludedColumnSlots, this.excludedBeamSlots, this.excludedFootingSlots]) {
+    // （structural/wallBeamAxes.js wallBeamAxisExcludeKey参照）。excludedSlabBeamSlots
+    // （`slab:<ベイ4辺のCL id>:…`）は4辺のCL idを含み、境界の線を消せばそのベイも無いため同じ式で掃除する。
+    for (const set of [this.excludedColumnSlots, this.excludedBeamSlots, this.excludedFootingSlots, this.excludedSlabBeamSlots]) {
       for (const key of [...set]) {
         if (exclusionKeyReferencesCL(key, id)) set.delete(key);
       }

@@ -31,7 +31,8 @@ import {
 } from './structuralOrchestration.js';
 import { figureBindingManager } from '../figure/FigureBindingManager.js';
 import { createStructuralResolveContext } from './structuralResolveContext.js';
-import { buildWoodFloorForB1, dumpB1AllFloorsAllFields } from './structuralOrchestrationFixtures.js';
+import { buildWoodFloorForB1, dumpB1AllFloorsAllFields, allFieldsDumpForGraph } from './structuralOrchestrationFixtures.js';
+import { slabBeamSlotKey } from './slabSecondaryBeamAxes.js';
 
 // 下階なし（基礎伏図相当）composition スタブ。recomputeStructuralComposition は
 // belowGraph=null のとき下階分岐（buildStructuralWallGate 等の非同期IDB経路）を一切通らない。
@@ -332,6 +333,22 @@ test('recomputeForStructuralSync("all"): 3階建て(在来)+屋根フィクス�
     }
     assert.ok((saveCalls2.get(activeId) ?? 0) >= 1, '自階は仕組み上パス1で毎回1回保存されるため0にはならない');
   });
+});
+
+// S2a: 全フィールドダンプ（その場比較用）はスラブ小梁の枠の除外集合も拾う。通り芯 id は値（種別:座標）へ解決される。
+test('【S2a】allFieldsDumpForGraph: excludedSlabBeamSlots を1件入れるとダンプが変わり、CL id は種別:座標へ解決される', () => {
+  const g = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const x0 = g.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const x1 = g.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  const y0 = g.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const y1 = g.addCenterLine(CenterLineType.HORIZONTAL, 7000, { labeled: true, discipline: Discipline.STRUCT });
+  const before = allFieldsDumpForGraph(g);
+  assert.deepEqual(before.excludedSlabBeamSlots, [], '前提: 空');
+
+  g.excludedSlabBeamSlots.add(slabBeamSlotKey({ x1Id: x0.id, x2Id: x1.id, y1Id: y0.id, y2Id: y1.id, dir: CenterLineType.VERTICAL, n: 3, i: 1 }));
+  const after = allFieldsDumpForGraph(g);
+  assert.deepEqual(after.excludedSlabBeamSlots, ['slab:X:0:X:5000:Y:0:Y:7000:X:3:1']);
+  assert.notDeepEqual(after, before);
 });
 
 // ---- 'activeAndAbove' の恒久化（段階(b)・R1裁定・案B: 'all'と同じ処理のまま恒久化する。

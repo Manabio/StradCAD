@@ -12,7 +12,7 @@ import { BeamAxisOrigin } from '../core/centerLine.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillStructuralGrid } from './structuralAutoFill.js';
 import { autoFillWoodWallBeams, autoFillWoodFloorBeams, autoFillWoodBeamDepths } from './woodAutoFill.js';
-import { autoFillWoodOpeningBeams, isLandingFrontEdge } from './woodOpeningBeams.js';
+import { autoFillWoodOpeningBeams, isLandingFrontEdge, woodOpeningHosts } from './woodOpeningBeams.js';
 import { generateStairPartitionWalls } from '../finish/stair/stairPartitionWalls.js';
 import { stairPartitionEnds, stairPartitionLandingEnds } from './wallFreeEnds.js';
 import { openingEdgeComponents, edgeTarget } from './openingBeamAxes.js';
@@ -262,6 +262,21 @@ test('【S3-7】手動固定（locked）の小梁は撤去されず保持され�
   });
   fill(g2, project);
   assert.ok(g2.beamMap.has(keep.id));
+});
+
+test('【S2a】手動固定の小梁でも、軸CLの由来が floorBeam・slabBeam なら支えに数えない（user・由来なしは数える）', () => {
+  const hostCount = (origin) => {
+    const { g2, x0, x1, y1 } = makePartialVoidFixture();
+    runInAction(() => {
+      y1.beamAxisOrigin = origin;
+      g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', y1, false, x0, x1, { role: 'secondary', beamType: '小梁', dimensionStatus: 'locked' });
+    });
+    return woodOpeningHosts(g2, rulesFor(WOOD)).hosts.filter(h => h.kind === 'beam' && h.clId === y1.id).length;
+  };
+  assert.equal(hostCount(null), 1, '対照: 由来なしの手動小梁は支え');
+  assert.equal(hostCount(BeamAxisOrigin.USER), 1, '対照: user 由来の手動小梁は支え');
+  assert.equal(hostCount(BeamAxisOrigin.FLOOR_BEAM), 0);
+  assert.equal(hostCount(BeamAxisOrigin.SLAB_BEAM), 0);
 });
 
 test('【S3-8】2×4 と構造未定では吹抜け小梁を生成しない', () => {

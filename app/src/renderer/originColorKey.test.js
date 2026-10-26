@@ -57,6 +57,12 @@ test('【C2a】centerLineOriginColorKey: 梁芯でbeamAxisOrigin:roofBeam（小�
   assert.equal(centerLineOriginColorKey(cl), 'generated');
 });
 
+test('【S2a】centerLineOriginColorKey: 梁芯でbeamAxisOrigin:slabBeam（S造スラブ小梁の割付け由来）は generated（FLOOR_BEAM と同色）', () => {
+  assert.equal(BeamAxisOrigin.SLAB_BEAM, 'slabBeam');
+  const cl = makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM });
+  assert.equal(centerLineOriginColorKey(cl), 'generated');
+});
+
 test('【C2a・失敗系】BeamAxisOrigin の全値は由来色キーが none（既定）へ落ちない——由来を足したのに色の写像を足し忘れる事故の検出', () => {
   for (const [name, origin] of Object.entries(BeamAxisOrigin)) {
     const key = centerLineOriginColorKey(makeCL({ discipline: Discipline.FUSE, beamAxisOrigin: origin }));

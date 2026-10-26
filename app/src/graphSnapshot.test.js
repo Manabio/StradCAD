@@ -21,6 +21,7 @@ import { base64ToBytes } from './storage/documentFile.js';
 import { BeamAxisOrigin, centerLineKind } from './core/centerLine.js';
 import { remapLineIdsInSnapshot, makeFreshLineIdMap, findLineIdOccurrences } from './lineIdRemap.js';
 import { findDuplicateLineIds } from './lineIdUniqueness.js';
+import { slabBeamSlotKey } from './structural/slabSecondaryBeamAxes.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -222,6 +223,95 @@ test('CenterLine.beamAxisOrigin:opening（床開口由来）もFlatBuffers encod
   const cl2 = restored.shapeMap.get(cl.id);
   assert.ok(cl2, '復元後に同一IDの中心線が存在する');
   assert.equal(cl2.beamAxisOrigin, BeamAxisOrigin.OPENING);
+});
+
+// ---- S2a: 梁芯の由来 slabBeam（S造スラブ小梁の割付け由来）と、スラブ小梁の枠の除外集合 excludedSlabBeamSlots
+// （GS.EXCLUDED_SLAB_BEAM_SLOTS=55）の保存。----
+test('【S2a】CenterLine.beamAxisOrigin:slabBeam は FlatBuffers encode→decode で往復し、未知の値のように null へ落ちない', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM,
+  });
+  const restored = makeGraph();
+  restoreGraph(restored, serializeGraph(graph));
+  assert.equal(restored.shapeMap.get(cl.id).beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM);
+  assert.equal(decode(serializeGraph(graph)).centerLines.find(c => c.id === cl.id).beamAxisOrigin, 'slabBeam');
+});
+
+const SLAB_SLOT_KEYS = [
+  slabBeamSlotKey({ x1Id: 'xa', x2Id: 'xb', y1Id: 'ya', y2Id: 'yb', dir: CenterLineType.VERTICAL, n: 3, i: 1 }),
+  slabBeamSlotKey({ x1Id: 'xa', x2Id: 'xb', y1Id: 'ya', y2Id: 'yb', dir: CenterLineType.VERTICAL, n: 3, i: 2 }),
+];
+
+test('【S2a】excludedSlabBeamSlots は FlatBuffers（serializeGraph→restoreGraph）で往復し、decode でもそのキー集合が出る', () => {
+  const graph = makeGraph();
+  for (const k of SLAB_SLOT_KEYS) graph.excludedSlabBeamSlots.add(k);
+  const bytes = serializeGraph(graph);
+  assert.deepEqual([...decode(bytes).excludedSlabBeamSlots].sort(), [...SLAB_SLOT_KEYS].sort());
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+  assert.deepEqual([...restored.excludedSlabBeamSlots].sort(), [...SLAB_SLOT_KEYS].sort());
+});
+
+test('【S2a】excludedSlabBeamSlots は plain 経路（decodeFloorSnapshot→JSON→restoreGraph）でも往復し、復元は前の内容を引きずらない', () => {
+  const graph = makeGraph();
+  for (const k of SLAB_SLOT_KEYS) graph.excludedSlabBeamSlots.add(k);
+  const plain = JSON.parse(JSON.stringify(decodeFloorSnapshot(serializeGraph(graph))));
+  const target = makeGraph();
+  target.excludedSlabBeamSlots.add('slab:stale:stale:stale:stale:Y:2:1'); // clear() で消えるはずの残り
+  restoreGraph(target, plain);
+  assert.deepEqual([...target.excludedSlabBeamSlots].sort(), [...SLAB_SLOT_KEYS].sort());
+});
+
+// 階のルートテーブルに、フィールド番号 fieldNo が書かれているか（vtable の有無）を直接読む。
+function rootHasField(bytes, fieldNo) {
+  const bb = new ByteBuffer(bytes);
+  const root = bb.readInt32(bb.position()) + bb.position();
+  return bb.__offset(root, 4 + fieldNo * 2) !== 0;
+}
+const GS_EXCLUDED_SLAB_BEAM_SLOTS = 55;
+
+test('【S2a】空の excludedSlabBeamSlots はフィールドを書かない（GS 55 が vtable に無い）: キーの無い旧形式の snapshot を encode したバイト列と一致し、入れて空へ戻してもバイト列は元と同じ', () => {
+  const { graph } = makeGraphWithRoofRoom(); // 他の内容を持つ階でも
+  const base = serializeGraph(graph);
+  assert.equal(rootHasField(base, GS_EXCLUDED_SLAB_BEAM_SLOTS), false, '空集合は書かない（空ベクタも作らない）');
+  graph.excludedSlabBeamSlots.add(SLAB_SLOT_KEYS[0]);
+  assert.equal(rootHasField(serializeGraph(graph), GS_EXCLUDED_SLAB_BEAM_SLOTS), true, '前提: 1件あれば書く（フィールド番号が合っている）');
+  graph.excludedSlabBeamSlots.clear();
+  const snap = decodeFloorSnapshot(base);
+  assert.deepEqual(snap.excludedSlabBeamSlots, [], '空集合は空配列で読める');
+  delete snap.excludedSlabBeamSlots;
+  assert.deepEqual([...encodeFloorSnapshot(snap)], [...base], '旧形式と同じバイト列');
+
+  graph.excludedSlabBeamSlots.add(SLAB_SLOT_KEYS[0]);
+  assert.ok(serializeGraph(graph).length > base.length, '1件入ればベクタぶん長くなる');
+  graph.excludedSlabBeamSlots.clear();
+  assert.deepEqual([...serializeGraph(graph)], [...base], '空へ戻せばバイト列は元と一致');
+});
+
+test('【S2a・失敗系】旧文書（excludedSlabBeamSlots のキー・フィールドが無い）は空集合になり、他の除外集合は影響を受けない', () => {
+  const graph = makeGraph();
+  graph.excludedWallBeamAxes.add('X:1000');
+  const snap = decodeFloorSnapshot(serializeGraph(graph));
+  delete snap.excludedSlabBeamSlots; // 旧 plain 文書
+  const target = makeGraph();
+  target.excludedSlabBeamSlots.add(SLAB_SLOT_KEYS[0]);
+  restoreGraph(target, snap);
+  assert.equal(target.excludedSlabBeamSlots.size, 0);
+  assert.deepEqual([...target.excludedWallBeamAxes], ['X:1000']);
+});
+
+test('【S2a】undo/redo: excludedSlabBeamSlots は serializeGraph(前後)→restoreGraph で往復する', async () => {
+  const { undoManager } = await import('./undoManager.js');
+  const graph = makeGraph();
+  const before = serializeGraph(graph);
+  graph.excludedSlabBeamSlots.add(SLAB_SLOT_KEYS[0]);
+  const after = serializeGraph(graph);
+  undoManager.push(() => restoreGraph(graph, before), () => restoreGraph(graph, after));
+  undoManager.undo();
+  assert.equal(graph.excludedSlabBeamSlots.size, 0, 'undo で空に戻る');
+  undoManager.redo();
+  assert.deepEqual([...graph.excludedSlabBeamSlots], [SLAB_SLOT_KEYS[0]], 'redo でキーが戻る');
 });
 
 // ---- ステップC2a: 小屋梁（role:'roofBeam'・beamType:'小屋梁'）と梁芯の由来 roofBeam の保存。

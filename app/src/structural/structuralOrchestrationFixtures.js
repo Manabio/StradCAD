@@ -133,6 +133,7 @@ export function allFieldsDumpForGraph(g) {
   const excludedBeamSlots    = snap.excludedBeamSlots.map(resolver.resolveComposite).sort();
   const excludedFootingSlots = snap.excludedFootingSlots.map(resolver.resolveComposite).sort();
   const excludedWallBeamAxes = snap.excludedWallBeamAxes.map(resolver.resolveComposite).sort();
+  const excludedSlabBeamSlots = snap.excludedSlabBeamSlots.map(resolver.resolveComposite).sort();
   const columnAxisOffsets = snap.columnAxisOffsetKeys
     .map((clId, i) => `${resolver.resolveId(clId)}=${snap.columnAxisOffsetVals[i]}`)
     .sort();
@@ -150,7 +151,7 @@ export function allFieldsDumpForGraph(g) {
   const woodColumnWidthMm = snap.woodColumnWidthMm ?? 'null';
   return {
     columns, beams, footings, slabs, excludedColumnSlots, excludedBeamSlots, excludedFootingSlots, excludedWallBeamAxes,
-    columnAxisOffsets, fuseCLs, clEccentricities, structureOverride, woodColumnWidthMm,
+    excludedSlabBeamSlots, columnAxisOffsets, fuseCLs, clEccentricities, structureOverride, woodColumnWidthMm,
   };
 }
 

@@ -23,7 +23,7 @@ import { LodLevel } from '../viewport.js';
  *   'aux'    → 'aux'（補助・手動）
  *   'ceiling' → 'ceiling'（天井芯。天伏だけの分割線。S8a）
  *   'beam'   → cl.beamAxisOrigin（ステップ2で新設した由来フィールド）で分岐する:
- *              wall/floorBeam/roofBeam/opening（壁・床梁割付け・小屋梁割付け・床開口からの自動生成）→ 'generated'
+ *              wall/floorBeam/slabBeam/roofBeam/opening（壁・床梁割付け・スラブ小梁割付け・小屋梁割付け・床開口からの自動生成）→ 'generated'
  *              center（中心線由来。S造向け・未実装。色キーのみ予約）→ 'center'
  *              user（AddCLDialogから追加）→ 'aux'
  *              null（既存データ・不明）→ 'none'
@@ -38,6 +38,7 @@ export function centerLineOriginColorKey(cl) {
       case BeamAxisOrigin.WALL:
       case BeamAxisOrigin.FLOOR_BEAM:
       case BeamAxisOrigin.ROOF_BEAM:
+      case BeamAxisOrigin.SLAB_BEAM:
       case BeamAxisOrigin.OPENING:    return 'generated';
       case BeamAxisOrigin.CENTER:     return 'center';
       case BeamAxisOrigin.USER:       return 'aux';

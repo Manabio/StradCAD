@@ -22,6 +22,7 @@ import {
 } from './centerLineFloorSync.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { collectUnresolvableCells } from '../finish/roomReinterpret.js';
+import { slabBeamSlotKey } from '../structural/slabSecondaryBeamAxes.js';
 
 function makeProjectWithTwoFloors() {
   const project = new Project('proj', 'test');
@@ -298,6 +299,24 @@ test('findFloorsBlockingGridDeletion: anyOtherFloorNeedsWallRegenはこの通り
   const store2 = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
   const after = await withPeekOverride(project, store2, () => findFloorsBlockingGridDeletion(project, activeGraph, cl));
   assert.equal(after.anyOtherFloorNeedsWallRegen, true, 'この通り芯を参照し、壁を持ったことのある他階が1つでもあればtrue');
+});
+
+// S2a: スラブ小梁の枠の除外集合（excludedSlabBeamSlots）のキーも通り芯 id の参照として数える（他の参照は置かない）。
+test('【S2a】findFloorsBlockingGridDeletion: 他階の excludedSlabBeamSlots だけがこの通り芯を参照していれば anyOtherFloorNeedsWallRegen=true、キーが無ければ false', async () => {
+  const { project, activeGraph, otherGraph } = makeProjectWithTwoFloors();
+  const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  otherGraph.setWallFreshnessKey('dummy'); // 壁を持ったことのある階（参照だけが判定を分ける）
+  const run = async () => {
+    const store = new Map([[otherGraph.plane.id, serializeGraph(otherGraph)]]);
+    return withPeekOverride(project, store, () => findFloorsBlockingGridDeletion(project, activeGraph, cl));
+  };
+
+  assert.equal((await run()).anyOtherFloorNeedsWallRegen, false, '対照: キーが無ければ false');
+
+  otherGraph.excludedSlabBeamSlots.add(slabBeamSlotKey({ x1Id: cl.id, x2Id: 'xb', y1Id: 'ya', y2Id: 'yb', dir: CenterLineType.VERTICAL, n: 3, i: 1 }));
+  assert.equal(otherGraph.rooms.length, 0, '前提: 部屋なし');
+  assert.equal(otherGraph.excludedColumnSlots.size + otherGraph.excludedBeamSlots.size + otherGraph.excludedFootingSlots.size, 0, '前提: 他の除外集合は空');
+  assert.equal((await run()).anyOtherFloorNeedsWallRegen, true, '枠キーが通り芯 id を含めば true');
 });
 
 // 2026-09-30再裁定: hasNeverBuiltWallsが「部屋0件」も条件に加わったため、部屋がある他階

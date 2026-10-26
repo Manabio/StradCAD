@@ -239,7 +239,7 @@ function referencesClInCellsOrRecords(graph, clId) {
   for (const key of graph.kneeDropWalls.keys()) {
     if (key.split(':').includes(clId)) return true;
   }
-  for (const set of [graph.excludedColumnSlots, graph.excludedBeamSlots, graph.excludedFootingSlots]) {
+  for (const set of [graph.excludedColumnSlots, graph.excludedBeamSlots, graph.excludedFootingSlots, graph.excludedSlabBeamSlots]) {
     for (const key of set) if (key.split(':').includes(clId)) return true;
   }
   if (graph.columnAxisOffsets.has(clId)) return true;

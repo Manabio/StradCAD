@@ -284,6 +284,7 @@ const SELF_MUTATIONS = {
   excludedBeamSlots: (g) => g.excludedBeamSlots.add('slot-b'),
   excludedFootingSlots: (g) => g.excludedFootingSlots.add('slot-c'),
   excludedWallBeamAxes: (g) => g.excludedWallBeamAxes.add('axis-d'),
+  excludedSlabBeamSlots: (g) => g.excludedSlabBeamSlots.add('slot-e'),
   columnAxisOffsetKeys: (g, c) => g.setColumnAxisOffset(c.y0.id, 7),
   columnAxisOffsetVals: (g, c) => g.setColumnAxisOffset(c.x0.id, 16),
   stairs: (g) => g.addStair({ type: StairType.STRAIGHT, cells: new Set(['i:j:k:l']), upDirection: 'up', flip: false, totalSteps: 8, tread: 250 }),

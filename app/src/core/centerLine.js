@@ -18,11 +18,12 @@ import { Shape } from './shapeBase.js';
 // 梁芯（centerLineKind(cl)==='beam'）の由来。既存データ・未設定は null（由来色は'none'＝黒）。
 export const BeamAxisOrigin = Object.freeze({
   WALL:       'wall',      // 壁由来の自動生成（structural/wallBeamAxes.js）
-  FLOOR_BEAM: 'floorBeam', // 床梁割付け由来の自動生成（structural/woodAutoFill.js・S造のスラブ小梁は structural/slabSecondaryBeamAxes.js）
+  FLOOR_BEAM: 'floorBeam', // 床梁割付け由来の自動生成（structural/woodAutoFill.js。在来木造が手動判定に使う）
   CENTER:     'center',    // 中心線由来（S造向け。未実装・色キーのみ予約）
   USER:       'user',      // ユーザーが AddCLDialog から追加
   OPENING:    'opening',   // 床開口由来の自動生成（structural/openingBeamAxes.js）。規則O
   ROOF_BEAM:  'roofBeam',  // 小屋梁割付け由来の自動生成（structural/woodRoofFraming.js。在来木造の主屋根・下屋の小屋組）
+  SLAB_BEAM:  'slabBeam',  // S造のスラブ小梁の割付け由来の自動生成（structural/slabSecondaryBeamAxes.js）。未編集の自動梁芯。FLOOR_BEAM（在来木造の手動判定）と分けて、後の割り直しが木造に触れないようにする
 });
 
 export class CenterLine extends Shape {

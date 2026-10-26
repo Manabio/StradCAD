@@ -15,16 +15,20 @@ import {
 } from './wallBeamAxes.js';
 import { axisSpanOccupied } from './woodAutoFill.js';
 
+// 床梁・スラブ小梁の割付けが作った梁芯の由来。S造→在来木造へ切り替えた階に残ったスラブ小梁の梁芯
+// （SLAB_BEAM）を ensureAutoBeamAxisCL が使い回しうるため、FLOOR_BEAM と同じ扱いにする。
+const AUTO_FRAMING_ORIGINS = new Set([BeamAxisOrigin.FLOOR_BEAM, BeamAxisOrigin.SLAB_BEAM]);
+
 /**
  * 計画器へ渡す支え線（host）を、グラフの実梁から集める（在来木造）:
  *   - role 'primary'（壁線の通し梁・頭つなぎ・受梁など。auto／手動とも）
- *   - 手動配置（dimensionStatus!=='auto'）の role 'secondary'／'floor'。ただし軸CLの由来が FLOOR_BEAM の
+ *   - 手動配置（dimensionStatus!=='auto'）の role 'secondary'／'floor'。ただし軸CLの由来が FLOOR_BEAM・SLAB_BEAM の
  *     secondary は除く——この関数自身が作った小梁をユーザーが固定（locked）しただけで辺が「梁あり」になり、
  *     架け方が組み替わるのを防ぐ（S造系の規則Oが OPENING 由来を除くのと同型）。
  *   - 自動（dimensionStatus==='auto'）の secondary は数えない（自分の前回出力を支えにすると振動する）。
  * @returns {{hosts: Array, clById: Map<string, object>}} clById＝host 梁の軸CL（clId → CL）
  */
-function woodOpeningHosts(graph, rules) {
+export function woodOpeningHosts(graph, rules) {
   const hosts = [];
   const clById = new Map();
   for (const b of graph.beams) {
@@ -32,7 +36,7 @@ function woodOpeningHosts(graph, rules) {
     const manual = b.dimensionStatus !== 'auto';
     const isHost = b.role === 'primary'
       || (manual && b.role === 'floor')
-      || (manual && b.role === 'secondary' && b.axisCL.beamAxisOrigin !== BeamAxisOrigin.FLOOR_BEAM);
+      || (manual && b.role === 'secondary' && !AUTO_FRAMING_ORIGINS.has(b.axisCL.beamAxisOrigin));
     if (!isHost) continue;
     const a = b.clStart.effectiveValue, c = b.clEnd.effectiveValue;
     hosts.push({

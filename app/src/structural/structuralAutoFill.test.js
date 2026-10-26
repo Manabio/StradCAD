@@ -1048,7 +1048,7 @@ test('【ステップ5・T2】通し梁芯の小梁スロットが最初からex
 });
 
 // ---- S造スラブ小梁の梁芯の割付け（slabSecondaryBeamAxes.js）の配線 ----
-const slabAxesOf = (graph) => graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.FLOOR_BEAM)
+const slabAxesOf = (graph) => graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM)
   .sort((a, b) => a.centerLineType.localeCompare(b.centerLineType) || a.value - b.value);
 
 // 通り芯 X:[0,width]・Y:[-height,0] の S造グリッド。最下階（基礎伏図）にしないためダミーの1階を先に置く。

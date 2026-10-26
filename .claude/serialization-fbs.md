@@ -32,5 +32,8 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 ## 地階構造（`SI.BASEMENT_STRUCTURE=14`）は値があるときだけ書く
 `StructuralInfo.basementStructure`（`'RC造(ラーメン)'｜'RC造(壁式)'｜null`）は`SI`テーブル末尾の文字列フィールド。nullのときは何も書かない（末尾のフィールドはvtableで切り詰められるため、地階構造を使わない文書のバイト列は1バイトも変わらない）。読みは`normalizeBasementStructure`を通し、フィールドが無い旧データ・未知の文字列・空文字はnull。`graphSnapshot`の採取（`buildStructSnapshot`）と復元（`restoreStructCLs`）にも足してあり、CL操作のundo・文書読込み・階操作のundoで保たれる。`StructuralInfo`に項目を足すときは、ここに加えて`FloorSwapManager`のdirty追跡（足し忘れると、その項目だけの変更で未保存の印が付かない）と階操作のundoの列挙（`collectProjectLevels`等）も同時に足す。設計意図は`.claude/structural-model.md`。
 
+## S造スラブ小梁の枠の除外集合（`GS.EXCLUDED_SLAB_BEAM_SLOTS=55`）は空のとき書かない
+`PlanGraph.excludedSlabBeamSlots`（キーは`slab:<ベイ4辺のCL id>:<X|Y>:<n>:<i>`の文字列vector）。座標キーの`excludedWallBeamAxes`（GS 44）とは別のフィールドにしてある——あちらは追従・張り替えが座標キー前提で、CL idを含むこちらを混ぜると壊れる。空集合のときはvectorも作らない（末尾のフィールドはvtableで切り詰められ、枠を使わない文書のバイト列は1バイトも変わらない）。読みは無ければ空。CL削除時はキー内のCL idで掃除する（`removeDependentsOfCenterLine`）。
+
 ## 主屋根（`GS.MAIN_ROOF_SPEC=53`→同じ`RS`テーブル）は既定値のとき書かない
 最上階の階ごと設定（`PlanGraph.mainRoofSpec`）。`graphSnapshot.buildSnapshot`が`isDefaultRoofSpec`で既定値なら`null`にし、`encode`は`null`のとき何も書かない（フィールド自体を省く）ので、主屋根を編集していない文書のバイト列は1バイトも変わらない（読み側は無ければ`restoreGraph`の`clear()`の既定値）。`RS`の読み書きは下屋と共用（`writeRoofSpec`/`readRoofSpec`）。

@@ -1,7 +1,7 @@
 // ================================================================
 // S造スラブを支える子梁（小梁）の梁芯の割付け（ユーザー指示2026-10-26「スパン間を2500mm以下等間隔に
 // 割り付ける」）。大梁（と開口辺の小梁）で4辺囲まれたベイ（framingCells.js beamGridCells）の短辺が
-// 最大ピッチを超えるとき、長辺方向に等分して梁芯CL（beamAxisOrigin:FLOOR_BEAM）を生成する。子梁そのものは
+// 最大ピッチを超えるとき、長辺方向に等分して梁芯CL（beamAxisOrigin:SLAB_BEAM）を生成する。子梁そのものは
 // 既存の小梁生成（structuralAutoFill.js autoFillSecondaryBeams）が梁芯から作る。
 // 在来木造の床梁（woodAutoFill.js autoFillWoodFloorBeams）と等分の式を framingCells.js divideBayEqually で共有する。
 //
@@ -9,13 +9,47 @@
 // 個別の位置変更・ベイ単位の除外は後続ステップ（S2）。ここは既定の割付けだけ。
 // ================================================================
 import { CenterLineType, Discipline } from '../core.js';
-import { BeamRole, CL_OVERLAP_TOL_MM, SlabBayFillSkip, SlabSecondaryBeamPlacement } from '../core/constants.js';
+import { BeamRole, CL_OVERLAP_TOL_MM, SlabBayFillSkip, SlabSecondaryBeamPlacement, SLAB_BEAM_SLOT_KEY_PREFIX } from '../core/constants.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { beamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { findHostBeam } from '../core/structuralEntities.js';
 import { beamGridCells, divideBayEqually } from './framingCells.js';
 import { wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
+
+// スラブ小梁の枠キー（PlanGraph.excludedSlabBeamSlots の要素）。ベイを4辺のCL id で同定し（座標ではない——
+// 座標キーの excludedWallBeamAxes とは別の集合）、そのベイの n 等分のうち i 番目（1始まり。内部の n-1 本）の
+// 枠を表す。`slab:<x1辺>:<x2辺>:<y1辺>:<y2辺>:<'X'|'Y'>:<n>:<i>`。x1/x2＝ベイの左右（x小・x大）の辺のCL id、
+// y1/y2＝上下（y小・y大）。dir は割り付けた梁芯の向き（CenterLineType の VERTICAL='X'／HORIZONTAL='Y'）。
+// CL id は素の uuid（`:` を含まない）なので、exclusionKeyReferencesCL（`:` 区切り照合）がそのまま使える。
+// この集合を読む・書く処理は後続ステップ（S2b 割り直し・S2c 削除と移動の記録）。ここはキーの形だけ。
+
+/**
+ * @param {{x1Id:string, x2Id:string, y1Id:string, y2Id:string, dir:string, n:number, i:number}} slot
+ * @returns {string}
+ */
+export function slabBeamSlotKey({ x1Id, x2Id, y1Id, y2Id, dir, n, i }) {
+  return [SLAB_BEAM_SLOT_KEY_PREFIX, x1Id, x2Id, y1Id, y2Id, dir, n, i].join(':');
+}
+
+/**
+ * slabBeamSlotKey の逆。壊れたキー（項数違い・空の id・別名前空間・dir が X/Y 以外・n/i が整数でない・
+ * n<2・i が 1..n-1 の外）は null。最後に slabBeamSlotKey で組み直して元と一致することを確かめる
+ * （余分な項・欠けた項・'01' のような非正規表記を弾く）。
+ * @param {string} key
+ * @returns {{x1Id:string, x2Id:string, y1Id:string, y2Id:string, dir:string, n:number, i:number}|null}
+ */
+export function parseSlabBeamSlotKey(key) {
+  if (typeof key !== 'string') return null;
+  const [prefix, x1Id, x2Id, y1Id, y2Id, dir, nStr, iStr] = key.split(':');
+  if (prefix !== SLAB_BEAM_SLOT_KEY_PREFIX) return null;
+  if (![x1Id, x2Id, y1Id, y2Id].every(id => id)) return null;
+  if (dir !== CenterLineType.VERTICAL && dir !== CenterLineType.HORIZONTAL) return null;
+  const n = Number(nStr), i = Number(iStr);
+  if (!Number.isInteger(n) || !Number.isInteger(i) || n < 2 || i < 1 || i > n - 1) return null;
+  const slot = { x1Id, x2Id, y1Id, y2Id, dir, n, i };
+  return slabBeamSlotKey(slot) === key ? slot : null;
+}
 
 /**
  * 境界線 lines（大梁・開口辺の小梁）で囲まれた各ベイの割付けを純粋に計画する（graph を受けない）。
@@ -60,7 +94,7 @@ function bayHasBeamAxis(graph, cell, boundaryAxisIds) {
  * S造のスラブ小梁の梁芯を、ベイごとに等ピッチで生成する（structureRules.js slabSecondaryBeams が null の主構造・
  * 基礎伏図・屋根専用平面では呼び出し側が呼ばない／ここで空を返す）。
  *  - 境界: role primary・landing の大梁、および由来 OPENING の梁芯に乗る小梁（開口辺）。座標は梁芯の
- *    effectiveValue（外周の大梁は偏芯しうる）。USER・FLOOR_BEAM 由来の梁芯に乗る小梁は境界にしない
+ *    effectiveValue（外周の大梁は偏芯しうる）。USER・SLAB_BEAM 由来の梁芯に乗る小梁は境界にしない
  *    （自分の子梁が次のパスで区画を割らないため）。
  *  - 端: 短辺の両端に通り芯があり、各座標でその通り芯上の大梁（primary）が子梁を受けること。無ければ NO_HOST
  *    （端が踊り場受け梁・開口小梁のベイは作らない）。
@@ -113,7 +147,7 @@ export function autoFillSlabSecondaryBeamAxes(graph, project, openingRects = und
         extentHiRef: { clId: hiGrid.id, offset: 0 },
         extentLo: null,
         extentHi: null,
-        beamAxisOrigin: BeamAxisOrigin.FLOOR_BEAM,
+        beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM,
       }));
     }
   }

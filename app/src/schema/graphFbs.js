@@ -92,6 +92,9 @@ const GS = {
   MAIN_ROOF_SPEC: 53,
   // GL は 1FL の何 mm 下か（float64。0=1FLとGLが同じ。plane一覧チャネル〔serializePlanes〕でだけ使う project 単位の値。末尾追加）
   GL_BELOW_1FL_MM: 54,
+  // S造スラブ小梁の枠の除外・移動記録（string vector。キーは structural/slabSecondaryBeamAxes.js slabBeamSlotKey。
+  // per-floor。末尾追加）。空集合のときはフィールド自体を書かない（既存文書のバイト列を変えない）。
+  EXCLUDED_SLAB_BEAM_SLOTS: 55,
 };
 
 // Stair: 20 フィールド
@@ -1938,6 +1941,9 @@ export function encode(snapshot) {
   const excludedBeamSlotsVec    = writeStrVec(b, snapshot.excludedBeamSlots    ?? []);
   const excludedFootingSlotsVec = writeStrVec(b, snapshot.excludedFootingSlots ?? []);
   const excludedWallBeamAxesVec = writeStrVec(b, snapshot.excludedWallBeamAxes ?? []);
+  // 空集合はベクタも作らない（0＝addFieldOffset が書かない。スラブ小梁の枠を使わない文書のバイト列は不変）
+  const excludedSlabBeamSlots = snapshot.excludedSlabBeamSlots ?? [];
+  const excludedSlabBeamSlotsVec = excludedSlabBeamSlots.length ? writeStrVec(b, excludedSlabBeamSlots) : 0;
   const tagRegistryKeysVec = writeStrVec(b, snapshot.tagRegistryKeys ?? []);
   const tagRegistryValsVec = writeStrVec(b, snapshot.tagRegistryVals ?? []);
   const columnAxisKeysVec = writeStrVec(b, snapshot.columnAxisOffsetKeys ?? []);
@@ -1963,7 +1969,7 @@ export function encode(snapshot) {
   const equipmentRowsVec = writeVec(b, snapshot.equipmentRows ?? [], writeEquipmentRow);
   const mainRoofSpecOff = writeRoofSpec(b, snapshot.mainRoofSpec ?? null); // null（既定値）は何も書かない（0）
 
-  b.startObject(55);
+  b.startObject(56);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -2018,6 +2024,7 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.EQUIPMENT_ROWS, equipmentRowsVec, 0);
   b.addFieldOffset(GS.MAIN_ROOF_SPEC, mainRoofSpecOff, 0);
   b.addFieldFloat64(GS.GL_BELOW_1FL_MM, snapshot.glBelow1FlMm ?? 0, 0.0);
+  b.addFieldOffset(GS.EXCLUDED_SLAB_BEAM_SLOTS, excludedSlabBeamSlotsVec, 0);
   const root = b.endObject();
 
   b.finish(root);
@@ -2081,6 +2088,7 @@ export function decode(bytes) {
     excludedBeamSlots:    r.strVec(GS.EXCLUDED_BEAM_SLOTS),
     excludedFootingSlots: r.strVec(GS.EXCLUDED_FOOTING_SLOTS),
     excludedWallBeamAxes: r.strVec(GS.EXCLUDED_WALL_BEAM_AXES),
+    excludedSlabBeamSlots: r.strVec(GS.EXCLUDED_SLAB_BEAM_SLOTS),
     tagRegistryKeys: r.strVec(GS.TAG_REGISTRY_KEYS),
     tagRegistryVals: r.strVec(GS.TAG_REGISTRY_VALS),
     columnAxisOffsetKeys: r.strVec(GS.COLUMN_AXIS_KEYS),

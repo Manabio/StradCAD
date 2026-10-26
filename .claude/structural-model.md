@@ -650,7 +650,7 @@ CL（通り芯・梁芯・中心線）の削除・通り芯の降格で固定材
 ## 由来集合と由来別色分け（2026-09-26〜27）
 CL・梁芯・柱を「誰が・何のために作ったか（由来）」で色分けする機能の設計意図。色は由来を表し、CL・梁芯・柱の3表で同じ由来語彙は同じ色相を共有する（定数は`renderer/canvasStyle.js`。1つの明度から各色相をhsl()で導出し、ダークモードは無く差し替え口だけ用意する）。種別・由来から表示色キーへ解決する経路は`renderer/originColorKey.js`に一本化する——renderer/は種別の生フィールドを読める許可ドメインであり、structural/側に「通り芯か」を判定する汎用述語を新設しない設計（`.claude/data-model.md`「種別を生フィールドで読んでよいのは…」節と同じ理由）。
 
-CL・梁芯・柱で由来の持ち方は異なり、共通の1エンティティにはまとめない：CLは種別（struct/center/aux等）そのものが由来を兼ねる。梁芯CLは`beamAxisOrigin`（wall/floorBeam/center/user、既定null）を持ち、nullはFlatBuffersへフィールドを書かず既存バイト列を不変に保つ。自動生成経路は生成時に付与し、既存梁芯を再利用する経路はnullのときだけ書き戻す（'user'は上書きしない）ため冪等——書き戻しはundo・他階記録の箱に影響しない。柱（在来木造のみ）は`woodColumnOrigins`（wall/freeEnd/above/supportSpanの和集合）を毎パス再計算して既存柱にも書き戻す——`woodAutoFill.js`のslotsは上書きでなく和集合（`structural/columnOrigins.js`の`mergeSlot`）で積む。通り芯交点由来・袖柱由来・手動由来は別の真実（アンカー種別・`woodJambRef`・`dimensionStatus`）から描画時に導出し、集合には入れない（真実を1つに保つ・昇格降格で再計算なしに追従させるため）。
+CL・梁芯・柱で由来の持ち方は異なり、共通の1エンティティにはまとめない：CLは種別（struct/center/aux等）そのものが由来を兼ねる。梁芯CLは`beamAxisOrigin`（wall/floorBeam/slabBeam/roofBeam/opening/center/user、既定null。slabBeamはS造スラブ小梁の割付け由来で、在来木造が手動判定に使うfloorBeamと分けてある）を持ち、nullはFlatBuffersへフィールドを書かず既存バイト列を不変に保つ。自動生成経路は生成時に付与し、既存梁芯を再利用する経路はnullのときだけ書き戻す（'user'は上書きしない）ため冪等——書き戻しはundo・他階記録の箱に影響しない。柱（在来木造のみ）は`woodColumnOrigins`（wall/freeEnd/above/supportSpanの和集合）を毎パス再計算して既存柱にも書き戻す——`woodAutoFill.js`のslotsは上書きでなく和集合（`structural/columnOrigins.js`の`mergeSlot`）で積む。通り芯交点由来・袖柱由来・手動由来は別の真実（アンカー種別・`woodJambRef`・`dimensionStatus`）から描画時に導出し、集合には入れない（真実を1つに保つ・昇格降格で再計算なしに追従させるため）。
 
 **由来は表示用であり、撤去・存在判定の入力にしない（不変条件）**。前節群にある「孤児梁芯を撤去しない」「フットプリントが縮んでも既存部材を destructive に消さない」という既存裁定は、由来フィールドが増えた後も変わらない——由来は色分け専用の副次情報であり、由来推定の誤りが不可逆な削除に直結しないよう、撤去・生成ゲートの判定には引き続き使わない。
 
