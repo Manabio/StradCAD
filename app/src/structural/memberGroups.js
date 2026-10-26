@@ -139,15 +139,35 @@ export function conformToLedger(graph, project, rules = null, planeId = null) {
         applySpecToEntity(entity, getGroupSpec(ledger, resolved));
         continue;
       }
-      const signature = rules ? joinSignatureFor(entity, mapName, rules, planeId) : memberSignature(entity, mapName);
-      const gid = findGidByJoinSignature(ledger, signature);
-      if (gid) {
-        const resolved = resolveMergedGid(ledger, gid);
+      const resolved = joinedGidFor(ledger, entity, mapName, rules, planeId);
+      if (resolved) {
         entity.setNumberGroupId(resolved);
         applySpecToEntity(entity, getGroupSpec(ledger, resolved));
       }
     }
   }
+}
+
+/**
+ * numberGroupId が無い部材 entity を conformToLedger が吸収する gid（加入署名が grp.join と一致するもの。
+ * mergedInto 解決済み）。吸収されなければ null。conformToLedger と、「部材の numberGroupId は自動で付いたものか
+ * 個別の指定か」の判定（isGroupDrivenMember）が共有する単一の実装。
+ */
+export function joinedGidFor(ledger, entity, mapName, rules = null, planeId = null) {
+  const signature = rules ? joinSignatureFor(entity, mapName, rules, planeId) : memberSignature(entity, mapName);
+  const gid = findGidByJoinSignature(ledger, signature);
+  return gid ? resolveMergedGid(ledger, gid) : null;
+}
+
+/**
+ * entity の numberGroupId（と、それで conform される材寸）が台帳の加入（grp.join）経由で自動に付いたものか。
+ * 真なら、gid を外して conformToLedger に掛けても同じ gid へ戻る＝利用者がその部材だけに加えた編集ではない。
+ * join を持たない孤立グループ（個別採番）や gid 無しは偽。
+ */
+export function isGroupDrivenMember(ledger, entity, mapName, rules = null, planeId = null) {
+  if (!entity.numberGroupId) return false;
+  const joined = joinedGidFor(ledger, entity, mapName, rules, planeId);
+  return joined != null && joined === resolveMergedGid(ledger, entity.numberGroupId);
 }
 
 // 次に発番する連番（同一 symbol の grp.spec:<symbol>#N キーの最大 N + 1）。

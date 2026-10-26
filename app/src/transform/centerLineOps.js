@@ -35,6 +35,7 @@ import {
 } from '../structural/wallBeamAxes.js';
 import { followWallBeamAxes } from '../structural/wallBeamAxisFollow.js';
 import { openingBeamSourcesFor, mapOpeningSourceMoves } from '../structural/openingBeamAxes.js';
+import { slabBeamSlotKeyFor } from '../structural/slabSecondaryBeamAxes.js';
 import { stairRiserOf } from '../finish/stair/stairDimensions.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { peekVia } from '../structural/structuralPeek.js';
@@ -89,6 +90,15 @@ function pushUndoWithStructuralSync(graph, project, scope, undoFn, redoFn, saveF
   );
   notify(floorRecords);
   return entry;
+}
+
+// S造スラブ小梁の梁芯の枠キー（slabBeamSlotKeyFor）の引数。座標は明示（移動前の座標・削除時の座標）で渡し、
+// pendingDelta を含む effectiveValue を暗黙に読ませない。
+function slabProbeOf(cl, coord) {
+  return {
+    beamAxisOrigin: cl.beamAxisOrigin, centerLineType: cl.centerLineType, coord,
+    extentLoRef: cl.extentLoRef, extentHiRef: cl.extentHiRef, extentLo: cl.extentLo, extentHi: cl.extentHi,
+  };
 }
 
 // CL の pendingDelta を実座標に bake する（ref CL / 通常 CL 両対応）
@@ -226,12 +236,21 @@ export function commitCLMoveOp(graph, project, cl, originalValue, opts = {}) {
     // 移動＝元位置の放棄と解釈する。次回のモード境界再計算で「壁由来の梁芯自動生成」が元の座標に
     // 復活しないよう、移動前の座標を除外集合へ記録する（cl-del分岐の記録と同じ意味・同じキー形式。
     // 手動追加の梁芯を動かした場合も無害——その座標に壁が無ければ単に使われないキーが残るだけ）。
-    graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, originalValue));
+    // S造スラブ小梁の割付け由来（SLAB_BEAM）は座標キーではなくベイ単位の枠キーで記録する（別のベイの同座標を
+    // 巻き込まず、通り芯が動いて座標が変わっても元の枠が空いたままになる）。属するベイが無ければ記録しない。
+    if (cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM) {
+      const slotKey = slabBeamSlotKeyFor(graph, project, slabProbeOf(cl, originalValue));
+      if (slotKey) graph.excludedSlabBeamSlots.add(slotKey);
+    } else {
+      graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, originalValue));
+    }
     // 開口由来（規則O）の梁芯を手動で動かしたら由来をUSERへ切り替える（ステップ6・設計§2）——
     // 再計算時の照合（reconcileOpeningBeamAxes）は「開口の位置に無い開口由来梁芯」を孤児とみなすため、
     // 手動移動を区別する印が要る。壁由来（WALL）はソース差分方式（wallBeamAxisFollow.js）が手動移動を
     // 誤認しないため、由来は変えない。before/afterのグラフスナップショット方式でundo/redoに乗る。
-    if (cl.beamAxisOrigin === BeamAxisOrigin.OPENING) cl.beamAxisOrigin = BeamAxisOrigin.USER;
+    // S造スラブ小梁の割付け由来（SLAB_BEAM＝未編集の自動梁芯）も同じ理由でUSERへ切り替える——動かした梁芯を
+    // 割り直し（slabSecondaryBeamAxes.js）が別の目標へ寄せないため。
+    if (cl.beamAxisOrigin === BeamAxisOrigin.OPENING || cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM) cl.beamAxisOrigin = BeamAxisOrigin.USER;
     bakeCLValue(cl, newValue);
     counts = resolveSecondaryBeamsForAxis(graph, cl, project);
     renumberMembers(graph, project, 'beamMap');
@@ -846,7 +865,12 @@ async function runDeleteCenterLineWithUndo(graph, project, cl, opts = {}) {
         // 削除しないため、記録しないと自動生成が復活させてしまう）。キーは structural/wallBeamAxes.js
         // と同じ形式。中心線の道連れ削除（removeOrphanedWallBeamAxesFor）は excludedWallBeamAxes
         // に触れない——壁が戻れば（undo）再生成されるため、手動削除・移動の記録と同列に扱わない。
-        if (centerLineKind(cl) === 'beam') {
+        // S造スラブ小梁の割付け由来（SLAB_BEAM）は座標キーでなくベイ単位の枠キー（slabBeamSlotKeyFor。
+        // 属するベイが無ければ記録しない）。別のベイの同座標を巻き込まない。
+        if (cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM) {
+          const slotKey = slabBeamSlotKeyFor(graph, project, slabProbeOf(cl, cl.effectiveValue));
+          if (slotKey) graph.excludedSlabBeamSlots.add(slotKey);
+        } else if (centerLineKind(cl) === 'beam') {
           graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(cl.centerLineType === CenterLineType.VERTICAL, cl.effectiveValue));
         }
         // graph.removeCenterLine は内部で detachFromCenterLine（壁端・extent参照の切り離し）→

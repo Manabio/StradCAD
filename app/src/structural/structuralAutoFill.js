@@ -20,7 +20,7 @@ import { ROOF_COLUMN_CLASS } from './roofColumnFilter.js';
 import { autoFillWallBeamAxes, removeStaleWallBeamAxes } from './wallBeamAxes.js';
 import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisExtentsAfterCreate } from './openingBeamAxes.js';
 import { autoFillWoodOpeningBeams } from './woodOpeningBeams.js';
-import { autoFillSlabSecondaryBeamAxes } from './slabSecondaryBeamAxes.js';
+import { reconcileSlabSecondaryBeamAxes } from './slabSecondaryBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -885,7 +885,13 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // S造のスラブ小梁の梁芯（slabSecondaryBeamAxes.js。structureRules.js slabSecondaryBeams が null の主構造は空）。
   // 大梁・開口辺の小梁が確定した直後に梁芯を作り、追加の梁芯の子梁を同じパスで作る（次の再計算を待たない）。
   // 基礎伏図・屋根専用平面は対象外。
-  const slabAxes = (!isRoof && !foundation) ? autoFillSlabSecondaryBeamAxes(graph, project, slabOpeningRects).created : [];
+  // 現況のベイへ割り直す（後から足した吹抜け・動いた通り芯に追従。手が入った梁芯は由来を USER へ替えて残す）。
+  // 作った梁芯の子梁は同じパスで作る。撤去は teardown が子梁を道連れにするので作り直し不要。値を張り直しただけの梁芯は
+  // 呼び直さない: 子梁のスパンは端の通り芯（受け梁で縛られたベイの両端）と梁芯の id で決まり、値が動いても変わらない。
+  const slabReconcile = (!isRoof && !foundation)
+    ? reconcileSlabSecondaryBeamAxes(graph, project, slabOpeningRects)
+    : { created: [], revalued: [], removed: [], normalized: [], skipped: [] };
+  const slabAxes = slabReconcile.created;
   const newSlabSecondaries = slabAxes.length > 0 ? autoFillSecondaryBeams(graph, project) : [];
   // 階段を横切る孤児の梁芯の撤去（ユーザー指示2026-10-12。「CLは残す」規律の例外）。生成・撤去がすべて確定した
   // 最後に呼ぶ——梁が乗った梁芯を孤児と誤認しない／現況の生成源（壁・開口）と往復しないため。
@@ -899,8 +905,10 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     // 「新規/撤去した梁」ではないため newBeams/removedBeams には混ぜず、別枠で返す
     // （structuralRecompute.js の changed 判定はこの配列の長さも見る）。
     changedOpeningBeamAxes: [...relabeledOpeningBeamAxes, ...retargetedOpeningBeamAxes, ...retargetedOpeningBeamAxesAfterCreate],
+    // S造のスラブ小梁の梁芯の値の張り直し・由来の USER 化（slabSecondaryBeamAxes.js）。新規/撤去ではないため別枠。
+    changedSlabBeamAxes: [...slabReconcile.revalued, ...slabReconcile.normalized],
     newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newOpeningBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...slabAxes, ...newSlabSecondaries, ...sillBeamsResult.created, ...floorBeamsResult.created],
-    removedBeams: [...staleFoundation.removedBeams, ...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes, ...removedLandingG, ...removedStaleLandingBeams],
+    removedBeams: [...staleFoundation.removedBeams, ...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes, ...slabReconcile.removed, ...removedLandingG, ...removedStaleLandingBeams],
     // 踊り場受け梁の既存auto LGへのlevelOffset再計算更新（QA指摘F1是正）。新規/撤去した梁ではないため
     // newBeams/removedBeamsには混ぜず、changedOpeningBeamAxesと同じ別枠にする
     // （structuralRecompute.jsのchanged判定はこの配列の長さも見る）。

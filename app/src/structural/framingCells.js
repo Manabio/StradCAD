@@ -74,18 +74,34 @@ export function bayBeamIsVertical(w, h) {
 export function divideBayEqually(cell, maxPitchMm) {
   const w = cell.x2 - cell.x1, h = cell.y2 - cell.y1;
   if (Math.min(w, h) <= maxPitchMm) return null;
-  const isVertical = bayBeamIsVertical(w, h);
-  const longLen = isVertical ? w : h;
-  const longLo = isVertical ? cell.x1 : cell.y1;
-  const longHi = isVertical ? cell.x2 : cell.y2;
-  const shortLo = isVertical ? cell.y1 : cell.x1;
-  const shortHi = isVertical ? cell.y2 : cell.x2;
-  const n = Math.ceil(longLen / maxPitchMm);
+  const geom = bayGeometry(cell);
+  const n = Math.ceil((geom.longHi - geom.longLo) / maxPitchMm);
   if (n < 2) return null; // 内部位置が無い（理論上 min(w,h)>maxPitchMm 判定と矛盾しないための安全弁）
-  const pitch = longLen / n;
+  return { ...geom, coords: equalDivisionCoords(geom.longLo, geom.longHi, n) };
+}
+
+/**
+ * 区画 cell の子梁の向きと、長辺（子梁を並べる方向）・短辺（子梁が架かる方向）の範囲。
+ * 短辺が maxPitch 以下かどうかは見ない（割付け対象外の区画の所属判定にも使う）。
+ * @param {{x1:number, y1:number, x2:number, y2:number}} cell
+ * @returns {{isVertical:boolean, shortLo:number, shortHi:number, longLo:number, longHi:number}}
+ */
+export function bayGeometry(cell) {
+  const isVertical = bayBeamIsVertical(cell.x2 - cell.x1, cell.y2 - cell.y1);
+  return isVertical
+    ? { isVertical, shortLo: cell.y1, shortHi: cell.y2, longLo: cell.x1, longHi: cell.x2 }
+    : { isVertical, shortLo: cell.x1, shortHi: cell.x2, longLo: cell.y1, longHi: cell.y2 };
+}
+
+/**
+ * [longLo,longHi] を n 等分したときの内部の n-1 本の座標（i=1..n-1。配列の index は i-1）。
+ * divideBayEqually と、分割数を固定した割り直し（slabSecondaryBeamAxes.js）が共有する単一の式。
+ */
+export function equalDivisionCoords(longLo, longHi, n) {
+  const pitch = (longHi - longLo) / n;
   const coords = [];
   for (let i = 1; i < n; i++) coords.push(longLo + i * pitch);
-  return { isVertical, coords, shortLo, shortHi, longLo, longHi };
+  return coords;
 }
 
 /**

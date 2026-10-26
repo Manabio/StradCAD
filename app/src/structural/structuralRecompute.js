@@ -226,7 +226,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     ? withGraphReadScope(targetGraph, () => buildRoofColumnFilter(targetGraph)) : null;
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams, removedStairCrossingAxes, removedStaleRoofWallAxes } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents, slabOpeningRects));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, changedSlabBeamAxes, updatedLandingBeams, removedStairCrossingAxes, removedStaleRoofWallAxes } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents, slabOpeningRects));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
@@ -286,6 +286,8 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     // m-5是正・QA指摘: 開口由来梁芯の再ラベル（→WALL）・extent張り直し（reconcileOpeningBeamAxes）も
     // changedに乗せる——undoスナップショット（captureSnapshots）に反映されるべき実質的な変更のため。
     || changedOpeningBeamAxes.length > 0
+    // S造のスラブ小梁の梁芯の値の張り直し・由来の USER 化（slabSecondaryBeamAxes.js）。実質的な変更。
+    || changedSlabBeamAxes.length > 0
     // 階段を横切る孤児の梁芯の撤去（依存の柱・梁が道連れで消えるため実質的な変更。再アンカーは次の sweep）。
     || removedStairCrossingAxes.length > 0
     // 屋根専用平面の旧最上階の壁由来梁芯の撤去（依存の auto の梁が道連れで消えるため実質的な変更）。

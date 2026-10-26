@@ -6,17 +6,18 @@ import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline, RoomFeature, centerLineKind as centerLineKindOf } from '../core.js';
 import { getAllCells } from '../finish/gridCells.js';
+import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { SlabBayFillSkip, STEEL_SECONDARY_BEAM_MAX_PITCH_MM } from '../core/constants.js';
-import { autoFillSlabSecondaryBeamAxes, planSlabSecondaryBeamAxes, slabBeamSlotKey, parseSlabBeamSlotKey } from './slabSecondaryBeamAxes.js';
+import { reconcileSlabSecondaryBeamAxes, slabBeamSlotKeyFor, planSlabSecondaryBeamAxes, slabBeamSlotKey, parseSlabBeamSlotKey } from './slabSecondaryBeamAxes.js';
 import { exclusionKeyReferencesCL } from '../core/structuralEntities.js';
 import { autoFillSecondaryBeams } from './structuralAutoFill.js';
 import { rulesFor } from './structureRules.js';
 import { wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 
-const PROJECT = { planes: [], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+const PROJECT = { planes: [], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' }, memberGroupLedger: new Map() };
 const MAX = STEEL_SECONDARY_BEAM_MAX_PITCH_MM;
 
 // 幅 width × 高さ height のベイを4辺 primary 梁で囲む。topRole で上辺（y=-height）の役割を変えられる。
@@ -43,7 +44,7 @@ const rectOpening = (x1, x2, y1, y2) => ({ x1, x2, y1, y2, source: 'void' });
 
 test('5000×7000のベイ: 短辺方向（横梁）の梁芯が y=-4666.67・-2333.33 の2本。端の通り芯を extent に参照し由来は slabBeam。座標は丸めない', () => {
   const { graph, x0, x1 } = buildBay('S造');
-  const { created, skipped } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created, skipped } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.deepEqual(skipped, []);
   const axes = axesOf(created);
   assert.equal(axes.length, 2);
@@ -67,7 +68,7 @@ test('5000×7000のベイ: 短辺方向（横梁）の梁芯が y=-4666.67・-23
 
 test('正方形のベイは横梁（材軸＝X）: 5000×5000 → 横梁の梁芯1本 y=-2500', () => {
   const { graph } = buildBay('S造', { width: 5000, height: 5000 });
-  const { created } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.equal(created.length, 1);
   assert.equal(created[0].centerLineType, CenterLineType.HORIZONTAL);
   assert.equal(created[0].value, -2500);
@@ -75,7 +76,7 @@ test('正方形のベイは横梁（材軸＝X）: 5000×5000 → 横梁の梁�
 
 test('幅が長辺のベイは縦梁: 7000×5000 → x=2333.33/4666.67 の縦梁芯2本（端は横の通り芯）', () => {
   const { graph, y0, y1 } = buildBay('S造', { width: 7000, height: 5000 });
-  const { created } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   const axes = axesOf(created);
   assert.equal(axes.length, 2);
   assert.ok(axes.every(a => a.centerLineType === CenterLineType.VERTICAL));
@@ -84,18 +85,18 @@ test('幅が長辺のベイは縦梁: 7000×5000 → x=2333.33/4666.67 の縦梁
 
 test('3595角のベイは1本（ceil(3595/2500)=2等分）', () => {
   const { graph } = buildBay('S造', { width: 3595, height: 3595 });
-  const { created } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.equal(created.length, 1);
   assert.equal(created[0].value, -3595 + 3595 / 2);
 });
 
 test('【失敗系】短辺がちょうど2500のベイは作らず SHORT_SPAN、2501は作る', () => {
   const at = buildBay('S造', { width: MAX, height: 7000 });
-  const r1 = autoFillSlabSecondaryBeamAxes(at.graph, PROJECT);
+  const r1 = reconcileSlabSecondaryBeamAxes(at.graph, PROJECT);
   assert.equal(r1.created.length, 0);
   assert.deepEqual(r1.skipped.map(s => s.reason), [SlabBayFillSkip.SHORT_SPAN]);
   const over = buildBay('S造', { width: MAX + 1, height: 7000 });
-  const r2 = autoFillSlabSecondaryBeamAxes(over.graph, PROJECT);
+  const r2 = reconcileSlabSecondaryBeamAxes(over.graph, PROJECT);
   assert.ok(r2.created.length > 0, '2501 は作る');
   assert.deepEqual(r2.skipped, []);
 });
@@ -104,7 +105,7 @@ test('【失敗系】辺が1本欠けるとベイにならず何も作らない�
   for (const side of ['top', 'bottom', 'left', 'right']) {
     const b = buildBay('S造');
     b.graph.beamMap.delete(b[side].id);
-    const { created, skipped } = autoFillSlabSecondaryBeamAxes(b.graph, PROJECT);
+    const { created, skipped } = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
     assert.equal(created.length, 0, `${side} 欠け`);
     assert.deepEqual(skipped, [], `${side} 欠け: ベイが無いので報告もしない`);
   }
@@ -113,27 +114,27 @@ test('【失敗系】辺が1本欠けるとベイにならず何も作らない�
 test('【失敗系】開口と面積で重なるベイは OPENING（開口の中心がベイの外でも）。辺で接するだけなら割り付ける', () => {
   // ベイ x:[0,5000] y:[-7000,0]。開口 x:[4000,6000] y:[-6500,-5500] は中心 (5000,-6000) がベイの辺上＝内部ではないが1000×1000で重なる。
   const overlap = buildBay('S造');
-  const r1 = autoFillSlabSecondaryBeamAxes(overlap.graph, PROJECT, [rectOpening(4000, 6000, -6500, -5500)]);
+  const r1 = reconcileSlabSecondaryBeamAxes(overlap.graph, PROJECT, [rectOpening(4000, 6000, -6500, -5500)]);
   assert.equal(r1.created.length, 0);
   assert.equal(r1.created.length, 0);
   assert.deepEqual(r1.skipped.map(s => s.reason), [SlabBayFillSkip.OPENING]);
   // x:[5000,6000] はベイの右辺に接するだけ。
   const touch = buildBay('S造');
-  const r2 = autoFillSlabSecondaryBeamAxes(touch.graph, PROJECT, [rectOpening(5000, 6000, -6500, -5500)]);
+  const r2 = reconcileSlabSecondaryBeamAxes(touch.graph, PROJECT, [rectOpening(5000, 6000, -6500, -5500)]);
   assert.equal(r2.created.length, 2);
 });
 
 test('【失敗系】端が踊り場受け梁（LG）のベイは NO_HOST で作らない', () => {
   // 7000×5000 は縦梁（y方向に走る）で、上辺（y=-5000）が子梁の端になる。
   const { graph } = buildBay('S造', { width: 7000, height: 5000, topRole: 'landing' });
-  const { created, skipped } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created, skipped } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.equal(created.length, 0);
   assert.deepEqual(skipped.map(s => s.reason), [SlabBayFillSkip.NO_HOST]);
 });
 
 test('【失敗系】hi 端（下辺 y=0）が踊り場受け梁（LG）のベイも NO_HOST で作らない', () => {
   const { graph } = buildBay('S造', { width: 7000, height: 5000, bottomRole: 'landing' });
-  const { created, skipped } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created, skipped } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.equal(created.length, 0);
   assert.deepEqual(skipped.map(s => s.reason), [SlabBayFillSkip.NO_HOST]);
 });
@@ -142,7 +143,7 @@ test('【失敗系】端の通り芯が無い（端が通り芯でない梁芯�
   const { graph, y0 } = buildBay('S造', { width: 7000, height: 5000 });
   // 子梁の端（上辺）の通り芯を通り芯でなくす（labeled:false の梁芯相当）。大梁は残るので境界にはなる。
   runInAction(() => { y0.labeled = false; });
-  const { created, skipped } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created, skipped } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.equal(created.length, 0);
   assert.deepEqual(skipped.map(s => s.reason), [SlabBayFillSkip.NO_HOST]);
 });
@@ -151,7 +152,7 @@ test('同方向の通り芯と同座標の位置は作らない', () => {
   const { graph } = buildBay('S造');
   const yy = -7000 + 7000 / 3;
   graph.addCenterLine(CenterLineType.HORIZONTAL, yy, { labeled: true, discipline: Discipline.STRUCT });
-  const { created } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.equal(created.length, 1);
   assert.equal(created[0].value, -7000 + 2 * (7000 / 3));
 });
@@ -159,7 +160,7 @@ test('同方向の通り芯と同座標の位置は作らない', () => {
 test('除外集合（手動削除済み）の座標は作らない', () => {
   const { graph } = buildBay('S造');
   graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(false, -7000 + 7000 / 3));
-  const { created } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.equal(created.length, 1);
   assert.equal(created[0].value, -7000 + 2 * (7000 / 3));
 });
@@ -168,7 +169,7 @@ test('【失敗系】ベイ内にユーザーの梁芯があれば丸ごと作�
   for (const [type, value] of [[CenterLineType.HORIZONTAL, -3000], [CenterLineType.VERTICAL, 1000]]) {
     const { graph } = buildBay('S造');
     graph.addCenterLine(type, value, { labeled: false, discipline: Discipline.FUSE, extentLo: -7000, extentHi: 5000, beamAxisOrigin: BeamAxisOrigin.USER });
-    const { created, skipped } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+    const { created, skipped } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
     assert.equal(created.length, 0, `${type} の USER 梁芯`);
     assert.deepEqual(skipped.map(s => s.reason), [SlabBayFillSkip.OCCUPIED]);
   }
@@ -178,23 +179,23 @@ test('ベイと extent が重ならないユーザーの梁芯は邪魔しない
   const { graph } = buildBay('S造');
   // x=1000 の縦梁芯だが extent が y:[-9000,-8000]（ベイの外）。
   graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: -9000, extentHi: -8000, beamAxisOrigin: BeamAxisOrigin.USER });
-  const { created } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.equal(created.length, 2);
 });
 
-test('冪等: 2回目は0本（自分の梁芯がベイ内にあり OCCUPIED）', () => {
+test('冪等: 2回目は何も変えない（自分の梁芯があるベイは管理中——作らず・張り直さず・撤去せず・正規化せず）', () => {
   const { graph } = buildBay('S造');
-  assert.equal(autoFillSlabSecondaryBeamAxes(graph, PROJECT).created.length, 2);
-  const again = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
-  assert.equal(again.created.length, 0);
-  assert.deepEqual(again.skipped.map(s => s.reason), [SlabBayFillSkip.OCCUPIED]);
+  assert.equal(reconcileSlabSecondaryBeamAxes(graph, PROJECT).created.length, 2);
+  const again = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
+  assert.deepEqual(
+    [again.created, again.revalued, again.removed, again.normalized, again.skipped].map(a => a.length), [0, 0, 0, 0, 0]);
 });
 
 // 人が消したものが再計算で復活しない（team-lessons: 広い領域で梁芯を作る規則は削除→再計算を複数パス回して確かめる）。
 function recomputePasses(graph, n = 3) {
   const made = [];
   for (let i = 0; i < n; i++) {
-    made.push(...autoFillSlabSecondaryBeamAxes(graph, PROJECT).created, ...autoFillSecondaryBeams(graph, PROJECT));
+    made.push(...reconcileSlabSecondaryBeamAxes(graph, PROJECT).created, ...autoFillSecondaryBeams(graph, PROJECT));
   }
   return made;
 }
@@ -229,14 +230,17 @@ test('子梁だけ削除（梁芯は残す）→再計算×3パスで梁も梁�
   const victim = graph.beams.find(b => b.role === 'secondary');
   graph.removeBeam(victim.id);
   assert.equal(recomputePasses(graph, 3).length, 0);
-  assert.deepEqual(graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM).map(cl => cl.id), axisIds);
+  // 子梁を消した梁芯は「手を加えた」ので由来が USER へ替わるだけで、梁芯自体は残る（撤去 0）。
+  const beamAxes = graph.centerLines.filter(cl => cl.discipline === Discipline.FUSE);
+  assert.deepEqual(beamAxes.map(cl => cl.id).sort(), [...axisIds].sort());
+  assert.deepEqual(beamAxes.map(cl => cl.beamAxisOrigin).sort(), [BeamAxisOrigin.SLAB_BEAM, BeamAxisOrigin.USER]);
   assert.equal(graph.beams.filter(b => b.role === 'secondary').length, 1);
 });
 
 test('対象外の主構造は0本: SRC造・未定・在来木造・RC造(ラーメン/壁式)・2x4', () => {
   for (const structure of ['SRC造', '未定', '木造（在来）', 'RC造(ラーメン)', 'RC造(壁式)', '木造（2"×4"）']) {
     const { graph } = buildBay(structure);
-    const { created, skipped } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+    const { created, skipped } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
     assert.equal(created.length, 0, structure);
     assert.deepEqual(skipped, [], structure);
   }
@@ -256,7 +260,7 @@ function buildBayWithMidBeam(origin) {
 
 test('開口辺の小梁（由来 OPENING）はベイの境界になり、上下の2ベイを別々に割り付ける', () => {
   const { graph } = buildBayWithMidBeam(BeamAxisOrigin.OPENING);
-  const { created, skipped } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created, skipped } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.deepEqual(skipped, []);
   // 下 y:[-8000,0] は ceil(8000/2500)=4 等分で3本、上 y:[-20000,-8000] は ceil(12000/2500)=5 等分で4本。
   assert.equal(created.length, 7);
@@ -265,7 +269,7 @@ test('開口辺の小梁（由来 OPENING）はベイの境界になり、上下
 
 test('【失敗系】USER 由来の梁芯に乗る小梁は境界にしない（ベイは割れず、その梁芯がベイ内にあり OCCUPIED）', () => {
   const { graph } = buildBayWithMidBeam(BeamAxisOrigin.USER);
-  const { created, skipped } = autoFillSlabSecondaryBeamAxes(graph, PROJECT);
+  const { created, skipped } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
   assert.equal(created.length, 0);
   assert.deepEqual(skipped.map(s => s.reason), [SlabBayFillSkip.OCCUPIED]);
 });
@@ -393,4 +397,644 @@ test('【S2a】exclusionKeyReferencesCL は枠キーの4辺いずれのCL id も
   const key = slabBeamSlotKey(SLOT);
   for (const id of ['xa', 'xb', 'ya', 'yb']) assert.equal(exclusionKeyReferencesCL(key, id), true, id);
   assert.equal(exclusionKeyReferencesCL(key, 'xc'), false);
+});
+
+// ---- S2b: 割り直し（reconcileSlabSecondaryBeamAxes） ----
+const fuseAxes = g => g.centerLines.filter(cl => cl.discipline === Discipline.FUSE).sort((a, b) => a.value - b.value);
+const bayIds = b => ({ x1Id: b.x0.id, x2Id: b.x1.id, y1Id: b.y0.id, y2Id: b.y1.id });
+// 1パス＝割り直し＋子梁の生成（structuralAutoFill.js と同じ順）。パスごとの変更の総数を返す。
+function settle(graph, passes = 3, openingRects = undefined) {
+  return Array.from({ length: passes }, () => {
+    const r = reconcileSlabSecondaryBeamAxes(graph, PROJECT, openingRects);
+    const kids = autoFillSecondaryBeams(graph, PROJECT);
+    return r.created.length + r.revalued.length + r.removed.length + r.normalized.length + kids.length;
+  });
+}
+const secondaries = g => g.beams.filter(b => b.role === 'secondary');
+const pitchesOf = (values, lo, hi) => [lo, ...values, hi].map((v, i, a) => v - a[i - 1]).slice(1);
+
+test('【S2b】通り芯を動かす（y −7000→−10000）: 同じ id の2本を張り直し1本を新規、ピッチ≤2500。戻すと元の座標・元の id に戻る', () => {
+  const b = buildBay('S造');
+  assert.deepEqual(settle(b.graph, 1), [4]);
+  const [a, c] = fuseAxes(b.graph);
+  const before = [a.value, c.value];
+  b.y0.value = -10000;
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual([r.revalued.map(x => x.id), r.created.length, r.removed.length, r.normalized.length], [[a.id, c.id], 1, 0, 0]);
+  autoFillSecondaryBeams(b.graph, PROJECT);
+  const vs = fuseAxes(b.graph).map(x => x.value);
+  assert.equal(vs.length, 3);
+  assert.ok(pitchesOf(vs, -10000, 0).every(p => p <= MAX + 1e-9), `ピッチ ${pitchesOf(vs, -10000, 0)}`);
+  assert.equal(secondaries(b.graph).length, 3, '子梁も3本');
+  // 戻す（undo 後の再同期）: 決定的に元の座標・元の id へ。-7500 に出ていた a がベイ (−7000,0) の外でも、所属は
+  // 端の通り芯で決まるので a のまま張り直され、移動時に増えた1本だけが撤去される。
+  b.y0.value = -7000;
+  const back = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.equal(back.removed.length, 1);
+  assert.deepEqual(fuseAxes(b.graph).map(x => [x.id, x.value]), [[a.id, before[0]], [c.id, before[1]]], '元の id・座標に戻る');
+  assert.deepEqual(settle(b.graph, 3), [0, 0, 0], '収束');
+});
+
+test('【S2b】子梁の id は張り直しで保たれる（番号グループ・除外キーが生き残る）', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const kidIds = secondaries(b.graph).map(k => k.id).sort();
+  b.y0.value = -10000;
+  settle(b.graph, 3);
+  const after = secondaries(b.graph).map(k => k.id);
+  for (const id of kidIds) assert.ok(after.includes(id), `子梁 ${id} が残る`);
+});
+
+test('【S2b・失敗系】通り芯を動かして短辺が2500以下になると、梁芯も子梁も撤去する（SHORT_SPAN）', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  b.y0.value = -2400; // 5000×2400
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.equal(r.removed.length, 2);
+  assert.deepEqual(r.skipped.map(s => s.reason), [SlabBayFillSkip.SHORT_SPAN]);
+  assert.equal(fuseAxes(b.graph).length, 0);
+  assert.equal(secondaries(b.graph).length, 0, '子梁は梁芯の撤去で道連れ');
+});
+
+test('【S2b】ベイが分割される（大梁が増える）: 孤児の梁芯を撤去し、新しい2ベイを割り付ける', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const oldIds = fuseAxes(b.graph).map(x => x.id);
+  const rules = rulesFor('S造');
+  const ym = b.graph.addCenterLine(CenterLineType.HORIZONTAL, -3000, { labeled: true, discipline: Discipline.STRUCT });
+  b.graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, ym, false, b.x0, b.x1, { role: 'primary' });
+  // 左右の大梁も ym で受けられるよう、既存の縦梁は y0〜y1 の通しのまま（ホスト判定は区間内で成立）。
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.equal(r.removed.length, 2, '向きの違う旧梁芯は孤児');
+  assert.deepEqual(r.removed.map(x => x.id).sort(), [...oldIds].sort());
+  // 5000×4000 と 5000×3000 はともに縦梁（短辺が垂直方向）で x=2500 の1本ずつ。
+  assert.equal(r.created.length, 2);
+  assert.ok(r.created.every(x => x.centerLineType === CenterLineType.VERTICAL && x.value === 2500));
+  assert.deepEqual(settle(b.graph, 2), [2, 0], '子梁2本を作って収束');
+});
+
+test('【S2b】隣り合う2ベイ: それぞれの梁芯は自分のベイに属し（extent）、再計算を重ねても id・本数が変わらない', () => {
+  const b = buildBay('S造');
+  const rules = rulesFor('S造');
+  const x2 = b.graph.addCenterLine(CenterLineType.VERTICAL, 10000, { labeled: true, discipline: Discipline.STRUCT });
+  const add = (cl, isV, p, q) => b.graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, cl, isV, p, q, { role: 'primary' });
+  add(b.y0, false, b.x1, x2); add(b.y1, false, b.x1, x2); add(x2, true, b.y0, b.y1);
+  assert.equal(settle(b.graph, 1)[0] > 0, true);
+  const snap = () => fuseAxes(b.graph).map(x => `${x.id}@${x.value}[${x.extentLo},${x.extentHi}]`).join('|');
+  const first = snap();
+  assert.equal(fuseAxes(b.graph).length, 4);
+  assert.deepEqual(settle(b.graph, 3), [0, 0, 0]);
+  assert.equal(snap(), first);
+});
+
+test('【S2b】子梁を固定（locked）した梁芯: 由来を USER へ替え枠を記録し、その梁芯は動かさない。同じベイの他の梁芯は割り直され、重複しない', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const [a, c] = fuseAxes(b.graph); // a=−4666.67（i=1）, c=−2333.33（i=2）
+  secondaries(b.graph).find(k => k.axisCL.id === a.id).setDimensionStatus('locked');
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual(r.normalized.map(x => x.id), [a.id]);
+  assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER);
+  assert.equal(c.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM);
+  assert.deepEqual([...b.graph.excludedSlabBeamSlots], [slabBeamSlotKey({ ...bayIds(b), dir: CenterLineType.HORIZONTAL, n: 3, i: 1 })]);
+  assert.deepEqual([r.created.length, r.revalued.length, r.removed.length], [0, 0, 0]);
+  assert.deepEqual(settle(b.graph, 3), [0, 0, 0]);
+  assert.equal(fuseAxes(b.graph).length, 2, '重複して作らない');
+  // 寸法が変わっても n は固定（ユーザー裁定U1）: 高さ10000でも n=3、i=1 は作らず i=2 だけ追従。固定した梁芯は動かない。
+  b.y0.value = -10000;
+  const moved = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual(moved.revalued.map(x => x.id), [c.id]);
+  assert.equal(c.value, -10000 + 2 * (10000 / 3));
+  assert.equal(a.value, -7000 + 7000 / 3, '固定した梁芯は動かない');
+  assert.equal(moved.created.length, 0, 'i=1 は記録済みで作らない');
+});
+
+test('【S2b・失敗系】子梁だけ削除: 梁芯は USER で残り子梁は復活しない（×3パス・撤去0）。後から吹抜けが出ても削除の記録を持つ梁芯は撤去しない', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const [a, c] = fuseAxes(b.graph);
+  b.graph.removeBeam(secondaries(b.graph).find(k => k.axisCL.id === a.id).id);
+  let removedTotal = 0;
+  for (let i = 0; i < 3; i++) {
+    removedTotal += reconcileSlabSecondaryBeamAxes(b.graph, PROJECT).removed.length;
+    assert.equal(autoFillSecondaryBeams(b.graph, PROJECT).length, 0, '子梁は復活しない');
+  }
+  assert.equal(removedTotal, 0);
+  assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER);
+  // 吹抜けが後から出る: 未編集の c は撤去、削除の記録（excludedBeamSlots が a.id を参照）を持つ a は撤去しない。
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT, [rectOpening(0, 5000, -7000, 0)]);
+  assert.deepEqual(r.removed.map(x => x.id), [c.id]);
+  assert.ok(b.graph.centerLines.includes(a), '別 id で復活する事故の再発防止: 削除の記録がある梁芯は残る');
+  assert.ok([...b.graph.excludedBeamSlots].some(k => exclusionKeyReferencesCL(k, a.id)));
+});
+
+test('【S2b・失敗系】孤児でも手が入った梁芯は撤去しない（USER へ替えるだけ）', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const [a, c] = fuseAxes(b.graph);
+  secondaries(b.graph).find(k => k.axisCL.id === c.id).setDimensionStatus('locked');
+  b.y0.value = -2400; // 短辺2400でベイは SHORT_SPAN
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual(r.removed.map(x => x.id), [a.id]);
+  assert.equal(c.beamAxisOrigin, BeamAxisOrigin.USER);
+  assert.ok(b.graph.centerLines.includes(c));
+});
+
+test('【S2b】管理中のベイでも、手で足した USER 梁芯が目標の座標にあればそこには作らず、他は割り直す', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const [a, c] = fuseAxes(b.graph);
+  b.graph.removeCenterLine(c.id);
+  const user = b.graph.addCenterLine(CenterLineType.HORIZONTAL, -7000 + 2 * (7000 / 3) + 0.2, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER,
+    extentLoRef: { clId: b.x0.id, offset: 0 }, extentHiRef: { clId: b.x1.id, offset: 0 },
+  });
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual([r.created.length, r.revalued.length, r.removed.length, r.normalized.length], [0, 0, 0, 0]);
+  assert.deepEqual(fuseAxes(b.graph).map(x => x.id), [a.id, user.id]);
+});
+
+test('【S2b・U1/U2】記録のあるベイ: 寸法が変わっても n 固定で除外枠は作らず残りは追従。短辺・長辺が入れ替わると記録は効かず全部割り直す', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const [a, c] = fuseAxes(b.graph);
+  b.graph.removeCenterLine(a.id); // 利用者が i=1 を削除した状態（記録を直接入れる）
+  b.graph.excludedSlabBeamSlots.add(slabBeamSlotKey({ ...bayIds(b), dir: CenterLineType.HORIZONTAL, n: 3, i: 1 }));
+  b.y0.value = -10000;
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual(r.revalued.map(x => x.id), [c.id]);
+  assert.deepEqual(fuseAxes(b.graph).map(x => x.value), [-10000 + 2 * (10000 / 3)], 'n=3 のまま（既定なら n=4）・i=1 は作らない');
+  // 入れ替え: 5000×3000（横が長辺→縦梁・n=2）。向きが変わるので記録は効かず、旧梁芯は孤児で撤去、既定の割付けになる。
+  b.y0.value = -3000;
+  const flipped = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual(flipped.removed.map(x => x.id), [c.id]);
+  assert.deepEqual(flipped.created.map(x => [x.centerLineType, x.value]), [[CenterLineType.VERTICAL, 2500]]);
+});
+
+test('【S2b・失敗系】記録の無い手動削除（excludedWallBeamAxes）の座標は、管理中でも作らない', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const [a, c] = fuseAxes(b.graph);
+  b.graph.excludedWallBeamAxes.add(wallBeamAxisExcludeKey(false, a.effectiveValue));
+  b.graph.removeCenterLine(a.id);
+  assert.deepEqual(settle(b.graph, 3), [0, 0, 0]);
+  assert.deepEqual(fuseAxes(b.graph).map(x => x.id), [c.id]);
+});
+
+test('【S2b】在来木造の FLOOR_BEAM 梁芯には触れない（木造は何もしない・S造でも FLOOR_BEAM は未編集の自動梁芯として扱わない）', () => {
+  const wood = buildBay('木造（在来）');
+  const axisOf = (g, bay, origin) => g.addCenterLine(CenterLineType.HORIZONTAL, -3500, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: origin,
+    extentLoRef: { clId: bay.x0.id, offset: 0 }, extentHiRef: { clId: bay.x1.id, offset: 0 },
+  });
+  const wAxis = axisOf(wood.graph, wood, BeamAxisOrigin.FLOOR_BEAM);
+  const wr = reconcileSlabSecondaryBeamAxes(wood.graph, PROJECT);
+  assert.deepEqual([wr.created, wr.revalued, wr.removed, wr.normalized, wr.skipped].map(a => a.length), [0, 0, 0, 0, 0]);
+  assert.equal(wAxis.value, -3500);
+  const steel = buildBay('S造');
+  const sAxis = axisOf(steel.graph, steel, BeamAxisOrigin.FLOOR_BEAM);
+  const sr = reconcileSlabSecondaryBeamAxes(steel.graph, PROJECT);
+  assert.deepEqual([sr.created.length, sr.revalued.length, sr.removed.length, sr.normalized.length], [0, 0, 0, 0]);
+  assert.deepEqual(sr.skipped.map(s => s.reason), [SlabBayFillSkip.OCCUPIED]);
+  assert.equal(sAxis.value, -3500);
+});
+
+// ---- S2b: 本番の再計算（recomputeStructuralForGraph）経由 ----
+// 1階・2階の S造。両階に通り芯 xs×ys を引き、各階を全セル1部屋にする。leftVoid=true のとき x 最小のセルを後から吹抜けにできる。
+async function buildS2FProject(xs, ys) {
+  const project = new Project('proj-slab-s2b', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  project.activePlaneId = 'p2';
+  project.structuralInfo.mainStructure = 'S造';
+  g1.structureOverride = 'S造';
+  g2.structureOverride = 'S造';
+  const struct = { labeled: true, discipline: Discipline.STRUCT };
+  // 通り芯は本番どおり構造グラフ（全階共有）に置く。
+  for (const x of xs) project.structGraph.addCenterLine(CenterLineType.VERTICAL, x, struct);
+  for (const y of ys) project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, y, struct);
+  g1.addRoom(new Set(getAllCells(g1).map(c => c.key)));
+  const cells = getAllCells(g2);
+  const rooms = cells.map(c => g2.addRoom(new Set([c.key])));
+  const run = async (passes = 3) => {
+    const original = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => ({ p1: g1, p2: g2 })[plane.id] ?? null;
+    const changed = [];
+    try {
+      for (let i = 0; i < passes; i++) changed.push((await recomputeStructuralForGraph(g2, project, 'S造')).changed);
+    } finally { floorSwapManager.peek = original; }
+    return changed;
+  };
+  const moveY = (from, to) => { g2.gridYs.find(c => c.value === from).value = to; };
+  return { project, g1, g2, rooms, run, moveY };
+}
+const slabAxesOf = g => g.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM).sort((a, b) => a.value - b.value);
+
+test('【S2b・配線】割付け後に吹抜けを足すと、そのベイの梁芯と子梁は0本になり、隣のベイの id・座標は変わらない', async () => {
+  const p = await buildS2FProject([0, 5000, 10000], [0, 7000]);
+  assert.equal((await p.run(3)).slice(1).some(Boolean), false, '2パス目以降は changed=false');
+  const before = slabAxesOf(p.g2);
+  assert.equal(before.length, 4);
+  const left = before.filter(a => a.extentLo === 0 && a.extentHi === 5000); // 水平の梁芯の extent は x の範囲
+  assert.equal(left.length, 2);
+  // 後から足す吹抜け: 左のセル（x:0〜5000）。
+  const leftCell = getAllCells(p.g2).find(c => c.x1 === 0 && c.x2 === 5000);
+  p.rooms.find(r => r.cells.has(leftCell.key)).setFeature(RoomFeature.VOID);
+  await p.run(3);
+  const after = slabAxesOf(p.g2);
+  const rightBefore = before.filter(a => !left.includes(a));
+  assert.equal(after.length, 2);
+  assert.deepEqual(after.map(a => [a.id, a.value]), rightBefore.map(a => [a.id, a.value]), '隣のベイは id・座標とも不変');
+  assert.ok(p.g2.beams.filter(b => b.role === 'secondary').every(b => after.some(a => a.id === b.axisCL.id)), '吹抜けのベイの子梁は無い');
+  assert.equal(p.g2.beams.filter(b => b.role === 'secondary').length, 2);
+});
+
+test('【S2b・配線】通り芯 y 7000→10000 を再計算に通す: 同じ id が張り直され、changed は収束する。戻すと元の座標・元の id', async () => {
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const before = slabAxesOf(p.g2);
+  assert.equal(before.length, 2);
+  p.moveY(7000, 10000);
+  const changed = await p.run(3);
+  assert.deepEqual(changed, [true, false, false]);
+  const moved = slabAxesOf(p.g2);
+  assert.equal(moved.length, 3);
+  assert.deepEqual(moved.map(a => a.value), [2500, 5000, 7500]);
+  assert.deepEqual(before.map(a => a.id), moved.slice(0, 2).map(a => a.id), '値だけ張り直し（id 不変）');
+  assert.equal(p.g2.beams.filter(b => b.role === 'secondary').length, 3);
+  p.moveY(10000, 7000);
+  assert.deepEqual((await p.run(3)), [true, false, false]);
+  assert.deepEqual(slabAxesOf(p.g2).map(a => [a.id, a.value]), before.map(a => [a.id, a.value]));
+});
+
+test('【S2b・配線】子梁の固定は再計算で梁芯を USER へ替え（changed=true）、次のパスで収束する', async () => {
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a] = slabAxesOf(p.g2);
+  p.g2.beams.find(k => k.role === 'secondary' && k.axisCL.id === a.id).setDimensionStatus('locked');
+  assert.deepEqual(await p.run(3), [true, false, false]);
+  assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER);
+  assert.equal(slabAxesOf(p.g2).length, 1);
+  assert.equal(p.g2.centerLines.filter(cl => cl.discipline === Discipline.FUSE).length, 2);
+});
+
+test('【S2b・配線】保存→読込みの往復の後も同じ（値・由来・枠の記録が戻り、再計算は何も変えない）', async () => {
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a] = slabAxesOf(p.g2);
+  p.g2.beams.find(k => k.role === 'secondary' && k.axisCL.id === a.id).setDimensionStatus('locked');
+  p.moveY(7000, 10000);
+  await p.run(3);
+  const snap = g => g.centerLines.filter(cl => cl.discipline === Discipline.FUSE)
+    .sort((x, y) => x.value - y.value).map(x => `${x.id}@${x.value}:${x.beamAxisOrigin}`).join('|');
+  const slots = [...p.g2.excludedSlabBeamSlots];
+  assert.equal(slots.length, 1);
+  // 本番同型の読込み（graph を新しく作り、構造グラフを繋いでバイト列から復元する）。
+  const loaded = new PlanGraph(p.g2.plane);
+  loaded._structGraph = p.project.structGraph;
+  restoreGraph(loaded, serializeGraph(p.g2));
+  assert.equal(snap(loaded), snap(p.g2));
+  assert.deepEqual([...loaded.excludedSlabBeamSlots], slots);
+  const r = reconcileSlabSecondaryBeamAxes(loaded, p.project);
+  assert.deepEqual([r.created, r.revalued, r.removed, r.normalized, r.skipped].map(x => x.length), [0, 0, 0, 0, 0]);
+  assert.equal(snap(loaded), snap(p.g2));
+});
+
+// ---- S2b 是正（QA）: 梁芯の個別移動・undo/redo の id・子梁の編集判定・変異の穴 ----
+test('【S2b・配線】梁芯を commitCLMoveOp で +500 動かす: 由来は USER になり、再計算×3 でも2本とも残り値が保たれる。元の位置に自動の梁芯は作り直されない', async () => {
+  const { commitCLMoveOp } = await import('../transform/centerLineOps.js');
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a, c] = slabAxesOf(p.g2);
+  const original = a.value;
+  a.pendingDelta = 500;
+  commitCLMoveOp(p.g2, p.project, a, original);
+  assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER);
+  assert.equal(a.value, original + 500);
+  assert.deepEqual(await p.run(3), [false, false, false]);
+  const axes = p.g2.centerLines.filter(cl => cl.discipline === Discipline.FUSE).sort((x, y) => x.value - y.value);
+  assert.deepEqual(axes.map(x => [x.id, x.value]), [[a.id, original + 500], [c.id, c.value]], '2本とも残り、c は動かない');
+  assert.equal(c.value, 2 * (7000 / 3), 'c は元の座標のまま');
+  assert.ok(!p.g2.excludedWallBeamAxes.has(wallBeamAxisExcludeKey(false, original)), 'SLAB_BEAM の移動は座標キーを記録しない');
+  assert.deepEqual([...p.g2.excludedSlabBeamSlots].map(k => parseSlabBeamSlotKey(k)).map(s => [s.dir, s.n, s.i]),
+    [[CenterLineType.HORIZONTAL, 3, 1]], '元の枠（i=1）がベイ単位で記録される');
+  assert.equal(p.g2.beams.filter(b => b.role === 'secondary').length, 2);
+});
+
+test('【S2b・配線】通り芯 y=0→−3000 の移動を undo/redo しても、元の2本の梁芯と子梁の id が両方向とも元どおり', async () => {
+  const { commitCLMoveOp, setCenterLineStructuralListener } = await import('../transform/centerLineOps.js');
+  const { undoManager } = await import('../undoManager.js');
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a, c] = slabAxesOf(p.g2);
+  const kidIds = p.g2.beams.filter(b => b.role === 'secondary').map(b => b.id).sort();
+  const idsOf = () => slabAxesOf(p.g2).map(x => x.id);
+  let pending = Promise.resolve();
+  setCenterLineStructuralListener(() => { pending = pending.then(() => p.run(3)); });
+  try {
+    const grid = p.g2.gridYs.find(g => g.value === 0);
+    grid.pendingDelta = -3000;
+    commitCLMoveOp(p.g2, p.project, grid, 0, { saveFloorFn: async () => {} });
+    await pending;
+    assert.ok(idsOf().includes(a.id) && idsOf().includes(c.id), '広げても元の2本は残る');
+    const widened = slabAxesOf(p.g2);
+    assert.equal(widened.length, 3);
+    undoManager.undo(); await pending;
+    assert.deepEqual(slabAxesOf(p.g2).map(x => [x.id, x.value]), [[a.id, 7000 / 3], [c.id, 2 * (7000 / 3)]], 'undo: 元の id・座標');
+    assert.deepEqual(p.g2.beams.filter(b => b.role === 'secondary').map(b => b.id).sort(), kidIds, 'undo: 子梁の id');
+    undoManager.redo(); await pending;
+    assert.ok(idsOf().includes(a.id) && idsOf().includes(c.id), 'redo: 元の2本の id');
+    assert.ok(p.g2.beams.filter(b => b.role === 'secondary').map(b => b.id).every(Boolean));
+    for (const id of kidIds) assert.ok(p.g2.beams.some(b => b.id === id), `redo: 子梁 ${id} が残る`);
+  } finally { setCenterLineStructuralListener(null); }
+});
+
+test('【S2b・失敗系】子梁の接合・番号グループ・断面・face gap だけ変えた梁芯は、吹抜けが出ても撤去されず USER になる', () => {
+  const edits = {
+    接合: k => { k.jointType = 'RIGID'; },
+    番号グループ: k => { k.numberGroupId = 'B#1'; },
+    断面: k => { k.sectionDefId = 'other-section'; },
+    faceGap: k => { k.faceGap = 10; },
+    天端レベル: k => { k.levelOffset = -50; },
+  };
+  for (const [label, edit] of Object.entries(edits)) {
+    const b = buildBay('S造');
+    settle(b.graph, 1);
+    const [a, c] = fuseAxes(b.graph);
+    edit(secondaries(b.graph).find(k => k.axisCL.id === a.id));
+    const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT, [rectOpening(0, 5000, -7000, 0)]);
+    assert.deepEqual(r.normalized.map(x => x.id), [a.id], label);
+    assert.deepEqual(r.removed.map(x => x.id), [c.id], `${label}: 未編集の c だけ撤去`);
+    assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER, label);
+    assert.ok(b.graph.centerLines.includes(a), label);
+  }
+});
+
+test('【S2b】自動生成のままの子梁（既定の接合・断面・番号なし）は編集あり扱いにならない', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  assert.deepEqual(settle(b.graph, 2), [0, 0]);
+  assert.ok(fuseAxes(b.graph).every(x => x.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM));
+});
+
+test('【S2b】ベイが縮む（y −7000→−5000: n=3→2）: 1本を張り直し・1本を撤去、子梁は1本', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const [a] = fuseAxes(b.graph);
+  b.y0.value = -5000;
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual([r.revalued.length, r.removed.length, r.created.length], [1, 1, 0]);
+  assert.equal(r.revalued[0].id, a.id);
+  autoFillSecondaryBeams(b.graph, PROJECT);
+  assert.deepEqual(fuseAxes(b.graph).map(x => x.value), [-2500]);
+  assert.equal(secondaries(b.graph).length, 1);
+});
+
+// 通り芯 grid を commitCLMoveOp で delta だけ動かし、構造同期（再計算×3）の changed 列を返す。
+async function moveGridWithSync(p, grid, delta) {
+  const { commitCLMoveOp, setCenterLineStructuralListener } = await import('../transform/centerLineOps.js');
+  const original = grid.value;
+  let pending = Promise.resolve([]);
+  setCenterLineStructuralListener(() => { pending = pending.then(() => p.run(3)); });
+  try {
+    grid.pendingDelta = delta;
+    commitCLMoveOp(p.g2, p.project, grid, original, { saveFloorFn: async () => {} });
+    return await pending;
+  } finally { setCenterLineStructuralListener(null); }
+}
+
+test('【S2b・配線】縦に並ぶ2ベイの中央の通り芯 7000→4000: 1回の再計算で収束し（changed [true,false,false]）、上のベイ（縦梁）の梁芯1本と子梁が1パス目でできる', async () => {
+  const p = await buildS2FProject([0, 5000], [0, 7000, 14000]);
+  await p.run(3);
+  assert.equal(slabAxesOf(p.g2).length, 4);
+  const changed = await moveGridWithSync(p, p.g2.gridYs.find(g => g.value === 7000), -3000);
+  assert.deepEqual(changed, [true, false, false]);
+  const axes = slabAxesOf(p.g2);
+  const vertical = axes.filter(a => a.centerLineType === CenterLineType.VERTICAL);
+  assert.deepEqual(vertical.map(a => [a.value, a.extentLo, a.extentHi]), [[2500, 0, 4000]]);
+  assert.equal(axes.length - vertical.length, 3, '下のベイ（5000×10000）は n=4 の3本');
+  assert.equal(p.g2.beams.filter(b => b.role === 'secondary').length, 4, '子梁も1パス目で揃う');
+});
+
+test('【S2b・配線】縦に並ぶ2ベイ（同じ端の通り芯を共有）: 各梁芯は自分の値を含むベイに属し、中央の通り芯を動かしても元の id が正しいベイで保たれる', async () => {
+  const p = await buildS2FProject([0, 5000], [0, 7000, 14000]);
+  await p.run(3);
+  const [a, b, c, d] = slabAxesOf(p.g2); // a,b＝上のベイ（2333・4667）、c,d＝下のベイ（9333・11667）
+  assert.deepEqual(await (async () => { p.moveY(7000, 9000); return p.run(3); })(), [true, false, false]);
+  const now = slabAxesOf(p.g2).map(x => [x.id, x.value]);
+  // 上のベイ 0..9000（n=4: 2250・4500・6750）、下のベイ 9000..14000（5000×5000: n=2 → 11500）。
+  assert.deepEqual(now.map(x => x[1]), [2250, 4500, 6750, 11500]);
+  assert.deepEqual(now.slice(0, 2).map(x => x[0]), [a.id, b.id], '上のベイ: a・b が保たれる');
+  assert.equal(now[3][0], c.id, '下のベイ: 自分の値を含むベイへ属した c が張り直される（上のベイに取られない）');
+  assert.ok(!now.some(x => x[0] === d.id), 'd は余りとして撤去');
+});
+
+test('【S2b・配線】小梁グループに手動タグ（join あり）を付けても梁芯は SLAB_BEAM のまま・枠0件。通り芯 7000→10000 で3本に割り直される。個別の断面変更は編集（対照）', async () => {
+  const { splitGroup, setGroupManualTag } = await import('./memberGroups.js');
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const kids = p.g2.beams.filter(b => b.role === 'secondary');
+  const gid = splitGroup(p.project, 'beamMap', kids);
+  setGroupManualTag(p.project.memberGroupLedger, gid, 'Bx');
+  await p.run(3); // conformToLedger が加入署名の一致する自動の部材にも gid を付ける
+  assert.ok(kids.every(k => k.numberGroupId === gid));
+  assert.equal(slabAxesOf(p.g2).length, 2);
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 0);
+  p.moveY(7000, 10000);
+  await p.run(3);
+  const vs = slabAxesOf(p.g2).map(x => x.value);
+  assert.deepEqual(vs, [2500, 5000, 7500]);
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 0);
+  // 対照: 個別の断面変更（join に乗らない値）は編集
+  const q = await buildS2FProject([0, 5000], [0, 7000]);
+  await q.run(3);
+  q.g2.beams.find(b => b.role === 'secondary').sectionDefId = 'other-section';
+  await q.run(2);
+  assert.equal(slabAxesOf(q.g2).length, 1, '個別編集した梁芯は USER');
+  assert.equal(q.g2.excludedSlabBeamSlots.size, 1);
+});
+
+test('【S2b・失敗系】孤立グループ（join なし＝個別採番）の子梁は編集あり。join のあるグループは編集なし', async () => {
+  const { splitGroup, materializeGroup } = await import('./memberGroups.js');
+  const withGroup = (join) => {
+    const b = buildBay('S造');
+    settle(b.graph, 1);
+    const kids = secondaries(b.graph);
+    if (join) splitGroup(PROJECT_G, 'beamMap', kids);
+    else kids.forEach(k => k.setNumberGroupId(materializeGroup(PROJECT_G.memberGroupLedger, 'B', 'iso-signature', 'sectionDefId=x', { join: false })));
+    return b;
+  };
+  const PROJECT_G = { ...PROJECT, memberGroupLedger: new Map() };
+  for (const [join, edited] of [[true, false], [false, true]]) {
+    const b = withGroup(join);
+    const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT_G);
+    assert.equal(r.normalized.length > 0, edited, join ? 'join あり' : '孤立グループ');
+  }
+});
+
+// ---- S2c: 削除・移動の記録をベイ単位に（slabBeamSlotKeyFor） ----
+const slabSlotsOf = g => [...g.excludedSlabBeamSlots].map(k => parseSlabBeamSlotKey(k));
+const userAxesOf = g => g.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.USER);
+
+async function deleteAxis(p, cl) {
+  const { deleteCenterLineWithUndo } = await import('../transform/centerLineOps.js');
+  const r = await deleteCenterLineWithUndo(p.g2, p.project, cl, { saveFloorFn: async () => {} });
+  assert.equal(r.toast, null);
+}
+
+test('【S2c・配線】梁芯を1本削除→通り芯 7000→10000: 削除は保たれ（n=3 固定・除外枠は作らない）、残りは追従し、再計算×3 で復活しない。座標キーは記録しない', async () => {
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a, c] = slabAxesOf(p.g2);
+  await deleteAxis(p, a);
+  assert.equal(p.g2.excludedWallBeamAxes.size, 0, 'SLAB_BEAM の削除は座標キーを記録しない');
+  assert.deepEqual(slabSlotsOf(p.g2).map(s => [s.dir, s.n, s.i]), [[CenterLineType.HORIZONTAL, 3, 1]]);
+  assert.deepEqual(await p.run(3), [false, false, false], '削除直後の再計算で何も起きない');
+  await moveGridWithSync(p, p.g2.gridYs.find(g => g.value === 7000), 3000);
+  const after = slabAxesOf(p.g2);
+  assert.deepEqual(after.map(x => [x.id, x.value]), [[c.id, 2 * (10000 / 3)]], 'n=3 固定: i=2 の1本だけが追従。復活しない');
+  assert.equal(p.g2.beams.filter(b => b.role === 'secondary').length, 1);
+});
+
+test('【S2c・配線】あるベイで梁芯を削除しても、別のベイの同じ座標には作られる（座標キーを使わない）', async () => {
+  const p = await buildS2FProject([0, 5000, 10000], [0, 7000]);
+  await p.run(3);
+  const left = slabAxesOf(p.g2).filter(x => x.extentHi === 5000);
+  const right = slabAxesOf(p.g2).filter(x => x.extentHi === 10000);
+  assert.equal(left.length + right.length, 4);
+  await deleteAxis(p, left[0]);
+  // 右のベイは梁芯ごと消えた状態（未管理）にして、再計算が同じ座標へ作ることを見る。
+  right.forEach(x => p.g2.removeCenterLine(x.id));
+  await p.run(3);
+  const rightNow = slabAxesOf(p.g2).filter(x => x.extentHi === 10000).map(x => x.value);
+  assert.deepEqual(rightNow, right.map(x => x.value), '右のベイは同じ座標（削除した左の座標を含む）に2本とも作られる');
+  assert.equal(slabAxesOf(p.g2).filter(x => x.extentHi === 5000).length, 1, '左は削除した1本が戻らない');
+});
+
+test('【S2c・配線】梁芯を1本動かす: 元の位置に作り直されず、通り芯 7000→10000 でも元の枠は空いたまま（動かした梁芯は USER で動かない）', async () => {
+  const { commitCLMoveOp } = await import('../transform/centerLineOps.js');
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a, c] = slabAxesOf(p.g2);
+  const original = a.value;
+  a.pendingDelta = 500;
+  commitCLMoveOp(p.g2, p.project, a, original);
+  assert.deepEqual(slabSlotsOf(p.g2).map(s => [s.dir, s.n, s.i]), [[CenterLineType.HORIZONTAL, 3, 1]]);
+  assert.equal(p.g2.excludedWallBeamAxes.size, 0);
+  assert.deepEqual(await p.run(3), [false, false, false]);
+  await moveGridWithSync(p, p.g2.gridYs.find(g => g.value === 7000), 3000);
+  assert.deepEqual(slabAxesOf(p.g2).map(x => [x.id, x.value]), [[c.id, 2 * (10000 / 3)]], 'i=1 の位置（3333）に自動の梁芯は作られない');
+  assert.deepEqual(userAxesOf(p.g2).map(x => [x.id, x.value]), [[a.id, original + 500]], '動かした梁芯は動かない');
+});
+
+test('【S2c・配線】梁芯を +1700 動かす（移動後の位置では最寄りの枠が i=2 になる距離）: 枠は移動前の位置で i=1 と記録され、もう1本は張り直されない', async () => {
+  const { commitCLMoveOp } = await import('../transform/centerLineOps.js');
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a, c] = slabAxesOf(p.g2);
+  const [aBefore, cBefore] = [a.value, c.value];
+  a.pendingDelta = 1700; // 7000/3 → 4033.3。i=1(2333) より i=2(4667) の方が近い
+  commitCLMoveOp(p.g2, p.project, a, aBefore);
+  assert.deepEqual(slabSlotsOf(p.g2).map(s => [s.n, s.i]), [[3, 1]], '移動前の位置（i=1）で記録される');
+  assert.deepEqual(await p.run(3), [false, false, false]);
+  assert.equal(c.value, cBefore, 'もう1本の自動梁芯は i=2 の位置のまま張り直されない');
+  assert.equal(c.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM);
+  assert.equal(a.value, aBefore + 1700);
+});
+
+test('【S2c・配線】削除・移動の undo/redo で、枠の記録と梁芯が往復する', async () => {
+  const { commitCLMoveOp } = await import('../transform/centerLineOps.js');
+  const { undoManager } = await import('../undoManager.js');
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a, c] = slabAxesOf(p.g2);
+  // 削除
+  await deleteAxis(p, a);
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 1);
+  undoManager.undo();
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 0, 'undo: 記録が戻る');
+  assert.ok(p.g2.centerLines.some(x => x.id === a.id), 'undo: 梁芯が戻る');
+  undoManager.redo();
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 1, 'redo: 記録が再び付く');
+  assert.ok(!p.g2.centerLines.some(x => x.id === a.id));
+  undoManager.undo();
+  // 移動（undo 後に戻った a を動かす。graph 復元で CL 実体が作り直されるので引き直す）
+  const a2 = p.g2.centerLines.find(x => x.id === a.id);
+  const original = a2.value;
+  a2.pendingDelta = 500;
+  commitCLMoveOp(p.g2, p.project, a2, original);
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 1);
+  undoManager.undo();
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 0, '移動の undo: 記録が戻る');
+  const back = p.g2.centerLines.find(x => x.id === a.id);
+  assert.equal(back.value, original);
+  assert.equal(back.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM, '移動の undo: 由来も SLAB_BEAM に戻る');
+  undoManager.redo();
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 1);
+  assert.equal(p.g2.centerLines.find(x => x.id === a.id).beamAxisOrigin, BeamAxisOrigin.USER);
+  assert.ok(p.g2.centerLines.some(x => x.id === c.id));
+});
+
+test('【S2c・配線】子梁だけ削除（excludedBeamSlots）した後に、その梁芯を削除しても復活しない・枠は重複しない', async () => {
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a, c] = slabAxesOf(p.g2);
+  p.g2.removeBeam(p.g2.beams.find(k => k.role === 'secondary' && k.axisCL.id === a.id).id);
+  await p.run(3);
+  assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER);
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 1);
+  await deleteAxis(p, a); // USER 由来なので枠は増えず、座標キーで守る（従来の記録）
+  assert.equal(p.g2.excludedSlabBeamSlots.size, 1);
+  assert.deepEqual(await p.run(3), [false, false, false]);
+  assert.deepEqual(p.g2.centerLines.filter(x => x.discipline === Discipline.FUSE).map(x => x.id), [c.id]);
+});
+
+test('【S2c・失敗系】slabBeamSlotKeyFor: 非スラブ由来・FLOOR_BEAM・孤児・木造・S造でない構造は null', () => {
+  const probeOf = (cl, extra = {}) => ({ beamAxisOrigin: cl.beamAxisOrigin, centerLineType: cl.centerLineType, coord: cl.value,
+    extentLoRef: cl.extentLoRef, extentHiRef: cl.extentHiRef, extentLo: cl.extentLo, extentHi: cl.extentHi, ...extra });
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const [a] = fuseAxes(b.graph);
+  assert.ok(slabBeamSlotKeyFor(b.graph, PROJECT, probeOf(a)), '基準: SLAB_BEAM は枠キーを返す');
+  for (const origin of [BeamAxisOrigin.USER, BeamAxisOrigin.FLOOR_BEAM, BeamAxisOrigin.OPENING, BeamAxisOrigin.WALL, null]) {
+    assert.equal(slabBeamSlotKeyFor(b.graph, PROJECT, probeOf(a, { beamAxisOrigin: origin })), null, String(origin));
+  }
+  // 孤児: 端の通り芯が合わない（参照 id も座標も）
+  assert.equal(slabBeamSlotKeyFor(b.graph, PROJECT, probeOf(a, { extentLoRef: { clId: 'nope', offset: 0 }, extentHiRef: { clId: 'nope2', offset: 0 } })), null);
+  assert.equal(slabBeamSlotKeyFor(b.graph, PROJECT, probeOf(a, { extentLoRef: null, extentHiRef: null, extentLo: 123, extentHi: 456 })), null);
+  // 向きがベイの割付け方向と違う
+  assert.equal(slabBeamSlotKeyFor(b.graph, PROJECT, probeOf(a, { centerLineType: CenterLineType.VERTICAL })), null);
+  // 木造・SRC 造・未定
+  for (const structure of ['木造（在来）', 'SRC造', '未定']) {
+    const w = buildBay(structure);
+    assert.equal(slabBeamSlotKeyFor(w.graph, PROJECT, probeOf(a)), null, structure);
+  }
+  // 短辺が最大ピッチ以下のベイ（割付け対象外）
+  const s = buildBay('S造', { width: 5000, height: 2400 });
+  assert.equal(slabBeamSlotKeyFor(s.graph, PROJECT, probeOf(a)), null);
+});
+
+test('【S2c・失敗系】壊れたキー・別名前空間・範囲外の枠が除外集合にあっても、割り直しは無視して何も変えない', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const before = fuseAxes(b.graph).map(x => `${x.id}@${x.value}`).join('|');
+  for (const k of ['', 'slab', 'X:1000', 'wall:a:b:c:d:X:3:1', 'slab:a:b:c:d:Z:3:1', 'slab:a:b:c:d:Y:3:9', 'slab:a:b:c:d:Y:x:1']) b.graph.excludedSlabBeamSlots.add(k);
+  assert.deepEqual(settle(b.graph, 3), [0, 0, 0]);
+  assert.equal(fuseAxes(b.graph).map(x => `${x.id}@${x.value}`).join('|'), before);
+});
+
+test('【S2b】同じ座標に通り芯と OPENING 由来梁芯が並ぶ辺は、枠キーの辺 id が通り芯の id（id の辞書順より通り芯を優先）', () => {
+  const b = buildBay('S造');
+  const rules = rulesFor('S造');
+  // 辞書順で必ず通り芯より前になる id ('!' は uuid のどの文字より小さい)。
+  const open = b.graph.addCenterLine(CenterLineType.HORIZONTAL, -7000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING,
+    extentLoRef: { clId: b.x0.id, offset: 0 }, extentHiRef: { clId: b.x1.id, offset: 0 },
+  }, '!open');
+  b.graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, open, false, b.x0, b.x1, { role: 'secondary' });
+  settle(b.graph, 1);
+  const [a] = fuseAxes(b.graph).filter(x => x.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM);
+  secondaries(b.graph).find(k => k.axisCL.id === a.id).setDimensionStatus('locked');
+  reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual([...b.graph.excludedSlabBeamSlots], [slabBeamSlotKey({ ...bayIds(b), dir: CenterLineType.HORIZONTAL, n: 3, i: 1 })]);
 });
