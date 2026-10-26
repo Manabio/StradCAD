@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, Plane, PlanGraph, CenterLineType, Discipline, RoomKind, centerLineKind } from '../core.js';
+import { BeamAxisOrigin } from '../core/centerLine.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
 import {
   ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_LAST_GRID, ERR_CL_CONVERT_ATTACHED,
@@ -83,6 +84,23 @@ test('applyPromoteToGrid異常系: 階グラフの同座標・同軸に梁芯（
   assert.equal(result.error, ERR_CL_CONVERT_DUP('beam'));
   // ERR_CL_CONVERT_DUP自体を呼んで期待値を作ると、その関数がkind引数を無視する変異を検出できない
   // ——リテラル文字列で固定する。
+  assert.equal(result.error, '同じ位置に梁芯があるため通り芯にできません。');
+  assert.equal(graph.shapeMap.has(cl.id), true, '階グラフに残ったまま（変換されない）');
+  assert.equal(project.structGraph.shapeMap.has(cl.id), false);
+  assert.equal(graph.shapeMap.has(beam.id), true, '梁芯は無傷');
+});
+
+// 規則C 案c 第2段（S3-2・ユーザー裁定Q3）: 梁芯を中心線と同座標に手動追加できるようにしたが、
+// 同座標に梁芯（由来USER）を持つ中心線の通り芯への昇格は拒否のまま（通り芯と梁芯の共存は禁止）。
+test('【S3-2】applyPromoteToGrid異常系: 同座標に手動追加の梁芯（由来USER）が吸着した中心線は通り芯へ昇格できず、ERR_CL_CONVERT_DUP(beam)でグラフ無変更', () => {
+  const { project, graph } = makeProjectWithGraph();
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+  const cl   = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER });
+
+  const result = applyPromoteToGrid(graph, project.structGraph, cl);
+
   assert.equal(result.error, '同じ位置に梁芯があるため通り芯にできません。');
   assert.equal(graph.shapeMap.has(cl.id), true, '階グラフに残ったまま（変換されない）');
   assert.equal(project.structGraph.shapeMap.has(cl.id), false);

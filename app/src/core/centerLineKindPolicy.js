@@ -137,6 +137,14 @@ export const HIT_EXCLUDED_KINDS_BY_MODE = Object.freeze({
 //                 「残ることはない」点は共通だが、'forbidden'は追加自体を拒否するのに対し
 //                 'absorb'は既存を消して追加を通す）
 //
+// 梁芯（beam）の行（規則C 案c 第2段 S3-2・2026-10-26 ユーザー裁定）: struct だけ 'forbidden'、center/aux は
+// 'allowed'。禁止の目的「大梁と完全に重なる小梁を作らない」は通り芯向けで、中心線・補助線には大梁が立たない。
+// 中心線・補助線は構造モードで非表示で、梁芯を中心線上へ「動かす」ことは既に可能なのに「足す」ことが
+// できない食い違いがあった。補助線も禁止のままだと「補助線だけなら拒否、中心線＋補助線なら通る」の
+// 並び順依存が残るため、補助線も許可する。梁芯→通り芯の判定は、同座標の相手を1本に絞らず全種別で行う
+// （transform/centerLineOps.js addCenterLineFromDialog）。通り芯への昇格は、手動の梁芯がある中心線では
+// 拒否のまま（transform/centerLineConvert.js）。
+//
 // 天井芯（ceiling。S8a）: 既存4行の ceiling 列はすべて 'allowed'（天井芯は天伏だけの線で、他種別と同座標に
 // あっても平面・仕上げ・構造の関係を変えない）。ceiling 行は、天伏で見える通り芯・中心線の上には引けない
 // （そこは既にセルの分割線）、補助線・梁芯とは共存可、同種別は 'extent'（重ならなければ可）。
@@ -144,7 +152,7 @@ export const COEXISTENCE = Object.freeze({
   struct:  Object.freeze({ struct: 'forbidden', center: 'promote',   aux: 'allowed',   beam: 'absorb',    ceiling: 'allowed' }),
   center:  Object.freeze({ struct: 'forbidden', center: 'extent',    aux: 'allowed',   beam: 'allowed',   ceiling: 'allowed' }),
   aux:     Object.freeze({ struct: 'allowed',   center: 'allowed',   aux: 'extent',    beam: 'allowed',   ceiling: 'allowed' }),
-  beam:    Object.freeze({ struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent',    ceiling: 'allowed' }),
+  beam:    Object.freeze({ struct: 'forbidden', center: 'allowed',   aux: 'allowed',beam: 'extent',    ceiling: 'allowed' }),
   ceiling: Object.freeze({ struct: 'forbidden', center: 'forbidden', aux: 'allowed',   beam: 'allowed',   ceiling: 'extent'  }),
 });
 

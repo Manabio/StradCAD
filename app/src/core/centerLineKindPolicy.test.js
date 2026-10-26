@@ -136,7 +136,9 @@ test('COEXISTENCE: 25セルの値を固定する（原始事実の書き写し�
       struct:  { struct: 'forbidden', center: 'promote',   aux: 'allowed',   beam: 'absorb',  ceiling: 'allowed' },
       center:  { struct: 'forbidden', center: 'extent',    aux: 'allowed',   beam: 'allowed', ceiling: 'allowed' },
       aux:     { struct: 'allowed',   center: 'allowed',   aux: 'extent',    beam: 'allowed', ceiling: 'allowed' },
-      beam:    { struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent',  ceiling: 'allowed' },
+      // beam.center / beam.aux は 'forbidden' から 'allowed' へ改めた（規則C 案c 第2段 S3-2・2026-10-26
+      // ユーザー裁定。梁芯を中心線・補助線の上へ足せるようにする。beam.struct は forbidden のまま）。
+      beam:    { struct: 'forbidden', center: 'allowed',   aux: 'allowed',   beam: 'extent',  ceiling: 'allowed' },
       ceiling: { struct: 'forbidden', center: 'forbidden', aux: 'allowed',   beam: 'allowed', ceiling: 'extent'  },
     },
   );
