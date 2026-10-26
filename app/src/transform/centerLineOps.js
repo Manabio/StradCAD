@@ -1596,13 +1596,19 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
   // 規約であり、種別ごとの拒否・共存ルール自体はこの順に依存しない。
   const existing = sameCoord.find(cl => centerLineKind(cl) === kind)
     ?? CL_KINDS.map(k => sameCoord.find(cl => centerLineKind(cl) === k)).find(Boolean);
-  // 梁芯の手動追加は、同座標のどの種別が1本でも COEXISTENCE で 'forbidden' なら拒否する（現状は通り芯）。
-  // 下の existing は同種別優先で1本だけ選ぶため、そこで判定すると「同座標に範囲の重ならない別の梁芯が
-  // ある」とき相手がその梁芯になり、通り芯の真上へ梁芯を足せてしまう（S3-2 で再現して確認）。
+  // 鉄骨造の階の手動梁芯だけ、意匠の線（中心線・補助線）と同座標に足せる（COEXISTENCE の上書き。S3-5 裁定
+  // R1〜R5）。主構造の判定はここで行い、ポリシーへはフラグで渡す。
+  const beamOnArchLines = kind === 'beam'
+    && rulesFor(effectiveStructure(graph, project)).manualBeamAxisOnArchLines;
+  // 【S造の階】梁芯の手動追加は、同座標のどの種別が1本でも COEXISTENCE で 'forbidden' なら拒否する（現状は
+  // 通り芯）。下の existing は同種別優先で1本だけ選ぶため、そこで判定すると「同座標に範囲の重ならない別の
+  // 梁芯がある」とき相手がその梁芯になり、通り芯の真上へ梁芯を足せてしまう（S3-2 で再現して確認）。
   // 拒否する相手の種別は CL_KINDS の優先順（通り芯＞中心線＞補助線）で最初のもの。
-  if (kind === 'beam') {
+  // S造以外の階は S3-2 前のまま（下の existing 分岐内で判定。この抜け道は既知の限界——限界16 の追記は S5）。
+  if (beamOnArchLines) {
     const blockerKind = CL_KINDS.find(k =>
-      k !== 'beam' && coexistenceAt(kind, k) === 'forbidden' && sameCoord.some(cl => centerLineKind(cl) === k));
+      k !== 'beam' && coexistenceAt(kind, k, { beamOnArchLines }) === 'forbidden'
+      && sameCoord.some(cl => centerLineKind(cl) === k));
     if (blockerKind) return { done: false, toast: ERR_CL_DUPLICATE(blockerKind), suggestWood: null };
   }
   if (existing) {
@@ -1610,7 +1616,7 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
 
     if (kind === existingKind) {
       // COEXISTENCE の対角セル: struct×structのみforbidden、center/aux/beamはextent（重なり判定）。
-      if (coexistenceAt(kind, existingKind) === 'forbidden') {
+      if (coexistenceAt(kind, existingKind, { beamOnArchLines }) === 'forbidden') {
         return { done: false, toast: ERR_CL_DUPLICATE(kind), suggestWood: null };
       }
       // center / aux / beam: extent が重ならなければ追加を許可（端点が接するだけなら下の結合連鎖へ）。
@@ -1644,20 +1650,24 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
       }
     }
 
-    // 梁芯の手動追加は通り芯と同位置に共存できない（大梁と完全重複する小梁の生成防止）。この拒否は
-    // 同座標の全種別を見る必要があるため existing 選択の前（上）で行う。中心線・補助線とは共存できる
-    // （COEXISTENCE.beam・S3-2）。
+    // 梁芯の手動追加は他種別（通り芯/中心/補助線）と同位置に共存できない（大梁と完全重複する小梁の
+    // 生成防止）。kind==='beam'は coexistenceAt(kind, existingKind) で判定できる（beam行はbeam自身
+    // 以外すべてforbiddenのため、existingKind!=='beam'と同値）。S造の階は上の全種別ループで判定済み
+    // （中心線・補助線とは共存できる）なので、ここは S造以外の階（S3-2 前のまま。相手は existing の1本だけ）。
     // kind==='struct'側（通り芯の追加が既存の梁芯と同座標のとき）は、線種変更の移籍一本化・
     // ステップ6是正（2026-09-30・裁定Q8・COEXISTENCE.struct.beam='absorb'）により、ここでは
     // 拒否しない——addGridLinesWithFloorAbsorptionが自階の壁由来梁芯を「保護されなければ吸収・
     // 保護されれば拒否」で判定する（同座標に中心線があり昇格分岐（promote）へ入る場合は、ここへ
     // 来る前に下のif（coexistenceAt==='promote'）で処理される）。
+    if (kind === 'beam' && coexistenceAt(kind, existingKind, { beamOnArchLines }) === 'forbidden') {
+      return { done: false, toast: ERR_CL_DUPLICATE(existingKind), suggestWood: null };
+    }
     // 天井芯（S8b）: 天伏で見える分割線（通り芯・中心線）と同座標には引けない（COEXISTENCE.ceiling）。
-    if (kind === 'ceiling' && coexistenceAt(kind, existingKind) === 'forbidden') {
+    if (kind === 'ceiling' && coexistenceAt(kind, existingKind, { beamOnArchLines }) === 'forbidden') {
       return { done: false, toast: ERR_CL_DUPLICATE(existingKind), suggestWood: null };
     }
 
-    if (coexistenceAt(kind, existingKind) === 'promote') {
+    if (coexistenceAt(kind, existingKind, { beamOnArchLines }) === 'promote') {
       // 線種変更の移籍一本化・ステップ5（2026-09-30）: 削除して作り直す旧経路を廃止し、メニューと
       // 同じpromoteCenterToGridWithUndo（移籍。他平面の吸収・Q11の同id拒否・undoを含む）へ委譲する。
       // 裁定Q7: 既存の中心線（existing）の座標・参照（refId・extent）をそのまま使う——ダイアログの
@@ -1676,7 +1686,7 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
 
     // center行でforbiddenなのはstructのみ（COEXISTENCE.center.struct）。ERR_CL_DUPLICATEの
     // 「追加できません」ではなく専用文言（ERR_CL_STRUCT_EXISTS）を使う。
-    if (kind === 'center' && coexistenceAt(kind, existingKind) === 'forbidden') {
+    if (kind === 'center' && coexistenceAt(kind, existingKind, { beamOnArchLines }) === 'forbidden') {
       return { done: false, toast: ERR_CL_STRUCT_EXISTS, suggestWood: null };
     }
   }

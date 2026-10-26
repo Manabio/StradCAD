@@ -4,7 +4,47 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Discipline, AddCLOptionKind } from '../core/constants.js';
-import { initialRef, distStrForRef, foldRefForConfirm } from './addCLDialogRefs.js';
+import { initialRef, distStrForRef, foldRefForConfirm, isAddDialogRefCandidate } from './addCLDialogRefs.js';
+import { CL_KINDS, APP_MODES, isRenderTarget, isAddDialogSnapOnlyRef } from '../core/centerLineKindPolicy.js';
+import { rulesFor, TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from '../structural/structureRules.js';
+
+// ---- isAddDialogRefCandidate（吸着専用の参照を S造の階だけに限る。S3-5 S3） ----
+const duckCL = (kind) => {
+  const base = { centerLineType: 'vertical', labeled: kind === 'struct' };
+  switch (kind) {
+    case 'struct':  return { ...base, discipline: Discipline.STRUCT, lineType: 'center' };
+    case 'center':  return { ...base, discipline: Discipline.ARCH, lineType: 'center' };
+    case 'aux':     return { ...base, discipline: Discipline.ARCH, lineType: 'dashed' };
+    case 'beam':    return { ...base, discipline: Discipline.FUSE, lineType: 'center' };
+    case 'ceiling': return { ...base, discipline: Discipline.CEILING, lineType: 'center' };
+    default: throw new Error(`未知のCL種別: ${kind}`);
+  }
+};
+
+test('isAddDialogRefCandidate: 5種別×全appMode×主構造。S造は S3-3 の式（描画対象 ∪ 吸着専用）、S造以外は描画対象のみ', () => {
+  const structures = { 'S造': true, [TRADITIONAL_WOOD_STRUCTURE]: false, 'RC造(ラーメン)': false, 'SRC造': false, [UNSPECIFIED_STRUCTURE]: false };
+  for (const [structure, isSteel] of Object.entries(structures)) {
+    const rules = rulesFor(structure);
+    assert.equal(rules.manualBeamAxisOnArchLines, isSteel, `前提 ${structure}`);
+    for (const appMode of APP_MODES) {
+      for (const kind of CL_KINDS) {
+        const cl = duckCL(kind);
+        const expected = isSteel
+          ? isRenderTarget(cl, appMode) || isAddDialogSnapOnlyRef(cl, appMode)
+          : isRenderTarget(cl, appMode);
+        assert.equal(isAddDialogRefCandidate(cl, appMode, rules), expected, `${structure} appMode=${appMode} kind=${kind}`);
+      }
+    }
+  }
+  // 要点: 構造モードの中心線はS造だけ候補に入る
+  assert.equal(isAddDialogRefCandidate(duckCL('center'), 'structure', rulesFor('S造')), true);
+  assert.equal(isAddDialogRefCandidate(duckCL('center'), 'structure', rulesFor(TRADITIONAL_WOOD_STRUCTURE)), false);
+});
+
+test('【失敗系】isAddDialogRefCandidate: rules が無い（undefined/null）と throw する', () => {
+  assert.throws(() => isAddDialogRefCandidate(duckCL('center'), 'structure', undefined), /rules が必要/);
+  assert.throws(() => isAddDialogRefCandidate(duckCL('center'), 'structure', null), /rules が必要/);
+});
 
 const center = (id, value) => ({ id, value, discipline: Discipline.ARCH, lineType: 'center', labeled: false });
 const aux    = (id, value) => ({ id, value, discipline: Discipline.ARCH, lineType: 'dashed', labeled: false });

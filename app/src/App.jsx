@@ -37,7 +37,7 @@ import { MemberStatusMenu } from './ui/MemberStatusMenu.jsx';
 import { PRIMARY_DIMENSION_FIELD_BY_MAP, UNNUMBERED_TAG } from './structural/memberCatalog.js';
 import { CenterLineType, OpeningCategory, isRoofFeature, planCutHeightMmOf, ceilingCutHeightMmOf } from '@core';
 import { upperAdoptedPlanes, findUpperRoomsOverCells } from './finish/roof/roofFloorCheck.js';
-import { isRenderTarget, isAddDialogSnapOnlyRef } from './core/centerLineKindPolicy.js';
+import { isAddDialogRefCandidate } from './ui/addCLDialogRefs.js';
 import { AddCLOptionKind } from './core/constants.js';
 import { subtractSkipZero, makeFloorName } from './floorNumber.js';
 import {
@@ -70,7 +70,7 @@ import { BuildingInfoDialog }  from './ui/BuildingInfoDialog.jsx';
 import { StructuralPanel } from './structural/StructuralPanel.jsx';
 import { autoFillColumnAxisOffsets, autoFillBeamEccentricity, resolveLowestGraph, axisExteriorSign } from './structural/structuralAutoFill.js';
 import { buildExteriorSide } from './structural/wallGate.js';
-import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
+import { TRADITIONAL_WOOD_STRUCTURE, rulesFor, effectiveStructure } from './structural/structureRules.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane, floorSettingsPlaneIdForSlot } from './structural/structuralFigureSlots.js';
 import { recomputeStructuralComposition, runStructuralModeSetup, rebuildStructuralBinding, reflectStructuralToOtherFloors, setStructuralToastHandler } from './structural/structuralOrchestration.js';
 import { structuralSync, OPENING_STRUCTURAL_SYNC } from './structural/structuralSync.js';
@@ -2514,10 +2514,12 @@ const App = observer(() => {
       // findNearbyCenterLines が先に常に除く。
       // 加えて「吸着専用」の種別（構造モードの中心線。isAddDialogSnapOnlyRef）は描かないが参照候補に入れる
       // ——構造モードの梁芯の手動追加が、非表示の中心線の位置へ吸着できるように（規則C 案c・S3-3）。
+      // S造の階だけ（manualBeamAxisOnArchLines。2026-10-27 限定）。判定は ui/addCLDialogRefs.js isAddDialogRefCandidate。
+      const addRefRules = rulesFor(effectiveStructure(graph, project));
       const nearbyCLs = findNearbyCenterLines(
         graph, pos.x, pos.y, SNAP_THRESHOLD_PX * 2,
         viewport.scaleX, viewport.scaleY, clType
-      ).filter(cl => isRenderTarget(cl, appMode) || isAddDialogSnapOnlyRef(cl, appMode));
+      ).filter(cl => isAddDialogRefCandidate(cl, appMode, addRefRules));
       setClDialog({
         type:       isV ? 'vertical' : 'horizontal',
         worldCoord: isV ? pos.x : pos.y,

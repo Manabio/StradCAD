@@ -94,6 +94,8 @@ test('applyPromoteToGrid異常系: 階グラフの同座標・同軸に梁芯（
 // 同座標に梁芯（由来USER）を持つ中心線の通り芯への昇格は拒否のまま（通り芯と梁芯の共存は禁止）。
 test('【S3-2】applyPromoteToGrid異常系: 同座標に手動追加の梁芯（由来USER）が吸着した中心線は通り芯へ昇格できず、ERR_CL_CONVERT_DUP(beam)でグラフ無変更', () => {
   const { project, graph } = makeProjectWithGraph();
+  // 中心線の上へ手動の梁芯を足せるのは S造の階だけ（S3-5 S2）。昇格の判定自体は主構造に依らない。
+  graph.structureOverride = 'S造';
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl   = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });

@@ -279,9 +279,10 @@ test('【配線】usePointerInteraction: longPress の onFire は天伏ならメ
 test('【配線】App.jsx: 天伏の天井芯の移動（startMove に ctx）・カーソル grab・追加の nearbyCLs は描画対象（isRenderTarget）で絞る（S8b）', () => {
   assert.match(appCode, /^\s*const err = await modeRef\.current\?\.startMove\(cl, \{ graph, project \}\);\s*$/m);
   assert.match(appCode, /^\s*: appMode === 'ceiling' \? \(isMoving \? 'grab' : 'default'\)\s*$/m);
-  // 構造モードの梁芯追加は、描かない中心線も吸着専用の参照として候補に入れる（isAddDialogSnapOnlyRef。S3-3）。
-  assert.match(appCode, /^\s*\)\.filter\(cl => isRenderTarget\(cl, appMode\) \|\| isAddDialogSnapOnlyRef\(cl, appMode\)\);\s*$/m);
-  assert.match(appCode, /^import \{ isRenderTarget, isAddDialogSnapOnlyRef \} from '\.\/core\/centerLineKindPolicy\.js';\s*$/m);
+  // 構造モードの梁芯追加は、S造の階だけ描かない中心線も吸着専用の参照として候補に入れる（isAddDialogRefCandidate。S3-3・S3-5 S3）。
+  assert.match(appCode, /^\s*\)\.filter\(cl => isAddDialogRefCandidate\(cl, appMode, addRefRules\)\);\s*$/m);
+  assert.match(appCode, /^\s*const addRefRules = rulesFor\(effectiveStructure\(graph, project\)\);\s*$/m);
+  assert.match(appCode, /^import \{ isAddDialogRefCandidate \} from '\.\/ui\/addCLDialogRefs\.js';\s*$/m);
   assert.ok(!/isHitTestTarget/.test(appCode), 'App.jsx に isHitTestTarget が残っている');
 });
 

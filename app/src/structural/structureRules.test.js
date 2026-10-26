@@ -468,6 +468,35 @@ test('【不変条件・実機QA指摘4】standardBeamSectionFor の呼び出し
   assert.deepEqual(offenders, [], `standardBeamSectionFor(...) が belowGraph を渡している呼び出しが残っている:\n${offenders.join('\n')}`);
 });
 
+test('structureRules（手動梁芯×意匠の線・2026-10-27）: manualBeamAxisOnArchLines は S造だけ true、他の全主構造・SRC造・未定・未知は false', () => {
+  for (const key of STRUCTURES) {
+    assert.equal(rulesFor(key).manualBeamAxisOnArchLines, key === 'S造', `${key}: manualBeamAxisOnArchLines`);
+  }
+  assert.equal(STRUCTURE_RULES[TRADITIONAL_WOOD_STRUCTURE].manualBeamAxisOnArchLines, false, '在来木造');
+  assert.equal(STRUCTURE_RULES['木造（2"×4"）'].manualBeamAxisOnArchLines, false, '2×4');
+  assert.equal(STRUCTURE_RULES['SRC造'].manualBeamAxisOnArchLines, false, 'SRC造は STEEL_RULES 継承を上書き');
+  assert.equal(UNSPECIFIED_RULES.manualBeamAxisOnArchLines, false, '未指定は STEEL_RULES 継承を上書き');
+  assert.equal(rulesFor('不明な構造').manualBeamAxisOnArchLines, false, '未知は UNSPECIFIED_RULES');
+});
+
+test('structureRules（手動梁芯×意匠の線）: 実効主構造の場合分け（S造の地階→false、S造の建物の木造上書き階→false、木造の建物のS造上書き階→true）', () => {
+  const pick = (graph, project) => rulesFor(effectiveStructure(graph, project)).manualBeamAxisOnArchLines;
+  const steelProject = { structuralInfo: { mainStructure: 'S造', basementStructure: 'RC造(ラーメン)' } };
+  const woodProject = { structuralInfo: { mainStructure: TRADITIONAL_WOOD_STRUCTURE } };
+  const basement = new PlanGraph(new Plane('b1', 0, '地下1階', -1, 1));
+  assert.equal(pick(basement, steelProject), false, 'S造の建物の地階は地階構造（RC系）');
+  const upper = new PlanGraph(new Plane('p2', 0, '2階', 2, 1));
+  assert.equal(pick(upper, steelProject), true, 'S造の建物の地上階');
+  upper.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  assert.equal(pick(upper, steelProject), false, '木造に上書きした階');
+  const woodFloor = new PlanGraph(new Plane('p3', 0, '3階', 3, 1));
+  assert.equal(pick(woodFloor, woodProject), false, '木造の建物の地上階');
+  woodFloor.structureOverride = 'S造';
+  assert.equal(pick(woodFloor, woodProject), true, 'S造に上書きした階');
+  woodFloor.structureOverride = '不明な構造';
+  assert.equal(pick(woodFloor, woodProject), false, '未知の主構造は false');
+});
+
 test('structureRules: 描画ルール（柱包み・平面の柱線色・線幅・伏図の色/柱記号）は在来木造だけ包みなし・壁と同じ色・極太線・全黒・×/□記号、梁端の柱判定は座標一致（beamEndColumnMatch）', () => {
   // 在来は壁厚＝柱寸法で柱の輪郭が壁の下地帯の線と重なるため極太線（実機 moku1 2026-09-15「柱が消えた」）
   // beamEndColumnMatch:'coordinate' は下階柱がper-floorの梁芯CL/中心線（自階と別id）に乗っても

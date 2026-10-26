@@ -7,8 +7,22 @@
 // 追従しない。規則C 案c・S3-3）。
 // react/store/.jsx を静的に引かない（node:test から単体 import 可能）。
 // ================================================================
-import { isAddDialogSnapOnlyRef } from '../core/centerLineKindPolicy.js';
+import { isRenderTarget, isAddDialogSnapOnlyRef } from '../core/centerLineKindPolicy.js';
 import { AddCLOptionKind } from '../core/constants.js';
+
+/**
+ * 追加ダイアログの参照候補にする実CLか。描画対象（isRenderTarget）に加え、吸着専用の参照
+ * （構造モードの中心線。isAddDialogSnapOnlyRef）は主構造が許すときだけ（rules.manualBeamAxisOnArchLines＝S造。
+ * 2026-10-27 限定）。ポリシー（core）は主構造を知らないため、主構造の判定はここ（呼び出し側の rules）で行う。
+ * @param {object} cl
+ * @param {string} appMode
+ * @param {{manualBeamAxisOnArchLines: boolean}} rules rulesFor(effectiveStructure(graph, project))
+ * @returns {boolean}
+ */
+export function isAddDialogRefCandidate(cl, appMode, rules) {
+  if (rules == null) throw new Error('isAddDialogRefCandidate: rules が必要です');
+  return isRenderTarget(cl, appMode) || (rules.manualBeamAxisOnArchLines && isAddDialogSnapOnlyRef(cl, appMode));
+}
 
 // 合成の選択肢（柱芯）か。印 optionKind（core/constants.js AddCLOptionKind）で見分け、実CLの選択肢は持たない。
 // 印が無いのに clId を持つ形は合成の選択肢の作り忘れ（centerLineKind が既定種別 'center' に黙って落ちる）

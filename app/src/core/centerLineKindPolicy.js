@@ -148,13 +148,10 @@ export const HIT_EXCLUDED_KINDS_BY_MODE = Object.freeze({
 //                 「残ることはない」点は共通だが、'forbidden'は追加自体を拒否するのに対し
 //                 'absorb'は既存を消して追加を通す）
 //
-// 梁芯（beam）の行（規則C 案c 第2段 S3-2・2026-10-26 ユーザー裁定）: struct だけ 'forbidden'、center/aux は
-// 'allowed'。禁止の目的「大梁と完全に重なる小梁を作らない」は通り芯向けで、中心線・補助線には大梁が立たない。
-// 中心線・補助線は構造モードで非表示で、梁芯を中心線上へ「動かす」ことは既に可能なのに「足す」ことが
-// できない食い違いがあった。補助線も禁止のままだと「補助線だけなら拒否、中心線＋補助線なら通る」の
-// 並び順依存が残るため、補助線も許可する。梁芯→通り芯の判定は、同座標の相手を1本に絞らず全種別で行う
-// （transform/centerLineOps.js addCenterLineFromDialog）。通り芯への昇格は、手動の梁芯がある中心線では
-// 拒否のまま（transform/centerLineConvert.js）。
+// 梁芯（beam）の行は beam 自身（extent）と天井芯（allowed）以外すべて 'forbidden'（大梁と完全に重なる小梁を
+// 作らない）。鉄骨造の階だけは下の BEAM_ON_ARCH_LINES_COEXISTENCE で center/aux を許可に上書きする
+// （coexistenceAt の beamOnArchLines。主構造の判定は呼び出し側＝transform/centerLineOps.js が行い、
+// ポリシーは主構造を持たない）。
 //
 // 天井芯（ceiling。S8a）: 既存4行の ceiling 列はすべて 'allowed'（天井芯は天伏だけの線で、他種別と同座標に
 // あっても平面・仕上げ・構造の関係を変えない）。ceiling 行は、天伏で見える通り芯・中心線の上には引けない
@@ -163,9 +160,21 @@ export const COEXISTENCE = Object.freeze({
   struct:  Object.freeze({ struct: 'forbidden', center: 'promote',   aux: 'allowed',   beam: 'absorb',    ceiling: 'allowed' }),
   center:  Object.freeze({ struct: 'forbidden', center: 'extent',    aux: 'allowed',   beam: 'allowed',   ceiling: 'allowed' }),
   aux:     Object.freeze({ struct: 'allowed',   center: 'allowed',   aux: 'extent',    beam: 'allowed',   ceiling: 'allowed' }),
-  beam:    Object.freeze({ struct: 'forbidden', center: 'allowed',   aux: 'allowed',   beam: 'extent',    ceiling: 'allowed' }),
+  beam:    Object.freeze({ struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent',    ceiling: 'allowed' }),
   ceiling: Object.freeze({ struct: 'forbidden', center: 'forbidden', aux: 'allowed',   beam: 'allowed',   ceiling: 'extent'  }),
 });
+
+// 鉄骨造の階で手動の梁芯を意匠の線（中心線・補助線）の同座標に足すときの上書き（規則C 案c S3-2・
+// 2026-10-26 ユーザー裁定、S造限定は同 S3-5 裁定 R1〜R5）。通り芯は上書きしない（forbidden のまま）。
+// 禁止の目的「大梁と完全に重なる小梁を作らない」は通り芯向けで、中心線・補助線には大梁が立たない。
+// 中心線・補助線は構造モードで非表示で、梁芯を中心線上へ「動かす」ことは既に可能なのに「足す」ことが
+// できない食い違いがあった。補助線も禁止のままだと「補助線だけなら拒否、中心線＋補助線なら通る」の
+// 並び順依存が残るため、補助線も許可する。梁芯→通り芯の判定は、同座標の相手を1本に絞らず全種別で行う
+// （transform/centerLineOps.js addCenterLineFromDialog）。通り芯への昇格は、手動の梁芯がある中心線では
+// 拒否のまま（transform/centerLineConvert.js）。
+// 【置き場の例外】実装方針11「新規は core/constants.js」の例外（ユーザー裁定 R4）: 共存の語彙であり、
+// COEXISTENCE の隣に置かないと表と上書きが別ファイルに分かれて読めなくなるため、ここに置く。
+export const BEAM_ON_ARCH_LINES_COEXISTENCE = Object.freeze({ center: 'allowed', aux: 'allowed' });
 
 // ---- 原始事実4: 直交端部アンカーの特例 ----
 // transform/centerLineOps.js 追加extent・transform/centerLineExtend.js 延長短縮: 梁芯の端部候補は
@@ -564,10 +573,17 @@ export function moveSnapTargetKinds(kind) {
   return CL_KINDS.filter(k => set.has(k));
 }
 
-/** newKind を existingKind と同座標へ追加しようとしたときの帰結（COEXISTENCE行列）。 */
-export function coexistenceAt(newKind, existingKind) {
+/**
+ * newKind を existingKind と同座標へ追加しようとしたときの帰結（COEXISTENCE行列）。
+ * beamOnArchLines（鉄骨造の階。呼び出し側が主構造から決めて渡す）が true で newKind==='beam' のときだけ、
+ * BEAM_ON_ARCH_LINES_COEXISTENCE にある相手種別（中心線・補助線）を上書きの値で返す。
+ */
+export function coexistenceAt(newKind, existingKind, { beamOnArchLines = false } = {}) {
   assertKnownKind(newKind);
   assertKnownKind(existingKind);
+  if (beamOnArchLines && newKind === 'beam' && Object.hasOwn(BEAM_ON_ARCH_LINES_COEXISTENCE, existingKind)) {
+    return BEAM_ON_ARCH_LINES_COEXISTENCE[existingKind];
+  }
   return COEXISTENCE[newKind][existingKind];
 }
 

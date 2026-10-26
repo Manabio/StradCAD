@@ -4926,8 +4926,15 @@ test('addCenterLineFromDialog: 通り芯・中心線・補助線の追加ではb
 
 // 規則C 案c 第2段（S3-2・2026-10-26）: 梁芯の手動追加は中心線・補助線（構造モードで非表示）と同位置に
 // 共存できる（旧テスト「中心線・通り芯と同位置に共存できない」の center 側を反転）。通り芯とは共存不可のまま。
-test('【S3-2】addCenterLineFromDialog: 梁芯の手動追加は中心線と同位置に共存でき（由来USER）、既存の中心線は残る', async () => {
+// S3-5 S2（ユーザー裁定 R1〜R5）: この共存は S造の階だけ。以下の【S3-2】テストは階を S造にして検証する。
+function makeSteelProjectWithGraph() {
   const { project, graph } = makeProjectWithGraph();
+  graph.structureOverride = 'S造';
+  return { project, graph };
+}
+
+test('【S3-2】addCenterLineFromDialog: S造の階では梁芯の手動追加は中心線と同位置に共存でき（由来USER）、既存の中心線は残る', async () => {
+  const { project, graph } = makeSteelProjectWithGraph();
 
   const center = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false });
   const r2 = await addCenterLineFromDialog(
@@ -4942,8 +4949,8 @@ test('【S3-2】addCenterLineFromDialog: 梁芯の手動追加は中心線と同
   assert.equal(beam.beamAxisOrigin, BeamAxisOrigin.USER);
 });
 
-test('【S3-2】addCenterLineFromDialog: 梁芯の手動追加は補助線と同位置にも共存できる', async () => {
-  const { project, graph } = makeProjectWithGraph();
+test('【S3-2】addCenterLineFromDialog: S造の階では梁芯の手動追加は補助線と同位置にも共存できる', async () => {
+  const { project, graph } = makeSteelProjectWithGraph();
 
   const aux = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, lineType: 'dashed' });
   const r = await addCenterLineFromDialog(
@@ -4956,8 +4963,8 @@ test('【S3-2】addCenterLineFromDialog: 梁芯の手動追加は補助線と同
   assert.ok(graph.centerLines.some(cl => centerLineKind(cl) === 'beam' && cl.value === 2000), '梁芯が追加される');
 });
 
-test('【S3-2・失敗系】addCenterLineFromDialog: 梁芯の手動追加は通り芯と同位置には共存できない（ERR_CL_DUPLICATE(struct)）', async () => {
-  const { project, graph } = makeProjectWithGraph();
+test('【S3-2・失敗系】addCenterLineFromDialog: S造の階でも梁芯の手動追加は通り芯と同位置には共存できない（ERR_CL_DUPLICATE(struct)）', async () => {
+  const { project, graph } = makeSteelProjectWithGraph();
 
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
   const r = await addCenterLineFromDialog(
@@ -4969,8 +4976,8 @@ test('【S3-2・失敗系】addCenterLineFromDialog: 梁芯の手動追加は通
   assert.equal(r.toast, ERR_CL_DUPLICATE('struct'));
 });
 
-test('【S3-2・失敗系】addCenterLineFromDialog: 範囲の重なる既存の梁芯がある座標への梁芯の追加は拒否（ERR_CL_DUPLICATE(beam)）。同座標に中心線があっても同じ', async () => {
-  const { project, graph } = makeProjectWithGraph();
+test('【S3-2・失敗系】addCenterLineFromDialog: 範囲の重なる既存の梁芯がある座標への梁芯の追加は拒否（ERR_CL_DUPLICATE(beam)）。同座標に中心線があっても同じ（S造の階）', async () => {
+  const { project, graph } = makeSteelProjectWithGraph();
 
   graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false, discipline: Discipline.FUSE });
   graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false });
@@ -4985,8 +4992,8 @@ test('【S3-2・失敗系】addCenterLineFromDialog: 範囲の重なる既存の
 
 // 抜け道の再現: 同座標の相手を「同種別優先で1本だけ」選ぶと、範囲の重ならない別の梁芯があるとき
 // 相手がその梁芯になり、通り芯の判定を素通りして通り芯の真上に梁芯を足せてしまった。
-test('【S3-2・失敗系】addCenterLineFromDialog: 同座標に通り芯と範囲の重ならない梁芯の両方があっても、通り芯の真上への梁芯の追加は拒否（相手を1本に絞らない）', async () => {
-  const { project, graph } = makeProjectWithGraph();
+test('【S3-2・失敗系】addCenterLineFromDialog: 同座標に通り芯と範囲の重ならない梁芯の両方があっても、通り芯の真上への梁芯の追加は拒否（相手を1本に絞らない。S造の階）', async () => {
+  const { project, graph } = makeSteelProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
@@ -5001,6 +5008,68 @@ test('【S3-2・失敗系】addCenterLineFromDialog: 同座標に通り芯と範
   assert.equal(r.done, false);
   assert.equal(r.toast, ERR_CL_DUPLICATE('struct'));
   assert.equal(graph.centerLines.length, before, '何も追加されない');
+});
+
+// ---- S3-5 S2: 共存の限定（S造の階だけ） ----
+const BEAM_ON_CENTER_PAYLOAD = {
+  clDialog: { type: 'horizontal', worldCoord: 2000, perpCoord: 0 }, value: 2000, kind: 'beam', refId: null, refOffset: 0,
+};
+
+test('【S3-5 S2・失敗系】addCenterLineFromDialog: S造以外の階（未指定・RC・木造）では梁芯を中心線の上へ足せない（ERR_CL_DUPLICATE(center)）。補助線の上も同じ', async () => {
+  for (const structure of [null, 'RC造(ラーメン)', TRADITIONAL_WOOD_STRUCTURE]) {
+    for (const [existingKind, props] of [['center', { labeled: false }], ['aux', { labeled: false, lineType: 'dashed' }]]) {
+      const { project, graph } = makeProjectWithGraph();
+      if (structure) graph.structureOverride = structure;
+      const existing = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, props);
+      const r = await addCenterLineFromDialog(graph, project, BEAM_ON_CENTER_PAYLOAD, null);
+      assert.equal(r.done, false, `${structure}/${existingKind}`);
+      assert.equal(r.toast, ERR_CL_DUPLICATE(existingKind), `${structure}/${existingKind}`);
+      assert.ok(graph.shapeMap.has(existing.id));
+      assert.equal(graph.centerLines.filter(cl => centerLineKind(cl) === 'beam').length, 0, '何も追加されない');
+    }
+  }
+});
+
+// 【既知の限界】S造以外の階は S3-2 前のまま、同座標の相手を existing の1本だけ見る。通り芯と範囲の重ならない
+// 梁芯が同座標にあると、通り芯の真上へ梁芯を足せる（抜け道。ユーザー裁定 R1: 修正は S造だけ。限界16 の
+// 追記は S5）。S造の階は同じ配置で通り芯として拒否される。
+test('【S3-5 S2・既知の限界】addCenterLineFromDialog: 通り芯＋範囲の重ならない梁芯の座標へ、S造以外の階は梁芯を足せてしまい（done:true）、S造の階は通り芯で拒否する', async () => {
+  for (const { structure, expectDone } of [{ structure: 'RC造(ラーメン)', expectDone: true }, { structure: 'S造', expectDone: false }]) {
+    const { project, graph } = makeProjectWithGraph();
+    graph.structureOverride = structure;
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+    graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: -3000, extentHi: -1000 });
+    const r = await addCenterLineFromDialog(
+      graph, project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 2000 }, value: 1000, kind: 'beam', refId: null, refOffset: 0 },
+      { scaleDenominator: 100 },
+    );
+    assert.equal(r.done, expectDone, structure);
+    if (!expectDone) assert.equal(r.toast, ERR_CL_DUPLICATE('struct'), structure);
+  }
+});
+
+test('【S3-5 S2・失敗系】addCenterLineFromDialog: S造の建物の地階（RC造）では梁芯を中心線の上へ足せない。木造の建物でも階を S造に上書きした階では足せる', async () => {
+  // S造の建物の地階: 実効主構造は地階構造（RC造）になるため S造の上書きは効かない。
+  const a = makeProjectWithGraph();
+  a.project.structuralInfo.mainStructure = 'S造';
+  a.project.structuralInfo.basementStructure = 'RC造(ラーメン)';
+  const basement = a.project.addPlane(-3000, '地下1階', 'pb', -1);
+  const bg = basement.graph;
+  bg.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false });
+  const r1 = await addCenterLineFromDialog(bg, a.project, BEAM_ON_CENTER_PAYLOAD, null);
+  assert.equal(r1.done, false);
+  assert.equal(r1.toast, ERR_CL_DUPLICATE('center'));
+
+  // 木造の建物で、階だけ S造に上書き。
+  const b = makeProjectWithGraph();
+  b.project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  b.graph.structureOverride = 'S造';
+  b.graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: false });
+  const r2 = await addCenterLineFromDialog(b.graph, b.project, BEAM_ON_CENTER_PAYLOAD, null);
+  assert.equal(r2.done, true);
 });
 
 // 線種変更の移籍一本化・ステップ6（2026-09-30・裁定Q8）: 既存が保護されない壁由来梁芯（中心線が
@@ -5633,7 +5702,16 @@ test('【失敗系】addCenterLineFromDialog: 補助線の追加extentは直交C
 // （centerLineOps.js）もCL_KINDSをそのまま使うため、importして使うと期待値・実測値の両方が
 // 同じ壊れたCL_KINDSを経由してしまい、CL_KINDS自体の並びが壊れる変異を検出できない
 // （QA指摘M-1・QAのcombi.mjsと同じ方針。下のassertで現在値と一致することは別途確認する）。
-test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合の重複判定を総当りで照合する（新規4種別×既存部分集合32通り〔天井芯を含む5種別〕×extent2通り=256ケース、QA指摘M-1・S8a）', async () => {
+// S3-5 S2: 主構造ごとに期待値を分ける。S造の階だけ梁芯を中心線・補助線の上へ足せる（beamOnArchLines。
+// 同座標の全種別を見る）。それ以外（未指定・RC・木造）は S3-2 前のまま（existing の1本だけを見る）。
+// 本体は for の中にあるがインデントは揃えていない（差分を小さく保つため）。
+for (const { name, structure, arch } of [
+  { name: '主構造 未指定', structure: null, arch: false },
+  { name: '主構造 RC造(ラーメン)', structure: 'RC造(ラーメン)', arch: false },
+  { name: '主構造 木造（在来）', structure: TRADITIONAL_WOOD_STRUCTURE, arch: false },
+  { name: '主構造 S造', structure: 'S造', arch: true },
+]) {
+test(`addCenterLineFromDialog: 同座標に複数種別が同時にある場合の重複判定を総当りで照合する（新規4種別×既存部分集合32通り〔天井芯を含む5種別〕×extent2通り=256ケース、QA指摘M-1・S8a）[${name}]`, async () => {
   const KINDS = ['struct', 'center', 'aux', 'beam', 'ceiling'];
   // 追加ダイアログが新規として扱える種別（天井芯の追加は S8b）。既存側には天井芯も置く
   // （単体追加が天井芯も相手に含める includeCeilingOnly 経路。共存は 'allowed' で、天井芯は何も邪魔しない）。
@@ -5655,12 +5733,17 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
   function decideOutcome(newKind, present) {
     if (present.length === 0) return 'allowed';
     const existingKind = pickExistingKind(newKind, present);
-    // S3-2: 梁芯の拒否は同座標の全種別を見る（相手を1本に絞らない）。通り芯があれば、同種別（梁芯）が
-    // 選ばれる配置でも拒否。中心線・補助線とは共存（COEXISTENCE.beam）。
-    if (newKind === 'beam' && present.some(k => k !== 'beam' && coexistenceAt('beam', k) === 'forbidden')) return 'forbidden-beam-existing';
+    // S造の階（arch）: 梁芯の拒否は同座標の全種別を見る（相手を1本に絞らない）。通り芯があれば、同種別
+    // （梁芯）が選ばれる配置でも拒否。中心線・補助線とは共存（BEAM_ON_ARCH_LINES_COEXISTENCE）。
+    // 拒否される相手はリテラルで書く（ポリシーの上書き表から導くと、表が壊れても期待値も一緒に壊れて検出できない）。
+    if (arch && newKind === 'beam' && present.includes('struct')) {
+      return 'forbidden-beam-existing';
+    }
     if (newKind === existingKind) {
       return coexistenceAt(newKind, existingKind) === 'forbidden' ? 'forbidden-same' : 'extent';
     }
+    // S造以外（S3-2 前のまま）: 相手は existing の1本だけ。beam 行は beam 自身以外すべて forbidden。
+    if (!arch && newKind === 'beam' && coexistenceAt(newKind, existingKind) === 'forbidden') return 'forbidden-beam-existing';
     // 線種変更の移籍一本化・裁定Q8（2026-09-30）: 中心線が同座標にあり昇格分岐（promote）へ入る
     // 場合は、梁芯の事前拒否を適用しない——promoteCenterToGridWithUndo自身が保護されない壁由来
     // 梁芯を吸収する（centerLineOps.js addCenterLineFromDialogのコメント参照）。中心線が無い場合は
@@ -5694,6 +5777,7 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
         const label = `newKind=${newKind} present=[${present.join(',')}] ext=${ext}`;
         const project = new Project('proj', 'test');
         const { graph } = project.addPlane(0, '1階', 'p1');
+        if (structure) graph.structureOverride = structure;
         // 直交通り芯2本（新規のextentを解決させる。perpCoord=2000でブラケットする）
         project.structGraph.addCenterLine(perpType, 1000, { labeled: true, discipline: Discipline.STRUCT });
         project.structGraph.addCenterLine(perpType, 3000, { labeled: true, discipline: Discipline.STRUCT });
@@ -5764,6 +5848,7 @@ test('addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
   }
   assert.equal(caseCount, 256, '新規4種別×32マスク×2extent=256ケースを網羅する');
 });
+}
 
 // ---- promoteCenterToGridWithUndo / demoteGridToCenterWithUndo ----
 // findFloorsWithCounterpartCL・propagateDemotedCenterLine は project.planeMap の「アクティブ以外の

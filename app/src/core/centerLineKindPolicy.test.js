@@ -16,7 +16,7 @@ import { Plane } from './plane.js';
 import { Project } from './project.js';
 import { PlanGraph } from './planGraph.js';
 import {
-  CL_KINDS, APP_MODES, VISIBLE_KINDS_BY_MODE, HIT_EXCLUDED_KINDS_BY_MODE, COEXISTENCE,
+  CL_KINDS, APP_MODES, VISIBLE_KINDS_BY_MODE, HIT_EXCLUDED_KINDS_BY_MODE, COEXISTENCE, BEAM_ON_ARCH_LINES_COEXISTENCE,
   DISPLAY_ONLY_KINDS_BY_MODE, SAME_DIRECTION_OBSTACLE_OVERRIDE, kindsRenderedIn,
   CEILING_CELL_DIVIDER_KINDS, CEILING_ONLY_KINDS, isCeilingCellDivider, isCeilingOnlyKind,
   ORTHO_ANCHOR_OVERRIDE, WALL_ANCHOR_KINDS, EXTENT_ANCHOR_STYLE, ENDPOINT_RULE_KINDS, FULL_SPAN_KINDS,
@@ -137,12 +137,32 @@ test('COEXISTENCE: 25セルの値を固定する（原始事実の書き写し�
       struct:  { struct: 'forbidden', center: 'promote',   aux: 'allowed',   beam: 'absorb',  ceiling: 'allowed' },
       center:  { struct: 'forbidden', center: 'extent',    aux: 'allowed',   beam: 'allowed', ceiling: 'allowed' },
       aux:     { struct: 'allowed',   center: 'allowed',   aux: 'extent',    beam: 'allowed', ceiling: 'allowed' },
-      // beam.center / beam.aux は 'forbidden' から 'allowed' へ改めた（規則C 案c 第2段 S3-2・2026-10-26
-      // ユーザー裁定。梁芯を中心線・補助線の上へ足せるようにする。beam.struct は forbidden のまま）。
-      beam:    { struct: 'forbidden', center: 'allowed',   aux: 'allowed',   beam: 'extent',  ceiling: 'allowed' },
+      // beam 行は S3-2 前の値。S造の階の上書き（center/aux を allowed）は BEAM_ON_ARCH_LINES_COEXISTENCE
+      // （下の専用テスト）で別に固定する。
+      beam:    { struct: 'forbidden', center: 'forbidden', aux: 'forbidden', beam: 'extent',  ceiling: 'allowed' },
       ceiling: { struct: 'forbidden', center: 'forbidden', aux: 'allowed',   beam: 'allowed', ceiling: 'extent'  },
     },
   );
+});
+
+test('BEAM_ON_ARCH_LINES_COEXISTENCE: 梁芯→中心線・補助線だけ allowed の上書き表で、凍結されている', () => {
+  assert.deepEqual({ ...BEAM_ON_ARCH_LINES_COEXISTENCE }, { center: 'allowed', aux: 'allowed' });
+  assert.ok(Object.isFrozen(BEAM_ON_ARCH_LINES_COEXISTENCE));
+});
+
+test('coexistenceAt: beamOnArchLines:true で値が変わるのは beam×center と beam×aux の2セルだけ（全25組合せ）', () => {
+  const changed = [];
+  for (const a of CL_KINDS) {
+    for (const b of CL_KINDS) {
+      const base = coexistenceAt(a, b);
+      assert.equal(coexistenceAt(a, b, { beamOnArchLines: false }), base, `${a}×${b}: false は既定と同じ`);
+      if (coexistenceAt(a, b, { beamOnArchLines: true }) !== base) changed.push(`${a}×${b}`);
+    }
+  }
+  assert.deepEqual(changed, ['beam×center', 'beam×aux']);
+  assert.equal(coexistenceAt('beam', 'center', { beamOnArchLines: true }), 'allowed');
+  assert.equal(coexistenceAt('beam', 'aux', { beamOnArchLines: true }), 'allowed');
+  assert.equal(coexistenceAt('beam', 'struct', { beamOnArchLines: true }), 'forbidden', '通り芯は上書きしない');
 });
 
 test('小表: WALL_ANCHOR_KINDS・EXTENT_ANCHOR_STYLE・ENDPOINT_RULE_KINDS・FULL_SPAN_KINDS・CONVERT_BLOCKING_KINDS', () => {
@@ -185,6 +205,7 @@ test('【不変条件】原始事実の表（VISIBLE_KINDS_BY_MODE・COEXISTENCE
   for (const v of Object.values(VISIBLE_KINDS_BY_MODE)) assert.ok(Object.isFrozen(v));
   assert.ok(Object.isFrozen(HIT_EXCLUDED_KINDS_BY_MODE));
   assert.ok(Object.isFrozen(COEXISTENCE));
+  assert.ok(Object.isFrozen(BEAM_ON_ARCH_LINES_COEXISTENCE));
   for (const v of Object.values(COEXISTENCE)) assert.ok(Object.isFrozen(v));
   assert.ok(Object.isFrozen(ORTHO_ANCHOR_OVERRIDE));
   for (const v of Object.values(ORTHO_ANCHOR_OVERRIDE)) assert.ok(Object.isFrozen(v));
@@ -1713,7 +1734,7 @@ test('【不変条件】App.jsx: CL追加メニューの参照候補がポリシ
   assert.ok(idx >= 0, 'findNearbyCenterLines( の呼び出しが見つからない');
   const code = stripLineComments(src.slice(idx, idx + 500));
   assert.ok(
-    /\.filter\(cl\s*=>\s*isRenderTarget\(cl,\s*appMode\)(\s*\|\|\s*isAddDialogSnapOnlyRef\(cl,\s*appMode\))?\)/.test(code) ||
+    /\.filter\(cl\s*=>\s*isAddDialogRefCandidate\(cl,\s*appMode,\s*addRefRules\)\)/.test(code) ||
     /\.filter\(cl\s*=>\s*isHitTestTarget\(cl,\s*appMode\)\)/.test(code) ||
     /\.filter\(cl\s*=>\s*hitTestKinds\(appMode\)\.includes\(centerLineKind\(cl\)\)\)/.test(code),
     'findNearbyCenterLines(...) の直後にポリシー（isHitTestTarget/hitTestKinds）由来のフィルタが見つからない'
@@ -1729,6 +1750,8 @@ test('【不変条件】App.jsx: CL追加メニューの参照候補がポリシ
 test('【失敗系】未知のCL種別は throw する', () => {
   assert.throws(() => coexistenceAt('wood', 'struct'), /未知のCL種別: wood/);
   assert.throws(() => coexistenceAt('struct', 'wood'), /未知のCL種別: wood/);
+  assert.throws(() => coexistenceAt('beam', 'wood', { beamOnArchLines: true }), /未知のCL種別: wood/, 'フラグ付きでも未知の種別は throw');
+  assert.throws(() => coexistenceAt('wood', 'center', { beamOnArchLines: true }), /未知のCL種別: wood/);
   assert.throws(() => orthoAnchorKinds('wood'), /未知のCL種別: wood/);
   assert.throws(() => sameDirectionObstacleKinds('wood'), /未知のCL種別: wood/);
   assert.throws(() => moveSnapTargetKinds('wood'), /未知のCL種別: wood/);
