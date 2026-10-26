@@ -793,7 +793,9 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     reconcileOpeningBeamAxes(graph, openingSources, wallSources);
   // 床開口（吹抜け・昇降路・階段吹抜け・階段の破れ先）由来の梁芯CL自動生成（規則O）。
   // 壁由来梁芯の直後・柱より前——重複ガード（findBeamAnchorCL）が壁由来梁芯も対象に含むため。
-  const newOpeningBeamAxes = autoFillOpeningBeamAxes(graph, openingSources);
+  // 重複ガードの範囲判定は S造の階だけ（rules.manualBeamAxisOnArchLines。S3-5 S4）。
+  const newOpeningBeamAxes = autoFillOpeningBeamAxes(graph, openingSources,
+    { rangeAware: rulesFor(structure).manualBeamAxisOnArchLines === true });
   // M-1'是正・QA指摘: extent張り直し2段目（autoFillOpeningBeamAxesの直後）。開口の形状変化で
   // 新たに必要になった先置きの辺（後の辺の支え）は上のautoFillOpeningBeamAxesで今しがた生成された
   // ばかりのため、reconcileOpeningBeamAxes内（生成前）の1段目では期待extentが解決できず静的値に

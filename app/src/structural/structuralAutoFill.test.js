@@ -732,7 +732,7 @@ test('【不変条件】structuralAutoFill.js: autoFillStructuralGrid はautoFil
     'openingBeamAxes.jsのautoFillOpeningBeamAxes/reconcileOpeningBeamAxes/retargetOpeningBeamAxisExtentsAfterCreateをimportしていない');
   const wallIdx = src.indexOf('autoFillWallBeamAxes(graph, wallSources)');
   const reconcileIdx = src.indexOf('reconcileOpeningBeamAxes(graph, openingSources, wallSources)');
-  const openingIdx = src.indexOf('autoFillOpeningBeamAxes(graph, openingSources)');
+  const openingIdx = src.indexOf('autoFillOpeningBeamAxes(graph, openingSources,');
   const retargetShortIdx = src.indexOf('retargetOpeningBeamAxisExtentsAfterCreate(graph, openingSources)');
   assert.ok(wallIdx >= 0 && reconcileIdx >= 0 && openingIdx >= 0 && retargetShortIdx >= 0
     && reconcileIdx > wallIdx && openingIdx > reconcileIdx && retargetShortIdx > openingIdx,
