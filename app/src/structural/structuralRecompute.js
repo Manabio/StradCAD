@@ -2,7 +2,7 @@ import { runInAction } from 'mobx';
 import { serializeGraph } from '../graphSnapshot.js';
 import { buildStructuralWallGate, buildExteriorSide, buildSelfFootprintGate, createFootprintCache } from './wallGate.js';
 import { collectWallBeamSources, peekBelowGraph, peekAboveGraph, wallRunSegments, columnSeedBeamSegments, peekRoofBelowGraph, peekRoofGraphAbove, createWallSourceCache } from './wallBeamAxes.js';
-import { openingBeamSourcesFor, openingEdgeComponents } from './openingBeamAxes.js';
+import { openingBeamSourcesFor, openingEdgeComponents, openingCellRects } from './openingBeamAxes.js';
 import { stairRiserOf } from '../finish/stair/stairDimensions.js';
 import { RoomFeature } from '../core.js';
 import {
@@ -169,6 +169,11 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   const openingComponents = (ownRules.openingBeamAxes === 'slabOpeningsDirect' && !isRoof)
     ? openingEdgeComponents(targetGraph, { riserOf: (s) => stairRiserOf(s, project, targetGraph.plane), belowGraph })
     : undefined;
+  // S造のスラブ小梁の割付け（slabSecondaryBeams が非 null）が開口と重なるベイを除く入力。矩形フィルタの前の
+  // 開口セル矩形（L字などの非矩形の開口もセルの集まりのまま）。情報源は上の openingComponents と同じ。
+  const slabOpeningRects = (ownRules.slabSecondaryBeams != null && !isRoof)
+    ? openingCellRects(targetGraph, { riserOf: (s) => stairRiserOf(s, project, targetGraph.plane), belowGraph })
+    : undefined;
   // 在来木造の上階柱直下の柱（ステップ3b）が候補列挙に使う1つ上の実体階の柱。columnPlacementが
   // wallIntersections（在来木造）のときだけpeekする（非在来はpeek 0回。二重管理ではなく同じ主構造
   // ルール軸をここでも読む——ownRulesはstructuralRecompute.js冒頭で集約済み）。
@@ -221,7 +226,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     ? withGraphReadScope(targetGraph, () => buildRoofColumnFilter(targetGraph)) : null;
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams, removedStairCrossingAxes, removedStaleRoofWallAxes } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, updatedLandingBeams, removedStairCrossingAxes, removedStaleRoofWallAxes } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents, slabOpeningRects));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。

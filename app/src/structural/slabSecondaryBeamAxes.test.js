@@ -4,7 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Plane, PlanGraph, CenterLineType, Discipline, centerLineKind as centerLineKindOf } from '../core.js';
+import { Plane, PlanGraph, Project, CenterLineType, Discipline, RoomFeature, centerLineKind as centerLineKindOf } from '../core.js';
+import { getAllCells } from '../finish/gridCells.js';
+import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { SlabBayFillSkip, STEEL_SECONDARY_BEAM_MAX_PITCH_MM } from '../core/constants.js';
 import { autoFillSlabSecondaryBeamAxes, planSlabSecondaryBeamAxes } from './slabSecondaryBeamAxes.js';
@@ -307,4 +310,53 @@ test('【失敗系】planSlabSecondaryBeamAxes: 境界の欠け（4辺のどれ�
     assert.deepEqual(planSlabSecondaryBeamAxes(all.filter((_, j) => j !== i), [], MAX), [], `辺${i}欠け`);
   }
   assert.deepEqual(planSlabSecondaryBeamAxes([], [], MAX), []);
+});
+
+// ---- 本番の再計算（recomputeStructuralForGraph）経由: 開口セル矩形が配線されること ----
+// 1階・2階の S造。2階に通り芯 X:0,6000 / Y:0,6000,12000 と補助の分割線（x=3000,y=3000）を引き、voidCells のセルを吹抜けにする。
+async function recomputeS2F(voidCellsOf) {
+  const project = new Project('proj-slab', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  project.activePlaneId = 'p2';
+  project.structuralInfo.mainStructure = 'S造';
+  g1.structureOverride = 'S造';
+  g2.structureOverride = 'S造';
+  const struct = { labeled: true, discipline: Discipline.STRUCT }, arch = { labeled: false, discipline: Discipline.ARCH };
+  for (const g of [g1, g2]) {
+    for (const x of [0, 6000]) g.addCenterLine(CenterLineType.VERTICAL, x, struct);
+    for (const y of [0, 6000, 12000]) g.addCenterLine(CenterLineType.HORIZONTAL, y, struct);
+  }
+  g2.addCenterLine(CenterLineType.VERTICAL, 3000, arch);
+  g2.addCenterLine(CenterLineType.HORIZONTAL, 3000, arch);
+  const cells = getAllCells(g2);
+  const keyOf = ([x1, y1, x2, y2]) => cells.find(c => c.x1 === x1 && c.y1 === y1 && c.x2 === x2 && c.y2 === y2).key;
+  g2.addRoom(new Set(voidCellsOf.map(keyOf))).setFeature(RoomFeature.VOID);
+  // 建物フットプリント（自階の部屋と直下階の部屋）で部材を取捨するゲートを通すため、吹抜け以外のセルを1部屋にし、
+  // 1階は全体を1部屋にする。
+  const voidKeys = new Set(voidCellsOf.map(keyOf));
+  g2.addRoom(new Set(cells.map(c => c.key).filter(k => !voidKeys.has(k))));
+  g1.addRoom(new Set(getAllCells(g1).map(c => c.key)));
+  const original = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => ({ p1: g1, p2: g2 })[plane.id] ?? null;
+  try {
+    for (let i = 0; i < 3; i++) await recomputeStructuralForGraph(g2, project, 'S造');
+  } finally { floorSwapManager.peek = original; }
+  return g2;
+}
+const floorBeamAxisYs = (g) => g.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.FLOOR_BEAM)
+  .map(cl => cl.value).sort((a, b) => a - b);
+
+test('【失敗系・配線】recomputeStructuralForGraph: S造の矩形の吹抜けと重なるベイには梁芯を作らず、隣のベイには作る', async () => {
+  // 吹抜け＝上半分 x:[0,6000] y:[0,6000]（2×2セル）。下のベイ y:[6000,12000]（6000角）は y=8000,10000 の2本。
+  const g2 = await recomputeS2F([[0, 0, 3000, 3000], [3000, 0, 6000, 3000], [0, 3000, 3000, 6000], [3000, 3000, 6000, 6000]]);
+  assert.deepEqual(floorBeamAxisYs(g2), [8000, 10000]);
+});
+
+test('【失敗系・配線】L字（非矩形）の吹抜けと重なるベイは OPENING: 梁芯・子梁を作らず、接しない隣のベイには作る', async () => {
+  // 吹抜け＝L字（上半分の4セルのうち右下を除く3セル）。吹抜けは非矩形のため開口辺の矩形成分（openingEdgeComponents）には
+  // 入らないが、開口セル矩形には入る。上半分のベイ（6000角）は L字と面積で重なるので割り付けない。
+  const g2 = await recomputeS2F([[0, 0, 3000, 3000], [3000, 0, 6000, 3000], [0, 3000, 3000, 6000]]);
+  assert.deepEqual(floorBeamAxisYs(g2), [8000, 10000], '上半分（L字と重なる）には無く、下のベイにだけある');
+  assert.equal(g2.beams.filter(b => b.role === 'secondary').length, 2, '子梁も下のベイの2本だけ');
 });

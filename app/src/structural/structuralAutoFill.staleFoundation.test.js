@@ -38,7 +38,9 @@ test('【S5c-1】最下階の1階で基礎梁4・フーチング4が生まれ、
   assert.equal(roleCount(graph, 'primary'), 4, '同じ辺の床梁(primary)が生まれた（残骸に塞がれない）');
   assert.deepEqual([...second.removedBeams].sort(), [...oldBeamIds].sort(), '撤去した基礎梁のidが removedBeams に載る');
   assert.deepEqual([...second.removedFootings].sort(), [...oldFootingIds].sort(), '撤去したフーチングのidが removedFootings に載る');
-  assert.equal(second.newBeams.length, 4, '床梁4は newBeams に載る');
+  // 通常階になった S造の2.5m超のベイにはスラブ小梁の梁芯1本＋子梁1本も同じパスで生まれる（slabSecondaryBeamAxes.js）。
+  assert.equal(second.newBeams.filter(b => b.role === 'primary').length, 4, '床梁4は newBeams に載る');
+  assert.equal(second.newBeams.length, 6, '床梁4＋スラブ小梁の梁芯1・子梁1');
 
   const third = autoFillStructuralGrid(graph, project, 'S造');
   assert.equal(third.removedBeams.length + third.newBeams.length + third.removedFootings.length, 0, '2回目は変化なし（冪等）');

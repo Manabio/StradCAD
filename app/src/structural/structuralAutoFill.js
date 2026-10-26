@@ -20,6 +20,7 @@ import { ROOF_COLUMN_CLASS } from './roofColumnFilter.js';
 import { autoFillWallBeamAxes, removeStaleWallBeamAxes } from './wallBeamAxes.js';
 import { autoFillOpeningBeamAxes, reconcileOpeningBeamAxes, retargetOpeningBeamAxisExtentsAfterCreate } from './openingBeamAxes.js';
 import { autoFillWoodOpeningBeams } from './woodOpeningBeams.js';
+import { autoFillSlabSecondaryBeamAxes } from './slabSecondaryBeamAxes.js';
 import { landingEdgeCLs, landingZ } from '../finish/stair/stairLanding.js';
 import { floorHeightAbove } from '../finish/stair/stairDimensions.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -745,8 +746,11 @@ export function autoFillStairLandingBeams(graph, project, wallGate = null, below
  *  openingComponents: 在来木造の吹抜け小梁の入力（openingBeamAxes.js openingEdgeComponents の結果。
  *  structureRules.js openingBeamAxes:'slabOpeningsDirect' のときだけ呼び出し側が渡す）。大梁の生成直後に
  *  woodOpeningBeams.js autoFillWoodOpeningBeams へそのまま渡す——省略時（undefined）は何もしない
- *  （[] なら auto の小梁を撤去する）。 */
-export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined, roofColumnFilter = null, openingComponents = undefined) {
+ *  （[] なら auto の小梁を撤去する）。
+ *  slabOpeningRects: S造のスラブ小梁の割付けが開口と重なるベイを除く入力（openingBeamAxes.js openingCellRects の結果。
+ *  slabSecondaryBeams が非 null のときだけ呼び出し側が渡す。矩形フィルタの前のセル矩形＝L字も含む）。
+ *  省略時（undefined）は開口を考慮しない。 */
+export function autoFillStructuralGrid(graph, project, belowMainStructure, wallGate = null, wallSources = [], wallSegments = [], aboveColumns = [], belowColumns = [], aboveBeamSegments = [], selfGate = undefined, freeEndGraph = undefined, wallSourceCache = undefined, openingSources = [], belowGraph = null, roofRegions = undefined, roofCellKeys = undefined, roofColumnFilter = null, openingComponents = undefined, slabOpeningRects = undefined) {
   const foundation = isFoundationPlane(graph.plane, project);
   const isRoof = graph.plane.isRoofPlane;
   // 基礎伏図でなくなった実体階（下に階が足された）の auto の基礎梁・独立フーチングを先に撤去する
@@ -878,6 +882,11 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // （在来木造）は通り芯グリッドの大梁を持たないため小梁のhostが無く、呼んでも0本になる以外に害はないが、
   // 二重の判定軸を持たないよう明示的にスキップする（ステップ3c-2）。
   const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
+  // S造のスラブ小梁の梁芯（slabSecondaryBeamAxes.js。structureRules.js slabSecondaryBeams が null の主構造は空）。
+  // 大梁・開口辺の小梁が確定した直後に梁芯を作り、追加の梁芯の子梁を同じパスで作る（次の再計算を待たない）。
+  // 基礎伏図・屋根専用平面は対象外。
+  const slabAxes = (!isRoof && !foundation) ? autoFillSlabSecondaryBeamAxes(graph, project, slabOpeningRects).created : [];
+  const newSlabSecondaries = slabAxes.length > 0 ? autoFillSecondaryBeams(graph, project) : [];
   // 階段を横切る孤児の梁芯の撤去（ユーザー指示2026-10-12。「CLは残す」規律の例外）。生成・撤去がすべて確定した
   // 最後に呼ぶ——梁が乗った梁芯を孤児と誤認しない／現況の生成源（壁・開口）と往復しないため。
   // 依存の柱・梁は teardown で道連れ、次の sweep で中心線へ再アンカーされる。通知は structuralOrchestration.js。
@@ -890,7 +899,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     // 「新規/撤去した梁」ではないため newBeams/removedBeams には混ぜず、別枠で返す
     // （structuralRecompute.js の changed 判定はこの配列の長さも見る）。
     changedOpeningBeamAxes: [...relabeledOpeningBeamAxes, ...retargetedOpeningBeamAxes, ...retargetedOpeningBeamAxesAfterCreate],
-    newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newOpeningBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...sillBeamsResult.created, ...floorBeamsResult.created],
+    newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newOpeningBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...slabAxes, ...newSlabSecondaries, ...sillBeamsResult.created, ...floorBeamsResult.created],
     removedBeams: [...staleFoundation.removedBeams, ...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes, ...removedLandingG, ...removedStaleLandingBeams],
     // 踊り場受け梁の既存auto LGへのlevelOffset再計算更新（QA指摘F1是正）。新規/撤去した梁ではないため
     // newBeams/removedBeamsには混ぜず、changedOpeningBeamAxesと同じ別枠にする

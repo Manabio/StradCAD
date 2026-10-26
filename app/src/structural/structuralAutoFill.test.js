@@ -12,9 +12,9 @@ import {
   autoFillColumns, autoFillBeams, autoFillFootings, autoFillRoofBeams, secondaryBeamSpansFor, autoFillSecondaryBeams,
   convertMembersToEffectiveMaterial, deleteClassificationOverflow,
 } from './structuralAutoFill.js';
-import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
+import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { selfWallSegments, wallBeamSourcesFor } from './wallBeamAxes.js';
-import { openingBeamSourcesFor, autoFillOpeningBeamAxes } from './openingBeamAxes.js';
+import { openingBeamSourcesFor, autoFillOpeningBeamAxes, openingCellRects } from './openingBeamAxes.js';
 import { resolveSecondaryBeamsForAxis } from './beamAxisMove.js';
 import { getAllCells } from '../finish/gridCells.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
@@ -751,10 +751,10 @@ test('【不変条件】structuralRecompute.js: openingBeamSourcesForを呼び�
   const url = await import('node:url');
   const here = path.dirname(url.fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, 'structuralRecompute.js'), 'utf8');
-  assert.ok(/import \{ openingBeamSourcesFor, openingEdgeComponents \} from '\.\/openingBeamAxes\.js';/.test(src),
-    'openingBeamAxes.jsのopeningBeamSourcesFor・openingEdgeComponents（在来木造の吹抜け小梁の入力）をimportしていない');
+  assert.ok(/import \{ openingBeamSourcesFor, openingEdgeComponents, openingCellRects \} from '\.\/openingBeamAxes\.js';/.test(src),
+    'openingBeamAxes.jsのopeningBeamSourcesFor・openingEdgeComponents（在来木造の吹抜け小梁の入力）・openingCellRects（S造のスラブ小梁の開口の入力）をimportしていない');
   assert.ok(/openingBeamSourcesFor\(targetGraph, project,/.test(src), 'openingBeamSourcesForの呼び出しが無い');
-  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents\)/.test(src),
+  assert.ok(/autoFillStructuralGrid\([^)]*openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents, slabOpeningRects\)/.test(src),
     'autoFillStructuralGridの末尾引数にopeningSources, belowGraph, roofRegions, roofCellKeysを渡していない（belowGraphはWP-B2改訂＝踊り場受け梁の到達階生成、roofRegionsはC2b＝小屋梁の生成、roofCellKeysはC2d-1＝下屋の範囲の床梁ガードが追加した引数）');
 });
 
@@ -1045,4 +1045,100 @@ test('【ステップ5・T2】通し梁芯の小梁スロットが最初からex
   assert.equal(graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === through4000.id).length, 1,
     '対照: 除外していない通し梁芯(y=4000)は通常どおり生成される');
   void created;
+});
+
+// ---- S造スラブ小梁の梁芯の割付け（slabSecondaryBeamAxes.js）の配線 ----
+const slabAxesOf = (graph) => graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.FLOOR_BEAM)
+  .sort((a, b) => a.centerLineType.localeCompare(b.centerLineType) || a.value - b.value);
+
+// 通り芯 X:[0,width]・Y:[-height,0] の S造グリッド。最下階（基礎伏図）にしないためダミーの1階を先に置く。
+function makeSlabGridFixture({ width = 5000, height = 7000, structure = 'S造' } = {}) {
+  const graph = new PlanGraph(new Plane('p1', 3000, '2階', 2, 1));
+  graph.structureOverride = structure;
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,      { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, width,  { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, -height, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,       { labeled: true, discipline: Discipline.STRUCT });
+  const project = { planes: [new Plane('p0', 0, '1階', 1, 1), graph.plane], structuralInfo: { mainStructure: structure, foundationType: 'ベタ基礎' } };
+  return { graph, project };
+}
+
+test('【スラブ小梁・配線】autoFillStructuralGrid 1回で、梁芯2本と子梁2本が同じパスで揃い、newBeams に載る。2回目は何も増えない', () => {
+  const { graph, project } = makeSlabGridFixture();
+  const r = autoFillStructuralGrid(graph, project, 'S造');
+  const axes = slabAxesOf(graph);
+  assert.equal(axes.length, 2, '梁芯2本');
+  const children = graph.beams.filter(b => b.role === 'secondary');
+  assert.equal(children.length, 2, '子梁2本（次の再計算を待たない）');
+  assert.deepEqual(children.map(b => b.axisCL.id).sort(), axes.map(a => a.id).sort());
+  for (const x of [...axes, ...children]) assert.ok(r.newBeams.includes(x), '戻り値 newBeams に梁芯・子梁が入る（changed 判定に乗る）');
+  const again = autoFillStructuralGrid(graph, project, 'S造');
+  assert.equal(again.newBeams.length, 0, '冪等');
+  assert.equal(slabAxesOf(graph).length, 2);
+});
+
+test('【スラブ小梁・配線】開口小梁のあるベイが1パスで割れる（開口の上下のベイに梁芯、開口自身のベイには作らない）', () => {
+  // 通り芯 X:0,5000 / Y:0,12000。吹抜け X:[1000,4000] Y:[5000,6000]（幅>高さ → 通しは水平辺 y=5000,6000）。
+  const graph = new PlanGraph(new Plane('p1', 3000, '2階', 2, 1));
+  graph.structureOverride = 'S造';
+  graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 4000, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 5000,  { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 6000,  { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 12000, { labeled: true, discipline: Discipline.STRUCT });
+  const voidKey = getAllCells(graph).find(c => c.x1 === 1000 && c.x2 === 4000 && c.y1 === 5000 && c.y2 === 6000).key;
+  graph.addRoom(new Set([voidKey])).setFeature(RoomFeature.VOID);
+  const project = { planes: [new Plane('p0', 0, '1階', 1, 1), graph.plane], structuralInfo: { mainStructure: 'S造', foundationType: 'ベタ基礎' } };
+
+  const openingSources = openingBeamSourcesFor(graph, project);
+  const slabOpeningRects = openingCellRects(graph);
+  const r = autoFillStructuralGrid(graph, project, 'S造', null, [], [], [], [], [], undefined, undefined, undefined, openingSources, null, undefined, undefined, null, undefined, slabOpeningRects);
+  const axes = slabAxesOf(graph);
+  // 下 y:[0,5000]（5000×5000）→ ceil(5000/2500)=2 等分で y=2500、上 y:[6000,12000] → 3 等分で y=8000,10000。
+  assert.deepEqual(axes.map(a => [a.centerLineType, a.value]), [
+    [CenterLineType.HORIZONTAL, 2500], [CenterLineType.HORIZONTAL, 8000], [CenterLineType.HORIZONTAL, 10000],
+  ]);
+  for (const a of axes) {
+    assert.equal(graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === a.id).length, 1, `y=${a.value} に子梁`);
+    assert.ok(r.newBeams.includes(a));
+  }
+});
+
+test('【失敗系・スラブ小梁】基礎伏図（最下階）・屋根専用平面では、大梁で囲まれたベイがあっても梁芯を作らない', () => {
+  const addPrimaries = (graph) => {
+    const [x0, x1] = graph.gridXs, [y0, y1] = graph.gridYs;
+    const rules = rulesFor('S造');
+    for (const [cl, isV, a, b] of [[y0, false, x0, x1], [y1, false, x0, x1], [x0, true, y0, y1], [x1, true, y0, y1]]) {
+      // locked: 基礎伏図の再計算が auto の床梁系（role:primary）を撤去してしまうと、ゲートが無くても梁芯が出ない空振りテストになる。
+      graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, cl, isV, a, b, { role: 'primary', dimensionStatus: 'locked' });
+    }
+  };
+  // 基礎伏図: graph.plane が project.planes の先頭。
+  const f = makeSlabGridFixture();
+  f.project.planes = [f.graph.plane];
+  addPrimaries(f.graph);
+  autoFillStructuralGrid(f.graph, f.project, 'S造');
+  assert.equal(slabAxesOf(f.graph).length, 0, '基礎伏図では作らない');
+  // 屋根専用平面。
+  const roofGraph = new PlanGraph(new Plane('roof1', 6000, '屋根伏図', 1, 1, false, null, 0, true, 'p_top'));
+  roofGraph.structureOverride = 'S造';
+  roofGraph.addCenterLine(CenterLineType.VERTICAL, 0,      { labeled: true, discipline: Discipline.STRUCT });
+  roofGraph.addCenterLine(CenterLineType.VERTICAL, 5000,   { labeled: true, discipline: Discipline.STRUCT });
+  roofGraph.addCenterLine(CenterLineType.HORIZONTAL, -7000, { labeled: true, discipline: Discipline.STRUCT });
+  roofGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  addPrimaries(roofGraph);
+  const roofProject = { planes: [new Plane('p_top', 3000, '最上階', 1, 1)], structuralInfo: { mainStructure: '未定', foundationType: 'ベタ基礎' } };
+  autoFillStructuralGrid(roofGraph, roofProject, 'S造');
+  assert.equal(slabAxesOf(roofGraph).length, 0, '屋根専用平面では作らない');
+});
+
+test('【失敗系・スラブ小梁】S造以外（SRC造・RC造）は autoFillStructuralGrid でも梁芯を作らない', () => {
+  for (const structure of ['SRC造', 'RC造(ラーメン)']) {
+    const { graph, project } = makeSlabGridFixture({ structure });
+    autoFillStructuralGrid(graph, project, structure);
+    assert.equal(slabAxesOf(graph).length, 0, structure);
+  }
 });

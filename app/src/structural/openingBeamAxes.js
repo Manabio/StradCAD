@@ -15,7 +15,7 @@ import {
   unprotectedAmong,
 } from './wallBeamAxes.js';
 import { planOpeningEdgeBeams } from './openingEdgePlan.js';
-import { floorOpeningEdges } from '../finish/stair/slabOpening.js';
+import { floorOpeningEdges, floorOpeningCellRects } from '../finish/stair/slabOpening.js';
 import { roomBounds } from '../finish/gridCells.js';
 
 // 矩形判定・辺の一致判定の許容誤差(mm)。floorOpeningEdges/wallBeamAxes.js と同じ規約
@@ -169,6 +169,19 @@ export function rectangularSidesOf(edges) {
   if (!closeTo(h1.lo, v1.coord) || !closeTo(h1.hi, v2.coord)) return null;
   if (!closeTo(h2.lo, v1.coord) || !closeTo(h2.hi, v2.coord)) return null;
   return { v1, v2, h1, h2 };
+}
+
+/**
+ * 床開口を**セル矩形の集合**で返す（矩形フィルタの前の情報。L字など非矩形の開口もセル矩形の集まりのまま）。
+ * 開口セルの情報源・階段の破れ先の絞り込み（下階に到達元の階段があるときだけ開口）は
+ * openingEdgeComponents・floorOpeningEdges と同じ（floorOpeningCellRects ← openingCellSets＝唯一）。
+ * S造のスラブ小梁の割付け（slabSecondaryBeamAxes.js）が開口と重なるベイを除くのに使う。
+ * @param {object} graph
+ * @param {{riserOf?: (stair:object)=>number|null, belowGraph?: object|null}} [opts]
+ * @returns {Array<{x1:number,y1:number,x2:number,y2:number,source:string}>}
+ */
+export function openingCellRects(graph, { riserOf = () => null, belowGraph = null } = {}) {
+  return floorOpeningCellRects(graph, { riserOf, stairFilter: stairFilterFor(graph, belowGraph) });
 }
 
 /**
