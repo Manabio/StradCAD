@@ -36,6 +36,19 @@ test('followWallBeamAxes: アンカー柱の解決先（findBeamAnchorCL）が�
   assert.equal(findBeamAnchorCL(graph, CenterLineType.HORIZONTAL, 2045), null, '旧座標にはもう存在しない');
 });
 
+test('【S2d・失敗系】followWallBeamAxes: from の位置が SLAB_BEAM（スラブ小梁の割付け由来）だけなら動かさない。壁由来が同座標にあればそちらだけ動く', () => {
+  const graph = makeGraph();
+  const slab = graph.addCenterLine(CenterLineType.HORIZONTAL, 2045, { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM });
+  const r1 = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(r1.moved, []);
+  assert.equal(slab.value, 2045, 'SLAB_BEAM は壁の帯の移動に引きずられない');
+  const wall = graph.addCenterLine(CenterLineType.HORIZONTAL, 2045, { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.WALL });
+  const r2 = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(r2.moved.map(m => m.clId), [wall.id]);
+  assert.equal(slab.value, 2045);
+  assert.equal(wall.value, 2060);
+});
+
 // ---- 案B（ユーザー裁定・2026-09-26）: 追従先に既存の梁芯・通り芯があるとき、保護されない旧梁芯は
 // 吸収して撤去する（相手はそのまま残す。乗っていたauto柱・梁も道連れ）----
 

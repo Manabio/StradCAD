@@ -6,7 +6,7 @@ import { CenterLineType, Discipline, centerLineKind } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { isWallEndAtCorner } from '../core/wall.js';
 import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
-import { structuralAnchorAt, beamAxisAt, beamAxesAt, beamAxisCenterLines, spansEntireAxis } from '../core/centerLineKindPolicy.js';
+import { structuralAnchorAt, beamAxesAt, beamAxisCenterLines, spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { exclusionKeyReferencesCL } from '../core/structuralEntities.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -369,9 +369,12 @@ export function wallBeamAxisExcludeKey(isVertical, coord) {
   return `${isVertical ? 'X' : 'Y'}:${Math.round(coord)}`;
 }
 
+// S造スラブ小梁の割付け由来（SLAB_BEAM＝未編集の自動梁芯）は壁の帯と無関係に置かれる梁芯のため拾わない——
+// 壁の帯が偶然同じ座標へ動いた・消えたときに、追従（wallBeamAxisFollow.js）や孤児撤去（orphanedWallBeamAxes）が
+// 割付けの梁芯を引きずる・巻き込むのを防ぐ（SLAB_BEAM の座標は再計算のたびにベイ単位で割り直される）。
 export function findWallBeamAxisCL(graph, isVertical, coord) {
   const centerLineType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
-  return beamAxisAt(graph, { centerLineType, coord });
+  return beamAxesAt(graph, { centerLineType, coord }).find(cl => cl.beamAxisOrigin !== BeamAxisOrigin.SLAB_BEAM) ?? null;
 }
 
 /**

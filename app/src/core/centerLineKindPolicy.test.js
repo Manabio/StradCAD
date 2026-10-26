@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runInAction } from 'mobx';
 import { CenterLineType, Discipline, CL_OVERLAP_TOL_MM } from './constants.js';
-import { centerLineKind } from './centerLine.js';
+import { centerLineKind, BeamAxisOrigin } from './centerLine.js';
 import { Plane } from './plane.js';
 import { Project } from './project.js';
 import { PlanGraph } from './planGraph.js';
@@ -623,6 +623,136 @@ test('sameDirectionObstacles: graph.centerLines を isSameDirectionObstacle(subj
   // 最小のダックタイピング（{centerLines}のみ）でも動く。
   const duckGraph = { centerLines: graph.centerLines };
   assert.deepEqual(sameDirectionObstacles(duckGraph, subject).map(c => c.id).sort(), obstacles.map(c => c.id).sort());
+});
+
+// ---- S2d: 表（種別単位）の外の2つの絞り込み（梁芯×梁芯の extent 条件／通り芯×未編集の自動梁芯） ----
+// 梁芯を extent 付きで足す（extentLo/Hi は静的値＝水平の梁芯なら x の範囲）。
+function addBeamAxis(graph, type, value, { lo = null, hi = null, origin = null } = {}) {
+  return graph.addCenterLine(type, value, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: lo, extentHi: hi, beamAxisOrigin: origin,
+  });
+}
+
+test('【S2d】isSameDirectionObstacle: 通り芯の主体は未編集の自動梁芯（SLAB_BEAM）を障害物にしない。手を加えた梁芯・他の由来・由来なしは障害物のまま', () => {
+  const graph = makeGraph();
+  const struct = graph.addCenterLine(CenterLineType.HORIZONTAL, 7000, { labeled: true, discipline: Discipline.STRUCT });
+  const verdict = {};
+  for (const [name, origin] of Object.entries({
+    SLAB_BEAM: BeamAxisOrigin.SLAB_BEAM, USER: BeamAxisOrigin.USER, OPENING: BeamAxisOrigin.OPENING, WALL: BeamAxisOrigin.WALL,
+    FLOOR_BEAM: BeamAxisOrigin.FLOOR_BEAM, ROOF_BEAM: BeamAxisOrigin.ROOF_BEAM, なし: null,
+  })) {
+    verdict[name] = isSameDirectionObstacle(struct, addBeamAxis(graph, CenterLineType.HORIZONTAL, 3000, { lo: 0, hi: 5000, origin }));
+  }
+  assert.deepEqual(verdict, {
+    SLAB_BEAM: false, USER: true, OPENING: true, WALL: true, FLOOR_BEAM: true, ROOF_BEAM: true, なし: true,
+  });
+});
+
+test('【S2d】isSameDirectionObstacle: SLAB_BEAM の除外は主体が通り芯のときだけ（梁芯の主体にとって SLAB_BEAM は extent が重なれば障害物）', () => {
+  const graph = makeGraph();
+  const subject = addBeamAxis(graph, CenterLineType.HORIZONTAL, 1000, { lo: 0, hi: 5000, origin: BeamAxisOrigin.USER });
+  const slab = addBeamAxis(graph, CenterLineType.HORIZONTAL, 3000, { lo: 0, hi: 5000, origin: BeamAxisOrigin.SLAB_BEAM });
+  assert.equal(isSameDirectionObstacle(subject, slab), true);
+});
+
+test('【S2d】isSameDirectionObstacle: SLAB_BEAM が絡まない梁芯×梁芯（在来木造の FLOOR_BEAM・WALL・OPENING・USER・由来なし）は、extent が端で接するだけ・離れていても従来どおり常に障害物', () => {
+  const graph = makeGraph();
+  const H = CenterLineType.HORIZONTAL;
+  const origins = [BeamAxisOrigin.FLOOR_BEAM, BeamAxisOrigin.WALL, BeamAxisOrigin.OPENING, BeamAxisOrigin.USER, BeamAxisOrigin.ROOF_BEAM, null];
+  for (const so of origins) {
+    for (const oo of origins) {
+      const subject = addBeamAxis(graph, H, 1000, { lo: 0, hi: 5000, origin: so });
+      assert.equal(isSameDirectionObstacle(subject, addBeamAxis(graph, H, 3000, { lo: 5000, hi: 10000, origin: oo })), true, `接するだけ ${so}×${oo}`);
+      assert.equal(isSameDirectionObstacle(subject, addBeamAxis(graph, H, 3000, { lo: 8000, hi: 10000, origin: oo })), true, `離れている ${so}×${oo}`);
+    }
+  }
+});
+
+test('【S2d】isSameDirectionObstacle: 片方だけ SLAB_BEAM の組（主体・相手のどちら側でも）は extent が離れていれば障害物でない', () => {
+  const graph = makeGraph();
+  const H = CenterLineType.HORIZONTAL;
+  const slab = addBeamAxis(graph, H, 1000, { lo: 0, hi: 5000, origin: BeamAxisOrigin.SLAB_BEAM });
+  const wood = addBeamAxis(graph, H, 3000, { lo: 5000, hi: 10000, origin: BeamAxisOrigin.FLOOR_BEAM });
+  assert.equal(isSameDirectionObstacle(slab, wood), false, '主体が SLAB_BEAM');
+  assert.equal(isSameDirectionObstacle(wood, slab), false, '相手が SLAB_BEAM');
+});
+
+test('【S2d】isSameDirectionObstacle: SLAB_BEAM が絡む梁芯×梁芯は extent が tol を超えて重なるときだけ障害物（端で接するだけ・離れている・tol 以内の重なりは対象外）', () => {
+  const graph = makeGraph();
+  const H = CenterLineType.HORIZONTAL;
+  const subject = addBeamAxis(graph, H, 1000, { lo: 0, hi: 5000, origin: BeamAxisOrigin.SLAB_BEAM });
+  const cases = [
+    ['同じ範囲', { lo: 0, hi: 5000 }, true],
+    ['部分的に重なる', { lo: 4000, hi: 9000 }, true],
+    ['端で接するだけ（隣のベイとの共有辺）', { lo: 5000, hi: 10000 }, false],
+    ['離れている', { lo: 6000, hi: 10000 }, false],
+    ['tol 以内の重なり', { lo: 5000 - CL_OVERLAP_TOL_MM, hi: 10000 }, false],
+    ['tol を超える重なり', { lo: 5000 - CL_OVERLAP_TOL_MM - 1, hi: 10000 }, true],
+    ['手前側で接するだけ', { lo: -5000, hi: 0 }, false],
+  ];
+  for (const [label, ext, expected] of cases) {
+    assert.equal(isSameDirectionObstacle(subject, addBeamAxis(graph, H, 3000, ext)), expected, label);
+  }
+});
+
+test('【S2d・失敗系】isSameDirectionObstacle: extent が null（範囲未設定＝無限扱い）の梁芯は、どちら側にあっても障害物のまま', () => {
+  const graph = makeGraph();
+  const H = CenterLineType.HORIZONTAL;
+  const bounded = addBeamAxis(graph, H, 1000, { lo: 0, hi: 5000, origin: BeamAxisOrigin.SLAB_BEAM });
+  const unbounded = addBeamAxis(graph, H, 3000);
+  const farBounded = addBeamAxis(graph, H, 4000, { lo: 8000, hi: 9000, origin: BeamAxisOrigin.SLAB_BEAM });
+  assert.equal(isSameDirectionObstacle(bounded, unbounded), true, '相手が無限');
+  assert.equal(isSameDirectionObstacle(unbounded, bounded), true, '主体が無限');
+  assert.equal(isSameDirectionObstacle(unbounded, farBounded), true, '主体が無限なら遠い範囲とも重なる');
+  const half = addBeamAxis(graph, H, 5000, { lo: 0, hi: null });
+  assert.equal(isSameDirectionObstacle(half, bounded), true, '片側だけ null も無限扱い');
+});
+
+test('【S2d】computeMoveRange: 通り芯の移動は SLAB_BEAM の梁芯で止まらず、USER・OPENING・WALL・FLOOR_BEAM・由来なしの梁芯では止まる', () => {
+  const rangeFor = (origin) => {
+    const graph = makeGraph();
+    graph.addCenterLine(CenterLineType.HORIZONTAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+    const moving = graph.addCenterLine(CenterLineType.HORIZONTAL, 7000, { labeled: true, discipline: Discipline.STRUCT });
+    addBeamAxis(graph, CenterLineType.HORIZONTAL, 4666.67, { lo: 0, hi: 5000, origin });
+    const bundle = { centerLines: graph.centerLines, walls: graph.walls, diagonals: [] };
+    const { offsetOf } = collectFollowerOffsets(bundle, moving);
+    return computeMoveRange(bundle, moving, offsetOf);
+  };
+  assert.deepEqual(rangeFor(BeamAxisOrigin.SLAB_BEAM), { min: 0, max: Infinity }, 'SLAB_BEAM は通り芯 y=0 までの範囲を狭めない（S1 前の上限へ戻る）');
+  for (const origin of [BeamAxisOrigin.USER, BeamAxisOrigin.OPENING, BeamAxisOrigin.WALL, BeamAxisOrigin.FLOOR_BEAM, null]) {
+    assert.deepEqual(rangeFor(origin), { min: 4666.67, max: Infinity }, `由来 ${origin} は従来どおり障害物`);
+  }
+});
+
+test('【S2d】beamAxisMoveRange: 隣のベイ（extent が重ならない）の梁芯には止められないが、同じベイの隣の梁芯・ベイの辺の通り芯では止まる（U5）', () => {
+  const graph = makeGraph();
+  const H = CenterLineType.HORIZONTAL;
+  graph.addCenterLine(H, 0,     { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(H, 7000,  { labeled: true, discipline: Discipline.STRUCT });
+  const a = addBeamAxis(graph, H, 2000, { lo: 0, hi: 5000, origin: BeamAxisOrigin.SLAB_BEAM });
+  addBeamAxis(graph, H, 4000, { lo: 0, hi: 5000, origin: BeamAxisOrigin.SLAB_BEAM });       // 同じベイの隣
+  addBeamAxis(graph, H, 1000, { lo: 5000, hi: 10000, origin: BeamAxisOrigin.SLAB_BEAM });   // 隣のベイ（端で接するだけ）
+  assert.deepEqual(beamAxisMoveRange(graph, a), { min: 0 + CL_OVERLAP_TOL_MM, max: 4000 - CL_OVERLAP_TOL_MM },
+    '下は辺の通り芯（隣のベイの 1000 は無視）、上は同じベイの隣の梁芯（順番が入れ替わらない）');
+});
+
+test('【S2d・失敗系】beamAxisMoveRange: extent が null の梁芯は別ベイの位置にあっても止める（範囲不明は無限扱い）', () => {
+  const graph = makeGraph();
+  const H = CenterLineType.HORIZONTAL;
+  graph.addCenterLine(H, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const a = addBeamAxis(graph, H, 2000, { lo: 0, hi: 5000, origin: BeamAxisOrigin.SLAB_BEAM });
+  addBeamAxis(graph, H, 1000);
+  assert.equal(beamAxisMoveRange(graph, a).min, 1000 + CL_OVERLAP_TOL_MM);
+});
+
+test('【S2d】findBeamAxisMoveSnap: 隣のベイの梁芯は挟む区間の端にならない（吸着先は同じベイの障害物の中点・3等分点）', () => {
+  const graph = makeGraph();
+  const H = CenterLineType.HORIZONTAL;
+  graph.addCenterLine(H, 0,    { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(H, 6000, { labeled: true, discipline: Discipline.STRUCT });
+  const moving = addBeamAxis(graph, H, 2000, { lo: 0, hi: 5000, origin: BeamAxisOrigin.SLAB_BEAM });
+  addBeamAxis(graph, H, 1000, { lo: 5000, hi: 10000, origin: BeamAxisOrigin.SLAB_BEAM }); // 隣のベイ（無視される）
+  assert.equal(findBeamAxisMoveSnap(graph, moving, 3000, 3000, 50, 1, 1), 3000, '通り芯 0〜6000 の中点（隣のベイの 1000 が障害物なら 3500）');
 });
 
 // ---- sameCoordCounterparts: 同座標の相手を列挙する走査API（種別による絞り込みは行わない）----

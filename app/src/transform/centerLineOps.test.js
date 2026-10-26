@@ -5741,6 +5741,26 @@ test('promoteCenterToGridWithUndo: 直交通り芯があれば通り芯化しund
 // 壁由来梁芯を吸収して撤去する（ユーザー裁定・案A・2026-09-25）。保護判定は
 // structural/wallBeamAxes.jsのisProtectedWallBeamAxis（orphanedWallBeamAxesと共有する単一の述語）。
 
+test('【S2d】promoteCenterToGridWithUndo: 同座標の未編集の自動梁芯（SLAB_BEAM）は阻まず吸収されるが、手を加えた梁芯（USER）は従来どおり昇格を拒否する', async () => {
+  const run = async (origin) => {
+    const { project, graph } = makeProjectWithGraph();
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+    const cl = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+    const beam = graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: origin });
+    const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
+    return { toast, graph, beam, promoted: project.structGraph.shapeMap.get(cl.id) === cl };
+  };
+  const slab = await run(BeamAxisOrigin.SLAB_BEAM);
+  assert.equal(slab.toast, null);
+  assert.equal(slab.promoted, true);
+  assert.equal(slab.graph.shapeMap.has(slab.beam.id), false, 'SLAB_BEAM は吸収されて消える（再計算で割り直される）');
+  const user = await run(BeamAxisOrigin.USER);
+  assert.notEqual(user.toast, null, 'USER は保護される');
+  assert.equal(user.promoted, false);
+  assert.equal(user.graph.shapeMap.has(user.beam.id), true);
+});
+
 test('promoteCenterToGridWithUndo: 保護されない壁由来梁芯が同座標にあっても昇格が成功し梁芯が消え、undoで同idのまま戻る', async () => {
   const { project, graph } = makeProjectWithGraph();
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: true, discipline: Discipline.STRUCT });

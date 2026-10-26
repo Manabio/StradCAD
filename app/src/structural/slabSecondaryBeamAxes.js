@@ -9,7 +9,8 @@
 // 印——子梁の固定・削除などの手が入った梁芯は USER へ替え、そのベイの枠を除外集合へ記録して以後は動かさない。
 //
 // react/konva/store/.jsx を静的に引かない（node:test から単体 import 可能）。
-// 個別の削除・移動の記録は slabBeamSlotKeyFor（centerLineOps.js が呼ぶ）。移動の障害物は後続ステップ（S2d）。
+// 個別の削除・移動の記録は slabBeamSlotKeyFor（centerLineOps.js が呼ぶ）。移動の障害物は
+// core/centerLineKindPolicy.js isSameDirectionObstacle（梁芯どうしは extent が重なるときだけ・通り芯は SLAB_BEAM を止めない）。
 // ================================================================
 import { CenterLineType, Discipline } from '../core.js';
 import { BeamRole, CL_OVERLAP_TOL_MM, SlabBayFillSkip, SlabSecondaryBeamPlacement, SLAB_BEAM_SLOT_KEY_PREFIX } from '../core/constants.js';

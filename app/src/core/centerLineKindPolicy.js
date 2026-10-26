@@ -50,7 +50,7 @@
  * isGridCenterLine）と ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/
  * core.js バレル/error.js は静的 import しない——node:test から本ファイルを単体 import 可能に保つため。
  */
-import { centerLineKind, isGridCenterLine } from './centerLine.js';
+import { centerLineKind, isGridCenterLine, BeamAxisOrigin } from './centerLine.js';
 import { CenterLineType, CL_OVERLAP_TOL_MM } from './constants.js';
 
 // 末尾の 'ceiling'（天井芯。天伏モードの天井セルだけを割る線。S8a・2026-10-10）は既存4種別の並びを変えない
@@ -329,7 +329,7 @@ const STRUCTURAL_ANCHOR_KINDS_ANY = Object.freeze(CL_KINDS.filter(k =>
 //   - 開口由来＝規則O（structural/openingBeamAxes.js autoFillOpeningBeamAxes。beamAxisOrigin:
 //     'opening'。対象はS造・RC造・SRC造——structureRules.js openingBeamAxes:'slabOpenings'。
 //     通り芯上の辺は大梁の領分のため生成しない）
-//   - 規則C（開口以外の中心線からのS造梁芯選定）は未裁定（.claude/structural-model.md参照）
+//   - 規則C（開口以外の中心線からのS造梁芯選定）は裁定済み（S造はスラブの子梁の等間隔割付けで置き換え。.claude/structural-model.md参照）
 export const BEAM_AXIS_KINDS = Object.freeze(['beam']);
 
 // woodAutoFill.js 支持長超過時の追加柱の走行方向候補（ユーザー指示2026-09-19「梁の支持長が1820を超える
@@ -721,11 +721,36 @@ export function isOrthoAnchorCandidate(subject, other, { coord = subject.value, 
   return matchesOrthoAnchor(centerLineKind(subject), subject.centerLineType, other, coord, tolMm);
 }
 
-/** other が subject と同方向（同 centerLineType）の移動障害物候補か（移動範囲・移動スナップで使う）。 */
+// 2つの梁芯の extent（軸方向の範囲）が tol を超えて重なるか。null（範囲未設定）は無限扱い＝重なる。
+// 端点で接するだけ（隣のベイとの共有辺）は重ならない（structural/fixedBeamOverlap.js spansOverlapOnAxis と同じ開区間規約）。
+function extentsOverlapBeyondTol(a, b, tolMm) {
+  const aLo = a.extentLo ?? -Infinity, aHi = a.extentHi ?? Infinity;
+  const bLo = b.extentLo ?? -Infinity, bHi = b.extentHi ?? Infinity;
+  return aLo < bHi - tolMm && aHi > bLo + tolMm;
+}
+
+/**
+ * other が subject と同方向（同 centerLineType）の移動障害物候補か（移動範囲・移動スナップで使う）。
+ * 種別の表（sameDirectionObstacleKinds）に加え、表では書けない2つの絞り込みがある（data-model.md「CL種別間の関係」）:
+ *  1. 梁芯×梁芯のうち**どちらかが由来 SLAB_BEAM の組**: 軸方向の extent が tol を超えて重なるときだけ障害物
+ *     （別のベイの同座標付近の梁芯は物理的にぶつからない。ベイの外へ出られない・同じベイの隣を追い越せないのは、
+ *     辺の通り芯・梁芯と隣の梁芯が重なるため）。SLAB_BEAM が絡まない組（在来木造の床梁・壁由来など）は従来どおり常に障害物。
+ *  2. 通り芯×未編集の自動梁芯（由来 SLAB_BEAM）: 障害物にしない（2026-10-24 裁定「平面で見えない梁芯に阻まれない」）。
+ *     未編集の自動梁芯は通り芯の移動後の再計算で割り直されるので止めなくてよい。手を加えた梁芯（USER など）は
+ *     障害物のまま。種別単位の表（SAME_DIRECTION_OBSTACLE_OVERRIDE）では書けない由来単位の除外。
+ */
 export function isSameDirectionObstacle(subject, other) {
   if (subject === other) return false;
   if (subject.centerLineType !== other.centerLineType) return false;
-  return sameDirectionObstacleKinds(centerLineKind(subject)).includes(centerLineKind(other));
+  const subjectKind = centerLineKind(subject);
+  const otherKind = centerLineKind(other);
+  if (!sameDirectionObstacleKinds(subjectKind).includes(otherKind)) return false;
+  if (subjectKind === 'beam' && otherKind === 'beam'
+    && (subject.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM || other.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM)) {
+    return extentsOverlapBeyondTol(subject, other, CL_OVERLAP_TOL_MM);
+  }
+  if (subjectKind === 'struct' && otherKind === 'beam' && other.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM) return false;
+  return true;
 }
 
 /** other が subject の移動スナップ吸着先候補か（moveSnapTargetKinds ベース。findCLMoveSnap で使う）。 */
@@ -1107,9 +1132,9 @@ export function beamAxesAt(graph, { centerLineType, coord, tolMm = CL_OVERLAP_TO
 
 /**
  * coord（effectiveValue基準、tolMm以内）に一致する梁芯CL（BEAM_AXIS_KINDS）を graph.centerLines から
- * 1本返す走査API（structural/wallBeamAxes.js findWallBeamAxisCL——壁由来梁芯の追従元探索。通り芯は
- * 対象にしない）。`beamAxesAt`の先頭1本を返す薄い包み（同座標に複数本ある場合の扱いは呼び出し側が
- * 決める——追従元探索は「1本目が見つかれば十分」という前提のまま変えない）。
+ * 1本返す走査API（通り芯は対象にしない）。`beamAxesAt`の先頭1本を返す薄い包み（同座標に複数本ある
+ * 場合の扱いは呼び出し側が決める）。壁由来梁芯の追従元探索 structural/wallBeamAxes.js findWallBeamAxisCL は
+ * 由来 SLAB_BEAM を除く必要があるため beamAxesAt から自前で選ぶ（本関数は使わない）。
  * @param {{centerLines: Array}} graph
  * @param {{centerLineType: string, coord: number, tolMm?: number}} opts
  * @returns {object|null}

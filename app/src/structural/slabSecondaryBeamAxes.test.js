@@ -10,7 +10,7 @@ import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
-import { SlabBayFillSkip, STEEL_SECONDARY_BEAM_MAX_PITCH_MM } from '../core/constants.js';
+import { SlabBayFillSkip, STEEL_SECONDARY_BEAM_MAX_PITCH_MM, CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { reconcileSlabSecondaryBeamAxes, slabBeamSlotKeyFor, planSlabSecondaryBeamAxes, slabBeamSlotKey, parseSlabBeamSlotKey } from './slabSecondaryBeamAxes.js';
 import { exclusionKeyReferencesCL } from '../core/structuralEntities.js';
 import { autoFillSecondaryBeams } from './structuralAutoFill.js';
@@ -1037,4 +1037,85 @@ test('【S2b】同じ座標に通り芯と OPENING 由来梁芯が並ぶ辺は�
   secondaries(b.graph).find(k => k.axisCL.id === a.id).setDimensionStatus('locked');
   reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
   assert.deepEqual([...b.graph.excludedSlabBeamSlots], [slabBeamSlotKey({ ...bayIds(b), dir: CenterLineType.HORIZONTAL, n: 3, i: 1 })]);
+});
+
+// ---- S2d: 平面で見えない子梁芯に通り芯の移動が阻まれない／個別の移動は別ベイの梁芯に止められない ----
+// 本番の移動範囲（resolveMoveRange。通り芯は他階を peek して障害物を集める）を、peek を2階分だけ差し替えて呼ぶ。
+async function moveRangeOf(p, cl) {
+  const { resolveMoveRange } = await import('../transform/followerGraph.js');
+  const original = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => ({ p1: p.g1, p2: p.g2 })[plane.id] ?? null;
+  try {
+    const r = await resolveMoveRange(p.project, p.g2, cl);
+    assert.ok(r.range, '随伴探査の上限を超えない');
+    return r.range;
+  } finally { floorSwapManager.peek = original; }
+}
+
+test('【S2d・配線】通り芯 y=7000 の移動範囲は SLAB_BEAM の子梁芯（2333・4667）で止まらず、辺の通り芯 y=0 までになる。y=0 の上側も 7000 まで', async () => {
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  assert.equal(slabAxesOf(p.g2).length, 2, '前提: 子梁芯が2本ある');
+  assert.deepEqual(await moveRangeOf(p, p.g2.gridYs.find(g => g.value === 7000)), { min: 0, max: Infinity });
+  assert.deepEqual(await moveRangeOf(p, p.g2.gridYs.find(g => g.value === 0)), { min: -Infinity, max: 7000 });
+});
+
+test('【S2d・配線・U3】手を加えた（動かして USER になった）梁芯は通り芯の移動を止める。他の SLAB_BEAM は止めない', async () => {
+  const { commitCLMoveOp } = await import('../transform/centerLineOps.js');
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const [a, c] = slabAxesOf(p.g2);
+  const original = a.value;
+  a.pendingDelta = 500;
+  commitCLMoveOp(p.g2, p.project, a, original);
+  assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER);
+  assert.equal(c.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM);
+  assert.deepEqual(await moveRangeOf(p, p.g2.gridYs.find(g => g.value === 7000)), { min: original + 500, max: Infinity },
+    'USER の梁芯（a）で止まる。c（SLAB_BEAM・4667）は止めない');
+});
+
+test('【S2d・配線】通り芯 10000→7000（子梁芯 7500 を越える）: 再計算で割り直され、ピッチ≤2500・changed 収束。undo で元の3本が元の id・座標に戻る', async () => {
+  const { commitCLMoveOp, setCenterLineStructuralListener } = await import('../transform/centerLineOps.js');
+  const { undoManager } = await import('../undoManager.js');
+  const p = await buildS2FProject([0, 5000], [0, 10000]);
+  await p.run(3);
+  const before = slabAxesOf(p.g2).map(x => [x.id, x.value]);
+  assert.deepEqual(before.map(x => x[1]), [2500, 5000, 7500]);
+  const grid = p.g2.gridYs.find(g => g.value === 10000);
+  assert.deepEqual(await moveRangeOf(p, grid), { min: 0, max: Infinity }, '前提: 7500 の子梁芯を越えて動かせる');
+  let pending = Promise.resolve([]);
+  setCenterLineStructuralListener(() => { pending = pending.then(() => p.run(3)); });
+  try {
+    grid.pendingDelta = -3000;
+    commitCLMoveOp(p.g2, p.project, grid, 10000, { saveFloorFn: async () => {} });
+    const changed = await pending;
+    assert.deepEqual(changed, [true, false, false]);
+    const axes = slabAxesOf(p.g2);
+    assert.deepEqual(axes.map(x => x.value), [7000 / 3, 2 * (7000 / 3)], '越えられた 7500 は孤児として撤去、残りは 7000 の 3 等分へ割り直し');
+    const ys = [0, ...axes.map(x => x.value), 7000];
+    assert.ok(ys.slice(1).every((y, i) => y - ys[i] <= MAX), 'ピッチ≤2500');
+    assert.deepEqual(axes.map(x => x.id), before.slice(0, 2).map(x => x[0]), '1・2本目は同じ id で張り直される');
+    assert.equal(p.g2.beams.filter(b => b.role === 'secondary').length, 2);
+    undoManager.undo(); await pending;
+    const undone = slabAxesOf(p.g2).map(x => [x.id, x.value]);
+    assert.deepEqual(undone.map(x => x[1]), before.map(x => x[1]), 'undo: 元の座標');
+    assert.deepEqual(undone.slice(0, 2), before.slice(0, 2), 'undo: 張り直された2本は元の id');
+    // 既知の限界（cl-conversion-limits.md）: 本数が減る移動で撤去された3本目の id は、undo で作り直されるため戻らない。
+    assert.notEqual(undone[2][0], before[2][0]);
+  } finally { setCenterLineStructuralListener(null); }
+});
+
+test('【S2d・配線・U5】横に並ぶ2ベイ: 左のベイの子梁芯の移動範囲は、右のベイの梁芯（extent が接するだけ）に止められず、同じベイの隣と辺の通り芯で止まる', async () => {
+  const { beamAxisMoveRange } = await import('./beamAxisMove.js');
+  const p = await buildS2FProject([0, 5000, 10000], [0, 7000]);
+  await p.run(3);
+  const left = slabAxesOf(p.g2).filter(a => a.extentHi === 5000);
+  assert.equal(left.length, 2);
+  const [a, b] = left;
+  // 右のベイにだけ y=1000 の手動の梁芯（USER）を足す: 左の子梁芯の下限になってはならない。
+  p.g2.addCenterLine(CenterLineType.HORIZONTAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER, extentLo: 5000, extentHi: 10000,
+  });
+  assert.deepEqual(beamAxisMoveRange(p.g2, a), { min: 0 + CL_OVERLAP_TOL_MM, max: b.value - CL_OVERLAP_TOL_MM },
+    '下は辺の通り芯 y=0（右のベイの y=1000 は無視）、上は同じベイの隣（順番が入れ替わらない）');
 });

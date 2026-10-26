@@ -700,6 +700,15 @@ test('【findBeamAnchorCLとの違い】findWallBeamAxisCL: 通り芯（labeled�
     'findBeamAnchorCLは通り芯にも一致するが、findWallBeamAxisCLは意図的に一致させない');
 });
 
+test('【S2d】findWallBeamAxisCL: 由来 SLAB_BEAM（スラブ小梁の割付け）は壁由来として拾わない。同座標の壁由来の梁芯があればそちらを返す', () => {
+  const graph = makeGraph('p1', 0);
+  const slab = graph.addCenterLine(CenterLineType.HORIZONTAL, 2045, { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM });
+  assert.equal(findWallBeamAxisCL(graph, false, 2045), null, 'SLAB_BEAM だけなら見つからない（壁の帯の動きに引きずらない）');
+  const wall = graph.addCenterLine(CenterLineType.HORIZONTAL, 2045, { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.WALL });
+  assert.equal(findWallBeamAxisCL(graph, false, 2045), wall, '同座標に壁由来があればそれを返す（先頭の SLAB_BEAM に邪魔されない）');
+  assert.notEqual(findWallBeamAxisCL(graph, false, 2045), slab);
+});
+
 test('wallBeamAxisExcludeKey: autoFillWallBeamAxesの除外キーと同じ書式（X|Y:座標丸め）を返す', () => {
   assert.equal(wallBeamAxisExcludeKey(true, 2045.6), 'X:2046');
   assert.equal(wallBeamAxisExcludeKey(false, 2045.4), 'Y:2045');
