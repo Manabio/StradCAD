@@ -30,6 +30,22 @@
 //     それらは種別判定ではないため「比較演算子を伴う場合」だけに絞ることで機械的に除外する（限界:
 //     CenterLine以外のShape（Wall等）が同名フィールドを比較する将来のコードは区別できず誤検出になり
 //     うるが、実測ではapp/src中の比較演算子つき出現はすべてCenterLineに対するものだった）。
+// G5: 同座標の線から相手を選ぶ入口の固定（限界16 (i)、2026-10-27）。他階の対応する線を「座標だけ」で
+//     探していたため、梁芯が中心線の代わりに選ばれた不良（課題(i) i1）の再発防止。
+//     G5a: `sameCoordCounterparts(` の呼び出し（種別を問わず同座標の線を全部返す走査API）を、製品コード
+//          （許可ドメイン=core/。定義側）ではファイルごとの件数で固定する。呼び出し側は戻り値から
+//          「どの種別をどう選ぶか」を自分で決めるため、新しい呼び出しが増えたら種別の扱いを理由欄に
+//          書いて足す（category 'caller-chooses-kind'）。
+//     G5b: 種別を見ない `findCounterpartCL(` の呼び出し（定義 `function findCounterpartCL(` は数えない）を
+//          finish/floorCLMap.js の2件に固定し、他ファイルは0。他階の対応する線は findCounterpartForCL
+//          （同種別）を使う。
+//     どちらも codeOnly で数える（コメント・文字列の中の語は数えない）。数えるのは「識別子の出現」
+//     （`\b名前\b`。import 行・呼び出し・値としての参照・`P.名前(` のすべて。`function 名前` の定義は除く、
+//     別名の識別子 `名前Foo`・`my名前`・findCounterpartForCL は `\b` で一致しない）。呼び出し形だけを
+//     数えると `import { 名前 as f }` して f() を呼ぶ・`const f = 名前` する形ですり抜けるため。import 別名・
+//     値としての受け渡しも件数が変わって赤になる（件数は import 行を含む）。
+//     残る限界: (1) 登録済みファイルが包み関数を新たに export して他ファイルから呼ばれる経路（件数は
+//     変わらない）。(2) 許可ドメイン core/ の除外（G5a。core/ 内の新しい使い方は数えない）。
 //
 // 数え方: ソースを1文字ずつ走査するトークナイザ（tokenize、下記）でコメント（`//`・`/* */`）・
 // 文字列リテラル（'・"・`）・正規表現リテラルの境界を認識したうえで、2種類のテキストを作る——
@@ -242,6 +258,12 @@ const RE_DISCIPLINE    =
 const RE_LINETYPE      =
   /\.lineType\s*[!=]==?\s*(?:'[^'\n]*'|"[^"\n]*")|(?:'[^'\n]*'|"[^"\n]*")\s*[!=]==?\s*[\w$]+(?:\.[\w$]+)*\.lineType/g;
 
+// G5: 識別子の出現を数える（import 行・呼び出し・値としての参照・`P.name(` のすべて。`function ` 直後の
+// 定義だけ除く）。`\b` で別名（sameCoordCounterpartsFoo・myFindCounterpartCL・findCounterpartForCL）は除く。
+// 呼び出し形だけを数えると `import { findCounterpartCL as f }` して f() を呼ぶ形ですり抜けるため。
+const RE_SAME_COORD_CALL = /(?<!function\s+)\bsameCoordCounterparts\b/g;
+const RE_FIND_COUNTERPART_CL_CALL = /(?<!function\s+)\bfindCounterpartCL\b/g;
+
 function isUnderRoot(rel, root) {
   return rel === root || rel.startsWith(`${root}/`);
 }
@@ -256,6 +278,11 @@ const G2G3_EXEMPT_FILES = new Set(['graphSnapshot.js']);
 function isG2G3Exempt(rel) {
   return isG1Exempt(rel) || G2G3_EXEMPT_FILES.has(rel);
 }
+// G5a 許可ドメイン: core/（sameCoordCounterparts の定義側）だけ。G5b は許可ドメインなし（定義は数えない）。
+function isG5aExempt(rel) {
+  return isUnderRoot(rel, 'core');
+}
+const isG5bExempt = () => false;
 
 // ================================================================
 // allowlist（残課題の台帳）
@@ -265,6 +292,9 @@ function isG2G3Exempt(rel) {
 //                              （シリアライズ・id解決・全件列挙・reactionの依存収集・幾何署名判定等）。
 //   'unmigrated'             — 相手選択だが、既存ロジックへの手入れが波及大のため本ステップでは
 //                              未移行（別タスクで種別ベースへ統一する）。
+//   'caller-chooses-kind'    — G5 専用。相手選択そのもの（同座標の線のうち何を相手にするかを呼び出し側が
+//                              決める）で、種別の扱い（絞り込み・優先順・全種別を対象にする等）を
+//                              呼び出し側のコードで決めている。reason に「何をどう選ぶか」を書くこと。
 
 // ---- G1: `.centerLines` 直接参照 ----
 const G1_ALLOWLIST = {
@@ -382,6 +412,44 @@ const G3_ALLOWLIST = {
 const G4_ALLOWLIST = {
 };
 
+// ---- G5a: `sameCoordCounterparts(` の呼び出し（core/ を除く） ----
+const G5A_ALLOWLIST = {
+  'transform/centerLineOps.js': { count: 3, category: 'caller-chooses-kind',
+    reason: '件数は import 行を含む識別子の出現数（import 1＋呼び出し2）。:1444 スパン配列の通り芯追加の重複除外（includeCeilingOnly 既定=false で天井芯は除くが、' +
+      '残りは種別を問わず1本でもあれば同座標とみなしてその値を飛ばす＝全種別が相手）。' +
+      ':1594 単体追加の重複判定（includeCeilingOnly:true。同座標の全種別を取り、同種別を先に、無ければ' +
+      'CL_KINDS の優先順で existing を1本選ぶ。梁芯ガードは全件に対して coexistenceAt で判定）。' },
+  'transform/centerLineFloorSync.js': { count: 3, category: 'caller-chooses-kind',
+    reason: '件数は import 行を含む識別子の出現数（import 1＋呼び出し2）。:97 findFloorsWithCounterpartCL（他階の peek グラフで同座標を取り、CROSS_FLOOR_COUNTERPART_KINDS ' +
+      'に含まれる種別だけに絞って、吸収可能な梁芯・昇格で吸収される種別を除く＝種別は呼び出し側のフィルタで決める）。' +
+      ':733 findCenterLinesToAbsorbForValues（他階の同座標から isPromoteAbsorbedKind の種別＝吸収される中心線' +
+      'だけを id で拾う）。' },
+  'transform/centerLineConvert.js': { count: 3, category: 'caller-chooses-kind',
+    reason: '件数は import 行を含む識別子の出現数（import 1＋呼び出し2）。:166 昇格ガード（convertBlockingKinds(\'promote\') の各種別ごとに、struct は structGraph・それ以外は' +
+      '階グラフを走査し、同座標のうちその種別（梁芯は保護されないものを除く）が1本でもあれば拒否）。' +
+      ':244 降格ガード（階グラフの同座標を取り、convertBlockingKinds(\'demote\') の並び順＝中心線＞補助線で' +
+      '最初に見つかった種別を障害物とする。exclude で自分自身を除く）。' },
+  'finish/floorCLMap.js': { count: 6, category: 'caller-chooses-kind',
+    reason: '件数は import 行を含む識別子の出現数（import 1＋呼び出し5）。:55 findCounterpartCL 本体（種別を見ない。predicate 省略時は同座標の先頭＝G5b で呼び出しを固定）。' +
+      ':72 findCounterpartForCL 本体（同座標のうち isFloorClMapCounterpart＝同じ種別だけに絞り、範囲の' +
+      '重なりを優先して1本選ぶ＝種別ベースの正規の入口）。:238 セルキー辺の置換（同座標のうち' +
+      'isFinishCellDivider かつ辺を覆う分割線を探す）。:251 extendOneEdge（同座標の有無の確認と、' +
+      'isFinishCellDivider の分割線だけを延長対象にする）。:266 同関数の延長ループ（同座標の分割線ピースだけ' +
+      'を引き直す）。' },
+  'finish/stair/stairPartitionWalls.js': { count: 2, category: 'caller-chooses-kind',
+    reason: '件数は import 行を含む識別子の出現数（import 1＋呼び出し1）。:41 findDividerCL（同座標のうち isFinishCellDivider の分割線だけに絞り、coverCoords をすべて' +
+      '軸方向に覆う先頭の1本を返す）。' },
+};
+
+// ---- G5b: 種別を見ない `findCounterpartCL(` の呼び出し（定義は数えない） ----
+const G5B_ALLOWLIST = {
+  'finish/floorCLMap.js': { count: 2, category: 'caller-chooses-kind',
+    reason: '件数は識別子の出現数（定義は除く。同ファイル内なので import 行は無く呼び出し2）。:136 translateCellKeyId（セルキーの例外＝2026-10-27 ユーザー裁定 案A。同種別が無いときだけ同座標の' +
+      '線へ写す。null だと上階の同座標に梁芯・補助線しか無い階段の足元が写らず吹抜けが置かれない）。' +
+      ':342 addMissingCLs の「対応先あり」判定（isCounterpart 省略時は種別を問わず先頭を対応先とみなす。' +
+      'U4 で据え置き＝階段の既存挙動を変えない。昇降機の経路は isFinishCellDivider を渡す）。' },
+};
+
 // variant: 'codeOnly'（文字列・正規表現の中身も空白化。G1/G2用）または
 // 'withoutComments'（文字列はそのまま。G3/G4用）。regexes は複数渡せば合算する（G1の
 // RE_CENTERLINES + RE_DESTRUCTURE_CENTERLINES、G4の RE_DISCIPLINE + RE_LINETYPE 用）。
@@ -450,6 +518,50 @@ test('【ガード G4】app/src 配下の製品コードは discipline／lineTyp
     'に理由付きで追加してください。');
 });
 
+test('【ガード G5a】app/src 配下の製品コードは sameCoordCounterparts( の呼び出しを増やさない（許可ドメイン=core/。それ以外は allowlist の件数のみ許可。種別の扱いは reason に書く）', () => {
+  const actual = buildActual(files, RE_SAME_COORD_CALL, isG5aExempt, 'codeOnly');
+  assertAgainstAllowlist(actual, G5A_ALLOWLIST, 'G5a (sameCoordCounterparts( の呼び出し)',
+    'sameCoordCounterparts は種別を問わず同座標の線を全部返す。他階の対応する線を探すなら ' +
+    'findCounterpartForCL（finish/floorCLMap.js。同種別だけ）を使ってください。それ以外の相手選択で' +
+    '本当に必要なら、呼び出し側で種別をどう扱うか（絞り込み・優先順・全種別を対象）を reason に書いて、' +
+    '本ファイルの G5A_ALLOWLIST に追加してください。');
+});
+
+test('【ガード G5b】種別を見ない findCounterpartCL( の呼び出しは finish/floorCLMap.js の2件（セルキーの例外・addMissingCLs の対応先あり判定）だけ。定義は数えない', () => {
+  const actual = buildActual(files, RE_FIND_COUNTERPART_CL_CALL, isG5bExempt, 'codeOnly');
+  assertAgainstAllowlist(actual, G5B_ALLOWLIST, 'G5b (findCounterpartCL( の呼び出し)',
+    '他階の対応する線は findCounterpartForCL（同種別。finish/floorCLMap.js）を使ってください。' +
+    'findCounterpartCL は種別を見ず、同座標に梁芯が先に並ぶと中心線の代わりに選ぶ（課題(i)・限界16 (i)）。');
+});
+
+test('【ガード自己診断】G5 の検出正規表現が識別子の出現（import・呼び出し・値参照）に一致し、定義・コメント・文字列・別名には一致しない', () => {
+  const callsIn = (src, re) => countMatches(tokenize(src).codeOnly, re);
+  const cases = [
+    [RE_SAME_COORD_CALL, 'sameCoordCounterparts', 'sameCoordCounterpartsFoo'],
+    [RE_FIND_COUNTERPART_CL_CALL, 'findCounterpartCL', 'myFindCounterpartCL'],
+  ];
+  for (const [re, name, alias] of cases) {
+    // 一致すべき形（各1件）
+    assert.equal(callsIn(`import { ${name} as f } from './floorCLMap.js';`, re), 1, `${name}: import 別名に一致しない`);
+    assert.equal(callsIn(`const f = ${name};`, re), 1, `${name}: 値としての参照に一致しない`);
+    assert.equal(callsIn(`P.${name}(g)`, re), 1, `${name}: P.name( に一致しない`);
+    assert.equal(callsIn(`const a = ${name}(g, {});`, re), 1, `${name}: 呼び出しに一致しない`);
+    assert.equal(callsIn(`const a = ${name} (g);`, re), 1, `${name}: 空白つきの呼び出しに一致しない`);
+    assert.equal(callsIn(`x.filter(c => ${name}(c))`, re), 1, `${name}: 式中の呼び出しに一致しない`);
+    // 一致してはいけない形（各0件）
+    assert.equal(callsIn(`export function ${name}(g, v) {}`, re), 0, `${name}: export 定義に一致した`);
+    assert.equal(callsIn(`function ${name}(g, v) {}`, re), 0, `${name}: 定義に一致した`);
+    assert.equal(callsIn(`// ${name}(g) を使う`, re), 0, `${name}: 行コメント内に一致した`);
+    assert.equal(callsIn(`/* ${name}(g) */`, re), 0, `${name}: ブロックコメント内に一致した`);
+    assert.equal(callsIn(`const s = '${name}(g)';`, re), 0, `${name}: 文字列内に一致した`);
+    assert.equal(callsIn(`const s = \`${name}(g)\`;`, re), 0, `${name}: テンプレートリテラル内に一致した`);
+    assert.equal(callsIn(`${alias}(g)`, re), 0, `${alias}: 別名に一致した`);
+    assert.equal(callsIn(`${alias}`, re), 0, `${alias}: 別名の識別子（呼び出し形でなくても）に一致した`);
+  }
+  // findCounterpartForCL（同種別の正規の入口）は G5b の対象外
+  assert.equal(callsIn('findCounterpartForCL(g, cl)', RE_FIND_COUNTERPART_CL_CALL), 0);
+});
+
 test('【ガード自己診断】G3・G4 の検出正規表現が意図した形だけに一致する', () => {
   // countMatches は String.prototype.match を使う——global正規表現でも毎回lastIndex=0から
   // 走査し直すため（match()自体の仕様）、同じ正規表現オブジェクトを使い回しても持ち越しは無い
@@ -488,10 +600,12 @@ test('【ガード自己診断】G3・G4 の検出正規表現が意図した形
   assert.equal(countMatches("graphList(wallGraph, 'walls')", RE_GRAPHLIST_CENTERLINES), 0);
 });
 
-test('【ガード自己診断】allowlist の全エントリは category が既定の2種のいずれかで、reason が空でない', () => {
-  for (const [name, table] of [['G1', G1_ALLOWLIST], ['G2', G2_ALLOWLIST], ['G3', G3_ALLOWLIST], ['G4', G4_ALLOWLIST]]) {
+test('【ガード自己診断】allowlist の全エントリは category が既定の3種のいずれかで、reason が空でない', () => {
+  const tables = [['G1', G1_ALLOWLIST], ['G2', G2_ALLOWLIST], ['G3', G3_ALLOWLIST], ['G4', G4_ALLOWLIST],
+    ['G5a', G5A_ALLOWLIST], ['G5b', G5B_ALLOWLIST]];
+  for (const [name, table] of tables) {
     for (const [rel, entry] of Object.entries(table)) {
-      assert.ok(['not-partner-selection', 'unmigrated'].includes(entry.category), `${name} ${rel}: 未知のcategory`);
+      assert.ok(['not-partner-selection', 'unmigrated', 'caller-chooses-kind'].includes(entry.category), `${name} ${rel}: 未知のcategory`);
       assert.ok(entry.reason && entry.reason.length > 0, `${name} ${rel}: reasonが空`);
       assert.ok(entry.count > 0, `${name} ${rel}: countは1以上のはず（0件ならallowlistから削除する）`);
     }
