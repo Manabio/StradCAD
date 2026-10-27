@@ -147,6 +147,46 @@ test('【k4・在来木造】autoFillStructuralGrid は在来木造（wallRuns�
   assert.equal(r.removedBeams.includes(wood.id), false);
 });
 
+// 小梁の生成・撤去は梁芯の id を鍵にしている（spanKey(cl, a, b)・beam.axisCL.id）。同じ座標で範囲の重なる梁芯が2本あると、
+// 同じ支えの組の上に梁芯ごとの小梁が1本ずつ乗る。2026-10-28 の実測では実データ・移動の試行の最終配置とも重複梁芯は 0 件だったため、
+// 座標を鍵にした重複除去（問題4.md 案4A）は入れず、HEAD の挙動をここで固定する。4A を入れるなら期待を 1 本へ反転する。
+test('【既知の限界（限界16 (k) の (4)）】同じ座標で範囲の重なる梁芯2本（片方は USER 由来）は、同じ支えの組の上に小梁が2本できる。prune で2回通しても2本のまま（増えず、消えない）', () => {
+  const sc = makeScene();
+  const dup = sc.graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING, extentLo: 0, extentHi: 8000,
+  });
+  assert.equal(sc.axis.beamAxisOrigin, BeamAxisOrigin.USER, '前提: 先の梁芯は USER 由来');
+
+  autoFillSecondaryBeams(sc.graph, PROJECT, { prune: true });
+  assert.deepEqual(spansOf(sc.graph, sc.axis), [[0, 8000]], 'USER 側に小梁 1 本');
+  assert.deepEqual(spansOf(sc.graph, dup), [[0, 8000]], '重複側にも同じ支えの組の小梁 1 本（座標では除かれない）');
+  assert.equal(sc.graph.beams.filter(b => b.role === 'secondary').length, 2);
+
+  const ids = sc.graph.beams.map(b => b.id).sort();
+  const again = autoFillSecondaryBeams(sc.graph, PROJECT, { prune: true });
+  assert.equal(again.created.length + again.removed.length, 0, '2回目は生成も撤去もしない（冪等・増えない）');
+  assert.deepEqual(sc.graph.beams.map(b => b.id).sort(), ids);
+  assert.equal(sc.graph.beams.filter(b => b.role === 'secondary').length, 2, '2本のまま');
+});
+
+test('【既知の限界（限界16 (k) の (4)）・対照】端で接するだけの2本（k1 の K1 裁定）は別線で、小梁は2本、それぞれ別の区間', () => {
+  const sc = makeScene({ primaryXs: [0, 4000, 8000] });
+  sc.graph.removeCenterLine(sc.axis.id); // 既定の [0,8000] の梁芯は外し、[0,4000] と [4000,8000] の2本に置き換える
+  const left = sc.graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER, extentLo: 0, extentHi: 4000,
+  });
+  const right = sc.graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING, extentLo: 4000, extentHi: 8000,
+  });
+
+  autoFillSecondaryBeams(sc.graph, PROJECT, { prune: true });
+  autoFillSecondaryBeams(sc.graph, PROJECT, { prune: true });
+
+  assert.deepEqual(spansOf(sc.graph, left), [[0, 4000]]);
+  assert.deepEqual(spansOf(sc.graph, right), [[4000, 8000]]);
+  assert.equal(sc.graph.beams.filter(b => b.role === 'secondary').length, 2);
+});
+
 test('【k4・配線】autoFillStructuralGrid（S造）の再計算で撤去した小梁の id が removedBeams に載る', () => {
   const sc = makeScene({ primaryXs: [0, 4000, 8000] });
   const stale = addSecondary(sc, sc.xs[0], sc.xs[2]);
