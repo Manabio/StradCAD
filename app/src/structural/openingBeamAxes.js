@@ -472,7 +472,8 @@ export function autoFillOpeningBeamAxes(graph, openingSources) {
  */
 /**
  * graph の梁芯CL（beamAxisOrigin===OPENING）のうち、座標（effectiveValue）と向きが openingSources の
- * いずれかと CL_OVERLAP_TOL_MM 以内で一致するものを{cl, src}の配列で返す（一致候補。孤児は含まない）。
+ * いずれかと CL_OVERLAP_TOL_MM 以内で一致するものを、梁芯と源が 1 対 1 になるよう{cl, src}の配列で返す
+ * （一致候補。割り当て規則は関数本体のコメント。孤児は含まない）。
  * reconcileOpeningBeamAxes（1段目）とretargetOpeningBeamAxisExtentsAfterCreate（2段目）が
  * 共有する走査（二重実装しない）。
  * @param {object} graph
@@ -482,13 +483,37 @@ export function autoFillOpeningBeamAxes(graph, openingSources) {
 function matchedOpeningCandidates(graph, openingSources) {
   const candidates = beamAxisCenterLines(graph).filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING);
   const isVerticalOf = (cl) => cl.centerLineType === CenterLineType.VERTICAL;
+  // (k) k1c: 同じ座標・向きの源が複数あっても、梁芯と源は 1 対 1。組んだ梁芯は生成の前に源の範囲へ張り直すので、
+  // 生成側（autoFillOpeningBeamAxes）の範囲判定（extentsOverlapBeyondTol）と食い違わない。
+  // 座標だけで先頭の源へ割り当てない（割り当てると同座標の 2 つ目の源の梁芯も 1 つ目の範囲へ張り直され、
+  // 生成側は 2 つ目の源が空いていると見て作る→再計算のたびに増え続けた）。
+  // 同じ座標・向きの全組を候補にし、符号付きの重なり（min(hi)-max(lo)。重ならなければ隙間のマイナス）の降順で
+  // 1 対 1 に確定する（同点は梁芯の並び順→源の順）。重なる組が先・重ならない組は隙間の小さい順（近い組どうし）になる。
+  // 同点の梁芯の並び順は、端の参照解決（extentTargetFor の座標フォールバック＝graph.centerLines の先頭）が
+  // 選ぶ梁芯を割り当て済み側に残すため。
+  // 範囲が重ならない梁芯（中心線の移動の追従などで extent が縮退した（長さ0）・辺から離れたもの）でも、座標が合う
+  // 空きの源があるなら同じ id のまま張り直して辺を覆わせる（孤児にすると、他CLの参照で保護された縮退した梁芯が残り、
+  // 新しい梁芯と二重になって小梁が欠けた。(k) k1c の実データ試行で確認）。
+  // どちらにも漏れた梁芯（同座標に空きの源が無い重複など）は孤児（reconcileOpeningBeamAxes の手順3・4）。
+  const pairs = [];
+  candidates.forEach((cl, ci) => {
+    openingSources.forEach((src, si) => {
+      if (src.isVertical !== isVerticalOf(cl) || Math.abs(src.coord - cl.effectiveValue) >= CL_OVERLAP_TOL_MM) return;
+      const overlap = Math.min(cl.extentHi ?? Infinity, src.hi) - Math.max(cl.extentLo ?? -Infinity, src.lo);
+      pairs.push({ cl, src, ci, si, overlap });
+    });
+  });
+  pairs.sort((a, b) => b.overlap - a.overlap || a.ci - b.ci || a.si - b.si);
+  const usedCL = new Set();
+  const usedSrc = new Set();
   const out = [];
-  for (const cl of candidates) {
-    const src = openingSources.find(s =>
-      s.isVertical === isVerticalOf(cl) && Math.abs(s.coord - cl.effectiveValue) < CL_OVERLAP_TOL_MM);
-    if (src) out.push({ cl, src });
+  for (const p of pairs) {
+    if (usedCL.has(p.ci) || usedSrc.has(p.si)) continue;
+    usedCL.add(p.ci);
+    usedSrc.add(p.si);
+    out.push(p);
   }
-  return out;
+  return out.sort((a, b) => a.ci - b.ci).map(({ cl, src }) => ({ cl, src }));
 }
 
 /**
