@@ -2125,8 +2125,8 @@ for (const structure of K1C_STRUCTURES) {
         assert.equal(secondaryCoveredLength(f.graph, true, x, 1500, 4500), 3000, `左の開口の垂直の辺 V${x} が梁で覆われる`);
       }
       for (const x of [6000, 7000]) {
-        assert.equal(secondaryCoveredLength(f.graph, true, x, 1500, 4500), 0,
-          `右の開口の垂直の辺 V${x} は梁で覆われない（既知の限界・k2: 直交する辺の端のつなぎ先 extentTargetFor が範囲を見ず同座標の先頭の梁芯（左の開口側）につながるため。k2 で直したら覆いの長さ 3000 へ反転する）`);
+        assert.equal(secondaryCoveredLength(f.graph, true, x, 1500, 4500), 3000,
+          `右の開口の垂直の辺 V${x} も梁で覆われる（端のつなぎ先は辺の座標を含む直交の梁芯。k2）`);
       }
     }
   });
@@ -2150,6 +2150,102 @@ for (const structure of ['S造', 'RC造(ラーメン)']) {
     assert.equal((await recomputeSameLine(f, structure)).changed, false, '収束している');
   });
 }
+
+for (const structure of ['S造', 'RC造(ラーメン)']) {
+  test(`【(k) k2・受け入れ（修復）】recomputeStructuralForGraph: ${structure} で端の参照が辺の座標を含まない梁芯（k2 前のコードが先頭の梁芯へつないだ状態）を指していても、再計算で含む梁芯へ張り直され小梁が乗る`, async () => {
+    const f = makeSameLineOpeningsFixture(`proj-k2-repair-${structure}`, structure);
+    await recomputeSameLine(f, structure);
+    const leftH = (y) => f.graph.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+      && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === y && cl.extentLo === -1000);
+    const rightV = f.graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+      && cl.centerLineType === CenterLineType.VERTICAL && (cl.value === 6000 || cl.value === 7000));
+    assert.equal(rightV.length, 2, '前提: 右の開口の垂直辺の梁芯が 2 本ある');
+    runInAction(() => {
+      for (const cl of rightV) {
+        f.graph.setCenterLineExtentRef(cl, 'lo', { clId: leftH(1500).id, offset: 0 }, null); // 範囲外（x:-1000〜3500）の梁芯
+        f.graph.setCenterLineExtentRef(cl, 'hi', { clId: leftH(4500).id, offset: 0 }, null);
+      }
+      for (const b of [...f.graph.beams]) if (rightV.some(cl => cl.id === b.axisCL.id)) f.graph.beamMap.delete(b.id);
+    });
+    assert.equal(secondaryCoveredLength(f.graph, true, 6000, 1500, 4500), 0, '前提: 範囲外を指す状態では梁が乗らない');
+    for (let i = 0; i < 2; i++) await recomputeSameLine(f, structure);
+    for (const x of [6000, 7000]) {
+      assert.equal(secondaryCoveredLength(f.graph, true, x, 1500, 4500), 3000, `V${x} は含む梁芯へ張り直されて梁で覆われる`);
+    }
+    for (const cl of rightV) {
+      assert.equal(cl.extentLoRef.clId === leftH(1500).id, false, '下端の参照は左の開口側の梁芯ではない');
+      assert.equal(cl.extentLo, 1500);
+      assert.equal(cl.extentHi, 4500);
+    }
+    assert.equal((await recomputeSameLine(f, structure)).changed, false, '収束している');
+  });
+}
+
+// ---- (k) k2: extentTargetFor——開口梁芯の端のつなぎ先は、辺の座標を extent に含む直交の梁芯だけ ----
+// V6000（y:1500〜4500）の下端 H1500 候補。手で組んだ源を autoFillOpeningBeamAxes へ渡して端の参照を見る。
+function k2Source(coordLo = 1500) {
+  return {
+    isVertical: true, coord: 6000, lo: coordLo, hi: 4500, outwardSign: 1, through: false, source: 'void', sources: ['void'],
+    beamWidthUnresolved: false, axisCLId: 'x', order: 0,
+    spanRefs: { lo: { kind: 'beam', coord: coordLo }, hi: { kind: 'grid', coord: 4500 } },
+  };
+}
+function k2Graph(extents) {
+  const g = makeGraph();
+  g.addCenterLine(CenterLineType.HORIZONTAL, 4500, GRID);
+  const cls = extents.map(([lo, hi]) => g.addCenterLine(CenterLineType.HORIZONTAL, 1500, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER, extentLo: lo, extentHi: hi,
+  }));
+  return { g, cls };
+}
+const k2V6000 = (created) => created.find(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 6000);
+
+test('【(k) k2・受け入れ】autoFillOpeningBeamAxes: 同座標に直交梁芯が範囲違いで 2 本あり先頭が辺の座標を含まないとき、含む方へつなぐ', () => {
+  const { g, cls } = k2Graph([[-1000, 3500], [3500, 8000]]);
+  const v = k2V6000(autoFillOpeningBeamAxes(g, [k2Source()]));
+  assert.ok(v, '開口梁芯が作られる');
+  assert.equal(v.extentLoRef?.clId, cls[1].id, '含む方（2 本目）へつなぐ。先頭（x:-1000〜3500）にはつながない');
+});
+
+test('【(k) k2・失敗系】autoFillOpeningBeamAxes: 辺の座標を含む直交梁芯が無いとき、参照は張らず静的値（spanRefs の coord）になる', () => {
+  const { g } = k2Graph([[-1000, 3500]]);
+  const v = k2V6000(autoFillOpeningBeamAxes(g, [k2Source()]));
+  assert.ok(v, '開口梁芯が作られる');
+  assert.equal(v.extentLoRef ?? null, null, '先頭へ戻さず参照なし');
+  assert.equal(v.extentLo, 1500, '静的値');
+});
+
+test('【(k) k2・境界】autoFillOpeningBeamAxes: 直交梁芯の端ちょうど（隙間 ≤ 許容差）は含むとみなしてつなぎ、許容差を超えて外れていればつながない', () => {
+  const touch = k2Graph([[3500, 6000]]);
+  assert.equal(k2V6000(autoFillOpeningBeamAxes(touch.g, [k2Source()])).extentLoRef?.clId, touch.cls[0].id, '端ちょうど');
+  const near = k2Graph([[3500, 6000 - CL_OVERLAP_TOL_MM * 0.6]]);
+  assert.equal(k2V6000(autoFillOpeningBeamAxes(near.g, [k2Source()])).extentLoRef?.clId, near.cls[0].id, '隙間が許容差以内');
+  const far = k2Graph([[3500, 6000 - CL_OVERLAP_TOL_MM * 2]]);
+  assert.equal(k2V6000(autoFillOpeningBeamAxes(far.g, [k2Source()])).extentLoRef ?? null, null, '許容差を超えて外れていればつながない');
+});
+
+test('【(k) k2・openingHostsFor (b)】openingBeamSourcesFor: RC下地壁の支え線の clId は、同座標の先頭の梁芯ではなく壁の範囲と重なる梁芯', () => {
+  const { graph, ya } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  graph.interiorWallBacking = RC_WALL_BACKING_CODES[0];
+  // 壁より先に、同座標（y=1000）で壁の範囲と重ならない梁芯を置く（座標だけで探すと先頭のこれにつながる）
+  const decoy = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER, extentLo: 20000, extentHi: 22000,
+  });
+  const wallAxisX0 = graph.addCenterLine(CenterLineType.VERTICAL, -2000, GRID);
+  const wallAxisX1 = graph.addCenterLine(CenterLineType.VERTICAL, 9000, GRID);
+  graph.addWall(ya, 0, false, wallAxisX0, 0, wallAxisX1, 0, { backingDepth: 120, wallFinish: 12.5 });
+  const project = {};
+  const wallAxes = autoFillWallBeamAxes(graph, wallBeamSourcesFor(graph, project, null));
+  const wallAxisCL = wallAxes.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && Math.abs(cl.value - 1000) < 1);
+  assert.ok(wallAxisCL && wallAxisCL.id !== decoy.id, '前提: 壁由来の梁芯が decoy とは別に作られる');
+  assert.ok(graph.centerLines.indexOf(decoy) < graph.centerLines.indexOf(wallAxisCL), '前提: decoy が先頭');
+
+  const sources = openingBeamSourcesFor(graph, project);
+  const left = sources.find(s => s.isVertical && s.coord === 2000);
+  assert.ok(left, '前提: 左辺が源になる');
+  assert.equal(left.spanRefs.lo.clId, wallAxisCL.id, '支え線は壁の範囲と重なる梁芯のid（decoy ではない）');
+});
 
 // 実データ opening-test.stq 2階 の再現: 吹抜け B（x:6000-7000, y:6500-7500）の下辺の意匠線 H6500 を通り芯 Y=9500 へ動かすと、
 // 追従で B の垂直辺の梁芯の extent が縮退する（長さ0）。縮退した梁芯は辺と範囲が重ならないが、座標が合う空きの源があるので

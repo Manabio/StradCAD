@@ -11,7 +11,7 @@ import { beamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { findSectionEntry } from './sectionCatalog.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import {
-  findBeamAnchorCL, findOpeningBeamAnchorCL, wallBeamAxisExcludeKey, wallBackingCenterCoord, wallBeamSourcesFor,
+  findWallBeamAnchorCL, findOpeningBeamAnchorCL, wallBeamAxisExcludeKey, wallBackingCenterCoord, wallBeamSourcesFor,
   unprotectedAmong,
 } from './wallBeamAxes.js';
 import { planOpeningEdgeBeams } from './openingEdgePlan.js';
@@ -200,7 +200,7 @@ export function openingEdgeComponents(graph, { riserOf = () => null, belowGraph 
 /**
  * 計画器（planOpeningEdgeBeams）へ渡す支え線（host）を集める（S/RC/SRC/未定。設計 D1）:
  *   (a) 通り芯（beamPlacement!=='wallRuns' のとき全長。通り芯上に大梁が立つ前提の代理）
- *   (b) RC下地壁由来の梁芯源（rcWallAxisSources。clIdは壁由来梁芯が既にあればそのid）
+ *   (b) RC下地壁由来の梁芯源（rcWallAxisSources。clIdは壁由来梁芯が既にあり、その範囲が壁の範囲と重なる（端で接するも含む＝壁由来梁芯の引き受け手と同じ述語）ものならそのid。k2）
  *   (c) 手動配置の梁（dimensionStatus!=='auto' の primary／secondary。clIdは梁の軸CL）。
  *       ただし軸CLの beamAxisOrigin が OPENING の梁は除く——規則O自身が作った小梁をユーザーが
  *       部材リストで固定（locked）しただけで辺が covered になり、架け方が組み替わる／中心線移動で
@@ -220,7 +220,7 @@ function openingHostsFor(graph, rules, rcWallAxisSources) {
   }
   for (const s of rcWallAxisSources) {
     const type = s.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
-    const cl = findBeamAnchorCL(graph, type, s.coord);
+    const cl = findWallBeamAnchorCL(graph, type, s.coord, { lo: s.lo, hi: s.hi });
     hosts.push({ isVertical: s.isVertical, coord: s.coord, lo: s.lo, hi: s.hi, kind: 'wall', ...(cl ? { clId: cl.id } : {}) });
   }
   for (const beam of graph.beams) {
@@ -371,7 +371,7 @@ export function openingBeamSourcesDiagnostics(graph, project, { riserOf = () => 
  * autoFillOpeningBeamAxes（新規生成）とreconcileOpeningBeamAxes（既存梁芯の役割照合・張り直し）が
  * 同じ計算を共有する——二重実装しない）。
  * 両端とも同じ手順: spanRefs.X.clId のCL（graph に今もあれば）→ 無ければ spanRefs.X.coord にある
- * 梁芯・通り芯（findBeamAnchorCL）→ それも無ければ静的値 spanRefs.X.coord。
+ * src.coord を extent に含む直交の梁芯・通り芯（findOpeningBeamAnchorCL）→ それも無ければ静的値 spanRefs.X.coord。
  * @param {object} graph
  * @param {object} src openingBeamSourcesForの1件
  * @returns {{loRef: {clId:string, offset:number}|null, hiRef: {clId:string, offset:number}|null,
@@ -381,7 +381,9 @@ function extentTargetFor(graph, src) {
   const orthoType = src.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
   const resolve = (ref) => {
     const byId = ref.clId != null ? resolveCLById(graph.shapeMap, graph._structGraph, ref.clId, CenterLine) : null;
-    return byId ?? findOpeningBeamAnchorCL(graph, orthoType, ref.coord); // SLAB_BEAM は端の参照にしない（S3-1）
+    // SLAB_BEAM は端の参照にしない（S3-1）。直交する梁芯は、この開口梁芯の座標 src.coord を extent に含むものだけ
+    // （touchCounts:true の点判定＝含む・隙間 ≤ tol。k2）。含むものが無ければ静的値へ落とす。
+    return byId ?? findOpeningBeamAnchorCL(graph, orthoType, ref.coord, { lo: src.coord, hi: src.coord, touchCounts: true });
   };
   const loCL = resolve(src.spanRefs.lo);
   const hiCL = resolve(src.spanRefs.hi);
@@ -489,7 +491,7 @@ function matchedOpeningCandidates(graph, openingSources) {
   // 生成側は 2 つ目の源が空いていると見て作る→再計算のたびに増え続けた）。
   // 同じ座標・向きの全組を候補にし、符号付きの重なり（min(hi)-max(lo)。重ならなければ隙間のマイナス）の降順で
   // 1 対 1 に確定する（同点は梁芯の並び順→源の順）。重なる組が先・重ならない組は隙間の小さい順（近い組どうし）になる。
-  // 同点の梁芯の並び順は、端の参照解決（extentTargetFor の座標フォールバック＝graph.centerLines の先頭）が
+  // 同点の梁芯の並び順は、端の参照解決（extentTargetFor の座標フォールバック＝辺の座標を含むもののうち graph.centerLines の先頭）が
   // 選ぶ梁芯を割り当て済み側に残すため。
   // 範囲が重ならない梁芯（中心線の移動の追従などで extent が縮退した（長さ0）・辺から離れたもの）でも、座標が合う
   // 空きの源があるなら同じ id のまま張り直して辺を覆わせる（孤児にすると、他CLの参照で保護された縮退した梁芯が残り、
@@ -566,7 +568,7 @@ function retargetMatchedOpeningExtents(graph, matched) {
  * もう一度実行する（M-1'是正・QA指摘）。`autoFillStructuralGrid`内で`autoFillOpeningBeamAxes`の
  * **直後**に呼ぶこと——reconcileOpeningBeamAxes（autoFillOpeningBeamAxesの直前）の時点では、
  * 先に置く辺（支えになる開口梁芯）がまだ存在しないため、後の辺の期待extent
- * （spanRefsのclId／座標のfindBeamAnchorCL）が解決できず静的値へフォールバックする——
+ * （spanRefsのclId／座標のfindOpeningBeamAnchorCL）が解決できず静的値へフォールバックする——
  * autoFillOpeningBeamAxesが新しい梁芯を生成した直後にもう一度この関数を呼ぶことで、
  * 同じ再計算1回の中で参照を新しい梁芯のidへ張り直せる（1パスで収束させる。
  * 呼ばないと次の再計算でchanged=trueになり続け、S造/RC造の構造同期は1パス打ち切り

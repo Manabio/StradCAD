@@ -591,7 +591,8 @@ export function findOpeningBeamAnchorCL(graph, centerLineType, coord, { lo = nul
 }
 
 /** 壁由来梁芯の引き受け手（限界16 (h1)）: 通り芯または梁芯のうち、lo/hi と extent が重なるもの
- *  （SLAB_BEAM も除かない。実体は core/centerLineKindPolicy.js wallBeamAnchorAt）。autoFillWallBeamAxes 専用。
+ *  （SLAB_BEAM も除かない。実体は core/centerLineKindPolicy.js wallBeamAnchorAt）。autoFillWallBeamAxes と、それが引き受けた梁芯を
+ *  支え線の clId に使う openingBeamAxes.js openingHostsFor (b)（限界16 (k) の k2）が呼ぶ。
  *  findBeamAnchorCL は在来木造の柱アンカーと共有する単一の述語のため変えない。 */
 export function findWallBeamAnchorCL(graph, centerLineType, coord, { lo = null, hi = null } = {}) {
   return wallBeamAnchorAt(graph, { centerLineType, coord, lo, hi });
