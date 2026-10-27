@@ -345,6 +345,93 @@ test('【S3-1】followWallBeamAxes: 行き先が SLAB_BEAM でも、旧梁芯を
   assert.equal(slab.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM);
 });
 
+// ---- 限界16 (h2): 行き先アンカーの判定に、動く梁芯自身の extent を渡す ----
+// 生成側（autoFillWallBeamAxes。h1）が範囲の重なりで引き受け手を選ぶのと同じ規則に揃える。範囲の離れた梁芯は
+// 同座標にあっても別線（物理的に離れた別の梁）なので、そこへ吸収せずそのまま移動する（吸収すると再計算で別 id が作り直される）。
+
+function addFuseCLWithExtent(graph, value, extentLo, extentHi, origin = BeamAxisOrigin.WALL) {
+  return graph.addCenterLine(CenterLineType.HORIZONTAL, value, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: origin, extentLo, extentHi,
+  });
+}
+
+test('【h2】followWallBeamAxes: 行き先に範囲の離れた梁芯があっても吸収せず移動し、idが保たれる。undo/redoで往復する', () => {
+  const graph = makeGraph();
+  const beamCL = addFuseCLWithExtent(graph, 2045, 0, 3000);
+  const far = addFuseCLWithExtent(graph, 2060, 5000, 8000, BeamAxisOrigin.USER);
+
+  const { moved, skipped, absorbed, undoFns, redoFns } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(absorbed, [], '範囲の離れた梁芯へは吸収しない');
+  assert.deepEqual(skipped, []);
+  assert.deepEqual(moved.map(m => m.clId), [beamCL.id]);
+  assert.equal(beamCL.value, 2060);
+  assert.equal(graph.shapeMap.has(beamCL.id), true, 'idが保たれる');
+  assert.equal(graph.shapeMap.has(far.id), true, '相手はそのまま');
+  assert.equal(far.value, 2060);
+
+  undoFns.forEach(fn => fn());
+  assert.equal(beamCL.value, 2045, 'undoで旧座標へ戻る');
+  redoFns.forEach(fn => fn());
+  assert.equal(beamCL.value, 2060, 'redoで新座標へ');
+});
+
+// 端で接する（隙間 ≤ CL_OVERLAP_TOL_MM）は重なり扱い＝吸収（2026-10-27 ユーザー裁定・案A）。在来木造・RC の規則
+// （壁の源をまとめる・床梁の D1・手での追加の結合）は「同じ線上は1本」で、端で接する2本を残すと、床梁の割付けが
+// 作成順の最初の1本を拾って広げ、梁の無い梁芯が重なって残る。別線にするのは隙間が許容差を超えて離れているときだけ。
+test('【h2・端で接する】followWallBeamAxes: 行き先の梁芯と範囲が端で接する（隙間 ≤ CL_OVERLAP_TOL_MM）なら重なり扱いで吸収する。許容差内のわずかな隙間も同じ', () => {
+  for (const gapLo of [3000, 3000.4]) {
+    const graph = makeGraph();
+    const beamCL = addFuseCLWithExtent(graph, 2045, 0, 3000);
+    const mate = addFuseCLWithExtent(graph, 2060, gapLo, 6000, BeamAxisOrigin.USER);
+    const { moved, absorbed } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+    assert.deepEqual(moved, [], `gapLo=${gapLo}`);
+    assert.deepEqual(absorbed.map(a => a.clId), [beamCL.id], `gapLo=${gapLo}`);
+    assert.equal(graph.shapeMap.has(mate.id), true);
+  }
+});
+
+test('【h2・失敗系・隙間が許容差超】followWallBeamAxes: 隙間が CL_OVERLAP_TOL_MM を超えて離れた相手は吸収せず移動する', () => {
+  const graph = makeGraph();
+  const beamCL = addFuseCLWithExtent(graph, 2045, 0, 3000);
+  addFuseCLWithExtent(graph, 2060, 3001, 6000, BeamAxisOrigin.USER);
+  const { moved, absorbed } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(absorbed, []);
+  assert.deepEqual(moved.map(m => m.clId), [beamCL.id]);
+});
+
+test('【h2・対照】followWallBeamAxes: 行き先の梁芯と範囲が重なれば従来どおり吸収する', () => {
+  const graph = makeGraph();
+  const beamCL = addFuseCLWithExtent(graph, 2045, 0, 3000);
+  const near = addFuseCLWithExtent(graph, 2060, 2000, 6000, BeamAxisOrigin.USER);
+  const { moved, absorbed } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(moved, []);
+  assert.deepEqual(absorbed.map(a => a.clId), [beamCL.id]);
+  assert.equal(graph.shapeMap.has(near.id), true);
+});
+
+test('【h2・対照】followWallBeamAxes: 行き先が通り芯なら範囲に関係なく吸収する（通り芯は全域）', () => {
+  const graph = makeGraph();
+  const beamCL = addFuseCLWithExtent(graph, 2045, 0, 3000);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 2060, { labeled: true, discipline: Discipline.STRUCT });
+  const { moved, absorbed } = followWallBeamAxes(graph, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(moved, []);
+  assert.deepEqual(absorbed.map(a => a.clId), [beamCL.id]);
+});
+
+test('【h2・無限扱い】followWallBeamAxes: 行き先の梁芯の extent が null（全幅）なら範囲の離れた相手でも重なる扱いで吸収する。動く側が null でも同様', () => {
+  const g1 = makeGraph();
+  const b1 = addFuseCLWithExtent(g1, 2045, 0, 3000);
+  addFuseCL(g1, 2060); // extent null＝全幅
+  const r1 = followWallBeamAxes(g1, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(r1.absorbed.map(a => a.clId), [b1.id]);
+
+  const g2 = makeGraph();
+  const b2 = addFuseCL(g2, 2045); // 動く側が全幅
+  addFuseCLWithExtent(g2, 2060, 5000, 8000, BeamAxisOrigin.USER);
+  const r2 = followWallBeamAxes(g2, [{ axisCLId: 'ax1', isVertical: false, from: 2045, to: 2060 }]);
+  assert.deepEqual(r2.absorbed.map(a => a.clId), [b2.id]);
+});
+
 test('【S3-1・対照】followWallBeamAxes: 行き先が SLAB_BEAM と通り芯の両方なら通り芯が吸収先になり、旧は従来どおり吸収される', () => {
   const graph = makeGraph();
   const beamCL = addFuseCL(graph, 2045);

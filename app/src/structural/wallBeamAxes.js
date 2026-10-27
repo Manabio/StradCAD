@@ -586,8 +586,8 @@ export function findBeamAnchorCL(graph, centerLineType, coord) {
  *  開口由来梁芯の重複ガード・端の参照解決（openingBeamAxes.js）と、壁由来梁芯の追従先の判定
  *  （wallBeamAxisFollow.js。lo/hi なし＝SLAB_BEAM を除くだけ）が使う。findBeamAnchorCL は在来木造の柱アンカーと
  *  共有する単一の述語のため変えない（変えると柱が湧く／消える）。 */
-export function findOpeningBeamAnchorCL(graph, centerLineType, coord, { lo = null, hi = null } = {}) {
-  return openingBeamAnchorAt(graph, { centerLineType, coord, lo, hi });
+export function findOpeningBeamAnchorCL(graph, centerLineType, coord, { lo = null, hi = null, touchCounts = false } = {}) {
+  return openingBeamAnchorAt(graph, { centerLineType, coord, lo, hi, touchCounts });
 }
 
 /** 壁由来梁芯の引き受け手（限界16 (h1)）: 通り芯または梁芯のうち、lo/hi と extent が重なるもの

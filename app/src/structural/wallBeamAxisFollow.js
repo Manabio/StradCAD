@@ -60,8 +60,9 @@ function snapshotForRestore(cl) {
  * 反映する。各 move について:
  *   1. from の位置に壁由来の梁芯があれば（findWallBeamAxisCL。通り芯は対象にしない——from側は
  *      「追従元が壁由来の梁芯か」だけを見る。通り芯を動かす経路にしない）
- *   2. to の位置に**通り芯または壁由来の梁芯**（findBeamAnchorCL。autoFillWallBeamAxes の重複ガードと
- *      同じ述語）が既に無ければ bakeCLValue(cl, to) で値を書き換える。
+ *   2. to の位置に**通り芯または梁芯**（findOpeningBeamAnchorCL。SLAB_BEAM を除き、梁芯は cl 自身の extent と
+ *      重なる（端で接する＝隙間 ≤ 許容差も含む）ものだけ＝限界16 (h2)。autoFillWallBeamAxes の引き受け手選びと
+ *      同じ範囲規則）が既に無ければ bakeCLValue(cl, to) で値を書き換える（隙間が許容差を超えて離れた梁芯は相手にしない）。
  *      あれば（ユーザー裁定・案B・2026-09-26）: 旧梁芯（cl）が isProtectedWallBeamAxis で保護されて
  *      いなければ吸収して撤去する（graph.removeCenterLine。乗っていたauto柱・梁・基礎も道連れ——
  *      次の構造同期で作り直される）。相手（通り芯・梁芯いずれでも）はそのまま残す——相手が既に
@@ -100,8 +101,13 @@ export function followWallBeamAxes(graph, moves, opts = {}) {
     if (!cl) continue; // この階に壁由来の梁芯が無い（主構造が生成しない等）— 何もしない
 
     const toType = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
-    // 行き先の SLAB_BEAM（再計算で割り直される未編集の自動梁芯）は吸収先にしない（S3-1）
-    const anchor = findOpeningBeamAnchorCL(graph, toType, to);
+    // 行き先の SLAB_BEAM（再計算で割り直される未編集の自動梁芯）は吸収先にしない（S3-1）。
+    // さらに梁芯は、動く梁芯自身の extent と重なるものだけを吸収先にする（限界16 (h2)。生成側 autoFillWallBeamAxes
+    // の引き受け手選び（h1）と同じ規則。端で接する（隙間 ≤ 許容差）は重なり扱い＝吸収（在来木造・RC は同じ線上は1本。
+    // 残すと床梁の割付けが1本を拾って広げ、梁の無い梁芯が重なって残る）。隙間が許容差を超えて離れた同座標の梁芯だけが別線で、
+    // 吸収せずそのまま移動する。findWallBeamAnchorCL でなく findOpeningBeamAnchorCL（touchCounts）なのは SLAB_BEAM の除外を
+    // 保つため）。通り芯は全域。
+    const anchor = findOpeningBeamAnchorCL(graph, toType, to, { lo: cl.extentLo, hi: cl.extentHi, touchCounts: true });
     if (anchor) {
       const repointTargets = repointRefsFrom ? openingReferrersOf(graph, cl) : [];
       const ignoreRefsFrom = new Set(repointTargets.map(r => r.referrer.id));

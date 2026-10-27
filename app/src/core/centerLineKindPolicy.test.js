@@ -37,7 +37,7 @@ import {
   FINISH_CELL_DIVIDER_KINDS, isFinishCellDivider,
   UNDER_STAIR_SPLIT_KINDS, isUnderStairSplitKind, axisLineKindOf,
   STRUCTURAL_ANCHOR_KINDS, BEAM_AXIS_KINDS, SUPPORT_SPAN_COLUMN_KINDS,
-  structuralAnchorKinds, isStructuralAnchor, structuralAnchorAt, structuralAnchorCandidates, openingBeamAnchorAt,
+  structuralAnchorKinds, isStructuralAnchor, structuralAnchorAt, structuralAnchorCandidates, openingBeamAnchorAt, wallBeamAnchorAt,
   beamAxisAt, beamAxisCenterLines, supportSpanColumnCandidates,
   FLOOR_SHARED_KINDS, structuralSyncScopeOfKind, structuralSyncScopeOfConversion,
   structuralSyncScopeForCenterLine,
@@ -1893,6 +1893,29 @@ test('openingBeamAnchorAt: SLAB_BEAM を除き、lo/hi があれば梁芯は ext
 
   const grid = addCLOfKind(graph, project, V, 1000, 'struct');
   assert.equal(openingBeamAnchorAt(graph, { centerLineType: V, coord: 1000, lo: 1000, hi: 3000 }), grid, '通り芯は範囲に関わらず拾う');
+});
+
+// 端で接する（隙間 ≤ CL_OVERLAP_TOL_MM）を重なりに含める判定（限界16 (h1)(h2)・2026-10-27 ユーザー裁定・案A）。
+// openingBeamAnchorAt は既定では含めない（開口梁芯の重複ガード用。上のテストが不変の証拠）。追従だけ touchCounts:true で含める。
+// wallBeamAnchorAt（壁由来梁芯の生成）は常に含める。
+test('端接触を含む判定: openingBeamAnchorAt は touchCounts:true のときだけ端で接する梁芯を拾う（既定は拾わない）。wallBeamAnchorAt は常に拾う。隙間が許容差を超えれば拾わない', () => {
+  const { graph, project } = makeProjectWithGraph();
+  const V = CenterLineType.VERTICAL;
+  const mate = addCLOfKind(graph, project, V, 1000, 'beam');
+  runInAction(() => { mate.beamAxisOrigin = BeamAxisOrigin.USER; mate._extentLo = 4000; mate._extentHi = 6000; });
+  const q = (lo, hi) => ({ centerLineType: V, coord: 1000, lo, hi });
+  assert.equal(openingBeamAnchorAt(graph, q(1000, 4000)), null, '既定: 端で接するだけは拾わない');
+  assert.equal(openingBeamAnchorAt(graph, { ...q(1000, 4000), touchCounts: true }), mate, 'touchCounts: 拾う');
+  assert.equal(openingBeamAnchorAt(graph, { ...q(1000, 3999.7), touchCounts: true }), mate, 'touchCounts: 隙間 0.3 ≤ 許容差も拾う');
+  assert.equal(openingBeamAnchorAt(graph, { ...q(1000, 3999), touchCounts: true }), null, 'touchCounts: 隙間 1 > 許容差は拾わない');
+  assert.equal(openingBeamAnchorAt(graph, { ...q(7000, 8000), touchCounts: true }), null, 'touchCounts: 反対側の端でも同様');
+  assert.equal(openingBeamAnchorAt(graph, { ...q(6000, 8000), touchCounts: true }), mate, 'touchCounts: 反対側で接するなら拾う');
+  assert.equal(wallBeamAnchorAt(graph, q(1000, 4000)), mate, 'wallBeamAnchorAt: 端で接するなら拾う');
+  assert.equal(wallBeamAnchorAt(graph, q(1000, 3999)), null, 'wallBeamAnchorAt: 隙間が許容差を超えれば拾わない');
+  assert.equal(wallBeamAnchorAt(graph, { centerLineType: V, coord: 1000 }), mate, 'wallBeamAnchorAt: lo/hi なしは範囲を見ない');
+  // 境界: 裁定は「隙間 ≤ 許容差なら重なり」——等号の側を固定する（< へ変えると隙間ちょうど許容差が拾われなくなる）
+  assert.equal(wallBeamAnchorAt(graph, q(1000, 4000 - CL_OVERLAP_TOL_MM)), mate, '隙間ちょうど許容差は拾う');
+  assert.equal(wallBeamAnchorAt(graph, q(1000, 4000 - CL_OVERLAP_TOL_MM - 0.01)), null, '隙間が許容差を 0.01 超えれば拾わない');
 });
 
 test('【失敗系】openingBeamAnchorAt: centerLineType 未指定・coord が数値でなければ throw', () => {

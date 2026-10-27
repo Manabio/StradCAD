@@ -1381,6 +1381,31 @@ test('【h1-b】RC: 壁の範囲から離れた USER 梁芯は引き受けず、
   assert.equal(Math.max(...sec.map(s => s[1])), 8000);
 });
 
+// 端で接する（隙間 ≤ CL_OVERLAP_TOL_MM）は重なり扱い（2026-10-27 ユーザー裁定・案A）: 在来木造・RC の規則（壁の源をまとめる・
+// 床梁の D1・手での追加の結合）は「同じ線上は1本」。別線にするのは隙間が許容差を超えて離れているときだけ。
+test('【h1-f】RC: 壁の範囲の端（8000）で接するだけの USER 梁芯は引き受けて広げ、梁芯は1本のまま（別線を作らない）', async () => {
+  const { project, graph } = makeRcWallProject();
+  const user = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 8000, extentHi: 10000, beamAxisOrigin: BeamAxisOrigin.USER,
+  });
+  await recomputeN(graph, project, 2);
+  const axes = hAxesAt(graph, 2000);
+  assert.equal(axes.length, 1, '端で接する梁芯は別線にしない');
+  assert.equal(axes[0].id, user.id);
+  assert.deepEqual([axes[0].extentLo, axes[0].extentHi], [0, 10000], '壁区間を覆うよう広がる');
+});
+
+test('【h1-g・失敗系】RC: 壁の範囲の端から隙間が許容差を超えて離れた USER 梁芯（8002〜）は引き受けず、壁由来の梁芯が別に立つ', async () => {
+  const { project, graph } = makeRcWallProject();
+  const user = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 8002, extentHi: 10000, beamAxisOrigin: BeamAxisOrigin.USER,
+  });
+  await recomputeN(graph, project, 2);
+  const axes = hAxesAt(graph, 2000);
+  assert.equal(axes.length, 2);
+  assert.deepEqual([user.extentLo, user.extentHi], [8002, 10000], 'USER の extent は不変');
+});
+
 test('【h1-c・失敗系】RC: 広げた USER 梁芯を削除→再計算×3 で、梁芯 0 本・新しい id 0・除外キーが保たれる（削除の復活なし）', async () => {
   const { project, graph } = makeRcWallProject();
   const user = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {

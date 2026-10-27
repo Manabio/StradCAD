@@ -584,6 +584,85 @@ test('【案B】commitCLMoveOp: 移動先に通り芯があれば、保護され
   assert.equal(graph.shapeMap.has(beamAxisId), false, 'redoで再び吸収され撤去される');
 });
 
+// 限界16 (h2): 壁の帯が動くとき、行き先の座標に範囲の離れた梁芯があっても壁由来梁芯は吸収されず移動する
+// （吸収すると直後の再計算で別 id として作り直される）。生成側（h1）と同じ「範囲の重なり」規則。
+test('【h2】commitCLMoveOp（在来木造）: 移動先に範囲の離れたUSER梁芯があっても壁由来梁芯は吸収されず同idで移動し、再計算×3でもidが保たれる。undo/redoで往復する', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  await recomputeStructuralForGraph(graph, project, graph.structureOverride);
+
+  const wallAxis = findWallBeamAxisCL(graph, true, 4000);
+  assert.ok(wallAxis, '前提: 間仕切り(x=4000)を根拠にした壁由来梁芯がある');
+  const wallAxisId = wallAxis.id;
+  const far = graph.addCenterLine(CenterLineType.VERTICAL, 4300, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER, extentLo: 20000, extentHi: 24000,
+  });
+  const farId = far.id;
+
+  xm.pendingDelta = 300; // 4000→4300
+  const { toast } = commitCLMoveOp(graph, project, xm, 4000);
+  assert.equal(toast, null);
+  assert.equal(xm.value, 4300);
+  const after = graph.shapeMap.get(wallAxisId);
+  assert.ok(after, '壁由来梁芯は吸収されず残る（同id）');
+  assert.equal(after.value, 4300, '壁の帯の移動先へ追従する');
+  assert.equal(graph.shapeMap.get(farId)?.value, 4300, '範囲の離れた相手はそのまま');
+
+  for (let i = 0; i < 3; i++) {
+    await recomputeStructuralForGraph(graph, project, graph.structureOverride);
+    assert.equal(findWallBeamAxisCL(graph, true, 4300)?.id, wallAxisId, `再計算${i + 1}回目後も壁由来梁芯のidが保たれる（別idで作り直されない）`);
+  }
+
+  undoManager.undo();
+  assert.equal(xm.value, 4000, 'undoで中心線が戻る');
+  assert.equal(graph.shapeMap.get(wallAxisId)?.value, 4000, 'undoで壁由来梁芯も戻る');
+  undoManager.redo();
+  assert.equal(xm.value, 4300, 'redoで中心線が再び動く');
+  assert.equal(graph.shapeMap.get(wallAxisId)?.value, 4300, 'redoで壁由来梁芯も追従する');
+});
+
+// 端で接する梁芯（隙間 ≤ 許容差）は重なり扱い（案A・2026-10-27）。moku4 2階 Y=-6370 を +910 動かす型の再現:
+// 壁由来梁芯の行き先に、端で接する別スパンの梁芯（床梁由来）がある。吸収されずに2本が残ると、床梁の割付けが
+// 作成順の最初の1本を拾って広げ、梁の無い梁芯が重なって残る。
+test('【h2・端接触】commitCLMoveOp（在来木造）: 端で接する梁芯の座標へ壁由来梁芯を動かすと吸収され、再計算×3 後も梁の無い梁芯が残らない', async () => {
+  const { project, graph } = makeProjectWithGraph();
+  graph.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
+  const { xm } = addAdjacentRoomsWithWalls(graph);
+  const materialMap = await loadMaterialMap();
+  await regenerateWalls(graph, { materialMap, project });
+  await recomputeStructuralForGraph(graph, project, graph.structureOverride);
+
+  const wallAxis = findWallBeamAxisCL(graph, true, 4000);
+  assert.ok(wallAxis, '前提: 間仕切り(x=4000)を根拠にした壁由来梁芯がある');
+  const wallAxisId = wallAxis.id;
+  const [lo, hi] = [wallAxis.extentLo, wallAxis.extentHi];
+  assert.ok(lo != null && hi != null, '前提: 壁由来梁芯は範囲を持つ');
+  const mate = graph.addCenterLine(CenterLineType.VERTICAL, 4300, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.FLOOR_BEAM, extentLo: hi, extentHi: hi + 4000,
+  });
+  const mateId = mate.id;
+
+  xm.pendingDelta = 300; // 4000→4300
+  const { toast } = commitCLMoveOp(graph, project, xm, 4000);
+  assert.equal(toast, null);
+  assert.equal(graph.shapeMap.has(wallAxisId), false, '端で接する相手へ吸収されて撤去される');
+  assert.equal(graph.shapeMap.has(mateId), true, '相手はそのまま残る');
+
+  for (let i = 0; i < 3; i++) {
+    await recomputeStructuralForGraph(graph, project, graph.structureOverride);
+    const axes = graph.centerLines.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.discipline === Discipline.FUSE && Math.abs(cl.effectiveValue - 4300) < 1);
+    const beamless = axes.filter(a => !graph.beams.some(b => b.axisCL === a));
+    assert.deepEqual(beamless.map(a => a.id), [], `再計算${i + 1}回目後: 梁の無い梁芯が残らない`);
+    assert.ok(axes.length <= 1, `再計算${i + 1}回目後: 同座標の梁芯は1本以下（実際 ${axes.length}）`);
+  }
+
+  undoManager.undo();
+  assert.equal(graph.shapeMap.get(wallAxisId)?.id, wallAxisId, 'undoで吸収された壁由来梁芯が同idで戻る');
+});
+
 // QA指摘n-1（2026-09-25）: pendingDeltaを一時的に0へ戻してwallBackingCenters(移動前スナップショット)を
 // 読む処理は、例外が起きてもtry/finallyで必ず元の値へ復元されること（復元漏れがあると、この後に
 // 例外を握りつぶす呼び出し元がいた場合、CLのドラッグ中表示位置が0のまま固まってしまう）。

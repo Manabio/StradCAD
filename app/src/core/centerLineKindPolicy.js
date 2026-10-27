@@ -764,6 +764,16 @@ function extentsOverlapBeyondTol(a, b, tolMm) {
   return aLo < bHi - tolMm && aHi > bLo + tolMm;
 }
 
+// extentsOverlapBeyondTol の兄弟: 端で接する（隙間 ≤ tol）も重なりに含める。null は無限扱い。
+// 在来木造・RC の規則（壁の源をまとめる・床梁の D1・手での追加の結合）は「同じ線上は1本」なので、壁由来梁芯の
+// 引き受け手選びと追従の行き先判定はこちらを使う（2026-10-27 ユーザー裁定・案A）。別線にするのは隙間が tol を超えるときだけ。
+// S造の子梁芯のベイ単位（端で接するだけは別線）は SLAB_BEAM の除外が受け持つので、extentsOverlapBeyondTol 側は変えない。
+function extentsOverlapOrTouch(a, b, tolMm) {
+  const aLo = a.extentLo ?? -Infinity, aHi = a.extentHi ?? Infinity;
+  const bLo = b.extentLo ?? -Infinity, bHi = b.extentHi ?? Infinity;
+  return aLo <= bHi + tolMm && aHi >= bLo - tolMm;
+}
+
 /**
  * other が subject と同方向（同 centerLineType）の移動障害物候補か（移動範囲・移動スナップで使う）。
  * 種別の表（sameDirectionObstacleKinds）に加え、表では書けない2つの絞り込みがある（data-model.md「CL種別間の関係」）:
@@ -1142,10 +1152,12 @@ export function structuralAnchorAt(graph, { centerLineType, coord, tier, tolMm =
  *  2. lo/hi を渡されたら、梁芯は extent が [lo,hi] と tol を超えて重なるものだけ（null は無限扱い）。
  *     通り芯（種別 struct）は常に全域なので範囲を見ない。
  * @param {{centerLines: Array}} graph
- * @param {{centerLineType: string, coord: number, lo?: number|null, hi?: number|null, tolMm?: number}} opts
+ *  3. touchCounts:true なら範囲判定で端で接する（隙間 ≤ tol）も重なりに含める（既定 false＝開口梁芯の重複ガードの
+ *     従来判定。壁由来梁芯の追従 wallBeamAxisFollow.js だけが true で呼ぶ＝限界16 (h2)）。
+ * @param {{centerLineType: string, coord: number, lo?: number|null, hi?: number|null, touchCounts?: boolean, tolMm?: number}} opts
  * @returns {object|null}
  */
-export function openingBeamAnchorAt(graph, { centerLineType, coord, lo = null, hi = null, tolMm = CL_OVERLAP_TOL_MM }) {
+export function openingBeamAnchorAt(graph, { centerLineType, coord, lo = null, hi = null, touchCounts = false, tolMm = CL_OVERLAP_TOL_MM }) {
   if (centerLineType == null) {
     throw new Error(`openingBeamAnchorAt: centerLineTypeは必須です（実際: ${centerLineType}）`);
   }
@@ -1161,14 +1173,15 @@ export function openingBeamAnchorAt(graph, { centerLineType, coord, lo = null, h
     if (Math.abs(cl.effectiveValue - coord) >= tolMm) return false;
     if (kind !== 'beam') return true;
     if (cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM) return false;
-    return span == null || extentsOverlapBeyondTol(cl, span, CL_OVERLAP_TOL_MM);
+    if (span == null) return true;
+    return touchCounts ? extentsOverlapOrTouch(cl, span, CL_OVERLAP_TOL_MM) : extentsOverlapBeyondTol(cl, span, CL_OVERLAP_TOL_MM);
   }) ?? null;
 }
 
 /**
  * 壁由来梁芯（autoFillWallBeamAxes）の引き受け手を選ぶ走査API（限界16 (h1)）。openingBeamAnchorAt と同型で、
  * 通り芯または梁芯のうち、lo/hi を渡したときは梁芯の extent が [lo,hi] と tol を超えて重なるものだけを返す
- * （通り芯は常に全域）。**由来 SLAB_BEAM は除かない**——壁源は RC・木造にしか無く、S造から切り替えた階に残った
+ * （通り芯は常に全域）。**端で接する（隙間 ≤ tol）も重なり扱い**（案A。在来木造・RC は同じ線上は1本）。**由来 SLAB_BEAM は除かない**——壁源は RC・木造にしか無く、S造から切り替えた階に残った
  * SLAB_BEAM は実在の梁芯として扱う（除くと同座標に重なる梁芯が2本できる）。
  * findBeamAnchorCL は在来木造の柱アンカーと共有する単一の述語のため変えず、こちらを兄弟として置く。
  * @param {{centerLines: Array}} graph
@@ -1190,7 +1203,7 @@ export function wallBeamAnchorAt(graph, { centerLineType, coord, lo = null, hi =
     if (!kinds.includes(kind)) return false;
     if (Math.abs(cl.effectiveValue - coord) >= tolMm) return false;
     if (kind !== 'beam') return true;
-    return span == null || extentsOverlapBeyondTol(cl, span, CL_OVERLAP_TOL_MM);
+    return span == null || extentsOverlapOrTouch(cl, span, CL_OVERLAP_TOL_MM); // 端で接する（隙間 ≤ tol）も重なり扱い（案A）
   }) ?? null;
 }
 
