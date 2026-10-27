@@ -8525,6 +8525,42 @@ test('commitCLMoveOp: 開口の辺が乗る中心線を動かすと、追従先�
   assert.equal(ya.value, 1000, '中心線自体もundoで戻る');
 });
 
+// 限界16 (k)・k1b: 開口由来梁芯の行き先に、端で接するだけの梁芯があっても吸収されず同idで追従する
+// （生成側 autoFillOpeningBeamAxes は端で接するだけを別線とする）。
+test('【k1b】commitCLMoveOp: 開口由来梁芯の行き先に端で接するだけの梁芯があっても吸収されず同idで追従し、undoで戻りredoで再び同idで追従する', () => {
+  const { graph, ya } = makeRcVoidGraphForFollow();
+  const project = {};
+  const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, project));
+  const throughTop = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
+  assert.ok(throughTop, '前提: y=1000の通し梁芯（由来opening）が生成されている');
+  const throughTopId = throughTop.id;
+  const hi = throughTop.extentHi;
+  assert.ok(throughTop.extentLo != null && hi != null, '前提: 開口由来梁芯は範囲を持つ');
+  const mate = graph.addCenterLine(CenterLineType.HORIZONTAL, 1100, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER, extentLo: hi, extentHi: hi + 3000,
+  });
+  const mateId = mate.id;
+
+  ya.pendingDelta = 100; // 1000 → 1100（行き先 y=1100 に端で接するだけの梁芯がある）
+  const { toast } = commitCLMoveOp(graph, project, ya, 1000);
+  assert.equal(toast, null);
+
+  const moved = graph.shapeMap.get(throughTopId);
+  assert.ok(moved, '吸収されず同idのまま残る');
+  assert.equal(moved.value, 1100, '辺の移動分だけ追従する');
+  assert.equal(moved.beamAxisOrigin, BeamAxisOrigin.OPENING);
+  assert.equal(graph.shapeMap.get(mateId)?.value, 1100, '相手はそのまま');
+
+  undoManager.undo();
+  assert.equal(graph.shapeMap.get(throughTopId)?.value, 1000, 'undoで元の座標へ戻る');
+  assert.equal(ya.value, 1000);
+
+  undoManager.redo();
+  assert.equal(graph.shapeMap.get(throughTopId)?.value, 1100, 'redoで同idのまま再び追従する');
+  assert.equal(graph.shapeMap.get(throughTopId)?.beamAxisOrigin, BeamAxisOrigin.OPENING);
+  assert.equal(graph.shapeMap.get(mateId)?.value, 1100, 'redo後も相手はそのまま');
+});
+
 test('【T3・m-4是正】commitCLMoveOp: 下地オーナー壁の乗る開口辺の中心線を移動すると、壁面を逃げた開口由来梁芯が移動量どおり追従する（pendingDelta=0区間の内側で開口源を採る必要がある）', () => {
   const { graph, xa, ya, yb } = makeRcVoidGraphForFollow();
   // 左辺(x=2000)のCL(xa)上に下地オーナー壁を1本張る（backingDepth=120→半幅60、偏芯なし）。

@@ -1187,7 +1187,7 @@ export function structuralAnchorAt(graph, { centerLineType, coord, tier, tolMm =
  *     通り芯（種別 struct）は常に全域なので範囲を見ない。
  * @param {{centerLines: Array}} graph
  *  3. touchCounts:true なら範囲判定で端で接する（隙間 ≤ tol）も重なりに含める（既定 false＝開口梁芯の重複ガードの
- *     従来判定。壁由来梁芯の追従 wallBeamAxisFollow.js＝限界16 (h2) と、openingBeamAxes.js extentTargetFor の端のつなぎ先
+ *     従来判定。壁由来梁芯の追従 wallBeamAxisFollow.js＝限界16 (h2)（動く梁芯が開口由来のときだけ false＝k1b）と、openingBeamAxes.js extentTargetFor の端のつなぎ先
  *     （lo=hi の点判定＝その点を含む梁芯。限界16 (k) の k2）が true で呼ぶ）。
  * @param {{centerLineType: string, coord: number, lo?: number|null, hi?: number|null, touchCounts?: boolean, tolMm?: number}} opts
  * @returns {object|null}

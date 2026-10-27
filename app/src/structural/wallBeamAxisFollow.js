@@ -67,6 +67,8 @@ function snapshotForRestore(cl) {
  *      いなければ吸収して撤去する（graph.removeCenterLine。乗っていたauto柱・梁・基礎も道連れ——
  *      次の構造同期で作り直される）。相手（通り芯・梁芯いずれでも）はそのまま残す——相手が既に
  *      その座標の壁の根拠を持っているため。保護されていれば従来どおりskip（旧を残す）。
+ *      例外（k1b）: 動く梁芯が開口由来（OPENING）なら「端で接するだけ」は重なりに数えない（touchCounts:false。
+ *      生成側 autoFillOpeningBeamAxes と同じ＝端で接するだけは別線。吸収せず移動する）。
  *   3. 追従（bake）した場合のみ graph.excludedWallBeamAxes の旧座標キーを新座標キーへ張り替える
  *      （忘れると「ユーザーが消した梁芯が壁の移動で復活＝柱が湧く」）。吸収（撤去）した場合は
  *      excludedWallBeamAxesに一切触れない——旧CL自体が無くなるため張り替え先が無く、それまでの
@@ -107,7 +109,11 @@ export function followWallBeamAxes(graph, moves, opts = {}) {
     // 残すと床梁の割付けが1本を拾って広げ、梁の無い梁芯が重なって残る）。隙間が許容差を超えて離れた同座標の梁芯だけが別線で、
     // 吸収せずそのまま移動する。findWallBeamAnchorCL でなく findOpeningBeamAnchorCL（touchCounts）なのは SLAB_BEAM の除外を
     // 保つため）。通り芯は全域。
-    const anchor = findOpeningBeamAnchorCL(graph, toType, to, { lo: cl.extentLo, hi: cl.extentHi, touchCounts: true });
+    // 例外（限界16 (k)・k1b）: 動く梁芯が開口由来（OPENING）のときは touchCounts を false にする。生成側
+    // （openingBeamAxes.js autoFillOpeningBeamAxes。k1）は端で接するだけを別線とするため、ここで吸収すると
+    // 直後の再計算で別 id に作り直される。壁由来など他の由来は h2 のまま。
+    const touchCounts = cl.beamAxisOrigin !== BeamAxisOrigin.OPENING;
+    const anchor = findOpeningBeamAnchorCL(graph, toType, to, { lo: cl.extentLo, hi: cl.extentHi, touchCounts });
     if (anchor) {
       const repointTargets = repointRefsFrom ? openingReferrersOf(graph, cl) : [];
       const ignoreRefsFrom = new Set(repointTargets.map(r => r.referrer.id));
