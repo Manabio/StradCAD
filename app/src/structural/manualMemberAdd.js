@@ -11,7 +11,7 @@
 //
 // 順序は「追加 → 初期値の自動算定 → locked」固定。autoFillColumnSizes/autoFillColumnBaseSizes は
 // dimensionStatus==='auto' の材だけを対象にするため、先に locked にすると初期値が入らない
-// （structuralAutoFill.js:915,933）。autoFillBeamEccentricity は dimensionStatus を見ないため
+// （structuralAutoFill.js の autoFillColumnSizes・autoFillColumnBaseSizes の `dimensionStatus !== 'auto'` 判定）。autoFillBeamEccentricity は dimensionStatus を見ないため
 // 順序に依存しないが、追加直後に呼ぶ既存の挙動（faceGap=0からの初期偏芯算出）に合わせる。
 // 梁成の自動算定（autoFillWoodBeamDepths、在来木造のみ）も同じ理由で「追加直後の1回だけ」locked化前に
 // 呼ぶ（書き戻しは追加した梁だけ・他の梁からの成の伝播なし。下の addManualBeam のコメント参照。S造柱のautoFillColumnSizesと同じ扱い。指示書 案(ii) 2026-09-30）。dimensionStatus==='auto' の

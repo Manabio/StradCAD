@@ -52,7 +52,7 @@ test('【手動追加】在来木造の柱も追加直後にdimensionStatusがlo
 // ---- (b) 順序=「追加→初期値の自動算定→locked」であること ----
 // S造（columnSizing:'tributary'）の柱はautoFillColumnSizesの対象——先にlockedにすると
 // dimensionStatus!=='auto'でスキップされ、tributaryWidthが既定のnullのまま残る
-// （structuralAutoFill.js:915 `if (column.dimensionStatus !== 'auto') continue;`）。
+// （structuralAutoFill.js の autoFillColumnSizes の `if (column.dimensionStatus !== 'auto') continue;`）。
 test('【手動追加】柱の初期値算定（tributaryWidth）はlockedにする前に行われる（S造）', () => {
   const { graph, xCLs: [, x2], yCLs: [y1] } = makeGridGraph('S造');
   const column = addManualColumn(graph, GRID_PROJECT, { vCL: x2, hCL: y1 });
@@ -61,7 +61,7 @@ test('【手動追加】柱の初期値算定（tributaryWidth）はlockedにす
 });
 
 // 独立基礎（IndependentFooting）はpedestalDepthを持たないため対象外——autoFillColumnBaseSizesは
-// 'pedestalDepth' in footing の柱脚のみを見る（structuralAutoFill.js:933）。柱脚（kind:'base'）で確認する。
+// 'pedestalDepth' in footing の柱脚のみを見る（structuralAutoFill.js の autoFillColumnBaseSizes）。柱脚（kind:'base'）で確認する。
 test('【手動追加】柱脚の初期値算定（widthX/widthY/pedestalDepth）はlockedにする前に行われる（S造）', () => {
   const { graph, xCLs: [, x2], yCLs: [y1] } = makeGridGraph('S造');
   const footing = addManualFooting(graph, GRID_PROJECT, { kind: 'base', vCL: x2, hCL: y1 });
