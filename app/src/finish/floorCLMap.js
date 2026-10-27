@@ -20,8 +20,11 @@
  * だけを対応先として認める——上階の同じ座標に梁芯・補助線しか無い場合は「対応先なし」として
  * 新しい中心線を足す（S0計測で実データに実在を確認済み）。
  */
-import { sameCoordCounterparts, isFinishCellDivider } from '../core/centerLineKindPolicy.js';
-import { isGridCenterLine } from '../core/centerLine.js';
+import {
+  sameCoordCounterparts, isFinishCellDivider, isFloorClMapCounterpart, extentsOverlapBeyondTol,
+} from '../core/centerLineKindPolicy.js';
+import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { isGridCenterLine, centerLineKind } from '../core/centerLine.js';
 import { serializeGraph, restoreGraph, decodeFloorSnapshot } from '../graphSnapshot.js';
 import { healDerivedGeometry } from './wallGeneration.js';
 import { remapLineIdsInSnapshot, findLineIdOccurrences, hasAbsorptionConflict } from '../lineIdRemap.js';
@@ -40,6 +43,9 @@ const EPS = 1e-6;
 // type/valueでも単に該当なしとして null を返していた）を保つため、ここで先にガードする
 // （QA指摘: translateCLId が非CL形状のid（centerLineType/valueを持たない）を渡すケースがあり、
 // 移行前は暗黙にnullへ収束していた）。
+// 【課題(i) i1（2026-10-27）】translateCLId・translateExtent は種別を見る findCounterpartForCL へ切り替えた。
+// 本関数（種別を見ない）が残るのは addMissingCLs の「対応先あり」判定だけ——述語を省略すると
+// どの種別でも「対応先あり」とみなす既定は U4 で据え置き（階段の既存挙動を変えない）。
 // predicate（省略可）: 見つかった候補をさらに絞る述語（例: isFinishCellDivider）。省略時
 // （null）は絞り込みをせず従来どおり最初の1件を返す——呼び出し側が明示的に渡さない限り
 // 挙動は変わらない（team-lessons「明示vs省略のA/B等価テストが既定生成で恒真化する」に沿い、
@@ -48,6 +54,24 @@ export function findCounterpartCL(graph, type, value, predicate = null) {
   if (type == null || typeof value !== 'number' || Number.isNaN(value)) return null;
   const matches = sameCoordCounterparts(graph, { centerLineType: type, value, tolMm: EPS });
   return (predicate ? matches.filter(predicate) : matches)[0] ?? null;
+}
+
+/**
+ * 源の線 srcCl に対応する別階の線を graph から探す（課題(i) i1・2026-10-27 ユーザー裁定 I1）。
+ * 同座標（tol=EPS）の線を、同じ種別だけ（isFloorClMapCounterpart。種別の関係は
+ * core/centerLineKindPolicy.js FLOOR_CL_MAP_COUNTERPART_KINDS）に絞り、同種別が複数あれば範囲
+ * （extent）の重なるもの（extentsOverlapBeyondTol。共有の判定）を優先し、無ければ同種別の先頭。
+ * 同種別が無ければ null（「対応なし」）——呼び出し側は安全側（translateCLId はスキップ、
+ * translateExtent は静的値）に落ちる。引数不正（type 未指定・value が数値でない）も null（throw しない）。
+ * findCounterpartCL（種別を見ない）は addMissingCLs の「対応先あり」判定のためだけに残す
+ * （既定は種別を問わない。U4 で据え置き）。
+ */
+export function findCounterpartForCL(graph, srcCl) {
+  if (!srcCl || srcCl.centerLineType == null || typeof srcCl.value !== 'number' || Number.isNaN(srcCl.value)) return null;
+  const srcKind = centerLineKind(srcCl);
+  const sameKind = sameCoordCounterparts(graph, { centerLineType: srcCl.centerLineType, value: srcCl.value, tolMm: EPS })
+    .filter(c => isFloorClMapCounterpart(srcKind, c));
+  return sameKind.find(c => extentsOverlapBeyondTol(srcCl, c, CL_OVERLAP_TOL_MM)) ?? sameKind[0] ?? null;
 }
 
 /**
@@ -66,8 +90,10 @@ export function translateCLId(id, sourceGraph, structGraph, targetGraph) {
   // shapeMap から誤って渡されたケース）場合も null——「解決できなければ null」の契約を守る
   // （findCounterpartCL 側の引数ガードとの二重防御。QA指摘）。
   if (!cl || cl.centerLineType == null || typeof cl.value !== 'number' || Number.isNaN(cl.value)) return null;
-  const counterpart = findCounterpartCL(targetGraph, cl.centerLineType, cl.value);
-  return counterpart ? counterpart.id : null;
+  // 同じグラフ（アクティブ階が自分の線を探し直す側）は探さずそのまま返す——同座標に別種別の線が先に
+  // 並んでいても取り違えない（課題(i) I2）。CL の検査（上）の後に置くので、CL でない id は従来どおり null。
+  if (targetGraph === sourceGraph) return id;
+  return findCounterpartForCL(targetGraph, cl)?.id ?? null;
 }
 
 /**
@@ -87,9 +113,7 @@ function translateExtent(src, side, activeGraph, structGraph, upperGraph) {
   if (ref?.clId) {
     if (structGraph?.shapeMap.has(ref.clId)) return { ref, staticVal: null };
     const srcRef = activeGraph.shapeMap.get(ref.clId);
-    const counterpart = srcRef
-      ? findCounterpartCL(upperGraph, srcRef.centerLineType, srcRef.value)
-      : null;
+    const counterpart = srcRef ? findCounterpartForCL(upperGraph, srcRef) : null;
     if (counterpart) {
       return { ref: { clId: counterpart.id, offset: ref.offset ?? 0 }, staticVal: null };
     }
@@ -100,8 +124,20 @@ function translateExtent(src, side, activeGraph, structGraph, upperGraph) {
 }
 
 // セルキー（"leftId:topId:rightId:bottomId"）を上階のCL id集合へ変換する。1つでも解決不能なら null。
+// 【課題(i) i1 の例外】セルキーでは、同種別の相手が無くても同座標の別種別の線（座標の担い手）へ写す
+// （従来どおり。translateCLId が null のときだけ findCounterpartCL に落ちる）。上階に同座標の梁芯・補助線しか
+// 無い階段の足元（moku1-2 の2階 Y=-4550 と同じ形）で、キーを null にすると階段全体が untranslatable で
+// 落ちて吹抜けが置かれなくなるため（finish/stairWallRules.test.js【N+1・下り口】）。同種別があれば
+// そちらが優先される（keys に梁芯の id が混じるのは、同種別が無いときだけ）。
+function translateCellKeyId(id, activeGraph, structGraph, upperGraph) {
+  const strict = translateCLId(id, activeGraph, structGraph, upperGraph);
+  if (strict) return strict;
+  const cl = activeGraph.shapeMap.get(id);
+  return cl ? findCounterpartCL(upperGraph, cl.centerLineType, cl.value)?.id ?? null : null;
+}
+
 function translateCellKey(key, activeGraph, structGraph, upperGraph) {
-  const ids = key.split(':').map(id => translateCLId(id, activeGraph, structGraph, upperGraph));
+  const ids = key.split(':').map(id => translateCellKeyId(id, activeGraph, structGraph, upperGraph));
   return ids.every(Boolean) ? ids.join(':') : null;
 }
 

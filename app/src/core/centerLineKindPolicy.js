@@ -253,6 +253,39 @@ export const CONVERT_BLOCKING_KINDS = Object.freeze({
 // （中心線・補助線 ＞ 梁芯）。
 export const CROSS_FLOOR_COUNTERPART_KINDS = Object.freeze(['center', 'aux', 'beam']);
 
+// ---- 原始事実6a: 階またぎの対応付け（finish/floorCLMap.js）で「対応する線」になる種別 ----
+// finish/floorCLMap.js findCounterpartForCL: 階の CL を別階へ写す（セルキーの付け替え・extent 参照先の
+// 付け替え）とき、対応する線にしてよい種別。キー＝源の種別。CROSS_FLOOR_COUNTERPART_KINDS（入替え後に
+// 座標が重複する衝突相手）とは別の関係なので別の表にする。2026-10-27 ユーザー裁定 I1（課題(i)）。
+// 理由（種別ごと）:
+//   struct  — 通り芯は全階共有の id（project.structGraph）で translateCLId が先に同 id を返す。階ローカルの
+//             グラフに通り芯が現れても写す相手はいない（空）。
+//   center  — 中心線はセルの分割線かつ壁の軸。同座標の補助線・梁芯は区画を割らず同じ壁も持たないので、
+//             中心線の相手は中心線だけ。
+//   aux     — 補助線は extent の参照先や壁端のアンカーで、中心線・梁芯とは役割が違う。相手は補助線だけ。
+//   beam    — 梁芯は構造専用。相手は梁芯だけ。
+//   ceiling — 天井芯は天伏専用で、階またぎの写しの対象外（空）。
+// 同種別が複数あるときの選び方（範囲の重なり優先）は findCounterpartForCL が持つ。
+export const FLOOR_CL_MAP_COUNTERPART_KINDS = Object.freeze({
+  struct:  Object.freeze([]),
+  center:  Object.freeze(['center']),
+  aux:     Object.freeze(['aux']),
+  beam:    Object.freeze(['beam']),
+  ceiling: Object.freeze([]),
+});
+
+/**
+ * candidate が、源の種別 sourceKind の線の階またぎの対応先になれる種別か
+ * （FLOOR_CL_MAP_COUNTERPART_KINDS）。未知の種別は throw。
+ * @param {string} sourceKind
+ * @param {object} candidate - 実在の CenterLine またはその POJO スナップショット
+ * @returns {boolean}
+ */
+export function isFloorClMapCounterpart(sourceKind, candidate) {
+  assertKnownKind(sourceKind);
+  return FLOOR_CL_MAP_COUNTERPART_KINDS[sourceKind].includes(centerLineKind(candidate));
+}
+
 // ---- 原始事実6b: 昇格で他階から吸収する種別 ----
 // transform/centerLineFloorSync.js findCenterLinesToAbsorbOnPromote/applyCenterLineAbsorptionOnPromote・
 // findFloorsWithCounterpartCL
@@ -758,7 +791,8 @@ export function isOrthoAnchorCandidate(subject, other, { coord = subject.value, 
 
 // 2つの梁芯の extent（軸方向の範囲）が tol を超えて重なるか。null（範囲未設定）は無限扱い＝重なる。
 // 端点で接するだけ（隣のベイとの共有辺）は重ならない（structural/fixedBeamOverlap.js spansOverlapOnAxis と同じ開区間規約）。
-function extentsOverlapBeyondTol(a, b, tolMm) {
+// finish/floorCLMap.js findCounterpartForCL（同種別が複数あるときの範囲の重なり優先）も共有する。
+export function extentsOverlapBeyondTol(a, b, tolMm) {
   const aLo = a.extentLo ?? -Infinity, aHi = a.extentHi ?? Infinity;
   const bLo = b.extentLo ?? -Infinity, bHi = b.extentHi ?? Infinity;
   return aLo < bHi - tolMm && aHi > bLo + tolMm;

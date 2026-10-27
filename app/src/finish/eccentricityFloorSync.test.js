@@ -16,7 +16,9 @@ import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 // 同座標のymで分割し、吹抜け側にRoomFeature.VOIDを立てる——吹抜けは「その階と直下階」で連動する
 // （eccentricityFloorSync.js冒頭コメント参照）ため、この最小構成だけで連動先1階を作れる
 // （階段連動（stair）はSTAIR/STAIR_VOID一式が要るぶん重いため、より軽い吹抜け（void）側で確認する）。
-async function makeVoidLinkedTwoFloorFixture() {
+// beamFirstBelow／beamFirstAbove: その階の ym（y=3000）の中心線より先に同座標の梁芯を並べる（課題(i) i1。
+// 種別を見ずに同座標の線を探すと梁芯へ解決して連動が黙って効かなくなる並び。S0 の再現と同じ構成）。
+async function makeVoidLinkedTwoFloorFixture({ beamFirstBelow = false, beamFirstAbove = false, splitAbove = false } = {}) {
   const project = new Project('proj', 'test');
   const { graph: below } = project.addPlane(0, '1階', 'p1');
   const { graph: above } = project.addPlane(3000, '2階', 'p2');
@@ -36,6 +38,7 @@ async function makeVoidLinkedTwoFloorFixture() {
   const bx0 = below.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const bx1 = below.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
   const by0 = below.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  if (beamFirstBelow) below.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.FUSE });
   const bym = below.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
   const by1 = below.addCenterLine(CenterLineType.HORIZONTAL, 6000, { labeled: false, discipline: Discipline.ARCH });
   const bKeyA = `${bx0.id}:${by0.id}:${bx1.id}:${bym.id}`;
@@ -48,17 +51,32 @@ async function makeVoidLinkedTwoFloorFixture() {
   const ax0 = above.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });
   const ax1 = above.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH });
   const ay0 = above.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
-  const aym = above.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.ARCH });
+  if (beamFirstAbove) above.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.FUSE });
+  const aym = above.addCenterLine(CenterLineType.HORIZONTAL, 3000, {
+    labeled: false, discipline: Discipline.ARCH, ...(splitAbove ? { extentLo: 0, extentHi: 3000 } : {}),
+  });
   const ay1 = above.addCenterLine(CenterLineType.HORIZONTAL, 6000, { labeled: false, discipline: Discipline.ARCH });
   const aKeyVoid = `${ax0.id}:${ay0.id}:${ax1.id}:${aym.id}`;
   const aKeyA = `${ax0.id}:${aym.id}:${ax1.id}:${ay1.id}`;
   above.addRoom(new Set([aKeyVoid]), '吹抜け').setFeature(RoomFeature.VOID);
   above.addRoom(new Set([aKeyA]), '部屋A2');
+  // splitAbove: 同座標 y=3000 に範囲の重ならない2本目 aymFar [6000,9000] と、それだけを境にする通常の2部屋（吹抜けに接しない）。
+  // 13.stq 2階 Y=-3500（[-8000,0] が吹抜けに接し、[1000,7000] は接しない）と同じ形。
+  let aymFar = null;
+  if (splitAbove) {
+    const ax2 = above.addCenterLine(CenterLineType.VERTICAL, 6000, { labeled: false, discipline: Discipline.ARCH });
+    const ax3 = above.addCenterLine(CenterLineType.VERTICAL, 9000, { labeled: false, discipline: Discipline.ARCH });
+    aymFar = above.addCenterLine(CenterLineType.HORIZONTAL, 3000, {
+      labeled: false, discipline: Discipline.ARCH, extentLo: 6000, extentHi: 9000,
+    });
+    above.addRoom(new Set([`${ax2.id}:${ay0.id}:${ax3.id}:${aymFar.id}`]), '部屋C2');
+    above.addRoom(new Set([`${ax2.id}:${aymFar.id}:${ax3.id}:${ay1.id}`]), '部屋D2');
+  }
   above.structureOverride = TRADITIONAL_WOOD_STRUCTURE;
   await runFinishEntryBoundary(above, project);
 
   const materialMap = await loadMaterialMap();
-  return { project, below, above, aym, materialMap };
+  return { project, below, above, aym, aymFar, materialMap };
 }
 
 // ---- QA F4/T5: 昇降路（昇降機）は階段規則（設置階〜最上階）で連動することの結線固定 ----
@@ -157,6 +175,80 @@ test('propagateCLEccentricities: undoRecords省略時は従来どおり保存の
   const saveFloorFn = async (planeId) => { saveCalls.push(planeId); };
   await assert.doesNotReject(() => propagateCLEccentricities(project, above, [aym.id], { materialMap, saveFloorFn }));
   assert.deepEqual(saveCalls, [below.plane.id]);
+});
+
+// ---- 課題(i) i1: 同座標に梁芯が中心線より先に並ぶ階でも連動が効く（S0 の再現と同じ構成）----
+test('propagateCLEccentricities【i1】: 連動先の階で梁芯が中心線より先に並んでいても偏芯が連動し、レコードは中心線に付く', async () => {
+  const { project, below, above, aym, materialMap } = await makeVoidLinkedTwoFloorFixture({ beamFirstBelow: true });
+  const beamBelow = below.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 3000);
+  assert.equal(beamBelow.discipline, Discipline.FUSE, '前提: 直下階の同座標の先頭が梁芯');
+  above.setCLEccentricity(aym.id, { mode: 'face', value: 0, side: 1, backing: '' });
+
+  const saveCalls = [];
+  await propagateCLEccentricities(project, above, [aym.id], { materialMap, saveFloorFn: async (id) => { saveCalls.push(id); } });
+
+  assert.deepEqual(saveCalls, [below.plane.id], '直下階へ連動して1回保存される');
+  const ids = [...below.clEccentricities.keys()];
+  assert.equal(ids.length, 1);
+  assert.notEqual(ids[0], beamBelow.id, '偏芯レコードは梁芯ではなく中心線に付く');
+  assert.equal(below.shapeMap.get(ids[0]).discipline, Discipline.ARCH);
+});
+
+test('propagateCLEccentricities【i1】: アクティブ階で梁芯が中心線より先に並んでいても連動する（自分を探し直す側）', async () => {
+  const { project, below, above, aym, materialMap } = await makeVoidLinkedTwoFloorFixture({ beamFirstAbove: true });
+  above.setCLEccentricity(aym.id, { mode: 'face', value: 0, side: 1, backing: '' });
+
+  const saveCalls = [];
+  await propagateCLEccentricities(project, above, [aym.id], { materialMap, saveFloorFn: async (id) => { saveCalls.push(id); } });
+
+  assert.deepEqual(saveCalls, [below.plane.id], '直下階へ連動して1回保存される');
+  assert.equal(below.clEccentricities.size, 1);
+});
+
+test('【失敗系】propagateCLEccentricities【i1】: 連動先の同座標に梁芯しか無ければ（対応する中心線なし）連動せず保存もしない', async () => {
+  const { project, below, above, aym, materialMap } = await makeVoidLinkedTwoFloorFixture();
+  const bym = below.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 3000);
+  below.removeCenterLine(bym.id);
+  below.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: false, discipline: Discipline.FUSE });
+  above.setCLEccentricity(aym.id, { mode: 'face', value: 0, side: 1, backing: '' });
+
+  const saveCalls = [];
+  await propagateCLEccentricities(project, above, [aym.id], { materialMap, saveFloorFn: async (id) => { saveCalls.push(id); } });
+
+  assert.deepEqual(saveCalls, []);
+  assert.equal(below.clEccentricities.size, 0);
+});
+
+// ---- 連動の判定は偏芯を付けた線そのものの接触で決まる（2026-10-27 ユーザー受け入れ。13.stq 2階 Y=-3500 の形）----
+// アクティブ階（above）の同座標 y=3000 に同種別（中心線）で範囲の重ならない2ピース: 先頭 P1 [0,3000] は吹抜けに接し、
+// 後ろの P2 [6000,9000] はどの吹抜けにも接しない。同じ階へは id をそのまま引くので、P2 に付けた偏芯は連動しない
+// （同座標の先頭ピース P1 を経由して連動することはない）。
+async function makeSplitCoordVoidFixture() {
+  const f = await makeVoidLinkedTwoFloorFixture({ splitAbove: true });
+  return { ...f, p1: f.aym, p2: f.aymFar };
+}
+
+test('propagateCLEccentricities【受け入れ】: 同座標の先頭ピースだけが吹抜けに接するとき、先頭ピースに付けた偏芯は直下階へ連動する（対照）', async () => {
+  const { project, below, above, p1, p2, materialMap } = await makeSplitCoordVoidFixture();
+  assert.deepEqual(above.centerLines.filter(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 3000).map(c => c.id), [p1.id, p2.id], '前提: 先頭が吹抜けに接する P1');
+  above.setCLEccentricity(p1.id, { mode: 'face', value: 0, side: 1, backing: '' });
+
+  const saveCalls = [];
+  await propagateCLEccentricities(project, above, [p1.id], { materialMap, saveFloorFn: async (id) => { saveCalls.push(id); } });
+
+  assert.deepEqual(saveCalls, [below.plane.id], '吹抜けに接する P1 の偏芯は直下階へ連動して1回保存される');
+});
+
+test('【失敗系】propagateCLEccentricities【受け入れ】: 同座標の後ろのピース（吹抜けに接しない）に付けた偏芯は、先頭ピースが吹抜けに接していても連動せず保存もしない', async () => {
+  const { project, below, above, p1, p2, materialMap } = await makeSplitCoordVoidFixture();
+  assert.deepEqual(above.centerLines.filter(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 3000).map(c => c.id), [p1.id, p2.id], '前提: 先頭 P1 だけが吹抜けに接する');
+  above.setCLEccentricity(p2.id, { mode: 'face', value: 0, side: 1, backing: '' });
+
+  const saveCalls = [];
+  await propagateCLEccentricities(project, above, [p2.id], { materialMap, saveFloorFn: async (id) => { saveCalls.push(id); } });
+
+  assert.deepEqual(saveCalls, []);
+  assert.equal(below.clEccentricities.size, 0);
 });
 
 test('【失敗系】propagateCLEccentricities: clIds空配列なら何もしない（saveFloorFnも呼ばれずundoRecordsも変化しない）', async () => {

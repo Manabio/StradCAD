@@ -41,6 +41,7 @@ import {
   beamAxisAt, beamAxisCenterLines, supportSpanColumnCandidates,
   FLOOR_SHARED_KINDS, structuralSyncScopeOfKind, structuralSyncScopeOfConversion,
   structuralSyncScopeForCenterLine,
+  FLOOR_CL_MAP_COUNTERPART_KINDS, isFloorClMapCounterpart,
 } from './centerLineKindPolicy.js';
 
 // ---- 製品コード（section C）との突き合わせに使う実装 ----
@@ -178,6 +179,41 @@ test('小表: WALL_ANCHOR_KINDS・EXTENT_ANCHOR_STYLE・ENDPOINT_RULE_KINDS・FU
 
 test('CROSS_FLOOR_COUNTERPART_KINDS: 他階の入替え相手種別は中心線・補助線・梁芯（優先順つき。通り芯は含まない）', () => {
   assert.deepEqual([...CROSS_FLOOR_COUNTERPART_KINDS], ['center', 'aux', 'beam']);
+});
+
+// 課題(i) i1（2026-10-27 裁定 I1）: 階またぎの対応付け（finish/floorCLMap.js）の対応種別表。入替えの衝突相手
+// （CROSS_FLOOR_COUNTERPART_KINDS）とは別の関係。
+test('FLOOR_CL_MAP_COUNTERPART_KINDS: 通り芯・天井芯は対応なし、中心線・補助線・梁芯は同種別だけ。凍結されている', () => {
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(FLOOR_CL_MAP_COUNTERPART_KINDS).map(([k, v]) => [k, [...v]])),
+    { struct: [], center: ['center'], aux: ['aux'], beam: ['beam'], ceiling: [] },
+  );
+  assert.deepEqual(Object.keys(FLOOR_CL_MAP_COUNTERPART_KINDS), [...CL_KINDS], '全種別を網羅し並びも CL_KINDS と同じ');
+  assert.ok(Object.isFrozen(FLOOR_CL_MAP_COUNTERPART_KINDS));
+  for (const v of Object.values(FLOOR_CL_MAP_COUNTERPART_KINDS)) assert.ok(Object.isFrozen(v));
+});
+
+test('isFloorClMapCounterpart: 全種別×全種別の総当りが表どおり（同種別だけ。通り芯・天井芯の源は何にも写らない）', () => {
+  const graph = makeGraph();
+  const byKind = {
+    struct: graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT }),
+    center: graph.addCenterLine(CenterLineType.VERTICAL, 1, { labeled: false, discipline: Discipline.ARCH }),
+    aux: graph.addCenterLine(CenterLineType.VERTICAL, 2, { labeled: false, lineType: 'dashed' }),
+    beam: graph.addCenterLine(CenterLineType.VERTICAL, 3, { labeled: false, discipline: Discipline.FUSE }),
+    ceiling: graph.addCenterLine(CenterLineType.VERTICAL, 4, { labeled: false, discipline: Discipline.CEILING }),
+  };
+  for (const [kind, cl] of Object.entries(byKind)) assert.equal(centerLineKind(cl), kind, `前提: ${kind} の CL`);
+  for (const src of CL_KINDS) {
+    for (const cand of CL_KINDS) {
+      assert.equal(isFloorClMapCounterpart(src, byKind[cand]), FLOOR_CL_MAP_COUNTERPART_KINDS[src].includes(cand), `${src} → ${cand}`);
+    }
+  }
+});
+
+test('【失敗系】isFloorClMapCounterpart: 未知の種別は throw', () => {
+  const graph = makeGraph();
+  const cl = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  assert.throws(() => isFloorClMapCounterpart('unknown', cl), /未知のCL種別/);
 });
 
 // QA指摘（ステップ5再QA）で判明した既存の穴: CL_KINDS 自体の並びを固定するリテラルテストが

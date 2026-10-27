@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, Project, CenterLineType, Discipline } from '../core.js';
 import {
   findCounterpartCL, translateCLId, collectNeededCLs, addMissingCLs, translateCellSet,
-  extendDividerExtents, retargetKeysToCoveringCLs,
+  extendDividerExtents, retargetKeysToCoveringCLs, findCounterpartForCL,
 } from './floorCLMap.js';
 import { isFinishCellDivider } from '../core/centerLineKindPolicy.js';
 import { RoomKind } from '../core.js';
@@ -486,3 +486,158 @@ function cellFixtureKeys(g1) {
   ].map(([ty, v]) => g1.centerLines.find(c => c.centerLineType === ty && c.value === v));
   return [`${l.id}:${t.id}:${r.id}:${b.id}`];
 }
+
+// ---- 課題(i) i1: 対応する線は同じ種別だけ（2026-10-27 ユーザー裁定 I1）----
+// 同座標で梁芯・補助線を中心線より先に並べた階（素の find なら梁芯・補助線を返してしまう並び）。
+const ARCH_OPTS = { labeled: false, discipline: Discipline.ARCH };
+const BEAM_OPTS = { labeled: false, discipline: Discipline.FUSE };
+const AUX_OPTS = { labeled: false, lineType: 'dashed' };
+
+test('translateCLId【i1】: 上階に同座標の梁芯・補助線が中心線より先に並んでいても中心線を返す', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const srcCl = g1.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS);
+  const beam = g2.addCenterLine(CenterLineType.VERTICAL, 1000, BEAM_OPTS);
+  const aux = g2.addCenterLine(CenterLineType.VERTICAL, 1000, AUX_OPTS);
+  const dstCl = g2.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS);
+  assert.deepEqual(g2.centerLines.map(c => c.id), [beam.id, aux.id, dstCl.id], '前提: 梁芯・補助線が先頭');
+  assert.equal(translateCLId(srcCl.id, g1, project.structGraph, g2), dstCl.id);
+});
+
+test('translateCLId【i1】: 補助線・梁芯も同種別の相手へ写す（中心線が先に並んでいても取り違えない）', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const srcAux = g1.addCenterLine(CenterLineType.VERTICAL, 1000, AUX_OPTS);
+  const srcBeam = g1.addCenterLine(CenterLineType.VERTICAL, 2000, BEAM_OPTS);
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS);
+  const dstAux = g2.addCenterLine(CenterLineType.VERTICAL, 1000, AUX_OPTS);
+  g2.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH_OPTS);
+  const dstBeam = g2.addCenterLine(CenterLineType.VERTICAL, 2000, BEAM_OPTS);
+  assert.equal(translateCLId(srcAux.id, g1, project.structGraph, g2), dstAux.id);
+  assert.equal(translateCLId(srcBeam.id, g1, project.structGraph, g2), dstBeam.id);
+});
+
+test('【失敗系】translateCLId【i1】: 相手が同座標の梁芯・補助線しか無いときは null（違う種別へ写さない）', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const srcCl = g1.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS);
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, BEAM_OPTS);
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, AUX_OPTS);
+  assert.equal(translateCLId(srcCl.id, g1, project.structGraph, g2), null);
+});
+
+test('translateCLId【i2】: 対象のグラフが源のグラフと同じなら id をそのまま返す（同座標に梁芯が先に並んでいても）', () => {
+  const { project, g1 } = makeProjectWithTwoFloors();
+  g1.addCenterLine(CenterLineType.VERTICAL, 1000, BEAM_OPTS);
+  g1.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS); // 同種別・範囲も重なる先行ピース（探し直すとこちらを返す）
+  const cl = g1.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS);
+  assert.equal(translateCLId(cl.id, g1, project.structGraph, g1), cl.id, '自分自身の id（先行の同種別ピースや梁芯ではない）');
+});
+
+test('【失敗系】translateCLId【i2】: 同じグラフでも存在しない id は null（短絡は CL の検査の後）', () => {
+  const { project, g1 } = makeProjectWithTwoFloors();
+  assert.equal(translateCLId('no-such-id', g1, project.structGraph, g1), null);
+});
+
+test('translateCLId【i1】: 同種別が複数あるとき範囲の重なる線を優先し、重なるものが無ければ同種別の先頭', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const srcCl = g1.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH_OPTS, extentLo: 5000, extentHi: 8000 });
+  const far = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH_OPTS, extentLo: 0, extentHi: 3000 });
+  const near = g2.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH_OPTS, extentLo: 4000, extentHi: 9000 });
+  assert.equal(translateCLId(srcCl.id, g1, project.structGraph, g2), near.id, '範囲の重なる後ろの線を選ぶ');
+
+  const noOverlapSrc = g1.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH_OPTS, extentLo: 20000, extentHi: 30000 });
+  assert.equal(translateCLId(noOverlapSrc.id, g1, project.structGraph, g2), far.id, '重なる線が無ければ同種別の先頭');
+});
+
+test('【失敗系】findCounterpartForCL【i1】: 引数不正（源なし・value が数値でない）は null（throw しない）', () => {
+  const { g1 } = makeProjectWithTwoFloors();
+  assert.equal(findCounterpartForCL(g1, null), null);
+  assert.equal(findCounterpartForCL(g1, { centerLineType: CenterLineType.VERTICAL, value: NaN }), null);
+  assert.equal(findCounterpartForCL(g1, { centerLineType: null, value: 0 }), null);
+});
+
+test('【失敗系】findCounterpartForCL【i1】: 源が天井芯なら、相手グラフの同座標に天井芯がいても null（天井芯は階固有で対応先を持たない）', () => {
+  const { g1, g2 } = makeProjectWithTwoFloors();
+  const CEILING_OPTS = { labeled: false, discipline: Discipline.CEILING };
+  const src = g1.addCenterLine(CenterLineType.VERTICAL, 1000, CEILING_OPTS);
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, CEILING_OPTS);
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS);
+  assert.equal(findCounterpartForCL(g2, src), null);
+});
+
+test('【失敗系】findCounterpartForCL【i1】: 源が通り芯の種別なら、相手グラフの同座標に同種別がいても null（通り芯は全階共通 id で探さない）', () => {
+  const { g1, g2 } = makeProjectWithTwoFloors();
+  const STRUCT_OPTS = { labeled: true, discipline: Discipline.STRUCT };
+  const src = g1.addCenterLine(CenterLineType.VERTICAL, 1000, STRUCT_OPTS);
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, STRUCT_OPTS);
+  g2.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS);
+  assert.equal(findCounterpartForCL(g2, src), null);
+});
+
+test('translateCellSet【i1の例外】: 源が通り芯の種別の階ローカル CL（structGraph に無い）でも、セルキーに限り従来どおり同座標の先頭の線へ写す（フォールバックの境界）', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const [l, t, r] = [[CenterLineType.VERTICAL, 0], [CenterLineType.HORIZONTAL, 0], [CenterLineType.VERTICAL, 1000]]
+    .map(([ty, v]) => g1.addCenterLine(ty, v, ARCH_OPTS));
+  const b = g1.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  assert.equal(project.structGraph.shapeMap.has(b.id), false, '前提: structGraph に無い階ローカルの通り芯種別');
+  const upL = g2.addCenterLine(CenterLineType.VERTICAL, 0, ARCH_OPTS);
+  const upT = g2.addCenterLine(CenterLineType.HORIZONTAL, 0, ARCH_OPTS);
+  const upR = g2.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS);
+  const upBFirst = g2.addCenterLine(CenterLineType.HORIZONTAL, 1000, BEAM_OPTS); // 先頭
+  g2.addCenterLine(CenterLineType.HORIZONTAL, 1000, ARCH_OPTS);
+  assert.equal(translateCLId(b.id, g1, project.structGraph, g2), null, '対照: translateCLId 自体は null（通り芯の種別に対応先なし）');
+  const out = translateCellSet(new Set([`${l.id}:${t.id}:${r.id}:${b.id}`]), g1, project.structGraph, g2);
+  assert.deepEqual([...out], [[upL, upT, upR, upBFirst].map(c => c.id).join(':')], '同座標の先頭の線');
+});
+
+test('translateCellSet【i1】: セルキーは同種別の中心線を優先して写す（梁芯が先に並んでいても）', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const [l, t, r, b] = [[CenterLineType.VERTICAL, 0], [CenterLineType.HORIZONTAL, 0], [CenterLineType.VERTICAL, 1000], [CenterLineType.HORIZONTAL, 1000]]
+    .map(([ty, v]) => g1.addCenterLine(ty, v, ARCH_OPTS));
+  g2.addCenterLine(CenterLineType.HORIZONTAL, 1000, BEAM_OPTS); // 先に並ぶ梁芯
+  const up = [[CenterLineType.VERTICAL, 0], [CenterLineType.HORIZONTAL, 0], [CenterLineType.VERTICAL, 1000], [CenterLineType.HORIZONTAL, 1000]]
+    .map(([ty, v]) => g2.addCenterLine(ty, v, ARCH_OPTS));
+  const out = translateCellSet(new Set([`${l.id}:${t.id}:${r.id}:${b.id}`]), g1, project.structGraph, g2);
+  assert.deepEqual([...out], [up.map(c => c.id).join(':')]);
+});
+
+test('translateCellSet【i1の例外】: 同座標に同種別が無く梁芯しか無いときは、セルキーに限り従来どおり梁芯の id へ写す（階段全体を untranslatable にしない）', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const [l, t, r, b] = [[CenterLineType.VERTICAL, 0], [CenterLineType.HORIZONTAL, 0], [CenterLineType.VERTICAL, 1000], [CenterLineType.HORIZONTAL, 1000]]
+    .map(([ty, v]) => g1.addCenterLine(ty, v, ARCH_OPTS));
+  const upL = g2.addCenterLine(CenterLineType.VERTICAL, 0, ARCH_OPTS);
+  const upT = g2.addCenterLine(CenterLineType.HORIZONTAL, 0, ARCH_OPTS);
+  const upR = g2.addCenterLine(CenterLineType.VERTICAL, 1000, ARCH_OPTS);
+  const upB = g2.addCenterLine(CenterLineType.HORIZONTAL, 1000, BEAM_OPTS);
+  const out = translateCellSet(new Set([`${l.id}:${t.id}:${r.id}:${b.id}`]), g1, project.structGraph, g2);
+  assert.deepEqual([...out], [[upL, upT, upR, upB].map(c => c.id).join(':')]);
+  assert.equal(translateCLId(b.id, g1, project.structGraph, g2), null, '対照: translateCLId 自体は null（種別を見る）');
+});
+
+test('【失敗系】translateCellSet【i1】: 同座標に何も無いセルは従来どおり null', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const [l, t, r, b] = [[CenterLineType.VERTICAL, 0], [CenterLineType.HORIZONTAL, 0], [CenterLineType.VERTICAL, 1000], [CenterLineType.HORIZONTAL, 1000]]
+    .map(([ty, v]) => g1.addCenterLine(ty, v, ARCH_OPTS));
+  assert.equal(translateCellSet(new Set([`${l.id}:${t.id}:${r.id}:${b.id}`]), g1, project.structGraph, g2), null);
+});
+
+test('addMissingCLs【i1】: extent の参照先は上階の同種別の線へ付け替える（梁芯が先に並んでいても中心線）', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const srcRef = g1.addCenterLine(CenterLineType.HORIZONTAL, 500, ARCH_OPTS);
+  g2.addCenterLine(CenterLineType.HORIZONTAL, 500, BEAM_OPTS);
+  const dstRef = g2.addCenterLine(CenterLineType.HORIZONTAL, 500, ARCH_OPTS);
+  const src = g1.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH_OPTS, extentLoRef: { clId: srcRef.id, offset: 10 } });
+  addMissingCLs(collectNeededCLs([`${src.id}:a:b:c`], g1), g1, project.structGraph, g2);
+  const nc = findCounterpartCL(g2, CenterLineType.VERTICAL, 1000);
+  assert.equal(nc.extentLoRef?.clId, dstRef.id, '参照先は梁芯ではなく上階の中心線');
+});
+
+test('【失敗系】addMissingCLs【i1】: 参照先の相手が上階に同座標の梁芯しか無いときは参照化せず静的値に落とす', () => {
+  const { project, g1, g2 } = makeProjectWithTwoFloors();
+  const srcRef = g1.addCenterLine(CenterLineType.HORIZONTAL, 500, ARCH_OPTS);
+  const beam = g2.addCenterLine(CenterLineType.HORIZONTAL, 500, BEAM_OPTS);
+  const src = g1.addCenterLine(CenterLineType.VERTICAL, 1000, { ...ARCH_OPTS, extentLoRef: { clId: srcRef.id, offset: 10 } });
+  addMissingCLs(collectNeededCLs([`${src.id}:a:b:c`], g1), g1, project.structGraph, g2);
+  const nc = findCounterpartCL(g2, CenterLineType.VERTICAL, 1000);
+  assert.notEqual(nc.extentLoRef?.clId, beam.id, '梁芯を参照先にしない');
+  assert.equal(nc.extentLoRef, null);
+  assert.equal(nc.extentLo, 510, '静的値（解決済み座標 500+10）');
+});
