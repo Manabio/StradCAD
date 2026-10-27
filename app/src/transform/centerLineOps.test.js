@@ -7,7 +7,7 @@ import {
   edgeKey, RoomFeature, RoomKind,
 } from '../core.js';
 import {
-  ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
+  ERR_CL_DUPLICATE, ERR_CL_MOVE_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_ATTACHED, ERR_CL_CONVERT_NO_GRID, ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE,
   ERR_CL_CONVERT_DUP_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_DUP, ERR_CL_DELETE_FOOTPRINT,
   ERR_CL_DELETE_UNRESOLVABLE, ERR_CL_DELETE_WALLS_UNAVAILABLE, ERR_CATALOG_DUPLICATE,
@@ -428,6 +428,92 @@ test('【失敗系】commitCLMoveOp: 通り芯の移動量ゼロは構造同期�
   } finally {
     setCenterLineStructuralListener(null);
   }
+});
+
+// ---- 通り芯どうしの重複ガード（問題3・3A）----
+
+function addStructVertical(graph, value) {
+  return graph.addCenterLine(CenterLineType.VERTICAL, value, { labeled: true, discipline: Discipline.STRUCT });
+}
+
+test('【失敗系】commitCLMoveOp: 通り芯を同じ向きの別の通り芯と同じ座標へ動かす確定は拒否される（値は元のまま・undoなし・リスナーなし・トースト）', () => {
+  const graph = makeGraph();
+  const moving = addStructVertical(graph, 500);
+  addStructVertical(graph, 1000);
+  const project = {};
+  moving.pendingDelta = 500; // 500→1000（他の通り芯と同座標）
+  const beforeTop = undoManager.peekUndo();
+
+  let calls = 0;
+  setCenterLineStructuralListener(() => { calls++; });
+  try {
+    const { toast } = commitCLMoveOp(graph, project, moving, 500);
+    assert.equal(toast, ERR_CL_MOVE_DUPLICATE);
+    assert.equal(moving.value, 500, '値は元のまま');
+    assert.equal(moving.pendingDelta, 0, 'pendingDeltaは戻る');
+    assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
+    assert.equal(calls, 0, '構造同期リスナーは呼ばれない');
+  } finally {
+    setCenterLineStructuralListener(null);
+  }
+});
+
+test('commitCLMoveOp: 通り芯の重複ガードは水平の通り芯でも効き、向きの違う通り芯の座標へは動かせる', () => {
+  const graph = makeGraph();
+  const h = graph.addCenterLine(CenterLineType.HORIZONTAL, 500, { labeled: true, discipline: Discipline.STRUCT });
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+  addStructVertical(graph, 2000);
+  h.pendingDelta = 500;
+  assert.equal(commitCLMoveOp(graph, {}, h, 500).toast, ERR_CL_MOVE_DUPLICATE);
+  assert.equal(h.value, 500);
+
+  h.pendingDelta = 1500; // 500→2000（垂直の通り芯と同じ値だが向きが違う）
+  assert.equal(commitCLMoveOp(graph, {}, h, 500).toast, null);
+  assert.equal(h.value, 2000);
+  undoManager.undo();
+});
+
+test('commitCLMoveOp: 通り芯の重複ガードの境界——CL_OVERLAP_TOL_MM(0.5mm)の内は拒否、外は通る', () => {
+  const inside = makeGraph();
+  const a = addStructVertical(inside, 500);
+  addStructVertical(inside, 1000);
+  a.pendingDelta = 500.4; // 1000.4（差0.4mm）
+  assert.equal(commitCLMoveOp(inside, {}, a, 500).toast, ERR_CL_MOVE_DUPLICATE);
+  assert.equal(a.value, 500);
+
+  const outside = makeGraph();
+  const b = addStructVertical(outside, 500);
+  addStructVertical(outside, 1000);
+  b.pendingDelta = 500.6; // 1000.6（差0.6mm）
+  assert.equal(commitCLMoveOp(outside, {}, b, 500).toast, null);
+  assert.equal(b.value, 1000.6);
+  undoManager.undo();
+});
+
+test('commitCLMoveOp: 【T6対照】同じ座標に通り芯があっても、動かす線が通り芯でない中心線なら拒否しない（限界13）', () => {
+  const graph = makeGraph();
+  const center = graph.addCenterLine(CenterLineType.VERTICAL, 500, { labeled: false, discipline: Discipline.ARCH });
+  addStructVertical(graph, 1000);
+  center.pendingDelta = 500;
+
+  const { toast } = commitCLMoveOp(graph, {}, center, 500);
+  assert.equal(toast, null);
+  assert.equal(center.value, 1000);
+  undoManager.undo();
+  assert.equal(center.value, 500);
+});
+
+test('commitCLMoveOp: 通り芯の移動先に通り芯でない線（中心線）しか無ければ拒否しない', () => {
+  const graph = makeGraph();
+  const moving = addStructVertical(graph, 500);
+  graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+  moving.pendingDelta = 500;
+
+  const { toast } = commitCLMoveOp(graph, {}, moving, 500);
+  assert.equal(toast, null);
+  assert.equal(moving.value, 1000);
+  undoManager.undo();
+  assert.equal(moving.value, 500);
 });
 
 test('commitCLMoveOp: 梁芯の移動は構造同期リスナーを呼ばない（専用の追従経路wallBeamAxisFollow.jsと二重に動かさないため・条件10。T4）', () => {

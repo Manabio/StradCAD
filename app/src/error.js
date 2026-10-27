@@ -12,6 +12,11 @@ function assertKnownKind(kind) {
 export const ERR_CL_DUPLICATE = (kind) =>
   `既に同じ位置に${KIND_LABEL[kind]}があり、追加できません。`;
 
+// 通り芯の移動の確定が、同じ向きの別の通り芯と同じ座標になる場合の文言（transform/centerLineOps.js
+// commitCLMoveOp）。ERR_CL_DUPLICATE('struct') の移動版（動詞だけ「移動できません」）。
+export const ERR_CL_MOVE_DUPLICATE =
+  `既に同じ位置に${KIND_LABEL.struct}があり、移動できません。`;
+
 // 裁定Q9（線種変更の移籍一本化・2026-09-30）: 実態は削除+新規作成ではなく移籍（既存の中心線を
 // そのまま通り芯へ昇格）のため、文言もそれに合わせる。
 export const ERR_CL_CENTER_UPGRADED =

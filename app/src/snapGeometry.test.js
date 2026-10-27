@@ -546,10 +546,28 @@ test('findCLMoveSnap: moving=struct/center/aux いずれでも梁芯へは吸着
     const moving = graph.addCenterLine(CenterLineType.VERTICAL, 0, movingProps[movingKind]);
     graph.addCenterLine(CenterLineType.VERTICAL, 3, { labeled: false, discipline: Discipline.FUSE }); // 梁芯（最も近いが吸着対象外）
     const struct = graph.addCenterLine(CenterLineType.VERTICAL, 6, { labeled: true, discipline: Discipline.STRUCT });
+    // moving=struct のときだけ通り芯は吸着先から外れる（問題3・Q3）ので、その場合の吸着先は中心線(7)
+    const center = graph.addCenterLine(CenterLineType.VERTICAL, 7, { labeled: false, discipline: Discipline.ARCH });
 
     const snap = findCLMoveSnap(graph, moving, 0, 0, THRESHOLD_PX, SCALE, SCALE);
-    assert.equal(snap, struct.value, `moving=${movingKind}: 梁芯(3)ではなく通り芯(6)へ吸着するはず`);
+    if (movingKind === 'struct') {
+      assert.equal(snap, center.value, 'moving=struct: 梁芯(3)でも通り芯(6)でもなく中心線(7)へ吸着するはず');
+    } else {
+      assert.equal(snap, struct.value, `moving=${movingKind}: 梁芯(3)ではなく通り芯(6)へ吸着するはず`);
+    }
   }
+});
+
+test('findCLMoveSnap: 通り芯を動かすとき他の通り芯は吸着先に入らず、中心線を動かすときは入る（問題3・Q3）', () => {
+  const graph = makeGraph();
+  const struct = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
+  const center = graph.addCenterLine(CenterLineType.VERTICAL, 100, { labeled: false, discipline: Discipline.ARCH });
+  graph.addCenterLine(CenterLineType.VERTICAL, 3, { labeled: true, discipline: Discipline.STRUCT });
+
+  assert.equal(findCLMoveSnap(graph, struct, 0, 0, THRESHOLD_PX, SCALE, SCALE), null,
+    '通り芯(0)を動かすとき、閾値内の他の通り芯(3)へは吸着しない');
+  assert.equal(findCLMoveSnap(graph, center, 3, 0, THRESHOLD_PX, SCALE, SCALE), 3,
+    '中心線を動かすときは通り芯(3)へ吸着する（従来どおり）');
 });
 
 test('【失敗系】findCLMoveSnap: 候補が梁芯のみ（吸着対象外種別のみ）で閾値内の場合はnullを返す', () => {

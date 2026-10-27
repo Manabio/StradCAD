@@ -1404,11 +1404,15 @@ for (const movingKind of ['struct', 'center', 'aux']) {
     const moving = graph.addCenterLine(CenterLineType.VERTICAL, 0, movingProps);
     graph.addCenterLine(CenterLineType.VERTICAL, 3, { labeled: false, discipline: Discipline.FUSE }); // 梁芯（最も近い）
     const struct = graph.addCenterLine(CenterLineType.VERTICAL, 6, { labeled: true, discipline: Discipline.STRUCT });
+    // moving=struct のときだけ通り芯は吸着先から外れる（問題3・Q3。確定時に拒否される座標のため）。
+    // その場合の吸着先は中心線(7)。
+    const center = graph.addCenterLine(CenterLineType.VERTICAL, 7, { labeled: false, discipline: Discipline.ARCH });
 
     const targetKinds = moveSnapTargetKinds(movingKind);
     assert.ok(!targetKinds.includes('beam'), '前提: moveSnapTargetKindsは梁芯を含まない');
     const snap = findCLMoveSnap(graph, moving, 0, 0, 8, 1, 1);
-    assert.equal(snap, struct.value, `moving=${movingKind}: 梁芯(3)ではなく通り芯(6)へ吸着するはず`);
+    const expected = movingKind === 'struct' ? center : struct;
+    assert.equal(snap, expected.value, `moving=${movingKind}: 梁芯(3)ではなく(${expected.value})へ吸着するはず`);
   });
 }
 

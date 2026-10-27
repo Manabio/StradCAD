@@ -4,7 +4,7 @@
 // （transform/centerLineOps.js 等、graph実体のみで完結する純関数を node:test から直接検証したいモジュールが
 // これらの関数を必要とするケースがある）。snap.js は本モジュールを import して同名を再エクスポートし、
 // 既存の import 元（App.jsx・CenterLinesLayer.jsx 等）を壊さない。
-import { CenterLineType, DimensionKind, DimensionSide, centerLineKind } from './core.js';
+import { CenterLineType, DimensionKind, DimensionSide, centerLineKind, isGridCenterLine } from './core.js';
 import { isMoveSnapTarget, sameDirectionObstacles, spansEntireAxis, gridCenterLinesOnAxis, hitTestKinds } from './core/centerLineKindPolicy.js';
 
 // ----------------------------------------------------------------
@@ -96,10 +96,15 @@ export function findCLMoveSnap(graph, movingCL, wx, wy, thresholdPx, scaleX, sca
   const isV   = movingCL.centerLineType === CenterLineType.VERTICAL;
   const scale = isV ? scaleX : scaleY;
   const coord = isV ? wx : wy;
+  // 通り芯を動かすときは同じ向きの他の通り芯を吸着先から外す——その座標への移動は確定時に拒否される
+  // （centerLineOps.commitCLMoveOp の通り芯どうしの重複ガード）ため、吸着させる意味が無い。
+  // 中心線・補助線・天井芯を動かすときは従来どおり（通り芯へも吸着する）。
+  const movingIsStruct = isGridCenterLine(movingCL);
   let best = null, minDist = Infinity;
   for (const cl of graph.centerLines) {
     if (cl.id === movingCL.id || cl.centerLineType !== movingCL.centerLineType) continue;
     if (!isMoveSnapTarget(movingCL, cl)) continue;
+    if (movingIsStruct && isGridCenterLine(cl)) continue;
     const dist = Math.abs(cl.value - coord) * scale;
     if (dist < thresholdPx && dist < minDist) { minDist = dist; best = cl.value; }
   }

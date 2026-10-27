@@ -7,7 +7,7 @@ import { BeamAxisOrigin } from '../core/centerLine.js';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
 import {
-  ERR_CL_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
+  ERR_CL_DUPLICATE, ERR_CL_MOVE_DUPLICATE, ERR_CL_CENTER_UPGRADED, ERR_CL_STRUCT_EXISTS,
   ERR_CL_CONVERT_DUP_FLOOR, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE, ERR_CL_DELETE_LAST_GRID, ERR_CL_CONVERT_NO_GRID,
   ERR_CL_DELETE_FOOTPRINT, ERR_CL_DELETE_UNRESOLVABLE, ERR_CL_DELETE_WALLS_UNAVAILABLE, ERR_CATALOG_DUPLICATE,
   ERR_CL_CONVERT_SAME_ID_FLOOR, ERR_CL_CONVERT_SAME_ID_FLOOR_DEMOTE, ERR_CL_CONVERT_ABSORB_CONFLICT_FLOOR,
@@ -139,6 +139,18 @@ export function commitCLMoveOp(graph, project, cl, originalValue, opts = {}) {
   }
 
   if (centerLineKind(cl) !== 'beam') {
+    // 通り芯どうしの重複ガード（問題3・3A）: 通り芯を同じ向きの別の通り芯の座標（CL_OVERLAP_TOL_MM以内）へ
+    // 動かす確定は拒否する。追加（ERR_CL_DUPLICATE('struct')）・昇格と同じ述語（sameCoordCounterparts）で、
+    // 種別の表（struct.struct:'forbidden'）の規約を移動にも通す。生成・撤去の鍵が線idで座標を見ないため、
+    // 同座標の通り芯が2本並ぶと柱・大梁・基礎梁が二重に作られる。どの書き込みよりも前に判定し、
+    // 拒否時は pendingDelta を戻すだけ（undoは積まず、構造同期も起動しない）。動かす線が struct のときだけ
+    // （中心線・天井芯を通り芯の座標へ動かす移動は限界13で受容済み＝拒否しない）。
+    if (isGridCenterLine(cl)
+      && sameCoordCounterparts(graph, { centerLineType: cl.centerLineType, value: newValue, exclude: cl })
+        .some(isGridCenterLine)) {
+      runInAction(() => { cl.pendingDelta = 0; });
+      return { toast: ERR_CL_MOVE_DUPLICATE };
+    }
     // 段階(b)/(c)・2026-09-25: 中心線・通り芯の移動でも構造同期を起動する（種別ポリシー
     // structuralSyncScopeOfKind経由——「操作×種別」の専用表は作らず、削除・追加・変換と同じ表を使う。
     // 通り芯（struct）は'all'、中心線（center）は'activeAndAbove'、補助線・梁芯自身の移動はnull＝

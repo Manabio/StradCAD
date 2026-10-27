@@ -414,8 +414,10 @@ const G4_ALLOWLIST = {
 
 // ---- G5a: `sameCoordCounterparts(` の呼び出し（core/ を除く） ----
 const G5A_ALLOWLIST = {
-  'transform/centerLineOps.js': { count: 3, category: 'caller-chooses-kind',
-    reason: '件数は import 行を含む識別子の出現数（import 1＋呼び出し2）。:1444 スパン配列の通り芯追加の重複除外（includeCeilingOnly 既定=false で天井芯は除くが、' +
+  'transform/centerLineOps.js': { count: 4, category: 'caller-chooses-kind',
+    reason: '件数は import 行を含む識別子の出現数（import 1＋呼び出し3）。commitCLMoveOp 通り芯の移動の重複ガード' +
+      '（同座標のうち isGridCenterLine＝通り芯だけを相手にし、動かす線が通り芯のときだけ拒否。exclude で自分自身を除く）。' +
+      ':1444 スパン配列の通り芯追加の重複除外（includeCeilingOnly 既定=false で天井芯は除くが、' +
       '残りは種別を問わず1本でもあれば同座標とみなしてその値を飛ばす＝全種別が相手）。' +
       ':1594 単体追加の重複判定（includeCeilingOnly:true。同座標の全種別を取り、同種別を先に、無ければ' +
       'CL_KINDS の優先順で existing を1本選ぶ。梁芯ガードは全件に対して coexistenceAt で判定）。' },

@@ -37,7 +37,9 @@ import { commitCLMoveOp } from '../../src/transform/centerLineOps.js';
 import { collectFollowerOffsets, computeMoveRange, isSharedCL } from '../../src/transform/followerGraph.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../../src/graphSnapshot.js';
 
-const OUT_DIR = 'D:/tatsuya/AppData/claude/temp/d--tatsuya-dev-strad/4b8f6dc1-faa2-417b-bb63-2614a90a9873/scratchpad/s0/k34';
+// 出力先は環境変数 K34_OUT_DIR で差し替えられる（問題3 S1 の前後比較で s3 へ出すため）。
+const OUT_DIR = process.env.K34_OUT_DIR
+  ?? 'D:/tatsuya/AppData/claude/temp/d--tatsuya-dev-strad/4b8f6dc1-faa2-417b-bb63-2614a90a9873/scratchpad/s0/k34';
 const TOL = 0.5;      // 同座標・同位置の許容 (mm)
 const OVL = 1;        // 範囲の重なりとみなす下限 (mm)
 const EDGE = 1e-6;    // 可動範囲の端ちょうど判定 (mm)
@@ -301,7 +303,8 @@ async function runTrial([src, outName, mode = 'src', maxArg, maxTArg]) {
 
           const before = axisIds();
           runInAction(() => { cl.pendingDelta = to - from; });
-          commitCLMoveOp(graph, project, cl, from);
+          // 通り芯どうしの重複ガード（問題3・3A）で拒否されると toast が返り、値は from のまま（試行は何も変えない）
+          rec.rejected = !!commitCLMoveOp(graph, project, cl, from).toast;
           const after = axisIds();
           const absorbed = [], moved = [];
           for (const [k, v] of before) {
