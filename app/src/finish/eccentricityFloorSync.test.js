@@ -10,6 +10,7 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { runFinishEntryBoundary } from './finishBoundary.js';
 import { loadMaterialMap } from './wallRegeneration.js';
 import { propagateCLEccentricities, shaftOrStairLinks } from './eccentricityFloorSync.js';
+import { buildCellToRoom, roomsAdjacentToCL } from './edgeClassify.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 
 // 直下階（below）: 部屋A1/部屋B1をym（y=3000）で分割。自階（above。アクティブ）: 吹抜け/部屋A2を
@@ -228,9 +229,16 @@ async function makeSplitCoordVoidFixture() {
   return { ...f, p1: f.aym, p2: f.aymFar };
 }
 
+// 本番の linkFlagsOnGraph（非 export）と同じ経路（roomsAdjacentToCL → shaftOrStairLinks）で、線が吹抜けに接するかを返す。
+function touchesVoid(graph, clId) {
+  return shaftOrStairLinks(roomsAdjacentToCL(graph, clId, buildCellToRoom(graph))).void;
+}
+
 test('propagateCLEccentricities【受け入れ】: 同座標の先頭ピースだけが吹抜けに接するとき、先頭ピースに付けた偏芯は直下階へ連動する（対照）', async () => {
   const { project, below, above, p1, p2, materialMap } = await makeSplitCoordVoidFixture();
-  assert.deepEqual(above.centerLines.filter(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 3000).map(c => c.id), [p1.id, p2.id], '前提: 先頭が吹抜けに接する P1');
+  assert.deepEqual(above.centerLines.filter(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 3000).map(c => c.id), [p1.id, p2.id], '前提: 並びは P1, P2');
+  assert.equal(touchesVoid(above, p1.id), true, '前提: 先頭 P1 は吹抜けに接する');
+  assert.equal(touchesVoid(above, p2.id), false, '前提: 後ろの P2 は吹抜けに接しない');
   above.setCLEccentricity(p1.id, { mode: 'face', value: 0, side: 1, backing: '' });
 
   const saveCalls = [];
@@ -241,7 +249,9 @@ test('propagateCLEccentricities【受け入れ】: 同座標の先頭ピース�
 
 test('【失敗系】propagateCLEccentricities【受け入れ】: 同座標の後ろのピース（吹抜けに接しない）に付けた偏芯は、先頭ピースが吹抜けに接していても連動せず保存もしない', async () => {
   const { project, below, above, p1, p2, materialMap } = await makeSplitCoordVoidFixture();
-  assert.deepEqual(above.centerLines.filter(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 3000).map(c => c.id), [p1.id, p2.id], '前提: 先頭 P1 だけが吹抜けに接する');
+  assert.deepEqual(above.centerLines.filter(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 3000).map(c => c.id), [p1.id, p2.id], '前提: 並びは P1, P2');
+  assert.equal(touchesVoid(above, p1.id), true, '前提: 先頭 P1 は吹抜けに接する');
+  assert.equal(touchesVoid(above, p2.id), false, '前提: 後ろの P2 は吹抜けに接しない');
   above.setCLEccentricity(p2.id, { mode: 'face', value: 0, side: 1, backing: '' });
 
   const saveCalls = [];
