@@ -5109,24 +5109,63 @@ test('【S3-5 S2・失敗系】addCenterLineFromDialog: S造以外の階（未�
   }
 });
 
-// 【既知の限界】S造以外の階は S3-2 前のまま、同座標の相手を existing の1本だけ見る。通り芯と範囲の重ならない
-// 梁芯が同座標にあると、通り芯の真上へ梁芯を足せる（抜け道。ユーザー裁定 R1: 修正は S造だけ。限界16 の
-// 追記は S5）。S造の階は同じ配置で通り芯として拒否される。
-test('【S3-5 S2・既知の限界】addCenterLineFromDialog: 通り芯＋範囲の重ならない梁芯の座標へ、S造以外の階は梁芯を足せてしまい（done:true）、S造の階は通り芯で拒否する', async () => {
-  for (const { structure, expectDone } of [{ structure: 'RC造(ラーメン)', expectDone: true }, { structure: 'S造', expectDone: false }]) {
+// 限界16 (j) の解消（裁定 J1・2026-10-27）: S造以外の階でも、通り芯の判定だけは同座標の全線で行う。
+// 通り芯と範囲の重ならない梁芯が同座標にあっても、通り芯の真上へ梁芯は足せない（S造の階と同じ）。
+// 中心線・補助線の判定は S3-2 前の1本選びのまま（J2 不採用。下の失敗系テスト参照）。
+test('【限界16 (j)・J1】addCenterLineFromDialog: 通り芯＋範囲の重ならない梁芯の座標へ、主構造によらず梁芯を足せず通り芯で拒否する', async () => {
+  // gridLabeled:false は labeled と種別が食い違う旧データの形の通り芯。通り芯は種別だけで拾うので、これも主構造によらず拒否する。
+  for (const gridLabeled of [true, false]) {
+  for (const structure of ['RC造(ラーメン)', TRADITIONAL_WOOD_STRUCTURE, 'S造']) {
+    const label = `${structure}・通り芯 labeled:${gridLabeled}`;
     const { project, graph } = makeProjectWithGraph();
     graph.structureOverride = structure;
     project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
     project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
-    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+    project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: gridLabeled, discipline: Discipline.STRUCT });
     graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: -3000, extentHi: -1000 });
+    const before = graph.centerLines.length;
     const r = await addCenterLineFromDialog(
       graph, project,
       { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 2000 }, value: 1000, kind: 'beam', refId: null, refOffset: 0 },
       { scaleDenominator: 100 },
     );
-    assert.equal(r.done, expectDone, structure);
-    if (!expectDone) assert.equal(r.toast, ERR_CL_DUPLICATE('struct'), structure);
+    assert.equal(r.done, false, label);
+    assert.equal(r.toast, ERR_CL_DUPLICATE('struct'), label);
+    assert.equal(graph.centerLines.length, before, `${label}: 何も追加されない`);
+  }
+  }
+});
+
+// J2 不採用の証拠: 通り芯が無ければ、中心線と範囲の重ならない梁芯が同座標にあっても（S造以外は1本選びのまま）
+// 梁芯を足せる。通り芯があっても範囲の重なる梁芯なら、従来どおり梁芯として拒否する。
+test('【限界16 (j)・J1・失敗系】addCenterLineFromDialog: 中心線＋範囲の重ならない梁芯（通り芯なし）の座標へは従来どおり足せる。通り芯＋範囲の重なる梁芯は梁芯で拒否', async () => {
+  for (const structure of ['RC造(ラーメン)', TRADITIONAL_WOOD_STRUCTURE]) {
+    const a = makeProjectWithGraph();
+    a.graph.structureOverride = structure;
+    a.project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+    a.project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+    a.graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
+    a.graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: -3000, extentHi: -1000 });
+    const r1 = await addCenterLineFromDialog(
+      a.graph, a.project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 2000 }, value: 1000, kind: 'beam', refId: null, refOffset: 0 },
+      { scaleDenominator: 100 },
+    );
+    assert.equal(r1.done, true, `${structure}: 中心線＋範囲の重ならない梁芯は今のまま足せる`);
+
+    const b = makeProjectWithGraph();
+    b.graph.structureOverride = structure;
+    b.project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+    b.project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
+    b.project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
+    b.graph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.FUSE, extentLo: 1000, extentHi: 3000 });
+    const r2 = await addCenterLineFromDialog(
+      b.graph, b.project,
+      { clDialog: { type: 'vertical', worldCoord: 1000, perpCoord: 2000 }, value: 1000, kind: 'beam', refId: null, refOffset: 0 },
+      { scaleDenominator: 100 },
+    );
+    assert.equal(r2.done, false, structure);
+    assert.equal(r2.toast, ERR_CL_DUPLICATE('beam'), `${structure}: 範囲の重なる梁芯は梁芯で拒否`);
   }
 });
 
@@ -5816,6 +5855,13 @@ test(`addCenterLineFromDialog: 同座標に複数種別が同時にある場合�
     // （梁芯）が選ばれる配置でも拒否。中心線・補助線とは共存（BEAM_ON_ARCH_LINES_COEXISTENCE）。
     // 拒否される相手はリテラルで書く（ポリシーの上書き表から導くと、表が壊れても期待値も一緒に壊れて検出できない）。
     if (arch && newKind === 'beam' && present.includes('struct')) {
+      return 'forbidden-beam-existing';
+    }
+    // 限界16 (j)・裁定 J1（2026-10-27）: S造以外の階でも、通り芯の判定だけは同座標の全線で行う。
+    // 相手が同種別の梁芯で範囲が重ならない配置（下の 'extent' かつ ext）でも、通り芯があれば拒否。
+    // 範囲の重なる配置（!ext）は従来どおり梁芯として拒否されるため、分類は変えない（下の 'extent' !ext）。
+    // 中心線・補助線は今のまま（J2 不採用）。
+    if (!arch && newKind === 'beam' && existingKind === 'beam' && present.includes('struct')) {
       return 'forbidden-beam-existing';
     }
     if (newKind === existingKind) {

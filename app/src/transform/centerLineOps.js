@@ -19,7 +19,7 @@ import { calcStep } from '../renderer/clMoveMath.js';
 import {
   orthoAnchorCandidatesForNew, allowsWallAnchor, extentAnchorStyle, isReferencedByAux,
   sameCoordCounterparts, coexistenceAt, CL_KINDS, structuralSyncScopeOfKind, structuralSyncScopeOfConversion,
-  structuralSyncScopeForCenterLine, isFinishCellDivider,
+  structuralSyncScopeForCenterLine, isFinishCellDivider, spansEntireAxis,
 } from '../core/centerLineKindPolicy.js';
 import { mergeCenterLineChain, composeUndoWithMergeChain } from './centerLineMerge.js';
 import {
@@ -1604,7 +1604,11 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
   // 通り芯）。下の existing は同種別優先で1本だけ選ぶため、そこで判定すると「同座標に範囲の重ならない別の
   // 梁芯がある」とき相手がその梁芯になり、通り芯の真上へ梁芯を足せてしまう（S3-2 で再現して確認）。
   // 拒否する相手の種別は CL_KINDS の優先順（通り芯＞中心線＞補助線）で最初のもの。
-  // S造以外の階は S3-2 前のまま（下の existing 分岐内で判定。この抜け道は既知の限界——限界16 の追記は S5）。
+  // S造以外の階は S3-2 前のまま（下の existing 分岐内で、相手は existing の1本だけ）。ただし通り芯の判定だけは
+  // 同座標の全線で行う（限界16 (j)・裁定 J1・2026-10-27）。下の existing が範囲の重ならない同種別の梁芯のとき、
+  // 同種別の分岐が通り芯の判定を素通りして通り芯の真上へ梁芯を足せたため、その分岐の extent 重なり判定の後
+  // （範囲の重なる梁芯は従来どおり梁芯で拒否する）・結合連鎖の前に、通り芯だけを見る。中心線・補助線は
+  // 1本選びのまま（J2 不採用）。
   if (beamOnArchLines) {
     const blockerKind = CL_KINDS.find(k =>
       k !== 'beam' && coexistenceAt(kind, k, { beamOnArchLines }) === 'forbidden'
@@ -1633,6 +1637,15 @@ export async function addCenterLineFromDialog(graph, project, payload, viewport,
                     : !(newExtentHi <= exLo || newExtentLo >= exHi));
       if (extentsOverlap) {
         return { done: false, toast: ERR_CL_DUPLICATE(kind), suggestWood: null };
+      }
+      // 梁芯の手動追加は同座標の通り芯とも共存できない（J1。S造の階は上の全種別ループで拒否済み）。
+      // 同座標の通り芯は種別だけで拾う（全幅の種別＝通り芯。S造の全種別ループ・相手の1本選びと同じく centerLineKind で
+      // 判定し、labeled を見ない——labeled:false の旧データの通り芯でも主構造によって結果が食い違わないため）。
+      // 可否はポリシー（coexistenceAt）で判定する。
+      const sameCoordGrid = kind === 'beam' && !beamOnArchLines
+        ? sameCoord.find(cl => spansEntireAxis(centerLineKind(cl))) : null;
+      if (sameCoordGrid && coexistenceAt(kind, centerLineKind(sameCoordGrid)) === 'forbidden') {
+        return { done: false, toast: ERR_CL_DUPLICATE(centerLineKind(sameCoordGrid)), suggestWood: null };
       }
       // 隣接するCLがあれば結合する（線分の端点一致をベクトル演算で確認、多段連鎖にも対応）
       // extentProps.extentLo/Hi は CenterLine コンストラクタ用の静的フォールバック値（ref があれば null）。
