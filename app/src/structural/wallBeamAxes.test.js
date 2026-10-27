@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, StairType } from '../core.js';
+import { Plane, PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType, StairType } from '../core.js';
+import { recomputeStructuralForGraph } from './structuralRecompute.js';
+import { deleteCenterLineWithUndo } from '../transform/centerLineOps.js';
 import {
   collectWallBeamSources, autoFillWallBeamAxes, isTraditionalWoodStructure,
   wallBackingCenters, mapBackingCenterMoves, findWallBeamAxisCL, wallBeamAxisExcludeKey, peekBelowGraph,
@@ -1293,4 +1295,176 @@ test('【失敗系】bracketAutoBeamAxisExtent: extent が未確定（null＝全
   assert.equal(cl.extentLo, null);
   assert.equal(cl.extentHi, null);
   assert.equal(cl.extentLoRef, null);
+});
+
+// ================================================================
+// 限界16 (h1): 壁由来梁芯の引き受け手は「通り芯へ広げた後の範囲」が重なるものだけ。覆わなければ広げる（D1 と同じ）。
+// ================================================================
+
+// RC造(ラーメン)・通り芯 X0/4000/8000・Y0/4000・RC下地の壁 H y=2000（x0〜8000）を持つ2階（graph）の Project。
+function makeRcWallProject(structure = 'RC造(ラーメン)') {
+  const project = new Project('proj-h1', 'test');
+  project.addPlane(0, '1階', 'p0'); // 1階は空。2階（大梁が出る階）を対象にする
+  const { graph } = project.addPlane(3000, '2階', 'p1');
+  graph.structureOverride = structure;
+  graph.interiorWallBacking = RC_WALL_BACKING_CODES[0];
+  graph.exteriorWallBacking = RC_WALL_BACKING_CODES[0];
+  const G = { labeled: true, discipline: Discipline.STRUCT };
+  for (const x of [0, 4000, 8000]) project.structGraph.addCenterLine(CenterLineType.VERTICAL, x, G);
+  for (const y of [0, 4000]) project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, y, G);
+  const a = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
+  const b = graph.addCenterLine(CenterLineType.VERTICAL, 8000, { labeled: false, discipline: Discipline.ARCH });
+  addBackingWall(graph, { axisValue: 2000, clStart: a, clEnd: b, isVertical: false, backingDepth: 150 });
+  return { project, graph };
+}
+
+async function recomputeN(graph, project, n = 1) {
+  const structure = graph.structureOverride;
+  const originalPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+  try {
+    for (let i = 0; i < n; i++) await recomputeStructuralForGraph(graph, project, structure, null);
+  } finally {
+    floorSwapManager.peek = originalPeek;
+  }
+}
+
+const hAxesAt = (graph, y) => graph.centerLines.filter(cl =>
+  cl.centerLineType === CenterLineType.HORIZONTAL && !cl.labeled && cl.discipline === Discipline.FUSE && Math.abs(cl.effectiveValue - y) < 1);
+const secondariesAt = (graph, y) => graph.beams.filter(b => b.role === 'secondary' && Math.abs(b.axisValue - y) < 1)
+  .map(b => [Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue), Math.max(b.clStart.effectiveValue, b.clEnd.effectiveValue)])
+  .sort((p, q) => p[0] - q[0]);
+
+test('【h1・基準】RC: 壁区間に梁芯が無ければ壁由来の梁芯が通り芯ペア(0〜8000)で立ち、小梁は全スパンに出る', async () => {
+  const { project, graph } = makeRcWallProject();
+  await recomputeN(graph, project);
+  const axes = hAxesAt(graph, 2000);
+  assert.equal(axes.length, 1);
+  assert.equal(axes[0].beamAxisOrigin, BeamAxisOrigin.WALL);
+  assert.deepEqual([axes[0].extentLo, axes[0].extentHi], [0, 8000]);
+  const sec = secondariesAt(graph, 2000);
+  assert.ok(sec.length >= 1, `前提: 小梁が出る（実際 ${sec.length}）`);
+  assert.equal(Math.min(...sec.map(s => s[0])), 0);
+  assert.equal(Math.max(...sec.map(s => s[1])), 8000);
+});
+
+test('【h1-a】RC: 壁の前半だけを覆う USER 梁芯は壁区間を覆うよう広がり、梁芯は1本のまま・小梁は全スパンに出る', async () => {
+  const { project, graph } = makeRcWallProject();
+  const user = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 4000, beamAxisOrigin: BeamAxisOrigin.USER,
+  });
+  await recomputeN(graph, project, 2);
+  const axes = hAxesAt(graph, 2000);
+  assert.equal(axes.length, 1, '壁由来の梁芯を重ねて作らない');
+  assert.equal(axes[0].id, user.id);
+  assert.equal(axes[0].beamAxisOrigin, BeamAxisOrigin.USER, '由来は不変');
+  assert.deepEqual([axes[0].extentLo, axes[0].extentHi], [0, 8000]);
+  const sec = secondariesAt(graph, 2000);
+  assert.equal(Math.max(...sec.map(s => s[1])), 8000, '後半にも小梁が出る');
+});
+
+test('【h1-b】RC: 壁の範囲から離れた USER 梁芯は引き受けず、壁由来の梁芯が別に1本立つ（USER は不変）。小梁は全スパンに出る', async () => {
+  const { project, graph } = makeRcWallProject();
+  const user = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 9000, extentHi: 10000, beamAxisOrigin: BeamAxisOrigin.USER,
+  });
+  await recomputeN(graph, project, 2);
+  const axes = hAxesAt(graph, 2000);
+  assert.equal(axes.length, 2);
+  const wall = axes.find(a => a.beamAxisOrigin === BeamAxisOrigin.WALL);
+  assert.ok(wall, '壁由来の梁芯が別に立つ');
+  assert.deepEqual([wall.extentLo, wall.extentHi], [0, 8000]);
+  assert.deepEqual([user.extentLo, user.extentHi], [9000, 10000], 'USER の extent は不変');
+  assert.equal(user.beamAxisOrigin, BeamAxisOrigin.USER);
+  const sec = secondariesAt(graph, 2000);
+  assert.equal(Math.min(...sec.map(s => s[0])), 0);
+  assert.equal(Math.max(...sec.map(s => s[1])), 8000);
+});
+
+test('【h1-c・失敗系】RC: 広げた USER 梁芯を削除→再計算×3 で、梁芯 0 本・新しい id 0・除外キーが保たれる（削除の復活なし）', async () => {
+  const { project, graph } = makeRcWallProject();
+  const user = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 4000, beamAxisOrigin: BeamAxisOrigin.USER,
+  });
+  await recomputeN(graph, project, 2);
+  assert.deepEqual([user.extentLo, user.extentHi], [0, 8000], '前提: 広がっている');
+  const before = new Set(graph.centerLines.map(cl => cl.id));
+  await deleteCenterLineWithUndo(graph, project, user);
+  assert.ok(graph.excludedWallBeamAxes.has(wallBeamAxisExcludeKey(false, 2000)), '除外キーが記録される');
+  await recomputeN(graph, project, 3);
+  assert.equal(hAxesAt(graph, 2000).length, 0, '梁芯は復活しない');
+  assert.deepEqual(graph.centerLines.filter(cl => !before.has(cl.id)).map(cl => cl.id), [], '新しい id の中心線は作られない');
+  assert.ok(graph.excludedWallBeamAxes.has(wallBeamAxisExcludeKey(false, 2000)), '除外キーが保たれる');
+});
+
+test('【h1-d・失敗系】RC: 範囲の離れた USER を削除→再計算×3 でも、既存の壁由来梁芯の id は変わらない', async () => {
+  const { project, graph } = makeRcWallProject();
+  const user = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 9000, extentHi: 10000, beamAxisOrigin: BeamAxisOrigin.USER,
+  });
+  await recomputeN(graph, project, 2);
+  const wallBefore = hAxesAt(graph, 2000).find(a => a.beamAxisOrigin === BeamAxisOrigin.WALL);
+  assert.ok(wallBefore, '前提: 壁由来の梁芯がある');
+  await deleteCenterLineWithUndo(graph, project, user);
+  await recomputeN(graph, project, 3);
+  const axes = hAxesAt(graph, 2000);
+  assert.deepEqual(axes.map(a => a.id), [wallBefore.id], '壁由来の梁芯の id は不変・他に増えない');
+});
+
+test('【h1-e】RC: SLAB_BEAM の梁芯が残った階でも、同座標に壁由来の梁芯を重ねて作らない（SLAB_BEAM を除かない）', () => {
+  const { graph, x1, x3 } = makeGridGraph('p1', 0);
+  const slab = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 8000, beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM,
+  });
+  const created = autoFillWallBeamAxes(graph, [{ isVertical: false, coord: 2000, lo: 0, hi: 8000 }]);
+  assert.equal(created.length, 0);
+  assert.equal(hAxesAt(graph, 2000).length, 1);
+  assert.equal(slab.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM, '由来は不変（未設定ではないので書き戻さない）');
+  assert.ok(x1 && x3);
+});
+
+test('【h1・木造】既存の壁由来梁芯の extent が壁源の合流で広がる範囲に追従して広がる（縮めない・冪等）', () => {
+  const { graph, x1, x2, x3 } = makeGridGraph('p1', 0);
+  const axis = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLoRef: { clId: graph.gridYs[0].id, offset: 0 },
+    extentHiRef: { clId: graph.gridYs[1].id, offset: 0 }, beamAxisOrigin: BeamAxisOrigin.WALL,
+  });
+  assert.deepEqual([axis.extentLo, axis.extentHi], [0, 4000]);
+  const sources = [{ isVertical: true, coord: 2000, lo: 0, hi: 4000 }];
+  assert.equal(autoFillWallBeamAxes(graph, sources).length, 0);
+  assert.deepEqual([axis.extentLo, axis.extentHi], [0, 4000], '覆っていれば何もしない');
+  // 通り芯の外（y=6000）まで壁源が延びても、直交通り芯が無い側は静的な和集合値
+  const wide = [{ isVertical: true, coord: 2000, lo: -500, hi: 6000 }];
+  assert.equal(autoFillWallBeamAxes(graph, wide).length, 0, '重なるので引き受ける');
+  assert.deepEqual([axis.extentLo, axis.extentHi], [-500, 6000], '壁区間を覆うよう広がる');
+  assert.equal(autoFillWallBeamAxes(graph, [{ isVertical: true, coord: 2000, lo: 1000, hi: 2000 }]).length, 0);
+  assert.deepEqual([axis.extentLo, axis.extentHi], [-500, 6000], '縮めない');
+  assert.ok(x1 && x2 && x3);
+});
+
+test('【h1・失敗系】autoFillWallBeamAxes: 範囲が離れた梁芯だけが同座標にあれば新しく作り、離れた梁芯は広げない', () => {
+  const { graph } = makeGridGraph('p1', 0);
+  const far = graph.addCenterLine(CenterLineType.HORIZONTAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 20000, extentHi: 21000, beamAxisOrigin: BeamAxisOrigin.WALL,
+  });
+  const created = autoFillWallBeamAxes(graph, [{ isVertical: false, coord: 2000, lo: 0, hi: 8000 }]);
+  assert.equal(created.length, 1);
+  assert.deepEqual([far.extentLo, far.extentHi], [20000, 21000]);
+});
+
+test('【h1・隙間】通り芯へ広げた後の範囲で判定する: 生の壁区間とは離れていても、広げた範囲が既存の梁芯と重なれば引き受けて広げる（重なる梁芯を2本作らない）', () => {
+  const { graph } = makeGridGraph('p1', 0);
+  // 既存の壁由来梁芯 x=2000 は y[3500,8000]（絶対座標）。壁源 y[1000,3000] は生では離れるが、通り芯 Y1(0)〜Y2(4000) へ広げると重なる。
+  const axis = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, extentLo: 3500, extentHi: 8000, beamAxisOrigin: BeamAxisOrigin.WALL,
+  });
+  const created = autoFillWallBeamAxes(graph, [{ isVertical: true, coord: 2000, lo: 1000, hi: 3000 }]);
+  assert.equal(created.length, 0, '広げた範囲 [0,4000] が重なるので引き受ける');
+  assert.deepEqual([axis.extentLo, axis.extentHi], [0, 8000], '覆うよう広がる（縮めない）');
+});
+
+test('【h1・S造】S造の階は壁源が無く、壁があっても梁芯を作らない', async () => {
+  const { project, graph } = makeRcWallProject('S造');
+  await recomputeN(graph, project, 2);
+  assert.equal(graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.WALL).length, 0);
 });

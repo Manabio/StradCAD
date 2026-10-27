@@ -1166,6 +1166,35 @@ export function openingBeamAnchorAt(graph, { centerLineType, coord, lo = null, h
 }
 
 /**
+ * 壁由来梁芯（autoFillWallBeamAxes）の引き受け手を選ぶ走査API（限界16 (h1)）。openingBeamAnchorAt と同型で、
+ * 通り芯または梁芯のうち、lo/hi を渡したときは梁芯の extent が [lo,hi] と tol を超えて重なるものだけを返す
+ * （通り芯は常に全域）。**由来 SLAB_BEAM は除かない**——壁源は RC・木造にしか無く、S造から切り替えた階に残った
+ * SLAB_BEAM は実在の梁芯として扱う（除くと同座標に重なる梁芯が2本できる）。
+ * findBeamAnchorCL は在来木造の柱アンカーと共有する単一の述語のため変えず、こちらを兄弟として置く。
+ * @param {{centerLines: Array}} graph
+ * @param {{centerLineType: string, coord: number, lo?: number|null, hi?: number|null, tolMm?: number}} opts
+ * @returns {object|null}
+ */
+export function wallBeamAnchorAt(graph, { centerLineType, coord, lo = null, hi = null, tolMm = CL_OVERLAP_TOL_MM }) {
+  if (centerLineType == null) {
+    throw new Error(`wallBeamAnchorAt: centerLineTypeは必須です（実際: ${centerLineType}）`);
+  }
+  if (typeof coord !== 'number' || Number.isNaN(coord)) {
+    throw new Error(`wallBeamAnchorAt: coordは数値である必要があります（実際: ${coord}）`);
+  }
+  const kinds = structuralAnchorKinds('primary');
+  const span = (lo != null || hi != null) ? { extentLo: lo, extentHi: hi } : null;
+  return graph.centerLines.find(cl => {
+    if (cl.centerLineType !== centerLineType) return false;
+    const kind = centerLineKind(cl);
+    if (!kinds.includes(kind)) return false;
+    if (Math.abs(cl.effectiveValue - coord) >= tolMm) return false;
+    if (kind !== 'beam') return true;
+    return span == null || extentsOverlapBeyondTol(cl, span, CL_OVERLAP_TOL_MM);
+  }) ?? null;
+}
+
+/**
  * tier の柱アンカー候補となる CenterLine を graph.centerLines から centerLineType 一致で列挙する
  * 走査API（structural/woodAutoFill.js nearestAnchorCL の候補集合。距離によるタイブレークは
  * 呼び出し側=structural/の責務——本APIは候補を絞るだけで並べ替えない）。

@@ -6,7 +6,7 @@ import { CenterLineType, Discipline, centerLineKind } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { isWallEndAtCorner } from '../core/wall.js';
 import { BeamAxisOrigin, fillBeamAxisOriginIfUnknown } from '../core/centerLine.js';
-import { structuralAnchorAt, openingBeamAnchorAt, beamAxesAt, beamAxisCenterLines, spansEntireAxis } from '../core/centerLineKindPolicy.js';
+import { structuralAnchorAt, openingBeamAnchorAt, wallBeamAnchorAt, beamAxesAt, beamAxisCenterLines, spansEntireAxis } from '../core/centerLineKindPolicy.js';
 import { exclusionKeyReferencesCL } from '../core/structuralEntities.js';
 import { backingClassOf } from '../finish/materials/backingClass.js';
 import { roomBounds } from '../finish/gridCells.js';
@@ -590,6 +590,13 @@ export function findOpeningBeamAnchorCL(graph, centerLineType, coord, { lo = nul
   return openingBeamAnchorAt(graph, { centerLineType, coord, lo, hi });
 }
 
+/** 壁由来梁芯の引き受け手（限界16 (h1)）: 通り芯または梁芯のうち、lo/hi と extent が重なるもの
+ *  （SLAB_BEAM も除かない。実体は core/centerLineKindPolicy.js wallBeamAnchorAt）。autoFillWallBeamAxes 専用。
+ *  findBeamAnchorCL は在来木造の柱アンカーと共有する単一の述語のため変えない。 */
+export function findWallBeamAnchorCL(graph, centerLineType, coord, { lo = null, hi = null } = {}) {
+  return wallBeamAnchorAt(graph, { centerLineType, coord, lo, hi });
+}
+
 /** 同一方向・近接座標（CL_OVERLAP_TOL_MM以内）のソースを1本にまとめ、extentは和集合（min/max）にする。
  *  同一生成バッチ内で複数の壁が同じ位置に梁芯を要求するケース（対向壁等）の重複生成を防ぐ。 */
 function mergeWallBeamSources(sources) {
@@ -818,7 +825,8 @@ export function bracketAutoBeamAxisExtent(graph, axisCL, isVertical, lo, hi) {
  * autoFillStructuralGrid の autoFillSecondaryBeams 直前で呼ぶ。
  *   - 除外集合（graph.excludedWallBeamAxes、キー `${'X'|'Y'}:${Math.round(coord)}`）にあれば生成しない
  *     （手動削除・移動元の尊重。記録/解除は transform/centerLineOps.js 側）。
-  *   - 重複ガード: 同方向の通り芯（labeled）・既存の梁芯（fuse）とだけ CL_OVERLAP_TOL_MM 以内なら
+  *   - 重複ガード: 同方向の通り芯（labeled）・既存の梁芯（fuse）とだけ CL_OVERLAP_TOL_MM 以内で、梁芯は
+ *     通り芯へ広げた後の範囲が重なるものだけを引き受け手にし（限界16 (h1)）、覆わなければ広げて
  *     スキップする（意匠中心線・補助線は対象外——壁は意匠中心線＝部屋境界に沿って生成されるのが
  *     常態のため、これらも障害物にすると壁由来の梁芯が主用途で何も生成されなくなる。実機検証で発覚。
  *     意匠中心線は構造モードで非表示のため同位置共存に視覚上の衝突もない）。
@@ -839,18 +847,27 @@ export function autoFillWallBeamAxes(graph, wallSources) {
     // 壁由来の梁芯が主用途で何も生成されなくなる（実機検証で発覚。意匠中心線は構造モードで非表示化
     // 済みのため、その位置に梁芯が立つのは「中心線の代わりに梁芯が見える」という設計どおりの状態）。
     // beamAxisMoveRange の障害物集合（通り芯・他の梁芯のみ）と同じ規約に揃える。判定は
-    // findBeamAnchorCL（壁交点柱のアンカー解決と同一の述語＝二重管理しない）。
-    const anchor = findBeamAnchorCL(graph, centerLineType, src.coord);
-    if (anchor) {
-      // 既存の梁芯を再利用する場合、由来が未設定（旧データ）なら壁由来として書き戻す
-      // （centerLineKindPolicy.js structuralAnchorAt が通り芯を返すこともあるが、
-      // fillBeamAxisOriginIfUnknown は梁芯以外には何もしない）。
-      fillBeamAxisOriginIfUnknown(anchor, BeamAxisOrigin.WALL);
-      continue;
-    }
-
+    // findWallBeamAnchorCL（限界16 (h1)）。梁芯は**通り芯へ広げた後の範囲**が重なるものだけを引き受け手にする
+    // （柱アンカーと共有の findBeamAnchorCL は範囲を見ないため、遠い梁芯に壁源を吸われて小梁が減った）。
     const gridCLs = src.isVertical ? graph.gridYs : graph.gridXs; // 直交通り芯（value昇順）
     const { loCL, hiCL } = bracketExtent(gridCLs, src.lo, src.hi);
+    const bLo = loCL ? loCL.value : src.lo;
+    const bHi = hiCL ? hiCL.value : src.hi;
+    const anchor = findWallBeamAnchorCL(graph, centerLineType, src.coord, { lo: bLo, hi: bHi });
+    if (anchor) {
+      // 既存の梁芯を再利用する場合、由来が未設定（旧データ）なら壁由来として書き戻す
+      // （centerLineKindPolicy.js wallBeamAnchorAt が通り芯を返すこともあるが、
+      // fillBeamAxisOriginIfUnknown は梁芯以外には何もしない）。
+      fillBeamAxisOriginIfUnknown(anchor, BeamAxisOrigin.WALL);
+      // 引き受けた梁芯（由来は問わない）が壁区間を覆っていなければ広げる（床梁の D1 と同じ。縮めない・冪等）。
+      // 広げるのは梁芯だけ（梁芯の全件列挙 beamAxisCenterLines に含まれるもの）。通り芯は bracketAutoBeamAxisExtent も
+      // 全幅扱いとして触らないが、アンカーの対象種別に梁芯以外が将来足されても黙って広げないよう、呼び出し側でも絞る。
+      if (beamAxisCenterLines(graph).includes(anchor) && anchor.extentLo != null && anchor.extentHi != null &&
+          (anchor.extentLo > bLo + BRACKET_EPS_MM || anchor.extentHi < bHi - BRACKET_EPS_MM)) {
+        bracketAutoBeamAxisExtent(graph, anchor, src.isVertical, bLo, bHi);
+      }
+      continue;
+    }
 
     created.push(graph.addCenterLine(centerLineType, src.coord, {
       labeled: false,
