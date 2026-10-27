@@ -2343,6 +2343,56 @@ test('【(k) k1c・照合・保護】reconcileOpeningBeamAxes: 余りの重複�
   assert.ok(graph.shapeMap.get(dup.id) && graph.shapeMap.get(original.id));
 });
 
+// 既知の限界（限界16 (k) の (5)）の固定。2026-10-28 の実測では静的 106 本・opening-test の移動試行（136/176）とも
+// 収束後の「一致梁芯の参照だけで保護される孤児」は 0 件だったため、直さずここで HEAD の挙動を固定する。
+// 直すなら（問題5.md 案B）このテストの期待を反転させる。
+test('【既知の限界（限界16 (k) の (5)）】端で接するだけの先着の余りの開口梁芯は、直交辺の端のつなぎ先になり、その参照で保護されて撤去されず、辺の小梁も増えない（冪等）', () => {
+  const { graph } = makeRectOpeningGraph();
+  graph.structureOverride = 'RC造(ラーメン)';
+  const project = fakeNonFoundationProjectFor(graph);
+  // 余り: x=2000 に静的範囲 [3000,3500] の開口梁芯（開口の下辺 y=3000 と端で接するだけ）。本来の V2000 より先に並ぶ。
+  const stale = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING, extentLo: 3000, extentHi: 3500,
+  });
+  const sources = openingBeamSourcesFor(graph, project);
+  autoFillOpeningBeamAxes(graph, sources);
+
+  const v2000 = openingAxes(graph, CenterLineType.VERTICAL, 2000);
+  const real = v2000.find(cl => cl.id !== stale.id);
+  assert.ok(real, '前提: 本来の V2000 が余りとは別の梁芯として作られる（端で接するだけは流用しない・k1）');
+  assert.ok(graph.centerLines.indexOf(stale) < graph.centerLines.indexOf(real), '前提: 余りが並びで先');
+  const h3000 = openingAxes(graph, CenterLineType.HORIZONTAL, 3000)[0];
+  assert.equal(h3000.extentLoRef?.clId, stale.id, '下辺 H3000 の lo 端のつなぎ先は余り（座標フォールバックが先頭の梁芯を選ぶ）');
+
+  const { removed } = reconcileOpeningBeamAxes(graph, sources, []);
+  assert.deepEqual(removed, [], '余りは H3000 からの extent 参照で保護されて残る');
+  assert.ok(graph.shapeMap.has(stale.id));
+
+  const secondaryCount = () => graph.beams.filter(b => b.role === 'secondary').length;
+  const onSide = () => graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === h3000.id
+    && (b.clStart.id === real.id || b.clEnd.id === real.id));
+  const counts = [];
+  for (let i = 0; i < 3; i++) {
+    applyOneOpeningReconcilePass(graph, project);
+    counts.push(secondaryCount());
+    assert.ok(graph.shapeMap.has(stale.id), `${i + 1} 回通しても余りは残る`);
+    assert.equal(graph.shapeMap.get(h3000.id)?.extentLoRef?.clId, stale.id, `${i + 1} 回通しても H3000 の lo 端は余りを指す`);
+    assert.equal(onSide().length, 0, `${i + 1} 回通しても H3000 の 2000 側（本来の V2000 にとりつく区間）に小梁は無い`);
+  }
+  assert.deepEqual(counts, [counts[0], counts[0], counts[0]], '小梁の本数は 2 回目以降変わらない（冪等）');
+
+  // 対照（空振り防止）: 余りが無ければ、同じ判定（H3000 の lo 端が本来の V2000 にとりつく小梁）は 1 本以上ある。
+  const { graph: ctl } = makeRectOpeningGraph();
+  ctl.structureOverride = 'RC造(ラーメン)';
+  const ctlProject = fakeNonFoundationProjectFor(ctl);
+  for (let i = 0; i < 3; i++) applyOneOpeningReconcilePass(ctl, ctlProject);
+  const ctlReal = openingAxes(ctl, CenterLineType.VERTICAL, 2000)[0];
+  const ctlH = openingAxes(ctl, CenterLineType.HORIZONTAL, 3000)[0];
+  assert.equal(ctlH.extentLoRef?.clId, ctlReal.id, '対照: 余りが無ければ H3000 の lo 端は本来の V2000 を指す');
+  assert.ok(ctl.beams.some(b => b.role === 'secondary' && b.axisCL.id === ctlH.id
+    && (b.clStart.id === ctlReal.id || b.clEnd.id === ctlReal.id)), '対照: 余りが無ければ 2000 側に小梁ができる');
+});
+
 test('【(k) k1c・照合・失敗系】reconcileOpeningBeamAxes: どの源とも辺の範囲が重ならず、同座標に空きの源も無い梁芯は孤児として撤去される（端で接するだけの源にも割り当てない）', () => {
   const { graph } = makeSameLineOpeningsFixture('proj-k1c-unit-orphan', 'RC造(ラーメン)');
   const sources = openingBeamSourcesFor(graph, {});
