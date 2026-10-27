@@ -397,17 +397,16 @@ function extentTargetFor(graph, src) {
  *   - 梁のある辺（通り芯・RC下地壁・手動梁）は源に含まれない（openingBeamSourcesFor＝計画器が除く）。
  *   - 源のorder昇順（先に置く辺が先。後の辺のextent参照先が先に生成されている必要があるため）。
  *   - 除外集合（graph.excludedWallBeamAxes）にあれば生成しない（wallBeamAxisExcludeKeyを共用）。
- *   - 重複ガード: findBeamAnchorCL（通り芯・梁芯の第1候補）が返せば再利用し、由来未設定なら書き戻す。
+ *   - 重複ガード: findOpeningBeamAnchorCL（SLAB_BEAMを除く・辺の範囲と重なるものだけ）が返せば再利用し、由来未設定なら書き戻す。
  *   - extentは両端ともextentTargetFor（spanRefsのclId→座標のCL→静的値）。
  * @param {object} graph
  * @param {ReturnType<typeof openingBeamSourcesFor>} openingSources
- * @param {{rangeAware?: boolean}} [opts] rangeAware: 重複ガードで辺の範囲との重なりも見る（S3-1）。S造の階だけ true
- *   （rules.manualBeamAxisOnArchLines。S3-5 S4・2026-10-27 ユーザー裁定 R2）。既定 false＝範囲を見ない（S3-1 前と同じ。
- *   SLAB_BEAM の除外は S造にしか SLAB_BEAM が無いので全主構造のまま）。S造以外では、同座標に範囲の離れた
- *   壁由来・USER 梁芯があるとそれを流用して開口梁芯を作らない（S3-1 前からの既知の限界・受容）。
+ *   重複ガードは全主構造で辺の範囲との重なりも見る（S3-1。(k) k1・2026-10-27 ユーザー裁定 K1 で S造限定（R2）を解いた）。
+ *   判定は S造と同じ（端で接するだけは別線＝touchCounts を使わない）。開口梁芯は辺を覆う梁を作るためのもので、
+ *   範囲の離れた・端で接するだけの梁芯を流用すると辺に梁が乗らないため。一部だけ重なる梁芯は流用される（既知の限界・K3 で別課題）。
  * @returns {import('../core.js').CenterLine[]} 新規作成した梁芯CLの配列
  */
-export function autoFillOpeningBeamAxes(graph, openingSources, { rangeAware = false } = {}) {
+export function autoFillOpeningBeamAxes(graph, openingSources) {
   const created = [];
   const ordered = [...openingSources].sort((a, b) => a.order - b.order); // 安定ソート
   for (const src of ordered) {
@@ -415,10 +414,8 @@ export function autoFillOpeningBeamAxes(graph, openingSources, { rangeAware = fa
     const excludeKey = wallBeamAxisExcludeKey(src.isVertical, src.coord);
     if (graph.excludedWallBeamAxes.has(excludeKey)) continue;
 
-    // SLAB_BEAM は根拠にしない（全主構造）。rangeAware（S造）のときは辺の範囲と重なる梁芯・通り芯だけを流用する（S3-1）
-    const anchor = rangeAware
-      ? findOpeningBeamAnchorCL(graph, centerLineType, src.coord, { lo: src.lo, hi: src.hi })
-      : findOpeningBeamAnchorCL(graph, centerLineType, src.coord);
+    // SLAB_BEAM は根拠にしない。辺の範囲と重なる梁芯・通り芯だけを流用する（全主構造。S3-1・(k) k1）
+    const anchor = findOpeningBeamAnchorCL(graph, centerLineType, src.coord, { lo: src.lo, hi: src.hi });
     if (anchor) {
       fillBeamAxisOriginIfUnknown(anchor, BeamAxisOrigin.OPENING);
       continue;

@@ -376,44 +376,55 @@ test('【S3-1】autoFillOpeningBeamAxes: 別のベイ（範囲が辺と離れた
   assert.equal(created.length, 4);
 });
 
-test('【S3-1・失敗系】autoFillOpeningBeamAxes: 範囲が辺と離れた USER 梁芯が同座標にあっても流用せず作る（範囲の重なり判定。rangeAware＝S造）', () => {
+test('【S3-1・失敗系】autoFillOpeningBeamAxes: 範囲が辺と離れた USER 梁芯が同座標にあっても流用せず作る（範囲の重なり判定）', () => {
   const { graph } = makeRectOpeningGraph();
   graph.structureOverride = 'S造';
   const far = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
     labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER,
     extentLo: 4000, extentHi: 6000,
   });
-  const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, {}), { rangeAware: true });
+  const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, {}));
   assert.equal(created.length, 4, '離れた梁芯は辺の根拠にならない');
   assert.equal(far.beamAxisOrigin, BeamAxisOrigin.USER, '離れた梁芯の由来は書き換えない');
 });
 
-// S3-5 S4（2026-10-27 ユーザー裁定 R2）: 範囲判定は S造の階だけ。S造以外（RC・SRC・未定）は S3-1 前と同じく範囲を見ず、
-// 同座標の離れた梁芯を流用して開口梁芯を作らない（既知の限界・受容）。SLAB_BEAM の除外は全主構造（上のテスト）。
-for (const structure of ['RC造(ラーメン)', 'SRC造', null]) {
-  test(`【S3-5 S4・既知の限界】autoFillOpeningBeamAxes: ${structure ?? '未定'} は範囲の離れた壁由来梁芯を流用し、その辺の開口梁芯を作らない（S3-1 前と同じ）`, () => {
-    const { graph } = makeRectOpeningGraph();
-    graph.structureOverride = structure;
-    const far = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
-      labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.WALL,
-      extentLo: 4000, extentHi: 6000,
+// (k) k1（2026-10-27 ユーザー裁定 K1＝案1）: 範囲判定は全主構造。S3-5 S4（裁定 R2）の「S造以外は範囲を見ない（S3-1 前の挙動）」を
+// 反転した。辺と同座標の梁芯が (A) 離れている (B) 端で接するだけ のとき開口梁芯が新しく立ち、(C) 一部重なる (D) 辺を覆う ときは流用する。
+// 辺は x=2000 の垂直辺 y:[1000,3000]。(C) の流用は既知の限界（K3 で別課題）。
+const K1_STRUCTURES = ['RC造(ラーメン)', 'SRC造', null, 'S造'];
+const K1_CASES = [
+  { tag: 'A 離れた壁由来', extent: [4000, 6000], origin: BeamAxisOrigin.WALL, reused: false },
+  { tag: 'B 端で接するだけ', extent: [3000, 6000], origin: BeamAxisOrigin.WALL, reused: false },
+  { tag: 'B 端で接するだけ(下端側・USER)', extent: [-2000, 1000], origin: BeamAxisOrigin.USER, reused: false },
+  { tag: 'C 一部だけ重なる（既知の限界・K3）', extent: [2000, 5000], origin: BeamAxisOrigin.WALL, reused: true },
+  { tag: 'D 辺を覆う', extent: [500, 3500], origin: BeamAxisOrigin.WALL, reused: true, covers: true },
+];
+for (const structure of K1_STRUCTURES) {
+  for (const c of K1_CASES) {
+    test(`【(k) k1・K1 裁定】autoFillOpeningBeamAxes: ${structure ?? '未定'} で同座標の梁芯が ${c.tag} のとき、${c.reused ? '流用して作らない' : '開口梁芯が新しく立つ'}（旧 S3-5 S4: S造以外は範囲を見ない、を反転）`, () => {
+      const { graph } = makeRectOpeningGraph();
+      graph.structureOverride = structure;
+      const existing = graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
+        labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: c.origin,
+        extentLo: c.extent[0], extentHi: c.extent[1],
+      });
+      if (c.covers) {
+        assert.ok(existing.extentLo <= 1000 && existing.extentHi >= 3000, '前提: 既存の梁芯が辺 y:[1000,3000] を覆っている');
+      }
+      const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, {}));
+      const own = created.filter(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000);
+      assert.equal(created.length, c.reused ? 3 : 4);
+      assert.equal(own.length, c.reused ? 0 : 1);
+      assert.equal(existing.beamAxisOrigin, c.origin, '既存梁芯の由来は書き換えない');
+      if (!c.reused) {
+        assert.equal(own[0].beamAxisOrigin, BeamAxisOrigin.OPENING);
+        assert.ok(own[0].extentLo <= 1000 && own[0].extentHi >= 3000, '新しい開口梁芯は辺 y:[1000,3000] を覆う');
+      }
     });
-    const sources = openingBeamSourcesFor(graph, {});
-    const created = autoFillOpeningBeamAxes(graph, sources);
-    assert.equal(created.length, 3, '範囲を見ないので離れた x=2000 を流用（S3-1 前の挙動）');
-    assert.ok(!created.some(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000));
-    assert.equal(far.beamAxisOrigin, BeamAxisOrigin.WALL);
-    // 対照: 範囲を見れば（S造）新しく立つ
-    const ctl = makeRectOpeningGraph();
-    ctl.graph.structureOverride = 'S造';
-    ctl.graph.addCenterLine(CenterLineType.VERTICAL, 2000, {
-      labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.WALL, extentLo: 4000, extentHi: 6000,
-    });
-    assert.equal(autoFillOpeningBeamAxes(ctl.graph, openingBeamSourcesFor(ctl.graph, {}), { rangeAware: true }).length, 4);
-  });
+  }
 }
 
-test('【S3-5 S4・配線】recomputeStructuralForGraph: 範囲の離れた壁由来梁芯が同座標にあるとき、S造の階は開口梁芯が新しく立ち、RC造の階は立たない', async () => {
+test('【S3-5 S4・配線】recomputeStructuralForGraph: 範囲の離れた壁由来梁芯が同座標にあっても、S造・RC造どちらの階も開口梁芯が新しく立つ（(k) k1 で RC を反転）', async () => {
   const run = async (structure) => {
     const project = new Project('proj-s35-s4', 'test');
     const { graph } = project.addPlane(0, '1階', 'p1');
@@ -443,7 +454,7 @@ test('【S3-5 S4・配線】recomputeStructuralForGraph: 範囲の離れた壁�
       && cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000).length;
   };
   assert.equal(await run('S造'), 1, 'S造: 範囲判定で離れた USER 梁芯を流用せず開口梁芯が立つ');
-  assert.equal(await run('RC造(ラーメン)'), 0, 'RC造: 範囲を見ず離れた梁芯を流用（既知の限界）');
+  assert.equal(await run('RC造(ラーメン)'), 1, 'RC造: (k) k1・K1 裁定で範囲を見る＝離れた梁芯を流用せず開口梁芯が立つ');
 });
 
 test('【S3-1・対照】autoFillOpeningBeamAxes: 範囲が辺と重なる壁由来梁芯・通り芯は従来どおり流用し、その座標に新規は作らない', () => {
@@ -453,7 +464,7 @@ test('【S3-1・対照】autoFillOpeningBeamAxes: 範囲が辺と重なる壁由
     labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.WALL,
     extentLo: 500, extentHi: 3500, // 辺 y:[1000,3000] を含む
   });
-  const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, {}), { rangeAware: true });
+  const created = autoFillOpeningBeamAxes(graph, openingBeamSourcesFor(graph, {}));
   assert.equal(created.length, 3, '重なる壁由来梁芯(x=2000)は流用される');
   assert.equal(wall.beamAxisOrigin, BeamAxisOrigin.WALL);
   assert.ok(!created.some(cl => cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000));
