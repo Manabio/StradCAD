@@ -1142,3 +1142,111 @@ test('【失敗系・スラブ小梁】S造以外（SRC造・RC造）は autoFil
     assert.equal(slabAxesOf(graph).length, 0, structure);
   }
 });
+
+// ---- 開口梁芯の extent 参照が循環（A⇄B）したときの小梁の生成（既知の限界・限界16 (k) の (6)） ----
+// 2026-10-28 の実測では静的 106 本・移動の試行とも循環は 0 件だったため、直さず HEAD の挙動を固定する。
+// 循環の中の梁芯どうしの角の区間は、相手の小梁を host にしないと作れない（secondaryBeamSpansFor・allowSecondaryHost）。
+// 生成順は orderForSecondaryBeamFill の rank で決まるが、循環は rank が確定せず並び順で決まる。
+// 不動点は2つある: 小梁が両方無ければ無いまま（膠着）／片方でも残っていれば、もう片方ができて支え合って残る。
+// 直す（問題6.md 案A）なら (ii) を「作らない」へ反転する。
+// A（V2000）は下端を通り芯 gy0・上端を B に、B（H3000）は左端を A・右端を通り芯 gx1 に張る＝A.hi→B・B.lo→A。
+// C（V5000）は通り芯 gy0〜gy1 だけを参照する循環にかからない対照。
+function makeCyclicOpeningFixture(order) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const GRID_ = { labeled: true, discipline: Discipline.STRUCT };
+  const gx0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, GRID_);
+  const gx1 = graph.addCenterLine(CenterLineType.VERTICAL, 8000, GRID_);
+  const gy0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, GRID_);
+  const gy1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 6000, GRID_);
+  graph.structureOverride = 'RC造(ラーメン)';
+  const fuse = { labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.OPENING };
+  const make = {
+    A: () => graph.addCenterLine(CenterLineType.VERTICAL, 2000, fuse),
+    B: () => graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, fuse),
+  };
+  const made = {};
+  for (const k of order) made[k] = make[k]();
+  const { A, B } = made;
+  const C = graph.addCenterLine(CenterLineType.VERTICAL, 5000, fuse);
+  const ref = (cl) => ({ clId: cl.id, offset: 0 });
+  graph.setCenterLineExtentRef(A, 'lo', ref(gy0), null);
+  graph.setCenterLineExtentRef(A, 'hi', ref(B), null);
+  graph.setCenterLineExtentRef(B, 'lo', ref(A), null);
+  graph.setCenterLineExtentRef(B, 'hi', ref(gx1), null);
+  graph.setCenterLineExtentRef(C, 'lo', ref(gy0), null);
+  graph.setCenterLineExtentRef(C, 'hi', ref(gy1), null);
+  const rc = StructuralMaterialType.RC;
+  graph.addBeam(rc, 'RC-BEAM-TEST', gy0, false, gx0, gx1, { role: 'primary' });
+  graph.addBeam(rc, 'RC-BEAM-TEST', gy1, false, gx0, gx1, { role: 'primary' });
+  graph.addBeam(rc, 'RC-BEAM-TEST', gx1, true, gy0, gy1, { role: 'primary' });
+  const secondariesOf = (cl) => graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === cl.id);
+  return { graph, A, B, C, gy0, secondariesOf };
+}
+
+// 角の区間の小梁の有無: A は gy0〜B、B は A〜gx1 の区間（どちらも相手の小梁を host にしないと作れない）。
+const cornerPresence = (fx) => ({ A: fx.secondariesOf(fx.A).length, B: fx.secondariesOf(fx.B).length, C: fx.secondariesOf(fx.C).length });
+
+test('【既知の限界（限界16 (k) の (6)）(i)】循環の梁芯 A⇄B は、小梁が無い状態から autoFillSecondaryBeams を2回通しても角の区間が作られない（膠着）。循環にかからない C は作られる', () => {
+  const fx = makeCyclicOpeningFixture('AB');
+  assert.deepEqual(cornerPresence(fx), { A: 0, B: 0, C: 0 }, '前提: 小梁は無い');
+
+  for (let i = 0; i < 2; i++) {
+    autoFillSecondaryBeams(fx.graph, {});
+    assert.deepEqual(cornerPresence(fx), { A: 0, B: 0, C: 1 }, `${i + 1} 回目: A・B の角の区間は作られず、循環にかからない C の小梁（gy0〜gy1）だけできる`);
+  }
+});
+
+test('【既知の限界（限界16 (k) の (6)）(ii)】A の角の区間の auto 小梁が先に残っていると、B の角の区間もでき、支え合って prune でも残る（不動点が2つ）', () => {
+  const fx = makeCyclicOpeningFixture('AB');
+  const aBeam = fx.graph.addBeam(StructuralMaterialType.RC, 'RC-BEAM-TEST', fx.A, true, fx.gy0, fx.B, { role: 'secondary' });
+  assert.equal(aBeam.dimensionStatus, 'auto', '前提: auto の小梁');
+
+  autoFillSecondaryBeams(fx.graph, {}); // 再計算の1回目（prune なし）
+  assert.equal(fx.secondariesOf(fx.B).length, 1, 'B の角の区間（A〜gx1）が A の小梁を host にしてできる');
+
+  const r = autoFillSecondaryBeams(fx.graph, {}, { prune: true }); // 再計算の最後（prune あり）
+  assert.deepEqual(r.removed, [], 'prune でも消えない（互いに支え合う）');
+  assert.deepEqual(cornerPresence(fx), { A: 1, B: 1, C: 1 });
+  assert.equal(fx.graph.beamMap.has(aBeam.id), true, 'A の小梁は同じ id のまま');
+
+  const again = autoFillSecondaryBeams(fx.graph, {}, { prune: true });
+  assert.equal(again.created.length + again.removed.length, 0, '繰り返しても変わらない（冪等）');
+});
+
+test('【既知の限界（限界16 (k) の (6)）(iii)】graph.centerLines の並びを B→A にしても、(i) の膠着・(ii) の相互保持の結果は同じ', () => {
+  const sc = (order) => {
+    const fx = makeCyclicOpeningFixture(order);
+    autoFillSecondaryBeams(fx.graph, {});
+    autoFillSecondaryBeams(fx.graph, {}, { prune: true });
+    return cornerPresence(fx);
+  };
+  const stuck = { A: 0, B: 0, C: 1 };
+  assert.deepEqual(sc('AB'), stuck, '前提: 並び A→B の (i)');
+  assert.deepEqual(sc('BA'), stuck, '並び B→A でも (i) は膠着');
+
+  const seeded = (order) => {
+    const fx = makeCyclicOpeningFixture(order);
+    assert.equal(fx.graph.centerLines.indexOf(fx.B) < fx.graph.centerLines.indexOf(fx.A), order === 'BA', '前提: 並び');
+    fx.graph.addBeam(StructuralMaterialType.RC, 'RC-BEAM-TEST', fx.A, true, fx.gy0, fx.B, { role: 'secondary' });
+    autoFillSecondaryBeams(fx.graph, {});
+    autoFillSecondaryBeams(fx.graph, {}, { prune: true });
+    return cornerPresence(fx);
+  };
+  const mutual = { A: 1, B: 1, C: 1 };
+  assert.deepEqual(seeded('AB'), mutual, '前提: 並び A→B の (ii)');
+  assert.deepEqual(seeded('BA'), mutual, '並び B→A でも (ii) は相互に残る');
+});
+
+test('【既知の限界（限界16 (k) の (6)）(iv)】循環の梁芯でも orderForSecondaryBeamFill・autoFillSecondaryBeams は無限ループにならず有限時間で戻る（A の両端が B を指す輪にしても）', { timeout: 10000 }, () => {
+  const t0 = Date.now();
+  for (const order of ['AB', 'BA']) {
+    const fx = makeCyclicOpeningFixture(order);
+    // A の lo も B に張り直し、A⇄B の輪を両端で張る
+    fx.graph.setCenterLineExtentRef(fx.A, 'lo', { clId: fx.B.id, offset: 0 }, null);
+    for (let i = 0; i < 3; i++) {
+      autoFillSecondaryBeams(fx.graph, {});
+      autoFillSecondaryBeams(fx.graph, {}, { prune: true });
+    }
+  }
+  assert.ok(Date.now() - t0 < 5000, '有限時間で戻る');
+});
