@@ -63,7 +63,7 @@ test('5000×7000のベイ: 短辺方向（横梁）の梁芯が y=-4666.67・-23
     assert.deepEqual([a.extentLo, a.extentHi], [0, 5000], '解決後の extent は端の通り芯の位置');
   }
   // 既存の小梁生成が梁芯から子梁を作る（大梁面までの端部クリアランスは小梁生成側の規則）。
-  const children = autoFillSecondaryBeams(graph, PROJECT);
+  const children = autoFillSecondaryBeams(graph, PROJECT).created;
   assert.equal(children.length, 2);
   assert.ok(children.every(b => b.role === 'secondary' && b.isVertical === false));
 });
@@ -197,7 +197,7 @@ test('冪等: 2回目は何も変えない（自分の梁芯があるベイは�
 function recomputePasses(graph, n = 3) {
   const made = [];
   for (let i = 0; i < n; i++) {
-    made.push(...reconcileSlabSecondaryBeamAxes(graph, PROJECT).created, ...autoFillSecondaryBeams(graph, PROJECT));
+    made.push(...reconcileSlabSecondaryBeamAxes(graph, PROJECT).created, ...autoFillSecondaryBeams(graph, PROJECT).created);
   }
   return made;
 }
@@ -408,7 +408,7 @@ const bayIds = b => ({ x1Id: b.x0.id, x2Id: b.x1.id, y1Id: b.y0.id, y2Id: b.y1.i
 function settle(graph, passes = 3, openingRects = undefined) {
   return Array.from({ length: passes }, () => {
     const r = reconcileSlabSecondaryBeamAxes(graph, PROJECT, openingRects);
-    const kids = autoFillSecondaryBeams(graph, PROJECT);
+    const kids = autoFillSecondaryBeams(graph, PROJECT).created;
     return r.created.length + r.revalued.length + r.removed.length + r.normalized.length + kids.length;
   });
 }
@@ -519,7 +519,7 @@ test('【S2b・失敗系】子梁だけ削除: 梁芯は USER で残り子梁は
   let removedTotal = 0;
   for (let i = 0; i < 3; i++) {
     removedTotal += reconcileSlabSecondaryBeamAxes(b.graph, PROJECT).removed.length;
-    assert.equal(autoFillSecondaryBeams(b.graph, PROJECT).length, 0, '子梁は復活しない');
+    assert.equal(autoFillSecondaryBeams(b.graph, PROJECT).created.length, 0, '子梁は復活しない');
   }
   assert.equal(removedTotal, 0);
   assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER);

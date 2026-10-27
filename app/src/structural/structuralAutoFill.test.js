@@ -930,7 +930,7 @@ test('【ステップ5統合・変異(2)検出用】graph.centerLinesの並び�
 
   autoFillColumns(graph, project, null);
   autoFillBeams(graph, project, 'primary', null); // 通り芯の大梁(primary)を生成
-  const created = autoFillSecondaryBeams(graph, project);
+  const created = autoFillSecondaryBeams(graph, project).created;
 
   const shortSecondary = created.find(b => b.axisCL.id === shortAxis.id);
   assert.ok(shortSecondary, '1回目のautoFillSecondaryBeamsで短辺梁芯にも小梁が生成される（orderForSecondaryBeamFillが通しを先に処理するため）');
@@ -1010,7 +1010,7 @@ test('【ステップ5・I-9】RC下地壁の通し辺では短辺小梁が壁�
 });
 
 test('【ステップ5・T2】通し梁芯の小梁スロットが最初からexcludedBeamSlotsなら短辺小梁は生成されない（0本）', () => {
-  // autoFillSecondaryBeams（自動補完）はADD-ONLY——既存の短辺小梁を持ったまま通し小梁だけ後から
+  // autoFillSecondaryBeams（自動補完）は prune なしの呼び出しでは ADD-ONLY——既存の短辺小梁を持ったまま通し小梁だけ後から
   // 除外しても、既存の短辺小梁は削除されない（他のautoFill*系と同じ規律。resolveSecondaryBeamsForAxis
   // だけが張り替えの巻き戻しを持つ）。そのため本テストは「最初の生成より前に除外を仕込む」形で、
   // host欠落が生成時点に効くことを確かめる。
@@ -1028,7 +1028,7 @@ test('【ステップ5・T2】通し梁芯の小梁スロットが最初からex
   // （ユーザーが「この位置には小梁を置かない」と事前に選んだ状態を模す）。
   graph.excludedBeamSlots.add(spanKey(through3000, hostA, hostB));
 
-  const created = autoFillSecondaryBeams(graph, project);
+  const created = autoFillSecondaryBeams(graph, project).created;
 
   assert.equal(graph.beams.filter(b => b.role === 'secondary' && b.axisCL.id === through3000.id).length, 0,
     '通し梁芯(y=3000)の小梁は除外集合により生成されない');

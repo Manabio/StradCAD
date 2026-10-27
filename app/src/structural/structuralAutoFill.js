@@ -317,6 +317,8 @@ export function removeStaleFoundationMembers(graph) {
  *  - primary: 基礎伏図では autoFillBeamsForStructure が role:'foundation' しか作らない（本ファイル autoFillStructuralGrid の beamKind 分岐）→ 対象。
  *  - landing: autoFillStairLandingBeams は belowGraph が無い最下階では源が空（collectLandingSources）→ 対象。
  *  - secondary: autoFillSecondaryBeams は基礎伏図でも呼ばれ、role:'primary' の梁（locked 等）が残れば生成しうる → 対象外。
+ *    ここでは撤去しないが、支えの大梁が無くなった auto の小梁は autoFillSecondaryBeams の撤去段（prune）が
+ *    同じ再計算の中で撤去する（別課題 k4。生成しうるものは host が残る限り撤去されない＝撤去→再生成の往復は起きない）。
  *  - floor: autoFillWoodFloorBeams は基礎伏図でも呼ばれ、primary の梁が残れば生成しうる → 対象外。
  *  partitionBeam（隔て梁）は autoFillStairPartitionBeams が自前で撤去する／eaves・roofBeam は屋根の梁／sill は基礎伏図の梁
  *  （別課題 Q-A5）なので含めない。対象は dimensionStatus==='auto' のみ（locked／手動固定は保持）。
@@ -440,19 +442,46 @@ function orderForSecondaryBeamFill(cls) {
  *  連続ペア（＝梁と梁の内側）へ小梁（role:'secondary', symbol B）を自動生成する（除外集合のスロットはスキップ）。
  *  基礎伏図・屋上伏図はhostとなる大梁がrole:'primary'でない（'foundation'/'eaves'）ため自動的に0本になる
  *  （分岐不要）。構造モード突入時の再計算（autoFillStructuralGrid）と、梁芯CL追加時の両方から呼ぶ。
- *  走査順は orderForSecondaryBeamFill（開口由来の短辺は、参照する通し辺の小梁が先に生成されるよう後回し）。 */
-export function autoFillSecondaryBeams(graph, project) {
-  if (!isStructureSpecified(graph, project)) return [];
+ *  走査順は orderForSecondaryBeamFill（開口由来の短辺は、参照する通し辺の小梁が先に生成されるよう後回し）。
+ *  prune（別課題 k4）: true なら生成の前に、梁芯ごとに host 連続ペアの spanKey に無い auto の小梁（role:'secondary'・
+ *  dimensionStatus:'auto'・同じ axisCL）を撤去する。開口梁芯の範囲が伸びて途中に大梁が入る・通り芯の移動で host の並びが
+ *  変わる・host の大梁が無くなる（host が空＝全て撤去）と、古い全長の小梁が分割後の小梁と重なって残るため。
+ *  locked／calculated の小梁は区間に合わなくても残す。excludedBeamSlots は撤去で増やさない（removeBeam を使わない）。
+ *  在来木造（wallRuns）は小梁を woodOpeningBeams.js が担うので、呼び出し側がこの関数を呼ばない（prune も渡さない）。
+ *  @returns {{created: Beam[], removed: string[]}} 生成した小梁と、撤去した小梁のid */
+export function autoFillSecondaryBeams(graph, project, { prune = false } = {}) {
+  if (!isStructureSpecified(graph, project)) return { created: [], removed: [] };
   const structure = effectiveStructure(graph, project);
-  if (!structureHasMemberKind(MEMBER_KIND.BEAM, structure)) return [];
+  if (!structureHasMemberKind(MEMBER_KIND.BEAM, structure)) return { created: [], removed: [] };
   const rules = rulesFor(structure);
   const materialType = rules.baseMaterial;
   const section = rules.defaultSections.beam;
   const existing = new Set(graph.beams.map(b => spanKey(b.axisCL, b.clStart, b.clEnd)));
   const created = [];
+  const removed = [];
+  // 撤去段（別課題 k4）: 生成と同じ host 連続ペアの spanKey に無い auto の小梁を、梁芯ごとに生成の直前で撤去する
+  // （autoFillBeams／autoFillRoofBeams と同じ型）。在来木造（wallRuns）の小梁は woodOpeningBeams.js が担うので、
+  // 在来木造では呼び出し側（autoFillStructuralGrid）がこの関数自体を呼ばない＝撤去しない。
+  // prune は再計算の最後（スラブ小梁の梁芯の張り直しの後）の呼び出しだけが true にする——張り直し前の梁芯の値で
+  // 判定すると、まだ追従していない梁芯の子梁を「host なし」と見て撤去し、id が変わってしまう
+  // （slabSecondaryBeamAxes.test.js の S2b 配線 undo/redo）。host が無い（hosts が空）梁芯の auto 小梁も撤去する——
+  // 大梁の撤去段（autoFillBeams）と同じ規律で、宙に浮いた小梁を残さない。
   for (const cl of orderForSecondaryBeamFill(beamAxisCenterLines(graph))) {
     const isVertical = cl.centerLineType === CenterLineType.VERTICAL;
     const hosts = secondaryBeamSpansFor(graph, cl);
+    if (prune) {
+      const validKeys = new Set();
+      for (let i = 0; i < hosts.length - 1; i++) validKeys.add(spanKey(cl, hosts[i], hosts[i + 1]));
+      for (const beam of [...graph.beamMap.values()]) {
+        if (beam.role !== 'secondary' || beam.dimensionStatus !== 'auto' || beam.axisCL.id !== cl.id) continue;
+        const key = spanKey(beam.axisCL, beam.clStart, beam.clEnd);
+        if (validKeys.has(key)) continue;
+        for (const s of [...graph.sleeveMap.values()]) if (s.hostBeamId === beam.id) graph.sleeveMap.delete(s.id);
+        graph.beamMap.delete(beam.id); // removeBeam は excludedBeamSlots を汚すため使わない
+        existing.delete(key);
+        removed.push(beam.id);
+      }
+    }
     for (let i = 0; i < hosts.length - 1; i++) {
       const a = hosts[i], b = hosts[i + 1];
       const key = spanKey(cl, a, b);
@@ -461,7 +490,7 @@ export function autoFillSecondaryBeams(graph, project) {
       existing.add(key);
     }
   }
-  return created;
+  return { created, removed };
 }
 
 /** 屋上伏図（isRoofPlane）専用：梁が存在しないグリッド辺を検出し、軒桁を含む横架材（role:'eaves',
@@ -882,7 +911,8 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 出自を問わず全梁芯が対象のため、壁由来の梁芯（newWallBeamAxes）もそのまま拾う。beamPlacement:'wallRuns'
   // （在来木造）は通り芯グリッドの大梁を持たないため小梁のhostが無く、呼んでも0本になる以外に害はないが、
   // 二重の判定軸を持たないよう明示的にスキップする（ステップ3c-2）。
-  const newSecondaryBeams = rulesFor(structure).beamPlacement === 'wallRuns' ? [] : autoFillSecondaryBeams(graph, project);
+  const secondaryResult = rulesFor(structure).beamPlacement === 'wallRuns' ? { created: [], removed: [] } : autoFillSecondaryBeams(graph, project);
+  const newSecondaryBeams = secondaryResult.created;
   // S造のスラブ小梁の梁芯（slabSecondaryBeamAxes.js。structureRules.js slabSecondaryBeams が null の主構造は空）。
   // 大梁・開口辺の小梁が確定した直後に梁芯を作り、追加の梁芯の子梁を同じパスで作る（次の再計算を待たない）。
   // 基礎伏図・屋根専用平面は対象外。
@@ -893,7 +923,12 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     ? reconcileSlabSecondaryBeamAxes(graph, project, slabOpeningRects)
     : { created: [], revalued: [], removed: [], normalized: [], skipped: [] };
   const slabAxes = slabReconcile.created;
-  const newSlabSecondaries = slabAxes.length > 0 ? autoFillSecondaryBeams(graph, project) : [];
+  // 2回目（梁芯の追従・張り直しが済んだ後）だけ撤去段を有効にする（別課題 k4。理由は autoFillSecondaryBeams の prune 参照）。
+  // 在来木造は小梁を woodOpeningBeams.js が担うので呼ばない。以前の「slabAxes があるときだけ」は外した——
+  // 撤去は新規の梁芯の有無と無関係に必要なため（生成は冪等で、梁芯が増えなければ 0 本）。
+  const slabSecondaryResult = rulesFor(structure).beamPlacement === 'wallRuns' ? { created: [], removed: [] }
+    : autoFillSecondaryBeams(graph, project, { prune: true });
+  const newSlabSecondaries = slabSecondaryResult.created;
   // 階段を横切る孤児の梁芯の撤去（ユーザー指示2026-10-12。「CLは残す」規律の例外）。生成・撤去がすべて確定した
   // 最後に呼ぶ——梁が乗った梁芯を孤児と誤認しない／現況の生成源（壁・開口）と往復しないため。
   // 依存の柱・梁は teardown で道連れ、次の sweep で中心線へ再アンカーされる。通知は structuralOrchestration.js。
@@ -909,7 +944,7 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
     // S造のスラブ小梁の梁芯の値の張り直し・由来の USER 化（slabSecondaryBeamAxes.js）。新規/撤去ではないため別枠。
     changedSlabBeamAxes: [...slabReconcile.revalued, ...slabReconcile.normalized],
     newBeams: [...newBeams, ...newRoofBeams, ...newWallBeamAxes, ...newOpeningBeamAxes, ...newLandingBeams, ...newSecondaryBeams, ...slabAxes, ...newSlabSecondaries, ...sillBeamsResult.created, ...floorBeamsResult.created],
-    removedBeams: [...staleFoundation.removedBeams, ...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes, ...slabReconcile.removed, ...removedLandingG, ...removedStaleLandingBeams],
+    removedBeams: [...staleFoundation.removedBeams, ...removedBeams, ...removedRoofBeams, ...sillBeamsResult.removed, ...floorBeamsResult.removed, ...removedOpeningBeamAxes, ...slabReconcile.removed, ...removedLandingG, ...removedStaleLandingBeams, ...secondaryResult.removed, ...slabSecondaryResult.removed],
     // 踊り場受け梁の既存auto LGへのlevelOffset再計算更新（QA指摘F1是正）。新規/撤去した梁ではないため
     // newBeams/removedBeamsには混ぜず、changedOpeningBeamAxesと同じ別枠にする
     // （structuralRecompute.jsのchanged判定はこの配列の長さも見る）。

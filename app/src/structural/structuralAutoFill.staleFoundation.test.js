@@ -85,13 +85,18 @@ test('【S5c-1・Q-A4】地階を消して1階が再び最下階に戻ると、�
   assert.equal(roleCount(graph, 'foundation'), 0);
   assert.equal(roleCount(graph, 'primary'), 4);
 
+  const staleSecondaryIds = graph.beams.filter(b => b.role === 'secondary').map(b => b.id);
+  assert.equal(staleSecondaryIds.length, 1, '通常階の間はスラブ小梁の子梁（secondary）が1本ある');
   project.planes = [plane1F]; // 地下1階を削除
   const r = autoFillStructuralGrid(graph, project, 'S造');
   assert.equal(roleCount(graph, 'foundation'), 4, '基礎梁が作り直された');
   assert.equal(roleCount(graph, 'primary'), 0, '床梁(primary)は撤去された');
   assert.equal(graph.footings.length, 4, 'フーチングが作り直された');
   assert.equal(r.newFootings.length, 4);
-  assert.equal(r.removedBeams.length, 4, '撤去した primary 4本のidが removedBeams に載る');
+  // 5本目＝床梁（支えの大梁）が消えて host の無くなった auto の小梁（別課題 k4 の撤去段。宙に浮いた小梁を残さない）
+  assert.equal(r.removedBeams.length, 5, '撤去した primary 4本＋host を失った auto の小梁1本のidが removedBeams に載る');
+  assert.equal(staleSecondaryIds.every(id => r.removedBeams.includes(id)), true, '5本目は host を失った小梁');
+  assert.equal(roleCount(graph, 'secondary'), 0);
   assert.equal(r.newBeams.length, 4);
 });
 
