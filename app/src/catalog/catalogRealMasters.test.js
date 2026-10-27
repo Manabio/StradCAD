@@ -31,8 +31,9 @@ import {
 // 昇降路壁材の新設1件（301000000020・強化せっこうボード t=12.5+12.5）を加えた131件。
 // 2026-10-01: 木質系セメント板の面材16件（301000000021〜36）とルーフィング3件（302000000007〜09）を
 // 加えて150件。2026-10-18: 軒裏下地材 □-30×15（101400000015）を加えて151件。
-test('MATERIALS: 151件（131件＋セメント系面材16件＋ルーフィング3件＋軒裏下地材1件。振り直し済み・新体系）', () => {
-  assert.equal(MATERIALS.length, 151);
+// 2026-10-26: デッキプレート6件（201600000001〜06）を加えて157件。
+test('MATERIALS: 157件（131件＋セメント系面材16件＋ルーフィング3件＋軒裏下地材1件＋デッキプレート6件。振り直し済み・新体系）', () => {
+  assert.equal(MATERIALS.length, 157);
 });
 
 test('MATERIALS: 面材（PANEL）は全件 x=910,y=1820、仕上げ材（FINISH）は全件 x=0,y=0（2026-10-01裁定）', () => {
@@ -308,7 +309,7 @@ function readCatalogSource(relPath) {
   return fs.readFileSync(path.join(import.meta.dirname, '..', relPath), 'utf8').split(/\r?\n/);
 }
 
-test('formatCatalogSourceLine(material): symbolic参照（WOOD_STUD_CODE_BY_SIZE 4件・RC_WALL_BACKING_CODES 3件）を除く123件が materialData.js の該当行と一致する', () => {
+test('formatCatalogSourceLine(material): symbolic参照（WOOD_STUD_CODE_BY_SIZE 4件・RC_WALL_BACKING_CODES 3件）を除く150件が materialData.js の該当行と一致する', () => {
   const lines = readCatalogSource('finish/materials/materialData.js');
   let matched = 0;
   let symbolic = 0;
