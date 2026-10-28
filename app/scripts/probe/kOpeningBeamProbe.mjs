@@ -13,16 +13,27 @@
 //   edges[].key＝plane|V/H|coord|lo-hi（id を含まない位置キー。モード間の比較キー）。
 //   edges[].axes＝辺の目標座標にある梁芯・通り芯（kind・由来・extent。由来 opening＝新しく作られた／流用の判定は origin で読む）。
 //   edges[].beams＝その座標を軸にする梁（role・長さ）。coveredLen＝辺の範囲 [lo,hi] を梁が覆う長さ（和集合）。
+//   【S1・2026-10-28 の測り方】計画器（openingEdgePlan.js）と同じ coverTol＝max(CL_OVERLAP_TOL_MM, 既定梁幅/2) 以内で、
+//   辺の coord と target のどちらからでも梁を探す。梁の座標は axisValue（偏芯込み）と axisCL.effectiveValue の両方を見る
+//   （旧: target±1mm・axisValue のみ。外周通り芯の 50mm 偏芯の軸上の大梁を数え落とす偽陽性があった）。
+//   status は (向き, coord, target) に加え辺の範囲 lo/hi まで照合して引く（同じ線上に辺が2つあるとき別の辺の status を取らない）。
+//   診断表（openingBeamSourcesDiagnostics）が範囲を持たない版では、placed を openingBeamSourcesFor の源と範囲で照合し、
+//   それ以外は同じ線の先頭を取る。
+//   主構造未定（梁を作らない rules）の階は梁の代わりに梁芯の extent で被覆を測り、梁芯が何も無く源も出ない辺は計測から除く
+//   （counts.g6Skipped）。
 //   digest＝モード間の差の件数を数える全体ダンプ（開口梁芯・梁・柱。位置キー）。
 import fs from 'node:fs';
 import { loadDocument } from './loadDoc.mjs';
 import { convergeProject, rnd } from './hAnchorCoverageProbe.mjs';
-import { effectiveStructure, rulesFor } from '../../src/structural/structureRules.js';
-import { openingEdgeComponents, openingBeamSourcesDiagnostics, openingBeamSourcesFor, edgeTarget } from '../../src/structural/openingBeamAxes.js';
+import { effectiveStructure, rulesFor, UNSPECIFIED_STRUCTURE } from '../../src/structural/structureRules.js';
+import { openingEdgeComponents, openingBeamSourcesDiagnostics, openingBeamSourcesFor, edgeTarget, defaultBeamWidthMm } from '../../src/structural/openingBeamAxes.js';
 import { belowPlaneOf } from '../../src/structural/wallBeamAxes.js';
+import { isFoundationPlane } from '../../src/structural/drawingDesignation.js';
+import { structureHasMemberKind, MEMBER_KIND } from '../../src/structural/structuralClassification.js';
 import { stairRiserOf } from '../../src/finish/stair/stairDimensions.js';
 import { centerLineKind } from '../../src/core/centerLine.js';
-import { CenterLineType } from '../../src/core/constants.js';
+import { beamAxisCenterLines } from '../../src/core/centerLineKindPolicy.js';
+import { CenterLineType, CL_OVERLAP_TOL_MM } from '../../src/core/constants.js';
 
 const isMain = !!process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('kOpeningBeamProbe.mjs');
 const short = (id) => (id ? id.slice(0, 8) : null);
@@ -51,9 +62,28 @@ export function measurePlane(plane, project) {
   const diag = openingBeamSourcesDiagnostics(graph, project, { riserOf, belowGraph });
   out.counts = {
     sources: sources.length, skipped: diag.skipped ?? null, components: diag.componentCount ?? 0, edgeCount: diag.edgeCount ?? 0,
-    covered: diag.coveredCount ?? 0, excluded: diag.excludedCount ?? 0, unsupported: diag.unsupportedCount ?? 0,
+    covered: diag.coveredCount ?? 0, split: diag.splitCount ?? 0, excluded: diag.excludedCount ?? 0, unsupported: diag.unsupportedCount ?? 0,
   };
-  const statusOf = (isVertical, target) => diag.edges?.find(e => e.isVertical === isVertical && Math.abs(e.target - target) < TOL)?.status ?? null;
+  // 辺の status: 同じ線（向き・coord・target）の診断行から、範囲 lo/hi まで一致する行を引く。
+  const statusOf = (edge, target) => {
+    const line = (diag.edges ?? []).filter(e => e.isVertical === edge.isVertical && Math.abs(e.coord - edge.coord) < TOL && Math.abs(e.target - target) < TOL);
+    const ranged = e => Number.isFinite(e.lo) && Number.isFinite(e.hi);
+    const exact = line.find(e => ranged(e) && Math.abs(e.lo - edge.lo) < TOL && Math.abs(e.hi - edge.hi) < TOL);
+    if (exact) return exact.status;
+    if (line.some(ranged)) {
+      // 計画器が辺を割った子の行（範囲が辺の内側）だけが残る形。
+      return line.some(e => ranged(e) && e.lo >= edge.lo - TOL && e.hi <= edge.hi + TOL) ? 'split' : null;
+    }
+    // 範囲を持たない診断表: placed は源（範囲つき）と照合し、それ以外は同じ線の先頭。
+    if (sources.some(s => s.isVertical === edge.isVertical && Math.abs(s.coord - target) < TOL && Math.abs(s.lo - edge.lo) < TOL && Math.abs(s.hi - edge.hi) < TOL)) return 'placed';
+    return line.find(e => e.status !== 'placed')?.status ?? line[0]?.status ?? null;
+  };
+  // 梁を作らない主構造（未定など）の階は G6 として計測から除く（問題2.md Q7）。
+  const beamKind = isFoundationPlane(plane, project) ? MEMBER_KIND.FOUNDATION_BEAM : MEMBER_KIND.BEAM;
+  const g6 = structure === UNSPECIFIED_STRUCTURE || !structureHasMemberKind(beamKind, structure);
+  out.g6 = g6;
+  const coverTol = Math.max(CL_OVERLAP_TOL_MM, (defaultBeamWidthMm(rules) ?? 0) / 2);
+  let g6Skipped = 0;
   if (rules.openingBeamAxes === 'slabOpenings' || rules.openingBeamAxes === 'slabOpeningsDirect') {
     for (const comp of openingEdgeComponents(graph, { riserOf, belowGraph })) {
       for (const edge of comp) {
@@ -63,21 +93,34 @@ export function measurePlane(plane, project) {
           .filter(c => c.centerLineType === type && Math.abs(c.effectiveValue - t.coord) < TOL && ['beam', 'struct'].includes(centerLineKind(c)))
           .map(c => ({ id: short(c.id), kind: centerLineKind(c), origin: c.beamAxisOrigin ?? null, ext: [rnd(c.extentLo), rnd(c.extentHi)] }))
           .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-        const beams = graph.beams.filter(b => b.isVertical === edge.isVertical && Math.abs(b.axisValue - t.coord) < TOL)
+        // 計画器と同じ被覆の座標: coord か target のどちらかから coverTol 以内。梁の axisValue と軸CLの座標の両方を見る。
+        const near = (v) => Math.abs(v - edge.coord) <= coverTol + 1e-9 || Math.abs(v - t.coord) <= coverTol + 1e-9;
+        const beams = graph.beams.filter(b => b.isVertical === edge.isVertical && (near(b.axisValue) || near(b.axisCL.effectiveValue)))
           .map(b => {
             const a = b.clStart.effectiveValue, c = b.clEnd.effectiveValue;
             return { role: b.role ?? null, lo: rnd(Math.min(a, c)), hi: rnd(Math.max(a, c)), len: rnd(Math.abs(c - a)), status: b.dimensionStatus ?? null };
           }).sort((a, b) => a.lo - b.lo || a.hi - b.hi);
+        const status = statusOf(edge, t.coord);
+        const intervals = beams.map(b => [b.lo, b.hi]);
+        if (g6) {
+          // 梁が出ない階は梁芯の extent で測る。梁芯が何も覆わず源も出ない辺は測る対象が無い（G6）。
+          for (const c of beamAxisCenterLines(graph, { centerLineType: type })) {
+            if (near(c.effectiveValue)) intervals.push([c.extentLo ?? -Infinity, c.extentHi ?? Infinity]);
+          }
+        }
+        const coveredLen = coveredLength(intervals, edge.lo, edge.hi);
+        if (g6 && !(coveredLen > 0) && status !== 'placed' && status !== 'split') { g6Skipped++; continue; }
         out.edges.push({
           key: `${plane.name}|${edge.isVertical ? 'V' : 'H'}|${rnd(edge.coord)}|${rnd(edge.lo)}-${rnd(edge.hi)}`,
           isVertical: edge.isVertical, coord: rnd(edge.coord), target: rnd(t.coord), lo: rnd(edge.lo), hi: rnd(edge.hi), edgeLen: rnd(edge.hi - edge.lo),
-          source: edge.source, status: statusOf(edge.isVertical, t.coord), axes, beams,
-          coveredLen: rnd(coveredLength(beams.map(b => [b.lo, b.hi]), edge.lo, edge.hi)),
+          source: edge.source, status, axes, beams,
+          coveredLen: rnd(coveredLen),
           secondaryCount: beams.filter(b => b.role === 'secondary').length, primaryCount: beams.filter(b => b.role === 'primary').length,
         });
       }
     }
   }
+  out.counts.g6Skipped = g6Skipped;
   const beamAxes = graph.centerLines.filter(c => centerLineKind(c) === 'beam')
     .map(c => `${c.centerLineType === CenterLineType.VERTICAL ? 'V' : 'H'}:${rnd(c.effectiveValue)}:${c.beamAxisOrigin ?? '-'}:${rnd(c.extentLo)}:${rnd(c.extentHi)}`).sort();
   out.digest = {
