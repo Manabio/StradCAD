@@ -210,31 +210,32 @@ test('classOf: 50コンクリート/10RC壁（暫定分類・ステップ3追加
   assert.deepEqual(classOf(50, 10), { major: 50, majorLabel: 'コンクリート', minor: 10, minorLabel: 'RC壁' });
 });
 
-test('MATERIAL_CLASSES: 中分類は全大分類で10始まりの2刻み・11欠番（分類表そのまま）', () => {
+test('MATERIAL_CLASSES: 中分類は全大分類で10始まりの2刻み（例外＝鋼材17）・11欠番（分類表そのまま）', () => {
   assert.equal(MATERIAL_CLASSES[11], undefined);
   assert.equal(Object.keys(MATERIAL_CLASSES).length, 5);
 });
 
 // QA指摘M6: 中分類全件をclassOfで固定する（保存データに焼き付く数値のため）。
-// ステップ3（2026-09-22）でコンクリート/RC壁（50/10）を分類表へ追加し、19個になった。
-test('MATERIAL_CLASSES: 中分類19個全件をclassOfで固定する（保存データに焼き付く数値）', () => {
+// ステップ3（2026-09-22）でコンクリート/RC壁（50/10）を分類表へ追加し19個、2026-10-28 に鋼材 17/18 を足して21個になった。
+test('MATERIAL_CLASSES: 中分類21個全件をclassOfで固定する（保存データに焼き付く数値）', () => {
   const expected = [
     [10, 10, '木材', '正角材'], [10, 12, '木材', '面材'], [10, 14, '木材', '線材'],
     [20, 10, '鋼材', '構造材'], [20, 12, '鋼材', '軽量鉄骨'], [20, 14, '鋼材', '鉄筋'], [20, 16, '鋼材', 'デッキプレート'],
+    [20, 17, '鋼材', 'フラットデッキ'], [20, 18, '鋼材', 'キーストン'],
     [30, 10, 'その他建材', '面材'], [30, 12, 'その他建材', 'ALC'], [30, 14, 'その他建材', '屋根'],
     [30, 16, 'その他建材', 'サイディング'], [30, 18, 'その他建材', '床仕上げ'], [30, 20, 'その他建材', 'シート'],
     [30, 22, 'その他建材', '断熱'], [30, 24, 'その他建材', '左官'], [30, 26, 'その他建材', '石工'],
     [40, 10, '塗装', '塗料'], [40, 12, '塗装', '防水'],
     [50, 10, 'コンクリート', 'RC壁'],
   ];
-  assert.equal(expected.length, 19);
+  assert.equal(expected.length, 21);
   for (const [major, minor, majorLabel, minorLabel] of expected) {
     assert.deepEqual(classOf(major, minor), { major, majorLabel, minor, minorLabel });
   }
   // MATERIAL_CLASSESの実体からも同じ総数が出ることを確認（表の変更に追随して壊れる形にする）
   const totalFromTable = Object.values(MATERIAL_CLASSES)
     .reduce((sum, majorClass) => sum + Object.keys(majorClass.minors).length, 0);
-  assert.equal(totalFromTable, 19);
+  assert.equal(totalFromTable, 21);
 });
 
 // ---- validate（型違い・必須欠落の失敗路）----
