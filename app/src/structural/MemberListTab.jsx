@@ -1037,6 +1037,21 @@ const MemberCard = observer(({
     });
   }
 
+  // 梁カードの断面変更（S造の階）は構造再計算に乗せる——スラブ小梁の割付けが梁幅を入力にするため、
+  // 断面を変えたら同じ操作の中で梁芯を割り直す（ユーザー裁定 2026-10-28 Q3）。recomputeStructuralComposition が
+  // 断面の変更と割り直しを 1 つの undo エントリにする（従来この経路は undo を積まなかった）。
+  // 番号分割の経路（scope≠all）は従来どおり分割の確認後に部材だけ書き換え、割り直しは次の再計算（既知の限界）。
+  // 柱の断面は割付けに関係しないので対象外。busy で無視されたときは何もしない（select は members[0] の値で制御される）。
+  function commitSectionEdit(mutateFn) {
+    if (readOnly) return;
+    const slabBeamSection = group.mapName === 'beamMap' && rulesFor(structure).slabSecondaryBeams != null;
+    if (slabBeamSection && (woodColumnCard || scope === 'all')) {
+      onStructureChanged(() => mutateFn(members));
+      return;
+    }
+    commitScopedEdit(mutateFn);
+  }
+
   // 「グループに戻す」: 自階分の numberGroupId だけ外して再採番する。台帳（grp.spec/grp.join）は
   // 削除しない——他階に同じ gid の部材が残っている可能性があり、次のモード境界の conformToLedger が
   // 引き続きそれらを同じ gid で扱う設計のため（memberGroups.releaseFromGroup 参照）。
@@ -1363,7 +1378,8 @@ const MemberCard = observer(({
                 <div style={cardInputWrapStyle}>
                   <MemberFieldInput
                     members={members} fieldDef={sectionField} graph={graph} group={group} project={project}
-                    readOnly={readOnly || !!sectionField.disabledWhen?.(representative, fieldCtx)} onCommit={commitScopedEdit}
+                    readOnly={readOnly || !!sectionField.disabledWhen?.(representative, fieldCtx)}
+                    onCommit={commitSectionEdit}
                   />
                 </div>
               </div>

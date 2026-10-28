@@ -60,3 +60,20 @@ test('【配線】handleSectionChange: locked は beamMap の secondary 以外�
   assert.equal(countWholeLines(rest, "m.setDimensionStatus('locked');"), 1, 'beamMap 以外では locked を1回書く');
   assert.equal(countOccurrences(body, 'setDimensionStatus('), 2, 'handleSectionChange 全体で setDimensionStatus は2箇所');
 });
+
+// 梁カードの断面変更（S造の階）は onStructureChanged（構造再計算・undo 1 エントリ）に乗せる（ユーザー裁定 2026-10-28 Q3）。
+// S造でない階の梁・柱・番号分割（scope≠all）は従来の commitScopedEdit。いずれも1行まるごと一致で固定する。
+test('【配線】commitSectionEdit: S造の梁だけ onStructureChanged、他は commitScopedEdit。断面フィールドだけがこれを使う', () => {
+  const start = stripped.indexOf('function commitSectionEdit(mutateFn) {');
+  assert.ok(start >= 0, 'commitSectionEdit が見つからない');
+  const body = stripped.slice(start, stripped.indexOf('\n  }\n', start));
+  assert.equal(countWholeLines(body, "const slabBeamSection = group.mapName === 'beamMap' && rulesFor(structure).slabSecondaryBeams != null;"), 1,
+    '対象条件（beamMap かつ slabSecondaryBeams あり）の行');
+  assert.equal(countWholeLines(body, "if (slabBeamSection && (woodColumnCard || scope === 'all')) {"), 1,
+    '再計算へ乗せる条件の行（commitScopedEdit が即時ミューテートする条件と同じ）');
+  assert.equal(countWholeLines(body, 'onStructureChanged(() => mutateFn(members));'), 1, '再計算経路の行');
+  assert.equal(countWholeLines(body, 'commitScopedEdit(mutateFn);'), 1, '従来経路の行');
+  assert.equal(countOccurrences(body, 'onStructureChanged('), 1, 'onStructureChanged は1回だけ');
+  assert.equal(countWholeLines(stripped, 'onCommit={commitSectionEdit}'), 1, '断面フィールドの onCommit');
+  assert.equal(countWholeLines(stripped, 'onCommit={commitScopedEdit}'), 1, '他フィールドの onCommit は従来どおり');
+});
