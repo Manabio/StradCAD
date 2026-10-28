@@ -1,6 +1,76 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { beamGridCells, bayBeamIsVertical, divideBayEqually } from './framingCells.js';
+import { beamGridCells, bayBeamIsVertical, divideBayEqually, equalDivisionCoords, clearGapDivisionCoords } from './framingCells.js';
+
+const closeTo = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg ?? ''} 期待 ${b} 実際 ${a}`);
+
+test('フランジ間割付け: 7000スパン・境界200・子125×2 → あき3つが等しく式どおりの座標、左右対称', () => {
+  // 手計算: あき＝(7000−100−100−125−125)/3＝6550/3＝2183.33…。子1の芯＝−7000+100+2183.33+62.5＝−4654.17（＝−4654−1/6）、
+  // 子2の芯＝−7000+100+2·2183.33+125+62.5＝−2345.83（＝−2345−5/6）。関数の式を写さず数値で固定する。
+  const c = clearGapDivisionCoords(-7000, 0, 200, 200, [125, 125]);
+  assert.equal(c.length, 2);
+  closeTo(c[0], -4654 - 1 / 6);
+  closeTo(c[1], -2345 - 5 / 6);
+  closeTo(0 - c[1], c[0] + 7000, '対称');
+});
+
+test('フランジ間割付け: 全幅同一なら equalDivisionCoords と一致（n=2,3,4・longLo=0/-5000・幅0も）', () => {
+  for (const lo of [0, -5000]) {
+    for (const w of [100, 0]) {
+      for (const n of [2, 3, 4]) {
+        const got = clearGapDivisionCoords(lo, lo + 6000, w, w, new Array(n - 1).fill(w));
+        const exp = equalDivisionCoords(lo, lo + 6000, n);
+        assert.equal(got.length, exp.length);
+        got.forEach((v, k) => closeTo(v, exp[k], `lo=${lo} w=${w} n=${n}`));
+      }
+    }
+  }
+});
+
+test('フランジ間割付け: 子梁の幅が異なる[100,300]でも面どうしのあき3つが等しい（芯±幅/2 から検算）', () => {
+  const lo = 0, hi = 6000, wLo = 200, wHi = 150;
+  const widths = [100, 300];
+  const c = clearGapDivisionCoords(lo, hi, wLo, wHi, widths);
+  const gap1 = (c[0] - widths[0] / 2) - (lo + wLo / 2);
+  const gap2 = (c[1] - widths[1] / 2) - (c[0] + widths[0] / 2);
+  const gap3 = (hi - wHi / 2) - (c[1] + widths[1] / 2);
+  closeTo(gap1, gap2);
+  closeTo(gap2, gap3);
+  assert.ok(gap1 > 0);
+});
+
+test('フランジ間割付け: childWidths が空 → []', () => {
+  assert.deepEqual(clearGapDivisionCoords(0, 5000, 200, 200, []), []);
+});
+
+test('フランジ間割付け: 子梁の幅が異なる3本[100,300,150]でも面どうしのあき4つが等しい（累積和の検算）', () => {
+  const lo = 0, hi = 8000, wLo = 200, wHi = 150;
+  const widths = [100, 300, 150];
+  const c = clearGapDivisionCoords(lo, hi, wLo, wHi, widths);
+  assert.equal(c.length, 3);
+  const faces = [lo + wLo / 2, ...c.flatMap((v, k) => [v - widths[k] / 2, v + widths[k] / 2]), hi - wHi / 2];
+  const gaps = [faces[1] - faces[0], faces[3] - faces[2], faces[5] - faces[4], faces[7] - faces[6]];
+  gaps.slice(1).forEach((g, k) => closeTo(g, gaps[0], `あき${k + 2}`));
+  assert.ok(gaps[0] > 0);
+  assert.ok(c[0] < c[1] && c[1] < c[2], '昇順');
+});
+
+test('フランジ間割付け: 幅の合計が区間を超える（gap<0）→ 等分へ退化し例外にしない（非対称: 退化しなければ 650 になる入力）', () => {
+  // あき＝(1000−400−100−600)/2＝−50。退化しないと 0+400−50+300＝650 になるので、等分の 500 と区別できる。
+  assert.deepEqual(clearGapDivisionCoords(0, 1000, 800, 200, [600]), [500]);
+  assert.deepEqual(clearGapDivisionCoords(0, 1000, 800, 200, [600]), equalDivisionCoords(0, 1000, 2));
+});
+
+test('フランジ間割付け【失敗系】: 不正な引数は日本語の Error', () => {
+  const re = /フランジ間割付けの引数が不正です/;
+  assert.throws(() => clearGapDivisionCoords(0, NaN, 100, 100, [100]), re);
+  assert.throws(() => clearGapDivisionCoords(5000, 0, 100, 100, [100]), re, 'longHi < longLo（降順の区間）');
+  assert.throws(() => clearGapDivisionCoords(0, 5000, -1, 100, [100]), re);
+  assert.throws(() => clearGapDivisionCoords(0, 5000, 100, 100, 100), re);
+  assert.throws(() => clearGapDivisionCoords(0, 5000, 100, 100, [-1]), re);
+  assert.throws(() => clearGapDivisionCoords(0, 5000, 100, 100, ['a']), re);
+  assert.throws(() => clearGapDivisionCoords(0, 5000, 100, 100, [Infinity]), re);
+});
 
 // 縦線ヘルパ（coord=x, lo/hi=y範囲）
 const V = (coord, lo, hi) => ({ isVertical: true, coord, lo, hi });

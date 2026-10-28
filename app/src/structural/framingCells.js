@@ -105,6 +105,49 @@ export function equalDivisionCoords(longLo, longHi, n) {
 }
 
 /**
+ * フランジ間（あき）が等しくなる子梁の芯座標（S造スラブ小梁の割付け用）。
+ * ユーザー指示 2026-10-28「柱芯間でなくフランジ間を等間隔に。材寸変更都度再計算」。
+ *
+ * 区間 [longLo,longHi] の両端に幅 loWidth / hiWidth の境界梁が longLo / longHi を芯として乗り、
+ * 内部に幅 childWidths[k]（k=0..n-2）の子梁を n-1 本置く（n = childWidths.length + 1）。
+ *   gap = (L - loWidth/2 - hiWidth/2 - Σ childWidths) / n,  L = longHi - longLo
+ *   coord_i = longLo + loWidth/2 + i*gap + Σ_{j<i} childWidths[j] + childWidths[i-1]/2  （i=1..n-1）
+ * 返り値は昇順の n-1 本（配列の index は i-1）。childWidths が空なら []。
+ *
+ * 恒等: 全部の幅が等しい（loWidth = hiWidth = 各 childWidths）とき equalDivisionCoords(longLo,longHi,n) と一致する。
+ * 退化: gap が負（幅の合計が L を超え成立しない）ときは equalDivisionCoords(longLo,longHi,n) を返す
+ * （例外にしない。再計算全体を巻き戻さないため）。
+ * 呼び出し側は S2 で slabSecondaryBeamAxes.js が使う予定。在来木造の床梁は従来の等分のまま。
+ *
+ * @param {number} longLo
+ * @param {number} longHi
+ * @param {number} loWidth - longLo 側の境界梁の幅
+ * @param {number} hiWidth - longHi 側の境界梁の幅
+ * @param {number[]} childWidths - 内部の子梁の幅（昇順の並び）
+ * @returns {number[]}
+ * @throws {Error} 引数が有限数でない・負・配列でない・longHi < longLo（降順の区間）のとき
+ */
+export function clearGapDivisionCoords(longLo, longHi, loWidth, hiWidth, childWidths) {
+  const bad = (v) => !Number.isFinite(v) || v < 0;
+  if (!Number.isFinite(longLo) || !Number.isFinite(longHi) || longHi < longLo || bad(loWidth) || bad(hiWidth)
+    || !Array.isArray(childWidths) || childWidths.some((w) => typeof w !== 'number' || bad(w))) {
+    throw new Error(`フランジ間割付けの引数が不正です: longLo=${longLo}, longHi=${longHi}, loWidth=${loWidth}, hiWidth=${hiWidth}, childWidths=${JSON.stringify(childWidths)}`);
+  }
+  const n = childWidths.length + 1;
+  if (childWidths.length === 0) return [];
+  const sumChildren = childWidths.reduce((a, w) => a + w, 0);
+  const gap = (longHi - longLo - loWidth / 2 - hiWidth / 2 - sumChildren) / n;
+  if (gap < 0) return equalDivisionCoords(longLo, longHi, n);
+  const coords = [];
+  let before = 0;
+  for (let i = 1; i < n; i++) {
+    coords.push(longLo + loWidth / 2 + i * gap + before + childWidths[i - 1] / 2);
+    before += childWidths[i - 1];
+  }
+  return coords;
+}
+
+/**
  * 梁の軸線 lines から、縦線 coord 集合 × 横線 coord 集合の**全ペア**（隣接に限らない）が作る矩形のうち、
  * 4辺すべてがその線上の梁で覆われ、かつ**内部（両端を除いた開区間）へ入り込む梁が1本も無い**ものを返す。
  *
