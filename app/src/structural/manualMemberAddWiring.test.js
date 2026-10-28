@@ -41,3 +41,22 @@ test('【配線】MemberListTabはaddManualColumn/addManualFooting/addManualBeam
 test('【配線】耐力壁（addBearingWall）は対象外のまま1回残る', () => {
   assert.equal(countOccurrences(stripped, 'graph.addBearingWall('), 1, '耐力壁は本課題の対象外なので従来どおり直接addBearingWallを呼ぶ');
 });
+
+// 小梁（role==='secondary'）の断面変更は locked にしない（ユーザー裁定 2026-10-28 Q2 案1。スラブ小梁の割付けが梁幅を入力にするため。範囲は小梁だけ）。
+// 大梁など secondary 以外の梁と、柱など beamMap 以外は従来どおり locked。handleSectionChange の本体だけを切り出して判定する。
+test('【配線】handleSectionChange: locked は beamMap の secondary 以外の梁用（role 条件つき）と beamMap 以外用の計2件', () => {
+  const start = stripped.indexOf('function handleSectionChange(newId) {');
+  assert.ok(start >= 0, 'handleSectionChange が見つからない');
+  const body = stripped.slice(start, stripped.indexOf('<select', start));
+  const branchStart = body.indexOf("if (group.mapName === 'beamMap') {");
+  const branchEnd = body.indexOf('continue;', branchStart);
+  assert.ok(branchStart >= 0 && branchEnd > branchStart, 'beamMap 分岐が見つからない');
+  const beamBranch = body.slice(branchStart, branchEnd);
+  const rest = body.slice(branchEnd);
+  // 1行まるごと一致（行末コメントに元の式を残す変異を見逃さない。上の countWholeLines の注記）。
+  assert.equal(countWholeLines(beamBranch, "if (m.role !== 'secondary') m.setDimensionStatus('locked');"), 1,
+    'beamMap 分岐の locked は secondary 以外の梁用の1件で、role の条件と同じ行にある');
+  assert.equal(countOccurrences(beamBranch, "setDimensionStatus('locked')"), 1, 'beamMap 分岐に他の locked 書込みは無い');
+  assert.equal(countWholeLines(rest, "m.setDimensionStatus('locked');"), 1, 'beamMap 以外では locked を1回書く');
+  assert.equal(countOccurrences(body, 'setDimensionStatus('), 2, 'handleSectionChange 全体で setDimensionStatus は2箇所');
+});

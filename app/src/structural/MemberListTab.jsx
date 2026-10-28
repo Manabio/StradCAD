@@ -1645,11 +1645,15 @@ const MemberFieldInput = observer(({ members, fieldDef, graph, group, project, r
       onCommit(targets => {
         for (const m of targets) {
           m.setField('sectionDefId', newId);
-          m.setDimensionStatus('locked');
           if (group.mapName === 'beamMap') {
+            // 小梁の断面は分類変更（上の handleChange の注記「プルダウン選択＝分類変更では遷移させない」）で、
+            // スラブ小梁の割付けは梁幅を入力にするので locked にして追従を止めない（ユーザー裁定 2026-10-28 Q2 案1、範囲は小梁だけ＝リード裁定）。
+            // 大梁・基礎梁・軒桁は従来どおり locked（断面の選択を撤去段・再算定・× 化削除から守る。QA 実測 2026-10-28）。
+            if (m.role !== 'secondary') m.setDimensionStatus('locked');
             m.setField('eccentricity', autoBeamEccentricity(graph, project, m, m.faceGap ?? 0)); // 新断面幅 × faceGap で再算出
             continue;
           }
+          m.setDimensionStatus('locked');
           if (!refWidth || newWidth === refWidth) continue;
           if (group.mapName === 'columnMap') {
             const offX = graph.columnAxisOffsets.get(m.verticalCL.id) ?? 0;

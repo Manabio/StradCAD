@@ -113,29 +113,32 @@ function edgeAxisId(lines, gridIds, isVertical, coord, lo, hi) {
 // 手が入った梁芯か（SLAB_BEAM の印が嘘になっている）: 固定・算出済みの子梁・スリーブ・偏芯・参照など保護対象
 // （isProtectedWallBeamAxis）、または除外集合（削除した子梁・柱・基礎の記録）が id を参照している。
 // 除外キーが参照する梁芯を撤去すると別 id の梁芯で復活する（team-lessons 2026-10-12）ため、撤去対象から外す根拠にもなる。
-function isEditedSlabAxis(graph, project, cl, defaultBeamSection) {
+function isEditedSlabAxis(graph, project, cl) {
   if (isProtectedWallBeamAxis(graph, cl)) return true;
-  if (graph.beams.some(b => b.axisCL.id === cl.id && isEditedChildBeam(graph, project, b, defaultBeamSection))) return true;
+  if (graph.beams.some(b => b.axisCL.id === cl.id && isEditedChildBeam(graph, project, b))) return true;
   return [graph.excludedBeamSlots, graph.excludedColumnSlots, graph.excludedFootingSlots]
     .some(set => [...set].some(key => exclusionKeyReferencesCL(key, cl.id)));
 }
 
 // 子梁が自動生成の既定と違うフィールドを持つか（＝利用者が編集した）。固定・算出済み（dimensionStatus）は
-// 寸法の手動書換えでだけ遷移し、分類変更（断面・接合）や番号の分割・統合は遷移させない
+// 寸法の手動書換え・手動追加でだけ遷移し、分類変更（接合）や番号の分割・統合は遷移させない
 // （MemberListTab.jsx の注記）ため、それらを直接見る。既定は StructuralBeam のコンストラクタと autoFillSecondaryBeams が決める:
-//   sectionDefId=主構造ルールの既定の梁断面・jointType=role の PIN_ROLES で決まる既定（小梁は PIN）・jointCondition=剛/剛・
+//   jointType=role の PIN_ROLES で決まる既定（小梁は PIN）・jointCondition=剛/剛・
 //   levelOffset/startLevelOffset/endLevelOffset=0・beamWidth/beamDepth=null（S造の小梁は自動算定の対象外）・numberGroupId=null（明示グループ）。
+// 断面（sectionDefId）は位置の編集ではなく割付けの入力（梁幅）なので編集とみなさない（ユーザー裁定 2026-10-28 Q2 案1。
+// 小梁の断面変更は locked にしない。大梁は従来どおり）。locked は手動追加・数値編集の印として従来どおり編集とみなす。
+// 既知の限界: この変更より前に断面を変えて locked になった保存データの小梁は、そのまま手が入った扱い（遡って直さない）。
 // 見ないもの: eccentricity は autoFillBeamEccentricity が faceGap から毎回算出する派生値（編集の根拠は faceGap の方）、
 // memberNo は採番が毎回振る値（手動タグは台帳＝numberGroupId 側）、materialType は convertMembersToEffectiveMaterial が揃える。
 // 台帳の加入（grp.join）経由で自動に付いた numberGroupId と、それで conform される材寸（beamMap の署名フィールド＝
 // sectionDefId・beamWidth・beamDepth）は編集とみなさない（毎回の再計算の conformToLedger が自動の部材にも書くため。
 // その部材だけの個別編集は、加入を持たない孤立グループ＝個別採番か、署名フィールド以外の値）。
-function isEditedChildBeam(graph, project, beam, defaultBeamSection) {
+function isEditedChildBeam(graph, project, beam) {
   const defaultJoint = PIN_ROLES.has(beam.role) ? 'PIN' : 'RIGID';
   const groupDriven = isGroupDrivenMember(project.memberGroupLedger, beam, 'beamMap',
     rulesFor(effectiveStructure(graph, project)), graph.plane.id);
   return beam.dimensionStatus !== 'auto' ||
-    (!groupDriven && (beam.numberGroupId != null || beam.sectionDefId !== defaultBeamSection ||
+    (!groupDriven && (beam.numberGroupId != null ||
       beam.beamWidth != null || beam.beamDepth != null)) ||
     beam.jointType !== defaultJoint ||
     beam.jointCondition?.start !== 'RIGID' || beam.jointCondition?.end !== 'RIGID' ||
@@ -221,13 +224,12 @@ export function reconcileSlabSecondaryBeamAxes(graph, project, openingRects = un
   const built = buildBays(graph, project, openingRects);
   if (!built) return result;
   const { bays, boundaryAxisIds } = built;
-  const defaultBeamSection = rulesFor(effectiveStructure(graph, project)).defaultSections.beam;
   const activeBays = bays.filter(b => !b.skip);
 
   // 正規化（不変条件「由来 SLAB_BEAM ⇔ 未編集の自動梁芯」を保つ）。
   const slabAxes = beamAxisCenterLines(graph).filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM);
   for (const cl of slabAxes) {
-    if (!isEditedSlabAxis(graph, project, cl, defaultBeamSection)) continue;
+    if (!isEditedSlabAxis(graph, project, cl)) continue;
     cl.beamAxisOrigin = BeamAxisOrigin.USER;
     result.normalized.push(cl);
     const bay = ownerBay(bays, axisProbe(cl));

@@ -678,6 +678,26 @@ test('【S2b・配線】通り芯 y 7000→10000 を再計算に通す: 同じ i
   assert.deepEqual(slabAxesOf(p.g2).map(a => [a.id, a.value]), before.map(a => [a.id, a.value]));
 });
 
+test('【S2b・配線・既知の限界】子梁を H300×150 にした後にベイが伸びて本数が増える（y 7000→10000 で区間数 3→4＝子梁 2→3 本）と、既存の子梁は id と断面を保ち、新しい子梁は既定断面 H200×100 になる', async () => {
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(3);
+  const kids0 = p.g2.beams.filter(b => b.role === 'secondary');
+  assert.equal(kids0.length, 2);
+  kids0.forEach(k => { k.sectionDefId = 'STEEL-H300x150'; }); // dimensionStatus は auto のまま（小梁の断面変更は locked にしない）
+  const ids0 = kids0.map(k => k.id);
+  await p.run(3);
+  p.moveY(7000, 10000);
+  await p.run(3);
+  const kids = p.g2.beams.filter(b => b.role === 'secondary');
+  assert.equal(kids.length, 3);
+  // 幅の混在は最大の 150 で割る: 面 100・9900、あき=(9800-3×150)/4=2337.5 → 100+2337.5+75=2512.5・5000・7487.5。
+  assert.deepEqual(slabAxesOf(p.g2).map(a => a.value), [2512.5, 5000, 7487.5]);
+  for (const id of ids0) assert.equal(kids.find(k => k.id === id)?.sectionDefId, 'STEEL-H300x150', '既存の子梁は id と断面を保つ');
+  const fresh = kids.filter(k => !ids0.includes(k.id));
+  assert.equal(fresh.length, 1);
+  assert.equal(fresh[0].sectionDefId, 'STEEL-H200x100', '新しい子梁は既定断面（既知の限界）');
+});
+
 test('【S2b・配線】子梁の固定は再計算で梁芯を USER へ替え（changed=true）、次のパスで収束する', async () => {
   const p = await buildS2FProject([0, 5000], [0, 7000]);
   await p.run(3);
@@ -760,11 +780,10 @@ test('【S2b・配線】通り芯 y=0→−3000 の移動を undo/redo しても
   } finally { setCenterLineStructuralListener(null); }
 });
 
-test('【S2b・失敗系】子梁の接合・番号グループ・断面・face gap だけ変えた梁芯は、吹抜けが出ても撤去されず USER になる', () => {
+test('【S2b・失敗系】子梁の接合・番号グループ・face gap だけ変えた梁芯は、吹抜けが出ても撤去されず USER になる', () => {
   const edits = {
     接合: k => { k.jointType = 'RIGID'; },
     番号グループ: k => { k.numberGroupId = 'B#1'; },
-    断面: k => { k.sectionDefId = 'other-section'; },
     faceGap: k => { k.faceGap = 10; },
     天端レベル: k => { k.levelOffset = -50; },
   };
@@ -779,6 +798,35 @@ test('【S2b・失敗系】子梁の接合・番号グループ・断面・face 
     assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER, label);
     assert.ok(b.graph.centerLines.includes(a), label);
   }
+});
+
+test('【S2b】子梁の断面だけ変えた梁芯（locked にしない）は USER にならず、次の割り直しで幅に追従する（裁定 2026-10-28 Q2 案1）', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const axes = fuseAxes(b.graph);
+  const ids = axes.map(x => x.id);
+  for (const k of secondaries(b.graph)) {
+    k.sectionDefId = 'STEEL-H300x150'; // dimensionStatus は auto のまま
+    assert.equal(k.dimensionStatus, 'auto');
+  }
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual(r.normalized, [], '断面の違いは編集ではない');
+  assert.ok(fuseAxes(b.graph).every(x => x.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM));
+  assert.equal(b.graph.excludedSlabBeamSlots.size, 0);
+  assert.deepEqual(fuseAxes(b.graph).map(x => x.id), ids, '同じ id のまま');
+  near(fuseAxes(b.graph)[0].value, -4675); near(fuseAxes(b.graph)[1].value, -2325);
+});
+
+test('【S2b・失敗系】子梁の断面を変えたうえで locked（手動相当）にした梁芯は従来どおり USER になる', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const [a] = fuseAxes(b.graph);
+  const kid = secondaries(b.graph).find(k => k.axisCL.id === a.id);
+  kid.sectionDefId = 'STEEL-H300x150';
+  kid.setDimensionStatus('locked');
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual(r.normalized.map(x => x.id), [a.id]);
+  assert.equal(a.beamAxisOrigin, BeamAxisOrigin.USER);
 });
 
 test('【S2b】自動生成のままの子梁（既定の接合・断面・番号なし）は編集あり扱いにならない', () => {
@@ -842,7 +890,7 @@ test('【S2b・配線】縦に並ぶ2ベイ（同じ端の通り芯を共有）:
   assert.ok(!now.some(x => x[0] === d.id), 'd は余りとして撤去');
 });
 
-test('【S2b・配線】小梁グループに手動タグ（join あり）を付けても梁芯は SLAB_BEAM のまま・枠0件。通り芯 7000→10000 で3本に割り直される。個別の断面変更は編集（対照）', async () => {
+test('【S2b・配線】小梁グループに手動タグ（join あり）を付けても梁芯は SLAB_BEAM のまま・枠0件。通り芯 7000→10000 で3本に割り直される。個別の天端レベル変更は編集（対照）', async () => {
   const { splitGroup, setGroupManualTag } = await import('./memberGroups.js');
   const p = await buildS2FProject([0, 5000], [0, 7000]);
   await p.run(3);
@@ -858,10 +906,10 @@ test('【S2b・配線】小梁グループに手動タグ（join あり）を付
   const vs = slabAxesOf(p.g2).map(x => x.value);
   assert.deepEqual(vs, [2525, 5000, 7475], '外周の偏芯 50 を織り込んだあき等分（旧: 等分の 2500・5000・7500）');
   assert.equal(p.g2.excludedSlabBeamSlots.size, 0);
-  // 対照: 個別の断面変更（join に乗らない値）は編集
+  // 対照: 個別の天端レベル変更（join に乗らない値）は編集
   const q = await buildS2FProject([0, 5000], [0, 7000]);
   await q.run(3);
-  q.g2.beams.find(b => b.role === 'secondary').sectionDefId = 'other-section';
+  q.g2.beams.find(b => b.role === 'secondary').levelOffset = -50;
   await q.run(2);
   assert.equal(slabAxesOf(q.g2).length, 1, '個別編集した梁芯は USER');
   assert.equal(q.g2.excludedSlabBeamSlots.size, 1);
