@@ -1,9 +1,11 @@
 // ================================================================
 // S造スラブを支える子梁（小梁）の梁芯の割付け（ユーザー指示2026-10-26「スパン間を2500mm以下等間隔に
 // 割り付ける」）。大梁（と開口辺の小梁）で4辺囲まれたベイ（framingCells.js beamGridCells）の短辺が
-// 最大ピッチを超えるとき、長辺方向に等分して梁芯CL（beamAxisOrigin:SLAB_BEAM）を生成する。子梁そのものは
+// 最大ピッチを超えるとき、長辺方向にフランジ間（あき）が等しくなるよう割り付けて梁芯CL（beamAxisOrigin:SLAB_BEAM）を生成する。子梁そのものは
 // 既存の小梁生成（structuralAutoFill.js autoFillSecondaryBeams）が梁芯から作る。
-// 在来木造の床梁（woodAutoFill.js autoFillWoodFloorBeams）と等分の式を framingCells.js divideBayEqually で共有する。
+// 座標は「フランジ間（あき）が等しい」位置（ユーザー指示2026-10-28。framingCells.js clearGapDivisionCoords。
+// 梁幅は断面カタログから引き、材寸が変わるたびの再計算で追従する）。分割数 n は従来どおり。
+// 在来木造の床梁（woodAutoFill.js autoFillWoodFloorBeams）は従来の等分（framingCells.js divideBayEqually）のまま。
 //
 // 再計算のたびに現況のベイへ割り直す（reconcileSlabSecondaryBeamAxes）。由来 SLAB_BEAM は「未編集の自動梁芯」の
 // 印——子梁の固定・削除などの手が入った梁芯は USER へ替え、そのベイの枠を除外集合へ記録して以後は動かさない。
@@ -13,11 +15,12 @@
 // core/centerLineKindPolicy.js isSameDirectionObstacle（梁芯どうしは extent が重なるときだけ・通り芯は SLAB_BEAM を止めない）。
 // ================================================================
 import { CenterLineType, Discipline } from '../core.js';
-import { BeamRole, CL_OVERLAP_TOL_MM, SlabBayFillSkip, SlabSecondaryBeamPlacement, SLAB_BEAM_SLOT_KEY_PREFIX } from '../core/constants.js';
+import { BeamRole, CL_OVERLAP_TOL_MM, SlabBayFillSkip, SlabSecondaryBeamPlacement, SLAB_BEAM_SLOT_KEY_PREFIX, SLAB_BEAM_WIDTH_FALLBACK_SECTION_ID } from '../core/constants.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { beamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { findHostBeam, exclusionKeyReferencesCL, PIN_ROLES } from '../core/structuralEntities.js';
-import { bayGeometry, beamGridCells, divideBayEqually, equalDivisionCoords } from './framingCells.js';
+import { bayGeometry, beamGridCells, divideBayEqually, clearGapDivisionCoords } from './framingCells.js';
+import { findSectionEntry } from './sectionCatalog.js';
 import { isProtectedWallBeamAxis, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import { isGroupDrivenMember } from './memberGroups.js';
@@ -61,6 +64,7 @@ export function parseSlabBeamSlotKey(key) {
  * 境界線 lines（大梁・開口辺の小梁）で囲まれた各ベイの割付けを純粋に計画する（graph を受けない）。
  * 開口との重なり・短辺の判定だけを行い、端の受け梁（NO_HOST）・既存梁芯（OCCUPIED）の判定は graph が要るため
  * reconcileSlabSecondaryBeamAxes 側。開口判定を短辺判定より先に行う（開口自身のベイは OPENING と報告する）。
+ * coords は分割数 n を決めるための等分の暫定値。実際の座標は reconcile が梁幅を見て bayTargetCoords で決める。
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} lines
  * @param {Array<{x1:number, x2:number, y1:number, y2:number}>} openingRects 床開口の矩形
  * @param {number} maxPitchMm
@@ -194,7 +198,8 @@ function bayDivisionCount(graph, bay) {
  *    なったもの、目標より余った梁芯。正規化の後なので撤去されるのは未編集のものだけ（子梁・スリーブは teardown で道連れ）。
  *  - 端: 短辺の両端に通り芯があり、各座標でその通り芯上の大梁（primary）が子梁を受けること。無ければ NO_HOST
  *    （端が踊り場受け梁・開口小梁のベイは作らない）。
- *  - 管理中のベイ（属する SLAB_BEAM がある、または枠の記録がある）: 目標の座標（n 等分の内部。記録した枠・通り芯と
+ *  - 管理中のベイ（属する SLAB_BEAM がある、または枠の記録がある）: 目標の座標（フランジ間が等しい位置の内部
+ *    n-1 本＝framingCells.js clearGapDivisionCoords。記録した枠・通り芯と
  *    一致する座標・excludedWallBeamAxes の座標・他の梁芯と一致する座標を除く）と未編集の SLAB_BEAM を値の昇順で
  *    1対1に対応づけ、**同じ id のまま**値を張り直す（子梁の id・番号グループ・除外キーが生き残る）。余りは撤去、
  *    不足は新規作成。手で足した USER 梁芯は分割数を固定せず割り直しも止めない。
@@ -241,7 +246,7 @@ export function reconcileSlabSecondaryBeamAxes(graph, project, openingRects = un
   // 端の受け梁（NO_HOST）。分割数を記録で固定した座標で判定する（S1 は既定の分割数）。
   for (const bay of activeBays) {
     bay.n = bayDivisionCount(graph, bay);
-    bay.coords = equalDivisionCoords(bay.geom.longLo, bay.geom.longHi, bay.n);
+    bay.coords = bayTargetCoords(bay, bay.n);
     const hosted = g => !!g && bay.coords.every(c => findHostBeam(graph.beams, g.id, !bay.geom.isVertical, c));
     if (!hosted(bay.loGrid) || !hosted(bay.hiGrid)) bay.skip = SlabBayFillSkip.NO_HOST;
   }
@@ -330,21 +335,78 @@ function buildBays(graph, project, openingRects = undefined) {
     // 短辺の両端の通り芯（子梁が架かる先。梁芯の extent が参照する）。
     const crossGrids = geom.isVertical ? graph.gridYs : graph.gridXs;
     const endGrid = v => crossGrids.find(g => Math.abs(g.effectiveValue - v) <= CL_OVERLAP_TOL_MM);
+    const dir = geom.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
     return {
       cell, geom, plan, ids: complete ? ids : null,
       loGrid: endGrid(geom.shortLo), hiGrid: endGrid(geom.shortHi),
-      dir: geom.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL,
+      dir,
       skip: plan.skip ?? (complete ? null : SlabBayFillSkip.NO_HOST),
       owned: [],
+      // 面・子梁の幅の計算に要る入力。bayLayout が初めて必要になったときに1ベイ1回だけ計算する（遅延）。
+      layoutInput: { graph, project, boundaryBeams, boundaryAxisIds },
+      layout: null,
     };
   });
   return { bays, boundaryAxisIds };
 }
 
-// 枠キー: ベイ bay の n 等分のうち、位置 coord に最も近い i 番目。
+// 梁の幅（mm）。断面がカタログで引けない（sectionDefId が null・未知キー）ときは
+// SLAB_BEAM_WIDTH_FALLBACK_SECTION_ID の幅。末尾の 0 はフォールバック断面すら無いときの保険。
+// 描画・偏芯の StructuralBeam.sectionWidth（フォールバック 300）とは別系統。フォールバック 150 はユーザー裁定。
+function beamFlangeWidth(beam) {
+  return findSectionEntry(beam?.sectionDefId)?.width
+    ?? findSectionEntry(SLAB_BEAM_WIDTH_FALLBACK_SECTION_ID)?.width ?? 0;
+}
+
+// 梁 b の範囲 [min(clStart,clEnd), max(...)] がベイの短辺 [shortLo, shortHi] と CL_OVERLAP_TOL_MM を超えて重なるか。
+function overlapsShortSide(b, geom) {
+  const a = b.clStart.effectiveValue, c = b.clEnd.effectiveValue;
+  return Math.min(Math.max(a, c), geom.shortHi) - Math.max(Math.min(a, c), geom.shortLo) > CL_OVERLAP_TOL_MM;
+}
+
+// ベイの割付けに使う「面」と子梁の幅。bayTargetCoords が初めて必要としたときに1ベイ1回だけ計算して bay.layout に保持する
+// （描画の computed や枠キーの計算で無駄に走らせない）。
+//  - faceLo/faceHi＝長辺の両端の内側の面。長辺の端（geom.longLo/longHi。通り芯の位置）に軸CLが乗る子梁と平行な
+//    境界梁のうち、短辺と重なるものの**実材芯**（axisValue＝通り芯＋柱芯オフセット＋偏芯。外周の大梁は材芯が通り芯の
+//    上に無い）から幅/2 だけ内側。柱で分かれた複数ピースは最も内へ出ている面（lo 側は最大・hi 側は最小）。
+//    1本も無い（理論上無い）ときは通り芯 ± フォールバック幅/2。
+//  - child＝ベイの子梁（SECONDARY）の幅。ベイ内の同向きの梁芯に乗り、範囲が短辺と重なるものの最大。ベイを横切る
+//    手動梁芯の隣のベイの区間の小梁は数えない。子梁がまだ無い（初回生成）ときは主構造の既定の梁断面の幅。
+//    ベイ内で子梁の幅が混在すれば最大（まれ。リード裁定）。
+// 子梁の梁芯は材芯に置く（子梁は柱芯オフセット・偏芯が 0＝axisValue が CL の値と一致）。
+function bayLayout(bay) {
+  if (bay.layout) return bay.layout;
+  const { graph, project, boundaryBeams, boundaryAxisIds } = bay.layoutInput;
+  const { geom, cell, dir } = bay;
+  const fallbackHalf = beamFlangeWidth(null) / 2;
+  const parallelAt = (longCoord) => boundaryBeams.filter(b => b.isVertical === geom.isVertical &&
+    Math.abs(b.axisCL.effectiveValue - longCoord) <= CL_OVERLAP_TOL_MM && overlapsShortSide(b, geom));
+  const lo = parallelAt(geom.longLo), hi = parallelAt(geom.longHi);
+  const faceLo = lo.length > 0 ? Math.max(...lo.map(b => b.axisValue + beamFlangeWidth(b) / 2)) : geom.longLo + fallbackHalf;
+  const faceHi = hi.length > 0 ? Math.min(...hi.map(b => b.axisValue - beamFlangeWidth(b) / 2)) : geom.longHi - fallbackHalf;
+  const childAxisIds = new Set(beamAxesInBay(graph, cell, boundaryAxisIds)
+    .filter(cl => cl.centerLineType === dir).map(cl => cl.id));
+  const childWidths = graph.beams
+    .filter(b => b.role === BeamRole.SECONDARY && childAxisIds.has(b.axisCL.id) && overlapsShortSide(b, geom))
+    .map(beamFlangeWidth);
+  const defaultSection = rulesFor(effectiveStructure(graph, project)).defaultSections.beam;
+  const child = childWidths.length > 0
+    ? Math.max(...childWidths) : beamFlangeWidth({ sectionDefId: defaultSection });
+  // 面が逆転する（梁幅が長辺を超える。理論上無い）ときは通り芯どうしの等分へ退化させる（clearGapDivisionCoords は降順を throw）。
+  bay.layout = faceHi >= faceLo ? { faceLo, faceHi, child } : { faceLo: geom.longLo, faceHi: geom.longHi, child };
+  return bay.layout;
+}
+
+// ベイの内部 n-1 本の目標座標（フランジ間が等しい位置の梁芯座標。端の幅は面に織り込み済みなので 0 を渡す）。
+function bayTargetCoords(bay, n) {
+  const { faceLo, faceHi, child } = bayLayout(bay);
+  return clearGapDivisionCoords(faceLo, faceHi, 0, 0, new Array(n - 1).fill(child));
+}
+
+// 枠キー: ベイ bay の目標座標（bayTargetCoords）のうち、位置 coord に最も近い i 番目。
 function slotKeyIn(graph, bay, coord) {
   const n = bayDivisionCount(graph, bay);
-  const coords = equalDivisionCoords(bay.geom.longLo, bay.geom.longHi, n);
+  const coords = bayTargetCoords(bay, n);
   let nearest = 0;
   coords.forEach((c, k) => { if (Math.abs(c - coord) < Math.abs(coords[nearest] - coord)) nearest = k; });
   return slabBeamSlotKey({ ...bay.ids, dir: bay.dir, n, i: nearest + 1 });

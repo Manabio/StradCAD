@@ -95,7 +95,8 @@ export function bayGeometry(cell) {
 
 /**
  * [longLo,longHi] を n 等分したときの内部の n-1 本の座標（i=1..n-1。配列の index は i-1）。
- * divideBayEqually と、分割数を固定した割り直し（slabSecondaryBeamAxes.js）が共有する単一の式。
+ * divideBayEqually（分割数を決めるための暫定値・在来木造の床梁）と、clearGapDivisionCoords の退化先
+ * （幅が成立しないとき）が共有する単一の式。
  */
 export function equalDivisionCoords(longLo, longHi, n) {
   const pitch = (longHi - longLo) / n;
@@ -117,7 +118,7 @@ export function equalDivisionCoords(longLo, longHi, n) {
  * 恒等: 全部の幅が等しい（loWidth = hiWidth = 各 childWidths）とき equalDivisionCoords(longLo,longHi,n) と一致する。
  * 退化: gap が負（幅の合計が L を超え成立しない）ときは equalDivisionCoords(longLo,longHi,n) を返す
  * （例外にしない。再計算全体を巻き戻さないため）。
- * 呼び出し側は S2 で slabSecondaryBeamAxes.js が使う予定。在来木造の床梁は従来の等分のまま。
+ * 呼び出し側は slabSecondaryBeamAxes.js（bayTargetCoords）。在来木造の床梁は従来の等分のまま。
  *
  * @param {number} longLo
  * @param {number} longHi

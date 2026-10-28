@@ -226,7 +226,7 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     ? withGraphReadScope(targetGraph, () => buildRoofColumnFilter(targetGraph)) : null;
   // 構造体トポロジーから未定義の柱・梁・基礎（基礎伏図のみ）を検出し、自動補完する。
   // ユーザーが明示削除した箇所は除外集合（excludedColumnSlots 等）により復活しない。
-  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, changedSlabBeamAxes, updatedLandingBeams, removedStairCrossingAxes, removedStaleRoofWallAxes } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents, slabOpeningRects));
+  const { newColumns, removedColumns, newFootings, removedFootings, newBeams, removedBeams, originsUpdatedColumns, changedOpeningBeamAxes, changedSlabBeamAxes, updatedLandingBeams, removedStairCrossingAxes, removedStaleRoofWallAxes, slabRepass } = runInAction(() => autoFillStructuralGrid(targetGraph, project, mainStructure, wallGate, wallSources, wallSegments, aboveColumns, belowGraph?.columns ?? [], aboveBeamSegments, selfGate, freeEndGraph, wallSourceCache, openingSources, belowGraph, roofRegions, roofCellKeys, roofColumnFilter, openingComponents, slabOpeningRects));
   // べた基礎（木造）のマットスラブを基礎伏図に生成・撤去する（基礎種別で取捨）。基礎伏図以外では no-op。
   const matFoundation = runInAction(() => autoFillMatFoundation(targetGraph, project));
   // 外周モデル（side ビュー）を1回構築し、柱芯オフセットと梁偏芯の両方に渡す——柱・梁で外側方向（内外定義）を一致させる。
@@ -238,6 +238,10 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   runInAction(() => autoFillColumnAxisOffsets(targetGraph, project, lowestGraph, exterior, footprintCache));
   // 梁の偏芯量（柱芯⇄材芯）を faceGap から再算出し、柱外面と梁縁の一致（柱寸法・梁寸法変更に追従）を保つ。
   const updatedBeamEcc = runInAction(() => autoFillBeamEccentricity(targetGraph, project));
+  // S造スラブ小梁の2回目の割り直し。1回目（autoFillStructuralGrid 内）は大梁の偏芯の算定より前に走るため、大梁を新しく
+  // 作った再計算では材芯が通り芯の上にある前提で置かれる。偏芯が確定した後にもう1回割り直して同じ再計算の中で
+  // 面に合わせる（非木造は1パスで終わるため次の再計算を待たない。ユーザー裁定2026-10-28 案A′）。通常は値の張り直しだけ。
+  const slabRepassResult = runInAction(() => slabRepass?.() ?? { changedSlabBeamAxes: [], newBeams: [], removedBeams: [] });
   // 別フロアにいる間に主要構造が変更された等で取りこぼした柱・梁を、実効主構造に合わせて変換する。
   const { convertedColumns, convertedBeams, convertedFootings } = runInAction(() => convertMembersToEffectiveMaterial(targetGraph, project, mainStructure));
   // 在来木造: 既存の柱・梁の断面を主構造ルール（柱120角・梁は「梁を支える1つ下の実体階の柱寸」幅）へ
@@ -287,7 +291,8 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
     // changedに乗せる——undoスナップショット（captureSnapshots）に反映されるべき実質的な変更のため。
     || changedOpeningBeamAxes.length > 0
     // S造のスラブ小梁の梁芯の値の張り直し・由来の USER 化（slabSecondaryBeamAxes.js）。実質的な変更。
-    || changedSlabBeamAxes.length > 0
+    || changedSlabBeamAxes.length > 0 || slabRepassResult.changedSlabBeamAxes.length > 0
+    || slabRepassResult.newBeams.length > 0 || slabRepassResult.removedBeams.length > 0
     // 階段を横切る孤児の梁芯の撤去（依存の柱・梁が道連れで消えるため実質的な変更。再アンカーは次の sweep）。
     || removedStairCrossingAxes.length > 0
     // 屋根専用平面の旧最上階の壁由来梁芯の撤去（依存の auto の梁が道連れで消えるため実質的な変更）。

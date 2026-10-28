@@ -923,7 +923,8 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 現況のベイへ割り直す（後から足した吹抜け・動いた通り芯に追従。手が入った梁芯は由来を USER へ替えて残す）。
   // 作った梁芯の子梁は同じパスで作る。撤去は teardown が子梁を道連れにするので作り直し不要。値を張り直しただけの梁芯は
   // 呼び直さない: 子梁のスパンは端の通り芯（受け梁で縛られたベイの両端）と梁芯の id で決まり、値が動いても変わらない。
-  const slabReconcile = (!isRoof && !foundation)
+  const slabRuns = !isRoof && !foundation;
+  const slabReconcile = slabRuns
     ? reconcileSlabSecondaryBeamAxes(graph, project, slabOpeningRects)
     : { created: [], revalued: [], removed: [], normalized: [], skipped: [] };
   const slabAxes = slabReconcile.created;
@@ -938,7 +939,23 @@ export function autoFillStructuralGrid(graph, project, belowMainStructure, wallG
   // 依存の柱・梁は teardown で道連れ、次の sweep で中心線へ再アンカーされる。通知は structuralOrchestration.js。
   const removedStairCrossingAxes = !isRoof
     ? removeStairCrossingOrphanBeamAxes(graph, project, belowGraph, [...wallSources, ...openingSources]) : [];
+  // 2回目の割り直し（呼び出し側が梁の偏芯の算定の後に走らせる。同じ開口矩形・同じ条件で1回目と同じ処理をもう1回行う）。
+  // 1回目の割り直しは大梁の偏芯の算定より前に走るため、大梁を新しく作った再計算では材芯が通り芯の上にある前提で
+  // 置かれる。偏芯が確定した後にもう1回割り直して同じ再計算の中で面に合わせる（非木造は1パスで終わるため
+  // 次の再計算を待たない。ユーザー裁定2026-10-28 案A′）。条件は1回目と同じ（!isRoof && !foundation かつ在来木造でない）。
+  const slabRepass = (slabRuns && rulesFor(structure).beamPlacement !== 'wallRuns')
+    ? () => {
+      const again = reconcileSlabSecondaryBeamAxes(graph, project, slabOpeningRects);
+      const again2 = autoFillSecondaryBeams(graph, project, { prune: true });
+      return {
+        changedSlabBeamAxes: [...again.revalued, ...again.normalized],
+        newBeams: [...again.created, ...again2.created],
+        removedBeams: [...again.removed, ...again2.removed],
+      };
+    }
+    : null;
   return {
+    slabRepass,
     removedStairCrossingAxes, removedStaleRoofWallAxes,
     newColumns, removedColumns, newFootings, removedFootings, originsUpdatedColumns,
     // m-5是正・QA指摘: 開口由来梁芯の再ラベル（→WALL）・extent張り直し（reconcileOpeningBeamAxes）は

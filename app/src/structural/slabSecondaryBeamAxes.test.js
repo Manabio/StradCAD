@@ -15,7 +15,7 @@ import { reconcileSlabSecondaryBeamAxes, slabBeamSlotKeyFor, planSlabSecondaryBe
 import { addCenterLineFromDialog } from '../transform/centerLineOps.js';
 import { initialRef, foldRefForConfirm } from '../ui/addCLDialogRefs.js';
 import { exclusionKeyReferencesCL } from '../core/structuralEntities.js';
-import { autoFillSecondaryBeams } from './structuralAutoFill.js';
+import { autoFillSecondaryBeams, autoFillStructuralGrid } from './structuralAutoFill.js';
 import { rulesFor } from './structureRules.js';
 import { wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 
@@ -23,7 +23,8 @@ const PROJECT = { planes: [], structuralInfo: { mainStructure: '未定', foundat
 const MAX = STEEL_SECONDARY_BEAM_MAX_PITCH_MM;
 
 // 幅 width × 高さ height のベイを4辺 primary 梁で囲む。topRole で上辺（y=-height）の役割を変えられる。
-function buildBay(structure, { width = 5000, height = 7000, topRole = 'primary', bottomRole = 'primary' } = {}) {
+// primarySection＝4辺の大梁の断面（既定は主構造の既定の梁断面）、topSection＝上辺（y=-height）だけ別断面。
+function buildBay(structure, { width = 5000, height = 7000, topRole = 'primary', bottomRole = 'primary', primarySection = undefined, topSection = undefined } = {}) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
   graph.structureOverride = structure;
   const rules = rulesFor(structure);
@@ -31,8 +32,9 @@ function buildBay(structure, { width = 5000, height = 7000, topRole = 'primary',
   const x1 = graph.addCenterLine(CenterLineType.VERTICAL, width,  { labeled: true, discipline: Discipline.STRUCT });
   const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, -height, { labeled: true, discipline: Discipline.STRUCT });
   const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,       { labeled: true, discipline: Discipline.STRUCT });
-  const add = (cl, isV, a, b, role) => graph.addBeam(rules.baseMaterial, rules.defaultSections.beam, cl, isV, a, b, { role });
-  const top = add(y0, false, x0, x1, topRole);
+  const add = (cl, isV, a, b, role, section = primarySection) =>
+    graph.addBeam(rules.baseMaterial, section === undefined ? rules.defaultSections.beam : section, cl, isV, a, b, { role });
+  const top = add(y0, false, x0, x1, topRole, topSection ?? primarySection);
   const bottom = add(y1, false, x0, x1, bottomRole);
   const left = add(x0, true, y0, y1, 'primary');
   const right = add(x1, true, y0, y1, 'primary');
@@ -357,14 +359,20 @@ const slabBeamAxisYs =(g) => g.centerLines.filter(cl => cl.beamAxisOrigin === Be
 test('【失敗系・配線】recomputeStructuralForGraph: S造の矩形の吹抜けと重なるベイには梁芯を作らず、隣のベイには作る', async () => {
   // 吹抜け＝上半分 x:[0,6000] y:[0,6000]（2×2セル）。下のベイ y:[6000,12000]（6000角）は y=8000,10000 の2本。
   const g2 = await recomputeS2F([[0, 0, 3000, 3000], [3000, 0, 6000, 3000], [0, 3000, 3000, 6000], [3000, 3000, 6000, 6000]]);
-  assert.deepEqual(slabBeamAxisYs(g2), [8000, 10000]);
+  // 外周（y=12000）の大梁は材芯が 50 内側（偏芯）、境界の y=6000 は偏芯なし。面は 6000+50 と 12000-50-50＝11900、
+  // 子梁幅 100 → あき=(11900-6050-200)/3=1883.33 → 梁芯 6050+1883.33+50=7983.33・9966.67（あき等分。旧: 等分の 8000・10000）。
+  const ys = slabBeamAxisYs(g2);
+  assert.equal(ys.length, 2);
+  near(ys[0], 7983 + 1 / 3); near(ys[1], 9966 + 2 / 3);
 });
 
 test('【失敗系・配線】L字（非矩形）の吹抜けと重なるベイは OPENING: 梁芯・子梁を作らず、接しない隣のベイには作る', async () => {
   // 吹抜け＝L字（上半分の4セルのうち右下を除く3セル）。吹抜けは非矩形のため開口辺の矩形成分（openingEdgeComponents）には
   // 入らないが、開口セル矩形には入る。上半分のベイ（6000角）は L字と面積で重なるので割り付けない。
   const g2 = await recomputeS2F([[0, 0, 3000, 3000], [3000, 0, 6000, 3000], [0, 3000, 3000, 6000]]);
-  assert.deepEqual(slabBeamAxisYs(g2), [8000, 10000], '上半分（L字と重なる）には無く、下のベイにだけある');
+  const ys = slabBeamAxisYs(g2);
+  assert.equal(ys.length, 2, '上半分（L字と重なる）には無く、下のベイにだけある');
+  near(ys[0], 7983 + 1 / 3); near(ys[1], 9966 + 2 / 3); // 上のテストと同じあき等分の座標（外周の偏芯 50 を面に織り込む）
   assert.equal(g2.beams.filter(b => b.role === 'secondary').length, 2, '子梁も下のベイの2本だけ');
 });
 
@@ -661,7 +669,8 @@ test('【S2b・配線】通り芯 y 7000→10000 を再計算に通す: 同じ i
   assert.deepEqual(changed, [true, false, false]);
   const moved = slabAxesOf(p.g2);
   assert.equal(moved.length, 3);
-  assert.deepEqual(moved.map(a => a.value), [2500, 5000, 7500]);
+  // 外周の大梁は材芯が 50 内側（偏芯）→ 面 100 と 9900、あき=(9800-300)/4=2375 → 100+2375+50=2525・5000・7475（旧: 等分の 2500・5000・7500）。
+  assert.deepEqual(moved.map(a => a.value), [2525, 5000, 7475]);
   assert.deepEqual(before.map(a => a.id), moved.slice(0, 2).map(a => a.id), '値だけ張り直し（id 不変）');
   assert.equal(p.g2.beams.filter(b => b.role === 'secondary').length, 3);
   p.moveY(10000, 7000);
@@ -716,7 +725,7 @@ test('【S2b・配線】梁芯を commitCLMoveOp で +500 動かす: 由来は U
   assert.deepEqual(await p.run(3), [false, false, false]);
   const axes = p.g2.centerLines.filter(cl => cl.discipline === Discipline.FUSE).sort((x, y) => x.value - y.value);
   assert.deepEqual(axes.map(x => [x.id, x.value]), [[a.id, original + 500], [c.id, c.value]], '2本とも残り、c は動かない');
-  assert.equal(c.value, 2 * (7000 / 3), 'c は元の座標のまま');
+  assert.equal(c.value, 4650, 'c は元の座標のまま（面 100〜6900・あき 2200 → 2350・4650）');
   assert.ok(!p.g2.excludedWallBeamAxes.has(wallBeamAxisExcludeKey(false, original)), 'SLAB_BEAM の移動は座標キーを記録しない');
   assert.deepEqual([...p.g2.excludedSlabBeamSlots].map(k => parseSlabBeamSlotKey(k)).map(s => [s.dir, s.n, s.i]),
     [[CenterLineType.HORIZONTAL, 3, 1]], '元の枠（i=1）がベイ単位で記録される');
@@ -742,7 +751,7 @@ test('【S2b・配線】通り芯 y=0→−3000 の移動を undo/redo しても
     const widened = slabAxesOf(p.g2);
     assert.equal(widened.length, 3);
     undoManager.undo(); await pending;
-    assert.deepEqual(slabAxesOf(p.g2).map(x => [x.id, x.value]), [[a.id, 7000 / 3], [c.id, 2 * (7000 / 3)]], 'undo: 元の id・座標');
+    assert.deepEqual(slabAxesOf(p.g2).map(x => [x.id, x.value]), [[a.id, 2350], [c.id, 4650]], 'undo: 元の id・座標（外周の偏芯 50 を織り込んだあき等分）');
     assert.deepEqual(p.g2.beams.filter(b => b.role === 'secondary').map(b => b.id).sort(), kidIds, 'undo: 子梁の id');
     undoManager.redo(); await pending;
     assert.ok(idsOf().includes(a.id) && idsOf().includes(c.id), 'redo: 元の2本の id');
@@ -825,7 +834,9 @@ test('【S2b・配線】縦に並ぶ2ベイ（同じ端の通り芯を共有）:
   assert.deepEqual(await (async () => { p.moveY(7000, 9000); return p.run(3); })(), [true, false, false]);
   const now = slabAxesOf(p.g2).map(x => [x.id, x.value]);
   // 上のベイ 0..9000（n=4: 2250・4500・6750）、下のベイ 9000..14000（5000×5000: n=2 → 11500）。
-  assert.deepEqual(now.map(x => x[1]), [2250, 4500, 6750, 11500]);
+  // あき等分: 上 0..9000 は面 100〜8950（境界 y=9000 は偏芯なし）・あき 2137.5 → 2287.5・4525・6762.5、
+  // 下 9000..14000 は面 9050〜13900・あき 2375 → 11475。
+  assert.deepEqual(now.map(x => x[1]), [2287.5, 4525, 6762.5, 11475]);
   assert.deepEqual(now.slice(0, 2).map(x => x[0]), [a.id, b.id], '上のベイ: a・b が保たれる');
   assert.equal(now[3][0], c.id, '下のベイ: 自分の値を含むベイへ属した c が張り直される（上のベイに取られない）');
   assert.ok(!now.some(x => x[0] === d.id), 'd は余りとして撤去');
@@ -845,7 +856,7 @@ test('【S2b・配線】小梁グループに手動タグ（join あり）を付
   p.moveY(7000, 10000);
   await p.run(3);
   const vs = slabAxesOf(p.g2).map(x => x.value);
-  assert.deepEqual(vs, [2500, 5000, 7500]);
+  assert.deepEqual(vs, [2525, 5000, 7475], '外周の偏芯 50 を織り込んだあき等分（旧: 等分の 2500・5000・7500）');
   assert.equal(p.g2.excludedSlabBeamSlots.size, 0);
   // 対照: 個別の断面変更（join に乗らない値）は編集
   const q = await buildS2FProject([0, 5000], [0, 7000]);
@@ -894,7 +905,7 @@ test('【S2c・配線】梁芯を1本削除→通り芯 7000→10000: 削除は�
   assert.deepEqual(await p.run(3), [false, false, false], '削除直後の再計算で何も起きない');
   await moveGridWithSync(p, p.g2.gridYs.find(g => g.value === 7000), 3000);
   const after = slabAxesOf(p.g2);
-  assert.deepEqual(after.map(x => [x.id, x.value]), [[c.id, 2 * (10000 / 3)]], 'n=3 固定: i=2 の1本だけが追従。復活しない');
+  assert.deepEqual(after.map(x => [x.id, x.value]), [[c.id, 6650]], 'n=3 固定: i=2 の1本だけが追従（面 100〜9900・あき 3200 → 6650）。復活しない');
   assert.equal(p.g2.beams.filter(b => b.role === 'secondary').length, 1);
 });
 
@@ -925,7 +936,7 @@ test('【S2c・配線】梁芯を1本動かす: 元の位置に作り直され�
   assert.equal(p.g2.excludedWallBeamAxes.size, 0);
   assert.deepEqual(await p.run(3), [false, false, false]);
   await moveGridWithSync(p, p.g2.gridYs.find(g => g.value === 7000), 3000);
-  assert.deepEqual(slabAxesOf(p.g2).map(x => [x.id, x.value]), [[c.id, 2 * (10000 / 3)]], 'i=1 の位置（3333）に自動の梁芯は作られない');
+  assert.deepEqual(slabAxesOf(p.g2).map(x => [x.id, x.value]), [[c.id, 6650]], 'i=1 の位置（3350）に自動の梁芯は作られない');
   assert.deepEqual(userAxesOf(p.g2).map(x => [x.id, x.value]), [[a.id, original + 500]], '動かした梁芯は動かない');
 });
 
@@ -1082,7 +1093,7 @@ test('【S2d・配線】通り芯 10000→7000（子梁芯 7500 を越える）:
   const p = await buildS2FProject([0, 5000], [0, 10000]);
   await p.run(3);
   const before = slabAxesOf(p.g2).map(x => [x.id, x.value]);
-  assert.deepEqual(before.map(x => x[1]), [2500, 5000, 7500]);
+  assert.deepEqual(before.map(x => x[1]), [2525, 5000, 7475]);
   const grid = p.g2.gridYs.find(g => g.value === 10000);
   assert.deepEqual(await moveRangeOf(p, grid), { min: 0, max: Infinity }, '前提: 7500 の子梁芯を越えて動かせる');
   let pending = Promise.resolve([]);
@@ -1093,7 +1104,7 @@ test('【S2d・配線】通り芯 10000→7000（子梁芯 7500 を越える）:
     const changed = await pending;
     assert.deepEqual(changed, [true, false, false]);
     const axes = slabAxesOf(p.g2);
-    assert.deepEqual(axes.map(x => x.value), [7000 / 3, 2 * (7000 / 3)], '越えられた 7500 は孤児として撤去、残りは 7000 の 3 等分へ割り直し');
+    assert.deepEqual(axes.map(x => x.value), [2350, 4650], '越えられた 7475 は孤児として撤去、残りは 7000 のあき等分（面 100〜6900）へ割り直し');
     const ys = [0, ...axes.map(x => x.value), 7000];
     assert.ok(ys.slice(1).every((y, i) => y - ys[i] <= MAX), 'ピッチ≤2500');
     assert.deepEqual(axes.map(x => x.id), before.slice(0, 2).map(x => x[0]), '1・2本目は同じ id で張り直される');
@@ -1260,4 +1271,194 @@ test('【S3-3・失敗系・配線】自動の梁芯と同位置への手動追�
   assert.ok(r.toast);
   assert.equal(b.graph.centerLines.filter(cl => Math.abs(cl.value - -4000) < CL_OVERLAP_TOL_MM && cl.discipline === Discipline.FUSE).length, 1);
   assert.equal(a.beamAxisOrigin, BeamAxisOrigin.SLAB_BEAM);
+});
+
+// ---- フランジ間（あき）が等しい割付け（ユーザー指示 2026-10-28）。期待値は手計算 ----
+const near = (actual, expected, msg = '') => assert.ok(Math.abs(actual - expected) < 1e-6, `${msg} actual=${actual} expected=${expected}`);
+const sortedValues = axes => axes.map(a => a.value).sort((a, b) => a - b);
+
+test('【あき等分】大梁 H-400×200（幅200）・子梁 H-200×100（幅100）の5000×7000: あき=(7000-100-100-200)/3=2200 → 梁芯 y=-4650・-2350', () => {
+  const { graph } = buildBay('S造', { primarySection: 'STEEL-H400x200' });
+  const { created } = reconcileSlabSecondaryBeamAxes(graph, PROJECT);
+  const vs = sortedValues(created);
+  assert.equal(vs.length, 2);
+  near(vs[0], -4650); near(vs[1], -2350);
+});
+
+test('【あき等分】大梁が既定（幅100＝子梁と同じ）なら従来の等分と一致: y=-4666.67・-2333.33', () => {
+  const { graph } = buildBay('S造');
+  const vs = sortedValues(reconcileSlabSecondaryBeamAxes(graph, PROJECT).created);
+  near(vs[0], -14000 / 3); near(vs[1], -7000 / 3);
+});
+
+test('【あき等分・配線】大梁の断面変更に追従: 同じ id のまま revalued で -4650/-2350 へ動き、3回目は冪等', () => {
+  const b = buildBay('S造');
+  settle(b.graph, 2);
+  const before = fuseAxes(b.graph);
+  const ids = before.map(a => a.id);
+  near(before[0].value, -14000 / 3);
+  for (const beam of [b.top, b.bottom, b.left, b.right]) beam.sectionDefId = 'STEEL-H400x200';
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual(r.revalued.map(a => a.id).sort(), [...ids].sort(), '同じ id のまま値を張り直す');
+  assert.deepEqual([r.created.length, r.removed.length, r.normalized.length], [0, 0, 0]);
+  autoFillSecondaryBeams(b.graph, PROJECT);
+  const after = fuseAxes(b.graph);
+  assert.deepEqual(after.map(a => a.id), ids);
+  near(after[0].value, -4650); near(after[1].value, -2350);
+  const again = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT);
+  assert.deepEqual([again.created.length, again.revalued.length, again.removed.length, again.normalized.length], [0, 0, 0, 0], '3回目は冪等');
+});
+
+test('【あき等分・失敗系】大梁の断面がカタログに無い（未知キー・null）なら幅150扱い: あき=(7000-75-75-200)/3 → -4658.33・-2341.67', () => {
+  for (const sec of ['no-such-section', null]) {
+    const { graph } = buildBay('S造', { primarySection: sec });
+    const vs = sortedValues(reconcileSlabSecondaryBeamAxes(graph, PROJECT).created);
+    assert.equal(vs.length, 2, String(sec));
+    near(vs[0], -4658 - 1 / 3, String(sec));
+    near(vs[1], -2341 - 2 / 3, String(sec));
+  }
+});
+
+test('【あき等分】上辺（longLo 側）だけ幅200: 梁芯 -4633.33・-2316.67。枠キーは新座標の最寄り（coord -3490 は i=1）', () => {
+  const b = buildBay('S造', { topSection: 'STEEL-H400x200' });
+  const axes = axesOf(reconcileSlabSecondaryBeamAxes(b.graph, PROJECT).created);
+  near(axes[0].value, -4633 - 1 / 3); near(axes[1].value, -2316 - 2 / 3);
+  const probe = { beamAxisOrigin: BeamAxisOrigin.SLAB_BEAM, centerLineType: CenterLineType.HORIZONTAL, coord: -3490,
+    extentLoRef: axes[0].extentLoRef, extentHiRef: axes[0].extentHiRef, extentLo: axes[0].extentLo, extentHi: axes[0].extentHi };
+  const slot = parseSlabBeamSlotKey(slabBeamSlotKeyFor(b.graph, PROJECT, probe));
+  assert.equal(slot.i, 1, '旧等分（-4666/-2333）なら i=2 になる位置');
+  assert.equal(slot.n, 3);
+});
+
+test('【あき等分・配線】台帳の加入で子梁が H-300×150（幅150）にそろった状態: 梁芯は USER にならず あき=(7000-50-50-300)/3 → -4675・-2325', async () => {
+  const { splitGroup } = await import('./memberGroups.js');
+  const PROJECT_G = { ...PROJECT, memberGroupLedger: new Map() };
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const kids = secondaries(b.graph);
+  kids.forEach(k => { k.sectionDefId = 'STEEL-H300x150'; });
+  splitGroup(PROJECT_G, 'beamMap', kids);
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT_G);
+  assert.deepEqual(r.normalized, [], '台帳経由の材寸変更は編集ではない');
+  assert.equal(r.revalued.length, 2);
+  const vs = sortedValues(fuseAxes(b.graph));
+  near(vs[0], -4675); near(vs[1], -2325);
+});
+
+// ---- 面を大梁の実材芯から取る（案A′。ユーザー裁定 2026-10-28）。期待値は手計算 ----
+test('【実材芯の面】外周の大梁が柱芯オフセットで外へ寄る（上 -100・下 +100）: 面 -7050 と +50・あき=(7100-200)/3=2300 → -4700・-2300', () => {
+  const b = buildBay('S造');
+  b.graph.setColumnAxisOffset(b.y0.id, -100);
+  b.graph.setColumnAxisOffset(b.y1.id, 100);
+  const vs = sortedValues(reconcileSlabSecondaryBeamAxes(b.graph, PROJECT).created);
+  assert.equal(vs.length, 2);
+  near(vs[0], -4700); near(vs[1], -2300);
+  // 面から検算: -7050→-4750 が 2300、-4650→-2350 が 2300、-2250→50 が 2300
+  near((vs[0] - 50) - -7050, 2300); near((vs[1] - 50) - (vs[0] + 50), 2300); near(50 - (vs[1] + 50), 2300);
+});
+
+test('【実材芯の面】偏芯（eccentricity）も効く: 上辺の大梁だけ -100 → 面 -7050 と -50・あき=(7000-200)/3 → -4733.33・-2366.67', () => {
+  const b = buildBay('S造');
+  b.top.eccentricity = -100;
+  const vs = sortedValues(reconcileSlabSecondaryBeamAxes(b.graph, PROJECT).created);
+  assert.equal(vs.length, 2);
+  near(vs[0], -4733 - 1 / 3); near(vs[1], -2366 - 2 / 3);
+  near((vs[0] - 50) - -7050, (vs[1] - 50) - (vs[0] + 50)); near((vs[1] - 50) - (vs[0] + 50), -50 - (vs[1] + 50));
+});
+
+// 2ベイ（x:[0,5000]・[5000,10000]）× y:[-7000,0]。上辺 y=-7000 は左が既定・右が rightTopSection の大梁（同じ梁芯 y0 の別ピース）。
+function buildTwoBays({ rightTopSection }) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.structureOverride = 'S造';
+  const rules = rulesFor('S造');
+  const st = { labeled: true, discipline: Discipline.STRUCT };
+  const xs = [0, 5000, 10000].map(x => graph.addCenterLine(CenterLineType.VERTICAL, x, st));
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, -7000, st);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, st);
+  const add = (cl, isV, a, b, section = rules.defaultSections.beam) => graph.addBeam(rules.baseMaterial, section, cl, isV, a, b, { role: 'primary' });
+  add(y0, false, xs[0], xs[1]);
+  add(y0, false, xs[1], xs[2], rightTopSection);
+  add(y1, false, xs[0], xs[2]);
+  xs.forEach(x => add(x, true, y0, y1));
+  return { graph, xs, y0, y1 };
+}
+
+test('【実材芯の面】隣のベイが端の通り芯を別断面で共有しても、自分の側のピースの幅だけを使う: 左 -4666.67・-2333.33、右（上辺幅200）-4633.33・-2316.67', () => {
+  const { graph } = buildTwoBays({ rightTopSection: 'STEEL-H400x200' });
+  const created = reconcileSlabSecondaryBeamAxes(graph, PROJECT).created;
+  const left = sortedValues(created.filter(a => a.extentHi === 5000));
+  const right = sortedValues(created.filter(a => a.extentHi === 10000));
+  assert.equal(left.length, 2); assert.equal(right.length, 2);
+  near(left[0], -4666 - 2 / 3); near(left[1], -2333 - 1 / 3);
+  near(right[0], -4633 - 1 / 3); near(right[1], -2316 - 2 / 3);
+});
+
+test('【子梁の幅】ベイの子梁の幅が混在（台帳経由で1本だけ H-300×150）: 最大の150を使い -4675・-2325。梁芯は USER にならない', async () => {
+  const { splitGroup } = await import('./memberGroups.js');
+  const PROJECT_G = { ...PROJECT, memberGroupLedger: new Map() };
+  const b = buildBay('S造');
+  settle(b.graph, 1);
+  const kids = secondaries(b.graph);
+  assert.equal(kids.length, 2);
+  kids[0].sectionDefId = 'STEEL-H300x150';
+  splitGroup(PROJECT_G, 'beamMap', [kids[0]]);
+  const r = reconcileSlabSecondaryBeamAxes(b.graph, PROJECT_G);
+  assert.deepEqual(r.normalized, [], '台帳経由の材寸変更は編集ではない');
+  const vs = sortedValues(fuseAxes(b.graph));
+  near(vs[0], -4675); near(vs[1], -2325);
+});
+
+test('【子梁の幅】ベイを横切る手動梁芯の「隣のベイの区間」の小梁（H-300×150）は数えない: 左のベイは幅100のまま・右は150', () => {
+  const { graph, xs } = buildTwoBays({ rightTopSection: undefined });
+  settle(graph, 2);
+  const slab = sortedValues(fuseAxes(graph));
+  assert.equal(slab.length, 4);
+  // 両ベイを横切る手動の水平梁芯 y=-3500（SLAB の梁芯 -4666.67・-2333.33 とは重ならない）。
+  const user = graph.addCenterLine(CenterLineType.HORIZONTAL, -3500, { labeled: false, discipline: Discipline.FUSE, extentLo: 0, extentHi: 10000, beamAxisOrigin: BeamAxisOrigin.USER });
+  autoFillSecondaryBeams(graph, PROJECT);
+  const pieces = graph.beams.filter(b => b.axisCL.id === user.id);
+  const rightPiece = pieces.filter(b => Math.min(b.clStart.effectiveValue, b.clEnd.effectiveValue) >= 5000 - CL_OVERLAP_TOL_MM);
+  assert.ok(pieces.length >= 2 && rightPiece.length >= 1, `前提: 手動梁芯の小梁が両ベイの区間に分かれる（${pieces.length}本）`);
+  rightPiece.forEach(b => { b.sectionDefId = 'STEEL-H300x150'; });
+  reconcileSlabSecondaryBeamAxes(graph, PROJECT);
+  const left = sortedValues(fuseAxes(graph).filter(a => a.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM && a.extentHi === 5000));
+  const right = sortedValues(fuseAxes(graph).filter(a => a.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM && a.extentHi === 10000));
+  near(left[0], -4666 - 2 / 3, '左は隣の区間の幅150を拾わない'); near(left[1], -2333 - 1 / 3);
+  near(right[0], -4675, '右は自分の区間の幅150を使う'); near(right[1], -2325);
+  assert.equal(xs.length, 3);
+});
+
+test('【2回目の割り直し・配線】recomputeStructuralForGraph を1回だけ呼んだ直後に、大梁の実材芯の面と子梁のフランジ間のあきが全部等しい', async () => {
+  const { findSectionEntry } = await import('./sectionCatalog.js');
+  const p = await buildS2FProject([0, 5000], [0, 7000]);
+  await p.run(1);
+  const horizontals = p.g2.beams.filter(b => !b.isVertical && (b.role === 'primary' || b.role === 'secondary'));
+  const kids = horizontals.filter(b => b.role === 'secondary');
+  const outers = horizontals.filter(b => b.role === 'primary');
+  assert.equal(kids.length, 2, '前提: 小梁が2本');
+  assert.ok(outers.some(b => Math.abs(b.axisValue - b.axisCL.effectiveValue) > 1), '前提: 外周の大梁の材芯は通り芯の上に無い（偏芯が確定している）');
+  assert.ok(kids.every(b => Math.abs(b.axisValue - b.axisCL.effectiveValue) < 1e-9), '子梁の材芯は梁芯の値と一致（柱芯オフセット・偏芯は0）');
+  const w = b => findSectionEntry(b.sectionDefId).width;
+  const lanes = [...outers.filter(b => b.axisCL.effectiveValue === 0 || b.axisCL.effectiveValue === 7000), ...kids]
+    .sort((a, b) => a.axisValue - b.axisValue);
+  const gaps = lanes.slice(1).map((b, i) => (b.axisValue - w(b) / 2) - (lanes[i].axisValue + w(lanes[i]) / 2));
+  assert.equal(gaps.length, 3);
+  gaps.forEach(g => near(g, gaps[0], `あきが等しい: ${gaps}`));
+});
+
+test('【2回目の割り直し・失敗系】slabRepass は S造の実体階だけ関数。在来木造・屋根専用平面・基礎伏図（最下階）では null', () => {
+  // S造の実体階（PROJECT.planes は空＝最下階ではない）: 関数。
+  const steel = buildBay('S造');
+  assert.equal(typeof autoFillStructuralGrid(steel.graph, PROJECT, 'S造').slabRepass, 'function');
+  // 在来木造（wallRuns）: 割付けの対象外。
+  const wood = buildBay('木造（在来）');
+  assert.equal(autoFillStructuralGrid(wood.graph, PROJECT, '木造（在来）').slabRepass, null);
+  // 屋根専用平面: 1回目も2回目も走らない。
+  const roof = buildBay('S造');
+  roof.graph.plane.isRoofPlane = true;
+  assert.equal(autoFillStructuralGrid(roof.graph, PROJECT, 'S造').slabRepass, null);
+  // 基礎伏図（project.planes の先頭＝最下階）。
+  const found = buildBay('S造');
+  const foundationProject = { ...PROJECT, planes: [found.graph.plane] };
+  assert.equal(autoFillStructuralGrid(found.graph, foundationProject, 'S造').slabRepass, null);
 });

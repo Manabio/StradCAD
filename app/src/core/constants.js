@@ -312,6 +312,9 @@ export const BeamRole = Object.freeze({
 // S造スラブを支える子梁（小梁）の最大ピッチ(mm)。スパン間をこれ以下の等間隔に割り付ける
 // （structural/slabSecondaryBeamAxes.js。ユーザー指示2026-10-26）。
 export const STEEL_SECONDARY_BEAM_MAX_PITCH_MM = 2500;
+// スラブ小梁の割付けで、断面がカタログで引けない梁（境界の大梁・子梁）の幅の代わりに使う断面（幅150。
+// ユーザー裁定 2026-10-28「とりあえず H-300×150×6.5×9、幅は150」。structural/slabSecondaryBeamAxes.js）。
+export const SLAB_BEAM_WIDTH_FALLBACK_SECTION_ID = 'STEEL-H300x150';
 // スラブ小梁の割付け方式（structureRules.js の slabSecondaryBeams.kind）。
 export const SlabSecondaryBeamPlacement = Object.freeze({ EQUAL_PITCH: 'equalPitch' });
 // スラブ小梁の梁芯を作らなかったベイの理由（slabSecondaryBeamAxes.js）。
