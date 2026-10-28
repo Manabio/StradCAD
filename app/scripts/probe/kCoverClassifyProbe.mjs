@@ -80,7 +80,7 @@ function unionGaps(intervals, a, b) {
 }
 
 // ---------- openingBeamAxes.js からの写し ----------
-/** openingHostsFor の写し（openingBeamAxes.js :215〜244）。 */
+/** openingHostsFor の写し（openingBeamAxes.js。K3 の Q5 込み＝2026-10-28 版）。 */
 function openingHostsFor(graph, rules, rcWallAxisSources) {
   const hosts = [];
   if (rules.beamPlacement !== 'wallRuns') {
@@ -101,12 +101,14 @@ function openingHostsFor(graph, rules, rcWallAxisSources) {
       kind: 'beam', clId: beam.axisCL.id,
     });
   }
+  // (k) K3 Q5: OPENING・SLAB_BEAM 以外の梁芯を host に（USER は 'user'、それ以外は 'axis'）。
   for (const cl of beamAxisCenterLines(graph)) {
-    if (cl.beamAxisOrigin !== BeamAxisOrigin.USER) continue;
+    if (cl.beamAxisOrigin === BeamAxisOrigin.OPENING || cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM) continue;
     if (cl.centerLineType !== CenterLineType.VERTICAL && cl.centerLineType !== CenterLineType.HORIZONTAL) continue;
     hosts.push({
       isVertical: cl.centerLineType === CenterLineType.VERTICAL, coord: cl.effectiveValue,
-      lo: cl.extentLo ?? -Infinity, hi: cl.extentHi ?? Infinity, kind: 'user', clId: cl.id,
+      lo: cl.extentLo ?? -Infinity, hi: cl.extentHi ?? Infinity,
+      kind: cl.beamAxisOrigin === BeamAxisOrigin.USER ? 'user' : 'axis', clId: cl.id,
     });
   }
   return hosts;
@@ -121,6 +123,7 @@ function planForRect(graph, rules, edges4, hosts) {
   const coverTol = Math.max(CL_OVERLAP_TOL_MM, (defaultBeamWidthMm(rules) ?? 0) / 2);
   const result = planOpeningEdgeBeams(edges, hosts, {
     coverTol,
+    partialCover: 'split',
     canPlace: edge => !graph.excludedWallBeamAxes.has(wallBeamAxisExcludeKey(edge.isVertical, edge.target)),
   });
   return { mapped: edges, result, coverTol };
@@ -270,7 +273,11 @@ async function classifyPlane(plane, project, label) {
   const comps = openingEdgeComponents(graph, { riserOf, belowGraph });
   const flat = comps.flat();
   out.edgeCount = flat.length;
-  if (m.edges.length !== flat.length) out.selfCheck.push(`旧 measurePlane の辺数 ${m.edges.length} ≠ openingEdgeComponents ${flat.length}`);
+  // measurePlane は主構造未定（G6）の階で、梁芯が何も覆わず源も出ない辺を除く（counts.g6Skipped）。辺は位置キーで引く。
+  const g6Skipped = m.counts?.g6Skipped ?? 0;
+  if (m.edges.length !== flat.length - g6Skipped) out.selfCheck.push(`measurePlane の辺数 ${m.edges.length} ≠ openingEdgeComponents ${flat.length} − g6Skipped ${g6Skipped}`);
+  const measuredByKey = new Map(m.edges.map(e => [e.key, e]));
+  const keyOf = (e) => `${plane.name}|${e.isVertical ? 'V' : 'H'}|${rnd(e.coord)}|${rnd(e.lo)}-${rnd(e.hi)}`;
   const oldIndependent = m.edges.filter(e => e.coveredLen < e.edgeLen - GAP_TOL).length;
   out.oldUncovered = oldIndependent;
 
@@ -295,16 +302,20 @@ async function classifyPlane(plane, project, label) {
   const hosts = openingHostsFor(graph, rules, rcWallAxisSources);
   const plans = comps.map(c => planForRect(graph, rules, c, hosts));
   const statusOfMapped = new Map();
-  const cnt = { placed: 0, covered: 0, excluded: 0, unsupported: 0 };
+  const cnt = { placed: 0, covered: 0, excluded: 0, unsupported: 0, split: 0 };
   const statusRows = [];
   for (const p of plans) {
     for (const x of p.result.placed) { statusOfMapped.set(x.edge, { status: 'placed', placed: x }); cnt.placed++; }
     for (const x of p.result.covered) { statusOfMapped.set(x.edge, { status: 'covered', host: x.host }); cnt.covered++; }
     for (const x of p.result.excluded) { statusOfMapped.set(x.edge, { status: 'excluded' }); cnt.excluded++; }
     for (const x of p.result.unsupported) { statusOfMapped.set(x.edge, { status: 'unsupported' }); cnt.unsupported++; }
+    // 一部だけ host が覆う辺（partialCover:'split'）。子の辺は placed／excluded／unsupported の行に出る。
+    for (const x of p.result.split) { statusOfMapped.set(x.edge, { status: 'split', host: x.host, children: x.children }); cnt.split++; }
   }
-  for (const [e, v] of statusOfMapped) statusRows.push(`${e.isVertical}|${rnd(e.coord)}|${rnd(e.target)}|${v.status}`);
-  const diagRows = (diag.edges ?? []).map(e => `${e.isVertical}|${rnd(e.coord)}|${rnd(e.target)}|${e.status}`);
+  // 子の辺は mapped に無いが、diag の行（lo/hi つき）と突き合わせるため、行は全 status の辺オブジェクトから採る。
+  for (const [e, v] of statusOfMapped) statusRows.push(`${e.isVertical}|${rnd(e.coord)}|${rnd(e.target)}|${rnd(e.lo)}|${rnd(e.hi)}|${v.status}`);
+  const diagRows = (diag.edges ?? []).map(e => `${e.isVertical}|${rnd(e.coord)}|${rnd(e.target)}|${rnd(e.lo)}|${rnd(e.hi)}|${e.status}`);
+  if (cnt.split !== (diag.splitCount ?? 0)) out.selfCheck.push(`split: 写し ${cnt.split} ≠ diag.splitCount ${diag.splitCount}`);
   if (cnt.covered !== (diag.coveredCount ?? 0)) out.selfCheck.push(`covered: 写し ${cnt.covered} ≠ diag.coveredCount ${diag.coveredCount}`);
   if (cnt.excluded !== (diag.excludedCount ?? 0)) out.selfCheck.push(`excluded: 写し ${cnt.excluded} ≠ diag ${diag.excludedCount}`);
   if (cnt.unsupported !== (diag.unsupportedCount ?? 0)) out.selfCheck.push(`unsupported: 写し ${cnt.unsupported} ≠ diag ${diag.unsupportedCount}`);
@@ -325,18 +336,26 @@ async function classifyPlane(plane, project, label) {
     for (let ei = 0; ei < comps[ci].length; ei++, flatIdx++) {
       const mapped = plans[ci].mapped[ei];
       const coverTol = plans[ci].coverTol;
-      const old = m.edges[flatIdx];
+      const old = measuredByKey.get(keyOf(mapped));
+      if (!old) continue; // G6 で measurePlane が除いた辺（梁芯が何も覆わず源も出ない＝測る対象が無い）
       const oldUnc = old.coveredLen < old.edgeLen - GAP_TOL;
       // 新判定: 梁の軸座標（偏芯込み axisValue）に加え、梁の軸 CL の座標（axisCL.effectiveValue。計画器が手動梁 host に使う座標）も
       // coord・target と coverTol 以内で比べる。spec（axisValue のみ）の結果も newSpec として残す（偏芯した梁は axisValue が coverTol を超えて離れる）。
+      // 主構造未定（G6）の階は measurePlane と同じく梁芯の extent でも測る（梁が出ない階）。
+      const axisSpans = g6
+        ? beamAxisCenterLines(graph, { centerLineType: mapped.isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL })
+          .filter(c => Math.abs(c.effectiveValue - mapped.coord) <= coverTol + 1e-9 || Math.abs(c.effectiveValue - mapped.target) <= coverTol + 1e-9)
+          .map(c => [c.extentLo ?? -Infinity, c.extentHi ?? Infinity])
+        : [];
       const bsSpec = beamsOnEdge(graph, mapped, mapped.target, coverTol, false);
-      const ugSpec = unionGaps(bsSpec.map(b => [b.lo, b.hi]), mapped.lo, mapped.hi);
+      const ugSpec = unionGaps([...bsSpec.map(b => [b.lo, b.hi]), ...axisSpans], mapped.lo, mapped.hi);
       const bs = beamsOnEdge(graph, mapped, mapped.target, coverTol, true);
-      const ug = unionGaps(bs.map(b => [b.lo, b.hi]), mapped.lo, mapped.hi);
+      const ug = unionGaps([...bs.map(b => [b.lo, b.hi]), ...axisSpans], mapped.lo, mapped.hi);
       const newUnc = ug.gaps.length > 0;
       if (newUnc) out.newUncovered++;
       if (ugSpec.gaps.length > 0) out.newSpecUncovered++;
-      if (!oldUnc && !newUnc) continue;
+      // measurePlane は S1 で軸CL座標も見るようになった（旧判定＝新判定）。axisValue だけでは覆われない辺（P）も記録に残す。
+      if (!oldUnc && !newUnc && !(ugSpec.gaps.length > 0)) continue;
       const st = statusOfMapped.get(mapped);
       const rec = {
         file: label, plane: plane.name, structure, key: old.key, status: st.status, oldStatus: old.status, statusMismatch: st.status !== old.status,
@@ -375,6 +394,8 @@ async function classifyUncovered(rec, { mapped: e, st, graph, gctx, role, g6, so
   if (g6) { rec.type = 'G6'; rec.sub = st.status; rec.reasons = [{ reason: 'G6' }]; return; }
   if (st.status === 'excluded') { rec.type = 'E'; return; }
   if (st.status === 'unsupported') { rec.type = 'S'; return; }
+  // 一部だけ host が覆う辺: 残部の子が excluded／unsupported（割った点に支えが無い等）で梁が架からない＝設計どおり。
+  if (st.status === 'split') { rec.type = 'S'; rec.sub = 'split'; detail({ children: st.children.map(c => [rnd(c.lo), rnd(c.hi)]) }); return; }
   if (st.status === 'covered') {
     const h = st.host;
     if (h.kind === 'grid') {

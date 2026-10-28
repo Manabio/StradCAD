@@ -362,3 +362,192 @@ test('covered／excluded の出力順も入力順に依らない', () => {
     assert.deepEqual(ex.excluded.map(c => `${c.edge.isVertical ? 'V' : 'H'}${c.edge.coord}`), ['H1000', 'H3000', 'V2000', 'V5000']);
   }
 });
+
+// ---- partialCover:'split'（(k) K3。一部だけ重なる host の残部に梁を架ける） ----
+// 記法: 横辺 y=1000 x[2000,5000]。host は同じ線 y=1000 上の梁芯（USER など）。直交する支えは縦の通り芯。
+const SPLIT = { ...OPTS, partialCover: 'split' };
+const hEdge = () => ({ isVertical: false, coord: 1000, lo: 2000, hi: 5000, target: 1000, axisCL: 'top', source: 'void' });
+const hHost = (lo, hi, clId = 'u1', kind = 'user') => ({ isVertical: false, coord: 1000, lo, hi, kind, clId });
+
+test('split: 一部だけ重なる host の残部が子の辺になる（割った点に支えがあれば配置され、元の辺は covered にならない）', () => {
+  // host x[3500,8000]。残部は x[2000,3500]。割った点 x=3500 に通り芯がある。
+  const hosts = [hHost(3500, 8000), ...gridHosts([0, 3500, 8000], [])];
+  const plan = planOpeningEdgeBeams([hEdge()], hosts, SPLIT);
+  assert.equal(plan.covered.length, 0);
+  assert.equal(plan.split.length, 1);
+  assert.equal(plan.split[0].host.clId, 'u1');
+  assert.deepEqual(plan.split[0].children.map(c => [c.lo, c.hi]), [[2000, 3500]]);
+  assert.equal(plan.placed.length, 1);
+  const p = plan.placed[0];
+  assert.deepEqual([p.edge.lo, p.edge.hi], [2000, 3500]);
+  assert.deepEqual(p.hiRef, { kind: 'grid', coord: 3500, clId: 'gx3500' });
+  assert.deepEqual(p.loRef, { kind: 'grid', coord: 0, clId: 'gx0' });
+  // 子の辺は元の辺のフィールド（軸・源・target）を継ぐ。
+  assert.equal(p.edge.axisCL, 'top');
+  assert.equal(p.edge.source, 'void');
+  assert.equal(p.target, 1000);
+});
+
+test('split: 割った点に直交する支えが無い子の辺は unsupported（隣の host と重なる梁芯を作らない）', () => {
+  // 通り芯は x=0・8000 だけ。x=3500 に支えが無いので、hi 側の支えは 8000 まで飛ぶ＝host と重なる梁になる。
+  const hosts = [hHost(3500, 8000), ...gridHosts([0, 8000], [])];
+  const plan = planOpeningEdgeBeams([hEdge()], hosts, SPLIT);
+  assert.equal(plan.placed.length, 0);
+  assert.equal(plan.unsupported.length, 1);
+  assert.deepEqual([plan.unsupported[0].edge.lo, plan.unsupported[0].edge.hi], [2000, 3500]);
+  // 既定（partialCover なし）は従来どおり covered で、支えの有無を問わない。
+  const def = planOpeningEdgeBeams([hEdge()], hosts, OPTS);
+  assert.equal(def.covered.length, 1);
+  assert.equal(def.unsupported.length, 0);
+});
+
+test('split: 割った点の支えは bracketEps 以内（0.4 ずれは可、0.6 ずれは不可）', () => {
+  const run = off => planOpeningEdgeBeams([hEdge()],
+    [hHost(3500, 8000), ...gridHosts([0, 8000], []), { isVertical: true, coord: 3500 + off, lo: -INF, hi: INF, kind: 'beam', clId: 'o' }], SPLIT);
+  assert.equal(run(0.4).placed.length, 1);
+  // 3500.4 は「coord ≥ hi−eps」の最小として拾われ、辺の hi(3500) との差 0.4 は eps(0.5＝CL_OVERLAP_TOL_MM) 以内。
+  assert.equal(run(0.4).placed[0].hiRef.coord, 3500.4);
+  // 0.6 は eps(0.5) を超えるので支えと認めない（8000 まで飛ぶ梁になるため unsupported）。
+  assert.equal(run(0.6).placed.length, 0);
+  assert.equal(run(0.6).unsupported.length, 1);
+  // eps を 0.3 に絞ると 0.4 のずれは支えと認めない。
+  const strict = planOpeningEdgeBeams([hEdge()],
+    [hHost(3500, 8000), ...gridHosts([0, 8000], []), { isVertical: true, coord: 3500.4, lo: -INF, hi: INF, kind: 'beam', clId: 'o' }],
+    { ...SPLIT, bracketEps: 0.3 });
+  assert.equal(strict.placed.length, 0);
+  assert.equal(strict.unsupported.length, 1);
+});
+
+test('split: host の和集合が全長を覆えば covered（隙間が CL_OVERLAP_TOL_MM 以下なら覆う）、元の host 1本の場合は既定と同じ', () => {
+  // x[2000,3600] ∪ x[3400,5000]＝全長。
+  const two = planOpeningEdgeBeams([hEdge()], [hHost(2000, 3600, 'a'), hHost(3400, 5000, 'b'), ...gridHosts([0, 8000], [])], SPLIT);
+  assert.equal(two.covered.length, 1);
+  assert.equal(two.split.length, 0);
+  assert.equal(two.placed.length, 0);
+  // 隙間 0.5（許容誤差ちょうど）は覆う、0.6 は覆わない。
+  const gap = g => planOpeningEdgeBeams([hEdge()], [hHost(2000, 3500, 'a'), hHost(3500 + g, 5000, 'b'), ...gridHosts([0, 3500, 3500 + g, 8000], [])], SPLIT);
+  assert.equal(gap(0.5).covered.length, 1);
+  assert.equal(gap(0.6).covered.length, 0);
+  assert.equal(gap(0.6).split.length, 1);
+  // 全長を覆う host 1本は既定と同じ host を返す。
+  const full = [hHost(0, 9000, 'f'), ...gridHosts([0, 8000], [])];
+  const a = planOpeningEdgeBeams([hEdge()], full, SPLIT);
+  const b = planOpeningEdgeBeams([hEdge()], full, OPTS);
+  assert.equal(a.covered[0].host.clId, 'f');
+  assert.deepEqual(a.covered.map(c => c.host.clId), b.covered.map(c => c.host.clId));
+});
+
+test('split: 真ん中だけ覆われない辺は両端が割った点（両方に支えが要る）、host が両端を覆えば子は1本', () => {
+  // host x[2000,3000] と x[4000,5000]。残部 x[3000,4000]。
+  const hosts = [hHost(2000, 3000, 'a'), hHost(4000, 5000, 'b')];
+  const withBoth = planOpeningEdgeBeams([hEdge()], [...hosts, ...gridHosts([3000, 4000], [])], SPLIT);
+  assert.equal(withBoth.placed.length, 1);
+  assert.deepEqual([withBoth.placed[0].edge.lo, withBoth.placed[0].edge.hi], [3000, 4000]);
+  assert.equal(withBoth.placed[0].span, 1000);
+  // 片側（x=4000）に支えが無ければ unsupported。
+  const oneSide = planOpeningEdgeBeams([hEdge()], [...hosts, ...gridHosts([3000, 8000], [])], SPLIT);
+  assert.equal(oneSide.placed.length, 0);
+  assert.equal(oneSide.unsupported.length, 1);
+  // 両側に残部があれば子は2本（host x[3000,4000] が中央）。
+  const mid = planOpeningEdgeBeams([hEdge()], [hHost(3000, 4000), ...gridHosts([0, 3000, 4000, 8000], [])], SPLIT);
+  assert.deepEqual(mid.split[0].children.map(c => [c.lo, c.hi]), [[2000, 3000], [4000, 5000]]);
+  assert.equal(mid.placed.length, 2);
+});
+
+test('split: 辺の端に接する隙間は coverTol 以下なら割らない（host の端が角から coverTol 以内にずれても covered。超えれば split）', () => {
+  // 矩形 x[2000,5000]×y[1000,3000]・coverTol 50。USER の H1000 が [2000+gap, 8000]、直交する USER の V(2000+gap)。
+  const run = gap => planOpeningEdgeBeams(rectEdges(2000, 5000, 1000, 3000), [
+    hHost(2000 + gap, 8000),
+    { isVertical: true, coord: 2000 + gap, lo: -INF, hi: INF, kind: 'user', clId: 'v' },
+    ...gridHosts([0, 8000], [0, 6000]),
+  ], SPLIT);
+  const h1000 = plan => plan.placed.filter(p => !p.edge.isVertical && p.edge.coord === 1000);
+  for (const gap of [0.6, 49, 50]) {
+    const plan = run(gap);
+    assert.equal(h1000(plan).length, 0, `gap ${gap}: H1000 に梁を置かない`);
+    assert.ok(plan.covered.some(c => !c.edge.isVertical && c.edge.coord === 1000), `gap ${gap}: H1000 は covered`);
+    assert.equal(plan.split.filter(s => !s.edge.isVertical && s.edge.coord === 1000).length, 0);
+  }
+  // coverTol(50) を超える 60 は割る。
+  const plan = run(60);
+  assert.equal(plan.split.filter(s => !s.edge.isVertical && s.edge.coord === 1000).length, 1);
+  // 反対側の端（host が [-∞,5000-gap]）も同じ。
+  const hi = planOpeningEdgeBeams([hEdge()], [hHost(0, 5000 - 49), ...gridHosts([0, 8000], [])], SPLIT);
+  assert.equal(hi.covered.length, 1);
+  assert.equal(planOpeningEdgeBeams([hEdge()], [hHost(0, 5000 - 60), ...gridHosts([0, 8000], [])], SPLIT).split.length, 1);
+});
+
+test('split: 割らない側の端は従来どおり（支えが辺の外にあってよい）', () => {
+  // host x[2000,3500]（lo 側を覆う）。残部 x[3500,5000]、hi 側は元の辺の端 x=5000。支えは x=3500 と x=6000（辺の外）。
+  const plan = planOpeningEdgeBeams([hEdge()], [hHost(2000, 3500), ...gridHosts([3500, 6000], [])], SPLIT);
+  assert.equal(plan.placed.length, 1);
+  assert.deepEqual([plan.placed[0].edge.lo, plan.placed[0].edge.hi], [3500, 5000]);
+  assert.equal(plan.placed[0].hiRef.coord, 6000);
+});
+
+test('split: 子の辺も canPlace を通る（除外されれば excluded に入り、配置も unsupported もしない）', () => {
+  const hosts = [hHost(3500, 8000), ...gridHosts([0, 3500, 8000], [])];
+  const plan = planOpeningEdgeBeams([hEdge()], hosts, { ...SPLIT, canPlace: () => false });
+  assert.equal(plan.placed.length, 0);
+  assert.equal(plan.unsupported.length, 0);
+  assert.equal(plan.excluded.length, 1);
+  assert.deepEqual([plan.excluded[0].edge.lo, plan.excluded[0].edge.hi], [2000, 3500]);
+});
+
+test('split: host が辺と重ならない（または重なりが許容誤差以下）なら従来どおり割らずに配置する', () => {
+  const plan = planOpeningEdgeBeams([hEdge()], [hHost(5000, 8000), ...gridHosts([0, 8000], [])], SPLIT);
+  assert.equal(plan.split.length, 0);
+  assert.equal(plan.placed.length, 1);
+  assert.deepEqual([plan.placed[0].edge.lo, plan.placed[0].edge.hi], [2000, 5000]);
+});
+
+test('split: 入力順（辺・host）を入れ替えても結果は同じ', () => {
+  const edges = rectEdges(2000, 5000, 1000, 3000);
+  const hosts = [
+    { isVertical: false, coord: 1000, lo: 3500, hi: 9000, kind: 'user', clId: 'u1' },
+    { isVertical: true, coord: 5000, lo: 1500, hi: 9000, kind: 'axis', clId: 'a1' },
+    ...gridHosts([0, 3500, 8000], [0, 6000]),
+  ];
+  const summary = p => JSON.stringify({
+    placed: p.placed.map(x => `${x.order}:${x.edge.isVertical ? 'V' : 'H'}${x.edge.coord}[${x.edge.lo},${x.edge.hi}]:${x.span}:${x.loRef.kind}${x.loRef.coord}:${x.hiRef.kind}${x.hiRef.coord}`),
+    covered: p.covered.map(x => `${x.edge.isVertical ? 'V' : 'H'}${x.edge.coord}:${x.host.clId}`),
+    split: p.split.map(x => `${x.edge.isVertical ? 'V' : 'H'}${x.edge.coord}:${x.children.map(c => `${c.lo}-${c.hi}`).join(',')}`),
+    unsupported: p.unsupported.map(x => `${x.edge.isVertical ? 'V' : 'H'}${x.edge.coord}[${x.edge.lo},${x.edge.hi}]`),
+  });
+  const base = planOpeningEdgeBeams(edges, hosts, SPLIT);
+  assert.ok(base.split.length >= 1, '分割が起きる配置のテストであること');
+  const expected = summary(base);
+  for (const es of permutations([0, 1, 2, 3]).map(ix => ix.map(i => edges[i]))) {
+    assert.equal(summary(planOpeningEdgeBeams(es, [...hosts].reverse(), SPLIT)), expected);
+  }
+});
+
+test('split: 子の辺に直交する host が割った点の支えになる（kind axis・user・beam はどれも支え）', () => {
+  for (const kind of ['axis', 'user', 'beam', 'wall']) {
+    const plan = planOpeningEdgeBeams([hEdge()], [
+      hHost(3500, 8000), ...gridHosts([0, 8000], []),
+      { isVertical: true, coord: 3500, lo: 0, hi: 5000, kind, clId: 'o' },
+    ], SPLIT);
+    assert.equal(plan.placed.length, 1, kind);
+    assert.equal(plan.placed[0].hiRef.kind, kind);
+  }
+});
+
+test('partialCover の不正値は throw（省略・undefined は既定、"split" だけが有効）', () => {
+  const run = pc => () => planOpeningEdgeBeams([hEdge()], gridHosts([0, 8000], []), { ...OPTS, partialCover: pc });
+  for (const bad of ['merge', 'SPLIT', '', null, true, 1]) {
+    assert.throws(run(bad), /partialCover が不正です/, String(bad));
+  }
+  assert.doesNotThrow(run(undefined));
+  assert.doesNotThrow(run('split'));
+  assert.doesNotThrow(() => planOpeningEdgeBeams([hEdge()], gridHosts([0, 8000], []), OPTS));
+});
+
+test('既定（partialCover 省略）は部分被覆でも covered のままで split は常に空', () => {
+  const hosts = [hHost(3500, 8000), ...gridHosts([0, 3500, 8000], [])];
+  const plan = planOpeningEdgeBeams([hEdge()], hosts, OPTS);
+  assert.equal(plan.covered.length, 1);
+  assert.equal(plan.placed.length, 0);
+  assert.deepEqual(plan.split, []);
+  assert.deepEqual(planOpeningEdgeBeams([hEdge()], hosts, { ...OPTS, partialCover: undefined }).covered.length, 1);
+});

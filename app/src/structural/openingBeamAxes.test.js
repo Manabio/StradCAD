@@ -309,23 +309,26 @@ test('openingBeamSourcesFor→autoFillOpeningBeamAxes: 除外集合にあるキ�
     '除外キーY:1000は生成しない');
 });
 
-test('openingBeamSourcesFor→autoFillOpeningBeamAxes: 既存梁芯／通り芯が同座標なら再利用し、由来未設定(null)なら書き戻す', () => {
+// (k) K3（Q5）: 由来なし（null）の梁芯が辺の全長を覆うと、計画器が host（kind 'axis'）として見て辺は梁あり＝源にならない。
+// 以前は源になって生成側が流用し、由来を OPENING に書き戻していた（書き戻すと開口が消えたとき回収対象になる）。
+// いまは由来なしの梁芯は開口のものにならない（由来は null のまま。後の辺の extent はその梁芯を参照する）。
+test('openingBeamSourcesFor→autoFillOpeningBeamAxes: 辺の全長を覆う由来なし(null)の梁芯は host として辺が梁あり＝再利用も由来の書き戻しも起きず、後の辺はその梁芯を参照する（K3・Q5）', () => {
   const { graph } = makeRectOpeningGraph();
   graph.structureOverride = 'RC造(ラーメン)';
   // 【S2で期待値を変更】旧: 水平辺(y=1000)が通しで、短辺が再利用梁芯を参照。新: 垂直辺が先に通るため、
-  // 先に置かれる垂直辺(x=2000)の既存梁芯を再利用対象にし、後の水平辺がそのidを参照することを確認する。
+  // 先に置かれる垂直辺(x=2000)の既存梁芯を host（梁あり）にし、後の水平辺がそのidを参照することを確認する。
   const existing = graph.addCenterLine(CenterLineType.VERTICAL, 2000, { labeled: false, discipline: Discipline.FUSE });
   assert.equal(existing.beamAxisOrigin, null, '前提');
   const before = graph.centerLines.length;
 
   const sources = openingBeamSourcesFor(graph, {});
   const created = autoFillOpeningBeamAxes(graph, sources);
-  assert.equal(created.length, 3, '既存梁芯(x=2000)は新規作成せず再利用される（残り3本のみ新規）');
+  assert.equal(created.length, 3, '既存梁芯(x=2000)は host として梁ありのため新規作成しない（残り3本のみ新規）');
   assert.equal(graph.centerLines.length, before + 3);
-  assert.equal(existing.beamAxisOrigin, BeamAxisOrigin.OPENING, '再利用時に由来を書き戻す');
-  // ---- T7: 後の辺のextentは再利用した既存梁芯自身のidを参照する ----
+  assert.equal(existing.beamAxisOrigin, null, '由来なしの梁芯は開口由来に書き戻さない（辺は host として梁あり＝源にならない）');
+  // ---- T7: 後の辺のextentは既存梁芯自身のidを参照する ----
   const hTop = created.find(cl => cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000);
-  assert.equal(hTop.extentLoRef?.clId, existing.id, '後の辺のextentは再利用した既存梁芯のidを参照する');
+  assert.equal(hTop.extentLoRef?.clId, existing.id, '後の辺のextentは host の既存梁芯のidを参照する');
 });
 
 // ---- T7: 既に由来'wall'の梁芯を再利用する場合は由来を上書きしない ----
@@ -340,7 +343,7 @@ test('【T7】openingBeamSourcesFor→autoFillOpeningBeamAxes: 既に由来wall�
 
   const sources = openingBeamSourcesFor(graph, {});
   const created = autoFillOpeningBeamAxes(graph, sources);
-  assert.equal(created.length, 3, '既存梁芯(x=2000)は新規作成せず再利用される（残り3本のみ新規）');
+  assert.equal(created.length, 3, '既存梁芯(x=2000)は host として梁ありのため新規作成しない（残り3本のみ新規）');
   assert.equal(graph.centerLines.length, before + 3);
   assert.equal(existing.beamAxisOrigin, BeamAxisOrigin.WALL, '既に由来wallの梁芯は開口由来で上書きしない（fillBeamAxisOriginIfUnknownの規約）');
 
@@ -390,13 +393,16 @@ test('【S3-1・失敗系】autoFillOpeningBeamAxes: 範囲が辺と離れた US
 
 // (k) k1（2026-10-27 ユーザー裁定 K1＝案1）: 範囲判定は全主構造。S3-5 S4（裁定 R2）の「S造以外は範囲を見ない（S3-1 前の挙動）」を
 // 反転した。辺と同座標の梁芯が (A) 離れている (B) 端で接するだけ のとき開口梁芯が新しく立ち、(C) 一部重なる (D) 辺を覆う ときは流用する。
-// 辺は x=2000 の垂直辺 y:[1000,3000]。(C) の流用は既知の限界（K3 で別課題）。
+// 辺は x=2000 の垂直辺 y:[1000,3000]。(C) 一部だけ重なる梁芯は、(k) K3（partialCover:'split'）で重なる範囲を流用し、
+// 覆われない残部 y:[1000,2000] だけに開口梁芯が立つ（割った点 y=2000 に直交する支えがあるとき）。支えが無ければ残部は
+// unsupported＝何も立たない（隣の梁芯と重なる梁芯を作らない）。支えは y=2000 の USER 梁芯（梁芯は意匠セルを割らない）。
 const K1_STRUCTURES = ['RC造(ラーメン)', 'SRC造', null, 'S造'];
 const K1_CASES = [
   { tag: 'A 離れた壁由来', extent: [4000, 6000], origin: BeamAxisOrigin.WALL, reused: false },
   { tag: 'B 端で接するだけ', extent: [3000, 6000], origin: BeamAxisOrigin.WALL, reused: false },
   { tag: 'B 端で接するだけ(下端側・USER)', extent: [-2000, 1000], origin: BeamAxisOrigin.USER, reused: false },
-  { tag: 'C 一部だけ重なる（既知の限界・K3）', extent: [2000, 5000], origin: BeamAxisOrigin.WALL, reused: true },
+  { tag: 'C 一部だけ重なる（割った点 y=2000 に支えあり・K3）', extent: [2000, 5000], origin: BeamAxisOrigin.WALL, reused: false, splitAt: 2000, support: true },
+  { tag: 'C 一部だけ重なる（割った点に支えなし・unsupported）', extent: [2000, 5000], origin: BeamAxisOrigin.WALL, reused: true },
   { tag: 'D 辺を覆う', extent: [500, 3500], origin: BeamAxisOrigin.WALL, reused: true, covers: true },
 ];
 for (const structure of K1_STRUCTURES) {
@@ -408,6 +414,11 @@ for (const structure of K1_STRUCTURES) {
         labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: c.origin,
         extentLo: c.extent[0], extentHi: c.extent[1],
       });
+      if (c.support) {
+        graph.addCenterLine(CenterLineType.HORIZONTAL, c.splitAt, {
+          labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER, extentLo: 0, extentHi: 8000,
+        });
+      }
       if (c.covers) {
         assert.ok(existing.extentLo <= 1000 && existing.extentHi >= 3000, '前提: 既存の梁芯が辺 y:[1000,3000] を覆っている');
       }
@@ -416,9 +427,16 @@ for (const structure of K1_STRUCTURES) {
       assert.equal(created.length, c.reused ? 3 : 4);
       assert.equal(own.length, c.reused ? 0 : 1);
       assert.equal(existing.beamAxisOrigin, c.origin, '既存梁芯の由来は書き換えない');
+      assert.deepEqual([existing.extentLo, existing.extentHi], c.extent, '既存梁芯の範囲は広げも縮めもしない');
       if (!c.reused) {
         assert.equal(own[0].beamAxisOrigin, BeamAxisOrigin.OPENING);
-        assert.ok(own[0].extentLo <= 1000 && own[0].extentHi >= 3000, '新しい開口梁芯は辺 y:[1000,3000] を覆う');
+        if (c.splitAt == null) {
+          assert.ok(own[0].extentLo <= 1000 && own[0].extentHi >= 3000, '新しい開口梁芯は辺 y:[1000,3000] を覆う');
+        } else {
+          // 残部 y:[1000,2000] だけ。既存梁芯 y:[2000,5000] とは割った点で接するだけ（重ならない）。
+          assert.ok(own[0].extentLo <= 1000, '残部の下端（辺の端）を覆う');
+          assert.ok(Math.abs(own[0].extentHi - c.splitAt) <= CL_OVERLAP_TOL_MM, `残部の上端は割った点 y=${c.splitAt}（既存梁芯と重ならない）: ${own[0].extentHi}`);
+        }
       }
     });
   }
@@ -1444,6 +1462,17 @@ test('mapOpeningSourceMoves: coordが変わらなければ move を返さない'
   assert.deepEqual(mapOpeningSourceMoves(before, after), []);
 });
 
+// (k) K3: 割った子の辺は同じ axisCLId・outwardSign・座標を共有する。区間の重なり最大で 1 対 1 に対応づく（取り違えない）。
+test('【(k) K3】mapOpeningSourceMoves: 同じ axisCLId を共有する子の辺 2 本は区間ごとに 1 対 1 で対応づき、2 本とも move になる（片方が空振りしない）', () => {
+  const child = (lo, hi, coord) => ({ isVertical: false, coord, lo, hi, outwardSign: -1, axisCLId: 'cl-a' });
+  const before = [child(2000, 3000, 1000), child(4000, 5000, 1000)];
+  const after = [child(4000, 5000, 1500), child(2000, 3000, 1500)]; // 並びを入れ替えても区間で対応する
+  const moves = mapOpeningSourceMoves(before, after);
+  assert.deepEqual(moves, [{ isVertical: false, from: 1000, to: 1500 }, { isVertical: false, from: 1000, to: 1500 }]);
+  // 失敗系: 後継が片方しか無い（もう一方の host が消えて辺が 1 本に戻った等）なら、move は 1 本だけ。
+  assert.equal(mapOpeningSourceMoves(before, [child(2000, 5000, 1500)]).length, 1);
+});
+
 // ---- m-4是正・QA指摘: 移動先が既存CLの座標へ厳密一致すると、floorOpeningEdgesがその辺のaxisCLを
 // 動的に差し替える（移動元CLの物理的な位置は同じでもaxisCLIdが変わる）ため、1段階目（axisCLId一致）で
 // 対応が付かない場合に2段階目（isVertical・outwardSign・区間重なりのみ）でフォールバック対応する。 ----
@@ -2180,6 +2209,120 @@ for (const structure of ['S造', 'RC造(ラーメン)']) {
     assert.equal((await recomputeSameLine(f, structure)).changed, false, '収束している');
   });
 }
+
+// ---- (k) K3: 一部だけ重なる host の残部に開口梁芯と小梁を架ける（partialCover:'split'・hosts に Q5 の梁芯） ----
+// 配置: 通り芯 X:0/8000（＋grids）・Y:0/6000。意匠線 X:2000,5000・Y:1000,3000。吹抜け x:2000-5000 y:1000-3000（通り芯 grids で
+// セルが割れても吹抜けは全セル）。上辺 H1000 [2000,5000] と同座標に host の梁芯（由来 origin・範囲 host）を置く。
+function makePartialCoverFixture(name, structure, { host, grids = [], origin = BeamAxisOrigin.USER }) {
+  const project = new Project(name, 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph } = project.addPlane(3000, '2階', 'p2');
+  g1.structureOverride = structure;
+  graph.structureOverride = structure;
+  for (const x of [0, 8000, ...grids]) graph.addCenterLine(CenterLineType.VERTICAL, x, GRID);
+  for (const x of [2000, 5000]) graph.addCenterLine(CenterLineType.VERTICAL, x, ARCH);
+  for (const y of [0, 6000]) graph.addCenterLine(CenterLineType.HORIZONTAL, y, GRID);
+  for (const y of [1000, 3000]) graph.addCenterLine(CenterLineType.HORIZONTAL, y, ARCH);
+  const hostCL = graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: origin, extentLo: host[0], extentHi: host[1],
+  });
+  const cells = getAllCells(graph);
+  const inVoid = c => c.x1 >= 2000 && c.x2 <= 5000 && c.y1 >= 1000 && c.y2 <= 3000;
+  graph.addRoom(new Set(cells.filter(inVoid).map(c => c.key))).setFeature(RoomFeature.VOID);
+  graph.addRoom(new Set(cells.filter(c => !inVoid(c)).map(c => c.key)));
+  return { project, g1, graph, hostCL };
+}
+const h1000Opening = (g) => g.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
+  && cl.centerLineType === CenterLineType.HORIZONTAL && cl.value === 1000).map(cl => [cl.extentLo, cl.extentHi]).sort((a, b) => a[0] - b[0]);
+
+for (const structure of ['S造', 'RC造(ラーメン)', 'SRC造', null]) {
+  for (const origin of [BeamAxisOrigin.USER, BeamAxisOrigin.WALL]) {
+    test(`【(k) K3・受け入れ】recomputeStructuralForGraph: ${structure ?? '未定'} で上辺に由来 ${origin} の梁芯が x:[3500,8000] だけ重なるとき、残部 x:[2000,3500] に開口梁芯が立つ（既存の梁芯は不変・再計算 3 回で本数と id が不変）`, async () => {
+      const f = makePartialCoverFixture(`proj-k3-${structure}-${origin}`, structure, { host: [3500, 8000], grids: [3500], origin });
+      const ids = [];
+      for (let i = 0; i < 3; i++) {
+        await recomputeSameLine(f, structure);
+        ids.push(f.graph.centerLines.map(cl => cl.id).sort().join(',') + `|${f.graph.beams.length}`);
+      }
+      assert.equal(ids[1], ids[0], '2 回目で本数も id も変わらない');
+      assert.equal(ids[2], ids[0], '3 回目で本数も id も変わらない');
+      // 子の辺 x:[2000,3500] は支え間のスパンが短い辺として先に通る＝下端は辺の外の通り芯 X:0 まで通し（通常の辺と同じ）。
+      // 上端は割った点の通り芯 X:3500 で止まり、既存の梁芯 x:[3500,8000] とは接するだけ（重ならない）。
+      assert.deepEqual(h1000Opening(f.graph), [[0, 3500]], '残部を覆う開口梁芯が 1 本。既存の梁芯とは割った点で接するだけ');
+      assert.deepEqual([f.hostCL.extentLo, f.hostCL.extentHi], [3500, 8000], '既存の梁芯の範囲は広げない');
+      assert.equal(f.hostCL.beamAxisOrigin, origin, '既存の梁芯の由来は書き換えない');
+      assert.equal((await recomputeSameLine(f, structure)).changed, false, '4 回目の再計算は変化なし');
+      if (structure != null) { // 未定は梁を作らない（梁芯だけ）
+        assert.equal(secondaryCoveredLength(f.graph, false, 1000, 2000, 5000), 3000, '辺 H1000 の全長が梁で覆われる');
+      }
+    });
+  }
+}
+
+test('【(k) K3・失敗系】割った点に直交する支えが無ければ、残部の開口梁芯は作らない（unsupported。既存の梁芯と重なる梁芯を作らない・冪等）', async () => {
+  const f = makePartialCoverFixture('proj-k3-nosupport', 'S造', { host: [3500, 8000], grids: [] });
+  const diag = openingBeamSourcesDiagnostics(f.graph, f.project, {});
+  assert.ok(diag.edges.some(e => e.status === 'unsupported' && e.lo === 2000 && e.hi === 3500), '残部 x:[2000,3500] は unsupported の行で診断に出る');
+  assert.ok(diag.edges.some(e => e.status === 'split' && e.lo === 2000 && e.hi === 5000), '元の辺は split の行');
+  const keys = [];
+  for (let i = 0; i < 3; i++) {
+    await recomputeSameLine(f, 'S造');
+    keys.push(openingAxisKeys(f.graph).join('|'));
+  }
+  assert.deepEqual(h1000Opening(f.graph), [], 'H1000 に開口梁芯は立たない（重複を作らない）');
+  assert.equal(keys[1], keys[0]);
+  assert.equal(keys[2], keys[0]);
+  assert.equal((await recomputeSameLine(f, 'S造')).changed, false);
+});
+
+for (const structure of ['S造', 'RC造(ラーメン)', 'SRC造', null]) {
+  test(`【(k) K3・照合（k1c）】${structure ?? '未定'} で host が辺の真ん中だけを覆い、残部の子の辺 2 本が同じ軸 CL・同じ座標を共有しても、梁芯は 1 対 1 で撤去・重複されず、再計算 3 回で不変`, async () => {
+    const f = makePartialCoverFixture(`proj-k3-two-${structure}`, structure, { host: [3000, 4000], grids: [3000, 4000] });
+    const sources = openingBeamSourcesFor(f.graph, f.project, {}).filter(s => !s.isVertical && s.coord === 1000);
+    assert.equal(sources.length, 2, '前提: H1000 の源は子の辺 2 本');
+    assert.equal(sources[0].axisCLId, sources[1].axisCLId, '前提: 2 本は同じ軸 CL を共有する');
+    assert.deepEqual(sources.map(s => [s.lo, s.hi]).sort((a, b) => a[0] - b[0]), [[2000, 3000], [4000, 5000]]);
+    const ids = [];
+    for (let i = 0; i < 3; i++) {
+      await recomputeSameLine(f, structure);
+      ids.push(f.graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING).map(cl => cl.id).sort().join(',') + `|${f.graph.beams.length}`);
+    }
+    assert.equal(ids[1], ids[0], '開口梁芯の id も梁の本数も 2 回目で不変');
+    assert.equal(ids[2], ids[0], '3 回目も不変');
+    assert.deepEqual(h1000Opening(f.graph), [[0, 3000], [4000, 8000]], '子の辺ごとに 1 本ずつ（割らない側の端は外側の通り芯まで通し。割った点 X:3000・4000 では host と接するだけ）');
+    assert.equal((await recomputeSameLine(f, structure)).changed, false);
+    // 動き: 照合の 1 対 1（余りの孤児が出ない）
+    const matchedOrphans = reconcileOpeningBeamAxes(f.graph, openingBeamSourcesFor(f.graph, f.project, {}), []);
+    assert.equal(matchedOrphans.removed.length, 0, '照合で孤児として撤去される梁芯が無い');
+  });
+}
+
+for (const structure of ['S造', 'RC造(ラーメン)']) {
+  test(`【(k) K3・撤去】${structure} で host の梁芯を全長 [0,8000] へ伸ばすと、次の再計算で残部の開口梁芯が撤去され（辺は host で梁あり）、2 回目は changed=false`, async () => {
+    const f = makePartialCoverFixture(`proj-k3-remove-${structure}`, structure, { host: [3500, 8000], grids: [3500] });
+    await recomputeSameLine(f, structure);
+    await recomputeSameLine(f, structure);
+    assert.deepEqual(h1000Opening(f.graph), [[0, 3500]], '前提: 残部の開口梁芯が立っている');
+    runInAction(() => {
+      f.graph.setCenterLineExtentRef(f.hostCL, 'lo', null, 0);
+      f.graph.setCenterLineExtentRef(f.hostCL, 'hi', null, 8000);
+    });
+    const first = await recomputeSameLine(f, structure);
+    assert.equal(first.changed, true, '撤去が起きる再計算は changed=true');
+    assert.deepEqual(h1000Opening(f.graph), [], '残部の開口梁芯は撤去される');
+    assert.equal(f.graph.shapeMap.has(f.hostCL.id), true, 'host の梁芯は残る');
+    assert.equal((await recomputeSameLine(f, structure)).changed, false, '2 回目は変化なし');
+    assert.equal(secondaryCoveredLength(f.graph, false, 1000, 2000, 5000), 3000, '辺は host の上の小梁で覆われる');
+  });
+}
+
+test('【(k) K3・Q5】openingBeamSourcesFor: 由来 OPENING・SLAB_BEAM の梁芯は host にならない（残部を割らず、辺は従来どおり全長が源）', () => {
+  for (const origin of [BeamAxisOrigin.OPENING, BeamAxisOrigin.SLAB_BEAM]) {
+    const f = makePartialCoverFixture(`proj-k3-q5-${origin}`, 'S造', { host: [3500, 8000], grids: [3500], origin });
+    const h = openingBeamSourcesFor(f.graph, f.project, {}).filter(s => !s.isVertical && s.coord === 1000);
+    assert.deepEqual(h.map(s => [s.lo, s.hi]), [[2000, 5000]], `${origin}: 辺の全長が 1 本の源`);
+  }
+});
 
 // ---- (k) k2: extentTargetFor——開口梁芯の端のつなぎ先は、辺の座標を extent に含む直交の梁芯だけ ----
 // V6000（y:1500〜4500）の下端 H1500 候補。手で組んだ源を autoFillOpeningBeamAxes へ渡して端の参照を見る。

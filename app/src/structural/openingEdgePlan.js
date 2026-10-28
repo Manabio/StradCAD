@@ -10,7 +10,12 @@ const SPAN_TIE_MM = 0.5;
 const FLOAT_EPS = 1e-9;
 
 // 支えの種類の優先（同座標の支えが複数あるときの決定的な選び方）。
-const KIND_RANK = { grid: 0, wall: 1, beam: 2, user: 3, opening: 4 };
+// axis＝由来が USER・OPENING・SLAB_BEAM のどれでもない梁芯（WALL・由来なし。openingBeamAxes.js openingHostsFor）。
+const KIND_RANK = { grid: 0, wall: 1, beam: 2, user: 3, axis: 3, opening: 4 };
+
+// 部分被覆の扱い。既定（省略）＝「区間が重なる host が1本でもあれば辺は梁あり」（在来木造と共有）。
+// 'split'＝host の区間の和集合が辺の全長を覆うときだけ梁あり。覆われない区間は子の辺として配置を計画する。
+const PARTIAL_COVER_MODES = ['split'];
 const kindRank = kind => (kind in KIND_RANK ? KIND_RANK[kind] : 9);
 
 /** 支え同士の決定的な順序（kind 優先 → clId）。 */
@@ -34,6 +39,38 @@ function findCoveringHost(e, hosts, coverTol) {
     }
   }
   return best;
+}
+
+/**
+ * 辺 e の区間 [lo,hi] のうち、e を覆う支え（findCoveringHost と同じ条件）の区間の和集合が覆わない区間を返す
+ * （真ん中の隙間は CL_OVERLAP_TOL_MM 以下、辺の端に接する隙間は coverTol 以下を無いものとする）。splitLo／splitHi＝その端が覆われた区間と接する（割った点）か。
+ * @returns {Array<{lo:number, hi:number, splitLo:boolean, splitHi:boolean}>}
+ */
+function uncoveredRanges(e, hosts, coverTol) {
+  const spans = [];
+  for (const h of hosts) {
+    if (h.isVertical !== e.isVertical) continue;
+    const dist = Math.min(Math.abs(h.coord - e.coord), Math.abs(h.coord - e.target));
+    if (dist > coverTol + FLOAT_EPS) continue;
+    const lo = Math.max(h.lo, e.lo);
+    const hi = Math.min(h.hi, e.hi);
+    if (!(hi - lo > CL_OVERLAP_TOL_MM)) continue;
+    spans.push([lo, hi]);
+  }
+  spans.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const gaps = [];
+  let cursor = e.lo;
+  // 辺の端に接する隙間は coverTol 以下なら隙間に数えない（計画器の被覆の許容と同じ量。host の端が角から coverTol 以内に
+  // ずれた程度で子の辺を作ると、直交する開口の辺が coverTol 以内で covered になって割った点の支えが外の通り芯まで飛ぶ）。
+  // 真ん中の隙間（両側を host が覆う）は CL_OVERLAP_TOL_MM 超で数える。
+  const endTol = Math.max(coverTol, CL_OVERLAP_TOL_MM);
+  for (const [lo, hi] of spans) {
+    const touchesEdgeLo = cursor <= e.lo;
+    if (lo - cursor > (touchesEdgeLo ? endTol : CL_OVERLAP_TOL_MM)) gaps.push({ lo: cursor, hi: lo, splitLo: cursor > e.lo, splitHi: true });
+    if (hi > cursor) cursor = hi;
+  }
+  if (e.hi - cursor > endTol) gaps.push({ lo: cursor, hi: e.hi, splitLo: cursor > e.lo, splitHi: false });
+  return gaps;
 }
 
 const toRef = h => (h.clId === undefined ? { kind: h.kind, coord: h.coord } : { kind: h.kind, coord: h.coord, clId: h.clId });
@@ -82,19 +119,31 @@ function compareTie(a, b) {
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number, kind:string, clId?:string, manual?:boolean}>} hosts
  *   既存の支え線（kind: 'grid'|'wall'|'beam'|'user'|'opening'。lo/hi は ±Infinity 可）。
  *   梁あり（covered）になる辺の覆い host も、直交辺の支えとして呼び出し側が必ず含める。
- * @param {{coverTol:number, bracketEps?:number, canPlace?:(edge:object)=>boolean}} opts
+ * @param {{coverTol:number, bracketEps?:number, canPlace?:(edge:object)=>boolean, partialCover?:'split'}} opts
+ *   partialCover＝部分被覆の扱い。省略（既定）は「区間が重なる host が1本でもあれば梁あり」。'split' は
+ *   host の区間の和集合が辺の全長を覆うときだけ梁ありにし、覆われない区間を子の辺（元の辺のコピー。lo/hi だけ
+ *   区間の値）として配置の対象にする。元の辺は split に入る（covered・placed には入らない）。割った点
+ *   （host の端）に直交する支え（bracketEps 以内）が無い子の辺は unsupported——支えの無い点を越えて梁を伸ばすと、
+ *   隣の host と重なる梁芯ができるため。割らない側の端は従来どおり（支えが辺の外にあってよい）。
+ *   'split' 以外の値は throw。
  * @returns {{
  *   placed: Array<{edge:object, target:number, order:number, span:number, loRef:object, hiRef:object, through:boolean}>,
  *   covered: Array<{edge:object, host:object}>,
  *   excluded: Array<{edge:object}>,
  *   unsupported: Array<{edge:object}>,
+ *   split: Array<{edge:object, host:object, children:object[]}>,
  * }}
+ *   split は partialCover:'split' のときだけ要素が入る（既定では常に空）。
  */
 export function planOpeningEdgeBeams(edges, hosts, opts) {
-  const { coverTol, bracketEps = CL_OVERLAP_TOL_MM, canPlace = () => true } = opts ?? {};
+  const { coverTol, bracketEps = CL_OVERLAP_TOL_MM, canPlace = () => true, partialCover } = opts ?? {};
   // 入力検証: 不正値は黙って誤判定（NaN 比較が常に false になる等）になるため、呼び出し元のバグとして投げる。
   if (!Number.isFinite(coverTol) || coverTol < 0) throw new Error(`開口辺の計画: coverTol が不正です: ${coverTol}`);
   if (!Number.isFinite(bracketEps) || bracketEps < 0) throw new Error(`開口辺の計画: bracketEps が不正です: ${bracketEps}`);
+  if (partialCover !== undefined && !PARTIAL_COVER_MODES.includes(partialCover)) {
+    throw new Error(`開口辺の計画: partialCover が不正です: ${String(partialCover)}`);
+  }
+  const splitMode = partialCover === 'split';
   for (const e of edges) {
     for (const key of ['coord', 'lo', 'hi', 'target']) {
       if (!Number.isFinite(e[key])) throw new Error(`開口辺の計画: 辺の ${key} が有限の数ではありません: ${e[key]}`);
@@ -104,18 +153,33 @@ export function planOpeningEdgeBeams(edges, hosts, opts) {
   const covered = [];
   const excluded = [];
   const unsupported = [];
+  const split = [];
+  // 子の辺ごとの「割った点の側」（割った点には支えが必須）。
+  const splitEnds = new Map();
 
   // 梁あり判定（被覆辺は host 一覧に既にあるため、直交辺の支えとしても残る）。
   const pending = [];
+  const enqueue = (edge) => {
+    if (!canPlace(edge)) excluded.push({ edge });
+    else pending.push(edge);
+  };
   for (const edge of edges) {
     const host = findCoveringHost(edge, hosts, coverTol);
-    if (host) covered.push({ edge, host });
-    else if (!canPlace(edge)) excluded.push({ edge });
-    else pending.push(edge);
+    if (!host) { enqueue(edge); continue; }
+    const gaps = splitMode ? uncoveredRanges(edge, hosts, coverTol) : [];
+    if (gaps.length === 0) { covered.push({ edge, host }); continue; }
+    const children = gaps.map(g => {
+      const child = { ...edge, lo: g.lo, hi: g.hi };
+      splitEnds.set(child, { lo: g.splitLo, hi: g.splitHi });
+      return child;
+    });
+    split.push({ edge, host, children });
+    for (const child of children) enqueue(child);
   }
   // 出力順も入力順に依存させない。
   covered.sort(compareTie);
   excluded.sort(compareTie);
+  split.sort(compareTie);
 
   // 置く順位は配置前の hosts だけで求めた初回スパンで一度だけ決める（支え不足＝Infinity は最後尾）。
   // 同値判定（SPAN_TIE_MM）は推移的でないため比較関数に入れず、スパン昇順に並べたうえで
@@ -143,6 +207,12 @@ export function planOpeningEdgeBeams(edges, hosts, opts) {
       unsupported.push({ edge });
       continue;
     }
+    // 子の辺: 割った点に直交する支えが無いと、梁は点を越えて隣の host と重なる。支えが無ければ架けない。
+    const ends = splitEnds.get(edge);
+    if (ends && ((ends.lo && edge.lo - cur.loRef.coord > bracketEps) || (ends.hi && cur.hiRef.coord - edge.hi > bracketEps))) {
+      unsupported.push({ edge });
+      continue;
+    }
     placed.push({
       edge,
       target: edge.target,
@@ -161,5 +231,5 @@ export function planOpeningEdgeBeams(edges, hosts, opts) {
     });
   }
 
-  return { placed, covered, excluded, unsupported };
+  return { placed, covered, excluded, unsupported, split };
 }

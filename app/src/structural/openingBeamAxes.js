@@ -207,6 +207,10 @@ export function openingEdgeComponents(graph, { riserOf = () => null, belowGraph 
  *       旧梁芯が残って平行2本になるため。踊り場受け梁 LG（role 'landing'）も含めない（踊り場レベルの梁で
  *       床レベルの開口縁梁とは別。リード裁定）。
  *   (d) 由来 USER の梁芯（ユーザーが置いた梁芯。clId＝そのCL）
+ *   (e) 由来が OPENING・SLAB_BEAM・USER のどれでもない梁芯（WALL・由来なし等。kind 'axis'。extent つき）。
+ *       開口梁芯の重複ガード（autoFillOpeningBeamAxes の findOpeningBeamAnchorCL＝SLAB_BEAM 以外の梁芯の extent の重なり）と
+ *       範囲の判定をそろえるため（(k) K3。これが無いと、一部だけ重なる WALL 由来の梁芯を計画器が見落として辺全体を源にし、
+ *       生成側がその梁芯を流用して残部に梁が無くなった）。
  * @param {object} graph
  * @param {ReturnType<typeof rulesFor>} rules
  * @param {Array} rcWallAxisSources
@@ -233,11 +237,13 @@ function openingHostsFor(graph, rules, rcWallAxisSources) {
     });
   }
   for (const cl of beamAxisCenterLines(graph)) {
-    if (cl.beamAxisOrigin !== BeamAxisOrigin.USER) continue;
+    // OPENING（自分の前回の出力を支えにすると振動する）と SLAB_BEAM（スラブ小梁の割付け由来。重複ガードも根拠にしない）は除く。
+    if (cl.beamAxisOrigin === BeamAxisOrigin.OPENING || cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM) continue;
     if (cl.centerLineType !== CenterLineType.VERTICAL && cl.centerLineType !== CenterLineType.HORIZONTAL) continue;
     hosts.push({
       isVertical: cl.centerLineType === CenterLineType.VERTICAL, coord: cl.effectiveValue,
-      lo: cl.extentLo ?? -Infinity, hi: cl.extentHi ?? Infinity, kind: 'user', clId: cl.id,
+      lo: cl.extentLo ?? -Infinity, hi: cl.extentHi ?? Infinity,
+      kind: cl.beamAxisOrigin === BeamAxisOrigin.USER ? 'user' : 'axis', clId: cl.id,
     });
   }
   return hosts;
@@ -246,6 +252,8 @@ function openingHostsFor(graph, rules, rcWallAxisSources) {
 /**
  * 単一の矩形成分（4辺）を計画器へ通し、配置・被覆・除外・支え不足に分けた結果を返す。
  * openingBeamSourcesFor／Diagnostics が連結成分ごとに呼ぶ（二重実装しない）。
+ * 部分被覆は partialCover:'split'（(k) K3）: host の区間の和集合が辺の全長を覆わないとき、覆われない残部を
+ * 子の辺として源にする（在来木造 woodOpeningBeams.js はこの引数を渡さない＝従来どおり）。
  * @param {object} graph
  * @param {ReturnType<typeof rulesFor>} rules
  * @param {Array} edges4 openingEdgeComponents の1成分
@@ -260,6 +268,7 @@ function planForRect(graph, rules, edges4, hosts) {
   const coverTol = Math.max(CL_OVERLAP_TOL_MM, (defaultBeamWidthMm(rules) ?? 0) / 2);
   return planOpeningEdgeBeams(edges, hosts, {
     coverTol,
+    partialCover: 'split',
     canPlace: edge => !graph.excludedWallBeamAxes.has(wallBeamAxisExcludeKey(edge.isVertical, edge.target)),
   });
 }
@@ -332,8 +341,10 @@ export function openingBeamSourcesFor(graph, project, { riserOf = () => null, be
  * @returns {{skipped: 'notApplicable'|'noOpenings'|'nonRectangular'|null, edgeCount?:number,
  *   componentCount?:number, rectangularCount?:number, nonRectangularCount?:number,
  *   beamWidthUnresolvedCount?:number, coveredCount?:number, excludedCount?:number, unsupportedCount?:number,
- *   edges?: Array<{isVertical:boolean, coord:number, target:number,
- *     status:'placed'|'covered'|'excluded'|'unsupported', span?:number, order?:number, loRef?:object, hiRef?:object}>}}
+ *   splitCount?:number,
+ *   edges?: Array<{isVertical:boolean, coord:number, target:number, lo:number, hi:number,
+ *     status:'placed'|'covered'|'excluded'|'unsupported'|'split', span?:number, order?:number, loRef?:object, hiRef?:object}>}}
+ *   status 'split'＝一部だけ host が覆う辺（元の範囲の行）。覆われない残部は子の辺として placed／excluded／unsupported の行で出る。
  */
 export function openingBeamSourcesDiagnostics(graph, project, { riserOf = () => null, belowGraph = null, rules: rulesOverride = undefined } = {}) {
   const rules = rulesOverride ?? rulesFor(effectiveStructure(graph, project));
@@ -350,11 +361,14 @@ export function openingBeamSourcesDiagnostics(graph, project, { riserOf = () => 
   // 辺ごとの判定表（probeの説明用。status＝placed／covered／excluded／unsupported）。
   const table = [];
   for (const p of plans) {
-    const base = e => ({ isVertical: e.isVertical, coord: e.coord, target: e.target });
+    // lo/hi＝辺の範囲（同じ線上に辺が2つあるとき、probe が辺ごとに status を引くため）。
+    // 子の辺（split）は割った残部の範囲、split の行は元の辺の範囲。
+    const base = e => ({ isVertical: e.isVertical, coord: e.coord, target: e.target, lo: e.lo, hi: e.hi });
     for (const x of p.placed) table.push({ ...base(x.edge), status: 'placed', span: x.span, order: x.order, loRef: x.loRef, hiRef: x.hiRef });
     for (const x of p.covered) table.push({ ...base(x.edge), status: 'covered' });
     for (const x of p.excluded) table.push({ ...base(x.edge), status: 'excluded' });
     for (const x of p.unsupported) table.push({ ...base(x.edge), status: 'unsupported' });
+    for (const x of p.split) table.push({ ...base(x.edge), status: 'split' });
   }
   const count = key => plans.reduce((n, p) => n + p[key].length, 0);
   return {
@@ -362,6 +376,7 @@ export function openingBeamSourcesDiagnostics(graph, project, { riserOf = () => 
     edgeCount: edges.length, componentCount: components.length,
     rectangularCount, nonRectangularCount, beamWidthUnresolvedCount,
     coveredCount: count('covered'), excludedCount: count('excluded'), unsupportedCount: count('unsupported'),
+    splitCount: count('split'),
     edges: table,
   };
 }
@@ -405,7 +420,9 @@ function extentTargetFor(graph, src) {
  * @param {ReturnType<typeof openingBeamSourcesFor>} openingSources
  *   重複ガードは全主構造で辺の範囲との重なりも見る（S3-1。(k) k1・2026-10-27 ユーザー裁定 K1 で S造限定（R2）を解いた）。
  *   判定は S造と同じ（端で接するだけは別線＝touchCounts を使わない）。開口梁芯は辺を覆う梁を作るためのもので、
- *   範囲の離れた・端で接するだけの梁芯を流用すると辺に梁が乗らないため。一部だけ重なる梁芯は流用される（既知の限界・K3 で別課題）。
+ *   範囲の離れた・端で接するだけの梁芯を流用すると辺に梁が乗らないため。一部だけ重なる梁芯の残部は、計画器が
+ *   partialCover:'split' で子の辺（残部）を源にするので、流用した梁芯と別の梁芯が残部に生成される（(k) K3。S造系のみ）。
+ *   源の範囲（残部）と流用先の梁芯が重ならないので、この重複ガードは残部の梁芯を流用しない。
  * @returns {import('../core.js').CenterLine[]} 新規作成した梁芯CLの配列
  */
 export function autoFillOpeningBeamAxes(graph, openingSources) {

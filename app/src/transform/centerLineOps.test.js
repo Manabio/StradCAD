@@ -8647,6 +8647,51 @@ test('【k1b】commitCLMoveOp: 開口由来梁芯の行き先に端で接する�
   assert.equal(graph.shapeMap.get(mateId)?.value, 1100, 'redo後も相手はそのまま');
 });
 
+// 限界16 (k)・K3: 一部だけ重なる USER 梁芯の残部（split の子の辺）に立つ開口梁芯も、辺の線の移動で追従し、undo／redo の往復で位置キーが一致する。
+test('【K3】commitCLMoveOp: split の子の辺を持つ開口の辺の線（x=2000）を動かすと、移動→undo→redo の往復で開口梁芯の位置キーが一致し、再計算も収束する', async () => {
+  const GRID = { labeled: true, discipline: Discipline.STRUCT };
+  const ARCH = { labeled: false, discipline: Discipline.ARCH };
+  const project = new Project('proj-k3-undo', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { graph } = project.addPlane(3000, '2階', 'p2');
+  g1.structureOverride = 'S造';
+  graph.structureOverride = 'S造';
+  for (const x of [0, 3500, 8000]) graph.addCenterLine(CenterLineType.VERTICAL, x, GRID);
+  const xa = graph.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH);
+  graph.addCenterLine(CenterLineType.VERTICAL, 5000, ARCH);
+  for (const y of [0, 6000]) graph.addCenterLine(CenterLineType.HORIZONTAL, y, GRID);
+  for (const y of [1000, 3000]) graph.addCenterLine(CenterLineType.HORIZONTAL, y, ARCH);
+  graph.addCenterLine(CenterLineType.HORIZONTAL, 1000, {
+    labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER, extentLo: 3500, extentHi: 8000,
+  });
+  const cells = getAllCells(graph);
+  const inVoid = c => c.x1 >= 2000 && c.x2 <= 5000 && c.y1 >= 1000 && c.y2 <= 3000;
+  graph.addRoom(new Set(cells.filter(inVoid).map(c => c.key))).setFeature(RoomFeature.VOID);
+  graph.addRoom(new Set(cells.filter(c => !inVoid(c)).map(c => c.key)));
+  const keys = () => graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING)
+    .map(cl => `${cl.centerLineType === CenterLineType.VERTICAL ? 'V' : 'H'}:${cl.effectiveValue}:${cl.extentLo}:${cl.extentHi}`).sort();
+  const recompute = async () => {
+    const originalPeek = floorSwapManager.peek;
+    floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
+    try { return await recomputeStructuralForGraph(graph, project, 'S造', g1); } finally { floorSwapManager.peek = originalPeek; }
+  };
+  await recompute();
+  await recompute();
+  const before = keys();
+  assert.ok(before.includes('H:1000:0:3500'), `前提: 残部の開口梁芯が立っている ${JSON.stringify(before)}`);
+
+  xa.pendingDelta = 200; // 2000 → 2200
+  assert.equal(commitCLMoveOp(graph, project, xa, 2000).toast, null);
+  const moved = keys();
+  assert.notDeepEqual(moved, before, '前提: 開口梁芯の位置が動いた');
+  undoManager.undo();
+  assert.deepEqual(keys(), before, 'undo で位置キーが元に戻る');
+  undoManager.redo();
+  assert.deepEqual(keys(), moved, 'redo で位置キーが移動後に一致する');
+  for (let i = 0; i < 3; i++) await recompute();
+  assert.equal((await recompute()).changed, false, '再計算は収束する');
+});
+
 test('【T3・m-4是正】commitCLMoveOp: 下地オーナー壁の乗る開口辺の中心線を移動すると、壁面を逃げた開口由来梁芯が移動量どおり追従する（pendingDelta=0区間の内側で開口源を採る必要がある）', () => {
   const { graph, xa, ya, yb } = makeRcVoidGraphForFollow();
   // 左辺(x=2000)のCL(xa)上に下地オーナー壁を1本張る（backingDepth=120→半幅60、偏芯なし）。
