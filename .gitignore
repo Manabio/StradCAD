@@ -3,5 +3,6 @@ dist/
 .env
 *.local
 問題.md
+問題[0-9]*.md
 debug.log
 .claude/settings.local.json
