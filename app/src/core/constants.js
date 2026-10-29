@@ -312,6 +312,10 @@ export const BeamRole = Object.freeze({
 // S造スラブを支える子梁（小梁）の最大ピッチ(mm)。スパン間をこれ以下の等間隔に割り付ける
 // （structural/slabSecondaryBeamAxes.js。ユーザー指示2026-10-26）。
 export const STEEL_SECONDARY_BEAM_MAX_PITCH_MM = 2500;
+// S造スラブのブレース（丸鋼・L型鋼）の対角長の上限(mm)。ブレース種別ごと。ブレースの割付けで対角が
+// これを超えるベイは割り付けない（ユーザー指示 問題.md 2026-10-29。メモの「7000m/12000m」は mm の誤記）。
+// 使うのは後続のブレース割付け（S7）。
+export const STEEL_BRACE_MAX_DIAGONAL_MM = Object.freeze({ roundBar: 7000, angle: 12000 });
 // スラブ小梁の割付けで、断面がカタログで引けない梁（境界の大梁・子梁）の幅の代わりに使う断面（幅150。
 // ユーザー裁定 2026-10-28「とりあえず H-300×150×6.5×9、幅は150」。structural/slabSecondaryBeamAxes.js）。
 export const SLAB_BEAM_WIDTH_FALLBACK_SECTION_ID = 'STEEL-H300x150';
@@ -328,6 +332,61 @@ export const SlabBayFillSkip = Object.freeze({
 // スラブ小梁の枠キー（PlanGraph.excludedSlabBeamSlots）の名前空間。他の除外集合のキーと区別する前置き
 // （structural/slabSecondaryBeamAxes.js slabBeamSlotKey）。
 export const SLAB_BEAM_SLOT_KEY_PREFIX = 'slab';
+
+// ---- S造スラブの仕様（structural/steelSlabSpec.js。ユーザー指示 問題.md 2026-10-29「S造スラブ指定」）----
+// スラブの種別。共通仕様（StructuralInfo.steelSlabSpec）と個別仕様（SteelSlab.steelSpec）が同じ選択肢を持つ。
+export const SteelSlabKind = Object.freeze({
+  DECK:      'deck',      // デッキプレート（既定）
+  FLAT_DECK: 'flatDeck',  // フラットデッキ
+  BRACE:     'brace',     // ブレース
+  ALC:       'alc',       // ALC
+});
+export const STEEL_SLAB_KIND_LABELS = Object.freeze({
+  [SteelSlabKind.DECK]:      'デッキプレート',
+  [SteelSlabKind.FLAT_DECK]: 'フラットデッキ',
+  [SteelSlabKind.BRACE]:     'ブレース',
+  [SteelSlabKind.ALC]:       'ALC',
+});
+// コンクリート種別（デッキ・フラットデッキ共通）。
+export const SlabConcreteType = Object.freeze({ NORMAL: 'normal', LIGHTWEIGHT: 'lightweight' });
+export const SLAB_CONCRETE_TYPE_LABELS = Object.freeze({
+  [SlabConcreteType.NORMAL]:      '普通',
+  [SlabConcreteType.LIGHTWEIGHT]: '軽量',
+});
+// ブレース種別。
+export const BraceMemberType = Object.freeze({ ROUND_BAR: 'roundBar', ANGLE: 'angle' });
+export const BRACE_MEMBER_TYPE_LABELS = Object.freeze({
+  [BraceMemberType.ROUND_BAR]: '丸鋼',
+  [BraceMemberType.ANGLE]:     'L型鋼',
+});
+// ブレースの規格の選択肢（メモのとおり。L型鋼の区切りは ASCII の '*'）。先頭が L型鋼の既定。
+export const ROUND_BAR_BRACE_SPECS = Object.freeze(['M12', 'M14', 'M16', 'M18', 'M20', 'M22', 'M24']);
+export const ANGLE_BRACE_SPECS = Object.freeze([
+  'L-50*50*4', 'L-50*50*6', 'L-65*65*6', 'L-75*75*6', 'L-75*75*9', 'L-90*90*7', 'L-90*90*10',
+  'L-100*100*7', 'L-100*100*10', 'L-130*130*9', 'L-130*130*12',
+]);
+// ALC のかさ上げ鋼材（リップ溝形鋼 JIS G 3350）の選択肢。区切りは乗算記号 '×'（U+00D7。メモのとおり）。
+export const RAISE_CHANNEL_SPECS = Object.freeze([
+  'C-60×30×10×1.6', 'C-60×30×10×2.3', 'C-75×45×15×1.6', 'C-75×45×15×2.3',
+  'C-100×50×20×1.6', 'C-100×50×20×2.3', 'C-100×50×20×3.2',
+  'C-120×40×20×3.2', 'C-120×60×20×3.2', 'C-120×60×25×4.5',
+  'C-150×50×20×3.2', 'C-150×65×20×3.2', 'C-150×75×20×4.5',
+  'C-200×75×20×3.2', 'C-200×75×25×4.5',
+]);
+// 既定値（メモの * 印。メモに既定の無い項目はリード裁定）。
+export const DEFAULT_DECK_PLATE_CODE = '201600000001';      // QL99-50-10（材料コード帯 2016 の先頭）
+export const DEFAULT_FLAT_DECK_PLATE_CODE = '201700000001'; // JF75ME-07（材料コード帯 2017 の先頭）
+export const DEFAULT_ALC_PLATE_CODE = '301200000008';       // ALCパネル（厚100）（材料コード帯 3012 の先頭）
+export const DEFAULT_SLAB_CONCRETE_THICKNESS_MM = 150;      // コンクリート厚(mm)。リード裁定
+export const DEFAULT_SLAB_TOP_BELOW_FL_MM = 0;              // コンクリート上面・ALC上面の FL−(mm)。0＝FL に揃える。リード裁定
+export const DEFAULT_ROUND_BAR_BRACE_SPEC = 'M16';          // 丸鋼の既定（メモの * 印）
+export const DEFAULT_RAISE_CHANNEL_SPEC = 'C-100×50×20×3.2'; // かさ上げ鋼材の既定（メモの * 印）
+// 材料コードの帯（先頭4桁）。プレート選択肢の絞り込みと保存データの照合に使う。
+export const STEEL_SLAB_DECK_CODE_BAND = '2016';       // 合成スラブ用デッキ
+export const STEEL_SLAB_FLAT_DECK_CODE_BAND = '2017';  // フラットデッキ（調整プレートを含む帯）
+export const STEEL_SLAB_ALC_CODE_BAND = '3012';        // ALC 平パネル
+// フラットデッキ帯のうち「調整プレート」（スラブ本体にならない）の名称の先頭。選択肢から除く。
+export const FLAT_DECK_ADJUST_PLATE_NAME_PREFIX = 'JFPL';
 
 // 注意色（黄）。画面の構造モードで「手動の梁芯に近すぎる自動の梁芯に乗る子梁」を示す
 // （structural/slabSecondaryBeamAxes.js nearUserSlabAxisIds）。由来色（renderer/canvasStyle.js ORIGIN_HUES）
