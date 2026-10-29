@@ -40,6 +40,18 @@ test('【S5d・配線】CommonInfoTab.jsx: 基礎種別の正規化は mutate �
   assert.ok(/foundationStructureFor\(info, hasBasementFloor\(project\.planes\)\)/.test(code));
 });
 
+test('【S5・配線】CommonInfoTab.jsx: 書込みは commitSteelSlabSpec( が onStructureChanged の閉包の中に1回だけ（setSteelSlabSpec( は直接呼ばない）。欄は showSteelSlabSection で出し分ける', () => {
+  const code = tabSrc();
+  assert.equal([...code.matchAll(/setSteelSlabSpec\(/g)].length, 0, 'jsx は setSteelSlabSpec を直接呼ばない（モデルの commitSteelSlabSpec 経由＝カタログ照合なし）');
+  assert.equal([...code.matchAll(/commitSteelSlabSpec\(/g)].length, 1, '書き込み箇所は1つ');
+  assert.ok(/onStructureChanged\(\(\) => commitSteelSlabSpec\(info, patch\)\)/.test(code), '再計算＋undo 1件の経路（onStructureChanged）に乗せる');
+  assert.ok(/loadBuiltin\(\)\.then\([\s\S]*?\}\)\.catch\(/.test(code), '材料の読込み失敗を握る（未読込みのまま続ける）');
+  assert.ok(/FIELD_ERROR_COLOR/.test(code) && !/#c0392b/.test(code));
+  assert.ok(/\{showSlab && \(/.test(code) && /const showSlab = showSteelSlabSection\(graph, project\);/.test(code), '欄は showSteelSlabSection で出し分ける');
+  assert.ok(/planSlabEdit\(/.test(code), '検証はモデル（planSlabEdit）経由');
+  assert.ok(/materials\.length > 0 \? materials : undefined/.test(code), '材料の未読込み（空配列）では照合しない');
+});
+
 test('【S5d・配線】App.jsx: StructuralPanel の onStructureChanged は guardUi(handleStructureChanged)。本体は握りつぶしの .catch を持たない', () => {
   const app = stripCommentLines(readAppSrc());
   assert.ok(/<StructuralPanel[\s\S]{0,900}onStructureChanged=\{guardUi\(handleStructureChanged\)\}/.test(app),

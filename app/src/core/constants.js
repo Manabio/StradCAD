@@ -410,6 +410,8 @@ export const BAY_PICK_FILL = 'rgba(100, 116, 139, 0.08)';
 export const BAY_PICK_STROKE = '#94a3b8';
 /** 未選択ベイの枠線の太さ（画面px。ズームに依らず一定）。 */
 export const BAY_PICK_STROKE_PX = 1;
+/** 入力欄の検証エラー文字色（値 '#dc2626'＝red-600・意味 入力不正・単位 CSS色・根拠 FinishTable.jsx fieldErrorStyle / CeilingPanel.jsx と同色）。 */
+export const FIELD_ERROR_COLOR = '#dc2626';
 // スラブ見出しの小ボタン（スラブ指定・スラブにする・指定を外す・取消）。見出し（fontSize 13）より一段小さくして
 // 件数ラベルと並べる。高さはタッチ操作の下限（約28px）を確保する。色は既存のパネルのボタン（MergeBar）と同じ
 // スレート系——有効=青（選択色 MEMBER_SELECTION_COLOR）、無効・枠=スレート300、文字=スレート600。

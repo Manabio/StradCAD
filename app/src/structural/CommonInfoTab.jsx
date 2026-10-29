@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { observer } from 'mobx-react-lite';
 import {
   DESIGN_STRENGTH_OPTIONS, CONCRETE_TYPE_OPTIONS, MAIN_BAR_OPTIONS, HOOP_BAR_OPTIONS,
@@ -7,6 +7,40 @@ import {
 } from '../ui/StructuralInfoDialog.jsx';
 import { OTHER_STRUCTURE_OPTIONS, hasBasementFloor, foundationStructureFor, normalizeFoundationTypeFor } from './structureRules.js';
 import { commonTabStructureRow, STRUCTURE_ROW, BASEMENT_UNSET_LABEL } from './commonInfoTabModel.js';
+import {
+  showSteelSlabSection, steelSlabCommonRows, planSlabEdit, commitSteelSlabSpec, SLAB_SECTION_TITLE, SLAB_ROW_KIND,
+} from './commonInfoTabSlabModel.js';
+import { CatalogKind, kindDef } from '../catalog/catalogKinds.js';
+import { composeList } from '../catalog/catalogRegistry.js';
+import { FIELD_ERROR_COLOR } from '../core/constants.js';
+
+/** スラブ欄の1行（select / number / 読取専用）。number は入力中は下書きを持ち、blur / Enter で確定する（1打鍵ごとに再計算しない）。 */
+const SlabRow = observer(function SlabRow({ row, draft, onDraft, onCommit, error }) {
+  const shown = draft ?? (row.value ?? '');
+  return (
+    <>
+      {row.kind === SLAB_ROW_KIND.READONLY ? (
+        <TranscribedField label={row.label} note={row.note} value={`${row.value}${row.unit ? ` ${row.unit}` : ''}`} />
+      ) : (
+        <label className="site-row">
+          <span className="site-label">{row.label}</span>
+          {row.kind === SLAB_ROW_KIND.SELECT ? (
+            <select value={row.value} onChange={e => onCommit(row.key, e.target.value)}>
+              {row.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          ) : (
+            <input type="number" min={row.min} value={shown} placeholder={row.placeholder}
+              onChange={e => onDraft(row.key, e.target.value)}
+              onBlur={() => { if (draft !== undefined) onCommit(row.key, draft); }}
+              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+          )}
+          {row.unit && <span className="site-pair-unit">{row.unit}</span>}
+        </label>
+      )}
+      {error && <div className="site-row" role="alert" style={{ color: FIELD_ERROR_COLOR }}>{error}</div>}
+    </>
+  );
+});
 
 /**
  * 共通タブ（旧・構造パレット）。
@@ -19,6 +53,38 @@ export const CommonInfoTab = observer(function CommonInfoTab({ project, graph, o
   const mainStructureRef = useRef(null);
   const hasOverride = graph.structureOverride != null;
   const row = commonTabStructureRow(graph.plane, graph.structureOverride, info);
+
+  // S造スラブ欄。材料（プレート）の選択肢は本体カタログ＋ユーザー追加（仕上げモードと同じ composeList）。
+  // materialData.js は独立チャンクのため kindDef(...).loadBuiltin() の動的 import で読む（読込み前は空＝照合しない）。
+  const [materials, setMaterials] = useState([]);
+  const [slabDrafts, setSlabDrafts] = useState({});
+  const [slabError, setSlabError] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    kindDef(CatalogKind.MATERIAL).loadBuiltin().then(list => {
+      if (alive) setMaterials(composeList(CatalogKind.MATERIAL, list));
+    }).catch(() => {
+      // 読込みに失敗したら未読込み（slabCatalog=undefined）のまま続ける——照合も「カタログに無い」表示もせず、現在値を保つ。
+    });
+    return () => { alive = false; };
+  }, []);
+  // 仕様の実体が替わった（undo/redo・他経路の書込み）ら入力途中の下書きは捨てる。
+  const slabSpecRef = info.steelSlabSpec;
+  useEffect(() => { setSlabDrafts({}); }, [slabSpecRef]);
+  const slabCatalog = materials.length > 0 ? materials : undefined; // 空配列を渡すと全プレートが既定へ正規化されるため未読込みは undefined
+  const showSlab = showSteelSlabSection(graph, project);
+  const slab = showSlab ? steelSlabCommonRows({ spec: info.steelSlabSpec, materials: slabCatalog }) : null;
+
+  // 共通仕様はS造スラブの子梁の割付けに効くため、再計算と undo 1件をまとめる onStructureChanged へ委譲する。
+  // 検証に落ちたら書かず、行の下へ理由を出す。
+  function commitSlab(key, value) {
+    const { error, patch } = planSlabEdit({ spec: info.steelSlabSpec, key, value, materials: slabCatalog });
+    if (error) { setSlabError({ key, message: error }); return; }
+    setSlabError(null);
+    setSlabDrafts(d => Object.fromEntries(Object.entries(d).filter(([k]) => k !== key)));
+    if (patch === null) return; // 値が変わらない確定は書かない
+    onStructureChanged(() => commitSteelSlabSpec(info, patch));
+  }
 
   // 基礎種別の選択肢は構造（地階があれば地階構造、無ければ主構造。foundationStructureFor）で決まる。新しい構造の
   // 選択肢に現在値が無ければ既定へ正規化する（木造⇄非木造の往来で「なし/土間コン」等の不整合な値が残らないように）。
@@ -116,6 +182,19 @@ export const CommonInfoTab = observer(function CommonInfoTab({ project, graph, o
         <SelectRow label="地震地域係数 (Z)" value={info.seismicZoneFactor} options={SEISMIC_ZONE_FACTOR_OPTIONS}
           onChange={v => info.setField('seismicZoneFactor', v)} />
       </section>
+
+      {/* 4. スラブ（S造）。S造の建物、または階の上書きがS造の階だけ */}
+      {showSlab && (
+        <section className="site-section">
+          <div className="site-section-title">4. {SLAB_SECTION_TITLE}</div>
+          {[slab.kindRow, ...slab.rows].map(r => (
+            <SlabRow key={r.key} row={r} draft={slabDrafts[r.key]}
+              onDraft={(k, text) => setSlabDrafts(d => ({ ...d, [k]: text }))}
+              onCommit={commitSlab}
+              error={slabError?.key === r.key ? slabError.message : null} />
+          ))}
+        </section>
+      )}
     </div>
   );
 });
