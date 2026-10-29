@@ -227,11 +227,30 @@ export function resolveSteelSlabSpec(individual, common) {
   return projectToKind(base, base.kind);
 }
 
-/** 個別仕様が共通仕様（同じ種別の項目）と同じなら null（個別を捨てて共通へ戻る）、違えば個別のまま返す。 */
+/**
+ * 個別仕様が共通仕様と同じなら null（個別を捨てて共通へ戻る）、違えば個別のまま返す。
+ * 種別が違う個別は共通と同じ仕様ではない（畳むと種別が共通の種別へ戻ってしまう）ので常に個別のまま。
+ */
 export function foldIntoCommon(individual, common) {
   if (!individual) return null;
   const base = common ?? defaultSteelSlabSpec();
+  if (individual.kind !== base.kind) return individual;
   return steelSlabSpecEquals(individual, projectToKind(base, individual.kind)) ? null : individual;
+}
+
+/** SteelSlab か（steelSpec を持つ実体）。core を引かずに判定する（memberCatalog.js は core.js から import されるため循環を避ける）。 */
+export function isSteelSlabLike(entity) {
+  return entity != null && typeof entity === 'object' && 'steelSpec' in entity;
+}
+
+/**
+ * 部材番号の署名に載せる、SteelSlab の個別仕様の安定文字列。共通に従う（null）は 'common'、個別は toPairs を
+ * `キー:値` で連結する（キー順は ALL_STEEL_SLAB_SPEC_KEYS で固定）。署名の区切り '|' と '=' は含まない。
+ */
+export function steelSlabSignatureValue(steelSpec) {
+  if (!steelSpec) return 'common';
+  const [keys, vals] = toPairs(steelSpec);
+  return keys.map((k, i) => `${k}:${vals[i]}`).join(',');
 }
 
 /**

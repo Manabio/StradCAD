@@ -45,11 +45,13 @@ test('【S5・配線】CommonInfoTab.jsx: 書込みは commitSteelSlabSpec( が 
   assert.equal([...code.matchAll(/setSteelSlabSpec\(/g)].length, 0, 'jsx は setSteelSlabSpec を直接呼ばない（モデルの commitSteelSlabSpec 経由＝カタログ照合なし）');
   assert.equal([...code.matchAll(/commitSteelSlabSpec\(/g)].length, 1, '書き込み箇所は1つ');
   assert.ok(/onStructureChanged\(\(\) => commitSteelSlabSpec\(info, patch\)\)/.test(code), '再計算＋undo 1件の経路（onStructureChanged）に乗せる');
-  assert.ok(/loadBuiltin\(\)\.then\([\s\S]*?\}\)\.catch\(/.test(code), '材料の読込み失敗を握る（未読込みのまま続ける）');
+  assert.ok(/const slabCatalog = useSteelSlabMaterials\(\);/.test(code), '材料は共有フック経由（カードと同じ読込み方式）');
+  const hook = stripComments(fs.readFileSync(path.resolve(import.meta.dirname, 'useSteelSlabMaterials.js'), 'utf8'));
+  assert.ok(/loadBuiltin\(\)\.then\([\s\S]*?\}\)\.catch\(/.test(hook), '材料の読込み失敗を握る（未読込みのまま続ける）');
   assert.ok(/FIELD_ERROR_COLOR/.test(code) && !/#c0392b/.test(code));
   assert.ok(/\{showSlab && \(/.test(code) && /const showSlab = showSteelSlabSection\(graph, project\);/.test(code), '欄は showSteelSlabSection で出し分ける');
   assert.ok(/planSlabEdit\(/.test(code), '検証はモデル（planSlabEdit）経由');
-  assert.ok(/materials\.length > 0 \? materials : undefined/.test(code), '材料の未読込み（空配列）では照合しない');
+  assert.ok(/materials\.length > 0 \? materials : undefined/.test(hook), '材料の未読込み（空配列）では照合しない');
 });
 
 test('【S5d・配線】App.jsx: StructuralPanel の onStructureChanged は guardUi(handleStructureChanged)。本体は握りつぶしの .catch を持たない', () => {

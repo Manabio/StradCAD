@@ -171,14 +171,17 @@ test('foldIntoCommon: 共通と同じ内容の個別は null（共通へ戻る�
   assert.equal(foldIntoCommon(same, com), null);
   const diff = normalizeSteelSlabSpec({ kind: 'deck', concreteThicknessMm: 120 }, INDIVIDUAL);
   assert.equal(foldIntoCommon(diff, com), diff);
-  // 共通の種別と違う個別は、その種別の共通の項目と同じなら戻る（他種別の項目は共通に残っている）
+  // 共通の種別と違う個別は、共通のその種別の項目と同じ値でも個別のまま（畳むと種別が共通の種別へ戻る）
   const flat = normalizeSteelSlabSpec({ kind: 'flatDeck' }, INDIVIDUAL);
-  assert.equal(foldIntoCommon(flat, com), null);
+  assert.equal(foldIntoCommon(flat, com), flat);
+  const alc = projectToKind(com, 'alc');
+  assert.equal(foldIntoCommon(alc, com), alc, '共通デッキ・個別 ALC（共通の ALC 値と同じ）は個別のまま');
+  assert.equal(foldIntoCommon(projectToKind(com, 'deck'), com), null, '共通と同種別・同値なら null');
   assert.equal(foldIntoCommon(null, com), null);
 });
 
 test('foldIntoCommon: braceHeightMm が null(自動) の共通に対し 150 の個別は残る・null の個別は戻る', () => {
-  const com = defaultSteelSlabSpec();
+  const com = { ...defaultSteelSlabSpec(), kind: 'brace' };
   const fixed = normalizeSteelSlabSpec({ kind: 'brace', braceHeightMm: 150 }, INDIVIDUAL);
   assert.equal(foldIntoCommon(fixed, com), fixed);
   const auto = normalizeSteelSlabSpec({ kind: 'brace' }, INDIVIDUAL);

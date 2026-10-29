@@ -34,6 +34,13 @@ import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
 import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
 import { isFoundationPlane } from './drawingDesignation.js';
 import { canAssignSteelSlab, assignSteelSlabBays, releaseSteelSlabBays } from './steelSlabBays.js';
+import { isSteelSlabLike } from './steelSlabSpec.js';
+import {
+  slabCardFields, steelSlabSummary, steelSlabCardView, planSteelSlabCardEdit, planSteelSlabRevert, slabWriteIsNoop,
+  SLAB_CARD_SPEC_TITLE, SLAB_CARD_REVERT_LABEL,
+} from './steelSlabCardModel.js';
+import { useSteelSlabMaterials } from './useSteelSlabMaterials.js';
+import { SlabRow } from './CommonInfoTab.jsx';
 import { prepareSteelSlabPick } from './steelSlabPickInput.js';
 import { slabPickHeader } from './steelSlabPickModel.js';
 import { MEMBER_SELECTION_COLOR } from './memberSelection.js';
@@ -119,10 +126,11 @@ function pushGraphUndo(graph, before) {
 }
 
 // 部材1件分の主要寸法サマリー（カード折りたたみ時の1行表示用）
-function summaryDims(entity, mapName) {
+// S造スラブ（SteelSlab）は基底の厚みを使わず種別名（個別指定なら「（個別）」付き。common＝共通仕様）を出す。
+function summaryDims(entity, mapName, common) {
   switch (mapName) {
     case 'wallMap':    return `t=${entity.thickness}mm`;
-    case 'slabMap':    return `t=${entity.thickness}mm`;
+    case 'slabMap':    return isSteelSlabLike(entity) ? steelSlabSummary(entity, common) : `t=${entity.thickness}mm`;
     case 'footingMap': return `${entity.widthX}×${entity.widthY}mm`;
     case 'beamMap':    return entity.role === 'foundation' ? `b=${entity.beamWidth}×D=${entity.beamDepth}mm` : (entity.sectionDefId ?? '断面未設定');
     default:           return entity.sectionDefId ?? '断面未設定';
@@ -283,6 +291,8 @@ const MergeBar = observer(({ group, graph, project, structure, figureType, selec
 
 export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest = 0, structureMode = null }) => {
   const [expandedKey, setExpandedKey] = useState(null); // `${mapName}:${タグ}` | null
+  // S造スラブカードのプレート選択肢（一覧のマウントにつき 1 回読む。未読込みは undefined）。
+  const slabMaterials = useSteelSlabMaterials();
 
   // 伏図の空白タップ（App.jsx deselectStructuralMembers。カウンタが進む）で展開中のカードを閉じる
   // ——下の「expandedKey==null で onSelectMembers([])」の effect が伏図の強調も消す。初期値0は無視。
@@ -495,6 +505,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               onStructureChanged={onStructureChanged}
               onPendingFocus={setPendingFocusId}
               onColumnWidthNotice={setColumnWidthNotice}
+              slabMaterials={slabMaterials}
               focusRequest={focusRequest}
               onToast={onToast}
               mergeModeActiveAnywhere={!!mergeState}
@@ -548,7 +559,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
           groups={mergeDialogState.groups}
           mapName={mergeDialogState.group.mapName}
           categoryLabel={mergeDialogState.group.label}
-          specLabel={summaryDims}
+          specLabel={(e, m) => summaryDims(e, m, project.structuralInfo.steelSlabSpec)}
           project={project}
           onCancel={() => setMergeDialogState(null)}
           onConfirm={handleConfirmMerge}
@@ -792,7 +803,7 @@ const SlabPickControls = observer(({ structureMode, graph, composition, project,
 const MemberGroupSection = observer(({
   group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onExpandKey, onRequestDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag,
-  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice, structureMode,
+  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice, structureMode, slabMaterials,
 }) => {
   // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
   // structure=null（主構造未設定）は素通し。memberKindOf が null を返す表外部材（軒桁・杭）は structureHasMemberKind=true で残る。
@@ -861,6 +872,7 @@ const MemberGroupSection = observer(({
             onStructureChanged={onStructureChanged}
             onPendingFocus={onPendingFocus}
             onColumnWidthNotice={onColumnWidthNotice}
+            slabMaterials={slabMaterials}
           />
         );
       })}
@@ -874,7 +886,7 @@ const MemberGroupSection = observer(({
 const MemberCard = observer(({
   members, group, graph, composition, project, readOnly, isExpanded, onToggle, onExpandKey, onDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, isMergeAnchor, isMergeSelected, mergeAnchorMaterialType, onToggleMerge, onStartMerge,
-  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice,
+  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice, slabMaterials,
 }) => {
   // 展開中は自分の members（同一タグの全部材）を描画エリアの選択状態として報告する（ユーザー裁定2026-09-16
   // 「構造リストで材を選択すると描画エリアの当該材が選択状態に」）。members 配列は親の再計算で毎回新しい
@@ -919,7 +931,16 @@ const MemberCard = observer(({
     && !rulesFor(structure).foundation.beamSectionField;
   // 「断面」は部材番号の直下（図の上）に置く。残りは図の下に並べる。
   const sectionField = isWoodFoundationBeam ? null : allFields.find(f => f.kind === 'section');
-  const fields = allFields.filter(f => f.kind !== 'section');
+  // S造スラブ（SteelSlab）は RC 用の欄を出さず、下の「仕様」ブロックを出す（steelSlabCardModel.slabCardFields）。
+  const fields = slabCardFields(representative, allFields.filter(f => f.kind !== 'section'));
+  const steelSlabCard = group.mapName === 'slabMap' && isSteelSlabLike(representative);
+  const steelSlabCommon = project.structuralInfo.steelSlabSpec;
+  const slabView = steelSlabCard ? steelSlabCardView({ slab: representative, common: steelSlabCommon, materials: slabMaterials, members }) : null;
+  const [slabDrafts, setSlabDrafts] = useState({});
+  const [slabError, setSlabError] = useState(null);
+  // 仕様の実体が替わった（undo/redo・他経路の書込み）ら入力途中の下書きは捨てる。
+  const slabSpecRef = representative.steelSpec;
+  useEffect(() => { setSlabDrafts({}); setSlabError(null); }, [slabSpecRef]);
   const isFocusTarget = isExpanded && focusRequest?.mapName === group.mapName && focusRequest?.tag === representative.memberNo;
   // 統合選択モード中はこのセクションのアコーディオン展開を無効化する（タップ＝チェック切替に一本化。
   // design-member-numbering-ui.md 3.2）。isExpanded state 自体は保持するが、本文の描画だけ抑止する。
@@ -1120,6 +1141,30 @@ const MemberCard = observer(({
       return;
     }
     commitScopedEdit(mutateFn);
+  }
+
+  // S造スラブカードの仕様編集。個別仕様は子梁の割付けに効くため、書込みは onStructureChanged（再計算＋undo 1 件）の
+  // 閉包の中だけ。カードの全 members（同一番号グループ＝同じ steelSpec）へ同じ値を書く。検証に落ちたら書かず理由を行の下へ出す。
+  // nextSpec: undefined＝書かない／null＝共通へ戻す／object＝個別仕様（steelSlabCardModel.planSteelSlabCardEdit）。
+  function commitSlabSpec(nextSpec) {
+    if (slabWriteIsNoop(members, nextSpec)) return; // 全員がすでにその値なら書かない（混在していれば全員を揃えるため書く）
+    onStructureChanged(() => { for (const m of members) m.setSteelSpec(nextSpec); });
+  }
+  function commitSlabField(key, value) {
+    if (readOnly) return;
+    const { error, nextSpec } = planSteelSlabCardEdit({ slab: representative, common: steelSlabCommon, key, value, materials: slabMaterials, members });
+    if (error) { setSlabError({ key, message: error }); return; }
+    setSlabError(null);
+    setSlabDrafts(d => Object.fromEntries(Object.entries(d).filter(([k]) => k !== key)));
+    if (nextSpec === undefined) return; // 変化なしは書かない
+    commitSlabSpec(nextSpec);
+  }
+  function revertSlabSpec() {
+    if (readOnly) return;
+    const nextSpec = planSteelSlabRevert(representative, members);
+    if (nextSpec === undefined) return;
+    setSlabError(null);
+    commitSlabSpec(nextSpec);
   }
 
   // 「グループに戻す」: 自階分の numberGroupId だけ外して再採番する。台帳（grp.spec/grp.join）は
@@ -1355,7 +1400,7 @@ const MemberCard = observer(({
         <SectionIcon entity={representative} mapName={group.mapName} iconShape={group.iconShape} />
         <span style={{ fontWeight: 700, fontSize: 13, color: '#1e293b' }}>{representative.memberNo ?? UNNUMBERED_TAG}</span>
         <span style={{ fontSize: 12, color: '#64748b' }}>{materialLabel(representative.materialType)}</span>
-        <span style={{ flex: 1, fontSize: 12, color: '#64748b' }}>{summaryDims(representative, group.mapName)}</span>
+        <span style={{ flex: 1, fontSize: 12, color: '#64748b' }}>{summaryDims(representative, group.mapName, steelSlabCommon)}</span>
         {isFocusTarget && focusedMember && (
           <span style={{ fontSize: 11, color: '#2563eb' }}>対象: {memberPositionLabel(focusedMember, group.mapName)}</span>
         )}
@@ -1623,6 +1668,28 @@ const MemberCard = observer(({
               title={`${representative.memberNo ?? group.label}`}
               onClose={() => setStudyOpen(false)}
             />
+          )}
+          {slabView && (
+            <div style={cardRowStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: BAY_PICK_BUTTON_FONT_PX }}>
+                <span style={cardLabelStyle}>{SLAB_CARD_SPEC_TITLE}：</span>
+                <span style={{ color: slabView.individual ? MEMBER_SELECTION_COLOR : BAY_PICK_BUTTON_TEXT_COLOR }}>{slabView.statusLabel}</span>
+                {slabView.showRevert && !readOnly && (
+                  <button type="button" onClick={revertSlabSpec}
+                    style={{ fontSize: BAY_PICK_BUTTON_FONT_PX, color: MEMBER_SELECTION_COLOR, background: 'none', border: `1px solid ${BAY_PICK_BUTTON_DISABLED_COLOR}`, borderRadius: 4, padding: BAY_PICK_BUTTON_PADDING, minHeight: BAY_PICK_BUTTON_MIN_HEIGHT_PX, cursor: 'pointer' }}>
+                    {SLAB_CARD_REVERT_LABEL}
+                  </button>
+                )}
+              </div>
+              {[slabView.kindRow, ...slabView.rows].map(r => (
+                <SlabRow key={r.key} row={r}
+                  draft={slabDrafts[r.key]}
+                  onDraft={(k, text) => setSlabDrafts(d => ({ ...d, [k]: text }))}
+                  onCommit={commitSlabField}
+                  disabled={readOnly}
+                  error={slabError?.key === r.key ? slabError.message : null} />
+              ))}
+            </div>
           )}
           {fields.map(fieldDef => (
             <div key={fieldDef.key} style={cardRowStyle}>

@@ -2,6 +2,7 @@
 // 循環import回避のため core.js への依存を持たない（StructuralMaterialType の値は文字列リテラルで直接扱う）。
 
 import { findSectionEntry, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
+import { isSteelSlabLike, steelSlabSignatureValue } from './steelSlabSpec.js';
 
 // 構造部材の分類定義（A=点定義/B=軸定義/C=面定義/D=垂直面材。F=基礎・G=開口貫通は別分類でこの定数の対象外。
 // CLAUDE.md「構造材定義」セクション参照）
@@ -251,7 +252,14 @@ function readPath(entity, path) {
 }
 function formatValue(v) { return v == null ? '' : String(v); }
 
+// SteelSlab（ベイ指定のS造スラブ）は RC 用の署名項目（厚・配筋）を持たない。署名は個別仕様 steelSpec だけで決める
+// （共通に従う null は全部同じ署名＝1つの番号グループ、個別仕様が違えば別の番号。S6・2026-10-29）。
+function isSteelSlabSignature(entity, mapName) {
+  return mapName === 'slabMap' && isSteelSlabLike(entity);
+}
+
 function buildFieldPairs(entity, mapName) {
+  if (isSteelSlabSignature(entity, mapName)) return [['steelSpec', steelSlabSignatureValue(entity.steelSpec)]];
   return (SIGNATURE_FIELDS_BY_MAP[mapName] ?? []).map(f => [f, formatValue(readPath(entity, f))]);
 }
 
@@ -266,6 +274,9 @@ export function memberSignature(entity, mapName) {
 /** グループが確定した材寸の永続表現（台帳 grp.spec:<gid> の値・conform 時に部材へ書き戻す文字列）。
  *  signature と異なり mapName・記号・材料は含まない（部材側に既に materialType があるため冗長）。 */
 export function memberSpecString(entity, mapName) {
+  // SteelSlab の仕様は部材固有（steelSpec）で、台帳の spec を applySpecToEntity が setField で書き戻すと
+  // steelSpec を文字列で壊すため、台帳には載せない（空＝書き戻しなし）。
+  if (isSteelSlabSignature(entity, mapName)) return '';
   return buildFieldPairs(entity, mapName).map(([k, v]) => `${k}=${v}`).join('|');
 }
 
