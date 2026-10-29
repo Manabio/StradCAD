@@ -556,6 +556,28 @@ export function listSlabBays(graph, project, openingRects = undefined) {
 }
 
 /**
+ * ベイごとの子梁（小梁）の梁芯座標（ブレースの×を小区画へ分けて描くための、ベイの分割線）。
+ * 座標は長辺方向（geom の longLo〜longHi）の内側にある子梁の axisCL.effectiveValue を昇順・重複除去したもの
+ * （bayChildBeams と同じ判定＝ベイ内の同向きの梁芯に乗り短辺と重なる SECONDARY）。
+ * isVertical＝子梁が縦（梁芯が x 一定。分割線は x 座標）。子梁が無いベイは coords が空。
+ * 割付け対象でない構造（buildBays が null）は空 Map。ids が決まらないベイは含めない。
+ * @returns {Map<string, {isVertical:boolean, coords:number[]}>}
+ */
+export function bayChildAxisCoords(graph, project, openingRects = undefined) {
+  const result = new Map();
+  const built = buildBays(graph, project, openingRects);
+  if (!built) return result;
+  for (const bay of built.bays) {
+    if (!bay.ids) continue;
+    const key = bayCellKey(bay.ids);
+    if (result.has(key)) continue;
+    const coords = [...new Set(bayChildBeams(bay).map(b => b.axisCL.effectiveValue))].sort((a, b) => a - b);
+    result.set(key, { isVertical: bay.geom.isVertical, coords });
+  }
+  return result;
+}
+
+/**
  * 手動の梁芯（由来 USER）に近すぎる自動の梁芯（由来 SLAB_BEAM）の id 集合（規則C 案c・S3-3。ユーザー裁定 Q4・R1）。
  * 手動の梁芯を中心線へ吸着して足すと、自動の梁芯とほぼ同じ位置に2本並びうる（Q4: ずれれば両方残る）。
  * 画面で子梁を注意色にするための判定。「近い」＝同じベイ（ownerBay）・同じ向き・梁芯の範囲（extent）が重なり、

@@ -13,7 +13,7 @@ const code = src => src.split('\n').filter(l => !/^\s*(\/\/|\{?\/\*|\*)/.test(l)
 const layer = code(read('StructuralLayer.jsx'));
 
 test('【配線】StructuralLayer.jsx: 近い梁芯の集合は graphComputed 経由（主題階の梁グラフ）で求め、梁の線色だけを CAUTION_COLOR にする', () => {
-  assert.match(layer, /import \{ CAUTION_COLOR \} from '\.\.\/core\/constants\.js';/);
+  assert.match(layer, /import \{[^}]*\bCAUTION_COLOR\b[^}]*\} from '\.\.\/core\/constants\.js';/);
   assert.match(layer, /import \{ nearUserSlabAxisIds \} from '\.\.\/structural\/slabSecondaryBeamAxes\.js';/);
   assert.match(layer, /graphComputed\(beam\.graph, 'nearUserSlabAxisIds', \(\) => nearUserSlabAxisIds\(beam\.graph, project\)\)/);
   assert.match(layer, /const color = cautionAxisIds\?\.has\(b\.axisCL\.id\) \? CAUTION_COLOR : colorOf\(b\.materialType\);/);

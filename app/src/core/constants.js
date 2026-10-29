@@ -395,6 +395,13 @@ export const FLAT_DECK_ADJUST_PLATE_NAME_PREFIX = 'JFPL';
 // ではないのでそちらには足さない。
 export const CAUTION_COLOR = 'hsl(48, 100%, 45%)';
 
+/**
+ * 水平ブレースの×（構造モードの伏図。structural/braceFigure.js）の線色。値 'hsl(210, 20%, 45%)'（くすんだ青灰）・
+ * 意味 ブレース材の対角線・単位 CSS色・根拠 スラブ塗り（部材色を 15% 透過）とも注意色（黄）とも取り違えず、
+ * 梁・柱の線の下で補助線として読める控えめな寒色。
+ */
+export const BRACE_LINE_COLOR = 'hsl(210, 20%, 45%)';
+
 // CL追加ダイアログ（ui/AddCLDialog.jsx）の参照の選択肢のうち、実CLではない合成の選択肢の種類。
 // 実CLの選択肢はこの印（optionKind）を持たない。印の無いものだけが CL 種別の自動導出（centerLineKind）に通る。
 export const AddCLOptionKind = Object.freeze({

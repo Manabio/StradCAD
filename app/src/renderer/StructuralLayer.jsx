@@ -1,8 +1,8 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Rect, Circle, Group, Text } from 'react-konva';
 import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
-import { CAUTION_COLOR } from '../core/constants.js';
-import { BAY_PICK_FILL, BAY_PICK_STROKE, BAY_PICK_STROKE_PX } from '../core/constants.js'; // ベイ選択の描画定数（S4）
+import { CAUTION_COLOR, BRACE_LINE_COLOR, BAY_PICK_FILL, BAY_PICK_STROKE, BAY_PICK_STROKE_PX } from '../core/constants.js'; // BRACE_*＝ブレースの×（S8）・BAY_PICK_*＝ベイ選択（S4）
+import { braceCrossSegments } from '../structural/braceFigure.js';
 import { nearUserSlabAxisIds } from '../structural/slabSecondaryBeamAxes.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
@@ -535,6 +535,11 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   const cautionAxisIds = beam?.graph
     ? graphComputed(beam.graph, 'nearUserSlabAxisIds', () => nearUserSlabAxisIds(beam.graph, project))
     : null;
+  // 水平ブレースの×。スラブ層の graph（主題階）で 1 回だけ導く（S造でない階・ブレース無しは braceCrossSegments が早期に空）。
+  // 共通仕様（structuralInfo.steelSlabSpec は observable.ref）も compute の中で読まれるので computed が追跡する（キーは固定）。
+  const braceCrossList = slab?.graph
+    ? graphComputed(slab.graph, 'braceCross', () => braceCrossSegments(slab.graph, project))
+    : [];
 
   return (
     <>
@@ -697,6 +702,18 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
             />
           );
         }))}
+      </Group>
+      {/* 水平ブレースの×（S8）。ブレース指定のベイを子梁の梁芯で小区画に分けた対角線（structural/braceFigure.js。描画時に導く）。 */}
+      <Group {...groupPropsForStyle(slab?.spec.style)}>
+        {braceCrossList.map((s, i) => (
+          <Line
+            key={`brace:${i}`}
+            points={[s.x1, s.y1, s.x2, s.y2]}
+            stroke={BRACE_LINE_COLOR}
+            strokeWidth={thin}
+            listening={false}
+          />
+        ))}
       </Group>
       {/* S造スラブ指定のベイ選択中（bayPick 非 null）だけ、ベイごとの当たり面を重ねる。listening なのはこの矩形だけ
           （タップは interaction/usePointerInteraction.js が bayKey 属性で拾って toggleBay）。選択済みは構造リストの
