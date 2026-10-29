@@ -14,7 +14,7 @@
 //                            （少ない方の cells が空になれば部屋自体を削除）
 // ================================================================
 
-import { Room, RoomFeature, isShaftFeature, isRoofFeature, restoreCeilingZones } from '@core';
+import { Room, RoomFeature, isShaftFeature, isRoofFeature, restoreCeilingZones, isBayKeyedSlab } from '@core';
 import {
   lostSides, cellInteriorPoint, regionCellsAt, refreshCells, cellBoundsFromKey, worldToCell,
   gridIndexOf, isActiveAcrossRange,
@@ -144,6 +144,8 @@ export function findUnresolvableCells(graph, clId) {
     }
   }
   for (const slab of graph.slabs) {
+    // S造スラブ（ベイキー）は仕上げグリッドの再解釈の対象外（structural-model.md「S造スラブ（ベイ指定）」）。
+    if (isBayKeyedSlab(slab)) continue;
     for (const key of slab.cells) {
       if (isUnresolvableAfterLoss(key)) result.add(key);
     }
@@ -187,6 +189,7 @@ export function collectUnresolvableCells(graph) {
     }
   }
   for (const slab of graph.slabs) {
+    if (isBayKeyedSlab(slab)) continue; // S造スラブ（ベイキー）は再解釈の対象外（同上）
     for (const key of slab.cells) {
       if (isUnresolvable(key)) result.add(key);
     }
@@ -227,7 +230,9 @@ export function collectUnresolvableCells(graph) {
  * @returns {{ unresolved: string[] }} 復元不能（現状維持にした）セルキーの配列
  */
 export function reinterpretSlabsAfterCLRemoval(graph) {
-  const slabs = graph.slabs;
+  // S造スラブ（ベイキー）は対象外: lostSides は通り芯・'center' の CL しか生きた辺と見なさず、開口由来梁芯の辺を
+  // 持つベイキーを誤って「辺を失った」と判定し壊すため（structural-model.md「S造スラブ（ベイ指定）」）。
+  const slabs = graph.slabs.filter(s => !isBayKeyedSlab(s));
   if (slabs.length === 0) return { unresolved: [] };
 
   const unresolved = new Set();

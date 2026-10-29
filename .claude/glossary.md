@@ -540,3 +540,6 @@ sillPackingThicknessMm`）。基礎天端＝土台下端−この値という関
 ## 階設定表（nFL・GL）
 各階の階高とGLを1つの表で編集するダイアログ（フロアドラム長押しで開く）。nFL＝n階の床仕上げ高さ（GLからの高さ＝`elevation`＋GL）、GL＝1FLからの下がり寸法（`Project.glBelow1FlMm`）、最上階の階高＝最上階FL〜軒桁上端。設計意図は`.claude/floor-design.md`「階設定表の確定」。
 **最高の軒の高さ**＝階設定表の軒高の下に出す派生値。屋根が複数あるときの各屋根の軒高（GLから）の最大値。主屋根＝軒高（GL〜軒桁上端）、下屋＝GL＋覆う階のFL＋覆う階の階高＝GL＋屋根セルが付く階のFL（屋根セルは覆う階の1つ上の階に付く）。構造の軒桁は読まない。設計意図は`.claude/floor-design.md`「蹴上の確認・追従と最高の軒の高さ」。
+
+## ベイキー
+S造スラブ（`SteelSlab`）のセルキー。梁で囲まれた区画（ベイ）を4辺の軸CL id `左:上:右:下` で表す（`finish/gridCells.js`のセルキーと同形）。設計意図は`.claude/structural-model.md`「S造スラブ（ベイ指定）」。

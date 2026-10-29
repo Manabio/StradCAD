@@ -249,6 +249,9 @@ const WOOD_RULES = Object.freeze({
   // 手動の梁芯を意匠の線（中心線・補助線）の上に足せ、追加ダイアログで中心線へ吸着できるか。S造だけ true
   // （STEEL_RULES）。木造系は false。
   manualBeamAxisOnArchLines: false,
+  // S造スラブをベイ（梁で囲まれた区画）単位で指定できるか（structural/steelSlabBays.js）。S造だけ true
+  // （STEEL_RULES）。木造系は false。
+  steelSlabAssignment: false,
   // 採番の選択子（(3)）: individualBeamRoles＝標準材（defaultSections.beam）以外の梁を材ごとに個別採番
   // するrole集合（memberCatalog.js isIndividuallyNumbered/memberGroupKey/memberOrderKey が唯一の消費先）。
   // 既定null＝個別採番なし（同一材寸は常に1グループ）。在来木造だけ WOOD_DEPTH_BEAM_ROLES で上書きする。
@@ -311,6 +314,8 @@ const RC_RULES = Object.freeze({
   sashFinDirect: false,
   // 手動の梁芯の意匠の線上への追加・中心線への吸着: RC系は不可（STEEL_RULES だけ上書き）。
   manualBeamAxisOnArchLines: false,
+  // S造スラブのベイ指定: RC系は不可（STEEL_RULES だけ上書き）。
+  steelSlabAssignment: false,
   numbering: Object.freeze({ individualBeamRoles: null, individualColumns: null, columnGroupScope: 'building' }),
   // (2) 主屋根の形状の既定: 非木造（RC・S・SRC。STEEL_RULES は spread で継承）は陸屋根
   // （仕様「非木造の建物の場合、最上階の上の構造R階伏せ図の仕上げは、最上階の外壁に合わせて、自動的に陸屋根」）。
@@ -331,6 +336,9 @@ const STEEL_RULES = Object.freeze({
   // 手動の梁芯を中心線・補助線の上に足せ、追加ダイアログで中心線へ吸着できる（ユーザー裁定2026-10-27:
   // 鉄骨造に限った課題のため S造だけ。slabSecondaryBeams とは別の裁定なので流用しない）。
   manualBeamAxisOnArchLines: true,
+  // S造スラブをベイ単位で指定できる（ユーザー裁定2026-10-29: S造限定。2026-10-27 の manualBeamAxisOnArchLines と
+  // 同じく鉄骨造に限った課題のため S造だけ。SRC造・未定は対象外）。
+  steelSlabAssignment: true,
 });
 
 // 主構造キー → ルールセット。isRigidFrame / baseMaterial は structuralClassification.js の
@@ -352,7 +360,7 @@ export const STRUCTURE_RULES = Object.freeze({
   'S造':           withProfile('S造', STEEL_RULES),
   // SRC造はスラブ小梁の割付け・手動梁芯の意匠の線上への追加の対象外（STEEL_RULES の継承を上書き。
   // ユーザー裁定2026-10-27: SRC・未定は対象外）。
-  'SRC造':         withProfile('SRC造', { ...STEEL_RULES, slabSecondaryBeams: null, manualBeamAxisOnArchLines: false }),
+  'SRC造':         withProfile('SRC造', { ...STEEL_RULES, slabSecondaryBeams: null, manualBeamAxisOnArchLines: false, steelSlabAssignment: false }),
   // 在来木造: 柱120角・梁は材幅＝柱同寸（成は梁成表。既定はその最小120）。framing/backing は在来固有仕様。
   [TRADITIONAL_WOOD_STRUCTURE]: withProfile(TRADITIONAL_WOOD_STRUCTURE,
     { ...WOOD_RULES, isTraditionalWood: true, wallBeamAxes: 'selfAndBelow',
@@ -418,6 +426,8 @@ export const UNSPECIFIED_RULES = Object.freeze({
   slabSecondaryBeams: null,
   // 主構造が未定のときは手動梁芯の意匠の線上への追加を認めない（STEEL_RULES の継承を明示的に false へ）。
   manualBeamAxisOnArchLines: false,
+  // 主構造が未定のときは S造スラブのベイ指定を認めない（STEEL_RULES の継承を明示的に false へ）。
+  steelSlabAssignment: false,
   // 【裁定・2026-10-02】STEEL_RULES（RC_RULES の spread）を継承すると 'flat' になるが、主構造が未定のときは
   // 非木造と決まっていないため木造系と同じ短手の規則（null＝導出）にする。継承に任せず明示して意図を残す。
   mainRoofDefaultShape: null,

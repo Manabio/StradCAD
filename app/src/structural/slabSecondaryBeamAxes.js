@@ -437,6 +437,34 @@ export function slabBeamSlotKeyFor(graph, project, probe) {
 }
 
 /**
+ * ベイキー（S造スラブのセルキー）: ベイの4辺の軸CL id を finish/gridCells.js のセルキーと同じ
+ * `左:上:右:下`（x1Id:y1Id:x2Id:y2Id）で連結する。cellBoundsFromKey がそのまま矩形に解決できる。
+ * 純粋な文字列結合（検証しない）。置き場がここなのは、ベイの計算を持つこのモジュールが steelSlabBays.js から
+ * 依存される側（循環を避ける）のため。steelSlabBays.js が再エクスポートする。
+ * @param {{x1Id:string, y1Id:string, x2Id:string, y2Id:string}} ids
+ * @returns {string}
+ */
+export function bayCellKey({ x1Id, y1Id, x2Id, y2Id }) {
+  return [x1Id, y1Id, x2Id, y2Id].join(':');
+}
+
+/**
+ * 現況のベイの一覧（S造スラブの指定先）。buildBays（唯一のベイ計算）の結果を公開用の形にしたもの。
+ * S造の等ピッチ割付け対象でない構造（buildBays が null）は空配列。ids が決まらないベイは key が null。
+ * skip は buildBays 時点の理由（SHORT_SPAN・OPENING・NO_HOST[辺の軸CLが決まらない]）で、null＝割付け可能。
+ * 割付け（reconcile）が後から付ける NO_HOST・OCCUPIED は含まない（スラブの指定には無関係）。
+ * @param {object} graph
+ * @param {object} project
+ * @param {Array<{x1:number, x2:number, y1:number, y2:number}>} [openingRects] 床開口のセル矩形（省略は開口なし）
+ * @returns {Array<{key:string|null, cell:object, ids:object|null, skip:string|null}>}
+ */
+export function listSlabBays(graph, project, openingRects = undefined) {
+  const built = buildBays(graph, project, openingRects);
+  if (!built) return [];
+  return built.bays.map(b => ({ key: b.ids ? bayCellKey(b.ids) : null, cell: b.cell, ids: b.ids, skip: b.skip }));
+}
+
+/**
  * 手動の梁芯（由来 USER）に近すぎる自動の梁芯（由来 SLAB_BEAM）の id 集合（規則C 案c・S3-3。ユーザー裁定 Q4・R1）。
  * 手動の梁芯を中心線へ吸着して足すと、自動の梁芯とほぼ同じ位置に2本並びうる（Q4: ずれれば両方残る）。
  * 画面で子梁を注意色にするための判定。「近い」＝同じベイ（ownerBay）・同じ向き・梁芯の範囲（extent）が重なり、
