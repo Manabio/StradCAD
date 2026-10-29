@@ -314,7 +314,8 @@ export const BeamRole = Object.freeze({
 export const STEEL_SECONDARY_BEAM_MAX_PITCH_MM = 2500;
 // S造スラブのブレース（丸鋼・L型鋼）の対角長の上限(mm)。ブレース種別ごと。ブレースの割付けで対角が
 // これを超えるベイは割り付けない（ユーザー指示 問題.md 2026-10-29。メモの「7000m/12000m」は mm の誤記）。
-// 使うのは後続のブレース割付け（S7）。
+// 子梁の分割数 n の決定（framingCells.js divideBayByMaxDiagonal）が structureRules.js
+// slabSecondaryBeams.braceMaxDiagonalMm 経由で使う。
 export const STEEL_BRACE_MAX_DIAGONAL_MM = Object.freeze({ roundBar: 7000, angle: 12000 });
 // スラブ小梁の割付けで、断面がカタログで引けない梁（境界の大梁・子梁）の幅の代わりに使う断面（幅150。
 // ユーザー裁定 2026-10-28「とりあえず H-300×150×6.5×9、幅は150」。structural/slabSecondaryBeamAxes.js）。
@@ -327,6 +328,7 @@ export const SlabBayFillSkip = Object.freeze({
   OPENING:    'opening',   // 床開口と重なる
   NO_HOST:    'noHost',    // 端に受ける大梁（通り芯上の primary）が無い
   OCCUPIED:   'occupied',  // ベイ内に既に梁芯がある（冪等・手動の梁芯を尊重）
+  BRACE_NO_DIVISION: 'braceNoDivision', // ブレースのベイで、割らなくても対角長が上限以内（n=1。子梁は不要）
 });
 
 // スラブ小梁の枠キー（PlanGraph.excludedSlabBeamSlots）の名前空間。他の除外集合のキーと区別する前置き

@@ -10,16 +10,18 @@
 // （呼び出し側が onStructureChanged / runInAction で包む。manualMemberAdd.js と同じ流儀）。
 //
 // 純モジュール: react/.jsx/store.js/snap.js を静的 import しない。依存方向は
-// steelSlabBays → slabSecondaryBeamAxes（ベイ計算）・steelSlabSpec（仕様の解決）。循環なし。
+// steelSlabBays → slabSecondaryBeamAxes（ベイ計算）→ steelSlabBayIndex（ベイキー・ブレースのベイ）・steelSlabSpec。循環なし。
 // ================================================================
 import { StructuralMaterialType, isBayKeyedSlab } from '../core.js';
-import { SlabBayFillSkip, SteelSlabKind } from '../core/constants.js';
+import { SlabBayFillSkip } from '../core/constants.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import { isFoundationPlane } from './drawingDesignation.js';
-import { listSlabBays, bayCellKey } from './slabSecondaryBeamAxes.js';
-import { resolveSteelSlabSpec } from './steelSlabSpec.js';
+import { listSlabBays, bayBraceInfos, defaultChildDepthMm } from './slabSecondaryBeamAxes.js';
+import { bayCellKey, braceBayMap } from './steelSlabBayIndex.js';
+import { resolveSteelSlabSpec, resolveBraceHeightMm } from './steelSlabSpec.js';
 
-export { bayCellKey };
+// bayCellKey・braceBayMap は steelSlabBayIndex.js（slabSecondaryBeamAxes.js からも引かれる低層）が本体。
+export { bayCellKey, braceBayMap };
 
 /**
  * この階で S造スラブをベイ指定できるか。主構造の選択子（steelSlabAssignment＝S造だけ）が真、かつ
@@ -93,16 +95,21 @@ export function releaseSteelSlabBays(graph, keys) {
 }
 
 /**
- * ブレース指定のベイ → ブレース部材種別（BraceMemberType）。実効仕様（個別＞共通）の種別がブレースのベイだけ。
- * 現在のベイかどうかは見ない（保持しているキーをそのまま返す）。
- * @returns {Map<string, string>}
+ * ブレース設置高さの解決結果（スラブカードの読取専用の注記用。S7）。ブレースの高さは子梁成に依る
+ * （null＝自動は子梁成の1/2、指定は 0〜子梁成に丸める）。スラブが複数ベイを持つときは**各ベイの子梁成の最小**で
+ * 解決する（どのベイでも子梁成を超えない値を示すため。リード裁定）。ベイが現況に無い（辺のCLが消えた等）ときは
+ * そのベイを数えず、全部無ければ主構造の既定の梁断面→フォールバック断面の成。
+ * exceededBays＝対角線長が上限を超えるベイ数（短辺が上限以上で 2500 ピッチへ戻るベイ・U1 で n 固定のベイ）。
+ * @returns {{childDepthMm:number, resolvedMm:number, clamped:boolean, exceededBays:number}} clamped＝指定値が子梁成を超えて丸められた
  */
-export function braceBayMap(graph, project) {
-  const map = new Map();
-  for (const slab of steelSlabs(graph)) {
-    const spec = resolveSteelSlabSpec(slab.steelSpec, project.structuralInfo?.steelSlabSpec);
-    if (spec.kind !== SteelSlabKind.BRACE) continue;
-    for (const key of slab.cells) map.set(key, spec.braceMemberType);
-  }
-  return map;
+export function steelSlabBraceHeightInfo(graph, project, slab) {
+  const spec = resolveSteelSlabSpec(slab.steelSpec, project.structuralInfo?.steelSlabSpec);
+  const infos = [...bayBraceInfos(graph, project, slab.cells).values()];
+  const childDepthMm = infos.length > 0 ? Math.min(...infos.map(i => i.childDepthMm)) : defaultChildDepthMm(graph, project);
+  const resolvedMm = resolveBraceHeightMm(spec, childDepthMm);
+  const requested = spec.braceHeightMm;
+  return {
+    childDepthMm, resolvedMm, clamped: requested != null && requested > childDepthMm,
+    exceededBays: infos.filter(i => i.exceeded).length,
+  };
 }

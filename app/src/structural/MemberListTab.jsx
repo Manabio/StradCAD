@@ -33,8 +33,8 @@ import { memberFigure } from './sectionFigure/memberFigures.js';
 import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
 import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
 import { isFoundationPlane } from './drawingDesignation.js';
-import { canAssignSteelSlab, assignSteelSlabBays, releaseSteelSlabBays } from './steelSlabBays.js';
-import { isSteelSlabLike } from './steelSlabSpec.js';
+import { canAssignSteelSlab, assignSteelSlabBays, releaseSteelSlabBays, steelSlabBraceHeightInfo } from './steelSlabBays.js';
+import { isSteelSlabLike, resolveSteelSlabSpec, SteelSlabKind } from './steelSlabSpec.js';
 import {
   slabCardFields, steelSlabSummary, steelSlabCardView, planSteelSlabCardEdit, planSteelSlabRevert, slabWriteIsNoop,
   SLAB_CARD_SPEC_TITLE, SLAB_CARD_REVERT_LABEL,
@@ -935,7 +935,10 @@ const MemberCard = observer(({
   const fields = slabCardFields(representative, allFields.filter(f => f.kind !== 'section'));
   const steelSlabCard = group.mapName === 'slabMap' && isSteelSlabLike(representative);
   const steelSlabCommon = project.structuralInfo.steelSlabSpec;
-  const slabView = steelSlabCard ? steelSlabCardView({ slab: representative, common: steelSlabCommon, materials: slabMaterials, members }) : null;
+  // ブレースのスラブだけ、設置高さの解決結果（子梁成→自動/丸め）を注記する（読取専用。S7）。
+  const braceInfo = isExpanded && steelSlabCard && resolveSteelSlabSpec(representative.steelSpec, steelSlabCommon).kind === SteelSlabKind.BRACE
+    ? steelSlabBraceHeightInfo(graph, project, representative) : null;
+  const slabView = steelSlabCard ? steelSlabCardView({ slab: representative, common: steelSlabCommon, materials: slabMaterials, members, braceInfo }) : null;
   const [slabDrafts, setSlabDrafts] = useState({});
   const [slabError, setSlabError] = useState(null);
   // 仕様の実体が替わった（undo/redo・他経路の書込み）ら入力途中の下書きは捨てる。

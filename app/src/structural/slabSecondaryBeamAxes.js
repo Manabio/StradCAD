@@ -5,6 +5,9 @@
 // 既存の小梁生成（structuralAutoFill.js autoFillSecondaryBeams）が梁芯から作る。
 // 座標は「フランジ間（あき）が等しい」位置（ユーザー指示2026-10-28。framingCells.js clearGapDivisionCoords。
 // 梁幅は断面カタログから引き、材寸が変わるたびの再計算で追従する）。分割数 n は従来どおり。
+// ブレース指定のベイ（S造スラブの仕様がブレース）は分割数 n だけ別規則: ブレース長（対角線長）が上限
+// （丸鋼7000・L型鋼12000）以下になる最小の n（framingCells.js divideBayByMaxDiagonal）。座標はフランジ間のまま。
+// 枠の記録のあるベイは種別が変わっても記録の n に固定（裁定U1）。
 // 在来木造の床梁（woodAutoFill.js autoFillWoodFloorBeams）は従来の等分（framingCells.js divideBayEqually）のまま。
 //
 // 再計算のたびに現況のベイへ割り直す（reconcileSlabSecondaryBeamAxes）。由来 SLAB_BEAM は「未編集の自動梁芯」の
@@ -19,8 +22,9 @@ import { BeamRole, CL_OVERLAP_TOL_MM, SlabBayFillSkip, SlabSecondaryBeamPlacemen
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { beamAxisCenterLines } from '../core/centerLineKindPolicy.js';
 import { findHostBeam, exclusionKeyReferencesCL, PIN_ROLES } from '../core/structuralEntities.js';
-import { bayGeometry, beamGridCells, divideBayEqually, clearGapDivisionCoords } from './framingCells.js';
+import { bayGeometry, beamGridCells, divideBayEqually, divideBayByMaxDiagonal, braceDiagonalExceeded, clearGapDivisionCoords } from './framingCells.js';
 import { findSectionEntry } from './sectionCatalog.js';
+import { bayCellKey, braceBayMap } from './steelSlabBayIndex.js';
 import { isProtectedWallBeamAxis, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import { isGroupDrivenMember } from './memberGroups.js';
@@ -68,16 +72,28 @@ export function parseSlabBeamSlotKey(key) {
  * @param {Array<{isVertical:boolean, coord:number, lo:number, hi:number}>} lines
  * @param {Array<{x1:number, x2:number, y1:number, y2:number}>} openingRects 床開口の矩形
  * @param {number} maxPitchMm
+ * @param {((cell:object) => ({kind:'pitch'}|{kind:'diagonal', maxDiagonalMm:number}|null))|null} [policyForCell]
+ *   ベイごとの分割数の方針（S7）。null・省略・null を返すベイは従来の最大ピッチ規則。'diagonal'＝ブレースのベイ:
+ *   対角線長が maxDiagonalMm 以下になる分割数（framingCells.js divideBayByMaxDiagonal）。割らなくてよければ
+ *   BRACE_NO_DIVISION、短辺が上限以上で成立しなければ最大ピッチ規則へ戻す。
  * @returns {Array<{cell:object, isVertical:boolean, coords:number[], shortLo:number, shortHi:number}|{cell:object, skip:string}>}
  */
-export function planSlabSecondaryBeamAxes(lines, openingRects, maxPitchMm) {
+export function planSlabSecondaryBeamAxes(lines, openingRects, maxPitchMm, policyForCell = null) {
   return beamGridCells(lines).map((cell) => {
     // セル内部と面積で重なる開口（辺で接するだけは重ならない）。
     const overlapsOpening = openingRects.some(r =>
       Math.min(cell.x2, r.x2) - Math.max(cell.x1, r.x1) > CL_OVERLAP_TOL_MM &&
       Math.min(cell.y2, r.y2) - Math.max(cell.y1, r.y1) > CL_OVERLAP_TOL_MM);
     if (overlapsOpening) return { cell, skip: SlabBayFillSkip.OPENING };
-    const division = divideBayEqually(cell, maxPitchMm);
+    const policy = policyForCell ? policyForCell(cell) : null;
+    let division;
+    if (policy?.kind === 'diagonal') {
+      const byDiagonal = divideBayByMaxDiagonal(cell, policy.maxDiagonalMm);
+      if (byDiagonal === null) return { cell, skip: SlabBayFillSkip.BRACE_NO_DIVISION };
+      division = byDiagonal.fallback ? divideBayEqually(cell, maxPitchMm) : byDiagonal;
+    } else {
+      division = divideBayEqually(cell, maxPitchMm);
+    }
     if (!division) return { cell, skip: SlabBayFillSkip.SHORT_SPAN };
     const { isVertical, coords, shortLo, shortHi } = division;
     return { cell, isVertical, coords, shortLo, shortHi };
@@ -324,15 +340,29 @@ function buildBays(graph, project, openingRects = undefined) {
   const boundaryAxisIds = new Set(boundaryBeams.map(b => b.axisCL.id));
   const gridIds = new Set([...graph.gridXs, ...graph.gridYs].map(g => g.id));
 
-  const bays = planSlabSecondaryBeamAxes(lines, openingRects ?? [], spec.maxPitchMm).map((plan) => {
+  const cellIds = cell => ({
+    x1Id: edgeAxisId(lines, gridIds, true, cell.x1, cell.y1, cell.y2),
+    x2Id: edgeAxisId(lines, gridIds, true, cell.x2, cell.y1, cell.y2),
+    y1Id: edgeAxisId(lines, gridIds, false, cell.y1, cell.x1, cell.x2),
+    y2Id: edgeAxisId(lines, gridIds, false, cell.y2, cell.x1, cell.x2),
+  });
+  // ブレース指定のベイは対角線長の上限で分割数を決める（S7）。ベイキーはベイの ids と同じ経路（cellIds）で組む。
+  const braceTypes = braceBayMap(graph, project);
+  const policyForCell = braceTypes.size === 0 ? null : (cell) => {
+    const ids = cellIds(cell);
+    if (!Object.values(ids).every(id => id != null)) return null;
+    // 裁定U1: 枠の記録のあるベイは記録の n に固定する。方針は記録の無いベイの既定の n にだけ効かせる
+    // （効かせると n=1 の BRACE_NO_DIVISION が記録より先に効き、管理中の梁芯が撤去される）。
+    const dir = bayGeometry(cell).isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+    if (recordedSlots(graph, { ids, dir }).length > 0) return null;
+    const maxDiagonalMm = spec.braceMaxDiagonalMm?.[braceTypes.get(bayCellKey(ids))];
+    return maxDiagonalMm ? { kind: 'diagonal', maxDiagonalMm } : null;
+  };
+
+  const bays = planSlabSecondaryBeamAxes(lines, openingRects ?? [], spec.maxPitchMm, policyForCell).map((plan) => {
     const { cell } = plan;
     const geom = bayGeometry(cell);
-    const ids = {
-      x1Id: edgeAxisId(lines, gridIds, true, cell.x1, cell.y1, cell.y2),
-      x2Id: edgeAxisId(lines, gridIds, true, cell.x2, cell.y1, cell.y2),
-      y1Id: edgeAxisId(lines, gridIds, false, cell.y1, cell.x1, cell.x2),
-      y2Id: edgeAxisId(lines, gridIds, false, cell.y2, cell.x1, cell.x2),
-    };
+    const ids = cellIds(cell);
     const complete = Object.values(ids).every(id => id != null);
     // 短辺の両端の通り芯（子梁が架かる先。梁芯の extent が参照する）。
     const crossGrids = geom.isVertical ? graph.gridYs : graph.gridXs;
@@ -366,6 +396,80 @@ function overlapsShortSide(b, geom) {
   return Math.min(Math.max(a, c), geom.shortHi) - Math.max(Math.min(a, c), geom.shortLo) > CL_OVERLAP_TOL_MM;
 }
 
+// ベイの子梁（SECONDARY）。ベイ内の同向きの梁芯に乗り、範囲が短辺と重なるもの。ベイを横切る手動梁芯の隣のベイの区間の小梁は含めない。
+function bayChildBeams(bay) {
+  const { graph, boundaryAxisIds } = bay.layoutInput;
+  const childAxisIds = new Set(beamAxesInBay(graph, bay.cell, boundaryAxisIds)
+    .filter(cl => cl.centerLineType === bay.dir).map(cl => cl.id));
+  return graph.beams.filter(b => b.role === BeamRole.SECONDARY && childAxisIds.has(b.axisCL.id) && overlapsShortSide(b, bay.geom));
+}
+
+// 子梁の成（mm）。断面がカタログで引けないときは SLAB_BEAM_WIDTH_FALLBACK_SECTION_ID の成。末尾の 0 は保険。
+function beamDepth(beam) {
+  return findSectionEntry(beam?.sectionDefId)?.height
+    ?? findSectionEntry(SLAB_BEAM_WIDTH_FALLBACK_SECTION_ID)?.height ?? 0;
+}
+
+/**
+ * 子梁がまだ無いベイの成の既定（mm）: 主構造の既定の梁断面の成（引けなければフォールバック断面）。
+ * ブレースの設置高さ（steelSlabSpec.js resolveBraceHeightMm）の基準。
+ */
+export function defaultChildDepthMm(graph, project) {
+  return beamDepth({ sectionDefId: rulesFor(effectiveStructure(graph, project)).defaultSections.beam });
+}
+
+/**
+ * ベイ bayKey の子梁成（mm）＝ベイ内の子梁（小梁）の成の最大（混在は最大。幅と同じ流儀）。子梁が無ければ
+ * 主構造の既定の梁断面の成（defaultChildDepthMm）。現況のベイでない・S造の割付け対象でない構造なら null。
+ * ブレースの設置高さ（null＝自動は子梁成の1/2）の基準で、スラブカードの注記が読む。
+ * @returns {number|null}
+ */
+export function bayChildDepthMm(graph, project, bayKey) {
+  return bayChildDepthsMm(graph, project, [bayKey]).get(bayKey) ?? null;
+}
+
+/**
+ * bayChildDepthMm の複数キー版（buildBays を 1 回だけ作る）。現況のベイでないキーは Map に含めない。
+ * @returns {Map<string, number>}
+ */
+export function bayChildDepthsMm(graph, project, bayKeys) {
+  const depths = new Map();
+  for (const [key, info] of bayBraceInfos(graph, project, bayKeys)) depths.set(key, info.childDepthMm);
+  return depths;
+}
+
+/**
+ * ベイごとの子梁成と、ブレースの対角線長の上限超過（スラブカードの注記用）を buildBays 1 回で解決する。
+ * exceeded＝ブレース指定のベイで (a) 短辺が上限以上（どう割っても成立せず 2500 ピッチ規則へ戻る）、または
+ * (b) 裁定U1 で記録の n に固定されていて小区画の対角線長が上限を超える。現況のベイでないキーは含めない。
+ * @returns {Map<string, {childDepthMm:number, exceeded:boolean}>}
+ */
+export function bayBraceInfos(graph, project, bayKeys) {
+  const infos = new Map();
+  const built = buildBays(graph, project);
+  if (!built) return infos;
+  const wanted = new Set(bayKeys);
+  const braceTypes = braceBayMap(graph, project);
+  const limits = rulesFor(effectiveStructure(graph, project)).slabSecondaryBeams.braceMaxDiagonalMm;
+  for (const bay of built.bays) {
+    if (!bay.ids) continue;
+    const key = bayCellKey(bay.ids);
+    if (!wanted.has(key) || infos.has(key)) continue;
+    const depths = bayChildBeams(bay).map(beamDepth);
+    const childDepthMm = depths.length > 0 ? Math.max(...depths) : defaultChildDepthMm(graph, project);
+    const maxDiagonalMm = limits?.[braceTypes.get(key)];
+    let exceeded = false;
+    if (maxDiagonalMm) {
+      const recorded = recordedSlots(graph, bay);
+      exceeded = recorded.length > 0
+        ? braceDiagonalExceeded(bay.cell, Math.min(...recorded.map(s => s.n)), maxDiagonalMm)
+        : bay.geom.shortHi - bay.geom.shortLo >= maxDiagonalMm;
+    }
+    infos.set(key, { childDepthMm, exceeded });
+  }
+  return infos;
+}
+
 // ベイの割付けに使う「面」と子梁の幅。bayTargetCoords が初めて必要としたときに1ベイ1回だけ計算して bay.layout に保持する
 // （描画の computed や枠キーの計算で無駄に走らせない）。
 //  - faceLo/faceHi＝長辺の両端の内側の面。長辺の端（geom.longLo/longHi。通り芯の位置）に軸CLが乗る子梁と平行な
@@ -378,19 +482,15 @@ function overlapsShortSide(b, geom) {
 // 子梁の梁芯は材芯に置く（子梁は柱芯オフセット・偏芯が 0＝axisValue が CL の値と一致）。
 function bayLayout(bay) {
   if (bay.layout) return bay.layout;
-  const { graph, project, boundaryBeams, boundaryAxisIds } = bay.layoutInput;
-  const { geom, cell, dir } = bay;
+  const { graph, project, boundaryBeams } = bay.layoutInput;
+  const { geom } = bay;
   const fallbackHalf = beamFlangeWidth(null) / 2;
   const parallelAt = (longCoord) => boundaryBeams.filter(b => b.isVertical === geom.isVertical &&
     Math.abs(b.axisCL.effectiveValue - longCoord) <= CL_OVERLAP_TOL_MM && overlapsShortSide(b, geom));
   const lo = parallelAt(geom.longLo), hi = parallelAt(geom.longHi);
   const faceLo = lo.length > 0 ? Math.max(...lo.map(b => b.axisValue + beamFlangeWidth(b) / 2)) : geom.longLo + fallbackHalf;
   const faceHi = hi.length > 0 ? Math.min(...hi.map(b => b.axisValue - beamFlangeWidth(b) / 2)) : geom.longHi - fallbackHalf;
-  const childAxisIds = new Set(beamAxesInBay(graph, cell, boundaryAxisIds)
-    .filter(cl => cl.centerLineType === dir).map(cl => cl.id));
-  const childWidths = graph.beams
-    .filter(b => b.role === BeamRole.SECONDARY && childAxisIds.has(b.axisCL.id) && overlapsShortSide(b, geom))
-    .map(beamFlangeWidth);
+  const childWidths = bayChildBeams(bay).map(beamFlangeWidth);
   const defaultSection = rulesFor(effectiveStructure(graph, project)).defaultSections.beam;
   const child = childWidths.length > 0
     ? Math.max(...childWidths) : beamFlangeWidth({ sectionDefId: defaultSection });
@@ -436,17 +536,8 @@ export function slabBeamSlotKeyFor(graph, project, probe) {
   return slotKeyIn(graph, bay, probe.coord);
 }
 
-/**
- * ベイキー（S造スラブのセルキー）: ベイの4辺の軸CL id を finish/gridCells.js のセルキーと同じ
- * `左:上:右:下`（x1Id:y1Id:x2Id:y2Id）で連結する。cellBoundsFromKey がそのまま矩形に解決できる。
- * 純粋な文字列結合（検証しない）。置き場がここなのは、ベイの計算を持つこのモジュールが steelSlabBays.js から
- * 依存される側（循環を避ける）のため。steelSlabBays.js が再エクスポートする。
- * @param {{x1Id:string, y1Id:string, x2Id:string, y2Id:string}} ids
- * @returns {string}
- */
-export function bayCellKey({ x1Id, y1Id, x2Id, y2Id }) {
-  return [x1Id, y1Id, x2Id, y2Id].join(':');
-}
+// ベイキーの組み立て（本体は steelSlabBayIndex.js。循環を避けるため低層に置く）。従来どおりここからも引ける。
+export { bayCellKey };
 
 /**
  * 現況のベイの一覧（S造スラブの指定先）。buildBays（唯一のベイ計算）の結果を公開用の形にしたもの。

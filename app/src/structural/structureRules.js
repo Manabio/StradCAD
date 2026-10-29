@@ -20,7 +20,7 @@ import { STRUCTURES, STRUCTURE_PROFILES, structureProfile } from './structuralCl
 import { DEFAULT_SECTION_BY_MATERIAL, DEFAULT_COLUMN_SECTION_BY_MATERIAL, DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { BackingClass } from '../finish/materials/backingClass.js';
 import { findSectionEntry, woodRectSectionKey, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
-import { RoofShape, SlabSecondaryBeamPlacement, STEEL_SECONDARY_BEAM_MAX_PITCH_MM } from '../core/constants.js';
+import { RoofShape, SlabSecondaryBeamPlacement, STEEL_SECONDARY_BEAM_MAX_PITCH_MM, STEEL_BRACE_MAX_DIAGONAL_MM } from '../core/constants.js';
 
 /** 主構造未指定を表す値（MAIN_STRUCTURE_OPTIONS[0]。core/structuralInfo.js の既定・FlatBuffers復元の既定もこれ）。 */
 export const UNSPECIFIED_STRUCTURE = '未定';
@@ -332,6 +332,8 @@ const STEEL_RULES = Object.freeze({
   slabSecondaryBeams: Object.freeze({
     kind: SlabSecondaryBeamPlacement.EQUAL_PITCH,
     maxPitchMm: STEEL_SECONDARY_BEAM_MAX_PITCH_MM,
+    // ブレース指定のベイは、ブレース長（対角線長）がこの上限以下になるよう分割数を決める（種別ごと。S7・2026-10-29）。
+    braceMaxDiagonalMm: STEEL_BRACE_MAX_DIAGONAL_MM,
   }),
   // 手動の梁芯を中心線・補助線の上に足せ、追加ダイアログで中心線へ吸着できる（ユーザー裁定2026-10-27:
   // 鉄骨造に限った課題のため S造だけ。slabSecondaryBeams とは別の裁定なので流用しない）。

@@ -54,7 +54,8 @@ test('structureRules（スラブ小梁の割付け・2026-10-26）: slabSecondar
     assert.equal(rulesFor(key).slabSecondaryBeams, null, `${key}: slabSecondaryBeams`);
   }
   assert.equal(UNSPECIFIED_RULES.slabSecondaryBeams, null, '未指定はnull（STEEL_RULES継承を上書き）');
-  assert.deepEqual({ ...rulesFor('S造').slabSecondaryBeams }, { kind: 'equalPitch', maxPitchMm: 2500 });
+  assert.deepEqual({ ...rulesFor('S造').slabSecondaryBeams },
+    { kind: 'equalPitch', maxPitchMm: 2500, braceMaxDiagonalMm: { roundBar: 7000, angle: 12000 } });
 });
 
 test('structureRules（F-3・2026-09-19裁定）: wallFreeEndは在来木造だけcolumnWrap、他はflush', () => {

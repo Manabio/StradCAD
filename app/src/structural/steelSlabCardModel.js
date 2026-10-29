@@ -35,12 +35,31 @@ export function steelSlabSummary(slab, common) {
 }
 
 /**
+ * ブレース設置高さの注記（読取専用）。clamped（指定値が子梁成を超えた）は「上限 N に丸め」、
+ * 自動（null）は「子梁成 N → 自動 M」、指定が収まっているときは「子梁成 N → M」。
+ * @param {{childDepthMm:number, resolvedMm:number, clamped:boolean}} info steelSlabBays.js steelSlabBraceHeightInfo
+ * @param {object} spec 実効仕様
+ */
+export function braceHeightNote(info, spec) {
+  const height = info.clamped
+    ? `上限 ${info.childDepthMm} に丸め`
+    : `子梁成 ${info.childDepthMm} → ${spec?.braceHeightMm == null ? '自動 ' : ''}${info.resolvedMm}`;
+  // 対角線長が上限を超えるベイ（短辺が上限以上・U1 の n 固定）があれば同じ行へ足す。
+  return info.exceededBays > 0 ? `${height}／対角線長が上限を超えるベイ ${info.exceededBays}（短辺が上限以上、または記録で分割数が固定）` : height;
+}
+
+/**
  * 仕様ブロックの表示内容。行は実効仕様（個別があれば個別、無ければ共通を種別へ絞ったもの）から作る。
+ * braceInfo（steelSlabBraceHeightInfo の結果。ブレースのスラブだけ渡す）があれば、設置高さの行に注記（note）を付ける。
  * @returns {{ individual: boolean, statusLabel: string, kindRow: object, rows: object[], showRevert: boolean }}
  */
-export function steelSlabCardView({ slab, common, materials, members }) {
+export function steelSlabCardView({ slab, common, materials, members, braceInfo = null }) {
   const individual = slab?.steelSpec != null;
-  const { kindRow, rows } = steelSlabCommonRows({ spec: resolveSteelSlabSpec(slab?.steelSpec, common), materials });
+  const spec = resolveSteelSlabSpec(slab?.steelSpec, common);
+  const { kindRow, rows: baseRows } = steelSlabCommonRows({ spec, materials });
+  const rows = braceInfo
+    ? baseRows.map(r => (r.key === 'braceHeightMm' ? { ...r, note: braceHeightNote(braceInfo, spec) } : r))
+    : baseRows;
   const mixed = slabMembersMixed(members ?? [slab]);
   return {
     individual,

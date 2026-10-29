@@ -33,6 +33,22 @@ test('【S6・配線】カードの readOnly では SlabRow を無効化し、�
   assert.ok(!/'#2563eb'|'#93c5fd'|'#64748b'/.test(code.slice(code.indexOf('{slabView && ('), code.indexOf('{fields.map'))), '仕様ブロックに色リテラルを直書きしない');
 });
 
+test('【S7・配線】ブレースのカードは展開中だけ設置高さの解決結果を計算して view へ渡し、SlabRow は読取専用以外でも note を出す', () => {
+  const code = read('MemberListTab.jsx');
+  assert.ok(/steelSlabBraceHeightInfo\(graph, project, representative\)/.test(code), '計算は steelSlabBays の純関数');
+  assert.ok(/isExpanded && steelSlabCard && resolveSteelSlabSpec\(representative\.steelSpec, steelSlabCommon\)\.kind === SteelSlabKind\.BRACE/.test(code),
+    '展開中のブレースのカードだけ（折りたたみ全カードでベイ計算しない）');
+  assert.ok(/materials: slabMaterials, members, braceInfo \}/.test(code));
+  const row = read('CommonInfoTab.jsx');
+  assert.ok(/row\.kind !== SLAB_ROW_KIND\.READONLY && row\.note/.test(row));
+});
+
+test('【S7・配線】steelSlabBraceHeightInfo は buildBays 1 回の bayBraceInfos で全 cells を解決する（cells ごとの再構築をしない）', () => {
+  const code = read('steelSlabBays.js');
+  assert.ok(/bayBraceInfos\(graph, project, slab\.cells\)/.test(code));
+  assert.ok(!/bayChildDepthMm\(/.test(code));
+});
+
 test('【S6・配線】材料の読込みは共有フックを一覧の1か所（MemberListTab）で呼び、カードへ props で渡す', () => {
   const code = read('MemberListTab.jsx');
   assert.equal([...code.matchAll(/useSteelSlabMaterials\(\)/g)].length, 1, 'カードごとに読まない');

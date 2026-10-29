@@ -7,7 +7,7 @@ import { defaultSteelSlabSpec, projectToKind, resolveSteelSlabSpec } from './ste
 import { memberSignature, memberSpecString } from './memberCatalog.js';
 import {
   steelSlabCardView, planSteelSlabCardEdit, planSteelSlabRevert, slabCardFields, steelSlabSummary, slabWriteIsNoop,
-  SLAB_CARD_STATUS_COMMON, SLAB_CARD_STATUS_INDIVIDUAL, SLAB_CARD_INDIVIDUAL_SUFFIX,
+  SLAB_CARD_STATUS_COMMON, SLAB_CARD_STATUS_INDIVIDUAL, SLAB_CARD_INDIVIDUAL_SUFFIX, braceHeightNote,
 } from './steelSlabCardModel.js';
 
 const COMMON = defaultSteelSlabSpec();
@@ -31,6 +31,20 @@ test('【S6】カード表示: 個別指定は実効（個別）仕様の行・�
   assert.equal(v.showRevert, true);
   assert.deepEqual(keysOf(v), ['kind', 'alcCode', 'alcThickness', 'alcTopBelowFlMm', 'raiseChannelSpec']);
   assert.equal(v.rows.find(r => r.key === 'alcTopBelowFlMm').value, 40);
+});
+
+test('【S7】設置高さの注記: 自動「子梁成 300 → 自動 150」・指定が収まる「子梁成 300 → 100」・超過「上限 300 に丸め」。braceInfo が無ければ注記なし', () => {
+  const brace = { ...projectToKind(COMMON, SteelSlabKind.BRACE) };
+  const noteOf = (spec, info) => steelSlabCardView({ slab: slabOf(spec), common: COMMON, braceInfo: info })
+    .rows.find(r => r.key === 'braceHeightMm').note;
+  assert.equal(noteOf(brace, { childDepthMm: 300, resolvedMm: 150, clamped: false }), '子梁成 300 → 自動 150');
+  assert.equal(noteOf({ ...brace, braceHeightMm: 100 }, { childDepthMm: 300, resolvedMm: 100, clamped: false }), '子梁成 300 → 100');
+  assert.equal(noteOf({ ...brace, braceHeightMm: 500 }, { childDepthMm: 300, resolvedMm: 300, clamped: true }), '上限 300 に丸め');
+  assert.equal(braceHeightNote({ childDepthMm: 200, resolvedMm: 100, clamped: false }, { braceHeightMm: null }), '子梁成 200 → 自動 100');
+  assert.equal(noteOf(brace, { childDepthMm: 300, resolvedMm: 150, clamped: false, exceededBays: 2 }),
+    '子梁成 300 → 自動 150／対角線長が上限を超えるベイ 2（短辺が上限以上、または記録で分割数が固定）');
+  assert.equal(noteOf(brace, { childDepthMm: 300, resolvedMm: 150, clamped: false, exceededBays: 0 }), '子梁成 300 → 自動 150', '0 件は足さない');
+  assert.equal(noteOf(brace, null), undefined, 'braceInfo なし（デッキ等・未計算）は注記を付けない');
 });
 
 test('【S6】サマリー: 種別名・個別指定なら（個別）付き。基底の厚みは出さない', () => {

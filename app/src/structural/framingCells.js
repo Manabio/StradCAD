@@ -81,6 +81,38 @@ export function divideBayEqually(cell, maxPitchMm) {
 }
 
 /**
+ * ブレース指定の区画 cell を、ブレース長（対角線長）が maxDiagonalMm 以下になるよう短辺方向に架ける子梁で割る
+ * （S7・2026-10-29）。小区画の対角線長＝√(短辺² + (長辺/n)²)（梁芯々の寸法）。
+ * 分割数 n = ceil(長辺 / √(D² − 短辺²))。coords は n 等分の暫定値（divideBayEqually と同じ形。実際の座標は
+ * フランジ間の式で決まる——slabSecondaryBeamAxes.js bayTargetCoords）。
+ *  - 短辺 >= D: どれだけ割っても対角線長が D 以下にならない → `{ fallback: true }`（呼び出し側が 2500 ピッチ規則へ戻す）。
+ *  - n < 2（割らなくても対角線長が D 以下）→ null（子梁は不要）。
+ * @param {{x1:number, y1:number, x2:number, y2:number}} cell
+ * @param {number} maxDiagonalMm
+ * @returns {{isVertical:boolean, coords:number[], shortLo:number, shortHi:number, longLo:number, longHi:number}|{fallback:true}|null}
+ */
+export function divideBayByMaxDiagonal(cell, maxDiagonalMm) {
+  const geom = bayGeometry(cell);
+  const short = geom.shortHi - geom.shortLo;
+  if (short >= maxDiagonalMm) return { fallback: true };
+  const maxPitch = Math.sqrt(maxDiagonalMm * maxDiagonalMm - short * short);
+  const n = Math.ceil((geom.longHi - geom.longLo) / maxPitch);
+  if (n < 2) return null;
+  return { ...geom, coords: equalDivisionCoords(geom.longLo, geom.longHi, n) };
+}
+
+/**
+ * 区画 cell を長辺方向に n 等分したときの小区画の対角線長が maxDiagonalMm を超えるか（記録で n が固定された
+ * ベイ・短辺 >= D の退化の警告用。裁定 U1 で n が自動の値より小さいままになりうる）。
+ */
+export function braceDiagonalExceeded(cell, n, maxDiagonalMm) {
+  const geom = bayGeometry(cell);
+  const short = geom.shortHi - geom.shortLo;
+  const pitch = (geom.longHi - geom.longLo) / n;
+  return Math.hypot(short, pitch) > maxDiagonalMm;
+}
+
+/**
  * 区画 cell の子梁の向きと、長辺（子梁を並べる方向）・短辺（子梁が架かる方向）の範囲。
  * 短辺が maxPitch 以下かどうかは見ない（割付け対象外の区画の所属判定にも使う）。
  * @param {{x1:number, y1:number, x2:number, y2:number}} cell

@@ -36,6 +36,9 @@ export const SlabRow = observer(function SlabRow({ row, draft, onDraft, onCommit
           {row.unit && <span className="site-pair-unit">{row.unit}</span>}
         </label>
       )}
+      {row.kind !== SLAB_ROW_KIND.READONLY && row.note && (
+        <div className="site-row"><span className="site-pair-sep">{row.note}</span></div>
+      )}
       {error && <div className="site-row" role="alert" style={{ color: FIELD_ERROR_COLOR }}>{error}</div>}
     </>
   );
