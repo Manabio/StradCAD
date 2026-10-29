@@ -31,17 +31,19 @@ import {
 // 昇降路壁材の新設1件（301000000020・強化せっこうボード t=12.5+12.5）を加えた131件。
 // 2026-10-01: 木質系セメント板の面材16件（301000000021〜36）とルーフィング3件（302000000007〜09）を
 // 加えて150件。2026-10-18: 軒裏下地材 □-30×15（101400000015）を加えて151件。
-// 2026-10-26: デッキプレート6件（201600000001〜06）を加えて157件。2026-10-28: フラットデッキ31件（201700000001〜31）＋キーストン1件（201800000001）を加えて189件。
-test('MATERIALS: 189件（131件＋セメント系面材16件＋ルーフィング3件＋軒裏下地材1件＋デッキプレート6件＋フラットデッキ31件＋キーストン1件。振り直し済み・新体系）', () => {
-  assert.equal(MATERIALS.length, 189);
+// 2026-10-26: デッキプレート6件（201600000001〜06）を加えて157件。2026-10-28: フラットデッキ31件（201700000001〜31）＋キーストン1件（201800000001）を加えて189件。2026-10-29: ALC 平パネル3件（301200000008〜10・x,y は施工寸法 600×2580/3000/3440）を加えて192件。
+test('MATERIALS: 192件（131件＋セメント系面材16件＋ルーフィング3件＋軒裏下地材1件＋デッキプレート6件＋フラットデッキ31件＋キーストン1件＋ALC平パネル3件。振り直し済み・新体系）', () => {
+  assert.equal(MATERIALS.length, 192);
 });
 
-test('MATERIALS: 面材（PANEL）は全件 x=910,y=1820、仕上げ材（FINISH）は全件 x=0,y=0（2026-10-01裁定）', () => {
+test('MATERIALS: 面材（PANEL）は ALC 平パネル3件（施工寸法 600×2580/3000/3440）を除き全件 x=910,y=1820、仕上げ材（FINISH）は全件 x=0,y=0（2026-10-01裁定・2026-10-29 例外追加）', () => {
   const panels = MATERIALS.filter(m => m.category === MATERIAL_CATEGORY.PANEL);
   const finishes = MATERIALS.filter(m => m.category === MATERIAL_CATEGORY.FINISH);
-  assert.equal(panels.length, 58); // 既存42件＋セメント系16件
+  assert.equal(panels.length, 61); // 既存42件＋セメント系16件＋ALC平パネル3件
+  const alcPlain = { '301200000008': [600, 2580], '301200000009': [600, 3000], '301200000010': [600, 3440] };
   // 保守パネル側の既定寸法定数（catalogMaintenance.js）と本体の全面材が一致すること
-  for (const m of panels) assert.deepEqual([m.x, m.y], [DEFAULT_PANEL_X, DEFAULT_PANEL_Y], `${m.code}(${m.name})`);
+  for (const m of panels) assert.deepEqual([m.x, m.y], alcPlain[m.code] ?? [DEFAULT_PANEL_X, DEFAULT_PANEL_Y], `${m.code}(${m.name})`);
+  for (const code of Object.keys(alcPlain)) assert.ok(panels.some(m => m.code === code), `${code}が面材に無い`);
   assert.deepEqual([DEFAULT_PANEL_X, DEFAULT_PANEL_Y], [910, 1820]);
   for (const m of finishes) assert.deepEqual([m.x, m.y], [0, 0], `${m.code}(${m.name})`);
 });

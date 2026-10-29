@@ -42,8 +42,8 @@ test('LEGACY_MATERIAL_CODE_ALIASES: 新コード全件がmaterialData.jsのMATER
 // 明記し、REMOVED_MATERIALSの記録形にも新コード欄が無い＝2件は本体カタログから除外される設計と
 // 判断した。旧MATERIALS件数132から2件を除いた130件を固定する（132のままという別の記述との食い違いは
 // 報告書で明示する）。
-test('MATERIALS: 全件が新体系（isLegacyCodeがfalse）。189件（131＋セメント系面材16＋ルーフィング3＋軒裏下地材1＋デッキプレート6＋フラットデッキ31＋キーストン1。2026-10-28）', () => {
-  assert.equal(MATERIALS.length, 189);
+test('MATERIALS: 全件が新体系（isLegacyCodeがfalse）。192件（131＋セメント系面材16＋ルーフィング3＋軒裏下地材1＋デッキプレート6＋フラットデッキ31＋キーストン1＋ALC平パネル3。2026-10-29）', () => {
+  assert.equal(MATERIALS.length, 192);
   for (const m of MATERIALS) assert.equal(isLegacyCode(m.code), false, `${m.code}(${m.name})が旧体系のまま`);
 });
 
