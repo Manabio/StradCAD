@@ -14,6 +14,9 @@ import { buildExteriorGroups } from '../finish/exteriorGroups.js';
 import { undoManager } from '../undoManager.js';
 import { wallFreshnessKey } from '../finish/wallFreshnessKey.js';
 import { ERR_ROOF_NOT_UNASSIGNED } from '../error.js';
+import { StructuralInfo } from '../core/structuralInfo.js';
+import { StructuralMaterialType } from '../core/constants.js';
+import { defaultSteelSlabSpec, normalizeSteelSlabSpec } from '../structural/steelSlabSpec.js';
 
 function makeGraph() {
   const plane = new Plane('p1', 0, '1階', 1, 1);
@@ -1560,4 +1563,21 @@ test('【B2】FBS 保存→読込み: 屋根の項目の編集値が残る（保
   assert.equal(spec.slope, 2.5);
   assert.equal(spec.eaveOverhangMm, 0);
   assert.equal(spec.note, '変更後');
+});
+
+test('_collectReferencedCodes: S造スラブ仕様のプレート材料コード（個別は持つ項目・共通は既定以外のとき）が照合対象に入る', () => {
+  const graph = makeGraph();
+  const state = new FinishModeState(graph, { structuralInfo: new StructuralInfo() });
+  assert.equal(state._collectReferencedCodes().has('201600000001'), false, '前提: スラブも非既定の共通仕様も無ければ載らない');
+
+  const slab = graph.addSlab(StructuralMaterialType.STEEL, 'SEC', new Set(['a:b:c:d']));
+  slab.setSteelSpec(normalizeSteelSlabSpec({ kind: 'alc', alcCode: '301200000009' }, { mode: 'individual' }));
+  assert.equal(state._collectReferencedCodes().has('301200000009'), true, '個別仕様のALC');
+  assert.equal(state._collectReferencedCodes().has('201600000001'), false, '個別仕様は持たない項目を載せない');
+
+  const info = new StructuralInfo();
+  info.setSteelSlabSpec({ ...defaultSteelSlabSpec(), flatDeckPlateCode: '201700000002' });
+  const withCommon = new FinishModeState(graph, { structuralInfo: info })._collectReferencedCodes();
+  assert.equal(withCommon.has('201700000002'), true, '非既定の共通仕様のフラットデッキ');
+  assert.equal(withCommon.has('201600000001'), true, '共通仕様は全プレート項目を載せる');
 });

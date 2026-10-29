@@ -19,6 +19,7 @@ import { buildingEquipmentCatalog, equipmentSpanLabelOf } from '../finish/equipm
 import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { commitRoofSpecField } from '../finish/roof/roofSpecCommit.js';
+import { STEEL_SLAB_PLATE_CODE_KEYS, isDefaultSteelSlabSpec } from '../structural/steelSlabSpec.js';
 import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED, ERR_ROOM_DELETE_HAS_STAIR_CHILD, ERR_STAIR_VOID_NOT_STAIR, ERR_STAIR_VOID_PARTIAL } from '../error.js';
 import { stairVoidsTouching } from '../finish/stair/stairVoidReconcile.js';
 import { buildStairChains } from '../finish/stair/stairChains.js';
@@ -561,6 +562,22 @@ export class FinishModeState {
     if (g?.mainRoofSpec && !isDefaultRoofSpec(g.mainRoofSpec)) {
       for (const f of ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking']) {
         const v = g.mainRoofSpec[f];
+        if (typeof v === 'string' && v) codes.add(v);
+      }
+    }
+
+    // S造スラブ仕様のプレート材料コード。個別仕様（各スラブの steelSpec）は持つ項目だけ、共通仕様
+    // （project.structuralInfo.steelSlabSpec）は既定以外のときだけ載せる（保存側が既定のとき書かない規則と同じ）。
+    for (const slab of g?.slabs ?? []) {
+      for (const f of STEEL_SLAB_PLATE_CODE_KEYS) {
+        const v = slab.steelSpec?.[f];
+        if (typeof v === 'string' && v) codes.add(v);
+      }
+    }
+    const steelCommon = this.project?.structuralInfo?.steelSlabSpec;
+    if (steelCommon && !isDefaultSteelSlabSpec(steelCommon)) {
+      for (const f of STEEL_SLAB_PLATE_CODE_KEYS) {
+        const v = steelCommon[f];
         if (typeof v === 'string' && v) codes.add(v);
       }
     }

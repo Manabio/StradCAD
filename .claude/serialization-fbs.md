@@ -32,6 +32,9 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 ## 地階構造（`SI.BASEMENT_STRUCTURE=14`）は値があるときだけ書く
 `StructuralInfo.basementStructure`（`'RC造(ラーメン)'｜'RC造(壁式)'｜null`）は`SI`テーブル末尾の文字列フィールド。nullのときは何も書かない（末尾のフィールドはvtableで切り詰められるため、地階構造を使わない文書のバイト列は1バイトも変わらない）。読みは`normalizeBasementStructure`を通し、フィールドが無い旧データ・未知の文字列・空文字はnull。`graphSnapshot`の採取（`buildStructSnapshot`）と復元（`restoreStructCLs`）にも足してあり、CL操作のundo・文書読込み・階操作のundoで保たれる。`StructuralInfo`に項目を足すときは、ここに加えて`FloorSwapManager`のdirty追跡（足し忘れると、その項目だけの変更で未保存の印が付かない）と階操作のundoの列挙（`collectProjectLevels`等）も同時に足す。設計意図は`.claude/structural-model.md`。
 
+## S造スラブの共通仕様（`SI.STEEL_SLAB_KEYS=15`・`STEEL_SLAB_VALS=16`）は既定のとき書かない
+`StructuralInfo.steelSlabSpec`（`structural/steelSlabSpec.js`）を`toPairs`の文字列ペア（並列vector）で持つ。`graphSnapshot.buildStructSnapshot`が`isDefaultSteelSlabSpec`（全項目比較）で既定なら空配列にし、`writeStructuralInfo`は空のときvectorも作らない（使わない文書のバイト列は不変）。読みは`setSteelSlabSpec`（正規化）を通し、無い・壊れた対は項目の既定へ。材料コードは`fieldPacking`の`coerce`で数値に化けるため、正規化が`String()`で戻す。スラブの個別仕様`SteelSlab.steelSpec`は新フィールドを足さず、スラブの`extraKeys/extraVals`の`steelSpec.*`で運ぶ（nullなら書かない）。
+
 ## S造スラブ小梁の枠の除外集合（`GS.EXCLUDED_SLAB_BEAM_SLOTS=55`）は空のとき書かない
 `PlanGraph.excludedSlabBeamSlots`（キーは`slab:<ベイ4辺のCL id>:<X|Y>:<n>:<i>`の文字列vector）。座標キーの`excludedWallBeamAxes`（GS 44）とは別のフィールドにしてある——あちらは追従・張り替えが座標キー前提で、CL idを含むこちらを混ぜると壊れる。空集合のときはvectorも作らない（末尾のフィールドはvtableで切り詰められ、枠を使わない文書のバイト列は1バイトも変わらない）。読みは無ければ空。CL削除時はキー内のCL idで掃除する（`removeDependentsOfCenterLine`）。
 

@@ -82,6 +82,65 @@ function isEdgeMaterialOverride(ov) {
   return !!ov && typeof ov.value === 'string' && /^\d{12}$/.test(ov.value);
 }
 
+// S造スラブ仕様のプレート材料コード項目（structural/steelSlabSpec.js の deckPlateCode / flatDeckPlateCode / alcCode。
+// 本ファイルはゼロ依存の葉モジュールのため名前を直書きし、一致は codeNormalization.test.js が固定する）。
+// 2系統: スラブの個別仕様＝slabs[].extraKeys/extraVals の 'steelSpec.<項目>'、
+// 共通仕様＝structuralInfo.steelSlabKeys/steelSlabVals の '<項目>'（keys[]/vals[] の並列配列）。
+const STEEL_SLAB_CODE_FIELDS = ['deckPlateCode', 'flatDeckPlateCode', 'alcCode'];
+const STEEL_SLAB_EXTRA_KEY_PREFIX = 'steelSpec.';
+
+function steelSlabCodeIndexes(keys, prefix) {
+  const out = [];
+  if (!Array.isArray(keys)) return out;
+  keys.forEach((k, i) => {
+    if (STEEL_SLAB_CODE_FIELDS.some(f => k === prefix + f)) out.push(i);
+  });
+  return out;
+}
+
+// keys/vals の並列配列から材料コード項目の値を列挙する。
+function enumerateSteelSlabPairRefs(keys, vals, prefix, refs, context) {
+  for (const i of steelSlabCodeIndexes(keys, prefix)) {
+    const code = vals?.[i];
+    if (typeof code !== 'string' || code === '') continue;
+    refs.push({ code, ...context, key: keys[i] });
+  }
+}
+
+// vals の材料コード項目を table で書き換える。変化が無ければ同一参照の vals を返す。
+function normalizeSteelSlabPairVals(keys, vals, prefix, table, unresolved, context) {
+  let next = vals;
+  for (const i of steelSlabCodeIndexes(keys, prefix)) {
+    const code = vals?.[i];
+    if (typeof code !== 'string' || code === '') continue;
+    const mapped = normalizeCode(code, table, unresolved, { ...context, key: keys[i] });
+    if (mapped === code) continue;
+    if (next === vals) next = [...vals];
+    next[i] = mapped;
+  }
+  return next;
+}
+
+function normalizeSteelSlabs(slabs, table, unresolved) {
+  if (!Array.isArray(slabs)) return slabs;
+  let changedAny = false;
+  const next = slabs.map(slab => {
+    const vals = normalizeSteelSlabPairVals(slab?.extraKeys, slab?.extraVals, STEEL_SLAB_EXTRA_KEY_PREFIX, table, unresolved,
+      { location: 'slabSteelSpec', slabId: slab?.id });
+    if (vals === slab?.extraVals) return slab;
+    changedAny = true;
+    return { ...slab, extraVals: vals };
+  });
+  return changedAny ? next : slabs;
+}
+
+function normalizeSteelSlabCommon(info, table, unresolved) {
+  if (!info) return info;
+  const vals = normalizeSteelSlabPairVals(info.steelSlabKeys, info.steelSlabVals, '', table, unresolved,
+    { location: 'steelSlabCommon' });
+  return vals === info.steelSlabVals ? info : { ...info, steelSlabVals: vals };
+}
+
 function isNormalizableEccentricity(item) {
   // backing==='' は per-floor 既定の合図であって材コードではない（裁定済み）——対象にしない。
   return !!item && item.backing !== '' && item.backing != null;
@@ -125,6 +184,12 @@ export function enumerateMaterialCodeRefs(snapshot) {
     if (!isNormalizableEccentricity(item)) continue;
     refs.push({ code: item.backing, location: 'clEccentricity', clId: item.clId });
   }
+  for (const slab of snapshot.slabs ?? []) {
+    enumerateSteelSlabPairRefs(slab?.extraKeys, slab?.extraVals, STEEL_SLAB_EXTRA_KEY_PREFIX, refs,
+      { location: 'slabSteelSpec', slabId: slab?.id });
+  }
+  enumerateSteelSlabPairRefs(snapshot.structuralInfo?.steelSlabKeys, snapshot.structuralInfo?.steelSlabVals, '', refs,
+    { location: 'steelSlabCommon' });
   return refs;
 }
 
@@ -246,10 +311,19 @@ export function normalizeSnapshotCodes(snapshot, table) {
   const clEccentricities = normalizeEccentricities(snapshot.clEccentricities, table, unresolved);
   if (clEccentricities !== snapshot.clEccentricities) changed = true;
 
+  const slabs = normalizeSteelSlabs(snapshot.slabs, table, unresolved);
+  if (slabs !== snapshot.slabs) changed = true;
+
+  const structuralInfo = normalizeSteelSlabCommon(snapshot.structuralInfo, table, unresolved);
+  if (structuralInfo !== snapshot.structuralInfo) changed = true;
+
   if (!changed) return { snapshot, unresolved };
   // mainRoofSpec が undefined（キー無し）のときは足さない（キー集合を変えない）
   const next = { ...snapshot, ...backingFields, rooms, edges, clEccentricities };
   if (mainRoofSpec !== undefined) next.mainRoofSpec = mainRoofSpec;
+  // slabs / structuralInfo はキーが無いとき足さない（キー集合を変えない）
+  if (slabs !== undefined) next.slabs = slabs;
+  if (structuralInfo !== undefined) next.structuralInfo = structuralInfo;
   return { snapshot: next, unresolved };
 }
 

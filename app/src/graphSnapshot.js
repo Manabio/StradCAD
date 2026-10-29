@@ -3,6 +3,10 @@ import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine
 import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
 import { normalizeBasementStructure } from './structural/structureRules.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
+import {
+  normalizeSteelSlabSpec, isDefaultSteelSlabSpec, toPairs as steelSlabSpecToPairs,
+  fromPairs as steelSlabSpecFromPairs, SteelSlabSpecMode,
+} from './structural/steelSlabSpec.js';
 import { applyDocumentCodeNormalization } from './catalog/codeNormalization.js';
 import { restoreRoofSpecInto } from './finish/roof/roofDefaults.js';
 import { makeFreshLineIdMap, remapLineIdsInSnapshot } from './lineIdRemap.js';
@@ -240,7 +244,7 @@ function buildSnapshot(graph) {
       };
     }),
     slabs: graph.slabs.map(s => {
-      const [extraKeys, extraVals] = packExtraFields(s, ['mainBars', 'distributionBars', 'dimensionStatus', 'slabKind', 'deckDirection', 'numberGroupId']);
+      const [extraKeys, extraVals] = packExtraFields(s, ['mainBars', 'distributionBars', 'dimensionStatus', 'slabKind', 'deckDirection', 'numberGroupId', 'steelSpec']);
       return {
         id: s.id, materialType: s.materialType, sectionDefId: s.sectionDefId,
         cells: [...s.cells], thickness: s.thickness, floorLevel: s.floorLevel,
@@ -297,6 +301,10 @@ function buildSnapshot(graph) {
 // CenterLine のみ。Shape / Intersection は不要（addCenterLine が再生成）。
 // ----------------------------------------------------------------
 function buildStructSnapshot(structGraph, structuralInfo, ledger) {
+  // S造スラブの共通仕様は既定のときは書かない（使わない文書のバイト列を変えない）。
+  const [steelSlabKeys, steelSlabVals] = isDefaultSteelSlabSpec(structuralInfo.steelSlabSpec)
+    ? [[], []]
+    : steelSlabSpecToPairs(structuralInfo.steelSlabSpec);
   return {
     centerLines: [...structGraph.shapeMap.values()]
       .filter(s => isStructCL(s))
@@ -323,6 +331,7 @@ function buildStructSnapshot(structGraph, structuralInfo, ledger) {
       columnFaceProjection: structuralInfo.columnFaceProjection,
       columnFaceProjKeys: [...structuralInfo.columnFaceProjections.keys()],
       columnFaceProjVals: [...structuralInfo.columnFaceProjections.values()].map(String),
+      steelSlabKeys, steelSlabVals,
       designStrength:     structuralInfo.designStrength,
       concreteType:       structuralInfo.concreteType,
       mainBar:            structuralInfo.mainBar,
@@ -598,6 +607,16 @@ export function decodeFloorSnapshot(bytes) {
 }
 
 /**
+ * 構造スナップショット（通り芯・建物全体の構造情報。階には載らない project 単位の blob）を、使用エントリ収集
+ * （catalog/usedEntries.js collectUsedKeysByKind）へ渡せる snapshot にする。階のスナップショットだけを渡すと、
+ * 共通仕様だけが参照する材料（S造スラブ共通仕様のプレート。structuralInfo.steelSlabKeys/Vals）が同梱から漏れる。
+ * 現在のメモリ上の状態から採る（保存直前の収集のため）。rooms・edges 等は空なので他種別の収集は空を返す。
+ */
+export function snapshotStructForCatalogUsage(structGraph, structuralInfo, ledger) {
+  return decodeFloorSnapshot(serializeStructCLs(structGraph, structuralInfo, ledger));
+}
+
+/**
  * 階データに CL偏芯レコードが在りうるか（仕上げ突入の pull の事前確認用。全体を decode しない）。
  * null・undefined・長さ0 → false／Uint8Array・ArrayBuffer → 偏芯ベクタの件数 > 0／
  * それ以外（restoreGraph が受ける旧 JSON 文字列など）→ 不明なので true（＝peek へ進み、旧経路と同じ結果）。
@@ -633,6 +652,8 @@ export function restoreStructCLs(structGraph, structuralInfo, data, ledger) {
   } else {
     snapshot = data;
   }
+  // S造スラブの共通仕様（structuralInfo.steelSlabKeys/Vals）のプレート材料コードの読み替え。階の restoreGraph と同じ入口。
+  snapshot = applyDocumentCodeNormalization(snapshot);
   runInAction(() => {
     structGraph.clear();
     for (const d of snapshot.centerLines ?? []) {
@@ -658,6 +679,8 @@ export function restoreStructCLs(structGraph, structuralInfo, data, ledger) {
       structuralInfo.columnFaceProjections.clear();
       (si.columnFaceProjKeys ?? []).forEach((k, i) =>
         structuralInfo.columnFaceProjections.set(k, Number((si.columnFaceProjVals ?? [])[i])));
+      // 無い（旧データ）・壊れた対は既定へ。プレートの材料コードはカタログと照合せず帯だけ見る（編集で消えた材料も保つ）。
+      structuralInfo.setSteelSlabSpec(steelSlabSpecFromPairs(si.steelSlabKeys, si.steelSlabVals));
       structuralInfo.setField('designStrength',     si.designStrength);
       structuralInfo.setField('concreteType',       si.concreteType);
       structuralInfo.setField('mainBar',            si.mainBar);
@@ -932,12 +955,17 @@ function applySnapshot(graph, snapshot) {
 
     // 10.5. 構造: スラブ（cellsのみ、CL非依存）→ 貫通孔（ホスト梁/スラブのID参照解決）
     for (const d of snapshot.slabs ?? []) {
+      const slabExtra = unpackExtraFields(d.extraKeys, d.extraVals);
+      // S造スラブの個別仕様: 材料コードは coerce で数値になっているため normalize が文字列へ戻す。種別不明は null（共通に従う）。
+      if (slabExtra.steelSpec !== undefined) {
+        slabExtra.steelSpec = normalizeSteelSlabSpec(slabExtra.steelSpec, { mode: SteelSlabSpecMode.INDIVIDUAL });
+      }
       const s = graph.addSlab(d.materialType, d.sectionDefId, new Set(d.cells), {
         thickness: d.thickness, floorLevel: d.floorLevel,
         role: d.role, levelRef: d.levelRef,
         slopeDirection: (d.slopeDirX != null && d.slopeDirY != null) ? { dx: d.slopeDirX, dy: d.slopeDirY } : null,
         slopeAngle: d.slopeAngle,
-        ...unpackExtraFields(d.extraKeys, d.extraVals),
+        ...slabExtra,
       }, d.id);
       if (d.memberNo) s.setMemberNo(d.memberNo);
     }

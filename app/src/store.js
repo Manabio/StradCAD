@@ -19,7 +19,7 @@ import { SpatialIndex } from './transform/SpatialIndex.js';
 import { whenCenterLineOpsIdle } from './transform/centerLineOps.js';
 import { runBusy } from './uiBusy.js';
 import {
-  serializePlanes, decodePlanes, serializeSite, decodeSite, restoreSite, decodeFloorSnapshot,
+  serializePlanes, decodePlanes, serializeSite, decodeSite, restoreSite, decodeFloorSnapshot, snapshotStructForCatalogUsage,
   serializeGraph, restoreGraph,
 } from './graphSnapshot.js';
 import { reconcilePlanes } from './floorOps.js';
@@ -673,6 +673,8 @@ const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, Catalo
  */
 export async function collectCatalogUsageAcrossFloors(floorRecords) {
   const snapshots = floorRecords.map(({ bytes }) => decodeFloorSnapshot(bytes));
+  // 構造スナップショット（共通仕様＝S造スラブのプレートなど階に載らない参照）も1件加える。
+  snapshots.push(snapshotStructForCatalogUsage(project.structGraph, project.structuralInfo, project.memberGroupLedger));
   return collectUsedKeysByKind(snapshots, BUNDLED_KINDS);
 }
 
@@ -707,6 +709,7 @@ export async function collectCurrentCatalogUsage() {
 
   const floorBytesList = await Promise.all([...project.planeMap.keys()].map(id => loadFloor(id)));
   const snapshots = floorBytesList.filter(Boolean).map(bytes => decodeFloorSnapshot(bytes));
+  snapshots.push(snapshotStructForCatalogUsage(project.structGraph, project.structuralInfo, project.memberGroupLedger));
   const rawUsedKeysByKind = collectUsedKeysByKind(snapshots, BUNDLED_KINDS);
 
   const builtinLists = await Promise.all(BUNDLED_KINDS.map(kind => kindDef(kind).loadBuiltin()));

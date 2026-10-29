@@ -835,6 +835,25 @@ export class RcSlab extends StructuralSlab {
 }
 
 // ----------------------------------------------------------------
+// S造スラブ（SteelSlab） — ベイ（梁に囲まれた区画）単位で指定する。個別仕様 steelSpec が null のときは
+// 建物全体の共通仕様（StructuralInfo.steelSlabSpec）に従う（resolveSteelSlabSpec）。
+// 基底の thickness / slabKind / deckDirection は SteelSlab では使わない（正は steelSpec と共通仕様）。
+// ----------------------------------------------------------------
+export class SteelSlab extends StructuralSlab {
+  constructor(id, sectionDefId, cells, props = {}) {
+    super(id, StructuralMaterialType.STEEL, sectionDefId, cells, props);
+    // 個別仕様（SteelSlabSpec のフラット形）。null＝共通仕様に従う。復元時の正規化は graphSnapshot.js が行う。
+    this.steelSpec = props.steelSpec ?? null;
+    makeObservable(this, { steelSpec: observable.ref, setSteelSpec: action });
+  }
+  /** 個別仕様を置き換える（null＝共通へ戻す）。正規化・共通との畳み込みは呼び出し側（structural/steelSlabSpec.js）。 */
+  setSteelSpec(spec) { this.steelSpec = spec ?? null; }
+}
+
+/** ベイ（梁で囲まれた区画）単位で指定するスラブか（S造スラブ）。 */
+export function isBayKeyedSlab(slab) { return slab instanceof SteelSlab; }
+
+// ----------------------------------------------------------------
 // 貫通孔（PenetrationSleeve） — 梁(B)・スラブ(C)の配管/配線貫通孔。
 // 意匠Openingと同じ設計パターンで、ホスト構造材を直接参照せず自己完結アンカーを持つ
 // （StructuralEntity は継承しない＝materialType/sectionDefId/memberNo の採番対象外）。
@@ -889,4 +908,5 @@ export const WALL_CLASS_BY_MATERIAL = Object.freeze({
 });
 export const SLAB_CLASS_BY_MATERIAL = Object.freeze({
   [StructuralMaterialType.RC]: RcSlab,
+  [StructuralMaterialType.STEEL]: SteelSlab,
 });

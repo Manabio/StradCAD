@@ -22,6 +22,7 @@ import { BeamAxisOrigin, centerLineKind } from './core/centerLine.js';
 import { remapLineIdsInSnapshot, makeFreshLineIdMap, findLineIdOccurrences } from './lineIdRemap.js';
 import { findDuplicateLineIds } from './lineIdUniqueness.js';
 import { slabBeamSlotKey } from './structural/slabSecondaryBeamAxes.js';
+import { defaultSteelSlabSpec } from './structural/steelSlabSpec.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
@@ -3209,6 +3210,7 @@ function makeProjectWithFullStructuralInfo(basement) {
   si.setField('surfaceRoughness', 'II');
   si.setField('seismicZoneFactor', '0.9');
   si.setBasementStructure(basement);
+  si.setSteelSlabSpec({ ...defaultSteelSlabSpec(), kind: 'alc', alcTopBelowFlMm: 30 });
   return project;
 }
 

@@ -104,7 +104,7 @@ export {
   StructuralBeam, WoodBeam, SteelBeam, RcBeam,
   IndependentFooting, ColumnBase,
   StructuralWall, RcBearingWall, RcWallOpening,
-  StructuralSlab, RcSlab, PenetrationSleeve,
+  StructuralSlab, RcSlab, SteelSlab, isBayKeyedSlab, PenetrationSleeve,
 } from './core/structuralEntities.js';
 
 // ================================================================

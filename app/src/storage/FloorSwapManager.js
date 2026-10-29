@@ -276,6 +276,8 @@ export class FloorSwapManager {
       void graph.beamMap.size;
       void graph.wallMap.size;
       void graph.slabMap.size;
+      // S造スラブの個別仕様の変更も dirty 対象にする（RC スラブには steelSpec が無く undefined）。
+      for (const slab of graph.slabMap.values()) void slab.steelSpec;
       void graph.footingMap.size;
       void graph.sleeveMap.size;
       void graph.columnAxisOffsets.size;
@@ -317,6 +319,7 @@ export class FloorSwapManager {
       void structuralInfo.otherStructures.length;
       void structuralInfo.foundationType;
       void structuralInfo.basementStructure;
+      void structuralInfo.steelSlabSpec;
       void structuralInfo.designStrength;
       void structuralInfo.concreteType;
       void structuralInfo.mainBar;

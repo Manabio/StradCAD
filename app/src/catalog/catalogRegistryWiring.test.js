@@ -488,6 +488,20 @@ test('【不変条件・ステップ7c・Major-1】store.js: collectCatalogUsage
   );
 });
 
+// S造スラブの共通仕様（階に載らない構造スナップショットのプレート材料コード）を同梱の使用キー収集へ渡す配線。
+// 渡さないと、共通仕様だけが参照するユーザー追加材が保存時に同梱されない（収集の純ロジックは graphSnapshot.steelSlab.test.js）。
+test('【不変条件】store.js: 同梱の使用キー収集（collectCatalogUsageAcrossFloors・collectCurrentCatalogUsage）は構造スナップショットも snapshots に加える', () => {
+  const src = readSrc('store.js');
+  for (const head of ['async function collectCatalogUsageAcrossFloors(floorRecords) {', 'async function collectCurrentCatalogUsage() {']) {
+    const body = extractBalancedBody(src, head);
+    assert.ok(body, `store.js に ${head} が見つからない`);
+    assert.ok(
+      /snapshots\.push\(\s*snapshotStructForCatalogUsage\(/.test(body),
+      `${head} が構造スナップショットを snapshots に加えていない（共通仕様の材料が同梱から漏れる）`,
+    );
+  }
+});
+
 // ステップ7c→12b改訂（QA指摘M1・2026-09-24再報告）: 内装マスター・境界マスターが参照する
 // 材コードを推移的にmaterial側へ含める経路。この展開そのもの（interiorMasters/boundaryMasters
 // を両方expandTransitiveMaterialsへ渡す判定）はcatalog/usedEntries.jsのexpandUsedMaterials

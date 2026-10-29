@@ -13,7 +13,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Plane, PlanGraph, Project, Site, SiteLineKind, CenterLineType, Discipline } from '../core.js';
+import { Plane, PlanGraph, Project, Site, SiteLineKind, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
+import { defaultSteelSlabSpec, normalizeSteelSlabSpec } from '../structural/steelSlabSpec.js';
 import { FloorSwapManager } from './FloorSwapManager.js';
 import { isDirty, clearDirty } from '../dirtyState.js';
 
@@ -212,5 +213,35 @@ test('_startStructAutoSave: basementStructure だけの変更で markDirty す�
 
   assert.equal(isDirty(), true, '地階構造の変更で dirty になる');
   mgr._structCleanup();
+  clearDirty();
+});
+
+// ---- S造スラブ仕様の変更も未保存の印を付ける ----
+test('_startStructAutoSave: S造スラブの共通仕様（steelSlabSpec）だけの変更で markDirty する（開始直後は付けない）', () => {
+  clearDirty();
+  const mgr = new FloorSwapManager();
+  const project = new Project('proj', 'test');
+  mgr._startStructAutoSave(project.structGraph, project.structuralInfo, project.memberGroupLedger);
+  assert.equal(isDirty(), false, '前提: 開始直後は dirty でない');
+
+  runInAction(() => { project.structuralInfo.setSteelSlabSpec({ ...defaultSteelSlabSpec(), kind: 'alc' }); });
+
+  assert.equal(isDirty(), true, '共通仕様の変更で dirty になる');
+  mgr._structCleanup();
+  clearDirty();
+});
+
+test('_startAutoSave: S造スラブの個別仕様（steelSpec）だけの変更で markDirty する（開始直後は付けない）', () => {
+  clearDirty();
+  const mgr = new FloorSwapManager();
+  const { plane, graph } = makeGraph();
+  const slab = graph.addSlab(StructuralMaterialType.STEEL, 'SEC', new Set(['a:b:c:d']));
+  mgr._startAutoSave(plane, graph);
+  assert.equal(isDirty(), false, '前提: 開始直後は dirty でない');
+
+  runInAction(() => { slab.setSteelSpec(normalizeSteelSlabSpec({ kind: 'alc' }, { mode: 'individual' })); });
+
+  assert.equal(isDirty(), true, '個別仕様の変更で dirty になる');
+  mgr._stopAutoSave(plane.id);
   clearDirty();
 });
