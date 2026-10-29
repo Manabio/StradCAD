@@ -353,7 +353,8 @@ S造・RC造・SRC造（選択子`structureRules.js`の`openingBeamAxes:'slabOpe
 - **指定・解除**: RcSlab・べた基礎には触らない（セルキーの意味が違い、ベイ指定の取り合いに巻き込むと RC 側の再解釈規則と衝突するため）。開口矩形は呼び出し側（UI）が渡す（開口の解決に peek 階が要り、純モジュールから引けないため。省略は例外）。
 - **選択子`steelSlabAssignment`**: S造だけ true（SRC・未定・木造・RC は false。`manualBeamAxisOnArchLines`と同じ2026-10-27のS造限定の裁定を踏襲）。基礎伏図・屋根専用平面でも不可（`canAssignSteelSlab`）。
 - **仕上げグリッドの再解釈から除外**: `finish/roomReinterpret.js`の CL 削除後始末（`findUnresolvableCells`・`collectUnresolvableCells`・`reinterpretSlabsAfterCLRemoval`）は`isBayKeyedSlab`のスラブを見ない。`lostSides`は通り芯と'center'しか生きた辺と見なさないため、開口由来梁芯の辺を持つベイキーを「辺を失った」と誤判定して壊すため。CL 削除の拒否にも数えない。
-- **既知の限界**: ベイが割れた／結合したら旧キーは、4本の CL が生きる限り旧矩形を描き続ける。辺の CL が消えたキーは`cellBoundsFromKey`が null で描かない（Room と同じ「解決できないセルは描かない」。データは保持し teardown しない）。S造の階に RcSlab を手で足すと同じ矩形が二重に持たれうる（受容）。
+- **既知の限界**: ベイが割れた／結合したら旧キーは、4本の CL が生きる限り旧矩形を描き続ける。辺の CL が消えたキーは`cellBoundsFromKey`が null で描かない（Room と同じ「解決できないセルは描かない」。データは保持し teardown しない）。S造の階に RcSlab を手で足すと同じ矩形が二重に持たれうる（受容）。ベイ選択中（構造リスト「スラブ指定」）に部材タグをタップするとカードが開き、そのタップではベイを選べない（受容。リード裁定2026-10-29）。
+- **指定したスラブは locked（S4）**: `assignSteelSlabBays` が作る SteelSlab は `dimensionStatus='locked'`（手動追加材と同じ扱い）。auto のままだと主構造変更の撤去段 `deleteClassificationOverflow`（スラブが×の主構造）が黙って消すため。ベイ選択UIの確定は `onStructureChanged`（再計算＋undo 1 エントリ）に乗せ、検証エラーのトースト後も選択を閉じる（選び直しで足りる）。
 
 ## 規則C（開口以外の中心線）——案cは実装済み（S3-1〜S3-3・2026-10-26）。効くのはS造の階だけ（S3-5・2026-10-27）
 - **2026-10-24 ユーザー裁定**: 案a（壁の乗る中心線から梁芯を自動生成）＋案c（梁芯の手動追加時に非表示の中心線へ吸着）。案b（S造だけ構造モードで中心線を表示）は拒否——可視モード表の導出基準を崩すため。代わりに「平面で見えない梁芯に阻まれない」対応とする（前節の移動の障害物）。

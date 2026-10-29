@@ -139,6 +139,7 @@ export const SceneLayers = observer(({
                 project={project}
                 onMemberClick={onMemberClick}
                 selectedMemberIds={mode?.selectedMemberIds ?? null}
+                bayPick={mode?.bayPick ?? null}
               />
             )}
             {appMode === 'structure' && (

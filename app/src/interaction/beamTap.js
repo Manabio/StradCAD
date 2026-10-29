@@ -36,6 +36,23 @@ export function shouldFireMemberTap({ appMode, onMemberClick, menu, panned, long
 }
 
 /**
+ * S造スラブ指定のベイ選択中（StructuralModeState.bayPick が非 null）のタップが成立する条件。
+ * shouldFireMemberTap と同じ信号（メニュー・パン・長押し・他ジェスチャー）に加え、bayPickActive が要る。
+ * 成立したタップは usePointerInteraction.js でベイの選択に使い、梁タップ・空白タップ（選択解除）へは流さない。
+ * @returns {boolean}
+ */
+export function shouldFireBayTap({ appMode, bayPickActive, menu, panned, longPressFired, busy }) {
+  return appMode === 'structure' && !!bayPickActive && !menu && !panned && !longPressFired && !busy;
+}
+
+/** Konvaのイベントターゲット（<Rect name="bay-hit" bayKey={...}>）から bayKey 属性を取り出す。無ければnull。
+ *  bay-hit は選択中だけ描く当たり面で、梁記号のような祖先 Group は無い（図形自身が属性を持つ）。 */
+export function bayKeyAtKonvaTarget(target) {
+  if (!target || typeof target.getAttr !== 'function') return null;
+  return target.getAttr('bayKey') ?? null;
+}
+
+/**
  * 構造モードの「空白タップ」（何の部材にも当たらないタップ）か。Konva は何もヒットしないとき
  * イベントの target を Stage 自身にする——梁記号（beam-symbol）・部材タグなど listening な図形に
  * 当たったときは target がその図形（またはその子孫）になるので Stage ではない。

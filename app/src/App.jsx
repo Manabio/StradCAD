@@ -3257,6 +3257,7 @@ const App = observer(() => {
           onToast={msg => setToast({ msg, key: Date.now() })}
           onSelectMembers={selectStructuralMembers}
           deselectRequest={memberDeselectRequest}
+          structureMode={appMode === 'structure' && mode?.startBayPick ? mode : null}
           onStructureChanged={guardUi(handleStructureChanged)}
         />
       )}

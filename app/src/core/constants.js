@@ -399,6 +399,31 @@ export const AddCLOptionKind = Object.freeze({
   COLUMN_AXIS: 'columnAxis', // 構造モードの柱芯（通り芯 clId＋偏芯量 axisOffset の合成。App.jsx buildColumnAxisRefs）
 });
 
+// ---- S造スラブ指定のベイ選択UI（renderer/StructuralLayer.jsx のベイ当たり面・structural/MemberListTab.jsx のボタン） ----
+// 選択済みのベイは構造リストの部材選択と同じ色族（structural/memberSelection.js MEMBER_SELECTION_*）を使う
+// ——「選ばれている」見た目をアプリで揃えるため。未選択ベイは「選べる区画」を示す淡い灰の塗りと細い枠で、
+// 選択済みの青と取り違えない程度に薄くする。透明（塗り無し）にしないのは Konva が塗りの無い図形を
+// ヒット判定しないため（タップで選ぶ当たり面を兼ねる）。
+/** 未選択ベイの塗り（淡い灰。スレート500 #64748b を 8%）。 */
+export const BAY_PICK_FILL = 'rgba(100, 116, 139, 0.08)';
+/** 未選択ベイの枠線色（スレート400 #94a3b8）。 */
+export const BAY_PICK_STROKE = '#94a3b8';
+/** 未選択ベイの枠線の太さ（画面px。ズームに依らず一定）。 */
+export const BAY_PICK_STROKE_PX = 1;
+// スラブ見出しの小ボタン（スラブ指定・スラブにする・指定を外す・取消）。見出し（fontSize 13）より一段小さくして
+// 件数ラベルと並べる。高さはタッチ操作の下限（約28px）を確保する。色は既存のパネルのボタン（MergeBar）と同じ
+// スレート系——有効=青（選択色 MEMBER_SELECTION_COLOR）、無効・枠=スレート300、文字=スレート600。
+/** 小ボタンの文字サイズ（px）。 */
+export const BAY_PICK_BUTTON_FONT_PX = 11;
+/** 小ボタンの最小高さ（px）。 */
+export const BAY_PICK_BUTTON_MIN_HEIGHT_PX = 28;
+/** 小ボタンの余白（CSS padding）。 */
+export const BAY_PICK_BUTTON_PADDING = '4px 8px';
+/** 小ボタンの無効色・枠色（スレート300 #cbd5e1）。 */
+export const BAY_PICK_BUTTON_DISABLED_COLOR = '#cbd5e1';
+/** 小ボタンの文字色（スレート600 #475569）。 */
+export const BAY_PICK_BUTTON_TEXT_COLOR = '#475569';
+
 // 敷地線の種別
 export const SiteLineKind = Object.freeze({
   BOUNDARY:   'boundary',   // 境界（隣地境界線）

@@ -78,6 +78,9 @@ export function assignSteelSlabBays(graph, project, keys, { steelSpec = null, op
   }
   const { touched } = detachKeys(graph, keySet);
   const slab = graph.addSlab(StructuralMaterialType.STEEL, null, keySet, { steelSpec });
+  // ユーザーが指定したスラブは手動追加材と同じ扱い＝locked（auto のままだと主構造変更の撤去段
+  // deleteClassificationOverflow が「×」化したスラブとして黙って消す。structural-model.md「手動追加は locked」）。
+  slab.setDimensionStatus('locked');
   return { slabId: slab.id, releasedFrom: touched };
 }
 

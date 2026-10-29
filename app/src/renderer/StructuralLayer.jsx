@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Line, Rect, Circle, Group, Text } from 'react-konva';
 import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
 import { CAUTION_COLOR } from '../core/constants.js';
+import { BAY_PICK_FILL, BAY_PICK_STROKE, BAY_PICK_STROKE_PX } from '../core/constants.js'; // ベイ選択の描画定数（S4）
 import { nearUserSlabAxisIds } from '../structural/slabSecondaryBeamAxes.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
@@ -376,7 +377,7 @@ export const ColumnsLayer = observer(({
 // z-order は描画順（柱→基礎→梁→スラブ→耐力壁）で再現し、レイヤ宣言順には依存させない。
 // selectedMemberIds（Set<string>|null。構造リストで展開中のカードの部材id集合＝StructuralModeState.selectedMemberIds）
 // を渡すと、該当部材の実形状に半透明の青矩形（structural/memberSelection.js）を最前面に重ねて選択状態を示す。
-export const StructuralLayer = observer(({ composition, viewport, project, onMemberClick = null, selectedMemberIds = null }) => {
+export const StructuralLayer = observer(({ composition, viewport, project, onMemberClick = null, selectedMemberIds = null, bayPick = null }) => {
   if (!composition) return null;
   const scale  = Math.min(viewport.scaleX, viewport.scaleY);
   const lod    = viewport.lodLevel;
@@ -697,6 +698,31 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
           );
         }))}
       </Group>
+      {/* S造スラブ指定のベイ選択中（bayPick 非 null）だけ、ベイごとの当たり面を重ねる。listening なのはこの矩形だけ
+          （タップは interaction/usePointerInteraction.js が bayKey 属性で拾って toggleBay）。選択済みは構造リストの
+          部材選択と同じ青、未選択は淡い灰の塗り＋細枠（core/constants.js BAY_PICK_*）。 */}
+      {bayPick && (
+        <Group name="bay-pick">
+          {bayPick.bays.map(({ key }) => {
+            const bd = slab?.graph ? cellBoundsFromKey(key, slab.graph) : null;
+            if (!bd) return null;
+            const selected = bayPick.selectedKeys.has(key);
+            return (
+              <Rect
+                key={`bay:${key}`}
+                name="bay-hit"
+                bayKey={key}
+                x={bd.x1} y={bd.y1}
+                width={bd.x2 - bd.x1} height={bd.y2 - bd.y1}
+                fill={selected ? MEMBER_SELECTION_FILL : BAY_PICK_FILL}
+                stroke={selected ? MEMBER_SELECTION_COLOR : BAY_PICK_STROKE}
+                strokeWidth={(selected ? MEMBER_SELECTION_STROKE_PX : BAY_PICK_STROKE_PX) / scale}
+                listening
+              />
+            );
+          })}
+        </Group>
+      )}
       <Group {...groupPropsForStyle(wall?.spec.style)}>
         {(wall?.graph?.structuralWalls ?? []).flatMap(w => {
           const color    = colorOf(w.materialType);

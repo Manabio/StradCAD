@@ -33,6 +33,14 @@ import { memberFigure } from './sectionFigure/memberFigures.js';
 import { MemberLayoutStudy } from './sectionFigure/MemberLayoutStudy.jsx';
 import { isStudyEnabled, layoutScopeFor, getLayoutOverrides, applyLayoutOverrides } from './sectionFigure/layoutStudy.js';
 import { isFoundationPlane } from './drawingDesignation.js';
+import { canAssignSteelSlab, assignSteelSlabBays, releaseSteelSlabBays } from './steelSlabBays.js';
+import { prepareSteelSlabPick } from './steelSlabPickInput.js';
+import { slabPickHeader } from './steelSlabPickModel.js';
+import { MEMBER_SELECTION_COLOR } from './memberSelection.js';
+import {
+  BAY_PICK_BUTTON_FONT_PX, BAY_PICK_BUTTON_MIN_HEIGHT_PX, BAY_PICK_BUTTON_PADDING,
+  BAY_PICK_BUTTON_DISABLED_COLOR, BAY_PICK_BUTTON_TEXT_COLOR,
+} from '../core/constants.js';
 import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
 import { foundationOptionsFor, rulesFor, effectiveStructure, woodColumnWidthMm, columnWidthMm, resolvedBeamColumnWidthMm } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
@@ -273,7 +281,7 @@ const MergeBar = observer(({ group, graph, project, structure, figureType, selec
   );
 });
 
-export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest = 0 }) => {
+export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest = 0, structureMode = null }) => {
   const [expandedKey, setExpandedKey] = useState(null); // `${mapName}:${タグ}` | null
 
   // 伏図の空白タップ（App.jsx deselectStructuralMembers。カウンタが進む）で展開中のカードを閉じる
@@ -494,6 +502,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               mergeAnchorTag={isMergingHere ? mergeState.anchorTag : null}
               mergeAnchorMaterialType={isMergingHere ? mergeState.anchorMaterialType : null}
               onSelectMembers={onSelectMembers}
+              structureMode={structureMode}
               mergeSelectedTags={isMergingHere ? mergeState.selectedTags : null}
               onStartMerge={(tag, materialType) => setMergeState({ group, graph: g, structure: gStructure, figureType, anchorTag: tag, anchorMaterialType: materialType, selectedTags: new Set([tag]) })}
               onToggleMergeTag={toggleMergeTag}
@@ -719,13 +728,71 @@ const ColumnOffsetAxisSelect = observer(({ axis, target, readOnly, onStructureCh
   );
 });
 
+// スラブ見出しの S造スラブ指定（ベイを描画エリアで選んで「スラブにする」「指定を外す」。ユーザー指示2026-10-29）。
+// 出し分けは slabPickHeader（structural/steelSlabPickModel.js）が決め、ここは描くだけ。選択状態は
+// StructuralModeState.bayPick（伏図のタップで toggleBay）。確定は他の構造編集と同じ onStructureChanged
+// （再計算＋undo 1 エントリ。検証エラー［現況のベイでない等］は mutate の例外として巻き戻され、guardUi がトースト表示）。
+// 確定の受理後［busy で無視されたときは残す］に選択状態を閉じる。
+const SlabPickControls = observer(({ structureMode, graph, composition, project, onStructureChanged }) => {
+  const pick = structureMode?.bayPick ?? null;
+  // 構造リストタブが閉じる（共通タブへの切替・パネルを閉じる）と操作手段が無くなるため、選択状態も閉じる。
+  useEffect(() => () => structureMode?.cancelBayPick(), [structureMode]);
+  const header = slabPickHeader({
+    active: pick != null, selectedCount: pick?.selectedKeys.size ?? 0, canAssign: canAssignSteelSlab(graph, project),
+  });
+  const small = { fontSize: BAY_PICK_BUTTON_FONT_PX, padding: BAY_PICK_BUTTON_PADDING, minHeight: BAY_PICK_BUTTON_MIN_HEIGHT_PX, borderRadius: 4, cursor: 'pointer' };
+  const accent = MEMBER_SELECTION_COLOR, disabled = BAY_PICK_BUTTON_DISABLED_COLOR, text = BAY_PICK_BUTTON_TEXT_COLOR;
+  // 確定（スラブにする／指定を外す）の受理後に選択状態を閉じる。guardUi は例外を catch して resolve するため、
+  // 検証エラー（現況のベイでない等。トースト表示）の後も選択を閉じる——選び直しで十分（リード裁定2026-10-29）。
+  // busy で無視された（undefined）ときは閉じない。
+  const closeAfter = accepted => { if (accepted) accepted.then(() => structureMode.cancelBayPick()); };
+  function start() {
+    // belowGraph＝柱の供給階（1つ下の実体階）。床開口の×の描画と同じ供給元（steelSlabPickInput.js）。
+    // 主題階自身が返る場合の除外は prepareSteelSlabPick 側（belowGraph !== graph）。
+    structureMode.startBayPick(prepareSteelSlabPick({ graph, project, belowGraph: composition?.graphForCategory('columnMap') ?? null }));
+  }
+  function commit() {
+    const keys = [...pick.selectedKeys];
+    closeAfter(onStructureChanged(() => assignSteelSlabBays(graph, project, keys, { openingRects: pick.openingRects })));
+  }
+  function release() {
+    const keys = [...pick.selectedKeys];
+    closeAfter(onStructureChanged(() => releaseSteelSlabBays(graph, keys)));
+  }
+  if (header.showToggle) {
+    return (
+      <button type="button" onClick={start} style={{ ...small, border: `1px solid ${accent}`, background: '#fff', color: accent }}>
+        {header.label}
+      </button>
+    );
+  }
+  if (!header.showActions) return null;
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 400 }}>
+      <span style={{ fontSize: BAY_PICK_BUTTON_FONT_PX, fontWeight: 700, color: accent }}>{header.label}</span>
+      <button type="button" onClick={commit} disabled={!header.canCommit}
+        style={{ ...small, border: 'none', background: header.canCommit ? accent : disabled, color: '#fff', cursor: header.canCommit ? 'pointer' : 'not-allowed' }}>
+        スラブにする
+      </button>
+      <button type="button" onClick={release} disabled={!header.canRelease}
+        style={{ ...small, border: `1px solid ${disabled}`, background: '#fff', color: header.canRelease ? text : disabled, cursor: header.canRelease ? 'pointer' : 'not-allowed' }}>
+        指定を外す
+      </button>
+      <button type="button" onClick={() => structureMode.cancelBayPick()}
+        style={{ ...small, border: `1px solid ${disabled}`, background: '#fff', color: text }}>
+        取消
+      </button>
+    </span>
+  );
+});
+
 // 1分類分のグループ（外部タブの GroupedExteriorTable と同じ「部位ごとの小テーブル」の発想）。
 // 同一形状＝同一タグ（部材番号）であるため、リストはタグ（ラベル）単位で1行のみ表示する
 // （同じラベルの部材は複数あっても重複表示しない。件数はカード見出しに表示）。
 const MemberGroupSection = observer(({
   group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onExpandKey, onRequestDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag,
-  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice,
+  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice, structureMode,
 }) => {
   // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
   // structure=null（主構造未設定）は素通し。memberKindOf が null を返す表外部材（軒桁・杭）は structureHasMemberKind=true で残る。
@@ -751,6 +818,9 @@ const MemberGroupSection = observer(({
       }}>
         <span>{groupLabel}（{tagGroups.length}）</span>
         {mergeActive && <span style={{ fontSize: 11, fontWeight: 700, color: '#2563eb' }}>〔統合するグループを選択〕</span>}
+        {group.key === 'slab' && structureMode && !readOnly && (
+          <SlabPickControls structureMode={structureMode} graph={graph} composition={composition} project={project} onStructureChanged={onStructureChanged} />
+        )}
         {isWoodFoundationBeamGroup && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 400 }}>
             <span style={{ fontSize: 12, color: '#64748b' }}>基礎種別</span>

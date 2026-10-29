@@ -10,6 +10,8 @@ import { cellBoundsFromKey, cellInteriorPoint, regionCellsAt } from '../finish/g
 import { findUnresolvableCells, reinterpretSlabsAfterCLRemoval, collectUnresolvableCells } from '../finish/roomReinterpret.js';
 import { rulesFor, STRUCTURE_RULES, UNSPECIFIED_RULES, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { listSlabBays } from './slabSecondaryBeamAxes.js';
+import { deleteClassificationOverflow } from './structuralAutoFill.js';
+import { structureHasMemberKind, MEMBER_KIND, STRUCTURES } from './structuralClassification.js';
 import { defaultSteelSlabSpec, projectToKind } from './steelSlabSpec.js';
 import {
   bayCellKey, canAssignSteelSlab, assignSteelSlabBays, releaseSteelSlabBays, steelSlabForBay, braceBayMap,
@@ -142,7 +144,26 @@ test('releaseSteelSlabBays: キーを外し、空になったスラブを削除�
   assert.equal(steelSlabForBay(graph, k2), null);
 });
 
-test('braceBayMap: 実効仕様（個別＞共通）がブレースのベイだけ、部材種別つきで返す', () => {
+test('assignSteelSlabBays: 作ったスラブは locked（手動追加材と同じ扱い）。主構造変更の撤去段 deleteClassificationOverflow が「×」化したスラブとして消さない', () => {
+  const { graph } = buildBay('S造');
+  const [bay] = listSlabBays(graph, PROJECT);
+  const r = assignSteelSlabBays(graph, PROJECT, [bay.key], NO_OPENING);
+  const slab = graph.slabMap.get(r.slabId);
+  assert.equal(slab.dimensionStatus, 'locked');
+  // スラブが「×」になる主構造を探す（検出力の前提。無ければ撤去段の検証が空振りになる）。
+  const noSlabStructure = STRUCTURES.find(s => !structureHasMemberKind(MEMBER_KIND.SLAB, s));
+  assert.ok(noSlabStructure, '前提: スラブが×の主構造がある');
+  graph.structureOverride = noSlabStructure;
+  // （梁など他の auto 部材も×で消えるため、スラブ id が含まれるかで見る）
+  assert.ok(!deleteClassificationOverflow(graph, PROJECT).includes(r.slabId), 'locked は撤去されない');
+  assert.ok(graph.slabMap.has(r.slabId));
+  // 対照: auto のままなら同じ撤去段で消える。
+  slab.setDimensionStatus('auto');
+  assert.ok(deleteClassificationOverflow(graph, PROJECT).includes(r.slabId));
+  assert.ok(!graph.slabMap.has(r.slabId));
+});
+
+test('braceBayMap:実効仕様（個別＞共通）がブレースのベイだけ、部材種別つきで返す', () => {
   const { graph } = buildBayWithOpeningBeam();
   const [k1, k2] = listSlabBays(graph, PROJECT).map(b => b.key);
   const brace = { ...projectToKind(defaultSteelSlabSpec(), SteelSlabKind.BRACE), braceMemberType: BraceMemberType.ANGLE };

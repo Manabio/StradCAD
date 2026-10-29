@@ -44,6 +44,12 @@ export class StructuralModeState {
   // 梁芯の移動範囲は同期計算（他フロアのIDB読み込みが不要＝先読みすべき非同期処理が無い）のため
   // preloadMove は no-op、startMove も同期のまま moveState を立てる。
   moveState        = null;
+  // S造スラブ指定のベイ選択（構造リスト「スラブ」見出しの「スラブ指定」トグル。ユーザー指示2026-10-29）。
+  // null＝選択中でない。非 null＝{ bays: [{key, cell}], openingRects, selectedKeys: Set<string> }。
+  // bays・openingRects は開始時に呼び出し側が組み立てて渡す（structural/steelSlabPickInput.js）——
+  // 状態は同期のまま保つ。selectedKeys は常に bays のキーの部分集合（空は共有の空Set）。
+  // 書き手は startBayPick / toggleBay / cancelBayPick だけ。dispose・clearSelection でも破棄する。
+  bayPick          = null;
 
   // 指示UI（ステップ8g）場面(b)unresolved-codeの行。init()で組み立て、App.jsxが
   // project.catalogResolveRows（catalog/resolveQueue.js replaceRowsByScenarioで自分の種別だけ
@@ -64,9 +70,13 @@ export class StructuralModeState {
       placementState:   observable.ref,
       axisEditState:    observable.ref,
       moveState:        observable.ref,
+      bayPick:          observable.ref,
       catalogResolveRows: observable.ref,
       selectMembers:     action,
       clearSelection:    action,
+      startBayPick:      action,
+      toggleBay:         action,
+      cancelBayPick:     action,
       startAxisEdit:     action,
       updateAxisEdit:    action,
       cancelAxisEdit:    action,
@@ -155,7 +165,24 @@ export class StructuralModeState {
     this.selectedMemberIds = EMPTY_IDS;
     this.placementState   = null;
     this.axisEditState    = null;
+    this.bayPick          = null;
   }
+
+  // ---- S造スラブ指定のベイ選択 ----
+  startBayPick({ bays, openingRects }) {
+    this.bayPick = { bays, openingRects, selectedKeys: EMPTY_IDS };
+  }
+
+  // 選択のトグル。選択中でない・bays に無いキー（古い当たり面など）は無視する。
+  toggleBay(key) {
+    const pick = this.bayPick;
+    if (!pick || !pick.bays.some(b => b.key === key)) return;
+    const next = new Set(pick.selectedKeys);
+    if (!next.delete(key)) next.add(key);
+    this.bayPick = { ...pick, selectedKeys: next.size === 0 ? EMPTY_IDS : next };
+  }
+
+  cancelBayPick() { this.bayPick = null; }
 
   // ---- 梁芯CL移動 ----
   // ガター長押し（FloorplanModeState）と違い、梁芯の範囲計算は他フロアのIDB読み込みを伴わないため

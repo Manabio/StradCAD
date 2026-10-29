@@ -11,7 +11,32 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { beamAtKonvaTarget, shouldFireMemberTap } from './beamTap.js';
+import { beamAtKonvaTarget, shouldFireMemberTap, shouldFireBayTap, bayKeyAtKonvaTarget } from './beamTap.js';
+
+// ---- S造スラブ指定のベイタップ ----
+const baySignals = (overrides = {}) => ({
+  appMode: 'structure', bayPickActive: true, menu: null, panned: false, longPressFired: false, busy: false, ...overrides,
+});
+
+test('shouldFireBayTap: 構造モードでベイ選択中・パン無し・長押し無し・メニュー無し・他ジェスチャー無しのときだけ成立', () => {
+  assert.equal(shouldFireBayTap(baySignals()), true);
+});
+
+test('【失敗系】shouldFireBayTap: パン後・長押し後・メニュー中・busy・選択中でない・構造モード以外は成立しない', () => {
+  assert.equal(shouldFireBayTap(baySignals({ panned: true })), false, 'パン後');
+  assert.equal(shouldFireBayTap(baySignals({ longPressFired: true })), false, '長押し後');
+  assert.equal(shouldFireBayTap(baySignals({ menu: { pos: { x: 0, y: 0 }, items: [] } })), false, 'メニュー中');
+  assert.equal(shouldFireBayTap(baySignals({ busy: true })), false, '他ジェスチャー進行中');
+  assert.equal(shouldFireBayTap(baySignals({ bayPickActive: false })), false, 'トグルOFF');
+  assert.equal(shouldFireBayTap(baySignals({ appMode: 'floorplan' })), false, '構造モード以外');
+});
+
+test('bayKeyAtKonvaTarget: bayKey 属性を返す。属性が無い・target が無い・getAttr が無い（Stage 以外の擬似 target）は null', () => {
+  assert.equal(bayKeyAtKonvaTarget({ getAttr: k => (k === 'bayKey' ? 'a:b:c:d' : undefined) }), 'a:b:c:d');
+  assert.equal(bayKeyAtKonvaTarget({ getAttr: () => undefined }), null);
+  assert.equal(bayKeyAtKonvaTarget(null), null);
+  assert.equal(bayKeyAtKonvaTarget({}), null);
+});
 
 function baseSignals(overrides = {}) {
   return {

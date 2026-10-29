@@ -25,7 +25,7 @@ import { usesBeamAxisMoveSnap } from '../core/centerLineKindPolicy.js';
 import { roundAbsToStep, calcStep } from '../renderer/clMoveMath.js';
 import { findHostWall } from '../openings/openingGeometry.js';
 import { effectiveStructure } from '../structural/structureRules.js';
-import { beamAtKonvaTarget, columnAtKonvaTarget, shouldFireMemberTap, isBlankTapTarget } from './beamTap.js';
+import { beamAtKonvaTarget, columnAtKonvaTarget, shouldFireMemberTap, shouldFireBayTap, bayKeyAtKonvaTarget, isBlankTapTarget } from './beamTap.js';
 import {
   openingMoveRange, openingSnapCandidates, resolveOpeningRefOffset, snapIndicatorAlong,
   elevationDragAlong, previewDxLocalMm,
@@ -841,7 +841,17 @@ export function usePointerInteraction({
     // 判定はStructuralLayer.jsx側）。成立条件の判定（interaction/beamTap.js shouldFireMemberTap）は
     // 純関数へ抽出済み——node:testでパン・長押しの各信号を単体検証できる（team-lessons「抽出モジュールは
     // 呼び出し側もテストで守る」）。
-    if (shouldFireMemberTap({
+    // S造スラブ指定のベイ選択中は、タップをベイの選択に使い梁タップ・空白タップへ流さない
+    // （空白タップ＝選択解除［裁定2026-09-17］が選択中に発火して構造リストのカードを閉じないため。
+    // ベイ以外のタップは何もしない。ドラッグはパンのまま）。
+    const bayTapSignals = {
+      appMode, bayPickActive: !!modeRef.current?.bayPick, menu, panned: !!drag.current, longPressFired: longPress.hasFired(),
+      busy: !!drawDownRef.current || !!modeRef.current?.moveState || !!modeRef.current?.drawState,
+    };
+    if (shouldFireBayTap(bayTapSignals)) {
+      const bayKey = bayKeyAtKonvaTarget(e.target);
+      if (bayKey != null) modeRef.current.toggleBay(bayKey);
+    } else if (shouldFireMemberTap({
       appMode, onMemberClick, menu, panned: !!drag.current, longPressFired: longPress.hasFired(),
       busy: !!drawDownRef.current || !!modeRef.current?.moveState || !!modeRef.current?.drawState,
     })) {
