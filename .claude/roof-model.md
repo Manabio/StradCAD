@@ -45,6 +45,7 @@
 - 1回の確定＝undo 1エントリ（`FinishModeState.setRoofField`が`withFinishUndo`）。入力の検証は`roofInput.js`の純関数（勾配は0.5刻みの正の数・出幅は0以上）。文字・数値欄は draft で持ち、blur/Enterで確定し、不正な数値は確定せず元の値へ戻す。
 - 屋根仕上げは値の保持だけ（平面・展開図には描かない）。軒裏は天伏の見上げで描く（下の「軒裏」）。軒の出・妻側の出は伏図と下屋の平面表示の外形線の位置に使う。
 - 確定の本体（検証・無変更判定・`withFinishUndo`）は`finish/roof/roofSpecCommit.js commitRoofSpecField`の1か所で、仕上げモード（`setRoofField`／`setMainRoofField`）と天伏の外部タブ（主屋根の軒裏）が共用する。片流れの向きは`highSide`、切妻の棟木の向きは`ridgeDirection`（下記）。寄棟の棟の向きの項目は持たない。
+- **構造モードの外部タブ**（`structural/RoofSpecTab.jsx`。ユーザー指示2026-10-30「屋根の指定ができるため」）は同じ群（`RoofGroup`／`MainRoofGroup`）を描くが、確定は`withFinishUndo`ではなく`onStructureChanged`の閉包で書く——屋根の入力は伏図の小屋組・軒の梁・柱貫通の唯一の入力なので、主構造の変更と同じ経路で再計算し undo 1件にまとめる（`RoofSpec`は graph スナップショットに含まれる）。検証・無変更判定だけ`roofSpecFieldChanges`を共用し、無変更は再計算を起こさない。確定後は`markDirty`を明示する（auto-save の autorun は`roofSpec`／`mainRoofSpec`を見ないため。天伏と同じ）。再計算されるのは自階＋直下階だけ——最上階で主屋根を変えても小屋伏図（R階）はその場では更新されず、R階へ移った突入境界で反映される（共通タブの他階と同じ規律。undo の対象外）。出すのは屋根の群だけ（屋外部屋・部位行は削除・改名が仕上げモードの機構に依存するため出さない）。小屋伏図（R階）では最上階（composition の`columnMap`＝`belowGraph`）の主屋根を編集する（`recomputeStructuralComposition`は mutate が`belowGraph`を書く前提で before を採る）。群と編集対象の判断は`structural/roofSpecTabModel.js`。
 
 ## 選択の導線
 - 平面で屋根セルをクリックすると、`FinishModeState.startDrag`（優先0b。`roofRoomAtCell`）がその屋根の部屋を選択するだけでドラッグは始めない（屋根は部屋ドラッグの対象外のまま。広げるときは削除→指定し直し）。選択は屋外部屋と同じ経路で外部タブへ切り替わり、選んだ屋根の群だけを青枠で強調して可視域へ寄せる（判定は`exteriorGroups.js`の`isSelectedRoofGroup`）。
@@ -104,7 +105,7 @@
 - 項目は`RoofSpec`の4つ: `soffitMaterial`（仕上げ材コード）・`soffitBacking`（下地材コード）・`soffitOrientation`（'sloped'＝屋根勾配なり／'level'＝地面に水平／null）・`soffitNote`（備考）。旧の自由文字列`soffit`はデータとして残し画面から外した（天伏 S3 の`ceilingMaterial`と同じ扱い）。
 - **空＝既定**: コンストラクタの既定は4項目とも空（''／null）で`isDefaultRoofSpec`（主屋根「既定なら保存しない」）を変えない。下屋を付けたとき（`createLeanToRoofSpec`）だけ既定値（けい酸カルシウム板 t=8・□-30×15・傾斜・「目透かし貼り」）を書く（材料コードは保存されていないと同梱・照合に乗らないため）。主屋根と旧文書の下屋は空のままで、**空を既定へ読み替える入口は`roofDefaults.js resolveSoffitSpec`の1つだけ**（備考は補わない）。帰結: 旧文書・主屋根の既定材は同梱の使用コードに載らない（本体マスタにあるので表示は崩れない。受容）。FBSは`RS`末尾の4フィールドで、空のときは文字列もフィールドも書かない＝既存文書のバイト列は不変。
 - 下地材は構造に依らず保存し、欄は木造（`roofInput.js soffitBackingVisible`＝`isWoodStructure`）のときだけ出す（柱貫通の「値は保存するが欄は構造で出し分ける」と同型）。「木造以外の軒裏下地」は未定義。
-- 編集口は仕上げモードの外部タブ（`RoofGroup.jsx`の軒裏行。下屋・主屋根とも）。天伏の外部タブは直上階の下屋を**表示だけ**し、主屋根（自階）だけ編集できる（`.claude/ceiling-model.md`「外部タブ」）。材の select は「（未選択）」を出さず現在値を先頭に補う`RoofMaterialSelect`を両方で共用。
+- 編集口は仕上げモードの外部タブ（`RoofGroup.jsx`の軒裏行。下屋・主屋根とも）と構造モードの外部タブ（同じ群。上の「入力の確定」）。天伏の外部タブは直上階の下屋を**表示だけ**し、主屋根（自階）だけ編集できる（`.claude/ceiling-model.md`「外部タブ」）。材の select は「（未選択）」を出さず現在値を先頭に補う`RoofMaterialSelect`を両方で共用。
 - 落とし穴: `<select>`は同じ値の選び直しで change を出さないので、既定と同じ材を「明示的に保存」する操作は無い（別の材にして戻せば保存される）。
 
 ## 既知の限界

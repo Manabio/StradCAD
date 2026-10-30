@@ -2,17 +2,20 @@ import { useState, useEffect } from 'react';
 import { observer } from 'mobx-react-lite';
 import { CommonInfoTab } from './CommonInfoTab.jsx';
 import { MemberListTab } from './MemberListTab.jsx';
+import { RoofSpecTab } from './RoofSpecTab.jsx';
 import { ModePanel } from '../ui/ModePanel.jsx';
 import { BottomSheet } from '../ui/BottomSheet.jsx';
 
 const TABS = [
   { id: 'common',  label: '共通' },
   { id: 'members', label: '構造リスト' },
+  { id: 'roof',    label: '外部' },
 ];
 
 // 構造モード突入時に自動表示される入力パネル。
 // 横長＝右端パネル（ModePanel）／縦長＝ボトムシート（BottomSheet）。
-// 「共通」タブ＝旧・構造パレット（CommonInfoTab）、「構造リスト」タブ＝分類別の部材一覧（MemberListTab）。
+// 「共通」タブ＝旧・構造パレット（CommonInfoTab）、「構造リスト」タブ＝分類別の部材一覧（MemberListTab）、
+// 「外部」タブ＝仕上げモードの外部タブの屋根の群（主屋根・下屋）を構造モードから指定する（RoofSpecTab。ユーザー指示2026-10-30）。
 // focusRequest（描画エリアの部材タグクリック由来）が来たら構造リストタブへ強制切替する。
 export const StructuralPanel = observer(function StructuralPanel({ project, graph, composition, onClose, isLandscape, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest, structureMode = null }) {
   const [activeTab, setActiveTab] = useState('common');
@@ -50,9 +53,9 @@ export const StructuralPanel = observer(function StructuralPanel({ project, grap
         ))}
       </div>
 
-      {activeTab === 'common'
-        ? <CommonInfoTab project={project} graph={graph} onStructureChanged={onStructureChanged} />
-        : <MemberListTab composition={composition} project={project} focusRequest={focusRequest} onToast={onToast} onStructureChanged={onStructureChanged} onSelectMembers={onSelectMembers} deselectRequest={deselectRequest} structureMode={structureMode} />}
+      {activeTab === 'common' && <CommonInfoTab project={project} graph={graph} onStructureChanged={onStructureChanged} />}
+      {activeTab === 'members' && <MemberListTab composition={composition} project={project} focusRequest={focusRequest} onToast={onToast} onStructureChanged={onStructureChanged} onSelectMembers={onSelectMembers} deselectRequest={deselectRequest} structureMode={structureMode} />}
+      {activeTab === 'roof' && <RoofSpecTab graph={graph} composition={composition} project={project} onStructureChanged={onStructureChanged} />}
     </>
   );
 

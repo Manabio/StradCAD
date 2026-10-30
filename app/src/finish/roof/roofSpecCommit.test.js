@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph } from '@core';
 import { undoManager } from '../../undoManager.js';
-import { commitRoofSpecField } from './roofSpecCommit.js';
+import { commitRoofSpecField, roofSpecFieldChanges } from './roofSpecCommit.js';
 
 const freshGraph = () => new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
 
@@ -38,4 +38,17 @@ test('【失敗系】commitRoofSpecField: spec が null/undefined は false（�
   const graph = freshGraph();
   assert.equal(commitRoofSpecField(graph, null, 'slope', 5), false);
   assert.equal(commitRoofSpecField(graph, undefined, 'slope', 5), false);
+});
+
+test('roofSpecFieldChanges: 検証・無変更判定だけで書かない（構造モードの外部タブが onStructureChanged の閉包で書く前に使う）', () => {
+  const graph = freshGraph();
+  const spec = graph.mainRoofSpec;
+  const stack = undoManager._undoStack.length;
+  assert.equal(roofSpecFieldChanges(spec, 'soffitNote', '目透かし貼り'), true);
+  assert.equal(spec.soffitNote, '', '判定だけで値は書かない');
+  assert.equal(undoManager._undoStack.length, stack, 'undo も積まない');
+  assert.equal(roofSpecFieldChanges(spec, 'soffitNote', spec.soffitNote), false, '無変更');
+  assert.equal(roofSpecFieldChanges(spec, 'soffitOrientation', 'diagonal'), false, '不正な値');
+  assert.equal(roofSpecFieldChanges(null, 'slope', 5), false);
+  assert.equal(roofSpecFieldChanges(undefined, 'slope', 5), false);
 });
