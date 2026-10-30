@@ -132,6 +132,8 @@ export const ROOF_RIDGE_DIRECTION_LABELS = Object.freeze({
 // 屋根区画（PlanGraph.roofZones[].spec）の材料コード参照の location（catalog/codeNormalization.js）とその表示名
 export const ROOF_ZONE_SPEC_LOCATION = 'roofZoneSpec';
 export const ROOF_ZONE_LABEL = '屋根区画';
+// 屋根区画の小屋組 region の key の接頭辞（structural/roofFramingRegions.js。key＝`zone:<zoneId>`。区画以外の主屋根は 'main'）
+export const ROOF_ZONE_REGION_KEY_PREFIX = 'zone:';
 // 外部タブ（finish/exteriorGroups.js buildExteriorGroups）の群の種別
 export const ExteriorGroupType = Object.freeze({
   MAIN_ROOF: 'mainRoof',  // 主屋根（区画以外の範囲。セルを持たない固定の群）

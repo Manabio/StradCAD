@@ -33,13 +33,16 @@
  *
  * どの graph から作るか（呼び出し側は roofFramingRegionsForFigure を使う）:
  *   主屋根＝最上階の graph（屋根専用平面＝小屋伏図では柱レイヤ columnMap の供給階。mainRoofSpec と部屋を持つ）。
+ *     屋根区画があれば区画ごとの region（key `zone:<id>`）＋区画以外の 'main'（topRoofFramingRegions。S4）。
  *   下屋＝屋根セルのある階の graph（その階の伏図の自階 graph）。
  */
 import {
-  isRoofFeature, RoofShape, CL_OVERLAP_TOL_MM, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM,
+  isRoofFeature, RoofShape, CL_OVERLAP_TOL_MM, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM, ROOF_ZONE_REGION_KEY_PREFIX,
 } from '../core/constants.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
-import { mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView } from '../finish/roof/mainRoof.js';
+import {
+  mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView, roofZoneBounds, resolveRoofZoneShape, roofZoneHighSideView,
+} from '../finish/roof/mainRoof.js';
 import { resolveRoofShape, roofRoomBounds, resolveSoffitSpec } from '../finish/roof/roofDefaults.js';
 import { roofHighSideViewOfRoom, roofEdgeInteriorAdjacency, roofEdgeInteriorContacts, roofBoundaryInteriorContacts, roofInteriorRects } from '../finish/roof/roofOrientation.js';
 import { rectOfBounds, resolveRoofRidgeIsVertical, resolveRoofHighSide } from '../finish/roof/roofGeometry.js';
@@ -96,31 +99,93 @@ function validCellRects(bounds) {
 }
 
 /**
- * 矩形でない主屋根の region（ステップ C2e-2）。形状（自動なら導いた形状）が寄棟のときだけ作る（矩形でない切妻・片流れは
- * 小屋組を持たない）。rect=null・rects＝セル矩形（有効なもののコピー。無ければ null を返す）。描画（棟木・母屋・束）と
- * 小屋梁・飛び梁の生成（woodRoofFraming.js C2e-3b）に使う。
+ * 主屋根・屋根区画に共通の region の組み立て（構造ゲートは見ない。呼び出し側が済ませる）。条件を満たさなければ null。
+ *  - 範囲が矩形: 形状が片流れ・切妻・寄棟のとき { key, rect, shape, ridgeIsVertical, highSide }（highSideOf は片流れのときだけ呼ぶ）
+ *  - 矩形でない（C2e-2）: 形状（自動なら導いた形状）が寄棟のときだけ { key, rect:null, rects, shape:'hip', ... }。矩形でない切妻・
+ *    片流れは小屋組を持たない。描画（棟木・母屋・束）と小屋梁・飛び梁の生成（woodRoofFraming.js C2e-3b）に使う
+ * zeroZonesOf(rect, rects)＝他の屋根（区画・主屋根）に接する区間（軒の出 0。S4）。区画の無い屋根は常に空で、外形線は従来と同じ。
  */
-function hipOnlyRegion(topGraph, project, bounds) {
-  const rects = validCellRects(bounds);
-  if (!rects) return null;
-  if (resolveMainRoofShape(topGraph, project) !== RoofShape.HIP) return null;
-  return withOutline({ key: 'main', rect: null, rects, shape: RoofShape.HIP, ridgeIsVertical: null, highSide: null }, topGraph.mainRoofSpec);
+function topRoofRegionOf({ key, boundsList, shape, highSideOf, spec, zeroZonesOf }) {
+  const rect = rectOfBounds(boundsList);
+  if (!rect) {
+    const rects = validCellRects(boundsList);
+    if (!rects) return null;
+    if (shape !== RoofShape.HIP) return null;
+    return withOutline({ key, rect: null, rects, shape: RoofShape.HIP, ridgeIsVertical: null, highSide: null }, spec, zeroZonesOf(null, rects));
+  }
+  if (!FRAMING_SHAPES.has(shape)) return null;
+  const highSide = shape === RoofShape.MONO ? highSideOf() : null;
+  return withOutline({ key, rect, shape, ridgeIsVertical: regionRidgeIsVertical(shape, spec, rect), highSide }, spec, zeroZonesOf(rect, [rect]));
 }
 
 /**
- * 主屋根の小屋組の region。条件を満たさなければ null。範囲は最上階の建物範囲から屋根区画の実効セルを除いた残り
- * （mainRoof.js mainRoofBounds＝R3・2026-10-30 S2）——区画があると主屋根の region はその分縮む。区画ごとの region は S4 で足す。
+ * 他の屋根（rects）に接する区間を出幅 0 の区間にする関数を作る。otherRects が空なら常に []（区画の無い屋根・独立した区画）。
+ * 区画どうし・区画と主屋根の取り合いは谷・棟違いを作らず、壁に接するのと同じく軒の出 0（ユーザー裁定 2026-10-30 Q4）。
+ */
+function zeroZonesAgainst(graph, otherRects) {
+  return (rect, rects) => {
+    if (otherRects.length === 0) return [];
+    return rect
+      ? roofEdgeInteriorContacts(rect, graph, otherRects)
+      : roofBoundaryInteriorContacts(orthogonalBoundaryLoops({ rects, tolMm: CL_OVERLAP_TOL_MM }).flat(), graph, otherRects);
+  };
+}
+
+/** 屋根区画ごとのセル矩形（区画の並び順。実効セルが0の区画は空配列）と、主屋根（区画以外）のセル矩形。 */
+function topRoofLayout(topGraph) {
+  const zones = (topGraph.roofZones ?? []).map(zone => ({ zone, bounds: roofZoneBounds(topGraph, zone) }));
+  return { zones, restBounds: mainRoofBounds(topGraph) };
+}
+
+/** 主屋根（区画以外）の region。otherRects＝全区画のセル矩形。 */
+function restRoofRegion(topGraph, project, restBounds, otherRects) {
+  return topRoofRegionOf({
+    key: 'main', boundsList: restBounds,
+    shape: resolveMainRoofShape(topGraph, project),
+    highSideOf: () => mainRoofHighSideView(topGraph, project).value,
+    spec: topGraph.mainRoofSpec,
+    zeroZonesOf: zeroZonesAgainst(topGraph, otherRects),
+  });
+}
+
+/**
+ * 主屋根の小屋組の region（区画以外の残り）。条件を満たさなければ null。範囲は最上階の建物範囲から屋根区画の実効セルを除いた残り
+ * （mainRoof.js mainRoofBounds＝R3・2026-10-30 S2）——区画があると主屋根の region はその分縮み、区画に接する辺は軒の出 0。
+ * 区画の region は topRoofFramingRegions（S4）。
  */
 export function mainRoofFramingRegion(topGraph, project) {
   if (!topGraph) return null;
   if (!rulesFor(effectiveStructure(topGraph, project)).framing) return null;
-  const bounds = mainRoofBounds(topGraph);
-  const rect = rectOfBounds(bounds);
-  if (!rect) return hipOnlyRegion(topGraph, project, bounds);
-  const shape = resolveMainRoofShape(topGraph, project);
-  if (!FRAMING_SHAPES.has(shape)) return null;
-  const highSide = shape === RoofShape.MONO ? mainRoofHighSideView(topGraph, project).value : null;
-  return withOutline({ key: 'main', rect, shape, ridgeIsVertical: regionRidgeIsVertical(shape, topGraph.mainRoofSpec, rect), highSide }, topGraph.mainRoofSpec);
+  const { zones, restBounds } = topRoofLayout(topGraph);
+  return restRoofRegion(topGraph, project, restBounds, zones.flatMap(z => z.bounds));
+}
+
+/**
+ * 最上階の屋根の小屋組の region 群（S4）: 屋根区画ごとに1つ（graph.roofZones の並び。key＝`zone:<id>`。実効セルが0・条件を満たさない
+ * 区画は無し）、続けて区画以外の主屋根（key 'main'。無ければ省く）。区画は独立した屋根で、主屋根と同じ規則（矩形なら形状・高い側・
+ * 棟木の向き、矩形でない寄棟だけ rect:null・rects）で作る。区画どうし・区画と主屋根の接する辺は軒の出 0（谷・棟違いは作らない）。
+ * 区画が無ければ [mainRoofFramingRegion] か []（従来と同じ）。
+ */
+export function topRoofFramingRegions(topGraph, project) {
+  if (!topGraph) return [];
+  if (!rulesFor(effectiveStructure(topGraph, project)).framing) return [];
+  const { zones, restBounds } = topRoofLayout(topGraph);
+  const out = [];
+  zones.forEach(({ zone, bounds }, i) => {
+    if (bounds.length === 0) return;
+    const others = [...zones.filter((_, j) => j !== i).flatMap(z => z.bounds), ...restBounds];
+    const region = topRoofRegionOf({
+      key: `${ROOF_ZONE_REGION_KEY_PREFIX}${zone.id}`, boundsList: bounds,
+      shape: resolveRoofZoneShape(topGraph, zone, project),
+      highSideOf: () => roofZoneHighSideView(topGraph, zone, project).value,
+      spec: zone.spec,
+      zeroZonesOf: zeroZonesAgainst(topGraph, others),
+    });
+    if (region) out.push(region);
+  });
+  const rest = restRoofRegion(topGraph, project, restBounds, zones.flatMap(z => z.bounds));
+  if (rest) out.push(rest);
+  return out;
 }
 
 /**
@@ -316,10 +381,8 @@ export function leanToFraming(graph, project) {
  */
 export function roofFramingRegionsForFigure({ isRoofPlane, subjectGraph, topGraph, project, memo = (_graph, _key, compute) => compute() }) {
   if (isRoofPlane) {
-    return memo(topGraph, 'roofFramingMainRegions', () => {
-      const region = mainRoofFramingRegion(topGraph, project);
-      return region ? [region] : [];
-    });
+    // 区画（graph.roofZones。observable.ref）の増減・セル・仕様の変化は compute の読みで追跡される（鍵は区画に依らない）
+    return memo(topGraph, 'roofFramingMainRegions', () => topRoofFramingRegions(topGraph, project));
   }
   return memo(subjectGraph, 'roofFramingLeanRegions', () => leanToFramingRegions(subjectGraph, project));}
 

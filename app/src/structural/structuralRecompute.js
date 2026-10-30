@@ -21,7 +21,7 @@ import {
 import { collectFloorGroups } from './memberNumbering.js';
 import { conformWoodSections, conformWoodBeamLevels, conformWoodColumnEccentricity, autoFillWoodBeamDepths, woodBeamDepthMarkSignature } from './woodAutoFill.js';
 import { rulesFor, effectiveStructure, beamColumnWidthMm } from './structureRules.js';
-import { mainRoofFramingRegion, leanToFraming } from './roofFramingRegions.js';
+import { topRoofFramingRegions, leanToFraming } from './roofFramingRegions.js';
 import { buildRoofColumnFilter } from './roofColumnFilter.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { conformToLedger } from './memberGroups.js';
@@ -218,8 +218,8 @@ export async function recomputeStructuralForGraph(targetGraph, project, mainStru
   // 実体階＝下屋（自階の屋根セル。上の leanTo と同じ1回の導出）。どちらも region が無ければ []＝その平面の
   // auto の小屋梁を撤去する（下屋の削除・L字化・非在来化。locked は残る）。非在来・陸屋根も [] 。矩形でない寄棟の
   // 主屋根は [region]（rect=null・rects。autoFillWoodRoofFraming が翼ごとに小屋梁・飛び梁を作る＝C2e-3b）。
-  const mainRegion = isRoof ? mainRoofFramingRegion(belowGraph, project) : null;
-  const roofRegions = isRoof ? (mainRegion ? [mainRegion] : []) : leanTo.regions;
+  // 主屋根は屋根区画ごとの region（key `zone:<id>`）＋区画以外の主屋根（key 'main'）の配列（roofFramingRegions.js topRoofFramingRegions。S4）
+  const roofRegions = isRoof ? topRoofFramingRegions(belowGraph, project) : leanTo.regions;
   // 柱貫通（下屋の屋根セルにしか接しない通り芯交点の柱。roofColumnFilter.js）。通り芯の交点に柱が立つ構造の実体階だけ、
   // 自階の graph から作って autoFillStructuralGrid へ渡す（在来木造・屋根専用平面は null＝従来どおり）。
   const roofColumnFilter = (!isRoof && ownRules.columnPlacement !== 'wallIntersections')
