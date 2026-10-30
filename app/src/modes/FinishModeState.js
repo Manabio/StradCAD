@@ -33,7 +33,7 @@ import { effectiveStructure, defaultMaterialFor } from '../structural/structureR
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
 import { composeCatalog, composeList, docDiffMap, overlayGeneration } from '../catalog/catalogRegistry.js';
 import { isMaterialCode } from '../catalog/materialCode.js';
-import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes } from '../catalog/codeNormalization.js';
+import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes, ROOF_SPEC_MATERIAL_FIELDS } from '../catalog/codeNormalization.js';
 import { buildResolveRows } from '../catalog/resolveQueue.js';
 import { REMOVED_MATERIALS } from '../catalog/legacyMaterialCodes.js';
 
@@ -58,6 +58,17 @@ const MATERIAL_CODE_GRAPH_FIELDS    = [
   'shaftWallMaterial',
 ]; // per-floor 設定
 export const MATERIAL_CODE_OVERRIDE_FIELDS = ['wallMaterial', 'wallFinish', 'ceilingPanel', 'ceilingFinish']; // Room.customOverrides
+
+// 屋根の仕様（RoofSpec）の列から、材料コード4項目（ROOF_SPEC_MATERIAL_FIELDS）の空でない文字列を codes へ足す。
+// spec が null/undefined の要素は読み飛ばす。どの spec を対象にするか（既定値の扱い）は呼び出し側が決める。
+function addRoofSpecMaterialCodes(codes, specs) {
+  for (const spec of specs) {
+    for (const f of ROOF_SPEC_MATERIAL_FIELDS) {
+      const v = spec?.[f];
+      if (typeof v === 'string' && v) codes.add(v);
+    }
+  }
+}
 
 export class FinishModeState {
   dragState      = null; // { currentCell, visitedCells: Map, stairKeys: Set, startCellKey } | null
@@ -564,30 +575,14 @@ export class FinishModeState {
       }
     }
 
-    // 屋根の仕様の材料コード（野地板・防水シート・軒裏。codeNormalization の ROOF_SPEC_MATERIAL_FIELDS と同じ4項目）
-    for (const room of g?.rooms ?? []) {
-      for (const f of ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking']) {
-        const v = room.roofSpec?.[f];
-        if (typeof v === 'string' && v) codes.add(v);
-      }
-    }
-
-    // 主屋根の仕様の材料コード。既定値のときは保存データへ書かれず（codeNormalization の列挙にも出ない）、
+    // 屋根の仕様の材料コード（野地板・防水シート・軒裏。ROOF_SPEC_MATERIAL_FIELDS の4項目）。
+    // 下屋（rooms[].roofSpec）。
+    addRoofSpecMaterialCodes(codes, (g?.rooms ?? []).map(room => room.roofSpec));
+    // 主屋根。既定値のときは保存データへ書かれず（codeNormalization の列挙にも出ない）、
     // ここでも対象にしない（保存側と同じ規則）。
-    if (g?.mainRoofSpec && !isDefaultRoofSpec(g.mainRoofSpec)) {
-      for (const f of ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking']) {
-        const v = g.mainRoofSpec[f];
-        if (typeof v === 'string' && v) codes.add(v);
-      }
-    }
-
-    // 屋根区画の仕様の材料コード（保存側 snapshot.roofZones[].spec と同じ。区画は既定値でも書かれる）
-    for (const zone of g?.roofZones ?? []) {
-      for (const f of ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking']) {
-        const v = zone.spec?.[f];
-        if (typeof v === 'string' && v) codes.add(v);
-      }
-    }
+    if (g?.mainRoofSpec && !isDefaultRoofSpec(g.mainRoofSpec)) addRoofSpecMaterialCodes(codes, [g.mainRoofSpec]);
+    // 屋根区画（保存側 snapshot.roofZones[].spec と同じ。区画は既定値でも書かれる）。
+    addRoofSpecMaterialCodes(codes, (g?.roofZones ?? []).map(zone => zone.spec));
 
     // S造スラブ仕様のプレート材料コード。個別仕様（各スラブの steelSpec）は持つ項目だけ、共通仕様
     // （project.structuralInfo.steelSlabSpec）は既定以外のときだけ載せる（保存側が既定のとき書かない規則と同じ）。

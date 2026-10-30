@@ -65,7 +65,7 @@ const BACKING_FIELDS = ['exteriorWallBacking', 'interiorWallBacking', 'ceilingBa
 // ROOF_SPEC_KEYS の部分集合。本ファイルはゼロ依存の葉モジュールのため名前を直書きし、一致は
 // codeNormalization.test.js が固定する）。空文字・非文字列は対象外（野地板・防水シートは復元側が既定で補う。軒裏の 2 項目は
 // 補わず空のまま保ち、表示のときだけ resolveSoffitSpec が既定へ読み替える＝空の既定材は同梱・照合に載らない）。
-const ROOF_SPEC_MATERIAL_FIELDS = ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking'];
+export const ROOF_SPEC_MATERIAL_FIELDS = ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking'];
 
 function isRoofSpecMaterialCode(spec, field) {
   return !!spec && typeof spec[field] === 'string' && spec[field] !== '';

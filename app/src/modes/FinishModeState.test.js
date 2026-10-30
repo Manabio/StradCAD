@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature, ROOF_SPEC_KEYS, RoofZone, RoofSpec } from '@core';
 import { FinishModeState, MATERIAL_CODE_OVERRIDE_FIELDS } from './FinishModeState.js';
-import { enumerateMaterialCodeRefs, ROOM_MATERIAL_OVERRIDE_KEYS } from '../catalog/codeNormalization.js';
+import { enumerateMaterialCodeRefs, ROOM_MATERIAL_OVERRIDE_KEYS, ROOF_SPEC_MATERIAL_FIELDS } from '../catalog/codeNormalization.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { restoreGraph, serializeGraph } from '../graphSnapshot.js';
@@ -1523,6 +1523,19 @@ test('【屋根区画 S1】区画の spec の材料コードは既定値でも�
   const codes = state._collectReferencedCodes();
   assert.equal(codes.has('999999999999'), true, '区画の未知の野地板コードも載る（照合の対象になる）');
   assert.equal(codes.has('302000000003'), true, '区画の既定の防水シートが載る（既定値でも載る）');
+});
+
+test('【重複整理 D3】ROOF_SPEC_MATERIAL_FIELDS は4項目で、区画 spec の4項目すべてが参照コードに載る（下屋・主屋根・区画が同じ定数を共有する）。空は載らない', () => {
+  assert.deepEqual(ROOF_SPEC_MATERIAL_FIELDS, ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking']);
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  const spec = new RoofSpec();
+  const codes = ['999999999901', '999999999902', '999999999903', '999999999904'];
+  ROOF_SPEC_MATERIAL_FIELDS.forEach((f, i) => spec.setField(f, codes[i]));
+  graph.setRoofZones([new RoofZone({ id: 'z1', cells: [worldToCell(1000, 1500, graph).key], spec })]);
+  const got = state._collectReferencedCodes();
+  for (const c of codes) assert.equal(got.has(c), true, `区画の ${c} が載る`);
+  assert.equal(got.has(''), false, '空文字は載らない');
 });
 
 test('【軒裏】参照コードに軒裏の材コードが載る: 下屋は付与時の既定（ケイカル板・野縁30×15）、主屋根は軒裏を指定したとき。空は載らない', () => {
