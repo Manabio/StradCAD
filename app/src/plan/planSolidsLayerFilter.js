@@ -18,6 +18,8 @@ import { markEaveOutlineLines } from '../ceiling/soffitLineStyle.js';
 import { markDroppedBeamLines } from '../ceiling/droppedBeamStyle.js';
 import { markOpeningEdges } from './planOpeningEdges.js';
 import { subtractRects } from './planGeometry.js';
+import { topRoofPlanRegions } from '../structural/roofFramingRegions.js';
+import { resolveTopStoryHeightMm } from '../floorHeights.js';
 import { planSolids } from './planSolids.js';
 import { planSectionFigure } from './planSectionFigure.js';
 import { planSectionFigureUp } from './planSectionUp.js';
@@ -50,7 +52,11 @@ export const UP_SELF_DRAWN_KINDS = Object.freeze(['ceiling', 'beam', 'generic'])
 /** 見上げで**上階の層**（layerFloorZ > 0）に描く source.kind。'all'＝全種別を細線で（天井の無い所＝吹抜け・穴の中だけ見える）。 */
 export const UP_ABOVE_DRAWN_KINDS = 'all';
 
-/** 見上げの isDrawn（層は layerFloorZ。上階の層は > 0、自階は 0・省略）。 */
+/**
+ * 見上げの isDrawn（層は layerFloorZ。上階の層は > 0、自階は 0・省略）。
+ * > 0 には最上階の主屋根・屋根区画の軒裏の立体（自階の層だが layerFloorZ＝軒の高さ。source.topRoof:true）も含む——
+ * 「> 0＝上階の層」を前提に graph や peek を引く処理を足すときは topRoof を除くこと。
+ */
 const isDrawnUp = (kind, layerFloorZ) => ((layerFloorZ ?? 0) > 0
   ? UP_ABOVE_DRAWN_KINDS === 'all' || UP_ABOVE_DRAWN_KINDS.includes(kind)
   : UP_SELF_DRAWN_KINDS.includes(kind));
@@ -112,11 +118,15 @@ export function planSolidsLayerPrimitives({ graph, belowPeek = null, selfRiserOf
  * 最上の層は上階なので、蹴上（段の高さ・破れ先の位置）は上階の plane で解く aboveRiserOf（planSolids の「最上の層は opts.riserOf」）。
  * 自階の階段の蹴上は自階〜上階の階高から求まる。上階スラブの階段の破れ先は、下階（見上げでは自階）に同じ階段があるときだけ穴になる。
  * abovePeek.aboveAboveGraph＝N+2 の graph（無ければ null）。上階の層の階段の裏面・足元の壁の天端・段の到達辺へ aboveGraphOf で渡す（無ければ Q3）。
- * @param {{graph: object|null, abovePeek?: {graph: object|null, floorHeightMm: number, aboveAboveGraph?: object|null}|null, aboveRiserOf?: (stair:object)=>number|null}} args
+ * project があり graph が最上階（とその検討案）なら、主屋根・屋根区画の軒裏も足す（topRoofPlanRegions。軒の高さ＝最上階の階高
+ * resolveTopStoryHeightMm＝最上階 FL〜軒桁上端。planSolids の opts.topRoof）。project なしは従来どおり（主屋根は描かない）。
+ * @param {{graph: object|null, abovePeek?: {graph: object|null, floorHeightMm: number, aboveAboveGraph?: object|null}|null, aboveRiserOf?: (stair:object)=>number|null, project?: object|null}} args
  * @returns {import('./planSolids.js').Solid[]}
  */
-export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf = () => null }) {
+export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf = () => null, project = null }) {
   if (!graph) return [];
+  const topRegions = topRoofPlanRegions(graph, project);
+  const topRoof = topRegions.length > 0 ? { regions: topRegions, eaveZMm: resolveTopStoryHeightMm(project) } : null;
   const aboveGraph = abovePeek?.graph ?? null;
   const aboveAboveGraph = abovePeek?.aboveAboveGraph ?? null;
   const layers = [{ graph, floorZMm: 0, role: 'self' }];
@@ -126,6 +136,7 @@ export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf 
   return planSolids(layers, {
     riserOf: aboveRiserOf, belowGraphOf: g => (g === aboveGraph ? graph : null),
     aboveGraphOf: g => (g === aboveGraph ? aboveAboveGraph : null), ceilings: true, lookUp: true,
+    topRoof,
   });
 }
 
@@ -144,9 +155,9 @@ export function ownLayerBeamSolids(solids) {
  * 全域が階の値と同じ（uniform）なら数値の cutZ で解く（出力不変）。
  * @returns {Primitive[]}
  */
-export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRiserOf = () => null, cutZ }) {
+export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRiserOf = () => null, cutZ, project = null }) {
   if (!graph || !Number.isFinite(cutZ)) return [];
-  const solids = planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf });
+  const solids = planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf, project });
   // 下がり梁の判定には、いま作った自階の梁の立体を使い回す（resolver が梁を立体化し直さない）
   const resolver = ceilingCutResolverOf(graph, { baseCutMm: cutZ, beamSolids: ownLayerBeamSolids(solids) });
   const figure = resolver.uniform
@@ -214,12 +225,13 @@ export function planSolidsLayerCacheSpec(graph, belowPeek, direction = 'down') {
  *   aboveRiserOf?: (stair: object) => number|null  direction 'up' の上階の階段の蹴上（上階の plane で解く）}} args
  * @returns {Primitive[]|null}
  */
-export function planSolidsLayerResolve({ graph, belowPeek, abovePeek, direction = 'down', prevPrims = null, memo, selfRiserOf, aboveRiserOf }) {
+export function planSolidsLayerResolve({ graph, belowPeek, abovePeek, direction = 'down', prevPrims = null, memo, selfRiserOf, aboveRiserOf, project = null }) {
   if (!graph) return null;
   if (isCenterLineDragging(graph)) return prevPrims;
   if (direction === 'up') {
     const spec = planSolidsLayerCacheSpec(graph, abovePeek, 'up');
-    return memo(spec.home, spec.key, () => planSolidsLayerPrimitivesUp({ graph, abovePeek: spec.peek, aboveRiserOf, cutZ: spec.cutZ }));
+    // project（最上階の判定と軒の高さ）は compute の中で読むので、階の増減・階高の変更は memo（computed）が追う
+    return memo(spec.home, spec.key, () => planSolidsLayerPrimitivesUp({ graph, abovePeek: spec.peek, aboveRiserOf, cutZ: spec.cutZ, project }));
   }
   const { home, key, peek, cutZ } = planSolidsLayerCacheSpec(graph, belowPeek);
   return memo(home, key, () => planSolidsLayerPrimitives({ graph, belowPeek: peek, selfRiserOf, cutZ }));

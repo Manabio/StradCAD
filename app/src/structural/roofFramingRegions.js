@@ -29,7 +29,7 @@
  * そのまま使い、ここで複製しない。
  *
  * 平面の表示（軒先・棟木・隅木・谷木の細線）用は別入口 leanToPlanRegions（構造ゲートなし・全構造種別・補完 region あり。
- * 伏図用の結果は変えない）。
+ * 伏図用の結果は変えない）。最上階の主屋根・屋根区画の平面用（天伏の見上げの軒裏）は topRoofPlanRegions。
  *
  * どの graph から作るか（呼び出し側は roofFramingRegionsForFigure を使う）:
  *   主屋根＝最上階の graph（屋根専用平面＝小屋伏図では柱レイヤ columnMap の供給階。mainRoofSpec と部屋を持つ）。
@@ -39,6 +39,7 @@
 import {
   isRoofFeature, RoofShape, CL_OVERLAP_TOL_MM, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM, ROOF_ZONE_REGION_KEY_PREFIX,
 } from '../core/constants.js';
+import { isTopFloorPlane } from '../core/project.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
 import {
   mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView, roofZoneBounds, resolveRoofZoneShape, roofZoneHighSideView,
@@ -169,22 +170,83 @@ export function mainRoofFramingRegion(topGraph, project) {
 export function topRoofFramingRegions(topGraph, project) {
   if (!topGraph) return [];
   if (!rulesFor(effectiveStructure(topGraph, project)).framing) return [];
+  const out = [];
+  for (const args of topRoofRegionArgs(topGraph, project)) {
+    const region = topRoofRegionOf(args);
+    if (region) out.push(region);
+  }
+  return out;
+}
+
+/**
+ * topRoofRegionOf の引数を、区画ごと（実効セルが0の区画は除く。graph.roofZones の並び）→区画以外の主屋根（key 'main'。範囲が空なら除く）の
+ * 順で作る。伏図用（topRoofFramingRegions）と平面用（topRoofPlanRegions）が共有する（範囲・形状・高い側・出幅0の取り合いを二重化しない）。
+ */
+function topRoofRegionArgs(topGraph, project) {
   const { zones, restBounds } = topRoofLayout(topGraph);
   const out = [];
   zones.forEach(({ zone, bounds }, i) => {
     if (bounds.length === 0) return;
     const others = [...zones.filter((_, j) => j !== i).flatMap(z => z.bounds), ...restBounds];
-    const region = topRoofRegionOf({
+    out.push({
       key: `${ROOF_ZONE_REGION_KEY_PREFIX}${zone.id}`, boundsList: bounds,
       shape: resolveRoofZoneShape(topGraph, zone, project),
       highSideOf: () => roofZoneHighSideView(topGraph, zone, project).value,
       spec: zone.spec,
       zeroZonesOf: zeroZonesAgainst(topGraph, others),
     });
-    if (region) out.push(region);
   });
-  const rest = restRoofRegion(topGraph, project, restBounds, zones.flatMap(z => z.bounds));
-  if (rest) out.push(rest);
+  if (restBounds.length > 0) {
+    out.push({
+      key: 'main', boundsList: restBounds,
+      shape: resolveMainRoofShape(topGraph, project),
+      highSideOf: () => mainRoofHighSideView(topGraph, project).value,
+      spec: topGraph.mainRoofSpec,
+      zeroZonesOf: zeroZonesAgainst(topGraph, zones.flatMap(z => z.bounds)),
+    });
+  }
+  return out;
+}
+
+/**
+ * 平面（天伏の見上げ）に描く最上階の屋根（主屋根・屋根区画）ごとの region（leanToPlanRegions の主屋根版）。区画ごと→区画以外の主屋根の順。
+ * 構造ゲートは見ない（全構造種別で出す。非木造は陸屋根→外形線だけ）。伏図と同じ region（topRoofRegionOf）が作れればそれ、
+ * 作れなければ（陸屋根・棟違い・矩形でない切妻/片流れ）外形線だけの補完 region（outlineOnly。全辺を軒とみなす）。
+ * 区画どうし・区画と主屋根の接する辺は軒の出 0（伏図と同じ zeroZones）。屋内に接する辺は無い（屋根は建物範囲の上）ので interiorRects は渡さない。
+ * 平面用に exposedPaths・slope・soffitOrientation・zeroZones・planDrains を足す。最上階（とその検討案）でない・project/graph が無いときは []。
+ * 戻り値は読み取り専用。
+ */
+export function topRoofPlanRegions(graph, project) {
+  if (!graph || !project || !isTopFloorPlane(project, graph.plane)) return [];
+  const out = [];
+  for (const args of topRoofRegionArgs(graph, project)) {
+    const { boundsList, spec, zeroZonesOf } = args;
+    // 陸屋根（非木造の既定の形状）は軒を持たない＝出幅 0 とみなし、軒裏を描かない（ユーザー裁定 2026-10-30「非木造は陸屋根なので出幅0」。
+    // spec の出幅の値は変えない＝表示の規則）。他の区画・主屋根との接する辺は zeroZonesOf が区画のセルで判定するので、
+    // 陸屋根の区画に接する辺は従来どおり軒の出 0 のまま。
+    if (args.shape === RoofShape.FLAT) continue;
+    let region = topRoofRegionOf(args);
+    let kindZones = null;
+    if (!region) {
+      const rect = rectOfBounds(boundsList);
+      const rects = rect ? [rect] : validCellRects(boundsList);
+      if (!rects) continue;
+      const edges = orthogonalBoundaryLoops({ rects, tolMm: CL_OVERLAP_TOL_MM }).flat();
+      kindZones = edges.map(e => ({ isVertical: e.isVertical, coord: e.coord, lo: e.lo, hi: e.hi, outward: e.outward, kind: 'eave' }));
+      const base = { key: args.key, rect, shape: args.shape, ridgeIsVertical: null, highSide: null, outlineOnly: true };
+      if (!rect) base.rects = rects;
+      region = withOutline(base, spec, zeroZonesOf(rect, rects), kindZones);
+    }
+    const zeroZones = zeroZonesOf(region.rect, region.rect ? [region.rect] : region.rects);
+    out.push({
+      ...region,
+      exposedPaths: roofOutlineExposedPaths(outlineArgs(region, spec, zeroZones, kindZones, null)),
+      slope: spec?.slope,
+      soffitOrientation: resolveSoffitSpec(spec).orientation,
+      zeroZones,
+      planDrains: planDrainsOf(region),
+    });
+  }
   return out;
 }
 

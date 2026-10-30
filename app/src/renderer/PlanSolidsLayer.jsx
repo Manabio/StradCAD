@@ -40,6 +40,7 @@ export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, 
     prevPrims: prevRef.current?.planeId === graph.plane.id && prevRef.current.direction === direction ? prevRef.current.prims : null,
     selfRiserOf: s => stairRiserOf(s, project, graph.plane),
     aboveRiserOf: s => stairRiserOf(s, project, abovePeek.graph.plane),
+    project, // 見上げの最上階だけ主屋根・屋根区画の軒裏に使う（最上階の判定と軒の高さ）
   });
   if (resolved) prevRef.current = { planeId: graph.plane.id, direction, prims: resolved };
   const prims = resolved ? visiblePlanPrimitives(resolved, viewport.lodLevel) : [];

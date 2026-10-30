@@ -57,7 +57,7 @@ for (const src of sources) {
       const u0 = performance.now();
       // 上階の層の階段の蹴上は上階の plane で解く（PlanSolidsLayer.jsx と同じ。旧版は selfRiserOf を渡して上階の階段の段・裏面が出なかった）
       const aboveRiserOf = above ? s => stairRiserOf(s, project, above) : undefined;
-      const upPrims = planSolidsLayerPrimitivesUp({ graph, abovePeek, aboveRiserOf, cutZ: ceilingCutHeightMmOf(plane) });
+      const upPrims = planSolidsLayerPrimitivesUp({ graph, abovePeek, aboveRiserOf, cutZ: ceilingCutHeightMmOf(plane), project }); // project＝最上階の主屋根・屋根区画の軒裏用（PlanSolidsLayer.jsx と同じ）
       const upMs = performance.now() - u0;
       const upLines = upPrims.filter(p => p.kind === 'line').map(p => ({
         key: p.key, cls: p.cls, kind: p.source.kind, id: p.source.id, layerFloorZ: p.source.layerFloorZ ?? 0,

@@ -66,7 +66,8 @@ test('【配線】planSolidsLayerFilter.js: 置き場・鍵・使う peek は pl
   assert.match(filter, /^\s*if \(!graph\) return null;\s*$/m);
   assert.equal(count(filter, /belowPeek === undefined/g), 1, '未解決は鍵の pending だけで扱う（描かない分岐を持たない）');
   assert.match(filter, /^\s*const spec = planSolidsLayerCacheSpec\(graph, abovePeek, 'up'\);\s*$/m, '見上げは abovePeek で置き場・鍵を決める');
-  assert.match(filter, /^\s*return memo\(spec\.home, spec\.key, \(\) => planSolidsLayerPrimitivesUp\(\{ graph, abovePeek: spec.peek, aboveRiserOf, cutZ: spec.cutZ \}\)\);\s*$/m);
+  assert.match(filter, /^\s*return memo\(spec\.home, spec\.key, \(\) => planSolidsLayerPrimitivesUp\(\{ graph, abovePeek: spec.peek, aboveRiserOf, cutZ: spec.cutZ, project \}\)\);\s*$/m, '最上階の主屋根の軒裏用に project を見上げの解決へ渡す（compute の中で読むので memo が階の増減を追う）');
+  assert.match(layer, /^\s*project, \/\/ 見上げの最上階だけ/m, 'PlanSolidsLayer.jsx は planSolidsLayerResolve へ project を渡す');
   assert.match(filter, /^\s*if \(isCenterLineDragging\(graph\)\) return prevPrims;\s*$/m);
   assert.match(filter, /^\s*return memo\(home, key, \(\) => planSolidsLayerPrimitives\(\{ graph, belowPeek: peek, selfRiserOf, cutZ \}\)\);\s*$/m);
   assert.match(filter, /^\s*return \(graph\?\.centerLines \?\? \[\]\)\.some\(cl => \(cl\.pendingDelta \?\? 0\) !== 0\);\s*$/m);
@@ -235,7 +236,9 @@ test('【配線】App.jsx の上階 peek の effect が abovePlanPeek を3状態
 
 test('【不変条件】planSolidsLayerFilter.js（純モジュール）は store.js・snap.js・.jsx・react-konva・graphDerived・mobx を import しない。描く種別の集合は1か所', () => {
   const imports = filter.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 12);
+  assert.equal(imports.length, 14);
+  assert.match(filter, /^import \{ topRoofPlanRegions \} from '\.\.\/structural\/roofFramingRegions\.js';$/m, '最上階の主屋根の軒裏の region（純モジュール）');
+  assert.match(filter, /^import \{ resolveTopStoryHeightMm \} from '\.\.\/floorHeights\.js';$/m, '軒の高さ＝最上階の階高');
   assert.match(filter, /^import \{ markDroppedBeamLines \} from '\.\.\/ceiling\/droppedBeamStyle\.js';$/m);
   assert.match(filter, /markDroppedBeamLines\(markEaveOutlineLines\(markOpeningEdges\(marked, visibleHoles\)\), resolver\.droppedBeams\.map\(d => d\.beamId\)\)/, '下がり梁の中線は見上げの経路だけ');
   assert.equal(count(filter, /markDroppedBeamLines\(/g), 1, '見下げの経路に通さない');
@@ -272,6 +275,8 @@ test('【配線】planSolidsLayerFilter.js: 見下げは自階（FL=0）＋直�
   assert.match(filter, /^\s*return planSolids\(layers, \{ riserOf: selfRiserOf, belowGraphOf: g => \(g === graph \? belowGraph : null\) \}\);\s*$/m, '見下げは ceilings を渡さない（出力不変）');
   assert.match(filter, /^\s*riserOf: aboveRiserOf, belowGraphOf: g => \(g === aboveGraph \? graph : null\),\s*$/m, '上階スラブの破れ先は自階に同じ階段があるとき穴。蹴上は上階の層（最上）。lookUp は見上げだけ（階段上の裏面。S13a）');
   assert.match(filter, /^\s*aboveGraphOf: g => \(g === aboveGraph \? aboveAboveGraph : null\), ceilings: true, lookUp: true,\s*$/m, 'N+2 は見上げの上階の層にだけ aboveGraphOf で渡す');
+  assert.match(filter, /^\s*topRoof,\s*$/m, '最上階の主屋根・屋根区画の軒裏（opts.topRoof）は見上げの1か所だけ');
+  assert.equal(count(filter, /topRoof,/g), 1);
   assert.equal(count(filter, /aboveGraphOf:/g), 1, 'aboveGraphOf を渡すのは見上げの1か所だけ（見下げは N+2 を使わない）');
   assert.equal(count(filter, /lookUp: true/g), 1, 'lookUp を渡すのは見上げの1か所だけ');
   assert.equal(count(filter, /ceilings: true/g), 1, '天井を足すのは見上げの1か所だけ');

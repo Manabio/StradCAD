@@ -527,16 +527,30 @@ const innerLinePoints = ({ points, closed }) => (closed ? [...points, points[0],
  * **遮蔽専用**（drawEdges:false。屋内に接する出幅0の辺を描かない裁定は壁の無い階でも有効で、幾何だけでは再現できないため）。
  * 描く線は innerLines（壁で切る前の外形線 exposedPaths・棟木・隅木・谷木。`roofPlanRegionFigure`）で、外壁面どまりは
  * 壁立体の遮蔽が導く。傾斜ラベルは marks。複数の閉路なら閉路ごとに1件（source.part）で、線とラベルは最初の1件だけに付ける。
- * outline の無い region は矩形のときだけ矩形の閉路で代用し、矩形でなければ落とす。主屋根（最上階の屋根）は常に切断面より
- * 上なので立体化しない（拡張点: ここ）。
+ * outline の無い region は矩形のときだけ矩形の閉路で代用し、矩形でなければ落とす。主屋根（最上階の屋根）は見下げでは常に切断面より
+ * 上なので立体化しない（見上げの軒裏だけ opts.topRoof で足す。下記）。
  * 見上げ（opts.lookUp）の上階の層（layer.role==='above'）だけ軒裏の表現にする: 線は外形線＋（軒裏の向きが傾斜〔region.soffitOrientation
  * ==='sloped'〕のときだけ）棟木・隅木・谷木＋910割付線（roofSoffitJointLines。詳細 LOD のみ・グレー）で、傾斜ラベル（marks）は付けない。
- * それ以外（見下げ・見上げの自階の層）は従来のまま。
+ * 見上げの自階の層で opts.topRoof（最上階の主屋根・屋根区画の region と軒の高さ。planSolidsLayerSolidsUp が最上階だけ渡す）が
+ * あるときは、その region も同じ軒裏の表現で足す（zLo＝軒の高さ＝最上階の階高。source.layerFloorZ もその高さ〔> 0〕にするので、
+ * 見上げの「上階の層」の描画・軒先の中線・グレーの割付線の規則がそのまま効き、自階の層の下屋〔見上げでは描かない〕と見分けられる。
+ * source.topRoof:true は識別用の印）。自階の天井立体が建物の内側を遮るので、見えるのは外壁の外の軒だけ。
+ * それ以外（見下げ・見上げの自階の層の下屋）は従来のまま。
  */
 function roofSolids(layer, opts = {}) {
-  const soffitView = opts.lookUp === true && layer.role === 'above';
+  const lookUp = opts.lookUp === true;
+  const out = regionRoofSolids(layer, leanToPlanRegions(layer.graph), lookUp && layer.role === 'above', {});
+  if (lookUp && layer.role === 'self' && opts.topRoof?.regions?.length > 0 && Number.isFinite(opts.topRoof.eaveZMm)) {
+    const topLayer = { ...layer, floorZMm: opts.topRoof.eaveZMm };
+    out.push(...regionRoofSolids(topLayer, opts.topRoof.regions, true, { topRoof: true }));
+  }
+  return out;
+}
+
+/** roofSolids の本体: region ごとの立体。extraSource は立体の source へ足す印（最上階の屋根は topRoof:true）。 */
+function regionRoofSolids(layer, regions, soffitView, extraSource) {
   const out = [];
-  for (const region of leanToPlanRegions(layer.graph)) {
+  for (const region of regions) {
     const loops = (region.outline ?? []).map(l => l.points);
     if (loops.length === 0 && region.rect) {
       const { x1, y1, x2, y2 } = region.rect;
@@ -555,7 +569,7 @@ function roofSolids(layer, opts = {}) {
       if (poly.length < 6 || !poly.every(Number.isFinite)) return;
       const solid = {
         kind: 'roof', footprint: { poly }, zLo: layer.floorZMm, zHi: slope ? slope.zTop : layer.floorZMm, drawEdges: false,
-        source: baseSource(layer, 'roof', region.key, { part }),
+        source: baseSource(layer, 'roof', region.key, { part, ...extraSource }),
       };
       if (slope) solid.zAt = slope.zAt;
       if (first) {

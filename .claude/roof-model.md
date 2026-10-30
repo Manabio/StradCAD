@@ -96,7 +96,7 @@
 - 隅木: 軒側の端が屋根範囲の角（直交する2辺の上）にあり、2辺の出幅が等しければ、その出幅ぶん45°に外形線の角まで延ばす。軒側の端が内部の隅木（隠れた出隅）は延ばさない。谷木は軒側の端が入隅の角（直交する2辺の上）にあれば同じ規則で外形線の入隅の角まで延ばす（`valleys`。平面と伏図の両方。矩形でない寄棟・L字の下屋とも）。2辺の出幅が違う角（下屋の辺が屋内に接する角）は延ばさない。L字の下屋の隅木・谷木は水下と水下の角（軒先の角）から出るので普通の角の規則で延び、`midEdge`（軒側の端が1本の辺の途中にある隅木も延ばす）は今は使わない（引数は残してある）。
 
 ## 平面の表示（下屋。2026-10-04）
-- 下屋だけを、構造・展開モード以外の平面（`shouldShowPlanFigure`）に**細い実線**で描く（軒先の線・棟木・隅木・谷木。全 LOD・全構造種別。主屋根は対象外。母屋・束・小屋梁は描かない）。線の作り方は`finish/roof/roofPlanFigure.js roofPlanRegionFigure`（純モジュール・1か所）で、2026-10-08（平面の断面解決 S5）から屋根立体の`innerLines`・`marks`として解決器へ渡り、`renderer/PlanSolidsLayer.jsx`が描く（`.claude/plan-section.md`「S5」）。旧`RoofPlanLayer.jsx`・`roofPlanFigure`・`roofPlanWallTrim.js`は目視 OK 後の S5b（2026-10-08）で削除した（回帰の関門は`scripts/probe/dumpRoofPlanCompare.mjs`と`golden-roof/`）。
+- 下屋だけを、構造・展開モード以外の平面（`shouldShowPlanFigure`）に**細い実線**で描く（軒先の線・棟木・隅木・谷木。全 LOD・全構造種別。主屋根は対象外〔天伏の見上げの軒裏は別。最上階では主屋根・屋根区画の軒裏も描く＝`.claude/plan-section.md`「軒裏」〕。母屋・束・小屋梁は描かない）。線の作り方は`finish/roof/roofPlanFigure.js roofPlanRegionFigure`（純モジュール・1か所）で、2026-10-08（平面の断面解決 S5）から屋根立体の`innerLines`・`marks`として解決器へ渡り、`renderer/PlanSolidsLayer.jsx`が描く（`.claude/plan-section.md`「S5」）。旧`RoofPlanLayer.jsx`・`roofPlanFigure`・`roofPlanWallTrim.js`は目視 OK 後の S5b（2026-10-08）で削除した（回帰の関門は`scripts/probe/dumpRoofPlanCompare.mjs`と`golden-roof/`）。
 - region は伏図と別入口の`leanToPlanRegions`（構造ゲートなし）。木造で伏図の region になるものはそのまま使い（伏図側の結果は変えない）、ならないもの（陸屋根・棟違い・全周が壁・向かい合う壁の間・けらばの無い L字の切妻・翼が0の L字の片流れ・規則で作れない形）だけ平面専用の補完 region（`outlineOnly`。全辺を軒とみなした外形線だけで、棟木・隅木・谷木・傾斜ラベルは出さない）にする。
 - 軒先の線は、壁の中に重なる部分（屋内に接する辺＝出幅 0）を描かない（`roofOutlineExposedPaths`。ユーザーが出幅 0 にした屋内に接しない辺は描く）。伏図の外形線（`roofOutline`）は閉路のまま。
 - 谷木は軒先の線の入隅の角まで延ばす（`extendDiagonalsToOutline`の`valleys`。伏図も同じ。2026-10-04 に伏図へ拡張）。L字の下屋の片流れの棟木（向かい合う水下があるときだけ）も伏図と同じ線を平面に出す（`roofRidgeLines`）。
@@ -110,6 +110,7 @@
 - **空＝既定**: コンストラクタの既定は4項目とも空（''／null）で`isDefaultRoofSpec`（主屋根「既定なら保存しない」）を変えない。下屋を付けたとき（`createLeanToRoofSpec`）だけ既定値（けい酸カルシウム板 t=8・□-30×15・傾斜・「目透かし貼り」）を書く（材料コードは保存されていないと同梱・照合に乗らないため）。主屋根と旧文書の下屋は空のままで、**空を既定へ読み替える入口は`roofDefaults.js resolveSoffitSpec`の1つだけ**（備考は補わない）。帰結: 旧文書・主屋根の既定材は同梱の使用コードに載らない（本体マスタにあるので表示は崩れない。受容）。FBSは`RS`末尾の4フィールドで、空のときは文字列もフィールドも書かない＝既存文書のバイト列は不変。
 - 下地材は構造に依らず保存し、欄は木造（`roofInput.js soffitBackingVisible`＝`isWoodStructure`）のときだけ出す（柱貫通の「値は保存するが欄は構造で出し分ける」と同型）。「木造以外の軒裏下地」は未定義。
 - 編集口は仕上げモードの外部タブ（`RoofGroup.jsx`の軒裏行。下屋・主屋根とも）と構造モードの外部タブ（同じ群。上の「入力の確定」）。天伏の外部タブは直上階の下屋を**表示だけ**し、主屋根（自階）だけ編集できる（`.claude/ceiling-model.md`「外部タブ」）。材の select は「（未選択）」を出さず現在値を先頭に補う`RoofMaterialSelect`を両方で共用。
+- 天伏の見上げに描く軒裏は、直上階の下屋に加えて**最上階の主屋根・屋根区画**も（2026-10-30。`topRoofPlanRegions`。区画ごとに別の軒裏〔向きは各 spec の`soffitOrientation`〕、接する辺は軒の出 0 で線なし）。設計は`.claude/plan-section.md`「軒裏」。
 - 落とし穴: `<select>`は同じ値の選び直しで change を出さないので、既定と同じ材を「明示的に保存」する操作は無い（別の材にして戻せば保存される）。
 
 ## 既知の限界

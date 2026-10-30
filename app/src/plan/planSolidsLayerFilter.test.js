@@ -1,7 +1,8 @@
 // planSolidsLayerFilter.js（S4: 新レイヤへ渡す線の絞り込みと層スタックの組み立て）の単体テスト。実物の PlanGraph で組む。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomFeature, RoomKind, StairType, RoofShape } from '@core';
+import { RoomFeature, RoomKind, StairType, RoofShape, Project, Plane, RoofSpec, RoofZone } from '@core';
+import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import {
   S4_DRAWN_KINDS, BELOW_DRAWN_KINDS, drawnPrimitives, planSolidsLayerPrimitives, planSolidsLayerSolids, planSolidsLayerCacheSpec, planSolidsLayerResolve, isCenterLineDragging,
   visiblePlanPrimitives, UP_SELF_DRAWN_KINDS, UP_ABOVE_DRAWN_KINDS, planSolidsLayerPrimitivesUp, planSolidsLayerSolidsUp, ownLayerBeamSolids,
@@ -770,4 +771,117 @@ test('見上げ: 軒裏の910割付線は本番経路で detailOnly:true・style
   const roles = new Set(lp.filter(p => p.kind === 'line' && p.source.kind === 'roof').map(p => p.source.role));
   assert.ok(roles.has('eaveSoffitJoint') && roles.has('outline'), '水平でも外形線・割付線は出る');
   assert.ok(!roles.has('hip') && !roles.has('ridge'), '水平なら棟木・隅木は消える');
+});
+
+// ---- 最上階の主屋根・屋根区画の軒裏（project を渡した見上げ。topRoofPlanRegions → opts.topRoof）
+
+/** 6000×4500 の1部屋（壁あり）の最上階と、それを最上階に持つ project（在来木造）。上階なし。 */
+function topFloorScene({ structure = TRADITIONAL_WOOD_STRUCTURE, orientation } = {}) {
+  const self = makeGrid([0, 6000], [0, 4500], { id: 'top', startFloor: 2 });
+  self.interior([[0, 0]], { walls: true });
+  if (orientation) self.graph.mainRoofSpec.setField('soffitOrientation', orientation);
+  const project = new Project('p', 'test');
+  project.structuralInfo.mainStructure = structure;
+  project.planeMap.set(self.graph.plane.id, self.graph.plane);
+  return { self, project };
+}
+const roofLines = prims => prims.filter(p => p.kind === 'line' && p.source.kind === 'roof');
+const anyPointInside = (p, x1, y1, x2, y2) => Array.from({ length: p.points.length / 2 }, (_, k) => [p.points[2 * k], p.points[2 * k + 1]])
+  .some(([x, y]) => x > x1 && x < x2 && y > y1 && y < y2);
+
+test('見上げ・最上階: 主屋根の軒先は中線・割付線は detailOnly グレー（軒の高さ＝最上階の階高の層）。建物の内側（天井の下）の線は隠れる', () => {
+  const { self, project } = topFloorScene();
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: CUT, project });
+  const lines = roofLines(prims);
+  const outlines = lines.filter(p => p.source.role === 'outline');
+  assert.ok(outlines.length > 0, '前提: 軒先線が出る');
+  assert.ok(outlines.every(p => p.weight === 'medium' && p.source.topRoof === true && p.source.layerFloorZ === 2900), JSON.stringify(outlines[0]));
+  const joints = lines.filter(p => p.source.role === 'eaveSoffitJoint');
+  assert.ok(joints.length > 0, '前提: 910割付線が出る');
+  assert.ok(joints.every(p => p.detailOnly === true && p.style === 'eaveSoffitJoint' && p.weight === 'thin'));
+  assert.equal(visiblePlanPrimitives(prims, LodLevel.STANDARD).filter(p => p.source?.role === 'eaveSoffitJoint').length, 0, '標準 LOD では落ちる');
+  // 立体には棟木が入っている（傾斜）が、建物の内側にあるので天井が隠す。内側に点を持つ roof の線は 1 本も出ない
+  const solids = planSolidsLayerSolidsUp({ graph: self.graph, project });
+  const roof = solids.find(s => s.kind === 'roof');
+  assert.ok(roof.innerLines.some(l => l.role === 'ridge'), '前提: 立体には棟木がある');
+  const ridges = lines.filter(p => p.source.role === 'ridge');
+  assert.ok(ridges.length > 0 && ridges.every(p => p.points[0] < 0 || p.points[0] > 6000), '棟木は建物の外（軒の出の部分）だけ見える');
+  assert.ok(!lines.some(p => anyPointInside(p, 0, 0, 6000, 4500)), '建物の内側（天井・壁の下）の点を持つ線は出ない');
+});
+
+test('見上げ・最上階: 軒の高さは階設定表の最上階の階高（plane.topStoryHeightMm）から来る（QA 指摘: 既定 2900 の直書きでは通らない）', () => {
+  const { self, project } = topFloorScene();
+  self.graph.plane.topStoryHeightMm = 3300;
+  const roofs = planSolidsLayerSolidsUp({ graph: self.graph, project }).filter(s => s.kind === 'roof');
+  assert.ok(roofs.length > 0, '前提: 主屋根の軒裏の立体');
+  assert.ok(roofs.every(r => r.zLo === 3300), JSON.stringify(roofs.map(r => r.zLo)));
+  const outlines = roofLines(planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: CUT, project })).filter(p => p.source.role === 'outline');
+  assert.ok(outlines.length > 0 && outlines.every(p => p.source.layerFloorZ === 3300));
+});
+
+test('見上げ・最上階の検討案: 主屋根の軒裏が出る（referenceId＝最上階）。上に採用階を足すと検討案にも出ない', () => {
+  const { self, project } = topFloorScene();
+  const alt = makeGrid([0, 6000], [0, 4500], { id: 'top-alt', startFloor: 2 });
+  alt.interior([[0, 0]], { walls: true });
+  alt.graph.plane.isAlternative = true;
+  alt.graph.plane.referenceId = self.graph.plane.id;
+  project.planeMap.set(alt.graph.plane.id, alt.graph.plane);
+  const before = roofLines(planSolidsLayerPrimitivesUp({ graph: alt.graph, cutZ: CUT, project })).filter(p => p.source.role === 'outline');
+  assert.ok(before.length > 0, '検討案にも主屋根の軒先線が出る');
+  const upper = makeGrid([0, 6000], [0, 4500], { id: 'upper', startFloor: 3 });
+  upper.graph.plane.elevation = self.graph.plane.elevation + 3000;
+  project.planeMap.set(upper.graph.plane.id, upper.graph.plane);
+  const after = roofLines(planSolidsLayerPrimitivesUp({ graph: alt.graph, cutZ: CUT, project }));
+  assert.deepEqual(after, [], '最上階でなくなれば検討案にも出ない');
+});
+
+test('見上げ・最上階: 屋根区画は区画ごと（zone:<id>）の立体になり、区画どうしの接する辺には軒先線が出ない。軒の向きが水平なら棟木・隅木は立体にも入らない', () => {
+  const g = makeGrid([0, 3000, 6000], [0, 4500], { id: 'top', startFloor: 2 });
+  g.interior([[0, 0], [1, 0]], { walls: true });
+  const zoneA = new RoofZone({ id: 'zA', cells: [g.cell(0, 0)], spec: new RoofSpec() });
+  const zoneB = new RoofZone({ id: 'zB', cells: [g.cell(1, 0)], spec: new RoofSpec() });
+  g.graph.setRoofZones(Object.freeze([zoneA, zoneB]));
+  const zProject = new Project('p', 'test');
+  zProject.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  zProject.planeMap.set(g.graph.plane.id, g.graph.plane);
+  const roofs = planSolidsLayerSolidsUp({ graph: g.graph, project: zProject }).filter(s => s.kind === 'roof');
+  assert.deepEqual(roofs.map(r => r.source.id), ['zone:zA', 'zone:zB']);
+  const zLines = roofLines(planSolidsLayerPrimitivesUp({ graph: g.graph, cutZ: CUT, project: zProject })).filter(p => p.source.role === 'outline');
+  assert.ok(zLines.length > 0);
+  assert.ok(!zLines.some(p => p.points[0] === 3000 && p.points[2] === 3000), '描かれた軒先線に、接する辺（x=3000）の上を走る縦線は無い');
+  // 区画の立体の線（壁で切る前）にも、接する辺（x=3000）の上を走る外形線・割付線は無い（軒の出 0）
+  const joints = roofs.flatMap(r => r.innerLines ?? []).filter(l => l.role === 'eaveSoffitJoint');
+  assert.ok(joints.length > 0, '前提: 外側の辺の割付線はある');
+  const fromSeam = joints.filter(l => l.points[1] === l.points[3] && (l.points[0] === 3000 || l.points[2] === 3000));
+  assert.deepEqual(fromSeam, [], '割付線は接する辺（x=3000）から横へ出ない');
+  const { self, project } = topFloorScene({ orientation: 'level' });
+  const prims = planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: CUT, project });
+  const roles = new Set(roofLines(prims).map(p => p.source.role));
+  assert.ok(roles.has('outline') && roles.has('eaveSoffitJoint'));
+  assert.ok(!roles.has('ridge') && !roles.has('hip'));
+  const roof = planSolidsLayerSolidsUp({ graph: self.graph, project }).find(s => s.kind === 'roof');
+  assert.deepEqual([...new Set(roof.innerLines.map(l => l.role))].sort(), ['eaveSoffitJoint', 'outline']);
+});
+
+test('【失敗系】見上げ・最上階: project なし・最上階でない階・S造（既定＝陸屋根＝軒なし）は主屋根の軒裏を出さない。S造でも形状を明示すれば出る', () => {
+  const { self, project } = topFloorScene();
+  assert.equal(roofLines(planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: CUT })).length, 0, 'project なし＝従来どおり主屋根は描かない');
+  project.planeMap.set('up', new Plane('up', 3000, '3階', 3, 1)); // 上階あり＝最上階でない
+  assert.equal(roofLines(planSolidsLayerPrimitivesUp({ graph: self.graph, cutZ: CUT, project })).length, 0);
+  const s = topFloorScene({ structure: 'S造' });
+  assert.equal(roofLines(planSolidsLayerPrimitivesUp({ graph: s.self.graph, cutZ: CUT, project: s.project })).length, 0,
+    '陸屋根は出幅 0 とみなす（ユーザー裁定 2026-10-30「非木造は陸屋根なので出幅0」）');
+  s.self.graph.mainRoofSpec.setField('shape', 'gable');
+  const gable = roofLines(planSolidsLayerPrimitivesUp({ graph: s.self.graph, cutZ: CUT, project: s.project }));
+  assert.ok(gable.some(p => p.source.role === 'outline' && p.weight === 'medium'), '形状を明示した非木造は下屋と同じく軒裏が出る');
+});
+
+test('見下げ（planSolidsLayerPrimitives）は主屋根を出さない。planSolidsLayerResolve は project を見上げの解決へ渡す', () => {
+  const { self, project } = topFloorScene();
+  assert.equal(roofLines(planSolidsLayerPrimitives({ graph: self.graph, cutZ: CUT })).length, 0);
+  const memo = (_home, _key, compute) => compute();
+  const up = planSolidsLayerResolve({ graph: self.graph, abovePeek: null, direction: 'up', memo, project });
+  assert.ok(roofLines(up).some(p => p.source.role === 'outline'), '見上げ＋project で軒先が出る');
+  const noProject = planSolidsLayerResolve({ graph: self.graph, abovePeek: null, direction: 'up', memo });
+  assert.equal(roofLines(noProject).length, 0);
 });
