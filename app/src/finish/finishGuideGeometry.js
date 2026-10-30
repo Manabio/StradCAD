@@ -106,7 +106,7 @@ function cornerFaceValue(seg, resolved, boundaryCLId) {
 /**
  * computeExteriorWallSegments（外壁判定線。CL座標）を、外壁の外面（さらにstrokeHalfWidthMmぶん
  * 外側）へ置き換えた線分にする。角は接続する相手の面調整後の座標に揃える（無ければCL座標のまま）。
- * @returns {Array<{key, isVertical, value, start, end, loopType}>}
+ * @returns {Array<{key, isVertical, value, start, end, loopType, outwardSign, axisCLId}>}
  */
 export function exteriorGuideSegments(graph, { strokeHalfWidthMm = 0 } = {}) {
   const base = computeExteriorWallSegments(graph);
@@ -134,6 +134,10 @@ export function exteriorGuideSegments(graph, { strokeHalfWidthMm = 0 } = {}) {
       value: seg.value,
       start, end,
       loopType: seg.loopType,
+      // 外向き（+1/-1。isVertical なら x、そうでなければ y の向き）と軸CL。立面（facade/facadeInputs.js）が
+      // 「どの面を向く外壁か」の判定に使う。
+      outwardSign: seg.outwardSign,
+      axisCLId: seg.axisCLId,
     };
   });
 }

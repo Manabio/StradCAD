@@ -471,3 +471,38 @@ export const SiteLineKind = Object.freeze({
   ROAD_WIDTH: 'roadWidth',  // 道路幅員
   OTHER:      'other',      // その他
 });
+
+// ---- 立面モード（facade/。外壁立面図4面）----
+// 立面図の面の向き（方位）。値は面の識別子（layoutBands の roomId にも使う）。
+export const FacadeDirection = Object.freeze({
+  EAST:  'east',
+  SOUTH: 'south',
+  WEST:  'west',
+  NORTH: 'north',
+});
+/** 立面図を描く順（上から東・南・西・北。問題.md の仕様）。 */
+export const FACADE_DIRECTION_ORDER = Object.freeze([
+  FacadeDirection.EAST, FacadeDirection.SOUTH, FacadeDirection.WEST, FacadeDirection.NORTH,
+]);
+/** 各面の見出し。 */
+export const FACADE_TITLE_BY_DIRECTION = Object.freeze({
+  [FacadeDirection.EAST]:  '東立面図',
+  [FacadeDirection.SOUTH]: '南立面図',
+  [FacadeDirection.WEST]:  '西立面図',
+  [FacadeDirection.NORTH]: '北立面図',
+});
+/** ▽GL の文字。 */
+export const FACADE_GL_LABEL = 'GL';
+/** 外壁が1本も無く立面図を描けないときの表示文。 */
+export const FACADE_EMPTY_MESSAGE = '外壁が無いため立面図を描けません';
+/** 立面モードの初期化に失敗したときの表示文（展開モードの「展開モードの初期化に失敗しました」と同じ言い方）。 */
+export const FACADE_INIT_ERROR_MESSAGE = '立面モードの初期化に失敗しました';
+/** 立面の入力組み立て（facade/facadeInputs.js）で階を飛ばした理由。 */
+export const FacadeSkipReason = Object.freeze({
+  NO_GRAPH:         'noGraph',          // その階の graph が無い（未読込み）
+  NO_EXTERIOR_WALL: 'noExteriorWall',   // 外壁の線分が1本も無い（部屋の無い階など）
+  ERROR:            'error',            // 外壁の線分の取得で例外
+  // 階の上端（次の階の FL）が GL 以下＝地上に出る部分が無い（GL が 2FL より上などの異常入力）。
+  // 補完（STORY_HEIGHT_FALLBACK_MM）で上端を作ると上の階と z が重なるため、補わずに飛ばす。
+  BELOW_GL:         'belowGl',
+});

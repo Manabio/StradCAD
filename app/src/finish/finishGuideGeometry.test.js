@@ -145,6 +145,24 @@ test('中庭（屋外部屋）: courtyard境界の外向きは屋外部屋側（
   assert.ok(courtyard.value > 4000, `外向きは屋外部屋側（x>4000）のはず（実際:${courtyard.value}）`);
 });
 
+// ---- 5b. 外向き・軸CL（立面 facade/facadeInputs.js が使う） ----
+test('exteriorGuideSegments: 各辺に外向き（outwardSign）と軸CL（axisCLId）が載る。外向きは建物の外側', () => {
+  const graph = makeGraph();
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL,   0,    ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL,   4000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), 'A');
+  generateExteriorWalls(graph);
+
+  const segs = exteriorGuideSegments(graph);
+  const signOf = Object.fromEntries(segs.map(s => [s.axisCLId, s.outwardSign]));
+  assert.deepEqual(signOf, { [x0.id]: -1, [x1.id]: 1, [y0.id]: -1, [y1.id]: 1 });
+  // 外向きの側に外面がある（value は通り芯から outwardSign の向きへずれる）。
+  const clValue = { [x0.id]: 0, [x1.id]: 4000, [y0.id]: 0, [y1.id]: 3000 };
+  for (const s of segs) assert.ok((s.value - clValue[s.axisCLId]) * s.outwardSign > 0, JSON.stringify(s));
+});
+
 // ---- 6. 帯シフト（柱寸105、bandShift 7.5）: 外面がシフト後のaxisValueに追従する ----
 test('帯シフト（柱寸105階）: exteriorGuideSegmentsのvalueはCL座標のままではなく、シフトを織り込んだ壁の実面に追従する', () => {
   const BAND_WALL_BASE = 105, BAND_WALL_FINISH = 12.5, BAND_SHIFT = 7.5;
