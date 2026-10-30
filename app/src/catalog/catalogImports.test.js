@@ -14,10 +14,17 @@ const dir = import.meta.dirname;
 const productFiles = fs.readdirSync(dir).filter(f => f.endsWith('.js') && !f.endsWith('.test.js'));
 
 const MASTER_PATHS = [/finish\/materials\//, /structural\/sectionCatalog/, /openings\/openingCatalog/];
-// 許可される静的import specifier: 同ディレクトリの兄弟モジュール（'./xxx.js'）と '../error.js' のみ。
-const ALLOWED_STATIC_SPECIFIERS = [/^\.\/[\w-]+\.js$/, /^\.\.\/error\.js$/];
+// 許可される静的import specifier: 同ディレクトリの兄弟モジュール（'./xxx.js'）、'../error.js'、
+// および import を一切持たない葉の '../core/constants.js'（定数の置き場。2026-10-30 屋根区画の location 定数）のみ。
+const ALLOWED_STATIC_SPECIFIERS = [/^\.\/[\w-]+\.js$/, /^\.\.\/error\.js$/, /^\.\.\/core\/constants\.js$/];
 
-test('【不変条件】catalog/*.js（テスト除く）の静的importは許可リスト（./配下の兄弟モジュール＋../error.jsのみ）に限る', () => {
+test('【不変条件】core/constants.js は import を持たない葉（catalog の許可リストに入れる前提。再輸出 `export … from`・動的 import( も無い）', () => {
+  const src = fs.readFileSync(path.join(dir, '..', 'core', 'constants.js'), 'utf8');
+  assert.deepEqual(src.split(/\r?\n/).filter(l => /^\s*import\s/.test(l) || /^\s*export\s.*\sfrom\s/.test(l)), []);
+  assert.ok(!/\bimport\s*\(/.test(src), '動的 import も持たない');
+});
+
+test('【不変条件】catalog/*.js（テスト除く）の静的importは許可リスト（./配下の兄弟モジュール＋../error.js＋葉の ../core/constants.js のみ）に限る', () => {
   const offenders = [];
   for (const file of productFiles) {
     const src = fs.readFileSync(path.join(dir, file), 'utf8');

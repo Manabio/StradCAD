@@ -2,7 +2,7 @@
 // node:testから直接importできる（ElevationModeState.test.jsと同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature, ROOF_SPEC_KEYS } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature, ROOF_SPEC_KEYS, RoofZone, RoofSpec } from '@core';
 import { FinishModeState, MATERIAL_CODE_OVERRIDE_FIELDS } from './FinishModeState.js';
 import { enumerateMaterialCodeRefs, ROOM_MATERIAL_OVERRIDE_KEYS } from '../catalog/codeNormalization.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
@@ -1459,6 +1459,18 @@ test('【B3】主屋根の材料コードは既定以外のときだけ参照コ
   const codes = state._collectReferencedCodes();
   assert.equal(codes.has('301000000023'), true);
   assert.equal(codes.has('302000000003'), true, '既定以外になれば防水シートも載る');
+});
+
+test('【屋根区画 S1】区画の spec の材料コードは既定値でも参照コードに載る（_collectReferencedCodes。主屋根と違い区画は既定でも保存されるため）。未知のコードもそのまま載る', () => {
+  const graph = makeThreeCellGraph();
+  const state = new FinishModeState(graph, null);
+  assert.equal(state._collectReferencedCodes().has('302000000003'), false, '前提: 区画が無ければ既定の防水シートは載らない');
+  const spec = new RoofSpec();
+  spec.setField('sheathingMaterial', '999999999999');
+  graph.setRoofZones([new RoofZone({ id: 'z1', cells: [worldToCell(1000, 1500, graph)], spec })]);
+  const codes = state._collectReferencedCodes();
+  assert.equal(codes.has('999999999999'), true, '区画の未知の野地板コードも載る（照合の対象になる）');
+  assert.equal(codes.has('302000000003'), true, '区画の既定の防水シートが載る（既定値でも載る）');
 });
 
 test('【軒裏】参照コードに軒裏の材コードが載る: 下屋は付与時の既定（ケイカル板・野縁30×15）、主屋根は軒裏を指定したとき。空は載らない', () => {

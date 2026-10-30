@@ -566,6 +566,14 @@ export class FinishModeState {
       }
     }
 
+    // 屋根区画の仕様の材料コード（保存側 snapshot.roofZones[].spec と同じ。区画は既定値でも書かれる）
+    for (const zone of g?.roofZones ?? []) {
+      for (const f of ['sheathingMaterial', 'underlaymentMaterial', 'soffitMaterial', 'soffitBacking']) {
+        const v = zone.spec?.[f];
+        if (typeof v === 'string' && v) codes.add(v);
+      }
+    }
+
     // S造スラブ仕様のプレート材料コード。個別仕様（各スラブの steelSpec）は持つ項目だけ、共通仕様
     // （project.structuralInfo.steelSlabSpec）は既定以外のときだけ載せる（保存側が既定のとき書かない規則と同じ）。
     for (const slab of g?.slabs ?? []) {

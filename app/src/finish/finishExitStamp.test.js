@@ -9,7 +9,7 @@ import path from 'node:path';
 import { runInAction } from 'mobx';
 import {
   Project, CenterLineType, Discipline, OpeningCategory, StairType, StructuralMaterialType,
-  HDimensionLine, RoofSpec, RoofShape, ElevatorEquipmentCategory, EvUsage, RoomKind, RoomFeature,
+  HDimensionLine, RoofSpec, RoofZone, RoofShape, ElevatorEquipmentCategory, EvUsage, RoomKind, RoomFeature,
 } from '../core.js';
 import { serializeGraph, decodeFloorSnapshot } from '../graphSnapshot.js';
 import { floorBytesEqual } from '../floorOps.js';
@@ -300,6 +300,7 @@ const SELF_MUTATIONS = {
   shaftSoundproof: (g) => g.setShaftSoundproof('insulation'),
   equipmentRows: (g) => g.addEquipmentRow({ id: 'eq1', category: ElevatorEquipmentCategory.EV, usage: EvUsage.PASSENGER_FREIGHT, no: 1, cellKeys: new Set(['a:b:c:d']) }),
   mainRoofSpec: (g) => g.setMainRoofSpec(new RoofSpec({ shape: RoofShape.GABLE, slope: 6 })),
+  roofZones: (g) => g.setRoofZones([new RoofZone({ id: 'rz1', cells: ['a:b:c:d'] })]),
 };
 
 test('自階の表 SELF_MUTATIONS のキー集合は、階のスナップショットのキーから階の内容でないものを除いた集合と一致する', async () => {

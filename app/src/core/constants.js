@@ -129,6 +129,9 @@ export const ROOF_RIDGE_DIRECTION_LABELS = Object.freeze({
   [RoofRidgeDirection.VERTICAL]:   '縦',
   [RoofRidgeDirection.HORIZONTAL]: '横',
 });
+// 屋根区画（PlanGraph.roofZones[].spec）の材料コード参照の location（catalog/codeNormalization.js）とその表示名
+export const ROOF_ZONE_SPEC_LOCATION = 'roofZoneSpec';
+export const ROOF_ZONE_LABEL = '屋根区画';
 // 形状の自動判定: 短手（屋根範囲に内接する全矩形の短辺の最大）がこの値以下なら片流れ、超えれば切妻。
 export const ROOF_MONO_MAX_SHORT_SPAN_MM = 3640;
 

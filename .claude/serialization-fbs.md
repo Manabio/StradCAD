@@ -40,3 +40,6 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 
 ## 主屋根（`GS.MAIN_ROOF_SPEC=53`→同じ`RS`テーブル）は既定値のとき書かない
 最上階の階ごと設定（`PlanGraph.mainRoofSpec`）。`graphSnapshot.buildSnapshot`が`isDefaultRoofSpec`で既定値なら`null`にし、`encode`は`null`のとき何も書かない（フィールド自体を省く）ので、主屋根を編集していない文書のバイト列は1バイトも変わらない（読み側は無ければ`restoreGraph`の`clear()`の既定値）。`RS`の読み書きは下屋と共用（`writeRoofSpec`/`readRoofSpec`）。
+
+## 屋根区画（`GS.ROOF_ZONES=56`→`RZ{ID,CELLS,SPEC}`の vector。SPEC は同じ`RS`）は区画があるときだけ書く
+最上階の階ごと設定（`PlanGraph.roofZones`。2026-10-30）。区画はユーザーがセルを指定した意図そのものなので **spec は既定値でも書く**（主屋根と逆）。vector は0件のとき省くので区画の無い文書のバイト列は変わらない（13・moku4・moku4-3 の全階で A/B 一致を実測済み）。読み側の正規化は`core/roofZone.js restoreRoofZones`の1か所（不正 id・空セルを捨て、同 id・重なりセルは先勝ち。SPEC が無ければ既定の`RoofSpec`）で、FBS・plain・仕上げ undo（`finishUndo`のキー`roofZones`）が共用する。セルキーは生のまま保存し、線 id の振り直し（`lineIdRemap`）は文字列の全置換なので自動で追従する。

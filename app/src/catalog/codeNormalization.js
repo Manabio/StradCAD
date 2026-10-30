@@ -9,10 +9,11 @@
 // 「どのフィールドが対象か」は SNAPSHOT_REF_WALKERS（kind → {enumerate, rewrite}）に集約する——
 // catalog/usedEntries.js collectUsedKeys がこの enumerate を共有する（二重実装を作らない）。
 //
-// ゼロ依存の葉モジュール（legacyMaterialCodes.js だけ import可）。
+// ゼロ依存の葉モジュール（legacyMaterialCodes.js と、葉の core/constants.js だけ import可）。
 // ================================================================
 
 import { LEGACY_MATERIAL_CODE_ALIASES } from './legacyMaterialCodes.js';
+import { ROOF_ZONE_SPEC_LOCATION } from '../core/constants.js';
 
 /**
  * {legacy, aliases} → 潰し済みの読み替え表 Map<旧コード, 新コード|null>。
@@ -164,6 +165,13 @@ export function enumerateMaterialCodeRefs(snapshot) {
     if (!isRoofSpecMaterialCode(snapshot.mainRoofSpec, field)) continue;
     refs.push({ code: snapshot.mainRoofSpec[field], location: 'mainRoofSpec', key: field });
   }
+  // 屋根区画の仕様（snapshot.roofZones[].spec）
+  for (const zone of snapshot.roofZones ?? []) {
+    for (const field of ROOF_SPEC_MATERIAL_FIELDS) {
+      if (!isRoofSpecMaterialCode(zone?.spec, field)) continue;
+      refs.push({ code: zone.spec[field], location: ROOF_ZONE_SPEC_LOCATION, zoneId: zone.id, key: field });
+    }
+  }
   for (const room of snapshot.rooms ?? []) {
     for (const ov of room?.overrides ?? []) {
       if (!isRoomMaterialOverride(ov)) continue;
@@ -240,6 +248,26 @@ function normalizeMainRoofSpec(spec, table, unresolved) {
   return next;
 }
 
+// 屋根区画（snapshot.roofZones[].spec）の材料コード。変化が無ければ同一参照を返す。
+function normalizeRoofZones(zones, table, unresolved) {
+  if (!Array.isArray(zones)) return zones;
+  let changedAny = false;
+  const next = zones.map(zone => {
+    let spec = zone?.spec;
+    for (const field of ROOF_SPEC_MATERIAL_FIELDS) {
+      if (!isRoofSpecMaterialCode(zone?.spec, field)) continue;
+      const code = zone.spec[field];
+      const mapped = normalizeCode(code, table, unresolved, { location: ROOF_ZONE_SPEC_LOCATION, zoneId: zone.id, key: field });
+      if (mapped === code) continue;
+      spec = { ...spec, [field]: mapped };
+    }
+    if (spec === zone?.spec) return zone;
+    changedAny = true;
+    return { ...zone, spec };
+  });
+  return changedAny ? next : zones;
+}
+
 function normalizeEdges(edges, table, unresolved) {
   if (!Array.isArray(edges)) return edges;
   let changedAny = false;
@@ -305,6 +333,9 @@ export function normalizeSnapshotCodes(snapshot, table) {
   const mainRoofSpec = normalizeMainRoofSpec(snapshot.mainRoofSpec, table, unresolved);
   if (mainRoofSpec !== snapshot.mainRoofSpec) changed = true;
 
+  const roofZones = normalizeRoofZones(snapshot.roofZones, table, unresolved);
+  if (roofZones !== snapshot.roofZones) changed = true;
+
   const edges = normalizeEdges(snapshot.edges, table, unresolved);
   if (edges !== snapshot.edges) changed = true;
 
@@ -321,6 +352,7 @@ export function normalizeSnapshotCodes(snapshot, table) {
   // mainRoofSpec が undefined（キー無し）のときは足さない（キー集合を変えない）
   const next = { ...snapshot, ...backingFields, rooms, edges, clEccentricities };
   if (mainRoofSpec !== undefined) next.mainRoofSpec = mainRoofSpec;
+  if (roofZones !== undefined) next.roofZones = roofZones; // 同上（キー無しなら足さない）
   // slabs / structuralInfo はキーが無いとき足さない（キー集合を変えない）
   if (slabs !== undefined) next.slabs = slabs;
   if (structuralInfo !== undefined) next.structuralInfo = structuralInfo;

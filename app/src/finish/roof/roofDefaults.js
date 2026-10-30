@@ -51,6 +51,28 @@ export function resolveSoffitSpec(spec) {
 }
 
 /**
+ * 屋根区画（PlanGraph.roofZones）の初期 RoofSpec。主屋根の値を写し、形状・片流れの高い側・棟木の向きだけ
+ * null（自動）にする（区画ごとに範囲が違うため、主屋根の明示値を持ち越さない）。
+ * 軒裏の材コード・向きは空のままだと保存されず使用コードの収集・照合に乗らないため、resolveSoffitSpec の既定で埋める。備考は写す。
+ * @param {RoofSpec|object|null|undefined} mainSpec 主屋根の仕様（graph.mainRoofSpec）
+ * @returns {RoofSpec}
+ */
+export function createRoofZoneSpec(mainSpec) {
+  const src = typeof mainSpec?.toData === 'function' ? mainSpec.toData() : (mainSpec ?? {});
+  const soffit = resolveSoffitSpec(src);
+  return RoofSpec.fromData({
+    ...src,
+    shape: null,
+    highSide: null,
+    ridgeDirection: null,
+    soffitMaterial: soffit.material,
+    soffitBacking: soffit.backing,
+    soffitOrientation: soffit.orientation,
+    soffitNote: soffit.note,
+  });
+}
+
+/**
  * 復元（graphSnapshot.restoreGraph・roomReinterpret.restoreRoomsState）で Room の roofSpec を整える。
  * 不変条件 I1（feature===ROOF ⇔ roofSpec≠null）を復元側で保証する唯一の入口:
  *  - ROOF でない部屋: 何もしない（plain に roofSpec が付いていても捨てる。Room.roofSpec は null のまま）

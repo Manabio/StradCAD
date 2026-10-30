@@ -279,6 +279,8 @@ export class FloorSwapManager {
       // S造スラブの個別仕様の変更も dirty 対象にする（RC スラブには steelSpec が無く undefined）。
       for (const slab of graph.slabMap.values()) void slab.steelSpec;
       void graph.footingMap.size;
+      // 屋根区画の作成・削除（配列の差替え）で dirty。spec の中身は見ない（項目の確定側が markDirty を明示する）。
+      void graph.roofZones;
       void graph.sleeveMap.size;
       void graph.columnAxisOffsets.size;
       void graph.clEccentricities.size;

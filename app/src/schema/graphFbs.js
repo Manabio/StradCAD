@@ -41,7 +41,7 @@ const SHAFT_SOUNDPROOF_ENC = { none: 0, insulation: 1 };
 // フィールドインデックス定数
 // ================================================================
 
-// GraphSnapshot (root): 55 フィールド
+// GraphSnapshot (root): 57 フィールド
 const GS = {
   CLS: 0, PTS: 1, WALLS: 2, DIAGS: 3, VLINES: 4, HLINES: 5, ARCS: 6, CIRCS: 7, DIMS: 8, ROOMS: 9, ROOM_ORDER: 10,
   // 11 は旧 INTERIOR_WALL_PANEL（内壁面材の per-floor 設定。部屋の壁材へ移行し廃止。slot 予約）
@@ -95,6 +95,8 @@ const GS = {
   // S造スラブ小梁の枠の除外・移動記録（string vector。キーは structural/slabSecondaryBeamAxes.js slabBeamSlotKey。
   // per-floor。末尾追加）。空集合のときはフィールド自体を書かない（既存文書のバイト列を変えない）。
   EXCLUDED_SLAB_BEAM_SLOTS: 55,
+  // 屋根区画（RZ テーブルの vector。per-floor。末尾追加）。区画が無いときは vector 自体を書かない（既存文書のバイト列は不変）。
+  ROOF_ZONES: 56,
 };
 
 // Stair: 20 フィールド
@@ -148,6 +150,10 @@ const RS = {
   EAVE_OVERHANG: 5, GABLE_OVERHANG: 6, SOFFIT: 7, NOTE: 8, HIGH_SIDE: 9, RIDGE_DIRECTION: 10, COLUMN_THROUGH: 11,
   SOFFIT_MATERIAL: 12, SOFFIT_BACKING: 13, SOFFIT_ORIENTATION: 14, SOFFIT_NOTE: 15,
 };
+
+// RoofZone（屋根区画。PlanGraph.roofZones）: 3 フィールド。項目集合は core/roofZone.js の ROOF_ZONE_KEYS が唯一の定義。
+// SPEC は RS テーブルの入れ子（下屋・主屋根と共用の writeRoofSpec/readRoofSpec）。正規化は復元側の restoreRoofZones。
+const RZ = { ID: 0, CELLS: 1, SPEC: 2 };
 
 // CeilingZone（天井区画。Room.ceilingZones）: 6 フィールド。項目集合は core/ceilingZone.js の CEILING_ZONE_KEYS が唯一の定義。
 // HAS_HEIGHT/HEIGHT は floorLevel と同じ HAS 方式（heightMm null＝部屋の CH）。SHAPE は 'flat' 以外のときだけ書く（無ければ読みは 'flat'）。
@@ -745,6 +751,17 @@ function writeRoofSpec(b, rs) {
   b.addFieldOffset(RS.SOFFIT_BACKING,     sSoffitBack, 0);
   b.addFieldOffset(RS.SOFFIT_ORIENTATION, sSoffitOri,  0);
   b.addFieldOffset(RS.SOFFIT_NOTE,        sSoffitNote, 0);
+  return b.endObject();
+}
+
+function writeRoofZone(b, z) {
+  const sId      = b.createString(z.id);
+  const cellsVec = writeStrVec(b, z.cells ?? []);
+  const specOff  = writeRoofSpec(b, z.spec ?? null);
+  b.startObject(3);
+  b.addFieldOffset(RZ.ID,    sId,      0);
+  b.addFieldOffset(RZ.CELLS, cellsVec, 0);
+  b.addFieldOffset(RZ.SPEC,  specOff,  0);
   return b.endObject();
 }
 
@@ -1547,6 +1564,16 @@ function readRoofSpec(bb, tablePos) {
   };
 }
 
+// 屋根区画の plain 表現（RoofZone.toData と同じキー集合）。値の正規化は復元側の restoreRoofZones。
+function readRoofZone(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    id:    r.str(RZ.ID),
+    cells: r.strVec(RZ.CELLS),
+    spec:  readRoofSpec(bb, r.nested(RZ.SPEC)),
+  };
+}
+
 // 天井区画の plain 表現（CeilingZone.toData と同じキー集合）。値の正規化は復元側の restoreCeilingZones。
 function readCeilingZone(bb, tablePos) {
   const r = makeReader(bb, tablePos);
@@ -1982,7 +2009,11 @@ export function encode(snapshot) {
   const equipmentRowsVec = writeVec(b, snapshot.equipmentRows ?? [], writeEquipmentRow);
   const mainRoofSpecOff = writeRoofSpec(b, snapshot.mainRoofSpec ?? null); // null（既定値）は何も書かない（0）
 
-  b.startObject(56);
+  // 区画が無いときは vector も作らない（0＝addFieldOffset が書かない。屋根区画を使わない文書のバイト列は不変）
+  const roofZones = snapshot.roofZones ?? [];
+  const roofZonesVec = roofZones.length ? writeVec(b, roofZones, writeRoofZone) : 0;
+
+  b.startObject(57);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -2038,6 +2069,7 @@ export function encode(snapshot) {
   b.addFieldOffset(GS.MAIN_ROOF_SPEC, mainRoofSpecOff, 0);
   b.addFieldFloat64(GS.GL_BELOW_1FL_MM, snapshot.glBelow1FlMm ?? 0, 0.0);
   b.addFieldOffset(GS.EXCLUDED_SLAB_BEAM_SLOTS, excludedSlabBeamSlotsVec, 0);
+  b.addFieldOffset(GS.ROOF_ZONES, roofZonesVec, 0);
   const root = b.endObject();
 
   b.finish(root);
@@ -2123,5 +2155,6 @@ export function decode(bytes) {
     equipmentRows:       r.vec(GS.EQUIPMENT_ROWS, readEquipmentRow),
     mainRoofSpec:        readRoofSpec(bb, r.nested(GS.MAIN_ROOF_SPEC)),
     glBelow1FlMm:        r.f64(GS.GL_BELOW_1FL_MM),
+    roofZones:           r.vec(GS.ROOF_ZONES, readRoofZone),
   };
 }

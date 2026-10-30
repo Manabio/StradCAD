@@ -58,6 +58,7 @@
 - 形状の既定は`rulesFor(effectiveStructure).mainRoofDefaultShape`（RC・S・SRC=陸屋根、在来・2×4=null＝短手の規則）。主構造が**未定**のときは`UNSPECIFIED_RULES`が明示でnull（継承に任せると`STEEL_RULES`経由で`flat`になるため）＝木造と同じ短手の規則。導出は`finish/roof/mainRoof.js`（`wallGate.js`が storage 系を連鎖して引くので、`graphSnapshot`が引く`roofDefaults.js`には置かない＝import循環の回避）。
 - 主屋根は壁・境界・構造・展開図に影響しない（値の保持と外部タブの表示だけ。壁の鮮度キーにも入れない）。
 - 仕上げ undo は別キー`mainRoof`（`PER_FLOOR_SETTERS`は値そのものを入れる形でオブジェクトを相乗りさせない）。確定は`FinishModeState.setMainRoofField`（1確定＝undo 1エントリ）。
+- **屋根区画（2026-10-30・S1 データ層）**: 主屋根を区画ごとに指定するため、最上階の階ごと設定`PlanGraph.roofZones`（`core/roofZone.js RoofZone {id, cells, spec: RoofSpec}`。殻は凍結・spec は可変）を持つ。区画＝部屋セルの上に重なるセル集合で、区画に入らないセルが主屋根（`mainRoofSpec`）の範囲。不変条件は天井区画と同型: **R1** 実効セル＝`refreshCells`∩建物範囲（`finish/roof/roofZones.js roofZoneEffectiveCells`。保存では間引かず読む側で守る）／**R2** 区画どうしは重ならない（作成は後勝ち＝`createRoofZone`が既存区画のセルを奪い空になった区画を消す。復元は先勝ち）／**R3** 主屋根の範囲＝建物範囲−全区画（`mainRoofRestCellKeys`）。初期の spec は`createRoofZoneSpec(mainSpec)`（主屋根の値を写し、形状・高い側・棟木の向きは自動。**`mainRoofSpec`の実体をそのまま渡してはいけない**＝共有すると両方に setField が効く）。上に階を追加しても区画は写さない（セルはその階の部屋配置に依存。ユーザー裁定）。保存は`.claude/serialization-fbs.md`「屋根区画」。UI・小屋組は S2 以降。
 - **上に階を追加して最上階が入れ替わったときだけ**、旧最上階の値を新しい最上階へ写す（follower `mainRoofCarry`・`finish/roof/mainRoofFloorSync.js`）。階の削除・並べ替え・階変更・下への追加では写さず、新しい最上階が自分の値を使う。旧最上階の値は残し、旧最上階が既定値なら何も書かない。旧最上階の検討案の主屋根は写さない（採用フロアの値だけ）。階追加のundoは追加階ごと消えるので、旧最上階には何も書かない。
 
 ## 小屋組との関係（構造モードの伏図の描画）

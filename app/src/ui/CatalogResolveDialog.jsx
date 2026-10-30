@@ -5,6 +5,7 @@ import { displayNameOf } from '../catalog/catalogMatch.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs } from '../catalog/catalogDiffView.js';
 import { buildCatalogRows } from '../catalog/catalogMaintenance.js';
 import { defaultResolveDecision, openingCategoryOf } from '../catalog/resolveQueue.js';
+import { ROOF_ZONE_SPEC_LOCATION, ROOF_ZONE_LABEL } from '../core/constants.js';
 
 const SCENARIO_LABELS = Object.freeze({
   'library-conflict': '(a) ライブラリ内の衝突',
@@ -31,6 +32,7 @@ const LOCATION_LABELS = Object.freeze({
   room: '部屋',
   roofSpec: '屋根',
   mainRoofSpec: '主屋根',
+  [ROOF_ZONE_SPEC_LOCATION]: ROOF_ZONE_LABEL,
   edge: '境界',
   clEccentricity: 'CL偏芯',
   exteriorWallBacking: '外壁下地',
