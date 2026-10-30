@@ -12,7 +12,8 @@
 import { useMemo } from 'react';
 import { observer } from 'mobx-react-lite';
 import { isRoofFeature } from '@core';
-import { RoofGroup, MainRoofGroup } from '../finish/roof/RoofGroup.jsx';
+import { ExteriorGroupType } from '../core/constants.js';
+import { RoofGroup, MainRoofGroup, RoofZoneGroup } from '../finish/roof/RoofGroup.jsx';
 import { roofSpecFieldChanges } from '../finish/roof/roofSpecCommit.js';
 import { markDirty } from '../dirtyState.js';
 import { useSteelSlabMaterials } from './useSteelSlabMaterials.js';
@@ -66,6 +67,7 @@ function buildRoofSpecMode({ target, project, materials, onStructureChanged }) {
       return commit(room.roofSpec, field, value);
     },
     setMainRoofField: (field, value) => commit(target?.mainRoofSpec, field, value),
+    setRoofZoneField: (zoneId, field, value) => commit(target?.roofZones.find(z => z.id === zoneId)?.spec, field, value), // 不明な zoneId は spec なし＝commit が false
   };
 }
 
@@ -85,14 +87,15 @@ export const RoofSpecTab = observer(function RoofSpecTab({ graph, composition, p
           {ROOF_SPEC_TAB_EMPTY}
         </div>
       )}
-      {groups.map(({ key, type, roomId, part }) => {
-        const roofRoom = type === 'roof' ? target.roomMap.get(roomId) : null;
+      {groups.map(({ key, type, roomId, zoneId, part }) => {
+        const roofRoom = type === ExteriorGroupType.ROOF ? target.roomMap.get(roomId) : null;
+        const roofZone = type === ExteriorGroupType.ROOF_ZONE ? target.roofZones.find(z => z.id === zoneId) : null;
         return (
           <div key={key} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 4 }}>{part}</div>
-            {type === 'mainRoof'
-              ? <MainRoofGroup graph={target} mode={mode} styles={ROOF_GROUP_STYLES} />
-              : roofRoom && <RoofGroup room={roofRoom} graph={target} mode={mode} styles={ROOF_GROUP_STYLES} />}
+            {type === ExteriorGroupType.MAIN_ROOF && <MainRoofGroup graph={target} mode={mode} styles={ROOF_GROUP_STYLES} />}
+            {roofZone && <RoofZoneGroup zone={roofZone} graph={target} mode={mode} styles={ROOF_GROUP_STYLES} />}
+            {roofRoom && <RoofGroup room={roofRoom} graph={target} mode={mode} styles={ROOF_GROUP_STYLES} />}
           </div>
         );
       })}

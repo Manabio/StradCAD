@@ -3,7 +3,7 @@
 // structuralOrchestration.steelSlab.test.js と同じく専用ファイル（node --test はファイル単位で別プロセス）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline } from '../core.js';
+import { Project, CenterLineType, Discipline, RoofZone, RoofSpec } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { recomputeStructuralComposition } from './structuralOrchestration.js';
@@ -63,6 +63,26 @@ test('屋根専用平面を subject にして belowGraph（最上階）の mainR
     assert.equal(stackLen(), stack0 + 1, 'undo は1件');
     undoManager.undo();
     assert.equal(g2.mainRoofSpec.shape, before, 'undo で最上階の形状が戻る（belowGraph の before が採られている）');
+  });
+});
+
+test('【屋根区画 S2】最上階を subject にして区画の spec を mutate で書くと undo 1件。undo で区画の値が戻り、mainRoofSpec は不変', async () => {
+  const { project, g1, g2 } = makeProject();
+  const composition = { graphForCategory: () => g1 };
+  await withPeek({ p1: g1, p2: g2 }, async () => {
+    g2.setRoofZones([new RoofZone({ id: 'z1', cells: ['dummy'], spec: new RoofSpec() })]);
+    await recomputeStructuralComposition(composition, g2, project, {});
+    const mainBefore = g2.mainRoofSpec.toData();
+    const zoneBefore = g2.roofZones[0].spec.slope;
+    const stack0 = stackLen();
+    await recomputeStructuralComposition(composition, g2, project, { mutate: () => g2.roofZones[0].spec.setField('slope', 7) });
+    assert.equal(g2.roofZones[0].spec.slope, 7);
+    assert.equal(stackLen(), stack0 + 1, 'undo は1件');
+    assert.deepEqual(g2.mainRoofSpec.toData(), mainBefore, '主屋根の値は変わらない');
+    undoManager.undo();
+    assert.equal(g2.roofZones.length, 1, 'undo 後も区画は残る');
+    assert.equal(g2.roofZones[0].spec.slope, zoneBefore, 'undo で区画の勾配が戻る');
+    assert.deepEqual(g2.mainRoofSpec.toData(), mainBefore);
   });
 });
 

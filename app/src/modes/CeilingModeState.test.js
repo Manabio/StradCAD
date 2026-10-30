@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { autorun, isObservable } from 'mobx';
-import { RoomKind, StairType, CenterLineType, Discipline, RoomFeature, Plane, PlanGraph } from '@core';
+import { RoomKind, StairType, CenterLineType, Discipline, RoomFeature, Plane, PlanGraph, RoofZone } from '@core';
+import { createRoofZoneSpec } from '../finish/roof/roofDefaults.js';
 import { isUiBusy } from '../uiBusy.js';
 import { ERR_CL_MOVE_LOAD_FAILED } from '../error.js';
 import { undoManager } from '../undoManager.js';
@@ -96,6 +97,40 @@ test('【失敗系】setMainRoofField: 不正な値・無変更は false で mar
   const stack = undoManager._undoStack.length;
   assert.equal(state.setMainRoofField(graph, 'soffitOrientation', 'diagonal'), false, '不正な値');
   assert.equal(state.setMainRoofField(graph, 'soffitNote', ''), false, '無変更');
+  assert.equal(isDirty(), false);
+  assert.equal(undoManager._undoStack.length, stack);
+});
+
+function graphWithZone() {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  graph.setRoofZones(Object.freeze([new RoofZone({ id: 'z1', cells: ['c1'], spec: createRoofZoneSpec(graph.mainRoofSpec) })]));
+  return graph;
+}
+
+test('【屋根区画 S2】setRoofZoneField: 確定で true・区画の spec だけが変わり（主屋根は不変）markDirty・undo 1エントリ。undo で戻る', () => {
+  const state = new CeilingModeState();
+  const graph = graphWithZone();
+  clearDirty();
+  const stack = undoManager._undoStack.length;
+  assert.equal(state.setRoofZoneField(graph, 'z1', 'soffitNote', '区画の備考'), true);
+  assert.equal(graph.roofZones[0].spec.soffitNote, '区画の備考');
+  assert.equal(graph.mainRoofSpec.soffitNote, '', '主屋根は変わらない');
+  assert.equal(isDirty(), true);
+  assert.equal(undoManager._undoStack.length, stack + 1);
+  undoManager.undo();
+  assert.notEqual(graph.roofZones[0].spec.soffitNote, '区画の備考');
+  undoManager.redo();
+  assert.equal(graph.roofZones[0].spec.soffitNote, '区画の備考');
+});
+
+test('【屋根区画 S2・失敗系】setRoofZoneField: 存在しない zoneId・不正な値・無変更は false で markDirty も undo も積まない', () => {
+  const state = new CeilingModeState();
+  const graph = graphWithZone();
+  clearDirty();
+  const stack = undoManager._undoStack.length;
+  assert.equal(state.setRoofZoneField(graph, 'ghost', 'soffitNote', 'x'), false, '不明な zoneId');
+  assert.equal(state.setRoofZoneField(graph, 'z1', 'soffitOrientation', 'diagonal'), false, '不正な値');
+  assert.equal(state.setRoofZoneField(graph, 'z1', 'soffitOrientation', graph.roofZones[0].spec.soffitOrientation), false, '無変更');
   assert.equal(isDirty(), false);
   assert.equal(undoManager._undoStack.length, stack);
 });

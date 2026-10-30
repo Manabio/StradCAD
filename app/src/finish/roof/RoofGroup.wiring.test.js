@@ -127,8 +127,8 @@ test('【不変条件・軒裏】軒裏行: 表示値は resolveSoffitSpec・確
   assert.ok(roofLines.includes('{soffitBackingShown && ('), '下地の表示分岐');
   assert.ok(roofLines.includes("const panelCodes = mode.getMaterialsByCategory('panel').map(m => m.code);"), 'panel の候補');
   assert.ok(roofLines.includes("const backingCodes = mode.getMaterialsByCategory('backing').map(m => m.code);"), 'backing の候補');
-  assert.equal(roofLines.filter(l => l === 'const soffitBackingShown = soffitBackingVisible(effectiveStructure(graph, mode.project));').length, 2,
-    '下屋・主屋根の2か所で構造から導く');
+  assert.equal(roofLines.filter(l => l === 'const soffitBackingShown = soffitBackingVisible(effectiveStructure(graph, mode.project));').length, 3,
+    '下屋・主屋根・屋根区画の3か所で構造から導く');
   // 下地の表示分岐は向きの select より前（上段が下地・下段が向き）
   assert.ok(groupBody.indexOf('{soffitBackingShown && (') < groupBody.indexOf('soffitOrientationOptions().map('), '下地 → 向き の順');
 });
@@ -151,7 +151,9 @@ test('【不変条件・柱貫通】「柱貫通」チェックは columnThrough
   // 表示判断は純関数（下屋は部屋と階から、主屋根は isLeanTo:false の固定）
   assert.ok(roofLines.includes('const columnThrough = roofColumnThroughViewOfRoom(room, graph, mode.project);'), '下屋の柱貫通の導出の行が見つからない');
   assert.ok(roofLines.includes('const columnThrough = roofColumnThroughView({ isLeanTo: false, columnPlacement: null, hasColumns: false, columnThrough: false });'), '主屋根の柱貫通の導出の行が見つからない');
-  assert.equal((roofCode.match(/columnThrough=\{columnThrough\}/g) ?? []).length, 2, '下屋・主屋根の2か所から RoofSpecFields へ渡す');
+  assert.equal((roofCode.match(/columnThrough=\{columnThrough\}/g) ?? []).length, 3, '下屋・主屋根・屋根区画の3か所から RoofSpecFields へ渡す');
+  assert.equal(roofLines.filter(l => l === 'const columnThrough = roofColumnThroughView({ isLeanTo: false, columnPlacement: null, hasColumns: false, columnThrough: false });').length, 2,
+    '主屋根・屋根区画は isLeanTo:false の固定（柱貫通は出さない）');
   assert.ok(!/\.columnThrough\s*=|setField\('columnThrough'/.test(roofCode), 'jsx が columnThrough を直接書き換えていない（確定は set 経由）');
 });
 
@@ -223,8 +225,8 @@ test('【不変条件】FinishTable.jsx の屋根の群（groupType===roof）は
   assert.ok(tableCode.split('\n').map(l => l.trim()).includes(
     '{roofRoom && <RoofGroup room={roofRoom} graph={graph} mode={mode} styles={{ cellBase, headerCell, cellInputStyle }} />}'),
   'FinishTable.jsx に RoofGroup の配線の1行が見つからない');
-  const roofBranchStart = tableCode.indexOf("if (groupType === 'roof') {");
-  assert.ok(roofBranchStart >= 0, "if (groupType === 'roof') { が見つからない");
+  const roofBranchStart = tableCode.indexOf('if (groupType === ExteriorGroupType.ROOF) {');
+  assert.ok(roofBranchStart >= 0, 'if (groupType === ExteriorGroupType.ROOF) { が見つからない');
   const roofBranchEnd = tableCode.indexOf('const room   = roomId', roofBranchStart);
   const roofBranch = tableCode.slice(roofBranchStart, roofBranchEnd);
   assert.ok(!/ExteriorLevelRow|ExteriorPartHeading/.test(roofBranch), '屋根の分岐に屋外部屋の群の部品が入っている');
@@ -246,8 +248,8 @@ test('【不変条件・B3】MainRoofGroup の確定は mode.setMainRoofField(fi
 });
 
 test('【不変条件・B3】下屋と主屋根は同じ描画部品 RoofSpecFields（spec・shape・set を引数で受ける）を使い、各1回ずつ描く', () => {
-  assert.equal(roofLines.filter(l => l === 'return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} soffitBackingShown={soffitBackingShown} set={set} mode={mode} styles={styles} />;').length, 2,
-    '下屋と主屋根の2か所で同じ RoofSpecFields を同じ引数で描く');
+  assert.equal(roofLines.filter(l => l === 'return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} soffitBackingShown={soffitBackingShown} set={set} mode={mode} styles={styles} />;').length, 3,
+    '下屋・主屋根・屋根区画の3か所で同じ RoofSpecFields を同じ引数で描く');
   assert.ok(roofLines.includes('const RoofSpecFields = observer(({ spec, shape, highSide, ridgeDirection, columnThrough, soffitBackingShown, set, mode, styles }) => {'), 'RoofSpecFields の宣言');
   // 下屋の形状の導出（範囲は屋根セル）は RoofGroup 側のまま
   assert.ok(roofLines.includes('const shape = resolveRoofShape(spec, { boundsList: roofRoomBounds(room, graph) });'));
@@ -255,12 +257,38 @@ test('【不変条件・B3】下屋と主屋根は同じ描画部品 RoofSpecFie
 
 test('【不変条件・B3】FinishTable.jsx: 主屋根の群は最上階（isTopFloorPlane）のときだけ buildExteriorGroups に含め、MainRoofGroup を描く。削除ボタン・選択の青枠・屋外部屋の部品を持たない', () => {
   assert.ok(tableLines.includes('const includeMainRoof = isTopFloorPlane(mode.project, graph.plane);'), 'includeMainRoof の1行が見つからない');
-  const branch = sliceBlock(tableCode, "if (groupType === 'mainRoof') {", "if (groupType === 'roof') {");
+  const branch = sliceBlock(tableCode, 'if (groupType === ExteriorGroupType.MAIN_ROOF) {', 'if (groupType === ExteriorGroupType.ROOF_ZONE) {');
   assert.ok(/<MainRoofGroup graph=\{graph\} mode=\{mode\} styles=\{\{ cellBase, headerCell, cellInputStyle \}\} \/>/.test(branch), 'MainRoofGroup の配線が見つからない');
   assert.ok(!/setDeleteConfirm|削除|deleteButtonStyle|<button|deleteRoom/.test(branch), '主屋根の群に削除ボタン（button・deleteRoom・setDeleteConfirm）がある');
   assert.ok(!/RoofGroupFrame|isSelectedRoofGroup|outline/.test(branch), '主屋根の群に選択の青枠がある');
   assert.ok(!/ExteriorLevelRow|ExteriorPartHeading|<RoofGroup /.test(branch), '主屋根の分岐に他の群の部品が入っている');
   assert.ok(branch.indexOf('>{part}<') >= 0, '見出しは群の part（固定「屋根」）');
+});
+
+// ---- 屋根区画 S2: RoofZoneGroup（主屋根の次に並ぶ区画ごとの群） ----
+const zoneStart = roofCode.indexOf('export const RoofZoneGroup');
+const zoneBody = roofCode.slice(zoneStart, roofCode.indexOf('const RoofSpecFields', zoneStart));
+const zoneLines = zoneBody.split('\n').map(l => l.replace(/\s\/\/.*$/, '').trim());
+
+test('【不変条件・屋根区画 S2】RoofZoneGroup の確定は mode.setRoofZoneField(zone.id, field, value) の1か所。値は zone.spec。形状・高い側・棟木の向きは区画用の導出', () => {
+  assert.ok(zoneStart >= 0, 'export const RoofZoneGroup が見つからない');
+  assert.ok(zoneLines.includes('const spec = zone.spec;'), 'const spec = zone.spec; が見つからない');
+  assert.ok(zoneLines.includes('const set = (field, value) => mode.setRoofZoneField(zone.id, field, value);'), '確定の1行が見つからない');
+  assert.equal((roofCode.match(/mode\.setRoofZoneField\(/g) ?? []).length, 1, 'mode.setRoofZoneField の呼び出しは1か所だけ');
+  assert.ok(zoneLines.includes('const shape = resolveRoofZoneShape(graph, zone, mode.project);'), '形状の導出');
+  assert.ok(zoneLines.includes('const highSide = roofZoneHighSideView(graph, zone, mode.project);'), '高い側の導出');
+  assert.ok(zoneLines.includes('const ridgeDirection = roofZoneRidgeDirectionView(graph, zone, mode.project);'), '棟木の向きの導出');
+  assert.ok(!/\.setField\(|setRoofField|setMainRoofField|mainRoofSpec/.test(zoneBody), '区画の群が RoofSpec を直接書き換えない・主屋根の spec を参照しない');
+});
+
+test('【不変条件・屋根区画 S2】FinishTable.jsx: 区画の群は主屋根の分岐の次・下屋の分岐の前に、RoofGroupFrame（isSelectedRoofGroup に zoneId）で囲んで RoofZoneGroup を描く。削除ボタンは持たない（S3）', () => {
+  const branch = sliceBlock(tableCode, 'if (groupType === ExteriorGroupType.ROOF_ZONE) {', 'if (groupType === ExteriorGroupType.ROOF) {');
+  assert.ok(/<RoofZoneGroup zone=\{zone\} graph=\{graph\} mode=\{mode\} styles=\{\{ cellBase, headerCell, cellInputStyle \}\} \/>/.test(branch), 'RoofZoneGroup の配線');
+  assert.ok(/isSelectedRoofGroup\(\{ type: groupType, roomId: null, zoneId \}, mode\.selectedRoomId, mode\.selectedRoofZoneId \?\? null\)/.test(branch), '選択中の判定');
+  assert.ok(/<RoofGroupFrame /.test(branch) && branch.indexOf('>{part}<') >= 0, '枠と見出し（part）');
+  assert.ok(!/setDeleteConfirm|deleteButtonStyle|<button|deleteRoom/.test(branch), '区画の群に削除ボタンを持たない（作成・削除は S3）');
+  assert.ok(tableLines.includes('const roofZones = includeMainRoof ? roofZoneGroupInputs(graph) : [];'), '区画の入力は最上階だけ');
+  assert.ok(tableLines.includes('const groups = buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder, includeMainRoof, roofZones });'), 'buildExteriorGroups へ roofZones を渡す');
 });
 
 test('【不変条件・B3】カタログ照合ダイアログは location=mainRoofSpec を「主屋根」と表示する（下屋の roofSpec＝「屋根」と区別）', () => {

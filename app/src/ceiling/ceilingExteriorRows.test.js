@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlanGraph, Project, Room, RoomKind, RoomFeature, RoofSpec } from '@core';
+import { PlanGraph, Project, Room, RoomKind, RoomFeature, RoofSpec, RoofZone } from '@core';
+import { createRoofZoneSpec, createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
-import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { ceilingExteriorRows } from './ceilingExteriorRows.js';
 
@@ -110,6 +110,38 @@ test('【失敗系】project が null なら主屋根の行は出さず、下屋
   const rows = ceilingExteriorRows({ graph, aboveGraph: above, project: null, materialMap });
   assert.deepEqual(rows.map(r => r.id), ['soffit:a']);
   assert.equal(rows[0].backingShown, false);
+});
+
+function addZones(graph, ids) {
+  const zones = ids.map(id => new RoofZone({ id, cells: [`c-${id}`], spec: createRoofZoneSpec(graph.mainRoofSpec) }));
+  graph.setRoofZones(Object.freeze(zones));
+  return zones;
+}
+
+test('【屋根区画 S2】最上階は主屋根の行の次に区画の行（id soffit:zone:<id>・kind zone・「軒裏（屋根区画N）」・zoneId・編集可・spec は区画の spec）', () => {
+  const { project, planes } = projectWithFloors(3);
+  const top = new PlanGraph(planes[2]);
+  top.setStructureOverride(TRADITIONAL_WOOD_STRUCTURE);
+  const zones = addZones(top, ['za', 'zb']);
+  const rows = ceilingExteriorRows({ graph: top, aboveGraph: null, project, materialMap });
+  assert.deepEqual(rows.map(r => r.id), ['soffit:main', 'soffit:zone:za', 'soffit:zone:zb']);
+  assert.deepEqual(rows.slice(1).map(r => [r.kind, r.name, r.zoneId, r.roomId, r.editable, r.backingShown]),
+    [['zone', '軒裏（屋根区画1）', 'za', null, true, true], ['zone', '軒裏（屋根区画2）', 'zb', null, true, true]]);
+  assert.equal(rows[1].spec, zones[0].spec);
+  assert.notEqual(rows[1].spec, top.mainRoofSpec, '区画の spec は主屋根の spec と別実体');
+  assert.equal(rows[0].zoneId, null, '主屋根の行は zoneId を持たない（null）');
+  assert.equal(rows[1].materialLabel, 'けい酸カルシウム板 ア)8', 'createRoofZoneSpec が軒裏の既定を埋めている');
+});
+
+test('【屋根区画 S2・失敗系】最上階でない階・project なしでは区画の行を出さない（休眠）。区画 0 件は従来どおり主屋根の行だけ', () => {
+  const { project, planes } = projectWithFloors(3);
+  const mid = new PlanGraph(planes[1]);
+  addZones(mid, ['za']);
+  assert.deepEqual(ceilingExteriorRows({ graph: mid, aboveGraph: null, project, materialMap }), []);
+  const top = new PlanGraph(planes[2]);
+  assert.deepEqual(ceilingExteriorRows({ graph: top, aboveGraph: null, project, materialMap }).map(r => r.id), ['soffit:main']);
+  addZones(top, ['zb']);
+  assert.deepEqual(ceilingExteriorRows({ graph: top, aboveGraph: null, project: null, materialMap }), []);
 });
 
 test('materialMap が無い・コードが解けないときは表示名がコードのまま', () => {

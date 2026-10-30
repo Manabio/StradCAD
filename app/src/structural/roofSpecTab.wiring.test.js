@@ -33,8 +33,16 @@ test('【配線】RoofSpecTab.jsx: 群と編集対象は roofSpecTabGroups（純
   assert.ok(/composition\?\.graphForCategory\('columnMap'\) \?\? null/.test(code));
   assert.ok(/roofSpecTabGroups\(\{ graph, belowGraph, project \}\)/.test(code));
   assert.equal([...code.matchAll(/useSteelSlabMaterials\(\)/g)].length, 1, '材料は共有フック経由で1回だけ');
-  assert.ok(/<MainRoofGroup graph=\{target\} mode=\{mode\}/.test(code) && /<RoofGroup room=\{roofRoom\} graph=\{target\} mode=\{mode\}/.test(code),
-    '群の描画は仕上げモードと同じ RoofGroup／MainRoofGroup で、graph は編集対象（target）');
+  assert.ok(/<MainRoofGroup graph=\{target\} mode=\{mode\}/.test(code) && /<RoofGroup room=\{roofRoom\} graph=\{target\} mode=\{mode\}/.test(code)
+    && /<RoofZoneGroup zone=\{roofZone\} graph=\{target\} mode=\{mode\}/.test(code),
+  '群の描画は仕上げモードと同じ RoofGroup／MainRoofGroup／RoofZoneGroup で、graph は編集対象（target）');
+});
+
+test('【配線】RoofSpecTab.jsx: 屋根区画の確定は同じ commit（roofSpecFieldChanges → onStructureChanged の閉包 → markDirty）を通る。不明な zoneId は spec なしで commit が false', () => {
+  const code = read('RoofSpecTab.jsx');
+  assert.ok(/setRoofZoneField: \(zoneId, field, value\) => commit\(target\?\.roofZones\.find\(z => z\.id === zoneId\)\?\.spec, field, value\),/.test(code),
+    'setRoofZoneField が commit(区画の spec, …) になっていない');
+  assert.equal([...code.matchAll(/commit\(/g)].length, 3, 'commit の呼び出しは 下屋・主屋根・区画 の3か所');
 });
 
 test('【配線】roofSpecTabModel.js は react／store.js／.jsx を静的に import しない（node:test から単体 import 可能に保つ）', () => {

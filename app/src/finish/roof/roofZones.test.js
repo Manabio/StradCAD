@@ -5,7 +5,7 @@ import {
   Plane, PlanGraph, CenterLineType, Discipline, RoofSpec, RoofZone, RoofShape,
   DEFAULT_SOFFIT_MATERIAL, DEFAULT_SOFFIT_BACKING, SoffitOrientation,
 } from '@core';
-import { createRoofZone, removeRoofZone, roofZoneEffectiveCells, mainRoofRestCellKeys } from './roofZones.js';
+import { createRoofZone, removeRoofZone, roofZoneEffectiveCells, mainRoofRestCellKeys, roofZoneGroupInputs } from './roofZones.js';
 import { createRoofZoneSpec } from './roofDefaults.js';
 import { NON_DEFAULT_ROOF_SPEC } from '../roofTestFixtures.js';
 
@@ -124,6 +124,16 @@ test('【失敗系】createRoofZoneSpec: 主屋根が null/undefined でも既�
     assert.equal(spec.shape, null);
     assert.equal(spec.soffitMaterial, DEFAULT_SOFFIT_MATERIAL);
   }
+});
+
+test('roofZoneGroupInputs: 建物範囲内のセルを持つ区画は empty:false・範囲外だけの区画は empty:true。並び順は維持。【失敗系】0件なら []', () => {
+  const { graph, a, c } = layout();
+  assert.deepEqual(roofZoneGroupInputs(graph), []);
+  const f = ids();
+  let zones = createRoofZone([], [c], new RoofSpec(), f).zones;   // 範囲外だけ
+  zones = createRoofZone(zones, [a], new RoofSpec(), f).zones;    // 範囲内
+  graph.setRoofZones(zones);
+  assert.deepEqual(roofZoneGroupInputs(graph), [{ id: 'id1', empty: true }, { id: 'id2', empty: false }]);
 });
 
 test('createRoofZoneSpec: 軒裏が埋まっている主屋根の値は上書きしない', () => {

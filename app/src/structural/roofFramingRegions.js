@@ -107,7 +107,10 @@ function hipOnlyRegion(topGraph, project, bounds) {
   return withOutline({ key: 'main', rect: null, rects, shape: RoofShape.HIP, ridgeIsVertical: null, highSide: null }, topGraph.mainRoofSpec);
 }
 
-/** 主屋根（最上階の建物範囲）の小屋組の region。条件を満たさなければ null。 */
+/**
+ * 主屋根の小屋組の region。条件を満たさなければ null。範囲は最上階の建物範囲から屋根区画の実効セルを除いた残り
+ * （mainRoof.js mainRoofBounds＝R3・2026-10-30 S2）——区画があると主屋根の region はその分縮む。区画ごとの region は S4 で足す。
+ */
 export function mainRoofFramingRegion(topGraph, project) {
   if (!topGraph) return null;
   if (!rulesFor(effectiveStructure(topGraph, project)).framing) return null;

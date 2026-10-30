@@ -9,6 +9,7 @@ import { ceilingExteriorRows } from './ceilingExteriorRows.js';
 import { withFinishUndo } from '../finish/finishUndo.js';
 import { markDirty } from '../dirtyState.js';
 import { StairSoffitFinish } from '@core';
+import { SoffitRowKind } from '../core/constants.js';
 import { ceilingPanelTree, ceilingPanelLines, selectedNodeId, selectionSpanMm, stairSoffitChoice, writeStairSoffitFinish } from './ceilingPanelRows.js';
 import { updateZoneSpec, removeZone } from './ceilingZones.js';
 import { roomCeilingShapeOf, setRoomCeilingShape, applyRoomCeilingHeightDraft } from './roomCeilingShape.js';
@@ -336,7 +337,7 @@ const PanelLine = observer(({ graph, mode, line, selectedId }) => {
 });
 
 // 外部タブ（軒裏）の平らな表: 部位｜仕上げ｜下地｜備考。行はセル群を持たない（クリック・強調・▸ なし）。
-// 下屋（直上階）の行は表示のみ（編集は上階の仕上げモード・外部タブ）。最上階の主屋根の行だけ編集でき、確定は mode.setMainRoofField。
+// 下屋（直上階）の行は表示のみ（編集は上階の仕上げモード・外部タブ）。最上階の主屋根・屋根区画の行だけ編集でき、確定は mode.setMainRoofField／setRoofZoneField（row.kind で分岐）。
 const EXTERIOR_COLUMNS = [
   { key: 'part',    label: '部位',   width: 110 },
   { key: 'finish',  label: '仕上げ', width: '30%' },
@@ -350,7 +351,9 @@ const ExteriorRow = observer(({ graph, mode, row }) => {
   const stack = { display: 'flex', flexDirection: 'column', gap: 2 };
   const line = { display: 'flex', alignItems: 'center', gap: 4 };
   const orientationLabel = soffitOrientationOptions().find(o => o.value === row.orientation)?.label ?? row.orientation;
-  const set = (field, value) => mode.setMainRoofField(graph, field, value);
+  const set = (field, value) => (row.kind === SoffitRowKind.ZONE
+    ? mode.setRoofZoneField(graph, row.zoneId, field, value)
+    : mode.setMainRoofField(graph, field, value));
   const nameOf = code => mode.getMaterial(code)?.name;
   const panelCodes = mode.getMaterialsByCategory('panel').map(m => m.code);
   const backingCodes = mode.getMaterialsByCategory('backing').map(m => m.code);

@@ -97,7 +97,10 @@ test('【配線】外部タブ（軒裏）: TABS に exterior、行は ceilingEx
   assert.ok(readonlyStart >= 0 && editableStart > readonlyStart);
   const readonlyBlock = src.slice(readonlyStart, editableStart);
   assert.ok(!/<select|MaterialSelect|RoofTextInput|mode\.setMainRoofField|\bset\(/.test(readonlyBlock), '表示のみの行は入力部品も書込みも持たない');
-  assert.match(src, /^\s*const set = \(field, value\) => mode\.setMainRoofField\(graph, field, value\);\s*$/m);
+  assert.match(src, /^\s*const set = \(field, value\) => \(row\.kind === SoffitRowKind\.ZONE\s*$/m, '区画の行は row.kind で分岐');
+  assert.match(src, /^\s*\? mode\.setRoofZoneField\(graph, row\.zoneId, field, value\)\s*$/m);
+  assert.match(src, /^\s*: mode\.setMainRoofField\(graph, field, value\)\);\s*$/m);
+  assert.equal(count(/mode\.setRoofZoneField\(/g), 1, '区画の書込みの入口も1か所');
   assert.equal(count(/set\('soffit(Material|Backing|Orientation|Note)'/g), 4, '編集は軒裏の4項目だけ');
   assert.equal(count(/mode\.setMainRoofField\(/g), 1, '書込みの入口は1か所');
   assert.match(src, /^\s*\{row\.backingShown && \(\s*$/m, '編集行の下地は木造のときだけ');

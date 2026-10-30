@@ -325,3 +325,64 @@ test('【B3】屋根の部屋（下屋）が無い・複数でも主屋根の群
   const groups = buildExteriorGroups({ ...input(graph), includeMainRoof: true });
   assert.deepEqual(groups.map(g => g.type), ['mainRoof', 'roof', 'roof']);
 });
+
+// ---- 屋根区画（S2）: 主屋根の次・下屋の前に type:'roofZone' の群 ----
+test('【屋根区画 S2】buildExteriorGroups: 並びは 主屋根→区画（並び順）→下屋→部位→屋外部屋。区画の key／zoneId／見出し「屋根区画N」', () => {
+  const graph = makeGraph();
+  makeRoom(graph, 'テラス', { kind: RoomKind.EXTERIOR });
+  const roof = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  graph.addExteriorRow('exteriorRows', '外壁');
+  const groups = buildExteriorGroups({
+    ...input(graph), includeMainRoof: true, roofZones: [{ id: 'za', empty: false }, { id: 'zb', empty: false }],
+  });
+  assert.deepEqual(groups.map(g => g.type), ['mainRoof', 'roofZone', 'roofZone', 'roof', 'part', 'room']);
+  assert.deepEqual(groups.slice(1, 3).map(g => [g.key, g.zoneId, g.roomId, g.part, g.rows]),
+    [['roofZone:za', 'za', null, '屋根区画1', []], ['roofZone:zb', 'zb', null, '屋根区画2', []]]);
+  assert.equal(groups[3].roomId, roof.id);
+});
+
+test('【屋根区画 S2】buildExteriorGroups: 区画が1件以上あるとき主屋根の見出しは「屋根（主屋根・区画以外）」。0件なら従来の「屋根（主屋根）」', () => {
+  const graph = makeGraph();
+  assert.equal(buildExteriorGroups({ ...input(graph), includeMainRoof: true })[0].part, '屋根（主屋根）');
+  assert.equal(buildExteriorGroups({ ...input(graph), includeMainRoof: true, roofZones: [] })[0].part, '屋根（主屋根）');
+  assert.equal(buildExteriorGroups({ ...input(graph), includeMainRoof: true, roofZones: [{ id: 'z', empty: false }] })[0].part,
+    '屋根（主屋根・区画以外）');
+});
+
+test('【屋根区画 S2】buildExteriorGroups: 実効セルが0の区画の見出しには「（範囲なし）」が付く（番号は並び順のまま）', () => {
+  const graph = makeGraph();
+  const groups = buildExteriorGroups({
+    ...input(graph), includeMainRoof: true, roofZones: [{ id: 'a', empty: false }, { id: 'b', empty: true }],
+  });
+  assert.deepEqual(groups.slice(1).map(g => g.part), ['屋根区画1', '屋根区画2（範囲なし）']);
+});
+
+test('【屋根区画 S2・失敗系】buildExteriorGroups: roofZones を省略・空配列にすると、引数を渡さない呼び出しと出力が同一（deepEqual）。最上階でない（includeMainRoof=false）なら区画を渡しても群は出ない', () => {
+  const graph = makeGraph();
+  makeRoom(graph, 'テラス', { kind: RoomKind.EXTERIOR });
+  makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  graph.addExteriorRow('exteriorRows', '外壁');
+  for (const includeMainRoof of [true, false]) {
+    const base = buildExteriorGroups({ ...input(graph), includeMainRoof });
+    assert.deepEqual(buildExteriorGroups({ ...input(graph), includeMainRoof, roofZones: [] }), base);
+  }
+  const noTop = buildExteriorGroups({ ...input(graph), includeMainRoof: false, roofZones: [{ id: 'z', empty: false }] });
+  assert.deepEqual(noTop, buildExteriorGroups(input(graph)));
+});
+
+test('【屋根区画 S2】isSelectedRoofGroup: 区画の群は選択中の区画 id と一致するときだけ true。部屋 id・未選択・省略は false（従来の呼び出しは不変）', () => {
+  const graph = makeGraph();
+  const roof = makeRoom(graph, '屋根', { kind: RoomKind.EXTERIOR, feature: RoomFeature.ROOF });
+  const groups = buildExteriorGroups({ ...input(graph), includeMainRoof: true, roofZones: [{ id: 'za', empty: false }, { id: 'zb', empty: false }] });
+  const [za, zb] = groups.filter(g => g.type === 'roofZone');
+  assert.equal(isSelectedRoofGroup(za, null, 'za'), true);
+  assert.equal(isSelectedRoofGroup(zb, null, 'za'), false);
+  assert.equal(isSelectedRoofGroup(za, 'za', null), false, '部屋 id の欄に区画 id を入れても true にならない');
+  assert.equal(isSelectedRoofGroup(za, roof.id), false, '第3引数を省略すると区画は選択なし');
+  assert.equal(isSelectedRoofGroup(za, null, undefined), false);
+  assert.equal(isSelectedRoofGroup(za, null, 'ghost'), false);
+  // 下屋の群は区画 id の影響を受けない
+  const roofGroup = groups.find(g => g.type === 'roof');
+  assert.equal(isSelectedRoofGroup(roofGroup, roof.id, 'za'), true);
+  assert.equal(isSelectedRoofGroup(roofGroup, null, roof.id), false);
+});

@@ -167,6 +167,7 @@ export class FinishModeState {
       renameExteriorRoom: action,
       setRoofField: action,
       setMainRoofField: action,
+      setRoofZoneField: action,
       selectStair:  action,
       deleteStair:  action,
       revertStairToRoom:  action,
@@ -1410,6 +1411,18 @@ export class FinishModeState {
    */
   setMainRoofField(field, value) {
     return commitRoofSpecField(this.graph, this.graph.mainRoofSpec, field, value);
+  }
+
+  /**
+   * 屋根区画（graph.roofZones の1件）の項目を1つ確定する。setMainRoofField と同じ検証・無変更判定・undo 1エントリ
+   * （区画の spec は finishUndo の `roofZones` キーのスナップショットで戻る）。存在しない zoneId・不正な値・無変更は
+   * 何も変更せず（undo を積まず）false を返す。mainRoofSpec には触れない（区画の spec は独立した RoofSpec）。
+   * @returns {boolean} 変更を確定したら true
+   */
+  setRoofZoneField(zoneId, field, value) {
+    const zone = this.graph.roofZones.find(z => z.id === zoneId);
+    if (!zone) return false;
+    return commitRoofSpecField(this.graph, zone.spec, field, value);
   }
 
   // ---- 階段 ----

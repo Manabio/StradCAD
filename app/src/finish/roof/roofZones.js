@@ -63,6 +63,17 @@ function effectiveCellsIn(zone, graph, footprint) {
 }
 
 /**
+ * 外部タブの群の組み立て（exteriorGroups.js buildExteriorGroups の roofZones 引数）用に、区画ごとの
+ * { id, empty }（empty＝実効セルが0）を並び順のまま返す。建物範囲は1回だけ計算する。
+ * @returns {Array<{ id: string, empty: boolean }>}
+ */
+export function roofZoneGroupInputs(graph) {
+  if (graph.roofZones.length === 0) return [];
+  const footprint = footprintCellKeys(graph);
+  return graph.roofZones.map(zone => ({ id: zone.id, empty: effectiveCellsIn(zone, graph, footprint).size === 0 }));
+}
+
+/**
  * 主屋根（mainRoofSpec）に従うセル＝建物範囲 − どの区画の実効セルでもないセル。
  * @returns {Set<string>}
  */

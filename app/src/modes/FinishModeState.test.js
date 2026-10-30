@@ -11,6 +11,7 @@ import { restoreGraph, serializeGraph } from '../graphSnapshot.js';
 import { takeUnresolvedCodes, addDocumentAliases, clearDocumentAliases } from '../catalog/codeNormalization.js';
 import { worldToCell, refreshCells, regionCellsAt } from '../finish/gridCells.js';
 import { buildExteriorGroups } from '../finish/exteriorGroups.js';
+import { createRoofZoneSpec } from '../finish/roof/roofDefaults.js';
 import { undoManager } from '../undoManager.js';
 import { wallFreshnessKey } from '../finish/wallFreshnessKey.js';
 import { ERR_ROOF_NOT_UNASSIGNED } from '../error.js';
@@ -1441,6 +1442,57 @@ test('【B3】主屋根の編集は屋根の部屋（下屋）の値に触れず
   assert.equal(graph.mainRoofSpec.slope, 5, '主屋根は変わらない');
 });
 
+// ---- 屋根区画（S2）: setRoofZoneField。値は graph.roofZones[].spec。undo は finishUndo の roofZones キー ----
+function graphWithRoofZone() {
+  const graph = makeThreeCellGraph();
+  const zone = new RoofZone({ id: 'z1', cells: [worldToCell(1000, 1500, graph).key], spec: createRoofZoneSpec(graph.mainRoofSpec) });
+  graph.setRoofZones(Object.freeze([zone]));
+  return graph;
+}
+
+test('【屋根区画 S2】setRoofZoneField: 確定で true・undo は1エントリ・undo で戻り redo でやり直せる。主屋根の spec は不変', () => {
+  const graph = graphWithRoofZone();
+  const state = new FinishModeState(graph, null);
+  const mainBefore = graph.mainRoofSpec.toData();
+  const edits = { shape: 'hip', slope: 4, eaveOverhangMm: 600, note: '区画', soffitNote: '備考', soffitOrientation: 'level', highSide: 'left' };
+  for (const [field, value] of Object.entries(edits)) {
+    const before = graph.roofZones[0].spec[field]; // undo/redo は spec を作り直すので毎回 graph から引く
+    const stack = undoManager._undoStack.length;
+    assert.equal(state.setRoofZoneField('z1', field, value), true, `${field} の確定`);
+    assert.equal(graph.roofZones[0].spec[field], value);
+    assert.equal(undoManager._undoStack.length, stack + 1, `${field}: undo は1エントリ`);
+    undoManager.undo();
+    assert.equal(graph.roofZones[0].spec[field], before, `${field}: undo で戻る`);
+    undoManager.redo();
+    assert.equal(graph.roofZones[0].spec[field], value, `${field}: redo でやり直せる`);
+  }
+  assert.deepEqual(graph.mainRoofSpec.toData(), mainBefore, '区画の編集は mainRoofSpec に触れない');
+});
+
+test('【屋根区画 S2・失敗系】setRoofZoneField: 存在しない zoneId・不正な値・無変更は false で値も undo も変わらない', () => {
+  const graph = graphWithRoofZone();
+  const state = new FinishModeState(graph, null);
+  const specBefore = graph.roofZones[0].spec.toData();
+  const stack = undoManager._undoStack.length;
+  assert.equal(state.setRoofZoneField('ghost', 'slope', 5), false, '不明な zoneId');
+  assert.equal(state.setRoofZoneField(undefined, 'slope', 5), false);
+  for (const [field, value] of [['slope', 0], ['slope', 2.3], ['eaveOverhangMm', -1], ['shape', 'dome'], ['sheathingMaterial', ''], ['highSide', 'up'], ['unknown', 1]]) {
+    assert.equal(state.setRoofZoneField('z1', field, value), false, `${field}=${String(value)}`);
+  }
+  assert.equal(state.setRoofZoneField('z1', 'slope', graph.roofZones[0].spec.slope), false, '無変更');
+  assert.deepEqual(graph.roofZones[0].spec.toData(), specBefore);
+  assert.equal(undoManager._undoStack.length, stack, 'undo は積まれない');
+});
+
+test('【屋根区画 S2】区画の編集は壁の鮮度キーを変えない（区画は壁に効かない）', () => {
+  const graph = graphWithRoofZone();
+  const state = new FinishModeState(graph, null);
+  const key = wallFreshnessKey(graph);
+  state.setRoofZoneField('z1', 'shape', 'flat');
+  state.setRoofZoneField('z1', 'eaveOverhangMm', 900);
+  assert.equal(wallFreshnessKey(graph), key);
+});
+
 test('【B3】主屋根の全項目を編集しても壁の鮮度キーは変わらない（主屋根は壁に効かない）', () => {
   const graph = makeThreeCellGraph();
   const state = new FinishModeState(graph, null);
@@ -1467,7 +1519,7 @@ test('【屋根区画 S1】区画の spec の材料コードは既定値でも�
   assert.equal(state._collectReferencedCodes().has('302000000003'), false, '前提: 区画が無ければ既定の防水シートは載らない');
   const spec = new RoofSpec();
   spec.setField('sheathingMaterial', '999999999999');
-  graph.setRoofZones([new RoofZone({ id: 'z1', cells: [worldToCell(1000, 1500, graph)], spec })]);
+  graph.setRoofZones([new RoofZone({ id: 'z1', cells: [worldToCell(1000, 1500, graph).key], spec })]);
   const codes = state._collectReferencedCodes();
   assert.equal(codes.has('999999999999'), true, '区画の未知の野地板コードも載る（照合の対象になる）');
   assert.equal(codes.has('302000000003'), true, '区画の既定の防水シートが載る（既定値でも載る）');

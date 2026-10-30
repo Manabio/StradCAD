@@ -132,6 +132,26 @@ export const ROOF_RIDGE_DIRECTION_LABELS = Object.freeze({
 // 屋根区画（PlanGraph.roofZones[].spec）の材料コード参照の location（catalog/codeNormalization.js）とその表示名
 export const ROOF_ZONE_SPEC_LOCATION = 'roofZoneSpec';
 export const ROOF_ZONE_LABEL = '屋根区画';
+// 外部タブ（finish/exteriorGroups.js buildExteriorGroups）の群の種別
+export const ExteriorGroupType = Object.freeze({
+  MAIN_ROOF: 'mainRoof',  // 主屋根（区画以外の範囲。セルを持たない固定の群）
+  ROOF:      'roof',      // 屋根セルの群（下屋）
+  ROOF_ZONE: 'roofZone',  // 屋根区画の群（PlanGraph.roofZones の1件）
+  ROOM:      'room',      // roomId 連動群
+  PART:      'part',      // 手入力の部位群
+});
+export const ROOF_ZONE_GROUP_KEY_PREFIX = 'roofZone:';          // 区画の群の key ＝ 接頭辞 + zone.id
+export const MAIN_ROOF_GROUP_LABEL_WITH_ZONES = '屋根（主屋根・区画以外）'; // 区画が1件以上あるときの主屋根の群の見出し
+export const ROOF_ZONE_EMPTY_SUFFIX = '（範囲なし）';             // 実効セルが0の区画の見出しに付ける
+// 天伏パネル外部タブ（軒裏）の行の種別と、区画の行の id 接頭辞・見出し（'軒裏（屋根区画' + n + '）'）
+export const SoffitRowKind = Object.freeze({
+  LEAN_TO: 'leanTo', // 直上階の下屋（表示のみ）
+  MAIN:    'main',   // 最上階の主屋根（区画以外）
+  ZONE:    'zone',   // 最上階の屋根区画
+});
+export const SOFFIT_ROW_ZONE_ID_PREFIX = 'soffit:zone:';
+export const SOFFIT_ZONE_ROW_LABEL_PREFIX = '軒裏（屋根区画';
+export const SOFFIT_ZONE_ROW_LABEL_SUFFIX = '）';
 // 形状の自動判定: 短手（屋根範囲に内接する全矩形の短辺の最大）がこの値以下なら片流れ、超えれば切妻。
 export const ROOF_MONO_MAX_SHORT_SPAN_MM = 3640;
 

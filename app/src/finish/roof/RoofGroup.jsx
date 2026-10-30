@@ -10,7 +10,10 @@ import { useState } from 'react';
 import { ROOF_SHEATHING_CODES, ROOF_UNDERLAYMENT_CODES } from '@core';
 import { effectiveStructure } from '../../structural/structureRules.js';
 import { resolveRoofShape, roofRoomBounds, resolveSoffitSpec } from './roofDefaults.js';
-import { resolveMainRoofShape, mainRoofHighSideView, mainRoofRidgeDirectionView } from './mainRoof.js';
+import {
+  resolveMainRoofShape, mainRoofHighSideView, mainRoofRidgeDirectionView,
+  resolveRoofZoneShape, roofZoneHighSideView, roofZoneRidgeDirectionView,
+} from './mainRoof.js';
 import { roofHighSideViewOfRoom, roofRidgeDirectionViewOfRoom, roofColumnThroughViewOfRoom } from './roofOrientation.js';
 import { roofColumnThroughView } from './roofGeometry.js';
 import {
@@ -120,7 +123,23 @@ export const MainRoofGroup = observer(({ graph, mode, styles }) => {
 });
 
 /**
- * 屋根の項目のフォーム1行＋固定2行の表（下屋・主屋根で共通）。spec＝表示する RoofSpec、shape＝形状の実効値
+ * 屋根区画（最上階の外部タブ。主屋根の次に並ぶ区画ごとの群）。範囲は区画の実効セル、形状の既定は主屋根と同じ規則
+ * （resolveRoofZoneShape）。項目の描画は RoofSpecFields（下屋・主屋根と共通）。確定は mode.setRoofZoneField。
+ * @param {{ zone: object, graph: object, mode: object, styles: { cellBase: object, headerCell: object, cellInputStyle: object } }} props
+ */
+export const RoofZoneGroup = observer(({ zone, graph, mode, styles }) => {
+  const spec = zone.spec;
+  const set = (field, value) => mode.setRoofZoneField(zone.id, field, value);
+  const shape = resolveRoofZoneShape(graph, zone, mode.project);
+  const highSide = roofZoneHighSideView(graph, zone, mode.project);
+  const ridgeDirection = roofZoneRidgeDirectionView(graph, zone, mode.project);
+  const columnThrough = roofColumnThroughView({ isLeanTo: false, columnPlacement: null, hasColumns: false, columnThrough: false }); // 区画には出さない（主屋根と同じ）
+  const soffitBackingShown = soffitBackingVisible(effectiveStructure(graph, mode.project));
+  return <RoofSpecFields spec={spec} shape={shape} highSide={highSide} ridgeDirection={ridgeDirection} columnThrough={columnThrough} soffitBackingShown={soffitBackingShown} set={set} mode={mode} styles={styles} />;
+});
+
+/**
+ * 屋根の項目のフォーム1行＋固定2行の表（下屋・主屋根・屋根区画で共通）。spec＝表示する RoofSpec、shape＝形状の実効値
  * （呼び出し側が範囲・主構造から導く）、highSide＝「高い側」欄の表示判断 { visible, value }（呼び出し側が導く。
  * visible のときだけ形状の直後に選択欄を出す）、ridgeDirection＝「棟木の向き」欄の表示判断 { visible, value }（同。切妻のときだけ
  * visible。value は明示値、自動は null）、columnThrough＝「柱貫通」チェックの表示判断 { visible, value }（同。下屋で、

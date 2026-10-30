@@ -134,8 +134,9 @@ test('【不変条件・W1】GroupedExteriorTable は exteriorGroups.js の buil
     "import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js'; が見つからない");
   const block = groupedExteriorTableBlock();
   // B3: 主屋根の群（最上階のみ）の有無を includeMainRoof で渡す（旧: 引数は rows・rooms・roomOrder の3つだけ）
-  assert.ok(/buildExteriorGroups\(\{ rows, rooms: graph\.rooms, roomOrder: graph\.roomOrder, includeMainRoof \}\)/.test(block),
-    'GroupedExteriorTable本体に buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder, includeMainRoof }) の呼び出しが見つからない');
+  // 屋根区画 S2: 区画の群の入力 roofZones も渡す
+  assert.ok(/buildExteriorGroups\(\{ rows, rooms: graph\.rooms, roomOrder: graph\.roomOrder, includeMainRoof, roofZones \}\)/.test(block),
+    'GroupedExteriorTable本体に buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder, includeMainRoof, roofZones }) の呼び出しが見つからない');
   // 旧実装（rowsから直接Mapを組む処理）が復活していないことも固定する
   assert.ok(!/const key = row\.roomId \? `room:\$\{row\.roomId\}` : `part:\$\{row\.part\}`;/.test(block),
     '群キーの手組みロジックが残っている（buildExteriorGroupsへ一本化されていないはず）');
@@ -273,7 +274,7 @@ test('【不変条件】activeTab===equipmentは<EquipmentTab ...>（onDeleteEqu
 // jsx は type==='roof' で分岐するだけ。 ----
 function roofGroupBlock() {
   // トリムした1行がまるごと一致する行から探す（行末コメントに元の式を残す変異を許さない）。
-  const needle = "if (groupType === 'roof') {";
+  const needle = 'if (groupType === ExteriorGroupType.ROOF) {';
   const lines = codeOnly.split('\n');
   const lineIdx = lines.findIndex(l => l.trim() === needle);
   assert.ok(lineIdx >= 0, `${needle} の行が見つからない`);
@@ -288,8 +289,8 @@ function roofGroupBlock() {
 }
 
 test('【不変条件・B1a】GroupedExteriorTable は群の type を受けて type===roof の分岐を持つ（map の分割代入に type: groupType）', () => {
-  assert.ok(codeOnly.split('\n').some(l => l.trim() === '{groups.map(({ key: groupKey, type: groupType, roomId, part, rows: groupRows }) => {'),
-    "{groups.map(({ key: groupKey, type: groupType, roomId, part, rows: groupRows }) => { の行が見つからない");
+  assert.ok(codeOnly.split('\n').some(l => l.trim() === '{groups.map(({ key: groupKey, type: groupType, roomId, zoneId, part, rows: groupRows }) => {'),
+    "{groups.map(({ key: groupKey, type: groupType, roomId, zoneId, part, rows: groupRows }) => { の行が見つからない");
 });
 
 test('【不変条件・B1a】屋根群のブロックは見出し（part）と削除ボタン（setDeleteConfirm→RoomDeleteConfirm→mode.deleteRoom）だけで、仕上げレベル行・改名入力・区分セレクタ・行テーブルを出さない', () => {

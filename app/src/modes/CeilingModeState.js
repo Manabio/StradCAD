@@ -75,6 +75,7 @@ export class CeilingModeState {
       aboveRoofContext: observable.ref,
       setAboveRoofContext: action,
       setMainRoofField: action,
+      setRoofZoneField: action,
       isMoving:       computed,
       startMove:      action,
       updateMove:     action,
@@ -166,6 +167,19 @@ export class CeilingModeState {
    */
   setMainRoofField(graph, field, value) {
     if (!commitRoofSpecField(graph, graph.mainRoofSpec, field, value)) return false;
+    markDirty();
+    return true;
+  }
+
+  /**
+   * 最上階の屋根区画（自階 graph.roofZones の1件）の項目を1つ確定する（外部タブの「軒裏（屋根区画N）」行）。
+   * setMainRoofField と同じ検証・無変更判定・undo 1エントリ・markDirty。存在しない zoneId は何も変えず false。
+   * @returns {boolean} 変更を確定したら true
+   */
+  setRoofZoneField(graph, zoneId, field, value) {
+    const zone = graph.roofZones.find(z => z.id === zoneId);
+    if (!zone) return false;
+    if (!commitRoofSpecField(graph, zone.spec, field, value)) return false;
     markDirty();
     return true;
   }

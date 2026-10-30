@@ -4,7 +4,8 @@ import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.j
 import { StairTab } from './stair/StairTab.jsx';
 import { EquipmentTab } from './equipment/EquipmentTab.jsx';
 import { RoomDeleteConfirm } from './RoomDeleteConfirm.jsx';
-import { RoofGroup, MainRoofGroup } from './roof/RoofGroup.jsx';
+import { RoofGroup, MainRoofGroup, RoofZoneGroup } from './roof/RoofGroup.jsx';
+import { roofZoneGroupInputs } from './roof/roofZones.js';
 import { withFinishUndo, beginFieldUndo, endFieldUndo } from './finishUndo.js';
 import { roomCeilingHeight } from './roomMetrics.js';
 import { parseSlopeInput } from './exteriorLevelInput.js';
@@ -12,6 +13,7 @@ import {
   RoomFeature, RoomKind, ExteriorLevelRef, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
   ShaftSoundproof, isTopFloorPlane,
 } from '@core';
+import { ExteriorGroupType } from '../core/constants.js';
 import { interiorTabRooms, interiorRoomDisplayName } from './interiorTabRooms.js';
 import { shaftWallMaterialOptions } from './shaftWallMaterialOptions.js';
 import { floorHeightAbove } from './stair/stairDimensions.js';
@@ -1189,7 +1191,9 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
   // セレクタをRoom連動で置く）。
   // 主屋根の群は最上階（とその検討案）の外部タブにだけ出す（判定は core/project.js isTopFloorPlane）。
   const includeMainRoof = isTopFloorPlane(mode.project, graph.plane);
-  const groups = buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder, includeMainRoof });
+  // 屋根区画の群は主屋根の次（最上階だけ。includeMainRoof が false なら buildExteriorGroups が出さない）。
+  const roofZones = includeMainRoof ? roofZoneGroupInputs(graph) : [];
+  const groups = buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder, includeMainRoof, roofZones });
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { roomId, roomName } | null
 
   return (
@@ -1200,8 +1204,8 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
           部位が登録されていません
         </div>
       )}
-      {groups.map(({ key: groupKey, type: groupType, roomId, part, rows: groupRows }) => {
-        if (groupType === 'mainRoof') {
+      {groups.map(({ key: groupKey, type: groupType, roomId, zoneId, part, rows: groupRows }) => {
+        if (groupType === ExteriorGroupType.MAIN_ROOF) {
           // 主屋根（最上階の建物範囲全体）の固定の群: 見出し「屋根（主屋根）」＋屋根の項目（MainRoofGroup）。セルを持たないため
           // 平面からは選ばれず、選択の枠は付けない。
           return (
@@ -1213,7 +1217,20 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
             </div>
           );
         }
-        if (groupType === 'roof') {
+        if (groupType === ExteriorGroupType.ROOF_ZONE) {
+          // 屋根区画の群: 見出し「屋根区画N」＋屋根の項目（RoofZoneGroup）。削除・作成の口は S3 で足す。
+          // 選択中の区画の強調は isSelectedRoofGroup（mode.selectedRoofZoneId は S3 で導入。それまでは null）。
+          const zone = graph.roofZones.find(z => z.id === zoneId);
+          return (
+            <RoofGroupFrame key={groupKey} selected={isSelectedRoofGroup({ type: groupType, roomId: null, zoneId }, mode.selectedRoomId, mode.selectedRoofZoneId ?? null)}>
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part}</div>
+              </div>
+              {zone && <RoofZoneGroup zone={zone} graph={graph} mode={mode} styles={{ cellBase, headerCell, cellInputStyle }} />}
+            </RoofGroupFrame>
+          );
+        }
+        if (groupType === ExteriorGroupType.ROOF) {
           // 屋根（下屋）の群: 見出し「屋根」＋削除ボタン＋屋根の項目（RoofGroup。フォーム1行＋固定2行の表）。
           // 連動行・仕上げレベル行・改名入力・区分セレクタは出さない。削除は屋外部屋と同じ mode.deleteRoom。
           const roofRoom = graph.roomMap.get(roomId);

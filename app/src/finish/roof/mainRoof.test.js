@@ -4,12 +4,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Plane, PlanGraph, Project, CenterLineType, Discipline, RoofSpec, RoofShape, ROOF_SPEC_KEYS,
+  Plane, PlanGraph, Project, CenterLineType, Discipline, RoofSpec, RoofShape, ROOF_SPEC_KEYS, RoofZone,
 } from '@core';
+import { cellBoundsList } from '../gridCells.js';
 import { rulesFor, UNSPECIFIED_STRUCTURE, TRADITIONAL_WOOD_STRUCTURE } from '../../structural/structureRules.js';
 import { footprintCellKeys } from '../../structural/wallGate.js';
 import { resolveRoofShape } from './roofDefaults.js';
-import { mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView, mainRoofRidgeDirectionView } from './mainRoof.js';
+import {
+  mainRoofBounds, resolveMainRoofShape, mainRoofHighSideView, mainRoofRidgeDirectionView,
+  resolveTopRoofShape, roofZoneBounds, resolveRoofZoneShape, roofZoneHighSideView, roofZoneRidgeDirectionView,
+} from './mainRoof.js';
 import { rectOfBounds } from './roofGeometry.js';
 import { wallFreshnessKey } from '../wallFreshnessKey.js';
 import { generateExteriorWalls, generateRoomWallsFromOutline, computeExteriorWallSegments } from '../wallGeneration.js';
@@ -249,4 +253,106 @@ test('【B3】主屋根の全16項目を既定以外にしても、壁の鮮度�
       assert.deepEqual(fingerprint(graph, project), before, `${shape}/${mode}`);
     }
   }
+});
+
+// ---- 屋根区画（S2）: 主屋根の範囲は区画を除いた残り（R3）。区画の形状は主屋根と同じ規則で区画の実効セルから導く ----
+
+const woodProject = () => {
+  const project = new Project('p', 'test');
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
+  return project;
+};
+const withZone = (graph, cells, spec = new RoofSpec()) => {
+  const zone = new RoofZone({ id: 'z1', cells, spec });
+  graph.setRoofZones(Object.freeze([zone]));
+  return zone;
+};
+/** 'notch'（L字の屋内3セル）で、x が 2000..4000 の右腕のセルキー。残りは左の縦長 2000×3000（矩形）。 */
+function notchWithArmKey() {
+  const { graph, extraCell } = buildRoofLayout('notch', 'none');
+  const arm = [...footprintCellKeys(graph)].find(k => cellBoundsList([k], graph)[0].x1 === 2000);
+  return { graph, arm, extraCell };
+}
+
+test('【屋根区画 S2】mainRoofBounds: 区画が無ければ建物範囲そのまま。L字の右腕を区画にすると残りは矩形になり、木造の自動の形状は寄棟→片流れへ変わる', () => {
+  const project = woodProject();
+  const { graph, arm } = notchWithArmKey();
+  assert.equal(mainRoofBounds(graph).length, footprintCellKeys(graph).size);
+  assert.equal(resolveMainRoofShape(graph, project), RoofShape.HIP, '前提: 区画なしのL字は寄棟');
+  withZone(graph, [arm]);
+  const rest = mainRoofBounds(graph);
+  assert.equal(rest.length, footprintCellKeys(graph).size - 1, '区画のセルは主屋根の範囲から外れる');
+  assert.ok(rectOfBounds(rest), '残りは矩形');
+  assert.equal(resolveMainRoofShape(graph, project), RoofShape.MONO, '残り 2000×3000 は短手の規則（3640以下=片流れ）');
+});
+
+test('【屋根区画 S2】resolveRoofZoneShape: 区画の範囲（実効セル）から導く。木造の矩形は短手の規則（3640以下=片流れ・超=切妻）、S造は陸屋根、明示値はそのまま', () => {
+  const small = singleRoomGraph(9000, 3640);
+  const big = singleRoomGraph(9000, 3641);
+  const zoneOf = g => withZone(g, [...footprintCellKeys(g)]);
+  const zs = zoneOf(small);
+  const zb = zoneOf(big);
+  assert.equal(resolveRoofZoneShape(small, zs, woodProject()), RoofShape.MONO);
+  assert.equal(resolveRoofZoneShape(big, zb, woodProject()), RoofShape.GABLE);
+  const steel = new Project('p', 'test');
+  steel.structuralInfo.mainStructure = 'S造';
+  assert.equal(resolveRoofZoneShape(small, zs, steel), RoofShape.FLAT);
+  assert.equal(resolveRoofZoneShape(big, zb, steel), RoofShape.FLAT);
+  zs.spec.setField('shape', RoofShape.HIP);
+  assert.equal(resolveRoofZoneShape(small, zs, steel), RoofShape.HIP, '明示値は主構造に依らない');
+});
+
+test('【屋根区画 S2】resolveRoofZoneShape: 区画の範囲が矩形でない（L字全体を1区画）木造は寄棟。主屋根の残りと区画は互いの形状に影響しない', () => {
+  const project = woodProject();
+  const { graph, arm } = notchWithArmKey();
+  const zone = withZone(graph, [...footprintCellKeys(graph)]);
+  assert.equal(resolveRoofZoneShape(graph, zone, project), RoofShape.HIP);
+  assert.deepEqual(mainRoofBounds(graph), [], '全部が区画なら主屋根の残りは空');
+  assert.equal(resolveMainRoofShape(graph, project), RoofShape.MONO, '空の残りは短手0＝片流れ（主屋根の空と同じ。例外にならない）');
+  zone.spec.setField('shape', RoofShape.GABLE);
+  assert.equal(graph.mainRoofSpec.shape, null, '区画の編集は主屋根の spec に触れない');
+  withZone(graph, [arm]);
+  assert.equal(roofZoneBounds(graph, graph.roofZones[0]).length, 1);
+});
+
+test('【屋根区画 S2】roofZoneHighSideView／roofZoneRidgeDirectionView: 主屋根と同じ規則（片流れ＋矩形で高い側、切妻＋矩形で棟木の向き）。値は区画の spec', () => {
+  const project = woodProject();
+  const flatLong = singleRoomGraph(9000, 3000); // 片流れ
+  const z1 = withZone(flatLong, [...footprintCellKeys(flatLong)]);
+  assert.deepEqual(roofZoneHighSideView(flatLong, z1, project), { visible: true, value: 'top' });
+  z1.spec.setField('highSide', 'right');
+  assert.deepEqual(roofZoneHighSideView(flatLong, z1, project), { visible: true, value: 'right' });
+  assert.deepEqual(roofZoneRidgeDirectionView(flatLong, z1, project), { visible: false, value: null });
+  const gable = singleRoomGraph(9000, 6000); // 切妻
+  const z2 = withZone(gable, [...footprintCellKeys(gable)]);
+  assert.deepEqual(roofZoneRidgeDirectionView(gable, z2, project), { visible: true, value: null });
+  z2.spec.setField('ridgeDirection', 'vertical');
+  assert.deepEqual(roofZoneRidgeDirectionView(gable, z2, project), { visible: true, value: 'vertical' });
+  assert.deepEqual(roofZoneHighSideView(gable, z2, project), { visible: false, value: null });
+});
+
+test('【屋根区画 S2・失敗系】実効セルが0の区画（建物範囲の外のセルだけ）: 範囲は空・形状は例外にならず（木造=片流れ・S造=陸屋根）、高い側／棟木の向きは非表示', () => {
+  const { graph, extraCell } = buildRoofLayout('notch', 'none'); // extraCell は部屋の外
+  const zone = withZone(graph, [extraCell]);
+  assert.deepEqual(roofZoneBounds(graph, zone), []);
+  assert.equal(resolveRoofZoneShape(graph, zone, woodProject()), RoofShape.MONO);
+  assert.equal(resolveRoofZoneShape(graph, zone, null), RoofShape.MONO, 'project なしでも落ちない（主構造未定の短手の規則）');
+  const steel = new Project('p', 'test');
+  steel.structuralInfo.mainStructure = 'S造';
+  assert.equal(resolveRoofZoneShape(graph, zone, steel), RoofShape.FLAT);
+  const hidden = { visible: false, value: null };
+  assert.deepEqual(roofZoneHighSideView(graph, zone, woodProject()), hidden);
+  assert.deepEqual(roofZoneRidgeDirectionView(graph, zone, woodProject()), hidden);
+  assert.equal(mainRoofBounds(graph).length, footprintCellKeys(graph).size, '範囲外の区画は主屋根の範囲を減らさない');
+});
+
+test('【屋根区画 S2】resolveTopRoofShape: 核は spec・範囲・規則だけで決まる（明示値 > 規則の既定 > 矩形でない=寄棟 > 短手の規則）', () => {
+  const L = [rect(0, 0, 6000, 2000), rect(0, 2000, 3000, 7000)];
+  const wood = rulesFor(TRADITIONAL_WOOD_STRUCTURE);
+  assert.equal(resolveTopRoofShape(new RoofSpec(), L, wood), RoofShape.HIP);
+  assert.equal(resolveTopRoofShape(new RoofSpec({ shape: RoofShape.GABLE }), L, wood), RoofShape.GABLE);
+  assert.equal(resolveTopRoofShape(new RoofSpec(), L, rulesFor('S造')), RoofShape.FLAT);
+  assert.equal(resolveTopRoofShape(new RoofSpec(), SMALL, wood), RoofShape.MONO);
+  assert.equal(resolveTopRoofShape(new RoofSpec(), BIG, wood), RoofShape.GABLE);
+  assert.equal(resolveTopRoofShape(new RoofSpec(), [], wood), RoofShape.MONO);
 });

@@ -52,13 +52,14 @@
 - 逆向き（外部タブの群のクリックで平面の屋根を選ぶ）は、既存の屋外部屋の群も持たないため屋根にも付けていない。
 
 ## 主屋根（最上階の屋根）
-- 最上階（とその検討案）の外部タブ先頭に、セルを持たない固定の群「屋根」（`type:'mainRoof'`・削除ボタンなし・選択の枠なし）。範囲は最上階の建物範囲（`footprintCellKeys`）、入力項目・入力UI・初期値関数は下屋と同じ（`RoofGroup.jsx`の`RoofSpecFields`を共用）。備考の既定だけ空（下屋は「下野」）。
+- 最上階（とその検討案）の外部タブ先頭に、セルを持たない固定の群「屋根」（`type:'mainRoof'`・削除ボタンなし・選択の枠なし）。範囲は最上階の建物範囲（`footprintCellKeys`）から屋根区画の実効セルを除いた残り（区画が無ければ建物範囲。S2 以降 `mainRoofBounds`＝R3）、入力項目・入力UI・初期値関数は下屋と同じ（`RoofGroup.jsx`の`RoofSpecFields`を共用）。備考の既定だけ空（下屋は「下野」）。
 - 保存先は最上階の**graphの階ごと設定** `PlanGraph.mainRoofSpec`（常に`RoofSpec`。全階が持てるが使われるのは最上階の分だけで、他の階では休眠する）。project・屋根専用平面（R階。構造モード専用で、最上階が変わると新しい最上階へ付け替わる〔`.claude/structural-model.md`〕）には置かない。最上階の判定は`core/project.js`の`isTopFloorPlane`（`project.planes`の末尾。検討案は参照元で判定）。
 - **既定値のときは保存データへ何も書かない**（`GS.MAIN_ROOF_SPEC=53`を省く。`isDefaultRoofSpec`が唯一の判定）。主屋根を編集していない文書のバイト列は変わらない。材料コードの収集・照合も既定値のときは出ない。
 - 形状の既定は`rulesFor(effectiveStructure).mainRoofDefaultShape`（RC・S・SRC=陸屋根、在来・2×4=null＝短手の規則）。主構造が**未定**のときは`UNSPECIFIED_RULES`が明示でnull（継承に任せると`STEEL_RULES`経由で`flat`になるため）＝木造と同じ短手の規則。導出は`finish/roof/mainRoof.js`（`wallGate.js`が storage 系を連鎖して引くので、`graphSnapshot`が引く`roofDefaults.js`には置かない＝import循環の回避）。
 - 主屋根は壁・境界・構造・展開図に影響しない（値の保持と外部タブの表示だけ。壁の鮮度キーにも入れない）。
 - 仕上げ undo は別キー`mainRoof`（`PER_FLOOR_SETTERS`は値そのものを入れる形でオブジェクトを相乗りさせない）。確定は`FinishModeState.setMainRoofField`（1確定＝undo 1エントリ）。
-- **屋根区画（2026-10-30・S1 データ層）**: 主屋根を区画ごとに指定するため、最上階の階ごと設定`PlanGraph.roofZones`（`core/roofZone.js RoofZone {id, cells, spec: RoofSpec}`。殻は凍結・spec は可変）を持つ。区画＝部屋セルの上に重なるセル集合で、区画に入らないセルが主屋根（`mainRoofSpec`）の範囲。不変条件は天井区画と同型: **R1** 実効セル＝`refreshCells`∩建物範囲（`finish/roof/roofZones.js roofZoneEffectiveCells`。保存では間引かず読む側で守る）／**R2** 区画どうしは重ならない（作成は後勝ち＝`createRoofZone`が既存区画のセルを奪い空になった区画を消す。復元は先勝ち）／**R3** 主屋根の範囲＝建物範囲−全区画（`mainRoofRestCellKeys`）。初期の spec は`createRoofZoneSpec(mainSpec)`（主屋根の値を写し、形状・高い側・棟木の向きは自動。**`mainRoofSpec`の実体をそのまま渡してはいけない**＝共有すると両方に setField が効く）。上に階を追加しても区画は写さない（セルはその階の部屋配置に依存。ユーザー裁定）。保存は`.claude/serialization-fbs.md`「屋根区画」。UI・小屋組は S2 以降。
+- **屋根区画（2026-10-30・S1 データ層）**: 主屋根を区画ごとに指定するため、最上階の階ごと設定`PlanGraph.roofZones`（`core/roofZone.js RoofZone {id, cells, spec: RoofSpec}`。殻は凍結・spec は可変）を持つ。区画＝部屋セルの上に重なるセル集合で、区画に入らないセルが主屋根（`mainRoofSpec`）の範囲。不変条件は天井区画と同型: **R1** 実効セル＝`refreshCells`∩建物範囲（`finish/roof/roofZones.js roofZoneEffectiveCells`。保存では間引かず読む側で守る）／**R2** 区画どうしは重ならない（作成は後勝ち＝`createRoofZone`が既存区画のセルを奪い空になった区画を消す。復元は先勝ち）／**R3** 主屋根の範囲＝建物範囲−全区画（`mainRoofRestCellKeys`）。初期の spec は`createRoofZoneSpec(mainSpec)`（主屋根の値を写し、形状・高い側・棟木の向きは自動。**`mainRoofSpec`の実体をそのまま渡してはいけない**＝共有すると両方に setField が効く）。上に階を追加しても区画は写さない（セルはその階の部屋配置に依存。ユーザー裁定）。保存は`.claude/serialization-fbs.md`「屋根区画」。
+- **屋根区画の項目編集（S2）**: 最上階の外部タブ（仕上げ・構造）と天伏の外部タブ（軒裏）に区画ごとの群が出る。仕上げ・構造は主屋根の次・下屋の前に`type:'roofZone'`の群「屋根区画N」（N は`graph.roofZones`の1始まりの並び順。実効セル0は「（範囲なし）」を付ける）、区画が1件以上あると主屋根の見出しは「屋根（主屋根・区画以外）」。群の並びは`exteriorGroups.js buildExteriorGroups`の`roofZones`引数（`roofZones.js roofZoneGroupInputs`が作る`{id, empty}`）、描画は`RoofZoneGroup`（`RoofSpecFields`共用。柱貫通は主屋根と同じく出さない）、確定は`FinishModeState.setRoofZoneField`（`commitRoofSpecField`→undo は`roofZones`キー）／構造の`commit`（`onStructureChanged`＋`markDirty`）／天伏の`CeilingModeState.setRoofZoneField`（`markDirty`付き）。形状の自動は`mainRoof.js`の`resolveTopRoofShape`（主屋根・区画共通の核）で、主屋根は残りの範囲（`mainRoofBounds`＝R3）、区画は実効セル（`roofZoneBounds`）から決める。区画は主屋根と同じ`isTopFloorPlane`の階にだけ出す。作成・削除・選択の UI と小屋組は S3 以降。
 - **上に階を追加して最上階が入れ替わったときだけ**、旧最上階の値を新しい最上階へ写す（follower `mainRoofCarry`・`finish/roof/mainRoofFloorSync.js`）。階の削除・並べ替え・階変更・下への追加では写さず、新しい最上階が自分の値を使う。旧最上階の値は残し、旧最上階が既定値なら何も書かない。旧最上階の検討案の主屋根は写さない（採用フロアの値だけ）。階追加のundoは追加階ごと消えるので、旧最上階には何も書かない。
 
 ## 小屋組との関係（構造モードの伏図の描画）
@@ -119,6 +120,6 @@
 - 矩形でない屋根（L字の下屋など）が片流れのとき、「高い側」を入力できない。L字の下屋の伏図は壁ごとの翼で流れを決める（明示の高い側は使わない）。自動の形状は下屋＝短手の規則・主屋根＝寄棟のまま。面・継ぎ目・母屋は水下だけが進む場で決まる（`structural-model.md`「L字の下屋」。水下が段違いなら規則で作れない形で軒先の線だけ）。
 - 形状が自動のとき、導かれた形状と同じ値を選んでも `onChange` が発火しないため、導いた形状を「そのまま固定」するには別の形状を一度選ぶ必要がある。高い側も同じ（自動で導いた辺を固定するには別の辺を一度選ぶ。固定するまで、高い側は隣の部屋の追加・削除に追随して変わる）。棟木の向きは欄が「自動（長手）」を示すので、導いた向きと同じ縦／横も直接選んで固定できる（この限界は持たない）。
 - 高い側の「屋内に接する辺」の「屋内」は建物範囲（`footprintCellKeys`）と同じ定義で、未定義部屋・階段・吹抜け・昇降路も数える。B1b の「上の階」の警告は未定義部屋を数えないので定義が違う（どちらに合わせるかはユーザー確認待ち）。
-- 主屋根の形状は最上階の建物範囲から導くだけで、構造材（梁の生成）・平面・展開図・断面には反映しない（構造種別が変わると表示の形状が追従するだけ。構造モードの伏図の小屋組の描画だけがこれを読む）。
+- 主屋根の形状は最上階の建物範囲（屋根区画があればその残り＝R3。小屋組の主屋根の region も残りの範囲に縮む。区画ごとの region は S4）から導くだけで、構造材（梁の生成）・平面・展開図・断面には反映しない（構造種別が変わると表示の形状が追従するだけ。構造モードの伏図の小屋組の描画だけがこれを読む）。
 - 「既定値は保存しない」の帰結（主屋根）: (a) 既定の野地板・防水シートのコードをユーザーが保守パネルで上書き（本体の編集）していても、主屋根が既定値のままの文書にはその材が同梱されず、別の環境では本体カタログの内容で表示される。(b) 将来、屋根の既定値の定数（`DEFAULT_ROOF_*`）を変えると、主屋根を編集していない文書は新しい既定値に変わる（保存データに値が無いため）。下屋は付与時に値を保存するのでどちらも起きない。
 - 最上階が入れ替わっても、階の削除・並べ替えでは主屋根の値は動かない（旧最上階の値は旧最上階に休眠したまま）。
