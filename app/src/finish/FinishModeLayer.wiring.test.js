@@ -65,3 +65,19 @@ test('【配線・強化】FinishModeLayer は区割り線・外壁判定線を 
   assert.equal((codeOnly.match(/computeExteriorWallSegments\(/g) || []).length, 0,
     'computeExteriorWallSegments(を直接呼んでいないはず（本体コメント除去後の件数で判定）');
 });
+
+// ---- 屋根区画 S3: 指定中だけ区画の外形を描く ----
+// 描くかどうかの判断は FinishModeState.roofZoneOutlines（指定中でなければ空）が持ち、レイヤは受け取った配列を描くだけ
+// （配列が空なら何も足さない）。選択中の区画だけ塗りを足す。
+test('【配線・S3】FinishModeLayer は roofZoneOutlines（既定[]）と selectedRoofZoneId（既定null）を受け取る', () => {
+  assert.match(codeOnly, /^\s*roofZoneOutlines = \[\],\s*$/m);
+  assert.match(codeOnly, /^\s*selectedRoofZoneId = null,\s*$/m);
+});
+
+test('【配線・S3】区画の外形は roofZoneOutlines を回して zone.segments を線分で描き、選択中（zone.id === selectedRoofZoneId）だけ塗りを足す。{roofZoneShapes} を Group に含む', () => {
+  assert.match(codeOnly, /^\s*for \(const zone of roofZoneOutlines\) \{\s*$/m);
+  assert.match(codeOnly, /^\s*if \(zone\.id === selectedRoofZoneId\) \{\s*$/m);
+  assert.match(codeOnly, /^\s*for \(const seg of zone\.segments\) \{\s*$/m);
+  assert.match(codeOnly, /^\s*\{roofZoneShapes\}\s*$/m);
+  assert.equal((codeOnly.match(/outlineSegments\(/g) || []).length, 3, '幾何は純モジュール側（roofZoneOutlines）で作り、jsx に増やさない');
+});

@@ -21,6 +21,8 @@ export const FinishModeLayer = observer(({
   selectedRoomId,
   previewCells = [],
   highlightCellKeys = null,
+  roofZoneOutlines = [],
+  selectedRoofZoneId = null,
 }) => {
   // extent を尊重した実在セルのみ列挙してグリッド背景を塗る。
   // 枠線をセル矩形の stroke で描くと L字領域の内部分割位置に実在しない線が
@@ -177,12 +179,46 @@ export const FinishModeLayer = observer(({
     />
   ));
 
+  // 屋根区画の外形（「屋根区画を指定」中だけ。roofZoneOutlines は指定中でなければ空＝何も足さない）。
+  // 区画ごとに外周線分（共有辺を打ち消した輪郭）を描き、選択中の区画は塗りも足す。
+  const roofZoneShapes = [];
+  for (const zone of roofZoneOutlines) {
+    if (zone.id === selectedRoofZoneId) {
+      roofZoneShapes.push(
+        <Shape
+          key={`zf${zone.id}`}
+          sceneFunc={(ctx, shape) => {
+            ctx.beginPath();
+            for (const b of zone.boundsList) ctx.rect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+            ctx.fillStrokeShape(shape);
+          }}
+          fill="rgba(37,99,235,0.2)"
+          listening={false}
+        />
+      );
+    }
+    for (const seg of zone.segments) {
+      roofZoneShapes.push(
+        <Line
+          key={`zo${zone.id}:${seg.isVertical ? 'v' : 'h'}${seg.value}:${seg.lo}`}
+          points={seg.isVertical
+            ? [seg.value, seg.lo, seg.value, seg.hi]
+            : [seg.lo, seg.value, seg.hi, seg.value]}
+          stroke="#2563eb"
+          strokeWidth={2 / viewport.scaleX}
+          listening={false}
+        />
+      );
+    }
+  }
+
   return (
     <Group>
       {gridCells}
       {gridLines}
       {roomRects}
       {exteriorWalls}
+      {roofZoneShapes}
       {previewRects}
       {highlightSegs}
     </Group>

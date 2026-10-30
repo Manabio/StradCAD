@@ -98,6 +98,8 @@ export const SceneLayers = observer(({
                 selectedRoomId={mode.selectedRoomId}
                 previewCells={mode.previewCells}
                 highlightCellKeys={mode.selectedEquipmentCellKeys}
+                roofZoneOutlines={mode.roofZoneOutlines}
+                selectedRoofZoneId={mode.selectedRoofZoneId}
               />
             )}
             {appMode === 'ceiling' && mode && (

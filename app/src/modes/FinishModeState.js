@@ -17,15 +17,17 @@ import { equipmentAtCell } from '../finish/equipment/equipmentGeometry.js';
 import { equipmentHighlightKeys } from '../finish/equipment/equipmentTab.js';
 import { buildingEquipmentCatalog, equipmentSpanLabelOf } from '../finish/equipment/buildingEquipment.js';
 import { validateElevatorInstall, installEquipment, removeEquipment } from '../finish/equipment/equipmentOps.js';
-import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
+import { createLeanToRoofSpec, createRoofZoneSpec } from '../finish/roof/roofDefaults.js';
 import { commitRoofSpecField } from '../finish/roof/roofSpecCommit.js';
+import { createRoofZone, removeRoofZone, roofZoneEffectiveCells, roofZoneOutlines } from '../finish/roof/roofZones.js';
+import { footprintCellKeys } from '../structural/wallGate.js';
 import { STEEL_SLAB_PLATE_CODE_KEYS, isDefaultSteelSlabSpec } from '../structural/steelSlabSpec.js';
 import { ERR_MATERIAL_MISMATCH, ERR_ROOF_NOT_UNASSIGNED, ERR_ROOM_DELETE_HAS_STAIR_CHILD, ERR_STAIR_VOID_NOT_STAIR, ERR_STAIR_VOID_PARTIAL } from '../error.js';
 import { stairVoidsTouching } from '../finish/stair/stairVoidReconcile.js';
 import { buildStairChains } from '../finish/stair/stairChains.js';
 import {
   RoomFeature, RoomKind, StructuralMaterialType, isShaftFeature, isRoofFeature, ROOF_ROOM_NAME, applyDefaultBaseboard,
-  ElevatorEquipmentCategory, DEFAULT_EV_USAGE, isDefaultRoofSpec,
+  ElevatorEquipmentCategory, DEFAULT_EV_USAGE, isDefaultRoofSpec, isTopFloorPlane,
 } from '@core';
 import { effectiveStructure, defaultMaterialFor } from '../structural/structureRules.js';
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
@@ -67,6 +69,10 @@ export class FinishModeState {
   namingCellOrder = null;
   selectedStairId = null;
   selectedEquipmentId = null; // 選択中の昇降機器具（器具行のid、または未登録の昇降路Roomのid）
+  selectedRoofZoneId = null;  // 選択中の屋根区画（graph.roofZones の id）。部屋・階段・器具の選択とは排他
+  // 「屋根区画を指定」中か（外部タブの主屋根の見出しのトグル）。真の間は平面のなぞりが区画の作成・選択になり、
+  // 部屋・階段・器具の選択はしない。最上階（とその検討案）でだけ真にできる。モード・階の切替で作り直されるので持ち越さない。
+  roofZonePickActive = false;
 
   // ---- 直下階の階段（見下げ表示のヒット判定用。init() で peek しロード） ----
   lowerStairs = []; // Array<{ stair, cellBounds }>（cellBounds は下階graphで解決したワールド矩形配列）
@@ -138,7 +144,15 @@ export class FinishModeState {
       namingIsNew:    observable,
       selectedStairId: observable,
       selectedEquipmentId: observable,
-      lowerStairs:     observable.ref,
+      selectedRoofZoneId: observable,
+      roofZonePickActive: observable,
+      roofZoneOutlines: computed,
+      roofZonePicking: computed,
+      setRoofZonePick: action,
+      toggleRoofZonePick: action,
+      selectRoofZone: action,
+      removeRoofZone: action,
+      lowerStairs:    observable.ref,
       otherFloors:     observable.ref,
       stairChains:     computed,
       upperFloorGraph: computed,
@@ -669,6 +683,9 @@ export class FinishModeState {
     // namingIsNew（新規部屋）なら現行どおり削除、既存部屋なら選択維持のまま閉じるだけ（cancelNaming参照）。
     if (this.namingRoomId) this.cancelNaming(this.namingRoomId);
 
+    // 屋根区画の指定中は優先順位の判定（昇降機・屋根・階段・部屋）に入らず、建物範囲のセルのなぞりだけを始める。
+    if (this.roofZonePicking) { this._startRoofZonePick(wx, wy); return; }
+
     const region = regionCellsAt(wx, wy, this.graph);
     if (region.length === 0) return;
 
@@ -761,7 +778,7 @@ export class FinishModeState {
     const state = this.dragState;
     if (!state) return;
     const region = regionCellsAt(wx, wy, this.graph)
-      .filter(c => !state.stairKeys.has(c.key));
+      .filter(c => !state.stairKeys.has(c.key) && (!state.roofZoneFootprint || state.roofZoneFootprint.has(c.key)));
     if (region.length === 0) return;
     if (region.every(c => state.visitedCells.has(c.key))) {
       this.dragState = { ...state, currentCell: region[0] };
@@ -791,6 +808,7 @@ export class FinishModeState {
   commitDrag({ tap = false } = {}) {
     const state = this.dragState;
     if (!state) return;
+    if (state.roofZoneFootprint) { this._commitRoofZonePick(state, tap); return; }
     const newCells = new Set(state.visitedCells.keys());
     if (newCells.size === 0) { this.dragState = null; return; }
     // 吹抜けのセルから始めて動かさずに離した（tap。ポインタの移動量で決める。訪れたセル数では、吹抜けが
@@ -919,6 +937,7 @@ export class FinishModeState {
     this.namingCellOrder = cellOrder;
     this.selectedRoomId  = roomId;
     this.selectedEquipmentId = null;
+    this.selectedRoofZoneId = null;
   }
 
   /**
@@ -936,6 +955,90 @@ export class FinishModeState {
     this.selectedRoomId = roomId;
     this.selectedStairId = null;
     this.selectedEquipmentId = null;
+    this.selectedRoofZoneId = null;
+  }
+
+  // ---- 屋根区画（平面で指定する。最上階の外部タブの主屋根の見出しのトグルが入口） ----
+
+  /** 区画の指定モードを切り替える。最上階（とその検討案）以外では真にならない。偽にするときは途中のなぞりも捨てる。 */
+  setRoofZonePick(on) {
+    this.roofZonePickActive = !!on && isTopFloorPlane(this.project, this.graph.plane);
+    if (!this.roofZonePickActive && this.dragState?.roofZoneFootprint) this.dragState = null;
+  }
+
+  toggleRoofZonePick() { this.setRoofZonePick(!this.roofZonePickActive); }
+
+  /**
+   * 今この瞬間に区画の指定中か＝フラグが真で、かつ表示中の階が今も最上階（とその検討案）か。
+   * 最上階の判定はオンにする瞬間だけでなく、なぞりの入口（startDrag）と外形（roofZoneOutlines）でも毎回行う——
+   * 階の並べ替え・階変更は FinishModeState を作り直さず表示中の階が最上階でなくなりうるため（QA 指摘 2026-10-30）。
+   * そのときは主屋根の群（トグル）も消えるので、フラグが真のまま残っても普段のなぞりに戻る。
+   */
+  get roofZonePicking() {
+    return this.roofZonePickActive && isTopFloorPlane(this.project, this.graph.plane);
+  }
+
+  /** 区画を選択する（部屋・階段・器具の選択は外す）。 */
+  selectRoofZone(zoneId) {
+    this.selectedRoofZoneId = zoneId;
+    this.selectedRoomId = null;
+    this.selectedStairId = null;
+    this.selectedEquipmentId = null;
+  }
+
+  /**
+   * 区画を消す（確認ダイアログなし。undo で戻る）。1回で undo 1エントリ。存在しない id は何も変更せず false。
+   * @returns {boolean}
+   */
+  removeRoofZone(zoneId) {
+    if (!this.graph.roofZones.some(z => z.id === zoneId)) return false;
+    withFinishUndo(this.graph, () => this.graph.setRoofZones(removeRoofZone(this.graph.roofZones, zoneId)));
+    if (this.selectedRoofZoneId === zoneId) this.selectedRoofZoneId = null;
+    return true;
+  }
+
+  /** 指定中だけ平面に出す、各区画の外形（FinishModeLayer が描く）。指定中でなければ空。 */
+  get roofZoneOutlines() { return this.roofZonePicking ? roofZoneOutlines(this.graph) : []; }
+
+  /**
+   * 指定中のなぞりの開始。押下点の連結領域のうち建物範囲（footprintCellKeys）のセルだけを集める
+   * （範囲外だけなら空のまま始め、なぞりで範囲内へ入れば集まる）。dragState の roofZoneFootprint が
+   * 区画のなぞりの目印（updateDrag の絞り込み・commitDrag の分岐）。
+   */
+  _startRoofZonePick(wx, wy) {
+    const region = regionCellsAt(wx, wy, this.graph);
+    if (region.length === 0) return;
+    const footprint = footprintCellKeys(this.graph);
+    const cells = region.filter(c => footprint.has(c.key));
+    this.dragState = {
+      currentCell: cells[0] ?? region[0],
+      visitedCells: new Map(cells.map(c => [c.key, c])),
+      stairKeys: new Set(),
+      startCellKey: cells[0]?.key ?? null,
+      roofZoneFootprint: footprint,
+    };
+  }
+
+  /**
+   * 指定中のなぞりの確定。タップ（動かさずに離した）で押下点が既存区画のセルなら、その区画を選ぶだけ（書込みなし）。
+   * それ以外は集めたセルで区画を作る（既存区画のセルは奪う＝後勝ち。undo 1エントリ）。建物範囲のセルが無ければ何もしない。
+   * 作った区画を選択する。指定モードはそのまま（続けて別の区画を指定できる）。
+   */
+  _commitRoofZonePick(state, tap) {
+    this.dragState = null;
+    const cellKeys = [...state.visitedCells.keys()];
+    if (cellKeys.length === 0) return;
+    if (tap) {
+      const hit = this.graph.roofZones.find(z => roofZoneEffectiveCells(z, this.graph).has(state.startCellKey));
+      if (hit) { this.selectRoofZone(hit.id); return; }
+    }
+    let zoneId = null;
+    withFinishUndo(this.graph, () => {
+      const made = createRoofZone(this.graph.roofZones, cellKeys, createRoofZoneSpec(this.graph.mainRoofSpec));
+      zoneId = made.zoneId;
+      if (zoneId) this.graph.setRoofZones(made.zones);
+    });
+    if (zoneId) this.selectRoofZone(zoneId);
   }
 
   /**
@@ -1434,6 +1537,7 @@ export class FinishModeState {
     const roomId = this.graph.stairMap.get(id)?.roomId ?? null;
     this.selectedRoomId = roomId && this.graph.roomMap.has(roomId) ? roomId : null;
     this.selectedEquipmentId = null;
+    this.selectedRoofZoneId = null;
   }
 
   // ---- 昇降機器具 ----
@@ -1443,6 +1547,7 @@ export class FinishModeState {
     this.selectedEquipmentId = id;
     this.selectedRoomId  = null;
     this.selectedStairId = null;
+    this.selectedRoofZoneId = null;
   }
 
   /**
@@ -1589,6 +1694,8 @@ export class FinishModeState {
     this.cancelDrag();
     this._pendingDialogUndo = null;
     this.selectedEquipmentId = null;
+    this.selectedRoofZoneId = null;
+    this.roofZonePickActive = false;
     // 材データを破棄（仕上げモード離脱時）
     this.materials       = null;
     this.materialMap     = null;

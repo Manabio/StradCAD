@@ -259,7 +259,9 @@ test('【不変条件・B3】FinishTable.jsx: 主屋根の群は最上階（isTo
   assert.ok(tableLines.includes('const includeMainRoof = isTopFloorPlane(mode.project, graph.plane);'), 'includeMainRoof の1行が見つからない');
   const branch = sliceBlock(tableCode, 'if (groupType === ExteriorGroupType.MAIN_ROOF) {', 'if (groupType === ExteriorGroupType.ROOF_ZONE) {');
   assert.ok(/<MainRoofGroup graph=\{graph\} mode=\{mode\} styles=\{\{ cellBase, headerCell, cellInputStyle \}\} \/>/.test(branch), 'MainRoofGroup の配線が見つからない');
-  assert.ok(!/setDeleteConfirm|削除|deleteButtonStyle|<button|deleteRoom/.test(branch), '主屋根の群に削除ボタン（button・deleteRoom・setDeleteConfirm）がある');
+  assert.ok(!/setDeleteConfirm|削除|deleteButtonStyle|deleteRoom|removeRoofZone/.test(branch), '主屋根の群に削除ボタン（deleteRoom・setDeleteConfirm・removeRoofZone）がある');
+  // <button> は S3 の「屋根区画を指定」トグルの1つだけ（FinishTable.wiring.test.js が配線を固定）
+  assert.equal((branch.match(/<button/g) ?? []).length, 1, '主屋根の群の button は区画指定のトグル1つだけ');
   assert.ok(!/RoofGroupFrame|isSelectedRoofGroup|outline/.test(branch), '主屋根の群に選択の青枠がある');
   assert.ok(!/ExteriorLevelRow|ExteriorPartHeading|<RoofGroup /.test(branch), '主屋根の分岐に他の群の部品が入っている');
   assert.ok(branch.indexOf('>{part}<') >= 0, '見出しは群の part（固定「屋根」）');
@@ -281,12 +283,13 @@ test('【不変条件・屋根区画 S2】RoofZoneGroup の確定は mode.setRoo
   assert.ok(!/\.setField\(|setRoofField|setMainRoofField|mainRoofSpec/.test(zoneBody), '区画の群が RoofSpec を直接書き換えない・主屋根の spec を参照しない');
 });
 
-test('【不変条件・屋根区画 S2】FinishTable.jsx: 区画の群は主屋根の分岐の次・下屋の分岐の前に、RoofGroupFrame（isSelectedRoofGroup に zoneId）で囲んで RoofZoneGroup を描く。削除ボタンは持たない（S3）', () => {
+test('【不変条件・屋根区画 S2】FinishTable.jsx: 区画の群は主屋根の分岐の次・下屋の分岐の前に、RoofGroupFrame（isSelectedRoofGroup に zoneId）で囲んで RoofZoneGroup を描く。削除ボタンは確認なしの mode.removeRoofZone（S3）', () => {
   const branch = sliceBlock(tableCode, 'if (groupType === ExteriorGroupType.ROOF_ZONE) {', 'if (groupType === ExteriorGroupType.ROOF) {');
   assert.ok(/<RoofZoneGroup zone=\{zone\} graph=\{graph\} mode=\{mode\} styles=\{\{ cellBase, headerCell, cellInputStyle \}\} \/>/.test(branch), 'RoofZoneGroup の配線');
   assert.ok(/isSelectedRoofGroup\(\{ type: groupType, roomId: null, zoneId \}, mode\.selectedRoomId, mode\.selectedRoofZoneId \?\? null\)/.test(branch), '選択中の判定');
   assert.ok(/<RoofGroupFrame /.test(branch) && branch.indexOf('>{part}<') >= 0, '枠と見出し（part）');
-  assert.ok(!/setDeleteConfirm|deleteButtonStyle|<button|deleteRoom/.test(branch), '区画の群に削除ボタンを持たない（作成・削除は S3）');
+  assert.ok(/onClick=\{\(\) => mode\.removeRoofZone\(zoneId\)\}/.test(branch), '削除ボタンは mode.removeRoofZone(zoneId)（S3）');
+  assert.ok(!/setDeleteConfirm|deleteRoom/.test(branch), '区画の削除は部屋の削除確認・deleteRoom を経ない');
   assert.ok(tableLines.includes('const roofZones = includeMainRoof ? roofZoneGroupInputs(graph) : [];'), '区画の入力は最上階だけ');
   assert.ok(tableLines.includes('const groups = buildExteriorGroups({ rows, rooms: graph.rooms, roomOrder: graph.roomOrder, includeMainRoof, roofZones });'), 'buildExteriorGroups へ roofZones を渡す');
 });

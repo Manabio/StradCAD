@@ -13,7 +13,7 @@ import {
   RoomFeature, RoomKind, ExteriorLevelRef, DEFAULT_ROOM_FLOOR_LEVEL, DEFAULT_ROOM_CEILING_HEIGHT,
   ShaftSoundproof, isTopFloorPlane,
 } from '@core';
-import { ExteriorGroupType } from '../core/constants.js';
+import { ExteriorGroupType, ROOF_ZONE_PICK_START_LABEL, ROOF_ZONE_PICK_END_LABEL } from '../core/constants.js';
 import { interiorTabRooms, interiorRoomDisplayName } from './interiorTabRooms.js';
 import { shaftWallMaterialOptions } from './shaftWallMaterialOptions.js';
 import { floorHeightAbove } from './stair/stairDimensions.js';
@@ -402,6 +402,8 @@ export const FinishTable = observer(({
     if (!mode.selectedRoomId || mode.selectedStairId) return;
     setActiveTab(selectedIsExterior ? 'exterior' : 'interior');
   }, [mode.selectedRoomId, mode.selectedStairId, selectedIsExterior]);
+  // 屋根区画が選択されたら「外部」タブへ自動切替（区画の群は外部タブにある）
+  useEffect(() => { if (mode.selectedRoofZoneId) setActiveTab('exterior'); }, [mode.selectedRoofZoneId]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
@@ -1210,21 +1212,35 @@ const GroupedExteriorTable = observer(({ graph, mode, onApplyNaming, category })
           // 平面からは選ばれず、選択の枠は付けない。
           return (
             <div key={groupKey} style={{ marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, gap: 8 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part}</div>
+                {/* 平面で屋根区画をなぞって指定するトグル（最上階だけ。この群自体が最上階にしか出ない） */}
+                <button
+                  onClick={() => mode.toggleRoofZonePick()}
+                  style={{
+                    fontSize: 12, borderRadius: 4, padding: '4px 12px', cursor: 'pointer', border: '1px solid #2563eb',
+                    color: mode.roofZonePickActive ? '#fff' : '#2563eb',
+                    background: mode.roofZonePickActive ? '#2563eb' : '#fff',
+                  }}
+                >
+                  {mode.roofZonePickActive ? ROOF_ZONE_PICK_END_LABEL : ROOF_ZONE_PICK_START_LABEL}
+                </button>
               </div>
               <MainRoofGroup graph={graph} mode={mode} styles={{ cellBase, headerCell, cellInputStyle }} />
             </div>
           );
         }
         if (groupType === ExteriorGroupType.ROOF_ZONE) {
-          // 屋根区画の群: 見出し「屋根区画N」＋屋根の項目（RoofZoneGroup）。削除・作成の口は S3 で足す。
-          // 選択中の区画の強調は isSelectedRoofGroup（mode.selectedRoofZoneId は S3 で導入。それまでは null）。
+          // 屋根区画の群: 見出し「屋根区画N」＋削除ボタン＋屋根の項目（RoofZoneGroup）。削除は確認なしで mode.removeRoofZone
+          // （undo で戻る）。選択中の区画の強調は isSelectedRoofGroup（mode.selectedRoofZoneId）。
           const zone = graph.roofZones.find(z => z.id === zoneId);
           return (
             <RoofGroupFrame key={groupKey} selected={isSelectedRoofGroup({ type: groupType, roomId: null, zoneId }, mode.selectedRoomId, mode.selectedRoofZoneId ?? null)}>
-              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, gap: 8 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>{part}</div>
+                <button onClick={() => mode.removeRoofZone(zoneId)} style={deleteButtonStyle}>
+                  🗑️ 削除
+                </button>
               </div>
               {zone && <RoofZoneGroup zone={zone} graph={graph} mode={mode} styles={{ cellBase, headerCell, cellInputStyle }} />}
             </RoofGroupFrame>

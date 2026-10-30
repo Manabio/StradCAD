@@ -9,7 +9,7 @@
  * （mainRoof.js のヘッダと同じ理由）。store.js / snap.js / .jsx を静的に import しない。
  */
 import { RoofZone } from '../../core/roofZone.js';
-import { refreshCells } from '../gridCells.js';
+import { refreshCells, cellBoundsList, outlineSegments } from '../gridCells.js';
 import { footprintCellKeys } from '../../structural/wallGate.js';
 
 /**
@@ -71,6 +71,23 @@ export function roofZoneGroupInputs(graph) {
   if (graph.roofZones.length === 0) return [];
   const footprint = footprintCellKeys(graph);
   return graph.roofZones.map(zone => ({ id: zone.id, empty: effectiveCellsIn(zone, graph, footprint).size === 0 }));
+}
+
+/**
+ * 平面に出す区画の外形（仕上げモードの「屋根区画を指定」中だけ使う）。区画ごとに実効セルのセル矩形と、その外周線分
+ * （共有辺を打ち消した outlineSegments）を返す。実効セルが0の区画は含めない。区画の並びのまま。
+ * @returns {Array<{ id: string, boundsList: Array<{x1,y1,x2,y2}>, segments: Array<{isVertical,value,lo,hi}> }>}
+ */
+export function roofZoneOutlines(graph) {
+  if (graph.roofZones.length === 0) return [];
+  const footprint = footprintCellKeys(graph);
+  const out = [];
+  for (const zone of graph.roofZones) {
+    const boundsList = cellBoundsList(effectiveCellsIn(zone, graph, footprint), graph);
+    if (boundsList.length === 0) continue;
+    out.push({ id: zone.id, boundsList, segments: outlineSegments(boundsList) });
+  }
+  return out;
 }
 
 /**

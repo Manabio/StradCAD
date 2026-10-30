@@ -314,3 +314,30 @@ test('【不変条件・B1a】PART_OPTIONS に「屋根」を足さない（手�
   // 「屋根庇」等は既存の別の部位。単独の「屋根」要素だけを禁じる。
   assert.ok(!codeOnly.slice(start, end).includes("'屋根'"), "PART_OPTIONS に '屋根' が含まれている");
 });
+
+// ---- 屋根区画 S3: トグル・削除・選択タブ切替 ----
+
+/** groupType 分岐のブロック（`if (groupType === ExteriorGroupType.X) {` から次の `if (groupType ===` まで）。 */
+function groupBranch(kind) {
+  const start = codeOnly.indexOf(`if (groupType === ExteriorGroupType.${kind}) {`);
+  assert.ok(start >= 0, `${kind} の分岐が見つからない`);
+  const next = codeOnly.indexOf('if (groupType ===', start + 10);
+  return codeOnly.slice(start, next > 0 ? next : undefined);
+}
+
+test('【配線・S3】「屋根区画を指定」のトグルは主屋根の群の分岐にだけ 1 つあり、mode.toggleRoofZonePick() を呼ぶ', () => {
+  assert.equal((codeOnly.match(/mode\.toggleRoofZonePick\(\)/g) || []).length, 1, '全体で1箇所');
+  assert.match(groupBranch('MAIN_ROOF'), /onClick=\{\(\) => mode\.toggleRoofZonePick\(\)\}/);
+  assert.match(groupBranch('MAIN_ROOF'), /\{mode\.roofZonePickActive \? ROOF_ZONE_PICK_END_LABEL : ROOF_ZONE_PICK_START_LABEL\}/);
+  assert.ok(!/toggleRoofZonePick/.test(groupBranch('ROOF_ZONE')) && !/toggleRoofZonePick/.test(groupBranch('ROOF')), '区画・下屋の群には出さない');
+});
+
+test('【配線・S3】区画の群の削除ボタンは確認ダイアログを経ず mode.removeRoofZone(zoneId) を直接呼ぶ', () => {
+  const block = groupBranch('ROOF_ZONE');
+  assert.match(block, /onClick=\{\(\) => mode\.removeRoofZone\(zoneId\)\}/);
+  assert.ok(!/setDeleteConfirm/.test(block), '区画の削除は RoomDeleteConfirm を開かない');
+});
+
+test('【配線・S3】selectedRoofZoneId の変化で外部タブへ切り替える useEffect がある', () => {
+  assert.match(codeOnly, /useEffect\(\(\) => \{ if \(mode\.selectedRoofZoneId\) setActiveTab\('exterior'\); \}, \[mode\.selectedRoofZoneId\]\);/);
+});

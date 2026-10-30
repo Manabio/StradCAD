@@ -5,7 +5,7 @@ import {
   Plane, PlanGraph, CenterLineType, Discipline, RoofSpec, RoofZone, RoofShape,
   DEFAULT_SOFFIT_MATERIAL, DEFAULT_SOFFIT_BACKING, SoffitOrientation,
 } from '@core';
-import { createRoofZone, removeRoofZone, roofZoneEffectiveCells, mainRoofRestCellKeys, roofZoneGroupInputs } from './roofZones.js';
+import { createRoofZone, removeRoofZone, roofZoneEffectiveCells, mainRoofRestCellKeys, roofZoneGroupInputs, roofZoneOutlines } from './roofZones.js';
 import { createRoofZoneSpec } from './roofDefaults.js';
 import { NON_DEFAULT_ROOF_SPEC } from '../roofTestFixtures.js';
 
@@ -134,6 +134,30 @@ test('roofZoneGroupInputs: 建物範囲内のセルを持つ区画は empty:fals
   zones = createRoofZone(zones, [a], new RoofSpec(), f).zones;    // 範囲内
   graph.setRoofZones(zones);
   assert.deepEqual(roofZoneGroupInputs(graph), [{ id: 'id1', empty: true }, { id: 'id2', empty: false }]);
+});
+
+test('roofZoneOutlines: 1区画は実効セルの外周4線分。隣り合う2セルは共有辺が消えて外周のみ。区画ごとに1要素で並び順維持', () => {
+  const { graph, a, b } = layout();
+  const f = ids();
+  graph.setRoofZones(createRoofZone([], [a], new RoofSpec(), f).zones);
+  const one = roofZoneOutlines(graph);
+  assert.equal(one.length, 1);
+  assert.equal(one[0].id, 'id1');
+  assert.equal(one[0].boundsList.length, 1);
+  assert.equal(one[0].segments.length, 4);
+  graph.setRoofZones(createRoofZone([], [a, b], new RoofSpec(), f).zones);
+  const two = roofZoneOutlines(graph);
+  assert.equal(two[0].boundsList.length, 2);
+  assert.deepEqual(two[0].segments.filter(s => s.isVertical).map(s => s.value).sort((p, q) => p - q), [0, 2000], '共有辺（x=1000）は打ち消され縦は左右の外周だけ');
+  graph.setRoofZones(createRoofZone(createRoofZone([], [a], new RoofSpec(), ids()).zones, [b], new RoofSpec(), (() => { let n = 5; return () => `id${++n}`; })()).zones);
+  assert.deepEqual(roofZoneOutlines(graph).map(o => o.id), ['id1', 'id6']);
+});
+
+test('【失敗系】roofZoneOutlines: 区画なし・実効セル0（範囲外だけ）の区画は含めない', () => {
+  const { graph, c } = layout();
+  assert.deepEqual(roofZoneOutlines(graph), []);
+  graph.setRoofZones(createRoofZone([], [c], new RoofSpec(), ids()).zones);
+  assert.deepEqual(roofZoneOutlines(graph), []);
 });
 
 test('createRoofZoneSpec: 軒裏が埋まっている主屋根の値は上書きしない', () => {
