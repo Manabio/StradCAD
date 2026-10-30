@@ -286,3 +286,20 @@ export async function refreshWallsForViewEntry(project, {
     ...(loadMaterialMapFn ? { loadMaterialMapFn } : {}),
   });
 }
+
+/**
+ * 立面の突入境界（モード切替でもモード維持の階切替でも同じ）。立面は全採用階の外壁を読むため、
+ * refreshWallsForViewEntry と同じ形で planeIds を絞らない（null＝全階）。自階の壁変更は undo エントリ、
+ * 他階は undo 対象外。自階は他階の処理の前に saveActiveFloorFn で IDB へ書く。
+ */
+export async function refreshWallsForFacadeEntry(project, {
+  saveActiveFloorFn = defaultSaveFloor, peek, saveFloorFn, loadMaterialMapFn,
+} = {}) {
+  return refreshWallsAllFloors(project, {
+    pushUndo: true, pushActiveStructuralUndo: true,
+    planeIds: null, saveActiveFloorFn,
+    ...(peek ? { peek } : {}),
+    ...(saveFloorFn ? { saveFloorFn } : {}),
+    ...(loadMaterialMapFn ? { loadMaterialMapFn } : {}),
+  });
+}

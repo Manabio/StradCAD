@@ -17,7 +17,7 @@ import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline, StructuralMaterialType, RoomFeature, centerLineKind } from './core.js';
 import { undoManager } from './undoManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
-import { refreshWallsAllFloors, refreshWallsForGraph, hasNeverBuiltWalls, viewNeighborPlaneIds, refreshWallsForViewEntry } from './wallRefresh.js';
+import { refreshWallsAllFloors, refreshWallsForGraph, hasNeverBuiltWalls, viewNeighborPlaneIds, refreshWallsForViewEntry, refreshWallsForFacadeEntry } from './wallRefresh.js';
 import { regenerateWalls, loadMaterialMap } from './finish/wallRegeneration.js';
 import { wallFreshnessKey, WALL_KEY_VERSION } from './finish/wallFreshnessKey.js';
 import { classifyStairArea } from './finish/stair/stairClassify.js';
@@ -1547,4 +1547,51 @@ test('【S2-18c】refreshWallsForViewEntry: ERR_CATALOG_DUPLICATE は reject が
     assert.notEqual(graph.wallFreshnessKey, key, '自階の鍵は再生成済み');
     assert.notDeepEqual(graph.walls.map(w => w.id).sort(), ids, '自階の壁は再生成済み');
   }
+});
+
+test('【立面】refreshWallsForFacadeEntry: 4階建て・自階1F で全階（2F〜4F）を peek・再生成する（展開の入口は 1F/2F だけ）', async () => {
+  // 対照: 展開の入口（refreshWallsForViewEntry）は 1F/2F だけで 3F・4F に触れない
+  {
+    const log = [];
+    const { project, graphs, commit, stored, peek, saveFloorFn, restore } = await makeSeededFloors(4, 'p1', log);
+    try {
+      for (const g of Object.values(graphs)) g.setWallFreshnessKey('force-mismatch');
+      commit();
+      log.length = 0;
+      const r = await refreshWallsForViewEntry(project, { peek, saveFloorFn, saveActiveFloorFn: async () => {} });
+      assert.deepEqual([...r.changedPlaneIds].sort(), ['p1', 'p2']);
+      assert.ok(!log.includes('peek:p4'), `展開は 4F を peek しない（log=${log.join(',')}）`);
+      assert.equal(stored('p4').wallFreshnessKey, 'force-mismatch');
+    } finally { restore(); }
+  }
+  {
+    const log = [];
+    const { project, graphs, commit, stored, peek, saveFloorFn, restore } = await makeSeededFloors(4, 'p1', log);
+    try {
+      for (const g of Object.values(graphs)) g.setWallFreshnessKey('force-mismatch');
+      commit();
+      log.length = 0;
+      const savedActive = [];
+      const r = await refreshWallsForFacadeEntry(project, {
+        peek, saveFloorFn, saveActiveFloorFn: async (id) => { savedActive.push(id); },
+      });
+      assert.deepEqual([...r.changedPlaneIds].sort(), ['p1', 'p2', 'p3', 'p4']);
+      for (const id of ['p2', 'p3', 'p4']) assert.ok(log.includes(`peek:${id}`), `${id} を peek する（log=${log.join(',')}）`);
+      assert.notEqual(stored('p4').wallFreshnessKey, 'force-mismatch', '4F の鍵も再生成後の値で保存される');
+      assert.deepEqual(savedActive, ['p1'], '自階は1回だけ保存');
+    } finally { restore(); }
+  }
+});
+
+test('【立面・失敗系】refreshWallsForFacadeEntry: 読めなかった階（peek が null）は飛ばし、他の階は続ける', async () => {
+  const { project, graphs, commit, stored, peek, saveFloorFn, restore } = await makeSeededFloors(3, 'p1');
+  try {
+    for (const g of Object.values(graphs)) g.setWallFreshnessKey('force-mismatch');
+    commit();
+    const failingPeek = async (plane) => (plane.id === 'p2' ? null : peek(plane));
+    const r = await refreshWallsForFacadeEntry(project, { peek: failingPeek, saveFloorFn, saveActiveFloorFn: async () => {} });
+    assert.ok(!r.changedPlaneIds.includes('p2'));
+    assert.ok(r.changedPlaneIds.includes('p3'), '3F は続けて再生成される');
+    assert.equal(stored('p2').wallFreshnessKey, 'force-mismatch', '2F は触らない');
+  } finally { restore(); }
 });

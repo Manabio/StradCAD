@@ -4,6 +4,7 @@ import { viewport } from '../appViewport.js';
 import { scaleLabel } from '../structural/sectionFigure/sectionGeometry.js';
 import { makeElevationTransform, bandContentOriginMm } from '../elevation/elevationLayout.js';
 import { renderFigurePrimitives } from './figurePrimitivesKonva.jsx';
+import { SCALE_LABEL_RIGHT_PX, SCALE_LABEL_BOTTOM_PX, SCALE_LABEL_FONT_PX, SCALE_LABEL_COLOR } from '../elevation/elevationStyle.js';
 
 // ================================================================
 // 展開モードの描画本体。mode.scale/mode.layout（=ElevationModeState、固定倍率・帯レイアウト）
@@ -53,8 +54,8 @@ export const ElevationLayer = observer(({ mode, size, onOpeningClick }) => {
         );
       })}
       <Text
-        x={size.width - 70} y={size.height - 26}
-        text={scaleLabel(scale)} fontSize={13} fill="#64748b" listening={false}
+        x={size.width - SCALE_LABEL_RIGHT_PX} y={size.height - SCALE_LABEL_BOTTOM_PX}
+        text={scaleLabel(scale)} fontSize={SCALE_LABEL_FONT_PX} fill={SCALE_LABEL_COLOR} listening={false}
       />
     </>
   );

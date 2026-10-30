@@ -29,6 +29,7 @@ import {
   shouldShowColumnOriginMarks, shouldShowEquipmentSymbols, planSectionDirection,
 } from './planFigureVisibility.js';
 import { ElevationLayer } from './ElevationLayer.jsx';
+import { FacadeLayer } from './FacadeLayer.jsx';
 
 // ================================================================
 // Stage 内の描画レイヤ束（world / overlay / ui の3 Layer）。
@@ -50,6 +51,14 @@ export const SceneLayers = observer(({
     return (
       <Layer name="elevation">
         <ElevationLayer mode={mode} size={size} onOpeningClick={onElevationOpeningClick} />
+      </Layer>
+    );
+  }
+  // 立面モード（外壁立面図）も展開と同じ専用画面。平面レイヤー群を一切通らない。
+  if (appMode === 'facade') {
+    return (
+      <Layer name="facade">
+        <FacadeLayer mode={mode} size={size} />
       </Layer>
     );
   }

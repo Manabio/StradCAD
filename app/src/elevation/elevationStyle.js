@@ -108,6 +108,15 @@ export const UPPER_PLANE_OVERHANG_LIMIT_MM = 500;
 // 「「5」C2: 1階400の『アキ・バツ』が省略されない」）。
 export const GAP_LABEL_WIDTH_PX = 30;
 
+// 画面右下の縮尺ラベル（「1/50」等）の位置・文字（スクリーン固定px）。展開モード（ElevationLayer）と
+// 立面モード（FacadeLayer）が共用する単一情報源（どちらもズームなしの固定倍率で、同じ位置に出す）。
+//   RIGHT  … ラベル左端の画面右端からの距離(px)。「1/100」程度の文字幅＋余白が収まる値
+//   BOTTOM … ラベル上端の画面下端からの距離(px)。13px の1行＋余白
+export const SCALE_LABEL_RIGHT_PX  = 70;
+export const SCALE_LABEL_BOTTOM_PX = 26;
+export const SCALE_LABEL_FONT_PX   = 13;        // 文字サイズ(px)。面ラベル（FACE_LABEL_FONT_PX）と同じ大きさ
+export const SCALE_LABEL_COLOR     = '#64748b'; // 補助情報の灰色（図の線と紛れない控えめな色）
+
 // 展開図での腰壁天端の見付(mm)。実際の天端厚（finish/kneeDropWall.js の CAP_THICKNESS=30）の
 // ままだと天端の2本線が縮尺で潰れて読めないため、**作図上だけ**広げて描く（ユーザー明示指示
 // 2026-08「見付30のまま2本線だと見えないので50で書いて」）。モデルの寸法（天端の実厚・

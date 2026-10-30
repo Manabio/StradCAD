@@ -14,6 +14,7 @@ const MODES = [
   { mode: 'structure', label: '構造' },
   { mode: 'site',      label: '敷地' },
   { mode: 'elevation', label: '展開' },
+  { mode: 'facade',    label: '立面' },
 ];
 
 export function ModeBar({ appMode, onSelect, isLandscape }) {

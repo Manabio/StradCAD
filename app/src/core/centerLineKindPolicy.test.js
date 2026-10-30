@@ -97,6 +97,7 @@ test('VISIBLE_KINDS_BY_MODE: floorplan/finish/opening=[struct,center,aux]、ceil
     structure: ['struct', 'beam'],
     site:      [],
     elevation: [],
+    facade:    [],
   });
 });
 
@@ -353,7 +354,7 @@ test('【不変条件】天井芯の追加前後で kindsVisibleWith・sameDirec
     Object.fromEntries(APP_MODES.map(m => [m, hitTestKinds(m)])),
     {
       floorplan: ['struct', 'center', 'aux'], finish: ['struct', 'center', 'aux'], ceiling: ['ceiling'],
-      opening: ['struct', 'center', 'aux'], structure: ['beam'], site: [], elevation: [],
+      opening: ['struct', 'center', 'aux'], structure: ['beam'], site: [], elevation: [], facade: [],
     },
   );
 });
@@ -1002,6 +1003,7 @@ const VISIBLE_KINDS_LITERAL = {
   structure: ['struct', 'beam'],
   site:      [],
   elevation: [],
+  facade:    [],
 };
 
 // リテラル表が実装（VISIBLE_KINDS_BY_MODE）から乖離していないことの一回きりの確認（このテストだけは

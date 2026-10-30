@@ -87,6 +87,7 @@ export function usePointerInteraction({
   const ceilingDragDownRef = useRef(null); // 天伏モード: pointerDown 座標
   const siteDrawDownRef   = useRef(null); // 敷地モード: ドラッグ開始スクリーン座標
   const elevationDragRef  = useRef(null); // 展開モード: { x, y, axis:'h'|'v'|null, roomId }
+  const facadeDragRef     = useRef(null); // 立面モード: { y, started }（縦スクロールだけ）
   const openingDownRef    = useRef(null); // 建具ドラッグ開始判定用: { clientX, clientY, opening }
   const openingDragRef    = useRef(null); // 建具ドラッグ中: { opening, wall, range, candidates, grabDelta, before }
   const openingDragEndedRef = useRef(false); // 直前の pointerUp が建具ドラッグの確定だったか（記号丸の click を無視するため）
@@ -198,6 +199,12 @@ export function usePointerInteraction({
       if (scale > 0) modeRef.current?.scrollBy(0, -e.evt.deltaY / scale, null);
       return;
     }
+    // 立面モードも固定倍率（ズームなし）。ホイールは展開と同じ向きの縦スクロール。
+    if (appMode === 'facade') {
+      const scale = modeRef.current?.scale;
+      if (scale > 0) modeRef.current?.scrollBy(-e.evt.deltaY / scale);
+      return;
+    }
     const factor = e.evt.deltaY < 0 ? 1.1 : 1 / 1.1;
     viewport.zoomAt(e.evt.clientX, e.evt.clientY, factor);
     updateSnap(e.evt.clientX, e.evt.clientY);
@@ -260,6 +267,12 @@ export function usePointerInteraction({
         x: clientX, y: clientY, axis: null,
         roomId: modeRef.current?.bandAtScreenY(clientY) ?? null,
       };
+      return;
+    }
+
+    // ---- 立面モード（表示専用。押下を記録するだけ。建具ヒット・スナップ・パン・長押しメニューは無い）----
+    if (appMode === 'facade') {
+      facadeDragRef.current = { y: clientY, started: false };
       return;
     }
 
@@ -525,6 +538,22 @@ export function usePointerInteraction({
       return;
     }
 
+    // ---- 立面モード（縦スクロールだけ。8px 未満の動きでは始めない＝展開と同じ閾値）----
+    if (appMode === 'facade') {
+      const drag = facadeDragRef.current;
+      if (!drag) return;
+      const dy = clientY - drag.y;
+      if (!drag.started) {
+        if (Math.abs(dy) < TAP_MOVE_PX) return;
+        drag.started = true;
+      }
+      drag.y = clientY;
+      const scale = modeRef.current?.scale;
+      if (scale > 0) modeRef.current?.scrollBy(dy / scale);
+      setIsPanning(true);
+      return;
+    }
+
     // ---- 仕上げモード（パン／ロングタップ後のなぞり／長押し成立前の 8px 超の移動でパン開始）----
     if (appMode === 'finish') {
       if (drag.current) { panTo(clientX, clientY); return; }
@@ -712,6 +741,12 @@ export function usePointerInteraction({
       if (openingDragRef.current) finishOpeningDrag();
       openingDownRef.current = null;
       elevationDragRef.current = null;
+      setIsPanning(false);
+      return;
+    }
+    // ---- 立面モード ----
+    if (appMode === 'facade') {
+      facadeDragRef.current = null;
       setIsPanning(false);
       return;
     }
@@ -916,6 +951,11 @@ export function usePointerInteraction({
       setIsPanning(false);
       return;
     }
+    if (appMode === 'facade') {
+      facadeDragRef.current = null;
+      setIsPanning(false);
+      return;
+    }
     if (appMode === 'finish') {
       modeRef.current?.cancelDrag();
       finishDragDownRef.current = null;
@@ -989,6 +1029,8 @@ export function usePointerInteraction({
   const handleTouchMove = (e) => {
     // 展開モードはズームが存在しない（固定倍率）。ピンチを封じる。
     if (appMode === 'elevation') { e.evt.preventDefault(); return; }
+    // 立面モードも固定倍率。ピンチを封じる。
+    if (appMode === 'facade') { e.evt.preventDefault(); return; }
     e.evt.preventDefault();
     const touches = e.evt.touches;
     if (touches.length >= 2) touchTapRef.current = null; // 動きあり → タップではない
@@ -1050,6 +1092,7 @@ export function usePointerInteraction({
     ceilingDragDownRef.current = null;
     siteDrawDownRef.current = null;
     elevationDragRef.current = null;
+    facadeDragRef.current = null;
     touchTapRef.current = null;
     // 建具ドラッグ中の ESC は開始前へ戻す（CL移動の cancelMove と同じ扱い）
     if (openingDragRef.current) cancelOpeningDrag();

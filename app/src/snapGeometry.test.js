@@ -243,6 +243,7 @@ const HIT_TEST_KINDS_LITERAL = {
   structure: ['beam'],
   site:      [],
   elevation: [],
+  facade:    [],
 };
 
 // リテラル表が実装（hitTestKinds）から乖離していないことの一回きりの確認（このテストだけは
@@ -251,7 +252,7 @@ test('HIT_TEST_KINDS_LITERAL: 実装（hitTestKinds）の値と一致する（�
   for (const mode of APP_MODES) assert.deepEqual(HIT_TEST_KINDS_LITERAL[mode], hitTestKinds(mode), `mode=${mode}`);
 });
 
-test('findNearestCenterLine: 5種別×7モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）と一致する', () => {
+test('findNearestCenterLine: 5種別×8モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）と一致する', () => {
   const clProps = {
     struct: { labeled: true,  discipline: Discipline.STRUCT },
     center: { labeled: false, discipline: Discipline.ARCH },
@@ -275,7 +276,7 @@ test('findNearestCenterLine: 5種別×7モードの拾われる/拾われない�
   }
 });
 
-test('findNearestCenterLineEndpoint: 5種別×7モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）∧非struct と一致する（通り芯はリテラル表に含まれてもspansEntireAxisで別途除外される）', () => {
+test('findNearestCenterLineEndpoint: 5種別×8モードの拾われる/拾われないがリテラル表（HIT_TEST_KINDS_LITERAL）∧非struct と一致する（通り芯はリテラル表に含まれてもspansEntireAxisで別途除外される）', () => {
   const clProps = {
     struct: { labeled: true,  discipline: Discipline.STRUCT, extentLo: 0, extentHi: 3000 },
     center: { labeled: false, discipline: Discipline.ARCH,   extentLo: 0, extentHi: 3000 },

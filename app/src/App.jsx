@@ -74,7 +74,7 @@ import { TRADITIONAL_WOOD_STRUCTURE, rulesFor, effectiveStructure } from './stru
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane, floorSettingsPlaneIdForSlot } from './structural/structuralFigureSlots.js';
 import { recomputeStructuralComposition, runStructuralModeSetup, rebuildStructuralBinding, reflectStructuralToOtherFloors, setStructuralToastHandler } from './structural/structuralOrchestration.js';
 import { structuralSync, OPENING_STRUCTURAL_SYNC } from './structural/structuralSync.js';
-import { refreshWallsAllFloors, refreshWallsForViewEntry } from './wallRefresh.js';
+import { refreshWallsAllFloors, refreshWallsForViewEntry, refreshWallsForFacadeEntry } from './wallRefresh.js';
 import { figureBindingManager } from './figure/FigureBindingManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
 import { saveFloor, loadFloor } from './storage/db.js';
@@ -148,7 +148,7 @@ function buildColumnAxisRefs(graph, type) {
 // モード切替失敗時のトースト文言用（ui/ModeBar.jsx MODESのlabelと同じ日本語。ModeBarは
 // 'opening'ボタンを持たないため、モード切替のappMode全種別をここで別に持つ）。
 const MODE_LOAD_LABELS = Object.freeze({
-  floorplan: '平面', finish: '仕上げ', ceiling: '天伏', structure: '構造', opening: '建具', elevation: '展開', site: '敷地',
+  floorplan: '平面', finish: '仕上げ', ceiling: '天伏', structure: '構造', opening: '建具', elevation: '展開', facade: '立面', site: '敷地',
 });
 
 const App = observer(() => {
@@ -770,6 +770,14 @@ const App = observer(() => {
                   await s.init(); // 材データの動的ロード・直上階のpeek・帯の一括構築
                   return s;
                 })
+            : appMode === 'facade'
+              ? import('./modes/FacadeModeState.js').then(async m => {
+                  // screenPxPerMm は展開と同じく呼び出し側で解決して渡す（FacadeModeState.js は appViewport.js を引かない）。
+                  const screenPxPerMm = (viewport.pxPerMmX + viewport.pxPerMmY) / 2;
+                  const s = new m.FacadeModeState(graph, project, size, screenPxPerMm);
+                  await s.init(); // 全採用階の peek・外壁立面の一括構築（決して reject しない）
+                  return s;
+                })
               : import('./modes/SiteModeState.js').then(m => new m.SiteModeState(project.site));
 
     loader.then(s => {
@@ -1303,6 +1311,11 @@ const App = observer(() => {
       // 突入: 同上（見上げも graph.walls を読む）。天伏モードは room.ceilingZones・天井芯しか書かず
       // 壁の入力ではないため exit は不要。
       enter: () => refreshWallsForViewEntry(project, { saveActiveFloorFn: saveFloor }),
+    },
+    facade: {
+      // 突入: 全階の壁の鮮度判定（立面は全採用階の外壁を読むため planeIds で絞らない）。表示専用で graph を
+      // 書かないため exit は持たない。履歴ナビ（素の切替）では境界が走らないのは展開・天伏と同じ。
+      enter: () => refreshWallsForFacadeEntry(project, { saveActiveFloorFn: saveFloor }),
     },
   };
 
@@ -2038,7 +2051,7 @@ const App = observer(() => {
   async function rebuildFiguresAfterHeights() {
     setFloorSyncTick(t => t + 1);
     const m = appModeRef.current;
-    if (m === 'elevation' || m === 'ceiling') setCatalogReloadKey(k => k + 1);
+    if (m === 'elevation' || m === 'ceiling' || m === 'facade') setCatalogReloadKey(k => k + 1);
     if (m === 'structure') await rebuildStructuralAfterHeights();
   }
 
@@ -2713,6 +2726,7 @@ const App = observer(() => {
                : appMode === 'ceiling' ? (isMoving ? 'grab' : 'default')
                : appMode === 'site'   ? (mode?.siteDrawState ? 'crosshair' : 'default')
                : appMode === 'elevation' ? 'grab'
+               : appMode === 'facade' ? 'grab'
                : appMode === 'opening' ? ((nearOpening || nearWall) ? 'pointer' : 'default')
                : isMoving         ? 'grab'
                : isDrawing        ? 'crosshair'
@@ -3065,8 +3079,8 @@ const App = observer(() => {
         </Stage>
       </div>
 
-      {/* 縮尺表示 / 入力 — 右下（展開モードは自前の固定倍率ラベルをElevationLayerが描くため非表示） */}
-      {appMode !== 'elevation' && <ScaleIndicator width={size.width} height={size.height} />}
+      {/* 縮尺表示 / 入力 — 右下（展開・立面モードは自前の固定倍率ラベルを ElevationLayer／FacadeLayer が描くため非表示） */}
+      {appMode !== 'elevation' && appMode !== 'facade' && <ScaleIndicator width={size.width} height={size.height} />}
 
       {/* 仕上げモード: 部屋名入力ポップアップ */}
       {appMode === 'finish' && mode?.namingRoomId && (() => {

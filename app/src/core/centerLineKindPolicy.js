@@ -60,7 +60,7 @@ export const CL_KINDS = Object.freeze(['struct', 'center', 'aux', 'beam', 'ceili
 // ui/ModeBar.jsx の MODES（mode値）∪ ['opening']。建具モードはモードバーにボタンを持たないが、
 // App.jsx の appMode としては存在する（ModeBar.jsx冒頭コメント参照。平面モードでの建具追加・
 // 他モードでの建具ターゲットクリックの2経路から遷移する）。
-export const APP_MODES = Object.freeze(['floorplan', 'finish', 'ceiling', 'opening', 'structure', 'site', 'elevation']);
+export const APP_MODES = Object.freeze(['floorplan', 'finish', 'ceiling', 'opening', 'structure', 'site', 'elevation', 'facade']);
 
 function assertKnownKind(kind) {
   if (!CL_KINDS.includes(kind)) throw new Error(`未知のCL種別: ${kind}`);
@@ -89,6 +89,8 @@ export const VISIBLE_KINDS_BY_MODE = Object.freeze({
   structure: Object.freeze(['struct', 'beam']),
   site:      Object.freeze([]),
   elevation: Object.freeze([]),
+  // 立面（外壁立面図）も専用画面（SceneLayers の早期return）で GutterLayer を通らない＝展開と同じ。
+  facade:    Object.freeze([]),
 });
 
 // ---- 原始事実1b: 描くだけの種別表（可視モード表の外） ----

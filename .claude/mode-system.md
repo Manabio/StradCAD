@@ -35,10 +35,12 @@ Reactフックはコンポーネント外の`import()`非同期ロードと組�
 ## モード境界でgraphを変える処理は必ずundoエントリを積む
 履歴ナビゲーション（またぎundo）はモード切替を「素の切替」で再現し、`handleModeChange`の境界同期を再実行しない。境界処理にgraph変更を追加するときはundoエントリが必須（`.claude/undo-redo.md`）。
 
-## 壁の鮮度リフレッシュは平面モードの階切替に足さず、3境界（仕上げ脱出・構造脱出・読込み）で全階を回す。展開・天伏の突入だけは自階と直上・直下を回す
+## 壁の鮮度リフレッシュは平面モードの階切替に足さず、3境界（仕上げ脱出・構造脱出・読込み）で全階を回す。展開・天伏の突入だけは自階と直上・直下を、立面の突入は全階を回す
+立面の突入（`modeBoundaries`の`facade`の`enter`＝`refreshWallsForFacadeEntry`）は`planeIds`を絞らず（null）全階の鍵を比較する。立面は全採用階の外壁を読むため、直上・直下に絞ると離れた階の古い外壁が図に出る。undo・自階の先書きは展開・天伏の突入と同じ。
+
 展開・天伏の突入（モード切替・モード維持の階切替とも。`modeBoundaries`の`elevation`/`ceiling`の`enter`）は`refreshWallsForViewEntry`で自階と直上・直下の階だけ鍵を比較し、不一致の階だけ再生成する。平面モードで通り芯・階段・部屋を編集した直後に入ると、断面エンジンが新しい入力と古い壁（隔て壁・階段下部屋2a・柱巻き）を同じ断面で切ってしまうため。2026-09-15の裁定（階切替に足さない）との関係: モード切替は境界を通りundoエントリを積める経路であり、履歴ナビの「素の切替」とは衝突しない。平面モードの階切替・履歴ナビ（素の切替）に足さない方針は不変。自階は無条件に他階のpeekより前にIDBへ書く（仕上げ脱出と同じ理由）。履歴ナビで展開・天伏へ戻るときは境界が走らない（`.claude/undo-redo.md`）。`switchFloorKeepingMode`は`switchFloor`後の`enter`を`try/finally`で包み、`setActiveFloorId`・`afterFloorSwitch`・リセットは`enter`の成否によらず行う（失敗は再throw。2026-10-13）。失敗時に`activePlaneId`だけ新階で`activeFloorId`が旧階（旧Stateが空graphを表示し続け、同階は早期returnで復旧不能）となる不一致を防ぐ。構造モードの`enter`の同型も同時に解消。
 
-`wallRefresh.js`の`refreshWallsAllFloors`（壁の再生成をFinishModeStateから独立させる計画）は、仕上げモード脱出・構造モード脱出・文書読込み（`store.js`の`bootReady`）の3つの境界から全階に対して呼ぶ（展開・天伏の突入は上記のとおり`planeIds`で自階と直上・直下に絞った別入口）。階ごとのフック（階切替の`reflectOtherFloors:false`経路等）には足さない——階切替は履歴ナビの「素の切替」（上記）と衝突し、切替のたびに全階の鍵不一致を検出・再生成すると、素の切替のはずが裏で壁を書き換える予期しない副作用になる。
+`wallRefresh.js`の`refreshWallsAllFloors`（壁の再生成をFinishModeStateから独立させる計画）は、仕上げモード脱出・構造モード脱出・文書読込み（`store.js`の`bootReady`）の3つの境界から全階に対して呼ぶ（展開・天伏の突入は上記のとおり`planeIds`で自階と直上・直下に絞った別入口、立面の突入は絞らない別入口）。階ごとのフック（階切替の`reflectOtherFloors:false`経路等）には足さない——階切替は履歴ナビの「素の切替」（上記）と衝突し、切替のたびに全階の鍵不一致を検出・再生成すると、素の切替のはずが裏で壁を書き換える予期しない副作用になる。
 
 階切替（`switchFloorKeepingMode`）が仕上げ脱出へ渡すのは「省く判定」（`floorSwitch: true`のときだけ省略の印を渡す。ユーザー裁定2026-10-05）だけで、この方針は変えていない。省く条件・保守上の注意は`.claude/data-model.md`「内周壁は鮮度キーが…」節。
 

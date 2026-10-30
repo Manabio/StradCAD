@@ -38,9 +38,10 @@ test('shouldShowStairFigure: 階段の図は平面・建具・仕上げ・敷地
   assert.equal(shouldShowPlanFigure('ceiling'), true, '壁・建具・柱は天伏でも描く（階段だけ別の述語）');
 });
 
-test('shouldShowPlanFigure: 伏図（構造）と展開図は描かない', () => {
+test('shouldShowPlanFigure: 伏図（構造）と展開図・立面図は描かない', () => {
   assert.equal(shouldShowPlanFigure('structure'), false);
   assert.equal(shouldShowPlanFigure('elevation'), false);
+  assert.equal(shouldShowPlanFigure('facade'), false);
 });
 
 test('shouldShowIntersectionMarkers: 通り芯交点の青丸は平面・建具・仕上げ・展開で描き、敷地と構造（伏図。主構造によらず）では描かない', () => {

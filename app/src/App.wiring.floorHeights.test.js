@@ -124,11 +124,11 @@ test('【配線】runFloorHeights: 再検査 → ダイアログを閉じる →
   }
 });
 
-test('【配線】rebuildFiguresAfterHeights: 平面の断面（floorSyncTick）は常に、展開・天伏はモード状態を作り直す（実行時のモードを appModeRef で見る）', () => {
+test('【配線】rebuildFiguresAfterHeights: 平面の断面（floorSyncTick）は常に、展開・天伏・立面はモード状態を作り直す（実行時のモードを appModeRef で見る）', () => {
   const body = extractFunctionBody(readAppSrc(), 'function rebuildFiguresAfterHeights');
   assert.match(body, /^\s*setFloorSyncTick\(t => t \+ 1\);\s*$/m, 'setFloorSyncTick の行が見つからない');
   assert.match(body, /^\s*const m = appModeRef\.current;\s*$/m, 'appModeRef.current を読む行が見つからない');
-  assert.match(body, /^\s*if \(m === 'elevation' \|\| m === 'ceiling'\) setCatalogReloadKey\(k => k \+ 1\);\s*$/m, '展開・天伏の作り直し行が見つからない');
+  assert.match(body, /^\s*if \(m === 'elevation' \|\| m === 'ceiling' \|\| m === 'facade'\) setCatalogReloadKey\(k => k \+ 1\);\s*$/m, '展開・天伏・立面の作り直し行が見つからない');
 });
 
 test('【配線】App.jsx: appModeRef は毎レンダーで appMode を映す', () => {
