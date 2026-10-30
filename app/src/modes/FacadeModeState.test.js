@@ -4,7 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getObserverTree } from 'mobx';
-import { Project, CenterLineType, Discipline } from '@core';
+import { Project, CenterLineType, Discipline, OpeningCategory } from '@core';
+import { faceGapLimitMm } from '../elevation/elevationStyle.js';
+import { resolveLineWeightsPx } from '../viewport.js';
+import { FACADE_OPENING_KIND } from '../facade/facadeStyle.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { FACADE_EMPTY_MESSAGE, FACADE_INIT_ERROR_MESSAGE, FACADE_DIRECTION_ORDER } from '../core/constants.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
@@ -154,6 +157,39 @@ test('FacadeModeState: viewSize を変えると倍率が変わり、注記（GL 
     const facesAfterDispose = state.faces;
     state.setViewSize({ width: 1600, height: 1200 });
     assert.equal(state.faces, facesAfterDispose, 'dispose 後は作り直さない');
+  });
+});
+
+test('FacadeModeState: 建具の姿図の minFaceMm が倍率に追従する（三方枠の内法の竪＝見付 20 と faceGapLimitMm の大きい方）', async () => {
+  const project = makeProject(1, { activeId: 'p1' });
+  const graph = project.activeGraph;
+  const lineAt = (type, value) => graph.centerLines.find(c => c.centerLineType === type && c.value === value);
+  const south = lineAt(CenterLineType.HORIZONTAL, 4000), west = lineAt(CenterLineType.VERTICAL, 0);
+  assert.ok(south && west, '前提: 部屋の通り芯を引ける');
+  // 南の壁（y=4000・外向き +1）の x=1000 を中心に幅 800 の三方枠（見付 20）
+  graph.addOpening(south, 1, false, west, 1000, 800, OpeningCategory.FITTING, 'threeSidedFrame', { height: 2000 });
+  await withPeek(async plane => project.graphMap.get(plane.id), async () => {
+    const state = new FacadeModeState(graph, project, { width: 1600, height: 1200 });
+    await state.init();
+    // 南面の三方枠の線の X（外の竪 2 本・内法の竪 2 本）から内法の竪の寄り（外の竪からの距離）を読む
+    const jambInset = () => {
+      const face = state.faces.find(f => f.direction === 'south');
+      const prims = face.primitives.filter(p => p.kind === FACADE_OPENING_KIND);
+      const xs = [...new Set(prims.flatMap(p => [p.x1, p.x2]))].sort((a, b) => a - b);
+      assert.equal(xs.length, 4, `竪の X は 4 つ: ${JSON.stringify(xs)}`);
+      assert.ok(Math.abs((xs[1] - xs[0]) - (xs[3] - xs[2])) < 1e-6, '左右の内法の寄りは同じ');
+      return xs[1] - xs[0];
+    };
+    const expectedInset = () => Math.max(20, faceGapLimitMm(state.scale, resolveLineWeightsPx(state.screenPxPerMm), 'thin', 'medium'));
+    const inset1 = jambInset();
+    assert.ok(Math.abs(inset1 - expectedInset()) < 1e-6, `大きい画面: ${inset1} = ${expectedInset()}`);
+    const scale1 = state.scale;
+    state.setViewSize({ width: 400, height: 300 });
+    assert.ok(state.scale < scale1, '前提: 倍率が下がる');
+    const inset2 = jambInset();
+    assert.ok(Math.abs(inset2 - expectedInset()) < 1e-6, `小さい画面: ${inset2} = ${expectedInset()}`);
+    assert.ok(inset2 > inset1 + 1, `倍率が下がると 1px 保証の内法の寄りは広がる（${inset1}→${inset2}）`);
+    state.dispose();
   });
 });
 

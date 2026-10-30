@@ -1,6 +1,6 @@
 /**
  * 立面図（外壁立面4面）の図の組み立て。facadeGeometry.js の外形線（u・世界 z）を図の座標へ移し、
- * ▽GL・見出しを足したプリミティブ（elevation/elevationPrimitives.js の語彙）を面ごとに返す。
+ * 外壁の建具の姿図（facadeOpenings.js）・▽GL・見出しを足したプリミティブ（elevation/elevationPrimitives.js の語彙）を面ごとに返す。
  *
  * 図の座標: X = u − uMin（建物の左端が 0）、Y = glZMm − z（GL が Y=0・上が負。展開図と同じ規約）。
  * 注記の大きさ（annotationMm）は呼び出し側が倍率確定後に実画面mm→モデルmmへ換算して渡す（2パス方式）。
@@ -10,6 +10,7 @@ import { line, polyline, text } from '../elevation/elevationPrimitives.js';
 import { ElevationLineRole, FACE_LABEL_FONT_PX, CANVAS_BG_COLOR } from '../elevation/elevationStyle.js';
 import { facadeViews, facadeFloorProfiles, buildFacadeLines, projectedRoofSegments } from './facadeGeometry.js';
 import { FACADE_GL_MARK_APEX_DEG, FACADE_LEVEL_FONT_PX } from './facadeStyle.js';
+import { buildFacadeOpenings } from './facadeOpenings.js';
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -65,11 +66,16 @@ function glPrimitives(widthMm, { glExtendMm, glMarkMm }, bgColor) {
  * 4面（東・南・西・北の順）の図。外壁の線分が1本も無ければ []。
  * @param {object} inputs - buildFacadeInputs の返り値
  * @param {{northAngleDeg?:number|null, annotationMm?:{glExtendMm?:number, glMarkMm?:number, titleGapMm?:number},
- *   bgColor?:string}} [opts]
+ *   bgColor?:string, minFaceMm?:number, entryOf?:Function|null}} [opts]
+ *   minFaceMm＝建具の姿図の見付1px保証（展開図と同じ elevationStyle.js faceGapLimitMm の値を呼び出し側が倍率から求めて渡す）。
+ *   entryOf＝建具のカタログの解決（省略時は facadeOpenings.js の既定 findCatalogEntry）。
  * @returns {Array<{direction:string, widthMm:number, heightMm:number,
- *   bounds:{minX:number,minY:number,maxX:number,maxY:number}, primitives:object[]}>}
+ *   bounds:{minX:number,minY:number,maxX:number,maxY:number}, primitives:object[],
+ *   openingCounts:{drawn:number, hidden:number, noEntry:number}}>}
  */
-export function buildFacadeModel(inputs, { northAngleDeg = null, annotationMm, bgColor = CANVAS_BG_COLOR } = {}) {
+export function buildFacadeModel(inputs, {
+  northAngleDeg = null, annotationMm, bgColor = CANVAS_BG_COLOR, minFaceMm = 0, entryOf = null,
+} = {}) {
   if (!hasAnySegment(inputs)) return [];
   const { glExtendMm = 0, glMarkMm = 0, titleGapMm = 0 } = annotationMm ?? {};
   const glZ = inputs.glZMm;
@@ -78,6 +84,10 @@ export function buildFacadeModel(inputs, { northAngleDeg = null, annotationMm, b
     const { uMin, widthMm, heightMm } = ext;
     const primitives = buildFacadeLines(inputs, view)
       .map(l => line(l.x1 - uMin, glZ - l.z1, l.x2 - uMin, glZ - l.z2, l.role));
+    const openings = buildFacadeOpenings(inputs, view, {
+      uMin, profiles: facadeFloorProfiles(inputs, view.normal), minFaceMm, entryOf,
+    });
+    primitives.push(...openings.primitives);
     primitives.push(...glPrimitives(widthMm, { glExtendMm, glMarkMm }, bgColor));
     const titleY = -heightMm - titleGapMm;
     primitives.push(text(widthMm / 2, titleY, FACADE_TITLE_BY_DIRECTION[view.direction],
@@ -89,6 +99,8 @@ export function buildFacadeModel(inputs, { northAngleDeg = null, annotationMm, b
       // 注記（GL の延長・▽・見出しの中心）を含む範囲。文字の大きさ（px 固定）は含まない。
       bounds: { minX: -glExtendMm, minY: titleY, maxX: widthMm + glExtendMm, maxY: 0 },
       primitives,
+      // 建具の件数（描いた／全部隠れた／カタログに無い種別で飛ばした。probe・テスト用）
+      openingCounts: openings.counts,
     };
   });
 }

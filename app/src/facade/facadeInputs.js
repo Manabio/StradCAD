@@ -10,6 +10,9 @@
  * 屋根（S2）: opts.roofRegionsOf(graph) が { leanTo, top }（leanToPlanRegions・topRoofPlanRegions の結果）を返せば、
  * 下屋は軒の高さ＝その階の FL（floor-design.md「最高の軒の高さ」）、主屋根・屋根区画は最上階の分だけ軒の高さ＝軒桁上端で
  * facadeRoof.js の屋根にする。region の解決は呼び出し側（roofFramingRegions.js は storage を推移的に引くため facade/ から引かない）。
+ *
+ * 建具（S3）: 各階の graph.openings のうち外壁の線分に乗るもの（facadeOpenings.js exteriorOpeningsOn）を、壁の座標（coord1/coord2）
+ * とその階の FL を読み取りスコープ内で確定して floors[].openings に持たせる（姿図の組み立ては倍率が決まった後＝facadeFigure.js）。
  */
 import { FacadeSkipReason } from '../core/constants.js';
 import { isBasementPlane } from '../structural/structureRules.js';
@@ -17,6 +20,7 @@ import { exteriorGuideSegments } from '../finish/finishGuideGeometry.js';
 import { eaveTopZMm, resolveTopStoryHeightMm, STORY_HEIGHT_FALLBACK_MM } from '../floorHeights.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { facadeRoofOf } from './facadeRoof.js';
+import { exteriorOpeningsOn } from './facadeOpenings.js';
 
 // 立面の対象の階か（採用・地上階・屋根専用でない）。
 const isFacadePlane = plane => !!plane && !plane.isAlternative && !plane.isRoofPlane && !isBasementPlane(plane);
@@ -42,7 +46,8 @@ function exteriorSegmentsOf(graph) {
  * @param {{roofRegionsOf?: (graph:object)=>{leanTo?:Array<object>, top?:Array<object>}}} [opts]
  * @returns {{ glZMm:number,
  *   floors: Array<{planeId:string, zLoMm:number, zHiMm:number,
- *     segments: Array<{isVertical:boolean, value:number, lo:number, hi:number, outwardSign:number, axisCLId:string, loopType:string}>}>,
+ *     segments: Array<{isVertical:boolean, value:number, lo:number, hi:number, outwardSign:number, axisCLId:string, loopType:string}>,
+ *     openings: Array<{opening:object, coord1:number, coord2:number, flMm:number, segment:object}>}>,
  *   roofs: Array<{planeId:string} & object>,
  *   skipped: Array<{planeId:string, reason:string, message?:string, roofKey?:string}> }}
  */
@@ -74,10 +79,20 @@ export function buildFacadeInputs(floors, project, { roofRegionsOf = null } = {}
       return;
     }
     if (segments.length === 0) { skipped.push({ planeId: plane.id, reason: FacadeSkipReason.NO_EXTERIOR_WALL }); return; }
-    out.push({ planeId: plane.id, zLoMm, zHiMm, segments });
+    out.push({ planeId: plane.id, zLoMm, zHiMm, segments, openings: exteriorOpeningsOf(skipped, plane, graph, segments) });
     if (roofRegionsOf) collectRoofs(roofs, skipped, plane, graph, roofRegionsOf, i === targets.length - 1 ? zHiMm : null);
   });
   return { glZMm, floors: out, roofs, skipped };
+}
+
+// 1階分の外壁の建具（S3。facadeOpenings.js exteriorOpeningsOn）。例外は skipped（ERROR）に載せて建具なしで続ける（壁は描く）。
+function exteriorOpeningsOf(skipped, plane, graph, segments) {
+  try {
+    return withGraphReadScope(graph, () => exteriorOpeningsOn(graph.openings, segments, plane.elevation));
+  } catch (err) {
+    skipped.push({ planeId: plane.id, reason: FacadeSkipReason.ERROR, message: String(err?.message ?? err) });
+    return [];
+  }
 }
 
 // 1階分の屋根（下屋＝軒の高さはその階の FL。topEaveZ が有限＝最上階なら主屋根・区画も軒の高さ topEaveZ で）。

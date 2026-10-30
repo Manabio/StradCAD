@@ -27,3 +27,5 @@ export const FACADE_VIS_BISECT_MM = 0.5;
 export const FACADE_ROOF_OCCLUSION_DEPTH_MM = 100;
 /** buildFacadeLines（facadeGeometry.js）の屋根の線の kind（壁の線は kind を持たない＝S1 の形のまま）。壁の線と屋根の線は1本にまとめない。 */
 export const FACADE_ROOF_LINE_KIND = 'roof';
+/** 外壁の建具の姿図のプリミティブの kind（facadeOpenings.js。壁・屋根の線と区別する。展開図の建具の openingId と同じく建具ごとに付く）。 */
+export const FACADE_OPENING_KIND = 'opening';

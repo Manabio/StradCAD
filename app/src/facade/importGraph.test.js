@@ -3,7 +3,8 @@
 //   (2) elevation/ は facade/ を引かない（逆向き禁止）。
 //   (3) facade/ の製品ファイルから（推移的にも）store.js・snap.js・appViewport.js・storage/・.jsx・react-konva/konva/react を
 //       静的に引かない（node:test から単体 import できる純モジュールに保つ）。屋根（S2）の facadeRoof.js が引く
-//       structural/roofFramingGeometry.js・finish/roof/roofPlanFigure.js はこれを満たす。region を作る structural/roofFramingRegions.js は
+//       structural/roofFramingGeometry.js・finish/roof/roofPlanFigure.js、建具（S3）の facadeOpenings.js が引く
+//       openings/openingElevationFigure.js・openings/openingCatalog.js（catalog/ を含む）はこれを満たす。region を作る structural/roofFramingRegions.js は
 //       storage/（FloorSwapManager・db）を推移的に引くので facade/ からは引かず、modes/FacadeModeState.js が解決して渡す。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -103,6 +104,9 @@ test('【不変条件】facade/ は推移的にも store.js・snap.js・appViewp
   const { offenders, seen } = transitiveOffenders(facadeFiles);
   assert.ok(seen.size > facadeFiles.length, `推移的に辿れていない: ${seen.size}`);
   assert.ok(seen.has(norm(path.join(srcDir, 'structural', 'roofFramingGeometry.js'))), '屋根の幾何（facadeRoof.js の依存）まで辿れていない');
+  // 建具（S3）の facadeOpenings.js が引く姿図・カタログ（catalog/ の照合を含む）もこの検査の対象に入っている
+  assert.ok(seen.has(norm(path.join(srcDir, 'openings', 'openingElevationFigure.js'))), '建具の姿図（facadeOpenings.js の依存）まで辿れていない');
+  assert.ok(seen.has(norm(path.join(srcDir, 'openings', 'openingCatalog.js'))), '建具のカタログ（facadeOpenings.js の依存）まで辿れていない');
   assert.deepEqual(offenders, []);
 });
 

@@ -3,7 +3,7 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { screenMmToModelMm, clampScrollY } from '../elevation/elevationLayout.js';
 import { FACADE_EMPTY_MESSAGE, FACADE_INIT_ERROR_MESSAGE, FacadeSkipReason } from '../core/constants.js';
-import { CANVAS_BG_COLOR } from '../elevation/elevationStyle.js';
+import { CANVAS_BG_COLOR, faceGapLimitMm } from '../elevation/elevationStyle.js';
 import { buildFacadeInputs } from '../facade/facadeInputs.js';
 import { leanToPlanRegions, topRoofPlanRegions } from '../structural/roofFramingRegions.js';
 import { facadeExtentsMm, buildFacadeModel } from '../facade/facadeFigure.js';
@@ -12,7 +12,7 @@ import {
   FACADE_GAP_SCREEN_MM, FACADE_GL_EXTEND_SCREEN_MM, FACADE_GL_MARK_SCREEN_MM, FACADE_TITLE_GAP_SCREEN_MM,
 } from '../facade/facadeStyle.js';
 // DEFAULT_PX_PER_MM は DOM 依存の無い viewport.js から取る（ElevationModeState.js と同じ。node:test から単体 import できる状態を保つ）。
-import { DEFAULT_PX_PER_MM as DEFAULT_SCREEN_PX_PER_MM } from '../viewport.js';
+import { DEFAULT_PX_PER_MM as DEFAULT_SCREEN_PX_PER_MM, resolveLineWeightsPx } from '../viewport.js';
 
 // 方位は常に未設定（null）で渡す（リード裁定 S1。北の角度の入力は今後）。
 const NORTH_ANGLE_DEG = null;
@@ -142,6 +142,8 @@ export class FacadeModeState {
         titleGapMm: toModel(FACADE_TITLE_GAP_SCREEN_MM),
       },
       bgColor: CANVAS_BG_COLOR, // ▽の塗り＝キャンバスの地（展開図の通り芯丸と同じ）
+      // 建具の姿図の見付1px保証（展開図 elevationFigure.js appendOpenings と同じ値。描画側の線幅＝校正値から）
+      minFaceMm: faceGapLimitMm(scale, resolveLineWeightsPx(this.screenPxPerMm), 'thin', 'medium'),
     });
   }
 

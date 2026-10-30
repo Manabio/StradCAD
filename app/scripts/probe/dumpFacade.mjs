@@ -1,6 +1,7 @@
 // .stq の全階から立面図（外壁立面4面。facade/）を組み、面ごとの線の本数・幅・高さ・bounds と飛ばした階を標準出力へ出す。
 // 屋根（S2）は本番と同じ region の解決（modes/FacadeModeState.js facadeRoofRegionsResolver）を通し、屋根の一覧（key・軒の高さ・形状・
-// 平らか）と、面ごとの壁線・屋根線（SILHOUETTE/DETAIL 別）の本数を出す。
+// 平らか）と、面ごとの壁線・屋根線（SILHOUETTE/DETAIL 別）の本数を出す。建具（S3）は階ごとの外壁の建具／全建具の数と、
+// 面ごとの描いた／隠れた／カタログに無い（entry なし）の数を出す。
 // 使い方: node --import ./scripts/testSetup.mjs scripts/probe/dumpFacade.mjs <stq> [--north deg]
 // ファイルへは書かない（出力先の削除もしない）。
 import { loadDocument } from './loadDoc.mjs';
@@ -48,6 +49,8 @@ console.log(JSON.stringify({
     zLoMm: num(f.zLoMm), zHiMm: num(f.zHiMm),
     segments: f.segments.length,
     courtyard: f.segments.filter(s => s.loopType === 'courtyard').length,
+    exteriorOpenings: (f.openings ?? []).length,
+    allOpenings: (project.graphMap.get(f.planeId)?.openings ?? []).length,
   })),
   roofs: inputs.roofs.map(r => ({
     planeId: r.planeId, floor: project.planeMap.get(r.planeId)?.name ?? null, key: r.key,
@@ -63,6 +66,8 @@ console.log(JSON.stringify({
       wallLines: count(lines, l => l.kind !== FACADE_ROOF_LINE_KIND),
       roofSilhouette: count(lines, l => l.kind === FACADE_ROOF_LINE_KIND && l.role === ElevationLineRole.SILHOUETTE),
       roofDetail: count(lines, l => l.kind === FACADE_ROOF_LINE_KIND && l.role === ElevationLineRole.DETAIL),
+      // 外壁の建具（S3）: 描いた／全部隠れた／カタログに無い種別で飛ばした
+      openings: f.openingCounts,
       widthMm: num(f.widthMm), heightMm: num(f.heightMm),
       bounds: Object.fromEntries(Object.entries(f.bounds).map(([k, v]) => [k, num(v)])),
     };
