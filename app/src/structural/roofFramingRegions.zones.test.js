@@ -77,6 +77,20 @@ test('【S4・L字・区画なし】矩形でない寄棟も従来どおり [key
   assert.deepEqual(regions, [mainRoofFramingRegion(l, project)]);
 });
 
+test('【重複整理 D1】mainRoofFramingRegion は topRoofFramingRegions の末尾（key main）と deepEqual（区画なし・区画あり・主屋根が残らないとき null ↔ 不在）', () => {
+  const project = woodProject();
+  const none = topGrid([0, 9000], [0, 6000], [[0, 0]]).graph;
+  assert.deepEqual(mainRoofFramingRegion(none, project), topRoofFramingRegions(none, project).at(-1));
+  const { graph, cell } = topGrid([0, 5000, 10000], [0, 3000], [[0, 0], [1, 0]]);
+  setZones(graph, zoneOf('zA', [cell(0, 0)]));
+  const withZone = mainRoofFramingRegion(graph, project);
+  assert.equal(withZone.key, 'main');
+  assert.deepEqual(withZone, topRoofFramingRegions(graph, project).at(-1));
+  setZones(graph, zoneOf('zA', [cell(0, 0)]), zoneOf('zB', [cell(1, 0)]));
+  assert.equal(topRoofFramingRegions(graph, project).some(r => r.key === 'main'), false, '前提: 全部区画なら main の region は無い');
+  assert.equal(mainRoofFramingRegion(graph, project), null);
+});
+
 // ---- 区画あり ----
 
 test('【S4】矩形の建物を2区画に分けると、区画ごとの region（key zone:<id>・区画の並び順）だけ。接する辺は両側とも軒の出 0・外側の辺は spec の出幅のまま。主屋根の region は無い', () => {
