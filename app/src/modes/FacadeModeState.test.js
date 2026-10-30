@@ -8,6 +8,8 @@ import { Project, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { FACADE_EMPTY_MESSAGE, FACADE_INIT_ERROR_MESSAGE, FACADE_DIRECTION_ORDER } from '../core/constants.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
+import { eaveTopZMm, resolveTopStoryHeightMm } from '../floorHeights.js';
 import { FacadeModeState } from './FacadeModeState.js';
 
 function makeRectRoom(graph, x0v, y0v, x1v, y1v, name) {
@@ -63,6 +65,20 @@ test('FacadeModeState.init: 自階（1F）より広い 3F の幅が南面の幅�
     const south = state.faces.find(f => f.direction === 'south');
     // 3F の部屋は x 方向に 9000（＋壁厚）。1F だけなら 7000 前後
     assert.ok(south.widthMm > 8500, `南面の幅に 3F（9000）が出る（width=${south.widthMm}）`);
+    state.dispose();
+  });
+});
+
+test('FacadeModeState.init: 屋根の region を解決して渡す（在来木造の最上階の切妻＝南面の高さが軒桁上端より高い・屋根の線がある）', async () => {
+  const project = makeProject(2, { activeId: 'p2' });
+  project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE; // 既定（未定）は陸屋根＝屋根なし
+  const eaveHeight = eaveTopZMm(project.planes, resolveTopStoryHeightMm(project)) + project.glBelow1FlMm; // GL〜軒桁上端
+  await withPeek(async plane => project.graphMap.get(plane.id), async () => {
+    const state = new FacadeModeState(project.activeGraph, project, { width: 1200, height: 900 });
+    const result = await state.init();
+    assert.equal(result.ok, true);
+    const south = state.faces.find(f => f.direction === 'south');
+    assert.ok(south.heightMm > eaveHeight + 1, `棟が軒桁上端より上（${south.heightMm} > ${eaveHeight}）`);
     state.dispose();
   });
 });

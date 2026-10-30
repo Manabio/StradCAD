@@ -1,8 +1,10 @@
 // 立面図（facade/）の依存の向きの不変条件（elevation/importGraph.test.js と同じ書き方。ソーステキストの静的 import を検査する）。
 //   (1) facade/ から elevation/ へ引いてよいのは elevationPrimitives.js・elevationLayout.js・elevationStyle.js の3本だけ。
 //   (2) elevation/ は facade/ を引かない（逆向き禁止）。
-//   (3) facade/ の製品ファイルから（推移的にも）store.js・snap.js・appViewport.js・.jsx・react-konva/konva/react を
-//       静的に引かない（node:test から単体 import できる純モジュールに保つ）。
+//   (3) facade/ の製品ファイルから（推移的にも）store.js・snap.js・appViewport.js・storage/・.jsx・react-konva/konva/react を
+//       静的に引かない（node:test から単体 import できる純モジュールに保つ）。屋根（S2）の facadeRoof.js が引く
+//       structural/roofFramingGeometry.js・finish/roof/roofPlanFigure.js はこれを満たす。region を作る structural/roofFramingRegions.js は
+//       storage/（FloorSwapManager・db）を推移的に引くので facade/ からは引かず、modes/FacadeModeState.js が解決して渡す。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -18,6 +20,7 @@ const rel = p => norm(path.relative(srcDir, p));
 const ALLOWED_ELEVATION_TARGETS = new Set(['elevationPrimitives.js', 'elevationLayout.js', 'elevationStyle.js']);
 const FORBIDDEN_SRC_FILES = new Set(['store.js', 'snap.js', 'appViewport.js']);
 const FORBIDDEN_PACKAGES = new Set(['react-konva', 'konva', 'react', 'react-dom']);
+const FORBIDDEN_SRC_DIR = 'storage/'; // IndexedDB（FloorSwapManager・db）。facade/ は永続化を引かない
 
 function productFilesUnder(dir) {
   const out = [];
@@ -71,10 +74,11 @@ test('【不変条件】elevation/ は facade/ を引かない', () => {
   assert.deepEqual(offenders, []);
 });
 
-test('【不変条件】facade/ は推移的にも store.js・snap.js・appViewport.js・.jsx・react 系を静的に引かない', () => {
+// startFiles から静的 import を推移的に辿り、禁止先へ届く鎖と辿ったファイルの集合を返す。
+function transitiveOffenders(startFiles) {
   const offenders = [];
   const seen = new Set();
-  const stack = facadeFiles.map(f => [f, rel(f)]);
+  const stack = startFiles.map(f => [f, rel(f)]);
   while (stack.length) {
     const [file, chain] = stack.pop();
     if (seen.has(file)) continue;
@@ -88,10 +92,21 @@ test('【不変条件】facade/ は推移的にも store.js・snap.js・appViewp
         continue;
       }
       const r = rel(target);
-      if (FORBIDDEN_SRC_FILES.has(r) || r.endsWith('.jsx')) { offenders.push(`${chain} -> ${r}`); continue; }
+      if (FORBIDDEN_SRC_FILES.has(r) || r.startsWith(FORBIDDEN_SRC_DIR) || r.endsWith('.jsx')) { offenders.push(`${chain} -> ${r}`); continue; }
       if (fs.existsSync(target) && fs.statSync(target).isFile()) stack.push([target, `${chain} > ${r}`]);
     }
   }
+  return { offenders, seen };
+}
+
+test('【不変条件】facade/ は推移的にも store.js・snap.js・appViewport.js・storage/・.jsx・react 系を静的に引かない', () => {
+  const { offenders, seen } = transitiveOffenders(facadeFiles);
   assert.ok(seen.size > facadeFiles.length, `推移的に辿れていない: ${seen.size}`);
+  assert.ok(seen.has(norm(path.join(srcDir, 'structural', 'roofFramingGeometry.js'))), '屋根の幾何（facadeRoof.js の依存）まで辿れていない');
   assert.deepEqual(offenders, []);
+});
+
+test('【不変条件】検出力: region を作る structural/roofFramingRegions.js を起点にすると storage/ を検出する（facade/ から引けない理由）', () => {
+  const { offenders } = transitiveOffenders([norm(path.join(srcDir, 'structural', 'roofFramingRegions.js'))]);
+  assert.ok(offenders.some(o => / -> storage\//.test(o)), JSON.stringify(offenders));
 });

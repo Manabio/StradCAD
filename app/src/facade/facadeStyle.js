@@ -20,3 +20,10 @@ export const FACADE_LEVEL_FONT_PX = 11;
 export const FACADE_VIS_SAMPLE_MM = 100;
 /** 見え隠れの切れ目を二分探索で詰める精度（モデルmm）。奥行きプロファイルの折れ点がこの範囲にあればそこへ寄せる。 */
 export const FACADE_VIS_BISECT_MM = 0.5;
+/**
+ * 屋根の遮蔽の厚み（モデルmm）。視線の手前にある屋根の部分の屋根面の z の最小からこの厚みだけ下までを隠す
+ * （屋根は面＝厚み 0 で持つため、垂木＋野地の目安の厚みを足して、軒の出の下の壁の上端・鼻先の下を隠す。リード裁定 S2）。
+ */
+export const FACADE_ROOF_OCCLUSION_DEPTH_MM = 100;
+/** buildFacadeLines（facadeGeometry.js）の屋根の線の kind（壁の線は kind を持たない＝S1 の形のまま）。壁の線と屋根の線は1本にまとめない。 */
+export const FACADE_ROOF_LINE_KIND = 'roof';

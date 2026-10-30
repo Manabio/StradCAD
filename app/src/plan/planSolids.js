@@ -491,6 +491,7 @@ function narrowStairVoidHoles(holes, graph, below) {
  * tMax は、水下・矩形の座標の格子点と、その座標対の中点の組での評価の最大で近似する（左右対称な寄棟・切妻・片流れでは厳密。
  * 左右非対称の L 字の谷では最高点が数 mm ずれうる）。
  * 水下が無い・到達時刻が作れない形（valid=false）・勾配が不正は平ら（zAt なし。zHi = FL）。
+ * 立面（facade/facadeRoof.js）は軒の出を屋根面の延長で下げる。見下げでは軒の出の高さを描かないのでこの割り切りで足りる。
  * @returns {{zAt: (x:number,y:number)=>number, zTop: number}|null} null＝平ら
  */
 function roofZAtOf(layer, region) {

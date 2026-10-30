@@ -5,6 +5,7 @@ import { screenMmToModelMm, clampScrollY } from '../elevation/elevationLayout.js
 import { FACADE_EMPTY_MESSAGE, FACADE_INIT_ERROR_MESSAGE, FacadeSkipReason } from '../core/constants.js';
 import { CANVAS_BG_COLOR } from '../elevation/elevationStyle.js';
 import { buildFacadeInputs } from '../facade/facadeInputs.js';
+import { leanToPlanRegions, topRoofPlanRegions } from '../structural/roofFramingRegions.js';
 import { facadeExtentsMm, buildFacadeModel } from '../facade/facadeFigure.js';
 import { chooseFacadeScale, layoutFacadeFaces } from '../facade/facadeLayout.js';
 import {
@@ -74,7 +75,8 @@ export class FacadeModeState {
       if (this._disposed) return { ok: true, error: null };
 
       const graphs = floors.map(f => f.graph).filter(Boolean);
-      const inputs = withGraphsReadScope(graphs, () => buildFacadeInputs(floors, this.project));
+      const inputs = withGraphsReadScope(graphs, () => buildFacadeInputs(floors, this.project,
+        { roofRegionsOf: facadeRoofRegionsResolver(this.project) }));
       const extents = facadeExtentsMm(inputs, { northAngleDeg: NORTH_ANGLE_DEG });
       this._inputs = inputs;
       runInAction(() => { this._extents = extents; });
@@ -197,6 +199,15 @@ export class FacadeModeState {
     this._scaleReactionDispose?.();
     this._disposed = true;
   }
+}
+
+/**
+ * 立面の屋根の region の解決（buildFacadeInputs の roofRegionsOf）。下屋＝その階の leanToPlanRegions、主屋根・屋根区画＝
+ * topRoofPlanRegions（最上階でなければ []。陸屋根は出ない）。roofFramingRegions.js は storage を推移的に引くため facade/ からは
+ * 引かず、ここで解決して渡す（展開の帯ビルダーと同じ流儀）。probe（scripts/probe/dumpFacade.mjs）も同じ関数を使う。
+ */
+export function facadeRoofRegionsResolver(project) {
+  return graph => ({ leanTo: leanToPlanRegions(graph), top: topRoofPlanRegions(graph, project) });
 }
 
 /** 複数の graph をまとめて読み取りスコープに入れる（graphReadScope.js。ElevationModeState._buildBands の入れ子と同じ）。 */

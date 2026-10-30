@@ -128,6 +128,6 @@ test('【失敗系】GL が 2FL より上なら 1階は skipped（reason=belowGl
 });
 
 test('【失敗系】floors・project が無くても例外にならない', () => {
-  assert.deepEqual(buildFacadeInputs(undefined, undefined), { glZMm: 0, floors: [], skipped: [] });
+  assert.deepEqual(buildFacadeInputs(undefined, undefined), { glZMm: 0, floors: [], roofs: [], skipped: [] });
   assert.deepEqual(buildFacadeModel(buildFacadeInputs([], null)), []);
 });

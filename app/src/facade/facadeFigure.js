@@ -8,14 +8,14 @@
 import { FACADE_TITLE_BY_DIRECTION, FACADE_GL_LABEL } from '../core/constants.js';
 import { line, polyline, text } from '../elevation/elevationPrimitives.js';
 import { ElevationLineRole, FACE_LABEL_FONT_PX, CANVAS_BG_COLOR } from '../elevation/elevationStyle.js';
-import { facadeViews, facadeFloorProfiles, buildFacadeLines } from './facadeGeometry.js';
+import { facadeViews, facadeFloorProfiles, buildFacadeLines, projectedRoofSegments } from './facadeGeometry.js';
 import { FACADE_GL_MARK_APEX_DEG, FACADE_LEVEL_FONT_PX } from './facadeStyle.js';
 
 const DEG_TO_RAD = Math.PI / 180;
 
 const hasAnySegment = inputs => (inputs?.floors ?? []).some(f => (f.segments ?? []).length > 0);
 
-// 1面の建物の範囲（u の最小・最大、GL からの高さ）。何も無ければ null。
+// 1面の建物の範囲（u の最小・最大、GL からの高さ）。屋根の線（見え隠れによらず全部。軒の出・棟を含む）も含める。何も無ければ null。
 function faceExtent(inputs, normal) {
   const profiles = facadeFloorProfiles(inputs, normal);
   if (profiles.length === 0) return null;
@@ -23,6 +23,11 @@ function faceExtent(inputs, normal) {
   for (const f of profiles) {
     for (const p of f.pieces) { uMin = Math.min(uMin, p.lo); uMax = Math.max(uMax, p.hi); }
     zTop = Math.max(zTop, f.zHiMm);
+  }
+  for (const s of projectedRoofSegments(inputs.roofs, normal)) {
+    uMin = Math.min(uMin, s.u1, s.u2);
+    uMax = Math.max(uMax, s.u1, s.u2);
+    zTop = Math.max(zTop, s.z1, s.z2);
   }
   return { uMin, widthMm: uMax - uMin, heightMm: Math.max(0, zTop - inputs.glZMm) };
 }

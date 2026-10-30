@@ -505,4 +505,7 @@ export const FacadeSkipReason = Object.freeze({
   // 階の上端（次の階の FL）が GL 以下＝地上に出る部分が無い（GL が 2FL より上などの異常入力）。
   // 補完（STORY_HEIGHT_FALLBACK_MM）で上端を作ると上の階と z が重なるため、補わずに飛ばす。
   BELOW_GL:         'belowGl',
+  // 以下は屋根（S2。skipped の要素に roofKey が付く）。
+  ROOF_NO_OUTLINE:    'roofNoOutline',    // 屋根範囲が空・外形線が無い（その屋根は描かない）
+  ROOF_FLAT_FALLBACK: 'roofFlatFallback', // 勾配・水下・到達時刻が作れない（軒の高さの水平線だけ描く）
 });
