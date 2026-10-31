@@ -61,7 +61,10 @@ test('buildKindTabs: listKinds()から導出し、全種別（material・interio
   const fixtureSymbolTab = tabs.find(t => t.kind === CatalogKind.FIXTURE_SYMBOL);
   assert.equal(fixtureSymbolTab.enabled, true);
   assert.equal(fixtureSymbolTab.label, '建具記号');
-  assert.equal(tabs.length, 6, '登録表の全種別ぶん（6種別）タブが出る');
+  const detailFigureTab = tabs.find(t => t.kind === CatalogKind.DETAIL_FIGURE);
+  assert.equal(detailFigureTab.enabled, true);
+  assert.equal(detailFigureTab.label, '部分詳細図');
+  assert.equal(tabs.length, 7, '登録表の全種別ぶん（7種別）タブが出る');
 });
 
 // ---- buildCatalogRows（ステップ7d: buildMaterialRowsの一般化。3種別）----

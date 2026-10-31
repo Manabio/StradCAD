@@ -177,11 +177,11 @@ test('【不変条件・ステップ6-1】store.js: bootReadyがreconcileIncomin
 // doc・userが両方空ならcontinueでスキップし（不変条件7-1: 本体標準マスタは新規文書の起動では
 // 読まない）、builtinはkindDef(kind).loadBuiltin()経由で読む（materialData.js等の直接動的importが
 // reconcileIncomingCatalogs本体から消える）。
-test('【不変条件・ステップ7d→8f→10d→12d】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER, SECTION, OPENING_SUB_TYPE, FIXTURE_SYMBOL]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
+test('【不変条件・ステップ7d→8f→10d→12d→部分詳細図S2】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER, SECTION, OPENING_SUB_TYPE, FIXTURE_SYMBOL, DETAIL_FIGURE]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
   const src = readSrc('store.js');
   assert.ok(
-    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.FIXTURE_SYMBOL\];/.test(src),
-    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL] が見つからない',
+    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.FIXTURE_SYMBOL, CatalogKind\.DETAIL_FIGURE\];/.test(src),
+    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL, CatalogKind.DETAIL_FIGURE] が見つからない',
   );
   const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
@@ -412,6 +412,27 @@ test('【不変条件・ステップ7c・Minor-2】store.js: saveCatalogDocument
   assert.ok(secondRecoverIdx >= 0, 'reexpandTransitiveMaterials後にrecoverUnresolvedEntriesの再試行が無い（回収分から生じた未解決材の救済が欠落）');
 });
 
+// 部分詳細図S2: 回収後の再展開の順序。回収した建具記号 → 詳細図の再展開 → 未解決の詳細図の回収 →
+// 材の再展開（追記された詳細図の material 束縛が指す材を拾わせる）。順序が崩れると材が同梱から漏れる。
+// コメント行に一致しないよう、全行コメントの行を除いたコードだけを検査する。
+test('【不変条件・部分詳細図S2】store.js: saveCatalogDocumentの回収後は recoverUnresolvedEntries(draftBundle) → reexpandTransitiveDetailFigures → recoverUnresolvedEntries(DETAIL_FIGURE) → reexpandTransitiveMaterials の順に並ぶ', () => {
+  const src = readSrc('store.js');
+  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
+  const code = body.split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+  const anchors = [
+    /recoverUnresolvedEntries\(\s*draftBundle,/,
+    /reexpandTransitiveDetailFigures\(/,
+    /recoverUnresolvedEntries\(\s*finalBundle,\s*new Map\(\[\[CatalogKind\.DETAIL_FIGURE,/,
+    /reexpandTransitiveMaterials\(/,
+  ];
+  const idx = anchors.map(re => code.search(re));
+  idx.forEach((i, n) => assert.ok(i >= 0, `anchors[${n}] ${anchors[n]} が saveCatalogDocument のコードに見つからない`));
+  for (let n = 1; n < idx.length; n++) {
+    assert.ok(idx[n - 1] < idx[n], `順序違反: ${anchors[n - 1]} は ${anchors[n]} より前に呼ぶ契約`);
+  }
+});
+
 // ステップ6-1・既存バグ修正 → ステップ7a → ステップ7c → QA指摘Minor-4改訂: saveCatalogDocumentの
 // buildDocumentBundle 呼び出しに aliases（BUNDLED_KINDSの各種別ぶんcurrentDocumentAliases(kind)を
 // 集めたオブジェクト）を渡していないと、保存のたびに文書aliasesが空で上書きされる
@@ -443,11 +464,11 @@ test('【不変条件・ステップ7c・Minor-4/P5】store.js: saveCatalogDocum
 // section・openingSubType・fixtureSymbol）を定義し、saveCatalogDocumentがそれをbuiltinの
 // loadBuiltin経由の解決・保存の両方で回していることを固定する（material固定への退行・
 // splitBundleByKind未使用への退行を検知）。
-test('【不変条件・ステップ7c→8f→10d→12d】store.js: BUNDLED_KINDSはmaterial・interiorMaster・boundaryMaster・section・openingSubType・fixtureSymbolの6種別で、saveCatalogDocumentがkindDef(kind).loadBuiltin()とsplitBundleByKindを使っている', () => {
+test('【不変条件・ステップ7c→8f→10d→12d→部分詳細図S2】store.js: BUNDLED_KINDSはmaterial・interiorMaster・boundaryMaster・section・openingSubType・fixtureSymbol・detailFigureの7種別で、saveCatalogDocumentがkindDef(kind).loadBuiltin()とsplitBundleByKindを使っている', () => {
   const src = readSrc('store.js');
   assert.ok(
-    /const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.FIXTURE_SYMBOL\];/.test(src),
-    'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL] が見つからない',
+    /^const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.FIXTURE_SYMBOL, CatalogKind\.DETAIL_FIGURE\];/m.test(src),
+    'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL, CatalogKind.DETAIL_FIGURE] が見つからない',
   );
   const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
@@ -513,8 +534,8 @@ test('【不変条件・ステップ7c→12b改訂】store.js: saveCatalogDocume
   const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   assert.ok(
-    /const usedKeysByKind = expandUsedMaterialsTransitively\(\s*rawUsedKeysByKind,\s*resolvedByKind\s*\);/.test(body),
-    'saveCatalogDocument が expandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind) を呼んでいない',
+    /^\s*const usedKeysByKind = expandUsedMaterialsTransitively\(\s*expandUsedDetailFiguresTransitively\(\s*rawUsedKeysByKind,\s*resolvedByKind\s*\),\s*resolvedByKind\s*\);/m.test(body),
+    'saveCatalogDocument が expandUsedMaterialsTransitively(expandUsedDetailFiguresTransitively(rawUsedKeysByKind, resolvedByKind), resolvedByKind) を呼んでいない（詳細図の推移展開は材の推移展開の前段）',
   );
   // 展開ロジック（usedInteriorMasters/usedBoundaryMastersの手組み立て・expandTransitiveMaterials
   // 直接呼び出し）をsaveCatalogDocument側で再実装していないことを固定する。
@@ -533,8 +554,8 @@ test('【不変条件・QA指摘M1・2026-09-24再報告】store.js: collectCurr
   assert.ok(/loadFloor\(/.test(body), 'collectCurrentCatalogUsage が loadFloor で全階を読んでいない');
   assert.ok(/collectUsedKeysByKind\(\s*snapshots,\s*BUNDLED_KINDS\s*\)/.test(body), 'collectCurrentCatalogUsage が collectUsedKeysByKind(snapshots, BUNDLED_KINDS) を呼んでいない');
   assert.ok(
-    /return expandUsedMaterialsTransitively\(\s*rawUsedKeysByKind,\s*resolvedByKind\s*\);/.test(body),
-    'collectCurrentCatalogUsage が expandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind) を返していない',
+    /^\s*return expandUsedMaterialsTransitively\(\s*expandUsedDetailFiguresTransitively\(\s*rawUsedKeysByKind,\s*resolvedByKind\s*\),\s*resolvedByKind\s*\);/m.test(body),
+    'collectCurrentCatalogUsage が expandUsedMaterialsTransitively(expandUsedDetailFiguresTransitively(rawUsedKeysByKind, resolvedByKind), resolvedByKind) を返していない',
   );
   // 順序: flushEditablePeek → saveFloor(アクティブ階) → loadFloorループ の順であること
   // （アクティブ階を書き出す前に読んでしまうと、書出し前の古い内容を読む競合になる）。

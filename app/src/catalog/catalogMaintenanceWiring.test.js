@@ -1856,3 +1856,21 @@ test('【不変条件・入力規制ステップ5】ui/CatalogMaintenancePanel.j
     );
   }
 });
+
+// ---- 部分詳細図 S2: 閲覧タブ（ReadonlyKindTab）の配線。コメント行に一致しないよう stripComments 後を検査する ----
+test('【不変条件・部分詳細図S2】catalogMaintenance.js: VIEWABLE_KINDS に CatalogKind.DETAIL_FIGURE が含まれる（コード部分のみ）', () => {
+  const code = stripComments(readSrc('catalog/catalogMaintenance.js'));
+  const m = /const VIEWABLE_KINDS = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(code);
+  assert.ok(m, 'catalogMaintenance.js に VIEWABLE_KINDS が見つからない');
+  assert.ok(/CatalogKind\.DETAIL_FIGURE/.test(m[1]), 'VIEWABLE_KINDS に CatalogKind.DETAIL_FIGURE が含まれていない（部分詳細図タブが閲覧できない）');
+});
+
+test('【不変条件・部分詳細図S2】CatalogMaintenancePanel.jsx: READONLY_KIND_FIELDS に DETAIL_FIGURE の項目（label,category,view,subject,provenance）がある（コード部分のみ）', () => {
+  const code = stripComments(readSrc('ui/CatalogMaintenancePanel.jsx'));
+  const m = /const READONLY_KIND_FIELDS = Object\.freeze\(\{([\s\S]*?)\n\}\);/.exec(code);
+  assert.ok(m, 'CatalogMaintenancePanel.jsx に READONLY_KIND_FIELDS が見つからない');
+  assert.ok(
+    /\[CatalogKind\.DETAIL_FIGURE\]: Object\.freeze\(\['label', 'category', 'view', 'subject', 'provenance'\]\)/.test(m[1]),
+    'READONLY_KIND_FIELDS に [CatalogKind.DETAIL_FIGURE] の閲覧項目が無い（部分詳細図タブの詳細欄が空になる）',
+  );
+});

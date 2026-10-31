@@ -13,6 +13,8 @@ import { enumerateMaterialCodeRefs, SNAPSHOT_REF_WALKERS } from './codeNormaliza
 import { isMaterialCode } from './materialCode.js';
 import { CatalogKind, kindDef } from './catalogKinds.js';
 import { emptyBundle, withEntries, bundleEntries } from './catalogBundle.js';
+import { DetailLenMode, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
+import { moveParts } from '../detail/detailModel.js';
 
 /**
  * snapshot（1階分）が参照する材コードを Set で返す（12桁数字として不正な値は含めない）。
@@ -37,8 +39,10 @@ export function collectUsedMaterialCodes(snapshot) {
  * - section: columns/beams/structuralWalls/slabs/footings の sectionDefId
  * - openingSubType: openings[] の `${category}:${subType}`（catalogKinds.js の keyOf と同型）
  * - fixtureSymbol: openings[].fixtureType（空でない文字列のみ）
+ * - detailFigure: スナップショットからの参照はまだ無い（walker の enumerate が空。S6 以降が足す）。
+ *   建具記号経由の使用は expandUsedDetailFiguresTransitively が推移展開する
  * @returns {{ interiorMaster: Set<string>, boundaryMaster: Set<string>, section: Set<string>,
- *             openingSubType: Set<string>, fixtureSymbol: Set<string> }}
+ *             openingSubType: Set<string>, fixtureSymbol: Set<string>, detailFigure: Set<string> }}
  */
 export function collectUsedKeys(snapshot) {
   const interiorMaster = new Set();
@@ -46,15 +50,17 @@ export function collectUsedKeys(snapshot) {
   const section = new Set();
   const openingSubType = new Set();
   const fixtureSymbol = new Set();
-  if (!snapshot) return { interiorMaster, boundaryMaster, section, openingSubType, fixtureSymbol };
+  const detailFigure = new Set();
+  if (!snapshot) return { interiorMaster, boundaryMaster, section, openingSubType, fixtureSymbol, detailFigure };
 
   for (const ref of SNAPSHOT_REF_WALKERS.interiorMaster.enumerate(snapshot)) interiorMaster.add(ref.code);
   for (const ref of SNAPSHOT_REF_WALKERS.boundaryMaster.enumerate(snapshot)) boundaryMaster.add(ref.code);
   for (const ref of SNAPSHOT_REF_WALKERS.section.enumerate(snapshot)) section.add(ref.code);
   for (const ref of SNAPSHOT_REF_WALKERS.openingSubType.enumerate(snapshot)) openingSubType.add(ref.code);
   for (const ref of SNAPSHOT_REF_WALKERS.fixtureSymbol.enumerate(snapshot)) fixtureSymbol.add(ref.code);
+  for (const ref of SNAPSHOT_REF_WALKERS.detailFigure.enumerate(snapshot)) detailFigure.add(ref.code);
 
-  return { interiorMaster, boundaryMaster, section, openingSubType, fixtureSymbol };
+  return { interiorMaster, boundaryMaster, section, openingSubType, fixtureSymbol, detailFigure };
 }
 
 /**
@@ -91,6 +97,38 @@ export function collectUsedKeysByKind(snapshots, kinds) {
 }
 
 /**
+ * 建具記号エントリが割り当てている詳細図キー（detailFigures の値のうち空でない文字列）。
+ * detailFigures が無い・オブジェクトでない旧形のエントリは空。
+ * @param {object|null|undefined} symbolEntry
+ * @returns {string[]}
+ */
+function detailFigureKeysOfSymbol(symbolEntry) {
+  const slots = symbolEntry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
+  if (slots === null || typeof slots !== 'object' || Array.isArray(slots)) return [];
+  return Object.values(slots).filter(v => typeof v === 'string' && v.length > 0);
+}
+
+/**
+ * 詳細図の全 LenSpec（Move の len／V の dx・dy）のうち mode が material のものが指す材コード
+ * （12桁数字として正しいものだけ）。壊れた図（strokes が配列でない・未知の dir）でも例外にしない。
+ * @param {object|null|undefined} figure
+ * @returns {Set<string>}
+ */
+function detailFigureMaterialCodes(figure) {
+  const codes = new Set();
+  const strokes = Array.isArray(figure?.strokes) ? figure.strokes : [];
+  for (const stroke of strokes) {
+    const moves = Array.isArray(stroke?.moves) ? stroke.moves : [];
+    for (const move of moves) {
+      for (const part of moveParts(move) ?? []) {
+        if (part.len?.mode === DetailLenMode.MATERIAL && isMaterialCode(part.len.code)) codes.add(part.len.code);
+      }
+    }
+  }
+  return codes;
+}
+
+/**
  * 使用材コードの集合に、内装マスター・境界マスターが内部で参照する材コードを推移的に追加する
  * （同梱は使用中エントリのみとする規約）。LAYER_SOURCE の層（実行時解決）は辿らない——固定コード（layer.code）だけを見る
  * （ステップ7b）。理由: LAYER_SOURCE.FLOOR_EXTERIOR_BACKING/FLOOR_INTERIOR_BACKING の実体は
@@ -100,12 +138,17 @@ export function collectUsedKeysByKind(snapshots, kinds) {
  * 別経路収集済み）——ここで LAYER_SOURCE を辿ると同じ材コードを二重収集するだけになる。
  * @param {Set<string>|Iterable<string>} codes 直接参照された材コード
  * @param {{ interiorMasters?: Iterable<{wallMaterial?: string, wallFinish?: string}>,
- *           boundaryMasters?: Iterable<{layers?: Array<{code?: string|null}>}> }} used
- *        使用されている（解決済みの）内装・境界マスターのエントリ本体
+ *           boundaryMasters?: Iterable<{layers?: Array<{code?: string|null}>}>,
+ *           detailFigures?: Iterable<object> }} used
+ *        使用されている（解決済みの）内装・境界マスター・部分詳細図のエントリ本体
+ *        （詳細図は material 束縛の LenSpec が指す材コード）
  * @returns {Set<string>}
  */
-export function expandTransitiveMaterials(codes, { interiorMasters = [], boundaryMasters = [] } = {}) {
+export function expandTransitiveMaterials(codes, { interiorMasters = [], boundaryMasters = [], detailFigures = [] } = {}) {
   const expanded = new Set(codes);
+  for (const figure of detailFigures) {
+    for (const code of detailFigureMaterialCodes(figure)) expanded.add(code);
+  }
   for (const master of interiorMasters) {
     if (isMaterialCode(master?.wallMaterial)) expanded.add(master.wallMaterial);
     if (isMaterialCode(master?.wallFinish)) expanded.add(master.wallFinish);
@@ -149,6 +192,37 @@ export function expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind) 
   });
   const next = new Map(usedKeysByKind);
   next.set(CatalogKind.MATERIAL, expandedMaterial);
+  return next;
+}
+
+/**
+ * カタログ→カタログの推移展開（2 例目）。expandUsedMaterialsTransitively の**前段**で呼ぶ
+ * （詳細図の material 束縛が増やす材を、後段の材の推移展開が取りこぼさないため）。
+ * (a) 使用中の建具記号（三層合成後）の detailFigures の値 → 詳細図キー
+ * (b) 使用中の詳細図の material 束縛 LenSpec の code → 材コード（material が収集対象のときだけ）
+ * 詳細図から別の詳細図へは辿らない。usedKeysByKind が DETAIL_FIGURE を含まなければそのまま返す
+ * （expandUsedMaterialsTransitively と同じ）。非破壊（新しい Map を返す）。
+ * @param {Map<string, Set<string>>} usedKeysByKind
+ * @param {Map<string, Map<string, object>>} resolvedByKind
+ * @returns {Map<string, Set<string>>}
+ */
+export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKind) {
+  if (!usedKeysByKind.has(CatalogKind.DETAIL_FIGURE)) return usedKeysByKind;
+  const figureKeys = new Set(usedKeysByKind.get(CatalogKind.DETAIL_FIGURE));
+  for (const symbolKey of usedKeysByKind.get(CatalogKind.FIXTURE_SYMBOL) ?? []) {
+    const symbol = resolvedByKind.get(CatalogKind.FIXTURE_SYMBOL)?.get(symbolKey);
+    for (const figureKey of detailFigureKeysOfSymbol(symbol)) figureKeys.add(figureKey);
+  }
+  const next = new Map(usedKeysByKind);
+  next.set(CatalogKind.DETAIL_FIGURE, figureKeys);
+  if (next.has(CatalogKind.MATERIAL)) {
+    const codes = new Set(next.get(CatalogKind.MATERIAL));
+    for (const figureKey of figureKeys) {
+      const figure = resolvedByKind.get(CatalogKind.DETAIL_FIGURE)?.get(figureKey);
+      for (const code of detailFigureMaterialCodes(figure)) codes.add(code);
+    }
+    next.set(CatalogKind.MATERIAL, codes);
+  }
   return next;
 }
 
@@ -246,6 +320,42 @@ export function recoverUnresolvedEntries(bundle, unresolvedKeys, existingBundles
 }
 
 /**
+ * recoverUnresolvedEntries が既存の同梱束から回収した fixtureSymbol エントリが割り当てている
+ * 詳細図（detailFigures）も含め、bundle 上の fixtureSymbol 全エントリから詳細図への推移的展開を
+ * やり直す（reexpandTransitiveMaterials の詳細図版）。不足分を detailFigureMap
+ * （composeCatalog(DETAIL_FIGURE, ...) の結果）で解決して detailFigure 束へ追記し、解決できない
+ * キーは unresolvedDetailFigureKeys として返す（呼び出し側が既存束から回収し、残りを通知する）。
+ * この関数の後に reexpandTransitiveMaterials を呼ぶこと（追記された詳細図の材を展開させるため）。
+ * @param {object} bundle
+ * @param {Map<string, object>|undefined} detailFigureMap 詳細図の解決済み Map（省略時は全て未解決扱い）
+ * @returns {{ bundle: object, unresolvedDetailFigureKeys: Set<string> }}
+ */
+export function reexpandTransitiveDetailFigures(bundle, detailFigureMap) {
+  const figureDef = kindDef(CatalogKind.DETAIL_FIGURE);
+  const existingFigures = bundleEntries(bundle, CatalogKind.DETAIL_FIGURE);
+  const existingKeys = new Set(existingFigures.map(e => figureDef.keyOf(e)));
+
+  const wanted = new Set();
+  for (const symbol of bundleEntries(bundle, CatalogKind.FIXTURE_SYMBOL)) {
+    for (const figureKey of detailFigureKeysOfSymbol(symbol)) wanted.add(figureKey);
+  }
+
+  const newEntries = [];
+  const unresolvedDetailFigureKeys = new Set();
+  for (const key of wanted) {
+    if (existingKeys.has(key)) continue;
+    const entry = detailFigureMap?.get(key);
+    if (entry) newEntries.push(stripOverridesBuiltin(entry));
+    else unresolvedDetailFigureKeys.add(key);
+  }
+  if (newEntries.length === 0) return { bundle, unresolvedDetailFigureKeys };
+  return {
+    bundle: withEntries(bundle, CatalogKind.DETAIL_FIGURE, [...existingFigures, ...newEntries]),
+    unresolvedDetailFigureKeys,
+  };
+}
+
+/**
  * recoverUnresolvedEntries が既存の同梱束から回収した interiorMaster/boundaryMaster エントリも
  * 含め、bundle 上の interiorMaster/boundaryMaster 全エントリから material への推移的展開を
  * やり直す（QA指摘Minor-2・回収分の推移展開）。saveCatalogDocument が最初に呼ぶ
@@ -264,8 +374,10 @@ export function reexpandTransitiveMaterials(bundle, materialMap) {
   const materialDef = kindDef(CatalogKind.MATERIAL);
   const existingMaterials = bundleEntries(bundle, CatalogKind.MATERIAL);
   const existingCodes = new Set(existingMaterials.map(e => materialDef.keyOf(e)));
+  // 束の詳細図（直接解決分＋回収分）の material 束縛が指す材も同じ式で展開する。
+  const detailFigures = bundleEntries(bundle, CatalogKind.DETAIL_FIGURE);
 
-  const expanded = expandTransitiveMaterials(existingCodes, { interiorMasters, boundaryMasters });
+  const expanded = expandTransitiveMaterials(existingCodes, { interiorMasters, boundaryMasters, detailFigures });
 
   const newEntries = [];
   const unresolvedMaterialKeys = new Set();

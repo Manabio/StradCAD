@@ -29,6 +29,7 @@ import { nextSerial, parseMaterialCode, formatMaterialCode, isMaterialCode } fro
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
 import { stripOverridesBuiltin } from './usedEntries.js';
+import { DetailCategory, DetailView } from '../core/constants.js';
 
 /** 材の役割（カテゴリ）。materialData.js の MATERIAL_CATEGORY と同じ3値
  * （本体マスタは静的 import できないため、ここでは値の集合だけを持つ）。 */
@@ -114,6 +115,8 @@ export function parseThicknessInput(raw) {
 const VIEWABLE_KINDS = Object.freeze([
   CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION,
   CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL,
+  // 部分詳細図（S2）は閲覧のみ（ReadonlyKindTab）。編集・削除はヘルパー（S4）。
+  CatalogKind.DETAIL_FIGURE,
 ]);
 
 export function buildKindTabs() {
@@ -179,7 +182,27 @@ const CATEGORY_LABELS_BY_KIND = Object.freeze({
   // ——別の対応表として持つ（formatCategoryLabelはkindごとに独立した表を引くため、
   // 値が同じでも共有せず複製する既存の規約に合わせる）。
   [CatalogKind.FIXTURE_SYMBOL]: Object.freeze({ fitting: '建具', window: '窓' }),
+  // 部分詳細図の分類（部位・取り合い・自由部位・対の部位・姿図）。
+  [CatalogKind.DETAIL_FIGURE]: Object.freeze({
+    [DetailCategory.PART]:      '部位',
+    [DetailCategory.JUNCTION]:  '取り合い',
+    [DetailCategory.FREE_PART]: '自由部位',
+    [DetailCategory.PAIRED]:    '対の部位',
+    [DetailCategory.FIGURE]:    '姿図',
+  }),
 });
+
+// 部分詳細図の向き（view）の表示名。subject（17種）のラベルは S4 で定義するため S2 は生の値を出す。
+const DETAIL_VIEW_LABELS = Object.freeze({
+  [DetailView.PLAN]:      '平面',
+  [DetailView.SECTION]:   '断面',
+  [DetailView.ELEVATION]: '立面',
+});
+
+/** 部分詳細図の向きの表示名。未知の値は formatReadonlyValue にフォールバックする（投げない）。 */
+export function formatDetailViewLabel(value) {
+  return typeof value === 'string' && Object.hasOwn(DETAIL_VIEW_LABELS, value) ? DETAIL_VIEW_LABELS[value] : formatReadonlyValue(value);
+}
 
 /**
  * category値の表示名（kindごとの対応表から引く）。対応表に無い種別・値は

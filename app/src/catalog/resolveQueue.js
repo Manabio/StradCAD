@@ -16,6 +16,17 @@
 import { CatalogKind, kindDef } from './catalogKinds.js';
 import { matchByContent, rankCandidates, suggestByClass, displayNameOf } from './catalogMatch.js';
 import { parseMaterialCode, formatMaterialCode, nextSerial } from './materialCode.js';
+import { SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
+
+/**
+ * 行の許可操作。参照の書換え先が無い種別（walker の rewrite が null）では、aliasPairs を生む操作
+ * （承認・別のものを指定・ライブラリへ追加）を出さず「保留」だけにする
+ * （積むと addDocumentAliases が例外になり、以後の保存が重複禁止で止まるため）。
+ */
+function allowedActionsFor(kind, scenario) {
+  if (SNAPSHOT_REF_WALKERS[kind]?.rewrite === null) return ['defer'];
+  return [...ALLOWED_ACTIONS[scenario]];
+}
 
 /** 場面ごとに許可される操作id（行モデル allowedActions の唯一の定義箇所）。 */
 const ALLOWED_ACTIONS = Object.freeze({
@@ -81,7 +92,7 @@ function libraryConflictRow(kind, conflict, { userEntries = [], appEntries = [],
     targetKey: conflict.key, targetLabel: displayNameOf(targetEntry), targetEntry,
     usage: [],
     candidates,
-    allowedActions: [...ALLOWED_ACTIONS['library-conflict']],
+    allowedActions: allowedActionsFor(kind, 'library-conflict'),
     // 承認（同分類の空き番へ付け替え=renumber）の付け替え先を事前計算しておく——
     // applyResolveDecisions を appEntries 非依存の純関数にするため（行が計算結果を運ぶ）。
     // material以外（parseMaterialCodeが解けないkey）は null（承認は保留扱いにフォールバック）。
@@ -99,7 +110,7 @@ function unsupportedRow(kind, entry) {
     targetKey: key, targetLabel: displayNameOf(entry), targetEntry: entry,
     usage: [],
     candidates: [],
-    allowedActions: [...ALLOWED_ACTIONS.unsupported],
+    allowedActions: allowedActionsFor(kind, 'unsupported'),
   };
 }
 
@@ -111,7 +122,7 @@ function proposeRow(kind, p) {
     targetKey: p.from, targetLabel: displayNameOf(p.entry), targetEntry: p.entry,
     usage: [],
     candidates: p.candidates,
-    allowedActions: [...ALLOWED_ACTIONS.propose],
+    allowedActions: allowedActionsFor(kind, 'propose'),
   };
 }
 
@@ -135,7 +146,7 @@ function unresolvedCodeRow(kind, code, usage, { appEntries = [], origins, remove
     targetKey: code, targetLabel: removedEntry?.name ?? code, targetEntry: null,
     usage,
     candidates,
-    allowedActions: [...ALLOWED_ACTIONS['unresolved-code']],
+    allowedActions: allowedActionsFor(kind, 'unresolved-code'),
   };
 }
 

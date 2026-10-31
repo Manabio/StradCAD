@@ -122,12 +122,10 @@ export function overlayFor(kind) {
 /**
  * dedupeFields の1値を正規化文字列にする。トップレベル同値規則（catalogMatch.js valuesEqual:
  * 文字列はtrim・null≡undefined、null/0は区別）と一致させる。
- * 2026-09-22 QA指摘D: 文字列・数値・null(≡undefined)以外の値（配列・オブジェクト・boolean等）は
- * 文字列化比較の禁止によりJSON.stringifyでの比較を許さない——現状の登録表では
- * dedupeFieldsに文字列・数値・nullableな数値以外を持つ種別が無いため（materialの
- * name/spec/x/y/thicknessのみ、全てスカラー）、来たら「未対応」の日本語例外にする
- * （2026-09-22 QA指摘・Minor: 文言を型名一般で言えるように一般化——配列・オブジェクトに限らず
- * booleanが来ても正しい文言になる）。
+ * 2026-09-22 QA指摘D: JSON.stringify での比較は許さない。トップレベルの boolean 等は
+ * 「未対応」の日本語例外にする（文言は型名一般）。部分詳細図S2（案A）: 配列・プレーンオブジェクトは
+ * 入れ子の厳密比較（deepValuesEqualStrict と同値）を構造的に正規化した文字列で比べる
+ * （strokes を dedupeFields に含めるため）。
  * 2026-09-22 QA指摘・Minor: 数値はNumber.isFiniteでなければ例外（NaN/Infinityは比較不能）。
  */
 function normalizeDedupeValue(v) {
@@ -139,7 +137,31 @@ function normalizeDedupeValue(v) {
     }
     return `n:${v}`;
   }
+  // 配列・プレーンオブジェクト（部分詳細図の strokes 等）: 入れ子の厳密比較（catalogMatch.js
+  // deepValuesEqualStrict と同じ意味論）を構造的な正規化文字列にする。JSON.stringify の素通しではなく、
+  // 型タグ・長さ接頭辞・キー順の整列で、キーの有無と null/undefined を区別する。
+  if (Array.isArray(v) || (typeof v === 'object' && v !== null && Object.getPrototypeOf(v) === Object.prototype)) {
+    return `x:${encodeNestedStrict(v)}`;
+  }
   throw new Error(`dedupeFieldsに文字列・数値・null以外の値は未対応です（実際の型: ${typeof v}）`);
+}
+
+/** 入れ子の値の構造的な正規化文字列（deepValuesEqualStrict と同値な値は同じ文字列になる）。 */
+function encodeNestedStrict(v) {
+  if (v === null) return 'N';
+  if (v === undefined) return 'U';
+  if (typeof v === 'string') { const t = v.trim(); return `s${t.length}:${t}`; }
+  if (typeof v === 'boolean') return v ? 'T' : 'F';
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) throw new Error(`dedupeFieldsの値がNaN/Infinityです（比較できません）: ${v}`);
+    return `n${v};`;
+  }
+  if (Array.isArray(v)) return `[${v.map(encodeNestedStrict).join(',')}]`;
+  if (typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype) {
+    const parts = Object.keys(v).sort().map(k => `${k.length}:${k}=${encodeNestedStrict(v[k])}`);
+    return `{${parts.join(',')}}`;
+  }
+  throw new Error(`dedupeFieldsの入れ子に未対応の値があります（実際の型: ${typeof v}）`);
 }
 
 /**
@@ -157,7 +179,8 @@ function dedupeTupleKey(dedupeFields, entry) {
 /**
  * assertNoDuplicatesInMergedの本体。登録表の行（またはそれと同じ形のダミー行）を直接受け取る
  * （2026-09-22 QA指摘D・T6: rankCandidatesWithと同じ方式——凍結された本番登録表を書き換えずに
- * 正規化ロジック（配列・オブジェクトが来たときの例外等）をテストするため）。kind は
+ * 正規化ロジックをテストするため。配列・プレーンオブジェクトは構造的に正規化する（部分詳細図 S2 で
+ * 規約変更）。非プレーンのオブジェクト・トップレベルの boolean は例外）。kind は
  * formatDuplicateError のメッセージに使うラベル文字列（本番経路では種別文字列そのもの）。
  * dedupeFields を持たない def は no-op。origins（Map<key,origin>）を渡すとエラー文言に
  * 出所（doc/user/builtin）を併記する。

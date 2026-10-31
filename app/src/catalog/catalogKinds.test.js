@@ -5,9 +5,9 @@ import { CatalogKind, CATALOG_KINDS, kindDef, listKinds, MATERIAL_CLASSES, class
 // （catalogKinds.js自体は静的importできないが、テストファイルからは制約されない）。
 import { parseSectionSpec } from '../structural/sectionCatalog.js';
 
-test('listKinds: 登録済み6種別を返す', () => {
+test('listKinds: 登録済み7種別を返す', () => {
   assert.deepEqual(new Set(listKinds()), new Set([
-    'material', 'interiorMaster', 'boundaryMaster', 'section', 'openingSubType', 'fixtureSymbol',
+    'material', 'interiorMaster', 'boundaryMaster', 'section', 'openingSubType', 'fixtureSymbol', 'detailFigure',
   ]));
   assert.deepEqual(Object.values(CatalogKind).sort(), listKinds().sort());
 });

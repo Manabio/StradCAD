@@ -31,8 +31,8 @@ import { composeCatalog, clearOverlays, overlayFor, removeDocEntry } from './cat
 import { decodeCatalogBundle, encodeCatalogBundle } from './catalog/catalogCodec.js';
 import { mergeBundles, splitBundleByKind, resolveCatalog, resolveOrigins, detectLibraryConflicts } from './catalog/catalogBundle.js';
 import {
-  collectUsedKeysByKind, expandUsedMaterialsTransitively, buildDocumentBundle,
-  recoverUnresolvedEntries, reexpandTransitiveMaterials,
+  collectUsedKeysByKind, expandUsedMaterialsTransitively, expandUsedDetailFiguresTransitively, buildDocumentBundle,
+  recoverUnresolvedEntries, reexpandTransitiveMaterials, reexpandTransitiveDetailFigures,
 } from './catalog/usedEntries.js';
 import {
   clearDocumentAliases, currentDocumentAliases, takeUnresolvedCodes, addDocumentAliases,
@@ -269,9 +269,9 @@ export async function loadCatalogOverlaysFromIDB({
  * 起動時の同梱カタログ照合の対象種別（ステップ6-1は material 単独だったが、ステップ7dで
  * 内装マスター・境界マスターへ、ステップ8fで断面（section）へ、ステップ10dで建具種別
  * （openingSubType）へ、ステップ12dで建具記号（fixtureSymbol）へ一般化した——BUNDLED_KINDS
- * （同梱の一般化。ステップ7c→8f→10d→12d）と同じ6種別）。
+ * （同梱の一般化。ステップ7c→8f→10d→12d→部分詳細図S2）と同じ7種別）。
  */
-const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL];
+const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL, CatalogKind.DETAIL_FIGURE];
 
 /**
  * 起動時の同梱カタログ照合（ステップ6-1→ステップ7d: 種別ループへ一般化）。loadCatalogOverlaysFromIDB
@@ -650,10 +650,10 @@ export async function switchFloor(nextPlaneId) {
 /**
  * 文書同梱する種別の一覧（ステップ7c: 同梱の一般化。それまでは material のみだった。
  * ステップ8fで断面（section）、ステップ10dで建具種別（openingSubType）、
- * ステップ12dで建具記号（fixtureSymbol）を追加）。
+ * ステップ12dで建具記号（fixtureSymbol）、部分詳細図S2で部分詳細図（detailFigure）を追加）。
  * 使用キー収集経路（openingsのsubType・fixtureType）はusedEntries.jsに既にある。
  */
-const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL];
+const BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL, CatalogKind.DETAIL_FIGURE];
 
 /**
  * 全階のバイト列を decode し、BUNDLED_KINDS の使用キーを種別ごとに集めて返す
@@ -715,7 +715,8 @@ export async function collectCurrentCatalogUsage() {
   const builtinLists = await Promise.all(BUNDLED_KINDS.map(kind => kindDef(kind).loadBuiltin()));
   const resolvedByKind = new Map(BUNDLED_KINDS.map((kind, i) => [kind, composeCatalog(kind, builtinLists[i])]));
 
-  return expandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind);
+  // 詳細図の推移展開（建具記号→詳細図→材）は材の推移展開の前段（saveCatalogDocument と同じ式）。
+  return expandUsedMaterialsTransitively(expandUsedDetailFiguresTransitively(rawUsedKeysByKind, resolvedByKind), resolvedByKind);
 }
 
 /**
@@ -766,7 +767,8 @@ async function saveCatalogDocument(floorRecords) {
   // catalog/usedEntries.js の expandUsedMaterialsTransitively へ集約する——store.js
   // collectCurrentCatalogUsage（削除確認の「現在の使用キー」収集）と同じ判定式を共有し、
   // 二重実装しない（片方だけ内装・境界マスター経路を外す退行を1箇所の修正で防ぐ）。
-  const usedKeysByKind = expandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind);
+  // 前段に部分詳細図の推移展開（使用中の建具記号の detailFigures → 詳細図 → その material 束縛の材）。
+  const usedKeysByKind = expandUsedMaterialsTransitively(expandUsedDetailFiguresTransitively(rawUsedKeysByKind, resolvedByKind), resolvedByKind);
 
   // QA指摘Minor-4: 空の種別を手元でふるい落とさなくても、splitBundleByKindのbundleAliases側が
   // 「非空のときだけ添える」判定を持つため設計上は同値——フィルタの唯一の判定箇所をそちらに寄せる。
@@ -782,6 +784,22 @@ async function saveCatalogDocument(floorRecords) {
       draftBundle, unresolvedKeys, existingBundlesByKind,
     );
     finalBundle = recoveredBundle;
+
+    // 回収分の建具記号が割り当てる詳細図を推移展開し直す（材の展開より前。追記された詳細図の
+    // material 束縛が指す材を、次の reexpandTransitiveMaterials に拾わせるため）。
+    const { bundle: figuresReexpanded, unresolvedDetailFigureKeys } = reexpandTransitiveDetailFigures(
+      finalBundle, resolvedByKind.get(CatalogKind.DETAIL_FIGURE),
+    );
+    finalBundle = figuresReexpanded;
+    if (unresolvedDetailFigureKeys.size > 0) {
+      const { bundle: recoveredFigures, stillUnresolvedByKind: stillFigures } = recoverUnresolvedEntries(
+        finalBundle, new Map([[CatalogKind.DETAIL_FIGURE, unresolvedDetailFigureKeys]]), existingBundlesByKind,
+      );
+      finalBundle = recoveredFigures;
+      for (const [kind, keys] of stillFigures) {
+        stillUnresolvedByKind.set(kind, new Set([...(stillUnresolvedByKind.get(kind) ?? []), ...keys]));
+      }
+    }
 
     // QA指摘Minor-2: 回収分の内装・境界マスターから推移展開をやり直し、不足する材を追記する。
     const { bundle: reexpandedBundle, unresolvedMaterialKeys } = reexpandTransitiveMaterials(
@@ -840,7 +858,7 @@ export async function saveToIDB() {
   await commitFloorsToDocument([...project.planeMap.keys()]);
   // ④.5 使用キーを、commitFloorsToDocument で確定した savedFloors から（削除済み階を
   // 含まないため）全階ぶん収集し、文書同梱（BUNDLED_KINDS＝material・interiorMaster・
-  // boundaryMaster・section・openingSubType・fixtureSymbolの6種別）として保存する（ステップ4→7c→8f→10d→12d）。
+  // boundaryMaster・section・openingSubType・fixtureSymbol・detailFigureの7種別）として保存する（ステップ4→7c→8f→10d→12d）。
   const floorRecords = await loadAllSavedFloors();
   await saveCatalogDocument(floorRecords);
   // ⑤ 次回起動時のブートplane（PLANE_ID_KEY）を最下階の採用planeへ揃える。保存文書の実在planeと

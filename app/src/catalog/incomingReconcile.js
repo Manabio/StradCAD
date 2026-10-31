@@ -12,7 +12,7 @@
 
 import { CatalogKind, kindDef, KIND_LABELS } from './catalogKinds.js';
 import { classifyIncoming, assertNoDuplicate, displayNameOf } from './catalogMatch.js';
-import { addDocumentAliases } from './codeNormalization.js';
+import { addDocumentAliases, SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
 import { overlayFor, removeDocEntry } from './catalogRegistry.js';
 
 /**
@@ -38,13 +38,19 @@ export function planIncomingReconcile({ kind, docEntries, appEntries, origins })
   const proposals = [];
   const adds = [];
   const unsupported = [];
+  // 参照の書換え先が無い種別（walker の rewrite が null）は読み替え（alias）を積めない
+  // （積むと addDocumentAliases が例外）。alias／propose は作らず、同梱を別物として扱う（add）。
+  const cannotAlias = SNAPSHOT_REF_WALKERS[kind]?.rewrite === null;
 
   for (const docEntry of docEntries ?? []) {
     if (typeof def.isSupported === 'function' && !def.isSupported(docEntry)) {
       unsupported.push(docEntry);
       continue;
     }
-    const result = classifyIncoming(kind, docEntry, appEntries, origins);
+    let result = classifyIncoming(kind, docEntry, appEntries, origins);
+    if (cannotAlias && (result.action === 'alias' || result.action === 'propose')) {
+      result = { action: 'add', entry: docEntry };
+    }
     switch (result.action) {
       case 'same':
         same.push(result.key);
@@ -171,6 +177,8 @@ export async function applyReconcilePlan(plan, {
   const skipped = [];
   for (const entry of plan.adds) {
     try {
+      // nextUser（ライブラリ）としか比べない。本体（builtin）とは比べない: detailFigure の本体は空
+      // （detailBuiltins.js = []）が前提。本体を持つ rewrite:null 種別を足すときは builtin とも比べること。
       assertNoDuplicate(kind, entry, nextUser);
     } catch (e) {
       skipped.push({ entry, reason: e.message });
@@ -179,6 +187,18 @@ export async function applyReconcilePlan(plan, {
     }
     nextUser = [...nextUser, entry];
     addedKeys.push(def.keyOf(entry));
+  }
+
+  // 読み替え（alias）を積めない種別では、重複で追加を弾いた同梱を overlay の doc に残すと、
+  // 合成後の重複禁止が毎回例外になり以後の保存が止まる——alias 確定時と同じく doc から外す
+  // （参照されていても、保存時の回収（store.js saveCatalogDocument の recoverUnresolvedEntries）で
+  // 同梱に温存される。参照の読み替えは S6）。
+  if (SNAPSHOT_REF_WALKERS[kind]?.rewrite === null && skipped.length > 0) {
+    const docKeys = new Set(overlayFor(kind).doc.map(e => def.keyOf(e)));
+    for (const { entry } of skipped) {
+      const key = def.keyOf(entry);
+      if (docKeys.has(key)) removeDocEntryFn(kind, key);
+    }
   }
 
   if (addedKeys.length > 0) await commitUserFn(nextUser);

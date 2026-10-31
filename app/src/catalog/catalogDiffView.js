@@ -13,6 +13,7 @@
 
 import { kindDef } from './catalogKinds.js';
 import { diffEntries } from './catalogMatch.js';
+import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
 
 /**
  * 差分表示色。renderer/SiteLinesLayer.jsx の隣地境界線と同じ値(#f97316)だが、
@@ -40,13 +41,17 @@ const FIELD_LABELS = Object.freeze({
   }),
   fixtureSymbol: Object.freeze({
     key: '記号', label: '呼称', category: '区分', mechanism: '機構',
-    profile: '枠断面', defaultMaterialGlass: '材料・ガラス（既定）',
+    profile: '枠断面', defaultMaterialGlass: '材料・ガラス（既定）', [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: '詳細図',
   }),
   interiorMaster: Object.freeze({
     key: 'キー', label: '呼称', wallMaterial: '壁材', wallFinish: '壁仕上げ', ceilingHeight: '天井高',
   }),
   boundaryMaster: Object.freeze({
     key: 'キー', label: '呼称', kind: '種類', layers: '層構成', derivedFrom: '継承元', fields: '項目',
+  }),
+  detailFigure: Object.freeze({
+    key: 'キー', version: '版', label: '呼称', category: '分類', view: '向き', subject: '主題',
+    strokes: '線', datums: '基準', anchors: '固定点', provenance: '由来', note: '備考',
   }),
 });
 

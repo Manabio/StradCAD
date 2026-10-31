@@ -1,8 +1,8 @@
 // ================================================================
 // カタログ種別の登録表（唯一の定義箇所）＋ 材料分類表（MATERIAL_CLASSES）。
 //
-// カタログ束（.stq 同梱／ユーザーライブラリ）を構成する6種別
-// （材料・内装マスター・境界マスター・構造断面・建具種別・建具記号）を1本の表に持つ。
+// カタログ束（.stq 同梱／ユーザーライブラリ）を構成する7種別
+// （材料・内装マスター・境界マスター・構造断面・建具種別・建具記号・部分詳細図）を1本の表に持つ。
 // 種別の追加はこの表に1行足すだけでよい。
 //
 // 純モジュール（葉）。store.js / snap.js / .jsx を静的 import しない。
@@ -19,6 +19,9 @@
 // （catalogImports.test.js が固定）。独立チャンクが保たれているかは、build の警告3件から
 // 増えていないかで都度確認すること。
 // ================================================================
+
+import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
+import { isSupportedDetailFigure } from '../detail/detailModel.js';
 
 function isPlainObject(v) {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -105,6 +108,7 @@ export const CatalogKind = Object.freeze({
   SECTION:          'section',
   OPENING_SUB_TYPE: 'openingSubType',
   FIXTURE_SYMBOL:   'fixtureSymbol',
+  DETAIL_FIGURE:    'detailFigure',
 });
 
 /**
@@ -119,6 +123,7 @@ export const KIND_LABELS = Object.freeze({
   [CatalogKind.SECTION]:          '断面',
   [CatalogKind.OPENING_SUB_TYPE]: '建具種別',
   [CatalogKind.FIXTURE_SYMBOL]:   '建具記号',
+  [CatalogKind.DETAIL_FIGURE]:    '部分詳細図',
 });
 
 // ----------------------------------------------------------------
@@ -440,7 +445,8 @@ const REGISTRY = Object.assign(Object.create(null), {
       return { key };
     },
     encoding: 'json',
-    knownFields: ['key', 'label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass'],
+    // detailFigures（任意）＝{ jamb?, head? } の詳細図キー（R4。旧ビルドでは未知項目として保持される）。
+    knownFields: ['key', 'label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass', FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD],
     requiredFields: ['key', 'label', 'category'],
     // ステップ12d（Q-D確定 2026-09-24）: keyの書式（英大文字2〜4文字）は登録表のvalidateでは
     // 検査しない——未知書式の同梱（他アプリ・将来バージョンの記号等）で読込み全体が例外に
@@ -450,7 +456,8 @@ const REGISTRY = Object.assign(Object.create(null), {
     // 絞り込みキー）のため固定——openingSubTypeと同じ理由。
     keyBoundFields: ['key', 'category', 'mechanism'],
     overrideLockedFields: [],
-    compareFields: ['label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass'],
+    // detailFigures は入れ子のため厳密比較（matchFields には入れない）。
+    compareFields: ['label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass', FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD],
     // Q-B系の割り切り（openingSubTypeのlabelと同型）: 呼称差は通知しない。
     silentDiffFields: ['label'],
     matchFields: ['category', 'mechanism', 'profile', 'defaultMaterialGlass', 'label'],
@@ -472,6 +479,10 @@ const REGISTRY = Object.assign(Object.create(null), {
       if (entry.defaultMaterialGlass !== undefined && entry.defaultMaterialGlass !== null
         && typeof entry.defaultMaterialGlass !== 'string') {
         throw new Error('建具記号エントリのdefaultMaterialGlassが不正です（文字列またはnull/undefinedが必要）');
+      }
+      const detailFigures = entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
+      if (detailFigures !== undefined && detailFigures !== null && !isPlainObject(detailFigures)) {
+        throw new Error(`建具記号エントリの${FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD}が不正です（オブジェクトまたはnull/undefinedが必要）`);
       }
     },
     // 場面(c)unsupported: mechanismは「無し」または三方枠専用スコープ'frameOnly'のみ既知
@@ -575,6 +586,57 @@ const REGISTRY = Object.assign(Object.create(null), {
       }
     },
     loadBuiltin: () => import('../finish/materials/boundaryMasters.js').then(m => Object.values(m.BOUNDARY_MASTERS)),
+  },
+
+  // 部分詳細図（S2。一筆書きのペン命令列で登録する詳細図。形・深い検査は detail/detailModel.js）。
+  [CatalogKind.DETAIL_FIGURE]: {
+    kind: CatalogKind.DETAIL_FIGURE,
+    keyOf: entry => {
+      if (!isNonEmptyString(entry?.key)) {
+        throw new Error(`部分詳細図エントリのkeyが不正です（キーを組み立てられません）: ${JSON.stringify(entry)}`);
+      }
+      return entry.key;
+    },
+    parseKey(key) {
+      if (!isNonEmptyString(key)) throw new Error(`部分詳細図のキーが不正です: ${key}`);
+      return { key };
+    },
+    encoding: 'json',
+    knownFields: ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note'],
+    requiredFields: ['key', 'label', 'category', 'view', 'strokes'],
+    keyBoundFields: ['key'],
+    overrideLockedFields: [],
+    compareFields: ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note'],
+    silentDiffFields: ['label'],
+    // strokes を先頭に置く: 末尾から外す段階的探索でも strokes は最後まで残る（線が違う図を
+    // 呼称・分類だけで「同じもの」と見なさない）。入れ子は厳密比較（規約）。
+    matchFields: ['strokes', 'category', 'view', 'subject', 'label'],
+    minMatchFields: 2,
+    dedupeFields: ['strokes', 'label', 'category', 'view', 'subject'],
+    // 浅い型検査だけ（必須項目の存在・配列か・文字列か）。深い検査（語彙・長さ・Anchor 規則）を例外にすると、
+    // validateBundle の例外で全種別の overlay が立たなくなる——深い検査は isSupported（unsupported 通知）へ。
+    // version・subject・datums・anchors は省略可（省略は isSupported/検証側が扱う）。
+    validate(entry) {
+      requireFields(entry, ['key', 'label', 'category', 'view', 'strokes'], '部分詳細図エントリ');
+      if (!isNonEmptyString(entry.key)) throw new Error('部分詳細図エントリのkeyが不正です（非空文字列が必要）');
+      for (const f of ['label', 'category', 'view']) {
+        if (typeof entry[f] !== 'string') throw new Error(`部分詳細図エントリの${f}が不正です（文字列が必要）`);
+      }
+      if (entry.subject !== undefined && entry.subject !== null && typeof entry.subject !== 'string') {
+        throw new Error('部分詳細図エントリのsubjectが不正です（文字列またはnull/undefinedが必要）');
+      }
+      // null は省略と同値（規約）。isSupported／検証側が扱う。
+      if (entry.version != null && !isFiniteNumber(entry.version)) {
+        throw new Error('部分詳細図エントリのversionが不正です（数値が必要）');
+      }
+      for (const f of ['strokes', 'datums', 'anchors']) {
+        if (entry[f] == null && f !== 'strokes') continue; // strokes は requireFields が欠落（undefined）を弾き済み。null は下で弾く
+        if (!Array.isArray(entry[f])) throw new Error(`部分詳細図エントリの${f}が不正です（配列が必要）`);
+      }
+    },
+    // 読めない図（未知の版・語彙・長さが有限かつ正でない等）は受け入れない（判定は detail/detailModel.js の 1 実装）。
+    isSupported: entry => isSupportedDetailFigure(entry),
+    loadBuiltin: () => import('../detail/detailBuiltins.js').then(m => m.default),
   },
 });
 

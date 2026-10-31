@@ -15,6 +15,21 @@ function material(overrides) {
   };
 }
 
+test('applyReconcilePlan: rewrite が関数の種別（material）では、重複で弾かれた同梱を doc から外さない', async () => {
+  const docEntry = material({ code: '301000000010' });
+  const userEntry = material({ code: '301000000011' }); // dedupeFields（name/spec/x/y/thickness）が同じ別キー
+  setOverlay(CatalogKind.MATERIAL, { doc: [docEntry], user: [userEntry] });
+  const plan = { same: [], adoptDoc: [], aliases: [], proposals: [], adds: [docEntry], unsupported: [] };
+  const removed = [];
+  const result = await applyReconcilePlan(plan, {
+    kind: CatalogKind.MATERIAL, currentUser: [userEntry],
+    commitUserFn: async () => {}, removeDocEntryFn: (k, key) => removed.push([k, key]),
+  });
+  assert.equal(result.skipped.length, 1);
+  assert.equal(removed.length, 0);
+  assert.deepEqual(overlayFor(CatalogKind.MATERIAL).doc, [docEntry]);
+});
+
 // ---- planIncomingReconcile ----
 test('planIncomingReconcile: id一致・内容一致 → same（aliases/adoptDoc/adds/proposalsには積まない）', () => {
   const existing = material();

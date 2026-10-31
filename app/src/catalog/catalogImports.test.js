@@ -68,6 +68,14 @@ test('【不変条件】本体マスタ（finish/materials/・structural/section
   assert.deepEqual(offenders, []);
 });
 
+test('【不変条件】catalogKinds.js は ../detail/detailModel.js を静的importし（判定の 1 実装を共有）、detailBuiltins.js は動的importだけで引く', () => {
+  const lines = fs.readFileSync(path.join(dir, 'catalogKinds.js'), 'utf8').split(/\r?\n/);
+  const staticLine = lines.find(l => /^\s*import /.test(l) && l.includes('../detail/detailModel.js'));
+  assert.ok(staticLine && /isSupportedDetailFigure/.test(staticLine), 'detailModel.js から isSupportedDetailFigure を静的importしていない');
+  assert.ok(!lines.some(l => /^\s*import /.test(l) && l.includes('detailBuiltins.js')), 'detailBuiltins.js が静的importになっている');
+  assert.ok(lines.some(l => l.includes('detailBuiltins.js') && /\bimport\(/.test(l) && !/^\s*import /.test(l)), 'detailBuiltins.js への動的import(...)行が無い');
+});
+
 test('catalogKinds.js: 本体標準マスタ5本への動的import(loadBuiltin thunk)が実在する', () => {
   const lines = fs.readFileSync(path.join(dir, 'catalogKinds.js'), 'utf8').split(/\r?\n/);
   for (const token of ['materialData.js', 'sectionCatalog.js', 'openingCatalog.js', 'interiorMasters.js', 'boundaryMasters.js']) {

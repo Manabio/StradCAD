@@ -207,12 +207,15 @@ test('boundaryMaster: BOUNDARY_MASTERS全件がboundaryMaster.validateを通る'
 
 // ---- 必須テスト T1: 5種別すべて loadBuiltin()→withEntries→validateBundle 無例外・resolveCatalogのsizeが件数と一致 ----
 const EXPECTED_SIZE = { openingSubType: 45, fixtureSymbol: 10 };
+// 本体に標準エントリを持たない種別（部分詳細図は利用者が作る。loadBuiltin は空配列）。
+const EMPTY_BUILTIN_KINDS = new Set([CatalogKind.DETAIL_FIGURE]);
 
 for (const kind of listKinds()) {
   test(`T1 ${kind}: loadBuiltin()の結果がvalidateBundleを無例外で通り、resolveCatalogのsizeが件数と一致する`, async () => {
     const def = kindDef(kind);
     const entries = await def.loadBuiltin();
-    assert.ok(entries.length > 0, `${kind}: loadBuiltin()が空`);
+    if (EMPTY_BUILTIN_KINDS.has(kind)) assert.deepEqual(entries, [], `${kind}: loadBuiltin()は空配列のはず`);
+    else assert.ok(entries.length > 0, `${kind}: loadBuiltin()が空`);
 
     const bundle = withEntries(emptyBundle(), kind, entries);
     assert.doesNotThrow(() => validateBundle(bundle), `${kind}: validateBundleが例外を投げた`);

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { composeCatalog, composeList, originOf, assertNoDuplicatesInMergedWith } from './catalogRegistry.js';
 import { ERR_CATALOG_DUPLICATE } from '../error.js';
+import { valuesEqual } from './catalogMatch.js';
 
 function material(overrides) {
   return {
@@ -95,21 +96,64 @@ test('【失敗系・2026-09-22 QA指摘・Minor】originOf: builtin同士がded
   assert.throws(() => originOf('material', a.code, [a, b]), /既に登録されています/);
 });
 
-// ---- 2026-09-22 QA指摘D・T6: dedupeFieldsに配列・オブジェクトが来たら文字列化比較禁止の規約
-// によりJSON.stringifyでの比較をせず、日本語例外にする。ダミー行（rankCandidatesWithと同じ
+// ---- 2026-09-22 QA指摘D・T6: JSON.stringifyでの比較は禁止。部分詳細図S2で規約変更: 配列・
+// プレーンオブジェクトは構造的に正規化する。非プレーンのオブジェクト・トップレベルのbooleanは日本語例外。ダミー行（rankCandidatesWithと同じ
 // 方式）で凍結された本番登録表を書き換えずに確認する ----
-test('【失敗系・2026-09-22 QA指摘D・T6】assertNoDuplicatesInMergedWith: dedupeFieldsに配列値が来たら「未対応」の例外（JSON.stringify比較はしない）', () => {
+// 部分詳細図S2（案A）: 配列・オブジェクトは入れ子の厳密比較（deepValuesEqualStrict と同値）で重複判定する。
+test('assertNoDuplicatesInMergedWith: dedupeFieldsの配列値は入れ子の厳密比較で重複判定する（同じ中身は重複・違えば通る）', () => {
   const def = { keyOf: e => e.id, dedupeFields: ['layers'] };
-  const a = { id: 'a', layers: [{ x: 1 }] };
-  const b = { id: 'b', layers: [{ x: 1 }] }; // JSON.stringifyすれば同一文字列になるが、比較してはいけない
-  assert.throws(() => assertNoDuplicatesInMergedWith('dummyKind', def, [a, b]), /未対応/);
+  const same = [{ id: 'a', layers: [{ x: 1 }] }, { id: 'b', layers: [{ x: 1 }] }];
+  assert.throws(() => assertNoDuplicatesInMergedWith('dummyKind', def, same), /重複禁止/);
+  const diff = [{ id: 'a', layers: [{ x: 1 }] }, { id: 'b', layers: [{ x: 2 }] }];
+  assert.doesNotThrow(() => assertNoDuplicatesInMergedWith('dummyKind', def, diff));
 });
 
-test('【失敗系・2026-09-22 QA指摘D・T6】assertNoDuplicatesInMergedWith: dedupeFieldsにオブジェクト値が来ても同様に例外', () => {
+test('assertNoDuplicatesInMergedWith: dedupeFieldsのオブジェクト値はキー順に依らず、キーの有無と null/undefined を区別する', () => {
   const def = { keyOf: e => e.id, dedupeFields: ['slideLayout'] };
-  const a = { id: 'a', slideLayout: { tracks: 2 } };
-  const b = { id: 'b', slideLayout: { tracks: 2 } };
-  assert.throws(() => assertNoDuplicatesInMergedWith('dummyKind', def, [a, b]), /未対応/);
+  assert.throws(() => assertNoDuplicatesInMergedWith('dummyKind', def, [
+    { id: 'a', slideLayout: { tracks: 2, fix: true } }, { id: 'b', slideLayout: { fix: true, tracks: 2 } },
+  ]), /重複禁止/);
+  assert.doesNotThrow(() => assertNoDuplicatesInMergedWith('dummyKind', def, [
+    { id: 'a', slideLayout: { tracks: 2 } }, { id: 'b', slideLayout: { tracks: 2, fix: null } },
+  ]));
+  assert.doesNotThrow(() => assertNoDuplicatesInMergedWith('dummyKind', def, [
+    { id: 'a', slideLayout: { tracks: 2 } }, { id: 'b', slideLayout: { tracks: '2' } },
+  ]));
+});
+
+test('assertNoDuplicatesInMergedWith: 入れ子の文字列は前後空白を除いて比べる（catalogMatch の valuesEqual と同値）', () => {
+  const def = { keyOf: e => e.id, dedupeFields: ['layers'] };
+  assert.throws(() => assertNoDuplicatesInMergedWith('dummyKind', def, [
+    { id: 'a', layers: [' x'] }, { id: 'b', layers: ['x'] },
+  ]), /重複禁止/);
+  const def2 = { keyOf: e => e.id, dedupeFields: ['slideLayout'] };
+  assert.throws(() => assertNoDuplicatesInMergedWith('dummyKind', def2, [
+    { id: 'a', slideLayout: { k: 'x ' } }, { id: 'b', slideLayout: { k: 'x' } },
+  ]), /重複禁止/);
+  assert.equal(valuesEqual([' x'], ['x']), true);
+  assert.equal(valuesEqual({ k: 'x ' }, { k: 'x' }), true);
+});
+
+test('assertNoDuplicatesInMergedWith: 長さ接頭辞の衝突と型の区別（別物は例外にならず、-0 と 0 だけ重複）', () => {
+  const def = { keyOf: e => e.id, dedupeFields: ['v'] };
+  const pairs = [
+    [['a,b'], ['a', 'b']],
+    [[['a'], 'b'], [['a', 'b']]],
+    [[{ 'a=1': 1 }], [{ a: '1=1' }]],
+    [[[]], [{}]],
+    [[null], [undefined]],
+    [[1], ['1']],
+  ];
+  for (const [x, y] of pairs) {
+    assert.doesNotThrow(() => assertNoDuplicatesInMergedWith('dummyKind', def, [{ id: 'a', v: x }, { id: 'b', v: y }]), JSON.stringify([x, y]));
+  }
+  assert.throws(() => assertNoDuplicatesInMergedWith('dummyKind', def, [{ id: 'a', v: [-0] }, { id: 'b', v: [0] }]), /重複禁止/);
+  assert.throws(() => assertNoDuplicatesInMergedWith('dummyKind', def, [{ id: 'a', v: [Object.create(null)] }]), /入れ子に未対応/);
+});
+
+test('【失敗系】assertNoDuplicatesInMergedWith: 入れ子の NaN/Infinity は例外（比較不能）', () => {
+  const def = { keyOf: e => e.id, dedupeFields: ['layers'] };
+  assert.throws(() => assertNoDuplicatesInMergedWith('dummyKind', def, [{ id: 'a', layers: [NaN] }]), /NaN\/Infinity/);
 });
 
 test('【失敗系・2026-09-22 QA指摘・Minor】assertNoDuplicatesInMergedWith: dedupeFieldsにboolean値が来ても例外（文言が実際の型(boolean)を言う。配列・オブジェクトに限らず一般化）', () => {

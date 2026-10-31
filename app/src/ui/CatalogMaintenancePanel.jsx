@@ -14,7 +14,7 @@ import {
   buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserCatalogEntry, commitUserEntries,
-  realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel,
+  realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel, formatDetailViewLabel,
   isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY, BACKING_CLASS_OPTIONS,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry,
   materialFormHasDimensions, materialFormHasBackingClass, initialMaterialDimensions,
@@ -69,6 +69,8 @@ const ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', bu
 // READONLY_KIND_FIELDSに残るのは境界マスターのみになった。
 const READONLY_KIND_FIELDS = Object.freeze({
   [CatalogKind.BOUNDARY_MASTER]: Object.freeze(['label', 'kind', 'layers', 'derivedFrom', 'fields']),
+  // 部分詳細図（S2）: 閲覧のみ。strokes 等の図の中身は表示しない（編集・描画プレビューはヘルパー S4）。
+  [CatalogKind.DETAIL_FIGURE]: Object.freeze(['label', 'category', 'view', 'subject', 'provenance']),
 });
 
 /** layers（境界マスター）1件を「役割: コード or src」の1行文字列にする。 */
@@ -95,6 +97,9 @@ function formatReadonlyFieldValue(kind, field, value) {
   }
   if (field === 'category') {
     return formatCategoryLabel(kind, value);
+  }
+  if (kind === CatalogKind.DETAIL_FIGURE && field === 'view') {
+    return formatDetailViewLabel(value);
   }
   return formatReadonlyValue(value);
 }

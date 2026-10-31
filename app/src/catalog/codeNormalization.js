@@ -13,6 +13,7 @@
 // ================================================================
 
 import { LEGACY_MATERIAL_CODE_ALIASES } from './legacyMaterialCodes.js';
+import { CatalogKind } from './catalogKinds.js';
 import { ROOF_ZONE_SPEC_LOCATION } from '../core/constants.js';
 
 /**
@@ -588,7 +589,7 @@ function rewriteFixtureSymbolRefs(snapshot, table) {
  * enumerate は catalog/usedEntries.js collectUsedKeys（保存時の使用キー収集）と
  * applyDocumentCodeNormalization の unresolved 検出が共有する。rewrite が null の種別は
  * まだ参照の書換え先を持たない——setDocumentAliases/addDocumentAliases でその種別に非空の
- * aliasesを積もうとすると例外になる（ステップ10bで全5種別のrewriteが出揃い、現状該当なし）。
+ * aliasesを積もうとすると例外になる（ステップ10bで全5種別のrewriteが出揃い、部分詳細図 detailFigure が該当。S6 で rewrite を入れる予定）。
  */
 export const SNAPSHOT_REF_WALKERS = Object.freeze({
   material: Object.freeze({
@@ -614,6 +615,13 @@ export const SNAPSHOT_REF_WALKERS = Object.freeze({
   fixtureSymbol: Object.freeze({
     enumerate: enumerateFixtureSymbolRefs,
     rewrite: rewriteFixtureSymbolRefs,
+  }),
+  // 部分詳細図: スナップショットからの参照はまだ無い（S2）。書換え先が無いので rewrite:null
+  // （非空の alias を積むと setDocumentAliases が例外にする＝黙って効かない読み替えを作らない）。
+  // S6 以降が enumerate に列挙を足し、S6 で実際の rewrite を入れる。
+  [CatalogKind.DETAIL_FIGURE]: Object.freeze({
+    enumerate: () => [],
+    rewrite: null,
   }),
 });
 
@@ -770,7 +778,7 @@ export function peekUnresolvedCodes() {
 /**
  * 実効中の正規化表を snapshot に適用する（全種別。文書固有の表が無ければ種別ごとの
  * 本体表だけで正規化する。material以外は本体表が空のため、文書固有の読み替えが無ければ
- * 実質no-op）。rewrite:null の種別（現状該当なし。ステップ10bでopeningSubTypeも実装済み）は
+ * 実質no-op）。rewrite:null の種別（現状は部分詳細図 detailFigure。S6 で rewrite を入れる予定）は
  * ここでは読み飛ばす（enumerateは別途 collectUsedKeys 等が使う）。
  * 未解決コードは kind+code+location（`unresolvedDedupeKey`）で重複排除して蓄積する——同じ
  * snapshot（階）を繰り返し適用しても（undo/redo・再読込み等）蓄積が単調増加しない。

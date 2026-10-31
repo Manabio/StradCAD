@@ -648,6 +648,10 @@ export const DetailDash = Object.freeze({
 });
 /** DetailFigure.version（前方互換。未知の版は読み飛ばす）。 */
 export const DETAIL_FIGURE_VERSION = 1;
+/** 建具記号エントリの任意項目名。{ [DetailSlot.JAMB]?: 詳細図キー, [DetailSlot.HEAD]?: 詳細図キー }（R4）。カタログ登録表と推移展開が使う。 */
+export const FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD = 'detailFigures';
+/** 詳細図キーの接頭辞（S4 の生成が使う。S2 の登録表は書式を検査しない）。 */
+export const DETAIL_FIGURE_KEY_PREFIX = 'df-';
 /** 詳細図由来のプリミティブに付ける出どころの印（source。kind は立面が上書きするので使わない）。 */
 export const DETAIL_PRIM_SOURCE = 'detail';
 /** fit の長さ比較の許容（mm）。elevationStyle.js の COORD_EPS_MM と同値だが、detail/ は elevation/ を引けないので別定義。 */
