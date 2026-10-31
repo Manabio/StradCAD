@@ -14,8 +14,13 @@
 // 壁は本番の仕上げ脱出境界（runFinishExitBoundary。makeCeilingSteelStairTestDoc.mjs と同じ手順）で生成する。
 // 書き出し前に往復テスト（書いて読み直して壁・部屋・建具のダイジェスト一致）。NG は終了コード 1。
 //
-// 使い方: node --import ./scripts/testSetup.mjs scripts/probe/makeFrameOnlySectionTestDoc.mjs [出力先.stq]
-// 既存ファイルは上書きしない。
+// --detail（部分詳細図 S3）: 木製三方枠 WF の同梱カタログ（overridesBuiltin 無しの doc エントリ。detailFigures に
+// jamb／head の詳細図キー）と詳細図 2 つ（コの字の方立 df-test-jamb・閉じた上枠 df-test-head。図は
+// src/openings/openingDetailTestFixtures.js と同じ）を .stq に同梱する。WF の 2 件（既定の見付20／出幅12 と
+// 見付40／出幅30）は平面（詳細 LOD）の方立と展開図の上枠が詳細図の形で描かれ、SF・SSF は従来のまま。
+//
+// 使い方: node --import ./scripts/testSetup.mjs scripts/probe/makeFrameOnlySectionTestDoc.mjs [出力先.stq] [--detail] [--out 出力先.stq]
+// 既存ファイルは上書きしない。--detail の出力先の既定は D:/tatsuya/Download/frame-only-detail-test.stq。
 import fs from 'node:fs';
 import { Project, CenterLineType, Discipline, OpeningCategory } from '../../src/core.js';
 import { serializeGraph, serializeStructCLs, serializePlanes, restoreGraph, restoreStructCLs, decodePlanes } from '../../src/graphSnapshot.js';
@@ -25,8 +30,15 @@ import { loadMaterialMap } from '../../src/finish/wallRegeneration.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { findHostWall, wallFaceRange } from '../../src/openings/openingGeometry.js';
 import { loadDocument } from './loadDoc.mjs';
+import { emptyBundle, withEntries } from '../../src/catalog/catalogBundle.js';
+import { CatalogKind } from '../../src/catalog/catalogKinds.js';
+import { jambFigure, headFigure } from '../../src/openings/openingDetailTestFixtures.js';
 
-const outPath = process.argv[2] ?? 'D:/tatsuya/Download/frame-only-section-test.stq';
+const args = process.argv.slice(2);
+const detail = args.includes('--detail');
+const outIndex = args.indexOf('--out');
+const outPath = (outIndex >= 0 ? args[outIndex + 1] : args.find(a => !a.startsWith('--')))
+  ?? (detail ? 'D:/tatsuya/Download/frame-only-detail-test.stq' : 'D:/tatsuya/Download/frame-only-section-test.stq');
 if (fs.existsSync(outPath)) {
   console.error(`既存ファイルを上書きしません: ${outPath}`);
   process.exit(1);
@@ -145,7 +157,16 @@ function digestProject(proj) {
 }
 const floors = [{ planeId: plane.id, bytes: serializeGraph(g) }];
 const struct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
-const json = buildDocumentJson({ floors, struct, planes: serializePlanes(project), site: null, info: null, bootPlaneId: plane.id });
+// --detail: WF（doc 層・overridesBuiltin 無し）と詳細図 2 つを同梱する（本体と同じ項目に detailFigures だけ足す）。
+let catalogs = null;
+if (detail) {
+  catalogs = withEntries(emptyBundle(), CatalogKind.FIXTURE_SYMBOL, [{
+    key: 'WF', label: 'WF（木製三方枠）', category: 'fitting', mechanism: 'frameOnly', profile: 'solid',
+    defaultMaterialGlass: '木製', detailFigures: { jamb: 'df-test-jamb', head: 'df-test-head' },
+  }]);
+  catalogs = withEntries(catalogs, CatalogKind.DETAIL_FIGURE, [jambFigure('df-test-jamb'), headFigure('df-test-head')]);
+}
+const json = buildDocumentJson({ floors, struct, planes: serializePlanes(project), site: null, info: null, bootPlaneId: plane.id, catalogs });
 {
   const doc = parseDocumentEnvelope(JSON.parse(json));
   const project2 = new Project('probe', 'probe');
@@ -160,6 +181,13 @@ const json = buildDocumentJson({ floors, struct, planes: serializePlanes(project
   }
   if (activePlaneId && project2.planeMap.has(activePlaneId)) project2.activePlaneId = activePlaneId;
   check(digestProject(project) === digestProject(project2), '往復テスト一致（壁・部屋・三方枠のダイジェスト）');
+  if (detail) {
+    const syms = doc.catalogs?.catalogs?.[CatalogKind.FIXTURE_SYMBOL] ?? [];
+    const figs = doc.catalogs?.catalogs?.[CatalogKind.DETAIL_FIGURE] ?? [];
+    check(syms.length === 1 && syms[0].key === 'WF' && syms[0].detailFigures?.jamb === 'df-test-jamb' && !syms[0].overridesBuiltin,
+      '同梱の WF（overridesBuiltin 無し）が detailFigures を持って往復する');
+    check(figs.map(f => f.key).sort().join(',') === 'df-test-head,df-test-jamb', '詳細図 2 つが往復する');
+  }
 }
 if (failed) process.exit(1);
 fs.writeFileSync(outPath, json);

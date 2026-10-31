@@ -59,8 +59,11 @@ import {
   swingClosedLeafSpan, closedAngleFor, leafOpenAngle, angleVectors,
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   trackOf, trackPerp, resolveSlideLayoutPanels, foldZigzagPoints, frameOnlyJambProfiles,
+  frameOnlyPerpRange, clampFrameFaceWidth,
   DOOR_OPEN_ANGLE_DEG, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
+import { resolveDetailFrame } from './openingDetailFit.js';
+import { DetailSlot } from '../core/constants.js';
 import { fixtureSymbolOf, effectiveFrameFaceWidth, effectiveFrameProjection } from './openingNumbering.js';
 import { LodLevel } from '../viewport.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
@@ -592,11 +595,26 @@ function buildSashGroupPrimitives(opening, entry, lodLevel, band, detail, axisVa
 // OpeningsLayer.jsx）の挙動は不変（openingPlanSymbolProbe.mjs 通常3本・--sweep 3本で確認済み）。
 // 呼び出し元はui/catalogPreview.js fixtureSymbolPreview——保存前のフォームドラフト（ライブラリに
 // 未登録のkey・未保存の別profile上書き）でも、選んだprofileどおりに方立の断面を描き分けるため。
+//
+// 部分詳細図（S3）: 建具個別の detailRefs ＞ 記号の detailFigures の順で jamb の詳細図が割り当てられていれば、
+// その図を（壁厚・出幅・見付）へ fit して写した点列を frameOnlyJambProfiles の detail として渡す。図が無い・
+// fit に失敗したら profile（frameProfile 明示 ＞ 記号の profile。solid/bent）で描く（黙って戻す。通知は
+// 建具モード・展開モードの init。平面では出さない＝R21）。frameProfile は詳細図の可否には効かない
+// （フォームの下書きプレビューも詳細図で描く）。
 function frameOnlyPrimitives(opening, faceLo, faceHi, axisValue, frameWeight) {
-  const profile = opening.frameProfile ?? frameProfileFor(fixtureSymbolOf(opening));
+  const symbolKey = fixtureSymbolOf(opening);
+  const profile = opening.frameProfile ?? frameProfileFor(symbolKey);
+  const faceWidth = effectiveFrameFaceWidth(opening);
+  const projection = effectiveFrameProjection(opening);
+  const { faceMin, faceMax } = frameOnlyPerpRange({ faceLo, faceHi, axisValue, projection });
+  const resolved = resolveDetailFrame({
+    symbolKey, detailRefs: opening.detailRefs ?? null, slot: DetailSlot.JAMB,
+    coord1: opening.coord1, coord2: opening.coord2, faceMin, wallThickness: faceMax - faceMin,
+    faceWidth: clampFrameFaceWidth(faceWidth, opening.coord1, opening.coord2), projection,
+  });
   const jambs = frameOnlyJambProfiles({
     coord1: opening.coord1, coord2: opening.coord2, faceLo, faceHi, axisValue,
-    faceWidth: effectiveFrameFaceWidth(opening), projection: effectiveFrameProjection(opening), profile,
+    faceWidth, projection, profile, detail: resolved && !resolved.error ? resolved.profiles : null,
   });
   return jambs.map(jamb => polylinePrim('frame', frameWeight, jamb.points.flatMap(({ along, perp }) => {
     const p = toWorld(opening.isVertical, along, perp);

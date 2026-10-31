@@ -10,6 +10,8 @@ import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { placeOpeningWithDefaults } from '../openings/openingEdit.js';
 import { ElevationModeState } from './ElevationModeState.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { clearOverlays } from '../catalog/catalogRegistry.js';
+import { jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol } from '../openings/openingDetailTestFixtures.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
 import { buildRoomFaces } from '../elevation/elevationFaces.js';
 import { structuralColumnContribution } from '../elevation/section/sectionStructure.js';
@@ -309,6 +311,95 @@ test('【項目3】ElevationModeState: 建具の幅を変更すると帯が再�
   assert.notEqual(state.bands, bandsRefBefore, '帯（配列参照）が再構築されているはず');
   const rectAfter = state.bands[0].primitives.find(p => p.type === 'rect' && p.w === opening.width);
   assert.ok(rectAfter, '変更後の幅(+200)で建具の姿(rect)が見つかるはず（展開図への即時反映）');
+});
+
+// ---- 部分詳細図 S3: 三方枠の詳細図が上枠の寸法に合わせられないときの通知（materialError 経由・init で1回だけ）----
+function graphWithFrames(symbolKey, props = [{}]) {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const project = { openingNumberIndex: new Map() };
+  const wall = [...graph.walls][0];
+  props.forEach((p, i) => {
+    const { opening, error } = placeOpeningWithDefaults(
+      graph, project, wall, { x: wall.isVertical ? 0 : 800 + i * 1200, y: wall.isVertical ? 800 + i * 1200 : 0 }, OpeningCategory.FITTING,
+    );
+    assert.ok(opening && !error, `前提: 開口を配置できるはず（${error}）`);
+    runInAction(() => { Object.assign(opening, { subType: 'threeSidedFrame', fixtureType: symbolKey, width: 800, ...p }); });
+  });
+  return { graph, project };
+}
+
+test('ElevationModeState.init: 三方枠の詳細図が合わせられないと materialError に通知文が1件載る（ok は帯の構築結果のまま）', async () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: materialBoundFigure('df-elev-1') });
+  try {
+    const { graph, project } = graphWithFrames(sym);
+    const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    const result = await state.init();
+    assert.equal(result.ok, true, '通知は図面の構築失敗ではない');
+    assert.equal(result.error, null);
+    assert.match(state.materialError, new RegExp(`^詳細図 材束縛の方立 を ${sym} の上枠に合わせられません: `), '展開は上枠の分だけ');
+    assert.ok(!state.materialError.includes('ほか'), '1組だけなら件数を添えない');
+    assert.equal(state.bands.length, 1, '図面は既定の断面で描かれて止まらない');
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('ElevationModeState.init: 失敗が複数の組にまたがるときは最初の1件に「ほかN件」を添えて1回だけ載せる', async () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: materialBoundFigure('df-elev-2') });
+  try {
+    const { graph, project } = graphWithFrames(sym, [{}, { frameProjection: 30 }, { frameProjection: 25 }]);
+    const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    await state.init();
+    assert.match(state.materialError, /（ほか2件）$/);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('【失敗系】ElevationModeState.init: 帯の構築エラーがあれば、詳細図の通知より構築エラーの文言が materialError に残る（ok も false）', async () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: materialBoundFigure('df-elev-3') });
+  try {
+    const { graph, project } = graphWithFrames(sym);
+    const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    state._buildBands = () => ({ bands: [], error: '帯の構築に失敗しました（テスト）' });
+    const result = await state.init();
+    assert.equal(result.ok, false);
+    assert.equal(state.materialError, '帯の構築に失敗しました（テスト）');
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('ElevationModeState.init: 展開は上枠が実際に使う図だけ試す（jamb が材束縛でも head が正常なら通知しない）', async () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: materialBoundFigure('df-elev-4j'), head: headFigure('df-elev-4h') });
+  try {
+    const { graph, project } = graphWithFrames(sym);
+    const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    await state.init();
+    assert.equal(state.materialError, null);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('【失敗系】ElevationModeState.init: 詳細図が合わせられる・割当て無しの三方枠では通知しない（materialError は null のまま）', async () => {
+  const ok = uniqueSymbolKey();
+  installFrameSymbol(ok, { jamb: jambFigure('df-elev-ok') });
+  try {
+    for (const sym of [ok, 'WF']) {
+      const { graph, project } = graphWithFrames(sym);
+      const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+      await state.init();
+      assert.equal(state.materialError, null, sym);
+    }
+  } finally {
+    clearOverlays();
+  }
 });
 
 // ---- 失敗系: 建具データと無関係な変更（部屋名等）では帯を再構築しない ----

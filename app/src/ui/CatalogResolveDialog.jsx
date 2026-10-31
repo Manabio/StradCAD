@@ -12,6 +12,7 @@ const SCENARIO_LABELS = Object.freeze({
   'unresolved-code':  '(b) 未解決の参照',
   unsupported:        '(c) 未対応の項目',
   propose:            '類似項目の提案',
+  'detail-fit-failed': '詳細図を合わせられません',
 });
 
 // ステップ7d QA指摘Minor-2: 「材料」固定の文言を種別非依存にする（材以外の行でも意味が通るように）。
@@ -117,6 +118,7 @@ function ResolveRow({ row, decision, onChange, builtinListByKind }) {
         <span className="catresolve-target-key">{row.targetKey}</span>
       </div>
       {usage && <div className="catresolve-usage">参照箇所: {usage}</div>}
+      {row.message && <div className="catresolve-usage">{row.message}</div>}
 
       {diffs.length > 0 && (
         <div className="catresolve-diffs">
@@ -128,7 +130,7 @@ function ResolveRow({ row, decision, onChange, builtinListByKind }) {
         </div>
       )}
 
-      {row.candidates.length === 0 && row.scenario !== 'library-conflict' && (
+      {row.candidates.length === 0 && row.scenario !== 'library-conflict' && row.scenario !== 'detail-fit-failed' && (
         <div className="catresolve-no-candidate">候補なし</div>
       )}
 

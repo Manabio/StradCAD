@@ -15,6 +15,10 @@
 
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog, composeList, overlayGeneration } from '../catalog/catalogRegistry.js';
+import { DetailSlot, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
+import { fitLocal } from '../detail/detailPlacement.js';
+import { ERR_DETAIL_FIGURE_NOT_FOUND } from '../error.js';
+import { detailFrameTargets, detailFrameFail, DetailFrameError } from './openingDetailFrame.js';
 
 export const OpeningMechanism = Object.freeze({
   SWING:        'swing',       // 1枚の扉が蝶番で回転して開く
@@ -277,6 +281,91 @@ export function findFixtureSymbol(key) {
 /** 建具記号の平面断面プロファイル（frameOnlyJambProfiles参照）。未定義の記号は'solid'。唯一の定義箇所。 */
 export function frameProfileFor(symbol) {
   return findFixtureSymbol(symbol)?.profile ?? 'solid';
+}
+
+// ---- 部分詳細図（detailFigure）の読み出し口とメモ（部分詳細図 S3）----
+// 建具記号エントリの detailFigures（{jamb?, head?}＝詳細図キー）を引き、図を fitLocal で三方枠の寸法に合わせる。
+// 世代キー（overlayGeneration）でメモ化する流儀は fixtureSymbolMap と同じ。メモするのは **fitLocal の結果だけ**
+// （局所座標。鍵に位置が無い）。placeStrokes（図座標への写像）は毎回呼び出し側で行う。消費側は別キャッシュを持たない。
+let _detailFigureMap = null;
+let _detailFigureGen = -1;
+
+function detailFigureMap() {
+  const gen = overlayGeneration();
+  if (_detailFigureMap === null || _detailFigureGen !== gen) {
+    // 本体（builtin）は空＝detail/detailBuiltins.js が空である S1 の設計が前提。本体に標準の図が入ったら、
+    // [] ではなく kindDef(CatalogKind.DETAIL_FIGURE).loadBuiltin() の結果を渡す口に変えること。
+    _detailFigureMap = composeCatalog(CatalogKind.DETAIL_FIGURE, []);
+    _detailFigureGen = gen;
+  }
+  return _detailFigureMap;
+}
+
+/** 詳細図キー → エントリ（三層合成後。無ければnull）。 */
+export function detailFigureEntry(key) {
+  if (typeof key !== 'string' || key === '') return null;
+  return detailFigureMap().get(key) ?? null;
+}
+
+/** 建具記号が参照する詳細図キー {jamb?, head?}（空でない文字列だけ。図の有無は見ない）。1つも無ければnull。 */
+export function detailFigureRefsFor(symbolKey) {
+  const refs = findFixtureSymbol(symbolKey)?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
+  if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) return null;
+  const out = {};
+  for (const slot of [DetailSlot.JAMB, DetailSlot.HEAD]) {
+    const key = refs[slot];
+    if (typeof key === 'string' && key !== '') out[slot] = key;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** 建具記号が参照する詳細図のうちカタログに実在するもの {jamb?: entry, head?: entry}。1つも無ければnull。 */
+export function detailFiguresFor(symbolKey) {
+  const refs = detailFigureRefsFor(symbolKey);
+  if (!refs) return null;
+  const out = {};
+  for (const [slot, key] of Object.entries(refs)) {
+    const entry = detailFigureEntry(key);
+    if (entry) out[slot] = entry;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+let _detailFitMemo = new Map();
+let _detailFitGen = -1;
+
+// 鍵の丸め（1e-6 mm）。同形のローカル関数が stairClassify.js:277・planSectionFigure.js:316 にもある
+// （共有ヘルパー化は別課題）。鍵の区切り '|' は openingNumbering.js の signature と同じ流儀。
+const roundMm = v => Math.round(v * 1e6) / 1e6; // 1e-6 mm で丸める（壁厚 (a+t)−a のような 1ULP の差で鍵が割れないように）
+
+/** fit の鍵（図のキー・slot・壁厚・出幅・見付）。メモと、建具モード・展開モードの重複排除（openingDetailFitCheck.js）が共有する唯一の組み立て。 */
+export function detailFitKey({ figureKey, slot, wallThickness, projection, faceWidth }) {
+  return [figureKey, slot, roundMm(wallThickness), roundMm(projection), roundMm(faceWidth)].join('|');
+}
+
+/**
+ * 詳細図（図のキー）を（壁厚・出幅・見付）に合わせた局所座標の頂点列（fitLocal の結果）。失敗は {error:{code,message}}
+ * （例外にしない。図が無い場合も NO_FIGURE）。faceWidth は開口半幅で頭打ちにした後の値。
+ * 鍵は記号ではなく図のキー——割当ての経路（建具個別の detailRefs か記号の detailFigures か）によらず同じ図ならメモを共有する。
+ * 世代キー（overlayGeneration）が変わると Map ごと作り直す。
+ * @returns {{strokes: object[], warnings: object[]} | {error:{code:string, message:string}}}
+ */
+export function fitDetailLocalMemo({ figureKey, slot, wallThickness, projection, faceWidth }) {
+  const gen = overlayGeneration();
+  if (_detailFitGen !== gen) { _detailFitMemo = new Map(); _detailFitGen = gen; }
+  const memoKey = detailFitKey({ figureKey, slot, wallThickness, projection, faceWidth });
+  const hit = _detailFitMemo.get(memoKey);
+  if (hit !== undefined) return hit;
+  const entry = detailFigureEntry(figureKey);
+  let result;
+  if (!entry) {
+    result = detailFrameFail(DetailFrameError.NO_FIGURE, ERR_DETAIL_FIGURE_NOT_FOUND(figureKey, slot));
+  } else {
+    const t = detailFrameTargets(entry, { wallThickness, faceWidth, projection });
+    result = t.error ? t : fitLocal(entry, t.targets);
+  }
+  _detailFitMemo.set(memoKey, result);
+  return result;
 }
 
 /**

@@ -30,6 +30,9 @@ import {
 import { DEFAULT_PX_PER_MM as DEFAULT_SCREEN_PX_PER_MM, resolveLineWeightsPx } from '../viewport.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
+import { collectDetailFitFailures } from '../openings/openingDetailFitCheck.js';
+import { ERR_DETAIL_FIT_FAILED_MORE } from '../error.js';
+import { DetailSlot } from '../core/constants.js';
 
 // 項目2: 階ごとのビュー位置記憶（Map<floorId, {focusedRoomId, precedingRoomId, scrollY,
 // faceScroll}>）。セッション内のメモリ保持のみ（IDB永続化なし。undo・graph変更とは無関係の
@@ -141,10 +144,13 @@ export class ElevationModeState {
       this._upperUpperGraph = upperUpperGraph;
 
       const { bands, error } = this._buildBands();
+      // 三方枠の部分詳細図が上枠の寸法に合わせられないときの通知（FacadeModeState と同じ materialError 経由で1回だけ。
+      // 毎レンダー経路からは出さない）。帯の構築エラーがあればそちらを優先する（ok の判定も構築エラーだけ）。
+      const detailFitMessage = this._detailFitMessage();
       runInAction(() => {
         this.bands        = bands;
         this.loading      = false;
-        this.materialError = error;
+        this.materialError = error ?? detailFitMessage;
       });
       this._restoreView();
       // 項目3: 建具データ（graph.openings内の各Openingの表示に効くフィールド）の変更を監視し、
@@ -177,6 +183,25 @@ export class ElevationModeState {
         this.materialError = message;
       });
       return { ok: false, error: message };
+    }
+  }
+
+  /**
+   * 自階（展開図に描く階）の三方枠で、部分詳細図が上枠の寸法に合わせられないものの通知文（無ければnull）。
+   * 最初の1件の文言に残りの件数を添える。集計の失敗は展開図を止める理由にしない（nullを返す）。
+   * @returns {string|null}
+   */
+  _detailFitMessage() {
+    try {
+      // 展開の断面が実際に使う上枠の分だけ試す（head の図があれば head、無ければ jamb の流用。平面の方立は対象外）。
+      const failures = collectDetailFitFailures(this.graph, undefined, { slots: [DetailSlot.HEAD] });
+      if (failures.length === 0) return null;
+      return failures.length === 1
+        ? failures[0].message
+        : ERR_DETAIL_FIT_FAILED_MORE(failures[0].message, failures.length - 1);
+    } catch (err) {
+      console.error('[elevation] 三方枠の詳細図の合わせ込み検査に失敗:', err);
+      return null;
     }
   }
 

@@ -347,6 +347,11 @@ export function frameOnlyPerpRange({ faceLo, faceHi, axisValue, projection }) {
   return { faceMin, faceMax, lo, hi, depth: hi - lo };
 }
 
+/** 三方枠の見付を開口半幅で頭打ちにする（方立同士の交差回避。frameOnlyJambProfiles と詳細図の fit が共有）。 */
+export function clampFrameFaceWidth(faceWidth, coord1, coord2) {
+  return Math.min(faceWidth, (coord2 - coord1) / 2);
+}
+
 /**
  * 三方枠（FRAME_ONLY）の平面記号——方立2本（開口の両端）を along（壁長さ方向）/perp（壁厚方向）
  * 座標のポリラインとして返す。見付＝壁長さ方向の寸法（faceWidth）、出幅＝仕上げ面から室内外へ
@@ -362,12 +367,16 @@ export function frameOnlyPerpRange({ faceLo, faceHi, axisValue, projection }) {
  * @param {number} p.faceWidth 見付(mm)
  * @param {number} p.projection 出幅(mm)
  * @param {'solid'|'bent'} p.profile frameProfileFor参照
- * @returns {[{points:{along:number,perp:number}[], closed:boolean}, {points:{along:number,perp:number}[], closed:boolean}]}
+ * @param {{points:{along:number,perp:number}[], closed:boolean}[]|null} [p.detail]
+ *   部分詳細図（openings/openingDetailFit.js resolveDetailFrame）が写像済みの方立の線の列。あればそのまま返す
+ *   （鏡像・見付クランプは呼び出し側。profile・faceWidth は見ない）。無ければ従来の solid/bent。
+ * @returns {{points:{along:number,perp:number}[], closed:boolean}[]} 従来は方立2本。detail 指定時は図のストローク数ぶん
  */
-export function frameOnlyJambProfiles({ coord1, coord2, faceLo, faceHi, axisValue, faceWidth, projection, profile }) {
+export function frameOnlyJambProfiles({ coord1, coord2, faceLo, faceHi, axisValue, faceWidth, projection, profile, detail = null }) {
+  if (detail) return detail;
   const { faceMin, faceMax, lo: perpLo, hi: perpHi } = frameOnlyPerpRange({ faceLo, faceHi, axisValue, projection });
   // 幅の狭い開口で方立同士が交差しないよう、見付をopening半幅でクランプする。
-  const fw = Math.min(faceWidth, (coord2 - coord1) / 2);
+  const fw = clampFrameFaceWidth(faceWidth, coord1, coord2);
 
   function jamb(outer, dir) {
     const inner = outer + dir * fw;

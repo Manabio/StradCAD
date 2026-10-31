@@ -13,6 +13,7 @@
  */
 import { effectiveHeight, effectiveFrameProjection, fixtureSymbolOf } from './openingNumbering.js';
 import { OpeningCategory } from '@core';
+import { DetailSlot } from '../core/constants.js';
 import { graphList } from '../graphReadScope.js';
 import { rect as rectPrim, line as linePrim, polyline as polylinePrim } from '../elevation/elevationPrimitives.js';
 import { findCatalogEntry, frameProfileFor, OpeningMechanism } from './openingCatalog.js';
@@ -20,8 +21,9 @@ import { findHostWall, wallFaceRange } from './openingGeometry.js';
 import { frameOnlyInnerRect } from './openingElevationFigure.js';
 import {
   FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM, FRAME_OVERHANG_MM,
-  swingOpenPerpDir, frameOnlyPerpRange, frameOnlyJambProfiles,
+  swingOpenPerpDir, frameOnlyPerpRange, frameOnlyJambProfiles, clampFrameFaceWidth,
 } from './openingPlanSymbolGeometry.js';
+import { resolveDetailFrame } from './openingDetailFit.js';
 
 // 従来の断面帯（枠40＋扉40＋枠40）。描き方の指定が無い建具はこのまま。
 const LEGACY_FRAME_W = 40;
@@ -205,22 +207,36 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
     const full = openingSectionWidthMm(o, opts);
     const t = full - proj * 2;
     const fw = frameOnlyInnerRect(o).fw;
-    const profile = o.frameProfile ?? frameProfileFor(fixtureSymbolOf(o));
-    const [head] = frameOnlyJambProfiles({
-      coord1: top, coord2: sillTop, faceLo: proj, faceHi: proj + t, axisValue: 0,
-      faceWidth: fw, projection: proj, profile,
+    const symbolKey = fixtureSymbolOf(o);
+    const profile = o.frameProfile ?? frameProfileFor(symbolKey);
+    // 部分詳細図（S3）: head（無ければ jamb。R9）の図を、**平面の点列を流用せず**この断面の寸法
+    // （coord1=上端・coord2=開口下端・面=proj〜proj+t）で fit し直す。建具個別の detailRefs ＞ 記号の割当て。
+    // 図が無い・失敗は profile（frameProfile 明示 ＞ 記号の profile）へ戻す（通知は init）。壁厚は呼び出し側の値を
+    // そのまま渡す（t = full − 2·proj の再計算は集計側の値と 1ULP ずれて鍵が二重になるため）。
+    const resolved = resolveDetailFrame({
+      symbolKey, detailRefs: o.detailRefs ?? null, slot: DetailSlot.HEAD, coord1: top, coord2: sillTop, faceMin: proj,
+      wallThickness: Number.isFinite(opts.wallThicknessMm) ? opts.wallThicknessMm : FALLBACK_WALL_THICKNESS_MM,
+      faceWidth: clampFrameFaceWidth(fw, top, sillTop), projection: proj,
     });
-    const headPrim = head.closed
-      ? rect(
-        Math.min(...head.points.map(p => p.perp)), Math.max(...head.points.map(p => p.perp)),
-        Math.min(...head.points.map(p => p.along)), Math.max(...head.points.map(p => p.along)), cutWeight)
-      : polylinePrim(head.points.map(p => [at(p.perp), p.along]), { weight: cutWeight });
+    const detail = resolved && !resolved.error ? resolved : null;
+    // 上枠の線は coord1 側（上端から下へ見付）だけ。detail は図のストローク数ぶん、従来は1本。
+    const heads = frameOnlyJambProfiles({
+      coord1: top, coord2: sillTop, faceLo: proj, faceHi: proj + t, axisValue: 0,
+      faceWidth: fw, projection: proj, profile, detail: detail?.profiles ?? null,
+    }).slice(0, detail ? detail.sides[0].length : 1);
+    const headPrims = heads.map(head => (detail
+      ? polylinePrim([...head.points, ...(head.closed ? [head.points[0]] : [])].map(p => [at(p.perp), p.along]), { weight: cutWeight })
+      : head.closed
+        ? rect(
+          Math.min(...head.points.map(p => p.perp)), Math.max(...head.points.map(p => p.perp)),
+          Math.min(...head.points.map(p => p.along)), Math.max(...head.points.map(p => p.along)), cutWeight)
+        : polylinePrim(head.points.map(p => [at(p.perp), p.along]), { weight: cutWeight })));
     // 竪枠の見えがかり: 開口を覗くと左右の竪枠の見込面が奥まで見え、枠の外縁が縦線2本に現れる（上枠の下端から床まで）。
     // 見えがかりなので細線（detailWeight。呼び出し側が渡さなければ中線）。
     const jambBottom = top + fw;
     const jambWeight = opts.detailWeight ?? silhouetteWeight;
     return [
-      headPrim,
+      ...headPrims,
       linePrim(at(0), jambBottom, at(0), sillTop, { weight: jambWeight }),
       linePrim(at(full), jambBottom, at(full), sillTop, { weight: jambWeight }),
     ];

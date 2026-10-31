@@ -4,6 +4,7 @@ import { composeCatalog } from '../catalog/catalogRegistry.js';
 import { buildResolveRows } from '../catalog/resolveQueue.js';
 import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes } from '../catalog/codeNormalization.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { collectDetailFitFailures } from '../openings/openingDetailFitCheck.js';
 
 /**
  * unresolved配列（{code, location:'opening', openingId}[]）を `${code}::${openingId}` で
@@ -79,7 +80,7 @@ export class OpeningModeState {
     const subTypeMap = composeCatalog(CatalogKind.OPENING_SUB_TYPE, builtin);
     const fixtureBuiltin = await kindDef(CatalogKind.FIXTURE_SYMBOL).loadBuiltin();
     const fixtureMap = composeCatalog(CatalogKind.FIXTURE_SYMBOL, fixtureBuiltin);
-    const { subTypeUsage: missingUsage, fixtureUsage: missingFixtureUsage } =
+    const { subTypeUsage: missingUsage, fixtureUsage: missingFixtureUsage, detailFitFailures } =
       await this._missingOpeningUsage(subTypeMap, fixtureMap);
 
     // 10b QA指摘Minor-3/4申し送り: peekUnresolvedCodes()（全階累積・全種別）をkindでフィルタし、
@@ -116,6 +117,8 @@ export class OpeningModeState {
     const fixtureRows = buildResolveRows({
       kind: CatalogKind.FIXTURE_SYMBOL,
       unresolved: dedupeOpeningUsageByOpeningId([...missingFixtureUsage, ...stillUnresolvedFixture]),
+      // 部分詳細図を三方枠の寸法に合わせられない通知（場面 detail-fit-failed。fixtureSymbol の kind に載せる）
+      detailFitFailures,
       appEntries: [...fixtureMap.values()],
     });
 
@@ -139,12 +142,21 @@ export class OpeningModeState {
    * scanだけを飛ばして続行する（refreshWallsAllFloors=wallRefresh.jsのpeekスキップ規約と同型。
    * 1階でもIDB読込みに失敗するとinit()全体がrejectし、App.jsxの共通.catchはトースト通知のみで
    * setModeされない＝建具モードに一切入れなくなる退行を防ぐ）。
-   * @returns {Promise<{ subTypeUsage: object[], fixtureUsage: object[] }>}
+   * @returns {Promise<{ subTypeUsage: object[], fixtureUsage: object[], detailFitFailures: object[] }>}
    */
   async _missingOpeningUsage(subTypeMap, fixtureMap) {
     const subTypeUsage = [];
     const fixtureUsage = [];
+    // 三方枠の部分詳細図が fit できないものも同じ全階走査で集める（図のキー・slot・壁厚・出幅・見付の組で階をまたいで重複排除。別の記号でも同じ図なら1行で、行の targetKey・文言は最初に見つけた記号）。
+    // 集計の失敗は建具モードに入れなくする理由にしない（その階の分だけ飛ばす）。
+    const detailFitFailures = [];
+    const detailFitSeen = new Set();
     const scan = (graph) => {
+      try {
+        detailFitFailures.push(...collectDetailFitFailures(graph, detailFitSeen));
+      } catch (e) {
+        console.error('三方枠の詳細図の合わせ込み検査に失敗しました（この階はスキップします）:', e);
+      }
       for (const opening of graph?.openings ?? []) {
         if (opening?.category && opening?.subType) {
           const code = kindDef(CatalogKind.OPENING_SUB_TYPE).keyOf({ category: opening.category, key: opening.subType });
@@ -168,7 +180,7 @@ export class OpeningModeState {
       }
       scan(temp);
     }
-    return { subTypeUsage, fixtureUsage };
+    return { subTypeUsage, fixtureUsage, detailFitFailures };
   }
 
   // 階切替時はモード再ロード effect（App.jsx）が新インスタンスを作るため選択は自然リセットされる。

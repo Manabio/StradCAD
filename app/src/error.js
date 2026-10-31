@@ -344,6 +344,25 @@ export const ERR_STAIR_VOID_PARTIAL = '下の階の階段の吹抜けは、全�
 export const ERR_ROOF_UPPER_ROOMS = (floorLabels) =>
   `屋根の上の階（${floorLabels.join('・')}）に部屋があります。上の階の部屋は自動では変更されません。`;
 
+// 部分詳細図を建具記号の三方枠（方立・上枠）の寸法に合わせられなかった場合（openings/openingDetailFitCheck.js）。
+// 方立の図を流用または既定の断面（solid/bent）で描いており、図面は止まらない。reason は合わせられない理由
+// （fit の error.message など）。slot は DetailSlot の値（'jamb'＝方立・'head'＝上枠。core/constants.js）。
+const DETAIL_SLOT_LABELS = Object.freeze({ jamb: '方立', head: '上枠' });
+const detailSlotLabel = (slot) => (Object.hasOwn(DETAIL_SLOT_LABELS, slot) ? DETAIL_SLOT_LABELS[slot] : slot);
+export const ERR_DETAIL_FIT_FAILED = (label, symbolKey, reason, slot) =>
+  `詳細図 ${label} を ${symbolKey} の${detailSlotLabel(slot)}に合わせられません: ${reason}`;
+// 参照先の詳細図がカタログ（ライブラリ・同梱）に無い場合。owner は参照の持ち主——記号キー、建具個別の指定なら
+// DETAIL_OWNER_OPENING、fit のメモ口では図のキー。
+export const DETAIL_OWNER_OPENING = '建具個別の指定';
+export const ERR_DETAIL_FIGURE_NOT_FOUND = (owner, slot) =>
+  `${owner} の${detailSlotLabel(slot)}の詳細図がカタログに見つかりません`;
+// 詳細図の基準（Datum）が三方枠の供給できない組（role・軸・種別）のとき。
+export const ERR_DETAIL_DATUM_UNSUPPORTED = (datumId, role) =>
+  `基準 ${datumId}（${role}）は三方枠では使えません`;
+// 展開モードのトースト用。最初の1件の文言に、残りの件数を添える。
+export const ERR_DETAIL_FIT_FAILED_MORE = (firstMessage, restCount) =>
+  `${firstMessage}（ほか${restCount}件）`;
+
 // 階段の指定の拒否（finish/stair/stairRoofConflict.js・App.jsx convertStairFromNaming）。階段は上の階へ
 // 展開される（中間階は階段、最上階は階段吹抜け）が、その位置に屋根があると屋根セルと重なるため、
 // 指定を確定せず何も変更しない。floorLabels は衝突する階名の配列。

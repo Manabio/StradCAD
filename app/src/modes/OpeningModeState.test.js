@@ -10,7 +10,9 @@ import {
 } from '../catalog/codeNormalization.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
-import { replaceRowsByScenario } from '../catalog/resolveQueue.js';
+import { replaceRowsByScenario, defaultResolveDecision } from '../catalog/resolveQueue.js';
+import { ERR_DETAIL_FIT_FAILED } from '../error.js';
+import { jambFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol } from '../openings/openingDetailTestFixtures.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 
@@ -258,6 +260,125 @@ test('【失敗系】init: overlayにユーザーエントリを追加したfixt
     const { catalogResolveRows } = await s.init();
 
     assert.deepEqual(catalogResolveRows.filter(r => r.kind === CatalogKind.FIXTURE_SYMBOL), [], 'overlay（ユーザー追加）に載っているfixtureTypeは未解決にならない');
+  } finally {
+    clearOverlays();
+  }
+});
+
+// ---- 部分詳細図 S3: 三方枠の詳細図が寸法に合わせられないときの通知（場面 detail-fit-failed）----
+test('init: 三方枠の詳細図が合わせられない記号は場面 detail-fit-failed の行を1行作る（候補なし・許可操作は defer だけ）', async () => {
+  const { project, graph, wall } = makeGraph();
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: materialBoundFigure('df-mode-1') });
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: sym });
+
+    const s = new OpeningModeState(graph, project);
+    const { catalogResolveRows } = await s.init();
+
+    const rows = catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows.length, 1);
+    const [row] = rows;
+    assert.equal(row.kind, CatalogKind.FIXTURE_SYMBOL);
+    assert.equal(row.targetKey, sym);
+    assert.equal(row.targetLabel, '材束縛の方立');
+    assert.deepEqual(row.candidates, []);
+    assert.deepEqual(row.allowedActions, ['defer']);
+    assert.ok(row.message.startsWith(ERR_DETAIL_FIT_FAILED('材束縛の方立', sym, '', 'jamb')), row.message);
+    assert.match(row.message, new RegExp(`^詳細図 材束縛の方立 を ${sym} の方立に合わせられません: `));
+    assert.deepEqual(defaultResolveDecision(row), { action: 'defer', pick: null });
+    assert.equal(s.catalogResolveRows, catalogResolveRows);
+    assert.equal(catalogResolveRows.filter(r => r.scenario === 'unresolved-code').length, 0, '記号自体は実在するので未解決の行は立たない');
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('init: 同じ（図のキー・slot・壁厚・出幅・見付）の三方枠が複数あっても detail-fit-failed の行は1行。出幅を変えたものは別の行', async () => {
+  const { project, graph, wall } = makeGraph();
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: materialBoundFigure('df-mode-2') });
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: sym });
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: sym });
+    let s = new OpeningModeState(graph, project);
+    let rows = (await s.init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows.length, 1, '同じ組は重複しない');
+
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2500, 400, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: sym, frameProjection: 30 });
+    s = new OpeningModeState(graph, project);
+    rows = (await s.init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows.length, 2, '出幅が違えば別の組（幅 400 なので見付の頭打ちも別）');
+    assert.equal(new Set(rows.map(r => r.id)).size, 2, '行 id は一意');
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('【失敗系】init: 詳細図が合わせられる記号・割当て無しの記号・三方枠でない建具は detail-fit-failed の行を作らない', async () => {
+  const { project, graph, wall } = makeGraph();
+  const ok = uniqueSymbolKey();
+  installFrameSymbol(ok, { jamb: jambFigure('df-mode-ok') });
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: ok });
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: 'WF' });
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2500, 800, OpeningCategory.FITTING, 'singleSwing', { fixtureType: ok });
+    const s = new OpeningModeState(graph, project);
+    const { catalogResolveRows } = await s.init();
+    assert.deepEqual(catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed'), []);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('init: 非アクティブ階（peek）の三方枠も詳細図の検査対象で、階をまたいで同じ組は1行にまとまる', async () => {
+  const project = new Project('proj-opening-mode-detail-multi', 'test');
+  const { graph: g1 } = project.addPlane(0, '1階', 'p1');
+  const { plane: plane2, graph: g2 } = project.addPlane(3000, '2階', 'p2');
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: materialBoundFigure('df-mode-multi') });
+  const w1 = addWallTo(g1).wall;
+  const w2 = addWallTo(g2).wall;
+  g1.addOpening(w1.axisCL, 1, false, w1.clStart, 500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: sym });
+  g2.addOpening(w2.axisCL, 1, false, w2.clStart, 500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: sym });
+  const store = new Map([[plane2.id, serializeGraph(g2)]]);
+  const origPeek = floorSwapManager.peek;
+  floorSwapManager.peek = async (plane, structGraph) => {
+    const g = new PlanGraph(plane);
+    g._structGraph = structGraph;
+    const bytes = store.get(plane.id);
+    if (bytes) restoreGraph(g, bytes);
+    return g;
+  };
+  try {
+    const s = new OpeningModeState(g1, project);
+    const rows = (await s.init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows.length, 1, '1階と2階で同じ（記号・壁厚・出幅・見付）は1行');
+    // 2階だけに出幅違いの三方枠を足すと、peek した階の分が別の行として増える
+    g2.addOpening(w2.axisCL, 1, false, w2.clStart, 1800, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: sym, frameProjection: 30 });
+    store.set(plane2.id, serializeGraph(g2));
+    const s2 = new OpeningModeState(g1, project);
+    const rows2 = (await s2.init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows2.length, 2, '非アクティブ階の組も集計される');
+  } finally {
+    floorSwapManager.peek = origPeek;
+    clearOverlays();
+  }
+});
+
+test('init: detail-fit-failed の行は App.jsx のマージ（場面 unresolved-code・detail-fit-failed×自分の kinds）で再突入時に置き換わり、他種別の行は残る', async () => {
+  const { project, graph, wall } = makeGraph();
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: materialBoundFigure('df-mode-3') });
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: sym });
+    const s = new OpeningModeState(graph, project);
+    const { catalogResolveRows } = await s.init();
+    const materialRow = { id: 'detail-fit-failed:material:x', scenario: 'detail-fit-failed', kind: 'material' };
+    const merged1 = replaceRowsByScenario([materialRow], catalogResolveRows, ['unresolved-code', 'detail-fit-failed'], { kinds: s.catalogResolveKinds });
+    const merged2 = replaceRowsByScenario(merged1, catalogResolveRows, ['unresolved-code', 'detail-fit-failed'], { kinds: s.catalogResolveKinds });
+    assert.equal(merged2.filter(r => r.scenario === 'detail-fit-failed' && r.kind === CatalogKind.FIXTURE_SYMBOL).length, 1, '再突入で積み増さない');
+    assert.ok(merged2.includes(materialRow), '他種別の行は残る');
   } finally {
     clearOverlays();
   }

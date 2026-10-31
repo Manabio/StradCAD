@@ -38,6 +38,8 @@ const ALLOWED_ACTIONS = Object.freeze({
   // ため、'defer' 自体は元々どの場面でも動作はしていた。propose の既定decisionをdeferにした
   // 変更に合わせ、ラジオボタンにも「保留」を表示して既定選択が見た目にも一致するようにする）。
   propose:            Object.freeze(['approve', 'pick', 'addToLibrary', 'defer']),
+  // 部分詳細図を三方枠の寸法に合わせられない通知（候補なし。許可操作は既存の 'defer' だけ＝了解して閉じる）。
+  'detail-fit-failed': Object.freeze(['defer']),
 });
 
 /**
@@ -126,6 +128,23 @@ function proposeRow(kind, p) {
   };
 }
 
+/**
+ * 通知: 部分詳細図を建具記号の三方枠の寸法に合わせられない（openings/openingDetailFitCheck.js の1件）。
+ * 実体の差し替え先は無い（候補なし・許可操作は 'defer' のみ）。kind は記号の種別（fixtureSymbol）、targetKey は記号キー。
+ * id は（図のキー・slot・壁厚・出幅・見付）の組ごとに一意（f.key。別の記号でも同じ図なら1行で、行の targetKey・文言は最初に見つけた記号）。message は ERR_DETAIL_FIT_FAILED の文言。
+ */
+function detailFitFailedRow(kind, f) {
+  return {
+    id: `detail-fit-failed:${kind}:${f.key}`,
+    scenario: 'detail-fit-failed', kind,
+    targetKey: f.symbolKey, targetLabel: f.label, targetEntry: null,
+    usage: [],
+    candidates: [],
+    allowedActions: allowedActionsFor(kind, 'detail-fit-failed'),
+    message: f.message,
+  };
+}
+
 /** unresolved（[{code, location, ...}]）を code でグルーピングし usage 配列を作る。 */
 function groupUnresolvedByCode(unresolved) {
   const byCode = new Map();
@@ -159,13 +178,14 @@ function unresolvedCodeRow(kind, code, usage, { appEntries = [], origins, remove
  *           libraryConflicts?: Array<{key:string, diffFields:string[]}>,
  *           unsupported?: object[],
  *           unresolved?: Array<{code:string, location:string, [k:string]: unknown}>,
+ *           detailFitFailures?: Array<{key:string, symbolKey:string, label:string, message:string}>,
  *           appEntries?: object[], userEntries?: object[], builtinEntries?: object[],
  *           origins?: Map<string,string>, removedMaterials?: object[] }} args
  * @returns {Array<object>} 行モデルの配列
  */
 export function buildResolveRows({
   kind = CatalogKind.MATERIAL,
-  proposals = [], libraryConflicts = [], unsupported = [], unresolved = [],
+  proposals = [], libraryConflicts = [], unsupported = [], unresolved = [], detailFitFailures = [],
   appEntries = [], userEntries = [], builtinEntries = [], origins,
   removedMaterials = [],
 } = {}) {
@@ -179,6 +199,7 @@ export function buildResolveRows({
   }
   for (const entry of unsupported) rows.push(unsupportedRow(kind, entry));
   for (const p of proposals) rows.push(proposeRow(kind, p));
+  for (const f of detailFitFailures) rows.push(detailFitFailedRow(kind, f));
   return rows;
 }
 

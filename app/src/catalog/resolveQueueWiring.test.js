@@ -304,11 +304,11 @@ test('【不変条件・ステップ6-3】App.jsx: applyCatalogResolutions適用
 });
 
 // ---- App.jsx: FinishModeState/StructuralModeState.init()の(b)行をproject側へマージ ----
-test('【不変条件・ステップ6-3→8g】App.jsx: モードロード後にs.catalogResolveRowsをreplaceRowsByScenario(...,[\'unresolved-code\'], { kinds: s.catalogResolveKinds })でマージする', () => {
+test('【不変条件・ステップ6-3→8g→部分詳細図S3】App.jsx: モードロード後にs.catalogResolveRowsをreplaceRowsByScenario(...,[\'unresolved-code\', \'detail-fit-failed\'], { kinds: s.catalogResolveKinds })でマージする', () => {
   const src = readSrc('App.jsx');
   assert.ok(/from ['"]\.\/catalog\/resolveQueue\.js['"]/.test(src), 'App.jsx が catalog/resolveQueue.js を import していない');
   assert.ok(
-    /replaceRowsByScenario\(\s*project\.catalogResolveRows,\s*s\.catalogResolveRows,\s*\['unresolved-code'\],\s*\{\s*kinds:\s*s\.catalogResolveKinds\s*\}\s*\)/.test(src),
+    /replaceRowsByScenario\(\s*project\.catalogResolveRows,\s*s\.catalogResolveRows,\s*\['unresolved-code',\s*'detail-fit-failed'\],\s*\{\s*kinds:\s*s\.catalogResolveKinds\s*\}\s*\)/.test(src),
     'App.jsx が s.catalogResolveRows を replaceRowsByScenario で場面(unresolved-code)・種別(s.catalogResolveKinds)だけ置き換えてマージしていない（ステップ8g: kindsを渡さないとFinish/Structuralの片方のモード突入がもう片方の行を消す）',
   );
 });

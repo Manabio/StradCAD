@@ -793,7 +793,7 @@ const App = observer(() => {
       // 保留中の行は残す）。
       if (s.catalogResolveRows) {
         project.setCatalogResolveRows(
-          replaceRowsByScenario(project.catalogResolveRows, s.catalogResolveRows, ['unresolved-code'], { kinds: s.catalogResolveKinds }),
+          replaceRowsByScenario(project.catalogResolveRows, s.catalogResolveRows, ['unresolved-code', 'detail-fit-failed'], { kinds: s.catalogResolveKinds }),
         );
       }
     }).catch((e) => {

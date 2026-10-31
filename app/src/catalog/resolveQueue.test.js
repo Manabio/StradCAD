@@ -486,6 +486,33 @@ test('【失敗系・ステップ10e QA指摘Minor-3】applyResolveDecisions: ap
   assert.match(rejected[0].reason, /カテゴリ/);
 });
 
+// ---- 部分詳細図 S3: 通知の場面 detail-fit-failed（候補なし・許可操作は defer だけ）----
+const DETAIL_FIT_FAILURE = {
+  key: 'TF1|jamb|120|12|20', symbolKey: 'TF1', label: 'コの字', message: '詳細図 コの字 を TF1 に合わせられません: 理由',
+};
+
+test('buildResolveRows: detailFitFailures は場面 detail-fit-failed の行になる（候補なし・許可操作は defer だけ・message を運ぶ）', () => {
+  const rows = buildResolveRows({ kind: CatalogKind.FIXTURE_SYMBOL, detailFitFailures: [DETAIL_FIT_FAILURE] });
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0], {
+    id: 'detail-fit-failed:fixtureSymbol:TF1|jamb|120|12|20',
+    scenario: 'detail-fit-failed', kind: CatalogKind.FIXTURE_SYMBOL,
+    targetKey: 'TF1', targetLabel: 'コの字', targetEntry: null,
+    usage: [], candidates: [], allowedActions: ['defer'],
+    message: DETAIL_FIT_FAILURE.message,
+  });
+  assert.deepEqual(defaultResolveDecision(rows[0]), { action: 'defer', pick: null });
+});
+
+test('【失敗系】applyResolveDecisions: detail-fit-failed の行に approve／pick を指定すると許可されていない操作として例外。defer は保留に残る', () => {
+  const rows = buildResolveRows({ kind: CatalogKind.FIXTURE_SYMBOL, detailFitFailures: [DETAIL_FIT_FAILURE] });
+  for (const action of ['approve', 'pick', 'addToLibrary', 'markOverride']) {
+    assert.throws(() => applyResolveDecisions(rows, new Map([[rows[0].id, { action, pick: 'WF' }]])), /許可されていない操作です/, action);
+  }
+  const { aliasPairs, userOps, deferredRowIds } = applyResolveDecisions(rows, new Map([[rows[0].id, { action: 'defer' }]]));
+  assert.deepEqual([aliasPairs, userOps, deferredRowIds], [[], [], [rows[0].id]]);
+});
+
 test('applyResolveDecisions: approveでopeningSubTypeの候補先頭が同カテゴリならaliasPairsに積まれる', () => {
   const sameCategoryCandidate = { category: 'fitting', key: 'sliding', label: '引き戸' };
   const rows = buildResolveRows({
