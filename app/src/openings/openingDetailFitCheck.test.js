@@ -52,7 +52,7 @@ test('集計: 材束縛の図（常に fit 不可）を割り当てた三方枠�
   assert.deepEqual([f.projection, f.faceWidth], [12, 20]);
   assert.ok(f.reason.includes('101000000001'), f.reason);
   assert.equal(f.message, ERR_DETAIL_FIT_FAILED(f.label, sym, f.reason, JAMB));
-  assert.ok(f.message.startsWith(`詳細図 材束縛の方立 を ${sym} の方立に合わせられません: `), f.message);
+  assert.ok(f.message.startsWith(`詳細図 材束縛の方立 を ${sym} の方立（縦枠）に合わせられません: `), f.message);
 });
 
 test('集計: 同じ（図のキー・slot・壁厚・出幅・見付）の組は1件にまとまり、出幅を変えた建具は別の組になる', () => {
@@ -126,7 +126,7 @@ test('集計: detailRefs の参照が切れていれば文言は建具個別の�
   const failures = collectDetailFitFailures(graph);
   assert.equal(failures.length, 1);
   assert.equal(failures[0].label, 'df-chk-gone2');
-  assert.equal(failures[0].reason, '建具個別の指定 の方立の詳細図がカタログに見つかりません');
+  assert.equal(failures[0].reason, '建具個別の指定 の方立（縦枠）の詳細図がカタログに見つかりません');
   assert.ok(!failures[0].reason.includes(sym));
 });
 

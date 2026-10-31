@@ -14,7 +14,7 @@ import {
   buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserCatalogEntry, commitUserEntries,
-  realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel, formatDetailViewLabel,
+  realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel, formatDetailViewLabel, formatDetailSubjectLabel,
   isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY, BACKING_CLASS_OPTIONS,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry,
   materialFormHasDimensions, materialFormHasBackingClass, initialMaterialDimensions,
@@ -100,6 +100,9 @@ function formatReadonlyFieldValue(kind, field, value) {
   }
   if (kind === CatalogKind.DETAIL_FIGURE && field === 'view') {
     return formatDetailViewLabel(value);
+  }
+  if (kind === CatalogKind.DETAIL_FIGURE && field === 'subject') {
+    return formatDetailSubjectLabel(value);
   }
   return formatReadonlyValue(value);
 }

@@ -33,7 +33,7 @@ import {
 const GATED = [
   'performUndo', 'performRedo', 'handleModeChange', 'handleFloorSwitch', 'switchFloorKeepingMode',
   'handleDeleteCenterLine', 'handleConvertCenterLine', 'handleEccConfirm', 'commitAxisEdit',
-  'handleSaveConfirm', 'runDocumentImport', 'openCatalogMaintenancePanel', 'openFloorSettings',
+  'handleSaveConfirm', 'runDocumentImport', 'openCatalogMaintenancePanel', 'openDetailHelperPanel', 'openFloorSettings',
   {
     name: 'withFloorOpUndo', noBeginUiTransition: true,
     reason: '呼び出し元（executeAddUpper・handleAddFloorConfirmの各分岐・runReorderFloor・'
@@ -255,7 +255,9 @@ const ANON_IIFE_COUNT = 3;
 // 階の追加・削除 S5d で handleStructureChanged（GATED。構造パネルの変更の入口）の runBusy( コールバックが1件加わったため47→48。
 // 立面モード（S1b）のローダー .then(async m => { ... await s.init() ... }) が加わったため48→49
 // （天伏 S3 と同じく、モード切替 effect のローダーで EXEMPT。入力の関門は通らない）。
-const ANON_CALLBACK_COUNT = 49;
+// 部分詳細図ヘルパー S4 で openDetailHelperPanel（GATED。openCatalogMaintenancePanel と同区分——動的 import の完了を待つ
+// 全画面パネルの open で、await 後にグラフ／IDB は書かない）の runBusy( コールバックが1件加わったため49→50。
+const ANON_CALLBACK_COUNT = 50;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {

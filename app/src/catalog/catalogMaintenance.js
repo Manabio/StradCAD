@@ -29,7 +29,7 @@ import { nextSerial, parseMaterialCode, formatMaterialCode, isMaterialCode } fro
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
 import { stripOverridesBuiltin } from './usedEntries.js';
-import { DetailCategory, DetailView } from '../core/constants.js';
+import { DetailCategory, DetailView, DetailSubject } from '../core/constants.js';
 
 /** 材の役割（カテゴリ）。materialData.js の MATERIAL_CATEGORY と同じ3値
  * （本体マスタは静的 import できないため、ここでは値の集合だけを持つ）。 */
@@ -192,7 +192,7 @@ const CATEGORY_LABELS_BY_KIND = Object.freeze({
   }),
 });
 
-// 部分詳細図の向き（view）の表示名。subject（17種）のラベルは S4 で定義するため S2 は生の値を出す。
+// 部分詳細図の向き（view）の表示名。
 const DETAIL_VIEW_LABELS = Object.freeze({
   [DetailView.PLAN]:      '平面',
   [DetailView.SECTION]:   '断面',
@@ -202,6 +202,32 @@ const DETAIL_VIEW_LABELS = Object.freeze({
 /** 部分詳細図の向きの表示名。未知の値は formatReadonlyValue にフォールバックする（投げない）。 */
 export function formatDetailViewLabel(value) {
   return typeof value === 'string' && Object.hasOwn(DETAIL_VIEW_LABELS, value) ? DETAIL_VIEW_LABELS[value] : formatReadonlyValue(value);
+}
+
+/** 部分詳細図の主題（subject・17種）の表示名。全 DetailSubject 値を持つことをテストで固定する。 */
+export const DETAIL_SUBJECT_LABELS = Object.freeze({
+  [DetailSubject.JAMB]:         '方立（縦枠）',
+  [DetailSubject.HEAD]:         '上枠',
+  [DetailSubject.SILL]:         '下枠（沓摺）',
+  [DetailSubject.SASH_SECTION]: '建具断面',
+  [DetailSubject.NAGESHI]:      '長押',
+  [DetailSubject.SHIKII]:       '敷居',
+  [DetailSubject.OPENING]:      '建具（姿図）',
+  [DetailSubject.SANITARY]:     '衛生器具',
+  [DetailSubject.FURNITURE]:    '家具',
+  [DetailSubject.HVAC]:         '空調機器',
+  [DetailSubject.WALL]:         '壁',
+  [DetailSubject.FLOOR]:        '床',
+  [DetailSubject.CEILING]:      '天井',
+  [DetailSubject.FLOOR_WALL]:   '床と壁の取り合い',
+  [DetailSubject.WALL_CEILING]: '壁と天井の取り合い',
+  [DetailSubject.EAVE]:         '軒先',
+  [DetailSubject.VERGE]:        'けらば',
+});
+
+/** 部分詳細図の主題の表示名。未知の値は formatReadonlyValue にフォールバックする（投げない）。 */
+export function formatDetailSubjectLabel(value) {
+  return typeof value === 'string' && Object.hasOwn(DETAIL_SUBJECT_LABELS, value) ? DETAIL_SUBJECT_LABELS[value] : formatReadonlyValue(value);
 }
 
 /**

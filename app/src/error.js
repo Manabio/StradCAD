@@ -347,7 +347,7 @@ export const ERR_ROOF_UPPER_ROOMS = (floorLabels) =>
 // 部分詳細図を建具記号の三方枠（方立・上枠）の寸法に合わせられなかった場合（openings/openingDetailFitCheck.js）。
 // 方立の図を流用または既定の断面（solid/bent）で描いており、図面は止まらない。reason は合わせられない理由
 // （fit の error.message など）。slot は DetailSlot の値（'jamb'＝方立・'head'＝上枠。core/constants.js）。
-const DETAIL_SLOT_LABELS = Object.freeze({ jamb: '方立', head: '上枠' });
+const DETAIL_SLOT_LABELS = Object.freeze({ jamb: '方立（縦枠）', head: '上枠' });
 const detailSlotLabel = (slot) => (Object.hasOwn(DETAIL_SLOT_LABELS, slot) ? DETAIL_SLOT_LABELS[slot] : slot);
 export const ERR_DETAIL_FIT_FAILED = (label, symbolKey, reason, slot) =>
   `詳細図 ${label} を ${symbolKey} の${detailSlotLabel(slot)}に合わせられません: ${reason}`;
@@ -359,6 +359,8 @@ export const ERR_DETAIL_FIGURE_NOT_FOUND = (owner, slot) =>
 // 詳細図の基準（Datum）が三方枠の供給できない組（role・軸・種別）のとき。
 export const ERR_DETAIL_DATUM_UNSUPPORTED = (datumId, role) =>
   `基準 ${datumId}（${role}）は三方枠では使えません`;
+// 部分詳細図ヘルパー（全画面パネル）の動的 import が失敗したときのトースト。
+export const ERR_DETAIL_HELPER_LOAD_FAILED = '部分詳細ヘルパーの読み込みに失敗しました';
 // 展開モードのトースト用。最初の1件の文言に、残りの件数を添える。
 export const ERR_DETAIL_FIT_FAILED_MORE = (firstMessage, restCount) =>
   `${firstMessage}（ほか${restCount}件）`;

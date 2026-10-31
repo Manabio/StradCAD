@@ -168,7 +168,7 @@ function resolveWallThicknessMm(backingCode, materialList) {
  * 非対称回帰防止——overlayが空ならbuiltinと同じ配列を返すため無変化）。
  * @returns {number}
  */
-function previewWallThicknessFor(entry, materialList) {
+export function previewWallThicknessFor(entry, materialList) {
   const backingCode = previewBackingCodeFor(entry);
   const composedMaterials = Array.isArray(materialList) ? composeList(CatalogKind.MATERIAL, materialList) : null;
   return resolveWallThicknessMm(backingCode, composedMaterials) ?? PREVIEW_DEFAULT_WALL_THICKNESS_MM;

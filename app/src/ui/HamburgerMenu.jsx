@@ -9,6 +9,7 @@ const FILE_ITEMS = [
   { id: 'save',     label: '保存' },
   { id: 'settings', label: '画面校正' },
   { id: 'catalog-maintenance', label: 'カタログ保守' }, // カタログ保守パネル（材料の面材・仕上げ材の追加・編集）
+  { id: 'detail-helper', label: '部分詳細' }, // 部分詳細図ヘルパー（一筆書きで詳細図を描いてライブラリへ登録）
 ];
 
 export function HamburgerMenu({ onSelect }) {

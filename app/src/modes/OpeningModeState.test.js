@@ -285,7 +285,7 @@ test('init: 三方枠の詳細図が合わせられない記号は場面 detail-
     assert.deepEqual(row.candidates, []);
     assert.deepEqual(row.allowedActions, ['defer']);
     assert.ok(row.message.startsWith(ERR_DETAIL_FIT_FAILED('材束縛の方立', sym, '', 'jamb')), row.message);
-    assert.match(row.message, new RegExp(`^詳細図 材束縛の方立 を ${sym} の方立に合わせられません: `));
+    assert.match(row.message, new RegExp(`^詳細図 材束縛の方立 を ${sym} の方立（縦枠）に合わせられません: `));
     assert.deepEqual(defaultResolveDecision(row), { action: 'defer', pick: null });
     assert.equal(s.catalogResolveRows, catalogResolveRows);
     assert.equal(catalogResolveRows.filter(r => r.scenario === 'unresolved-code').length, 0, '記号自体は実在するので未解決の行は立たない');

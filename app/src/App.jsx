@@ -102,7 +102,7 @@ import {
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_REMOVE_FAILED_MESSAGE, ERR_ELEVATOR_USAGE_FAILED, ERR_ELEVATOR_USAGE_FAILED_MESSAGE,
   ERR_ROOF_UPPER_ROOMS, ERR_STAIR_UPPER_CHECK_FAILED, ERR_STAIR_DESIGNATE_ABORTED, ERR_FLOOR_SETTINGS_LOAD_FAILED,
   ERR_STAIR_DESIGNATE_FAILED, ERR_STAIR_DESIGNATE_FAILED_MESSAGE,
-  ERR_STAIR_DELETE_FAILED, ERR_STAIR_DELETE_FAILED_MESSAGE,
+  ERR_STAIR_DELETE_FAILED, ERR_STAIR_DELETE_FAILED_MESSAGE, ERR_DETAIL_HELPER_LOAD_FAILED,
 } from './error.js';
 import { isUiBusy, runBusy } from './uiBusy.js';
 import { isSessionOwner } from './storage/sessionLock.js';
@@ -173,6 +173,7 @@ const App = observer(() => {
   const [openedFile, setOpenedFileState] = useState(getOpenedFileInfo); // オープン中のファイル { name, confirmed }（読込みで設定・保存で確定名に更新。confirmed=false は実名未確認＝表示に「(?)」。読込みは reload を伴うので起動時に1回読む）
   const [showBuildingInfoDialog, setShowBuildingInfoDialog] = useState(false);
   const [CatalogMaintenancePanelComp, setCatalogMaintenancePanelComp] = useState(null); // 動的import済みのパネル本体（null=未ロード/非表示）
+  const [DetailHelperPanelComp, setDetailHelperPanelComp] = useState(null); // 動的import済みの部分詳細図ヘルパー本体（null=未ロード/非表示）
   const [CatalogResolveDialogComp, setCatalogResolveDialogComp] = useState(null); // 指示UI（ステップ6-3）ダイアログ本体（動的import済み。null=未ロード/非表示）
   // 代替材ピッカー用のbuiltin一覧（ステップ7d: 行のkind集合ぶん kindDef(kind).loadBuiltin() で
   // 動的importし、kind → builtinList のオブジェクトにする。materialData.js単独固定をやめる）。
@@ -2186,6 +2187,20 @@ const App = observer(() => {
     });
   }
 
+  // 部分詳細図ヘルパー（全画面パネル）。カタログ保守と同じ作り（動的import＋関門）。グラフは読まない・書かない。
+  async function openDetailHelperPanel() {
+    beginUiTransition();
+    await runBusy('部分詳細', async () => {
+      try {
+        const m = await import('./ui/DetailHelperPanel.jsx');
+        setDetailHelperPanelComp(() => m.DetailHelperPanel);
+      } catch (e) {
+        console.error(e);
+        setToast({ msg: ERR_DETAIL_HELPER_LOAD_FAILED, key: Date.now() });
+      }
+    });
+  }
+
   // ---- ハンバーガーメニュー ----
   function handleHamburgerSelect(id) {
     if (id === 'new') {
@@ -2213,6 +2228,9 @@ const App = observer(() => {
     if (id === 'building-info')  { setShowBuildingInfoDialog(true); return; }
     if (id === 'catalog-maintenance') {
       return openCatalogMaintenancePanel();
+    }
+    if (id === 'detail-helper') {
+      return openDetailHelperPanel();
     }
     if (id === 'open') {
       fileInputRef.current?.click();
@@ -3246,6 +3264,12 @@ const App = observer(() => {
         // （動的import。使わないユーザーは読み込まない）。編集内容はIDBへ即時永続化されるため、
         // 開いている仕上げモード等への即時反映はしない（次回突入時にcomposeし直して反映）。
         <CatalogMaintenancePanelComp onClose={() => setCatalogMaintenancePanelComp(null)} />
+      )}
+
+      {DetailHelperPanelComp && (
+        // 全画面パネル（動的import。使わないユーザーは読み込まない）。保存・削除はカタログ編集の共通経路で
+        // IDBへ即時永続化される。グラフには触れない。
+        <DetailHelperPanelComp onClose={() => setDetailHelperPanelComp(null)} />
       )}
 
       {CatalogResolveDialogComp && catalogResolveBuiltinListByKind && project.catalogResolveRows.length > 0 && (

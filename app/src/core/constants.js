@@ -656,3 +656,5 @@ export const DETAIL_FIGURE_KEY_PREFIX = 'df-';
 export const DETAIL_PRIM_SOURCE = 'detail';
 /** fit の長さ比較の許容（mm）。elevationStyle.js の COORD_EPS_MM と同値だが、detail/ は elevation/ を引けないので別定義。 */
 export const DETAIL_FIT_EPS_MM = 1e-3;
+/** ヘルパー画面の下書き履歴（1 手戻し）の保持数の上限。超えたら古いものから捨てる（undoManager には積まない）。 */
+export const DETAIL_DRAFT_HISTORY_MAX = 50;
