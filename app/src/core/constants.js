@@ -259,6 +259,9 @@ export const LINE_WEIGHT_MM = Object.freeze({
   thin:       0.13,
 });
 
+// 部分詳細図の line.weightRole の既定。LINE_WEIGHT_MM のキー。
+export const DETAIL_DEFAULT_WEIGHT_ROLE = 'thin';
+
 // SVG 図（建具モード姿図・構造断面図）のプリミティブ型。生成元は structural/sectionFigure/svgFigurePrimitives.js、
 // 消費側は AutoScaledFigure.jsx の renderPrimitive（case の並びはそれに合わせる）。展開図（Konva）の語彙とは別。
 export const SvgFigurePrimitiveType = Object.freeze({
@@ -509,3 +512,143 @@ export const FacadeSkipReason = Object.freeze({
   ROOF_NO_OUTLINE:    'roofNoOutline',    // 屋根範囲が空・外形線が無い（その屋根は描かない）
   ROOF_FLAT_FALLBACK: 'roofFlatFallback', // 勾配・水下・到達時刻が作れない（軒の高さの水平線だけ描く）
 });
+
+// ---- 部分詳細図（detail/。一筆書きのペン命令列で登録する詳細図）----
+/** ペンの進む向き。U=t−・D=t+・L=s−・R=s+（t は画面下向き正）。V は斜め（dx,dy と、軸ごとの向き ss,st=±1（省略時 +1）を持つ）。 */
+export const PenDir = Object.freeze({
+  UP:     'U',
+  DOWN:   'D',
+  LEFT:   'L',
+  RIGHT:  'R',
+  VECTOR: 'V',
+});
+/** 長さ指定の種別。fixed=固定寸法・stretch=伸縮（軸ごとに1本）・param=見付/出幅などの参照・material=材の寸法の参照。 */
+export const DetailLenMode = Object.freeze({
+  FIXED:    'fixed',
+  STRETCH:  'stretch',
+  PARAM:    'param',
+  MATERIAL: 'material',
+});
+/** 詳細図の分類（部位・取り合い・自由部位・対の部位・姿図）。 */
+export const DetailCategory = Object.freeze({
+  PART:      'part',
+  JUNCTION:  'junction',
+  FREE_PART: 'freePart',
+  PAIRED:    'paired',
+  FIGURE:    'figure',
+});
+/** 詳細図の向き。 */
+export const DetailView = Object.freeze({
+  PLAN:      'plan',
+  SECTION:   'section',
+  ELEVATION: 'elevation',
+});
+/** 詳細図の主題（何の図か）。 */
+export const DetailSubject = Object.freeze({
+  JAMB:         'jamb',
+  HEAD:         'head',
+  SILL:         'sill',
+  SASH_SECTION: 'sashSection',
+  NAGESHI:      'nageshi',
+  SHIKII:       'shikii',
+  OPENING:      'opening',
+  SANITARY:     'sanitary',
+  FURNITURE:    'furniture',
+  HVAC:         'hvac',
+  WALL:         'wall',
+  FLOOR:        'floor',
+  CEILING:      'ceiling',
+  FLOOR_WALL:   'floorWall',
+  WALL_CEILING: 'wallCeiling',
+  EAVE:         'eave',
+  VERGE:        'verge',
+});
+/** 建具の枠など、詳細図を取り付ける先の名前（スロット）。 */
+export const DetailSlot = Object.freeze({
+  JAMB:         'jamb',
+  HEAD:         'head',
+  SILL:         'sill',
+  SASH_SECTION: 'sashSection',
+  NAGESHI:      'nageshi',
+  SHIKII:       'shikii',
+});
+/** 有効な (category, view, subject) の組合せ表。検証（detail/detailModel.js）と割当て先の絞り込みが引く。 */
+export const DETAIL_VIEW_COMBOS = Object.freeze([
+  ...[DetailView.PLAN, DetailView.SECTION].flatMap(view =>
+    [DetailSubject.JAMB, DetailSubject.HEAD, DetailSubject.SILL, DetailSubject.SASH_SECTION, DetailSubject.NAGESHI, DetailSubject.SHIKII]
+      .map(subject => ({ category: DetailCategory.PAIRED, view, subject }))),
+  ...[DetailView.ELEVATION, DetailView.PLAN].flatMap(view =>
+    [DetailSubject.OPENING, DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC]
+      .map(subject => ({ category: DetailCategory.FIGURE, view, subject }))),
+  { category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.FLOOR_WALL },
+  { category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.WALL_CEILING },
+  { category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.WALL },
+  { category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.FLOOR },
+  { category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.CEILING },
+  { category: DetailCategory.FREE_PART, view: DetailView.SECTION, subject: DetailSubject.EAVE },
+  { category: DetailCategory.FREE_PART, view: DetailView.SECTION, subject: DetailSubject.VERGE },
+].map(Object.freeze));
+/** スロットごとの、割り当てられる詳細図の (category, view, subject)。DETAIL_VIEW_COMBOS に含まれる。 */
+export const DETAIL_SLOT_TARGETS = Object.freeze({
+  [DetailSlot.JAMB]:         Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.PLAN,    subject: DetailSubject.JAMB }),
+  [DetailSlot.HEAD]:         Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.HEAD }),
+  [DetailSlot.SILL]:         Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.SILL }),
+  [DetailSlot.SASH_SECTION]: Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.SASH_SECTION }),
+  [DetailSlot.NAGESHI]:      Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.NAGESHI }),
+  [DetailSlot.SHIKII]:       Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.SHIKII }),
+});
+/** 基準（Datum）の種別。origin=図を載せる原点・end=伸縮区間の終端。 */
+export const DetailDatumKind = Object.freeze({
+  ORIGIN: 'origin',
+  END:    'end',
+});
+/** 局所座標の軸。s=横・t=縦（画面下向き正）。 */
+export const DetailAxis = Object.freeze({
+  S: 's',
+  T: 't',
+});
+/** 基準（Datum）の役割。各図側が供給する値（壁仕上面・FL・開口端など）との対応を表す。 */
+export const DetailDatumRole = Object.freeze({
+  WALL_FINISH_FACE: 'wallFinishFace',
+  WALL_AXIS:        'wallAxis',
+  FL:               'fl',
+  CEILING_FACE:     'ceilingFace',
+  GL:               'gl',
+  ROOF_SURFACE:     'roofSurface',
+  EAVE_EDGE:        'eaveEdge',
+  VERGE_EDGE:       'vergeEdge',
+  OPENING_OUTER:    'openingOuter',
+  OPENING_INNER:    'openingInner',
+  SILL:             'sill',
+  HEAD:             'head',
+  PLACEMENT_ORIGIN: 'placementOrigin',
+});
+/** LenSpec.mode='param' が参照する、取り付け先から供給される寸法。 */
+export const DetailParam = Object.freeze({
+  FRAME_FACE_WIDTH: 'frameFaceWidth',
+  FRAME_PROJECTION: 'frameProjection',
+  FRAME_DEPTH:      'frameDepth',
+  WALL_THICKNESS:   'wallThickness',
+});
+/** LenSpec.mode='material' が参照する材の寸法の項目。 */
+export const DetailMaterialField = Object.freeze({
+  THICKNESS: 'thickness',
+  X:         'x',
+  Y:         'y',
+});
+/** 詳細図の出どころ（provenance.source）。 */
+export const DetailProvenanceSource = Object.freeze({
+  MANUAL: 'manual',
+  DXF:    'dxf',
+});
+/** 詳細図の線種。'dashed' は elevation/elevationStyle.js の ElevationDash.DASHED と同値（detail/ は elevation/ を引けないのでここに置く）。 */
+export const DetailDash = Object.freeze({
+  SOLID:  'solid',
+  DASHED: 'dashed',
+});
+/** DetailFigure.version（前方互換。未知の版は読み飛ばす）。 */
+export const DETAIL_FIGURE_VERSION = 1;
+/** 詳細図由来のプリミティブに付ける出どころの印（source。kind は立面が上書きするので使わない）。 */
+export const DETAIL_PRIM_SOURCE = 'detail';
+/** fit の長さ比較の許容（mm）。elevationStyle.js の COORD_EPS_MM と同値だが、detail/ は elevation/ を引けないので別定義。 */
+export const DETAIL_FIT_EPS_MM = 1e-3;

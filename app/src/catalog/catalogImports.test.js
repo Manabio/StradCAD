@@ -16,7 +16,17 @@ const productFiles = fs.readdirSync(dir).filter(f => f.endsWith('.js') && !f.end
 const MASTER_PATHS = [/finish\/materials\//, /structural\/sectionCatalog/, /openings\/openingCatalog/];
 // 許可される静的import specifier: 同ディレクトリの兄弟モジュール（'./xxx.js'）、'../error.js'、
 // および import を一切持たない葉の '../core/constants.js'（定数の置き場。2026-10-30 屋根区画の location 定数）のみ。
-const ALLOWED_STATIC_SPECIFIERS = [/^\.\/[\w-]+\.js$/, /^\.\.\/error\.js$/, /^\.\.\/core\/constants\.js$/];
+// 加えて '../detail/detailModel.js'（部分詳細図の検証。S2 で catalog/ が引く。それ自身が constants だけを引く葉であることを下のテストで固定）。
+const ALLOWED_STATIC_SPECIFIERS = [/^\.\/[\w-]+\.js$/, /^\.\.\/error\.js$/, /^\.\.\/core\/constants\.js$/, /^\.\.\/detail\/detailModel\.js$/];
+
+test('【不変条件】detail/detailModel.js の静的importは ../core/constants.js だけ（catalog の許可リストに入れる前提の葉）', () => {
+  const src = fs.readFileSync(path.join(dir, '..', 'detail', 'detailModel.js'), 'utf8');
+  // 複数行の import { … } from '…' も拾う（行頭の import/export から次の `;` までの from 句）。
+  // 副作用 import（import '…';）も拾う。
+  const specs = [...src.matchAll(/^(?:import|export)\s[^;]*?from\s+['"]([^'"]+)['"]|^import\s+['"]([^'"]+)['"]/gm)].map(m => m[1] ?? m[2]);
+  assert.deepEqual(specs, ['../core/constants.js']);
+  assert.ok(!/\bimport\s*\(/.test(src), '動的 import も持たない');
+});
 
 test('【不変条件】core/constants.js は import を持たない葉（catalog の許可リストに入れる前提。再輸出 `export … from`・動的 import( も無い）', () => {
   const src = fs.readFileSync(path.join(dir, '..', 'core', 'constants.js'), 'utf8');
