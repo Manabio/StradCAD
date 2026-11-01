@@ -662,3 +662,62 @@ export const DETAIL_PRIM_SOURCE = 'detail';
 export const DETAIL_FIT_EPS_MM = 1e-3;
 /** ヘルパー画面の下書き履歴（1 手戻し）の保持数の上限。超えたら古いものから捨てる（undoManager には積まない）。 */
 export const DETAIL_DRAFT_HISTORY_MAX = 50;
+
+// ---- DXF 読込み（部分詳細図 S7a。detail/dxf/）----
+/** 端点スナップの許容（mm）。共線の間引き・軸平行の判定にも同値を使う（旧草案 §5.2「0.01 固定・自動で緩めない」）。 */
+export const DXF_SNAP_TOL_MM = 0.01;
+/** 円弧→弦の弦公差（mm。弧と弦の最大のずれ）。ASSUMED（実 DXF を見て決める）。 */
+export const DXF_CHORD_TOL_MM = 0.05;
+/** INSERT（ブロック挿入）を展開する深さの上限（段）。超えた INSERT は警告して展開しない。 */
+export const DXF_INSERT_DEPTH_MAX = 8;
+/** 読み込むエンティティ数の上限（INSERT 展開後の数にも使う）。超えたら打ち切って警告。ASSUMED。 */
+export const DXF_MAX_ENTITIES = 20000;
+/** 円弧を弦に分割した後の線分数の上限。超えたら打ち切って警告。ASSUMED。 */
+export const DXF_MAX_SEGMENTS = 200000;
+/** $INSUNITS → mm 係数（DXF 仕様: 1=inch・4=mm・5=cm・6=m）。表に無い値（0=単位なし 含む）は不明扱い。 */
+export const DXF_INSUNITS_TO_MM = Object.freeze({ 1: 25.4, 4: 1, 5: 10, 6: 1000 });
+/** バイナリ DXF の先頭の署名（読み込まず拒否する）。 */
+export const DXF_BINARY_SIGNATURE = 'AutoCAD Binary DXF';
+/** DXF から作る長さ（mm）の丸め係数（1e-6 mm 単位。浮動小数の尾を落とす）。 */
+export const DXF_LEN_ROUND_FACTOR = 1e6;
+/** DXF 読込みの警告コード（保存は止めない。画面に出して残す）。 */
+export const DxfWarning = Object.freeze({
+  UNIT_UNKNOWN:       'unitUnknown',       // $INSUNITS が無い・未知（係数 1 を仮置き）
+  CONTOUR_OPEN:       'contourOpen',       // 成分が閉じた輪郭 1 周ではない（開いている・分岐している）
+  SELF_INTERSECT:     'selfIntersect',     // 成分の輪郭が自己交差している
+  LICENSE_UNKNOWN:    'licenseUnknown',    // ライセンス注記が未記入
+  INSERT_DEPTH:       'insertDepth',       // INSERT の入れ子が DXF_INSERT_DEPTH_MAX を超えた（それ以上は展開しない）
+  INSERT_CYCLE:       'insertCycle',       // INSERT が循環している（そこで打ち切り）
+  UNSUPPORTED_ENTITY: 'unsupportedEntity', // 未対応のエンティティ（種類ごとの件数。無視した）
+  NONUNIFORM_SCALE:   'nonuniformScale',   // 非一様スケールの INSERT 内の円・円弧（楕円を多角形で近似した）
+  ENTITY_LIMIT:       'entityLimit',       // 件数上限で打ち切った
+  SELF_INTERSECT_UNCHECKED: 'selfIntersectUnchecked', // 線分が多い・密集している（候補の対・格子登録数が上限超）ため自己交差の判定を省いた
+  NO_DIGEST:          'noDigest',          // sha256 を取れなかった（出所の sha256 が空。読込みは続ける）
+});
+/** 自己交差の判定を行う成分の線分数の上限（超えたら判定を省いて SELF_INTERSECT_UNCHECKED）。ASSUMED。 */
+export const DXF_SELFINT_MAX_SEGMENTS = 20000;
+/** 自己交差の判定で調べる候補の対の数の上限（超えたら判定を省く。放射状に集まる図形での二乗の膨張を止める）。ASSUMED。 */
+export const DXF_SELFINT_MAX_PAIRS = 4000000;
+/** 自己交差の判定で格子へ登録する件数（線分ごとの標本点×周囲9セル）の上限。超えたら登録を始めず判定を省く。ASSUMED。 */
+export const DXF_SELFINT_MAX_CELL_ENTRIES = 2000000;
+/** INSERT が相似変換（等方スケール＋回転＋ミラー）かの判定の相対許容（数学的な許容。長さの mm ではない）。 */
+export const DXF_SIMILARITY_EPS = 1e-9;
+/** 円弧の掃引角が 2π（円）かの許容（rad）。 */
+export const DXF_FULL_TURN_EPS = 1e-9;
+/** 字句分解のエラーに載せる不正な行の先頭の長さ（巨大な行を持ち回らない）。 */
+export const DXF_ERROR_TEXT_MAX = 32;
+/** 出所欄（メーカー・シリーズ・ライセンス注記）の項目名。 */
+export const DXF_PROVENANCE_FIELDS = Object.freeze({ MAKER: 'maker', SERIES: 'series', LICENSE_NOTE: 'licenseNote' });
+/** DXF プレビューの線の見た目（淡色＝全体、強調＝選択中の成分。幅は px）。 */
+export const DXF_PREVIEW_STYLE = Object.freeze({
+  faint: Object.freeze({ stroke: '#cbd5e1', width: 1 }),
+  selected: Object.freeze({ stroke: '#2563eb', width: 2 }),
+});
+/** DXF を読み込まず拒否する理由。 */
+export const DxfReject = Object.freeze({
+  BINARY:         'binary',        // バイナリ DXF
+  BAD_GROUP_CODE: 'badGroupCode',  // group code が整数でない
+  TRUNCATED:      'truncated',     // 途中で切れている（対の片割れ・EOF が無い）
+  UNEXPECTED:     'unexpected',    // 想定外の例外（握って通知）
+  NOT_BYTES:      'notBytes',      // 入力がバイト列でない
+});

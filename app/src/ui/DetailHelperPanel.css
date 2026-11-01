@@ -45,6 +45,15 @@
 .dthlp-btn--primary:disabled { background: #bfdbfe; border-color: #bfdbfe; color: #ffffff; }
 
 /* ---- ペン ---- */
+.dthlp-tabs { display: flex; gap: 6px; }
+.dthlp-dxf { display: flex; flex-direction: column; gap: 10px; }
+.dthlp-dxf-file { font-size: 12px; color: #475569; word-break: break-all; }
+.dthlp-dxf-comps { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.dthlp-dxf-comp { display: flex; flex-direction: column; gap: 2px; padding: 4px 6px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.dthlp-dxf-comp--selected { background: #dbeafe; border-color: #93c5fd; }
+.dthlp-dxf-warn { font-size: 11px; color: #b45309; margin: 0; padding-left: 16px; }
+.dthlp-dxf-warn .dthlp-dxf-warn--red { color: #b91c1c; }
+.dthlp-provenance { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px; }
 .dthlp-pen { display: flex; flex-direction: column; gap: 8px; }
 .dthlp-distance { text-align: left; font-size: 14px; padding: 10px 12px; }
 .dthlp-dirs {

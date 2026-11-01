@@ -355,13 +355,37 @@ export const ERR_DETAIL_FIT_FAILED = (label, symbolKey, reason, slot) =>
 // DETAIL_OWNER_OPENING、fit のメモ口では図のキー。
 export const DETAIL_OWNER_OPENING = '建具個別の指定';
 export const ERR_DETAIL_FIGURE_NOT_FOUND = (owner, slot) =>
-  `${owner} の${detailSlotLabel(slot)}の詳細図がカタログに見つかりません`;
+  `${owner} の${detailSlotLabel(slot)}の詳細図がカタログに見つかりません（DXF 由来の図は保存ファイルに入らないため、別の端末では見つかりません）`;
 // 詳細図の基準（Datum）が取り付け先（既定は三方枠。建具の姿図なら「建具の姿図」）の供給できない組（role・軸・種別）のとき。
 export const DETAIL_TARGET_ELEVATION = '建具の姿図';
 export const ERR_DETAIL_DATUM_UNSUPPORTED = (datumId, role, target = '三方枠') =>
   `基準 ${datumId}（${role}）は${target}では使えません`;
 // 部分詳細図ヘルパー（全画面パネル）の動的 import が失敗したときのトースト。
 export const ERR_DETAIL_HELPER_LOAD_FAILED = '部分詳細ヘルパーの読み込みに失敗しました';
+// ---- DXF 読込み（部分詳細図 S7a。detail/dxf/ と ui/detailHelperForm.js）----
+// 警告（WARN_*。保存は止めない）。コードは core/constants.js の DxfWarning、対応は ui/detailHelperForm.js の describeDxfWarning。
+export const WARN_DXF_UNIT_UNKNOWN = '単位（$INSUNITS）が読めないため、1 単位 = 1 mm として読みました。単位を確かめてください';
+export const WARN_DXF_CONTOUR_OPEN = '閉じた輪郭になっていません（開いている、または枝分かれしています）';
+export const WARN_DXF_SELF_INTERSECT = '輪郭が自己交差しています';
+export const WARN_DXF_LICENSE_UNKNOWN = 'ライセンス注記が未記入です（保存はできます）';
+export const WARN_DXF_INSERT_DEPTH = (block, max) => `ブロック ${block} の挿入は入れ子が ${max} 段を超えるため展開しませんでした`;
+export const WARN_DXF_INSERT_CYCLE = (block) => `ブロック ${block} の挿入が循環しているため、そこで打ち切りました`;
+export const WARN_DXF_UNSUPPORTED_ENTITY = (type, count) => `未対応の図形 ${type} を ${count} 件無視しました`;
+export const WARN_DXF_NONUNIFORM_SCALE = (block) => `ブロック ${block} は縦横の倍率が違うため、円・円弧を多角形で近似しました`;
+export const WARN_DXF_ENTITY_LIMIT = (limit) => `図形が多すぎるため ${limit} 件で打ち切りました`;
+export const WARN_DXF_SELF_INTERSECT_UNCHECKED = '図形が密集しているか多すぎるため、輪郭の自己交差は調べていません';
+export const ERR_DXF_NOT_BYTES = 'ファイルの内容をバイト列として読めませんでした';
+export const WARN_DXF_NO_DIGEST = 'ファイルの sha256 を取れなかったため、出所の sha256 は空になります（読み込みは続けました）';
+// 拒否（ERR_*。読み込まない）。コードは DxfReject。
+export const ERR_DXF_BINARY = 'バイナリ形式の DXF は読み込めません。ASCII 形式で保存し直してください';
+export const ERR_DXF_BAD_GROUP_CODE = (line) => `DXF として読めません（${line} 行目が数値ではありません）`;
+export const ERR_DXF_TRUNCATED = 'DXF が途中で切れているため読み込めません';
+export const ERR_DXF_UNEXPECTED = (message) => `DXF の読み込み中に想定外の問題が起きました: ${message}`;
+export const ERR_DXF_FILE_READ_FAILED = 'ファイルを読み込めませんでした';
+// DXF 由来の図は保存ファイルに同梱しない（R10）。ヘルパー・保守パネルの出所の表示に添える。
+export const MSG_DXF_NOT_IN_FILE = 'この図は保存ファイルに入りません（この端末のライブラリにだけ残ります）';
+// 使用中の DXF 由来の図を削除するときの確認文（文書の同梱へ写せないため）。
+export const MSG_DXF_DELETE_IN_USE = '使用中です。DXF 由来の図は保存ファイルに入らないため、削除すると現在の文書は既定の描き方に戻ります。';
 // 展開モードのトースト用。最初の1件の文言に、残りの件数を添える。
 export const ERR_DETAIL_FIT_FAILED_MORE = (firstMessage, restCount) =>
   `${firstMessage}（ほか${restCount}件）`;

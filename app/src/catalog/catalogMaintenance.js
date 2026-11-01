@@ -28,10 +28,14 @@ import { diffPairs, fieldLabel } from './catalogDiffView.js';
 import { nextSerial, parseMaterialCode, formatMaterialCode, isMaterialCode } from './materialCode.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
-import { stripOverridesBuiltin } from './usedEntries.js';
+import { stripOverridesBuiltin, isDxfDerivedFigure } from './usedEntries.js';
+
+export { isDxfDerivedFigure };
 import {
   DetailCategory, DetailView, DetailSubject, DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD,
+  DetailProvenanceSource,
 } from '../core/constants.js';
+import { MSG_DXF_NOT_IN_FILE } from '../error.js';
 
 /** 材の役割（カテゴリ）。materialData.js の MATERIAL_CATEGORY と同じ3値
  * （本体マスタは静的 import できないため、ここでは値の集合だけを持つ）。 */
@@ -230,6 +234,31 @@ export const DETAIL_SUBJECT_LABELS = Object.freeze({
 /** 部分詳細図の主題の表示名。未知の値は formatReadonlyValue にフォールバックする（投げない）。 */
 export function formatDetailSubjectLabel(value) {
   return typeof value === 'string' && Object.hasOwn(DETAIL_SUBJECT_LABELS, value) ? DETAIL_SUBJECT_LABELS[value] : formatReadonlyValue(value);
+}
+
+const PROVENANCE_TEXT = Object.freeze({
+  manual: '手描き', dxf: 'DXF', file: 'ファイル', maker: 'メーカー', series: 'シリーズ', license: 'ライセンス注記', blank: '（未記入）',
+});
+
+/**
+ * 部分詳細図の出所（provenance）の表示文。手描き・無し（null）は「手描き」。DXF 由来はファイル名・メーカー・シリーズ・
+ * ライセンス注記と「この図は保存ファイルに入りません」（R10）。未知の source は formatReadonlyValue にフォールバックする。
+ * @param {object|null|undefined} provenance
+ * @returns {string}
+ */
+export function formatDetailProvenance(provenance) {
+  if (provenance === null || provenance === undefined) return PROVENANCE_TEXT.manual;
+  if (provenance.source === DetailProvenanceSource.MANUAL) return PROVENANCE_TEXT.manual;
+  if (provenance.source !== DetailProvenanceSource.DXF) return formatReadonlyValue(provenance);
+  const or = v => (typeof v === 'string' && v !== '' ? v : PROVENANCE_TEXT.blank);
+  return [
+    `${PROVENANCE_TEXT.dxf}`,
+    `${PROVENANCE_TEXT.file}: ${or(provenance.fileName)}`,
+    `${PROVENANCE_TEXT.maker}: ${or(provenance.maker)}`,
+    `${PROVENANCE_TEXT.series}: ${or(provenance.series)}`,
+    `${PROVENANCE_TEXT.license}: ${or(provenance.licenseNote)}`,
+    MSG_DXF_NOT_IN_FILE,
+  ].join('・');
 }
 
 /**
@@ -1125,7 +1154,8 @@ export function planRemoveUserEntry(kind, key, { usedKeys = new Set() } = {}) {
   if (!target) throw new Error(`ユーザーライブラリに無いキーです: ${key}`);
   const nextUser = user.filter(e => def.keyOf(e) !== key);
   const docHasKey = doc.some(e => def.keyOf(e) === key);
-  const docAppend = (usedKeys.has(key) && !docHasKey) ? stripOverridesBuiltin(target) : null;
+  // DXF 由来の図は保存ファイルに入らない（R10）ので、使用中でも文書へ写さない（参照は既定の描き方に戻る）。
+  const docAppend = (usedKeys.has(key) && !docHasKey && !isDxfDerivedFigure(target)) ? stripOverridesBuiltin(target) : null;
   return { nextUser, docAppend };
 }
 

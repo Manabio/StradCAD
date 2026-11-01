@@ -13,8 +13,17 @@ import { enumerateMaterialCodeRefs, SNAPSHOT_REF_WALKERS } from './codeNormaliza
 import { isMaterialCode } from './materialCode.js';
 import { CatalogKind, kindDef } from './catalogKinds.js';
 import { emptyBundle, withEntries, bundleEntries } from './catalogBundle.js';
-import { DetailLenMode, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
+import { DetailLenMode, DetailProvenanceSource, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
 import { moveParts } from '../detail/detailModel.js';
+
+/**
+ * DXF 由来の詳細図か（provenance.source==='dxf'）。文書に同梱しない対象（R10）。
+ * @param {object|null|undefined} figure
+ * @returns {boolean}
+ */
+export function isDxfDerivedFigure(figure) {
+  return figure?.provenance?.source === DetailProvenanceSource.DXF;
+}
 
 /**
  * snapshot（1階分）が参照する材コードを Set で返す（12桁数字として不正な値は含めない）。
@@ -206,7 +215,7 @@ export function expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind) 
  * @param {Map<string, Map<string, object>>} resolvedByKind
  * @returns {Map<string, Set<string>>}
  */
-export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKind) {
+export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKind, { excludeDxf = false } = {}) {
   if (!usedKeysByKind.has(CatalogKind.DETAIL_FIGURE)) return usedKeysByKind;
   const figureKeys = new Set(usedKeysByKind.get(CatalogKind.DETAIL_FIGURE));
   for (const symbolKey of usedKeysByKind.get(CatalogKind.FIXTURE_SYMBOL) ?? []) {
@@ -217,6 +226,13 @@ export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKi
   for (const subTypeKey of usedKeysByKind.get(CatalogKind.OPENING_SUB_TYPE) ?? []) {
     const subType = resolvedByKind.get(CatalogKind.OPENING_SUB_TYPE)?.get(subTypeKey);
     for (const figureKey of detailFigureKeysOfEntry(subType)) figureKeys.add(figureKey);
+  }
+  // 同梱（excludeDxf）のときだけ、DXF 由来の図を対象から外す（R10。割当てのキーは文書に残り、図を持たない環境では
+  // 既定の描きに戻る。材の推移展開にも載せない）。使用中の判定（削除確認・使用中バッジ）では外さない。
+  if (excludeDxf) {
+    for (const figureKey of [...figureKeys]) {
+      if (isDxfDerivedFigure(resolvedByKind.get(CatalogKind.DETAIL_FIGURE)?.get(figureKey))) figureKeys.delete(figureKey);
+    }
   }
   const next = new Map(usedKeysByKind);
   next.set(CatalogKind.DETAIL_FIGURE, figureKeys);
@@ -352,6 +368,7 @@ export function reexpandTransitiveDetailFigures(bundle, detailFigureMap) {
   for (const key of wanted) {
     if (existingKeys.has(key)) continue;
     const entry = detailFigureMap?.get(key);
+    if (isDxfDerivedFigure(entry)) continue; // DXF 由来の図は同梱しない（未解決にも数えない）
     if (entry) newEntries.push(stripOverridesBuiltin(entry));
     else unresolvedDetailFigureKeys.add(key);
   }

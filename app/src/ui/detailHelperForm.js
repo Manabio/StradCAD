@@ -20,14 +20,24 @@ import {
   PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam,
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
-  DETAIL_SLOT_TARGETS, DetailSlot,
+  DETAIL_SLOT_TARGETS, DetailSlot, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
+  DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE,
 } from '../core/constants.js';
+import { readDxf, buildDxfScene } from '../detail/dxf/dxfImport.js';
+import { buildDxfProvenance, baseNameOf } from '../detail/dxf/dxfProvenance.js';
+import {
+  WARN_DXF_UNIT_UNKNOWN, WARN_DXF_CONTOUR_OPEN, WARN_DXF_SELF_INTERSECT, WARN_DXF_LICENSE_UNKNOWN, WARN_DXF_INSERT_DEPTH,
+  WARN_DXF_INSERT_CYCLE, WARN_DXF_UNSUPPORTED_ENTITY, WARN_DXF_NONUNIFORM_SCALE, WARN_DXF_ENTITY_LIMIT,
+  WARN_DXF_SELF_INTERSECT_UNCHECKED, WARN_DXF_NO_DIGEST, MSG_DXF_DELETE_IN_USE,
+  ERR_DXF_BINARY, ERR_DXF_BAD_GROUP_CODE, ERR_DXF_TRUNCATED, ERR_DXF_UNEXPECTED, ERR_DXF_NOT_BYTES,
+} from '../error.js';
 import { validateDetailFigure, DetailValidationError } from '../detail/detailModel.js';
 import { previewPrimitives, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
 import { fitLocal } from '../detail/detailPlacement.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import {
   formatDetailSubjectLabel, formatDetailViewLabel, formatCategoryLabel, categoryOptionsFor, rowEditState, planSaveEntry,
+  formatDetailProvenance, isDxfDerivedFigure,
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
@@ -94,6 +104,13 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   fieldLabel: '呼称', fieldCategory: '分類', fieldView: '向き', fieldSubject: '主題',
   datumHeading: '基準と載せる頂点', noAnchor: '（なし）', validOk: '検証: 問題なし', blankValue: '—',
   approveButton: '承認する',
+  // DXF 読込み（S7a）
+  tabPen: 'ペン', tabDxf: 'DXF 読込み', dxfOpen: 'DXF を開く', dxfCopy: '下書きへ写す',
+  dxfUnit: '単位（1 単位 = ? mm）', dxfUnitDetected: '読み取り値', dxfComponents: '連結成分', dxfProvenance: '出所',
+  dxfMaker: 'メーカー', dxfSeries: 'シリーズ', dxfLicense: 'ライセンス注記', dxfWarnings: '警告',
+  dxfNoComponents: '輪郭が見つかりません', dxfEmptyPreview: 'DXF を開くとここに表示されます',
+  dxfComponentLabel: n => `成分 ${n}`,
+  dxfClosedLabel: '閉', dxfOpenLabel: '開', dxfVertexUnit: '頂点',
 });
 
 /** 値が空なら「—」を返す表示用（手の長さ・距離・オフセットのボタン文言）。 */
@@ -155,6 +172,9 @@ export const DETAIL_HELPER_MESSAGES = Object.freeze({
   emptyPreview: 'ペンで線を描くとここに表示されます',
   materialLoadFailed: '材の一覧を読み込めなかったため、壁厚は既定値で代用中です',
   confirmSyncTitle: 'この文書の同梱を外して保存します。変更項目: ',
+  dxfUnitInvalid: '単位は 0 より大きい数で入力してください',
+  dxfNothingSelected: '写す輪郭を一覧から選んでください',
+  dxfNothingToCopy: '選んだ成分に写せる線がありません',
 });
 
 /** ラベル表 → select の選択肢（{value,label}[]）。 */
@@ -243,9 +263,12 @@ export function afterSaveDoc(doc, entry, form) {
 }
 
 /** 削除の確認文。使用中（文書が参照している）なら同梱へ写すこと、未保存の編集があれば破棄されることを添える。 */
-export function deleteConfirmMessage({ label, used, dirty }) {
+export function deleteConfirmMessage({ label, used, dirty, entry = null }) {
+  const dxf = isDxfDerivedFigure(entry);
   const parts = [`「${label}」をライブラリから削除します。`];
-  if (used) parts.push('この文書が使用中のため、文書の同梱へ写します（文書は未保存扱いになります）。');
+  // DXF 由来の図は文書の同梱へ写せない（保存ファイルに入らない）ので、同梱へ写す文言ではなく専用の文で告げる。
+  if (used && dxf) parts.push(MSG_DXF_DELETE_IN_USE);
+  else if (used) parts.push('この文書が使用中のため、文書の同梱へ写します（文書は未保存扱いになります）。');
   if (dirty) parts.push('編集中の内容は破棄されます。');
   return parts.join('');
 }
@@ -350,8 +373,12 @@ export function formFromEntry(entry) {
 
 /** フォーム → カタログのエントリ（文字列の数値は parseNumberText で数値へ。読めない欄は NaN になり検証が理由を返す）。 */
 export function entryFromForm(form) {
+  // DXF 由来の出所は、編集中の生の入力を保存形（trim 済み）へ揃える。
+  const extra = form.extra?.provenance?.source === DetailProvenanceSource.DXF
+    ? { ...form.extra, provenance: buildDxfProvenance(form.extra.provenance).provenance }
+    : form.extra;
   return {
-    ...form.extra,
+    ...extra,
     key: form.key, label: form.label, category: form.category, view: form.view, subject: form.subject,
     strokes: form.strokes.map(s => ({ ...s, moves: s.moves.map(entryMoveOf) })),
     datums: form.datums.map(d => {
@@ -737,4 +764,182 @@ export function previewPrimitivesOf(form, fitted = null) {
   if (!form.strokes.some(s => s.moves.length > 0)) return [];
   if (fitted && !fitted.error) return fittedPrimitives(fitted);
   return previewPrimitives(previewEntryOf(form));
+}
+
+// ================================================================
+// DXF 読込み（S7a）
+//   dxf（パネルが持つ状態）= { fileName, sha256, encoding, parsed, scene, unitText, selected:number[], maker, series, licenseNote }
+//   読んだ原本のバイト列は持たない（sha256 だけ）。選んだ成分ごとに 1 本以上のストロークで新規下書きへ写す。
+// ================================================================
+
+const DXF_WARNING_TEXT = Object.freeze({
+  [DxfWarning.UNIT_UNKNOWN]:       () => WARN_DXF_UNIT_UNKNOWN,
+  [DxfWarning.CONTOUR_OPEN]:       () => WARN_DXF_CONTOUR_OPEN,
+  [DxfWarning.SELF_INTERSECT]:     () => WARN_DXF_SELF_INTERSECT,
+  [DxfWarning.LICENSE_UNKNOWN]:    () => WARN_DXF_LICENSE_UNKNOWN,
+  [DxfWarning.INSERT_DEPTH]:       w => WARN_DXF_INSERT_DEPTH(w.block, DXF_INSERT_DEPTH_MAX),
+  [DxfWarning.INSERT_CYCLE]:       w => WARN_DXF_INSERT_CYCLE(w.block),
+  [DxfWarning.UNSUPPORTED_ENTITY]: w => WARN_DXF_UNSUPPORTED_ENTITY(w.type, w.count),
+  [DxfWarning.NONUNIFORM_SCALE]:   w => WARN_DXF_NONUNIFORM_SCALE(w.block),
+  [DxfWarning.ENTITY_LIMIT]:       w => WARN_DXF_ENTITY_LIMIT(w.limit),
+  [DxfWarning.SELF_INTERSECT_UNCHECKED]: () => WARN_DXF_SELF_INTERSECT_UNCHECKED,
+  [DxfWarning.NO_DIGEST]:          () => WARN_DXF_NO_DIGEST,
+});
+const DXF_REJECT_TEXT = Object.freeze({
+  [DxfReject.BINARY]:         () => ERR_DXF_BINARY,
+  [DxfReject.BAD_GROUP_CODE]: e => ERR_DXF_BAD_GROUP_CODE(e.line),
+  [DxfReject.TRUNCATED]:      () => ERR_DXF_TRUNCATED,
+  [DxfReject.UNEXPECTED]:     e => ERR_DXF_UNEXPECTED(e.message),
+  [DxfReject.NOT_BYTES]:      () => ERR_DXF_NOT_BYTES,
+});
+
+/** 左ペインのタブ。 */
+export const DETAIL_HELPER_TABS = Object.freeze({ PEN: 'pen', DXF: 'dxf' });
+
+/** 警告 1 件の表示文。未知のコードはコードそのまま。 */
+export function describeDxfWarning(w) {
+  const f = DXF_WARNING_TEXT[w?.code];
+  return f ? f(w) : String(w?.code);
+}
+/** 拒否（読み込めない）理由の表示文。 */
+export function describeDxfReject(error) {
+  const f = DXF_REJECT_TEXT[error?.code];
+  return f ? f(error) : ERR_DXF_UNEXPECTED(String(error?.message ?? error?.code));
+}
+
+/**
+ * DXF のバイト列を読む（復号→構文解析→成分化。sha256 は注入した digest(bytes)→Promise<hex>）。
+ * 失敗は { ok:false, message }（例外にしない）。
+ */
+export async function loadDxf({ bytes, fileName, digest }) {
+  const read = readDxf(bytes);
+  if (!read.ok) return { ok: false, message: describeDxfReject(read.error) };
+  // sha256 を取れなくても読込みは止めない（出所の sha256 を空にして警告 NO_DIGEST で続ける）。
+  let sha256 = '';
+  let noDigest = false;
+  try {
+    sha256 = await digest(bytes);
+  } catch {
+    noDigest = true;
+  }
+  if (typeof sha256 !== 'string' || sha256 === '') { sha256 = ''; noDigest = true; }
+  const scene = buildDxfScene(read.parsed);
+  if (!scene.ok) return { ok: false, message: describeDxfReject(scene.error) };
+  return {
+    ok: true,
+    dxf: {
+      fileName: baseNameOf(fileName), sha256, noDigest, encoding: read.encoding, parsed: read.parsed, scene,
+      unitText: '', selected: [], maker: '', series: '', licenseNote: '',
+    },
+  };
+}
+
+/** 単位係数（1 単位 = ? mm）を指定し直して成分を作り直す（空文字は自動に戻す）。選択は解除する。失敗は { error } で dxf は変えない。 */
+export function setDxfUnit(dxf, unitText) {
+  const text = String(unitText ?? '').trim();
+  let unitFactor = null;
+  if (text !== '') {
+    unitFactor = parseNumberText(text);
+    if (!Number.isFinite(unitFactor) || unitFactor <= 0) return { dxf, error: DETAIL_HELPER_MESSAGES.dxfUnitInvalid };
+  }
+  const scene = buildDxfScene(dxf.parsed, { unitFactor });
+  if (!scene.ok) return { dxf, error: describeDxfReject(scene.error) };
+  return { dxf: { ...dxf, unitText: text, scene, selected: [] }, error: null };
+}
+
+/** 成分の選択を切り替える（選択は昇順の index 配列）。 */
+export function toggleDxfComponent(dxf, index) {
+  const has = dxf.selected.includes(index);
+  const selected = has ? dxf.selected.filter(i => i !== index) : [...dxf.selected, index].sort((a, b) => a - b);
+  return { ...dxf, selected };
+}
+
+/** 出所欄（メーカー・シリーズ・ライセンス注記）の項目を書き換える。 */
+export function setDxfProvenanceField(dxf, field, value) {
+  if (!DXF_PROVENANCE_FIELD_SET.has(field)) return dxf;
+  return { ...dxf, [field]: String(value ?? '') };
+}
+const DXF_PROVENANCE_FIELD_SET = new Set(Object.values(DXF_PROVENANCE_FIELDS));
+
+/** 下書き（DXF 由来）の出所欄を書き換える。DXF 由来でない下書き・未知の項目は何もしない。保存時に trim される（entryFromForm）。 */
+export function setProvenanceField(form, field, value) {
+  const prov = form?.extra?.provenance;
+  if (prov?.source !== DetailProvenanceSource.DXF || !DXF_PROVENANCE_FIELD_SET.has(field)) return form;
+  return { ...form, extra: { ...form.extra, provenance: { ...prov, [field]: String(value ?? '') } } };
+}
+
+/** 成分一覧の行（頂点数・閉/開・警告）。 */
+export function dxfComponentRows(dxf) {
+  return dxf.scene.components.map(c => ({
+    index: c.index,
+    label: DETAIL_HELPER_TEXT.dxfComponentLabel(c.index + 1),
+    detail: `${c.vertexCount} ${DETAIL_HELPER_TEXT.dxfVertexUnit}・${c.closed ? DETAIL_HELPER_TEXT.dxfClosedLabel : DETAIL_HELPER_TEXT.dxfOpenLabel}`,
+    warnings: c.warnings.map(describeDxfWarning),
+    // 表示用: 閉じていない成分の警告（CONTOUR_OPEN）だけ赤で出す。
+    warningItems: c.warnings.map(w => ({ text: describeDxfWarning(w), red: w.code === DxfWarning.CONTOUR_OPEN })),
+    selected: dxf.selected.includes(c.index),
+  }));
+}
+
+/** 単位の読み取り結果の表示（「読み取り値: 25.4」）。 */
+export function dxfUnitHint(dxf) {
+  return `${DETAIL_HELPER_TEXT.dxfUnitDetected}: ${dxf.scene.unitFactor}`;
+}
+
+/** ファイル全体の警告（構文解析・単位）と、出所欄から出る警告（ライセンス未記入）の表示文。保存は止めない。 */
+export function dxfWarningTexts(dxf) {
+  const { warnings } = buildDxfProvenance(dxfProvenanceInput(dxf));
+  const digest = dxf.noDigest ? [{ code: DxfWarning.NO_DIGEST }] : [];
+  return [...dxf.scene.warnings, ...digest, ...warnings].map(describeDxfWarning);
+}
+
+const dxfProvenanceInput = dxf => ({
+  fileName: dxf.fileName, sha256: dxf.sha256, maker: dxf.maker, series: dxf.series, licenseNote: dxf.licenseNote,
+});
+
+/** プレビュー用プリミティブ。全成分を淡色で、選んだ成分を強調して描く（閉じた一筆書きは始点を足して閉じ辺も描く）。 */
+export function dxfPreviewPrimitives(dxf) {
+  const faint = [];
+  const strong = [];
+  const selected = new Set(dxf.selected);
+  for (const c of dxf.scene.components) {
+    const isSelected = selected.has(c.index);
+    for (const tr of c.trails) {
+      if (tr.points.length < 2) continue;
+      const pts = tr.points.map(p => [p.s, p.t]);
+      if (tr.closed) pts.push(pts[0]);
+      (isSelected ? strong : faint).push(polyline(pts, { ...DXF_PREVIEW_STYLE[isSelected ? 'selected' : 'faint'] }));
+    }
+  }
+  return [...faint, ...strong];
+}
+
+/**
+ * 選んだ成分を新規下書きのフォームにする（成分ごとに 1 本以上のストローク・全 LenSpec は fixed・線種は既定）。
+ * 分類・基準・stretch はユーザーが後から指定する（基準は軸ごとの原点 2 つ、各ストロークの頂点 0 を載せる）。
+ * 出所（provenance）はフォームの extra に載り、保存でそのままエントリへ入る。
+ * @returns {{form: object} | {error: string}}
+ */
+export function draftFromDxf({ dxf, idFactory }) {
+  const picked = dxf.scene.components.filter(c => dxf.selected.includes(c.index));
+  if (picked.length === 0) return { error: DETAIL_HELPER_MESSAGES.dxfNothingSelected };
+  const drawn = picked.flatMap(c => c.strokes);
+  if (drawn.length === 0) return { error: DETAIL_HELPER_MESSAGES.dxfNothingToCopy };
+  const base = entryFromForm(newDraft({ idFactory }));
+  const strokes = drawn.map((s, i) => ({ id: `${STROKE_ID_PREFIX}${i + 1}`, closed: s.closed, line: defaultLine(), moves: s.moves }));
+  const originDatums = base.datums.filter(d => d.kind === DetailDatumKind.ORIGIN);
+  const anchors = strokes.flatMap(s => originDatums.map(d => ({ datumId: d.id, strokeId: s.id, vertexIndex: 0 })));
+  const { provenance } = buildDxfProvenance(dxfProvenanceInput(dxf));
+  const label = dxf.fileName.replace(/\.[^.]*$/, '');
+  return { form: formFromEntry({ ...base, label, strokes, anchors, provenance }) };
+}
+
+/** DXF から写した下書きの doc（基準なし＝常に未保存。破棄・閉じる前に確認が出る）。 */
+export function draftDocOf(form) {
+  return { form, history: [], baseline: null, prevEntry: null };
+}
+
+/** 下書きの出所の表示文（DXF 由来のときだけ。手描きは null）。「この図は保存ファイルに入りません」を含む。 */
+export function provenanceNoticeOf(form) {
+  return form?.extra?.provenance?.source === DetailProvenanceSource.DXF ? formatDetailProvenance(form.extra.provenance) : null;
 }

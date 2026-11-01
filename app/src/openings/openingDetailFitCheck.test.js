@@ -107,7 +107,7 @@ test('集計: head の参照が切れていて jamb の図が実在すれば、�
   assert.equal(failures[0].label, 'df-chk-7h');
   assert.equal(failures[0].slot, HEAD);
   assert.equal(failures[0].reason, ERR_DETAIL_FIGURE_NOT_FOUND(sym, HEAD));
-  assert.match(failures[0].reason, /上枠の詳細図がカタログに見つかりません$/);
+  assert.match(failures[0].reason, /上枠の詳細図がカタログに見つかりません（DXF 由来の図は保存ファイルに入らないため、別の端末では見つかりません）$/);
 });
 
 test('集計: 参照切れの記号を出幅違いの 2 建具に付けても not-found 行は 1 件（鍵に寸法を含めない）', () => {
@@ -126,7 +126,7 @@ test('集計: detailRefs の参照が切れていれば文言は建具個別の�
   const failures = collectDetailFitFailures(graph);
   assert.equal(failures.length, 1);
   assert.equal(failures[0].label, 'df-chk-gone2');
-  assert.equal(failures[0].reason, '建具個別の指定 の方立（縦枠）の詳細図がカタログに見つかりません');
+  assert.equal(failures[0].reason, '建具個別の指定 の方立（縦枠）の詳細図がカタログに見つかりません（DXF 由来の図は保存ファイルに入らないため、別の端末では見つかりません）');
   assert.ok(!failures[0].reason.includes(sym));
 });
 

@@ -4,7 +4,7 @@
 
 ## 置き場
 - 新カタログ種別 `detailFigure`（7 種別目）。三層（本体＞ライブラリ＞同梱）の照合・差分通知・上書き印がそのまま効く（`catalog-model.md`）。本体は空。
-- 同梱するのは**使用中だけ**（建具記号の `detailFigures` から推移展開で届く図）。読み込んだ DXF・PDF とその由来の図は同梱しない（R10。S7 で実装。現状は DXF 由来の図が存在せず、除外のコードも未）。割当てだけが文書に残り、図を持たない環境では既定の描きに戻る。
+- 同梱するのは**使用中だけ**（建具記号の `detailFigures` から推移展開で届く図）。読み込んだ DXF・PDF とその由来の図（`provenance.source==='dxf'`）は同梱しない（R10。DXF は S7a で実装済み＝`usedEntries.js` の推移展開と回復後の再展開が除く。PDF は S7b）。割当てだけが文書に残り、図を持たない環境では既定の描きに戻る。
 - 参照の担い手は建具記号エントリの任意項目 `detailFigures:{jamb,head}`。三方枠の断面形の選び先 `profile` が既に建具記号にある前例に揃え、FBS を触らずに通す。建具個別の上書き（`opening.detailRefs`）は S6a で永続化（FBS 末尾 28・29、undo は建具編集の EDITABLE、読み替えは walker の rewrite）。建具エディタの select（方立・上枠の 2 つ。先頭は「記号の設定を使う」）と、R16 の明示ボタン「図の寸法を建具へ」（解決後の方立の図の param 束縛 mm を見付・出幅へ写す。undo あり・自動の書き戻しなし）。判断は `openings/openingDetailRefsEdit.js`。
 
 ## 図の表現
@@ -36,13 +36,25 @@
 ## モジュール境界
 - `detail/` は葉（graph・カタログ・store を読まない）。`openings/` が引けるのは `detailPlacement.js` だけ、`catalog/` が静的に引けるのは `detailModel.js` だけ（それ自身が constants だけを引く。本体の空一覧 `detailBuiltins.js` は `loadBuiltin` の動的 import）。`ui/detailHelperForm.js` は純（node:test から単体 import 可）。`detail/`（`detail/importGraph.test.js`）・`catalog/`（`catalogImports.test.js`）・`ui/detailHelperForm.js`（`detailHelperImportGraph.test.js`）、`openings/` は `openings/importGraph.test.js` で固定。
 
+## DXF 読込み（S7a。`detail/dxf/`・純）
+- 意図: メーカー配布の ASCII DXF から輪郭を拾い、ペン命令列（ストローク）の新規下書きへ写す。**原本のバイト列は保持しない**（`sha256` だけ出所に残す）ので再解析・再生成の保証は要らず、9 段パイプライン・レイヤ辞書・LOD 事前生成は採らない。出所は `provenance={source:'dxf', fileName, sha256, maker, series, licenseNote}`（ライセンス未記入は警告 LICENSE_UNKNOWN で、保存は止めない）。
+- 流れ: `dxfDecode`（UTF-8／Shift_JIS の置換文字が少ない方・バイナリは拒否）→ `dxfTokenize`（対。不正 code・切れたファイルは `{error}`）→ `dxfParse`（LINE・ARC・CIRCLE・LWPOLYLINE の bulge・POLYLINE/VERTEX・INSERT を line／arc の 2 種へ。INSERT は深さ・循環で打ち切り、スケール・回転・ミラーを座標へ焼き込む。円・円弧・bulge は全部「楕円弧 c+u·cosθ+v·sinθ」で持つので非一様スケールも同じ式）→ `dxfEntities`（単位換算・弦分割・図座標 s 右／t 下向きへ y 反転）→ `dxfToStrokes`（端点スナップ→連結成分→一筆書き→共線の間引き→U/D/L/R／`'V'`）。入口は `dxfImport.js`（`readDxf`／`buildDxfScene`。例外は握って `{ok:false, error}`）。
+- 値は `core/constants.js`（`DXF_*`・`DxfWarning`・`DxfReject`）。文言は `error.js`（`WARN_DXF_*`／`ERR_DXF_*`／`MSG_DXF_NOT_IN_FILE`）。
+- 成分の順序は最初の線分の現れ順。分岐する成分は複数の一筆書き（ストローク）になり CONTOUR_OPEN（＝閉じた輪郭 1 周ではない）。自己交差は間引き前の節点で見る。`'V'` の dx/dy は正の大きさ、向きは ss（s 軸）／st（t 軸＝下向き正）。円は角度 0（+x）から始め、最後の点は最初の点と同座標。
+- 画面: ヘルパーの左ペイン「DXF 読込み」タブ（ファイル選択は accept なし・内容で判定。`runBusy('DXF 読込み')` の中で読む）。連結成分を一覧（頂点数・閉／開・警告）から選び（ヒット判定なし）、「下書きへ写す」で選んだ成分をまとめて新規下書き 1 つへ（成分ごとに 1 本以上のストローク。未保存の下書きは破棄の確認を通す。分類・基準・stretch は後から指定。全 LenSpec は fixed）。単位が不明なら係数を指定し直せる。
+- 同梱しない: 保存した図はライブラリ（user 層）にだけ残る。ヘルパー・保守パネルは出所と「この図は保存ファイルに入りません」を表示する。図を持たない環境の未解決行は文言（`ERR_DETAIL_FIGURE_NOT_FOUND`）で伝える。除外は同梱（`saveCatalogDocument`、`excludeDxf`）だけで、使用中の判定（削除確認・使用中バッジ）は除かない。使用中の DXF 由来の図を削除しても文書の同梱へは写さず、確認文（`MSG_DXF_DELETE_IN_USE`）で「現在の文書は既定の描き方に戻る」と告げる。
+- 次数 3 以上の節点（T 字・十字の接合点）は共線の間引きで消さない。自己交差は間引き前の節点で判定する。
+- digest（sha256）が失敗しても読込みは続け、sha256 は空・警告 NO_DIGEST。
+- 線分数（`DXF_SELFINT_MAX_SEGMENTS`）・候補の対（`DXF_SELFINT_MAX_PAIRS`）・格子登録数（`DXF_SELFINT_MAX_CELL_ENTRIES`）の上限を超えたら自己交差の判定を省き、警告 SELF_INTERSECT_UNCHECKED。
+- 先送り: PDF（S7b）・SPLINE／ELLIPSE・押し出し方向（210/220/230）・INSERT の配列・ペーパー空間・ズーム／パン・RDP 等の間引き（トポロジー保存版が要る）・キャンバスでのクリック選択。
+
 ## 既知の限界・先送り
 - 三方枠以外へ種別を変えても `opening.detailRefs` は残す（`frameFaceWidth` と同じ規約。UI からは見えず、使用中として同梱され続ける。リード裁定）。
 - 同梱の図が propose・pick（部分一致）になり、その図を指す同梱の記号が先にライブラリへ写されると、承認後もライブラリ側の記号は旧キーを指したまま（読み替えは同梱の記号だけ＝「ライブラリ層は触らない」規約の帰結。その記号を使う別文書では not-found 行になる）。
 - 線種（dash／weightRole）は無視（平面は枠の太さ・展開は断面の太線）／斜め寸法線なし／寸法は 1 手単位（複数手にまたがる寸法は表せない）／mm 判定の closed は param・material・stretch で閉じ辺 0 になるケースを登録時に検出しない／同じ図を参照する別記号の失敗は 1 行にまとまる／使用中の印は開いたとき 1 回。
 - 姿図の差替えの限界（S6b）: 線種は weightRole（極太は切断線へ寄せる）と dash だけ読み、破線は線分ごとの line・実線は polyline（Konva は polyline の dash を描かず、閉じた polyline を塗るため閉じ辺は始点を足した開いた折れ線にする）。レバーハンドルの取付高さの寸法（編集用）は図を置換しても残る。FL を origin にした図は窓台の分だけ伸縮する（SILL と別の挙動）。建具モード init の通知は kind が fixtureSymbol の行に載る（主語は建具種別キーで、区分 fitting/window は付かない）。ヘルパーの試し込みは分類が姿図なら幅・高さ・窓台（既定は代表の建具種別 singleSwing の既定幅・高さと窓台 0）、既定の基準は t の origin＝SILL・end＝HEAD。
-- 先送り: DXF（S7）・部屋の取り合い（S8）・屋根の軒先けらば（S9）・器具の配置（S10）・PDF・図を部品に組み合わせる作図・`useCatalogEditActions` の共有化・`rewriteDocSymbolDetailFigures` の改名（建具種別も読み替えるため。整理課題）。
+- 先送り: PDF（S7b）・部屋の取り合い（S8）・屋根の軒先けらば（S9）・器具の配置（S10）・PDF・図を部品に組み合わせる作図・`useCatalogEditActions` の共有化・`rewriteDocSymbolDetailFigures` の改名（建具種別も読み替えるため。整理課題）。
 
 ## 履歴
 - 2026-10-31 S1 `5f396eb2` 純モジュール／S2 `0f256ee1` カタログ種別と同梱往復／S3 `8047121a` 三方枠への反映（裁定 R1〜R21 は推奨案で確定）。
-- 2026-11-01 S6b（コミット前）姿図の差替え。S4 `c4c658c3` ヘルパー画面。S5（コミット前）建具記号タブの割当て UI・プレビューの `detailRefs` 経路・閲覧タブの使用中印・本文書。
+- 2026-11-01 S7a（コミット前）DXF 読込み。S6b（コミット前）姿図の差替え。S4 `c4c658c3` ヘルパー画面。S5（コミット前）建具記号タブの割当て UI・プレビューの `detailRefs` 経路・閲覧タブの使用中印・本文書。

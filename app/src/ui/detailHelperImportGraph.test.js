@@ -17,6 +17,7 @@ const FORBIDDEN_PACKAGES = new Set(['react-konva', 'konva', 'react', 'react-dom'
 const ALLOWED_DIRECT = new Set([
   'core/constants.js',
   'detail/detailModel.js', 'detail/detailPreview.js', 'detail/detailPlacement.js',
+  'detail/dxf/dxfImport.js', 'detail/dxf/dxfProvenance.js', 'error.js',
   'catalog/catalogKinds.js', 'catalog/catalogMaintenance.js',
   'openings/openingCatalog.js', 'openings/openingDetailFrame.js',
   'ui/numpadUtils.js',

@@ -22,7 +22,12 @@ import {
   deleteConfirmMessage, libraryRows, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
   libraryMetaLabel, wallThicknessNotice,
+  loadDxf, setDxfUnit, toggleDxfComponent, setDxfProvenanceField, dxfComponentRows, dxfUnitHint, dxfWarningTexts,
+  dxfPreviewPrimitives, draftFromDxf, draftDocOf, provenanceNoticeOf, DETAIL_HELPER_TABS, setProvenanceField,
 } from './detailHelperForm.js';
+import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
+import { DXF_PROVENANCE_FIELDS } from '../core/constants.js';
+import { ERR_DXF_FILE_READ_FAILED } from '../error.js';
 
 /**
  * 部分詳細図ヘルパー（全画面パネル）。ペン入力で一筆書きの図を描き、基準・寸法を指定して
@@ -61,8 +66,64 @@ function LibraryRow({ row, active, disabled, onSelect }) {
   );
 }
 
+// DXF の sha256（ブラウザの SubtleCrypto）。
+// 使えない環境（http など）では reject し、loadDxf が NO_DIGEST の警告で読込みを続ける。
+const sha256OfBytes = bytes => sha256HexWith(globalThis.crypto?.subtle)(bytes);
+
+/** 左ペインの「DXF 読込み」タブ。配線だけ（判断は detailHelperForm.js）。 */
+function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy }) {
+  const rows = dxf ? dxfComponentRows(dxf) : [];
+  const warnings = dxf ? dxfWarningTexts(dxf) : [];
+  return (
+    <div className="dthlp-dxf">
+      <button className="dthlp-btn" disabled={busy} onClick={onOpen}>{DETAIL_HELPER_TEXT.dxfOpen}</button>
+      {message && <div className={message.isError ? 'dthlp-error' : 'dthlp-ok'}>{message.text}</div>}
+      {dxf && (
+        <>
+          <div className="dthlp-dxf-file">{dxf.fileName}（{dxf.encoding}）</div>
+          <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onUnit}>
+            {DETAIL_HELPER_TEXT.dxfUnit}: {displayLen(dxf.unitText)}（{dxfUnitHint(dxf)}）
+          </button>
+          {warnings.length > 0 && (
+            <ul className="dthlp-dxf-warn" aria-label={DETAIL_HELPER_TEXT.dxfWarnings}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+          )}
+          <div className="dthlp-block-head"><span>{DETAIL_HELPER_TEXT.dxfComponents}</span></div>
+          <div className="dthlp-dxf-comps">
+            {rows.length === 0 && <div className="dthlp-empty">{DETAIL_HELPER_TEXT.dxfNoComponents}</div>}
+            {rows.map(r => (
+              <div key={r.index} className={`dthlp-dxf-comp${r.selected ? ' dthlp-dxf-comp--selected' : ''}`} onClick={() => onToggle(r.index)}>
+                <span>{`${r.label}・${r.detail}`}</span>
+                {r.warningItems.length > 0 && (
+                  <ul className="dthlp-dxf-warn">{r.warningItems.map((w, i) => <li key={i} className={w.red ? 'dthlp-dxf-warn--red' : undefined}>{w.text}</li>)}</ul>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="dthlp-block">
+            <div className="dthlp-block-head"><span>{DETAIL_HELPER_TEXT.dxfProvenance}</span></div>
+            <label className="dthlp-row">{DETAIL_HELPER_TEXT.dxfMaker}
+              <input className="dthlp-input" value={dxf.maker} onChange={e => onField(DXF_PROVENANCE_FIELDS.MAKER, e.target.value)} />
+            </label>
+            <label className="dthlp-row">{DETAIL_HELPER_TEXT.dxfSeries}
+              <input className="dthlp-input" value={dxf.series} onChange={e => onField(DXF_PROVENANCE_FIELDS.SERIES, e.target.value)} />
+            </label>
+            <label className="dthlp-row">{DETAIL_HELPER_TEXT.dxfLicense}
+              <input className="dthlp-input" value={dxf.licenseNote} onChange={e => onField(DXF_PROVENANCE_FIELDS.LICENSE_NOTE, e.target.value)} />
+            </label>
+          </div>
+          <button className="dthlp-btn dthlp-btn--primary" disabled={busy || dxf.selected.length === 0} onClick={onCopy}>{DETAIL_HELPER_TEXT.dxfCopy}</button>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function DetailHelperPanel({ onClose }) {
   const [doc, setDoc] = useState(freshDoc);
+  const [leftTab, setLeftTab] = useState(DETAIL_HELPER_TABS.PEN);
+  const [dxf, setDxf] = useState(null);
+  const [dxfMessage, setDxfMessage] = useState(null); // { text, isError }
+  const dxfInputRef = useRef(null);
   const { form, history, baseline, prevEntry } = doc;
   const penError = doc.penError ?? null;
   const rootRef = useRef(null);
@@ -95,6 +156,10 @@ export function DetailHelperPanel({ onClose }) {
   const fitFields = fitDimFieldsFor(form);
   const fitted = useMemo(() => (fitOn ? tryFit(form, fitDims) : null), [fitOn, form, fitDims]);
   const primitives = useMemo(() => previewPrimitivesOf(form, fitted), [form, fitted]);
+  const showDxf = leftTab === DETAIL_HELPER_TABS.DXF;
+  const dxfPrims = useMemo(() => (dxf ? dxfPreviewPrimitives(dxf) : []), [dxf]);
+  const shownPrims = showDxf ? dxfPrims : primitives;
+  const provenanceNotice = provenanceNoticeOf(form);
   const result = useMemo(() => validation(form), [form]);
   const blockers = saveBlockers(form, result);
   const dirty = isDraftDirty(form, baseline);
@@ -147,6 +212,41 @@ export function DetailHelperPanel({ onClose }) {
     else if (target.kind === 'move') edit(f => setMoveLen(f, target.editKey, value));
     else if (target.kind === 'offset') edit(f => setDatumField(f, target.datumId, 'offset', value));
     else if (target.kind === 'fit') setFitOverrides(o => ({ ...o, [target.field]: value }));
+    else if (target.kind === 'dxfUnit') {
+      const r = setDxfUnit(dxf, value);
+      setDxf(r.dxf);
+      setDxfMessage(r.error ? { text: r.error, isError: true } : null);
+    }
+  }
+
+  // DXF を読む。外部ファイルなので accept は付けない（iOS の Files は未登録拡張子を accept に含むと全ファイルをグレーアウトする）。
+  // 読込み〜解析は runBusy の中（await をまたぐ UI 入口）。失敗は握って画面に出す。
+  async function handleDxfFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || busy) return;
+    setBusy(true);
+    try {
+      const result = await runBusy('DXF 読込み', async () => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        return loadDxf({ bytes, fileName: file.name, digest: sha256OfBytes });
+      });
+      if (result.ok) { setDxf(result.dxf); setDxfMessage(null); } else setDxfMessage({ text: result.message, isError: true });
+    } catch {
+      setDxfMessage({ text: ERR_DXF_FILE_READ_FAILED, isError: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+  // 選んだ成分を新規下書きへ写す（未保存の下書きがあれば破棄の確認を通す）。
+  function handleDxfCopy() {
+    const r = draftFromDxf({ dxf, idFactory: newKeyPart });
+    if (r.error) { setDxfMessage({ text: r.error, isError: true }); return; }
+    guardDiscard(() => {
+      replaceDoc(draftDocOf(r.form));
+      setLeftTab(DETAIL_HELPER_TABS.PEN);
+      setDxfMessage(null);
+    });
   }
 
   function handleOpenEntry(key) {
@@ -206,7 +306,7 @@ export function DetailHelperPanel({ onClose }) {
       setBusy(false);
     }
     setConfirm({
-      message: deleteConfirmMessage({ label: prevEntry.label, used: used.has(prevEntry.key), dirty }),
+      message: deleteConfirmMessage({ label: prevEntry.label, used: used.has(prevEntry.key), dirty, entry: prevEntry }),
       buttons: [
         { label: DETAIL_HELPER_MESSAGES.confirmDeleteButton, value: 'ok', primary: true, danger: true },
         { label: DETAIL_HELPER_MESSAGES.cancelButton, value: 'cancel' },
@@ -266,6 +366,21 @@ export function DetailHelperPanel({ onClose }) {
       <div className="dthlp-body">
         {/* 左: ペン操作と命令一覧 */}
         <section className="dthlp-pane dthlp-left">
+          <div className="dthlp-tabs">
+            <button className={`dthlp-btn${showDxf ? '' : ' dthlp-btn--active'}`} onClick={() => setLeftTab(DETAIL_HELPER_TABS.PEN)}>{DETAIL_HELPER_TEXT.tabPen}</button>
+            <button className={`dthlp-btn${showDxf ? ' dthlp-btn--active' : ''}`} onClick={() => setLeftTab(DETAIL_HELPER_TABS.DXF)}>{DETAIL_HELPER_TEXT.tabDxf}</button>
+          </div>
+          {showDxf && (
+            <DxfPane
+              dxf={dxf} message={dxfMessage} busy={busy}
+              onOpen={() => dxfInputRef.current?.click()}
+              onUnit={() => openNumpad({ kind: 'dxfUnit' }, dxf.unitText, DETAIL_HELPER_TEXT.dxfUnit)}
+              onToggle={index => setDxf(d => toggleDxfComponent(d, index))}
+              onField={(field, value) => setDxf(d => setDxfProvenanceField(d, field, value))}
+              onCopy={handleDxfCopy}
+            />
+          )}
+          {!showDxf && (<>
           <div className="dthlp-pen">
             <button className="dthlp-btn dthlp-distance" onClick={() => openNumpad({ kind: 'pen' }, penText, DETAIL_NUMPAD_LABELS.penDistance)}>
               {distanceButtonLabel(penText)}
@@ -319,11 +434,12 @@ export function DetailHelperPanel({ onClose }) {
               </div>
             ))}
           </div>
+          </>)}
         </section>
 
         {/* 中央: プレビューと試し込み */}
         <section className="dthlp-pane dthlp-center">
-          <div className="dthlp-toolbar">
+          {!showDxf && <div className="dthlp-toolbar">
             <button className={`dthlp-btn${fitOn ? '' : ' dthlp-btn--active'}`} onClick={() => setFitOn(false)}>{DETAIL_HELPER_TEXT.fitOff}</button>
             <button className={`dthlp-btn${fitOn ? ' dthlp-btn--active' : ''}`} onClick={() => setFitOn(true)}>{DETAIL_HELPER_TEXT.fitOn}</button>
             {fitOn && fitFields.map(({ field, label }) => (
@@ -331,18 +447,18 @@ export function DetailHelperPanel({ onClose }) {
                 {fitDimButtonLabel(label, fitDims[field])}
               </button>
             ))}
-          </div>
-          {fitOn && wallNotice && <div className="dthlp-error">{wallNotice}</div>}
-          {fitted?.error && <div className="dthlp-error">{fitted.error.message}</div>}
+          </div>}
+          {!showDxf && fitOn && wallNotice && <div className="dthlp-error">{wallNotice}</div>}
+          {!showDxf && fitted?.error && <div className="dthlp-error">{fitted.error.message}</div>}
           <div className="dthlp-preview">
-            {primitives.length === 0 ? (
-              <div className="dthlp-empty">{DETAIL_HELPER_MESSAGES.emptyPreview}</div>
+            {shownPrims.length === 0 ? (
+              <div className="dthlp-empty">{showDxf ? DETAIL_HELPER_TEXT.dxfEmptyPreview : DETAIL_HELPER_MESSAGES.emptyPreview}</div>
             ) : (
               <AutoScaledFigure
-                primitives={primitives}
+                primitives={shownPrims}
                 maxWidth={PREVIEW_FRAME_PX.width}
                 maxHeight={PREVIEW_FRAME_PX.height}
-                onEditDim={fitOn ? undefined : (dim, v) => edit(f => setMoveLen(f, dim.editKey, String(v)))}
+                onEditDim={showDxf || fitOn ? undefined : (dim, v) => edit(f => setMoveLen(f, dim.editKey, String(v)))}
               />
             )}
           </div>
@@ -396,6 +512,22 @@ export function DetailHelperPanel({ onClose }) {
             ))}
           </div>
 
+          {provenanceNotice && (
+            <div className="dthlp-block dthlp-provenance">
+              <div>{provenanceNotice}</div>
+              {[
+                [DXF_PROVENANCE_FIELDS.MAKER, DETAIL_HELPER_TEXT.dxfMaker],
+                [DXF_PROVENANCE_FIELDS.SERIES, DETAIL_HELPER_TEXT.dxfSeries],
+                [DXF_PROVENANCE_FIELDS.LICENSE_NOTE, DETAIL_HELPER_TEXT.dxfLicense],
+              ].map(([field, label]) => (
+                <label key={field} className="dthlp-row">{label}
+                  <input className="dthlp-input" value={form.extra.provenance[field] ?? ''}
+                    onChange={e => edit(f => setProvenanceField(f, field, e.target.value), { track: false })} />
+                </label>
+              ))}
+            </div>
+          )}
+
           <div className="dthlp-block">
             {blockers.length === 0 ? (
               <div className="dthlp-ok">{DETAIL_HELPER_TEXT.validOk}</div>
@@ -416,6 +548,9 @@ export function DetailHelperPanel({ onClose }) {
         </section>
       </div>
 
+      {/* DXF 選択（hidden）。accept は付けない: iOS の Files は OS に未登録の拡張子を accept に含むと全ファイルを選べなくなる。
+          選別は読込み後の内容判定（dxfDecode／dxfTokenize）で行う。 */}
+      <input ref={dxfInputRef} type="file" style={{ display: 'none' }} onChange={handleDxfFile} />
       {numpad && (
         <NumPad
           value={numpad.value}
