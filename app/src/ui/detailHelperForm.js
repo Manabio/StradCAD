@@ -25,10 +25,11 @@ import {
 } from '../core/constants.js';
 import { readDxf, buildDxfScene } from '../detail/dxf/dxfImport.js';
 import { buildDxfProvenance, baseNameOf } from '../detail/dxf/dxfProvenance.js';
+import { buildPdfProvenance } from '../detail/pdf/pdfProvenance.js';
 import {
   WARN_DXF_UNIT_UNKNOWN, WARN_DXF_CONTOUR_OPEN, WARN_DXF_SELF_INTERSECT, WARN_DXF_LICENSE_UNKNOWN, WARN_DXF_INSERT_DEPTH,
   WARN_DXF_INSERT_CYCLE, WARN_DXF_UNSUPPORTED_ENTITY, WARN_DXF_NONUNIFORM_SCALE, WARN_DXF_ENTITY_LIMIT,
-  WARN_DXF_SELF_INTERSECT_UNCHECKED, WARN_DXF_NO_DIGEST, MSG_DXF_DELETE_IN_USE,
+  WARN_DXF_SELF_INTERSECT_UNCHECKED, WARN_DXF_NO_DIGEST, MSG_IMPORTED_DELETE_IN_USE,
   ERR_DXF_BINARY, ERR_DXF_BAD_GROUP_CODE, ERR_DXF_TRUNCATED, ERR_DXF_UNEXPECTED, ERR_DXF_NOT_BYTES,
 } from '../error.js';
 import { validateDetailFigure, DetailValidationError } from '../detail/detailModel.js';
@@ -37,7 +38,7 @@ import { fitLocal } from '../detail/detailPlacement.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import {
   formatDetailSubjectLabel, formatDetailViewLabel, formatCategoryLabel, categoryOptionsFor, rowEditState, planSaveEntry,
-  formatDetailProvenance, isDxfDerivedFigure,
+  formatDetailProvenance, isImportedFigure, IMPORTED_SOURCES,
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
@@ -105,10 +106,14 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   datumHeading: '基準と載せる頂点', noAnchor: '（なし）', validOk: '検証: 問題なし', blankValue: '—',
   approveButton: '承認する',
   // DXF 読込み（S7a）
-  tabPen: 'ペン', tabDxf: 'DXF 読込み', dxfOpen: 'DXF を開く', dxfCopy: '下書きへ写す',
+  tabPen: 'ペン', tabDxf: '図面読込み（DXF／PDF）', dxfOpen: 'DXF／PDF を開く', dxfCopy: '下書きへ写す',
   dxfUnit: '単位（1 単位 = ? mm）', dxfUnitDetected: '読み取り値', dxfComponents: '連結成分', dxfProvenance: '出所',
   dxfMaker: 'メーカー', dxfSeries: 'シリーズ', dxfLicense: 'ライセンス注記', dxfWarnings: '警告',
-  dxfNoComponents: '輪郭が見つかりません', dxfEmptyPreview: 'DXF を開くとここに表示されます',
+  dxfNoComponents: '輪郭が見つかりません', dxfEmptyPreview: 'DXF／PDF を開くとここに表示されます',
+  // PDF 読込み（S7b）
+  pdfPage: 'ページ', pdfPrev: '前', pdfNext: '次', pdfPageCount: n => `／ ${n} ページ`, pdfScale: '縮尺 1/N の N',
+  pdfClip: '範囲（pt。ページ左上が原点）', pdfClipFields: Object.freeze({ x: 'x', y: 'y', w: '幅', h: '高さ' }),
+  pdfDragHint: 'ページ画像をドラッグして、写す範囲を選んでください', pdfExtract: '抽出', pdfNoPage: 'ページを読み込んでいます',
   dxfComponentLabel: n => `成分 ${n}`,
   dxfClosedLabel: '閉', dxfOpenLabel: '開', dxfVertexUnit: '頂点',
 });
@@ -175,6 +180,9 @@ export const DETAIL_HELPER_MESSAGES = Object.freeze({
   dxfUnitInvalid: '単位は 0 より大きい数で入力してください',
   dxfNothingSelected: '写す輪郭を一覧から選んでください',
   dxfNothingToCopy: '選んだ成分に写せる線がありません',
+  pdfPageInvalid: 'ページは 1 以上の整数で入力してください',
+  pdfClipInvalid: '範囲は数値で、幅・高さは 0 より大きくしてください',
+  pdfNeedClip: '写す範囲をページ画像のドラッグか数値で指定してください',
 });
 
 /** ラベル表 → select の選択肢（{value,label}[]）。 */
@@ -264,10 +272,10 @@ export function afterSaveDoc(doc, entry, form) {
 
 /** 削除の確認文。使用中（文書が参照している）なら同梱へ写すこと、未保存の編集があれば破棄されることを添える。 */
 export function deleteConfirmMessage({ label, used, dirty, entry = null }) {
-  const dxf = isDxfDerivedFigure(entry);
+  const imported = isImportedFigure(entry);
   const parts = [`「${label}」をライブラリから削除します。`];
-  // DXF 由来の図は文書の同梱へ写せない（保存ファイルに入らない）ので、同梱へ写す文言ではなく専用の文で告げる。
-  if (used && dxf) parts.push(MSG_DXF_DELETE_IN_USE);
+  // DXF・PDF 由来の図は文書の同梱へ写せない（保存ファイルに入らない）ので、同梱へ写す文言ではなく専用の文で告げる。
+  if (used && imported) parts.push(MSG_IMPORTED_DELETE_IN_USE);
   else if (used) parts.push('この文書が使用中のため、文書の同梱へ写します（文書は未保存扱いになります）。');
   if (dirty) parts.push('編集中の内容は破棄されます。');
   return parts.join('');
@@ -373,9 +381,9 @@ export function formFromEntry(entry) {
 
 /** フォーム → カタログのエントリ（文字列の数値は parseNumberText で数値へ。読めない欄は NaN になり検証が理由を返す）。 */
 export function entryFromForm(form) {
-  // DXF 由来の出所は、編集中の生の入力を保存形（trim 済み）へ揃える。
-  const extra = form.extra?.provenance?.source === DetailProvenanceSource.DXF
-    ? { ...form.extra, provenance: buildDxfProvenance(form.extra.provenance).provenance }
+  // DXF・PDF 由来の出所は、編集中の生の入力を保存形（trim 済み）へ揃える。
+  const extra = isImportedProvenance(form.extra?.provenance)
+    ? { ...form.extra, provenance: normalizedProvenance(form.extra.provenance) }
     : form.extra;
   return {
     ...extra,
@@ -807,14 +815,8 @@ export function describeDxfReject(error) {
   return f ? f(error) : ERR_DXF_UNEXPECTED(String(error?.message ?? error?.code));
 }
 
-/**
- * DXF のバイト列を読む（復号→構文解析→成分化。sha256 は注入した digest(bytes)→Promise<hex>）。
- * 失敗は { ok:false, message }（例外にしない）。
- */
-export async function loadDxf({ bytes, fileName, digest }) {
-  const read = readDxf(bytes);
-  if (!read.ok) return { ok: false, message: describeDxfReject(read.error) };
-  // sha256 を取れなくても読込みは止めない（出所の sha256 を空にして警告 NO_DIGEST で続ける）。
+/** sha256 を取れなくても読込みは止めない（出所の sha256 を空にして警告 NO_DIGEST で続ける）。DXF・PDF 共通。 */
+export async function safeDigest(bytes, digest) {
   let sha256 = '';
   let noDigest = false;
   try {
@@ -823,6 +825,17 @@ export async function loadDxf({ bytes, fileName, digest }) {
     noDigest = true;
   }
   if (typeof sha256 !== 'string' || sha256 === '') { sha256 = ''; noDigest = true; }
+  return { sha256, noDigest };
+}
+
+/**
+ * DXF のバイト列を読む（復号→構文解析→成分化。sha256 は注入した digest(bytes)→Promise<hex>）。
+ * 失敗は { ok:false, message }（例外にしない）。
+ */
+export async function loadDxf({ bytes, fileName, digest }) {
+  const read = readDxf(bytes);
+  if (!read.ok) return { ok: false, message: describeDxfReject(read.error) };
+  const { sha256, noDigest } = await safeDigest(bytes, digest);
   const scene = buildDxfScene(read.parsed);
   if (!scene.ok) return { ok: false, message: describeDxfReject(scene.error) };
   return {
@@ -861,10 +874,19 @@ export function setDxfProvenanceField(dxf, field, value) {
 }
 const DXF_PROVENANCE_FIELD_SET = new Set(Object.values(DXF_PROVENANCE_FIELDS));
 
-/** 下書き（DXF 由来）の出所欄を書き換える。DXF 由来でない下書き・未知の項目は何もしない。保存時に trim される（entryFromForm）。 */
+/** 出所が外部ファイル（DXF・PDF）由来か。 */
+function isImportedProvenance(prov) {
+  return IMPORTED_SOURCES.includes(prov?.source);
+}
+/** 出所（DXF・PDF）の保存形（trim 済み）。それぞれの出所の builder を通す。 */
+function normalizedProvenance(prov) {
+  return prov.source === DetailProvenanceSource.PDF ? buildPdfProvenance(prov).provenance : buildDxfProvenance(prov).provenance;
+}
+
+/** 下書き（DXF・PDF 由来）の出所欄を書き換える。外部ファイル由来でない下書き・未知の項目は何もしない。保存時に trim される（entryFromForm）。 */
 export function setProvenanceField(form, field, value) {
   const prov = form?.extra?.provenance;
-  if (prov?.source !== DetailProvenanceSource.DXF || !DXF_PROVENANCE_FIELD_SET.has(field)) return form;
+  if (!isImportedProvenance(prov) || !DXF_PROVENANCE_FIELD_SET.has(field)) return form;
   return { ...form, extra: { ...form.extra, provenance: { ...prov, [field]: String(value ?? '') } } };
 }
 
@@ -896,6 +918,16 @@ export function dxfWarningTexts(dxf) {
 const dxfProvenanceInput = dxf => ({
   fileName: dxf.fileName, sha256: dxf.sha256, maker: dxf.maker, series: dxf.series, licenseNote: dxf.licenseNote,
 });
+
+/**
+ * 読込み状態（DXF の dxf／PDF の pdf）の出所。PDF（source==='pdf'）は抽出したときのページ・範囲・縮尺（scene が持つ）を載せる。
+ * @returns {{provenance: object, warnings: {code:string}[]}}
+ */
+export function importProvenanceOf(state) {
+  if (state.source !== DetailProvenanceSource.PDF) return buildDxfProvenance(dxfProvenanceInput(state));
+  const { page, clip, scaleDenominator } = state.scene;
+  return buildPdfProvenance({ ...dxfProvenanceInput(state), page, clip, scaleDenominator });
+}
 
 /** プレビュー用プリミティブ。全成分を淡色で、選んだ成分を強調して描く（閉じた一筆書きは始点を足して閉じ辺も描く）。 */
 export function dxfPreviewPrimitives(dxf) {
@@ -929,7 +961,7 @@ export function draftFromDxf({ dxf, idFactory }) {
   const strokes = drawn.map((s, i) => ({ id: `${STROKE_ID_PREFIX}${i + 1}`, closed: s.closed, line: defaultLine(), moves: s.moves }));
   const originDatums = base.datums.filter(d => d.kind === DetailDatumKind.ORIGIN);
   const anchors = strokes.flatMap(s => originDatums.map(d => ({ datumId: d.id, strokeId: s.id, vertexIndex: 0 })));
-  const { provenance } = buildDxfProvenance(dxfProvenanceInput(dxf));
+  const { provenance } = importProvenanceOf(dxf);
   const label = dxf.fileName.replace(/\.[^.]*$/, '');
   return { form: formFromEntry({ ...base, label, strokes, anchors, provenance }) };
 }
@@ -939,7 +971,7 @@ export function draftDocOf(form) {
   return { form, history: [], baseline: null, prevEntry: null };
 }
 
-/** 下書きの出所の表示文（DXF 由来のときだけ。手描きは null）。「この図は保存ファイルに入りません」を含む。 */
+/** 下書きの出所の表示文（DXF・PDF 由来のときだけ。手描きは null）。「この図は保存ファイルに入りません」を含む。 */
 export function provenanceNoticeOf(form) {
-  return form?.extra?.provenance?.source === DetailProvenanceSource.DXF ? formatDetailProvenance(form.extra.provenance) : null;
+  return isImportedProvenance(form?.extra?.provenance) ? formatDetailProvenance(form.extra.provenance) : null;
 }

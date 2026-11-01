@@ -12,3 +12,6 @@
   icacls "$env:USERPROFILE\.ssh\config" /inheritance:r /grant:r "${env:USERNAME}:F"
   ```
   使用する秘密鍵ファイルにも同様に実行する。
+
+## デプロイ後の確認
+- 初回デプロイ後に`curl -I`で`/assets/*.mjs`の Content-Type が JavaScript であることを確認する（PDF 読込みの module worker は MIME が違うと起動しない。Apache は`.htaccess`の`AddType`が要る場合あり）。

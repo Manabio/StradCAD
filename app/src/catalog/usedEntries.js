@@ -16,13 +16,16 @@ import { emptyBundle, withEntries, bundleEntries } from './catalogBundle.js';
 import { DetailLenMode, DetailProvenanceSource, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
 import { moveParts } from '../detail/detailModel.js';
 
+// 読み込んだ外部ファイル（DXF・PDF）由来の出所。文書に同梱しない対象（R10）。
+export const IMPORTED_SOURCES = Object.freeze([DetailProvenanceSource.DXF, DetailProvenanceSource.PDF]);
+
 /**
- * DXF 由来の詳細図か（provenance.source==='dxf'）。文書に同梱しない対象（R10）。
+ * 外部ファイル（DXF・PDF）由来の詳細図か（provenance.source が 'dxf' か 'pdf'）。文書に同梱しない対象（R10）。
  * @param {object|null|undefined} figure
  * @returns {boolean}
  */
-export function isDxfDerivedFigure(figure) {
-  return figure?.provenance?.source === DetailProvenanceSource.DXF;
+export function isImportedFigure(figure) {
+  return IMPORTED_SOURCES.includes(figure?.provenance?.source);
 }
 
 /**
@@ -215,7 +218,7 @@ export function expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind) 
  * @param {Map<string, Map<string, object>>} resolvedByKind
  * @returns {Map<string, Set<string>>}
  */
-export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKind, { excludeDxf = false } = {}) {
+export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKind, { excludeImported = false } = {}) {
   if (!usedKeysByKind.has(CatalogKind.DETAIL_FIGURE)) return usedKeysByKind;
   const figureKeys = new Set(usedKeysByKind.get(CatalogKind.DETAIL_FIGURE));
   for (const symbolKey of usedKeysByKind.get(CatalogKind.FIXTURE_SYMBOL) ?? []) {
@@ -227,11 +230,11 @@ export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKi
     const subType = resolvedByKind.get(CatalogKind.OPENING_SUB_TYPE)?.get(subTypeKey);
     for (const figureKey of detailFigureKeysOfEntry(subType)) figureKeys.add(figureKey);
   }
-  // 同梱（excludeDxf）のときだけ、DXF 由来の図を対象から外す（R10。割当てのキーは文書に残り、図を持たない環境では
-  // 既定の描きに戻る。材の推移展開にも載せない）。使用中の判定（削除確認・使用中バッジ）では外さない。
-  if (excludeDxf) {
+  // 同梱（excludeImported）のときだけ、外部ファイル（DXF・PDF）由来の図を対象から外す（R10。割当てのキーは文書に残り、
+  // 図を持たない環境では既定の描きに戻る。材の推移展開にも載せない）。使用中の判定（削除確認・使用中バッジ）では外さない。
+  if (excludeImported) {
     for (const figureKey of [...figureKeys]) {
-      if (isDxfDerivedFigure(resolvedByKind.get(CatalogKind.DETAIL_FIGURE)?.get(figureKey))) figureKeys.delete(figureKey);
+      if (isImportedFigure(resolvedByKind.get(CatalogKind.DETAIL_FIGURE)?.get(figureKey))) figureKeys.delete(figureKey);
     }
   }
   const next = new Map(usedKeysByKind);
@@ -368,7 +371,7 @@ export function reexpandTransitiveDetailFigures(bundle, detailFigureMap) {
   for (const key of wanted) {
     if (existingKeys.has(key)) continue;
     const entry = detailFigureMap?.get(key);
-    if (isDxfDerivedFigure(entry)) continue; // DXF 由来の図は同梱しない（未解決にも数えない）
+    if (isImportedFigure(entry)) continue; // DXF・PDF 由来の図は同梱しない（未解決にも数えない）
     if (entry) newEntries.push(stripOverridesBuiltin(entry));
     else unresolvedDetailFigureKeys.add(key);
   }

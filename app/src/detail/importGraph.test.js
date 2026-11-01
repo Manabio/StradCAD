@@ -17,6 +17,9 @@ const rel = p => norm(path.relative(srcDir, p));
 
 const FORBIDDEN_SRC_FILES = new Set(['store.js', 'snap.js', 'appViewport.js']);
 const FORBIDDEN_PACKAGES = new Set(['react-konva', 'konva', 'react', 'react-dom']);
+// pdfjs-dist（サブパスも）は ui/pdfLoader.js だけが引く。detail/pdf/ の純モジュールは演算子列を入力に取る。
+const PDFJS_PACKAGE = 'pdfjs-dist';
+const isForbiddenPackage = spec => FORBIDDEN_PACKAGES.has(spec) || spec === PDFJS_PACKAGE || spec.startsWith(`${PDFJS_PACKAGE}/`);
 const FORBIDDEN_SRC_DIRS = ['storage/', 'elevation/', 'facade/', 'plan/', 'ceiling/', 'finish/', 'openings/', 'catalog/', 'structural/'];
 const ALLOWED_OUTSIDE = new Map([
   ['core/constants.js', null],                                                       // null = どのファイルからでも可
@@ -45,7 +48,7 @@ function directOffenders(relFile, srcText) {
   const offenders = [];
   for (const spec of specifiersOfSource(srcText)) {
     if (!spec.startsWith('.')) {
-      if (FORBIDDEN_PACKAGES.has(spec)) offenders.push(`${relFile} -> ${spec}`);
+      if (isForbiddenPackage(spec)) offenders.push(`${relFile} -> ${spec}`);
       continue;
     }
     const target = norm(path.relative(srcDir, path.resolve(srcDir, path.dirname(relFile), spec)));
@@ -85,7 +88,7 @@ function transitiveOffenders(startFiles) {
     seen.add(file);
     for (const spec of specifiersOf(file)) {
       if (!spec.startsWith('.')) {
-        if (FORBIDDEN_PACKAGES.has(spec)) offenders.push(`${chain} -> ${spec}`);
+        if (isForbiddenPackage(spec)) offenders.push(`${chain} -> ${spec}`);
         continue;
       }
       const target = norm(path.resolve(path.dirname(file), spec));
@@ -104,6 +107,13 @@ test('【不変条件】detail/ は推移的にも store.js・snap.js・appViewp
   assert.deepEqual(offenders, []);
 });
 
+test('【不変条件】detail/pdf/ の製品ファイルを読めていて、どれも pdfjs を（直接・推移的に）引かない', () => {
+  const pdfFiles = detailFiles.filter(f => rel(f).startsWith('detail/pdf/'));
+  assert.ok(pdfFiles.length >= 5, `detail/pdf/ の製品ファイルが少なすぎる: ${pdfFiles.length}`);
+  for (const f of pdfFiles) assert.ok(!specifiersOf(f).some(isForbiddenPackage), `${rel(f)} が禁止パッケージを引いている`);
+  assert.deepEqual(transitiveOffenders(pdfFiles).offenders, []);
+});
+
 test('【不変条件】detailModel.js の静的 import は ../core/constants.js だけ', () => {
   assert.deepEqual(specifiersOf(path.join(detailDir, 'detailModel.js')), ['../core/constants.js']);
   assert.ok(!/\bimport\s*\(/.test(fs.readFileSync(path.join(detailDir, 'detailModel.js'), 'utf8')), '動的 import も持たない');
@@ -119,6 +129,8 @@ test('【不変条件】検出力: 禁止先を引くソース文字列は offen
     "import React from 'react';",
     "import { Layer } from 'react-konva';",
     "import Konva from 'konva';",
+    "import * as pdfjs from 'pdfjs-dist';",
+    "import * as pdfjs from 'pdfjs-dist/build/pdf.min.mjs';",
     "import { x } from '../elevation/elevationStyle.js';",
     "import { x } from '../facade/facadeStyle.js';",
     "import { x } from '../plan/planSectionFigure.js';",

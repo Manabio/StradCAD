@@ -644,6 +644,7 @@ export const DetailMaterialField = Object.freeze({
 export const DetailProvenanceSource = Object.freeze({
   MANUAL: 'manual',
   DXF:    'dxf',
+  PDF:    'pdf',
 });
 /** 詳細図の線種。'dashed' は elevation/elevationStyle.js の ElevationDash.DASHED と同値（detail/ は elevation/ を引けないのでここに置く）。 */
 export const DetailDash = Object.freeze({
@@ -720,4 +721,46 @@ export const DxfReject = Object.freeze({
   TRUNCATED:      'truncated',     // 途中で切れている（対の片割れ・EOF が無い）
   UNEXPECTED:     'unexpected',    // 想定外の例外（握って通知）
   NOT_BYTES:      'notBytes',      // 入力がバイト列でない
+});
+
+// ---- PDF 読込み（部分詳細図 S7b。detail/pdf/。pdfjs は ui/pdfLoader.js だけが引く）----
+/** PDF の 1 pt = 1/72 inch → mm。 */
+export const PDF_PT_TO_MM = 25.4 / 72;
+/** 選べるページ数の上限（超えたページは選べない。PAGE_LIMIT）。ASSUMED。 */
+export const PDF_MAX_PAGES = 200;
+/** 読み込むファイルの上限バイト数（超えたら読まない。PdfReject.SIZE_LIMIT）。ASSUMED。 */
+export const PDF_MAX_BYTES = 50 * 1024 * 1024;
+/** 1 ページから拾うパス（constructPath）数の上限（超えたら打ち切る。PATH_LIMIT）。ASSUMED。 */
+export const PDF_MAX_PATH_OPS = 200000;
+/** PDF の先頭の署名（内容判定。ファイル名・拡張子・MIME は見ない）。 */
+export const PDF_SIGNATURE = '%PDF-';
+/** 署名を探す先頭のバイト数（仕様は先頭 1024 バイト以内）。 */
+export const PDF_SIGNATURE_SCAN_BYTES = 1024;
+/** ページ画像を描く倍率（canvas の px／pt。表示専用）。 */
+export const PDF_PREVIEW_SCALE = 1.5;
+/** pdfjs の constructPath が持つ描画命令の符号（pdfjs は export していないため固定版に合わせて持つ）。
+ *  pdfjs-dist 6.4.299 固定。版を上げたら detail/pdf/pdfjsPin.test.js で照合する（DrawOPS と一致しなければ落ちる）。 */
+export const PdfDrawOp = Object.freeze({ MOVE_TO: 0, LINE_TO: 1, CURVE_TO: 2, QUAD_TO: 3, CLOSE: 4 });
+/** 塗りの色がこの値（pdfjs の setFillRGBColor の引数）だけのパスは地（白抜き・ページ背景）として拾わない。 */
+export const PDF_BACKGROUND_FILL = '#ffffff';
+/** PDF 読込みの警告コード（保存は止めない。画面に出して残す）。 */
+export const PdfWarning = Object.freeze({
+  PAGE_LIMIT:    'pageLimit',    // ページ数が PDF_MAX_PAGES を超える（先頭からだけ選べる）
+  NO_PATHS:     'noPaths',      // 選んだ範囲にパスが無い
+  TEXT_IGNORED:  'textIgnored',  // 文字（showText 系）を無視した（件数）
+  IMAGE_IGNORED: 'imageIgnored', // 画像（paintImage 系）を無視した（件数）
+  PATH_LIMIT:    'pathLimit',    // パス数が PDF_MAX_PATH_OPS を超えて打ち切った
+  SCALE_MISSING: 'scaleMissing', // 縮尺が未入力・不正（mm へ換算できない）
+  UNKNOWN_DRAW_OP:    'unknownDrawOp',    // 経路データの未知の描画命令で、その経路の残りを読めなかった（件数）
+  NON_FINITE_SEGMENT: 'nonFiniteSegment', // 座標が有限でない線分を捨てた（件数）
+});
+/** PATH_LIMIT の打ち切りの種類（経路数か線分数か）。 */
+export const PdfLimitKind = Object.freeze({ PATHS: 'paths', SEGMENTS: 'segments' });
+/** PDF を読み込まず拒否する理由。 */
+export const PdfReject = Object.freeze({
+  NOT_PDF:            'notPdf',            // PDF ではない（署名が無い）
+  LOAD_FAILED:        'loadFailed',        // pdfjs が開けなかった（壊れている・暗号化など）
+  WORKER_UNAVAILABLE: 'workerUnavailable', // worker を起動できなかった
+  SIZE_LIMIT:         'sizeLimit',         // ファイルが PDF_MAX_BYTES を超える（読み込まない）
+  UNEXPECTED:         'unexpected',        // 純関数内の想定外の例外（握って通知）
 });

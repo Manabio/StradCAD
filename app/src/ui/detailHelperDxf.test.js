@@ -10,9 +10,9 @@ import {
 } from './detailHelperForm.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { formatDetailProvenance } from '../catalog/catalogMaintenance.js';
-import { isDxfDerivedFigure } from '../catalog/usedEntries.js';
+import { isImportedFigure } from '../catalog/usedEntries.js';
 import {
-  ERR_DXF_BINARY, ERR_DXF_TRUNCATED, MSG_DXF_NOT_IN_FILE, WARN_DXF_LICENSE_UNKNOWN, WARN_DXF_UNIT_UNKNOWN, WARN_DXF_NO_DIGEST, ERR_DXF_NOT_BYTES,
+  ERR_DXF_BINARY, ERR_DXF_TRUNCATED, MSG_IMPORTED_NOT_IN_FILE, WARN_DXF_LICENSE_UNKNOWN, WARN_DXF_UNIT_UNKNOWN, WARN_DXF_NO_DIGEST, ERR_DXF_NOT_BYTES,
 } from '../error.js';
 import { DxfWarning, DxfReject, PenDir, DetailProvenanceSource, DXF_PROVENANCE_FIELDS } from '../core/constants.js';
 
@@ -141,8 +141,8 @@ test('draftFromDxf: 矩形の成分 → R100/U50/L100・closed の 1 ストロ�
   assert.deepEqual(entry.provenance, {
     source: DetailProvenanceSource.DXF, fileName: 'sample.dxf', sha256: dxf.sha256, maker: 'ACME', series: 'S-1', licenseNote: '',
   });
-  assert.equal(isDxfDerivedFigure(entry), true, '保存した図は文書の同梱から外れる');
-  assert.ok(provenanceNoticeOf(form).includes(MSG_DXF_NOT_IN_FILE));
+  assert.equal(isImportedFigure(entry), true, '保存した図は文書の同梱から外れる');
+  assert.ok(provenanceNoticeOf(form).includes(MSG_IMPORTED_NOT_IN_FILE));
 });
 
 test('draftFromDxf: 斜めの成分は V（raw 保持）で検証が通る。複数の成分を選ぶと成分ごとにストロークが増える（id は s1, s2）', async () => {
@@ -188,6 +188,6 @@ test('出所の表示: 保守パネル・ヘルパー共通の文。DXF は フ�
   assert.equal(formatDetailProvenance(null), '手描き');
   assert.equal(formatDetailProvenance({ source: DetailProvenanceSource.MANUAL }), '手描き');
   const s = formatDetailProvenance({ source: DetailProvenanceSource.DXF, fileName: 'a.dxf', sha256: 'x', maker: 'ACME', series: '', licenseNote: '条件あり' });
-  assert.equal(s, `DXF・ファイル: a.dxf・メーカー: ACME・シリーズ: （未記入）・ライセンス注記: 条件あり・${MSG_DXF_NOT_IN_FILE}`);
+  assert.equal(s, `DXF・ファイル: a.dxf・メーカー: ACME・シリーズ: （未記入）・ライセンス注記: 条件あり・${MSG_IMPORTED_NOT_IN_FILE}`);
   assert.equal(provenanceNoticeOf({ extra: { provenance: { source: DetailProvenanceSource.MANUAL } } }), null);
 });

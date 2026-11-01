@@ -14,10 +14,13 @@ const rel = p => norm(path.relative(srcDir, p));
 
 const FORBIDDEN_SRC_FILES = new Set(['store.js', 'snap.js', 'appViewport.js']);
 const FORBIDDEN_PACKAGES = new Set(['react-konva', 'konva', 'react', 'react-dom']);
+// pdfjs-dist（サブパスも）は ui/pdfLoader.js だけが引く（動的 import の独立チャンク）。純ロジック側は静的にも引かない。
+const PDFJS_PACKAGE = 'pdfjs-dist';
+const isForbiddenPackage = spec => FORBIDDEN_PACKAGES.has(spec) || spec === PDFJS_PACKAGE || spec.startsWith(`${PDFJS_PACKAGE}/`);
 const ALLOWED_DIRECT = new Set([
   'core/constants.js',
   'detail/detailModel.js', 'detail/detailPreview.js', 'detail/detailPlacement.js',
-  'detail/dxf/dxfImport.js', 'detail/dxf/dxfProvenance.js', 'error.js',
+  'detail/dxf/dxfImport.js', 'detail/dxf/dxfProvenance.js', 'detail/pdf/pdfProvenance.js', 'error.js',
   'catalog/catalogKinds.js', 'catalog/catalogMaintenance.js',
   'openings/openingCatalog.js', 'openings/openingDetailFrame.js',
   'ui/numpadUtils.js',
@@ -29,15 +32,15 @@ const specifiersOfSource = src => [...src.matchAll(IMPORT_RE)].map(m => m[1] || 
 const specifiersOf = file => specifiersOfSource(fs.readFileSync(file, 'utf8'));
 
 // 直接 import の違反（許可表に無い相対 import・禁止パッケージ）。srcText と自分の位置（src からの相対）を渡す。
-function directOffenders(relFile, srcText) {
+function directOffenders(relFile, srcText, allowed = null) {
   const offenders = [];
   for (const spec of specifiersOfSource(srcText)) {
     if (!spec.startsWith('.')) {
-      if (FORBIDDEN_PACKAGES.has(spec)) offenders.push(`${relFile} -> ${spec}`);
+      if (isForbiddenPackage(spec)) offenders.push(`${relFile} -> ${spec}`);
       continue;
     }
     const t = norm(path.relative(srcDir, path.resolve(srcDir, path.dirname(relFile), spec)));
-    if (!ALLOWED_DIRECT.has(t)) offenders.push(`${relFile} -> ${t}`);
+    if (!(allowed ?? ALLOWED_DIRECT).has(t)) offenders.push(`${relFile} -> ${t}`);
   }
   return offenders;
 }
@@ -52,7 +55,7 @@ function transitiveOffenders(startFiles) {
     seen.add(file);
     for (const spec of specifiersOf(file)) {
       if (!spec.startsWith('.')) {
-        if (FORBIDDEN_PACKAGES.has(spec)) offenders.push(`${chain} -> ${spec}`);
+        if (isForbiddenPackage(spec)) offenders.push(`${chain} -> ${spec}`);
         continue;
       }
       const t = norm(path.resolve(path.dirname(file), spec));
@@ -80,6 +83,25 @@ test('【不変条件】detailHelperForm.js は推移的にも store.js・snap.j
   assert.ok(seen.size > 10, `推移的に辿れていない: ${seen.size}`);
   assert.ok(seen.has(norm(path.join(srcDir, 'openings', 'openingCatalog.js'))), 'openingCatalog.js まで辿れていない');
   assert.deepEqual(offenders, []);
+});
+
+// PDF 読込みの純ロジック（detailHelperPdf.js）。pdfjs・pdfLoader.js・.jsx を静的に引かず、node:test から単体 import できる。
+const PDF_LOGIC_ALLOWED = new Set([
+  'core/constants.js', 'error.js', 'ui/detailHelperForm.js',
+  'detail/dxf/dxfProvenance.js',
+  'detail/pdf/pdfImport.js', 'detail/pdf/pdfUnits.js', 'detail/pdf/pdfClip.js', 'detail/pdf/pdfProvenance.js',
+]);
+test('【不変条件】detailHelperPdf.js の直接 import は許可表の内側だけで、pdfjs・pdfLoader.js を静的に引かない（推移的にも）', () => {
+  const pdfTarget = path.join(srcDir, 'ui', 'detailHelperPdf.js');
+  const text = fs.readFileSync(pdfTarget, 'utf8');
+  assert.ok(specifiersOf(pdfTarget).includes('../detail/pdf/pdfImport.js'), 'import を読めていない');
+  assert.deepEqual(directOffenders('ui/detailHelperPdf.js', text, PDF_LOGIC_ALLOWED), []);
+  assert.ok(!specifiersOf(pdfTarget).some(s => s.includes('pdfLoader')), 'pdfLoader.js を静的に引いている');
+  const { offenders } = transitiveOffenders([pdfTarget]);
+  assert.deepEqual(offenders, []);
+  // 検出力: pdfjs・pdfLoader を引くソースは違反に出る
+  assert.ok(directOffenders('ui/detailHelperPdf.js', "import * as p from 'pdfjs-dist/build/pdf.min.mjs';", PDF_LOGIC_ALLOWED).length > 0);
+  assert.ok(directOffenders('ui/detailHelperPdf.js', "import { openPdf } from './pdfLoader.js';", PDF_LOGIC_ALLOWED).length > 0);
 });
 
 test('【不変条件】検出力: 禁止先・許可表の外を引くソース文字列は offenders に出る', () => {

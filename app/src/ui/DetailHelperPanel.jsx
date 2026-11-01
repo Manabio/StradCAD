@@ -26,8 +26,13 @@ import {
   dxfPreviewPrimitives, draftFromDxf, draftDocOf, provenanceNoticeOf, DETAIL_HELPER_TABS, setProvenanceField,
 } from './detailHelperForm.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
-import { DXF_PROVENANCE_FIELDS } from '../core/constants.js';
-import { ERR_DXF_FILE_READ_FAILED } from '../error.js';
+import { isPdfBytes } from '../detail/pdf/pdfImport.js';
+import {
+  loadPdf, setPdfPage, stepPdfPage, setPdfPageView, setPdfScale, setPdfClip, setPdfClipField, pdfClipText, pageSizeOf,
+  pointToPage, clipFromDrag, clipOverlayStyle, pdfCanExtract, pdfCanCopy, extractPdf, pdfWarningTexts, describePdfReject,
+} from './detailHelperPdf.js';
+import { DXF_PROVENANCE_FIELDS, PdfReject, PDF_MAX_BYTES, PDF_SIGNATURE_SCAN_BYTES, PDF_PREVIEW_SCALE } from '../core/constants.js';
+import { ERR_DXF_FILE_READ_FAILED, ERR_PDF_PAGE_FAILED } from '../error.js';
 
 /**
  * 部分詳細図ヘルパー（全画面パネル）。ペン入力で一筆書きの図を描き、基準・寸法を指定して
@@ -37,6 +42,8 @@ import { ERR_DXF_FILE_READ_FAILED } from '../error.js';
  * runBusy('カタログ適用', …) の中で呼ぶ。
  */
 const KIND = CatalogKind.DETAIL_FIGURE;
+// 旧い pdfjs 文書の破棄（待たない。破棄の失敗で画面の操作を止めない）。
+const discardPdfDoc = (loader, doc) => { if (doc) loader?.closePdf(doc).catch(() => undefined); };
 const newKeyPart = () => crypto.randomUUID();
 const freshDoc = () => freshDocOf(newDraft({ idFactory: newKeyPart }));
 
@@ -70,23 +77,16 @@ function LibraryRow({ row, active, disabled, onSelect }) {
 // 使えない環境（http など）では reject し、loadDxf が NO_DIGEST の警告で読込みを続ける。
 const sha256OfBytes = bytes => sha256HexWith(globalThis.crypto?.subtle)(bytes);
 
-/** 左ペインの「DXF 読込み」タブ。配線だけ（判断は detailHelperForm.js）。 */
-function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy }) {
-  const rows = dxf ? dxfComponentRows(dxf) : [];
-  const warnings = dxf ? dxfWarningTexts(dxf) : [];
+/** 読込み結果の共通部分（警告・連結成分の一覧・出所欄・下書きへ写す）。DXF と PDF で共用。配線だけ。 */
+function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCopy }) {
+  const rows = state.scene ? dxfComponentRows(state) : [];
   return (
-    <div className="dthlp-dxf">
-      <button className="dthlp-btn" disabled={busy} onClick={onOpen}>{DETAIL_HELPER_TEXT.dxfOpen}</button>
-      {message && <div className={message.isError ? 'dthlp-error' : 'dthlp-ok'}>{message.text}</div>}
-      {dxf && (
+    <>
+      {warnings.length > 0 && (
+        <ul className="dthlp-dxf-warn" aria-label={DETAIL_HELPER_TEXT.dxfWarnings}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+      )}
+      {state.scene && (
         <>
-          <div className="dthlp-dxf-file">{dxf.fileName}（{dxf.encoding}）</div>
-          <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onUnit}>
-            {DETAIL_HELPER_TEXT.dxfUnit}: {displayLen(dxf.unitText)}（{dxfUnitHint(dxf)}）
-          </button>
-          {warnings.length > 0 && (
-            <ul className="dthlp-dxf-warn" aria-label={DETAIL_HELPER_TEXT.dxfWarnings}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
-          )}
           <div className="dthlp-block-head"><span>{DETAIL_HELPER_TEXT.dxfComponents}</span></div>
           <div className="dthlp-dxf-comps">
             {rows.length === 0 && <div className="dthlp-empty">{DETAIL_HELPER_TEXT.dxfNoComponents}</div>}
@@ -99,21 +99,92 @@ function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy
               </div>
             ))}
           </div>
-          <div className="dthlp-block">
-            <div className="dthlp-block-head"><span>{DETAIL_HELPER_TEXT.dxfProvenance}</span></div>
-            <label className="dthlp-row">{DETAIL_HELPER_TEXT.dxfMaker}
-              <input className="dthlp-input" value={dxf.maker} onChange={e => onField(DXF_PROVENANCE_FIELDS.MAKER, e.target.value)} />
-            </label>
-            <label className="dthlp-row">{DETAIL_HELPER_TEXT.dxfSeries}
-              <input className="dthlp-input" value={dxf.series} onChange={e => onField(DXF_PROVENANCE_FIELDS.SERIES, e.target.value)} />
-            </label>
-            <label className="dthlp-row">{DETAIL_HELPER_TEXT.dxfLicense}
-              <input className="dthlp-input" value={dxf.licenseNote} onChange={e => onField(DXF_PROVENANCE_FIELDS.LICENSE_NOTE, e.target.value)} />
-            </label>
-          </div>
-          <button className="dthlp-btn dthlp-btn--primary" disabled={busy || dxf.selected.length === 0} onClick={onCopy}>{DETAIL_HELPER_TEXT.dxfCopy}</button>
         </>
       )}
+      <div className="dthlp-block">
+        <div className="dthlp-block-head"><span>{DETAIL_HELPER_TEXT.dxfProvenance}</span></div>
+        <label className="dthlp-row">{DETAIL_HELPER_TEXT.dxfMaker}
+          <input className="dthlp-input" value={state.maker} onChange={e => onField(DXF_PROVENANCE_FIELDS.MAKER, e.target.value)} />
+        </label>
+        <label className="dthlp-row">{DETAIL_HELPER_TEXT.dxfSeries}
+          <input className="dthlp-input" value={state.series} onChange={e => onField(DXF_PROVENANCE_FIELDS.SERIES, e.target.value)} />
+        </label>
+        <label className="dthlp-row">{DETAIL_HELPER_TEXT.dxfLicense}
+          <input className="dthlp-input" value={state.licenseNote} onChange={e => onField(DXF_PROVENANCE_FIELDS.LICENSE_NOTE, e.target.value)} />
+        </label>
+      </div>
+      <button className="dthlp-btn dthlp-btn--primary" disabled={busy || !canCopy} onClick={onCopy}>{DETAIL_HELPER_TEXT.dxfCopy}</button>
+    </>
+  );
+}
+
+/** 左ペインの「図面読込み」タブ（DXF）。配線だけ（判断は detailHelperForm.js）。 */
+function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy }) {
+  return (
+    <div className="dthlp-dxf">
+      <button className="dthlp-btn" disabled={busy} onClick={onOpen}>{DETAIL_HELPER_TEXT.dxfOpen}</button>
+      {message && <div className={message.isError ? 'dthlp-error' : 'dthlp-ok'}>{message.text}</div>}
+      {dxf && (
+        <>
+          <div className="dthlp-dxf-file">{dxf.fileName}（{dxf.encoding}）</div>
+          <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onUnit}>
+            {DETAIL_HELPER_TEXT.dxfUnit}: {displayLen(dxf.unitText)}（{dxfUnitHint(dxf)}）
+          </button>
+          <ImportResult state={dxf} warnings={dxfWarningTexts(dxf)} busy={busy} canCopy={dxf.selected.length > 0} onToggle={onToggle} onField={onField} onCopy={onCopy} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 左ペインの「図面読込み」タブ（PDF）。ページ選定（番号・前後）→ ページ画像（canvas。表示専用）の上で矩形を 1 回ドラッグ
+ * （数値欄と同期）→ 縮尺 → 「抽出」→ 連結成分。配線だけ（判断は detailHelperPdf.js）。
+ */
+function PdfPane({ pdf, message, busy, onOpen, onPrev, onNext, onPageNumpad, onScale, onClipField, onClipDrag, onExtract, onToggle, onField, onCopy, renderPage, onView, onRenderError }) {
+  const canvasRef = useRef(null);
+  const dragFrom = useRef(null);
+  useEffect(() => {
+    let cancelled = false;
+    renderPage(canvasRef.current, pdf.page)
+      .then(r => { if (!cancelled) onView(r.view); })
+      .catch(e => { if (!cancelled) onRenderError(e); });
+    return () => { cancelled = true; };
+  }, [pdf.loadId, pdf.page]); // eslint-disable-line react-hooks/exhaustive-deps -- ページ（と読み直し）が変わったときだけ描く。コールバックは毎回作り直されるため依存に入れない
+  const size = pageSizeOf(pdf.view);
+  const overlay = clipOverlayStyle(pdf.clip, size);
+  const pointOf = e => pointToPage(e, e.currentTarget.getBoundingClientRect(), size);
+  return (
+    <div className="dthlp-dxf">
+      <button className="dthlp-btn" disabled={busy} onClick={onOpen}>{DETAIL_HELPER_TEXT.dxfOpen}</button>
+      {message && <div className={message.isError ? 'dthlp-error' : 'dthlp-ok'}>{message.text}</div>}
+      <div className="dthlp-dxf-file">{pdf.fileName}</div>
+      <div className="dthlp-row">
+        <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onPrev}>{DETAIL_HELPER_TEXT.pdfPrev}</button>
+        <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onPageNumpad}>{DETAIL_HELPER_TEXT.pdfPage}: {pdf.page}</button>
+        <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onNext}>{DETAIL_HELPER_TEXT.pdfNext}</button>
+        <span>{DETAIL_HELPER_TEXT.pdfPageCount(pdf.pageCount)}</span>
+      </div>
+      <div className="dthlp-pdf-page"
+        onPointerDown={e => { if (!size || busy) return; e.currentTarget.setPointerCapture(e.pointerId); dragFrom.current = pointOf(e); }}
+        onPointerMove={e => { if (dragFrom.current && size) onClipDrag(clipFromDrag(dragFrom.current, pointOf(e))); }}
+        onPointerUp={() => { dragFrom.current = null; }}
+        onPointerCancel={() => { dragFrom.current = null; }}>
+        <canvas ref={canvasRef} className="dthlp-pdf-canvas" />
+        {overlay && <div className="dthlp-pdf-clip" style={overlay} />}
+      </div>
+      <div className="dthlp-dxf-file">{size ? DETAIL_HELPER_TEXT.pdfDragHint : DETAIL_HELPER_TEXT.pdfNoPage}</div>
+      <div className="dthlp-block-head"><span>{DETAIL_HELPER_TEXT.pdfClip}</span></div>
+      <div className="dthlp-row">
+        {Object.entries(DETAIL_HELPER_TEXT.pdfClipFields).map(([field, label]) => (
+          <button key={field} className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={() => onClipField(field)}>
+            {label}: {displayLen(pdfClipText(pdf.clip, field))}
+          </button>
+        ))}
+      </div>
+      <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onScale}>{DETAIL_HELPER_TEXT.pdfScale}: {displayLen(pdf.scaleText)}</button>
+      <button className="dthlp-btn dthlp-btn--primary" disabled={busy || !pdfCanExtract(pdf)} onClick={onExtract}>{DETAIL_HELPER_TEXT.pdfExtract}</button>
+      <ImportResult state={pdf} warnings={pdfWarningTexts(pdf)} busy={busy} canCopy={pdfCanCopy(pdf)} onToggle={onToggle} onField={onField} onCopy={onCopy} />
     </div>
   );
 }
@@ -122,8 +193,11 @@ export function DetailHelperPanel({ onClose }) {
   const [doc, setDoc] = useState(freshDoc);
   const [leftTab, setLeftTab] = useState(DETAIL_HELPER_TABS.PEN);
   const [dxf, setDxf] = useState(null);
-  const [dxfMessage, setDxfMessage] = useState(null); // { text, isError }
+  const [pdf, setPdf] = useState(null); // PDF 読込みの状態（DXF と排他。dxf を読むと null）
+  const [dxfMessage, setDxfMessage] = useState(null); // { text, isError }（DXF・PDF 共通）
   const dxfInputRef = useRef(null);
+  const pdfDocRef = useRef(null);    // pdfjs の文書（状態に入れない）
+  const pdfLoaderRef = useRef(null); // ui/pdfLoader.js（初回の PDF を開くときに動的 import）
   const { form, history, baseline, prevEntry } = doc;
   const penError = doc.penError ?? null;
   const rootRef = useRef(null);
@@ -148,6 +222,8 @@ export function DetailHelperPanel({ onClose }) {
 
   // 開いた直後からキー入力（Escape）を受けられるよう、ルートへフォーカスする。
   useEffect(() => { rootRef.current?.focus(); }, []);
+  // 閉じるとき pdfjs の文書（worker 側の資源）を解放する。
+  useEffect(() => () => { discardPdfDoc(pdfLoaderRef.current, pdfDocRef.current); pdfDocRef.current = null; }, []);
 
   const fitDims = useMemo(
     () => ({ ...defaultFitDimsFor(form, previewWallThicknessFor(null, materialList)), ...fitOverrides }),
@@ -157,7 +233,8 @@ export function DetailHelperPanel({ onClose }) {
   const fitted = useMemo(() => (fitOn ? tryFit(form, fitDims) : null), [fitOn, form, fitDims]);
   const primitives = useMemo(() => previewPrimitivesOf(form, fitted), [form, fitted]);
   const showDxf = leftTab === DETAIL_HELPER_TABS.DXF;
-  const dxfPrims = useMemo(() => (dxf ? dxfPreviewPrimitives(dxf) : []), [dxf]);
+  const imported = pdf ?? dxf;
+  const dxfPrims = useMemo(() => (imported?.scene ? dxfPreviewPrimitives(imported) : []), [imported]);
   const shownPrims = showDxf ? dxfPrims : primitives;
   const provenanceNotice = provenanceNoticeOf(form);
   const result = useMemo(() => validation(form), [form]);
@@ -216,31 +293,75 @@ export function DetailHelperPanel({ onClose }) {
       const r = setDxfUnit(dxf, value);
       setDxf(r.dxf);
       setDxfMessage(r.error ? { text: r.error, isError: true } : null);
-    }
+    } else if (target.kind === 'pdfPage') applyPdfResult(setPdfPage(pdf, value));
+    else if (target.kind === 'pdfScale') { setPdf(setPdfScale(pdf, value)); setDxfMessage(null); }
+    else if (target.kind === 'pdfClip') applyPdfResult(setPdfClipField(pdf, target.field, value));
+  }
+  // { pdf, error } を状態へ反映する（エラーは握って画面に出す）。
+  function applyPdfResult(r) {
+    setPdf(r.pdf);
+    setDxfMessage(r.error ? { text: r.error, isError: true } : null);
   }
 
-  // DXF を読む。外部ファイルなので accept は付けない（iOS の Files は未登録拡張子を accept に含むと全ファイルをグレーアウトする）。
-  // 読込み〜解析は runBusy の中（await をまたぐ UI 入口）。失敗は握って画面に出す。
-  async function handleDxfFile(e) {
+  // PDF を開く（pdfjs は初回だけ動的 import。読み込めなければ「部品を起動できません」）。
+  async function loadPdfFile(bytes, fileName) {
+    try {
+      pdfLoaderRef.current ??= await import('./pdfLoader.js');
+    } catch {
+      return { ok: false, message: describePdfReject({ code: PdfReject.WORKER_UNAVAILABLE }) };
+    }
+    const { openPdf, closePdf } = pdfLoaderRef.current;
+    return loadPdf({ bytes, fileName, digest: sha256OfBytes, open: openPdf, close: closePdf });
+  }
+
+  // DXF・PDF を読む。外部ファイルなので accept は付けない（iOS の Files は未登録拡張子を accept に含むと全ファイルをグレーアウトする）。
+  // 種別は内容で判定（先頭が %PDF- なら PDF、それ以外は DXF）。読込み〜解析は runBusy の中（await をまたぐ UI 入口）。失敗は握って画面に出す。
+  async function handleImportFile(e) {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file || busy) return;
     setBusy(true);
     try {
-      const result = await runBusy('DXF 読込み', async () => {
+      const result = await runBusy('図面読込み', async () => {
+        // 先頭だけ読んで内容判定し、PDF の大きさの上限は全体を読む前に見る。
+        const isPdf = isPdfBytes(new Uint8Array(await file.slice(0, PDF_SIGNATURE_SCAN_BYTES).arrayBuffer()));
+        if (isPdf && file.size > PDF_MAX_BYTES) return { ok: false, message: describePdfReject({ code: PdfReject.SIZE_LIMIT }) };
         const bytes = new Uint8Array(await file.arrayBuffer());
+        if (isPdf) return loadPdfFile(bytes, file.name);
         return loadDxf({ bytes, fileName: file.name, digest: sha256OfBytes });
       });
-      if (result.ok) { setDxf(result.dxf); setDxfMessage(null); } else setDxfMessage({ text: result.message, isError: true });
+      if (!result.ok) setDxfMessage({ text: result.message, isError: true });
+      else {
+        setDxfMessage(null);
+        discardPdfDoc(pdfLoaderRef.current, pdfDocRef.current);
+        if (result.pdf) { pdfDocRef.current = result.doc; setDxf(null); setPdf(result.pdf); }
+        else { pdfDocRef.current = null; setPdf(null); setDxf(result.dxf); }
+      }
     } catch {
       setDxfMessage({ text: ERR_DXF_FILE_READ_FAILED, isError: true });
     } finally {
       setBusy(false);
     }
   }
-  // 選んだ成分を新規下書きへ写す（未保存の下書きがあれば破棄の確認を通す）。
+  // 選んだページの演算子列を読み、範囲の成分を作る（runBusy の中。失敗は握って画面に出す）。
+  async function handlePdfExtract() {
+    if (busy || !pdf || !pdfCanExtract(pdf)) return;
+    setBusy(true);
+    try {
+      const r = await runBusy('図面読込み', async () => {
+        const pageData = await pdfLoaderRef.current.readPdfPage(pdfDocRef.current, pdf.page);
+        return extractPdf(pdf, pageData);
+      });
+      applyPdfResult(r);
+    } catch (err) {
+      setDxfMessage({ text: ERR_PDF_PAGE_FAILED(err instanceof Error ? err.message : String(err)), isError: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+  // 選んだ成分を新規下書きへ写す（未保存の下書きがあれば破棄の確認を通す）。DXF・PDF 共通。
   function handleDxfCopy() {
-    const r = draftFromDxf({ dxf, idFactory: newKeyPart });
+    const r = draftFromDxf({ dxf: imported, idFactory: newKeyPart });
     if (r.error) { setDxfMessage({ text: r.error, isError: true }); return; }
     guardDiscard(() => {
       replaceDoc(draftDocOf(r.form));
@@ -370,7 +491,26 @@ export function DetailHelperPanel({ onClose }) {
             <button className={`dthlp-btn${showDxf ? '' : ' dthlp-btn--active'}`} onClick={() => setLeftTab(DETAIL_HELPER_TABS.PEN)}>{DETAIL_HELPER_TEXT.tabPen}</button>
             <button className={`dthlp-btn${showDxf ? ' dthlp-btn--active' : ''}`} onClick={() => setLeftTab(DETAIL_HELPER_TABS.DXF)}>{DETAIL_HELPER_TEXT.tabDxf}</button>
           </div>
-          {showDxf && (
+          {showDxf && pdf && (
+            <PdfPane
+              pdf={pdf} message={dxfMessage} busy={busy}
+              onOpen={() => dxfInputRef.current?.click()}
+              onPrev={() => applyPdfResult(stepPdfPage(pdf, -1))}
+              onNext={() => applyPdfResult(stepPdfPage(pdf, 1))}
+              onPageNumpad={() => openNumpad({ kind: 'pdfPage' }, String(pdf.page), DETAIL_HELPER_TEXT.pdfPage)}
+              onScale={() => openNumpad({ kind: 'pdfScale' }, pdf.scaleText, DETAIL_HELPER_TEXT.pdfScale)}
+              onClipField={field => openNumpad({ kind: 'pdfClip', field }, pdfClipText(pdf.clip, field), DETAIL_HELPER_TEXT.pdfClipFields[field])}
+              onClipDrag={clip => setPdf(p => setPdfClip(p, clip))}
+              onExtract={handlePdfExtract}
+              onToggle={index => setPdf(p => toggleDxfComponent(p, index))}
+              onField={(field, value) => setPdf(p => setDxfProvenanceField(p, field, value))}
+              onCopy={handleDxfCopy}
+              renderPage={(canvas, pageNo) => pdfLoaderRef.current.renderPdfPage(pdfDocRef.current, pageNo, canvas, PDF_PREVIEW_SCALE)}
+              onView={view => setPdf(p => setPdfPageView(p, view))}
+              onRenderError={err => setDxfMessage({ text: ERR_PDF_PAGE_FAILED(err instanceof Error ? err.message : String(err)), isError: true })}
+            />
+          )}
+          {showDxf && !pdf && (
             <DxfPane
               dxf={dxf} message={dxfMessage} busy={busy}
               onOpen={() => dxfInputRef.current?.click()}
@@ -550,7 +690,7 @@ export function DetailHelperPanel({ onClose }) {
 
       {/* DXF 選択（hidden）。accept は付けない: iOS の Files は OS に未登録の拡張子を accept に含むと全ファイルを選べなくなる。
           選別は読込み後の内容判定（dxfDecode／dxfTokenize）で行う。 */}
-      <input ref={dxfInputRef} type="file" style={{ display: 'none' }} onChange={handleDxfFile} />
+      <input ref={dxfInputRef} type="file" style={{ display: 'none' }} onChange={handleImportFile} />
       {numpad && (
         <NumPad
           value={numpad.value}

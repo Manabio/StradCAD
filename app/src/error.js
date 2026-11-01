@@ -355,7 +355,7 @@ export const ERR_DETAIL_FIT_FAILED = (label, symbolKey, reason, slot) =>
 // DETAIL_OWNER_OPENING、fit のメモ口では図のキー。
 export const DETAIL_OWNER_OPENING = '建具個別の指定';
 export const ERR_DETAIL_FIGURE_NOT_FOUND = (owner, slot) =>
-  `${owner} の${detailSlotLabel(slot)}の詳細図がカタログに見つかりません（DXF 由来の図は保存ファイルに入らないため、別の端末では見つかりません）`;
+  `${owner} の${detailSlotLabel(slot)}の詳細図がカタログに見つかりません（DXF・PDF 由来の図は保存ファイルに入らないため、別の端末では見つかりません）`;
 // 詳細図の基準（Datum）が取り付け先（既定は三方枠。建具の姿図なら「建具の姿図」）の供給できない組（role・軸・種別）のとき。
 export const DETAIL_TARGET_ELEVATION = '建具の姿図';
 export const ERR_DETAIL_DATUM_UNSUPPORTED = (datumId, role, target = '三方枠') =>
@@ -382,10 +382,30 @@ export const ERR_DXF_BAD_GROUP_CODE = (line) => `DXF として読めません（
 export const ERR_DXF_TRUNCATED = 'DXF が途中で切れているため読み込めません';
 export const ERR_DXF_UNEXPECTED = (message) => `DXF の読み込み中に想定外の問題が起きました: ${message}`;
 export const ERR_DXF_FILE_READ_FAILED = 'ファイルを読み込めませんでした';
-// DXF 由来の図は保存ファイルに同梱しない（R10）。ヘルパー・保守パネルの出所の表示に添える。
-export const MSG_DXF_NOT_IN_FILE = 'この図は保存ファイルに入りません（この端末のライブラリにだけ残ります）';
-// 使用中の DXF 由来の図を削除するときの確認文（文書の同梱へ写せないため）。
-export const MSG_DXF_DELETE_IN_USE = '使用中です。DXF 由来の図は保存ファイルに入らないため、削除すると現在の文書は既定の描き方に戻ります。';
+// DXF・PDF 由来の図は保存ファイルに同梱しない（R10）。ヘルパー・保守パネルの出所の表示に添える。
+export const MSG_IMPORTED_NOT_IN_FILE = 'この図は保存ファイルに入りません（この端末のライブラリにだけ残ります）';
+// 使用中の DXF・PDF 由来の図を削除するときの確認文（文書の同梱へ写せないため）。
+export const MSG_IMPORTED_DELETE_IN_USE = '使用中です。DXF・PDF 由来の図は保存ファイルに入らないため、削除すると現在の文書は既定の描き方に戻ります。';
+
+// ---- PDF 読込み（部分詳細図 S7b。detail/pdf/ と ui/detailHelperPdf.js）----
+// 警告（WARN_PDF_*。保存は止めない）。コードは core/constants.js の PdfWarning、対応は ui/detailHelperPdf.js の describePdfWarning。
+export const WARN_PDF_PAGE_LIMIT = (limit, total) => `ページが多いため先頭の ${limit} ページまでしか選べません（全 ${total} ページ）`;
+export const WARN_PDF_NO_PATHS = '選んだ範囲に線（パス）がありません。範囲を広げるかページを確かめてください';
+export const WARN_PDF_TEXT_IGNORED = (count) => `ページ内の文字 ${count} 件は読み込みません（線だけを写します）`;
+export const WARN_PDF_IMAGE_IGNORED = (count) => `ページ内の画像 ${count} 件は読み込みません（線だけを写します）`;
+export const WARN_PDF_PATH_LIMIT = (limit) => `線が多すぎるため、先頭の ${limit} 本で打ち切りました`;
+export const WARN_PDF_SEGMENT_LIMIT = (limit) => `線分が多すぎるため、${limit} 線分で打ち切りました`;
+export const WARN_PDF_UNKNOWN_DRAW_OP = (count) => `未知の描画命令で読めなかった経路が ${count} 件あります（その経路の残りは写していません）`;
+export const WARN_PDF_NON_FINITE_SEGMENT = (count) => `座標が数値でない線分 ${count} 件を捨てました`;
+export const WARN_PDF_SCALE_MISSING = '縮尺（1/N の N）を入力してください。入力するまで mm に換算できません';
+// 拒否（ERR_PDF_*。読み込まない）。コードは PdfReject。
+export const ERR_PDF_NOT_PDF = 'PDF として読めません（先頭に %PDF- がありません）';
+export const ERR_PDF_LOAD_FAILED = (message) => `PDF を開けませんでした（壊れている・暗号化されているなど）: ${message}`;
+export const ERR_PDF_WORKER_UNAVAILABLE = 'PDF の読込み部品を起動できませんでした。再読み込みしてもう一度お試しください';
+export const ERR_PDF_SIZE_LIMIT = (limitMb) => `ファイルが大きすぎます（${limitMb} MB まで）`;
+export const ERR_PDF_PAGE_NOT_FOUND = (page) => `${page} ページ目は選べません`;
+export const ERR_PDF_NO_PAGES = 'ページが 1 つもありません';
+export const ERR_PDF_PAGE_FAILED =(message) => `ページを読み込めませんでした: ${message}`;
 // 展開モードのトースト用。最初の1件の文言に、残りの件数を添える。
 export const ERR_DETAIL_FIT_FAILED_MORE = (firstMessage, restCount) =>
   `${firstMessage}（ほか${restCount}件）`;
