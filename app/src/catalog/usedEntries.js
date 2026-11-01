@@ -51,7 +51,7 @@ export function collectUsedMaterialCodes(snapshot) {
  * - section: columns/beams/structuralWalls/slabs/footings の sectionDefId
  * - openingSubType: openings[] の `${category}:${subType}`（catalogKinds.js の keyOf と同型）
  * - fixtureSymbol: openings[].fixtureType（空でない文字列のみ）
- * - detailFigure: openings[].detailRefs の値（建具個別の上書き。S6a）。
+ * - detailFigure: openings[].detailRefs の値（建具個別の上書き。S6a）と rooms[].detailRefs の値（部屋の取り合い。S8a）。
  *   建具記号経由の使用は expandUsedDetailFiguresTransitively が推移展開する
  * @returns {{ interiorMaster: Set<string>, boundaryMaster: Set<string>, section: Set<string>,
  *             openingSubType: Set<string>, fixtureSymbol: Set<string>, detailFigure: Set<string> }}

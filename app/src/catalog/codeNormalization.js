@@ -585,7 +585,8 @@ function rewriteFixtureSymbolRefs(snapshot, table) {
 }
 
 // ----------------------------------------------------------------
-// detailFigure: openings[].detailRefs（建具 1 件の部分詳細図の上書き。{[slot]: 詳細図キー}）の値（S6a）。
+// detailFigure: openings[].detailRefs（建具 1 件の部分詳細図の上書き。{[slot]: 詳細図キー}）の値（S6a）と、
+// rooms[].detailRefs（部屋の取り合いの割当て。S8a。location 'room'・roomId・slot）。
 // slot は問わない（全 slot をデータとして通す）。対象は空でない文字列の値だけ。
 // カタログ→カタログの参照（建具記号エントリの detailFigures）はスナップショットに無いので、
 // ここでは扱わず incomingReconcile.js applyReconcilePlan が読み替える。
@@ -600,7 +601,36 @@ function enumerateDetailFigureRefs(snapshot) {
       if (typeof key === 'string' && key !== '') refs.push({ code: key, location: 'opening', openingId: opening.id, slot });
     }
   }
+  // 部屋の取り合い（rooms[].detailRefs。S8a）
+  for (const room of snapshot.rooms ?? []) {
+    const detailRefs = room?.detailRefs;
+    if (detailRefs === null || typeof detailRefs !== 'object') continue;
+    for (const [slot, key] of Object.entries(detailRefs)) {
+      if (typeof key === 'string' && key !== '') refs.push({ code: key, location: 'room', roomId: room.id, slot });
+    }
+  }
   return refs;
+}
+
+function normalizeRoomDetailRefs(rooms, table, unresolved) {
+  if (!Array.isArray(rooms)) return rooms;
+  let changedAny = false;
+  const next = rooms.map(room => {
+    const detailRefs = room?.detailRefs;
+    if (detailRefs === null || typeof detailRefs !== 'object') return room;
+    let changed = false;
+    const mappedRefs = {};
+    for (const [slot, key] of Object.entries(detailRefs)) {
+      if (typeof key !== 'string' || key === '') { mappedRefs[slot] = key; continue; }
+      const mapped = normalizeCode(key, table, unresolved, { location: 'room', roomId: room.id, slot });
+      mappedRefs[slot] = mapped;
+      if (mapped !== key) changed = true;
+    }
+    if (!changed) return room;
+    changedAny = true;
+    return { ...room, detailRefs: mappedRefs };
+  });
+  return changedAny ? next : rooms;
 }
 
 function normalizeDetailRefsOf(openings, table, unresolved) {
@@ -628,8 +658,12 @@ function rewriteDetailFigureRefs(snapshot, table) {
   if (!snapshot) return { snapshot, unresolved: [] };
   const unresolved = [];
   const openings = normalizeDetailRefsOf(snapshot.openings, table, unresolved);
-  if (openings === snapshot.openings) return { snapshot, unresolved };
-  return { snapshot: { ...snapshot, openings }, unresolved };
+  const rooms = normalizeRoomDetailRefs(snapshot.rooms, table, unresolved);
+  if (openings === snapshot.openings && rooms === snapshot.rooms) return { snapshot, unresolved };
+  const next = { ...snapshot };
+  if (openings !== snapshot.openings) next.openings = openings;
+  if (rooms !== snapshot.rooms) next.rooms = rooms;
+  return { snapshot: next, unresolved };
 }
 
 /**

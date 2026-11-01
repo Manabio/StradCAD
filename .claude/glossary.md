@@ -560,4 +560,7 @@ S造スラブ（`SteelSlab`）のセルキー。梁で囲まれた区画（ベ�
 部分詳細図の1手（Move）で、目標寸法との差分をすべて吸う区間。end の基準に載るストロークでは軸ごとにちょうど1本。end が無いストロークは持たない（あれば登録時エラー）。固定の和が目標以上（伸縮が `DETAIL_FIT_EPS_MM` 未満）になるのは fit 時のエラー。他の手は固定寸法・パラメータ・材の寸法に束縛される。
 
 ## スロット（DetailSlot）
-部分詳細図の取り付け先の枠名（方立 jamb・上枠 head・下枠 sill など）。スロットごとに割り当てられる図の分類（category×view×subject）が決まる（`core/constants.js DETAIL_SLOT_TARGETS`）。
+部分詳細図の取り付け先の枠名（方立 jamb・上枠 head・下枠 sill など）。スロットごとに割り当てられる図の分類（category×view×subject）が決まる（`core/constants.js DETAIL_SLOT_TARGETS`）。部屋の取り合いの床と壁 floorWall・壁と天井 wallCeiling も同じ表に載る（`Room.detailRefs`）。
+
+## 空気との境目（Move.edge='air'）
+部分詳細図の手（辺）に付ける印。室内の空気に面する辺で、展開図では中線になる（腰壁の天板の線など）。印のない段差は包絡線から自動で細線になる（`detail/detailEnvelope.js`）。

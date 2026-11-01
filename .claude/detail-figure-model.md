@@ -26,6 +26,12 @@
 - メモ化は**局所座標の fit だけ**（鍵に世界座標が混ざらない）。placeStrokes は毎回。消費側は独自キャッシュを持たない。
 - fit 失敗は既定 profile へ戻して描き、通知は描画時でなく建具モード・展開モードの init で 1 回（`resolveQueue` の場面 `detail-fit-failed`）。平面モードでは通知しない（毎レンダーの純関数に通知経路が無い。R21）。
 
+## 部屋の取り合い（S8a。junction の床と壁・壁と天井）
+- 割当ては `Room.detailRefs`（`{floorWall?, wallCeiling?}`・部屋全体・仕上げモードの部屋カード「部分詳細」。仕上げ undo に乗る）。FBS は `RM.DETAIL_KEYS=32`・`DETAIL_VALS=33`、使わない文書は書かず、旧ビルドで保存すると消える片方向（`OP 28/29` と同型）。part（腰壁の天板・段差天井）は要素に付ける別設計（8b）で、ここでは部屋全体の取り合いだけ。
+- 基準は部屋が供給する（`finish/roomDetailTargets.js`）: s＝壁の仕上げ面 0〜−壁厚、t＝FL（floorWall）または天井面（wallCeiling）が 0。壁厚は部屋が生成した壁の `materialRange` 幅（`roomDetailJunction.js`）。openings/ のメモ（`fitDetailLocalMemo`）を `targetsOf` 差し込みで共有し、材マップ未ロードの結果はメモしない。通知は仕上げ init（未解決＝`unresolved-code`・fit 失敗＝`detail-fit-failed`）。
+- 展開図へは断面そのものを重ねず、**室内側の包絡線**（`detail/detailEnvelope.js`）から水平線を派生する。各高さの最大 s（壁の中 s<0 は見えないので 0 に頭打ち。区切りは端点・辺どうしの交点・s=0 を跨ぐ点）が階段状に変わる所＝段差（>1 mm）、同じ s で辺の向きが変わる所＝折れ（>1°。面取り）が自動の細線、手の印 `Move.edge='air'`（ヘルパーのトグル「空気との境目」）の辺の端点の高さが中線で、同じ高さは中線 1 本。FL・天井面（t≈0）と定義域の外（床より下・天井より上）は引かない。
+- 既知の限界: 印は閉じ辺に付けられない／印の辺は包絡線上にあるかを見ず端点の高さに線を出す／包絡線は室内側の最大 s だけで、凹み（欠き込み）の奥は出ない／展開図への反映（線の派生・断面形の差替え）は 8a-2。
+
 ## 照合と重複禁止
 - 図の参照は書換え先が無い種別（rewrite が null）なので alias を作らない。規則と dedupe の同値不変条件は `catalog-model.md`「読込み時の照合と未解決」「三層の重ね合わせ」を参照。
 
@@ -60,7 +66,7 @@
 - 同梱の図が propose・pick（部分一致）になり、その図を指す同梱の記号が先にライブラリへ写されると、承認後もライブラリ側の記号は旧キーを指したまま（読み替えは同梱の記号だけ＝「ライブラリ層は触らない」規約の帰結。その記号を使う別文書では not-found 行になる）。
 - 線種（dash／weightRole）は無視（平面は枠の太さ・展開は断面の太線）／斜め寸法線なし／寸法は 1 手単位（複数手にまたがる寸法は表せない）／mm 判定の closed は param・material・stretch で閉じ辺 0 になるケースを登録時に検出しない／同じ図を参照する別記号の失敗は 1 行にまとまる／使用中の印は開いたとき 1 回。
 - 姿図の差替えの限界（S6b）: 線種は weightRole（極太は切断線へ寄せる）と dash だけ読み、破線は線分ごとの line・実線は polyline（Konva は polyline の dash を描かず、閉じた polyline を塗るため閉じ辺は始点を足した開いた折れ線にする）。レバーハンドルの取付高さの寸法（編集用）は図を置換しても残る。FL を origin にした図は窓台の分だけ伸縮する（SILL と別の挙動）。建具モード init の通知は kind が fixtureSymbol の行に載る（主語は建具種別キーで、区分 fitting/window は付かない）。ヘルパーの試し込みは分類が姿図なら幅・高さ・窓台（既定は代表の建具種別 singleSwing の既定幅・高さと窓台 0）、既定の基準は t の origin＝SILL・end＝HEAD。
-- 先送り: 部屋の取り合い（S8）・屋根の軒先けらば（S9）・器具の配置（S10）・図を部品に組み合わせる作図・整理課題＝`dxfToStrokes`／`dxfToComponents`（PDF も共用）と `describeDxfWarning`・`DxfWarning.LICENSE_UNKNOWN`／`NO_DIGEST`・`DXF_PROVENANCE_FIELDS`・`draftFromDxf` の名前の一般化・`useCatalogEditActions` の共有化・`rewriteDocSymbolDetailFigures` の改名（建具種別も読み替えるため。整理課題）。
+- 先送り: 部屋の取り合いの展開反映（S8a-2）・要素付きの part（S8b）・屋根の軒先けらば（S9）・器具の配置（S10）・図を部品に組み合わせる作図・整理課題＝`dxfToStrokes`／`dxfToComponents`（PDF も共用）と `describeDxfWarning`・`DxfWarning.LICENSE_UNKNOWN`／`NO_DIGEST`・`DXF_PROVENANCE_FIELDS`・`draftFromDxf` の名前の一般化・`useCatalogEditActions` の共有化・`rewriteDocSymbolDetailFigures` の改名（建具種別も読み替えるため。整理課題）。
 
 ## 履歴
 - 2026-10-31 S1 `5f396eb2` 純モジュール／S2 `0f256ee1` カタログ種別と同梱往復／S3 `8047121a` 三方枠への反映（裁定 R1〜R21 は推奨案で確定）。

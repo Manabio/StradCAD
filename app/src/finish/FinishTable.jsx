@@ -23,6 +23,8 @@ import {
 import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
+import { roomDetailRefSelects, roomDetailRefsAfterSelect } from './roomDetailRefsEdit.js';
+import { ROOM_DETAIL_REF_TEXT } from '../error.js';
 import { toHalfWidthDigits } from '../halfWidth.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip } from '../catalog/catalogDiffView.js';
 
@@ -729,6 +731,7 @@ const RoomCard = observer(({ room, mode, isExpanded, isDragging, isOver,
             ))}
           </div>
         ))}
+        <RoomDetailRefsRows room={room} graph={mode?.graph} />
         <div style={sectionTitleStyle}>【 その他 】 +</div>
         <div style={{ borderTop: '1px solid #e2e8f0', margin: '10px 0 8px' }} />
         <div style={{ fontSize: 12, color: '#64748b', marginBottom: 2 }}>備考</div>
@@ -745,6 +748,31 @@ const RoomCard = observer(({ room, mode, isExpanded, isDragging, isOver,
   </div>
   );
 });
+
+// 部分詳細（部屋の取り合いの詳細図の割当て。床と壁／壁と天井）。選択は finishUndo に乗る（undo・redo で戻る）。
+// 判断は finish/roomDetailRefsEdit.js（先頭は「なし」＝割当てなし）。
+const RoomDetailRefsRows = observer(({ room, graph }) => (
+  <div>
+    <div style={sectionTitleStyle}>【 {ROOM_DETAIL_REF_TEXT.section} 】</div>
+    <div style={cardRowStyle}>
+      {roomDetailRefSelects(room).map(sel => (
+        <div key={sel.slot} style={cardFieldStyle}>
+          <span style={cardLabelStyle}>{sel.label}：</span>
+          <div style={cardInputWrapStyle}>
+            <select
+              value={sel.value}
+              onClick={e => e.stopPropagation()}
+              onChange={e => withFinishUndo(graph, () => room.setDetailRefs(roomDetailRefsAfterSelect(room, sel.slot, e.target.value)))}
+              style={cellInputStyle}
+            >
+              {sel.options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+            </select>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+));
 
 // セクション内の1行（左右2列。leftKey/rightKeyはINTERIOR_FIELDSのキー、nullなら空セル）
 const FieldRow = observer(({ leftKey, rightKey, room, mode }) => (

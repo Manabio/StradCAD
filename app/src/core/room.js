@@ -4,6 +4,7 @@
  */
 import { makeObservable, observable, action } from 'mobx';
 import { RoomKind, RoomFeature, ExteriorLevelRef, DEFAULT_WALL_MATERIAL, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH, DEFAULT_EXTERIOR_CEILING_PANEL } from './constants.js';
+import { normalizeDetailRefs } from './detailRefs.js';
 import { INTERIOR_MASTERS } from '../finish/materials/interiorMasters.js';
 import { CatalogKind, interiorMasterBuiltinList } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
@@ -183,6 +184,9 @@ export class Room {
     // 天井区画（CeilingZone の凍結配列。天伏モードで選んだセル群ごとの天井高。.claude/ceiling-model.md「天井区画（S5）」）。
     // setFeature/setKind では消さない（customOverrides と同じ。天井を持たない部屋の区画は読む側が無視する）。
     this.ceilingZones     = Object.freeze([]);
+    // 部分詳細図の割当て（{[slot]: 詳細図キー}|null。slot は ROOM_DETAIL_SLOTS。S8a）。凍結した正規形で差し替える
+    // （core/detailRefs.js）。setFeature/setKind では消さない（ceilingZones と同じ）。
+    this.detailRefs       = null;
     this.generatedWallIds = new Set(); // 自動生成された Wall の ID を管理（非 observable）
     makeObservable(this, {
       name:                observable,
@@ -200,6 +204,8 @@ export class Room {
       setRoofSpec:         action,
       ceilingZones:        observable.ref,
       setCeilingZones:     action,
+      detailRefs:          observable.ref,
+      setDetailRefs:       action,
       setName:             action,
       addCell:             action,
       removeCell:          action,
@@ -227,6 +233,7 @@ export class Room {
   }
   setRoofSpec(spec)          { this.roofSpec = spec; } // RoofSpec | null（作るのは仕上げモードの付与／復元）
   setCeilingZones(zones)     { this.ceilingZones = Object.freeze([...zones]); } // CeilingZone[]（置換。差し引き・正規化は ceiling/ceilingZones.js）
+  setDetailRefs(refs)        { this.detailRefs = normalizeDetailRefs(refs); } // {[slot]: キー}|null（空・不正は null に正規化）
   setNamePosition(x, y)     { this.namePosition = { x, y }; }
   setFloorLevel(mm)         { this.floorLevel = mm; } // mm | null（null = 階基準どおり）
   setExteriorSlope(n)       { this.exteriorSlope = n; } // 勾配1/N の N | null

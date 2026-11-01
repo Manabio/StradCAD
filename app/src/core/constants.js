@@ -574,7 +574,11 @@ export const DetailSlot = Object.freeze({
   NAGESHI:      'nageshi',
   SHIKII:       'shikii',
   FIGURE:       'figure', // 建具の姿図（正面図）。枠・機構・ハンドルを置き換える（S6b）
+  FLOOR_WALL:   'floorWall',   // 部屋の床と壁の取り合い（Room.detailRefs。S8a）
+  WALL_CEILING: 'wallCeiling', // 部屋の壁と天井の取り合い（Room.detailRefs。S8a）
 });
+/** 部屋（Room.detailRefs）に割り当てられる slot（S8a。wall・floor・ceiling の part は 8b）。 */
+export const ROOM_DETAIL_SLOTS = Object.freeze([DetailSlot.FLOOR_WALL, DetailSlot.WALL_CEILING]);
 /** 有効な (category, view, subject) の組合せ表。検証（detail/detailModel.js）と割当て先の絞り込みが引く。 */
 export const DETAIL_VIEW_COMBOS = Object.freeze([
   ...[DetailView.PLAN, DetailView.SECTION].flatMap(view =>
@@ -600,6 +604,8 @@ export const DETAIL_SLOT_TARGETS = Object.freeze({
   [DetailSlot.NAGESHI]:      Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.NAGESHI }),
   [DetailSlot.SHIKII]:       Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.SHIKII }),
   [DetailSlot.FIGURE]:       Object.freeze({ category: DetailCategory.FIGURE, view: DetailView.ELEVATION, subject: DetailSubject.OPENING }),
+  [DetailSlot.FLOOR_WALL]:   Object.freeze({ category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.FLOOR_WALL }),
+  [DetailSlot.WALL_CEILING]: Object.freeze({ category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.WALL_CEILING }),
 });
 /** 基準（Datum）の種別。origin=図を載せる原点・end=伸縮区間の終端。 */
 export const DetailDatumKind = Object.freeze({
@@ -661,6 +667,16 @@ export const DETAIL_FIGURE_KEY_PREFIX = 'df-';
 export const DETAIL_PRIM_SOURCE = 'detail';
 /** fit の長さ比較の許容（mm）。elevationStyle.js の COORD_EPS_MM と同値だが、detail/ は elevation/ を引けないので別定義。 */
 export const DETAIL_FIT_EPS_MM = 1e-3;
+/** 手の辺に付ける印（Move.edge）。'air'＝空気との境目（室内側の見え掛かりの線。展開図で中線になる。S8a）。 */
+export const DetailEdgeMark = Object.freeze({
+  AIR: 'air',
+});
+/** 包絡線の段差とみなす s の差の下限（mm。これ以下は見えない。S8a）。 */
+export const DETAIL_ENVELOPE_STEP_MIN_MM = 1;
+/** 包絡線の折れ（'V' の向きの変化）とみなす角度の下限（度。面取りの稜線。S8a）。 */
+export const DETAIL_ENVELOPE_KINK_MIN_DEG = 1;
+/** 展開図の切断面を詳細図の断面形へ差し替える、形状差の下限（mm。これを超えたら差し替える。S8a）。8a-2（展開の断面形の差し替え）で使用。 */
+export const DETAIL_SECTION_SWAP_MIN_DIFF_MM = 100;
 /** ヘルパー画面の下書き履歴（1 手戻し）の保持数の上限。超えたら古いものから捨てる（undoManager には積まない）。 */
 export const DETAIL_DRAFT_HISTORY_MAX = 50;
 

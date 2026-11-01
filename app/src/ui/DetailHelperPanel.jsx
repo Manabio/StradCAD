@@ -3,7 +3,7 @@ import './DetailHelperPanel.css';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { overlayFor, docDiffMap } from '../catalog/catalogRegistry.js';
 import { planRemoveUserEntry, applyCatalogEditPlan } from '../catalog/catalogMaintenance.js';
-import { DetailLenMode } from '../core/constants.js';
+import { DetailLenMode, DetailEdgeMark } from '../core/constants.js';
 import { saveUserCatalog } from '../storage/db.js';
 import { markDirty } from '../dirtyState.js';
 import { collectCurrentCatalogUsage } from '../store.js';
@@ -17,7 +17,7 @@ import {
   DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, DETAIL_NUMPAD_LABELS, PEN_BUTTONS, PREVIEW_FRAME_PX,
   DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS, DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS,
   newDraft, entryFromForm, freshDocOf, docFromEntry, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, isDraftDirty, undoDraft, penStep, penUp, setClosed,
-  setMoveLen, setMoveMode, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
+  setMoveLen, setMoveMode, setMoveEdge, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, saveDecision, planSave, afterSaveDoc,
   deleteConfirmMessage, libraryRows, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
@@ -230,7 +230,9 @@ export function DetailHelperPanel({ onClose }) {
     [materialList, fitOverrides, form],
   );
   const fitFields = fitDimFieldsFor(form);
-  const fitted = useMemo(() => (fitOn ? tryFit(form, fitDims) : null), [fitOn, form, fitDims]);
+  // 部屋の取り合いの材束縛を解く材マップ（材コード→材。材の一覧が読めるまでは null＝材束縛の図は UNRESOLVED_MATERIAL）
+  const materialMap = useMemo(() => (materialList ? new Map(materialList.map(m => [m.code, m])) : null), [materialList]);
+  const fitted = useMemo(() => (fitOn ? tryFit(form, fitDims, { materialMap }) : null), [fitOn, form, fitDims, materialMap]);
   const primitives = useMemo(() => previewPrimitivesOf(form, fitted), [form, fitted]);
   const showDxf = leftTab === DETAIL_HELPER_TABS.DXF;
   const imported = pdf ?? dxf;
@@ -569,6 +571,13 @@ export function DetailHelperPanel({ onClose }) {
                         )}
                       </>
                     )}
+                    <button
+                      className={`dthlp-btn dthlp-btn--small${m.edge === DetailEdgeMark.AIR ? ' dthlp-btn--active' : ''}`}
+                      aria-pressed={m.edge === DetailEdgeMark.AIR}
+                      onClick={() => edit(f => setMoveEdge(f, m.editKey, m.edge === DetailEdgeMark.AIR ? null : DetailEdgeMark.AIR))}
+                    >
+                      {DETAIL_HELPER_TEXT.airEdge}
+                    </button>
                   </div>
                 ))}
               </div>

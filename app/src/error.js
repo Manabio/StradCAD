@@ -347,8 +347,14 @@ export const ERR_ROOF_UPPER_ROOMS = (floorLabels) =>
 // 部分詳細図を建具記号の三方枠（方立・上枠）の寸法に合わせられなかった場合（openings/openingDetailFitCheck.js）。
 // 方立の図を流用または既定の断面（solid/bent）で描いており、図面は止まらない。reason は合わせられない理由
 // （fit の error.message など）。slot は DetailSlot の値（'jamb'＝方立・'head'＝上枠。core/constants.js）。
-const DETAIL_SLOT_LABELS = Object.freeze({ jamb: '方立（縦枠）', head: '上枠', figure: '姿図' });
-const detailSlotLabel = (slot) => (Object.hasOwn(DETAIL_SLOT_LABELS, slot) ? DETAIL_SLOT_LABELS[slot] : slot);
+const DETAIL_SLOT_LABELS = Object.freeze({
+  jamb: '方立（縦枠）', head: '上枠', figure: '姿図', floorWall: '床と壁', wallCeiling: '壁と天井',
+});
+// 部屋の取り合い（Room.detailRefs。S8a）の通知文の主語。ERR_DETAIL_FIT_FAILED の symbolKey・ERR_DETAIL_FIGURE_NOT_FOUND の owner に渡す。
+export const detailOwnerRoom = (roomName) => `部屋「${roomName || '（名称なし）'}」`;
+// 仕上げモードの部屋カードの「部分詳細」欄の文言（finish/roomDetailRefsEdit.js）。
+export const ROOM_DETAIL_REF_TEXT = Object.freeze({ section: '部分詳細', none: 'なし' });
+export const detailSlotLabel = (slot) => (Object.hasOwn(DETAIL_SLOT_LABELS, slot) ? DETAIL_SLOT_LABELS[slot] : slot);
 export const ERR_DETAIL_FIT_FAILED = (label, symbolKey, reason, slot) =>
   `詳細図 ${label} を ${symbolKey} の${detailSlotLabel(slot)}に合わせられません: ${reason}`;
 // 参照先の詳細図がカタログ（ライブラリ・同梱）に無い場合。owner は参照の持ち主——記号キー、建具個別の指定なら
@@ -358,6 +364,7 @@ export const ERR_DETAIL_FIGURE_NOT_FOUND = (owner, slot) =>
   `${owner} の${detailSlotLabel(slot)}の詳細図がカタログに見つかりません（DXF・PDF 由来の図は保存ファイルに入らないため、別の端末では見つかりません）`;
 // 詳細図の基準（Datum）が取り付け先（既定は三方枠。建具の姿図なら「建具の姿図」）の供給できない組（role・軸・種別）のとき。
 export const DETAIL_TARGET_ELEVATION = '建具の姿図';
+export const DETAIL_TARGET_JUNCTION = '部屋の取り合い';
 export const ERR_DETAIL_DATUM_UNSUPPORTED = (datumId, role, target = '三方枠') =>
   `基準 ${datumId}（${role}）は${target}では使えません`;
 // 部分詳細図ヘルパー（全画面パネル）の動的 import が失敗したときのトースト。

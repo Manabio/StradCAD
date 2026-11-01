@@ -241,11 +241,11 @@ test('【不変条件・ステップ6-3】modes/FinishModeState.js: initがbuild
 // s.catalogResolveKindsを読むため、StructuralModeStateと同じ場面(unresolved-code)で行を
 // 積むFinishModeState側も自分の種別スコープを持たないと、構造モード突入がsection以外の
 // scenarioを消さない代わりに、Finish突入時にsection行まで巻き込んで消してしまう） ----
-test('【不変条件・ステップ8g】modes/FinishModeState.js: catalogResolveKindsがMATERIAL/INTERIOR_MASTER/BOUNDARY_MASTERの3種別', () => {
+test('【不変条件・ステップ8g→S8a】modes/FinishModeState.js: catalogResolveKindsがMATERIAL/INTERIOR_MASTER/BOUNDARY_MASTER/DETAIL_FIGUREの4種別', () => {
   const src = readSrc('modes/FinishModeState.js');
   assert.ok(
-    /catalogResolveKinds\s*=\s*\[CatalogKind\.MATERIAL,\s*CatalogKind\.INTERIOR_MASTER,\s*CatalogKind\.BOUNDARY_MASTER\];/.test(src),
-    'FinishModeState.js に catalogResolveKinds = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER] が見つからない',
+    /catalogResolveKinds\s*=\s*\[CatalogKind\.MATERIAL,\s*CatalogKind\.INTERIOR_MASTER,\s*CatalogKind\.BOUNDARY_MASTER,\s*CatalogKind\.DETAIL_FIGURE\];/.test(src),
+    'FinishModeState.js に catalogResolveKinds = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.DETAIL_FIGURE] が見つからない',
   );
 });
 

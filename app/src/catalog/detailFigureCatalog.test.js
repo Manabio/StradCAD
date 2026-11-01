@@ -495,6 +495,55 @@ test('walker（S6a）: rewrite は alias 表で detailRefs の値だけ書き換
   assert.deepEqual(dropped.unresolved, [{ code: 'df-old', location: 'opening', openingId: 'o1', slot: 'jamb' }]);
 });
 
+test('walker（S8a）: enumerate は rooms[].detailRefs の値を {location:room, roomId, slot} で列挙し、使用キー収集に合流する。空・空文字・非文字列は無視', () => {
+  const walker = SNAPSHOT_REF_WALKERS[DF];
+  const snapshot = {
+    openings: [{ id: 'o1', fixtureType: 'WF', detailRefs: { jamb: 'df-j' } }],
+    rooms: [
+      { id: 'r1', detailRefs: { wallCeiling: 'df-wc', floorWall: 'df-fw' } },
+      { id: 'r2', detailRefs: null },
+      { id: 'r3' },
+      { id: 'r4', detailRefs: { floorWall: '', wallCeiling: 3 } },
+    ],
+  };
+  assert.deepEqual([...walker.enumerate(snapshot)], [
+    { code: 'df-j', location: 'opening', openingId: 'o1', slot: 'jamb' },
+    { code: 'df-wc', location: 'room', roomId: 'r1', slot: 'wallCeiling' },
+    { code: 'df-fw', location: 'room', roomId: 'r1', slot: 'floorWall' },
+  ]);
+  assert.deepEqual([...collectUsedKeys(snapshot).detailFigure].sort(), ['df-fw', 'df-j', 'df-wc']);
+});
+
+test('walker（S8a）: rewrite は rooms[].detailRefs の値も alias 表で書き換える。表に無い部屋は同一参照・元は変えず、to=null は据え置きで unresolved へ。openings の書換えと両立する', () => {
+  const walker = SNAPSHOT_REF_WALKERS[DF];
+  const snapshot = {
+    openings: [{ id: 'o1', fixtureType: 'WF', detailRefs: { jamb: 'df-old' } }],
+    rooms: [
+      { id: 'r1', detailRefs: { floorWall: 'df-old', wallCeiling: 'df-keep' } },
+      { id: 'r2', detailRefs: { floorWall: 'df-keep' } },
+      { id: 'r3', detailRefs: null },
+    ],
+  };
+  const before = JSON.stringify(snapshot);
+  const { snapshot: next, unresolved } = walker.rewrite(snapshot, new Map([['df-old', 'df-new']]));
+  assert.deepEqual(next.rooms[0].detailRefs, { floorWall: 'df-new', wallCeiling: 'df-keep' });
+  assert.deepEqual(next.openings[0].detailRefs, { jamb: 'df-new' });
+  assert.equal(next.rooms[1], snapshot.rooms[1], '表に無い部屋は同一参照のまま');
+  assert.equal(next.rooms[2], snapshot.rooms[2]);
+  assert.deepEqual(unresolved, []);
+  assert.equal(JSON.stringify(snapshot), before, '元のスナップショットを書き換えない');
+  // 部屋だけに当たる表: openings は同一参照のまま、rooms キーの無い snapshot に rooms キーを足さない
+  const roomsOnly = walker.rewrite(snapshot, new Map([['df-keep', 'df-k2']]));
+  assert.equal(roomsOnly.snapshot.openings, snapshot.openings);
+  assert.deepEqual(roomsOnly.snapshot.rooms[1].detailRefs, { floorWall: 'df-k2' });
+  const noRooms = walker.rewrite({ openings: snapshot.openings }, new Map([['df-old', 'df-new']]));
+  assert.equal(Object.hasOwn(noRooms.snapshot, 'rooms'), false);
+  assert.equal(walker.rewrite(snapshot, new Map([['df-x', 'df-y']])).snapshot, snapshot);
+  const dropped = walker.rewrite({ rooms: snapshot.rooms }, new Map([['df-old', null]]));
+  assert.deepEqual(dropped.snapshot.rooms[0].detailRefs, { floorWall: 'df-old', wallCeiling: 'df-keep' });
+  assert.deepEqual(dropped.unresolved, [{ code: 'df-old', location: 'room', roomId: 'r1', slot: 'floorWall' }]);
+});
+
 test('【失敗系】walker（S6a）: detailFigure への alias は積める（rewrite がある）。循環は従来どおり例外。applyDocumentCodeNormalization が detailRefs を書き換える', () => {
   assert.doesNotThrow(() => setDocumentAliases(DF, { 'df-1': 'df-2' }));
   const snap = { openings: [{ id: 'o1', fixtureType: 'WF', detailRefs: { jamb: 'df-1' } }] };

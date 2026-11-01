@@ -161,7 +161,7 @@ const RZ = { ID: 0, CELLS: 1, SPEC: 2 };
 // DIMS（f64 vector）は空でないときだけ書く。正規化は復元側の restoreCeilingZones。
 const CZ = { ID: 0, CELLS: 1, HAS_HEIGHT: 2, HEIGHT: 3, SHAPE: 4, DIMS: 5 };
 
-// Room: 32 フィールド
+// Room: 34 フィールド
 const RM = {
   ID: 0, NAME: 1, CELLS: 2, REF_IDS: 3, GEN_WALL_IDS: 4,
   HAS_POS: 5, POS_X: 6, POS_Y: 7,
@@ -178,6 +178,9 @@ const RM = {
   HAS_EXT_SLOPE: 28, EXT_SLOPE: 29, // 勾配 1/N の N
   ROOF_SPEC: 30, // 屋根の仕様（RS テーブル。feature=roof の部屋だけが持つ。無ければフィールド自体を書かない）
   CEILING_ZONES: 31, // 天井区画（CZ テーブルの vector。区画が無い部屋は vector 自体を書かない＝既存文書のバイト列は不変）
+  // 部分詳細図の割当て（Room.detailRefs）。slot 名の昇順の並列 vector。割当ての無い部屋は両方とも書かない
+  // （使わない文書のバイト列は不変）。読みは無ければ null。新 .stq を旧ビルドで開いて保存すると黙って消える片方向非互換（OP 28/29 と同型）。
+  DETAIL_KEYS: 32, DETAIL_VALS: 33,
 };
 
 // Room.kind 列挙値エンコード（VOID は旧データデコード専用。書き込みは INTERIOR/EXTERIOR のみ）
@@ -795,6 +798,9 @@ function writeRoom(b, rm) {
   const roofSpecOff = writeRoofSpec(b, rm.roofSpec ?? null);
   // 区画が無い部屋は vector を作らない（区画の無い全文書のバイト列を不変に保つ）
   const ceilingZonesVec = rm.ceilingZones?.length ? writeVec(b, rm.ceilingZones, writeCeilingZone) : 0;
+  const detailEntries = Object.entries(normalizeDetailRefs(rm.detailRefs) ?? {});
+  const detailKeysVec = detailEntries.length > 0 ? writeStrVec(b, detailEntries.map(([slot]) => slot)) : 0;
+  const detailValsVec = detailEntries.length > 0 ? writeStrVec(b, detailEntries.map(([, key]) => key)) : 0;
   const cellsVec    = writeStrVec(b, rm.cells);
   const refIdsVec   = writeStrVec(b, rm.referenceRoomIds);
   const genWallVec  = writeStrVec(b, rm.generatedWallIds);
@@ -822,7 +828,7 @@ function writeRoom(b, rm) {
   const kindEnc    = isLegacyVoidKind ? ROOM_KIND_ENC.interior : (ROOM_KIND_ENC[rm.kind] ?? 0);
   const featureVal = isLegacyVoidKind ? 'void' : (rm.feature ?? null);
 
-  b.startObject(32);
+  b.startObject(34);
   b.addFieldOffset(RM.ID,           sId,          0);
   b.addFieldOffset(RM.NAME,         sName,        0);
   b.addFieldOffset(RM.CELLS,        cellsVec,     0);
@@ -855,6 +861,8 @@ function writeRoom(b, rm) {
   b.addFieldFloat64(RM.EXT_SLOPE,    rm.exteriorSlope ?? 0.0, 0.0);
   b.addFieldOffset(RM.ROOF_SPEC,     roofSpecOff,  0);
   b.addFieldOffset(RM.CEILING_ZONES, ceilingZonesVec, 0);
+  b.addFieldOffset(RM.DETAIL_KEYS,   detailKeysVec, 0);
+  b.addFieldOffset(RM.DETAIL_VALS,   detailValsVec, 0);
   return b.endObject();
 }
 
@@ -1646,6 +1654,7 @@ function readRoom(bb, tablePos) {
     exteriorSlope:    r.i8(RM.HAS_EXT_SLOPE) ? r.f64(RM.EXT_SLOPE) : null,
     roofSpec:         readRoofSpec(bb, r.nested(RM.ROOF_SPEC)),
     ceilingZones:     r.vec(RM.CEILING_ZONES, readCeilingZone),
+    detailRefs:       readDetailRefs(r.strVec(RM.DETAIL_KEYS), r.strVec(RM.DETAIL_VALS)),
   };
 }
 

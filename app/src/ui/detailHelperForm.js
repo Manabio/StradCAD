@@ -20,7 +20,7 @@ import {
   PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam,
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
-  DETAIL_SLOT_TARGETS, DetailSlot, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
+  DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
   DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE,
 } from '../core/constants.js';
 import { readDxf, buildDxfScene } from '../detail/dxf/dxfImport.js';
@@ -33,7 +33,7 @@ import {
   ERR_DXF_BINARY, ERR_DXF_BAD_GROUP_CODE, ERR_DXF_TRUNCATED, ERR_DXF_UNEXPECTED, ERR_DXF_NOT_BYTES,
 } from '../error.js';
 import { validateDetailFigure, DetailValidationError } from '../detail/detailModel.js';
-import { previewPrimitives, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
+import { previewPrimitives, airEdgeOverlays, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
 import { fitLocal } from '../detail/detailPlacement.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import {
@@ -42,6 +42,7 @@ import {
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
+import { junctionTargets } from '../finish/roomDetailTargets.js';
 import { evalNumpadExpr } from './numpadUtils.js';
 import { polyline, text } from '../structural/sectionFigure/svgFigurePrimitives.js';
 
@@ -105,6 +106,7 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   fieldLabel: '呼称', fieldCategory: '分類', fieldView: '向き', fieldSubject: '主題',
   datumHeading: '基準と載せる頂点', noAnchor: '（なし）', validOk: '検証: 問題なし', blankValue: '—',
   approveButton: '承認する',
+  airEdge: '空気との境目', // 手の印（Move.edge='air'）の切替。展開図で中線になる（S8a）
   // DXF 読込み（S7a）
   tabPen: 'ペン', tabDxf: '図面読込み（DXF／PDF）', dxfOpen: 'DXF／PDF を開く', dxfCopy: '下書きへ写す',
   dxfUnit: '単位（1 単位 = ? mm）', dxfUnitDetected: '読み取り値', dxfComponents: '連結成分', dxfProvenance: '出所',
@@ -164,8 +166,19 @@ export function isElevationFigureForm(form) {
   const t = DETAIL_SLOT_TARGETS[DetailSlot.FIGURE];
   return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
 }
+/** 試し込みの目標値の欄（部屋の取り合い。壁厚だけ）。 */
+export const JUNCTION_FIT_DIM_FIELDS = Object.freeze([FIT_DIM_FIELDS[0]]);
+
+/** 分類が部屋の取り合い（junction/section/床と壁・壁と天井）なら、その slot（DetailSlot の floorWall／wallCeiling）。違えば null。 */
+export function junctionSlotOf(form) {
+  return ROOM_DETAIL_SLOTS.find(slot => {
+    const t = DETAIL_SLOT_TARGETS[slot];
+    return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
+  }) ?? null;
+}
 /** 現在の分類に合う試し込みの欄。 */
-export const fitDimFieldsFor = form => (isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
+export const fitDimFieldsFor = form => (isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS
+  : junctionSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
 /** 保存・破棄・削除の確認の文言。 */
 export const DETAIL_HELPER_MESSAGES = Object.freeze({
   saved: '保存しました',
@@ -515,6 +528,20 @@ export function setMoveMode(form, editKey, mode, { param, code, field } = {}) {
   });
 }
 
+/**
+ * 手の「空気との境目」の印を付け外しする（S8a）。mark が DetailEdgeMark の値なら付け、null・未知の値なら外す
+ * （外すときはキー自体を消す＝印なしの図は byte 不変）。斜め（V）は raw の手に付ける。editKey の手だけが変わる。
+ */
+export function setMoveEdge(form, editKey, mark) {
+  const on = Object.values(DetailEdgeMark).includes(mark);
+  const apply = o => {
+    const next = { ...o };
+    if (on) next.edge = mark; else delete next.edge;
+    return next;
+  };
+  return mapMove(form, editKey, m => (m.dir === PenDir.VECTOR ? { ...m, raw: apply(m.raw) } : apply(m)));
+}
+
 /** 命令一覧の行（ストロークごとの見出し付き）。表示用の文字列はここで作る。 */
 export function moveRows(form) {
   return form.strokes.map((s, strokeIndex) => ({
@@ -524,6 +551,7 @@ export function moveRows(form) {
       dir: m.dir, dirLabel: PEN_DIR_LABELS[m.dir] ?? String(m.dir),
       isVector: m.dir === PenDir.VECTOR,
       mode: m.mode, lenText: m.len, param: m.param, code: m.code, field: m.field,
+      edge: (m.dir === PenDir.VECTOR ? m.raw?.edge : m.edge) ?? null,
       fromVertex: moveIndex, toVertex: moveIndex + 1,
     })),
   }));
@@ -730,13 +758,26 @@ function tryFitElevation(form, dims) {
   return fitLocal(fig, t.targets);
 }
 
+// 部屋の取り合い（床と壁・壁と天井）の試し込み: 壁厚に合わせる。基準の対応は finish/roomDetailTargets.js。
+// 材束縛の図は materialMap（材コード→材。無ければ UNRESOLVED_MATERIAL）で解く。
+function tryFitJunction(form, dims, slot, materialMap) {
+  const wallThickness = parseNumberText(dims.wallThickness);
+  if (!Number.isFinite(wallThickness) || wallThickness <= 0) return badFitDim('壁厚は正の数で入力してください');
+  const fig = entryFromForm(form);
+  const t = junctionTargets(fig, { slot, wallThicknessMm: wallThickness, materialMap });
+  if (t.error) return { error: t.error };
+  return fitLocal(fig, t.targets);
+}
+
 /**
  * 試し込み: 取り付け先の寸法に図を合わせる。建具の姿図（figure/elevation/opening）は幅・高さ・窓台、
  * それ以外は三方枠の寸法（壁厚・見付・出幅。文字列か数値）。
  * 基準の対応は S3／S6b（openings/openingDetailFrame.js）と同じ。失敗は { error:{code,message} }（黙って代用しない）。
  */
-export function tryFit(form, dims) {
+export function tryFit(form, dims, { materialMap = null } = {}) {
   if (isElevationFigureForm(form)) return tryFitElevation(form, dims);
+  const junctionSlot = junctionSlotOf(form);
+  if (junctionSlot) return tryFitJunction(form, dims, junctionSlot, materialMap);
   const wallThickness = parseNumberText(dims.wallThickness);
   const faceWidth = parseNumberText(dims.faceWidth);
   const projection = parseNumberText(dims.projection);
@@ -762,6 +803,7 @@ function fittedPrimitives(fitted) {
     if (st.closed) extra.closed = true;
     if (st.line?.dashRole === DetailDash.DASHED) extra.dash = DetailDash.DASHED;
     out.push(polyline(st.points.map(p => [p.s, p.t]), extra));
+    out.push(...airEdgeOverlays(st.points, st.edgeMarks));
     st.points.forEach((p, i) => out.push(text(p.s + PREVIEW_LABEL_OFFSET_MM, p.t - PREVIEW_LABEL_OFFSET_MM, String(i), { size: PREVIEW_LABEL_SIZE_PX })));
   }
   return out;

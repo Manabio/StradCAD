@@ -16,7 +16,7 @@
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog, composeList, overlayGeneration } from '../catalog/catalogRegistry.js';
 import { DetailSlot, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
-import { fitLocal } from '../detail/detailPlacement.js';
+import { fitLocal, DetailFitError } from '../detail/detailPlacement.js';
 import { ERR_DETAIL_FIGURE_NOT_FOUND } from '../error.js';
 import { detailFrameTargets, detailElevationTargets, detailFrameFail, DetailFrameError } from './openingDetailFrame.js';
 
@@ -385,10 +385,13 @@ export function detailFitKey(p) {
  * （例外にしない。図が無い場合も NO_FIGURE）。faceWidth は開口半幅で頭打ちにした後の値。
  * 鍵は記号ではなく図のキー——割当ての経路（建具個別の detailRefs か記号の detailFigures か）によらず同じ図ならメモを共有する。
  * 世代キー（overlayGeneration）が変わると Map ごと作り直す。
+ * 任意の args.targetsOf(entry, dims)（{targets}|{error} を返す）を渡すと、取り付け先の基準の割当てを呼び出し側が決める
+ * （部屋の取り合い finish/roomDetailJunction.js が使う。openings/→finish/ の依存を作らず、メモだけを共有する）。省略時は従来の分岐。
+ * targetsOf を渡した結果が材の未解決（材マスタ未ロード）のときはメモしない（後でロードされたら解ける）。
  * @returns {{strokes: object[], warnings: object[]} | {error:{code:string, message:string}}}
  */
 export function fitDetailLocalMemo(args) {
-  const { figureKey, slot } = args;
+  const { figureKey, slot, targetsOf } = args;
   const dims = dimsOfFitArgs(args);
   const gen = overlayGeneration();
   if (_detailFitGen !== gen) { _detailFitMemo = new Map(); _detailFitGen = gen; }
@@ -400,10 +403,13 @@ export function fitDetailLocalMemo(args) {
   if (!entry) {
     result = detailFrameFail(DetailFrameError.NO_FIGURE, ERR_DETAIL_FIGURE_NOT_FOUND(figureKey, slot));
   } else {
-    // 取り付け先で基準の割当てが違う: 姿図（幅・高さ・窓台高さ）／三方枠（壁厚・出幅・見付）。
-    const t = slot === DetailSlot.FIGURE ? detailElevationTargets(entry, dims) : detailFrameTargets(entry, dims);
+    // 取り付け先で基準の割当てが違う: 呼び出し側指定（部屋の取り合い）／姿図（幅・高さ・窓台高さ）／三方枠（壁厚・出幅・見付）。
+    const t = typeof targetsOf === 'function'
+      ? targetsOf(entry, dims)
+      : slot === DetailSlot.FIGURE ? detailElevationTargets(entry, dims) : detailFrameTargets(entry, dims);
     result = t.error ? t : fitLocal(entry, t.targets);
   }
+  if (typeof targetsOf === 'function' && result.error?.code === DetailFitError.UNRESOLVED_MATERIAL) return result;
   _detailFitMemo.set(memoKey, result);
   return result;
 }

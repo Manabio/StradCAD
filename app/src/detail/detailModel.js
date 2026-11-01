@@ -5,8 +5,9 @@
 // 検証は例外にせず、理由を列挙して返す。形は 問題0.md §3 のとおり:
 //   DetailFigure = { key, version, label, category, view, subject, strokes[], datums[], anchors[], provenance, note }
 //   Stroke = { id, moves[], closed, line:{weightRole, dashRole} }
-//   Move   = { dir:'U'|'D'|'L'|'R', len:LenSpec } | { dir:'V', dx:LenSpec, dy:LenSpec, ss?:1|-1, st?:1|-1 }
+//   Move   = { dir:'U'|'D'|'L'|'R', len:LenSpec, edge? } | { dir:'V', dx:LenSpec, dy:LenSpec, ss?:1|-1, st?:1|-1, edge? }
 //            'V' の ss は s 軸・st は t 軸の向き（省略時 +1。normalize が埋める）。dx/dy の mm は正のみ。
+//            edge は DetailEdgeMark（'air'＝空気との境目。S8a）。印なしはキーを持たない（normalize は足さない）。
 //   Datum  = { id, role, axis, kind, offsetMm }   Anchor = { datumId, strokeId, vertexIndex }
 // closed の規約: 閉じ辺は描画側が補う。始点へ戻る手は書かない（mm で歩いた終点が始点に一致する closed は CLOSED_RETURNS_TO_START）。
 // 既知の限界: CLOSED_RETURNS_TO_START は LenSpec.mm（プレビュー値）で判定する。param・material・stretch の closed は
@@ -16,7 +17,7 @@
 
 import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumKind, DetailAxis,
-  DetailDatumRole, DetailParam, DetailMaterialField, DetailDash, DETAIL_VIEW_COMBOS,
+  DetailDatumRole, DetailParam, DetailMaterialField, DetailDash, DetailEdgeMark, DETAIL_VIEW_COMBOS,
   DETAIL_FIGURE_VERSION, LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_FIT_EPS_MM,
 } from '../core/constants.js';
 
@@ -47,6 +48,7 @@ export const DetailValidationError = Object.freeze({
   CLOSED_TOO_FEW:          'closedTooFew',         // closed なのに頂点が 2 以下
   CLOSED_RETURNS_TO_START: 'closedReturnsToStart', // closed なのに mm で歩いた終点が始点に一致（閉じ辺は描画側が補う）
   BAD_VECTOR_SIGN:         'badVectorSign',        // 'V' の ss / st が 1 か -1 でない
+  UNKNOWN_EDGE_MARK:       'unknownEdgeMark',      // Move.edge が未知の印（印なし＝キーが無い。S8a）
   ANCHOR_DATUM_MISSING:    'anchorDatumMissing',
   ANCHOR_STROKE_MISSING:   'anchorStrokeMissing',
   ANCHOR_VERTEX_MISSING:   'anchorVertexMissing',
@@ -202,6 +204,9 @@ export function validateDetailFigure(input) {
       if (!isObj(m)) { push(E.SHAPE, 'Move がオブジェクトでない', mp); return; }
       const parts = moveParts(m);
       if (parts === null) { push(E.UNKNOWN_DIR, `未知の dir: ${String(m.dir)}`, `${mp}.dir`); return; }
+      if (Object.hasOwn(m, 'edge') && !isEnum(DetailEdgeMark, m.edge)) {
+        push(E.UNKNOWN_EDGE_MARK, `未知の edge: ${String(m.edge)}`, `${mp}.edge`);
+      }
       if (m.dir === PenDir.VECTOR) {
         for (const key of ['ss', 'st']) {
           if (m[key] !== 1 && m[key] !== -1) push(E.BAD_VECTOR_SIGN, `${key} が 1 か -1 でない: ${String(m[key])}`, `${mp}.${key}`);
@@ -293,7 +298,7 @@ export function validateDetailFigure(input) {
 const SUPPORT_BLOCKING = new Set([
   E.SHAPE, E.VERSION, E.UNKNOWN_CATEGORY, E.UNKNOWN_VIEW, E.UNKNOWN_SUBJECT, E.UNKNOWN_DIR, E.UNKNOWN_MODE, E.UNKNOWN_PARAM,
   E.UNKNOWN_MATERIAL_FIELD, E.UNKNOWN_ROLE, E.UNKNOWN_KIND, E.UNKNOWN_AXIS, E.UNKNOWN_WEIGHT, E.UNKNOWN_DASH, E.BAD_LENGTH,
-  E.BAD_VECTOR_SIGN,
+  E.BAD_VECTOR_SIGN, E.UNKNOWN_EDGE_MARK,
 ]);
 
 /** この版で読める図か（version・全語彙が既知・全 LenSpec の mm が有限かつ正・線の役割が既知）。例外にしない。 */

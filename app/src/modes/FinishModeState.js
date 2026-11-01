@@ -35,6 +35,8 @@ import { composeCatalog, composeList, docDiffMap, overlayGeneration } from '../c
 import { isMaterialCode } from '../catalog/materialCode.js';
 import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes, ROOF_SPEC_MATERIAL_FIELDS } from '../catalog/codeNormalization.js';
 import { buildResolveRows } from '../catalog/resolveQueue.js';
+import { materialCodesOf } from '../detail/detailPlacement.js';
+import { collectRoomJunctionFailures } from '../finish/roomDetailJunction.js';
 import { REMOVED_MATERIALS } from '../catalog/legacyMaterialCodes.js';
 
 function setsEqual(a, b) {
@@ -112,7 +114,7 @@ export class FinishModeState {
   // App.jsx のモードロード後マージ（replaceRowsByScenario）に渡す種別スコープ（ステップ8g）。
   // StructuralModeState（section）と同じ場面（unresolved-code）で行を積むため、種別を絞らないと
   // 片方のモード突入がもう片方の行を消してしまう（非observable。モード生存中は不変の定数）。
-  catalogResolveKinds = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER];
+  catalogResolveKinds = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.DETAIL_FIGURE];
 
   constructor(graph, project = null) {
     this.graph = graph;
@@ -263,10 +265,16 @@ export class FinishModeState {
     // boundaryMasterの未解決行は次のモード境界でsyncEdgesFromTopologyがmasterTypeを再導出して
     // 上書きするため一過性（F2: edgeClassify.js selectBoundaryMaster が閉じた7キーのリテラルから
     // 再導出する。行として一瞬見えても、モード境界を跨げば自然に消える）。
+    // 部分詳細図（S8a）: 部屋の取り合い（Room.detailRefs）の未解決キーと、壁厚に合わせられない図の通知。
+    // 本体（builtin）は空（openings/openingCatalog.js detailFigureMap と同じ前提）。
+    const detailFigureMap = composeCatalog(CatalogKind.DETAIL_FIGURE, []);
+    const detailMissingUsage = this._missingUsageForKind(CatalogKind.DETAIL_FIGURE, detailFigureMap);
     const catalogResolveRows = [
       ...this._buildUnresolvedCodeRows(CatalogKind.MATERIAL, materialMap, materials, materialMissingUsage),
       ...this._buildUnresolvedCodeRows(CatalogKind.INTERIOR_MASTER, interiorMasters, [...interiorMasters.values()], interiorMissingUsage),
       ...this._buildUnresolvedCodeRows(CatalogKind.BOUNDARY_MASTER, boundaryMasters, [...boundaryMasters.values()], boundaryMissingUsage),
+      ...this._buildUnresolvedCodeRows(CatalogKind.DETAIL_FIGURE, detailFigureMap, [...detailFigureMap.values()], detailMissingUsage,
+        { detailFitFailures: this._roomDetailFitFailures(materialMap) }),
     ];
 
     runInAction(() => {
@@ -294,7 +302,7 @@ export class FinishModeState {
    * peekUnresolvedCodes()（全階累積。kindでフィルタ）を今のコード表で再解決できないものだけ
    * usage として渡す。
    */
-  _buildUnresolvedCodeRows(kind, appMap, appEntries, missingUsage) {
+  _buildUnresolvedCodeRows(kind, appMap, appEntries, missingUsage, { detailFitFailures = [] } = {}) {
     const table = buildCodeTable({ aliases: currentDocumentAliases(kind) });
     // peekUnresolvedCodes()は全種別（ステップ7a）の未解決コードを返す——kindでフィルタする。
     const stillUnresolved = peekUnresolvedCodes().filter(u => u.kind === kind).filter(u => {
@@ -304,9 +312,24 @@ export class FinishModeState {
     return buildResolveRows({
       kind,
       unresolved: [...missingUsage, ...stillUnresolved],
+      detailFitFailures,
       appEntries,
       removedMaterials: kind === CatalogKind.MATERIAL ? REMOVED_MATERIALS : [],
     });
+  }
+
+  /**
+   * 自階の部屋の取り合い（Room.detailRefs）の図を壁厚に合わせられない通知（detail-fit-failed の行）の元。
+   * 参照切れ（図がカタログに無い）は unresolved-code 側で出すので、ここでは fit 失敗だけを返す。
+   * 集計の失敗は仕上げモードに入れなくする理由にしない（空を返す）。
+   */
+  _roomDetailFitFailures(materialMap) {
+    try {
+      return collectRoomJunctionFailures(this.graph, new Set(), { materialMap }).filter(f => f.wallThickness !== undefined);
+    } catch (err) {
+      console.error('[finish] 部屋の取り合いの詳細図の合わせ込み検査に失敗:', err);
+      return [];
+    }
   }
 
   /**
@@ -332,6 +355,15 @@ export class FinishModeState {
       return this.graph.edges
         .filter(edge => edge.masterType && !appMap.has(edge.masterType))
         .map(edge => ({ code: edge.masterType, location: 'edge', edgeKey: edge.key }));
+    }
+    if (kind === CatalogKind.DETAIL_FIGURE) {
+      const usage = [];
+      for (const room of this.graph.rooms) {
+        for (const [slot, key] of Object.entries(room.detailRefs ?? {})) {
+          if (!appMap.has(key)) usage.push({ code: key, location: 'room', roomId: room.id, slot });
+        }
+      }
+      return usage;
     }
     return [];
   }
@@ -597,6 +629,16 @@ export class FinishModeState {
       for (const f of STEEL_SLAB_PLATE_CODE_KEYS) {
         const v = steelCommon[f];
         if (typeof v === 'string' && v) codes.add(v);
+      }
+    }
+
+    // 部屋の取り合い（rooms[].detailRefs）が指す詳細図の material 束縛の材コード（推移。S8a）。割当てが無ければ合成しない。
+    if ((g?.rooms ?? []).some(room => room.detailRefs)) {
+      const figures = composeCatalog(CatalogKind.DETAIL_FIGURE, []);
+      for (const room of g.rooms) {
+        for (const key of Object.values(room.detailRefs ?? {})) {
+          for (const code of materialCodesOf(figures.get(key))) if (isMaterialCode(code)) codes.add(code);
+        }
       }
     }
 

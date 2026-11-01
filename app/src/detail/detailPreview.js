@@ -8,7 +8,7 @@
 //   - ストロークは origin の Anchor の頂点が origin の Datum の offsetMm に来るよう平行移動して描く（Anchor が揃わない下書きは原点のまま）。
 // ================================================================
 
-import { PenDir, DetailAxis, DetailDatumKind, DetailDash } from '../core/constants.js';
+import { PenDir, DetailAxis, DetailDatumKind, DetailDash, DetailEdgeMark } from '../core/constants.js';
 import { polyline, text, dim } from '../structural/sectionFigure/svgFigurePrimitives.js';
 import { normalizeDetailFigure, moveParts } from './detailModel.js';
 import { penWalk } from './detailPen.js';
@@ -19,6 +19,23 @@ export const PREVIEW_DIM_GAP_MM = 40;
 export const PREVIEW_LABEL_OFFSET_MM = 15;
 /** 頂点番号の文字サイズ（px。text の size）。 */
 export const PREVIEW_LABEL_SIZE_PX = 11;
+
+/** 「空気との境目」の印（Move.edge）の辺に重ねる線の太さ（px。polyline の width。S8a）。 */
+export const PREVIEW_AIR_EDGE_WIDTH_PX = 2.5;
+
+/**
+ * 印のある辺（手 i＝頂点 i→i+1）に重ねる太線の polyline の列。印が無ければ []。
+ * @param {{s:number,t:number}[]} pts 頂点列
+ * @param {(string|null|undefined)[]} marks 手の番号に対応する印
+ */
+export function airEdgeOverlays(pts, marks) {
+  const out = [];
+  (marks ?? []).forEach((mark, i) => {
+    if (mark !== DetailEdgeMark.AIR || !pts[i] || !pts[i + 1]) return;
+    out.push(polyline([[pts[i].s, pts[i].t], [pts[i + 1].s, pts[i + 1].t]], { width: PREVIEW_AIR_EDGE_WIDTH_PX }));
+  });
+  return out;
+}
 
 /**
  * @param {object} figure DetailFigure（下書きでもよい。歩けないストロークは飛ばす）
@@ -48,6 +65,7 @@ export function previewPrimitives(figure, opts = {}) {
     if (stroke.closed) extra.closed = true;
     if (stroke.line?.dashRole === DetailDash.DASHED) extra.dash = DetailDash.DASHED;
     out.push(polyline(pts.map(p => [p.s, p.t]), extra));
+    out.push(...airEdgeOverlays(pts, stroke.moves.map(m => m?.edge)));
 
     pts.forEach((p, i) => out.push(text(p.s + off, p.t - off, String(i), { size })));
 

@@ -29,7 +29,8 @@ const isFiniteNumber = v => typeof v === 'number' && Number.isFinite(v);
 /**
  * @param {object} plain DetailFigure
  * @param {{datums?: Object<string, number>, params?: Object<string, number>, materials?: Object<string, {thickness:number, x:number, y:number}>}} targets
- * @returns {{strokes: {id:string, points:{s:number,t:number}[], closed:boolean, line:object}[], warnings: object[]} | {error:{code:string, message:string}}}
+ * @returns {{strokes: {id:string, points:{s:number,t:number}[], closed:boolean, line:object, edgeMarks?:(string|null)[]}[], warnings: object[]} | {error:{code:string, message:string}}}
+ *   edgeMarks は印（Move.edge）が 1 つでもあるストロークだけ。手 i（頂点 i→i+1）の印、無ければ null
  */
 export function fitDetailFigure(plain, targets) {
   const fig = normalizeDetailFigure(plain);
@@ -104,12 +105,15 @@ export function fitDetailFigure(plain, targets) {
       const origin = anchorOn(axis, DetailDatumKind.ORIGIN);
       shift[axis] = targetOf.get(origin.datum.id) - points[origin.vertexIndex][axis];
     }
-    strokes.push({
+    const fitted = {
       id: stroke.id,
       points: points.map(p => ({ s: p.s + shift[DetailAxis.S], t: p.t + shift[DetailAxis.T] })),
       closed: stroke.closed,
       line: { ...stroke.line },
-    });
+    };
+    // 手の印（Move.edge）。手の番号に対応（印なしは null）。印が 1 つも無いストロークにはキーを付けない（既存の出力は不変）
+    if (stroke.moves.some(m => m.edge != null)) fitted.edgeMarks = stroke.moves.map(m => m.edge ?? null);
+    strokes.push(fitted);
   }
   return { strokes, warnings: [] };
 }

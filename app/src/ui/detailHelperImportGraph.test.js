@@ -22,7 +22,7 @@ const ALLOWED_DIRECT = new Set([
   'detail/detailModel.js', 'detail/detailPreview.js', 'detail/detailPlacement.js',
   'detail/dxf/dxfImport.js', 'detail/dxf/dxfProvenance.js', 'detail/pdf/pdfProvenance.js', 'error.js',
   'catalog/catalogKinds.js', 'catalog/catalogMaintenance.js',
-  'openings/openingCatalog.js', 'openings/openingDetailFrame.js',
+  'openings/openingCatalog.js', 'openings/openingDetailFrame.js', 'finish/roomDetailTargets.js',
   'ui/numpadUtils.js',
   'structural/sectionFigure/svgFigurePrimitives.js',
 ]);

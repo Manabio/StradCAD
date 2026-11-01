@@ -600,6 +600,7 @@ export function snapshotRoomsState(graph) {
         exteriorSlope: r.exteriorSlope, exteriorLevelRef: r.exteriorLevelRef, exteriorLevel: r.exteriorLevel,
         roofSpec: r.roofSpec ? r.roofSpec.toData() : null,
         ceilingZones: r.ceilingZones.map(z => z.toData()),
+        detailRefs: r.detailRefs ?? null, // 凍結した正規形（core/detailRefs.js）なので参照の共有で安全
         namePosition: r.namePosition ? { x: r.namePosition.x, y: r.namePosition.y } : null,
         generatedWallIds: [...r.generatedWallIds],
         customOverrides: [...r.customOverrides],
@@ -622,6 +623,7 @@ export function restoreRoomsState(graph, snap) {
     if (d.exteriorLevel != null) room.setExteriorLevel(d.exteriorLevel);
     restoreRoofSpecInto(room, d.roofSpec); // I1（ROOF なら補う／ROOF でなければ捨てる）
     room.setCeilingZones(restoreCeilingZones(d.ceilingZones)); // 旧スナップショット（キー欠落）は []
+    room.setDetailRefs(d.detailRefs); // 旧スナップショット（キー欠落）は null
     if (d.namePosition) room.setNamePosition(d.namePosition.x, d.namePosition.y);
     for (const [k, v] of d.customOverrides) room.customOverrides.set(k, v);
     for (const [k, v] of Object.entries(d.finish)) if (v) room.finish.setField(k, v);

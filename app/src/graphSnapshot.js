@@ -135,6 +135,8 @@ function buildSnapshot(graph) {
           roofSpec:         r.roofSpec ? r.roofSpec.toData() : null,
           // 天井区画（天伏）。キー集合は CeilingZone.toData が唯一の定義。区画なしは [] （FBS は vector 自体を書かない）
           ceilingZones:     r.ceilingZones.map(z => z.toData()),
+          // 部分詳細図の割当て（S8a）。割当てなしは null（FBS は vector を書かない）
+          detailRefs:       normalizeDetailRefs(r.detailRefs),
           // 個別上書きポケット（選択された材のみが結果的に永続化される）
           overrides:        [...r.customOverrides].map(([key, value]) => ({ key, value: String(value) })),
           finish: {
@@ -922,6 +924,7 @@ function applySnapshot(graph, snapshot) {
       if (d.exteriorLevel != null) room.setExteriorLevel(d.exteriorLevel);
       restoreRoofSpecInto(room, d.roofSpec); // I1（ROOF なら補う／ROOF でなければ捨てる）
       room.setCeilingZones(restoreCeilingZones(d.ceilingZones)); // 旧データ（キー欠落）は []。正規化は restoreCeilingZones
+      room.setDetailRefs(d.detailRefs); // 旧データ（キー欠落）は null
       for (const [key, val] of Object.entries(d.finish ?? {})) {
         if (val) room.finish.setField(key, val);
       }
