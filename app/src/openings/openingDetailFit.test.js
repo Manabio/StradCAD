@@ -120,6 +120,28 @@ test('メモ: overlay の世代が変わる（図を差し替える）と作り�
   assert.equal(b.strokes[0].points[4].t, 130, '差し替えた図で fit されている');
 });
 
+test('resolveDetailFigure: detailRefs.jamb===null は記号の jamb を候補にしない（intended も drawn も null）。キー無し・undefined は従来どおり記号へ進む', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: jambFigure('df-n-j') });
+  const none = resolveDetailFigure({ symbolKey: sym, detailRefs: { jamb: null }, slot: JAMB });
+  assert.equal(none, null);
+  assert.equal(resolveDetailFigure({ symbolKey: sym, detailRefs: {}, slot: JAMB })?.drawn?.key, 'df-n-j');
+  assert.equal(resolveDetailFigure({ symbolKey: sym, detailRefs: { jamb: undefined }, slot: JAMB })?.drawn?.key, 'df-n-j');
+});
+
+test('resolveDetailFigure: detailRefs.head===null・記号 head あり → head は候補にせず jamb へ流用（R9）', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: jambFigure('df-n2-j'), head: headFigure('df-n2-h') });
+  const r = resolveDetailFigure({ symbolKey: sym, detailRefs: { head: null }, slot: HEAD });
+  assert.deepEqual([r.intended.slot, r.intended.key, r.drawn.key], [JAMB, 'df-n2-j', 'df-n2-j']);
+});
+
+test('resolveDetailFigure: jamb===null と head===null を両方明示すれば head の要求も null（記号の jamb へ流れない）', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { jamb: jambFigure('df-n3-j') });
+  assert.equal(resolveDetailFigure({ symbolKey: sym, detailRefs: { jamb: null, head: null }, slot: HEAD }), null);
+});
+
 test('resolveDetailFigure: jamb はそのまま、head は head の図があればそれ・無ければ jamb（R9）・何も無ければ null', () => {
   const sym = uniqueSymbolKey();
   installFrameSymbol(sym, { [JAMB]: jambFigure('df-r-j'), [HEAD]: headFigure('df-r-h') });

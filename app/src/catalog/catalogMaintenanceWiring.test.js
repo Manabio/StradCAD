@@ -340,7 +340,7 @@ test('【不変条件・ステップ12g】ui/CatalogMaintenancePanel.jsx: Sectio
   assert.ok(sectionTabBody, 'CatalogMaintenancePanel.jsx に SectionTab コンポーネントが見つからない');
   assert.ok(/<SectionBulkImport\b/.test(sectionTabBody), 'SectionTab が <SectionBulkImport を描いていない');
 
-  const readonlyTabBody = extractBalancedBody(src, 'function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey, materialList }) {');
+  const readonlyTabBody = extractBalancedBody(src, 'function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey, materialList, usage }) {');
   assert.ok(readonlyTabBody, 'CatalogMaintenancePanel.jsx に ReadonlyKindTab コンポーネントが見つからない');
   assert.ok(!/<SectionBulkImport\b/.test(readonlyTabBody), 'ReadonlyKindTab が <SectionBulkImport を描いている（SectionTabへの一本化への退行）');
 });
@@ -1873,4 +1873,40 @@ test('【不変条件・部分詳細図S2】CatalogMaintenancePanel.jsx: READONL
     /\[CatalogKind\.DETAIL_FIGURE\]: Object\.freeze\(\['label', 'category', 'view', 'subject', 'provenance'\]\)/.test(m[1]),
     'READONLY_KIND_FIELDS に [CatalogKind.DETAIL_FIGURE] の閲覧項目が無い（部分詳細図タブの詳細欄が空になる）',
   );
+});
+
+// ---- 部分詳細図 S5: 割当て UI・プレビューの detailRefs・使用中の 1 回取得（コメント除去後の本体を検査）----
+test('【不変条件・部分詳細図S5】FixtureSymbolTab: 割当て select は showProfile の下で slot ごとに描かれ、選択肢は detailFigureOptionsFor、保存前検証へ図の一覧を渡す', () => {
+  const body = extractBalancedBody(stripComments(readSrc('ui/CatalogMaintenancePanel.jsx')), 'function FixtureSymbolTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'FixtureSymbolTab が見つからない');
+  assert.ok(/showProfile && Object\.keys\(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS\)\.map\(/.test(body), '割当て select が showProfile の条件下で slot ごとに描かれていない');
+  assert.ok(/detailFigureOptionsFor\(slot, detailFigureList, form\[field\]\)/.test(body), 'select の選択肢が detailFigureOptionsFor で絞られていない');
+  assert.equal((body.match(/validateFixtureSymbolForm\([^)]*detailFigureList/g) ?? []).length, 2, '追加・編集の両方の検証へ detailFigureList を渡していない');
+  assert.ok(/fixtureSymbolFormWithFrameOnly\(f, e\.target\.checked\)/.test(body), '三方枠専用の切替が fixtureSymbolFormWithFrameOnly を通っていない');
+});
+
+test('【不変条件・部分詳細図S5】ui/catalogPreview.js: 建具記号のプレビューは entry.detailFigures を opening.detailRefs へ渡す', () => {
+  const code = stripComments(readSrc('ui/catalogPreview.js'));
+  const preview = extractBalancedBody(code, 'function fixtureSymbolPreview(entry, { materialList } = {}) {');
+  assert.ok(preview, 'fixtureSymbolPreview が見つからない');
+  assert.ok(/detailRefs:\s*previewDetailRefs\(entry\)/.test(preview), 'fixtureSymbolPreview が detailRefs を渡していない');
+  const refs = extractBalancedBody(code, 'function previewDetailRefs(entry) {');
+  assert.ok(refs && /entry\[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD\]/.test(refs) && /: null\)/.test(refs), 'previewDetailRefs が未割当てを null にしていない');
+  const plan = extractBalancedBody(code, 'function openingSubTypePlanPreview(entry, { materialList, fixtureType, profile, detailRefs } = {}) {');
+  assert.ok(plan, 'openingSubTypePlanPreview が見つからない');
+  assert.ok(/\.\.\.\(detailRefs \? \{ detailRefs \} : \{\}\)/.test(plan), 'openingSubTypePlanPreview が opening.detailRefs を組んでいない');
+});
+
+test('【不変条件・部分詳細図S5】使用状況はパネルを開いたとき 1 回だけ取る（本体の依存空の useEffect）。閲覧タブは取らず、行へ usedKeys を渡す', () => {
+  const code = stripComments(readSrc('ui/CatalogMaintenancePanel.jsx'));
+  const panel = extractBalancedBody(code, 'export function CatalogMaintenancePanel({ onClose }) {');
+  assert.ok(panel, 'CatalogMaintenancePanel が見つからない');
+  assert.ok(/useEffect\(\(\) => \{[^]*?collectCurrentCatalogUsage\(\)[^]*?\}, \[\]\);/.test(panel), '使用状況が依存空の useEffect（開いたとき 1 回）で取られていない');
+  assert.equal((panel.match(/collectCurrentCatalogUsage\(/g) ?? []).length, 1, '使用状況の取得が本体内に 1 か所だけではない');
+  const tab = extractBalancedBody(code, 'function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey, materialList, usage }) {');
+  assert.ok(tab, 'ReadonlyKindTab が見つからない');
+  assert.ok(!/collectCurrentCatalogUsage/.test(tab), '閲覧タブが使用状況を自分で取っている（毎レンダーの取得になる）');
+  assert.ok(/buildCatalogRows\(\{ kind, builtinList, search, diffMap, usedKeys \}\)/.test(tab), '行の合成へ usedKeys を渡していない');
+  assert.ok(/row\.inUse && /.test(tab) && /CATALOG_IN_USE_LABEL/.test(tab), '使用中バッジが inUse で描かれていない');
+  assert.ok(/usage\?\.status === 'error' && [^]*?formatCatalogUsageError\(usage\.message\)/.test(tab), '取得失敗（usage.status==="error"）の理由を出していない');
 });

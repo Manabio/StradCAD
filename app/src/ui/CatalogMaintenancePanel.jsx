@@ -4,7 +4,7 @@ import {
   CatalogKind, kindDef, MATERIAL_CLASSES, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS,
 } from '../catalog/catalogKinds.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
-import { docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
+import { composeCatalog, docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip, fieldLabel } from '../catalog/catalogDiffView.js';
 import { saveUserCatalog } from '../storage/db.js';
 import { markDirty } from '../dirtyState.js';
@@ -30,6 +30,9 @@ import {
   nextOpeningSubTypeKey, openingSubTypeFormFromEntry, buildOpeningSubTypeEntry,
   validateOpeningSubTypeForm, openingSubTypeFormFieldsFor, openingSubTypeRowDisabledReason,
   formatMechanismLabel, collectExportableEntries, formatBuiltinSource,
+  detailFigureOptionsFor, fixtureSymbolFormWithFrameOnly,
+  FIXTURE_SYMBOL_DETAIL_FORM_FIELDS, FIXTURE_SYMBOL_DETAIL_SLOT_TEXT, CATALOG_IN_USE_LABEL,
+  formatCatalogUsageError,
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
 import { CatalogPreview } from './CatalogPreview.jsx';
@@ -190,6 +193,16 @@ export function CatalogMaintenancePanel({ onClose }) {
   const [readonlyBuiltinByKind, setReadonlyBuiltinByKind] = useState({}); // kind -> builtin一覧
   const [readonlySearch, setReadonlySearch] = useState('');
   const [readonlySelectedKey, setReadonlySelectedKey] = useState(null);
+  // 閲覧タブの「使用中」印用。使用状況（全階の走査＋作業領域への書出しを伴う）はパネルを開いたとき
+  // 1回だけ取る——毎レンダー・タブ切替では取らない。失敗時は印なし＋理由を閲覧タブに出す。
+  const [usage, setUsage] = useState({ status: 'loading', usedByKind: null, message: null });
+  useEffect(() => {
+    let cancelled = false;
+    collectCurrentCatalogUsage()
+      .then(usedByKind => { if (!cancelled) setUsage({ status: 'ready', usedByKind, message: null }); })
+      .catch(e => { if (!cancelled) setUsage({ status: 'error', usedByKind: null, message: e.message }); });
+    return () => { cancelled = true; };
+  }, []);
 
   // ステップ12i QA指摘M1（2026-09-24再報告・案(b)）: overlay（catalog/catalogRegistry.js）は
   // モジュール単位の可変状態でReactが変化を追跡しない。DeveloperExportPanelは各種別タブと別の
@@ -878,6 +891,7 @@ export function CatalogMaintenancePanel({ onClose }) {
               selectedKey={readonlySelectedKey}
               setSelectedKey={setReadonlySelectedKey}
               materialList={builtinList}
+              usage={usage}
             />
           )}
 
@@ -921,10 +935,11 @@ export function CatalogMaintenancePanel({ onClose }) {
  * 選択行の詳細（READONLY_KIND_FIELDS）を表示するだけ——追加・複製・編集・削除・合わせ直しの
  * 手段は一切持たない。
  */
-function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey, materialList }) {
+function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, setSelectedKey, materialList, usage }) {
   const def = kindDef(kind);
   const diffMap = builtinList ? docDiffMap(kind, builtinList) : new Map();
-  const rows = builtinList ? buildCatalogRows({ kind, builtinList, search, diffMap }) : [];
+  const usedKeys = usage?.usedByKind?.get(kind) ?? null;
+  const rows = builtinList ? buildCatalogRows({ kind, builtinList, search, diffMap, usedKeys }) : [];
   const selectedRow = selectedKey ? rows.find(r => def.keyOf(r.entry) === selectedKey) ?? null : null;
   const fieldDefs = READONLY_KIND_FIELDS[kind] ?? [];
 
@@ -939,6 +954,9 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
             onChange={e => setSearch(e.target.value)}
           />
         </div>
+        {usage?.status === 'error' && (
+          <div className="catmnt-row-empty">{formatCatalogUsageError(usage.message)}</div>
+        )}
         <div className="catmnt-rows">
           {!builtinList && <div className="catmnt-row-empty">読み込み中…</div>}
           {builtinList && rows.length === 0 && <div className="catmnt-row-empty">該当する項目がありません</div>}
@@ -953,6 +971,7 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
                 <span className={`catmnt-badge catmnt-badge--${row.origin ?? 'builtin'}`}>
                   {ORIGIN_LABELS[row.origin] ?? '?'}
                 </span>
+                {row.inUse && <span className="catmnt-badge catmnt-badge--inuse">{CATALOG_IN_USE_LABEL}</span>}
                 <span
                   className="catmnt-row-name"
                   style={row.diff ? { color: CATALOG_DIFF_COLOR } : undefined}
@@ -1208,7 +1227,10 @@ function DeveloperExportPanel({ kind, libraryTick }) {
 
 // ステップ12f: 建具記号（fixtureSymbol）タブの新規追加フォーム初期値。
 function emptyFixtureSymbolForm() {
-  return { key: '', label: '', category: 'fitting', frameOnly: false, profile: '', defaultMaterialGlass: '' };
+  return {
+    key: '', label: '', category: 'fitting', frameOnly: false, profile: '', defaultMaterialGlass: '',
+    ...Object.fromEntries(Object.values(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS).map(f => [f, ''])),
+  };
 }
 
 // QA指摘n8（2026-09-24再報告）: 枠断面selectの表示文言。値の集合そのもの（'solid'|'bent'）は
@@ -1634,6 +1656,9 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     : new Set();
   const disabledReason = form ? fixtureSymbolRowDisabledReason({ isAdding, editState }) : null;
   const { showProfile } = fixtureSymbolFormFieldsFor(form);
+  // 詳細図の割当て先候補（三層合成後。overlayは毎レンダー取り直す＝上の行合成と同じ理由）。本体は空
+  // （openings/openingCatalog.js detailFigureMap と同じ前提）。
+  const detailFigureList = [...composeCatalog(CatalogKind.DETAIL_FIGURE, []).values()];
 
   // QA指摘m5（2026-09-24再報告）: 材料タブと同じ2種類の併記——同梱差分（doc起源が本体と不一致。
   // オレンジ）と、標準を編集した行の本体値参考併記（非オレンジ）。
@@ -1701,7 +1726,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
 
     if (isAdding) {
       const allKeys = collectKnownCatalogKeys(CatalogKind.FIXTURE_SYMBOL, builtinList);
-      const check = validateFixtureSymbolForm(form, { isAdding: true, allKeys, builtinKeys });
+      const check = validateFixtureSymbolForm(form, { isAdding: true, allKeys, builtinKeys, detailFigureList });
       if (!check.ok) { setFormError(check.message); return; }
       const plan = planSaveEntry(CatalogKind.FIXTURE_SYMBOL, entry, { builtinList, rowState: null });
       if (!plan.ok) { setFormError(plan.message); return; }
@@ -1709,7 +1734,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
       return;
     }
 
-    const check = validateFixtureSymbolForm(form, { isAdding: false });
+    const check = validateFixtureSymbolForm(form, { isAdding: false, detailFigureList });
     if (!check.ok) { setFormError(check.message); return; }
     const prevEntry = selectedRow?.entry ?? null;
     const plan = planSaveEntry(CatalogKind.FIXTURE_SYMBOL, entry, {
@@ -1881,7 +1906,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
                   checked={form.frameOnly}
                   disabled={!!disabledReason || lockedFields.has('mechanism')}
                   title={lockedFields.has('mechanism') ? lockedFieldReason(CatalogKind.FIXTURE_SYMBOL, 'mechanism') : undefined}
-                  onChange={e => setForm(f => ({ ...f, frameOnly: e.target.checked }))}
+                  onChange={e => setForm(f => fixtureSymbolFormWithFrameOnly(f, e.target.checked))}
                 />
                 三方枠専用記号にする
               </label>
@@ -1913,6 +1938,26 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
                 )}
               </div>
             )}
+
+            {showProfile && Object.keys(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS).map(slot => {
+              const field = FIXTURE_SYMBOL_DETAIL_FORM_FIELDS[slot];
+              const text = FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[slot];
+              return (
+                <div className="catmnt-form-row" key={slot}>
+                  <span className="catmnt-form-label">{text.label}</span>
+                  <select
+                    value={form[field]}
+                    disabled={!!disabledReason}
+                    onChange={e => setForm(f => ({ ...f, [field]: e.target.value }))}
+                  >
+                    <option value="">{text.unassigned}</option>
+                    {detailFigureOptionsFor(slot, detailFigureList, form[field]).map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
 
             <div className="catmnt-form-row">
               <span className="catmnt-form-label">材料・ガラス（既定）</span>

@@ -29,7 +29,9 @@ import { nextSerial, parseMaterialCode, formatMaterialCode, isMaterialCode } fro
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
 import { stripOverridesBuiltin } from './usedEntries.js';
-import { DetailCategory, DetailView, DetailSubject } from '../core/constants.js';
+import {
+  DetailCategory, DetailView, DetailSubject, DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD,
+} from '../core/constants.js';
 
 /** 材の役割（カテゴリ）。materialData.js の MATERIAL_CATEGORY と同じ3値
  * （本体マスタは静的 import できないため、ここでは値の集合だけを持つ）。 */
@@ -333,11 +335,13 @@ function isBuiltinOverride(userEntry, keyIsBuiltin) {
  * ステップ12a: 各行に `overridesBuiltin`（userエントリがbuiltin同キーの上書きとして保存されたもの
  * かどうか。true=バッジ「標準を編集」の対象）・`builtinEntry`（builtinの同キーentryか無ければnull。
  * フォームで本体の値を併記するのに使う）を付ける。
- * @param {{ kind: string, builtinList: object[], search?: string, diffMap?: Map }} args
+ * usedKeys（現在の文書が使っているキーのSet。collectCurrentCatalogUsage の kind ぶん）を渡すと
+ * 各行に inUse（使用中か）を付ける。省略・null（使用状況が取れていない）は全行 false＝印なし。
+ * @param {{ kind: string, builtinList: object[], search?: string, diffMap?: Map, usedKeys?: Set<string>|null }} args
  * @returns {Array<{ entry: object, origin: 'doc'|'user'|'builtin'|null, diff: object|null,
- *                    overridesBuiltin: boolean, builtinEntry: object|null }>}
+ *                    overridesBuiltin: boolean, builtinEntry: object|null, inUse: boolean }>}
  */
-export function buildCatalogRows({ kind, builtinList, search = '', diffMap = null }) {
+export function buildCatalogRows({ kind, builtinList, search = '', diffMap = null, usedKeys = null }) {
   const def = kindDef(kind);
   const needle = (search ?? '').trim().toLowerCase();
   const builtinByKey = new Map(builtinList.map(e => [def.keyOf(e), e]));
@@ -359,6 +363,7 @@ export function buildCatalogRows({ kind, builtinList, search = '', diffMap = nul
         diff: diffMap?.get(key) ?? null,
         overridesBuiltin: Boolean(userEntry) && isBuiltinOverride(userEntry, builtinByKey.has(key)),
         builtinEntry: builtinByKey.get(key) ?? null,
+        inUse: usedKeys instanceof Set && usedKeys.has(key),
       };
     })
     .filter(row => (
@@ -1296,6 +1301,67 @@ export function fixtureSymbolFormFieldsFor(form) {
   return { showProfile: form?.frameOnly === true };
 }
 
+/** 閲覧タブの行バッジ「使用中」（現在の文書が参照しているエントリ。buildCatalogRows の inUse）。 */
+export const CATALOG_IN_USE_LABEL = '使用中';
+
+/** 建具記号フォームの詳細図割当て欄。slot ⇄ フォーム項目名（detailJamb／detailHead。'' は未割当て）。 */
+export const FIXTURE_SYMBOL_DETAIL_FORM_FIELDS = Object.freeze({
+  [DetailSlot.JAMB]: 'detailJamb',
+  [DetailSlot.HEAD]: 'detailHead',
+});
+
+/** 詳細図割当て欄の表示。label＝select の見出し・unassigned＝未割当ての選択肢（上枠は方立の図へ倒れる＝R9）。 */
+export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
+  [DetailSlot.JAMB]: Object.freeze({ label: '部分詳細図（方立）', unassigned: 'なし' }),
+  [DetailSlot.HEAD]: Object.freeze({ label: '部分詳細図（上枠）', unassigned: '方立の図を使う' }),
+});
+
+// 現在の値が選択肢に無いときの行の前置き（実在するが枠に合わない図／存在しないキー）。
+const DETAIL_OPTION_NOTE_WRONG_SLOT = '（この枠には使えません）';
+const DETAIL_OPTION_NOTE_MISSING = '（見つかりません）';
+
+/** 閲覧タブの「使用中」印を付けられないときの表示（使用状況の取得失敗）。 */
+export function formatCatalogUsageError(message) {
+  return `使用中の印を付けられません（使用状況を取得できませんでした: ${message}）`;
+}
+
+const FIXTURE_SYMBOL_DETAIL_SLOTS = Object.freeze(Object.keys(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS));
+
+/**
+ * slot に割り当てられる詳細図の選択肢。DETAIL_SLOT_TARGETS（category×view×subject）に一致する図だけ
+ * （jamb＝平面の方立・head＝断面の上枠。sill 等の図は出ない）。currentKey が一覧に無ければ末尾に
+ * 「見つかりません」の行を足す（参照切れの割当てを select が黙って「なし」に見せない）。
+ * @param {string} slot DetailSlot（FIXTURE_SYMBOL_DETAIL_FORM_FIELDS のキー）
+ * @param {object[]} list 詳細図エントリ（三層合成後。composeCatalog(DETAIL_FIGURE, []) の値）
+ * @param {string} [currentKey]
+ * @returns {Array<{ value: string, label: string }>}
+ */
+export function detailFigureOptionsFor(slot, list, currentKey = '') {
+  const target = DETAIL_SLOT_TARGETS[slot];
+  if (!target) return [];
+  const options = list
+    .filter(e => e.category === target.category && e.view === target.view && e.subject === target.subject)
+    .map(e => ({ value: e.key, label: `${e.label}（${e.key}）` }));
+  if (currentKey !== '' && !options.some(o => o.value === currentKey)) {
+    // 実在するが slot の分類に合わない図と、そもそも存在しないキーを分ける。
+    const exists = list.some(e => e.key === currentKey);
+    options.push({ value: currentKey, label: `${exists ? DETAIL_OPTION_NOTE_WRONG_SLOT : DETAIL_OPTION_NOTE_MISSING}${currentKey}` });
+  }
+  return options;
+}
+
+/**
+ * 「三方枠専用記号にする」の切替をフォームへ反映する。外したら詳細図の割当てを空に戻す
+ * （割当て欄は三方枠専用記号のときだけ出る＝出ていない欄の値が残って検証に落ちないように）。
+ * @param {object} form
+ * @param {boolean} frameOnly
+ */
+export function fixtureSymbolFormWithFrameOnly(form, frameOnly) {
+  if (frameOnly) return { ...form, frameOnly: true };
+  const cleared = Object.fromEntries(Object.values(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS).map(f => [f, '']));
+  return { ...form, ...cleared, frameOnly: false };
+}
+
 /**
  * ステップ12f: 建具記号フォーム入力からエントリを組み立てる。key/labelは前後の空白を除く
  * （他種別のbuildMaterialEntry等と同じトリム規約）。keyは大文字化しない——追加時の書式検査
@@ -1314,11 +1380,19 @@ export function fixtureSymbolFormFieldsFor(form) {
  */
 export function buildFixtureSymbolEntry({
   key, label, category, frameOnly = false, profile = null, defaultMaterialGlass = null,
+  detailJamb = '', detailHead = '',
 } = {}) {
   const entry = { key: (key ?? '').trim(), label: (label ?? '').trim(), category };
   if (frameOnly) {
     entry.mechanism = FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM;
     if (FIXTURE_SYMBOL_PROFILES.includes(profile)) entry.profile = profile;
+    // 詳細図の割当て（三方枠専用記号だけ。両方空なら項目ごと持たない）。
+    const detailFigures = {};
+    const jamb = (detailJamb ?? '').trim();
+    const head = (detailHead ?? '').trim();
+    if (jamb !== '') detailFigures[DetailSlot.JAMB] = jamb;
+    if (head !== '') detailFigures[DetailSlot.HEAD] = head;
+    if (Object.keys(detailFigures).length > 0) entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD] = detailFigures;
   }
   const glass = (defaultMaterialGlass ?? '').trim();
   if (glass !== '') entry.defaultMaterialGlass = glass;
@@ -1344,6 +1418,12 @@ export function fixtureSymbolFormFromEntry(entry) {
     frameOnly: entry?.mechanism === FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM,
     profile: entry?.profile ?? '',
     defaultMaterialGlass: entry?.defaultMaterialGlass ?? '',
+    ...Object.fromEntries(FIXTURE_SYMBOL_DETAIL_SLOTS.map(slot => {
+      const key = entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]?.[slot];
+      // 三方枠専用でない記号は割当てを持てない（fixtureSymbolFormWithFrameOnly と同じ扱い）ので空で読む。
+      const assigned = entry?.mechanism === FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM && typeof key === 'string';
+      return [FIXTURE_SYMBOL_DETAIL_FORM_FIELDS[slot], assigned ? key : ''];
+    })),
   };
 }
 
@@ -1369,16 +1449,31 @@ export function fixtureSymbolPreviewEntry(form) {
  * いるため、ここでの重複検査は不要（keyは変わらない）。label必須・category必須は追加・編集の
  * 両方で検査する（planSaveEntry側のkindDef.validateでも検査されるが、フォーム表示用の日本語
  * メッセージをここで先に出す——他種別のvalidateMaterialEntryと同じ役割分担）。
- * @param {{ key?: string, label?: string, category?: string }} form
- * @param {{ isAdding: boolean, allKeys?: Set<string>, builtinKeys?: Set<string> }} args
+ * 詳細図の割当て（detailJamb／detailHead）: 三方枠専用記号のときだけ持てる。指定するキーは
+ * detailFigureList（三層合成後の詳細図エントリ）の中に、そのslotの絞り込み（detailFigureOptionsFor）で
+ * 残る図として存在すること。detailFigureList を省略した場合は「図が1つも無い」扱い＝指定は全て拒否
+ * （存在を確かめられないキーを黙って通さない）。
+ * @param {{ key?: string, label?: string, category?: string, frameOnly?: boolean, detailJamb?: string, detailHead?: string }} form
+ * @param {{ isAdding: boolean, allKeys?: Set<string>, builtinKeys?: Set<string>, detailFigureList?: object[] }} args
  * @returns {{ ok: true } | { ok: false, message: string }}
  */
-export function validateFixtureSymbolForm(form, { isAdding, allKeys = new Set(), builtinKeys = new Set() } = {}) {
+export function validateFixtureSymbolForm(form, { isAdding, allKeys = new Set(), builtinKeys = new Set(), detailFigureList = [] } = {}) {
   const label = (form?.label ?? '').trim();
   const category = form?.category;
   if (!label) return { ok: false, message: '呼称を入力してください' };
   if (category !== 'fitting' && category !== 'window') {
     return { ok: false, message: '区分は建具または窓のいずれかです' };
+  }
+  for (const slot of FIXTURE_SYMBOL_DETAIL_SLOTS) {
+    const figureKey = (form?.[FIXTURE_SYMBOL_DETAIL_FORM_FIELDS[slot]] ?? '').trim();
+    if (figureKey === '') continue;
+    const text = FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[slot].label;
+    if (form?.frameOnly !== true) {
+      return { ok: false, message: `${text}は三方枠専用記号にだけ割り当てられます` };
+    }
+    if (!detailFigureOptionsFor(slot, detailFigureList).some(o => o.value === figureKey)) {
+      return { ok: false, message: `${text}に指定した図が見つかりません: ${figureKey}` };
+    }
   }
   if (isAdding) {
     const key = (form?.key ?? '').trim();

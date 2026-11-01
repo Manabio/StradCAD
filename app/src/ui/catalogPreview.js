@@ -23,6 +23,7 @@ import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
 import { buildOpeningPlanSymbol } from '../openings/openingPlanSymbol.js';
 import { OpeningMechanism, findCatalogEntry } from '../openings/openingCatalog.js';
 import { LodLevel } from '../viewport.js';
+import { DetailSlot, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
 import {
   LINE_WEIGHT_MM, DEFAULT_EXTERIOR_WALL_BACKING, DEFAULT_INTERIOR_WALL_BACKING, DEFAULT_WALL_MATERIAL,
 } from '../core.js';
@@ -265,7 +266,10 @@ function previewWallStubPrimitives(width, thicknessMm) {
 // ライブラリ未登録（未保存ドラフト）のfixtureTypeでもフォームで選んだprofileどおりに描ける——
 // fixtureType単体（ライブラリ照合）に頼るとプレビュー時点で未保存のためsolidへ落ちてしまう
 // （QA指摘M2の症状そのもの）。三方枠でない機構ではframeProfileは参照されないため無害。
-function openingSubTypePlanPreview(entry, { materialList, fixtureType, profile } = {}) {
+// 部分詳細図（S5）: detailRefs（{jamb?, head?}＝詳細図キー。省略可）は opening.detailRefs へ渡す——
+// 三方枠の方立（openingPlanSymbol.js）は建具個別の detailRefs を記号の detailFigures より優先して解決する。
+// 記号は保存前のドラフトなので、フォームの未保存の選択はこの最優先経路でしかプレビューに届かない。
+function openingSubTypePlanPreview(entry, { materialList, fixtureType, profile, detailRefs } = {}) {
   if (!entry || !isNonEmptyString(entry.key) || !isNonEmptyString(entry.category)) {
     return { ok: false, reason: '建具種別エントリのkey/categoryが不正です（プレビューできません）' };
   }
@@ -282,6 +286,7 @@ function openingSubTypePlanPreview(entry, { materialList, fixtureType, profile }
     coord1: 0, coord2: width, centerCoord: width / 2, width, isVertical: false,
     hingeSide: -1, swingSide: 1, category: entry.category, subType: entry.key,
     lineWeight: LINE_WEIGHT_MM.medium, frameDepth: 0, fixtureType, frameProfile: profile,
+    ...(detailRefs ? { detailRefs } : {}),
   };
   const ctx = {
     entry, lodLevel: LodLevel.STANDARD, axisValue: 0,
@@ -325,11 +330,20 @@ function fixtureSymbolRepresentativeEntry(category, mechanism) {
   return category === 'window' ? findCatalogEntry('window', 'fixed') : findCatalogEntry('fitting', 'singleSwing');
 }
 
+// フォームの詳細図の割当てを slot ごとに写す。未割当ては null（＝「なし」を明示）にして、保存済みの記号側の割当てを
+// プレビューに混ぜない（openingDetailFit.js resolveDetailFigure の null 条件）。
+function previewDetailRefs(entry) {
+  const refs = entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
+  const pick = slot => (typeof refs?.[slot] === 'string' && refs[slot] !== '' ? refs[slot] : null);
+  return { [DetailSlot.JAMB]: pick(DetailSlot.JAMB), [DetailSlot.HEAD]: pick(DetailSlot.HEAD) };
+}
+
 // 建具記号（FIXTURE_SYMBOL）: 代表の開口種別へ entry.key を opening.fixtureType として渡し、
 // openingSubTypePlanPreviewへ委譲する（唯一の平面記号ジェネレータ配線への一本化）。
 // QA指摘M2（2026-09-24再報告）: profileは entry.profile（フォームで選んだ値。未保存でもそのまま
 // 使う）をprofileとして明示的に渡す——fixtureType（ライブラリ照合）に委ねると、保存前の
 // ドラフト（key '?'・未保存の別profile上書き）がすべてsolidへ落ちてしまう不具合があった。
+// 詳細図の割当ても同じ理屈で entry から previewDetailRefs を経て opening.detailRefs に渡す（S5）。
 function fixtureSymbolPreview(entry, { materialList } = {}) {
   if (!entry || !isNonEmptyString(entry.key) || !isNonEmptyString(entry.category)) {
     return { ok: false, reason: '建具記号エントリのkey/categoryが不正です（プレビューできません）' };
@@ -338,7 +352,10 @@ function fixtureSymbolPreview(entry, { materialList } = {}) {
   if (!repEntry) {
     return { ok: false, reason: `建具記号の区分「${entry.category}」に対応する代表種別が見つかりません` };
   }
-  return openingSubTypePlanPreview(repEntry, { materialList, fixtureType: entry.key, profile: entry.profile ?? 'solid' });
+  return openingSubTypePlanPreview(repEntry, {
+    materialList, fixtureType: entry.key, profile: entry.profile ?? 'solid',
+    detailRefs: previewDetailRefs(entry),
+  });
 }
 
 /**

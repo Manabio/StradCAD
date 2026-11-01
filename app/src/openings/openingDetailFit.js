@@ -36,7 +36,12 @@ export function resolveDetailFigure({ symbolKey, detailRefs = null, slot }) {
   const symbolRefs = detailFigureRefsFor(symbolKey);
   const candidates = [];
   for (const s of SLOT_ORDER[slot] ?? []) {
+    // detailRefs がこの slot を null で明示しているときは「なし」＝記号側の同じ slot を候補にしない
+    // （保守パネルのプレビューが、保存済みの割当てを未保存で外した状態を描くための口）。キー無し・undefined は従来どおり記号へ進む。
+    // 永続化（S6）は「空なら書かない」規約なので、保存された detailRefs に null は現れない。
+    const openingSaysNone = detailRefs !== null && typeof detailRefs === 'object' && Object.hasOwn(detailRefs, s) && detailRefs[s] === null;
     for (const [source, refs] of [['opening', detailRefs], ['symbol', symbolRefs]]) {
+      if (source === 'symbol' && openingSaysNone) continue;
       const key = refOf(refs, s);
       if (key !== undefined) candidates.push({ slot: s, key, source });
     }

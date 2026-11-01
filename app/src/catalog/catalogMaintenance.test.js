@@ -22,7 +22,9 @@ import {
   collectExportableEntries, formatBuiltinSource, formatCatalogSourceLine,
   DEFAULT_PANEL_X, DEFAULT_PANEL_Y, materialFormHasDimensions, materialFormHasBackingClass,
   initialMaterialDimensions, materialFormWithCategory, validateMaterialFormDimensions,
+  detailFigureOptionsFor, fixtureSymbolFormWithFrameOnly,
 } from './catalogMaintenance.js';
+import { DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog, markOverlayUntrusted } from './catalogRegistry.js';
 import { valuesEqual } from './catalogMatch.js';
 import { CatalogKind, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS, interiorMasterBuiltinList } from './catalogKinds.js';
@@ -2159,7 +2161,113 @@ test('fixtureSymbolFormFromEntry ⇄ buildFixtureSymbolEntry: WF・SF・AW（bui
 
 test('fixtureSymbolFormFromEntry: entryのmechanism/profile/defaultMaterialGlassが未設定ならフォームでは空文字・frameOnly:falseになる', () => {
   const form = fixtureSymbolFormFromEntry({ key: 'AD', label: 'AD', category: 'fitting' });
-  assert.deepEqual(form, { key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, profile: '', defaultMaterialGlass: '' });
+  assert.deepEqual(form, {
+    key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, profile: '', defaultMaterialGlass: '',
+    detailJamb: '', detailHead: '',
+  });
+});
+
+// ---- S5: 建具記号の詳細図割当て（detailFigures）----
+const DT = DETAIL_SLOT_TARGETS;
+const detailFig = (key, target) => ({ key, label: `図${key}`, ...target });
+const FIG_LIST = [
+  detailFig('df-j1', DT[DetailSlot.JAMB]),
+  detailFig('df-h1', DT[DetailSlot.HEAD]),
+  detailFig('df-s1', DT[DetailSlot.SILL]),
+  detailFig('df-sash', DT[DetailSlot.SASH_SECTION]),
+];
+const frameOnlyForm = over => ({ key: 'TF', label: 'TF', category: 'fitting', frameOnly: true, profile: 'bent', ...over });
+
+test('detailFigures 往復: 両方空なら項目を持たず、片方だけ・両方ならその slot だけ持ち、フォームへ戻して一致する', () => {
+  assert.equal(Object.hasOwn(buildFixtureSymbolEntry(frameOnlyForm({})), FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD), false);
+  assert.equal(Object.hasOwn(buildFixtureSymbolEntry(frameOnlyForm({ detailJamb: '  ', detailHead: '' })), FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD), false);
+  const jambOnly = buildFixtureSymbolEntry(frameOnlyForm({ detailJamb: ' df-j1 ' }));
+  assert.deepEqual(jambOnly[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { jamb: 'df-j1' });
+  const both = buildFixtureSymbolEntry(frameOnlyForm({ detailJamb: 'df-j1', detailHead: 'df-h1' }));
+  assert.deepEqual(both[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { jamb: 'df-j1', head: 'df-h1' });
+  for (const entry of [jambOnly, both]) {
+    assert.deepEqual(buildFixtureSymbolEntry(fixtureSymbolFormFromEntry(entry)), entry);
+  }
+  const headOnly = buildFixtureSymbolEntry(frameOnlyForm({ detailHead: 'df-h1' }));
+  assert.deepEqual(fixtureSymbolFormFromEntry(headOnly).detailJamb, '');
+  assert.deepEqual(fixtureSymbolFormFromEntry(headOnly).detailHead, 'df-h1');
+});
+
+test('detailFigures: 三方枠専用でない記号は割当てを保存値に持たない（build）・検証でも拒否する（validate）', () => {
+  const entry = buildFixtureSymbolEntry({ key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, detailJamb: 'df-j1' });
+  assert.equal(Object.hasOwn(entry, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD), false);
+  const r = validateFixtureSymbolForm(
+    { key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, detailJamb: 'df-j1' },
+    { isAdding: false, detailFigureList: FIG_LIST },
+  );
+  assert.equal(r.ok, false);
+  assert.match(r.message, /三方枠専用記号/);
+});
+
+test('validateFixtureSymbolForm: 三層に無い図のキー（df-x）は拒否・実在すれば通る・図の一覧を渡さなければ全て拒否', () => {
+  const bad = validateFixtureSymbolForm(frameOnlyForm({ detailJamb: 'df-x' }), { isAdding: false, detailFigureList: FIG_LIST });
+  assert.equal(bad.ok, false);
+  assert.match(bad.message, /部分詳細図（方立）.*df-x/);
+  const badHead = validateFixtureSymbolForm(frameOnlyForm({ detailHead: 'df-x' }), { isAdding: false, detailFigureList: FIG_LIST });
+  assert.equal(badHead.ok, false);
+  assert.match(badHead.message, /部分詳細図（上枠）.*df-x/);
+  assert.equal(validateFixtureSymbolForm(frameOnlyForm({ detailJamb: 'df-j1', detailHead: 'df-h1' }), { isAdding: false, detailFigureList: FIG_LIST }).ok, true);
+  assert.equal(validateFixtureSymbolForm(frameOnlyForm({ detailJamb: 'df-j1' }), { isAdding: false }).ok, false);
+  assert.equal(validateFixtureSymbolForm(frameOnlyForm({}), { isAdding: false }).ok, true, '割当て無しは図の一覧が無くても通る');
+});
+
+test('validateFixtureSymbolForm: slot に合わない図（方立に下枠の図・上枠に平面の図）は存在しても拒否する', () => {
+  assert.equal(validateFixtureSymbolForm(frameOnlyForm({ detailJamb: 'df-s1' }), { isAdding: false, detailFigureList: FIG_LIST }).ok, false);
+  assert.equal(validateFixtureSymbolForm(frameOnlyForm({ detailHead: 'df-j1' }), { isAdding: false, detailFigureList: FIG_LIST }).ok, false);
+});
+
+test('detailFigureOptionsFor: jamb は plan・subject jamb だけ、head は section・subject head だけ。sill・sashSection の図は出ない', () => {
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.JAMB, FIG_LIST), [{ value: 'df-j1', label: '図df-j1（df-j1）' }]);
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.HEAD, FIG_LIST), [{ value: 'df-h1', label: '図df-h1（df-h1）' }]);
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.JAMB, []), []);
+  assert.deepEqual(detailFigureOptionsFor('unknownSlot', FIG_LIST), []);
+});
+
+test('detailFigureOptionsFor: 現在の値が一覧に無ければ末尾に足す。存在しないキーは「見つかりません」・実在するが枠に合わない図は「この枠には使えません」（合う図なら足さない）', () => {
+  const lost = detailFigureOptionsFor(DetailSlot.JAMB, FIG_LIST, 'df-gone');
+  assert.deepEqual(lost.at(-1), { value: 'df-gone', label: '（見つかりません）df-gone' });
+  const wrong = detailFigureOptionsFor(DetailSlot.JAMB, FIG_LIST, 'df-s1');
+  assert.deepEqual(wrong.at(-1), { value: 'df-s1', label: '（この枠には使えません）df-s1' });
+  assert.equal(detailFigureOptionsFor(DetailSlot.JAMB, FIG_LIST, 'df-j1').length, 1);
+});
+
+test('fixtureSymbolFormFromEntry: 三方枠専用でない記号が detailFigures を持っていてもフォームの割当ては空で、検証は通る', () => {
+  const entry = { key: 'AD', label: 'AD', category: 'fitting', [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { jamb: 'df-j1', head: 'df-h1' } };
+  const form = fixtureSymbolFormFromEntry(entry);
+  assert.deepEqual([form.detailJamb, form.detailHead], ['', '']);
+  assert.equal(validateFixtureSymbolForm(form, { isAdding: false, detailFigureList: FIG_LIST }).ok, true);
+});
+
+test('fixtureSymbolFormWithFrameOnly: 外すと割当てを空に戻し、付けると他の値を保つ', () => {
+  const form = frameOnlyForm({ detailJamb: 'df-j1', detailHead: 'df-h1' });
+  const off = fixtureSymbolFormWithFrameOnly(form, false);
+  assert.deepEqual([off.frameOnly, off.detailJamb, off.detailHead], [false, '', '']);
+  assert.equal(off.profile, 'bent');
+  const on = fixtureSymbolFormWithFrameOnly(off, true);
+  assert.equal(on.frameOnly, true);
+});
+
+test('fixtureSymbolPreviewEntry: 詳細図の割当てを entry.detailFigures として持つ（プレビューの opening.detailRefs の元）', () => {
+  const entry = fixtureSymbolPreviewEntry(frameOnlyForm({ detailJamb: 'df-j1', detailHead: 'df-h1' }));
+  assert.deepEqual(entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { jamb: 'df-j1', head: 'df-h1' });
+});
+
+test('buildCatalogRows: usedKeys を渡すと該当行だけ inUse（省略・null は全行 false）', () => {
+  const builtin = [
+    { key: 'A', label: 'a', wallMaterial: 'x', wallFinish: 'y', ceilingHeight: 2400 },
+    { key: 'B', label: 'b', wallMaterial: 'x', wallFinish: 'y', ceilingHeight: 2400 },
+  ];
+  const used = buildCatalogRows({ kind: CatalogKind.INTERIOR_MASTER, builtinList: builtin, usedKeys: new Set(['B']) });
+  assert.deepEqual(used.map(r => [r.entry.key, r.inUse]), [['A', false], ['B', true]]);
+  for (const usedKeys of [undefined, null]) {
+    const rows = buildCatalogRows({ kind: CatalogKind.INTERIOR_MASTER, builtinList: builtin, usedKeys });
+    assert.deepEqual(rows.map(r => r.inUse), [false, false]);
+  }
 });
 
 // ---- QA指摘m4（2026-09-24再報告）: fixtureSymbolPreviewEntry ----

@@ -13,6 +13,8 @@ import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { findFixtureSymbol } from '../openings/openingCatalog.js';
 import { LINE_WEIGHT_MM, DEFAULT_WALL_MATERIAL } from '../core.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration.js';
+import { DetailLenMode, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
+import { jambFigure, uniqueSymbolKey, installFrameSymbol } from '../openings/openingDetailTestFixtures.js';
 
 // AutoScaledFigure.jsx renderPrimitive の既知type集合（2026-09-23時点。同期コメント: AutoScaledFigure.jsx
 // のswitch文のcase一覧が増減したらここも合わせる——本テストが「知らない型を静かに描かない」ことの網）。
@@ -574,4 +576,66 @@ test('buildCatalogPreview(fixtureSymbol): view省略時はview:\'plan\'指定時
   const explicit = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, entry, { view: 'plan', materialList });
   assert.deepEqual(omitted, explicit);
   assert.equal(omitted.ok, true);
+});
+
+// ---- 28. S5: 未保存の詳細図の選択（entry.detailFigures）は opening.detailRefs の最優先経路でプレビューに出る ----
+test('buildCatalogPreview(fixtureSymbol): 未保存の entry.detailFigures.jamb で方立が詳細図の形になる（記号に割当てを保存した場合と同じ図・無しは従来の描き）', () => {
+  const symbolKey = uniqueSymbolKey();
+  try {
+    // 図だけをライブラリに立てる。記号 symbolKey はライブラリに無い（未保存のドラフト）。
+    setOverlay(CatalogKind.DETAIL_FIGURE, { user: [jambFigure('df-prev')] });
+    const draft = { key: symbolKey, label: '試験', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent' };
+    const plain = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, draft, { view: 'plan' });
+    const withRef = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, { ...draft, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { jamb: 'df-prev' } }, { view: 'plan' });
+    assert.equal(plain.ok, true);
+    assert.equal(withRef.ok, true);
+    assert.notDeepEqual(withRef.primitives, plain.primitives, '詳細図の選択がプレビューに反映されていない');
+
+  } finally {
+    clearOverlays();
+  }
+});
+
+// 保存済みの記号 symbolKey は jamb=df-a。fit 結果が異なるよう df-b は見付を変えた図にする。
+function installSavedJamb() {
+  const symbolKey = uniqueSymbolKey();
+  const figA = jambFigure('df-a');
+  const figB = jambFigure('df-b', { strokes: jambFigure('df-b').strokes.map(s => ({ ...s, moves: s.moves.map((m, i) => (i === 1 ? { ...m, len: { mm: 33, mode: DetailLenMode.FIXED } } : m)) })) });
+  installFrameSymbol(symbolKey, { jamb: figA }, { extraFigures: [figB] });
+  const saved = { key: symbolKey, label: '試験', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent' };
+  const prim = e => buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, e, { view: 'plan' }).primitives;
+  return { saved, prim };
+}
+
+test('buildCatalogPreview(fixtureSymbol): 保存済み jamb=A と未保存 jamb=B では B の図が出る', () => {
+  try {
+    const { saved, prim } = installSavedJamb();
+    const asSaved = prim({ ...saved, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { jamb: 'df-a' } });
+    const unsavedB = prim({ ...saved, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { jamb: 'df-b' } });
+    assert.notDeepEqual(unsavedB, asSaved, '未保存の B が保存済みの A に負けている');
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('buildCatalogPreview(fixtureSymbol): 保存済み jamb=A を未保存で「なし」にすると既定 profile で描く（A でも出ない）', () => {
+  try {
+    const { saved, prim } = installSavedJamb();
+    const asSaved = prim({ ...saved, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { jamb: 'df-a' } });
+    const none = prim(saved);
+    assert.notDeepEqual(none, asSaved, '「なし」にしても保存済みの A が描かれている');
+    // 記号を保存していない同形のドラフト（既定 profile）と一致する。
+    clearOverlays();
+    assert.deepEqual(none, prim({ ...saved, key: uniqueSymbolKey() }));
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('buildCatalogPreview(fixtureSymbol): 図が実在しない detailFigures（参照切れ）でも落ちず従来の描きになる', () => {
+  const draft = { key: uniqueSymbolKey(), label: '試験', category: 'fitting', mechanism: OpeningMechanism.FRAME_ONLY, profile: 'bent' };
+  const plain = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, draft, { view: 'plan' });
+  const dangling = buildCatalogPreview(CatalogKind.FIXTURE_SYMBOL, { ...draft, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { jamb: 'df-none' } }, { view: 'plan' });
+  assert.equal(dangling.ok, true);
+  assert.deepEqual(dangling.primitives, plain.primitives);
 });
