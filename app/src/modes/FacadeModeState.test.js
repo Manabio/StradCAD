@@ -14,6 +14,8 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { eaveTopZMm, resolveTopStoryHeightMm } from '../floorHeights.js';
 import { FacadeModeState } from './FacadeModeState.js';
+import { clearOverlays } from '../catalog/catalogRegistry.js';
+import { elevationFigure, installElevationFigures } from '../openings/openingDetailTestFixtures.js';
 
 function makeRectRoom(graph, x0v, y0v, x1v, y1v, name) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
@@ -191,6 +193,50 @@ test('FacadeModeState: 建具の姿図の minFaceMm が倍率に追従する（�
     assert.ok(inset2 > inset1 + 1, `倍率が下がると 1px 保証の内法の寄りは広がる（${inset1}→${inset2}）`);
     state.dispose();
   });
+});
+
+// ---- 部分詳細図 S6b: 外壁の建具の姿図の詳細図を合わせられないときの通知（materialError 経由・init で 1 回だけ）----
+test('FacadeModeState.init: 姿図の詳細図が建具に合わせられないと materialError に通知文が 1 件載る（ok は true・図面は描く）', async () => {
+  installElevationFigures([elevationFigure('df-fs-bad', { sFixed: 900 })]);
+  try {
+    const project = makeProject(1, { activeId: 'p1' });
+    const graph = project.activeGraph;
+    const lineAt = (type, value) => graph.centerLines.find(c => c.centerLineType === type && c.value === value);
+    const south = lineAt(CenterLineType.HORIZONTAL, 4000), west = lineAt(CenterLineType.VERTICAL, 0);
+    graph.addOpening(south, 1, false, west, 1000, 800, OpeningCategory.FITTING, 'singleSwing', { height: 2000, detailRefs: { figure: 'df-fs-bad' } });
+    graph.addOpening(south, 1, false, west, 2500, 800, OpeningCategory.FITTING, 'singleSwing', { height: 2000, detailRefs: { figure: 'df-fs-bad' } });
+    await withPeek(async plane => project.graphMap.get(plane.id), async () => {
+      const state = new FacadeModeState(graph, project, { width: 1600, height: 1200 });
+      const result = await state.init();
+      assert.equal(result.ok, true, '通知は図面の構築失敗ではない');
+      assert.equal(result.error, null);
+      assert.match(state.materialError, /^詳細図 テスト姿図 を singleSwing の姿図に合わせられません: /);
+      assert.ok(!state.materialError.includes('ほか'), '同じ図×寸法は 1 件にまとまる');
+      assert.equal(state.faces.length, 4, '図面は従来の姿図で描かれて止まらない');
+      state.dispose();
+    });
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('【失敗系】FacadeModeState.init: 姿図の詳細図が合わせられる建具では materialError は null のまま（通知しない）', async () => {
+  installElevationFigures([elevationFigure('df-fs-ok')]);
+  try {
+    const project = makeProject(1, { activeId: 'p1' });
+    const graph = project.activeGraph;
+    const lineAt = (type, value) => graph.centerLines.find(c => c.centerLineType === type && c.value === value);
+    graph.addOpening(lineAt(CenterLineType.HORIZONTAL, 4000), 1, false, lineAt(CenterLineType.VERTICAL, 0), 1000, 800,
+      OpeningCategory.FITTING, 'singleSwing', { height: 2000, detailRefs: { figure: 'df-fs-ok' } });
+    await withPeek(async plane => project.graphMap.get(plane.id), async () => {
+      const state = new FacadeModeState(graph, project, { width: 1600, height: 1200 });
+      await state.init();
+      assert.equal(state.materialError, null);
+      state.dispose();
+    });
+  } finally {
+    clearOverlays();
+  }
 });
 
 test('FacadeModeState.scrollBy: 書き込み時にクランプする（上端 0・下端 contentHeight−画面高さ）', async () => {

@@ -151,8 +151,8 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
     });
   });
 
-  // 部分詳細図の上書き（三方枠だけ。S6a）。変更は他の編集と同じ commitEdit（undo に乗る）。
-  const detailSelects = isFrameOnly ? openingDetailRefSelects(opening) : [];
+  // 部分詳細図の上書き（方立・上枠は三方枠だけ=S6a／姿図は全機構=S6b）。変更は他の編集と同じ commitEdit（undo に乗る）。
+  const detailSelects = openingDetailRefSelects(opening, undefined, { frameOnly: isFrameOnly });
   const detailDimensions = isFrameOnly ? detailDimensionsToCopy(opening) : null;
   const onDetailRefChange = (slot) => (e) => commitEdit(() => {
     const next = detailRefsAfterSelect(opening, slot, e.target.value);
@@ -297,22 +297,26 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
               onChange={numField('frameProjection', { allowNull: true, zeroAsNull: true })} {...fieldUndoProps} />
           </div>
 
-          {/* 部分詳細図の上書き（S6a）。空の選択肢＝この建具は上書きせず記号の設定に従う。判断は openingDetailRefsEdit.js */}
-          {detailSelects.map(sel => (
-            <div key={sel.slot} style={rowStyle}>
-              <span style={labelStyle}>{sel.label}</span>
-              <select style={inputStyle} value={sel.value} onChange={onDetailRefChange(sel.slot)}>
-                {sel.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-          ))}
-          <div style={rowStyle}>
-            <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
-              disabled={detailDimensions == null} onClick={onCopyDetailDimensions}>
-              {OPENING_DETAIL_REF_TEXT.copyDimensions}
-            </button>
-          </div>
         </>
+      )}
+
+      {/* 部分詳細図の上書き（S6a 方立・上枠＝三方枠だけ／S6b 姿図＝全機構）。空の選択肢＝この建具は上書きせず
+          記号（姿図は建具種別）の設定に従う。判断は openingDetailRefsEdit.js */}
+      {detailSelects.map(sel => (
+        <div key={sel.slot} style={rowStyle}>
+          <span style={labelStyle}>{sel.label}</span>
+          <select style={inputStyle} value={sel.value} onChange={onDetailRefChange(sel.slot)}>
+            {sel.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+      ))}
+      {isFrameOnly && (
+        <div style={rowStyle}>
+          <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
+            disabled={detailDimensions == null} onClick={onCopyDetailDimensions}>
+            {OPENING_DETAIL_REF_TEXT.copyDimensions}
+          </button>
+        </div>
       )}
 
       <div style={rowStyle}>

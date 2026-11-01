@@ -7,7 +7,8 @@
 // ================================================================
 
 import { OpeningMechanism } from './openingCatalog.js';
-import { effectiveHeight, effectiveHandleHeight, effectiveFrameFaceWidth } from './openingNumbering.js';
+import { effectiveHeight, effectiveHandleHeight, effectiveFrameFaceWidth, effectiveSillHeight } from './openingNumbering.js';
+import { resolveDetailElevation } from './openingDetailFit.js';
 import { resolveSlideLayoutPanels } from './openingPlanSymbolGeometry.js';
 import { OpeningCategory } from '../core.js';
 // 線種語彙（'thin'|'medium'|'thick'）の単一情報源。
@@ -395,7 +396,7 @@ export function buildOpeningElevation(
   const width  = opening.width;
   const height = effectiveHeight(opening);
   // 建具（fitting）は窓台の概念を持たないため sill=0 扱い（core.js のコメント方針どおり）。
-  const sill = opening.category === OpeningCategory.WINDOW ? (opening.sillHeight ?? 0) : 0;
+  const sill = effectiveSillHeight(opening);
   const top = -(sill + height); // FLからの上端y（負）
   const sillTop = -sill;        // 窓台上端y（建具はFL=0）
 
@@ -437,10 +438,17 @@ export function buildOpeningElevation(
         rect(INSET_MM, top + INSET_MM, Math.max(width - 2 * INSET_MM, 0), Math.max(height - 2 * INSET_MM, 0), { stroke: '#94a3b8' }),
       ];
 
+  // 部分詳細図（S6b）: 姿図の詳細図が解決・fit できたときは、枠・機構表現（開き線・FIX 文字・機構矢印）・レバーハンドルを
+  // 詳細図（source:'detail'）で置き換える。寸法・FL 線・タグは従来どおり。図が無い・fit できない（error）ときは従来の描き方
+  // （通知は建具モード・展開モードの init と立面の入力組み立て）。三方枠の「アキ」標記は展開図側（elevationFigure.js）が描く別物で、
+  // 姿図の置換では変えない。
+  const resolvedDetail = resolveDetailElevation({ opening, entry });
+  const detailPrimitives = resolvedDetail && !resolvedDetail.error ? resolvedDetail.primitives : null;
+
   const primitives = [
-    ...frameOutline,
+    ...(detailPrimitives ?? frameOutline),
     levelLine(0, { label: 'FL' }),
-    ...mechanismPrimitives(opening, entry, width, top, sillTop),
+    ...(detailPrimitives ? [] : mechanismPrimitives(opening, entry, width, top, sillTop)),
     dim('h', top - 250, 0, width, {
       foot: top, editable: true, target: 'width', label: String(round(width)),
     }),
@@ -454,8 +462,10 @@ export function buildOpeningElevation(
   }
 
   // レバーハンドル: 建具（fitting）×SWING機構・間口十分のときのみ（窓・引戸・狭小間口には描かない）。
+  // 詳細図で置き換えたときはカプセル形の図形だけ省き、取付高さの寸法（編集用）は従来どおり残す。
   if (drawHandle) {
-    primitives.push(...leverHandlePrimitives(opening, width));
+    const handle = leverHandlePrimitives(opening, width);
+    primitives.push(...(detailPrimitives ? handle.filter(p => p.type === 'dim') : handle));
   }
 
   if (tag) primitives.push(text(0, top - 450, tag, { size: 12, anchor: 'start' }));

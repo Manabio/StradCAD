@@ -136,7 +136,7 @@ export function formatReconcileNotice(plan, { kind, addedCount = 0, skippedCount
 }
 
 /**
- * 部分詳細図の読み替え（from→to）を、同梱（overlay の doc 層）の建具記号エントリの detailFigures の値へ反映する
+ * 部分詳細図の読み替え（from→to）を、同梱（overlay の doc 層）の建具記号・建具種別エントリの detailFigures の値へ反映する
  * （カタログ→カタログの参照。スナップショットの openings[].detailRefs は walker の rewrite が受け持つ）。
  * ライブラリ層（user）の記号は触らない。書き換えがあれば doc を差し替える（無ければ overlay に触れない）。
  * @param {Array<{from:string,to:string}>} pairs
@@ -144,23 +144,26 @@ export function formatReconcileNotice(plan, { kind, addedCount = 0, skippedCount
 export function rewriteDocSymbolDetailFigures(pairs) {
   const table = new Map((pairs ?? []).map(({ from, to }) => [from, to]));
   if (table.size === 0) return;
-  const { doc, user } = overlayFor(CatalogKind.FIXTURE_SYMBOL);
-  let changedAny = false;
-  const nextDoc = doc.map(entry => {
-    const refs = entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
-    if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) return entry;
-    let changed = false;
-    const nextRefs = {};
-    for (const [slot, key] of Object.entries(refs)) {
-      const to = typeof key === 'string' ? table.get(key) : undefined;
-      nextRefs[slot] = to ?? key;
-      if (to !== undefined) changed = true;
-    }
-    if (!changed) return entry;
-    changedAny = true;
-    return { ...entry, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: nextRefs };
-  });
-  if (changedAny) setOverlay(CatalogKind.FIXTURE_SYMBOL, { doc: nextDoc, user });
+  // 建具記号（方立・上枠）と建具種別（姿図。S6b）の両方が detailFigures を持つ
+  for (const kind of [CatalogKind.FIXTURE_SYMBOL, CatalogKind.OPENING_SUB_TYPE]) {
+    const { doc, user } = overlayFor(kind);
+    let changedAny = false;
+    const nextDoc = doc.map(entry => {
+      const refs = entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
+      if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) return entry;
+      let changed = false;
+      const nextRefs = {};
+      for (const [slot, key] of Object.entries(refs)) {
+        const to = typeof key === 'string' ? table.get(key) : undefined;
+        nextRefs[slot] = to ?? key;
+        if (to !== undefined) changed = true;
+      }
+      if (!changed) return entry;
+      changedAny = true;
+      return { ...entry, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: nextRefs };
+    });
+    if (changedAny) setOverlay(kind, { doc: nextDoc, user });
+  }
 }
 
 /**

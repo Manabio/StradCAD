@@ -2243,6 +2243,41 @@ test('fixtureSymbolFormFromEntry: 三方枠専用でない記号が detailFigure
   assert.equal(validateFixtureSymbolForm(form, { isAdding: false, detailFigureList: FIG_LIST }).ok, true);
 });
 
+// ---- S6b: 建具種別の姿図の詳細図割当て（detailFigures.figure）----
+const FIG_LIST_WITH_FIGURE = [...FIG_LIST, detailFig('df-f1', DT[DetailSlot.FIGURE]), detailFig('df-f2', DT[DetailSlot.FIGURE])];
+const subTypeForm = over => ({ ...openingSubTypeFormFromEntry({ category: 'fitting', key: 'user1', label: '試験', mechanism: 'swing', defaultWidth: 800, defaultHeight: 2000 }), ...over });
+
+test('detailFigureOptionsFor(figure): figure/elevation/opening の図だけ（方立・上枠・窓台の図は出ない）。参照切れ・分類違いの現在値は末尾に注記つきで足す', () => {
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.FIGURE, FIG_LIST_WITH_FIGURE).map(o => o.value), ['df-f1', 'df-f2']);
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.FIGURE, FIG_LIST), []);
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.JAMB, FIG_LIST_WITH_FIGURE).map(o => o.value), ['df-j1'], '方立の選択肢に姿図は出ない');
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.FIGURE, FIG_LIST_WITH_FIGURE, 'df-gone').at(-1), { value: 'df-gone', label: '（見つかりません）df-gone' });
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.FIGURE, FIG_LIST_WITH_FIGURE, 'df-j1').at(-1), { value: 'df-j1', label: '（この枠には使えません）df-j1' });
+});
+
+test('建具種別 detailFigure 往復: 未割当てなら項目ごと持たず、割当てはトリムして figure だけ持ち、フォームへ戻して一致する。既存の本体45件の往復は不変', () => {
+  assert.equal(Object.hasOwn(buildOpeningSubTypeEntry(subTypeForm({})), FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD), false);
+  assert.equal(Object.hasOwn(buildOpeningSubTypeEntry(subTypeForm({ detailFigure: '  ' })), FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD), false);
+  const entry = buildOpeningSubTypeEntry(subTypeForm({ detailFigure: ' df-f1 ' }));
+  assert.deepEqual(entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { figure: 'df-f1' });
+  assert.equal(openingSubTypeFormFromEntry(entry).detailFigure, 'df-f1');
+  assert.equal(openingSubTypeFormFromEntry({ ...entry, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { figure: 3 } }).detailFigure, '', '文字列でない値は未割当て');
+  assert.equal(openingSubTypeFormFromEntry({ category: 'fitting', key: 'k' }).detailFigure, '');
+  assert.deepEqual(buildOpeningSubTypeEntry(openingSubTypeFormFromEntry(entry)), entry);
+});
+
+test('validateOpeningSubTypeForm: 姿図の割当ては図の一覧に実在し figure の分類に合うものだけ。未割当ては図の一覧が無くても通る', () => {
+  const ok = validateOpeningSubTypeForm(subTypeForm({ detailFigure: 'df-f1' }), { isAdding: false, detailFigureList: FIG_LIST_WITH_FIGURE });
+  assert.equal(ok.ok, true);
+  const missing = validateOpeningSubTypeForm(subTypeForm({ detailFigure: 'df-x' }), { isAdding: false, detailFigureList: FIG_LIST_WITH_FIGURE });
+  assert.equal(missing.ok, false);
+  assert.match(missing.message, /部分詳細図（姿図）に指定した図が見つかりません: df-x/);
+  const wrong = validateOpeningSubTypeForm(subTypeForm({ detailFigure: 'df-j1' }), { isAdding: false, detailFigureList: FIG_LIST_WITH_FIGURE });
+  assert.equal(wrong.ok, false, '実在しても分類（方立）が違えば拒否');
+  assert.equal(validateOpeningSubTypeForm(subTypeForm({ detailFigure: 'df-f1' }), { isAdding: false }).ok, false, '一覧を渡さなければ拒否');
+  assert.equal(validateOpeningSubTypeForm(subTypeForm({}), { isAdding: false }).ok, true);
+});
+
 test('fixtureSymbolFormWithFrameOnly: 外すと割当てを空に戻し、付けると他の値を保つ', () => {
   const form = frameOnlyForm({ detailJamb: 'df-j1', detailHead: 'df-h1' });
   const off = fixtureSymbolFormWithFrameOnly(form, false);

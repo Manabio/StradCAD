@@ -1314,6 +1314,8 @@ export const FIXTURE_SYMBOL_DETAIL_FORM_FIELDS = Object.freeze({
 export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
   [DetailSlot.JAMB]: Object.freeze({ label: '部分詳細図（方立）', unassigned: 'なし' }),
   [DetailSlot.HEAD]: Object.freeze({ label: '部分詳細図（上枠）', unassigned: '方立の図を使う' }),
+  // 建具種別タブの姿図（S6b）と、建具エディタの姿図の上書き欄。建具記号フォームの割当て欄（FIXTURE_SYMBOL_DETAIL_FORM_FIELDS）には載らない。
+  [DetailSlot.FIGURE]: Object.freeze({ label: '部分詳細図（姿図）', unassigned: 'なし' }),
 });
 
 /**
@@ -1323,6 +1325,7 @@ export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
  */
 export const OPENING_DETAIL_REF_TEXT = Object.freeze({
   useSymbol: '記号の設定を使う',
+  useSubType: '建具種別の設定を使う', // 姿図（S6b）の既定は建具種別の割当て
   copyDimensions: '図の寸法を建具へ',
 });
 
@@ -1887,6 +1890,9 @@ export function openingSubTypeFormFromEntry(entry) {
     fireLeaves: entry?.fireLeaves == null ? '' : String(entry.fireLeaves),
     fireAngle: entry?.fireAngle == null ? '' : String(entry.fireAngle),
     slideLayoutText,
+    // 姿図の詳細図（S6b。detailFigures.figure。'' は未割当て）
+    detailFigure: typeof entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]?.[DetailSlot.FIGURE] === 'string'
+      ? entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD][DetailSlot.FIGURE] : '',
   };
 }
 
@@ -1972,6 +1978,9 @@ export function buildOpeningSubTypeEntry(form) {
       }
     }
   }
+  // 姿図の詳細図（S6b）。未割当てなら項目ごと持たない（建具記号の detailFigures と同じ）。
+  const detailFigure = (form?.detailFigure ?? '').trim();
+  if (detailFigure !== '') entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD] = { [DetailSlot.FIGURE]: detailFigure };
   return entry;
 }
 
@@ -2008,7 +2017,7 @@ export function openingSubTypeFormFieldsFor(form) {
  * @param {{ isAdding: boolean, allKeys?: Set<string>, builtinKeys?: Set<string> }} args
  * @returns {{ ok: true } | { ok: false, message: string }}
  */
-export function validateOpeningSubTypeForm(form, { isAdding, allKeys = new Set(), builtinKeys = new Set() } = {}) {
+export function validateOpeningSubTypeForm(form, { isAdding, allKeys = new Set(), builtinKeys = new Set(), detailFigureList = [] } = {}) {
   const category = form?.category;
   if (category !== 'fitting' && category !== 'window') {
     return { ok: false, message: '区分は建具または窓のいずれかです' };
@@ -2069,6 +2078,12 @@ export function validateOpeningSubTypeForm(form, { isAdding, allKeys = new Set()
     } catch (e) {
       return { ok: false, message: e.message };
     }
+  }
+  // 姿図の詳細図（S6b）: 指定するキーは detailFigureList（三層合成後の詳細図エントリ）の中に、姿図の絞り込み
+  // （detailFigureOptionsFor）で残る図として存在すること。省略した場合は「図が1つも無い」扱い＝指定は拒否。
+  const detailFigure = (form?.detailFigure ?? '').trim();
+  if (detailFigure !== '' && !detailFigureOptionsFor(DetailSlot.FIGURE, detailFigureList).some(o => o.value === detailFigure)) {
+    return { ok: false, message: `${FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE].label}に指定した図が見つかりません: ${detailFigure}` };
   }
 
   if (isAdding) {

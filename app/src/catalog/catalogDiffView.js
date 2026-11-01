@@ -38,6 +38,7 @@ const FIELD_LABELS = Object.freeze({
     category: '区分', key: 'キー', label: '呼称', mechanism: '機構', wallKinds: '対応壁種',
     defaultWidth: '既定幅', defaultHeight: '既定高', childRatio: '子扉比率',
     fireLeaves: '防火枚数', fireAngle: '防火角度', slideLayout: '引違い配置',
+    [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: '詳細図',
   }),
   fixtureSymbol: Object.freeze({
     key: '記号', label: '呼称', category: '区分', mechanism: '機構',

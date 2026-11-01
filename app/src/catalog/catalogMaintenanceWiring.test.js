@@ -1910,3 +1910,12 @@ test('【不変条件・部分詳細図S5】使用状況はパネルを開いた
   assert.ok(/row\.inUse && /.test(tab) && /CATALOG_IN_USE_LABEL/.test(tab), '使用中バッジが inUse で描かれていない');
   assert.ok(/usage\?\.status === 'error' && [^]*?formatCatalogUsageError\(usage\.message\)/.test(tab), '取得失敗（usage.status==="error"）の理由を出していない');
 });
+
+test('【不変条件・部分詳細図S6b】OpeningSubTypeTab: 姿図の select は全機構で出し、選択肢は detailFigureOptionsFor(figure)、保存前検証へ図の一覧を渡し、プレビューは未保存フォームのエントリを使う', () => {
+  const body = extractBalancedBody(stripComments(readSrc('ui/CatalogMaintenancePanel.jsx')), 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'OpeningSubTypeTab が見つからない');
+  assert.ok(/detailFigureOptionsFor\(DetailSlot\.FIGURE, detailFigureList, form\.detailFigure\)/.test(body), 'select の選択肢が姿図の絞り込みを通っていない');
+  assert.ok(/value=\{form\.detailFigure\}/.test(body) && /detailFigure: e\.target\.value/.test(body), 'select がフォーム項目 detailFigure に繋がっていない');
+  assert.equal((body.match(/validateOpeningSubTypeForm\([^)]*detailFigureList/g) ?? []).length, 2, '追加・編集の両方の検証へ detailFigureList を渡していない');
+  assert.ok(/const previewEntry = form \? buildOpeningSubTypeEntry\(form\) : null;/.test(body), 'プレビューが未保存フォームのエントリ（detailFigures 込み）を使っていない');
+});

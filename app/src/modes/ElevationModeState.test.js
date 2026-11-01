@@ -11,7 +11,9 @@ import { placeOpeningWithDefaults } from '../openings/openingEdit.js';
 import { ElevationModeState } from './ElevationModeState.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { clearOverlays } from '../catalog/catalogRegistry.js';
-import { jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol } from '../openings/openingDetailTestFixtures.js';
+import {
+  jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol, elevationFigure, installElevationFigures,
+} from '../openings/openingDetailTestFixtures.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
 import { buildRoomFaces } from '../elevation/elevationFaces.js';
 import { structuralColumnContribution } from '../elevation/section/sectionStructure.js';
@@ -397,6 +399,52 @@ test('【失敗系】ElevationModeState.init: 詳細図が合わせられる・�
       await state.init();
       assert.equal(state.materialError, null, sym);
     }
+  } finally {
+    clearOverlays();
+  }
+});
+
+// ---- 部分詳細図 S6b: 建具の姿図の詳細図が合わせられないときの通知（展開 init で 1 回）と、合わせられるときの差し替え ----
+function graphWithDoor(props) {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const project = { openingNumberIndex: new Map() };
+  const wall = [...graph.walls][0];
+  const { opening, error } = placeOpeningWithDefaults(
+    graph, project, wall, { x: wall.isVertical ? 0 : 2000, y: wall.isVertical ? 1500 : 0 }, OpeningCategory.FITTING,
+  );
+  assert.ok(opening && !error, `前提: 開口を配置できるはず（${error}）`);
+  runInAction(() => { Object.assign(opening, props); });
+  return { graph, project, opening };
+}
+
+test('ElevationModeState.init: 姿図の詳細図が建具に合わせられないと materialError に通知文が 1 件載り（ok は true）、姿図は従来の rect', async () => {
+  installElevationFigures([elevationFigure('df-es-bad', { sFixed: 900 })]);
+  try {
+    const { graph, project, opening } = graphWithDoor({ width: 800, detailRefs: { figure: 'df-es-bad' } });
+    const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    const result = await state.init();
+    assert.equal(result.ok, true, '通知は図面の構築失敗ではない');
+    assert.match(state.materialError, new RegExp(`^詳細図 テスト姿図 を ${opening.subType} の姿図に合わせられません: `));
+    assert.ok(!state.materialError.includes('ほか'));
+    assert.ok(state.bands[0].primitives.some(p => p.type === 'rect' && p.w === 800), '従来の姿図の枠');
+    assert.equal(state.bands[0].primitives.filter(p => p.source === 'detail').length, 0);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('ElevationModeState.init: 姿図の詳細図が合わせられると展開に差し替わり（source:detail）、通知は出ない', async () => {
+  installElevationFigures([elevationFigure('df-es-ok')]);
+  try {
+    const { graph, project, opening } = graphWithDoor({ width: 800, detailRefs: { figure: 'df-es-ok' } });
+    const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    await state.init();
+    assert.equal(state.materialError, null);
+    const detail = state.bands[0].primitives.filter(p => p.source === 'detail');
+    assert.equal(detail.length, 4, '実線の polyline 2 本＋破線の line 2 本');
+    assert.ok(detail.every(p => p.openingId === opening.id));
+    assert.ok(!state.bands[0].primitives.some(p => p.type === 'rect' && p.w === 800 && p.h === opening.height), '従来の枠の rect は無い');
   } finally {
     clearOverlays();
   }

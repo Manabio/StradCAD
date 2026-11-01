@@ -13,11 +13,11 @@
  * 直径線・行間を別プリミティブとして正しく追従させられない。figurePrimitivesKonva.jsx が
  * OpeningTagLayer.jsx と同じ構成でGroup描画する）。
  */
-import { CenterLineType, OpeningCategory } from '@core';
+import { CenterLineType } from '@core';
 import { parseBaseboardHeightMm } from '../core/room.js';
 import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallContinuationBeyondFaceEnd, wallLessEndAt, openingsReachingCorner, cornerOpeningZRanges } from './elevationFaces.js';
 import { openingSectionPrimitives, openingSectionWallRange, openingSectionOverhangMm } from '../openings/openingSection.js';
-import { openingTagPartsOf, effectiveHeight } from '../openings/openingNumbering.js';
+import { openingTagPartsOf, effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
 import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
 import { buildOpeningElevation, frameOnlyInnerRect } from '../openings/openingElevationFigure.js';
 import {
@@ -920,7 +920,7 @@ function cornerSectionsOf(face, graph, { prevFace, nextFace, run, cutWeight, sil
 }
 
 /** 床まで達する建具か（窓台のある窓は壁が下に残るので除く。巾木と同じ述語）。 */
-const reachesFloor = o => (o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0) === 0;
+const reachesFloor = o => effectiveSillHeight(o) === 0;
 
 /** 区間ごとの床線（水平線）と段差の縦線（CUT）をprimsへ積む。 */
 function appendFloorLines(prims, { segs, floorX0, floorXRun, riserXAt, floorYOf, cutWeight }) {
@@ -1453,7 +1453,7 @@ function appendOpenings(prims, {
     // 描画は figurePrimitivesKonva.jsx（listening のみ・見た目なし）。SVG 出力等は type を知らず無視する。
     {
       const h = effectiveHeight(o);
-      const sill = o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0;
+      const sill = effectiveSillHeight(o);
       prims.push(hit(o.id, face.dirSign, x, floorDyAt(localX) - sill - h, o.width, h));
     }
     // 「扉のない建具」（三方枠等。openingCatalog.js DOORLESS_MECHANISMS）の内法は実際に抜けている

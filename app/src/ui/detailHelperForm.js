@@ -20,6 +20,7 @@ import {
   PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam,
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
+  DETAIL_SLOT_TARGETS, DetailSlot,
 } from '../core/constants.js';
 import { validateDetailFigure, DetailValidationError } from '../detail/detailModel.js';
 import { previewPrimitives, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
@@ -28,8 +29,8 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import {
   formatDetailSubjectLabel, formatDetailViewLabel, formatCategoryLabel, categoryOptionsFor, rowEditState, planSaveEntry,
 } from '../catalog/catalogMaintenance.js';
-import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM } from '../openings/openingCatalog.js';
-import { detailFrameTargets } from '../openings/openingDetailFrame.js';
+import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
+import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
 import { evalNumpadExpr } from './numpadUtils.js';
 import { polyline, text } from '../structural/sectionFigure/svgFigurePrimitives.js';
 
@@ -121,13 +122,28 @@ export function wallThicknessNotice(materialLoadFailed) {
 /** NumPad の見出し。 */
 export const DETAIL_NUMPAD_LABELS = Object.freeze({
   penDistance: '距離', moveLen: '長さ', offset: 'オフセット', wallThickness: '壁厚', faceWidth: '見付', projection: '出幅',
+  width: '幅', height: '高さ', sill: '窓台',
 });
-/** 試し込みの目標値の欄（順序＝表示順。field は defaultFitDims／tryFit の項目名）。 */
+/** 試し込みの目標値の欄（三方枠。順序＝表示順。field は defaultFitDims／tryFit の項目名）。 */
 export const FIT_DIM_FIELDS = Object.freeze([
   Object.freeze({ field: 'wallThickness', label: DETAIL_NUMPAD_LABELS.wallThickness }),
   Object.freeze({ field: 'faceWidth', label: DETAIL_NUMPAD_LABELS.faceWidth }),
   Object.freeze({ field: 'projection', label: DETAIL_NUMPAD_LABELS.projection }),
 ]);
+/** 試し込みの目標値の欄（建具の姿図）。 */
+export const ELEVATION_FIT_DIM_FIELDS = Object.freeze([
+  Object.freeze({ field: 'width', label: DETAIL_NUMPAD_LABELS.width }),
+  Object.freeze({ field: 'height', label: DETAIL_NUMPAD_LABELS.height }),
+  Object.freeze({ field: 'sill', label: DETAIL_NUMPAD_LABELS.sill }),
+]);
+
+/** 分類が建具の姿図（slot=figure の取り付け先: figure/elevation/opening）か。 */
+export function isElevationFigureForm(form) {
+  const t = DETAIL_SLOT_TARGETS[DetailSlot.FIGURE];
+  return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
+}
+/** 現在の分類に合う試し込みの欄。 */
+export const fitDimFieldsFor = form => (isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
 /** 保存・破棄・削除の確認の文言。 */
 export const DETAIL_HELPER_MESSAGES = Object.freeze({
   saved: '保存しました',
@@ -246,6 +262,17 @@ const DEFAULT_ROLE_BY_AXIS = Object.freeze({
   [DetailAxis.T]: DetailDatumRole.WALL_FINISH_FACE,
 });
 
+/**
+ * 基準の role の既定。三方枠系は軸ごと（DEFAULT_ROLE_BY_AXIS）。建具の姿図は s＝開口端（origin/end とも）・
+ * t＝origin が SILL・end が HEAD（detailElevationTargets が供給できる組）。
+ */
+export function defaultRoleFor(form, axis, kind) {
+  if (isElevationFigureForm(form) && axis === DetailAxis.T) {
+    return kind === DetailDatumKind.END ? DetailDatumRole.HEAD : DetailDatumRole.SILL;
+  }
+  return DEFAULT_ROLE_BY_AXIS[axis];
+}
+
 // 式の評価値を文字列にするときの丸め（1e-6 mm 単位。0.1+0.2 → '0.3' のような浮動小数の尾を落とす）。
 const PEN_LEN_ROUND = 1e6;
 const ALL_DIRS =new Set([PenDir.UP, PenDir.DOWN, PenDir.LEFT, PenDir.RIGHT]);
@@ -271,7 +298,7 @@ export function parseNumberText(value) {
 // ================================================================
 
 function originDatum(form, axis) {
-  return { id: nextId(DATUM_ID_PREFIX, form.datums.map(d => d.id)), role: DEFAULT_ROLE_BY_AXIS[axis], axis, kind: DetailDatumKind.ORIGIN, offset: '0' };
+  return { id: nextId(DATUM_ID_PREFIX, form.datums.map(d => d.id)), role: defaultRoleFor(form, axis, DetailDatumKind.ORIGIN), axis, kind: DetailDatumKind.ORIGIN, offset: '0' };
 }
 
 /** 新規の下書き。キーは接頭辞＋idFactory()（呼び出し側が crypto.randomUUID を渡す）。分類は組合せ表の先頭。基準は軸ごとの原点 2 つ。 */
@@ -474,7 +501,7 @@ export function moveRows(form) {
 /** 基準を足す（既定は縦軸の端。軸・種別・role は後から select で変える）。原点を足したときは全ストロークの頂点 0 に載せる。 */
 export function addDatum(form, { axis = DetailAxis.T, kind = DetailDatumKind.END, role } = {}) {
   const id = nextId(DATUM_ID_PREFIX, form.datums.map(d => d.id));
-  const datum = { id, role: role ?? DEFAULT_ROLE_BY_AXIS[axis], axis, kind, offset: '0' };
+  const datum = { id, role: role ?? defaultRoleFor(form, axis, kind), axis, kind, offset: '0' };
   const anchors = kind === DetailDatumKind.ORIGIN
     ? [...form.anchors, ...form.strokes.map(s => ({ datumId: id, strokeId: s.id, vertexIndex: 0 }))]
     : form.anchors;
@@ -549,7 +576,14 @@ export function setClassification(form, field, value) {
   if (!DETAIL_VIEW_COMBOS.some(c => c.category === category && c.view === view && c.subject === subject)) {
     subject = DETAIL_VIEW_COMBOS.find(c => c.category === category && c.view === view)?.subject ?? subject;
   }
-  return { ...form, category, view, subject };
+  const next = { ...form, category, view, subject };
+  // 建具の姿図へ出入りするときは、既定の role のままの基準を移行先の既定へ寄せる（ユーザーが選んだ role は触らない）。
+  if (isElevationFigureForm(form) === isElevationFigureForm(next)) return next;
+  return {
+    ...next,
+    datums: next.datums.map(d => (d.role === defaultRoleFor(form, d.axis, d.kind)
+      ? { ...d, role: defaultRoleFor(next, d.axis, d.kind) } : d)),
+  };
 }
 
 // ================================================================
@@ -627,13 +661,47 @@ export function defaultFitDims(wallThickness) {
   };
 }
 
-const badFitDim = message => ({ error: { code: 'badFitDim', message } });
+// 姿図の試し込みの既定の建具種別（保守パネルの代表種別 ui/catalogPreview.js fixtureSymbolRepresentativeEntry の fitting 側と同じ）。
+// 幅・高さはその defaultWidth／defaultHeight（catalogPreview の openingSubTypePreview と同じ供給源）。窓台 0。
+const ELEVATION_FIT_REPRESENTATIVE = Object.freeze({ category: 'fitting', subType: 'singleSwing' });
 
 /**
- * 試し込み: 三方枠の寸法（壁厚・見付・出幅。文字列か数値）に図を合わせる。
- * 基準の対応は S3（openings/openingDetailFrame.js）と同じ。失敗は { error:{code,message} }（黙って代用しない）。
+ * 分類に合う試し込みの目標値の既定（文字列）。三方枠は defaultFitDims、建具の姿図は代表建具種別の既定幅・高さと窓台 0。
+ * 代表種別がカタログに無いとき幅・高さは '' （tryFit が入力を促す error を返す）。
+ */
+export function defaultFitDimsFor(form, wallThickness) {
+  if (!isElevationFigureForm(form)) return defaultFitDims(wallThickness);
+  const entry = findCatalogEntry(ELEVATION_FIT_REPRESENTATIVE.category, ELEVATION_FIT_REPRESENTATIVE.subType);
+  return {
+    width: entry?.defaultWidth == null ? '' : String(entry.defaultWidth),
+    height: entry?.defaultHeight == null ? '' : String(entry.defaultHeight),
+    sill: '0',
+  };
+}
+
+const badFitDim = message => ({ error: { code: 'badFitDim', message } });
+
+// 建具の姿図の試し込み: 幅・高さ・窓台高さ（文字列か数値）に合わせる。基準の対応は openings/openingDetailFrame.js detailElevationTargets。
+function tryFitElevation(form, dims) {
+  const width = parseNumberText(dims.width);
+  const height = parseNumberText(dims.height);
+  const sill = parseNumberText(dims.sill);
+  if (!Number.isFinite(width) || width <= 0) return badFitDim('幅は正の数で入力してください');
+  if (!Number.isFinite(height) || height <= 0) return badFitDim('高さは正の数で入力してください');
+  if (!Number.isFinite(sill) || sill < 0) return badFitDim('窓台は 0 以上の数で入力してください');
+  const fig = entryFromForm(form);
+  const t = detailElevationTargets(fig, { width, height, sill });
+  if (t.error) return { error: t.error };
+  return fitLocal(fig, t.targets);
+}
+
+/**
+ * 試し込み: 取り付け先の寸法に図を合わせる。建具の姿図（figure/elevation/opening）は幅・高さ・窓台、
+ * それ以外は三方枠の寸法（壁厚・見付・出幅。文字列か数値）。
+ * 基準の対応は S3／S6b（openings/openingDetailFrame.js）と同じ。失敗は { error:{code,message} }（黙って代用しない）。
  */
 export function tryFit(form, dims) {
+  if (isElevationFigureForm(form)) return tryFitElevation(form, dims);
   const wallThickness = parseNumberText(dims.wallThickness);
   const faceWidth = parseNumberText(dims.faceWidth);
   const projection = parseNumberText(dims.projection);

@@ -3,6 +3,7 @@ import './CatalogMaintenancePanel.css';
 import {
   CatalogKind, kindDef, MATERIAL_CLASSES, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS,
 } from '../catalog/catalogKinds.js';
+import { DetailSlot } from '../core/constants.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
 import { composeCatalog, docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip, fieldLabel } from '../catalog/catalogDiffView.js';
@@ -2809,6 +2810,7 @@ function emptyOpeningSubTypeForm(category, key) {
     wallInterior: false, wallExterior: false, wallKindsExplicitEmpty: false,
     defaultWidth: '', defaultHeight: '',
     childRatio: '', fireLeaves: '', fireAngle: '', slideLayoutText: '',
+    detailFigure: '',
   };
 }
 
@@ -2902,6 +2904,8 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     : new Set();
   const disabledReason = form ? openingSubTypeRowDisabledReason({ isAdding, editState }) : null;
   const { showChildRatio, showFireLeaves, showFireAngle, showSlideLayout } = openingSubTypeFormFieldsFor(form);
+  // 姿図の詳細図の割当て先候補（三層合成後。建具記号タブと同じく毎レンダー取り直す。本体は空）
+  const detailFigureList = [...composeCatalog(CatalogKind.DETAIL_FIGURE, []).values()];
 
   const docDiffByField = (selectedRow?.origin === 'doc' && selectedRow?.diff)
     ? new Map(diffPairs(
@@ -2988,7 +2992,7 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
 
     if (isAdding) {
       const allKeys = collectKnownCatalogKeys(CatalogKind.OPENING_SUB_TYPE, builtinList);
-      const check = validateOpeningSubTypeForm(form, { isAdding: true, allKeys, builtinKeys });
+      const check = validateOpeningSubTypeForm(form, { isAdding: true, allKeys, builtinKeys, detailFigureList });
       if (!check.ok) { setFormError(check.message); return; }
       const plan = planSaveEntry(CatalogKind.OPENING_SUB_TYPE, entry, { builtinList, rowState: null });
       if (!plan.ok) { setFormError(plan.message); return; }
@@ -2996,7 +3000,7 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
       return;
     }
 
-    const check = validateOpeningSubTypeForm(form, { isAdding: false });
+    const check = validateOpeningSubTypeForm(form, { isAdding: false, detailFigureList });
     if (!check.ok) { setFormError(check.message); return; }
     const prevEntry = selectedRow?.entry ?? null;
     const plan = planSaveEntry(CatalogKind.OPENING_SUB_TYPE, entry, {
@@ -3335,6 +3339,21 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
                 )}
               </div>
             )}
+
+            {/* 姿図の部分詳細図（S6b）。全機構で出す。未保存の選択は previewEntry（下の作図プレビュー）へそのまま届く */}
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">{FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE].label}</span>
+              <select
+                value={form.detailFigure}
+                disabled={!!disabledReason}
+                onChange={e => setForm(f => ({ ...f, detailFigure: e.target.value }))}
+              >
+                <option value="">{FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE].unassigned}</option>
+                {detailFigureOptionsFor(DetailSlot.FIGURE, detailFigureList, form.detailFigure).map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
 
             {formError && <div className="catmnt-form-error">{formError}</div>}
             {formMessage && <div className="catmnt-form-message">{formMessage}</div>}

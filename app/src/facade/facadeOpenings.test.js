@@ -6,7 +6,9 @@ import assert from 'node:assert/strict';
 import {
   Plane, PlanGraph, Project, CenterLineType, Discipline, OpeningCategory, RoomKind, RoomFeature, ShapeType,
 } from '@core';
-import { FacadeDirection } from '../core/constants.js';
+import { FacadeDirection, FacadeSkipReason } from '../core/constants.js';
+import { clearOverlays } from '../catalog/catalogRegistry.js';
+import { elevationFigure, installElevationFigures } from '../openings/openingDetailTestFixtures.js';
 import { generateExteriorWalls } from '../finish/wallGeneration.js';
 import { buildFacadeInputs } from './facadeInputs.js';
 import { buildFacadeModel } from './facadeFigure.js';
@@ -299,6 +301,74 @@ test('【失敗系】graph.openings が空・undefined、floors に openings が
   const view = facadeViews().find(v => v.direction === FacadeDirection.EAST);
   const out = buildFacadeOpenings(legacy, view, { uMin: 0, profiles: facadeFloorProfiles(legacy, view.normal) });
   assert.deepEqual(out, { primitives: [], counts: { drawn: 0, hidden: 0, noEntry: 0 } });
+});
+
+// ---- 部分詳細図 S6b: 姿図の差し替え（立面の呼出し元）。kind を FACADE_OPENING_KIND に上書きしても source:'detail' は残る ----
+const detailPolylines = face => openingPrims(face).filter(p => p.source === 'detail' && p.type === 'polyline')
+  .map(p => p.points.map(q => q.map(v => v + 0)));
+
+test('【S6b】東面の窓: 姿図の詳細図で差し替わり、u が壁の座標と逆向きの面は左右反転（mirrorPrimitiveX）。kind 上書き後も source:detail と openingId が残る', () => {
+  installElevationFigures([elevationFigure('df-fa')]);
+  try {
+    const { p1, graph, cl } = rectGraph();
+    addOpening(graph, cl.x1, 1, cl.y0, 1500, 1690, WINDOW, { sillHeight: 800, height: 1170, detailRefs: { figure: 'df-fa' } });
+    const east = faceOf(modelOf(p1, graph), FacadeDirection.EAST);
+    // 姿図ローカル lt=(0,-800)→(0,-1970)→(1690,-1970)。反転 x→1690−x のあと dx=712.5（uLo−uMin）、dy=−450（GL）
+    assert.deepEqual(detailPolylines(east), [
+      [[1690 + 712.5, -800 - 450], [1690 + 712.5, -1970 - 450], [712.5, -1970 - 450]],
+      [[1690 + 712.5, -800 - 450], [712.5, -800 - 450], [712.5, -1970 - 450]],
+    ]);
+    const detail = openingPrims(east).filter(p => p.source === 'detail');
+    assert.equal(detail.length, 4, '実線の polyline 2 本＋破線の line 2 本');
+    assert.ok(detail.every(p => p.kind === FACADE_OPENING_KIND && p.openingId != null), 'kind 上書きを通っても source が残る');
+    assert.equal(openingPrims(east).filter(p => p.type === 'rect').length, 0, '従来の枠の rect は無い');
+    assert.deepEqual(east.openingCounts, { drawn: 1, hidden: 0, noEntry: 0 });
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('【S6b】南面のドア（u＝x・反転なし）: 同じ図が反転せずに置かれる。割当てなしの建具は従来の姿図のまま（source:detail なし）', () => {
+  installElevationFigures([elevationFigure('df-fb')]);
+  try {
+    const { p1, graph, cl } = rectGraph();
+    addOpening(graph, cl.y1, 1, cl.x0, 1000, 800, DOOR, { height: 2000, detailRefs: { figure: 'df-fb' } });
+    addOpening(graph, cl.y1, 1, cl.x0, 2500, 800, DOOR, { height: 2000 }); // 割当てなし
+    const south = faceOf(modelOf(p1, graph), FacadeDirection.SOUTH);
+    // 南面 u＝x、uMin＝−57.5。ドアの coord1＝600 → dx=657.5。lt=(0,0)→(0,-2000)→(800,-2000)、dy=−450
+    assert.deepEqual(detailPolylines(south), [
+      [[657.5, -450], [657.5, -2450], [1457.5, -2450]],
+      [[657.5, -450], [1457.5, -450], [1457.5, -2450]],
+    ]);
+    const rects = openingPrims(south).filter(p => p.type === 'rect' && p.stroke == null && p.rx == null);
+    assert.equal(rects.length, 1, '割当てなしの 1 件だけ従来の枠の rect');
+    assert.equal(rects[0].x, 2100 + FACE);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('【S6b・失敗系】姿図の詳細図が建具に合わせられないと skipped に DETAIL_FIT_FAILED を 1 件（同じ図×寸法は重複排除）積み、姿図は従来の描き方で描く', () => {
+  installElevationFigures([elevationFigure('df-bad', { sFixed: 900 })]);
+  try {
+    const { p1, graph, cl } = rectGraph();
+    addOpening(graph, cl.x1, 1, cl.y0, 1000, 800, DOOR, { height: 2000, detailRefs: { figure: 'df-bad' } });
+    addOpening(graph, cl.x1, 1, cl.y0, 2200, 800, DOOR, { height: 2000, detailRefs: { figure: 'df-bad' } });
+    const inputs = buildFacadeInputs([{ plane: p1, graph }], { glBelow1FlMm: GL_BELOW, planes: [p1] });
+    const failed = inputs.skipped.filter(s => s.reason === FacadeSkipReason.DETAIL_FIT_FAILED);
+    assert.equal(failed.length, 1, JSON.stringify(inputs.skipped));
+    assert.equal(failed[0].planeId, 'p1');
+    assert.match(failed[0].message, /^詳細図 テスト姿図 を door の姿図に合わせられません: 固定寸法の和が目標を超える/);
+    const east = faceOf(buildFacadeModel(inputs), FacadeDirection.EAST);
+    assert.equal(openingPrims(east).filter(p => p.source === 'detail').length, 0);
+    assert.equal(openingPrims(east).filter(p => p.type === 'rect' && p.stroke == null && p.rx == null).length, 2, '従来の枠の rect');
+    // 割当てなし・正常な図では積まない
+    installElevationFigures([elevationFigure('df-ok')]);
+    const ok = buildFacadeInputs([{ plane: p1, graph }], { glBelow1FlMm: GL_BELOW, planes: [p1] });
+    assert.equal(ok.skipped.filter(s => s.reason === FacadeSkipReason.DETAIL_FIT_FAILED).length, 1, '図が無い参照は notFound として 1 件');
+  } finally {
+    clearOverlays();
+  }
 });
 
 test('【失敗系】建具の読み取りが例外の階は skipped（ERROR）に載せ、壁は描く', () => {

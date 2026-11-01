@@ -97,13 +97,13 @@ export function collectUsedKeysByKind(snapshots, kinds) {
 }
 
 /**
- * 建具記号エントリが割り当てている詳細図キー（detailFigures の値のうち空でない文字列）。
+ * 建具記号・建具種別エントリが割り当てている詳細図キー（detailFigures の値のうち空でない文字列）。
  * detailFigures が無い・オブジェクトでない旧形のエントリは空。
- * @param {object|null|undefined} symbolEntry
+ * @param {object|null|undefined} entry
  * @returns {string[]}
  */
-function detailFigureKeysOfSymbol(symbolEntry) {
-  const slots = symbolEntry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
+function detailFigureKeysOfEntry(entry) {
+  const slots = entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
   if (slots === null || typeof slots !== 'object' || Array.isArray(slots)) return [];
   return Object.values(slots).filter(v => typeof v === 'string' && v.length > 0);
 }
@@ -198,7 +198,7 @@ export function expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind) 
 /**
  * カタログ→カタログの推移展開（2 例目）。expandUsedMaterialsTransitively の**前段**で呼ぶ
  * （詳細図の material 束縛が増やす材を、後段の材の推移展開が取りこぼさないため）。
- * (a) 使用中の建具記号（三層合成後）の detailFigures の値 → 詳細図キー
+ * (a) 使用中の建具記号・建具種別（三層合成後）の detailFigures の値 → 詳細図キー
  * (b) 使用中の詳細図の material 束縛 LenSpec の code → 材コード（material が収集対象のときだけ）
  * 詳細図から別の詳細図へは辿らない。usedKeysByKind が DETAIL_FIGURE を含まなければそのまま返す
  * （expandUsedMaterialsTransitively と同じ）。非破壊（新しい Map を返す）。
@@ -211,7 +211,12 @@ export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKi
   const figureKeys = new Set(usedKeysByKind.get(CatalogKind.DETAIL_FIGURE));
   for (const symbolKey of usedKeysByKind.get(CatalogKind.FIXTURE_SYMBOL) ?? []) {
     const symbol = resolvedByKind.get(CatalogKind.FIXTURE_SYMBOL)?.get(symbolKey);
-    for (const figureKey of detailFigureKeysOfSymbol(symbol)) figureKeys.add(figureKey);
+    for (const figureKey of detailFigureKeysOfEntry(symbol)) figureKeys.add(figureKey);
+  }
+  // 使用中の建具種別（三層合成後）の detailFigures（姿図。S6b）も同じ
+  for (const subTypeKey of usedKeysByKind.get(CatalogKind.OPENING_SUB_TYPE) ?? []) {
+    const subType = resolvedByKind.get(CatalogKind.OPENING_SUB_TYPE)?.get(subTypeKey);
+    for (const figureKey of detailFigureKeysOfEntry(subType)) figureKeys.add(figureKey);
   }
   const next = new Map(usedKeysByKind);
   next.set(CatalogKind.DETAIL_FIGURE, figureKeys);
@@ -336,8 +341,10 @@ export function reexpandTransitiveDetailFigures(bundle, detailFigureMap) {
   const existingKeys = new Set(existingFigures.map(e => figureDef.keyOf(e)));
 
   const wanted = new Set();
-  for (const symbol of bundleEntries(bundle, CatalogKind.FIXTURE_SYMBOL)) {
-    for (const figureKey of detailFigureKeysOfSymbol(symbol)) wanted.add(figureKey);
+  for (const kind of [CatalogKind.FIXTURE_SYMBOL, CatalogKind.OPENING_SUB_TYPE]) {
+    for (const entry of bundleEntries(bundle, kind)) {
+      for (const figureKey of detailFigureKeysOfEntry(entry)) wanted.add(figureKey);
+    }
   }
 
   const newEntries = [];

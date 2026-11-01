@@ -30,6 +30,7 @@
 //   4. 階プレフィックスは付けない（採番は全階統一＝記号-番号(-枝番)は仕様を指す）。
 // ================================================================
 
+import { OpeningCategory } from '../core.js';
 import {
   defaultFixtureSymbol, defaultOpeningHeight, findCatalogEntry, OpeningMechanism,
   DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM,
@@ -50,6 +51,14 @@ export function fixtureSymbolOf(opening) {
 export function effectiveHeight(opening) {
   const h = opening.height;
   return (h != null && h > 0) ? h : defaultOpeningHeight(opening.category, opening.subType);
+}
+
+/**
+ * 開口の下端高さ（FL から。窓は窓台高さ・未設定は 0、建具（fitting）は窓台の概念が無いので常に 0）。
+ * 建具の姿図（openingElevationFigure.js）と詳細図の姿図への反映（openingDetailFit.js）が共有する。
+ */
+export function effectiveSillHeight(opening) {
+  return opening.category === OpeningCategory.WINDOW ? (opening.sillHeight ?? 0) : 0;
 }
 
 /** レバーハンドル取付高さの既定値(mm、FLから)。 */

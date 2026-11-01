@@ -6,7 +6,7 @@ import {
   DetailParam, DetailMaterialField, DETAIL_VIEW_COMBOS, DETAIL_DRAFT_HISTORY_MAX, SvgFigurePrimitiveType,
 } from '../core/constants.js';
 import { DetailValidationError } from '../detail/detailModel.js';
-import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM } from '../openings/openingCatalog.js';
+import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { DETAIL_SUBJECT_LABELS, formatDetailSubjectLabel } from '../catalog/catalogMaintenance.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays, docDiffMap } from '../catalog/catalogRegistry.js';
@@ -14,6 +14,7 @@ import {
   newDraft, formFromEntry, entryFromForm, duplicateForm, isDraftDirty, pushHistory, undoDraft, applyPen, penUp, setClosed,
   setMoveLen, setMoveMode, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, libraryRows, defaultFitDims, tryFit,
+  isElevationFigureForm, fitDimFieldsFor, defaultFitDimsFor,
   previewPrimitivesOf, parseNumberText, planSave, saveContextFor, saveDecision, afterSaveDoc, penStep, describeError,
   wallThicknessNotice, displayLen, freshDocOf, docFromEntry, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, DETAIL_HELPER_MESSAGES, DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS,
   DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS, PEN_BUTTONS, PEN_DIR_LABELS,
@@ -284,6 +285,65 @@ test('tryFit の失敗系: 目標値が不正・基準が三方枠で供給で�
   const tooShort = tryFit(f, { ...dims, wallThickness: '15' });
   assert.equal(tooShort.error.code, 'fixedExceedsTarget');
   assert.equal(tryFit(newDraft({ idFactory }), dims).error.code, 'invalid');
+});
+
+// ---- S6b: 建具の姿図（figure/elevation/opening）の試し込み・既定の基準 ----
+function elevationDraft() {
+  let f = setClassification(setClassification(newDraft({ idFactory }), 'category', DetailCategory.FIGURE), 'view', DetailView.ELEVATION);
+  f = { ...f, label: '姿図' };
+  f = drawAll(f, [[PenDir.UP, '50'], [PenDir.RIGHT, '20']]);
+  f = setMoveMode(f, { strokeId: 's1', moveIndex: 0 }, DetailLenMode.STRETCH);
+  f = addDatum(f); // T の end（姿図では HEAD が既定）
+  return setAnchor(f, 's1', 'd3', 1);
+}
+
+test('姿図: 分類を figure/elevation/opening にすると既定の基準は s＝開口端・t origin＝SILL・end＝HEAD。出入りで既定のままの role だけ移行し、選んだ role は残す', () => {
+  const draft = newDraft({ idFactory });
+  assert.deepEqual(draft.datums.map(d => d.role), [DetailDatumRole.OPENING_OUTER, DetailDatumRole.WALL_FINISH_FACE]);
+  const el = setClassification(setClassification(draft, 'category', DetailCategory.FIGURE), 'view', DetailView.ELEVATION);
+  assert.equal(isElevationFigureForm(el), true);
+  assert.deepEqual(el.datums.map(d => d.role), [DetailDatumRole.OPENING_OUTER, DetailDatumRole.SILL]);
+  assert.equal(addDatum(el).datums.at(-1).role, DetailDatumRole.HEAD, '足した end の基準は HEAD');
+  assert.equal(addDatum(el, { axis: DetailAxis.S }).datums.at(-1).role, DetailDatumRole.OPENING_OUTER);
+  const back = setClassification(el, 'category', DetailCategory.PAIRED);
+  assert.equal(isElevationFigureForm(back), false);
+  assert.deepEqual(back.datums.map(d => d.role), [DetailDatumRole.OPENING_OUTER, DetailDatumRole.WALL_FINISH_FACE]);
+  const custom = setDatumField(el, 'd2', 'role', DetailDatumRole.FL);
+  assert.equal(setClassification(custom, 'category', DetailCategory.PAIRED).datums[1].role, DetailDatumRole.FL, '選んだ role は触らない');
+  // 姿図内での view／subject の移動（figure/plan へ）は姿図でなくなる＝基準を既定へ戻す
+  assert.equal(setClassification(el, 'view', DetailView.PLAN).datums[1].role, DetailDatumRole.WALL_FINISH_FACE);
+});
+
+test('姿図 tryFit: 幅 800→1000・高さ 2000→2100 で伸縮の 1 本だけが伸び、固定寸法（右 20）は変わらない。窓台は局所座標に影響しない', () => {
+  const f = elevationDraft();
+  assert.equal(validation(f).ok, true);
+  const at = dims => tryFit(f, dims).strokes[0].points.map(p => [p.s, p.t]);
+  assert.deepEqual(at({ width: '800', height: '2000', sill: '0' }), [[0, 0], [0, -2000], [20, -2000]]);
+  assert.deepEqual(at({ width: '1000', height: '2100', sill: '900' }), [[0, 0], [0, -2100], [20, -2100]]);
+});
+
+test('【失敗系】姿図 tryFit: 寸法が不正は badFitDim、三方枠の基準（壁の仕上げ面）は unsupportedDatum、図が不正は invalid。三方枠の寸法欄では試し込めない', () => {
+  const f = elevationDraft();
+  const dims = { width: '800', height: '2000', sill: '0' };
+  assert.equal(tryFit(f, { ...dims, width: '' }).error.code, 'badFitDim');
+  assert.equal(tryFit(f, { ...dims, height: '0' }).error.code, 'badFitDim');
+  assert.equal(tryFit(f, { ...dims, sill: '-1' }).error.code, 'badFitDim');
+  assert.equal(tryFit(setDatumField(f, 'd2', 'role', DetailDatumRole.WALL_FINISH_FACE), dims).error.code, 'unsupportedDatum');
+  assert.match(tryFit(setDatumField(f, 'd2', 'role', DetailDatumRole.WALL_FINISH_FACE), dims).error.message, /建具の姿図では使えません/);
+  const empty = setClassification(setClassification(newDraft({ idFactory }), 'category', DetailCategory.FIGURE), 'view', DetailView.ELEVATION);
+  assert.equal(tryFit(empty, dims).error.code, 'invalid', 'ストロークの無い図');
+  assert.equal(tryFit(f, { wallThickness: '105', faceWidth: '20', projection: '12' }).error.code, 'badFitDim');
+});
+
+test('姿図の試し込み欄: 分類が姿図なら 幅・高さ・窓台、それ以外は壁厚・見付・出幅。既定は代表の建具種別の既定幅・高さと窓台 0', () => {
+  const el = elevationDraft();
+  assert.deepEqual(fitDimFieldsFor(el).map(x => x.field), ['width', 'height', 'sill']);
+  assert.deepEqual(fitDimFieldsFor(newDraft({ idFactory })).map(x => x.field), ['wallThickness', 'faceWidth', 'projection']);
+  const rep = findCatalogEntry('fitting', 'singleSwing');
+  assert.deepEqual(defaultFitDimsFor(el, 105), { width: String(rep.defaultWidth), height: String(rep.defaultHeight), sill: '0' });
+  assert.ok(Number(rep.defaultWidth) > 0 && Number(rep.defaultHeight) > 0);
+  assert.deepEqual(defaultFitDimsFor(newDraft({ idFactory }), 105), defaultFitDims(105));
+  assert.equal(tryFit(el, defaultFitDimsFor(el, 105)).error, undefined, '既定の寸法でそのまま試し込める');
 });
 
 test('defaultFitDims: 見付・出幅は建具の既定、壁厚は渡した値', () => {

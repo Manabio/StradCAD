@@ -63,6 +63,61 @@ export function materialBoundFigure(key, over = {}) {
   return { ...j, label: '材束縛の方立', strokes: [{ ...j.strokes[0], moves }], ...over };
 }
 
+const fixedLen = mm => ({ mm, mode: DetailLenMode.FIXED });
+
+/**
+ * 建具の姿図（正面図。S6b）。3 ストローク（FL/窓台を 0・上が t−）:
+ *   lt   左辺（U 伸縮）＋上辺（R 伸縮）。(0,0)→(0,−H)→(W,−H)
+ *   br   下辺（R 伸縮）＋右辺（U 伸縮）。(0,0)→(W,0)→(W,−H)
+ *   dash 破線。(0,0)→(dashX,0)→(dashX,−H)（R は固定 dashX）
+ * 基準は s: OPENING_OUTER の origin／end・t: originRole（SILL または FL）の origin と HEAD の end。
+ * sFixed を渡すと lt の上辺の手前に固定の R を差し込む（開口幅が小さいと固定寸法が目標を超える＝FIXED_EXCEEDS_TARGET）。
+ */
+export function elevationFigure(key, { originRole = DetailDatumRole.SILL, dashX = 100, sFixed = null, over = {} } = {}) {
+  const dash = { weightRole: 'thin', dashRole: DetailDash.DASHED };
+  const ltMoves = sFixed === null
+    ? [move(PenDir.UP, stretchLen(50)), move(PenDir.RIGHT, stretchLen(50))]
+    : [move(PenDir.UP, stretchLen(50)), move(PenDir.RIGHT, fixedLen(sFixed)), move(PenDir.RIGHT, stretchLen(50))];
+  const a = (datumId, strokeId, vertexIndex) => ({ datumId, strokeId, vertexIndex });
+  return {
+    key, version: DETAIL_FIGURE_VERSION, label: 'テスト姿図',
+    category: DetailCategory.FIGURE, view: DetailView.ELEVATION, subject: DetailSubject.OPENING,
+    strokes: [
+      { id: 'lt', closed: false, line: LINE, moves: ltMoves },
+      { id: 'br', closed: false, line: LINE, moves: [move(PenDir.RIGHT, stretchLen(50)), move(PenDir.UP, stretchLen(50))] },
+      { id: 'dash', closed: false, line: dash, moves: [move(PenDir.RIGHT, fixedLen(dashX)), move(PenDir.UP, stretchLen(50))] },
+    ],
+    datums: [
+      { id: 'so', role: DetailDatumRole.OPENING_OUTER, axis: DetailAxis.S, kind: DetailDatumKind.ORIGIN, offsetMm: 0 },
+      { id: 'se', role: DetailDatumRole.OPENING_OUTER, axis: DetailAxis.S, kind: DetailDatumKind.END, offsetMm: 0 },
+      { id: 'to', role: originRole, axis: DetailAxis.T, kind: DetailDatumKind.ORIGIN, offsetMm: 0 },
+      { id: 'te', role: DetailDatumRole.HEAD, axis: DetailAxis.T, kind: DetailDatumKind.END, offsetMm: 0 },
+    ],
+    anchors: [
+      a('so', 'lt', 0), a('to', 'lt', 0), a('te', 'lt', 1), a('se', 'lt', ltMoves.length),
+      a('so', 'br', 0), a('to', 'br', 0), a('se', 'br', 1), a('te', 'br', 2),
+      a('so', 'dash', 0), a('to', 'dash', 0), a('te', 'dash', 2),
+    ],
+    provenance: null, note: null,
+    ...over,
+  };
+}
+
+/** 建具種別（user overlay）の最小エントリ。図は detailFigures.figure（S6b）で参照する（figureKey が null なら参照しない）。 */
+export function subTypeEntry(key, figureKey, over = {}) {
+  return {
+    category: 'fitting', key, label: `試験用${key}`, mechanism: 'swing', defaultWidth: 800, defaultHeight: 2000,
+    ...(figureKey === null ? {} : { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: figureKey } }),
+    ...over,
+  };
+}
+
+/** user overlay に姿図の図（と建具種別）を立てる（呼び出し側が afterEach で clearOverlays する）。 */
+export function installElevationFigures(figures, subTypes = []) {
+  setOverlay(CatalogKind.DETAIL_FIGURE, { user: figures });
+  if (subTypes.length > 0) setOverlay(CatalogKind.OPENING_SUB_TYPE, { user: subTypes });
+}
+
 let symbolSerial = 0;
 /** テストごとに一意な三方枠専用の建具記号キー（fit のメモがテスト間で漏れても影響しないように）。 */
 export function uniqueSymbolKey() {

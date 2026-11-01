@@ -23,6 +23,8 @@ import {
 } from './elevationStyle.js';
 import { screenMmToModelMm, horizontalDimLabelBox } from './elevationLayout.js';
 import { openingOpenPerpDir } from '../openings/openingSection.js';
+import { clearOverlays } from '../catalog/catalogRegistry.js';
+import { elevationFigure, installElevationFigures } from '../openings/openingDetailTestFixtures.js';
 import { clipContentAtHiddenEnds } from './elevationStairSequence.js';
 import { DEFAULT_PX_PER_MM } from '../viewport.js';
 
@@ -1324,6 +1326,30 @@ test('buildFaceFigure: 三方枠(FRAME_ONLY)は見付ぶん内側の内法にバ
   }
 });
 
+test('【S6b】buildFaceFigure: 三方枠に姿図の詳細図があっても、外周・内法の line 6 本は出ず、アキ標記（バツ2本＋「ア キ」）は従来どおり残る', () => {
+  installElevationFigures([elevationFigure('df-frame-face')]);
+  try {
+    const opening = {
+      id: 'opFrameDetail', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+      centerCoord: 2000, width: 2000, height: 2000, sillHeight: null, frameFaceWidth: null, frameProjection: null,
+      category: OpeningCategory.FITTING, subType: 'threeSidedFrame', fixtureType: 'WF',
+      detailRefs: { figure: 'df-frame-face' },
+    };
+    const prims = buildFaceFigure(makeFace(), baseCtx({ graph: makeGraph({ openings: [opening] }) }));
+    assert.equal(prims.filter(p => p.source === 'detail').length, 4, '姿図の詳細図（polyline 2＋破線 line 2）');
+    // 従来の三方枠の線: 外周（thin）と内法（medium）の実線 line は詳細図の破線以外に出ない（外周は x=1000 / 3000 の縦線を含む）
+    const frameLines = prims.filter(p => p.type === 'line' && p.source !== 'detail' && p.dash == null
+      && (p.weight === 'thin' || p.weight === 'medium') && p.openingId === 'opFrameDetail');
+    assert.deepEqual(frameLines, [], '従来の三方枠の線（6 本）は出ない');
+    // アキ標記は従来どおり（内法 x=1020〜2980・y=-1980〜0）
+    assert.equal(prims.filter(p => p.type === 'text' && p.text === 'ア キ').length, 1);
+    const diagonals = prims.filter(p => p.type === 'line' && p.dash === 'center' && Math.abs(p.x1 - p.x2) > 1 && Math.abs(p.y1 - p.y2) > 1);
+    assert.equal(diagonals.length, 2, 'バツは対角線2本');
+  } finally {
+    clearOverlays();
+  }
+});
+
 test('buildFaceFigure: 見付1px保証——scale=1/100では三方枠の内法（中線・アキ標記）が100mm内側になり、外周（細線）は指定寸法のまま', () => {
   const opening = {
     id: 'opFrame', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
@@ -1500,6 +1526,42 @@ test('buildFaceFigure: dirSign=-1の面では姿図が左右反転され、吊�
   assert.ok(revVee.length >= 2, '前提: 吊元表示のVが描かれる');
   assert.ok(revVee.every(p => p.x2 === 2450),
     'dirSign=-1: 姿図が反転され、V頂点（吊元）は世界coord1に対応するローカルx=2450のはず（反転なしだと1550+900-900=1550側に残る）');
+});
+
+// ---- 部分詳細図 S6b: 姿図の差し替え（展開の呼出し元）。dirSign<0 の面は既存の mirrorPrimitiveX で左右反転する ----
+test('【S6b】buildFaceFigure: 姿図の詳細図は展開でも差し替わり（source:detail）、dirSign=-1 の面では左右反転、枠(rect)・吊元V・ハンドルは出ない', () => {
+  installElevationFigures([elevationFigure('df-face')]);
+  try {
+    const opening = {
+      id: 'op-detail', isVertical: false, axisCL: { id: 'axisY0' }, wallSide: 1,
+      centerCoord: 2000, width: 900, height: 2000, sillHeight: null, hingeSide: -1,
+      category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: null,
+      detailRefs: { figure: 'df-face' },
+    };
+    const ctx = () => baseCtx({ graph: makeGraph({ openings: [opening] }) });
+    const polylinesOf = prims => prims.filter(p => p.source === 'detail' && p.type === 'polyline').map(p => p.points.map(q => q.map(v => v + 0)));
+    // 世界 coord1=1550。dirSign=+1: ローカル x=1550 から右へ。lt=(1550,0)→(1550,-2000)→(2450,-2000)
+    const fwd = buildFaceFigure(makeFace({ dirSign: 1, originWorld: 0 }), ctx());
+    assert.deepEqual(polylinesOf(fwd), [
+      [[1550, 0], [1550, -2000], [2450, -2000]],
+      [[1550, 0], [2450, 0], [2450, -2000]],
+    ]);
+    // dirSign=-1（originWorld=4000）: 姿図ローカルを x→900−x に反転してから x=1550 に置く。lt=(2450,0)→(2450,-2000)→(1550,-2000)
+    const rev = buildFaceFigure(makeFace({ dirSign: -1, originWorld: 4000 }), ctx());
+    assert.deepEqual(polylinesOf(rev), [
+      [[2450, 0], [2450, -2000], [1550, -2000]],
+      [[2450, 0], [1550, 0], [1550, -2000]],
+    ]);
+    for (const prims of [fwd, rev]) {
+      assert.ok(!prims.some(p => p.type === 'rect' && p.w === 900 && p.h === 2000), '従来の枠の rect は無い');
+      assert.ok(!prims.some(p => p.type === 'line' && p.dash === 'center' && p.x1 !== p.x2), '吊元の一点鎖線 V（斜め）は無い');
+      assert.ok(!prims.some(p => p.type === 'rect' && p.rx != null), 'レバーハンドルは無い');
+      assert.ok(prims.some(p => p.type === 'hit'), 'ドラッグ用のヒット矩形は残る');
+      assert.ok(prims.filter(p => p.source === 'detail').every(p => p.openingId === 'op-detail'), '建具のプリミティブに openingId');
+    }
+  } finally {
+    clearOverlays();
+  }
 });
 
 // ---- 姿図の左右反転（非対称機構その2）: 親子扉の子扉分割線も世界座標どおりの端に来る ----

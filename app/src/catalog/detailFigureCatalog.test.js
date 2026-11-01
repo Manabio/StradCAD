@@ -704,3 +704,110 @@ test('formatCategoryLabel(DETAIL_FIGURE): 5 分類の表示名', () => {
   );
   assert.equal(formatCategoryLabel(DF, 'other'), 'other');
 });
+
+// ---- 建具種別（openingSubType）の任意項目 detailFigures（S6b・姿図の差し替え）----
+const ST = CatalogKind.OPENING_SUB_TYPE;
+
+function subType(key, over) {
+  return { category: 'fitting', key, label: `種別${key}`, mechanism: 'swing', defaultWidth: 800, defaultHeight: 2000, ...over };
+}
+
+test('S6b 建具種別: detailFigures は knownFields・compareFields に入り matchFields には入らない。差は diffEntries に出る', () => {
+  const def = kindDef(ST);
+  assert.ok(def.knownFields.includes(FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD));
+  assert.ok(def.compareFields.includes(FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD));
+  assert.ok(!def.matchFields.includes(FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD));
+  const a = subType('u1', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-1' } });
+  const b = subType('u1', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-2' } });
+  assert.deepEqual(diffEntries(ST, a, b), [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]);
+  assert.deepEqual(diffEntries(ST, a, a), []);
+  assert.deepEqual(diffEntries(ST, subType('u1'), subType('u1')), [], '割当て無しの旧形は差が出ない');
+});
+
+test('S6b 建具種別 validate: detailFigures は省略・null・オブジェクトのみ許す。参照先の有無は見ない', () => {
+  const def = kindDef(ST);
+  assert.doesNotThrow(() => def.validate(subType('u1')));
+  assert.doesNotThrow(() => def.validate(subType('u1', { detailFigures: null })));
+  assert.doesNotThrow(() => def.validate(subType('u1', { detailFigures: { [DetailSlot.FIGURE]: 'df-no-such' } })));
+  assert.throws(() => def.validate(subType('u1', { detailFigures: ['df-1'] })), /建具種別エントリのdetailFiguresが不正/);
+  assert.throws(() => def.validate(subType('u1', { detailFigures: 'df-1' })), /建具種別エントリのdetailFiguresが不正/);
+  assert.equal(def.isSupported(subType('u1', { detailFigures: { [DetailSlot.FIGURE]: 'df-no-such' } })), true);
+});
+
+test('S6b 推移展開: 使用中の建具種別の detailFigures.figure と、その図が参照する材だけが入り、未使用の図・材は入らない', () => {
+  const df1 = detailFigure('df-1', '姿図1', MAT_X);
+  const df2 = detailFigure('df-2', '姿図2', MAT_Y);
+  setOverlay(DF, { user: [df1, df2] });
+  setOverlay(ST, { user: [subType('u1', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-1' } })] });
+  setOverlay(MAT, { user: [material(MAT_X), material(MAT_Y)] });
+  const kinds = [MAT, ST, DF];
+  const raw = new Map(kinds.map(kind => [kind, new Set()]));
+  raw.get(ST).add('fitting:u1');
+  const used = expandUsedMaterialsTransitively(expandUsedDetailFiguresTransitively(raw, resolvedAll(kinds)), resolvedAll(kinds));
+  assert.deepEqual([...used.get(DF)], ['df-1']);
+  assert.deepEqual([...used.get(MAT)], [MAT_X]);
+  // 対照: 建具種別が使用中でなければ増えない
+  const none = expandUsedDetailFiguresTransitively(new Map(kinds.map(kind => [kind, new Set()])), resolvedAll(kinds));
+  assert.deepEqual([...none.get(DF)], []);
+});
+
+test('【失敗系】S6b 推移展開: 割当て先の図が解決できなくても例外にならず、キーは使用中に入る。detailFigures が壊れた建具種別は展開しない', () => {
+  setOverlay(ST, { user: [
+    subType('u1', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-gone' } }),
+    subType('u2'),
+  ] });
+  const kinds = [MAT, ST, DF];
+  const raw = new Map(kinds.map(kind => [kind, new Set()]));
+  raw.get(ST).add('fitting:u1').add('fitting:u2');
+  const used = expandUsedDetailFiguresTransitively(raw, resolvedAll(kinds));
+  assert.deepEqual([...used.get(DF)], ['df-gone']);
+  const broken = new Map(kinds.map(kind => [kind, new Set()]));
+  broken.get(ST).add('fitting:u3');
+  const resolved = resolvedAll(kinds);
+  resolved.get(ST).set('fitting:u3', { ...subType('u3'), detailFigures: 'df-1' });
+  assert.deepEqual([...expandUsedDetailFiguresTransitively(broken, resolved).get(DF)], []);
+});
+
+test('S6b 回復後の再展開: 回収した建具種別の姿図も足し、無いものは未解決で返る', () => {
+  const { df1 } = setupLibrary();
+  const recovered = withEntries(emptyBundle(), ST, [
+    subType('u1', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-1' } }),
+    subType('u2', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-gone' } }),
+  ]);
+  const figures = reexpandTransitiveDetailFigures(recovered, composeCatalog(DF, []));
+  assert.deepEqual(bundleEntries(figures.bundle, DF), [df1]);
+  assert.deepEqual([...figures.unresolvedDetailFigureKeys], ['df-gone']);
+});
+
+test('S6b 往復: 建具種別の detailFigures は文書ファイルを通って保たれる（未知項目として落ちない）', () => {
+  const st = subType('u1', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-1' } });
+  const back = roundTripThroughDocument(withEntries(emptyBundle(), ST, [st]));
+  assert.deepEqual(bundleEntries(back, ST), [st]);
+});
+
+test('S6b 照合①b-2: 外した同梱 df-B を指していた同梱側の建具種別の detailFigures.figure も df-A へ読み替わる。ライブラリ層は触らない', async () => {
+  const a = detailFigure('df-A', '同じ呼称');
+  const b = detailFigure('df-B', '同じ呼称');
+  const docSt = subType('d1', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-B' } });
+  const docOther = subType('d2', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-other' } });
+  const userSt = subType('l1', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-B' } });
+  setOverlay(ST, { doc: [docSt, docOther], user: [userSt] });
+  await reconcile([a], [b]);
+  const { doc, user } = overlayFor(ST);
+  assert.deepEqual(doc.find(e => e.key === 'd1')[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { [DetailSlot.FIGURE]: 'df-A' });
+  assert.equal(doc.find(e => e.key === 'd2'), docOther, '当たりの無い種別は同一参照のまま');
+  assert.deepEqual(user, [userSt], 'ライブラリ層は触らない');
+  // rewriteDocSymbolDetailFigures は空の表では overlay に触れない（世代も進めない）
+  const gen = overlayGeneration();
+  rewriteDocSymbolDetailFigures([]);
+  assert.equal(overlayGeneration(), gen);
+});
+
+test('S6b 照合の順序: 同梱の建具種別 d1{figure:df-B} がライブラリへ写される前に df-B→df-A が読み替えられ、ライブラリの d1 は df-A を指す', async () => {
+  setOverlay(DF, { user: [detailFigure('df-A', '同じ呼称')], doc: [detailFigure('df-B', '同じ呼称')] });
+  setOverlay(ST, { doc: [subType('d1', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.FIGURE]: 'df-B' } })], user: [] });
+  await reconcileAllInStoreOrder();
+  const lib = overlayFor(ST).user.find(e => e.key === 'd1');
+  assert.ok(lib, '前提: 建具種別はライブラリへ写される');
+  assert.deepEqual(lib[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { [DetailSlot.FIGURE]: 'df-A' });
+});

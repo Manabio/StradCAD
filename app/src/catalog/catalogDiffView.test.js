@@ -95,6 +95,11 @@ test('【失敗系】diffPairs: 未知の種別は例外', () => {
 // ---- fieldLabel（QA指摘Minor-1・ステップ10f・2026-09-23）: FIELD_LABELSの唯一の読み出し口。
 // ui/CatalogMaintenancePanel.jsx の閲覧タブ（ReadonlyKindTab）詳細欄もこれ経由でラベルを引く
 // ——ツールチップ（diffTooltip）と詳細欄で別の日本語名が同時に出る二重定義を防ぐ。 ----
+test('fieldLabel（S6b）: 建具種別の detailFigures は「詳細図」（キーの生文字列を出さない）', () => {
+  assert.equal(fieldLabel('openingSubType', 'detailFigures'), '詳細図');
+  assert.equal(fieldLabel('fixtureSymbol', 'detailFigures'), '詳細図');
+});
+
 test('fieldLabel: FIELD_LABELSに登録済みの項目はその日本語ラベルを返す（material/section/openingSubType）', () => {
   assert.equal(fieldLabel('material', 'thickness'), '厚');
   assert.equal(fieldLabel('section', 'height'), 'せい');

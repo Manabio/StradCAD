@@ -271,9 +271,9 @@ export async function loadCatalogOverlaysFromIDB({
  * （openingSubType）へ、ステップ12dで建具記号（fixtureSymbol）へ一般化した——BUNDLED_KINDS
  * （同梱の一般化。ステップ7c→8f→10d→12d→部分詳細図S2）と同じ7種別）。
  */
-const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.DETAIL_FIGURE, CatalogKind.FIXTURE_SYMBOL];
-// 順序: DETAIL_FIGURE は FIXTURE_SYMBOL より前。詳細図の alias 確定で同梱の記号の detailFigures を読み替えてから
-// 記号を照合しないと、読み替え前の（消えた図を指す）記号がライブラリへ写される。詳細図の依存は材だけ。
+const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.DETAIL_FIGURE, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL];
+// 順序: DETAIL_FIGURE は OPENING_SUB_TYPE・FIXTURE_SYMBOL より前。詳細図の alias 確定で同梱の建具種別（姿図。S6b）・記号の
+// detailFigures を読み替えてから照合しないと、読み替え前の（消えた図を指す）エントリがライブラリへ写される。詳細図の依存は材だけ。
 
 /**
  * 起動時の同梱カタログ照合（ステップ6-1→ステップ7d: 種別ループへ一般化）。loadCatalogOverlaysFromIDB

@@ -40,7 +40,7 @@ test('【不変条件】記号selectのoptionsはfixtureSymbolOptionsの呼び�
 
 // ---- S6a: 部分詳細図の上書き欄（判断は openingDetailRefsEdit.js、jsx は配線だけ） ----
 test('【不変条件】S6a: 詳細図の select は openingDetailRefSelects の結果を map し、変更は commitEdit 経由で detailRefsAfterSelect の値を代入する', () => {
-  assert.ok(/openingDetailRefSelects\(opening\)/.test(codeOnly), 'openingDetailRefSelects を呼んでいない');
+  assert.ok(/openingDetailRefSelects\(opening, undefined, \{ frameOnly: isFrameOnly \}\)/.test(codeOnly), 'openingDetailRefSelects を frameOnly 付きで呼んでいない');
   assert.ok(/detailSelects\.map\(/.test(codeOnly), 'select を detailSelects.map で出していない');
   assert.ok(/onDetailRefChange\s*=\s*\(slot\)\s*=>\s*\(e\)\s*=>\s*commitEdit\(/.test(codeOnly), 'select の変更が commitEdit を通っていない（undo に乗らない）');
   assert.ok(/detailRefsAfterSelect\(opening, slot, e\.target\.value\)/.test(codeOnly), '次の detailRefs を純関数で求めていない');
@@ -54,7 +54,8 @@ test('【不変条件】S6a: R16 ボタンは commitEdit 経由で detailDimensi
   assert.equal((codeOnly.match(/detailDimensionsToCopy\(/g) ?? []).length, 1, '寸法の導出は 1 箇所（描画のたびに書き戻していない）');
 });
 
-test('【不変条件】S6a: 三方枠のときだけ欄を出す（isFrameOnly で絞る）', () => {
-  assert.ok(/const detailSelects = isFrameOnly \?/.test(codeOnly));
+test('【不変条件】S6a/S6b: 方立・上枠と R16 は三方枠のときだけ（isFrameOnly で絞る）。姿図の select は全機構（絞りは frameOnly 引数が方立・上枠だけを外す）', () => {
+  assert.ok(/const detailSelects = openingDetailRefSelects\(opening, undefined, \{ frameOnly: isFrameOnly \}\)/.test(codeOnly));
   assert.ok(/const detailDimensions = isFrameOnly \?/.test(codeOnly));
+  assert.ok(/\{isFrameOnly && \(\s*<div style=\{rowStyle\}>\s*<button/.test(codeOnly), 'R16 ボタンが isFrameOnly で絞られていない');
 });

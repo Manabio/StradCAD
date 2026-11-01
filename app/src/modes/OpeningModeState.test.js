@@ -12,7 +12,9 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { replaceRowsByScenario, defaultResolveDecision } from '../catalog/resolveQueue.js';
 import { ERR_DETAIL_FIT_FAILED } from '../error.js';
-import { jambFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol } from '../openings/openingDetailTestFixtures.js';
+import {
+  jambFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol, elevationFigure, installElevationFigures,
+} from '../openings/openingDetailTestFixtures.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 
@@ -323,6 +325,39 @@ test('【失敗系】init: 詳細図が合わせられる記号・割当て無�
     graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: ok });
     graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: 'WF' });
     graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2500, 800, OpeningCategory.FITTING, 'singleSwing', { fixtureType: ok });
+    const s = new OpeningModeState(graph, project);
+    const { catalogResolveRows } = await s.init();
+    assert.deepEqual(catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed'), []);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('init（S6b）: 姿図の詳細図が建具に合わせられないと、機構によらず場面 detail-fit-failed の行を 1 行作る（同じ図×寸法は重複しない・許可操作は defer だけ）', async () => {
+  const { project, graph, wall } = makeGraph();
+  installElevationFigures([elevationFigure('df-mode-f', { sFixed: 900 })]);
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'singleSwing', { detailRefs: { figure: 'df-mode-f' } });
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 800, OpeningCategory.FITTING, 'singleSwing', { detailRefs: { figure: 'df-mode-f' } });
+    const s = new OpeningModeState(graph, project);
+    const { catalogResolveRows } = await s.init();
+    const rows = catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows.length, 1);
+    assert.deepEqual(rows[0].allowedActions, ['defer']);
+    assert.deepEqual(rows[0].candidates, []);
+    assert.equal(rows[0].targetKey, 'singleSwing', '主語は建具種別');
+    assert.match(rows[0].message, /^詳細図 テスト姿図 を singleSwing の姿図に合わせられません: 固定寸法の和が目標を超える/);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('【失敗系】init（S6b）: 合わせられる姿図・割当て無しの建具は detail-fit-failed の行を作らない', async () => {
+  const { project, graph, wall } = makeGraph();
+  installElevationFigures([elevationFigure('df-mode-f-ok')]);
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'singleSwing', { detailRefs: { figure: 'df-mode-f-ok' } });
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 800, OpeningCategory.FITTING, 'singleSwing');
     const s = new OpeningModeState(graph, project);
     const { catalogResolveRows } = await s.init();
     assert.deepEqual(catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed'), []);

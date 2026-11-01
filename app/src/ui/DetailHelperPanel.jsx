@@ -14,12 +14,12 @@ import { ConfirmDialog } from './ConfirmDialog.jsx';
 import { previewWallThicknessFor } from './catalogPreview.js';
 import { useScrollIntoViewWhenActive } from './useScrollIntoViewWhenActive.js';
 import {
-  DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, DETAIL_NUMPAD_LABELS, FIT_DIM_FIELDS, PEN_BUTTONS, PREVIEW_FRAME_PX,
+  DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, DETAIL_NUMPAD_LABELS, PEN_BUTTONS, PREVIEW_FRAME_PX,
   DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS, DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS,
   newDraft, entryFromForm, freshDocOf, docFromEntry, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, isDraftDirty, undoDraft, penStep, penUp, setClosed,
   setMoveLen, setMoveMode, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, saveDecision, planSave, afterSaveDoc,
-  deleteConfirmMessage, libraryRows, defaultFitDims, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
+  deleteConfirmMessage, libraryRows, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
   libraryMetaLabel, wallThicknessNotice,
 } from './detailHelperForm.js';
@@ -89,9 +89,10 @@ export function DetailHelperPanel({ onClose }) {
   useEffect(() => { rootRef.current?.focus(); }, []);
 
   const fitDims = useMemo(
-    () => ({ ...defaultFitDims(previewWallThicknessFor(null, materialList)), ...fitOverrides }),
-    [materialList, fitOverrides],
+    () => ({ ...defaultFitDimsFor(form, previewWallThicknessFor(null, materialList)), ...fitOverrides }),
+    [materialList, fitOverrides, form],
   );
+  const fitFields = fitDimFieldsFor(form);
   const fitted = useMemo(() => (fitOn ? tryFit(form, fitDims) : null), [fitOn, form, fitDims]);
   const primitives = useMemo(() => previewPrimitivesOf(form, fitted), [form, fitted]);
   const result = useMemo(() => validation(form), [form]);
@@ -325,7 +326,7 @@ export function DetailHelperPanel({ onClose }) {
           <div className="dthlp-toolbar">
             <button className={`dthlp-btn${fitOn ? '' : ' dthlp-btn--active'}`} onClick={() => setFitOn(false)}>{DETAIL_HELPER_TEXT.fitOff}</button>
             <button className={`dthlp-btn${fitOn ? ' dthlp-btn--active' : ''}`} onClick={() => setFitOn(true)}>{DETAIL_HELPER_TEXT.fitOn}</button>
-            {fitOn && FIT_DIM_FIELDS.map(({ field, label }) => (
+            {fitOn && fitFields.map(({ field, label }) => (
               <button key={field} className="dthlp-btn dthlp-btn--small" onClick={() => openNumpad({ kind: 'fit', field }, fitDims[field], label)}>
                 {fitDimButtonLabel(label, fitDims[field])}
               </button>

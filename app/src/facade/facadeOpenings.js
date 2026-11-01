@@ -17,8 +17,7 @@ import { COORD_EPS_MM } from '../elevation/elevationStyle.js';
 import { translatePrimitive, mirrorPrimitiveX } from '../elevation/elevationPrimitives.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
-import { effectiveHeight } from '../openings/openingNumbering.js';
-import { OpeningCategory } from '../core.js';
+import { effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
 import { projectToView, isFacingSegment, isHidden } from './facadeGeometry.js';
 import { FACADE_OPENING_KIND } from './facadeStyle.js';
 
@@ -49,8 +48,6 @@ const projectAlong = (seg, normal, c) => (seg.isVertical
   ? projectToView(normal, seg.value, c)
   : projectToView(normal, c, seg.value));
 
-/** 建具の窓台高さ（FL から。建具（fitting）は 0。姿図 buildOpeningElevation と同じ扱い）。 */
-const sillOf = o => (o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0);
 
 /**
  * 1面分の建具の姿図（図の座標）と件数。
@@ -74,7 +71,7 @@ export function buildFacadeOpenings(inputs, view, { uMin, profiles, minFaceMm = 
       if (!entry) { counts.noEntry++; continue; }
       const p1 = projectAlong(segment, normal, coord1), p2 = projectAlong(segment, normal, coord2);
       const uLo = Math.min(p1.u, p2.u), uHi = Math.max(p1.u, p2.u);
-      const zLo = flMm + sillOf(o), zHi = zLo + effectiveHeight(o);
+      const zLo = flMm + effectiveSillHeight(o), zHi = zLo + effectiveHeight(o);
       const depth = p1.depth;
       const probes = [[(uLo + uHi) / 2, (zLo + zHi) / 2], [uLo, zLo], [uLo, zHi], [uHi, zLo], [uHi, zHi]];
       if (probes.every(([u, z]) => isHidden(profiles, u, z, depth, roofs, normal))) { counts.hidden++; continue; }

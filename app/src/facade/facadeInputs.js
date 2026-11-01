@@ -21,6 +21,7 @@ import { eaveTopZMm, resolveTopStoryHeightMm, STORY_HEIGHT_FALLBACK_MM } from '.
 import { withGraphReadScope } from '../graphReadScope.js';
 import { facadeRoofOf } from './facadeRoof.js';
 import { exteriorOpeningsOn } from './facadeOpenings.js';
+import { collectDetailFigureFailures } from '../openings/openingDetailFitCheck.js';
 
 // 立面の対象の階か（採用・地上階・屋根専用でない）。
 const isFacadePlane = plane => !!plane && !plane.isAlternative && !plane.isRoofPlane && !isBasementPlane(plane);
@@ -62,6 +63,7 @@ export function buildFacadeInputs(floors, project, { roofRegionsOf = null } = {}
   const out = [];
   const roofs = [];
   const skipped = [];
+  const detailSeen = new Set(); // 姿図の詳細図の fit 失敗の重複排除（階をまたいで同じ図×寸法は 1 件）
   targets.forEach(({ plane, graph }, i) => {
     const zLoMm = i === 0 ? glZMm : plane.elevation;
     const next = planes[i + 1];
@@ -79,16 +81,26 @@ export function buildFacadeInputs(floors, project, { roofRegionsOf = null } = {}
       return;
     }
     if (segments.length === 0) { skipped.push({ planeId: plane.id, reason: FacadeSkipReason.NO_EXTERIOR_WALL }); return; }
-    out.push({ planeId: plane.id, zLoMm, zHiMm, segments, openings: exteriorOpeningsOf(skipped, plane, graph, segments) });
+    out.push({ planeId: plane.id, zLoMm, zHiMm, segments, openings: exteriorOpeningsOf(skipped, plane, graph, segments, detailSeen) });
     if (roofRegionsOf) collectRoofs(roofs, skipped, plane, graph, roofRegionsOf, i === targets.length - 1 ? zHiMm : null);
   });
   return { glZMm, floors: out, roofs, skipped };
 }
 
 // 1階分の外壁の建具（S3。facadeOpenings.js exteriorOpeningsOn）。例外は skipped（ERROR）に載せて建具なしで続ける（壁は描く）。
-function exteriorOpeningsOf(skipped, plane, graph, segments) {
+// 建具の姿図の詳細図（S6b）を建具の寸法に合わせられないものは skipped（DETAIL_FIT_FAILED）に載せる（姿図は従来の描き方で描く）。
+function exteriorOpeningsOf(skipped, plane, graph, segments, detailSeen) {
   try {
-    return withGraphReadScope(graph, () => exteriorOpeningsOn(graph.openings, segments, plane.elevation));
+    const list = withGraphReadScope(graph, () => exteriorOpeningsOn(graph.openings, segments, plane.elevation));
+    // 集計の失敗は立面を止める理由にしない（通知が出ないだけ。展開・建具モードの init と同じ扱い）。
+    try {
+      for (const f of collectDetailFigureFailures(list.map(x => x.opening), detailSeen)) {
+        skipped.push({ planeId: plane.id, reason: FacadeSkipReason.DETAIL_FIT_FAILED, message: f.message });
+      }
+    } catch (err) {
+      console.error('[facade] 建具の姿図の詳細図の合わせ込み検査に失敗:', err);
+    }
+    return list;
   } catch (err) {
     skipped.push({ planeId: plane.id, reason: FacadeSkipReason.ERROR, message: String(err?.message ?? err) });
     return [];

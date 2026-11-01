@@ -46,6 +46,7 @@
 - 三方枠は枠の三方の線だけ（展開図のアキのバツ・「ア キ」は描かない。外からは素通しの開口）。カタログに無い種別は飛ばして数える（`noEntry`）。
 - 見付の 1px 保証（`minFaceMm`）は展開図と同じ式を State が倍率から求めて渡す（倍率が変わると作り直す）。
 - 建具の読み取りで例外の階は `skipped`（ERROR）に載せ、その階の壁は描く。
+- 姿図の部分詳細図（`detail-figure-model.md`）の fit 失敗・参照切れは `skipped`（`DETAIL_FIT_FAILED`）に載り、`materialError = error ?? detailError`（初期化失敗・外壁なしが優先。ok の判定には含めない）。
 
 ## 既知の限界
 - S1: 外面は壁が無い区間で通り芯へ落ちる／地階が GL より上へ出る部分は描かない／stories>1 の最上階は `eaveTopZMm`／最下の地上階に graph が無いと次の階が FL から浮く。

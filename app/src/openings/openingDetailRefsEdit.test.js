@@ -17,7 +17,9 @@ import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import {
   openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy, OPENING_DETAIL_REF_SLOTS,
 } from './openingDetailRefsEdit.js';
-import { jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol } from './openingDetailTestFixtures.js';
+import {
+  jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol, elevationFigure, subTypeEntry, installElevationFigures,
+} from './openingDetailTestFixtures.js';
 
 test.afterEach(() => clearOverlays());
 
@@ -33,20 +35,30 @@ function makeFrameGraph(props = {}) {
   return { graph, opening, project: { openingNumberIndex: observable.map() } };
 }
 
-test('select: 方立・上枠の 2 つだけ。先頭は「記号の設定を使う」、図は slot に合うものだけ、現在値は value に出る', () => {
+test('select: 三方枠は方立・上枠・姿図の 3 つ。先頭は「記号の設定を使う」（姿図は建具種別）、図は slot に合うものだけ、現在値は value に出る', () => {
   const list = [
     { key: 'df-j', label: '方立A', category: 'paired', view: 'plan', subject: 'jamb' },
     { key: 'df-h', label: '上枠A', category: 'paired', view: 'section', subject: 'head' },
+    { key: 'df-f', label: '姿図A', category: 'figure', view: 'elevation', subject: 'opening' },
   ];
   const sels = openingDetailRefSelects({ detailRefs: { [JAMB]: 'df-j' } }, list);
   assert.deepEqual(sels.map(s => s.slot), [...OPENING_DETAIL_REF_SLOTS]);
-  assert.deepEqual(OPENING_DETAIL_REF_SLOTS, [JAMB, HEAD]);
-  assert.deepEqual(sels.map(s => s.label), ['部分詳細図（方立）', '部分詳細図（上枠）']);
+  assert.deepEqual(OPENING_DETAIL_REF_SLOTS, [JAMB, HEAD, DetailSlot.FIGURE]);
+  assert.deepEqual(sels.map(s => s.label), ['部分詳細図（方立）', '部分詳細図（上枠）', '部分詳細図（姿図）']);
   assert.deepEqual(sels[0].options.map(o => o.value), ['', 'df-j']);
   assert.deepEqual(sels[1].options.map(o => o.value), ['', 'df-h']);
+  assert.deepEqual(sels[2].options.map(o => o.value), ['', 'df-f'], '姿図は figure/elevation/opening の図だけ');
   assert.equal(sels[0].options[0].label, '記号の設定を使う');
+  assert.equal(sels[2].options[0].label, '建具種別の設定を使う');
   assert.equal(sels[0].value, 'df-j');
   assert.equal(sels[1].value, '');
+});
+
+test('select: 三方枠以外（frameOnly:false）は姿図の select だけ', () => {
+  const sels = openingDetailRefSelects({ detailRefs: { [DetailSlot.FIGURE]: 'df-f' } }, [], { frameOnly: false });
+  assert.deepEqual(sels.map(s => s.slot), [DetailSlot.FIGURE]);
+  assert.equal(sels[0].value, 'df-f');
+  assert.match(sels[0].options.at(-1).label, /見つかりません/, '参照切れは黙って未上書きに見せない');
 });
 
 test('【失敗系】select: 無いキーを持つ建具は「見つかりません」の行を足し、黙って未上書きに見せない。上書き無しは value が空', () => {
@@ -55,7 +67,7 @@ test('【失敗系】select: 無いキーを持つ建具は「見つかりませ
   assert.equal(sels[0].options.at(-1).value, 'df-gone');
   assert.match(sels[0].options.at(-1).label, /見つかりません/);
   const none = openingDetailRefSelects({ detailRefs: null }, []);
-  assert.deepEqual(none.map(s => s.value), ['', '']);
+  assert.deepEqual(none.map(s => s.value), ['', '', '']);
 });
 
 test('detailRefsAfterSelect: 選ぶ・差し替える・空で外す。最後の 1 件を外すと null。元は変えない', () => {
@@ -65,6 +77,20 @@ test('detailRefsAfterSelect: 選ぶ・差し替える・空で外す。最後の
   assert.equal(o.detailRefs, null);
   assert.deepEqual(detailRefsAfterSelect({ detailRefs: a }, HEAD, 'df-2'), { [HEAD]: 'df-2', [JAMB]: 'df-1' });
   assert.equal(detailRefsAfterSelect({ detailRefs: a }, JAMB, ''), null);
+});
+
+test('S6b detailRefsAfterSelect(figure): 建具種別の割当てと同じキーを選ぶと上書きとして持たず外す（キーが一致するときだけ）。方立・上枠の上書きとは独立', () => {
+  installElevationFigures([elevationFigure('df-f1'), elevationFigure('df-f2', { dashX: 150 })], [subTypeEntry('user1', 'df-f1')]);
+  const o = { category: 'fitting', subType: 'user1', detailRefs: null };
+  assert.equal(detailRefsAfterSelect(o, DetailSlot.FIGURE, 'df-f1'), null, '建具種別の図と同じキーは畳む');
+  assert.deepEqual(detailRefsAfterSelect(o, DetailSlot.FIGURE, 'df-f2'), { [DetailSlot.FIGURE]: 'df-f2' });
+  const withJamb = { ...o, detailRefs: { [JAMB]: 'df-j' } };
+  assert.deepEqual(detailRefsAfterSelect(withJamb, DetailSlot.FIGURE, 'df-f2'), { [JAMB]: 'df-j', [DetailSlot.FIGURE]: 'df-f2' });
+  assert.deepEqual(detailRefsAfterSelect(withJamb, DetailSlot.FIGURE, 'df-f1'), { [JAMB]: 'df-j' }, '畳んでも他 slot の上書きは残す');
+  const plain = { category: 'fitting', subType: 'singleSwing', detailRefs: null };
+  assert.deepEqual(detailRefsAfterSelect(plain, DetailSlot.FIGURE, 'df-f1'), { [DetailSlot.FIGURE]: 'df-f1' }, '建具種別に割当てが無ければ畳まない');
+  assert.equal(detailRefsAfterSelect({ detailRefs: { [DetailSlot.FIGURE]: 'df-f2' } }, DetailSlot.FIGURE, ''), null, '空で外す');
+  clearOverlays();
 });
 
 test('R16 detailDimensionsToCopy: 解決後の方立の図の param 束縛（見付 20・出幅 12）を建具の項目名で返す。建具の上書きが記号に勝つ', () => {

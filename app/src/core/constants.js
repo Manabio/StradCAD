@@ -508,6 +508,8 @@ export const FacadeSkipReason = Object.freeze({
   // 階の上端（次の階の FL）が GL 以下＝地上に出る部分が無い（GL が 2FL より上などの異常入力）。
   // 補完（STORY_HEIGHT_FALLBACK_MM）で上端を作ると上の階と z が重なるため、補わずに飛ばす。
   BELOW_GL:         'belowGl',
+  // 外壁の建具の姿図に割り当てた部分詳細図が建具の寸法に合わせられない（姿図は従来の描き方へ戻る。planeId の階の建具。message に理由）。
+  DETAIL_FIT_FAILED: 'detailFitFailed',
   // 以下は屋根（S2。skipped の要素に roofKey が付く）。
   ROOF_NO_OUTLINE:    'roofNoOutline',    // 屋根範囲が空・外形線が無い（その屋根は描かない）
   ROOF_FLAT_FALLBACK: 'roofFlatFallback', // 勾配・水下・到達時刻が作れない（軒の高さの水平線だけ描く）
@@ -571,6 +573,7 @@ export const DetailSlot = Object.freeze({
   SASH_SECTION: 'sashSection',
   NAGESHI:      'nageshi',
   SHIKII:       'shikii',
+  FIGURE:       'figure', // 建具の姿図（正面図）。枠・機構・ハンドルを置き換える（S6b）
 });
 /** 有効な (category, view, subject) の組合せ表。検証（detail/detailModel.js）と割当て先の絞り込みが引く。 */
 export const DETAIL_VIEW_COMBOS = Object.freeze([
@@ -596,6 +599,7 @@ export const DETAIL_SLOT_TARGETS = Object.freeze({
   [DetailSlot.SASH_SECTION]: Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.SASH_SECTION }),
   [DetailSlot.NAGESHI]:      Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.NAGESHI }),
   [DetailSlot.SHIKII]:       Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.SHIKII }),
+  [DetailSlot.FIGURE]:       Object.freeze({ category: DetailCategory.FIGURE, view: DetailView.ELEVATION, subject: DetailSubject.OPENING }),
 });
 /** 基準（Datum）の種別。origin=図を載せる原点・end=伸縮区間の終端。 */
 export const DetailDatumKind = Object.freeze({

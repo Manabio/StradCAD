@@ -6,14 +6,18 @@
 // （通知は建具モード・展開モードの init。R21）。frameProfile は「図が無い／合わせられないときに戻る profile」にだけ効く。
 // ================================================================
 
-import { DetailSlot } from '../core/constants.js';
-import { detailFigureEntry, detailFigureRefsFor, fitDetailLocalMemo } from './openingCatalog.js';
-import { placeDetailSides } from './openingDetailFrame.js';
+import { DetailSlot, DetailDash, DETAIL_PRIM_SOURCE } from '../core/constants.js';
+import { ElevationLineRole, ElevationDash, weightForRole } from '../elevation/elevationStyle.js';
+import { line, polyline } from '../elevation/elevationPrimitives.js';
+import { detailFigureEntry, detailFigureRefsFor, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
+import { placeDetailSides, placeDetailElevation } from './openingDetailFrame.js';
+import { effectiveHeight, effectiveSillHeight } from './openingNumbering.js';
 
 // 要求された枠の図を探す slot の順（head は head の図が無ければ jamb を流用する＝R9）。
 const SLOT_ORDER = Object.freeze({
   [DetailSlot.JAMB]: [DetailSlot.JAMB],
   [DetailSlot.HEAD]: [DetailSlot.HEAD, DetailSlot.JAMB],
+  [DetailSlot.FIGURE]: [DetailSlot.FIGURE],
 });
 
 const refOf = (refs, slot) => {
@@ -26,22 +30,26 @@ const refOf = (refs, slot) => {
  * 枠に使う詳細図の解決（描画と集計が共有する唯一の判定）。優先順は
  * 建具個別の detailRefs ＞ 記号の detailFigures ＞（無ければ既定の profile）。slot の順は SLOT_ORDER
  * （head の要求: detailRefs.head ＞ 記号.head ＞ detailRefs.jamb ＞ 記号.jamb）。
- * @param {{symbolKey:string, detailRefs?:object|null, slot:string}} p slot は DetailSlot.JAMB | DetailSlot.HEAD
- * @returns {null | {intended:{slot:string,key:string,source:'opening'|'symbol'}, drawn:{slot:string,key:string,source:'opening'|'symbol',entry:object}|null}}
- *   source＝参照の出所（'opening'＝建具個別の detailRefs・'symbol'＝記号の detailFigures）。通知文の主語に使う。
+ * 姿図（slot=figure）の「記号側」の参照元は建具種別の detailFigures（呼び出し側が subTypeRefs で渡す。symbolKey は使わない）。
+ * @param {{symbolKey?:string, detailRefs?:object|null, slot:string, subTypeRefs?:object|null}} p
+ *   slot は DetailSlot.JAMB | HEAD | FIGURE
+ * @returns {null | {intended:{slot:string,key:string,source:'opening'|'symbol'|'subType'}, drawn:{slot:string,key:string,source:'opening'|'symbol'|'subType',entry:object}|null}}
+ *   source＝参照の出所（'opening'＝建具個別の detailRefs・'symbol'＝記号の detailFigures・'subType'＝建具種別の detailFigures）。通知文の主語に使う。
  *   null＝参照が1つも無い（従来どおり）。intended＝優先順の先頭の参照（利用者の意図）。drawn＝実在する図のうち先頭
  *   （intended の図が無いとき、後ろの候補の図を流用する）。drawn が null＝参照はあるが図が1つも実在しない。
  */
-export function resolveDetailFigure({ symbolKey, detailRefs = null, slot }) {
-  const symbolRefs = detailFigureRefsFor(symbolKey);
+export function resolveDetailFigure({ symbolKey, detailRefs = null, slot, subTypeRefs = null }) {
+  const isFigure = slot === DetailSlot.FIGURE;
+  const baseSource = isFigure ? 'subType' : 'symbol';
+  const baseRefs = isFigure ? subTypeRefs : detailFigureRefsFor(symbolKey);
   const candidates = [];
   for (const s of SLOT_ORDER[slot] ?? []) {
-    // detailRefs がこの slot を null で明示しているときは「なし」＝記号側の同じ slot を候補にしない
+    // detailRefs がこの slot を null で明示しているときは「なし」＝記号（姿図は建具種別）側の同じ slot を候補にしない
     // （保守パネルのプレビューが、保存済みの割当てを未保存で外した状態を描くための口）。キー無し・undefined は従来どおり記号へ進む。
     // 永続化（S6）は「空なら書かない」規約なので、保存された detailRefs に null は現れない。
     const openingSaysNone = detailRefs !== null && typeof detailRefs === 'object' && Object.hasOwn(detailRefs, s) && detailRefs[s] === null;
-    for (const [source, refs] of [['opening', detailRefs], ['symbol', symbolRefs]]) {
-      if (source === 'symbol' && openingSaysNone) continue;
+    for (const [source, refs] of [['opening', detailRefs], [baseSource, baseRefs]]) {
+      if (source === baseSource && openingSaysNone) continue;
       const key = refOf(refs, s);
       if (key !== undefined) candidates.push({ slot: s, key, source });
     }
@@ -77,4 +85,60 @@ export function resolveDetailFrame({ symbolKey, detailRefs = null, slot, coord1,
   if (fitted.error) return fitted;
   const sides = placeDetailSides(fitted, { coord1, coord2, faceMin });
   return { sides, profiles: sides.flat() };
+}
+
+/** 姿図の fit の寸法 dims（描画 resolveDetailElevation と集計 openingDetailFitCheck.js が共有する唯一の式）。 */
+export function elevationDetailDims(opening) {
+  return { width: opening.width, height: effectiveHeight(opening), sill: effectiveSillHeight(opening) };
+}
+
+// 図の線の太さの役割（LINE_WEIGHT_MM のキー）→ 展開図の線種の役割。極太は展開図の語彙に無いので最も太い切断線へ寄せる。
+const ELEVATION_ROLE_BY_WEIGHT_ROLE = Object.freeze({
+  ultraThick: ElevationLineRole.CUT,
+  thick:      ElevationLineRole.CUT,
+  medium:     ElevationLineRole.SILHOUETTE,
+  thin:       ElevationLineRole.DETAIL,
+});
+
+/**
+ * 写像済みのストローク（placeDetailElevation の結果）を姿図のプリミティブにする。実線＝polyline・破線＝線分ごとの line
+ * （展開図の Konva は polyline の dash を描かず、閉じた polyline は塗るため、閉じ辺は始点を末尾に足した開いた折れ線で表す）。
+ * 全プリミティブに source:'detail' を付ける（立面が kind を上書きするので kind は使わない）。型は line／polyline だけ。
+ */
+function detailStrokesToElevationPrimitives(strokes) {
+  const out = [];
+  for (const st of strokes) {
+    const pts = st.closed && st.points.length > 1 ? [...st.points, st.points[0]] : st.points;
+    if (pts.length < 2) continue;
+    const weight = weightForRole(ELEVATION_ROLE_BY_WEIGHT_ROLE[st.line?.weightRole] ?? ElevationLineRole.DETAIL);
+    if (st.line?.dashRole === DetailDash.DASHED) {
+      for (let i = 1; i < pts.length; i += 1) {
+        out.push(line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], { weight, dash: ElevationDash.DASHED, source: DETAIL_PRIM_SOURCE }));
+      }
+    } else {
+      out.push(polyline(pts, { weight, source: DETAIL_PRIM_SOURCE }));
+    }
+  }
+  return out;
+}
+
+/**
+ * 建具の姿図（正面図）の詳細図を（幅・高さ・窓台高さ）に合わせてプリミティブにする（S6b）。buildOpeningElevation の内部から呼ぶ
+ * （展開・立面・建具エディタ・カタログプレビューは buildOpeningElevation を呼ぶだけ）。解決順は
+ * 建具個別の opening.detailRefs.figure ＞ 建具種別エントリの detailFigures.figure。
+ * @param {{opening:object, entry?:object|null}} p entry＝建具種別エントリ（findCatalogEntry の結果。未保存ドラフトでもよい）
+ * @returns {null | {error:{code:string, message:string}} | {primitives: object[]}}
+ *   null＝参照が無い、または参照先の図が実在しない（従来どおり）。error＝fit できない（従来の姿図へ戻る。通知は init）。
+ *   primitives＝壁の座標昇順＝図の x 昇順の正準向き（FL を y=0・上方は負）。
+ */
+export function resolveDetailElevation({ opening, entry = null }) {
+  const r = resolveDetailFigure({
+    detailRefs: opening.detailRefs ?? null, slot: DetailSlot.FIGURE,
+    subTypeRefs: subTypeDetailFigureRefsFor(opening.category, opening.subType, entry),
+  });
+  if (!r?.drawn) return null;
+  const dims = elevationDetailDims(opening);
+  const fitted = fitDetailLocalMemo({ figureKey: r.drawn.key, slot: r.drawn.slot, dims });
+  if (fitted.error) return fitted;
+  return { primitives: detailStrokesToElevationPrimitives(placeDetailElevation(fitted, { sillTop: -dims.sill })) };
 }

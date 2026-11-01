@@ -193,8 +193,9 @@ export class ElevationModeState {
    */
   _detailFitMessage() {
     try {
-      // 展開の断面が実際に使う上枠の分だけ試す（head の図があれば head、無ければ jamb の流用。平面の方立は対象外）。
-      const failures = collectDetailFitFailures(this.graph, undefined, { slots: [DetailSlot.HEAD] });
+      // 展開の断面が実際に使う上枠（head の図があれば head、無ければ jamb の流用。平面の方立は対象外）と、
+      // 建具の姿図（S6b）の分だけ試す。
+      const failures = collectDetailFitFailures(this.graph, undefined, { slots: [DetailSlot.HEAD, DetailSlot.FIGURE] });
       if (failures.length === 0) return null;
       return failures.length === 1
         ? failures[0].message

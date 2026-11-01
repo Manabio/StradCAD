@@ -371,13 +371,15 @@ const REGISTRY = Object.assign(Object.create(null), {
       return { category: m[1], key: m[2] };
     },
     encoding: 'json',
-    knownFields: ['category', 'key', 'label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout'],
+    // detailFigures（任意）＝{ figure? } の詳細図キー（S6b。姿図の差し替え。建具記号の detailFigures と同型・旧ビルドでは未知項目として保持される）。
+    knownFields: ['category', 'key', 'label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout', FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD],
     requiredFields: ['category', 'key', 'label', 'mechanism', 'defaultWidth', 'defaultHeight'],
     // ステップ12a（Q-B確定）: category/keyはkeyOfの複合キーそのもの、mechanismは開閉の仕組み
     // （断面と同型の理由——OpeningEditor.jsx等の機構別UI分岐がmechanismを前提にしている）ため固定。
     keyBoundFields: ['category', 'key', 'mechanism'],
     overrideLockedFields: [],
-    compareFields: ['label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout'],
+    // detailFigures は入れ子のため厳密比較（matchFields には入れない。建具記号と同じ）。
+    compareFields: ['label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout', FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD],
     // Q-B（2026-09-23裁定）: 呼称（label）差は通知しない。全文書が建具を同梱するため、本体の
     // 呼称を1件直すと全旧文書で通知が出てしまう（材のspec/thicknessと同型の割り切り）。
     // defaultWidth/defaultHeight・mechanism等は引き続き通知する（heightが未設定の旧建具が
@@ -419,6 +421,10 @@ const REGISTRY = Object.assign(Object.create(null), {
       }
       if (entry.slideLayout !== undefined && !isPlainObject(entry.slideLayout)) {
         throw new Error('建具種別エントリのslideLayoutが不正です（オブジェクトが必要）');
+      }
+      const detailFigures = entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
+      if (detailFigures !== undefined && detailFigures !== null && !isPlainObject(detailFigures)) {
+        throw new Error(`建具種別エントリの${FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD}が不正です（オブジェクトまたはnull/undefinedが必要）`);
       }
     },
     // 場面(c)unsupported（2026-09-23 ステップ10d）: validateはmechanismの型（string）しか

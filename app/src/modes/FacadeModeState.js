@@ -3,6 +3,7 @@ import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { screenMmToModelMm, clampScrollY } from '../elevation/elevationLayout.js';
 import { FACADE_EMPTY_MESSAGE, FACADE_INIT_ERROR_MESSAGE, FacadeSkipReason } from '../core/constants.js';
+import { ERR_DETAIL_FIT_FAILED_MORE } from '../error.js';
 import { CANVAS_BG_COLOR, faceGapLimitMm } from '../elevation/elevationStyle.js';
 import { buildFacadeInputs } from '../facade/facadeInputs.js';
 import { leanToPlanRegions, topRoofPlanRegions } from '../structural/roofFramingRegions.js';
@@ -83,12 +84,17 @@ export class FacadeModeState {
       const faces = this._buildFaces();
       // 読めなかった階・外壁の取得で例外の階があれば（残りの階は描いたうえで）初期化失敗を知らせる。
       const partFailed = readFailed || inputs.skipped.some(s => s.reason === FacadeSkipReason.ERROR);
+      // 建具の姿図の詳細図を合わせられないもの（S6b）。初期化失敗・外壁なしが優先。最初の1件の文言に残りの件数を添える。
+      const detailMessages = inputs.skipped.filter(s => s.reason === FacadeSkipReason.DETAIL_FIT_FAILED).map(s => s.message);
+      const detailError = detailMessages.length === 0 ? null
+        : detailMessages.length === 1 ? detailMessages[0]
+          : ERR_DETAIL_FIT_FAILED_MORE(detailMessages[0], detailMessages.length - 1);
       const error = partFailed ? FACADE_INIT_ERROR_MESSAGE
         : faces.length === 0 ? FACADE_EMPTY_MESSAGE : null;
       runInAction(() => {
         this.faces = faces;
         this.loading = false;
-        this.materialError = error;
+        this.materialError = error ?? detailError; // ok の判定は詳細図の通知を含めない（展開モードと同じ）
       });
       // 倍率（viewSize で変わる）が変わったら注記の換算をやり直して model を作り直す。
       this._scaleReactionDispose = reaction(

@@ -14,7 +14,9 @@ import { findFixtureSymbol } from '../openings/openingCatalog.js';
 import { LINE_WEIGHT_MM, DEFAULT_WALL_MATERIAL } from '../core.js';
 import { DEFAULT_WALL_BASE, DEFAULT_WALL_FINISH } from '../finish/wallGeneration.js';
 import { DetailLenMode, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
-import { jambFigure, uniqueSymbolKey, installFrameSymbol } from '../openings/openingDetailTestFixtures.js';
+import {
+  jambFigure, uniqueSymbolKey, installFrameSymbol, elevationFigure, installElevationFigures,
+} from '../openings/openingDetailTestFixtures.js';
 
 // AutoScaledFigure.jsx renderPrimitive の既知type集合（2026-09-23時点。同期コメント: AutoScaledFigure.jsx
 // のswitch文のcase一覧が増減したらここも合わせる——本テストが「知らない型を静かに描かない」ことの網）。
@@ -627,6 +629,32 @@ test('buildCatalogPreview(fixtureSymbol): 保存済み jamb=A を未保存で「
     // 記号を保存していない同形のドラフト（既定 profile）と一致する。
     clearOverlays();
     assert.deepEqual(none, prim({ ...saved, key: uniqueSymbolKey() }));
+  } finally {
+    clearOverlays();
+  }
+});
+
+// ---- 29. S6b: 建具種別の姿図（entry.detailFigures.figure）はプレビュー（呼出し元の 1 つ）でも差し替わる ----
+test('buildCatalogPreview(openingSubType・姿図): 未保存の entry.detailFigures.figure で姿図が詳細図（source:detail）になる。割当て無し・参照切れ・fit 失敗は従来の姿図', () => {
+  try {
+    installElevationFigures([elevationFigure('df-prev-f'), elevationFigure('df-prev-bad', { sFixed: 5000 })]);
+    // 保存していないドラフト（user1 は overlay に無い）。幅 800・高さ 2000
+    const draft = { category: 'fitting', key: 'user9', label: '試験', mechanism: OpeningMechanism.SWING, defaultWidth: 800, defaultHeight: 2000 };
+    const plain = buildCatalogPreview(CatalogKind.OPENING_SUB_TYPE, draft, { view: 'elevation' });
+    assert.equal(plain.ok, true);
+    assert.equal(plain.primitives.filter(p => p.source === 'detail').length, 0);
+    const withFig = buildCatalogPreview(CatalogKind.OPENING_SUB_TYPE,
+      { ...draft, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { figure: 'df-prev-f' } }, { view: 'elevation' });
+    assert.equal(withFig.ok, true);
+    assert.equal(withFig.primitives.filter(p => p.source === 'detail').length, 4, '実線 polyline 2 本＋破線 line 2 本');
+    assert.equal(withFig.primitives.filter(p => p.type === 'rect').length, 0, '従来の枠の rect は無い');
+    assertKnownTypes(withFig.primitives, '姿図プレビュー');
+    for (const ref of ['df-none', 'df-prev-bad']) {
+      const r = buildCatalogPreview(CatalogKind.OPENING_SUB_TYPE,
+        { ...draft, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { figure: ref } }, { view: 'elevation' });
+      assert.equal(r.ok, true, ref);
+      assert.deepEqual(r.primitives, plain.primitives, `${ref}: 従来の姿図`);
+    }
   } finally {
     clearOverlays();
   }
