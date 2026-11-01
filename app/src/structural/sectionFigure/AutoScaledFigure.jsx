@@ -180,13 +180,18 @@ function renderPrimitive(p, i, t, interactive, linePts) {
         stroke={p.stroke ?? COLOR.stroke} strokeWidth={p.width ?? 1}
         strokeDasharray={p.dash === 'center' ? AXIS_DASH : p.dash === 'dashed' ? '4 3' : undefined} />;
     }
-    case 'polyline':
+    case 'polyline': {
       // width/dash は任意（未指定なら従来どおり幅1・実線）。ui/catalogPreview.js
       // planSymbolToFigurePrimitives（建具平面記号プレビュー。ステップ11f）が渡す
       // ——'line'型と異なりL字の外角閉じ（figureLineJoin.js）は掛からない。
-      return <polyline key={i} points={p.points.map(([x, y]) => `${t.tx(x)},${t.ty(y)}`).join(' ')}
+      // closed は SVG の <polygon> で描く（<polyline> は fill しか閉じず線が閉じない。部分詳細図の閉じた
+      // ストロークは「始点へ戻る手を書かない」規約＝描画側が閉じる責務。renderer/figurePrimitivesKonva.jsx の
+      // Line closed と同じ見え方。2026-11-01）。
+      const Tag = p.closed ? 'polygon' : 'polyline';
+      return <Tag key={i} points={p.points.map(([x, y]) => `${t.tx(x)},${t.ty(y)}`).join(' ')}
         fill={p.closed ? (p.fill ?? 'none') : 'none'} stroke={p.stroke ?? COLOR.stroke} strokeWidth={p.width ?? 1}
         strokeDasharray={p.dash === 'dashed' ? '4 3' : undefined} />;
+    }
     case 'hSection':
       return renderHSection(p, i, t);
     case 'text':

@@ -1,7 +1,8 @@
 // ================================================================
 // ヘルパー画面のプレビュー用に、図を SvgFigurePrimitive の列へ変換する（純関数）。
 //   - LenSpec.mm で歩く（fit しない。param・material も mm のまま）。
-//   - 各ストローク: polyline（closed は closed:true を付ける。AutoScaledFigure が塗りなしで閉じて描く）＋頂点番号の text。
+//   - 各ストローク: polyline（closed は closed:true を付ける。AutoScaledFigure は closed を SVG の <polygon> で描き線を閉じる。
+//     <polyline> のままだと fill しか閉じず四角が開いて見えた＝2026-11-01 の DXF 矩形の目視で発覚・修正）＋頂点番号の text。
 //   - 各 Move: 寸法 dim（横移動は dir 'h'、縦移動は 'v'）。editable:true と editKey:{strokeId, moveIndex} を付ける。
 //     'V'（斜め）の Move は寸法を出さない。既知の限界（斜め寸法は先送り）。
 //   - ストロークは origin の Anchor の頂点が origin の Datum の offsetMm に来るよう平行移動して描く（Anchor が揃わない下書きは原点のまま）。
