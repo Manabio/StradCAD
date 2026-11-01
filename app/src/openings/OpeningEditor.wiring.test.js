@@ -37,3 +37,24 @@ test('【不変条件】OpeningEditor.jsx の記号selectは getFixtureSymbols �
 test('【不変条件】記号selectのoptionsはfixtureSymbolOptionsの呼び出し結果をmapするだけ', () => {
   assert.ok(/fixtureSymbolOptions\([\s\S]*?\)\.map\(/.test(codeOnly), 'fixtureSymbolOptions(...).map( の形が見つからない');
 });
+
+// ---- S6a: 部分詳細図の上書き欄（判断は openingDetailRefsEdit.js、jsx は配線だけ） ----
+test('【不変条件】S6a: 詳細図の select は openingDetailRefSelects の結果を map し、変更は commitEdit 経由で detailRefsAfterSelect の値を代入する', () => {
+  assert.ok(/openingDetailRefSelects\(opening\)/.test(codeOnly), 'openingDetailRefSelects を呼んでいない');
+  assert.ok(/detailSelects\.map\(/.test(codeOnly), 'select を detailSelects.map で出していない');
+  assert.ok(/onDetailRefChange\s*=\s*\(slot\)\s*=>\s*\(e\)\s*=>\s*commitEdit\(/.test(codeOnly), 'select の変更が commitEdit を通っていない（undo に乗らない）');
+  assert.ok(/detailRefsAfterSelect\(opening, slot, e\.target\.value\)/.test(codeOnly), '次の detailRefs を純関数で求めていない');
+  assert.ok(/opening\.detailRefs\s*=\s*next/.test(codeOnly), 'detailRefs へ代入していない');
+});
+
+test('【不変条件】S6a: R16 ボタンは commitEdit 経由で detailDimensionsToCopy の値を書き、値が無ければ disabled。自動の書き戻しは無い', () => {
+  assert.ok(/onCopyDetailDimensions\s*=\s*\(\)\s*=>\s*\{[\s\S]*?commitEdit\(/.test(codeOnly), 'R16 が commitEdit を通っていない');
+  assert.ok(/disabled=\{detailDimensions == null\}/.test(codeOnly), '値が無いときに disabled にしていない');
+  assert.ok(/OPENING_DETAIL_REF_TEXT\.copyDimensions/.test(codeOnly), 'ボタン文言を共通のラベル表から引いていない');
+  assert.equal((codeOnly.match(/detailDimensionsToCopy\(/g) ?? []).length, 1, '寸法の導出は 1 箇所（描画のたびに書き戻していない）');
+});
+
+test('【不変条件】S6a: 三方枠のときだけ欄を出す（isFrameOnly で絞る）', () => {
+  assert.ok(/const detailSelects = isFrameOnly \?/.test(codeOnly));
+  assert.ok(/const detailDimensions = isFrameOnly \?/.test(codeOnly));
+});

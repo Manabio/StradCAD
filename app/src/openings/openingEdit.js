@@ -78,6 +78,7 @@ const EDITABLE = [
   'refOffset', 'width', 'height', 'subType', 'hingeSide', 'swingSide', 'fixtureType', 'sillHeight',
   'finish', 'materialGlass', 'frameDepth', 'hardware', 'note', 'handleHeight',
   'frameFaceWidth', 'frameProjection',
+  'detailRefs', // 凍結した正規形（core/detailRefs.js）を差し替える方式なので参照の共有で安全
 ];
 
 /** Opening の編集可能フィールドのみを持つ plain object スナップショット（refCL は id で保持）。 */
@@ -120,6 +121,7 @@ function addOpeningFromSnapshot(graph, o) {
       finish: o.finish, materialGlass: o.materialGlass, frameDepth: o.frameDepth, hardware: o.hardware, note: o.note,
       handleHeight: o.handleHeight,
       frameFaceWidth: o.frameFaceWidth, frameProjection: o.frameProjection,
+      detailRefs: o.detailRefs,
     }, o.id);
 }
 

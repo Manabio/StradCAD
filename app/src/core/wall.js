@@ -5,6 +5,7 @@ import { makeObservable, observable, computed } from 'mobx';
 import { ShapeType } from './constants.js';
 import { Shape } from './shapeBase.js';
 import { coordLo as _coordLo, coordHi as _coordHi } from './_internal.js';
+import { normalizeDetailRefs } from './detailRefs.js';
 
 // ----------------------------------------------------------------
 // 壁: 軸 CL 参照 + オフセット + 直交 CL 参照端点
@@ -169,6 +170,8 @@ export class Wall extends Shape {
 //   frameDepth: 見込み(mm、null=未設定)。0は不正値としてnull扱い（heightと同じ規約。openings/層で正規化）
 //   frameFaceWidth: 三方枠の見付(mm、null=未設定)。0以下/nullはframeDepthと同じ規約
 //   frameProjection: 三方枠の壁面からの出幅(mm、null=未設定)。0以下/nullはframeDepthと同じ規約
+//   detailRefs: 部分詳細図の上書き({[slot]: 詳細図キー}|null。null=記号の設定に従う)。空の写像はnullに正規化
+//     （core/detailRefs.js）。値は凍結した別オブジェクトで差し替える（observable.ref・中身は書き換えない）
 // ----------------------------------------------------------------
 const WALL_END_CORNER_EPS = 0.5; // mm
 
@@ -230,6 +233,7 @@ export class Opening extends Shape {
     this.note           = props?.note           ?? null; // 備考（建具表の自由入力）
     this.frameFaceWidth  = props?.frameFaceWidth  ?? null; // 三方枠の見付(mm、null=未設定)
     this.frameProjection = props?.frameProjection ?? null; // 三方枠の壁面からの出幅(mm、null=未設定)
+    this.detailRefs      = normalizeDetailRefs(props?.detailRefs); // 部分詳細図の上書き({[slot]: キー}|null)
     makeObservable(this, {
       axisCL:      observable.ref,
       wallSide:    observable,
@@ -250,6 +254,7 @@ export class Opening extends Shape {
       note:          observable,
       frameFaceWidth:  observable,
       frameProjection: observable,
+      detailRefs:      observable.ref,
       centerCoord: computed,
       coord1:      computed,
       coord2:      computed,

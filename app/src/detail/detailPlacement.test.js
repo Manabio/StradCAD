@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DETAIL_PRIM_SOURCE } from '../core/constants.js';
-import { fitLocal, placeStrokes, fitAndPlace } from './detailPlacement.js';
+import { fitLocal, placeStrokes, fitAndPlace, paramMmOf } from './detailPlacement.js';
 import { fitDetailFigure, DetailFitError } from './detailFit.js';
-import { stretchFigure, rectFigure } from './detailTestFixtures.js';
+import { stretchFigure, rectFigure, figureOf, strokeOf, move, paramLen, fixedLen } from './detailTestFixtures.js';
+import { PenDir, DetailParam } from '../core/constants.js';
 
 const ZERO = { datums: { ds0: 0, dt0: 0 } };
 // 矩形（幅 100・高さ 50）: 局所座標の頂点 4 つ (0,0) (100,0) (100,50) (0,50)。閉じ辺は描画側が補う
@@ -53,4 +54,22 @@ test('fitAndPlace: 成功時は配置済みストローク、fit が error な�
   assert.equal(ng.error.code, DetailFitError.FIXED_EXCEEDS_TARGET);
   assert.deepEqual(ng, fitDetailFigure(stretchFigure(), { datums: { ds0: 0, dt0: 0, dt1: 15 } }));
   assert.equal(Array.isArray(ng), false);
+});
+
+test('paramMmOf（S6a・R16）: param 束縛の mm を param 名で返す。同じ param は先頭の正の値、固定値・不正な mm は含めない', () => {
+  const fig = figureOf([strokeOf('a', [
+    move(PenDir.RIGHT, paramLen(DetailParam.FRAME_FACE_WIDTH, 20)),
+    move(PenDir.DOWN, paramLen(DetailParam.FRAME_PROJECTION, 0)),
+    move(PenDir.DOWN, paramLen(DetailParam.FRAME_PROJECTION, 12)),
+    move(PenDir.LEFT, paramLen(DetailParam.FRAME_FACE_WIDTH, 99)),
+    move(PenDir.UP, fixedLen(7)),
+  ])]);
+  assert.deepEqual(paramMmOf(fig), { [DetailParam.FRAME_FACE_WIDTH]: 20, [DetailParam.FRAME_PROJECTION]: 12 });
+});
+
+test('【失敗系】paramMmOf: 図が null・strokes が壊れている・param 束縛が無い図は空（例外にしない）', () => {
+  assert.deepEqual(paramMmOf(null), {});
+  assert.deepEqual(paramMmOf({ strokes: 'oops' }), {});
+  assert.deepEqual(paramMmOf({ strokes: [{ moves: [{ dir: 'Z', len: paramLen('x', 5) }] }] }), {});
+  assert.deepEqual(paramMmOf(rectFigure()), {});
 });

@@ -100,6 +100,8 @@ export function openingBaseSignature(opening) {
  * 見付・出幅は三方枠（FRAME_ONLY）にだけ意味を持つため、三方枠は実効値（未設定＝既定20/12と
  * 明示20/12を同一視する）、それ以外の機構は常に'-'にする——扉のある建具に紛れ込んだ値で
  * グループが割れないようにする。
+ * 部分詳細図の上書き（opening.detailRefs。R15）は含めない——建具表の項目ではなく、含めると上書きだけで
+ * 枝番・タグが動く。
  */
 export function openingSubSignature(opening) {
   const frameOnly = findCatalogEntry(opening.category, opening.subType)?.mechanism === OpeningMechanism.FRAME_ONLY;

@@ -1,6 +1,7 @@
 import { runInAction } from 'mobx';
 import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec, restoreCeilingZones, restoreRoofZones } from '@core';
 import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
+import { normalizeDetailRefs } from './core/detailRefs.js';
 import { normalizeBasementStructure } from './structural/structureRules.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 import {
@@ -82,6 +83,7 @@ function buildSnapshot(graph) {
       frameDepth: o.frameDepth ?? null, hardware: o.hardware ?? null, note: o.note ?? null,
       handleHeight: o.handleHeight ?? null,
       frameFaceWidth: o.frameFaceWidth ?? null, frameProjection: o.frameProjection ?? null,
+      detailRefs: normalizeDetailRefs(o.detailRefs),
       ...baseProps(o),
     })),
     diagonals: gs.filter(s => s.type === ShapeType.DIAGONAL).map(d => ({
@@ -818,7 +820,8 @@ function applySnapshot(graph, snapshot) {
             finish: d.finish ?? null, materialGlass: d.materialGlass ?? null,
             frameDepth: d.frameDepth ?? null, hardware: d.hardware ?? null, note: d.note ?? null,
             handleHeight: d.handleHeight ?? null,
-            frameFaceWidth: d.frameFaceWidth ?? null, frameProjection: d.frameProjection ?? null }, d.id);
+            frameFaceWidth: d.frameFaceWidth ?? null, frameProjection: d.frameProjection ?? null,
+            detailRefs: d.detailRefs ?? null }, d.id);
       }
     }
 

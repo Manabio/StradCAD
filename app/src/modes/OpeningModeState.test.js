@@ -331,6 +331,26 @@ test('【失敗系】init: 詳細図が合わせられる記号・割当て無�
   }
 });
 
+test('【失敗系】init（S6a）: 無いキーを detailRefs に持つ建具（保存→読込み後）は not-found の行を 1 行作る。記号の割当ては無くても描ける', async () => {
+  const { project, graph, wall } = makeGraph();
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, {});
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { fixtureType: sym, detailRefs: { jamb: 'df-gone' } }, 'o-gone');
+    const reopened = new PlanGraph(graph.plane);
+    reopened._structGraph = graph._structGraph;
+    restoreGraph(reopened, serializeGraph(graph));
+    assert.deepEqual(reopened.openings.find(o => o.id === 'o-gone').detailRefs, { jamb: 'df-gone' });
+    const s = new OpeningModeState(reopened, project);
+    const rows = (await s.init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows.length, 1);
+    assert.match(rows[0].message, /建具個別の指定/);
+    assert.deepEqual(rows[0].allowedActions, ['defer']);
+  } finally {
+    clearOverlays();
+  }
+});
+
 test('init: 非アクティブ階（peek）の三方枠も詳細図の検査対象で、階をまたいで同じ組は1行にまとまる', async () => {
   const project = new Project('proj-opening-mode-detail-multi', 'test');
   const { graph: g1 } = project.addPlane(0, '1階', 'p1');

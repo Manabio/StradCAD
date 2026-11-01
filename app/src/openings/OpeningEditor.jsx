@@ -16,6 +16,8 @@ import {
   flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange, fixtureSymbolOptions,
 } from './openingEdit.js';
 import { openingTagOf, fixtureSymbolOf, effectiveFrameProjection } from './openingNumbering.js';
+import { openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy } from './openingDetailRefsEdit.js';
+import { OPENING_DETAIL_REF_TEXT } from '../catalog/catalogMaintenance.js';
 
 // 数値入力は絶対値化して確定する（幅・高さ・位置・窓台高さ共通の規約。図上のdim編集（onEditDim）・
 // numField の両方で使う）。height/handleHeight はさらに絶対値化後の0を不正値として未設定(null)に
@@ -149,6 +151,21 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
     });
   });
 
+  // 部分詳細図の上書き（三方枠だけ。S6a）。変更は他の編集と同じ commitEdit（undo に乗る）。
+  const detailSelects = isFrameOnly ? openingDetailRefSelects(opening) : [];
+  const detailDimensions = isFrameOnly ? detailDimensionsToCopy(opening) : null;
+  const onDetailRefChange = (slot) => (e) => commitEdit(() => {
+    const next = detailRefsAfterSelect(opening, slot, e.target.value);
+    runInAction(() => { opening.detailRefs = next; });
+  });
+  // R16: 解決後の方立の図の寸法（見付・出幅）を建具の項目へ写す。自動の書き戻しはしない。
+  const onCopyDetailDimensions = () => {
+    if (detailDimensions == null) return;
+    commitEdit(() => runInAction(() => {
+      for (const [field, mm] of Object.entries(detailDimensions)) opening[field] = mm;
+    }));
+  };
+
   const numField = (field, { allowNull = false, zeroAsNull = false } = {}) => (e) => {
     const v = e.target.value;
     runInAction(() => {
@@ -278,6 +295,22 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
             <span style={labelStyle}>出幅(mm)</span>
             <input type="number" style={inputStyle} value={opening.frameProjection || ''}
               onChange={numField('frameProjection', { allowNull: true, zeroAsNull: true })} {...fieldUndoProps} />
+          </div>
+
+          {/* 部分詳細図の上書き（S6a）。空の選択肢＝この建具は上書きせず記号の設定に従う。判断は openingDetailRefsEdit.js */}
+          {detailSelects.map(sel => (
+            <div key={sel.slot} style={rowStyle}>
+              <span style={labelStyle}>{sel.label}</span>
+              <select style={inputStyle} value={sel.value} onChange={onDetailRefChange(sel.slot)}>
+                {sel.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          ))}
+          <div style={rowStyle}>
+            <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
+              disabled={detailDimensions == null} onClick={onCopyDetailDimensions}>
+              {OPENING_DETAIL_REF_TEXT.copyDimensions}
+            </button>
           </div>
         </>
       )}

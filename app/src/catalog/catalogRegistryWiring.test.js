@@ -177,11 +177,20 @@ test('【不変条件・ステップ6-1】store.js: bootReadyがreconcileIncomin
 // doc・userが両方空ならcontinueでスキップし（不変条件7-1: 本体標準マスタは新規文書の起動では
 // 読まない）、builtinはkindDef(kind).loadBuiltin()経由で読む（materialData.js等の直接動的importが
 // reconcileIncomingCatalogs本体から消える）。
-test('【不変条件・ステップ7d→8f→10d→12d→部分詳細図S2】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS = [MATERIAL, INTERIOR_MASTER, BOUNDARY_MASTER, SECTION, OPENING_SUB_TYPE, FIXTURE_SYMBOL, DETAIL_FIGURE]の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
+test('【不変条件・S6a】store.js: RECONCILE_KINDS は DETAIL_FIGURE が FIXTURE_SYMBOL より前（記号の照合の前に詳細図の読み替えを済ませる）', () => {
+  const src = readSrc('store.js');
+  const m = /const RECONCILE_KINDS = \[([^\]]*)\];/.exec(src);
+  assert.ok(m, 'RECONCILE_KINDS が見つからない');
+  const kinds = m[1].split(',').map(s => s.trim().replace('CatalogKind.', ''));
+  assert.ok(kinds.indexOf('DETAIL_FIGURE') >= 0 && kinds.indexOf('FIXTURE_SYMBOL') >= 0);
+  assert.ok(kinds.indexOf('DETAIL_FIGURE') < kinds.indexOf('FIXTURE_SYMBOL'), `順序が逆: ${kinds.join(',')}`);
+});
+
+test('【不変条件・ステップ7d→8f→10d→12d→部分詳細図S2→S6a】store.js: reconcileIncomingCatalogsはRECONCILE_KINDS（7種別）の種別ループで、種別ごとに doc・user両方空ならcontinueし、kindDef(kind).loadBuiltin()経由でbuiltinを読む', () => {
   const src = readSrc('store.js');
   assert.ok(
-    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.FIXTURE_SYMBOL, CatalogKind\.DETAIL_FIGURE\];/.test(src),
-    'store.js に RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL, CatalogKind.DETAIL_FIGURE] が見つからない',
+    /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.DETAIL_FIGURE, CatalogKind\.FIXTURE_SYMBOL\];/.test(src),
+    'store.js に RECONCILE_KINDS（7種別）が見つからない',
   );
   const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');

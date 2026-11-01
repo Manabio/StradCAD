@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   CatalogKind, KIND_LABELS, kindDef, listKinds,
 } from './catalogKinds.js';
-import { setOverlay, clearOverlays, overlayFor, composeCatalog } from './catalogRegistry.js';
+import { setOverlay, clearOverlays, overlayFor, composeCatalog, overlayGeneration } from './catalogRegistry.js';
 import {
   emptyBundle, withEntries, bundleEntries, validateBundle, splitBundleByKind,
 } from './catalogBundle.js';
@@ -17,12 +17,14 @@ import {
   reexpandTransitiveMaterials, reexpandTransitiveDetailFigures,
 } from './usedEntries.js';
 import { loadCatalogOverlaysFromIDB } from './catalogOverlayLoader.js';
-import { planIncomingReconcile, applyReconcilePlan } from './incomingReconcile.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { planIncomingReconcile, applyReconcilePlan, rewriteDocSymbolDetailFigures } from './incomingReconcile.js';
 import { buildResolveRows, defaultResolveDecision } from './resolveQueue.js';
 import { formatDetailViewLabel, formatCategoryLabel } from './catalogMaintenance.js';
 import { diffEntries } from './catalogMatch.js';
 import {
-  SNAPSHOT_REF_WALKERS, setDocumentAliases, clearDocumentAliases,
+  SNAPSHOT_REF_WALKERS, setDocumentAliases, clearDocumentAliases, applyDocumentCodeNormalization,
 } from './codeNormalization.js';
 import { buildDocumentJson, parseDocumentEnvelope } from '../storage/documentFile.js';
 import { isSupportedDetailFigure } from '../detail/detailModel.js';
@@ -441,26 +443,68 @@ test('重複禁止: 呼称・分類・向き・主題のどれかが違えば別
 
 // ---- walker・使用キー収集 ----
 
-test('walker: detailFigure は enumerate が空で rewrite が null。collectUsedKeys／collectUsedKeysByKind は空 Set を返す', () => {
+test('walker（S6a）: detailFigure の enumerate は openings[].detailRefs の値を列挙し、rewrite は関数。使用キー収集に合流する', () => {
   const walker = SNAPSHOT_REF_WALKERS[DF];
   assert.ok(walker, 'SNAPSHOT_REF_WALKERS に detailFigure が登録されている');
-  assert.deepEqual([...walker.enumerate({ rooms: [], openings: [{ fixtureType: 'WF' }] })], []);
-  assert.equal(walker.rewrite, null);
+  assert.equal(typeof walker.rewrite, 'function');
   assert.deepEqual(Object.keys(SNAPSHOT_REF_WALKERS).sort(), listKinds().sort(), 'walker は全種別に 1 つずつ');
-  assert.ok(collectUsedKeys({}).detailFigure instanceof Set);
+  const snapshot = {
+    rooms: [],
+    openings: [
+      { id: 'o1', fixtureType: 'WF', detailRefs: { head: 'df-h', jamb: 'df-j' } },
+      { id: 'o2', fixtureType: 'WF', detailRefs: null },
+      { id: 'o3', fixtureType: 'WF' },
+      { id: 'o4', fixtureType: 'WF', detailRefs: { jamb: 'df-j', sill: '', nageshi: 3 } },
+    ],
+  };
+  assert.deepEqual([...walker.enumerate(snapshot)], [
+    { code: 'df-h', location: 'opening', openingId: 'o1', slot: 'head' },
+    { code: 'df-j', location: 'opening', openingId: 'o1', slot: 'jamb' },
+    { code: 'df-j', location: 'opening', openingId: 'o4', slot: 'jamb' },
+  ]);
+  assert.deepEqual([...collectUsedKeys(snapshot).detailFigure].sort(), ['df-h', 'df-j']);
+  assert.deepEqual([...collectUsedKeysByKind([snapshot, { openings: [{ id: 'o9', detailRefs: { jamb: 'df-z' } }] }], [DF]).get(DF)].sort(), ['df-h', 'df-j', 'df-z']);
+  // 参照の無い・空のスナップショットは空 Set（例外にしない）
   assert.equal(collectUsedKeys({}).detailFigure.size, 0);
   assert.equal(collectUsedKeys(null).detailFigure.size, 0);
-  const byKind = collectUsedKeysByKind([{ openings: [] }], [DF]);
-  assert.deepEqual([...byKind.get(DF)], []);
+  assert.deepEqual([...walker.enumerate(null)], []);
+  assert.deepEqual([...collectUsedKeysByKind([{ openings: [] }], [DF]).get(DF)], []);
 });
 
-test('【失敗系】walker: rewrite が無い detailFigure に非空の alias を積むと例外（黙って効かない読み替えを作らない）。空なら通る', () => {
-  assert.throws(() => setDocumentAliases(DF, { 'df-1': 'df-2' }), /alias.*対応していません/);
+test('walker（S6a）: rewrite は alias 表で detailRefs の値だけ書き換える。表に無い値・他の項目・元のスナップショットは変えない', () => {
+  const walker = SNAPSHOT_REF_WALKERS[DF];
+  const snapshot = {
+    openings: [
+      { id: 'o1', fixtureType: 'WF', detailRefs: { head: 'df-h', jamb: 'df-old' } },
+      { id: 'o2', fixtureType: 'WF', detailRefs: { jamb: 'df-keep' } },
+      { id: 'o3', fixtureType: 'WF', detailRefs: null },
+    ],
+  };
+  const before = JSON.stringify(snapshot);
+  const { snapshot: next, unresolved } = walker.rewrite(snapshot, new Map([['df-old', 'df-new']]));
+  assert.deepEqual(next.openings[0].detailRefs, { head: 'df-h', jamb: 'df-new' });
+  assert.equal(next.openings[1], snapshot.openings[1], '表に無い建具は同一参照のまま');
+  assert.equal(next.openings[2], snapshot.openings[2]);
+  assert.deepEqual(unresolved, []);
+  assert.equal(JSON.stringify(snapshot), before, '元のスナップショットを書き換えない');
+  // 表に当たりが無ければスナップショットごと同一参照
+  assert.equal(walker.rewrite(snapshot, new Map([['df-x', 'df-y']])).snapshot, snapshot);
+  // 削除・廃止（to=null）は据え置きで unresolved へ
+  const dropped = walker.rewrite(snapshot, new Map([['df-old', null]]));
+  assert.deepEqual(dropped.snapshot.openings[0].detailRefs, { head: 'df-h', jamb: 'df-old' });
+  assert.deepEqual(dropped.unresolved, [{ code: 'df-old', location: 'opening', openingId: 'o1', slot: 'jamb' }]);
+});
+
+test('【失敗系】walker（S6a）: detailFigure への alias は積める（rewrite がある）。循環は従来どおり例外。applyDocumentCodeNormalization が detailRefs を書き換える', () => {
+  assert.doesNotThrow(() => setDocumentAliases(DF, { 'df-1': 'df-2' }));
+  const snap = { openings: [{ id: 'o1', fixtureType: 'WF', detailRefs: { jamb: 'df-1' } }] };
+  assert.deepEqual(applyDocumentCodeNormalization(snap).openings[0].detailRefs, { jamb: 'df-2' });
+  assert.throws(() => setDocumentAliases(DF, { 'df-1': 'df-2', 'df-2': 'df-1' }), /循環/);
   assert.doesNotThrow(() => setDocumentAliases(DF, null));
   assert.doesNotThrow(() => setDocumentAliases(DF, {}));
 });
 
-// ---- 起動時照合（rewrite:null の種別は alias／propose を作らない。案A） ----
+// ---- 起動時照合（S6a で rewrite を得た: 他の種別と同じく alias／propose を作る。S2 の案A は仕様変更で外れた） ----
 
 function otherStrokes() {
   return [strokeOf('a', [move(PenDir.RIGHT, fixedLen(30)), move(PenDir.DOWN, fixedLen(8))])];
@@ -486,27 +530,112 @@ test('照合①a: ライブラリ df-A・同梱 df-B（呼称等は同じで線�
   assert.deepEqual([...composeCatalog(DF, []).keys()].sort(), ['df-A', 'df-B']);
 });
 
-test('照合①b: ライブラリ df-A と中身が完全に同じ同梱 df-B（キー違い）は alias を作らず、例外なく同梱側を外して合成も通る', async () => {
+test('照合①b（S6a）: ライブラリ df-A と中身が完全に同じ同梱 df-B（キー違い）は alias になり、同梱側を外して合成も通り、スナップショットの参照も df-A へ読み替わる', async () => {
   const a = detailFigure('df-A', '同じ呼称');
   const b = detailFigure('df-B', '同じ呼称');
   const { plan, result, commits } = await reconcile([a], [b]);
-  assert.deepEqual(plan.aliases, [], 'alias を積むと addDocumentAliases が例外になる');
-  assert.deepEqual(result.aliasPairs, []);
-  assert.equal(result.skipped.length, 1, '重複で追加は弾かれる');
+  assert.deepEqual(plan.aliases, [{ from: 'df-B', to: 'df-A' }]);
+  assert.deepEqual(result.aliasPairs, [{ from: 'df-B', to: 'df-A' }]);
+  assert.equal(result.skipped.length, 0);
   assert.equal(commits.length, 0);
-  assert.deepEqual(overlayFor(DF).doc, [], '重複した同梱は overlay から外す（残すと合成後の重複禁止で保存が止まる）');
+  assert.deepEqual(overlayFor(DF).doc, [], '読み替えた同梱は overlay から外す（残すと合成後の重複禁止で保存が止まる）');
   assert.deepEqual([...composeCatalog(DF, []).keys()], ['df-A']);
+  const snap = applyDocumentCodeNormalization({ openings: [{ id: 'o1', detailRefs: { jamb: 'df-B', head: 'df-A' } }] });
+  assert.deepEqual(snap.openings[0].detailRefs, { jamb: 'df-A', head: 'df-A' });
 });
 
-test('照合②: 部分一致（線は同じで呼称だけ違う）でも propose 行は作られず、別物として追加される', async () => {
+test('照合①b-2（S6a）: 外した同梱 df-B を指していた同梱側の建具記号の detailFigures も df-A へ読み替わる。ライブラリ層の記号・無関係の割当ては触らない', async () => {
+  const a = detailFigure('df-A', '同じ呼称');
+  const b = detailFigure('df-B', '同じ呼称');
+  const docWf = symbol('WF', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.JAMB]: 'df-B', [DetailSlot.HEAD]: 'df-other' } });
+  const docSf = symbol('SF', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.JAMB]: 'df-other' } });
+  const docNone = symbol('SSF');
+  const userWf = symbol('USR', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.JAMB]: 'df-B' } });
+  setOverlay(FS, { doc: [docWf, docSf, docNone], user: [userWf] });
+  await reconcile([a], [b]);
+  const { doc, user } = overlayFor(FS);
+  assert.deepEqual(doc.find(e => e.key === 'WF')[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { [DetailSlot.JAMB]: 'df-A', [DetailSlot.HEAD]: 'df-other' });
+  assert.equal(doc.find(e => e.key === 'SF'), docSf, '当たりの無い記号は同一参照のまま');
+  assert.equal(doc.find(e => e.key === 'SSF'), docNone);
+  assert.deepEqual(user, [userWf], 'ライブラリ層は触らない');
+});
+
+/**
+ * store.js reconcileIncomingCatalogs の種別ループ（順序は store.js の RECONCILE_KINDS を読む）を純モジュールで再現する。
+ * commit はライブラリ（overlay の user）へ書く。本体（builtin）は空として扱う。
+ */
+async function reconcileAllInStoreOrder() {
+  const src = fs.readFileSync(path.join(import.meta.dirname, '..', 'store.js'), 'utf8');
+  const m = /const RECONCILE_KINDS = \[([^\]]*)\];/.exec(src);
+  const kinds = m[1].split(',').map(s => CatalogKind[s.trim().replace('CatalogKind.', '')]);
+  const plans = {};
+  for (const kind of kinds) {
+    const { doc, user } = overlayFor(kind);
+    if (doc.length === 0 && user.length === 0) continue;
+    const plan = planIncomingReconcile({ kind, docEntries: doc, appEntries: user, origins: new Map() });
+    plans[kind] = plan;
+    await applyReconcilePlan(plan, {
+      kind, currentUser: user,
+      commitUserFn: async next => { setOverlay(kind, { doc: overlayFor(kind).doc, user: next }); },
+    });
+  }
+  return plans;
+}
+
+test('照合の順序（S6a）: 同梱の記号 WQ{jamb:df-B} がライブラリへ写される前に df-B→df-A が読み替えられ、ライブラリの WQ は df-A を指す', async () => {
+  setOverlay(DF, { user: [detailFigure('df-A', '同じ呼称')], doc: [detailFigure('df-B', '同じ呼称')] });
+  setOverlay(FS, { doc: [symbol('WQ', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.JAMB]: 'df-B' } })], user: [] });
+  await reconcileAllInStoreOrder();
+  const libWq = overlayFor(FS).user.find(e => e.key === 'WQ');
+  assert.ok(libWq, '前提: 記号はライブラリへ写される');
+  assert.deepEqual(libWq[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { [DetailSlot.JAMB]: 'df-A' });
+});
+
+test('照合の順序（S6a）: ライブラリに WQ{jamb:df-A} があり同梱が WQ{jamb:df-B} なら、読み替え後の記号の照合は same（通知・差分なし）', async () => {
+  setOverlay(DF, { user: [detailFigure('df-A', '同じ呼称')], doc: [detailFigure('df-B', '同じ呼称')] });
+  setOverlay(FS, {
+    doc: [symbol('WQ', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.JAMB]: 'df-B' } })],
+    user: [symbol('WQ', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.JAMB]: 'df-A' } })],
+  });
+  const plans = await reconcileAllInStoreOrder();
+  assert.deepEqual(plans[FS].same, ['WQ']);
+  assert.deepEqual(plans[FS].adoptDoc, []);
+});
+
+test('指示UI（S6a）: detailFigure の propose を承認した読み替えの組は、同梱の記号の detailFigures にも反映される（store.js applyCatalogResolutions と同じ呼び出し）', () => {
+  setOverlay(FS, { doc: [symbol('WQ', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.JAMB]: 'df-B' } })], user: [] });
+  rewriteDocSymbolDetailFigures([{ from: 'df-B', to: 'df-A' }]);
+  assert.deepEqual(overlayFor(FS).doc[0][FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { [DetailSlot.JAMB]: 'df-A' });
+});
+
+test('【不変条件】指示UI（S6a）: store.js applyCatalogResolutions は detailFigure の alias 確定で rewriteDocSymbolDetailFigures を呼ぶ', () => {
+  const src = fs.readFileSync(path.join(import.meta.dirname, '..', 'store.js'), 'utf8')
+    .split(/\r?\n/).filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n');
+  assert.ok(/pKind === CatalogKind\.DETAIL_FIGURE\)\s*rewriteDocSymbolDetailFigures\(pairs\)/.test(src));
+});
+
+test('【失敗系】照合①b-3（S6a）: alias が無い照合（呼称だけ違う等）は記号の overlay に触れない（世代も進めない）', async () => {
+  const docWf = symbol('WF', { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [DetailSlot.JAMB]: 'df-B' } });
+  setOverlay(FS, { doc: [docWf], user: [] });
+  const gen = overlayGeneration();
+  await reconcile([detailFigure('df-A', '呼称A')], [detailFigure('df-B', '呼称B')]);
+  assert.equal(overlayFor(FS).doc[0], docWf);
+  assert.equal(overlayGeneration(), gen + 1, 'setOverlay(DF) の 1 回だけ。記号の overlay は書き換えない');
+});
+
+test('照合②（S6a）: 部分一致（線は同じで呼称だけ違う）は propose 行になり、同梱は残る（自動では置き換えない）', async () => {
   const a = detailFigure('df-A', '呼称A');
   const b = detailFigure('df-B', '呼称B');
   const { plan, result } = await reconcile([a], [b]);
-  assert.deepEqual(plan.proposals, []);
+  assert.equal(plan.proposals.length, 1);
+  assert.equal(plan.proposals[0].from, 'df-B');
   assert.deepEqual(plan.aliases, []);
-  assert.deepEqual(result.addedKeys, ['df-B']);
+  assert.deepEqual(plan.adds, []);
+  assert.deepEqual(result.addedKeys, []);
   assert.equal(composeCatalog(DF, []).size, 2);
-  assert.deepEqual(buildResolveRows({ kind: DF, proposals: plan.proposals, unsupported: plan.unsupported }), []);
+  const rows = buildResolveRows({ kind: DF, proposals: plan.proposals, unsupported: plan.unsupported, userEntries: [a] });
+  assert.deepEqual(rows.map(r => r.scenario), ['propose']);
+  assert.deepEqual(rows[0].allowedActions, ['approve', 'pick', 'addToLibrary', 'defer']);
 });
 
 test('重複禁止③: 線・呼称・分類・向き・主題がすべて同じ（キー違い）は三層合成後に重複。線だけ・呼称だけ違えば別物', () => {
@@ -519,7 +648,7 @@ test('重複禁止③: 線・呼称・分類・向き・主題がすべて同じ
   assert.equal(composeCatalog(DF, []).size, 2, '呼称が違えば別物');
 });
 
-test('指示UI④: rewrite:null の種別の行は全場面で許可操作が「保留」だけ（aliasPairs を生む操作を出さない）。他の種別は従来どおり', () => {
+test('指示UI④（S6a）: detailFigure の行の許可操作は他の種別と同じ（場面ごとの従来どおり。保留だけに絞らない）', () => {
   const broken = detailFigure('df-bad', '壊れ', null, { strokes: [strokeOf('a', [move('Z', fixedLen(10))])] });
   const rows = buildResolveRows({
     kind: DF,
@@ -530,9 +659,15 @@ test('指示UI④: rewrite:null の種別の行は全場面で許可操作が「
     userEntries: [detailFigure('df-A', 'A')],
   });
   assert.deepEqual(rows.map(r => r.scenario).sort(), ['library-conflict', 'propose', 'unresolved-code', 'unsupported']);
+  const EXPECTED = {
+    'library-conflict': ['approve', 'pick', 'markOverride', 'defer'],
+    'unresolved-code': ['approve', 'pick', 'defer'],
+    unsupported: ['approve', 'pick', 'defer'],
+    propose: ['approve', 'pick', 'addToLibrary', 'defer'],
+  };
   for (const row of rows) {
-    assert.deepEqual(row.allowedActions, ['defer'], `${row.scenario}`);
-    assert.deepEqual(defaultResolveDecision(row), { action: 'defer', pick: null });
+    assert.deepEqual(row.allowedActions, EXPECTED[row.scenario], `${row.scenario}`);
+    assert.equal(defaultResolveDecision(row).action, 'defer', `${row.scenario}: 既定の決定は保留`);
   }
   const fsRows = buildResolveRows({ kind: FS, unsupported: [symbol('ZZ', { mechanism: 'swing' })] });
   assert.deepEqual(fsRows[0].allowedActions, ['approve', 'pick', 'defer']);

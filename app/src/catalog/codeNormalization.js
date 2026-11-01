@@ -584,12 +584,60 @@ function rewriteFixtureSymbolRefs(snapshot, table) {
   return { snapshot: { ...snapshot, openings }, unresolved };
 }
 
+// ----------------------------------------------------------------
+// detailFigure: openings[].detailRefs（建具 1 件の部分詳細図の上書き。{[slot]: 詳細図キー}）の値（S6a）。
+// slot は問わない（全 slot をデータとして通す）。対象は空でない文字列の値だけ。
+// カタログ→カタログの参照（建具記号エントリの detailFigures）はスナップショットに無いので、
+// ここでは扱わず incomingReconcile.js applyReconcilePlan が読み替える。
+// ----------------------------------------------------------------
+function enumerateDetailFigureRefs(snapshot) {
+  if (!snapshot) return [];
+  const refs = [];
+  for (const opening of snapshot.openings ?? []) {
+    const detailRefs = opening?.detailRefs;
+    if (detailRefs === null || typeof detailRefs !== 'object') continue;
+    for (const [slot, key] of Object.entries(detailRefs)) {
+      if (typeof key === 'string' && key !== '') refs.push({ code: key, location: 'opening', openingId: opening.id, slot });
+    }
+  }
+  return refs;
+}
+
+function normalizeDetailRefsOf(openings, table, unresolved) {
+  if (!Array.isArray(openings)) return openings;
+  let changedAny = false;
+  const next = openings.map(opening => {
+    const detailRefs = opening?.detailRefs;
+    if (detailRefs === null || typeof detailRefs !== 'object') return opening;
+    let changed = false;
+    const mappedRefs = {};
+    for (const [slot, key] of Object.entries(detailRefs)) {
+      if (typeof key !== 'string' || key === '') { mappedRefs[slot] = key; continue; }
+      const mapped = normalizeCode(key, table, unresolved, { location: 'opening', openingId: opening.id, slot });
+      mappedRefs[slot] = mapped;
+      if (mapped !== key) changed = true;
+    }
+    if (!changed) return opening;
+    changedAny = true;
+    return { ...opening, detailRefs: mappedRefs };
+  });
+  return changedAny ? next : openings;
+}
+
+function rewriteDetailFigureRefs(snapshot, table) {
+  if (!snapshot) return { snapshot, unresolved: [] };
+  const unresolved = [];
+  const openings = normalizeDetailRefsOf(snapshot.openings, table, unresolved);
+  if (openings === snapshot.openings) return { snapshot, unresolved };
+  return { snapshot: { ...snapshot, openings }, unresolved };
+}
+
 /**
  * 参照所在の唯一の集約点（kind → {enumerate(snapshot), rewrite(snapshot, table)|null}）。
  * enumerate は catalog/usedEntries.js collectUsedKeys（保存時の使用キー収集）と
  * applyDocumentCodeNormalization の unresolved 検出が共有する。rewrite が null の種別は
  * まだ参照の書換え先を持たない——setDocumentAliases/addDocumentAliases でその種別に非空の
- * aliasesを積もうとすると例外になる（ステップ10bで全5種別のrewriteが出揃い、部分詳細図 detailFigure が該当。S6 で rewrite を入れる予定）。
+ * aliasesを積もうとすると例外になる（現在は全7種別が rewrite を持つ。部分詳細図は S6a で出揃った）。
  */
 export const SNAPSHOT_REF_WALKERS = Object.freeze({
   material: Object.freeze({
@@ -616,12 +664,10 @@ export const SNAPSHOT_REF_WALKERS = Object.freeze({
     enumerate: enumerateFixtureSymbolRefs,
     rewrite: rewriteFixtureSymbolRefs,
   }),
-  // 部分詳細図: スナップショットからの参照はまだ無い（S2）。書換え先が無いので rewrite:null
-  // （非空の alias を積むと setDocumentAliases が例外にする＝黙って効かない読み替えを作らない）。
-  // S6 以降が enumerate に列挙を足し、S6 で実際の rewrite を入れる。
+  // 部分詳細図: スナップショットからの参照は openings[].detailRefs の値（S6a）。
   [CatalogKind.DETAIL_FIGURE]: Object.freeze({
-    enumerate: () => [],
-    rewrite: null,
+    enumerate: enumerateDetailFigureRefs,
+    rewrite: rewriteDetailFigureRefs,
   }),
 });
 
@@ -778,7 +824,7 @@ export function peekUnresolvedCodes() {
 /**
  * 実効中の正規化表を snapshot に適用する（全種別。文書固有の表が無ければ種別ごとの
  * 本体表だけで正規化する。material以外は本体表が空のため、文書固有の読み替えが無ければ
- * 実質no-op）。rewrite:null の種別（現状は部分詳細図 detailFigure。S6 で rewrite を入れる予定）は
+ * 実質no-op）。rewrite:null の種別（現状は無い）は
  * ここでは読み飛ばす（enumerateは別途 collectUsedKeys 等が使う）。
  * 未解決コードは kind+code+location（`unresolvedDedupeKey`）で重複排除して蓄積する——同じ
  * snapshot（階）を繰り返し適用しても（undo/redo・再読込み等）蓄積が単調増加しない。

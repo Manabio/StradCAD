@@ -13,7 +13,8 @@
 import { CatalogKind, kindDef, KIND_LABELS } from './catalogKinds.js';
 import { classifyIncoming, assertNoDuplicate, displayNameOf } from './catalogMatch.js';
 import { addDocumentAliases, SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
-import { overlayFor, removeDocEntry } from './catalogRegistry.js';
+import { overlayFor, removeDocEntry, setOverlay } from './catalogRegistry.js';
+import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
 
 /**
  * 文書同梱（docEntries）を appEntries（user+builtin。docは含まない）と照合し、
@@ -40,6 +41,7 @@ export function planIncomingReconcile({ kind, docEntries, appEntries, origins })
   const unsupported = [];
   // 参照の書換え先が無い種別（walker の rewrite が null）は読み替え（alias）を積めない
   // （積むと addDocumentAliases が例外）。alias／propose は作らず、同梱を別物として扱う（add）。
+  // 現在は全種別が rewrite を持つので当たる種別は無い（部分詳細図は S6a で rewrite を得た）。将来の種別の安全弁。
   const cannotAlias = SNAPSHOT_REF_WALKERS[kind]?.rewrite === null;
 
   for (const docEntry of docEntries ?? []) {
@@ -134,6 +136,34 @@ export function formatReconcileNotice(plan, { kind, addedCount = 0, skippedCount
 }
 
 /**
+ * 部分詳細図の読み替え（from→to）を、同梱（overlay の doc 層）の建具記号エントリの detailFigures の値へ反映する
+ * （カタログ→カタログの参照。スナップショットの openings[].detailRefs は walker の rewrite が受け持つ）。
+ * ライブラリ層（user）の記号は触らない。書き換えがあれば doc を差し替える（無ければ overlay に触れない）。
+ * @param {Array<{from:string,to:string}>} pairs
+ */
+export function rewriteDocSymbolDetailFigures(pairs) {
+  const table = new Map((pairs ?? []).map(({ from, to }) => [from, to]));
+  if (table.size === 0) return;
+  const { doc, user } = overlayFor(CatalogKind.FIXTURE_SYMBOL);
+  let changedAny = false;
+  const nextDoc = doc.map(entry => {
+    const refs = entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
+    if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) return entry;
+    let changed = false;
+    const nextRefs = {};
+    for (const [slot, key] of Object.entries(refs)) {
+      const to = typeof key === 'string' ? table.get(key) : undefined;
+      nextRefs[slot] = to ?? key;
+      if (to !== undefined) changed = true;
+    }
+    if (!changed) return entry;
+    changedAny = true;
+    return { ...entry, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: nextRefs };
+  });
+  if (changedAny) setOverlay(CatalogKind.FIXTURE_SYMBOL, { doc: nextDoc, user });
+}
+
+/**
  * plan（planIncomingReconcileの戻り値）を実際に反映する。
  * - aliases: addAliasesFn(plan.aliases) を（非空なら）1回呼ぶ——文書固有の読み替え表へ追記する。
  *   続けて、alias確定した doc エントリ（from＝そのdocEntry自身のキー）を removeDocEntryFn(kind, from)
@@ -153,12 +183,13 @@ export function formatReconcileNotice(plan, { kind, addedCount = 0, skippedCount
  *           commitUserFn: (nextUser: object[]) => Promise<void>,
  *           addAliasesFn?: (kind: string, pairs: Array<{from:string,to:string}>) => void,
  *           removeDocEntryFn?: (kind: string, key: string) => void,
+ *           rewriteDocRefsFn?: (pairs: Array<{from:string,to:string}>) => void,
  *           onSkipped?: (entry: object, error: Error) => void }} args
  * @returns {Promise<{ addedKeys: string[], aliasPairs: Array<{from:string,to:string}>, skipped: Array<{entry:object, reason:string}> }>}
  */
 export async function applyReconcilePlan(plan, {
   kind, currentUser, commitUserFn, addAliasesFn = addDocumentAliases,
-  removeDocEntryFn = removeDocEntry, onSkipped,
+  removeDocEntryFn = removeDocEntry, rewriteDocRefsFn = rewriteDocSymbolDetailFigures, onSkipped,
 }) {
   const def = kindDef(kind);
 
@@ -170,6 +201,9 @@ export async function applyReconcilePlan(plan, {
     for (const { from } of plan.aliases) {
       if (docKeys.has(from)) removeDocEntryFn(kind, from);
     }
+    // 部分詳細図: 外した同梱を指す同梱側の建具記号の割当て（カタログ→カタログの参照）も読み替える。
+    // スナップショット側（openings[].detailRefs）は addAliasesFn の表を walker の rewrite が引く。
+    if (kind === CatalogKind.DETAIL_FIGURE) rewriteDocRefsFn(plan.aliases);
   }
 
   let nextUser = currentUser;
@@ -192,7 +226,7 @@ export async function applyReconcilePlan(plan, {
   // 読み替え（alias）を積めない種別では、重複で追加を弾いた同梱を overlay の doc に残すと、
   // 合成後の重複禁止が毎回例外になり以後の保存が止まる——alias 確定時と同じく doc から外す
   // （参照されていても、保存時の回収（store.js saveCatalogDocument の recoverUnresolvedEntries）で
-  // 同梱に温存される。参照の読み替えは S6）。
+  // 同梱に温存される）。現在は当たる種別が無い安全弁。
   if (SNAPSHOT_REF_WALKERS[kind]?.rewrite === null && skipped.length > 0) {
     const docKeys = new Set(overlayFor(kind).doc.map(e => def.keyOf(e)));
     for (const { entry } of skipped) {

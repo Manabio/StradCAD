@@ -38,7 +38,7 @@ import {
   clearDocumentAliases, currentDocumentAliases, takeUnresolvedCodes, addDocumentAliases,
 } from './catalog/codeNormalization.js';
 import { loadCatalogOverlaysFromIDB as applyCatalogOverlays } from './catalog/catalogOverlayLoader.js';
-import { planIncomingReconcile, formatReconcileNotice, applyReconcilePlan } from './catalog/incomingReconcile.js';
+import { planIncomingReconcile, formatReconcileNotice, applyReconcilePlan, rewriteDocSymbolDetailFigures } from './catalog/incomingReconcile.js';
 import { commitUserEntries, upsertUserCatalogEntry } from './catalog/catalogMaintenance.js';
 import { buildResolveRows, applyResolveDecisions, replaceRowsByScenario } from './catalog/resolveQueue.js';
 import { REMOVED_MATERIALS } from './catalog/legacyMaterialCodes.js';
@@ -271,7 +271,9 @@ export async function loadCatalogOverlaysFromIDB({
  * （openingSubType）へ、ステップ12dで建具記号（fixtureSymbol）へ一般化した——BUNDLED_KINDS
  * （同梱の一般化。ステップ7c→8f→10d→12d→部分詳細図S2）と同じ7種別）。
  */
-const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL, CatalogKind.DETAIL_FIGURE];
+const RECONCILE_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.DETAIL_FIGURE, CatalogKind.FIXTURE_SYMBOL];
+// 順序: DETAIL_FIGURE は FIXTURE_SYMBOL より前。詳細図の alias 確定で同梱の記号の detailFigures を読み替えてから
+// 記号を照合しないと、読み替え前の（消えた図を指す）記号がライブラリへ写される。詳細図の依存は材だけ。
 
 /**
  * 起動時の同梱カタログ照合（ステップ6-1→ステップ7d: 種別ループへ一般化）。loadCatalogOverlaysFromIDB
@@ -457,6 +459,8 @@ export async function applyCatalogResolutions(decisions) {
       for (const { from } of pairs) {
         if (docKeys.has(from)) removeDocEntry(pKind, from);
       }
+      // 部分詳細図: 同梱側の建具記号の detailFigures（カタログ→カタログの参照）も読み替える（起動時照合と同じ）。
+      if (pKind === CatalogKind.DETAIL_FIGURE) rewriteDocSymbolDetailFigures(pairs);
     }
     const activeGraph = project.activeGraph;
     if (activeGraph) restoreGraph(activeGraph, serializeGraph(activeGraph));

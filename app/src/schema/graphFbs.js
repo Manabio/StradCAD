@@ -13,6 +13,7 @@ import { Builder, ByteBuffer } from 'flatbuffers';
 import { normalizeSubType } from '../openings/openingCatalog.js';
 import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION, normalizeBasementStructure } from '../structural/structureRules.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
+import { normalizeDetailRefs } from '../core/detailRefs.js';
 import { StairPortSide, StairSoffitFinish } from '../core/constants.js';
 import { DEFAULT_PLAN_CUT_HEIGHT_MM, DEFAULT_CEILING_CUT_HEIGHT_MM } from '../core/plane.js';
 
@@ -266,7 +267,7 @@ const SHS = {
 const SITE_KIND_ENC = { boundary: 0, road: 1, survey: 2, roadWidth: 3, other: 4 };
 const SITE_KIND_DEC = ['boundary', 'road', 'survey', 'roadWidth', 'other'];
 
-// Opening: 28 フィールド（開口 — 建具・窓）
+// Opening: 30 フィールド（開口 — 建具・窓）
 const OP = {
   ID: 0, AXIS_CL: 1, WALL_SIDE: 2, IS_V: 3,
   REF_CL: 4, REF_OFF: 5, WIDTH: 6, CATEGORY: 7, SUB_TYPE: 8,
@@ -284,6 +285,10 @@ const OP = {
   // 建具記号の文字列（列挙 FIXTURE_TYPE に無いユーザー記号のみ。ステップ10g・2026-09-23）。
   // 新 .stq を旧ビルドで開くと未知記号は null→カテゴリ既定記号に落ちる片方向非互換（4.4.1 と同型）。
   FIXTURE_TYPE_STR: 27,
+  // 部分詳細図の上書き（Opening.detailRefs）。slot 名の昇順の並列 vector。上書きの無い建具は両方とも書かない
+  // （使わない文書のバイト列は不変）。読みは無ければ null。
+  // 新 .stq を旧ビルドで開いて保存すると detailRefs は黙って消える片方向非互換（FIXTURE_TYPE_STR と同型）。
+  DETAIL_KEYS: 28, DETAIL_VALS: 29,
 };
 
 // Opening.category 列挙値エンコード
@@ -565,8 +570,12 @@ function writeOpening(b, o) {
   const fixKnown = typeof o.fixtureType === 'string' && Object.hasOwn(FIXTURE_TYPE_ENC, o.fixtureType);
   const fixStr = (typeof o.fixtureType === 'string' && o.fixtureType && !fixKnown) ? o.fixtureType : '';
   const sFixtureTypeStr = fixStr ? b.createString(fixStr) : 0;
+  // 部分詳細図の上書き。正規化（core/detailRefs.js）して 1 件以上あるときだけ vector を作る
+  const detailEntries = Object.entries(normalizeDetailRefs(o.detailRefs) ?? {});
+  const detailKeysVec = detailEntries.length > 0 ? writeStrVec(b, detailEntries.map(([slot]) => slot)) : 0;
+  const detailValsVec = detailEntries.length > 0 ? writeStrVec(b, detailEntries.map(([, key]) => key)) : 0;
 
-  b.startObject(28);
+  b.startObject(30);
   b.addFieldOffset(OP.ID,         sId,   0);
   b.addFieldOffset(OP.AXIS_CL,    sAxis, 0);
   b.addFieldInt8(OP.WALL_SIDE,    o.wallSide < 0 ? -1 : 1, 0);
@@ -595,6 +604,8 @@ function writeOpening(b, o) {
   b.addFieldFloat64(OP.FRAME_FACE_W,  o.frameFaceWidth ?? 0, 0.0);
   b.addFieldFloat64(OP.FRAME_PROJ,    o.frameProjection ?? 0, 0.0);
   b.addFieldOffset(OP.FIXTURE_TYPE_STR, sFixtureTypeStr, 0);
+  b.addFieldOffset(OP.DETAIL_KEYS, detailKeysVec, 0);
+  b.addFieldOffset(OP.DETAIL_VALS, detailValsVec, 0);
   return b.endObject();
 }
 
@@ -1441,7 +1452,13 @@ function readOpening(bb, tablePos) {
     handleHeight:  r.f64(OP.HANDLE_H)       || null,
     frameFaceWidth:  r.f64(OP.FRAME_FACE_W) || null,
     frameProjection: r.f64(OP.FRAME_PROJ)   || null,
+    detailRefs:    readDetailRefs(r.strVec(OP.DETAIL_KEYS), r.strVec(OP.DETAIL_VALS)),
   };
+}
+
+/** 並列 vector（slot 名・詳細図キー）から detailRefs を組む。無い・対の欠けた行は捨て、空なら null。 */
+function readDetailRefs(keys, vals) {
+  return normalizeDetailRefs(Object.fromEntries(keys.map((slot, i) => [slot, vals[i] ?? ''])));
 }
 
 function readDiag(bb, tablePos) {

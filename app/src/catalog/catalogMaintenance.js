@@ -1316,6 +1316,16 @@ export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
   [DetailSlot.HEAD]: Object.freeze({ label: '部分詳細図（上枠）', unassigned: '方立の図を使う' }),
 });
 
+/**
+ * 建具エディタ（openings/OpeningEditor.jsx）の詳細図の上書き欄の文言（S6a）。select の見出しは上の
+ * FIXTURE_SYMBOL_DETAIL_SLOT_TEXT.label を再利用する。useSymbol＝未上書き（記号の割当てへ戻る）の選択肢・
+ * copyDimensions＝R16 のボタン（詳細図の param 束縛の寸法を建具の見付・出幅へ写す）。
+ */
+export const OPENING_DETAIL_REF_TEXT = Object.freeze({
+  useSymbol: '記号の設定を使う',
+  copyDimensions: '図の寸法を建具へ',
+});
+
 // 現在の値が選択肢に無いときの行の前置き（実在するが枠に合わない図／存在しないキー）。
 const DETAIL_OPTION_NOTE_WRONG_SLOT = '（この枠には使えません）';
 const DETAIL_OPTION_NOTE_MISSING = '（見つかりません）';

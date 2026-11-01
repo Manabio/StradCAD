@@ -38,6 +38,9 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 ## S造スラブ小梁の枠の除外集合（`GS.EXCLUDED_SLAB_BEAM_SLOTS=55`）は空のとき書かない
 `PlanGraph.excludedSlabBeamSlots`（キーは`slab:<ベイ4辺のCL id>:<X|Y>:<n>:<i>`の文字列vector）。座標キーの`excludedWallBeamAxes`（GS 44）とは別のフィールドにしてある——あちらは追従・張り替えが座標キー前提で、CL idを含むこちらを混ぜると壊れる。空集合のときはvectorも作らない（末尾のフィールドはvtableで切り詰められ、枠を使わない文書のバイト列は1バイトも変わらない）。読みは無ければ空。CL削除時はキー内のCL idで掃除する（`removeDependentsOfCenterLine`）。
 
+## 建具の部分詳細図の上書き（`OP.DETAIL_KEYS=28`・`DETAIL_VALS=29`）は上書きのある建具だけが書く
+`Opening.detailRefs`（`{[slot]: 詳細図キー}|null`。正規形は`core/detailRefs.js`＝空文字・非文字列を捨て、キー昇順、空なら null）を slot 名と図キーの並列 vector で持つ。null・空のときは 2 フィールドとも書かない（上書きの無い文書のバイト列は不変。13.stq・moku4 の全階で HEAD と一致を実測）。読みは無ければ null。新 .stq を旧ビルドで開いて保存すると detailRefs は黙って消える片方向非互換（`OP.FIXTURE_TYPE_STR` と同型）。枝番（`openingSubSignature`）には含めない（R15）。
+
 ## 主屋根（`GS.MAIN_ROOF_SPEC=53`→同じ`RS`テーブル）は既定値のとき書かない
 最上階の階ごと設定（`PlanGraph.mainRoofSpec`）。`graphSnapshot.buildSnapshot`が`isDefaultRoofSpec`で既定値なら`null`にし、`encode`は`null`のとき何も書かない（フィールド自体を省く）ので、主屋根を編集していない文書のバイト列は1バイトも変わらない（読み側は無ければ`restoreGraph`の`clear()`の既定値）。`RS`の読み書きは下屋と共用（`writeRoofSpec`/`readRoofSpec`）。
 
