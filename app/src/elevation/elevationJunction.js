@@ -16,13 +16,15 @@ import {
 import { computeEnvelope, EnvelopeWeight } from '../detail/detailPlacement.js';
 import { resolveRoomDetailFigure, fitRoomJunction, wallAssemblyThicknessMm } from '../finish/roomDetailJunction.js';
 import { kneeDropPartEnvelope } from '../finish/partDetail.js';
-import { sameAxisLine, kneeDropRecordsOnAxis, kneeDropRecordFor, kneeDropRecordsForWallPoint } from '../finish/kneeDropWall.js';
+import { sameAxisLine, kneeDropRecordsOnAxis, kneeDropRecordsForWallPoint, kneeDropWallGeometry } from '../finish/kneeDropWall.js';
 import { graphList } from '../graphReadScope.js';
 import { effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
 import { ElevationLineRole, weightForRole, minDrawnMm } from './elevationStyle.js';
 import { wallLessEndAt, cornerOpeningZRanges, faceBoundaryLocalX, localXOf } from './elevationFaces.js';
 import { composeRoomFaces } from './elevationFaceList.js';
-import { polyline, subtractCollinearSpans } from './elevationPrimitives.js';
+import { line, polyline, subtractCollinearSpans } from './elevationPrimitives.js';
+import { buildEnclosureCellToRoom } from '../finish/edgeClassify.js';
+import { roomCeilingHeight } from '../finish/roomMetrics.js';
 
 const roleOf = weight => (weight === EnvelopeWeight.AIR ? ElevationLineRole.SILHOUETTE : ElevationLineRole.DETAIL);
 
@@ -243,15 +245,40 @@ export function junctionLineSpecs(plan, geo) {
   return { floorWall, wallCeiling };
 }
 
-// 隣の面 P の、F との隅（P の cornerEnd 側の壁中心線）に立つ壁が腰壁・垂れ壁か（全高でない）。
-function cornerWallPartial(P, cornerEnd, graph) {
-  if (!graph?.kneeDropWalls) return false;
+// P の軸上で、長さ方向の位置 world を含む壁。
+function wallsOnAxisAt(P, world, graph) {
+  return (graphList(graph, 'walls') ?? []).filter(w =>
+    w.isVertical === P.isVertical && sameAxisLine(w.axisCL, P.axisCL)
+    && Math.min(w.coord1, w.coord2) - DETAIL_FIT_EPS_MM <= world && world <= Math.max(w.coord1, w.coord2) + DETAIL_FIT_EPS_MM);
+}
+
+// 隣の面 P の、F との隅（P の cornerEnd 側の壁中心線の位置 world）と、そこに立つ壁。
+function cornerWallsOf(P, cornerEnd, graph) {
   const b = faceBoundaryLocalX(P, graph);
   const world = P.originWorld + (cornerEnd === 'hi' ? b.hi : b.lo) * P.dirSign;
-  return (graphList(graph, 'walls') ?? []).some(w =>
-    w.isVertical === P.isVertical && sameAxisLine(w.axisCL, P.axisCL)
-    && Math.min(w.coord1, w.coord2) - DETAIL_FIT_EPS_MM <= world && world <= Math.max(w.coord1, w.coord2) + DETAIL_FIT_EPS_MM
-    && kneeDropRecordFor(w, graph) !== null);
+  return { world, walls: wallsOnAxisAt(P, world, graph) };
+}
+
+// 隅の記録を探す点（P の軸上の位置）を F の仕上げ面から F の部屋の側へずらす量(mm)。
+// 値の根拠: 記録の区間端は CL 位置（例 1500）にあり、F の仕上げ面（例 1442.5）は CL の半壁厚手前。CL や仕上げ面ちょうどだと
+// 区間の境目や T 字の継ぎ目に乗って別の記録・構成外の一片を拾うので、部屋の側へ寄せる。点クエリ幅
+// （kneeDropWall.js POINT_QUERY_EPS_MM＝±0.5）より大きく、壁厚（数十 mm）より十分小さい 2 とする。
+const CORNER_PROBE_INTO_ROOM_MM = 2;
+
+// F の部屋の側の探索点とそこに立つ壁（P の軸上。F の仕上げ面から部屋の側へ CORNER_PROBE_INTO_ROOM_MM）。
+function cornerProbeWallsOf(face, P, graph) {
+  const point = face.faceValue + face.inward * CORNER_PROBE_INTO_ROOM_MM;
+  return { point, walls: wallsOnAxisAt(P, point, graph) };
+}
+
+// 隣の面 P の、F との隅に立つ壁が腰壁・垂れ壁か（全高でない）。隅の CL の位置と F の部屋の側の探索点の両方で見る。
+function cornerWallPartial(face, P, cornerEnd, graph) {
+  if (!graph?.kneeDropWalls) return false;
+  // 位置の判定（同じ壁の離れた区間に腰壁があっても、点が記録の区間に無ければ全高）
+  const corner = cornerWallsOf(P, cornerEnd, graph);
+  const probe = cornerProbeWallsOf(face, P, graph);
+  return [{ point: corner.world, walls: corner.walls }, probe]
+    .some(({ point, walls }) => walls.some(w => kneeDropRecordsForWallPoint(graph, w, point).length > 0));
 }
 
 /**
@@ -274,6 +301,33 @@ export function applyJunctionSectionSwap(primitives, layout, { graph, room, mate
     if (!planCache.has(P)) planCache.set(P, junctionPlanForFace(P, { graph, room, materialMap }));
     return planCache.get(P);
   };
+  forEachSwapEnd(layout, { graph, neighborOf, includeFace }, ({ face, P, atRun, seg, localX, x, sx }) => {
+    if (cornerWallPartial(face, P, atRun ? 'lo' : 'hi', graph)) return;
+    const plan = planOf(P);
+    if (!plan) return;
+    for (const slot of ROOM_DETAIL_SLOTS) {
+      const env = plan[slot];
+      if (!env || !(env.maxDeviationMm > DETAIL_SECTION_SWAP_MIN_DIFF_MM) || env.outline.length < 2) continue;
+      const floor = slot === DetailSlot.FLOOR_WALL;
+      // 勾配・円弧・上階天井の端の天井は水平な CUT 線ではない（差し引けず二重になる）ので差し替えない（派生線側と同じ扱い）
+      if (!floor && (seg.ceilArc || seg.chHiMm != null || (seg.ceilFloorZMm ?? 0) !== 0)) continue;
+      const y = floor ? -(seg.floorDeltaMm ?? 0) : -segCeilAbsAt(seg, localX);
+      const first = env.outline[0];
+      const last = env.outline[env.outline.length - 1];
+      // 床側は輪郭が上端（s=0）から FL（s=E0）へ、天井側は天井面（s=E0）から下端（s=0）へ
+      const reach = floor ? first[1] : last[1];  // 縦線を差し引く t（床: 上端の負値・天井: 下端の正値）
+      const e0 = floor ? last[0] : first[0];     // 床／天井線を差し引く幅
+      let prims = subtractCollinearSpans(primitives, { axis: 'x', at: x, lo: y + Math.min(0, reach), hi: y + Math.max(0, reach), weight: cutWeight });
+      prims = subtractCollinearSpans(prims, { axis: 'y', at: y, lo: x, hi: x + sx * e0, weight: cutWeight });
+      prims.push(polyline(env.outline.map(([s, t]) => [x + s * sx, y + t]), { weight: cutWeight, source: DETAIL_PRIM_SOURCE }));
+      replacePrimitives(primitives, prims);
+    }
+  });
+}
+
+// 差し替えの対象になる面の端（壁のある端・開放スパンで延長された端でない・隅に開口が達しない・隣の面がある）を順に fn へ渡す。
+// fn には隣の面 P・端の向き・端の床区間 seg・端の面ローカル x・帯の座標 x と、輪郭を室内側へ伸ばす向き sx（左端 +1・右端 −1）を渡す。
+function forEachSwapEnd(layout, { graph, neighborOf, includeFace }, fn) {
   layout.faceRuns.forEach(({ face, xCursor, floorSegments }, i) => {
     if (face.kind === 'step' || !includeFace(face) || !floorSegments?.length) return;
     for (const end of ['lo', 'hi']) {
@@ -283,31 +337,151 @@ export function applyJunctionSectionSwap(primitives, layout, { graph, room, mate
       const hasWall = (atRun ? face.hasWallAtLocalRun : face.hasWallAtLocal0) ?? true;
       if (!hasWall || wallLessEndAt(face, atRun ? 'Run' : '0') || (atRun ? face.extendedAtLocalRun : face.extendedAtLocal0)) continue;
       if (cornerOpeningZRanges(face, P, end, graph).length > 0) continue;
-      if (cornerWallPartial(P, atRun ? 'lo' : 'hi', graph)) continue;
-      const plan = planOf(P);
-      if (!plan) continue;
-      const seg = atRun ? floorSegments[floorSegments.length - 1] : floorSegments[0];
       const localX = atRun ? face.run : 0;
-      const x = xCursor + localX;
-      const sx = atRun ? -1 : 1;
-      for (const slot of ROOM_DETAIL_SLOTS) {
-        const env = plan[slot];
-        if (!env || !(env.maxDeviationMm > DETAIL_SECTION_SWAP_MIN_DIFF_MM) || env.outline.length < 2) continue;
-        const floor = slot === DetailSlot.FLOOR_WALL;
-        // 勾配・円弧・上階天井の端の天井は水平な CUT 線ではない（差し引けず二重になる）ので差し替えない（派生線側と同じ扱い）
-        if (!floor && (seg.ceilArc || seg.chHiMm != null || (seg.ceilFloorZMm ?? 0) !== 0)) continue;
-        const y = floor ? -(seg.floorDeltaMm ?? 0) : -segCeilAbsAt(seg, localX);
-        const first = env.outline[0];
-        const last = env.outline[env.outline.length - 1];
-        // 床側は輪郭が上端（s=0）から FL（s=E0）へ、天井側は天井面（s=E0）から下端（s=0）へ
-        const reach = floor ? first[1] : last[1];  // 縦線を差し引く t（床: 上端の負値・天井: 下端の正値）
-        const e0 = floor ? last[0] : first[0];     // 床／天井線を差し引く幅
-        let prims = subtractCollinearSpans(primitives, { axis: 'x', at: x, lo: y + Math.min(0, reach), hi: y + Math.max(0, reach), weight: cutWeight });
-        prims = subtractCollinearSpans(prims, { axis: 'y', at: y, lo: x, hi: x + sx * e0, weight: cutWeight });
-        prims.push(polyline(env.outline.map(([s, t]) => [x + s * sx, y + t]), { weight: cutWeight, source: DETAIL_PRIM_SOURCE }));
-        primitives.length = 0;
-        for (const p of prims) primitives.push(p);
+      fn({
+        face, P, atRun, localX, x: xCursor + localX, sx: atRun ? -1 : 1,
+        seg: atRun ? floorSegments[floorSegments.length - 1] : floorSegments[0],
+      });
+    }
+  });
+}
+
+// primitives（帯の座標の配列）を prims の内容で置き換える（呼び出し元の配列を保つ）。
+function replacePrimitives(primitives, prims) {
+  primitives.length = 0;
+  for (const p of prims) primitives.push(p);
+}
+
+// 隣の面 P の隅に立つ、部分詳細図（kneeTop／dropBottom）の割当てのある腰壁・垂れ壁の記録とその壁。無ければ null。
+// 探す位置は F の部屋の側 2 mm の探索点（cornerProbeWallsOf。junction の飛ばしも同じ点で判定）を先に、次に隅の CL。T 字の継ぎ目（CL に乗り、両側の壁が別の記録を持つ）でも、
+// 記録の境目が F の通り芯にある形（隅の一片がどの記録の構成壁でもない）でも、F の部屋の側の壁の記録を拾える。
+function cornerKneeDropHit(face, P, cornerEnd, graph) {
+  if (!graph?.kneeDropWalls) return null;
+  const probe = cornerProbeWallsOf(face, P, graph);
+  const { world, walls: cornerWalls } = cornerWallsOf(P, cornerEnd, graph);
+  for (const { point, walls } of [probe, { point: world, walls: cornerWalls }]) {
+    for (const w of walls) {
+      const hit = kneeDropRecordsForWallPoint(graph, w, point).find(({ rec }) => rec.detailRefs && (rec.knee || rec.drop));
+      if (hit) return { wall: w, rec: hit.rec, key: hit.key };
+    }
+  }
+  return null;
+}
+
+// 帯の座標の縦線を端の天端（垂れ壁は下端）側の区間だけ差し引く線種。断面エンジンの端の全高の中線（recess の SILHOUETTE）も同じ位置に立つ。
+const SWAP_VERTICAL_WEIGHTS = [ElevationLineRole.CUT, ElevationLineRole.SILHOUETTE].map(weightForRole);
+
+// 向こう側の部屋（壁 P の F の部屋でない側）の、F の部屋の床を 0 とした床の高さと天井面の高さ。部屋が引けなければ null。
+function defaultFarExtentOf(graph, room) {
+  let cellToRoom = null;
+  return (recKey, backSide) => {
+    if (!room || !graph.rooms) return null;
+    cellToRoom ??= buildEnclosureCellToRoom(graph);
+    const geo = kneeDropWallGeometry(graph, recKey, cellToRoom);
+    const far = backSide === KneeDropFrontSide.ROOM_NEG ? geo?.roomNeg : geo?.roomPos;
+    if (!far) return null;
+    const floorDeltaMm = graph.effectiveFloorLevel(far) - graph.effectiveFloorLevel(room);
+    return { floorDeltaMm, ceilAbsMm: floorDeltaMm + roomCeilingHeight(graph, far).mm };
+  };
+}
+
+/**
+ * 腰壁（kneeTop）・垂れ壁（dropBottom）の部位の包絡線の輪郭を、壁の両側から連ねた 1 本の折れ線にする（S8b-2）。
+ * front＝F の部屋の側から見た輪郭（s は部屋側の仕上げ面から部屋側が正）・back＝反対側から見た輪郭（s は反対側の仕上げ面から反対側が正。
+ * −壁厚−s で壁の向こうへ写す）。腰壁は天端（t=0）、垂れ壁は下端（t=0）で折り返す。壁の面に戻る端は reach（腰壁: 最大の t・垂れ壁: 最小の t）まで
+ * 壁の面に沿って延ばす（差し引く縦線の区間と揃える）。閉じない。
+ * @param {number[][]} front
+ * @param {number[][]} back
+ * @param {number} wallThicknessMm
+ * @param {boolean} knee 腰壁（t が正）か。垂れ壁は t が負
+ * @returns {number[][]}
+ */
+export function joinPartOutlines(front, back, wallThicknessMm, knee) {
+  const mapped = back.map(([s, t]) => [-wallThicknessMm - s, t]);
+  const pts = knee ? [...front].reverse().concat(mapped) : [...front].concat([...mapped].reverse());
+  const ts = pts.map(p => p[1]);
+  const reach = knee ? Math.max(...ts) : Math.min(...ts);
+  if (Math.abs(pts[0][1] - reach) > DETAIL_FIT_EPS_MM) pts.unshift([pts[0][0], reach]);
+  const end = pts[pts.length - 1];
+  if (Math.abs(end[1] - reach) > DETAIL_FIT_EPS_MM) pts.push([end[0], reach]);
+  return pts.filter((p, i) => i === 0 || Math.abs(p[0] - pts[i - 1][0]) > DETAIL_FIT_EPS_MM || Math.abs(p[1] - pts[i - 1][1]) > DETAIL_FIT_EPS_MM);
+}
+
+/**
+ * 帯の端で隣の面 P が腰壁・垂れ壁のとき、その切断面を部位図（kneeTop／dropBottom）の輪郭（CUT・source=detail）へ差し替える（S8b-2・後段処理）。
+ * applyJunctionSectionSwap が cornerWallPartial で飛ばしている端が対象（P の隅＝F の面の線に立つ記録に detailRefs がある）。
+ * 輪郭: 部屋側の包絡線（kneeDropPartEnvelope。表の側と見る側が違えば鏡像済み）と反対側の包絡線を −壁厚 側へ連ねた 1 本（joinPartOutlines）。
+ * どちらか一方でも fit できなければ差し替えない。形状差は両側の大きい方で DETAIL_SECTION_SWAP_MIN_DIFF_MM と比べる（超える slot だけ）。
+ * 差し引く線: その端の天端（垂れ壁は下端）の水平線 [端, 壁の向こう側の面]（壁厚ぶん・帯の外側。CUT だけ）と、両側の縦線の天端側
+ * [天端−厚, 天端]（垂れ壁は下端側。CUT と、同じ位置の全高の中線 SILHOUETTE）。
+ * 向こう側（隣の部屋）の出は帯の外へはねだして描く。さらに壁の向こうの面を、天板の下（垂れ壁は下端の上）から向こう側の部屋の床（垂れ壁は天井）まで
+ * CUT の縦線で連ねる（向こう側の部屋が引けなければ F の床・天井）。隣の面・寸法線との交差は受容。
+ * 天端の下の細線（kneeCapUnderline）は DETAIL なので触らない。frame は 8a と同じ（左端 sx=+1・右端 sx=−1）で、腰壁は y=−天端（床段差込み）・垂れ壁は y=−下端。
+ * 袖壁の分割端（partitionCutAtLocal0/Run）は対象外（8b-2b）。
+ * @param {object[]} primitives
+ * @param {{faceRuns:{face:object, xCursor:number, floorSegments?:object[]}[]}} layout
+ * @param {{graph:object, room?:object|null, materialMap?:object|null, segCeilAbsAt:(s:object,x:number)=>number,
+ *   neighborOf:(i:number, dir:1|-1)=>object|null, includeFace?:(face:object)=>boolean,
+ *   farExtentOf?:(recKey:string, backSide:string)=>({floorDeltaMm:number, ceilAbsMm:number}|null)}} opts
+ *   room＝帯の部屋（向こう側の部屋の床の差の基準）。farExtentOf＝向こう側の部屋の床・天井面（帯の部屋の床からの高さ。既定は graph から導く）
+ */
+export function applyKneeDropSectionSwap(primitives, layout, {
+  graph, room = null, materialMap = null, segCeilAbsAt, neighborOf, includeFace = () => true, farExtentOf = defaultFarExtentOf(graph, room),
+}) {
+  if (!graph?.kneeDropWalls || graph.kneeDropWalls.size === 0) return;
+  const cutWeight = weightForRole(ElevationLineRole.CUT);
+  forEachSwapEnd(layout, { graph, neighborOf, includeFace }, ({ face, P, atRun, seg, localX, x, sx }) => {
+    // junction を飛ばす端（cornerWallPartial）だけが対象＝junction との二重化なし
+    const cornerEnd = atRun ? 'lo' : 'hi';
+    if (!cornerWallPartial(face, P, cornerEnd, graph)) return;
+    const hit = cornerKneeDropHit(face, P, cornerEnd, graph);
+    if (!hit) return;
+    const { wall, rec } = hit;
+    const thickness = wallAssemblyThicknessMm(graph, wall);
+    if (thickness === null) return;
+    // F の部屋は、端の内側（atRun なら local の小さい側）にある。世界座標の向きが正なら P の正側の部屋
+    const interiorUp = (atRun ? -face.dirSign : face.dirSign) > 0;
+    const frontSide = interiorUp ? KneeDropFrontSide.ROOM_POS : KneeDropFrontSide.ROOM_NEG;
+    const backSide = interiorUp ? KneeDropFrontSide.ROOM_NEG : KneeDropFrontSide.ROOM_POS;
+    const ceilAbs = segCeilAbsAt(seg, localX);
+    const horizontalCeil = !(seg.ceilArc || seg.chHiMm != null || (seg.ceilFloorZMm ?? 0) !== 0);
+    for (const slot of KNEE_DROP_DETAIL_SLOTS) {
+      if (!rec.detailRefs[slot]) continue;
+      const knee = slot === DetailSlot.KNEE_TOP;
+      // 天端（腰壁）・下端（垂れ壁）の帯の座標 y。腰壁は床段差込み、垂れ壁は水平天井の端だけ（勾配・円弧・上階天井は CUT 線が水平でない）
+      let y;
+      if (knee) {
+        if (rec.knee == null) continue;
+        y = -(rec.knee.topHeight + (seg.floorDeltaMm ?? 0));
+      } else {
+        if (rec.drop == null || !horizontalCeil) continue;
+        y = -(ceilAbs - rec.drop.bottomHeight);
       }
+      const front = kneeDropPartEnvelope({ graph, wall, rec, slot, viewedSide: frontSide, materialMap });
+      const back = kneeDropPartEnvelope({ graph, wall, rec, slot, viewedSide: backSide, materialMap });
+      if (!front || !back || front.outline.length < 2 || back.outline.length < 2) continue;
+      if (!(Math.max(front.maxDeviationMm, back.maxDeviationMm) > DETAIL_SECTION_SWAP_MIN_DIFF_MM)) continue;
+      const outline = joinPartOutlines(front.outline, back.outline, thickness, knee);
+      const reach = knee ? Math.max(...outline.map(p => p[1])) : Math.min(...outline.map(p => p[1]));
+      const farX = x - sx * thickness; // 壁の向こう側の面（帯の外側。左端なら x より小さい側）
+      const lo = y + Math.min(0, reach);
+      const hi = y + Math.max(0, reach);
+      let prims = primitives;
+      for (const weight of SWAP_VERTICAL_WEIGHTS) {
+        prims = subtractCollinearSpans(prims, { axis: 'x', at: x, lo, hi, weight });
+        prims = subtractCollinearSpans(prims, { axis: 'x', at: farX, lo, hi, weight });
+      }
+      prims = subtractCollinearSpans(prims, { axis: 'y', at: y, lo: x, hi: farX, weight: cutWeight });
+      // 向こう側の面: 天板の下（垂れ壁は下端の上）から向こう側の部屋の床（垂れ壁は天井面）まで 1 本の CUT 縦線にする
+      const far = farExtentOf(hit.key, backSide);
+      const tip = knee ? hi : lo;
+      const end = 0 - (knee ? (far?.floorDeltaMm ?? seg.floorDeltaMm ?? 0) : (far?.ceilAbsMm ?? ceilAbs)); // 0 − で −0 を作らない
+      if (knee ? end > tip : end < tip) {
+        prims = subtractCollinearSpans(prims, { axis: 'x', at: farX, lo: Math.min(tip, end), hi: Math.max(tip, end), weight: cutWeight });
+        prims.push(line(farX, Math.min(tip, end), farX, Math.max(tip, end), { weight: cutWeight, source: DETAIL_PRIM_SOURCE }));
+      }
+      prims.push(polyline(outline.map(([s, t]) => [x + s * sx, y + t]), { weight: cutWeight, source: DETAIL_PRIM_SOURCE }));
+      replacePrimitives(primitives, prims);
     }
   });
 }

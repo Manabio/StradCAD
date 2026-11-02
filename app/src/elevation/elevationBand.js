@@ -19,7 +19,7 @@ import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDi
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { beamBlockerRectsForFace, droppedMemberPrimitivesForFace, memberLayersOf } from './elevationSolids.js';
 import { buildFaceFigure, segEndProfile, hasRightChDim, parseBaseboardHeightMm, ceilingResolversOf } from './elevationFigure.js';
-import { applyJunctionSectionSwap, kneeDropPartStepsOf } from './elevationJunction.js';
+import { applyJunctionSectionSwap, applyKneeDropSectionSwap, kneeDropPartStepsOf } from './elevationJunction.js';
 import { ceilArcCircleOf, ceilArcChords } from './ceilArcSection.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments, cornerOpeningZOfFace } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
@@ -1063,10 +1063,13 @@ export function buildRoomBand(room, graph, ctx = {}) {
   // 部屋の取り合い（Room.detailRefs）の断面形への差し替え（S8a-2）。倍率が閾値以上の 2 パス目だけ（ctx.junctionSectionSwap）
   if (ctx.junctionSectionSwap === true) {
     const bandFaces = layout.faceRuns.map(r => r.face);
-    applyJunctionSectionSwap(primitives, layout, {
+    const swapOpts = {
       graph, room, materialMap: ctx.materialMap ?? null, segCeilAbsAt: ceilingResolversOf(layout.CH).segCeilAbsAt,
       neighborOf: (i, dir) => neighborWallFace(bandFaces, i, dir),
-    });
+    };
+    applyJunctionSectionSwap(primitives, layout, swapOpts);
+    // 端の隣の面が腰壁・垂れ壁（junction が飛ばす端）の切断面は、その記録の部位図（kneeTop／dropBottom）の輪郭へ（S8b-2）
+    applyKneeDropSectionSwap(primitives, layout, swapOpts);
   }
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
