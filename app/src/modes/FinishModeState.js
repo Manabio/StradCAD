@@ -37,7 +37,8 @@ import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes, ROOF_SPEC_
 import { buildResolveRows } from '../catalog/resolveQueue.js';
 import { materialCodesOf } from '../detail/detailPlacement.js';
 import { collectRoomJunctionFailures } from '../finish/roomDetailJunction.js';
-import { collectKneeDropPartFailures } from '../finish/partDetail.js';
+import { collectKneeDropPartFailures, collectFloorStepFailures } from '../finish/partDetail.js';
+import { floorStepHeightsByOwner } from '../elevation/elevationStepFace.js';
 import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { REMOVED_MATERIALS } from '../catalog/legacyMaterialCodes.js';
 
@@ -331,7 +332,8 @@ export class FinishModeState {
       return [
         ...collectRoomJunctionFailures(this.graph, seen, { materialMap }),
         ...collectKneeDropPartFailures(this.graph, seen, { materialMap }), // 腰壁・垂れ壁の部位（S8b-1）
-      ].filter(f => f.wallThickness !== undefined);
+        ...collectFloorStepFailures(this.graph, seen, { materialMap, stepHeightsOf: floorStepHeightsByOwner(this.graph) }), // 床の段差（S8b-3）
+      ].filter(f => f.wallThickness !== undefined || f.stepHeightMm !== undefined);
     } catch (err) {
       console.error('[finish] 部屋の取り合いの詳細図の合わせ込み検査に失敗:', err);
       return [];

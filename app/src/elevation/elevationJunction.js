@@ -3,6 +3,7 @@
 // elevation/ から detail/ を引く唯一のファイル（引き先は detailPlacement.js だけ。importGraph.test.js で固定）。
 //   junctionPlanForFace   面 F の部屋の割当てを F 自身の壁の厚みで fit し、包絡線（段差の t 列）を求める
 //   junctionLineSpecs     包絡線の段差を面の水平線の仕様へ（途切れる区間・天井の段差への追従）。描画は elevationFigure.js
+//   floorStepLineSpecs / applyFloorStepSectionSwap  床の段差（Room.detailRefs の floorStep。S8b-3）の派生線（段差見付け面）と riser の差し替え
 // 断面図の包絡線の各段差 t: floorWall は FL から上へ −t の高さ、wallCeiling は天井面から下へ t の位置。
 // 自動（auto）の段差は細線 DETAIL・ヘルパーの印（air）は中線 SILHOUETTE（同じ t は包絡線が中線 1 本に畳んでいる）。
 // 失敗（参照切れ・壁厚に合わない図）は線を出さない（通知は展開 init が集める＝collectRoomJunctionFailures）。
@@ -15,11 +16,13 @@ import {
 } from '../core/constants.js';
 import { computeEnvelope, EnvelopeWeight } from '../detail/detailPlacement.js';
 import { resolveRoomDetailFigure, fitRoomJunction, wallAssemblyThicknessMm } from '../finish/roomDetailJunction.js';
-import { kneeDropPartEnvelope } from '../finish/partDetail.js';
+import { kneeDropPartEnvelope, floorStepEnvelope } from '../finish/partDetail.js';
 import { sameAxisLine, kneeDropRecordsOnAxis, kneeDropRecordsForWallPoint, kneeDropWallGeometry } from '../finish/kneeDropWall.js';
 import { graphList } from '../graphReadScope.js';
 import { effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
-import { ElevationLineRole, weightForRole, minDrawnMm } from './elevationStyle.js';
+import { ElevationLineRole, weightForRole, minDrawnMm, PROBE_EPS_MM } from './elevationStyle.js';
+import { drawnRiserX, halfWallThicknessMm, roomOwnerByCell } from './elevationFloorProfile.js';
+import { worldToCell } from '../finish/gridCells.js';
 import { wallLessEndAt, cornerOpeningZRanges, faceBoundaryLocalX, localXOf } from './elevationFaces.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { line, polyline, subtractCollinearSpans } from './elevationPrimitives.js';
@@ -481,6 +484,85 @@ export function applyKneeDropSectionSwap(primitives, layout, {
         prims.push(line(farX, Math.min(tip, end), farX, Math.max(tip, end), { weight: cutWeight, source: DETAIL_PRIM_SOURCE }));
       }
       prims.push(polyline(outline.map(([s, t]) => [x + s * sx, y + t]), { weight: cutWeight, source: DETAIL_PRIM_SOURCE }));
+      replacePrimitives(primitives, prims);
+    }
+  });
+}
+
+// ---- 床の段差（Room.detailRefs の floorStep。S8b-3）----
+
+/**
+ * 段差見付け面（kind 'step'）に引く水平線の仕様（高い側の床から t の高さ）。高い側の部屋の floorStep を段差高で fit した包絡線の段差 t を
+ * 最小描画幅へ調整（stepsAtMinDrawn）し、高い側の床（t≈0）と低い側の床（t≈段差高）に一致するものは引かない。
+ * 割当て無し・参照切れ・fit 失敗は空（従来の描き方＝出力不変）。
+ * @param {object} face 段差見付け面（highOwnerRoom・stepHeightMm を持つ）
+ * @param {{materialMap?:object|null, scaleDenom?:number}} [opts]
+ * @returns {{t:number, role:string}[]} t＝高い側の床から下向き
+ */
+export function floorStepLineSpecs(face, { materialMap = null, scaleDenom } = {}) {
+  const room = face?.highOwnerRoom;
+  if (face?.kind !== 'step' || !room?.detailRefs) return [];
+  const env = floorStepEnvelope({ room, stepHeightMm: face.stepHeightMm, materialMap });
+  if (!env) return [];
+  const eps = DETAIL_FIT_EPS_MM;
+  return stepsAtMinDrawn(env.steps, minDrawnMm(scaleDenom))
+    .filter(({ t }) => t > eps && t < face.stepHeightMm - eps)
+    .map(({ t, weight }) => ({ t, role: roleOf(weight) }));
+}
+
+// 面 F の面ローカル x の位置の床の所有者（wallAdjacentFloorSegments の probeGapOwners と同じ探査点）。引けなければ null。
+function floorOwnerAtLocalX(face, room, graph, localX) {
+  const run = face.originWorld + localX * face.dirSign;
+  const depth = face.axisCL.value + face.inward * PROBE_EPS_MM;
+  const cell = face.isVertical ? worldToCell(depth, run, graph) : worldToCell(run, depth, graph);
+  return cell ? (roomOwnerByCell(room, graph).get(cell.key) ?? null) : null;
+}
+
+/**
+ * 壁面上の床の段差の縦線（appendFloorLines の riser の CUT）を、高い側の部屋の floorStep（床の段差の部位図）の輪郭（CUT・source=detail）へ差し替える
+ * （S8b-3・後段処理）。帯の部屋 room の床区間（floorSegments）の隣り合う 2 区間で床高が違う境（riser）ごとに、高い側の区間の所有者
+ * （floorOwnerAtLocalX）の割当てを段差高で fit した包絡線を引く。形状差 maxDeviationMm が DETAIL_SECTION_SWAP_MIN_DIFF_MM を超えるものだけ。
+ * frame: 原点＝riser の描画 x（drawnRiserX）・高い側の床 y、s＝低い側へ（低い区間が右なら sx=+1・左なら −1）、t＝下向き。
+ * 差し引く線: riser の縦線（CUT）の [高い側の床, 高い側の床＋輪郭の下端（段差高まで）]。輪郭の頂部が riser 面に付かない（出がある）ときは
+ * 高い側の床面を鼻の先まで延ばす（riser 上端から始める）。段差見付け面自身（kind 'step'）の端の縦線は対象外。
+ * primitives を直接書き換える（帯の座標系。finalizeBand の前）。
+ * @param {object[]} primitives
+ * @param {{faceRuns:{face:object, xCursor:number, floorSegments?:object[]}[]}} layout
+ * @param {{graph:object, room:object, materialMap?:object|null, includeFace?:(face:object)=>boolean}} opts
+ */
+export function applyFloorStepSectionSwap(primitives, layout, { graph, room, materialMap = null, includeFace = () => true }) {
+  if (!room || !(graph?.rooms ?? []).some(r => r.detailRefs?.[DetailSlot.FLOOR_STEP])) return;
+  const cutWeight = weightForRole(ElevationLineRole.CUT);
+  const eps = DETAIL_FIT_EPS_MM;
+  const envCache = new Map();
+  layout.faceRuns.forEach(({ face, xCursor, floorSegments: segs }) => {
+    if (face.kind === 'step' || !includeFace(face) || !(segs?.length > 1)) return;
+    const half = halfWallThicknessMm(face);
+    for (let i = 0; i + 1 < segs.length; i++) {
+      const a = segs[i];
+      const b = segs[i + 1];
+      const da = a.floorDeltaMm ?? 0;
+      const db = b.floorDeltaMm ?? 0;
+      if (da === db || a.flatLineSpanX || b.flatLineSpanX) continue; // 床が同じ高さの境・階段帯のレーン区間は riser を引かない
+      const aHigh = da > db;
+      const high = aHigh ? a : b;
+      const stepHeightMm = Math.abs(da - db);
+      // 探査点は riser から高い側の区間へ少し入った点（区間の中点だと、床高が同じで所有者が違う区間が連結された区間で riser に接しない部屋を拾う）
+      const inset = Math.min(CORNER_PROBE_INTO_ROOM_MM, (high.hiX - high.loX) / 2);
+      const owner = floorOwnerAtLocalX(face, room, graph, aHigh ? high.hiX - inset : high.loX + inset);
+      if (!owner?.detailRefs?.[DetailSlot.FLOOR_STEP]) continue;
+      const cacheKey = `${owner.id}|${stepHeightMm}`;
+      if (!envCache.has(cacheKey)) envCache.set(cacheKey, floorStepEnvelope({ room: owner, stepHeightMm, materialMap }));
+      const env = envCache.get(cacheKey);
+      if (!env || !(env.maxDeviationMm > DETAIL_SECTION_SWAP_MIN_DIFF_MM) || env.outline.length < 2) continue;
+      const x = xCursor + drawnRiserX(segs, i, half);
+      const y = 0 - Math.max(da, db); // 0 − で −0 を作らない
+      const sx = aHigh ? 1 : -1;
+      const reach = Math.min(env.outline[env.outline.length - 1][1], stepHeightMm);
+      const prims = subtractCollinearSpans(primitives, { axis: 'x', at: x, lo: y, hi: y + reach, weight: cutWeight });
+      const pts = env.outline.map(([s, t]) => [x + s * sx, y + t]);
+      if (Math.abs(env.outline[0][0]) > eps) pts.unshift([x, y]); // 出（鼻）の天端は高い側の床面の続き
+      prims.push(polyline(pts, { weight: cutWeight, source: DETAIL_PRIM_SOURCE }));
       replacePrimitives(primitives, prims);
     }
   });

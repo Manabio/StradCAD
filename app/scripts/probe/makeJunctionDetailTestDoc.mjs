@@ -4,6 +4,8 @@
 // df-jn-countertop（kneeTop。カウンター天板 厚 30・表の側へ 150・裏へ 12。S8b-2 の帯の端の切断面の差し替え確認用）。
 // 腰壁（LDK|洋室の仕切り壁の y 500..1400＝組込み天板）・帯の端の腰壁（同 y 1400..1800＝カウンター天板。洋室・納戸の仕切り壁 y=1500 が突き当たる隅）・
 // 戸 1（仕切り壁）・窓 1（LDK 南外壁）を含む。
+// 小上がり（LDK の x 0..1500 の部分指定の子・床 +300＝高い側）に df-jn-stepnose（floorStep。段鼻 出 120・厚 40＋見切り 30＝形状差 120。S8b-3）を割当て、
+// 段差見付け面の派生線と壁面上の riser の差し替え（上辺・下辺の 2 面）を割当ての有無の差で数える。
 // 使い方: cd app && MSYS_NO_PATHCONV=1 node --import ./scripts/testSetup.mjs scripts/probe/makeJunctionDetailTestDoc.mjs --out D:/tatsuya/Download/junction-detail-test.stq
 // 既存ファイルは上書きしない（再生成は先に削除する）。
 import fs from 'node:fs';
@@ -15,6 +17,7 @@ import { runFinishExitBoundary } from '../../src/finish/finishBoundary.js';
 import { placeOpeningWithDefaults } from '../../src/openings/openingEdit.js';
 import { kneeDropWallGeometry, effectiveCeilingHeight, validateKneeDropWall } from '../../src/finish/kneeDropWall.js';
 import { buildCellToRoom } from '../../src/finish/edgeClassify.js';
+import { getCellsInRect } from '../../src/finish/gridCells.js';
 import { loadMaterialMap } from '../../src/finish/wallRegeneration.js';
 import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { emptyBundle, withEntries } from '../../src/catalog/catalogBundle.js';
@@ -22,7 +25,7 @@ import { CatalogKind } from '../../src/catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../../src/catalog/catalogRegistry.js';
 import { DetailSlot, DetailDash, DetailEdgeMark, DetailParam, PenDir, DETAIL_PRIM_SOURCE, KneeDropFrontSide } from '../../src/core/constants.js';
 import detailBuiltins, { KNEE_CAP_20_KEY } from '../../src/detail/detailBuiltins.js';
-import { junctionFigure, partFigure, paramLen, fixedLen, move } from '../../src/finish/roomDetailTestFixtures.js';
+import { junctionFigure, partFigure, paramLen, fixedLen, move, stepNoseFigure } from '../../src/finish/roomDetailTestFixtures.js';
 import { ElevationModeState } from '../../src/modes/ElevationModeState.js';
 import { loadDocument } from './loadDoc.mjs';
 
@@ -66,6 +69,10 @@ const counterTop = partFigure(KEY_CT, DetailSlot.KNEE_TOP, [
   move(PenDir.LEFT, fixedLen(12)), move(PenDir.UP, fixedLen(30)),
 ], { sVertex: 2, tVertex: 0 });
 counterTop.label = 'カウンター天板 厚30 出150＋壁厚＋12（差し替え確認用）';
+// (4) 段鼻（floorStep。S8b-3）: 高い側の床から 出 120 → 厚 40 → 見切り（内へ 90・下へ 30・内へ 30）→ 低い側の床まで伸縮。形状差 120 > 100 なので壁面上の riser が差し替わる。
+const KEY_ST = 'df-jn-stepnose';
+const stepNose = stepNoseFigure(KEY_ST);
+stepNose.label = '段鼻 出120 厚40＋見切り30（差し替え確認用）';
 
 // ---- 構築 ----
 const project = new Project('junction-detail-test', '部屋の取り合い詳細図テスト');
@@ -82,6 +89,7 @@ const Ya = addCL(CenterLineType.HORIZONTAL, 500);   // 腰壁の区間 y 500..14
 const Yb = addCL(CenterLineType.HORIZONTAL, 1500);
 const Yd = addCL(CenterLineType.HORIZONTAL, 1400);
 const Yc = addCL(CenterLineType.HORIZONTAL, 1800);   // 帯の端の腰壁の区間 y 1400..1800（S8b-2。洋室の南面・納戸の北面の端が仕切り壁 X1 の隅に突き当たる）
+const Xs = addCL(CenterLineType.VERTICAL, 1500);    // 小上がり（LDK の部分指定の子。床 +300）の境（S8b-3。S8b-2 の確認箇所＝仕切り壁 X1 の LDK 側から離す）
 const cellKey = (L, T, R, B) => `${L.id}:${T.id}:${R.id}:${B.id}`;
 const ldk = graph.addRoom(new Set([cellKey(X0, Y0, X1, Y1)]), 'LDK');
 const yoshitsu = graph.addRoom(new Set([cellKey(X1, Y0, X2, Yb)]), '洋室');
@@ -89,6 +97,9 @@ const nando = graph.addRoom(new Set([cellKey(X1, Yb, X2, Y1)]), '納戸');
 ldk.setOverride('ceilingHeight', '2400');
 yoshitsu.setOverride('ceilingHeight', '2400');
 nando.setOverride('ceilingHeight', '2400');
+// 小上がり: LDK の x 0..1500 の全セルを部分指定の子にし、床を +300（高い側）。df-jn-stepnose を割り当てる（S8b-3）
+const kamiagari = graph.addRoom(new Set(getCellsInRect(X0.value, Y0.value, Xs.value, Y1.value, graph).map(c => c.key)), '小上がり', undefined, new Set([ldk.id]));
+kamiagari.setFloorLevel(300);
 
 // 構造反映が storage/db.js saveFloor を直呼びするため、最小のインメモリ IDB を差す（makeFrameOnlySectionTestDoc.mjs と同じ）。
 function withFakeIndexedDB(fn) {
@@ -153,9 +164,11 @@ check(!!door.opening && !!win.opening, '戸 1・窓 1 を配置');
 
 // 割当て（LDK のみ）
 ldk.setDetailRefs({ [DetailSlot.FLOOR_WALL]: KEY_FW, [DetailSlot.WALL_CEILING]: KEY_WC });
+// 床の段差は高い側の部屋（小上がり）に割り当てる（S8b-3）
+kamiagari.setDetailRefs({ [DetailSlot.FLOOR_STEP]: KEY_ST });
 
 // ---- 保存 ----
-const catalogs = withEntries(emptyBundle(), CatalogKind.DETAIL_FIGURE, [baseboard, cornice, counterTop]);
+const catalogs = withEntries(emptyBundle(), CatalogKind.DETAIL_FIGURE, [baseboard, cornice, counterTop, stepNose]);
 const floors = [{ planeId: plane.id, bytes: serializeGraph(graph) }];
 const struct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
 const json = buildDocumentJson({ floors, struct, planes: serializePlanes(project), site: null, info: null, bootPlaneId: plane.id, catalogs });
@@ -174,7 +187,10 @@ check(rl?.detailRefs?.floorWall === KEY_FW && rl?.detailRefs?.wallCeiling === KE
 check(ry && ry.detailRefs == null, '洋室は未割当て');
 const figs = doc.catalogs?.catalogs?.[CatalogKind.DETAIL_FIGURE] ?? [];
 console.log('同梱の詳細図:', figs.map(f => f.key).join(','));
-check(figs.map(f => f.key).sort().join(',') === [KEY_FW, KEY_WC, KEY_CT].sort().join(','), '同梱の detailFigure 3 件');
+check(figs.map(f => f.key).sort().join(',') === [KEY_FW, KEY_WC, KEY_CT, KEY_ST].sort().join(','), '同梱の detailFigure 4 件');
+const rk = G.rooms.find(r => r.name === '小上がり');
+check(rk?.detailRefs?.floorStep === KEY_ST && rk.referenceRoomIds.has(rl.id) && G.effectiveFloorLevel(rk) - G.effectiveFloorLevel(rl) === 300,
+  '小上がり（LDK の部分指定の子・床 +300）の detailRefs.floorStep が往復する');
 check(G.openings.length === 2, `建具 2（${G.openings.length}）`);
 const kneeRecs = [...G.kneeDropWalls.values()];
 console.log('腰壁の記録:', JSON.stringify(kneeRecs));
@@ -240,4 +256,31 @@ check(Object.values(withRefs.kneeCapBy).some(c => c['y-750(50下)'] + c['y-780(2
     }
   }
   check(byRoom['洋室'] === 0 && byRoom['納戸'] === 1 && !byRoom['LDK'], '洋室の南面の西端（組込み天板＝形状差が閾値以下）は差し替えず、納戸の北面の西端（カウンター天板）が輪郭 polyline 1 本に差し替わる');
+}
+
+// ---- 床の段差（S8b-3）: 小上がりの floorStep の有無で展開の source=detail の差を見る ----
+{
+  const runElev = async () => {
+    clearOverlays();
+    setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs, user: detailBuiltins });
+    const st = new ElevationModeState(G, P, { width: 1600, height: 1200 });
+    await st.init();
+    return { prims: st.bands.flatMap(b => b.primitives), err: st.materialError };
+  };
+  const refs = rk.detailRefs;
+  const withStep = await runElev();
+  rk.setDetailRefs(null);
+  const withoutStep = await runElev();
+  rk.setDetailRefs(refs);
+  const isStepLine = p => p.type === 'line' && p.source === DETAIL_PRIM_SOURCE && p.weight === 'thin' && p.y1 === p.y2;
+  const isNose = p => p.type === 'polyline' && p.source === DETAIL_PRIM_SOURCE && p.weight === 'thick' && p.points.length === 7 && p.points[0][1] === -300;
+  const lineDiff = withStep.prims.filter(isStepLine).length - withoutStep.prims.filter(isStepLine).length;
+  const noses = withStep.prims.filter(isNose);
+  console.log(`段差見付け面の派生線（細線・水平）の増分=${lineDiff}  riser の差し替え輪郭 polyline=${noses.length}`);
+  for (const p of noses) console.log('  ', JSON.stringify(p.points));
+  check(withStep.err === null && withoutStep.err === null, `床の段差の通知なし（${withStep.err}）`);
+  check(lineDiff >= 2, `段差見付け面に派生線（段鼻の厚 40・見切り 70 の高さ）が引かれる（増分 ${lineDiff}）`);
+  const isRiser = p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2 && Math.min(p.y1, p.y2) === -300 && Math.max(p.y1, p.y2) === 0;
+  check(noses.length >= 2 && noses.length === withoutStep.prims.filter(isRiser).length - withStep.prims.filter(isRiser).length,
+    `壁面（上辺・下辺）の riser 縦線 [−300,0] が段鼻の輪郭 ${noses.length} 本に差し替わる（割当て無しの縦線本数と一致）`);
 }

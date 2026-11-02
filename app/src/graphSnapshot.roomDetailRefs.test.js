@@ -13,7 +13,7 @@ import { snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.
 const GS_ROOMS = 9; // schema/graphFbs.js GS.ROOMS
 const RM_DETAIL_KEYS = 32; // schema/graphFbs.js RM.DETAIL_KEYS
 const RM_DETAIL_VALS = 33; // schema/graphFbs.js RM.DETAIL_VALS
-const { FLOOR_WALL, WALL_CEILING } = DetailSlot;
+const { FLOOR_WALL, WALL_CEILING, FLOOR_STEP } = DetailSlot;
 
 function makeGraph() {
   return new PlanGraph(new Plane('p1', 0, 'p1階', 1, 1));
@@ -52,6 +52,23 @@ test('FBS 往復: floorWall だけ／両方の detailRefs が往復する。キ�
   assert.deepEqual(roomOf(restored, 'rm1').detailRefs, { [FLOOR_WALL]: 'df-fw', [WALL_CEILING]: 'df-wc' });
   assert.deepEqual(Object.keys(roomOf(restored, 'rm1').detailRefs), [FLOOR_WALL, WALL_CEILING]);
   assert.ok(Object.isFrozen(roomOf(restored, 'rm1').detailRefs), '復元後も凍結した正規形');
+});
+
+test('FBS 往復: 床の段差（floorStep。S8b-3）は FBS 無変更で RM 32/33 に載り、取り合いと一緒でも往復する。キーは slot 名の昇順', () => {
+  const { graph, rooms: [a, b] } = makeGraphWithRooms();
+  a.setDetailRefs({ [FLOOR_STEP]: 'df-fs' });
+  b.setDetailRefs({ [WALL_CEILING]: 'df-wc', [FLOOR_STEP]: 'df-fs2', [FLOOR_WALL]: 'df-fw' });
+  const restored = roundTrip(graph);
+  assert.deepEqual(roomOf(restored, 'rm0').detailRefs, { [FLOOR_STEP]: 'df-fs' });
+  assert.deepEqual(roomOf(restored, 'rm1').detailRefs, { [FLOOR_STEP]: 'df-fs2', [FLOOR_WALL]: 'df-fw', [WALL_CEILING]: 'df-wc' });
+  assert.deepEqual(Object.keys(roomOf(restored, 'rm1').detailRefs), [FLOOR_STEP, FLOOR_WALL, WALL_CEILING]);
+  assert.equal(roomHasField(serializeGraph(graph), 0, RM_DETAIL_KEYS), true);
+  a.setDetailRefs(null);
+  b.setDetailRefs(null);
+  assert.equal(roomHasField(serializeGraph(graph), 0, RM_DETAIL_KEYS), false, '外せば書かない');
+  // 【失敗系】値が空の floorStep は捨てる（読み戻しで null）
+  a.setDetailRefs({ [FLOOR_STEP]: '' });
+  assert.equal(roomOf(roundTrip(graph), 'rm0').detailRefs, null);
 });
 
 test('割当ての無い部屋は detailRefs が null。空の写像・空文字だけの値も null に正規化され書かれない', () => {

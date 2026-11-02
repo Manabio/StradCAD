@@ -30,7 +30,7 @@ import {
 } from './elevationFloorProfile.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
 import { DetailSlot, DETAIL_PRIM_SOURCE } from '../core/constants.js';
-import { junctionPlanForFace, junctionLineSpecs } from './elevationJunction.js';
+import { junctionPlanForFace, junctionLineSpecs, floorStepLineSpecs } from './elevationJunction.js';
 import { formatMaterialLabel } from '../finish/materials/materialLabel.js';
 import {
   ElevationLineRole, weightForRole, faceGapLimitMm,
@@ -672,6 +672,7 @@ export function buildFaceFigure(face, ctx) {
   if (face.kind === 'step') {
     appendStepFace(prims, {
       face, graph, CH, boundary, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY, faceLabelAvoidThresholdModelMm,
+      materialMap, scaleDenom,
     });
     return prims;
   }
@@ -839,6 +840,7 @@ export function buildFaceFigure(face, ctx) {
  */
 function appendStepFace(prims, {
   face, graph, CH, boundary, gridCLs, dimRow1Y, gridCircleRowY, faceLabelRowY, faceLabelAvoidThresholdModelMm,
+  materialMap, scaleDenom,
 }) {
   const run = face.run;
   const stepCutWeight = weightForRole(ElevationLineRole.CUT);
@@ -859,6 +861,10 @@ function appendStepFace(prims, {
   prims.push(line(0,   floorY, 0,   stepCeilY, { weight: stepCutWeight }));
   prims.push(line(run, floorY, run, stepCeilY, { weight: stepCutWeight }));
   prims.push(line(0, stepCeilY, run, stepCeilY, { weight: stepCutWeight })); // 天井線
+  // 高い側の部屋の床の段差の部位図（Room.detailRefs の floorStep。S8b-3）から派生する水平線（高い側の床から t 下。面の全幅。開口は無い）
+  for (const sp of floorStepLineSpecs(face, { materialMap, scaleDenom })) {
+    prims.push(line(0, topY + sp.t, run, topY + sp.t, { weight: weightForRole(sp.role), source: DETAIL_PRIM_SOURCE }));
+  }
   // 問題修正2026-08その6: 高い側エリア（向こう側）の天井が天井断面より上にあれば、
   // 「床断面下・天井断面上の向こう側の断面は細線の破線」の既存規則どおり細線の破線で描く
   // （「C1の天井断面上+100に3'の天井を表す破線」——見付け面は部分指定関係のエリア同士の

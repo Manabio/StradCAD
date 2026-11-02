@@ -79,6 +79,42 @@ export function frontOnlyCapFigure(key, thickness = 20, overhang = 12) {
   ], { sVertex: 2, tVertex: 0 });
 }
 
+/**
+ * 床の段差の段鼻（floorStep。part/section/floor。S8b-3。閉）。頂点 (0,0)=riser 上端 → (出,0) → (出,厚) → (出−見切り幅,厚) → (出−見切り幅,厚+見切り高) →
+ * (0,厚+見切り高) → (0, 厚+見切り高+伸縮)。s の origin＝立ち上がり面（頂点 0）・t の origin＝高い側の床（頂点 0）・t の end＝低い側の床（最終頂点）。
+ * 形状差（包絡線の最大の出）＝出。段差高が 厚+見切り高 以下だと伸縮が 0 以下で fit 不可（FIXED_EXCEEDS_TARGET）。
+ * 既定（出 120・厚 40・見切り 30×30）の包絡線: t 0〜40 が s=120・40〜70 が s=30・以降 0。
+ */
+export function stepNoseFigure(key, { overhang = 120, thickness = 40, trimWidth = 30, trimHeight = 30 } = {}) {
+  return floorStepFigure(key, [
+    move(PenDir.RIGHT, fixedLen(overhang)), move(PenDir.DOWN, fixedLen(thickness)), move(PenDir.LEFT, fixedLen(overhang - trimWidth)),
+    move(PenDir.DOWN, fixedLen(trimHeight)), move(PenDir.LEFT, fixedLen(trimWidth)), move(PenDir.DOWN, stretchLen(100)),
+  ]);
+}
+
+/**
+ * 床の段差の部位図の組み立て（part/section/floor）。ストローク 1 本（id 'a'）。s の origin＝立ち上がり面（頂点 0）・
+ * t の origin＝高い側の床（頂点 0）・t の end＝低い側の床（頂点 endVertex。省略は最終頂点）。
+ */
+export function floorStepFigure(key, moves, { closed = true, endVertex = moves.length } = {}) {
+  return {
+    key, version: DETAIL_FIGURE_VERSION, label: `テスト${key}`,
+    category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.FLOOR,
+    strokes: [{ id: 'a', closed, line: LINE, moves }],
+    datums: [
+      { id: 'ds0', role: DetailDatumRole.STEP_EDGE, axis: DetailAxis.S, kind: DetailDatumKind.ORIGIN, offsetMm: 0 },
+      { id: 'dt0', role: DetailDatumRole.FL, axis: DetailAxis.T, kind: DetailDatumKind.ORIGIN, offsetMm: 0 },
+      { id: 'dt1', role: DetailDatumRole.FL, axis: DetailAxis.T, kind: DetailDatumKind.END, offsetMm: 0 },
+    ],
+    anchors: [
+      { datumId: 'ds0', strokeId: 'a', vertexIndex: 0 },
+      { datumId: 'dt0', strokeId: 'a', vertexIndex: 0 },
+      { datumId: 'dt1', strokeId: 'a', vertexIndex: endVertex },
+    ],
+    provenance: null, note: null,
+  };
+}
+
 /** 矩形の巾木（floorWall。閉）。頂点 (0,0) → (0,−h) → (d,−h) → (d,0)。 */
 export function baseboardFigure(key, depth = 12, height = 60) {
   return junctionFigure(key, DetailSlot.FLOOR_WALL, [

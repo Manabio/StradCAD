@@ -9,10 +9,10 @@ import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { takeUnresolvedCodes, clearDocumentAliases } from '../catalog/codeNormalization.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { DetailSlot } from '../core/constants.js';
-import { wallBackedFigure, junctionFigure, move, fixedLen, stretchLen, materialLen } from '../finish/roomDetailTestFixtures.js';
+import { wallBackedFigure, junctionFigure, stepNoseFigure, move, fixedLen, stretchLen, materialLen } from '../finish/roomDetailTestFixtures.js';
 
 const DF = CatalogKind.DETAIL_FIGURE;
-const { FLOOR_WALL, WALL_CEILING } = DetailSlot;
+const { FLOOR_WALL, WALL_CEILING, FLOOR_STEP } = DetailSlot;
 
 test.afterEach(() => { clearOverlays(); clearDocumentAliases(); takeUnresolvedCodes(); });
 
@@ -56,6 +56,40 @@ test('init: 壁厚に合わせられない図は detail-fit-failed の行（図�
   assert.equal(rows[0].scenario, 'detail-fit-failed');
   assert.ok(rows[0].message.includes('部屋「LDK」') && rows[0].message.includes('の床と壁に合わせられません'), rows[0].message);
   assert.deepEqual(rows[0].allowedActions, ['defer']);
+});
+
+// 3 列×1 行の部屋 LDK ＋ 右列の子「小上がり」（床 childFL）。子に floorStep を割り当てる
+function graphWithStep(childFL, key) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const xs = [0, 2000, 4000, 6000].map(v => cl(CenterLineType.VERTICAL, v));
+  const [y0, y1] = [cl(CenterLineType.HORIZONTAL, 0), cl(CenterLineType.HORIZONTAL, 3000)];
+  const cellKey = (a, b) => `${xs[a].id}:${y0.id}:${xs[b].id}:${y1.id}`;
+  const room = graph.addRoom(new Set([cellKey(0, 1), cellKey(1, 2), cellKey(2, 3)]), 'LDK');
+  room.generatedWallIds = new Set(generateRoomWallsFromOutline(graph, room).map(w => w.id));
+  const child = graph.addRoom(new Set([cellKey(2, 3)]), '小上がり', undefined, new Set([room.id]));
+  child.setFloorLevel(childFL);
+  child.setDetailRefs({ [FLOOR_STEP]: key });
+  return { graph, child };
+}
+
+test('init: 床の段差の図が段差高に合わない部屋は detail-fit-failed の行 1 行（stepHeightMm 付き・主語は部屋）。合う段差高は行を作らない', async () => {
+  setOverlay(DF, { user: [stepNoseFigure('df-step')] });
+  const tight = graphWithStep(60, 'df-step'); // 固定寸法の和（70）以下
+  const rows = (await new FinishModeState(tight.graph, null).init()).catalogResolveRows.filter(r => r.kind === DF);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].scenario, 'detail-fit-failed');
+  assert.ok(rows[0].message.includes('部屋「小上がり」') && rows[0].message.includes('の床の段差に合わせられません'), rows[0].message);
+  const ok = graphWithStep(300, 'df-step');
+  assert.deepEqual((await new FinishModeState(ok.graph, null).init()).catalogResolveRows.filter(r => r.kind === DF), []);
+});
+
+test('init: 床の段差の参照切れは unresolved-code の行（usage の slot は floorStep）。fit 失敗の行は出ない', async () => {
+  const { graph, child } = graphWithStep(300, 'df-gone');
+  const rows = (await new FinishModeState(graph, null).init()).catalogResolveRows.filter(r => r.kind === DF);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].scenario, 'unresolved-code');
+  assert.deepEqual(rows[0].usage.map(u => [u.location, u.roomId, u.slot]), [['room', child.id, FLOOR_STEP]]);
 });
 
 test('【失敗系】init: 図の合わせ込み検査が例外を投げても仕上げモードに入れる（行は空）', async () => {

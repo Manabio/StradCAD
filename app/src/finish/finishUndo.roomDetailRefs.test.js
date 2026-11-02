@@ -9,7 +9,7 @@ import { undoManager } from '../undoManager.js';
 import { withFinishUndo, snapshotFinishState } from './finishUndo.js';
 import { roomDetailRefsAfterSelect } from './roomDetailRefsEdit.js';
 
-const { FLOOR_WALL, WALL_CEILING } = DetailSlot;
+const { FLOOR_WALL, WALL_CEILING, FLOOR_STEP } = DetailSlot;
 
 function graphWithRoom() {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -44,6 +44,21 @@ test('割当ての選択を withFinishUndo で包むと undo/redo で戻る（1 
   undoManager.redo();
   assert.deepEqual(graph.roomMap.get('rm0').detailRefs, { [FLOOR_WALL]: 'df-1', [WALL_CEILING]: 'df-2' });
   undoManager.undo(); undoManager.undo(); undoManager.undo(); // 後始末（積んだ分を戻す）
+});
+
+test('床の段差（floorStep。S8b-3）の選択も withFinishUndo で undo/redo で戻る。snapshot にも載る', () => {
+  const { graph, room } = graphWithRoom();
+  withFinishUndo(graph, () => room.setDetailRefs(roomDetailRefsAfterSelect(room, FLOOR_STEP, 'df-fs')));
+  assert.deepEqual(snapshotFinishState(graph).rooms.rooms[0].detailRefs, { [FLOOR_STEP]: 'df-fs' });
+  withFinishUndo(graph, () => room.setDetailRefs(roomDetailRefsAfterSelect(room, FLOOR_STEP, 'df-fs2')));
+  assert.deepEqual(room.detailRefs, { [FLOOR_STEP]: 'df-fs2' });
+  undoManager.undo();
+  assert.deepEqual(graph.roomMap.get('rm0').detailRefs, { [FLOOR_STEP]: 'df-fs' }, 'undo で差し替え前に戻る');
+  undoManager.undo();
+  assert.equal(graph.roomMap.get('rm0').detailRefs, null, 'undo で最初の選択も戻り null');
+  undoManager.redo();
+  assert.deepEqual(graph.roomMap.get('rm0').detailRefs, { [FLOOR_STEP]: 'df-fs' }, 'redo で戻る');
+  undoManager.undo(); // 後始末
 });
 
 test('部屋の削除（feature=undefined 化）でも detailRefs は残り、undo で feature ごと戻り、redo で再び undefined 化される', () => {

@@ -3,16 +3,19 @@
 // ui/KneeDropWallDialog.jsx（腰壁・垂れ壁）、判断はここ（純）。
 //   - detailRefSelectsFor       slot の並びの select（見出し・現在値・選択肢）。slot と refs は呼び出し側が決める
 //   - detailRefsAfterSelectFor  slot を key にした（'' なら外した）次の detailRefs。slots 以外の slot は変えない
-//   - roomDetailRefSelects / roomDetailRefsAfterSelect  部屋カード（床と壁／壁と天井）用のラッパ
+//   - roomDetailRefSelects / roomDetailRefsAfterSelect  部屋カード（床と壁／壁と天井／床の段差）用のラッパ
 // 選択肢の絞り込みは S5 と同じ catalogMaintenance.detailFigureOptionsFor（分類・view・subject 一致）。
 // 先頭は「なし」（キー無し＝割当てなし）。
 // ================================================================
 
-import { ROOM_DETAIL_SLOTS } from '../core/constants.js';
+import { ROOM_DETAIL_SLOTS, ROOM_PART_SLOTS } from '../core/constants.js';
 import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { detailFigureOptionsFor } from '../catalog/catalogMaintenance.js';
 import { withDetailRef } from '../core/detailRefs.js';
 import { detailSlotLabel, ROOM_DETAIL_REF_TEXT } from '../error.js';
+
+// 部屋カードの select の slot（取り合い＋要素付きの床の段差。S8b-3）
+const ROOM_REF_SLOTS = Object.freeze([...ROOM_DETAIL_SLOTS, ...ROOM_PART_SLOTS]);
 
 /** 三層合成後の詳細図エントリ（組込み＋ライブラリ＋同梱。openings/openingCatalog.js detailFigureCatalog）。 */
 function detailFigureEntries() {
@@ -53,13 +56,13 @@ export function detailRefsAfterSelectFor(slots, refs, slot, key) {
  * @param {object[]} [figureList] 詳細図エントリ（省略時は三層合成後）
  */
 export function roomDetailRefSelects(room, figureList = detailFigureEntries()) {
-  return detailRefSelectsFor(ROOM_DETAIL_SLOTS, room?.detailRefs, figureList);
+  return detailRefSelectsFor(ROOM_REF_SLOTS, room?.detailRefs, figureList);
 }
 
 /**
- * slot を key にした（'' なら外した）次の detailRefs。ROOM_DETAIL_SLOTS 以外の slot は変えない。元は変えない。
+ * slot を key にした（'' なら外した）次の detailRefs。ROOM_DETAIL_SLOTS・ROOM_PART_SLOTS 以外の slot は変えない。元は変えない。
  * @returns {Readonly<Record<string,string>>|null}
  */
 export function roomDetailRefsAfterSelect(room, slot, key) {
-  return detailRefsAfterSelectFor(ROOM_DETAIL_SLOTS, room?.detailRefs, slot, key);
+  return detailRefsAfterSelectFor(ROOM_REF_SLOTS, room?.detailRefs, slot, key);
 }

@@ -349,7 +349,7 @@ export const ERR_ROOF_UPPER_ROOMS = (floorLabels) =>
 // （fit の error.message など）。slot は DetailSlot の値（'jamb'＝方立・'head'＝上枠。core/constants.js）。
 const DETAIL_SLOT_LABELS = Object.freeze({
   jamb: '方立（縦枠）', head: '上枠', figure: '姿図', floorWall: '床と壁', wallCeiling: '壁と天井',
-  kneeTop: '腰壁の天端', dropBottom: '垂れ壁の下端',
+  kneeTop: '腰壁の天端', dropBottom: '垂れ壁の下端', floorStep: '床の段差',
 });
 // 部屋の取り合い（Room.detailRefs。S8a）の通知文の主語。ERR_DETAIL_FIT_FAILED の symbolKey・ERR_DETAIL_FIGURE_NOT_FOUND の owner に渡す。
 export const detailOwnerRoom = (roomName) => `部屋「${roomName || '（名称なし）'}」`;
@@ -376,6 +376,7 @@ export const ERR_DETAIL_FIGURE_NOT_FOUND = (owner, slot) =>
 export const DETAIL_TARGET_ELEVATION = '建具の姿図';
 export const DETAIL_TARGET_JUNCTION = '部屋の取り合い';
 export const DETAIL_TARGET_PART = '腰壁・垂れ壁の部位';
+export const DETAIL_TARGET_PART_STEP = '床の段差の部位';
 export const ERR_DETAIL_DATUM_UNSUPPORTED = (datumId, role, target = '三方枠') =>
   `基準 ${datumId}（${role}）は${target}では使えません`;
 // 部分詳細図ヘルパー（全画面パネル）の動的 import が失敗したときのトースト。

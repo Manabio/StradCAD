@@ -3,6 +3,7 @@
  * 「見えがかり（見付け）」を1枚の面として描くための抽出・合成）。設計意図は
  * .claude/elevation-model.md 参照。
  */
+import { DetailSlot } from '../core/constants.js';
 import { cellBoundsList, outlineSegments, worldToCell } from '../finish/gridCells.js';
 import { letterOf, DIR_SIGN, perpFaceAt, CORNER_TOL_MM } from './elevationFaces.js';
 import { roomOwnerByCell, collectRunBreaks, findRunCLAt } from './elevationFloorProfile.js';
@@ -156,7 +157,31 @@ export function buildStepFaces(seg, wallFaces, graph, parentFL) {
     hasWallAtLocal0: true, hasWallAtLocalRun: true,
     kind: 'step', stepHeightMm, baseFloorDeltaMm: seg.lowFL - parentFL,
     ceilAbsMm: lowCeilAbsMm, beyondCeilAbsMm: highCeilAbsMm,
+    // 高い側の部屋（床の段差の部位図 Room.detailRefs.floorStep の持ち主。S8b-3）
+    highOwnerRoom: seg.ownerRoom,
   };
+}
+
+/**
+ * 床の段差の部位図（Room.detailRefs の floorStep）を持つ部屋ごとに、その部屋が高い側になる段差の高さ（mm・昇順・重複なし）を返す。
+ * 通知（fit を試す段差高）の供給元。floorStep を持つ部屋が無ければ stepRiserSegments を呼ばない。
+ * @param {object|null} graph
+ * @returns {(room:object)=>number[]}
+ */
+export function floorStepHeightsByOwner(graph) {
+  const rooms = graph?.rooms ?? [];
+  const owners = new Set(rooms.filter(r => r.detailRefs?.[DetailSlot.FLOOR_STEP]));
+  const byOwner = new Map();
+  if (owners.size > 0) {
+    for (const parent of rooms) {
+      for (const seg of stepRiserSegments(parent, graph)) {
+        if (!owners.has(seg.ownerRoom)) continue;
+        if (!byOwner.has(seg.ownerRoom)) byOwner.set(seg.ownerRoom, new Set());
+        byOwner.get(seg.ownerRoom).add(seg.highFL - seg.lowFL);
+      }
+    }
+  }
+  return room => [...(byOwner.get(room) ?? [])].sort((a, b) => a - b);
 }
 
 // R6: axis方向（isVertical面ならVERTICAL）のCL探索は、findRunCLAt（run方向=axis方向の反転）に

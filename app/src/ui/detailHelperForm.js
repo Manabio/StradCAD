@@ -20,7 +20,7 @@ import {
   PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam,
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
-  DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
+  DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
   DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE,
 } from '../core/constants.js';
 import { readDxf, buildDxfScene } from '../detail/dxf/dxfImport.js';
@@ -42,7 +42,7 @@ import {
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
-import { junctionTargets, partTargets } from '../finish/roomDetailTargets.js';
+import { junctionTargets, partTargets, floorStepTargets } from '../finish/roomDetailTargets.js';
 import { evalNumpadExpr } from './numpadUtils.js';
 import { polyline, text } from '../structural/sectionFigure/svgFigurePrimitives.js';
 
@@ -54,6 +54,7 @@ export const DETAIL_ROLE_LABELS = Object.freeze({
   [DetailDatumRole.CEILING_FACE]:     '天井面',
   [DetailDatumRole.WALL_TOP]:         '腰壁の天端',
   [DetailDatumRole.WALL_BOTTOM]:      '垂れ壁の下端',
+  [DetailDatumRole.STEP_EDGE]:        '床の段差の立ち上がり面',
   [DetailDatumRole.GL]:               'GL',
   [DetailDatumRole.ROOF_SURFACE]:     '屋根面',
   [DetailDatumRole.EAVE_EDGE]:        '軒先',
@@ -148,7 +149,7 @@ export function wallThicknessNotice(materialLoadFailed) {
 /** NumPad の見出し。 */
 export const DETAIL_NUMPAD_LABELS = Object.freeze({
   penDistance: '距離', moveLen: '長さ', offset: 'オフセット', wallThickness: '壁厚', faceWidth: '見付', projection: '出幅',
-  width: '幅', height: '高さ', sill: '窓台',
+  width: '幅', height: '高さ', sill: '窓台', stepHeight: '段差高',
 });
 /** 試し込みの目標値の欄（三方枠。順序＝表示順。field は defaultFitDims／tryFit の項目名）。 */
 export const FIT_DIM_FIELDS = Object.freeze([
@@ -187,9 +188,19 @@ export function partSlotOf(form) {
   if (!(form?.category === t.category && form?.view === t.view && form?.subject === t.subject)) return null;
   return (form.datums ?? []).some(d => d?.role === DetailDatumRole.WALL_BOTTOM) ? DetailSlot.DROP_BOTTOM : DetailSlot.KNEE_TOP;
 }
+/** 試し込みの目標値の欄（床の段差の部位。段差高だけ）。 */
+export const FLOOR_STEP_FIT_DIM_FIELDS = Object.freeze([
+  Object.freeze({ field: 'stepHeight', label: DETAIL_NUMPAD_LABELS.stepHeight }),
+]);
+/** 分類が床の段差の部位（slot=floorStep の取り合わせ先: part/section/floor。S8b-3）か。 */
+export function isFloorStepForm(form) {
+  const t = DETAIL_SLOT_TARGETS[DetailSlot.FLOOR_STEP];
+  return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
+}
 /** 現在の分類に合う試し込みの欄。 */
 export const fitDimFieldsFor = form => (isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS
-  : junctionSlotOf(form) || partSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
+  : isFloorStepForm(form) ? FLOOR_STEP_FIT_DIM_FIELDS
+    : junctionSlotOf(form) || partSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
 /** 保存・破棄・削除の確認の文言。 */
 export const DETAIL_HELPER_MESSAGES = Object.freeze({
   saved: '保存しました',
@@ -326,6 +337,8 @@ export function defaultRoleFor(form, axis, kind) {
   if (isElevationFigureForm(form) && axis === DetailAxis.T) {
     return kind === DetailDatumKind.END ? DetailDatumRole.HEAD : DetailDatumRole.SILL;
   }
+  // 床の段差の部位（part/section/floor）: s は立ち上がり面・t は FL（高い側の床。end は低い側の床）
+  if (isFloorStepForm(form)) return axis === DetailAxis.S ? DetailDatumRole.STEP_EDGE : DetailDatumRole.FL;
   // 腰壁・垂れ壁の部位（part/section/wall）の t の origin は腰壁の天端の面（垂れ壁の下端にしたい図は基準の役割を選び直す）
   if (partSlotOf(form) && axis === DetailAxis.T && kind === DetailDatumKind.ORIGIN) return DetailDatumRole.WALL_TOP;
   return DEFAULT_ROLE_BY_AXIS[axis];
@@ -747,6 +760,7 @@ const ELEVATION_FIT_REPRESENTATIVE = Object.freeze({ category: 'fitting', subTyp
  * 代表種別がカタログに無いとき幅・高さは '' （tryFit が入力を促す error を返す）。
  */
 export function defaultFitDimsFor(form, wallThickness) {
+  if (isFloorStepForm(form)) return { stepHeight: String(DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM) };
   if (!isElevationFigureForm(form)) return defaultFitDims(wallThickness);
   const entry = findCatalogEntry(ELEVATION_FIT_REPRESENTATIVE.category, ELEVATION_FIT_REPRESENTATIVE.subType);
   return {
@@ -785,6 +799,16 @@ function tryFitJunction(form, dims, slot, materialMap) {
   return fitLocal(fig, t.targets);
 }
 
+// 床の段差の部位（floorStep）の試し込み: 段差高に合わせる。基準の対応は finish/roomDetailTargets.js floorStepTargets。
+function tryFitFloorStep(form, dims, materialMap) {
+  const stepHeightMm = parseNumberText(dims.stepHeight);
+  if (!Number.isFinite(stepHeightMm) || stepHeightMm <= 0) return badFitDim('段差高は正の数で入力してください');
+  const fig = entryFromForm(form);
+  const t = floorStepTargets(fig, { stepHeightMm, materialMap });
+  if (t.error) return { error: t.error };
+  return fitLocal(fig, t.targets);
+}
+
 /**
  * 試し込み: 取り付け先の寸法に図を合わせる。建具の姿図（figure/elevation/opening）は幅・高さ・窓台、
  * それ以外は三方枠の寸法（壁厚・見付・出幅。文字列か数値）。
@@ -792,6 +816,7 @@ function tryFitJunction(form, dims, slot, materialMap) {
  */
 export function tryFit(form, dims, { materialMap = null } = {}) {
   if (isElevationFigureForm(form)) return tryFitElevation(form, dims);
+  if (isFloorStepForm(form)) return tryFitFloorStep(form, dims, materialMap);
   const junctionSlot = junctionSlotOf(form);
   if (junctionSlot) return tryFitJunction(form, dims, junctionSlot, materialMap);
   const partSlot = partSlotOf(form);

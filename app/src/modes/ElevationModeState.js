@@ -33,7 +33,8 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
 import { collectDetailFitFailures } from '../openings/openingDetailFitCheck.js';
 import { collectRoomJunctionFailures } from '../finish/roomDetailJunction.js';
-import { collectKneeDropPartFailures } from '../finish/partDetail.js';
+import { collectKneeDropPartFailures, collectFloorStepFailures } from '../finish/partDetail.js';
+import { floorStepHeightsByOwner } from '../elevation/elevationStepFace.js';
 import { ERR_DETAIL_FIT_FAILED_MORE } from '../error.js';
 import { DetailSlot } from '../core/constants.js';
 
@@ -208,6 +209,10 @@ export class ElevationModeState {
         }),
         // 腰壁・垂れ壁の部位（記録の detailRefs の kneeTop・dropBottom。S8b-1）
         ...collectKneeDropPartFailures(this.graph, seen, { materialMap: this._materialMap ?? null }),
+        // 床の段差の部位（Room.detailRefs の floorStep。S8b-3）
+        ...collectFloorStepFailures(this.graph, seen, {
+          materialMap: this._materialMap ?? null, stepHeightsOf: floorStepHeightsByOwner(this.graph),
+        }),
       ];
       if (failures.length === 0) return null;
       return failures.length === 1

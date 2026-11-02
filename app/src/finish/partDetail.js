@@ -5,15 +5,16 @@
 //   fitKneeDropPart              図のキー×slot×壁厚の fit（openings/openingCatalog.js fitDetailLocalMemo のメモを共有）
 //   kneeDropPartEnvelope         fit → 見る側の向きに合わせた包絡線（表の側と反対から見るときは壁の中心で鏡像）
 //   collectKneeDropPartFailures  未解決キー・fit 失敗の集計（仕上げ init・展開 init の通知）
+// 床の段差（Room.detailRefs の floorStep。S8b-3）: resolveRoomPartFigure／fitFloorStepPart／floorStepEnvelope／collectFloorStepFailures。
 // 失敗は例外にしない（{error}・null・集計の行）。
 // ================================================================
 
-import { KNEE_DROP_DETAIL_SLOTS } from '../core/constants.js';
+import { KNEE_DROP_DETAIL_SLOTS, DetailSlot } from '../core/constants.js';
 import { kneeDropFrontSideOf } from '../core/kneeDropRecord.js';
-import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerKneeDrop } from '../error.js';
+import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerKneeDrop, detailOwnerRoom } from '../error.js';
 import { detailFigureEntry, detailFitKey, fitDetailLocalMemo } from '../openings/openingCatalog.js';
 import { computeEnvelope } from '../detail/detailPlacement.js';
-import { partTargets } from './roomDetailTargets.js';
+import { partTargets, floorStepTargets } from './roomDetailTargets.js';
 import { wallAssemblyThicknessMm } from './roomDetailJunction.js';
 import { kneeDropWallGeometry } from './kneeDropWall.js';
 import { buildCellToRoom } from './edgeClassify.js';
@@ -69,6 +70,78 @@ export function kneeDropPartEnvelope({ graph, wall, rec, slot, viewedSide, mater
   if (fitted.error) return null;
   const strokes = viewedSide === kneeDropFrontSideOf(rec) ? fitted.strokes : mirrorStrokesAcrossWall(fitted.strokes, thickness);
   return computeEnvelope(strokes, slot);
+}
+
+/**
+ * 部屋の floorStep の割当てを図のエントリへ解決する（床の段差。S8b-3。高い側の部屋の Room.detailRefs）。
+ * @param {{room:object, slot?:string, entryOf?:(key:string)=>object|null}} p slot の既定は DetailSlot.FLOOR_STEP
+ * @returns {null | {key:string, slot:string, entry:object|null}} null＝割当て無し。entry が null＝参照切れ（カタログに無い）
+ */
+export function resolveRoomPartFigure({ room, slot = DetailSlot.FLOOR_STEP, entryOf = detailFigureEntry }) {
+  const key = refOf(room, slot);
+  if (key === undefined) return null;
+  return { key, slot, entry: entryOf(key) ?? null };
+}
+
+/**
+ * 床の段差の図を段差高に合わせた局所座標のストローク列（fitLocal の結果）。失敗は {error:{code,message}}（例外にしない）。
+ * メモは fitDetailLocalMemo と共有（鍵は図のキー・slot・段差高）。材未解決の結果はメモしない。
+ * @param {{figureKey:string, stepHeightMm:number, materialMap?:object|null}} p
+ */
+export function fitFloorStepPart({ figureKey, stepHeightMm, materialMap = null }) {
+  return fitDetailLocalMemo({
+    figureKey, slot: DetailSlot.FLOOR_STEP, dims: { stepHeight: stepHeightMm },
+    targetsOf: (entry, dims) => floorStepTargets(entry, { stepHeightMm: dims.stepHeight, materialMap }),
+  });
+}
+
+/**
+ * 段差高 stepHeightMm の床の段差の包絡線。参照切れ・fit 失敗は null（従来の描き方）。
+ * @param {{room:object, stepHeightMm:number, materialMap?:object|null, entryOf?:(key:string)=>object|null}} p room＝高い側の部屋
+ * @returns {null | {steps:{t:number, weight:string}[], outline:number[][], maxDeviationMm:number}}
+ */
+export function floorStepEnvelope({ room, stepHeightMm, materialMap = null, entryOf = detailFigureEntry }) {
+  const r = resolveRoomPartFigure({ room, entryOf });
+  if (!r?.entry) return null;
+  const fitted = fitFloorStepPart({ figureKey: r.key, stepHeightMm, materialMap });
+  if (fitted.error) return null;
+  return computeEnvelope(fitted.strokes, DetailSlot.FLOOR_STEP, { tMaxMm: stepHeightMm }); // 低い側の床より下は定義域の外
+}
+
+/**
+ * graph の部屋の floorStep について、図が見つからない・段差高に合わせられない組を集める。
+ * 行の形は collectRoomJunctionFailures と同形（wallThickness の代わりに stepHeightMm）。symbolKey は部屋名の主語。
+ * 試す段差高は stepHeightsOf(部屋)＝その部屋が高い側になる段差の高さ（呼び出し側が elevation/elevationStepFace.js floorStepHeightsByOwner で供給。
+ * finish/ は elevation/ を引かない）。重複排除の鍵 seen は階をまたいで共有できる（破壊的に更新する）。
+ * @param {object|null} graph
+ * @param {Set<string>} [seen]
+ * @param {{materialMap?:object|null, entryOf?:(key:string)=>object|null, stepHeightsOf?:(room:object)=>number[]}} [opts]
+ */
+export function collectFloorStepFailures(graph, seen = new Set(), { materialMap = null, entryOf = detailFigureEntry, stepHeightsOf = () => [] } = {}) {
+  const failures = [];
+  for (const room of graph?.rooms ?? []) {
+    const r = resolveRoomPartFigure({ room, entryOf });
+    if (!r) continue;
+    const slot = DetailSlot.FLOOR_STEP;
+    const owner = detailOwnerRoom(room.name);
+    const push = (key, label, reason, extra) => {
+      if (seen.has(key)) return;
+      seen.add(key);
+      failures.push({ key, symbolKey: owner, slot, label, reason, message: ERR_DETAIL_FIT_FAILED(label, owner, reason, slot), roomId: room.id, ...extra });
+    };
+    if (!r.entry) {
+      push(`notFound|room|${room.id}|${slot}|${r.key}`, r.key, ERR_DETAIL_FIGURE_NOT_FOUND(owner, slot));
+      continue;
+    }
+    for (const stepHeightMm of stepHeightsOf(room)) {
+      const fitted = fitFloorStepPart({ figureKey: r.key, stepHeightMm, materialMap });
+      if (fitted.error) {
+        push(`${detailFitKey({ figureKey: r.key, slot, dims: { stepHeight: stepHeightMm } })}|room|${room.id}`,
+          r.entry.label || r.key, fitted.error.message, { stepHeightMm });
+      }
+    }
+  }
+  return failures;
 }
 
 /**

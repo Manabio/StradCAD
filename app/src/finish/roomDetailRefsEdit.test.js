@@ -2,27 +2,45 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Room } from '@core';
-import { DetailSlot, ROOM_DETAIL_SLOTS } from '../core/constants.js';
+import { DetailSlot, ROOM_DETAIL_SLOTS, ROOM_PART_SLOTS } from '../core/constants.js';
 import { roomDetailRefSelects, roomDetailRefsAfterSelect } from './roomDetailRefsEdit.js';
-import { baseboardFigure, wallBackedFigure } from './roomDetailTestFixtures.js';
+import { baseboardFigure, wallBackedFigure, stepNoseFigure } from './roomDetailTestFixtures.js';
 import { ROOM_DETAIL_REF_TEXT } from '../error.js';
 
-const { FLOOR_WALL, WALL_CEILING } = DetailSlot;
+const { FLOOR_WALL, WALL_CEILING, FLOOR_STEP } = DetailSlot;
 const jambPlan = { key: 'df-jamb', label: '方立', category: 'paired', view: 'plan', subject: 'jamb' };
 const FIGURES = [
   { ...baseboardFigure('df-fw1'), label: '巾木A' },
   { ...wallBackedFigure('df-wc1', WALL_CEILING), label: '廻り縁A' },
+  { ...stepNoseFigure('df-fs1'), label: '段鼻A' },
   jambPlan,
 ];
 
-test('select は床と壁・壁と天井の 2 つで、先頭は「なし」。選択肢は junction・section・subject 一致の図だけ（他の分類の図は出ない）', () => {
+test('select は床と壁・壁と天井・床の段差の 3 つで、先頭は「なし」。選択肢は分類（category・view・subject）一致の図だけ（他の分類の図は出ない）', () => {
   const room = new Room('r1', 'LDK');
   const sels = roomDetailRefSelects(room, FIGURES);
-  assert.deepEqual(sels.map(s => s.slot), ROOM_DETAIL_SLOTS);
-  assert.deepEqual(sels.map(s => s.label), ['床と壁', '壁と天井']);
+  assert.deepEqual(sels.map(s => s.slot), [...ROOM_DETAIL_SLOTS, ...ROOM_PART_SLOTS]);
+  assert.deepEqual(sels.map(s => s.label), ['床と壁', '壁と天井', '床の段差']);
   assert.deepEqual(sels[0].options, [{ value: '', label: ROOM_DETAIL_REF_TEXT.none }, { value: 'df-fw1', label: '巾木A（df-fw1）' }]);
   assert.deepEqual(sels[1].options, [{ value: '', label: 'なし' }, { value: 'df-wc1', label: '廻り縁A（df-wc1）' }]);
-  assert.deepEqual(sels.map(s => s.value), ['', '']);
+  assert.deepEqual(sels[2].options, [{ value: '', label: 'なし' }, { value: 'df-fs1', label: '段鼻A（df-fs1）' }]);
+  assert.deepEqual(sels.map(s => s.value), ['', '', '']);
+});
+
+test('床の段差: 選ぶ・「なし」で外す（他の slot は保つ）。part の図は床と壁の選択肢に出ず、床と壁の図は床の段差に出ない', () => {
+  const room = new Room('r1', 'LDK');
+  const a = roomDetailRefsAfterSelect(room, FLOOR_STEP, 'df-fs1');
+  assert.deepEqual(a, { [FLOOR_STEP]: 'df-fs1' });
+  room.setDetailRefs({ ...a, [FLOOR_WALL]: 'df-fw1' });
+  assert.deepEqual(roomDetailRefsAfterSelect(room, FLOOR_STEP, ''), { [FLOOR_WALL]: 'df-fw1' });
+  room.setDetailRefs({ ...a, [FLOOR_WALL]: 'df-fw1' });
+  const sels = roomDetailRefSelects(room, FIGURES);
+  assert.equal(sels[2].value, 'df-fs1');
+  assert.ok(!sels[0].options.some(o => o.value === 'df-fs1'));
+  assert.ok(!sels[2].options.some(o => o.value === 'df-fw1'));
+  // 【失敗系】分類違いの現在値は末尾に「この枠には使えません」で残る
+  room.setDetailRefs({ [FLOOR_STEP]: 'df-fw1' });
+  assert.ok(roomDetailRefSelects(room, FIGURES)[2].options.at(-1).label.includes('この枠には使えません'));
 });
 
 test('figureList 省略時（三層合成後）は組込み「巾木 10×60」が床と壁の選択肢に出る（壁と天井には出ない）', () => {
